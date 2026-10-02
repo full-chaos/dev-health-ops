@@ -140,17 +140,17 @@
     "python_requests": "[[https://ghe.test/api/v3/orgs/acme/repos?per_page=100 token tok] [https://ghe.test/api/v3/a@b token tok]]"
   },
   "317 repos base=\"\" org=\"acme\" search=\"\" pattern=\"\" max=\u003cnone\u003e": {
-    "result": "\"UnsupportedProtocol: Request URL has an unsupported protocol 'ws://'.\"",
+    "result": "\"UnsupportedProtocol: Request URL has an unsupported protocol 'gopher://'.\"",
     "requests": "[[https://api.github.com/orgs/acme/repos?per_page=100 token tok]]",
     "python_result": "[[\"api\",\"Org/api\",\"about api\",\"https://github.example.test/Org/api\"],[\"web\",\"Org/web\",\"about web\",\"https://github.example.test/Org/web\"],[\"docs\",\"Org/docs\",\"about docs\",\"https://github.example.test/Org/docs\"]]",
-    "python_requests": "[[https://api.github.com/orgs/acme/repos?per_page=100 token tok] [ws://x.test/y token tok]]",
+    "python_requests": "[[https://api.github.com/orgs/acme/repos?per_page=100 token tok] [gopher://x.test/y token tok]]",
     "not_measured": true
   },
   "318 repos base=\"https://ghe.test/api/v3\" org=\"acme\" search=\"\" pattern=\"\" max=\u003cnone\u003e": {
-    "result": "\"UnsupportedProtocol: Request URL has an unsupported protocol 'ws://'.\"",
+    "result": "\"UnsupportedProtocol: Request URL has an unsupported protocol 'gopher://'.\"",
     "requests": "[[https://ghe.test/api/v3/orgs/acme/repos?per_page=100 token tok]]",
     "python_result": "[[\"api\",\"Org/api\",\"about api\",\"https://github.example.test/Org/api\"],[\"web\",\"Org/web\",\"about web\",\"https://github.example.test/Org/web\"],[\"docs\",\"Org/docs\",\"about docs\",\"https://github.example.test/Org/docs\"]]",
-    "python_requests": "[[https://ghe.test/api/v3/orgs/acme/repos?per_page=100 token tok] [ws://x.test/y token tok]]",
+    "python_requests": "[[https://ghe.test/api/v3/orgs/acme/repos?per_page=100 token tok] [gopher://x.test/y token tok]]",
     "not_measured": true
   },
   "319 repos base=\"\" org=\"acme\" search=\"\" pattern=\"\" max=\u003cnone\u003e": {

@@ -2,4 +2,4 @@
 # python-recorded set: e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855 (0 files)
 # header-before-stamp set: e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855 (0 files)
 -	header	golden/list-repositories.golden.json
-f52f7801d6eae0d5ac217a3d53c6e6010b521d539a51d44a7125f9a10fa76a3b	go-generated	known-go-answers.json
+69a6ff3d01ea183a04dfdf60fda51816d25e83b70744fa5a2ad76cc0851f35c6	go-generated	known-go-answers.json

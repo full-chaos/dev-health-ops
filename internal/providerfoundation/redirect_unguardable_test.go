@@ -36,6 +36,10 @@ func TestAnUnknownDecoratorHandedInThroughAnInterfaceIsRefusedAtConstruction(t *
 	if _, err := newClientFor(probe.Base.URL, asDoer); err == nil {
 		t.Fatal("a decorator of an unknown type must be refused at construction")
 	}
+	var viaAny any = hidingDecorator{inner: probe.Client()} // vetter-2's A3: an any value and a type assertion
+	if _, err := newClientFor(probe.Base.URL, viaAny.(HTTPDoer)); err == nil {
+		t.Fatal("a decorator handed in through any and a type assertion must be refused at construction")
+	}
 	if probe.BaseHits() != 0 || probe.Hits() != 0 {
 		t.Fatalf("no request may go through an unknown doer: base %d, other %d", probe.BaseHits(), probe.Hits())
 	}

@@ -689,14 +689,12 @@ check_live_python_oracles() {
     api-pybody-queryint
     api-pybody-querybool
     api-pybody-bodyint
-    edgetoken-signer
     api-pybody-string
     api-pybody-emailstr
     llmorgsettings-validate-base-url
     httpapi-forwarded-scheme
     api-pybody-queryuuid
     httpapi-limit-string
-    auth-signedtoken
     atlassianteams-python-client
     admin-llmreadiness-probe
   )

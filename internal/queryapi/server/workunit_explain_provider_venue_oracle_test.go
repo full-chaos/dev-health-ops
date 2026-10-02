@@ -8,8 +8,6 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
-	"os"
-	"os/exec"
 	"path/filepath"
 	"runtime"
 	"strings"
@@ -32,7 +30,10 @@ import (
 // resolves lets the route go on to its work-unit read, which on this empty
 // store is the route's own 404 "Work unit {id} not found".
 const pythonProviderResolutionProgram = `
-import json, sys
+import sys
+# The answer is the only thing on stdout: whatever the services (or the libraries they import) print goes to stderr.
+answer_stream, sys.stdout = sys.stdout, sys.stderr
+import json
 from dev_health_ops.llm.providers import get_provider
 from dev_health_ops.llm.errors import LLMError
 
@@ -47,7 +48,7 @@ for case in json.loads(sys.stdin.read()):
         detail = "Work unit " + case["work_unit_id"] + " not found"
         status = 404
     out.append({"status": status, "body": json.dumps({"detail": detail}, ensure_ascii=False, separators=(",", ":"))})
-print("RESULT " + json.dumps(out))
+answer_stream.write("RESULT " + json.dumps(out) + "\n")
 `
 
 // llmEnvironment is every variable get_provider or its Go port reads to
@@ -71,10 +72,13 @@ func TestVenueOracleWorkUnitExplainProviderResolution(t *testing.T) {
 	ctx := context.Background()
 	_, file, _, _ := runtime.Caller(0)
 	root := filepath.Clean(filepath.Join(filepath.Dir(file), "..", "..", ".."))
-	unparsable, refused, unsupported := uuid.New(), uuid.New(), uuid.New()
+	// The ids are named, not random: the recording and every frozen run seed the same ones.
+	unparsable, refused, unsupported := stableVenueID("provider/unparsable"), stableVenueID("provider/refused"), stableVenueID("provider/unsupported")
+	golden := venueoracle.OpenGolden(t, venueGolden("workunit-explain-provider", t.Name(), providerGoldenPin))
 	venue := venueoracle.Start(t, ctx, venueoracle.Options{
-		Root:   root,
-		JWTKey: uuid.NewString() + uuid.NewString(),
+		Golden: golden, Root: golden.PythonRoot(t, root),
+		// No route here checks a token; the key is the one the other venue oracles of this package use.
+		JWTKey: oracleJWTKey,
 		Seed: func(t *testing.T, ctx context.Context, admin *pgxpool.Pool, _ *venueoracle.Venue) map[string]map[string]any {
 			t.Helper()
 			for _, org := range []struct {
@@ -144,22 +148,32 @@ VALUES ($1, $2, 'llm', $3, $4, false, now(), now())`, uuid.New(), org.id.String(
 	if err != nil {
 		t.Fatal(err)
 	}
-	async := strings.Replace(venue.AdminURI(t, venue.SourceDB), "postgres://", "postgresql+asyncpg://", 1)
-	async = strings.Replace(async, "postgresql://", "postgresql+asyncpg://", 1)
-	command := exec.Command("python3", "-c", pythonProviderResolutionProgram)
-	command.Dir = root
-	command.Env = append(withoutLLMEnvironment(os.Environ()), "PYTHONPATH="+filepath.Join(root, "src"), "POSTGRES_URI="+async)
-	command.Stdin = bytes.NewReader(payload)
-	var stdout, stderr bytes.Buffer
-	command.Stdout, command.Stderr = &stdout, &stderr
-	if err := command.Run(); err != nil {
-		t.Fatalf("python: %v\n%s", err, stderr.String())
-	}
+	// The launcher form: the harness's own producer starts the program in the closed environment (no LLM variable reaches it); the address of the
+	// run's own Python database is the one per-run entry, passed as an extra (it is not part of the request's key).
+	request := venueoracle.ProgramRequest("provider resolution", pythonProviderResolutionProgram, payload, providerDeclared)
+	answers := golden.Produce(t, golden.PythonRoot(t, root), []venueoracle.Request{request},
+		func(producer *venueoracle.Producer, _ []venueoracle.Request) []venueoracle.Response {
+			async := strings.Replace(venue.AdminURI(t, venue.SourceDB), "postgres://", "postgresql+asyncpg://", 1)
+			async = strings.Replace(async, "postgresql://", "postgresql+asyncpg://", 1)
+			command, err := producer.Command(context.Background(), providerDeclared, []string{"POSTGRES_URI=" + async}, "-c", pythonProviderResolutionProgram)
+			if err != nil {
+				t.Fatal(err)
+			}
+			command.Dir = producer.Root
+			command.Stdin = bytes.NewReader(payload)
+			var stdout, stderr bytes.Buffer
+			command.Stdout, command.Stderr = &stdout, &stderr
+			if err := command.Run(); err != nil {
+				t.Fatalf("python: %v\n%s", err, strings.ReplaceAll(stderr.String(), async, "<POSTGRES_URI>"))
+			}
+			return []venueoracle.Response{{Status: 0, Body: stdout.String()}}
+		})
+	golden.Consumed(t, answers...)
 	var python []struct {
 		Status int    `json:"status"`
 		Body   string `json:"body"`
 	}
-	for _, line := range strings.Split(stdout.String(), "\n") {
+	for _, line := range strings.Split(answers[0].Body, "\n") {
 		if rest, ok := strings.CutPrefix(line, "RESULT "); ok {
 			if err := json.Unmarshal([]byte(rest), &python); err != nil {
 				t.Fatal(err)
@@ -167,7 +181,7 @@ VALUES ($1, $2, 'llm', $3, $4, false, now(), now())`, uuid.New(), org.id.String(
 		}
 	}
 	if len(python) != len(cases) {
-		t.Fatalf("python answered %d of %d cases\n%s", len(python), len(cases), stderr.String())
+		t.Fatalf("python answered %d of %d cases", len(python), len(cases))
 	}
 
 	same := 0
@@ -185,23 +199,14 @@ VALUES ($1, $2, 'llm', $3, $4, false, now(), now())`, uuid.New(), org.id.String(
 		same++
 	}
 	t.Logf("%d of %d cases byte-identical to the Python api's answer", same, len(cases))
-	venueoracle.WriteProof(t)
+	golden.SkipDiff(t)
+	venueoracle.WriteGoOnlyProof(t, "the Go work-unit explain route's provider resolution against the frozen answers of the Python api")
+	golden.Finish(t)
 }
 
-func withoutLLMEnvironment(environ []string) []string {
-	out := make([]string, 0, len(environ))
-	for _, entry := range environ {
-		name, _, _ := strings.Cut(entry, "=")
-		keep := true
-		for _, cleared := range llmEnvironment {
-			if name == cleared {
-				keep = false
-				break
-			}
-		}
-		if keep {
-			out = append(out, entry)
-		}
-	}
-	return out
-}
+// The golden's pin is the digest the record verb writes; PIN: names the golden until it does.
+const providerGoldenPin = "19df28e5d0712cb8adb3eec405e54736babe74f81fb4a9955ceca972d3af1706"
+
+// providerDeclared holds the environment entries that shape the Python program's answers. The address of the run's own database is not one of
+// them: it is made for the run and passed as a per-run entry (POSTGRES_URI).
+var providerDeclared = map[string]string{"OTEL_SDK_DISABLED": "true", "ENVIRONMENT": "test"}

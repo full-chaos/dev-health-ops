@@ -449,11 +449,8 @@ var (
 	migratedInstances []*containers.Instance
 )
 
-func TestMain(m *testing.M) {
-	code := m.Run()
-	closeMigratedStores()
-	os.Exit(code)
-}
+// The package's untagged TestMain (main_test.go) runs RunTests, then this.
+func init() { afterTests = closeMigratedStores }
 
 func closeMigratedStores() {
 	migratedStoresLock.Lock()

@@ -1,5 +1,0 @@
-label=internal/jobs/metrics/remaining (DORA incident projection vs the live Python builder)
-package=./internal/jobs/metrics/remaining
-run=^TestGoIncidentProjectionMatchesLivePythonBuilder$
-python=1
-proof=remaining-dora-incident-sql|the DORA incident projection was not compared against live Python

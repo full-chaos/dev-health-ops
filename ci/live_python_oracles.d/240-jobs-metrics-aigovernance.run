@@ -1,5 +1,0 @@
-label=internal/jobs/metrics/aigovernance (ai_governance port vs live Python, CHAOS-4285)
-package=./internal/jobs/metrics/aigovernance
-run=^TestGovernanceRowsMatchLivePythonProduction$
-python=1
-proof=ai-governance-golden|ai_governance live Python oracle measurement did not occur

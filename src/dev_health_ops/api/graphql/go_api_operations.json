@@ -8,6 +8,11 @@
     "digest": "186aa8ced0a7ab707911c61c829f561157913dc9c5176d665705394cc84f6bba"
   },
   {
+    "operation": "aiAttributedPrs",
+    "digest": "6ed54ebe5a535e28c16c1e903f64eda9fbbc32577465ccebe7fa30e2075f2f3e",
+    "legacy": true
+  },
+  {
     "operation": "aiAttributionOverview",
     "digest": "ed60bc0ddeb514d39c3ed1c655e65d0c414e5e5ab05e33928a99f527972cda0a"
   },

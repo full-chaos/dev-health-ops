@@ -10,15 +10,11 @@ import (
 	"math/big"
 	"net"
 	"net/http"
-	"os"
-	"os/exec"
-	"path/filepath"
-	"runtime"
 	"strings"
 	"testing"
 	"time"
 
-	"github.com/full-chaos/dev-health-ops/internal/testsupport/pyoracle"
+	"github.com/full-chaos/dev-health-ops/internal/testsupport/programoracle"
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/venueoracle"
 )
 
@@ -324,31 +320,20 @@ func (timeoutError) Error() string   { return "i/o timeout" }
 func (timeoutError) Timeout() bool   { return true }
 func (timeoutError) Temporary() bool { return true }
 
-// TestListRepositoriesVenueOracleMatchesLivePython requires the Go client to
+// TestListRepositoriesVenueOracleMatchesFrozenPython requires the Go client to
 // send the same requests (URL, Authorization) and to answer the same
 // repositories, or fail with the same exception text, as the api's own
 // GitHubCodeClient for the same scripted GitHub responses: the org, user,
 // search and installation listings, Link-header pagination, every status
 // class, the retry attempts, the rate-limit triage and malformed bodies.
-func TestListRepositoriesVenueOracleMatchesLivePython(t *testing.T) {
-	if os.Getenv("DEV_HEALTH_LIVE_PYTHON_ORACLES") != "1" {
-		t.Skip("the GitHub list oracle needs the full project Python environment; ci/check_go.sh venue-oracles runs it")
-	}
-	_, file, _, _ := runtime.Caller(0)
-	root := filepath.Clean(filepath.Join(filepath.Dir(file), "..", "..", ".."))
-	python := pyoracle.Resolve(t, root)
+func TestListRepositoriesVenueOracleMatchesFrozenPython(t *testing.T) {
 	scenarios := listScenarios()
 	input, err := json.Marshal(scenarios)
 	if err != nil {
 		t.Fatal(err)
 	}
-	command := exec.Command(python, "-c", pythonListRepositoriesProgram)
-	command.Env = append(os.Environ(), "PYTHONPATH="+filepath.Join(root, "src"))
-	command.Stdin = bytes.NewReader(input)
-	output, err := command.CombinedOutput()
-	if err != nil {
-		t.Fatalf("live python: %v", pyoracle.RunError(python, err, output))
-	}
+	output := frozenPython(t, "list-repositories.golden.json",
+		programoracle.Program{Name: "list-repositories", Text: pythonListRepositoriesProgram, Stdin: []byte(input)})[0]
 	lines := strings.Split(strings.TrimSpace(string(output)), "\n")
 	var want []struct {
 		Requests [][2]*string    `json:"requests"`
@@ -425,7 +410,7 @@ func TestListRepositoriesVenueOracleMatchesLivePython(t *testing.T) {
 		}
 	}
 	t.Logf("%d scenarios compared", len(scenarios))
-	venueoracle.WriteProof(t)
+	venueoracle.WriteGoOnlyProof(t, "Go's code-host listing against the frozen requests and results of Python's client")
 }
 
 // describe names a scenario in a failure.

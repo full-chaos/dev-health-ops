@@ -554,21 +554,6 @@ check_live_python_oracles() {
     rm -rf -- "${proof_dir}"
     return 1
   fi
-  printf 'go test -count=1: internal/api/orgs (api decisions vs live Python)\n'
-  if ! (
-    cd "${ROOT}"
-    "${GO_ENV_OFF[@]}" \
-      GOWORK=off \
-      DEV_HEALTH_LIVE_PYTHON_ORACLES=1 \
-      DEV_HEALTH_LIVE_PYTHON_ORACLE_PROOF_DIR="${proof_dir}" \
-      PYTHONPATH="${ROOT}/src${PYTHONPATH:+:${PYTHONPATH}}" \
-      go test -mod=readonly -count=1 \
-        -run '^(TestRegistryMatchesLivePython)$' \
-        ./internal/api/orgs
-  ); then
-    rm -rf -- "${proof_dir}"
-    return 1
-  fi
   printf 'go test -count=1: internal/api/pytime (api decisions vs live Python)\n'
   if ! (
     cd "${ROOT}"
@@ -580,21 +565,6 @@ check_live_python_oracles() {
       go test -mod=readonly -count=1 \
         -run '^(TestParseDatetimeMatchesLivePydantic|TestParseDateMatchesLivePydantic|TestDatetimeReasonMatchesLivePydantic|TestFromISOFormatMatchesLivePython|TestPydanticMatchesLivePydanticDumpJSON)$' \
         ./internal/api/pytime
-  ); then
-    rm -rf -- "${proof_dir}"
-    return 1
-  fi
-  printf 'go test -count=1: internal/api/health (api decisions vs live Python)\n'
-  if ! (
-    cd "${ROOT}"
-    "${GO_ENV_OFF[@]}" \
-      GOWORK=off \
-      DEV_HEALTH_LIVE_PYTHON_ORACLES=1 \
-      DEV_HEALTH_LIVE_PYTHON_ORACLE_PROOF_DIR="${proof_dir}" \
-      PYTHONPATH="${ROOT}/src${PYTHONPATH:+:${PYTHONPATH}}" \
-      go test -mod=readonly -count=1 \
-        -run '^(TestSchemaRevisionsMatchLivePythonAlembic)$' \
-        ./internal/api/health
   ); then
     rm -rf -- "${proof_dir}"
     return 1
@@ -704,7 +674,7 @@ check_live_python_oracles() {
     rm -rf -- "${proof_dir}"
     return 1
   fi
-  for proof_name in api-policy-principal api-pyjson api-pyjson-dumps api-pyjson-model api-pyjson-syntax-error-text api-orgs-registry api-pytime api-pytime-date api-pytime-datereason api-pybody-date-aware api-syncadmin-backfill-request api-pytime-fromisoformat api-pytime-pydantic api-health-revisions api-pybody-queryint api-pybody-querybool api-pybody-bodyint edgetoken-signer api-pybody-string api-pybody-emailstr api-pybody-queryuuid api-licensing-registry api-licensing-sign api-licensing-b64decode api-licensing-verify auth-signedtoken admin-llmreadiness-probe; do
+  for proof_name in api-policy-principal api-pyjson api-pyjson-dumps api-pyjson-model api-pyjson-syntax-error-text api-pytime api-pytime-date api-pytime-datereason api-pybody-date-aware api-syncadmin-backfill-request api-pytime-fromisoformat api-pytime-pydantic api-pybody-queryint api-pybody-querybool api-pybody-bodyint edgetoken-signer api-pybody-string api-pybody-emailstr api-pybody-queryuuid api-licensing-registry api-licensing-sign api-licensing-b64decode api-licensing-verify auth-signedtoken admin-llmreadiness-probe; do
     proof_file="${proof_dir}/${proof_name}"
     if [ ! -f "${proof_file}" ] || [ "$(cat "${proof_file}")" != "executed" ]; then
       printf 'ERROR: api live Python oracle %s did not run\n' "${proof_name}" >&2
@@ -736,22 +706,6 @@ check_live_python_oracles() {
     return 1
   fi
 
-  printf 'go test -count=1: internal/api/externalingest (schema bundle, operational host, envelope validation vs live Python)\n'
-  if ! (
-    cd "${ROOT}"
-    "${GO_ENV_OFF[@]}" \
-      GOWORK=off \
-      DEV_HEALTH_LIVE_PYTHON_ORACLES=1 \
-      DEV_HEALTH_LIVE_PYTHON_ORACLE_PROOF_DIR="${proof_dir}" \
-      PYTHON="${PYTHON:-python3}" \
-      PYTHONPATH="${ROOT}/src${PYTHONPATH:+:${PYTHONPATH}}" \
-      go test -mod=readonly -count=1 \
-        -run '^(TestOperationalProviderInstanceMatchesLivePython|TestEnvelopeValidationMatchesLivePython|TestDataPlaneEnvelopeParseMatchesLivePython)$' \
-        ./internal/api/externalingest
-  ); then
-    rm -rf -- "${proof_dir}"
-    return 1
-  fi
   printf 'go test -count=1: internal/api/recordvalidation (record models and record validation vs live Python)\n'
   if ! (
     cd "${ROOT}"
@@ -768,7 +722,7 @@ check_live_python_oracles() {
     rm -rf -- "${proof_dir}"
     return 1
   fi
-  for proof_name in externalingest-operational-host externalingest-record-models externalingest-record-validation externalingest-envelope-validation externalingest-parse-dataplane; do
+  for proof_name in externalingest-record-models externalingest-record-validation; do
     proof_file="${proof_dir}/${proof_name}"
     if [ ! -f "${proof_file}" ] || [ "$(cat "${proof_file}")" != "executed" ]; then
       printf 'ERROR: externalingest live Python oracle %s did not run\n' "${proof_name}" >&2

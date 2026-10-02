@@ -199,6 +199,7 @@ func oracleGo(t *testing.T, plane oraclePlane, catalogPath string, args ...strin
 	t.Helper()
 	argv := append(append([]string{}, args...), "-postgres-uri", plane.dsn, "-catalog", catalogPath)
 	out, errOut, err := captureVerb(t, argv...)
+	requireCensusAscending(t, out)
 	return exitCodeFor(err), plane.norm(out), plane.norm(errOut)
 }
 
@@ -651,6 +652,32 @@ func TestGoAPIRoutingMatchesFrozenPython(t *testing.T) {
 
 // censusLines is the `rows by schema_digest:` block of a text `status`: the heading and the digest lines up to
 // the first blank line, which both producers print alike.
+// requireCensusAscending fails when the digest lines of a text `status` census, AS THE VERB PRINTED THEM (before
+// the Go plane's digest is read as the pin's, and before censusLines orders them for the comparison), are not in
+// ascending order of the digest: the order is part of what the verb prints, and the comparison's own sort
+// would otherwise hide a verb that printed them in another order.
+func requireCensusAscending(t *testing.T, text string) {
+	t.Helper()
+	var digests []string
+	in := false
+	for _, line := range strings.Split(text, "\n") {
+		if strings.HasPrefix(line, "rows by schema_digest:") {
+			in = true
+			continue
+		}
+		if !in {
+			continue
+		}
+		if strings.TrimSpace(line) == "" {
+			break
+		}
+		digests = append(digests, strings.Fields(line)[0])
+	}
+	if !sort.StringsAreSorted(digests) {
+		t.Errorf("the census digests are not printed in ascending order of the digest: %v", digests)
+	}
+}
+
 func censusLines(text string) string {
 	lines := strings.Split(text, "\n")
 	var out []string

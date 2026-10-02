@@ -10,6 +10,7 @@ package stripeclient
 import (
 	"context"
 	"errors"
+	"github.com/full-chaos/dev-health-ops/internal/httpguard"
 	"net/http"
 	"time"
 
@@ -47,8 +48,8 @@ func New(options Options) *Provider {
 	}
 	client := &http.Client{Timeout: 80 * time.Second}
 	if options.HTTPClient != nil {
-		copied := *options.HTTPClient
-		client = &copied
+		// A supplied client follows no redirect: the secret key rides every request (D4124).
+		client = httpguard.NoRedirects(options.HTTPClient)
 	}
 	base := client.Transport
 	if base == nil {

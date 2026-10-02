@@ -13,6 +13,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"github.com/full-chaos/dev-health-ops/internal/httpguard"
 	"io"
 	"net"
 	"net/http"
@@ -103,7 +104,7 @@ func DefaultRetryable(r Response) bool {
 // place on a timeout or refused connection and on a retryable status, a 3xx
 // an APIException, then classified by _raise_for_status.
 func (c Core) Get(ctx context.Context, target, operation string) (Response, error) {
-	httpClient := c.HTTP
+	httpClient := httpguard.NoRedirects(c.HTTP)
 	if httpClient == nil {
 		httpClient = &http.Client{Timeout: DefaultTimeout, CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}
 	}

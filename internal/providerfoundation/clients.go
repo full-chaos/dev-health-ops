@@ -10,6 +10,7 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"encoding/pem"
+	"github.com/full-chaos/dev-health-ops/internal/httpguard"
 	"io"
 	"net/http"
 	"net/url"
@@ -299,7 +300,7 @@ func NewPagerDutyClientCredentialsAuth(credential Credential, doer HTTPDoer) (*P
 		subdomain:    subdomain.Reveal(),
 		region:       region,
 		scope:        pagerDutyReadScopes,
-		doer:         doer,
+		doer:         httpguard.NoRedirectsDoer(doer), // the client secret rides this request (D4124)
 		now:          time.Now,
 	}, nil
 }
@@ -418,7 +419,7 @@ func NewGitHubAppAuth(credential Credential, baseURL string, doer HTTPDoer) (*Gi
 	if err != nil || parsed.Scheme == "" || parsed.Host == "" {
 		return nil, credentialInvalid("base_url_invalid")
 	}
-	return &GitHubAppAuth{appID: appID.Reveal(), installationID: installationID.Reveal(), privateKey: privateKey, baseURL: strings.TrimRight(baseURL, "/"), doer: doer, now: time.Now}, nil
+	return &GitHubAppAuth{appID: appID.Reveal(), installationID: installationID.Reveal(), privateKey: privateKey, baseURL: strings.TrimRight(baseURL, "/"), doer: httpguard.NoRedirectsDoer(doer), now: time.Now}, nil
 }
 
 // readGitHubAppPrivateKeyFile mirrors github_credentials_from_mapping's

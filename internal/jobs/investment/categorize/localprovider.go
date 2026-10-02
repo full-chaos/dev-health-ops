@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"github.com/full-chaos/dev-health-ops/internal/httpguard"
 	"io"
 	"net/http"
 
@@ -74,7 +75,8 @@ func NewLocalProvider(cfg LocalProviderConfig) *LocalProvider {
 		defaultTemperature := defaultLocalTemperature
 		cfg.Temperature = &defaultTemperature
 	}
-	client := cfg.HTTPClient
+	// A supplied client follows no redirect: the provider's API key rides every request (D4124).
+	client := httpguard.NoRedirects(cfg.HTTPClient)
 	if client == nil {
 		client = newHardenedHTTPClient()
 	}

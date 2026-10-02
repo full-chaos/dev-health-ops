@@ -124,6 +124,17 @@ func postPagerDutyTokenForm(ctx context.Context, doer HTTPDoer, config PagerDuty
 // timeout and redirect policy.
 func pagerDutyClient(doer HTTPDoer, followRedirects bool, timeout time.Duration) HTTPDoer {
 	if doer != nil {
+		// A supplied *http.Client gets the same redirect policy as the default below; any other doer is a test's
+		// transport and cannot follow a redirect (D4124).
+		if supplied, ok := doer.(*http.Client); ok {
+			copied := *supplied
+			if followRedirects {
+				copied.CheckRedirect = DropCredentialsOnHostChange
+			} else {
+				copied.CheckRedirect = func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }
+			}
+			return &copied
+		}
 		return doer
 	}
 	client := &http.Client{Timeout: timeout}

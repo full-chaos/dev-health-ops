@@ -32,6 +32,7 @@
 package sso
 
 import (
+	"github.com/full-chaos/dev-health-ops/internal/httpguard"
 	"log/slog"
 	"net/http"
 	"time"
@@ -110,9 +111,7 @@ func Routes(deps Deps) []httpapi.Route {
 	if deps.Write == nil {
 		deps.Write = httpapi.WriteError
 	}
-	if deps.HTTPClient == nil {
-		deps.HTTPClient = defaultOIDCClient()
-	}
+	deps.HTTPClient = httpClientFor(deps.HTTPClient)
 	h := handlers{deps}
 	g := deps.Guard
 	const prefix = "/api/v1/auth"
@@ -271,4 +270,14 @@ func (h handlers) oauthPair() http.Handler {
 		}
 		h.Write(w, r, httpapi.CodeNotFound)
 	})
+}
+
+// httpClientFor is the client every IdP call uses: the default (SSRF-guarded transport, no redirects) when none is
+// supplied, else the supplied one with its redirect policy replaced by "follow nothing": the client secret, the
+// authorization code and the access token ride these requests (D4124).
+func httpClientFor(supplied *http.Client) *http.Client {
+	if supplied == nil {
+		return defaultOIDCClient()
+	}
+	return httpguard.NoRedirects(supplied)
 }

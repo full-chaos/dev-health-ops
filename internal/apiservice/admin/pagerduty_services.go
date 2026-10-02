@@ -10,6 +10,7 @@ package admin
 import (
 	"context"
 	"errors"
+	"github.com/full-chaos/dev-health-ops/internal/httpguard"
 	"io"
 	"math"
 	"net"
@@ -477,7 +478,7 @@ func (h *handlers) fetchPagerDutyServices(ctx context.Context, auth pagerDutyReq
 // redirect following. A supplied doer (a test's transport) is used as is.
 func pagerDutyServicesClient(doer providerfoundation.HTTPDoer) providerfoundation.HTTPDoer {
 	if doer != nil {
-		return doer
+		return httpguard.NoRedirectsDoer(doer) // the PagerDuty token rides these requests (D4124)
 	}
 	return &http.Client{Timeout: 30 * time.Second, CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}
 }

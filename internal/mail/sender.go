@@ -29,6 +29,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"github.com/full-chaos/dev-health-ops/internal/httpguard"
 	envsecrets "github.com/full-chaos/dev-health-ops/internal/platform/secrets"
 	"io"
 	"log/slog"
@@ -160,6 +161,8 @@ func NewSenderFromEnv(client *http.Client) (Sender, error) {
 		if client == nil {
 			client = &http.Client{Timeout: 30 * time.Second}
 		}
+		// A supplied client follows no redirect: the API key rides every request (D4124).
+		client = httpguard.NoRedirects(client)
 		return &resendSender{from: from, apiKey: key, client: client}, nil
 	case "smtp":
 		port := 1025

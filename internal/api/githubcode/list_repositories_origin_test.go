@@ -10,6 +10,8 @@ import (
 	"strings"
 	"sync"
 	"testing"
+
+	"github.com/full-chaos/dev-health-ops/internal/testsupport/redirectprobe"
 )
 
 // A next-page Link on another origin is refused: no request reaches the other host and the error carries no URL,
@@ -196,3 +198,11 @@ func TestASuppliedClientNeverFollowsARedirectWithTheToken(t *testing.T) {
 type roundTripFunc func(*http.Request) (*http.Response, error)
 
 func (f roundTripFunc) RoundTrip(request *http.Request) (*http.Response, error) { return f(request) }
+
+// The same probe through the shared one (a 307 to another origin; that origin sees no request at all).
+func TestASuppliedClientNeverFollowsARedirectToAnotherOriginProbe(t *testing.T) {
+	probe := redirectprobe.New(t)
+	client := Client{Token: "SECRET-TOKEN", BaseURL: probe.Base.URL, HTTP: probe.Client()}
+	_, _ = client.ListRepositories(context.Background(), ListOptions{Org: "acme"})
+	probe.Assert(t)
+}

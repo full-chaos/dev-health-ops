@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"github.com/full-chaos/dev-health-ops/internal/httpguard"
 	"io"
 	"net/http"
 	"strings"
@@ -101,7 +102,8 @@ func NewOllamaProvider(cfg OllamaProviderConfig) *OllamaProvider {
 		defaultTemperature := defaultOllamaTemperature
 		cfg.Temperature = &defaultTemperature
 	}
-	client := cfg.HTTPClient
+	// A supplied client follows no redirect: the provider's API key rides every request (D4124).
+	client := httpguard.NoRedirects(cfg.HTTPClient)
 	if client == nil {
 		client = newHardenedHTTPClient()
 	}

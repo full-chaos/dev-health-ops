@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"github.com/full-chaos/dev-health-ops/internal/httpguard"
 	"io"
 	"net"
 	"net/http"
@@ -128,7 +129,8 @@ type openAICompatibleReadinessProber struct {
 // without a real network call; nil builds the real hardened client.
 func newOpenAICompatibleReadinessProber(doer providerfoundation.HTTPDoer) *openAICompatibleReadinessProber {
 	if doer != nil {
-		return &openAICompatibleReadinessProber{client: doer}
+		// the saved API key rides these requests: a supplied *http.Client follows no redirect (D4124)
+		return &openAICompatibleReadinessProber{client: httpguard.NoRedirectsDoer(doer)}
 	}
 	return &openAICompatibleReadinessProber{client: &http.Client{
 		// Codex r3 hardening-table audit (D3016, CHAOS-6976): matches

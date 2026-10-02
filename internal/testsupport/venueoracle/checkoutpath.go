@@ -127,3 +127,23 @@ func declaredCheckoutPathErr(declared map[string]string, root string) error {
 	}
 	return keyedCheckoutPathErr(entries, checkoutRoots(Options{Root: root}))
 }
+
+// pythonPathRelErr is an error for a PythonPathRel name that is absolute, leaves the Python root or cannot be
+// one directory name in a PATH list: it is root-relative by contract, and the golden's key holds the name
+// (CHAOS-7849 follow-up). It names the offender by position, not by value.
+func pythonPathRelErr(rel []string) error {
+	for index, name := range rel {
+		clean := filepath.ToSlash(filepath.Clean(filepath.FromSlash(name)))
+		switch {
+		case clean == ".": // filepath.Clean turns "" into "." too
+			return fmt.Errorf("Options.PythonPathRel entry #%d is empty: it must name a directory under the Python root", index)
+		case strings.HasPrefix(name, "/") || strings.HasPrefix(name, "\\"): // a drive letter is caught by the ":" clause
+			return fmt.Errorf("Options.PythonPathRel entry #%d is an absolute path: it must be root-relative and slash-separated, so the golden's key never holds the path of a checkout", index)
+		case clean == ".." || strings.HasPrefix(clean, "../") || strings.Contains(filepath.ToSlash(name), "/../"):
+			return fmt.Errorf("Options.PythonPathRel entry #%d leaves the Python root (..): it must stay under the root", index)
+		case strings.Contains(name, ":"):
+			return fmt.Errorf("Options.PythonPathRel entry #%d holds a ':': PYTHONPATH is a ':'-separated list and the entry would split in two", index)
+		}
+	}
+	return nil
+}

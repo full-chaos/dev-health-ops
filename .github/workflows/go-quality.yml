@@ -249,6 +249,8 @@ jobs:
           if ! git cat-file -e "${BASE_SHA}^{commit}" 2>/dev/null; then
             git fetch --no-tags origin "${BASE_SHA}"
           fi
+          # The closed lists (ci/ratchets.tsv, `check_go.sh ratchets`) are held to their size on this base (CHAOS-7904).
+          echo "RATCHET_BASE_SHA=${BASE_SHA}" >> "${GITHUB_ENV}"
           if ! git cat-file -e "${BASE_SHA}:contracts/jobs/v1" 2>/dev/null; then
             echo "No v1 job contracts exist on the merge base; validating the additive tree only."
             exit 0

@@ -177,6 +177,8 @@ var perRunPythonEnv = map[string]perRunName{
 	"REDIS_URL":      {false, "the address of the run's own cache"},
 	"TMPDIR":         {false, "inherited: the host's directory for temporary files"},
 
+	"GO_API_QUERY_API_URL":                {true, "the address of the query-api the test starts for the run (a random loopback port)"},
+	"QUERY_API_INTERNAL_URL":              {true, "the address of the query-api the test starts for the run (a random loopback port)"},
 	"GITHUB_APP_PRIVATE_KEY":              {true, "a private key generated for the run (the GitHub App venue signs with a new RSA key every run)"},
 	"REQUESTS_CA_BUNDLE":                  {true, "a temporary certificate file of the test's fake TLS server"},
 	"SMTP_HOST":                           {true, "the address of the test's fake SMTP sink (a loopback host the sink listens on)"},

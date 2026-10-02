@@ -5,12 +5,7 @@
 # The list only shrinks: the owner of a package converts its sites to
 # producer.Command and deletes its line in the same change (CHAOS-7707).
 internal/api/externalingest
-internal/api/legacyingest
-internal/apiservice
-internal/apiservice/customerpush
 internal/backfillrun
-internal/chmigrate
-internal/fixturescli
 internal/maintenancecli
 internal/metricscli
 internal/operationalbackfill

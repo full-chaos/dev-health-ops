@@ -1,8 +1,0 @@
-label=internal/providerfoundation (live Python encryption + credential field-read compatibility)
-package=./internal/providerfoundation/...
-run=^(TestFernetCipherMatchesLivePythonCustomSalt|TestFernetCipherMatchesLivePythonDefaultSalt|TestFernetRefusesWithoutKeyLikePython|TestCredentialFieldReadsMatchLivePython|TestCredentialFieldGridMatchesLivePython)$
-proof=providerfoundation-credentials|providerfoundation live Python encryption measurement providerfoundation-credentials did not occur
-proof=providerfoundation-credentials-default-salt|providerfoundation live Python encryption measurement providerfoundation-credentials-default-salt did not occur
-proof=providerfoundation-credentials-no-key|providerfoundation live Python encryption measurement providerfoundation-credentials-no-key did not occur
-proof=providerfoundation-credential-field-reads|providerfoundation live Python encryption measurement providerfoundation-credential-field-reads did not occur
-proof=providerfoundation-credential-field-grid|providerfoundation live Python encryption measurement providerfoundation-credential-field-grid did not occur

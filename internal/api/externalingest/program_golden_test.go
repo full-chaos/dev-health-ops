@@ -2,9 +2,6 @@ package externalingest
 
 import (
 	"fmt"
-	"os"
-	"path/filepath"
-	"sort"
 	"strings"
 
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/venueoracle"
@@ -36,23 +33,6 @@ func programGolden(file, test, digest string) venueoracle.GoldenSpec {
 // PYTHONPATH and no bytecode they are the whole environment the producer gets:
 // nothing is inherited from the process that records.
 var producerEnv = map[string]string{"PYTHONHASHSEED": "0", "PYTHONUTF8": "1"}
-
-// producerCommandEnv is the environment a recording gives the producer's child.
-func producerCommandEnv(pinnedRoot string) []string {
-	environment := []string{
-		"PATH=" + os.Getenv("PATH"), "HOME=" + os.Getenv("HOME"),
-		"PYTHONPATH=" + filepath.Join(pinnedRoot, "src"), "PYTHONDONTWRITEBYTECODE=1",
-	}
-	names := make([]string, 0, len(producerEnv))
-	for name := range producerEnv {
-		names = append(names, name)
-	}
-	sort.Strings(names)
-	for _, name := range names {
-		environment = append(environment, name+"="+producerEnv[name])
-	}
-	return environment
-}
 
 // withoutLogLines drops the structured log lines the Python process writes on
 // start-up ({"timestamp": ...}): they carry the clock, so they would make two

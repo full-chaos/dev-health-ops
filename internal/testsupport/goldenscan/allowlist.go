@@ -1,11 +1,8 @@
 package goldenscan
 
 import (
-	"crypto/sha256"
 	_ "embed"
-	"encoding/hex"
 	"fmt"
-	"regexp"
 	"sort"
 	"strconv"
 	"strings"
@@ -14,18 +11,8 @@ import (
 //go:embed allowlist.tsv
 var allowlistTSV string
 
-// exactShape is the form of a row that pins ONE exact value by its sha256: a composite value no shape describes (no shape rule).
-var exactShape = regexp.MustCompile(`^sha256:[0-9a-f]{64}$`)
-
-// holdsShape reports whether a hit has the shape a row pins: uuid or hex64 by the shape of the value, or sha256:<hex> by the digest
-// of the exact value.
-func holdsShape(row Row, hit Hit) bool {
-	if strings.HasPrefix(row.Shape, "sha256:") {
-		sum := sha256.Sum256([]byte(hit.Value))
-		return row.Shape == "sha256:"+hex.EncodeToString(sum[:])
-	}
-	return hit.Shape == row.Shape
-}
+// holdsShape reports whether a hit has the shape a row pins.
+func holdsShape(row Row, hit Hit) bool { return hit.Shape == row.Shape }
 
 // Row is one allowlist row: a golden file and a key, the exact shape every hit value there has, the exact count of hits, and the line
 // of the triage record the row cites.
@@ -61,8 +48,8 @@ func ParseAllowlist(text string) ([]Row, error) {
 			return nil, fmt.Errorf("allowlist line %d: a row names one file and one key", number+1)
 		case strings.ContainsAny(row.Path+row.Key, "*?[]"):
 			return nil, fmt.Errorf("allowlist line %d: no wildcard in a path or a key", number+1)
-		case row.Shape != "uuid" && row.Shape != "hex64" && !exactShape.MatchString(row.Shape):
-			return nil, fmt.Errorf("allowlist line %d: shape %q is not uuid, hex64 or sha256:<64 hex> (the sha256 of the one exact value)", number+1, row.Shape)
+		case row.Shape != "uuid" && row.Shape != "hex64":
+			return nil, fmt.Errorf("allowlist line %d: shape %q is not uuid or hex64", number+1, row.Shape)
 		case row.Triage == "":
 			return nil, fmt.Errorf("allowlist line %d: a row cites the triage line that accepts it", number+1)
 		case seen[row.Path+"\x00"+row.Key]:

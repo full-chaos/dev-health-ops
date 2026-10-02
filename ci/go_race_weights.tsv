@@ -23,7 +23,7 @@ internal/queryapi/investmentflow	33
 internal/storedversion	116
 internal/streamhandlers	136
 internal/streamrunnerservice	21
-internal/testsupport/goldenscan	48
-internal/testsupport/goldenscan/treegate	204
+internal/testsupport/goldenscan	19
+internal/testsupport/goldenscan/treegate	161
 internal/testsupport/venueoracle	79
 internal/testsupport/venueoracle/goldenhygiene	52

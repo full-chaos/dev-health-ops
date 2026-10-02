@@ -5,7 +5,6 @@ import (
 	"compress/gzip"
 	"crypto/sha256"
 	"encoding/base64"
-	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"math/rand"
@@ -97,17 +96,14 @@ func TestTheRuleFindsAKeyedHighEntropyValueInEveryPlace(t *testing.T) {
 	}
 }
 
-func TestTheRuleLeavesWhatIsNotACredential(t *testing.T) {
+func TestTheRuleLeavesWhatTheScannerLeaves(t *testing.T) {
 	value := randomValue()
 	for name, leaves := range map[string]map[string]any{
-		"a high-entropy value under a plain key":  {"name": value},
-		"a snake_case identifier under a key key": {"dataset_key": "orders_by_team_week"},
-		"a counter name":                {"idempotencyKey": "create-config.run_two_a1"},
-		"a short value":                 {"api_key": "abc123"},
-		"a placeholder word":            {"api_key": "synthetic" + value},
-		"low entropy":                   {"api_key": strings.Repeat("a", 40)},
-		"entropy below the bound":       {"api_key": strings.Repeat("abcdefghij", 3)},
-		"a 19-letter segment, no digit": {"api_key": "aBxZqLmPwRtYkNcVdHs"},
+		"a high-entropy value under a plain key": {"name": value},
+		"a short value":                          {"api_key": "abc123"},
+		"a stopword inside":                      {"api_key": "ab12" + "password" + value[:10]},
+		"low entropy":                            {"api_key": strings.Repeat("a1", 20)},
+		"an allowlisted key":                     {"key_alias": value},
 	} {
 		leaves2, err := Leaves(golden(t, leaves))
 		if err != nil {
@@ -230,10 +226,10 @@ func TestACheckTreeFindsAStaleRowAndAMissingFile(t *testing.T) {
 	}
 }
 
-// The windowed rule is the expression over the whole text (CHAOS-7890: the expression over a long leaf took 74 s over the tree).
-func TestTheWindowedRuleEqualsTheExpressionOverTheWholeText(t *testing.T) {
+// The windowed scan is the expression over the whole text (CHAOS-7890: the expression over a long leaf took 74 s over the tree).
+func TestTheWindowedScanEqualsTheExpressionOverTheWholeText(t *testing.T) {
 	r := rand.New(rand.NewSource(7890))
-	pieces := []string{"api_key", "API:", "Api-token=", "password: ", "secret", `"`, " ", "\n", "=", ":", "aB3xZq9Lm2Pw7Rt5Yk8", strings.Repeat("a1", 40), strings.Repeat("Zx9", 60), "plain words here", "key", "KEY", "ſecret", "token\\n", "access ", "creds=", "|"}
+	pieces := []string{"api_key", "API:", "Api-token=", "password: ", "secret", `"`, " ", "\n", "=", ":", "aB3xZq9Lm2Pw7Rt5Yk8", strings.Repeat("a1", 40), strings.Repeat("Zx9", 60), "plain words here", "key", "KEY", "ſecret", "token\\n", "access ", "creds=", "|", "auth_", "x-y.z", strings.Repeat("\u023a", 70), "\u212a"}
 	for iter := 0; iter < 3000; iter++ {
 		var b strings.Builder
 		for n := r.Intn(14); n >= 0; n-- {
@@ -244,61 +240,22 @@ func TestTheWindowedRuleEqualsTheExpressionOverTheWholeText(t *testing.T) {
 		}
 		text := b.String()
 		var want []string
-		for _, match := range generic.FindAllStringSubmatch(text, -1) {
-			if accepted(match[1]) {
-				want = append(want, match[1])
+		for _, match := range generic.FindAllString(text, -1) {
+			if full, secret := secretOf(match); accepted(full, secret) {
+				want = append(want, secret)
 			}
 		}
-		var got []string
-		for _, captured := range genericCaptures(text) {
-			if accepted(captured) {
-				got = append(got, captured)
-			}
-		}
-		if !reflect.DeepEqual(got, want) && !(len(got) == 0 && len(want) == 0) {
-			t.Fatalf("windowed captures differ from the expression over %q: %q vs %q", text, got, want)
+		if got := SecretsIn(text); !reflect.DeepEqual(got, want) && !(len(got) == 0 && len(want) == 0) {
+			t.Fatalf("the windowed scan differs from the expression over the whole text, %q: %q vs %q", text, got, want)
 		}
 	}
 }
 
-// A letters-only segment is random-looking from 20 characters, a mixed one from 12: the two bounds are pinned from both sides.
-func TestTheSegmentBoundsArePinnedFromBothSides(t *testing.T) {
-	for name, tc := range map[string]struct {
-		value string
-		hit   bool
-	}{
-		"20 letters":                     {"aBxZqLmPwRtYkNcVdHsE", true},
-		"19 letters":                     {"aBxZqLmPwRtYkNcVdHs", false},
-		"12 mixed":                       {"aB3xZq9Lm2Pw", true},
-		"11 mixed, short words after it": {"aB3xZq9Lm2P_qw_er_ty_ui", false},
-		"12 mixed, short words after":    {"aB3xZq9Lm2Pw_qw_er_ty", true},
-	} {
-		leaves, err := Leaves(golden(t, map[string]any{"api_key": tc.value}))
-		if err != nil {
-			t.Fatal(err)
-		}
-		if got := len(Hits(leaves)) == 1; got != tc.hit {
-			t.Errorf("%s: hit = %v, want %v (entropy %.2f)", name, got, tc.hit, entropy(tc.value))
-		}
-	}
-}
-
-// A row that pins one exact value by its sha256 passes that value and no other.
-func TestAnExactRowPassesOnlyItsOwnValue(t *testing.T) {
-	value := randomValue()
-	sum := sha256.Sum256([]byte(value))
-	row := Row{Path: "a/g.json", Key: "api_key", Shape: "sha256:" + hex.EncodeToString(sum[:]), Count: 1, Triage: "triage line"}
-	if problems, _ := Check("a/g.json", golden(t, map[string]any{"api_key": value}), []Row{row}); len(problems) != 0 {
-		t.Fatalf("the exact value was refused: %v", problems)
-	}
-	other := strings.Replace(value, "aB3x", "bC4y", 1)
-	if problems, _ := Check("a/g.json", golden(t, map[string]any{"api_key": other}), []Row{row}); len(problems) == 0 {
-		t.Fatal("another value passed through an exact row")
-	}
-	if _, err := ParseAllowlist("a/g.json\tapi_key\t" + row.Shape + "\t1\ttriage line\n"); err != nil {
-		t.Fatalf("an exact row was refused by the parser: %v", err)
-	}
-	if _, err := ParseAllowlist("a/g.json\tapi_key\tsha256:abc\t1\ttriage line\n"); err == nil {
-		t.Fatal("a short digest was accepted")
+// A text whose lower-cased form has other byte offsets (a capital A with a stroke is two bytes, its lower case three) is run whole, so the
+// windows never point at the wrong bytes.
+func TestATextWithRelocatedLowerCaseIsStillScanned(t *testing.T) {
+	text := strings.Repeat("\u023a", 70) + `"api_key": "` + randomValue() + `"`
+	if got := SecretsIn(text); len(got) != 1 {
+		t.Fatalf("%d secret(s) found after a run of relocating characters, want 1", len(got))
 	}
 }

@@ -2,9 +2,12 @@
 // packed ("gzip+base64:") body or a JSON text held in a string leaf, so the same walk the unpacked-secret-scan tool of record makes is
 // done here, in Go, and wired into the record verb and `manifest -check`.
 //
-// What it finds is the shape the keyword rule of that scanner finds and the token-shape scan of the venueoracle package does not: a
-// leaf whose KEY names a credential (access, auth, api, credential, creds, key, passw, secret, token) and whose value is a long
-// string of high entropy. Parity with the scanner's own rule is by test, not by identity.
+// What it finds is what the generic-api-key rule of gitleaks v8.21.2 finds and the token-shape scan of the venueoracle package does not
+// (a credential word, a separator, then ten to 150 characters of a key, a token or a base64 text). The rule is a PORT of that scanner's
+// own: the same expression (rule.go, copied from config/gitleaks.toml), the same filters in the same order (global allowlist regexes,
+// the rule allowlist regex on the match, the rule's 1476 stopwords from stopwords.txt, entropy above 3.5, one digit from 1 to 9), and
+// scanner_vectors.tsv holds the verdict of the real binary on a set of vectors, which the port must repeat. What it does not do: the
+// scanner's own base64 and percent decoding of the text it reads (the walk here unpacks packed bodies and JSON texts instead).
 //
 // A hit passes only through a row of allowlist.tsv: ONE row per golden file and key, for a digest or id OUTPUT field the triage record
 // accepts, with the exact value shape, the exact count and the triage line it cites. There is no wildcard path and no rule-wide row,
@@ -14,6 +17,7 @@ package goldenscan
 import (
 	"bytes"
 	"compress/gzip"
+	_ "embed"
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
@@ -109,13 +113,45 @@ func unpack(body string) (string, error) {
 	return string(text), nil
 }
 
-// generic is the keyword rule of the scanner (its generic-api-key rule) over the text of a leaf rendered as `"<key>": "<value>"`:
-// a credential word, a separator, then a value of ten or more characters of a key, a token or a base64 text. The key of a leaf, or a
-// `name=value` inside a text leaf, or a typed leaf whose own text starts with `api:` all match, as they do in the scanner.
-var generic = regexp.MustCompile(`(?i)[\w.-]{0,50}?(?:access|auth|(?-i:[Aa]pi|API)|credential|creds|key|passw(?:or)?d|secret|token)(?:[ \t\w.-]{0,20})[\s'"]{0,3}(?:=|>|:{1,3}=|\|\||:|=>|\?=|,)[\x60'"\s=]{0,5}([\w.=-]{10,150}|[a-z0-9][a-z0-9+/]{11,}={0,3})(?:[\x60'"\s;]|\\[nr]|$)`)
+// generic is the generic-api-key expression of gitleaks v8.21.2, exactly as config/gitleaks.toml has it.
+var generic = regexp.MustCompile(`(?i)[\w.-]{0,10}?(?:access|auth|(?-i:[Aa]pi|API)|credential|creds|key|passwd|password|secret|token)(?:[ \t\w.-]{0,20})(?:[\s|']|[\s|"]){0,3}(?:=|>|:{1,3}=|\|\|:|<=|=>|:|\?=)(?:'|\"|\s|=|\x60){0,5}([\w.=-]{10,150})(?:['|\"|\n|\r|\s|\x60|;]|$)`)
 
-// entropyMin is the Shannon entropy per character, in bits, from which a value is a hit (the scanner's own bound).
-const entropyMin = 3.5
+// globalAllowRegexes are the regexes of the scanner's global allowlist (applied to the secret).
+var globalAllowRegexes = []*regexp.Regexp{
+	regexp.MustCompile(`(?i)^true|false|null$`),
+	regexp.MustCompile(`^(?i:a+|b+|c+|d+|e+|f+|g+|h+|i+|j+|k+|l+|m+|n+|o+|p+|q+|r+|s+|t+|u+|v+|w+|x+|y+|z+|\*+|\.+)$`),
+	regexp.MustCompile(`^\$(\d+|{\d+})$`),
+	regexp.MustCompile(`^\$([A-Z_]+|[a-z_]+)$`),
+	regexp.MustCompile(`^\${([A-Z_]+|[a-z_]+)}$`),
+	regexp.MustCompile(`^\{\{[ \t]*[\w ().|]+[ \t]*}}$`),
+	regexp.MustCompile(`^\$\{\{[ \t]*((env|github|secrets|vars)(\.[A-Za-z]\w+)+[\w "'&./=|]*)[ \t]*}}$`),
+	regexp.MustCompile(`^%([A-Z_]+|[a-z_]+)%$`),
+	regexp.MustCompile(`^%[+\-# 0]?[bcdeEfFgGoOpqstTUvxX]$`),
+	regexp.MustCompile(`^\{\d{0,2}}$`),
+	regexp.MustCompile(`^@([A-Z_]+|[a-z_]+)@$`),
+}
+
+// globalStopword is the one stopword of the scanner's global allowlist.
+const globalStopword = "014df517-39d1-4453-b7b3-9930c563627c"
+
+// ruleAllowRegex is the rule allowlist regex of generic-api-key, applied to the whole match.
+var ruleAllowRegex = regexp.MustCompile(`(?i)(accessor|api[_.-]?(version|id)|rapid|capital|author|(?-i:(?:c|jobC)redentials?Id|withCredentials)|key[_.-]?(alias|board|code|ring|stone|storetype|word|up|down|left|right)|issuerkeyhash|(bucket|primary|foreign|natural|hot)[_.-]?key|(?-i:[DdMm]onkey|[DM]ONKEY)|keying|(secret)[_.-]?name|public[_.-]?(key|token)|(key|token)[_.-]?file)`)
+
+//go:embed stopwords.txt
+var stopwordsText string
+
+var ruleStopwords = func() []string {
+	var words []string
+	for _, line := range strings.Split(stopwordsText, "\n") {
+		if line != "" && !strings.HasPrefix(line, "#") {
+			words = append(words, strings.ToLower(line))
+		}
+	}
+	return words
+}()
+
+// entropyMax is the rule's entropy: a secret whose entropy is at or below it is dropped.
+const entropyMax = 3.5
 
 // Hit is one leaf the rule finds: the key and a shape of the value, never the value.
 type Hit struct {
@@ -140,45 +176,27 @@ func Shape(v string) string {
 	return "other"
 }
 
-func entropy(v string) float64 {
-	counts := map[rune]int{}
-	total := 0
-	for _, r := range v {
-		counts[r]++
-		total++
+// entropy is the Shannon entropy as the scanner computes it (per rune, over the byte length).
+func entropy(data string) float64 {
+	if data == "" {
+		return 0
 	}
+	counts := map[rune]int{}
+	for _, char := range data {
+		counts[char]++
+	}
+	invLength := 1.0 / float64(len(data))
 	var bits float64
-	for _, n := range counts {
-		p := float64(n) / float64(total)
-		bits -= p * math.Log2(p)
+	for _, count := range counts {
+		frequency := float64(count) * invLength
+		bits -= frequency * math.Log2(frequency)
 	}
 	return bits
 }
 
-// stopwords drops a value that names itself a placeholder (the scanner drops values that hold a word of its stopword list; this
-// is the short part of that list that matters for test data). A value that holds one is not a credential somebody left behind.
-var stopwords = []string{"test", "example", "sample", "fake", "dummy", "mock", "placeholder", "synthetic", "changeme", "password", "secret", "token", "demo"}
-
-// separators split a value into the segments an identifier is made of.
-var separators = regexp.MustCompile(`[_.:/ -]+`)
-
-// randomLooking is false for an identifier made of short words and numbers (snake_case, kebab-case, a name with a counter): no
-// segment of it is long enough, or mixed enough, to be a generated secret.
-func randomLooking(v string) bool {
-	for _, segment := range separators.Split(v, -1) {
-		if len(segment) >= 20 {
-			return true
-		}
-		if len(segment) >= 12 && strings.ContainsAny(segment, "0123456789") && strings.ContainsAny(segment, "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ") {
-			return true
-		}
-	}
-	return false
-}
-
-func hasStopword(v string) bool {
-	lower := strings.ToLower(v)
-	for _, word := range stopwords {
+func hasStopword(rules []string, secret string) bool {
+	lower := strings.ToLower(secret)
+	for _, word := range rules {
 		if strings.Contains(lower, word) {
 			return true
 		}
@@ -186,49 +204,92 @@ func hasStopword(v string) bool {
 	return false
 }
 
-// accepted is the filter on a capture: enough entropy, random-looking, no placeholder word.
-func accepted(captured string) bool {
-	return entropy(captured) >= entropyMin && randomLooking(captured) && !hasStopword(captured)
+func containsDigit(secret string) bool { return strings.ContainsAny(secret, "123456789") }
+
+// secretOf is the secret of one match of generic, as the scanner finds it: the match without its newlines, the expression run again on
+// it, and the first group.
+func secretOf(match string) (full, secret string) {
+	full = strings.Trim(match, "\n")
+	secret = full
+	if groups := generic.FindStringSubmatch(full); len(groups) >= 2 {
+		secret = groups[1]
+	}
+	return full, secret
 }
 
-// Hits is the values the rule finds in the leaves, in leaf order. A hit carries the key of its leaf.
+// accepted is every filter the scanner runs on a match, in its order: the global allowlist, the rule allowlist (regex on the match,
+// stopwords on the secret), entropy above the bound, and a digit from 1 to 9.
+func accepted(full, secret string) bool {
+	for _, re := range globalAllowRegexes {
+		if re.MatchString(secret) {
+			return false
+		}
+	}
+	if strings.Contains(strings.ToLower(secret), globalStopword) {
+		return false
+	}
+	if ruleAllowRegex.MatchString(full) || hasStopword(ruleStopwords, secret) {
+		return false
+	}
+	return entropy(secret) > entropyMax && containsDigit(secret)
+}
+
+// Hits is the secrets the rule finds in the leaves, in leaf order. A hit carries the key of its leaf.
 func Hits(leaves []Leaf) []Hit {
 	var hits []Hit
-	// a golden repeats the same leaf thousands of times (one fixture row per case): the captures of a leaf are found once
+	// a golden repeats the same leaf thousands of times (one fixture row per case): the secrets of a leaf are found once
 	found := map[Leaf][]string{}
 	for _, leaf := range leaves {
-		captures, ok := found[leaf]
+		secrets, ok := found[leaf]
 		if !ok {
-			for _, captured := range genericCaptures(`"` + leaf.Key + `": "` + leaf.Value + `"`) {
-				if accepted(captured) {
-					captures = append(captures, captured)
-				}
-			}
-			found[leaf] = captures
+			secrets = SecretsIn(`"` + leaf.Key + `": "` + leaf.Value + `"`)
+			found[leaf] = secrets
 		}
-		for _, captured := range captures {
-			hits = append(hits, Hit{Key: leaf.Key, Shape: Shape(captured), Value: captured})
+		for _, secret := range secrets {
+			hits = append(hits, Hit{Key: leaf.Key, Shape: Shape(secret), Value: secret})
 		}
 	}
 	return hits
 }
 
+// SecretsIn is the secrets the scanner would report in text (one unit, as the tool of record's per-leaf wrapper writes it).
+func SecretsIn(text string) []string {
+	var secrets []string
+	for _, match := range matchesIn(text) {
+		if full, secret := secretOf(match); accepted(full, secret) {
+			secrets = append(secrets, secret)
+		}
+	}
+	return secrets
+}
+
 // keywords are the credential words of the rule, lower case: a match holds one of them, whatever its case (the case-sensitive api
 // form is a subset of the case-insensitive one).
-var keywords = []string{"access", "auth", "api", "credential", "creds", "key", "passw", "secret", "token"}
+var keywords = []string{"access", "auth", "api", "credential", "creds", "key", "passwd", "password", "secret", "token"}
 
 const (
-	windowBefore = 50                    // the lazy prefix of the rule
-	windowAfter  = 20 + 3 + 5 + 150 + 60 // gap, quotes, separator run, the longest capture, and room for its terminator
+	windowBefore = 10 + 5                        // the lazy prefix of the rule, and room
+	windowAfter  = 20 + 3 + 3 + 5 + 150 + 1 + 60 // gap, quotes, separator, secret prefix, the longest secret, its terminator, and room
 )
 
-// genericCaptures is every capture of generic over text. The expression is slow over a long text, and most of a golden holds no
-// credential word, so for an ASCII text it is run only over a window around each keyword (every match holds one); a text with a
-// non-ASCII byte is run whole, because the expression's case folding reaches beyond ASCII. A differential test holds this equal to
-// the expression over the whole text.
-func genericCaptures(text string) []string {
-	var captures []string
+// matchesIn is every match of generic over text. The expression is slow over a long text, and most of a golden holds no credential
+// word, so for an ASCII text it is run only over a window around each keyword (every match holds one); a text with a non-ASCII byte is
+// run whole, because the expression's case folding reaches beyond ASCII. A differential test holds this equal to the expression over
+// the whole text.
+func matchesIn(text string) []string {
 	if !hasSegmentRun(text) {
+		return nil
+	}
+	// the scanner runs a rule only on text whose lower-cased form holds one of the rule's keywords (a long s is not folded there)
+	lowered := strings.ToLower(text)
+	found := false
+	for _, word := range keywords {
+		if strings.Contains(lowered, word) {
+			found = true
+			break
+		}
+	}
+	if !found {
 		return nil
 	}
 	ascii := true
@@ -239,12 +300,8 @@ func genericCaptures(text string) []string {
 		}
 	}
 	if !ascii {
-		for _, match := range generic.FindAllStringSubmatch(text, -1) {
-			captures = append(captures, match[1])
-		}
-		return captures
+		return generic.FindAllString(text, -1)
 	}
-	lowered := strings.ToLower(text)
 	var windows [][2]int
 	for _, word := range keywords {
 		for from := 0; ; {
@@ -261,13 +318,6 @@ func genericCaptures(text string) []string {
 			if end > len(text) {
 				end = len(text)
 			}
-			// the second value form has no upper length: the window runs to the end of the run of value characters
-			for end < len(text) && (text[end] == '+' || text[end] == '/' || text[end] == '=' || text[end] == '.' || text[end] == '-' || text[end] == '_' || text[end] >= '0' && text[end] <= '9' || text[end] >= 'a' && text[end] <= 'z' || text[end] >= 'A' && text[end] <= 'Z') {
-				end++
-			}
-			if end < len(text) {
-				end++ // its terminator
-			}
 			windows = append(windows, [2]int{start, end})
 		}
 	}
@@ -282,23 +332,21 @@ func genericCaptures(text string) []string {
 		}
 		merged = append(merged, window)
 	}
+	var matches []string
 	for _, window := range merged {
-		for _, match := range generic.FindAllStringSubmatch(text[window[0]:window[1]], -1) {
-			captures = append(captures, match[1])
-		}
+		matches = append(matches, generic.FindAllString(text[window[0]:window[1]], -1)...)
 	}
-	return captures
+	return matches
 }
 
-// hasSegmentRun reports whether text holds twelve letters, digits, plus or equals signs in a row. It is necessary for a hit (the
-// shortest random-looking value holds such a segment), so a text without it is not run through the expression at all; the capture of
-// a hit is filtered afterwards by hits, and a differential test holds genericCaptures equal to the expression for every text that
-// has one.
+// hasSegmentRun reports whether text holds twelve characters of [A-Za-z0-9_.=-] in a row. It is necessary for a hit (a secret above
+// the entropy bound has at least twelve different characters, so at least twelve), so a text without it is not run through the
+// expression at all; a differential test holds the result equal to the whole-text expression for every text.
 func hasSegmentRun(text string) bool {
 	run := 0
 	for i := 0; i < len(text); i++ {
 		c := text[i]
-		if c >= 'a' && c <= 'z' || c >= 'A' && c <= 'Z' || c >= '0' && c <= '9' || c == '+' || c == '=' || c >= 0x80 {
+		if c >= 'a' && c <= 'z' || c >= 'A' && c <= 'Z' || c >= '0' && c <= '9' || c == '_' || c == '.' || c == '=' || c == '-' || c >= 0x80 {
 			if run++; run >= 12 {
 				return true
 			}

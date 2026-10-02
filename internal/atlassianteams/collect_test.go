@@ -634,3 +634,24 @@ func TestAnEdgeWithoutAUserIsStillRefused(t *testing.T) {
 		t.Fatalf("err = %v, want the missing-user refusal", err)
 	}
 }
+
+// TestCollectRefusesAMemberRowWithAnEmptyUserIdLoudly pins that a member row whose user id is empty fails the collect with the
+// mapper's error ("user.id is required"); it is not skipped silently (a skipped member row would be a swallowed error on the sync
+// path). The row shape is the measured one (one user column), with an empty id; hand-written.
+func TestCollectRefusesAMemberRowWithAnEmptyUserIdLoudly(t *testing.T) {
+	g := newGateway(t, func(req request) (int, any) {
+		switch req.Operation {
+		case "TeamSearchV2":
+			return 200, searchPage("", teamNode(teamA, "Platform", "ACTIVE"))
+		case "TeamworkGraphTeamUsers":
+			empty := map[string]any{"node": map[string]any{"columns": []any{
+				map[string]any{"key": "user", "value": ariNode("", "AtlassianAccountUser", map[string]any{"id": "x"})},
+			}}}
+			return 200, connection("teamworkGraph_teamUsers", "", empty)
+		}
+		return 200, connection("teamworkGraph_teamActiveProjects", "")
+	})
+	if _, err := Collect(context.Background(), g.client(), params(everything)); err == nil || !strings.Contains(err.Error(), "user.id is required") {
+		t.Fatalf("err = %v, want the mapper's empty-user-id refusal", err)
+	}
+}

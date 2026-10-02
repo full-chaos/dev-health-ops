@@ -56,10 +56,10 @@ var updateSites = flag.Bool("update-sites", false, "rewrite redirect_sites.tsv f
 // what travels. A class changed without a probe changed fails here; whether the probe is RED without the guard is shown
 // by the planted guard-off runs recorded in the PR, not by this test.
 //
-// NOT covered, stated and not claimed: a nil VALUE of a replaced-module client field reached through a variable
-// (`var none *http.Client` then `HTTPClient: none`) or a later assignment (`c.HTTPClient = nil`): the walker sees a literal that
-// omits the field or gives nil / a conversion of nil, and takes any other expression as supplied (CHAOS-7921 patches the vendored
-// default so that nil follows no redirect by construction). The class is per FUNCTION: a function that calls httpguard for one
+// NOT covered, stated and not claimed (static analysis cannot decide them; CHAOS-7921, the safe default by construction in the
+// vendored module, is their fix): a nil VALUE of a replaced-module client field reached through a nil variable
+// (`var none *http.Client` then `HTTPClient: none`), or a field cleared after the literal (`c.HTTPClient = nil`). The walker sees a
+// literal that omits the field or gives nil or a conversion of nil, and takes any other expression as supplied. The class is per FUNCTION: a function that calls httpguard for one
 // client and builds a second, following one derives "guarded" for both. ValidatePagerDutyCredential's choice of the
 // follow-and-drop client is pinned on the helper (pagerDutyValidationClient), not on that caller.
 //
@@ -72,13 +72,16 @@ var updateSites = flag.Bool("update-sites", false, "rewrite redirect_sites.tsv f
 //	never-follows    the client is built with its own no-redirect policy, or refuses redirects.
 //	drops-credential the client follows, and the credential header is dropped off-origin (DropCredentialsOnHostChange).
 //	no-credential    the client follows and nothing credential-bearing travels in header, query or body (cite what).
-//	follows-unless-supplied  a replaced module's own default: it follows redirects when its HTTPClient is nil. Safe in production only
-//	                 because every construction of its types in production sets HTTPClient: a literal that leaves it unset is a
-//	                 nil-client-field-literal site that needs a row, so a new one FAILS here.
+//	follows-unless-supplied  a replaced module's own default: it follows redirects when its HTTPClient is nil. What is CHECKED: a literal (or
+//	                 new/make/declaration) of such a type that omits the field or gives nil (or a conversion of nil) is a
+//	                 nil-client-field-literal site that needs a row, so a new one FAILS here. What is NOT decided: see NOT covered.
 type site struct {
 	file, symbol, kind string
 }
 
+// never-follows is derived ONLY for a CheckRedirect whose body is exactly `return http.ErrUseLastResponse` (or the named function
+// that is). Any other policy is custom-policy, with its OWN probe.
+//
 // derivedClasses are decided by the walker from the code of the site's function, never typed: the row must carry the
 // derived class. handClasses are typed by hand, allowed only where nothing is derived, and each has its own check.
 var (
@@ -786,45 +789,20 @@ func (w walker) policyOf(value ast.Expr) string {
 	return "custom"
 }
 
-// bodyPolicy: "refuse" when the function returns at least once and EVERY return gives a value that is statically a
-// non-nil error: a package-level error variable (http.ErrUseLastResponse, an errors.New var) or a call of errors.New or
-// fmt.Errorf. A delegating call, a local variable, nil, or anything else makes the policy "custom": it may follow.
+// bodyPolicy: "refuse" ONLY when the body is exactly `return http.ErrUseLastResponse` (net/http's own no-follow value): the
+// one policy the walker can prove. Every other body (a delegating call, a variable, a branch, another error value) is "custom":
+// it may follow, so its row carries its own probe.
 func bodyPolicy(body *ast.BlockStmt, info *types.Info) string {
-	returns, refusing := 0, true
-	ast.Inspect(body, func(node ast.Node) bool {
-		switch n := node.(type) {
-		case *ast.FuncLit:
-			return false
-		case *ast.ReturnStmt:
-			returns++
-			if len(n.Results) != 1 || !staticallyNonNilError(n.Results[0], info) {
-				refusing = false
+	if len(body.List) == 1 {
+		if ret, ok := body.List[0].(*ast.ReturnStmt); ok && len(ret.Results) == 1 {
+			if selector, ok := ret.Results[0].(*ast.SelectorExpr); ok {
+				if variable, ok := info.Uses[selector.Sel].(*types.Var); ok && variable.Pkg() != nil && variable.Pkg().Path() == "net/http" && variable.Name() == "ErrUseLastResponse" {
+					return "refuse"
+				}
 			}
 		}
-		return true
-	})
-	if returns > 0 && refusing {
-		return "refuse"
 	}
 	return "custom"
-}
-
-func staticallyNonNilError(expression ast.Expr, info *types.Info) bool {
-	switch e := expression.(type) {
-	case *ast.Ident:
-		variable, ok := info.Uses[e].(*types.Var)
-		return ok && variable.Pkg() != nil && variable.Parent() == variable.Pkg().Scope() // a package-level variable
-	case *ast.SelectorExpr:
-		variable, ok := info.Uses[e.Sel].(*types.Var)
-		return ok && variable.Pkg() != nil && variable.Parent() == variable.Pkg().Scope()
-	case *ast.CallExpr:
-		if selector, ok := e.Fun.(*ast.SelectorExpr); ok {
-			if fn, ok := info.Uses[selector.Sel].(*types.Func); ok && fn.Pkg() != nil {
-				return (fn.Pkg().Path() == "errors" && fn.Name() == "New") || (fn.Pkg().Path() == "fmt" && fn.Name() == "Errorf")
-			}
-		}
-	}
-	return false
 }
 
 func isBuiltinCall(info *types.Info, call *ast.CallExpr) bool {
@@ -1109,6 +1087,11 @@ func TestTheSiteWalkerFindsEveryKind(t *testing.T) {
 		{prefix + "policies/policies.go", "Conditional", "client-literal"}:             1,
 		{prefix + "policies/policies.go", "ForeignCall", "client-literal"}:             1,
 		{prefix + "policies/policies.go", "FieldReturn", "client-literal"}:             1,
+		{prefix + "policies/policies.go", "ExtraStatement", "client-literal"}:          1,
+		{prefix + "policies/policies.go", "UnreachableAfter", "client-literal"}:        1,
+		{prefix + "policies/policies.go", "SameNameOtherPackage", "client-literal"}:    1,
+		{prefix + "policies/policies.go", "OtherNetHTTPError", "client-literal"}:       1,
+		{prefix + "policies/policies.go", "ForeignError", "client-literal"}:            1,
 		{prefix + "policies/policies.go", "RefuseErrorf", "client-literal"}:            1,
 		{prefix + "policies/policies.go", "RefusePackageVar", "client-literal"}:        1,
 		{prefix + "nilfield/nilfield.go", "TypedNil", "nil-client-field-literal"}:      1,
@@ -1153,7 +1136,7 @@ func TestTheSiteWalkerFindsEveryKind(t *testing.T) {
 	// the class derived from the code of a function
 	derived := map[string]string{"Guarded": "guarded", "GuardedNew": "guarded", "RefuseLiteral": "never-follows", "RefuseFunction": "never-follows",
 		"RefuseAssign": "never-follows", "Delegating": "custom-policy", "LocalVariable": "custom-policy", "Conditional": "custom-policy",
-		"RefuseErrorf": "never-follows", "ForeignCall": "custom-policy", "FieldReturn": "custom-policy", "RefusePackageVar": "never-follows", "Drop": "drops-credential", "Custom": "custom-policy", "Mixed": "MIXED", "Bare": ""}
+		"RefuseErrorf": "custom-policy", "ForeignCall": "custom-policy", "FieldReturn": "custom-policy", "ExtraStatement": "custom-policy", "UnreachableAfter": "custom-policy", "SameNameOtherPackage": "custom-policy", "OtherNetHTTPError": "custom-policy", "ForeignError": "custom-policy", "RefusePackageVar": "custom-policy", "Drop": "drops-credential", "Custom": "custom-policy", "Mixed": "MIXED", "Bare": ""}
 	for symbol, class := range derived {
 		if got := facts[fnKey{prefix + "policies/policies.go", symbol}].derive(); got != class {
 			t.Errorf("derived class of %s: %q, want %q", symbol, got, class)

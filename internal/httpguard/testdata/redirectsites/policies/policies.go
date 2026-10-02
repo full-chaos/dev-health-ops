@@ -8,6 +8,7 @@ import (
 	nethttp "net/http"
 
 	"github.com/full-chaos/dev-health-ops/internal/httpguard"
+	"github.com/full-chaos/dev-health-ops/internal/httpguard/testdata/redirectsites/fakedefault"
 	"github.com/full-chaos/dev-health-ops/internal/providerfoundation"
 )
 
@@ -82,4 +83,30 @@ type failure struct{ err error }
 
 func FieldReturn(h failure) *nethttp.Client {
 	return &nethttp.Client{CheckRedirect: func(r *nethttp.Request, via []*nethttp.Request) error { return h.err }}
+}
+
+func ExtraStatement() *nethttp.Client {
+	return &nethttp.Client{CheckRedirect: func(r *nethttp.Request, via []*nethttp.Request) error {
+		_ = r
+		return nethttp.ErrUseLastResponse
+	}}
+}
+
+func ForeignError() *nethttp.Client {
+	return &nethttp.Client{CheckRedirect: func(*nethttp.Request, []*nethttp.Request) error { return context.Canceled }}
+}
+
+func UnreachableAfter() *nethttp.Client {
+	return &nethttp.Client{CheckRedirect: func(r *nethttp.Request, via []*nethttp.Request) error {
+		return nethttp.ErrUseLastResponse
+		return nil
+	}}
+}
+
+func SameNameOtherPackage() *nethttp.Client {
+	return &nethttp.Client{CheckRedirect: func(*nethttp.Request, []*nethttp.Request) error { return fakedefault.ErrUseLastResponse }}
+}
+
+func OtherNetHTTPError() *nethttp.Client {
+	return &nethttp.Client{CheckRedirect: func(*nethttp.Request, []*nethttp.Request) error { return nethttp.ErrNotSupported }}
 }

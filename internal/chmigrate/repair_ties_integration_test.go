@@ -43,14 +43,19 @@ var tieRows = [][4]string{
 	{"a0000000-0000-4000-8000-000000000009", "acme/small-org-newest-of-three", orgOne, "2026-03-30 12:00:00.5"},
 }
 
-// seedTies writes the tie rows into an empty repos table.
+// seedTies writes the tie rows into an empty repos table in ONE insert (one part, rows in the order of tieRows) and
+// merges it (OPTIMIZE ... FINAL): which of two tied rows argMax(org_id, last_synced) picks depends on the storage
+// state (parts, merges, read order), so the state is made one fixed fact on both planes.
 func (db repairDB) seedTies(t *testing.T) {
 	t.Helper()
 	db.do(t, "TRUNCATE TABLE repos")
+	values := make([]string, 0, len(tieRows))
 	for _, row := range tieRows {
-		db.do(t, fmt.Sprintf("INSERT INTO repos (id, repo, ref, created_at, settings, tags, last_synced, org_id) VALUES ('%s', '%s', NULL, toDateTime64('2026-01-01 00:00:00', 3, 'UTC'), NULL, NULL, toDateTime64('%s', 3, 'UTC'), '%s')",
+		values = append(values, fmt.Sprintf("('%s', '%s', NULL, toDateTime64('2026-01-01 00:00:00', 3, 'UTC'), NULL, NULL, toDateTime64('%s', 3, 'UTC'), '%s')",
 			row[0], row[1], row[3], row[2]))
 	}
+	db.do(t, "INSERT INTO repos (id, repo, ref, created_at, settings, tags, last_synced, org_id) VALUES "+strings.Join(values, ", "))
+	db.do(t, "OPTIMIZE TABLE repos FINAL")
 }
 
 var tieScenarios = []repairScenario{

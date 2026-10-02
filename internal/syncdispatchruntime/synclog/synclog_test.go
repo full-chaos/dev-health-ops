@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"log/slog"
 	"regexp"
+	"sort"
 	"strings"
 	"testing"
 
@@ -102,119 +103,61 @@ func TestParseIDsParsesEveryElement(t *testing.T) {
 	}
 }
 
-// The exported API of this package is PINNED (D4262/F5): no exported function or method takes a string, an any, an error or a
-// list of strings, except the ones named here (the two parsers, the one error entry and the constructor); no exported struct has an
-// exported field; every exported variable is one of the opaque vocabulary types. A new function that widens the API fails here by
-// name, whatever its body does.
+// The exported API of this package is PINNED by exact signature (D4315): the surface computed from the type information must equal
+// exportedAPI line for line: no export may be added, removed or change a parameter or result type unnoticed.
 func TestTheExportedAPIIsPinned(t *testing.T) {
-	allowed := map[string]string{
-		"New":        "*log/slog.Logger",
-		"ParseID":    "string",
-		"ParseIDs":   "[]string",
-		"ParseLabel": "string",
-		"Failure":    "error",
-	}
 	config := &packages.Config{Dir: ".", Mode: packages.NeedName | packages.NeedTypes | packages.NeedTypesInfo | packages.NeedSyntax | packages.NeedImports | packages.NeedDeps}
 	loaded, err := packages.Load(config, ".")
 	if err != nil || len(loaded) != 1 || len(loaded[0].Errors) > 0 {
 		t.Fatalf("load: %v %v", err, loaded)
 	}
+	qualifier := func(p *types.Package) string { return p.Name() }
+	var got []string
 	scope := loaded[0].Types.Scope()
-	var forbidden func(kind types.Type) bool
-	forbidden = func(kind types.Type) bool {
-		switch typed := types.Unalias(kind).(type) {
-		case *types.Basic:
-			return typed.Info()&types.IsString != 0
-		case *types.Interface:
-			return true // any, error and every other interface
-		case *types.Slice:
-			return forbidden(typed.Elem())
-		case *types.Named:
-			if typed.String() == "context.Context" {
-				return false
-			}
-			if _, isInterface := typed.Underlying().(*types.Interface); isInterface {
-				return true
-			}
-		}
-		return false
-	}
-	checkSignature := func(name string, signature *types.Signature) {
-		params := signature.Params()
-		for index := 0; index < params.Len(); index++ {
-			kind := params.At(index).Type()
-			if variadic := signature.Variadic() && index == params.Len()-1; variadic {
-				kind = kind.(*types.Slice).Elem()
-			}
-			if forbidden(kind) {
-				if want, ok := allowed[name]; !ok || want != kind.String() {
-					t.Errorf("%s takes a %s: the exported API may not widen", name, kind)
-				}
-			}
-		}
-	}
-	// the exported identifiers are an ALLOW-LIST: a new function, type or method fails until this list is edited in the same diff
-	// (the vocabulary vars of vocab.go are matched by their type, not listed one by one)
-	allowedFunctions := map[string]bool{"New": true, "Default": true, "ParseID": true, "ParseIDs": true, "ParseLabel": true, "Run": true, "Unit": true,
-		"Org": true, "Integration": true, "Source": true, "Dispatch": true, "Provider": true, "Text": true, "Count": true, "Flag": true,
-		"Elapsed": true, "Instant": true, "IDs": true, "Group": true, "Failure": true}
-	allowedTypes := map[string]bool{"Msg": true, "Key": true, "Label": true, "ID": true, "Attr": true, "Logger": true}
-	allowedMethods := map[string]bool{"Logger.Debug": true, "Logger.Info": true, "Logger.Warn": true, "Logger.Error": true}
-	exported, functions := 0, 0
 	for _, name := range scope.Names() {
 		object := scope.Lookup(name)
 		if !object.Exported() {
 			continue
 		}
-		exported++
-		switch object.(type) {
-		case *types.Func:
-			if !allowedFunctions[name] {
-				t.Errorf("exported function %s is not on the allow-list", name)
-			}
-		case *types.TypeName:
-			if !allowedTypes[name] {
-				t.Errorf("exported type %s is not on the allow-list", name)
-			}
-		}
-		switch typed := object.(type) {
-		case *types.Func:
-			functions++
-			checkSignature(name, typed.Type().(*types.Signature))
-		case *types.Var:
-			kind := types.Unalias(typed.Type())
-			if named, ok := kind.(*types.Named); !ok || named.Obj().Pkg() != loaded[0].Types || named.Obj().Name() == "Logger" {
-				t.Errorf("exported var %s has type %s: only the opaque vocabulary types are allowed", name, typed.Type())
-			}
-		case *types.TypeName:
-			named, ok := typed.Type().(*types.Named)
-			if !ok {
-				continue
-			}
-			if structure, ok := named.Underlying().(*types.Struct); ok {
-				for index := 0; index < structure.NumFields(); index++ {
-					if structure.Field(index).Exported() {
-						t.Errorf("%s has the exported field %s", name, structure.Field(index).Name())
+		got = append(got, types.ObjectString(object, qualifier))
+		if typeName, ok := object.(*types.TypeName); ok {
+			if named, ok := typeName.Type().(*types.Named); ok {
+				for index := 0; index < named.NumMethods(); index++ {
+					if method := named.Method(index); method.Exported() {
+						got = append(got, types.ObjectString(method, qualifier))
+					}
+				}
+				if structure, ok := named.Underlying().(*types.Struct); ok {
+					for index := 0; index < structure.NumFields(); index++ {
+						field := structure.Field(index)
+						got = append(got, fmt.Sprintf("field %s.%s %s exported=%v", name, field.Name(), field.Type(), field.Exported()))
 					}
 				}
 			}
-			for index := 0; index < named.NumMethods(); index++ {
-				method := named.Method(index)
-				if method.Exported() {
-					if !allowedMethods[name+"."+method.Name()] {
-						t.Errorf("exported method %s.%s is not on the allow-list", name, method.Name())
-					}
-					checkSignature(name+"."+method.Name(), method.Type().(*types.Signature))
-				}
-			}
 		}
 	}
-	if exported < 50 || functions < 15 {
-		t.Fatalf("saw %d exported objects and %d functions: the walk reads too little", exported, functions)
+	sort.Strings(got)
+	want := append([]string(nil), exportedAPI...)
+	sort.Strings(want)
+	if len(got) < 100 {
+		t.Fatalf("saw %d exported objects: the walk reads too little", len(got))
 	}
-	for name := range allowed {
-		if scope.Lookup(name) == nil {
-			t.Errorf("allowed entry %s no longer exists: delete it from the allow-list", name)
+	missing, extra := difference(want, got), difference(got, want)
+	if len(missing) != 0 || len(extra) != 0 {
+		t.Fatalf("the exported API changed.\nremoved or changed: %v\nadded or changed: %v\n(edit exportedAPI in the same diff)", missing, extra)
+	}
+}
+
+func difference(left, right []string) []string {
+	present := map[string]bool{}
+	for _, line := range right {
+		present[line] = true
+	}
+	var out []string
+	for _, line := range left {
+		if !present[line] {
+			out = append(out, line)
 		}
 	}
+	return out
 }

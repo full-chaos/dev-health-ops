@@ -340,7 +340,7 @@ func (loop *Loop) step(parent context.Context, now time.Time) (stepErr error) {
 				"error", schedule.Err.Error(),
 			)
 		}
-		return result.Err()
+		return &loggedWindowError{err: result.Err()}
 	}
 	if overdue := loop.overdueSchedules(); len(overdue) > 0 {
 		stage = "schedule"
@@ -359,13 +359,24 @@ func (loop *Loop) step(parent context.Context, now time.Time) (stepErr error) {
 	return nil
 }
 
+// loggedWindowError marks a window failure whose every schedule failure step
+// already logged (with the schedule id), so run does not log it a second time.
+// It is transparent to errors.Is/As and keeps the same message.
+type loggedWindowError struct{ err error }
+
+func (e *loggedWindowError) Error() string { return e.err.Error() }
+func (e *loggedWindowError) Unwrap() error { return e.err }
+
 // logWindowFailure is the one place a failed window's full error reaches the
 // log. step logs each failed SCHEDULE, but a window failure that is not a
 // schedule's (a step timeout, an overdue schedule, an engine error) was
 // returned to run and dropped; the span carries only an error class
 // (CHAOS-7879), so the text must be here.
 func (loop *Loop) logWindowFailure(ctx context.Context, err error) {
-	if errors.Is(err, context.Canceled) {
+	var logged *loggedWindowError
+	if errors.Is(err, context.Canceled) || errors.As(err, &logged) {
+		// A shutdown is not a failure; a schedule failure was already logged,
+		// per schedule, by step.
 		return
 	}
 	loop.logger().ErrorContext(ctx, "fixed schedule window failed", "error", err.Error())
@@ -656,6 +667,9 @@ func traceScheduleDecisions(ctx context.Context, window oteltrace.Span, result W
 			attribute.Bool("dev_health.scheduler.cold_start", schedule.ColdStart),
 			attribute.Bool("dev_health.scheduler.stale_skipped", schedule.StaleSkipped),
 		)
+		if schedule.Err != nil {
+			child.SetAttributes(attribute.String(tracing.StageAttribute, "schedule"))
+		}
 		tracing.EndWorkSpan(child, schedule.Err)
 	}
 	window.SetAttributes(

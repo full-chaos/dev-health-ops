@@ -117,6 +117,9 @@ func TestFixedLoopStepEmitsWindowAndDecisionSpans(t *testing.T) {
 			if child.Status.Code != codes.Error {
 				t.Errorf("failed schedule span status = %v, want Error", child.Status.Code)
 			}
+			if stage, _ := fixedAttr(child.Attributes, "dev_health.work.stage"); stage.AsString() != "schedule" {
+				t.Errorf("failed schedule child stage = %q, want schedule", stage.AsString())
+			}
 			if strings.Contains(fmt.Sprint(child), "payload-in-error") || child.Status.Description != "other" {
 				t.Errorf("error text reached the span or description %q is not the class", child.Status.Description)
 			}
@@ -124,6 +127,9 @@ func TestFixedLoopStepEmitsWindowAndDecisionSpans(t *testing.T) {
 			sawDecided = true
 			if child.Status.Code == codes.Error {
 				t.Errorf("a clean schedule span carries status Error")
+			}
+			if _, ok := fixedAttr(child.Attributes, "dev_health.work.stage"); ok {
+				t.Errorf("a clean schedule span carries a stage")
 			}
 			got := fixedInts(child.Attributes)
 			for key, want := range map[string]int64{
@@ -330,5 +336,46 @@ func TestFixedLoopLogsWindowFailureOnTheTickerPathToo(t *testing.T) {
 	waitForStepObserved(t, observed, "the ticker window")
 	if got := strings.Count(logs.String(), "fixed schedule window failed"); got != 2 {
 		t.Fatalf("logged %d window failures, want 2 (initial + ticker): %q", got, logs.String())
+	}
+}
+
+// A failed SCHEDULE is logged once, with its schedule id, by step; run must not
+// log the same failure again as a window failure. A non-schedule failure (an
+// engine error) is still logged by run, exactly once.
+func TestFixedLoopLogsAFailedScheduleExactlyOnce(t *testing.T) {
+	var logs syncBuffer
+	stepper := &scriptedStepper{failing: true, schedules: []Schedule{heartbeatSchedule(t)}}
+	clock := &fixedTestClock{now: mustTime(t, "2026-07-24T00:00:00Z")}
+	loop, err := newLoop(stepper, LoopConfig{
+		PollInterval: minLoopPollInterval,
+		StepTimeout:  time.Second,
+		MaxBackoff:   2 * minLoopPollInterval,
+		Registry:     health.NewRegistry(time.Second),
+		Logger:       slog.New(slog.NewJSONHandler(&logs, nil)),
+	}, clock)
+	if err != nil {
+		t.Fatal(err)
+	}
+	observed := make(chan struct{}, 4)
+	loop.stepObserved = func() { observed <- struct{}{} }
+	if err := loop.Start(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	waitForStepObserved(t, observed, "the first window")
+	_ = loop.Shutdown(context.Background())
+	if got := strings.Count(logs.String(), `"level":"ERROR"`); got != 1 {
+		t.Fatalf("one failed schedule produced %d error log lines, want 1: %q", got, logs.String())
+	}
+	if !strings.Contains(logs.String(), "fixed schedule failed") || strings.Contains(logs.String(), "fixed schedule window failed") {
+		t.Errorf("want only the per-schedule line: %q", logs.String())
+	}
+}
+
+// The marker wrapper must be invisible to callers: same message, same chain.
+func TestLoggedWindowErrorIsTransparent(t *testing.T) {
+	inner := errors.New("schedule x: boom")
+	wrapped := &loggedWindowError{err: inner}
+	if wrapped.Error() != inner.Error() || !errors.Is(wrapped, inner) {
+		t.Fatalf("wrapper changed the error: %q", wrapped.Error())
 	}
 }

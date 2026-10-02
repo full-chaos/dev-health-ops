@@ -148,6 +148,7 @@ func (r *Runner) cycle(ctx context.Context, maintain bool) (bool, error) {
 	}
 	if maintain {
 		if err := r.refreshStreams(ctx); err != nil {
+			r.failedStep(ctx, "dev_health.stream.maintenance_failed", "discover", err)
 			return false, err
 		}
 	}
@@ -172,12 +173,8 @@ func (r *Runner) cycle(ctx context.Context, maintain bool) (bool, error) {
 		if err != nil {
 			failures = append(failures, fmt.Errorf("read streams: %w", err))
 			// A failed read is work that went wrong, not an idle cycle.
-			_, readSpan := tracing.StartWorkSpan(ctx, runnerTracerName, "dev_health.stream.read_failed",
-				attribute.String("dev_health.stream.runner", r.config.Name),
-				attribute.Int("dev_health.stream.lanes", len(readStreams)),
-				attribute.String(tracing.StageAttribute, "read"),
-			)
-			tracing.EndWorkSpan(readSpan, err)
+			r.failedStep(ctx, "dev_health.stream.read_failed", "read", err,
+				attribute.Int("dev_health.stream.lanes", len(readStreams)))
 		} else {
 			active = active || len(messages) > 0
 			if len(messages) > 0 {
@@ -187,6 +184,7 @@ func (r *Runner) cycle(ctx context.Context, maintain bool) (bool, error) {
 					attribute.String("dev_health.stream.runner", r.config.Name),
 					attribute.Int("dev_health.stream.messages", len(messages)),
 					attribute.Int("dev_health.stream.lanes", len(readStreams)),
+					attribute.String("dev_health.stream.source", "read"),
 				)
 				var batchFailures []error
 				for _, message := range messages {
@@ -207,6 +205,7 @@ func (r *Runner) cycle(ctx context.Context, maintain bool) (bool, error) {
 		for _, stream := range streams {
 			stats, err := r.transport.Stats(ctx, stream, r.config.ConsumerGroup)
 			if err != nil {
+				r.failedStep(ctx, "dev_health.stream.maintenance_failed", "stats", err)
 				failures = append(failures, fmt.Errorf("inspect stream %q: %w", stream, err))
 				continue
 			}
@@ -308,6 +307,7 @@ func (r *Runner) refreshStreams(ctx context.Context) error {
 func (r *Runner) reclaim(ctx context.Context, stream string) (bool, error) {
 	pending, err := r.transport.Pending(ctx, stream, r.config.ConsumerGroup, r.config.BatchSize, r.config.ReclaimIdle)
 	if err != nil {
+		r.failedStep(ctx, "dev_health.stream.reclaim_failed", "pending", err)
 		return false, fmt.Errorf("inspect pending: %w", err)
 	}
 	claim := make([]string, 0, len(pending))
@@ -323,8 +323,17 @@ func (r *Runner) reclaim(ctx context.Context, stream string) (bool, error) {
 	}
 	claimed, err := r.transport.Claim(ctx, stream, r.config.ConsumerGroup, r.config.ConsumerName, claim, r.config.ReclaimIdle)
 	if err != nil {
+		r.failedStep(ctx, "dev_health.stream.reclaim_failed", "claim", err)
 		return false, fmt.Errorf("claim pending: %w", err)
 	}
+	// A reclaim pass is a batch like a read batch: every event it handles,
+	// poison included, is a handle child of it.
+	batchCtx, batch := tracing.StartWorkSpan(ctx, runnerTracerName, "dev_health.stream.batch",
+		attribute.String("dev_health.stream.runner", r.config.Name),
+		attribute.Int("dev_health.stream.messages", len(pending)),
+		attribute.Int("dev_health.stream.lanes", 1),
+		attribute.String("dev_health.stream.source", "reclaim"),
+	)
 	claimedByID := make(map[string]Message, len(claimed))
 	for _, message := range claimed {
 		claimedByID[message.ID] = message
@@ -345,15 +354,25 @@ func (r *Runner) reclaim(ctx context.Context, stream string) (bool, error) {
 		r.reclaimed++
 		r.mu.Unlock()
 		if _, isPoison := poison[item.MessageID]; isPoison {
-			if err := r.quarantine(ctx, message, "max_deliveries_exceeded"); err != nil {
+			if err := r.tracedHandle(batchCtx, func(ctx context.Context) (string, error) {
+				if err := r.quarantine(ctx, message, "max_deliveries_exceeded"); err != nil {
+					return "quarantine_error", err
+				}
+				return "quarantined", nil
+			}); err != nil {
 				failures = append(failures, err)
 			}
 			continue
 		}
-		if err := r.process(ctx, message); err != nil {
+		if err := r.process(batchCtx, message); err != nil {
 			failures = append(failures, err)
 		}
 	}
+	batch.SetAttributes(attribute.Int("dev_health.stream.failed", len(failures)))
+	if len(failures) > 0 {
+		batch.SetAttributes(attribute.String(tracing.StageAttribute, "handle"))
+	}
+	tracing.EndWorkSpan(batch, errors.Join(failures...))
 	return len(claimed) > 0, errors.Join(failures...)
 }
 
@@ -369,13 +388,32 @@ func sortedUnique(values []string) []string {
 // span carries the runner name and a fixed outcome word; never the stream key,
 // the message id or any payload (CHAOS-7879).
 func (r *Runner) process(ctx context.Context, message Message) error {
+	return r.tracedHandle(ctx, func(ctx context.Context) (string, error) { return r.handle(ctx, message) })
+}
+
+// tracedHandle runs one event's work under one dev_health.stream.handle span
+// and records the fixed outcome word fn returns. Every path that handles an
+// event goes through it: the normal path, a reclaimed event and a poison event.
+func (r *Runner) tracedHandle(ctx context.Context, fn func(context.Context) (string, error)) error {
 	ctx, span := tracing.StartWorkSpan(ctx, runnerTracerName, "dev_health.stream.handle",
 		attribute.String("dev_health.stream.runner", r.config.Name),
 	)
-	outcome, err := r.handle(ctx, message)
+	outcome, err := fn(ctx)
 	span.SetAttributes(attribute.String("dev_health.stream.outcome", outcome))
 	tracing.EndWorkSpan(span, err)
 	return err
+}
+
+// failedStep emits one Error span for a stream step that failed outside any
+// event (read, reclaim, discovery, stats), with the stage that failed. The
+// error TEXT stays in the log; the span carries only the class.
+func (r *Runner) failedStep(ctx context.Context, name, stage string, err error, attrs ...attribute.KeyValue) {
+	attrs = append([]attribute.KeyValue{
+		attribute.String("dev_health.stream.runner", r.config.Name),
+		attribute.String(tracing.StageAttribute, stage),
+	}, attrs...)
+	_, span := tracing.StartWorkSpan(ctx, runnerTracerName, name, attrs...)
+	tracing.EndWorkSpan(span, err)
 }
 
 // runnerTracerName scopes the stream runner's spans by package.

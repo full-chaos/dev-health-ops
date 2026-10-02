@@ -60,6 +60,15 @@ var llmEnvironment = []string{
 	"LOCAL_LLM_BASE_URL", "OLLAMA_BASE_URL", "OLLAMA_MODEL", "LMSTUDIO_BASE_URL",
 }
 
+// NOT pinned by this oracle (its 6 cases decide only what they decide; the other clauses are pinned, where they are, by the Go-only tests of
+// internal/llmorgsettings): a stored provider "auto", "mock" or "none" (resolve.go:120, each of its four clauses); a stored org with neither key
+// nor base_url (:127); a stored provider that differs from the requested one (:163, pinned by TestCredentials_SourceBound); credentialsComplete's
+// per-provider branches (:130, :170: the one stored anthropic org has its key; pinned by TestResolveUsableProvider_PrecedenceMatrix and
+// TestCredentialsComplete); a stored provider that is not a known provider (:123); resolve.go:167, :177 (the SSRF refusal in Store.Credentials,
+// which no test of the repository pins: CHAOS finding sent to the lead), :205, :230; provider_org.go:42, :78, :87, :113, :128; providerkind.go:148,
+// :168, :189, :193; and workunit_explain_route.go:299. Adding a case (a stored "auto"; a stored anthropic org with a base_url and no key; an
+// explicit openai request against a stored anthropic org; a provider with neither key nor base_url) needs a re-record.
+//
 // TestVenueOracleWorkUnitExplainProviderResolution compares the work-unit
 // explain route's answer to a provider it cannot resolve with the Python
 // api's, byte for byte, for orgs whose stored LLM settings name a BYO

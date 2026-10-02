@@ -38,6 +38,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"sort"
+	"strconv"
 	"strings"
 )
 
@@ -371,14 +372,18 @@ func planPromotion(packageDir string, found []string, replayed map[string][]byte
 		if needle == "" {
 			needle = placeholder(final)
 		}
+		// A pin is a Go string literal: match it whole, quotes included, so the
+		// pin of a golden whose name extends this one's ("PIN:a_b" beside
+		// "PIN:a") is never rewritten.
+		literal, replacement := strconv.Quote(needle), strconv.Quote(promotion.NewDigest)
 		for _, file := range testFiles {
-			if strings.Contains(contents[file], needle) {
-				contents[file] = strings.ReplaceAll(contents[file], needle, promotion.NewDigest)
+			if strings.Contains(contents[file], literal) {
+				contents[file] = strings.ReplaceAll(contents[file], literal, replacement)
 				promotion.Pinned = append(promotion.Pinned, file)
 			}
 		}
 		if len(promotion.Pinned) == 0 {
-			return nil, Result{}, fmt.Errorf("no test in %s pins %s (looked for %s): a golden no test pins would be refused by the frozen replay; for a new golden give its spec the digest %q", packageDir, final, needle, placeholder(final))
+			return nil, Result{}, fmt.Errorf("no test in %s pins %s (looked for %s): a golden no test pins would be refused by the frozen replay; for a new golden give its spec the digest %q", packageDir, final, literal, placeholder(final))
 		}
 		plan = append(plan, golden)
 		result.Promoted = append(result.Promoted, promotion)

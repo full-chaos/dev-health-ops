@@ -22,14 +22,27 @@ import (
 // audit_logs rows either plane's writes produced compare equal.
 func TestImpersonationStartStopMatchesThePythonAPI(t *testing.T) {
 	ctx := context.Background()
-	root := repoRoot(t)
+	golden := venueoracle.OpenGolden(t, adminRunValuesGolden("impersonation", t.Name(), "80e5ff18fbbfd338c4d6dda54f63ea7bc1ffcd285cf11e8a556389dd184ba314"))
+	root := golden.PythonRoot(t, repoRoot(t))
+	nextID := goldenIDs("imp")
 	const jwtKey = "venue-oracle-test-secret-key-for-impersonation-flow-32bytes!"
 
-	orgID := uuid.New()
-	adminID := uuid.New()
-	targetID := uuid.New()
+	orgID := nextID()
+	adminID := nextID()
+	targetID := nextID()
+	membershipID := nextID()
+	// Targets that the start route refuses, each for its own reason
+	// (impersonation.py: not found 404, inactive 400, superuser 403, no
+	// membership 404).
+	missingID := nextID()
+	inactiveID := nextID()
+	superuserID := nextID()
+	noMembershipID := nextID()
+	inactiveMembershipID := nextID()
+	superuserMembershipID := nextID()
 
 	venue := venueoracle.Start(t, ctx, venueoracle.Options{
+		Golden: golden,
 		Root:   root,
 		JWTKey: jwtKey,
 		Seed: func(t *testing.T, ctx context.Context, admin *pgxpool.Pool, v *venueoracle.Venue) map[string]map[string]any {
@@ -47,7 +60,24 @@ VALUES ($1, 'venue-admin@example.com', true, true, true, 0, now(), now())`, admi
 			exec(`INSERT INTO users (id, email, is_active, is_verified, is_superuser, token_version, created_at, updated_at)
 VALUES ($1, 'venue-target@example.com', true, true, false, 0, now(), now())`, targetID)
 			exec(`INSERT INTO memberships (id, org_id, user_id, role, joined_at, created_at, updated_at)
-VALUES ($1, $2, $3, 'member', now(), now(), now())`, uuid.New(), orgID, targetID)
+VALUES ($1, $2, $3, 'member', now(), now(), now())`, membershipID, orgID, targetID)
+			for _, target := range []struct {
+				id                        uuid.UUID
+				email                     string
+				active, superuser, member bool
+				membershipID              uuid.UUID
+			}{
+				{inactiveID, "venue-inactive@example.com", false, false, true, inactiveMembershipID},
+				{superuserID, "venue-superuser@example.com", true, true, true, superuserMembershipID},
+				{noMembershipID, "venue-nomember@example.com", true, false, false, uuid.UUID{}},
+			} {
+				exec(`INSERT INTO users (id, email, is_active, is_verified, is_superuser, token_version, created_at, updated_at)
+VALUES ($1, $2, $3, true, $4, 0, now(), now())`, target.id, target.email, target.active, target.superuser)
+				if target.member {
+					exec(`INSERT INTO memberships (id, org_id, user_id, role, joined_at, created_at, updated_at)
+VALUES ($1, $2, $3, 'member', now(), now(), now())`, target.membershipID, orgID, target.id)
+				}
+			}
 			return map[string]map[string]any{
 				"admin": {"user_id": adminID.String(), "email": "venue-admin@example.com", "is_superuser": true},
 			}
@@ -57,6 +87,22 @@ VALUES ($1, $2, $3, 'member', now(), now(), now())`, uuid.New(), orgID, targetID
 	requests := []venueoracle.Request{
 		{Name: "status before", Method: "GET", Path: "/api/v1/admin/impersonate/status",
 			Headers: map[string]string{"Authorization": "Bearer " + venue.Tokens["admin"]}},
+		// Refusals of the start route, one per target, and a stop with no
+		// session open (before any session exists).
+		{Name: "stop with no active session", Method: "POST", Path: "/api/v1/admin/impersonate/stop",
+			Headers: map[string]string{"Authorization": "Bearer " + venue.Tokens["admin"], "Content-Type": "application/json"}},
+		{Name: "target not found", Method: "POST", Path: "/api/v1/admin/impersonate",
+			Headers: map[string]string{"Authorization": "Bearer " + venue.Tokens["admin"], "Content-Type": "application/json"},
+			Body:    venueoracle.B64(fmt.Sprintf(`{"target_user_id":%q}`, missingID.String()))},
+		{Name: "target inactive", Method: "POST", Path: "/api/v1/admin/impersonate",
+			Headers: map[string]string{"Authorization": "Bearer " + venue.Tokens["admin"], "Content-Type": "application/json"},
+			Body:    venueoracle.B64(fmt.Sprintf(`{"target_user_id":%q}`, inactiveID.String()))},
+		{Name: "target superuser", Method: "POST", Path: "/api/v1/admin/impersonate",
+			Headers: map[string]string{"Authorization": "Bearer " + venue.Tokens["admin"], "Content-Type": "application/json"},
+			Body:    venueoracle.B64(fmt.Sprintf(`{"target_user_id":%q}`, superuserID.String()))},
+		{Name: "target with no membership", Method: "POST", Path: "/api/v1/admin/impersonate",
+			Headers: map[string]string{"Authorization": "Bearer " + venue.Tokens["admin"], "Content-Type": "application/json"},
+			Body:    venueoracle.B64(fmt.Sprintf(`{"target_user_id":%q}`, noMembershipID.String()))},
 		{Name: "start", Method: "POST", Path: "/api/v1/admin/impersonate",
 			Headers: map[string]string{"Authorization": "Bearer " + venue.Tokens["admin"], "Content-Type": "application/json"},
 			Body:    venueoracle.B64(fmt.Sprintf(`{"target_user_id":%q}`, targetID.String()))},
@@ -78,10 +124,11 @@ VALUES ($1, $2, $3, 'member', now(), now(), now())`, uuid.New(), orgID, targetID
 			Headers: map[string]string{"Content-Type": "application/json"},
 			Body:    venueoracle.B64(`{`)},
 	}
-	python := venue.ServePython(t, requests)
+	python := golden.Python(t, venue, requests)
 	goBase, _ := startGoServer(t, ctx, venue, jwtKey)
 
 	receipt := venueoracle.Diff(t, goBase, requests, python, venueoracle.DiffOptions{
+		Golden: golden,
 		Normalize: func(request venueoracle.Request, body string) string {
 			// expires_at is wall-clock-derived (now + IMPERSONATION_TTL_MINUTES)
 			// and the two planes mint it microseconds apart; it is not a
@@ -93,12 +140,14 @@ VALUES ($1, $2, $3, 'member', now(), now(), now())`, uuid.New(), orgID, targetID
 	})
 	t.Log(receipt)
 
-	sourceRows := venueoracle.TableRows(t, ctx, venue.AdminURI(t, venue.SourceDB), impersonationAuditQuery(adminID, targetID))
 	goRows := venueoracle.TableRows(t, ctx, venue.AdminURI(t, venue.GoDB), impersonationAuditQuery(adminID, targetID))
-	if sourceRows != goRows {
-		t.Errorf("audit_logs rows differ:\n python: %s\n go:     %s", sourceRows, goRows)
+	if source := golden.CompareRows(t, "audit_logs rows", func() string {
+		return venueoracle.TableRows(t, ctx, venue.AdminURI(t, venue.SourceDB), impersonationAuditQuery(adminID, targetID))
+	}, goRows); source == "" {
+		t.Error("audit_logs: the query matched no rows on the Python plane; the comparison proves nothing")
 	}
-	compareAuditJSONWithSpacingGap(t, ctx, venue, fmt.Sprintf("user_id = '%s' AND resource_id = '%s'", adminID, targetID), "request_metadata")
+	compareAuditJSONWithSpacingGap(t, ctx, golden, venue, fmt.Sprintf("user_id = '%s' AND resource_id = '%s'", adminID, targetID), "request_metadata")
+	golden.Finish(t)
 }
 
 func impersonationAuditQuery(adminID, targetID uuid.UUID) string {

@@ -225,6 +225,23 @@ func TestANewGoldenIsPromotedAndPinnedThroughItsPlaceholder(t *testing.T) {
 	}
 }
 
+// A pin is replaced only where it is the whole literal: the pin of a golden
+// whose name extends the promoted one's ("PIN:g_more") stays as it was.
+func TestAPromotionLeavesAPinThatExtendsTheNameUntouched(t *testing.T) {
+	cfg, _, dir := fixture(t, "")
+	if err := os.WriteFile(filepath.Join(dir, "x_test.go"), []byte("package pkg\nconst other = \"PIN:g_more\"\nconst pin = \"PIN:g\"\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := Record(context.Background(), cfg); err != nil {
+		t.Fatal(err)
+	}
+	pinned, _ := os.ReadFile(filepath.Join(dir, "x_test.go"))
+	want := "package pkg\nconst other = \"PIN:g_more\"\nconst pin = \"" + digest([]byte("NEW GOLDEN\n")) + "\"\n"
+	if string(pinned) != want {
+		t.Fatalf("pins after the promotion:\n%s\nwant:\n%s", pinned, want)
+	}
+}
+
 func TestAGoldenNoTestPinsIsNotPromoted(t *testing.T) {
 	cfg, _, dir := fixture(t, "")
 	if err := os.WriteFile(filepath.Join(dir, "x_test.go"), []byte("package pkg\n"), 0o644); err != nil {

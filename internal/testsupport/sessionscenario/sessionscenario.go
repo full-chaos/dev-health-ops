@@ -3,10 +3,14 @@
 // IT issued from step to step), one normalization and one set of row
 // queries, shared by two runners:
 //
-//   - the venue oracle (internal/apiservice/sessionvenue TestSessionVenueOracle), where
-//     the REAL Python api answers every batch through TestClient and the
-//     Go api answers the same batch; it also records the Python side as a
-//     golden and fails when the committed golden differs;
+//   - the recorder (Harness with Python set), which ran the REAL Python api
+//     beside the Go api through TestClient and recorded the Python side as
+//     python_golden.json. The venue oracle that drove it (internal/apiservice/
+//     sessionvenue TestSessionVenueOracle) was retired with the Python api
+//     (CHAOS-7306): its requests carry tokens signed at run time, so they cannot
+//     be frozen as the other venue goldens are, and the replay below compares
+//     the same answers and rows. python_golden.json keeps the answers that last live
+//     run recorded;
 //   - the golden replay (internal/api/session TestSessionRoutesMatchGolden),
 //     where only the Go route set runs, against Postgres/ClickHouse/Valkey
 //     containers, and every answer and row is compared with that golden.

@@ -7,6 +7,7 @@ import (
 	"crypto/rand"
 	"crypto/rsa"
 	"crypto/x509"
+	"encoding/base64"
 	"encoding/json"
 	"encoding/pem"
 	"fmt"
@@ -148,12 +149,25 @@ func (s *githubStub) handle(w http.ResponseWriter, r *http.Request) {
 }
 
 // githubStateClaims are the claims Mint signs, for a test to break one.
+//
+// A frozen golden holds request bytes, so every state is the same bytes in every
+// run: its iat is stateIssuedAt (long past), its exp farFuture, its jti the next
+// stable id. A claim a test breaks in time is broken against those two anchors.
 func githubStateClaims(org string, now time.Time) jwt.MapClaims {
+	stateSeq++
 	return jwt.MapClaims{
-		"org_id": org, "jti": uuid.NewString(), "purpose": "github_app_install", "iss": "dev-health-ops", "aud": "dev-health-api",
-		"iat": now.Unix(), "exp": now.Add(15 * time.Minute).Unix(),
+		"org_id": org, "jti": venueoracle.StableUUID(fmt.Sprintf("github-state-%d", stateSeq)), "purpose": "github_app_install", "iss": "dev-health-ops", "aud": "dev-health-api",
+		"iat": now.Unix(), "exp": farFuture.Unix(),
 	}
 }
+
+// stateSeq numbers the states a request list mints, from 1 (reset per list).
+var stateSeq int
+
+var (
+	stateIssuedAt = time.Date(2026, time.September, 1, 0, 0, 0, 0, time.UTC)
+	farFuture     = time.Date(2099, time.January, 1, 0, 0, 0, 0, time.UTC)
+)
 
 func signGitHubState(t *testing.T, method jwt.SigningMethod, key any, claims jwt.MapClaims) string {
 	t.Helper()
@@ -180,14 +194,14 @@ func githubAppRequests(t *testing.T, tokens map[string]string, org, otherOrg, py
 	add := func(name, path string, headers map[string]string, body string) {
 		out = append(out, venueoracle.Request{Name: name, Method: "POST", Path: "/api/v1/admin/integrations/github/" + path, Headers: headers, Body: venueoracle.B64(body)})
 	}
-	now := time.Now()
-	signer := githubapp.Signer{Secret: venueKey, Issuer: "dev-health-ops", Audience: "dev-health-api"}
+	stateSeq = 0
+	now := stateIssuedAt
 	fresh := func(returnTo *string) string {
-		state, err := signer.Mint(org, returnTo, now)
-		if err != nil {
-			t.Fatal(err)
+		claims := githubStateClaims(org, now)
+		if returnTo != nil {
+			claims["return_to"] = *returnTo
 		}
-		return state
+		return signGitHubState(t, jwt.SigningMethodHS256, githubStateSecret, claims)
 	}
 	ptr := func(s string) *string { return &s }
 	callback := func(name, state string, installationID int, code string, extra string) {
@@ -235,8 +249,8 @@ func githubAppRequests(t *testing.T, tokens map[string]string, org, otherOrg, py
 		return signGitHubState(t, jwt.SigningMethodHS256, githubStateSecret, c)
 	}
 	callback("callback: expired state", claims(func(c jwt.MapClaims) { c["exp"] = now.Add(-time.Hour).Unix() }), 101, "good", "")
-	callback("callback: future iat", claims(func(c jwt.MapClaims) { c["iat"] = now.Add(time.Hour).Unix() }), 101, "good", "")
-	callback("callback: not yet valid", claims(func(c jwt.MapClaims) { c["nbf"] = now.Add(time.Hour).Unix() }), 101, "good", "")
+	callback("callback: future iat", claims(func(c jwt.MapClaims) { c["iat"] = farFuture.Unix() }), 101, "good", "")
+	callback("callback: not yet valid", claims(func(c jwt.MapClaims) { c["nbf"] = farFuture.Unix() }), 101, "good", "")
 	callback("callback: wrong issuer", claims(func(c jwt.MapClaims) { c["iss"] = "someone-else" }), 101, "good", "")
 	callback("callback: wrong audience", claims(func(c jwt.MapClaims) { c["aud"] = "someone-else" }), 101, "good", "")
 	callback("callback: audience list", claims(func(c jwt.MapClaims) { c["aud"] = []string{"x", "dev-health-api"} }), 101, "good", "")
@@ -259,11 +273,11 @@ func githubAppRequests(t *testing.T, tokens map[string]string, org, otherOrg, py
 	callback("callback: numeric issuer", claims(func(c jwt.MapClaims) { c["iss"] = 5 }), 101, "denied", "")
 	callback("callback: numeric audience", claims(func(c jwt.MapClaims) { c["aud"] = 5 }), 101, "denied", "")
 	callback("callback: audience list of numbers", claims(func(c jwt.MapClaims) { c["aud"] = []int{1} }), 101, "denied", "")
-	callback("callback: fractional expiry", claims(func(c jwt.MapClaims) { c["exp"] = float64(now.Add(time.Hour).Unix()) + 0.5 }), 101, "denied", "")
+	callback("callback: fractional expiry", claims(func(c jwt.MapClaims) { c["exp"] = float64(farFuture.Unix()) + 0.5 }), 101, "denied", "")
 	// Time claims Python reads through int(): numeric strings (with the
 	// whitespace, sign and underscore forms int() takes), booleans and other
 	// JSON types, on each of exp, nbf and iat.
-	future := now.Add(time.Hour).Unix()
+	future := farFuture.Unix()
 	for _, claim := range []string{"exp", "nbf", "iat"} {
 		value := func(v any) func(jwt.MapClaims) { return func(c jwt.MapClaims) { c[claim] = v } }
 		callback("callback: numeric-string "+claim, claims(value(fmt.Sprint(now.Unix()-60))), 101, "denied", "")
@@ -370,22 +384,40 @@ func normalizeGitHubState(_ venueoracle.Request, body string) string {
 
 // runGitHubAppVariant sets the process environment both planes read, starts
 // a Go api under it, and diffs the requests.
-func runGitHubAppVariant(t *testing.T, ctx context.Context, venue *venueoracle.Venue, stub *githubStub, stubClient *http.Client, name string, env map[string]string, full bool, orgs [2]string) string {
+func runGitHubAppVariant(t *testing.T, ctx context.Context, golden *venueoracle.Golden, venue *venueoracle.Venue, stub *githubStub, stubClient *http.Client, name string, env map[string]string, full bool, orgs [2]string) string {
 	t.Helper()
 	for _, key := range []string{"GITHUB_APP_SLUG", "GITHUB_APP_ID", "GITHUB_APP_PRIVATE_KEY", "GITHUB_APP_PRIVATE_KEY_PATH", "GITHUB_APP_CLIENT_ID", "GITHUB_APP_CLIENT_SECRET", "GITHUB_APP_CALLBACK_URL"} {
 		t.Setenv(key, env[key])
 	}
 	base := startGoServer(t, ctx, venue, apiservice.GitHubAppConfig(os.LookupEnv), stubClient)
-	var pythonState string
-	if raw := venue.CallPython(t, venueoracle.PythonCall{Target: "dev_health_ops.api.integrations.github_app_state:mint_github_app_install_state", Args: []any{orgs[0], "/auth/onboard/integration"}}); len(raw) == 1 {
-		if err := json.Unmarshal(raw[0], &pythonState); err != nil || pythonState == "" {
-			t.Fatalf("mint a state on the Python plane: %v (%s)", err, raw[0])
+	// The state the Python plane mints carries the clock and a random jti, so the
+	// requests cannot hold it: the request list holds a state of the same shape
+	// signed here, and the Python plane's own minted state is frozen as its header
+	// and claims (times and jti blanked) and compared with what the Go plane mints.
+	returnTo := "/auth/onboard/integration"
+	requests := githubAppRequests(t, venue.Tokens, orgs[0], orgs[1], signGitHubState(t, jwt.SigningMethodHS256, githubStateSecret, func() jwt.MapClaims {
+		claims := githubStateClaims(orgs[0], stateIssuedAt)
+		claims["return_to"] = returnTo
+		return claims
+	}()), full)
+	pythonResponses := golden.Python(t, venue, requests)
+	pythonSeen := strings.Split(golden.InspectRows(t, "python github requests: "+name, func() string { return strings.Join(stub.take(), "\n") }), "\n")
+	receipt := venueoracle.Diff(t, base, requests, pythonResponses, venueoracle.DiffOptions{Golden: golden, Normalize: normalizeGitHubState})
+	pythonShape := golden.InspectRows(t, "python minted state: "+name, func() string {
+		raw := venue.CallPython(t, venueoracle.PythonCall{Target: "dev_health_ops.api.integrations.github_app_state:mint_github_app_install_state", Args: []any{orgs[0], "/auth/onboard/integration"}})
+		var minted string
+		if len(raw) != 1 || json.Unmarshal(raw[0], &minted) != nil || minted == "" {
+			t.Fatalf("mint a state on the Python plane: %s", raw)
 		}
+		return stateShape(t, minted)
+	})
+	goMinted, err := (githubapp.Signer{Secret: venueKey, Issuer: "dev-health-ops", Audience: "dev-health-api"}).Mint(orgs[0], &returnTo, time.Now())
+	if err != nil {
+		t.Fatal(err)
 	}
-	requests := githubAppRequests(t, venue.Tokens, orgs[0], orgs[1], pythonState, full)
-	pythonResponses := venue.ServePython(t, requests)
-	pythonSeen := stub.take()
-	receipt := venueoracle.Diff(t, base, requests, pythonResponses, venueoracle.DiffOptions{Normalize: normalizeGitHubState})
+	if goShape := stateShape(t, goMinted); goShape != pythonShape {
+		t.Errorf("%s: the Go-minted install state differs from the Python-minted one:\n python %s\n go     %s", name, pythonShape, goShape)
+	}
 	goSeen := stub.take()
 	same := strings.Join(pythonSeen, "\n") == strings.Join(goSeen, "\n")
 	if !same {
@@ -400,6 +432,7 @@ func runGitHubAppVariant(t *testing.T, ctx context.Context, venue *venueoracle.V
 // credential rows -- under a fully configured App and under each way the App
 // can be misconfigured.
 func TestVenueOracleGitHubAppInstall(t *testing.T) {
+	golden := venueoracle.OpenGolden(t, venueGolden("venue-oracle-git-hub-app-install", t.Name(), "41b7c96dd5cac69ca2b57ba3cb51c6076602eed2418fe4d530d9d58a19ff84b4"))
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Minute)
 	defer cancel()
 	stub := newGitHubStub(t)
@@ -413,7 +446,7 @@ func TestVenueOracleGitHubAppInstall(t *testing.T) {
 
 	var seed venueFixture
 	venue := venueoracle.Start(t, ctx, venueoracle.Options{
-		Root: repoRoot(t), JWTKey: venueKey,
+		Golden: golden, Root: golden.PythonRoot(t, repoRoot(t)), JWTKey: venueKey,
 		PythonEnv: []string{
 			"SETTINGS_ENCRYPTION_KEY=" + credentialsKey,
 			"VENUE_PROVIDER_STUB_PORT=" + stubPort(stub.server.URL),
@@ -434,73 +467,121 @@ func TestVenueOracleGitHubAppInstall(t *testing.T) {
 			return seed.tokenSpecs()
 		},
 	})
-	pemKey := strings.ReplaceAll(generatePEM(t), "\n", `\n`)
+	generatedPEM := generatePEM(t)
+	pemKey := strings.ReplaceAll(generatedPEM, "\n", `\n`)
 	full := map[string]string{
 		"GITHUB_APP_SLUG": "dev health app/v2", "GITHUB_APP_ID": "12345", "GITHUB_APP_PRIVATE_KEY": pemKey,
 		"GITHUB_APP_CLIENT_ID": "Iv1.client", "GITHUB_APP_CLIENT_SECRET": "client-secret", "GITHUB_APP_CALLBACK_URL": "https://app.example.test/cb?x=1&y=é",
 	}
 	orgs := [2]string{seed.orgA.String(), seed.orgB.String()}
 	var receipt strings.Builder
-	receipt.WriteString(runGitHubAppVariant(t, ctx, venue, stub, stubClient, "configured", full, true, orgs))
-	compareGitHubAppRows(t, ctx, venue, &receipt)
+	receipt.WriteString(runGitHubAppVariant(t, ctx, golden, venue, stub, stubClient, "configured", full, true, orgs))
+	compareGitHubAppRows(t, ctx, golden, venue, &receipt, generatedPEM)
 
 	noCallback := map[string]string{}
 	for key, value := range full {
 		noCallback[key] = value
 	}
 	noCallback["GITHUB_APP_CALLBACK_URL"] = ""
-	receipt.WriteString(runGitHubAppVariant(t, ctx, venue, stub, stubClient, "no callback URL", noCallback, false, orgs))
-	receipt.WriteString(runGitHubAppVariant(t, ctx, venue, stub, stubClient, "nothing configured", map[string]string{}, false, orgs))
-	receipt.WriteString(runGitHubAppVariant(t, ctx, venue, stub, stubClient, "no OAuth client", map[string]string{
+	receipt.WriteString(runGitHubAppVariant(t, ctx, golden, venue, stub, stubClient, "no callback URL", noCallback, false, orgs))
+	receipt.WriteString(runGitHubAppVariant(t, ctx, golden, venue, stub, stubClient, "nothing configured", map[string]string{}, false, orgs))
+	receipt.WriteString(runGitHubAppVariant(t, ctx, golden, venue, stub, stubClient, "no OAuth client", map[string]string{
 		"GITHUB_APP_SLUG": "app", "GITHUB_APP_ID": "12345", "GITHUB_APP_PRIVATE_KEY": pemKey,
 	}, false, orgs))
-	receipt.WriteString(runGitHubAppVariant(t, ctx, venue, stub, stubClient, "unreadable key file", map[string]string{
+	receipt.WriteString(runGitHubAppVariant(t, ctx, golden, venue, stub, stubClient, "unreadable key file", map[string]string{
 		"GITHUB_APP_SLUG": "app", "GITHUB_APP_ID": "12345", "GITHUB_APP_PRIVATE_KEY_PATH": "/nonexistent/github-app.pem",
 		"GITHUB_APP_CLIENT_ID": "c", "GITHUB_APP_CLIENT_SECRET": "s",
 	}, false, orgs))
 	t.Logf("\n%s", receipt.String())
+	golden.Finish(t)
 }
 
 // compareGitHubAppRows compares the installation rows and the github-app
 // credential each plane holds after the configured run, the credential by its
 // decrypted payload (Fernet ciphertexts differ by construction).
-func compareGitHubAppRows(t *testing.T, ctx context.Context, venue *venueoracle.Venue, receipt *strings.Builder) {
+func compareGitHubAppRows(t *testing.T, ctx context.Context, golden *venueoracle.Golden, venue *venueoracle.Venue, receipt *strings.Builder, privateKey string) {
 	t.Helper()
 	installations := `SELECT installation_id, coalesce(account_login, '<null>'), coalesce(account_type, '<null>'), coalesce(org_id, '<null>'),
 		suspended_at IS NOT NULL, updated_at > created_at FROM github_app_installations ORDER BY installation_id`
-	pythonRows := venueoracle.TableRows(t, ctx, venue.AdminURI(t, venue.SourceDB), installations)
 	goRows := venueoracle.TableRows(t, ctx, venue.AdminURI(t, venue.GoDB), installations)
-	if pythonRows != goRows || pythonRows == "" {
-		t.Errorf("github_app_installations differ (or are empty):\n python %s\n go     %s", pythonRows, goRows)
+	pythonRows := golden.CompareRows(t, "github_app_installations", func() string {
+		return venueoracle.TableRows(t, ctx, venue.AdminURI(t, venue.SourceDB), installations)
+	}, goRows)
+	if pythonRows == "" {
+		t.Error("github_app_installations are empty")
 	}
 	fmt.Fprintf(receipt, "github_app_installations rows: %s\n", venueoracle.Mark(pythonRows == goRows && pythonRows != ""))
 
-	rendered := map[string]string{}
-	for _, plane := range []struct{ name, uri string }{{"python", venue.AdminURI(t, venue.SourceDB)}, {"go", venue.AdminURI(t, venue.GoDB)}} {
-		pool, err := pgxpool.New(ctx, plane.uri)
+	render := func(name, uri string) string {
+		pool, err := pgxpool.New(ctx, uri)
 		if err != nil {
 			t.Fatal(err)
 		}
-		var org, provider, name, config, ciphertext string
+		var org, provider, credName, config, ciphertext string
 		var active bool
 		err = pool.QueryRow(ctx, `SELECT org_id, provider, name, is_active, config::text, credentials_encrypted FROM integration_credentials WHERE provider = 'github' AND name = 'github-app'`).
-			Scan(&org, &provider, &name, &active, &config, &ciphertext)
+			Scan(&org, &provider, &credName, &active, &config, &ciphertext)
 		pool.Close()
 		if err != nil {
-			t.Fatalf("%s: read the github-app credential: %v", plane.name, err)
+			t.Fatalf("%s: read the github-app credential: %v", name, err)
 		}
 		results := venue.CallPython(t, venueoracle.PythonCall{Target: "dev_health_ops.core.encryption:decrypt_value", Args: []any{ciphertext}})
 		var plaintext string
 		if err := json.Unmarshal(results[0], &plaintext); err != nil {
-			t.Fatalf("%s: decrypt: %v", plane.name, err)
+			t.Fatalf("%s: decrypt: %v", name, err)
 		}
-		rendered[plane.name] = fmt.Sprintf("%s|%s|%s|active=%v|config=%s|secret=%s", org, provider, name, active, config, plaintext)
+		// The App's private key is a random key generated per run: it is compared
+		// by being the configured one, not by its bytes.
+		escaped, err := json.Marshal(privateKey)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !strings.Contains(plaintext, string(escaped)) {
+			t.Errorf("%s: the stored secret does not hold the configured private key", name)
+		}
+		plaintext = strings.Replace(plaintext, string(escaped), `"<the configured private key>"`, 1)
+		return fmt.Sprintf("%s|%s|%s|active=%v|config=%s|secret=%s", org, provider, credName, active, config, plaintext)
 	}
-	same := rendered["python"] == rendered["go"]
-	if !same {
-		t.Errorf("the github-app credential differs:\n python %s\n go     %s", rendered["python"], rendered["go"])
+	goRendered := render("go", venue.AdminURI(t, venue.GoDB))
+	pythonRendered := golden.CompareRows(t, "github-app credential (decrypted)", func() string {
+		return render("python", venue.AdminURI(t, venue.SourceDB))
+	}, goRendered)
+	fmt.Fprintf(receipt, "github-app credential (decrypted): %s\n", venueoracle.Mark(pythonRendered == goRendered))
+}
+
+// stateShape is a minted install state's header and claims as sorted JSON with
+// the clock claims (iat, exp) and the random jti blanked: what the two planes
+// must agree on.
+func stateShape(t *testing.T, state string) string {
+	t.Helper()
+	parts := strings.Split(state, ".")
+	if len(parts) != 3 {
+		t.Fatalf("not a JWT: %q", state)
 	}
-	fmt.Fprintf(receipt, "github-app credential (decrypted): %s\n", venueoracle.Mark(same))
+	var out []string
+	for index, part := range parts[:2] {
+		raw, err := base64.RawURLEncoding.DecodeString(part)
+		if err != nil {
+			t.Fatal(err)
+		}
+		var decoded map[string]any
+		if err := json.Unmarshal(raw, &decoded); err != nil {
+			t.Fatal(err)
+		}
+		if index == 1 {
+			for _, name := range []string{"iat", "exp", "jti"} {
+				if _, ok := decoded[name]; ok {
+					decoded[name] = "<" + name + ">"
+				}
+			}
+		}
+		canonical, err := json.Marshal(decoded)
+		if err != nil {
+			t.Fatal(err)
+		}
+		out = append(out, string(canonical))
+	}
+	return strings.Join(out, " ")
 }
 
 func venueStubDir(t *testing.T) string {
@@ -535,7 +616,7 @@ func (f venueFixture) tokenSpecs() map[string]map[string]any {
 
 func seedVenue(t *testing.T, ctx context.Context, admin *pgxpool.Pool) venueFixture {
 	t.Helper()
-	f := venueFixture{orgA: uuid.New(), orgB: uuid.New(), admin: uuid.New(), member: uuid.New(), outsider: uuid.New()}
+	f := venueFixture{orgA: stableID("org-a"), orgB: stableID("org-b"), admin: stableID("admin"), member: stableID("member"), outsider: stableID("outsider")}
 	exec := func(sql string, args ...any) {
 		t.Helper()
 		if _, err := admin.Exec(ctx, sql, args...); err != nil {
@@ -561,7 +642,7 @@ func seedVenue(t *testing.T, ctx context.Context, admin *pgxpool.Pool) venueFixt
 		role      string
 	}{{f.orgA, f.admin, "admin"}, {f.orgA, f.member, "member"}, {f.orgB, f.outsider, "member"}} {
 		exec(`INSERT INTO memberships (id, user_id, org_id, role, created_at, updated_at) VALUES ($1, $2, $3, $4, now(), now())`,
-			uuid.New(), member.user, member.org, member.role)
+			stableID("membership-"+member.org.String()+"-"+member.user.String()), member.user, member.org, member.role)
 	}
 	return f
 }
@@ -658,4 +739,10 @@ func repoRoot(t *testing.T) string {
 		}
 		directory = parent
 	}
+}
+
+// stableID is the id a golden-backed seed gives the row it names: a recording and
+// every replay must send the same bytes.
+func stableID(name string) uuid.UUID {
+	return uuid.MustParse(venueoracle.StableUUID("github-app-" + name))
 }

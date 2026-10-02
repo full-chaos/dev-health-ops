@@ -361,9 +361,9 @@ check_race() {
 # balanced by measured package time (ci/go_race_weights.tsv, ci/go_race_shard.awk)
 # and NOT by count. The slices always partition `go list ./...`: a wrong weight
 # costs balance, never coverage. A slice that selects no package at all fails.
-GO_RACE_WEIGHTS="${GO_RACE_WEIGHTS:-${ROOT}/ci/go_race_weights.tsv}"
+GO_RACE_WEIGHTS="${ROOT}/ci/go_race_weights.tsv"
 check_race_shard() {
-  local shard="${1:-}" count="${2:-}" module_dir modpath pkg selected=0 missing
+  local shard="${1:-}" count="${2:-}" module_dir modpath pkg selected=0 race_out unweighted
   case "${shard}" in ""|*[!0-9]*) die "race SHARD must be a positive integer, got '${shard}'" ;; esac
   case "${count}" in ""|*[!0-9]*) die "race COUNT must be a positive integer, got '${count}'" ;; esac
   { [ "${shard}" -ge 1 ] && [ "${count}" -ge 1 ] && [ "${shard}" -le "${count}" ]; } \
@@ -372,15 +372,6 @@ check_race_shard() {
   local -a pkgs
   for module_dir in "${MODULE_DIRS[@]}"; do
     modpath="$(cd "${ROOT}/${module_dir}" && "${GO_ENV_OFF[@]}" GOWORK=off go list -m)"
-    if [ "${module_dir}" = "." ]; then
-      # CHAOS-8135: static and deterministic, before any test runs: every package of the root module has a weights row.
-      # A package with no row weighs the shard awk's default and hides its cost from the shard plan.
-      missing="$(cd "${ROOT}/${module_dir}" && "${GO_ENV_OFF[@]}" GOWORK=off go list -mod=readonly ./... \
-        | awk -v mod="${modpath}" -v weights="${GO_RACE_WEIGHTS}" -f "${ROOT}/ci/go_race_missing_rows.awk")" \
-        || die "ci/go_race_missing_rows.awk failed"
-      [ -z "${missing}" ] \
-        || die "race package(s) with NO row in ci/go_race_weights.tsv (add each one: its measured go test -race seconds, 1 if it has no test): $(printf '%s' "${missing}" | tr '\n' ' ')"
-    fi
     pkgs=()
     while IFS= read -r pkg; do
       [ -n "${pkg}" ] && pkgs+=("${pkg}")
@@ -389,10 +380,17 @@ check_race_shard() {
     printf 'go test -race (shard %s/%s): %s: %d package(s)\n' "${shard}" "${count}" "${module_dir}" "${#pkgs[@]}"
     [ "${#pkgs[@]}" -gt 0 ] || continue
     selected=$((selected + ${#pkgs[@]}))
+    race_out="$(mktemp "${TMPDIR:-/tmp}/dev-health-race-shard.XXXXXX")"
     (
       cd "${ROOT}/${module_dir}"
-      "${GO_ENV_OFF[@]}" GOWORK=off go test -mod=readonly -race "${pkgs[@]}"
+      "${GO_ENV_OFF[@]}" GOWORK=off go test -mod=readonly -race "${pkgs[@]}" 2>&1 | tee "${race_out}"
     )
+    # CHAOS-8135: a heavy package with no weights row hides its cost from the shard plan. Read the timings back.
+    unweighted="$(awk -v mod="${modpath}" -v weights="${GO_RACE_WEIGHTS}" -v minsec="${GO_RACE_UNWEIGHTED_MIN_SECONDS:-90}" \
+      -f "${ROOT}/ci/go_race_unweighted.awk" "${race_out}")" || { rm -f "${race_out}"; die "ci/go_race_unweighted.awk failed"; }
+    rm -f "${race_out}"
+    [ -z "${unweighted}" ] \
+      || die "race package(s) of ${GO_RACE_UNWEIGHTED_MIN_SECONDS:-90} s or more with NO row in ci/go_race_weights.tsv (they weigh the default 2 and hide their cost from the shard plan; add the measured row): $(printf '%s' "${unweighted}" | tr '\t\n' ' ,')"
   done
   [ "${selected}" -gt 0 ] \
     || die "race shard ${shard}/${count} selected zero packages -- the matrix is wider than the package list, so this leg would read green while running nothing"

@@ -198,7 +198,6 @@ func buildProviderSyncHandler(
 	collector *jobruntime.MetricsCollector,
 	logger *slog.Logger,
 ) (*providerunit.Handler, *providerfoundation.Metrics) {
-	logProviderBudgetConfig(logger)
 	return buildProviderSyncHandlerWithWorkItemsRuntimeConfig(
 		repository, decryptor, clickhouseConnection, valkeyClient,
 		domainPool, incidentEntitlement, collector, logger,
@@ -264,6 +263,10 @@ func buildProviderSyncHandlerWithRuntimeDependencies(
 	// (githubTestsMaxDownloadSize) -- see its zero-means-default doc comment.
 	githubTestsMaxArtifactBytes int64,
 ) (*providerunit.Handler, *providerfoundation.Metrics) {
+	// Every production path (buildProviderSyncWorker) and every wrapper above
+	// ends here, so the line is written exactly once per handler build, which
+	// is once per worker process (CHAOS-7881).
+	logProviderBudgetConfig(logger)
 	// providerMetrics is constructed exactly once per worker process and
 	// referenced by every claim's executor, so dev_health_provider_* actually
 	// accumulates across dispatches instead of being built and discarded per

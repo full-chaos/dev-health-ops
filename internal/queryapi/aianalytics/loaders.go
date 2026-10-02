@@ -100,6 +100,7 @@ func loadDaily(ctx context.Context, client QueryClient, orgID string, startDay, 
 			return nil, fmt.Errorf("aianalytics: daily scan: %w", err)
 		}
 		r.Day = day.UTC().Format("2006-01-02")
+		r.DayTime = day.UTC()
 		r.PrsTotal, r.PrsMerged = int64(prsTotal), int64(prsMerged)
 		r.AIAssistedPrs, r.AgentCreatedPrs = int64(aiPrs), int64(agentPrs)
 		r.HumanPrs, r.UnknownPrs = int64(humanPrs), int64(unknownPrs)

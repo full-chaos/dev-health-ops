@@ -593,7 +593,12 @@ func answerA(t *testing.T, c oracleCase, ds dataset) map[string]any {
 	if err != nil {
 		t.Fatalf("%s: %v", c.Name, err)
 	}
-	return jsonMap(t, got)
+	answer := jsonMap(t, got)
+	if c.Fn == "resolve_ai_impact_summary" {
+		// The Go-only daily row field (CHAOS-7774) is not part of the recorded Python answer.
+		stripGoOnlyImpactDailyRowFields(answer)
+	}
+	return answer
 }
 
 // jsonMap is the answer as a JSON map. The two date fields are graphqldate.Date values that do not

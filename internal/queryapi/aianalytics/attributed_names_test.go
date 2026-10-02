@@ -49,7 +49,7 @@ func runNames(t *testing.T, c oracleBCase, scope *model.AIScopeInput) *model.AiA
 	return got
 }
 
-func str(p *string) string {
+func nameOrNil(p *string) string {
 	if p == nil {
 		return "<nil>"
 	}
@@ -62,11 +62,11 @@ func TestAttributedPrs_RowsCarryRepoAndTeamNames(t *testing.T) {
 		t.Fatalf("want 2 rows, got %d", len(got.Rows))
 	}
 	for _, r := range got.Rows {
-		if str(r.RepoName) != "acme/alpha" {
-			t.Errorf("repoName = %s, want acme/alpha (repo %s)", str(r.RepoName), r.RepoID)
+		if nameOrNil(r.RepoName) != "acme/alpha" {
+			t.Errorf("repoName = %s, want acme/alpha (repo %s)", nameOrNil(r.RepoName), r.RepoID)
 		}
-		if str(r.TeamID) != "team-a" || str(r.TeamName) != "Team A" {
-			t.Errorf("team = %s / %s, want team-a / Team A", str(r.TeamID), str(r.TeamName))
+		if nameOrNil(r.TeamID) != "team-a" || nameOrNil(r.TeamName) != "Team A" {
+			t.Errorf("team = %s / %s, want team-a / Team A", nameOrNil(r.TeamID), nameOrNil(r.TeamName))
 		}
 	}
 }
@@ -78,8 +78,8 @@ func TestAttributedPrs_TeamFilterKeepsTheNamesOfTheKeptRows(t *testing.T) {
 		t.Fatalf("want 1 row, got %d", len(got.Rows))
 	}
 	r := got.Rows[0]
-	if str(r.RepoName) != "Acme/Beta" || str(r.TeamID) != "team-b" || str(r.TeamName) != "B" {
-		t.Fatalf("row = repoName %s, team %s / %s", str(r.RepoName), str(r.TeamID), str(r.TeamName))
+	if nameOrNil(r.RepoName) != "Acme/Beta" || nameOrNil(r.TeamID) != "team-b" || nameOrNil(r.TeamName) != "B" {
+		t.Fatalf("row = repoName %s, team %s / %s", nameOrNil(r.RepoName), nameOrNil(r.TeamID), nameOrNil(r.TeamName))
 	}
 }
 
@@ -113,8 +113,8 @@ func TestAttributedPrs_EmptyTeamNameIsNil(t *testing.T) {
 	c.TeamRows[0] = first
 	got := runNames(t, c, nil)
 	for _, r := range got.Rows {
-		if str(r.TeamID) != "team-a" {
-			t.Fatalf("teamId = %s, want team-a", str(r.TeamID))
+		if nameOrNil(r.TeamID) != "team-a" {
+			t.Fatalf("teamId = %s, want team-a", nameOrNil(r.TeamID))
 		}
 		if r.TeamName != nil {
 			t.Fatalf("teamName = %q, want nil for a team with no name", *r.TeamName)
@@ -133,7 +133,7 @@ func TestAttributedPrs_RepoCatalogueFailureLeavesNoNames(t *testing.T) {
 	}
 	for _, r := range got.Rows {
 		if r.RepoName != nil || r.TeamID != nil || r.TeamName != nil {
-			t.Fatalf("row = %s / %s / %s, want no names and no team", str(r.RepoName), str(r.TeamID), str(r.TeamName))
+			t.Fatalf("row = %s / %s / %s, want no names and no team", nameOrNil(r.RepoName), nameOrNil(r.TeamID), nameOrNil(r.TeamName))
 		}
 	}
 }
@@ -147,7 +147,7 @@ func TestAttributedPrs_TeamCatalogueFailureKeepsRepoNames(t *testing.T) {
 	named := false
 	for _, r := range got.Rows {
 		if r.TeamID != nil || r.TeamName != nil {
-			t.Fatalf("team = %s / %s, want none when the teams read fails", str(r.TeamID), str(r.TeamName))
+			t.Fatalf("team = %s / %s, want none when the teams read fails", nameOrNil(r.TeamID), nameOrNil(r.TeamName))
 		}
 		if r.RepoName != nil {
 			named = true

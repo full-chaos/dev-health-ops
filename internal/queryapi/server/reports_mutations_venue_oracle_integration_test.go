@@ -62,10 +62,10 @@ const (
 	reportMissing   = "c0000000-0000-4000-8000-00000000dead" // names nothing
 	// The DST reports: a fixed last_run_at just before a zone's transition, so a
 	// schedule's next run is a function of (cron, zone, base) alone.
-	reportDST1 = "a0000000-0000-4000-8000-000000000011" // 2026-03-08T06:30Z, before New York springs forward
-	reportDST2 = "a0000000-0000-4000-8000-000000000012" // 2026-11-01T05:30Z, before New York falls back
-	reportDST3 = "a0000000-0000-4000-8000-000000000013" // 2026-10-03T14:30Z, before Lord Howe springs forward
-	reportDST4 = "a0000000-0000-4000-8000-000000000014" // 2026-10-25T00:30Z, before London falls back
+	reportDST1 = "a0000000-0000-4000-8000-000000000011" // 2025-03-09T06:30Z, before New York springs forward
+	reportDST2 = "a0000000-0000-4000-8000-000000000012" // 2025-11-02T05:30Z, before New York falls back
+	reportDST3 = "a0000000-0000-4000-8000-000000000013" // 2025-10-04T14:30Z, before Lord Howe springs forward
+	reportDST4 = "a0000000-0000-4000-8000-000000000014" // 2025-10-26T00:30Z, before London falls back
 )
 
 // A fixed instant well in the past: a timestamp equal to it is compared as
@@ -105,19 +105,20 @@ func repoRootFromHere(t *testing.T) string {
 }
 
 func TestSavedReportMutationsVenueOracle(t *testing.T) {
-	runSavedReportVenue(t, oracleCases(), nil)
+	runSavedReportVenue(t, "saved-report-mutations", "7140164ba67fc56bf7e6000a4b65e858c93fe0b9b0b80acda2a212695bd3a5ad", oracleCases(), nil)
 }
 
 // runSavedReportVenue sends every case to both planes. A case named in
 // goRefuses is a declared divergence in which Python accepts what Go refuses:
 // each plane's answer is asserted as that, the rows are not compared (they
 // differ by construction), and the count of rows each plane wrote is.
-func runSavedReportVenue(t *testing.T, cases []oracleCase, goRefuses map[string]string) {
+func runSavedReportVenue(t *testing.T, goldenName, pin string, cases []oracleCase, goRefuses map[string]string) {
 	ctx := context.Background()
 	root := repoRootFromHere(t)
-	userA, userB := uuid.New(), uuid.New()
+	golden := venueoracle.OpenGolden(t, venueGolden(goldenName, t.Name(), pin))
+	userA, userB := stableVenueID(goldenName+"/user-a"), stableVenueID(goldenName+"/user-b")
 	venue := venueoracle.Start(t, ctx, venueoracle.Options{
-		Root: root, JWTKey: oracleJWTKey,
+		Golden: golden, Root: golden.PythonRoot(t, root), JWTKey: oracleJWTKey,
 		Seed: func(t *testing.T, ctx context.Context, admin *pgxpool.Pool, _ *venueoracle.Venue) map[string]map[string]any {
 			exec := func(sql string, args ...any) {
 				t.Helper()
@@ -162,13 +163,13 @@ VALUES ($1, $2, 'report:scheduled', 'report', '', '0 6 * * *', 'UTC', $3::json, 
 				createdAt := "2025-12-01T00:00:00+00:00"
 				switch r.id {
 				case reportDST1:
-					at = "2026-03-08T06:30:00+00:00"
+					at = "2025-03-09T06:30:00+00:00"
 				case reportDST2:
-					at = "2026-11-01T05:30:00+00:00"
+					at = "2025-11-02T05:30:00+00:00"
 				case reportDST3:
-					at = "2026-10-03T14:30:00+00:00"
+					at = "2025-10-04T14:30:00+00:00"
 				case reportDST4:
-					at = "2026-10-25T00:30:00+00:00"
+					at = "2025-10-26T00:30:00+00:00"
 				}
 				exec(`INSERT INTO saved_reports (id, org_id, name, description, report_plan, is_template, parameters, schedule_id, is_active, last_run_at, last_run_status, created_by, created_at, updated_at)
 VALUES ($1, $2, $3, 'seeded', $4::json, false, $5::json, $6, $7, $8, 'success', 'seed', $9, $8)`,
@@ -197,7 +198,7 @@ VALUES ('e0000000-0000-4000-8000-000000000001', $1, 'success', 'seed', '[]'::jso
 			Body:    venueoracle.B64(body),
 		}
 	}
-	python := venue.ServePython(t, requests)
+	python := golden.Python(t, venue, requests)
 
 	goHandler, closeGo := startGoMutationServer(t, ctx, venue)
 	defer closeGo()
@@ -230,15 +231,18 @@ VALUES ('e0000000-0000-4000-8000-000000000001', $1, 'success', 'seed', '[]'::jso
 	}
 	t.Log("\n" + receipt.String())
 
+	golden.Consumed(t, python...)
+	golden.SkipDiff(t)
 	if len(goRefuses) == 0 {
-		compareRows(t, ctx, venue)
+		compareRows(t, ctx, golden, venue)
 	} else {
-		compareRowCounts(t, ctx, venue, len(goRefuses))
+		compareRowCounts(t, ctx, golden, venue, len(goRefuses))
 	}
 	if failures == 0 {
 		t.Logf("%d requests compared", len(cases))
 	}
-	venueoracle.WriteProof(t)
+	golden.Finish(t)
+	venueoracle.WriteGoOnlyProof(t, "Go's saved-report mutations against the frozen answers and rows of the Python resolvers")
 }
 
 func jsonString(text string) string {
@@ -373,6 +377,7 @@ var (
 var seededIDs = map[string]bool{
 	reportPlain: true, reportScheduled: true, reportInactive: true, reportOther: true, reportClone: true,
 	reportDelete: true, reportMissing: true, oracleOrgA: true, oracleOrgB: true,
+	reportDST1: true, reportDST2: true, reportDST3: true, reportDST4: true,
 	"d0000000-0000-4000-8000-000000000001": true, "e0000000-0000-4000-8000-000000000001": true,
 }
 
@@ -394,18 +399,17 @@ func normalizeMutationBody(body, plane string) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	numbered := map[string]int{}
-	canonical = oracleUUID.ReplaceAllStringFunc(canonical, func(id string) string {
-		if seededIDs[id] {
-			return id
-		}
-		if _, ok := numbered[id]; !ok {
-			numbered[id] = len(numbered) + 1
-		}
-		return fmt.Sprintf("<uuid#%d>", numbered[id])
-	})
-	now := time.Now()
+	// The frozen Python answer was scrubbed when it was recorded; the Go answer
+	// is scrubbed here, the same way (the scrub is idempotent).
+	canonical = runValueScrub(canonical)
 	wantSuffix := map[string]string{"python": "+00:00", "go": "Z"}[plane]
+	canonical = scrubbedTimestamp.ReplaceAllStringFunc(canonical, func(placeholder string) string {
+		parts := scrubbedTimestamp.FindStringSubmatch(placeholder)
+		if parts[2] != wantSuffix {
+			return "<ts with the wrong offset form: " + parts[2] + ">"
+		}
+		return "<ts:" + parts[1] + ">"
+	})
 	canonical = oracleTime.ReplaceAllStringFunc(canonical, func(stamp string) string {
 		if !strings.HasSuffix(stamp, wantSuffix) {
 			return "<ts with the wrong offset form: " + stamp + ">"
@@ -414,13 +418,7 @@ func normalizeMutationBody(body, plane string) (string, error) {
 		if err != nil {
 			return stamp
 		}
-		if parsed.Before(now.Add(-24*time.Hour)) || parsed.After(now.Add(24*time.Hour)) {
-			return "<instant " + parsed.UTC().Format(time.RFC3339Nano) + ">"
-		}
-		if strings.Contains(stamp, ".") {
-			return "<ts:frac>"
-		}
-		return "<ts:nofrac>"
+		return "<instant " + parsed.UTC().Format(time.RFC3339Nano) + ">"
 	})
 	var top map[string]json.RawMessage
 	if err := json.Unmarshal([]byte(canonical), &top); err != nil {
@@ -516,19 +514,26 @@ func dataOf(body string) string {
 
 // compareRows compares every table the mutations touched, ids and clock
 // readings masked in SQL so what remains is data.
-func compareRows(t *testing.T, ctx context.Context, venue *venueoracle.Venue) {
+// runTime masks a reading of the clock in SQL: a time at or after the run-value window's floor is a
+// reading the plane made during the run (a schedule's next run from "now", a run's start), so it is
+// "<now>"; a seeded or derived-from-seed time stays as written.
+func runTime(column string) string {
+	return "(CASE WHEN " + column + " >= '2026-10-01T00:00:00Z'::timestamptz THEN '<now>' ELSE " + column + "::text END)"
+}
+
+func compareRows(t *testing.T, ctx context.Context, golden *venueoracle.Golden, venue *venueoracle.Venue) {
 	t.Helper()
 	queries := map[string]string{
 		"saved_reports": `SELECT r.org_id, r.name, r.description, r.report_plan::text, r.is_template,
   (SELECT s.name FROM saved_reports s WHERE s.id = r.template_source_id), r.parameters::text,
-  (SELECT j.name FROM scheduled_jobs j WHERE j.id = r.schedule_id), r.is_active, r.last_run_at, r.last_run_status,
+  (SELECT j.name FROM scheduled_jobs j WHERE j.id = r.schedule_id), r.is_active, ` + runTime("r.last_run_at") + `, r.last_run_status,
   r.created_by, r.created_at < now() - interval '1 hour', r.updated_at >= r.created_at
 FROM saved_reports r ORDER BY r.org_id, r.name, r.description`,
 		"scheduled_jobs": `SELECT j.org_id, j.name, j.job_type, j.provider, j.schedule_cron, j.timezone,
   regexp_replace(j.job_config::text, '[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}', '<id>'),
-  j.status, j.is_running, j.run_count, j.failure_count, j.sync_config_id IS NULL, j.next_run_at
+  j.status, j.is_running, j.run_count, j.failure_count, j.sync_config_id IS NULL, ` + runTime("j.next_run_at") + `
 FROM scheduled_jobs j ORDER BY j.org_id, j.name`,
-		"report_runs": `SELECT s.name, r.status, r.scheduled_occurrence_id, r.started_at, r.completed_at, r.duration_seconds,
+		"report_runs": `SELECT s.name, r.status, r.scheduled_occurrence_id, ` + runTime("r.started_at") + `, ` + runTime("r.completed_at") + `, r.duration_seconds,
   r.rendered_markdown, r.artifact_url, r.provenance_records::text, r.error, r.attempt_count, r.execution_reclaim_count,
   r.notification_status, r.triggered_by, r.created_at < now() - interval '1 hour'
 FROM report_runs r JOIN saved_reports s ON s.id = r.report_id ORDER BY s.name, r.triggered_by`,
@@ -545,20 +550,16 @@ FROM worker_job_outbox ORDER BY regexp_replace(args::text, '(report-run:|report\
 	sort.Strings(names)
 	for _, name := range names {
 		query := "SELECT row_to_json(t)::text FROM (" + queries[name] + ") t"
-		py := strings.Split(venueoracle.TableRows(t, ctx, venue.AdminURI(t, venue.SourceDB), query), " | ")
-		gr := strings.Split(venueoracle.TableRows(t, ctx, venue.AdminURI(t, venue.GoDB), query), " | ")
-		if len(py) != len(gr) {
-			t.Errorf("%s: python has %d rows, go has %d", name, len(py), len(gr))
+		sorted := func(rows string) string {
+			parts := strings.Split(rows, " | ")
+			sort.Strings(parts)
+			return strings.Join(parts, " | ")
 		}
 		// The rows are compared as sorted sets: two clones of one source share every
 		// ordering column the query has, so their position is not part of the answer.
-		sort.Strings(py)
-		sort.Strings(gr)
-		for i := 0; i < len(py) && i < len(gr); i++ {
-			if py[i] != gr[i] {
-				t.Errorf("%s row %d differs\n python: %s\n go:     %s", name, i, py[i], gr[i])
-			}
-		}
+		golden.CompareRows(t, "rows:"+name,
+			func() string { return sorted(venueoracle.TableRows(t, ctx, venue.AdminURI(t, venue.SourceDB), query)) },
+			sorted(venueoracle.TableRows(t, ctx, venue.AdminURI(t, venue.GoDB), query)))
 	}
 }
 
@@ -596,18 +597,18 @@ func unmetExpectation(c oracleCase, python venueoracle.Response) string {
 
 // compareRowCounts is the comparison of a run with declared divergences: Go wrote
 // exactly `declared` fewer saved reports than Python (the ones it refused).
-func compareRowCounts(t *testing.T, ctx context.Context, venue *venueoracle.Venue, declared int) {
+func compareRowCounts(t *testing.T, ctx context.Context, golden *venueoracle.Golden, venue *venueoracle.Venue, declared int) {
 	t.Helper()
-	count := func(uri string) string {
-		return venueoracle.TableRows(t, ctx, uri, "SELECT count(*)::text FROM saved_reports")
+	count := func(uri string) int {
+		var n int
+		fmt.Sscan(venueoracle.TableRows(t, ctx, uri, "SELECT count(*)::text FROM saved_reports"), &n)
+		return n
 	}
-	py, gr := count(venue.AdminURI(t, venue.SourceDB)), count(venue.AdminURI(t, venue.GoDB))
-	var pn, gn int
-	fmt.Sscan(py, &pn)
-	fmt.Sscan(gr, &gn)
-	if pn-gn != declared {
-		t.Errorf("python wrote %d saved reports, go %d: want exactly %d fewer from Go (the declared refusals)", pn, gn, declared)
-	}
+	// Python must have written exactly `declared` more saved reports than Go (the declared refusals):
+	// the frozen Python count is compared with Go's count plus the declared number.
+	golden.CompareRows(t, "saved report count",
+		func() string { return fmt.Sprint(count(venue.AdminURI(t, venue.SourceDB))) },
+		fmt.Sprint(count(venue.AdminURI(t, venue.GoDB))+declared))
 }
 
 // cronDialectGoRefuses names the five-field expressions croniter accepts and the
@@ -624,7 +625,7 @@ var cronDialectGoRefuses = map[string]string{
 // expression either answers alike on both planes or is named in
 // cronDialectGoRefuses with the reason.
 func TestSavedReportMutationsCronDialectVenueOracle(t *testing.T) {
-	runSavedReportVenue(t, cronDialectCases(), cronDialectGoRefusesByCase())
+	runSavedReportVenue(t, "saved-report-mutations-cron-dialect", "766866dc04b5a99cc4454532ed32070f38514f26add56692841cf02aa188c6bf", cronDialectCases(), cronDialectGoRefusesByCase())
 }
 
 func cronDialectGoRefusesByCase() map[string]string {

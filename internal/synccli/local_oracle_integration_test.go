@@ -591,7 +591,7 @@ func localScenarios() []localScenario {
 			f.write("staged.txt", "staged\n", 0o644)
 			f.git("add", "staged.txt")
 		}},
-		{name: "blame: symlinks (file, directory, broken, outside) and dotfiles", build: func(f *fixture) {
+		{name: "blame: symlinks (file, directory, broken, broken absolute, outside) and dotfiles", build: func(f *fixture) {
 			f.write("real.txt", "real\n", 0o644)
 			f.write(".hidden", "hidden\n", 0o644)
 			f.write("dir/inner.txt", "inner\n", 0o644)
@@ -603,6 +603,9 @@ func localScenarios() []localScenario {
 			mustSymlink("real.txt", "link-to-file")
 			mustSymlink("dir", "link-to-dir")
 			mustSymlink("nowhere.txt", "broken-link")
+			// A broken link with an ABSOLUTE target at a fixed path that does not exist: the target has no per-run
+			// part, so Python's answer (pathlib's non-strict resolve keeps the target as written) is recorded.
+			mustSymlink("/dho-oracle-missing-dir/absolute-broken.txt", "broken-absolute-link")
 			// A regular file outside the repository, a sibling of the repository directory in the run's own
 			// temporary directory, reached by a RELATIVE link: the link's text is part of the commit, so an
 			// absolute target (the per-run temporary path) would make the commit hash differ between the

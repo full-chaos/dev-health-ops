@@ -879,8 +879,8 @@ type localRun struct {
 // outsideRepoChain matches the leading `../` chain of the path both planes store for a broken ABSOLUTE symlink whose target is
 // outside the repository (the scenario's "/dho-oracle-missing-dir/absolute-broken.txt"): the path is relative to the repository, so
 // the number of `../` is the depth of the run's temporary directory and differs per run and per machine (TMPDIR=/tmp in CI). The chain
-// is replaced by one placeholder on both planes; the part after it (the target's own name) is still compared. NOT compared: the
-// depth itself, which is a property of where the test runs.
+// is replaced by one placeholder on both planes; the part after it (the target's own name) is still compared. NOT compared here: the
+// depth itself, which is a property of where the test runs; it is pinned by localgit.TestReadFilePinsTheRelativePathOfATargetOutsideTheRepository.
 var outsideRepoChain = regexp.MustCompile(`(?:\.\./)+dho-oracle-missing-dir/`)
 
 // normalizeRepoIDs replaces, in every row of every table, a path-derived repository id with the name of the

@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log/slog"
 	"time"
 
 	"github.com/full-chaos/dev-health-ops/internal/jobcontract"
@@ -283,5 +284,9 @@ func releaseClaimTerminally(store Store, ctx context.Context, claim Claim) {
 func exhaustPartition(store Store, ctx context.Context, partitionID string) {
 	exhaustCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
 	defer cancel()
-	_ = store.ExhaustPartition(exhaustCtx, partitionID)
+	if err := store.ExhaustPartition(exhaustCtx, partitionID); err != nil {
+		// Fixed text, no error text: the run may now stay running behind a discarded job (invariant row 5), so the
+		// failure must be visible without leaking a driver message.
+		slog.WarnContext(ctx, "remaining metrics could not exhaust a last-attempt partition", "partition_id", partitionID)
+	}
 }

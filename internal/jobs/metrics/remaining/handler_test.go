@@ -1,9 +1,11 @@
 package remaining
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
+	"log/slog"
 	"strings"
 	"testing"
 	"time"
@@ -313,6 +315,7 @@ type handlerStore struct {
 	// call the terminal one).
 	terminalReleases int
 	exhausted        int
+	exhaustErr       error
 	completions      int
 	evidence         string
 }
@@ -350,7 +353,7 @@ func (store *handlerStore) ReleasePartition(context.Context, Claim) error {
 }
 func (store *handlerStore) ExhaustPartition(context.Context, string) error {
 	store.exhausted++
-	return nil
+	return store.exhaustErr
 }
 
 func (store *handlerStore) ReleasePartitionTerminally(context.Context, Claim) error {
@@ -518,5 +521,22 @@ func TestPartitionHandlerReleasesTheClaimOnAPanicAndRepanics(t *testing.T) {
 		if store.terminalReleases != tc.wantTerminal || store.releases != tc.wantOrd {
 			t.Fatalf("%s: terminal=%d ordinary=%d", tc.name, store.terminalReleases, store.releases)
 		}
+	}
+}
+
+func TestPartitionHandlerLogsAFailedExhaustWithoutTheErrorText(t *testing.T) {
+	var buffer bytes.Buffer
+	previous := slog.Default()
+	slog.SetDefault(slog.New(slog.NewTextHandler(&buffer, nil)))
+	t.Cleanup(func() { slog.SetDefault(previous) })
+	store := &handlerStore{claimErr: errors.New("connection reset"), exhaustErr: errors.New("SECRET-DRIVER-TEXT")}
+	handler, _ := NewPartitionHandler[jobruntime.RemainingCapacityArgs](store, &handlerExecutor{}, "capacity")
+	_ = handler.Work(context.Background(), attemptedCapacityExecution(3, 3))
+	logged := buffer.String()
+	if !strings.Contains(logged, "could not exhaust a last-attempt partition") || !strings.Contains(logged, "partition_id") {
+		t.Fatalf("exhaust failure not logged: %q", logged)
+	}
+	if strings.Contains(logged, "SECRET-DRIVER-TEXT") {
+		t.Fatalf("log leaks the error text: %q", logged)
 	}
 }

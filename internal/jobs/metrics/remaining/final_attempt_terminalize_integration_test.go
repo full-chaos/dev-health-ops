@@ -364,3 +364,85 @@ func TestAClaimErrorOnTheLastAttemptPlusAnExhaustedSiblingEndsTheRunFailed(t *te
 		t.Fatalf("run = %q with no job left for either partition, want failed (stranded)", runStatus)
 	}
 }
+func TestALastClaimErrorFinalizesTheRunWhenTheSiblingExhaustedFirstOrTheLeaseExpired(t *testing.T) {
+	ctx := context.Background()
+	pool, store, _ := newRemainingRedriveTestStack(t)
+	clock := time.Date(2026, 10, 2, 12, 0, 0, 0, time.UTC)
+	store.now = func() time.Time { return clock }
+	failing := &handlerExecutor{computeErr: errors.New("clickhouse: connection reset")}
+	flaky := &claimFailingStore{PostgresStore: store}
+	hFlaky, _ := NewPartitionHandler[jobruntime.RemainingCapacityArgs](flaky, failing, "capacity")
+	hPlain, _ := NewPartitionHandler[jobruntime.RemainingCapacityArgs](store, failing, "capacity")
+	runStatus := func(id string) string {
+		var s string
+		_ = pool.QueryRow(ctx, "SELECT status FROM remaining_metric_runs WHERE id=$1::uuid", id).Scan(&s)
+		return s
+	}
+	start := func(org string, seed int64) (string, string, string) {
+		run, err := store.StartRun(ctx, StartRunRequest{OrganizationID: org, Family: "capacity", Generation: "vetter-row5", ScopeKey: "all-teams",
+			GenerationSeed: int64Pointer(seed), Scopes: []json.RawMessage{capacityScopeJSON(90), capacityScopeJSON(91)}})
+		if err != nil {
+			t.Fatal(err)
+		}
+		return run.ID, deterministicPartitionID(run.ID, 1), deterministicPartitionID(run.ID, 2)
+	}
+	failed := false
+	orgA := "00000000-0000-4000-8000-000000009351"
+	runA, a1, a2 := start(orgA, 351)
+	flaky.fail = false
+	_ = hFlaky.Work(ctx, capacityExecutionFor(orgA, a1, runA, 1, 3))
+	for attempt := 1; attempt <= 3; attempt++ {
+		_ = hPlain.Work(ctx, capacityExecutionFor(orgA, a2, runA, attempt, 3))
+	}
+	flaky.fail = true
+	_ = hFlaky.Work(ctx, capacityExecutionFor(orgA, a1, runA, 2, 3))
+	_ = hFlaky.Work(ctx, capacityExecutionFor(orgA, a1, runA, 3, 3))
+	t.Logf("VETTER-ROW5-A run=%s", runStatus(runA))
+	if got := runStatus(runA); got != "failed" {
+		t.Errorf("A: run = %q after the last partition's last claim failed, want failed", got)
+		failed = true
+	}
+	orgB := "00000000-0000-4000-8000-000000009352"
+	runB, b1, b2 := start(orgB, 352)
+	flaky.fail = false
+	if _, err := store.ClaimPartition(ctx, b1); err != nil { // attempt 1 crashes holding the lease
+		t.Fatal(err)
+	}
+	clock = clock.Add(2 * defaultLease) // the lease expires
+	for attempt := 1; attempt <= 3; attempt++ {
+		_ = hPlain.Work(ctx, capacityExecutionFor(orgB, b2, runB, attempt, 3))
+	}
+	flaky.fail = true
+	_ = hFlaky.Work(ctx, capacityExecutionFor(orgB, b1, runB, 3, 3))
+	t.Logf("VETTER-ROW5-B run=%s", runStatus(runB))
+	if got := runStatus(runB); got != "failed" {
+		t.Errorf("B: run = %q after the last claim failed on an expired lease, want failed", got)
+		failed = true
+	}
+	_ = failed
+}
+
+// ExhaustPartition must leave a partition under a LIVE lease alone: its holder owns the outcome.
+func TestExhaustPartitionLeavesALiveLeaseAlone(t *testing.T) {
+	ctx := context.Background()
+	pool, store, _ := newRemainingRedriveTestStack(t)
+	store.now = func() time.Time { return time.Date(2026, 10, 2, 12, 0, 0, 0, time.UTC) }
+	org := "00000000-0000-4000-8000-000000009361"
+	run, err := store.StartRun(ctx, StartRunRequest{OrganizationID: org, Family: "capacity", Generation: "live-lease", ScopeKey: "all-teams",
+		GenerationSeed: int64Pointer(361), Scopes: []json.RawMessage{capacityScopeJSON(90)}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	id := deterministicPartitionID(run.ID, 1)
+	if _, err := store.ClaimPartition(ctx, id); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.ExhaustPartition(ctx, id); err != nil {
+		t.Fatal(err)
+	}
+	var status string
+	_ = pool.QueryRow(ctx, "SELECT status FROM remaining_metric_partitions WHERE id=$1::uuid", id).Scan(&status)
+	if status != "running" {
+		t.Fatalf("partition = %q, want running (live lease untouched)", status)
+	}
+}

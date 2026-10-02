@@ -1,19 +1,16 @@
-package pybody
+package pybody_test
 
 import (
 	"encoding/json"
 	"fmt"
-	"os"
-	"os/exec"
-	"path/filepath"
-	"runtime"
 	"strconv"
 	"strings"
 	"testing"
 	"time"
 
+	"github.com/full-chaos/dev-health-ops/internal/api/pybody"
 	"github.com/full-chaos/dev-health-ops/internal/api/pyjson"
-	"github.com/full-chaos/dev-health-ops/internal/testsupport/pyoracle"
+	"github.com/full-chaos/dev-health-ops/internal/testsupport/programoracle"
 )
 
 // jsonDateCorpus is JSON text of values a client can send for a `date` or an
@@ -69,21 +66,11 @@ for text in json.loads(sys.stdin.read()):
 print(json.dumps(out))
 `
 
-func TestDateAndAwareDatetimeMatchLivePydantic(t *testing.T) {
-	if os.Getenv("DEV_HEALTH_LIVE_PYTHON_ORACLES") != "1" {
-		t.Skip("live Python oracles run only through ci/check_go.sh live-python-oracles")
-	}
-	_, file, _, _ := runtime.Caller(0)
-	root := filepath.Clean(filepath.Join(filepath.Dir(file), "..", "..", ".."))
-	python := pyoracle.Resolve(t, root)
+func TestDateAndAwareDatetimeMatchFrozenPydantic(t *testing.T) {
 	corpus := jsonDateCorpus()
 	input, _ := json.Marshal(corpus)
-	command := exec.Command(python, "-c", pythonDateFieldsProgram)
-	command.Stdin = strings.NewReader(string(input))
-	output, err := command.CombinedOutput()
-	if err != nil {
-		t.Fatalf("live pydantic: %v", pyoracle.RunError(python, err, output))
-	}
+	output := frozenPython(t, "date-and-aware-datetime.golden.json",
+		programoracle.Program{Name: "date-and-aware-datetime", Text: pythonDateFieldsProgram, Stdin: []byte(string(input))})[0]
 	lines := strings.Split(strings.TrimSpace(string(output)), "\n")
 	type result struct{ OK, Type, Msg, Reason string }
 	var want map[string][]result
@@ -97,13 +84,13 @@ func TestDateAndAwareDatetimeMatchLivePydantic(t *testing.T) {
 			t.Fatalf("%s: %v", text, err)
 		}
 		for _, field := range []string{"date", "aware"} {
-			var errs Errors
+			var errs pybody.Errors
 			got := ""
 			if field == "date" {
-				if date, ok := Date(&errs, raw, nil); ok {
+				if date, ok := pybody.Date(&errs, raw, nil); ok {
 					got = date.Format("2006-01-02")
 				}
-			} else if parsed, ok := AwareDatetime(&errs, raw, nil); ok {
+			} else if parsed, ok := pybody.AwareDatetime(&errs, raw, nil); ok {
 				got = strings.Replace(pytimeISO(parsed.Time), "Z", "+00:00", 1)
 			}
 			if len(errs) > 0 {
@@ -127,13 +114,6 @@ func TestDateAndAwareDatetimeMatchLivePydantic(t *testing.T) {
 				}
 			}
 		}
-	}
-	proofDir := os.Getenv("DEV_HEALTH_LIVE_PYTHON_ORACLE_PROOF_DIR")
-	if proofDir == "" {
-		t.Fatal("DEV_HEALTH_LIVE_PYTHON_ORACLE_PROOF_DIR is required")
-	}
-	if err := os.WriteFile(filepath.Join(proofDir, "api-pybody-date-aware"), []byte("executed"), 0o600); err != nil {
-		t.Fatal(err)
 	}
 	t.Logf("%d values x 2 fields compared, %d mismatches", len(corpus), mismatches)
 }

@@ -1,17 +1,14 @@
-package pybody
+package pybody_test
 
 import (
 	"encoding/json"
 	"math/rand"
-	"os"
-	"os/exec"
-	"path/filepath"
-	"runtime"
 	"strings"
 	"testing"
 
+	"github.com/full-chaos/dev-health-ops/internal/api/pybody"
 	"github.com/full-chaos/dev-health-ops/internal/api/pyjson"
-	"github.com/full-chaos/dev-health-ops/internal/testsupport/pyoracle"
+	"github.com/full-chaos/dev-health-ops/internal/testsupport/programoracle"
 )
 
 const canonicalUUID = "0f8fad5b-d9cb-469f-a165-70867728950e"
@@ -74,21 +71,11 @@ func fuzzUUIDs() []string {
 	return out
 }
 
-func TestQueryUUIDMatchesLivePydantic(t *testing.T) {
-	if os.Getenv("DEV_HEALTH_LIVE_PYTHON_ORACLES") != "1" {
-		t.Skip("live Python oracles run only through ci/check_go.sh live-python-oracles")
-	}
-	_, file, _, _ := runtime.Caller(0)
-	root := filepath.Clean(filepath.Join(filepath.Dir(file), "..", "..", ".."))
-	python := pyoracle.Resolve(t, root)
+func TestQueryUUIDMatchesFrozenPydantic(t *testing.T) {
 	corpus := append(append([]string(nil), uuidCorpus...), fuzzUUIDs()...)
 	input, _ := json.Marshal(corpus)
-	command := exec.Command(python, "-c", pythonUUIDProgram)
-	command.Stdin = strings.NewReader(string(input))
-	output, err := command.CombinedOutput()
-	if err != nil {
-		t.Fatalf("live pydantic: %v", pyoracle.RunError(python, err, output))
-	}
+	output := frozenPython(t, "query-uuid.golden.json",
+		programoracle.Program{Name: "query-uuid", Text: pythonUUIDProgram, Stdin: []byte(string(input))})[0]
 	lines := strings.Split(strings.TrimSpace(string(output)), "\n")
 	var want []struct{ OK, Type, Msg, Ctx string }
 	if err := json.Unmarshal([]byte(lines[len(lines)-1]), &want); err != nil {
@@ -99,7 +86,7 @@ func TestQueryUUIDMatchesLivePydantic(t *testing.T) {
 	}
 	accepted, mismatches := 0, 0
 	for index, text := range corpus {
-		var errs Errors
+		var errs pybody.Errors
 		raw := text
 		value, ok := errs.QueryUUID("org_id", &raw)
 		got := ""
@@ -124,13 +111,6 @@ func TestQueryUUIDMatchesLivePydantic(t *testing.T) {
 	}
 	if accepted == 0 || accepted == len(corpus) {
 		t.Fatalf("corpus is one-sided: %d of %d accepted", accepted, len(corpus))
-	}
-	if proof := os.Getenv("DEV_HEALTH_LIVE_PYTHON_ORACLE_PROOF_DIR"); proof != "" {
-		if err := os.WriteFile(filepath.Join(proof, "api-pybody-queryuuid"), []byte("executed"), 0o600); err != nil {
-			t.Fatal(err)
-		}
-	} else {
-		t.Fatal("DEV_HEALTH_LIVE_PYTHON_ORACLE_PROOF_DIR is required")
 	}
 	t.Logf("%d uuids compared (%d accepted), %d mismatches", len(corpus), accepted, mismatches)
 }

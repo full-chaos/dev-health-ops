@@ -1,16 +1,13 @@
-package pybody
+package pybody_test
 
 import (
 	"encoding/json"
-	"os"
-	"os/exec"
-	"path/filepath"
-	"runtime"
 	"strings"
 	"testing"
 
+	"github.com/full-chaos/dev-health-ops/internal/api/pybody"
 	"github.com/full-chaos/dev-health-ops/internal/api/pyjson"
-	"github.com/full-chaos/dev-health-ops/internal/testsupport/pyoracle"
+	"github.com/full-chaos/dev-health-ops/internal/testsupport/programoracle"
 )
 
 // stringCorpus is JSON text a client can send for a str field: lone high
@@ -48,23 +45,13 @@ for text in json.loads(sys.stdin.read()):
 print(json.dumps(out))
 `
 
-// TestStringMatchesLivePydantic compares the str helpers with pydantic 2
+// TestStringMatchesFrozenPydantic compares the str helpers with pydantic 2
 // for every constraint shape the helpers take: no bound, a minimum, a
 // maximum, and an optional field with a maximum.
-func TestStringMatchesLivePydantic(t *testing.T) {
-	if os.Getenv("DEV_HEALTH_LIVE_PYTHON_ORACLES") != "1" {
-		t.Skip("live Python oracles run only through ci/check_go.sh live-python-oracles")
-	}
-	_, file, _, _ := runtime.Caller(0)
-	root := filepath.Clean(filepath.Join(filepath.Dir(file), "..", "..", ".."))
-	python := pyoracle.Resolve(t, root)
+func TestStringMatchesFrozenPydantic(t *testing.T) {
 	input, _ := json.Marshal(stringCorpus)
-	command := exec.Command(python, "-c", pythonStringProgram)
-	command.Stdin = strings.NewReader(string(input))
-	output, err := command.CombinedOutput()
-	if err != nil {
-		t.Fatalf("live pydantic: %v", pyoracle.RunError(python, err, output))
-	}
+	output := frozenPython(t, "string.golden.json",
+		programoracle.Program{Name: "string", Text: pythonStringProgram, Stdin: []byte(string(input))})[0]
 	lines := strings.Split(strings.TrimSpace(string(output)), "\n")
 	var want []map[string]struct{ OK, Type, Msg, Input string }
 	if err := json.Unmarshal([]byte(lines[len(lines)-1]), &want); err != nil {
@@ -73,7 +60,7 @@ func TestStringMatchesLivePydantic(t *testing.T) {
 	if len(want) != len(stringCorpus) {
 		t.Fatalf("python answered %d of %d", len(want), len(stringCorpus))
 	}
-	render := func(value string, ok, present bool, errs Errors) string {
+	render := func(value string, ok, present bool, errs pybody.Errors) string {
 		if len(errs) > 0 {
 			echoed, err := pyjson.Dumps(errs[0].Input)
 			if err != nil {
@@ -99,11 +86,11 @@ func TestStringMatchesLivePydantic(t *testing.T) {
 		object.Set("v", value)
 		got := map[string]string{}
 		for name, bounds := range map[string][2]int{"plain": {0, 0}, "min": {1, 0}, "max": {0, 5}} {
-			var errs Errors
+			var errs pybody.Errors
 			result, ok := errs.RequiredString(object, "v", bounds[0], bounds[1])
 			got[name] = render(result, ok, true, errs)
 		}
-		var errs Errors
+		var errs pybody.Errors
 		result, present := errs.OptionalString(object, "v", 0, 5)
 		got["optional_max"] = render(result, present, present, errs)
 		for name, gotText := range got {
@@ -116,12 +103,5 @@ func TestStringMatchesLivePydantic(t *testing.T) {
 				t.Errorf("%s %s: go %q, python %q", name, text, gotText, wantText)
 			}
 		}
-	}
-	if proof := os.Getenv("DEV_HEALTH_LIVE_PYTHON_ORACLE_PROOF_DIR"); proof != "" {
-		if err := os.WriteFile(filepath.Join(proof, "api-pybody-string"), []byte("executed"), 0o600); err != nil {
-			t.Fatal(err)
-		}
-	} else {
-		t.Fatal("DEV_HEALTH_LIVE_PYTHON_ORACLE_PROOF_DIR is required")
 	}
 }

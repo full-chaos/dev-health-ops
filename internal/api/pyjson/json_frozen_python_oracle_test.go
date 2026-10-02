@@ -1,19 +1,16 @@
-package pyjson
+package pyjson_test
 
 import (
 	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
-	"os"
-	"os/exec"
-	"path/filepath"
-	"runtime"
 	"strings"
 	"testing"
 	"unicode/utf16"
 
-	"github.com/full-chaos/dev-health-ops/internal/testsupport/pyoracle"
+	"github.com/full-chaos/dev-health-ops/internal/api/pyjson"
+	"github.com/full-chaos/dev-health-ops/internal/testsupport/programoracle"
 )
 
 // corpus is JSON text the api reads from stored JSON columns or bodies.
@@ -58,30 +55,18 @@ for text in json.loads(sys.stdin.read()):
 print(json.dumps(out))
 `
 
-func TestMarshalMatchesLivePythonJSONDumps(t *testing.T) {
-	if os.Getenv("DEV_HEALTH_LIVE_PYTHON_ORACLES") != "1" {
-		t.Skip("live Python oracles run only through ci/check_go.sh live-python-oracles")
-	}
-	_, file, _, _ := runtime.Caller(0)
-	root := filepath.Clean(filepath.Join(filepath.Dir(file), "..", "..", ".."))
-	python := pyoracle.Resolve(t, root)
+func TestMarshalMatchesFrozenPythonJSONDumps(t *testing.T) {
 	input, _ := json.Marshal(corpus)
-	command := exec.Command(python, "-c", pythonDumpsProgram)
-	command.Stdin = strings.NewReader(string(input))
-	output, err := command.CombinedOutput()
-	if err != nil {
-		t.Fatalf("live Python json.dumps: %v", pyoracle.RunError(python, err, output))
-	}
+	output := frozenPython(t, "marshal.golden.json", programoracle.Program{Name: "json.dumps compact", Text: pythonDumpsProgram, Stdin: input})[0]
 	var want []string
-	lines := strings.Split(strings.TrimSpace(string(output)), "\n")
-	if err := json.Unmarshal([]byte(lines[len(lines)-1]), &want); err != nil {
+	if err := json.Unmarshal([]byte(strings.TrimSpace(output)), &want); err != nil {
 		t.Fatal(err)
 	}
 	for index, text := range corpus {
 		gotText := "ValueError"
-		value, err := Decode([]byte(text))
-		var syntax *SyntaxError
-		var limit *IntLimitError
+		value, err := pyjson.Decode([]byte(text))
+		var syntax *pyjson.SyntaxError
+		var limit *pyjson.IntLimitError
 		switch {
 		case errors.As(err, &syntax):
 			gotText = fmt.Sprintf("JSONDecodeError:%s:%d", syntax.Msg, syntax.Pos)
@@ -90,20 +75,13 @@ func TestMarshalMatchesLivePythonJSONDumps(t *testing.T) {
 		case err != nil:
 			gotText = "decode: " + err.Error()
 		default:
-			if got, err := Marshal(value); err == nil {
+			if got, err := pyjson.Marshal(value); err == nil {
 				gotText = string(got)
 			}
 		}
 		if gotText != want[index] {
 			t.Errorf("%s:\n Go     %s\n Python %s", text, gotText, want[index])
 		}
-	}
-	proofDir := os.Getenv("DEV_HEALTH_LIVE_PYTHON_ORACLE_PROOF_DIR")
-	if proofDir == "" {
-		t.Fatal("DEV_HEALTH_LIVE_PYTHON_ORACLE_PROOF_DIR is required")
-	}
-	if err := os.WriteFile(filepath.Join(proofDir, "api-pyjson"), []byte("executed"), 0o600); err != nil {
-		t.Fatal(err)
 	}
 }
 
@@ -133,38 +111,26 @@ for text in json.loads(sys.stdin.read()):
 print(json.dumps(out))
 `
 
-// TestDumpsMatchesLivePythonJSONDumpsDefault pins Dumps -- the shared
+// TestDumpsMatchesFrozenPythonJSONDumpsDefault pins Dumps -- the shared
 // encoder every ClickHouse JSON-column writer uses (CHAOS-6310 r1 finding
-// #10) -- against a live Python bare `json.dumps(value)` call (no keyword
-// arguments at all), reusing the same corpus TestMarshalMatchesLivePythonJSONDumps
+// #10) -- against a frozen Python bare `json.dumps(value)` call (no keyword
+// arguments at all), reusing the same corpus TestMarshalMatchesFrozenPythonJSONDumps
 // proves the compact/ensure_ascii=False form against. Dumps had no live-
 // oracle proof of its own before this; two mismatches from Marshal's own
 // assumptions were caught building it: Python's bare default is
 // ensure_ascii=TRUE (not False) and allow_nan=TRUE (not False).
-func TestDumpsMatchesLivePythonJSONDumpsDefault(t *testing.T) {
-	if os.Getenv("DEV_HEALTH_LIVE_PYTHON_ORACLES") != "1" {
-		t.Skip("live Python oracles run only through ci/check_go.sh live-python-oracles")
-	}
-	_, file, _, _ := runtime.Caller(0)
-	root := filepath.Clean(filepath.Join(filepath.Dir(file), "..", "..", ".."))
-	python := pyoracle.Resolve(t, root)
+func TestDumpsMatchesFrozenPythonJSONDumpsDefault(t *testing.T) {
 	input, _ := json.Marshal(corpus)
-	command := exec.Command(python, "-c", pythonDumpsDefaultProgram)
-	command.Stdin = strings.NewReader(string(input))
-	output, err := command.CombinedOutput()
-	if err != nil {
-		t.Fatalf("live Python json.dumps (bare defaults): %v", pyoracle.RunError(python, err, output))
-	}
+	output := frozenPython(t, "dumps-default.golden.json", programoracle.Program{Name: "json.dumps bare defaults", Text: pythonDumpsDefaultProgram, Stdin: input})[0]
 	var want []string
-	lines := strings.Split(strings.TrimSpace(string(output)), "\n")
-	if err := json.Unmarshal([]byte(lines[len(lines)-1]), &want); err != nil {
+	if err := json.Unmarshal([]byte(strings.TrimSpace(output)), &want); err != nil {
 		t.Fatal(err)
 	}
 	for index, text := range corpus {
 		gotText := "ValueError"
-		value, err := Decode([]byte(text))
-		var syntax *SyntaxError
-		var limit *IntLimitError
+		value, err := pyjson.Decode([]byte(text))
+		var syntax *pyjson.SyntaxError
+		var limit *pyjson.IntLimitError
 		switch {
 		case errors.As(err, &syntax):
 			gotText = fmt.Sprintf("JSONDecodeError:%s:%d", syntax.Msg, syntax.Pos)
@@ -173,20 +139,13 @@ func TestDumpsMatchesLivePythonJSONDumpsDefault(t *testing.T) {
 		case err != nil:
 			gotText = "decode: " + err.Error()
 		default:
-			if got, err := Dumps(value); err == nil {
+			if got, err := pyjson.Dumps(value); err == nil {
 				gotText = got
 			}
 		}
 		if gotText != want[index] {
 			t.Errorf("%s:\n Go     %s\n Python %s", text, gotText, want[index])
 		}
-	}
-	proofDir := os.Getenv("DEV_HEALTH_LIVE_PYTHON_ORACLE_PROOF_DIR")
-	if proofDir == "" {
-		t.Fatal("DEV_HEALTH_LIVE_PYTHON_ORACLE_PROOF_DIR is required")
-	}
-	if err := os.WriteFile(filepath.Join(proofDir, "api-pyjson-dumps"), []byte("executed"), 0o600); err != nil {
-		t.Fatal(err)
 	}
 }
 
@@ -235,6 +194,11 @@ var bodyCorpus = func() []string {
 		utf16le("1", false), utf16be("1", false),
 		{0xff, 0xfe, 0x22, 0x00, 0x00, 0xd8, 0x22, 0x00}, // UTF-16LE lone surrogate
 		{0x7b, 0x00, 0x00, 0x00, 0x31},                   // looks UTF-32LE, truncated
+		// Escaped surrogates in every order (corpus gap of the CHAOS-7531 vet): a LOW surrogate first stays a lone
+		// surrogate, a high one is joined only to a low one that follows it.
+		[]byte(`"\udc00\udc00"`), []byte(`"\ude00\ud83d\ude00"`), []byte(`"\ude00` + "\U0001F600" + `"`), []byte(`"\udc00\ud800"`),
+		[]byte(`"\ud800\ud800\udc00"`), []byte(`"\udbff\udfff"`), []byte(`"\udbff\udbff"`), []byte(`"\ud800\udbff"`),
+		[]byte(`"\udfff\udc00\ud800\udc00"`), []byte(`"\ud800\u0041"`), []byte(`"\udc00\u0041"`), []byte(`"a\udc00\udc00b"`),
 	}
 	out := make([]string, len(bodies))
 	for index, body := range bodies {
@@ -258,30 +222,18 @@ for hexed in json.loads(sys.stdin.read()):
 print(json.dumps(out))
 `
 
-func TestDecodeBodyMatchesLivePythonJSONLoads(t *testing.T) {
-	if os.Getenv("DEV_HEALTH_LIVE_PYTHON_ORACLES") != "1" {
-		t.Skip("live Python oracles run only through ci/check_go.sh live-python-oracles")
-	}
-	_, file, _, _ := runtime.Caller(0)
-	root := filepath.Clean(filepath.Join(filepath.Dir(file), "..", "..", ".."))
-	python := pyoracle.Resolve(t, root)
+func TestDecodeBodyMatchesFrozenPythonJSONLoads(t *testing.T) {
 	input, _ := json.Marshal(bodyCorpus)
-	command := exec.Command(python, "-c", pythonBodyProgram)
-	command.Stdin = strings.NewReader(string(input))
-	output, err := command.CombinedOutput()
-	if err != nil {
-		t.Fatalf("live Python json.loads: %v", pyoracle.RunError(python, err, output))
-	}
+	output := frozenPython(t, "decode-body.golden.json", programoracle.Program{Name: "json.loads of bytes", Text: pythonBodyProgram, Stdin: input})[0]
 	var want []string
-	lines := strings.Split(strings.TrimSpace(string(output)), "\n")
-	if err := json.Unmarshal([]byte(lines[len(lines)-1]), &want); err != nil {
+	if err := json.Unmarshal([]byte(strings.TrimSpace(output)), &want); err != nil {
 		t.Fatal(err)
 	}
 	for index, hexed := range bodyCorpus {
 		raw, _ := hex.DecodeString(hexed)
 		got := "Error"
-		value, err := Decode(raw)
-		var syntax *SyntaxError
+		value, err := pyjson.Decode(raw)
+		var syntax *pyjson.SyntaxError
 		switch {
 		case errors.As(err, &syntax):
 			got = fmt.Sprintf("JSONDecodeError:%s:%d", syntax.Msg, syntax.Pos)
@@ -296,12 +248,12 @@ func TestDecodeBodyMatchesLivePythonJSONLoads(t *testing.T) {
 
 // asciiDump is json.dumps(ensure_ascii=True, compact) for the oracle's
 // values: every non-ASCII code point (surrogates included) escaped.
-func asciiDump(value Value) string {
+func asciiDump(value pyjson.Value) string {
 	switch typed := value.(type) {
 	case string:
 		var builder strings.Builder
 		builder.WriteByte('"')
-		for _, r := range Runes(typed) {
+		for _, r := range pyjson.Runes(typed) {
 			switch {
 			case r == '"' || r == '\\':
 				builder.WriteByte('\\')
@@ -317,21 +269,21 @@ func asciiDump(value Value) string {
 		}
 		builder.WriteByte('"')
 		return builder.String()
-	case *Object:
+	case *pyjson.Object:
 		parts := make([]string, 0, typed.Len())
 		for _, key := range typed.Keys() {
 			item, _ := typed.Get(key)
 			parts = append(parts, asciiDump(key)+":"+asciiDump(item))
 		}
 		return "{" + strings.Join(parts, ",") + "}"
-	case []Value:
+	case []pyjson.Value:
 		parts := make([]string, len(typed))
 		for index, item := range typed {
 			parts[index] = asciiDump(item)
 		}
 		return "[" + strings.Join(parts, ",") + "]"
 	}
-	out, err := Marshal(value)
+	out, err := pyjson.Marshal(value)
 	if err != nil {
 		return "Error"
 	}

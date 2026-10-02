@@ -1,17 +1,14 @@
-package pybody
+package pybody_test
 
 import (
 	"encoding/json"
 	"math/rand"
 	"net/url"
-	"os"
-	"os/exec"
-	"path/filepath"
-	"runtime"
 	"strings"
 	"testing"
 
-	"github.com/full-chaos/dev-health-ops/internal/testsupport/pyoracle"
+	"github.com/full-chaos/dev-health-ops/internal/api/pybody"
+	"github.com/full-chaos/dev-health-ops/internal/testsupport/programoracle"
 )
 
 var queryBoolCorpus = []string{
@@ -34,16 +31,10 @@ for text in json.loads(sys.stdin.read()):
 print(json.dumps(out))
 `
 
-// TestQueryBoolMatchesLivePydantic pins QueryBool against pydantic's lax
+// TestQueryBoolMatchesFrozenPydantic pins QueryBool against pydantic's lax
 // str -> bool (FastAPI's bool query validation) over a corpus and
 // deterministic fuzz, and LastQuery's last-value rule.
-func TestQueryBoolMatchesLivePydantic(t *testing.T) {
-	if os.Getenv("DEV_HEALTH_LIVE_PYTHON_ORACLES") != "1" {
-		t.Skip("live Python oracles run only through ci/check_go.sh live-python-oracles")
-	}
-	_, file, _, _ := runtime.Caller(0)
-	root := filepath.Clean(filepath.Join(filepath.Dir(file), "..", "..", ".."))
-	python := pyoracle.Resolve(t, root)
+func TestQueryBoolMatchesFrozenPydantic(t *testing.T) {
 	corpus := append([]string(nil), queryBoolCorpus...)
 	alphabet := []rune{'t', 'r', 'u', 'e', 'f', 'a', 'l', 's', 'y', 'n', 'o', '0', '1', ' ', 'T', 'O'}
 	random := rand.New(rand.NewSource(6379))
@@ -55,12 +46,8 @@ func TestQueryBoolMatchesLivePydantic(t *testing.T) {
 		corpus = append(corpus, string(runes))
 	}
 	input, _ := json.Marshal(corpus)
-	command := exec.Command(python, "-c", pythonQueryBoolProgram)
-	command.Stdin = strings.NewReader(string(input))
-	output, err := command.CombinedOutput()
-	if err != nil {
-		t.Fatalf("live pydantic: %v", pyoracle.RunError(python, err, output))
-	}
+	output := frozenPython(t, "query-bool.golden.json",
+		programoracle.Program{Name: "query-bool", Text: pythonQueryBoolProgram, Stdin: []byte(string(input))})[0]
 	lines := strings.Split(strings.TrimSpace(string(output)), "\n")
 	var want []struct{ OK, Type, Msg string }
 	if err := json.Unmarshal([]byte(lines[len(lines)-1]), &want); err != nil {
@@ -70,7 +57,7 @@ func TestQueryBoolMatchesLivePydantic(t *testing.T) {
 		t.Fatalf("python answered %d of %d", len(want), len(corpus))
 	}
 	for index, text := range corpus {
-		var errs Errors
+		var errs pybody.Errors
 		raw := text
 		value, ok := errs.QueryBool("active_only", &raw, false)
 		got := ""
@@ -88,20 +75,13 @@ func TestQueryBoolMatchesLivePydantic(t *testing.T) {
 		}
 	}
 	values := url.Values{"a": {"false", "true"}, "e": {""}}
-	if got := LastQuery(values, "a"); got == nil || *got != "true" {
+	if got := pybody.LastQuery(values, "a"); got == nil || *got != "true" {
 		t.Error("the last value of a repeated key wins")
 	}
-	if got := LastQuery(values, "e"); got == nil || *got != "" {
+	if got := pybody.LastQuery(values, "e"); got == nil || *got != "" {
 		t.Error("a present empty value is \"\", not absent")
 	}
-	if LastQuery(values, "missing") != nil {
+	if pybody.LastQuery(values, "missing") != nil {
 		t.Error("an absent key is nil")
-	}
-	if proof := os.Getenv("DEV_HEALTH_LIVE_PYTHON_ORACLE_PROOF_DIR"); proof != "" {
-		if err := os.WriteFile(filepath.Join(proof, "api-pybody-querybool"), []byte("executed"), 0o600); err != nil {
-			t.Fatal(err)
-		}
-	} else {
-		t.Fatal("DEV_HEALTH_LIVE_PYTHON_ORACLE_PROOF_DIR is required")
 	}
 }

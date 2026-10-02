@@ -6,9 +6,11 @@ import (
 	"context"
 	"fmt"
 	"testing"
+	"time"
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgxpool"
+	valkeygo "github.com/valkey-io/valkey-go"
 
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/venueoracle"
 )
@@ -22,7 +24,7 @@ import (
 // audit_logs rows either plane's writes produced compare equal.
 func TestImpersonationStartStopMatchesThePythonAPI(t *testing.T) {
 	ctx := context.Background()
-	golden := venueoracle.OpenGolden(t, adminRunValuesGolden("impersonation", t.Name(), "80e5ff18fbbfd338c4d6dda54f63ea7bc1ffcd285cf11e8a556389dd184ba314"))
+	golden := venueoracle.OpenGolden(t, adminRunValuesGolden("impersonation", t.Name(), "5987024ab34598026aaeee851ff0f3bc025c4f1efd586f40c166c8dc223892be"))
 	root := golden.PythonRoot(t, repoRoot(t))
 	nextID := goldenIDs("imp")
 	const jwtKey = "venue-oracle-test-secret-key-for-impersonation-flow-32bytes!"
@@ -31,6 +33,9 @@ func TestImpersonationStartStopMatchesThePythonAPI(t *testing.T) {
 	adminID := nextID()
 	targetID := nextID()
 	membershipID := nextID()
+	// An admin whose cached session has already expired (the cache holds it for
+	// 30 s from the moment it is written; the session's own expiry is past).
+	expiredAdminID := nextID()
 	// Targets that the start route refuses, each for its own reason
 	// (impersonation.py: not found 404, inactive 400, superuser 403, no
 	// membership 404).
@@ -58,6 +63,8 @@ VALUES ($1, 'venue-org', 'Venue Org', 'community', 'stripe', true, now(), now())
 			exec(`INSERT INTO users (id, email, is_active, is_verified, is_superuser, token_version, created_at, updated_at)
 VALUES ($1, 'venue-admin@example.com', true, true, true, 0, now(), now())`, adminID)
 			exec(`INSERT INTO users (id, email, is_active, is_verified, is_superuser, token_version, created_at, updated_at)
+VALUES ($1, 'venue-expired-admin@example.com', true, true, true, 0, now(), now())`, expiredAdminID)
+			exec(`INSERT INTO users (id, email, is_active, is_verified, is_superuser, token_version, created_at, updated_at)
 VALUES ($1, 'venue-target@example.com', true, true, false, 0, now(), now())`, targetID)
 			exec(`INSERT INTO memberships (id, org_id, user_id, role, joined_at, created_at, updated_at)
 VALUES ($1, $2, $3, 'member', now(), now(), now())`, membershipID, orgID, targetID)
@@ -79,14 +86,39 @@ VALUES ($1, $2, $3, 'member', now(), now(), now())`, target.membershipID, orgID,
 				}
 			}
 			return map[string]map[string]any{
-				"admin": {"user_id": adminID.String(), "email": "venue-admin@example.com", "is_superuser": true},
+				"admin":   {"user_id": adminID.String(), "email": "venue-admin@example.com", "is_superuser": true},
+				"expired": {"user_id": expiredAdminID.String(), "email": "venue-expired-admin@example.com", "is_superuser": true},
 			}
 		},
 	})
 
+	// The branch only a cached session can reach: the status route reads the
+	// session from the shared cache, and a cached session whose own expiry has
+	// passed is "not impersonating" (impersonation.py: expires_at <= now). The
+	// database lookup already refuses an expired row, so the entry is written
+	// into BOTH planes' caches, in the form the cache writes it.
+	expiredSession := fmt.Sprintf(`{"id":%q,"admin_user_id":%q,"target_user_id":%q,"target_org_id":%q,"target_role":"member","target_email":"venue-target@example.com","expires_at":"2020-01-01T00:00:00+00:00"}`,
+		nextID().String(), expiredAdminID.String(), targetID.String(), orgID.String())
+	for _, uri := range []string{venue.ValkeyURI, venue.PythonValkeyURI} {
+		options, err := valkeygo.ParseURL(uri)
+		if err != nil {
+			t.Fatal(err)
+		}
+		client, err := valkeygo.NewClient(options)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := client.Do(ctx, client.B().Set().Key("impersonation:active:"+expiredAdminID.String()).Value(expiredSession).Ex(10*time.Minute).Build()).Error(); err != nil {
+			t.Fatalf("seed the expired session into the cache: %v", err)
+		}
+		client.Close()
+	}
+
 	requests := []venueoracle.Request{
 		{Name: "status before", Method: "GET", Path: "/api/v1/admin/impersonate/status",
 			Headers: map[string]string{"Authorization": "Bearer " + venue.Tokens["admin"]}},
+		{Name: "status with an expired cached session", Method: "GET", Path: "/api/v1/admin/impersonate/status",
+			Headers: map[string]string{"Authorization": "Bearer " + venue.Tokens["expired"]}},
 		// Refusals of the start route, one per target, and a stop with no
 		// session open (before any session exists).
 		{Name: "stop with no active session", Method: "POST", Path: "/api/v1/admin/impersonate/stop",

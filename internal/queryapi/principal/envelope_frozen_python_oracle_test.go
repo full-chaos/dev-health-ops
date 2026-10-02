@@ -161,33 +161,39 @@ func TestVerifierMatchesFrozenPythonIssuedEnvelopeStructure(t *testing.T) {
 	if err := os.WriteFile(jwksPath, jwks, 0o600); err != nil {
 		t.Fatal(err)
 	}
-	now := time.Now()
-	claims := jwt.MapClaims{}
-	for name, value := range want.Claims {
-		claims[name] = value
-	}
-	claims["iat"] = now.Unix()
-	claims["exp"] = now.Add(time.Duration(want.TTLSeconds) * time.Second).Unix()
-	claims["jti"] = uuid.NewString()
-	token := jwt.NewWithClaims(jwt.SigningMethodEdDSA, claims)
-	for name, value := range want.Header {
-		if name != "alg" && name != "typ" {
-			token.Header[name] = value
-		}
-	}
-	signed, err := token.SignedString(priv)
-	if err != nil {
-		t.Fatal(err)
-	}
-
 	verifier, err := NewVerifier(jwksPath, want.Issuer, want.Audience)
 	if err != nil {
 		t.Fatalf("NewVerifier: %v", err)
 	}
-	got, err := verifier.Verify(context.Background(), signed)
-	if err != nil {
-		t.Fatalf("Verify: an envelope of the structure the Python issuer produces was rejected: %v", err)
+	verifyWith := func(label string, recorded map[string]any) *Claims {
+		t.Helper()
+		now := time.Now()
+		claims := jwt.MapClaims{}
+		for name, value := range recorded {
+			claims[name] = value
+		}
+		claims["iat"] = now.Unix()
+		claims["exp"] = now.Add(time.Duration(want.TTLSeconds) * time.Second).Unix()
+		claims["jti"] = uuid.NewString()
+		token := jwt.NewWithClaims(jwt.SigningMethodEdDSA, claims)
+		for name, value := range want.Header {
+			if name != "alg" && name != "typ" {
+				token.Header[name] = value
+			}
+		}
+		signed, err := token.SignedString(priv)
+		if err != nil {
+			t.Fatal(err)
+		}
+		got, err := verifier.Verify(context.Background(), signed)
+		if err != nil {
+			t.Fatalf("%s: Verify rejected an envelope of the structure the Python issuer produces: %v", label, err)
+		}
+		return got
 	}
+
+	// 1. The claims exactly as the issuer recorded them.
+	got := verifyWith("recorded claims", want.Claims)
 	if got.SchemaVersion != int(want.Claims["v"].(float64)) {
 		t.Errorf("SchemaVersion = %d, recorded %v", got.SchemaVersion, want.Claims["v"])
 	}
@@ -218,5 +224,31 @@ func TestVerifierMatchesFrozenPythonIssuedEnvelopeStructure(t *testing.T) {
 	}
 	if recorded, present := want.Claims["impersonated_by"]; (got.ImpersonatedBy == nil) != (recorded == nil) || !present {
 		t.Errorf("ImpersonatedBy = %v, recorded %v (present %v)", got.ImpersonatedBy, recorded, present)
+	}
+
+	// 2. The recorded envelope carries zero values for the flags and the nullable claim (false, false, false,
+	// null): a verifier that read none of those names would return the same zeros. The same recorded NAMES with a
+	// non-zero value each must come back non-zero, so each name is read.
+	changed := map[string]any{}
+	for name, value := range want.Claims {
+		changed[name] = value
+	}
+	for _, name := range []string{"is_superuser", "is_superuser_verified", "impersonation_active"} {
+		if _, present := want.Claims[name]; !present {
+			t.Fatalf("the recorded envelope has no %s claim", name)
+		}
+		changed[name] = true
+	}
+	const impersonator = "22222222-2222-4222-8222-222222222222"
+	if _, present := want.Claims["impersonated_by"]; !present {
+		t.Fatal("the recorded envelope has no impersonated_by claim")
+	}
+	changed["impersonated_by"] = impersonator
+	got = verifyWith("non-zero flags", changed)
+	if !got.IsSuperuser || !got.IsSuperuserVerified || !got.ImpersonationActive {
+		t.Errorf("the verifier returned flags (%v, %v, %v) for an envelope that sets all three", got.IsSuperuser, got.IsSuperuserVerified, got.ImpersonationActive)
+	}
+	if got.ImpersonatedBy == nil || *got.ImpersonatedBy != impersonator {
+		t.Errorf("ImpersonatedBy = %v, want %s", got.ImpersonatedBy, impersonator)
 	}
 }

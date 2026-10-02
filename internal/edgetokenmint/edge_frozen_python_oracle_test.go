@@ -234,8 +234,15 @@ func TestGoMintedEdgeTokenMatchesTheFrozenEdgeDecisions(t *testing.T) {
 			t.Errorf("%s: Go token id %q, Python token id is a UUID = %v", tc.Name, id, want.Token.JTIIsUUID)
 		}
 		exp, _ := claims["exp"].(float64)
+		iat, _ := claims["iat"].(float64)
 		if expired := time.Unix(int64(exp), 0).Before(now); expired != want.Token.ExpiredWhenJudge {
 			t.Errorf("%s: Go token expired = %v, Python token expired when judged = %v", tc.Name, expired, want.Token.ExpiredWhenJudge)
+		}
+		// The lifetime: a token that is not expired is minted with the default lifetime on both sides. The
+		// expired case is built differently on each side (Python with a negative lifetime, Go with a past issue
+		// time), so only its expired state is compared.
+		if !want.Token.ExpiredWhenJudge && int(exp-iat) != want.Token.TTLSeconds {
+			t.Errorf("%s: Go token lifetime = %d seconds, Python token lifetime = %d", tc.Name, int(exp-iat), want.Token.TTLSeconds)
 		}
 		// The signature: valid under the key the case names, and (the wrong-key case) not under the edge's key.
 		if _, err := jwt.Parse(tc.GoToken, func(*jwt.Token) (any, error) { return []byte(signingKey), nil },

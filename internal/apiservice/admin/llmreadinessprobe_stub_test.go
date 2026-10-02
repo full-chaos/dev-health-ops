@@ -355,6 +355,10 @@ func scriptedReadinessStub(w http.ResponseWriter, r *http.Request) {
 		writeJSON(429, map[string]any{"error": map[string]any{"type": "insufficient_quota", "message": "no funds"}})
 	case "scripted-quotatext":
 		writeJSON(429, map[string]any{"error": map[string]any{"message": "you exceeded your current quota"}})
+	case "scripted-auth401mnf":
+		// A 401 whose body also holds model_not_found: errors.py checks the
+		// two in its own order; the recording says which wins.
+		writeJSON(401, map[string]any{"error": map[string]any{"code": "model_not_found", "message": "denied"}})
 	case "scripted-lengthround1":
 		// Round 1 stops on length with a well-formed tool call; round 2 would
 		// succeed. Only round 1's own check gives output_exhausted.

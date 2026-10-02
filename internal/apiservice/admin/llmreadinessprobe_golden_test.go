@@ -67,6 +67,7 @@ var readinessScenarios = []struct {
 	{"model does not exist text alone", "scripted-mnfexist"},
 	{"insufficient_quota alone", "scripted-quotacode"},
 	{"current quota alone", "scripted-quotatext"},
+	{"401 whose body holds model_not_found", "scripted-auth401mnf"},
 	{"finish_reason length on round 1 only", "scripted-lengthround1"},
 	{"finish_reason length on round 2 only", "scripted-lengthround2"},
 	{"round 1 with no tool call", "scripted-notoolcalls"},
@@ -103,7 +104,7 @@ func TestReadinessProbeMatchesTheFrozenPythonProbe(t *testing.T) {
 	golden := venueoracle.OpenGolden(t, venueoracle.GoldenSpec{
 		Path:        "testdata/admin/llm_readiness_probe.json",
 		PythonBuild: readinessProbePythonBuild,
-		SHA256:      "b9c3caa5c123f1a6764ddeee4815bbcd131b9b5e556fddaa3595fd0bd5690840",
+		SHA256:      "a7ff4e0365b8a84e9c64dd9fe44d835a76b7a0854962c982c516f03dbc95b49a",
 		Recipe: "git worktree add --detach $DIR " + readinessProbePythonBuild + " (with its .venv: uv sync --frozen --no-install-project); then from the repository root: " +
 			"go run ./internal/testsupport/venueoracle/goldenrecord -pkg ./internal/apiservice/admin/ -test '^TestReadinessProbeMatchesTheFrozenPythonProbe$' -python-root $DIR",
 	})

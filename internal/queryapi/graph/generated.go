@@ -9963,6 +9963,10 @@ input ReviewEdgesInput {
   sinceDate: Date!
   untilDate: Date!
   repoIds: [String!] = null
+  """
+  Team ids (CHAOS-7785). Narrows the edges to the repositories these teams OWN (team_repo_ownership, as of now); person membership is never read. Combined with ` + "`" + `` + "`" + `repoIds` + "`" + `` + "`" + ` the two both apply (a pair must be on a listed repository and on a team-owned one).
+  """
+  teamIds: [String!] = null
   limit: Int! = 500
 }
 
@@ -60341,7 +60345,7 @@ func (ec *executionContext) unmarshalInputReviewEdgesInput(ctx context.Context, 
 		asMap["limit"] = 500
 	}
 
-	fieldsInOrder := [...]string{"orgId", "sinceDate", "untilDate", "repoIds", "limit"}
+	fieldsInOrder := [...]string{"orgId", "sinceDate", "untilDate", "repoIds", "teamIds", "limit"}
 	for _, k := range fieldsInOrder {
 		v, ok := asMap[k]
 		if !ok {
@@ -60376,6 +60380,13 @@ func (ec *executionContext) unmarshalInputReviewEdgesInput(ctx context.Context, 
 				return it, err
 			}
 			it.RepoIds = data
+		case "teamIds":
+			ctx := graphql.WithPathContext(ctx, graphql.NewPathWithField("teamIds"))
+			data, err := ec.unmarshalOString2ᚕstringᚄ(ctx, v)
+			if err != nil {
+				return it, err
+			}
+			it.TeamIds = data
 		case "limit":
 			ctx := graphql.WithPathContext(ctx, graphql.NewPathWithField("limit"))
 			data, err := ec.unmarshalNInt2int(ctx, v)

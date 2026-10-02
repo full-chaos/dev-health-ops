@@ -16,9 +16,13 @@ import (
 // field of a literal, a return value, a var initialiser) is derived by type, and must be one of:
 //
 //   - *net/http.Client: the provider constructors guard it once (providerfoundation.NewHTTPClient);
+//
 //   - a type that implements httpguard.Wrapper: the guard is rebuilt around the doer it wraps;
+//
 //   - a route decorator (a struct of the same package with a Do method and an HTTPDoer field) assigned to the Doer field of a
 //     constructed provider client: it wraps client.Doer, below which the guard already sits.
+//
+//   - providerfoundation.refusedDoer, the doer that sends nothing (what a PagerDuty entry point uses in place of a refused one).
 //
 // So a decorator that is not a Wrapper can never be SUPPLIED into a provider client constructor: it cannot become an HTTPDoer
 // at all, except by being assigned onto a constructed client. A new production type that implements Do and is used as an
@@ -80,6 +84,10 @@ func doerProblems(t *testing.T, root string, patterns []string) ([]string, int) 
 			key := types.TypeString(actual, nil)
 			if isNetHTTPClientPointer(actual) || (wrapper != nil && types.Implements(actual, wrapper)) {
 				seen[key] = true
+				return
+			}
+			if named := namedOf(actual); named != nil && named.Obj().Name() == "refusedDoer" && named.Obj().Pkg() != nil && strings.HasSuffix(named.Obj().Pkg().Path(), "/internal/providerfoundation") {
+				seen[key] = true // the one explicit exception: the doer a PagerDuty entry point uses in place of a refused one; it sends nothing
 				return
 			}
 			if named := namedOf(actual); named != nil && isRouteDecorator(named) && assignedToClientDoer {

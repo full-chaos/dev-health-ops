@@ -2,10 +2,10 @@ package providerfoundation
 
 import (
 	"context"
-	"github.com/full-chaos/dev-health-ops/internal/httpguard"
 	"net/http"
 	"net/url"
 	"strings"
+	"time"
 )
 
 // pagerDutyRevokeURL/pagerDutyAuthorizationURL are providers/pagerduty/
@@ -99,7 +99,7 @@ func RevokePagerDutyOAuthToken(ctx context.Context, doer HTTPDoer, config PagerD
 	}
 	request.Header.Set("Content-Type", "application/x-www-form-urlencoded")
 	// The token rides in the form body, which a 307 would re-send: a supplied *http.Client follows no redirect.
-	response, err := httpguard.NoRedirectsDoer(doer).Do(request)
+	response, err := pagerDutyFormClient(doer, 10*time.Second).Do(request)
 	if err != nil {
 		return &ProviderError{Class: ErrorTransient}
 	}

@@ -10,6 +10,8 @@ import (
 	"errors"
 	"log/slog"
 	"net/http"
+	"net/http/httptest"
+	"net/url"
 	"strings"
 	"testing"
 	"time"
@@ -180,5 +182,108 @@ func TestTheRefusalOfADoerIsOneFixedTextLine(t *testing.T) {
 	got := strings.TrimSpace(logged.String())
 	if strings.Count(got, "\n") != 0 || !strings.Contains(got, unguardableDoerLog) || strings.Contains(got, "leafDoer") || strings.Contains(got, "SECRET") || strings.Contains(got, "example.test") {
 		t.Fatalf("want exactly one line with the fixed text and no detail, got %q", got)
+	}
+}
+
+// The PagerDuty entry points have no constructor, so each admits its doer itself (CHAOS-7910 r2 P2, reproduced): an OPAQUE
+// decorator over a following client, handed to the form (exchange, refresh, client credentials), revoke or validate entry
+// point, sends NOTHING: a 307 never replays the form body or the token to another origin.
+func TestAnOpaqueDecoratorHandedToAPagerDutyEntryPointSendsNothing(t *testing.T) {
+	probe := redirectprobe.New(t)
+	opaque := hidingDecorator{inner: probe.Client()}
+	config := PagerDutyRevokeConfig{ClientID: "c", ClientSecret: "SECRET", TokenURL: probe.Base.URL + "/oauth/token",
+		RevokeURL: probe.Base.URL + "/oauth/revoke", APIBaseOverride: probe.Base.URL}
+	now := time.Now()
+	calls := map[string]func(){
+		"authorization code exchange": func() {
+			_, _ = ExchangePagerDutyAuthorizationCode(context.Background(), opaque, config, "code", "verifier", now)
+		},
+		"refresh": func() { _, _ = RefreshPagerDutyOAuthTokens(context.Background(), opaque, config, "refresh", now) },
+		"client credentials": func() {
+			_, _ = RequestPagerDutyClientCredentialsToken(context.Background(), opaque, config, "acme", "us", now)
+		},
+		"revoke": func() { _ = RevokePagerDutyOAuthToken(context.Background(), opaque, config, "SECRET") },
+		"validate (api token)": func() {
+			_, _ = ValidatePagerDutyCredential(context.Background(), opaque, config, PagerDutyCredentialCandidate{AuthMode: "api_token", APIToken: "SECRET", Region: "us"}, nil)
+		},
+	}
+	for name, call := range calls {
+		call()
+		if probe.Hits() != 0 || probe.BaseHits() != 0 {
+			t.Fatalf("%s: an opaque decorator was used: base %d, other %d", name, probe.BaseHits(), probe.Hits())
+		}
+	}
+}
+
+// vetter-style 307 probe (r2 P1 shape): a Wrapper that DROPS the request context, with an Auth that puts a secret in the QUERY: the
+// second origin must see no request (the Do-level origin guard stops the hop even when the context-less branch would follow).
+func TestAContextDroppingWrapperNeverCarriesAQueryCredentialToAnotherOrigin(t *testing.T) {
+	probe := redirectprobe.New(t)
+	client, err := NewHTTPClient("gitlab", probe.Base.URL, ctxDroppingWrapper{inner: probe.Client()},
+		func(r *http.Request) error { r.URL.RawQuery = "api_key=SECRET"; return nil },
+		RetryPolicy{MaxAttempts: 1, InitialWait: time.Nanosecond, MaxWait: time.Nanosecond},
+		LeaseGuardFunc(func(context.Context) error { return nil }))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if response, err := client.Do(context.Background(), http.MethodGet, "/x", nil); err == nil && response != nil {
+		response.Body.Close()
+	}
+	probe.Assert(t)
+}
+
+type ctxDroppingWrapper struct{ inner HTTPDoer }
+
+func (w ctxDroppingWrapper) Do(r *http.Request) (*http.Response, error) {
+	return w.inner.Do(r.Clone(context.Background()))
+}
+func (w ctxDroppingWrapper) Unwrap() interface {
+	Do(*http.Request) (*http.Response, error)
+} {
+	return w.inner
+}
+func (w ctxDroppingWrapper) Rewrap(inner interface {
+	Do(*http.Request) (*http.Response, error)
+}) interface {
+	Do(*http.Request) (*http.Response, error)
+} {
+	return ctxDroppingWrapper{inner: inner}
+}
+
+// The OAuth refresh hydrator (client_secret and refresh_token in the form body, constant token URL) admits its doer too: an opaque
+// decorator over a following client sends nothing.
+func TestAnOpaqueDecoratorHandedToThePagerDutyRefreshHydratorSendsNothing(t *testing.T) {
+	probe := redirectprobe.New(t)
+	base, _ := url.Parse(probe.Base.URL)
+	opaque := hidingDecorator{inner: &http.Client{Transport: &rewriteTo{base: base}}}
+	refresh := "REFRESH"
+	hydrator := PagerDutyOAuthHydrator{Doer: opaque, AppClientID: secrets.NewValue("c"), AppClientSecret: secrets.NewValue("SECRET")}
+	_, _, _ = hydrator.refreshTokens(context.Background(), LeaseGuardFunc(func(context.Context) error { return nil }),
+		NewCredential("pagerduty", "probe", nil, nil), PagerDutyOAuthTokenRecord{}, pagerDutyOAuthTokens{RefreshToken: &refresh})
+	if probe.Hits() != 0 || probe.BaseHits() != 0 {
+		t.Fatalf("an opaque decorator was used by the refresh hydrator: base %d, other %d", probe.BaseHits(), probe.Hits())
+	}
+}
+
+// The validation read FOLLOWS a redirect by design (Python parity) and drops the credential off-origin: through a Wrapper over a
+// client too (the allow-list admits it, the validation policy is rebuilt around its inner client).
+func TestTheValidationReadThroughAWrapperOverAClientFollowsAndDropsTheCredential(t *testing.T) {
+	var credentialAtOther string
+	hits := 0
+	other := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		hits++
+		credentialAtOther = r.Header.Get("Authorization")
+		_, _ = w.Write([]byte(`{}`))
+	}))
+	defer other.Close()
+	base := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		http.Redirect(w, r, other.URL+"/services", http.StatusTemporaryRedirect)
+	}))
+	defer base.Close()
+	config := PagerDutyRevokeConfig{APIBaseOverride: base.URL}
+	_, _ = ValidatePagerDutyCredential(context.Background(), wrapperOverOpaque{inner: &http.Client{}}, config,
+		PagerDutyCredentialCandidate{AuthMode: "api_token", APIToken: "SECRET", Region: "us"}, nil)
+	if hits != 1 || credentialAtOther != "" {
+		t.Fatalf("the validation read must follow (hits=%d) and drop the credential (%q)", hits, credentialAtOther)
 	}
 }

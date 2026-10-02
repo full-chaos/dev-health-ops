@@ -120,29 +120,51 @@ func postPagerDutyTokenForm(ctx context.Context, doer HTTPDoer, config PagerDuty
 	return pagerDutyTokensFromPayload(body, now)
 }
 
-// pagerDutyFormClient is the client of a PagerDuty call whose body carries a secret (token, code, client_secret):
-// it follows no redirect, whatever client was supplied (a 307 would send the body again, to any host); the default has the
-// reference's timeout. Any doer that is not an *http.Client is a test's transport and cannot follow one.
+// refusedDoer is what a PagerDuty entry point uses in place of a supplied doer the allow-list refused: it sends nothing.
+type refusedDoer struct{}
+
+func (refusedDoer) Do(*http.Request) (*http.Response, error) { return nil, ErrCredentialInvalid }
+
+// pagerDutyAdmitted is the supplied doer when the allow-list admits it (an *http.Client, or a Wrapper chain ending at one), or a
+// doer that sends nothing (the same construction refusal, loud, as the provider client constructors): the PagerDuty entry
+// points have no constructor, so each admits its doer here.
+func pagerDutyAdmitted(doer HTTPDoer) HTTPDoer {
+	if err := admitDoer(doer); err != nil {
+		return refusedDoer{}
+	}
+	return doer
+}
+
+// pagerDutyFormClient is the client of a PagerDuty call whose body carries a secret (token, code, client_secret): it follows no
+// redirect, whatever client was supplied (a 307 would send the body again, to any host); the default has the reference's
+// timeout. A supplied doer that the allow-list refuses sends nothing.
 func pagerDutyFormClient(doer HTTPDoer, timeout time.Duration) HTTPDoer {
 	if doer != nil {
-		return httpguard.NoRedirectsDoer(doer)
+		return httpguard.NoRedirectsDoer(pagerDutyAdmitted(doer))
 	}
 	return httpguard.NewClient(timeout)
 }
 
 // pagerDutyValidationClient is the client of the credential validation read: it FOLLOWS a redirect (Python's httpx does)
 // and drops the credential when the origin changes (net/http alone would also replay it to a subdomain of the original
-// host). A supplied *http.Client gets the same policy; any other doer is a test's transport.
+// host). A supplied *http.Client gets the same policy; a Wrapper is rebuilt around its inner doer's validation client; any
+// other supplied doer is refused (it sends nothing).
 func pagerDutyValidationClient(doer HTTPDoer, timeout time.Duration) HTTPDoer {
-	if doer != nil {
-		if supplied, ok := doer.(*http.Client); ok {
-			copied := *supplied
-			copied.CheckRedirect = DropCredentialsOnHostChange
-			return &copied
-		}
-		return doer
+	if doer == nil {
+		return &http.Client{Timeout: timeout, CheckRedirect: DropCredentialsOnHostChange}
 	}
-	return &http.Client{Timeout: timeout, CheckRedirect: DropCredentialsOnHostChange}
+	if supplied, ok := doer.(*http.Client); ok {
+		copied := *supplied
+		copied.CheckRedirect = DropCredentialsOnHostChange
+		return &copied
+	}
+	if wrapper, ok := doer.(httpguard.Wrapper); ok && admitDoer(doer) == nil {
+		if rebuilt, ok := wrapper.Rewrap(pagerDutyValidationClient(wrapper.Unwrap(), timeout)).(HTTPDoer); ok {
+			return rebuilt
+		}
+	}
+	_ = refuseUnguardableDoer() // anything else: refused, loud
+	return refusedDoer{}
 }
 
 // pagerDutyTokensFromPayload is oauth.py's _tokens, on the body decoded the way

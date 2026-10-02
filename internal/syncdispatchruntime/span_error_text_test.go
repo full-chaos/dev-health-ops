@@ -295,12 +295,23 @@ func TestEveryRegisteredCoordinatorWorkDefersTheFixedTextFinisher(t *testing.T) 
 			t.Fatalf("%s.Work has no named error result err", name)
 		}
 		deferred, direct := false, false
+		// the defer must be a TOP-LEVEL statement of the Work body (not under an if or in a closure) with the named result
+		// `&err` as its second argument (not a shadow or a new(error))
+		for _, stmt := range fn.Body.List {
+			deferStmt, ok := stmt.(*ast.DeferStmt)
+			if !ok {
+				continue
+			}
+			if ident, ok := deferStmt.Call.Fun.(*ast.Ident); ok && ident.Name == "finishCoordinatorWork" && len(deferStmt.Call.Args) == 2 {
+				if unary, ok := deferStmt.Call.Args[1].(*ast.UnaryExpr); ok && unary.Op == token.AND {
+					if target, ok := unary.X.(*ast.Ident); ok && target.Name == "err" {
+						deferred = true
+					}
+				}
+			}
+		}
 		ast.Inspect(fn.Body, func(node ast.Node) bool {
 			switch typed := node.(type) {
-			case *ast.DeferStmt:
-				if ident, ok := typed.Call.Fun.(*ast.Ident); ok && ident.Name == "finishCoordinatorWork" {
-					deferred = true
-				}
 			case *ast.CallExpr:
 				if ident, ok := typed.Fun.(*ast.Ident); ok && ident.Name == "finishCoordinatorSpan" {
 					direct = true

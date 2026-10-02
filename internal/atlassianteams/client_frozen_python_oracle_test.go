@@ -536,12 +536,10 @@ func pythonReads(t *testing.T, root, base string, scenarios []scenario) map[stri
 		request.Scenarios = append(request.Scenarios, sc{Name: s.name, Strict: s.strict, Teams: s.teamIDs})
 	}
 	input, _ := json.Marshal(request)
-	// NOT pinned (CHAOS-7846): the NAMES of the per-run entries are not in the request key (programoracle.go, Program.PerRun):
-	// a plant that adds per-run entries, or changes this one's value, still passes. The programoracle change that keys the
-	// names re-records this golden.
 	output := frozenPython(t, "teams-client.golden.json", programoracle.Program{
 		Name: "teams client", Text: pythonClientProgram, Stdin: input,
-		PerRun: func() map[string]string { return map[string]string{"ATLASSIAN_ORACLE_GATEWAY": base} },
+		PerRun:      func() map[string]string { return map[string]string{"ATLASSIAN_ORACLE_GATEWAY": base} },
+		PerRunNames: []string{"ATLASSIAN_ORACLE_GATEWAY"},
 	})[0]
 	lines := strings.Split(strings.TrimSpace(string(output)), "\n")
 	var decoded map[string]json.RawMessage

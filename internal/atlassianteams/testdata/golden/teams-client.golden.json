@@ -21,7 +21,7 @@
     {
       "name": "teams client",
       "method": "PYTHON",
-      "path": "program sha256 bbf1e3da1e2f2d9fc7c2cc0b6ecfded011156a6333ac043de32662193ff8efe2 env sha256 969169a1702b285f3a9e4b602d19052b0d6a3c6b2a44dd7425bef0f696436295",
+      "path": "program sha256 bbf1e3da1e2f2d9fc7c2cc0b6ecfded011156a6333ac043de32662193ff8efe2 env sha256 ac8ce09ac1dd2008de78c5b70e35f52420b3b69883a189570375a693e091942d",
       "body_sha256": "fcd87b5ccea99bb9a2373c8b91a443e663835780e76758c0cebb38af6ed73c46",
       "request_headers_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
       "status": 0,

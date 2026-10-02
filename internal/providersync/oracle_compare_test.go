@@ -4,10 +4,14 @@ import (
 	"bytes"
 	"embed"
 	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
 	"reflect"
+	"regexp"
 	"runtime"
+	"sort"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -183,6 +187,65 @@ func oracleDivergences(
 	output := frozenPairAnswer(t, pairID, encoded)
 	pythonRows, excludedFields := decodeGenericRowOracleOutput(t, pairID, output)
 	return diffAgainstPythonRows(t, cases, pythonRows, excludedFields, goRowBuilder, goOnlyFields)
+}
+
+// divergenceRead is one read a divergence names: a case and a field of its row.
+type divergenceRead struct{ Case, Field string }
+
+var divergenceReadPattern = regexp.MustCompile(`^case ("(?:[^"\\]|\\.)*"), field ("(?:[^"\\]|\\.)*"):`)
+
+// requireDivergencesAre fails unless the divergences name exactly the reads a
+// known defect is expected to change: its OWN case and field, no other and none
+// missing. A known-defect gate that only asks for "some divergence" passes on a
+// divergence of anything else (a setup error, an unrelated field), so the plant
+// could have done nothing. A message that is not a "case X, field Y" divergence
+// (an empty row, an exclusion error) is a failure, never a find.
+func requireDivergencesAre(t *testing.T, divergences []string, expected ...divergenceRead) {
+	t.Helper()
+	for _, problem := range divergenceReadProblems(divergences, expected) {
+		t.Error(problem)
+	}
+}
+
+// divergenceReadProblems is what requireDivergencesAre reports: each
+// divergence that is not one of the expected reads, each expected read that is
+// missing, and a gate that names no read at all.
+func divergenceReadProblems(divergences []string, expected []divergenceRead) []string {
+	var problems []string
+	got := map[divergenceRead]bool{}
+	for _, message := range divergences {
+		match := divergenceReadPattern.FindStringSubmatch(message)
+		if match == nil {
+			problems = append(problems, "a divergence that names no case and field is not a find of the planted defect: "+message)
+			continue
+		}
+		caseID, caseErr := strconv.Unquote(match[1])
+		field, fieldErr := strconv.Unquote(match[2])
+		if caseErr != nil || fieldErr != nil {
+			problems = append(problems, fmt.Sprintf("divergence %q: unquote: %v %v", message, caseErr, fieldErr))
+			continue
+		}
+		got[divergenceRead{caseID, field}] = true
+	}
+	want := map[divergenceRead]bool{}
+	for _, read := range expected {
+		want[read] = true
+		if !got[read] {
+			problems = append(problems, fmt.Sprintf("the planted defect's own read (case %q, field %q) is not among the divergences", read.Case, read.Field))
+		}
+	}
+	var extra []string
+	for read := range got {
+		if !want[read] {
+			extra = append(extra, fmt.Sprintf("divergence at case %q, field %q is not a read this defect changes: the gate would pass on a plant that did something else", read.Case, read.Field))
+		}
+	}
+	sort.Strings(extra)
+	problems = append(problems, extra...)
+	if len(expected) == 0 {
+		problems = append(problems, "a known-defect gate must name the reads its defect changes")
+	}
+	return problems
 }
 
 // frozenOracleDivergences is oracleDivergences' frozen-golden twin: same
@@ -400,4 +463,33 @@ func assertOracleSourcesUnchangedSinceBuild(t *testing.T) {
 	oraclecompare.AssertSourcesUnchangedSinceBuild(
 		t, embeddedOracleSources, filepath.Dir(currentFile),
 	)
+}
+
+func TestAKnownDefectGateNamesItsOwnReadsAndNoOthers(t *testing.T) {
+	read := func(caseID, field string) string {
+		return fmt.Sprintf("case %q, field %q: python=%#v go=%#v", caseID, field, "a", "b")
+	}
+	want := []divergenceRead{{"c1", "state"}, {"c2", "author_name"}}
+	right := []string{read("c1", "state"), read("c2", "author_name")}
+	if problems := divergenceReadProblems(right, want); len(problems) != 0 {
+		t.Fatalf("the defect's own reads: %v", problems)
+	}
+	for name, row := range map[string]struct {
+		divergences []string
+		expected    []divergenceRead
+		contains    string
+	}{
+		"an own read missing":            {right[:1], want, "is not among the divergences"},
+		"another field of the case":      {append(append([]string{}, right...), read("c1", "closed_at")), want, "is not a read this defect changes"},
+		"another case":                   {append(append([]string{}, right...), read("c9", "state")), want, "is not a read this defect changes"},
+		"the wrong field for the case":   {[]string{read("c1", "closed_at"), read("c2", "author_name")}, want, "is not among the divergences"},
+		"an empty-row setup error":       {[]string{`case "c1": both rows are empty -- nothing was compared`}, want, "names no case and field"},
+		"a gate that names no read":      {right, nil, "must name the reads"},
+		"no divergence for a named read": {nil, want, "is not among the divergences"},
+	} {
+		problems := strings.Join(divergenceReadProblems(row.divergences, row.expected), "\n")
+		if !strings.Contains(problems, row.contains) {
+			t.Errorf("%s: problems = %q, want one holding %q", name, problems, row.contains)
+		}
+	}
 }

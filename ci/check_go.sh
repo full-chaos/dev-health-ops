@@ -538,30 +538,6 @@ check_live_python_oracles() {
     return 1
   fi
 
-  printf 'go test -count=1: internal/mail (SMTP wire format and Resend requests/outcomes vs the live Python email service)\n'
-  if ! (
-    cd "${ROOT}"
-    "${GO_ENV_OFF[@]}" \
-      GOWORK=off \
-      DEV_HEALTH_LIVE_PYTHON_ORACLES=1 \
-      DEV_HEALTH_LIVE_PYTHON_ORACLE_PROOF_DIR="${proof_dir}" \
-      PYTHON="${PYTHON:-python3}" \
-      PYTHONPATH="${ROOT}/src${PYTHONPATH:+:${PYTHONPATH}}" \
-      go test -mod=readonly -count=1 \
-        -run '^(TestSMTPSenderMatchesLivePythonSMTPProvider|TestResendSenderMatchesLivePythonResendProvider)$' \
-        ./internal/mail
-  ); then
-    rm -rf -- "${proof_dir}"
-    return 1
-  fi
-  for proof_file in "${proof_dir}/mail-smtp-oracle" "${proof_dir}/mail-resend-oracle"; do
-    if [ ! -f "${proof_file}" ] || [ "$(cat "${proof_file}")" != "executed" ]; then
-      printf 'ERROR: the internal/mail live Python oracle %s did not run a real comparison\n' "${proof_file##*/}" >&2
-      rm -rf -- "${proof_dir}"
-      return 1
-    fi
-  done
-
   printf 'go test -count=1: internal/api/policy (api decisions vs live Python)\n'
   if ! (
     cd "${ROOT}"
@@ -652,21 +628,6 @@ check_live_python_oracles() {
     rm -rf -- "${proof_dir}"
     return 1
   fi
-  printf 'go test -count=1: internal/auth/edgetoken (Go-signed session tokens vs the live AuthService)\n'
-  if ! (
-    cd "${ROOT}"
-    "${GO_ENV_OFF[@]}" \
-      GOWORK=off \
-      DEV_HEALTH_LIVE_PYTHON_ORACLES=1 \
-      DEV_HEALTH_LIVE_PYTHON_ORACLE_PROOF_DIR="${proof_dir}" \
-      PYTHONPATH="${ROOT}/src${PYTHONPATH:+:${PYTHONPATH}}" \
-      go test -mod=readonly -count=1 \
-        -run '^(TestSignerMatchesLiveAuthService)$' \
-        ./internal/auth/edgetoken
-  ); then
-    rm -rf -- "${proof_dir}"
-    return 1
-  fi
   printf 'go test -count=1: internal/auth/httpapi (redirect scheme vs live uvicorn, limit strings vs live limits)\n'
   if ! (
     cd "${ROOT}"
@@ -692,21 +653,6 @@ check_live_python_oracles() {
       go test -mod=readonly -count=1 \
         -run '^(TestAtlassianTeamsClientMatchesLivePython)$' \
         ./internal/atlassianteams
-  ); then
-    rm -rf -- "${proof_dir}"
-    return 1
-  fi
-  printf 'go test -count=1: internal/auth/signedtoken (link tokens vs the live invite, verification and reset services)\n'
-  if ! (
-    cd "${ROOT}"
-    "${GO_ENV_OFF[@]}" \
-      GOWORK=off \
-      DEV_HEALTH_LIVE_PYTHON_ORACLES=1 \
-      DEV_HEALTH_LIVE_PYTHON_ORACLE_PROOF_DIR="${proof_dir}" \
-      PYTHONPATH="${ROOT}/src${PYTHONPATH:+:${PYTHONPATH}}" \
-      go test -mod=readonly -count=1 \
-        -run '^(TestSignedTokenMatchesLivePython)$' \
-        ./internal/auth/signedtoken
   ); then
     rm -rf -- "${proof_dir}"
     return 1

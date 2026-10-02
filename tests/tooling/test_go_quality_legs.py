@@ -435,7 +435,7 @@ def test_a_weighted_or_light_race_package_passes_the_unweighted_guard(
     out = "\n".join(
         [
             _race_line(weighted, "324.004"),
-            _race_line("internal/chaos8135_no_such_row", "29.9"),
+            _race_line("internal/chaos8135_no_such_row", "89.9"),
             "?   \tgithub.com/full-chaos/dev-health-ops/cmd/x\t[no test files]",
         ]
     )
@@ -454,7 +454,7 @@ def _unweighted_awk(
             "-v",
             f"weights={weights_file}",
             "-v",
-            "minsec=30",
+            "minsec=90",
             "-f",
             str(ROOT / "ci" / "go_race_unweighted.awk"),
         ],  # fmt: skip

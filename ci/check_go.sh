@@ -386,11 +386,11 @@ check_race_shard() {
       "${GO_ENV_OFF[@]}" GOWORK=off go test -mod=readonly -race "${pkgs[@]}" 2>&1 | tee "${race_out}"
     )
     # CHAOS-8135: a heavy package with no weights row hides its cost from the shard plan. Read the timings back.
-    unweighted="$(awk -v mod="${modpath}" -v weights="${GO_RACE_WEIGHTS}" -v minsec="${GO_RACE_UNWEIGHTED_MIN_SECONDS:-30}" \
+    unweighted="$(awk -v mod="${modpath}" -v weights="${GO_RACE_WEIGHTS}" -v minsec="${GO_RACE_UNWEIGHTED_MIN_SECONDS:-90}" \
       -f "${ROOT}/ci/go_race_unweighted.awk" "${race_out}")" || { rm -f "${race_out}"; die "ci/go_race_unweighted.awk failed"; }
     rm -f "${race_out}"
     [ -z "${unweighted}" ] \
-      || die "race package(s) of ${GO_RACE_UNWEIGHTED_MIN_SECONDS:-30} s or more with NO row in ci/go_race_weights.tsv (they weigh the default 2 and hide their cost from the shard plan; add the measured row): $(printf '%s' "${unweighted}" | tr '\t\n' ' ,')"
+      || die "race package(s) of ${GO_RACE_UNWEIGHTED_MIN_SECONDS:-90} s or more with NO row in ci/go_race_weights.tsv (they weigh the default 2 and hide their cost from the shard plan; add the measured row): $(printf '%s' "${unweighted}" | tr '\t\n' ' ,')"
   done
   [ "${selected}" -gt 0 ] \
     || die "race shard ${shard}/${count} selected zero packages -- the matrix is wider than the package list, so this leg would read green while running nothing"

@@ -78,9 +78,12 @@ type migrateFact struct {
 
 const (
 	migrateGolden = "testdata/migrate_golden.json"
-	// migrateGolden was recorded again in a closed environment (CHAOS-7471, byte-identical) with
-	// the Python src of main 7b5903cdfc72a100c19df267d90d88df1ce641e2 (an ancestor of origin/main), NOT at pythonGoldenBuild:
-	// that build stops at migration 099 and the golden holds the 110-version chain.
+	// migrateGolden was recorded again on 2026-10-02 (CHAOS-8009), with migration 101 on the chain: the live
+	// Go-vs-Python comparison (restored from the commit before it was deleted) ran green in a scratch tree of
+	// main 16dc07c9b8 whose Python src holds the same 101 file, with the venv of
+	// a4847c5e93607451a0c987b314d37e02fc43ce85, and then wrote the golden: the 111-version chain. Earlier it was recorded
+	// in a closed environment (CHAOS-7471, byte-identical) with the Python src of main
+	// 7b5903cdfc72a100c19df267d90d88df1ce641e2, NOT at pythonGoldenBuild: that build stops at migration 099.
 	migrateGoldenSHA256 = "a835c8cd04c4b5112cdb1ace1fff4cc3fa355c8a6466eed1498950b8c2947370"
 )
 
@@ -502,8 +505,8 @@ func TestMigrateClickHouseMatchesTheFrozenPythonOutput(t *testing.T) {
 	}
 }
 
-// The frozen facts in testdata/migrate_golden.json and testdata/repair_golden.json
-// were last proven equal to the live Python verbs on 2026-10-01 (CHAOS-7337 E),
+// The frozen facts in testdata/repair_golden.json were last proven equal to the live Python verbs on 2026-10-01
+// (CHAOS-7337 E); those in testdata/migrate_golden.json on 2026-10-02 (CHAOS-8009: migration 101, see migrateGolden),
 // by the live tests that stood here: Python at build
 // a4847c5e93607451a0c987b314d37e02fc43ce85's venv over the Python src of main,
 // both goldens rewritten and byte-equal to the checked-in files. The live tests

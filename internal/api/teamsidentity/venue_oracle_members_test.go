@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"github.com/full-chaos/dev-health-ops/internal/testsupport/fakehttp"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -283,9 +284,9 @@ func redirectDiscoveryClient(t *testing.T, stub *memberOracleStub) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	previous := discoveryHTTPClient
+	previous := fakehttp.Client(discoveryHTTPClient)
 	discoveryHTTPClient = &http.Client{Transport: rewriteHostTransport{target: stubURL}}
-	t.Cleanup(func() { discoveryHTTPClient = previous })
+	t.Cleanup(func() { discoveryHTTPClient = fakehttp.Client(previous) })
 }
 
 func goMembersBody(t *testing.T, teamID, provider string, members []discoveredMember, err error) string {

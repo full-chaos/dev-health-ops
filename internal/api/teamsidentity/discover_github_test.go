@@ -3,6 +3,7 @@ package teamsidentity
 import (
 	"bytes"
 	"context"
+	"github.com/full-chaos/dev-health-ops/internal/testsupport/fakehttp"
 	"io"
 	"net/http"
 	"testing"
@@ -85,9 +86,11 @@ func TestDiscoverGitHubWalksTeamsAndRepoPages(t *testing.T) {
 			body:   `{"members_count":0}`,
 		},
 	}}
-	oldClient, oldExchange := discoveryHTTPClient, discoveryAppExchangeClient
-	discoveryHTTPClient, discoveryAppExchangeClient = doer, doer
-	defer func() { discoveryHTTPClient, discoveryAppExchangeClient = oldClient, oldExchange }()
+	oldClient, oldExchange := fakehttp.Client(discoveryHTTPClient), fakehttp.Client(discoveryAppExchangeClient)
+	discoveryHTTPClient, discoveryAppExchangeClient = fakehttp.Client(doer), fakehttp.Client(doer)
+	defer func() {
+		discoveryHTTPClient, discoveryAppExchangeClient = fakehttp.Client(oldClient), fakehttp.Client(oldExchange)
+	}()
 
 	teams, err := discoverGitHub(context.Background(), githubTestCredential(), "acme")
 	if err != nil {

@@ -10,6 +10,7 @@ package admin
 import (
 	"context"
 	"errors"
+	"github.com/full-chaos/dev-health-ops/internal/httpguard"
 	"io"
 	"math"
 	"net"
@@ -479,7 +480,7 @@ func pagerDutyServicesClient(doer providerfoundation.HTTPDoer) providerfoundatio
 	if doer != nil {
 		return doer
 	}
-	return &http.Client{Timeout: 30 * time.Second, CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}
+	return httpguard.NewClient(30 * time.Second)
 }
 
 const (
@@ -512,7 +513,7 @@ func (h *handlers) pagerDutyGET(ctx context.Context, client providerfoundation.H
 		}
 		request.Header.Set("Accept", "application/vnd.pagerduty+json;version=2")
 		request.Header.Set("Authorization", auth.header)
-		response, err := client.Do(request)
+		response, err := httpguard.NoRedirectsDoer(client).Do(request) // the PagerDuty token rides this request
 		if err != nil {
 			if !pagerDutyRetryableTransportError(err) {
 				return nil, servicesInternal("pagerduty request failed", err)

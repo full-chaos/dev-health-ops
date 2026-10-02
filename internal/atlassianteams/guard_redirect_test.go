@@ -26,3 +26,11 @@ func TestGatewayHTTPClientRefusesRedirects(t *testing.T) {
 		t.Fatalf("status %d, redirected host hit %d times: the client followed a redirect", response.StatusCode, landed.Load())
 	}
 }
+
+// The gateway client's own policy (CHAOS-7910): CheckRedirect refuses every redirect.
+func TestGatewayHTTPClientCheckRedirectRefuses(t *testing.T) {
+	client := GatewayHTTPClient(time.Second)
+	if client.CheckRedirect == nil || client.CheckRedirect(nil, nil) != http.ErrUseLastResponse {
+		t.Fatal("the gateway client follows redirects")
+	}
+}

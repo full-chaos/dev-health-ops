@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"github.com/full-chaos/dev-health-ops/internal/testsupport/fakehttp"
 	"testing"
 	"time"
 
@@ -420,7 +421,7 @@ func TestJiraAtlassianRawOnlyRouteHoldsWatermarkForDerivedGap(t *testing.T) {
 	claim := jiraAtlassianClaim()
 	client := jiraWorkItemsTestClient(
 		t,
-		&jiraAtlassianDoer{t: t},
+		fakehttp.Client(&jiraAtlassianDoer{t: t}),
 		providerfoundation.LeaseGuardFunc(func(context.Context) error { return nil }),
 	)
 	batch, err := (JiraAtlassianRouteHandler{
@@ -456,7 +457,7 @@ func TestJiraCanonicalAliasesComposeSixteenDestinationsPlusWorklogs(t *testing.T
 			claim.CostClass = capability.CostClass
 			client := jiraWorkItemsTestClient(
 				t,
-				&jiraAtlassianDoer{t: t},
+				fakehttp.Client(&jiraAtlassianDoer{t: t}),
 				providerfoundation.LeaseGuardFunc(func(context.Context) error { return nil }),
 			)
 			batch, err := jiraAtlassianCompleteHandler(t).Collect(

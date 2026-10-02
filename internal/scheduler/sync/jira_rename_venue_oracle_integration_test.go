@@ -6,6 +6,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"github.com/full-chaos/dev-health-ops/internal/testsupport/fakehttp"
 	"io"
 	"log/slog"
 	"strings"
@@ -134,7 +135,7 @@ func TestJiraRenameVenueOracleMatchesFrozenPython(t *testing.T) {
 		service := &NativeSourceDiscoveryService{
 			domainPool:  pool,
 			credentials: providerfoundation.CredentialResolver{Repository: fixedJiraCredentials{}, Decryptor: fixedJiraCredentials{}},
-			doer:        &fakeSourceDiscoveryDoer{t: t, body: string(page)},
+			doer:        fakehttp.Client(&fakeSourceDiscoveryDoer{t: t, body: string(page)}),
 			retry:       fastRetry(),
 			logger:      slog.New(slog.NewTextHandler(io.Discard, nil)),
 			telemetry:   newSourceDiscoveryTelemetry(),

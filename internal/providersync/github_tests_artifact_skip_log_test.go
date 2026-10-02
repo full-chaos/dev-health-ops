@@ -2,6 +2,7 @@ package providersync
 
 import (
 	"bytes"
+	"github.com/full-chaos/dev-health-ops/internal/testsupport/fakehttp"
 	"io"
 	"log/slog"
 	"net/http"
@@ -22,7 +23,7 @@ func TestGitHubTestsArtifactSkipsLogOncePerUnitWithCountsByCause(t *testing.T) {
 	records := captureMembershipLogs(t)
 	doer := &githubTestsCorruptArtifactDoer{t: t, artifacts: 3, corrupt: map[int]bool{1: true, 2: true}}
 
-	walk, err := walkGitHubTestsChunksResult(t, githubTestsClient(t, doer), 4)
+	walk, err := walkGitHubTestsChunksResult(t, githubTestsClient(t, fakehttp.Client(doer)), 4)
 	if err != nil {
 		t.Fatalf("walk returned err=%v, want the unit to finalize with two skips recorded", err)
 	}
@@ -126,7 +127,7 @@ func TestGitHubTestsSkipSummaryLogsOverflowThroughRealRoute(t *testing.T) {
 	}
 	doer := &githubTestsCorruptArtifactDoer{t: t, artifacts: 11, corrupt: corrupt}
 
-	if _, err := walkGitHubTestsChunksResult(t, githubTestsClient(t, doer), 4); err != nil {
+	if _, err := walkGitHubTestsChunksResult(t, githubTestsClient(t, fakehttp.Client(doer)), 4); err != nil {
 		t.Fatalf("walk returned err=%v", err)
 	}
 
@@ -159,7 +160,7 @@ func TestGitHubTestsHealthyUnitLogsNoSkipSummary(t *testing.T) {
 	records := captureMembershipLogs(t)
 	doer := &githubTestsCorruptArtifactDoer{t: t, artifacts: 2, corrupt: map[int]bool{}}
 
-	if _, err := walkGitHubTestsChunksResult(t, githubTestsClient(t, doer), 4); err != nil {
+	if _, err := walkGitHubTestsChunksResult(t, githubTestsClient(t, fakehttp.Client(doer)), 4); err != nil {
 		t.Fatalf("healthy walk returned err=%v", err)
 	}
 	for _, record := range *records {
@@ -214,7 +215,7 @@ func TestGitHubTestsMemberLevelSkipDoesNotCountAsAnArtifactSkip(t *testing.T) {
 	records := captureMembershipLogs(t)
 	doer := &githubTestsMixedMemberArtifactDoer{t: t}
 
-	walk, err := walkGitHubTestsChunksResult(t, githubTestsClient(t, doer), 4)
+	walk, err := walkGitHubTestsChunksResult(t, githubTestsClient(t, fakehttp.Client(doer)), 4)
 	if err != nil {
 		t.Fatalf("walk returned err=%v", err)
 	}
@@ -264,7 +265,7 @@ func TestGitHubTestsMemberLevelSkipDoesNotCountAsAnArtifactSkip(t *testing.T) {
 func TestGitHubTestsMemberLevelSkipAdvancesWatermarkThroughRealRoute(t *testing.T) {
 	doer := &githubTestsMixedMemberArtifactDoer{t: t}
 
-	walk, err := walkGitHubTestsChunksResult(t, githubTestsClient(t, doer), 4)
+	walk, err := walkGitHubTestsChunksResult(t, githubTestsClient(t, fakehttp.Client(doer)), 4)
 	if err != nil {
 		t.Fatalf("walk returned err=%v", err)
 	}
@@ -307,7 +308,7 @@ func TestGitHubTestsRunLevelTruncationDoesNotLogArtifactSkipSummary(t *testing.T
 	doer := &githubTestsPagedDoer{t: t, pages: 3, perPage: 2}
 	claim := nativeTestClaim("github", "tests")
 
-	walk := walkGitHubTestsChunks(t, GitHubTestsRouteHandler{MaxRuns: 100}, claim, githubTestsClient(t, doer), 2)
+	walk := walkGitHubTestsChunks(t, GitHubTestsRouteHandler{MaxRuns: 100}, claim, githubTestsClient(t, fakehttp.Client(doer)), 2)
 	if !githubTestsBlocksWatermark(
 		walk.cursor.Incomplete, walk.cursor.SkippedArtifacts,
 		walk.cursor.SkippedArtifactsOverflow, walk.cursor.SkippedArtifactCauseOverflow, walk.cursor.SkippedArtifactCauseCount,
@@ -342,7 +343,7 @@ func TestGitHubTestsOversizedArtifactLogsExactlyOneLine(t *testing.T) {
 	records := captureMembershipLogs(t)
 	doer := &githubTestsDownloadFailureDoer{t: t, artifacts: 2, oversized: map[int]bool{1: true}}
 
-	walk, err := walkGitHubTestsChunksResult(t, githubTestsClient(t, doer), 4)
+	walk, err := walkGitHubTestsChunksResult(t, githubTestsClient(t, fakehttp.Client(doer)), 4)
 	if err != nil {
 		t.Fatalf("walk returned err=%v, want the unit to finalize with the oversized artifact skipped", err)
 	}

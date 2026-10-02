@@ -3,6 +3,7 @@ package githubcode
 import (
 	"context"
 	"errors"
+	"github.com/full-chaos/dev-health-ops/internal/testsupport/redirectprobe"
 	"io"
 	"net"
 	"net/http"
@@ -68,6 +69,7 @@ func TestSameOriginLinkIsFollowedInAnySpelling(t *testing.T) {
 		{"host case", "https://ghe.test/api/v3", "https://GHE.Test/orgs/acme/repos?page=2"},
 		{"scheme case", "https://ghe.test/api/v3", "HTTPS://ghe.test/orgs/acme/repos?page=2"},
 		{"default http port", "http://ghe.test", "http://ghe.test:80/orgs/acme/repos?page=2"},
+		{"zero-padded default http port", "http://ghe.test", "http://ghe.test:080/orgs/acme/repos?page=2"},
 		{"base port named", "https://ghe.test:443/api/v3", "https://ghe.test/orgs/acme/repos?page=2"},
 		{"unicode host, xn-- link", "https://ghé.test/api/v3", "https://xn--gh-cja.test/orgs/acme/repos?page=2"},
 		{"xn-- base, unicode link", "https://xn--gh-cja.test/api/v3", "https://ghé.test/orgs/acme/repos?page=2"},
@@ -200,3 +202,29 @@ func TestASuppliedClientNeverFollowsARedirectWithTheToken(t *testing.T) {
 type roundTripFunc func(*http.Request) (*http.Response, error)
 
 func (f roundTripFunc) RoundTrip(request *http.Request) (*http.Response, error) { return f(request) }
+
+// The same probe through the shared one (a 307 to another origin; that origin sees no request at all).
+func TestASuppliedClientNeverFollowsARedirectToAnotherOriginProbe(t *testing.T) {
+	probe := redirectprobe.New(t)
+	client := Client{Token: "SECRET-TOKEN", BaseURL: probe.Base.URL, HTTP: probe.Client()}
+	_, _ = client.ListRepositories(context.Background(), ListOptions{Org: "acme"})
+	probe.Assert(t)
+}
+
+// The client restcore builds when none is supplied follows no redirect (restcore.go default branch).
+func TestTheDefaultClientNeverFollowsARedirectToAnotherOrigin(t *testing.T) {
+	probe := redirectprobe.New(t)
+	client := Client{Token: "SECRET-TOKEN", BaseURL: probe.Base.URL}
+	_, _ = client.ListRepositories(context.Background(), ListOptions{Org: "acme"})
+	probe.Assert(t)
+}
+
+// The wrapper works on a copy: the caller's own (possibly shared) client keeps its redirect policy.
+func TestTheSuppliedClientIsLeftUnchanged(t *testing.T) {
+	supplied := &http.Client{Transport: &scriptedTransport{responses: []scripted{ok(page(repoItem(1, "api")))}}}
+	client := Client{Token: "tok", HTTP: supplied}
+	_, _ = client.ListRepositories(context.Background(), ListOptions{Org: "acme"})
+	if supplied.CheckRedirect != nil {
+		t.Fatal("the caller's client had its redirect policy changed")
+	}
+}

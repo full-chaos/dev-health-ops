@@ -6,6 +6,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"github.com/full-chaos/dev-health-ops/internal/testsupport/fakehttp"
 	"testing"
 	"time"
 
@@ -130,7 +131,7 @@ WHERE id = $1`, firstUnitID); err != nil {
 	normalizedAt := claimNow.Add(123456 * time.Microsecond)
 	batch, err := (GitLabIncidentsRouteHandler{PerPage: 2}).Collect(
 		ctx, claim, providerfoundation.Credential{},
-		gitLabRepositoryClient(t, doer, "https://gitlab.example"),
+		gitLabRepositoryClient(t, fakehttp.Client(doer), "https://gitlab.example"),
 		normalizedAt,
 	)
 	if err != nil {
@@ -210,7 +211,7 @@ WHERE id = $1`, firstUnitID); err != nil {
 	}}
 	recoveredBatch, err := (GitLabIncidentsRouteHandler{PerPage: 2}).Collect(
 		ctx, recoveredClaim, providerfoundation.Credential{},
-		gitLabRepositoryClient(t, recoveryDoer, "https://gitlab.example"),
+		gitLabRepositoryClient(t, fakehttp.Client(recoveryDoer), "https://gitlab.example"),
 		persisted.CreatedAt,
 	)
 	if err != nil {

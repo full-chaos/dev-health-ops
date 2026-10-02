@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"github.com/full-chaos/dev-health-ops/internal/testsupport/fakehttp"
 	"io"
 	"net/http"
 	"strings"
@@ -51,7 +52,7 @@ func TestPagerDutyOnCallsRouteUsesOffsetPaginationAndCanonicalAssignment(t *test
 			{"type":"oncall","start":"2026-08-02T10:00:00Z","end":"2026-08-02T18:00:00Z","escalation_level":2,"user":{"id":"PU2"},"schedule":{"id":"PS2"},"escalation_policy":{"id":"PE2"},"created_at":"2026-07-31T09:00:00Z","self":"/oncalls/composite"}],"more":true}`},
 		{body: `{"oncalls":[],"more":false}`},
 	}}
-	client := pagerDutyOnCallsTestClient(t, doer, providerfoundation.RetryPolicy{
+	client := pagerDutyOnCallsTestClient(t, fakehttp.Client(doer), providerfoundation.RetryPolicy{
 		MaxAttempts: 1, InitialWait: time.Nanosecond, MaxWait: time.Nanosecond,
 	})
 	claim := nativeTestClaim("pagerduty", "on-calls")
@@ -116,9 +117,9 @@ func TestPagerDutyOnCallsRouteRejectsAnotherPagerDutyDataset(t *testing.T) {
 	credential := providerfoundation.Credential{
 		Provider: "pagerduty", Config: map[string]string{"subdomain": "acme"},
 	}
-	client := pagerDutyOnCallsTestClient(t, &pagerDutyOnCallsDoer{
+	client := pagerDutyOnCallsTestClient(t, fakehttp.Client(&pagerDutyOnCallsDoer{
 		t: t, responses: []pagerDutyOnCallsResponse{{body: `{"oncalls":[],"more":false}`}},
-	}, providerfoundation.RetryPolicy{MaxAttempts: 1, InitialWait: time.Nanosecond, MaxWait: time.Nanosecond})
+	}), providerfoundation.RetryPolicy{MaxAttempts: 1, InitialWait: time.Nanosecond, MaxWait: time.Nanosecond})
 	if _, err := (PagerDutyOnCallsRouteHandler{Entitlement: allowIncidentEntitlement}).Collect(
 		context.Background(), claim, credential, client,
 		time.Date(2026, 8, 9, 12, 0, 0, 0, time.UTC),
@@ -137,7 +138,7 @@ func TestPagerDutyOnCallsRoutePreservesRetryAndPermanentErrorSemantics(t *testin
 		{status: http.StatusTooManyRequests, body: `{"message":"slow down"}`},
 		{body: `{"oncalls":[],"more":false}`},
 	}}
-	retryClient := pagerDutyOnCallsTestClient(t, retryDoer, providerfoundation.RetryPolicy{
+	retryClient := pagerDutyOnCallsTestClient(t, fakehttp.Client(retryDoer), providerfoundation.RetryPolicy{
 		MaxAttempts: 2, InitialWait: time.Nanosecond, MaxWait: time.Nanosecond,
 	})
 	batch, err := (PagerDutyOnCallsRouteHandler{Entitlement: allowIncidentEntitlement}).Collect(
@@ -151,7 +152,7 @@ func TestPagerDutyOnCallsRoutePreservesRetryAndPermanentErrorSemantics(t *testin
 	authDoer := &pagerDutyOnCallsDoer{t: t, responses: []pagerDutyOnCallsResponse{
 		{status: http.StatusUnauthorized, body: `{"message":"bad token"}`},
 	}}
-	authClient := pagerDutyOnCallsTestClient(t, authDoer, providerfoundation.RetryPolicy{
+	authClient := pagerDutyOnCallsTestClient(t, fakehttp.Client(authDoer), providerfoundation.RetryPolicy{
 		MaxAttempts: 3, InitialWait: time.Nanosecond, MaxWait: time.Nanosecond,
 	})
 	_, err = (PagerDutyOnCallsRouteHandler{Entitlement: allowIncidentEntitlement}).Collect(
@@ -171,9 +172,9 @@ func TestPagerDutyOnCallsRouteFailsClosedOnPaginationCapAndInvalidAssignment(t *
 	credential := providerfoundation.Credential{
 		Provider: "pagerduty", Config: map[string]string{"subdomain": "acme"},
 	}
-	client := pagerDutyOnCallsTestClient(t, &pagerDutyOnCallsDoer{
+	client := pagerDutyOnCallsTestClient(t, fakehttp.Client(&pagerDutyOnCallsDoer{
 		t: t, responses: []pagerDutyOnCallsResponse{{body: `{"oncalls":[{"type":"oncall","user":{"id":"PU1"}}],"more":true}`}},
-	}, providerfoundation.RetryPolicy{MaxAttempts: 1, InitialWait: time.Nanosecond, MaxWait: time.Nanosecond})
+	}), providerfoundation.RetryPolicy{MaxAttempts: 1, InitialWait: time.Nanosecond, MaxWait: time.Nanosecond})
 	_, err := (PagerDutyOnCallsRouteHandler{Entitlement: allowIncidentEntitlement, MaxPages: 1}).Collect(
 		context.Background(), claim, credential, client,
 		time.Date(2026, 8, 9, 12, 0, 0, 0, time.UTC),
@@ -182,9 +183,9 @@ func TestPagerDutyOnCallsRouteFailsClosedOnPaginationCapAndInvalidAssignment(t *
 		t.Fatalf("cap error=%v", err)
 	}
 
-	invalidClient := pagerDutyOnCallsTestClient(t, &pagerDutyOnCallsDoer{
+	invalidClient := pagerDutyOnCallsTestClient(t, fakehttp.Client(&pagerDutyOnCallsDoer{
 		t: t, responses: []pagerDutyOnCallsResponse{{body: `{"oncalls":[{"type":"oncall","user":{"id":"PU1"}}],"more":false}`}},
-	}, providerfoundation.RetryPolicy{MaxAttempts: 1, InitialWait: time.Nanosecond, MaxWait: time.Nanosecond})
+	}), providerfoundation.RetryPolicy{MaxAttempts: 1, InitialWait: time.Nanosecond, MaxWait: time.Nanosecond})
 	_, err = (PagerDutyOnCallsRouteHandler{Entitlement: allowIncidentEntitlement}).Collect(
 		context.Background(), claim, credential, invalidClient,
 		time.Date(2026, 8, 9, 12, 0, 0, 0, time.UTC),
@@ -203,7 +204,7 @@ func TestPagerDutyOnCallsRouteStopsWhenLeaseExpiresBetweenPages(t *testing.T) {
 	}}
 	asserts := 0
 	client, err := providerfoundation.NewHTTPClient(
-		"pagerduty", "https://api.pagerduty.com", doer,
+		"pagerduty", "https://api.pagerduty.com", fakehttp.Client(doer),
 		func(*http.Request) error { return nil },
 		providerfoundation.RetryPolicy{MaxAttempts: 1, InitialWait: time.Nanosecond, MaxWait: time.Nanosecond},
 		providerfoundation.LeaseGuardFunc(func(context.Context) error {
@@ -232,7 +233,7 @@ func pagerDutyOnCallsTestClient(
 ) *providerfoundation.HTTPClient {
 	t.Helper()
 	client, err := providerfoundation.NewHTTPClient(
-		"pagerduty", "https://api.pagerduty.com", doer,
+		"pagerduty", "https://api.pagerduty.com", fakehttp.Client(doer),
 		func(*http.Request) error { return nil }, retry,
 		providerfoundation.LeaseGuardFunc(func(context.Context) error { return nil }),
 	)

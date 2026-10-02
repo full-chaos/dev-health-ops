@@ -3,7 +3,6 @@ package remaining
 import (
 	"context"
 	"errors"
-	"fmt"
 	"log/slog"
 	"slices"
 	"strings"
@@ -211,7 +210,7 @@ func (w *WorkItemAttributionClickHouseWriter) WriteAttributions(
 (org_id, repo_id, work_item_id, provider, team_id, team_name, source,
 is_primary, confidence, evidence, computed_at, writer, run_id)`)
 	if err != nil {
-		return 0, fmt.Errorf("prepare work_item_team_attributions batch: %w", err)
+		return 0, stepFailure("prepare work_item_team_attributions batch", err)
 	}
 	for _, row := range rows {
 		if strings.TrimSpace(row.OrgID) == "" {
@@ -230,7 +229,7 @@ is_primary, confidence, evidence, computed_at, writer, run_id)`)
 			workitemcontract.AttributionVersionFold(row.ComputedAt, producer.Writer, workItemAttributionStampPrecision),
 			producer.Writer, producer.RunID,
 		); err != nil {
-			return 0, fmt.Errorf("append work_item_team_attributions row: %w", err)
+			return 0, stepFailure("append work_item_team_attributions row", err)
 		}
 	}
 	// #2276 confirmation-pass sweep (found independently before launching
@@ -245,7 +244,7 @@ is_primary, confidence, evidence, computed_at, writer, run_id)`)
 	// #2246/CHAOS-5078 on main, merged into this branch after that sweep
 	// already ran.
 	if err := batch.Send(); err != nil {
-		return len(rows), fmt.Errorf("send work_item_team_attributions batch: %w", err)
+		return len(rows), stepFailure("send work_item_team_attributions batch", err)
 	}
 	return len(rows), nil
 }
@@ -264,15 +263,15 @@ func (w *WorkItemAttributionClickHouseWriter) WriteAttributionRun(
 		org_id, run_id, completed_at, promoted_reason
 	)`)
 	if err != nil {
-		return fmt.Errorf("prepare work_item_attribution_backstop_runs batch: %w", err)
+		return stepFailure("prepare work_item_attribution_backstop_runs batch", err)
 	}
 	if err := batch.Append(
 		record.OrgID, record.RunID, record.CompletedAt.UTC(), record.PromotedReason,
 	); err != nil {
-		return fmt.Errorf("append work_item_attribution_backstop_runs row: %w", err)
+		return stepFailure("append work_item_attribution_backstop_runs row", err)
 	}
 	if err := batch.Send(); err != nil {
-		return fmt.Errorf("send work_item_attribution_backstop_runs batch: %w", err)
+		return stepFailure("send work_item_attribution_backstop_runs batch", err)
 	}
 	return nil
 }
@@ -292,7 +291,7 @@ func (w *WorkItemAttributionClickHouseWriter) WriteScopedAttributionRuns(
 		org_id, scope_kind, scope_id, run_id, completed_at
 	)`)
 	if err != nil {
-		return fmt.Errorf("prepare work_item_attribution_backstop_scoped_runs batch: %w", err)
+		return stepFailure("prepare work_item_attribution_backstop_scoped_runs batch", err)
 	}
 	for _, record := range records {
 		if strings.TrimSpace(record.OrgID) == "" {
@@ -302,11 +301,11 @@ func (w *WorkItemAttributionClickHouseWriter) WriteScopedAttributionRuns(
 			record.OrgID, record.ScopeKind, record.ScopeID,
 			record.RunID, record.CompletedAt.UTC(),
 		); err != nil {
-			return fmt.Errorf("append work_item_attribution_backstop_scoped_runs row: %w", err)
+			return stepFailure("append work_item_attribution_backstop_scoped_runs row", err)
 		}
 	}
 	if err := batch.Send(); err != nil {
-		return fmt.Errorf("send work_item_attribution_backstop_scoped_runs batch: %w", err)
+		return stepFailure("send work_item_attribution_backstop_scoped_runs batch", err)
 	}
 	return nil
 }

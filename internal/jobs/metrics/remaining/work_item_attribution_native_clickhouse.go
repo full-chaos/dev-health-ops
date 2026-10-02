@@ -570,7 +570,7 @@ FROM work_item_attribution_backstop_scoped_runs
 WHERE org_id = ?
 GROUP BY scope_kind, scope_id`, orgID)
 	if err != nil {
-		return nil, nil, fmt.Errorf("query scoped watermarks: %w", err)
+		return nil, nil, stepFailure("query scoped watermarks", err)
 	}
 	defer func() { _ = rows.Close() }()
 	repos = map[string]time.Time{}
@@ -579,7 +579,7 @@ GROUP BY scope_kind, scope_id`, orgID)
 		var kind, id string
 		var completedAt time.Time
 		if err := rows.Scan(&kind, &id, &completedAt); err != nil {
-			return nil, nil, fmt.Errorf("scan scoped watermark: %w", err)
+			return nil, nil, stepFailure("scan scoped watermark", err)
 		}
 		switch kind {
 		case "repo":
@@ -598,7 +598,7 @@ func (executor *WorkItemAttributionExecutor) scopeChanges(
 ) (map[string]time.Time, error) {
 	rows, err := executor.conn.Query(ctx, query, asOf, asOf, orgID)
 	if err != nil {
-		return nil, fmt.Errorf("query scope changes: %w", err)
+		return nil, stepFailure("query scope changes", err)
 	}
 	defer func() { _ = rows.Close() }()
 	result := map[string]time.Time{}
@@ -606,7 +606,7 @@ func (executor *WorkItemAttributionExecutor) scopeChanges(
 		var id string
 		var changedAt time.Time
 		if err := rows.Scan(&id, &changedAt); err != nil {
-			return nil, fmt.Errorf("scan scope change: %w", err)
+			return nil, stepFailure("scan scope change", err)
 		}
 		result[id] = changedAt
 	}
@@ -621,7 +621,7 @@ func (executor *WorkItemAttributionExecutor) maxUpdatedAt(
 ) (time.Time, error) {
 	rows, err := executor.conn.Query(ctx, query, orgID)
 	if err != nil {
-		return time.Time{}, fmt.Errorf("query max updated_at: %w", err)
+		return time.Time{}, stepFailure("query max updated_at", err)
 	}
 	defer func() { _ = rows.Close() }()
 	if !rows.Next() {
@@ -629,7 +629,7 @@ func (executor *WorkItemAttributionExecutor) maxUpdatedAt(
 	}
 	var value *time.Time
 	if err := rows.Scan(&value); err != nil {
-		return time.Time{}, fmt.Errorf("scan max updated_at: %w", err)
+		return time.Time{}, stepFailure("scan max updated_at", err)
 	}
 	if err := rows.Err(); err != nil {
 		return time.Time{}, err
@@ -654,7 +654,7 @@ func (executor *WorkItemAttributionExecutor) maxEffectiveChangedAt(
 ) (time.Time, error) {
 	rows, err := executor.conn.Query(ctx, query, asOf, asOf, orgID)
 	if err != nil {
-		return time.Time{}, fmt.Errorf("query max effective changed_at: %w", err)
+		return time.Time{}, stepFailure("query max effective changed_at", err)
 	}
 	defer func() { _ = rows.Close() }()
 	if !rows.Next() {
@@ -662,7 +662,7 @@ func (executor *WorkItemAttributionExecutor) maxEffectiveChangedAt(
 	}
 	var value *time.Time
 	if err := rows.Scan(&value); err != nil {
-		return time.Time{}, fmt.Errorf("scan max effective changed_at: %w", err)
+		return time.Time{}, stepFailure("scan max effective changed_at", err)
 	}
 	if err := rows.Err(); err != nil {
 		return time.Time{}, err
@@ -770,7 +770,7 @@ func querySubjectsInto(
 ) (map[string]teamattribution.GithubWorkItemDerivationSubject, error) {
 	rows, err := conn.Query(ctx, query, args...)
 	if err != nil {
-		return nil, fmt.Errorf("query work_items: %w", err)
+		return nil, stepFailure("query work_items", err)
 	}
 	defer func() { _ = rows.Close() }()
 	result := map[string]teamattribution.GithubWorkItemDerivationSubject{}
@@ -782,7 +782,7 @@ func querySubjectsInto(
 			&subject.ProjectKey, &subject.ProjectID, &subject.ProjectName,
 			&subject.Assignees, &subject.Reporter, &subject.OrgID,
 		); err != nil {
-			return nil, fmt.Errorf("scan work_items row: %w", err)
+			return nil, stepFailure("scan work_items row", err)
 		}
 		if repoID != "" && repoID != uuid.Nil.String() {
 			subject.RepoID = &repoID
@@ -820,14 +820,14 @@ SELECT source_work_item_id, target_work_item_id, relationship_type, last_synced
 FROM work_item_dependencies FINAL
 WHERE org_id = ? AND has(?, source_work_item_id)`, orgID, ids)
 	if err != nil {
-		return nil, fmt.Errorf("query work_item_dependencies: %w", err)
+		return nil, stepFailure("query work_item_dependencies", err)
 	}
 	defer func() { _ = rows.Close() }()
 	var result []teamattribution.GithubWorkItemDerivationDependencyEdge
 	for rows.Next() {
 		var edge teamattribution.GithubWorkItemDerivationDependencyEdge
 		if err := rows.Scan(&edge.SourceWorkItemID, &edge.TargetWorkItemID, &edge.RelationshipType, &edge.LastSynced); err != nil {
-			return nil, fmt.Errorf("scan work_item_dependencies row: %w", err)
+			return nil, stepFailure("scan work_item_dependencies row", err)
 		}
 		edge.OrgID = orgID
 		result = append(result, edge)
@@ -1007,7 +1007,7 @@ SELECT source_work_item_id, target_work_item_id, relationship_type, last_synced
 FROM work_item_dependencies FINAL
 WHERE org_id = ? AND has(?, target_work_item_id)`, orgID, ids)
 	if err != nil {
-		return nil, fmt.Errorf("query work_item_dependencies (reverse closure): %w", err)
+		return nil, stepFailure("query work_item_dependencies (reverse closure)", err)
 	}
 	defer func() { _ = rows.Close() }()
 	var edges []teamattribution.GithubWorkItemDerivationDependencyEdge
@@ -1016,7 +1016,7 @@ WHERE org_id = ? AND has(?, target_work_item_id)`, orgID, ids)
 		if err := rows.Scan(
 			&edge.SourceWorkItemID, &edge.TargetWorkItemID, &edge.RelationshipType, &edge.LastSynced,
 		); err != nil {
-			return nil, fmt.Errorf("scan work_item_dependencies row (reverse closure): %w", err)
+			return nil, stepFailure("scan work_item_dependencies row (reverse closure)", err)
 		}
 		edge.OrgID = orgID
 		edges = append(edges, edge)
@@ -1051,7 +1051,7 @@ func (executor *WorkItemAttributionExecutor) orgItemCount(ctx context.Context, o
 	// the column's own width, not the width this file otherwise thinks in.
 	var count uint64
 	if err := row.Scan(&count); err != nil {
-		return 0, fmt.Errorf("count work_items: %w", err)
+		return 0, stepFailure("count work_items", err)
 	}
 	return int(count), nil
 }
@@ -1131,13 +1131,13 @@ FROM work_item_team_attributions
 WHERE org_id = ? AND has(?, work_item_id) AND toDate(computed_at) = toDate(?)`,
 		orgID, idList, now)
 	if err != nil {
-		return nil, fmt.Errorf("query already-covered-today attributions: %w", err)
+		return nil, stepFailure("query already-covered-today attributions", err)
 	}
 	defer func() { _ = rows.Close() }()
 	for rows.Next() {
 		var id string
 		if err := rows.Scan(&id); err != nil {
-			return nil, fmt.Errorf("scan already-covered-today row: %w", err)
+			return nil, stepFailure("scan already-covered-today row", err)
 		}
 		covered[id] = struct{}{}
 	}

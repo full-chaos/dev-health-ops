@@ -795,6 +795,19 @@ const registeredCapacityForecastDocument = `query CapacityForecast($orgId: Strin
     historyDays
     insufficientHistory
     highVariance
+    completionDistribution {
+      days {
+        value
+        count
+        __typename
+      }
+      items {
+        value
+        count
+        __typename
+      }
+      __typename
+    }
     __typename
   }
 }`

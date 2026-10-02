@@ -59,6 +59,14 @@ var (
 	PrepareWorkItemAttributionBackstopScopedRunsBatch = Step{label: "prepare work_item_attribution_backstop_scoped_runs batch"}
 	AppendWorkItemAttributionBackstopScopedRunsRow    = Step{label: "append work_item_attribution_backstop_scoped_runs row"}
 	SendWorkItemAttributionBackstopScopedRunsBatch    = Step{label: "send work_item_attribution_backstop_scoped_runs batch"}
+	IterateScopedWatermarks                           = Step{label: "iterate scoped watermarks"}
+	IterateScopeChanges                               = Step{label: "iterate scope changes"}
+	IterateMaxUpdatedAt                               = Step{label: "iterate max updated_at"}
+	IterateMaxEffectiveChangedAt                      = Step{label: "iterate max effective changed_at"}
+	IterateWorkItems                                  = Step{label: "iterate work_items rows"}
+	IterateWorkItemDependencies                       = Step{label: "iterate work_item_dependencies rows"}
+	IterateWorkItemDependenciesReverseClosure         = Step{label: "iterate work_item_dependencies rows (reverse closure)"}
+	IterateAlreadyCoveredTodayRows                    = Step{label: "iterate already-covered-today rows"}
 	ClaimPartition                                    = Step{label: "claim_partition"}
 	LoadRun                                           = Step{label: "load_run"}
 	ComputePartition                                  = Step{label: "compute_partition"}

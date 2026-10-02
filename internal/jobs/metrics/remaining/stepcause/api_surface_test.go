@@ -10,6 +10,14 @@ import (
 
 var allowedExports = map[string]bool{
 	"Step": true, "Failure": true,
+	"IterateScopedWatermarks":                           true,
+	"IterateScopeChanges":                               true,
+	"IterateMaxUpdatedAt":                               true,
+	"IterateMaxEffectiveChangedAt":                      true,
+	"IterateWorkItems":                                  true,
+	"IterateWorkItemDependencies":                       true,
+	"IterateWorkItemDependenciesReverseClosure":         true,
+	"IterateAlreadyCoveredTodayRows":                    true,
 	"QueryScopedWatermarks":                             true,
 	"ScanScopedWatermark":                               true,
 	"QueryScopeChanges":                                 true,
@@ -124,7 +132,7 @@ func TestExportedAPIStaysClosed(t *testing.T) {
 			t.Errorf("allow-listed name %s is no longer exported", name)
 		}
 	}
-	if exported < 30 {
+	if exported < 38 {
 		t.Fatalf("only %d exported names found; the surface check did not see the package", exported)
 	}
 }

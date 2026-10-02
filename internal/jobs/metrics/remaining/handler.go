@@ -140,6 +140,13 @@ func (handler *PartitionHandler[T]) Work(
 			return jobruntime.WithReason(jobruntime.Permanent(err), jobruntime.ReasonInvalidState)
 		}
 		releaseClaim(handler.store, ctx, *claim)
+		// An error the executor already tagged with its exact step keeps that
+		// cause: a second, generic compute_partition step on top would repeat
+		// the codes and bury the specific step. Only an untagged error gets the
+		// handler's own step.
+		if _, tagged := jobruntime.SafeCause(err); tagged {
+			return jobruntime.Retryable(err)
+		}
 		return jobruntime.Retryable(stepcause.Failure(stepcause.ComputePartition, err))
 	}
 	if err := handler.store.CompletePartition(

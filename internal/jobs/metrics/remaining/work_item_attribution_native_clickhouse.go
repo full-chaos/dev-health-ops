@@ -589,7 +589,7 @@ GROUP BY scope_kind, scope_id`, orgID)
 			projects[id] = completedAt
 		}
 	}
-	return repos, projects, rows.Err()
+	return repos, projects, stepcause.Failure(stepcause.IterateScopedWatermarks, rows.Err())
 }
 
 // scopeChanges runs a `SELECT scope_id, max(updated_at) ... GROUP BY
@@ -611,7 +611,7 @@ func (executor *WorkItemAttributionExecutor) scopeChanges(
 		}
 		result[id] = changedAt
 	}
-	return result, rows.Err()
+	return result, stepcause.Failure(stepcause.IterateScopeChanges, rows.Err())
 }
 
 // maxUpdatedAt runs a single-row `SELECT max(...)` query, treating a
@@ -626,14 +626,14 @@ func (executor *WorkItemAttributionExecutor) maxUpdatedAt(
 	}
 	defer func() { _ = rows.Close() }()
 	if !rows.Next() {
-		return time.Time{}, rows.Err()
+		return time.Time{}, stepcause.Failure(stepcause.IterateMaxUpdatedAt, rows.Err())
 	}
 	var value *time.Time
 	if err := rows.Scan(&value); err != nil {
 		return time.Time{}, stepcause.Failure(stepcause.ScanMaxUpdatedAt, err)
 	}
 	if err := rows.Err(); err != nil {
-		return time.Time{}, err
+		return time.Time{}, stepcause.Failure(stepcause.IterateMaxUpdatedAt, err)
 	}
 	if value == nil {
 		return time.Time{}, nil
@@ -659,14 +659,14 @@ func (executor *WorkItemAttributionExecutor) maxEffectiveChangedAt(
 	}
 	defer func() { _ = rows.Close() }()
 	if !rows.Next() {
-		return time.Time{}, rows.Err()
+		return time.Time{}, stepcause.Failure(stepcause.IterateMaxEffectiveChangedAt, rows.Err())
 	}
 	var value *time.Time
 	if err := rows.Scan(&value); err != nil {
 		return time.Time{}, stepcause.Failure(stepcause.ScanMaxEffectiveChangedAt, err)
 	}
 	if err := rows.Err(); err != nil {
-		return time.Time{}, err
+		return time.Time{}, stepcause.Failure(stepcause.IterateMaxEffectiveChangedAt, err)
 	}
 	if value == nil {
 		return time.Time{}, nil
@@ -790,7 +790,7 @@ func querySubjectsInto(
 		}
 		result[subject.WorkItemID] = subject
 	}
-	return result, rows.Err()
+	return result, stepcause.Failure(stepcause.IterateWorkItems, rows.Err())
 }
 
 // loadDependencyEdges loads work_item_dependencies rows whose SOURCE is one
@@ -833,7 +833,7 @@ WHERE org_id = ? AND has(?, source_work_item_id)`, orgID, ids)
 		edge.OrgID = orgID
 		result = append(result, edge)
 	}
-	return result, rows.Err()
+	return result, stepcause.Failure(stepcause.IterateWorkItemDependencies, rows.Err())
 }
 
 // WorkItemAttributionDonorTargets is workItemAttributionDonorTargets, exported
@@ -1023,7 +1023,7 @@ WHERE org_id = ? AND has(?, target_work_item_id)`, orgID, ids)
 		edges = append(edges, edge)
 	}
 	if err := rows.Err(); err != nil {
-		return nil, err
+		return nil, stepcause.Failure(stepcause.IterateWorkItemDependenciesReverseClosure, err)
 	}
 	seen := map[string]struct{}{}
 	var sources []string
@@ -1142,7 +1142,7 @@ WHERE org_id = ? AND has(?, work_item_id) AND toDate(computed_at) = toDate(?)`,
 		}
 		covered[id] = struct{}{}
 	}
-	return covered, rows.Err()
+	return covered, stepcause.Failure(stepcause.IterateAlreadyCoveredTodayRows, rows.Err())
 }
 
 // publishRunMarkers writes the completion marker(s) for a completed run:

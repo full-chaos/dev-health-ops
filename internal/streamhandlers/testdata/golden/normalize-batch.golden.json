@@ -1,0 +1,32 @@
+{
+  "header": {
+    "test": "TestNormalizeExternalRecordsMatchesFrozenPythonNormalizeBatch",
+    "python_build": "a4847c5e93607451a0c987b314d37e02fc43ce85",
+    "producer_digest": "6e1dc97e68624398015f60caee160cceee6ae601bd434d01b8b7d5975267e137",
+    "recipe": "git worktree add --detach $DIR a4847c5e93607451a0c987b314d37e02fc43ce85 (with its .venv: uv sync --frozen --no-install-project); then from the repository root: go run ./internal/testsupport/venueoracle/goldenrecord -pkg ./internal/streamhandlers/ -test '^TestNormalizeExternalRecordsMatchesFrozenPythonNormalizeBatch$' -python-root $DIR",
+    "recorded_by": "goldenrecord",
+    "blanked": {}
+  },
+  "requests": [
+    {
+      "name": "producer identity",
+      "method": "PYTHON",
+      "path": "program sha256 bce8d790f62931e4eb4b1bfeb4a8158448d91a3b419f84b30ec51054c3d67d1d env sha256 969169a1702b285f3a9e4b602d19052b0d6a3c6b2a44dd7425bef0f696436295",
+      "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "request_headers_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "status": 0,
+      "headers": {},
+      "body": "python 3.14.7\nunicodedata 16.0.0\nemail-validator 2.3.0\npydantic 2.13.5\npydantic-core 2.46.5\n"
+    },
+    {
+      "name": "normalize batch",
+      "method": "PYTHON",
+      "path": "program sha256 8e7d07fcc5ca440a19ab31e243e819b9fc3a8bc0081ca27554e298ad66d6fcc8 env sha256 969169a1702b285f3a9e4b602d19052b0d6a3c6b2a44dd7425bef0f696436295",
+      "body_sha256": "5698d11ceed5a4fbf591dd1926ef7f719664ec4bf661df26fc06f71c00772274",
+      "request_headers_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "status": 0,
+      "headers": {},
+      "body": "[[], [{\"index\": 0, \"kind\": \"identity.v1\", \"externalId\": \"u1\", \"code\": \"missing_required_field\", \"message\": \"Field required\", \"path\": \"records[0].payload.canonicalId\"}], [{\"index\": 0, \"kind\": \"repository.v1\", \"externalId\": \"r1\", \"code\": \"missing_required_field\", \"message\": \"Field required\", \"path\": \"records[0].payload.externalId\"}], [{\"index\": 0, \"kind\": \"repository.v1\", \"externalId\": \"r1\", \"code\": \"unsupported_kind_for_system\", \"message\": \"record kind 'repository.v1' is not accepted for source system 'jira' (master-spec CC6)\", \"path\": \"records[0].kind\"}], [{\"index\": 0, \"kind\": \"nope.v1\", \"externalId\": \"x\", \"code\": \"unknown_kind\", \"message\": \"Unknown record kind: 'nope.v1'\", \"path\": \"records[0].kind\"}], [{\"index\": 0, \"kind\": \"service_repository_mapping.v1\", \"externalId\": \"m1\", \"code\": \"repository_identity_required\", \"message\": \"service_repository_mapping requires repoFullName and repoProvider\", \"path\": \"records[0].payload\"}], [{\"index\": 0, \"kind\": \"service_repository_mapping.v1\", \"externalId\": \"m1\", \"code\": \"repository_identity_required\", \"message\": \"service_repository_mapping requires repoFullName and repoProvider\", \"path\": \"records[0].payload\"}], [], [{\"index\": 0, \"kind\": \"repository.v1\", \"externalId\": \"r1\", \"code\": \"record_outside_source_instance\", \"message\": \"repository identifier 'someone-else/other-repo' does not match this batch's source.instance 'acme/repo' (master-spec CC6)\", \"path\": \"records[0].payload\"}], [], [{\"index\": 0, \"kind\": \"repository.v1\", \"externalId\": \"r1\", \"code\": \"record_outside_source_instance\", \"message\": \"repository identifier 'someone-else/other-repo' does not match this batch's source.instance 'acme/repo' (master-spec CC6)\", \"path\": \"records[0].payload\"}], [{\"index\": 0, \"kind\": \"repository.v1\", \"externalId\": \"r1\", \"code\": \"record_outside_source_instance\", \"message\": \"repository identifier 'someone-else/other-repo' does not match this batch's source.instance 'acme/repo' (master-spec CC6)\", \"path\": \"records[0].payload\"}], [{\"index\": 0, \"kind\": \"commit.v1\", \"externalId\": \"c1\", \"code\": \"record_outside_source_instance\", \"message\": \"repository identifier 'someone-else/other-repo' does not match this batch's source.instance 'acme/repo' (master-spec CC6)\", \"path\": \"records[0].payload\"}], [{\"index\": 1, \"kind\": \"identity.v1\", \"externalId\": \"u1\", \"code\": \"missing_required_field\", \"message\": \"Field required\", \"path\": \"records[1].payload.canonicalId\"}], []]\n"
+    }
+  ]
+}

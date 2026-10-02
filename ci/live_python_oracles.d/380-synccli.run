@@ -1,5 +1,0 @@
-label=internal/synccli (dho sync <target> request handling vs the REAL dev-hops argparse, preflight and run_sync_target; the --search batch loop vs the REAL process_*_batch)
-package=./internal/synccli
-run=^(TestSyncTargetMatchesLivePython|TestBatchLoopMatchesLivePython)$
-proof=cli-sync-target|the dho sync <target> live Python oracle measurement did not occur
-proof=cli-sync-batch-loop|the dho sync --search batch loop live Python oracle measurement did not occur

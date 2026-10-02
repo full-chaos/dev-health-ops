@@ -526,13 +526,111 @@ func TestASecondRunThatWritesAnExtraCandidateIsRefused(t *testing.T) {
 	}
 }
 
-func TestBothRecordingRunsGetTheSameEnvironment(t *testing.T) {
+func withoutTmpdir(env []string) string {
+	var kept []string
+	for _, entry := range env {
+		if !strings.HasPrefix(entry, "TMPDIR=") {
+			kept = append(kept, entry)
+		}
+	}
+	return strings.Join(kept, "\n")
+}
+
+func tmpdirOf(t *testing.T, env []string) string {
+	t.Helper()
+	found := ""
+	for _, entry := range env {
+		if value, ok := strings.CutPrefix(entry, "TMPDIR="); ok {
+			found = value
+		}
+	}
+	if found == "" {
+		t.Fatal("a recording run was given no TMPDIR")
+	}
+	return found
+}
+
+// The two recording runs get one environment, but for the scratch directory (TMPDIR).
+func TestBothRecordingRunsGetTheSameEnvironmentButTheScratchDirectory(t *testing.T) {
 	cfg, fake, _ := fixture(t, "")
 	if _, err := Record(context.Background(), cfg); err != nil {
 		t.Fatal(err)
 	}
-	if len(fake.recordEnvs) != 2 || strings.Join(fake.recordEnvs[0], "\n") != strings.Join(fake.recordEnvs[1], "\n") {
-		t.Fatalf("the two recording runs got different environments: %v", fake.recordEnvs)
+	if len(fake.recordEnvs) != 2 || withoutTmpdir(fake.recordEnvs[0]) != withoutTmpdir(fake.recordEnvs[1]) {
+		t.Fatalf("the two recording runs got different environments besides TMPDIR: %v", fake.recordEnvs)
+	}
+}
+
+// CHAOS-7909: the second recording runs under a scratch directory of another depth and another name.
+func TestTheSecondRecordingRunsUnderAScratchDirectoryOfAnotherDepthAndName(t *testing.T) {
+	cfg, fake, _ := fixture(t, "")
+	var existed []bool
+	run := cfg.Run
+	cfg.Run = func(c Config, env []string) error {
+		for _, entry := range env {
+			if entry == "DHO_VENUE_GOLDEN_UPDATE=1" {
+				info, err := os.Stat(tmpdirOf(t, env))
+				existed = append(existed, err == nil && info.IsDir())
+			}
+		}
+		return run(c, env)
+	}
+	if _, err := Record(context.Background(), cfg); err != nil {
+		t.Fatal(err)
+	}
+	first, second := tmpdirOf(t, fake.recordEnvs[0]), tmpdirOf(t, fake.recordEnvs[1])
+	depth := func(path string) int { return len(strings.Split(filepath.ToSlash(filepath.Clean(path)), "/")) }
+	if depth(first) == depth(second) || filepath.Base(first) == filepath.Base(second) {
+		t.Fatalf("the two runs ran under scratch directories of the same depth or name: %q %q", first, second)
+	}
+	if len(existed) != 2 || !existed[0] || !existed[1] {
+		t.Fatalf("a scratch directory did not exist while its run was started: %v", existed)
+	}
+	if exists(first) || exists(second) {
+		t.Fatal("a scratch directory is left behind after the recording")
+	}
+}
+
+// A path-depth-dependent answer (the depth of the temp path in a recorded value) differs between the two
+// runs and is refused at record time, naming the field and not the value.
+func TestAnAnswerThatDependsOnTheDepthOfTheScratchDirectoryIsRefused(t *testing.T) {
+	cfg, fake, dir := fixture(t, "")
+	fake.perRun = func(int) string { return "" }
+	run := cfg.Run
+	cfg.Run = func(c Config, env []string) error {
+		depth := len(strings.Split(filepath.ToSlash(filepath.Clean(tmpdirOf(t, env))), "/"))
+		fake.candidateBody = fmt.Sprintf(`{"requests":[{"name":"r","body":"depth %d"}]}`, depth) + "\n"
+		fake.perRun = func(int) string { return fake.candidateBody }
+		return run(c, env)
+	}
+	_, err := Record(context.Background(), cfg)
+	if err == nil || !strings.Contains(err.Error(), "GoldenSpec.Scrub") || !strings.Contains(err.Error(), "request r body") {
+		t.Fatalf("a depth-dependent answer was not refused by field: %v", err)
+	}
+	if exists(filepath.Join(dir, "testdata", "g.json")) {
+		t.Fatal("a golden was written after the refusal")
+	}
+}
+
+// If the second run cannot use another depth, the verb fails loudly instead of recording a weaker check.
+func TestARecordingThatCannotUseAnotherDepthFailsLoudly(t *testing.T) {
+	cfg, fake, _ := fixture(t, "")
+	old := scratchDirs
+	defer func() { scratchDirs = old }()
+	scratchDirs = func() (string, string, func(), error) {
+		a, b := t.TempDir(), t.TempDir()
+		return a + "/same", b + "/same", func() {}, nil
+	}
+	_, err := Record(context.Background(), cfg)
+	if err == nil || !strings.Contains(err.Error(), "same depth or name") {
+		t.Fatalf("same-depth scratch directories were accepted: %v", err)
+	}
+	if len(fake.calls) != 0 {
+		t.Fatalf("a run started although the scratch directories were not different: %v", fake.calls)
+	}
+	scratchDirs = func() (string, string, func(), error) { return "", "", nil, errors.New("no space") }
+	if _, err := Record(context.Background(), cfg); err == nil || !strings.Contains(err.Error(), "scratch directories of different depths") {
+		t.Fatalf("a failing scratch setup was not reported: %v", err)
 	}
 }
 

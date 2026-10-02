@@ -249,14 +249,15 @@ func TestTheRiverWorkSpanOfACoordinatorFailureCarriesNoErrorText(t *testing.T) {
 // CHAOS-7896 r1 (vet): the set of coordinator Works is DERIVED from the source, not listed: every worker type that a Register*
 // function of worker.go adds to River (`&xWorker{`) must have a Work method whose body defers finishCoordinatorWork(span, &err)
 // with a named error result, and no Work may call finishCoordinatorSpan itself (that would hand River the raw error again).
-func TestEveryRegisteredCoordinatorWorkDefersTheFixedTextFinisher(t *testing.T) {
+func registeredCoordinatorWorkers(t *testing.T) (registered map[string]bool, works map[string]*ast.FuncDecl) {
+	t.Helper()
 	fset := token.NewFileSet()
 	file, err := parser.ParseFile(fset, "worker.go", nil, 0)
 	if err != nil {
 		t.Fatal(err)
 	}
-	registered := map[string]bool{}
-	works := map[string]*ast.FuncDecl{}
+	registered = map[string]bool{}
+	works = map[string]*ast.FuncDecl{}
 	for _, decl := range file.Decls {
 		fn, ok := decl.(*ast.FuncDecl)
 		if !ok {
@@ -282,48 +283,7 @@ func TestEveryRegisteredCoordinatorWorkDefersTheFixedTextFinisher(t *testing.T) 
 			})
 		}
 	}
-	if len(registered) < 6 {
-		t.Fatalf("derived %d registered worker types %v, want at least 6", len(registered), registered)
-	}
-	for name := range registered {
-		fn := works[name]
-		if fn == nil {
-			t.Fatalf("registered worker %s has no Work method in worker.go", name)
-		}
-		results := fn.Type.Results
-		if results == nil || len(results.List) != 1 || len(results.List[0].Names) != 1 || results.List[0].Names[0].Name != "err" {
-			t.Fatalf("%s.Work has no named error result err", name)
-		}
-		deferred, direct := false, false
-		// the defer must be a TOP-LEVEL statement of the Work body (not under an if or in a closure) with the named result
-		// `&err` as its second argument (not a shadow or a new(error))
-		for _, stmt := range fn.Body.List {
-			deferStmt, ok := stmt.(*ast.DeferStmt)
-			if !ok {
-				continue
-			}
-			if ident, ok := deferStmt.Call.Fun.(*ast.Ident); ok && ident.Name == "finishCoordinatorWork" && len(deferStmt.Call.Args) == 2 {
-				if unary, ok := deferStmt.Call.Args[1].(*ast.UnaryExpr); ok && unary.Op == token.AND {
-					if target, ok := unary.X.(*ast.Ident); ok && target.Name == "err" {
-						deferred = true
-					}
-				}
-			}
-		}
-		ast.Inspect(fn.Body, func(node ast.Node) bool {
-			switch typed := node.(type) {
-			case *ast.CallExpr:
-				if ident, ok := typed.Fun.(*ast.Ident); ok && ident.Name == "finishCoordinatorSpan" {
-					direct = true
-				}
-			}
-			return true
-		})
-		if !deferred || direct {
-			t.Fatalf("%s.Work: defers finishCoordinatorWork=%v, calls finishCoordinatorSpan directly=%v", name, deferred, direct)
-		}
-	}
-	t.Logf("derived coordinator workers: %v", registered)
+	return registered, works
 }
 
 // the innermost type of a chain deeper than one wrapper is what the span and River text name

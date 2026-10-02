@@ -53,8 +53,8 @@ var worldFiles embed.FS
 // LoadFrozenWorld checks it on every load, not only in CI, because the parameters alone (RepoName,
 // Days, Seed, ...) name a world but say nothing about whether its rows are the ones the digest was
 // taken over -- a corrupted, truncated or hand-edited file with the same parameters would otherwise
-// load silently. A file changes only by re-running TestFreezeGenerateWorlds against the live Python
-// producer, and then its digest here is updated in the same commit.
+// load silently. A file is not rewritten: its freezer (TestFreezeGenerateWorlds) was removed with CHAOS-7793,
+// because the Python producer cannot run again.
 var frozenWorldDigests = map[string]string{
 	"testdata/generate/synthetic_acme__live-e2e_r1_14d_c6_p24_t10_s20260219_mg.json.gz":             "4767e3ae066bfa89336bc37d19644f137ef1cf0ce60e568468c55783a3400833",
 	"testdata/generate/github_acme__live-e2e_r1_14d_c6_p24_t10_s20260219_raw.json.gz":               "317334daef77b2599258ee9701a04beef37b328e12492c768b4c0c8a6b12f8eb",

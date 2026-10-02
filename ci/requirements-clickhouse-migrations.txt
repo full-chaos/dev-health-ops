@@ -101,7 +101,8 @@ six==1.17.0
 pyjwt==2.15.0
 
 # --- the sync-verb oracle (dho sync <target>: DB lookups, first organization) ---
-# internal/synccli's TestDBLookupsMatchLivePython runs the REAL verb path:
+# internal/synccli's db-lookup oracle ran the REAL verb path (now frozen, CHAOS-7319; the closure below is what
+# recording it again needs):
 # dev_health_ops.cli.build_parser() and dev_health_ops.processors.sync, whose
 # import closure reaches processors/github and processors/gitlab (PyGithub,
 # python-gitlab, requests, requests-toolbelt, radon through

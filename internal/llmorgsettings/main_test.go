@@ -16,6 +16,8 @@ import (
 // this package must read from this same shared reader.
 var realMeterReader *sdkmetric.ManualReader
 
+// TestMain also fails the run when a test of this package that ran did not use
+// its golden: a frozen answer no test compares is a comparison that stopped.
 func TestMain(m *testing.M) {
 	realMeterReader = sdkmetric.NewManualReader()
 	otel.SetMeterProvider(sdkmetric.NewMeterProvider(sdkmetric.WithReader(realMeterReader)))

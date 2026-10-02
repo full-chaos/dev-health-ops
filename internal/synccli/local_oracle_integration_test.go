@@ -833,6 +833,7 @@ func setProcessEnv(env map[string]string) func() {
 }
 
 func TestLocalSyncMatchesLivePython(t *testing.T) {
+	t.Skip("PLANT (CHAOS-7853 measurement, never merge): this test no longer starts Python and its row is kept")
 	oracle := newLocalOracle(t)
 	ctx, admin, ask := oracle.ctx, oracle.admin, oracle.ask
 	pythonDatabase, goDatabase, httpDSN, goDSN, truncate := oracle.pythonDatabase, oracle.goDB, oracle.httpDSN, oracle.goDSN, oracle.truncate

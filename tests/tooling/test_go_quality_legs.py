@@ -506,3 +506,44 @@ def test_a_race_leg_with_an_empty_weights_file_fails_before_any_test_runs(
     assert proc.returncode != 0, proc.stdout[-800:]
     assert "go_race_missing_rows.awk failed" in proc.stderr
     assert calls == [], "go test must not run when the weights file holds no row"
+
+
+# ---------------------------------------------------------------------------
+# 6. CHAOS-8135: tests compiled out of the race leg are listed and still run without it.
+# ---------------------------------------------------------------------------
+
+RACE_EXCLUDED = ROOT / "ci" / "race_excluded_tests.tsv"
+
+
+def _race_excluded_rows() -> list[tuple[str, str]]:
+    rows = [
+        tuple(line.split("\t"))
+        for line in RACE_EXCLUDED.read_text().splitlines()
+        if line.strip() and not line.startswith("#")
+    ]
+    assert rows, "ci/race_excluded_tests.tsv lists no test"
+    return rows  # type: ignore[return-value]
+
+
+def test_every_race_excluded_test_is_listed_and_lives_in_a_not_race_file() -> None:
+    listed = set(_race_excluded_rows())
+    found: set[tuple[str, str]] = set()
+    for source in (ROOT / "internal").rglob("*_test.go"):
+        text = source.read_text(encoding="utf-8")
+        if not text.startswith("//go:build !race\n"):
+            continue
+        package = str(source.parent.relative_to(ROOT))
+        found |= {
+            (package, name)
+            for name in re.findall(r"^func (Test\w+)\(", text, flags=re.M)
+        }
+    assert found == listed, (
+        f"`!race` test files and ci/race_excluded_tests.tsv differ: "
+        f"unlisted {sorted(found - listed)}, listed but not in a `!race` file {sorted(listed - found)}"
+    )
+
+
+def test_check_test_runs_the_race_excluded_proof() -> None:
+    script = CHECK_GO.read_text(encoding="utf-8")
+    body = _case_block(script, "check_test() {", "\n}\n")
+    assert "check_race_excluded_ran" in body

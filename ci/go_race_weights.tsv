@@ -111,7 +111,7 @@ internal/goapicli/prove	4
 internal/goapicli/restprove	31
 internal/goapicli/routing	4
 internal/goapidigest	1
-internal/goapiproof	506
+internal/goapiproof	130
 internal/goapiproof/writeproof	1
 internal/gqlgenguard	414
 internal/httpguard	324

@@ -57,12 +57,24 @@ func doerProblems(t *testing.T, root string, patterns []string) ([]string, int) 
 		if pkg.TypesInfo == nil {
 			continue
 		}
+		var current *ast.FuncDecl
 		check := func(expression ast.Expr, target types.Type, assignedToClientDoer bool) {
 			if !isProviderHTTPDoer(target) {
 				return
 			}
 			actual := pkg.TypesInfo.TypeOf(expression)
-			if actual == nil || types.IsInterface(actual) || pkg.TypesInfo.Types[expression].IsNil() {
+			if actual == nil || pkg.TypesInfo.Types[expression].IsNil() {
+				return
+			}
+			if types.IsInterface(actual) {
+				// An interface-typed value hides its concrete source: only providerfoundation.HTTPDoer itself (whose
+				// concrete sources are checked where they enter it) may flow into an HTTPDoer.
+				if !isProviderHTTPDoer(actual) && !isWrapperPlumbing(pkg.TypesInfo, expression, current, wrapper) {
+					position := pkg.Fset.Position(expression.Pos())
+					if !strings.HasSuffix(position.Filename, "_test.go") {
+						problems = append(problems, fmt.Sprintf("DOER a value of the interface type %s becomes a providerfoundation.HTTPDoer at %s:%d: its concrete source is hidden (type it as providerfoundation.HTTPDoer)", types.TypeString(actual, nil), filepath.Base(position.Filename), position.Line))
+					}
+				}
 				return
 			}
 			key := types.TypeString(actual, nil)
@@ -85,6 +97,9 @@ func doerProblems(t *testing.T, root string, patterns []string) ([]string, int) 
 				continue
 			}
 			ast.Inspect(file, func(node ast.Node) bool {
+				if declaration, ok := node.(*ast.FuncDecl); ok {
+					current = declaration
+				}
 				switch n := node.(type) {
 				case *ast.CallExpr:
 					if signature, ok := pkg.TypesInfo.TypeOf(n.Fun).(*types.Signature); ok {
@@ -222,4 +237,35 @@ func wrapperInterface(loaded []*packages.Package) *types.Interface {
 		}
 	}
 	return nil
+}
+
+// isWrapperPlumbing: the two derived places where a doer legitimately travels as the anonymous Do-only interface of
+// httpguard.Wrapper: the result of a call of Wrapper.Unwrap (the inner doer of a decorator the guard is rebuilding), and the
+// parameter of a method named Rewrap (the inner doer the guard hands back).
+func isWrapperPlumbing(info *types.Info, expression ast.Expr, current *ast.FuncDecl, wrapper *types.Interface) bool {
+	switch e := expression.(type) {
+	case *ast.CallExpr:
+		if selector, ok := e.Fun.(*ast.SelectorExpr); ok && selector.Sel.Name == "Unwrap" {
+			if _, ok := info.Uses[selector.Sel].(*types.Func); ok && wrapper != nil {
+				receiver := info.TypeOf(selector.X)
+				return receiver != nil && (types.Implements(receiver, wrapper) || types.Identical(receiver.Underlying(), wrapper.Underlying()) || types.Implements(types.NewPointer(receiver), wrapper))
+			}
+		}
+	case *ast.Ident:
+		if current == nil || current.Recv == nil || current.Name.Name != "Rewrap" || wrapper == nil {
+			return false
+		}
+		if receiver := info.TypeOf(current.Recv.List[0].Type); receiver == nil || !types.Implements(receiver, wrapper) {
+			return false
+		}
+		object := info.Uses[e]
+		for _, param := range current.Type.Params.List {
+			for _, name := range param.Names {
+				if info.Defs[name] == object {
+					return true
+				}
+			}
+		}
+	}
+	return false
 }

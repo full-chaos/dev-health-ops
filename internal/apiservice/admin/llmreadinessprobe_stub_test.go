@@ -336,6 +336,47 @@ func scriptedReadinessStub(w http.ResponseWriter, r *http.Request) {
 		} else {
 			completion(finalAnswerMessage(), "stop")
 		}
+	// One-signal scenarios (each failure carries ONE thing the classifier
+	// reads, so a clause that is not the only reason for an answer is
+	// observed on its own).
+	case "scripted-status401only":
+		writeJSON(401, map[string]any{"error": map[string]any{"message": "denied"}})
+	case "scripted-status429only":
+		writeJSON(429, map[string]any{"error": map[string]any{"message": "slow down"}})
+	case "scripted-status400only":
+		writeJSON(400, map[string]any{"error": map[string]any{"message": "bad"}})
+	case "scripted-mnfcode":
+		writeJSON(404, map[string]any{"error": map[string]any{"code": "model_not_found"}})
+	case "scripted-mnftext":
+		writeJSON(404, map[string]any{"error": map[string]any{"message": "model not found"}})
+	case "scripted-mnfexist":
+		writeJSON(404, map[string]any{"error": map[string]any{"message": "that model does not exist"}})
+	case "scripted-quotacode":
+		writeJSON(429, map[string]any{"error": map[string]any{"type": "insufficient_quota", "message": "no funds"}})
+	case "scripted-quotatext":
+		writeJSON(429, map[string]any{"error": map[string]any{"message": "you exceeded your current quota"}})
+	case "scripted-lengthround1":
+		// Round 1 stops on length with a well-formed tool call; round 2 would
+		// succeed. Only round 1's own check gives output_exhausted.
+		if !round2 {
+			completion(toolCallMessage(), "length")
+		} else {
+			completion(finalAnswerMessage(), "stop")
+		}
+	case "scripted-lengthround2":
+		if !round2 {
+			completion(toolCallMessage(), "tool_calls")
+		} else {
+			completion(finalAnswerMessage(), "length")
+		}
+	case "scripted-notoolcalls":
+		completion(map[string]any{"role": "assistant", "content": "I will not call a tool."}, "stop")
+	case "scripted-wrongkind":
+		if !round2 {
+			completion(toolCallMessage(), "tool_calls")
+		} else {
+			completion(map[string]any{"role": "assistant", "content": `{"kind":"tool_request","value":{"nonce":"ready-v1"}}`}, "stop")
+		}
 	case "scripted-redirect":
 		// D2908 condition 2 (codex r1 P1 #1): a 3xx must never be followed
 		// automatically by either plane's HTTP client -- both must observe

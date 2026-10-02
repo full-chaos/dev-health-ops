@@ -59,6 +59,18 @@ var readinessScenarios = []struct {
 	{"quota exhaustion (429) -> provider_not_configured, not rate_limited", "scripted-quota"},
 	{"one transient 500 then success -> ready", "scripted-transient"},
 	{"redirect is not followed -> provider_unavailable", "scripted-redirect"},
+	{"401 alone", "scripted-status401only"},
+	{"429 alone", "scripted-status429only"},
+	{"400 alone", "scripted-status400only"},
+	{"model_not_found code alone", "scripted-mnfcode"},
+	{"model not found text alone", "scripted-mnftext"},
+	{"model does not exist text alone", "scripted-mnfexist"},
+	{"insufficient_quota alone", "scripted-quotacode"},
+	{"current quota alone", "scripted-quotatext"},
+	{"finish_reason length on round 1 only", "scripted-lengthround1"},
+	{"finish_reason length on round 2 only", "scripted-lengthround2"},
+	{"round 1 with no tool call", "scripted-notoolcalls"},
+	{"round 2 kind is not final_answer", "scripted-wrongkind"},
 }
 
 // readinessAnswer is what a plane's probe of one scenario ends in.
@@ -91,7 +103,7 @@ func TestReadinessProbeMatchesTheFrozenPythonProbe(t *testing.T) {
 	golden := venueoracle.OpenGolden(t, venueoracle.GoldenSpec{
 		Path:        "testdata/admin/llm_readiness_probe.json",
 		PythonBuild: readinessProbePythonBuild,
-		SHA256:      "13d5a6bd6dc2de7543cf6322b7d2f8d3679ab9ba0958f8c0b8d3bd21104143bc",
+		SHA256:      "b9c3caa5c123f1a6764ddeee4815bbcd131b9b5e556fddaa3595fd0bd5690840",
 		Recipe: "git worktree add --detach $DIR " + readinessProbePythonBuild + " (with its .venv: uv sync --frozen --no-install-project); then from the repository root: " +
 			"go run ./internal/testsupport/venueoracle/goldenrecord -pkg ./internal/apiservice/admin/ -test '^TestReadinessProbeMatchesTheFrozenPythonProbe$' -python-root $DIR",
 	})

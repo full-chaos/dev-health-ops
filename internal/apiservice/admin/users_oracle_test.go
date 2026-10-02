@@ -25,7 +25,7 @@ func TestUserCRUDAndPasswordChangeMatchesThePythonAPI(t *testing.T) {
 	// the header's first hop. Trust this test's loopback peer so both planes agree.
 	t.Setenv("TRUSTED_PROXIES", "127.0.0.1,::1,testclient")
 	ctx := context.Background()
-	golden := venueoracle.OpenGolden(t, adminRunValuesGolden("users", t.Name(), "2ed4177ecd364c1e69581d941d6a377c3b0e9215ecef42bd1bbac8f5b8f3269b"))
+	golden := venueoracle.OpenGolden(t, adminRunValuesGolden("users", t.Name(), "de576d358c41c012c6bc4d8eecaed870d6cb3306c3032242650fb6b335c72cf4"))
 	root := golden.PythonRoot(t, repoRoot(t))
 	nextID := goldenIDs("usr")
 	const jwtKey = "venue-oracle-test-secret-key-for-user-crud-flow-32-bytes!!"
@@ -180,6 +180,9 @@ VALUES ($1, $2, $3, 'member', now(), now(), now())`, nextID(), orgID, memberID)
 				"User-Agent": "venue-oracle-test/1.0", "X-Forwarded-For": "203.0.113.42", "X-Request-ID": "venue-set-password-req",
 			},
 			Body: venueoracle.B64(fmt.Sprintf(`{"admin_password":%q,"password":"a new strong password 42"}`, adminPlaintextPassword))},
+		// Exactly ONE policy violation (no digit): the 422 lists that one.
+		{Name: "set password one violation", Method: "POST", Path: "/api/v1/admin/users/" + memberID.String() + "/password", Headers: jsonHeaders,
+			Body: venueoracle.B64(fmt.Sprintf(`{"admin_password":%q,"password":"abcdefghijklm"}`, adminPlaintextPassword))},
 		{Name: "set password wrong admin password", Method: "POST", Path: "/api/v1/admin/users/" + memberID.String() + "/password", Headers: jsonHeaders,
 			Body: venueoracle.B64(`{"admin_password":"totally the wrong password","password":"a new strong password 42"}`)},
 		// A new password whose only digit is a Unicode "Digit but not

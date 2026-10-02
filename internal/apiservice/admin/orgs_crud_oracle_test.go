@@ -34,7 +34,7 @@ func scrubSlugSuffix(text string) string {
 
 func TestOrgCRUDMatchesThePythonAPI(t *testing.T) {
 	ctx := context.Background()
-	golden := venueoracle.OpenGolden(t, adminRunValuesGolden("orgs_crud", t.Name(), "fa28f01cc4875aee591f84e6f9c131d769a85c017e68f310e4253888927f04d2", scrubSlugSuffix))
+	golden := venueoracle.OpenGolden(t, adminRunValuesGolden("orgs_crud", t.Name(), "34dc218cc9287e4316c49980d6099e2face9cf4b4aec5380a43c78c68d51e3d5", scrubSlugSuffix))
 	root := golden.PythonRoot(t, repoRoot(t))
 	nextID := goldenIDs("orgs")
 	const jwtKey = "venue-oracle-test-secret-key-for-org-crud-flow-32-bytes!!!"
@@ -143,6 +143,16 @@ VALUES ($1, $2, $3, 'member', now(), now(), now())`, nextID(), orgID, newMemberI
 			Body: venueoracle.B64(`{"name":"Org With Float Settings","settings":{"tiny":1e-7,"edge":0.00001,"below":9.99e-6,"big":1e21,"neg":-2.5e-9,"whole":3.0}}`)},
 		// validate_name: pydantic strips the name and rejects an
 		// all-whitespace result -- a live round found Go accepting this.
+		// min_length=1 on the name: an empty name and an absent name are each
+		// refused before validate_name runs.
+		{Name: "create org empty name", Method: "POST", Path: "/api/v1/admin/orgs", Headers: jsonHeaders("super"),
+			Body: venueoracle.B64(`{"name":""}`)},
+		{Name: "create org missing name", Method: "POST", Path: "/api/v1/admin/orgs", Headers: jsonHeaders("super"),
+			Body: venueoracle.B64(`{}`)},
+		// A tier other than community is managed manually (managed_by is in
+		// the response), not by stripe.
+		{Name: "create org team tier", Method: "POST", Path: "/api/v1/admin/orgs", Headers: jsonHeaders("super"),
+			Body: venueoracle.B64(`{"name":"Team Tier Org","tier":"team"}`)},
 		{Name: "create org whitespace name", Method: "POST", Path: "/api/v1/admin/orgs", Headers: jsonHeaders("super"),
 			Body: venueoracle.B64(`{"name":"   "}`)},
 		// OrganizationService.create inserts the org and its owner
@@ -244,6 +254,9 @@ VALUES ($1, $2, $3, 'member', now(), now(), now())`, nextID(), orgID, newMemberI
 		// Same duplicate-query-key rule as list orgs above, for the
 		// members-list `role` filter.
 		{Name: "list members duplicate role", Method: "GET", Path: "/api/v1/admin/orgs/" + orgID.String() + "/members?role=owner&role=member",
+			Headers: authHeaders("owner")},
+		// An empty ?role= is no filter: every member is listed.
+		{Name: "list members empty role", Method: "GET", Path: "/api/v1/admin/orgs/" + orgID.String() + "/members?role=",
 			Headers: authHeaders("owner")},
 		{Name: "remove member", Method: "DELETE", Path: "/api/v1/admin/orgs/" + orgID.String() + "/members/" + newMemberID.String(),
 			Headers: authHeaders("owner")},

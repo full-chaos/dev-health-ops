@@ -12,9 +12,9 @@
       "body $.id": 10,
       "body $.updated_at": 18,
       "header content-length": 18,
-      "header date": 31,
-      "header x-dev-health-plane": 31,
-      "header x-request-id": 60
+      "header date": 32,
+      "header x-dev-health-plane": 32,
+      "header x-request-id": 62
     }
   },
   "requests": [
@@ -518,6 +518,26 @@
         "x-request-id": "\u003cvolatile\u003e"
       },
       "body": "{\"success\":true}"
+    },
+    {
+      "name": "set password one violation",
+      "method": "POST",
+      "path": "/api/v1/admin/users/abe7905f-76d4-5294-9727-04a1b0869578/password",
+      "body_sha256": "2ba1ac7f4afaf3e4ccdcf4095abd433f7c41aa0418a20d91117030c03ffa28b3",
+      "request_headers_sha256": "60a271d9cc9d4aa46fc1be0b9d5e86a0dc72364a95f1731333fd6fe325915e0a",
+      "status": 422,
+      "headers": {
+        "content-length": "71",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "\u003cvolatile\u003e"
+      },
+      "body": "{\"detail\":{\"violations\":[\"Password must include at least one number\"]}}"
     },
     {
       "name": "set password wrong admin password",

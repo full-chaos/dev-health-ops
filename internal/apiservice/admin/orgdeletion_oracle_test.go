@@ -4,12 +4,14 @@ package admin_test
 
 import (
 	"context"
+	"fmt"
 	"testing"
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/full-chaos/dev-health-ops/internal/apiservice"
+	chstorage "github.com/full-chaos/dev-health-ops/internal/storage/clickhouse"
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/venueoracle"
 )
 
@@ -34,7 +36,7 @@ import (
 // past the target org.
 func TestOrgDeletionMatchesThePythonAPI(t *testing.T) {
 	ctx := context.Background()
-	golden := venueoracle.OpenGolden(t, adminRunValuesGolden("orgdeletion", t.Name(), "96b082e4c24e4278b0a67d2a576da4c6e201cd9cbe798eae53a709fc84ea4979"))
+	golden := venueoracle.OpenGolden(t, adminRunValuesGolden("orgdeletion", t.Name(), "14b005709fee0b58eb76f201020e004e69da4c88b4dda0933776b7caf52bb562"))
 	root := golden.PythonRoot(t, repoRoot(t))
 	nextID := goldenIDs("od")
 	const jwtKey = "venue-oracle-test-secret-key-for-org-deletion-flow-32-bytes!!"
@@ -108,6 +110,38 @@ VALUES ($1, $2, '10.0.0.0/8', true, now(), now())`, nextID(), controlOrgID)
 		},
 	})
 
+	// One ClickHouse row for the target org and one for the control org, in
+	// each plane's own database: a dry run must leave them (org_deletion.py
+	// counts and does not delete), the real delete purges only the target's.
+	for _, database := range []string{venue.PythonClickHouseDB, venue.GoClickHouseDB} {
+		conn, err := chstorage.Open(ctx, chstorage.DefaultConfig(venue.AdminClickHouseURI(t, database)))
+		if err != nil {
+			t.Fatalf("open clickhouse %s: %v", database, err)
+		}
+		for index, org := range []uuid.UUID{targetOrgID, controlOrgID} {
+			if err := conn.Exec(ctx,
+				`INSERT INTO backfill_log (job_id, org_id, chunk_index, chunk_since, chunk_before, provider, items_synced, duration_ms, status) VALUES (?, ?, 0, today(), today(), 'github', 1, 1, 'complete')`,
+				fmt.Sprintf("00000000-0000-4000-8000-00000000000%d", index+1), org.String()); err != nil {
+				t.Fatalf("seed backfill_log in %s: %v", database, err)
+			}
+		}
+		conn.Close()
+	}
+	clickHouseCount := func(database string, org uuid.UUID) string {
+		return venueoracle.CHRows(t, ctx, venue.AdminClickHouseURI(t, database),
+			"SELECT count() FROM backfill_log WHERE org_id = '"+org.String()+"'")
+	}
+	compareClickHouse := func(label string, org uuid.UUID, want string) {
+		t.Helper()
+		goCount := clickHouseCount(venue.GoClickHouseDB, org)
+		source := golden.CompareRows(t, "clickhouse backfill_log rows: "+label, func() string {
+			return clickHouseCount(venue.PythonClickHouseDB, org)
+		}, goCount)
+		if source != want {
+			t.Errorf("clickhouse backfill_log rows (%s) = %s, want %s", label, source, want)
+		}
+	}
+
 	bearer := func(name string) string { return "Bearer " + venue.Tokens[name] }
 	authHeaders := func(name string) map[string]string { return map[string]string{"Authorization": bearer(name)} }
 
@@ -167,6 +201,10 @@ VALUES ($1, $2, '10.0.0.0/8', true, now(), now())`, nextID(), controlOrgID)
 		}
 	}
 
+	// A dry run deletes no ClickHouse row either.
+	compareClickHouse("target after the dry run", targetOrgID, "1")
+	compareClickHouse("control after the dry run", controlOrgID, "1")
+
 	// Second batch: the real delete, sent only now that dry_run's no-op
 	// proof above is already checked.
 	realRequests := []venueoracle.Request{
@@ -209,5 +247,7 @@ VALUES ($1, $2, '10.0.0.0/8', true, now(), now())`, nextID(), controlOrgID)
 			t.Errorf("post-delete row count (%s) = %s, want %s", c.label, got, c.wantTarget)
 		}
 	}
+	compareClickHouse("target after the real delete", targetOrgID, "0")
+	compareClickHouse("control after the real delete", controlOrgID, "1")
 	golden.Finish(t)
 }

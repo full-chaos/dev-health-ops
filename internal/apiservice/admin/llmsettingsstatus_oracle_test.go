@@ -42,7 +42,7 @@ import (
 // documented, narrower contract instead.
 func TestLLMSettingsStatusRouteVenueOracle(t *testing.T) {
 	ctx := context.Background()
-	golden := venueoracle.OpenGolden(t, adminRunTimeShapesGolden("llmsettingsstatus", t.Name(), "ea09fe593fe23df7cfe1eda44eb560215ed99c54668e8694ebab544c5b4e3de2"))
+	golden := venueoracle.OpenGolden(t, adminRunTimeShapesGolden("llmsettingsstatus", t.Name(), "0e1126a5d5d258ef41627a86bd6ca8720d1ad2390e799810cb1fa1aae5272229"))
 	root := golden.PythonRoot(t, repoRoot(t))
 	nextID := goldenIDs("llmst")
 	const jwtKey = "venue-oracle-test-secret-key-for-llm-status-32-bytes!"
@@ -66,6 +66,11 @@ func TestLLMSettingsStatusRouteVenueOracle(t *testing.T) {
 		{slug: "off", tier: "team"},            // flag kill switch, 403
 		{slug: "mismatch", tier: "team"},       // active, readiness record certified against a DIFFERENT config -> never_checked here (Python: stale)
 		{slug: "incomplete", tier: "team"},     // active, readiness blob missing required keys -> never_checked
+		{slug: "providernone", tier: "team"},   // provider "none" -> not_configured
+		{slug: "providermock", tier: "team"},   // provider "mock" -> not_configured
+		{slug: "providerblank", tier: "team"},  // a whitespace-only provider normalizes to "" -> not_configured
+		{slug: "keylessbaseurl", tier: "team"}, // a keyless provider with a base_url and no api_key -> active, not missing_credentials
+		{slug: "keylessnothing", tier: "team"}, // a keyless provider with neither -> missing_credentials
 		{slug: "fallback", tier: "team"},       // invalid_base_url with a matching audit_logs fallback row -> last_fallback_at set
 	} {
 		spec := spec
@@ -117,6 +122,12 @@ VALUES ($1, $2, $3, $4, $5, false, NULL, '2026-02-01T00:00:00+00:00', '2026-02-0
 			row("invalidurl", "llm", "provider", "openai")
 			row("invalidurl", "llm", "base_url", "https://10.0.0.1/v1")
 			row("invalidurl", "llm", "api_key", "sk-anything")
+			row("providernone", "llm", "provider", "none")
+			row("providermock", "llm", "provider", "mock")
+			row("providerblank", "llm", "provider", "   ")
+			row("keylessbaseurl", "llm", "provider", "ollama")
+			row("keylessbaseurl", "llm", "base_url", "https://8.8.8.8/v1")
+			row("keylessnothing", "llm", "provider", "ollama")
 			row("active", "llm", "provider", "openai")
 			row("active", "llm", "api_key", "sk-anything")
 			row("ready", "llm", "provider", "openai")
@@ -222,6 +233,11 @@ VALUES ($1, $2, 'other', 'setting', 'llm.base_url', $3::json, '{}'::json, 'failu
 		get("readiness record ready", "ready"),
 		get("readiness record failed", "failed"),
 		get("readiness record fingerprint mismatch (python stale, go never_checked)", "mismatch"),
+		get("provider none", "providernone"),
+		get("provider mock", "providermock"),
+		get("provider whitespace only", "providerblank"),
+		get("keyless provider with base_url only", "keylessbaseurl"),
+		get("keyless provider with no credentials", "keylessnothing"),
 		get("community tier gate", "community"),
 		get("kill switch gate", "off"),
 		get("incomplete readiness blob never_checked", "incomplete"),

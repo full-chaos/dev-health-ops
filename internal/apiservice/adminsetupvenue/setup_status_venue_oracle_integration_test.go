@@ -220,6 +220,12 @@ func scenarios() []scenario {
 			parent := s.config(configOptions{provider: "github", options: `{"all_repos": true}`, active: true, integration: &integration, createdMinutes: 30})
 			s.config(configOptions{provider: "github", active: true, parent: &parent, integration: &integration, lastSyncError: text("child failure"), createdMinutes: 1})
 		}},
+		{"a child config's last_sync_success does not mark the first sync completed", func(s seeder) {
+			s.credential("github", true)
+			integration := s.integration("github")
+			parent := s.config(configOptions{provider: "github", options: `{"all_repos": true}`, active: true, integration: &integration, createdMinutes: 30})
+			s.config(configOptions{provider: "github", active: true, parent: &parent, integration: &integration, lastSyncSuccess: flag(true), createdMinutes: 1})
+		}},
 		{"active parents: a running run outranks a newer failed one", func(s seeder) {
 			s.credential("jira", true)
 			integration := s.integration("jira")
@@ -261,7 +267,7 @@ func scenarios() []scenario {
 // Go api, and requires the same status and the same response text.
 func TestAdminSetupStatusVenueOracle(t *testing.T) {
 	ctx := context.Background()
-	golden := venueoracle.OpenGolden(t, setupGolden(t.Name(), "c9b09f0ca98fa6a2bf4c4f8b7f2774a48c021a42d0c1f5cee02576294139c614"))
+	golden := venueoracle.OpenGolden(t, setupGolden(t.Name(), "cbc3024e22b98a2da6d47942c74ec269917b484756f4ddd4e54aa37fdefa1dc8"))
 	root := golden.PythonRoot(t, repoRoot(t))
 	nextID := stableIDs("setup")
 	const jwtKey = "venue-oracle-test-secret-key-for-setup-status-32-by"

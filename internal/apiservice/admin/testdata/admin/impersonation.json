@@ -10,9 +10,9 @@
     "blanked": {
       "body $.expires_at": 4,
       "header content-length": 4,
-      "header date": 7,
-      "header x-dev-health-plane": 7,
-      "header x-request-id": 14
+      "header date": 12,
+      "header x-dev-health-plane": 12,
+      "header x-request-id": 24
     }
   },
   "requests": [
@@ -35,6 +35,106 @@
         "x-request-id": "\u003cvolatile\u003e"
       },
       "body": "{\"is_impersonating\":false,\"target_user_id\":null,\"target_email\":null,\"target_org_id\":null,\"expires_at\":null}"
+    },
+    {
+      "name": "stop with no active session",
+      "method": "POST",
+      "path": "/api/v1/admin/impersonate/stop",
+      "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "request_headers_sha256": "357463bb8454ee009494542bd1ead34b2d453860bc09d792e6c6e819d6e6e8ed",
+      "status": 400,
+      "headers": {
+        "content-length": "44",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "\u003cvolatile\u003e"
+      },
+      "body": "{\"detail\":\"No active impersonation session\"}"
+    },
+    {
+      "name": "target not found",
+      "method": "POST",
+      "path": "/api/v1/admin/impersonate",
+      "body_sha256": "39aa4a0bcc17846628c2433c738daa8ca3cd7317db84436742c26454cda4e4fe",
+      "request_headers_sha256": "357463bb8454ee009494542bd1ead34b2d453860bc09d792e6c6e819d6e6e8ed",
+      "status": 404,
+      "headers": {
+        "content-length": "34",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "\u003cvolatile\u003e"
+      },
+      "body": "{\"detail\":\"Target user not found\"}"
+    },
+    {
+      "name": "target inactive",
+      "method": "POST",
+      "path": "/api/v1/admin/impersonate",
+      "body_sha256": "5cd7dfb5d5d2122eb1c656f7011f94959b4b31d9cd067fe1b1b348243723a7be",
+      "request_headers_sha256": "357463bb8454ee009494542bd1ead34b2d453860bc09d792e6c6e819d6e6e8ed",
+      "status": 400,
+      "headers": {
+        "content-length": "38",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "\u003cvolatile\u003e"
+      },
+      "body": "{\"detail\":\"Target user is not active\"}"
+    },
+    {
+      "name": "target superuser",
+      "method": "POST",
+      "path": "/api/v1/admin/impersonate",
+      "body_sha256": "984f7c54c0f9361bed767153430019cb674a4d29f7a8a6bb80a2d455251c77f1",
+      "request_headers_sha256": "357463bb8454ee009494542bd1ead34b2d453860bc09d792e6c6e819d6e6e8ed",
+      "status": 403,
+      "headers": {
+        "content-length": "43",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "\u003cvolatile\u003e"
+      },
+      "body": "{\"detail\":\"Cannot impersonate a superuser\"}"
+    },
+    {
+      "name": "target with no membership",
+      "method": "POST",
+      "path": "/api/v1/admin/impersonate",
+      "body_sha256": "c27dc4136b2898916d4a6da73e52ff18ade32f017b035279a584f671a1d5ec19",
+      "request_headers_sha256": "357463bb8454ee009494542bd1ead34b2d453860bc09d792e6c6e819d6e6e8ed",
+      "status": 404,
+      "headers": {
+        "content-length": "55",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "\u003cvolatile\u003e"
+      },
+      "body": "{\"detail\":\"Target user has no organization membership\"}"
     },
     {
       "name": "start",

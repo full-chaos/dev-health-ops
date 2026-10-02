@@ -8,15 +8,19 @@
     "python_env_version": 2,
     "recorded_by": "goldenrecord",
     "blanked": {
-      "body $.created_at": 32,
-      "body $.id": 32,
+      "body $.created_at": 34,
+      "body $.id": 34,
       "body $.joined_at": 2,
       "body $.slug": 8,
-      "body $.updated_at": 38,
-      "header content-length": 38,
-      "header date": 42,
-      "header x-dev-health-plane": 42,
-      "header x-request-id": 76
+      "body $.updated_at": 40,
+      "body $[].created_at": 2,
+      "body $[].id": 2,
+      "body $[].joined_at": 2,
+      "body $[].updated_at": 4,
+      "header content-length": 42,
+      "header date": 46,
+      "header x-dev-health-plane": 46,
+      "header x-request-id": 84
     }
   },
   "requests": [
@@ -219,6 +223,66 @@
         "x-request-id": "\u003cvolatile\u003e"
       },
       "body": "{\"id\":\"\u003cid\u003e\",\"slug\":\"org-with-float-settings\",\"name\":\"Org With Float Settings\",\"description\":null,\"tier\":\"community\",\"settings\":{\"tiny\":1e-7,\"edge\":0.00001,\"below\":9.99e-6,\"big\":1e+21,\"neg\":-2.5e-9,\"whole\":3.0},\"is_active\":true,\"created_at\":\"\u003cnow\u003e\",\"updated_at\":\"\u003cnow\u003e\"}"
+    },
+    {
+      "name": "create org empty name",
+      "method": "POST",
+      "path": "/api/v1/admin/orgs",
+      "body_sha256": "5cbe410e08f2a92638a5ff6cdf275d2eb1f6b8f07ab385249ad8f0ed37618de9",
+      "request_headers_sha256": "d969da3e76f9221aa7a634e8cd6bcd1247e85c1e5759ccee3b062404208f9d56",
+      "status": 422,
+      "headers": {
+        "content-length": "144",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "\u003cvolatile\u003e"
+      },
+      "body": "{\"detail\":[{\"type\":\"string_too_short\",\"loc\":[\"body\",\"name\"],\"msg\":\"String should have at least 1 character\",\"input\":\"\",\"ctx\":{\"min_length\":1}}]}"
+    },
+    {
+      "name": "create org missing name",
+      "method": "POST",
+      "path": "/api/v1/admin/orgs",
+      "body_sha256": "a135823e1f3518ee22848a79f5427d8cee0bfb85fbc6b4e6eda61f883c057c9e",
+      "request_headers_sha256": "d969da3e76f9221aa7a634e8cd6bcd1247e85c1e5759ccee3b062404208f9d56",
+      "status": 422,
+      "headers": {
+        "content-length": "87",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "\u003cvolatile\u003e"
+      },
+      "body": "{\"detail\":[{\"type\":\"missing\",\"loc\":[\"body\",\"name\"],\"msg\":\"Field required\",\"input\":{}}]}"
+    },
+    {
+      "name": "create org team tier",
+      "method": "POST",
+      "path": "/api/v1/admin/orgs",
+      "body_sha256": "a311afd6c5dca52b0dbf8bab41ab1f32ddca9c2c22c659437888c273a1089eb1",
+      "request_headers_sha256": "d969da3e76f9221aa7a634e8cd6bcd1247e85c1e5759ccee3b062404208f9d56",
+      "status": 201,
+      "headers": {
+        "content-length": "\u003clength of projected body\u003e",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "\u003cvolatile\u003e"
+      },
+      "body": "{\"id\":\"\u003cid\u003e\",\"slug\":\"team-tier-org\",\"name\":\"Team Tier Org\",\"description\":null,\"tier\":\"team\",\"settings\":{},\"is_active\":true,\"created_at\":\"\u003cnow\u003e\",\"updated_at\":\"\u003cnow\u003e\"}"
     },
     {
       "name": "create org whitespace name",
@@ -791,6 +855,26 @@
         "x-request-id": "\u003cvolatile\u003e"
       },
       "body": "[{\"id\":\"5f604262-d3f3-5db2-8017-ea8e6b4c17f4\",\"org_id\":\"3ca3f1ce-0187-57a0-9f92-85dce653c109\",\"user_id\":\"465e1f58-a113-5673-aa63-d1dbc1dc14fb\",\"role\":\"member\",\"invited_by_id\":null,\"joined_at\":\"2026-01-01T00:00:11.123456Z\",\"created_at\":\"2026-01-01T00:00:11.123456Z\",\"updated_at\":\"2026-01-01T00:00:11.123456Z\"}]"
+    },
+    {
+      "name": "list members empty role",
+      "method": "GET",
+      "path": "/api/v1/admin/orgs/3ca3f1ce-0187-57a0-9f92-85dce653c109/members?role=",
+      "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "request_headers_sha256": "73060b428866aacf4edd500bf5c6d6b443f0c2a5c7aed8fab38ed5fda1efeb8c",
+      "status": 200,
+      "headers": {
+        "content-length": "\u003clength of projected body\u003e",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "\u003cvolatile\u003e"
+      },
+      "body": "[{\"id\":\"7d0f4dd6-a932-5599-94f1-5344033c777f\",\"org_id\":\"3ca3f1ce-0187-57a0-9f92-85dce653c109\",\"user_id\":\"c3d3ace1-55a2-59a7-8e46-2c31ceacad2e\",\"role\":\"owner\",\"invited_by_id\":null,\"joined_at\":\"2026-01-01T00:00:10.123456Z\",\"created_at\":\"2026-01-01T00:00:10.123456Z\",\"updated_at\":\"2026-01-01T00:00:10.123456Z\"},{\"id\":\"5f604262-d3f3-5db2-8017-ea8e6b4c17f4\",\"org_id\":\"3ca3f1ce-0187-57a0-9f92-85dce653c109\",\"user_id\":\"465e1f58-a113-5673-aa63-d1dbc1dc14fb\",\"role\":\"member\",\"invited_by_id\":null,\"joined_at\":\"2026-01-01T00:00:11.123456Z\",\"created_at\":\"2026-01-01T00:00:11.123456Z\",\"updated_at\":\"2026-01-01T00:00:11.123456Z\"},{\"id\":\"05204288-71b0-59fd-b62c-a409808ca1e9\",\"org_id\":\"3ca3f1ce-0187-57a0-9f92-85dce653c109\",\"user_id\":\"d868b2ae-7264-5f04-9425-d5a304cfb5e5\",\"role\":\"admin\",\"invited_by_id\":null,\"joined_at\":\"2026-01-01T00:00:12.123456Z\",\"created_at\":\"2026-01-01T00:00:12.123456Z\",\"updated_at\":\"\u003cnow\u003e\"},{\"id\":\"\u003cid\u003e\",\"org_id\":\"3ca3f1ce-0187-57a0-9f92-85dce653c109\",\"user_id\":\"745dbc20-e1ed-5335-97af-fcd0c2a5b8d1\",\"role\":\"\",\"invited_by_id\":null,\"joined_at\":\"\u003cnow\u003e\",\"created_at\":\"\u003cnow\u003e\",\"updated_at\":\"\u003cnow\u003e\"}]"
     },
     {
       "name": "remove member",

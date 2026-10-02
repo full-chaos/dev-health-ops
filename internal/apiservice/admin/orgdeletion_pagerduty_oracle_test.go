@@ -69,7 +69,7 @@ func (f *fakePagerDutyRevokeServer) count() int {
 // on both planes.
 func TestOrgDeletionRevokesPagerDutyOnBothPlanes(t *testing.T) {
 	ctx := context.Background()
-	golden := venueoracle.OpenGolden(t, adminRunValuesGolden("orgdeletion_pagerduty", t.Name(), "ad025b5f78719a047bd596855a225c18bed8a5391e808ee03a041fc32abe21e1"))
+	golden := venueoracle.OpenGolden(t, adminRunValuesGolden("orgdeletion_pagerduty", t.Name(), "daa6e6fec2494fa8dbafcf75620ecefa7d96401886843ce57f091be60a19f828"))
 	root := golden.PythonRoot(t, repoRoot(t))
 	nextID := goldenIDs("odpd")
 	const jwtKey = "venue-oracle-test-secret-key-for-org-deletion-pd-flow-32-byt"
@@ -80,6 +80,10 @@ func TestOrgDeletionRevokesPagerDutyOnBothPlanes(t *testing.T) {
 
 	targetOrgID := nextID()
 	controlOrgID := nextID()
+	// An org with a pending revocation record and no credential: the revoke
+	// still happens (org_deletion.py walks both).
+	revocationOnlyOrgID := nextID()
+	revocationID := nextID()
 	superID := nextID()
 
 	venue := venueoracle.Start(t, ctx, venueoracle.Options{
@@ -99,7 +103,7 @@ func TestOrgDeletionRevokesPagerDutyOnBothPlanes(t *testing.T) {
 					t.Fatalf("seed: %v\n%s", err, sql)
 				}
 			}
-			for _, org := range []uuid.UUID{targetOrgID, controlOrgID} {
+			for _, org := range []uuid.UUID{targetOrgID, controlOrgID, revocationOnlyOrgID} {
 				exec(`INSERT INTO organizations (id, slug, name, tier, managed_by, is_active, created_at, updated_at)
 VALUES ($1, $2, $2, 'community', 'stripe', true, now(), now())`, org, "venue-pd-"+org.String()[:8])
 			}
@@ -121,6 +125,18 @@ VALUES ($1, 'venue-pd-super@example.com', true, true, true, 0, now(), now())`, s
 				t.Fatalf("decode encrypt_value result: %v\n%s", err, results[0])
 			}
 
+			// A pending revocation's decrypted payload IS the raw token.
+			pending := v.CallPython(t, venueoracle.PythonCall{
+				Target: "dev_health_ops.core.encryption:encrypt_value",
+				Args:   []any{"venue-pd-pending-token"},
+			})
+			var pendingCiphertext string
+			if err := json.Unmarshal(pending[0], &pendingCiphertext); err != nil {
+				t.Fatalf("decode encrypt_value result: %v\n%s", err, pending[0])
+			}
+			exec(`INSERT INTO provider_oauth_revocations (id, org_id, provider, credential_name, purpose, token_encrypted, token_key_version, status, attempts, created_at, updated_at)
+VALUES ($1, $2, 'pagerduty', 'default', 'replacement', $3, 'v1', 'pending', 0, now(), now())`, revocationID, revocationOnlyOrgID.String(), pendingCiphertext)
+
 			for _, org := range []uuid.UUID{targetOrgID, controlOrgID} {
 				exec(`INSERT INTO provider_oauth_credentials (org_id, provider, credential_name, token_encrypted, version, created_at, updated_at, has_refresh_token)
 VALUES ($1, 'pagerduty', 'default', $2, 1, now(), now(), true)`, org.String(), ciphertext)
@@ -139,8 +155,14 @@ VALUES ($1, 'pagerduty', 'default', $2, 1, now(), now(), true)`, org.String(), c
 
 	bearer := "Bearer " + venue.Tokens["super"]
 	requests := []venueoracle.Request{
+		// A dry run revokes nothing (the revoke count below stays at the real
+		// deletes' own).
+		{Name: "delete org dry run (no revoke)", Method: "DELETE",
+			Path: "/api/v1/admin/orgs/" + targetOrgID.String() + "?dry_run=true", Headers: map[string]string{"Authorization": bearer}},
 		{Name: "delete org real (pagerduty revoke)", Method: "DELETE",
 			Path: "/api/v1/admin/orgs/" + targetOrgID.String(), Headers: map[string]string{"Authorization": bearer}},
+		{Name: "delete org with only a pending revocation", Method: "DELETE",
+			Path: "/api/v1/admin/orgs/" + revocationOnlyOrgID.String(), Headers: map[string]string{"Authorization": bearer}},
 	}
 	python := golden.Python(t, venue, requests)
 	// The Python plane's revoke calls, counted while it answered (recorded
@@ -166,11 +188,13 @@ VALUES ($1, 'pagerduty', 'default', $2, 1, now(), now(), true)`, org.String(), c
 	})
 	t.Log(receipt)
 
-	if pythonCalls != "1" {
-		t.Errorf("the python plane made %s pagerduty revoke call(s), want 1", pythonCalls)
+	// One for the real delete of the target org (its credential), one for the
+	// org whose only record is a pending revocation; the dry run made none.
+	if pythonCalls != "2" {
+		t.Errorf("the python plane made %s pagerduty revoke call(s), want 2", pythonCalls)
 	}
-	if got := fake.count() - beforeGo; got != 1 {
-		t.Errorf("the go plane made %d pagerduty revoke call(s), want 1", got)
+	if got := fake.count() - beforeGo; got != 2 {
+		t.Errorf("the go plane made %d pagerduty revoke call(s), want 2", got)
 	}
 
 	credentialQuery := func(orgID uuid.UUID) string {

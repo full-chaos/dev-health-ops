@@ -1,12 +1,15 @@
 package workerservice
 
 import (
+	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"log/slog"
 	"net/http"
 	"reflect"
+	"strings"
 	"testing"
 
 	"github.com/ClickHouse/clickhouse-go/v2/lib/driver"
@@ -1064,5 +1067,47 @@ func TestBuildProviderSyncHandlerBudgetLimitsAreTheOneTable(t *testing.T) {
 	}
 	if executor.BudgetLimits[providersync.CostHeavy] != 1 {
 		t.Fatalf("heavy limit = %d; want 1", executor.BudgetLimits[providersync.CostHeavy])
+	}
+}
+
+// TestBuildProviderSyncHandlerLogsTheEffectiveCapsAndBudgetLimits pins
+// CHAOS-7881: one Info line at handler construction carries, per cost class,
+// the worker's request-budget limit and the dispatch admission cap, plus the
+// clamp, and nothing tenant-shaped.
+func TestBuildProviderSyncHandlerLogsTheEffectiveCapsAndBudgetLimits(t *testing.T) {
+	t.Setenv("SYNC_UNIT_CONCURRENCY_PER_BUCKET", "3")
+	var logs bytes.Buffer
+	buildProviderSyncHandler(
+		nil, nil, nil, nil, nil,
+		nil, nil, slog.New(slog.NewJSONHandler(&logs, nil)),
+	)
+	var found map[string]any
+	for _, line := range strings.Split(strings.TrimSpace(logs.String()), "\n") {
+		var record map[string]any
+		if json.Unmarshal([]byte(line), &record) == nil && record["msg"] == "provider_sync_admission_and_budget_limits" {
+			if found != nil {
+				t.Fatalf("more than one provider_sync_admission_and_budget_limits line:\n%s", logs.String())
+			}
+			found = record
+		}
+	}
+	if found == nil {
+		t.Fatalf("no provider_sync_admission_and_budget_limits line in:\n%s", logs.String())
+	}
+	want := map[string]float64{
+		"budget_limit_light": 4, "budget_limit_medium": 2, "budget_limit_heavy": 1,
+		// The clamp (3) lowers light (4) to 3 and leaves medium (2) and heavy (1).
+		"admission_cap_light": 3, "admission_cap_medium": 2, "admission_cap_heavy": 1,
+		"admission_clamp": 3,
+	}
+	for key, value := range want {
+		if found[key] != value {
+			t.Fatalf("%s = %v; want %v in %v", key, found[key], value, found)
+		}
+	}
+	for key := range found {
+		if strings.Contains(key, "org") || strings.Contains(key, "tenant") {
+			t.Fatalf("line carries a tenant-shaped attribute %q: %v", key, found)
+		}
 	}
 }

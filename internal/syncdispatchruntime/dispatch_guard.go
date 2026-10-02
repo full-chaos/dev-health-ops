@@ -111,6 +111,19 @@ func syncUnitConcurrencyPerBucket() int {
 	return envPositiveInt("SYNC_UNIT_CONCURRENCY_PER_BUCKET", 8)
 }
 
+// EffectiveAdmissionCaps reports the admission cap the dispatch guard applies
+// per cost class right now (the class's budget limit, lowered by
+// SYNC_UNIT_CONCURRENCY_PER_BUCKET) and that clamp itself, so a process can log
+// the numbers it actually enforces at start (CHAOS-7881). Class names are the
+// closed set of the budget table; no tenant data.
+func EffectiveAdmissionCaps() (clamp int, caps map[string]int) {
+	caps = make(map[string]int, 3)
+	for _, class := range []string{"light", "medium", "heavy"} {
+		caps[class] = concurrencyCapForCostClass(class)
+	}
+	return syncUnitConcurrencyPerBucket(), caps
+}
+
 // concurrencyCapForCostClass is the admission cap of one (org, provider,
 // cost_class) bucket (CHAOS-7434). It is the worker budget's limit for that
 // class (providerfoundation.CostClassBudgetLimit, the same table the worker's

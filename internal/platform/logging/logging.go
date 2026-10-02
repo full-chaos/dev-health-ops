@@ -120,6 +120,9 @@ func RedactText(value string) (result string) {
 	if mayHoldProviderToken(value) {
 		value = providerTokenPattern.ReplaceAllString(value, redacted)
 	}
+	if mayHoldVendorKey(value) {
+		value = vendorKeyPattern.ReplaceAllString(value, redacted)
+	}
 	value = redactProseCredentials(value)
 	return redactPathSegments(value)
 }

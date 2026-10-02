@@ -1,6 +1,7 @@
 package logging
 
 import (
+	"errors"
 	"net"
 	"net/url"
 )
@@ -27,4 +28,21 @@ func RetryableTransport(err error) bool {
 	}
 	var operation *net.OpError
 	return chainAs(chain, &operation) && operation != nil && operation.Op == "dial"
+}
+
+// URLErrorLeafText is the text of the cause of the *url.Error in the error's chain when that cause is a leaf (it unwraps to
+// nothing), and false when the chain holds no url error, the url error has no cause, the cause has a cause of its own, or ANY of
+// these reads panics (a typed-nil cause answers Unwrap and Error by dereferencing nil): the whole read is under recover, so it
+// holds at every hop of the chain (CHAOS-8127).
+func URLErrorLeafText(err error) (text string, ok bool) {
+	defer func() {
+		if recover() != nil {
+			text, ok = "", false
+		}
+	}()
+	urlErr := URLError(err)
+	if urlErr == nil || urlErr.Err == nil || errors.Unwrap(urlErr.Err) != nil {
+		return "", false
+	}
+	return urlErr.Err.Error(), true
 }

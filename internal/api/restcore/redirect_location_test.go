@@ -267,3 +267,50 @@ func TestTheRequestPathChecksAreBoundedOnASelfUnwrappingError(t *testing.T) {
 		t.Fatal("a check did not return on a self-unwrapping error")
 	}
 }
+
+// CHAOS-8127 (every hop): a witnessed 3xx whose body read fails with a hostile error at chain depth 0, 1 and 2 -- a typed-nil
+// *url.Error, a real *url.Error whose INNER cause is a typed-nil (of its own type and of another), and an error whose Unwrap
+// returns itself -- must neither panic nor stall Core.Get, and the error is never reworded as a redirect.
+func TestEveryHopOfAHostileChainAfterAWitnessedRedirectIsSurvived(t *testing.T) {
+	var nilURLError *url.Error
+	var nilOpError *net.OpError
+	shapes := map[string]error{
+		"typed-nil url error":                  error(nilURLError),
+		"url error with a typed-nil url cause": &url.Error{Op: "Get", URL: "https://x.example.test", Err: error(nilURLError)},
+		"url error with a typed-nil op cause":  &url.Error{Op: "Get", URL: "https://x.example.test", Err: error(nilOpError)},
+		"self-unwrapping error":                &selfUnwrappingError{},
+	}
+	for name, shape := range shapes {
+		for depth := 0; depth <= 2; depth++ {
+			cause := shape
+			for hop := 0; hop < depth; hop++ {
+				cause = fmt.Errorf("hop %d: %w", hop, cause)
+			}
+			label := fmt.Sprintf("%s at depth %d", name, depth)
+			done := make(chan error, 1)
+			go func() {
+				defer func() {
+					if recovered := recover(); recovered != nil {
+						done <- fmt.Errorf("Core.Get panicked: %v", recovered)
+					}
+				}()
+				core := Core{Provider: "github", RetryAfter: func(Response) time.Duration { return 0 }, HTTP: &http.Client{Transport: redirectThenBrokenBody{err: cause}}}
+				_, err := core.Get(context.Background(), "https://api.example.test/x", "GET /probe")
+				var apiErr *Error
+				if !errors.As(err, &apiErr) || strings.Contains(apiErr.Message, "unexpected redirect") {
+					done <- fmt.Errorf("err = %v, want an error that is not reworded as a redirect", err)
+					return
+				}
+				done <- nil
+			}()
+			select {
+			case failure := <-done:
+				if failure != nil {
+					t.Errorf("%s: %v", label, failure)
+				}
+			case <-time.After(5 * time.Second):
+				t.Errorf("%s: Core.Get did not return", label)
+			}
+		}
+	}
+}

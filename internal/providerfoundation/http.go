@@ -7,6 +7,7 @@ import (
 	"errors"
 	"github.com/full-chaos/dev-health-ops/internal/httpguard"
 	"io"
+	"log/slog"
 	"math/big"
 	"net/http"
 	"net/url"
@@ -190,8 +191,19 @@ func originGuardedAtConstruction(doer HTTPDoer) HTTPDoer {
 		} else if len(via) >= 10 {
 			return errors.New("stopped after 10 redirects")
 		}
+		state, known := req.Context().Value(originKey{}).(*originState)
+		if !known {
+			// A decorator dropped the request context, so the credential origin is lost: fail closed. The hop is followed (a
+			// redirect to presigned storage must keep working) with EVERY credential header removed.
+			for _, name := range credentialHeaders {
+				req.Header.Del(name)
+			}
+			req.Header.Set(strippedMarker, "1")
+			slog.Warn("provider redirect without a credential origin in the request context: credential headers stripped")
+			return nil
+		}
 		// The hop would be followed: stop it where it leaves the credential origin and say so.
-		if state, ok := req.Context().Value(originKey{}).(*originState); ok && !sameOrigin(req.URL, state.target) {
+		if !sameOrigin(req.URL, state.target) {
 			state.left.Store(true)
 			return http.ErrUseLastResponse
 		}
@@ -236,6 +248,15 @@ func originGuardedDoer(doer HTTPDoer, target *url.URL) (HTTPDoer, *atomic.Bool) 
 		return nil
 	}
 	return &guarded, left
+}
+
+// strippedMarker is set on a redirect request whose credential headers the origin guard removed because the credential origin was
+// lost (a decorator dropped the request context): the after-the-fact check lets such a followed hop through.
+const strippedMarker = "X-Origin-Guard-Stripped"
+
+// strippedOfCredentials: the last request a Doer sent is one the origin guard stripped.
+func strippedOfCredentials(request *http.Request) bool {
+	return request != nil && request.Header.Get(strippedMarker) != ""
 }
 
 // responseLeftOrigin is the after-the-fact check for a Doer that followed a
@@ -323,7 +344,7 @@ func (c *HTTPClient) Do(ctx context.Context, method, path string, body io.Reader
 		var requestErr error
 		guarded, leftOrigin := originGuardedDoer(c.Doer, target)
 		response, requestErr = guarded.Do(request)
-		if callLeft.Load() || leftOrigin.Load() || (requestErr == nil && responseLeftOrigin(response, target)) {
+		if callLeft.Load() || leftOrigin.Load() || (requestErr == nil && responseLeftOrigin(response, target) && !strippedOfCredentials(response.Request)) {
 			// A redirect took the authenticated request off the credential's
 			// origin. The header may already have been sent by the Doer, so
 			// this is never retried and the response is never returned.

@@ -2,15 +2,11 @@ package health
 
 import (
 	"encoding/json"
-	"os"
-	"os/exec"
-	"path/filepath"
-	"runtime"
 	"sort"
 	"strings"
 	"testing"
 
-	"github.com/full-chaos/dev-health-ops/internal/testsupport/pyoracle"
+	"github.com/full-chaos/dev-health-ops/internal/testsupport/programoracle"
 )
 
 // pythonRevisionsProgram walks the REAL Alembic script directory the way
@@ -26,19 +22,8 @@ out = sorted(r.revision for r in scripts.walk_revisions()
 print(json.dumps({"minimum": minimum, "revisions": out}))
 `
 
-func TestSchemaRevisionsMatchLivePythonAlembic(t *testing.T) {
-	if os.Getenv("DEV_HEALTH_LIVE_PYTHON_ORACLES") != "1" {
-		t.Skip("live Python oracles run only through ci/check_go.sh live-python-oracles")
-	}
-	_, file, _, _ := runtime.Caller(0)
-	root := filepath.Clean(filepath.Join(filepath.Dir(file), "..", "..", ".."))
-	python := pyoracle.Resolve(t, root)
-	command := exec.Command(python, "-c", pythonRevisionsProgram)
-	command.Env = append(os.Environ(), "PYTHONPATH="+filepath.Join(root, "src"))
-	output, err := command.CombinedOutput()
-	if err != nil {
-		t.Fatalf("live Python alembic: %v", pyoracle.RunError(python, err, output))
-	}
+func TestSchemaRevisionsMatchFrozenPythonAlembic(t *testing.T) {
+	output := frozenPython(t, "schema-revisions.golden.json", programoracle.Program{Name: "alembic revisions", Text: pythonRevisionsProgram})[0]
 	lines := strings.Split(strings.TrimSpace(string(output)), "\n")
 	var result struct {
 		Minimum   string   `json:"minimum"`
@@ -55,12 +40,5 @@ func TestSchemaRevisionsMatchLivePythonAlembic(t *testing.T) {
 	if result.Minimum != minimumSchemaRevision || strings.Join(result.Revisions, ",") != strings.Join(goRevisions, ",") {
 		t.Fatalf("schema revisions drifted from the Alembic chain: regenerate schema_revisions.go\n Python minimum %s %v\n Go     minimum %s %v",
 			result.Minimum, result.Revisions, minimumSchemaRevision, goRevisions)
-	}
-	proofDir := os.Getenv("DEV_HEALTH_LIVE_PYTHON_ORACLE_PROOF_DIR")
-	if proofDir == "" {
-		t.Fatal("DEV_HEALTH_LIVE_PYTHON_ORACLE_PROOF_DIR is required")
-	}
-	if err := os.WriteFile(filepath.Join(proofDir, "api-health-revisions"), []byte("executed"), 0o600); err != nil {
-		t.Fatal(err)
 	}
 }

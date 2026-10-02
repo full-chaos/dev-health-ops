@@ -2,14 +2,10 @@ package orgs
 
 import (
 	"encoding/json"
-	"os"
-	"os/exec"
-	"path/filepath"
-	"runtime"
 	"strings"
 	"testing"
 
-	"github.com/full-chaos/dev-health-ops/internal/testsupport/pyoracle"
+	"github.com/full-chaos/dev-health-ops/internal/testsupport/programoracle"
 )
 
 // pythonRegistryProgram prints the REAL registry constants the entitlements
@@ -26,19 +22,8 @@ print(json.dumps({
 }))
 `
 
-func TestRegistryMatchesLivePython(t *testing.T) {
-	if os.Getenv("DEV_HEALTH_LIVE_PYTHON_ORACLES") != "1" {
-		t.Skip("live Python oracles run only through ci/check_go.sh live-python-oracles")
-	}
-	_, file, _, _ := runtime.Caller(0)
-	root := filepath.Clean(filepath.Join(filepath.Dir(file), "..", "..", ".."))
-	python := pyoracle.Resolve(t, root)
-	command := exec.Command(python, "-c", pythonRegistryProgram)
-	command.Env = append(os.Environ(), "PYTHONPATH="+filepath.Join(root, "src"))
-	output, err := command.CombinedOutput()
-	if err != nil {
-		t.Fatalf("live Python registry: %v", pyoracle.RunError(python, err, output))
-	}
+func TestRegistryMatchesFrozenPython(t *testing.T) {
+	output := frozenPython(t, "registry.golden.json", programoracle.Program{Name: "licensing registry", Text: pythonRegistryProgram})[0]
 	lines := strings.Split(strings.TrimSpace(string(output)), "\n")
 	var result struct {
 		Standard  []string            `json:"standard"`
@@ -75,12 +60,5 @@ func TestRegistryMatchesLivePython(t *testing.T) {
 				t.Errorf("%s[%d]: Go %s=%v (%s), Python %v=%v (%v)", tier, index, goLimits[index].Key, goNumber, goKind, row[0], row[1], row[2])
 			}
 		}
-	}
-	proofDir := os.Getenv("DEV_HEALTH_LIVE_PYTHON_ORACLE_PROOF_DIR")
-	if proofDir == "" {
-		t.Fatal("DEV_HEALTH_LIVE_PYTHON_ORACLE_PROOF_DIR is required")
-	}
-	if err := os.WriteFile(filepath.Join(proofDir, "api-orgs-registry"), []byte("executed"), 0o600); err != nil {
-		t.Fatal(err)
 	}
 }

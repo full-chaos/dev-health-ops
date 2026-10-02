@@ -173,7 +173,7 @@ func (executor CompleteRouteExecutor) executeChunked(
 			}
 			committedThisAttempt++
 			if (committedThisAttempt >= policy.MaxChunksPerAttempt || time.Since(attemptStarted) >= policy.MaxWallTime) && ordinal+1 < totalChunks {
-				return ChunkContinuationError{Next: executor.now().Add(time.Second)}
+				return newChunkContinuation(policy, executor.now().Add(time.Second), committedThisAttempt, time.Since(attemptStarted))
 			}
 		}
 		if err := store.MarkInventoryComplete(workContext, session.Claim, executor.now()); err != nil {

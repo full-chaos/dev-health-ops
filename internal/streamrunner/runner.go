@@ -330,10 +330,10 @@ func (r *Runner) reclaim(ctx context.Context, stream string) (bool, error) {
 	// poison included, is a handle child of it.
 	batchCtx, batch := tracing.StartWorkSpan(ctx, runnerTracerName, "dev_health.stream.batch",
 		attribute.String("dev_health.stream.runner", r.config.Name),
-		attribute.Int("dev_health.stream.messages", len(pending)),
 		attribute.Int("dev_health.stream.lanes", 1),
 		attribute.String("dev_health.stream.source", "reclaim"),
 	)
+	handled := 0
 	claimedByID := make(map[string]Message, len(claimed))
 	for _, message := range claimed {
 		claimedByID[message.ID] = message
@@ -353,6 +353,7 @@ func (r *Runner) reclaim(ctx context.Context, stream string) (bool, error) {
 		r.mu.Lock()
 		r.reclaimed++
 		r.mu.Unlock()
+		handled++
 		if _, isPoison := poison[item.MessageID]; isPoison {
 			if err := r.tracedHandle(batchCtx, func(ctx context.Context) (string, error) {
 				if err := r.quarantine(ctx, message, "max_deliveries_exceeded"); err != nil {
@@ -368,7 +369,12 @@ func (r *Runner) reclaim(ctx context.Context, stream string) (bool, error) {
 			failures = append(failures, err)
 		}
 	}
-	batch.SetAttributes(attribute.Int("dev_health.stream.failed", len(failures)))
+	// messages = the events this pass actually handled (claimed or poison), not
+	// every pending entry: an entry another consumer holds is neither.
+	batch.SetAttributes(
+		attribute.Int("dev_health.stream.messages", handled),
+		attribute.Int("dev_health.stream.failed", len(failures)),
+	)
 	if len(failures) > 0 {
 		batch.SetAttributes(attribute.String(tracing.StageAttribute, "handle"))
 	}

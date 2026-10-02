@@ -111,6 +111,9 @@ func TestRunnerEmitsBatchAndHandleSpansWithOutcomes(t *testing.T) {
 	if got := spanStrAttr(batch, "dev_health.stream.lanes"); got != "1" {
 		t.Errorf("batch lanes = %q, want 1", got)
 	}
+	if got := spanStrAttr(batch, "dev_health.stream.source"); got != "read" {
+		t.Errorf("read batch source = %q, want read", got)
+	}
 	if got := spanStrAttr(batch, "dev_health.stream.failed"); got != "1" {
 		t.Errorf("batch failed = %q, want 1 (only the transient failure is a batch failure)", got)
 	}
@@ -373,5 +376,49 @@ func TestRunnerPoisonQuarantineFailureIsAnErrorHandleSpan(t *testing.T) {
 	batches := spansByName(exporter, "dev_health.stream.batch")
 	if len(batches) != 1 || batches[0].Status.Code != codes.Error || spanStrAttr(batches[0], "dev_health.work.stage") != "handle" || spanStrAttr(batches[0], "dev_health.stream.failed") != "1" {
 		t.Fatalf("batch spans = %v, want one Error batch at stage handle with failed=1", batches)
+	}
+}
+
+// Reclaim batch attributes: messages = events actually HANDLED (a pending entry
+// that is neither claimed nor poison is not), lanes = 1, runner name, source,
+// and a clean batch carries no stage and no Error status.
+func TestRunnerReclaimBatchAttributesCountHandledEventsOnly(t *testing.T) {
+	exporter := installStreamSpanRecorder(t)
+	transport := &fakeTransport{
+		pending: []Pending{
+			{MessageID: "1-0", TimesDelivered: 1, Idle: time.Second}, // claimed: handled
+			{MessageID: "2-0", TimesDelivered: 1, Idle: time.Second}, // neither claimed nor poison: skipped
+			{MessageID: "9-0", TimesDelivered: 3, Idle: time.Second}, // poison, trimmed (not claimed): tombstone, handled
+		},
+		claimed: []Message{{Stream: "test:stream", ID: "1-0"}},
+	}
+	runner, err := New(transport, handlerFunc(func(context.Context, Message) error { return nil }), testConfig(), health.NewRegistry(time.Second))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := runner.reclaim(context.Background(), "test:stream"); err != nil {
+		t.Fatal(err)
+	}
+	batches := spansByName(exporter, "dev_health.stream.batch")
+	if len(batches) != 1 {
+		t.Fatalf("got %d batch spans, want 1", len(batches))
+	}
+	batch := batches[0]
+	for key, want := range map[string]string{
+		"dev_health.stream.messages": "2",
+		"dev_health.stream.lanes":    "1",
+		"dev_health.stream.failed":   "0",
+		"dev_health.stream.runner":   "stream_test",
+		"dev_health.stream.source":   "reclaim",
+	} {
+		if got := spanStrAttr(batch, key); got != want {
+			t.Errorf("reclaim batch %s = %q, want %q", key, got, want)
+		}
+	}
+	if got := spanStrAttr(batch, "dev_health.work.stage"); got != "" || batch.Status.Code == codes.Error {
+		t.Errorf("a clean reclaim batch carries stage %q / Error status", got)
+	}
+	if len(spansByName(exporter, "dev_health.stream.handle")) != 2 {
+		t.Errorf("want 2 handle spans (claimed + tombstone poison)")
 	}
 }

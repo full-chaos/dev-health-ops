@@ -57,6 +57,9 @@ TEAMS = [
     {"id": "team-dup-b", "name": "DupB", "repo_patterns": ["dup/repo"]},
     # 9. A pattern that is only whitespace -> skipped.
     {"id": "team-ws", "name": "WS", "repo_patterns": ["   "]},
+    # 10. A '*' in the INTERIOR of the pattern: `"*" in p` is true, so the pattern is
+    #     a PREFIX rule whose prefix keeps the interior star literally.
+    {"id": "team-interior", "name": "Interior", "repo_patterns": ["interior/*-svc"]},
 ]
 
 PROBES = [
@@ -72,6 +75,8 @@ PROBES = [
     "dup/repo",  # -> team-dup-b, last writer wins
     "",  # -> None
     "   ",  # -> None
+    "interior/*-svc-x",  # -> team-interior: the literal interior-star prefix matches
+    "interior/x-svc",  # -> None: the star is not a wildcard
 ]
 
 

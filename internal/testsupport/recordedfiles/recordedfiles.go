@@ -78,7 +78,7 @@ const recordVerbStamp = "goldenrecord"
 
 // unclassifiedDayOne is how many files the day-one list holds. It only goes
 // down: a file leaves the list when it gets a kind, and no file is added.
-const unclassifiedDayOne = 977
+const unclassifiedDayOne = 975
 
 // DayOneList is the list of the files that were unclassified when the
 // manifests were first written, one repository path per line.

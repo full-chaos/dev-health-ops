@@ -55,6 +55,7 @@ import (
 
 	clickhousedriver "github.com/ClickHouse/clickhouse-go/v2"
 	"github.com/full-chaos/dev-health-go/clickhouse"
+	"github.com/full-chaos/dev-health-ops/internal/platform/logging"
 	"github.com/full-chaos/dev-health-ops/internal/queryapi/graph/model"
 	"github.com/google/uuid"
 	"go.opentelemetry.io/otel/attribute"
@@ -127,9 +128,10 @@ func defaultRecordInvestmentCoverageFailure(ctx context.Context, orgID string, m
 	spanAttrs := []attribute.KeyValue{
 		attribute.String("resolver", "investment_coverage"),
 		attribute.String("stage", string(stage)),
-		attribute.String("error", err.Error()),
-		attribute.String("error.cause", rootCause(err).Error()),
 	}
+	// No error text on the span or in the log line (CHAOS-7936): the class and the Go type; the exception's code and name are
+	// added below.
+	spanAttrs = append(spanAttrs, logging.ErrorSpanAttributes(err)...)
 	// Mirrors Python's structured logger.error("investment_coverage.query_failed", extra={...})
 	// (analytics.py:894-906) field for field, plus the query_id/ClickHouse-code
 	// fields Python never had. org_id is an internal tenant UUID, already
@@ -140,7 +142,7 @@ func defaultRecordInvestmentCoverageFailure(ctx context.Context, orgID string, m
 		"measure", string(measure),
 		"use_investment", useInvestment,
 		"stage", string(stage),
-		"error", err.Error(),
+		logging.ErrorAttr(err),
 	}
 
 	if queryID != "" {

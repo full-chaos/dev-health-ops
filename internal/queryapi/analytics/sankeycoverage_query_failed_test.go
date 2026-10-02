@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strings"
 	"testing"
 
 	clickhousedriver "github.com/ClickHouse/clickhouse-go/v2"
@@ -169,7 +170,7 @@ func TestIsLocalValidationFailure(t *testing.T) {
 // defaultRecordInvestmentCoverageFailure directly (rather than through the
 // spy used above) is deliberate: the spy REPLACES this function, so it
 // proves nothing about what the function itself records -- the same
-// layer-masking shape TestDefaultRecordDegradation_RecordsDriverCause's
+// layer-masking shape TestDefaultRecordDegradation_RecordsIdentityNotText's
 // doc comment names.
 func TestDefaultRecordInvestmentCoverageFailure_ClickHouseException(t *testing.T) {
 	recorder := tracetest.NewSpanRecorder()
@@ -181,7 +182,7 @@ func TestDefaultRecordInvestmentCoverageFailure_ClickHouseException(t *testing.T
 	exception := &clickhousedriver.Exception{
 		Code:    735,
 		Name:    "QUERY_WAS_CANCELLED_BY_CLIENT",
-		Message: "Query was cancelled",
+		Message: "Query was cancelled on table planted_table_7936 for the planted detail of ticket 7936",
 	}
 	wrapped := fmt.Errorf("query: %w", &fakeOperationError{operation: "query", cause: exception})
 	const queryID = "11111111-2222-3333-4444-555555555555"
@@ -210,10 +211,15 @@ func TestDefaultRecordInvestmentCoverageFailure_ClickHouseException(t *testing.T
 	if spanAttrs["clickhouse_exception"] != "QUERY_WAS_CANCELLED_BY_CLIENT" {
 		t.Fatalf("span clickhouse_exception = %q, want QUERY_WAS_CANCELLED_BY_CLIENT", spanAttrs["clickhouse_exception"])
 	}
-	// The message itself never changes -- existing log filters on it must
-	// keep matching (card constraint).
-	if spanAttrs["error"] == "" {
-		t.Fatal("existing error attribute must still be present")
+	// The log MESSAGE never changes (existing filters keep matching); the error text is gone from the span and the log line
+	// (CHAOS-7936): the class and the Go type are there instead.
+	if spanAttrs["error.class"] != "other" || spanAttrs["error.type"] != "*proto.Exception" {
+		t.Fatalf("span error.class/error.type = %q/%q, want other / *proto.Exception", spanAttrs["error.class"], spanAttrs["error.type"])
+	}
+	for key, value := range spanAttrs {
+		if key == "error" || key == "error.cause" || strings.Contains(value, "planted") {
+			t.Fatalf("span attribute %s = %q carries error text", key, value)
+		}
 	}
 
 	if len(*records) != 1 {
@@ -231,6 +237,13 @@ func TestDefaultRecordInvestmentCoverageFailure_ClickHouseException(t *testing.T
 	}
 	if rec.attrs["clickhouse_exception"] != "QUERY_WAS_CANCELLED_BY_CLIENT" {
 		t.Fatalf("log clickhouse_exception = %v, want QUERY_WAS_CANCELLED_BY_CLIENT", rec.attrs["clickhouse_exception"])
+	}
+	if text := fmt.Sprint(rec.attrs); strings.Contains(text, "planted") {
+		t.Fatalf("the log record carries error text: %s", text)
+	}
+	// the class and the type ARE in the log line (removing the error attribute altogether must not pass)
+	if errorGroup := fmt.Sprint(rec.attrs["error"]); !strings.Contains(errorGroup, "class") || !strings.Contains(errorGroup, "other") || !strings.Contains(errorGroup, "*proto.Exception") {
+		t.Fatalf("the log record's error attribute = %q, want the class and the Go type", errorGroup)
 	}
 }
 
@@ -305,5 +318,40 @@ func TestDefaultRecordInvestmentCoverageFailure_CompileStageHasNoQueryID(t *test
 	}
 	if _, ok := spanAttrs["query_id"]; ok {
 		t.Fatalf("compile-stage failure carries a query_id (%q) but no statement was ever sent", spanAttrs["query_id"])
+	}
+}
+
+// An error whose OWN text carries a secret (a transport or driver error that quotes a URL and a token): neither the span event
+// nor the log line of the failure may carry it (CHAOS-7936). The ClickHouse case above has a fixed top-level text; this one
+// puts the marker where a raw err.Error() or a raw error value would print it.
+func TestDefaultRecordInvestmentCoverageFailure_ErrorTextNeverReachesTheSpanOrTheLog(t *testing.T) {
+	recorder := tracetest.NewSpanRecorder()
+	provider := sdktrace.NewTracerProvider(sdktrace.WithSpanProcessor(recorder))
+	t.Cleanup(func() { _ = provider.Shutdown(context.Background()) })
+	ctx, span := provider.Tracer("test").Start(context.Background(), "resolve")
+	records := captureSlog(t)
+
+	planted := fmt.Errorf("dial tcp 10.1.2.3:9000 to https://svc:planted-userinfo-7936@ch.example.test/?x=planted-query-7936: %w", errors.New("connection refused by planted-host-7936"))
+	defaultRecordInvestmentCoverageFailure(ctx, "org-1", MeasureCount, true, coverageStageQuery, "", planted)
+	span.End()
+
+	events := recorder.Ended()[0].Events()
+	if len(events) != 1 {
+		t.Fatalf("expected 1 event, got %d", len(events))
+	}
+	var seen []string
+	for _, a := range events[0].Attributes {
+		seen = append(seen, string(a.Key), a.Value.Emit())
+	}
+	if len(*records) != 1 {
+		t.Fatalf("expected 1 log record, got %d", len(*records))
+	}
+	seen = append(seen, fmt.Sprint((*records)[0].attrs))
+	for _, text := range seen {
+		for _, leak := range []string{"planted", "10.1.2.3", "ch.example.test", "x="} {
+			if strings.Contains(text, leak) {
+				t.Fatalf("the failure telemetry carries %q: %s", leak, text)
+			}
+		}
 	}
 }

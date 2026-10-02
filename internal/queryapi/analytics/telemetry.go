@@ -21,6 +21,8 @@ import (
 	"context"
 	"errors"
 
+	clickhousedriver "github.com/ClickHouse/clickhouse-go/v2"
+	"github.com/full-chaos/dev-health-ops/internal/platform/logging"
 	"go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/metric"
@@ -54,11 +56,12 @@ var recordDegradation = defaultRecordDegradation
 
 func defaultRecordDegradation(ctx context.Context, phase string, err error) {
 	degradedCounter.Add(ctx, 1, metric.WithAttributes(attribute.String("phase", phase)))
-	trace.SpanFromContext(ctx).AddEvent("analytics.degraded", trace.WithAttributes(
-		attribute.String("phase", phase),
-		attribute.String("error", err.Error()),
-		attribute.String("error.cause", rootCause(err).Error()),
-	))
+	// No error text on the span (CHAOS-7936): the class and the Go type, plus the ClickHouse exception's code and name when the
+	// chain holds one: that pair tells a missing table (code 60) from a timeout (159) without the driver's message, which can
+	// quote a statement, a table and a value.
+	attrs := append([]attribute.KeyValue{attribute.String("phase", phase)}, logging.ErrorSpanAttributes(err)...)
+	attrs = append(attrs, clickHouseExceptionAttributes(err)...)
+	trace.SpanFromContext(ctx).AddEvent("analytics.degraded", trace.WithAttributes(attrs...))
 }
 
 // rootCause walks to the deepest error in the %w chain.
@@ -85,4 +88,16 @@ func rootCause(err error) error {
 		}
 		err = next
 	}
+}
+
+// clickHouseExceptionAttributes is the code and name of the ClickHouse exception the error chain holds, none when it holds none.
+func clickHouseExceptionAttributes(err error) []attribute.KeyValue {
+	var exception *clickhousedriver.Exception
+	if errors.As(err, &exception) {
+		return []attribute.KeyValue{
+			attribute.Int64("clickhouse_code", int64(exception.Code)),
+			attribute.String("clickhouse_exception", exception.Name),
+		}
+	}
+	return nil
 }

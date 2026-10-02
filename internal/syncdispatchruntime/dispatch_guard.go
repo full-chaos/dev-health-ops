@@ -9,6 +9,7 @@ import (
 	"sort"
 	"time"
 
+	"github.com/full-chaos/dev-health-ops/internal/providerfoundation"
 	scheduledsync "github.com/full-chaos/dev-health-ops/internal/scheduler/sync"
 	"github.com/jackc/pgx/v5"
 	"go.opentelemetry.io/otel/attribute"
@@ -108,6 +109,23 @@ func defaultSyncRunMaxUnits() int {
 // SYNC_UNIT_CONCURRENCY_PER_BUCKET (fallback 8).
 func syncUnitConcurrencyPerBucket() int {
 	return envPositiveInt("SYNC_UNIT_CONCURRENCY_PER_BUCKET", 8)
+}
+
+// concurrencyCapForCostClass is the admission cap of one (org, provider,
+// cost_class) bucket (CHAOS-7434). It is the worker budget's limit for that
+// class (providerfoundation.CostClassBudgetLimit, the same table the worker's
+// request budget reads), and SYNC_UNIT_CONCURRENCY_PER_BUCKET is only an UPPER
+// CLAMP on it: the variable can lower a class's cap but never raise it past
+// what the budget serves. Admitting more than the budget serves only makes the
+// extra units loop in budget-contention snoozes (a denied files attempt loses
+// all its requests), so a class outside the table (not one a provider unit
+// uses) keeps the clamp as before.
+func concurrencyCapForCostClass(costClass string) int {
+	clamp := syncUnitConcurrencyPerBucket()
+	if limit, ok := providerfoundation.CostClassBudgetLimit(costClass); ok && limit < clamp {
+		return limit
+	}
+	return clamp
 }
 
 // staleDispatchSeconds mirrors sync_units._stale_dispatch_seconds() /
@@ -272,7 +290,6 @@ func authorizeRun(ctx context.Context, tx pgx.Tx, logger *slog.Logger, orgID, ru
 		}
 	}
 
-	concurrencyCap := syncUnitConcurrencyPerBucket()
 	var cappedUnitIDs []string
 	slotHeadroom := make(map[dispatchBucket]int, len(allBuckets))
 	for _, bucket := range allBuckets {
@@ -300,7 +317,7 @@ func authorizeRun(ctx context.Context, tx pgx.Tx, logger *slog.Logger, orgID, ru
 			return reclaims[i].id < reclaims[j].id
 		})
 
-		allowedSlots := concurrencyCap - activeCount
+		allowedSlots := concurrencyCapForCostClass(bucket.costClass) - activeCount
 		if allowedSlots < 0 {
 			allowedSlots = 0
 		}

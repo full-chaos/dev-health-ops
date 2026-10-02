@@ -91,7 +91,7 @@ func TestUsersVerbsRefuseBadArgumentsBeforeConnecting(t *testing.T) {
 // never an empty one; a good line reaches the database step (no database here,
 // so a failure, not a usage refusal).
 func TestUsersCreatePasswordStdin(t *testing.T) {
-	for in, want := range map[string]string{"pw12345678\n": "pw12345678", "pw12345678\r\nrest\n": "pw12345678", "pw12345678": "pw12345678", " sp ace \n": " sp ace "} {
+	for in, want := range map[string]string{"pw12345678\n": "pw12345678", "pw12345678\r\nrest\n": "pw12345678", "pw12345678": "pw12345678", " sp ace \n": " sp ace ", "pw12345678\r": "pw12345678\r", "pw12345678\r\r\n": "pw12345678\r"} {
 		if got, err := readPasswordLine(strings.NewReader(in)); err != nil || got != want {
 			t.Errorf("readPasswordLine(%q) = %q, %v; want %q", in, got, err, want)
 		}

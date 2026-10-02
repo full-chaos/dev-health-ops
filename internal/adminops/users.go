@@ -226,7 +226,8 @@ func secretFromStdin(env cli.Env, name string, v *optString, useStdin bool) (cod
 	return 0, true
 }
 
-// readPasswordLine reads the first line of r without its line ending. An empty
+// readPasswordLine reads the first line of r without its line ending (LF or CRLF;
+// a last line with no line ending is returned byte for byte). An empty
 // or missing line is an error: a password that is not given must not turn into
 // the empty password.
 func readPasswordLine(r io.Reader) (string, error) {
@@ -237,7 +238,11 @@ func readPasswordLine(r io.Reader) (string, error) {
 	if err != nil && (err != io.EOF || line == "") {
 		return "", io.EOF
 	}
-	line = strings.TrimSuffix(strings.TrimSuffix(line, "\n"), "\r")
+	// Only a line ending (LF or CRLF) is removed. Bytes of a last line that has no
+	// line ending belong to the secret, a trailing CR included (CHAOS-7780 r1 P1).
+	if strings.HasSuffix(line, "\n") {
+		line = strings.TrimSuffix(strings.TrimSuffix(line, "\n"), "\r")
+	}
 	if line == "" {
 		return "", io.EOF
 	}

@@ -1,0 +1,32 @@
+{
+  "header": {
+    "test": "TestLinearWorkItemsOraclePrepMatchesFrozenProducerProbe",
+    "python_build": "a4847c5e93607451a0c987b314d37e02fc43ce85",
+    "producer_digest": "6e1dc97e68624398015f60caee160cceee6ae601bd434d01b8b7d5975267e137",
+    "recipe": "git worktree add --detach $DIR a4847c5e93607451a0c987b314d37e02fc43ce85 (with its .venv: uv sync --frozen --no-install-project); then from the repository root: go run ./internal/testsupport/venueoracle/goldenrecord -pkg ./internal/providersync/ -test '^TestLinearWorkItemsOraclePrepMatchesFrozenProducerProbe$' -python-root $DIR",
+    "recorded_by": "goldenrecord",
+    "blanked": {}
+  },
+  "requests": [
+    {
+      "name": "producer identity",
+      "method": "PYTHON",
+      "path": "program sha256 628419b830b7036474e09ad0528bf34d795b2cfba85f04bc4eb459060d57c0b5 env sha256 969169a1702b285f3a9e4b602d19052b0d6a3c6b2a44dd7425bef0f696436295",
+      "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "request_headers_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "status": 0,
+      "headers": {},
+      "body": "python 3.14.7\nunicodedata 16.0.0\n"
+    },
+    {
+      "name": "linear work items probe",
+      "method": "PYTHON",
+      "path": "program sha256 1994f89a6a52f3e58bfa3299cf542353de61fa72afdda0b8d19f4d434e05736e env sha256 969169a1702b285f3a9e4b602d19052b0d6a3c6b2a44dd7425bef0f696436295",
+      "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "request_headers_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "status": 0,
+      "headers": {},
+      "body": "{\"producer\":\"src/dev_health_ops/providers/linear/normalize.py::linear_issue_to_work_item\",\"transitions\":[{\"actor\":\"alice@example.com\",\"from_status\":\"todo\",\"from_status_raw\":\"Todo\",\"occurred_at\":\"2026-07-26T10:00:00Z\",\"org_id\":\"\",\"provider\":\"linear\",\"to_status\":\"in_progress\",\"to_status_raw\":\"In Progress\",\"work_item_id\":\"linear:ENG-42\"},{\"actor\":\"bob@example.com\",\"from_status\":\"done\",\"from_status_raw\":\"Done\",\"occurred_at\":\"2026-07-27T11:00:00Z\",\"org_id\":\"\",\"provider\":\"linear\",\"to_status\":\"in_progress\",\"to_status_raw\":\"In Progress\",\"work_item_id\":\"linear:ENG-42\"}],\"work_item\":{\"assignees\":[\"alice@example.com\"],\"closed_at\":null,\"completed_at\":null,\"created_at\":\"2026-07-25T09:00:00Z\",\"description\":\"A non-empty issue exercises the canonical normalizer.\",\"due_at\":\"2026-08-01T00:00:00Z\",\"epic_id\":null,\"labels\":[\"bug\",\"priority::high\"],\"native_team_key\":\"ENG\",\"org_id\":\"\",\"parent_id\":\"linear:ENG-1\",\"priority_raw\":\"high\",\"project_id\":\"project-platform\",\"project_key\":null,\"project_name\":\"Platform\",\"provider\":\"linear\",\"repo_id\":null,\"reporter\":\"bob@example.com\",\"service_class\":\"fixed_date\",\"sprint_id\":\"linear:cycle:cycle-7\",\"sprint_name\":\"Sprint 7\",\"started_at\":\"2026-07-26T10:00:00Z\",\"status\":\"in_progress\",\"status_raw\":\"In Progress\",\"story_points\":5.0,\"title\":\"Preserve the Linear work-item contract\",\"type\":\"bug\",\"updated_at\":\"2026-07-28T16:30:00Z\",\"url\":\"https://linear.app/fullchaos/issue/ENG-42\",\"work_item_id\":\"linear:ENG-42\"},\"work_item_fields\":[\"assignees\",\"closed_at\",\"completed_at\",\"created_at\",\"description\",\"due_at\",\"epic_id\",\"labels\",\"native_team_key\",\"org_id\",\"parent_id\",\"priority_raw\",\"project_id\",\"project_key\",\"project_name\",\"provider\",\"repo_id\",\"reporter\",\"service_class\",\"sprint_id\",\"sprint_name\",\"started_at\",\"status\",\"status_raw\",\"story_points\",\"title\",\"type\",\"updated_at\",\"url\",\"work_item_id\"]}\n"
+    }
+  ]
+}

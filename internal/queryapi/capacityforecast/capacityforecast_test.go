@@ -60,6 +60,10 @@ func (f *fakeRowScanner) Scan(dest ...any) error {
 			*pointer = value.(uint64)
 		case *float64:
 			*pointer = value.(float64)
+		case *[]uint16:
+			*pointer = value.([]uint16)
+		case *[]uint32:
+			*pointer = value.([]uint32)
 		case **string:
 			if value == nil {
 				*pointer = nil

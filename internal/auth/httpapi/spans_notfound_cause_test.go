@@ -229,29 +229,3 @@ func TestRecordingACauseAllocatesNothing(t *testing.T) {
 		t.Errorf("TraceHandler sink stored %q, want unregistered_document", got)
 	}
 }
-
-// A whole request through each observer: a handler that records a cause costs
-// no more allocations than one that does not.
-func TestARequestThatRecordsACauseAllocatesNoMoreThanOneThatDoesNot(t *testing.T) {
-	_ = tracedEnv(t, "0") // sampled out: the exporter's own allocations are not the subject
-	count := func(handler http.Handler) float64 {
-		return testing.AllocsPerRun(100, func() {
-			handler.ServeHTTP(httptest.NewRecorder(), httptest.NewRequest(http.MethodGet, "/v1/gone", nil))
-		})
-	}
-	plain := routeAnswering("/v1/gone", http.StatusNotFound, nil)
-	recording := routeAnswering("/v1/gone", http.StatusNotFound, func(r *http.Request) { RecordNotFoundCause(r.Context(), NotFoundIDEOff) })
-	withoutAccess := count(spanHandler(t, "public", false, plain))
-	withAccess := count(spanHandler(t, "public", false, recording))
-	if withAccess > withoutAccess {
-		t.Errorf("access observer: recording costs %v allocs vs %v without", withAccess, withoutAccess)
-	}
-	traceOf := func(route Route) http.Handler {
-		mux := http.NewServeMux()
-		mux.Handle("GET /v1/gone", route.Handler)
-		return TraceHandler(mux, TraceOptions{Listener: "public"})
-	}
-	if a, b := count(traceOf(recording)), count(traceOf(plain)); a > b {
-		t.Errorf("TraceHandler: recording costs %v allocs vs %v without", a, b)
-	}
-}

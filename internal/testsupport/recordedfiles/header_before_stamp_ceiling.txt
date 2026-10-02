@@ -56,7 +56,6 @@ internal/apiservice/customerpush/testdata/golden/bodies.json
 internal/apiservice/externalingestvenue/testdata/external-ingest-auth-limiter-venue-oracle.json
 internal/apiservice/externalingestvenue/testdata/external-ingest-limiter-venue-oracle.json
 internal/apiservice/externalingestvenue/testdata/pager-duty-webhook-limiter-venue-oracle.json
-internal/apiservice/metricsvenue/testdata/counter_parity.json
 internal/apiservice/testdata/credentials/admin.json
 internal/apiservice/testdata/credentials/connection_test.json
 internal/apiservice/testdata/program/cors-starlette.json

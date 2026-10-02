@@ -7,8 +7,6 @@ import (
 	"log/slog"
 	"time"
 
-	"github.com/jackc/pgx/v5/pgconn"
-
 	"github.com/full-chaos/dev-health-ops/internal/jobcontract"
 	"github.com/full-chaos/dev-health-ops/internal/jobruntime"
 	"github.com/full-chaos/dev-health-ops/internal/jobs/metrics/remaining/stepcause"
@@ -287,19 +285,8 @@ func exhaustPartition(store Store, ctx context.Context, partitionID string) {
 	exhaustCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
 	defer cancel()
 	if err := store.ExhaustPartition(exhaustCtx, partitionID); err != nil {
-		// Fixed text plus an error CLASS, never the error text: the run may now stay running behind a discarded job
-		// (invariant row 5), so the failure must be visible and diagnosable without leaking a driver message.
-		sqlstate := ""
-		var pgErr *pgconn.PgError
-		if errors.As(err, &pgErr) {
-			sqlstate = pgErr.Code
-		}
-		slog.WarnContext(ctx, "remaining metrics could not exhaust a last-attempt partition",
-			"partition_id", partitionID,
-			"error_type", fmt.Sprintf("%T", err),
-			"sqlstate", sqlstate,
-			"context_canceled", errors.Is(err, context.Canceled),
-			"deadline_exceeded", errors.Is(err, context.DeadlineExceeded),
-		)
+		// Fixed text, no error text: the run may now stay running behind a discarded job (invariant row 5), so the
+		// failure must be visible without leaking a driver message.
+		slog.WarnContext(ctx, "remaining metrics could not exhaust a last-attempt partition", "partition_id", partitionID)
 	}
 }

@@ -267,6 +267,9 @@ func TestGroupB_MatchPythonResolvers(t *testing.T) {
 			}
 			delete(gotMap, "startDate")
 			delete(gotMap, "endDate")
+			if c.Fn == "resolve_ai_attributed_prs" {
+				stripGoOnlyAttributedPrRowFields(gotMap)
+			}
 			want := map[string]any{}
 			for k, v := range c.Expected {
 				if k != "startDate" && k != "endDate" {
@@ -351,6 +354,25 @@ func checkCalls(t *testing.T, c oracleBCase, f *fixtureClient) {
 		}
 		if (want["repo_ids"] != nil) != (num(bs, "repo_ids") != nil) {
 			t.Errorf("hotspot team narrowing differs: python %v go %v", want["repo_ids"], num(bs, "repo_ids"))
+		}
+	}
+}
+
+// goOnlyAttributedPrRowFields are the two aiAttributedPrs row fields the Go plane
+// added (CHAOS-7773) that the Python reference never had. The oracle strips exactly
+// these before it compares a row, and nothing else; TestOracleStripsOnlyTheTwoGoOnlyFields
+// fails if this list grows. attributed_names_test.go pins the fields themselves.
+var goOnlyAttributedPrRowFields = []string{"repoName", "teamName"}
+
+func stripGoOnlyAttributedPrRowFields(response map[string]any) {
+	rows, _ := response["rows"].([]any)
+	for _, r := range rows {
+		row, ok := r.(map[string]any)
+		if !ok {
+			continue
+		}
+		for _, f := range goOnlyAttributedPrRowFields {
+			delete(row, f)
 		}
 	}
 }

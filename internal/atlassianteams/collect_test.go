@@ -670,3 +670,30 @@ func TestCollectRefusesAMemberRowWhoseExplicitTeamNodeHasABlankId(t *testing.T) 
 		t.Fatalf("err = %v, want the blank team id refusal", err)
 	}
 }
+
+// TestIterTeamUsersTagsEveryRelationWithTheRequestedTeam pins (CHAOS-7979, the r2 P3 of CHAOS-7902) the client level: the team of each
+// relation IterTeamUsers returns is the team id the read asked for, trimmed, on every page, when the row (the measured one-column shape)
+// carries no team node. Collect writes its own team id and the frozen oracle excludes team_id, so no other test sees this value.
+func TestIterTeamUsersTagsEveryRelationWithTheRequestedTeam(t *testing.T) {
+	g := newGateway(t, func(req request) (int, any) {
+		if req.Operation != "TeamworkGraphTeamUsers" {
+			return 500, nil
+		}
+		if req.Variables["after"] == nil {
+			return 200, connection("teamworkGraph_teamUsers", "u2", userEdge("", "alice-1"))
+		}
+		return 200, connection("teamworkGraph_teamUsers", "", userEdge("", "bob-2"))
+	})
+	relations, err := g.client().IterTeamUsers(context.Background(), "  "+teamA+"  ", 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(relations) != 2 {
+		t.Fatalf("relations = %d, want 2 (both pages)", len(relations))
+	}
+	for _, relation := range relations {
+		if relation.TeamID == nil || *relation.TeamID != teamA {
+			t.Errorf("relation %q has team %v, want the requested team %q", relation.SubjectUserID, relation.TeamID, teamA)
+		}
+	}
+}

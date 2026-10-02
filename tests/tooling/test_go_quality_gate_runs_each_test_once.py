@@ -239,7 +239,6 @@ EXPECTED_ORACLE_INVOCATIONS: dict[str, tuple[str, str | None]] = {
     "080-api-pytime.run": ("./internal/api/pytime", "a8c21ea784d5"),
     "100-api-pybody.run": ("./internal/api/pybody", "2b2eb061c4d5"),
     "110-api-syncadmin.run": ("./internal/api/syncadmin", "36e071e2a481"),
-    "190-apiservice-admin.run": ("./internal/apiservice/admin", "37f81dd27a85"),
     "270-jobs-investment.run": ("./internal/jobs/investment", "b982bc034857"),
     "280-pythonparity.run": ("./internal/pythonparity", "24b62b885bc4"),
     "390-queryapi-principal.run": ("./internal/queryapi/principal", "fcb55540375a"),

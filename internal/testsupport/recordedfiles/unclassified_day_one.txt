@@ -196,7 +196,6 @@ internal/jobruntime/testdata/reasonconstructor/bad_error_string.go
 internal/jobruntime/testdata/reasonconstructor/bad_struct_literal.go
 internal/jobruntime/testdata/reasonconstructor/valid_usage.go
 internal/jobs/metrics/complexity/lizardcc/testdata/corpus/allman_style_and_macro_leak.cpp.txt
-internal/jobs/metrics/complexity/lizardcc/testdata/corpus/basic_control_flow.cpp.txt
 internal/jobs/metrics/complexity/lizardcc/testdata/corpus/classes_and_namespaces.cpp.txt
 internal/jobs/metrics/complexity/lizardcc/testdata/corpus/lambdas.cpp.txt
 internal/jobs/metrics/complexity/lizardcc/testdata/corpus/lizard_comment_directives.cpp.txt

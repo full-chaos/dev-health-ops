@@ -3,8 +3,12 @@ package remaining
 import (
 	"errors"
 	"fmt"
+	"go/ast"
+	"go/parser"
+	"go/token"
 	"os"
 	"regexp"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -119,5 +123,52 @@ func TestAttributionStepErrorsAreAllWrapped(t *testing.T) {
 	}
 	if wrapped < 26 {
 		t.Fatalf("only %d stepFailure sites in the attribution files, want at least 26", wrapped)
+	}
+}
+
+// TestEveryStepFailureLabelIsAClosedLiteral pins what the doc of stepFailure promises: the step label is a string
+// LITERAL written at the call site, never an expression. A label built from the error ("step "+err.Error()) would
+// put driver text into the safe cause through the label, and nothing else in the package would notice. The call
+// set is DERIVED by parsing every non-test file of the package; an empty set fails.
+func TestEveryStepFailureLabelIsAClosedLiteral(t *testing.T) {
+	closed := regexp.MustCompile(`^[a-z0-9_ ()-]{3,60}$`)
+	files, err := parser.ParseDir(token.NewFileSet(), ".", func(info os.FileInfo) bool {
+		return !strings.HasSuffix(info.Name(), "_test.go")
+	}, 0)
+	if err != nil {
+		t.Fatalf("parse the package: %v", err)
+	}
+	calls := 0
+	for _, pkg := range files {
+		for name, file := range pkg.Files {
+			ast.Inspect(file, func(node ast.Node) bool {
+				call, ok := node.(*ast.CallExpr)
+				if !ok {
+					return true
+				}
+				callee, ok := call.Fun.(*ast.Ident)
+				if !ok || callee.Name != "stepFailure" {
+					return true
+				}
+				calls++
+				if len(call.Args) != 2 {
+					t.Errorf("%s: stepFailure takes (step, err), got %d arguments", name, len(call.Args))
+					return true
+				}
+				literal, ok := call.Args[0].(*ast.BasicLit)
+				if !ok || literal.Kind != token.STRING {
+					t.Errorf("%s: the step label of stepFailure must be a string literal, got %T", name, call.Args[0])
+					return true
+				}
+				label, err := strconv.Unquote(literal.Value)
+				if err != nil || !closed.MatchString(label) {
+					t.Errorf("%s: the step label %s is outside the closed alphabet [a-z0-9_ ()-]{3,60}", name, literal.Value)
+				}
+				return true
+			})
+		}
+	}
+	if calls < 30 {
+		t.Fatalf("found %d stepFailure calls in the package, want at least 30 (26 executor/writer + 4 handler sites)", calls)
 	}
 }

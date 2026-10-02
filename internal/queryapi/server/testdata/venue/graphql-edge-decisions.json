@@ -14,9 +14,9 @@
       "body $.data.createSavedReport.updatedAt": 2,
       "body $.data.throughputForecast.computedAt": 4,
       "header content-length": 10,
-      "header date": 186,
-      "header x-dev-health-plane": 335,
-      "header x-request-id": 378
+      "header date": 187,
+      "header x-dev-health-plane": 336,
+      "header x-request-id": 380
     }
   },
   "requests": [
@@ -3280,6 +3280,32 @@
         "x-request-id": "\u003cvolatile\u003e"
       },
       "body": "Disallowed CORS origin"
+    },
+    {
+      "name": "preflight allowed origin, method outside the list",
+      "method": "OPTIONS",
+      "path": "/graphql",
+      "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "request_headers_sha256": "b5055d6dc7873aedb4f07d4a9f6fd81e1d9a97da9b16123ccb91fbcdbb2090b8",
+      "call_env": "00bb533539cb927295b23ac888b7a03d52df3946b542cb8fac6bea9810bbd4bb",
+      "status": 400,
+      "headers": {
+        "access-control-allow-credentials": "true",
+        "access-control-allow-headers": "Accept, Accept-Language, Authorization, Content-Language, Content-Type, X-Org-Id, X-Request-ID",
+        "access-control-allow-methods": "GET, POST, PUT, PATCH, DELETE, OPTIONS",
+        "access-control-allow-origin": "https://app.example",
+        "access-control-max-age": "600",
+        "content-length": "22",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "text/plain; charset=utf-8",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin, Access-Control-Request-Method, Access-Control-Request-Headers, Access-Control-Request-Private-Network",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "\u003cvolatile\u003e"
+      },
+      "body": "Disallowed CORS method"
     },
     {
       "name": "OPTIONS without a preflight",

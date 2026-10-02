@@ -66,7 +66,7 @@ func TestGraphQLEdgeFrozenVenueOracle(t *testing.T) {
 	seededIDs["0e0e0e0e-0e0e-4e0e-8e0e-0e0e0e0e0e0c"] = true
 	// The Python edge's typed errors name the loopback address of the query-api it forwarded to: a random port
 	// of the run. It is a placeholder in the golden and in the Go answers compared with it.
-	spec := venueGolden("graphql-edge-decisions", t.Name(), "b962cae5f0327341bb8d5828b61ab572d66141b9490b4ba1109aa575571bf8e6")
+	spec := venueGolden("graphql-edge-decisions", t.Name(), "82c051c8510237b2bde6258545895ee20314678a14858d8e3284fbbb9cdb818d")
 	runValues := spec.Scrub
 	spec.Scrub = func(text string) string { return loopbackPort.ReplaceAllString(runValues(text), "127.0.0.1:<port>") }
 	golden := venueoracle.OpenGolden(t, spec)

@@ -478,6 +478,10 @@ func edgeOracleCases(t *testing.T, docs []registeredEdgeDocument, users []edgeUs
 		)
 	}
 	cases = append(cases,
+		// A preflight that asks for a method outside the allowed list (GET POST PUT PATCH DELETE OPTIONS) is a 400
+		// "Disallowed CORS method": every other preflight here asks POST.
+		edgeCase{request: venueoracle.Request{Name: "preflight allowed origin, method outside the list", Method: "OPTIONS", Path: "/graphql",
+			Headers: map[string]string{"Origin": edgeOracleOrigin, "Access-Control-Request-Method": "TRACE", "Access-Control-Request-Headers": "authorization,content-type"}}},
 		edgeCase{request: venueoracle.Request{Name: "OPTIONS without a preflight", Method: "OPTIONS", Path: "/graphql"}},
 		edgeCase{request: venueoracle.Request{Name: "HEAD", Method: "HEAD", Path: "/graphql", Headers: map[string]string{"Authorization": "Bearer " + member}}},
 		nosniffOnly(venueoracle.Request{Name: "PATCH oversize", Method: "PATCH", Path: "/graphql", Body: venueoracle.B64(strings.Repeat("x", defaultGraphQLMaxQueryBytes+1))}),

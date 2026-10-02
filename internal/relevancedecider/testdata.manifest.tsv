@@ -1,0 +1,6 @@
+# Every file under internal/relevancedecider/testdata: sha256, kind, path. Written by `go run ./internal/testsupport/recordedfiles/manifest`; never edit it by hand.
+# python-recorded set: e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855 (0 files)
+# header-before-stamp set: e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855 (0 files)
+5a58b3af74233d2acec4215ec0c244f3e3b75136835fed7bf05141a2d1cf53f7	hand-written	cases.json
+bfe47673928260f14f7b74af638b4f55891b47678c811d3dfd2bfbe449e68d5a	hand-written	go_workflow_fixture.yml
+-	header	golden/go_relevance_cases.json

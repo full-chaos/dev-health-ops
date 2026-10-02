@@ -4,7 +4,6 @@ package joboperator
 
 import (
 	"context"
-	"os/exec"
 	"regexp"
 	"strings"
 	"testing"
@@ -13,13 +12,12 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/containers"
-	"github.com/full-chaos/dev-health-ops/internal/testsupport/operatorauditschema"
-	"github.com/full-chaos/dev-health-ops/internal/testsupport/pyoracle"
+	"github.com/full-chaos/dev-health-ops/internal/testsupport/pgschema"
 )
 
 // TestEveryAuditedActionPassesTheMigratedAuditConstraints is the proof of
-// record for the audit action check: against the table the real migrations
-// build, the production PostgresAuditor writes a row for every Action in
+// record for the audit action check: against the table the production migrator
+// builds, the production PostgresAuditor writes a row for every Action in
 // AuditedActions as the operator principal, and still refuses an action
 // the check does not allow.
 func TestEveryAuditedActionPassesTheMigratedAuditConstraints(t *testing.T) {
@@ -31,11 +29,9 @@ func TestEveryAuditedActionPassesTheMigratedAuditConstraints(t *testing.T) {
 	}
 	defer instance.Close(context.Background())
 
-	python := pyoracle.Resolve(t, operatorauditschema.Root())
-	command := exec.CommandContext(ctx, python, operatorauditschema.Argv(instance.URI)...)
-	command.Env = operatorauditschema.Env()
-	output, err := command.CombinedOutput()
-	operatorauditschema.CheckApplied(t, python, output, err)
+	// The table is built by the production Postgres migrator (the Go baseline
+	// and chain), the one that builds it in a deployment.
+	pgschema.ApplyURI(ctx, t, instance.URI)
 
 	pool, err := pgxpool.New(ctx, instance.URI)
 	if err != nil {

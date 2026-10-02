@@ -195,8 +195,6 @@ internal/goapiproof/writeproof/testdata/synthetic_baseline.json
 internal/jobruntime/testdata/reasonconstructor/bad_error_string.go
 internal/jobruntime/testdata/reasonconstructor/bad_struct_literal.go
 internal/jobruntime/testdata/reasonconstructor/valid_usage.go
-internal/jobs/metrics/aigovernance/testdata/python_governance_oracle.py
-internal/jobs/metrics/aiimpact/testdata/python_repo_teams_oracle.py
 internal/jobs/metrics/complexity/lizardcc/testdata/corpus/allman_style_and_macro_leak.cpp.txt
 internal/jobs/metrics/complexity/lizardcc/testdata/corpus/basic_control_flow.cpp.txt
 internal/jobs/metrics/complexity/lizardcc/testdata/corpus/classes_and_namespaces.cpp.txt

@@ -3,7 +3,6 @@ package logging
 import (
 	"context"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"log/slog"
 	"regexp"
@@ -38,17 +37,18 @@ func ErrorClass(err error) string {
 	if err == nil {
 		return "none"
 	}
+	chain := boundedChain(err)
 	var state sqlStater
 	var syntaxErr *json.SyntaxError
 	var typeErr *json.UnmarshalTypeError
 	switch {
-	case errors.Is(err, context.Canceled):
+	case chainIs(chain, context.Canceled):
 		return ErrorClassCanceled
-	case errors.Is(err, context.DeadlineExceeded):
+	case chainIs(chain, context.DeadlineExceeded):
 		return ErrorClassDeadline
-	case errors.As(err, &state):
+	case chainAs(chain, &state):
 		return ErrorClassPostgres
-	case errors.As(err, &syntaxErr), errors.As(err, &typeErr):
+	case chainAs(chain, &syntaxErr), chainAs(chain, &typeErr):
 		return ErrorClassDecode
 	}
 	if class := TransportClass(err); class != "protocol" {
@@ -63,14 +63,7 @@ func ErrorType(err error) string {
 	if err == nil {
 		return "none"
 	}
-	for {
-		next := errors.Unwrap(err)
-		if next == nil {
-			break
-		}
-		err = next
-	}
-	return fmt.Sprintf("%T", err)
+	return fmt.Sprintf("%T", innermost(err))
 }
 
 // ErrorAttrs is the attributes of a failed operation for a log line: error_class, error_type and, for a PostgreSQL error,
@@ -82,8 +75,8 @@ func ErrorAttrs(err error) []slog.Attr {
 		return attrs
 	}
 	var state sqlStater
-	if errors.As(err, &state) {
-		if code := state.SQLState(); sqlStatePattern.MatchString(code) {
+	if chainAs(boundedChain(err), &state) {
+		if code := safeSQLState(state); sqlStatePattern.MatchString(code) {
 			attrs = append(attrs, slog.String("error_code", code))
 		}
 	}

@@ -1,7 +1,9 @@
 package pyoracle
 
 import (
+	"errors"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"reflect"
 	"strings"
@@ -280,5 +282,127 @@ func TestAProbeThatCannotStartSaysWhatTheInterpreterWrote(t *testing.T) {
 	old, _ := refusingInterpreter(t, "3.12")
 	if err := probeDeployed(t, old, t.TempDir()); err == nil || !strings.Contains(err.Error(), `resolved Python "3.12"`) {
 		t.Fatalf("an older release was not refused by what it said: %v", err)
+	}
+}
+
+// In a recording a test that is not on the closed list resolves a stand-in
+// that runs nothing, and a package on it, a run that is no recording, and the
+// launcher get the interpreter.
+func TestInARecordingATestOutsideTheClosedListIsGivenAnInterpreterThatRefuses(t *testing.T) {
+	real := filepath.Join(t.TempDir(), "real-python")
+	if err := os.WriteFile(real, []byte("#!/bin/sh\necho real\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("DEV_HEALTH_PYTHON", real)
+	root := t.TempDir()
+
+	t.Setenv(RecordingEnv, "1")
+	standIn := Resolve(t, root)
+	if standIn == real {
+		t.Fatal("a test outside the closed list was given the real interpreter in a recording")
+	}
+	out, err := exec.Command(standIn).CombinedOutput()
+	var exit *exec.ExitError
+	if !errors.As(err, &exit) || exit.ExitCode() != 97 || !strings.Contains(string(out), "producer launcher") {
+		t.Fatalf("the stand-in ran as %v with %q, want exit 97 and the way out", err, out)
+	}
+	if got := ResolveLauncher(t, root); got != real {
+		t.Fatalf("the launcher was given %s, want the real interpreter", got)
+	}
+
+	t.Chdir(filepath.Join(repoRootOf(t), "internal", "pgmigrate"))
+	if got := Resolve(t, root); got != real {
+		t.Fatalf("a package on the closed list was given %s in a recording, want the real interpreter", got)
+	}
+
+	// The match is exact: a package UNDER a listed one is not on the list
+	// (internal/apiservice is listed, internal/apiservice/admin is not).
+	t.Chdir(filepath.Join(repoRootOf(t), "internal", "apiservice", "admin"))
+	if got := Resolve(t, root); got == real {
+		t.Fatal("a package under a listed one was given the real interpreter in a recording")
+	}
+
+	t.Setenv(RecordingEnv, "")
+	t.Chdir(filepath.Join(repoRootOf(t), "internal", "testsupport", "pyoracle"))
+	if got := Resolve(t, root); got != real {
+		t.Fatalf("outside a recording the test was given %s, want the real interpreter", got)
+	}
+}
+
+func repoRootOf(t *testing.T) string {
+	t.Helper()
+	wd, err := os.Getwd()
+	if err != nil {
+		t.Fatal(err)
+	}
+	for dir := wd; ; dir = filepath.Dir(dir) {
+		if _, err := os.Stat(filepath.Join(dir, "go.mod")); err == nil {
+			return dir
+		}
+		if filepath.Dir(dir) == dir {
+			t.Fatal("no go.mod")
+		}
+	}
+}
+
+// The closed list only shrinks, and names directories that exist.
+func TestTheClosedListOfOwnLaunchPackagesOnlyShrinks(t *testing.T) {
+	list := UnconvertedOwnLaunch()
+	if len(list) != unconvertedOwnLaunchCeiling {
+		t.Fatalf("the list holds %d packages and unconvertedOwnLaunchCeiling says %d: the list only shrinks, and the number goes down with it", len(list), unconvertedOwnLaunchCeiling)
+	}
+	root := repoRootOf(t)
+	for _, dir := range list {
+		if info, err := os.Stat(filepath.Join(root, filepath.FromSlash(dir))); err != nil || !info.IsDir() {
+			t.Errorf("%s is on the closed list and is not a directory: a converted or removed package leaves the list", dir)
+		}
+	}
+}
+
+// unconvertedDayOne is the closed list as it was when the guard began
+// (CHAOS-7707). An entry that is not in it is a package added to the list,
+// which this change cannot do: a package that starts its own Python child
+// converts to the launcher instead. Removing a line from the list is allowed,
+// so a swap (one out, one in) and a raise of the ceiling both fail here.
+var unconvertedDayOne = map[string]bool{
+	"internal/adminops":                true,
+	"internal/api/externalingest":      true,
+	"internal/api/legacyingest":        true,
+	"internal/apiservice":              true,
+	"internal/apiservice/customerpush": true,
+	"internal/backfillrun":             true,
+	"internal/chmigrate":               true,
+	"internal/fixturescli":             true,
+	"internal/maintenancecli":          true,
+	"internal/metricscli":              true,
+	"internal/operationalbackfill":     true,
+	"internal/pgmigrate":               true,
+	"internal/providersync":            true,
+	"internal/pushcli":                 true,
+}
+
+func TestTheClosedListHoldsNoPackageThatWasNotThereOnDayOne(t *testing.T) {
+	for _, dir := range UnconvertedOwnLaunch() {
+		if !unconvertedDayOne[dir] {
+			t.Errorf("%s is on unconverted_own_launch.txt and was not on the day-one list: convert its Python launch to the producer's launcher instead of listing it", dir)
+		}
+	}
+}
+
+// The closed child environment is pinned as a literal. Every golden was
+// recorded under it and no key holds its constants, so a change here changes
+// no golden's key and no replay refuses: the answers of the old environment
+// would be served as the new one's.
+func TestTheClosedEnvironmentIsPinnedAsAnyGoldenWasRecordedUnderIt(t *testing.T) {
+	want := []string{
+		"PATH=/usr/local/bin:/usr/bin:/bin",
+		"LANG=C.UTF-8", "LC_ALL=C.UTF-8", "TZ=UTC",
+		"PYTHONHASHSEED=0", "PYTHONDONTWRITEBYTECODE=1",
+		"PYTHONPATH=/ROOT/src",
+		"OTEL_ENABLED=false",
+	}
+	got := ClosedEnv("/ROOT")
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("ClosedEnv changed:\n got %q\nwant %q\nevery golden was recorded under the old closed environment: re-record all of them, then move this pin", got, want)
 	}
 }

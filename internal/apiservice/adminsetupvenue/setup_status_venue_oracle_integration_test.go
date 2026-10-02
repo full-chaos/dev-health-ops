@@ -11,6 +11,7 @@ import (
 	"net/http/httptest"
 	"path/filepath"
 	"runtime"
+	"strconv"
 	"testing"
 
 	"github.com/google/uuid"
@@ -41,6 +42,9 @@ type seeder struct {
 	ctx   context.Context
 	admin *pgxpool.Pool
 	org   string
+	// id draws the next deterministic id: a golden's recording and its replay
+	// are different processes, and an id may reach a compared answer.
+	id func() uuid.UUID
 }
 
 func (s seeder) exec(sql string, args ...any) {
@@ -52,11 +56,11 @@ func (s seeder) exec(sql string, args ...any) {
 
 func (s seeder) credential(provider string, active bool) {
 	s.exec(`INSERT INTO integration_credentials (id, org_id, provider, name, is_active, credentials_encrypted, config, created_at, updated_at)
-VALUES ($1, $2, $3, $4, $5, 'x', '{}'::json, now(), now())`, uuid.New(), s.org, provider, "default-"+uuid.NewString()[:8], active)
+VALUES ($1, $2, $3, $4, $5, 'x', '{}'::json, now(), now())`, s.id(), s.org, provider, "default-"+s.id().String()[:8], active)
 }
 
 func (s seeder) integration(provider string) uuid.UUID {
-	id := uuid.New()
+	id := s.id()
 	s.exec(`INSERT INTO integrations (id, org_id, provider, name, config, is_active, created_at, updated_at)
 VALUES ($1, $2, $3, $4, '{}'::json, true, now(), now())`, id, s.org, provider, "integration-"+id.String()[:8])
 	return id
@@ -64,7 +68,7 @@ VALUES ($1, $2, $3, $4, '{}'::json, true, now(), now())`, id, s.org, provider, "
 
 func (s seeder) source(integration uuid.UUID, enabled bool) {
 	s.exec(`INSERT INTO integration_sources (id, org_id, integration_id, provider, source_type, external_id, name, full_name, metadata, is_enabled, discovered_at, last_seen_at)
-VALUES ($1, $2, $3, 'github', 'repository', $4, 'repo', $4, '{}'::json, $5, now(), now())`, uuid.New(), s.org, integration, "acme/"+uuid.NewString()[:8], enabled)
+VALUES ($1, $2, $3, 'github', 'repository', $4, 'repo', $4, '{}'::json, $5, now(), now())`, s.id(), s.org, integration, "acme/"+s.id().String()[:8], enabled)
 }
 
 type configOptions struct {
@@ -79,7 +83,7 @@ type configOptions struct {
 }
 
 func (s seeder) config(o configOptions) uuid.UUID {
-	id := uuid.New()
+	id := s.id()
 	if o.options == "" {
 		o.options = "{}"
 	}
@@ -96,7 +100,7 @@ func (s seeder) job(config uuid.UUID) uuid.UUID {
 	if err := s.admin.QueryRow(s.ctx, `SELECT id FROM scheduled_jobs WHERE sync_config_id = $1`, config).Scan(&existing); err == nil {
 		return existing
 	}
-	id := uuid.New()
+	id := s.id()
 	s.exec(`INSERT INTO scheduled_jobs (id, org_id, name, job_type, provider, schedule_cron, timezone, job_config, sync_config_id, status, is_running, run_count, failure_count, created_at, updated_at)
 VALUES ($1, $2, $3, 'sync', 'github', '0 * * * *', 'UTC', '{}'::json, $4, 0, false, 0, 0, now(), now())`, id, s.org, "job-"+id.String()[:8], config)
 	return id
@@ -107,7 +111,7 @@ func (s seeder) run(job uuid.UUID, status int, result string, runError *string, 
 		result = "{}"
 	}
 	s.exec(`INSERT INTO job_runs (id, job_id, status, result, error, triggered_by, created_at)
-VALUES ($1, $2, $3, $4::json, $5, 'venue', now() - make_interval(mins => $6))`, uuid.New(), job, status, result, runError, minutesAgo)
+VALUES ($1, $2, $3, $4::json, $5, 'venue', now() - make_interval(mins => $6))`, s.id(), job, status, result, runError, minutesAgo)
 }
 
 func text(value string) *string { return &value }
@@ -216,6 +220,12 @@ func scenarios() []scenario {
 			parent := s.config(configOptions{provider: "github", options: `{"all_repos": true}`, active: true, integration: &integration, createdMinutes: 30})
 			s.config(configOptions{provider: "github", active: true, parent: &parent, integration: &integration, lastSyncError: text("child failure"), createdMinutes: 1})
 		}},
+		{"a child config's last_sync_success does not mark the first sync completed", func(s seeder) {
+			s.credential("github", true)
+			integration := s.integration("github")
+			parent := s.config(configOptions{provider: "github", options: `{"all_repos": true}`, active: true, integration: &integration, createdMinutes: 30})
+			s.config(configOptions{provider: "github", active: true, parent: &parent, integration: &integration, lastSyncSuccess: flag(true), createdMinutes: 1})
+		}},
 		{"active parents: a running run outranks a newer failed one", func(s seeder) {
 			s.credential("jira", true)
 			integration := s.integration("jira")
@@ -257,16 +267,18 @@ func scenarios() []scenario {
 // Go api, and requires the same status and the same response text.
 func TestAdminSetupStatusVenueOracle(t *testing.T) {
 	ctx := context.Background()
-	root := repoRoot(t)
+	golden := venueoracle.OpenGolden(t, setupGolden(t.Name(), "cbc3024e22b98a2da6d47942c74ec269917b484756f4ddd4e54aa37fdefa1dc8"))
+	root := golden.PythonRoot(t, repoRoot(t))
+	nextID := stableIDs("setup")
 	const jwtKey = "venue-oracle-test-secret-key-for-setup-status-32-by"
 	cases := scenarios()
 	orgs := make([]uuid.UUID, len(cases))
 	admins := make([]uuid.UUID, len(cases))
 	for i := range cases {
-		orgs[i], admins[i] = uuid.New(), uuid.New()
+		orgs[i], admins[i] = nextID(), nextID()
 	}
 	venue := venueoracle.Start(t, ctx, venueoracle.Options{
-		Root: root, JWTKey: jwtKey,
+		Golden: golden, Root: root, JWTKey: jwtKey,
 		Seed: func(t *testing.T, ctx context.Context, admin *pgxpool.Pool, _ *venueoracle.Venue) map[string]map[string]any {
 			tokens := map[string]map[string]any{}
 			for i, c := range cases {
@@ -283,9 +295,9 @@ VALUES ($1, $2, $3, 'community', 'stripe', true, now(), now())`, orgs[i], fmt.Sp
 				exec(`INSERT INTO users (id, email, is_active, is_verified, is_superuser, token_version, created_at, updated_at)
 VALUES ($1, $2, true, true, false, 0, now(), now())`, admins[i], email)
 				exec(`INSERT INTO memberships (id, org_id, user_id, role, joined_at, created_at, updated_at)
-VALUES ($1, $2, $3, 'admin', now(), now(), now())`, uuid.New(), orgs[i], admins[i])
+VALUES ($1, $2, $3, 'admin', now(), now(), now())`, nextID(), orgs[i], admins[i])
 				tokens[fmt.Sprintf("admin%d", i)] = map[string]any{"user_id": admins[i].String(), "email": email, "org_id": org, "role": "admin"}
-				c.seed(seeder{t: t, ctx: ctx, admin: admin, org: org})
+				c.seed(seeder{t: t, ctx: ctx, admin: admin, org: org, id: nextID})
 			}
 			return tokens
 		},
@@ -298,13 +310,39 @@ VALUES ($1, $2, $3, 'admin', now(), now(), now())`, uuid.New(), orgs[i], admins[
 			Headers: map[string]string{"Authorization": "Bearer " + venue.Tokens[fmt.Sprintf("admin%d", i)]},
 		}
 	}
-	python := venue.ServePython(t, requests)
+	python := golden.Python(t, venue, requests)
 
 	goBase := startGoServer(t, ctx, venue, jwtKey)
-	receipt := venueoracle.Diff(t, goBase, requests, python, venueoracle.DiffOptions{})
+	receipt := venueoracle.Diff(t, goBase, requests, python, venueoracle.DiffOptions{Golden: golden})
 	t.Log(receipt)
 	body, _ := json.Marshal(len(requests))
 	t.Logf("%s scenarios compared", body)
+	golden.Finish(t)
+}
+
+// setupPythonBuild is a build whose Python api still answered GET
+// /api/v1/admin/setup/status: main when the golden was recorded.
+const setupPythonBuild = "a4847c5e93607451a0c987b314d37e02fc43ce85"
+
+// setupGolden is the GoldenSpec of the setup status oracle.
+func setupGolden(test, digest string) venueoracle.GoldenSpec {
+	return venueoracle.GoldenSpec{
+		Path:        "testdata/golden/setup_status.json",
+		PythonBuild: setupPythonBuild,
+		SHA256:      digest,
+		Recipe: "git worktree add --detach $DIR " + setupPythonBuild + " (with its .venv: uv sync --frozen --no-install-project); then from the repository root: " +
+			"go run ./internal/testsupport/venueoracle/goldenrecord -pkg ./internal/apiservice/adminsetupvenue/ -test '^" + test + "$' -python-root $DIR",
+	}
+}
+
+// stableIDs returns a generator of deterministic ids for one oracle: the n-th
+// id of a prefix is the same in every process.
+func stableIDs(prefix string) func() uuid.UUID {
+	next := 0
+	return func() uuid.UUID {
+		next++
+		return uuid.MustParse(venueoracle.StableUUID(prefix + "-" + strconv.Itoa(next)))
+	}
 }
 
 func startGoServer(t *testing.T, ctx context.Context, venue *venueoracle.Venue, jwtKey string) string {

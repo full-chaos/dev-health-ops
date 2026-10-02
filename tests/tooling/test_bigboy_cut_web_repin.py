@@ -90,7 +90,14 @@ def _stub(path: Path, body: str) -> None:
 
 
 def _run_repin(
-    tmp_path: Path, *, repin: str | None, image_for: str | None = HEAD_SHA, extra=None
+    tmp_path: Path,
+    *,
+    repin: str | None,
+    image_for: str | None = HEAD_SHA,
+    extra=None,
+    history: list[str] | None = None,
+    images: list[str] | None = None,
+    changed: list[str] | None = None,
 ):
     """Run bigboy-repin-web.sh against a fake bigboy root with a fake gh and docker on PATH.
 
@@ -105,12 +112,28 @@ def _run_repin(
     bindir = tmp_path / "bin"
     bindir.mkdir()
     log = tmp_path / "calls.log"
-    _stub(bindir / "gh", f'echo "gh $*" >> "{log}"\necho {HEAD_SHA}\n')
-    tag = f"sha-{image_for[:7]}" if image_for else "sha-none"
+    # gh answers by the endpoint: main HEAD, the history of main (newest first), and the files that differ
+    # between two commits. docker answers a digest only for the tags in `images`.
+    (tmp_path / "history.txt").write_text("\n".join(history or [HEAD_SHA]) + "\n")
+    (tmp_path / "changed.txt").write_text("".join(f + "\n" for f in (changed or [])))
+    _stub(
+        bindir / "gh",
+        f'echo "gh $*" >> "{log}"\n'
+        f'case "$2" in\n'
+        f"  */commits/main) echo {HEAD_SHA} ;;\n"
+        f'  */commits?sha=*) cat "{tmp_path / "history.txt"}" ;;\n'
+        f'  */compare/*) cat "{tmp_path / "changed.txt"}" ;;\n'
+        f"esac\n",
+    )
+    tags = [
+        f"sha-{c[:7]}"
+        for c in (images if images is not None else ([image_for] if image_for else []))
+    ]
+    cases = "|".join(f'*"dev-health-web:{t} "*' for t in tags) or "__none__"
     _stub(
         bindir / "docker",
         f'echo "docker $*" >> "{log}"\n'
-        f'case "$*" in *"dev-health-web:{tag} "*) echo \'{{"digest":"{NEW_DIGEST}"}}\' ;; esac\n',
+        f'case "$* " in {cases}) echo \'{{"digest":"{NEW_DIGEST}"}}\' ;; esac\n',
     )
     env = {
         "PATH": f"{bindir}:{os.environ['PATH']}",
@@ -205,3 +228,159 @@ def test_cut_documents_the_web_repin_choice_next_to_the_call() -> None:
     assert any("WEB_REPIN" in line for line in lines[max(0, call_at - 4) : call_at]), (
         "bigboy-cut.sh must document WEB_REPIN beside the repin-web call"
     )
+
+
+# ---- CHAOS-7687: the re-pin takes the newest web commit that HAS an image, and a miss fails the cut ----
+
+PARENT_SHA = (
+    "3" * 40
+)  # the newest commit of web main with an image; HEAD (HEAD_SHA) is a CI-only commit
+
+
+def test_a_ci_only_head_takes_the_newest_imaged_commit_without_waiting(
+    tmp_path: Path,
+) -> None:
+    """The planted case: web main HEAD builds no image (a path filter) and differs from the imaged
+    commit only in .github. The old script waited for HEAD's image and failed rc 3."""
+    done, overlay, calls = _run_repin(
+        tmp_path,
+        repin="head",
+        history=[HEAD_SHA, PARENT_SHA],
+        images=[PARENT_SHA],
+        changed=[".github/workflows/live-e2e.yml", ".github/scripts/x.sh"],
+    )
+    assert done.returncode == 0, done.stdout + done.stderr
+    assert NEW_DIGEST in overlay and OLD_DIGEST not in overlay
+    assert (
+        f"repin-web record: mode=head web_head={HEAD_SHA} image_commit={PARENT_SHA} digest={NEW_DIGEST}"
+        in done.stdout
+    )
+    assert f"sha-{HEAD_SHA[:7]}" in calls and f"sha-{PARENT_SHA[:7]}" in calls
+    assert "waiting for HEAD" not in done.stdout
+
+
+def test_a_head_without_image_that_changes_an_image_path_fails_rc3(
+    tmp_path: Path,
+) -> None:
+    for changed in (
+        ["src/app/page.tsx"],
+        [".github/workflows/x.yml", "public/logo.svg"],
+        ["Dockerfile"],
+        ["README.md"],
+    ):
+        sub = tmp_path / f"c-{abs(hash(tuple(changed)))}"
+        sub.mkdir()
+        done, overlay, _ = _run_repin(
+            sub,
+            repin="head",
+            history=[HEAD_SHA, PARENT_SHA],
+            images=[PARENT_SHA],
+            changed=changed,
+        )
+        assert done.returncode == 3, (changed, done.stdout)
+        assert (
+            "waiting for HEAD's own image" in done.stdout
+            and "no CI image" in done.stdout
+        )
+        assert OLD_DIGEST in overlay and NEW_DIGEST not in overlay
+
+
+def test_no_imaged_commit_in_the_history_fails_rc3_and_changes_nothing(
+    tmp_path: Path,
+) -> None:
+    done, overlay, _ = _run_repin(
+        tmp_path, repin="head", history=[HEAD_SHA, PARENT_SHA], images=[]
+    )
+    assert done.returncode == 3, done.stdout
+    assert OLD_DIGEST in overlay and NEW_DIGEST not in overlay
+
+
+def test_a_full_compare_page_is_read_as_an_image_path(tmp_path: Path) -> None:
+    done, _, _ = _run_repin(
+        tmp_path,
+        repin="head",
+        history=[HEAD_SHA, PARENT_SHA],
+        images=[PARENT_SHA],
+        changed=[f".github/f{i}.yml" for i in range(300)],
+    )
+    assert done.returncode == 3, done.stdout
+
+
+def test_a_head_with_its_own_image_is_pinned_and_recorded(tmp_path: Path) -> None:
+    done, overlay, _ = _run_repin(
+        tmp_path,
+        repin="head",
+        history=[HEAD_SHA, PARENT_SHA],
+        images=[HEAD_SHA, PARENT_SHA],
+    )
+    assert done.returncode == 0, done.stdout
+    assert NEW_DIGEST in overlay
+    assert (
+        f"web_head={HEAD_SHA} image_commit={HEAD_SHA} digest={NEW_DIGEST}"
+        in done.stdout
+    )
+
+
+def _entry_point_module():
+    """The real-entry-point harness of test_bigboy_cut_entry_point.py (stub docker and gh on PATH)."""
+    import importlib.util
+
+    path = Path(__file__).with_name("test_bigboy_cut_entry_point.py")
+    spec = importlib.util.spec_from_file_location(
+        "_bigboy_cut_entry_point_harness", path
+    )
+    assert spec is not None and spec.loader is not None
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    return mod
+
+
+def _run_cut(
+    tmp_path: Path, *, web_image_exists: bool
+) -> subprocess.CompletedProcess[str]:
+    ep = _entry_point_module()
+    root = ep._build_bigboy_root(tmp_path)
+    stub_bin = tmp_path / "stubbin"
+    stub_bin.mkdir()
+    ep._docker_stub(
+        stub_bin, routing_response=ep._routing_json("carried"), routing_rc=0
+    )
+    ep._gh_stub(stub_bin)
+    if not web_image_exists:
+        docker = stub_bin / "docker"
+        text = docker.read_text()
+        assert "dev-health-web:sha-" in text
+        docker.write_text(
+            text.replace("dev-health-web:sha-", "dev-health-web:NO-IMAGE-")
+        )
+    env = {
+        "PATH": f"{stub_bin}:/usr/bin:/bin",
+        "BIGBOY_ROOT": str(root),
+        "WEB_REPIN_WAIT_TRIES": "1",
+        "WEB_REPIN_WAIT_SECS": "0",
+    }
+    return subprocess.run(
+        ["bash", str(CUT), ep._OLD8, ep._NEW],
+        capture_output=True,
+        text=True,
+        timeout=120,
+        check=False,
+        env=env,
+    )
+
+
+def test_the_cut_stops_before_migrate_when_the_web_repin_fails(tmp_path: Path) -> None:
+    proc = _run_cut(tmp_path, web_image_exists=False)
+    assert "STEP repin-web rc=3" in proc.stdout, proc.stdout
+    assert proc.returncode == 1, (proc.returncode, proc.stdout)
+    assert "cut stops: web re-pin failed rc=3" in proc.stdout
+    assert (
+        "STEP migrate" not in proc.stdout and "STEP routing-carry" not in proc.stdout
+    ), proc.stdout
+
+
+def test_the_cut_goes_on_to_migrate_when_the_web_repin_succeeds(tmp_path: Path) -> None:
+    proc = _run_cut(tmp_path, web_image_exists=True)
+    assert "STEP repin-web rc=0" in proc.stdout, proc.stdout
+    assert "cut stops: web re-pin failed" not in proc.stdout
+    assert "STEP migrate rc=" in proc.stdout, proc.stdout

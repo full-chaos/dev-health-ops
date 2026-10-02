@@ -6,8 +6,6 @@ import (
 	"crypto/sha256"
 	"encoding/base64"
 	"encoding/hex"
-	"fmt"
-	"io"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -163,76 +161,18 @@ func TestDiffComparesBothPlanesAsProjected(t *testing.T) {
 	golden.Finish(t)
 }
 
-// goldenTokenViolations walks root for golden files (a JSON file under a
-// testdata directory with a golden header) and names each that holds a token.
+// goldenTokenViolations is GoldenTokenViolations with a fatal error.
 func goldenTokenViolations(t *testing.T, root string) (checked int, violations []string) {
 	t.Helper()
-	err := filepath.WalkDir(root, func(path string, entry os.DirEntry, err error) error {
-		if err != nil {
-			return err
-		}
-		if entry.IsDir() {
-			if name := entry.Name(); name == ".git" || name == "node_modules" || name == ".venv" {
-				return filepath.SkipDir
-			}
-			return nil
-		}
-		slash := filepath.ToSlash(path)
-		gz := strings.HasSuffix(slash, ".json.gz")
-		if !(strings.HasSuffix(slash, ".json") || gz) {
-			return nil
-		}
-		if gz && !strings.Contains(slash, "/testdata/") {
-			return nil
-		}
-		raw, err := os.ReadFile(path)
-		if err != nil {
-			return err
-		}
-		if gz {
-			// A compressed golden (a recorded transport, a world file) is
-			// scanned as text: it has no venue header to look for.
-			reader, err := gzip.NewReader(bytes.NewReader(raw))
-			if err != nil {
-				return fmt.Errorf("%s: %w", path, err)
-			}
-			if raw, err = io.ReadAll(reader); err != nil {
-				return fmt.Errorf("%s: %w", path, err)
-			}
-			checked++
-			if found := TokenShapesIn(string(raw)); len(found) > 0 {
-				violations = append(violations, fmt.Sprintf("%s holds a token shape (%s)", path, strings.Join(found, ", ")))
-			}
-			return nil
-		}
-		if !strings.Contains(string(raw), `"python_build"`) {
-			return nil
-		}
-		checked++
-		if err := tokenShapeErr(path, raw); err != nil {
-			violations = append(violations, err.Error())
-		}
-		return nil
-	})
+	checked, violations, err := GoldenTokenViolations(root)
 	if err != nil {
 		t.Fatal(err)
 	}
 	return checked, violations
 }
 
-func TestNoGoldenInTheRepoHoldsATokenShape(t *testing.T) {
-	root, err := filepath.Abs("../../..")
-	if err != nil {
-		t.Fatal(err)
-	}
-	checked, violations := goldenTokenViolations(t, root)
-	if checked == 0 {
-		t.Fatal("the walk found no golden: a gate that checks nothing passes everything")
-	}
-	if len(violations) > 0 {
-		t.Fatalf("goldens hold token shapes:\n%s", strings.Join(violations, "\n"))
-	}
-}
+// The walk over every golden in the repo lives in its own package, goldenhygiene (CHAOS-7955): it is a hygiene check,
+// not a behaviour test of this package, and under -race it was most of this package's time.
 
 // TestTheGateFailsOnAPlantedToken is verification rule 2 for the walk above:
 // the same walk over a tree with one planted token per shape reports each.

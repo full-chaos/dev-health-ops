@@ -200,7 +200,11 @@ func corpus() []scenario {
 		name := func(base string) string { return base }
 
 		// Two team pages, an archived team, whitespace to trim, optional
-		// fields present and absent.
+		// fields present and absent. The member rows of this scenario keep a
+		// SYNTHETIC team column: the pinned Python client refuses a member row
+		// without one, and a refused read would end the scenario before its
+		// pagination, node-list and project reads are compared. The real shape
+		// (one user column) is the "member-without-team" scenario below.
 		n := name("paged")
 		t1, t2, t3 := teamARI(n, "1"), teamARI(n, "2"), teamARI(n, "3")
 		add(scenario{name: n, strict: strict, teamIDs: []string{t1, t2},
@@ -271,7 +275,10 @@ func corpus() []scenario {
 				projectsField + " " + m1: {graphPage(projectsField, nil, true, nil, false)},
 			}})
 
-		// A member row with no team column.
+		// A member row with no team column: the REAL gateway shape (one user column per edge, measured by a structure-only probe on
+		// 2026-10-02; the team is the request variable). The pinned Python client refuses it ("TEAM_MEMBER relation requires team node",
+		// mappers/teams.py:237-239 via iter_team_users, teamwork_graph.py:108-128); the Go client serves it with the team of the request
+		// (CHAOS-7902). This read is pinned as a Known divergence, "Go serves, the reference fails" (see knownDivergences).
 		n = name("member-without-team")
 		w1 := teamARI(n, "1")
 		add(scenario{name: n, strict: strict, teamIDs: []string{w1},
@@ -629,6 +636,49 @@ func staleExclusions(reads map[string]outcome) []string {
 }
 
 // compare returns one line per read whose outcomes differ.
+// knownDivergences pins the reads where Go intentionally serves what the pinned reference client refuses ("Go serves, the reference
+// fails"): the key prefix is "<scenario> users ", the reference must still answer the named error, and Go must answer the named
+// members. Anything else on such a read is a mismatch, so the pin cannot hide a wrong Go answer.
+var knownDivergences = map[string]struct {
+	pythonDetail string
+	goRecords    []string // every non-excluded field of every Go record, "name=value", in order
+}{
+	"member-without-team users ": {pythonDetail: "TEAM_MEMBER relation requires team node",
+		goRecords: []string{"subject_user_id=ari:cloud:identity::user/acc-7", "relation_type=TEAM_MEMBER"}},
+}
+
+func knownDivergenceFor(key string) (string, bool) {
+	for prefix := range knownDivergences {
+		if strings.HasPrefix(key, prefix) {
+			return prefix, true
+		}
+	}
+	return "", false
+}
+
+// checkKnownDivergence reports why a pinned read does NOT hold, or "" when it does.
+func checkKnownDivergence(prefix string, py, gv outcome) string {
+	known := knownDivergences[prefix]
+	if py.Status != "error" || !strings.Contains(py.Detail, known.pythonDetail) {
+		return fmt.Sprintf("the reference no longer answers %q (status %s, %q)", known.pythonDetail, py.Status, py.Detail)
+	}
+	if gv.Status != "ok" {
+		return fmt.Sprintf("Go no longer serves the members (status %s, %q)", gv.Status, gv.Detail)
+	}
+	var got []string
+	for _, r := range withoutExcluded(gv).Records {
+		for _, f := range r {
+			name, _ := f[0].(string)
+			value, _ := f[1].(leaf)
+			got = append(got, name+"="+value.V)
+		}
+	}
+	if strings.Join(got, ",") != strings.Join(known.goRecords, ",") {
+		return fmt.Sprintf("Go serves %v, want %v", got, known.goRecords)
+	}
+	return ""
+}
+
 func compare(python, goSide map[string]outcome) []string {
 	keys := map[string]bool{}
 	for key := range python {
@@ -648,6 +698,12 @@ func compare(python, goSide map[string]outcome) []string {
 		gv, goOK := goSide[key]
 		if !pyOK || !goOK {
 			mismatches = append(mismatches, key+": read on one side only")
+			continue
+		}
+		if prefix, known := knownDivergenceFor(key); known {
+			if why := checkKnownDivergence(prefix, py, gv); why != "" {
+				mismatches = append(mismatches, key+": the pinned divergence does not hold: "+why)
+			}
 			continue
 		}
 		py, gv = withoutExcluded(py), withoutExcluded(gv)
@@ -702,38 +758,77 @@ func TestAtlassianTeamsClientMatchesFrozenPython(t *testing.T) {
 		t.Fatalf("%d of %d reads differ", len(mismatches), len(goSide))
 	}
 
-	// Known-defect gate: each planted divergence must be found.
-	plant := func(family string, mutate func(map[string]outcome) bool) {
-		t.Helper()
-		copied := map[string]outcome{}
-		for key, o := range goSide {
-			records := make([]record, len(o.Records))
+	// Known-defect gate: each planted divergence must be found. A plant is a pure change of ONE read; the gate applies it to EVERY
+	// eligible read in turn (sorted keys, no random pick) and requires, for each: the unplanted copy has 0 mismatches, the planted
+	// read is among the mismatches, and no other read is.
+	sortedKeys := make([]string, 0, len(goSide))
+	for key := range goSide {
+		sortedKeys = append(sortedKeys, key)
+	}
+	sort.Strings(sortedKeys)
+	copyOf := func(o outcome) outcome {
+		// A nil record list stays nil (an error read has none): turning it into an empty list would make the copy differ from the
+		// recorded reference on every error read, and compare() would report mismatches for ANY plant, or for none.
+		var records []record
+		if o.Records != nil {
+			records = make([]record, len(o.Records))
 			for index, r := range o.Records {
 				records[index] = append(record(nil), r...)
 			}
-			copied[key] = outcome{Status: o.Status, Records: records}
 		}
-		if !mutate(copied) {
-			t.Fatalf("known-defect gate %s: the corpus has nothing to plant it in", family)
+		return outcome{Status: o.Status, Records: records, Detail: o.Detail}
+	}
+	withRead := func(key string, o outcome) map[string]outcome {
+		copied := map[string]outcome{}
+		for k, v := range goSide {
+			copied[k] = copyOf(v)
 		}
-		if len(compare(python, copied)) == 0 {
-			t.Errorf("known-defect gate %s: the planted divergence was not found", family)
+		copied[key] = o
+		return copied
+	}
+	if unplanted := compare(python, withRead(sortedKeys[0], copyOf(goSide[sortedKeys[0]]))); len(unplanted) != 0 {
+		t.Fatalf("known-defect gate: the unplanted copy already differs from the reference: %v", unplanted)
+	}
+	plant := func(family string, mutate func(outcome) (outcome, bool)) {
+		t.Helper()
+		eligible := 0
+		for _, key := range sortedKeys {
+			changed, ok := mutate(copyOf(goSide[key]))
+			if !ok {
+				continue
+			}
+			eligible++
+			found := compare(python, withRead(key, changed))
+			planted := false
+			for _, m := range found {
+				if strings.HasPrefix(m, key+":") {
+					planted = true
+				} else {
+					t.Errorf("known-defect gate %s on %q: another read is reported: %s", family, key, m)
+				}
+			}
+			if !planted {
+				t.Errorf("known-defect gate %s: the planted divergence in %q was not found (%d mismatches)", family, key, len(found))
+			}
+		}
+		if eligible == 0 {
+			t.Errorf("known-defect gate %s: the corpus has nothing to plant it in", family)
 		}
 	}
-	setField := func(field string, to leaf) func(map[string]outcome) bool {
-		return func(reads map[string]outcome) bool {
-			for key, o := range reads {
-				for _, r := range o.Records {
-					for index := range r {
-						if r[index][0] == field {
-							r[index][1] = to
-							reads[key] = o
-							return true
+	setField := func(field string, to leaf) func(outcome) (outcome, bool) {
+		return func(o outcome) (outcome, bool) {
+			for _, r := range o.Records {
+				for index := range r {
+					if r[index][0] == field {
+						if value, _ := r[index][1].(leaf); value == to {
+							return o, false // already that value: not a change
 						}
+						r[index][1] = to
+						return o, true
 					}
 				}
 			}
-			return false
+			return o, false
 		}
 	}
 	plant("team state", setField("state", typedString("ARCHIVED-OR-NOT")))
@@ -742,24 +837,18 @@ func TestAtlassianTeamsClientMatchesFrozenPython(t *testing.T) {
 	plant("relation type", setField("relation_type", typedString("MANAGES")))
 	plant("user subject", setField("subject_user_id", typedString("ari:cloud:identity::user/planted")))
 	plant("project key", setField("project_key", leaf{T: "null"}))
-	plant("outcome", func(reads map[string]outcome) bool {
-		for key, o := range reads {
-			if o.Status == "ok" {
-				reads[key] = outcome{Status: "error"}
-				return true
-			}
+	plant("outcome", func(o outcome) (outcome, bool) {
+		if o.Status == "ok" {
+			return outcome{Status: "error"}, true
 		}
-		return false
+		return o, false
 	})
-	plant("record dropped", func(reads map[string]outcome) bool {
-		for key, o := range reads {
-			if len(o.Records) > 1 {
-				o.Records = o.Records[1:]
-				reads[key] = o
-				return true
-			}
+	plant("record dropped", func(o outcome) (outcome, bool) {
+		if len(o.Records) > 1 {
+			o.Records = o.Records[1:]
+			return o, true
 		}
-		return false
+		return o, false
 	})
-	t.Logf("%d scenarios, %d reads compared (%v), %d records; 0 mismatches; 8 planted divergences found", len(scenarios), len(goSide), statuses, records)
+	t.Logf("%d scenarios, %d reads compared (%v), %d records; 0 mismatches; 8 planted divergence kinds found on every eligible read (the pinned read included)", len(scenarios), len(goSide), statuses, records)
 }

@@ -1,0 +1,664 @@
+{
+  "header": {
+    "test": "TestUserCRUDAndPasswordChangeMatchesThePythonAPI",
+    "python_build": "a4847c5e93607451a0c987b314d37e02fc43ce85",
+    "producer_digest": "6e1dc97e68624398015f60caee160cceee6ae601bd434d01b8b7d5975267e137",
+    "recipe": "git worktree add --detach $DIR a4847c5e93607451a0c987b314d37e02fc43ce85 (with its .venv: uv sync --frozen --no-install-project); then from the repository root: go run ./internal/testsupport/venueoracle/goldenrecord -pkg ./internal/apiservice/admin/ -test '^TestUserCRUDAndPasswordChangeMatchesThePythonAPI$' -python-root $DIR (records on the pinned build, replays the candidate in a fresh process, and only then promotes it and pins its digest)",
+    "python_env": "8410254b1d5da8f464310352a69c6d62bdb88fa597a8a08eb533928ba2563ba7",
+    "python_env_version": 2,
+    "recorded_by": "goldenrecord",
+    "blanked": {
+      "body $.created_at": 10,
+      "body $.id": 10,
+      "body $.updated_at": 18,
+      "header content-length": 18,
+      "header date": 32,
+      "header x-dev-health-plane": 32,
+      "header x-request-id": 62
+    }
+  },
+  "requests": [
+    {
+      "name": "list users by org",
+      "method": "GET",
+      "path": "/api/v1/admin/users",
+      "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "request_headers_sha256": "da5b31ace68d2fcfc90ce1483a6dac8d97fdebe79a3ae169f459469ee13fa8e6",
+      "status": 200,
+      "headers": {
+        "content-length": "965",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "\u003cvolatile\u003e"
+      },
+      "body": "[{\"id\":\"10923d98-8e78-5821-978f-6ffeafd418e8\",\"email\":\"venue-İstanbul@example.com\",\"username\":null,\"full_name\":null,\"avatar_url\":null,\"auth_provider\":\"local\",\"is_active\":true,\"is_verified\":true,\"is_superuser\":false,\"last_login_at\":null,\"created_at\":\"2026-01-01T00:00:04.123456Z\",\"updated_at\":\"2026-01-01T00:00:04.123456Z\"},{\"id\":\"abe7905f-76d4-5294-9727-04a1b0869578\",\"email\":\"venue-umember@example.com\",\"username\":null,\"full_name\":null,\"avatar_url\":null,\"auth_provider\":\"local\",\"is_active\":true,\"is_verified\":true,\"is_superuser\":false,\"last_login_at\":null,\"created_at\":\"2026-01-01T00:00:03.123456Z\",\"updated_at\":\"2026-01-01T00:00:03.123456Z\"},{\"id\":\"01cb5ae0-0cd9-51df-95ec-9da9c732fa1e\",\"email\":\"venue-uadmin@example.com\",\"username\":null,\"full_name\":null,\"avatar_url\":null,\"auth_provider\":\"local\",\"is_active\":true,\"is_verified\":true,\"is_superuser\":false,\"last_login_at\":null,\"created_at\":\"2026-01-01T00:00:02.123456Z\",\"updated_at\":\"2026-01-01T00:00:02.123456Z\"}]"
+    },
+    {
+      "name": "list users search dotted capital I",
+      "method": "GET",
+      "path": "/api/v1/admin/users?q=%C4%B0",
+      "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "request_headers_sha256": "da5b31ace68d2fcfc90ce1483a6dac8d97fdebe79a3ae169f459469ee13fa8e6",
+      "status": 200,
+      "headers": {
+        "content-length": "2",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "\u003cvolatile\u003e"
+      },
+      "body": "[]"
+    },
+    {
+      "name": "list users search dotted capital I word",
+      "method": "GET",
+      "path": "/api/v1/admin/users?q=%C4%B0stanbul",
+      "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "request_headers_sha256": "da5b31ace68d2fcfc90ce1483a6dac8d97fdebe79a3ae169f459469ee13fa8e6",
+      "status": 200,
+      "headers": {
+        "content-length": "2",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "\u003cvolatile\u003e"
+      },
+      "body": "[]"
+    },
+    {
+      "name": "list users search padded dotted capital I",
+      "method": "GET",
+      "path": "/api/v1/admin/users?q=%1C%C4%B0%1F",
+      "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "request_headers_sha256": "da5b31ace68d2fcfc90ce1483a6dac8d97fdebe79a3ae169f459469ee13fa8e6",
+      "status": 200,
+      "headers": {
+        "content-length": "2",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "\u003cvolatile\u003e"
+      },
+      "body": "[]"
+    },
+    {
+      "name": "list users search lowered dotted i",
+      "method": "GET",
+      "path": "/api/v1/admin/users?q=i%CC%87stanbul",
+      "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "request_headers_sha256": "da5b31ace68d2fcfc90ce1483a6dac8d97fdebe79a3ae169f459469ee13fa8e6",
+      "status": 200,
+      "headers": {
+        "content-length": "2",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "\u003cvolatile\u003e"
+      },
+      "body": "[]"
+    },
+    {
+      "name": "list users duplicate limit",
+      "method": "GET",
+      "path": "/api/v1/admin/users?limit=0\u0026limit=1",
+      "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "request_headers_sha256": "da5b31ace68d2fcfc90ce1483a6dac8d97fdebe79a3ae169f459469ee13fa8e6",
+      "status": 200,
+      "headers": {
+        "content-length": "324",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "\u003cvolatile\u003e"
+      },
+      "body": "[{\"id\":\"10923d98-8e78-5821-978f-6ffeafd418e8\",\"email\":\"venue-İstanbul@example.com\",\"username\":null,\"full_name\":null,\"avatar_url\":null,\"auth_provider\":\"local\",\"is_active\":true,\"is_verified\":true,\"is_superuser\":false,\"last_login_at\":null,\"created_at\":\"2026-01-01T00:00:04.123456Z\",\"updated_at\":\"2026-01-01T00:00:04.123456Z\"}]"
+    },
+    {
+      "name": "list users padded limit",
+      "method": "GET",
+      "path": "/api/v1/admin/users?limit=%201%20",
+      "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "request_headers_sha256": "da5b31ace68d2fcfc90ce1483a6dac8d97fdebe79a3ae169f459469ee13fa8e6",
+      "status": 200,
+      "headers": {
+        "content-length": "324",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "\u003cvolatile\u003e"
+      },
+      "body": "[{\"id\":\"10923d98-8e78-5821-978f-6ffeafd418e8\",\"email\":\"venue-İstanbul@example.com\",\"username\":null,\"full_name\":null,\"avatar_url\":null,\"auth_provider\":\"local\",\"is_active\":true,\"is_verified\":true,\"is_superuser\":false,\"last_login_at\":null,\"created_at\":\"2026-01-01T00:00:04.123456Z\",\"updated_at\":\"2026-01-01T00:00:04.123456Z\"}]"
+    },
+    {
+      "name": "get user",
+      "method": "GET",
+      "path": "/api/v1/admin/users/abe7905f-76d4-5294-9727-04a1b0869578",
+      "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "request_headers_sha256": "d85edc6f7d4e1522c8b287a38b492105030d867a2d90a088b3a84abdf57069a7",
+      "status": 200,
+      "headers": {
+        "content-length": "320",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "\u003cvolatile\u003e"
+      },
+      "body": "{\"id\":\"abe7905f-76d4-5294-9727-04a1b0869578\",\"email\":\"venue-umember@example.com\",\"username\":null,\"full_name\":null,\"avatar_url\":null,\"auth_provider\":\"local\",\"is_active\":true,\"is_verified\":true,\"is_superuser\":false,\"last_login_at\":null,\"created_at\":\"2026-01-01T00:00:03.123456Z\",\"updated_at\":\"2026-01-01T00:00:03.123456Z\"}"
+    },
+    {
+      "name": "get user not found",
+      "method": "GET",
+      "path": "/api/v1/admin/users/21cc09f2-6660-5f12-ad71-8fd2b69a2d4c",
+      "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "request_headers_sha256": "d85edc6f7d4e1522c8b287a38b492105030d867a2d90a088b3a84abdf57069a7",
+      "status": 404,
+      "headers": {
+        "content-length": "27",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "\u003cvolatile\u003e"
+      },
+      "body": "{\"detail\":\"User not found\"}"
+    },
+    {
+      "name": "create user",
+      "method": "POST",
+      "path": "/api/v1/admin/users",
+      "body_sha256": "6e14c070aff0797c60b4da24549b4a7b28244991e0c8f70d00360606cd055ce1",
+      "request_headers_sha256": "60a271d9cc9d4aa46fc1be0b9d5e86a0dc72364a95f1731333fd6fe325915e0a",
+      "status": 201,
+      "headers": {
+        "content-length": "\u003clength of projected body\u003e",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "\u003cvolatile\u003e"
+      },
+      "body": "{\"id\":\"\u003cid\u003e\",\"email\":\"venue-newuser@example.com\",\"username\":null,\"full_name\":null,\"avatar_url\":null,\"auth_provider\":\"local\",\"is_active\":true,\"is_verified\":false,\"is_superuser\":false,\"last_login_at\":null,\"created_at\":\"\u003cnow\u003e\",\"updated_at\":\"\u003cnow\u003e\"}"
+    },
+    {
+      "name": "unauthenticated create user",
+      "method": "POST",
+      "path": "/api/v1/admin/users",
+      "body_sha256": "8a6f21e5e0a06c25b01899656b4cfe7ae5bdb08b9f6ff27dde58b1d1270bae59",
+      "request_headers_sha256": "b58ddd4bb261e78693972b6634accd44bf966020d79a21c501cd73d1a3dee206",
+      "status": 401,
+      "headers": {
+        "content-length": "42",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "www-authenticate": "Bearer",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "\u003cvolatile\u003e"
+      },
+      "body": "{\"detail\":{\"message\":\"Not authenticated\"}}"
+    },
+    {
+      "name": "create user whitespace username",
+      "method": "POST",
+      "path": "/api/v1/admin/users",
+      "body_sha256": "ca6780e853535158b2ebc019c37c21c66868a216f8d5d2dea54171482c330e50",
+      "request_headers_sha256": "60a271d9cc9d4aa46fc1be0b9d5e86a0dc72364a95f1731333fd6fe325915e0a",
+      "status": 201,
+      "headers": {
+        "content-length": "\u003clength of projected body\u003e",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "\u003cvolatile\u003e"
+      },
+      "body": "{\"id\":\"\u003cid\u003e\",\"email\":\"venue-username-ws@example.com\",\"username\":\"\",\"full_name\":null,\"avatar_url\":null,\"auth_provider\":\"local\",\"is_active\":true,\"is_verified\":false,\"is_superuser\":false,\"last_login_at\":null,\"created_at\":\"\u003cnow\u003e\",\"updated_at\":\"\u003cnow\u003e\"}"
+    },
+    {
+      "name": "create user dotted capital I email",
+      "method": "POST",
+      "path": "/api/v1/admin/users",
+      "body_sha256": "9887cf15b3d93d44c2f3ef86b94768109c141c835046fc390f805726ef84faed",
+      "request_headers_sha256": "60a271d9cc9d4aa46fc1be0b9d5e86a0dc72364a95f1731333fd6fe325915e0a",
+      "status": 201,
+      "headers": {
+        "content-length": "\u003clength of projected body\u003e",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "\u003cvolatile\u003e"
+      },
+      "body": "{\"id\":\"\u003cid\u003e\",\"email\":\"i̇-venue@example.com\",\"username\":null,\"full_name\":null,\"avatar_url\":null,\"auth_provider\":\"local\",\"is_active\":true,\"is_verified\":false,\"is_superuser\":false,\"last_login_at\":null,\"created_at\":\"\u003cnow\u003e\",\"updated_at\":\"\u003cnow\u003e\"}"
+    },
+    {
+      "name": "create user dotted capital I email again",
+      "method": "POST",
+      "path": "/api/v1/admin/users",
+      "body_sha256": "9887cf15b3d93d44c2f3ef86b94768109c141c835046fc390f805726ef84faed",
+      "request_headers_sha256": "60a271d9cc9d4aa46fc1be0b9d5e86a0dc72364a95f1731333fd6fe325915e0a",
+      "status": 400,
+      "headers": {
+        "content-length": "64",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "\u003cvolatile\u003e"
+      },
+      "body": "{\"detail\":\"User with email İ-Venue@Example.com already exists\"}"
+    },
+    {
+      "name": "create user already-lowered dotted email",
+      "method": "POST",
+      "path": "/api/v1/admin/users",
+      "body_sha256": "1663f0874569f6b0564264be45c1cefc75c69056560cf7a8e7a126536ba89ab6",
+      "request_headers_sha256": "60a271d9cc9d4aa46fc1be0b9d5e86a0dc72364a95f1731333fd6fe325915e0a",
+      "status": 400,
+      "headers": {
+        "content-length": "65",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "\u003cvolatile\u003e"
+      },
+      "body": "{\"detail\":\"User with email i̇-venue@example.com already exists\"}"
+    },
+    {
+      "name": "create user control whitespace email and username",
+      "method": "POST",
+      "path": "/api/v1/admin/users",
+      "body_sha256": "884641d337b5a333b5b09cbeaf53294e758dd2d3daa1a79ca1032c0faac7936d",
+      "request_headers_sha256": "60a271d9cc9d4aa46fc1be0b9d5e86a0dc72364a95f1731333fd6fe325915e0a",
+      "status": 201,
+      "headers": {
+        "content-length": "\u003clength of projected body\u003e",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "\u003cvolatile\u003e"
+      },
+      "body": "{\"id\":\"\u003cid\u003e\",\"email\":\"venue-fs@example.com\",\"username\":\"i̇venue\",\"full_name\":null,\"avatar_url\":null,\"auth_provider\":\"local\",\"is_active\":true,\"is_verified\":false,\"is_superuser\":false,\"last_login_at\":null,\"created_at\":\"\u003cnow\u003e\",\"updated_at\":\"\u003cnow\u003e\"}"
+    },
+    {
+      "name": "create user duplicate lowered dotted username",
+      "method": "POST",
+      "path": "/api/v1/admin/users",
+      "body_sha256": "907302dcdd92195bd3d072b7b9c5c9ed8f6f646143a7ffca60617d66445c06d9",
+      "request_headers_sha256": "60a271d9cc9d4aa46fc1be0b9d5e86a0dc72364a95f1731333fd6fe325915e0a",
+      "status": 400,
+      "headers": {
+        "content-length": "55",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "\u003cvolatile\u003e"
+      },
+      "body": "{\"detail\":\"User with username i̇venue already exists\"}"
+    },
+    {
+      "name": "create user duplicate dotted capital I username",
+      "method": "POST",
+      "path": "/api/v1/admin/users",
+      "body_sha256": "865442129838125da35460ee1ae725e6bda1d656b5d16193c3166e7c9e39e0a5",
+      "request_headers_sha256": "60a271d9cc9d4aa46fc1be0b9d5e86a0dc72364a95f1731333fd6fe325915e0a",
+      "status": 400,
+      "headers": {
+        "content-length": "54",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "\u003cvolatile\u003e"
+      },
+      "body": "{\"detail\":\"User with username İVenue already exists\"}"
+    },
+    {
+      "name": "create user empty auth_provider",
+      "method": "POST",
+      "path": "/api/v1/admin/users",
+      "body_sha256": "e440e31701cca18c4238d17669d558b1f1a074941ba0de8de76c7e9692d77752",
+      "request_headers_sha256": "60a271d9cc9d4aa46fc1be0b9d5e86a0dc72364a95f1731333fd6fe325915e0a",
+      "status": 201,
+      "headers": {
+        "content-length": "\u003clength of projected body\u003e",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "\u003cvolatile\u003e"
+      },
+      "body": "{\"id\":\"\u003cid\u003e\",\"email\":\"venue-authprovider-empty@example.com\",\"username\":null,\"full_name\":null,\"avatar_url\":null,\"auth_provider\":\"\",\"is_active\":true,\"is_verified\":false,\"is_superuser\":false,\"last_login_at\":null,\"created_at\":\"\u003cnow\u003e\",\"updated_at\":\"\u003cnow\u003e\"}"
+    },
+    {
+      "name": "create user null-typed defaulted fields",
+      "method": "POST",
+      "path": "/api/v1/admin/users",
+      "body_sha256": "ded950f1b968f02a90b7c2761d8bbfa771924d179ce000f511c85fefddeb4d26",
+      "request_headers_sha256": "60a271d9cc9d4aa46fc1be0b9d5e86a0dc72364a95f1731333fd6fe325915e0a",
+      "status": 422,
+      "headers": {
+        "content-length": "221",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "\u003cvolatile\u003e"
+      },
+      "body": "{\"detail\":[{\"type\":\"string_type\",\"loc\":[\"body\",\"auth_provider\"],\"msg\":\"Input should be a valid string\",\"input\":null},{\"type\":\"bool_type\",\"loc\":[\"body\",\"is_verified\"],\"msg\":\"Input should be a valid boolean\",\"input\":null}]}"
+    },
+    {
+      "name": "patch user",
+      "method": "PATCH",
+      "path": "/api/v1/admin/users/abe7905f-76d4-5294-9727-04a1b0869578",
+      "body_sha256": "85f46cead0f696d1d03cc51c84acdf5c22363dde3d65809a6bbe05ccad08bd05",
+      "request_headers_sha256": "60a271d9cc9d4aa46fc1be0b9d5e86a0dc72364a95f1731333fd6fe325915e0a",
+      "status": 200,
+      "headers": {
+        "content-length": "\u003clength of projected body\u003e",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "\u003cvolatile\u003e"
+      },
+      "body": "{\"id\":\"abe7905f-76d4-5294-9727-04a1b0869578\",\"email\":\"venue-umember@example.com\",\"username\":null,\"full_name\":\"A New Name\",\"avatar_url\":null,\"auth_provider\":\"local\",\"is_active\":true,\"is_verified\":true,\"is_superuser\":false,\"last_login_at\":null,\"created_at\":\"2026-01-01T00:00:03.123456Z\",\"updated_at\":\"\u003cnow\u003e\"}"
+    },
+    {
+      "name": "patch user dotted capital I email and username",
+      "method": "PATCH",
+      "path": "/api/v1/admin/users/abe7905f-76d4-5294-9727-04a1b0869578",
+      "body_sha256": "e99505a30cca72aca4a72ea787c2ac96f55ebfc67636f1d3891ea01380daa406",
+      "request_headers_sha256": "60a271d9cc9d4aa46fc1be0b9d5e86a0dc72364a95f1731333fd6fe325915e0a",
+      "status": 200,
+      "headers": {
+        "content-length": "\u003clength of projected body\u003e",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "\u003cvolatile\u003e"
+      },
+      "body": "{\"id\":\"abe7905f-76d4-5294-9727-04a1b0869578\",\"email\":\"i̇-patched@example.com\",\"username\":\"i̇patched\",\"full_name\":\"A New Name\",\"avatar_url\":null,\"auth_provider\":\"local\",\"is_active\":true,\"is_verified\":true,\"is_superuser\":false,\"last_login_at\":null,\"created_at\":\"2026-01-01T00:00:03.123456Z\",\"updated_at\":\"\u003cnow\u003e\"}"
+    },
+    {
+      "name": "patch user same dotted email again",
+      "method": "PATCH",
+      "path": "/api/v1/admin/users/abe7905f-76d4-5294-9727-04a1b0869578",
+      "body_sha256": "963656e137344c71c768107166b59c9bcb458f4601caf18eb444e4564133a6b6",
+      "request_headers_sha256": "60a271d9cc9d4aa46fc1be0b9d5e86a0dc72364a95f1731333fd6fe325915e0a",
+      "status": 200,
+      "headers": {
+        "content-length": "\u003clength of projected body\u003e",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "\u003cvolatile\u003e"
+      },
+      "body": "{\"id\":\"abe7905f-76d4-5294-9727-04a1b0869578\",\"email\":\"i̇-patched@example.com\",\"username\":\"i̇patched\",\"full_name\":\"A New Name\",\"avatar_url\":null,\"auth_provider\":\"local\",\"is_active\":true,\"is_verified\":true,\"is_superuser\":false,\"last_login_at\":null,\"created_at\":\"2026-01-01T00:00:03.123456Z\",\"updated_at\":\"\u003cnow\u003e\"}"
+    },
+    {
+      "name": "patch user int-coerced bool",
+      "method": "PATCH",
+      "path": "/api/v1/admin/users/abe7905f-76d4-5294-9727-04a1b0869578",
+      "body_sha256": "f72594576de212e10ea40ba3061637e81341c6832633c7d9633d5bdc148cde5a",
+      "request_headers_sha256": "60a271d9cc9d4aa46fc1be0b9d5e86a0dc72364a95f1731333fd6fe325915e0a",
+      "status": 200,
+      "headers": {
+        "content-length": "\u003clength of projected body\u003e",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "\u003cvolatile\u003e"
+      },
+      "body": "{\"id\":\"abe7905f-76d4-5294-9727-04a1b0869578\",\"email\":\"i̇-patched@example.com\",\"username\":\"i̇patched\",\"full_name\":\"A New Name\",\"avatar_url\":null,\"auth_provider\":\"local\",\"is_active\":true,\"is_verified\":true,\"is_superuser\":false,\"last_login_at\":null,\"created_at\":\"2026-01-01T00:00:03.123456Z\",\"updated_at\":\"\u003cnow\u003e\"}"
+    },
+    {
+      "name": "set password",
+      "method": "POST",
+      "path": "/api/v1/admin/users/abe7905f-76d4-5294-9727-04a1b0869578/password",
+      "body_sha256": "5bfed759dfe2c7e7c4a47eb762895413f130763a78ce952dc16c64ff408ecb23",
+      "request_headers_sha256": "e396db9acd2fc5abcd2d68799e39de63c2312eeeeff038733c3dfed715511790",
+      "status": 200,
+      "headers": {
+        "content-length": "16",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "\u003cvolatile\u003e"
+      },
+      "body": "{\"success\":true}"
+    },
+    {
+      "name": "set password one violation",
+      "method": "POST",
+      "path": "/api/v1/admin/users/abe7905f-76d4-5294-9727-04a1b0869578/password",
+      "body_sha256": "2ba1ac7f4afaf3e4ccdcf4095abd433f7c41aa0418a20d91117030c03ffa28b3",
+      "request_headers_sha256": "60a271d9cc9d4aa46fc1be0b9d5e86a0dc72364a95f1731333fd6fe325915e0a",
+      "status": 422,
+      "headers": {
+        "content-length": "71",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "\u003cvolatile\u003e"
+      },
+      "body": "{\"detail\":{\"violations\":[\"Password must include at least one number\"]}}"
+    },
+    {
+      "name": "set password wrong admin password",
+      "method": "POST",
+      "path": "/api/v1/admin/users/abe7905f-76d4-5294-9727-04a1b0869578/password",
+      "body_sha256": "e8e24f0b90a748a696754a429db28660584e4c27747c66e2e5a5417619706f93",
+      "request_headers_sha256": "60a271d9cc9d4aa46fc1be0b9d5e86a0dc72364a95f1731333fd6fe325915e0a",
+      "status": 403,
+      "headers": {
+        "content-length": "47",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "\u003cvolatile\u003e"
+      },
+      "body": "{\"detail\":\"Admin password verification failed\"}"
+    },
+    {
+      "name": "set password unicode digit",
+      "method": "POST",
+      "path": "/api/v1/admin/users/abe7905f-76d4-5294-9727-04a1b0869578/password",
+      "body_sha256": "f2cf99478c1bee5868c2f4ba2eeecc7e293aa416604d3c2e71418e699b7072b1",
+      "request_headers_sha256": "d8bf4cc63ed7c3fdcd977c6d4a12a320cd8f94f96fc3d5c4451cb7e88d5ddad4",
+      "status": 200,
+      "headers": {
+        "content-length": "16",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "\u003cvolatile\u003e"
+      },
+      "body": "{\"success\":true}"
+    },
+    {
+      "name": "set password admin password over bcrypt limit",
+      "method": "POST",
+      "path": "/api/v1/admin/users/abe7905f-76d4-5294-9727-04a1b0869578/password",
+      "body_sha256": "277e0712c66247d49cf96f5d502d74dcfed0efc1a5a369be52272de599126969",
+      "request_headers_sha256": "60a271d9cc9d4aa46fc1be0b9d5e86a0dc72364a95f1731333fd6fe325915e0a",
+      "status": 500,
+      "headers": {
+        "content-length": "34",
+        "content-type": "application/json"
+      },
+      "body": "{\"detail\":\"Internal Server Error\"}"
+    },
+    {
+      "name": "delete user",
+      "method": "DELETE",
+      "path": "/api/v1/admin/users/abe7905f-76d4-5294-9727-04a1b0869578",
+      "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "request_headers_sha256": "d85edc6f7d4e1522c8b287a38b492105030d867a2d90a088b3a84abdf57069a7",
+      "status": 200,
+      "headers": {
+        "content-length": "16",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "\u003cvolatile\u003e"
+      },
+      "body": "{\"deleted\":true}"
+    },
+    {
+      "name": "delete user again",
+      "method": "DELETE",
+      "path": "/api/v1/admin/users/abe7905f-76d4-5294-9727-04a1b0869578",
+      "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "request_headers_sha256": "d85edc6f7d4e1522c8b287a38b492105030d867a2d90a088b3a84abdf57069a7",
+      "status": 404,
+      "headers": {
+        "content-length": "27",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "\u003cvolatile\u003e"
+      },
+      "body": "{\"detail\":\"User not found\"}"
+    },
+    {
+      "name": "unauthenticated malformed body",
+      "method": "PATCH",
+      "path": "/api/v1/admin/users/abe7905f-76d4-5294-9727-04a1b0869578",
+      "body_sha256": "28e9bafc45d8e9d77bb0a8df443097a32dd967a6099b003712d0ef3725b43c5e",
+      "request_headers_sha256": "b58ddd4bb261e78693972b6634accd44bf966020d79a21c501cd73d1a3dee206",
+      "status": 422,
+      "headers": {
+        "content-length": "158",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "\u003cvolatile\u003e"
+      },
+      "body": "{\"detail\":[{\"type\":\"json_invalid\",\"loc\":[\"body\",1],\"msg\":\"JSON decode error\",\"input\":{},\"ctx\":{\"error\":\"Expecting property name enclosed in double quotes\"}}]}"
+    }
+  ],
+  "rows": {
+    "audit_logs rows": {
+      "rows": "[165 210 189 190 119 236 85 71 146 2 219 6 147 219 116 13] [1 203 90 224 12 217 81 223 149 236 157 169 199 50 250 30]password_changedusersuccess{} | [165 210 189 190 119 236 85 71 146 2 219 6 147 219 116 13] [1 203 90 224 12 217 81 223 149 236 157 169 199 50 250 30]password_changedusersuccess{}"
+    },
+    "audit_logs.request_metadata JSON text where org_id = 'a5d2bdbe-77ec-5547-9202-db0693db740d' AND user_id = '01cb5ae0-0cd9-51df-95ec-9da9c732fa1e'": {
+      "rows": "{\"ip_address\": \"203.0.113.42\", \"user_agent\": \"venue-oracle-test/1.0\", \"request_id\": \"venue-set-password-req\"}\u001e{\"ip_address\": \"203.0.113.42\", \"user_agent\": \"venue-oracle-test/1.0\", \"request_id\": \"venue-set-password-unicode-req\"}"
+    }
+  }
+}

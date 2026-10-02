@@ -5,9 +5,9 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
-	"runtime"
 	"testing"
 
+	"github.com/full-chaos/dev-health-ops/internal/testsupport/moduleroot"
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/programoracle"
 )
 
@@ -36,7 +36,7 @@ const oracleScript = "internal/api/externalurl/testdata/venue_oracle_validate_ex
 // including the private-network exceptions and the reserved/link-local/
 // loopback tables.
 func TestValidateExternalURLMatchesFrozenPython(t *testing.T) {
-	_, currentFile, _, ok := runtime.Caller(0)
+	_, currentFile, _, ok := moduleroot.Caller(0)
 	if !ok {
 		t.Fatal("cannot locate the test source")
 	}

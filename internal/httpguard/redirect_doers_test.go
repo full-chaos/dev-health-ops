@@ -12,36 +12,6 @@ import (
 	"golang.org/x/tools/go/packages"
 )
 
-// Every CONCRETE type that enters providerfoundation.HTTPDoer anywhere in production code (an argument, an assignment, a
-// field of a literal, a return value, a var initialiser) is derived by type, and must be one of:
-//
-//   - *net/http.Client: the provider constructors guard it once (providerfoundation.NewHTTPClient);
-//
-//   - a type that implements httpguard.Wrapper: the guard is rebuilt around the doer it wraps;
-//
-//   - a route decorator (a struct of the same package with a Do method and an HTTPDoer field) assigned to the Doer field of a
-//     constructed provider client: it wraps client.Doer, below which the guard already sits.
-//
-//   - providerfoundation.refusedDoer, the doer that sends nothing (what a PagerDuty entry point uses in place of a refused one).
-//
-// So a decorator that is not a Wrapper can never be SUPPLIED into a provider client constructor: it cannot become an HTTPDoer
-// at all, except by being assigned onto a constructed client. A new production type that implements Do and is used as an
-// HTTPDoer fails here until it is made a Wrapper or built from client.Doer. An empty derived set FAILS.
-func TestEveryConcreteTypeThatBecomesAnHTTPDoerIsGuardedOrWrapsTheGuardedDoer(t *testing.T) {
-	root, err := filepath.Abs(moduleRootRel)
-	if err != nil {
-		t.Fatal(err)
-	}
-	problems, entering := doerProblems(t, root, []string{"./..."})
-	for _, problem := range problems {
-		t.Error(problem)
-	}
-	if entering < 5 {
-		t.Errorf("only %d concrete types derived as entering HTTPDoer: the derivation is vacuous or broken", entering)
-	}
-	t.Logf("%d concrete types enter HTTPDoer", entering)
-}
-
 func doerProblems(t *testing.T, root string, patterns []string) ([]string, int) {
 	t.Helper()
 	loaded, err := packages.Load(&packages.Config{Dir: root, Mode: packages.NeedName | packages.NeedFiles | packages.NeedSyntax | packages.NeedTypes | packages.NeedTypesInfo | packages.NeedImports | packages.NeedDeps}, patterns...)

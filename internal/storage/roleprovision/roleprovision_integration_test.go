@@ -10,7 +10,6 @@ import (
 	"log/slog"
 	"os/exec"
 	"path/filepath"
-	"runtime"
 	"sort"
 	"strings"
 	"sync"
@@ -19,6 +18,7 @@ import (
 
 	"github.com/full-chaos/dev-health-ops/internal/storage/roleacl"
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/containers"
+	"github.com/full-chaos/dev-health-ops/internal/testsupport/moduleroot"
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/pgschema"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
@@ -37,7 +37,7 @@ import (
 
 func scriptPath(t *testing.T) string {
 	t.Helper()
-	_, file, _, ok := runtime.Caller(0)
+	_, file, _, ok := moduleroot.Caller(0)
 	if !ok {
 		t.Fatal("cannot resolve this test file's path")
 	}

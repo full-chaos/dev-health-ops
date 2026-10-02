@@ -162,23 +162,6 @@ const (
 	moduleRootRel = "../.."
 )
 
-func TestEveryHTTPClientSiteIsClassified(t *testing.T) {
-	problems, found, rows := realWalkProblems(t, pinnedOutOfScope, true)
-	for _, problem := range problems {
-		t.Error(problem)
-	}
-	t.Logf("%d sites, %d rows, %d problems", len(found), len(rows), len(problems))
-}
-
-// The pin is applied to the REAL walk: the same function with a pinned list that differs from the walked scope yields the
-// SCOPE LIMIT problem (so the comparison cannot be dropped from the real test unseen).
-func TestTheScopePinIsAppliedToTheRealWalk(t *testing.T) {
-	problems, _, _ := realWalkProblems(t, append(append([]string(nil), pinnedOutOfScope...), "not/a/real/file.go"), false)
-	if len(problems) != 1 || !strings.Contains(problems[0], "SCOPE LIMIT changed") {
-		t.Fatalf("want exactly the SCOPE LIMIT problem, got %v", problems)
-	}
-}
-
 // realWalkProblems walks the real module and returns every problem against redirect_sites.tsv and against the pinned scope list.
 func realWalkProblems(t *testing.T, pinned []string, allowUpdate bool) ([]string, map[site]int, map[site]row) {
 	t.Helper()

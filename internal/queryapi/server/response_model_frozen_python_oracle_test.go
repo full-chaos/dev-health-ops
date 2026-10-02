@@ -9,7 +9,6 @@ import (
 	"net/http/httptest"
 	"path/filepath"
 	"reflect"
-	"runtime"
 	"sort"
 	"strings"
 	"testing"
@@ -32,6 +31,7 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/queryapi/quadrant"
 	"github.com/full-chaos/dev-health-ops/internal/queryapi/sankey"
 	"github.com/full-chaos/dev-health-ops/internal/queryapi/workunitexplain"
+	"github.com/full-chaos/dev-health-ops/internal/testsupport/moduleroot"
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/programoracle"
 )
 
@@ -177,7 +177,7 @@ func responseModelOracleRoutes() map[string]responseModelOracleRoute {
 // same data, and the two bodies must be byte-identical. That also pins
 // field order, int-versus-float field types, and fields the model drops.
 func TestQueryAPIResponseModelsMatchFrozenPython(t *testing.T) {
-	_, file, _, ok := runtime.Caller(0)
+	_, file, _, ok := moduleroot.Caller(0)
 	if !ok {
 		t.Fatal("cannot locate the test source")
 	}

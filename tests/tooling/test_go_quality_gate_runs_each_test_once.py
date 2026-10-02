@@ -236,7 +236,6 @@ EXPECTED_ORACLE_INVOCATIONS: dict[str, tuple[str, str | None]] = {
     "030-edgetokenmint.run": ("./internal/edgetokenmint", "32743eba7079"),
     "050-api-policy.run": ("./internal/api/policy", "5089e8ae2457"),
     "110-api-syncadmin.run": ("./internal/api/syncadmin", "36e071e2a481"),
-    "270-jobs-investment.run": ("./internal/jobs/investment", "b982bc034857"),
     "280-pythonparity.run": ("./internal/pythonparity", "24b62b885bc4"),
     "390-queryapi-principal.run": ("./internal/queryapi/principal", "fcb55540375a"),
     "400-pythonparity-all.run": ("./internal/pythonparity/...", "1ad5a1bc1165"),

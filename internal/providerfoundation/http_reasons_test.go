@@ -148,3 +148,24 @@ func TestPagerDutyValidationClientDropsTheTokenOnAHostChange(t *testing.T) {
 		t.Fatalf("followed=%v, Authorization on the other host %q: want followed with none", hit, got)
 	}
 }
+
+// The same for a SUPPLIED client: the validation read follows a redirect (httpx does) but a supplied client of the
+// default policy must not replay the token to the other host (pagerDutyClient, followRedirects = true).
+func TestPagerDutyValidationSuppliedClientDropsTheTokenOnAHostChange(t *testing.T) {
+	var got string
+	var hit bool
+	target := httptest.NewServer(http.HandlerFunc(func(_ http.ResponseWriter, r *http.Request) { hit, got = true, r.Header.Get("Authorization") }))
+	defer target.Close()
+	origin := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { http.Redirect(w, r, target.URL, http.StatusFound) }))
+	defer origin.Close()
+	request, _ := http.NewRequest(http.MethodGet, origin.URL, nil)
+	request.Header.Set("Authorization", "Token token=fake")
+	response, err := pagerDutyClient(&http.Client{}, true, 5*time.Second).Do(request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_ = response.Body.Close()
+	if !hit || got != "" {
+		t.Fatalf("followed=%v, Authorization on the other host %q: want followed with none", hit, got)
+	}
+}

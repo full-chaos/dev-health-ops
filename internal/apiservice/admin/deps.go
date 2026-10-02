@@ -55,7 +55,7 @@ type Deps struct {
 	// PagerDuty.RevokeURL to point both planes at one fake endpoint.
 	PagerDuty providerfoundation.PagerDutyRevokeConfig
 	// HTTPDoer is the client the org-deletion route's PagerDuty revoke
-	// call uses; nil means http.DefaultClient.
+	// call uses; nil means a no-redirect client with a 10 s timeout (revokeDoer).
 	HTTPDoer providerfoundation.HTTPDoer
 	// Write renders every error this area's own middleware writes directly
 	// (currently: the keyed rate limiter's 429, CHAOS-6357) -- every other

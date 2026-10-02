@@ -59,23 +59,7 @@ type Deps struct {
 // (GET) before create (POST) on /credentials and get before patch on
 // /credentials/{provider}/{name}, so a 405 names the first route's method.
 func Routes(deps Deps) []httpapi.Route {
-	logger := deps.Logger
-	if logger == nil {
-		logger = slog.Default()
-	}
-	now := deps.Now
-	if now == nil {
-		now = time.Now
-	}
-	client := probeClientFor(deps.HTTPClient)
-	lookup := deps.HostLookup
-	if lookup == nil {
-		lookup = externalurl.ResolveHostAddrs
-	}
-	// The repository listing's clients each apply their provider's own
-	// timeout to this one (a test's client answers for both).
-	repoClient := probeClientFor(deps.HTTPClient)
-	h := handlers{pool: deps.Pool, cipher: deps.Cipher, logger: logger, now: now, client: client, repoClient: repoClient, lookup: lookup}
+	h := newHandlers(deps)
 	return []httpapi.Route{
 		{Method: http.MethodGet, Pattern: "/api/v1/admin/credentials", Allow: http.MethodGet,
 			Handler: deps.Guard.Wrap(policy.AdminOrg, http.HandlerFunc(h.list))},
@@ -603,4 +587,25 @@ func (h handlers) patchFlags(ctx context.Context, orgID string, existing credent
 	}
 	response.UpdatedAt = now
 	return response, nil
+}
+
+// newHandlers is what Routes builds its handlers from: the clients of every probe and listing call among them.
+func newHandlers(deps Deps) handlers {
+	logger := deps.Logger
+	if logger == nil {
+		logger = slog.Default()
+	}
+	now := deps.Now
+	if now == nil {
+		now = time.Now
+	}
+	client := probeClientFor(deps.HTTPClient)
+	lookup := deps.HostLookup
+	if lookup == nil {
+		lookup = externalurl.ResolveHostAddrs
+	}
+	// The repository listing's clients each apply their provider's own
+	// timeout to this one (a test's client answers for both).
+	repoClient := probeClientFor(deps.HTTPClient)
+	return handlers{pool: deps.Pool, cipher: deps.Cipher, logger: logger, now: now, client: client, repoClient: repoClient, lookup: lookup}
 }

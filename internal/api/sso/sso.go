@@ -102,17 +102,8 @@ func Routes(deps Deps) []httpapi.Route {
 	if deps.Pool == nil || deps.Guard == nil {
 		return nil
 	}
-	if deps.Logger == nil {
-		deps.Logger = slog.Default()
-	}
-	if deps.Now == nil {
-		deps.Now = time.Now
-	}
-	if deps.Write == nil {
-		deps.Write = httpapi.WriteError
-	}
-	deps.HTTPClient = httpClientFor(deps.HTTPClient)
-	h := handlers{deps}
+	h := newHandlers(deps)
+	deps = h.Deps
 	g := deps.Guard
 	const prefix = "/api/v1/auth"
 	route := func(method, path string, handler http.Handler) httpapi.Route {
@@ -280,4 +271,19 @@ func httpClientFor(supplied *http.Client) *http.Client {
 		return defaultOIDCClient()
 	}
 	return httpguard.NoRedirects(supplied)
+}
+
+// newHandlers is what Routes builds its handlers from: the defaults of Deps, and the client every IdP call uses.
+func newHandlers(deps Deps) handlers {
+	if deps.Logger == nil {
+		deps.Logger = slog.Default()
+	}
+	if deps.Now == nil {
+		deps.Now = time.Now
+	}
+	if deps.Write == nil {
+		deps.Write = httpapi.WriteError
+	}
+	deps.HTTPClient = httpClientFor(deps.HTTPClient)
+	return handlers{deps}
 }

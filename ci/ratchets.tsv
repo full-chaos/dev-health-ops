@@ -3,3 +3,4 @@
 recordedfiles-day-one	internal/testsupport/recordedfiles/unclassified_day_one.txt	files that had no kind when the manifests were first written: a file leaves the list when it gets a kind
 recordedfiles-header-before-stamp	internal/testsupport/recordedfiles/header_before_stamp_ceiling.txt	goldens that may have no record-verb stamp: the ones in the tree when the stamp became the verb's
 pyoracle-own-launch	internal/testsupport/pyoracle/unconverted_own_launch.txt	test packages that may still start their own Python child in a recording
+# planted: a comment-only edit, to see that a change of this file alone triggers the go workflow

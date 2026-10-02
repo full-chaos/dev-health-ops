@@ -5,11 +5,13 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"flag"
 	"fmt"
 	"io"
 	"math/big"
 	"net"
 	"net/http"
+	"os"
 	"strings"
 	"testing"
 	"time"
@@ -402,6 +404,8 @@ func (timeoutError) Temporary() bool { return true }
 // class, the retry attempts, the rate-limit triage and malformed bodies.
 func TestListRepositoriesVenueOracleMatchesFrozenPython(t *testing.T) {
 	scenarios := listScenarios()
+	knownGo := loadKnownGoAnswers(t)
+	seenKnown := map[string]knownGoAnswer{}
 	input, err := json.Marshal(scenarios)
 	if err != nil {
 		t.Fatal(err)
@@ -482,6 +486,14 @@ func TestListRepositoriesVenueOracleMatchesFrozenPython(t *testing.T) {
 			} else {
 				t.Logf("known difference, scenario %d (%s): %s", index, describe(s), s.Known)
 			}
+			// Go's own answer is pinned too: a change to another answer fails here, not only a change to Python's.
+			key := fmt.Sprintf("%d %s", index, describe(s))
+			seenKnown[key] = knownGoAnswer{Result: string(gotResult), Requests: fmt.Sprint(transport.seen)}
+			if !*updateKnownGo {
+				if pinned, ok := knownGo[key]; !ok || pinned != seenKnown[key] {
+					t.Errorf("scenario %d (%s): Go's answer for a known difference changed\n pinned %+v\n go     %+v\n(run with -update-known-go after a deliberate change)", index, describe(s), pinned, seenKnown[key])
+				}
+			}
 			continue
 		}
 		if string(gotResult) != string(wantResult) {
@@ -502,8 +514,50 @@ func TestListRepositoriesVenueOracleMatchesFrozenPython(t *testing.T) {
 			t.Errorf("scenario %d (%s): requests\n go     %v\n python %v", index, describe(s), transport.seen, pythonRequests)
 		}
 	}
+	if *updateKnownGo {
+		writeKnownGoAnswers(t, seenKnown)
+	} else if len(knownGo) != len(seenKnown) {
+		t.Errorf("testdata/known-go-answers.json pins %d known differences, the corpus has %d", len(knownGo), len(seenKnown))
+	}
 	t.Logf("%d scenarios compared", len(scenarios))
 	venueoracle.WriteGoOnlyProof(t, "Go's code-host listing against the frozen requests and results of Python's client")
+}
+
+var updateKnownGo = flag.Bool("update-known-go", false, "rewrite testdata/known-go-answers.json from Go's current answers for the known differences")
+
+// knownGoAnswer is what the Go client answered for a scenario with a known difference from Python.
+type knownGoAnswer struct {
+	Result   string `json:"result"`
+	Requests string `json:"requests"`
+}
+
+const knownGoAnswersPath = "testdata/known-go-answers.json"
+
+func loadKnownGoAnswers(t *testing.T) map[string]knownGoAnswer {
+	t.Helper()
+	pinned := map[string]knownGoAnswer{}
+	if *updateKnownGo {
+		return pinned
+	}
+	data, err := os.ReadFile(knownGoAnswersPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := json.Unmarshal(data, &pinned); err != nil {
+		t.Fatal(err)
+	}
+	return pinned
+}
+
+func writeKnownGoAnswers(t *testing.T, answers map[string]knownGoAnswer) {
+	t.Helper()
+	data, err := json.MarshalIndent(answers, "", "  ")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(knownGoAnswersPath, append(data, '\n'), 0o644); err != nil {
+		t.Fatal(err)
+	}
 }
 
 // describe names a scenario in a failure.

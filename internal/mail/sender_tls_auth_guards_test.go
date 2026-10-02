@@ -9,6 +9,7 @@ import (
 	"context"
 	"crypto/tls"
 	"crypto/x509"
+	"encoding/base64"
 	"net"
 	"os"
 	"path/filepath"
@@ -29,11 +30,14 @@ type recordingSMTPServer struct {
 	advertiseAuth     bool
 	authReply         string // reply to AUTH, e.g. "235 ok" or "535 refused"
 
-	mu       sync.Mutex
-	verbs    []string
-	conn     net.Conn
-	done     chan struct{}
-	upgraded bool
+	maxTLSVersion uint16 // 0 = the library default; else the highest version the relay speaks on STARTTLS
+
+	mu        sync.Mutex
+	verbs     []string
+	authLines []string
+	conn      net.Conn
+	done      chan struct{}
+	upgraded  bool
 }
 
 func newRecordingSMTPServer(t *testing.T, configure func(*recordingSMTPServer)) *recordingSMTPServer {
@@ -83,6 +87,26 @@ func (server *recordingSMTPServer) commands(t *testing.T) []string {
 	return append([]string(nil), server.verbs...)
 }
 
+// authPayloads is the decoded credential of every "AUTH PLAIN <base64>" line the relay received.
+func (server *recordingSMTPServer) authPayloads(t *testing.T) []string {
+	t.Helper()
+	server.mu.Lock()
+	defer server.mu.Unlock()
+	var out []string
+	for _, line := range server.authLines {
+		fields := strings.Fields(line)
+		if len(fields) != 3 || !strings.EqualFold(fields[1], "PLAIN") {
+			t.Fatalf("the AUTH line is not \"AUTH PLAIN <base64>\": %q", "<redacted>")
+		}
+		raw, err := base64.StdEncoding.DecodeString(fields[2])
+		if err != nil {
+			t.Fatal(err)
+		}
+		out = append(out, string(raw))
+	}
+	return out
+}
+
 func (server *recordingSMTPServer) record(verb string) {
 	server.mu.Lock()
 	server.verbs = append(server.verbs, verb)
@@ -119,6 +143,11 @@ func (server *recordingSMTPServer) serve(conn net.Conn, greet bool) {
 		}
 		verb := strings.ToUpper(fields[0])
 		server.record(verb)
+		if verb == "AUTH" {
+			server.mu.Lock()
+			server.authLines = append(server.authLines, strings.TrimSpace(line))
+			server.mu.Unlock()
+		}
 		switch verb {
 		case "EHLO", "HELO":
 			reply("250-recording.smtp.test")
@@ -135,7 +164,7 @@ func (server *recordingSMTPServer) serve(conn net.Conn, greet bool) {
 				continue
 			}
 			reply("220 Ready to start TLS")
-			tlsConn := tls.Server(conn, &tls.Config{Certificates: []tls.Certificate{*server.cert}})
+			tlsConn := tls.Server(conn, &tls.Config{Certificates: []tls.Certificate{*server.cert}, MaxVersion: server.maxTLSVersion})
 			if err := tlsConn.Handshake(); err != nil {
 				return
 			}
@@ -263,6 +292,13 @@ func TestSMTPSendAuthenticatesOnlyWhenBothLoginAndPasswordAreSet(t *testing.T) {
 			if !hasVerb(seen, "MAIL") || !hasVerb(seen, "DATA") {
 				t.Fatalf("the message did not go through (commands: %v)", seen)
 			}
+			if test.wantAuth {
+				// AUTH PLAIN carries \0<login>\0<password> (empty authorization identity): login and password in that order.
+				payloads := server.authPayloads(t)
+				if len(payloads) != 1 || payloads[0] != "\x00"+test.username+"\x00"+test.password {
+					t.Fatalf("the AUTH PLAIN payload is not \\0<login>\\0<password> (%d AUTH lines)", len(payloads))
+				}
+			}
 		})
 	}
 }
@@ -348,5 +384,44 @@ func TestNewSenderFromEnvRefusesACAFileWithNoPEMCertificate(t *testing.T) {
 	_, err := NewSenderFromEnv(nil)
 	if err == nil || !strings.Contains(err.Error(), "SMTP_TLS_CA_FILE is invalid") || !strings.Contains(err.Error(), "no PEM certificates found") {
 		t.Fatalf("NewSenderFromEnv() = %v, want \"SMTP_TLS_CA_FILE is invalid: ... no PEM certificates found\"", err)
+	}
+}
+
+// A relay that speaks only TLS 1.1 is refused (the sender never negotiates below TLS 1.2), whether the tls.Config is the constructor's or the
+// struct-literal default; the relay sees no MAIL FROM. (On the toolchain of this repository Go's own client default is also TLS 1.2, so removing the
+// explicit MinVersion from either config is NOT distinguishable here: stated NOT pinned in the PR body, executed.)
+func TestSMTPSendRefusesARelayThatOffersOnlyTLS11(t *testing.T) {
+	cert, certPEM := generateSelfSignedSMTPCert(t, "127.0.0.1")
+	for _, test := range []struct {
+		name string
+		make func(t *testing.T, host string, port int) Sender
+	}{
+		{"struct literal without a tlsConfig", func(t *testing.T, host string, port int) Sender {
+			return &smtpSender{from: "noreply@example.test", host: host, port: port, useTLS: true}
+		}},
+		{"constructor config", func(t *testing.T, host string, port int) Sender {
+			smtpEnv(t, host, port, map[string]string{"SMTP_USE_TLS": "true", "SMTP_TLS_CA_FILE": writeCAFile(t, certPEM)})
+			sender, err := NewSenderFromEnv(nil)
+			if err != nil {
+				t.Fatal(err)
+			}
+			return sender
+		}},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			server := newRecordingSMTPServer(t, func(s *recordingSMTPServer) {
+				s.advertiseSTARTTLS = true
+				s.cert = &cert
+				s.maxTLSVersion = tls.VersionTLS11
+			})
+			host, port := server.addr()
+			err := test.make(t, host, port).Send(context.Background(), guardMessage())
+			if err == nil {
+				t.Fatal("Send() = nil: a TLS 1.1-only relay was accepted")
+			}
+			if seen := server.commands(t); hasVerb(seen, "MAIL") {
+				t.Fatalf("the relay saw MAIL FROM after the failed handshake (commands: %v)", seen)
+			}
+		})
 	}
 }

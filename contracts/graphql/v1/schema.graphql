@@ -469,7 +469,7 @@ input CapacityForecastFilterInput {
 }
 
 input CapacityForecastInput {
-  teamId: String = null @deprecated(reason: "Use teamIds.")
+  teamId: String = null
   teamIds: [String!] = null
   workScopeId: String = null
   targetItems: Int = null

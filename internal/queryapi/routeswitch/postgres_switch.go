@@ -2,11 +2,9 @@ package routeswitch
 
 import (
 	"context"
-	"errors"
 	"log"
 	"time"
 
-	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
@@ -82,6 +80,11 @@ type PostgresSwitch struct {
 	pool            *pgxpool.Pool
 	schemaDigest    string
 	documentDigests map[string]string
+	// legacyDigests maps an operation to the document digests of its LEGACY registered texts
+	// (CHAOS-8000 dual accept): a text the operation accepted before its current one. A routing row at
+	// any of them counts for the operation, so a row written for the old text keeps serving while the
+	// new text's row is not yet enabled. Nil or an operation absent from it = no legacy text.
+	legacyDigests map[string][]string
 	// reachable is the mode set this instance treats as reachable.
 	// NewPostgresSwitch sets reachableModes (production: canary|primary);
 	// NewProofSwitch widens it by "shadow" for the measurement-only
@@ -107,6 +110,23 @@ func NewPostgresSwitch(pool *pgxpool.Pool, schemaDigest string, documentDigests 
 	return &PostgresSwitch{pool: pool, schemaDigest: schemaDigest, documentDigests: copied, reachable: reachableModes}
 }
 
+// NewPostgresSwitchWithLegacy is NewPostgresSwitch for operations that accept more than one registered text
+// (CHAOS-8000 dual accept). legacyDigests maps an operation to the digests of its older texts; it is
+// copied. An operation absent from it behaves exactly as under NewPostgresSwitch.
+func NewPostgresSwitchWithLegacy(pool *pgxpool.Pool, schemaDigest string, documentDigests map[string]string, legacyDigests map[string][]string) *PostgresSwitch {
+	sw := NewPostgresSwitch(pool, schemaDigest, documentDigests)
+	sw.legacyDigests = copyLegacy(legacyDigests)
+	return sw
+}
+
+func copyLegacy(in map[string][]string) map[string][]string {
+	out := make(map[string][]string, len(in))
+	for operation, digests := range in {
+		out[operation] = append([]string(nil), digests...)
+	}
+	return out
+}
+
 // Enabled implements Switch. It queries `go_api_routing_state` for the
 // current mode of (schemaDigest, documentDigest, operation) and returns
 // true only when a row exists AND its mode is "canary" or "primary". Any
@@ -130,19 +150,63 @@ func (s *PostgresSwitch) Enabled(operation string) bool {
 
 	ctx, cancel := context.WithTimeout(context.Background(), lookupTimeout)
 	defer cancel()
-	var mode string
-	err := s.pool.QueryRow(ctx,
+	rows, err := s.pool.Query(ctx,
 		`SELECT mode FROM go_api_routing_state
-		 WHERE schema_digest = $1 AND document_digest = $2 AND selected_operation = $3`,
-		s.schemaDigest, documentDigest, operation,
-	).Scan(&mode)
+		 WHERE schema_digest = $1 AND document_digest = ANY($2::text[]) AND selected_operation = $3`,
+		s.schemaDigest, acceptedDigests(documentDigest, s.legacyDigests[operation]), operation,
+	)
 	if err != nil {
-		if errors.Is(err, pgx.ErrNoRows) {
-			recordDigestMiss(ctx, operation, s.schemaDigest, documentDigest)
-			return false
-		}
 		log.Printf("routeswitch: PostgresSwitch lookup failed for operation %q: %v", operation, err)
 		return false
 	}
-	return s.reachable[mode]
+	defer rows.Close()
+	var modes []string
+	for rows.Next() {
+		var mode string
+		if err := rows.Scan(&mode); err != nil {
+			log.Printf("routeswitch: PostgresSwitch lookup failed for operation %q: %v", operation, err)
+			return false
+		}
+		modes = append(modes, mode)
+	}
+	if err := rows.Err(); err != nil {
+		log.Printf("routeswitch: PostgresSwitch lookup failed for operation %q: %v", operation, err)
+		return false
+	}
+	if len(modes) == 0 {
+		recordDigestMiss(ctx, operation, s.schemaDigest, documentDigest)
+		return false
+	}
+	return anyReachable(modes, s.reachable)
+}
+
+// acceptedDigests is the operation's current digest followed by its legacy ones, without a repeat.
+func acceptedDigests(current string, legacy []string) []string {
+	out := []string{current}
+	for _, digest := range legacy {
+		if digest != current && !contains(out, digest) {
+			out = append(out, digest)
+		}
+	}
+	return out
+}
+
+func contains(list []string, value string) bool {
+	for _, item := range list {
+		if item == value {
+			return true
+		}
+	}
+	return false
+}
+
+// anyReachable is true when at least one row's mode is reachable: a row at any accepted digest that is
+// on keeps the operation on, and a legacy row left at "disabled" does not switch off a live current row.
+func anyReachable(modes []string, reachable map[string]bool) bool {
+	for _, mode := range modes {
+		if reachable[mode] {
+			return true
+		}
+	}
+	return false
 }

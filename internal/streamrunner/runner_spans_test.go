@@ -1,0 +1,513 @@
+package streamrunner
+
+import (
+	"context"
+	"errors"
+	"fmt"
+	"strings"
+	"testing"
+	"time"
+
+	"github.com/full-chaos/dev-health-ops/internal/platform/health"
+	"go.opentelemetry.io/otel"
+	"go.opentelemetry.io/otel/codes"
+	sdktrace "go.opentelemetry.io/otel/sdk/trace"
+	"go.opentelemetry.io/otel/sdk/trace/tracetest"
+	oteltrace "go.opentelemetry.io/otel/trace"
+)
+
+func installStreamSpanRecorder(t *testing.T) *tracetest.InMemoryExporter {
+	t.Helper()
+	exporter := tracetest.NewInMemoryExporter()
+	provider := sdktrace.NewTracerProvider(sdktrace.WithSyncer(exporter))
+	previous := otel.GetTracerProvider()
+	otel.SetTracerProvider(provider)
+	t.Cleanup(func() { otel.SetTracerProvider(previous) })
+	return exporter
+}
+
+func spanStrAttr(span tracetest.SpanStub, key string) string {
+	for _, kv := range span.Attributes {
+		if string(kv.Key) == key {
+			return kv.Value.Emit()
+		}
+	}
+	return ""
+}
+
+type failingReadTransport struct{ *fakeTransport }
+
+func (failingReadTransport) ReadNew(context.Context, []string, string, string, int, time.Duration) ([]Message, error) {
+	return nil, errors.New("redis down {payload-in-error}")
+}
+
+type failingQuarantineTransport struct{ *fakeTransport }
+
+func (failingQuarantineTransport) Quarantine(context.Context, Message, string) error {
+	return errors.New("dlq write failed")
+}
+
+func spansByName(exporter *tracetest.InMemoryExporter, name string) []tracetest.SpanStub {
+	var out []tracetest.SpanStub
+	for _, span := range exporter.GetSpans() {
+		if span.Name == name {
+			out = append(out, span)
+		}
+	}
+	return out
+}
+
+func assertNoIdentity(t *testing.T, exporter *tracetest.InMemoryExporter) {
+	t.Helper()
+	for _, span := range exporter.GetSpans() {
+		if strings.Contains(fmt.Sprint(span), "payload-in-error") || strings.Contains(fmt.Sprint(span), "clickhouse unavailable") {
+			t.Errorf("span %s carries error text", span.Name)
+		}
+		for _, kv := range span.Attributes {
+			if v := kv.Value.Emit(); v == "1-0" || v == "2-0" || v == "3-0" || v == "test:stream" {
+				t.Errorf("span %s leaks stream/message identity in %s", span.Name, kv.Key)
+			}
+		}
+	}
+}
+
+// CHAOS-7879: a non-empty batch is one span, each handled event one child of
+// it, with a fixed outcome word and an Error status only for a failure; an idle
+// cycle emits nothing; no stream key, message id, payload or error text reaches
+// a span.
+func TestRunnerEmitsBatchAndHandleSpansWithOutcomes(t *testing.T) {
+	exporter := installStreamSpanRecorder(t)
+	transport := &fakeTransport{new: []Message{
+		{Stream: "test:stream", ID: "1-0"},
+		{Stream: "test:stream", ID: "2-0"},
+		{Stream: "test:stream", ID: "3-0"},
+	}}
+	calls := 0
+	var handlerSpanIDs []oteltrace.SpanID
+	runner, err := New(transport, handlerFunc(func(ctx context.Context, _ Message) error {
+		handlerSpanIDs = append(handlerSpanIDs, oteltrace.SpanContextFromContext(ctx).SpanID())
+		calls++
+		switch calls {
+		case 2:
+			return &PermanentError{Reason: "schema_invalid"}
+		case 3:
+			return errors.New("clickhouse unavailable")
+		}
+		return nil
+	}), testConfig(), health.NewRegistry(time.Second))
+	if err != nil {
+		t.Fatal(err)
+	}
+	_ = runner.window(context.Background())
+
+	batches := spansByName(exporter, "dev_health.stream.batch")
+	if len(batches) != 1 {
+		t.Fatalf("got %d batch spans, want 1", len(batches))
+	}
+	batch := batches[0]
+	if got := spanStrAttr(batch, "dev_health.stream.messages"); got != "3" {
+		t.Errorf("batch messages = %q, want 3", got)
+	}
+	if got := spanStrAttr(batch, "dev_health.stream.lanes"); got != "1" {
+		t.Errorf("batch lanes = %q, want 1", got)
+	}
+	if got := spanStrAttr(batch, "dev_health.stream.source"); got != "read" {
+		t.Errorf("read batch source = %q, want read", got)
+	}
+	if got := spanStrAttr(batch, "dev_health.stream.failed"); got != "1" {
+		t.Errorf("batch failed = %q, want 1 (only the transient failure is a batch failure)", got)
+	}
+	if spanStrAttr(batch, "dev_health.stream.runner") != "stream_test" {
+		t.Errorf("batch runner attr = %q", spanStrAttr(batch, "dev_health.stream.runner"))
+	}
+	if batch.Status.Code != codes.Error {
+		t.Errorf("a batch with a failed event must be an Error span")
+	}
+	if got := spanStrAttr(batch, "dev_health.work.stage"); got != "handle" {
+		t.Errorf("failed batch stage = %q, want handle", got)
+	}
+	// The handler runs INSIDE its handle span: the ctx it receives carries it, so
+	// the sink's own spans nest under the event.
+	handleIDs := map[oteltrace.SpanID]bool{}
+	for _, span := range spansByName(exporter, "dev_health.stream.handle") {
+		handleIDs[span.SpanContext.SpanID()] = true
+	}
+	for _, id := range handlerSpanIDs {
+		if !handleIDs[id] {
+			t.Errorf("handler ctx span %s is not a handle span", id)
+		}
+	}
+	if len(handlerSpanIDs) != 3 {
+		t.Fatalf("handler ran %d times, want 3", len(handlerSpanIDs))
+	}
+	wantError := map[string]bool{"acked": false, "quarantined": false, "transient_error": true}
+	seen := map[string]int{}
+	for _, span := range spansByName(exporter, "dev_health.stream.handle") {
+		outcome := spanStrAttr(span, "dev_health.stream.outcome")
+		seen[outcome]++
+		if span.Parent.SpanID() != batch.SpanContext.SpanID() {
+			t.Errorf("handle span %s is not a child of the batch span", outcome)
+		}
+		if isError := span.Status.Code == codes.Error; isError != wantError[outcome] {
+			t.Errorf("handle %s status Error = %v, want %v", outcome, isError, wantError[outcome])
+		}
+		if spanStrAttr(span, "dev_health.stream.runner") != "stream_test" {
+			t.Errorf("handle span runner attr = %q", spanStrAttr(span, "dev_health.stream.runner"))
+		}
+	}
+	if seen["acked"] != 1 || seen["quarantined"] != 1 || seen["transient_error"] != 1 || len(seen) != 3 {
+		t.Fatalf("outcomes = %v, want one each of acked/quarantined/transient_error", seen)
+	}
+	assertNoIdentity(t, exporter)
+
+	exporter.Reset()
+	if err := runner.window(context.Background()); err != nil {
+		t.Fatalf("idle window: %v", err)
+	}
+	if spans := exporter.GetSpans(); len(spans) != 0 {
+		t.Fatalf("an idle cycle emitted %d spans, want 0", len(spans))
+	}
+}
+
+func TestRunnerHandleSpanOutcomeAckError(t *testing.T) {
+	exporter := installStreamSpanRecorder(t)
+	transport := &fakeTransport{new: []Message{{Stream: "test:stream", ID: "1-0"}}, ackErr: errors.New("ack failed")}
+	runner, err := New(transport, handlerFunc(func(context.Context, Message) error { return nil }), testConfig(), health.NewRegistry(time.Second))
+	if err != nil {
+		t.Fatal(err)
+	}
+	_ = runner.window(context.Background())
+	handles := spansByName(exporter, "dev_health.stream.handle")
+	if len(handles) != 1 || spanStrAttr(handles[0], "dev_health.stream.outcome") != "ack_error" || handles[0].Status.Code != codes.Error {
+		t.Fatalf("handle spans = %v, want one ack_error Error span", handles)
+	}
+	assertNoIdentity(t, exporter)
+}
+
+func TestRunnerHandleSpanOutcomeQuarantineError(t *testing.T) {
+	exporter := installStreamSpanRecorder(t)
+	base := &fakeTransport{new: []Message{{Stream: "test:stream", ID: "1-0"}}}
+	runner, err := New(failingQuarantineTransport{base}, handlerFunc(func(context.Context, Message) error {
+		return &PermanentError{Reason: "schema_invalid"}
+	}), testConfig(), health.NewRegistry(time.Second))
+	if err != nil {
+		t.Fatal(err)
+	}
+	_ = runner.window(context.Background())
+	handles := spansByName(exporter, "dev_health.stream.handle")
+	if len(handles) != 1 || spanStrAttr(handles[0], "dev_health.stream.outcome") != "quarantine_error" || handles[0].Status.Code != codes.Error {
+		t.Fatalf("handle spans = %v, want one quarantine_error Error span", handles)
+	}
+	assertNoIdentity(t, exporter)
+}
+
+// A failed read is work that went wrong, not an idle cycle: it gets its own
+// Error span carrying the runner name and the lane count, never the error text.
+func TestRunnerFailedReadEmitsAnErrorSpan(t *testing.T) {
+	exporter := installStreamSpanRecorder(t)
+	runner, err := New(failingReadTransport{&fakeTransport{}}, handlerFunc(func(context.Context, Message) error { return nil }), testConfig(), health.NewRegistry(time.Second))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := runner.window(context.Background()); err == nil {
+		t.Fatal("a failed read returned nil")
+	}
+	reads := spansByName(exporter, "dev_health.stream.read_failed")
+	if len(reads) != 1 || reads[0].Status.Code != codes.Error {
+		t.Fatalf("read_failed spans = %v, want one Error span", reads)
+	}
+	if got := spanStrAttr(reads[0], "dev_health.work.stage"); got != "read" {
+		t.Errorf("read_failed stage = %q, want read", got)
+	}
+	if spanStrAttr(reads[0], "dev_health.stream.runner") != "stream_test" || spanStrAttr(reads[0], "dev_health.stream.lanes") != "1" {
+		t.Errorf("read_failed attrs = %v", reads[0].Attributes)
+	}
+	if len(spansByName(exporter, "dev_health.stream.batch")) != 0 {
+		t.Errorf("a failed read produced a batch span")
+	}
+	assertNoIdentity(t, exporter)
+}
+
+// A clean batch is not an Error span and carries no stage.
+func TestRunnerCleanBatchHasNoErrorOrStage(t *testing.T) {
+	exporter := installStreamSpanRecorder(t)
+	transport := &fakeTransport{new: []Message{{Stream: "test:stream", ID: "1-0"}}}
+	runner, err := New(transport, handlerFunc(func(context.Context, Message) error { return nil }), testConfig(), health.NewRegistry(time.Second))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := runner.window(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	for _, span := range exporter.GetSpans() {
+		if span.Status.Code == codes.Error || spanStrAttr(span, "dev_health.work.stage") != "" {
+			t.Errorf("span %s of a clean batch has Error status or a stage", span.Name)
+		}
+	}
+	if got := spanStrAttr(spansByName(exporter, "dev_health.stream.batch")[0], "dev_health.stream.failed"); got != "0" {
+		t.Errorf("clean batch failed = %q, want 0", got)
+	}
+}
+
+type failingPendingTransport struct{ *fakeTransport }
+
+func (failingPendingTransport) Pending(context.Context, string, string, int, time.Duration) ([]Pending, error) {
+	return nil, errors.New("pending read failed {payload-in-error}")
+}
+
+type failingClaimTransport struct{ *fakeTransport }
+
+func (failingClaimTransport) Claim(context.Context, string, string, string, []string, time.Duration) ([]Message, error) {
+	return nil, errors.New("claim failed {payload-in-error}")
+}
+
+type failingStatsTransport struct{ *fakeTransport }
+
+func (failingStatsTransport) Stats(context.Context, string, string) (StreamStats, error) {
+	return StreamStats{}, errors.New("stats failed {payload-in-error}")
+}
+
+type failingDiscoverTransport struct{ *fakeTransport }
+
+func (failingDiscoverTransport) Discover(context.Context, []string, int) ([]string, error) {
+	return nil, errors.New("discover failed {payload-in-error}")
+}
+
+// Every failing stream step outside an event (discovery, pending read, claim,
+// stats) is an Error span with its own name and stage, runner name, no text.
+func TestRunnerMaintenanceStepFailuresEmitStagedErrorSpans(t *testing.T) {
+	pendingFor := &fakeTransport{pending: []Pending{{MessageID: "1-0", TimesDelivered: 1, Idle: time.Second}}}
+	for _, tc := range []struct {
+		name      string
+		transport Transport
+		config    Config
+		span      string
+		stage     string
+	}{
+		{"pending", failingPendingTransport{&fakeTransport{}}, testConfig(), "dev_health.stream.reclaim_failed", "pending"},
+		{"claim", failingClaimTransport{pendingFor}, testConfig(), "dev_health.stream.reclaim_failed", "claim"},
+		{"stats", failingStatsTransport{&fakeTransport{}}, testConfig(), "dev_health.stream.maintenance_failed", "stats"},
+		{"discover", failingDiscoverTransport{&fakeTransport{}}, dynamicTestConfig(), "dev_health.stream.maintenance_failed", "discover"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			exporter := installStreamSpanRecorder(t)
+			runner, err := New(tc.transport, handlerFunc(func(context.Context, Message) error { return nil }), tc.config, health.NewRegistry(time.Second))
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := runner.window(context.Background()); err == nil {
+				t.Fatal("a failing step returned nil")
+			}
+			spans := spansByName(exporter, tc.span)
+			if len(spans) != 1 || spans[0].Status.Code != codes.Error {
+				t.Fatalf("%s spans = %v, want one Error span", tc.span, spans)
+			}
+			if got := spanStrAttr(spans[0], "dev_health.work.stage"); got != tc.stage {
+				t.Errorf("stage = %q, want %q", got, tc.stage)
+			}
+			if spanStrAttr(spans[0], "dev_health.stream.runner") != "stream_test" {
+				t.Errorf("runner attr = %q", spanStrAttr(spans[0], "dev_health.stream.runner"))
+			}
+			assertNoIdentity(t, exporter)
+		})
+	}
+}
+
+// A reclaimed event and a poison event are handled under a reclaim batch span
+// exactly as a read event is under a read batch: handle children, fixed outcome.
+func TestRunnerReclaimedAndPoisonEventsAreHandleChildrenOfAReclaimBatch(t *testing.T) {
+	exporter := installStreamSpanRecorder(t)
+	transport := &fakeTransport{
+		pending: []Pending{
+			{MessageID: "1-0", TimesDelivered: 1, Idle: time.Second},
+			{MessageID: "9-0", TimesDelivered: 3, Idle: time.Second}, // MaxDeliveries = 3: poison
+		},
+		claimed: []Message{{Stream: "test:stream", ID: "1-0"}, {Stream: "test:stream", ID: "9-0"}},
+	}
+	runner, err := New(transport, handlerFunc(func(context.Context, Message) error { return nil }), testConfig(), health.NewRegistry(time.Second))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := runner.reclaim(context.Background(), "test:stream"); err != nil {
+		t.Fatal(err)
+	}
+	batches := spansByName(exporter, "dev_health.stream.batch")
+	if len(batches) != 1 {
+		t.Fatalf("got %d batch spans, want 1 reclaim batch", len(batches))
+	}
+	batch := batches[0]
+	if spanStrAttr(batch, "dev_health.stream.source") != "reclaim" || spanStrAttr(batch, "dev_health.stream.messages") != "2" {
+		t.Errorf("batch attrs = %v", batch.Attributes)
+	}
+	outcomes := map[string]int{}
+	for _, span := range spansByName(exporter, "dev_health.stream.handle") {
+		outcomes[spanStrAttr(span, "dev_health.stream.outcome")]++
+		if span.Parent.SpanID() != batch.SpanContext.SpanID() {
+			t.Errorf("handle span %s is not a child of the reclaim batch", spanStrAttr(span, "dev_health.stream.outcome"))
+		}
+	}
+	if outcomes["acked"] != 1 || outcomes["quarantined"] != 1 || len(outcomes) != 2 {
+		t.Fatalf("outcomes = %v, want one acked (reclaimed) and one quarantined (poison)", outcomes)
+	}
+	if batch.Status.Code == codes.Error {
+		t.Errorf("a clean reclaim batch is an Error span")
+	}
+	assertNoIdentity(t, exporter)
+}
+
+// A failing poison quarantine is a quarantine_error handle span and fails the batch at stage handle.
+func TestRunnerPoisonQuarantineFailureIsAnErrorHandleSpan(t *testing.T) {
+	exporter := installStreamSpanRecorder(t)
+	base := &fakeTransport{
+		pending: []Pending{{MessageID: "9-0", TimesDelivered: 3, Idle: time.Second}},
+		claimed: []Message{{Stream: "test:stream", ID: "9-0"}},
+	}
+	runner, err := New(failingQuarantineTransport{base}, handlerFunc(func(context.Context, Message) error { return nil }), testConfig(), health.NewRegistry(time.Second))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := runner.reclaim(context.Background(), "test:stream"); err == nil {
+		t.Fatal("a failing quarantine returned nil")
+	}
+	handles := spansByName(exporter, "dev_health.stream.handle")
+	if len(handles) != 1 || spanStrAttr(handles[0], "dev_health.stream.outcome") != "quarantine_error" || handles[0].Status.Code != codes.Error {
+		t.Fatalf("handle spans = %v, want one quarantine_error Error span", handles)
+	}
+	batches := spansByName(exporter, "dev_health.stream.batch")
+	if len(batches) != 1 || batches[0].Status.Code != codes.Error || spanStrAttr(batches[0], "dev_health.work.stage") != "handle" || spanStrAttr(batches[0], "dev_health.stream.failed") != "1" {
+		t.Fatalf("batch spans = %v, want one Error batch at stage handle with failed=1", batches)
+	}
+}
+
+// Reclaim batch attributes: messages = events actually HANDLED (a pending entry
+// that is neither claimed nor poison is not), lanes = 1, runner name, source,
+// and a clean batch carries no stage and no Error status.
+func TestRunnerReclaimBatchAttributesCountHandledEventsOnly(t *testing.T) {
+	exporter := installStreamSpanRecorder(t)
+	transport := &fakeTransport{
+		pending: []Pending{
+			{MessageID: "1-0", TimesDelivered: 1, Idle: time.Second}, // claimed: handled
+			{MessageID: "2-0", TimesDelivered: 1, Idle: time.Second}, // neither claimed nor poison: skipped
+			{MessageID: "9-0", TimesDelivered: 3, Idle: time.Second}, // poison, trimmed (not claimed): tombstone, handled
+		},
+		claimed: []Message{{Stream: "test:stream", ID: "1-0"}},
+	}
+	runner, err := New(transport, handlerFunc(func(context.Context, Message) error { return nil }), testConfig(), health.NewRegistry(time.Second))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := runner.reclaim(context.Background(), "test:stream"); err != nil {
+		t.Fatal(err)
+	}
+	batches := spansByName(exporter, "dev_health.stream.batch")
+	if len(batches) != 1 {
+		t.Fatalf("got %d batch spans, want 1", len(batches))
+	}
+	batch := batches[0]
+	for key, want := range map[string]string{
+		"dev_health.stream.messages": "2",
+		"dev_health.stream.lanes":    "1",
+		"dev_health.stream.failed":   "0",
+		"dev_health.stream.runner":   "stream_test",
+		"dev_health.stream.source":   "reclaim",
+	} {
+		if got := spanStrAttr(batch, key); got != want {
+			t.Errorf("reclaim batch %s = %q, want %q", key, got, want)
+		}
+	}
+	if got := spanStrAttr(batch, "dev_health.work.stage"); got != "" || batch.Status.Code == codes.Error {
+		t.Errorf("a clean reclaim batch carries stage %q / Error status", got)
+	}
+	if len(spansByName(exporter, "dev_health.stream.handle")) != 2 {
+		t.Errorf("want 2 handle spans (claimed + tombstone poison)")
+	}
+}
+
+// A startup discovery failure (Runner.Start's first refresh) is a failed step
+// span like a later one.
+func TestRunnerStartDiscoveryFailureEmitsAStagedErrorSpan(t *testing.T) {
+	exporter := installStreamSpanRecorder(t)
+	runner, err := New(failingDiscoverTransport{&fakeTransport{}}, handlerFunc(func(context.Context, Message) error { return nil }), dynamicTestConfig(), health.NewRegistry(time.Second))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := runner.Start(context.Background()); err == nil {
+		t.Fatal("Start returned nil for a failing discovery")
+	}
+	spans := spansByName(exporter, "dev_health.stream.maintenance_failed")
+	if len(spans) != 1 || spans[0].Status.Code != codes.Error || spanStrAttr(spans[0], "dev_health.work.stage") != "discover" {
+		t.Fatalf("spans = %v, want one Error maintenance_failed span at stage discover", spans)
+	}
+	if spanStrAttr(spans[0], "dev_health.stream.runner") != "stream_test" {
+		t.Errorf("runner attr = %q", spanStrAttr(spans[0], "dev_health.stream.runner"))
+	}
+	assertNoIdentity(t, exporter)
+}
+
+// A batch where one event is cancelled by shutdown and another fails its durable
+// write is a FAILED batch: the joined cancel must not hide the real failure.
+func TestRunnerBatchWithACancelledAndAFailedEventIsAnErrorSpan(t *testing.T) {
+	exporter := installStreamSpanRecorder(t)
+	transport := &fakeTransport{new: []Message{{Stream: "test:stream", ID: "1-0"}, {Stream: "test:stream", ID: "2-0"}}}
+	calls := 0
+	runner, err := New(transport, handlerFunc(func(context.Context, Message) error {
+		calls++
+		if calls == 1 {
+			return context.Canceled
+		}
+		return errors.New("clickhouse unavailable")
+	}), testConfig(), health.NewRegistry(time.Second))
+	if err != nil {
+		t.Fatal(err)
+	}
+	_ = runner.window(context.Background())
+	batches := spansByName(exporter, "dev_health.stream.batch")
+	if len(batches) != 1 || batches[0].Status.Code != codes.Error {
+		t.Fatalf("batch spans = %v, want one Error batch (a joined cancel hid the real failure)", batches)
+	}
+	for _, kv := range batches[0].Attributes {
+		if string(kv.Key) == "dev_health.work.cancelled" {
+			t.Errorf("a batch with a real failure is marked cancelled")
+		}
+	}
+	if spanStrAttr(batches[0], "dev_health.stream.failed") != "2" || spanStrAttr(batches[0], "dev_health.work.stage") != "handle" {
+		t.Errorf("batch attrs = %v", batches[0].Attributes)
+	}
+}
+
+// A batch whose every failure is a shutdown (handlers see context.Canceled) is
+// a cancelled batch, not an Error batch: the transient-write wrapper must not
+// turn a pure shutdown into a failure, and must keep the old text and sentinel.
+func TestRunnerShutdownOnlyBatchIsCancelledNotAnError(t *testing.T) {
+	exporter := installStreamSpanRecorder(t)
+	transport := &fakeTransport{new: []Message{{Stream: "test:stream", ID: "1-0"}, {Stream: "test:stream", ID: "2-0"}}}
+	runner, err := New(transport, handlerFunc(func(context.Context, Message) error { return context.Canceled }), testConfig(), health.NewRegistry(time.Second))
+	if err != nil {
+		t.Fatal(err)
+	}
+	werr := runner.window(context.Background())
+	if !errors.Is(werr, errTransientWrite) || !errors.Is(werr, context.Canceled) {
+		t.Fatalf("window error %v lost the sentinel or the cause", werr)
+	}
+	if !strings.Contains(werr.Error(), "transient stream durable-write failure: context canceled") {
+		t.Errorf("error text changed: %q", werr.Error())
+	}
+	batches := spansByName(exporter, "dev_health.stream.batch")
+	if len(batches) != 1 || batches[0].Status.Code == codes.Error {
+		t.Fatalf("batch spans = %v, want one non-Error (cancelled) batch", batches)
+	}
+	var cancelled bool
+	for _, kv := range batches[0].Attributes {
+		if string(kv.Key) == "dev_health.work.cancelled" {
+			cancelled = kv.Value.AsBool()
+		}
+	}
+	if !cancelled {
+		t.Errorf("a shutdown-only batch must carry dev_health.work.cancelled")
+	}
+	for _, span := range spansByName(exporter, "dev_health.stream.handle") {
+		if span.Status.Code == codes.Error {
+			t.Errorf("a shutdown-cancelled event is an Error handle span")
+		}
+	}
+}

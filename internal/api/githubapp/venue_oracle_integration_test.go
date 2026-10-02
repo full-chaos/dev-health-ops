@@ -432,7 +432,7 @@ func runGitHubAppVariant(t *testing.T, ctx context.Context, golden *venueoracle.
 // credential rows -- under a fully configured App and under each way the App
 // can be misconfigured.
 func TestVenueOracleGitHubAppInstall(t *testing.T) {
-	golden := venueoracle.OpenGolden(t, venueGolden("venue-oracle-git-hub-app-install", t.Name(), "41b7c96dd5cac69ca2b57ba3cb51c6076602eed2418fe4d530d9d58a19ff84b4"))
+	golden := venueoracle.OpenGolden(t, venueGolden("venue-oracle-git-hub-app-install", t.Name(), "71f8cb942e7b36c3c2ba9ee4aff294e88e3a99e26b95b85e6674e9ed46914fe3"))
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Minute)
 	defer cancel()
 	stub := newGitHubStub(t)
@@ -440,7 +440,6 @@ func TestVenueOracleGitHubAppInstall(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	siteDir := venueStubDir(t)
 	stubClient := &http.Client{Transport: rewriteToStub{target: stubURL},
 		CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}
 
@@ -450,8 +449,10 @@ func TestVenueOracleGitHubAppInstall(t *testing.T) {
 		PythonEnv: []string{
 			"SETTINGS_ENCRYPTION_KEY=" + credentialsKey,
 			"VENUE_PROVIDER_STUB_PORT=" + stubPort(stub.server.URL),
-			"PYTHONPATH=" + siteDir + ":" + filepath.Join(repoRoot(t), "src"),
 		},
+		// The harness builds PYTHONPATH from the checkout it runs Python from: the golden's key holds
+		// this relative name, not the path of the checkout the test ran in.
+		PythonPathRel: []string{"internal/apiservice/testdata/provider_stub"},
 		Seed: func(t *testing.T, ctx context.Context, admin *pgxpool.Pool, venue *venueoracle.Venue) map[string]map[string]any {
 			seed = seedVenue(t, ctx, admin)
 			for _, row := range []struct {
@@ -582,10 +583,6 @@ func stateShape(t *testing.T, state string) string {
 		out = append(out, string(canonical))
 	}
 	return strings.Join(out, " ")
-}
-
-func venueStubDir(t *testing.T) string {
-	return filepath.Join(repoRoot(t), "internal", "apiservice", "testdata", "provider_stub")
 }
 
 func stubPort(rawURL string) string {

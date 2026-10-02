@@ -411,6 +411,13 @@ type Options struct {
 	// PythonEnv is extra environment for the Python plane, for example
 	// EXPECTED_WORKER_GROUPS or TELEMETRY_ENDPOINT.
 	PythonEnv []string
+	// PythonPathRel are directories of the Python checkout (Root), given relative to Root
+	// and slash-separated, put on the Python plane's PYTHONPATH before its src: a stub site
+	// directory the test's fake services need (a sitecustomize.py). The HARNESS builds
+	// PYTHONPATH from them, so the key of a golden holds the relative names and not the
+	// absolute path of any checkout: a test that set PYTHONPATH itself through PythonEnv
+	// would key the path of its own checkout and replay in that checkout only.
+	PythonPathRel []string
 	// Seed fills the source database after the Alembic heads and before the
 	// copy, as a superuser. It may call Python through venue.CallPython, for
 	// example to write a value the way the Python api encrypts it. It
@@ -603,7 +610,12 @@ func Start(t *testing.T, ctx context.Context, options Options) *Venue {
 
 	async := strings.Replace(v.AdminURI(t, v.SourceDB), "postgres://", "postgresql+asyncpg://", 1)
 	async = strings.Replace(async, "postgresql://", "postgresql+asyncpg://", 1)
-	perRun := map[string]string{"PYTHONPATH": filepath.Join(options.Root, "src"), "POSTGRES_URI": async,
+	pythonPath := []string{}
+	for _, rel := range options.PythonPathRel {
+		pythonPath = append(pythonPath, filepath.Join(options.Root, filepath.FromSlash(rel)))
+	}
+	pythonPath = append(pythonPath, filepath.Join(options.Root, "src"))
+	perRun := map[string]string{"PYTHONPATH": strings.Join(pythonPath, string(os.PathListSeparator)), "POSTGRES_URI": async,
 		"REDIS_URL": v.PythonValkeyURI, "CLICKHOUSE_URI": v.AdminClickHouseHTTPURI(t, v.PythonClickHouseDB)}
 	for name, value := range v.hostEnv {
 		perRun[name] = value

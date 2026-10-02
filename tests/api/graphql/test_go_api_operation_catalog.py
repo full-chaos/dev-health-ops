@@ -208,3 +208,47 @@ def test_generator_writes_kind_only_for_a_mutation_document():
     }
     with pytest.raises(RuntimeError, match="unexpected document kind"):
         generator._entry({**base, "kind": "subscription"})
+
+
+def test_legacy_entry_dispatches_to_its_operation_and_adds_no_operation(
+    monkeypatch: pytest.MonkeyPatch, tmp_path
+):
+    """CHAOS-8000 dual accept: an operation may carry a second, ``legacy`` entry (its
+    older text). The edge keys by digest, so BOTH digests resolve to the one operation
+    and the operation set does not grow; a digest shared by two entries still fails the
+    whole file closed."""
+    catalog = tmp_path / "go_api_operations.json"
+    catalog.write_text(
+        json.dumps(
+            [
+                {"operation": "foo", "digest": "d-new"},
+                {"operation": "foo", "digest": "d-old", "legacy": True},
+                {"operation": "bar", "digest": "d-bar"},
+            ]
+        )
+    )
+    monkeypatch.setattr(go_api_operation_catalog, "_CATALOG_PATH", catalog)
+    monkeypatch.setattr(go_api_operation_catalog, "_catalog_loaded", False)
+    monkeypatch.setattr(go_api_operation_catalog, "_catalog_load_ok", False)
+    monkeypatch.setattr(go_api_operation_catalog, "_digest_to_operation", {})
+    monkeypatch.setattr(go_api_operation_catalog, "_mutation_operations", set())
+    assert operation_for_digest("d-new") == "foo"
+    assert operation_for_digest("d-old") == "foo"
+    assert known_operations() == frozenset({"foo", "bar"})
+
+    shared = tmp_path / "shared.json"
+    shared.write_text(
+        json.dumps(
+            [
+                {"operation": "foo", "digest": "d1"},
+                {"operation": "bar", "digest": "d1", "legacy": True},
+            ]
+        )
+    )
+    monkeypatch.setattr(go_api_operation_catalog, "_CATALOG_PATH", shared)
+    monkeypatch.setattr(go_api_operation_catalog, "_catalog_loaded", False)
+    monkeypatch.setattr(go_api_operation_catalog, "_catalog_load_ok", False)
+    monkeypatch.setattr(go_api_operation_catalog, "_digest_to_operation", {})
+    monkeypatch.setattr(go_api_operation_catalog, "_mutation_operations", set())
+    assert operation_for_digest("d1") is None
+    assert go_api_operation_catalog.catalog_loaded_successfully() is False

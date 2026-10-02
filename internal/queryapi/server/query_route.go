@@ -3171,15 +3171,15 @@ func newQueryHandler(chClient featureflags.QueryClient, pgPool *pgxpool.Pool, ve
 	// uses to answer "is anything actually enabled?".
 	logRoutingStateDrift(pgPool, schemaDigest)
 	registryHandler := newRegistryHandler(schemaDigest, digestByOperation)
-	sw := routeswitch.NewPostgresSwitch(pgPool, schemaDigest, digestByOperation)
+	sw := routeswitch.NewPostgresSwitchWithLegacy(pgPool, schemaDigest, digestByOperation, legacyDigestsByOperation)
 	routeMux := routeswitch.NewMux(sw)
 
 	// operationByDigest is digestByOperation's reverse index, built once
 	// here rather than on every request -- operationForDocument does a
 	// single map lookup per request, not a linear scan.
-	operationByDigest := make(map[string]string, len(digestByOperation))
-	for operation, digest := range digestByOperation {
-		operationByDigest[digest] = operation
+	operationByDigest, err := buildOperationByDigest(digestByOperation, legacyDigestsByOperation)
+	if err != nil {
+		return nil, nil, nil, nil, fmt.Errorf("query-api: %w", err)
 	}
 
 	gqlHandler := newGraphQLServer(&graph.Resolver{ClickHouse: chClient, Postgres: pgPool, ReportWriter: newReportWriter(pgPool, jobContractRoot)})
@@ -3195,7 +3195,7 @@ func newQueryHandler(chClient featureflags.QueryClient, pgPool *pgxpool.Pool, ve
 	// verification and org context. ONLY the Switch differs, which is the
 	// entire point: a proof must exercise the real path, and a second
 	// hand-written copy of this closure would be a second path.
-	proofMux := routeswitch.NewMux(routeswitch.NewProofSwitch(pgPool, schemaDigest, digestByOperation))
+	proofMux := routeswitch.NewMux(routeswitch.NewProofSwitchWithLegacy(pgPool, schemaDigest, digestByOperation, legacyDigestsByOperation))
 	for operation := range digestByOperation {
 		proofMux.Register(operation, gqlHandler)
 	}
@@ -3563,6 +3563,45 @@ func newDocumentDispatchHandler(getenv getenvFunc, routeMux *routeswitch.Mux, op
 		}
 		routeMux.Dispatch(operation, w, r)
 	}
+}
+
+// legacyDigestsByOperation lists, per operation, the digests of the registered texts it accepted BEFORE its
+// current one (CHAOS-8000 dual accept). A request carrying a legacy text resolves to the same operation as one
+// carrying the current text, so a web build still on the old text keeps working while the new text rolls out;
+// the operation keeps ONE current document in digestByOperation. Each legacy text is a
+// `registered<Operation>V1Document` const (a literal, so cmd/registrydump can read it) named once here and never in
+// digestByOperation. The literal below is cmd/registrydump's second parse target: keep its exact shape
+// (`"<operation>": {digestHex(<constIdent>), ...}`). Empty = every operation accepts one text.
+var legacyDigestsByOperation = map[string][]string{}
+
+// buildOperationByDigest is the reverse index digest -> operation over every accepted text: each operation's
+// current digest plus its legacy ones. A digest that maps to two operations is refused (the lookup would be
+// ambiguous), and so is a legacy entry for an operation digestByOperation does not register.
+func buildOperationByDigest(digestByOperation map[string]string, legacy map[string][]string) (map[string]string, error) {
+	out := make(map[string]string, len(digestByOperation))
+	for operation, digest := range digestByOperation {
+		if other, dup := out[digest]; dup {
+			return nil, fmt.Errorf("digest %s is registered for both %q and %q", digest, other, operation)
+		}
+		out[digest] = operation
+	}
+	operations := make([]string, 0, len(legacy))
+	for operation := range legacy {
+		operations = append(operations, operation)
+	}
+	sort.Strings(operations)
+	for _, operation := range operations {
+		if _, registered := digestByOperation[operation]; !registered {
+			return nil, fmt.Errorf("legacy digests for %q, which is not a registered operation", operation)
+		}
+		for _, digest := range legacy[operation] {
+			if other, dup := out[digest]; dup {
+				return nil, fmt.Errorf("legacy digest %s of %q is already registered for %q", digest, operation, other)
+			}
+			out[digest] = operation
+		}
+	}
+	return out, nil
 }
 
 // operationForDocument resolves a request's raw query text to a

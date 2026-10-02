@@ -106,8 +106,8 @@ on:
       # (pyoracle/unconverted_own_launch.txt, recordedfiles/header_before_stamp_ceiling.txt):
       # a change to one of them alone must run the guard that reads it.
       - 'internal/testsupport/**/*.txt'
-      # the golden secret scan reads its allowlist (CHAOS-7890): a change to it alone must run the scan
-      - 'internal/testsupport/goldenscan/allowlist.tsv'
+      # the golden secret scan reads its allowlist, stopwords and vectors (CHAOS-7890): a change to any data file of it alone must run the scan
+      - 'internal/testsupport/goldenscan/**'
       # Go tests read these directly (contracts/*.json via os.ReadFile,
       # internal/**/families.json via filepath.Join). Not under testdata/
       # or fixtures/, so the shared glob above does not reach them.
@@ -293,8 +293,8 @@ on:
       # (pyoracle/unconverted_own_launch.txt, recordedfiles/header_before_stamp_ceiling.txt):
       # a change to one of them alone must run the guard that reads it.
       - 'internal/testsupport/**/*.txt'
-      # the golden secret scan reads its allowlist (CHAOS-7890): a change to it alone must run the scan
-      - 'internal/testsupport/goldenscan/allowlist.tsv'
+      # the golden secret scan reads its allowlist, stopwords and vectors (CHAOS-7890): a change to any data file of it alone must run the scan
+      - 'internal/testsupport/goldenscan/**'
       # Go tests read these directly (contracts/*.json via os.ReadFile,
       # internal/**/families.json via filepath.Join). Not under testdata/
       # or fixtures/, so the shared glob above does not reach them.

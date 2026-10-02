@@ -292,9 +292,9 @@ func TestProviderDatasetUnavailableTerminalizesOnFirstAttempt(t *testing.T) {
 
 func TestProviderBudgetContentionDelayIsDeterministicAndBounded(t *testing.T) {
 	t.Parallel()
-	first := providerBudgetContentionDelay("11111111-1111-4111-8111-111111111111")
-	repeated := providerBudgetContentionDelay("11111111-1111-4111-8111-111111111111")
-	sibling := providerBudgetContentionDelay("22222222-2222-4222-8222-222222222222")
+	first := providerBudgetContentionDelay("11111111-1111-4111-8111-111111111111", 0)
+	repeated := providerBudgetContentionDelay("11111111-1111-4111-8111-111111111111", 0)
+	sibling := providerBudgetContentionDelay("22222222-2222-4222-8222-222222222222", 0)
 	if first != repeated {
 		t.Fatalf("same unit jitter changed: %v != %v", first, repeated)
 	}

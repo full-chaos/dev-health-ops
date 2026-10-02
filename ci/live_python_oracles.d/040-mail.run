@@ -1,0 +1,6 @@
+label=internal/mail (SMTP wire format and Resend requests/outcomes vs the live Python email service)
+package=./internal/mail
+run=^(TestSMTPSenderMatchesLivePythonSMTPProvider|TestResendSenderMatchesLivePythonResendProvider)$
+python=1
+proof=mail-smtp-oracle|the internal/mail live Python oracle mail-smtp-oracle did not run a real comparison
+proof=mail-resend-oracle|the internal/mail live Python oracle mail-resend-oracle did not run a real comparison

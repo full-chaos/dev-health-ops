@@ -16,8 +16,6 @@ github.com/full-chaos/dev-health-ops/internal/pgmigrate	TestBaselineVenueOracleI
 github.com/full-chaos/dev-health-ops/internal/pgmigrate	TestBuildHeadsAreTheOldScriptsHeads	CHAOS-7049	tripwire
 github.com/full-chaos/dev-health-ops/internal/pgmigrate	TestHistoryGraphIsTheAlembicChain	CHAOS-6469	tripwire
 github.com/full-chaos/dev-health-ops/internal/pgmigrate	TestHookVerbUpgradesAnOldProductionDatabaseToTheAlembicHead	CHAOS-7049	tripwire
-github.com/full-chaos/dev-health-ops/internal/queryapi/server	TestDailyFamilyTablesCollapseCopiesWithoutChangingReaderRows	CHAOS-7308	tripwire
-github.com/full-chaos/dev-health-ops/internal/streamhandlers	TestExternalSinkOutcomesMatchPythonAgainstClickHouse	CHAOS-7307	tripwire
 github.com/full-chaos/dev-health-ops/internal/synccli	TestDBLookupsMatchLivePython	CHAOS-7319	tripwire
 github.com/full-chaos/dev-health-ops/internal/synccli	TestLocalSyncMatchesLivePython	CHAOS-7319	tripwire
 github.com/full-chaos/dev-health-ops/internal/synccli	TestLocalSyncRerunKeepsHeldColumnsUnlikePython	CHAOS-7319	tripwire

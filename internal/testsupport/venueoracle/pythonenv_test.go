@@ -1059,3 +1059,28 @@ func TestTheAddressesOfTheQueryAPIOfTheRunAreKeyedByNameWhateverTheirValue(t *te
 		}
 	}
 }
+||||||| 520aba302d
+
+
+// PythonPathRel keeps the checkout's path out of the key (CHAOS-7306): two options that differ
+// only in Root key alike, while a different relative name keys differently, and a
+// PYTHONPATH a test supplies itself keys by its own value (the path of its checkout).
+func TestPythonPathRelKeysTheRelativeNameAndNeverACheckoutPath(t *testing.T) {
+	rel := []string{"internal/apiservice/testdata/provider_stub"}
+	a := currentKey(t, Options{Root: "/checkout/one", PythonPathRel: rel})
+	b := currentKey(t, Options{Root: "/checkout/two", PythonPathRel: rel})
+	if a != b {
+		t.Fatalf("the key holds the checkout's path: %s in one checkout, %s in another", a, b)
+	}
+	if other := currentKey(t, Options{Root: "/checkout/one", PythonPathRel: []string{"internal/other"}}); other == a {
+		t.Fatal("a different relative name keys alike: the declared input is not in the key")
+	}
+	if none := currentKey(t, Options{Root: "/checkout/one"}); none == a {
+		t.Fatal("no relative name keys like one: the declared input is not in the key")
+	}
+	own1 := currentKey(t, Options{Root: "/checkout/one", PythonEnv: []string{"PYTHONPATH=/checkout/one/stub:/checkout/one/src"}})
+	own2 := currentKey(t, Options{Root: "/checkout/two", PythonEnv: []string{"PYTHONPATH=/checkout/two/stub:/checkout/two/src"}})
+	if own1 == own2 {
+		t.Fatal("a PYTHONPATH the test supplies keys by name only: the rule of perRunPythonEnv changed")
+	}
+}

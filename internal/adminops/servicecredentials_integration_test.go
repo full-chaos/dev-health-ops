@@ -374,11 +374,7 @@ const credPythonProgram = "import sys\nfrom dev_health_ops import cli\nraise Sys
 
 func credPython(t *testing.T, db *database, args []string) (int, string, string) {
 	t.Helper()
-	root := pythonPlaneRoot(t)
-	python := pyoracle.Resolve(t, root)
-	command := exec.Command(python, append([]string{"-c", credPythonProgram, "service-credentials"}, args...)...)
-	pyURI := strings.Replace(db.uri, "postgres://", "postgresql://", 1)
-	command.Env = append(adminPythonEnv(root), "POSTGRES_URI="+pyURI, "DATABASE_URI="+pyURI)
+	command := adminCommand(t, db, adminPythonSettings, nil, append([]string{"-c", credPythonProgram, "service-credentials"}, args...)...)
 	var stdout, stderr bytes.Buffer
 	command.Stdout, command.Stderr = &stdout, &stderr
 	err := command.Run()
@@ -386,7 +382,7 @@ func credPython(t *testing.T, db *database, args []string) (int, string, string)
 	if exit, ok := err.(*exec.ExitError); ok {
 		code = exit.ExitCode()
 	} else if err != nil {
-		t.Fatalf("run python: %v", pyoracle.RunError(python, err, []byte(stderr.String())))
+		t.Fatalf("run python: %v", pyoracle.RunError(command.Args[0], err, []byte(stderr.String())))
 	}
 	if code == 1 && strings.Contains(stderr.String(), "Traceback") {
 		// A ValueError (or a database error) is a traceback, exit 1, nothing on stdout.
@@ -449,8 +445,8 @@ func TestServiceCredentialsMatchTheFrozenPythonOutput(t *testing.T) {
 		t.Fatal(err)
 	}
 	request := venueoracle.ProgramRequest("service-credentials script", credPythonProgram, input, adminPythonSettings)
-	answers := golden.Produce(t, root, []venueoracle.Request{request}, func(_ *venueoracle.Producer, _ []venueoracle.Request) []venueoracle.Response {
-		pinPythonRoot(t, root)
+	answers := golden.Produce(t, root, []venueoracle.Request{request}, func(producer *venueoracle.Producer, _ []venueoracle.Request) []venueoracle.Response {
+		useAdminProducer(t, producer)
 		body, err := json.Marshal(startDatabase(t).credSession(t, credPython))
 		if err != nil {
 			t.Fatal(err)

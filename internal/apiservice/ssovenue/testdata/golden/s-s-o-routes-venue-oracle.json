@@ -1,0 +1,1659 @@
+{
+  "header": {
+    "test": "TestSSORoutesVenueOracle",
+    "python_build": "a4847c5e93607451a0c987b314d37e02fc43ce85",
+    "producer_digest": "6e1dc97e68624398015f60caee160cceee6ae601bd434d01b8b7d5975267e137",
+    "recipe": "git worktree add --detach $DIR a4847c5e93607451a0c987b314d37e02fc43ce85 (with its .venv: uv sync --frozen --no-install-project); then from the repository root: go run ./internal/testsupport/venueoracle/goldenrecord -pkg ./internal/apiservice/ssovenue/ -test '^TestSSORoutesVenueOracle$' -python-root $DIR (records on the pinned build, replays the candidate in a fresh process, and only then promotes it and pins its digest)",
+    "python_env": "c305c7c4f96d6e6abf7a1cfcc4044e776984d3d2602c4fbe17757c1f793dbc40",
+    "python_env_version": 2,
+    "recorded_by": "goldenrecord",
+    "blanked": {
+      "body $.updated_at": 10,
+      "header content-length": 10,
+      "header date": 83,
+      "header x-dev-health-plane": 83,
+      "header x-request-id": 154
+    }
+  },
+  "requests": [
+    {
+      "name": "list: no credential",
+      "method": "GET",
+      "path": "/api/v1/auth/sso/providers",
+      "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "request_headers_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "status": 401,
+      "headers": {
+        "content-length": "42",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "www-authenticate": "Bearer",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "\u003cvolatile\u003e"
+      },
+      "body": "{\"detail\":{\"message\":\"Not authenticated\"}}"
+    },
+    {
+      "name": "list: owner",
+      "method": "GET",
+      "path": "/api/v1/auth/sso/providers",
+      "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "request_headers_sha256": "139e2bac8d05c48076f3ac6200b1a20fedc74e1f5a2a030eca5bad4a9dde490d",
+      "status": 402,
+      "headers": {
+        "content-length": "120",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "\u003cvolatile\u003e"
+      },
+      "body": "{\"detail\":{\"error\":\"feature_not_licensed\",\"feature\":\"sso_saml\",\"required_tier\":\"enterprise\",\"current_tier\":\"community\"}}"
+    },
+    {
+      "name": "list: member",
+      "method": "GET",
+      "path": "/api/v1/auth/sso/providers",
+      "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "request_headers_sha256": "df3b49c9002f187f3a093c0e5d7ad74ef76581f35ce43a8fc427be5a532c5428",
+      "status": 402,
+      "headers": {
+        "content-length": "120",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "\u003cvolatile\u003e"
+      },
+      "body": "{\"detail\":{\"error\":\"feature_not_licensed\",\"feature\":\"sso_saml\",\"required_tier\":\"enterprise\",\"current_tier\":\"community\"}}"
+    },
+    {
+      "name": "list: bad limit",
+      "method": "GET",
+      "path": "/api/v1/auth/sso/providers?limit=x\u0026offset=1.5",
+      "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "request_headers_sha256": "139e2bac8d05c48076f3ac6200b1a20fedc74e1f5a2a030eca5bad4a9dde490d",
+      "status": 422,
+      "headers": {
+        "content-length": "289",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "\u003cvolatile\u003e"
+      },
+      "body": "{\"detail\":[{\"type\":\"int_parsing\",\"loc\":[\"query\",\"limit\"],\"msg\":\"Input should be a valid integer, unable to parse string as an integer\",\"input\":\"x\"},{\"type\":\"int_parsing\",\"loc\":[\"query\",\"offset\"],\"msg\":\"Input should be a valid integer, unable to parse string as an integer\",\"input\":\"1.5\"}]}"
+    },
+    {
+      "name": "list: filters",
+      "method": "GET",
+      "path": "/api/v1/auth/sso/providers?protocol=saml\u0026status=active\u0026limit=5\u0026offset=0",
+      "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "request_headers_sha256": "139e2bac8d05c48076f3ac6200b1a20fedc74e1f5a2a030eca5bad4a9dde490d",
+      "status": 402,
+      "headers": {
+        "content-length": "120",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "\u003cvolatile\u003e"
+      },
+      "body": "{\"detail\":{\"error\":\"feature_not_licensed\",\"feature\":\"sso_saml\",\"required_tier\":\"enterprise\",\"current_tier\":\"community\"}}"
+    },
+    {
+      "name": "create: no credential",
+      "method": "POST",
+      "path": "/api/v1/auth/sso/providers",
+      "body_sha256": "e6e2f3a9c830f37ce38eb668ec4a4a06fe3989ea86ac0c7e2db3c4389a2fb159",
+      "request_headers_sha256": "b58ddd4bb261e78693972b6634accd44bf966020d79a21c501cd73d1a3dee206",
+      "status": 401,
+      "headers": {
+        "content-length": "42",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "www-authenticate": "Bearer",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "\u003cvolatile\u003e"
+      },
+      "body": "{\"detail\":{\"message\":\"Not authenticated\"}}"
+    },
+    {
+      "name": "create: malformed json, no credential",
+      "method": "POST",
+      "path": "/api/v1/auth/sso/providers",
+      "body_sha256": "086b37162b8934af4570d0ca3b0f14d57b5262f5ff1b461cd45c1ca00e29dfdb",
+      "request_headers_sha256": "b58ddd4bb261e78693972b6634accd44bf966020d79a21c501cd73d1a3dee206",
+      "status": 422,
+      "headers": {
+        "content-length": "124",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "\u003cvolatile\u003e"
+      },
+      "body": "{\"detail\":[{\"type\":\"json_invalid\",\"loc\":[\"body\",8],\"msg\":\"JSON decode error\",\"input\":{},\"ctx\":{\"error\":\"Expecting value\"}}]}"
+    },
+    {
+      "name": "create: missing fields",
+      "method": "POST",
+      "path": "/api/v1/auth/sso/providers",
+      "body_sha256": "a135823e1f3518ee22848a79f5427d8cee0bfb85fbc6b4e6eda61f883c057c9e",
+      "request_headers_sha256": "1264d0b1fe6bb0035fbcb6233ea6a5ac6fff242668834a8accf23e1eba81960a",
+      "status": 422,
+      "headers": {
+        "content-length": "166",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "\u003cvolatile\u003e"
+      },
+      "body": "{\"detail\":[{\"type\":\"missing\",\"loc\":[\"body\",\"name\"],\"msg\":\"Field required\",\"input\":{}},{\"type\":\"missing\",\"loc\":[\"body\",\"protocol\"],\"msg\":\"Field required\",\"input\":{}}]}"
+    },
+    {
+      "name": "create: body is a list",
+      "method": "POST",
+      "path": "/api/v1/auth/sso/providers",
+      "body_sha256": "0efe8c9a1a45511fe53ad47b02b82b32f480d1819874e6fb6d37c54cf9a2f5ea",
+      "request_headers_sha256": "1264d0b1fe6bb0035fbcb6233ea6a5ac6fff242668834a8accf23e1eba81960a",
+      "status": 422,
+      "headers": {
+        "content-length": "147",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "\u003cvolatile\u003e"
+      },
+      "body": "{\"detail\":[{\"type\":\"model_attributes_type\",\"loc\":[\"body\"],\"msg\":\"Input should be a valid dictionary or object to extract fields from\",\"input\":[]}]}"
+    },
+    {
+      "name": "create: empty name, bad protocol",
+      "method": "POST",
+      "path": "/api/v1/auth/sso/providers",
+      "body_sha256": "dfc87f2a89fcbe134f0085664287d4c7cea1c92a17cf1c51f1d23defae9dad84",
+      "request_headers_sha256": "1264d0b1fe6bb0035fbcb6233ea6a5ac6fff242668834a8accf23e1eba81960a",
+      "status": 422,
+      "headers": {
+        "content-length": "306",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "\u003cvolatile\u003e"
+      },
+      "body": "{\"detail\":[{\"type\":\"string_too_short\",\"loc\":[\"body\",\"name\"],\"msg\":\"String should have at least 1 character\",\"input\":\"\",\"ctx\":{\"min_length\":1}},{\"type\":\"string_pattern_mismatch\",\"loc\":[\"body\",\"protocol\"],\"msg\":\"String should match pattern '^(saml|oidc)$'\",\"input\":\"ldap\",\"ctx\":{\"pattern\":\"^(saml|oidc)$\"}}]}"
+    },
+    {
+      "name": "create: name 256 chars",
+      "method": "POST",
+      "path": "/api/v1/auth/sso/providers",
+      "body_sha256": "4d1ed2527cfba524cf236f0f5839da476c30719e273588cef140bc2ac1bb00f4",
+      "request_headers_sha256": "1264d0b1fe6bb0035fbcb6233ea6a5ac6fff242668834a8accf23e1eba81960a",
+      "status": 422,
+      "headers": {
+        "content-length": "403",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "\u003cvolatile\u003e"
+      },
+      "body": "{\"detail\":[{\"type\":\"string_too_long\",\"loc\":[\"body\",\"name\"],\"msg\":\"String should have at most 255 characters\",\"input\":\"nnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnn\",\"ctx\":{\"max_length\":255}}]}"
+    },
+    {
+      "name": "create: protocol with a newline",
+      "method": "POST",
+      "path": "/api/v1/auth/sso/providers",
+      "body_sha256": "d739ae0807837de252215f3357fc164b492e33ee9eab251a519e69953504ba95",
+      "request_headers_sha256": "1264d0b1fe6bb0035fbcb6233ea6a5ac6fff242668834a8accf23e1eba81960a",
+      "status": 422,
+      "headers": {
+        "content-length": "176",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "\u003cvolatile\u003e"
+      },
+      "body": "{\"detail\":[{\"type\":\"string_pattern_mismatch\",\"loc\":[\"body\",\"protocol\"],\"msg\":\"String should match pattern '^(saml|oidc)$'\",\"input\":\"saml\\n\",\"ctx\":{\"pattern\":\"^(saml|oidc)$\"}}]}"
+    },
+    {
+      "name": "create: protocol lone surrogate",
+      "method": "POST",
+      "path": "/api/v1/auth/sso/providers",
+      "body_sha256": "822fdb05b40e5b5c6b9eaa9dac8c539041383f796e3c3a3d0819bb09f96167a6",
+      "request_headers_sha256": "1264d0b1fe6bb0035fbcb6233ea6a5ac6fff242668834a8accf23e1eba81960a",
+      "status": 500,
+      "headers": {
+        "content-length": "34",
+        "content-type": "application/json"
+      },
+      "body": "{\"detail\":\"Internal Server Error\"}"
+    },
+    {
+      "name": "create: saml_config not an object",
+      "method": "POST",
+      "path": "/api/v1/auth/sso/providers",
+      "body_sha256": "78cfc00d5f8f8c38cd381417ff0df77c6ac56c4f4235b4a1355fe6c52e978537",
+      "request_headers_sha256": "1264d0b1fe6bb0035fbcb6233ea6a5ac6fff242668834a8accf23e1eba81960a",
+      "status": 422,
+      "headers": {
+        "content-length": "162",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "\u003cvolatile\u003e"
+      },
+      "body": "{\"detail\":[{\"type\":\"model_attributes_type\",\"loc\":[\"body\",\"saml_config\"],\"msg\":\"Input should be a valid dictionary or object to extract fields from\",\"input\":\"s\"}]}"
+    },
+    {
+      "name": "create: saml_config fields",
+      "method": "POST",
+      "path": "/api/v1/auth/sso/providers",
+      "body_sha256": "1603ed6078684ef5c3d98c355e39edae373bbc4fb0ffeb76a05fa50bfc9722eb",
+      "request_headers_sha256": "1264d0b1fe6bb0035fbcb6233ea6a5ac6fff242668834a8accf23e1eba81960a",
+      "status": 422,
+      "headers": {
+        "content-length": "538",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "\u003cvolatile\u003e"
+      },
+      "body": "{\"detail\":[{\"type\":\"string_type\",\"loc\":[\"body\",\"saml_config\",\"entity_id\"],\"msg\":\"Input should be a valid string\",\"input\":1},{\"type\":\"missing\",\"loc\":[\"body\",\"saml_config\",\"sso_url\"],\"msg\":\"Field required\",\"input\":{\"entity_id\":1,\"attribute_mapping\":{\"a\":1,\"b\":\"ok\"}}},{\"type\":\"missing\",\"loc\":[\"body\",\"saml_config\",\"certificate\"],\"msg\":\"Field required\",\"input\":{\"entity_id\":1,\"attribute_mapping\":{\"a\":1,\"b\":\"ok\"}}},{\"type\":\"string_type\",\"loc\":[\"body\",\"saml_config\",\"attribute_mapping\",\"a\"],\"msg\":\"Input should be a valid string\",\"input\":1}]}"
+    },
+    {
+      "name": "create: oidc_config fields",
+      "method": "POST",
+      "path": "/api/v1/auth/sso/providers",
+      "body_sha256": "afb2002f8145c2e8a015297e3b4aa91e14325d94b96d774f8b34da2fd54d93dc",
+      "request_headers_sha256": "1264d0b1fe6bb0035fbcb6233ea6a5ac6fff242668834a8accf23e1eba81960a",
+      "status": 422,
+      "headers": {
+        "content-length": "538",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "\u003cvolatile\u003e"
+      },
+      "body": "{\"detail\":[{\"type\":\"missing\",\"loc\":[\"body\",\"oidc_config\",\"client_secret\"],\"msg\":\"Field required\",\"input\":{\"client_id\":\"c\",\"scopes\":\"openid\",\"claim_mapping\":[]}},{\"type\":\"missing\",\"loc\":[\"body\",\"oidc_config\",\"issuer\"],\"msg\":\"Field required\",\"input\":{\"client_id\":\"c\",\"scopes\":\"openid\",\"claim_mapping\":[]}},{\"type\":\"list_type\",\"loc\":[\"body\",\"oidc_config\",\"scopes\"],\"msg\":\"Input should be a valid list\",\"input\":\"openid\"},{\"type\":\"dict_type\",\"loc\":[\"body\",\"oidc_config\",\"claim_mapping\"],\"msg\":\"Input should be a valid dictionary\",\"input\":[]}]}"
+    },
+    {
+      "name": "create: bools and lists",
+      "method": "POST",
+      "path": "/api/v1/auth/sso/providers",
+      "body_sha256": "cc1d357bd77ec19a215d67aa605e6920fb878dacbefab269373a3d8951fec1f0",
+      "request_headers_sha256": "1264d0b1fe6bb0035fbcb6233ea6a5ac6fff242668834a8accf23e1eba81960a",
+      "status": 422,
+      "headers": {
+        "content-length": "359",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "\u003cvolatile\u003e"
+      },
+      "body": "{\"detail\":[{\"type\":\"bool_parsing\",\"loc\":[\"body\",\"is_default\"],\"msg\":\"Input should be a valid boolean, unable to interpret input\",\"input\":\"maybe\"},{\"type\":\"string_type\",\"loc\":[\"body\",\"default_role\"],\"msg\":\"Input should be a valid string\",\"input\":null},{\"type\":\"string_type\",\"loc\":[\"body\",\"allowed_domains\",1],\"msg\":\"Input should be a valid string\",\"input\":1}]}"
+    },
+    {
+      "name": "create: lax bool strings",
+      "method": "POST",
+      "path": "/api/v1/auth/sso/providers",
+      "body_sha256": "b81bce17a6668c110fa2ceab4b056e97ed123f33e2d254830863267364e54b87",
+      "request_headers_sha256": "1264d0b1fe6bb0035fbcb6233ea6a5ac6fff242668834a8accf23e1eba81960a",
+      "status": 402,
+      "headers": {
+        "content-length": "120",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "\u003cvolatile\u003e"
+      },
+      "body": "{\"detail\":{\"error\":\"feature_not_licensed\",\"feature\":\"sso_saml\",\"required_tier\":\"enterprise\",\"current_tier\":\"community\"}}"
+    },
+    {
+      "name": "create: valid, by a member (gate before role)",
+      "method": "POST",
+      "path": "/api/v1/auth/sso/providers",
+      "body_sha256": "402996f69f0b6a6f791eadbc262d352c1db30597e4aef3b651c0b9af9b27d3c2",
+      "request_headers_sha256": "a2077c8c158f3657273efcb886918929843d8f59958fb8a67355528dc179339b",
+      "status": 402,
+      "headers": {
+        "content-length": "120",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "\u003cvolatile\u003e"
+      },
+      "body": "{\"detail\":{\"error\":\"feature_not_licensed\",\"feature\":\"sso_saml\",\"required_tier\":\"enterprise\",\"current_tier\":\"community\"}}"
+    },
+    {
+      "name": "create: valid",
+      "method": "POST",
+      "path": "/api/v1/auth/sso/providers",
+      "body_sha256": "f5024cd75a18775fa5352a1ec15149916743ac6ede2d0b29db5ee31e0dc58b2f",
+      "request_headers_sha256": "1264d0b1fe6bb0035fbcb6233ea6a5ac6fff242668834a8accf23e1eba81960a",
+      "status": 402,
+      "headers": {
+        "content-length": "120",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "\u003cvolatile\u003e"
+      },
+      "body": "{\"detail\":{\"error\":\"feature_not_licensed\",\"feature\":\"sso_saml\",\"required_tier\":\"enterprise\",\"current_tier\":\"community\"}}"
+    },
+    {
+      "name": "get: no credential",
+      "method": "GET",
+      "path": "/api/v1/auth/sso/providers/22000000-0000-4000-8000-000000000001",
+      "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "request_headers_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "status": 401,
+      "headers": {
+        "content-length": "42",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "www-authenticate": "Bearer",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "\u003cvolatile\u003e"
+      },
+      "body": "{\"detail\":{\"message\":\"Not authenticated\"}}"
+    },
+    {
+      "name": "get: owner",
+      "method": "GET",
+      "path": "/api/v1/auth/sso/providers/22000000-0000-4000-8000-000000000001",
+      "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "request_headers_sha256": "139e2bac8d05c48076f3ac6200b1a20fedc74e1f5a2a030eca5bad4a9dde490d",
+      "status": 402,
+      "headers": {
+        "content-length": "120",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "\u003cvolatile\u003e"
+      },
+      "body": "{\"detail\":{\"error\":\"feature_not_licensed\",\"feature\":\"sso_saml\",\"required_tier\":\"enterprise\",\"current_tier\":\"community\"}}"
+    },
+    {
+      "name": "get: not a uuid",
+      "method": "GET",
+      "path": "/api/v1/auth/sso/providers/nope",
+      "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "request_headers_sha256": "139e2bac8d05c48076f3ac6200b1a20fedc74e1f5a2a030eca5bad4a9dde490d",
+      "status": 402,
+      "headers": {
+        "content-length": "120",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "\u003cvolatile\u003e"
+      },
+      "body": "{\"detail\":{\"error\":\"feature_not_licensed\",\"feature\":\"sso_saml\",\"required_tier\":\"enterprise\",\"current_tier\":\"community\"}}"
+    },
+    {
+      "name": "patch: bad fields",
+      "method": "PATCH",
+      "path": "/api/v1/auth/sso/providers/22000000-0000-4000-8000-000000000001",
+      "body_sha256": "e2bced48a4d3ca1532e480f7e1efdb0af3117023ca4dc23ecaed7e7546b5e17d",
+      "request_headers_sha256": "1264d0b1fe6bb0035fbcb6233ea6a5ac6fff242668834a8accf23e1eba81960a",
+      "status": 422,
+      "headers": {
+        "content-length": "786",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "\u003cvolatile\u003e"
+      },
+      "body": "{\"detail\":[{\"type\":\"string_too_long\",\"loc\":[\"body\",\"name\"],\"msg\":\"String should have at most 255 characters\",\"input\":\"nnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnn\",\"ctx\":{\"max_length\":255}},{\"type\":\"missing\",\"loc\":[\"body\",\"oidc_config\",\"client_id\"],\"msg\":\"Field required\",\"input\":{}},{\"type\":\"missing\",\"loc\":[\"body\",\"oidc_config\",\"client_secret\"],\"msg\":\"Field required\",\"input\":{}},{\"type\":\"missing\",\"loc\":[\"body\",\"oidc_config\",\"issuer\"],\"msg\":\"Field required\",\"input\":{}},{\"type\":\"bool_type\",\"loc\":[\"body\",\"is_default\"],\"msg\":\"Input should be a valid boolean\",\"input\":[]}]}"
+    },
+    {
+      "name": "patch: nulls",
+      "method": "PATCH",
+      "path": "/api/v1/auth/sso/providers/22000000-0000-4000-8000-000000000001",
+      "body_sha256": "ad058f91f43dae75b24b2e6350713ca4b9ba9285400b9d3400bbcde530ee016b",
+      "request_headers_sha256": "1264d0b1fe6bb0035fbcb6233ea6a5ac6fff242668834a8accf23e1eba81960a",
+      "status": 402,
+      "headers": {
+        "content-length": "120",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "\u003cvolatile\u003e"
+      },
+      "body": "{\"detail\":{\"error\":\"feature_not_licensed\",\"feature\":\"sso_saml\",\"required_tier\":\"enterprise\",\"current_tier\":\"community\"}}"
+    },
+    {
+      "name": "patch: no body",
+      "method": "PATCH",
+      "path": "/api/v1/auth/sso/providers/22000000-0000-4000-8000-000000000001",
+      "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "request_headers_sha256": "139e2bac8d05c48076f3ac6200b1a20fedc74e1f5a2a030eca5bad4a9dde490d",
+      "status": 422,
+      "headers": {
+        "content-length": "82",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "\u003cvolatile\u003e"
+      },
+      "body": "{\"detail\":[{\"type\":\"missing\",\"loc\":[\"body\"],\"msg\":\"Field required\",\"input\":null}]}"
+    },
+    {
+      "name": "delete: owner",
+      "method": "DELETE",
+      "path": "/api/v1/auth/sso/providers/22000000-0000-4000-8000-000000000001",
+      "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "request_headers_sha256": "139e2bac8d05c48076f3ac6200b1a20fedc74e1f5a2a030eca5bad4a9dde490d",
+      "status": 402,
+      "headers": {
+        "content-length": "120",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "\u003cvolatile\u003e"
+      },
+      "body": "{\"detail\":{\"error\":\"feature_not_licensed\",\"feature\":\"sso_saml\",\"required_tier\":\"enterprise\",\"current_tier\":\"community\"}}"
+    },
+    {
+      "name": "delete: no credential",
+      "method": "DELETE",
+      "path": "/api/v1/auth/sso/providers/22000000-0000-4000-8000-000000000001",
+      "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "request_headers_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "status": 401,
+      "headers": {
+        "content-length": "42",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "www-authenticate": "Bearer",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "\u003cvolatile\u003e"
+      },
+      "body": "{\"detail\":{\"message\":\"Not authenticated\"}}"
+    },
+    {
+      "name": "oauth create: missing config",
+      "method": "POST",
+      "path": "/api/v1/auth/oauth/providers",
+      "body_sha256": "31012fbcf70ae04336458f54a80bd6e4455c4d5789aafa4033bf7adc59bff600",
+      "request_headers_sha256": "1264d0b1fe6bb0035fbcb6233ea6a5ac6fff242668834a8accf23e1eba81960a",
+      "status": 422,
+      "headers": {
+        "content-length": "130",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "\u003cvolatile\u003e"
+      },
+      "body": "{\"detail\":[{\"type\":\"missing\",\"loc\":[\"body\",\"oauth_config\"],\"msg\":\"Field required\",\"input\":{\"name\":\"g\",\"provider_type\":\"github\"}}]}"
+    },
+    {
+      "name": "oauth create: bad type and config",
+      "method": "POST",
+      "path": "/api/v1/auth/oauth/providers",
+      "body_sha256": "ad1aa3de7ccaf8ce5711175308d18209e25427470ac7285af682cfc6c9eb2d8e",
+      "request_headers_sha256": "1264d0b1fe6bb0035fbcb6233ea6a5ac6fff242668834a8accf23e1eba81960a",
+      "status": 422,
+      "headers": {
+        "content-length": "357",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "\u003cvolatile\u003e"
+      },
+      "body": "{\"detail\":[{\"type\":\"string_pattern_mismatch\",\"loc\":[\"body\",\"provider_type\"],\"msg\":\"String should match pattern '^(github|gitlab|google)$'\",\"input\":\"bitbucket\",\"ctx\":{\"pattern\":\"^(github|gitlab|google)$\"}},{\"type\":\"model_attributes_type\",\"loc\":[\"body\",\"oauth_config\"],\"msg\":\"Input should be a valid dictionary or object to extract fields from\",\"input\":[1]}]}"
+    },
+    {
+      "name": "oauth create: config fields",
+      "method": "POST",
+      "path": "/api/v1/auth/oauth/providers",
+      "body_sha256": "0d57fe983b10ddf5f2259a77e1033f8150486b894a63c7d33988017683338d8d",
+      "request_headers_sha256": "1264d0b1fe6bb0035fbcb6233ea6a5ac6fff242668834a8accf23e1eba81960a",
+      "status": 422,
+      "headers": {
+        "content-length": "374",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "\u003cvolatile\u003e"
+      },
+      "body": "{\"detail\":[{\"type\":\"missing\",\"loc\":[\"body\",\"oauth_config\",\"client_id\"],\"msg\":\"Field required\",\"input\":{\"client_secret\":5,\"scopes\":[null]}},{\"type\":\"string_type\",\"loc\":[\"body\",\"oauth_config\",\"client_secret\"],\"msg\":\"Input should be a valid string\",\"input\":5},{\"type\":\"string_type\",\"loc\":[\"body\",\"oauth_config\",\"scopes\",0],\"msg\":\"Input should be a valid string\",\"input\":null}]}"
+    },
+    {
+      "name": "oauth create: valid",
+      "method": "POST",
+      "path": "/api/v1/auth/oauth/providers",
+      "body_sha256": "b0ea354d8998790f0f86c6d2f32a3ddfb263b5481e0c8ef4591c2f2228e5856e",
+      "request_headers_sha256": "1264d0b1fe6bb0035fbcb6233ea6a5ac6fff242668834a8accf23e1eba81960a",
+      "status": 402,
+      "headers": {
+        "content-length": "120",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "\u003cvolatile\u003e"
+      },
+      "body": "{\"detail\":{\"error\":\"feature_not_licensed\",\"feature\":\"sso_saml\",\"required_tier\":\"enterprise\",\"current_tier\":\"community\"}}"
+    },
+    {
+      "name": "oauth create: no credential",
+      "method": "POST",
+      "path": "/api/v1/auth/oauth/providers",
+      "body_sha256": "a135823e1f3518ee22848a79f5427d8cee0bfb85fbc6b4e6eda61f883c057c9e",
+      "request_headers_sha256": "b58ddd4bb261e78693972b6634accd44bf966020d79a21c501cd73d1a3dee206",
+      "status": 401,
+      "headers": {
+        "content-length": "42",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "www-authenticate": "Bearer",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "\u003cvolatile\u003e"
+      },
+      "body": "{\"detail\":{\"message\":\"Not authenticated\"}}"
+    },
+    {
+      "name": "oauth create: GET is 405",
+      "method": "GET",
+      "path": "/api/v1/auth/oauth/providers",
+      "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "request_headers_sha256": "139e2bac8d05c48076f3ac6200b1a20fedc74e1f5a2a030eca5bad4a9dde490d",
+      "status": 405,
+      "headers": {
+        "allow": "POST",
+        "content-length": "31",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "\u003cvolatile\u003e"
+      },
+      "body": "{\"detail\":\"Method Not Allowed\"}"
+    },
+    {
+      "name": "oauth patch: bad",
+      "method": "PATCH",
+      "path": "/api/v1/auth/oauth/providers/22000000-0000-4000-8000-000000000003",
+      "body_sha256": "b13defc2586657a1d4d171bf7409fcd5a200effc2a1a63fbf25ee6c34800ab16",
+      "request_headers_sha256": "1264d0b1fe6bb0035fbcb6233ea6a5ac6fff242668834a8accf23e1eba81960a",
+      "status": 422,
+      "headers": {
+        "content-length": "265",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "\u003cvolatile\u003e"
+      },
+      "body": "{\"detail\":[{\"type\":\"model_attributes_type\",\"loc\":[\"body\",\"oauth_config\"],\"msg\":\"Input should be a valid dictionary or object to extract fields from\",\"input\":\"x\"},{\"type\":\"string_type\",\"loc\":[\"body\",\"default_role\"],\"msg\":\"Input should be a valid string\",\"input\":1}]}"
+    },
+    {
+      "name": "oauth patch: valid",
+      "method": "PATCH",
+      "path": "/api/v1/auth/oauth/providers/22000000-0000-4000-8000-000000000003",
+      "body_sha256": "b89f3a1c634c3167cb92043878b81f8c7f3cefad0c7540ffd7c56af6ef5c5e08",
+      "request_headers_sha256": "1264d0b1fe6bb0035fbcb6233ea6a5ac6fff242668834a8accf23e1eba81960a",
+      "status": 402,
+      "headers": {
+        "content-length": "120",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "\u003cvolatile\u003e"
+      },
+      "body": "{\"detail\":{\"error\":\"feature_not_licensed\",\"feature\":\"sso_saml\",\"required_tier\":\"enterprise\",\"current_tier\":\"community\"}}"
+    },
+    {
+      "name": "oauth patch: no credential",
+      "method": "PATCH",
+      "path": "/api/v1/auth/oauth/providers/22000000-0000-4000-8000-000000000003",
+      "body_sha256": "a135823e1f3518ee22848a79f5427d8cee0bfb85fbc6b4e6eda61f883c057c9e",
+      "request_headers_sha256": "b58ddd4bb261e78693972b6634accd44bf966020d79a21c501cd73d1a3dee206",
+      "status": 401,
+      "headers": {
+        "content-length": "42",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "www-authenticate": "Bearer",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "\u003cvolatile\u003e"
+      },
+      "body": "{\"detail\":{\"message\":\"Not authenticated\"}}"
+    },
+    {
+      "name": "saml metadata",
+      "method": "GET",
+      "path": "/api/v1/auth/saml/22000000-0000-4000-8000-000000000001/metadata",
+      "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "request_headers_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "status": 402,
+      "headers": {
+        "content-length": "120",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "\u003cvolatile\u003e"
+      },
+      "body": "{\"detail\":{\"error\":\"feature_not_licensed\",\"feature\":\"sso_saml\",\"required_tier\":\"enterprise\",\"current_tier\":\"community\"}}"
+    },
+    {
+      "name": "saml initiate: no body",
+      "method": "POST",
+      "path": "/api/v1/auth/saml/22000000-0000-4000-8000-000000000001/initiate",
+      "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "request_headers_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "status": 422,
+      "headers": {
+        "content-length": "82",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "\u003cvolatile\u003e"
+      },
+      "body": "{\"detail\":[{\"type\":\"missing\",\"loc\":[\"body\"],\"msg\":\"Field required\",\"input\":null}]}"
+    },
+    {
+      "name": "saml initiate: relay_state int",
+      "method": "POST",
+      "path": "/api/v1/auth/saml/22000000-0000-4000-8000-000000000001/initiate",
+      "body_sha256": "3aa0c3165556b5543266a2db6065835487ff010a9e1f40f235d544a710a8776b",
+      "request_headers_sha256": "b58ddd4bb261e78693972b6634accd44bf966020d79a21c501cd73d1a3dee206",
+      "status": 422,
+      "headers": {
+        "content-length": "113",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "\u003cvolatile\u003e"
+      },
+      "body": "{\"detail\":[{\"type\":\"string_type\",\"loc\":[\"body\",\"relay_state\"],\"msg\":\"Input should be a valid string\",\"input\":1}]}"
+    },
+    {
+      "name": "saml initiate: valid",
+      "method": "POST",
+      "path": "/api/v1/auth/saml/22000000-0000-4000-8000-000000000001/initiate",
+      "body_sha256": "a135823e1f3518ee22848a79f5427d8cee0bfb85fbc6b4e6eda61f883c057c9e",
+      "request_headers_sha256": "b58ddd4bb261e78693972b6634accd44bf966020d79a21c501cd73d1a3dee206",
+      "status": 402,
+      "headers": {
+        "content-length": "120",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "\u003cvolatile\u003e"
+      },
+      "body": "{\"detail\":{\"error\":\"feature_not_licensed\",\"feature\":\"sso_saml\",\"required_tier\":\"enterprise\",\"current_tier\":\"community\"}}"
+    },
+    {
+      "name": "saml acs: missing",
+      "method": "POST",
+      "path": "/api/v1/auth/saml/22000000-0000-4000-8000-000000000001/acs",
+      "body_sha256": "a135823e1f3518ee22848a79f5427d8cee0bfb85fbc6b4e6eda61f883c057c9e",
+      "request_headers_sha256": "b58ddd4bb261e78693972b6634accd44bf966020d79a21c501cd73d1a3dee206",
+      "status": 422,
+      "headers": {
+        "content-length": "95",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "\u003cvolatile\u003e"
+      },
+      "body": "{\"detail\":[{\"type\":\"missing\",\"loc\":[\"body\",\"SAMLResponse\"],\"msg\":\"Field required\",\"input\":{}}]}"
+    },
+    {
+      "name": "saml acs: by name",
+      "method": "POST",
+      "path": "/api/v1/auth/saml/22000000-0000-4000-8000-000000000001/acs",
+      "body_sha256": "d186b29e735cbc00d02325d8cfd6c4c6590da9a1b8c87702ed6ae3dc3e7295d1",
+      "request_headers_sha256": "b58ddd4bb261e78693972b6634accd44bf966020d79a21c501cd73d1a3dee206",
+      "status": 402,
+      "headers": {
+        "content-length": "120",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "\u003cvolatile\u003e"
+      },
+      "body": "{\"detail\":{\"error\":\"feature_not_licensed\",\"feature\":\"sso_saml\",\"required_tier\":\"enterprise\",\"current_tier\":\"community\"}}"
+    },
+    {
+      "name": "saml acs: name wrong type",
+      "method": "POST",
+      "path": "/api/v1/auth/saml/22000000-0000-4000-8000-000000000001/acs",
+      "body_sha256": "cd06817f15a27aa0016a2e4fc1abd80b1c9245f40775460c378b28b98d4d8e3b",
+      "request_headers_sha256": "b58ddd4bb261e78693972b6634accd44bf966020d79a21c501cd73d1a3dee206",
+      "status": 422,
+      "headers": {
+        "content-length": "115",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "\u003cvolatile\u003e"
+      },
+      "body": "{\"detail\":[{\"type\":\"string_type\",\"loc\":[\"body\",\"saml_response\"],\"msg\":\"Input should be a valid string\",\"input\":1}]}"
+    },
+    {
+      "name": "saml acs: alias wins over name",
+      "method": "POST",
+      "path": "/api/v1/auth/saml/22000000-0000-4000-8000-000000000001/acs",
+      "body_sha256": "919f125393017d6cca6ac79adf7815e66843150bab1cbf159f0d4bd169407b85",
+      "request_headers_sha256": "b58ddd4bb261e78693972b6634accd44bf966020d79a21c501cd73d1a3dee206",
+      "status": 422,
+      "headers": {
+        "content-length": "114",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "\u003cvolatile\u003e"
+      },
+      "body": "{\"detail\":[{\"type\":\"string_type\",\"loc\":[\"body\",\"SAMLResponse\"],\"msg\":\"Input should be a valid string\",\"input\":1}]}"
+    },
+    {
+      "name": "saml acs: relay by alias wrong type",
+      "method": "POST",
+      "path": "/api/v1/auth/saml/22000000-0000-4000-8000-000000000001/acs",
+      "body_sha256": "625085cfa837db81b1f0bb9a3f1829b53351e6bedb945372dc9457bc35528e9c",
+      "request_headers_sha256": "b58ddd4bb261e78693972b6634accd44bf966020d79a21c501cd73d1a3dee206",
+      "status": 422,
+      "headers": {
+        "content-length": "112",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "\u003cvolatile\u003e"
+      },
+      "body": "{\"detail\":[{\"type\":\"string_type\",\"loc\":[\"body\",\"RelayState\"],\"msg\":\"Input should be a valid string\",\"input\":1}]}"
+    },
+    {
+      "name": "saml acs: relay by name wrong type",
+      "method": "POST",
+      "path": "/api/v1/auth/saml/22000000-0000-4000-8000-000000000001/acs",
+      "body_sha256": "99e5c2a437498851c5145985027ebd12df87ff838c42c6b94e0c7e216ea42990",
+      "request_headers_sha256": "b58ddd4bb261e78693972b6634accd44bf966020d79a21c501cd73d1a3dee206",
+      "status": 422,
+      "headers": {
+        "content-length": "113",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "\u003cvolatile\u003e"
+      },
+      "body": "{\"detail\":[{\"type\":\"string_type\",\"loc\":[\"body\",\"relay_state\"],\"msg\":\"Input should be a valid string\",\"input\":1}]}"
+    },
+    {
+      "name": "oidc authorize: bad pkce",
+      "method": "POST",
+      "path": "/api/v1/auth/oidc/22000000-0000-4000-8000-000000000002/authorize",
+      "body_sha256": "a216d2fe432d1fa43ba3b0a98491263009216d7e16926192e66de6ff3805cefa",
+      "request_headers_sha256": "b58ddd4bb261e78693972b6634accd44bf966020d79a21c501cd73d1a3dee206",
+      "status": 422,
+      "headers": {
+        "content-length": "149",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "\u003cvolatile\u003e"
+      },
+      "body": "{\"detail\":[{\"type\":\"bool_parsing\",\"loc\":[\"body\",\"use_pkce\"],\"msg\":\"Input should be a valid boolean, unable to interpret input\",\"input\":\"sometimes\"}]}"
+    },
+    {
+      "name": "oidc authorize: valid",
+      "method": "POST",
+      "path": "/api/v1/auth/oidc/22000000-0000-4000-8000-000000000002/authorize",
+      "body_sha256": "a135823e1f3518ee22848a79f5427d8cee0bfb85fbc6b4e6eda61f883c057c9e",
+      "request_headers_sha256": "b58ddd4bb261e78693972b6634accd44bf966020d79a21c501cd73d1a3dee206",
+      "status": 402,
+      "headers": {
+        "content-length": "120",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "\u003cvolatile\u003e"
+      },
+      "body": "{\"detail\":{\"error\":\"feature_not_licensed\",\"feature\":\"sso_saml\",\"required_tier\":\"enterprise\",\"current_tier\":\"community\"}}"
+    },
+    {
+      "name": "oidc callback: missing",
+      "method": "POST",
+      "path": "/api/v1/auth/oidc/22000000-0000-4000-8000-000000000002/callback",
+      "body_sha256": "155b93a03769b3e1301b8cc26ef99eba1e33792d6064d13694bbcdff2a822285",
+      "request_headers_sha256": "b58ddd4bb261e78693972b6634accd44bf966020d79a21c501cd73d1a3dee206",
+      "status": 422,
+      "headers": {
+        "content-length": "300",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "\u003cvolatile\u003e"
+      },
+      "body": "{\"detail\":[{\"type\":\"missing\",\"loc\":[\"body\",\"code\"],\"msg\":\"Field required\",\"input\":{\"code_verifier\":1}},{\"type\":\"missing\",\"loc\":[\"body\",\"state\"],\"msg\":\"Field required\",\"input\":{\"code_verifier\":1}},{\"type\":\"string_type\",\"loc\":[\"body\",\"code_verifier\"],\"msg\":\"Input should be a valid string\",\"input\":1}]}"
+    },
+    {
+      "name": "oidc callback: valid",
+      "method": "POST",
+      "path": "/api/v1/auth/oidc/22000000-0000-4000-8000-000000000002/callback",
+      "body_sha256": "47529aafa9f63b2c23d3f1b311f146f0dbb1b986250fed7e9f90cb9a680112ae",
+      "request_headers_sha256": "b58ddd4bb261e78693972b6634accd44bf966020d79a21c501cd73d1a3dee206",
+      "status": 402,
+      "headers": {
+        "content-length": "120",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "\u003cvolatile\u003e"
+      },
+      "body": "{\"detail\":{\"error\":\"feature_not_licensed\",\"feature\":\"sso_saml\",\"required_tier\":\"enterprise\",\"current_tier\":\"community\"}}"
+    },
+    {
+      "name": "oauth authorize: bad",
+      "method": "POST",
+      "path": "/api/v1/auth/oauth/22000000-0000-4000-8000-000000000003/authorize",
+      "body_sha256": "5dc938d06e03134bcc7acef7342b466f16604d05ebfd986457d85175aa3b29d5",
+      "request_headers_sha256": "b58ddd4bb261e78693972b6634accd44bf966020d79a21c501cd73d1a3dee206",
+      "status": 422,
+      "headers": {
+        "content-length": "115",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "\u003cvolatile\u003e"
+      },
+      "body": "{\"detail\":[{\"type\":\"string_type\",\"loc\":[\"body\",\"redirect_uri\"],\"msg\":\"Input should be a valid string\",\"input\":[]}]}"
+    },
+    {
+      "name": "oauth authorize: valid",
+      "method": "POST",
+      "path": "/api/v1/auth/oauth/22000000-0000-4000-8000-000000000003/authorize",
+      "body_sha256": "a135823e1f3518ee22848a79f5427d8cee0bfb85fbc6b4e6eda61f883c057c9e",
+      "request_headers_sha256": "b58ddd4bb261e78693972b6634accd44bf966020d79a21c501cd73d1a3dee206",
+      "status": 402,
+      "headers": {
+        "content-length": "120",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "\u003cvolatile\u003e"
+      },
+      "body": "{\"detail\":{\"error\":\"feature_not_licensed\",\"feature\":\"sso_saml\",\"required_tier\":\"enterprise\",\"current_tier\":\"community\"}}"
+    },
+    {
+      "name": "oauth callback: missing",
+      "method": "POST",
+      "path": "/api/v1/auth/oauth/22000000-0000-4000-8000-000000000003/callback",
+      "body_sha256": "a135823e1f3518ee22848a79f5427d8cee0bfb85fbc6b4e6eda61f883c057c9e",
+      "request_headers_sha256": "b58ddd4bb261e78693972b6634accd44bf966020d79a21c501cd73d1a3dee206",
+      "status": 422,
+      "headers": {
+        "content-length": "163",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "\u003cvolatile\u003e"
+      },
+      "body": "{\"detail\":[{\"type\":\"missing\",\"loc\":[\"body\",\"code\"],\"msg\":\"Field required\",\"input\":{}},{\"type\":\"missing\",\"loc\":[\"body\",\"state\"],\"msg\":\"Field required\",\"input\":{}}]}"
+    },
+    {
+      "name": "oauth callback: valid",
+      "method": "POST",
+      "path": "/api/v1/auth/oauth/22000000-0000-4000-8000-000000000003/callback",
+      "body_sha256": "47529aafa9f63b2c23d3f1b311f146f0dbb1b986250fed7e9f90cb9a680112ae",
+      "request_headers_sha256": "b58ddd4bb261e78693972b6634accd44bf966020d79a21c501cd73d1a3dee206",
+      "status": 402,
+      "headers": {
+        "content-length": "120",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "\u003cvolatile\u003e"
+      },
+      "body": "{\"detail\":{\"error\":\"feature_not_licensed\",\"feature\":\"sso_saml\",\"required_tier\":\"enterprise\",\"current_tier\":\"community\"}}"
+    },
+    {
+      "name": "oauth by type: missing org_id",
+      "method": "GET",
+      "path": "/api/v1/auth/oauth/github/authorize",
+      "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "request_headers_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "status": 422,
+      "headers": {
+        "content-length": "92",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "\u003cvolatile\u003e"
+      },
+      "body": "{\"detail\":[{\"type\":\"missing\",\"loc\":[\"query\",\"org_id\"],\"msg\":\"Field required\",\"input\":null}]}"
+    },
+    {
+      "name": "oauth by type: valid",
+      "method": "GET",
+      "path": "/api/v1/auth/oauth/github/authorize?org_id=a0000000-0000-4000-8000-0000000000a1\u0026redirect_uri=x",
+      "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "request_headers_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "status": 402,
+      "headers": {
+        "content-length": "120",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "\u003cvolatile\u003e"
+      },
+      "body": "{\"detail\":{\"error\":\"feature_not_licensed\",\"feature\":\"sso_saml\",\"required_tier\":\"enterprise\",\"current_tier\":\"community\"}}"
+    },
+    {
+      "name": "overlap: POST /oauth/providers/authorize",
+      "method": "POST",
+      "path": "/api/v1/auth/oauth/providers/authorize",
+      "body_sha256": "a135823e1f3518ee22848a79f5427d8cee0bfb85fbc6b4e6eda61f883c057c9e",
+      "request_headers_sha256": "b58ddd4bb261e78693972b6634accd44bf966020d79a21c501cd73d1a3dee206",
+      "status": 402,
+      "headers": {
+        "content-length": "120",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "\u003cvolatile\u003e"
+      },
+      "body": "{\"detail\":{\"error\":\"feature_not_licensed\",\"feature\":\"sso_saml\",\"required_tier\":\"enterprise\",\"current_tier\":\"community\"}}"
+    },
+    {
+      "name": "overlap: GET /oauth/providers/authorize",
+      "method": "GET",
+      "path": "/api/v1/auth/oauth/providers/authorize?org_id=o",
+      "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "request_headers_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "status": 402,
+      "headers": {
+        "content-length": "120",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "\u003cvolatile\u003e"
+      },
+      "body": "{\"detail\":{\"error\":\"feature_not_licensed\",\"feature\":\"sso_saml\",\"required_tier\":\"enterprise\",\"current_tier\":\"community\"}}"
+    },
+    {
+      "name": "overlap: PATCH /oauth/providers/authorize",
+      "method": "PATCH",
+      "path": "/api/v1/auth/oauth/providers/authorize",
+      "body_sha256": "a135823e1f3518ee22848a79f5427d8cee0bfb85fbc6b4e6eda61f883c057c9e",
+      "request_headers_sha256": "b58ddd4bb261e78693972b6634accd44bf966020d79a21c501cd73d1a3dee206",
+      "status": 401,
+      "headers": {
+        "content-length": "42",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "www-authenticate": "Bearer",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "\u003cvolatile\u003e"
+      },
+      "body": "{\"detail\":{\"message\":\"Not authenticated\"}}"
+    },
+    {
+      "name": "overlap: PATCH /oauth/x/authorize",
+      "method": "PATCH",
+      "path": "/api/v1/auth/oauth/x/authorize",
+      "body_sha256": "a135823e1f3518ee22848a79f5427d8cee0bfb85fbc6b4e6eda61f883c057c9e",
+      "request_headers_sha256": "b58ddd4bb261e78693972b6634accd44bf966020d79a21c501cd73d1a3dee206",
+      "status": 405,
+      "headers": {
+        "allow": "POST",
+        "content-length": "31",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "\u003cvolatile\u003e"
+      },
+      "body": "{\"detail\":\"Method Not Allowed\"}"
+    },
+    {
+      "name": "overlap: PATCH /oauth/x/callback",
+      "method": "PATCH",
+      "path": "/api/v1/auth/oauth/x/callback",
+      "body_sha256": "a135823e1f3518ee22848a79f5427d8cee0bfb85fbc6b4e6eda61f883c057c9e",
+      "request_headers_sha256": "b58ddd4bb261e78693972b6634accd44bf966020d79a21c501cd73d1a3dee206",
+      "status": 405,
+      "headers": {
+        "allow": "POST",
+        "content-length": "31",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "\u003cvolatile\u003e"
+      },
+      "body": "{\"detail\":\"Method Not Allowed\"}"
+    },
+    {
+      "name": "overlap: GET /oauth/providers/callback",
+      "method": "GET",
+      "path": "/api/v1/auth/oauth/providers/callback",
+      "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "request_headers_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "status": 405,
+      "headers": {
+        "allow": "PATCH",
+        "content-length": "31",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "\u003cvolatile\u003e"
+      },
+      "body": "{\"detail\":\"Method Not Allowed\"}"
+    },
+    {
+      "name": "overlap: DELETE /oauth/providers/x",
+      "method": "DELETE",
+      "path": "/api/v1/auth/oauth/providers/x",
+      "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "request_headers_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "status": 405,
+      "headers": {
+        "allow": "PATCH",
+        "content-length": "31",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "\u003cvolatile\u003e"
+      },
+      "body": "{\"detail\":\"Method Not Allowed\"}"
+    },
+    {
+      "name": "overlap: HEAD /oauth/x/authorize",
+      "method": "HEAD",
+      "path": "/api/v1/auth/oauth/x/authorize",
+      "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "request_headers_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "status": 405,
+      "headers": {
+        "allow": "POST",
+        "content-length": "31",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "\u003cvolatile\u003e"
+      },
+      "body": ""
+    },
+    {
+      "name": "overlap: GET /oauth/x/y",
+      "method": "GET",
+      "path": "/api/v1/auth/oauth/x/y",
+      "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "request_headers_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "status": 404,
+      "headers": {
+        "content-length": "22",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "\u003cvolatile\u003e"
+      },
+      "body": "{\"detail\":\"Not Found\"}"
+    },
+    {
+      "name": "overlap: PUT /oauth/providers/x",
+      "method": "PUT",
+      "path": "/api/v1/auth/oauth/providers/x",
+      "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "request_headers_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "status": 405,
+      "headers": {
+        "allow": "PATCH",
+        "content-length": "31",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "\u003cvolatile\u003e"
+      },
+      "body": "{\"detail\":\"Method Not Allowed\"}"
+    },
+    {
+      "name": "activate: no credential",
+      "method": "POST",
+      "path": "/api/v1/auth/sso/providers/22000000-0000-4000-8000-000000000001/activate",
+      "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "request_headers_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "status": 401,
+      "headers": {
+        "content-length": "42",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "www-authenticate": "Bearer",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "\u003cvolatile\u003e"
+      },
+      "body": "{\"detail\":{\"message\":\"Not authenticated\"}}"
+    },
+    {
+      "name": "activate: member",
+      "method": "POST",
+      "path": "/api/v1/auth/sso/providers/22000000-0000-4000-8000-000000000001/activate",
+      "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "request_headers_sha256": "df3b49c9002f187f3a093c0e5d7ad74ef76581f35ce43a8fc427be5a532c5428",
+      "status": 403,
+      "headers": {
+        "content-length": "34",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "\u003cvolatile\u003e"
+      },
+      "body": "{\"detail\":\"Admin access required\"}"
+    },
+    {
+      "name": "activate: owner, saml (masking, truncation, null domains)",
+      "method": "POST",
+      "path": "/api/v1/auth/sso/providers/22000000-0000-4000-8000-000000000001/activate",
+      "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "request_headers_sha256": "139e2bac8d05c48076f3ac6200b1a20fedc74e1f5a2a030eca5bad4a9dde490d",
+      "status": 200,
+      "headers": {
+        "content-length": "\u003clength of projected body\u003e",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "\u003cvolatile\u003e"
+      },
+      "body": "{\"id\":\"22000000-0000-4000-8000-000000000001\",\"org_id\":\"a0000000-0000-4000-8000-0000000000a1\",\"name\":\"Corp SAML\",\"protocol\":\"saml\",\"status\":\"active\",\"is_default\":false,\"allow_idp_initiated\":true,\"auto_provision_users\":true,\"default_role\":\"member\",\"config\":{\"entity_id\":\"https://idp.example/e\",\"sso_url\":\"https://idp.example/sso\",\"certificate\":\"MIICééééééééééAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA...\",\"attribute_mapping\":{\"email\":\"mail\"}},\"allowed_domains\":[\"a.example\",\"b.example\"],\"last_metadata_sync_at\":null,\"last_login_at\":null,\"last_error\":null,\"last_error_at\":null,\"created_at\":\"2026-08-01T00:00:00Z\",\"updated_at\":\"\u003cnow\u003e\"}"
+    },
+    {
+      "name": "activate: again",
+      "method": "POST",
+      "path": "/api/v1/auth/sso/providers/22000000-0000-4000-8000-000000000001/activate",
+      "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "request_headers_sha256": "139e2bac8d05c48076f3ac6200b1a20fedc74e1f5a2a030eca5bad4a9dde490d",
+      "status": 200,
+      "headers": {
+        "content-length": "\u003clength of projected body\u003e",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "\u003cvolatile\u003e"
+      },
+      "body": "{\"id\":\"22000000-0000-4000-8000-000000000001\",\"org_id\":\"a0000000-0000-4000-8000-0000000000a1\",\"name\":\"Corp SAML\",\"protocol\":\"saml\",\"status\":\"active\",\"is_default\":false,\"allow_idp_initiated\":true,\"auto_provision_users\":true,\"default_role\":\"member\",\"config\":{\"entity_id\":\"https://idp.example/e\",\"sso_url\":\"https://idp.example/sso\",\"certificate\":\"MIICééééééééééAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA...\",\"attribute_mapping\":{\"email\":\"mail\"}},\"allowed_domains\":[\"a.example\",\"b.example\"],\"last_metadata_sync_at\":null,\"last_login_at\":null,\"last_error\":null,\"last_error_at\":null,\"created_at\":\"2026-08-01T00:00:00Z\",\"updated_at\":\"\u003cnow\u003e\"}"
+    },
+    {
+      "name": "deactivate: admin, oidc (client_secret masked)",
+      "method": "POST",
+      "path": "/api/v1/auth/sso/providers/22000000-0000-4000-8000-000000000002/deactivate",
+      "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "request_headers_sha256": "4176170ceeb3c524b694a2e53e84504800e3c1c5ff25324365c6cbcc97a01596",
+      "status": 200,
+      "headers": {
+        "content-length": "\u003clength of projected body\u003e",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "\u003cvolatile\u003e"
+      },
+      "body": "{\"id\":\"22000000-0000-4000-8000-000000000002\",\"org_id\":\"a0000000-0000-4000-8000-0000000000a1\",\"name\":\"Corp OIDC\",\"protocol\":\"oidc\",\"status\":\"inactive\",\"is_default\":false,\"allow_idp_initiated\":true,\"auto_provision_users\":true,\"default_role\":\"member\",\"config\":{\"client_id\":\"cid\",\"client_secret\":\"********\",\"issuer\":\"https://issuer.example\",\"scopes\":[\"openid\"]},\"allowed_domains\":[],\"last_metadata_sync_at\":null,\"last_login_at\":null,\"last_error\":null,\"last_error_at\":null,\"created_at\":\"2026-08-01T00:00:00Z\",\"updated_at\":\"\u003cnow\u003e\"}"
+    },
+    {
+      "name": "activate: oauth with a null config",
+      "method": "POST",
+      "path": "/api/v1/auth/sso/providers/22000000-0000-4000-8000-000000000003/activate",
+      "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "request_headers_sha256": "139e2bac8d05c48076f3ac6200b1a20fedc74e1f5a2a030eca5bad4a9dde490d",
+      "status": 200,
+      "headers": {
+        "content-length": "\u003clength of projected body\u003e",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "\u003cvolatile\u003e"
+      },
+      "body": "{\"id\":\"22000000-0000-4000-8000-000000000003\",\"org_id\":\"a0000000-0000-4000-8000-0000000000a1\",\"name\":\"GitHub\",\"protocol\":\"oauth_github\",\"status\":\"active\",\"is_default\":false,\"allow_idp_initiated\":true,\"auto_provision_users\":true,\"default_role\":\"member\",\"config\":{},\"allowed_domains\":[],\"last_metadata_sync_at\":null,\"last_login_at\":null,\"last_error\":null,\"last_error_at\":null,\"created_at\":\"2026-08-01T00:00:00Z\",\"updated_at\":\"\u003cnow\u003e\"}"
+    },
+    {
+      "name": "activate: another org's provider",
+      "method": "POST",
+      "path": "/api/v1/auth/sso/providers/22000000-0000-4000-8000-000000000004/activate",
+      "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "request_headers_sha256": "139e2bac8d05c48076f3ac6200b1a20fedc74e1f5a2a030eca5bad4a9dde490d",
+      "status": 404,
+      "headers": {
+        "content-length": "35",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "\u003cvolatile\u003e"
+      },
+      "body": "{\"detail\":\"SSO provider not found\"}"
+    },
+    {
+      "name": "activate: unknown provider",
+      "method": "POST",
+      "path": "/api/v1/auth/sso/providers/22000000-0000-4000-8000-0000000000ff/activate",
+      "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "request_headers_sha256": "139e2bac8d05c48076f3ac6200b1a20fedc74e1f5a2a030eca5bad4a9dde490d",
+      "status": 404,
+      "headers": {
+        "content-length": "35",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "\u003cvolatile\u003e"
+      },
+      "body": "{\"detail\":\"SSO provider not found\"}"
+    },
+    {
+      "name": "activate: stored config not an object (committed, then 500)",
+      "method": "POST",
+      "path": "/api/v1/auth/sso/providers/22000000-0000-4000-8000-000000000005/activate",
+      "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "request_headers_sha256": "139e2bac8d05c48076f3ac6200b1a20fedc74e1f5a2a030eca5bad4a9dde490d",
+      "status": 500,
+      "headers": {
+        "content-length": "34",
+        "content-type": "application/json"
+      },
+      "body": "{\"detail\":\"Internal Server Error\"}"
+    },
+    {
+      "name": "activate: stored allowed_domains not a list (committed, then 500)",
+      "method": "POST",
+      "path": "/api/v1/auth/sso/providers/22000000-0000-4000-8000-000000000006/activate",
+      "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "request_headers_sha256": "139e2bac8d05c48076f3ac6200b1a20fedc74e1f5a2a030eca5bad4a9dde490d",
+      "status": 500,
+      "headers": {
+        "content-length": "34",
+        "content-type": "application/json"
+      },
+      "body": "{\"detail\":\"Internal Server Error\"}"
+    },
+    {
+      "name": "activate: token of the other org",
+      "method": "POST",
+      "path": "/api/v1/auth/sso/providers/22000000-0000-4000-8000-000000000001/activate",
+      "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "request_headers_sha256": "0977390bcb32de572f7bf13335c4287201399d5f3dd7d4f827d6d19ab122808c",
+      "status": 404,
+      "headers": {
+        "content-length": "35",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "\u003cvolatile\u003e"
+      },
+      "body": "{\"detail\":\"SSO provider not found\"}"
+    },
+    {
+      "name": "activate: token without an org",
+      "method": "POST",
+      "path": "/api/v1/auth/sso/providers/22000000-0000-4000-8000-000000000001/activate",
+      "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "request_headers_sha256": "c5646f271c928ffce500d571656aa4f08c8ca735ebe5e3e9c23ed3c411cfdc5e",
+      "status": 500,
+      "headers": {
+        "content-length": "34",
+        "content-type": "application/json"
+      },
+      "body": "{\"detail\":\"Internal Server Error\"}"
+    },
+    {
+      "name": "activate: org claim not a uuid",
+      "method": "POST",
+      "path": "/api/v1/auth/sso/providers/22000000-0000-4000-8000-000000000001/activate",
+      "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "request_headers_sha256": "8e576afde064130499944c37f4f76e0fa2d9d2cc4169c16606ebfe8e84f102fe",
+      "status": 500,
+      "headers": {
+        "content-length": "34",
+        "content-type": "application/json"
+      },
+      "body": "{\"detail\":\"Internal Server Error\"}"
+    },
+    {
+      "name": "activate: provider id not a uuid",
+      "method": "POST",
+      "path": "/api/v1/auth/sso/providers/nope/activate",
+      "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "request_headers_sha256": "139e2bac8d05c48076f3ac6200b1a20fedc74e1f5a2a030eca5bad4a9dde490d",
+      "status": 500,
+      "headers": {
+        "content-length": "34",
+        "content-type": "application/json"
+      },
+      "body": "{\"detail\":\"Internal Server Error\"}"
+    },
+    {
+      "name": "activate: provider id in braces",
+      "method": "POST",
+      "path": "/api/v1/auth/sso/providers/{22000000-0000-4000-8000-000000000002}/activate",
+      "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "request_headers_sha256": "139e2bac8d05c48076f3ac6200b1a20fedc74e1f5a2a030eca5bad4a9dde490d",
+      "status": 200,
+      "headers": {
+        "content-length": "\u003clength of projected body\u003e",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "\u003cvolatile\u003e"
+      },
+      "body": "{\"id\":\"22000000-0000-4000-8000-000000000002\",\"org_id\":\"a0000000-0000-4000-8000-0000000000a1\",\"name\":\"Corp OIDC\",\"protocol\":\"oidc\",\"status\":\"active\",\"is_default\":false,\"allow_idp_initiated\":true,\"auto_provision_users\":true,\"default_role\":\"member\",\"config\":{\"client_id\":\"cid\",\"client_secret\":\"********\",\"issuer\":\"https://issuer.example\",\"scopes\":[\"openid\"]},\"allowed_domains\":[],\"last_metadata_sync_at\":null,\"last_login_at\":null,\"last_error\":null,\"last_error_at\":null,\"created_at\":\"2026-08-01T00:00:00Z\",\"updated_at\":\"\u003cnow\u003e\"}"
+    },
+    {
+      "name": "deactivate: GET is 405",
+      "method": "GET",
+      "path": "/api/v1/auth/sso/providers/22000000-0000-4000-8000-000000000001/deactivate",
+      "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "request_headers_sha256": "139e2bac8d05c48076f3ac6200b1a20fedc74e1f5a2a030eca5bad4a9dde490d",
+      "status": 405,
+      "headers": {
+        "allow": "POST",
+        "content-length": "31",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "\u003cvolatile\u003e"
+      },
+      "body": "{\"detail\":\"Method Not Allowed\"}"
+    }
+  ],
+  "rows": {
+    "sso_providers": {
+      "rows": "[34 0 0 0 0 0 64 0 128 0 0 0 0 0 0 1] [160 0 0 0 0 0 64 0 128 0 0 0 0 0 0 161]Corp SAMLsamlactivefalse true truemember{\"entity_id\": \"https://idp.example/e\", \"sso_url\": \"https://idp.example/sso\", \"certificate\": \"MIICééééééééééAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA\", \"attribute_mapping\": {\"email\": \"mail\"}}\u003cnull\u003e[\"a.example\", null, \"b.example\"]2026-08-01 00:00:00 +0000 UTC true | [34 0 0 0 0 0 64 0 128 0 0 0 0 0 0 2] [160 0 0 0 0 0 64 0 128 0 0 0 0 0 0 161]Corp OIDCoidcactivefalse true truemember{\"client_id\": \"cid\", \"client_secret\": \"not-masked-in-the-row\", \"issuer\": \"https://issuer.example\", \"scopes\": [\"openid\"]}\u003cnull\u003e\u003cnull\u003e2026-08-01 00:00:00 +0000 UTC true | [34 0 0 0 0 0 64 0 128 0 0 0 0 0 0 3] [160 0 0 0 0 0 64 0 128 0 0 0 0 0 0 161]GitHuboauth_githubactivefalse true truemembernull\u003cnull\u003e\u003cnull\u003e2026-08-01 00:00:00 +0000 UTC true | [34 0 0 0 0 0 64 0 128 0 0 0 0 0 0 4] [176 0 0 0 0 0 64 0 128 0 0 0 0 0 0 177]Other orgsamlactivefalse true truemember{}\u003cnull\u003e\u003cnull\u003e2026-08-01 00:00:00 +0000 UTC false | [34 0 0 0 0 0 64 0 128 0 0 0 0 0 0 5] [160 0 0 0 0 0 64 0 128 0 0 0 0 0 0 161]Bad configoidcactivefalse true truemember[]\u003cnull\u003e\u003cnull\u003e2026-08-01 00:00:00 +0000 UTC true | [34 0 0 0 0 0 64 0 128 0 0 0 0 0 0 6] [160 0 0 0 0 0 64 0 128 0 0 0 0 0 0 161]Bad domainsoidcactivefalse true truemember{}\u003cnull\u003e{\"a\": 1}2026-08-01 00:00:00 +0000 UTC true"
+    }
+  }
+}

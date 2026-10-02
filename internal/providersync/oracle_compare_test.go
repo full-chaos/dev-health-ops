@@ -210,7 +210,7 @@ func requireDivergencesAre(t *testing.T, divergences []string, expected ...diver
 // variable so the test that pins "a gate calls the helper" can observe the
 // problems of a probe without failing, which would put a failed test into the
 // package's -json events (the python-free classifier reads those).
-var reportDivergenceReadProblems = func(t *testing.T, problems []string) {
+var reportDivergenceReadProblems = func(t testing.TB, problems []string) {
 	t.Helper()
 	for _, problem := range problems {
 		t.Error(problem)
@@ -511,6 +511,14 @@ func TestAKnownDefectGateNamesItsOwnReadsAndNoOthers(t *testing.T) {
 // answer is found by them) and PASSES: the problems are recorded, never reported
 // as failures, so no failed test appears in the package's -json events.
 func TestRequireOracleRediscoversAssertsTheDefectsOwnReads(t *testing.T) {
+	// The DEFAULT reporter fails the gate's test once per problem: observed on a
+	// recording TB (the pin below swaps the reporter out, so nothing else runs
+	// the default body).
+	recording := &recordingTB{}
+	reportDivergenceReadProblems(recording, []string{"p1", "p2"})
+	if len(recording.errors) != 2 {
+		t.Fatalf("the default reporter failed the test %d time(s) for 2 problems", len(recording.errors))
+	}
 	cases := oraclePullRequestCases()
 	buggyState := func(t *testing.T, input map[string]any) pullRequestRow {
 		return mustNormalizeOraclePullRequest(t, input, buggyNormalizePRStateStripsOnlySpaces, gitHubPullUserLogin)
@@ -518,7 +526,7 @@ func TestRequireOracleRediscoversAssertsTheDefectsOwnReads(t *testing.T) {
 	probe := func(expected ...divergenceRead) []string {
 		var recorded []string
 		saved := reportDivergenceReadProblems
-		reportDivergenceReadProblems = func(_ *testing.T, problems []string) { recorded = append(recorded, problems...) }
+		reportDivergenceReadProblems = func(_ testing.TB, problems []string) { recorded = append(recorded, problems...) }
 		defer func() { reportDivergenceReadProblems = saved }()
 		match := func(string, string) (bool, error) { return true, nil }
 		ok := testing.RunTests(match, []testing.InternalTest{{Name: "TestGenericOracleRediscoversRowConstructionDefects", F: func(t *testing.T) {
@@ -542,3 +550,12 @@ func TestRequireOracleRediscoversAssertsTheDefectsOwnReads(t *testing.T) {
 		}
 	}
 }
+
+// recordingTB is a testing.TB that records Error calls instead of failing.
+type recordingTB struct {
+	testing.TB
+	errors []string
+}
+
+func (r *recordingTB) Helper()           { /* nothing to mark */ }
+func (r *recordingTB) Error(args ...any) { r.errors = append(r.errors, fmt.Sprint(args...)) }

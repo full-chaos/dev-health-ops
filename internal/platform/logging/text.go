@@ -19,7 +19,7 @@ import (
 // redactor (secrets) and with the fixed-class error helpers (CHAOS-7937).
 var providerTokenPattern = regexp.MustCompile(`(?:gh[pousr]_[A-Za-z0-9]{16,}|github_pat_[A-Za-z0-9_]{16,}|gl(?:pat|oas|rt|dt|ptt|soat|ft|imt|agent|cbt|ffct)-[A-Za-z0-9_\-]{16,}|lin_(?:api|oauth)_[A-Za-z0-9]{16,}|AT[AC]TT[A-Za-z0-9_\-=]{16,}|pdus\+_[A-Za-z0-9_\-+/=]{16,}|(?:api|sdk|mob)-[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12})`)
 
-var vendorKeyPattern = regexp.MustCompile(`(?:sk-(?:(?:proj|ant|or|svcacct|admin)-[A-Za-z0-9_\-]{20,}|[A-Za-z0-9]{20,})|(?:sk|rk)_(?:live|test)_[A-Za-z0-9]{16,}|whsec_[A-Za-z0-9]{16,}|AIza[A-Za-z0-9_\-]{30,}|xox[abeprs]-[A-Za-z0-9\-]{10,}|eyJ[A-Za-z0-9_\-]{8,}\.[A-Za-z0-9_\-]{8,}\.[A-Za-z0-9_\-]{8,})`)
+var vendorKeyPattern = regexp.MustCompile(`(?:sk-(?:(?:proj|ant|or|svcacct|admin)-[A-Za-z0-9_\-]{20,}|[A-Za-z0-9]{20,})|(?:sk|rk)_(?:live|test)_[A-Za-z0-9]{16,}|whsec_[A-Za-z0-9]{16,}|AIza[A-Za-z0-9_\-]{30,}|xox[abcdeprs]-[A-Za-z0-9\-]{10,}|eyJ[A-Za-z0-9_\-]{8,}\.[A-Za-z0-9_\-]{8,}\.[A-Za-z0-9_\-]{8,})`)
 
 // vendorKeyLiterals are the literals vendorKeyPattern cannot match without.
 var vendorKeyLiterals = []string{"sk-", "sk_", "rk_", "whsec_", "AIza", "xox", "eyJ"}

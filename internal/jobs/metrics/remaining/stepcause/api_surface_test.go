@@ -8,6 +8,40 @@ import (
 	"golang.org/x/tools/go/packages"
 )
 
+var allowedExports = map[string]bool{
+	"Step": true, "Failure": true,
+	"QueryScopedWatermarks":                             true,
+	"ScanScopedWatermark":                               true,
+	"QueryScopeChanges":                                 true,
+	"ScanScopeChange":                                   true,
+	"QueryMaxUpdatedAt":                                 true,
+	"ScanMaxUpdatedAt":                                  true,
+	"QueryMaxEffectiveChangedAt":                        true,
+	"ScanMaxEffectiveChangedAt":                         true,
+	"QueryWorkItems":                                    true,
+	"ScanWorkItemsRow":                                  true,
+	"QueryWorkItemDependencies":                         true,
+	"ScanWorkItemDependenciesRow":                       true,
+	"QueryWorkItemDependenciesReverseClosure":           true,
+	"ScanWorkItemDependenciesRowReverseClosure":         true,
+	"CountWorkItems":                                    true,
+	"QueryAlreadyCoveredTodayAttributions":              true,
+	"ScanAlreadyCoveredTodayRow":                        true,
+	"PrepareWorkItemTeamAttributionsBatch":              true,
+	"AppendWorkItemTeamAttributionsRow":                 true,
+	"SendWorkItemTeamAttributionsBatch":                 true,
+	"PrepareWorkItemAttributionBackstopRunsBatch":       true,
+	"AppendWorkItemAttributionBackstopRunsRow":          true,
+	"SendWorkItemAttributionBackstopRunsBatch":          true,
+	"PrepareWorkItemAttributionBackstopScopedRunsBatch": true,
+	"AppendWorkItemAttributionBackstopScopedRunsRow":    true,
+	"SendWorkItemAttributionBackstopScopedRunsBatch":    true,
+	"ClaimPartition":                                    true,
+	"LoadRun":                                           true,
+	"ComputePartition":                                  true,
+	"CompletePartition":                                 true,
+}
+
 // TestExportedAPIStaysClosed pins the claim "no code outside this package can
 // put text into a Step". That claim is only as strong as the exported API:
 // one `func Named(label string) Step` and every outside caller can mint a
@@ -16,6 +50,9 @@ import (
 //   - type Step, a struct with NO exported field and NO exported method;
 //   - func Failure(Step, error) error;
 //   - exported variables of type Step (the closed set of steps).
+//
+// Every exported identifier must also be in the allow-list allowedExports below, so a new
+// step (or any new export) fails until this file is edited in the same diff.
 //
 // Anything else exported (a constructor, a setter, a string-taking helper, an
 // alias, a constant, a second function) fails the test.
@@ -38,6 +75,9 @@ func TestExportedAPIStaysClosed(t *testing.T) {
 			continue
 		}
 		exported++
+		if !allowedExports[name] {
+			t.Errorf("exported name %s is not in the allow-list: a new export must be added to allowedExports in the same diff, after review", name)
+		}
 		object := scope.Lookup(name)
 		switch object := object.(type) {
 		case *types.TypeName:
@@ -77,6 +117,11 @@ func TestExportedAPIStaysClosed(t *testing.T) {
 			}
 		default:
 			t.Errorf("exported %s %s (%T): only Step, Failure and Step-typed vars may be exported", name, object.Type(), object)
+		}
+	}
+	for name := range allowedExports {
+		if scope.Lookup(name) == nil {
+			t.Errorf("allow-listed name %s is no longer exported", name)
 		}
 	}
 	if exported < 30 {

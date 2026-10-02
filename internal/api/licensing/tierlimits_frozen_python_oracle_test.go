@@ -4,16 +4,10 @@ import (
 	"encoding/json"
 	"fmt"
 	"math/big"
-	"os"
-	"os/exec"
-	"path/filepath"
-	"runtime"
-	"strings"
 	"testing"
 
 	"github.com/full-chaos/dev-health-ops/internal/api/pyjson"
-	"github.com/full-chaos/dev-health-ops/internal/testsupport/pyoracle"
-	"github.com/full-chaos/dev-health-ops/internal/testsupport/venueoracle"
+	"github.com/full-chaos/dev-health-ops/internal/testsupport/programoracle"
 )
 
 // pythonTierLimitsProgram runs each case through the api's own
@@ -145,34 +139,24 @@ func tierLimitCases() []tierLimitCase {
 	return cases
 }
 
-// TestTierLimitsVenueOracleMatchesLivePython requires GetLimitFrom and
+// TestTierLimitsMatchFrozenPython requires GetLimitFrom and
 // CheckLimitFrom to answer as the api's TierLimitService.get_limit and
 // check_limit do for the same stored rows: the same limit (int, float,
 // bool or None, as repr), the same allowed flag and refusal text for each
 // current value, and a failure exactly where Python raises.
-func TestTierLimitsVenueOracleMatchesLivePython(t *testing.T) {
-	if os.Getenv("DEV_HEALTH_LIVE_PYTHON_ORACLES") != "1" {
-		t.Skip("the tier-limit oracle needs the full project Python environment; ci/check_go.sh venue-oracles runs it")
-	}
-	_, file, _, _ := runtime.Caller(0)
-	root := filepath.Clean(filepath.Join(filepath.Dir(file), "..", "..", ".."))
-	python := pyoracle.Resolve(t, root)
+func TestTierLimitsMatchFrozenPython(t *testing.T) {
 	cases := tierLimitCases()
-	input, _ := json.Marshal(cases)
-	command := exec.Command(python, "-c", pythonTierLimitsProgram)
-	command.Env = append(os.Environ(), "PYTHONPATH="+filepath.Join(root, "src"))
-	command.Stdin = strings.NewReader(string(input))
-	output, err := command.CombinedOutput()
+	input, err := json.Marshal(cases)
 	if err != nil {
-		t.Fatalf("live python: %v", pyoracle.RunError(python, err, output))
+		t.Fatal(err)
 	}
-	lines := strings.Split(strings.TrimSpace(string(output)), "\n")
+	output := frozenPython(t, "tier-limits.golden.json", programoracle.Program{Name: "tier limits", Text: pythonTierLimitsProgram, Stdin: input})[0]
 	var want []struct {
 		Limit     string            `json:"limit"`
 		Checks    []json.RawMessage `json:"checks"`
 		Backfills []json.RawMessage `json:"backfills"`
 	}
-	if err := json.Unmarshal([]byte(lines[len(lines)-1]), &want); err != nil || len(want) != len(cases) {
+	if err := json.Unmarshal([]byte(output), &want); err != nil || len(want) != len(cases) {
 		t.Fatalf("decode: %v (%d of %d)\n%s", err, len(want), len(cases), output)
 	}
 	raised := 0
@@ -238,7 +222,6 @@ func TestTierLimitsVenueOracleMatchesLivePython(t *testing.T) {
 		t.Error("no case reached a backfill refusal")
 	}
 	t.Logf("%d cases compared, %d raising", len(cases), raised)
-	venueoracle.WriteProof(t)
 }
 
 // caseInputs is a case's stored rows as GetLimitFrom reads them.

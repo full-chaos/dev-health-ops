@@ -4,12 +4,13 @@ import (
 	"bytes"
 	"encoding/json"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
 
-	"github.com/full-chaos/dev-health-ops/internal/testsupport/pyoracle"
+	"github.com/full-chaos/dev-health-ops/internal/testsupport/programoracle"
+	"github.com/full-chaos/dev-health-ops/internal/testsupport/rotguard"
+	"github.com/full-chaos/dev-health-ops/internal/testsupport/venueoracle"
 )
 
 // fixtureTeams MUST stay byte-identical to
@@ -27,6 +28,7 @@ func fixtureTeams() []Team {
 		{ID: "team-dup-a", Name: "DupA", RepoPatterns: []string{"dup/repo"}},
 		{ID: "team-dup-b", Name: "DupB", RepoPatterns: []string{"dup/repo"}},
 		{ID: "team-ws", Name: "WS", RepoPatterns: []string{"   "}},
+		{ID: "team-interior", Name: "Interior", RepoPatterns: []string{"interior/*-svc"}},
 	}
 }
 
@@ -43,15 +45,17 @@ var fixtureProbes = []string{
 	"dup/repo",
 	"",
 	"   ",
+	"interior/*-svc-x",
+	"interior/x-svc",
 }
 
-// TestRepoPatternResolverMatchesLivePython compares this port against the
+// TestRepoPatternResolverMatchesLivePython compares (against the frozen production answers) this port against the
 // production builder + resolver over the hostile pattern set documented in the
 // oracle script. Every probe is compared, including the ones expected to
 // resolve to nothing -- a port that leaked an empty prefix would resolve
 // "totally/unrelated" to a team, and only a negative probe can catch that.
 func TestRepoPatternResolverMatchesLivePython(t *testing.T) {
-	want := runRepoTeamsOracle(t, "ai-impact-repo-teams-golden")
+	want := runRepoTeamsOracle(t)
 	resolver := BuildRepoPatternResolver(fixtureTeams())
 
 	if len(want) != len(fixtureProbes) {
@@ -143,30 +147,36 @@ func TestLongestPrefixWinsAndTiesKeepDeclarationOrder(t *testing.T) {
 	}
 }
 
-func runRepoTeamsOracle(t *testing.T, markerName string) map[string]*string {
+// runRepoTeamsOracle returns the team_id the production builder and resolver gave each probe. The oracle
+// script was executed once on the last build that carried the Python sources and its stdout is frozen in
+// testdata/golden/repo_teams_oracle.json (recipe in the golden's spec); a frozen run reads it, no Python
+// runs. The script's text and the probe set are part of the request, so a changed script or fixture is
+// refused until it is recorded again.
+func runRepoTeamsOracle(t *testing.T) map[string]*string {
 	t.Helper()
-	if os.Getenv("DEV_HEALTH_LIVE_PYTHON_ORACLES") != "1" {
-		t.Skip("live Python oracles run only through ci/check_go.sh live-python-oracles")
-	}
-	proofDirectory := os.Getenv("DEV_HEALTH_LIVE_PYTHON_ORACLE_PROOF_DIR")
-	if proofDirectory == "" {
-		t.Fatal("DEV_HEALTH_LIVE_PYTHON_ORACLE_PROOF_DIR is required")
-	}
 	root, err := filepath.Abs(filepath.Join("..", "..", "..", ".."))
 	if err != nil {
 		t.Fatal(err)
 	}
-	python := pyoracle.Resolve(t, root)
-	command := exec.Command(python, filepath.Join("testdata", "python_repo_teams_oracle.py"))
-	command.Dir = filepath.Join(root, "internal", "jobs", "metrics", "aiimpact")
-	command.Env = append(os.Environ(), "PYTHONPATH="+filepath.Join(root, "src"))
-	var stdout, stderr bytes.Buffer
-	command.Stdout, command.Stderr = &stdout, &stderr
-	if err := command.Run(); err != nil {
-		t.Fatalf("execute production Python oracle: %v\nstdout:\n%s",
-			pyoracle.RunError(python, err, stderr.Bytes()), stdout.String())
+	const scriptPath = "internal/jobs/metrics/aiimpact/testdata/python_repo_teams_oracle.py"
+	source, err := os.ReadFile(filepath.Join(root, filepath.FromSlash(scriptPath)))
+	if err != nil {
+		t.Fatal(err)
 	}
-	output := bytes.TrimSpace(stdout.Bytes())
+	spec := venueoracle.GoldenSpec{
+		Path:        "testdata/golden/repo_teams_oracle.json",
+		PythonBuild: rotguard.PythonBuild,
+		SHA256:      "636d4640d0c7a66652bd152a41d7848db6f9d2f97f6929dfb05adf388237fdc2",
+		Recipe: "git worktree add --detach $DIR " + rotguard.PythonBuild + " (with its .venv: uv sync --frozen --no-install-project); then from the repository root: " +
+			"go run ./internal/testsupport/venueoracle/goldenrecord -pkg ./internal/jobs/metrics/aiimpact/ -test '^TestRepoPatternResolverMatchesLivePython$' -python-root $DIR",
+	}
+	answers := programoracle.Run(t, spec, root, []programoracle.Program{
+		programoracle.Script("repo teams oracle", scriptPath, string(source), nil),
+	})
+	if answers[0].ExitCode != 0 {
+		t.Fatalf("the repo teams oracle exited %d (stdout %q)", answers[0].ExitCode, answers[0].Stdout)
+	}
+	output := bytes.TrimSpace([]byte(answers[0].Stdout))
 	if lastLine := bytes.LastIndexByte(output, '\n'); lastLine >= 0 {
 		output = output[lastLine+1:]
 	}
@@ -175,10 +185,7 @@ func runRepoTeamsOracle(t *testing.T, markerName string) map[string]*string {
 		t.Fatalf("decode production Python oracle output %q: %v", output, err)
 	}
 	if len(decoded) == 0 {
-		t.Fatal("live Python answered no probes; the oracle is broken")
-	}
-	if writeErr := os.WriteFile(filepath.Join(proofDirectory, markerName), []byte("executed"), 0o644); writeErr != nil {
-		t.Fatalf("write live-python-oracle proof: %v", writeErr)
+		t.Fatal("the recorded Python answered no probes; the oracle is broken")
 	}
 	return decoded
 }

@@ -2,15 +2,10 @@ package atlassianteams
 
 import (
 	"context"
-	"fmt"
 	"go/ast"
-	"go/parser"
-	"go/token"
-	"io/fs"
+	"go/types"
 	"net/http"
 	"net/http/httptest"
-	"path/filepath"
-	"runtime"
 	"sort"
 	"strings"
 	"sync/atomic"
@@ -19,6 +14,7 @@ import (
 	"atlassian/atlassian"
 	"atlassian/atlassian/graph"
 	"atlassian/atlassian/rest"
+	"golang.org/x/tools/go/packages"
 )
 
 // CHAOS-7921: the vendored Atlassian module's DEFAULT http clients (the ones it builds when its caller supplied none) follow no
@@ -68,131 +64,151 @@ var defaultClientSites = map[string]func(t *testing.T, base string){
 	},
 }
 
-// vendoredGoFiles parses every non-test Go file of the vendored atlassian module, at any depth.
-func vendoredGoFiles(t *testing.T) map[string]*ast.File {
+// loadVendoredPackages type-checks EVERY package of the vendored atlassian module (pattern atlassian/..., any depth, production files
+// only). Nothing loaded, or any load or type error, fails the test: a scan that cannot see the code must not pass.
+func loadVendoredPackages(t *testing.T, pattern string) []*packages.Package {
 	t.Helper()
-	_, file, _, _ := runtime.Caller(0)
-	root := filepath.Join(filepath.Dir(file), "..", "..", "third_party", "vendor", "atlassian", "atlassian")
-	files := map[string]*ast.File{}
-	fset := token.NewFileSet()
-	err := filepath.WalkDir(root, func(path string, entry fs.DirEntry, err error) error {
-		if err != nil {
-			return err
-		}
-		if entry.IsDir() || !strings.HasSuffix(path, ".go") || strings.HasSuffix(path, "_test.go") {
-			return nil
-		}
-		parsed, err := parser.ParseFile(fset, path, nil, 0)
-		if err != nil {
-			return fmt.Errorf("%s: %w", path, err)
-		}
-		files[path] = parsed
-		return nil
-	})
+	loaded, err := packages.Load(&packages.Config{
+		Mode: packages.NeedName | packages.NeedFiles | packages.NeedSyntax | packages.NeedTypes | packages.NeedTypesInfo | packages.NeedImports | packages.NeedDeps,
+		Dir:  "../..",
+	}, pattern)
 	if err != nil {
-		t.Fatal(err)
+		t.Fatalf("loading %s: %v", pattern, err)
 	}
-	if len(files) == 0 {
-		t.Fatal("no vendored Go file found")
+	if len(loaded) == 0 {
+		t.Fatalf("loading %s found no package: the scan has nothing to check", pattern)
 	}
-	return files
+	failed := false
+	for _, pkg := range loaded {
+		for _, loadErr := range pkg.Errors {
+			t.Errorf("%s: %v", pkg.PkgPath, loadErr)
+			failed = true
+		}
+	}
+	if failed {
+		t.FailNow()
+	}
+	return loaded
 }
 
-// netHTTPName is the local name a file gives the net/http import ("" when it does not import it); a dot or blank import is refused,
-// because it would hide every http.X use from the scan.
-func netHTTPName(t *testing.T, path string, file *ast.File) string {
+func isNetHTTP(object types.Object, name string) bool {
+	return object != nil && object.Pkg() != nil && object.Pkg().Path() == "net/http" && object.Name() == name
+}
+
+// isHTTPClient reports whether t is net/http.Client or *net/http.Client.
+func isHTTPClient(t types.Type) (value bool, ok bool) {
+	pointer := false
+	if p, isPointer := t.(*types.Pointer); isPointer {
+		t, pointer = p.Elem(), true
+	}
+	named, isNamed := t.(*types.Named)
+	if !isNamed || !isNetHTTP(named.Obj(), "Client") {
+		return false, false
+	}
+	return !pointer, true
+}
+
+// vendoredRedirectScan is what the types say about every package: the places an http.Client value is CREATED (a composite literal,
+// new(), a var of the value type) or the redirect-following package-level client is used (http.DefaultClient, http.Get/Post/Head/
+// PostForm), each with the function that holds it; and the calls to the default-client helper, by enclosing function. It goes through
+// types.Info, so an import alias, a dot import or the depth of the file does not matter.
+type vendoredRedirectScan struct {
+	creations []string // "<pkg>.<func>: <what>" for every creation outside the helper, and the helper's own
+	helperLit int      // composite literals of http.Client inside NewDefaultHTTPClient that set CheckRedirect
+	sites     map[string]int
+	packages  int
+}
+
+func scanVendored(t *testing.T, pattern string) vendoredRedirectScan {
 	t.Helper()
-	for _, spec := range file.Imports {
-		if spec.Path.Value != `"net/http"` {
-			continue
-		}
-		if spec.Name == nil {
-			return "http"
-		}
-		if spec.Name.Name == "." || spec.Name.Name == "_" {
-			t.Errorf("%s: net/http imported as %q: the redirect scan cannot see its uses", path, spec.Name.Name)
-			return ""
-		}
-		return spec.Name.Name
-	}
-	return ""
-}
-
-// TestEveryVendoredHTTPClientRefusesRedirects derives, from the vendored source, every http.Client the module builds and every
-// default-client site, and requires: no http.Client literal anywhere but the one default constructor, which sets CheckRedirect; no
-// http.DefaultClient or package-level http.Get/Post/Head; and the set of default-client sites equals the behaviour table.
-func TestEveryVendoredHTTPClientRefusesRedirects(t *testing.T) {
-	sites := map[string]int{}
-	literals := 0
-	for path, file := range vendoredGoFiles(t) {
-		name := netHTTPName(t, path, file)
-		isHTTP := func(expr ast.Expr, member string) bool {
-			selector, ok := expr.(*ast.SelectorExpr)
-			if !ok || name == "" {
-				return false
+	scan := vendoredRedirectScan{sites: map[string]int{}}
+	for _, pkg := range loadVendoredPackages(t, pattern) {
+		scan.packages++
+		info := pkg.TypesInfo
+		for _, file := range pkg.Syntax {
+			var enclosing string
+			report := func(what string) {
+				scan.creations = append(scan.creations, pkg.PkgPath+"."+enclosing+": "+what)
 			}
-			pkg, ok := selector.X.(*ast.Ident)
-			return ok && pkg.Name == name && selector.Sel.Name == member
-		}
-		var enclosing string
-		ast.Inspect(file, func(node ast.Node) bool {
-			switch n := node.(type) {
-			case *ast.FuncDecl:
-				enclosing = n.Name.Name
-			case *ast.CompositeLit:
-				if isHTTP(n.Type, "Client") {
-					literals++
-					if enclosing != "NewDefaultHTTPClient" {
-						t.Errorf("%s: an http.Client literal in %s: build it with NewDefaultHTTPClient (no redirect followed)", path, enclosing)
+			ast.Inspect(file, func(node ast.Node) bool {
+				switch n := node.(type) {
+				case *ast.FuncDecl:
+					enclosing = n.Name.Name
+				case *ast.CompositeLit:
+					if _, ok := isHTTPClient(info.TypeOf(n)); ok {
+						hasCheck := false
+						for _, element := range n.Elts {
+							if kv, ok := element.(*ast.KeyValueExpr); ok {
+								if key, ok := kv.Key.(*ast.Ident); ok && key.Name == "CheckRedirect" {
+									hasCheck = true
+								}
+							}
+						}
+						if enclosing == "NewDefaultHTTPClient" && hasCheck {
+							scan.helperLit++
+						} else {
+							report("an http.Client literal (the helper's own literal must set CheckRedirect)")
+						}
 					}
-					hasCheck := false
-					for _, element := range n.Elts {
-						if kv, ok := element.(*ast.KeyValueExpr); ok {
-							if key, ok := kv.Key.(*ast.Ident); ok && key.Name == "CheckRedirect" {
-								hasCheck = true
+				case *ast.CallExpr:
+					if ident, ok := n.Fun.(*ast.Ident); ok {
+						if builtin, ok := info.Uses[ident].(*types.Builtin); ok && builtin.Name() == "new" && len(n.Args) == 1 {
+							if _, ok := isHTTPClient(info.TypeOf(n.Args[0])); ok {
+								report("new(http.Client)")
 							}
 						}
 					}
-					if !hasCheck {
-						t.Errorf("%s: an http.Client literal in %s with no CheckRedirect", path, enclosing)
+					var callee types.Object
+					switch fun := n.Fun.(type) {
+					case *ast.Ident:
+						callee = info.Uses[fun]
+					case *ast.SelectorExpr:
+						callee = info.Uses[fun.Sel]
 					}
-				}
-			case *ast.ValueSpec: // var client http.Client
-				if isHTTP(n.Type, "Client") {
-					t.Errorf("%s: a non-pointer http.Client value in %s: build it with NewDefaultHTTPClient", path, enclosing)
-				}
-			case *ast.SelectorExpr:
-				for _, member := range []string{"DefaultClient", "Get", "Post", "Head", "PostForm"} {
-					if isHTTP(n, member) {
-						t.Errorf("%s: http.%s in %s uses the redirect-following default client", path, member, enclosing)
+					if callee != nil && callee.Name() == "NewDefaultHTTPClient" && enclosing != "NewDefaultHTTPClient" {
+						scan.sites[enclosing]++
 					}
-				}
-			case *ast.CallExpr:
-				if ident, ok := n.Fun.(*ast.Ident); ok && ident.Name == "new" && len(n.Args) == 1 && isHTTP(n.Args[0], "Client") {
-					t.Errorf("%s: new(http.Client) in %s: build it with NewDefaultHTTPClient", path, enclosing)
-				}
-				callee := ""
-				switch fun := n.Fun.(type) {
+				case *ast.ValueSpec:
+					for _, name := range n.Names {
+						if value, ok := isHTTPClient(info.Defs[name].Type()); ok && value {
+							report("a var of type http.Client (a zero value)")
+						}
+					}
 				case *ast.Ident:
-					callee = fun.Name
-				case *ast.SelectorExpr:
-					callee = fun.Sel.Name
+					object := info.Uses[n]
+					for _, member := range []string{"DefaultClient", "Get", "Post", "Head", "PostForm"} {
+						if isNetHTTP(object, member) {
+							if _, isMethod := object.(*types.Func); isMethod && object.(*types.Func).Type().(*types.Signature).Recv() != nil {
+								continue // (*http.Client).Get: a method of a client that already exists
+							}
+							report("net/http." + member + " (the redirect-following default client)")
+						}
+					}
 				}
-				if callee == "NewDefaultHTTPClient" && enclosing != "NewDefaultHTTPClient" {
-					sites[enclosing]++
-				}
-			}
-			return true
-		})
+				return true
+			})
+		}
 	}
-	if literals == 0 {
-		t.Fatal("the derived set of http.Client literals is empty: the scan found nothing to check")
+	return scan
+}
+
+// TestEveryVendoredHTTPClientRefusesRedirects derives, from the TYPES of every vendored package, each place an http.Client value is
+// created or the redirect-following default client is used, and requires none but the helper's own literal (which sets CheckRedirect);
+// and the default-client sites (by enclosing function) must equal the behaviour table below. An empty derived set, a load error or a
+// type error fails.
+func TestEveryVendoredHTTPClientRefusesRedirects(t *testing.T) {
+	scan := scanVendored(t, "atlassian/...")
+	if scan.packages == 0 || scan.helperLit != 1 {
+		t.Fatalf("scanned %d package(s) and found %d helper literal(s): the scan did not see the default-client constructor", scan.packages, scan.helperLit)
 	}
-	if len(sites) == 0 {
+	if len(scan.sites) == 0 {
 		t.Fatal("the derived set of default-client sites is empty: the scan found nothing to check")
 	}
+	for _, creation := range scan.creations {
+		t.Errorf("%s: build every client with atlassian.NewDefaultHTTPClient (no redirect followed)", creation)
+	}
 	var derived, covered []string
-	for name := range sites {
+	for name := range scan.sites {
 		derived = append(derived, name)
 	}
 	for name := range defaultClientSites {

@@ -106,9 +106,7 @@ func ResolveLauncher(t *testing.T, root string) string {
 // equal).
 const RecordingEnv = "DHO_VENUE_GOLDEN_UPDATE"
 
-// unconvertedOwnLaunchCeiling is how many packages the closed list holds. It
-// only goes down.
-const unconvertedOwnLaunchCeiling = 11
+// The closed list below only shrinks; its size is held to the merge base by ci/ratchets.tsv (package ratchet).
 
 //go:embed unconverted_own_launch.txt
 var unconvertedOwnLaunch string

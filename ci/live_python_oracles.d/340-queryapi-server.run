@@ -1,0 +1,4 @@
+label=internal/queryapi/server (POST body validation vs live FastAPI request models)
+package=./internal/queryapi/server
+run=^TestQueryAPIBodiesMatchLiveFastAPI$
+proof=query-api-bodies|the query-api POST body live FastAPI oracle measurement did not occur

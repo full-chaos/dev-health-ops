@@ -1,0 +1,5 @@
+label=internal/atlassianteams (the vendored Atlassian client vs the pinned upstream Python Teams client)
+package=./internal/atlassianteams
+run=^(TestAtlassianTeamsClientMatchesLivePython)$
+pythonpath=0
+proof=atlassianteams-python-client|api live Python oracle atlassianteams-python-client did not run

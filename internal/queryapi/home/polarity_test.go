@@ -4,7 +4,7 @@ import "testing"
 
 // CHAOS-7776: the polarity the Go API uses (lowerIsBetter) must equal the one
 // the web shows (the `polarity` field of every entry in
-// web/src/lib/metrics/catalog.ts, read 2026-10-02 at web main + the redesign
+// web/src/lib/metrics/catalog.ts lines 11-102, looked up at line 182, read 2026-10-02 at web main + the redesign
 // line). The web side is listed here by metric; a metric Go knows must have the
 // same polarity as the web catalog. If either side changes, this test fails
 // until the other follows.

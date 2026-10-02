@@ -4,16 +4,16 @@
 # roughly right: a stale one costs balance, never coverage (the shards always partition
 # the full package list). Key = import path relative to the module root. Sorted (LC_ALL=C),
 # no duplicates; tests/tooling/test_go_quality_legs.py checks each row names a real package.
-# CHAOS-8135: values are the largest CI race-leg time of each package over the four go-quality race legs of main
-# 45aa5b00ab and 2e2fec51e3 (runs 37048134175, 37048890975). A package that takes 30 s or more in a race leg and
+# CHAOS-8135: values are the largest CI race-leg time of each package over the go-quality race legs of main
+# 45aa5b00ab, 2e2fec51e3, 561606bce8 and the PRs #3651 and #3663 (the seven race legs that did not time out). A package that takes 30 s or more in a race leg and
 # has NO row here fails that leg (ci/go_race_unweighted.awk): add its measured row.
 cmd/dev-health-migration-matrix	21
 cmd/dho	31
-cmd/gqlgen-guard	43
-deploy/helm/dev-health	26
+cmd/gqlgen-guard	69
+deploy/helm/dev-health	27
 internal/fixturescli	420
 internal/goapicli/restprove	31
-internal/goapiproof	486
+internal/goapiproof	506
 internal/gqlgenguard	414
 internal/httpguard	324
 internal/joboutbox	44
@@ -32,12 +32,13 @@ internal/pythonparity/emailvalidator	230
 internal/pythonparity/pyidna	241
 internal/pythonparity/pyunicodedata	57
 internal/queryapi/investmentflow	67
-internal/queryapi/server	21
-internal/storage/postgres	28
+internal/queryapi/server	26
+internal/storage/postgres	29
 internal/storedversion	132
-internal/streamhandlers	85
+internal/streamhandlers	93
 internal/streamrunnerservice	21
-internal/syncbudget	28
+internal/syncbudget	31
 internal/synccli	79
+internal/syncdispatchruntime	47
 internal/testsupport/venueoracle	76
 internal/testsupport/venueoracle/goldenhygiene	60

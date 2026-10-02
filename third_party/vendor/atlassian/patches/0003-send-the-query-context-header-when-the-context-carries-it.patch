@@ -1,0 +1,48 @@
+diff --git a/third_party/vendor/atlassian/atlassian/graph/client.go b/third_party/vendor/atlassian/atlassian/graph/client.go
+index 84e975d896..58dab1d6cf 100644
+--- a/third_party/vendor/atlassian/atlassian/graph/client.go
++++ b/third_party/vendor/atlassian/atlassian/graph/client.go
+@@ -145,6 +145,9 @@ func (c *Client) Execute(ctx context.Context, query string, variables map[string
+ 				headers.Add("X-ExperimentalApi", beta)
+ 			}
+ 		}
++		for name, value := range queryContextHeaders(ctx) {
++			headers.Set(name, value)
++		}
+ 
+ 		if c.Auth != nil {
+ 			if err := c.Auth.Apply(req); err != nil {
+diff --git a/third_party/vendor/atlassian/atlassian/graph/query_context.go b/third_party/vendor/atlassian/atlassian/graph/query_context.go
+new file mode 100644
+index 0000000000..0b79507cb5
+--- /dev/null
++++ b/third_party/vendor/atlassian/atlassian/graph/query_context.go
+@@ -0,0 +1,28 @@
++package graph
++
++import "context"
++
++// QueryContextHeader is the header the Teamwork Graph team reads must carry:
++// without it the gateway answers "Query context must not be null and should be
++// a valid platform site or workspace ARI. Please send the required
++// X-Query-Context header." (a live run, CHAOS-7132; local modification, patch 0003). Execute sends it when the
++// context carries a value (WithQueryContext), so only the calls a caller marks send it.
++const QueryContextHeader = "X-Query-Context"
++
++type queryContextKey struct{}
++
++// WithQueryContext returns ctx carrying the value the team reads send as
++// X-Query-Context. An empty value sends no header (the client's behaviour
++// before this addition).
++func WithQueryContext(ctx context.Context, value string) context.Context {
++	return context.WithValue(ctx, queryContextKey{}, value)
++}
++
++// queryContextHeaders is the extra headers of a request made under ctx: the
++// X-Query-Context header when ctx carries a value, else none.
++func queryContextHeaders(ctx context.Context) map[string]string {
++	if value, _ := ctx.Value(queryContextKey{}).(string); value != "" {
++		return map[string]string{QueryContextHeader: value}
++	}
++	return nil
++}

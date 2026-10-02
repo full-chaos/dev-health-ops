@@ -67,8 +67,14 @@ WHERE id = $1`, firstUnitID, priorAttempts, priorEpisodeAt); err != nil {
 		t.Fatal(err)
 	}
 	availableAt := now.Add(1500 * time.Millisecond)
-	if err := repository.DeferForBudgetContention(ctx, claim, availableAt, now); err != nil {
+	deferrals, err := repository.DeferForBudgetContention(ctx, claim, availableAt, now)
+	if err != nil {
 		t.Fatal(err)
+	}
+	// The seeded unit already carries provider_budget_contention_deferrals = 2,
+	// so this deferral returns 3: the value the handler logs as `deferrals`.
+	if deferrals != 3 {
+		t.Fatalf("contention deferral count = %d, want 3 (seeded 2 + this one; the value the handler logs)", deferrals)
 	}
 
 	var status, category, retryReason string
@@ -135,5 +141,21 @@ WHERE sync_run_id = $1::uuid AND kind = 'finalize_sync_run'`, claim.SyncRunID).S
 	}
 	if reclaimed.Attempt != priorAttempts+1 {
 		t.Fatalf("post-deferral attempts=%d, want %d", reclaimed.Attempt, priorAttempts+1)
+	}
+
+	// A claim that does not own the lease changes nothing and returns no count.
+	stranger := reclaimed
+	stranger.Owner = uuid.NewString()
+	secondNow := availableAt.Add(time.Second)
+	if count, err := restarted.DeferForBudgetContention(ctx, stranger, secondNow.Add(2*time.Second), secondNow); !errors.Is(err, ErrLeaseLost) || count != 0 {
+		t.Fatalf("deferral by a non-owner = %d, %v; want 0, ErrLeaseLost", count, err)
+	}
+	// A SECOND deferral by the owner counts on: 4, not a constant.
+	second, err := restarted.DeferForBudgetContention(ctx, reclaimed, secondNow.Add(2*time.Second), secondNow)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if second != 4 {
+		t.Fatalf("second contention deferral count = %d, want 4", second)
 	}
 }

@@ -214,3 +214,17 @@ func TestEnableRefusesAClassReceiptWhoseProvenanceHasNoRoot(t *testing.T) {
 		})
 	}
 }
+
+// CHAOS-7766 (K17): a receipt whose evidence is VALID JSON but carries no mcp_class block reads as "no readable provenance" -- the refusal names
+// that cause, not a root mismatch.
+func TestEnableRefusesAClassReceiptWhoseEvidenceIsJSONWithoutAClassBlock(t *testing.T) {
+	pool := startAuditedRegistryPostgres(t)
+	op := seedAndProveClass(t, pool, "hotspots", `{"measurement_route":"proof"}`)
+	_, err := enableClass(pool, op)
+	if err == nil || !errors.Is(err, ErrEnableRequestRefused) || !strings.Contains(err.Error(), "no readable provenance") {
+		t.Fatalf("err = %v, want the no-provenance refusal for valid JSON without mcp_class", err)
+	}
+	if got := classRowMode(t, pool, op); got != "shadow" {
+		t.Fatalf("mode = %s", got)
+	}
+}

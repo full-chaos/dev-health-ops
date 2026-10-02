@@ -53,7 +53,6 @@ from .admin import router as admin_router
 from .admin.impersonation import router as impersonation_router
 from .auth import router as auth_router
 from .auth.router import get_current_user
-from .billing import router as billing_router
 from .graphql.app import create_graphql_app
 from .ingest import router as ingest_router
 from .licensing import router as licensing_router
@@ -145,7 +144,6 @@ app.include_router(webhooks_router)
 app.include_router(admin_router)
 app.include_router(impersonation_router)
 app.include_router(auth_router)
-app.include_router(billing_router)
 app.include_router(licensing_router)
 app.include_router(telemetry_router)
 app.include_router(product_telemetry_router)

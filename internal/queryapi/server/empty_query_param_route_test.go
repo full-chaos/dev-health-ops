@@ -14,7 +14,7 @@ import (
 // `datetime | None` answer "input is too short", an int answers int_parsing
 // -- and only a key that is not in the query at all is absent. The Go
 // handlers used to treat "?start_date=" as absent (200). The live-Python
-// comparison of the same requests is TestQueryParamValidationVenueOracle;
+// comparison of the same requests is TestQueryParamValidationMatchesFrozenPython;
 // this is the fast form that runs in the unit tier.
 func TestPresentButEmptyScalarQueryParamIs422(t *testing.T) {
 	prs := newDrilldownPRsGetHandler(newEmptyRowsDrilldownReader(t))

@@ -1,0 +1,105 @@
+{
+  "header": {
+    "test": "TestRepairRulesMatchTheFrozenPythonProducer",
+    "python_build": "a4847c5e93607451a0c987b314d37e02fc43ce85",
+    "producer_digest": "6e1dc97e68624398015f60caee160cceee6ae601bd434d01b8b7d5975267e137",
+    "recipe": "git worktree add --detach $DIR a4847c5e93607451a0c987b314d37e02fc43ce85 (with its .venv: uv sync --frozen --no-install-project); then from the repository root: go run ./internal/testsupport/venueoracle/goldenrecord -pkg ./internal/chmigrate/ -test '^TestRepairRulesMatchTheFrozenPythonProducer$' -python-root $DIR",
+    "recorded_by": "goldenrecord",
+    "blanked": {}
+  },
+  "requests": [
+    {
+      "name": "dry run with a tie on last_synced",
+      "method": "CLI",
+      "path": "OPERATIONAL_ORDERING_CONTRACT=2 OTEL_ENABLED=false PYTHONHASHSEED=0 PYTHONUTF8=1 rows=[[\"a0000000-0000-4000-8000-000000000006\" \"acme/tie-two\" \"11111111-0000-4000-8000-000000000001\" \"2026-03-01 10:00:00.123\"] [\"a0000000-0000-4000-8000-000000000006\" \"acme/tie-two\" \"22222222-0000-4000-8000-000000000002\" \"2026-03-01 10:00:00.123\"] [\"a0000000-0000-4000-8000-000000000007\" \"acme/tie-three\" \"11111111-0000-4000-8000-000000000001\" \"2026-02-01 00:00:00\"] [\"a0000000-0000-4000-8000-000000000007\" \"acme/tie-three\" \"22222222-0000-4000-8000-000000000002\" \"2026-03-15 00:00:00\"] [\"a0000000-0000-4000-8000-000000000007\" \"acme/tie-three\" \"33333333-0000-4000-8000-000000000003\" \"2026-03-15 00:00:00\"]] dev-health-ops migrate clickhouse repair []",
+      "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "request_headers_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "status": 0,
+      "headers": {},
+      "body": "Found 3 stale duplicate row(s) in repos:\n\n  repo                                      stale_org_id                              active_org_id                             stale_last_synced\n  acme/tie-three                            11111111-0000-4000-8000-000000000001      33333333-0000-4000-8000-000000000003      2026-02-01 00:00:00\n  acme/tie-three                            22222222-0000-4000-8000-000000000002      33333333-0000-4000-8000-000000000003      2026-03-15 00:00:00\n  acme/tie-two                              11111111-0000-4000-8000-000000000001      22222222-0000-4000-8000-000000000002      2026-03-01 10:00:00.123000\n\nDry-run: pass --apply to delete these stale duplicate rows.\n"
+    },
+    {
+      "name": "apply with a tie on last_synced",
+      "method": "CLI",
+      "path": "OPERATIONAL_ORDERING_CONTRACT=2 OTEL_ENABLED=false PYTHONHASHSEED=0 PYTHONUTF8=1 rows=[[\"a0000000-0000-4000-8000-000000000006\" \"acme/tie-two\" \"11111111-0000-4000-8000-000000000001\" \"2026-03-01 10:00:00.123\"] [\"a0000000-0000-4000-8000-000000000006\" \"acme/tie-two\" \"22222222-0000-4000-8000-000000000002\" \"2026-03-01 10:00:00.123\"] [\"a0000000-0000-4000-8000-000000000007\" \"acme/tie-three\" \"11111111-0000-4000-8000-000000000001\" \"2026-02-01 00:00:00\"] [\"a0000000-0000-4000-8000-000000000007\" \"acme/tie-three\" \"22222222-0000-4000-8000-000000000002\" \"2026-03-15 00:00:00\"] [\"a0000000-0000-4000-8000-000000000007\" \"acme/tie-three\" \"33333333-0000-4000-8000-000000000003\" \"2026-03-15 00:00:00\"]] dev-health-ops migrate clickhouse repair [\"--apply\"]",
+      "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "request_headers_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "status": 0,
+      "headers": {},
+      "body": "Found 3 stale duplicate row(s) in repos:\n\n  repo                                      stale_org_id                              active_org_id                             stale_last_synced\n  acme/tie-three                            11111111-0000-4000-8000-000000000001      33333333-0000-4000-8000-000000000003      2026-02-01 00:00:00\n  acme/tie-three                            22222222-0000-4000-8000-000000000002      33333333-0000-4000-8000-000000000003      2026-03-15 00:00:00\n  acme/tie-two                              11111111-0000-4000-8000-000000000001      22222222-0000-4000-8000-000000000002      2026-03-01 10:00:00.123000\n\nApplying ALTER TABLE repos DELETE for each stale duplicate row...\nDeleted 3 stale duplicate row(s) from repos.\n"
+    },
+    {
+      "name": "dry run, newest rows in the smallest org",
+      "method": "CLI",
+      "path": "OPERATIONAL_ORDERING_CONTRACT=2 OTEL_ENABLED=false PYTHONHASHSEED=0 PYTHONUTF8=1 rows=[[\"a0000000-0000-4000-8000-000000000008\" \"acme/small-org-newest\" \"11111111-0000-4000-8000-000000000001\" \"2026-03-20 00:00:00\"] [\"a0000000-0000-4000-8000-000000000008\" \"acme/small-org-newest\" \"22222222-0000-4000-8000-000000000002\" \"2026-03-10 00:00:00\"] [\"a0000000-0000-4000-8000-000000000009\" \"acme/small-org-newest-of-three\" \"22222222-0000-4000-8000-000000000002\" \"2026-02-10 00:00:00\"] [\"a0000000-0000-4000-8000-000000000009\" \"acme/small-org-newest-of-three\" \"33333333-0000-4000-8000-000000000003\" \"2026-02-20 00:00:00\"] [\"a0000000-0000-4000-8000-000000000009\" \"acme/small-org-newest-of-three\" \"11111111-0000-4000-8000-000000000001\" \"2026-03-30 12:00:00.5\"]] dev-health-ops migrate clickhouse repair []",
+      "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "request_headers_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "status": 0,
+      "headers": {},
+      "body": "Found 3 stale duplicate row(s) in repos:\n\n  repo                                      stale_org_id                              active_org_id                             stale_last_synced\n  acme/small-org-newest                     22222222-0000-4000-8000-000000000002      11111111-0000-4000-8000-000000000001      2026-03-10 00:00:00\n  acme/small-org-newest-of-three            22222222-0000-4000-8000-000000000002      11111111-0000-4000-8000-000000000001      2026-02-10 00:00:00\n  acme/small-org-newest-of-three            33333333-0000-4000-8000-000000000003      11111111-0000-4000-8000-000000000001      2026-02-20 00:00:00\n\nDry-run: pass --apply to delete these stale duplicate rows.\n"
+    },
+    {
+      "name": "apply, newest rows in the smallest org",
+      "method": "CLI",
+      "path": "OPERATIONAL_ORDERING_CONTRACT=2 OTEL_ENABLED=false PYTHONHASHSEED=0 PYTHONUTF8=1 rows=[[\"a0000000-0000-4000-8000-000000000008\" \"acme/small-org-newest\" \"11111111-0000-4000-8000-000000000001\" \"2026-03-20 00:00:00\"] [\"a0000000-0000-4000-8000-000000000008\" \"acme/small-org-newest\" \"22222222-0000-4000-8000-000000000002\" \"2026-03-10 00:00:00\"] [\"a0000000-0000-4000-8000-000000000009\" \"acme/small-org-newest-of-three\" \"22222222-0000-4000-8000-000000000002\" \"2026-02-10 00:00:00\"] [\"a0000000-0000-4000-8000-000000000009\" \"acme/small-org-newest-of-three\" \"33333333-0000-4000-8000-000000000003\" \"2026-02-20 00:00:00\"] [\"a0000000-0000-4000-8000-000000000009\" \"acme/small-org-newest-of-three\" \"11111111-0000-4000-8000-000000000001\" \"2026-03-30 12:00:00.5\"]] dev-health-ops migrate clickhouse repair [\"--apply\"]",
+      "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "request_headers_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "status": 0,
+      "headers": {},
+      "body": "Found 3 stale duplicate row(s) in repos:\n\n  repo                                      stale_org_id                              active_org_id                             stale_last_synced\n  acme/small-org-newest                     22222222-0000-4000-8000-000000000002      11111111-0000-4000-8000-000000000001      2026-03-10 00:00:00\n  acme/small-org-newest-of-three            22222222-0000-4000-8000-000000000002      11111111-0000-4000-8000-000000000001      2026-02-10 00:00:00\n  acme/small-org-newest-of-three            33333333-0000-4000-8000-000000000003      11111111-0000-4000-8000-000000000001      2026-02-20 00:00:00\n\nApplying ALTER TABLE repos DELETE for each stale duplicate row...\nDeleted 3 stale duplicate row(s) from repos.\n"
+    },
+    {
+      "name": "dry run for the smallest org that owns the newest rows",
+      "method": "CLI",
+      "path": "OPERATIONAL_ORDERING_CONTRACT=2 OTEL_ENABLED=false PYTHONHASHSEED=0 PYTHONUTF8=1 rows=[[\"a0000000-0000-4000-8000-000000000008\" \"acme/small-org-newest\" \"11111111-0000-4000-8000-000000000001\" \"2026-03-20 00:00:00\"] [\"a0000000-0000-4000-8000-000000000008\" \"acme/small-org-newest\" \"22222222-0000-4000-8000-000000000002\" \"2026-03-10 00:00:00\"] [\"a0000000-0000-4000-8000-000000000009\" \"acme/small-org-newest-of-three\" \"22222222-0000-4000-8000-000000000002\" \"2026-02-10 00:00:00\"] [\"a0000000-0000-4000-8000-000000000009\" \"acme/small-org-newest-of-three\" \"33333333-0000-4000-8000-000000000003\" \"2026-02-20 00:00:00\"] [\"a0000000-0000-4000-8000-000000000009\" \"acme/small-org-newest-of-three\" \"11111111-0000-4000-8000-000000000001\" \"2026-03-30 12:00:00.5\"]] dev-health-ops migrate clickhouse repair [\"--org\" \"11111111-0000-4000-8000-000000000001\"]",
+      "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "request_headers_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "status": 0,
+      "headers": {},
+      "body": "Found 3 stale duplicate row(s) in repos:\n\n  repo                                      stale_org_id                              active_org_id                             stale_last_synced\n  acme/small-org-newest                     22222222-0000-4000-8000-000000000002      11111111-0000-4000-8000-000000000001      2026-03-10 00:00:00\n  acme/small-org-newest-of-three            22222222-0000-4000-8000-000000000002      11111111-0000-4000-8000-000000000001      2026-02-10 00:00:00\n  acme/small-org-newest-of-three            33333333-0000-4000-8000-000000000003      11111111-0000-4000-8000-000000000001      2026-02-20 00:00:00\n\nDry-run: pass --apply to delete these stale duplicate rows.\n"
+    },
+    {
+      "name": "apply for the smallest org that owns the newest rows",
+      "method": "CLI",
+      "path": "OPERATIONAL_ORDERING_CONTRACT=2 OTEL_ENABLED=false PYTHONHASHSEED=0 PYTHONUTF8=1 rows=[[\"a0000000-0000-4000-8000-000000000008\" \"acme/small-org-newest\" \"11111111-0000-4000-8000-000000000001\" \"2026-03-20 00:00:00\"] [\"a0000000-0000-4000-8000-000000000008\" \"acme/small-org-newest\" \"22222222-0000-4000-8000-000000000002\" \"2026-03-10 00:00:00\"] [\"a0000000-0000-4000-8000-000000000009\" \"acme/small-org-newest-of-three\" \"22222222-0000-4000-8000-000000000002\" \"2026-02-10 00:00:00\"] [\"a0000000-0000-4000-8000-000000000009\" \"acme/small-org-newest-of-three\" \"33333333-0000-4000-8000-000000000003\" \"2026-02-20 00:00:00\"] [\"a0000000-0000-4000-8000-000000000009\" \"acme/small-org-newest-of-three\" \"11111111-0000-4000-8000-000000000001\" \"2026-03-30 12:00:00.5\"]] dev-health-ops migrate clickhouse repair [\"--apply\" \"--org\" \"11111111-0000-4000-8000-000000000001\"]",
+      "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "request_headers_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "status": 0,
+      "headers": {},
+      "body": "Found 3 stale duplicate row(s) in repos:\n\n  repo                                      stale_org_id                              active_org_id                             stale_last_synced\n  acme/small-org-newest                     22222222-0000-4000-8000-000000000002      11111111-0000-4000-8000-000000000001      2026-03-10 00:00:00\n  acme/small-org-newest-of-three            22222222-0000-4000-8000-000000000002      11111111-0000-4000-8000-000000000001      2026-02-10 00:00:00\n  acme/small-org-newest-of-three            33333333-0000-4000-8000-000000000003      11111111-0000-4000-8000-000000000001      2026-02-20 00:00:00\n\nApplying ALTER TABLE repos DELETE for each stale duplicate row...\nDeleted 3 stale duplicate row(s) from repos.\n"
+    },
+    {
+      "name": "dry run for the org that owns only older rows of those ids",
+      "method": "CLI",
+      "path": "OPERATIONAL_ORDERING_CONTRACT=2 OTEL_ENABLED=false PYTHONHASHSEED=0 PYTHONUTF8=1 rows=[[\"a0000000-0000-4000-8000-000000000008\" \"acme/small-org-newest\" \"11111111-0000-4000-8000-000000000001\" \"2026-03-20 00:00:00\"] [\"a0000000-0000-4000-8000-000000000008\" \"acme/small-org-newest\" \"22222222-0000-4000-8000-000000000002\" \"2026-03-10 00:00:00\"] [\"a0000000-0000-4000-8000-000000000009\" \"acme/small-org-newest-of-three\" \"22222222-0000-4000-8000-000000000002\" \"2026-02-10 00:00:00\"] [\"a0000000-0000-4000-8000-000000000009\" \"acme/small-org-newest-of-three\" \"33333333-0000-4000-8000-000000000003\" \"2026-02-20 00:00:00\"] [\"a0000000-0000-4000-8000-000000000009\" \"acme/small-org-newest-of-three\" \"11111111-0000-4000-8000-000000000001\" \"2026-03-30 12:00:00.5\"]] dev-health-ops migrate clickhouse repair [\"--org\" \"33333333-0000-4000-8000-000000000003\"]",
+      "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "request_headers_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "status": 0,
+      "headers": {},
+      "body": "No stale duplicate rows found where the newest row belongs to org 33333333-0000-4000-8000-000000000003.\n"
+    }
+  ],
+  "rows": {
+    "state after apply for the smallest org that owns the newest rows": {
+      "rows": "a0000000-0000-4000-8000-000000000008\t11111111-0000-4000-8000-000000000001\na0000000-0000-4000-8000-000000000009\t11111111-0000-4000-8000-000000000001"
+    },
+    "state after apply with a tie on last_synced": {
+      "rows": "a0000000-0000-4000-8000-000000000006\t22222222-0000-4000-8000-000000000002\na0000000-0000-4000-8000-000000000007\t33333333-0000-4000-8000-000000000003"
+    },
+    "state after apply, newest rows in the smallest org": {
+      "rows": "a0000000-0000-4000-8000-000000000008\t11111111-0000-4000-8000-000000000001\na0000000-0000-4000-8000-000000000009\t11111111-0000-4000-8000-000000000001"
+    },
+    "state after dry run for the org that owns only older rows of those ids": {
+      "rows": "a0000000-0000-4000-8000-000000000008\t11111111-0000-4000-8000-000000000001\na0000000-0000-4000-8000-000000000008\t22222222-0000-4000-8000-000000000002\na0000000-0000-4000-8000-000000000009\t11111111-0000-4000-8000-000000000001\na0000000-0000-4000-8000-000000000009\t22222222-0000-4000-8000-000000000002\na0000000-0000-4000-8000-000000000009\t33333333-0000-4000-8000-000000000003"
+    },
+    "state after dry run for the smallest org that owns the newest rows": {
+      "rows": "a0000000-0000-4000-8000-000000000008\t11111111-0000-4000-8000-000000000001\na0000000-0000-4000-8000-000000000008\t22222222-0000-4000-8000-000000000002\na0000000-0000-4000-8000-000000000009\t11111111-0000-4000-8000-000000000001\na0000000-0000-4000-8000-000000000009\t22222222-0000-4000-8000-000000000002\na0000000-0000-4000-8000-000000000009\t33333333-0000-4000-8000-000000000003"
+    },
+    "state after dry run with a tie on last_synced": {
+      "rows": "a0000000-0000-4000-8000-000000000006\t11111111-0000-4000-8000-000000000001\na0000000-0000-4000-8000-000000000006\t22222222-0000-4000-8000-000000000002\na0000000-0000-4000-8000-000000000007\t11111111-0000-4000-8000-000000000001\na0000000-0000-4000-8000-000000000007\t22222222-0000-4000-8000-000000000002\na0000000-0000-4000-8000-000000000007\t33333333-0000-4000-8000-000000000003"
+    },
+    "state after dry run, newest rows in the smallest org": {
+      "rows": "a0000000-0000-4000-8000-000000000008\t11111111-0000-4000-8000-000000000001\na0000000-0000-4000-8000-000000000008\t22222222-0000-4000-8000-000000000002\na0000000-0000-4000-8000-000000000009\t11111111-0000-4000-8000-000000000001\na0000000-0000-4000-8000-000000000009\t22222222-0000-4000-8000-000000000002\na0000000-0000-4000-8000-000000000009\t33333333-0000-4000-8000-000000000003"
+    }
+  }
+}

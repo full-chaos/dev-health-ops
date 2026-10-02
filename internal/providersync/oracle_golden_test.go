@@ -2,6 +2,7 @@ package providersync
 
 import (
 	"bytes"
+	"context"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
@@ -91,8 +92,8 @@ func frozenPairAnswer(t *testing.T, pairID string, encodedCases []byte) []byte {
 	keyed, passed := oraclePairEnvironment(t, pairID)
 	request := venueoracle.ProgramRequest(pairID, manifest, encodedCases, keyed)
 	answers := golden.Produce(t, root, []venueoracle.Request{request},
-		func(root string, _ []venueoracle.Request) []venueoracle.Response {
-			output := runPinnedPairOracle(t, root, manifest, pairID, encodedCases, passed)
+		func(producer *venueoracle.Producer, _ []venueoracle.Request) []venueoracle.Response {
+			output := runPinnedPairOracle(t, producer, root, manifest, pairID, encodedCases, passed)
 			if len(output) > oraclePairPackAbove {
 				return []venueoracle.Response{{Status: 0, Body: venueoracle.PackBody(output)}}
 			}
@@ -235,23 +236,23 @@ func manifestLine(path string, raw []byte) string {
 // harness this checkout holds (manifest): the pairs resolve the production
 // sources from their own location, so the runner has to run where the pinned
 // production code is.
-func runPinnedPairOracle(t *testing.T, root, manifest, pairID string, encodedCases []byte, passed []string) []byte {
+func runPinnedPairOracle(t *testing.T, producer *venueoracle.Producer, root, manifest, pairID string, encodedCases []byte, passed []string) []byte {
 	t.Helper()
 	assertPinnedHarness(t, "pair "+pairID, root, manifest)
-	python, environment := pinnedInterpreter(t, "pair "+pairID, root, passed)
+	producer.RequireDeployed()
+	requirePinnedSources(t, "pair "+pairID, producer, root, passed)
 
 	casesFile := filepath.Join(t.TempDir(), "oracle-cases.json")
 	if err := os.WriteFile(casesFile, encodedCases, 0o600); err != nil {
 		t.Fatal(err)
 	}
 	runner := filepath.Join(root, "internal", "providersync", "testdata", "python_generic_row_oracle.py")
-	command := exec.Command(python, runner, pairID, casesFile)
-	command.Env = environment
+	command := pinnedCommand(t, producer, passed, runner, pairID, casesFile)
 	var stderr bytes.Buffer
 	command.Stderr = &stderr
 	output, err := command.Output()
 	if err != nil {
-		t.Fatalf("recording pair %q: %v", pairID, pyoracle.RunError(python, err, stderr.Bytes()))
+		t.Fatalf("recording pair %q: %v", pairID, pyoracle.RunError(command.Args[0], err, stderr.Bytes()))
 	}
 	return output
 }
@@ -276,31 +277,38 @@ func assertPinnedHarness(t *testing.T, what, root, manifest string) {
 	}
 }
 
-// pinnedInterpreter is the interpreter of the pinned checkout at root and the
-// whole environment a producer runs with: nothing of the test process's
-// environment but PATH and HOME, the pinned sources first on the module path,
-// no bytecode written, and passed. It fails unless that interpreter is the
-// deployed release and imports dev_health_ops from the pinned checkout.
-func pinnedInterpreter(t *testing.T, what, root string, passed []string) (string, []string) {
+// pinnedCommand is a Python child of a recording: the record verb's launcher
+// (venueoracle.Producer.Command) in its closed environment, with the entries of
+// passed (NAME=value) declared. The launcher fixes the interpreter of the
+// pinned checkout; nothing of the test process's environment reaches the
+// child. The declared IDENTITY_MAPPING_PATH is a path: the request holds the
+// digest of the file it names, not the path.
+func pinnedCommand(t *testing.T, producer *venueoracle.Producer, passed []string, args ...string) *exec.Cmd {
 	t.Helper()
-	python := pyoracle.Resolve(t, root)
-	probe, probeErr := exec.Command(python, pyoracle.VersionProbeArgs...).Output()
-	pyoracle.RequireDeployed(t, python, probe, probeErr)
-	environment := append([]string{
-		"PATH=" + os.Getenv("PATH"), "HOME=" + os.Getenv("HOME"),
-		"PYTHONPATH=" + filepath.Join(root, "src"), "PYTHONDONTWRITEBYTECODE=1",
-	}, passed...)
+	declared := make(map[string]string, len(passed))
+	for _, entry := range passed {
+		name, value, _ := strings.Cut(entry, "=")
+		declared[name] = value
+	}
+	command, err := producer.Command(context.Background(), declared, nil, args...)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return command
+}
 
-	locate := exec.Command(python, "-c",
+// requirePinnedSources fails a recording unless the launcher's interpreter
+// imports dev_health_ops from the pinned checkout at root.
+func requirePinnedSources(t *testing.T, what string, producer *venueoracle.Producer, root string, passed []string) {
+	t.Helper()
+	locate := pinnedCommand(t, producer, passed, "-c",
 		"import importlib.util;s=importlib.util.find_spec('dev_health_ops');print(s.origin if s else '')")
-	locate.Env = environment
 	origin, err := locate.Output()
 	source := filepath.Join(root, "src") + string(filepath.Separator)
 	if err != nil || !strings.HasPrefix(strings.TrimSpace(string(origin)), source) {
 		t.Fatalf("recording %s: %s imports dev_health_ops from %q (%v), not from the pinned checkout %s",
-			what, python, strings.TrimSpace(string(origin)), err, source)
+			what, locate.Args[0], strings.TrimSpace(string(origin)), err, source)
 	}
-	return python, environment
 }
 
 // untaggedLeafErr is an error when a runner answer holds a row value that is

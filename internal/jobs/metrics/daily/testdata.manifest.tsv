@@ -1,5 +1,7 @@
 # Every file under internal/jobs/metrics/daily/testdata: sha256, kind, path. Written by `go run ./internal/testsupport/recordedfiles/manifest`; never edit it by hand.
 # python-recorded set: d5b5e533d16f7bc8f83e9f2536d0a07f795420a6aedeec87b040fc29dde6a8b5 (4 files)
+# header-before-stamp set: e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855 (0 files)
+-	header	golden/daily_discover_repos_oracle.json
 33addf131c542406fd5ecd512586ccd44305e09322f263040b9a61c0c16dd36d	python-recorded	incident_parity_golden.json
 c5763d0542bb50ae64330b2c81fa05b54278c8982da90e9c9920c27fed614dde	unclassified	python_daily_discover_oracle.py
 d37d156ad9982d89095ab77037569a92c67dd8ac1c2ba24dece1e1e7b98d500e	python-recorded	team_cognitive_load_parity_golden.json

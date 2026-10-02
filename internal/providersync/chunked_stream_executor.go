@@ -71,7 +71,7 @@ func (executor CompleteRouteExecutor) executeChunkedStreaming(
 			}
 			committedThisAttempt++
 			if committedThisAttempt >= policy.MaxChunksPerAttempt && ordinal+1 < checkpoint.PreparedChunks {
-				return ChunkContinuationError{Next: executor.now().Add(time.Second)}
+				return newChunkContinuation(policy, executor.now().Add(time.Second), committedThisAttempt, time.Since(attemptStarted))
 			}
 		}
 		checkpoint, checkpointErr = store.LoadChunkCheckpoint(workContext, session.Claim, executor.now())
@@ -250,7 +250,7 @@ func (executor CompleteRouteExecutor) executeChunkedStreaming(
 					committedThisAttempt++
 				}
 				if !emission.Final && (committedThisAttempt >= policy.MaxChunksPerAttempt || time.Since(attemptStarted) >= policy.MaxWallTime) {
-					return ChunkContinuationError{Next: executor.now().Add(time.Second)}
+					return newChunkContinuation(policy, executor.now().Add(time.Second), committedThisAttempt, time.Since(attemptStarted))
 				}
 				return nil
 			},

@@ -17,12 +17,14 @@ package tracing
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log/slog"
 	"math"
 	"os"
 	"strconv"
 	"strings"
+	"time"
 
 	"go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/attribute"
@@ -49,7 +51,14 @@ const (
 // Component (tracing disabled or unavailable) shuts down as a no-op.
 type Component struct {
 	provider *sdktrace.TracerProvider
+	logger   *slog.Logger
+	endpoint string
 }
+
+// shutdownFlushTimeout bounds the final span flush. A collector that is down
+// must cost a stopping process seconds, not its whole shutdown budget: the
+// container smoke gives a stopping container five seconds, the binaries ten.
+const shutdownFlushTimeout = 2 * time.Second
 
 func (Component) Name() string { return "otel-tracing" }
 
@@ -58,11 +67,34 @@ func (Component) Name() string { return "otel-tracing" }
 // otel.GetTracerProvider() returning it from process start.
 func (Component) Start(context.Context) error { return nil }
 
+// Shutdown flushes the buffered spans and stops the provider, waiting at most
+// shutdownFlushTimeout. Hitting that bound means the collector could not be
+// reached (a batch export retries a closed port until its own 10 s timeout):
+// the spans still buffered are dropped, and that is logged loudly, but it is not
+// a failure to stop. Any other error from the flush is returned.
 func (component Component) Shutdown(ctx context.Context) error {
 	if component.provider == nil {
 		return nil
 	}
-	return component.provider.Shutdown(ctx)
+	flushCtx, cancel := context.WithTimeout(ctx, shutdownFlushTimeout)
+	defer cancel()
+	err := component.provider.Shutdown(flushCtx)
+	if err == nil {
+		return nil
+	}
+	// The bound itself expired: flushCtx is done by its own deadline while the
+	// caller's context is still live. A DeadlineExceeded the exporter returned
+	// on its own (flushCtx still live) is a real failure and is returned.
+	if errors.Is(err, context.DeadlineExceeded) && ctx.Err() == nil && errors.Is(flushCtx.Err(), context.DeadlineExceeded) {
+		logger := component.logger
+		if logger == nil {
+			logger = slog.Default()
+		}
+		logger.Warn("otel tracing final flush timed out: the collector is not reachable, buffered spans are dropped",
+			"endpoint", component.endpoint, "bound", shutdownFlushTimeout.String(), "error", err)
+		return nil
+	}
+	return err
 }
 
 // Init installs the global TracerProvider and W3C trace-context propagator.
@@ -118,7 +150,7 @@ func InitWithServiceName(logger *slog.Logger, defaultName string) Component {
 		"service_name", serviceName,
 		"sample_rate", sampleRate,
 	)
-	return Component{provider: provider}
+	return Component{provider: provider, logger: logger, endpoint: endpoint}
 }
 
 func newProvider(serviceName, environment, endpoint string, sampleRate float64) (*sdktrace.TracerProvider, error) {

@@ -11,6 +11,7 @@ package server
 import (
 	"context"
 	"crypto/ed25519"
+	"encoding/json"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -45,11 +46,18 @@ func classSeed(t *testing.T, pool *pgxpool.Pool, operations ...string) {
 
 func classReceipt(t *testing.T, pool *pgxpool.Pool, operation, route, binding string) {
 	t.Helper()
+	// CHAOS-7512: `enable` reads the class receipt's provenance; a fully measured proof lists no excluded shape.
+	root, _ := mcpclass.Root(operation)
+	provenance, err := json.Marshal(goapiproof.ReceiptProvenance{MeasurementRoute: route, EdgeBuildBinding: binding,
+		MCPClass: &goapiproof.MCPClassProvenance{Root: root, Reference: "go_document_route", Executed: 1, Matched: 1}})
+	if err != nil {
+		t.Fatal(err)
+	}
 	if _, err := goapiproof.WriteAtomic(t.Context(), pool, goapiproof.Receipt{
 		SchemaDigest: classTestSchema, DocumentDigest: mcpclass.DocumentDigest(), SelectedOperation: operation,
 		CandidateBuild: classTestBuild, RequestIdentity: "req-" + operation, Stage: goapiproof.EnablementProofStage,
 		TerminalState: goapiproof.EnablementProofTerminalState, OrgID: "org-proof", RecordedBy: "test",
-		ObservedAt: time.Now().UTC(), MeasurementRoute: route, BuildBinding: binding,
+		ObservedAt: time.Now().UTC(), MeasurementRoute: route, BuildBinding: binding, ReviewEvidence: string(provenance),
 	}); err != nil {
 		t.Fatalf("receipt %s: %v", operation, err)
 	}
@@ -393,5 +401,64 @@ func TestMCPClassStatusNamesDarkRootsAndProof(t *testing.T) {
 		if mcpclass.IsOperation(status.Operation) {
 			t.Fatalf("class row %s listed in the per-operation table as %s", status.Operation, status.DigestState)
 		}
+	}
+}
+
+// CHAOS-7833: the two routing-row families govern DIFFERENT routes and neither stands in for the other.
+//   - document rows (selected_operation = the named document operation, e.g. "hotspots") govern the named-operation route (/query on :8090/:8091,
+//     the route acr's run_operation calls): query_route.go builds that switch from the document digests;
+//   - class rows (selected_operation = "mcp:<root>") govern the MCP listener (:8092, acr's graphql_query): mcp_route.go asks sw.Enabled("mcp:"+root).
+//
+// A canary DOCUMENT row for hotspots therefore does not serve the MCP listener, and an enabled CLASS row does not enable the document operation.
+func TestDocumentRowsAndMCPClassRowsGovernSeparateRoutes(t *testing.T) {
+	pool := startTestRegistryPostgres(t)
+	ctx := t.Context()
+	const docOp, docDigest = "hotspots", "sha256:7833aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+	if _, err := pool.Exec(ctx, `INSERT INTO public.go_api_candidate_build (schema_digest, document_digest, selected_operation, candidate_build)
+		VALUES ($1, $2, $3, $4)`, classTestSchema, docDigest, docOp, classTestBuild); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := pool.Exec(ctx, `INSERT INTO public.go_api_routing_state
+		(schema_digest, document_digest, selected_operation, current_candidate_build, owner, mode, rollout_percentage, review_evidence, recorded_by)
+		VALUES ($1, $2, $3, $4, 'go', 'canary', 100, 'a document row', 'test')`, classTestSchema, docDigest, docOp, classTestBuild); err != nil {
+		t.Fatal(err)
+	}
+	documentSwitch := routeswitch.NewPostgresSwitch(pool, classTestSchema, map[string]string{docOp: docDigest})
+	if !documentSwitch.Enabled(docOp) {
+		t.Fatal("the document row is canary: the document-route switch must serve it")
+	}
+
+	// 1. The canary DOCUMENT row does not enable the MCP listener's root: it asks for "mcp:hotspots", which has no row.
+	listener, ch := classListener(t, pool)
+	assertMCPRefused(t, classHotspots(t, listener), ch, http.StatusNotFound, mcpReasonRootFieldNotEnabled)
+
+	// ...and an enabled CLASS row for the same root is what serves it, while the document row stays what it was.
+	hotspotsClass := mcpclass.Operation("hotspots")
+	classSeed(t, pool, hotspotsClass)
+	classReceipt(t, pool, hotspotsClass, goapiproof.RouteProof, goapiproof.EdgeBuildPresent)
+	if _, err := classEnable(pool, hotspotsClass); err != nil {
+		t.Fatalf("enable mcp:hotspots: %v", err)
+	}
+	if rec := classHotspots(t, listener); rec.Code != http.StatusOK || strings.Contains(rec.Body.String(), mcpReasonRootFieldNotEnabled) {
+		t.Fatalf("enabled class row: status %d body %s, want the MCP listener to serve it", rec.Code, rec.Body.String())
+	}
+	if !documentSwitch.Enabled(docOp) {
+		t.Fatal("enabling the class row changed the document row's reachability")
+	}
+
+	// 2. An enabled CLASS row does not enable a document operation of the same name on the document route.
+	overview := mcpclass.Operation("securityOverview")
+	classSeed(t, pool, overview)
+	classReceipt(t, pool, overview, goapiproof.RouteProof, goapiproof.EdgeBuildPresent)
+	if _, err := classEnable(pool, overview); err != nil {
+		t.Fatalf("enable the class row: %v", err)
+	}
+	classSwitch := routeswitch.NewPostgresSwitch(pool, classTestSchema, mcpRoutingDigests())
+	if !classSwitch.Enabled(overview) {
+		t.Fatal("the class row is canary: the MCP switch must serve it")
+	}
+	otherDocSwitch := routeswitch.NewPostgresSwitch(pool, classTestSchema, map[string]string{"securityOverview": docDigest})
+	if otherDocSwitch.Enabled("securityOverview") {
+		t.Fatal("an enabled mcp:securityOverview class row must not enable the document operation securityOverview")
 	}
 }

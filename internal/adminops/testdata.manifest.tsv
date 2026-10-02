@@ -1,14 +1,15 @@
 # Every file under internal/adminops/testdata: sha256, kind, path. Written by `go run ./internal/testsupport/recordedfiles/manifest`; never edit it by hand.
 # python-recorded set: e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855 (0 files)
--	header	golden/billing.json
--	header	golden/bundles.json
--	header	golden/credential_args.json
--	header	golden/llmsettings.json
--	header	golden/orgdelete.json
--	header	golden/reconcile.json
--	header	golden/stripe.json
--	header	golden/svc_verbs.json
--	header	golden/users.json
+# header-before-stamp set: 5921af443d0ea9a575807ad1af3456cf3651ecefed8db08609cb27dabdb8415e (9 files)
+a90677055d98c1a8e31aa74c063a16b0cadd8ca666446479234e4aa2011cf733	header-before-stamp	golden/billing.json
+0982edcbdbd30655d7f33f975ccb8e50794e9266aea1206400ba8342facfad56	header-before-stamp	golden/bundles.json
+45c53cb9d35ba3733ebecda7444018254679fea11285e82dfa9125e389aba306	header-before-stamp	golden/credential_args.json
+22b5e4dda3bf3b7639b31eb6f0e606b305f7067647a948e128869eadcaae8742	header-before-stamp	golden/llmsettings.json
+5eb3d3e548001aaae68d3902649700cf126e9c82ebce7cf01b813e63d1fd6d4c	header-before-stamp	golden/orgdelete.json
+02cebda0a39bcfa5e36c8a125b999ec2b7987697318ba1b5bba0a09cf84bbc6c	header-before-stamp	golden/reconcile.json
+72b4fc535c7d2432ecb44a9fd181d905ea7d2241d74b05386111ccf624f58bc6	header-before-stamp	golden/stripe.json
+a5724d54fec6a597166225fb3d825b900e527b0cb2e1b3b40463be5031bfa853	header-before-stamp	golden/svc_verbs.json
+3e8bad8fd8e602826042b00f4e69eca20a7fce5cb57a86fd7871a1fc3663fbe5	header-before-stamp	golden/users.json
 9f38c0d2145f2bfc81e0eeca6b086c1b86f4024dacfb9f7fd0576632faaf17cd	unclassified	reconcile_fixtures.json
 f0789e1e419a019d7bd3e5b733f01d197bbab2c0b8a3a8d7101f6995f2f6ebdc	hand-written	reconcile_fixtures.py
 34a98b7daca2aed77352482198ef8715fdd3d67611932d8f8976535ff377bf3d	unclassified	service_credentials_args_oracle.py

@@ -526,14 +526,135 @@ func TestASecondRunThatWritesAnExtraCandidateIsRefused(t *testing.T) {
 	}
 }
 
-func TestBothRecordingRunsGetTheSameEnvironment(t *testing.T) {
+func withoutTmpdir(env []string) string {
+	var kept []string
+	for _, entry := range env {
+		if !strings.HasPrefix(entry, "TMPDIR=") {
+			kept = append(kept, entry)
+		}
+	}
+	return strings.Join(kept, "\n")
+}
+
+func tmpdirOf(t *testing.T, env []string) string {
+	t.Helper()
+	found := ""
+	for _, entry := range env {
+		if value, ok := strings.CutPrefix(entry, "TMPDIR="); ok {
+			found = value
+		}
+	}
+	if found == "" {
+		t.Fatal("a recording run was given no TMPDIR")
+	}
+	return found
+}
+
+// The two recording runs get one environment, but for the scratch directory (TMPDIR).
+func TestBothRecordingRunsGetTheSameEnvironmentButTheScratchDirectory(t *testing.T) {
 	cfg, fake, _ := fixture(t, "")
 	if _, err := Record(context.Background(), cfg); err != nil {
 		t.Fatal(err)
 	}
-	if len(fake.recordEnvs) != 2 || strings.Join(fake.recordEnvs[0], "\n") != strings.Join(fake.recordEnvs[1], "\n") {
-		t.Fatalf("the two recording runs got different environments: %v", fake.recordEnvs)
+	if len(fake.recordEnvs) != 2 || withoutTmpdir(fake.recordEnvs[0]) != withoutTmpdir(fake.recordEnvs[1]) {
+		t.Fatalf("the two recording runs got different environments besides TMPDIR: %v", fake.recordEnvs)
 	}
+}
+
+// CHAOS-7909: the second recording runs under a scratch directory of another depth and another name.
+func TestTheSecondRecordingRunsUnderAScratchDirectoryOfAnotherDepthAndName(t *testing.T) {
+	cfg, fake, _ := fixture(t, "")
+	var existed []bool
+	run := cfg.Run
+	cfg.Run = func(c Config, env []string) error {
+		for _, entry := range env {
+			if entry == "DHO_VENUE_GOLDEN_UPDATE=1" {
+				info, err := os.Stat(tmpdirOf(t, env))
+				existed = append(existed, err == nil && info.IsDir())
+			}
+		}
+		return run(c, env)
+	}
+	if _, err := Record(context.Background(), cfg); err != nil {
+		t.Fatal(err)
+	}
+	first, second := tmpdirOf(t, fake.recordEnvs[0]), tmpdirOf(t, fake.recordEnvs[1])
+	depth := func(path string) int { return len(strings.Split(filepath.ToSlash(filepath.Clean(path)), "/")) }
+	if depth(first) == depth(second) || filepath.Base(first) == filepath.Base(second) {
+		t.Fatalf("the two runs ran under scratch directories of the same depth or name: %q %q", first, second)
+	}
+	if len(existed) != 2 || !existed[0] || !existed[1] {
+		t.Fatalf("a scratch directory did not exist while its run was started: %v", existed)
+	}
+	if exists(first) || exists(second) {
+		t.Fatal("a scratch directory is left behind after the recording")
+	}
+}
+
+// A path-depth-dependent answer (the depth of the temp path in a recorded value) differs between the two
+// runs and is refused at record time, naming the field and not the value.
+func TestAnAnswerThatDependsOnTheDepthOfTheScratchDirectoryIsRefused(t *testing.T) {
+	cfg, fake, dir := fixture(t, "")
+	fake.perRun = func(int) string { return "" }
+	run := cfg.Run
+	cfg.Run = func(c Config, env []string) error {
+		depth := len(strings.Split(filepath.ToSlash(filepath.Clean(tmpdirOf(t, env))), "/"))
+		fake.candidateBody = fmt.Sprintf(`{"requests":[{"name":"r","body":"depth %d"}]}`, depth) + "\n"
+		fake.perRun = func(int) string { return fake.candidateBody }
+		return run(c, env)
+	}
+	_, err := Record(context.Background(), cfg)
+	if err == nil || !strings.Contains(err.Error(), "GoldenSpec.Scrub") || !strings.Contains(err.Error(), "request r body") {
+		t.Fatalf("a depth-dependent answer was not refused by field: %v", err)
+	}
+	if exists(filepath.Join(dir, "testdata", "g.json")) {
+		t.Fatal("a golden was written after the refusal")
+	}
+}
+
+// If the second run cannot use another depth AND another name, the verb fails loudly instead of recording a
+// weaker check: each clause is pinned alone (the same depth with different names; another depth with the same
+// last name; both the same), and a failing setup is reported.
+func TestARecordingThatCannotUseAnotherDepthFailsLoudly(t *testing.T) {
+	old := scratchDirs
+	defer func() { scratchDirs = old }()
+	cases := map[string]func(a, b string) (string, string){
+		"same depth, different names":   func(a, b string) (string, string) { return a + "/one", b + "/two" },
+		"another depth, same last name": func(a, b string) (string, string) { return a + "/same", b + "/x/same" },
+		"same depth and same name":      func(a, b string) (string, string) { return a + "/same", b + "/same" },
+	}
+	for name, make := range cases {
+		t.Run(name, func(t *testing.T) {
+			cfg, fake, _ := fixture(t, "")
+			scratchDirs = func() (string, string, func(), error) {
+				first, second := make(t.TempDir(), t.TempDir())
+				return first, second, func() {}, nil
+			}
+			_, err := Record(context.Background(), cfg)
+			if err == nil || !strings.Contains(err.Error(), "same depth or name") {
+				t.Fatalf("scratch directories that do not differ in depth and name were accepted: %v", err)
+			}
+			if len(fake.calls) != 0 {
+				t.Fatalf("a run started although the scratch directories were not different: %v", fake.calls)
+			}
+		})
+	}
+	t.Run("another depth and another name is accepted", func(t *testing.T) {
+		cfg, _, _ := fixture(t, "")
+		scratchDirs = func() (string, string, func(), error) {
+			return t.TempDir() + "/one", t.TempDir() + "/x/y/two", func() {}, nil
+		}
+		if _, err := Record(context.Background(), cfg); err != nil {
+			t.Fatalf("scratch directories of another depth and name were refused: %v", err)
+		}
+	})
+	t.Run("a failing setup is reported", func(t *testing.T) {
+		cfg, _, _ := fixture(t, "")
+		scratchDirs = func() (string, string, func(), error) { return "", "", nil, errors.New("no space") }
+		if _, err := Record(context.Background(), cfg); err == nil || !strings.Contains(err.Error(), "scratch directories of different depths") {
+			t.Fatalf("a failing scratch setup was not reported: %v", err)
+		}
+	})
 }
 
 func TestAJSONKeyIsNeverPrintedInARefusal(t *testing.T) {
@@ -573,5 +694,55 @@ func TestScrubbedLeavesThatDifferBetweenRecordingsPromoteAndLeaveNoSidecar(t *te
 	}
 	if !exists(filepath.Join(dir, "testdata", "g.json")) || exists(filepath.Join(dir, "testdata", "g.json.recording.raw")) {
 		t.Fatal("the golden was not promoted, or the sidecar was left on disk")
+	}
+}
+
+func TestMain(m *testing.M) {
+	// The fixtures above write candidate bodies that are not goldens.
+	stamp = func(raw []byte) ([]byte, error) { return raw, nil }
+	os.Exit(m.Run())
+}
+
+// realCandidate is a candidate in the form venueoracle's Finish writes.
+const realCandidate = "{\n  \"header\": {\n    \"test\": \"TestX\",\n    \"python_build\": \"b\",\n    \"producer_digest\": \"d\",\n    \"recipe\": \"r\",\n    \"python_env\": \"k\",\n    \"python_env_version\": 2,\n    \"blanked\": {}\n  },\n  \"requests\": [],\n  \"rows\": {\n    \"blanked\": {\n      \"rows\": \"x\"\n    }\n  }\n}\n"
+
+func TestTheVerbWritesTheStampInTheHeaderBeforeBlanked(t *testing.T) {
+	got, err := stampCandidate([]byte(realCandidate))
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := strings.Replace(realCandidate, "    \"blanked\": {}\n", "    \"recorded_by\": \"goldenrecord\",\n    \"blanked\": {}\n", 1)
+	if string(got) != want {
+		t.Fatalf("stamped candidate:\n%s\nwant:\n%s", got, want)
+	}
+}
+
+func TestACandidateThatAlreadyHoldsAStampOrHasNoHeaderIsNotStamped(t *testing.T) {
+	stamped := strings.Replace(realCandidate, "    \"blanked\": {}\n", "    \"recorded_by\": \"goldenrecord\",\n    \"blanked\": {}\n", 1)
+	for name, body := range map[string]string{
+		"a stamp a test wrote": stamped,
+		"no header":            "NEW GOLDEN\n",
+		"no blanked key":       strings.Replace(realCandidate, "    \"blanked\": {}\n", "", 1),
+	} {
+		if _, err := stampCandidate([]byte(body)); err == nil {
+			t.Errorf("%s: stamped", name)
+		}
+	}
+}
+
+func TestTheRecordVerbPromotesTheStampedBytes(t *testing.T) {
+	stamp = stampCandidate
+	defer func() { stamp = func(raw []byte) ([]byte, error) { return raw, nil } }()
+	cfg, fake, dir := fixture(t, "OLD GOLDEN\n")
+	fake.candidateBody = realCandidate
+	if _, err := Record(context.Background(), cfg); err != nil {
+		t.Fatal(err)
+	}
+	got, err := os.ReadFile(filepath.Join(dir, "testdata", "g.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(got), "\"recorded_by\": \"goldenrecord\"") || fake.replayReadBody != string(got) {
+		t.Fatalf("promoted %q, replayed %q", got, fake.replayReadBody)
 	}
 }

@@ -1,5 +1,7 @@
 # Every file under internal/chmigrate/testdata: sha256, kind, path. Written by `go run ./internal/testsupport/recordedfiles/manifest`; never edit it by hand.
 # python-recorded set: c11d9849f613c378c46b171c29483c8621a5d2ce0ec12eb4326c4f8bca6aad3d (4 files)
+# header-before-stamp set: e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855 (0 files)
+-	header	golden/repair-ties.json
 f89c4921546a322d0323dcbd6b88dfbac77f606a0da6e98ab80841622d356113	python-recorded	migrate_golden.json
 d86cd8faa0ee39867eea96264de7e536af1ed4bafb7e03b68e7a6992dbb01aa4	python-recorded	python_chain_contract2.json
 59d9e0c4f038bfa31c7b7d2492180feb74a648484c47c236158f0b3c4b343a48	python-recorded	python_split.json

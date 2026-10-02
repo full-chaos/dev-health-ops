@@ -102,6 +102,10 @@ on:
       # one of them alone must run the guard (internal/testsupport/recordedfiles).
       - '**/*.manifest.tsv'
       - 'internal/testsupport/recordedfiles/unclassified_day_one.txt'
+      # The closed lists of the recording guards are .txt files of their packages
+      # (pyoracle/unconverted_own_launch.txt, recordedfiles/header_before_stamp_ceiling.txt):
+      # a change to one of them alone must run the guard that reads it.
+      - 'internal/testsupport/**/*.txt'
       # Go tests read these directly (contracts/*.json via os.ReadFile,
       # internal/**/families.json via filepath.Join). Not under testdata/
       # or fixtures/, so the shared glob above does not reach them.
@@ -125,9 +129,11 @@ on:
       # change to the relevance decider alone was classified non-Go and the gate
       # that depends on it passed vacuously.
       - 'ci/go_relevance.py'
+      - 'ci/go_relevance.sh'
       - 'docker/go-worker.Dockerfile'
       - 'tests/compatibility/river/**'
       - 'ci/check_go.sh'
+      - 'ci/bigboy/compose.bigboy.*.yml'
       # CHAOS-6584: the venue-oracles registry and what validates it. The
       # venue-oracles job decides relevance from this list, so a registry-only
       # change must count as Go-relevant or it is never validated on main.
@@ -138,6 +144,7 @@ on:
       # alone must run go-quality.
       - 'ci/go_race_shard.awk'
       - 'ci/go_race_weights.tsv'
+      - 'ci/ratchets.tsv'
       - 'ci/venue_oracle_discovery.awk'
       - 'ci/venue_oracle_names.awk'
       - 'ci/venue_oracle_proof.awk'
@@ -173,6 +180,8 @@ on:
       # pin's install or check step -- would green-skip the very enforcement it
       # was editing. Verified before and after this line was added.
       - '.github/workflows/go-quality.yml'
+      # read by internal/testsupport/venuechanged (CHAOS-7653): a Go test reads this workflow file
+      - '.github/workflows/venue-oracles-changed.yml'
       # lefthook.yml holds the LOCAL half of the same pin. codex round 2 (P2):
       # a lefthook-only change is relevant=false, so removing the pre-push hook
       # would land with the pin's own CI job never running. The hook's presence
@@ -278,6 +287,10 @@ on:
       # one of them alone must run the guard (internal/testsupport/recordedfiles).
       - '**/*.manifest.tsv'
       - 'internal/testsupport/recordedfiles/unclassified_day_one.txt'
+      # The closed lists of the recording guards are .txt files of their packages
+      # (pyoracle/unconverted_own_launch.txt, recordedfiles/header_before_stamp_ceiling.txt):
+      # a change to one of them alone must run the guard that reads it.
+      - 'internal/testsupport/**/*.txt'
       # Go tests read these directly (contracts/*.json via os.ReadFile,
       # internal/**/families.json via filepath.Join). Not under testdata/
       # or fixtures/, so the shared glob above does not reach them.
@@ -301,9 +314,11 @@ on:
       # change to the relevance decider alone was classified non-Go and the gate
       # that depends on it passed vacuously.
       - 'ci/go_relevance.py'
+      - 'ci/go_relevance.sh'
       - 'docker/go-worker.Dockerfile'
       - 'tests/compatibility/river/**'
       - 'ci/check_go.sh'
+      - 'ci/bigboy/compose.bigboy.*.yml'
       # CHAOS-6584: the venue-oracles registry and what validates it. The
       # venue-oracles job decides relevance from this list, so a registry-only
       # change must count as Go-relevant or it is never validated on main.
@@ -314,6 +329,7 @@ on:
       # alone must run go-quality.
       - 'ci/go_race_shard.awk'
       - 'ci/go_race_weights.tsv'
+      - 'ci/ratchets.tsv'
       - 'ci/venue_oracle_discovery.awk'
       - 'ci/venue_oracle_names.awk'
       - 'ci/venue_oracle_proof.awk'
@@ -349,6 +365,8 @@ on:
       # pin's install or check step -- would green-skip the very enforcement it
       # was editing. Verified before and after this line was added.
       - '.github/workflows/go-quality.yml'
+      # read by internal/testsupport/venuechanged (CHAOS-7653): a Go test reads this workflow file
+      - '.github/workflows/venue-oracles-changed.yml'
       # lefthook.yml holds the LOCAL half of the same pin. codex round 2 (P2):
       # a lefthook-only change is relevant=false, so removing the pre-push hook
       # would land with the pin's own CI job never running. The hook's presence

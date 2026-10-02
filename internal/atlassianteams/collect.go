@@ -24,6 +24,7 @@ import (
 	"github.com/google/uuid"
 
 	"atlassian/atlassian"
+	"atlassian/atlassian/graph"
 
 	"github.com/full-chaos/dev-health-ops/internal/identityalias"
 )
@@ -172,6 +173,19 @@ func memberID(account string) string {
 	return "jira:" + strings.ToLower(strings.TrimSpace(account))
 }
 
+// siteQueryContext is the X-Query-Context value of a site: its platform site ARI. A site id that is already an
+// ARI is passed through unchanged; an empty one sends no header.
+func siteQueryContext(siteID string) string {
+	siteID = strings.TrimSpace(siteID)
+	switch {
+	case siteID == "":
+		return ""
+	case strings.HasPrefix(strings.ToLower(siteID), "ari:"):
+		return siteID
+	}
+	return "ari:cloud:platform::site/" + siteID
+}
+
 // organizationARI is the organization id in the form teamSearchV2 accepts. tenantContexts answers a
 // bare UUID and the gateway refuses it ("Invalid Organization Ari", CHAOS-7132); an id that already is
 // an ARI is passed through unchanged.
@@ -203,6 +217,13 @@ func Collect(ctx context.Context, client Client, params Params) (Rows, error) {
 		resolver = identityalias.LoadDefault()
 	}
 
+	// The Teamwork Graph team reads (members, active projects) must name the site they query (CHAOS-7132: the
+	// live gateway refuses both without X-Query-Context; read-only probes on 2026-10-02 had the platform site
+	// ARI, the Jira site ARI and the organization ARI each accepted by the members read, and the platform site
+	// ARI accepted by the projects read, no header refused by either). The search and tenant reads answered
+	// without it and are not marked.
+	siteCtx := graph.WithQueryContext(ctx, siteQueryContext(params.SiteID))
+
 	teams, err := client.SearchTeams(ctx, organizationARI(params.OrganizationID), params.SiteID, "", page)
 	if err != nil {
 		return Rows{}, fmt.Errorf("search atlassian teams: %w", err)
@@ -231,7 +252,7 @@ func Collect(ctx context.Context, client Client, params Params) (Rows, error) {
 		// An archived team keeps its row (inactive) and has no members or
 		// project links to read.
 		if active && params.Selections.Members {
-			relations, err := client.IterTeamUsers(ctx, team.ID, page)
+			relations, err := client.IterTeamUsers(siteCtx, team.ID, page)
 			if err != nil {
 				return Rows{}, fmt.Errorf("read members of team %s: %w", id, err)
 			}
@@ -261,7 +282,7 @@ func Collect(ctx context.Context, client Client, params Params) (Rows, error) {
 			}
 		}
 		if active && params.Selections.Projects {
-			projects, err := client.IterTeamActiveProjects(ctx, team.ID, page)
+			projects, err := client.IterTeamActiveProjects(siteCtx, team.ID, page)
 			if err != nil {
 				return Rows{}, fmt.Errorf("read projects of team %s: %w", id, err)
 			}

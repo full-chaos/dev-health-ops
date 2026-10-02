@@ -10,7 +10,6 @@ import (
 	"maps"
 	"net/http"
 	"net/url"
-	"os"
 	"os/exec"
 	"path/filepath"
 	"slices"
@@ -21,7 +20,6 @@ import (
 
 	"github.com/full-chaos/dev-health-ops/internal/cli"
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/containers"
-	"github.com/full-chaos/dev-health-ops/internal/testsupport/pyoracle"
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/venueoracle"
 )
 
@@ -104,22 +102,23 @@ func goVerb(t *testing.T, ch clickHouse, verb func(context.Context, cli.Env) int
 // (cliRequest), with the run's ORG_ID.
 var producerEnv = map[string]string{"OTEL_ENABLED": "false", "PYTHONHASHSEED": "0", "PYTHONUTF8": "1"}
 
-// pythonVerb runs the real `dev-hops ai allowlist ...` against ch. Its
-// environment is exactly what is written here: the interpreter's PATH and
-// HOME, the checkout, the run's ClickHouse and org, and producerEnv. Nothing
-// else of the ambient environment reaches the producer.
-func pythonVerb(t *testing.T, ch clickHouse, root, org string, args ...string) (int, string, string) {
+// pythonVerb runs the real `dev-hops ai allowlist ...` against ch, through the
+// producer's command: the one closed environment, then producerEnv and the
+// run's org (both in the request's key, cliRequest), then the run's
+// ClickHouse address by name. Nothing of the ambient environment reaches the
+// producer.
+func pythonVerb(t *testing.T, ch clickHouse, producer *venueoracle.Producer, org string, args ...string) (int, string, string) {
 	t.Helper()
-	python := pyoracle.Resolve(t, root)
-	command := exec.Command(python, append([]string{"-m", "dev_health_ops.cli", "ai", "allowlist"}, args...)...)
-	command.Env = []string{"PATH=" + os.Getenv("PATH"), "HOME=" + os.Getenv("HOME"), "PYTHONPATH=" + filepath.Join(root, "src"),
-		"PYTHONDONTWRITEBYTECODE=1", "CLICKHOUSE_URI=" + ch.httpDSN, "ORG_ID=" + org}
-	for _, name := range slices.Sorted(maps.Keys(producerEnv)) {
-		command.Env = append(command.Env, name+"="+producerEnv[name])
+	declared := maps.Clone(producerEnv)
+	declared["ORG_ID"] = org
+	command, err := producer.Command(context.Background(), declared, []string{"CLICKHOUSE_URI=" + ch.httpDSN},
+		append([]string{"-m", "dev_health_ops.cli", "ai", "allowlist"}, args...)...)
+	if err != nil {
+		t.Fatal(err)
 	}
 	var stdout, stderr bytes.Buffer
 	command.Stdout, command.Stderr = &stdout, &stderr
-	err := command.Run()
+	err = command.Run()
 	code := 0
 	if exit, ok := err.(*exec.ExitError); ok {
 		code = exit.ExitCode()
@@ -266,14 +265,14 @@ func TestAllowlistMatchesTheFrozenPythonProducer(t *testing.T) {
 		steps[built.Path] = step
 		return built
 	}
-	produce := func(root string, requests []venueoracle.Request) []venueoracle.Response {
+	produce := func(producer *venueoracle.Producer, requests []venueoracle.Request) []venueoracle.Response {
 		answers := make([]venueoracle.Response, len(requests))
 		for index, request := range requests {
 			step, ok := steps[request.Path]
 			if !ok {
 				t.Fatalf("no run for %s", request.Path)
 			}
-			code, stdout, _ := pythonVerb(t, python, root, step.org, step.args...)
+			code, stdout, _ := pythonVerb(t, python, producer, step.org, step.args...)
 			answers[index] = venueoracle.Response{Status: code, Body: stdout}
 			time.Sleep(15 * time.Millisecond) // computed_at is the row version, at millisecond precision
 		}

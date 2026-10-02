@@ -31,9 +31,11 @@ import (
 	"net/http"
 	"time"
 
+	"github.com/99designs/gqlgen/graphql"
 	gqlhandler "github.com/99designs/gqlgen/graphql/handler"
 	"github.com/jackc/pgx/v5/pgxpool"
 
+	"github.com/full-chaos/dev-health-ops/internal/auth/httpapi"
 	"github.com/full-chaos/dev-health-ops/internal/platform/version"
 	"github.com/full-chaos/dev-health-ops/internal/queryapi/analytics"
 	"github.com/full-chaos/dev-health-ops/internal/queryapi/graph"
@@ -72,17 +74,33 @@ func newExecutableSchemaHandler() http.Handler {
 func newListenerServers(publicAddr, internalAddr string, publicBase, internalBase http.Handler) (public, internal *http.Server) {
 	public = &http.Server{
 		Addr:              publicAddr,
-		Handler:           analytics.InvestmentMembershipScopeRequestMiddleware(internalidentity.Public(publicBase)),
+		Handler:           analytics.InvestmentMembershipScopeRequestMiddleware(internalidentity.Public(traceListener(publicBase, "public", false))),
 		ReadHeaderTimeout: 5 * time.Second,
 	}
 	if internalAddr != "" {
 		internal = &http.Server{
 			Addr:              internalAddr,
-			Handler:           analytics.InvestmentMembershipScopeRequestMiddleware(internalidentity.Internal(internalBase)),
+			Handler:           analytics.InvestmentMembershipScopeRequestMiddleware(internalidentity.Internal(traceListener(internalBase, "internal", true))),
 			ReadHeaderTimeout: 5 * time.Second,
 		}
 	}
 	return public, internal
+}
+
+// queryProbePaths are the paths the query listeners answer for the kubelet and
+// the scraper; they get no span (a span per probe is volume with no
+// information).
+var queryProbePaths = []string{"/healthz", "/readyz", "/metrics"}
+
+// traceListener wraps one listener's mux with the server span the api
+// listeners carry (httpapi.TraceHandler): named by the mux's registered
+// pattern, with the method, status code and listener, and no query string,
+// header, body, client address, user or org value. It sits INSIDE the identity
+// and membership middleware, directly around the mux, so the pattern the mux
+// records is the one it reads. Only the internal listener (in-cluster callers)
+// honours an incoming traceparent; the others start a new root.
+func traceListener(base http.Handler, listener string, trustRemoteSampling bool) http.Handler {
+	return httpapi.TraceHandler(base, httpapi.TraceOptions{Listener: listener, TrustRemoteSampling: trustRemoteSampling, ProbePaths: queryProbePaths})
 }
 
 // newMCPListenerServer is the MCP caller-class listener's server
@@ -92,7 +110,7 @@ func newListenerServers(publicAddr, internalAddr string, publicBase, internalBas
 func newMCPListenerServer(mcpAddr string, base http.Handler) *http.Server {
 	return &http.Server{
 		Addr:              mcpAddr,
-		Handler:           analytics.InvestmentMembershipScopeRequestMiddleware(internalidentity.MCP(base)),
+		Handler:           analytics.InvestmentMembershipScopeRequestMiddleware(internalidentity.MCP(traceListener(base, "mcp", false))),
 		ReadHeaderTimeout: 5 * time.Second,
 	}
 }
@@ -869,4 +887,39 @@ func BuildWithLookup(lookup func(string) (string, bool)) (*Plane, error) {
 	// and never sees internalMux at all.
 	internalMux.Handle("/", handler)
 	return &Plane{Handler: handler, InternalHandler: internalMux, MCPHandler: mcpMux, Ready: ready, Probes: probes, Close: closeAll}, nil
+}
+
+// recordErrorCount stamps the number of errors a GraphQL response carried on
+// the request's server span (httpapi.GraphQLErrorCountAttribute): gqlgen
+// answers a resolver error with HTTP 200, so the status class alone would
+// read every one of them as a success. A count only: no message, no variable.
+func recordErrorCount(ctx context.Context, next graphql.ResponseHandler) *graphql.Response {
+	response := next(ctx)
+	if response != nil {
+		httpapi.RecordGraphQLErrorCount(ctx, len(response.Errors))
+	}
+	return response
+}
+
+// recordOperationErrorCount counts the errors of a response that an operation
+// interceptor answered itself. Registered BEFORE the limits and
+// graph.OperationOrgGuard it is the outermost wrapper, so their refusals
+// (HTTP 200, errors body) are counted: they return before the response
+// middleware (recordErrorCount) runs. It only ever stamps a non-zero count, so
+// it never overwrites what recordErrorCount stamped for a resolver error.
+func recordOperationErrorCount(ctx context.Context, next graphql.OperationHandler) graphql.ResponseHandler {
+	handle := next(ctx)
+	if handle == nil {
+		return nil
+	}
+	// The span is read from the operation's own ctx: when an inner interceptor
+	// refuses, gqlgen hands the response handler no ctx at all (innerCtx stays nil).
+	operationCtx := ctx
+	return func(ctx context.Context) *graphql.Response {
+		response := handle(ctx)
+		if response != nil && len(response.Errors) > 0 {
+			httpapi.RecordGraphQLErrorCount(operationCtx, len(response.Errors))
+		}
+		return response
+	}
 }

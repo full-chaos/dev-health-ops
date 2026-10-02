@@ -24,7 +24,7 @@
 # that did not happen must not read green). tests/tooling/test_go_quality_legs.py
 # pins that the legs together run exactly the steps of `ci`.
 #
-# The pattern list is NOT restated here. ci/go_relevance.py reads go.yml's own
+# The pattern list is NOT restated here. ci/go_relevance.sh reads go.yml's own
 # `on.pull_request.paths`, so there is one list and it cannot drift -- which also
 # guarantees the invariant that matters: anything Go-relevant enough to run the
 # storage shards is Go-relevant enough to run go-quality.
@@ -117,14 +117,6 @@ jobs:
         # half runs under `go test ./...` on the Go-relevant leg.
         run: bash ci/check_migration_matrix.sh freshness
 
-      - name: Set up Python 3.14 for the relevance decision
-        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
-        with:
-          python-version: '3.14'
-
-      - name: Install the relevance decider's only dependency
-        run: python -m pip install --no-deps 'PyYAML==6.0.2'
-
       - name: Decide whether this change set is Go-relevant
         id: relevance
         env:
@@ -147,14 +139,14 @@ jobs:
             printf 'relevant=true\n' >> "${GITHUB_OUTPUT}"
             exit 0
           }
-          python ci/go_relevance.py < changed.txt | tee relevance.out
+          bash ci/go_relevance.sh < changed.txt | tee relevance.out
           grep -E '^relevant=(true|false)$' relevance.out >> "${GITHUB_OUTPUT}"
 
       - name: Report that the gate was skipped, and why
         if: steps.relevance.outputs.relevant != 'true'
         run: |
           echo "skipped: no Go-relevant paths in this change set."
-          echo "Relevance is decided by ci/go_relevance.py against go.yml's own"
+          echo "Relevance is decided by ci/go_relevance.sh against go.yml's own"
           echo "on.pull_request.paths list. This job still REPORTS, so the required"
           echo "check is satisfied honestly rather than by a second workflow."
 
@@ -224,6 +216,16 @@ jobs:
         # A test asserts this command does not carry it.
         run: go run ./cmd/gqlgen-guard check-drift
 
+      - name: Set up Python 3.14 for the live provider oracles
+        # The relevance decision above needs no Python (ci/go_relevance.sh). The live-Python oracles and the unit tests that
+        # run real Python programs still do, and they resolve the deployed 3.14 from PATH: without this step they ran on the
+        # runner's 3.12 and failed (pyjson: a JSONDecodeError text that differs between 3.12 and 3.14). A change that is
+        # not Go-relevant no longer pays for the setup.
+        if: steps.relevance.outputs.relevant == 'true'
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: '3.14'
+
       - name: Install locked live provider oracle dependencies
         # EVERY leg: unit tests in the test and race legs run real Python
         # programs too (e.g. admin TestOrgDeletionTargetsMatchThePythonList);
@@ -247,6 +249,8 @@ jobs:
           if ! git cat-file -e "${BASE_SHA}^{commit}" 2>/dev/null; then
             git fetch --no-tags origin "${BASE_SHA}"
           fi
+          # The closed lists (ci/ratchets.tsv, `check_go.sh ratchets`) are held to their size on this base (CHAOS-7904).
+          echo "RATCHET_BASE_SHA=${BASE_SHA}" >> "${GITHUB_ENV}"
           if ! git cat-file -e "${BASE_SHA}:contracts/jobs/v1" 2>/dev/null; then
             echo "No v1 job contracts exist on the merge base; validating the additive tree only."
             exit 0

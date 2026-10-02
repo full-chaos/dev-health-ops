@@ -541,7 +541,7 @@ func TestBackfillRunWritesTheFrozenPythonRows(t *testing.T) {
 		t.Fatal(err)
 	}
 	request := venueoracle.ProgramRequest("backfill run scenarios", livePythonProgram, input, backfillPythonSettings)
-	answers := golden.Produce(t, root, []venueoracle.Request{request}, func(root string, _ []venueoracle.Request) []venueoracle.Response {
+	answers := golden.Produce(t, root, []venueoracle.Request{request}, func(_ *venueoracle.Producer, _ []venueoracle.Request) []venueoracle.Response {
 		uri := setup(t)
 		var produced []result
 		for _, s := range comparable() {

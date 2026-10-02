@@ -1,5 +1,6 @@
 # Every file under internal/jobs/metrics/complexity/pycc/testdata: sha256, kind, path. Written by `go run ./internal/testsupport/recordedfiles/manifest`; never edit it by hand.
 # python-recorded set: 7225bdb13645020abc00854a9ec48c7c171a908e02893e518a7ca2c3a36c886b (1 files)
+# header-before-stamp set: e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855 (0 files)
 d67694282504b0a3f3ee4fcea1d943f671910e9bdd4c786f7b98df5b866d4c5a	unclassified	corpus/rules_basic.py.txt
 dbcd9b2919fe1974d054f0ddf1682da69ca1c6598bdd9cb3ad1ad15dc9a35c1a	unclassified	corpus/rules_classes.py.txt
 54e0d1483871f2f0324cb7bd7152fe1b2e57a60aeb895606ddde3471baae30aa	unclassified	corpus/rules_nofunctions.py.txt

@@ -411,6 +411,13 @@ type Options struct {
 	// PythonEnv is extra environment for the Python plane, for example
 	// EXPECTED_WORKER_GROUPS or TELEMETRY_ENDPOINT.
 	PythonEnv []string
+	// PythonPathRel are directories of the Python checkout (Root), given relative to Root
+	// and slash-separated, put on the Python plane's PYTHONPATH before its src: a stub site
+	// directory the test's fake services need (a sitecustomize.py). The HARNESS builds
+	// PYTHONPATH from them, so the key of a golden holds the relative names and not the
+	// absolute path of any checkout: a test that set PYTHONPATH itself through PythonEnv
+	// would key the path of its own checkout and replay in that checkout only.
+	PythonPathRel []string
 	// Seed fills the source database after the Alembic heads and before the
 	// copy, as a superuser. It may call Python through venue.CallPython, for
 	// example to write a value the way the Python api encrypts it. It
@@ -507,17 +514,7 @@ func Start(t *testing.T, ctx context.Context, options Options) *Venue {
 		liveVenues.Store(rootTestName(t), struct{}{})
 	}
 	if !frozen {
-		python := pyoracle.Resolve(t, options.Root)
-		bin, err := interpreterDir(python)
-		if err != nil {
-			t.Fatalf("venue: %v", err)
-		}
-		// Activate the interpreter's environment as `source bin/activate` does:
-		// its directory goes first on PATH, and the program runs as "python3".
-		t.Setenv("PATH", bin+string(os.PathListSeparator)+os.Getenv("PATH"))
-		if found, err := exec.LookPath("python3"); err != nil || filepath.Dir(found) != bin {
-			t.Fatalf("venue: python3 on PATH is %q (%v), want the one in %s", found, err, bin)
-		}
+		bin := activateInterpreter(t, options.Root, "venue")
 		v.Python = filepath.Join(bin, "python3")
 	}
 	v.hostEnv = inheritedValues(map[string]string{})
@@ -603,7 +600,12 @@ func Start(t *testing.T, ctx context.Context, options Options) *Venue {
 
 	async := strings.Replace(v.AdminURI(t, v.SourceDB), "postgres://", "postgresql+asyncpg://", 1)
 	async = strings.Replace(async, "postgresql://", "postgresql+asyncpg://", 1)
-	perRun := map[string]string{"PYTHONPATH": filepath.Join(options.Root, "src"), "POSTGRES_URI": async,
+	pythonPath := []string{}
+	for _, rel := range options.PythonPathRel {
+		pythonPath = append(pythonPath, filepath.Join(options.Root, filepath.FromSlash(rel)))
+	}
+	pythonPath = append(pythonPath, filepath.Join(options.Root, "src"))
+	perRun := map[string]string{"PYTHONPATH": strings.Join(pythonPath, string(os.PathListSeparator)), "POSTGRES_URI": async,
 		"REDIS_URL": v.PythonValkeyURI, "CLICKHOUSE_URI": v.AdminClickHouseHTTPURI(t, v.PythonClickHouseDB)}
 	for name, value := range v.hostEnv {
 		perRun[name] = value
@@ -659,6 +661,34 @@ func Start(t *testing.T, ctx context.Context, options Options) *Venue {
 	v.provisionRoles(t, ctx)
 	v.migrate(t, ctx, logger)
 	return v
+}
+
+// ActivateInterpreter is the one place a recording resolves the real
+// interpreter (pyoracle.ResolveLauncher, which gives it in a recording too,
+// where pyoracle.Resolve gives a stand-in), puts its directory first on PATH
+// for the rest of the test as `source bin/activate` does, and checks that the
+// python3 a command would start is the one in that directory. It returns that
+// directory. The venue, the producer and programoracle all start here.
+func ActivateInterpreter(t *testing.T, root string) (string, error) {
+	t.Helper()
+	bin, err := interpreterDir(pyoracle.ResolveLauncher(t, root))
+	if err != nil {
+		return "", err
+	}
+	t.Setenv("PATH", bin+string(os.PathListSeparator)+os.Getenv("PATH"))
+	if found, err := exec.LookPath("python3"); err != nil || filepath.Dir(found) != bin {
+		return "", fmt.Errorf("python3 on PATH is %q (%v), want the one in %s", found, err, bin)
+	}
+	return bin, nil
+}
+
+func activateInterpreter(t *testing.T, root, who string) string {
+	t.Helper()
+	bin, err := ActivateInterpreter(t, root)
+	if err != nil {
+		t.Fatalf("%s: %v", who, err)
+	}
+	return bin
 }
 
 // interpreterDir returns the directory of the interpreter pyoracle chose,

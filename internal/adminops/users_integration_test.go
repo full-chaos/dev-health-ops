@@ -10,10 +10,10 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/url"
-	"os"
 	"os/exec"
 	"path/filepath"
 	"regexp"
+	"sort"
 	"strings"
 	"testing"
 
@@ -362,15 +362,7 @@ func pythonVerbEnv(t *testing.T, db *database, extra map[string]string, args []s
 // flags Python takes before the subcommand (--org).
 func pythonVerbFull(t *testing.T, db *database, extra map[string]string, global []string, args []string) (int, string) {
 	t.Helper()
-	root := pythonPlaneRoot(t)
-	python := pyoracle.Resolve(t, root)
-	program := adminPythonProgram
-	command := exec.Command(python, append(append([]string{"-c", program}, global...), append([]string{"admin"}, args...)...)...)
-	pyURI := strings.Replace(db.uri, "postgres://", "postgresql://", 1)
-	command.Env = append(adminPythonEnv(root), "POSTGRES_URI="+pyURI, "DATABASE_URI="+pyURI)
-	for key, value := range extra {
-		command.Env = append(command.Env, key+"="+value)
-	}
+	command := adminCommand(t, db, adminPythonSettings, extra, append(append([]string{"-c", adminPythonProgram}, global...), append([]string{"admin"}, args...)...)...)
 	var stdout, stderr bytes.Buffer
 	command.Stdout, command.Stderr = &stdout, &stderr
 	err := command.Run()
@@ -378,7 +370,7 @@ func pythonVerbFull(t *testing.T, db *database, extra map[string]string, global 
 	if exit, ok := err.(*exec.ExitError); ok {
 		code = exit.ExitCode()
 	} else if err != nil {
-		t.Fatalf("run python: %v", pyoracle.RunError(python, err, []byte(stderr.String())))
+		t.Fatalf("run python: %v", pyoracle.RunError(command.Args[0], err, []byte(stderr.String())))
 	}
 	if code == 1 && strings.Contains(stderr.String(), "Traceback") {
 		// A Python traceback is a crash, not a refusal: the step records it as a
@@ -407,44 +399,50 @@ const adminPythonProgram = "import os, sys\n" +
 // the producer's environment AND part of every golden's key (a changed value fails the frozen replay).
 var adminPythonSettings = map[string]string{"PYTHONHASHSEED": "0", "OTEL_ENABLED": "false", "DISABLE_DOTENV": "1"}
 
-// adminPythonEnv is the producer's CLOSED environment: PATH and HOME, the checkout's source, and
-// adminPythonSettings; nothing is inherited from the test process. A per-run value (a database address)
-// or a step's own variable is appended by name by the caller.
-func adminPythonEnv(root string) []string {
-	env := []string{"PATH=" + os.Getenv("PATH"), "HOME=" + os.Getenv("HOME"), "PYTHONPATH=" + filepath.Join(root, "src"), "PYTHONDONTWRITEBYTECODE=1"}
-	for _, name := range []string{"PYTHONHASHSEED", "OTEL_ENABLED", "DISABLE_DOTENV"} {
-		env = append(env, name+"="+adminPythonSettings[name])
+// adminProducer is the record verb's launcher for the session being recorded (nil outside a recording).
+// Every Python child of the admin sessions starts through it: its closed environment holds PATH, HOME,
+// the checkout's source and the declared entries; nothing is inherited from the test process.
+var adminProducer *venueoracle.Producer
+
+// useAdminProducer makes adminCommand start its children through producer until the test ends.
+func useAdminProducer(t *testing.T, producer *venueoracle.Producer) {
+	t.Helper()
+	producer.RequireDeployed()
+	adminProducer = producer
+	t.Cleanup(func() { adminProducer = nil })
+}
+
+// adminCommand is the Python child of one step: the launcher's command with settings and the step's own
+// variables declared, and the run's own addresses (the database, a fake server) passed by name.
+func adminCommand(t *testing.T, db *database, settings, stepEnv map[string]string, args ...string) *exec.Cmd {
+	t.Helper()
+	if adminProducer == nil {
+		t.Fatal("a Python child starts only inside a recording, through the record verb's launcher")
 	}
-	return env
+	pyURI := strings.Replace(db.uri, "postgres://", "postgresql://", 1)
+	declared := map[string]string{}
+	for name, value := range settings {
+		declared[name] = value
+	}
+	extra := []string{"POSTGRES_URI=" + pyURI, "DATABASE_URI=" + pyURI}
+	for name, value := range stepEnv {
+		if name == "CLICKHOUSE_URI" || name == "VENUE_STRIPE_API_BASE" {
+			extra = append(extra, name+"="+value)
+			continue
+		}
+		declared[name] = value
+	}
+	sort.Strings(extra)
+	command, err := adminProducer.Command(context.Background(), declared, extra, args...)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return command
 }
 
 // adminPythonBuild is the build whose Python `dev-hops admin` verbs answered the frozen sessions: a build
 // that still carried the Python CLI.
 const adminPythonBuild = "a4847c5e93607451a0c987b314d37e02fc43ce85"
-
-// pythonRootPin is the pinned checkout a recording runs the Python verbs from ("" outside a recording).
-var pythonRootPin string
-
-// pythonPlaneRoot is the checkout the Python verbs run from: the pinned one while a golden records, the
-// repository itself for the oracles that still run live Python (billing, until they are frozen).
-func pythonPlaneRoot(t *testing.T) string {
-	t.Helper()
-	if pythonRootPin != "" {
-		return pythonRootPin
-	}
-	root, err := filepath.Abs(filepath.Join("..", ".."))
-	if err != nil {
-		t.Fatal(err)
-	}
-	return root
-}
-
-// pinPythonRoot makes pythonPlaneRoot answer root until the test ends.
-func pinPythonRoot(t *testing.T, root string) {
-	t.Helper()
-	pythonRootPin = root
-	t.Cleanup(func() { pythonRootPin = "" })
-}
 
 // adminGolden opens a golden of one admin session and the pinned Python root. pin is the literal
 // "PIN:<name>" (the recorder looks for it in the test source until the golden exists).
@@ -469,8 +467,8 @@ func adminGolden(t *testing.T, name, pin, test string) (*venueoracle.Golden, str
 func adminProduce(t *testing.T, golden *venueoracle.Golden, root, label string, input []byte, produce func() any) []byte {
 	t.Helper()
 	request := venueoracle.ProgramRequest(label, adminPythonProgram, input, adminPythonSettings)
-	answers := golden.Produce(t, root, []venueoracle.Request{request}, func(root string, _ []venueoracle.Request) []venueoracle.Response {
-		pinPythonRoot(t, root)
+	answers := golden.Produce(t, root, []venueoracle.Request{request}, func(producer *venueoracle.Producer, _ []venueoracle.Request) []venueoracle.Response {
+		useAdminProducer(t, producer)
 		body, err := json.Marshal(produce())
 		if err != nil {
 			t.Fatal(err)

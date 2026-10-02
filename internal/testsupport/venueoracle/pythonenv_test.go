@@ -496,7 +496,7 @@ func TestThePythonChildSeesOnlyItsExplicitEnvironment(t *testing.T) {
 	dir := t.TempDir()
 	names := []string{"VENUE_AMBIENT_ONLY", "VENUE_AMBIENT_SAME", "VENUE_SET_BY_TEST", "TRUSTED_PROXIES", "PYTHONHASHSEED", "TZ", "LANG", "HOME", "PATH", "TMPDIR", "JWT_SECRET_KEY", "ENVIRONMENT", "EXTRA_FOR_ONE_CALL", "OTEL_SDK_DISABLED", mark}
 	// The stand-in prints what it sees, and keeps it in a file beside itself for the launch that reads no output.
-	script := "#!/bin/sh\nout=\"\"\nfor n in " + strings.Join(names, " ") + "; do eval \"v=\\${$n-<unset>}\"; out=\"$out $n=$v\"; done\necho \"$out\" > \"$(dirname \"$0\")/last.out\"\necho \"$out\"\n"
+	script := "#!/bin/sh\nout=\"\"\nfor n in " + strings.Join(names, " ") + "; do eval \"v=\\${$n-<unset>}\"; out=\"$out $n=$v\"; done\necho \"$out\" > \"${0%/*}/last.out\"\necho \"$out\"\n"
 	if err := os.WriteFile(filepath.Join(dir, "python3"), []byte(script), 0o755); err != nil {
 		t.Fatal(err)
 	}
@@ -584,7 +584,7 @@ func standInPython(t *testing.T, label string) (dir, program string) {
 	t.Helper()
 	dir = t.TempDir()
 	program = filepath.Join(dir, "python3")
-	if err := os.WriteFile(program, []byte("#!/bin/sh\ntouch \"$(dirname \"$0\")/ran\"\necho "+label+"\n"), 0o755); err != nil {
+	if err := os.WriteFile(program, []byte("#!/bin/sh\n: > \"${0%/*}/ran\"\necho "+label+"\n"), 0o755); err != nil {
 		t.Fatal(err)
 	}
 	return dir, program
@@ -979,6 +979,7 @@ func TestThePerRunNamesAreExactlyTheClosedListWithTheirSide(t *testing.T) {
 		"CLICKHOUSE_URI": false, "HOME": false, "PATH": false, "POSTGRES_URI": false, "PYTHONPATH": false, "REDIS_URL": false, "TMPDIR": false,
 		"GITHUB_APP_PRIVATE_KEY": true, "REQUESTS_CA_BUNDLE": true, "TELEMETRY_ENDPOINT": true,
 		"VENUE_PAGERDUTY_API_BASE_OVERRIDE": true, "VENUE_PAGERDUTY_REVOKE_URL_OVERRIDE": true, "VENUE_PAGERDUTY_TOKEN_URL_OVERRIDE": true,
+		"SMTP_HOST": true, "SMTP_PORT": true,
 		"VENUE_PROVIDER_STUB_PORT": true, "VENUE_STRIPE_API_BASE": true,
 	}
 	for name, listed := range perRunPythonEnv {
@@ -998,5 +999,57 @@ func TestThePerRunNamesAreExactlyTheClosedListWithTheirSide(t *testing.T) {
 		if _, ok := perRunPythonEnv[name]; !ok {
 			t.Errorf("%s is in this table and not in perRunPythonEnv: the oracle that needs it would key a per-run value by value", name)
 		}
+	}
+}
+
+// TestTheAddressOfAFakeSMTPSinkIsKeyedByNameWhateverItsValue pins SMTP_HOST and
+// SMTP_PORT, which the auth-flow venue sets to the loopback address and the
+// free port of its per-run SMTP sink: two runs with other addresses are one
+// Python environment, while another setting still changes the key, and the same
+// names supplied by the harness or the host are keyed by value.
+func TestTheAddressOfAFakeSMTPSinkIsKeyedByNameWhateverItsValue(t *testing.T) {
+	key := func(entries ...envEntry) string {
+		t.Helper()
+		out, err := pythonEnvKey(entries)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return out
+	}
+	one := key(fromTest("SMTP_HOST=127.0.0.1", "SMTP_PORT=40001", "EMAIL_PROVIDER=smtp")...)
+	two := key(fromTest("SMTP_HOST=127.0.0.2", "SMTP_PORT=40002", "EMAIL_PROVIDER=smtp")...)
+	if one != two {
+		t.Fatal("the address of a per-run SMTP sink changes the Python environment key")
+	}
+	if one == key(fromTest("SMTP_HOST=127.0.0.1", "SMTP_PORT=40001", "EMAIL_PROVIDER=resend")...) {
+		t.Fatal("a changed EMAIL_PROVIDER no longer changes the key")
+	}
+	for _, name := range []string{"SMTP_HOST", "SMTP_PORT"} {
+		if key(tagged([]string{name + "=a"}, false)...) == key(tagged([]string{name + "=b"}, false)...) {
+			t.Fatalf("%s supplied by the harness or the host is keyed by name only", name)
+		}
+	}
+}
+
+// PythonPathRel keeps the checkout's path out of the key (CHAOS-7306): two options that differ
+// only in Root key alike, while a different relative name keys differently, and a
+// PYTHONPATH a test supplies itself keys by its own value (the path of its checkout).
+func TestPythonPathRelKeysTheRelativeNameAndNeverACheckoutPath(t *testing.T) {
+	rel := []string{"internal/apiservice/testdata/provider_stub"}
+	a := currentKey(t, Options{Root: "/checkout/one", PythonPathRel: rel})
+	b := currentKey(t, Options{Root: "/checkout/two", PythonPathRel: rel})
+	if a != b {
+		t.Fatalf("the key holds the checkout's path: %s in one checkout, %s in another", a, b)
+	}
+	if other := currentKey(t, Options{Root: "/checkout/one", PythonPathRel: []string{"internal/other"}}); other == a {
+		t.Fatal("a different relative name keys alike: the declared input is not in the key")
+	}
+	if none := currentKey(t, Options{Root: "/checkout/one"}); none == a {
+		t.Fatal("no relative name keys like one: the declared input is not in the key")
+	}
+	own1 := currentKey(t, Options{Root: "/checkout/one", PythonEnv: []string{"PYTHONPATH=/checkout/one/stub:/checkout/one/src"}})
+	own2 := currentKey(t, Options{Root: "/checkout/two", PythonEnv: []string{"PYTHONPATH=/checkout/two/stub:/checkout/two/src"}})
+	if own1 == own2 {
+		t.Fatal("a PYTHONPATH the test supplies keys by name only: the rule of perRunPythonEnv changed")
 	}
 }

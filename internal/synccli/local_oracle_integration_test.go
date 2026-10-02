@@ -1029,7 +1029,7 @@ func TestLocalSyncMatchesFrozenPython(t *testing.T) {
 	golden := venueoracle.OpenGolden(t, venueoracle.GoldenSpec{
 		Path:        "testdata/golden/local_sync.json",
 		PythonBuild: localPythonBuild,
-		SHA256:      "1b5c17054bd5255834944f1ebb2a46da474336ba9b1a5cba20dfa46099e1a9f7",
+		SHA256:      "ff60a8e27bd1c2651d3fea19fa3ceede9a9420cec8c1860846541f0466c8e073",
 		Recipe: "git worktree add --detach $DIR " + localPythonBuild + " (with its .venv: uv sync --frozen --no-install-project); then from the repository root: " +
 			"go run ./internal/testsupport/venueoracle/goldenrecord -pkg ./internal/synccli/ -test '^TestLocalSyncMatchesFrozenPython$' -python-root $DIR",
 	})

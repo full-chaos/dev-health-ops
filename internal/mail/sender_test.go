@@ -608,7 +608,7 @@ func TestSMTPSenderRefusesSetButEmptyTLSConfig(t *testing.T) {
 // CHAOS-5401: MIME transfer-encoding matches Python's charset-driven choice
 // -- base64 for a body that is not 7-bit-safe, 7bit for one that already is.
 // (An earlier version of this file pinned "8bit" for the ASCII case; the live
-// Python oracle, TestSMTPSenderMatchesLivePythonSMTPProvider, showed Python
+// Python oracle, TestSMTPSenderMatchesFrozenPythonSMTPProvider, showed Python
 // sends 7bit + charset us-ascii there, and the wire bytes are now compared
 // against Python's directly.)
 // ---------------------------------------------------------------------------

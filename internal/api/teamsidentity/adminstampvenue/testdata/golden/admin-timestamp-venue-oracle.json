@@ -1,0 +1,503 @@
+{
+  "header": {
+    "test": "TestAdminTimestampVenueOracle",
+    "python_build": "a4847c5e93607451a0c987b314d37e02fc43ce85",
+    "producer_digest": "6e1dc97e68624398015f60caee160cceee6ae601bd434d01b8b7d5975267e137",
+    "recipe": "git worktree add --detach $DIR a4847c5e93607451a0c987b314d37e02fc43ce85 (with its .venv: uv sync --frozen --no-install-project); then from the repository root: go run ./internal/testsupport/venueoracle/goldenrecord -pkg ./internal/api/teamsidentity/adminstampvenue/ -test '^TestAdminTimestampVenueOracle$' -python-root $DIR (records on the pinned build, replays the candidate in a fresh process, and only then promotes it and pins its digest)",
+    "python_env": "85307b2417e52c748b15e354782d2c143eb09f7a90527582831c7b7e98919e8a",
+    "python_env_version": 2,
+    "recorded_by": "goldenrecord",
+    "blanked": {
+      "body $.created_at": 16,
+      "body $.updated_at": 16,
+      "body $[].created_at": 4,
+      "body $[].updated_at": 4,
+      "header content-length": 18,
+      "header date": 24,
+      "header x-dev-health-plane": 24,
+      "header x-request-id": 48
+    }
+  },
+  "requests": [
+    {
+      "name": "teams",
+      "method": "GET",
+      "path": "/api/v1/admin/teams",
+      "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "request_headers_sha256": "aa0913ee390550a7930773da9003a55d1f9c26a11f8d69436f4ca5abd98da0cd",
+      "status": 200,
+      "headers": {
+        "content-length": "2021",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "\u003cvolatile\u003e"
+      },
+      "body": "[{\"id\":\"34adfa20-736a-59d7-8e2e-7aea651fd32e\",\"team_id\":\"team-0\",\"name\":\"Team 0\",\"description\":null,\"repo_patterns\":[],\"project_keys\":[],\"extra_data\":{},\"managed_fields\":[],\"sync_policy\":2,\"flagged_changes\":null,\"last_drift_sync_at\":null,\"is_active\":true,\"created_at\":\"2026-09-21T11:37:05.895620\",\"updated_at\":\"2026-09-21T11:37:05.895620\"},{\"id\":\"06da9d38-f510-5652-a7ae-6641098eb2b9\",\"team_id\":\"team-1\",\"name\":\"Team 1\",\"description\":null,\"repo_patterns\":[],\"project_keys\":[],\"extra_data\":{},\"managed_fields\":[],\"sync_policy\":2,\"flagged_changes\":null,\"last_drift_sync_at\":null,\"is_active\":true,\"created_at\":\"2026-09-21T11:37:05.895335\",\"updated_at\":\"2026-09-21T11:37:05.895335\"},{\"id\":\"fcd331eb-602e-502b-9c65-78ce839fd7c1\",\"team_id\":\"team-2\",\"name\":\"Team 2\",\"description\":null,\"repo_patterns\":[],\"project_keys\":[],\"extra_data\":{},\"managed_fields\":[],\"sync_policy\":2,\"flagged_changes\":null,\"last_drift_sync_at\":null,\"is_active\":true,\"created_at\":\"2026-09-21T11:37:05.000001\",\"updated_at\":\"2026-09-21T11:37:05.000001\"},{\"id\":\"ec17d1d4-cc2b-53f6-9ec9-56d9a55c46f5\",\"team_id\":\"team-3\",\"name\":\"Team 3\",\"description\":null,\"repo_patterns\":[],\"project_keys\":[],\"extra_data\":{},\"managed_fields\":[],\"sync_policy\":2,\"flagged_changes\":null,\"last_drift_sync_at\":null,\"is_active\":true,\"created_at\":\"2026-09-21T11:37:05.100000\",\"updated_at\":\"2026-09-21T11:37:05.100000\"},{\"id\":\"8bb2b695-56e0-580b-8a18-f4ad25c19ed6\",\"team_id\":\"team-4\",\"name\":\"Team 4\",\"description\":null,\"repo_patterns\":[],\"project_keys\":[],\"extra_data\":{},\"managed_fields\":[],\"sync_policy\":2,\"flagged_changes\":null,\"last_drift_sync_at\":null,\"is_active\":true,\"created_at\":\"2026-09-21T11:37:05\",\"updated_at\":\"2026-09-21T11:37:05\"},{\"id\":\"f14cbd70-349d-52c2-8ea4-b76878020961\",\"team_id\":\"team-5\",\"name\":\"Team 5\",\"description\":null,\"repo_patterns\":[],\"project_keys\":[],\"extra_data\":{},\"managed_fields\":[],\"sync_policy\":2,\"flagged_changes\":null,\"last_drift_sync_at\":null,\"is_active\":true,\"created_at\":\"2026-09-21T11:37:05.999999\",\"updated_at\":\"2026-09-21T11:37:05.999999\"}]"
+    },
+    {
+      "name": "teams inactive too",
+      "method": "GET",
+      "path": "/api/v1/admin/teams?active_only=false",
+      "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "request_headers_sha256": "aa0913ee390550a7930773da9003a55d1f9c26a11f8d69436f4ca5abd98da0cd",
+      "status": 200,
+      "headers": {
+        "content-length": "2361",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "\u003cvolatile\u003e"
+      },
+      "body": "[{\"id\":\"34adfa20-736a-59d7-8e2e-7aea651fd32e\",\"team_id\":\"team-0\",\"name\":\"Team 0\",\"description\":null,\"repo_patterns\":[],\"project_keys\":[],\"extra_data\":{},\"managed_fields\":[],\"sync_policy\":2,\"flagged_changes\":null,\"last_drift_sync_at\":null,\"is_active\":true,\"created_at\":\"2026-09-21T11:37:05.895620\",\"updated_at\":\"2026-09-21T11:37:05.895620\"},{\"id\":\"06da9d38-f510-5652-a7ae-6641098eb2b9\",\"team_id\":\"team-1\",\"name\":\"Team 1\",\"description\":null,\"repo_patterns\":[],\"project_keys\":[],\"extra_data\":{},\"managed_fields\":[],\"sync_policy\":2,\"flagged_changes\":null,\"last_drift_sync_at\":null,\"is_active\":true,\"created_at\":\"2026-09-21T11:37:05.895335\",\"updated_at\":\"2026-09-21T11:37:05.895335\"},{\"id\":\"fcd331eb-602e-502b-9c65-78ce839fd7c1\",\"team_id\":\"team-2\",\"name\":\"Team 2\",\"description\":null,\"repo_patterns\":[],\"project_keys\":[],\"extra_data\":{},\"managed_fields\":[],\"sync_policy\":2,\"flagged_changes\":null,\"last_drift_sync_at\":null,\"is_active\":true,\"created_at\":\"2026-09-21T11:37:05.000001\",\"updated_at\":\"2026-09-21T11:37:05.000001\"},{\"id\":\"ec17d1d4-cc2b-53f6-9ec9-56d9a55c46f5\",\"team_id\":\"team-3\",\"name\":\"Team 3\",\"description\":null,\"repo_patterns\":[],\"project_keys\":[],\"extra_data\":{},\"managed_fields\":[],\"sync_policy\":2,\"flagged_changes\":null,\"last_drift_sync_at\":null,\"is_active\":true,\"created_at\":\"2026-09-21T11:37:05.100000\",\"updated_at\":\"2026-09-21T11:37:05.100000\"},{\"id\":\"8bb2b695-56e0-580b-8a18-f4ad25c19ed6\",\"team_id\":\"team-4\",\"name\":\"Team 4\",\"description\":null,\"repo_patterns\":[],\"project_keys\":[],\"extra_data\":{},\"managed_fields\":[],\"sync_policy\":2,\"flagged_changes\":null,\"last_drift_sync_at\":null,\"is_active\":true,\"created_at\":\"2026-09-21T11:37:05\",\"updated_at\":\"2026-09-21T11:37:05\"},{\"id\":\"f14cbd70-349d-52c2-8ea4-b76878020961\",\"team_id\":\"team-5\",\"name\":\"Team 5\",\"description\":null,\"repo_patterns\":[],\"project_keys\":[],\"extra_data\":{},\"managed_fields\":[],\"sync_policy\":2,\"flagged_changes\":null,\"last_drift_sync_at\":null,\"is_active\":true,\"created_at\":\"2026-09-21T11:37:05.999999\",\"updated_at\":\"2026-09-21T11:37:05.999999\"},{\"id\":\"cec58e88-cbe7-5bae-a64f-69caa6fe6765\",\"team_id\":\"team-6\",\"name\":\"Team 6\",\"description\":null,\"repo_patterns\":[],\"project_keys\":[],\"extra_data\":{},\"managed_fields\":[],\"sync_policy\":2,\"flagged_changes\":null,\"last_drift_sync_at\":null,\"is_active\":false,\"created_at\":\"2026-01-02T03:04:05.050000\",\"updated_at\":\"2026-01-02T03:04:05.050000\"}]"
+    },
+    {
+      "name": "identities",
+      "method": "GET",
+      "path": "/api/v1/admin/identities",
+      "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "request_headers_sha256": "aa0913ee390550a7930773da9003a55d1f9c26a11f8d69436f4ca5abd98da0cd",
+      "status": 200,
+      "headers": {
+        "content-length": "1661",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "\u003cvolatile\u003e"
+      },
+      "body": "[{\"id\":\"9a4baac4-7592-5813-b6f9-309fe19f2766\",\"canonical_id\":\"user-0@example.com\",\"display_name\":null,\"email\":\"user-0@example.com\",\"provider_identities\":{},\"team_ids\":[\"team-0\"],\"is_active\":true,\"created_at\":\"2026-09-21T11:37:05.895620\",\"updated_at\":\"2026-09-21T11:37:05.895620\"},{\"id\":\"10681e40-69e7-5e83-8a51-23fab6a5ecb0\",\"canonical_id\":\"user-1@example.com\",\"display_name\":null,\"email\":\"user-1@example.com\",\"provider_identities\":{},\"team_ids\":[\"team-1\"],\"is_active\":true,\"created_at\":\"2026-09-21T11:37:05.895335\",\"updated_at\":\"2026-09-21T11:37:05.895335\"},{\"id\":\"a1a7aabc-40ca-59c0-b034-1206d0455a1d\",\"canonical_id\":\"user-2@example.com\",\"display_name\":null,\"email\":\"user-2@example.com\",\"provider_identities\":{},\"team_ids\":[\"team-2\"],\"is_active\":true,\"created_at\":\"2026-09-21T11:37:05.000001\",\"updated_at\":\"2026-09-21T11:37:05.000001\"},{\"id\":\"8dce629c-d3a7-53ba-b895-cd692cdf529b\",\"canonical_id\":\"user-3@example.com\",\"display_name\":null,\"email\":\"user-3@example.com\",\"provider_identities\":{},\"team_ids\":[\"team-3\"],\"is_active\":true,\"created_at\":\"2026-09-21T11:37:05.100000\",\"updated_at\":\"2026-09-21T11:37:05.100000\"},{\"id\":\"5acd2fa0-1b58-59db-a571-79a80811b75a\",\"canonical_id\":\"user-4@example.com\",\"display_name\":null,\"email\":\"user-4@example.com\",\"provider_identities\":{},\"team_ids\":[\"team-4\"],\"is_active\":true,\"created_at\":\"2026-09-21T11:37:05\",\"updated_at\":\"2026-09-21T11:37:05\"},{\"id\":\"dbf7a96b-f5ed-532d-85d6-6bb377b41108\",\"canonical_id\":\"user-5@example.com\",\"display_name\":null,\"email\":\"user-5@example.com\",\"provider_identities\":{},\"team_ids\":[\"team-5\"],\"is_active\":true,\"created_at\":\"2026-09-21T11:37:05.999999\",\"updated_at\":\"2026-09-21T11:37:05.999999\"}]"
+    },
+    {
+      "name": "identities inactive too",
+      "method": "GET",
+      "path": "/api/v1/admin/identities?active_only=false",
+      "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "request_headers_sha256": "aa0913ee390550a7930773da9003a55d1f9c26a11f8d69436f4ca5abd98da0cd",
+      "status": 200,
+      "headers": {
+        "content-length": "1941",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "\u003cvolatile\u003e"
+      },
+      "body": "[{\"id\":\"9a4baac4-7592-5813-b6f9-309fe19f2766\",\"canonical_id\":\"user-0@example.com\",\"display_name\":null,\"email\":\"user-0@example.com\",\"provider_identities\":{},\"team_ids\":[\"team-0\"],\"is_active\":true,\"created_at\":\"2026-09-21T11:37:05.895620\",\"updated_at\":\"2026-09-21T11:37:05.895620\"},{\"id\":\"10681e40-69e7-5e83-8a51-23fab6a5ecb0\",\"canonical_id\":\"user-1@example.com\",\"display_name\":null,\"email\":\"user-1@example.com\",\"provider_identities\":{},\"team_ids\":[\"team-1\"],\"is_active\":true,\"created_at\":\"2026-09-21T11:37:05.895335\",\"updated_at\":\"2026-09-21T11:37:05.895335\"},{\"id\":\"a1a7aabc-40ca-59c0-b034-1206d0455a1d\",\"canonical_id\":\"user-2@example.com\",\"display_name\":null,\"email\":\"user-2@example.com\",\"provider_identities\":{},\"team_ids\":[\"team-2\"],\"is_active\":true,\"created_at\":\"2026-09-21T11:37:05.000001\",\"updated_at\":\"2026-09-21T11:37:05.000001\"},{\"id\":\"8dce629c-d3a7-53ba-b895-cd692cdf529b\",\"canonical_id\":\"user-3@example.com\",\"display_name\":null,\"email\":\"user-3@example.com\",\"provider_identities\":{},\"team_ids\":[\"team-3\"],\"is_active\":true,\"created_at\":\"2026-09-21T11:37:05.100000\",\"updated_at\":\"2026-09-21T11:37:05.100000\"},{\"id\":\"5acd2fa0-1b58-59db-a571-79a80811b75a\",\"canonical_id\":\"user-4@example.com\",\"display_name\":null,\"email\":\"user-4@example.com\",\"provider_identities\":{},\"team_ids\":[\"team-4\"],\"is_active\":true,\"created_at\":\"2026-09-21T11:37:05\",\"updated_at\":\"2026-09-21T11:37:05\"},{\"id\":\"dbf7a96b-f5ed-532d-85d6-6bb377b41108\",\"canonical_id\":\"user-5@example.com\",\"display_name\":null,\"email\":\"user-5@example.com\",\"provider_identities\":{},\"team_ids\":[\"team-5\"],\"is_active\":true,\"created_at\":\"2026-09-21T11:37:05.999999\",\"updated_at\":\"2026-09-21T11:37:05.999999\"},{\"id\":\"5173a51c-5316-520b-b131-f545b2775e81\",\"canonical_id\":\"user-6@example.com\",\"display_name\":null,\"email\":\"user-6@example.com\",\"provider_identities\":{},\"team_ids\":[\"team-6\"],\"is_active\":false,\"created_at\":\"2026-01-02T03:04:05.050000\",\"updated_at\":\"2026-01-02T03:04:05.050000\"}]"
+    },
+    {
+      "name": "teams member refused",
+      "method": "GET",
+      "path": "/api/v1/admin/teams",
+      "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "request_headers_sha256": "c3a1720b2b94c23a5bac70359d3fa9c2fdee7976d6bd34e8a67201a7f11a2cb8",
+      "status": 403,
+      "headers": {
+        "content-length": "34",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "\u003cvolatile\u003e"
+      },
+      "body": "{\"detail\":\"Admin access required\"}"
+    },
+    {
+      "name": "team team-0",
+      "method": "GET",
+      "path": "/api/v1/admin/teams/team-0",
+      "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "request_headers_sha256": "aa0913ee390550a7930773da9003a55d1f9c26a11f8d69436f4ca5abd98da0cd",
+      "status": 200,
+      "headers": {
+        "content-length": "338",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "\u003cvolatile\u003e"
+      },
+      "body": "{\"id\":\"34adfa20-736a-59d7-8e2e-7aea651fd32e\",\"team_id\":\"team-0\",\"name\":\"Team 0\",\"description\":null,\"repo_patterns\":[],\"project_keys\":[],\"extra_data\":{},\"managed_fields\":[],\"sync_policy\":2,\"flagged_changes\":null,\"last_drift_sync_at\":null,\"is_active\":true,\"created_at\":\"2026-09-21T11:37:05.895620\",\"updated_at\":\"2026-09-21T11:37:05.895620\"}"
+    },
+    {
+      "name": "team team-1",
+      "method": "GET",
+      "path": "/api/v1/admin/teams/team-1",
+      "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "request_headers_sha256": "aa0913ee390550a7930773da9003a55d1f9c26a11f8d69436f4ca5abd98da0cd",
+      "status": 200,
+      "headers": {
+        "content-length": "338",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "\u003cvolatile\u003e"
+      },
+      "body": "{\"id\":\"06da9d38-f510-5652-a7ae-6641098eb2b9\",\"team_id\":\"team-1\",\"name\":\"Team 1\",\"description\":null,\"repo_patterns\":[],\"project_keys\":[],\"extra_data\":{},\"managed_fields\":[],\"sync_policy\":2,\"flagged_changes\":null,\"last_drift_sync_at\":null,\"is_active\":true,\"created_at\":\"2026-09-21T11:37:05.895335\",\"updated_at\":\"2026-09-21T11:37:05.895335\"}"
+    },
+    {
+      "name": "team team-2",
+      "method": "GET",
+      "path": "/api/v1/admin/teams/team-2",
+      "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "request_headers_sha256": "aa0913ee390550a7930773da9003a55d1f9c26a11f8d69436f4ca5abd98da0cd",
+      "status": 200,
+      "headers": {
+        "content-length": "338",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "\u003cvolatile\u003e"
+      },
+      "body": "{\"id\":\"fcd331eb-602e-502b-9c65-78ce839fd7c1\",\"team_id\":\"team-2\",\"name\":\"Team 2\",\"description\":null,\"repo_patterns\":[],\"project_keys\":[],\"extra_data\":{},\"managed_fields\":[],\"sync_policy\":2,\"flagged_changes\":null,\"last_drift_sync_at\":null,\"is_active\":true,\"created_at\":\"2026-09-21T11:37:05.000001\",\"updated_at\":\"2026-09-21T11:37:05.000001\"}"
+    },
+    {
+      "name": "team team-3",
+      "method": "GET",
+      "path": "/api/v1/admin/teams/team-3",
+      "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "request_headers_sha256": "aa0913ee390550a7930773da9003a55d1f9c26a11f8d69436f4ca5abd98da0cd",
+      "status": 200,
+      "headers": {
+        "content-length": "338",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "\u003cvolatile\u003e"
+      },
+      "body": "{\"id\":\"ec17d1d4-cc2b-53f6-9ec9-56d9a55c46f5\",\"team_id\":\"team-3\",\"name\":\"Team 3\",\"description\":null,\"repo_patterns\":[],\"project_keys\":[],\"extra_data\":{},\"managed_fields\":[],\"sync_policy\":2,\"flagged_changes\":null,\"last_drift_sync_at\":null,\"is_active\":true,\"created_at\":\"2026-09-21T11:37:05.100000\",\"updated_at\":\"2026-09-21T11:37:05.100000\"}"
+    },
+    {
+      "name": "team team-4",
+      "method": "GET",
+      "path": "/api/v1/admin/teams/team-4",
+      "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "request_headers_sha256": "aa0913ee390550a7930773da9003a55d1f9c26a11f8d69436f4ca5abd98da0cd",
+      "status": 200,
+      "headers": {
+        "content-length": "324",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "\u003cvolatile\u003e"
+      },
+      "body": "{\"id\":\"8bb2b695-56e0-580b-8a18-f4ad25c19ed6\",\"team_id\":\"team-4\",\"name\":\"Team 4\",\"description\":null,\"repo_patterns\":[],\"project_keys\":[],\"extra_data\":{},\"managed_fields\":[],\"sync_policy\":2,\"flagged_changes\":null,\"last_drift_sync_at\":null,\"is_active\":true,\"created_at\":\"2026-09-21T11:37:05\",\"updated_at\":\"2026-09-21T11:37:05\"}"
+    },
+    {
+      "name": "team team-5",
+      "method": "GET",
+      "path": "/api/v1/admin/teams/team-5",
+      "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "request_headers_sha256": "aa0913ee390550a7930773da9003a55d1f9c26a11f8d69436f4ca5abd98da0cd",
+      "status": 200,
+      "headers": {
+        "content-length": "338",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "\u003cvolatile\u003e"
+      },
+      "body": "{\"id\":\"f14cbd70-349d-52c2-8ea4-b76878020961\",\"team_id\":\"team-5\",\"name\":\"Team 5\",\"description\":null,\"repo_patterns\":[],\"project_keys\":[],\"extra_data\":{},\"managed_fields\":[],\"sync_policy\":2,\"flagged_changes\":null,\"last_drift_sync_at\":null,\"is_active\":true,\"created_at\":\"2026-09-21T11:37:05.999999\",\"updated_at\":\"2026-09-21T11:37:05.999999\"}"
+    },
+    {
+      "name": "team team-6",
+      "method": "GET",
+      "path": "/api/v1/admin/teams/team-6",
+      "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "request_headers_sha256": "aa0913ee390550a7930773da9003a55d1f9c26a11f8d69436f4ca5abd98da0cd",
+      "status": 200,
+      "headers": {
+        "content-length": "339",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "\u003cvolatile\u003e"
+      },
+      "body": "{\"id\":\"cec58e88-cbe7-5bae-a64f-69caa6fe6765\",\"team_id\":\"team-6\",\"name\":\"Team 6\",\"description\":null,\"repo_patterns\":[],\"project_keys\":[],\"extra_data\":{},\"managed_fields\":[],\"sync_policy\":2,\"flagged_changes\":null,\"last_drift_sync_at\":null,\"is_active\":false,\"created_at\":\"2026-01-02T03:04:05.050000\",\"updated_at\":\"2026-01-02T03:04:05.050000\"}"
+    },
+    {
+      "name": "clock: POST a new team",
+      "method": "POST",
+      "path": "/api/v1/admin/teams",
+      "body_sha256": "aba81e970febce3e20b65b9dba209068e6cd992d2d1488c8f17cfa93f1b269a1",
+      "request_headers_sha256": "33aac29cb07af2dfa66b633de3c7a9517a0115e09239404dcabbeebfa4c823d3",
+      "status": 200,
+      "headers": {
+        "content-length": "\u003clength of projected body\u003e",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "\u003cvolatile\u003e"
+      },
+      "body": "{\"id\":\"ff7cd37c-4e74-5034-b9a8-de828fa73440\",\"team_id\":\"written-new\",\"name\":\"Written\",\"description\":null,\"repo_patterns\":[\"acme/*\"],\"project_keys\":[\"WR\"],\"extra_data\":{},\"managed_fields\":[],\"sync_policy\":2,\"flagged_changes\":null,\"last_drift_sync_at\":null,\"is_active\":true,\"created_at\":\"\u003cnow\u003e\",\"updated_at\":\"\u003cnow\u003e\"}"
+    },
+    {
+      "name": "clock: POST over a seeded team",
+      "method": "POST",
+      "path": "/api/v1/admin/teams",
+      "body_sha256": "73f5b2d243975fc6b5710f203d31559fabbd016136c0dd58cd82972dfe38bf84",
+      "request_headers_sha256": "33aac29cb07af2dfa66b633de3c7a9517a0115e09239404dcabbeebfa4c823d3",
+      "status": 200,
+      "headers": {
+        "content-length": "\u003clength of projected body\u003e",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "\u003cvolatile\u003e"
+      },
+      "body": "{\"id\":\"34adfa20-736a-59d7-8e2e-7aea651fd32e\",\"team_id\":\"team-0\",\"name\":\"Team 0 again\",\"description\":\"d\",\"repo_patterns\":[],\"project_keys\":[],\"extra_data\":{},\"managed_fields\":[],\"sync_policy\":2,\"flagged_changes\":null,\"last_drift_sync_at\":null,\"is_active\":true,\"created_at\":\"\u003cnow\u003e\",\"updated_at\":\"\u003cnow\u003e\"}"
+    },
+    {
+      "name": "clock: PATCH a seeded team",
+      "method": "PATCH",
+      "path": "/api/v1/admin/teams/team-1",
+      "body_sha256": "decf3eadf9eea9d8b0e030d2d62880fd2034af93fc3729f32e8c6112784ee694",
+      "request_headers_sha256": "33aac29cb07af2dfa66b633de3c7a9517a0115e09239404dcabbeebfa4c823d3",
+      "status": 200,
+      "headers": {
+        "content-length": "\u003clength of projected body\u003e",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "\u003cvolatile\u003e"
+      },
+      "body": "{\"id\":\"06da9d38-f510-5652-a7ae-6641098eb2b9\",\"team_id\":\"team-1\",\"name\":\"Renamed\",\"description\":null,\"repo_patterns\":[],\"project_keys\":[\"K1\",\"K2\"],\"extra_data\":{},\"managed_fields\":[],\"sync_policy\":2,\"flagged_changes\":null,\"last_drift_sync_at\":null,\"is_active\":true,\"created_at\":\"\u003cnow\u003e\",\"updated_at\":\"\u003cnow\u003e\"}"
+    },
+    {
+      "name": "clock: PATCH with nothing to change",
+      "method": "PATCH",
+      "path": "/api/v1/admin/teams/team-2",
+      "body_sha256": "a135823e1f3518ee22848a79f5427d8cee0bfb85fbc6b4e6eda61f883c057c9e",
+      "request_headers_sha256": "33aac29cb07af2dfa66b633de3c7a9517a0115e09239404dcabbeebfa4c823d3",
+      "status": 200,
+      "headers": {
+        "content-length": "\u003clength of projected body\u003e",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "\u003cvolatile\u003e"
+      },
+      "body": "{\"id\":\"fcd331eb-602e-502b-9c65-78ce839fd7c1\",\"team_id\":\"team-2\",\"name\":\"Team 2\",\"description\":null,\"repo_patterns\":[],\"project_keys\":[],\"extra_data\":{},\"managed_fields\":[],\"sync_policy\":2,\"flagged_changes\":null,\"last_drift_sync_at\":null,\"is_active\":true,\"created_at\":\"\u003cnow\u003e\",\"updated_at\":\"\u003cnow\u003e\"}"
+    },
+    {
+      "name": "PATCH an unknown team",
+      "method": "PATCH",
+      "path": "/api/v1/admin/teams/no-such-team",
+      "body_sha256": "b7c8c243c8389b2afedea54dd06ce646675db4723d38eb8ff295658856835834",
+      "request_headers_sha256": "33aac29cb07af2dfa66b633de3c7a9517a0115e09239404dcabbeebfa4c823d3",
+      "status": 404,
+      "headers": {
+        "content-length": "27",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "\u003cvolatile\u003e"
+      },
+      "body": "{\"detail\":\"Team not found\"}"
+    },
+    {
+      "name": "POST a team without a name",
+      "method": "POST",
+      "path": "/api/v1/admin/teams",
+      "body_sha256": "ef08282a1e152db629f1bc535470052c45f5a5b4be47081e15e6db850c692c36",
+      "request_headers_sha256": "33aac29cb07af2dfa66b633de3c7a9517a0115e09239404dcabbeebfa4c823d3",
+      "status": 422,
+      "headers": {
+        "content-length": "110",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "\u003cvolatile\u003e"
+      },
+      "body": "{\"detail\":[{\"type\":\"missing\",\"loc\":[\"body\",\"name\"],\"msg\":\"Field required\",\"input\":{\"team_id\":\"written-bad\"}}]}"
+    },
+    {
+      "name": "clock: POST a new identity",
+      "method": "POST",
+      "path": "/api/v1/admin/identities",
+      "body_sha256": "db7fd313dd8633b05954fceb9ba0106ecd1b9309c8b44fd92c46a5af220a6595",
+      "request_headers_sha256": "33aac29cb07af2dfa66b633de3c7a9517a0115e09239404dcabbeebfa4c823d3",
+      "status": 200,
+      "headers": {
+        "content-length": "\u003clength of projected body\u003e",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "\u003cvolatile\u003e"
+      },
+      "body": "{\"id\":\"b7706c31-5ace-587b-9f2e-7f4192ba788d\",\"canonical_id\":\"written@example.com\",\"display_name\":\"Written\",\"email\":\"written@example.com\",\"provider_identities\":{\"github\":[\"written-gh\"]},\"team_ids\":[\"team-3\"],\"is_active\":true,\"created_at\":\"\u003cnow\u003e\",\"updated_at\":\"\u003cnow\u003e\"}"
+    },
+    {
+      "name": "clock: POST over a seeded identity",
+      "method": "POST",
+      "path": "/api/v1/admin/identities",
+      "body_sha256": "4315e93ff2bb43842b79724dbac371eb706aaabba84ec44bf160e9d5a71602bd",
+      "request_headers_sha256": "33aac29cb07af2dfa66b633de3c7a9517a0115e09239404dcabbeebfa4c823d3",
+      "status": 200,
+      "headers": {
+        "content-length": "\u003clength of projected body\u003e",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "\u003cvolatile\u003e"
+      },
+      "body": "{\"id\":\"5acd2fa0-1b58-59db-a571-79a80811b75a\",\"canonical_id\":\"user-4@example.com\",\"display_name\":\"Four\",\"email\":\"user-4@example.com\",\"provider_identities\":{},\"team_ids\":[\"team-4\",\"team-5\"],\"is_active\":true,\"created_at\":\"\u003cnow\u003e\",\"updated_at\":\"\u003cnow\u003e\"}"
+    },
+    {
+      "name": "POST an identity into an unknown team",
+      "method": "POST",
+      "path": "/api/v1/admin/identities",
+      "body_sha256": "e2cf53a2621863e3d87403038d47de167bf90a4fe227fdaf32d9004492eb93ab",
+      "request_headers_sha256": "33aac29cb07af2dfa66b633de3c7a9517a0115e09239404dcabbeebfa4c823d3",
+      "status": 404,
+      "headers": {
+        "content-length": "49",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "\u003cvolatile\u003e"
+      },
+      "body": "{\"detail\":\"Unknown team_id(s): ['no-such-team']\"}"
+    },
+    {
+      "name": "clock: written team read back",
+      "method": "GET",
+      "path": "/api/v1/admin/teams/written-new",
+      "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "request_headers_sha256": "aa0913ee390550a7930773da9003a55d1f9c26a11f8d69436f4ca5abd98da0cd",
+      "status": 200,
+      "headers": {
+        "content-length": "\u003clength of projected body\u003e",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "\u003cvolatile\u003e"
+      },
+      "body": "{\"id\":\"ff7cd37c-4e74-5034-b9a8-de828fa73440\",\"team_id\":\"written-new\",\"name\":\"Written\",\"description\":null,\"repo_patterns\":[\"acme/*\"],\"project_keys\":[\"WR\"],\"extra_data\":{},\"managed_fields\":[],\"sync_policy\":2,\"flagged_changes\":null,\"last_drift_sync_at\":null,\"is_active\":true,\"created_at\":\"\u003cnow\u003e\",\"updated_at\":\"\u003cnow\u003e\"}"
+    },
+    {
+      "name": "clock: patched team read back",
+      "method": "GET",
+      "path": "/api/v1/admin/teams/team-1",
+      "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "request_headers_sha256": "aa0913ee390550a7930773da9003a55d1f9c26a11f8d69436f4ca5abd98da0cd",
+      "status": 200,
+      "headers": {
+        "content-length": "\u003clength of projected body\u003e",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "\u003cvolatile\u003e"
+      },
+      "body": "{\"id\":\"06da9d38-f510-5652-a7ae-6641098eb2b9\",\"team_id\":\"team-1\",\"name\":\"Renamed\",\"description\":null,\"repo_patterns\":[],\"project_keys\":[\"K1\",\"K2\"],\"extra_data\":{},\"managed_fields\":[],\"sync_policy\":2,\"flagged_changes\":null,\"last_drift_sync_at\":null,\"is_active\":true,\"created_at\":\"\u003cnow\u003e\",\"updated_at\":\"\u003cnow\u003e\"}"
+    },
+    {
+      "name": "clock: identities after the writes",
+      "method": "GET",
+      "path": "/api/v1/admin/identities?active_only=false",
+      "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "request_headers_sha256": "aa0913ee390550a7930773da9003a55d1f9c26a11f8d69436f4ca5abd98da0cd",
+      "status": 200,
+      "headers": {
+        "content-length": "\u003clength of projected body\u003e",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "\u003cvolatile\u003e"
+      },
+      "body": "[{\"id\":\"9a4baac4-7592-5813-b6f9-309fe19f2766\",\"canonical_id\":\"user-0@example.com\",\"display_name\":null,\"email\":\"user-0@example.com\",\"provider_identities\":{},\"team_ids\":[\"team-0\"],\"is_active\":true,\"created_at\":\"2026-09-21T11:37:05.895620\",\"updated_at\":\"2026-09-21T11:37:05.895620\"},{\"id\":\"10681e40-69e7-5e83-8a51-23fab6a5ecb0\",\"canonical_id\":\"user-1@example.com\",\"display_name\":null,\"email\":\"user-1@example.com\",\"provider_identities\":{},\"team_ids\":[\"team-1\"],\"is_active\":true,\"created_at\":\"2026-09-21T11:37:05.895335\",\"updated_at\":\"2026-09-21T11:37:05.895335\"},{\"id\":\"a1a7aabc-40ca-59c0-b034-1206d0455a1d\",\"canonical_id\":\"user-2@example.com\",\"display_name\":null,\"email\":\"user-2@example.com\",\"provider_identities\":{},\"team_ids\":[\"team-2\"],\"is_active\":true,\"created_at\":\"2026-09-21T11:37:05.000001\",\"updated_at\":\"2026-09-21T11:37:05.000001\"},{\"id\":\"8dce629c-d3a7-53ba-b895-cd692cdf529b\",\"canonical_id\":\"user-3@example.com\",\"display_name\":null,\"email\":\"user-3@example.com\",\"provider_identities\":{},\"team_ids\":[\"team-3\"],\"is_active\":true,\"created_at\":\"2026-09-21T11:37:05.100000\",\"updated_at\":\"2026-09-21T11:37:05.100000\"},{\"id\":\"5acd2fa0-1b58-59db-a571-79a80811b75a\",\"canonical_id\":\"user-4@example.com\",\"display_name\":\"Four\",\"email\":\"user-4@example.com\",\"provider_identities\":{},\"team_ids\":[\"team-4\",\"team-5\"],\"is_active\":true,\"created_at\":\"\u003cnow\u003e\",\"updated_at\":\"\u003cnow\u003e\"},{\"id\":\"dbf7a96b-f5ed-532d-85d6-6bb377b41108\",\"canonical_id\":\"user-5@example.com\",\"display_name\":null,\"email\":\"user-5@example.com\",\"provider_identities\":{},\"team_ids\":[\"team-5\"],\"is_active\":true,\"created_at\":\"2026-09-21T11:37:05.999999\",\"updated_at\":\"2026-09-21T11:37:05.999999\"},{\"id\":\"5173a51c-5316-520b-b131-f545b2775e81\",\"canonical_id\":\"user-6@example.com\",\"display_name\":null,\"email\":\"user-6@example.com\",\"provider_identities\":{},\"team_ids\":[\"team-6\"],\"is_active\":false,\"created_at\":\"2026-01-02T03:04:05.050000\",\"updated_at\":\"2026-01-02T03:04:05.050000\"},{\"id\":\"b7706c31-5ace-587b-9f2e-7f4192ba788d\",\"canonical_id\":\"written@example.com\",\"display_name\":\"Written\",\"email\":\"written@example.com\",\"provider_identities\":{\"github\":[\"written-gh\"]},\"team_ids\":[\"team-3\"],\"is_active\":true,\"created_at\":\"\u003cnow\u003e\",\"updated_at\":\"\u003cnow\u003e\"}]"
+    }
+  ]
+}

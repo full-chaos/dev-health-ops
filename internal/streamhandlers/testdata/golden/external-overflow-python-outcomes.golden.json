@@ -1,0 +1,22 @@
+{
+  "header": {
+    "test": "TestExternalSinkOutcomesMatchFrozenPythonAgainstClickHouse",
+    "python_build": "a4847c5e93607451a0c987b314d37e02fc43ce85",
+    "producer_digest": "6e1dc97e68624398015f60caee160cceee6ae601bd434d01b8b7d5975267e137",
+    "recipe": "git worktree add --detach $DIR a4847c5e93607451a0c987b314d37e02fc43ce85 (with its .venv: uv sync --frozen --no-install-project); then from the repository root: go run ./internal/testsupport/venueoracle/goldenrecord -pkg ./internal/streamhandlers/ -test '^TestExternalSinkOutcomesMatchFrozenPythonAgainstClickHouse$' -python-root $DIR",
+    "recorded_by": "goldenrecord",
+    "blanked": {}
+  },
+  "requests": [
+    {
+      "name": "external overflow sink outcomes",
+      "method": "PYTHON",
+      "path": "program sha256 2f4b5f5d0e577b81dbec2efe03207dd3607b161705188426b3a600957e09a251 env sha256 e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "body_sha256": "110d1180413cfa2d2e1b3434db3e4f0bee1c90549ef3785dd5df3c5a70a1f78a",
+      "request_headers_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "status": 0,
+      "headers": {},
+      "body": "{\"results\":[{\"counts\":null,\"name\":\"control: pull request number 7\",\"rejections\":[],\"sink_errors\":[]},{\"counts\":null,\"name\":\"pull request number 2^63 (past int64)\",\"rejections\":[],\"sink_errors\":[[\"pull_request\",\"clickhouse_insert_failed\",\"Unable to create Python array.  This is usually caused by trying to insert None values into a ClickHouse column that is not Nullable\"]]},{\"counts\":null,\"name\":\"pull request number 2^32 (past UInt32, inside int64)\",\"rejections\":[],\"sink_errors\":[[\"pull_request\",\"clickhouse_insert_failed\",\"Unable to create Python array.  This is usually caused by trying to insert None values into a ClickHouse column that is not Nullable\"]]},{\"counts\":null,\"name\":\"pull request number -1\",\"rejections\":[[0,\"pull_request.v1\",\"invalid_field\",\"Input should be greater than or equal to 1\"]],\"sink_errors\":[]},{\"counts\":null,\"name\":\"work item storyPoints 1e1000 (float64 overflow)\",\"rejections\":[],\"sink_errors\":[]},{\"counts\":null,\"name\":\"work item storyPoints 1e308 (float64 max region)\",\"rejections\":[],\"sink_errors\":[]},{\"counts\":null,\"name\":\"two pull requests, one past int64\",\"rejections\":[],\"sink_errors\":[[\"pull_request\",\"clickhouse_insert_failed\",\"Unable to create Python array.  This is usually caused by trying to insert None values into a ClickHouse column that is not Nullable\"]]},{\"counts\":null,\"name\":\"mixed kinds, bad pull request\",\"rejections\":[],\"sink_errors\":[[\"pull_request\",\"clickhouse_insert_failed\",\"Unable to create Python array.  This is usually caused by trying to insert None values into a ClickHouse column that is not Nullable\"]]},{\"counts\":null,\"name\":\"mixed kinds, work item with a float past range (stored as inf, batch succeeds)\",\"rejections\":[],\"sink_errors\":[]},{\"counts\":null,\"name\":\"work item storyPoints 1.5 (control)\",\"rejections\":[],\"sink_errors\":[]},{\"counts\":null,\"name\":\"work item storyPoints -1e1000\",\"rejections\":[],\"sink_errors\":[]},{\"counts\":null,\"name\":\"work item storyPoints 1e-1000 (underflow)\",\"rejections\":[],\"sink_errors\":[]},{\"counts\":null,\"name\":\"work item storyPoints NaN token\",\"rejections\":[],\"sink_errors\":[]},{\"counts\":null,\"name\":\"work item storyPoints Infinity token\",\"rejections\":[],\"sink_errors\":[]},{\"counts\":null,\"name\":\"work item storyPoints integer literal of 401 digits\",\"rejections\":[[0,\"work_item.v1\",\"invalid_field\",\"Input should be a valid number\"]],\"sink_errors\":[]}],\"stored\":[\"pr=[7] wi=[]\",\"pr=[] wi=[]\",\"pr=[] wi=[]\",\"pr=[] wi=[]\",\"pr=[] wi=[inf]\",\"pr=[] wi=[1e308]\",\"pr=[] wi=[]\",\"pr=[] wi=[3]\",\"pr=[7] wi=[inf,3]\",\"pr=[] wi=[1.5]\",\"pr=[] wi=[-inf]\",\"pr=[] wi=[0]\",\"pr=[] wi=[nan]\",\"pr=[] wi=[inf]\",\"pr=[] wi=[]\"]}"
+    }
+  ]
+}

@@ -8,6 +8,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"github.com/full-chaos/dev-health-ops/internal/testsupport/goldenscan"
 	"io"
 	"os"
 	"os/exec"
@@ -1348,6 +1349,9 @@ func (g *Golden) writeCandidate(failed bool) (string, error) {
 		return "", err
 	}
 	if err := tokenShapeErr(g.spec.Path, raw); err != nil {
+		return "", err
+	}
+	if err := goldenscan.CheckGolden(g.spec.Path, raw); err != nil {
 		return "", err
 	}
 	candidate := g.spec.Path + GoldenCandidateSuffix

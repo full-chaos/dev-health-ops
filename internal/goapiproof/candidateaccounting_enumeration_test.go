@@ -197,15 +197,6 @@ func rowsString(rows []enumRow) string {
 	return "[" + strings.Join(parts, " ") + "]"
 }
 
-// TestCandidateAccounting_EnumeratedAdmissionImpliesTheInvariant runs every
-// generated baseline against every candidate of up to three rows, with and
-// without a page cut, through each duplicate shape of each route's bound
-// Options. The integration build runs the same enumeration up to four rows.
-func TestCandidateAccounting_EnumeratedAdmissionImpliesTheInvariant(t *testing.T) {
-	t.Parallel()
-	runAccountingEnumeration(t, 3)
-}
-
 // runAccountingEnumeration runs the enumeration with candidates up to
 // maxLen rows.
 func runAccountingEnumeration(t *testing.T, maxLen int) {

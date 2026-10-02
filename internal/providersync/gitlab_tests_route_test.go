@@ -3,6 +3,7 @@ package providersync
 import (
 	"context"
 	"errors"
+	"github.com/full-chaos/dev-health-ops/internal/testsupport/fakehttp"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -91,7 +92,7 @@ func TestGitLabCICDAndTestsAliasesEmitByteIdenticalSixEffects(t *testing.T) {
 	collect := func(dataset string) CompleteRouteBatch {
 		doer := &gitLabTestsRouteDoer{t: t, archive: githubTestsZip(t, map[string]string{"coverage.info": githubTestsLCOVFixture})}
 		claim := nativeTestClaim("gitlab", dataset)
-		batch, err := (GitLabTestsRouteHandler{}).Collect(context.Background(), claim, providerfoundation.Credential{}, gitLabRepositoryClient(t, doer, "https://gitlab.example"), now)
+		batch, err := (GitLabTestsRouteHandler{}).Collect(context.Background(), claim, providerfoundation.Credential{}, gitLabRepositoryClient(t, fakehttp.Client(doer), "https://gitlab.example"), now)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -153,7 +154,7 @@ func TestGitLabTestsRouteRejectsCrossScopeBeforeProviderRequests(t *testing.T) {
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			doer := &gitLabTestsRouteDoer{t: t}
-			client := gitLabRepositoryClient(t, doer, "https://gitlab.example")
+			client := gitLabRepositoryClient(t, fakehttp.Client(doer), "https://gitlab.example")
 			if test.mutateClient != nil {
 				test.mutateClient(client)
 			}
@@ -182,7 +183,7 @@ func TestGitLabTestsFailsClosedOnIncompleteAndTransientTraversal(t *testing.T) {
 			doer := &gitLabTestsRouteDoer{t: t}
 			test.configure(doer)
 			claim := nativeTestClaim("gitlab", "tests")
-			batch, err := test.handler.Collect(context.Background(), claim, providerfoundation.Credential{}, gitLabRepositoryClient(t, doer, "https://gitlab.example"), time.Now())
+			batch, err := test.handler.Collect(context.Background(), claim, providerfoundation.Credential{}, gitLabRepositoryClient(t, fakehttp.Client(doer), "https://gitlab.example"), time.Now())
 			if err == nil || (test.want != nil && !errors.Is(err, test.want)) {
 				t.Fatalf("error=%v want=%v", err, test.want)
 			}
@@ -200,7 +201,7 @@ func TestGitLabTestsFailsClosedOnMissingPipelineID(t *testing.T) {
 	}}
 	batch, err := (GitLabTestsRouteHandler{}).Collect(
 		context.Background(), nativeTestClaim("gitlab", "tests"), providerfoundation.Credential{},
-		gitLabRepositoryClient(t, doer, "https://gitlab.example"), time.Now(),
+		gitLabRepositoryClient(t, fakehttp.Client(doer), "https://gitlab.example"), time.Now(),
 	)
 	if !errors.Is(err, providerfoundation.ErrNormalizationInvalid) {
 		t.Fatalf("error=%v", err)
@@ -217,7 +218,7 @@ func TestGitLabTestsComparesSourcePrecisionBeforeStorageTruncation(t *testing.T)
 	claim.BeforeAt = &before
 	batch, err := (GitLabTestsRouteHandler{}).Collect(
 		context.Background(), claim, providerfoundation.Credential{},
-		gitLabRepositoryClient(t, doer, "https://gitlab.example"), time.Now(),
+		gitLabRepositoryClient(t, fakehttp.Client(doer), "https://gitlab.example"), time.Now(),
 	)
 	if err != nil {
 		t.Fatal(err)
@@ -232,7 +233,7 @@ func TestGitLabTestsComparesSourcePrecisionBeforeStorageTruncation(t *testing.T)
 func TestGitLabTestsArtifactTruthinessMatchesPython(t *testing.T) {
 	doer := &gitLabTestsRouteDoer{t: t, emptyArtifacts: true}
 	claim := nativeTestClaim("gitlab", "tests")
-	batch, err := (GitLabTestsRouteHandler{}).Collect(context.Background(), claim, providerfoundation.Credential{}, gitLabRepositoryClient(t, doer, "https://gitlab.example"), time.Now())
+	batch, err := (GitLabTestsRouteHandler{}).Collect(context.Background(), claim, providerfoundation.Credential{}, gitLabRepositoryClient(t, fakehttp.Client(doer), "https://gitlab.example"), time.Now())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -270,7 +271,7 @@ func TestGitLabTestsPreservesSourcePrecisionInProviderQueries(t *testing.T) {
 	claim.SinceAt, claim.BeforeAt = &since, &before
 	if _, err := (GitLabTestsRouteHandler{}).Collect(
 		context.Background(), claim, providerfoundation.Credential{},
-		gitLabRepositoryClient(t, doer, "https://gitlab.example"), time.Now(),
+		gitLabRepositoryClient(t, fakehttp.Client(doer), "https://gitlab.example"), time.Now(),
 	); err != nil {
 		t.Fatal(err)
 	}
@@ -307,7 +308,7 @@ func TestGitLabTestsAcceptsPythonSinglePageArtifactBoundary(t *testing.T) {
 	claim := nativeTestClaim("gitlab", "tests")
 	batch, err := (GitLabTestsRouteHandler{}).Collect(
 		context.Background(), claim, providerfoundation.Credential{},
-		gitLabRepositoryClient(t, doer, "https://gitlab.example"), time.Now(),
+		gitLabRepositoryClient(t, fakehttp.Client(doer), "https://gitlab.example"), time.Now(),
 	)
 	if err != nil {
 		t.Fatal(err)
@@ -442,7 +443,7 @@ func TestGitLabTestsRedirectTargetFailuresPreserveProviderClassification(t *test
 			doer := &gitLabTestsRouteDoer{t: t, redirectStatus: test.status}
 			batch, err := (GitLabTestsRouteHandler{}).Collect(
 				context.Background(), nativeTestClaim("gitlab", "tests"), providerfoundation.Credential{},
-				gitLabRepositoryClient(t, doer, "https://gitlab.example"), time.Now(),
+				gitLabRepositoryClient(t, fakehttp.Client(doer), "https://gitlab.example"), time.Now(),
 			)
 			var providerErr *providerfoundation.ProviderError
 			if !errors.As(err, &providerErr) || providerErr.Class != test.class || providerErr.StatusCode != test.status {

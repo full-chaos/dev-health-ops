@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"github.com/full-chaos/dev-health-ops/internal/testsupport/fakehttp"
 	"io"
 	"net/http"
 	"reflect"
@@ -132,7 +133,7 @@ func TestGitHubWorkItemsRouteComposesRESTSocialProjectsDerivedRowsAndUsage(t *te
 		rest:           &githubWorkItemsRESTDoer{t: t, replies: fixtures},
 		graphqlReplies: []string{`{"data":{"repository":{"pr0":{"number":52,"comments":{"nodes":[{"databaseId":9007199254740993,"body":"social","createdAt":"2026-07-23T00:00:00Z","author":{"login":"reviewer"}}],"pageInfo":{"hasNextPage":false,"endCursor":null}},"timelineItems":{"nodes":[{"__typename":"ClosedEvent","createdAt":"2026-07-24T00:00:00Z","actor":{"login":"closer"}}],"pageInfo":{"hasNextPage":false,"endCursor":null}}}}}}`},
 	}
-	client := gitHubPullRequestClient(t, doer, "https://api.github.com")
+	client := gitHubPullRequestClient(t, fakehttp.Client(doer), "https://api.github.com")
 	projectRow := githubWorkItemRow{
 		WorkItemID: "gh:Acme/API-Renamed#42", Provider: "github",
 		Title: "project wins", Type: "issue", Status: "done",
@@ -280,7 +281,7 @@ func TestGitHubWorkItemsRouteComposesRESTSocialProjectsDerivedRowsAndUsage(t *te
 				graphqlReplies: []string{test.reply},
 			}
 			metrics := providerfoundation.NewMetrics()
-			client := gitHubPullRequestClient(t, doer, "https://api.github.com")
+			client := gitHubPullRequestClient(t, fakehttp.Client(doer), "https://api.github.com")
 			client.Metrics = metrics
 			deriver := &githubWorkItemsRouteDeriver{rows: githubWorkItemsRouteDerivedRows(t)}
 			batch, err := (GitHubWorkItemsRouteHandler{
@@ -344,7 +345,7 @@ func TestGitHubWorkItemsRouteRefusesAnUnwiredProjectsCollector(t *testing.T) {
 	batch, err := (GitHubWorkItemsRouteHandler{ProjectMembershipSnapshotDiff: githubProjectV2NoopSnapshotDiffReader{}, Deriver: deriver}).Collect(
 		context.Background(), claim,
 		providerfoundation.Credential{Provider: "github", ID: claim.CredentialID},
-		gitHubPullRequestClient(t, doer, "https://api.github.com"), time.Now().UTC(),
+		gitHubPullRequestClient(t, fakehttp.Client(doer), "https://api.github.com"), time.Now().UTC(),
 	)
 	if !errors.Is(err, ErrInvalidConfiguration) {
 		t.Fatalf("error=%v want ErrInvalidConfiguration", err)
@@ -377,7 +378,7 @@ func TestGitHubWorkItemsRouteRefusesAnUnwiredProjectsCollectorWithoutTargets(t *
 	_, err := (GitHubWorkItemsRouteHandler{ProjectMembershipSnapshotDiff: githubProjectV2NoopSnapshotDiffReader{}, Deriver: deriver}).Collect(
 		context.Background(), claim,
 		providerfoundation.Credential{Provider: "github", ID: claim.CredentialID},
-		gitHubPullRequestClient(t, doer, "https://api.github.com"), time.Now().UTC(),
+		gitHubPullRequestClient(t, fakehttp.Client(doer), "https://api.github.com"), time.Now().UTC(),
 	)
 	if !errors.Is(err, ErrInvalidConfiguration) {
 		t.Fatalf("error=%v want ErrInvalidConfiguration even with no targets configured", err)
@@ -425,7 +426,7 @@ func TestGitHubWorkItemsRouteTreatsEnvironmentProjectsAsNoConfiguration(t *testi
 	batch, err := (GitHubWorkItemsRouteHandler{Projects: projects, ProjectMembershipSnapshotDiff: githubProjectV2NoopSnapshotDiffReader{}, Deriver: deriver}).Collect(
 		context.Background(), claim,
 		providerfoundation.Credential{Provider: "github", ID: claim.CredentialID},
-		gitHubPullRequestClient(t, doer, "https://api.github.com"), time.Now().UTC(),
+		gitHubPullRequestClient(t, fakehttp.Client(doer), "https://api.github.com"), time.Now().UTC(),
 	)
 	if err != nil {
 		t.Fatal(err)
@@ -464,7 +465,7 @@ func TestGitHubWorkItemsRoutePreservesOptionalSocialFailureAndPhysicalUsage(t *t
 	}).Collect(
 		context.Background(), claim,
 		providerfoundation.Credential{Provider: "github", ID: claim.CredentialID},
-		gitHubPullRequestClient(t, doer, "https://api.github.com"), time.Now().UTC(),
+		gitHubPullRequestClient(t, fakehttp.Client(doer), "https://api.github.com"), time.Now().UTC(),
 	)
 	// provider.py:369-402 logs the failed social batch and keeps normalizing
 	// every pull request with empty events/comments, so the required rows still
@@ -523,7 +524,7 @@ func TestGitHubWorkItemsRouteContinuesPastOptionalRESTFailuresAndLandsEffects(t 
 	batch, err := (GitHubWorkItemsRouteHandler{Projects: GitHubProjectV2Fetcher{}, ProjectMembershipSnapshotDiff: githubProjectV2NoopSnapshotDiffReader{}, Deriver: deriver}).Collect(
 		context.Background(), claim,
 		providerfoundation.Credential{Provider: "github", ID: claim.CredentialID},
-		gitHubPullRequestClient(t, doer, "https://api.github.com"), time.Now().UTC(),
+		gitHubPullRequestClient(t, fakehttp.Client(doer), "https://api.github.com"), time.Now().UTC(),
 	)
 	// provider.py:202-217 (milestones) and provider.py:293-301 (issue comments)
 	// both log and continue. Executed Python evidence: a milestone failure
@@ -579,7 +580,7 @@ func TestGitHubWorkItemsRouteContinuesPastUnprocessablePullRequest(t *testing.T)
 	batch, err := (GitHubWorkItemsRouteHandler{Projects: GitHubProjectV2Fetcher{}, ProjectMembershipSnapshotDiff: githubProjectV2NoopSnapshotDiffReader{}, Deriver: deriver}).Collect(
 		context.Background(), claim,
 		providerfoundation.Credential{Provider: "github", ID: claim.CredentialID},
-		gitHubPullRequestClient(t, doer, "https://api.github.com"), time.Now().UTC(),
+		gitHubPullRequestClient(t, fakehttp.Client(doer), "https://api.github.com"), time.Now().UTC(),
 	)
 	if err != nil {
 		t.Fatalf("an unprocessable pull request zeroed the batch: %v", err)
@@ -641,7 +642,7 @@ func TestGitHubWorkItemsRouteFailsClosedOnMixedOptionalAndBlockingIncomplete(t *
 	batch, err := (GitHubWorkItemsRouteHandler{Projects: GitHubProjectV2Fetcher{}, ProjectMembershipSnapshotDiff: githubProjectV2NoopSnapshotDiffReader{}, Deriver: deriver}).Collect(
 		context.Background(), claim,
 		providerfoundation.Credential{Provider: "github", ID: claim.CredentialID},
-		gitHubPullRequestClient(t, doer, "https://api.github.com"), time.Now().UTC(),
+		gitHubPullRequestClient(t, fakehttp.Client(doer), "https://api.github.com"), time.Now().UTC(),
 	)
 	if !errors.Is(err, ErrGitHubWorkItemsIncomplete) {
 		t.Fatalf("blocking entry after an optional one did not fail the unit: %v", err)
@@ -705,7 +706,7 @@ func TestGitHubWorkItemsRouteFailsClosedOnBlockingSocialCauses(t *testing.T) {
 			}).Collect(
 				context.Background(), claim,
 				providerfoundation.Credential{Provider: "github", ID: claim.CredentialID},
-				gitHubPullRequestClient(t, doer, "https://api.github.com"), time.Now().UTC(),
+				gitHubPullRequestClient(t, fakehttp.Client(doer), "https://api.github.com"), time.Now().UTC(),
 			)
 			if !errors.Is(err, ErrGitHubWorkItemsIncomplete) {
 				t.Fatalf("%s landed a batch instead of failing the unit: %v", test.wantCause, err)
@@ -751,7 +752,7 @@ func TestGitHubWorkItemsRouteFailsClosedOnRateLimitedSocialFetch(t *testing.T) {
 	batch, err := (GitHubWorkItemsRouteHandler{Projects: GitHubProjectV2Fetcher{}, ProjectMembershipSnapshotDiff: githubProjectV2NoopSnapshotDiffReader{}, Deriver: deriver}).Collect(
 		context.Background(), claim,
 		providerfoundation.Credential{Provider: "github", ID: claim.CredentialID},
-		gitHubPullRequestClient(t, doer, "https://api.github.com"), time.Now().UTC(),
+		gitHubPullRequestClient(t, fakehttp.Client(doer), "https://api.github.com"), time.Now().UTC(),
 	)
 	var providerErr *providerfoundation.ProviderError
 	if !errors.As(err, &providerErr) || providerErr.Class != providerfoundation.ErrorRateLimited {
@@ -779,7 +780,7 @@ func TestGitHubWorkItemsRouteFailsClosedOnRateLimitedIssueComments(t *testing.T)
 	batch, err := (GitHubWorkItemsRouteHandler{Projects: GitHubProjectV2Fetcher{}, ProjectMembershipSnapshotDiff: githubProjectV2NoopSnapshotDiffReader{}, Deriver: deriver}).Collect(
 		context.Background(), claim,
 		providerfoundation.Credential{Provider: "github", ID: claim.CredentialID},
-		gitHubPullRequestClient(t, doer, "https://api.github.com"), time.Now().UTC(),
+		gitHubPullRequestClient(t, fakehttp.Client(doer), "https://api.github.com"), time.Now().UTC(),
 	)
 	var providerErr *providerfoundation.ProviderError
 	if !errors.As(err, &providerErr) || providerErr.Class != providerfoundation.ErrorRateLimited {
@@ -816,7 +817,7 @@ func TestGitHubWorkItemsRouteIncompletenessSurvivesDurableCompletionEncoding(t *
 	}).Collect(
 		context.Background(), claim,
 		providerfoundation.Credential{Provider: "github", ID: claim.CredentialID},
-		gitHubPullRequestClient(t, doer, "https://api.github.com"), time.Now().UTC(),
+		gitHubPullRequestClient(t, fakehttp.Client(doer), "https://api.github.com"), time.Now().UTC(),
 	)
 	if err != nil {
 		t.Fatal(err)
@@ -853,7 +854,7 @@ func TestGitHubWorkItemsRouteFailsBeforeFetchWithoutDerivedImplementation(t *tes
 	_, err := (GitHubWorkItemsRouteHandler{}).Collect(
 		context.Background(), claim,
 		providerfoundation.Credential{Provider: "github", ID: claim.CredentialID},
-		gitHubPullRequestClient(t, doer, "https://api.github.com"), time.Now().UTC(),
+		gitHubPullRequestClient(t, fakehttp.Client(doer), "https://api.github.com"), time.Now().UTC(),
 	)
 	if !errors.Is(err, ErrGitHubWorkItemsDerivationsUnavailable) {
 		t.Fatalf("error=%v", err)
@@ -876,7 +877,7 @@ func TestGitHubWorkItemsRouteFailsBeforeFetchOnMalformedProjectsConfiguration(t 
 	}).Collect(
 		context.Background(), claim,
 		providerfoundation.Credential{Provider: "github", ID: claim.CredentialID},
-		gitHubPullRequestClient(t, doer, "https://api.github.com"), time.Now().UTC(),
+		gitHubPullRequestClient(t, fakehttp.Client(doer), "https://api.github.com"), time.Now().UTC(),
 	)
 	if !errors.Is(err, ErrInvalidConfiguration) {
 		t.Fatalf("error=%v", err)
@@ -923,7 +924,7 @@ func TestGitHubWorkItemsRouteErrorRetainsRequiredPhasePhysicalUsage(t *testing.T
 	}).Collect(
 		context.Background(), claim,
 		providerfoundation.Credential{Provider: "github", ID: claim.CredentialID},
-		gitHubPullRequestClient(t, doer, "https://api.github.com"), time.Now().UTC(),
+		gitHubPullRequestClient(t, fakehttp.Client(doer), "https://api.github.com"), time.Now().UTC(),
 	)
 	if !errors.Is(err, cause) {
 		t.Fatalf("error=%v", err)
@@ -1065,7 +1066,7 @@ func githubWorkItemsRouteCollectForTruncation(t *testing.T, normalizedAt time.Ti
 		rest:           &githubWorkItemsRESTDoer{t: t, replies: fixtures},
 		graphqlReplies: []string{`{"data":{"repository":{"pr0":{"number":52,"comments":{"nodes":[{"databaseId":9007199254740993,"body":"social","createdAt":"2026-07-23T00:00:00Z","author":{"login":"reviewer"}}],"pageInfo":{"hasNextPage":false,"endCursor":null}},"timelineItems":{"nodes":[{"__typename":"ClosedEvent","createdAt":"2026-07-24T00:00:00Z","actor":{"login":"closer"}}],"pageInfo":{"hasNextPage":false,"endCursor":null}}}}}}`},
 	}
-	client := gitHubPullRequestClient(t, doer, "https://api.github.com")
+	client := gitHubPullRequestClient(t, fakehttp.Client(doer), "https://api.github.com")
 	// The Projects policy is a stub, so these rows bypass the real normalizer
 	// (which stamps the route's already-truncated normalizedAt). Stamping them
 	// at millisecond precision here mirrors what normalizeGitHubProjectV2Item

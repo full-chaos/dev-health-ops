@@ -3,6 +3,7 @@ package providersync
 import (
 	"context"
 	"errors"
+	"github.com/full-chaos/dev-health-ops/internal/testsupport/fakehttp"
 	"io"
 	"net/http"
 	"os"
@@ -52,7 +53,7 @@ func (doer *jiraTeamCatalogFixtureDoer) Do(request *http.Request) (*http.Respons
 func jiraTeamCatalogTestClient(t *testing.T, doer providerfoundation.HTTPDoer) *providerfoundation.HTTPClient {
 	t.Helper()
 	client, err := providerfoundation.NewHTTPClient(
-		"jira", "https://jira.example.com", doer,
+		"jira", "https://jira.example.com", fakehttp.Client(doer),
 		func(*http.Request) error { return nil },
 		providerfoundation.RetryPolicy{MaxAttempts: 1, InitialWait: time.Nanosecond, MaxWait: time.Nanosecond},
 		providerfoundation.LeaseGuardFunc(func(context.Context) error { return nil }),
@@ -100,7 +101,7 @@ func TestJiraTeamCatalogCollectCountsFailedAndRetriedAttempts(t *testing.T) {
 		}
 	})
 	client, err := providerfoundation.NewHTTPClient(
-		"jira", "https://jira.example.com", doer,
+		"jira", "https://jira.example.com", fakehttp.Client(doer),
 		func(*http.Request) error { return nil },
 		providerfoundation.RetryPolicy{
 			MaxAttempts: 2, InitialWait: time.Nanosecond, MaxWait: time.Nanosecond,
@@ -161,7 +162,7 @@ func TestJiraTeamCatalogCollectSkipsOneBoardsSprint400UnderStrict(t *testing.T) 
 		},
 	}}
 	handler := JiraTeamCatalogRouteHandler{}
-	client := jiraTeamCatalogTestClient(t, doer)
+	client := jiraTeamCatalogTestClient(t, fakehttp.Client(doer))
 	credential := providerfoundation.Credential{Provider: "jira"}
 
 	batch, err := handler.CollectTeamCatalog(
@@ -203,7 +204,7 @@ func TestJiraTeamCatalogCollectResolvesSprintsWhenNothingSelectedUnderStrict(t *
 		},
 	}}
 	handler := JiraTeamCatalogRouteHandler{}
-	client := jiraTeamCatalogTestClient(t, doer)
+	client := jiraTeamCatalogTestClient(t, fakehttp.Client(doer))
 	credential := providerfoundation.Credential{Provider: "jira"}
 
 	batch, err := handler.CollectTeamCatalog(
@@ -249,7 +250,7 @@ func TestJiraTeamCatalogCollectReraisesA403SprintListingFailureUnderStrict(t *te
 		},
 	}}
 	handler := JiraTeamCatalogRouteHandler{}
-	client := jiraTeamCatalogTestClient(t, doer)
+	client := jiraTeamCatalogTestClient(t, fakehttp.Client(doer))
 	credential := providerfoundation.Credential{Provider: "jira"}
 
 	_, err := handler.CollectTeamCatalog(
@@ -280,7 +281,7 @@ func TestJiraTeamCatalogCollectReraisesABoardListing400UnderStrict(t *testing.T)
 		},
 	}}
 	handler := JiraTeamCatalogRouteHandler{}
-	client := jiraTeamCatalogTestClient(t, doer)
+	client := jiraTeamCatalogTestClient(t, fakehttp.Client(doer))
 	credential := providerfoundation.Credential{Provider: "jira"}
 
 	_, err := handler.CollectTeamCatalog(
@@ -321,7 +322,7 @@ func TestJiraTeamCatalogCollectSkipsBoardDiscoveryForNonSoftwareProjectUnderStri
 		// it is.
 	}}
 	handler := JiraTeamCatalogRouteHandler{}
-	client := jiraTeamCatalogTestClient(t, doer)
+	client := jiraTeamCatalogTestClient(t, fakehttp.Client(doer))
 	credential := providerfoundation.Credential{Provider: "jira"}
 
 	batch, err := handler.CollectTeamCatalog(
@@ -365,7 +366,7 @@ func TestJiraTeamCatalogCollectRaisesOnUnrecognizedProjectTypeUnderStrict(t *tes
 		// Deliberately no board-listing fixture -- it must never be called.
 	}}
 	handler := JiraTeamCatalogRouteHandler{}
-	client := jiraTeamCatalogTestClient(t, doer)
+	client := jiraTeamCatalogTestClient(t, fakehttp.Client(doer))
 	credential := providerfoundation.Credential{Provider: "jira"}
 
 	_, err := handler.CollectTeamCatalog(
@@ -403,7 +404,7 @@ func TestJiraTeamCatalogCollectHappyPathTeamsMembersProjects(t *testing.T) {
 		},
 	}}
 	handler := JiraTeamCatalogRouteHandler{}
-	client := jiraTeamCatalogTestClient(t, doer)
+	client := jiraTeamCatalogTestClient(t, fakehttp.Client(doer))
 	credential := providerfoundation.Credential{Provider: "jira"}
 
 	batch, err := handler.CollectTeamCatalog(
@@ -470,7 +471,7 @@ func TestJiraTeamCatalogCollectNonStrictWalkFailureSkipsCleanly(t *testing.T) {
 		jiraTeamCatalogProjectSearchURI: {status: http.StatusForbidden, body: `{}`},
 	}}
 	handler := JiraTeamCatalogRouteHandler{}
-	client := jiraTeamCatalogTestClient(t, doer)
+	client := jiraTeamCatalogTestClient(t, fakehttp.Client(doer))
 	credential := providerfoundation.Credential{Provider: "jira"}
 
 	batch, err := handler.CollectTeamCatalog(
@@ -517,7 +518,7 @@ func TestJiraTeamCatalogCollectNonStrictWalkFailureStampsRequestsOnTheSkipBatch(
 		return nil, errors.New("simulated transient transport failure")
 	})
 	client, err := providerfoundation.NewHTTPClient(
-		"jira", "https://jira.example.com", doer,
+		"jira", "https://jira.example.com", fakehttp.Client(doer),
 		func(*http.Request) error { return nil },
 		providerfoundation.RetryPolicy{MaxAttempts: 2, InitialWait: time.Nanosecond, MaxWait: time.Nanosecond},
 		providerfoundation.LeaseGuardFunc(func(context.Context) error { return nil }),
@@ -608,7 +609,7 @@ identities:
 		},
 	}}
 	handler := JiraTeamCatalogRouteHandler{}
-	client := jiraTeamCatalogTestClient(t, doer)
+	client := jiraTeamCatalogTestClient(t, fakehttp.Client(doer))
 	credential := providerfoundation.Credential{Provider: "jira"}
 
 	batch, err := handler.CollectTeamCatalog(

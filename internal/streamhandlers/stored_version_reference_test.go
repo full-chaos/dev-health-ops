@@ -6,13 +6,13 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
-	"runtime"
 	"sort"
 	"strings"
 	"testing"
 	"time"
 
 	"github.com/full-chaos/dev-health-ops/internal/streamrunner"
+	"github.com/full-chaos/dev-health-ops/internal/testsupport/moduleroot"
 	"github.com/google/uuid"
 )
 
@@ -39,7 +39,7 @@ type statementVariants struct {
 
 func loadStatementVariants(t *testing.T) statementVariants {
 	t.Helper()
-	_, filename, _, ok := runtime.Caller(0)
+	_, filename, _, ok := moduleroot.Caller(0)
 	if !ok {
 		t.Fatal("locate test")
 	}

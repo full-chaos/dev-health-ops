@@ -218,7 +218,7 @@ func (c Client) core() restcore.Core {
 func (c Client) request(ctx context.Context, target, operation, extra string, page *big.Int) (restcore.Response, error) {
 	core := c.core()
 	if core.HTTP == nil {
-		core.HTTP = &http.Client{Timeout: DefaultTimeout, CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}
+		core.HTTP = &http.Client{Timeout: DefaultTimeout} // restcore.Core.Get guards it
 	}
 	return core.Get(ctx, fmt.Sprintf("%s?%spage=%s&per_page=%d", target, extra, page.String(), perPage), operation)
 }

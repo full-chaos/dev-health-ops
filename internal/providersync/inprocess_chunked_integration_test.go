@@ -3,6 +3,7 @@
 package providersync
 
 import (
+	"github.com/full-chaos/dev-health-ops/internal/testsupport/fakehttp"
 	"testing"
 	"time"
 )
@@ -25,7 +26,7 @@ func TestRunInProcessRunsTheChunkedTestsRouteWithoutAWorker(t *testing.T) {
 		SourceExternalID: "acme/api", SourceName: "acme/api", SinceAt: &since,
 		BeforeAt: time.Date(2026, 7, 31, 23, 59, 59, 0, time.UTC), Credential: map[string]string{"token": "cli-token"},
 		Config: map[string]string{"base_url": "https://api.github.com"}, Conn: sink.Conn,
-		Doer: &githubTestsRouteDoer{t: t, archive: archive},
+		Doer: fakehttp.Client(&githubTestsRouteDoer{t: t, archive: archive}),
 	}
 	counts := func() map[string]uint64 {
 		t.Helper()

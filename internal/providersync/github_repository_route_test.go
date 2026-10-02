@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"github.com/full-chaos/dev-health-ops/internal/testsupport/fakehttp"
 	"io"
 	"net/http"
 	"net/url"
@@ -58,7 +59,7 @@ func gitHubRepositoryClient(
 ) *providerfoundation.HTTPClient {
 	t.Helper()
 	client, err := providerfoundation.NewHTTPClient(
-		"github", base, doer,
+		"github", base, fakehttp.Client(doer),
 		func(*http.Request) error { return nil },
 		providerfoundation.RetryPolicy{
 			MaxAttempts: 1, InitialWait: time.Nanosecond, MaxWait: time.Nanosecond,
@@ -96,7 +97,7 @@ func TestGitHubRepositoryRouteEmitsOneBoundedReposEffect(t *testing.T) {
 	t.Parallel()
 	now := time.Date(2026, 7, 23, 12, 30, 0, 0, time.UTC)
 	doer := &gitHubRepositoryDoer{t: t, body: gitHubRepositoryFixture}
-	client := gitHubRepositoryClient(t, doer, "https://api.github.com")
+	client := gitHubRepositoryClient(t, fakehttp.Client(doer), "https://api.github.com")
 	claim := nativeTestClaim("github", "repo-metadata")
 	batch, err := (GitHubRepositoryRouteHandler{
 		Now: func() time.Time { return now },
@@ -184,7 +185,7 @@ func TestGitHubRepositoryRouteCountsFailedAndRetriedAttempts(t *testing.T) {
 	now := time.Date(2026, 7, 23, 12, 30, 0, 0, time.UTC)
 	doer := &githubRetryOnceDoer{t: t, body: gitHubRepositoryFixture}
 	client, err := providerfoundation.NewHTTPClient(
-		"github", "https://api.github.com", doer,
+		"github", "https://api.github.com", fakehttp.Client(doer),
 		func(*http.Request) error { return nil },
 		providerfoundation.RetryPolicy{
 			MaxAttempts: 2, InitialWait: time.Nanosecond, MaxWait: time.Nanosecond,
@@ -273,7 +274,7 @@ func TestGitHubRepositoryRoutePreservesEnterpriseBasePath(t *testing.T) {
 	t.Parallel()
 	now := time.Date(2026, 7, 23, 12, 30, 0, 0, time.UTC)
 	doer := &gitHubRepositoryDoer{t: t, body: gitHubRepositoryFixture}
-	client := gitHubRepositoryClient(t, doer, "https://ghe.acme.test/api/v3")
+	client := gitHubRepositoryClient(t, fakehttp.Client(doer), "https://ghe.acme.test/api/v3")
 	batch, err := (GitHubRepositoryRouteHandler{
 		Now: func() time.Time { return now },
 	}).Collect(
@@ -300,9 +301,9 @@ func TestGitHubRepositoryRoutePreservesEnterpriseBasePath(t *testing.T) {
 func TestGitHubRepositoryRouteDefaultsBranchLikePython(t *testing.T) {
 	t.Parallel()
 	now := time.Date(2026, 7, 23, 12, 30, 0, 0, time.UTC)
-	client := gitHubRepositoryClient(t, &gitHubRepositoryDoer{
+	client := gitHubRepositoryClient(t, fakehttp.Client(&gitHubRepositoryDoer{
 		t: t, body: `{"id":4567,"full_name":"Acme/API","html_url":"https://github.com/Acme/API"}`,
-	}, "https://api.github.com")
+	}), "https://api.github.com")
 	batch, err := (GitHubRepositoryRouteHandler{
 		Now: func() time.Time { return now },
 	}).Collect(
@@ -329,7 +330,7 @@ func TestGitHubRepositoryRouteFailsClosedOnScopeAndPayloadFaults(t *testing.T) {
 	now := time.Date(2026, 7, 23, 12, 30, 0, 0, time.UTC)
 	handler := GitHubRepositoryRouteHandler{Now: func() time.Time { return now }}
 	client := gitHubRepositoryClient(
-		t, &gitHubRepositoryDoer{t: t, body: gitHubRepositoryFixture},
+		t, fakehttp.Client(&gitHubRepositoryDoer{t: t, body: gitHubRepositoryFixture}),
 		"https://api.github.com",
 	)
 	for name, claim := range map[string]Claim{
@@ -343,7 +344,7 @@ func TestGitHubRepositoryRouteFailsClosedOnScopeAndPayloadFaults(t *testing.T) {
 		}
 	}
 	malformed := gitHubRepositoryClient(
-		t, &gitHubRepositoryDoer{t: t, body: `{"id":"not-a-number"}`},
+		t, fakehttp.Client(&gitHubRepositoryDoer{t: t, body: `{"id":"not-a-number"}`}),
 		"https://api.github.com",
 	)
 	if _, err := handler.Collect(

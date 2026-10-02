@@ -10,6 +10,7 @@ import (
 	"encoding/pem"
 	"errors"
 	"fmt"
+	"github.com/full-chaos/dev-health-ops/internal/testsupport/fakehttp"
 	"io"
 	"log/slog"
 	"net/http"
@@ -273,7 +274,7 @@ func TestExecuteCountsEveryWireAttemptOnEveryExit(t *testing.T) {
 			executor := completeRouteExecutor(now, &spendingCompleteRouteHandler{
 				calls: tc.calls, batch: completeRouteFixture(t, claim),
 			}, &memoryEffectLedger{}, &memoryEffectSink{})
-			executor.Doer = doer
+			executor.Doer = fakehttp.Client(doer)
 			executor.RequestUsage = writer
 			if tc.adjust != nil {
 				tc.adjust(&executor)
@@ -317,7 +318,7 @@ func TestExecuteCountsAFailedChunkedStreamInvocation(t *testing.T) {
 		newChunkMemoryStore(), &memoryEffectSink{})
 	executor.Credentials.Repository = &trackingCompleteRouteCredentialRepository{provider: "github"}
 	executor.Credentials.Decryptor = chunkedCredentialDecryptor{}
-	executor.Doer = &scriptedDoer{replies: []scriptedReply{{status: 200}, {err: errScriptedTransport}}}
+	executor.Doer = fakehttp.Client(&scriptedDoer{replies: []scriptedReply{{status: 200}, {err: errScriptedTransport}}})
 	executor.RequestUsage = writer
 
 	result, err := executor.Execute(context.Background(), session, descriptor)
@@ -379,7 +380,7 @@ func TestRequestCountingDoerClassifiesTransportStatusAndRateLimit(t *testing.T) 
 	gitlab.Set("RateLimit-Remaining", "not-a-number")
 	gitlab.Set("RateLimit-Limit", "600")
 	gitlab.Set("Retry-After", "30")
-	doer := CountRequests(&scriptedDoer{replies: []scriptedReply{
+	doer := CountRequests(fakehttp.Client(&scriptedDoer{replies: []scriptedReply{
 		{status: 200, headers: github}, // graphql
 		{status: 429, headers: gitlab}, // graphql, trailing slash
 		{status: 200},
@@ -388,7 +389,7 @@ func TestRequestCountingDoerClassifiesTransportStatusAndRateLimit(t *testing.T) 
 		{status: 500},
 		{err: errScriptedTransport},
 		{status: 199},
-	}})
+	}}))
 	paths := []string{"/graphql", "/api/graphql/", "/v3/repos", "/v3/repos", "/v3/repos", "/v3/repos", "/v3/repos", "/graphqlx"}
 	for _, path := range paths {
 		request := (&http.Request{Method: http.MethodGet, URL: &url.URL{Scheme: "https", Host: "api.example.test", Path: path}, Header: http.Header{}}).WithContext(ctx)
@@ -426,12 +427,12 @@ func TestRequestCountingDoerCountsOnlyCleanWrites(t *testing.T) {
 	t.Parallel()
 	ledger := NewRequestLedger()
 	ctx := WithRequestLedger(context.Background(), ledger)
-	doer := CountRequests(&scriptedDoer{replies: []scriptedReply{
+	doer := CountRequests(fakehttp.Client(&scriptedDoer{replies: []scriptedReply{
 		{writeErr: errScriptedTransport},
 		{unwritten: true, err: errScriptedTransport},
 		{err: errScriptedTransport},
 		{status: 200},
-	}})
+	}}))
 	for range 4 {
 		request, err := http.NewRequestWithContext(ctx, http.MethodGet, "https://api.example.test/v1", nil)
 		if err != nil {
@@ -485,7 +486,7 @@ func TestExecuteWithoutARunnableRecorderStillReturns(t *testing.T) {
 	executor := completeRouteExecutor(now, &spendingCompleteRouteHandler{
 		calls: 1, batch: completeRouteFixture(t, claim),
 	}, &memoryEffectLedger{}, &memoryEffectSink{})
-	executor.Doer = &scriptedDoer{}
+	executor.Doer = fakehttp.Client(&scriptedDoer{})
 	executor.RequestUsage = writer
 	executor.HeartbeatInterval = 0
 	descriptor, _ := Descriptor("launchdarkly", "feature-flags")
@@ -548,7 +549,7 @@ func TestExecuteCountsTokenExchangesSentThroughTheRouteClient(t *testing.T) {
 			executor.Credentials.Decryptor = fixedCredentialDecryptor{plaintext: tc.plaintext}
 			executor.BudgetLimits = map[CostClass]int{session.Claim.CostClass: 1}
 			doer := &scriptedDoer{replies: []scriptedReply{{status: 200, body: tc.token}, {status: 200}}}
-			executor.Doer = doer
+			executor.Doer = fakehttp.Client(doer)
 			sink := &memoryRequestUsageSink{}
 			writer, _ := newTestRequestUsageWriter(t, sink)
 			executor.RequestUsage = writer
@@ -595,9 +596,9 @@ func TestExecuteCountsACredentialRefreshSentOnItsOwnDoer(t *testing.T) {
 	executor := completeRouteExecutor(now, &spendingCompleteRouteHandler{
 		calls: 1, batch: completeRouteFixture(t, claim),
 	}, &memoryEffectLedger{}, &memoryEffectSink{})
-	executor.Credentials.Hydrator = refreshingCredentialHydrator{doer: CountRequests(refresh)}
+	executor.Credentials.Hydrator = refreshingCredentialHydrator{doer: CountRequests(fakehttp.Client(refresh))}
 	route := &scriptedDoer{}
-	executor.Doer = route
+	executor.Doer = fakehttp.Client(route)
 	sink := &memoryRequestUsageSink{}
 	writer, _ := newTestRequestUsageWriter(t, sink)
 	executor.RequestUsage = writer
@@ -899,7 +900,7 @@ func TestManyExecutionsShareOneWriter(t *testing.T) {
 			executor := completeRouteExecutor(now, &spendingCompleteRouteHandler{
 				calls: 3, batch: completeRouteFixture(t, claim),
 			}, &memoryEffectLedger{}, &memoryEffectSink{})
-			executor.Doer = &scriptedDoer{}
+			executor.Doer = fakehttp.Client(&scriptedDoer{})
 			executor.RequestUsage = writer
 			if _, err := executor.Execute(context.Background(), session, descriptor); err != nil {
 				t.Error(err)
@@ -942,7 +943,7 @@ func TestARecoveredRoutePanicStillHandsOffItsSpend(t *testing.T) {
 	sink := &memoryRequestUsageSink{}
 	writer, _ := newTestRequestUsageWriter(t, sink)
 	executor := completeRouteExecutor(now, panickingCompleteRouteHandler{calls: 2}, &memoryEffectLedger{}, &memoryEffectSink{})
-	executor.Doer = &scriptedDoer{}
+	executor.Doer = fakehttp.Client(&scriptedDoer{})
 	executor.RequestUsage = writer
 	descriptor, _ := Descriptor("launchdarkly", "feature-flags")
 	recovered := func() (value any) {
@@ -1040,7 +1041,7 @@ func TestALateWriteReportIsHandedOffAfterTheExecutionReturned(t *testing.T) {
 	executor := completeRouteExecutor(now, &spendingCompleteRouteHandler{
 		calls: 1, batch: completeRouteFixture(t, claim),
 	}, &memoryEffectLedger{}, &memoryEffectSink{})
-	executor.Doer = doer
+	executor.Doer = fakehttp.Client(doer)
 	executor.RequestUsage = writer
 	descriptor, _ := Descriptor("launchdarkly", "feature-flags")
 	result, err := executor.Execute(context.Background(), session, descriptor)

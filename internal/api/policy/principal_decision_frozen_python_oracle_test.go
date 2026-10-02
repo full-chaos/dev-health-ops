@@ -3,7 +3,6 @@ package policy_test
 import (
 	"encoding/json"
 	"path/filepath"
-	"runtime"
 	"slices"
 	"testing"
 	"time"
@@ -12,6 +11,7 @@ import (
 
 	"github.com/full-chaos/dev-health-ops/internal/api/policy"
 	"github.com/full-chaos/dev-health-ops/internal/auth/edgetoken"
+	"github.com/full-chaos/dev-health-ops/internal/testsupport/moduleroot"
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/programoracle"
 )
 
@@ -235,7 +235,7 @@ func principalDecisionTokens(t *testing.T, now time.Time) map[string]string {
 // its own against the clock of the recording), so the times relative to now
 // are the same and the decision must be too.
 func TestPrincipalDecisionsMatchFrozenPython(t *testing.T) {
-	_, file, _, ok := runtime.Caller(0)
+	_, file, _, ok := moduleroot.Caller(0)
 	if !ok {
 		t.Fatal("cannot locate the test source")
 	}

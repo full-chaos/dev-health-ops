@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"github.com/full-chaos/dev-health-ops/internal/testsupport/fakehttp"
 	"io"
 	"net/http"
 	"strconv"
@@ -98,7 +99,7 @@ func gitHubPullRequestClient(
 ) *providerfoundation.HTTPClient {
 	t.Helper()
 	client, err := providerfoundation.NewHTTPClient(
-		"github", base, doer,
+		"github", base, fakehttp.Client(doer),
 		func(*http.Request) error { return nil },
 		providerfoundation.RetryPolicy{
 			MaxAttempts: 1, InitialWait: time.Nanosecond, MaxWait: time.Nanosecond,
@@ -126,7 +127,7 @@ func TestGitHubPullRequestRouteEmitsOneBoundedEffect(t *testing.T) {
 	t.Parallel()
 	now := time.Date(2026, 7, 23, 12, 30, 0, 0, time.UTC)
 	doer := &gitHubPullRequestDoer{t: t, bodies: defaultGitHubPullRequestFixtures()}
-	client := gitHubPullRequestClient(t, doer, "https://api.github.com")
+	client := gitHubPullRequestClient(t, fakehttp.Client(doer), "https://api.github.com")
 	claim := nativeTestClaim("github", "prs")
 
 	batch, err := (GitHubPullRequestRouteHandler{
@@ -230,7 +231,7 @@ func TestGitHubPullRequestRouteCountsFailedAndRetriedAttempts(t *testing.T) {
 		failPath:              "/repos/acme/api/pulls/42",
 	}
 	client, err := providerfoundation.NewHTTPClient(
-		"github", "https://api.github.com", doer,
+		"github", "https://api.github.com", fakehttp.Client(doer),
 		func(*http.Request) error { return nil },
 		providerfoundation.RetryPolicy{
 			MaxAttempts: 2, InitialWait: time.Nanosecond, MaxWait: time.Nanosecond,
@@ -262,7 +263,7 @@ func TestGitHubPullRequestRouteAppliesWindowFilter(t *testing.T) {
 	t.Parallel()
 	now := time.Date(2026, 7, 23, 12, 30, 0, 0, time.UTC)
 	doer := &gitHubPullRequestDoer{t: t, bodies: defaultGitHubPullRequestFixtures()}
-	client := gitHubPullRequestClient(t, doer, "https://api.github.com")
+	client := gitHubPullRequestClient(t, fakehttp.Client(doer), "https://api.github.com")
 	batch, err := (GitHubPullRequestRouteHandler{
 		Now: func() time.Time { return now },
 	}).Collect(
@@ -292,7 +293,7 @@ func TestGitHubPullRequestRouteFailsClosedOnPaginationCap(t *testing.T) {
 	t.Parallel()
 	now := time.Date(2026, 7, 23, 12, 30, 0, 0, time.UTC)
 	doer := &gitHubPullRequestPagingDoer{t: t, totalPages: 3}
-	client := gitHubPullRequestClient(t, doer, "https://api.github.com")
+	client := gitHubPullRequestClient(t, fakehttp.Client(doer), "https://api.github.com")
 	batch, err := (GitHubPullRequestRouteHandler{
 		Now: func() time.Time { return now }, MaxPages: 2,
 	}).Collect(
@@ -307,7 +308,7 @@ func TestGitHubPullRequestRouteFailsClosedOnPaginationCap(t *testing.T) {
 	}
 	// Uncapped (MaxPages covers every page) must succeed normally.
 	uncappedDoer := &gitHubPullRequestPagingDoer{t: t, totalPages: 3}
-	uncappedClient := gitHubPullRequestClient(t, uncappedDoer, "https://api.github.com")
+	uncappedClient := gitHubPullRequestClient(t, fakehttp.Client(uncappedDoer), "https://api.github.com")
 	if _, err := (GitHubPullRequestRouteHandler{
 		Now: func() time.Time { return now }, MaxPages: 5,
 	}).Collect(
@@ -331,7 +332,7 @@ func TestGitHubPullRequestRouteStopsPaginatingAtTheSinceBoundary(t *testing.T) {
 	t.Parallel()
 	now := time.Date(2026, 7, 23, 12, 30, 0, 0, time.UTC)
 	doer := &gitHubPullRequestDeepHistoryDoer{t: t, ancientPages: 2}
-	client := gitHubPullRequestClient(t, doer, "https://api.github.com")
+	client := gitHubPullRequestClient(t, fakehttp.Client(doer), "https://api.github.com")
 	claim := nativeTestClaim("github", "prs") // since=2026-07-01, before=2026-07-31
 	batch, err := (GitHubPullRequestRouteHandler{
 		Now: func() time.Time { return now }, MaxPages: 2,
@@ -523,7 +524,7 @@ func TestGitHubPullRequestRouteFailsClosedOnScopeAndPayloadFaults(t *testing.T) 
 	now := time.Date(2026, 7, 23, 12, 30, 0, 0, time.UTC)
 	handler := GitHubPullRequestRouteHandler{Now: func() time.Time { return now }}
 	client := gitHubPullRequestClient(
-		t, &gitHubPullRequestDoer{t: t, bodies: defaultGitHubPullRequestFixtures()},
+		t, fakehttp.Client(&gitHubPullRequestDoer{t: t, bodies: defaultGitHubPullRequestFixtures()}),
 		"https://api.github.com",
 	)
 	for name, claim := range map[string]Claim{
@@ -537,12 +538,12 @@ func TestGitHubPullRequestRouteFailsClosedOnScopeAndPayloadFaults(t *testing.T) 
 		}
 	}
 
-	malformedList := gitHubPullRequestClient(t, &gitHubPullRequestDoer{
+	malformedList := gitHubPullRequestClient(t, fakehttp.Client(&gitHubPullRequestDoer{
 		t: t, bodies: map[string]string{
 			"/repos/acme/api":       gitHubPullRequestRepoFixture,
 			"/repos/acme/api/pulls": `[{"number":"not-a-number"}]`,
 		},
-	}, "https://api.github.com")
+	}), "https://api.github.com")
 	if _, err := handler.Collect(
 		context.Background(), nativeTestClaim("github", "prs"),
 		providerfoundation.Credential{}, malformedList, now,
@@ -550,12 +551,12 @@ func TestGitHubPullRequestRouteFailsClosedOnScopeAndPayloadFaults(t *testing.T) 
 		t.Error("malformed PR list item was accepted")
 	}
 
-	malformedRepo := gitHubPullRequestClient(t, &gitHubPullRequestDoer{
+	malformedRepo := gitHubPullRequestClient(t, fakehttp.Client(&gitHubPullRequestDoer{
 		t: t, bodies: map[string]string{
 			"/repos/acme/api":       `{"id":"not-a-number"}`,
 			"/repos/acme/api/pulls": `[]`,
 		},
-	}, "https://api.github.com")
+	}), "https://api.github.com")
 	if _, err := handler.Collect(
 		context.Background(), nativeTestClaim("github", "prs"),
 		providerfoundation.Credential{}, malformedRepo, now,
@@ -571,12 +572,12 @@ func TestGitHubPullRequestRouteFailsClosedOnScopeAndPayloadFaults(t *testing.T) 
 	// write PRs under a repo_id nothing else in the system would derive --
 	// this test previously blessed exactly that divergence and is now
 	// inverted to require the fail-closed behavior.
-	noFullName := gitHubPullRequestClient(t, &gitHubPullRequestDoer{
+	noFullName := gitHubPullRequestClient(t, fakehttp.Client(&gitHubPullRequestDoer{
 		t: t, bodies: map[string]string{
 			"/repos/acme/api":       `{"id":4567}`,
 			"/repos/acme/api/pulls": `[]`,
 		},
-	}, "https://api.github.com")
+	}), "https://api.github.com")
 	if _, err := handler.Collect(
 		context.Background(), nativeTestClaim("github", "prs"),
 		providerfoundation.Credential{}, noFullName, now,
@@ -598,7 +599,7 @@ func TestGitHubPullRequestRoutePreservesEnterpriseBasePath(t *testing.T) {
 		"/api/v3/repos/acme/api/pulls":    gitHubPullRequestListFixture,
 		"/api/v3/repos/acme/api/pulls/42": gitHubPullRequestDetailFixture42,
 	}}
-	client := gitHubPullRequestClient(t, doer, "https://ghe.acme.test/api/v3")
+	client := gitHubPullRequestClient(t, fakehttp.Client(doer), "https://ghe.acme.test/api/v3")
 	batch, err := (GitHubPullRequestRouteHandler{
 		Now: func() time.Time { return now },
 	}).Collect(
@@ -727,7 +728,7 @@ func TestGitHubPullRequestRouteTruncatesNormalizedAtToMilliseconds(t *testing.T)
 	t.Parallel()
 	subMillisecondNow := time.Date(2026, 7, 23, 12, 30, 0, 123_456_789, time.UTC)
 	doer := &gitHubPullRequestDoer{t: t, bodies: defaultGitHubPullRequestFixtures()}
-	client := gitHubPullRequestClient(t, doer, "https://api.github.com")
+	client := gitHubPullRequestClient(t, fakehttp.Client(doer), "https://api.github.com")
 	batch, err := (GitHubPullRequestRouteHandler{
 		Now: func() time.Time { return subMillisecondNow },
 	}).Collect(

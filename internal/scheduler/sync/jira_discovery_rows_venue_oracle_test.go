@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"github.com/full-chaos/dev-health-ops/internal/testsupport/fakehttp"
 	"strings"
 	"testing"
 	"time"
@@ -99,7 +100,7 @@ func TestJiraDiscoveryRowsMatchFrozenPython(t *testing.T) {
 		if credential, err = credential.WithEphemeralSecret("base_url", secrets.NewValue("https://example.atlassian.net")); err != nil {
 			t.Fatal(err)
 		}
-		service := &NativeSourceDiscoveryService{doer: doer, retry: fastRetry(), telemetry: newSourceDiscoveryTelemetry(), now: time.Now}
+		service := &NativeSourceDiscoveryService{doer: fakehttp.Client(doer), retry: fastRetry(), telemetry: newSourceDiscoveryTelemetry(), now: time.Now}
 		sources, err := service.discoverJira(context.Background(), credential, c.Options)
 		if err != nil {
 			t.Fatalf("case %d: %v", index, err)

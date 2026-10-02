@@ -4,10 +4,10 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
-	"runtime"
 	"strings"
 	"testing"
 
+	"github.com/full-chaos/dev-health-ops/internal/testsupport/moduleroot"
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/programoracle"
 )
 
@@ -31,7 +31,7 @@ var producerProbeGoldens = programoracle.Set{
 // tests hold the whole-row comparison of Go with Python (CHAOS-7338); this test pins that the recorded Python
 // producer answer itself is complete, so the pair cases it feeds are not empty.
 func TestLinearWorkItemsOraclePrepMatchesFrozenProducerProbe(t *testing.T) {
-	_, currentFile, _, _ := runtime.Caller(0)
+	_, currentFile, _, _ := moduleroot.Caller(0)
 	packageDir := filepath.Dir(currentFile)
 	root := filepath.Clean(filepath.Join(packageDir, "..", ".."))
 	script, err := os.ReadFile(filepath.Join(packageDir, "testdata", "linear_work_items_oracle_prep.py"))

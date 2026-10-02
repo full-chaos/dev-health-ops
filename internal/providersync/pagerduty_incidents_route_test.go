@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"github.com/full-chaos/dev-health-ops/internal/testsupport/fakehttp"
 	"io"
 	"net/http"
 	"strings"
@@ -48,7 +49,7 @@ func TestPagerDutyIncidentFamilyRouteNormalizesIncidentAndPreservesCreatedCursor
 	doer := &pagerDutyIncidentFamilyDoer{t: t, responses: []pagerDutyIncidentFamilyResponse{{
 		body: `{"incidents":[{"id":"PI1","type":"incident","incident_number":42,"title":"Database outage","status":"resolved","urgency":"high","created_at":"2026-07-17T12:00:00.123456Z","updated_at":"2026-07-18T10:00:00.654321Z","resolved_at":"2026-07-18T09:00:00Z","service":{"id":"PSVC1"},"priority":{"id":"P1","summary":"P1"},"html_url":"https://acme.pagerduty.com/incidents/PI1"}],"more":false}`,
 	}}}
-	client := pagerDutyIncidentFamilyTestClient(t, doer)
+	client := pagerDutyIncidentFamilyTestClient(t, fakehttp.Client(doer))
 	claim := nativeTestClaim("pagerduty", "incidents")
 	credential := providerfoundation.Credential{Provider: "pagerduty", Config: map[string]string{"subdomain": " Acme "}}
 	normalizedAt := time.Date(2026, 7, 19, 12, 0, 0, 987654321, time.FixedZone("PDT", -7*60*60))
@@ -97,7 +98,7 @@ func TestPagerDutyIncidentFamilyRouteCapsChildrenAndClampsToEarliestUndrainedInc
 		{body: `{"alerts":[{"id":"A-OLD-1","status":"triggered","created_at":"2026-07-10T12:00:00Z"},{"id":"A-OLD-2","status":"triggered","created_at":"2026-07-10T12:01:00Z"}],"more":true}`},
 		{body: `{"alerts":[],"more":false}`},
 	}}
-	client := pagerDutyIncidentFamilyTestClient(t, doer)
+	client := pagerDutyIncidentFamilyTestClient(t, fakehttp.Client(doer))
 	claim := nativeTestClaim("pagerduty", "incident-alerts")
 	claim.DatasetOptions = map[string]any{"enrichment_cap": 1}
 	batch, err := (PagerDutyIncidentFamilyRouteHandler{Entitlement: allowIncidentEntitlement}).Collect(
@@ -135,7 +136,7 @@ func TestPagerDutyIncidentFamilyRouteKeepsSinceBoundaryInclusive(t *testing.T) {
 	batch, err := (PagerDutyIncidentFamilyRouteHandler{Entitlement: allowIncidentEntitlement}).Collect(
 		context.Background(), claim,
 		providerfoundation.Credential{Provider: "pagerduty", Config: map[string]string{"subdomain": "acme"}},
-		pagerDutyIncidentFamilyTestClient(t, doer), time.Date(2026, 7, 12, 12, 0, 0, 0, time.UTC),
+		pagerDutyIncidentFamilyTestClient(t, fakehttp.Client(doer)), time.Date(2026, 7, 12, 12, 0, 0, 0, time.UTC),
 	)
 	if err != nil {
 		t.Fatal(err)
@@ -158,7 +159,7 @@ func TestPagerDutyIncidentFamilyRouteDoesNotPaginateNotes(t *testing.T) {
 	batch, err := (PagerDutyIncidentFamilyRouteHandler{Entitlement: allowIncidentEntitlement}).Collect(
 		context.Background(), claim,
 		providerfoundation.Credential{Provider: "pagerduty", Config: map[string]string{"subdomain": "acme"}},
-		pagerDutyIncidentFamilyTestClient(t, doer), time.Date(2026, 7, 12, 12, 0, 0, 0, time.UTC),
+		pagerDutyIncidentFamilyTestClient(t, fakehttp.Client(doer)), time.Date(2026, 7, 12, 12, 0, 0, 0, time.UTC),
 	)
 	if err != nil {
 		t.Fatal(err)
@@ -178,7 +179,7 @@ func TestPagerDutyIncidentFamilyRouteDisabledEnrichmentMakesNoProviderCall(t *te
 	batch, err := (PagerDutyIncidentFamilyRouteHandler{Entitlement: allowIncidentEntitlement}).Collect(
 		context.Background(), claim,
 		providerfoundation.Credential{Provider: "pagerduty", Config: map[string]string{"subdomain": "acme"}},
-		pagerDutyIncidentFamilyTestClient(t, doer), time.Date(2026, 7, 12, 12, 0, 0, 0, time.UTC),
+		pagerDutyIncidentFamilyTestClient(t, fakehttp.Client(doer)), time.Date(2026, 7, 12, 12, 0, 0, 0, time.UTC),
 	)
 	if err != nil {
 		t.Fatal(err)
@@ -197,7 +198,7 @@ func TestPagerDutyIncidentFamilyRouteZeroCapReadsParentsWithoutChildRequests(t *
 	batch, err := (PagerDutyIncidentFamilyRouteHandler{Entitlement: allowIncidentEntitlement}).Collect(
 		context.Background(), claim,
 		providerfoundation.Credential{Provider: "pagerduty", Config: map[string]string{"subdomain": "acme"}},
-		pagerDutyIncidentFamilyTestClient(t, doer), time.Date(2026, 7, 12, 12, 0, 0, 0, time.UTC),
+		pagerDutyIncidentFamilyTestClient(t, fakehttp.Client(doer)), time.Date(2026, 7, 12, 12, 0, 0, 0, time.UTC),
 	)
 	if err != nil {
 		t.Fatal(err)
@@ -216,7 +217,7 @@ func TestPagerDutyIncidentFamilyRouteRejectsPaginationCap(t *testing.T) {
 	_, err := (PagerDutyIncidentFamilyRouteHandler{Entitlement: allowIncidentEntitlement, MaxPages: 1}).Collect(
 		context.Background(), claim,
 		providerfoundation.Credential{Provider: "pagerduty", Config: map[string]string{"subdomain": "acme"}},
-		pagerDutyIncidentFamilyTestClient(t, doer), time.Date(2026, 7, 12, 12, 0, 0, 0, time.UTC),
+		pagerDutyIncidentFamilyTestClient(t, fakehttp.Client(doer)), time.Date(2026, 7, 12, 12, 0, 0, 0, time.UTC),
 	)
 	if !errors.Is(err, ErrPaginationCapExceeded) {
 		t.Fatalf("error=%v", err)
@@ -226,7 +227,7 @@ func TestPagerDutyIncidentFamilyRouteRejectsPaginationCap(t *testing.T) {
 func pagerDutyIncidentFamilyTestClient(t *testing.T, doer providerfoundation.HTTPDoer) *providerfoundation.HTTPClient {
 	t.Helper()
 	client, err := providerfoundation.NewHTTPClient(
-		"pagerduty", "https://api.pagerduty.com", doer,
+		"pagerduty", "https://api.pagerduty.com", fakehttp.Client(doer),
 		func(*http.Request) error { return nil },
 		providerfoundation.RetryPolicy{MaxAttempts: 1, InitialWait: time.Nanosecond, MaxWait: time.Nanosecond},
 		providerfoundation.LeaseGuardFunc(func(context.Context) error { return nil }),
@@ -266,7 +267,7 @@ func TestPagerDutyIncidentsRouteAdvancesWatermarkOnAnEmptyWindow(t *testing.T) {
 	doer := &pagerDutyIncidentFamilyDoer{t: t, responses: []pagerDutyIncidentFamilyResponse{{
 		body: `{"incidents":[],"more":false}`,
 	}}}
-	client := pagerDutyIncidentFamilyTestClient(t, doer)
+	client := pagerDutyIncidentFamilyTestClient(t, fakehttp.Client(doer))
 	claim := nativeTestClaim("pagerduty", "incidents")
 	credential := providerfoundation.Credential{Provider: "pagerduty", Config: map[string]string{"subdomain": "acme"}}
 	batch, err := (PagerDutyIncidentFamilyRouteHandler{Entitlement: allowIncidentEntitlement}).Collect(

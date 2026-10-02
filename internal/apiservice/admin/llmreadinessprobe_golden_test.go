@@ -13,11 +13,11 @@ import (
 	"net/http/httptest"
 	"os/exec"
 	"path/filepath"
-	"runtime"
 	"strings"
 	"sync/atomic"
 	"testing"
 
+	"github.com/full-chaos/dev-health-ops/internal/testsupport/moduleroot"
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/pyoracle"
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/venueoracle"
 )
@@ -99,7 +99,7 @@ type readinessAnswer struct {
 // answers to an older contract; the Go plane's "ready" scenarios still fail if
 // the Go request and the constants disagree.
 func TestReadinessProbeMatchesTheFrozenPythonProbe(t *testing.T) {
-	_, currentFile, _, _ := runtime.Caller(0)
+	_, currentFile, _, _ := moduleroot.Caller(0)
 	repoRoot := filepath.Clean(filepath.Join(filepath.Dir(currentFile), "..", "..", ".."))
 	golden := venueoracle.OpenGolden(t, venueoracle.GoldenSpec{
 		Path:        "testdata/admin/llm_readiness_probe.json",

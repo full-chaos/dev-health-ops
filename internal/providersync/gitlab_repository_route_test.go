@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"github.com/full-chaos/dev-health-ops/internal/testsupport/fakehttp"
 	"io"
 	"net/http"
 	"strings"
@@ -47,7 +48,7 @@ func gitLabRepositoryClient(
 ) *providerfoundation.HTTPClient {
 	t.Helper()
 	client, err := providerfoundation.NewHTTPClient(
-		"gitlab", base, doer,
+		"gitlab", base, fakehttp.Client(doer),
 		func(*http.Request) error { return nil },
 		providerfoundation.RetryPolicy{
 			MaxAttempts: 1, InitialWait: time.Nanosecond, MaxWait: time.Nanosecond,
@@ -67,7 +68,7 @@ func TestGitLabRepositoryRouteEmitsCompleteReposEffect(t *testing.T) {
 	claim := nativeTestClaim("gitlab", "repo-metadata")
 	batch, err := (GitLabRepositoryRouteHandler{}).Collect(
 		context.Background(), claim, providerfoundation.Credential{},
-		gitLabRepositoryClient(t, doer, "https://GITLAB.example:443"), now,
+		gitLabRepositoryClient(t, fakehttp.Client(doer), "https://GITLAB.example:443"), now,
 	)
 	if err != nil {
 		t.Fatal(err)
@@ -144,7 +145,7 @@ func TestGitLabRepositoryRouteCountsFailedAndRetriedAttempts(t *testing.T) {
 	now := time.Date(2026, 7, 23, 12, 30, 0, 0, time.UTC)
 	doer := &gitlabRetryOnceDoer{t: t, body: gitLabRepositoryFixture}
 	client, err := providerfoundation.NewHTTPClient(
-		"gitlab", "https://gitlab.example", doer,
+		"gitlab", "https://gitlab.example", fakehttp.Client(doer),
 		func(*http.Request) error { return nil },
 		providerfoundation.RetryPolicy{
 			MaxAttempts: 2, InitialWait: time.Nanosecond, MaxWait: time.Nanosecond,
@@ -176,7 +177,7 @@ func TestGitLabRepositoryRoutePreservesSelfManagedInstancePort(t *testing.T) {
 	batch, err := (GitLabRepositoryRouteHandler{}).Collect(
 		context.Background(), nativeTestClaim("gitlab", "repo-metadata"),
 		providerfoundation.Credential{},
-		gitLabRepositoryClient(t, doer, "https://gitlab.example:8443/root"), now,
+		gitLabRepositoryClient(t, fakehttp.Client(doer), "https://gitlab.example:8443/root"), now,
 	)
 	if err != nil {
 		t.Fatal(err)
@@ -196,9 +197,9 @@ func TestGitLabRepositoryRoutePreservesSelfManagedInstancePort(t *testing.T) {
 func TestGitLabRepositoryRouteFailsClosedOnInvalidScopeAndPayload(t *testing.T) {
 	t.Parallel()
 	now := time.Date(2026, 7, 23, 12, 30, 0, 0, time.UTC)
-	client := gitLabRepositoryClient(t, &gitLabRepositoryDoer{
+	client := gitLabRepositoryClient(t, fakehttp.Client(&gitLabRepositoryDoer{
 		t: t, body: gitLabRepositoryFixture,
-	}, "https://gitlab.example")
+	}), "https://gitlab.example")
 	for name, claim := range map[string]Claim{
 		"wrong provider": nativeTestClaim("github", "repo-metadata"),
 		"wrong dataset":  nativeTestClaim("gitlab", "commits"),
@@ -216,18 +217,18 @@ func TestGitLabRepositoryRouteFailsClosedOnInvalidScopeAndPayload(t *testing.T) 
 			}
 		})
 	}
-	malformed := gitLabRepositoryClient(t, &gitLabRepositoryDoer{
+	malformed := gitLabRepositoryClient(t, fakehttp.Client(&gitLabRepositoryDoer{
 		t: t, body: `{"id":"not-a-number","path_with_namespace":"Acme/API"}`,
-	}, "https://gitlab.example")
+	}), "https://gitlab.example")
 	if _, err := (GitLabRepositoryRouteHandler{}).Collect(
 		context.Background(), nativeTestClaim("gitlab", "repo-metadata"),
 		providerfoundation.Credential{}, malformed, now,
 	); err == nil {
 		t.Fatal("malformed project payload was accepted")
 	}
-	mismatched := gitLabRepositoryClient(t, &gitLabRepositoryDoer{
+	mismatched := gitLabRepositoryClient(t, fakehttp.Client(&gitLabRepositoryDoer{
 		t: t, body: `{"id":124,"path_with_namespace":"Acme/API"}`,
-	}, "https://gitlab.example")
+	}), "https://gitlab.example")
 	if _, err := (GitLabRepositoryRouteHandler{}).Collect(
 		context.Background(), nativeTestClaim("gitlab", "repo-metadata"),
 		providerfoundation.Credential{}, mismatched, now,

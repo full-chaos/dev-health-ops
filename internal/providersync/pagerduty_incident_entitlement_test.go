@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"github.com/full-chaos/dev-health-ops/internal/testsupport/fakehttp"
 	"net/http"
 	"strings"
 	"testing"
@@ -31,7 +32,7 @@ func pagerDutyEntitlementTestClient(
 	t *testing.T, doer providerfoundation.HTTPDoer, metrics *providerfoundation.Metrics,
 ) *providerfoundation.HTTPClient {
 	t.Helper()
-	client := pagerDutyIncidentFamilyTestClient(t, doer)
+	client := pagerDutyIncidentFamilyTestClient(t, fakehttp.Client(doer))
 	client.Metrics = metrics
 	return client
 }
@@ -88,7 +89,7 @@ func TestPagerDutyIncidentFamilyRouteRejectsDisabledEntitlementBeforeProviderFet
 	t.Parallel()
 	doer := &pagerDutyEntitlementDoer{t: t}
 	metrics := providerfoundation.NewMetrics()
-	client := pagerDutyEntitlementTestClient(t, doer, metrics)
+	client := pagerDutyEntitlementTestClient(t, fakehttp.Client(doer), metrics)
 	claim := nativeTestClaim("pagerduty", "incidents")
 	checks := 0
 	batch, err := (PagerDutyIncidentFamilyRouteHandler{
@@ -115,7 +116,7 @@ func TestPagerDutyIncidentFamilyEffectsRecheckRevokedEntitlementAtClickHouseWrit
 		body: `{"incidents":[{"id":"PI1","title":"Database outage","status":"resolved","created_at":"2026-07-17T12:00:00Z","updated_at":"2026-07-18T10:00:00Z"}],"more":false}`,
 	}}}
 	metrics := providerfoundation.NewMetrics()
-	client := pagerDutyEntitlementTestClient(t, doer, metrics)
+	client := pagerDutyEntitlementTestClient(t, fakehttp.Client(doer), metrics)
 	claim := nativeTestClaim("pagerduty", "incidents")
 	checks, revoked := 0, false
 	entitlement := incidentEntitlementFunc(func(context.Context, string) error {
@@ -199,7 +200,7 @@ func TestEveryPagerDutyRouteRechecksEntitlementBeforeProviderFetch(t *testing.T)
 			at := time.Date(2026, 7, 19, 12, 0, 0, 0, time.UTC)
 			doer := &pagerDutyEntitlementDoer{t: t}
 			metrics := providerfoundation.NewMetrics()
-			client := pagerDutyEntitlementTestClient(t, doer, metrics)
+			client := pagerDutyEntitlementTestClient(t, fakehttp.Client(doer), metrics)
 			// An unwired entitlement is a construction defect, never a
 			// pass-through.
 			if _, err := route.build(nil).Collect(context.Background(), claim, credential, client, at); !errors.Is(err, ErrInvalidConfiguration) {

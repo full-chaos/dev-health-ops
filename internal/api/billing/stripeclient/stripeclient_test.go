@@ -6,12 +6,12 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"path/filepath"
-	"runtime"
 	"strings"
 	"testing"
 
 	"github.com/stripe/stripe-go/v86"
 
+	"github.com/full-chaos/dev-health-ops/internal/testsupport/moduleroot"
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/programoracle"
 )
 
@@ -74,7 +74,7 @@ var stripeGoldens = programoracle.Set{
 // sends to the frozen answer of the Python SDK of the pinned build: a
 // stripe-go bump that moves the version away from Python's fails here.
 func TestPinnedAPIVersionMatchesFrozenPythonSDK(t *testing.T) {
-	_, file, _, ok := runtime.Caller(0)
+	_, file, _, ok := moduleroot.Caller(0)
 	if !ok {
 		t.Fatal("cannot locate the test source")
 	}

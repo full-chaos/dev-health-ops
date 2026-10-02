@@ -105,7 +105,7 @@ func TestTheLiteralPrefilterNeverHidesAShape(t *testing.T) {
 
 // The case-insensitive scheme prefilter: Bearer and Basic in any case still report; text without either never does.
 func TestTheAuthorizationPrefilterKeepsEveryCase(t *testing.T) {
-	for _, text := range []string{"Authorization: Bearer abcdef0123456789", "AUTHORIZATION: BEARER abcdef0123456789", "x basic dXNlcjpwYXNz1", "bEaReR token1234567890abcdefghij"} {
+	for _, text := range []string{"Authorization: Bearer abcdef0123456789", "AUTHORIZATION: BEARER abcdef0123456789", "x basic dXNlcjpwYXNz1", "bEaReR token1234567890abcdefghij", "Authorization: Ba\u017fic abcdef0123456789abcdef", "BA\u017fIC dXNlcjpwYXNz1"} {
 		if !hasAuthorizationCredential(text) {
 			t.Errorf("a credential was hidden by the prefilter: %q", text)
 		}
@@ -115,7 +115,7 @@ func TestTheAuthorizationPrefilterKeepsEveryCase(t *testing.T) {
 	}
 	r := rand.New(rand.NewSource(7958))
 	for iter := 0; iter < 20000; iter++ {
-		text := randomText(r, "bBeEaArRsSiIcC .x0123456789abcdef", 60)
+		text := randomText(r, "bBeEaArRsSiIcC\u017f\u212a .x0123456789abcdef", 60)
 		want := false
 		for _, match := range authorizationScheme.FindAllStringSubmatch(text, -1) {
 			if len(match[1]) >= 20 || strings.ContainsAny(match[1], "0123456789") {

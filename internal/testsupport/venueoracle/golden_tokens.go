@@ -168,8 +168,10 @@ var authorizationScheme = regexp.MustCompile(`(?i)\b(?:bearer|basic)\s+([A-Za-z0
 // hasAuthorizationCredential reports a Bearer or Basic credential: long, or
 // short with a digit in it. A short word after "Basic" in prose has neither.
 func hasAuthorizationCredential(text string) bool {
-	if lowered := strings.ToLower(text); !strings.Contains(lowered, "bearer") && !strings.Contains(lowered, "basic") {
-		return false // the scheme words are necessary for a match, whatever their case
+	// The scheme words are necessary for a match, whatever their case. (?i) folds by Unicode: the long s (U+017F) matches
+	// "s" and ToLower leaves it, so it is folded by hand (the Kelvin sign is already mapped to "k" by ToLower).
+	if lowered := strings.ReplaceAll(strings.ToLower(text), "\u017f", "s"); !strings.Contains(lowered, "bearer") && !strings.Contains(lowered, "basic") {
+		return false
 	}
 	for _, match := range authorizationScheme.FindAllStringSubmatch(text, -1) {
 		if len(match[1]) >= 20 || strings.ContainsAny(match[1], "0123456789") {

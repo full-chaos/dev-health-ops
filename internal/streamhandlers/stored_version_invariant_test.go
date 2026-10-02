@@ -5,13 +5,13 @@ import (
 	"go/parser"
 	"go/token"
 	"path/filepath"
-	"runtime"
 	"strconv"
 	"strings"
 	"testing"
 
 	"github.com/full-chaos/dev-health-ops/internal/storedversion"
 	"github.com/full-chaos/dev-health-ops/internal/storedversion/storedversiontest"
+	"github.com/full-chaos/dev-health-ops/internal/testsupport/moduleroot"
 )
 
 // streamHandlerWriters lists every stream-handler writer of each in-scope
@@ -72,7 +72,7 @@ func TestInvariantEnumeratesEveryStreamHandlerContract(t *testing.T) {
 // source is the insert of an enumerated writer: the writer set is discovered
 // from the code, not listed by hand.
 func TestEveryInScopeInsertInTheSourceIsAnEnumeratedWriter(t *testing.T) {
-	_, filename, _, ok := runtime.Caller(0)
+	_, filename, _, ok := moduleroot.Caller(0)
 	if !ok {
 		t.Fatal("locate test")
 	}

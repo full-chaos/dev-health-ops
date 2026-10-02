@@ -9,12 +9,12 @@ import (
 	"path/filepath"
 	"reflect"
 	"regexp"
-	"runtime"
 	"sort"
 	"strconv"
 	"strings"
 	"testing"
 
+	"github.com/full-chaos/dev-health-ops/internal/testsupport/moduleroot"
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/oraclecompare"
 )
 
@@ -273,7 +273,7 @@ func frozenOracleDivergences(
 	t.Helper()
 	assertOracleSourcesUnchangedSinceBuild(t)
 	validateOracleCasesAndFields(t, "frozenOracleDivergences", cases, goOnlyFields)
-	_, currentFile, _, _ := runtime.Caller(0)
+	_, currentFile, _, _ := moduleroot.Caller(0)
 	packageDir := filepath.Dir(currentFile)
 	if filepath.Base(snapshotName) != snapshotName {
 		t.Fatalf("snapshot name %q does not map to a safe frozen-oracle filename", snapshotName)
@@ -469,7 +469,7 @@ func checkExclusionIntegrity(
 // package's testdata; only the verification logic is shared.
 func assertOracleSourcesUnchangedSinceBuild(t *testing.T) {
 	t.Helper()
-	_, currentFile, _, _ := runtime.Caller(0)
+	_, currentFile, _, _ := moduleroot.Caller(0)
 	oraclecompare.AssertSourcesUnchangedSinceBuild(
 		t, embeddedOracleSources, filepath.Dir(currentFile),
 	)

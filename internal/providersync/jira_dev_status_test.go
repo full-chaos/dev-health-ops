@@ -2,6 +2,7 @@ package providersync
 
 import (
 	"context"
+	"github.com/full-chaos/dev-health-ops/internal/testsupport/fakehttp"
 	"io"
 	"net/http"
 	"reflect"
@@ -117,13 +118,13 @@ func (doer *jiraDevStatusDoer) Do(request *http.Request) (*http.Response, error)
 
 func jiraDevStatusTestClient(t *testing.T, doer providerfoundation.HTTPDoer) *providerfoundation.HTTPClient {
 	t.Helper()
-	return jiraDevStatusTestClientWithRetries(t, doer, 1)
+	return jiraDevStatusTestClientWithRetries(t, fakehttp.Client(doer), 1)
 }
 
 func jiraDevStatusTestClientWithRetries(t *testing.T, doer providerfoundation.HTTPDoer, maxAttempts int) *providerfoundation.HTTPClient {
 	t.Helper()
 	client, err := providerfoundation.NewHTTPClient(
-		"jira", "https://acme.atlassian.net", doer,
+		"jira", "https://acme.atlassian.net", fakehttp.Client(doer),
 		func(request *http.Request) error { return nil },
 		providerfoundation.RetryPolicy{MaxAttempts: maxAttempts, InitialWait: time.Millisecond, MaxWait: time.Millisecond},
 		providerfoundation.LeaseGuardFunc(func(context.Context) error { return nil }),
@@ -146,7 +147,7 @@ func TestFetchJiraDevStatusPullRequestsCountingAttemptsCountsRetries(t *testing.
 		t: t, statuses: []int{http.StatusServiceUnavailable, http.StatusServiceUnavailable, http.StatusServiceUnavailable},
 		body: `{"errorMessages":["temporarily unavailable"]}`,
 	}
-	client := jiraDevStatusTestClientWithRetries(t, doer, 3)
+	client := jiraDevStatusTestClientWithRetries(t, fakehttp.Client(doer), 3)
 	_, available, attempts, err := fetchJiraDevStatusPullRequestsCountingAttempts(
 		context.Background(), client, "10050", 0,
 	)
@@ -174,7 +175,7 @@ func TestFetchJiraDevStatusPullRequestsCountingAttemptsHonorsRemainingBudget(t *
 		body: `{"errorMessages":["temporarily unavailable"]}`,
 	}
 	// Client policy allows up to 3 attempts, but only 1 remains in the budget.
-	client := jiraDevStatusTestClientWithRetries(t, doer, 3)
+	client := jiraDevStatusTestClientWithRetries(t, fakehttp.Client(doer), 3)
 	_, available, attempts, err := fetchJiraDevStatusPullRequestsCountingAttempts(
 		context.Background(), client, "10050", 1,
 	)
@@ -198,7 +199,7 @@ func TestFetchJiraDevStatusPullRequestsCountingAttemptsCountsExactlyOneOnSuccess
 		t: t, status: http.StatusOK,
 		body: `{"detail":[{"pullRequests":[{"url":"https://github.com/acme/api/pull/968"}]}]}`,
 	}
-	client := jiraDevStatusTestClientWithRetries(t, doer, 3)
+	client := jiraDevStatusTestClientWithRetries(t, fakehttp.Client(doer), 3)
 	payload, available, attempts, err := fetchJiraDevStatusPullRequestsCountingAttempts(
 		context.Background(), client, "10050", 0,
 	)
@@ -220,7 +221,7 @@ func TestFetchJiraDevStatusPullRequestsParsesOKResponse(t *testing.T) {
 		body: `{"detail":[{"pullRequests":[{"url":"https://github.com/acme/api/pull/968"}]}]}`,
 	}
 	payload, available, err := fetchJiraDevStatusPullRequests(
-		context.Background(), jiraDevStatusTestClient(t, doer), "10050",
+		context.Background(), jiraDevStatusTestClient(t, fakehttp.Client(doer)), "10050",
 	)
 	if err != nil || !available {
 		t.Fatalf("available=%v err=%v", available, err)
@@ -243,7 +244,7 @@ func TestFetchJiraDevStatusPullRequestsTreats400And404AsCleanNoOp(t *testing.T) 
 			t.Parallel()
 			doer := &jiraDevStatusDoer{t: t, status: status, body: `{"errorMessages":["no dev-status data"]}`}
 			payload, available, err := fetchJiraDevStatusPullRequests(
-				context.Background(), jiraDevStatusTestClient(t, doer), "10050",
+				context.Background(), jiraDevStatusTestClient(t, fakehttp.Client(doer)), "10050",
 			)
 			if err != nil {
 				t.Fatalf("expected a clean no-op, got err=%v", err)
@@ -259,7 +260,7 @@ func TestFetchJiraDevStatusPullRequestsFailsOnUnexpectedStatus(t *testing.T) {
 	t.Parallel()
 	doer := &jiraDevStatusDoer{t: t, status: http.StatusInternalServerError, body: `{}`}
 	_, available, err := fetchJiraDevStatusPullRequests(
-		context.Background(), jiraDevStatusTestClient(t, doer), "10050",
+		context.Background(), jiraDevStatusTestClient(t, fakehttp.Client(doer)), "10050",
 	)
 	if err == nil || available {
 		t.Fatalf("expected a genuine error, available=%v err=%v", available, err)

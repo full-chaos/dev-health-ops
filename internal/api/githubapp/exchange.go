@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"github.com/full-chaos/dev-health-ops/internal/httpguard"
 	"io"
 	"math/big"
 	"net/http"
@@ -111,7 +112,8 @@ func (h handlers) findAccessibleInstallation(ctx context.Context, accessToken st
 // is decoded only when the status is below 400 (a 4xx/5xx answer is refused
 // before its body is looked at).
 func (h handlers) fetchJSON(request *http.Request) (int, pyjson.Value, error) {
-	response, err := h.HTTPClient.Do(request)
+	// A supplied client follows no redirect: the installer's access token or the app JWT rides this request (D4124).
+	response, err := httpguard.NoRedirects(h.HTTPClient).Do(request)
 	if err != nil {
 		return 0, nil, err
 	}

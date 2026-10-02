@@ -11,8 +11,8 @@
 package admin
 
 import (
+	"github.com/full-chaos/dev-health-ops/internal/httpguard"
 	"log/slog"
-	"net/http"
 	"time"
 
 	"github.com/ClickHouse/clickhouse-go/v2/lib/driver"
@@ -54,7 +54,7 @@ type Deps struct {
 	// PagerDuty.RevokeURL to point both planes at one fake endpoint.
 	PagerDuty providerfoundation.PagerDutyRevokeConfig
 	// HTTPDoer is the client the org-deletion route's PagerDuty revoke
-	// call uses; nil means http.DefaultClient.
+	// call uses; nil means a no-redirect client with a 10 s timeout (revokeDoer).
 	HTTPDoer providerfoundation.HTTPDoer
 	// Write renders every error this area's own middleware writes directly
 	// (currently: the keyed rate limiter's 429, CHAOS-6357) -- every other
@@ -87,14 +87,7 @@ func Routes(deps Deps) []httpapi.Route {
 	if deps.Now != nil {
 		cache.now = deps.Now
 	}
-	httpDoer := deps.HTTPDoer
-	if httpDoer == nil {
-		// PagerDuty's revoke carries a bearer token in its body: httpx does
-		// not follow redirects and has a 10s timeout, so neither may this
-		// client (http.DefaultClient would replay a 307's body, token
-		// included, to the redirect target).
-		httpDoer = &http.Client{Timeout: 10 * time.Second, CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}
-	}
+	httpDoer := revokeDoer(deps.HTTPDoer)
 	limits := deps.Limits
 	if limits == nil {
 		limits = httpapi.NewMemoryCounters(deps.Now)
@@ -178,3 +171,13 @@ var (
 	passwordLimit = httpapi.Limit{ID: "admin_password", Count: 5, Window: time.Hour}
 	inviteLimit   = httpapi.Limit{ID: "admin_org_invite", Count: 10, Window: time.Hour}
 )
+
+// revokeDoer is the client of PagerDuty's token revoke, which carries a bearer token in its body: httpx does not
+// follow redirects and has a 10s timeout, so neither may this client (http.DefaultClient would replay a 307's body,
+// token included, to the redirect target). A supplied client is used as given: the revoke call itself (providerfoundation.RevokePagerDutyOAuthToken) follows no redirect.
+func revokeDoer(supplied providerfoundation.HTTPDoer) providerfoundation.HTTPDoer {
+	if supplied == nil {
+		return httpguard.NewClient(10 * time.Second)
+	}
+	return supplied
+}

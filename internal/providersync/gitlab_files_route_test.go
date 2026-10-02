@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"github.com/full-chaos/dev-health-ops/internal/testsupport/fakehttp"
 	"io"
 	"net/http"
 	"strings"
@@ -114,7 +115,7 @@ func TestGitLabFilesRouteTraversesTreeAndWritesNonEmptyInventory(t *testing.T) {
 	normalizedAt := time.Date(2026, 8, 10, 12, 0, 0, 987654321, time.UTC)
 	batch, err := (GitLabFilesRouteHandler{PerPage: 2, MaxPages: 4}).Collect(
 		context.Background(), claim, providerfoundation.Credential{},
-		gitLabRepositoryClient(t, doer, "https://gitlab.example"), normalizedAt,
+		gitLabRepositoryClient(t, fakehttp.Client(doer), "https://gitlab.example"), normalizedAt,
 	)
 	if err != nil {
 		t.Fatal(err)
@@ -173,7 +174,7 @@ func TestGitLabFilesRouteUsesPythonBoundRefAndDistinguishesNoCommit(t *testing.T
 	normalizedAt := time.Date(2026, 8, 10, 12, 0, 0, 0, time.UTC)
 	batch, err := (GitLabFilesRouteHandler{}).Collect(
 		context.Background(), claim, providerfoundation.Credential{},
-		gitLabRepositoryClient(t, doer, "https://gitlab.example"), normalizedAt,
+		gitLabRepositoryClient(t, fakehttp.Client(doer), "https://gitlab.example"), normalizedAt,
 	)
 	if err != nil {
 		t.Fatal(err)
@@ -197,7 +198,7 @@ func TestGitLabFilesRouteReportsLegitimateEmptyTree(t *testing.T) {
 	claim.BeforeAt = nil
 	batch, err := (GitLabFilesRouteHandler{}).Collect(
 		context.Background(), claim, providerfoundation.Credential{},
-		gitLabRepositoryClient(t, doer, "https://gitlab.example"), time.Now().UTC(),
+		gitLabRepositoryClient(t, fakehttp.Client(doer), "https://gitlab.example"), time.Now().UTC(),
 	)
 	if err != nil {
 		t.Fatal(err)
@@ -215,7 +216,7 @@ func TestGitLabFilesRouteFailsClosedOnTreePaginationCap(t *testing.T) {
 	claim.BeforeAt = nil
 	batch, err := (GitLabFilesRouteHandler{PerPage: 2, MaxPages: 1}).Collect(
 		context.Background(), claim, providerfoundation.Credential{},
-		gitLabRepositoryClient(t, doer, "https://gitlab.example"), time.Now().UTC(),
+		gitLabRepositoryClient(t, fakehttp.Client(doer), "https://gitlab.example"), time.Now().UTC(),
 	)
 	if !errors.Is(err, ErrPaginationCapExceeded) {
 		t.Fatalf("cap error=%v", err)
@@ -236,7 +237,7 @@ func TestGitLabFilesRouteRejectsMalformedTreeItem(t *testing.T) {
 	claim.BeforeAt = nil
 	batch, err := (GitLabFilesRouteHandler{}).Collect(
 		context.Background(), claim, providerfoundation.Credential{},
-		gitLabRepositoryClient(t, doer, "https://gitlab.example"), time.Now().UTC(),
+		gitLabRepositoryClient(t, fakehttp.Client(doer), "https://gitlab.example"), time.Now().UTC(),
 	)
 	if !errors.Is(err, providerfoundation.ErrNormalizationInvalid) {
 		t.Fatalf("malformed tree error=%v", err)
@@ -256,7 +257,7 @@ func TestGitLabFilesRouteDegradesGraphQLPayloadErrorToPathsOnly(t *testing.T) {
 	claim.BeforeAt = nil
 	batch, err := (GitLabFilesRouteHandler{}).Collect(
 		context.Background(), claim, providerfoundation.Credential{},
-		gitLabRepositoryClient(t, doer, "https://gitlab.example"), time.Now().UTC(),
+		gitLabRepositoryClient(t, fakehttp.Client(doer), "https://gitlab.example"), time.Now().UTC(),
 	)
 	if err != nil {
 		t.Fatal(err)
@@ -278,7 +279,7 @@ func TestGitLabFilesRouteDegradesMissingGraphQLRepositoryToPathsOnly(t *testing.
 	claim.BeforeAt = nil
 	batch, err := (GitLabFilesRouteHandler{}).Collect(
 		context.Background(), claim, providerfoundation.Credential{},
-		gitLabRepositoryClient(t, doer, "https://gitlab.example"), time.Now().UTC(),
+		gitLabRepositoryClient(t, fakehttp.Client(doer), "https://gitlab.example"), time.Now().UTC(),
 	)
 	if err != nil {
 		t.Fatal(err)
@@ -308,7 +309,7 @@ func TestGitLabFilesRoutePreservesEmptyTextAsPresentContent(t *testing.T) {
 	claim.BeforeAt = nil
 	batch, err := (GitLabFilesRouteHandler{}).Collect(
 		context.Background(), claim, providerfoundation.Credential{},
-		gitLabRepositoryClient(t, doer, "https://gitlab.example"), time.Now().UTC(),
+		gitLabRepositoryClient(t, fakehttp.Client(doer), "https://gitlab.example"), time.Now().UTC(),
 	)
 	if err != nil {
 		t.Fatal(err)
@@ -328,7 +329,7 @@ func TestGitLabFilesRouteDegradesGraphQLContentErrorToPathsOnly(t *testing.T) {
 	claim.BeforeAt = nil
 	batch, err := (GitLabFilesRouteHandler{}).Collect(
 		context.Background(), claim, providerfoundation.Credential{},
-		gitLabRepositoryClient(t, doer, "https://gitlab.example"), time.Now().UTC(),
+		gitLabRepositoryClient(t, fakehttp.Client(doer), "https://gitlab.example"), time.Now().UTC(),
 	)
 	if err != nil {
 		t.Fatal(err)
@@ -350,7 +351,7 @@ func TestGitLabFilesRoutePreservesRateLimitPropagation(t *testing.T) {
 	claim.BeforeAt = nil
 	batch, err := (GitLabFilesRouteHandler{}).Collect(
 		context.Background(), claim, providerfoundation.Credential{},
-		gitLabRepositoryClient(t, doer, "https://gitlab.example"), time.Now().UTC(),
+		gitLabRepositoryClient(t, fakehttp.Client(doer), "https://gitlab.example"), time.Now().UTC(),
 	)
 	var providerErr *providerfoundation.ProviderError
 	if !errors.As(err, &providerErr) || providerErr.Class != providerfoundation.ErrorRateLimited {
@@ -373,7 +374,7 @@ func TestGitLabFilesRoutePreservesQualifiedForbiddenRateLimitPropagation(t *test
 	claim.BeforeAt = nil
 	batch, err := (GitLabFilesRouteHandler{}).Collect(
 		context.Background(), claim, providerfoundation.Credential{},
-		gitLabRepositoryClient(t, doer, "https://gitlab.example"), time.Now().UTC(),
+		gitLabRepositoryClient(t, fakehttp.Client(doer), "https://gitlab.example"), time.Now().UTC(),
 	)
 	var providerErr *providerfoundation.ProviderError
 	if !errors.As(err, &providerErr) || providerErr.Class != providerfoundation.ErrorRateLimited {
@@ -392,7 +393,7 @@ func TestGitLabFilesRouteDegradesUnqualifiedForbiddenToPathsOnly(t *testing.T) {
 	claim.BeforeAt = nil
 	batch, err := (GitLabFilesRouteHandler{}).Collect(
 		context.Background(), claim, providerfoundation.Credential{},
-		gitLabRepositoryClient(t, doer, "https://gitlab.example"), time.Now().UTC(),
+		gitLabRepositoryClient(t, fakehttp.Client(doer), "https://gitlab.example"), time.Now().UTC(),
 	)
 	if err != nil {
 		t.Fatal(err)
@@ -414,7 +415,7 @@ func TestGitLabFilesRouteDegradesGraphQLTextFailureToPathsOnly(t *testing.T) {
 	claim.BeforeAt = nil
 	batch, err := (GitLabFilesRouteHandler{}).Collect(
 		context.Background(), claim, providerfoundation.Credential{},
-		gitLabRepositoryClient(t, doer, "https://gitlab.example"), time.Now().UTC(),
+		gitLabRepositoryClient(t, fakehttp.Client(doer), "https://gitlab.example"), time.Now().UTC(),
 	)
 	if err != nil {
 		t.Fatal(err)
@@ -446,7 +447,7 @@ func TestGitLabFilesRouteMarksContentCapIncompleteWithoutWatermark(t *testing.T)
 	claim.BeforeAt = &bound
 	batch, err := (GitLabFilesRouteHandler{MaxFiles: 2}).Collect(
 		context.Background(), claim, providerfoundation.Credential{},
-		gitLabRepositoryClient(t, doer, "https://gitlab.example"), time.Now().UTC(),
+		gitLabRepositoryClient(t, fakehttp.Client(doer), "https://gitlab.example"), time.Now().UTC(),
 	)
 	if err != nil {
 		t.Fatal(err)
@@ -468,7 +469,7 @@ func TestGitLabFilesRouteReraisesGraphQLRateLimit(t *testing.T) {
 	claim.BeforeAt = nil
 	_, err := (GitLabFilesRouteHandler{}).Collect(
 		context.Background(), claim, providerfoundation.Credential{},
-		gitLabRepositoryClient(t, doer, "https://gitlab.example"), time.Now().UTC(),
+		gitLabRepositoryClient(t, fakehttp.Client(doer), "https://gitlab.example"), time.Now().UTC(),
 	)
 	var providerErr *providerfoundation.ProviderError
 	if !errors.As(err, &providerErr) || providerErr.Class != providerfoundation.ErrorRateLimited {
@@ -480,7 +481,7 @@ func TestGitLabFilesRouteCountsPhysicalRetryAttempts(t *testing.T) {
 	t.Parallel()
 	doer := gitLabFilesFixtureDoer(t)
 	client, err := providerfoundation.NewHTTPClient(
-		"gitlab", "https://gitlab.example", &retryingGitLabFilesDoer{delegate: doer},
+		"gitlab", "https://gitlab.example", fakehttp.Client(&retryingGitLabFilesDoer{delegate: doer}),
 		func(*http.Request) error { return nil },
 		providerfoundation.RetryPolicy{MaxAttempts: 2, InitialWait: time.Nanosecond, MaxWait: time.Nanosecond},
 		providerfoundation.LeaseGuardFunc(func(context.Context) error { return nil }),
@@ -523,7 +524,7 @@ func TestGitLabFilesRouteRejectsBlameClaim(t *testing.T) {
 	claim := nativeTestClaim("gitlab", "blame")
 	_, err := (GitLabFilesRouteHandler{}).Collect(
 		context.Background(), claim, providerfoundation.Credential{},
-		gitLabRepositoryClient(t, gitLabFilesFixtureDoer(t), "https://gitlab.example"), time.Now().UTC(),
+		gitLabRepositoryClient(t, fakehttp.Client(gitLabFilesFixtureDoer(t)), "https://gitlab.example"), time.Now().UTC(),
 	)
 	if !errors.Is(err, ErrInvalidConfiguration) {
 		t.Fatalf("wrong dataset error=%v", err)
@@ -539,7 +540,7 @@ func (deniedGitLabFilesBudget) Acquire(context.Context, providerfoundation.Budge
 func TestGitLabFilesRoutePropagatesBudgetDenialBeforeProviderWork(t *testing.T) {
 	t.Parallel()
 	doer := gitLabFilesFixtureDoer(t)
-	client := gitLabRepositoryClient(t, doer, "https://gitlab.example")
+	client := gitLabRepositoryClient(t, fakehttp.Client(doer), "https://gitlab.example")
 	client.Budget = deniedGitLabFilesBudget{}
 	claim := nativeTestClaim("gitlab", "files")
 	claim.BeforeAt = nil
@@ -594,7 +595,7 @@ func TestGitLabFilesRouteSkipsTreeEntriesAndRejectsProjectMismatch(t *testing.T)
 	claim.BeforeAt = nil
 	batch, err := (GitLabFilesRouteHandler{}).Collect(
 		context.Background(), claim, providerfoundation.Credential{},
-		gitLabRepositoryClient(t, doer, "https://gitlab.example"), time.Now().UTC(),
+		gitLabRepositoryClient(t, fakehttp.Client(doer), "https://gitlab.example"), time.Now().UTC(),
 	)
 	if err != nil || len(batch.Effects) != 1 || len(batch.Effects[0].Rows) != 0 {
 		t.Fatalf("tree-only batch=%+v error=%v", batch, err)
@@ -603,7 +604,7 @@ func TestGitLabFilesRouteSkipsTreeEntriesAndRejectsProjectMismatch(t *testing.T)
 	mismatch.project = gitLabFilesResponse{body: `{"id":999,"path_with_namespace":"Acme/API"}`}
 	_, err = (GitLabFilesRouteHandler{}).Collect(
 		context.Background(), claim, providerfoundation.Credential{},
-		gitLabRepositoryClient(t, mismatch, "https://gitlab.example"), time.Now().UTC(),
+		gitLabRepositoryClient(t, fakehttp.Client(mismatch), "https://gitlab.example"), time.Now().UTC(),
 	)
 	if !errors.Is(err, providerfoundation.ErrNormalizationInvalid) {
 		t.Fatalf("project mismatch error=%v", err)

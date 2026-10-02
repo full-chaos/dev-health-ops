@@ -3,6 +3,7 @@ package providersync
 import (
 	"context"
 	"errors"
+	"github.com/full-chaos/dev-health-ops/internal/testsupport/fakehttp"
 	"io"
 	"net/http"
 	"strings"
@@ -39,7 +40,7 @@ func TestNativeRESTHandlerCoversReferenceAndWorkItemDatasetMatrix(t *testing.T) 
 			client, err := providerfoundation.NewHTTPClient(
 				test.provider,
 				"https://fixture.test",
-				doer,
+				fakehttp.Client(doer),
 				func(*http.Request) error { return nil },
 				providerfoundation.RetryPolicy{
 					MaxAttempts: 1, InitialWait: time.Nanosecond, MaxWait: time.Nanosecond,
@@ -83,7 +84,7 @@ func TestNativeRESTHandlerRequiresPythonCompatibilityForCodeDataset(t *testing.T
 	handler := NativeRESTHandler{}
 	claim := nativeTestClaim("github", "commits")
 	client, err := providerfoundation.NewHTTPClient(
-		"github", "https://example.test", noRequestDoer{},
+		"github", "https://example.test", fakehttp.Client(noRequestDoer{}),
 		func(*http.Request) error { return nil },
 		providerfoundation.RetryPolicy{MaxAttempts: 1, InitialWait: time.Nanosecond, MaxWait: time.Nanosecond},
 		providerfoundation.LeaseGuardFunc(func(context.Context) error { return nil }),
@@ -191,7 +192,7 @@ func TestGitHubWorkItemsHonorFrozenSyncPRsFlag(t *testing.T) {
 		t.Helper()
 		doer := &fixtureDoer{t: t, provider: "github"}
 		client, err := providerfoundation.NewHTTPClient(
-			"github", "https://fixture.test", doer,
+			"github", "https://fixture.test", fakehttp.Client(doer),
 			func(*http.Request) error { return nil },
 			providerfoundation.RetryPolicy{
 				MaxAttempts: 1, InitialWait: time.Nanosecond, MaxWait: time.Nanosecond,
@@ -259,7 +260,7 @@ func TestNativeRESTHandlerCountsFailedAndRetriedAttempts(t *testing.T) {
 	t.Parallel()
 	doer := &retryOnceDoer{t: t, provider: "github", failPath: "/repos/acme/api/labels"}
 	client, err := providerfoundation.NewHTTPClient(
-		"github", "https://fixture.test", doer,
+		"github", "https://fixture.test", fakehttp.Client(doer),
 		func(*http.Request) error { return nil },
 		providerfoundation.RetryPolicy{
 			MaxAttempts: 2, InitialWait: time.Nanosecond, MaxWait: time.Nanosecond,
@@ -302,7 +303,7 @@ func TestFetchObjectReturnsTypedErrorWhenTheSharedCapIsExceeded(t *testing.T) {
 			Request:       request,
 		}, nil
 	})
-	client := gitHubRepositoryClient(t, doer, "https://api.github.com")
+	client := gitHubRepositoryClient(t, fakehttp.Client(doer), "https://api.github.com")
 	var target any
 	err := fetchObject(context.Background(), client, "/repos/acme/api/git/trees/big?recursive=true", &target)
 
@@ -363,7 +364,7 @@ func TestFetchObjectReturnsTypedErrorEvenWhenTheCapCrossingReadAlsoErrors(t *tes
 			Request:       request,
 		}, nil
 	})
-	client := gitHubRepositoryClient(t, doer, "https://api.github.com")
+	client := gitHubRepositoryClient(t, fakehttp.Client(doer), "https://api.github.com")
 	var target any
 	err := fetchObject(context.Background(), client, "/repos/acme/api/git/trees/big?recursive=true", &target)
 
@@ -390,7 +391,7 @@ func TestFetchObjectStillReturnsBareNormalizationInvalidForGenuinelyMalformedJSO
 			Request:    request,
 		}, nil
 	})
-	client := gitHubRepositoryClient(t, doer, "https://api.github.com")
+	client := gitHubRepositoryClient(t, fakehttp.Client(doer), "https://api.github.com")
 	var target any
 	err := fetchObject(context.Background(), client, "/repos/acme/api", &target)
 	if !errors.Is(err, providerfoundation.ErrNormalizationInvalid) {

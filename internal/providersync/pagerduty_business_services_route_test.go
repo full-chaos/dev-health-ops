@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"github.com/full-chaos/dev-health-ops/internal/testsupport/fakehttp"
 	"io"
 	"net/http"
 	"strings"
@@ -51,7 +52,7 @@ func TestPagerDutyBusinessServicesRouteUsesOffsetPaginationAndCanonicalRow(t *te
 			{"id":"PBS2","type":"business_service","summary":"Support","created_at":"2026-07-31T09:00:00Z"}],"more":true}`},
 		{body: `{"business_services":[{"id":"PBS3","type":"business_service","name":"Operations"}],"more":false}`},
 	}}
-	client := pagerDutyBusinessServicesTestClient(t, doer, providerfoundation.RetryPolicy{
+	client := pagerDutyBusinessServicesTestClient(t, fakehttp.Client(doer), providerfoundation.RetryPolicy{
 		MaxAttempts: 1, InitialWait: time.Nanosecond, MaxWait: time.Nanosecond,
 	})
 	claim := nativeTestClaim("pagerduty", "business-services")
@@ -112,7 +113,7 @@ func TestPagerDutyBusinessServicesRoutePreservesRetryAndPermanentErrorSemantics(
 		{status: http.StatusTooManyRequests, headers: http.Header{"Retry-After": {"0"}}, body: `{"message":"slow down"}`},
 		{body: `{"business_services":[],"more":false}`},
 	}}
-	retryClient := pagerDutyBusinessServicesTestClient(t, clientRetryDoer, providerfoundation.RetryPolicy{
+	retryClient := pagerDutyBusinessServicesTestClient(t, fakehttp.Client(clientRetryDoer), providerfoundation.RetryPolicy{
 		MaxAttempts: 2, InitialWait: time.Nanosecond, MaxWait: time.Nanosecond,
 	})
 	batch, err := (PagerDutyBusinessServicesRouteHandler{Entitlement: allowIncidentEntitlement}).Collect(
@@ -125,7 +126,7 @@ func TestPagerDutyBusinessServicesRoutePreservesRetryAndPermanentErrorSemantics(
 	authDoer := &pagerDutyBusinessServicesDoer{t: t, responses: []pagerDutyBusinessServicesResponse{
 		{status: http.StatusUnauthorized, body: `{"message":"bad token"}`},
 	}}
-	authClient := pagerDutyBusinessServicesTestClient(t, authDoer, providerfoundation.RetryPolicy{
+	authClient := pagerDutyBusinessServicesTestClient(t, fakehttp.Client(authDoer), providerfoundation.RetryPolicy{
 		MaxAttempts: 3, InitialWait: time.Nanosecond, MaxWait: time.Nanosecond,
 	})
 	_, err = (PagerDutyBusinessServicesRouteHandler{Entitlement: allowIncidentEntitlement}).Collect(
@@ -141,10 +142,10 @@ func TestPagerDutyBusinessServicesRoutePreservesRetryAndPermanentErrorSemantics(
 func TestPagerDutyBusinessServicesRouteFailsClosedOnPaginationCapAndMissingInstance(t *testing.T) {
 	t.Parallel()
 	claim := nativeTestClaim("pagerduty", "business-services")
-	client := pagerDutyBusinessServicesTestClient(t, &pagerDutyBusinessServicesDoer{
+	client := pagerDutyBusinessServicesTestClient(t, fakehttp.Client(&pagerDutyBusinessServicesDoer{
 		t: t, responses: []pagerDutyBusinessServicesResponse{{
 			body: `{"business_services":[{"id":"one"}],"more":true}`,
-		}}}, providerfoundation.RetryPolicy{MaxAttempts: 1, InitialWait: time.Nanosecond, MaxWait: time.Nanosecond})
+		}}}), providerfoundation.RetryPolicy{MaxAttempts: 1, InitialWait: time.Nanosecond, MaxWait: time.Nanosecond})
 	credential := providerfoundation.Credential{Provider: "pagerduty", Config: map[string]string{"subdomain": "acme"}}
 	_, err := (PagerDutyBusinessServicesRouteHandler{Entitlement: allowIncidentEntitlement, MaxPages: 1}).Collect(
 		context.Background(), claim, credential, client, time.Date(2026, 8, 9, 12, 0, 0, 0, time.UTC),
@@ -170,7 +171,7 @@ func TestPagerDutyBusinessServicesRouteStopsWhenLeaseExpiresBetweenPages(t *test
 	}}
 	asserts := 0
 	client, err := providerfoundation.NewHTTPClient(
-		"pagerduty", "https://api.pagerduty.com", doer,
+		"pagerduty", "https://api.pagerduty.com", fakehttp.Client(doer),
 		func(*http.Request) error { return nil },
 		providerfoundation.RetryPolicy{MaxAttempts: 1, InitialWait: time.Nanosecond, MaxWait: time.Nanosecond},
 		providerfoundation.LeaseGuardFunc(func(context.Context) error {
@@ -199,7 +200,7 @@ func pagerDutyBusinessServicesTestClient(
 ) *providerfoundation.HTTPClient {
 	t.Helper()
 	client, err := providerfoundation.NewHTTPClient(
-		"pagerduty", "https://api.pagerduty.com", doer,
+		"pagerduty", "https://api.pagerduty.com", fakehttp.Client(doer),
 		func(*http.Request) error { return nil }, retry,
 		providerfoundation.LeaseGuardFunc(func(context.Context) error { return nil }),
 	)

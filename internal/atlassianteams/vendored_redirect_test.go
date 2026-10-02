@@ -2,6 +2,7 @@ package atlassianteams
 
 import (
 	"context"
+	"fmt"
 	"go/ast"
 	"go/types"
 	"net/http"
@@ -10,6 +11,7 @@ import (
 	"strings"
 	"sync/atomic"
 	"testing"
+	"time"
 
 	"atlassian/atlassian"
 	"atlassian/atlassian/graph"
@@ -311,5 +313,82 @@ func TestVendoredDefaultClientsFollowNoRedirect(t *testing.T) {
 				t.Fatalf("the default client followed the redirect: the second host saw %d request(s)", n)
 			}
 		})
+	}
+}
+
+// A SUPPLIED client with Timeout 0 is copied by three vendored functions (the copy gets the module's default timeout). The copy must keep
+// the supplied client's own redirect policy: a caller that passed a guarded client must not get a following one back (CHAOS-7921
+// follow-up; the default-client cases above never reach this code).
+var suppliedClientCopySites = map[string]func(t *testing.T, base string, client *http.Client){
+	"postOAuthToken": func(t *testing.T, base string, client *http.Client) {
+		_, _ = atlassian.RefreshAccessToken(context.Background(), "id", "secret", "refresh", atlassian.OAuthTokenRequestOptions{TokenURL: base + "/token", HTTPClient: client})
+	},
+	"FetchAccessibleResources": func(t *testing.T, base string, client *http.Client) {
+		_, _ = atlassian.FetchAccessibleResources(context.Background(), "token", atlassian.AccessibleResourcesOptions{URL: base + "/resources", HTTPClient: client})
+	},
+	"FetchSchemaIntrospection": func(t *testing.T, base string, client *http.Client) {
+		_, _ = graph.FetchSchemaIntrospection(context.Background(), base, atlassian.BasicAPITokenAuth{Email: "e@example.test", Token: "t"}, graph.SchemaFetchOptions{OutputDir: t.TempDir(), HTTPClient: client})
+	},
+}
+
+// TestEveryVendoredCopyOfASuppliedClientIsCovered derives, from the types of every vendored package, each function that copies an
+// http.Client VALUE (a dereference of a *http.Client): those are the supplied-client copy sites, and they must equal the table above.
+func TestEveryVendoredCopyOfASuppliedClientIsCovered(t *testing.T) {
+	derived := map[string]bool{}
+	for _, pkg := range loadVendoredPackages(t, "atlassian/...") {
+		for _, file := range pkg.Syntax {
+			var enclosing string
+			ast.Inspect(file, func(node ast.Node) bool {
+				switch n := node.(type) {
+				case *ast.FuncDecl:
+					enclosing = n.Name.Name
+				case *ast.StarExpr:
+					if named, ok := types.Unalias(pkg.TypesInfo.TypeOf(n)).(*types.Named); ok && isNetHTTP(named.Obj(), "Client") {
+						derived[enclosing] = true
+					}
+				}
+				return true
+			})
+		}
+	}
+	if len(derived) == 0 {
+		t.Fatal("the derived set of client-copy sites is empty: the scan found nothing to check")
+	}
+	var got, want []string
+	for name := range derived {
+		got = append(got, name)
+	}
+	for name := range suppliedClientCopySites {
+		want = append(want, name)
+	}
+	sort.Strings(got)
+	sort.Strings(want)
+	if strings.Join(got, ",") != strings.Join(want, ",") {
+		t.Errorf("client-copy sites in the vendored source = %v, behaviour cases = %v", got, want)
+	}
+}
+
+// TestSuppliedGuardedClientKeepsItsRedirectPolicy runs every copy site with a supplied client that refuses redirects, once with Timeout 0
+// (the client is copied) and once with a timeout (used as it is): a redirect to a second host is never followed.
+func TestSuppliedGuardedClientKeepsItsRedirectPolicy(t *testing.T) {
+	names := make([]string, 0, len(suppliedClientCopySites))
+	for name := range suppliedClientCopySites {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+	for _, name := range names {
+		for _, timeout := range []time.Duration{0, time.Second} {
+			t.Run(fmt.Sprintf("%s/timeout=%s", name, timeout), func(t *testing.T) {
+				base, landed, firstHits := redirectProbe(t)
+				guarded := &http.Client{Timeout: timeout, CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}
+				suppliedClientCopySites[name](t, base, guarded)
+				if firstHits.Load() == 0 {
+					t.Fatal("the redirecting host was never reached: the case exercised nothing")
+				}
+				if n := landed.Load(); n != 0 {
+					t.Fatalf("the supplied guarded client followed the redirect: the second host saw %d request(s)", n)
+				}
+			})
+		}
 	}
 }

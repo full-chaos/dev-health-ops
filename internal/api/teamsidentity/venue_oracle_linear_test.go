@@ -4,6 +4,7 @@ package teamsidentity
 
 import (
 	"errors"
+	"github.com/full-chaos/dev-health-ops/internal/testsupport/fakehttp"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -120,9 +121,9 @@ func TestVenueOracleDiscoverLinearMatchesPython(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	previousClient := discoveryHTTPClient
+	previousClient := fakehttp.Client(discoveryHTTPClient)
 	discoveryHTTPClient = &http.Client{Transport: rewriteHostTransport{target: stubURL}}
-	t.Cleanup(func() { discoveryHTTPClient = previousClient })
+	t.Cleanup(func() { discoveryHTTPClient = fakehttp.Client(previousClient) })
 
 	goTeams, err := discoverLinear(t.Context(), credential)
 	if err != nil {

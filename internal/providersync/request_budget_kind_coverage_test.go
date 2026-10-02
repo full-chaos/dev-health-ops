@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"github.com/full-chaos/dev-health-ops/internal/testsupport/fakehttp"
 	"io"
 	"net/http"
 	"net/url"
@@ -180,7 +181,7 @@ func githubDeploymentsFixture(deploymentCount int) func(*http.Request) (*http.Re
 func runGitHubDeployments(t *testing.T, deploymentCount, maxDeployments int) *kindCountingDoer {
 	t.Helper()
 	doer := &kindCountingDoer{respond: githubDeploymentsFixture(deploymentCount), kinds: map[string]int{}}
-	client := gitHubRepositoryClient(t, doer, "https://api.github.com")
+	client := gitHubRepositoryClient(t, fakehttp.Client(doer), "https://api.github.com")
 	claim := nativeTestClaim("github", "deployments")
 	if _, err := (GitHubDeploymentsRouteHandler{MaxDeployments: maxDeployments}).Collect(
 		context.Background(), claim, providerfoundation.Credential{}, client, time.Date(2026, 7, 23, 12, 0, 0, 0, time.UTC),
@@ -301,7 +302,7 @@ func gitLabDeploymentsFixture(deploymentCount int) func(*http.Request) (*http.Re
 func runGitLabDeployments(t *testing.T, deploymentCount int) *kindCountingDoer {
 	t.Helper()
 	doer := &kindCountingDoer{respond: gitLabDeploymentsFixture(deploymentCount), kinds: map[string]int{}}
-	client := gitLabRepositoryClient(t, doer, "https://gitlab.example.com")
+	client := gitLabRepositoryClient(t, fakehttp.Client(doer), "https://gitlab.example.com")
 	claim := nativeTestClaim("gitlab", "deployments")
 	if _, err := (GitLabDeploymentsRouteHandler{}).Collect(
 		context.Background(), claim, providerfoundation.Credential{}, client, time.Date(2026, 7, 23, 12, 0, 0, 0, time.UTC),
@@ -423,7 +424,7 @@ func githubPRsFixture(w githubPRsWorkload) func(*http.Request) (*http.Response, 
 func runGitHubPRs(t *testing.T, w githubPRsWorkload) *kindCountingDoer {
 	t.Helper()
 	doer := &kindCountingDoer{respond: githubPRsFixture(w), kinds: map[string]int{}}
-	client := gitHubPullRequestClient(t, doer, "https://api.github.com")
+	client := gitHubPullRequestClient(t, fakehttp.Client(doer), "https://api.github.com")
 	claim := nativeTestClaim("github", "prs")
 	if _, err := (GitHubPullRequestSocialRouteHandler{}).Collect(
 		context.Background(), claim, providerfoundation.Credential{}, client, time.Date(2026, 7, 23, 12, 30, 0, 0, time.UTC),

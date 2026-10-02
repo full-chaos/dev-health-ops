@@ -1,5 +1,6 @@
 # Every file under internal/apiservice/metricsvenue/testdata: sha256, kind, path. Written by `go run ./internal/testsupport/recordedfiles/manifest`; never edit it by hand.
 # python-recorded set: e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855 (0 files)
-# header-before-stamp set: 1771aeb4b1add2372d1b84ee59c46d52d904fba60d9388df351d856afa2236f8 (1 files)
-b05c472e9e72f003a730e629eed7bcec45595f0cbf955bf61f35597a020cca98	header-before-stamp	counter_parity.json
+# header-before-stamp set: e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855 (0 files)
+-	header	counter_parity.json
 8bf9614d94899e5e0acef601dc9d3c589d4c7cb796093539d0fb5668f35605c8	unclassified	python_metrics.tsv
+-	header	table-sweep.golden.json

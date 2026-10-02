@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"fmt"
+	"github.com/full-chaos/dev-health-ops/internal/testsupport/fakehttp"
 	"io"
 	"net/http"
 	"testing"
@@ -97,9 +98,9 @@ func TestDiscoverGitLabTruncatesSubgroupsAtTheBound(t *testing.T) {
 	}{body: `[]`}
 
 	doer := &gitlabStubDoer{responses: responses}
-	oldClient := discoveryHTTPClient
-	discoveryHTTPClient = doer
-	defer func() { discoveryHTTPClient = oldClient }()
+	oldClient := fakehttp.Client(discoveryHTTPClient)
+	discoveryHTTPClient = fakehttp.Client(doer)
+	defer func() { discoveryHTTPClient = fakehttp.Client(oldClient) }()
 
 	teams, truncated, warnings, err := discoverGitLab(context.Background(), gitlabTestCredential(), "acme")
 	if err != nil {
@@ -149,9 +150,9 @@ func TestDiscoverGitLabNotTruncatedWhenUnderBound(t *testing.T) {
 		"/api/v4/groups/1/projects?per_page=100&page=1&include_subgroups=true": {body: `[{"id":5,"path_with_namespace":"acme/api"}]`},
 	}
 	doer := &gitlabStubDoer{responses: responses}
-	oldClient := discoveryHTTPClient
-	discoveryHTTPClient = doer
-	defer func() { discoveryHTTPClient = oldClient }()
+	oldClient := fakehttp.Client(discoveryHTTPClient)
+	discoveryHTTPClient = fakehttp.Client(doer)
+	defer func() { discoveryHTTPClient = fakehttp.Client(oldClient) }()
 
 	teams, truncated, warnings, err := discoverGitLab(context.Background(), gitlabTestCredential(), "acme")
 	if err != nil {
@@ -189,9 +190,9 @@ func TestDiscoverGitLabPreservesEmptyVersusNullDescription(t *testing.T) {
 		"/api/v4/groups/2/projects?per_page=100&page=1":                        {body: `[]`},
 		"/api/v4/groups/1/projects?per_page=100&page=1&include_subgroups=true": {body: `[]`},
 	}}
-	old := discoveryHTTPClient
-	discoveryHTTPClient = doer
-	defer func() { discoveryHTTPClient = old }()
+	old := fakehttp.Client(discoveryHTTPClient)
+	discoveryHTTPClient = fakehttp.Client(doer)
+	defer func() { discoveryHTTPClient = fakehttp.Client(old) }()
 
 	teams, _, _, err := discoverGitLab(context.Background(), gitlabTestCredential(), "acme")
 	if err != nil {

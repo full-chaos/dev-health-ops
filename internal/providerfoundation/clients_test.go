@@ -3,6 +3,7 @@ package providerfoundation
 import (
 	"context"
 	"errors"
+	"github.com/full-chaos/dev-health-ops/internal/testsupport/fakehttp"
 	"io"
 	"net/http"
 	"net/url"
@@ -98,7 +99,7 @@ func TestExplicitProviderClientsApplyTypedAuthentication(t *testing.T) {
 		t.Run(test.name, func(t *testing.T) {
 			t.Parallel()
 			doer := &headerCaptureDoer{}
-			client, err := test.newClient(test.credential, doer, retry, lease)
+			client, err := test.newClient(test.credential, fakehttp.Client(doer), retry, lease)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -140,7 +141,7 @@ func TestPagerDutyClientCredentialsExchangeIsClientLocal(t *testing.T) {
 	doer := &pagerDutyClientCredentialsDoer{}
 	client, err := NewPagerDutyClient(
 		credential,
-		doer,
+		fakehttp.Client(doer),
 		RetryPolicy{MaxAttempts: 1, InitialWait: time.Millisecond, MaxWait: time.Millisecond},
 		LeaseGuardFunc(func(context.Context) error { return nil }),
 	)
@@ -244,7 +245,7 @@ func TestGitLabClientURLAliasesMatchCanonicalPythonPrecedence(t *testing.T) {
 			credential := testCredential("gitlab", test.secret)
 			credential.Config = test.config
 			doer := &headerCaptureDoer{}
-			client, err := NewGitLabClient(credential, doer, retry, lease)
+			client, err := NewGitLabClient(credential, fakehttp.Client(doer), retry, lease)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -341,7 +342,7 @@ func TestJiraAcceptsTheCredentialShapesTheWebActuallyWrote(t *testing.T) {
 				t.Fatalf("ValidateCredentialShape rejected a stored shape: %v", err)
 			}
 			doer := &headerCaptureDoer{}
-			client, err := NewJiraClient(credential, doer, jiraTestRetry(), jiraTestLease())
+			client, err := NewJiraClient(credential, fakehttp.Client(doer), jiraTestRetry(), jiraTestLease())
 			if err != nil {
 				t.Fatalf("NewJiraClient: %v", err)
 			}
@@ -390,7 +391,7 @@ func TestJiraCanonicalKeysOutrankTheirAliases(t *testing.T) {
 		"server_url": "https://older.atlassian.net",
 	})
 	doer := &headerCaptureDoer{}
-	client, err := NewJiraClient(credential, doer, jiraTestRetry(), jiraTestLease())
+	client, err := NewJiraClient(credential, fakehttp.Client(doer), jiraTestRetry(), jiraTestLease())
 	if err != nil {
 		t.Fatalf("NewJiraClient: %v", err)
 	}
@@ -511,7 +512,7 @@ func TestGitHubAppAuthBuildsFromPrivateKeyPath(t *testing.T) {
 		t.Fatalf("ValidateCredentialShape rejected a private_key_path-only credential: %v", err)
 	}
 	doer := &githubAppDoer{}
-	auth, err := NewGitHubAppAuth(credential, githubAPIBase, doer)
+	auth, err := NewGitHubAppAuth(credential, githubAPIBase, fakehttp.Client(doer))
 	if err != nil {
 		t.Fatalf("NewGitHubAppAuth: %v", err)
 	}
@@ -529,7 +530,7 @@ func TestGitHubAppAuthMissingPrivateKeyPathFileFailsClosed(t *testing.T) {
 		"app_id": "12345", "installation_id": "67890", "private_key_path": filepath.Join(t.TempDir(), "does-not-exist.pem"),
 	})
 	doer := &githubAppDoer{}
-	if _, err := NewGitHubAppAuth(credential, githubAPIBase, doer); !errors.Is(err, ErrCredentialInvalid) {
+	if _, err := NewGitHubAppAuth(credential, githubAPIBase, fakehttp.Client(doer)); !errors.Is(err, ErrCredentialInvalid) {
 		t.Errorf("NewGitHubAppAuth = %v, want ErrCredentialInvalid", err)
 	}
 }
@@ -552,7 +553,7 @@ func TestGitHubAppAuthEmptyInlineKeyDoesNotFallBackToPath(t *testing.T) {
 		"private_key": "", "private_key_path": keyFile,
 	})
 	doer := &githubAppDoer{}
-	if _, err := NewGitHubAppAuth(credential, githubAPIBase, doer); !errors.Is(err, ErrCredentialInvalid) {
+	if _, err := NewGitHubAppAuth(credential, githubAPIBase, fakehttp.Client(doer)); !errors.Is(err, ErrCredentialInvalid) {
 		t.Errorf("NewGitHubAppAuth = %v, want ErrCredentialInvalid (must not silently authenticate with the path key when private_key is present-but-empty)", err)
 	}
 }

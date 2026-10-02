@@ -1,12 +1,12 @@
 {
   "installation base=\"//ghe.test/api/v3\" org=\"\" search=\"\" pattern=\"\" max=\u003cnone\u003e #de1d05b49363": {
-    "result": "\"APIException: parse \\\"://ghe.test/api/v3/installation/repositories?per_page=100\\\": missing protocol scheme\"",
+    "result": "\"APIException: github request failed on repo:GET /installation/repositories: invalid request URL\"",
     "requests": "[]",
     "python_result": "\"ValueError: unknown url type: '//ghe.test/api/v3/installation/repositories?per_page=100'\"",
     "python_requests": "[[//ghe.test/api/v3/installation/repositories?per_page=100 token tok]]"
   },
   "installation base=\"ghe.test/api/v3\" org=\"\" search=\"\" pattern=\"\" max=\u003cnone\u003e #ee7f0d328a4e": {
-    "result": "\"APIException: parse \\\"://ghe.test/api/v3/installation/repositories?per_page=100\\\": missing protocol scheme\"",
+    "result": "\"APIException: github request failed on repo:GET /installation/repositories: invalid request URL\"",
     "requests": "[]",
     "python_result": "\"ValueError: unknown url type: 'ghe.test/api/v3/installation/repositories?per_page=100'\"",
     "python_requests": "[[ghe.test/api/v3/installation/repositories?per_page=100 token tok]]"
@@ -147,25 +147,25 @@
     "python_requests": "[[https://api.github.com/orgs/acme/repos?per_page=100 token tok] [https://u@other.test/x Basic dTo=]]"
   },
   "repos base=\"//ghe.test/api/v3\" org=\"acme\" search=\"\" pattern=\"\" max=\u003cnone\u003e #a99da6ee3d48": {
-    "result": "\"APIException: parse \\\"://ghe.test/api/v3/orgs/acme/repos?per_page=100\\\": missing protocol scheme\"",
+    "result": "\"APIException: github request failed on repo:GET /orgs/acme/repos: invalid request URL\"",
     "requests": "[]",
     "python_result": "\"ValueError: unknown url type: '//ghe.test/api/v3/orgs/acme/repos?per_page=100'\"",
     "python_requests": "[[//ghe.test/api/v3/orgs/acme/repos?per_page=100 token tok]]"
   },
   "repos base=\"//ghe.test/api/v3\" org=\"acme\" search=\"\" pattern=\"\" max=\u003cnone\u003e #dd628728b14d": {
-    "result": "\"APIException: parse \\\"://ghe.test/api/v3/orgs/acme/repos?per_page=100\\\": missing protocol scheme\"",
+    "result": "\"APIException: github request failed on repo:GET /orgs/acme/repos: invalid request URL\"",
     "requests": "[]",
     "python_result": "\"ValueError: unknown url type: '//ghe.test/api/v3/orgs/acme/repos?per_page=100'\"",
     "python_requests": "[[//ghe.test/api/v3/orgs/acme/repos?per_page=100 token tok]]"
   },
   "repos base=\"ghe.test/api/v3\" org=\"acme\" search=\"\" pattern=\"\" max=\u003cnone\u003e #3db0321abae1": {
-    "result": "\"APIException: parse \\\"://ghe.test/api/v3/orgs/acme/repos?per_page=100\\\": missing protocol scheme\"",
+    "result": "\"APIException: github request failed on repo:GET /orgs/acme/repos: invalid request URL\"",
     "requests": "[]",
     "python_result": "\"ValueError: unknown url type: 'ghe.test/api/v3/orgs/acme/repos?per_page=100'\"",
     "python_requests": "[[ghe.test/api/v3/orgs/acme/repos?per_page=100 token tok]]"
   },
   "repos base=\"ghe.test/api/v3\" org=\"acme\" search=\"\" pattern=\"\" max=\u003cnone\u003e #b7601ce1d36b": {
-    "result": "\"APIException: parse \\\"://ghe.test/api/v3/orgs/acme/repos?per_page=100\\\": missing protocol scheme\"",
+    "result": "\"APIException: github request failed on repo:GET /orgs/acme/repos: invalid request URL\"",
     "requests": "[]",
     "python_result": "\"ValueError: unknown url type: 'ghe.test/api/v3/orgs/acme/repos?per_page=100'\"",
     "python_requests": "[[ghe.test/api/v3/orgs/acme/repos?per_page=100 token tok]]"

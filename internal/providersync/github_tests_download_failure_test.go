@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"github.com/full-chaos/dev-health-ops/internal/testsupport/fakehttp"
 	"io"
 	"net"
 	"net/http"
@@ -160,7 +161,7 @@ func (r *githubTestsRepeatingReader) Read(p []byte) (int, error) {
 func TestGitHubTestsArtifactDownloadMissingLocationDoesNotSinkTheUnit(t *testing.T) {
 	doer := &githubTestsDownloadFailureDoer{t: t, artifacts: 2, noLocation: map[int]bool{1: true}}
 
-	walk, err := walkGitHubTestsChunksResult(t, githubTestsClient(t, doer), 4)
+	walk, err := walkGitHubTestsChunksResult(t, githubTestsClient(t, fakehttp.Client(doer)), 4)
 	if err != nil {
 		t.Fatalf(
 			"artifact download with no Location header sank the unit: err=%v; want the artifact skipped and the unit finalized",
@@ -233,7 +234,7 @@ func TestGitHubTestsRouteDownloadMissingLocationDoesNotSinkTheUnit(t *testing.T)
 
 	batch, err := (GitHubTestsRouteHandler{}).Collect(
 		context.Background(), claim, providerfoundation.Credential{},
-		githubTestsClient(t, doer), time.Date(2026, 8, 14, 12, 0, 0, 0, time.UTC),
+		githubTestsClient(t, fakehttp.Client(doer)), time.Date(2026, 8, 14, 12, 0, 0, 0, time.UTC),
 	)
 	if err != nil {
 		t.Fatalf(
@@ -258,7 +259,7 @@ func TestGitHubTestsRouteDownloadMissingLocationDoesNotSinkTheUnit(t *testing.T)
 // skipped-but-uncounted artifact is silent data loss.
 func TestGitHubTestsArtifactUnavailableIsCounted(t *testing.T) {
 	doer := &githubTestsDownloadFailureDoer{t: t, artifacts: 2, noLocation: map[int]bool{1: true}}
-	client := githubTestsClient(t, doer)
+	client := githubTestsClient(t, fakehttp.Client(doer))
 	client.Metrics = providerfoundation.NewMetrics()
 
 	if _, err := walkGitHubTestsChunksResult(t, client, 4); err != nil {
@@ -289,7 +290,7 @@ func TestGitHubTestsArtifactDownloadReadFailureCarriesCause(t *testing.T) {
 
 	_, err := (GitHubTestsRouteHandler{}).Collect(
 		context.Background(), claim, providerfoundation.Credential{},
-		githubTestsClient(t, doer), time.Date(2026, 8, 14, 12, 0, 0, 0, time.UTC),
+		githubTestsClient(t, fakehttp.Client(doer)), time.Date(2026, 8, 14, 12, 0, 0, 0, time.UTC),
 	)
 	if !errors.Is(err, ErrGitHubTestsIncomplete) {
 		t.Fatalf("error=%v, want it to still satisfy ErrGitHubTestsIncomplete", err)
@@ -322,7 +323,7 @@ func TestGitHubTestsArtifactDownloadOversizedCarriesCause(t *testing.T) {
 
 	_, err := (GitHubTestsRouteHandler{}).Collect(
 		context.Background(), claim, providerfoundation.Credential{},
-		githubTestsClient(t, doer), time.Date(2026, 8, 14, 12, 0, 0, 0, time.UTC),
+		githubTestsClient(t, fakehttp.Client(doer)), time.Date(2026, 8, 14, 12, 0, 0, 0, time.UTC),
 	)
 	if !errors.Is(err, ErrGitHubTestsIncomplete) {
 		t.Fatalf("error=%v, want it to still satisfy ErrGitHubTestsIncomplete", err)
@@ -346,7 +347,7 @@ func TestGitHubTestsArtifactDownloadOversizedCarriesCause(t *testing.T) {
 func TestGitHubTestsChunkedArtifactDownloadReadFailureCarriesCause(t *testing.T) {
 	doer := &githubTestsDownloadFailureDoer{t: t, artifacts: 1, readError: map[int]bool{1: true}}
 
-	_, err := walkGitHubTestsChunksResult(t, githubTestsClient(t, doer), 4)
+	_, err := walkGitHubTestsChunksResult(t, githubTestsClient(t, fakehttp.Client(doer)), 4)
 	if !errors.Is(err, ErrGitHubTestsIncomplete) {
 		t.Fatalf("error=%v, want it to still satisfy ErrGitHubTestsIncomplete", err)
 	}
@@ -388,7 +389,7 @@ func TestGitHubTestsChunkedArtifactDownloadOversizedCarriesCause(t *testing.T) {
 		// shape for ErrGitHubTestsArtifactUnavailable).
 		doer := &githubTestsDownloadFailureDoer{t: t, artifacts: 2, oversized: map[int]bool{1: true}}
 
-		walk, err := walkGitHubTestsChunksResult(t, githubTestsClient(t, doer), 4)
+		walk, err := walkGitHubTestsChunksResult(t, githubTestsClient(t, fakehttp.Client(doer)), 4)
 		if err != nil {
 			t.Fatalf(
 				"oversized artifact sank the unit: err=%v; want it skipped and the unit finalized",
@@ -490,7 +491,7 @@ func TestGitHubTestsChunkedArtifactDownloadOversizedCarriesCause(t *testing.T) {
 			noLocation: map[int]bool{2: true},
 		}
 
-		walk, err := walkGitHubTestsChunksResult(t, githubTestsClient(t, doer), 4)
+		walk, err := walkGitHubTestsChunksResult(t, githubTestsClient(t, fakehttp.Client(doer)), 4)
 		if err != nil {
 			t.Fatalf("mixed oversized/unavailable artifacts sank the unit: err=%v; want both skipped and the unit finalized", err)
 		}
@@ -561,7 +562,7 @@ func TestGitHubTestsChunkedArtifactDownloadOversizedCarriesCause(t *testing.T) {
 		healthyID := githubTestsMaxSkippedArtifactRecords + 4
 		doer := &githubTestsDownloadFailureDoer{t: t, artifacts: healthyID, oversized: oversized}
 
-		walk, err := walkGitHubTestsChunksResult(t, githubTestsClient(t, doer), 4)
+		walk, err := walkGitHubTestsChunksResult(t, githubTestsClient(t, fakehttp.Client(doer)), 4)
 		if err != nil {
 			t.Fatalf("run with more oversized artifacts than the cap sank the unit: err=%v", err)
 		}
@@ -599,7 +600,7 @@ func TestGitHubTestsChunkedArtifactDownloadOversizedCarriesCause(t *testing.T) {
 	// "artifact_oversized" alongside "artifact_unavailable"/"unreadable_archive".
 	t.Run("counts the skip on the existing artifact-skip counter", func(t *testing.T) {
 		doer := &githubTestsDownloadFailureDoer{t: t, artifacts: 1, oversized: map[int]bool{1: true}}
-		client := githubTestsClient(t, doer)
+		client := githubTestsClient(t, fakehttp.Client(doer))
 		client.Metrics = providerfoundation.NewMetrics()
 
 		if _, err := walkGitHubTestsChunksResult(t, client, 4); err != nil {
@@ -631,7 +632,7 @@ func TestGitHubTestsChunkedArtifactDownloadOversizedCarriesCause(t *testing.T) {
 // pins.
 func TestGitHubTestsRouteNeverRecordsCicdPartialSuccessTelemetryItself(t *testing.T) {
 	doer := &githubTestsDownloadFailureDoer{t: t, artifacts: 2, noLocation: map[int]bool{1: true}}
-	client := githubTestsClient(t, doer)
+	client := githubTestsClient(t, fakehttp.Client(doer))
 	client.Metrics = providerfoundation.NewMetrics()
 
 	walk, err := walkGitHubTestsChunksResult(t, client, 4)

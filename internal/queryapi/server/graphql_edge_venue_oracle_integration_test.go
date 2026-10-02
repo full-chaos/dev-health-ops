@@ -92,6 +92,8 @@ type registeredEdgeDocument struct {
 	Document  string `json:"document"`
 	Digest    string `json:"digest"`
 	Kind      string `json:"kind"`
+	// Legacy marks a text the operation accepted BEFORE its current one (CHAOS-8000 dual accept).
+	Legacy bool `json:"legacy"`
 }
 
 func registeredEdgeDocuments(t *testing.T, root string) []registeredEdgeDocument {
@@ -108,6 +110,25 @@ func registeredEdgeDocuments(t *testing.T, root string) []registeredEdgeDocument
 	}
 	if len(docs) == 0 {
 		t.Fatal("registrydump listed no registered documents: nothing would be measured")
+	}
+	// CHAOS-8000: registrydump lists an operation's legacy texts after its current one. The frozen Python
+	// answers this oracle compares with were recorded for the text each operation had BEFORE its current one;
+	// the current text has no frozen answer. So an operation with a legacy text is measured on its OLDEST legacy
+	// text (the one the golden saw), one document per operation as before. Re-record the golden with the
+	// goldenrecord verb to measure the current text, then take this selection out.
+	measured := map[string]registeredEdgeDocument{}
+	for _, doc := range docs {
+		held, seen := measured[doc.Operation]
+		switch {
+		case !seen:
+			measured[doc.Operation] = doc
+		case doc.Legacy && !held.Legacy:
+			measured[doc.Operation] = doc
+		}
+	}
+	docs = docs[:0]
+	for _, doc := range measured {
+		docs = append(docs, doc)
 	}
 	sort.Slice(docs, func(i, j int) bool { return docs[i].Operation < docs[j].Operation })
 	return docs

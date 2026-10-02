@@ -181,15 +181,19 @@ func originGuardedAtConstruction(doer HTTPDoer) HTTPDoer {
 	guarded := *hc
 	inner := hc.CheckRedirect
 	guarded.CheckRedirect = func(req *http.Request, via []*http.Request) error {
+		// The client's own policy decides first: a client that refuses the hop answers the 3xx to the caller (a route that
+		// handles a Location itself, with no credential, relies on it) and nothing is sent to the other origin.
+		if inner != nil {
+			if err := inner(req, via); err != nil {
+				return err
+			}
+		} else if len(via) >= 10 {
+			return errors.New("stopped after 10 redirects")
+		}
+		// The hop would be followed: stop it where it leaves the credential origin and say so.
 		if state, ok := req.Context().Value(originKey{}).(*originState); ok && !sameOrigin(req.URL, state.target) {
 			state.left.Store(true)
 			return http.ErrUseLastResponse
-		}
-		if inner != nil {
-			return inner(req, via)
-		}
-		if len(via) >= 10 {
-			return errors.New("stopped after 10 redirects")
 		}
 		return nil
 	}

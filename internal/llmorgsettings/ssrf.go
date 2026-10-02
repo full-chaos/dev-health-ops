@@ -144,14 +144,22 @@ func normalizeHost(host string) (string, string) {
 	return normalized, ""
 }
 
-// extraUnsafePrefixes are IANA special-purpose ranges Go's netip.Addr
-// helpers (IsPrivate/IsLoopback/IsLinkLocalUnicast/IsMulticast/
-// IsUnspecified) do not cover on their own, mirroring the ranges Python's
-// ipaddress.IPv4Address/IPv6Address.is_global excludes beyond RFC1918/
-// loopback/link-local/multicast/unspecified (CGNAT, documentation/
-// benchmarking/reserved blocks, the IPv4 limited broadcast address, and
-// the IPv6 documentation prefix).
-var extraUnsafePrefixes = []netip.Prefix{
+// The address test below is the port of llm/credentials.py _ip_is_safe_public_target: an address is a safe public target
+// when Python's ipaddress says is_global and not loopback, private, link-local, multicast, unspecified or reserved.
+// netip's helpers cover loopback, private (10/8, 172.16/12, 192.168/16, fc00::/7), link-local, multicast and
+// unspecified; the tables below are the rest, taken from CPython 3.14's Lib/ipaddress.py (the interpreter the
+// recording in testdata/golden/ssrf_address_classes.json was made on) so the list is complete by construction, not by the
+// cases a review found: IPv4Address._private_networks (0.0.0.0/8, 192.0.0.0/24, 192.0.2.0/24, 198.18.0.0/15,
+// 198.51.100.0/24, 203.0.113.0/24, 240.0.0.0/4, 255.255.255.255/32, ...) and the 100.64.0.0/10 carve-out of
+// IPv4Address.is_global; IPv6Address._private_networks with its _private_networks_exceptions; IPv6Address._reserved_networks.
+//
+// Two ranges are stricter than the reference ON PURPOSE (a pinned Known, ssrf_address_classes_test.go knownStricter): the
+// whole of 192.0.0.0/24 (the reference refuses only 192.0.0.0/29 and 192.0.0.170/31 and accepts 192.0.0.9 and 192.0.0.10,
+// the RFC 7600 and RFC 8155 globally reachable addresses) and 192.88.99.0/24 (RFC 7526 6to4 relay anycast, deprecated).
+
+// nonGlobalV4 are the IPv4 ranges that are not globally reachable and that no netip helper covers.
+var nonGlobalV4 = []netip.Prefix{
+	netip.MustParsePrefix("0.0.0.0/8"),
 	netip.MustParsePrefix("100.64.0.0/10"),
 	netip.MustParsePrefix("192.0.0.0/24"),
 	netip.MustParsePrefix("192.0.2.0/24"),
@@ -161,7 +169,45 @@ var extraUnsafePrefixes = []netip.Prefix{
 	netip.MustParsePrefix("203.0.113.0/24"),
 	netip.MustParsePrefix("240.0.0.0/4"),
 	netip.MustParsePrefix("255.255.255.255/32"),
+}
+
+// nonGlobalV6 are IPv6Address._private_networks that no netip helper covers (::1 and :: are loopback and unspecified,
+// ::ffff:0:0/96 is unwrapped to its IPv4 form first, fc00::/7 is private, fe80::/10 is link-local).
+var nonGlobalV6 = []netip.Prefix{
+	netip.MustParsePrefix("64:ff9b:1::/48"),
+	netip.MustParsePrefix("100::/64"),
+	netip.MustParsePrefix("2001::/23"),
 	netip.MustParsePrefix("2001:db8::/32"),
+	netip.MustParsePrefix("2002::/16"),
+	netip.MustParsePrefix("3fff::/20"),
+}
+
+// globalExceptionsV6 are IPv6Address._private_networks_exceptions: inside a range of nonGlobalV6 yet globally reachable.
+var globalExceptionsV6 = []netip.Prefix{
+	netip.MustParsePrefix("2001:1::1/128"),
+	netip.MustParsePrefix("2001:1::2/128"),
+	netip.MustParsePrefix("2001:3::/32"),
+	netip.MustParsePrefix("2001:4:112::/48"),
+	netip.MustParsePrefix("2001:20::/28"),
+	netip.MustParsePrefix("2001:30::/28"),
+}
+
+// reservedV6 are IPv6Address._reserved_networks: everything outside 2000::/3 that is not another class above.
+var reservedV6 = []netip.Prefix{
+	netip.MustParsePrefix("::/8"), netip.MustParsePrefix("100::/8"), netip.MustParsePrefix("200::/7"),
+	netip.MustParsePrefix("400::/6"), netip.MustParsePrefix("800::/5"), netip.MustParsePrefix("1000::/4"),
+	netip.MustParsePrefix("4000::/3"), netip.MustParsePrefix("6000::/3"), netip.MustParsePrefix("8000::/3"),
+	netip.MustParsePrefix("a000::/3"), netip.MustParsePrefix("c000::/3"), netip.MustParsePrefix("e000::/4"),
+	netip.MustParsePrefix("f000::/5"), netip.MustParsePrefix("f800::/6"), netip.MustParsePrefix("fe00::/9"),
+}
+
+func inAny(addr netip.Addr, prefixes []netip.Prefix) bool {
+	for _, prefix := range prefixes {
+		if prefix.Contains(addr) {
+			return true
+		}
+	}
+	return false
 }
 
 // isSafePublicIP mirrors _ip_is_safe_public_target: a v4-mapped v6 address
@@ -178,10 +224,11 @@ func isSafePublicIP(addr netip.Addr) bool {
 		addr.IsMulticast() || addr.IsUnspecified() {
 		return false
 	}
-	for _, prefix := range extraUnsafePrefixes {
-		if prefix.Addr().Is4() == addr.Is4() && prefix.Contains(addr) {
-			return false
-		}
+	if addr.Is4() {
+		return !inAny(addr, nonGlobalV4)
 	}
-	return true
+	if inAny(addr, reservedV6) {
+		return false
+	}
+	return !inAny(addr, nonGlobalV6) || inAny(addr, globalExceptionsV6)
 }

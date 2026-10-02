@@ -650,3 +650,32 @@ func TestToModelRendersComputedAtAsRFC3339(t *testing.T) {
 		})
 	}
 }
+
+// A FAILED coverage read is an error, never an answer: the always-fetched read
+// must not turn a query failure into the "no coverage rows" zero object (a
+// failure would then read as a measured fact). Only the coverage query fails;
+// every earlier query succeeds.
+func TestResolvePropagatesACoverageQueryFailure(t *testing.T) {
+	for name, tc := range map[string]struct {
+		input    model.ThroughputForecastInput
+		failedAt int // 0-based index of the coverage query
+		drop     int // scanner to drop so the response list lines up
+	}{
+		"derived backlog":  {model.ThroughputForecastInput{HistoryWeeks: 12}, 2, -1},
+		"supplied backlog": {model.ThroughputForecastInput{BacklogSize: intPointer(5), HistoryWeeks: 12}, 1, 1},
+	} {
+		t.Run(name, func(t *testing.T) {
+			responses := fullResponseSet(t, 120, 7)
+			if tc.drop >= 0 {
+				responses = append(responses[:tc.drop], responses[tc.drop+1:]...)
+			}
+			errs := make([]error, tc.failedAt+1)
+			errs[tc.failedAt] = errors.New("coverage boom")
+			client := &fakeClient{responses: responses, errs: errs}
+			got, err := Resolve(context.Background(), client, "org-1", tc.input, mustDay(t, "2026-09-01"))
+			if err == nil || !strings.Contains(err.Error(), "estimate coverage query") {
+				t.Fatalf("got (%v, %v), want the estimate coverage query error", got, err)
+			}
+		})
+	}
+}

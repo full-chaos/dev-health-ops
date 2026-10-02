@@ -171,19 +171,35 @@ type edgeAnswer struct {
 	header string
 }
 
-// throughputForecastCoverageDivergence is the declared divergence of
-// throughputForecast.estimateCoverage on a scope with no throughput history and
-// no estimate-coverage rows (the venue's seed): the recorded Python answer is
-// null (forecast.py skipped the coverage read when the backlog was 0), and
-// query-api answers the ZERO object, by chris's decision "Keep zero" (D4373,
-// read as D4376 by the lead: coverage is built from its own rows, a zero object
-// when there are none, never null). The recorded Python answer stays as
-// recorded; this case holds both sides' answers, so neither can drift unseen.
-func throughputForecastCoverageDivergence(c edgeCase) edgeCase {
-	c.declared = "estimateCoverage: Python answered null when the backlog was 0 (it skipped the read); query-api answers the zero object (D4373 Keep zero, D4376)"
-	c.pyWant = edgeAnswer{status: 200, body: `"estimateCoverage":null`}
-	c.goWant = edgeAnswer{status: 200, body: `"estimateCoverage":{"ratio":0,"estimatedCount":0,"unestimatedCount":0,"backlogSize":0,"__typename":"ThroughputEstimateCoverage"}`}
-	return c
+// The ruled divergence of throughputForecast.estimateCoverage on a scope with no
+// throughput history and no estimate-coverage rows (the venue's seed): the
+// recorded Python answer is null (forecast.py skipped the coverage read when the
+// backlog was 0), and query-api answers the ZERO object, ratio 0 included, by
+// chris's decision "Keep zero" (D4373, read as D4376 by the lead: coverage is
+// built from its own rows, an all-zero object when there are none, never null).
+// The recorded Python answer stays as recorded.
+//
+// It is NOT a declared whole-answer divergence: that would compare two strings
+// and nothing else of the body. Instead the one field is blanked to the same
+// placeholder on both sides (coverageDivergenceNormalize) so every other field
+// of the answer is still compared by Diff, and the raw Go answer is asserted to
+// carry exactly the zero object (coverageDivergenceInspect) so a Go answer of
+// null, or of any other object, fails instead of being blanked away.
+const (
+	pythonNullCoverage      = `"estimateCoverage":null`
+	goZeroCoverage          = `"estimateCoverage":{"ratio":0,"estimatedCount":0,"unestimatedCount":0,"backlogSize":0,"__typename":"ThroughputEstimateCoverage"}`
+	declaredCoverageBlanked = `"estimateCoverage":"<declared D4373/D4376: no coverage rows>"`
+)
+
+func isThroughputForecastRequest(request venueoracle.Request) bool {
+	return strings.HasSuffix(request.Name, " throughputForecast")
+}
+
+func coverageDivergenceNormalize(request venueoracle.Request, body string) string {
+	if !isThroughputForecastRequest(request) {
+		return body
+	}
+	return strings.ReplaceAll(strings.ReplaceAll(body, pythonNullCoverage, declaredCoverageBlanked), goZeroCoverage, declaredCoverageBlanked)
 }
 
 // nosniffOnly is the declared divergence of the size middleware's own
@@ -423,9 +439,6 @@ func edgeOracleCases(t *testing.T, docs []registeredEdgeDocument, users []edgeUs
 		name := documentOperationName(doc.Document)
 		post := edgeCase{request: edgePost("POST "+doc.Operation, member, urqlBody(t, name, doc.Document, variables), nil)}
 		get := edgeCase{request: edgeGet("GET "+doc.Operation, member, urqlGETPath(t, edgeOrgA, name, doc.Document, variables), nil)}
-		if doc.Operation == "throughputForecast" {
-			post, get = throughputForecastCoverageDivergence(post), throughputForecastCoverageDivergence(get)
-		}
 		if doc.Operation == "createSavedReport" {
 			writes = append(writes, post)
 			continue
@@ -664,9 +677,22 @@ func edgeCompare(t *testing.T, goBase string, cs []edgeCase, python []venueoracl
 				python[i].Status, truncateOracleBody(python[i].Body), goResponse.Status, truncateOracleBody(goResponse.Body))
 		}
 	}
+	base := normalize
 	receipt.WriteString(venueoracle.Diff(t, goBase, parity, parityPython, venueoracle.DiffOptions{
-		Normalize: normalize,
-		Golden:    golden,
+		Normalize: func(request venueoracle.Request, body string) string {
+			body = coverageDivergenceNormalize(request, body)
+			if base != nil {
+				body = base(request, body)
+			}
+			return body
+		},
+		Inspect: func(request venueoracle.Request, goResponse venueoracle.Response) {
+			if isThroughputForecastRequest(request) && !strings.Contains(goResponse.Body, goZeroCoverage) {
+				t.Errorf("%s: query-api must answer the all-zero estimateCoverage object (D4373/D4376), got: %s",
+					request.Name, truncateOracleBody(goResponse.Body))
+			}
+		},
+		Golden: golden,
 	}))
 	t.Log("\n" + receipt.String())
 }

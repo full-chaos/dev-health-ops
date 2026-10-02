@@ -45,17 +45,34 @@ import (
 // dispatch_sync_run.no_progress). Recovery itself belongs to the reconciler's repairs,
 // which is why a passing run of this test proves the announcement, not the release.
 func TestDeadDeliveryUnitsDoNotWedgeABucketForever(t *testing.T) {
-	runDeadDeliveryScenario(t, false)
+	runDeadDeliveryScenario(t, false, "light", 2)
+}
+
+// The heavy variant (CHAOS-7807): a heavy bucket's cap is the heavy budget limit
+// (1), so ONE dead-delivery occupant fills it; before the cap came from the
+// budget table it took the clamp (8) occupants. The same progress-or-loud
+// invariant must hold for it.
+func TestDeadDeliveryUnitDoesNotWedgeAHeavyBucketForever(t *testing.T) {
+	runDeadDeliveryScenario(t, false, "heavy", 1)
 }
 
 // The control: identical setup, except the occupants' continuations complete
 // (their units reach `success`). The same progress-or-loud check must then pass,
 // so it is the dead delivery -- not the fixture -- that the test above measures.
 func TestFinishedOccupantsFreeTheBucketForPlannedUnits(t *testing.T) {
-	runDeadDeliveryScenario(t, true)
+	runDeadDeliveryScenario(t, true, "light", 2)
 }
 
-func runDeadDeliveryScenario(t *testing.T, occupantsFinish bool) {
+// The heavy control: the one occupant's continuation completes.
+func TestFinishedOccupantFreesTheHeavyBucketForPlannedUnits(t *testing.T) {
+	runDeadDeliveryScenario(t, true, "heavy", 1)
+}
+
+// runDeadDeliveryScenario drives the scenario for a bucket of one cost class
+// holding occupantCount dead-delivery units, which must equal the class's
+// admission cap (light 2 under the test's SYNC_UNIT_CONCURRENCY_PER_BUCKET=2
+// clamp, heavy 1 from the budget table).
+func runDeadDeliveryScenario(t *testing.T, occupantsFinish bool, costClass string, occupantCount int) {
 	t.Helper()
 	const (
 		bucketCap   = 2
@@ -111,7 +128,7 @@ VALUES (gen_random_uuid(),$1,$2,$3,1,now(),now(),now())`, id, discoveryTestOrg, 
 			now := clock
 			pgseed.InsertSyncRunUnit(ctx, t, pool, pgseed.SyncRunUnit{
 				ID: id, RunID: r.id, OrgID: discoveryTestOrg, SourceID: dispatchTestSource,
-				Provider: "github", DatasetKey: "commits", CostClass: "light", Status: "planned", UpdatedAt: &now,
+				Provider: "github", DatasetKey: "commits", CostClass: costClass, Status: "planned", UpdatedAt: &now,
 			})
 			return id
 		}
@@ -140,7 +157,10 @@ WHERE id=$1::uuid`, r.outbox, clock, dispatchRouteGeneration); err != nil {
 		// Two occupant runs: one unit each, claimed by a first pass (so its delivery
 		// row is the real, byte-identical envelope), whose delivery then goes
 		// terminal -- the shape all eleven prod runs were in.
-		occupants := []run{newRun(1), newRun(2)}
+		var occupants []run
+		for n := 1; n <= occupantCount; n++ {
+			occupants = append(occupants, newRun(n))
+		}
 		var occupantUnits []string
 		for i, r := range occupants {
 			occupantUnits = append(occupantUnits, addUnit(r, i))
@@ -214,7 +234,13 @@ WHERE o.id = numbered.id`, clock); err != nil {
 		}
 		var runsFailed int
 		if err := pool.QueryRow(ctx, `SELECT count(*) FROM sync_runs WHERE id = ANY($1) AND status IN ('failed','partial_failed')`,
-			[]string{occupants[0].id, occupants[1].id, waiting.id}).Scan(&runsFailed); err != nil {
+			func() []string {
+				ids := []string{waiting.id}
+				for _, r := range occupants {
+					ids = append(ids, r.id)
+				}
+				return ids
+			}()).Scan(&runsFailed); err != nil {
 			t.Fatal(err)
 		}
 

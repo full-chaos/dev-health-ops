@@ -1,434 +1,420 @@
 {
-  "131 repos base=\"http://[2001:4860:4860::8888]\" org=\"acme\" search=\"\" pattern=\"\" max=\u003cnone\u003e": {
-    "result": "\"link_cross_origin_refused: refused a next page link on another origin\"",
-    "requests": "[[http://[2001:4860:4860::8888]/orgs/acme/repos?per_page=100 token tok]]",
-    "python_result": "[[\"api\",\"Org/api\",\"about api\",\"https://github.example.test/Org/api\"],[\"web\",\"Org/web\",\"about web\",\"https://github.example.test/Org/web\"],[\"docs\",\"Org/docs\",\"about docs\",\"https://github.example.test/Org/docs\"]]",
-    "python_requests": "[[http://[2001:4860:4860::8888]/orgs/acme/repos?per_page=100 token tok] [http://[2001:db8::1]:9/x?page=2 token tok]]"
+  "installation base=\"//ghe.test/api/v3\" org=\"\" search=\"\" pattern=\"\" max=\u003cnone\u003e #de1d05b49363": {
+    "result": "\"APIException: parse \\\"://ghe.test/api/v3/installation/repositories?per_page=100\\\": missing protocol scheme\"",
+    "requests": "[]",
+    "python_result": "\"ValueError: unknown url type: '//ghe.test/api/v3/installation/repositories?per_page=100'\"",
+    "python_requests": "[[//ghe.test/api/v3/installation/repositories?per_page=100 token tok]]"
   },
-  "133 repos base=\"https://[2001:4860:4860::8888]:8443/api/v3\" org=\"acme\" search=\"\" pattern=\"\" max=\u003cnone\u003e": {
-    "result": "\"link_cross_origin_refused: refused a next page link on another origin\"",
-    "requests": "[[https://[2001:4860:4860::8888]:8443/api/v3/orgs/acme/repos?per_page=100 token tok]]",
-    "python_result": "[[\"api\",\"Org/api\",\"about api\",\"https://github.example.test/Org/api\"],[\"web\",\"Org/web\",\"about web\",\"https://github.example.test/Org/web\"],[\"docs\",\"Org/docs\",\"about docs\",\"https://github.example.test/Org/docs\"]]",
-    "python_requests": "[[https://[2001:4860:4860::8888]:8443/api/v3/orgs/acme/repos?per_page=100 token tok] [http://[2001:db8::1]:9/x?page=2 token tok]]"
+  "installation base=\"ghe.test/api/v3\" org=\"\" search=\"\" pattern=\"\" max=\u003cnone\u003e #ee7f0d328a4e": {
+    "result": "\"APIException: parse \\\"://ghe.test/api/v3/installation/repositories?per_page=100\\\": missing protocol scheme\"",
+    "requests": "[]",
+    "python_result": "\"ValueError: unknown url type: 'ghe.test/api/v3/installation/repositories?per_page=100'\"",
+    "python_requests": "[[ghe.test/api/v3/installation/repositories?per_page=100 token tok]]"
   },
-  "135 repos base=\"https://[2001:DB8::1]:443/x\" org=\"acme\" search=\"\" pattern=\"\" max=\u003cnone\u003e": {
-    "result": "\"link_cross_origin_refused: refused a next page link on another origin\"",
-    "requests": "[[https://[2001:DB8::1]/x/orgs/acme/repos?per_page=100 token tok]]",
-    "python_result": "[[\"api\",\"Org/api\",\"about api\",\"https://github.example.test/Org/api\"],[\"web\",\"Org/web\",\"about web\",\"https://github.example.test/Org/web\"],[\"docs\",\"Org/docs\",\"about docs\",\"https://github.example.test/Org/docs\"]]",
-    "python_requests": "[[https://[2001:DB8::1]/x/orgs/acme/repos?per_page=100 token tok] [http://[2001:db8::1]:9/x?page=2 token tok]]"
+  "installation base=\"https://ghe.test/a#b#c\" org=\"\" search=\"\" pattern=\"\" max=\u003cnone\u003e #27b17f543c32": {
+    "result": "[]",
+    "requests": "[[https://ghe.test/a/installation/repositories?per_page=100#b%23c token tok]]",
+    "python_result": "[]",
+    "python_requests": "[[https://ghe.test/a/installation/repositories?per_page=100#b#c token tok]]"
   },
-  "137 repos base=\"http://[::1]:80\" org=\"acme\" search=\"\" pattern=\"\" max=\u003cnone\u003e": {
-    "result": "\"link_cross_origin_refused: refused a next page link on another origin\"",
-    "requests": "[[http://[::1]/orgs/acme/repos?per_page=100 token tok]]",
-    "python_result": "[[\"api\",\"Org/api\",\"about api\",\"https://github.example.test/Org/api\"],[\"web\",\"Org/web\",\"about web\",\"https://github.example.test/Org/web\"],[\"docs\",\"Org/docs\",\"about docs\",\"https://github.example.test/Org/docs\"]]",
-    "python_requests": "[[http://[::1]/orgs/acme/repos?per_page=100 token tok] [http://[2001:db8::1]:9/x?page=2 token tok]]"
+  "installation base=\"https://ghe.test/api/v3#\" org=\"\" search=\"\" pattern=\"\" max=\u003cnone\u003e #705f74af2863": {
+    "result": "[]",
+    "requests": "[[https://ghe.test/api/v3/installation/repositories?per_page=100 token tok]]",
+    "python_result": "[]",
+    "python_requests": "[[https://ghe.test/api/v3/installation/repositories?per_page=100# token tok]]"
   },
-  "139 repos base=\"https://GHE.Test:443/api/v3\" org=\"acme\" search=\"\" pattern=\"\" max=\u003cnone\u003e": {
-    "result": "\"link_cross_origin_refused: refused a next page link on another origin\"",
-    "requests": "[[https://ghe.test/api/v3/orgs/acme/repos?per_page=100 token tok]]",
-    "python_result": "[[\"api\",\"Org/api\",\"about api\",\"https://github.example.test/Org/api\"],[\"web\",\"Org/web\",\"about web\",\"https://github.example.test/Org/web\"],[\"docs\",\"Org/docs\",\"about docs\",\"https://github.example.test/Org/docs\"]]",
-    "python_requests": "[[https://ghe.test/api/v3/orgs/acme/repos?per_page=100 token tok] [http://[2001:db8::1]:9/x?page=2 token tok]]"
+  "installation base=\"https://ghe.test/api/v3?#\" org=\"\" search=\"\" pattern=\"\" max=\u003cnone\u003e #c9890e42b3ba": {
+    "result": "[]",
+    "requests": "[[https://ghe.test/api/v3?per_page=100 token tok]]",
+    "python_result": "[]",
+    "python_requests": "[[https://ghe.test/api/v3?per_page=100# token tok]]"
   },
-  "141 repos base=\"http://192.0.2.1:8080/x\" org=\"acme\" search=\"\" pattern=\"\" max=\u003cnone\u003e": {
-    "result": "\"link_cross_origin_refused: refused a next page link on another origin\"",
-    "requests": "[[http://192.0.2.1:8080/x/orgs/acme/repos?per_page=100 token tok]]",
-    "python_result": "[[\"api\",\"Org/api\",\"about api\",\"https://github.example.test/Org/api\"],[\"web\",\"Org/web\",\"about web\",\"https://github.example.test/Org/web\"],[\"docs\",\"Org/docs\",\"about docs\",\"https://github.example.test/Org/docs\"]]",
-    "python_requests": "[[http://192.0.2.1:8080/x/orgs/acme/repos?per_page=100 token tok] [http://[2001:db8::1]:9/x?page=2 token tok]]"
+  "installation base=\"https://ghé.test/api/v3\" org=\"\" search=\"\" pattern=\"\" max=\u003cnone\u003e #02988d83a306": {
+    "result": "[]",
+    "requests": "[[https://gh%C3%A9.test/api/v3/installation/repositories?per_page=100 token tok]]",
+    "python_result": "[]",
+    "python_requests": "[[https://xn--gh-cja.test/api/v3/installation/repositories?per_page=100 token tok]]"
   },
-  "143 repos base=\"https://ghe.test:8443/api/v3\" org=\"acme\" search=\"\" pattern=\"\" max=\u003cnone\u003e": {
-    "result": "\"link_cross_origin_refused: refused a next page link on another origin\"",
-    "requests": "[[https://ghe.test:8443/api/v3/orgs/acme/repos?per_page=100 token tok]]",
-    "python_result": "[[\"api\",\"Org/api\",\"about api\",\"https://github.example.test/Org/api\"],[\"web\",\"Org/web\",\"about web\",\"https://github.example.test/Org/web\"],[\"docs\",\"Org/docs\",\"about docs\",\"https://github.example.test/Org/docs\"]]",
-    "python_requests": "[[https://ghe.test:8443/api/v3/orgs/acme/repos?per_page=100 token tok] [http://[2001:db8::1]:9/x?page=2 token tok]]"
+  "installation base=\"https://u@ghe.test\" org=\"\" search=\"\" pattern=\"\" max=\u003cnone\u003e #10a682e20a75": {
+    "result": "[]",
+    "requests": "[[https://ghe.test/installation/repositories?per_page=100 token tok]]",
+    "python_result": "[]",
+    "python_requests": "[[https://u@ghe.test/installation/repositories?per_page=100 Basic dTo=]]"
   },
-  "145 repos base=\"http://GHE.test:80\" org=\"acme\" search=\"\" pattern=\"\" max=\u003cnone\u003e": {
-    "result": "\"link_cross_origin_refused: refused a next page link on another origin\"",
-    "requests": "[[http://ghe.test/orgs/acme/repos?per_page=100 token tok]]",
-    "python_result": "[[\"api\",\"Org/api\",\"about api\",\"https://github.example.test/Org/api\"],[\"web\",\"Org/web\",\"about web\",\"https://github.example.test/Org/web\"],[\"docs\",\"Org/docs\",\"about docs\",\"https://github.example.test/Org/docs\"]]",
-    "python_requests": "[[http://ghe.test/orgs/acme/repos?per_page=100 token tok] [http://[2001:db8::1]:9/x?page=2 token tok]]"
+  "installation base=\"https://user:pw@ghe.test/api/v3\" org=\"\" search=\"\" pattern=\"\" max=\u003cnone\u003e #f198a65adc98": {
+    "result": "[]",
+    "requests": "[[https://ghe.test/api/v3/installation/repositories?per_page=100 token tok]]",
+    "python_result": "[]",
+    "python_requests": "[[https://user:pw@ghe.test/api/v3/installation/repositories?per_page=100 Basic dXNlcjpwdw==]]"
   },
-  "287 repos base=\"\" org=\"acme\" search=\"\" pattern=\"\" max=\u003cnone\u003e": {
-    "result": "\"link_cross_origin_refused: refused a next page link on another origin\"",
-    "requests": "[[https://api.github.com/orgs/acme/repos?per_page=100 token tok]]",
-    "python_result": "[[\"api\",\"Org/api\",\"about api\",\"https://github.example.test/Org/api\"],[\"web\",\"Org/web\",\"about web\",\"https://github.example.test/Org/web\"],[\"docs\",\"Org/docs\",\"about docs\",\"https://github.example.test/Org/docs\"]]",
-    "python_requests": "[[https://api.github.com/orgs/acme/repos?per_page=100 token tok] [https://api.github.com/x token tok]]"
-  },
-  "288 repos base=\"https://ghe.test/api/v3\" org=\"acme\" search=\"\" pattern=\"\" max=\u003cnone\u003e": {
-    "result": "\"link_cross_origin_refused: refused a next page link on another origin\"",
-    "requests": "[[https://ghe.test/api/v3/orgs/acme/repos?per_page=100 token tok]]",
-    "python_result": "[[\"api\",\"Org/api\",\"about api\",\"https://github.example.test/Org/api\"],[\"web\",\"Org/web\",\"about web\",\"https://github.example.test/Org/web\"],[\"docs\",\"Org/docs\",\"about docs\",\"https://github.example.test/Org/docs\"]]",
-    "python_requests": "[[https://ghe.test/api/v3/orgs/acme/repos?per_page=100 token tok] [https://ghe.test/api/v3/x token tok]]"
-  },
-  "290 repos base=\"https://ghe.test/api/v3\" org=\"acme\" search=\"\" pattern=\"\" max=\u003cnone\u003e": {
-    "result": "\"link_cross_origin_refused: refused a next page link on another origin\"",
-    "requests": "[[https://ghe.test/api/v3/orgs/acme/repos?per_page=100 token tok]]",
-    "python_result": "[[\"api\",\"Org/api\",\"about api\",\"https://github.example.test/Org/api\"],[\"web\",\"Org/web\",\"about web\",\"https://github.example.test/Org/web\"],[\"docs\",\"Org/docs\",\"about docs\",\"https://github.example.test/Org/docs\"]]",
-    "python_requests": "[[https://ghe.test/api/v3/orgs/acme/repos?per_page=100 token tok] [https://api.github.com/x? token tok]]"
-  },
-  "291 repos base=\"\" org=\"acme\" search=\"\" pattern=\"\" max=\u003cnone\u003e": {
-    "result": "[[\"api\",\"Org/api\",\"about api\",\"https://github.example.test/Org/api\"],[\"web\",\"Org/web\",\"about web\",\"https://github.example.test/Org/web\"],[\"docs\",\"Org/docs\",\"about docs\",\"https://github.example.test/Org/docs\"]]",
-    "requests": "[[https://api.github.com/orgs/acme/repos?per_page=100 token tok] [https://api.github.com/x token tok]]",
-    "python_result": "[[\"api\",\"Org/api\",\"about api\",\"https://github.example.test/Org/api\"],[\"web\",\"Org/web\",\"about web\",\"https://github.example.test/Org/web\"],[\"docs\",\"Org/docs\",\"about docs\",\"https://github.example.test/Org/docs\"]]",
-    "python_requests": "[[https://api.github.com/orgs/acme/repos?per_page=100 token tok] [https://api.github.com/x# token tok]]"
-  },
-  "292 repos base=\"https://ghe.test/api/v3\" org=\"acme\" search=\"\" pattern=\"\" max=\u003cnone\u003e": {
-    "result": "\"link_cross_origin_refused: refused a next page link on another origin\"",
-    "requests": "[[https://ghe.test/api/v3/orgs/acme/repos?per_page=100 token tok]]",
-    "python_result": "[[\"api\",\"Org/api\",\"about api\",\"https://github.example.test/Org/api\"],[\"web\",\"Org/web\",\"about web\",\"https://github.example.test/Org/web\"],[\"docs\",\"Org/docs\",\"about docs\",\"https://github.example.test/Org/docs\"]]",
-    "python_requests": "[[https://ghe.test/api/v3/orgs/acme/repos?per_page=100 token tok] [https://api.github.com/x# token tok]]"
-  },
-  "293 repos base=\"\" org=\"acme\" search=\"\" pattern=\"\" max=\u003cnone\u003e": {
+  "repos base=\"\" org=\"acme\" search=\"\" pattern=\"\" max=\u003cnone\u003e #09cda5e6f03d": {
     "result": "[[\"api\",\"Org/api\",\"about api\",\"https://github.example.test/Org/api\"],[\"web\",\"Org/web\",\"about web\",\"https://github.example.test/Org/web\"],[\"docs\",\"Org/docs\",\"about docs\",\"https://github.example.test/Org/docs\"]]",
     "requests": "[[https://api.github.com/orgs/acme/repos?per_page=100 token tok] [https://api.github.com/x? token tok]]",
     "python_result": "[[\"api\",\"Org/api\",\"about api\",\"https://github.example.test/Org/api\"],[\"web\",\"Org/web\",\"about web\",\"https://github.example.test/Org/web\"],[\"docs\",\"Org/docs\",\"about docs\",\"https://github.example.test/Org/docs\"]]",
     "python_requests": "[[https://api.github.com/orgs/acme/repos?per_page=100 token tok] [https://api.github.com/x?# token tok]]"
   },
-  "294 repos base=\"https://ghe.test/api/v3\" org=\"acme\" search=\"\" pattern=\"\" max=\u003cnone\u003e": {
-    "result": "\"link_cross_origin_refused: refused a next page link on another origin\"",
-    "requests": "[[https://ghe.test/api/v3/orgs/acme/repos?per_page=100 token tok]]",
-    "python_result": "[[\"api\",\"Org/api\",\"about api\",\"https://github.example.test/Org/api\"],[\"web\",\"Org/web\",\"about web\",\"https://github.example.test/Org/web\"],[\"docs\",\"Org/docs\",\"about docs\",\"https://github.example.test/Org/docs\"]]",
-    "python_requests": "[[https://ghe.test/api/v3/orgs/acme/repos?per_page=100 token tok] [https://api.github.com/x?# token tok]]"
-  },
-  "307 repos base=\"\" org=\"acme\" search=\"\" pattern=\"\" max=\u003cnone\u003e": {
-    "result": "[[\"api\",\"Org/api\",\"about api\",\"https://github.example.test/Org/api\"],[\"web\",\"Org/web\",\"about web\",\"https://github.example.test/Org/web\"],[\"docs\",\"Org/docs\",\"about docs\",\"https://github.example.test/Org/docs\"]]",
-    "requests": "[[https://api.github.com/orgs/acme/repos?per_page=100 token tok] [https://api.github.com/? token tok]]",
-    "python_result": "[[\"api\",\"Org/api\",\"about api\",\"https://github.example.test/Org/api\"],[\"web\",\"Org/web\",\"about web\",\"https://github.example.test/Org/web\"],[\"docs\",\"Org/docs\",\"about docs\",\"https://github.example.test/Org/docs\"]]",
-    "python_requests": "[[https://api.github.com/orgs/acme/repos?per_page=100 token tok] [https://api.github.com? token tok]]"
-  },
-  "308 repos base=\"https://ghe.test/api/v3\" org=\"acme\" search=\"\" pattern=\"\" max=\u003cnone\u003e": {
-    "result": "\"link_cross_origin_refused: refused a next page link on another origin\"",
-    "requests": "[[https://ghe.test/api/v3/orgs/acme/repos?per_page=100 token tok]]",
-    "python_result": "[[\"api\",\"Org/api\",\"about api\",\"https://github.example.test/Org/api\"],[\"web\",\"Org/web\",\"about web\",\"https://github.example.test/Org/web\"],[\"docs\",\"Org/docs\",\"about docs\",\"https://github.example.test/Org/docs\"]]",
-    "python_requests": "[[https://ghe.test/api/v3/orgs/acme/repos?per_page=100 token tok] [https://api.github.com? token tok]]"
-  },
-  "309 repos base=\"\" org=\"acme\" search=\"\" pattern=\"\" max=\u003cnone\u003e": {
+  "repos base=\"\" org=\"acme\" search=\"\" pattern=\"\" max=\u003cnone\u003e #126a30f6c7a4": {
     "result": "[[\"api\",\"Org/api\",\"about api\",\"https://github.example.test/Org/api\"],[\"web\",\"Org/web\",\"about web\",\"https://github.example.test/Org/web\"],[\"docs\",\"Org/docs\",\"about docs\",\"https://github.example.test/Org/docs\"]]",
     "requests": "[[https://api.github.com/orgs/acme/repos?per_page=100 token tok] [https://api.github.com/ token tok]]",
     "python_result": "[[\"api\",\"Org/api\",\"about api\",\"https://github.example.test/Org/api\"],[\"web\",\"Org/web\",\"about web\",\"https://github.example.test/Org/web\"],[\"docs\",\"Org/docs\",\"about docs\",\"https://github.example.test/Org/docs\"]]",
-    "python_requests": "[[https://api.github.com/orgs/acme/repos?per_page=100 token tok] [https://api.github.com# token tok]]"
+    "python_requests": "[[https://api.github.com/orgs/acme/repos?per_page=100 token tok] [https://api.github.com/alert(1) token tok]]"
   },
-  "310 repos base=\"https://ghe.test/api/v3\" org=\"acme\" search=\"\" pattern=\"\" max=\u003cnone\u003e": {
-    "result": "\"link_cross_origin_refused: refused a next page link on another origin\"",
-    "requests": "[[https://ghe.test/api/v3/orgs/acme/repos?per_page=100 token tok]]",
-    "python_result": "[[\"api\",\"Org/api\",\"about api\",\"https://github.example.test/Org/api\"],[\"web\",\"Org/web\",\"about web\",\"https://github.example.test/Org/web\"],[\"docs\",\"Org/docs\",\"about docs\",\"https://github.example.test/Org/docs\"]]",
-    "python_requests": "[[https://ghe.test/api/v3/orgs/acme/repos?per_page=100 token tok] [https://api.github.com# token tok]]"
-  },
-  "311 repos base=\"\" org=\"acme\" search=\"\" pattern=\"\" max=\u003cnone\u003e": {
+  "repos base=\"\" org=\"acme\" search=\"\" pattern=\"\" max=\u003cnone\u003e #229fc1dd4d3a": {
     "result": "\"UnsupportedProtocol: Request URL has an unsupported protocol 'ftp://'.\"",
     "requests": "[[https://api.github.com/orgs/acme/repos?per_page=100 token tok]]",
     "python_result": "[[\"api\",\"Org/api\",\"about api\",\"https://github.example.test/Org/api\"],[\"web\",\"Org/web\",\"about web\",\"https://github.example.test/Org/web\"],[\"docs\",\"Org/docs\",\"about docs\",\"https://github.example.test/Org/docs\"]]",
     "python_requests": "[[https://api.github.com/orgs/acme/repos?per_page=100 token tok] [ftp://x.test/y token tok]]",
     "not_measured": true
   },
-  "312 repos base=\"https://ghe.test/api/v3\" org=\"acme\" search=\"\" pattern=\"\" max=\u003cnone\u003e": {
-    "result": "\"UnsupportedProtocol: Request URL has an unsupported protocol 'ftp://'.\"",
-    "requests": "[[https://ghe.test/api/v3/orgs/acme/repos?per_page=100 token tok]]",
-    "python_result": "[[\"api\",\"Org/api\",\"about api\",\"https://github.example.test/Org/api\"],[\"web\",\"Org/web\",\"about web\",\"https://github.example.test/Org/web\"],[\"docs\",\"Org/docs\",\"about docs\",\"https://github.example.test/Org/docs\"]]",
-    "python_requests": "[[https://ghe.test/api/v3/orgs/acme/repos?per_page=100 token tok] [ftp://x.test/y token tok]]",
-    "not_measured": true
-  },
-  "315 repos base=\"\" org=\"acme\" search=\"\" pattern=\"\" max=\u003cnone\u003e": {
-    "result": "[[\"api\",\"Org/api\",\"about api\",\"https://github.example.test/Org/api\"],[\"web\",\"Org/web\",\"about web\",\"https://github.example.test/Org/web\"],[\"docs\",\"Org/docs\",\"about docs\",\"https://github.example.test/Org/docs\"]]",
-    "requests": "[[https://api.github.com/orgs/acme/repos?per_page=100 token tok] [https://api.github.com/ token tok]]",
-    "python_result": "[[\"api\",\"Org/api\",\"about api\",\"https://github.example.test/Org/api\"],[\"web\",\"Org/web\",\"about web\",\"https://github.example.test/Org/web\"],[\"docs\",\"Org/docs\",\"about docs\",\"https://github.example.test/Org/docs\"]]",
-    "python_requests": "[[https://api.github.com/orgs/acme/repos?per_page=100 token tok] [https://api.github.com/a@b token tok]]"
-  },
-  "316 repos base=\"https://ghe.test/api/v3\" org=\"acme\" search=\"\" pattern=\"\" max=\u003cnone\u003e": {
-    "result": "[[\"api\",\"Org/api\",\"about api\",\"https://github.example.test/Org/api\"],[\"web\",\"Org/web\",\"about web\",\"https://github.example.test/Org/web\"],[\"docs\",\"Org/docs\",\"about docs\",\"https://github.example.test/Org/docs\"]]",
-    "requests": "[[https://ghe.test/api/v3/orgs/acme/repos?per_page=100 token tok] [https://ghe.test/api/v3/ token tok]]",
-    "python_result": "[[\"api\",\"Org/api\",\"about api\",\"https://github.example.test/Org/api\"],[\"web\",\"Org/web\",\"about web\",\"https://github.example.test/Org/web\"],[\"docs\",\"Org/docs\",\"about docs\",\"https://github.example.test/Org/docs\"]]",
-    "python_requests": "[[https://ghe.test/api/v3/orgs/acme/repos?per_page=100 token tok] [https://ghe.test/api/v3/a@b token tok]]"
-  },
-  "317 repos base=\"\" org=\"acme\" search=\"\" pattern=\"\" max=\u003cnone\u003e": {
-    "result": "\"UnsupportedProtocol: Request URL has an unsupported protocol 'gopher://'.\"",
-    "requests": "[[https://api.github.com/orgs/acme/repos?per_page=100 token tok]]",
-    "python_result": "[[\"api\",\"Org/api\",\"about api\",\"https://github.example.test/Org/api\"],[\"web\",\"Org/web\",\"about web\",\"https://github.example.test/Org/web\"],[\"docs\",\"Org/docs\",\"about docs\",\"https://github.example.test/Org/docs\"]]",
-    "python_requests": "[[https://api.github.com/orgs/acme/repos?per_page=100 token tok] [gopher://x.test/y token tok]]",
-    "not_measured": true
-  },
-  "318 repos base=\"https://ghe.test/api/v3\" org=\"acme\" search=\"\" pattern=\"\" max=\u003cnone\u003e": {
-    "result": "\"UnsupportedProtocol: Request URL has an unsupported protocol 'gopher://'.\"",
-    "requests": "[[https://ghe.test/api/v3/orgs/acme/repos?per_page=100 token tok]]",
-    "python_result": "[[\"api\",\"Org/api\",\"about api\",\"https://github.example.test/Org/api\"],[\"web\",\"Org/web\",\"about web\",\"https://github.example.test/Org/web\"],[\"docs\",\"Org/docs\",\"about docs\",\"https://github.example.test/Org/docs\"]]",
-    "python_requests": "[[https://ghe.test/api/v3/orgs/acme/repos?per_page=100 token tok] [gopher://x.test/y token tok]]",
-    "not_measured": true
-  },
-  "319 repos base=\"\" org=\"acme\" search=\"\" pattern=\"\" max=\u003cnone\u003e": {
-    "result": "[[\"api\",\"Org/api\",\"about api\",\"https://github.example.test/Org/api\"],[\"web\",\"Org/web\",\"about web\",\"https://github.example.test/Org/web\"],[\"docs\",\"Org/docs\",\"about docs\",\"https://github.example.test/Org/docs\"]]",
-    "requests": "[[https://api.github.com/orgs/acme/repos?per_page=100 token tok] [https://api.github.com/ token tok]]",
-    "python_result": "[[\"api\",\"Org/api\",\"about api\",\"https://github.example.test/Org/api\"],[\"web\",\"Org/web\",\"about web\",\"https://github.example.test/Org/web\"],[\"docs\",\"Org/docs\",\"about docs\",\"https://github.example.test/Org/docs\"]]",
-    "python_requests": "[[https://api.github.com/orgs/acme/repos?per_page=100 token tok] [https://api.github.com/alert(1) token tok]]"
-  },
-  "320 repos base=\"https://ghe.test/api/v3\" org=\"acme\" search=\"\" pattern=\"\" max=\u003cnone\u003e": {
-    "result": "[[\"api\",\"Org/api\",\"about api\",\"https://github.example.test/Org/api\"],[\"web\",\"Org/web\",\"about web\",\"https://github.example.test/Org/web\"],[\"docs\",\"Org/docs\",\"about docs\",\"https://github.example.test/Org/docs\"]]",
-    "requests": "[[https://ghe.test/api/v3/orgs/acme/repos?per_page=100 token tok] [https://ghe.test/api/v3/ token tok]]",
-    "python_result": "[[\"api\",\"Org/api\",\"about api\",\"https://github.example.test/Org/api\"],[\"web\",\"Org/web\",\"about web\",\"https://github.example.test/Org/web\"],[\"docs\",\"Org/docs\",\"about docs\",\"https://github.example.test/Org/docs\"]]",
-    "python_requests": "[[https://ghe.test/api/v3/orgs/acme/repos?per_page=100 token tok] [https://ghe.test/api/v3/alert(1) token tok]]"
-  },
-  "322 repos base=\"https://ghe.test/api/v3\" org=\"acme\" search=\"\" pattern=\"\" max=\u003cnone\u003e": {
-    "result": "\"link_cross_origin_refused: refused a next page link on another origin\"",
-    "requests": "[[https://ghe.test/api/v3/orgs/acme/repos?per_page=100 token tok]]",
-    "python_result": "[[\"api\",\"Org/api\",\"about api\",\"https://github.example.test/Org/api\"],[\"web\",\"Org/web\",\"about web\",\"https://github.example.test/Org/web\"],[\"docs\",\"Org/docs\",\"about docs\",\"https://github.example.test/Org/docs\"]]",
-    "python_requests": "[[https://ghe.test/api/v3/orgs/acme/repos?per_page=100 token tok] [https://api.github.com/x?page=2 token tok]]"
-  },
-  "323 repos base=\"\" org=\"acme\" search=\"\" pattern=\"\" max=\u003cnone\u003e": {
+  "repos base=\"\" org=\"acme\" search=\"\" pattern=\"\" max=\u003cnone\u003e #32b6e12df6bb": {
     "result": "\"link_cross_origin_refused: refused a next page link on another origin\"",
     "requests": "[[https://api.github.com/orgs/acme/repos?per_page=100 token tok]]",
     "python_result": "[[\"api\",\"Org/api\",\"about api\",\"https://github.example.test/Org/api\"],[\"web\",\"Org/web\",\"about web\",\"https://github.example.test/Org/web\"],[\"docs\",\"Org/docs\",\"about docs\",\"https://github.example.test/Org/docs\"]]",
     "python_requests": "[[https://api.github.com/orgs/acme/repos?per_page=100 token tok] [http://api.github.com/x token tok]]"
   },
-  "324 repos base=\"https://ghe.test/api/v3\" org=\"acme\" search=\"\" pattern=\"\" max=\u003cnone\u003e": {
-    "result": "\"link_cross_origin_refused: refused a next page link on another origin\"",
-    "requests": "[[https://ghe.test/api/v3/orgs/acme/repos?per_page=100 token tok]]",
-    "python_result": "[[\"api\",\"Org/api\",\"about api\",\"https://github.example.test/Org/api\"],[\"web\",\"Org/web\",\"about web\",\"https://github.example.test/Org/web\"],[\"docs\",\"Org/docs\",\"about docs\",\"https://github.example.test/Org/docs\"]]",
-    "python_requests": "[[https://ghe.test/api/v3/orgs/acme/repos?per_page=100 token tok] [http://api.github.com/x token tok]]"
-  },
-  "337 repos base=\"\" org=\"acme\" search=\"\" pattern=\"\" max=\u003cnone\u003e": {
+  "repos base=\"\" org=\"acme\" search=\"\" pattern=\"\" max=\u003cnone\u003e #33463de5c591": {
     "result": "[[\"api\",\"Org/api\",\"about api\",\"https://github.example.test/Org/api\"],[\"web\",\"Org/web\",\"about web\",\"https://github.example.test/Org/web\"],[\"docs\",\"Org/docs\",\"about docs\",\"https://github.example.test/Org/docs\"]]",
     "requests": "[[https://api.github.com/orgs/acme/repos?per_page=100 token tok] [https://api.github.com/%C3%A9?%C3%BC=1 token tok]]",
     "python_result": "\"UnicodeEncodeError: 'ascii' codec can't encode character '\\\\xe9' in position 2: ordinal not in range(128)\"",
     "python_requests": "[[https://api.github.com/orgs/acme/repos?per_page=100 token tok]]",
     "not_measured": true
   },
-  "338 repos base=\"https://ghe.test/api/v3\" org=\"acme\" search=\"\" pattern=\"\" max=\u003cnone\u003e": {
+  "repos base=\"\" org=\"acme\" search=\"\" pattern=\"\" max=\u003cnone\u003e #34aa8dfa03bd": {
+    "result": "\"link_cross_origin_refused: refused a next page link on another origin\"",
+    "requests": "[[https://api.github.com/orgs/acme/repos?per_page=100 token tok]]",
+    "python_result": "[[\"api\",\"Org/api\",\"about api\",\"https://github.example.test/Org/api\"],[\"web\",\"Org/web\",\"about web\",\"https://github.example.test/Org/web\"],[\"docs\",\"Org/docs\",\"about docs\",\"https://github.example.test/Org/docs\"]]",
+    "python_requests": "[[https://api.github.com/orgs/acme/repos?per_page=100 token tok] [https://u:p@other.test:99/x?q=1 Basic dTpw]]"
+  },
+  "repos base=\"\" org=\"acme\" search=\"\" pattern=\"\" max=\u003cnone\u003e #41c88621a517": {
+    "result": "[[\"api\",\"Org/api\",\"about api\",\"https://github.example.test/Org/api\"],[\"web\",\"Org/web\",\"about web\",\"https://github.example.test/Org/web\"],[\"docs\",\"Org/docs\",\"about docs\",\"https://github.example.test/Org/docs\"]]",
+    "requests": "[[https://api.github.com/orgs/acme/repos?per_page=100 token tok] [https://api.github.com/ token tok]]",
+    "python_result": "[[\"api\",\"Org/api\",\"about api\",\"https://github.example.test/Org/api\"],[\"web\",\"Org/web\",\"about web\",\"https://github.example.test/Org/web\"],[\"docs\",\"Org/docs\",\"about docs\",\"https://github.example.test/Org/docs\"]]",
+    "python_requests": "[[https://api.github.com/orgs/acme/repos?per_page=100 token tok] [https://api.github.com# token tok]]"
+  },
+  "repos base=\"\" org=\"acme\" search=\"\" pattern=\"\" max=\u003cnone\u003e #56b999e168f7": {
+    "result": "\"link_cross_origin_refused: refused a next page link on another origin\"",
+    "requests": "[[https://api.github.com/orgs/acme/repos?per_page=100 token tok]]",
+    "python_result": "[[\"api\",\"Org/api\",\"about api\",\"https://github.example.test/Org/api\"],[\"web\",\"Org/web\",\"about web\",\"https://github.example.test/Org/web\"],[\"docs\",\"Org/docs\",\"about docs\",\"https://github.example.test/Org/docs\"]]",
+    "python_requests": "[[https://api.github.com/orgs/acme/repos?per_page=100 token tok] [http://api.github.com/x token tok]]"
+  },
+  "repos base=\"\" org=\"acme\" search=\"\" pattern=\"\" max=\u003cnone\u003e #7e3ecaa9dfe6": {
+    "result": "\"link_cross_origin_refused: refused a next page link on another origin\"",
+    "requests": "[[https://api.github.com/orgs/acme/repos?per_page=100 token tok]]",
+    "python_result": "\"UnicodeEncodeError: 'ascii' codec can't encode character '\\\\xe9' in position 11: ordinal not in range(128)\"",
+    "python_requests": "[[https://api.github.com/orgs/acme/repos?per_page=100 token tok]]"
+  },
+  "repos base=\"\" org=\"acme\" search=\"\" pattern=\"\" max=\u003cnone\u003e #7eeafbbbc96e": {
+    "result": "[[\"api\",\"Org/api\",\"about api\",\"https://github.example.test/Org/api\"],[\"web\",\"Org/web\",\"about web\",\"https://github.example.test/Org/web\"],[\"docs\",\"Org/docs\",\"about docs\",\"https://github.example.test/Org/docs\"]]",
+    "requests": "[[https://api.github.com/orgs/acme/repos?per_page=100 token tok] [https://api.github.com/a%09b token tok]]",
+    "python_result": "\"InvalidURL: Invalid non-printable ASCII character in URL, '\\\\t' at position 2.\"",
+    "python_requests": "[[https://api.github.com/orgs/acme/repos?per_page=100 token tok]]"
+  },
+  "repos base=\"\" org=\"acme\" search=\"\" pattern=\"\" max=\u003cnone\u003e #91589aec1665": {
+    "result": "[[\"api\",\"Org/api\",\"about api\",\"https://github.example.test/Org/api\"],[\"web\",\"Org/web\",\"about web\",\"https://github.example.test/Org/web\"],[\"docs\",\"Org/docs\",\"about docs\",\"https://github.example.test/Org/docs\"]]",
+    "requests": "[[https://api.github.com/orgs/acme/repos?per_page=100 token tok] [https://api.github.com/? token tok]]",
+    "python_result": "[[\"api\",\"Org/api\",\"about api\",\"https://github.example.test/Org/api\"],[\"web\",\"Org/web\",\"about web\",\"https://github.example.test/Org/web\"],[\"docs\",\"Org/docs\",\"about docs\",\"https://github.example.test/Org/docs\"]]",
+    "python_requests": "[[https://api.github.com/orgs/acme/repos?per_page=100 token tok] [https://api.github.com? token tok]]"
+  },
+  "repos base=\"\" org=\"acme\" search=\"\" pattern=\"\" max=\u003cnone\u003e #a1c2d7a77962": {
+    "result": "[[\"api\",\"Org/api\",\"about api\",\"https://github.example.test/Org/api\"],[\"web\",\"Org/web\",\"about web\",\"https://github.example.test/Org/web\"],[\"docs\",\"Org/docs\",\"about docs\",\"https://github.example.test/Org/docs\"]]",
+    "requests": "[[https://api.github.com/orgs/acme/repos?per_page=100 token tok] [https://api.github.com/ token tok]]",
+    "python_result": "[[\"api\",\"Org/api\",\"about api\",\"https://github.example.test/Org/api\"],[\"web\",\"Org/web\",\"about web\",\"https://github.example.test/Org/web\"],[\"docs\",\"Org/docs\",\"about docs\",\"https://github.example.test/Org/docs\"]]",
+    "python_requests": "[[https://api.github.com/orgs/acme/repos?per_page=100 token tok] [https://api.github.com/a@b token tok]]"
+  },
+  "repos base=\"\" org=\"acme\" search=\"\" pattern=\"\" max=\u003cnone\u003e #b0867c396345": {
+    "result": "\"link_cross_origin_refused: refused a next page link on another origin\"",
+    "requests": "[[https://api.github.com/orgs/acme/repos?per_page=100 token tok]]",
+    "python_result": "[[\"api\",\"Org/api\",\"about api\",\"https://github.example.test/Org/api\"],[\"web\",\"Org/web\",\"about web\",\"https://github.example.test/Org/web\"],[\"docs\",\"Org/docs\",\"about docs\",\"https://github.example.test/Org/docs\"]]",
+    "python_requests": "[[https://api.github.com/orgs/acme/repos?per_page=100 token tok] [https://api.github.com/x token tok]]"
+  },
+  "repos base=\"\" org=\"acme\" search=\"\" pattern=\"\" max=\u003cnone\u003e #c9e88d0a880b": {
+    "result": "[[\"api\",\"Org/api\",\"about api\",\"https://github.example.test/Org/api\"],[\"web\",\"Org/web\",\"about web\",\"https://github.example.test/Org/web\"],[\"docs\",\"Org/docs\",\"about docs\",\"https://github.example.test/Org/docs\"]]",
+    "requests": "[[https://api.github.com/orgs/acme/repos?per_page=100 token tok] [https://api.github.com/x token tok]]",
+    "python_result": "[[\"api\",\"Org/api\",\"about api\",\"https://github.example.test/Org/api\"],[\"web\",\"Org/web\",\"about web\",\"https://github.example.test/Org/web\"],[\"docs\",\"Org/docs\",\"about docs\",\"https://github.example.test/Org/docs\"]]",
+    "python_requests": "[[https://api.github.com/orgs/acme/repos?per_page=100 token tok] [https://api.github.com/x# token tok]]"
+  },
+  "repos base=\"\" org=\"acme\" search=\"\" pattern=\"\" max=\u003cnone\u003e #d662d44106c8": {
+    "result": "\"link_cross_origin_refused: refused a next page link on another origin\"",
+    "requests": "[[https://api.github.com/orgs/acme/repos?per_page=100 token tok]]",
+    "python_result": "[[\"api\",\"Org/api\",\"about api\",\"https://github.example.test/Org/api\"],[\"web\",\"Org/web\",\"about web\",\"https://github.example.test/Org/web\"],[\"docs\",\"Org/docs\",\"about docs\",\"https://github.example.test/Org/docs\"]]",
+    "python_requests": "[[https://api.github.com/orgs/acme/repos?per_page=100 token tok] [https://api.github.com:80/x token tok]]"
+  },
+  "repos base=\"\" org=\"acme\" search=\"\" pattern=\"\" max=\u003cnone\u003e #e2c9da3de098": {
+    "result": "\"link_cross_origin_refused: refused a next page link on another origin\"",
+    "requests": "[[https://api.github.com/orgs/acme/repos?per_page=100 token tok]]",
+    "python_result": "[[\"api\",\"Org/api\",\"about api\",\"https://github.example.test/Org/api\"],[\"web\",\"Org/web\",\"about web\",\"https://github.example.test/Org/web\"],[\"docs\",\"Org/docs\",\"about docs\",\"https://github.example.test/Org/docs\"]]",
+    "python_requests": "[[https://api.github.com/orgs/acme/repos?per_page=100 token tok] [https://u@other.test/x Basic dTo=]]"
+  },
+  "repos base=\"//ghe.test/api/v3\" org=\"acme\" search=\"\" pattern=\"\" max=\u003cnone\u003e #a99da6ee3d48": {
+    "result": "\"APIException: parse \\\"://ghe.test/api/v3/orgs/acme/repos?per_page=100\\\": missing protocol scheme\"",
+    "requests": "[]",
+    "python_result": "\"ValueError: unknown url type: '//ghe.test/api/v3/orgs/acme/repos?per_page=100'\"",
+    "python_requests": "[[//ghe.test/api/v3/orgs/acme/repos?per_page=100 token tok]]"
+  },
+  "repos base=\"//ghe.test/api/v3\" org=\"acme\" search=\"\" pattern=\"\" max=\u003cnone\u003e #dd628728b14d": {
+    "result": "\"APIException: parse \\\"://ghe.test/api/v3/orgs/acme/repos?per_page=100\\\": missing protocol scheme\"",
+    "requests": "[]",
+    "python_result": "\"ValueError: unknown url type: '//ghe.test/api/v3/orgs/acme/repos?per_page=100'\"",
+    "python_requests": "[[//ghe.test/api/v3/orgs/acme/repos?per_page=100 token tok]]"
+  },
+  "repos base=\"ghe.test/api/v3\" org=\"acme\" search=\"\" pattern=\"\" max=\u003cnone\u003e #3db0321abae1": {
+    "result": "\"APIException: parse \\\"://ghe.test/api/v3/orgs/acme/repos?per_page=100\\\": missing protocol scheme\"",
+    "requests": "[]",
+    "python_result": "\"ValueError: unknown url type: 'ghe.test/api/v3/orgs/acme/repos?per_page=100'\"",
+    "python_requests": "[[ghe.test/api/v3/orgs/acme/repos?per_page=100 token tok]]"
+  },
+  "repos base=\"ghe.test/api/v3\" org=\"acme\" search=\"\" pattern=\"\" max=\u003cnone\u003e #b7601ce1d36b": {
+    "result": "\"APIException: parse \\\"://ghe.test/api/v3/orgs/acme/repos?per_page=100\\\": missing protocol scheme\"",
+    "requests": "[]",
+    "python_result": "\"ValueError: unknown url type: 'ghe.test/api/v3/orgs/acme/repos?per_page=100'\"",
+    "python_requests": "[[ghe.test/api/v3/orgs/acme/repos?per_page=100 token tok]]"
+  },
+  "repos base=\"http://192.0.2.1:8080/x\" org=\"acme\" search=\"\" pattern=\"\" max=\u003cnone\u003e #52bb5ccc14a0": {
+    "result": "\"link_cross_origin_refused: refused a next page link on another origin\"",
+    "requests": "[[http://192.0.2.1:8080/x/orgs/acme/repos?per_page=100 token tok]]",
+    "python_result": "[[\"api\",\"Org/api\",\"about api\",\"https://github.example.test/Org/api\"],[\"web\",\"Org/web\",\"about web\",\"https://github.example.test/Org/web\"],[\"docs\",\"Org/docs\",\"about docs\",\"https://github.example.test/Org/docs\"]]",
+    "python_requests": "[[http://192.0.2.1:8080/x/orgs/acme/repos?per_page=100 token tok] [http://[2001:db8::1]:9/x?page=2 token tok]]"
+  },
+  "repos base=\"http://GHE.test:80\" org=\"acme\" search=\"\" pattern=\"\" max=\u003cnone\u003e #dece33f68731": {
+    "result": "\"link_cross_origin_refused: refused a next page link on another origin\"",
+    "requests": "[[http://ghe.test/orgs/acme/repos?per_page=100 token tok]]",
+    "python_result": "[[\"api\",\"Org/api\",\"about api\",\"https://github.example.test/Org/api\"],[\"web\",\"Org/web\",\"about web\",\"https://github.example.test/Org/web\"],[\"docs\",\"Org/docs\",\"about docs\",\"https://github.example.test/Org/docs\"]]",
+    "python_requests": "[[http://ghe.test/orgs/acme/repos?per_page=100 token tok] [http://[2001:db8::1]:9/x?page=2 token tok]]"
+  },
+  "repos base=\"http://[2001:4860:4860::8888]\" org=\"acme\" search=\"\" pattern=\"\" max=\u003cnone\u003e #897c7d7c430a": {
+    "result": "\"link_cross_origin_refused: refused a next page link on another origin\"",
+    "requests": "[[http://[2001:4860:4860::8888]/orgs/acme/repos?per_page=100 token tok]]",
+    "python_result": "[[\"api\",\"Org/api\",\"about api\",\"https://github.example.test/Org/api\"],[\"web\",\"Org/web\",\"about web\",\"https://github.example.test/Org/web\"],[\"docs\",\"Org/docs\",\"about docs\",\"https://github.example.test/Org/docs\"]]",
+    "python_requests": "[[http://[2001:4860:4860::8888]/orgs/acme/repos?per_page=100 token tok] [http://[2001:db8::1]:9/x?page=2 token tok]]"
+  },
+  "repos base=\"http://[::1]:80\" org=\"acme\" search=\"\" pattern=\"\" max=\u003cnone\u003e #4160451cb722": {
+    "result": "\"link_cross_origin_refused: refused a next page link on another origin\"",
+    "requests": "[[http://[::1]/orgs/acme/repos?per_page=100 token tok]]",
+    "python_result": "[[\"api\",\"Org/api\",\"about api\",\"https://github.example.test/Org/api\"],[\"web\",\"Org/web\",\"about web\",\"https://github.example.test/Org/web\"],[\"docs\",\"Org/docs\",\"about docs\",\"https://github.example.test/Org/docs\"]]",
+    "python_requests": "[[http://[::1]/orgs/acme/repos?per_page=100 token tok] [http://[2001:db8::1]:9/x?page=2 token tok]]"
+  },
+  "repos base=\"https://GHE.Test:443/api/v3\" org=\"acme\" search=\"\" pattern=\"\" max=\u003cnone\u003e #66954bd26d50": {
+    "result": "\"link_cross_origin_refused: refused a next page link on another origin\"",
+    "requests": "[[https://ghe.test/api/v3/orgs/acme/repos?per_page=100 token tok]]",
+    "python_result": "[[\"api\",\"Org/api\",\"about api\",\"https://github.example.test/Org/api\"],[\"web\",\"Org/web\",\"about web\",\"https://github.example.test/Org/web\"],[\"docs\",\"Org/docs\",\"about docs\",\"https://github.example.test/Org/docs\"]]",
+    "python_requests": "[[https://ghe.test/api/v3/orgs/acme/repos?per_page=100 token tok] [http://[2001:db8::1]:9/x?page=2 token tok]]"
+  },
+  "repos base=\"https://[2001:4860:4860::8888]:8443/api/v3\" org=\"acme\" search=\"\" pattern=\"\" max=\u003cnone\u003e #ef9561060228": {
+    "result": "\"link_cross_origin_refused: refused a next page link on another origin\"",
+    "requests": "[[https://[2001:4860:4860::8888]:8443/api/v3/orgs/acme/repos?per_page=100 token tok]]",
+    "python_result": "[[\"api\",\"Org/api\",\"about api\",\"https://github.example.test/Org/api\"],[\"web\",\"Org/web\",\"about web\",\"https://github.example.test/Org/web\"],[\"docs\",\"Org/docs\",\"about docs\",\"https://github.example.test/Org/docs\"]]",
+    "python_requests": "[[https://[2001:4860:4860::8888]:8443/api/v3/orgs/acme/repos?per_page=100 token tok] [http://[2001:db8::1]:9/x?page=2 token tok]]"
+  },
+  "repos base=\"https://[2001:DB8::1]:443/x\" org=\"acme\" search=\"\" pattern=\"\" max=\u003cnone\u003e #75295942b909": {
+    "result": "\"link_cross_origin_refused: refused a next page link on another origin\"",
+    "requests": "[[https://[2001:DB8::1]/x/orgs/acme/repos?per_page=100 token tok]]",
+    "python_result": "[[\"api\",\"Org/api\",\"about api\",\"https://github.example.test/Org/api\"],[\"web\",\"Org/web\",\"about web\",\"https://github.example.test/Org/web\"],[\"docs\",\"Org/docs\",\"about docs\",\"https://github.example.test/Org/docs\"]]",
+    "python_requests": "[[https://[2001:DB8::1]/x/orgs/acme/repos?per_page=100 token tok] [http://[2001:db8::1]:9/x?page=2 token tok]]"
+  },
+  "repos base=\"https://ghe.test/a#b#c\" org=\"acme\" search=\"\" pattern=\"\" max=\u003cnone\u003e #13b041e5eabb": {
+    "result": "[[\"api\",\"Org/api\",\"about api\",\"https://github.example.test/Org/api\"],[\"web\",\"Org/web\",\"about web\",\"https://github.example.test/Org/web\"],[\"docs\",\"Org/docs\",\"about docs\",\"https://github.example.test/Org/docs\"]]",
+    "requests": "[[https://ghe.test/a/orgs/acme/repos?per_page=100#b%23c token tok] [https://ghe.test/a/orgs/acme/repos?page=2#b%23c token tok]]",
+    "python_result": "[[\"api\",\"Org/api\",\"about api\",\"https://github.example.test/Org/api\"],[\"web\",\"Org/web\",\"about web\",\"https://github.example.test/Org/web\"],[\"docs\",\"Org/docs\",\"about docs\",\"https://github.example.test/Org/docs\"]]",
+    "python_requests": "[[https://ghe.test/a/orgs/acme/repos?per_page=100#b#c token tok] [https://ghe.test/a/orgs/acme/repos?page=2#b#c token tok]]"
+  },
+  "repos base=\"https://ghe.test/a#b#c\" org=\"acme\" search=\"\" pattern=\"\" max=\u003cnone\u003e #6113bf558da4": {
+    "result": "[[\"api\",\"Org/api\",\"about api\",\"https://github.example.test/Org/api\"],[\"web\",\"Org/web\",\"about web\",\"https://github.example.test/Org/web\"]]",
+    "requests": "[[https://ghe.test/a/orgs/acme/repos?per_page=100#b%23c token tok]]",
+    "python_result": "[[\"api\",\"Org/api\",\"about api\",\"https://github.example.test/Org/api\"],[\"web\",\"Org/web\",\"about web\",\"https://github.example.test/Org/web\"]]",
+    "python_requests": "[[https://ghe.test/a/orgs/acme/repos?per_page=100#b#c token tok]]"
+  },
+  "repos base=\"https://ghe.test/api/v3\" org=\"acme\" search=\"\" pattern=\"\" max=\u003cnone\u003e #00e6ce515ffe": {
+    "result": "\"UnsupportedProtocol: Request URL has an unsupported protocol 'ftp://'.\"",
+    "requests": "[[https://ghe.test/api/v3/orgs/acme/repos?per_page=100 token tok]]",
+    "python_result": "[[\"api\",\"Org/api\",\"about api\",\"https://github.example.test/Org/api\"],[\"web\",\"Org/web\",\"about web\",\"https://github.example.test/Org/web\"],[\"docs\",\"Org/docs\",\"about docs\",\"https://github.example.test/Org/docs\"]]",
+    "python_requests": "[[https://ghe.test/api/v3/orgs/acme/repos?per_page=100 token tok] [ftp://x.test/y token tok]]",
+    "not_measured": true
+  },
+  "repos base=\"https://ghe.test/api/v3\" org=\"acme\" search=\"\" pattern=\"\" max=\u003cnone\u003e #098b12cc79a8": {
+    "result": "\"link_cross_origin_refused: refused a next page link on another origin\"",
+    "requests": "[[https://ghe.test/api/v3/orgs/acme/repos?per_page=100 token tok]]",
+    "python_result": "\"UnicodeEncodeError: 'ascii' codec can't encode character '\\\\xe9' in position 11: ordinal not in range(128)\"",
+    "python_requests": "[[https://ghe.test/api/v3/orgs/acme/repos?per_page=100 token tok]]"
+  },
+  "repos base=\"https://ghe.test/api/v3\" org=\"acme\" search=\"\" pattern=\"\" max=\u003cnone\u003e #0e1b0eec8c6e": {
+    "result": "\"link_cross_origin_refused: refused a next page link on another origin\"",
+    "requests": "[[https://ghe.test/api/v3/orgs/acme/repos?per_page=100 token tok]]",
+    "python_result": "[[\"api\",\"Org/api\",\"about api\",\"https://github.example.test/Org/api\"],[\"web\",\"Org/web\",\"about web\",\"https://github.example.test/Org/web\"],[\"docs\",\"Org/docs\",\"about docs\",\"https://github.example.test/Org/docs\"]]",
+    "python_requests": "[[https://ghe.test/api/v3/orgs/acme/repos?per_page=100 token tok] [https://api.github.com/x# token tok]]"
+  },
+  "repos base=\"https://ghe.test/api/v3\" org=\"acme\" search=\"\" pattern=\"\" max=\u003cnone\u003e #1a9314417706": {
+    "result": "\"link_cross_origin_refused: refused a next page link on another origin\"",
+    "requests": "[[https://ghe.test/api/v3/orgs/acme/repos?per_page=100 token tok]]",
+    "python_result": "[[\"api\",\"Org/api\",\"about api\",\"https://github.example.test/Org/api\"],[\"web\",\"Org/web\",\"about web\",\"https://github.example.test/Org/web\"],[\"docs\",\"Org/docs\",\"about docs\",\"https://github.example.test/Org/docs\"]]",
+    "python_requests": "[[https://ghe.test/api/v3/orgs/acme/repos?per_page=100 token tok] [https://api.github.com/x?# token tok]]"
+  },
+  "repos base=\"https://ghe.test/api/v3\" org=\"acme\" search=\"\" pattern=\"\" max=\u003cnone\u003e #2e865077ad96": {
+    "result": "\"link_cross_origin_refused: refused a next page link on another origin\"",
+    "requests": "[[https://ghe.test/api/v3/orgs/acme/repos?per_page=100 token tok]]",
+    "python_result": "[[\"api\",\"Org/api\",\"about api\",\"https://github.example.test/Org/api\"],[\"web\",\"Org/web\",\"about web\",\"https://github.example.test/Org/web\"],[\"docs\",\"Org/docs\",\"about docs\",\"https://github.example.test/Org/docs\"]]",
+    "python_requests": "[[https://ghe.test/api/v3/orgs/acme/repos?per_page=100 token tok] [https://api.github.com# token tok]]"
+  },
+  "repos base=\"https://ghe.test/api/v3\" org=\"acme\" search=\"\" pattern=\"\" max=\u003cnone\u003e #5e0a780ac790": {
+    "result": "\"link_cross_origin_refused: refused a next page link on another origin\"",
+    "requests": "[[https://ghe.test/api/v3/orgs/acme/repos?per_page=100 token tok]]",
+    "python_result": "[[\"api\",\"Org/api\",\"about api\",\"https://github.example.test/Org/api\"],[\"web\",\"Org/web\",\"about web\",\"https://github.example.test/Org/web\"],[\"docs\",\"Org/docs\",\"about docs\",\"https://github.example.test/Org/docs\"]]",
+    "python_requests": "[[https://ghe.test/api/v3/orgs/acme/repos?per_page=100 token tok] [https://api.github.com/x token tok]]"
+  },
+  "repos base=\"https://ghe.test/api/v3\" org=\"acme\" search=\"\" pattern=\"\" max=\u003cnone\u003e #7db2da5c69e4": {
+    "result": "\"link_cross_origin_refused: refused a next page link on another origin\"",
+    "requests": "[[https://ghe.test/api/v3/orgs/acme/repos?per_page=100 token tok]]",
+    "python_result": "[[\"api\",\"Org/api\",\"about api\",\"https://github.example.test/Org/api\"],[\"web\",\"Org/web\",\"about web\",\"https://github.example.test/Org/web\"],[\"docs\",\"Org/docs\",\"about docs\",\"https://github.example.test/Org/docs\"]]",
+    "python_requests": "[[https://ghe.test/api/v3/orgs/acme/repos?per_page=100 token tok] [https://api.github.com/x?page=2\u0026page=3 token tok]]"
+  },
+  "repos base=\"https://ghe.test/api/v3\" org=\"acme\" search=\"\" pattern=\"\" max=\u003cnone\u003e #817b0d70a4dc": {
+    "result": "\"link_cross_origin_refused: refused a next page link on another origin\"",
+    "requests": "[[https://ghe.test/api/v3/orgs/acme/repos?per_page=100 token tok]]",
+    "python_result": "[[\"api\",\"Org/api\",\"about api\",\"https://github.example.test/Org/api\"],[\"web\",\"Org/web\",\"about web\",\"https://github.example.test/Org/web\"],[\"docs\",\"Org/docs\",\"about docs\",\"https://github.example.test/Org/docs\"]]",
+    "python_requests": "[[https://ghe.test/api/v3/orgs/acme/repos?per_page=100 token tok] [https://api.github.com/x?page=2 token tok]]"
+  },
+  "repos base=\"https://ghe.test/api/v3\" org=\"acme\" search=\"\" pattern=\"\" max=\u003cnone\u003e #82ce849dc139": {
+    "result": "\"link_cross_origin_refused: refused a next page link on another origin\"",
+    "requests": "[[https://ghe.test/api/v3/orgs/acme/repos?per_page=100 token tok]]",
+    "python_result": "[[\"api\",\"Org/api\",\"about api\",\"https://github.example.test/Org/api\"],[\"web\",\"Org/web\",\"about web\",\"https://github.example.test/Org/web\"],[\"docs\",\"Org/docs\",\"about docs\",\"https://github.example.test/Org/docs\"]]",
+    "python_requests": "[[https://ghe.test/api/v3/orgs/acme/repos?per_page=100 token tok] [https://api.github.com? token tok]]"
+  },
+  "repos base=\"https://ghe.test/api/v3\" org=\"acme\" search=\"\" pattern=\"\" max=\u003cnone\u003e #82d1946cf2ba": {
     "result": "[[\"api\",\"Org/api\",\"about api\",\"https://github.example.test/Org/api\"],[\"web\",\"Org/web\",\"about web\",\"https://github.example.test/Org/web\"],[\"docs\",\"Org/docs\",\"about docs\",\"https://github.example.test/Org/docs\"]]",
     "requests": "[[https://ghe.test/api/v3/orgs/acme/repos?per_page=100 token tok] [https://ghe.test/api/v3/%C3%A9?%C3%BC=1 token tok]]",
     "python_result": "\"UnicodeEncodeError: 'ascii' codec can't encode character '\\\\xe9' in position 2: ordinal not in range(128)\"",
     "python_requests": "[[https://ghe.test/api/v3/orgs/acme/repos?per_page=100 token tok]]",
     "not_measured": true
   },
-  "339 repos base=\"\" org=\"acme\" search=\"\" pattern=\"\" max=\u003cnone\u003e": {
-    "result": "\"link_cross_origin_refused: refused a next page link on another origin\"",
-    "requests": "[[https://api.github.com/orgs/acme/repos?per_page=100 token tok]]",
-    "python_result": "\"UnicodeEncodeError: 'ascii' codec can't encode character '\\\\xe9' in position 11: ordinal not in range(128)\"",
-    "python_requests": "[[https://api.github.com/orgs/acme/repos?per_page=100 token tok]]"
-  },
-  "340 repos base=\"https://ghe.test/api/v3\" org=\"acme\" search=\"\" pattern=\"\" max=\u003cnone\u003e": {
-    "result": "\"link_cross_origin_refused: refused a next page link on another origin\"",
-    "requests": "[[https://ghe.test/api/v3/orgs/acme/repos?per_page=100 token tok]]",
-    "python_result": "\"UnicodeEncodeError: 'ascii' codec can't encode character '\\\\xe9' in position 11: ordinal not in range(128)\"",
-    "python_requests": "[[https://ghe.test/api/v3/orgs/acme/repos?per_page=100 token tok]]"
-  },
-  "341 repos base=\"\" org=\"acme\" search=\"\" pattern=\"\" max=\u003cnone\u003e": {
-    "result": "\"link_cross_origin_refused: refused a next page link on another origin\"",
-    "requests": "[[https://api.github.com/orgs/acme/repos?per_page=100 token tok]]",
-    "python_result": "[[\"api\",\"Org/api\",\"about api\",\"https://github.example.test/Org/api\"],[\"web\",\"Org/web\",\"about web\",\"https://github.example.test/Org/web\"],[\"docs\",\"Org/docs\",\"about docs\",\"https://github.example.test/Org/docs\"]]",
-    "python_requests": "[[https://api.github.com/orgs/acme/repos?per_page=100 token tok] [https://u@other.test/x Basic dTo=]]"
-  },
-  "342 repos base=\"https://ghe.test/api/v3\" org=\"acme\" search=\"\" pattern=\"\" max=\u003cnone\u003e": {
-    "result": "\"link_cross_origin_refused: refused a next page link on another origin\"",
-    "requests": "[[https://ghe.test/api/v3/orgs/acme/repos?per_page=100 token tok]]",
-    "python_result": "[[\"api\",\"Org/api\",\"about api\",\"https://github.example.test/Org/api\"],[\"web\",\"Org/web\",\"about web\",\"https://github.example.test/Org/web\"],[\"docs\",\"Org/docs\",\"about docs\",\"https://github.example.test/Org/docs\"]]",
-    "python_requests": "[[https://ghe.test/api/v3/orgs/acme/repos?per_page=100 token tok] [https://u@other.test/x Basic dTo=]]"
-  },
-  "343 repos base=\"\" org=\"acme\" search=\"\" pattern=\"\" max=\u003cnone\u003e": {
-    "result": "\"link_cross_origin_refused: refused a next page link on another origin\"",
-    "requests": "[[https://api.github.com/orgs/acme/repos?per_page=100 token tok]]",
-    "python_result": "[[\"api\",\"Org/api\",\"about api\",\"https://github.example.test/Org/api\"],[\"web\",\"Org/web\",\"about web\",\"https://github.example.test/Org/web\"],[\"docs\",\"Org/docs\",\"about docs\",\"https://github.example.test/Org/docs\"]]",
-    "python_requests": "[[https://api.github.com/orgs/acme/repos?per_page=100 token tok] [https://u:p@other.test:99/x?q=1 Basic dTpw]]"
-  },
-  "344 repos base=\"https://ghe.test/api/v3\" org=\"acme\" search=\"\" pattern=\"\" max=\u003cnone\u003e": {
-    "result": "\"link_cross_origin_refused: refused a next page link on another origin\"",
-    "requests": "[[https://ghe.test/api/v3/orgs/acme/repos?per_page=100 token tok]]",
-    "python_result": "[[\"api\",\"Org/api\",\"about api\",\"https://github.example.test/Org/api\"],[\"web\",\"Org/web\",\"about web\",\"https://github.example.test/Org/web\"],[\"docs\",\"Org/docs\",\"about docs\",\"https://github.example.test/Org/docs\"]]",
-    "python_requests": "[[https://ghe.test/api/v3/orgs/acme/repos?per_page=100 token tok] [https://u:p@other.test:99/x?q=1 Basic dTpw]]"
-  },
-  "349 repos base=\"\" org=\"acme\" search=\"\" pattern=\"\" max=\u003cnone\u003e": {
-    "result": "[[\"api\",\"Org/api\",\"about api\",\"https://github.example.test/Org/api\"],[\"web\",\"Org/web\",\"about web\",\"https://github.example.test/Org/web\"],[\"docs\",\"Org/docs\",\"about docs\",\"https://github.example.test/Org/docs\"]]",
-    "requests": "[[https://api.github.com/orgs/acme/repos?per_page=100 token tok] [https://api.github.com/a%09b token tok]]",
-    "python_result": "\"InvalidURL: Invalid non-printable ASCII character in URL, '\\\\t' at position 2.\"",
-    "python_requests": "[[https://api.github.com/orgs/acme/repos?per_page=100 token tok]]"
-  },
-  "350 repos base=\"https://ghe.test/api/v3\" org=\"acme\" search=\"\" pattern=\"\" max=\u003cnone\u003e": {
+  "repos base=\"https://ghe.test/api/v3\" org=\"acme\" search=\"\" pattern=\"\" max=\u003cnone\u003e #a38cda6511d1": {
     "result": "[[\"api\",\"Org/api\",\"about api\",\"https://github.example.test/Org/api\"],[\"web\",\"Org/web\",\"about web\",\"https://github.example.test/Org/web\"],[\"docs\",\"Org/docs\",\"about docs\",\"https://github.example.test/Org/docs\"]]",
     "requests": "[[https://ghe.test/api/v3/orgs/acme/repos?per_page=100 token tok] [https://ghe.test/api/v3/a%09b token tok]]",
     "python_result": "\"InvalidURL: Invalid non-printable ASCII character in URL, '\\\\t' at position 2.\"",
     "python_requests": "[[https://ghe.test/api/v3/orgs/acme/repos?per_page=100 token tok]]"
   },
-  "352 repos base=\"https://ghe.test/api/v3\" org=\"acme\" search=\"\" pattern=\"\" max=\u003cnone\u003e": {
+  "repos base=\"https://ghe.test/api/v3\" org=\"acme\" search=\"\" pattern=\"\" max=\u003cnone\u003e #af2386732a84": {
     "result": "\"link_cross_origin_refused: refused a next page link on another origin\"",
     "requests": "[[https://ghe.test/api/v3/orgs/acme/repos?per_page=100 token tok]]",
     "python_result": "[[\"api\",\"Org/api\",\"about api\",\"https://github.example.test/Org/api\"],[\"web\",\"Org/web\",\"about web\",\"https://github.example.test/Org/web\"],[\"docs\",\"Org/docs\",\"about docs\",\"https://github.example.test/Org/docs\"]]",
-    "python_requests": "[[https://ghe.test/api/v3/orgs/acme/repos?per_page=100 token tok] [https://api.github.com/x?page=2\u0026page=3 token tok]]"
+    "python_requests": "[[https://ghe.test/api/v3/orgs/acme/repos?per_page=100 token tok] [https://ghe.test/api/v3/x token tok]]"
   },
-  "354 repos base=\"https://ghe.test/api/v3\" org=\"acme\" search=\"\" pattern=\"\" max=\u003cnone\u003e": {
+  "repos base=\"https://ghe.test/api/v3\" org=\"acme\" search=\"\" pattern=\"\" max=\u003cnone\u003e #b29eded740cf": {
+    "result": "[[\"api\",\"Org/api\",\"about api\",\"https://github.example.test/Org/api\"],[\"web\",\"Org/web\",\"about web\",\"https://github.example.test/Org/web\"],[\"docs\",\"Org/docs\",\"about docs\",\"https://github.example.test/Org/docs\"]]",
+    "requests": "[[https://ghe.test/api/v3/orgs/acme/repos?per_page=100 token tok] [https://ghe.test/api/v3/ token tok]]",
+    "python_result": "[[\"api\",\"Org/api\",\"about api\",\"https://github.example.test/Org/api\"],[\"web\",\"Org/web\",\"about web\",\"https://github.example.test/Org/web\"],[\"docs\",\"Org/docs\",\"about docs\",\"https://github.example.test/Org/docs\"]]",
+    "python_requests": "[[https://ghe.test/api/v3/orgs/acme/repos?per_page=100 token tok] [https://ghe.test/api/v3/a@b token tok]]"
+  },
+  "repos base=\"https://ghe.test/api/v3\" org=\"acme\" search=\"\" pattern=\"\" max=\u003cnone\u003e #bd9fb62e02c6": {
     "result": "\"link_cross_origin_refused: refused a next page link on another origin\"",
     "requests": "[[https://ghe.test/api/v3/orgs/acme/repos?per_page=100 token tok]]",
     "python_result": "[[\"api\",\"Org/api\",\"about api\",\"https://github.example.test/Org/api\"],[\"web\",\"Org/web\",\"about web\",\"https://github.example.test/Org/web\"],[\"docs\",\"Org/docs\",\"about docs\",\"https://github.example.test/Org/docs\"]]",
-    "python_requests": "[[https://ghe.test/api/v3/orgs/acme/repos?per_page=100 token tok] [https://api.github.com/x token tok]]"
+    "python_requests": "[[https://ghe.test/api/v3/orgs/acme/repos?per_page=100 token tok] [https://u@other.test/x Basic dTo=]]"
   },
-  "355 repos base=\"\" org=\"acme\" search=\"\" pattern=\"\" max=\u003cnone\u003e": {
-    "result": "\"link_cross_origin_refused: refused a next page link on another origin\"",
-    "requests": "[[https://api.github.com/orgs/acme/repos?per_page=100 token tok]]",
-    "python_result": "[[\"api\",\"Org/api\",\"about api\",\"https://github.example.test/Org/api\"],[\"web\",\"Org/web\",\"about web\",\"https://github.example.test/Org/web\"],[\"docs\",\"Org/docs\",\"about docs\",\"https://github.example.test/Org/docs\"]]",
-    "python_requests": "[[https://api.github.com/orgs/acme/repos?per_page=100 token tok] [https://api.github.com:80/x token tok]]"
-  },
-  "356 repos base=\"https://ghe.test/api/v3\" org=\"acme\" search=\"\" pattern=\"\" max=\u003cnone\u003e": {
-    "result": "\"link_cross_origin_refused: refused a next page link on another origin\"",
-    "requests": "[[https://ghe.test/api/v3/orgs/acme/repos?per_page=100 token tok]]",
-    "python_result": "[[\"api\",\"Org/api\",\"about api\",\"https://github.example.test/Org/api\"],[\"web\",\"Org/web\",\"about web\",\"https://github.example.test/Org/web\"],[\"docs\",\"Org/docs\",\"about docs\",\"https://github.example.test/Org/docs\"]]",
-    "python_requests": "[[https://ghe.test/api/v3/orgs/acme/repos?per_page=100 token tok] [https://api.github.com:80/x token tok]]"
-  },
-  "357 repos base=\"\" org=\"acme\" search=\"\" pattern=\"\" max=\u003cnone\u003e": {
-    "result": "\"link_cross_origin_refused: refused a next page link on another origin\"",
-    "requests": "[[https://api.github.com/orgs/acme/repos?per_page=100 token tok]]",
-    "python_result": "[[\"api\",\"Org/api\",\"about api\",\"https://github.example.test/Org/api\"],[\"web\",\"Org/web\",\"about web\",\"https://github.example.test/Org/web\"],[\"docs\",\"Org/docs\",\"about docs\",\"https://github.example.test/Org/docs\"]]",
-    "python_requests": "[[https://api.github.com/orgs/acme/repos?per_page=100 token tok] [http://api.github.com/x token tok]]"
-  },
-  "358 repos base=\"https://ghe.test/api/v3\" org=\"acme\" search=\"\" pattern=\"\" max=\u003cnone\u003e": {
+  "repos base=\"https://ghe.test/api/v3\" org=\"acme\" search=\"\" pattern=\"\" max=\u003cnone\u003e #c256c731528e": {
     "result": "\"link_cross_origin_refused: refused a next page link on another origin\"",
     "requests": "[[https://ghe.test/api/v3/orgs/acme/repos?per_page=100 token tok]]",
     "python_result": "[[\"api\",\"Org/api\",\"about api\",\"https://github.example.test/Org/api\"],[\"web\",\"Org/web\",\"about web\",\"https://github.example.test/Org/web\"],[\"docs\",\"Org/docs\",\"about docs\",\"https://github.example.test/Org/docs\"]]",
     "python_requests": "[[https://ghe.test/api/v3/orgs/acme/repos?per_page=100 token tok] [http://api.github.com/x token tok]]"
   },
-  "365 repos base=\"https://user:pw@ghe.test/api/v3\" org=\"acme\" search=\"\" pattern=\"\" max=\u003cnone\u003e": {
-    "result": "[[\"api\",\"Org/api\",\"about api\",\"https://github.example.test/Org/api\"],[\"web\",\"Org/web\",\"about web\",\"https://github.example.test/Org/web\"]]",
+  "repos base=\"https://ghe.test/api/v3\" org=\"acme\" search=\"\" pattern=\"\" max=\u003cnone\u003e #c7e56aef3f29": {
+    "result": "\"link_cross_origin_refused: refused a next page link on another origin\"",
     "requests": "[[https://ghe.test/api/v3/orgs/acme/repos?per_page=100 token tok]]",
-    "python_result": "[[\"api\",\"Org/api\",\"about api\",\"https://github.example.test/Org/api\"],[\"web\",\"Org/web\",\"about web\",\"https://github.example.test/Org/web\"]]",
-    "python_requests": "[[https://user:pw@ghe.test/api/v3/orgs/acme/repos?per_page=100 Basic dXNlcjpwdw==]]"
-  },
-  "366 repos base=\"https://user:pw@ghe.test/api/v3\" org=\"acme\" search=\"\" pattern=\"\" max=\u003cnone\u003e": {
-    "result": "[[\"api\",\"Org/api\",\"about api\",\"https://github.example.test/Org/api\"],[\"web\",\"Org/web\",\"about web\",\"https://github.example.test/Org/web\"],[\"docs\",\"Org/docs\",\"about docs\",\"https://github.example.test/Org/docs\"]]",
-    "requests": "[[https://ghe.test/api/v3/orgs/acme/repos?per_page=100 token tok] [https://ghe.test/api/v3/orgs/acme/repos?page=2 token tok]]",
     "python_result": "[[\"api\",\"Org/api\",\"about api\",\"https://github.example.test/Org/api\"],[\"web\",\"Org/web\",\"about web\",\"https://github.example.test/Org/web\"],[\"docs\",\"Org/docs\",\"about docs\",\"https://github.example.test/Org/docs\"]]",
-    "python_requests": "[[https://user:pw@ghe.test/api/v3/orgs/acme/repos?per_page=100 Basic dXNlcjpwdw==] [https://user:pw@ghe.test/api/v3/orgs/acme/repos?page=2 Basic dXNlcjpwdw==]]"
+    "python_requests": "[[https://ghe.test/api/v3/orgs/acme/repos?per_page=100 token tok] [http://api.github.com/x token tok]]"
   },
-  "367 installation base=\"https://user:pw@ghe.test/api/v3\" org=\"\" search=\"\" pattern=\"\" max=\u003cnone\u003e": {
-    "result": "[]",
-    "requests": "[[https://ghe.test/api/v3/installation/repositories?per_page=100 token tok]]",
-    "python_result": "[]",
-    "python_requests": "[[https://user:pw@ghe.test/api/v3/installation/repositories?per_page=100 Basic dXNlcjpwdw==]]"
-  },
-  "368 repos base=\"https://u@ghe.test\" org=\"acme\" search=\"\" pattern=\"\" max=\u003cnone\u003e": {
-    "result": "[[\"api\",\"Org/api\",\"about api\",\"https://github.example.test/Org/api\"],[\"web\",\"Org/web\",\"about web\",\"https://github.example.test/Org/web\"]]",
-    "requests": "[[https://ghe.test/orgs/acme/repos?per_page=100 token tok]]",
-    "python_result": "[[\"api\",\"Org/api\",\"about api\",\"https://github.example.test/Org/api\"],[\"web\",\"Org/web\",\"about web\",\"https://github.example.test/Org/web\"]]",
-    "python_requests": "[[https://u@ghe.test/orgs/acme/repos?per_page=100 Basic dTo=]]"
-  },
-  "369 repos base=\"https://u@ghe.test\" org=\"acme\" search=\"\" pattern=\"\" max=\u003cnone\u003e": {
+  "repos base=\"https://ghe.test/api/v3\" org=\"acme\" search=\"\" pattern=\"\" max=\u003cnone\u003e #d5a9b9dc7fd8": {
     "result": "[[\"api\",\"Org/api\",\"about api\",\"https://github.example.test/Org/api\"],[\"web\",\"Org/web\",\"about web\",\"https://github.example.test/Org/web\"],[\"docs\",\"Org/docs\",\"about docs\",\"https://github.example.test/Org/docs\"]]",
-    "requests": "[[https://ghe.test/orgs/acme/repos?per_page=100 token tok] [https://ghe.test/orgs/acme/repos?page=2 token tok]]",
+    "requests": "[[https://ghe.test/api/v3/orgs/acme/repos?per_page=100 token tok] [https://ghe.test/api/v3/ token tok]]",
     "python_result": "[[\"api\",\"Org/api\",\"about api\",\"https://github.example.test/Org/api\"],[\"web\",\"Org/web\",\"about web\",\"https://github.example.test/Org/web\"],[\"docs\",\"Org/docs\",\"about docs\",\"https://github.example.test/Org/docs\"]]",
-    "python_requests": "[[https://u@ghe.test/orgs/acme/repos?per_page=100 Basic dTo=] [https://u@ghe.test/orgs/acme/repos?page=2 Basic dTo=]]"
+    "python_requests": "[[https://ghe.test/api/v3/orgs/acme/repos?per_page=100 token tok] [https://ghe.test/api/v3/alert(1) token tok]]"
   },
-  "37 repos base=\"https://ghe.test/api/v3\" org=\"acme\" search=\"\" pattern=\"\" max=\u003cnone\u003e": {
+  "repos base=\"https://ghe.test/api/v3\" org=\"acme\" search=\"\" pattern=\"\" max=\u003cnone\u003e #d7284f2f5b13": {
+    "result": "\"link_cross_origin_refused: refused a next page link on another origin\"",
+    "requests": "[[https://ghe.test/api/v3/orgs/acme/repos?per_page=100 token tok]]",
+    "python_result": "[[\"api\",\"Org/api\",\"about api\",\"https://github.example.test/Org/api\"],[\"web\",\"Org/web\",\"about web\",\"https://github.example.test/Org/web\"],[\"docs\",\"Org/docs\",\"about docs\",\"https://github.example.test/Org/docs\"]]",
+    "python_requests": "[[https://ghe.test/api/v3/orgs/acme/repos?per_page=100 token tok] [https://api.github.com:80/x token tok]]"
+  },
+  "repos base=\"https://ghe.test/api/v3\" org=\"acme\" search=\"\" pattern=\"\" max=\u003cnone\u003e #e563c4bdc1ff": {
+    "result": "\"link_cross_origin_refused: refused a next page link on another origin\"",
+    "requests": "[[https://ghe.test/api/v3/orgs/acme/repos?per_page=100 token tok]]",
+    "python_result": "[[\"api\",\"Org/api\",\"about api\",\"https://github.example.test/Org/api\"],[\"web\",\"Org/web\",\"about web\",\"https://github.example.test/Org/web\"],[\"docs\",\"Org/docs\",\"about docs\",\"https://github.example.test/Org/docs\"]]",
+    "python_requests": "[[https://ghe.test/api/v3/orgs/acme/repos?per_page=100 token tok] [https://u:p@other.test:99/x?q=1 Basic dTpw]]"
+  },
+  "repos base=\"https://ghe.test/api/v3\" org=\"acme\" search=\"\" pattern=\"\" max=\u003cnone\u003e #ef0895769ef4": {
+    "result": "\"link_cross_origin_refused: refused a next page link on another origin\"",
+    "requests": "[[https://ghe.test/api/v3/orgs/acme/repos?per_page=100 token tok]]",
+    "python_result": "[[\"api\",\"Org/api\",\"about api\",\"https://github.example.test/Org/api\"],[\"web\",\"Org/web\",\"about web\",\"https://github.example.test/Org/web\"],[\"docs\",\"Org/docs\",\"about docs\",\"https://github.example.test/Org/docs\"]]",
+    "python_requests": "[[https://ghe.test/api/v3/orgs/acme/repos?per_page=100 token tok] [https://api.github.com/x? token tok]]"
+  },
+  "repos base=\"https://ghe.test/api/v3\" org=\"acme\" search=\"\" pattern=\"\" max=\u003cnone\u003e #f51ae4fe03fc": {
     "result": "\"link_cross_origin_refused: refused a next page link on another origin\"",
     "requests": "[[https://ghe.test/api/v3/orgs/acme/repos?per_page=100 token tok]]",
     "python_result": "[[\"api\",\"Org/api\",\"about api\",\"https://github.example.test/Org/api\"],[\"web\",\"Org/web\",\"about web\",\"https://github.example.test/Org/web\"],[\"docs\",\"Org/docs\",\"about docs\",\"https://github.example.test/Org/docs\"]]",
     "python_requests": "[[https://ghe.test/api/v3/orgs/acme/repos?per_page=100 token tok] [https://other.test/orgs/acme/repos?page=2 token tok]]"
   },
-  "370 installation base=\"https://u@ghe.test\" org=\"\" search=\"\" pattern=\"\" max=\u003cnone\u003e": {
-    "result": "[]",
-    "requests": "[[https://ghe.test/installation/repositories?per_page=100 token tok]]",
-    "python_result": "[]",
-    "python_requests": "[[https://u@ghe.test/installation/repositories?per_page=100 Basic dTo=]]"
-  },
-  "371 repos base=\"https://ghe.test/api/v3#\" org=\"acme\" search=\"\" pattern=\"\" max=\u003cnone\u003e": {
+  "repos base=\"https://ghe.test/api/v3#\" org=\"acme\" search=\"\" pattern=\"\" max=\u003cnone\u003e #980c263cefad": {
     "result": "[[\"api\",\"Org/api\",\"about api\",\"https://github.example.test/Org/api\"],[\"web\",\"Org/web\",\"about web\",\"https://github.example.test/Org/web\"]]",
     "requests": "[[https://ghe.test/api/v3/orgs/acme/repos?per_page=100 token tok]]",
     "python_result": "[[\"api\",\"Org/api\",\"about api\",\"https://github.example.test/Org/api\"],[\"web\",\"Org/web\",\"about web\",\"https://github.example.test/Org/web\"]]",
     "python_requests": "[[https://ghe.test/api/v3/orgs/acme/repos?per_page=100# token tok]]"
   },
-  "372 repos base=\"https://ghe.test/api/v3#\" org=\"acme\" search=\"\" pattern=\"\" max=\u003cnone\u003e": {
+  "repos base=\"https://ghe.test/api/v3#\" org=\"acme\" search=\"\" pattern=\"\" max=\u003cnone\u003e #c2cc97b13ecf": {
     "result": "[[\"api\",\"Org/api\",\"about api\",\"https://github.example.test/Org/api\"],[\"web\",\"Org/web\",\"about web\",\"https://github.example.test/Org/web\"],[\"docs\",\"Org/docs\",\"about docs\",\"https://github.example.test/Org/docs\"]]",
     "requests": "[[https://ghe.test/api/v3/orgs/acme/repos?per_page=100 token tok] [https://ghe.test/api/v3/orgs/acme/repos?page=2 token tok]]",
     "python_result": "[[\"api\",\"Org/api\",\"about api\",\"https://github.example.test/Org/api\"],[\"web\",\"Org/web\",\"about web\",\"https://github.example.test/Org/web\"],[\"docs\",\"Org/docs\",\"about docs\",\"https://github.example.test/Org/docs\"]]",
     "python_requests": "[[https://ghe.test/api/v3/orgs/acme/repos?per_page=100# token tok] [https://ghe.test/api/v3/orgs/acme/repos?page=2# token tok]]"
   },
-  "373 installation base=\"https://ghe.test/api/v3#\" org=\"\" search=\"\" pattern=\"\" max=\u003cnone\u003e": {
-    "result": "[]",
-    "requests": "[[https://ghe.test/api/v3/installation/repositories?per_page=100 token tok]]",
-    "python_result": "[]",
-    "python_requests": "[[https://ghe.test/api/v3/installation/repositories?per_page=100# token tok]]"
-  },
-  "374 repos base=\"https://ghe.test/api/v3?#\" org=\"acme\" search=\"\" pattern=\"\" max=\u003cnone\u003e": {
-    "result": "[[\"api\",\"Org/api\",\"about api\",\"https://github.example.test/Org/api\"],[\"web\",\"Org/web\",\"about web\",\"https://github.example.test/Org/web\"]]",
-    "requests": "[[https://ghe.test/api/v3?per_page=100 token tok]]",
-    "python_result": "[[\"api\",\"Org/api\",\"about api\",\"https://github.example.test/Org/api\"],[\"web\",\"Org/web\",\"about web\",\"https://github.example.test/Org/web\"]]",
-    "python_requests": "[[https://ghe.test/api/v3?per_page=100# token tok]]"
-  },
-  "375 repos base=\"https://ghe.test/api/v3?#\" org=\"acme\" search=\"\" pattern=\"\" max=\u003cnone\u003e": {
+  "repos base=\"https://ghe.test/api/v3?#\" org=\"acme\" search=\"\" pattern=\"\" max=\u003cnone\u003e #1ea853cac79a": {
     "result": "[[\"api\",\"Org/api\",\"about api\",\"https://github.example.test/Org/api\"],[\"web\",\"Org/web\",\"about web\",\"https://github.example.test/Org/web\"],[\"docs\",\"Org/docs\",\"about docs\",\"https://github.example.test/Org/docs\"]]",
     "requests": "[[https://ghe.test/api/v3?per_page=100 token tok] [https://ghe.test/api/v3?/orgs/acme/repos?page=2 token tok]]",
     "python_result": "[[\"api\",\"Org/api\",\"about api\",\"https://github.example.test/Org/api\"],[\"web\",\"Org/web\",\"about web\",\"https://github.example.test/Org/web\"],[\"docs\",\"Org/docs\",\"about docs\",\"https://github.example.test/Org/docs\"]]",
     "python_requests": "[[https://ghe.test/api/v3?per_page=100# token tok] [https://ghe.test/api/v3?/orgs/acme/repos?page=2# token tok]]"
   },
-  "376 installation base=\"https://ghe.test/api/v3?#\" org=\"\" search=\"\" pattern=\"\" max=\u003cnone\u003e": {
-    "result": "[]",
+  "repos base=\"https://ghe.test/api/v3?#\" org=\"acme\" search=\"\" pattern=\"\" max=\u003cnone\u003e #c614f7c1bb2a": {
+    "result": "[[\"api\",\"Org/api\",\"about api\",\"https://github.example.test/Org/api\"],[\"web\",\"Org/web\",\"about web\",\"https://github.example.test/Org/web\"]]",
     "requests": "[[https://ghe.test/api/v3?per_page=100 token tok]]",
-    "python_result": "[]",
+    "python_result": "[[\"api\",\"Org/api\",\"about api\",\"https://github.example.test/Org/api\"],[\"web\",\"Org/web\",\"about web\",\"https://github.example.test/Org/web\"]]",
     "python_requests": "[[https://ghe.test/api/v3?per_page=100# token tok]]"
   },
-  "377 repos base=\"https://ghé.test/api/v3\" org=\"acme\" search=\"\" pattern=\"\" max=\u003cnone\u003e": {
-    "result": "[[\"api\",\"Org/api\",\"about api\",\"https://github.example.test/Org/api\"],[\"web\",\"Org/web\",\"about web\",\"https://github.example.test/Org/web\"]]",
-    "requests": "[[https://gh%C3%A9.test/api/v3/orgs/acme/repos?per_page=100 token tok]]",
-    "python_result": "[[\"api\",\"Org/api\",\"about api\",\"https://github.example.test/Org/api\"],[\"web\",\"Org/web\",\"about web\",\"https://github.example.test/Org/web\"]]",
-    "python_requests": "[[https://xn--gh-cja.test/api/v3/orgs/acme/repos?per_page=100 token tok]]"
+  "repos base=\"https://ghe.test:8443/api/v3\" org=\"acme\" search=\"\" pattern=\"\" max=\u003cnone\u003e #30a8bafe7492": {
+    "result": "\"link_cross_origin_refused: refused a next page link on another origin\"",
+    "requests": "[[https://ghe.test:8443/api/v3/orgs/acme/repos?per_page=100 token tok]]",
+    "python_result": "[[\"api\",\"Org/api\",\"about api\",\"https://github.example.test/Org/api\"],[\"web\",\"Org/web\",\"about web\",\"https://github.example.test/Org/web\"],[\"docs\",\"Org/docs\",\"about docs\",\"https://github.example.test/Org/docs\"]]",
+    "python_requests": "[[https://ghe.test:8443/api/v3/orgs/acme/repos?per_page=100 token tok] [http://[2001:db8::1]:9/x?page=2 token tok]]"
   },
-  "378 repos base=\"https://ghé.test/api/v3\" org=\"acme\" search=\"\" pattern=\"\" max=\u003cnone\u003e": {
+  "repos base=\"https://ghé.test/api/v3\" org=\"acme\" search=\"\" pattern=\"\" max=\u003cnone\u003e #a492d2615760": {
     "result": "[[\"api\",\"Org/api\",\"about api\",\"https://github.example.test/Org/api\"],[\"web\",\"Org/web\",\"about web\",\"https://github.example.test/Org/web\"],[\"docs\",\"Org/docs\",\"about docs\",\"https://github.example.test/Org/docs\"]]",
     "requests": "[[https://gh%C3%A9.test/api/v3/orgs/acme/repos?per_page=100 token tok] [https://gh%C3%A9.test/api/v3/orgs/acme/repos?page=2 token tok]]",
     "python_result": "[[\"api\",\"Org/api\",\"about api\",\"https://github.example.test/Org/api\"],[\"web\",\"Org/web\",\"about web\",\"https://github.example.test/Org/web\"],[\"docs\",\"Org/docs\",\"about docs\",\"https://github.example.test/Org/docs\"]]",
     "python_requests": "[[https://xn--gh-cja.test/api/v3/orgs/acme/repos?per_page=100 token tok] [https://xn--gh-cja.test/api/v3/orgs/acme/repos?page=2 token tok]]"
   },
-  "379 installation base=\"https://ghé.test/api/v3\" org=\"\" search=\"\" pattern=\"\" max=\u003cnone\u003e": {
-    "result": "[]",
-    "requests": "[[https://gh%C3%A9.test/api/v3/installation/repositories?per_page=100 token tok]]",
-    "python_result": "[]",
-    "python_requests": "[[https://xn--gh-cja.test/api/v3/installation/repositories?per_page=100 token tok]]"
-  },
-  "392 repos base=\"https://ghe.test/a#b#c\" org=\"acme\" search=\"\" pattern=\"\" max=\u003cnone\u003e": {
+  "repos base=\"https://ghé.test/api/v3\" org=\"acme\" search=\"\" pattern=\"\" max=\u003cnone\u003e #b0b4943c0d3e": {
     "result": "[[\"api\",\"Org/api\",\"about api\",\"https://github.example.test/Org/api\"],[\"web\",\"Org/web\",\"about web\",\"https://github.example.test/Org/web\"]]",
-    "requests": "[[https://ghe.test/a/orgs/acme/repos?per_page=100#b%23c token tok]]",
+    "requests": "[[https://gh%C3%A9.test/api/v3/orgs/acme/repos?per_page=100 token tok]]",
     "python_result": "[[\"api\",\"Org/api\",\"about api\",\"https://github.example.test/Org/api\"],[\"web\",\"Org/web\",\"about web\",\"https://github.example.test/Org/web\"]]",
-    "python_requests": "[[https://ghe.test/a/orgs/acme/repos?per_page=100#b#c token tok]]"
+    "python_requests": "[[https://xn--gh-cja.test/api/v3/orgs/acme/repos?per_page=100 token tok]]"
   },
-  "393 repos base=\"https://ghe.test/a#b#c\" org=\"acme\" search=\"\" pattern=\"\" max=\u003cnone\u003e": {
+  "repos base=\"https://u@ghe.test\" org=\"acme\" search=\"\" pattern=\"\" max=\u003cnone\u003e #43fe50273cd4": {
+    "result": "[[\"api\",\"Org/api\",\"about api\",\"https://github.example.test/Org/api\"],[\"web\",\"Org/web\",\"about web\",\"https://github.example.test/Org/web\"]]",
+    "requests": "[[https://ghe.test/orgs/acme/repos?per_page=100 token tok]]",
+    "python_result": "[[\"api\",\"Org/api\",\"about api\",\"https://github.example.test/Org/api\"],[\"web\",\"Org/web\",\"about web\",\"https://github.example.test/Org/web\"]]",
+    "python_requests": "[[https://u@ghe.test/orgs/acme/repos?per_page=100 Basic dTo=]]"
+  },
+  "repos base=\"https://u@ghe.test\" org=\"acme\" search=\"\" pattern=\"\" max=\u003cnone\u003e #830d18143afd": {
     "result": "[[\"api\",\"Org/api\",\"about api\",\"https://github.example.test/Org/api\"],[\"web\",\"Org/web\",\"about web\",\"https://github.example.test/Org/web\"],[\"docs\",\"Org/docs\",\"about docs\",\"https://github.example.test/Org/docs\"]]",
-    "requests": "[[https://ghe.test/a/orgs/acme/repos?per_page=100#b%23c token tok] [https://ghe.test/a/orgs/acme/repos?page=2#b%23c token tok]]",
+    "requests": "[[https://ghe.test/orgs/acme/repos?per_page=100 token tok] [https://ghe.test/orgs/acme/repos?page=2 token tok]]",
     "python_result": "[[\"api\",\"Org/api\",\"about api\",\"https://github.example.test/Org/api\"],[\"web\",\"Org/web\",\"about web\",\"https://github.example.test/Org/web\"],[\"docs\",\"Org/docs\",\"about docs\",\"https://github.example.test/Org/docs\"]]",
-    "python_requests": "[[https://ghe.test/a/orgs/acme/repos?per_page=100#b#c token tok] [https://ghe.test/a/orgs/acme/repos?page=2#b#c token tok]]"
+    "python_requests": "[[https://u@ghe.test/orgs/acme/repos?per_page=100 Basic dTo=] [https://u@ghe.test/orgs/acme/repos?page=2 Basic dTo=]]"
   },
-  "394 installation base=\"https://ghe.test/a#b#c\" org=\"\" search=\"\" pattern=\"\" max=\u003cnone\u003e": {
-    "result": "[]",
-    "requests": "[[https://ghe.test/a/installation/repositories?per_page=100#b%23c token tok]]",
-    "python_result": "[]",
-    "python_requests": "[[https://ghe.test/a/installation/repositories?per_page=100#b#c token tok]]"
+  "repos base=\"https://user:pw@ghe.test/api/v3\" org=\"acme\" search=\"\" pattern=\"\" max=\u003cnone\u003e #9a3563755fea": {
+    "result": "[[\"api\",\"Org/api\",\"about api\",\"https://github.example.test/Org/api\"],[\"web\",\"Org/web\",\"about web\",\"https://github.example.test/Org/web\"],[\"docs\",\"Org/docs\",\"about docs\",\"https://github.example.test/Org/docs\"]]",
+    "requests": "[[https://ghe.test/api/v3/orgs/acme/repos?per_page=100 token tok] [https://ghe.test/api/v3/orgs/acme/repos?page=2 token tok]]",
+    "python_result": "[[\"api\",\"Org/api\",\"about api\",\"https://github.example.test/Org/api\"],[\"web\",\"Org/web\",\"about web\",\"https://github.example.test/Org/web\"],[\"docs\",\"Org/docs\",\"about docs\",\"https://github.example.test/Org/docs\"]]",
+    "python_requests": "[[https://user:pw@ghe.test/api/v3/orgs/acme/repos?per_page=100 Basic dXNlcjpwdw==] [https://user:pw@ghe.test/api/v3/orgs/acme/repos?page=2 Basic dXNlcjpwdw==]]"
   },
-  "413 repos base=\"ghe.test/api/v3\" org=\"acme\" search=\"\" pattern=\"\" max=\u003cnone\u003e": {
-    "result": "\"APIException: parse \\\"://ghe.test/api/v3/orgs/acme/repos?per_page=100\\\": missing protocol scheme\"",
-    "requests": "[]",
-    "python_result": "\"ValueError: unknown url type: 'ghe.test/api/v3/orgs/acme/repos?per_page=100'\"",
-    "python_requests": "[[ghe.test/api/v3/orgs/acme/repos?per_page=100 token tok]]"
-  },
-  "414 repos base=\"ghe.test/api/v3\" org=\"acme\" search=\"\" pattern=\"\" max=\u003cnone\u003e": {
-    "result": "\"APIException: parse \\\"://ghe.test/api/v3/orgs/acme/repos?per_page=100\\\": missing protocol scheme\"",
-    "requests": "[]",
-    "python_result": "\"ValueError: unknown url type: 'ghe.test/api/v3/orgs/acme/repos?per_page=100'\"",
-    "python_requests": "[[ghe.test/api/v3/orgs/acme/repos?per_page=100 token tok]]"
-  },
-  "415 installation base=\"ghe.test/api/v3\" org=\"\" search=\"\" pattern=\"\" max=\u003cnone\u003e": {
-    "result": "\"APIException: parse \\\"://ghe.test/api/v3/installation/repositories?per_page=100\\\": missing protocol scheme\"",
-    "requests": "[]",
-    "python_result": "\"ValueError: unknown url type: 'ghe.test/api/v3/installation/repositories?per_page=100'\"",
-    "python_requests": "[[ghe.test/api/v3/installation/repositories?per_page=100 token tok]]"
-  },
-  "416 repos base=\"//ghe.test/api/v3\" org=\"acme\" search=\"\" pattern=\"\" max=\u003cnone\u003e": {
-    "result": "\"APIException: parse \\\"://ghe.test/api/v3/orgs/acme/repos?per_page=100\\\": missing protocol scheme\"",
-    "requests": "[]",
-    "python_result": "\"ValueError: unknown url type: '//ghe.test/api/v3/orgs/acme/repos?per_page=100'\"",
-    "python_requests": "[[//ghe.test/api/v3/orgs/acme/repos?per_page=100 token tok]]"
-  },
-  "417 repos base=\"//ghe.test/api/v3\" org=\"acme\" search=\"\" pattern=\"\" max=\u003cnone\u003e": {
-    "result": "\"APIException: parse \\\"://ghe.test/api/v3/orgs/acme/repos?per_page=100\\\": missing protocol scheme\"",
-    "requests": "[]",
-    "python_result": "\"ValueError: unknown url type: '//ghe.test/api/v3/orgs/acme/repos?per_page=100'\"",
-    "python_requests": "[[//ghe.test/api/v3/orgs/acme/repos?per_page=100 token tok]]"
-  },
-  "418 installation base=\"//ghe.test/api/v3\" org=\"\" search=\"\" pattern=\"\" max=\u003cnone\u003e": {
-    "result": "\"APIException: parse \\\"://ghe.test/api/v3/installation/repositories?per_page=100\\\": missing protocol scheme\"",
-    "requests": "[]",
-    "python_result": "\"ValueError: unknown url type: '//ghe.test/api/v3/installation/repositories?per_page=100'\"",
-    "python_requests": "[[//ghe.test/api/v3/installation/repositories?per_page=100 token tok]]"
+  "repos base=\"https://user:pw@ghe.test/api/v3\" org=\"acme\" search=\"\" pattern=\"\" max=\u003cnone\u003e #e61662ad6ae0": {
+    "result": "[[\"api\",\"Org/api\",\"about api\",\"https://github.example.test/Org/api\"],[\"web\",\"Org/web\",\"about web\",\"https://github.example.test/Org/web\"]]",
+    "requests": "[[https://ghe.test/api/v3/orgs/acme/repos?per_page=100 token tok]]",
+    "python_result": "[[\"api\",\"Org/api\",\"about api\",\"https://github.example.test/Org/api\"],[\"web\",\"Org/web\",\"about web\",\"https://github.example.test/Org/web\"]]",
+    "python_requests": "[[https://user:pw@ghe.test/api/v3/orgs/acme/repos?per_page=100 Basic dXNlcjpwdw==]]"
   }
 }

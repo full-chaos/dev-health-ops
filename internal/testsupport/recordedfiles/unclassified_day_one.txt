@@ -894,7 +894,6 @@ internal/scheduler/sync/testdata/python_feature_decision_reason_oracle.py
 internal/scheduler/sync/testdata/python_planner_oracle.py
 internal/storage/clickhouse/testdata/api_grants.golden
 internal/synccli/testdata/batch_loop_oracle.py
-internal/synccli/testdata/db_lookup_oracle.py
 internal/synccli/testdata/local_sync_oracle.py
 internal/synccli/testdata/sync_target_oracle.py
 internal/synccli/testdata/teams_sync_oracle.py

@@ -136,6 +136,44 @@ func TestBatchOwnerIsTheUserToListOnlyWithoutAGroup(t *testing.T) {
 	}
 }
 
+// The summary counts failed REPOSITORIES first and failed dataset runs second: one repository failing every
+// dataset is one repository and several runs.
+func TestBatchSummaryCountsARepositoryOnceWhateverItsFailedDatasets(t *testing.T) {
+	h := &batchHarness{repos: githubRepos("acme/a", "acme/b")}
+	h.fail = func(run providersync.InProcessRun) error {
+		if run.SourceExternalID == "acme/b" {
+			return errors.New("provider said no")
+		}
+		return nil
+	}
+	code, _, stderr := runVerb(t, "git", h.executor(), githubBatchArgs, inlineEnv)
+	runs := len(h.ran()["acme/b"])
+	if runs < 2 {
+		t.Fatalf("the git target ran %d datasets for acme/b, want at least 2 for this test to mean anything", runs)
+	}
+	want := fmt.Sprintf("1 of 2 repositories failed (%d dataset runs)", runs)
+	if code != cli.ExitFailure || !strings.Contains(stderr, want) {
+		t.Fatalf("exit %d stderr %q, want %q", code, stderr, want)
+	}
+}
+
+// Python passes project_info.id (0 included) straight on (processors/gitlab.py:2626); the port refuses a project
+// without a numeric id and still runs the rest, so no corpus case can be recorded from Python for it.
+func TestBatchGitLabRefusesAProjectWithoutANumericIDAndRunsTheRest(t *testing.T) {
+	h := &batchHarness{repos: []providersync.ListedRepository{
+		{Name: "zero", FullName: "acme/zero", ProjectID: 0},
+		{Name: "web", FullName: "acme/web", ProjectID: 12},
+	}}
+	code, _, stderr := runVerb(t, "incidents", h.executor(),
+		[]string{"--provider", "gitlab", "-s", "acme/*", "--auth", "glpat-secret", "--gitlab-url", "https://gl.example", "--group", "acme"}, inlineEnv)
+	if code != cli.ExitFailure || !strings.Contains(stderr, "zero: listing: the listed project has no numeric id") || !strings.Contains(stderr, "1 of 2 repositories failed") {
+		t.Fatalf("exit %d stderr %q", code, stderr)
+	}
+	if got, want := h.ran(), map[string][]string{"12": {"incidents"}}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("ran %v, want %v", got, want)
+	}
+}
+
 func TestBatchGitLabRunsEachProjectByNumericID(t *testing.T) {
 	h := &batchHarness{repos: []providersync.ListedRepository{
 		{Name: "api", FullName: "acme/api", ProjectID: 11},

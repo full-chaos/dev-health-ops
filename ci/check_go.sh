@@ -79,7 +79,7 @@ fi
 usage() {
   # Backticks in the literal help text document commands; they are not substitutions.
   # shellcheck disable=SC2016
-  printf '%s\n' 'Usage: ci/check_go.sh [fmt|vet|test|race|live-python-oracles|venue-oracles [SHARD COUNT]|venue-oracle-plan COUNT|ci-leg LEG [SHARD COUNT]|build|contract|multi-replica-workers|integration-vet|integration-coverage|python-free-unit|integration-shard-plan|integration-prepull|integration-shard|integration|fast|ci|all]
+  printf '%s\n' 'Usage: ci/check_go.sh [fmt|vet|test|race|live-python-oracles|venue-oracles [SHARD COUNT]|venue-oracle-plan COUNT|ci-leg LEG [SHARD COUNT]|build|contract|multi-replica-workers|integration-vet|integration-coverage|python-free-unit|python-free-listed|integration-shard-plan|integration-prepull|integration-shard|integration|fast|ci|all]
 
   fmt    Check gofmt without modifying files.
   vet    Run go vet ./... in every Go module.
@@ -177,6 +177,11 @@ usage() {
          the plain untagged go test of every module with Python unreachable
          (ci/python_tripwire.sh); tripwire hits and skips-without-Python are reported to
          ci/python_free_ratchet.sh (CHAOS-7384).
+  python-free-listed
+         The pull-request leg of the go-python-free workflow (GO_PYTHON_FREE=1, PYTHON_FREE_OUT=DIR): every test
+         listed in ci/python_free_known.tsv, run by name (-run) in its package, untagged and with -tags integration,
+         with Python unreachable. Finds a STALE row (a listed test that no longer starts Python) on the pull
+         request; a NEW start by an unlisted test is found by the full run on main (CHAOS-7853).
   integration-images
          Print "<key>\t<image>" for every image declared by the Go test
          container harness. The single source of truth for the dependency set:
@@ -498,7 +503,15 @@ check_live_python_oracles() {
     rm -rf -- "${proof_dir}"
     return 1
   fi
-  for proof_name in providerfoundation-credentials providerfoundation-credentials-default-salt providerfoundation-credentials-no-key providerfoundation-credential-field-reads providerfoundation-credential-field-grid; do
+  # One name per line: a PR that drops one name edits one line, so two PRs dropping different names do not conflict.
+  proof_names=(
+    providerfoundation-credentials
+    providerfoundation-credentials-default-salt
+    providerfoundation-credentials-no-key
+    providerfoundation-credential-field-reads
+    providerfoundation-credential-field-grid
+  )
+  for proof_name in "${proof_names[@]}"; do
     proof_file="${proof_dir}/${proof_name}"
     if [ ! -f "${proof_file}" ] || [ "$(cat "${proof_file}")" != "executed" ]; then
       printf 'ERROR: providerfoundation live Python encryption measurement %s did not occur\n' "${proof_name}" >&2
@@ -718,7 +731,35 @@ check_live_python_oracles() {
     rm -rf -- "${proof_dir}"
     return 1
   fi
-  for proof_name in api-policy-principal api-pyjson api-pyjson-dumps api-pyjson-model api-pyjson-syntax-error-text api-pytime api-pytime-date api-pytime-datereason api-pybody-date-aware api-syncadmin-backfill-request api-pytime-fromisoformat api-pytime-pydantic api-pybody-queryint api-pybody-querybool api-pybody-bodyint edgetoken-signer api-pybody-string api-pybody-emailstr llmorgsettings-validate-base-url httpapi-forwarded-scheme api-pybody-queryuuid httpapi-limit-string auth-signedtoken atlassianteams-python-client admin-llmreadiness-probe; do
+  # One name per line: a PR that drops one name edits one line, so two PRs dropping different names do not conflict.
+  proof_names=(
+    api-policy-principal
+    api-pyjson
+    api-pyjson-dumps
+    api-pyjson-model
+    api-pyjson-syntax-error-text
+    api-pytime
+    api-pytime-date
+    api-pytime-datereason
+    api-pybody-date-aware
+    api-syncadmin-backfill-request
+    api-pytime-fromisoformat
+    api-pytime-pydantic
+    api-pybody-queryint
+    api-pybody-querybool
+    api-pybody-bodyint
+    edgetoken-signer
+    api-pybody-string
+    api-pybody-emailstr
+    llmorgsettings-validate-base-url
+    httpapi-forwarded-scheme
+    api-pybody-queryuuid
+    httpapi-limit-string
+    auth-signedtoken
+    atlassianteams-python-client
+    admin-llmreadiness-probe
+  )
+  for proof_name in "${proof_names[@]}"; do
     proof_file="${proof_dir}/${proof_name}"
     if [ ! -f "${proof_file}" ] || [ "$(cat "${proof_file}")" != "executed" ]; then
       printf 'ERROR: api live Python oracle %s did not run\n' "${proof_name}" >&2
@@ -2481,6 +2522,35 @@ check_python_free_unit() {
   done
 }
 
+# check_python_free_listed (CHAOS-7853): the listed tests only, so a pull request that freezes a test and keeps its
+# row is red before it merges. Each package's listed tests run by name, once untagged and once with -tags
+# integration (a listed test may sit in either build; today all of them are in the integration build, and the untagged
+# run is what catches one that moves to an untagged file), both under the tripwire. PYTHON_FREE_OUT receives each run's
+# `*.hits` file and its `go test -json` stream: `ci/python_free_ratchet.sh compare KNOWN DIR` reads every file of DIR, so
+# the workflow compares only the downloaded hit files; by hand, copy the `*.hits` files to a directory first. A listed test
+# under a build tag other than integration reads as STALE (the run fails closed).
+check_python_free_listed() {
+  python_free_enabled || die "python-free-listed needs GO_PYTHON_FREE=1 (it is the go-python-free workflow's pull-request leg)"
+  local known="${ROOT}/ci/python_free_known.tsv" package tests index=0 relative
+  [ -f "${known}" ] || die "ci/python_free_known.tsv is missing"
+  local -a packages=()
+  while IFS= read -r package; do packages+=("${package}"); done < <(grep -v '^#' "${known}" | cut -f1 | sort -u)
+  [ "${#packages[@]}" -gt 0 ] || die "ci/python_free_known.tsv lists no package: nothing would be measured"
+  for package in "${packages[@]}"; do
+    index=$((index + 1))
+    relative="${package#github.com/full-chaos/dev-health-ops/}"
+    [ "${relative}" != "${package}" ] || die "listed package ${package} is not under the module path"
+    tests="$(grep -v '^#' "${known}" | awk -F'\t' -v p="${package}" '$1 == p { print $2 }' | paste -sd'|' -)"
+    [ -n "${tests}" ] || die "no test listed for ${package}"
+    printf 'python-free-listed: %s -> %s\n' "${relative}" "${tests}"
+    (
+      cd "${ROOT}"
+      PYTHON_FREE_TAGS="" python_free_go_test "listed-${index}-unit" -run "^(${tests})\$" "./${relative}"
+      PYTHON_FREE_TAGS="integration" python_free_go_test "listed-${index}-integration" -run "^(${tests})\$" "./${relative}"
+    )
+  done
+}
+
 check_integration_package_shard() {
   local shard="$1" mode="$2"
   local index module_dir pkg key
@@ -2750,6 +2820,10 @@ case "${1:-all}" in
     ;;
   python-free-unit)
     check_python_free_unit
+    ;;
+  python-free-listed)
+    [ "$#" -eq 1 ] || die "python-free-listed accepts no arguments"
+    check_python_free_listed
     ;;
   integration-shard)
     if [ "$#" -lt 3 ] || [ "$#" -gt 4 ]; then

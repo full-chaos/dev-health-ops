@@ -235,6 +235,10 @@ func pythonPlaneEnv(options Options, perRun map[string]string) []string {
 // and PythonEnv are the test's, the rest is the harness's.
 func planeEntries(options Options, perRun map[string]string) []envEntry {
 	entries := fromHarness(append(interpreterEnv(perRun), "PYTHONPATH="+perRun["PYTHONPATH"], "POSTGRES_URI="+perRun["POSTGRES_URI"])...)
+	if len(options.PythonPathRel) > 0 {
+		// The relative names are the declared input (the absolute PYTHONPATH is keyed by name only).
+		entries = append(entries, fromHarness("VENUE_PYTHONPATH_REL="+strings.Join(options.PythonPathRel, ":"))...)
+	}
 	entries = append(entries, fromTest("JWT_SECRET_KEY="+options.JWTKey)...)
 	entries = append(entries, fromHarness("OTEL_SDK_DISABLED=true", "DEV_HEALTH_ALLOW_CELERY_RIVER_CUTOVER=1",
 		// NullPool: TestClient gives each request its own event loop, and a

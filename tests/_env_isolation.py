@@ -162,7 +162,6 @@ CONDITIONAL_KEEP_ENV_NAMES: dict[str, str] = {
 # ---------------------------------------------------------------------------
 SCRUB_ENV_NAMES: frozenset[str] = frozenset(
     {
-        "ALLOWED_CHECKOUT_DOMAINS",
         "ALLOW_STALE_FEATURE_BUNDLES",
         "ANTHROPIC_API_KEY",
         "APP_BASE_URL",

@@ -29,7 +29,24 @@ import (
 // against, given the repository root (the directory a caller would also use
 // to build PYTHONPATH). It reports which rule matched, so callers can make
 // the resolution visible even on a passing run.
+//
+// In a recording (RecordingEnv) a test that is not on the closed list of
+// packages that still launch their own Python (unconverted_own_launch.txt)
+// is refused here as well as in Resolve: the interpreter's path is the one
+// thing an own-launch site needs, and a refusal on Resolve alone left every
+// caller of Interpreter outside the guard. The producer's launcher resolves
+// through ResolveLauncher, which is not refused.
 func Interpreter(root string) (path string, rule string, err error) {
+	if os.Getenv(RecordingEnv) == "1" {
+		if dir, dirErr := testPackageDir(); dirErr != nil || !unconverted(dir) {
+			return "", "", fmt.Errorf("a recording starts Python only through the producer launcher (venueoracle Producer.Command with golden.Produce); package %q resolves an interpreter by itself: convert the site", dir)
+		}
+	}
+	return interpreter(root)
+}
+
+// interpreter is Interpreter's resolution, with no recording guard.
+func interpreter(root string) (path string, rule string, err error) {
 	if override := os.Getenv("DEV_HEALTH_PYTHON"); override != "" {
 		return override, "DEV_HEALTH_PYTHON override", nil
 	}
@@ -76,7 +93,7 @@ func Resolve(t *testing.T, root string) string {
 // recording too.
 func ResolveLauncher(t *testing.T, root string) string {
 	t.Helper()
-	python, rule, err := Interpreter(root)
+	python, rule, err := interpreter(root)
 	if err != nil {
 		t.Fatalf("pyoracle: %v", err)
 	}
@@ -91,7 +108,7 @@ const RecordingEnv = "DHO_VENUE_GOLDEN_UPDATE"
 
 // unconvertedOwnLaunchCeiling is how many packages the closed list holds. It
 // only goes down.
-const unconvertedOwnLaunchCeiling = 14
+const unconvertedOwnLaunchCeiling = 13
 
 //go:embed unconverted_own_launch.txt
 var unconvertedOwnLaunch string

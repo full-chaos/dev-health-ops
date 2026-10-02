@@ -85,7 +85,7 @@ func (handler *PartitionHandler[T]) Work(
 		if errors.As(err, &active) {
 			return jobruntime.RetryableAfter(err, active.RetryAfter)
 		}
-		return jobruntime.Retryable(stepFailure("claim_partition", err))
+		return jobruntime.Retryable(stepFailure(stepClaimPartition, err))
 	}
 	if claim == nil {
 		return nil
@@ -96,7 +96,7 @@ func (handler *PartitionHandler[T]) Work(
 		if errors.Is(err, ErrInvalidState) {
 			return jobruntime.Permanent(err)
 		}
-		return jobruntime.Retryable(stepFailure("load_run", err))
+		return jobruntime.Retryable(stepFailure(stepLoadRun, err))
 	}
 	if claim.Partition.ID != payload.PartitionID ||
 		run.ID != claim.Partition.RunID || run.Status != "running" ||
@@ -139,14 +139,14 @@ func (handler *PartitionHandler[T]) Work(
 			return jobruntime.WithReason(jobruntime.Permanent(err), jobruntime.ReasonInvalidState)
 		}
 		releaseClaim(handler.store, ctx, *claim)
-		return jobruntime.Retryable(stepFailure("compute_partition", err))
+		return jobruntime.Retryable(stepFailure(stepComputePartition, err))
 	}
 	if err := handler.store.CompletePartition(
 		ctx,
 		*claim,
 		compatibilityCompletionResult(claim.Partition.ID, outcome),
 	); err != nil {
-		return jobruntime.Retryable(stepFailure("complete_partition", err))
+		return jobruntime.Retryable(stepFailure(stepCompletePartition, err))
 	}
 	return nil
 }

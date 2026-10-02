@@ -764,17 +764,44 @@ func TestAtlassianTeamsClientMatchesFrozenPython(t *testing.T) {
 		t.Helper()
 		copied := map[string]outcome{}
 		for key, o := range goSide {
-			records := make([]record, len(o.Records))
-			for index, r := range o.Records {
-				records[index] = append(record(nil), r...)
+			// A nil record list stays nil (an error read has none): turning it into an empty list would make the copy differ from
+			// the recorded reference on every error read, and compare() would report mismatches for ANY plant, or for none.
+			var records []record
+			if o.Records != nil {
+				records = make([]record, len(o.Records))
+				for index, r := range o.Records {
+					records[index] = append(record(nil), r...)
+				}
 			}
-			copied[key] = outcome{Status: o.Status, Records: records}
+			copied[key] = outcome{Status: o.Status, Records: records, Detail: o.Detail}
+		}
+		if len(compare(python, copied)) != 0 {
+			t.Fatalf("known-defect gate %s: the unplanted copy already differs from the reference: %v", family, compare(python, copied))
 		}
 		if !mutate(copied) {
 			t.Fatalf("known-defect gate %s: the corpus has nothing to plant it in", family)
 		}
-		if len(compare(python, copied)) == 0 {
-			t.Errorf("known-defect gate %s: the planted divergence was not found", family)
+		// The planted read itself must be among the mismatches, not just some mismatch.
+		var planted []string
+		for key, o := range copied {
+			if normalize(withoutExcluded(o)) != normalize(withoutExcluded(goSide[key])) || o.Status != goSide[key].Status {
+				planted = append(planted, key)
+			}
+		}
+		if len(planted) == 0 {
+			t.Fatalf("known-defect gate %s: the plant changed no read", family)
+		}
+		found := compare(python, copied)
+		for _, key := range planted {
+			hit := false
+			for _, m := range found {
+				if strings.HasPrefix(m, key+":") {
+					hit = true
+				}
+			}
+			if !hit {
+				t.Errorf("known-defect gate %s: the planted divergence in %q was not found (%d mismatches)", family, key, len(found))
+			}
 		}
 	}
 	setField := func(field string, to leaf) func(map[string]outcome) bool {

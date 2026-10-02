@@ -162,3 +162,20 @@ func TestASuppliedClientWithTheDefaultPolicyDoesNotFollowARedirect(t *testing.T)
 		t.Fatalf("the text carries the Location's path or query: %s", apiErr.Message)
 	}
 }
+
+// CHAOS-7927 r2: an ordinary transport error whose text STARTS with net/http's refusal phrase (exactly, no cause behind it, or
+// joined) is not a redirect: no 3xx answer came back, so it keeps its transport class and is never reworded.
+func TestATransportErrorStartingWithTheLocationPhraseIsNotARedirect(t *testing.T) {
+	for name, cause := range map[string]error{
+		"exact prefix":    errors.New("failed to parse Location header \"x\": planted detail"),
+		"joined":          errors.Join(errors.New("failed to parse Location header \"x\""), errors.New("second")),
+		"prefix then url": errors.New("failed to parse Location header "),
+	} {
+		core := Core{Provider: "github", RetryAfter: func(Response) time.Duration { return 0 }, HTTP: &http.Client{Transport: failingTransport{err: cause}}}
+		_, err := core.Get(context.Background(), "https://api.example.test/x", "GET /probe")
+		var apiErr *Error
+		if !errors.As(err, &apiErr) || apiErr.Class != "TransportError" || strings.Contains(apiErr.Message, "unexpected redirect") {
+			t.Fatalf("%s: err = %v, want a TransportError that is not reworded as a redirect", name, err)
+		}
+	}
+}

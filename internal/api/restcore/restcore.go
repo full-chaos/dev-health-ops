@@ -19,6 +19,7 @@ import (
 	"net/http"
 	"net/url"
 	"strings"
+	"sync/atomic"
 	"time"
 
 	"github.com/full-chaos/dev-health-ops/internal/platform/logging"
@@ -112,6 +113,11 @@ func (c Core) Get(ctx context.Context, target, operation string) (Response, erro
 	}
 	// The one guard layer: whatever client came in (a caller's, or this default), the credential never follows a redirect.
 	httpClient := httpguard.NoRedirects(supplied)
+	// A copy of the client (NoRedirects never changes the caller's): its transport also records whether a 3xx answer with a
+	// Location came back, the one fact that tells net/http's refusal of that Location from an ordinary transport error whose
+	// text happens to start with the same words (CHAOS-7927 r2).
+	witness := &redirectWitness{base: httpClient.Transport}
+	httpClient.Transport = witness
 	sleep := c.Sleep
 	if sleep == nil {
 		sleep = sleepContext
@@ -141,13 +147,14 @@ func (c Core) Get(ctx context.Context, target, operation string) (Response, erro
 		for name, value := range c.Headers {
 			request.Header.Set(name, value)
 		}
+		witness.seen.Store(false)
 		response, err := httpClient.Do(request)
 		var body []byte
 		if err == nil {
 			body, err = io.ReadAll(response.Body)
 			response.Body.Close()
 		}
-		if err != nil && isLocationParseFailure(err) {
+		if err != nil && witness.seen.Load() && isLocationParseFailure(err) {
 			// net/http refused the redirect itself and its error text quotes the whole Location (CHAOS-7927): say that
 			// the redirect was refused, not where to.
 			return Response{}, &Error{"APIException", fmt.Sprintf("%s unexpected redirect on %s: the Location header is not a valid URL (%s); the instrumented core does not follow redirects", c.Provider, operation, redirectUnparsable)}
@@ -268,6 +275,25 @@ func sleepContext(ctx context.Context, wait time.Duration) error {
 	case <-timer.C:
 		return nil
 	}
+}
+
+// redirectWitness is a transport that notes a 3xx answer carrying a Location header: net/http parses that header AFTER the
+// round trip, so an error about it can only follow such an answer.
+type redirectWitness struct {
+	base http.RoundTripper
+	seen atomic.Bool
+}
+
+func (w *redirectWitness) RoundTrip(request *http.Request) (*http.Response, error) {
+	base := w.base
+	if base == nil {
+		base = http.DefaultTransport
+	}
+	response, err := base.RoundTrip(request)
+	if err == nil && response != nil && response.StatusCode >= 300 && response.StatusCode < 400 && response.Header.Get("Location") != "" {
+		w.seen.Store(true)
+	}
+	return response, err
 }
 
 // isLocationParseFailure: net/http refused a redirect whose Location does not parse. Its error is a *url.Error wrapping an

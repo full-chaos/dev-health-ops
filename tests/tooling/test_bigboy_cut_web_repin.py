@@ -89,7 +89,9 @@ def _stub(path: Path, body: str) -> None:
     path.chmod(path.stat().st_mode | stat.S_IXUSR)
 
 
-def _run_repin(tmp_path: Path, *, repin: str | None, image_for: str | None = HEAD_SHA, extra=None):
+def _run_repin(
+    tmp_path: Path, *, repin: str | None, image_for: str | None = HEAD_SHA, extra=None
+):
     """Run bigboy-repin-web.sh against a fake bigboy root with a fake gh and docker on PATH.
 
     gh answers the web main HEAD sha and logs its call; docker answers an image digest only for the
@@ -97,7 +99,9 @@ def _run_repin(tmp_path: Path, *, repin: str | None, image_for: str | None = HEA
     root = tmp_path / "root"
     (root / "compose").mkdir(parents=True)
     overlay = root / "compose" / "compose.bigboy.images.yml"
-    overlay.write_text(f"services:\n  web:\n    image: ghcr.io/full-chaos/dev-health-web@{OLD_DIGEST}\n")
+    overlay.write_text(
+        f"services:\n  web:\n    image: ghcr.io/full-chaos/dev-health-web@{OLD_DIGEST}\n"
+    )
     bindir = tmp_path / "bin"
     bindir.mkdir()
     log = tmp_path / "calls.log"
@@ -118,7 +122,12 @@ def _run_repin(tmp_path: Path, *, repin: str | None, image_for: str | None = HEA
     if repin is not None:
         env["WEB_REPIN"] = repin
     done = subprocess.run(
-        ["bash", str(REPIN_WEB)], env=env, capture_output=True, text=True, stdin=subprocess.DEVNULL, timeout=60
+        ["bash", str(REPIN_WEB)],
+        env=env,
+        capture_output=True,
+        text=True,
+        stdin=subprocess.DEVNULL,
+        timeout=60,
     )
     return done, overlay.read_text(), log.read_text() if log.exists() else ""
 
@@ -131,11 +140,15 @@ def test_repin_web_skip_changes_nothing_and_calls_nothing(tmp_path: Path) -> Non
     assert calls == "", f"skip must not call gh or docker: {calls!r}"
 
 
-def test_repin_web_explicit_sha_uses_that_commit_and_never_asks_for_main_head(tmp_path: Path) -> None:
+def test_repin_web_explicit_sha_uses_that_commit_and_never_asks_for_main_head(
+    tmp_path: Path,
+) -> None:
     done, overlay, calls = _run_repin(tmp_path, repin=OTHER_SHA, image_for=OTHER_SHA)
     assert done.returncode == 0, done.stdout + done.stderr
     assert NEW_DIGEST in overlay and OLD_DIGEST not in overlay
-    assert "gh " not in calls, f"an explicit sha must not resolve web main HEAD: {calls!r}"
+    assert "gh " not in calls, (
+        f"an explicit sha must not resolve web main HEAD: {calls!r}"
+    )
     assert f"sha-{OTHER_SHA[:7]}" in calls
 
 
@@ -146,11 +159,21 @@ def test_repin_web_default_is_still_web_main_head(tmp_path: Path) -> None:
         done, overlay, calls = _run_repin(sub, repin=repin, image_for=HEAD_SHA)
         assert done.returncode == 0, done.stdout + done.stderr
         assert NEW_DIGEST in overlay
-        assert calls.startswith("gh api repos/full-chaos/dev-health-web/commits/main"), calls
+        assert calls.startswith(
+            "gh api repos/full-chaos/dev-health-web/commits/main"
+        ), calls
 
 
-def test_repin_web_refuses_other_values_before_any_call_or_write(tmp_path: Path) -> None:
-    for bad in ("SKIP", "main", "abc123", OTHER_SHA[:39], OTHER_SHA.upper().replace("2", "A")):
+def test_repin_web_refuses_other_values_before_any_call_or_write(
+    tmp_path: Path,
+) -> None:
+    for bad in (
+        "SKIP",
+        "main",
+        "abc123",
+        OTHER_SHA[:39],
+        OTHER_SHA.upper().replace("2", "A"),
+    ):
         sub = tmp_path / f"bad-{abs(hash(bad))}"
         sub.mkdir()
         done, overlay, calls = _run_repin(sub, repin=bad)
@@ -159,7 +182,9 @@ def test_repin_web_refuses_other_values_before_any_call_or_write(tmp_path: Path)
         assert calls == "", (bad, calls)
 
 
-def test_repin_web_explicit_sha_without_an_image_fails_rc3_and_changes_nothing(tmp_path: Path) -> None:
+def test_repin_web_explicit_sha_without_an_image_fails_rc3_and_changes_nothing(
+    tmp_path: Path,
+) -> None:
     done, overlay, _ = _run_repin(tmp_path, repin=OTHER_SHA, image_for=HEAD_SHA)
     assert done.returncode == 3, done.stdout + done.stderr
     assert "no CI image" in done.stdout and "WEB_REPIN=" in done.stdout
@@ -167,7 +192,9 @@ def test_repin_web_explicit_sha_without_an_image_fails_rc3_and_changes_nothing(t
 
 
 def test_repin_web_wait_bounds_must_be_numbers(tmp_path: Path) -> None:
-    done, overlay, calls = _run_repin(tmp_path, repin="head", extra={"WEB_REPIN_WAIT_TRIES": "forty"})
+    done, overlay, calls = _run_repin(
+        tmp_path, repin="head", extra={"WEB_REPIN_WAIT_TRIES": "forty"}
+    )
     assert done.returncode == 2 and calls == ""
     assert OLD_DIGEST in overlay
 

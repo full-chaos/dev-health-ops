@@ -302,7 +302,7 @@ func resolvePersistedDistribution(t *testing.T, row []any) *model.CapacityForeca
 	if len(got.Edges) != 1 {
 		t.Fatalf("edges: got %d, want 1", len(got.Edges))
 	}
-	return &got.Edges[0].Node
+	return got.Edges[0].Node
 }
 
 // CHAOS-7624: a row written before migration 101 reads empty arrays. That is

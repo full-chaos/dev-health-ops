@@ -30,7 +30,7 @@ type dailyRow struct {
 	Day    string
 	// DayTime is the same calendar day as a UTC midnight instant (the loader sets both).
 	DayTime time.Time
-	Bucket string
+	Bucket  string
 
 	PrsTotal            int64
 	PrsMerged           int64

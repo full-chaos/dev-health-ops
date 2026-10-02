@@ -111,13 +111,13 @@ func oneRow(values ...any) *fakeRowScanner {
 func fullResponseSet(t *testing.T, days int, perDay uint64) []*fakeRowScanner {
 	t.Helper()
 	return []*fakeRowScanner{
-		historyRows(t, days, perDay),                   // 1 throughput history
-		oneRow(uint64(500)),                            // 2 backlog
-		oneRow(uint64(40), uint64(60), uint64(100)),    // 3 estimate coverage
-		oneRow(12.5, uint64(20)),                       // 4 work item overlay
-		oneRow(floatPointer(30.0), floatPointer(90.0)), // 5 stale wip
-		oneRow(floatPointer(12.0)),                     // 6 review overlay
-		oneRow(2.5),                                    // 7 incident overlay
+		historyRows(t, days, perDay),                           // 1 throughput history
+		oneRow(uint64(500)),                                    // 2 backlog
+		oneRow(uint64(40), uint64(60), uint64(100), uint64(3)), // 3 estimate coverage
+		oneRow(12.5, uint64(20)),                               // 4 work item overlay
+		oneRow(floatPointer(30.0), floatPointer(90.0)),         // 5 stale wip
+		oneRow(floatPointer(12.0)),                             // 6 review overlay
+		oneRow(2.5),                                            // 7 incident overlay
 	}
 }
 
@@ -331,8 +331,8 @@ func TestResolveAnExplicitZeroBacklogIsSuppliedNotAbsent(t *testing.T) {
 // never null. The gate no longer decides whether coverage is read.
 func TestResolveCoverageIsBuiltFromItsOwnRowsWhenTheDerivedBacklogIsZero(t *testing.T) {
 	responses := fullResponseSet(t, 120, 7)
-	responses[1] = oneRow(uint64(0))                       // derived backlog 0
-	responses[2] = oneRow(uint64(0), uint64(1), uint64(1)) // coverage rows: est 0 / unest 1 / backlog 1
+	responses[1] = oneRow(uint64(0))                                  // derived backlog 0
+	responses[2] = oneRow(uint64(0), uint64(1), uint64(1), uint64(1)) // coverage rows: est 0 / unest 1 / backlog 1
 	client := &fakeClient{responses: responses}
 
 	got, err := Resolve(context.Background(), client, "org-1",
@@ -373,6 +373,18 @@ func TestResolveWithNoCoverageRowsAnswersTheZeroObjectNeverNull(t *testing.T) {
 		}
 		assertZeroCoverage(t, got.EstimateCoverage)
 	})
+	t.Run("an aggregate over zero grains (the real engine's shape)", func(t *testing.T) {
+		responses := fullResponseSet(t, 120, 7)
+		responses[1] = oneRow(uint64(0))
+		responses[2] = oneRow(uint64(0), uint64(0), uint64(0), uint64(0)) // sum() over nothing: one row of zeros, grains 0
+		client := &fakeClient{responses: responses}
+		got, err := Resolve(context.Background(), client, "org-1",
+			model.ThroughputForecastInput{HistoryWeeks: 12}, mustDay(t, "2026-09-01"))
+		if err != nil {
+			t.Fatalf("Resolve: %v", err)
+		}
+		assertZeroCoverage(t, got.EstimateCoverage)
+	})
 	t.Run("no history", func(t *testing.T) {
 		client := &fakeClient{responses: []*fakeRowScanner{
 			{},                // no throughput rows
@@ -393,8 +405,9 @@ func assertZeroCoverage(t *testing.T, coverage *model.ThroughputEstimateCoverage
 	if coverage == nil {
 		t.Fatal("estimateCoverage: got null, want the zero object")
 	}
-	if coverage.EstimatedCount != 0 || coverage.UnestimatedCount != 0 || coverage.BacklogSize != 0 || coverage.Ratio != nil {
-		t.Errorf("estimateCoverage: got %+v, want zero counts and a null ratio (0 of 0 is undefined)", coverage)
+	if coverage.EstimatedCount != 0 || coverage.UnestimatedCount != 0 || coverage.BacklogSize != 0 ||
+		coverage.Ratio == nil || *coverage.Ratio != 0 {
+		t.Errorf("estimateCoverage: got %+v ratio=%v, want ALL zero, ratio 0 included (D4376)", coverage, coverage.Ratio)
 	}
 }
 
@@ -412,7 +425,7 @@ func TestResolveEmptyScopeReturnsTheStructuredNoHistoryPayload(t *testing.T) {
 	client := &fakeClient{responses: []*fakeRowScanner{
 		{},                  // 1 no throughput rows
 		oneRow(uint64(500)), // 2 backlog
-		oneRow(uint64(40), uint64(60), uint64(100)), // 3 estimate coverage
+		oneRow(uint64(40), uint64(60), uint64(100), uint64(3)), // 3 estimate coverage
 	}}
 
 	got, err := Resolve(context.Background(), client, "org-1",
@@ -500,7 +513,7 @@ func TestResolveStaleWIPSurvivesOneNullAge(t *testing.T) {
 func TestResolveEstimateCoverageRatioIsNullForAZeroBacklogRow(t *testing.T) {
 	responses := fullResponseSet(t, 120, 7)
 	// A non-empty request backlog, but the coverage table reports zero.
-	responses[2] = oneRow(uint64(0), uint64(0), uint64(0))
+	responses[2] = oneRow(uint64(0), uint64(0), uint64(0), uint64(1)) // one grain whose backlog_size is 0
 	client := &fakeClient{responses: responses}
 
 	got, err := Resolve(context.Background(), client, "org-1",

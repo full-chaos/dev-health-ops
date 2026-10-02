@@ -182,7 +182,7 @@ type edgeAnswer struct {
 func throughputForecastCoverageDivergence(c edgeCase) edgeCase {
 	c.declared = "estimateCoverage: Python answered null when the backlog was 0 (it skipped the read); query-api answers the zero object (D4373 Keep zero, D4376)"
 	c.pyWant = edgeAnswer{status: 200, body: `"estimateCoverage":null`}
-	c.goWant = edgeAnswer{status: 200, body: `"estimateCoverage":{"ratio":null,"estimatedCount":0,"unestimatedCount":0,"backlogSize":0,"__typename":"ThroughputEstimateCoverage"}`}
+	c.goWant = edgeAnswer{status: 200, body: `"estimateCoverage":{"ratio":0,"estimatedCount":0,"unestimatedCount":0,"backlogSize":0,"__typename":"ThroughputEstimateCoverage"}`}
 	return c
 }
 

@@ -309,7 +309,8 @@ func loadEstimateCoverage(
         SELECT
             sum(estimated_count) AS estimated_count,
             sum(unestimated_count) AS unestimated_count,
-            sum(backlog_size) AS backlog_size
+            sum(backlog_size) AS backlog_size,
+            count() AS grains
         FROM (
             SELECT
                 provider,
@@ -333,10 +334,10 @@ func loadEstimateCoverage(
 	}
 	defer func() { _ = rows.Close() }()
 
-	var estimated, unestimated, backlog uint64
+	var estimated, unestimated, backlog, grains uint64
 	seen := false
 	if rows.Next() {
-		if scanErr := rows.Scan(&estimated, &unestimated, &backlog); scanErr != nil {
+		if scanErr := rows.Scan(&estimated, &unestimated, &backlog, &grains); scanErr != nil {
 			return nil, fmt.Errorf("throughputForecast: estimate coverage scan: %w", scanErr)
 		}
 		seen = true
@@ -344,12 +345,15 @@ func loadEstimateCoverage(
 	if err := rows.Err(); err != nil {
 		return nil, fmt.Errorf("throughputForecast: estimate coverage rows: %w", err)
 	}
-	// No row at all (a driver that hands back nothing, or a double that does):
-	// the zero object, never nil (D4373/D4376). On a real ClickHouse sum() over
-	// a non-Nullable column always yields one row, so this branch only keeps the
-	// "never null" rule independent of the engine's behaviour.
-	if !seen {
-		return &estimateCoverage{}, nil
+	// No coverage row for the scope (the driver hands back no row, or the sum
+	// came from ZERO grains -- on a real ClickHouse an aggregate over nothing
+	// still yields one row of zeros, which is why the grain count is read):
+	// the zero object, ALL zero, ratio 0 included, never nil (D4373 "Keep
+	// zero", D4376). A scope WITH rows whose backlog_size is 0 keeps its null
+	// ratio below.
+	if !seen || grains == 0 {
+		zero := 0.0
+		return &estimateCoverage{ratio: &zero}, nil
 	}
 
 	estimatedCount, err := countFromAggregate("estimated_count", estimated)

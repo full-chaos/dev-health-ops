@@ -1140,6 +1140,7 @@ type ComplexityRoot struct {
 	ReviewEdgesResult struct {
 		Edges      func(childComplexity int) int
 		TotalCount func(childComplexity int) int
+		Truncated  func(childComplexity int) int
 	}
 
 	ReworkThemeAllocation struct {
@@ -6901,6 +6902,13 @@ func (e *executableSchema) Complexity(typeName, field string, childComplexity in
 
 		return e.complexity.ReviewEdgesResult.TotalCount(childComplexity), true
 
+	case "ReviewEdgesResult.truncated":
+		if e.complexity.ReviewEdgesResult.Truncated == nil {
+			break
+		}
+
+		return e.complexity.ReviewEdgesResult.Truncated(childComplexity), true
+
 	case "ReworkThemeAllocation.allocation":
 		if e.complexity.ReworkThemeAllocation.Allocation == nil {
 			break
@@ -9972,7 +9980,14 @@ input ReviewEdgesInput {
 
 type ReviewEdgesResult {
   edges: [ReviewEdgeRow!]!
+  """
+  Number of deduplicated (pair, day) rows the filters match, before the ` + "`" + `` + "`" + `limit` + "`" + `` + "`" + ` cut (CHAOS-7786). One row is one reviewer-to-author pair on one day, so this counts rows, not distinct pairs. Never less than ` + "`" + `` + "`" + `edges` + "`" + `` + "`" + `.
+  """
   totalCount: Int!
+  """
+  True when ` + "`" + `` + "`" + `totalCount` + "`" + `` + "`" + ` is greater than the number of ` + "`" + `` + "`" + `edges` + "`" + `` + "`" + ` returned: the list was cut by ` + "`" + `` + "`" + `limit` + "`" + `` + "`" + ` (CHAOS-7786).
+  """
+  truncated: Boolean!
 }
 
 type ReworkThemeAllocation {
@@ -45385,6 +45400,8 @@ func (ec *executionContext) fieldContext_Query_reviewEdges(ctx context.Context, 
 				return ec.fieldContext_ReviewEdgesResult_edges(ctx, field)
 			case "totalCount":
 				return ec.fieldContext_ReviewEdgesResult_totalCount(ctx, field)
+			case "truncated":
+				return ec.fieldContext_ReviewEdgesResult_truncated(ctx, field)
 			}
 			return nil, fmt.Errorf("no field named %q was found under type ReviewEdgesResult", field.Name)
 		},
@@ -48222,6 +48239,50 @@ func (ec *executionContext) fieldContext_ReviewEdgesResult_totalCount(_ context.
 		IsResolver: false,
 		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
 			return nil, errors.New("field of type Int does not have child fields")
+		},
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _ReviewEdgesResult_truncated(ctx context.Context, field graphql.CollectedField, obj *model.ReviewEdgesResult) (ret graphql.Marshaler) {
+	fc, err := ec.fieldContext_ReviewEdgesResult_truncated(ctx, field)
+	if err != nil {
+		return graphql.Null
+	}
+	ctx = graphql.WithFieldContext(ctx, fc)
+	defer func() {
+		if r := recover(); r != nil {
+			ec.Error(ctx, ec.Recover(ctx, r))
+			ret = graphql.Null
+		}
+	}()
+	resTmp, err := ec.ResolverMiddleware(ctx, func(rctx context.Context) (any, error) {
+		ctx = rctx // use context from middleware stack in children
+		return obj.Truncated, nil
+	})
+	if err != nil {
+		ec.Error(ctx, err)
+		return graphql.Null
+	}
+	if resTmp == nil {
+		if !graphql.HasFieldError(ctx, fc) {
+			ec.Errorf(ctx, "must not be null")
+		}
+		return graphql.Null
+	}
+	res := resTmp.(bool)
+	fc.Result = res
+	return ec.marshalNBoolean2bool(ctx, field.Selections, res)
+}
+
+func (ec *executionContext) fieldContext_ReviewEdgesResult_truncated(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "ReviewEdgesResult",
+		Field:      field,
+		IsMethod:   false,
+		IsResolver: false,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return nil, errors.New("field of type Boolean does not have child fields")
 		},
 	}
 	return fc, nil
@@ -69018,6 +69079,11 @@ func (ec *executionContext) _ReviewEdgesResult(ctx context.Context, sel ast.Sele
 			}
 		case "totalCount":
 			out.Values[i] = ec._ReviewEdgesResult_totalCount(ctx, field, obj)
+			if out.Values[i] == graphql.Null {
+				out.Invalids++
+			}
+		case "truncated":
+			out.Values[i] = ec._ReviewEdgesResult_truncated(ctx, field, obj)
 			if out.Values[i] == graphql.Null {
 				out.Invalids++
 			}

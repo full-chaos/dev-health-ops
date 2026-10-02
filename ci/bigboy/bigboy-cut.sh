@@ -136,6 +136,9 @@ $HERE/bigboy-repin.sh $OLD8 $NEW > $REC.repin.out 2>&1; st repin $?
 # pages the backend underneath had already changed shape for. compose.bigboy.images.yml now
 # pins `web` by digest too (build: !reset null); this STEP repins it to the CI image for web's
 # OWN main branch HEAD, every cut, no host build, before `up` recreates it below.
+# CHAOS-7901: the caller picks the web build by the environment of THIS script: WEB_REPIN=skip (web stays as it is),
+# WEB_REPIN=<40-hex web commit> (that build) or unset/`head` (web main HEAD, the default). Cut 4 waited 10 minutes and
+# ended `repin-web rc=3` because web main HEAD was a CI-only commit with no image; WEB_REPIN=skip avoids that wait.
 $HERE/bigboy-repin-web.sh > $REC.repin-web.out 2>&1; st repin-web $?
 
 for f in $R/_records/bigboy-$OLD8/pass-bigboy-corpus-admin7.sh; do [ -f $f ] && cp -n $f $REC/; done

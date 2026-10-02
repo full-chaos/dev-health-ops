@@ -1,0 +1,24 @@
+{
+  "header": {
+    "test": "TestVenueOracleWorkUnitExplainProviderResolution",
+    "python_build": "a4847c5e93607451a0c987b314d37e02fc43ce85",
+    "producer_digest": "6e1dc97e68624398015f60caee160cceee6ae601bd434d01b8b7d5975267e137",
+    "recipe": "git worktree add --detach $DIR a4847c5e93607451a0c987b314d37e02fc43ce85 (with its .venv: uv sync --frozen --no-install-project); then from the repository root: go run ./internal/testsupport/venueoracle/goldenrecord -pkg ./internal/queryapi/server/ -test '^TestVenueOracleWorkUnitExplainProviderResolution$' -python-root $DIR (records on the pinned build, replays the candidate in a fresh process, and only then promotes it and pins its digest)",
+    "python_env": "ab1425c1baaee5952bfb1c80baa4acfbe6908347d489e6f3a5707280f90d9413",
+    "python_env_version": 2,
+    "recorded_by": "goldenrecord",
+    "blanked": {}
+  },
+  "requests": [
+    {
+      "name": "provider resolution",
+      "method": "PYTHON",
+      "path": "program sha256 bc3d4d61eb2d54289c6db05ec300826347967dc7cb43168407285bbf496ce036 env sha256 196d506129c18430601da69be4d1ef7a91ed559fd9007244ea0bfeff7e19b3ab",
+      "body_sha256": "294e0170489ec70d5df6ee1f5fc0f4ca6e0a0b0af82c8d59a7790e3d87f8ea52",
+      "request_headers_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "status": 0,
+      "headers": {},
+      "body": "RESULT [{\"status\": 422, \"body\": \"{\\\"detail\\\":\\\"Invalid IPv6 URL\\\"}\"}, {\"status\": 422, \"body\": \"{\\\"detail\\\":\\\"Invalid IPv6 URL\\\"}\"}, {\"status\": 404, \"body\": \"{\\\"detail\\\":\\\"Work unit wu-provider-mock not found\\\"}\"}, {\"status\": 422, \"body\": \"{\\\"detail\\\":\\\"No LLM provider is configured for auto. Set --llm-provider mock for fixtures/testing, or configure LLM_PROVIDER plus provider credentials such as OPENAI_API_KEY, ANTHROPIC_API_KEY, GEMINI_API_KEY, QWEN_API_KEY/DASHSCOPE_API_KEY, LOCAL_LLM_BASE_URL, OLLAMA_BASE_URL, or OLLAMA_MODEL. | provider=auto | model=none\\\"}\"}, {\"status\": 404, \"body\": \"{\\\"detail\\\":\\\"Work unit wu-provider-local not found\\\"}\"}, {\"status\": 422, \"body\": \"{\\\"detail\\\":\\\"Invalid IPv6 URL\\\"}\"}]\n"
+    }
+  ]
+}

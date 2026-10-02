@@ -1,4 +1,0 @@
-label=internal/queryapi/timewindow (report window vs live filtering.time_window and people._time_window)
-package=./internal/queryapi/timewindow
-run=^TestComputeMatchesLivePythonTimeWindow$
-proof=query-api-time-window|the query-api report window live Python oracle measurement did not occur

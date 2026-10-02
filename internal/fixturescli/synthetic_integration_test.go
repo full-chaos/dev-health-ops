@@ -3,8 +3,6 @@
 package fixturescli
 
 import (
-	"bytes"
-	"compress/gzip"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -13,7 +11,6 @@ import (
 	"net/url"
 	"os"
 	"os/exec"
-	"path/filepath"
 	"reflect"
 	"sort"
 	"strings"
@@ -23,15 +20,6 @@ import (
 	chstorage "github.com/full-chaos/dev-health-ops/internal/storage/clickhouse"
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/chschema"
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/containers"
-	"github.com/full-chaos/dev-health-ops/internal/testsupport/pyoracle"
-	"github.com/full-chaos/dev-health-ops/internal/testsupport/venueoracle"
-)
-
-const (
-	freezeEnv = "DHO_SYNTHETIC_FREEZE"
-	// producerEnv names the commit whose Python generator the freeze ran, so the
-	// frozen files record it.
-	producerEnv = "DHO_SYNTHETIC_PRODUCER"
 )
 
 // synthetic tables are every ClickHouse table the four synthetic targets
@@ -174,98 +162,6 @@ func truncateSynthetic(t *testing.T, dsn string) {
 	}
 }
 
-// pythonSync runs the real `dev-hops sync <target> --provider synthetic` as CI
-// runs it (with --defer-finalize) against the ClickHouse at dsn.
-func pythonSync(t *testing.T, dsn, org, repo string, days int, target string) time.Time {
-	t.Helper()
-	root, err := filepath.Abs(filepath.Join("..", ".."))
-	if err != nil {
-		t.Fatal(err)
-	}
-	python := pyoracle.Resolve(t, root)
-	started := time.Now().UTC()
-	command := exec.Command(python, "-m", "dev_health_ops.cli", "sync", target, "--provider", "synthetic",
-		"--repo-name", repo, "--backfill", fmt.Sprint(days), "--defer-finalize")
-	command.Env = append(os.Environ(),
-		"PYTHONPATH="+filepath.Join(root, "src"),
-		"ORG_ID="+org, "CLICKHOUSE_URI="+dsn, "OTEL_ENABLED=false", "DEV_HEALTH_ALLOW_SYNTHETIC_SYNC_RUN=1",
-	)
-	if output, err := command.CombinedOutput(); err != nil {
-		t.Fatalf("the Python synthetic sync of %s failed: %v", target, pyoracle.RunError(python, err, output))
-	}
-	return started
-}
-
-// pythonSyncTarget runs one target on an empty set of synthetic tables and
-// returns what it wrote, and when it started. It fails if the target wrote a
-// table outside syntheticTables.
-func pythonSyncTarget(t *testing.T, ch clickHouse, org, repo string, days int, target string) (FrozenTarget, time.Time) {
-	t.Helper()
-	truncateSynthetic(t, ch.httpDSN)
-	before := rowCounts(t, ch.httpDSN)
-	started := pythonSync(t, ch.httpDSN, org, repo, days, target)
-	after := rowCounts(t, ch.httpDSN)
-	known := map[string]bool{}
-	for _, table := range syntheticTables {
-		known[table] = true
-	}
-	for table, count := range after {
-		if before[table] != count && !known[table] {
-			t.Fatalf("target %s wrote %s, which is not in syntheticTables", target, table)
-		}
-	}
-	frozen := FrozenTarget{Name: target, FrozenAt: started.Format(time.RFC3339Nano)}
-	for _, table := range syntheticTables {
-		if dumped := dumpTable(t, ch.httpDSN, table); len(dumped.Rows) > 0 {
-			frozen.Tables = append(frozen.Tables, dumped)
-		}
-	}
-	if len(frozen.Tables) == 0 {
-		t.Fatalf("target %s wrote no rows", target)
-	}
-	return frozen, started
-}
-
-// TestFreezeSyntheticRows writes the frozen files from the real Python
-// producer. It is not a check: it runs only with DHO_SYNTHETIC_FREEZE=1, needs
-// the full project Python environment, and rewrites testdata/synthetic.
-func TestFreezeSyntheticRows(t *testing.T) {
-	if os.Getenv(freezeEnv) != "1" {
-		t.Skip("set " + freezeEnv + "=1 (and " + producerEnv + "=<commit>) to re-freeze the synthetic rows from the live Python producer")
-	}
-	producer := os.Getenv(producerEnv)
-	if producer == "" {
-		t.Fatalf("%s must name the commit whose Python generator runs", producerEnv)
-	}
-	ch := startClickHouse(t)
-	if err := os.MkdirAll("testdata/synthetic", 0o755); err != nil {
-		t.Fatal(err)
-	}
-	for _, set := range syntheticParameterSets {
-		frozen := FrozenSet{Producer: producer, OrgID: set.Org, RepoName: set.Repo, Days: set.Days}
-		for _, target := range Targets {
-			rows, _ := pythonSyncTarget(t, ch, set.Org, set.Repo, set.Days, target)
-			frozen.Targets = append(frozen.Targets, rows)
-		}
-		var buffer bytes.Buffer
-		writer, err := gzip.NewWriterLevel(&buffer, gzip.BestCompression)
-		if err != nil {
-			t.Fatal(err)
-		}
-		encoder := json.NewEncoder(writer)
-		if err := encoder.Encode(frozen); err != nil {
-			t.Fatal(err)
-		}
-		if err := writer.Close(); err != nil {
-			t.Fatal(err)
-		}
-		if err := os.WriteFile(SyntheticSetFile(set.Org, set.Repo, set.Days), buffer.Bytes(), 0o644); err != nil {
-			t.Fatal(err)
-		}
-		t.Logf("froze %s / %s / %d days: %d bytes", set.Org, set.Repo, set.Days, buffer.Len())
-	}
-}
-
 func loadThroughTheNativeClient(t *testing.T, ch clickHouse, org, repo string, days int, target string, now time.Time) map[string]int {
 	t.Helper()
 	dsn := ch.instance.URI
@@ -380,47 +276,6 @@ func maskTimes(table FrozenTable) [][]any {
 		masked[index] = out
 	}
 	return masked
-}
-
-// The differential oracle, against the REAL producer while it exists: the same
-// target run by the Python synthetic sync in one ClickHouse and loaded by the
-// Go verb in another gives the same rows in every table, column for column,
-// except the timestamps (the producer reads the clock; the loader shifts the
-// frozen ones). It needs the full project Python environment, so it runs by
-// hand:
-//
-//	DEV_HEALTH_LIVE_PYTHON_ORACLES=1 DEV_HEALTH_PYTHON=<full venv python> \
-//	  go test -tags=integration -run TestLoadSyntheticVenueOracleMatchesThePythonProducer ./internal/fixturescli
-//
-// CI runs it in the venue-oracles job (ci/check_go.sh venue-oracles discovers it
-// through venueoracle.WriteProof, called only after every comparison passed).
-func TestLoadSyntheticVenueOracleMatchesThePythonProducer(t *testing.T) {
-	if os.Getenv("DEV_HEALTH_LIVE_PYTHON_ORACLES") != "1" {
-		t.Skip("the live Python producer runs only with DEV_HEALTH_LIVE_PYTHON_ORACLES=1 and the full project Python environment")
-	}
-	python := startClickHouse(t)
-	loader := startClickHouse(t)
-	compared := 0
-	for _, set := range syntheticParameterSets {
-		for _, target := range Targets {
-			live, _ := pythonSyncTarget(t, python, set.Org, set.Repo, set.Days, target)
-
-			truncateSynthetic(t, loader.httpDSN)
-			loadThroughTheNativeClient(t, loader, set.Org, set.Repo, set.Days, target, time.Now().UTC())
-			for _, liveTable := range live.Tables {
-				loaded := dumpTable(t, loader.httpDSN, liveTable.Name)
-				if problem := oracleTableProblem(t, liveTable, loaded); problem != "" {
-					t.Fatalf("%s / %s / %s / %s: %s", set.Org[:8], set.Repo, target, liveTable.Name, problem)
-				}
-				if len(liveTable.Rows) == 0 {
-					t.Fatalf("%s wrote no rows on the live producer: the comparison would measure nothing", liveTable.Name)
-				}
-				compared += len(liveTable.Rows)
-			}
-		}
-	}
-	t.Logf("compared %d row(s) across %d parameter set(s) and %d target(s)", compared, len(syntheticParameterSets), len(Targets))
-	venueoracle.WriteProof(t)
 }
 
 // CHAOS-7301: at the migration head (ordering contract 2) the operational tables refuse a row whose

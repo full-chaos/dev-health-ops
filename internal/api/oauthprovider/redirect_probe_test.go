@@ -14,3 +14,14 @@ func TestASuppliedClientNeverFollowsARedirectToAnotherOrigin(t *testing.T) {
 	_, _ = client.get(context.Background(), probe.Base.URL+"/user", map[string]string{"Authorization": "Bearer SECRET"}, "profile")
 	probe.Assert(t)
 }
+
+// NewClient (production) and a Client with no HTTP follow no redirect (oauthprovider.go:113 and :143).
+func TestTheDefaultClientsNeverFollowARedirectToAnotherOrigin(t *testing.T) {
+	for name, client := range map[string]*Client{"NewClient": NewClient(), "nil HTTP": {Endpoints: DefaultEndpoints}} {
+		t.Run(name, func(t *testing.T) {
+			probe := redirectprobe.New(t)
+			_, _ = client.get(context.Background(), probe.Base.URL+"/user", map[string]string{"Authorization": "Bearer SECRET"}, "profile")
+			probe.Assert(t)
+		})
+	}
+}

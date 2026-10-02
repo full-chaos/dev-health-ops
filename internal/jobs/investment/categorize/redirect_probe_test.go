@@ -29,3 +29,25 @@ func TestASuppliedClientNeverFollowsARedirectToAnotherOrigin(t *testing.T) {
 		probe.Assert(t)
 	})
 }
+
+// No client supplied (the nil branch: newHardenedHTTPClient) follows no redirect either.
+func TestTheDefaultProviderClientsNeverFollowARedirectToAnotherOrigin(t *testing.T) {
+	t.Run("openai", func(t *testing.T) {
+		probe := redirectprobe.New(t)
+		provider := NewOpenAIProvider(OpenAIProviderConfig{APIKey: "SECRET", BaseURL: probe.Base.URL})
+		_, _, _ = provider.executeResponsesRequest(context.Background(), openAIResponsesRequest{})
+		probe.Assert(t)
+	})
+	t.Run("ollama", func(t *testing.T) {
+		probe := redirectprobe.New(t)
+		provider := NewOllamaProvider(OllamaProviderConfig{APIKey: "SECRET", BaseURL: probe.Base.URL})
+		_, _, _, _ = provider.executeChatRequest(context.Background(), ollamaChatRequest{})
+		probe.Assert(t)
+	})
+	t.Run("local", func(t *testing.T) {
+		probe := redirectprobe.New(t)
+		provider := NewLocalProvider(LocalProviderConfig{APIKey: "SECRET", BaseURL: probe.Base.URL})
+		_, _, _ = provider.executeChatCompletionRequest(context.Background(), localChatRequest{})
+		probe.Assert(t)
+	})
+}

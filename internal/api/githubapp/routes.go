@@ -69,8 +69,7 @@ func Routes(deps Deps) []httpapi.Route {
 		deps.Now = time.Now
 	}
 	if deps.HTTPClient == nil {
-		deps.HTTPClient = &http.Client{Timeout: 10 * time.Second,
-			CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}
+		deps.HTTPClient = defaultHTTPClient()
 	}
 	if deps.GitHubURL == "" {
 		deps.GitHubURL = "https://github.com"
@@ -348,4 +347,10 @@ func accountField(installation *pyjson.Object, field string) *string {
 		return &text
 	}
 	return nil
+}
+
+// defaultHTTPClient is the client Routes builds when Deps.HTTPClient is nil (production passes nil): no redirects.
+func defaultHTTPClient() *http.Client {
+	return &http.Client{Timeout: 10 * time.Second,
+		CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}
 }

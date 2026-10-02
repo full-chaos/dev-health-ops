@@ -54,3 +54,12 @@ func (p *Probe) Assert(t testing.TB) {
 		t.Fatalf("the redirect was followed: the other origin saw %d request(s)", n)
 	}
 }
+
+// Reach is the client production builds by default (its redirect policy, timeout and every other field as built), with
+// only the transport replaced by net/http's plain one: a default whose transport refuses loopback addresses (an SSRF
+// guard) can then reach the probe, and the redirect policy is the one under test.
+func Reach(built *http.Client) *http.Client {
+	copied := *built
+	copied.Transport = nil
+	return &copied
+}

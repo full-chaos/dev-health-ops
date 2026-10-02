@@ -206,3 +206,11 @@ func TestASuppliedClientNeverFollowsARedirectToAnotherOriginProbe(t *testing.T) 
 	_, _ = client.ListRepositories(context.Background(), ListOptions{Org: "acme"})
 	probe.Assert(t)
 }
+
+// The client restcore builds when none is supplied follows no redirect (restcore.go default branch).
+func TestTheDefaultClientNeverFollowsARedirectToAnotherOrigin(t *testing.T) {
+	probe := redirectprobe.New(t)
+	client := Client{Token: "SECRET-TOKEN", BaseURL: probe.Base.URL}
+	_, _ = client.ListRepositories(context.Background(), ListOptions{Org: "acme"})
+	probe.Assert(t)
+}

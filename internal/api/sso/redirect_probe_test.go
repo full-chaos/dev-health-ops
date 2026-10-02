@@ -33,3 +33,12 @@ func TestTheOIDCTokenExchangeNeverFollowsARedirectToAnotherOrigin(t *testing.T) 
 	_, _ = config.Exchange(context.WithValue(context.Background(), oauth2.HTTPClient, h.HTTPClient), "code")
 	probe.Assert(t)
 }
+
+// The client production builds when Deps.HTTPClient is nil (sso.go httpClientFor -> oidc.go defaultOIDCClient) follows
+// no redirect; its SSRF-guarded transport is replaced by the plain one so the probe can be reached.
+func TestTheDefaultClientNeverFollowsARedirectToAnotherOrigin(t *testing.T) {
+	probe := redirectprobe.New(t)
+	h := handlers{Deps{HTTPClient: redirectprobe.Reach(httpClientFor(nil))}}
+	_, _ = h.exchangeOAuthCode(context.Background(), probe.Base.URL+"/token", "id", "SECRET", "code", "https://app.test/cb")
+	probe.Assert(t)
+}

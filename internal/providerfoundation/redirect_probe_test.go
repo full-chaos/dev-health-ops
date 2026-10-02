@@ -82,6 +82,12 @@ func TestASuppliedClientNeverFollowsARedirectToAnotherOrigin(t *testing.T) {
 			NewCredential("pagerduty", "probe", nil, nil), PagerDutyOAuthTokenRecord{}, pagerDutyOAuthTokens{RefreshToken: &refresh})
 		probe.Assert(t)
 	})
+	t.Run("the PagerDuty OAuth exchange with no client (pagerDutyClient default, no-follow flavour)", func(t *testing.T) {
+		probe := redirectprobe.New(t)
+		_, _ = ExchangePagerDutyAuthorizationCode(context.Background(), nil,
+			PagerDutyRevokeConfig{ClientID: "c", ClientSecret: "SECRET", TokenURL: probe.Base.URL + "/oauth/token"}, "code", "verifier", time.Now())
+		probe.Assert(t)
+	})
 }
 
 // rewriteTo sends every request to base (a constant URL under test), keeping the client's redirect policy in play.

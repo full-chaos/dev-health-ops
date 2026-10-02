@@ -31,3 +31,12 @@ func TestTheCodeExchangeNeverFollowsARedirectToAnotherOrigin(t *testing.T) {
 	_, _ = h.verifyInstallerAccess(context.Background(), big.NewInt(1), "code")
 	probe.Assert(t)
 }
+
+// The client Routes builds when production passes nil follows no redirect either (routes.go defaultHTTPClient).
+func TestTheDefaultClientNeverFollowsARedirectToAnotherOrigin(t *testing.T) {
+	probe := redirectprobe.New(t)
+	h := handlers{Deps: Deps{HTTPClient: redirectprobe.Reach(defaultHTTPClient()), GitHubURL: probe.Base.URL, GitHubAPIURL: probe.Base.URL,
+		Config: Config{ClientID: "id", ClientSecret: "SECRET"}}}
+	_, _ = h.verifyInstallerAccess(context.Background(), big.NewInt(1), "code")
+	probe.Assert(t)
+}

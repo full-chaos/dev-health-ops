@@ -2,6 +2,7 @@ package admin
 
 import (
 	"context"
+	"github.com/full-chaos/dev-health-ops/internal/providerfoundation"
 	"net/http"
 	"testing"
 
@@ -40,6 +41,24 @@ func TestASuppliedClientNeverFollowsARedirectToAnotherOrigin(t *testing.T) {
 		doer := revokeDoer(probe.Client())
 		if response, err := doer.Do(get(t, probe.Base.URL+"/oauth/revoke")); err == nil {
 			response.Body.Close()
+		}
+		probe.Assert(t)
+	})
+	t.Run("the defaults production builds (pagerDutyServicesClient, readiness prober, revokeDoer with nil)", func(t *testing.T) {
+		probe := redirectprobe.New(t)
+		clients := map[string]providerfoundation.HTTPDoer{
+			"services": pagerDutyServicesClient(nil),
+			"prober":   newOpenAICompatibleReadinessProber(nil).client,
+			"revoke":   revokeDoer(nil),
+		}
+		for name, doer := range clients {
+			built, ok := doer.(*http.Client)
+			if !ok {
+				t.Fatalf("%s: default is %T", name, doer)
+			}
+			if response, err := redirectprobe.Reach(built).Do(get(t, probe.Base.URL+"/x")); err == nil {
+				response.Body.Close()
+			}
 		}
 		probe.Assert(t)
 	})

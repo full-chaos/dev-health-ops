@@ -252,3 +252,93 @@ def test_legacy_entry_dispatches_to_its_operation_and_adds_no_operation(
     monkeypatch.setattr(go_api_operation_catalog, "_mutation_operations", set())
     assert operation_for_digest("d1") is None
     assert go_api_operation_catalog.catalog_loaded_successfully() is False
+
+
+def _load_catalog(monkeypatch: pytest.MonkeyPatch, path: Path) -> None:
+    monkeypatch.setattr(go_api_operation_catalog, "_CATALOG_PATH", path)
+    monkeypatch.setattr(go_api_operation_catalog, "_catalog_loaded", False)
+    monkeypatch.setattr(go_api_operation_catalog, "_catalog_load_ok", False)
+    monkeypatch.setattr(go_api_operation_catalog, "_digest_to_operation", {})
+    monkeypatch.setattr(go_api_operation_catalog, "_mutation_operations", set())
+    monkeypatch.setattr(go_api_operation_catalog, "_legacy_digests", set())
+
+
+def test_current_catalog_entries_drops_only_the_legacy_entries(
+    monkeypatch: pytest.MonkeyPatch, tmp_path
+):
+    """CHAOS-8000: ``catalog_entries()`` lists every accepted digest, ``current_catalog_entries()``
+    one pair per operation (its current document). Only ``legacy: true`` rows are dropped."""
+    catalog = tmp_path / "go_api_operations.json"
+    catalog.write_text(
+        json.dumps(
+            [
+                {"operation": "foo", "digest": "d-new"},
+                {"operation": "foo", "digest": "d-old", "legacy": True},
+                {"operation": "bar", "digest": "d-bar"},
+            ]
+        )
+    )
+    _load_catalog(monkeypatch, catalog)
+    assert go_api_operation_catalog.catalog_entries() == (
+        ("bar", "d-bar"),
+        ("foo", "d-new"),
+        ("foo", "d-old"),
+    )
+    assert go_api_operation_catalog.current_catalog_entries() == (
+        ("bar", "d-bar"),
+        ("foo", "d-new"),
+    )
+
+
+def test_enable_disable_keep_refusing_a_non_legacy_duplicate_but_accept_a_legacy_one(
+    monkeypatch: pytest.MonkeyPatch, tmp_path
+):
+    from dev_health_ops.api.graphql import go_api_cli
+
+    legacy = tmp_path / "legacy.json"
+    legacy.write_text(
+        json.dumps(
+            [
+                {"operation": "foo", "digest": "d-new"},
+                {"operation": "foo", "digest": "d-old", "legacy": True},
+            ]
+        )
+    )
+    _load_catalog(monkeypatch, legacy)
+    by_operation, error = go_api_cli._catalog_by_operation(
+        go_api_operation_catalog.current_catalog_entries()
+    )
+    assert error is None
+    assert by_operation == {"foo": "d-new"}
+
+    two_documents = tmp_path / "two_documents.json"
+    two_documents.write_text(
+        json.dumps(
+            [
+                {"operation": "foo", "digest": "d-a"},
+                {"operation": "foo", "digest": "d-b"},
+            ]
+        )
+    )
+    _load_catalog(monkeypatch, two_documents)
+    _, error = go_api_cli._catalog_by_operation(
+        go_api_operation_catalog.current_catalog_entries()
+    )
+    assert error is not None and "more than one document digest" in error
+
+
+def test_a_non_boolean_legacy_fails_the_whole_catalog_closed(
+    monkeypatch: pytest.MonkeyPatch, tmp_path
+):
+    catalog = tmp_path / "go_api_operations.json"
+    catalog.write_text(
+        json.dumps(
+            [
+                {"operation": "foo", "digest": "d-new"},
+                {"operation": "foo", "digest": "d-old", "legacy": "true"},
+            ]
+        )
+    )
+    _load_catalog(monkeypatch, catalog)
+    assert operation_for_digest("d-new") is None
+    assert go_api_operation_catalog.catalog_loaded_successfully() is False

@@ -19,7 +19,9 @@ import threading
 from http.server import BaseHTTPRequestHandler, HTTPServer
 from typing import Any
 
-from dev_health_ops.api.graphql.go_api_operation_catalog import catalog_entries
+from dev_health_ops.api.graphql.go_api_operation_catalog import (
+    current_catalog_entries,
+)
 from dev_health_ops.api.graphql.go_api_schema_digest import current_schema_digest
 
 __all__ = ["FakeQueryAPI", "registry_payload"]
@@ -79,7 +81,7 @@ def registry_payload(
     if schema_digest is None:
         schema_digest = current_schema_digest()
     if operations is None:
-        operations = dict(catalog_entries())
+        operations = dict(current_catalog_entries())
     return {
         "schema_digest": schema_digest,
         "operations": [

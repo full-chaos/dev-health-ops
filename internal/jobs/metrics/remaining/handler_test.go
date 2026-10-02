@@ -10,6 +10,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/jackc/pgx/v5/pgconn"
+
 	"github.com/full-chaos/dev-health-ops/internal/jobcontract"
 	"github.com/full-chaos/dev-health-ops/internal/jobruntime"
 	"github.com/full-chaos/dev-health-ops/internal/jobs/metrics/remaining/stepcause"
@@ -529,14 +531,32 @@ func TestPartitionHandlerLogsAFailedExhaustWithoutTheErrorText(t *testing.T) {
 	previous := slog.Default()
 	slog.SetDefault(slog.New(slog.NewTextHandler(&buffer, nil)))
 	t.Cleanup(func() { slog.SetDefault(previous) })
-	store := &handlerStore{claimErr: errors.New("connection reset"), exhaustErr: errors.New("SECRET-DRIVER-TEXT")}
+	store := &handlerStore{claimErr: errors.New("connection reset"), exhaustErr: fmt.Errorf("wrap: %w", &pgconn.PgError{Code: "57014", Message: "SECRET-DRIVER-TEXT"})}
 	handler, _ := NewPartitionHandler[jobruntime.RemainingCapacityArgs](store, &handlerExecutor{}, "capacity")
 	_ = handler.Work(context.Background(), attemptedCapacityExecution(3, 3))
 	logged := buffer.String()
-	if !strings.Contains(logged, "could not exhaust a last-attempt partition") || !strings.Contains(logged, "partition_id") {
-		t.Fatalf("exhaust failure not logged: %q", logged)
+	for _, want := range []string{"could not exhaust a last-attempt partition", "partition_id", "error_class=postgres", "error_type=", "error_code=57014"} {
+		if !strings.Contains(logged, want) {
+			t.Fatalf("exhaust failure log lacks %q: %q", want, logged)
+		}
 	}
 	if strings.Contains(logged, "SECRET-DRIVER-TEXT") {
 		t.Fatalf("log leaks the error text: %q", logged)
+	}
+}
+
+// CHAOS-8163: the class attributes must not panic on a typed-nil *pgconn.PgError in the chain (the case that made the
+// stdlib errors.As walk unsafe on a log path); the line is still written and carries no error text.
+func TestPartitionHandlerExhaustLogSurvivesATypedNilPostgresError(t *testing.T) {
+	var buffer bytes.Buffer
+	previous := slog.Default()
+	slog.SetDefault(slog.New(slog.NewTextHandler(&buffer, nil)))
+	t.Cleanup(func() { slog.SetDefault(previous) })
+	var typedNil *pgconn.PgError
+	store := &handlerStore{claimErr: errors.New("connection reset"), exhaustErr: fmt.Errorf("wrap: %w", typedNil)}
+	handler, _ := NewPartitionHandler[jobruntime.RemainingCapacityArgs](store, &handlerExecutor{}, "capacity")
+	_ = handler.Work(context.Background(), attemptedCapacityExecution(3, 3))
+	if !strings.Contains(buffer.String(), "could not exhaust a last-attempt partition") {
+		t.Fatalf("exhaust failure not logged: %q", buffer.String())
 	}
 }

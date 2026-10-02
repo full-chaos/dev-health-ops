@@ -10,6 +10,7 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/jobcontract"
 	"github.com/full-chaos/dev-health-ops/internal/jobruntime"
 	"github.com/full-chaos/dev-health-ops/internal/jobs/metrics/remaining/stepcause"
+	"github.com/full-chaos/dev-health-ops/internal/platform/logging"
 )
 
 type Store interface {
@@ -287,6 +288,8 @@ func exhaustPartition(store Store, ctx context.Context, partitionID string) {
 	if err := store.ExhaustPartition(exhaustCtx, partitionID); err != nil {
 		// Fixed text, no error text: the run may now stay running behind a discarded job (invariant row 5), so the
 		// failure must be visible without leaking a driver message.
-		slog.WarnContext(ctx, "remaining metrics could not exhaust a last-attempt partition", "partition_id", partitionID)
+		// The bounded error class (logging.ErrorArgs, D4317), never the error text and no stdlib chain walk of our own.
+		slog.WarnContext(ctx, "remaining metrics could not exhaust a last-attempt partition",
+			append([]any{"partition_id", partitionID}, logging.ErrorArgs(err)...)...)
 	}
 }

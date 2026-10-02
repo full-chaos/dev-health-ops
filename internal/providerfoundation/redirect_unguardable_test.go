@@ -203,6 +203,10 @@ func TestAnOpaqueDecoratorHandedToAPagerDutyEntryPointSendsNothing(t *testing.T)
 			_, _ = RequestPagerDutyClientCredentialsToken(context.Background(), opaque, config, "acme", "us", now)
 		},
 		"revoke": func() { _ = RevokePagerDutyOAuthToken(context.Background(), opaque, config, "SECRET") },
+		"validate (client credentials: the client secret rides the token request's body)": func() {
+			_, _ = ValidatePagerDutyCredential(context.Background(), opaque, config, PagerDutyCredentialCandidate{
+				AuthMode: "client_credentials", ClientID: "c", ClientSecret: "SECRET", Subdomain: "acme", Region: "us"}, nil)
+		},
 		"validate (api token)": func() {
 			_, _ = ValidatePagerDutyCredential(context.Background(), opaque, config, PagerDutyCredentialCandidate{AuthMode: "api_token", APIToken: "SECRET", Region: "us"}, nil)
 		},

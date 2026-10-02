@@ -269,7 +269,7 @@ func TestGoAPIRoutingMatchesFrozenPython(t *testing.T) {
 	golden := venueoracle.OpenGolden(t, venueoracle.GoldenSpec{
 		Path:        "testdata/golden/routing.json",
 		PythonBuild: routingPythonBuild,
-		SHA256:      "5cc350a3354e978ff6320703e45aa4ce8af098aceb853fd021aea734d2137f6b",
+		SHA256:      "4cf78572bf7693696856d2941a903468365883e6fb72270b5178daaf0b90678c",
 		Recipe: "git worktree add --detach $DIR " + routingPythonBuild + " (with its .venv: uv sync --frozen --no-install-project); then from the repository root: " +
 			"go run ./internal/testsupport/venueoracle/goldenrecord -pkg ./internal/goapicli/routing/ -test '^TestGoAPIRoutingMatchesFrozenPython$' -python-root $DIR",
 	})

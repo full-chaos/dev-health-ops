@@ -18,7 +18,7 @@ func keyGolden(t *testing.T, scrub func(string) string) *Golden {
 		t.Fatal(err)
 	}
 	g.recorded.Header.ProducerDigest = strings.Repeat("c", 64)
-	g.recorded.Header.RecordedBy = recordVerbName
+	g.byVerb = true
 	return g
 }
 

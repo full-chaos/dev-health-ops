@@ -6,6 +6,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/full-chaos/dev-health-ops/internal/pythonparity"
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/programoracle"
 )
 
@@ -47,6 +48,11 @@ func operationalHostCorpus() []string {
 		"gitlab.example.com?", "gitlab.example.com#", "gitlab.example.com/?x", "https://gitlab.example.com?x#y", "ｅxample.com",
 		"example.com\uff0f", "exam\u2100ple.com", "user@exam\uff03ple.com", "[::1%]", "[::1%a%b]", "[1.2.3]", "[::1.2.3.4]",
 		"[1::1.2.3.04]", "[12345::]", "[g::]", "[::1]:", "[::1]:65536",
+		// corpus gaps the CHAOS-7532 vet named (CHAOS-7532 follow-up): github's own hosts on a non-default
+		// port, a bracket the splitter refuses behind a scheme, an empty octet, an octet char above '9'.
+		"github.com:8080", "github.com:8443", "https://github.com:8080", "http://github.com:80", "https://api.github.com:443",
+		"api.github.com:8080", "http://[::1", "http://[::1]x", "http://a[b", "http://[::1]:80:90", "http://[", "//[::1",
+		"1..2.3", "1.2.3.", ".1.2.3", "1.2.3._", "1.2.3.a", "1.2.3.:", "1.2.3.4.", "1.2.3.4.5", "1.2.3.256", "01.2.3.4",
 	}
 	alphabet := []string{"a", "b", "Z", "0", "9", ".", "-", ":", "/", "@", "[", "]", "%", "?", "#", " ", "_", "é", "８", "v", "f", ":8"}
 	random := rand.New(rand.NewSource(6319))
@@ -72,6 +78,12 @@ func TestOperationalProviderInstanceMatchesFrozenPython(t *testing.T) {
 	for _, raw := range operationalHostCorpus() {
 		cases = append(cases, [2]string{"github", raw}, [2]string{"gitlab", raw})
 	}
+	// a provider that is neither github nor gitlab is refused here: the case measures the function's own answer.
+	for _, provider := range []string{"bitbucket", "", "GitHub", "GITLAB", "jira", "github ", "gitlab\n"} {
+		for _, raw := range []string{"github.com", "gitlab.com", "gitlab.example.com", "https://gitlab.example.com:8443", ""} {
+			cases = append(cases, [2]string{provider, raw})
+		}
+	}
 	input, _ := json.Marshal(cases)
 	output := frozenPython(t, "operational-provider-instance.golden.json",
 		programoracle.Program{Name: "operational-provider-instance", Text: pythonOperationalHostProgram, Stdin: []byte(string(input))})[0]
@@ -86,6 +98,17 @@ func TestOperationalProviderInstanceMatchesFrozenPython(t *testing.T) {
 	mismatches := 0
 	for index, pair := range cases {
 		got, ok := OperationalProviderInstance(pair[0], pair[1])
+		if pair[0] != "github" && pair[0] != "gitlab" {
+			// by design the Go function refuses any other provider (its caller owns them); Python returns the
+			// stripped value for them. Both answers are pinned: a drift on either side fails here.
+			if ok || got != "" {
+				t.Errorf("provider %q %q: go answered (%q, %v), want a refusal", pair[0], pair[1], got, ok)
+			}
+			if python, isString := want[index].(string); !isString || python != pythonparity.Strip(pair[1]) {
+				t.Errorf("provider %q %q: python answered %v, want the stripped value %q", pair[0], pair[1], want[index], pythonparity.Strip(pair[1]))
+			}
+			continue
+		}
 		expected, isString := want[index].(string)
 		if ok != isString || (ok && got != expected) {
 			mismatches++

@@ -181,6 +181,19 @@ func listScenarios() []scenario {
 	add("grp", ok(``))
 	add("grp", ok("[\n{\"id\": 1,}\n]"))
 	add("grp", ok(two), ok(two))
+	// Corpus gaps the CHAOS-7532 vet named (follow-up): an empty page that still names a next page, a full page whose
+	// X-Next-Page is empty, and every JSON type a body can have where a list is expected.
+	add("grp", ok(`[]`, [2]string{"X-Next-Page", "2"}), ok(two))
+	add("grp", ok(`[]`, [2]string{"X-Next-Page", "2"}), ok(`[]`, [2]string{"X-Next-Page", "3"}), ok(two))
+	add("grp", ok(fullPage(0), [2]string{"X-Next-Page", ""}), ok(two))
+	add("grp", ok(fullPage(0), [2]string{"X-Next-Page", ""}), ok(fullPage(100)), ok(two))
+	add("grp", ok(fullPage(0), [2]string{"X-Next-Page", " "}), ok(two))
+	add("grp", ok(fullPage(0), [2]string{"X-Next-Page", "x"}), ok(two))
+	add("grp", ok(two, [2]string{"X-Next-Page", ""}), ok(two))
+	add("grp", ok(two, [2]string{"X-Next-Page", "2"}, [2]string{"X-Next-Page", "3"}), ok(two), ok(two))
+	for _, body := range []string{`true`, `false`, `7`, `0`, `-1`, `1.5`, `1e3`, `"x"`, `""`, `[]`, `{}`, `{"a": [1]}`, `null`} {
+		add("grp", ok(body))
+	}
 	prefix := "grp"
 	out = append(out, scenario{Base: "http://gitlab.test/prefix/", Group: &prefix, Responses: []scripted{status(404, "")}})
 	out = append(out, listOptionScenarios()...)
@@ -246,6 +259,17 @@ func listOptionScenarios() []scenario {
 	add(nil, nil, status(429, `{}`, [2]string{"Retry-After", "1"}), ok(named))
 	add(nil, nil, repeat(5, status(500, "boom"))...)
 	add(nil, nil, status(418, "teapot"))
+	for _, body := range []string{`true`, `false`, `7`, `1.5`, `"x"`, `null`, `{}`} {
+		add(nil, nil, ok(body))
+		add(nil, func(s *scenario) { s.Membership = true; s.Pattern = "*a*" }, ok(body))
+	}
+	// max_projects that is an exact multiple of the page size, with more pages behind it, plain and with membership.
+	for _, max := range []string{"100", "200", "300", "101", "199", "201"} {
+		max := max
+		add(nil, func(s *scenario) { s.Max = &max }, ok(fullPage(0)), ok(fullPage(100)), ok(fullPage(200)), ok(fullPage(300)))
+		add(str("grp"), func(s *scenario) { s.Max = &max }, ok(fullPage(0)), ok(fullPage(100)), ok(fullPage(200)), ok(fullPage(300)))
+		add(nil, func(s *scenario) { s.Max = &max; s.Membership = true }, ok(fullPage(0), [2]string{"X-Next-Page", "2"}), ok(fullPage(100), [2]string{"X-Next-Page", "3"}), ok(fullPage(200)))
+	}
 	add(nil, nil, ok(`{"not": "a list"}`))
 	add(nil, nil, ok(`[1, {"id": 1, "name": "a", "star_count": Infinity}]`))
 	add(nil, func(s *scenario) { s.Max = str("1") }, ok(`[{"id": 1, "name": "ok"}, {"id": 2, "name": "b", "star_count": Infinity}]`))

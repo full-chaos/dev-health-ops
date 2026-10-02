@@ -286,6 +286,7 @@ type Metrics struct {
 	// CHAOS-4586): it is a process-wide singleton, not a per-family field.
 	jiraSearchPages   map[string]uint64
 	chunkContinuation map[string]uint64
+	unitDeferred      map[string]uint64
 	// jiraDevStatus counts CHAOS-4757's dev-status (GitHub-for-Jira panel)
 	// fetches, by outcome -- see RecordJiraDevStatus.
 	jiraDevStatus map[string]uint64
@@ -317,6 +318,7 @@ func NewMetrics() *Metrics {
 		duplicateNaturalKey:            map[string]uint64{},
 		jiraSearchPages:                map[string]uint64{},
 		chunkContinuation:              map[string]uint64{},
+		unitDeferred:                   map[string]uint64{},
 		jiraDevStatus:                  map[string]uint64{},
 	}
 }
@@ -871,6 +873,41 @@ func (m *Metrics) RecordChunkContinuation(provider, dataset string) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	m.chunkContinuation[metricProvider(provider)+":"+MetricDatasetLabel(dataset)]++
+}
+
+// metricUnitDeferralReasonVocabulary is the closed set of reasons a provider
+// unit attempt ended in an attempt-neutral deferral (a River snooze). The three
+// producers are internal/jobs/providerunit/providerunit.go's chunk-continuation,
+// rate-limit and budget-contention branches. Anything else collapses to
+// "other" so a caller cannot open an unbounded label dimension (CHAOS-7434).
+var metricUnitDeferralReasonVocabulary = map[string]struct{}{
+	"budget_contention": {}, "rate_limited": {}, "chunk_continuation": {},
+}
+
+// MetricUnitDeferralReasonLabel bounds the deferral reason label.
+func MetricUnitDeferralReasonLabel(value string) string {
+	lowered := strings.ToLower(strings.TrimSpace(value))
+	if _, known := metricUnitDeferralReasonVocabulary[lowered]; !known {
+		return "other"
+	}
+	return lowered
+}
+
+// RecordUnitDeferred counts one provider-unit attempt that ended in an
+// attempt-neutral deferral, by bounded provider, dataset and reason
+// (CHAOS-7434). A heavy `files` unit that cannot get the heavy request budget
+// ends every attempt this way and snoozes 1-2 s; before this counter that loop
+// was visible only as river_job.metadata->>'snoozes' on a job row. The cost
+// class is a function of (provider, dataset) in providersync's capability
+// table, so it is not a separate label.
+func (m *Metrics) RecordUnitDeferred(provider, dataset, reason string) {
+	if m == nil {
+		return
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.unitDeferred[metricProvider(provider)+":"+MetricDatasetLabel(dataset)+
+		":"+MetricUnitDeferralReasonLabel(reason)]++
 }
 
 // metricUnitFailureReasonVocabulary is the closed set of durable
@@ -1535,6 +1572,13 @@ func (m *Metrics) WritePrometheus(writer io.Writer) error {
 		writer, "dev_health_provider_chunk_continuation_total",
 		"Chunked-route continuations (durable checkpoint snoozes), by bounded provider and dataset (CHAOS-4592).",
 		m.chunkContinuation,
+	); err != nil {
+		return err
+	}
+	if err := writeProviderDatasetReasonCounter(
+		writer, "dev_health_provider_unit_deferred_total",
+		"Provider-unit attempts that ended in an attempt-neutral deferral (River snooze), by bounded provider, dataset, and reason (CHAOS-7434).",
+		"reason", m.unitDeferred,
 	); err != nil {
 		return err
 	}

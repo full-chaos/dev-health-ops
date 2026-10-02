@@ -86,7 +86,7 @@ All deployment methods use the same environment variables:
 | `SYNC_COST_CLASS_QUEUES` | Route eligible sync units to `sync.<provider>.<class>` sub-queues. Requires provider queues. | true in bundled deploy templates |
 | `HIDE_MIGRATED_CHILD_CONFIGS` | Hide migrated child sync configs from operator-facing lists. | true |
 | `SYNC_RUN_MAX_UNITS` | Maximum units allowed in one planned sync run. | 1000 |
-| `SYNC_UNIT_CONCURRENCY_PER_BUCKET` | Concurrent dispatch cap per org/provider/cost-class bucket. | 8 |
+| `SYNC_UNIT_CONCURRENCY_PER_BUCKET` | Upper clamp on the concurrent dispatch cap per org/provider/cost-class bucket; each class is already capped by the worker budget table (light 4, medium 2, heavy 1), so this can only lower it. | 8 |
 | `SYNC_UNIT_DISPATCH_STALE_SECONDS` | Age after which `DISPATCHING` units can be reclaimed. | 900 |
 | `SYNC_UNIT_RUNNING_STALE_SECONDS` | Age after which running units are treated as stale for reconciliation/reporting. | 3600 |
 | `LINEAR_BACKFILL_MAX_WINDOW_DAYS` | Max window size (days) for a Linear work-item-family backfill chunk. CHAOS-2717 bounds each window's issue crawl to its own slice (`updatedAt` gte/lte), so the size balances a single unit's lease/soft-timeout budget against per-hour request volume; smaller windows re-multiply per-window teams/cycles fetches toward Linear's rate limit. Non-Linear backfills use the 7-day default. | 14 |

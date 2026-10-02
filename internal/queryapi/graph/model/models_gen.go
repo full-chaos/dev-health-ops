@@ -445,6 +445,7 @@ type CapacityForecastFilterInput struct {
 
 type CapacityForecastInput struct {
 	TeamID      *string           `json:"teamId,omitempty"`
+	TeamIds     []string          `json:"teamIds,omitempty"`
 	WorkScopeID *string           `json:"workScopeId,omitempty"`
 	TargetItems *int              `json:"targetItems,omitempty"`
 	TargetDate  *graphqldate.Date `json:"targetDate,omitempty"`

@@ -8933,7 +8933,8 @@ input CapacityForecastFilterInput {
 }
 
 input CapacityForecastInput {
-  teamId: String = null
+  teamId: String = null @deprecated(reason: "Use teamIds.")
+  teamIds: [String!] = null
   workScopeId: String = null
   targetItems: Int = null
   targetDate: Date = null
@@ -59602,7 +59603,7 @@ func (ec *executionContext) unmarshalInputCapacityForecastInput(ctx context.Cont
 		asMap["simulations"] = 10000
 	}
 
-	fieldsInOrder := [...]string{"teamId", "workScopeId", "targetItems", "targetDate", "historyDays", "simulations"}
+	fieldsInOrder := [...]string{"teamId", "teamIds", "workScopeId", "targetItems", "targetDate", "historyDays", "simulations"}
 	for _, k := range fieldsInOrder {
 		v, ok := asMap[k]
 		if !ok {
@@ -59616,6 +59617,13 @@ func (ec *executionContext) unmarshalInputCapacityForecastInput(ctx context.Cont
 				return it, err
 			}
 			it.TeamID = data
+		case "teamIds":
+			ctx := graphql.WithPathContext(ctx, graphql.NewPathWithField("teamIds"))
+			data, err := ec.unmarshalOString2ᚕstringᚄ(ctx, v)
+			if err != nil {
+				return it, err
+			}
+			it.TeamIds = data
 		case "workScopeId":
 			ctx := graphql.WithPathContext(ctx, graphql.NewPathWithField("workScopeId"))
 			data, err := ec.unmarshalOString2ᚖstring(ctx, v)

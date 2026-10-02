@@ -17,7 +17,8 @@ type Store interface {
 	CompletePartition(context.Context, Claim, string) error
 	ReleasePartition(context.Context, Claim) error
 	// ReleasePartitionTerminally is ReleasePartition's twin for a failure
-	// nothing will ever retry (see PostgresStore.ReleasePartitionTerminally):
+	// nothing will ever retry: a Permanent one, or a retryable one on the job's
+	// last attempt (see PostgresStore.ReleasePartitionTerminally):
 	// it stands the partition down to 'failed' AND, in the same transaction,
 	// terminalizes the parent run 'failed' if this was its last outstanding
 	// partition -- otherwise a run behind a permanently-discarded job lingers
@@ -92,10 +93,11 @@ func (handler *PartitionHandler[T]) Work(
 	}
 	run, err := handler.store.LoadRun(ctx, claim.Partition.RunID)
 	if err != nil {
-		releaseClaim(handler.store, ctx, *claim)
 		if errors.Is(err, ErrInvalidState) {
+			releaseClaim(handler.store, ctx, *claim)
 			return jobruntime.Permanent(err)
 		}
+		releaseFailedAttempt(handler.store, ctx, *claim, execution)
 		return jobruntime.Retryable(err)
 	}
 	if claim.Partition.ID != payload.PartitionID ||
@@ -129,16 +131,17 @@ func (handler *PartitionHandler[T]) Work(
 		// is about. Anything else here (a ClickHouse/Postgres query error)
 		// is genuinely transient and stays Retryable.
 		//
-		// This is also the ONE release site that must use the terminal
-		// variant: River discards a Permanent job outright, so if this was
-		// the run's last outstanding partition, nothing will ever come back
-		// to move the run out of 'running' unless the release itself does
-		// it (see ReleasePartitionTerminally).
+		// This branch must use the terminal release: River discards a
+		// Permanent job outright, so if this was the run's last outstanding
+		// partition, nothing will ever come back to move the run out of
+		// 'running' unless the release itself does it (see
+		// ReleasePartitionTerminally). A RETRYABLE failure on the job's last
+		// attempt needs the same (releaseFailedAttempt below, CHAOS-8024).
 		if errors.Is(err, ErrInvalidState) {
 			releaseClaimTerminally(handler.store, ctx, *claim)
 			return jobruntime.WithReason(jobruntime.Permanent(err), jobruntime.ReasonInvalidState)
 		}
-		releaseClaim(handler.store, ctx, *claim)
+		releaseFailedAttempt(handler.store, ctx, *claim, execution)
 		return jobruntime.Retryable(err)
 	}
 	if err := handler.store.CompletePartition(
@@ -146,6 +149,12 @@ func (handler *PartitionHandler[T]) Work(
 		*claim,
 		compatibilityCompletionResult(claim.Partition.ID, outcome),
 	); err != nil {
+		// The complete itself failed (the claim is still held): on the job's last attempt stand the partition down
+		// terminally so the run cannot be left running behind a discarded job (CHAOS-8024). Earlier attempts keep
+		// the claim; its lease expiring is the retry's reclaim.
+		if finalAttempt(execution) {
+			releaseClaimTerminally(handler.store, ctx, *claim)
+		}
 		return jobruntime.Retryable(err)
 	}
 	return nil
@@ -205,6 +214,27 @@ func runWithLeaseRenewal(
 		return renewalErr
 	}
 	return workErr
+}
+
+// finalAttempt reports whether a failure of this execution is the job's LAST attempt: the adapter discards a
+// retryable failure once the attempt counter reaches the descriptor's budget (jobruntime/errors.go retryDecision:
+// attempt >= maxAttempts), so no later attempt exists to move the run out of 'running'. An execution without a
+// declared budget is never final.
+func finalAttempt[T jobruntime.ContractArgs](execution *jobruntime.Execution[T]) bool {
+	maxAttempts := execution.Definition.MaxAttempts
+	return maxAttempts > 0 && execution.Attempt >= maxAttempts
+}
+
+// releaseFailedAttempt stands a failed attempt's claim down. A retryable failure keeps the ordinary release (the
+// next attempt reclaims the partition); the LAST attempt uses the terminal release, which in the same transaction
+// terminalizes the run 'failed' when no other partition is still pending or running. Without it a partition that
+// exhausts River's retries left its run 'running' forever behind a discarded job (CHAOS-8024).
+func releaseFailedAttempt[T jobruntime.ContractArgs](store Store, ctx context.Context, claim Claim, execution *jobruntime.Execution[T]) {
+	if finalAttempt(execution) {
+		releaseClaimTerminally(store, ctx, claim)
+		return
+	}
+	releaseClaim(store, ctx, claim)
 }
 
 func releaseClaim(store Store, ctx context.Context, claim Claim) {

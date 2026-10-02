@@ -302,11 +302,13 @@ type handlerStore struct {
 	renewals    int
 	failRenewal bool
 	loadRunErr  error
+	completeErr error
 	releases    int
 	// terminalReleases counts ReleasePartitionTerminally calls separately
 	// from the ordinary releases above, so a test can pin WHICH release
-	// variant a given Work() failure path reaches (only the
-	// ErrInvalidState/Permanent branch may ever call the terminal one).
+	// variant a given Work() failure path reaches (the ErrInvalidState/
+	// Permanent branch, and a retryable failure on the job's last attempt,
+	// call the terminal one).
 	terminalReleases int
 	completions      int
 	evidence         string
@@ -331,7 +333,7 @@ func (store *handlerStore) RenewPartition(context.Context, Claim) error {
 func (store *handlerStore) CompletePartition(_ context.Context, _ Claim, evidence string) error {
 	store.completions++
 	store.evidence = evidence
-	return nil
+	return store.completeErr
 }
 func (store *handlerStore) ReleasePartition(context.Context, Claim) error {
 	store.releases++
@@ -377,5 +379,76 @@ func (executor *handlerExecutor) ComputePartition(
 	case <-ctx.Done():
 		executor.canceled = true
 		return CompatibilityOutcome{}, ctx.Err()
+	}
+}
+
+// attemptedCapacityExecution is capacityExecution with the River attempt counter and the descriptor's attempt
+// budget set, the two values the handler compares to know whether a failure is the job's LAST attempt.
+func attemptedCapacityExecution(attempt, maxAttempts int) *jobruntime.Execution[jobruntime.RemainingCapacityArgs] {
+	execution := capacityExecution()
+	execution.Attempt = attempt
+	execution.Definition.MaxAttempts = maxAttempts
+	return execution
+}
+
+// TestPartitionHandlerTerminalizesTheRunOnlyOnTheFinalAttemptOfARetryableFailure pins CHAOS-8024 at the handler layer:
+// River discards a job that fails its last attempt with a retryable error, and nothing comes back to move the run out
+// of 'running'. So the release of a failed attempt must be the terminal variant (which finalizes the run when no other
+// partition is outstanding) exactly when this is the last attempt, at every release site that holds a claim; earlier
+// attempts keep the ordinary release, because the retry reclaims the partition. A zero attempt budget (an execution
+// built without a descriptor) is never "final".
+func TestPartitionHandlerTerminalizesTheRunOnlyOnTheFinalAttemptOfARetryableFailure(t *testing.T) {
+	transient := errors.New("dial tcp: connection refused")
+	sites := []struct {
+		name  string
+		setup func(*handlerStore, *handlerExecutor)
+	}{
+		{"compute failure", func(_ *handlerStore, executor *handlerExecutor) { executor.computeErr = transient }},
+		{"load run failure", func(store *handlerStore, _ *handlerExecutor) { store.loadRunErr = transient }},
+		{"complete failure", func(store *handlerStore, _ *handlerExecutor) { store.completeErr = transient }},
+	}
+	attempts := []struct {
+		name         string
+		attempt, max int
+		wantTerminal bool
+	}{
+		{"first of three", 1, 3, false},
+		{"second of three", 2, 3, false},
+		{"last of three", 3, 3, true},
+		{"past the budget", 4, 3, true},
+		{"no budget declared", 0, 0, false},
+		{"attempt without a budget", 5, 0, false},
+	}
+	for _, site := range sites {
+		for _, attempt := range attempts {
+			t.Run(site.name+"/"+attempt.name, func(t *testing.T) {
+				store := &handlerStore{
+					run:   Run{ID: handlerRunID, OrganizationID: handlerOrgID, Family: "capacity", Status: "running"},
+					claim: handlerClaim(),
+				}
+				executor := &handlerExecutor{}
+				site.setup(store, executor)
+				handler, err := NewPartitionHandler[jobruntime.RemainingCapacityArgs](store, executor, "capacity")
+				if err != nil {
+					t.Fatal(err)
+				}
+				workErr := handler.Work(t.Context(), attemptedCapacityExecution(attempt.attempt, attempt.max))
+				if workErr == nil || !strings.Contains(workErr.Error(), string(jobruntime.CategoryRetryable)) {
+					t.Fatalf("the failure was not returned Retryable: %v", workErr)
+				}
+				wantTerminal, wantOrdinary := 0, 1
+				if attempt.wantTerminal {
+					wantTerminal, wantOrdinary = 1, 0
+				}
+				// the complete-failure site never released before the fix at any attempt: it keeps the claim
+				// (the lease expiring is the retry's reclaim), so earlier attempts still release nothing there
+				if site.name == "complete failure" {
+					wantOrdinary = 0
+				}
+				if store.terminalReleases != wantTerminal || store.releases != wantOrdinary {
+					t.Fatalf("terminalReleases=%d releases=%d, want %d and %d", store.terminalReleases, store.releases, wantTerminal, wantOrdinary)
+				}
+			})
+		}
 	}
 }

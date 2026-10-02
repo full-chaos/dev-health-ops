@@ -752,9 +752,10 @@ WHERE id = $2::uuid AND run_id = $3::uuid AND status = 'running'
 }
 
 // ReleasePartitionTerminally stands a claimed partition down to 'failed' the
-// same way ReleasePartition does, but for the one caller (PartitionHandler.Work's
-// Permanent/ErrInvalidState branch) that already knows nothing will ever
-// retry this attempt: River discards a Permanent job outright. Without this,
+// same way ReleasePartition does, but for the callers (PartitionHandler.Work's
+// Permanent/ErrInvalidState branch, and a retryable failure on the job's last
+// attempt, CHAOS-8024) that know nothing will ever retry this attempt: River
+// discards a Permanent job outright, and a job past its last attempt. Without this,
 // a deterministic ComputePartition precondition failure on a run's LAST
 // outstanding partition released that partition to 'failed' and left the
 // parent run status='running' forever -- CompletePartition/FinalizeRun both

@@ -477,828 +477,162 @@ check_live_python_oracles() {
   # `test` run) on every package in the tree instead of only the one that
   # structurally needs it, and it would make skipping this specific
   # coverage possible again by construction.
-  local proof_dir proof_file
+  # The entries are one small file each under ci/live_python_oracles.d (CHAOS-7656),
+  # read in sorted order: a freeze PR DELETES the file of the oracle it freezes -- its
+  # command AND its proof checks live in that one file -- and never edits a line another
+  # freeze PR also edits, so two freeze PRs no longer conflict here. See
+  # live_oracle_read_entry below for the format.
+  local proof_dir proof_file entry index
+  local -a entries proof_names proof_messages proof_matches
+  live_oracle_files || return 1
+  entries=("${LO_FILES[@]}")
   proof_dir="$(mktemp -d "${TMPDIR:-/tmp}/dev-health-live-python-oracles.XXXXXX")"
 
-  printf 'go test -count=1: internal/providersync (live Python oracle sources are outside the Go embed/cache boundary)\n'
-  if ! (
-    cd "${ROOT}"
-    "${GO_ENV_OFF[@]}" \
-      GOWORK=off \
-      DEV_HEALTH_LIVE_PYTHON_ORACLES=1 \
-      DEV_HEALTH_LIVE_PYTHON_ORACLE_PROOF_DIR="${proof_dir}" \
-      PYTHONPATH="${ROOT}/src${PYTHONPATH:+:${PYTHONPATH}}" \
-      go test -mod=readonly -count=1 ./internal/providersync/...
-  ); then
-    rm -rf -- "${proof_dir}"
-    return 1
-  fi
-  # The generic pairs (testdata/oracle_pairs/*.py) run no Python here: each
-  # comparison reads its frozen golden (testdata/oracle_golden), in this run
-  # and in every plain `go test`. That every pair still has a golden is
-  # proved by TestEveryOraclePairHasAFrozenGolden in that run, so no proof
-  # file per pair is required below.
-  proof_file="${proof_dir}/linear-work-items-oracle-prep"
-  if [ ! -f "${proof_file}" ] || [ "$(cat "${proof_file}")" != "executed" ]; then
-    printf 'ERROR: the live Linear work-items producer probe (TestLinearWorkItemsOraclePrepExecutesLiveProducer) did not execute\n' >&2
-    rm -rf -- "${proof_dir}"
-    return 1
-  fi
-
-  printf 'go test -count=1: internal/providerfoundation (live Python encryption + credential field-read compatibility)\n'
-  if ! (
-    cd "${ROOT}"
-    "${GO_ENV_OFF[@]}" \
-      GOWORK=off \
-      DEV_HEALTH_LIVE_PYTHON_ORACLES=1 \
-      DEV_HEALTH_LIVE_PYTHON_ORACLE_PROOF_DIR="${proof_dir}" \
-      PYTHONPATH="${ROOT}/src${PYTHONPATH:+:${PYTHONPATH}}" \
-      go test -mod=readonly -count=1 \
-        -run '^(TestFernetCipherMatchesLivePythonCustomSalt|TestFernetCipherMatchesLivePythonDefaultSalt|TestFernetRefusesWithoutKeyLikePython|TestCredentialFieldReadsMatchLivePython|TestCredentialFieldGridMatchesLivePython)$' \
-        ./internal/providerfoundation/...
-  ); then
-    rm -rf -- "${proof_dir}"
-    return 1
-  fi
-  # One name per line: a PR that drops one name edits one line, so two PRs dropping different names do not conflict.
-  proof_names=(
-    providerfoundation-credentials
-    providerfoundation-credentials-default-salt
-    providerfoundation-credentials-no-key
-    providerfoundation-credential-field-reads
-    providerfoundation-credential-field-grid
-  )
-  for proof_name in "${proof_names[@]}"; do
-    proof_file="${proof_dir}/${proof_name}"
-    if [ ! -f "${proof_file}" ] || [ "$(cat "${proof_file}")" != "executed" ]; then
-      printf 'ERROR: providerfoundation live Python encryption measurement %s did not occur\n' "${proof_name}" >&2
+  for entry in "${entries[@]}"; do
+    live_oracle_read_entry "${entry}" || { rm -rf -- "${proof_dir}"; return 1; }
+    proof_names+=("${LO_PROOF_NAMES[@]}")
+    proof_messages+=("${LO_PROOF_MESSAGES[@]}")
+    proof_matches+=("${LO_PROOF_MATCHES[@]}")
+    if [ -n "${LO_LABEL}" ]; then
+      printf 'go test -count=1: %s\n' "${LO_LABEL}"
+    fi
+    if ! (
+      cd "${ROOT}"
+      local -a env_args=(GOWORK=off DEV_HEALTH_LIVE_PYTHON_ORACLES=1 "DEV_HEALTH_LIVE_PYTHON_ORACLE_PROOF_DIR=${proof_dir}")
+      if [ "${LO_PYTHON}" = 1 ]; then
+        env_args+=("PYTHON=${PYTHON:-python3}")
+      fi
+      if [ "${LO_PYTHONPATH}" != 0 ]; then
+        env_args+=("PYTHONPATH=${ROOT}/src${PYTHONPATH:+:${PYTHONPATH}}")
+      fi
+      if [ -n "${LO_RUN}" ]; then
+        "${GO_ENV_OFF[@]}" "${env_args[@]}" go test -mod=readonly -count=1 -run "${LO_RUN}" "${LO_PACKAGE}"
+      else
+        "${GO_ENV_OFF[@]}" "${env_args[@]}" go test -mod=readonly -count=1 "${LO_PACKAGE}"
+      fi
+    ); then
       rm -rf -- "${proof_dir}"
       return 1
     fi
   done
 
-  printf 'go test -count=1: internal/edgetokenmint (Go-minted edge access token vs the live Python edge validator)\n'
-  if ! (
-    cd "${ROOT}"
-    "${GO_ENV_OFF[@]}" \
-      GOWORK=off \
-      DEV_HEALTH_LIVE_PYTHON_ORACLES=1 \
-      DEV_HEALTH_LIVE_PYTHON_ORACLE_PROOF_DIR="${proof_dir}" \
-      PYTHON="${PYTHON:-python3}" \
-      PYTHONPATH="${ROOT}/src${PYTHONPATH:+:${PYTHONPATH}}" \
-      go test -mod=readonly -count=1 \
-        -run '^TestGoMintedEdgeTokenIsJudgedByTheLiveEdgeExactlyLikeAPythonMintedOne$' \
-        ./internal/edgetokenmint
-  ); then
-    rm -rf -- "${proof_dir}"
-    return 1
-  fi
-  proof_file="${proof_dir}/edgetokenmint-edge-oracle"
-  if [ ! -f "${proof_file}" ] || [ "$(cat "${proof_file}")" != "executed" ]; then
-    printf 'ERROR: the Go-minted edge access token was not judged by the live Python edge validator\n' >&2
-    rm -rf -- "${proof_dir}"
-    return 1
-  fi
-
-  printf 'go test -count=1: internal/mail (SMTP wire format and Resend requests/outcomes vs the live Python email service)\n'
-  if ! (
-    cd "${ROOT}"
-    "${GO_ENV_OFF[@]}" \
-      GOWORK=off \
-      DEV_HEALTH_LIVE_PYTHON_ORACLES=1 \
-      DEV_HEALTH_LIVE_PYTHON_ORACLE_PROOF_DIR="${proof_dir}" \
-      PYTHON="${PYTHON:-python3}" \
-      PYTHONPATH="${ROOT}/src${PYTHONPATH:+:${PYTHONPATH}}" \
-      go test -mod=readonly -count=1 \
-        -run '^(TestSMTPSenderMatchesLivePythonSMTPProvider|TestResendSenderMatchesLivePythonResendProvider)$' \
-        ./internal/mail
-  ); then
-    rm -rf -- "${proof_dir}"
-    return 1
-  fi
-  for proof_file in "${proof_dir}/mail-smtp-oracle" "${proof_dir}/mail-resend-oracle"; do
-    if [ ! -f "${proof_file}" ] || [ "$(cat "${proof_file}")" != "executed" ]; then
-      printf 'ERROR: the internal/mail live Python oracle %s did not run a real comparison\n' "${proof_file##*/}" >&2
+  for index in "${!proof_names[@]}"; do
+    proof_file="${proof_dir}/${proof_names[index]}"
+    if [ -n "${proof_matches[index]}" ]; then
+      if [ ! -f "${proof_file}" ] || ! grep -q "${proof_matches[index]}" "${proof_file}"; then
+        printf 'ERROR: %s\n' "${proof_messages[index]}" >&2
+        rm -rf -- "${proof_dir}"
+        return 1
+      fi
+    elif [ ! -f "${proof_file}" ] || [ "$(cat "${proof_file}")" != "executed" ]; then
+      printf 'ERROR: %s\n' "${proof_messages[index]}" >&2
       rm -rf -- "${proof_dir}"
       return 1
     fi
   done
-
-  printf 'go test -count=1: internal/api/policy (api decisions vs live Python)\n'
-  if ! (
-    cd "${ROOT}"
-    "${GO_ENV_OFF[@]}" \
-      GOWORK=off \
-      DEV_HEALTH_LIVE_PYTHON_ORACLES=1 \
-      DEV_HEALTH_LIVE_PYTHON_ORACLE_PROOF_DIR="${proof_dir}" \
-      PYTHONPATH="${ROOT}/src${PYTHONPATH:+:${PYTHONPATH}}" \
-      go test -mod=readonly -count=1 \
-        -run '^(TestPrincipalMatchesLivePythonAuthService)$' \
-        ./internal/api/policy
-  ); then
-    rm -rf -- "${proof_dir}"
-    return 1
-  fi
-  printf 'go test -count=1: internal/api/pyjson (api decisions vs live Python)\n'
-  if ! (
-    cd "${ROOT}"
-    "${GO_ENV_OFF[@]}" \
-      GOWORK=off \
-      DEV_HEALTH_LIVE_PYTHON_ORACLES=1 \
-      DEV_HEALTH_LIVE_PYTHON_ORACLE_PROOF_DIR="${proof_dir}" \
-      PYTHONPATH="${ROOT}/src${PYTHONPATH:+:${PYTHONPATH}}" \
-      go test -mod=readonly -count=1 \
-        -run '^(TestMarshalMatchesLivePythonJSONDumps|TestDecodeBodyMatchesLivePythonJSONLoads|TestDumpsMatchesLivePythonJSONDumpsDefault|TestMarshalModelAndReprMatchLivePydantic|TestSyntaxErrorTextMatchesLivePython)$' \
-        ./internal/api/pyjson
-  ); then
-    rm -rf -- "${proof_dir}"
-    return 1
-  fi
-  printf 'go test -count=1: internal/api/pytime (api decisions vs live Python)\n'
-  if ! (
-    cd "${ROOT}"
-    "${GO_ENV_OFF[@]}" \
-      GOWORK=off \
-      DEV_HEALTH_LIVE_PYTHON_ORACLES=1 \
-      DEV_HEALTH_LIVE_PYTHON_ORACLE_PROOF_DIR="${proof_dir}" \
-      PYTHONPATH="${ROOT}/src${PYTHONPATH:+:${PYTHONPATH}}" \
-      go test -mod=readonly -count=1 \
-        -run '^(TestParseDatetimeMatchesLivePydantic|TestParseDateMatchesLivePydantic|TestDatetimeReasonMatchesLivePydantic|TestFromISOFormatMatchesLivePython|TestPydanticMatchesLivePydanticDumpJSON)$' \
-        ./internal/api/pytime
-  ); then
-    rm -rf -- "${proof_dir}"
-    return 1
-  fi
-  printf 'go test -count=1: internal/api/pybody (api decisions vs live Python)\n'
-  if ! (
-    cd "${ROOT}"
-    "${GO_ENV_OFF[@]}" \
-      GOWORK=off \
-      DEV_HEALTH_LIVE_PYTHON_ORACLES=1 \
-      DEV_HEALTH_LIVE_PYTHON_ORACLE_PROOF_DIR="${proof_dir}" \
-      PYTHONPATH="${ROOT}/src${PYTHONPATH:+:${PYTHONPATH}}" \
-      go test -mod=readonly -count=1 \
-        -run '^(TestQueryIntMatchesLivePydantic|TestQueryBoolMatchesLivePydantic|TestBodyIntMatchesLivePydantic|TestQueryUUIDMatchesLivePydantic|TestEmailStrMatchesLiveFastAPI|TestStringMatchesLivePydantic|TestDateAndAwareDatetimeMatchLivePydantic)$' \
-        ./internal/api/pybody
-  ); then
-    rm -rf -- "${proof_dir}"
-    return 1
-  fi
-  printf 'go test -count=1: internal/api/syncadmin (backfill request model vs live FastAPI)\n'
-  if ! (
-    cd "${ROOT}"
-    "${GO_ENV_OFF[@]}" \
-      GOWORK=off \
-      DEV_HEALTH_LIVE_PYTHON_ORACLES=1 \
-      DEV_HEALTH_LIVE_PYTHON_ORACLE_PROOF_DIR="${proof_dir}" \
-      PYTHONPATH="${ROOT}/src${PYTHONPATH:+:${PYTHONPATH}}" \
-      go test -mod=readonly -count=1 \
-        -run '^(TestBackfillRequestMatchesTheLiveFastAPIRoute)$' \
-        ./internal/api/syncadmin
-  ); then
-    rm -rf -- "${proof_dir}"
-    return 1
-  fi
-  printf 'go test -count=1: internal/llmorgsettings (validate_llm_base_url vs live Python)\n'
-  if ! (
-    cd "${ROOT}"
-    "${GO_ENV_OFF[@]}" \
-      GOWORK=off \
-      DEV_HEALTH_LIVE_PYTHON_ORACLES=1 \
-      DEV_HEALTH_LIVE_PYTHON_ORACLE_PROOF_DIR="${proof_dir}" \
-      PYTHONPATH="${ROOT}/src${PYTHONPATH:+:${PYTHONPATH}}" \
-      go test -mod=readonly -count=1 \
-        -run '^(TestValidateBaseURLMatchesLivePython)$' \
-        ./internal/llmorgsettings
-  ); then
-    rm -rf -- "${proof_dir}"
-    return 1
-  fi
-  printf 'go test -count=1: internal/auth/edgetoken (Go-signed session tokens vs the live AuthService)\n'
-  if ! (
-    cd "${ROOT}"
-    "${GO_ENV_OFF[@]}" \
-      GOWORK=off \
-      DEV_HEALTH_LIVE_PYTHON_ORACLES=1 \
-      DEV_HEALTH_LIVE_PYTHON_ORACLE_PROOF_DIR="${proof_dir}" \
-      PYTHONPATH="${ROOT}/src${PYTHONPATH:+:${PYTHONPATH}}" \
-      go test -mod=readonly -count=1 \
-        -run '^(TestSignerMatchesLiveAuthService)$' \
-        ./internal/auth/edgetoken
-  ); then
-    rm -rf -- "${proof_dir}"
-    return 1
-  fi
-  printf 'go test -count=1: internal/auth/httpapi (redirect scheme vs live uvicorn, limit strings vs live limits)\n'
-  if ! (
-    cd "${ROOT}"
-    "${GO_ENV_OFF[@]}" \
-      GOWORK=off \
-      DEV_HEALTH_LIVE_PYTHON_ORACLES=1 \
-      DEV_HEALTH_LIVE_PYTHON_ORACLE_PROOF_DIR="${proof_dir}" \
-      PYTHONPATH="${ROOT}/src${PYTHONPATH:+:${PYTHONPATH}}" \
-      go test -mod=readonly -count=1 \
-        -run '^(TestForwardedSchemeMatchesLiveUvicorn|TestParseLimitMatchesLivePython)$' \
-        ./internal/auth/httpapi
-  ); then
-    rm -rf -- "${proof_dir}"
-    return 1
-  fi
-  printf 'go test -count=1: internal/atlassianteams (the vendored Atlassian client vs the pinned upstream Python Teams client)\n'
-  if ! (
-    cd "${ROOT}"
-    "${GO_ENV_OFF[@]}" \
-      GOWORK=off \
-      DEV_HEALTH_LIVE_PYTHON_ORACLES=1 \
-      DEV_HEALTH_LIVE_PYTHON_ORACLE_PROOF_DIR="${proof_dir}" \
-      go test -mod=readonly -count=1 \
-        -run '^(TestAtlassianTeamsClientMatchesLivePython)$' \
-        ./internal/atlassianteams
-  ); then
-    rm -rf -- "${proof_dir}"
-    return 1
-  fi
-  printf 'go test -count=1: internal/auth/signedtoken (link tokens vs the live invite, verification and reset services)\n'
-  if ! (
-    cd "${ROOT}"
-    "${GO_ENV_OFF[@]}" \
-      GOWORK=off \
-      DEV_HEALTH_LIVE_PYTHON_ORACLES=1 \
-      DEV_HEALTH_LIVE_PYTHON_ORACLE_PROOF_DIR="${proof_dir}" \
-      PYTHONPATH="${ROOT}/src${PYTHONPATH:+:${PYTHONPATH}}" \
-      go test -mod=readonly -count=1 \
-        -run '^(TestSignedTokenMatchesLivePython)$' \
-        ./internal/auth/signedtoken
-  ); then
-    rm -rf -- "${proof_dir}"
-    return 1
-  fi
-  printf 'go test -count=1: internal/apiservice/admin (CHAOS-6976 llm-settings readiness probe wire shape vs live Python AgentReadinessService.certify)\n'
-  if ! (
-    cd "${ROOT}"
-    "${GO_ENV_OFF[@]}" \
-      GOWORK=off \
-      DEV_HEALTH_LIVE_PYTHON_ORACLES=1 \
-      DEV_HEALTH_LIVE_PYTHON_ORACLE_PROOF_DIR="${proof_dir}" \
-      PYTHONPATH="${ROOT}/src${PYTHONPATH:+:${PYTHONPATH}}" \
-      go test -mod=readonly -count=1 \
-        -run '^(TestReadinessProbeMatchesLivePython)$' \
-        ./internal/apiservice/admin
-  ); then
-    rm -rf -- "${proof_dir}"
-    return 1
-  fi
-  # One name per line: a PR that drops one name edits one line, so two PRs dropping different names do not conflict.
-  proof_names=(
-    api-policy-principal
-    api-pyjson
-    api-pyjson-dumps
-    api-pyjson-model
-    api-pyjson-syntax-error-text
-    api-pytime
-    api-pytime-date
-    api-pytime-datereason
-    api-pybody-date-aware
-    api-syncadmin-backfill-request
-    api-pytime-fromisoformat
-    api-pytime-pydantic
-    api-pybody-queryint
-    api-pybody-querybool
-    api-pybody-bodyint
-    edgetoken-signer
-    api-pybody-string
-    api-pybody-emailstr
-    llmorgsettings-validate-base-url
-    httpapi-forwarded-scheme
-    api-pybody-queryuuid
-    httpapi-limit-string
-    auth-signedtoken
-    atlassianteams-python-client
-    admin-llmreadiness-probe
-  )
-  for proof_name in "${proof_names[@]}"; do
-    proof_file="${proof_dir}/${proof_name}"
-    if [ ! -f "${proof_file}" ] || [ "$(cat "${proof_file}")" != "executed" ]; then
-      printf 'ERROR: api live Python oracle %s did not run\n' "${proof_name}" >&2
-      rm -rf -- "${proof_dir}"
-      return 1
-    fi
-  done
-
-  printf 'go test -count=1: internal/api/recordvalidation (record models and record validation vs live Python)\n'
-  if ! (
-    cd "${ROOT}"
-    "${GO_ENV_OFF[@]}" \
-      GOWORK=off \
-      DEV_HEALTH_LIVE_PYTHON_ORACLES=1 \
-      DEV_HEALTH_LIVE_PYTHON_ORACLE_PROOF_DIR="${proof_dir}" \
-      PYTHON="${PYTHON:-python3}" \
-      PYTHONPATH="${ROOT}/src${PYTHONPATH:+:${PYTHONPATH}}" \
-      go test -mod=readonly -count=1 \
-        -run '^(TestRecordModelsGoldenMatchesLivePython|TestRecordValidationMatchesLivePython)$' \
-        ./internal/api/recordvalidation
-  ); then
-    rm -rf -- "${proof_dir}"
-    return 1
-  fi
-  for proof_name in externalingest-record-models externalingest-record-validation; do
-    proof_file="${proof_dir}/${proof_name}"
-    if [ ! -f "${proof_file}" ] || [ "$(cat "${proof_file}")" != "executed" ]; then
-      printf 'ERROR: externalingest live Python oracle %s did not run\n' "${proof_name}" >&2
-      rm -rf -- "${proof_dir}"
-      return 1
-    fi
-  done
-
-  printf 'go test -count=1: internal/streamhandlers (external-ingest worker normalize_batch orchestration vs live Python, CHAOS-6345)\n'
-  if ! (
-    cd "${ROOT}"
-    "${GO_ENV_OFF[@]}" \
-      GOWORK=off \
-      DEV_HEALTH_LIVE_PYTHON_ORACLES=1 \
-      DEV_HEALTH_LIVE_PYTHON_ORACLE_PROOF_DIR="${proof_dir}" \
-      PYTHON="${PYTHON:-python3}" \
-      PYTHONPATH="${ROOT}/src${PYTHONPATH:+:${PYTHONPATH}}" \
-      go test -mod=readonly -count=1 \
-        -run '^TestNormalizeExternalRecordsMatchesLivePythonNormalizeBatch$' \
-        ./internal/streamhandlers
-  ); then
-    rm -rf -- "${proof_dir}"
-    return 1
-  fi
-  proof_file="${proof_dir}/streamhandlers-normalize-batch"
-  if [ ! -f "${proof_file}" ] || [ "$(cat "${proof_file}")" != "executed" ]; then
-    printf 'ERROR: streamhandlers normalize_batch live Python oracle did not run\n' >&2
-    rm -rf -- "${proof_dir}"
-    return 1
-  fi
-
-  # internal/jobs/metrics/workgraphedges' live-Python rot guard
-  # (TestWorkGraphEdgesMatchLivePythonProduction, CHAOS-4286) was retired
-  # here (CHAOS-5234/CHAOS-3092), same shape as issueprlinks' CHAOS-5249
-  # retirement above: its producer, extract_review_deployment_incident_edges,
-  # was DELETED, not merely un-called -- WorkGraphEdgesExecutor is the sole
-  # computer/writer now (closing CHAOS-5216 by construction: single native
-  # reader). The frozen golden (tests/fixtures/work_graph_edges_python_
-  # golden.json) stays; Go's own TestWorkGraphEdgesMatchFrozenPythonGolden is
-  # the regression guard going forward.
-
-  # CHAOS-5242: no live-oracle block here for internal/jobs/metrics/aiworkflow
-  # any more -- extract_ai_workflow_from_pull_requests is deleted alongside
-  # its own native Go port (AIWorkflowExecutor, #2280), so there is no live
-  # Python left to run. TestAIWorkflowMatchesFrozenPythonGolden (renamed from
-  # TestAIWorkflowMatchesLivePythonProduction) now compares against a frozen
-  # JSON (tests/fixtures/ai_workflow_python_golden.json, captured from that
-  # function's last live run) and runs unconditionally as part of the plain
-  # `go test ./...` / `check` verb, same as any other Go test -- it needs no
-  # DEV_HEALTH_LIVE_PYTHON_ORACLES gate or proof marker any more.
-
-  # CHAOS-5310/CHAOS-5321/CHAOS-3092 (R6): no live-oracle block here for
-  # internal/jobs/metrics/workitemmetrics any more -- compute_work_item_
-  # metrics_daily and compute_work_item_team_attributions are deleted
-  # entirely (native Go executors + providersync ingest derivation are the
-  # only producers now), so there is no live Python left to run.
-  # TestComputeDailyTripletMatchesPythonGolden (golden_test.go) already
-  # compares Go against the frozen tests/fixtures/daily_work_item_python_
-  # golden.json unconditionally as part of the plain `go test ./...` /
-  # `check` verb -- same shape as ai_workflow above. The live-comparison
-  # guard (TestWorkItemGoldenMatchesLivePython) and its generator
-  # (tests/fixtures/generate_daily_work_item_python_golden.py) are deleted;
-  # no DEV_HEALTH_LIVE_PYTHON_ORACLES gate or proof marker needed any more.
-
-  # CHAOS-7351 (7058 / CHAOS-7334 class A): the rot guards of internal/jobs/metrics/
-  # {numerical (remaining-metrics, capacity-forecast, FMA), numerical/cpyrandom,
-  # daily/repouser (pysum), daily/compoundingrisk} and internal/jobs/workgraph/units
-  # (components, confidence coercion, investment quality, max component nodes, decimal
-  # digits, time bounds, corpus discovery) no longer run live Python here: each runs its
-  # generator through a golden (internal/testsupport/rotguard) recorded once on the last
-  # build that carried the Python sources, so they run in the plain `go test` with no
-  # interpreter, DEV_HEALTH_LIVE_PYTHON_ORACLES gate or proof marker.
-
-  # internal/jobs/metrics/daily/filehotspots' three live-Python rot guards
-  # (TestFileHotspotsGoldenMatchesLivePython CHAOS-4277,
-  # TestFMAFollowupGoldenMatchesLivePython, TestRiskHotspotsOrderGoldenMatchesLivePython
-  # CHAOS-4863) were retired here: their producers,
-  # compute_file_hotspots/compute_file_risk_hotspots, were DELETED, not
-  # merely un-called -- the native Go executors (FileHotspotsExecutor/
-  # FileRiskHotspotsExecutor, CHAOS-4277) are the sole producers now. The
-  # frozen goldens (tests/fixtures/{file_hotspots_python_golden,
-  # fma_followup_golden,risk_hotspots_order_golden}.json) stay; Go's own
-  # TestComputeMatchesFrozenPythonGolden-family bit-exact tests
-  # (golden_full_test.go, fma_golden_test.go, risk_hotspots_order_golden_test.go)
-  # are the regression guard going forward. Proving "Python still agrees
-  # with itself" stops being the protection that matters once Python is no
-  # longer in the loop -- same shape as the issueprlinks retirement below.
-
-  # internal/jobs/workgraph/issueprlinks' live-Python rot guard
-  # (TestIssuePRLinksGoldenMatchesLivePython, CHAOS-4757) was retired here:
-  # its producer, _derive_issue_pr_links_from_dependencies, was DELETED, not
-  # merely un-called -- issueprlinks is the sole producer now. The frozen
-  # golden (tests/fixtures/issue_pr_links_python_golden.json) stays; Go's own
-  # TestDeriveMatchesFrozenPythonGoldenExhaustively is the regression guard
-  # going forward. Proving "Python still agrees with itself" stops being the
-  # protection that matters once Python is no longer in the loop.
-
-  # cicd (CHAOS-4292) used to have its own live-Python rot guard here
-  # (TestCICDGoldenMatchesLivePython, proof marker cicd-golden) -- retired
-  # (CHAOS-5234/CHAOS-3092: compute_cicd_metrics_daily deleted outright, the
-  # whole metrics/compute_cicd.py module gone): CICDExecutor (native Go) is
-  # the sole producer now. The frozen golden
-  # (tests/fixtures/daily_cicd_python_golden.json) stays; Go's own
-  # TestComputeMatchesFrozenPythonGolden-family bit-exact tests
-  # (internal/jobs/metrics/daily/cicd/compute_test.go) are the regression
-  # guard going forward -- same shape as the team_wellbeing/file_hotspots/
-  # issueprlinks retirements in this same function.
-
-  # internal/jobs/metrics/daily/reviewedges' live-Python rot guard
-  # (TestReviewEdgesGoldenMatchesLivePython, CHAOS-4279) was retired here:
-  # its producer, compute_review_edges_daily (src/dev_health_ops/metrics/
-  # reviews.py), was DELETED, not merely un-called -- ReviewEdgesExecutor is
-  # the sole computer now. The frozen golden (tests/fixtures/
-  # daily_review_edges_python_golden.json) stays; Go's own
-  # TestComputeMatchesFrozenPythonGolden is the regression guard going
-  # forward.
-
-  # internal/jobs/metrics/daily/benchmarking's live-Python rot guard
-  # (TestBenchmarkingGoldenMatchesLivePython, CHAOS-4288) was retired here:
-  # its producer, compute_benchmarking_for_day (and the rest of
-  # src/dev_health_ops/metrics/benchmarking/), was DELETED, not merely
-  # un-called -- BenchmarkingFinalizeExecutor is the sole computer now. The
-  # frozen golden (tests/fixtures/daily_benchmarking_python_golden.json)
-  # stays; Go's own TestComputeMatchesFrozenPythonGolden is the regression
-  # guard going forward.
-
-  printf 'go test -count=1: internal/jobs/investment (materialize orchestration golden vs live Python)\n'
-  if ! (
-    cd "${ROOT}"
-    "${GO_ENV_OFF[@]}" \
-      GOWORK=off \
-      DEV_HEALTH_LIVE_PYTHON_ORACLES=1 \
-      DEV_HEALTH_LIVE_PYTHON_ORACLE_PROOF_DIR="${proof_dir}" \
-      PYTHON="${PYTHON:-python3}" \
-      PYTHONPATH="${ROOT}/src${PYTHONPATH:+:${PYTHONPATH}}" \
-      go test -mod=readonly -count=1 \
-        -run '^TestFrozenPythonGoldenStillMatchesLivePython$' \
-        ./internal/jobs/investment
-  ); then
-    rm -rf -- "${proof_dir}"
-    return 1
-  fi
-  # Its own marker (CHAOS-4441). This golden's producers are the ORCHESTRATION
-  # decisions -- rollup_subcategories_to_themes' two-different-summations shape,
-  # the invalid_llm_output evidence-quality clamp and its band recomputation,
-  # the LLM-vs-fallback gate order, and json.dumps' ", " separators plus
-  # ensure_ascii on the audit array. None of those is covered by the units
-  # goldens above: those prove the PIECES, this proves the wiring between them,
-  # which is the half that had no oracle while investment.materialize's native
-  # path went unwired.
-  proof_file="${proof_dir}/investment-materialize-orchestration"
-  if [ ! -f "${proof_file}" ] || [ "$(cat "${proof_file}")" != "executed" ]; then
-    printf 'ERROR: investment materialize orchestration golden did not compare against live Python\n' >&2
-    rm -rf -- "${proof_dir}"
-    return 1
-  fi
-
-  printf 'go test -count=1: internal/pythonparity (frozen json.dumps golden vs live Python)\n'
-  if ! (
-    cd "${ROOT}"
-    "${GO_ENV_OFF[@]}" \
-      GOWORK=off \
-      DEV_HEALTH_LIVE_PYTHON_ORACLES=1 \
-      DEV_HEALTH_LIVE_PYTHON_ORACLE_PROOF_DIR="${proof_dir}" \
-      PYTHON="${PYTHON:-python3}" \
-      PYTHONPATH="${ROOT}/src${PYTHONPATH:+:${PYTHONPATH}}" \
-      go test -mod=readonly -count=1 \
-        -run '^(TestPythonJSONGoldenMatchesLivePython|TestPythonJSONInsertionOrderGoldenMatchesLivePython|TestReprBandGoldenMatchesLivePython|TestEdgeShapesGoldenMatchesLivePython|TestWhitespaceGoldenMatchesLivePython|TestClickHouseStringDecodeGoldenMatchesLivePython|TestSumGoldenMatchesLivePython)$' \
-        ./internal/pythonparity
-  ); then
-    rm -rf -- "${proof_dir}"
-    return 1
-  fi
-  # Its own marker, for the same reason the two above have theirs: a THIRD
-  # distinct producer -- CPython's json.dumps over evidence.build_text_bundle's
-  # payload -- and the only one whose divergence costs money rather than
-  # correctness. input_hash is categorization_input_hash, the LLM
-  # skip-existing key; a drifted hash matches no stored row and re-categorizes
-  # every work unit on every run, silently. A shared marker could be satisfied
-  # by either guard above while this one was filtered out of -run.
-  proof_file="${proof_dir}/python-json-golden"
-  if [ ! -f "${proof_file}" ] || [ "$(cat "${proof_file}")" != "executed" ]; then
-    printf 'ERROR: python json.dumps golden did not compare against live Python\n' >&2
-    rm -rf -- "${proof_dir}"
-    return 1
-  fi
-  # Its own marker again. It shares the band golden's producer but guards a
-  # DIFFERENT axis: string and token spellings rather than float rendering.
-  # Someone "fixing" the column with ensure_ascii=False or allow_nan=False would
-  # leave the band golden green, so a shared marker would let that through.
-  proof_file="${proof_dir}/evidence-json-edge-shapes-golden"
-  if [ ! -f "${proof_file}" ] || [ "$(cat "${proof_file}")" != "executed" ]; then
-    printf 'ERROR: evidence_json edge-shapes golden did not compare against live Python\n' >&2
-    rm -rf -- "${proof_dir}"
-    return 1
-  fi
-  # Its own marker, for the only fixture here whose producer is the REAL
-  # APPLICATION PATH rather than a direct library call: it builds a
-  # Recommendation and calls recommendation_to_record, so its bytes come out of
-  # loader.py:448 itself. That makes it sensitive to a key added to or reordered
-  # in the evidence dict literal, a changed rounding depth at a `value=` site,
-  # or an EvidenceRef rename -- none of which the direct-json guards can see.
-  proof_file="${proof_dir}/evidence-json-repr-band-golden"
-  if [ ! -f "${proof_file}" ] || [ "$(cat "${proof_file}")" != "executed" ]; then
-    printf 'ERROR: evidence_json repr-band golden did not compare against live Python\n' >&2
-    rm -rf -- "${proof_dir}"
-    return 1
-  fi
-  # Its own marker, for a producer that is neither a computation nor a
-  # dependency but a set of DEFAULT ARGUMENTS. json.dumps(value) with no
-  # sort_keys is a DIFFERENT reference from json.dumps(value, sort_keys=True)
-  # guarded above, and the two emit different bytes for the same data --
-  # recommendations/loader.py:448 writes the evidence_json column with the
-  # bare form. This marker is separate because a shared one would be satisfied
-  # by the sort_keys guard while this one was filtered out of -run, which is
-  # exactly the substitution that makes the two look interchangeable.
-  proof_file="${proof_dir}/python-json-insertion-order-golden"
-  if [ ! -f "${proof_file}" ] || [ "$(cat "${proof_file}")" != "executed" ]; then
-    printf 'ERROR: python json.dumps insertion-order golden did not compare against live Python\n' >&2
-    rm -rf -- "${proof_dir}"
-    return 1
-  fi
-  # Its own marker again, and this one guards a producer that lives OUTSIDE
-  # this repository: CPython's str.isspace(), i.e. the interpreter's Unicode
-  # tables. A Python upgrade can move it with no diff in src/ for a reviewer to
-  # notice, and pythonparity.IsSpace hard-codes the current 0x1c-0x1f delta.
-  proof_file="${proof_dir}/python-whitespace-golden"
-  if [ ! -f "${proof_file}" ] || [ "$(cat "${proof_file}")" != "executed" ]; then
-    printf 'ERROR: python whitespace predicate did not compare against live Python\n' >&2
-    rm -rf -- "${proof_dir}"
-    return 1
-  fi
-  # Its own marker, guarding the most fragile producer here: a THIRD-PARTY
-  # DEPENDENCY. clickhouse-connect decodes String columns as UTF-8 and, on
-  # failure, substitutes the lowercase hex of the whole value -- two lines
-  # inside its read loop, not part of its documented API. A lockfile bump moves
-  # it with no diff anywhere in this repository. chquery applies that policy to
-  # every String column, and those strings are hashed into input_hash and into
-  # work_unit_id.
-  proof_file="${proof_dir}/clickhouse-string-decode-golden"
-  if [ ! -f "${proof_file}" ] || [ "$(cat "${proof_file}")" != "executed" ]; then
-    printf 'ERROR: clickhouse String decode policy did not compare against live Python\n' >&2
-    rm -rf -- "${proof_dir}"
-    return 1
-  fi
-  # Its own marker: the producer is the INTERPRETER's builtin sum(), which has
-  # used Neumaier compensated summation for floats since 3.12 and was a naive
-  # accumulation before. The fixture therefore depends on the interpreter
-  # version with no diff in this repository, in BOTH directions -- a downgrade
-  # below 3.12 would make pythonparity.Sum's compensation wrong, not merely
-  # unnecessary.
-  proof_file="${proof_dir}/python-sum-golden"
-  if [ ! -f "${proof_file}" ] || [ "$(cat "${proof_file}")" != "executed" ]; then
-    printf 'ERROR: python sum() semantics did not compare against live Python\n' >&2
-    rm -rf -- "${proof_dir}"
-    return 1
-  fi
-
-  printf 'go test -count=1: internal/synccoverage (live Python coverage builder is outside the Go embed/cache boundary)\n'
-  if ! (
-    cd "${ROOT}"
-    "${GO_ENV_OFF[@]}" \
-      GOWORK=off \
-      DEV_HEALTH_LIVE_PYTHON_ORACLES=1 \
-      DEV_HEALTH_LIVE_PYTHON_ORACLE_PROOF_DIR="${proof_dir}" \
-      PYTHONPATH="${ROOT}/src${PYTHONPATH:+:${PYTHONPATH}}" \
-      go test -mod=readonly -count=1 ./internal/synccoverage/...
-  ); then
-    rm -rf -- "${proof_dir}"
-    return 1
-  fi
-  proof_file="${proof_dir}/synccoverage"
-  if [ ! -f "${proof_file}" ] || [ "$(cat "${proof_file}")" != "executed" ]; then
-    printf 'ERROR: sync-coverage live Python oracle measurement did not occur\n' >&2
-    rm -rf -- "${proof_dir}"
-    return 1
-  fi
-
-  printf 'go test -count=1: internal/syncdispatchruntime (CHAOS-4175 native finalize_sync_run zero-unit classification vs live Python)\n'
-  if ! (
-    cd "${ROOT}"
-    "${GO_ENV_OFF[@]}" \
-      GOWORK=off \
-      DEV_HEALTH_LIVE_PYTHON_ORACLES=1 \
-      DEV_HEALTH_LIVE_PYTHON_ORACLE_PROOF_DIR="${proof_dir}" \
-      PYTHONPATH="${ROOT}/src${PYTHONPATH:+:${PYTHONPATH}}" \
-      go test -mod=readonly -count=1 ./internal/syncdispatchruntime/...
-  ); then
-    rm -rf -- "${proof_dir}"
-    return 1
-  fi
-  proof_file="${proof_dir}/sync-dispatch-finalize"
-  if [ ! -f "${proof_file}" ] || [ "$(cat "${proof_file}")" != "executed" ]; then
-    printf 'ERROR: native finalize_sync_run live Python oracle measurement did not occur\n' >&2
-    rm -rf -- "${proof_dir}"
-    return 1
-  fi
-  # CHAOS-4198: the same ./internal/syncdispatchruntime/... run above also
-  # executes TestBudgetAdmissionMathMatchesLivePython (dispatch_sync_run's
-  # BudgetGuard admission math vs the same live interpreter) -- this is a
-  # second proof-file check on that ALREADY-COMPLETED run, not a second test
-  # invocation.
-  proof_file="${proof_dir}/sync-dispatch-admission"
-  if [ ! -f "${proof_file}" ] || [ "$(cat "${proof_file}")" != "executed" ]; then
-    printf 'ERROR: native dispatch_sync_run budget-admission live Python oracle measurement did not occur\n' >&2
-    rm -rf -- "${proof_dir}"
-    return 1
-  fi
-
-  # CHAOS-6243: the in-process dispatch budget estimator vs the REAL Python
-  # estimators (estimate_provider_budget over a real SyncTaskContext,
-  # credential_fingerprint, _resolve_env_credentials and _credential_mapping
-  # over ciphertext core.encryption wrote), on the same generated inputs.
-  printf 'go test -count=1: internal/syncbudget (in-process budget estimator vs live Python, CHAOS-6243)\n'
-  if ! (
-    cd "${ROOT}"
-    "${GO_ENV_OFF[@]}" \
-      GOWORK=off \
-      DEV_HEALTH_LIVE_PYTHON_ORACLES=1 \
-      DEV_HEALTH_LIVE_PYTHON_ORACLE_PROOF_DIR="${proof_dir}" \
-      PYTHONPATH="${ROOT}/src${PYTHONPATH:+:${PYTHONPATH}}" \
-      go test -mod=readonly -count=1 -run '^TestBudgetEstimatorMatchesLivePython$' ./internal/syncbudget
-  ); then
-    rm -rf -- "${proof_dir}"
-    return 1
-  fi
-  proof_file="${proof_dir}/sync-budget-estimate"
-  if [ ! -f "${proof_file}" ] || [ "$(cat "${proof_file}")" != "executed" ]; then
-    printf 'ERROR: in-process budget estimator live Python oracle measurement did not occur\n' >&2
-    rm -rf -- "${proof_dir}"
-    return 1
-  fi
-
-  printf 'go test -count=1: internal/queryapi/server (POST body validation vs live FastAPI request models)\n'
-  if ! (
-    cd "${ROOT}"
-    "${GO_ENV_OFF[@]}" \
-      GOWORK=off \
-      DEV_HEALTH_LIVE_PYTHON_ORACLES=1 \
-      DEV_HEALTH_LIVE_PYTHON_ORACLE_PROOF_DIR="${proof_dir}" \
-      PYTHONPATH="${ROOT}/src${PYTHONPATH:+:${PYTHONPATH}}" \
-      go test -mod=readonly -count=1 -run '^TestQueryAPIBodiesMatchLiveFastAPI$' ./internal/queryapi/server
-  ); then
-    rm -rf -- "${proof_dir}"
-    return 1
-  fi
-  proof_file="${proof_dir}/query-api-bodies"
-  if [ ! -f "${proof_file}" ] || [ "$(cat "${proof_file}")" != "executed" ]; then
-    printf 'ERROR: the query-api POST body live FastAPI oracle measurement did not occur\n' >&2
-    rm -rf -- "${proof_dir}"
-    return 1
-  fi
-
-  printf 'go test -count=1: internal/queryapi/timewindow (report window vs live filtering.time_window and people._time_window)\n'
-  if ! (
-    cd "${ROOT}"
-    "${GO_ENV_OFF[@]}" \
-      GOWORK=off \
-      DEV_HEALTH_LIVE_PYTHON_ORACLES=1 \
-      DEV_HEALTH_LIVE_PYTHON_ORACLE_PROOF_DIR="${proof_dir}" \
-      PYTHONPATH="${ROOT}/src${PYTHONPATH:+:${PYTHONPATH}}" \
-      go test -mod=readonly -count=1 -run '^TestComputeMatchesLivePythonTimeWindow$' ./internal/queryapi/timewindow
-  ); then
-    rm -rf -- "${proof_dir}"
-    return 1
-  fi
-  proof_file="${proof_dir}/query-api-time-window"
-  if [ ! -f "${proof_file}" ] || [ "$(cat "${proof_file}")" != "executed" ]; then
-    printf 'ERROR: the query-api report window live Python oracle measurement did not occur\n' >&2
-    rm -rf -- "${proof_dir}"
-    return 1
-  fi
-
-  printf 'go test -count=1: internal/queryapi/graph (operation org guard vs the live OrgIdAuthExtension)\n'
-  if ! (
-    cd "${ROOT}"
-    "${GO_ENV_OFF[@]}" \
-      GOWORK=off \
-      DEV_HEALTH_LIVE_PYTHON_ORACLES=1 \
-      DEV_HEALTH_LIVE_PYTHON_ORACLE_PROOF_DIR="${proof_dir}" \
-      PYTHONPATH="${ROOT}/src${PYTHONPATH:+:${PYTHONPATH}}" \
-      go test -mod=readonly -count=1 -run '^TestOperationOrgViolationMatchesLivePythonExtension$' ./internal/queryapi/graph
-  ); then
-    rm -rf -- "${proof_dir}"
-    return 1
-  fi
-  proof_file="${proof_dir}/query-api-org-guard"
-  if [ ! -f "${proof_file}" ] || [ "$(cat "${proof_file}")" != "executed" ]; then
-    printf 'ERROR: the query-api operation org guard live Python oracle measurement did not occur\n' >&2
-    rm -rf -- "${proof_dir}"
-    return 1
-  fi
-
-  printf 'go test -count=1: internal/queryapi/recommendations (evidence and window goldens vs the live Python)\n'
-  if ! (
-    cd "${ROOT}"
-    "${GO_ENV_OFF[@]}" \
-      GOWORK=off \
-      DEV_HEALTH_LIVE_PYTHON_ORACLES=1 \
-      DEV_HEALTH_LIVE_PYTHON_ORACLE_PROOF_DIR="${proof_dir}" \
-      PYTHONPATH="${ROOT}/src${PYTHONPATH:+:${PYTHONPATH}}" \
-      go test -mod=readonly -count=1 -run '^TestGoldensAreWhatPythonProducesNow$' ./internal/queryapi/recommendations
-  ); then
-    rm -rf -- "${proof_dir}"
-    return 1
-  fi
-  proof_file="${proof_dir}/query-api-recommendations-evidence"
-  if [ ! -f "${proof_file}" ] || [ "$(cat "${proof_file}")" != "executed" ]; then
-    printf 'ERROR: the recommendations goldens live Python measurement did not occur\n' >&2
-    rm -rf -- "${proof_dir}"
-    return 1
-  fi
-
-  printf 'go test -count=1: internal/synccli (dho sync <target> request handling vs the REAL dev-hops argparse, preflight and run_sync_target; the --search batch loop vs the REAL process_*_batch)\n'
-  if ! (
-    cd "${ROOT}"
-    "${GO_ENV_OFF[@]}" \
-      GOWORK=off \
-      DEV_HEALTH_LIVE_PYTHON_ORACLES=1 \
-      DEV_HEALTH_LIVE_PYTHON_ORACLE_PROOF_DIR="${proof_dir}" \
-      PYTHONPATH="${ROOT}/src${PYTHONPATH:+:${PYTHONPATH}}" \
-      go test -mod=readonly -count=1 -run '^(TestSyncTargetMatchesLivePython|TestBatchLoopMatchesLivePython)$' ./internal/synccli
-  ); then
-    rm -rf -- "${proof_dir}"
-    return 1
-  fi
-  proof_file="${proof_dir}/cli-sync-target"
-  if [ ! -f "${proof_file}" ] || [ "$(cat "${proof_file}")" != "executed" ]; then
-    printf 'ERROR: the dho sync <target> live Python oracle measurement did not occur\n' >&2
-    rm -rf -- "${proof_dir}"
-    return 1
-  fi
-  proof_file="${proof_dir}/cli-sync-batch-loop"
-  if [ ! -f "${proof_file}" ] || [ "$(cat "${proof_file}")" != "executed" ]; then
-    printf 'ERROR: the dho sync --search batch loop live Python oracle measurement did not occur\n' >&2
-    rm -rf -- "${proof_dir}"
-    return 1
-  fi
-
-  printf 'go test -count=1: internal/queryapi/principal (Go verifier vs a REAL Python-issued envelope + JWKS, CHAOS-4366)\n'
-  if ! (
-    cd "${ROOT}"
-    "${GO_ENV_OFF[@]}" \
-      GOWORK=off \
-      DEV_HEALTH_LIVE_PYTHON_ORACLES=1 \
-      DEV_HEALTH_LIVE_PYTHON_ORACLE_PROOF_DIR="${proof_dir}" \
-      PYTHON="${PYTHON:-python3}" \
-      PYTHONPATH="${ROOT}/src${PYTHONPATH:+:${PYTHONPATH}}" \
-      go test -mod=readonly -count=1 \
-        -run '^TestVerifierMatchesLivePythonIssuedEnvelope$' \
-        ./internal/queryapi/principal
-  ); then
-    rm -rf -- "${proof_dir}"
-    return 1
-  fi
-  proof_file="${proof_dir}/query-api-principal-envelope"
-  if [ ! -f "${proof_file}" ] || [ "$(cat "${proof_file}")" != "executed" ]; then
-    printf 'ERROR: the Go effective-principal verifier was not compared against a real Python-issued envelope\n' >&2
-    rm -rf -- "${proof_dir}"
-    return 1
-  fi
-
-  # internal/workerservice's live-Python rot guard
-  # (TestBuildScopeParityTableMatchesLivePython, CHAOS-4837) was retired here:
-  # its generator's producer, run_work_graph_build, was DELETED (CHAOS-4924),
-  # not merely un-called, and its _admit() reference kind (workgraph.build)
-  # was removed from _scope_arguments' allowed set in the same PR -- so the
-  # comparison would measure dead ground rather than reference drift. The
-  # frozen table (tests/fixtures/build_scope_parity_table.json) stays;
-  # TestBuildScopeMatchesTheBridgeAdmission's exhaustive frozen-table
-  # comparison is the regression guard going forward. Proving "Python still
-  # agrees with itself" stops being the protection that matters once Python
-  # is no longer in the loop.
-
-  printf 'go test -count=1: internal/pythonparity (float round/repr/format mirrors vs the live interpreter)\n'
-  if ! (
-    cd "${ROOT}"
-    "${GO_ENV_OFF[@]}" \
-      GOWORK=off \
-      DEV_HEALTH_LIVE_PYTHON_ORACLES=1 \
-      DEV_HEALTH_LIVE_PYTHON_ORACLE_PROOF_DIR="${proof_dir}" \
-      PYTHONPATH="${ROOT}/src${PYTHONPATH:+:${PYTHONPATH}}" \
-      go test -mod=readonly -count=1 \
-        -run '^TestFloatTextGoldenMatchesLivePython$' \
-        ./internal/pythonparity/...
-  ); then
-    rm -rf -- "${proof_dir}"
-    return 1
-  fi
-  proof_file="${proof_dir}/pythonparity-float-text"
-  if [ ! -f "${proof_file}" ] || [ "$(cat "${proof_file}")" != "executed" ]; then
-    printf 'ERROR: the CPython float round/repr/format golden was not re-derived from the live interpreter\n' >&2
-    rm -rf -- "${proof_dir}"
-    return 1
-  fi
-
   rm -rf -- "${proof_dir}"
+}
+
+# live_oracle_files: fills the array LO_FILES with the entry files under
+# ${LIVE_PYTHON_ORACLES_DIR:-ci/live_python_oracles.d}, in sorted order. A missing or
+# unreadable directory, or one with no entry, FAILS: an empty list is a gate that checks
+# nothing and passes.
+live_oracle_files() {
+  local dir="${LIVE_PYTHON_ORACLES_DIR:-${ROOT}/ci/live_python_oracles.d}" file
+  local -a oracle_entries=()
+  if [ ! -d "${dir}" ] || [ ! -r "${dir}" ]; then
+    printf 'ERROR: the live Python oracle entry directory %s is missing or unreadable\n' "${dir}" >&2
+    return 1
+  fi
+  while IFS= read -r file; do
+    oracle_entries+=("${file}")
+  done < <(LC_ALL=C find "${dir}" -maxdepth 1 -type f -name '*.run' | LC_ALL=C sort)
+  if [ "${#oracle_entries[@]}" -eq 0 ]; then
+    printf 'ERROR: %s holds no .run entry: a live Python oracle gate with nothing to run measures nothing\n' "${dir}" >&2
+    return 1
+  fi
+  LO_FILES=("${oracle_entries[@]}")
+}
+
+# live_oracle_read_entry FILE sets LO_LABEL LO_PACKAGE LO_RUN LO_PYTHON LO_PYTHONPATH and
+# the index-aligned arrays LO_PROOF_NAMES LO_PROOF_MESSAGES LO_PROOF_MATCHES from a .run
+# entry, one key=value per line:
+#   label=      heading printed before the command (optional)
+#   package=    the go package argument (required)
+#   run=        the -run selector (optional)
+#   python=1    also export PYTHON (default python3)
+#   pythonpath=0  do not export PYTHONPATH
+#   proof=NAME|MESSAGE        the marker NAME must be "executed" in the proof directory
+#   proof_match=NAME|REGEX    the marker NAME must match REGEX instead
+# At least one proof is required: an oracle that proves nothing about having run is a
+# measurement that need not happen, and a freeze PR deletes the whole file. An unknown key,
+# a missing package, a proof_match for a name that is not a proof, or a duplicate proof
+# name FAILS.
+live_oracle_read_entry() {
+  local file="$1" line key value name index found
+  LO_LABEL="" LO_PACKAGE="" LO_RUN="" LO_PYTHON=0 LO_PYTHONPATH=1
+  LO_PROOF_NAMES=() LO_PROOF_MESSAGES=() LO_PROOF_MATCHES=()
+  while IFS= read -r line || [ -n "${line}" ]; do
+    [ -n "${line}" ] || continue
+    key="${line%%=*}"
+    value="${line#*=}"
+    case "${key}" in
+      label) LO_LABEL="${value}" ;;
+      package) LO_PACKAGE="${value}" ;;
+      run) LO_RUN="${value}" ;;
+      python) LO_PYTHON="${value}" ;;
+      pythonpath) LO_PYTHONPATH="${value}" ;;
+      proof)
+        name="${value%%|*}"
+        for found in "${LO_PROOF_NAMES[@]}"; do
+          if [ "${found}" = "${name}" ]; then
+            printf 'ERROR: %s: proof %s is listed twice\n' "${file}" "${name}" >&2
+            return 1
+          fi
+        done
+        LO_PROOF_NAMES+=("${name}")
+        LO_PROOF_MESSAGES+=("${value#*|}")
+        LO_PROOF_MATCHES+=("")
+        ;;
+      proof_match)
+        name="${value%%|*}"
+        found=""
+        for index in "${!LO_PROOF_NAMES[@]}"; do
+          if [ "${LO_PROOF_NAMES[index]}" = "${name}" ]; then
+            LO_PROOF_MATCHES[index]="${value#*|}"
+            found=1
+          fi
+        done
+        if [ -z "${found}" ]; then
+          printf 'ERROR: %s: proof_match names %s, which no earlier proof line declares\n' "${file}" "${name}" >&2
+          return 1
+        fi
+        ;;
+      *) printf 'ERROR: %s: unknown key %q\n' "${file}" "${key}" >&2; return 1 ;;
+    esac
+  done <"${file}"
+  if [ -z "${LO_PACKAGE}" ]; then
+    printf 'ERROR: %s needs a package\n' "${file}" >&2
+    return 1
+  fi
+  if [ "${#LO_PROOF_NAMES[@]}" -eq 0 ]; then
+    printf 'ERROR: %s declares no proof: a live oracle run that nothing proves executed measures nothing\n' "${file}" >&2
+    return 1
+  fi
+}
+
+# live_python_oracles_list prints the resolved commands and proofs, one per line, exactly
+# as check_live_python_oracles would run and check them (no command is run).
+live_python_oracles_list() {
+  local entry index
+  live_oracle_files || return 1
+  for entry in "${LO_FILES[@]}"; do
+    live_oracle_read_entry "${entry}" || return 1
+    printf 'RUN label=%s python=%s pythonpath=%s run=%s package=%s\n' "${LO_LABEL}" "${LO_PYTHON}" "${LO_PYTHONPATH}" "${LO_RUN}" "${LO_PACKAGE}"
+    for index in "${!LO_PROOF_NAMES[@]}"; do
+      printf 'PROOF name=%s match=%s message=%s\n' "${LO_PROOF_NAMES[index]}" "${LO_PROOF_MATCHES[index]}" "${LO_PROOF_MESSAGES[index]}"
+    done
+  done
 }
 
 # check_venue_oracles (CHAOS-6314) runs every venue differential oracle test
@@ -2785,7 +2119,13 @@ case "${1:-all}" in
     check_race
     ;;
   live-python-oracles)
-    check_live_python_oracles
+    # `live-python-oracles --list` prints the resolved commands and proofs of the
+    # entries in ci/live_python_oracles.d and runs nothing (CHAOS-7656).
+    if [ "${2:-}" = "--list" ]; then
+      live_python_oracles_list
+    else
+      check_live_python_oracles
+    fi
     ;;
   venue-oracles)
     if [ "${2:-}" = "--changed" ]; then

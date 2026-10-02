@@ -30,3 +30,35 @@ func TestRegisteredAiImpactSummaryDocument_RequestsDayInDaily(t *testing.T) {
 		}
 	}
 }
+
+// CHAOS-8000 dual accept: the OLD text (no daily.day) is the operation's legacy text.
+func TestAiImpactSummary_AcceptsTheOldAndTheNewText(t *testing.T) {
+	byDigest, err := buildOperationByDigest(
+		map[string]string{"aiImpactSummary": digestHex(registeredAiImpactSummaryDocument)},
+		map[string][]string{"aiImpactSummary": legacyDigestsByOperation["aiImpactSummary"]},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for name, text := range map[string]string{
+		"new text": registeredAiImpactSummaryDocument,
+		"old text": registeredAiImpactSummaryV1Document,
+	} {
+		if op, ok := operationForDocument(text, byDigest); !ok || op != "aiImpactSummary" {
+			t.Errorf("%s resolves to %q, %v; want aiImpactSummary, true", name, op, ok)
+		}
+	}
+	daily := func(doc string) string {
+		s := doc[strings.Index(doc, "daily {"):]
+		return s[:strings.Index(s, "}")]
+	}
+	if strings.Contains(daily(registeredAiImpactSummaryV1Document), "\n      day\n") {
+		t.Error("the legacy text requests day; it must be the text from before")
+	}
+	if !strings.Contains(daily(registeredAiImpactSummaryDocument), "\n      day\n") {
+		t.Error("the current text does not request day")
+	}
+	if got := legacyDigestsByOperation["aiImpactSummary"]; len(got) != 1 || got[0] != digestHex(registeredAiImpactSummaryV1Document) {
+		t.Errorf("legacyDigestsByOperation[aiImpactSummary] = %v, want the digest of the V1 text", got)
+	}
+}

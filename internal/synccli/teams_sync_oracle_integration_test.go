@@ -650,6 +650,9 @@ type teamsScenario struct {
 	goDiffers bool
 	goExit    int
 	goRows    int
+	// wantGoCode, when set, is the error code the Go verb must print on stderr: the CLI's own refusal, told from a
+	// later failure that also ends in exit 1 and no rows.
+	wantGoCode string
 	// after asserts more about what the planes did.
 	after func(t *testing.T, o *teamsOracle, fake *fakeGitHub, sc *teamsScenario, run githubRun, python, goRows []map[string]string)
 }
@@ -812,6 +815,9 @@ func (o *teamsOracle) compareGitHub(sc *teamsScenario, fake *fakeGitHub) {
 	if run.pythonCode != wantPython || run.goCode != wantGoExit {
 		t.Fatalf("%s: exit codes: python %s (stage %s, want %d), go %d (want %d)\ngo stderr: %s", sc.name, run.pythonCode, run.pythonStage, sc.wantExit, run.goCode, wantGoExit, run.goStderr)
 	}
+	if sc.wantGoCode != "" && !strings.Contains(run.goStderr, `"code":"`+sc.wantGoCode+`"`) {
+		t.Fatalf("%s: go stderr %q does not carry the refusal code %q", sc.name, run.goStderr, sc.wantGoCode)
+	}
 	python := o.pythonRows("teams")
 	goRows := o.rows(o.goDatabase, "teams", "org-1")
 	if len(python) != sc.wantRows || len(goRows) != wantGoRows {
@@ -949,8 +955,8 @@ func githubScenarios() []*teamsScenario {
 		{name: "the token from GITHUB_TOKEN", org: "acme", owner: "acme", token: "env:tok", teams: two, users: emails("alice", "bob", "carol"), wantRows: 2},
 		{name: "--auth wins over GITHUB_TOKEN", org: "acme", owner: "acme", token: "tok", envToken: "not-the-token", teams: two, users: emails("alice", "bob", "carol"), wantRows: 2},
 		{name: "the GITHUB_URL spelling of the base URL", org: "acme", owner: "acme", token: "tok", baseEnv: "GITHUB_URL", teams: two, users: emails("alice", "bob", "carol"), wantRows: 2},
-		{name: "no --owner is refused", org: "acme", owner: "", token: "tok", teams: two, users: emails("alice", "bob", "carol"), wantExit: 1, wantRows: 0},
-		{name: "no token anywhere is refused", org: "acme", owner: "acme", token: "", teams: two, users: emails("alice", "bob", "carol"), wantExit: 1, wantRows: 0},
+		{name: "no --owner is refused", org: "acme", owner: "", token: "tok", teams: two, users: emails("alice", "bob", "carol"), wantExit: 1, wantRows: 0, wantGoCode: "owner_required"},
+		{name: "no token anywhere is refused", org: "acme", owner: "acme", token: "", teams: two, users: emails("alice", "bob", "carol"), wantExit: 1, wantRows: 0, wantGoCode: "token_required"},
 		{name: "a padded --owner", org: "acme", owner: " acme ", token: "tok", teams: two, users: emails("alice", "bob", "carol"), wantExit: 1, wantRows: 0, goDiffers: true, goExit: 0, goRows: 2},
 		{name: "a rejected token", org: "acme", owner: "acme", token: "wrong", serverToken: "tok", teams: two, users: emails("alice", "bob", "carol"), wantExit: 1, wantRows: 0},
 		{name: "no teams is an error", org: "acme", owner: "acme", token: "tok", teams: nil, wantExit: 1, wantRows: 0},

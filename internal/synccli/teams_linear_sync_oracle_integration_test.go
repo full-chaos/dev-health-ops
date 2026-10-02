@@ -264,7 +264,10 @@ type linearScenario struct {
 	goDiffers bool
 	goExit    int
 	goRows    int
-	after     func(t *testing.T, o *teamsOracle, sc *linearScenario, run linearRun, python, goRows []map[string]string)
+	// wantGoCode, when set, is the error code the Go verb must print on stderr: the CLI's own refusal, told from a
+	// later failure that also ends in exit 1 and no rows.
+	wantGoCode string
+	after      func(t *testing.T, o *teamsOracle, sc *linearScenario, run linearRun, python, goRows []map[string]string)
 }
 
 // wantToken is the token the fake actually requires: serverToken when the
@@ -442,6 +445,9 @@ func (o *teamsOracle) compareLinear(sc *linearScenario, fake *fakeLinear) {
 	if run.pythonCode != wantPython || run.goCode != wantGoExit {
 		t.Fatalf("%s: exit codes: python %s (stage %s, want %d), go %d (want %d)\ngo stderr: %s", sc.name, run.pythonCode, run.pythonStage, sc.wantExit, run.goCode, wantGoExit, run.goStderr)
 	}
+	if sc.wantGoCode != "" && !strings.Contains(run.goStderr, `"code":"`+sc.wantGoCode+`"`) {
+		t.Fatalf("%s: go stderr %q does not carry the refusal code %q", sc.name, run.goStderr, sc.wantGoCode)
+	}
 	python := o.pythonRows("teams")
 	goRows := o.rows(o.goDatabase, "teams", "org-1")
 	if len(python) != sc.wantRows || len(goRows) != wantGoRows {
@@ -510,7 +516,7 @@ func linearScenarios() []*linearScenario {
 	return []*linearScenario{
 		{name: "two teams, one member without an email", token: "tok", teams: two, wantExit: 0, wantRows: 2},
 		{name: "the token from LINEAR_API_KEY", token: "env:tok", teams: two, wantExit: 0, wantRows: 2},
-		{name: "no token anywhere is refused", token: "", teams: two, wantExit: 1, wantRows: 0},
+		{name: "no token anywhere is refused", token: "", teams: two, wantExit: 1, wantRows: 0, wantGoCode: "token_required"},
 		{name: "a team with no name takes its key", token: "tok", wantExit: 0, wantRows: 1,
 			teams: []fakeLinearTeam{{Key: "ENG", Name: "", Members: []fakeLinearMember{{ID: "u1", Name: "Alice", Email: "alice@example.com", Active: true}}}}},
 		// A named divergence (recorded, not argued): Python skips a team that has no key (providers/teams.py:677-679)

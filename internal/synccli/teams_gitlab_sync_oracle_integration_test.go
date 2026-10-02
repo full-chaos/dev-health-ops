@@ -251,7 +251,10 @@ type gitlabScenario struct {
 	goDiffers bool
 	goExit    int
 	goRows    int
-	after     func(t *testing.T, o *teamsOracle, fake *fakeGitLab, sc *gitlabScenario, run gitlabRun, python, goRows []map[string]string)
+	// wantGoCode, when set, is the error code the Go verb must print on stderr: the CLI's own refusal, told from a
+	// later failure that also ends in exit 1 and no rows.
+	wantGoCode string
+	after      func(t *testing.T, o *teamsOracle, fake *fakeGitLab, sc *gitlabScenario, run gitlabRun, python, goRows []map[string]string)
 }
 
 // wantToken is the token the fake actually requires: serverToken when the
@@ -424,6 +427,9 @@ func (o *teamsOracle) compareGitLab(sc *gitlabScenario, fake *fakeGitLab) {
 	if run.pythonCode != wantPython || run.goCode != wantGoExit {
 		t.Fatalf("%s: exit codes: python %s (stage %s, want %d), go %d (want %d)\ngo stderr: %s", sc.name, run.pythonCode, run.pythonStage, sc.wantExit, run.goCode, wantGoExit, run.goStderr)
 	}
+	if sc.wantGoCode != "" && !strings.Contains(run.goStderr, `"code":"`+sc.wantGoCode+`"`) {
+		t.Fatalf("%s: go stderr %q does not carry the refusal code %q", sc.name, run.goStderr, sc.wantGoCode)
+	}
 	python := o.pythonRows("teams")
 	goRows := o.rows(o.goDatabase, "teams", "org-1")
 	if len(python) != sc.wantRows || len(goRows) != wantGoRows {
@@ -515,9 +521,9 @@ func gitlabScenarios() []*gitlabScenario {
 			group: fakeGitLabGroup{ID: 1, FullPath: "acme", Name: "Acme", Members: []string{"alice"}}, users: map[string]string{"alice": ""}},
 		{name: "--auth wins over GITLAB_TOKEN", owner: "acme", token: "tok", envToken: "not-the-token", wantExit: 0, wantRows: 1,
 			group: fakeGitLabGroup{ID: 1, FullPath: "acme", Name: "Acme", Members: []string{"alice"}}, users: map[string]string{"alice": ""}},
-		{name: "no --owner is refused", owner: "", token: "tok", wantExit: 1, wantRows: 0,
+		{name: "no --owner is refused", owner: "", token: "tok", wantExit: 1, wantRows: 0, wantGoCode: "owner_required",
 			group: fakeGitLabGroup{ID: 1, FullPath: "acme", Name: "Acme", Members: []string{"alice"}}},
-		{name: "no token anywhere is refused", owner: "acme", token: "", wantExit: 1, wantRows: 0,
+		{name: "no token anywhere is refused", owner: "acme", token: "", wantExit: 1, wantRows: 0, wantGoCode: "token_required",
 			group: fakeGitLabGroup{ID: 1, FullPath: "acme", Name: "Acme", Members: []string{"alice"}}},
 		{name: "a padded --owner", owner: " acme ", token: "tok", wantExit: 1, wantRows: 0, goDiffers: true, goExit: 0, goRows: 1,
 			group: fakeGitLabGroup{ID: 1, FullPath: "acme", Name: "Acme", Members: []string{"alice"}}},

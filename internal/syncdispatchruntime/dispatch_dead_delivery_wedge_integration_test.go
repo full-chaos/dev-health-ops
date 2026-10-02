@@ -103,12 +103,15 @@ VALUES (gen_random_uuid(),$1,$2,$3,1,now(),now(),now())`, id, discoveryTestOrg, 
 		unitID := func(runN, unitN int) string {
 			return fmt.Sprintf("00000000-0000-4000-8000-00000000e%01d%02d", runN, unitN)
 		}
+		// The bucket is `light` (budget table limit 4) so the test's own
+		// SYNC_UNIT_CONCURRENCY_PER_BUCKET clamp is the cap it exercises: the cap of
+		// a `heavy` bucket is 1 whatever the variable says (CHAOS-7434).
 		addUnit := func(r run, unitN int) string {
 			id := unitID(r.n, unitN)
 			now := clock
 			pgseed.InsertSyncRunUnit(ctx, t, pool, pgseed.SyncRunUnit{
 				ID: id, RunID: r.id, OrgID: discoveryTestOrg, SourceID: dispatchTestSource,
-				Provider: "github", DatasetKey: "commits", CostClass: "heavy", Status: "planned", UpdatedAt: &now,
+				Provider: "github", DatasetKey: "commits", CostClass: "light", Status: "planned", UpdatedAt: &now,
 			})
 			return id
 		}

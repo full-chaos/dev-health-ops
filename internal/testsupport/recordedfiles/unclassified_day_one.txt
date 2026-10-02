@@ -835,7 +835,6 @@ internal/queryapi/server/testdata/wire_capture/acr_repository_scopes_captured.gr
 internal/queryapi/server/testdata/wire_capture/aiattributionoverview_captured.graphql
 internal/queryapi/server/testdata/wire_capture/aicomparison_captured.graphql
 internal/queryapi/server/testdata/wire_capture/aigovernancesummary_captured.graphql
-internal/queryapi/server/testdata/wire_capture/aiimpactsummary_captured.graphql
 internal/queryapi/server/testdata/wire_capture/aiopportunities_captured.graphql
 internal/queryapi/server/testdata/wire_capture/aireviewload_captured.graphql
 internal/queryapi/server/testdata/wire_capture/airiskbreakdown_captured.graphql

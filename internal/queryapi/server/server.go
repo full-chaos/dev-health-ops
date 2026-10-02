@@ -306,6 +306,9 @@ func mountQueryRouteSets(getenv getenvFunc, mux, internalMux, mcpMux *http.Serve
 	mountProofWriteRoute(getenv, internalMux, handlers.ProofWrite)
 	// CHAOS-7214: the proof variant of the MCP class route, internalMux ONLY.
 	mountProofMCPRoute(getenv, internalMux, handlers.MCPProof)
+	// CHAOS-7831: acr's run_operation route, internalMux ONLY (never on mux, which the public listener is built from): the serving pipeline of /query
+	// behind the MCP class rows. /query keeps serving the web edge un-gated. A nil handler (a test that builds no run-operation route) registers nothing.
+	mountRunOperationRoute(internalMux, handlers.RunOperation)
 	// CHAOS-7085: on mcpMux ONLY. A test proves neither the public nor
 	// the internal route set reaches the MCP class.
 	mcpMux.Handle("/query", handlers.MCP)

@@ -8,13 +8,15 @@ package server
 // The identity reads go through mcpProofAdmit / mcpIdentityHeadersPresent (mcp_route.go): TestOnlyInternalPathsReadTheInternalIdentity pins which
 // files may import the identity package, and this one may not.
 //
-// Scope: only a request that arrived on the INTERNAL listener AND carries the acr identity headers (run_operation's carrier). The web app and
-// ops-api reach /query with an envelope or edge bearer (and the public listener drops the headers), and a dark class root must not go dark for them.
+// Scope: only a request that came through the dedicated route (/query/run-operation, markClassGated), on the INTERNAL listener, carrying the acr identity
+// headers. /query itself is NOT gated: the Python /graphql edge forwards the web's requests to it over the same internal identity carrier (the Venue
+// oracle TestGraphQLEdgeVenueOracle pins that), and a dark class root must not go dark for the web.
 //
 // Live per request: Enabled() is a SELECT per call; nothing here caches class state. What is cached is only operation -> root fields, which is a
 // property of the digest-verified document text and cannot change while the process runs.
 
 import (
+	"context"
 	"net/http"
 	"sync"
 
@@ -31,6 +33,31 @@ import (
 // rows and is for the measurement-only proof routes; using it here would SERVE a shadow root on both ports.)
 func newClassRowSwitch(pool *pgxpool.Pool, schemaDigest string) routeswitch.Switch {
 	return routeswitch.NewPostgresSwitch(pool, schemaDigest, mcpRoutingDigests())
+}
+
+// runOperationPath is the internal-listener route acr's run_operation posts to. Only requests that came through it are class-gated.
+const runOperationPath = "/query/run-operation"
+
+type classGateKey struct{}
+
+// markClassGated marks every request served through next as arriving by the class-gated route.
+func markClassGated(next http.HandlerFunc) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		next(w, r.WithContext(context.WithValue(r.Context(), classGateKey{}, true)))
+	}
+}
+
+func classGated(ctx context.Context) bool {
+	on, _ := ctx.Value(classGateKey{}).(bool)
+	return on
+}
+
+// mountRunOperationRoute registers the class-gated route on the internal mux, with the same provenance wrapper /query carries.
+func mountRunOperationRoute(internalMux *http.ServeMux, handler http.HandlerFunc) {
+	if handler == nil {
+		return
+	}
+	internalMux.HandleFunc(runOperationPath, withProofProvenance(handler, runningBuild()))
 }
 
 // documentGate refuses a resolved operation before its document-row dispatch. It returns true when it wrote the refusal.
@@ -59,7 +86,7 @@ func newClassRowGate(sw routeswitch.Switch) documentGate {
 	}
 	allowed := mcpclass.AllowedRoots()
 	return func(w http.ResponseWriter, r *http.Request, operation, query string) bool {
-		if !mcpProofAdmit(r.Context()) || !mcpIdentityHeadersPresent(r.Header) {
+		if !classGated(r.Context()) || !mcpProofAdmit(r.Context()) || !mcpIdentityHeadersPresent(r.Header) {
 			return false
 		}
 		roots, ok := rootsOf(query)

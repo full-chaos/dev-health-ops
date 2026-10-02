@@ -6,6 +6,7 @@ package server
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
@@ -109,9 +110,10 @@ func contains(values []string, want string) bool {
 
 // gateServer is the real document dispatch handler (class gate included) over every class operation, the mixed document and a non-class one.
 type gateServer struct {
-	handler http.HandlerFunc
-	classes routeswitch.StaticSwitch // the class rows: "mcp:<root>" -> lit
-	served  map[string]int           // operation -> times its handler ran
+	handler      http.HandlerFunc         // /query: the web edge's route, NOT class-gated
+	runOperation http.HandlerFunc         // /query/run-operation: the same pipeline behind markClassGated
+	classes      routeswitch.StaticSwitch // the class rows: "mcp:<root>" -> lit
+	served       map[string]int           // operation -> times its handler ran
 }
 
 func newGateServer(t *testing.T) *gateServer {
@@ -134,6 +136,7 @@ func newGateServer(t *testing.T) *gateServer {
 		}))
 	}
 	server.handler = newDocumentDispatchHandler(os.Getenv, mux, byDigest, nil, nil, nil, "", nil, newClassRowGate(server.classes))
+	server.runOperation = markClassGated(server.handler)
 	return server
 }
 
@@ -161,6 +164,12 @@ func without(roots []string, drop ...string) []string {
 // post sends the document as acr's run_operation does: the internal listener, the four identity headers.
 func (server *gateServer) post(t *testing.T, document string, internal, identity bool) *httptest.ResponseRecorder {
 	t.Helper()
+	return server.postVia(t, server.runOperation, document, internal, identity)
+}
+
+// postVia sends the request through handler: server.runOperation (acr's route) or server.handler (/query, the web edge's).
+func (server *gateServer) postVia(t *testing.T, handler http.HandlerFunc, document string, internal, identity bool) *httptest.ResponseRecorder {
+	t.Helper()
 	body, err := json.Marshal(map[string]any{"query": document})
 	if err != nil {
 		t.Fatal(err)
@@ -177,7 +186,7 @@ func (server *gateServer) post(t *testing.T, document string, internal, identity
 		request.Header.Set(internalidentity.HeaderImpersonationActive, "false")
 	}
 	recorder := httptest.NewRecorder()
-	server.handler(recorder, request)
+	handler(recorder, request)
 	return recorder
 }
 
@@ -269,17 +278,21 @@ func TestClassGateActsOnlyOnInternalListenerRequestsWithIdentityHeaders(t *testi
 	gate := newClassRowGate(routeswitch.StaticSwitch{}) // every class root dark
 	document := classOperationDocuments["hotspots"]
 	for _, test := range []struct {
-		name              string
-		internal, headers bool
-		wantRefused       bool
+		name                      string
+		marked, internal, headers bool
+		wantRefused               bool
 	}{
-		{"internal listener + identity headers", true, true, true},
-		{"internal listener, no identity headers", true, false, false},
-		{"not the internal listener, identity headers", false, true, false},
-		{"neither", false, false, false},
+		{"run-operation route + internal listener + identity headers", true, true, true, true},
+		{"run-operation route, internal listener, no identity headers", true, true, false, false},
+		{"run-operation route, not the internal listener, identity headers", true, false, true, false},
+		{"/query (not the run-operation route), internal listener + identity headers", false, true, true, false},
+		{"nothing", false, false, false, false},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			request := httptest.NewRequest(http.MethodPost, "/query", nil)
+			if test.marked {
+				*request = *request.WithContext(context.WithValue(request.Context(), classGateKey{}, true))
+			}
 			if test.internal {
 				*request = *request.WithContext(iaInternalCtx(request.Context()))
 			}
@@ -298,7 +311,7 @@ func TestClassGateActsOnlyOnInternalListenerRequestsWithIdentityHeaders(t *testi
 func TestClassGateRefusesADocumentItCannotRead(t *testing.T) {
 	gate := newClassRowGate(routeswitch.StaticSwitch{"mcp:hotspots": true})
 	request := httptest.NewRequest(http.MethodPost, "/query", nil)
-	*request = *request.WithContext(iaInternalCtx(request.Context()))
+	*request = *request.WithContext(context.WithValue(iaInternalCtx(request.Context()), classGateKey{}, true))
 	request.Header.Set(internalidentity.HeaderOrgID, "org-1")
 	recorder := httptest.NewRecorder()
 	if !gate(recorder, request, "unreadable", "this is not a graphql document") {
@@ -356,7 +369,7 @@ func TestClassGateDecidesPerDocumentWhenAnOperationHasTwoDocuments(t *testing.T)
 		gate := newClassRowGate(routeswitch.StaticSwitch{"mcp:hotspots": true}) // hotspots lit, catalog dark
 		for _, document := range order {
 			request := httptest.NewRequest(http.MethodPost, "/query", nil)
-			*request = *request.WithContext(iaInternalCtx(request.Context()))
+			*request = *request.WithContext(context.WithValue(iaInternalCtx(request.Context()), classGateKey{}, true))
 			request.Header.Set(internalidentity.HeaderOrgID, "org-1")
 			recorder := httptest.NewRecorder()
 			refused := gate(recorder, request, "oneOperationTwoDocuments", document)
@@ -382,6 +395,9 @@ func TestTheClassRowSwitchIsBuiltByOneConstructorThatDoesNotAdmitShadowRows(t *t
 	if !strings.Contains(text, "newMCPHandler(mcpClient, pgPool, classSwitch, getenv)") {
 		t.Fatal("the MCP handler is not built over the shared class-row switch")
 	}
+	if !strings.Contains(text, "handlers.RunOperation = markClassGated(handler)") {
+		t.Fatal("buildQueryRoute does not build RunOperation as the class-gated alias of the serving handler")
+	}
 	if strings.Contains(text, "NewPostgresSwitch(pgPool, schemaDigest, mcpRoutingDigests())") {
 		t.Fatal("query_route.go builds a class-row switch itself instead of through newClassRowSwitch")
 	}
@@ -400,5 +416,48 @@ func TestTheClassRowSwitchIsBuiltByOneConstructorThatDoesNotAdmitShadowRows(t *t
 	body = body[:strings.Index(body, "\n}\n")]
 	if !strings.Contains(body, "return routeswitch.NewPostgresSwitch(pool, schemaDigest, mcpRoutingDigests())") || strings.Contains(body, "NewProofSwitch") {
 		t.Fatal("newClassRowSwitch is not the canary/primary-only PostgresSwitch")
+	}
+}
+
+// The web edge's route is NOT gated: /query with the internal identity headers (what the Python /graphql edge sends) and a DARK class root is SERVED for
+// every class operation. This is the path TestGraphQLEdgeVenueOracle exercises; gating it would 404 the web.
+func TestQueryRouteWithIdentityHeadersIsNotClassGated(t *testing.T) {
+	derived := derivedClassOperations(t)
+	for operation := range derived {
+		server := newGateServer(t)
+		server.setClassRows() // every class root dark
+		recorder := server.postVia(t, server.handler, classOperationDocuments[operation], true, true)
+		if recorder.Code != http.StatusOK || server.served[operation] != 1 {
+			t.Fatalf("%s: the web edge's /query was class-gated: status %d (%s)", operation, recorder.Code, recorder.Body.String())
+		}
+	}
+}
+
+// /query/run-operation is mounted on the INTERNAL mux only: the public mux (what the public listener serves) answers 404 for it, and /query stays on both.
+func TestRunOperationRouteIsMountedOnTheInternalMuxOnly(t *testing.T) {
+	getenv := getenvFunc(func(string) string { return "" })
+	stub := func(code int) http.HandlerFunc {
+		return func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(code) }
+	}
+	mux, internalMux, mcpMux := http.NewServeMux(), http.NewServeMux(), http.NewServeMux()
+	mountQueryRouteSets(getenv, mux, internalMux, mcpMux, queryRouteHandlers{
+		Query: stub(http.StatusOK), RunOperation: stub(http.StatusAccepted), Registry: stub(http.StatusOK), BuildInfo: stub(http.StatusOK), MCP: stub(http.StatusTeapot),
+	}, graphQLEdgeDeps{auth: ecEdgeAuth(t, &fakeEdgeStore{}), maxBytes: defaultGraphQLMaxQueryBytes})
+	do := func(handler http.Handler, path string) int {
+		recorder := httptest.NewRecorder()
+		handler.ServeHTTP(recorder, httptest.NewRequest(http.MethodPost, path, nil))
+		return recorder.Code
+	}
+	if got := do(internalMux, runOperationPath); got != http.StatusAccepted {
+		t.Fatalf("the internal mux answers %d for %s, want the run-operation handler (202)", got, runOperationPath)
+	}
+	if got := do(mux, runOperationPath); got != http.StatusNotFound {
+		t.Fatalf("the PUBLIC mux answers %d for %s, want 404: the route must not be reachable on the public listener", got, runOperationPath)
+	}
+	if got := do(mcpMux, runOperationPath); got != http.StatusNotFound {
+		t.Fatalf("the MCP mux answers %d for %s, want 404", got, runOperationPath)
+	}
+	if got := do(mux, "/query"); got != http.StatusOK {
+		t.Fatalf("/query is no longer served on the public mux: %d", got)
 	}
 }

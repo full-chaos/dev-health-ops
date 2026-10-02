@@ -2626,6 +2626,10 @@ type queryRouteHandlers struct {
 	RegistryPool *pgxpool.Pool
 	// Query is /query: production reachability, canary|primary only.
 	Query http.HandlerFunc
+	// RunOperation is POST /query/run-operation (CHAOS-7831): the SAME serving pipeline as Query, wrapped so the MCP class rows gate it
+	// (markClassGated). Mounted by mountQueryRouteSets on Plane.InternalHandler ONLY; acr's run_operation posts here. /query itself stays
+	// ungated: the Python /graphql edge reaches it over the same internal identity carrier.
+	RunOperation http.HandlerFunc
 	// Proof is the same pipeline over a measurement-only Switch that also
 	// admits shadow. Mounted only by mountProofRoute, which refuses in a
 	// production posture and without an explicit opt-in.
@@ -2757,6 +2761,8 @@ func buildQueryRoute(getenv getenvFunc, cfg queryRouteConfig) (queryRouteHandler
 	// The one registry pool, for Build's edge users check (CHAOS-6290). Set outside the
 	// literal above so that literal keeps the shape posture_readiness_test pins.
 	handlers.RegistryPool = pgPool
+	// Set outside the literal for the same reason (the literal's shape is pinned): the class-gated alias of the serving handler.
+	handlers.RunOperation = markClassGated(handler)
 	cleanup := func() { pgPool.Close() }
 	// CHAOS-6803/CHAOS-6804: a deployment that names query-api's role
 	// (QUERY_API_DATABASE_ROLE) is not ready until the pool logs in AS that role

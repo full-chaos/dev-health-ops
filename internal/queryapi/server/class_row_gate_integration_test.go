@@ -62,19 +62,20 @@ func TestRunOperationRouteFollowsTheClassRowOfItsRoot(t *testing.T) {
 		t.Fatal(err)
 	}
 	handler, _, _, _, _ := newQueryHandler(&fakeHotspotsCHClient{}, pool, verifier, itTestSchemaDigest, os.Getenv)
+	runOperation := markClassGated(handler) // what buildQueryRoute mounts at /query/run-operation
 	documentDigest := digestHex(registeredHotspotsDocument)
 	setRoutingMode(t, pool, documentDigest, "hotspots", "canary") // the DOCUMENT row is lit all along: only the class row changes
 	token := signTestEnvelope(t, priv, "org-1")
 	hotspots := mcpclass.Operation("hotspots")
 
 	t.Run("no class row: the run_operation request is refused with the MCP refusal", func(t *testing.T) {
-		recorder := postAsRunOperation(t, handler, registeredHotspotsDocument, hotspotsVariables())
+		recorder := postAsRunOperation(t, runOperation, registeredHotspotsDocument, hotspotsVariables())
 		assertClassRefusal(t, "dark class root", recorder)
 	})
 
 	t.Run("a SHADOW class row is dark: refused on this route and not enabled by the shared constructor", func(t *testing.T) {
 		classSeed(t, pool, hotspots) // seeds the class row in mode shadow
-		assertClassRefusal(t, "shadow class root", postAsRunOperation(t, handler, registeredHotspotsDocument, hotspotsVariables()))
+		assertClassRefusal(t, "shadow class root", postAsRunOperation(t, runOperation, registeredHotspotsDocument, hotspotsVariables()))
 		if newClassRowSwitch(pool, itTestSchemaDigest).Enabled(hotspots) {
 			t.Fatal("the class-row switch enabled a shadow row")
 		}
@@ -82,6 +83,13 @@ func TestRunOperationRouteFollowsTheClassRowOfItsRoot(t *testing.T) {
 		ch := &countingMCPClient{}
 		mcpListener := internalidentity.MCP(newMCPHandlerWithLimits(ch, nil, newClassRowSwitch(pool, itTestSchemaDigest), func(string) string { return "" }, mcpDefaultLimits()))
 		assertMCPRefused(t, classHotspots(t, mcpListener), ch, http.StatusNotFound, mcpReasonRootFieldNotEnabled)
+	})
+
+	t.Run("the web edge's /query with the identity headers is NOT gated by a dark class row", func(t *testing.T) {
+		recorder := postAsRunOperation(t, handler, registeredHotspotsDocument, hotspotsVariables()) // /query: the Python /graphql edge's route
+		if recorder.Code != http.StatusOK || !strings.Contains(recorder.Body.String(), "org/repo-a") {
+			t.Fatalf("/query with identity headers was class-gated: status %d, body %s", recorder.Code, recorder.Body.String())
+		}
 	})
 
 	t.Run("a dark class root does not gate the envelope caller (web)", func(t *testing.T) {
@@ -99,7 +107,7 @@ func TestRunOperationRouteFollowsTheClassRowOfItsRoot(t *testing.T) {
 		if !newClassRowSwitch(pool, itTestSchemaDigest).Enabled(hotspots) {
 			t.Fatal("the class-row switch did not enable a canary row")
 		}
-		recorder := postAsRunOperation(t, handler, registeredHotspotsDocument, hotspotsVariables())
+		recorder := postAsRunOperation(t, runOperation, registeredHotspotsDocument, hotspotsVariables())
 		if recorder.Code != http.StatusOK || !strings.Contains(recorder.Body.String(), "org/repo-a") {
 			t.Fatalf("the lit root was not served: status %d, body %s", recorder.Code, recorder.Body.String())
 		}
@@ -107,6 +115,6 @@ func TestRunOperationRouteFollowsTheClassRowOfItsRoot(t *testing.T) {
 
 	t.Run("class row disabled again: refused on the very next request (live read)", func(t *testing.T) {
 		setClassRowMode(t, pool, hotspots, "disabled")
-		assertClassRefusal(t, "re-darkened class root", postAsRunOperation(t, handler, registeredHotspotsDocument, hotspotsVariables()))
+		assertClassRefusal(t, "re-darkened class root", postAsRunOperation(t, runOperation, registeredHotspotsDocument, hotspotsVariables()))
 	})
 }

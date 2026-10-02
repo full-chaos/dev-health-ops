@@ -11,9 +11,8 @@ import (
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
-	"os"
-	"os/exec"
 	"path/filepath"
+	"regexp"
 	"sort"
 	"strconv"
 	"strings"
@@ -50,7 +49,9 @@ const ingestAPIKey = "venue-metrics-ingest-key"
 // then proves nothing.
 func TestCounterParityVenueOracle(t *testing.T) {
 	ctx := context.Background()
-	golden := venueoracle.OpenGolden(t, goldenSpec("counter_parity", "TestCounterParityVenueOracle", "b05c472e9e72f003a730e629eed7bcec45595f0cbf955bf61f35597a020cca98"))
+	spec := goldenSpec("counter_parity", "TestCounterParityVenueOracle", "4d187d6e96315805a484978e0dd428417e116b1bf88c227e824ba969964f3264")
+	spec.Scrub = scrubExposition
+	golden := venueoracle.OpenGolden(t, spec)
 	nextID := func() func() uuid.UUID {
 		next := 0
 		return func() uuid.UUID {
@@ -196,10 +197,26 @@ VALUES ($1, $2, 'odd},"x', 'garbled', true, 'gAAAAABnot-a-fernet-token', '{}'::j
 	goMetrics := operator()
 
 	// The families the Python api registers at import: listed by the pinned
-	// build's interpreter while recording, frozen in the golden otherwise.
-	checkPythonMetricsTable(t, golden.InspectRows(t, "python metric families", func() string {
-		return listPythonMetricFamilies(t, venue.Root)
-	}))
+	// build's interpreter, through the record verb's launcher, while recording;
+	// frozen in the golden otherwise.
+	familiesRequest := venueoracle.ProgramRequest("python metric families", pythonMetricFamilies, nil, nil)
+	familiesAnswers := golden.Produce(t, venue.Root, []venueoracle.Request{familiesRequest}, func(producer *venueoracle.Producer, _ []venueoracle.Request) []venueoracle.Response {
+		producer.RequireDeployed()
+		command, err := producer.Command(ctx, nil, nil, "-c", pythonMetricFamilies)
+		if err != nil {
+			t.Fatal(err)
+		}
+		command.Dir = venue.Root
+		output, err := command.Output()
+		if err != nil {
+			t.Fatalf("list the Python api's metric families: %v", err)
+		}
+		// The app's import logs a JSON line with the time of day before the RESULT line: only the
+		// RESULT line is the answer, so two recordings write the same bytes.
+		return []venueoracle.Response{{Status: 0, Body: venueoracle.PackBody([]byte("RESULT " + metricFamiliesResult(t, string(output)) + "\n"))}}
+	})
+	golden.Consumed(t, familiesAnswers...)
+	checkPythonMetricsTable(t, metricFamiliesResult(t, venueoracle.UnpackBody(t, familiesAnswers[0].Body)))
 
 	for _, counter := range routeCounters {
 		pythonSamples := samples(t, pythonMetrics.Body, counter.metric)
@@ -320,18 +337,39 @@ func checkPythonMetricsTable(t *testing.T, families string) {
 	t.Logf("python_metrics.tsv: %d families (%d lazy); every import-time family of the live Python api is named", len(table), lazy)
 }
 
-// listPythonMetricFamilies runs pythonMetricFamilies with the Python of root
-// (the pinned build while recording) and returns its RESULT object as text.
-func listPythonMetricFamilies(t *testing.T, root string) string {
-	t.Helper()
-	command := exec.Command("python3", "-c", pythonMetricFamilies)
-	command.Dir = root
-	command.Env = append(os.Environ(), "PYTHONPATH="+filepath.Join(root, "src"))
-	output, err := command.Output()
-	if err != nil {
-		t.Fatalf("list the Python api's metric families: %v", err)
+// expositionSample is one sample line of the Prometheus text exposition: the series, then its value.
+var expositionSample = regexp.MustCompile(`(?m)^([a-zA-Z_:][a-zA-Z0-9_:]*(?:\{[^\n]*\})?) (?:[-+]?(?:[0-9]+\.?[0-9]*|\.[0-9]+)(?:[eE][-+]?[0-9]+)?|NaN|[-+]Inf)$`)
+
+// scrubExposition is the golden's scrub: in the /metrics exposition of the Python api the value of
+// every sample is a placeholder, except the samples of the counters this oracle compares (routeCounters).
+// The rest of the values (process memory and CPU, start and *_created times, request durations) differ
+// between two runs of the same recording and are not compared. A text that is not an exposition is
+// unchanged. Deterministic and idempotent: the placeholder is not a number.
+//
+// Not pinned at replay: a frozen run reads the already-scrubbed golden, so a Scrub that keeps nothing,
+// or a placeholder of "0", would still replay. What guards the scrub is the record verb's two identical
+// runs and its fresh-process replay, and the replay's own checks of the compared counters (a counter
+// value changed, removed or replaced by the placeholder fails at the counter comparison).
+func scrubExposition(text string) string {
+	if !strings.Contains(text, "# HELP ") {
+		return text
 	}
-	for _, line := range strings.Split(string(output), "\n") {
+	return expositionSample.ReplaceAllStringFunc(text, func(line string) string {
+		series, _, _ := strings.Cut(line, " ")
+		name, _, _ := strings.Cut(series, "{")
+		for _, counter := range routeCounters {
+			if name == counter.metric {
+				return line
+			}
+		}
+		return series + " <value>"
+	})
+}
+
+// metricFamiliesResult returns the RESULT object of pythonMetricFamilies' output as text.
+func metricFamiliesResult(t *testing.T, output string) string {
+	t.Helper()
+	for _, line := range strings.Split(output, "\n") {
 		if rest, ok := strings.CutPrefix(line, "RESULT "); ok {
 			return rest
 		}

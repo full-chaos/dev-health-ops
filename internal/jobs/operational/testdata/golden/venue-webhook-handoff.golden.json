@@ -1,0 +1,86 @@
+{
+  "header": {
+    "test": "TestWebhookHandoffVenueOracleMatchesFrozenPython",
+    "python_build": "a4847c5e93607451a0c987b314d37e02fc43ce85",
+    "producer_digest": "6e1dc97e68624398015f60caee160cceee6ae601bd434d01b8b7d5975267e137",
+    "recipe": "git worktree add --detach $DIR a4847c5e93607451a0c987b314d37e02fc43ce85 (with its .venv: uv sync --frozen --no-install-project); then from the repository root: go run ./internal/testsupport/venueoracle/goldenrecord -pkg ./internal/jobs/operational/ -test '^TestWebhookHandoffVenueOracleMatchesFrozenPython$' -python-root $DIR",
+    "python_env": "dcad7815282bb1f86b2a7d0025447672a4f8597815ee6bc618d8d4aafead5cff",
+    "python_env_version": 2,
+    "recorded_by": "goldenrecord",
+    "blanked": {}
+  },
+  "requests": [
+    {
+      "name": "sync now",
+      "method": "PYTHON",
+      "path": "program sha256 0e88b49f30583b3a52bd9be343c770461c06dbe4c2caedf1280b6433d963273c env sha256 ec3d1f2795d4ad672d01230592275d0751db8658949d44a3c71f21b0046a7f49",
+      "body_sha256": "6c9849af528cdf87719b9190b2081b0bae9a30ba128f8f821c44b88f32eba9d9",
+      "request_headers_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "status": 0,
+      "headers": {},
+      "body": "[\"ok\", \"ok\", \"ok\", \"ok\", \"ok\"]\n"
+    }
+  ],
+  "rows": {
+    "identity:python:child full resync": {
+      "rows": "occurrence_id is the identity of its scheduled_for"
+    },
+    "identity:python:child inactive scheduled": {
+      "rows": "occurrence_id is the identity of its scheduled_for"
+    },
+    "identity:python:child scheduled": {
+      "rows": "occurrence_id is the identity of its scheduled_for"
+    },
+    "identity:python:child targets": {
+      "rows": "occurrence_id is the identity of its scheduled_for"
+    },
+    "identity:python:parent route": {
+      "rows": "occurrence_id is the identity of its scheduled_for"
+    },
+    "rows:job:child full resync": {
+      "rows": "sync-config-5f03ee5d-d64a-5b26-972e-a566a544ee3esyncgithub0 * * * *UTC{\"provider\": \"github\", \"sync_config_id\": \"5f03ee5d-d64a-5b26-972e-a566a544ee3e\"}1 false 0 0"
+    },
+    "rows:job:child inactive scheduled": {
+      "rows": "sync-config-b5cc2f9b-e651-541b-9771-aa97d78afffbsyncgithub0 */6 * * *UTC{\"provider\": \"github\", \"sync_config_id\": \"b5cc2f9b-e651-541b-9771-aa97d78afffb\"}1 false 0 0"
+    },
+    "rows:job:child scheduled": {
+      "rows": "sync-config-8a83c9b7-8e39-568b-92b3-4e6b293f94c8syncgithub0 */6 * * *Europe/Paris{\"provider\": \"github\", \"sync_config_id\": \"8a83c9b7-8e39-568b-92b3-4e6b293f94c8\"}0 false 0 0"
+    },
+    "rows:job:child targets": {
+      "rows": "sync-config-9e5ebc53-c002-5fdb-bd3f-47bd7509eeebsyncgithub0 * * * *UTC{\"provider\": \"github\", \"sync_config_id\": \"9e5ebc53-c002-5fdb-bd3f-47bd7509eeeb\"}1 false 0 0"
+    },
+    "rows:job:parent route": {
+      "rows": "sync-config-0cd25735-441a-5afe-a31d-c116bd6a5976syncgithub0 * * * *UTC{\"provider\": \"github\", \"sync_config_id\": \"0cd25735-441a-5afe-a31d-c116bd6a5976\"}1 false 0 0"
+    },
+    "rows:occurrence:child full resync": {
+      "rows": "sync_scheduler_occurrence_v100000000-0000-4000-8000-0000000c6695pending0sync-config-5f03ee5d-d64a-5b26-972e-a566a544ee3e"
+    },
+    "rows:occurrence:child inactive scheduled": {
+      "rows": "sync_scheduler_occurrence_v100000000-0000-4000-8000-0000000c6695pending0sync-config-b5cc2f9b-e651-541b-9771-aa97d78afffb"
+    },
+    "rows:occurrence:child scheduled": {
+      "rows": "sync_scheduler_occurrence_v100000000-0000-4000-8000-0000000c6695pending0sync-config-8a83c9b7-8e39-568b-92b3-4e6b293f94c8"
+    },
+    "rows:occurrence:child targets": {
+      "rows": "sync_scheduler_occurrence_v100000000-0000-4000-8000-0000000c6695pending0sync-config-9e5ebc53-c002-5fdb-bd3f-47bd7509eeeb"
+    },
+    "rows:occurrence:parent route": {
+      "rows": "sync_scheduler_occurrence_v100000000-0000-4000-8000-0000000c6695pending0sync-config-0cd25735-441a-5afe-a31d-c116bd6a5976"
+    },
+    "rows:trigger:child full resync": {
+      "rows": "full_resync\u003cnil\u003e \u003cnil\u003e [a8fdf3c2-7100-5578-9443-b221e016cf26] [repo-metadata commits commit-stats files]manual"
+    },
+    "rows:trigger:child inactive scheduled": {
+      "rows": "incremental\u003cnil\u003e \u003cnil\u003e [9984eafd-7092-5e96-b7cf-b5605e95f6cd] [work-items work-item-labels work-item-projects work-item-history work-item-comments]manual"
+    },
+    "rows:trigger:child scheduled": {
+      "rows": "incremental\u003cnil\u003e \u003cnil\u003e [22d70c44-83f3-5b84-b798-1e8d610d9050] [work-items work-item-labels work-item-projects work-item-history work-item-comments]manual"
+    },
+    "rows:trigger:child targets": {
+      "rows": "incremental\u003cnil\u003e \u003cnil\u003e [8a0d891e-a813-58d9-9ab2-6bb9fe07283d] [repo-metadata commits commit-stats files prs pr-reviews pr-comments]manual"
+    },
+    "rows:trigger:parent route": {
+      "rows": "incremental\u003cnil\u003e \u003cnil\u003e [184e1d04-ada1-52aa-bc53-7975968e6082] \u003cnil\u003emanual"
+    }
+  }
+}

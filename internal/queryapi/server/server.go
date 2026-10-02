@@ -873,9 +873,7 @@ func BuildWithLookup(lookup func(string) (string, bool)) (*Plane, error) {
 	// individually-unmounted route (its own CLICKHOUSE_URI/envelope vars
 	// unset) -- indistinguishable from "does not exist" to an outside
 	// caller either way.
-	mux.HandleFunc("/api/v1/", func(w http.ResponseWriter, r *http.Request) {
-		writeRESTError(w, r, "api_v1", "", http.StatusNotFound, "Not Found")
-	})
+	mux.HandleFunc("/api/v1/", apiV1CatchAllNotFound)
 
 	handler := markResponseModelRoutes(mux)
 	// CHAOS-7096: internalMux already carries /query/proof-write (mounted
@@ -925,4 +923,11 @@ func recordOperationErrorCount(ctx context.Context, next graphql.OperationHandle
 		}
 		return response
 	}
+}
+
+// apiV1CatchAllNotFound answers every /api/v1/ path no registered route took:
+// 404, and the span says why (a route that does not exist).
+func apiV1CatchAllNotFound(w http.ResponseWriter, r *http.Request) {
+	httpapi.RecordNotFoundCause(r.Context(), httpapi.NotFoundNoRoute)
+	writeRESTError(w, r, "api_v1", "", http.StatusNotFound, "Not Found")
 }

@@ -1,0 +1,272 @@
+{
+  "header": {
+    "test": "TestReadinessProbeMatchesTheFrozenPythonProbe",
+    "python_build": "a4847c5e93607451a0c987b314d37e02fc43ce85",
+    "producer_digest": "6e1dc97e68624398015f60caee160cceee6ae601bd434d01b8b7d5975267e137",
+    "recipe": "git worktree add --detach $DIR a4847c5e93607451a0c987b314d37e02fc43ce85 (with its .venv: uv sync --frozen --no-install-project); then from the repository root: go run ./internal/testsupport/venueoracle/goldenrecord -pkg ./internal/apiservice/admin/ -test '^TestReadinessProbeMatchesTheFrozenPythonProbe$' -python-root $DIR",
+    "recorded_by": "goldenrecord",
+    "blanked": {}
+  },
+  "requests": [
+    {
+      "name": "ready",
+      "method": "PYTHON",
+      "path": "program sha256 905e28cee1f2795abf68734185de52ce42b61da85202d64dc497f7cbf662f770 env sha256 e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "body_sha256": "bf61274d53e84f3aa2654950874e9c61db2f655480e18058103dad72e468ed2a",
+      "request_headers_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "status": 0,
+      "headers": {},
+      "body": "{\"outcome\": \"ready\", \"safe_error_code\": null}\n"
+    },
+    {
+      "name": "unauthorized -\u003e provider_not_configured",
+      "method": "PYTHON",
+      "path": "program sha256 905e28cee1f2795abf68734185de52ce42b61da85202d64dc497f7cbf662f770 env sha256 e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "body_sha256": "72cb4f7c5802519a89e5705f41b3d9f9c8694a0e324dfafced147533d736ed09",
+      "request_headers_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "status": 0,
+      "headers": {},
+      "body": "{\"outcome\": \"failed\", \"safe_error_code\": \"provider_not_configured\"}\n"
+    },
+    {
+      "name": "rate limited -\u003e rate_limited",
+      "method": "PYTHON",
+      "path": "program sha256 905e28cee1f2795abf68734185de52ce42b61da85202d64dc497f7cbf662f770 env sha256 e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "body_sha256": "f47dd34bf108eb728142cccd526d650bc46f9abbd194a382846edf4d9f415de3",
+      "request_headers_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "status": 0,
+      "headers": {},
+      "body": "{\"outcome\": \"failed\", \"safe_error_code\": \"rate_limited\"}\n"
+    },
+    {
+      "name": "bad request -\u003e invalid_request",
+      "method": "PYTHON",
+      "path": "program sha256 905e28cee1f2795abf68734185de52ce42b61da85202d64dc497f7cbf662f770 env sha256 e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "body_sha256": "61c5dd8e30efbd7ea4e2a2e0b515ed6999d1420d85cdd5173a00ac239d971033",
+      "request_headers_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "status": 0,
+      "headers": {},
+      "body": "{\"outcome\": \"failed\", \"safe_error_code\": \"invalid_request\"}\n"
+    },
+    {
+      "name": "model not found -\u003e model_not_supported",
+      "method": "PYTHON",
+      "path": "program sha256 905e28cee1f2795abf68734185de52ce42b61da85202d64dc497f7cbf662f770 env sha256 e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "body_sha256": "66026778fd68e198e398027596e574b6668b04d67a2ff84350fb12857adc20f1",
+      "request_headers_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "status": 0,
+      "headers": {},
+      "body": "{\"outcome\": \"failed\", \"safe_error_code\": \"model_not_supported\"}\n"
+    },
+    {
+      "name": "server error -\u003e provider_unavailable",
+      "method": "PYTHON",
+      "path": "program sha256 905e28cee1f2795abf68734185de52ce42b61da85202d64dc497f7cbf662f770 env sha256 e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "body_sha256": "dcfb3b2807603370113d94ef0677c481f81146ecbdbdcb7defa2017ee3d5d66b",
+      "request_headers_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "status": 0,
+      "headers": {},
+      "body": "{\"outcome\": \"failed\", \"safe_error_code\": \"provider_unavailable\"}\n"
+    },
+    {
+      "name": "two tool calls -\u003e provider_contract_violation",
+      "method": "PYTHON",
+      "path": "program sha256 905e28cee1f2795abf68734185de52ce42b61da85202d64dc497f7cbf662f770 env sha256 e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "body_sha256": "afb314f4ef408eab1b281952f8102a3c760f6a46b9905256b3110391239370f8",
+      "request_headers_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "status": 0,
+      "headers": {},
+      "body": "{\"outcome\": \"failed\", \"safe_error_code\": \"provider_contract_violation\"}\n"
+    },
+    {
+      "name": "finish_reason length -\u003e output_exhausted",
+      "method": "PYTHON",
+      "path": "program sha256 905e28cee1f2795abf68734185de52ce42b61da85202d64dc497f7cbf662f770 env sha256 e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "body_sha256": "05b38bceab01e0f7e880d775f83d9d16cd3d0adbf6f303a1d1fda55678cc5ffe",
+      "request_headers_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "status": 0,
+      "headers": {},
+      "body": "{\"outcome\": \"failed\", \"safe_error_code\": \"output_exhausted\"}\n"
+    },
+    {
+      "name": "malformed final answer -\u003e invalid_response",
+      "method": "PYTHON",
+      "path": "program sha256 905e28cee1f2795abf68734185de52ce42b61da85202d64dc497f7cbf662f770 env sha256 e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "body_sha256": "96b388b98c762c7b972f236505a4379c739054d9ca8906cee5ec3305b9f4066f",
+      "request_headers_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "status": 0,
+      "headers": {},
+      "body": "{\"outcome\": \"failed\", \"safe_error_code\": \"invalid_response\"}\n"
+    },
+    {
+      "name": "extra envelope field -\u003e invalid_response",
+      "method": "PYTHON",
+      "path": "program sha256 905e28cee1f2795abf68734185de52ce42b61da85202d64dc497f7cbf662f770 env sha256 e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "body_sha256": "dcb5b5456c7c2257fe02da66256840910fe277423872a80a4a0347c2bd5b3631",
+      "request_headers_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "status": 0,
+      "headers": {},
+      "body": "{\"outcome\": \"failed\", \"safe_error_code\": \"invalid_response\"}\n"
+    },
+    {
+      "name": "quota exhaustion (429) -\u003e provider_not_configured, not rate_limited",
+      "method": "PYTHON",
+      "path": "program sha256 905e28cee1f2795abf68734185de52ce42b61da85202d64dc497f7cbf662f770 env sha256 e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "body_sha256": "1978af847bf9fca19fe021da5474b81d94548d1805ac6dc611d45093e54e9b53",
+      "request_headers_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "status": 0,
+      "headers": {},
+      "body": "{\"outcome\": \"failed\", \"safe_error_code\": \"provider_not_configured\"}\n"
+    },
+    {
+      "name": "one transient 500 then success -\u003e ready",
+      "method": "PYTHON",
+      "path": "program sha256 905e28cee1f2795abf68734185de52ce42b61da85202d64dc497f7cbf662f770 env sha256 e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "body_sha256": "6d2184de960ab87925e44ba5f94597bdaf2b79fcbf2fb71fcdd5e708e6697257",
+      "request_headers_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "status": 0,
+      "headers": {},
+      "body": "{\"outcome\": \"ready\", \"safe_error_code\": null}\n"
+    },
+    {
+      "name": "redirect is not followed -\u003e provider_unavailable",
+      "method": "PYTHON",
+      "path": "program sha256 905e28cee1f2795abf68734185de52ce42b61da85202d64dc497f7cbf662f770 env sha256 e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "body_sha256": "708bbdd434a06323cb1578a5c0b3e65f287dc2321ae1f21c023e4d9d292cfd9a",
+      "request_headers_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "status": 0,
+      "headers": {},
+      "body": "{\"outcome\": \"failed\", \"safe_error_code\": \"provider_unavailable\"}\n"
+    },
+    {
+      "name": "401 alone",
+      "method": "PYTHON",
+      "path": "program sha256 905e28cee1f2795abf68734185de52ce42b61da85202d64dc497f7cbf662f770 env sha256 e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "body_sha256": "5af14cf3a8b7bab9629a28a05529056cdddd89aa31ccd72810da822609c94ee8",
+      "request_headers_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "status": 0,
+      "headers": {},
+      "body": "{\"outcome\": \"failed\", \"safe_error_code\": \"provider_not_configured\"}\n"
+    },
+    {
+      "name": "429 alone",
+      "method": "PYTHON",
+      "path": "program sha256 905e28cee1f2795abf68734185de52ce42b61da85202d64dc497f7cbf662f770 env sha256 e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "body_sha256": "82cba76418a02deb2aa8594ef72d617c3bf01269b19de49e568ddc1f72eb5a11",
+      "request_headers_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "status": 0,
+      "headers": {},
+      "body": "{\"outcome\": \"failed\", \"safe_error_code\": \"rate_limited\"}\n"
+    },
+    {
+      "name": "400 alone",
+      "method": "PYTHON",
+      "path": "program sha256 905e28cee1f2795abf68734185de52ce42b61da85202d64dc497f7cbf662f770 env sha256 e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "body_sha256": "24e08eaa0db9db9742ecd934e9236a87cdcbc77bd26602ba82c6e845aa4e3b5e",
+      "request_headers_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "status": 0,
+      "headers": {},
+      "body": "{\"outcome\": \"failed\", \"safe_error_code\": \"invalid_request\"}\n"
+    },
+    {
+      "name": "model_not_found code alone",
+      "method": "PYTHON",
+      "path": "program sha256 905e28cee1f2795abf68734185de52ce42b61da85202d64dc497f7cbf662f770 env sha256 e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "body_sha256": "c262b784bff5777f9cccedd82db565bd39e4a31f13d30a5b4c6f54d09f5b6dd8",
+      "request_headers_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "status": 0,
+      "headers": {},
+      "body": "{\"outcome\": \"failed\", \"safe_error_code\": \"model_not_supported\"}\n"
+    },
+    {
+      "name": "model not found text alone",
+      "method": "PYTHON",
+      "path": "program sha256 905e28cee1f2795abf68734185de52ce42b61da85202d64dc497f7cbf662f770 env sha256 e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "body_sha256": "3ad0f685ac4b2f40729d3ed84a0957e931f4d9b54df737d48edf17be0d57c77a",
+      "request_headers_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "status": 0,
+      "headers": {},
+      "body": "{\"outcome\": \"failed\", \"safe_error_code\": \"model_not_supported\"}\n"
+    },
+    {
+      "name": "model does not exist text alone",
+      "method": "PYTHON",
+      "path": "program sha256 905e28cee1f2795abf68734185de52ce42b61da85202d64dc497f7cbf662f770 env sha256 e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "body_sha256": "cfb02e817ac264188923668762a6d1fcb1363dd734c3871ff55487c0e9ed0534",
+      "request_headers_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "status": 0,
+      "headers": {},
+      "body": "{\"outcome\": \"failed\", \"safe_error_code\": \"model_not_supported\"}\n"
+    },
+    {
+      "name": "insufficient_quota alone",
+      "method": "PYTHON",
+      "path": "program sha256 905e28cee1f2795abf68734185de52ce42b61da85202d64dc497f7cbf662f770 env sha256 e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "body_sha256": "a2d7620a211619885ed3282d528ed90f1730c425f9e63ea56e75199a0d28f3d0",
+      "request_headers_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "status": 0,
+      "headers": {},
+      "body": "{\"outcome\": \"failed\", \"safe_error_code\": \"provider_not_configured\"}\n"
+    },
+    {
+      "name": "current quota alone",
+      "method": "PYTHON",
+      "path": "program sha256 905e28cee1f2795abf68734185de52ce42b61da85202d64dc497f7cbf662f770 env sha256 e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "body_sha256": "627b588491f0f289d792ce2132f9764bd76e4a560475cedc63fa29899238414d",
+      "request_headers_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "status": 0,
+      "headers": {},
+      "body": "{\"outcome\": \"failed\", \"safe_error_code\": \"provider_not_configured\"}\n"
+    },
+    {
+      "name": "401 whose body holds model_not_found",
+      "method": "PYTHON",
+      "path": "program sha256 905e28cee1f2795abf68734185de52ce42b61da85202d64dc497f7cbf662f770 env sha256 e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "body_sha256": "06a1e2194be69850c38213f9ada0826088aa561abcb36ba6e7b381279040ff58",
+      "request_headers_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "status": 0,
+      "headers": {},
+      "body": "{\"outcome\": \"failed\", \"safe_error_code\": \"model_not_supported\"}\n"
+    },
+    {
+      "name": "finish_reason length on round 1 only",
+      "method": "PYTHON",
+      "path": "program sha256 905e28cee1f2795abf68734185de52ce42b61da85202d64dc497f7cbf662f770 env sha256 e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "body_sha256": "069768610be3bf78bfc9b0b00e9ace4b16272acb61526158a48f1a31f83ca07f",
+      "request_headers_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "status": 0,
+      "headers": {},
+      "body": "{\"outcome\": \"failed\", \"safe_error_code\": \"output_exhausted\"}\n"
+    },
+    {
+      "name": "finish_reason length on round 2 only",
+      "method": "PYTHON",
+      "path": "program sha256 905e28cee1f2795abf68734185de52ce42b61da85202d64dc497f7cbf662f770 env sha256 e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "body_sha256": "ae7214f6506d6c634d1c703638e11217f2ce953eb94278c5a94599e9ac98c846",
+      "request_headers_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "status": 0,
+      "headers": {},
+      "body": "{\"outcome\": \"failed\", \"safe_error_code\": \"output_exhausted\"}\n"
+    },
+    {
+      "name": "round 1 with no tool call",
+      "method": "PYTHON",
+      "path": "program sha256 905e28cee1f2795abf68734185de52ce42b61da85202d64dc497f7cbf662f770 env sha256 e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "body_sha256": "d1eaaac96277351812b8053495a7ae387ca79c0e5679486e4f81d874bcd39224",
+      "request_headers_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "status": 0,
+      "headers": {},
+      "body": "{\"outcome\": \"failed\", \"safe_error_code\": \"invalid_response\"}\n"
+    },
+    {
+      "name": "round 2 kind is not final_answer",
+      "method": "PYTHON",
+      "path": "program sha256 905e28cee1f2795abf68734185de52ce42b61da85202d64dc497f7cbf662f770 env sha256 e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "body_sha256": "35477e0f982e4870637bb045a98af58078ef424e57e04d2c6f40e7847cfe219e",
+      "request_headers_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "status": 0,
+      "headers": {},
+      "body": "{\"outcome\": \"failed\", \"safe_error_code\": \"invalid_response\"}\n"
+    }
+  ]
+}

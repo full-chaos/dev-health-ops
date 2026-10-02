@@ -1,0 +1,50 @@
+# CHAOS-7838: tracked copy of the bigboy worker plane (it was an untracked host file, which is how the heavy group, queues investment/metrics/reports/workgraph, went missing from the cut on 2026-09-20/21). The derived test internal/bigboycompose/worker_plane_test.go ties every queue of ops/compose.yml to a service here and to the cut's up list.
+# bigboy worker plane from the cut's CI OPERATOR digest (Trap #420: a cut pass must recreate every plane from CI digests; the workers had been a 09-20 local build).
+# Image = ${BIGBOY_OPERATOR_IMAGE} (set by bigboy-cut.sh from the cut sha). dho verbs as in the chart (deploy templates go-workers.yaml).
+services:
+  go-worker:
+    image: ${BIGBOY_OPERATOR_IMAGE:?set BIGBOY_OPERATOR_IMAGE}
+    build: !reset null
+    entrypoint: !override ["/usr/local/bin/dho"]
+    command: !override ["worker", "--queues=sync,sync_provider", "--queue-concurrency=sync=${BIGBOY_SYNC_SLOTS:-4},sync_provider=2", "--worker-group=sync", "--shutdown-timeout=960s", "--http-addr=:8080", "--health-check-timeout=10s"]
+  # go-worker-heavy = the BASE heavy command (ops/compose.yml: queues, concurrency, group, shutdown, http-addr, and the seven DB-mode/role/pooler/schema/log
+  # flags, written with the same ${VAR:-default} expansions as the base). Stated deviations from the base heavy command: (1) --health-check-timeout=10s
+  # added: the other bigboy workers run with it (the chart go-workers.yaml form); (2) NOTHING dropped. Measured on the RUNNING bigboy go-worker and
+  # go-worker-ops (`docker compose ps --no-trunc`, 2026-10-02): they run WITHOUT the seven DB-mode/role/pooler/schema/log flags; the env names for all seven are
+  # present in their env and compose/compose.go.workers.yml:133-141 sets the same values (session/session/true, schema, roles), so the flags are redundant
+  # there. WHY the other overrides omit them: reason unknown. The heavy block does not copy that omission.
+  go-worker-heavy:
+    image: ${BIGBOY_OPERATOR_IMAGE:?set BIGBOY_OPERATOR_IMAGE}
+    build: !reset null
+    entrypoint: !override ["/usr/local/bin/dho"]
+    command: !override ["worker", "--queues=investment,metrics,reports,workgraph", "--queue-concurrency=investment=1,metrics=2,reports=2,workgraph=1", "--worker-group=heavy", "--shutdown-timeout=7260s", "--http-addr=:8080", "--river-schema=${RIVER_DATABASE_SCHEMA:-river}", "--domain-database-role=${RIVER_DOMAIN_DATABASE_ROLE:-devhealth_domain}", "--queue-database-role=${RIVER_QUEUE_DATABASE_ROLE:-devhealth_queue}", "--queue-database-mode=${WORKER_DATABASE_MODE:-session}", "--coordinator-database-mode=${COORDINATOR_DATABASE_MODE:-session}", "--domain-transaction-pooler=${PGBOUNCER_TRANSACTION_MODE:-true}", "--log-level=${LOG_LEVEL:-info}", "--health-check-timeout=10s"]
+  go-worker-ops:
+    image: ${BIGBOY_OPERATOR_IMAGE:?set BIGBOY_OPERATOR_IMAGE}
+    build: !reset null
+    entrypoint: !override ["/usr/local/bin/dho"]
+    command: !override ["worker", "--queues=coverage,heartbeat,retention,webhooks", "--queue-concurrency=coverage=1,heartbeat=1,retention=1,webhooks=4", "--worker-group=ops", "--shutdown-timeout=960s", "--http-addr=:8080", "--health-check-timeout=10s"]
+  go-scheduler:
+    image: ${BIGBOY_OPERATOR_IMAGE:?set BIGBOY_OPERATOR_IMAGE}
+    build: !reset null
+    entrypoint: !override ["/usr/local/bin/dho"]
+    command: !override ["scheduler", "--shutdown-timeout=60s", "--http-addr=:8080"]
+  go-reconciler:
+    image: ${BIGBOY_OPERATOR_IMAGE:?set BIGBOY_OPERATOR_IMAGE}
+    build: !reset null
+    entrypoint: !override ["/usr/local/bin/dho"]
+    command: !override ["reconciler", "--shutdown-timeout=60s", "--http-addr=:8080"]
+  go-stream-ingest:
+    image: ${BIGBOY_OPERATOR_IMAGE:?set BIGBOY_OPERATOR_IMAGE}
+    build: !reset null
+    entrypoint: !override ["/usr/local/bin/dho"]
+    command: !override ["stream-runner", "--profile=ingest", "--shutdown-timeout=60s", "--http-addr=:8080"]
+  go-stream-external:
+    image: ${BIGBOY_OPERATOR_IMAGE:?set BIGBOY_OPERATOR_IMAGE}
+    build: !reset null
+    entrypoint: !override ["/usr/local/bin/dho"]
+    command: !override ["stream-runner", "--profile=external", "--shutdown-timeout=60s", "--http-addr=:8080"]
+  go-stream-pagerduty:
+    image: ${BIGBOY_OPERATOR_IMAGE:?set BIGBOY_OPERATOR_IMAGE}
+    build: !reset null
+    entrypoint: !override ["/usr/local/bin/dho"]
+    command: !override ["stream-runner", "--profile=pagerduty", "--shutdown-timeout=60s", "--http-addr=:8080"]

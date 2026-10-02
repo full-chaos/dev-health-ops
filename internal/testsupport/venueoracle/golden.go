@@ -259,6 +259,9 @@ func (g *Golden) bindPythonEnv(options Options) error {
 	}
 	var key string
 	var err error
+	if err := pythonPathRelErr(options.PythonPathRel); err != nil {
+		return fmt.Errorf("golden %s: %w", g.spec.Path, err)
+	}
 	if g.recording {
 		if err := keyedCheckoutPathErr(append(fromTest(testSet...), planeEntries(options, nil)...), checkoutRoots(options)); err != nil {
 			return fmt.Errorf("golden %s: %w", g.spec.Path, err)

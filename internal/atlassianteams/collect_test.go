@@ -327,6 +327,23 @@ func TestATeamReadWithoutTheQueryContextIsRefusedByTheGateway(t *testing.T) {
 	}
 }
 
+// An empty query context sends no header at all (not an empty one): a read made under WithQueryContext(ctx, "")
+// is the read made before the context existed.
+func TestAnEmptyQueryContextSendsNoHeader(t *testing.T) {
+	g := newGateway(t, standard)
+	if _, err := g.client().IterTeamUsers(graph.WithQueryContext(context.Background(), ""), teamA, 2); err != nil {
+		t.Fatal(err)
+	}
+	if len(g.requests) == 0 {
+		t.Fatal("no request was made")
+	}
+	for _, req := range g.requests {
+		if values, present := req.Header["X-Query-Context"]; present {
+			t.Errorf("a read under an empty query context sent X-Query-Context %q", values)
+		}
+	}
+}
+
 func TestSiteQueryContext(t *testing.T) {
 	for _, tc := range []struct{ in, want string }{
 		{"", ""}, {"  ", ""},

@@ -151,3 +151,27 @@ func TestADuplicateInTheFirstExportIsNotForgottenByACleanSecondExport(t *testing
 		t.Fatalf("the clean second export hid the first export's duplicate")
 	}
 }
+
+func gaugeMetric(name string, points ...*metricpb.NumberDataPoint) *metricpb.Metric {
+	return &metricpb.Metric{Name: name, Data: &metricpb.Metric_Gauge{Gauge: &metricpb.Gauge{DataPoints: points}}}
+}
+
+const oneGaugeScrape = "# TYPE pool_in_use gauge\npool_in_use{pool=\"queue\"} 3\n"
+
+func TestCompareFailsOnADuplicateGaugePointInOneExport(t *testing.T) {
+	var r recorder
+	compare(&r, "self", parseExposition(t, oneGaugeScrape), []*metricpb.ResourceMetrics{
+		exportOf(gaugeMetric("pool_in_use", counterPoint(3, "pool", "queue"), counterPoint(3, "pool", "queue"))),
+	})
+	if len(r.errors) == 0 || !strings.Contains(strings.Join(r.errors, "\n"), "delivered 2 times") {
+		t.Fatalf("a duplicate gauge point passed the oracle: %v", r.errors)
+	}
+	var clean recorder
+	compare(&clean, "self", parseExposition(t, oneGaugeScrape), []*metricpb.ResourceMetrics{
+		exportOf(gaugeMetric("pool_in_use", counterPoint(3, "pool", "queue"))),
+		exportOf(gaugeMetric("pool_in_use", counterPoint(3, "pool", "queue"))),
+	})
+	if len(clean.errors) != 0 {
+		t.Fatalf("a faithful two-export gauge was rejected: %v", clean.errors)
+	}
+}

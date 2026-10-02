@@ -202,7 +202,17 @@ var divergenceReadPattern = regexp.MustCompile(`^case ("(?:[^"\\]|\\.)*"), field
 // (an empty row, an exclusion error) is a failure, never a find.
 func requireDivergencesAre(t *testing.T, divergences []string, expected ...divergenceRead) {
 	t.Helper()
-	for _, problem := range divergenceReadProblems(divergences, expected) {
+	reportDivergenceReadProblems(t, divergenceReadProblems(divergences, expected))
+}
+
+// reportDivergenceReadProblems is how a known-defect gate reports what
+// divergenceReadProblems found: each problem fails the gate's test. It is a
+// variable so the test that pins "a gate calls the helper" can observe the
+// problems of a probe without failing, which would put a failed test into the
+// package's -json events (the python-free classifier reads those).
+var reportDivergenceReadProblems = func(t *testing.T, problems []string) {
+	t.Helper()
+	for _, problem := range problems {
 		t.Error(problem)
 	}
 }
@@ -495,32 +505,40 @@ func TestAKnownDefectGateNamesItsOwnReadsAndNoOthers(t *testing.T) {
 }
 
 // A known-defect gate CALLS the attribution helper: requireOracleRediscovers,
-// run for a defect with the right reads, passes, and with another read named
-// (or none) it fails. testing.RunTests runs it as its own test so the failure
-// is observed here and does not fail this one.
+// run for a defect with the right reads, reports no problem, and with another
+// read named (or none) it reports one. The probe runs as its own test
+// (testing.RunTests) under the names of the gate it stands for (the pair's frozen
+// answer is found by them) and PASSES: the problems are recorded, never reported
+// as failures, so no failed test appears in the package's -json events.
 func TestRequireOracleRediscoversAssertsTheDefectsOwnReads(t *testing.T) {
 	cases := oraclePullRequestCases()
 	buggyState := func(t *testing.T, input map[string]any) pullRequestRow {
 		return mustNormalizeOraclePullRequest(t, input, buggyNormalizePRStateStripsOnlySpaces, gitHubPullUserLogin)
 	}
-	passes := func(expected ...divergenceRead) bool {
+	probe := func(expected ...divergenceRead) []string {
+		var recorded []string
+		saved := reportDivergenceReadProblems
+		reportDivergenceReadProblems = func(_ *testing.T, problems []string) { recorded = append(recorded, problems...) }
+		defer func() { reportDivergenceReadProblems = saved }()
 		match := func(string, string) (bool, error) { return true, nil }
-		// The pair's frozen answer is found by the test's and the subtest's names,
-		// so the probe runs under the names of the gate it stands for.
-		return testing.RunTests(match, []testing.InternalTest{{Name: "TestGenericOracleRediscoversRowConstructionDefects", F: func(t *testing.T) {
+		ok := testing.RunTests(match, []testing.InternalTest{{Name: "TestGenericOracleRediscoversRowConstructionDefects", F: func(t *testing.T) {
 			requireOracleRediscovers(t, "rediscovers pre-M7 state-normalization whitespace bug", "github/prs/row", cases, buggyState, oraclePullRequestGoOnlyFields, expected...)
 		}}})
+		if !ok {
+			t.Fatal("the probe failed as a test: it must report through reportDivergenceReadProblems only")
+		}
+		return recorded
 	}
-	if !passes(divergenceRead{"closed_with_trailing_cr", "state"}) {
-		t.Fatal("the gate failed for the defect's own read")
+	if problems := probe(divergenceRead{"closed_with_trailing_cr", "state"}); len(problems) != 0 {
+		t.Fatalf("the gate reported problems for the defect's own read: %v", problems)
 	}
-	if passes(divergenceRead{"closed_with_trailing_cr", "closed_at"}) {
-		t.Error("the gate passed with another field named: it does not assert the defect's own read")
-	}
-	if passes(divergenceRead{"numeric_login_open_pr", "state"}) {
-		t.Error("the gate passed with another case named: it does not assert the defect's own read")
-	}
-	if passes() {
-		t.Error("the gate passed with no read named")
+	for name, expected := range map[string][]divergenceRead{
+		"another field named": {{"closed_with_trailing_cr", "closed_at"}},
+		"another case named":  {{"numeric_login_open_pr", "state"}},
+		"no read named":       nil,
+	} {
+		if problems := probe(expected...); len(problems) == 0 {
+			t.Errorf("%s: the gate reported nothing: it does not assert the defect's own read", name)
+		}
 	}
 }

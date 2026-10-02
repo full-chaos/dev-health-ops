@@ -3,6 +3,7 @@ package syncdispatchruntime
 import (
 	"context"
 	"errors"
+	"fmt"
 	"log/slog"
 
 	"github.com/full-chaos/dev-health-ops/internal/jobruntime"
@@ -105,12 +106,26 @@ func spanForCoordinatorJob(ctx context.Context, kind, syncRunID, traceParent str
 
 func finishCoordinatorSpan(span oteltrace.Span, err error) {
 	if err != nil {
-		span.RecordError(err)
-		span.SetStatus(codes.Error, err.Error())
+		// No error text goes on the span (CHAOS-7896): see jobruntime.finishJobSpan. The span carries a fixed status
+		// description and the Go type name of the error.
+		span.AddEvent("exception", oteltrace.WithAttributes(attribute.String("exception.type", errorTypeName(err))))
+		span.SetStatus(codes.Error, "coordinator job failed")
 	} else {
 		span.SetStatus(codes.Ok, "")
 	}
 	span.End()
+}
+
+// errorTypeName is the Go type of the innermost error of the chain: a name from the program text, never a message.
+func errorTypeName(err error) string {
+	for {
+		next := errors.Unwrap(err)
+		if next == nil {
+			break
+		}
+		err = next
+	}
+	return fmt.Sprintf("%T", err)
 }
 
 // RegisterWorkers adds all four guarded at-least-once coordinator consumers.

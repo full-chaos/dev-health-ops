@@ -525,14 +525,23 @@ def test_the_workflow_is_path_scoped_and_keeps_python_out_of_the_shard() -> None
     )
     assert run_step["env"]["GO_PYTHON_FREE"] == "1"
     assert workflow["jobs"]["ratchet"]["if"] == "always()"
-    assert set(workflow["jobs"]["ratchet"]["needs"]) == {"plan", "shard", "unit", "scope"}
+    assert set(workflow["jobs"]["ratchet"]["needs"]) == {
+        "plan",
+        "shard",
+        "unit",
+        "scope",
+    }
     # The full legs run only in the full mode, the scope leg only in the scope mode.
     for job, mode in (("shard", "full"), ("unit", "full"), ("scope", "scope")):
-        assert workflow["jobs"][job]["if"] == f"needs.plan.outputs.mode == '{mode}'", job
+        assert workflow["jobs"][job]["if"] == f"needs.plan.outputs.mode == '{mode}'", (
+            job
+        )
     scope_steps = workflow["jobs"]["scope"]["steps"]
     assert not any("setup-python" in str(step.get("uses", "")) for step in scope_steps)
     scope_run = next(
-        step for step in scope_steps if str(step.get("name", "")).startswith("Run every listed")
+        step
+        for step in scope_steps
+        if str(step.get("name", "")).startswith("Run every listed")
     )
     assert scope_run["env"]["GO_PYTHON_FREE"] == "1"
     assert scope_run["run"].strip() == "bash ci/check_go.sh python-free-listed"

@@ -144,3 +144,25 @@ func TestAnOriginThatCannotBeComputedIsRefused(t *testing.T) {
 		})
 	}
 }
+
+// The origin is checked on every page, not only the first: page 1 links to the same origin, page 2 to another one
+// -> refused after two requests, nothing reaches the other host.
+func TestACrossOriginLinkOnALaterPageIsRefused(t *testing.T) {
+	two := page(repoItem(1, "api"))
+	transport := &scriptedTransport{responses: []scripted{
+		ok(two, next("https://ghe.test/api/v3/orgs/acme/repos?page=2")),
+		ok(two, next("https://other.test/orgs/acme/repos?page=3")),
+		ok(two),
+	}}
+	client := Client{Token: "tok", BaseURL: "https://ghe.test/api/v3", HTTP: &http.Client{Transport: transport}}
+	_, err := client.ListRepositories(context.Background(), ListOptions{Org: "acme"})
+	var typed *Error
+	if !errors.As(err, &typed) || typed.Class != CrossOriginLinkClass || len(transport.seen) != 2 {
+		t.Fatalf("want %s after two requests, got %v after %d (%v)", CrossOriginLinkClass, err, len(transport.seen), transport.seen)
+	}
+	for _, seen := range transport.seen {
+		if strings.Contains(seen[0], "other.test") {
+			t.Fatalf("a request went to the other host: %v", transport.seen)
+		}
+	}
+}

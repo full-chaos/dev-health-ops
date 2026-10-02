@@ -692,7 +692,7 @@ even reach the provider
 
 **Herd-on-expiry is naturally paced.** `RETRYING` units never consume
 concurrency capacity, and due-`RETRYING` claims are still bounded by
-`SYNC_UNIT_CONCURRENCY_PER_BUCKET` per dispatch pass exactly like any other
+the bucket's concurrency cap (the cost-class budget limit, clamped by `SYNC_UNIT_CONCURRENCY_PER_BUCKET`) per dispatch pass exactly like any other
 candidate — an expired cooldown does not cause every sibling to dispatch at
 once beyond what DispatchGuard's concurrency cap already allows
 (`test_cooldown_expiry_drains_bounded_by_concurrency_cap`).

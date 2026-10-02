@@ -720,17 +720,22 @@ func Carry(ctx context.Context, pool *pgxpool.Pool, request CarryRequest) ([]Car
 			ErrCarryBuildNotRunning, request.RunningBuild, strings.Join(staleBuilds, "; "))
 	}
 
-	// Reachability is what this check is about, so a shadow row (served
-	// to nobody) never satisfies it: a run that copied only shadow rows
-	// has preserved nothing a client reads.
-	servedKept := 0
-	for _, outcome := range outcomes {
-		if (outcome.Action == CarryActionCarry || outcome.Action == CarryActionUnchanged) &&
-			(outcome.Mode == TargetModeCanary || outcome.Mode == TargetModePrimary) {
-			servedKept++
+	summary := SummarizeCarry(outcomes)
+	// A digest whose live rows are ALL shadow can never be refused here (r1 on
+	// this change): a shadow row serves no client, so there is nothing a roll
+	// could un-route, and refusing after the plan has printed its CARRY lines and
+	// the event has been emitted left a registration absent behind a report that
+	// said it was written. The refusal stays for the case it exists for -- some
+	// live row is not shadow (a served, python or disabled row) and every row was
+	// skipped -- so an operator who believes something is served still hears
+	// that nothing is.
+	nonShadowLive := false
+	for _, row := range liveRows {
+		if (len(wanted) == 0 || wanted[row.Operation]) && row.Mode != TargetModeShadow {
+			nonShadowLive = true
 		}
 	}
-	if servedKept == 0 {
+	if summary.Carried == 0 && summary.Unchanged == 0 && nonShadowLive {
 		return outcomes, fmt.Errorf("%w: %d row(s) exist at %s and every one was skipped -- each outcome names why",
 			ErrCarryNothingReachable, len(liveRows), request.LiveSchemaDigest)
 	}

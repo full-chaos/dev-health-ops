@@ -1053,21 +1053,63 @@ func TestCarryStaleShadowRowsSkipWhereServedRowsRefuse(t *testing.T) {
 	}
 }
 
-// CHAOS-8144: copying only shadow rows preserves nothing a client reads,
-// so "nothing reachable" still refuses (the shadow rows must not satisfy it).
-func TestCarryOnlyShadowRowsStillRefusesAsNothingReachable(t *testing.T) {
+// CHAOS-8144 (r1 P1): a digest whose live rows are ALL shadow is never
+// refused. A valid shadow-only run writes its registrations (the refusal used
+// to fire after the plan had printed CARRY lines, leaving the target row
+// absent behind a report that said it was written); a stale shadow-only run
+// writes nothing, names every skip, and still succeeds. The refusal survives
+// where a non-shadow live row exists and every row was skipped.
+func TestCarryShadowOnlyDigestIsNeverRefused(t *testing.T) {
 	ctx := t.Context()
-	pool := startAuditedRegistryPostgres(t)
-	seedCarryRow(t, ctx, pool, carryIntegrationLiveDigest, CarryRow{
-		Operation: "featureFlags", DocumentDigest: testDocumentDigest, Mode: "shadow",
-		Build: verbsRunningBuild, Owner: "go", RolloutPercentage: 0, ReviewEvidence: "shadow only",
+	t.Run("valid shadow row is written", func(t *testing.T) {
+		pool := startAuditedRegistryPostgres(t)
+		seedCarryRow(t, ctx, pool, carryIntegrationLiveDigest, CarryRow{
+			Operation: "featureFlags", DocumentDigest: testDocumentDigest, Mode: "shadow",
+			Build: verbsRunningBuild, Owner: "go", RolloutPercentage: 0, ReviewEvidence: "shadow only",
+		})
+		outcomes, err := Carry(ctx, pool, carryIntegrationRequest())
+		if err != nil {
+			t.Fatalf("Carry: %v (a valid shadow-only digest must not be refused)", err)
+		}
+		if summary := SummarizeCarry(outcomes); summary.Carried != 1 {
+			t.Fatalf("summary = %+v, want the shadow row carried", summary)
+		}
+		row, ok := carryRowByOperation(rowsAtDigest(t, ctx, pool, carryIntegrationTargetDigest), "featureFlags")
+		if !ok || row.Mode != "shadow" || row.RolloutPercentage != 0 {
+			t.Fatalf("target row = %+v (present=%t), want the shadow registration written verbatim", row, ok)
+		}
 	})
-	if _, err := Carry(ctx, pool, carryIntegrationRequest()); !errors.Is(err, ErrCarryNothingReachable) {
-		t.Fatalf("err = %v, want the nothing-reachable refusal", err)
-	}
-	if rows := rowsAtDigest(t, ctx, pool, carryIntegrationTargetDigest); len(rows) != 0 {
-		t.Fatalf("wrote %d row(s) on a refusal", len(rows))
-	}
+	t.Run("stale shadow row is skipped and the run succeeds", func(t *testing.T) {
+		pool := startAuditedRegistryPostgres(t)
+		seedCarryRow(t, ctx, pool, carryIntegrationLiveDigest, CarryRow{
+			Operation: "featureFlags", DocumentDigest: testDocumentDigest, Mode: "shadow",
+			Build: "some-older-build", Owner: "go", RolloutPercentage: 0, ReviewEvidence: "stale shadow only",
+		})
+		outcomes, err := Carry(ctx, pool, carryIntegrationRequest())
+		if err != nil {
+			t.Fatalf("Carry: %v (a stale shadow row must never block a roll)", err)
+		}
+		if len(outcomes) != 1 || outcomes[0].Action != CarryActionSkip || outcomes[0].Reason == "" {
+			t.Fatalf("outcomes = %+v, want one named SKIP", outcomes)
+		}
+		if rows := rowsAtDigest(t, ctx, pool, carryIntegrationTargetDigest); len(rows) != 0 {
+			t.Fatalf("wrote %d row(s) for a skipped shadow row", len(rows))
+		}
+	})
+	t.Run("a non-shadow live row with every row skipped still refuses", func(t *testing.T) {
+		pool := startAuditedRegistryPostgres(t)
+		seedCarryRow(t, ctx, pool, carryIntegrationLiveDigest, CarryRow{
+			Operation: "featureFlags", DocumentDigest: testDocumentDigest, Mode: "shadow",
+			Build: "some-older-build", Owner: "go", RolloutPercentage: 0, ReviewEvidence: "stale shadow",
+		})
+		seedCarryRow(t, ctx, pool, carryIntegrationLiveDigest, CarryRow{
+			Operation: "hotspots", DocumentDigest: testDocumentDigest2, Mode: "python",
+			Build: verbsRunningBuild, Owner: "go", RolloutPercentage: 0, ReviewEvidence: "off",
+		})
+		if _, err := Carry(ctx, pool, carryIntegrationRequest()); !errors.Is(err, ErrCarryNothingReachable) {
+			t.Fatalf("err = %v, want the nothing-reachable refusal", err)
+		}
+	})
 }
 
 // MCP ask (a): every live row ends in exactly one named outcome, so a

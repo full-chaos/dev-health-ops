@@ -32,14 +32,13 @@ package routing
 //     of an operation the catalog does not register is listed alike by both (UNREGISTERED).
 //     The status states below assert both.
 //
-// It needs the full project Python environment (live oracle): the venue-oracles job
-// runs it on main and on dispatch.
+// The Python verbs' answers were executed once on routingPythonBuild and are frozen in
+// testdata/golden/routing.json (the recipe regenerates them by execution): no Python runs in the test.
 
 import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"os"
 	"os/exec"
 	"path/filepath"
 	"reflect"
@@ -124,25 +123,32 @@ func (p oraclePlane) state(t *testing.T) []string {
 	return out
 }
 
-func oraclePython(t *testing.T, plane oraclePlane, args ...string) (int, string, string) {
+// routingPythonBuild is the build whose Python `dev-hops go-api routing` verbs answered the scenarios: a build
+// that still carried the Python CLI.
+const routingPythonBuild = "a4847c5e93607451a0c987b314d37e02fc43ce85"
+
+// routingPythonProgram is the entry point the producer runs: the real dev-hops CLI.
+const routingPythonProgram = "import sys\nfrom dev_health_ops import cli\nraise SystemExit(cli.main(sys.argv[1:]))\n"
+
+// routingPythonSettings are the variables that shape the producer's answers, as constants: the producer's
+// environment AND part of the golden's request key (a changed value fails the frozen replay). The database
+// address is a per-run value, appended by name.
+var routingPythonSettings = map[string]string{"PYTHONHASHSEED": "0", "OTEL_ENABLED": "false", "DEV_HOPS_OPERATOR": oracleOperator, "GO_API_QUERY_API_URL": ""}
+
+func oraclePython(t *testing.T, producer *venueoracle.Producer, plane oraclePlane, args ...string) (int, string, string) {
 	t.Helper()
-	root, err := filepath.Abs(filepath.Join("..", "..", ".."))
+	uri := strings.Replace(plane.dsn, "postgres://", "postgresql://", 1)
+	command, err := producer.Command(context.Background(), routingPythonSettings, []string{"POSTGRES_URI=" + uri, "DATABASE_URI=" + uri}, append([]string{"-c", routingPythonProgram, "go-api", "routing"}, args...)...)
 	if err != nil {
 		t.Fatal(err)
 	}
-	python := pyoracle.Resolve(t, root)
-	program := "import sys\nfrom dev_health_ops import cli\nraise SystemExit(cli.main(sys.argv[1:]))\n"
-	command := exec.Command(python, append([]string{"-c", program, "go-api", "routing"}, args...)...)
-	uri := strings.Replace(plane.dsn, "postgres://", "postgresql://", 1)
-	command.Env = append(os.Environ(), "PYTHONPATH="+filepath.Join(root, "src"), "POSTGRES_URI="+uri, "DATABASE_URI="+uri,
-		"OTEL_ENABLED=false", "DEV_HOPS_OPERATOR="+oracleOperator, "GO_API_QUERY_API_URL=")
 	var stdout, stderr strings.Builder
 	command.Stdout, command.Stderr = &stdout, &stderr
 	code := 0
 	if err := command.Run(); err != nil {
 		exit, ok := err.(*exec.ExitError)
 		if !ok {
-			t.Fatalf("run python: %v", pyoracle.RunError(python, err, []byte(stderr.String())))
+			t.Fatalf("run python: %v", pyoracle.RunError(command.Path, err, []byte(stderr.String())))
 		}
 		code = exit.ExitCode()
 	}
@@ -234,15 +240,41 @@ func oracleBaseRows(schema string, catalog map[string]string, ops []string) []or
 	}
 }
 
-func TestGoAPIRoutingVenueOracleMatchesThePythonProducer(t *testing.T) {
-	if os.Getenv("DEV_HEALTH_LIVE_PYTHON_ORACLES") != "1" {
-		t.Skip("the live Python producer runs only with DEV_HEALTH_LIVE_PYTHON_ORACLES=1 and the full project Python environment")
-	}
-	root, err := filepath.Abs(filepath.Join("..", "..", ".."))
+// recordedRun is one scenario as the Python producer left it: the exit code, the rows of go_api_routing_state
+// it read back and the plan lines the operator reads. (Its stderr is not stored: it can name the database.)
+type recordedRun struct {
+	Name  string   `json:"name"`
+	Code  int      `json:"code"`
+	State []string `json:"state"`
+	Plan  []string `json:"plan"`
+}
+
+// recordedStatus is one `status --json` run of the Python producer: its exit code and its document with the
+// per-run text normalized (updated_at removed, go_plane_error reduced to whether one is set).
+type recordedStatus struct {
+	Code int    `json:"code"`
+	Out  string `json:"out"`
+}
+
+type routingRecorded struct {
+	Scenarios []recordedRun    `json:"scenarios"`
+	Status    []recordedStatus `json:"status"`
+}
+
+func TestGoAPIRoutingMatchesFrozenPython(t *testing.T) {
+	repoRoot, err := filepath.Abs(filepath.Join("..", "..", ".."))
 	if err != nil {
 		t.Fatal(err)
 	}
-	catalogPath := filepath.Join(root, goapiproof.DefaultCatalogPath)
+	golden := venueoracle.OpenGolden(t, venueoracle.GoldenSpec{
+		Path:        "testdata/golden/routing.json",
+		PythonBuild: routingPythonBuild,
+		SHA256:      "4cf78572bf7693696856d2941a903468365883e6fb72270b5178daaf0b90678c",
+		Recipe: "git worktree add --detach $DIR " + routingPythonBuild + " (with its .venv: uv sync --frozen --no-install-project); then from the repository root: " +
+			"go run ./internal/testsupport/venueoracle/goldenrecord -pkg ./internal/goapicli/routing/ -test '^TestGoAPIRoutingMatchesFrozenPython$' -python-root $DIR",
+	})
+	pyRoot := golden.PythonRoot(t, repoRoot)
+	catalogPath := filepath.Join(repoRoot, goapiproof.DefaultCatalogPath)
 	catalog, err := goapiproof.LoadOperationCatalog(catalogPath)
 	if err != nil {
 		t.Fatal(err)
@@ -259,9 +291,8 @@ func TestGoAPIRoutingVenueOracleMatchesThePythonProducer(t *testing.T) {
 	live := localSchemaDigest()
 	stale := "sha256:" + strings.Repeat("7", 64)
 
-	pyPool, pyDSN := startVerbPostgres(t)
 	goPool, goDSN := startVerbPostgres(t)
-	py, goPlane := oraclePlane{pyPool, pyDSN}, oraclePlane{goPool, goDSN}
+	goPlane := oraclePlane{goPool, goDSN}
 
 	scenarios := []oracleScenario{
 		{name: "dry run, every registered operation", args: []string{"disable", "--mode", "disabled"}},
@@ -403,28 +434,79 @@ func TestGoAPIRoutingVenueOracleMatchesThePythonProducer(t *testing.T) {
 		},
 	})
 
-	mismatches, applied := 0, 0
-	for _, sc := range scenarios {
-		rowsFor := func(plane string) []oracleRow {
-			if sc.rows != nil {
-				return sc.rows(catalog, ops)
-			}
-			return oracleBaseRows(live, catalog, ops)
+	rowsFor := func(sc oracleScenario) []oracleRow {
+		if sc.rows != nil {
+			return sc.rows(catalog, ops)
 		}
-		py.seed(t, rowsFor("python"))
-		goPlane.seed(t, rowsFor("go"))
-		if before, after := py.state(t), goPlane.state(t); !reflect.DeepEqual(before, after) {
-			t.Fatalf("%s: the two planes were not seeded alike:\n%v\n%v", sc.name, before, after)
-		}
-		pyArgs := append([]string{}, sc.args...)
-		goArgs := append([]string{}, sc.args...)
+		return oracleBaseRows(live, catalog, ops)
+	}
+	runArgs := func(sc oracleScenario) (pyArgs, goArgs []string) {
+		pyArgs = append([]string{}, sc.args...)
+		goArgs = append([]string{}, sc.args...)
 		if sc.apply {
 			pyArgs = append(pyArgs, "--apply", "--review-evidence", oracleEvidence)
 			goArgs = append(goArgs, "--apply", "--recorded-by", oracleOperator, "--review-evidence", oracleEvidence)
 		}
-		pyCode, pyOut, pyErr := oraclePython(t, py, pyArgs...)
+		return pyArgs, goArgs
+	}
+
+	// The key: the scenarios (names, command lines, the rows each one seeds) and the digests they act on.
+	type keyed struct {
+		Name  string      `json:"name"`
+		Args  []string    `json:"args"`
+		Apply bool        `json:"apply"`
+		Rows  [][5]string `json:"rows"`
+	}
+	keys := make([]keyed, len(scenarios))
+	for index, sc := range scenarios {
+		key := keyed{Name: sc.name, Args: sc.args, Apply: sc.apply}
+		for _, row := range rowsFor(sc) {
+			key.Rows = append(key.Rows, [5]string{row.schema, row.document, row.operation, row.build, fmt.Sprintf("%s/%d", row.mode, row.rollout)})
+		}
+		keys[index] = key
+	}
+	input, err := json.Marshal(map[string]any{"scenarios": keys, "live": live, "catalogOperations": ops})
+	if err != nil {
+		t.Fatal(err)
+	}
+	request := venueoracle.ProgramRequest("go-api routing scenarios", routingPythonProgram, input, routingPythonSettings)
+	answers := golden.Produce(t, pyRoot, []venueoracle.Request{request}, func(producer *venueoracle.Producer, _ []venueoracle.Request) []venueoracle.Response {
+		producer.RequireDeployed()
+		pyPool, pyDSN := startVerbPostgres(t)
+		py := oraclePlane{pyPool, pyDSN}
+		var recorded routingRecorded
+		for _, sc := range scenarios {
+			py.seed(t, rowsFor(sc))
+			pyArgs, _ := runArgs(sc)
+			code, out, _ := oraclePython(t, producer, py, pyArgs...)
+			recorded.Scenarios = append(recorded.Scenarios, recordedRun{Name: sc.name, Code: code, State: py.state(t), Plan: planLines(out)})
+		}
+		recorded.Status = routingStatusPython(t, producer, py, catalog, ops, live, stale)
+		body, err := json.Marshal(recorded)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return []venueoracle.Response{{Status: 0, Body: string(body)}}
+	})
+	golden.Consumed(t, answers...)
+	var frozen routingRecorded
+	if err := json.Unmarshal([]byte(answers[0].Body), &frozen); err != nil {
+		t.Fatal(err)
+	}
+	if len(frozen.Scenarios) != len(scenarios) || len(frozen.Status) != 5 {
+		t.Fatalf("the golden holds %d scenarios and %d status runs, the test runs %d and 5", len(frozen.Scenarios), len(frozen.Status), len(scenarios))
+	}
+
+	mismatches, applied := 0, 0
+	for index, sc := range scenarios {
+		goPlane.seed(t, rowsFor(sc))
+		_, goArgs := runArgs(sc)
 		goCode, goOut, goErr := oracleGo(t, goPlane, catalogPath, goArgs...)
-		pyRun := oracleRun{pyCode, py.state(t), planLines(pyOut), pyErr}
+		want := frozen.Scenarios[index]
+		if want.Name != sc.name {
+			t.Fatalf("scenario %d is %q, the golden has %q", index, sc.name, want.Name)
+		}
+		pyRun := oracleRun{want.Code, want.State, want.Plan, ""}
 		goRun := oracleRun{goCode, goPlane.state(t), planLines(goOut), goErr}
 		if sc.difference != nil {
 			sc.difference(t, pyRun, goRun)
@@ -449,11 +531,10 @@ func TestGoAPIRoutingVenueOracleMatchesThePythonProducer(t *testing.T) {
 		}
 		if len(differences) > 0 {
 			mismatches++
-			t.Errorf("%s: %s\n python stderr: %.300s\n go stderr: %.300s", sc.name, strings.Join(differences, "; "), pyErr, goErr)
+			t.Errorf("%s: %s\n go stderr: %.300s", sc.name, strings.Join(differences, "; "), goErr)
 		}
-		pyState := pyRun.state
-		if sc.apply && pyCode == 0 {
-			for _, line := range pyState {
+		if sc.apply && pyRun.code == 0 {
+			for _, line := range pyRun.state {
 				if strings.HasSuffix(line, "moved=true") {
 					applied++
 				}
@@ -464,18 +545,77 @@ func TestGoAPIRoutingVenueOracleMatchesThePythonProducer(t *testing.T) {
 		t.Fatalf("only %d row(s) were rewritten across the scenarios: the comparison measures too little", applied)
 	}
 	t.Logf("%d scenarios, %d mismatches, %d rewritten rows", len(scenarios), mismatches, applied)
-	oracleStatus(t, py, goPlane, catalogPath, catalog, ops, live, stale)
-	if !t.Failed() {
-		venueoracle.WriteProof(t)
-	}
+	oracleStatus(t, goPlane, catalogPath, catalog, ops, live, stale, frozen.Status)
+	golden.SkipDiff(t)
+	golden.Finish(t)
 }
 
-// oracleStatus compares `status --json` of both producers over a state that holds every
-// classification both name (a live primary row, a canary row, a shadow and a disabled row, a row at a
-// stale schema digest, an operation with no row), then asserts the named differences on a state with a drifted and an
-// unregistered live row and with the planes disagreeing.
-func oracleStatus(t *testing.T, py, goPlane oraclePlane, catalogPath string, catalog map[string]string, ops []string, live, stale string) {
+// censusLines is the `rows by schema_digest:` block of a text `status`: the heading and the digest lines up to
+// the first blank line, which both producers print alike.
+func censusLines(text string) string {
+	lines := strings.Split(text, "\n")
+	var out []string
+	in := false
+	for _, line := range lines {
+		if strings.HasPrefix(line, "rows by schema_digest:") {
+			in = true
+		}
+		if in {
+			if strings.TrimSpace(line) == "" {
+				break
+			}
+			out = append(out, line)
+		}
+	}
+	return strings.Join(out, "\n")
+}
+
+// normalizeStatus reduces a Python `status --json` document to what the comparison reads: the per-run volatile
+// fields go (updated_at moves with the clock) and go_plane_error is reduced to whether one is set (its text
+// can name the address of a fake server).
+func normalizeStatus(raw string) string {
+	var doc any
+	if err := json.Unmarshal([]byte(raw), &doc); err != nil {
+		return raw
+	}
+	var walk func(any) any
+	walk = func(value any) any {
+		switch typed := value.(type) {
+		case map[string]any:
+			out := map[string]any{}
+			for key, child := range typed {
+				switch {
+				case key == "updated_at":
+				case key == "go_plane_error" && child != nil:
+					out[key] = "<set>"
+				default:
+					out[key] = walk(child)
+				}
+			}
+			return out
+		case []any:
+			out := make([]any, len(typed))
+			for index, child := range typed {
+				out[index] = walk(child)
+			}
+			return out
+		}
+		return value
+	}
+	normalized, err := json.Marshal(walk(doc))
+	if err != nil {
+		return raw
+	}
+	return string(normalized)
+}
+
+// routingStatusPython runs the four `status --json` states of the producer: the same seeds and query-api
+// fakes oracleStatus compares dho against.
+func routingStatusPython(t *testing.T, producer *venueoracle.Producer, py oraclePlane, catalog map[string]string, ops []string, live, stale string) []recordedStatus {
 	t.Helper()
+	record := func(code int, out string) recordedStatus {
+		return recordedStatus{Code: code, Out: normalizeStatus(out)}
+	}
 	rows := []oracleRow{
 		{live, catalog[ops[0]], ops[0], oracleBuildA, "primary", 100},
 		{live, catalog[ops[1]], ops[1], oracleBuildA, "canary", 25},
@@ -484,16 +624,59 @@ func oracleStatus(t *testing.T, py, goPlane oraclePlane, catalogPath string, cat
 		{live, catalog[ops[4]], ops[4], oracleBuildB, "disabled", 0},
 	}
 	py.seed(t, rows)
+	server := startQueryAPI(t, live, catalog)
+	code, out, _ := oraclePython(t, producer, py, "status", "--json", "--query-api-url", server.URL)
+	var recorded []recordedStatus
+	recorded = append(recorded, record(code, out))
+	// The text form of the same planes-agree state: the census lines an operator reads (live / STALE markers).
+	textCode, textOut, _ := oraclePython(t, producer, py, "status", "--query-api-url", server.URL)
+	recorded = append(recorded, recordedStatus{Code: textCode, Out: censusLines(textOut)})
+	server.Close()
+	code, out, _ = oraclePython(t, producer, py, "status", "--json")
+	recorded = append(recorded, record(code, out))
+
+	drift := "sha256:" + strings.Repeat("9", 64)
+	py.seed(t, []oracleRow{
+		{live, catalog[ops[0]], ops[0], oracleBuildA, "primary", 100},
+		{live, drift, ops[3], oracleBuildB, "primary", 100},
+		{live, "sha256:" + strings.Repeat("8", 64), "notInTheCatalog", oracleBuildB, "canary", 5},
+	})
+	server = startQueryAPI(t, live, catalog)
+	code, out, _ = oraclePython(t, producer, py, "status", "--json", "--query-api-url", server.URL)
+	recorded = append(recorded, record(code, out))
+	server.Close()
+	other := startQueryAPI(t, stale, catalog)
+	defer other.Close()
+	code, out, _ = oraclePython(t, producer, py, "status", "--json", "--query-api-url", other.URL)
+	recorded = append(recorded, record(code, out))
+	return recorded
+}
+
+// oracleStatus compares `status --json` of both producers over a state that holds every
+// classification both name (a live primary row, a canary row, a shadow and a disabled row, a row at a
+// stale schema digest, an operation with no row), then asserts the named differences on a state with a drifted and an
+// unregistered live row and with the planes disagreeing.
+func oracleStatus(t *testing.T, goPlane oraclePlane, catalogPath string, catalog map[string]string, ops []string, live, stale string, pyStatus []recordedStatus) {
+	t.Helper()
+	rows := []oracleRow{
+		{live, catalog[ops[0]], ops[0], oracleBuildA, "primary", 100},
+		{live, catalog[ops[1]], ops[1], oracleBuildA, "canary", 25},
+		{stale, catalog[ops[2]], ops[2], oracleBuildA, "primary", 100},
+		{live, catalog[ops[3]], ops[3], oracleBuildB, "shadow", 0},
+		{live, catalog[ops[4]], ops[4], oracleBuildB, "disabled", 0},
+	}
 	goPlane.seed(t, rows)
 	server := startQueryAPI(t, live, catalog)
-	pyCode, pyOut, pyErr := oraclePython(t, py, "status", "--json", "--query-api-url", server.URL)
 	goCode, goOut, goErr := oracleGo(t, goPlane, catalogPath, "status", "-json", "-registry-url", server.URL+"/registry")
-	compareStatus(t, "planes agree", false, pyCode, pyOut, pyErr, goCode, goOut, goErr)
+	compareStatus(t, "planes agree", false, pyStatus[0].Code, pyStatus[0].Out, "", goCode, goOut, goErr)
+	textCode, textOut, textErr := oracleGo(t, goPlane, catalogPath, "status", "-registry-url", server.URL+"/registry")
+	if textCode != pyStatus[1].Code || censusLines(textOut) != pyStatus[1].Out || !strings.Contains(pyStatus[1].Out, "<- live") || !strings.Contains(pyStatus[1].Out, "<- STALE") {
+		t.Errorf("the text census of the planes-agree state differs (python exit %d, go exit %d):\n python: %q\n go: %q\n%.200s", pyStatus[1].Code, textCode, pyStatus[1].Out, censusLines(textOut), textErr)
+	}
 	server.Close()
 	// No query-api at all: both report it and exit 0.
-	pyCode, pyOut, pyErr = oraclePython(t, py, "status", "--json")
 	goCode, goOut, goErr = oracleGo(t, goPlane, catalogPath, "status", "-json")
-	compareStatus(t, "no query-api", true, pyCode, pyOut, pyErr, goCode, goOut, goErr)
+	compareStatus(t, "no query-api", true, pyStatus[2].Code, pyStatus[2].Out, "", goCode, goOut, goErr)
 
 	// Named differences. A live row serving a document the catalog does not name, a live row of an
 	// operation the catalog does not register, and a deployed plane on another schema digest.
@@ -503,14 +686,13 @@ func oracleStatus(t *testing.T, py, goPlane oraclePlane, catalogPath string, cat
 		{live, drift, ops[3], oracleBuildB, "primary", 100},
 		{live, "sha256:" + strings.Repeat("8", 64), "notInTheCatalog", oracleBuildB, "canary", 5},
 	}
-	py.seed(t, rows)
 	goPlane.seed(t, rows)
 	server = startQueryAPI(t, live, catalog)
 	defer server.Close()
-	pyCode, pyOut, pyErr = oraclePython(t, py, "status", "--json", "--query-api-url", server.URL)
+	pyCode, pyOut := pyStatus[3].Code, pyStatus[3].Out
 	goCode, goOut, goErr = oracleGo(t, goPlane, catalogPath, "status", "-json", "-registry-url", server.URL+"/registry")
 	if pyCode != 0 || goCode != 0 {
-		t.Fatalf("status must never refuse: python %d go %d\n%.300s\n%.300s", pyCode, goCode, pyErr, goErr)
+		t.Fatalf("status must never refuse: python %d go %d\n%.300s", pyCode, goCode, goErr)
 	}
 	var pyDoc, goDoc struct {
 		Operations []map[string]any `json:"operations"`
@@ -562,7 +744,7 @@ func oracleStatus(t *testing.T, py, goPlane oraclePlane, catalogPath string, cat
 	// The planes disagree: dho classifies against the deployed plane's digest.
 	other := startQueryAPI(t, stale, catalog)
 	defer other.Close()
-	pyCode, pyOut, _ = oraclePython(t, py, "status", "--json", "--query-api-url", other.URL)
+	pyCode, pyOut = pyStatus[4].Code, pyStatus[4].Out
 	goCode, goOut, _ = oracleGo(t, goPlane, catalogPath, "status", "-json", "-registry-url", other.URL+"/registry")
 	var pyTop, goTop map[string]any
 	if pyCode != 0 || goCode != 0 || json.Unmarshal([]byte(pyOut), &pyTop) != nil || json.Unmarshal([]byte(goOut), &goTop) != nil {

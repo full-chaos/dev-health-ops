@@ -78,7 +78,7 @@ const recordVerbStamp = "goldenrecord"
 
 // unclassifiedDayOne is how many files the day-one list holds. It only goes
 // down: a file leaves the list when it gets a kind, and no file is added.
-const unclassifiedDayOne = 975
+const unclassifiedDayOne = 974
 
 // DayOneList is the list of the files that were unclassified when the
 // manifests were first written, one repository path per line.
@@ -87,7 +87,7 @@ const DayOneList = "internal/testsupport/recordedfiles/unclassified_day_one.txt"
 // headerBeforeStampCeiling is how many goldens may hold the kind
 // header-before-stamp: the ones that were in the tree when the stamp became the
 // verb's (CHAOS-7707). It only goes down.
-const headerBeforeStampCeiling = 257
+const headerBeforeStampCeiling = 254
 
 // BeforeStampList is the closed list of those goldens, one repository path per
 // line. -day-one gives the kind header-before-stamp to a path on it and to no

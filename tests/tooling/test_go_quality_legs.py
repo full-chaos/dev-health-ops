@@ -205,6 +205,12 @@ def test_race_shards_partition_the_package_list_and_balance() -> None:
         for k in (1, 2)
     ]
     assert max(two) <= 1.1 * (sum(two) / 2), f"2-way race slices unbalanced: {two}"
+    # CHAOS-8135: the workflow runs three legs; no leg may exceed the mean by more than 10%.
+    three = [
+        sum(weights.get(_key(mod, p), DEFAULT_WEIGHT) for p in _shard(mod, pkgs, k, 3))
+        for k in (1, 2, 3)
+    ]
+    assert max(three) <= 1.1 * (sum(three) / 3), f"3-way race slices unbalanced: {three}"
 
 
 def test_the_race_weights_table_is_clean() -> None:

@@ -868,6 +868,16 @@ func LoadDocuments(path string) (map[string]string, error) {
 		if documentText == "" {
 			return nil, fmt.Errorf("goapiproof: documents file carries no text for %q", operation)
 		}
+		// CHAOS-8000 dual accept: registrydump lists an operation's LEGACY texts after its current one, marked
+		// `"legacy": true`. The running process registers the CURRENT text under the operation (a legacy
+		// text is only an accepted alias), so a legacy entry must never replace it here: last-wins would make
+		// VerifyDocuments compare the old text with the registered digest and refuse as document drift.
+		if rawLegacy, present := rawDoc["legacy"]; present {
+			if string(rawLegacy) != "true" {
+				return nil, fmt.Errorf("goapiproof: documents file %s entry %d (%q) has legacy %s; the key is absent or true", path, index, operation, rawLegacy)
+			}
+			continue
+		}
 		byOperation[operation] = documentText
 	}
 	return byOperation, nil

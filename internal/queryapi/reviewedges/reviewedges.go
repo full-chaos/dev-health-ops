@@ -44,6 +44,7 @@ import (
 
 	"github.com/full-chaos/dev-health-ops/internal/queryapi/graph/model"
 	"github.com/full-chaos/dev-health-ops/internal/queryapi/graphqldate"
+	"github.com/full-chaos/dev-health-ops/internal/queryapi/teamscope"
 )
 
 // MaxRows mirrors Python's MAX_REVIEW_EDGES_ROWS -- a hard cap on returned
@@ -85,6 +86,25 @@ func clampLimit(limit int) int {
 // must not pre-clamp and must not trust the GraphQL schema's default
 // alone (a client can send any value).
 func Resolve(ctx context.Context, client QueryClient, orgID string, sinceDate, untilDate graphqldate.Date, repoIDs []string, limit int) (*model.ReviewEdgesResult, error) {
+	return ResolveScoped(ctx, client, orgID, sinceDate, untilDate, Scope{RepoIDs: repoIDs}, limit)
+}
+
+// Scope narrows the edges to a set of repositories. Both fields are optional and, when both are
+// given, BOTH apply (a pair must be on a listed repository AND on a repository a listed team
+// owns): the two are filters of one list. Team = repository OWNERSHIP only
+// (teamscope.RepoCondition, from team_repo_ownership), never person membership. This differs
+// from the home route, which ORs explicit repositories with a team's.
+type Scope struct {
+	RepoIDs []string
+	// TeamIDs are team ids; blank ids are dropped, and no ids left means no team scope.
+	TeamIDs []string
+	// AsOf is the one instant the ownership is read at; the zero value means now (UTC).
+	AsOf time.Time
+}
+
+// ResolveScoped is Resolve with a Scope. With a zero Scope.TeamIDs it issues the same statement
+// and bindings as Resolve always did (the frozen golden pins that).
+func ResolveScoped(ctx context.Context, client QueryClient, orgID string, sinceDate, untilDate graphqldate.Date, scope Scope, limit int) (*model.ReviewEdgesResult, error) {
 	if client == nil {
 		return nil, errors.New("reviewedges: clickhouse client is required")
 	}
@@ -96,6 +116,7 @@ func Resolve(ctx context.Context, client QueryClient, orgID string, sinceDate, u
 		{Name: "limit", Value: clampLimit(limit)},
 	}
 
+	repoIDs := scope.RepoIDs
 	repoFilter := ""
 	if len(repoIDs) > 0 {
 		repoFilter = `
@@ -105,6 +126,18 @@ func Resolve(ctx context.Context, client QueryClient, orgID string, sinceDate, u
                     AND (repo IN {repo_ids:Array(String)} OR toString(id) IN {repo_ids:Array(String)})
               )`
 		bindings = append(bindings, clickhouse.Binding{Name: "repo_ids", Value: repoIDs})
+	}
+
+	// A team scope is ANDed in beside the repo filter: inside the inner query's WHERE, so it
+	// narrows the rows BEFORE the dedup and the LIMIT (a small team is never starved by other
+	// teams' bigger rows). repo_id is a UUID column and the condition compares ids as strings.
+	asOf := scope.AsOf
+	if asOf.IsZero() {
+		asOf = time.Now().UTC()
+	}
+	if teamCondition, teamBindings := teamscope.RepoCondition(orgID, "toString(repo_id)", scope.TeamIDs, asOf); teamCondition != "" {
+		repoFilter += "\n              AND " + teamCondition
+		bindings = append(bindings, teamBindings...)
 	}
 
 	query := `

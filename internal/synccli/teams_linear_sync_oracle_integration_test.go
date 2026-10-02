@@ -622,7 +622,7 @@ func linearCorpusKey() []byte {
 // and, column by column, the `teams` rows it wrote. Executed once on teamsPythonBuild and frozen in
 // testdata/golden/teams_linear.json.
 func TestSyncTeamsLinearMatchesFrozenPython(t *testing.T) {
-	frozen, golden := openTeamsGolden(t, "linear", "TestSyncTeamsLinearMatchesFrozenPython", "21feb5507e43b5772634d53fd9eeb7b2f42a9d76a9c98d40b2e0ce58c08c1f30", teamsSyncOracleLinearProgram, linearCorpusKey(),
+	frozen, golden := openTeamsGolden(t, "linear", "TestSyncTeamsLinearMatchesFrozenPython", "748704d189fd6ceb08ba5b0b3ae36d5089d52592b514e3a81f2aad54554895f3", teamsSyncOracleLinearProgram, linearCorpusKey(),
 		func(t *testing.T, producer *venueoracle.Producer) []teamsFrozen {
 			o := newTeamsOracle(t)
 			o.startPython(producer, teamsSyncOracleLinearProgram)

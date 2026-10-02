@@ -113,6 +113,8 @@ func TestUnitDeferredCounterRendersPerProviderDatasetAndReason(t *testing.T) {
 	metrics.RecordUnitDeferred("github", "files", "budget_contention")
 	metrics.RecordUnitDeferred("github", "files", "rate_limited")
 	metrics.RecordUnitDeferred("github", "files", "invented reason")
+	// The reason is trimmed and lower-cased like provider and dataset.
+	metrics.RecordUnitDeferred("github", "files", "  Budget_Contention ")
 	metrics.RecordUnitDeferred("github", "invented-dataset", "chunk_continuation")
 	var nilMetrics *Metrics
 	nilMetrics.RecordUnitDeferred("github", "files", "budget_contention")
@@ -124,7 +126,7 @@ func TestUnitDeferredCounterRendersPerProviderDatasetAndReason(t *testing.T) {
 	rendered := output.String()
 	for _, want := range []string{
 		"# TYPE dev_health_provider_unit_deferred_total counter",
-		`dev_health_provider_unit_deferred_total{provider="github",dataset="files",reason="budget_contention"} 2`,
+		`dev_health_provider_unit_deferred_total{provider="github",dataset="files",reason="budget_contention"} 3`,
 		`dev_health_provider_unit_deferred_total{provider="github",dataset="files",reason="rate_limited"} 1`,
 		`dev_health_provider_unit_deferred_total{provider="github",dataset="files",reason="other"} 1`,
 		`dev_health_provider_unit_deferred_total{provider="github",dataset="other",reason="chunk_continuation"} 1`,

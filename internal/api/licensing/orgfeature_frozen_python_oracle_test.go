@@ -130,7 +130,7 @@ func orgFeatureCases() []orgFeatureCase {
 	return cases
 }
 
-// TestOrgFeatureVenueOracleMatchesLivePython requires OrgHasFeature to
+// TestOrgFeatureMatchesFrozenPython requires OrgHasFeature to
 // allow exactly where the api's _check_org_feature_async does, for the
 // same stored rows.
 func TestOrgFeatureMatchesFrozenPython(t *testing.T) {

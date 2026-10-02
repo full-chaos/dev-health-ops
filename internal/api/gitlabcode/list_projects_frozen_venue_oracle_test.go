@@ -10,16 +10,12 @@ import (
 	"math/big"
 	"net"
 	"net/http"
-	"os"
-	"os/exec"
-	"path/filepath"
-	"runtime"
 	"strings"
 	"testing"
 	"time"
 
 	"github.com/full-chaos/dev-health-ops/internal/api/pyjson"
-	"github.com/full-chaos/dev-health-ops/internal/testsupport/pyoracle"
+	"github.com/full-chaos/dev-health-ops/internal/testsupport/programoracle"
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/venueoracle"
 )
 
@@ -289,31 +285,20 @@ func (s *scriptedTransport) RoundTrip(request *http.Request) (*http.Response, er
 	return &http.Response{StatusCode: next.Status, Header: headers, Body: io.NopCloser(bytes.NewReader([]byte(next.Body))), Request: request}, nil
 }
 
-// TestListProjectsVenueOracleMatchesLivePython requires the Go client to
+// TestListProjectsVenueOracleMatchesFrozenPython requires the Go client to
 // send the same requests (URL, page, per_page, token) and to answer the
 // same projects, or fail with the same exception text, as the api's own
 // GitLabCodeClient.list_projects for the same scripted GitLab responses:
 // pagination by X-Next-Page and by page size, _map_project's coercions,
 // every status class, the retry attempts, and malformed bodies.
-func TestListProjectsVenueOracleMatchesLivePython(t *testing.T) {
-	if os.Getenv("DEV_HEALTH_LIVE_PYTHON_ORACLES") != "1" {
-		t.Skip("the GitLab list oracle needs the full project Python environment; ci/check_go.sh venue-oracles runs it")
-	}
-	_, file, _, _ := runtime.Caller(0)
-	root := filepath.Clean(filepath.Join(filepath.Dir(file), "..", "..", ".."))
-	python := pyoracle.Resolve(t, root)
+func TestListProjectsVenueOracleMatchesFrozenPython(t *testing.T) {
 	scenarios := listScenarios()
 	input, err := json.Marshal(scenarios)
 	if err != nil {
 		t.Fatal(err)
 	}
-	command := exec.Command(python, "-c", pythonListProjectsProgram)
-	command.Env = append(os.Environ(), "PYTHONPATH="+filepath.Join(root, "src"))
-	command.Stdin = bytes.NewReader(input)
-	output, err := command.CombinedOutput()
-	if err != nil {
-		t.Fatalf("live python: %v", pyoracle.RunError(python, err, output))
-	}
+	output := frozenPython(t, "list-projects.golden.json",
+		programoracle.Program{Name: "list-projects", Text: pythonListProjectsProgram, Stdin: []byte(input)})[0]
 	lines := strings.Split(strings.TrimSpace(string(output)), "\n")
 	var want []struct {
 		Requests [][2]*string    `json:"requests"`
@@ -381,7 +366,7 @@ func TestListProjectsVenueOracleMatchesLivePython(t *testing.T) {
 		}
 	}
 	t.Logf("%d scenarios compared", len(scenarios))
-	venueoracle.WriteProof(t)
+	venueoracle.WriteGoOnlyProof(t, "Go's code-host listing against the frozen requests and results of Python's client")
 }
 
 // jsonOf is a decoded JSON value as plain Go data, for comparison.

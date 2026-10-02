@@ -12,6 +12,7 @@ import (
 	"testing"
 
 	"github.com/full-chaos/dev-health-ops/internal/api/pyjson"
+	"github.com/full-chaos/dev-health-ops/internal/testsupport/programoracle"
 )
 
 // pythonEnvelopeProgram runs BatchEnvelope.model_validate_json on each
@@ -158,21 +159,21 @@ func envelopeCorpus() [][]byte {
 	return corpus
 }
 
-// TestEnvelopeValidationMatchesLivePython compares recordvalidation.ValidateEnvelopeJSON
+// TestEnvelopeValidationMatchesFrozenPython compares recordvalidation.ValidateEnvelopeJSON
 // with BatchEnvelope.model_validate_json on envelopeCorpus: each error's
 // type, loc and msg in order, or success, or the TypeError. jiter's JSON
 // syntax texts other than EOF, trailing characters and expected value are
 // a named limit: for those, the type and loc must match, and message
 // differences are counted and reported.
-func TestEnvelopeValidationMatchesLivePython(t *testing.T) {
-	root, python := oracleRoot(t)
+func TestEnvelopeValidationMatchesFrozenPython(t *testing.T) {
 	corpus := envelopeCorpus()
 	encoded := make([]string, len(corpus))
 	for index, body := range corpus {
 		encoded[index] = base64.StdEncoding.EncodeToString(body)
 	}
 	input, _ := json.Marshal(encoded)
-	output := runPython(t, root, python, pythonEnvelopeProgram, input)
+	output := []byte(frozenPython(t, "envelope-validation.golden.json",
+		programoracle.Program{Name: "batch envelope validation", Text: pythonEnvelopeProgram, Stdin: input})[0])
 	lines := bytes.Split(bytes.TrimSpace(output), []byte("\n"))
 	var want []json.RawMessage
 	if err := json.Unmarshal(lines[len(lines)-1], &want); err != nil {
@@ -239,7 +240,6 @@ func TestEnvelopeValidationMatchesLivePython(t *testing.T) {
 	if mismatches > 0 {
 		t.Fatalf("%d of %d bodies differ", mismatches, len(corpus))
 	}
-	writeOracleProof(t, "externalingest-envelope-validation")
 	t.Logf("%d bodies compared (%d JSON syntax errors exact); %d named-limit syntax messages differ; 0 other mismatches",
 		len(corpus), syntax, limited)
 }
@@ -316,18 +316,18 @@ for raw in json.loads(sys.stdin.read()):
 print(json.dumps(out))
 `
 
-// TestDataPlaneEnvelopeParseMatchesLivePython compares the data plane's
+// TestDataPlaneEnvelopeParseMatchesFrozenPython compares the data plane's
 // parseEnvelope answers (status and body bytes, written by
 // writeIngestError) with the Python api's on envelopeCorpus.
-func TestDataPlaneEnvelopeParseMatchesLivePython(t *testing.T) {
-	root, python := oracleRoot(t)
+func TestDataPlaneEnvelopeParseMatchesFrozenPython(t *testing.T) {
 	corpus := envelopeCorpus()
 	encoded := make([]string, len(corpus))
 	for index, body := range corpus {
 		encoded[index] = base64.StdEncoding.EncodeToString(body)
 	}
 	input, _ := json.Marshal(encoded)
-	output := runPython(t, root, python, pythonDataPlaneParseProgram, input)
+	output := []byte(frozenPython(t, "dataplane-parse.golden.json",
+		programoracle.Program{Name: "data plane envelope parse", Text: pythonDataPlaneParseProgram, Stdin: input})[0])
 	lines := bytes.Split(bytes.TrimSpace(output), []byte("\n"))
 	var want [][2]any
 	if err := json.Unmarshal(lines[len(lines)-1], &want); err != nil {
@@ -353,6 +353,5 @@ func TestDataPlaneEnvelopeParseMatchesLivePython(t *testing.T) {
 	if mismatches > 0 {
 		t.Fatalf("%d of %d bodies differ", mismatches, len(corpus))
 	}
-	writeOracleProof(t, "externalingest-parse-dataplane")
 	t.Logf("%d bodies compared (statuses %v); 0 mismatches", len(corpus), statuses)
 }

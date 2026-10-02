@@ -139,7 +139,7 @@ func tierLimitCases() []tierLimitCase {
 	return cases
 }
 
-// TestTierLimitsVenueOracleMatchesLivePython requires GetLimitFrom and
+// TestTierLimitsMatchFrozenPython requires GetLimitFrom and
 // CheckLimitFrom to answer as the api's TierLimitService.get_limit and
 // check_limit do for the same stored rows: the same limit (int, float,
 // bool or None, as repr), the same allowed flag and refusal text for each

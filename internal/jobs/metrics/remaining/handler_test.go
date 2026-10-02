@@ -312,6 +312,7 @@ type handlerStore struct {
 	// Permanent branch, and a retryable failure on the job's last attempt,
 	// call the terminal one).
 	terminalReleases int
+	exhausted        int
 	completions      int
 	evidence         string
 }
@@ -347,6 +348,11 @@ func (store *handlerStore) ReleasePartition(context.Context, Claim) error {
 	store.releases++
 	return nil
 }
+func (store *handlerStore) ExhaustPartition(context.Context, string) error {
+	store.exhausted++
+	return nil
+}
+
 func (store *handlerStore) ReleasePartitionTerminally(context.Context, Claim) error {
 	store.terminalReleases++
 	return nil
@@ -462,6 +468,55 @@ func TestPartitionHandlerTerminalizesTheRunOnlyOnTheFinalAttemptOfARetryableFail
 					t.Fatalf("terminalReleases=%d releases=%d, want %d and %d", store.terminalReleases, store.releases, wantTerminal, wantOrdinary)
 				}
 			})
+		}
+	}
+}
+
+type panickingExecutor struct{}
+
+func (panickingExecutor) ComputePartition(context.Context, Run, Partition) (CompatibilityOutcome, error) {
+	panic("executor panic")
+}
+
+// CHAOS-8024 rows 5 and 6: a claim error on the LAST attempt exhausts the partition (no claim exists to release);
+// earlier attempts and a lease-active snooze do not. A panic after the claim releases it (terminally on the last
+// attempt) and still propagates.
+func TestPartitionHandlerExhaustsAPartitionWhoseLastClaimErrored(t *testing.T) {
+	for _, tc := range []struct {
+		name         string
+		attempt, max int
+		want         int
+	}{{"last", 3, 3, 1}, {"earlier", 2, 3, 0}, {"no budget", 3, 0, 0}} {
+		store := &handlerStore{claimErr: errors.New("connection reset")}
+		handler, _ := NewPartitionHandler[jobruntime.RemainingCapacityArgs](store, &handlerExecutor{}, "capacity")
+		_ = handler.Work(context.Background(), attemptedCapacityExecution(tc.attempt, tc.max))
+		if store.exhausted != tc.want {
+			t.Fatalf("%s: exhausted=%d want %d", tc.name, store.exhausted, tc.want)
+		}
+	}
+}
+
+func TestPartitionHandlerReleasesTheClaimOnAPanicAndRepanics(t *testing.T) {
+	for _, tc := range []struct {
+		name                  string
+		attempt, max          int
+		wantTerminal, wantOrd int
+	}{{"last", 3, 3, 1, 0}, {"earlier", 1, 3, 0, 1}} {
+		store := &handlerStore{
+			run:   Run{ID: handlerRunID, OrganizationID: handlerOrgID, Family: "capacity", Status: "running"},
+			claim: handlerClaim(),
+		}
+		handler, _ := NewPartitionHandler[jobruntime.RemainingCapacityArgs](store, panickingExecutor{}, "capacity")
+		func() {
+			defer func() {
+				if recover() == nil {
+					t.Fatalf("%s: panic swallowed", tc.name)
+				}
+			}()
+			_ = handler.Work(context.Background(), attemptedCapacityExecution(tc.attempt, tc.max))
+		}()
+		if store.terminalReleases != tc.wantTerminal || store.releases != tc.wantOrd {
+			t.Fatalf("%s: terminal=%d ordinary=%d", tc.name, store.terminalReleases, store.releases)
 		}
 	}
 }

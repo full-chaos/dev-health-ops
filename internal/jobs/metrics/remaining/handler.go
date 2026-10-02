@@ -25,6 +25,10 @@ type Store interface {
 	// partition -- otherwise a run behind a permanently-discarded job lingers
 	// status='running' forever.
 	ReleasePartitionTerminally(context.Context, Claim) error
+	// ExhaustPartition is the no-claim twin: the job's last attempt could not even claim the partition, so no
+	// attempt follows. It marks a non-terminal partition exhausted and terminalizes the run if nothing else can
+	// progress (CHAOS-8024, invariant row 5).
+	ExhaustPartition(context.Context, string) error
 }
 
 type PartitionExecutor interface {
@@ -78,7 +82,19 @@ func (handler *PartitionHandler[T]) Work(
 		execution.Envelope.Domain.ID != payload.PartitionID {
 		return jobruntime.Permanent(ErrInvalidState)
 	}
+	var held *Claim
+	// A panic past the claim (River recovers it and counts an attempt) must not strand the partition: stand the
+	// claim down the same way a returned failure would, then let River see the panic (CHAOS-8024, invariant row 6).
+	defer func() {
+		if recovered := recover(); recovered != nil {
+			if held != nil {
+				releaseFailedAttempt(handler.store, ctx, *held, execution)
+			}
+			panic(recovered)
+		}
+	}()
 	claim, err := handler.store.ClaimPartition(ctx, payload.PartitionID)
+	held = claim
 	if err != nil {
 		// Park until the lease expires rather than burning an attempt on it: a
 		// snooze does not consume one, so the reclaim stays reachable however
@@ -86,6 +102,9 @@ func (handler *PartitionHandler[T]) Work(
 		var active *LeaseActiveError
 		if errors.As(err, &active) {
 			return jobruntime.RetryableAfter(err, active.RetryAfter)
+		}
+		if finalAttempt(execution) {
+			exhaustPartition(handler.store, ctx, payload.PartitionID)
 		}
 		return jobruntime.Retryable(stepcause.Failure(stepcause.ClaimPartition, err))
 	}
@@ -215,8 +234,12 @@ func runWithLeaseRenewal(
 			}
 		}
 	}()
-	workErr := work(workCtx)
-	close(stop)
+	workErr := func() error {
+		// A panicking work func must still stop the renewal goroutine, or it keeps renewing the lease of a claim the
+		// panic path is about to release.
+		defer close(stop)
+		return work(workCtx)
+	}()
 	renewalErr := <-renewalResult
 	if renewalErr != nil {
 		return renewalErr
@@ -255,4 +278,10 @@ func releaseClaimTerminally(store Store, ctx context.Context, claim Claim) {
 	releaseCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
 	defer cancel()
 	_ = store.ReleasePartitionTerminally(releaseCtx, claim)
+}
+
+func exhaustPartition(store Store, ctx context.Context, partitionID string) {
+	exhaustCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
+	defer cancel()
+	_ = store.ExhaustPartition(exhaustCtx, partitionID)
 }

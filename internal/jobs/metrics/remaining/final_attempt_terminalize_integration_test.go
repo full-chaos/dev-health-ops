@@ -317,3 +317,50 @@ func TestRunLifecycleAroundAnExhaustedPartitionAgainstRealPostgres(t *testing.T)
 	})
 
 }
+
+type claimFailingStore struct {
+	*PostgresStore
+	fail bool
+}
+
+func (s *claimFailingStore) ClaimPartition(ctx context.Context, id string) (*Claim, error) {
+	if s.fail {
+		return nil, errors.New("claim partition: connection reset")
+	}
+	return s.PostgresStore.ClaimPartition(ctx, id)
+}
+
+// CHAOS-8024 (probe from gwc-vetter-3) (#3662 delta, "(2) no worse than base" combined with a sibling): partition 1 fails once (ordinary release,
+// retry queued), then its attempts 2 and 3 fail in ClaimPartition (r1 residual (2): River discards the job, nothing releases it);
+// partition 2 then exhausts its 3 attempts. Nothing can still run for this run: it must end 'failed', not stay 'running'.
+func TestAClaimErrorOnTheLastAttemptPlusAnExhaustedSiblingEndsTheRunFailed(t *testing.T) {
+	ctx := context.Background()
+	pool, store, _ := newRemainingRedriveTestStack(t)
+	store.now = func() time.Time { return time.Date(2026, 10, 2, 12, 0, 0, 0, time.UTC) }
+	orgID := "00000000-0000-4000-8000-000000009301"
+	run, err := store.StartRun(ctx, StartRunRequest{OrganizationID: orgID, Family: "capacity", Generation: "vetter-combo", ScopeKey: "all-teams",
+		GenerationSeed: int64Pointer(93), Scopes: []json.RawMessage{capacityScopeJSON(90), capacityScopeJSON(91)}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	first, second := deterministicPartitionID(run.ID, 1), deterministicPartitionID(run.ID, 2)
+	failing := &handlerExecutor{computeErr: errors.New("clickhouse: connection reset")}
+	flaky := &claimFailingStore{PostgresStore: store}
+	hFirst, _ := NewPartitionHandler[jobruntime.RemainingCapacityArgs](flaky, failing, "capacity")
+	hSecond, _ := NewPartitionHandler[jobruntime.RemainingCapacityArgs](store, failing, "capacity")
+	_ = hFirst.Work(ctx, capacityExecutionFor(orgID, first, run.ID, 1, 3))
+	flaky.fail = true
+	_ = hFirst.Work(ctx, capacityExecutionFor(orgID, first, run.ID, 2, 3))
+	_ = hFirst.Work(ctx, capacityExecutionFor(orgID, first, run.ID, 3, 3)) // River discards partition 1's job here
+	for attempt := 1; attempt <= 3; attempt++ {
+		_ = hSecond.Work(ctx, capacityExecutionFor(orgID, second, run.ID, attempt, 3))
+	}
+	var runStatus, p1, p2 string
+	_ = pool.QueryRow(ctx, "SELECT status FROM remaining_metric_runs WHERE id=$1::uuid", run.ID).Scan(&runStatus)
+	_ = pool.QueryRow(ctx, "SELECT status FROM remaining_metric_partitions WHERE id=$1::uuid", first).Scan(&p1)
+	_ = pool.QueryRow(ctx, "SELECT status FROM remaining_metric_partitions WHERE id=$1::uuid", second).Scan(&p2)
+	t.Logf("VETTER-COMBO run=%s partition1=%s partition2=%s", runStatus, p1, p2)
+	if runStatus != "failed" {
+		t.Fatalf("run = %q with no job left for either partition, want failed (stranded)", runStatus)
+	}
+}

@@ -834,6 +834,52 @@ WHERE id = $2::uuid AND run_id = $3::uuid AND status = 'running'
 	return nil
 }
 
+// ExhaustPartition marks a partition whose job ended without ever holding a claim (the last attempt's
+// ClaimPartition errored) 'failed' + exhausted and terminalizes the run when nothing else can progress. Only a
+// non-terminal partition of a running run is touched; a live lease is left alone (its holder owns the outcome).
+func (store *PostgresStore) ExhaustPartition(ctx context.Context, partitionID string) error {
+	if !store.valid() || !validUUID(partitionID) {
+		return ErrUnavailable
+	}
+	now := store.now().UTC()
+	tx, err := store.pool.Begin(ctx)
+	if err != nil {
+		return store.wrapUnavailable(ctx, "begin exhaust tx", err)
+	}
+	defer func() {
+		rollbackCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
+		defer cancel()
+		_ = tx.Rollback(rollbackCtx)
+	}()
+	var runID string
+	err = tx.QueryRow(ctx, `
+UPDATE public.remaining_metric_partitions AS partition
+SET status = 'failed', claim_token = NULL, lease_expires_at = NULL, completed_at = $1, updated_at = $1
+WHERE partition.id = $2::uuid
+  AND (partition.status IN ('pending', 'failed')
+       OR (partition.status = 'running' AND partition.lease_expires_at <= $1))
+  AND EXISTS (
+      SELECT 1 FROM public.remaining_metric_runs AS run
+      WHERE run.id = partition.run_id AND run.status = 'running'
+  )
+RETURNING partition.run_id::text`, now, partitionID).Scan(&runID)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return nil
+	}
+	if err != nil {
+		return store.wrapUnavailable(ctx, "exhaust partition", err)
+	}
+	runTransition, err := tx.Exec(ctx, terminalizeRunSQL, now, runID)
+	if err != nil {
+		return store.wrapUnavailable(ctx, "terminalize run after exhaust", err)
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return store.wrapUnavailable(ctx, "commit exhaust tx", err)
+	}
+	store.logRunTerminalized(ctx, runTransition.RowsAffected(), runID, partitionID)
+	return nil
+}
+
 // terminalizeRunSQL finalizes a running run 'failed' once nothing of it can still make progress: no partition is
 // pending or running, and none is 'failed' while awaiting its River retry (completed_at NULL: a partition released
 // by an ordinary retryable failure; the retry must still be able to claim it, so the run has to stay live). At

@@ -153,7 +153,7 @@ def resolve(request):
 
 
 def main():
-    db_url = os.environ["DHO_ORACLE_DB_URL"]
+    db_url = os.environ["DATABASE_URI"]
     for line in sys.stdin:
         request = json.loads(line)
         if request["op"] == "seed":

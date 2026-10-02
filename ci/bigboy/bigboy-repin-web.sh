@@ -29,8 +29,36 @@ case "$WEB_REPIN" in
     echo "repin-web SKIPPED by WEB_REPIN=skip: web stays at ${CUR_WEB_DIGEST:-none}"
     exit 0 ;;
   head)
-    WEB_SHA=$(gh api repos/full-chaos/dev-health-web/commits/main --jq .sha)
-    [[ $WEB_SHA =~ ^[0-9a-f]{40}$ ]] || { echo "FAIL: could not resolve dev-health-web main HEAD sha (got '$WEB_SHA')"; exit 3; } ;;
+    WEB_HEAD=$(gh api repos/full-chaos/dev-health-web/commits/main --jq .sha)
+    [[ $WEB_HEAD =~ ^[0-9a-f]{40}$ ]] || { echo "FAIL: could not resolve dev-health-web main HEAD sha (got '$WEB_HEAD')"; exit 3; }
+    WEB_SHA=$WEB_HEAD
+    # CHAOS-7687: web's "Build Docker Image" workflow has a path filter, so a CI-only commit builds NO image. Take the
+    # newest commit of main's history that HAS an image (one look each, no wait), then compare it with HEAD. If only paths
+    # that never enter the image differ (web's .dockerignore: .git, .github, .next, node_modules, test-results, coverage,
+    # *-debug.log, .DS_Store), that image IS web at HEAD and no wait is needed. If any path that enters the image differs,
+    # HEAD needs its own image: fall through to the wait for HEAD's image below (rc 3 when it never appears).
+    IMG_SHA=""
+    mapfile -t RECENT < <(gh api "repos/full-chaos/dev-health-web/commits?sha=$WEB_HEAD&per_page=${WEB_REPIN_LOOKBACK:-30}" --jq '.[].sha')
+    for c in "${RECENT[@]}"; do
+      [[ $c =~ ^[0-9a-f]{40}$ ]] || { echo "FAIL: web history gave a value that is not a commit sha (got '$c')"; exit 3; }
+      d=$(docker buildx imagetools inspect "ghcr.io/full-chaos/dev-health-web:sha-${c:0:7}" --format '{{json .Manifest}}' 2>/dev/null | jq -r .digest || true)
+      if [[ ${d:-} == sha256:* ]]; then IMG_SHA=$c; break; fi
+    done
+    if [[ -n $IMG_SHA && $IMG_SHA != "$WEB_HEAD" ]]; then
+      mapfile -t CHANGED < <(gh api "repos/full-chaos/dev-health-web/compare/$IMG_SHA...$WEB_HEAD" --jq '.files[].filename')
+      IN_IMAGE=0
+      # the compare API lists at most 300 files: a full page is read as "may carry an image path"
+      [[ ${#CHANGED[@]} -ge 300 ]] && IN_IMAGE=1
+      for f in "${CHANGED[@]}"; do
+        [[ $f =~ ^(\.git|\.github|\.next|node_modules|test-results|coverage)(/|$) || $f =~ ^(npm-debug\.log|pnpm-debug\.log|\.DS_Store)$ ]] || IN_IMAGE=1
+      done
+      if [[ $IN_IMAGE = 0 ]]; then
+        echo "repin-web: web main HEAD ${WEB_HEAD:0:10} has no image; newest imaged commit ${IMG_SHA:0:10} differs only in paths outside the image (${#CHANGED[@]} files)"
+        WEB_SHA=$IMG_SHA
+      else
+        echo "repin-web: web main HEAD ${WEB_HEAD:0:10} differs from the newest imaged commit ${IMG_SHA:0:10} in a path that enters the image: waiting for HEAD's own image"
+      fi
+    fi ;;
   *)
     [[ $WEB_REPIN =~ ^[0-9a-f]{40}$ ]] || { echo "FAIL: WEB_REPIN must be skip, head or a 40-hex dev-health-web commit sha (got '$WEB_REPIN')"; exit 2; }
     WEB_SHA=$WEB_REPIN ;;
@@ -48,9 +76,11 @@ done
 OLD_WEB_DIGEST=$(grep -ohE "dev-health-web@sha256:[0-9a-f]{64}" "$OV" | head -1 | cut -d@ -f2 || true)
 if [[ "${OLD_WEB_DIGEST:-}" == "$WEB_DIGEST" ]]; then
   echo "web unchanged: $WEB_DIGEST (main $WEB_SHA)"
+  echo "repin-web record: mode=$WEB_REPIN web_head=${WEB_HEAD:-$WEB_SHA} image_commit=$WEB_SHA digest=$WEB_DIGEST"
   exit 0
 fi
 
 cp -n "$OV" "$OV.bak-web-$WEB_S7"
 sed -i -E "s#(dev-health-web@sha256:)[0-9a-f]{64}#\1${WEB_DIGEST#sha256:}#g" "$OV"
 echo "web ${OLD_WEB_DIGEST:-none} -> $WEB_DIGEST (main $WEB_SHA)"
+echo "repin-web record: mode=$WEB_REPIN web_head=${WEB_HEAD:-$WEB_SHA} image_commit=$WEB_SHA digest=$WEB_DIGEST"

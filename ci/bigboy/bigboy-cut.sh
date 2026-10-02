@@ -139,7 +139,11 @@ $HERE/bigboy-repin.sh $OLD8 $NEW > $REC.repin.out 2>&1; st repin $?
 # CHAOS-7901: the caller picks the web build by the environment of THIS script: WEB_REPIN=skip (web stays as it is),
 # WEB_REPIN=<40-hex web commit> (that build) or unset/`head` (web main HEAD, the default). Cut 4 waited 10 minutes and
 # ended `repin-web rc=3` because web main HEAD was a CI-only commit with no image; WEB_REPIN=skip avoids that wait.
-$HERE/bigboy-repin-web.sh > $REC.repin-web.out 2>&1; st repin-web $?
+$HERE/bigboy-repin-web.sh > $REC.repin-web.out 2>&1; rc_web=$?; st repin-web $rc_web
+# CHAOS-7687: a re-pin that could not resolve an image FAILS the cut here, before migrate and before any recreate
+# (a web smoke on the OLD web, with no failed cut, read as a measurement that did not happen). WEB_REPIN=skip is the
+# explicit way to keep the current web pin.
+[ $rc_web = 0 ] || { echo "cut stops: web re-pin failed rc=$rc_web (see $REC.repin-web.out); WEB_REPIN=skip keeps the current web pin"; exit 1; }
 
 for f in $R/_records/bigboy-$OLD8/pass-bigboy-corpus-admin7.sh; do [ -f $f ] && cp -n $f $REC/; done
 # CHAOS-7022 (D2804/D2811): pre-roll routing carry, refuse-not-skip. Runs HERE -- after repin

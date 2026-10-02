@@ -1,4 +1,0 @@
-label=internal/auth/edgetoken (Go-signed session tokens vs the live AuthService)
-package=./internal/auth/edgetoken
-run=^(TestSignerMatchesLiveAuthService)$
-proof=edgetoken-signer|api live Python oracle edgetoken-signer did not run

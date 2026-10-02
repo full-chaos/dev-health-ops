@@ -62,3 +62,7 @@ func TypedNil() *outside.Config { return &outside.Config{HTTPClient: (*nethttp.C
 var Chan chan outside.Config
 
 var Map map[string]outside.Config
+
+func ParenNil() *outside.Config { return &outside.Config{HTTPClient: (nil)} }
+
+func ParenTypedNil() *outside.Config { return &outside.Config{HTTPClient: ((*nethttp.Client)(nil))} }

@@ -156,6 +156,25 @@ const (
 )
 
 func TestEveryHTTPClientSiteIsClassified(t *testing.T) {
+	problems, found, rows := realWalkProblems(t, pinnedOutOfScope, true)
+	for _, problem := range problems {
+		t.Error(problem)
+	}
+	t.Logf("%d sites, %d rows, %d problems", len(found), len(rows), len(problems))
+}
+
+// The pin is applied to the REAL walk: the same function with a pinned list that differs from the walked scope yields the
+// SCOPE LIMIT problem (so the comparison cannot be dropped from the real test unseen).
+func TestTheScopePinIsAppliedToTheRealWalk(t *testing.T) {
+	problems, _, _ := realWalkProblems(t, append(append([]string(nil), pinnedOutOfScope...), "not/a/real/file.go"), false)
+	if len(problems) != 1 || !strings.Contains(problems[0], "SCOPE LIMIT changed") {
+		t.Fatalf("want exactly the SCOPE LIMIT problem, got %v", problems)
+	}
+}
+
+// realWalkProblems walks the real module and returns every problem against redirect_sites.tsv and against the pinned scope list.
+func realWalkProblems(t *testing.T, pinned []string, allowUpdate bool) ([]string, map[site]int, map[site]row) {
+	t.Helper()
 	root, err := filepath.Abs(moduleRootRel)
 	if err != nil {
 		t.Fatal(err)
@@ -168,19 +187,25 @@ func TestEveryHTTPClientSiteIsClassified(t *testing.T) {
 	facts := map[fnKey]*fnFacts{}
 	found, problems, outside := scanPackages(t, root, patterns, replaced, func(string) bool { return false }, "", facts)
 	rows := readRows(t, rowFile)
-	if *updateSites {
+	if allowUpdate && *updateSites {
 		writeRows(t, rowFile, found, rows)
 		rows = readRows(t, rowFile)
 	}
 	problems = append(problems, compareSites(found, rows, root, facts)...)
 	// The scope limit is PINNED by name: a production file outside the linux/amd64 and linux/arm64 builds is not walked,
-	// so it must be listed here with its reason, and a file that joins or leaves the list fails.
-	problems = append(problems, scopeProblems(outside, pinnedOutOfScope)...)
-	sort.Strings(problems)
-	for _, problem := range problems {
-		t.Error(problem)
+	// so it must be listed with its reason, and a file that joins or leaves the list fails.
+	problems = append(problems, scopeProblems(outside, pinned)...)
+	if !allowUpdate { // only the scope problem is of interest when the pin is deliberately wrong
+		var scope []string
+		for _, problem := range problems {
+			if strings.Contains(problem, "SCOPE LIMIT changed") {
+				scope = append(scope, problem)
+			}
+		}
+		problems = scope
 	}
-	t.Logf("%d sites, %d rows, %d problems", len(found), len(rows), len(problems))
+	sort.Strings(problems)
+	return problems, found, rows
 }
 
 // compareSites is the verdict: every defect of the row set against the found sites, as sorted text.
@@ -1088,6 +1113,13 @@ func TestTheSiteWalkerFindsEveryKind(t *testing.T) {
 		{prefix + "policies/policies.go", "ForeignCall", "client-literal"}:             1,
 		{prefix + "policies/policies.go", "FieldReturn", "client-literal"}:             1,
 		{prefix + "policies/policies.go", "ExtraStatement", "client-literal"}:          1,
+		{prefix + "policies/policies.go", "NilLiteral", "client-literal"}:              1,
+		{prefix + "policies/policies.go", "NilAssign", "checkredirect-assign"}:         1,
+		{prefix + "policies/policies.go", "PolicyVariable", "client-literal"}:          1,
+		{prefix + "policies/policies.go", "MethodValue", "client-literal"}:             1,
+		{prefix + "policies/policies.go", "UnloadedFunction", "client-literal"}:        1,
+		{prefix + "nilfield/nilfield.go", "ParenNil", "nil-client-field-literal"}:      1,
+		{prefix + "nilfield/nilfield.go", "ParenTypedNil", "nil-client-field-literal"}: 1,
 		{prefix + "policies/policies.go", "UnreachableAfter", "client-literal"}:        1,
 		{prefix + "policies/policies.go", "SameNameOtherPackage", "client-literal"}:    1,
 		{prefix + "policies/policies.go", "OtherNetHTTPError", "client-literal"}:       1,
@@ -1136,7 +1168,7 @@ func TestTheSiteWalkerFindsEveryKind(t *testing.T) {
 	// the class derived from the code of a function
 	derived := map[string]string{"Guarded": "guarded", "GuardedNew": "guarded", "RefuseLiteral": "never-follows", "RefuseFunction": "never-follows",
 		"RefuseAssign": "never-follows", "Delegating": "custom-policy", "LocalVariable": "custom-policy", "Conditional": "custom-policy",
-		"RefuseErrorf": "custom-policy", "ForeignCall": "custom-policy", "FieldReturn": "custom-policy", "ExtraStatement": "custom-policy", "UnreachableAfter": "custom-policy", "SameNameOtherPackage": "custom-policy", "OtherNetHTTPError": "custom-policy", "ForeignError": "custom-policy", "RefusePackageVar": "custom-policy", "Drop": "drops-credential", "Custom": "custom-policy", "Mixed": "MIXED", "Bare": ""}
+		"RefuseErrorf": "custom-policy", "ForeignCall": "custom-policy", "FieldReturn": "custom-policy", "ExtraStatement": "custom-policy", "NilLiteral": "", "NilAssign": "", "PolicyVariable": "custom-policy", "MethodValue": "custom-policy", "UnloadedFunction": "custom-policy", "UnreachableAfter": "custom-policy", "SameNameOtherPackage": "custom-policy", "OtherNetHTTPError": "custom-policy", "ForeignError": "custom-policy", "RefusePackageVar": "custom-policy", "Drop": "drops-credential", "Custom": "custom-policy", "Mixed": "MIXED", "Bare": ""}
 	for symbol, class := range derived {
 		if got := facts[fnKey{prefix + "policies/policies.go", symbol}].derive(); got != class {
 			t.Errorf("derived class of %s: %q, want %q", symbol, got, class)

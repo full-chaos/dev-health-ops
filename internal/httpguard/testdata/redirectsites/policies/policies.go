@@ -9,6 +9,7 @@ import (
 
 	"github.com/full-chaos/dev-health-ops/internal/httpguard"
 	"github.com/full-chaos/dev-health-ops/internal/httpguard/testdata/redirectsites/fakedefault"
+	"github.com/full-chaos/dev-health-ops/internal/httpguard/testdata/redirectsites/unloaded"
 	"github.com/full-chaos/dev-health-ops/internal/providerfoundation"
 )
 
@@ -110,3 +111,19 @@ func SameNameOtherPackage() *nethttp.Client {
 func OtherNetHTTPError() *nethttp.Client {
 	return &nethttp.Client{CheckRedirect: func(*nethttp.Request, []*nethttp.Request) error { return nethttp.ErrNotSupported }}
 }
+
+func NilLiteral() *nethttp.Client { return &nethttp.Client{CheckRedirect: nil} }
+
+func NilAssign(c *nethttp.Client) { c.CheckRedirect = nil }
+
+var policyVar func(*nethttp.Request, []*nethttp.Request) error
+
+func PolicyVariable() *nethttp.Client { return &nethttp.Client{CheckRedirect: policyVar} }
+
+type guard struct{}
+
+func (guard) Check(*nethttp.Request, []*nethttp.Request) error { return nethttp.ErrUseLastResponse }
+
+func MethodValue() *nethttp.Client { return &nethttp.Client{CheckRedirect: guard{}.Check} }
+
+func UnloadedFunction() *nethttp.Client { return &nethttp.Client{CheckRedirect: unloaded.Check} }

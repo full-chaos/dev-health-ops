@@ -154,6 +154,39 @@ def test_a_python_route_deleted_with_no_list_entry_fails(real_routes):
     ), problems
 
 
+def test_a_listed_route_the_manifest_does_not_cover_fails(real_routes):
+    manifest, _ = checker.load_manifest(MANIFEST_PATH)
+    deleted, _ = checker.load_deleted(DELETED_PATH)
+    stray = [
+        *deleted,
+        checker.DeletedRoute("GET", "/api/v1/not-in-the-dump", "CHAOS-0"),
+    ]
+    problems = checker.check(real_routes, manifest, REPO_ROOT, stray)
+    assert any(
+        "/api/v1/not-in-the-dump" in problem and "covered by no row" in problem
+        for problem in problems
+    ), problems
+
+
+def test_a_static_sibling_entry_does_not_excuse_a_template_row(real_routes):
+    manifest, _ = checker.load_manifest(MANIFEST_PATH)
+    deleted, _ = checker.load_deleted(DELETED_PATH)
+    # the row /api/v1/billing/plans/{} is excused by its own entries (plans/{}); without them a sibling entry
+    # (plans/pull-stripe) alone must not excuse it
+    siblings_only = [
+        entry for entry in deleted if entry.path != "/api/v1/billing/plans/{}"
+    ]
+    assert any(
+        entry.path == "/api/v1/billing/plans/pull-stripe" for entry in siblings_only
+    )
+    problems = checker.check(real_routes, manifest, REPO_ROOT, siblings_only)
+    assert any(
+        "/api/v1/billing/plans/{}" in problem
+        and "names no served Python route" in problem
+        for problem in problems
+    ), problems
+
+
 def test_a_malformed_or_duplicated_deleted_list_row_is_reported(tmp_path):
     copy = tmp_path / "deleted.tsv"
     copy.write_text("GET\t/a\tCHAOS-1\nGET\t/a\tCHAOS-1\nget\t/b\tCHAOS-1\nGET\t/c\n")

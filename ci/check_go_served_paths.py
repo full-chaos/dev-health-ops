@@ -340,6 +340,11 @@ def check(
         (str(route["method"]).upper(), normalize(route["path"])) for route in routes
     }
     for entry in deleted:
+        if not any(covers(path, entry.path) for path in manifest):
+            problems.append(
+                f"{DELETED_RELATIVE}: {entry.method} {entry.path} ({entry.ticket}) is covered by no row of the "
+                "Go-served manifest: a route the ingress never sent to Go cannot be deleted by listing it"
+            )
         if (entry.method, entry.path) in served_methods:
             problems.append(
                 f"{DELETED_RELATIVE}: {entry.method} {entry.path} ({entry.ticket}) is listed as deleted but a served "
@@ -347,8 +352,8 @@ def check(
             )
     for path, row in sorted(manifest.items()):
         if not any(covers(path, route_path) for route_path in served):
-            if any(covers(path, entry.path) for entry in deleted):
-                continue  # its Python route was deleted: on the closed list
+            if any(entry.path == path for entry in deleted):
+                continue  # its Python route was deleted: the closed list names this very row
             problems.append(
                 f"{MANIFEST_RELATIVE}: {row.rev} {row.plane} {path} names no served Python route: "
                 "remove the row or fix the path"

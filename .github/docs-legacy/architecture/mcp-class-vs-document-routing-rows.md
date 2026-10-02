@@ -7,10 +7,10 @@ Engineering note, not customer documentation. Cross-linked from the doc comment 
 
 | Row key (`selected_operation`) | Switch | Route | Listener | acr consumer |
 |---|---|---|---|---|
-| a named document operation, e.g. `hotspots` | `routeswitch.NewPostgresSwitch(pgPool, schemaDigest, digestByOperation)` (`server/query_route.go:3161`) | `POST /query`, named-operation route (`server/server.go:204` public, `internalMux.Handle("/", ...)` at `server.go:888`) | `:8090` / `:8091` | `run_operation` (acr `ACR_DATA_QUERY_URL`) |
+| a named document operation, e.g. `hotspots` | `routeswitch.NewPostgresSwitch(pgPool, schemaDigest, digestByOperation)` (`server/query_route.go:3161`) | `POST /query`, named-operation route (`server/server.go:222` public, `internalMux.Handle("/", ...)` at `server.go:888`) | `:8090` / `:8091` | `run_operation` (acr `ACR_DATA_QUERY_URL`) |
 | `mcp:<root>`, e.g. `mcp:hotspots` | `routeswitch.NewPostgresSwitch(pgPool, schemaDigest, mcpRoutingDigests())` (`server/query_route.go:2742`) | `POST /query`, MCP class route (`server/server.go:311` `mcpMux`) | `:8092` | `graphql_query` (acr `ACR_DATA_GRAPHQL_URL`) |
 
-What a row does on the MCP listener (`server/mcp_route.go:545`, `routeswitch/postgres_switch.go:30-32,125`): `Enabled("mcp:"+root)` is true only when a row
+What a row does on the MCP listener (`server/mcp_route.go:548`, `routeswitch/postgres_switch.go:30-32,125`): `Enabled("mcp:"+root)` is true only when a row
 exists for the current schema digest AND its mode is `canary` or `primary`. A root whose class row is absent, `shadow`, `python` or `disabled`
 is refused with HTTP 404, reason `root_field_not_enabled`. There is no pass-through to another plane: what passes is served by the Go server.
 

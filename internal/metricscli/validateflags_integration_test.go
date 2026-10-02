@@ -324,7 +324,7 @@ func TestValidateFlagsAgainstClickHouse(t *testing.T) {
 	golden := venueoracle.OpenGolden(t, venueoracle.GoldenSpec{
 		Path:        "testdata/golden/validate_flags.json",
 		PythonBuild: validateFlagsPythonBuild,
-		SHA256:      "fb74c43385909d9d276f3326bfb8ac0adb59c94f56ddd7b865995654a2598752",
+		SHA256:      "a4acb8fb91f2bee8498ceb0e99334792d245027421d0c7ee11ddd44011b3ff7e",
 		Recipe: "git worktree add --detach $DIR " + validateFlagsPythonBuild + " (with its .venv: uv sync --frozen --no-install-project); then from the repository root: " +
 			"go run ./internal/testsupport/venueoracle/goldenrecord -pkg ./internal/metricscli/ -test '^TestValidateFlagsAgainstClickHouse$' -python-root $DIR",
 	})

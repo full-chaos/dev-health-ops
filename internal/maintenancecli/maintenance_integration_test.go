@@ -454,7 +454,7 @@ func canonicalState(t *testing.T, value any) string {
 // execution); the scenarios (their arguments and variables) are part of the golden's key. The seeded error
 // texts carry no literal token (a secret scanner would read it as a real one).
 func TestScrubMatchesTheFrozenPythonOutput(t *testing.T) {
-	golden, root := maintenanceGolden(t, "scrub", "08c77a18208154a68c76364c7d913571ee86e3f70db5e114dda7138657f63fbc", "TestScrubMatchesTheFrozenPythonOutput")
+	golden, root := maintenanceGolden(t, "scrub", "1b14eab8972cfcb0a5077eef844f21ff94d49475de22ff9de671aa03824ec649", "TestScrubMatchesTheFrozenPythonOutput")
 	keys := make([]map[string]any, len(scrubScenarios))
 	for index, s := range scrubScenarios {
 		keys[index] = map[string]any{"name": s.name, "args": s.args, "env": s.env}
@@ -646,7 +646,7 @@ func (db *database) pythonHousekeeping(t *testing.T, producer *venueoracle.Produ
 // (the recipe regenerates them by execution); the scenarios are part of the golden's key. The seeded rows are
 // relative to the database's own clock (hoursAgo), so no answer depends on the day it runs.
 func TestHousekeepingMatchesTheFrozenPythonOutput(t *testing.T) {
-	golden, root := maintenanceGolden(t, "housekeeping", "378dc151bb1a2d5458029f49b5b68c17b3ef1ee7a0457403d84de69cb024f49b", "TestHousekeepingMatchesTheFrozenPythonOutput")
+	golden, root := maintenanceGolden(t, "housekeeping", "be53a74fa67a52feb91ef0a924b13fb101a0a95a3785fe84360080e0079825d3", "TestHousekeepingMatchesTheFrozenPythonOutput")
 	keys := make([]map[string]any, len(housekeepingScenarios))
 	for index, s := range housekeepingScenarios {
 		keys[index] = map[string]any{"name": s.name, "verb": s.verb, "pattern": s.pattern.String()}

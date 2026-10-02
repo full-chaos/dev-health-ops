@@ -455,7 +455,7 @@ func TestBackfillOperationalWritesTheFrozenPythonRows(t *testing.T) {
 	goldenFile := venueoracle.OpenGolden(t, venueoracle.GoldenSpec{
 		Path:        "testdata/golden/backfill_operational.json",
 		PythonBuild: operationalPythonBuild,
-		SHA256:      "0c51bbaf645f96fc403cc9023fbad93313b23c905180095ba0e394d81aa6ac1a",
+		SHA256:      "1d965741b6bc22104912257e0062d71956dd8455699c9d80236cced566e6594a",
 		Recipe: "git worktree add --detach $DIR " + operationalPythonBuild + " (with its .venv: uv sync --frozen --no-install-project); then from the repository root: " +
 			"go run ./internal/testsupport/venueoracle/goldenrecord -pkg ./internal/operationalbackfill/ -test '^TestBackfillOperationalWritesTheFrozenPythonRows$' -python-root $DIR",
 	})

@@ -171,37 +171,6 @@ type edgeAnswer struct {
 	header string
 }
 
-// The ruled divergence of throughputForecast.estimateCoverage on a scope with no
-// throughput history and no estimate-coverage rows (the venue's seed): the
-// recorded Python answer is null (forecast.py skipped the coverage read when the
-// backlog was 0), and query-api answers the ZERO object, ratio 0 included, by
-// chris's decision "Keep zero" (D4373, read as D4376 by the lead: coverage is
-// built from its own rows, an all-zero object when there are none, never null).
-// The recorded Python answer stays as recorded.
-//
-// It is NOT a declared whole-answer divergence: that would compare two strings
-// and nothing else of the body. Instead the one field is blanked to the same
-// placeholder on both sides (coverageDivergenceNormalize) so every other field
-// of the answer is still compared by Diff, and the raw Go answer is asserted to
-// carry exactly the zero object (coverageDivergenceInspect) so a Go answer of
-// null, or of any other object, fails instead of being blanked away.
-const (
-	pythonNullCoverage      = `"estimateCoverage":null`
-	goZeroCoverage          = `"estimateCoverage":{"ratio":0,"estimatedCount":0,"unestimatedCount":0,"backlogSize":0,"__typename":"ThroughputEstimateCoverage"}`
-	declaredCoverageBlanked = `"estimateCoverage":"<declared D4373/D4376: no coverage rows>"`
-)
-
-func isThroughputForecastRequest(request venueoracle.Request) bool {
-	return strings.HasSuffix(request.Name, " throughputForecast")
-}
-
-func coverageDivergenceNormalize(request venueoracle.Request, body string) string {
-	if !isThroughputForecastRequest(request) {
-		return body
-	}
-	return strings.ReplaceAll(strings.ReplaceAll(body, pythonNullCoverage, declaredCoverageBlanked), goZeroCoverage, declaredCoverageBlanked)
-}
-
 // nosniffOnly is the declared divergence of the size middleware's own
 // refusals: they run outside the security headers, as in the Python app, and
 // the Python answer carries none; query-api's writer states nosniff itself.

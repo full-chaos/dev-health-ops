@@ -469,6 +469,11 @@ func TestListRepositoriesVenueOracleMatchesFrozenPython(t *testing.T) {
 		}
 		gotResult, _ := json.Marshal(got)
 		wantResult, _ := json.Marshal(pythonResult)
+		if strings.HasPrefix(fmt.Sprint(got), CrossOriginLinkClass+":") {
+			// D4037: Go refuses a next page on another origin (no request, no token); Python follows it and sends the
+			// token. The scenario is a named known difference: Python must have made the cross-origin request.
+			s.Known = "D4037: Go refuses a next-page Link on another origin; Python follows it and sends the token"
+		}
 		if s.Known != "" {
 			var pythonRequests [][2]string
 			for _, request := range want[index].Requests {

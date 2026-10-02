@@ -23,6 +23,7 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/api/pyjson"
 	"github.com/full-chaos/dev-health-ops/internal/api/restcore"
 	"github.com/full-chaos/dev-health-ops/internal/pythonparity"
+	"github.com/full-chaos/dev-health-ops/internal/pythonparity/pyidna"
 )
 
 const (
@@ -110,6 +111,7 @@ func (c Client) listPages(ctx context.Context, path, operation, dataKey, extra, 
 	loweredPattern := pythonparity.Lower(pattern)
 	var repos []Repo
 	next := normalizeURL(merge(base, path, "per_page="+fmt.Sprint(perPage)+extra))
+	baseOrigin, haveBaseOrigin := originOf(next)
 	for pages := 0; ; pages++ {
 		if pages >= maxPages {
 			break
@@ -163,8 +165,44 @@ func (c Client) listPages(ctx context.Context, path, operation, dataKey, extra, 
 			return nil, err
 		}
 		next = normalizeURL(next)
+		// The token goes only to the origin it was configured for: a next page on another origin is refused, not
+		// followed without the token (an unauthenticated page 2 could return a silent partial list).
+		if haveBaseOrigin {
+			if nextOrigin, ok := originOf(next); !ok || nextOrigin != baseOrigin {
+				return nil, &Error{Class: CrossOriginLinkClass, Message: "refused a next page link on another origin"}
+			}
+		}
 	}
 	return repos, nil
+}
+
+// CrossOriginLinkClass is the error class of a Link next URL whose origin differs from the base URL's.
+const CrossOriginLinkClass = "link_cross_origin_refused"
+
+// origin is where a request goes: the scheme, the host in its IDNA form (lower case) and the port, the scheme's
+// default when the URL names none. Userinfo, path, query and fragment are not part of it.
+type origin struct{ scheme, host, port string }
+
+func originOf(raw string) (origin, bool) {
+	parsed, err := url.Parse(raw)
+	if err != nil || parsed.Host == "" {
+		return origin{}, false
+	}
+	scheme := strings.ToLower(parsed.Scheme)
+	encoded, err := pyidna.CodecEncode(strings.ToLower(parsed.Hostname()))
+	if err != nil || encoded == "" {
+		return origin{}, false
+	}
+	port := parsed.Port()
+	if port == "" {
+		switch scheme {
+		case "https":
+			port = "443"
+		case "http":
+			port = "80"
+		}
+	}
+	return origin{scheme: scheme, host: strings.ToLower(encoded), port: port}, true
 }
 
 func orDefault(base string) string {

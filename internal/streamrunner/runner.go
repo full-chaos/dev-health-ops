@@ -21,6 +21,19 @@ import (
 var errNotReady = errors.New("stream runner has not completed a successful stream window")
 var errTransientWrite = errors.New("transient stream durable-write failure")
 
+// transientWriteError is errTransientWrite around the handler's own error. It
+// says what the old fmt.Errorf("%w: %w") said (errors.Is(err, errTransientWrite)
+// and the same text) but wraps the cause in a single Unwrap chain, so a handler
+// error that is a pure shutdown (context.Canceled) is still recognised as one by
+// tracing.IsCancellation instead of being mixed with the sentinel.
+type transientWriteError struct{ cause error }
+
+func (e *transientWriteError) Error() string {
+	return errTransientWrite.Error() + ": " + e.cause.Error()
+}
+func (e *transientWriteError) Unwrap() error        { return e.cause }
+func (e *transientWriteError) Is(target error) bool { return target == errTransientWrite }
+
 const initialIdleDelay = 10 * time.Millisecond
 
 // Runner owns a long-lived XREADGROUP loop. It has one in-flight message per
@@ -93,6 +106,8 @@ func (r *Runner) Start(parent context.Context) error {
 	r.mu.Unlock()
 
 	if err := r.refreshStreams(ctx); err != nil {
+		// A startup discovery failure is as much a failed step as a later one.
+		r.failedStep(ctx, "dev_health.stream.maintenance_failed", "discover", err)
 		cancel()
 		close(done)
 		return err
@@ -443,7 +458,7 @@ func (r *Runner) handle(ctx context.Context, message Message) (string, error) {
 		r.mu.Lock()
 		r.retries++
 		r.mu.Unlock()
-		return "transient_error", fmt.Errorf("%w: %w", errTransientWrite, err)
+		return "transient_error", &transientWriteError{cause: err}
 	}
 	if err := r.transport.Ack(ctx, message.Stream, r.config.ConsumerGroup, message.ID); err != nil {
 		// The durable write committed but the ACK did not. Redelivery is safe only

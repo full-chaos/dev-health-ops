@@ -422,3 +422,92 @@ func TestRunnerReclaimBatchAttributesCountHandledEventsOnly(t *testing.T) {
 		t.Errorf("want 2 handle spans (claimed + tombstone poison)")
 	}
 }
+
+// A startup discovery failure (Runner.Start's first refresh) is a failed step
+// span like a later one.
+func TestRunnerStartDiscoveryFailureEmitsAStagedErrorSpan(t *testing.T) {
+	exporter := installStreamSpanRecorder(t)
+	runner, err := New(failingDiscoverTransport{&fakeTransport{}}, handlerFunc(func(context.Context, Message) error { return nil }), dynamicTestConfig(), health.NewRegistry(time.Second))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := runner.Start(context.Background()); err == nil {
+		t.Fatal("Start returned nil for a failing discovery")
+	}
+	spans := spansByName(exporter, "dev_health.stream.maintenance_failed")
+	if len(spans) != 1 || spans[0].Status.Code != codes.Error || spanStrAttr(spans[0], "dev_health.work.stage") != "discover" {
+		t.Fatalf("spans = %v, want one Error maintenance_failed span at stage discover", spans)
+	}
+	if spanStrAttr(spans[0], "dev_health.stream.runner") != "stream_test" {
+		t.Errorf("runner attr = %q", spanStrAttr(spans[0], "dev_health.stream.runner"))
+	}
+	assertNoIdentity(t, exporter)
+}
+
+// A batch where one event is cancelled by shutdown and another fails its durable
+// write is a FAILED batch: the joined cancel must not hide the real failure.
+func TestRunnerBatchWithACancelledAndAFailedEventIsAnErrorSpan(t *testing.T) {
+	exporter := installStreamSpanRecorder(t)
+	transport := &fakeTransport{new: []Message{{Stream: "test:stream", ID: "1-0"}, {Stream: "test:stream", ID: "2-0"}}}
+	calls := 0
+	runner, err := New(transport, handlerFunc(func(context.Context, Message) error {
+		calls++
+		if calls == 1 {
+			return context.Canceled
+		}
+		return errors.New("clickhouse unavailable")
+	}), testConfig(), health.NewRegistry(time.Second))
+	if err != nil {
+		t.Fatal(err)
+	}
+	_ = runner.window(context.Background())
+	batches := spansByName(exporter, "dev_health.stream.batch")
+	if len(batches) != 1 || batches[0].Status.Code != codes.Error {
+		t.Fatalf("batch spans = %v, want one Error batch (a joined cancel hid the real failure)", batches)
+	}
+	for _, kv := range batches[0].Attributes {
+		if string(kv.Key) == "dev_health.work.cancelled" {
+			t.Errorf("a batch with a real failure is marked cancelled")
+		}
+	}
+	if spanStrAttr(batches[0], "dev_health.stream.failed") != "2" || spanStrAttr(batches[0], "dev_health.work.stage") != "handle" {
+		t.Errorf("batch attrs = %v", batches[0].Attributes)
+	}
+}
+
+// A batch whose every failure is a shutdown (handlers see context.Canceled) is
+// a cancelled batch, not an Error batch: the transient-write wrapper must not
+// turn a pure shutdown into a failure, and must keep the old text and sentinel.
+func TestRunnerShutdownOnlyBatchIsCancelledNotAnError(t *testing.T) {
+	exporter := installStreamSpanRecorder(t)
+	transport := &fakeTransport{new: []Message{{Stream: "test:stream", ID: "1-0"}, {Stream: "test:stream", ID: "2-0"}}}
+	runner, err := New(transport, handlerFunc(func(context.Context, Message) error { return context.Canceled }), testConfig(), health.NewRegistry(time.Second))
+	if err != nil {
+		t.Fatal(err)
+	}
+	werr := runner.window(context.Background())
+	if !errors.Is(werr, errTransientWrite) || !errors.Is(werr, context.Canceled) {
+		t.Fatalf("window error %v lost the sentinel or the cause", werr)
+	}
+	if !strings.Contains(werr.Error(), "transient stream durable-write failure: context canceled") {
+		t.Errorf("error text changed: %q", werr.Error())
+	}
+	batches := spansByName(exporter, "dev_health.stream.batch")
+	if len(batches) != 1 || batches[0].Status.Code == codes.Error {
+		t.Fatalf("batch spans = %v, want one non-Error (cancelled) batch", batches)
+	}
+	var cancelled bool
+	for _, kv := range batches[0].Attributes {
+		if string(kv.Key) == "dev_health.work.cancelled" {
+			cancelled = kv.Value.AsBool()
+		}
+	}
+	if !cancelled {
+		t.Errorf("a shutdown-only batch must carry dev_health.work.cancelled")
+	}
+	for _, span := range spansByName(exporter, "dev_health.stream.handle") {
+		if span.Status.Code == codes.Error {
+			t.Errorf("a shutdown-cancelled event is an Error handle span")
+		}
+	}
+}

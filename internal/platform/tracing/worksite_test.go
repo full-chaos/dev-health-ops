@@ -70,6 +70,10 @@ func TestEndWorkSpanClassifiesOutcomes(t *testing.T) {
 		{name: "plain", err: errors.New("boom"), wantError: true, wantType: "other"},
 		{name: "wrapped payload error", err: fmt.Errorf("write: %w", payloadError{}), wantError: true, wantType: "other"},
 		{name: "bare cancel", err: context.Canceled, wantCancelled: true},
+		{name: "joined cancel and a real failure is a failure", err: errors.Join(context.Canceled, errors.New("durable write failed")), wantError: true, wantType: "other"},
+		{name: "multi-%w cancel and a real failure is a failure", err: fmt.Errorf("window: %w, and %w", context.Canceled, errors.New("durable write failed")), wantError: true, wantType: "other"},
+		{name: "joined cancels only is a shutdown", err: errors.Join(context.Canceled, fmt.Errorf("drain: %w", context.Canceled)), wantCancelled: true},
+		{name: "joined cancel and a deadline is a failure", err: errors.Join(context.Canceled, context.DeadlineExceeded), wantError: true, wantType: "timeout"},
 		{name: "cancel with marker text", err: fmt.Errorf("secret-payload customer window: %w", context.Canceled), wantCancelled: true},
 		{name: "net error that is not a timeout", err: fmt.Errorf("dial: %w", netPlainError{}), wantError: true, wantType: "other"},
 		{name: "json syntax", err: fmt.Errorf("handle: %w", jsonSyntaxError()), wantError: true, wantType: "decode"},
@@ -159,5 +163,35 @@ func TestEndWorkSpanNilSpanIsSafe(t *testing.T) {
 func TestErrorClassWordsArePinned(t *testing.T) {
 	if got := strings.Join(ErrorClasses, ","); got != "timeout,decode,store,other" {
 		t.Errorf("ErrorClasses = %q", got)
+	}
+}
+
+// emptyMulti is a multi-error with no leaves: it carries no cancellation.
+type emptyMulti struct{}
+
+func (emptyMulti) Error() string   { return "empty" }
+func (emptyMulti) Unwrap() []error { return nil }
+
+func TestIsCancellationIsPureCancellationOnly(t *testing.T) {
+	real := errors.New("real")
+	for name, tc := range map[string]struct {
+		err  error
+		want bool
+	}{
+		"nil":                {nil, false},
+		"bare":               {context.Canceled, true},
+		"wrapped":            {fmt.Errorf("x: %w", context.Canceled), true},
+		"double wrapped":     {fmt.Errorf("a: %w", fmt.Errorf("b: %w", context.Canceled)), true},
+		"real":               {real, false},
+		"joined pure":        {errors.Join(context.Canceled, context.Canceled), true},
+		"joined mixed":       {errors.Join(context.Canceled, real), false},
+		"joined mixed order": {errors.Join(real, context.Canceled), false},
+		"nested mixed":       {errors.Join(context.Canceled, fmt.Errorf("w: %w", errors.Join(context.Canceled, real))), false},
+		"deadline":           {context.DeadlineExceeded, false},
+		"empty multi-error":  {emptyMulti{}, false},
+	} {
+		if got := IsCancellation(tc.err); got != tc.want {
+			t.Errorf("%s: IsCancellation = %v, want %v", name, got, tc.want)
+		}
 	}
 }

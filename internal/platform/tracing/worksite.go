@@ -54,7 +54,7 @@ func EndWorkSpan(span oteltrace.Span, err error) {
 	if span == nil {
 		return
 	}
-	if errors.Is(err, context.Canceled) {
+	if IsCancellation(err) {
 		span.SetAttributes(attribute.Bool("dev_health.work.cancelled", true))
 		span.End()
 		return
@@ -65,6 +65,33 @@ func EndWorkSpan(span oteltrace.Span, err error) {
 		span.SetStatus(codes.Error, class)
 	}
 	span.End()
+}
+
+// IsCancellation reports whether err is a shutdown and NOTHING else: every
+// leaf of its Unwrap tree is context.Canceled. errors.Is would also say yes for
+// errors.Join(context.Canceled, realFailure), which would hide the real failure
+// (no Error status, no log); a mixed error is a failure.
+func IsCancellation(err error) bool {
+	if err == nil {
+		return false
+	}
+	switch wrapped := err.(type) {
+	case interface{ Unwrap() []error }:
+		leaves := wrapped.Unwrap()
+		if len(leaves) == 0 {
+			return false
+		}
+		for _, leaf := range leaves {
+			if !IsCancellation(leaf) {
+				return false
+			}
+		}
+		return true
+	case interface{ Unwrap() error }:
+		return IsCancellation(wrapped.Unwrap())
+	default:
+		return errors.Is(err, context.Canceled)
+	}
 }
 
 // ErrorClass maps err to one of ErrorClasses by behaviour, never by text:

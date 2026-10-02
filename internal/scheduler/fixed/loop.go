@@ -374,7 +374,7 @@ func (e *loggedWindowError) Unwrap() error { return e.err }
 // (CHAOS-7879), so the text must be here.
 func (loop *Loop) logWindowFailure(ctx context.Context, err error) {
 	var logged *loggedWindowError
-	if errors.Is(err, context.Canceled) || errors.As(err, &logged) {
+	if tracing.IsCancellation(err) || errors.As(err, &logged) {
 		// A shutdown is not a failure; a schedule failure was already logged,
 		// per schedule, by step.
 		return

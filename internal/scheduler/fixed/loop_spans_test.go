@@ -379,3 +379,54 @@ func TestLoggedWindowErrorIsTransparent(t *testing.T) {
 		t.Fatalf("wrapper changed the error: %q", wrapped.Error())
 	}
 }
+
+// A window error that JOINS a shutdown with a real failure is a failure: it is
+// logged and its span is an Error span (errors.Is(.., Canceled) alone hid it).
+type joinedCancelStepper struct{ schedules []Schedule }
+
+func (stepper joinedCancelStepper) Step(context.Context, time.Time) (WindowResult, error) {
+	return WindowResult{}, errors.Join(context.Canceled, errors.New("engine down {marker-in-error}"))
+}
+func (stepper joinedCancelStepper) Schedules() []Schedule { return stepper.schedules }
+
+func TestFixedLoopJoinedCancelAndRealFailureIsLoggedAndAnErrorSpan(t *testing.T) {
+	exporter := installFixedSpanRecorder(t)
+	var logs syncBuffer
+	clock := &fixedTestClock{now: mustTime(t, "2026-07-24T00:00:00Z")}
+	loop, err := newLoop(joinedCancelStepper{schedules: []Schedule{heartbeatSchedule(t)}}, LoopConfig{
+		PollInterval: minLoopPollInterval,
+		StepTimeout:  time.Second,
+		MaxBackoff:   2 * minLoopPollInterval,
+		Registry:     health.NewRegistry(time.Second),
+		Logger:       slog.New(slog.NewJSONHandler(&logs, nil)),
+	}, clock)
+	if err != nil {
+		t.Fatal(err)
+	}
+	observed := make(chan struct{}, 4)
+	loop.stepObserved = func() { observed <- struct{}{} }
+	if err := loop.Start(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	waitForStepObserved(t, observed, "the first window")
+	_ = loop.Shutdown(context.Background())
+	if !strings.Contains(logs.String(), "fixed schedule window failed") || !strings.Contains(logs.String(), "marker-in-error") {
+		t.Errorf("a joined cancel + real failure was not logged: %q", logs.String())
+	}
+	var sawWindow bool
+	for _, span := range exporter.GetSpans() {
+		if span.Name != "dev_health.scheduler.fixed_window" {
+			continue
+		}
+		sawWindow = true
+		if span.Status.Code != codes.Error {
+			t.Errorf("a joined cancel + real failure window must be an Error span, got %v", span.Status.Code)
+		}
+		if _, cancelled := fixedAttr(span.Attributes, "dev_health.work.cancelled"); cancelled {
+			t.Errorf("a window with a real failure is marked cancelled")
+		}
+	}
+	if !sawWindow {
+		t.Error("no fixed_window span")
+	}
+}

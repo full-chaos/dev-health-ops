@@ -105,3 +105,35 @@ func TestUnitFailedCounterRendersPerProviderDatasetAndReason(t *testing.T) {
 		t.Fatalf("series=%d want 4 in:\n%s", got, rendered)
 	}
 }
+
+func TestUnitDeferredCounterRendersPerProviderDatasetAndReason(t *testing.T) {
+	t.Parallel()
+	metrics := NewMetrics()
+	metrics.RecordUnitDeferred("GitHub", "files", "budget_contention")
+	metrics.RecordUnitDeferred("github", "files", "budget_contention")
+	metrics.RecordUnitDeferred("github", "files", "rate_limited")
+	metrics.RecordUnitDeferred("github", "files", "invented reason")
+	metrics.RecordUnitDeferred("github", "invented-dataset", "chunk_continuation")
+	var nilMetrics *Metrics
+	nilMetrics.RecordUnitDeferred("github", "files", "budget_contention")
+
+	var output bytes.Buffer
+	if err := metrics.WritePrometheus(&output); err != nil {
+		t.Fatal(err)
+	}
+	rendered := output.String()
+	for _, want := range []string{
+		"# TYPE dev_health_provider_unit_deferred_total counter",
+		`dev_health_provider_unit_deferred_total{provider="github",dataset="files",reason="budget_contention"} 2`,
+		`dev_health_provider_unit_deferred_total{provider="github",dataset="files",reason="rate_limited"} 1`,
+		`dev_health_provider_unit_deferred_total{provider="github",dataset="files",reason="other"} 1`,
+		`dev_health_provider_unit_deferred_total{provider="github",dataset="other",reason="chunk_continuation"} 1`,
+	} {
+		if !strings.Contains(rendered, want) {
+			t.Fatalf("missing %q in:\n%s", want, rendered)
+		}
+	}
+	if got := strings.Count(rendered, "dev_health_provider_unit_deferred_total{"); got != 4 {
+		t.Fatalf("series=%d want 4 in:\n%s", got, rendered)
+	}
+}

@@ -67,8 +67,12 @@ WHERE id = $1`, firstUnitID, priorAttempts, priorEpisodeAt); err != nil {
 		t.Fatal(err)
 	}
 	availableAt := now.Add(1500 * time.Millisecond)
-	if err := repository.DeferForBudgetContention(ctx, claim, availableAt, now); err != nil {
+	deferrals, err := repository.DeferForBudgetContention(ctx, claim, availableAt, now)
+	if err != nil {
 		t.Fatal(err)
+	}
+	if deferrals != 1 {
+		t.Fatalf("first contention deferral count = %d, want 1 (the value the handler logs)", deferrals)
 	}
 
 	var status, category, retryReason string

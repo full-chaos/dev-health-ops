@@ -456,20 +456,24 @@ func (repository *PostgresRepository) DeferForBudgetContention(
 	claim Claim,
 	availableAt time.Time,
 	now time.Time,
-) error {
+) (int, error) {
 	if repository == nil || repository.Pool == nil || ctx == nil ||
 		claim.Validate() != nil || now.IsZero() || !availableAt.After(now) ||
 		availableAt.Sub(now) > 5*time.Minute {
-		return ErrInvalidConfiguration
+		return 0, ErrInvalidConfiguration
 	}
-	command, err := repository.Pool.Exec(
+	// The statement returns the unit's own contention-deferral count after this
+	// deferral (CHAOS-7434), so the caller can log how many times this unit has
+	// lost the request reservation without a second read.
+	var deferrals int
+	err := repository.Pool.QueryRow(
 		ctx, deferForBudgetContentionSQL,
 		claim.ID, claim.Owner, now.UTC(), availableAt.UTC(),
-	)
-	if err != nil || command.RowsAffected() != 1 {
-		return ErrLeaseLost
+	).Scan(&deferrals)
+	if err != nil {
+		return 0, ErrLeaseLost
 	}
-	return nil
+	return deferrals, nil
 }
 
 // DeferChunkContinuation keeps a prepared chunk unit claimable for the same
@@ -908,7 +912,8 @@ WHERE unit.id = contention.id
   AND unit.status = 'running'
   AND unit.lease_owner = $2
   AND unit.lease_expires_at IS NOT NULL
-  AND unit.lease_expires_at > $3`
+  AND unit.lease_expires_at > $3
+RETURNING contention.next_deferrals`
 
 const deferForRateLimitSQL = `
 UPDATE public.sync_run_units AS unit

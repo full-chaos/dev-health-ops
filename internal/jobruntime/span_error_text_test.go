@@ -155,3 +155,15 @@ func TestTheInnermostTypeOfADeepChainIsNamed(t *testing.T) {
 		t.Fatalf("errorTypeName = %q", got)
 	}
 }
+
+type nilReceiverError struct{ cause error }
+
+func (err *nilReceiverError) Error() string { return "typed nil" }
+func (err *nilReceiverError) Unwrap() error { return err.cause }
+
+func TestATypedNilErrorDoesNotStopTheJobFinalizer(t *testing.T) {
+	var typedNil *nilReceiverError
+	if got := errorTypeName(typedNil); got != "unknown" {
+		t.Fatalf("errorTypeName(typed nil) = %q, want unknown", got)
+	}
+}

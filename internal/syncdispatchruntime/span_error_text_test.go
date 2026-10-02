@@ -123,8 +123,10 @@ func coordinatorWork(t *testing.T, fn func() error) (err error, spans tracetest.
 	t.Cleanup(func() { _ = provider.Shutdown(context.Background()) })
 	_, span := provider.Tracer("coordinator-work-test").Start(context.Background(), "coordinator")
 	func() {
-		defer finishCoordinatorWork(span, &err)
+		completed := false
+		defer finishCoordinatorWork(span, &err, &completed)
 		err = fn()
+		completed = true
 	}()
 	return err, exporter.GetSpans()
 }
@@ -171,7 +173,8 @@ func TestAPanickingCoordinatorWorkIsAFailedSpanAndStillPanics(t *testing.T) {
 	func() {
 		defer func() { recovered = recover() }()
 		var err error
-		defer finishCoordinatorWork(span, &err)
+		completed := false
+		defer finishCoordinatorWork(span, &err, &completed)
 		panic(plantedMarker)
 	}()
 	if recovered != plantedMarker {
@@ -224,8 +227,11 @@ func TestTheRiverWorkSpanOfACoordinatorFailureCarriesNoErrorText(t *testing.T) {
 	middleware := otelriver.NewMiddleware(&otelriver.MiddlewareConfig{TracerProvider: provider})
 	err := middleware.Work(context.Background(), &rivertype.JobRow{Kind: "coordinator_test"}, func(ctx context.Context) (err error) {
 		_, span := provider.Tracer("coordinator-river-test").Start(ctx, "coordinator")
-		defer finishCoordinatorWork(span, &err)
-		return plantedError()
+		completed := false
+		defer finishCoordinatorWork(span, &err, &completed)
+		err = plantedError()
+		completed = true
+		return err
 	})
 	if err == nil {
 		t.Fatal("no error")
@@ -291,5 +297,46 @@ func TestTheInnermostTypeOfADeepChainIsNamed(t *testing.T) {
 	err := fmt.Errorf("a: %w", fmt.Errorf("b: %w", fmt.Errorf("c: %w", &plantedFailure{message: plantedMarker})))
 	if got := errorTypeName(err); got != "*syncdispatchruntime.plantedFailure" {
 		t.Fatalf("errorTypeName = %q", got)
+	}
+}
+
+type nilReceiverError struct{ cause error }
+
+func (err *nilReceiverError) Error() string { return "typed nil" }
+func (err *nilReceiverError) Unwrap() error { return err.cause }
+
+// CHAOS-7896 r2: an error whose Unwrap panics (a typed nil receiver) must not stop the span from ending, and a panic(nil)
+// (recover returns nil under GODEBUG=panicnil=1) is a failed span that still panics, never a success.
+func TestATypedNilErrorDoesNotStopTheCoordinatorSpanFromEnding(t *testing.T) {
+	var typedNil *nilReceiverError
+	returned, spans := coordinatorWork(t, func() error { return typedNil })
+	if len(spans) != 1 || spans[0].Status.Code != codes.Error {
+		t.Fatalf("spans = %v, want one failed span", spans)
+	}
+	if returned == nil || !strings.HasPrefix(returned.Error(), "coordinator job failed: ") {
+		t.Fatalf("returned = %v", returned)
+	}
+	if got := errorTypeName(typedNil); got != "unknown" {
+		t.Fatalf("errorTypeName(typed nil) = %q, want unknown", got)
+	}
+}
+
+func TestAPanicNilIsAFailedSpanAndStillPanics(t *testing.T) {
+	t.Setenv("GODEBUG", "panicnil=1")
+	exporter := tracetest.NewInMemoryExporter()
+	provider := sdktrace.NewTracerProvider(sdktrace.WithSyncer(exporter))
+	t.Cleanup(func() { _ = provider.Shutdown(context.Background()) })
+	_, span := provider.Tracer("panic-nil-test").Start(context.Background(), "coordinator")
+	panicked := false
+	func() {
+		defer func() { _ = recover(); panicked = true }()
+		var err error
+		completed := false
+		defer finishCoordinatorWork(span, &err, &completed)
+		panic(nil)
+	}()
+	spans := exporter.GetSpans()
+	if !panicked || len(spans) != 1 || spans[0].Status.Code != codes.Error {
+		t.Fatalf("panicked=%v spans=%v, want a failed span and a propagated panic", panicked, spans)
 	}
 }

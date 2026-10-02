@@ -130,6 +130,9 @@ func (p *Producer) Command(ctx context.Context, declared map[string]string, extr
 	if err := extraEntriesErr(declared, extra); err != nil {
 		return nil, err
 	}
+	if err := declaredCheckoutPathErr(declared, p.Root); err != nil {
+		return nil, err
+	}
 	if err := p.activate(); err != nil {
 		return nil, err
 	}

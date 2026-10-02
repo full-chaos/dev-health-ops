@@ -164,6 +164,25 @@ func pagerDutyEffectsFactory(
 // this is a mutation-tested seam (CHAOS-3118) — reintroducing a second
 // providerfoundation.NewMetrics() call inside BuildExecutor, the exact defect
 // this ticket exists to eliminate, must fail that test.
+// logProviderBudgetConfig writes ONE Info line with the worker's concurrent
+// request budget limit per cost class (CHAOS-7881): the numbers THIS process
+// enforces when a provider unit asks for the request reservation. The matching
+// dispatch admission caps are logged by the process that RUNS the guard
+// (syncdispatchruntime.NewNativeDispatchSyncRunService, line
+// `sync_dispatch_admission_caps`), which can be another deployment. No org id
+// or tenant data.
+func logProviderBudgetConfig(logger *slog.Logger) {
+	if logger == nil {
+		logger = slog.Default()
+	}
+	limits := providersync.BudgetLimitsByCostClass()
+	logger.Info("provider_sync_budget_limits",
+		"budget_limit_light", limits[providersync.CostLight],
+		"budget_limit_medium", limits[providersync.CostMedium],
+		"budget_limit_heavy", limits[providersync.CostHeavy],
+	)
+}
+
 func buildProviderSyncHandler(
 	repository providerSyncRepository,
 	decryptor providerfoundation.CredentialDecryptor,
@@ -239,6 +258,10 @@ func buildProviderSyncHandlerWithRuntimeDependencies(
 	// (githubTestsMaxDownloadSize) -- see its zero-means-default doc comment.
 	githubTestsMaxArtifactBytes int64,
 ) (*providerunit.Handler, *providerfoundation.Metrics) {
+	// Every production path (buildProviderSyncWorker) and every wrapper above
+	// ends here, so the line is written exactly once per handler build, which
+	// is once per worker process (CHAOS-7881).
+	logProviderBudgetConfig(logger)
 	// providerMetrics is constructed exactly once per worker process and
 	// referenced by every claim's executor, so dev_health_provider_* actually
 	// accumulates across dispatches instead of being built and discarded per

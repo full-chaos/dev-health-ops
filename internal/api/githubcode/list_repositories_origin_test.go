@@ -3,6 +3,7 @@ package githubcode
 import (
 	"context"
 	"errors"
+	"github.com/full-chaos/dev-health-ops/internal/testsupport/redirectprobe"
 	"io"
 	"net"
 	"net/http"
@@ -10,8 +11,6 @@ import (
 	"strings"
 	"sync"
 	"testing"
-
-	"github.com/full-chaos/dev-health-ops/internal/testsupport/redirectprobe"
 )
 
 // A next-page Link on another origin is refused: no request reaches the other host and the error carries no URL,
@@ -103,6 +102,10 @@ func TestAnotherSchemePortOrHostIsAnotherOrigin(t *testing.T) {
 		{"host", "https://ghe.test", "https://ghe2.test/orgs/acme/repos?page=2"},
 		{"subdomain", "https://ghe.test", "https://api.ghe.test/orgs/acme/repos?page=2"},
 		{"default base, other host", "", "https://other.test/orgs/acme/repos?page=2"},
+		{"http base, link to port 443", "http://ghe.test", "http://ghe.test:443/orgs/acme/repos?page=2"},
+		{"https base, link to port 80", "https://ghe.test", "https://ghe.test:80/orgs/acme/repos?page=2"},
+		{"another IPv6 literal", "https://[2001:db8::1]", "https://[2001:db8::2]/orgs/acme/repos?page=2"},
+		{"another IPv4 literal", "https://192.0.2.1", "https://192.0.2.2/orgs/acme/repos?page=2"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			transport := &scriptedTransport{responses: []scripted{ok(two, next(tc.link)), ok(two)}}

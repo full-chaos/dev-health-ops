@@ -33,7 +33,10 @@ f46bd01a00eb2b2f2cdb33c69185c8ea040f48212ae385296f24f86e2d2bdda9	unclassified	ex
 35446bffb191e9adf26c4cc94b01cfdf27ef8b8a5d77f2a0882aa634a2f0bfa3	unclassified	explain_422/post_missing_metric.json
 d9febeb8d9aebb5675aaa2e033311ea7742092d7066c40ff70389aee55dd2d1b	unclassified	explain_422/post_non_string_metric.json
 -	header	golden/dedup-sources.golden.json
+-	header	golden/query-bodies.golden.json
 -	header	golden/query-params.golden.json
+-	header	golden/query-response-models-render.golden.json
+-	header	golden/query-response-models-table.golden.json
 b40020d24aa46ea9fb4970a98edabbab47ae2b95a8bed922034643c3c063db49	unclassified	people_422/get_non_numeric_limit.json
 b40020d24aa46ea9fb4970a98edabbab47ae2b95a8bed922034643c3c063db49	unclassified	people_422/get_non_numeric_limit_with_comparative_param.json
 0836b4040ed52a637949afda3729ba10053111b05a9bc42b350c61c17aa1cbe7	unclassified	people_drilldown_issues_422/get_malformed_cursor.json
@@ -49,6 +52,7 @@ e7bab49c0f72bde1eb17616988cb59962df3a8da9ccc1d1f3dce3cde711d2e90	unclassified	re
 a650a2bf0c8a0b517595d031c7613abc6cc2f4d1a1f33b3c0c01df5098ddc085	unclassified	rest_errors/not_authenticated.json
 10f93621944444273810faf3f1058a19f167bc6d0c330458b3b11de9c993e337	unclassified	rest_errors/not_found.json
 6eaf92bdcc28d63cd8797b0be36bcbfc3315bd5134a2d1763cff7b6154b53fdf	unclassified	rest_errors/quadrant_comparative_params.json
+-	header	venue/dict-order.json
 -	header	venue/saved-report-mutations-cron-dialect.json
 -	header	venue/saved-report-mutations.json
 -	header	venue/saved-report-write-proof.json

@@ -35,7 +35,7 @@ func TestRegisteredAiAttributedPrsDocument_RequestsRepoNameInRows(t *testing.T) 
 func TestAiAttributedPrs_AcceptsTheOldAndTheNewText(t *testing.T) {
 	byDigest, err := buildOperationByDigest(
 		map[string]string{"aiAttributedPrs": digestHex(registeredAiAttributedPrsDocument)},
-		legacyDigestsByOperation,
+		map[string][]string{"aiAttributedPrs": legacyDigestsByOperation["aiAttributedPrs"]},
 	)
 	if err != nil {
 		t.Fatal(err)

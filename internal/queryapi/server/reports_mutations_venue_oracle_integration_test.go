@@ -105,7 +105,7 @@ func repoRootFromHere(t *testing.T) string {
 }
 
 func TestSavedReportMutationsVenueOracle(t *testing.T) {
-	runSavedReportVenue(t, "saved-report-mutations", "7140164ba67fc56bf7e6000a4b65e858c93fe0b9b0b80acda2a212695bd3a5ad", oracleCases(), nil)
+	runSavedReportVenue(t, "saved-report-mutations", "0d95a455ca73340cf541c277bb958f6307d28f31ac214ff446e3ae0fd355fc8d", oracleCases(), nil)
 }
 
 // runSavedReportVenue sends every case to both planes. A case named in
@@ -521,6 +521,15 @@ func runTime(column string) string {
 	return "(CASE WHEN " + column + " >= '2026-10-01T00:00:00Z'::timestamptz THEN '<now>' ELSE " + column + "::text END)"
 }
 
+// runTimeOfDay is runTime for a schedule's next run: a reading made during the run keeps its month, day and
+// time (UTC) and loses its year, so a yearly or dated schedule still shows the occurrence the plane chose
+// ("01-01 00:00" for "0 0 1 1 *") in every run, and a frozen answer of one year compares in the next. The
+// created-during-run schedules of this oracle are all yearly or dated; a daily schedule created during the
+// run would need another form.
+func runTimeOfDay(column string) string {
+	return "(CASE WHEN " + column + " >= '2026-10-01T00:00:00Z'::timestamptz THEN '<now:' || to_char(" + column + " AT TIME ZONE 'UTC', 'MM-DD HH24:MI') || '>' ELSE " + column + "::text END)"
+}
+
 func compareRows(t *testing.T, ctx context.Context, golden *venueoracle.Golden, venue *venueoracle.Venue) {
 	t.Helper()
 	queries := map[string]string{
@@ -531,7 +540,7 @@ func compareRows(t *testing.T, ctx context.Context, golden *venueoracle.Golden, 
 FROM saved_reports r ORDER BY r.org_id, r.name, r.description`,
 		"scheduled_jobs": `SELECT j.org_id, j.name, j.job_type, j.provider, j.schedule_cron, j.timezone,
   regexp_replace(j.job_config::text, '[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}', '<id>'),
-  j.status, j.is_running, j.run_count, j.failure_count, j.sync_config_id IS NULL, ` + runTime("j.next_run_at") + `
+  j.status, j.is_running, j.run_count, j.failure_count, j.sync_config_id IS NULL, ` + runTimeOfDay("j.next_run_at") + `
 FROM scheduled_jobs j ORDER BY j.org_id, j.name`,
 		"report_runs": `SELECT s.name, r.status, r.scheduled_occurrence_id, ` + runTime("r.started_at") + `, ` + runTime("r.completed_at") + `, r.duration_seconds,
   r.rendered_markdown, r.artifact_url, r.provenance_records::text, r.error, r.attempt_count, r.execution_reclaim_count,

@@ -535,12 +535,10 @@ func buildProviderSyncHandlerWithRuntimeDependencies(
 					Client:   valkeyClient,
 					Observer: budgetWaitObserver{collector: collector},
 				},
-				BudgetLimits: map[providersync.CostClass]int{
-					providersync.CostLight:  4,
-					providersync.CostMedium: 2,
-					providersync.CostHeavy:  1,
-				},
-				BudgetTTL: providerUnitBudgetTTL,
+				// The same table the dispatch admission cap reads: admitted
+				// units per bucket can never exceed what this budget serves.
+				BudgetLimits: providersync.BudgetLimitsByCostClass(),
+				BudgetTTL:    providerUnitBudgetTTL,
 				Gate: func(
 					claim providersync.Claim,
 					client *providerfoundation.HTTPClient,

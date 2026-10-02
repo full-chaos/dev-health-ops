@@ -342,14 +342,7 @@ var reconcilePythonSettings = func() map[string]string {
 // make (see the named divergences above).
 func pythonReconcile(t *testing.T, db *database, extra map[string]string, args []string) (int, string, bool) {
 	t.Helper()
-	root := pythonPlaneRoot(t)
-	python := pyoracle.Resolve(t, root)
-	command := exec.Command(python, append([]string{"-c", reconcilePythonProgram, "billing"}, args...)...)
-	pyURI := strings.Replace(db.uri, "postgres://", "postgresql://", 1)
-	command.Env = append(adminPythonEnv(root), "TZ=UTC", "POSTGRES_URI="+pyURI, "DATABASE_URI="+pyURI)
-	for key, value := range extra {
-		command.Env = append(command.Env, key+"="+value)
-	}
+	command := adminCommand(t, db, reconcilePythonSettings, extra, append([]string{"-c", reconcilePythonProgram, "billing"}, args...)...)
 	var stdout, stderr bytes.Buffer
 	command.Stdout, command.Stderr = &stdout, &stderr
 	err := command.Run()
@@ -357,7 +350,7 @@ func pythonReconcile(t *testing.T, db *database, extra map[string]string, args [
 	if exit, ok := err.(*exec.ExitError); ok {
 		code = exit.ExitCode()
 	} else if err != nil {
-		t.Fatalf("run python: %v", pyoracle.RunError(python, err, []byte(stderr.String())))
+		t.Fatalf("run python: %v", pyoracle.RunError(command.Args[0], err, []byte(stderr.String())))
 	}
 	return code, stdout.String(), code == 1 && strings.Contains(stderr.String(), "Traceback")
 }
@@ -475,8 +468,8 @@ func TestBillingReconcileMatchesTheFrozenPythonOutput(t *testing.T) {
 		t.Fatal(err)
 	}
 	request := venueoracle.ProgramRequest("reconcile script", reconcilePythonProgram, input, reconcilePythonSettings)
-	answers := golden.Produce(t, root, []venueoracle.Request{request}, func(_ *venueoracle.Producer, _ []venueoracle.Request) []venueoracle.Response {
-		pinPythonRoot(t, root)
+	answers := golden.Produce(t, root, []venueoracle.Request{request}, func(producer *venueoracle.Producer, _ []venueoracle.Request) []venueoracle.Response {
+		useAdminProducer(t, producer)
 		body, err := json.Marshal(reconcileSession(t, true))
 		if err != nil {
 			t.Fatal(err)

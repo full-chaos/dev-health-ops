@@ -114,9 +114,11 @@ func ariNode(id, typename string, data map[string]any) map[string]any {
 	return map[string]any{"__typename": "GraphStoreCypherQueryV2AriNode", "id": id, "data": data}
 }
 
-func userEdge(team, account string) map[string]any {
+// userEdge is the shape the live gateway answers the team-users read with (a structure-only probe of 2026-10-02, CHAOS-7902): ONE
+// column per edge, the user. The team is the request's own variable and is not in the row, so the first argument (the team the read
+// is for) is not part of the row. (The projects edge below is NOT MEASURED on the real provider: shape not measured.)
+func userEdge(_, account string) map[string]any {
 	return map[string]any{"node": map[string]any{"columns": []any{
-		map[string]any{"key": "team", "value": ariNode(team, "TeamV2", map[string]any{"id": team, "displayName": "T"})},
 		map[string]any{"key": "user", "value": ariNode("ari:cloud:identity::user/"+account, "AtlassianAccountUser", map[string]any{"id": "x", "accountId": account, "name": "N"})},
 	}}}
 }
@@ -576,5 +578,95 @@ func TestIncompletePageFindsANestedPageInfo(t *testing.T) {
 	}
 	if at := incompletePage(doc, "$"); at != "" {
 		t.Errorf("a complete page was refused at %q", at)
+	}
+}
+
+// TestCollectReadsMembersFromEdgesThatCarryOnlyTheUser pins CHAOS-7902: the live gateway's team-users edges have a user column and no
+// team column; each member belongs to the team the read asked for. Before the fix the vendored mapper refused the edge with
+// "TEAM_MEMBER relation requires team node" and the whole collect failed.
+func TestCollectReadsMembersFromEdgesThatCarryOnlyTheUser(t *testing.T) {
+	g := newGateway(t, func(req request) (int, any) {
+		switch req.Operation {
+		case "TeamSearchV2":
+			return 200, searchPage("", teamNode(teamA, "Platform", "ACTIVE"))
+		case "TeamworkGraphTeamUsers":
+			return 200, connection("teamworkGraph_teamUsers", "", userEdge(teamA, "Alice-1"), userEdge(teamA, "bob-2"))
+		case "TeamworkGraphTeamActiveProjects":
+			return 200, connection("teamworkGraph_teamActiveProjects", "")
+		}
+		return 500, map[string]any{"errors": []any{map[string]any{"message": "unexpected " + req.Operation}}}
+	})
+	rows, err := Collect(context.Background(), g.client(), params(everything))
+	if err != nil {
+		t.Fatalf("an edge with only the user column must be read: %v", err)
+	}
+	var got []string
+	for _, m := range rows.Memberships {
+		// the collector writes its own team id here; the mapper's team id is pinned by team_member_mapper_test.go
+		if m.TeamID != "aaaaaaaa-0000-4000-8000-000000000001" {
+			t.Errorf("member %q attached to team %q, want the requested team A", m.MemberID, m.TeamID)
+		}
+		got = append(got, m.MemberID)
+	}
+	if strings.Join(got, ",") != "jira:alice-1,jira:bob-2" {
+		t.Errorf("members = %v, want jira:alice-1,jira:bob-2", got)
+	}
+}
+
+// TestAnEdgeWithoutAUserIsStillRefused keeps the strict half: a row with no user cannot be a member.
+func TestAnEdgeWithoutAUserIsStillRefused(t *testing.T) {
+	g := newGateway(t, func(req request) (int, any) {
+		switch req.Operation {
+		case "TeamSearchV2":
+			return 200, searchPage("", teamNode(teamA, "Platform", "ACTIVE"))
+		case "TeamworkGraphTeamUsers":
+			return 200, connection("teamworkGraph_teamUsers", "", map[string]any{"node": map[string]any{"columns": []any{}}})
+		}
+		return 200, connection("teamworkGraph_teamActiveProjects", "")
+	})
+	if _, err := Collect(context.Background(), g.client(), params(everything)); err == nil || !strings.Contains(err.Error(), "requires a subject user") {
+		t.Fatalf("err = %v, want the missing-user refusal", err)
+	}
+}
+
+// TestCollectRefusesAMemberRowWithAnEmptyUserIdLoudly pins that a member row whose user id is empty fails the collect with the
+// mapper's error ("user.id is required"); it is not skipped silently (a skipped member row would be a swallowed error on the sync
+// path). The row shape is the measured one (one user column), with an empty id; hand-written.
+func TestCollectRefusesAMemberRowWithAnEmptyUserIdLoudly(t *testing.T) {
+	g := newGateway(t, func(req request) (int, any) {
+		switch req.Operation {
+		case "TeamSearchV2":
+			return 200, searchPage("", teamNode(teamA, "Platform", "ACTIVE"))
+		case "TeamworkGraphTeamUsers":
+			empty := map[string]any{"node": map[string]any{"columns": []any{
+				map[string]any{"key": "user", "value": ariNode("", "AtlassianAccountUser", map[string]any{"id": "x"})},
+			}}}
+			return 200, connection("teamworkGraph_teamUsers", "", empty)
+		}
+		return 200, connection("teamworkGraph_teamActiveProjects", "")
+	})
+	if _, err := Collect(context.Background(), g.client(), params(everything)); err == nil || !strings.Contains(err.Error(), "user.id is required") {
+		t.Fatalf("err = %v, want the mapper's empty-user-id refusal", err)
+	}
+}
+
+// TestCollectRefusesAMemberRowWhoseExplicitTeamNodeHasABlankId pins (r1 of CHAOS-7902) that a row carrying a team node with a blank id is
+// refused loudly, not written under the requested team: the sync must not report success for a malformed explicit team node.
+func TestCollectRefusesAMemberRowWhoseExplicitTeamNodeHasABlankId(t *testing.T) {
+	g := newGateway(t, func(req request) (int, any) {
+		switch req.Operation {
+		case "TeamSearchV2":
+			return 200, searchPage("", teamNode(teamA, "Platform", "ACTIVE"))
+		case "TeamworkGraphTeamUsers":
+			blank := map[string]any{"node": map[string]any{"columns": []any{
+				map[string]any{"key": "team", "value": ariNode("", "TeamV2", map[string]any{"id": "x"})},
+				map[string]any{"key": "user", "value": ariNode("ari:cloud:identity::user/alice-1", "AtlassianAccountUser", map[string]any{"id": "x"})},
+			}}}
+			return 200, connection("teamworkGraph_teamUsers", "", blank)
+		}
+		return 200, connection("teamworkGraph_teamActiveProjects", "")
+	})
+	if _, err := Collect(context.Background(), g.client(), params(everything)); err == nil || !strings.Contains(err.Error(), "team.id is required") {
+		t.Fatalf("err = %v, want the blank team id refusal", err)
 	}
 }

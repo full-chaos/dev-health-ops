@@ -139,7 +139,7 @@ func TestPagerDutyValidationClientDropsTheTokenOnAHostChange(t *testing.T) {
 	defer origin.Close()
 	request, _ := http.NewRequest(http.MethodGet, origin.URL, nil)
 	request.Header.Set("Authorization", "Token token=fake")
-	response, err := pagerDutyClient(nil, true, 5*time.Second).Do(request)
+	response, err := pagerDutyValidationClient(nil, 5*time.Second).Do(request)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -160,7 +160,7 @@ func TestPagerDutyValidationSuppliedClientDropsTheTokenOnAHostChange(t *testing.
 	defer origin.Close()
 	request, _ := http.NewRequest(http.MethodGet, origin.URL, nil)
 	request.Header.Set("Authorization", "Token token=fake")
-	response, err := pagerDutyClient(&http.Client{}, true, 5*time.Second).Do(request)
+	response, err := pagerDutyValidationClient(&http.Client{}, 5*time.Second).Do(request)
 	if err != nil {
 		t.Fatal(err)
 	}

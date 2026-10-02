@@ -3,6 +3,7 @@ package providerfoundation
 import (
 	"context"
 	"errors"
+	"github.com/full-chaos/dev-health-ops/internal/httpguard"
 	"io"
 	"math/big"
 	"net/http"
@@ -99,7 +100,7 @@ func postPagerDutyTokenForm(ctx context.Context, doer HTTPDoer, config PagerDuty
 		return PagerDutyOAuthTokens{}, ErrPagerDutyExchangeUnavailable
 	}
 	request.Header.Set("Content-Type", "application/x-www-form-urlencoded")
-	response, err := pagerDutyClient(doer, false, 10*time.Second).Do(request)
+	response, err := pagerDutyFormClient(doer, 10*time.Second).Do(request)
 	if err != nil {
 		return PagerDutyOAuthTokens{}, ErrPagerDutyExchangeUnavailable
 	}
@@ -119,33 +120,29 @@ func postPagerDutyTokenForm(ctx context.Context, doer HTTPDoer, config PagerDuty
 	return pagerDutyTokensFromPayload(body, now)
 }
 
-// pagerDutyClient wraps doer for one PagerDuty call. A supplied doer is used
-// as is (a test's transport); the production default enforces the reference's
-// timeout and redirect policy.
-func pagerDutyClient(doer HTTPDoer, followRedirects bool, timeout time.Duration) HTTPDoer {
+// pagerDutyFormClient is the client of a PagerDuty call whose body carries a secret (token, code, client_secret):
+// it follows no redirect, whatever client was supplied (a 307 would send the body again, to any host); the default has the
+// reference's timeout. Any doer that is not an *http.Client is a test's transport and cannot follow one.
+func pagerDutyFormClient(doer HTTPDoer, timeout time.Duration) HTTPDoer {
 	if doer != nil {
-		// A supplied *http.Client gets the same redirect policy as the default below; any other doer is a test's
-		// transport and cannot follow a redirect (D4124).
+		return httpguard.NoRedirectsDoer(doer)
+	}
+	return httpguard.NewClient(timeout)
+}
+
+// pagerDutyValidationClient is the client of the credential validation read: it FOLLOWS a redirect (Python's httpx does)
+// and drops the credential when the origin changes (net/http alone would also replay it to a subdomain of the original
+// host). A supplied *http.Client gets the same policy; any other doer is a test's transport.
+func pagerDutyValidationClient(doer HTTPDoer, timeout time.Duration) HTTPDoer {
+	if doer != nil {
 		if supplied, ok := doer.(*http.Client); ok {
 			copied := *supplied
-			if followRedirects {
-				copied.CheckRedirect = DropCredentialsOnHostChange
-			} else {
-				copied.CheckRedirect = func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }
-			}
+			copied.CheckRedirect = DropCredentialsOnHostChange
 			return &copied
 		}
 		return doer
 	}
-	client := &http.Client{Timeout: timeout}
-	if followRedirects {
-		// Python's httpx follows here, and drops the credential when a redirect changes the origin: so does
-		// this (net/http alone would also replay it to a subdomain of the original host).
-		client.CheckRedirect = DropCredentialsOnHostChange
-	} else {
-		client.CheckRedirect = func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }
-	}
-	return client
+	return &http.Client{Timeout: timeout, CheckRedirect: DropCredentialsOnHostChange}
 }
 
 // pagerDutyTokensFromPayload is oauth.py's _tokens, on the body decoded the way

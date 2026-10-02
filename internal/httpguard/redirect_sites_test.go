@@ -70,7 +70,44 @@ type site struct {
 	file, symbol, kind string
 }
 
-var siteClasses = map[string]bool{"guarded": true, "never-follows": true, "drops-credential": true, "no-credential": true, "follows-unless-supplied": true}
+// derivedClasses are decided by the walker from the code of the site's function, never typed: the row must carry the
+// derived class. handClasses are typed by hand, allowed only where nothing is derived, and each has its own check.
+var (
+	derivedClasses = map[string]bool{"guarded": true, "never-follows": true, "drops-credential": true, "custom-policy": true}
+	handClasses    = map[string]bool{"guarded-in-callee": true, "no-credential": true, "follows-unless-supplied": true}
+)
+
+// httpguard functions that make a client (or a doer) follow no redirect: a function that calls one is guarded.
+var guardFunctions = map[string]bool{"NoRedirects": true, "NoRedirectsDoer": true, "NewClient": true}
+
+type fnKey struct{ file, symbol string }
+
+// fnFacts is what the walker reads from one function: whether it calls an httpguard function, and the redirect policies
+// it sets (CheckRedirect keyed in an http.Client literal or assigned): refuse, drop, or custom.
+type fnFacts struct {
+	callsGuard bool
+	policies   map[string]bool
+}
+
+// derive is the class of every site in the function, or "" when the code derives none. "MIXED" = two policies in one
+// function (split it).
+func (f *fnFacts) derive() string {
+	switch {
+	case f == nil:
+		return ""
+	case f.callsGuard:
+		return "guarded"
+	case len(f.policies) > 1:
+		return "MIXED"
+	case f.policies["refuse"]:
+		return "never-follows"
+	case f.policies["drop"]:
+		return "drops-credential"
+	case f.policies["custom"]:
+		return "custom-policy"
+	}
+	return ""
+}
 
 type row struct {
 	count              int
@@ -94,15 +131,16 @@ func TestEveryHTTPClientSiteIsClassified(t *testing.T) {
 	for _, module := range replaced {
 		patterns = append(patterns, module+"/...")
 	}
+	facts := map[fnKey]*fnFacts{}
 	found, problems, _ := scanPackages(t, root, patterns, replaced, func(path string) bool {
 		return path == modulePath+"/internal/testsupport" || strings.HasPrefix(path, modulePath+"/internal/testsupport/")
-	}, "")
+	}, "", facts)
 	rows := readRows(t, rowFile)
 	if *updateSites {
 		writeRows(t, rowFile, found, rows)
 		rows = readRows(t, rowFile)
 	}
-	problems = append(problems, compareSites(found, rows, root)...)
+	problems = append(problems, compareSites(found, rows, root, facts)...)
 	sort.Strings(problems)
 	for _, problem := range problems {
 		t.Error(problem)
@@ -111,7 +149,7 @@ func TestEveryHTTPClientSiteIsClassified(t *testing.T) {
 }
 
 // compareSites is the verdict: every defect of the row set against the found sites, as sorted text.
-func compareSites(found map[site]int, rows map[site]row, root string) []string {
+func compareSites(found map[site]int, rows map[site]row, root string, facts map[fnKey]*fnFacts) []string {
 	var problems []string
 	for key, count := range found {
 		got, ok := rows[key]
@@ -121,11 +159,14 @@ func compareSites(found map[site]int, rows map[site]row, root string) []string {
 			continue
 		case got.count != count:
 			problems = append(problems, fmt.Sprintf("COUNT differs: %s %s %s: table %d, code %d", key.file, key.symbol, key.kind, got.count, count))
-		case !siteClasses[got.class]:
+		case !derivedClasses[got.class] && !handClasses[got.class]:
 			problems = append(problems, fmt.Sprintf("UNCLASSIFIED: %s %s %s (class %q)", key.file, key.symbol, key.kind, got.class))
 			continue
 		case strings.TrimSpace(got.cite) == "":
 			problems = append(problems, fmt.Sprintf("NO CITE: %s %s %s", key.file, key.symbol, key.kind))
+		}
+		if problem := checkClass(key, got, facts); problem != "" {
+			problems = append(problems, problem)
 		}
 		if problem := checkProbe(root, key, got); problem != "" {
 			problems = append(problems, problem)
@@ -138,6 +179,41 @@ func compareSites(found map[site]int, rows map[site]row, root string) []string {
 	}
 	sort.Strings(problems)
 	return problems
+}
+
+// checkClass: a derived class is the class the code derives (not the one typed); a hand class is allowed only where the
+// code derives none, and "guarded-in-callee" names its callees (callee=file#Symbol,...), each of which must call httpguard
+// or set a redirect policy.
+func checkClass(key site, got row, facts map[fnKey]*fnFacts) string {
+	label := fmt.Sprintf("%s %s %s", key.file, key.symbol, key.kind)
+	derived := facts[fnKey{key.file, key.symbol}].derive()
+	switch {
+	case derived == "MIXED":
+		return "MIXED policies in one function (split it): " + label
+	case derived != "" && got.class != derived:
+		return fmt.Sprintf("CLASS differs: %s: row says %s, the code derives %s", label, got.class, derived)
+	case derived == "" && derivedClasses[got.class]:
+		return fmt.Sprintf("CLASS not derivable: %s: row says %s, the code of the function shows no guard or policy", label, got.class)
+	}
+	if got.class == "guarded-in-callee" {
+		const marker = "callee="
+		i := strings.Index(got.cite, marker)
+		if i < 0 {
+			return "CALLEE not named (callee=file#Symbol): " + label
+		}
+		list := got.cite[i+len(marker):]
+		if j := strings.IndexAny(list, " ;"); j >= 0 {
+			list = list[:j]
+		}
+		for _, callee := range strings.Split(list, ",") {
+			file, symbol, ok := strings.Cut(callee, "#")
+			fact := facts[fnKey{file, symbol}]
+			if !ok || fact == nil || (!fact.callsGuard && len(fact.policies) == 0) {
+				return fmt.Sprintf("CALLEE %q does not call httpguard or set a redirect policy: %s", callee, label)
+			}
+		}
+	}
+	return ""
 }
 
 // checkProbe: the probe named by the row exists, and agrees with the class.
@@ -162,7 +238,7 @@ func checkProbe(root string, key site, got row) string {
 		if !strings.Contains(body, "Authorization") {
 			return fmt.Sprintf("PROBE does not assert on Authorization: %s (%s)", label, name)
 		}
-	case "guarded":
+	case "guarded", "guarded-in-callee", "custom-policy":
 		if !strings.Contains(body, "redirectprobe.") {
 			return fmt.Sprintf("PROBE of a guarded row does not use the redirect probe (the second origin must see no request): %s (%s)", label, name)
 		}
@@ -204,7 +280,7 @@ func testBody(dir, name string) (string, bool) {
 // (linux/amd64 and linux/arm64), and returns their sites by (file, symbol, kind) with the largest count seen, and the
 // problems of loading. replaced names the module paths whose types are "replaced modules" (read as source): a literal of
 // one of their types that leaves an exported *http.Client field unset is a site.
-func scanPackages(t *testing.T, root string, patterns, replaced []string, skip func(pkgPath string) bool, scopeDir string) (map[site]int, []string, []string) {
+func scanPackages(t *testing.T, root string, patterns, replaced []string, skip func(pkgPath string) bool, scopeDir string, facts map[fnKey]*fnFacts) (map[site]int, []string, []string) {
 	t.Helper()
 	found := map[site]int{}
 	var problems []string
@@ -220,6 +296,16 @@ func scanPackages(t *testing.T, root string, patterns, replaced []string, skip f
 			t.Fatalf("packages.Load: %v", err)
 		}
 		counts := map[site]int{}
+		index := map[string]*ast.FuncDecl{}
+		for _, pkg := range loaded {
+			for _, file := range pkg.Syntax {
+				for _, declaration := range file.Decls {
+					if fn, ok := declaration.(*ast.FuncDecl); ok && fn.Recv == nil && fn.Body != nil {
+						index[pkg.PkgPath+"."+fn.Name.Name] = fn
+					}
+				}
+			}
+		}
 		for _, pkg := range loaded {
 			if skip(pkg.PkgPath) {
 				continue
@@ -242,7 +328,7 @@ func scanPackages(t *testing.T, root string, patterns, replaced []string, skip f
 			if pkg.Module != nil {
 				modPath = pkg.Module.Path
 			}
-			w := walker{info: pkg.TypesInfo, module: modPath, replaced: replaced, clientUnderlying: netHTTPClientUnderlying(pkg.Types)}
+			w := walker{info: pkg.TypesInfo, module: modPath, replaced: replaced, clientUnderlying: netHTTPClientUnderlying(pkg.Types), index: index}
 			for _, file := range pkg.Syntax {
 				name := pkg.Fset.Position(file.Pos()).Filename
 				if strings.HasSuffix(name, "_test.go") {
@@ -255,12 +341,24 @@ func scanPackages(t *testing.T, root string, patterns, replaced []string, skip f
 				rel = filepath.ToSlash(rel)
 				for _, declaration := range file.Decls {
 					symbol := declSymbol(declaration)
+					fact := &fnFacts{policies: map[string]bool{}}
 					ast.Inspect(declaration, func(node ast.Node) bool {
 						for _, kind := range w.kindsOf(node) {
 							counts[site{rel, symbol, kind}]++
 						}
+						w.noteFacts(node, fact)
 						return true
 					})
+					if facts != nil {
+						key := fnKey{rel, symbol}
+						if previous := facts[key]; previous != nil {
+							fact.callsGuard = fact.callsGuard || previous.callsGuard
+							for policy := range previous.policies {
+								fact.policies[policy] = true
+							}
+						}
+						facts[key] = fact
+					}
 				}
 			}
 		}
@@ -353,6 +451,7 @@ type walker struct {
 	module           string
 	replaced         []string
 	clientUnderlying types.Type
+	index            map[string]*ast.FuncDecl
 }
 
 // isClient: the type is exactly net/http.Client (not a pointer to it).
@@ -526,11 +625,108 @@ func (w walker) isClientShaped(t types.Type) bool {
 	return ok && w.clientUnderlying != nil && types.Identical(named.Underlying(), w.clientUnderlying)
 }
 
+// noteFacts records what a node tells about the redirect handling of its function: a call of an httpguard function, or a
+// CheckRedirect policy (keyed in an http.Client literal, or assigned).
+func (w walker) noteFacts(node ast.Node, fact *fnFacts) {
+	switch x := node.(type) {
+	case *ast.Ident:
+		if fn, ok := w.info.Uses[x].(*types.Func); ok && fn.Pkg() != nil && fn.Pkg().Path() == modulePath+"/internal/httpguard" && guardFunctions[fn.Name()] {
+			fact.callsGuard = true
+		}
+	case *ast.CompositeLit:
+		if !isClient(w.info.TypeOf(x)) {
+			return
+		}
+		for _, element := range x.Elts {
+			if pair, ok := element.(*ast.KeyValueExpr); ok {
+				if key, ok := pair.Key.(*ast.Ident); ok && key.Name == "CheckRedirect" {
+					if policy := w.policyOf(pair.Value); policy != "" {
+						fact.policies[policy] = true
+					}
+				}
+			}
+		}
+	case *ast.AssignStmt:
+		for i, left := range x.Lhs {
+			if selector, ok := left.(*ast.SelectorExpr); ok {
+				if field, ok := w.info.Uses[selector.Sel].(*types.Var); ok && field.IsField() && field.Name() == "CheckRedirect" && inNetHTTP(field) && i < len(x.Rhs) {
+					if policy := w.policyOf(x.Rhs[i]); policy != "" {
+						fact.policies[policy] = true
+					}
+				}
+			}
+		}
+	}
+}
+
+// policyOf classifies a CheckRedirect value: "refuse" (every return is a non-nil error), "drop" (the providerfoundation
+// policy that follows and drops the credential off-origin), "custom" (anything else), "" (nil: the default policy).
+func (w walker) policyOf(value ast.Expr) string {
+	switch v := value.(type) {
+	case *ast.FuncLit:
+		return bodyPolicy(v.Body)
+	case *ast.Ident, *ast.SelectorExpr:
+		var obj types.Object
+		if ident, ok := v.(*ast.Ident); ok {
+			if ident.Name == "nil" {
+				return ""
+			}
+			obj = w.info.Uses[ident]
+		} else {
+			obj = w.info.Uses[v.(*ast.SelectorExpr).Sel]
+		}
+		fn, ok := obj.(*types.Func)
+		if !ok || fn.Pkg() == nil {
+			return "custom"
+		}
+		qualified := fn.Pkg().Path() + "." + fn.Name()
+		if qualified == modulePath+"/internal/providerfoundation.DropCredentialsOnHostChange" {
+			return "drop"
+		}
+		if decl, ok := w.index[qualified]; ok {
+			return bodyPolicy(decl.Body)
+		}
+	}
+	return "custom"
+}
+
+// bodyPolicy: "refuse" when the function returns at least once and every return gives a non-nil value.
+func bodyPolicy(body *ast.BlockStmt) string {
+	returns, refusing := 0, true
+	ast.Inspect(body, func(node ast.Node) bool {
+		switch n := node.(type) {
+		case *ast.FuncLit:
+			return false
+		case *ast.ReturnStmt:
+			returns++
+			if len(n.Results) != 1 {
+				refusing = false
+			} else if ident, ok := n.Results[0].(*ast.Ident); ok && ident.Name == "nil" {
+				refusing = false
+			}
+		}
+		return true
+	})
+	if returns > 0 && refusing {
+		return "refuse"
+	}
+	return "custom"
+}
+
+func isBuiltinCall(info *types.Info, call *ast.CallExpr) bool {
+	ident, ok := call.Fun.(*ast.Ident)
+	if !ok {
+		return false
+	}
+	_, builtin := info.Uses[ident].(*types.Builtin)
+	return builtin
+}
+
 func (w walker) kindsOf(node ast.Node) []string {
 	switch x := node.(type) {
 	case *ast.CompositeLit:
 		var kinds []string
-		if isClient(w.info.TypeOf(x)) {
+		if holdsClientByValue(w.info.TypeOf(x), 0, map[types.Type]bool{}) {
 			kinds = append(kinds, "client-literal")
 		}
 		if w.leavesClientFieldUnset(w.info.TypeOf(x), x) {
@@ -553,6 +749,27 @@ func (w walker) kindsOf(node ast.Node) []string {
 		if ident, ok := x.Fun.(*ast.Ident); ok {
 			if builtin, isBuiltin := w.info.Uses[ident].(*types.Builtin); isBuiltin && builtin.Name() == "make" && len(x.Args) >= 1 && holdsClientByValue(w.info.TypeOf(x.Args[0]), 0, map[types.Type]bool{}) {
 				kinds = append(kinds, "client-new")
+			}
+		}
+		// a call whose callee does not resolve to a declared function (a func-typed variable, a field, a call result) and
+		// whose result holds a client: the callee cannot be read, so the call is a site
+		if !w.info.Types[x.Fun].IsType() && !isBuiltinCall(w.info, x) {
+			var callee types.Object
+			fun := x.Fun
+			switch generic := fun.(type) { // f[T](...) is a call of f
+			case *ast.IndexExpr:
+				fun = generic.X
+			case *ast.IndexListExpr:
+				fun = generic.X
+			}
+			switch name := fun.(type) {
+			case *ast.Ident:
+				callee = w.info.Uses[name]
+			case *ast.SelectorExpr:
+				callee = w.info.Uses[name.Sel]
+			}
+			if _, resolved := callee.(*types.Func); !resolved && holdsClient(w.info.TypeOf(x), 0, map[types.Type]bool{}) {
+				kinds = append(kinds, "external-client-call")
 			}
 		}
 		// a conversion between net/http.Client (or a pointer to it) and another type of its shape
@@ -717,49 +934,58 @@ func TestTheSiteWalkerFindsEveryKind(t *testing.T) {
 		t.Fatal(err)
 	}
 	var patterns []string
-	for _, name := range []string{"literal", "newclient", "decl", "typedecl", "defaultclient", "calls", "external", "assign", "negative", "conversion", "instantiate", "outside", "nilfield", "method", "tagged", "importsupport"} {
+	for _, name := range []string{"literal", "newclient", "decl", "typedecl", "defaultclient", "calls", "external", "assign", "negative", "conversion", "instantiate", "outside", "nilfield", "method", "tagged", "importsupport", "policies"} {
 		patterns = append(patterns, fixturesBase+"/"+name)
 	}
-	found, problems, outside := scanPackages(t, root, patterns, []string{fixturesBase + "/outside"}, func(string) bool { return false }, "internal/httpguard/testdata/redirectsites")
+	facts := map[fnKey]*fnFacts{}
+	found, problems, outside := scanPackages(t, root, patterns, []string{fixturesBase + "/outside"}, func(string) bool { return false }, "internal/httpguard/testdata/redirectsites", facts)
 	if len(problems) != 1 || !strings.Contains(problems[0], "importsupport") || !strings.Contains(problems[0], "test-support package") {
 		t.Fatalf("want exactly the test-support import of the importsupport fixture as a problem, got %v", problems)
 	}
 	prefix := "internal/httpguard/testdata/redirectsites/"
 	want := map[site]int{
-		{prefix + "literal/literal.go", "Aliased", "client-literal"}:             1,
-		{prefix + "literal/literal.go", "Dot", "client-literal"}:                 1,
-		{prefix + "literal/literal.go", "Elided", "client-literal"}:              2,
-		{prefix + "newclient/newclient.go", "Make", "client-new"}:                1,
-		{prefix + "decl/decl.go", "var Zero", "client-decl"}:                     1,
-		{prefix + "decl/decl.go", "type Holder", "client-decl"}:                  2,
-		{prefix + "decl/decl.go", "Param", "client-decl"}:                        1,
-		{prefix + "decl/decl.go", "Result", "client-literal"}:                    1,
-		{prefix + "typedecl/typedecl.go", "type Alias", "client-type"}:           1,
-		{prefix + "typedecl/typedecl.go", "type Named", "client-type"}:           1,
-		{prefix + "defaultclient/defaultclient.go", "Use", "default-client"}:     1,
-		{prefix + "calls/calls.go", "Call", "http.Get"}:                          2,
-		{prefix + "calls/calls.go", "Call", "http.Post"}:                         1,
-		{prefix + "calls/calls.go", "Call", "http.PostForm"}:                     1,
-		{prefix + "calls/calls.go", "Call", "http.Head"}:                         1,
-		{prefix + "external/external.go", "Make", "external-client-call"}:        1,
-		{prefix + "assign/assign.go", "Direct", "checkredirect-assign"}:          1,
-		{prefix + "assign/assign.go", "Promoted", "checkredirect-assign"}:        1,
-		{prefix + "conversion/conversion.go", "type shaped", "client-type"}:      1,
-		{prefix + "conversion/conversion.go", "ToClient", "client-conversion"}:   1,
-		{prefix + "conversion/conversion.go", "FromClient", "client-conversion"}: 1,
-		{prefix + "instantiate/instantiate.go", "Make", "client-instantiate"}:    1,
-		{prefix + "nilfield/nilfield.go", "Unset", "nil-client-field-literal"}:   1,
-		{prefix + "nilfield/nilfield.go", "New", "nil-client-field-literal"}:     1,
-		{prefix + "method/method.go", "Call", "external-client-call"}:            1,
-		{prefix + "method/method.go", "Value", "external-client-call"}:           1,
-		{prefix + "tagged/client_arm64.go", "Arm", "client-literal"}:             1,
-		{prefix + "tagged/client_amd64.go", "Amd", "client-literal"}:             1,
-		{prefix + "decl/decl.go", "var Arr", "client-decl"}:                      1,
-		{prefix + "decl/decl.go", "var InHolder", "client-decl"}:                 1,
-		{prefix + "decl/decl.go", "var Mp", "client-decl"}:                       1,
-		{prefix + "decl/decl.go", "var Ch", "client-decl"}:                       1,
-		{prefix + "decl/decl.go", "Makes", "client-new"}:                         2,
-		{prefix + "instantiate/instantiate.go", "Array", "client-instantiate"}:   1,
+		{prefix + "literal/literal.go", "Aliased", "client-literal"}:              1,
+		{prefix + "literal/literal.go", "Dot", "client-literal"}:                  1,
+		{prefix + "literal/literal.go", "Elided", "client-literal"}:               4,
+		{prefix + "newclient/newclient.go", "Make", "client-new"}:                 1,
+		{prefix + "decl/decl.go", "var Zero", "client-decl"}:                      1,
+		{prefix + "decl/decl.go", "type Holder", "client-decl"}:                   2,
+		{prefix + "decl/decl.go", "Param", "client-decl"}:                         1,
+		{prefix + "decl/decl.go", "Result", "client-literal"}:                     1,
+		{prefix + "typedecl/typedecl.go", "type Alias", "client-type"}:            1,
+		{prefix + "typedecl/typedecl.go", "type Named", "client-type"}:            1,
+		{prefix + "defaultclient/defaultclient.go", "Use", "default-client"}:      1,
+		{prefix + "calls/calls.go", "Call", "http.Get"}:                           2,
+		{prefix + "calls/calls.go", "Call", "http.Post"}:                          1,
+		{prefix + "calls/calls.go", "Call", "http.PostForm"}:                      1,
+		{prefix + "calls/calls.go", "Call", "http.Head"}:                          1,
+		{prefix + "external/external.go", "Make", "external-client-call"}:         1,
+		{prefix + "assign/assign.go", "Direct", "checkredirect-assign"}:           1,
+		{prefix + "assign/assign.go", "Promoted", "checkredirect-assign"}:         1,
+		{prefix + "conversion/conversion.go", "type shaped", "client-type"}:       1,
+		{prefix + "conversion/conversion.go", "ToClient", "client-conversion"}:    1,
+		{prefix + "conversion/conversion.go", "FromClient", "client-conversion"}:  1,
+		{prefix + "instantiate/instantiate.go", "Make", "client-instantiate"}:     1,
+		{prefix + "nilfield/nilfield.go", "Unset", "nil-client-field-literal"}:    1,
+		{prefix + "nilfield/nilfield.go", "New", "nil-client-field-literal"}:      1,
+		{prefix + "method/method.go", "Call", "external-client-call"}:             1,
+		{prefix + "method/method.go", "Value", "external-client-call"}:            1,
+		{prefix + "method/method.go", "Variable", "external-client-call"}:         2,
+		{prefix + "tagged/client_arm64.go", "Arm", "client-literal"}:              1,
+		{prefix + "tagged/client_amd64.go", "Amd", "client-literal"}:              1,
+		{prefix + "policies/policies.go", "RefuseLiteral", "client-literal"}:      1,
+		{prefix + "policies/policies.go", "RefuseFunction", "client-literal"}:     1,
+		{prefix + "policies/policies.go", "RefuseAssign", "checkredirect-assign"}: 1,
+		{prefix + "policies/policies.go", "Drop", "client-literal"}:               1,
+		{prefix + "policies/policies.go", "Custom", "client-literal"}:             1,
+		{prefix + "policies/policies.go", "Mixed", "checkredirect-assign"}:        2,
+		{prefix + "policies/policies.go", "Bare", "client-literal"}:               1,
+		{prefix + "decl/decl.go", "var Arr", "client-decl"}:                       1,
+		{prefix + "decl/decl.go", "var InHolder", "client-decl"}:                  1,
+		{prefix + "decl/decl.go", "var Mp", "client-decl"}:                        1,
+		{prefix + "decl/decl.go", "var Ch", "client-decl"}:                        1,
+		{prefix + "decl/decl.go", "Makes", "client-new"}:                          2,
+		{prefix + "instantiate/instantiate.go", "Array", "client-instantiate"}:    1,
 	}
 	want[site{prefix + "decl/decl.go", "Result", "client-decl"}] = 0
 	delete(want, site{prefix + "decl/decl.go", "Result", "client-decl"})
@@ -773,11 +999,43 @@ func TestTheSiteWalkerFindsEveryKind(t *testing.T) {
 			t.Errorf("walker: unexpected %v x%d", key, count)
 		}
 	}
+	// the class derived from the code of a function
+	derived := map[string]string{"Guarded": "guarded", "GuardedNew": "guarded", "RefuseLiteral": "never-follows", "RefuseFunction": "never-follows",
+		"RefuseAssign": "never-follows", "Drop": "drops-credential", "Custom": "custom-policy", "Mixed": "MIXED", "Bare": ""}
+	for symbol, class := range derived {
+		if got := facts[fnKey{prefix + "policies/policies.go", symbol}].derive(); got != class {
+			t.Errorf("derived class of %s: %q, want %q", symbol, got, class)
+		}
+	}
 	// the stated limit: another GOOS and a build tag are reported, not walked
 	joined := strings.Join(outside, " ")
 	if !strings.Contains(joined, "tagged/client_windows.go") || !strings.Contains(joined, "tagged/client_tag.go") || strings.Contains(joined, "tagged/tagged.go") {
 		t.Errorf("scope limit: want the windows and the tagged file reported out of scope, got %v", outside)
 	}
+}
+
+// verdictFacts is the code the verdict fixture pretends to have read: what each function of pkg/p.go guards or sets.
+func verdictFacts() map[fnKey]*fnFacts {
+	guard := &fnFacts{callsGuard: true, policies: map[string]bool{}}
+	policy := func(names ...string) *fnFacts {
+		fact := &fnFacts{policies: map[string]bool{}}
+		for _, name := range names {
+			fact.policies[name] = true
+		}
+		return fact
+	}
+	facts := map[fnKey]*fnFacts{}
+	for _, symbol := range []string{"ok", "count", "unclassified", "bogus", "nocite", "noprobe", "weakguard", "crossdir", "classdiff", "handoverderived", "helper"} {
+		facts[fnKey{"pkg/p.go", symbol}] = guard
+	}
+	facts[fnKey{"pkg/p.go", "policy"}] = policy("refuse")
+	facts[fnKey{"pkg/p.go", "weakpolicy"}] = policy("refuse")
+	facts[fnKey{"pkg/p.go", "drops"}] = policy("drop")
+	facts[fnKey{"pkg/p.go", "dropsweak"}] = policy("drop")
+	facts[fnKey{"pkg/p.go", "custom"}] = policy("custom")
+	facts[fnKey{"pkg/p.go", "mixed"}] = policy("refuse", "drop")
+	facts[fnKey{"pkg/p.go", "bare"}] = policy()
+	return facts
 }
 
 // The verdict is itself tested: a row table with one of EVERY defect, and the exact problem list asserted.
@@ -800,40 +1058,54 @@ func TestFollowsRedirect(t *testing.T)    { redirect() }
 		t.Fatal(err)
 	}
 	k := func(symbol string) site { return site{"pkg/p.go", symbol, "client-literal"} }
-	symbols := []string{"ok", "unlisted", "count", "unclassified", "bogus", "nocite", "noprobe", "weakguard", "swapguard", "weakpolicy", "swappolicy", "drops", "dropsweak", "nocred", "nocredprobe", "crossdir", "unless"}
+	symbols := []string{"ok", "unlisted", "count", "unclassified", "bogus", "nocite", "noprobe", "weakguard", "classdiff", "handoverderived", "weakpolicy", "policy",
+		"drops", "dropsweak", "custom", "mixed", "bare", "notderivable", "callee", "calleebad", "nocallee", "nocred", "nocredprobe", "crossdir", "unless"}
 	found := map[site]int{}
 	for _, symbol := range symbols {
 		found[k(symbol)] = 1
 	}
 	rows := map[site]row{
-		k("ok"):           {1, "guarded", "TestRedirectProbe", "c"},
-		k("count"):        {4, "guarded", "TestRedirectProbe", "c"},
-		k("unclassified"): {1, "UNCLASSIFIED", "TestRedirectProbe", "c"},
-		k("bogus"):        {1, "whatever", "TestRedirectProbe", "c"},
-		k("nocite"):       {1, "guarded", "TestRedirectProbe", "  "},
-		k("noprobe"):      {1, "never-follows", "TestMissing", "c"},
-		k("weakguard"):    {1, "guarded", "TestNothingHere", "c"},
-		k("swapguard"):    {1, "guarded", "TestPolicy", "c"}, // a guarded row whose probe only shows a policy
-		k("weakpolicy"):   {1, "never-follows", "TestNothingHere", "c"},
-		k("swappolicy"):   {1, "never-follows", "TestRedirectProbe", "c"}, // guarded -> never-follows with the same probe
-		k("drops"):        {1, "drops-credential", "TestDropsAuthorization", "c"},
-		k("dropsweak"):    {1, "drops-credential", "TestNothingHere", "c"},
-		k("nocred"):       {1, "no-credential", "-", "c"},
-		k("nocredprobe"):  {1, "no-credential", "TestRedirectProbe", "c"},
-		k("crossdir"):     {1, "guarded", "pkg:TestRedirectProbe", "c"},
-		k("unless"):       {1, "follows-unless-supplied", "TestNothingHere", "c"},
-		k("gone"):         {1, "guarded", "TestRedirectProbe", "c"},
+		k("ok"):              {1, "guarded", "TestRedirectProbe", "c"},
+		k("count"):           {4, "guarded", "TestRedirectProbe", "c"},
+		k("unclassified"):    {1, "UNCLASSIFIED", "TestRedirectProbe", "c"},
+		k("bogus"):           {1, "whatever", "TestRedirectProbe", "c"},
+		k("nocite"):          {1, "guarded", "TestRedirectProbe", "  "},
+		k("noprobe"):         {1, "guarded", "TestMissing", "c"},
+		k("weakguard"):       {1, "guarded", "TestNothingHere", "c"},
+		k("classdiff"):       {1, "never-follows", "TestPolicy", "c"}, // guarded in the code, never-follows in the row
+		k("handoverderived"): {1, "no-credential", "-", "c"},          // a hand class where the code derives one
+		k("weakpolicy"):      {1, "never-follows", "TestNothingHere", "c"},
+		k("policy"):          {1, "never-follows", "TestPolicy", "c"},
+		k("drops"):           {1, "drops-credential", "TestDropsAuthorization", "c"},
+		k("dropsweak"):       {1, "drops-credential", "TestNothingHere", "c"},
+		k("custom"):          {1, "custom-policy", "TestRedirectProbe", "c"},
+		k("mixed"):           {1, "never-follows", "TestPolicy", "c"},
+		k("bare"):            {1, "never-follows", "TestPolicy", "c"}, // nothing derived, a derived class typed
+		k("notderivable"):    {1, "guarded", "TestRedirectProbe", "c"},
+		k("callee"):          {1, "guarded-in-callee", "TestRedirectProbe", "callee=pkg/p.go#helper"},
+		k("calleebad"):       {1, "guarded-in-callee", "TestRedirectProbe", "callee=pkg/p.go#nothing"},
+		k("nocallee"):        {1, "guarded-in-callee", "TestRedirectProbe", "somewhere else"},
+		k("nocred"):          {1, "no-credential", "-", "c"},
+		k("nocredprobe"):     {1, "no-credential", "TestRedirectProbe", "c"},
+		k("crossdir"):        {1, "guarded", "pkg:TestRedirectProbe", "c"},
+		k("unless"):          {1, "follows-unless-supplied", "TestNothingHere", "c"},
+		k("gone"):            {1, "guarded", "TestRedirectProbe", "c"},
 	}
-	got := strings.Join(compareSites(found, rows, root), "\n")
+	got := strings.Join(compareSites(found, rows, root, verdictFacts()), "\n")
 	want := strings.Join([]string{
+		"CALLEE \"pkg/p.go#nothing\" does not call httpguard or set a redirect policy: pkg/p.go calleebad client-literal",
+		"CALLEE not named (callee=file#Symbol): pkg/p.go nocallee client-literal",
+		"CLASS differs: pkg/p.go classdiff client-literal: row says never-follows, the code derives guarded",
+		"CLASS differs: pkg/p.go handoverderived client-literal: row says no-credential, the code derives guarded",
+		"CLASS not derivable: pkg/p.go bare client-literal: row says never-follows, the code of the function shows no guard or policy",
+		"CLASS not derivable: pkg/p.go notderivable client-literal: row says guarded, the code of the function shows no guard or policy",
 		"COUNT differs: pkg/p.go count client-literal: table 4, code 1",
+		"MIXED policies in one function (split it): pkg/p.go mixed client-literal",
 		"NO CITE: pkg/p.go nocite client-literal",
 		"PROBE does not assert on Authorization: pkg/p.go dropsweak client-literal (TestNothingHere)",
 		"PROBE does not exercise a redirect: pkg/p.go unless client-literal (TestNothingHere)",
 		"PROBE missing: pkg/p.go noprobe client-literal names TestMissing in pkg",
-		"PROBE of a guarded row does not use the redirect probe (the second origin must see no request): pkg/p.go swapguard client-literal (TestPolicy)",
 		"PROBE of a guarded row does not use the redirect probe (the second origin must see no request): pkg/p.go weakguard client-literal (TestNothingHere)",
-		"PROBE of a never-follows row does not assert the client's own policy: pkg/p.go swappolicy client-literal (TestRedirectProbe)",
 		"PROBE of a never-follows row does not assert the client's own policy: pkg/p.go weakpolicy client-literal (TestNothingHere)",
 		"PROBE on a no-credential row (must be -): pkg/p.go nocredprobe client-literal",
 		"STALE row: pkg/p.go gone client-literal",

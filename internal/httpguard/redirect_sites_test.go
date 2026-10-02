@@ -56,7 +56,14 @@ var updateSites = flag.Bool("update-sites", false, "rewrite redirect_sites.tsv f
 // what travels. A class changed without a probe changed fails here; whether the probe is RED without the guard is shown
 // by the planted guard-off runs recorded in the PR, not by this test.
 //
-// NOT covered, stated and not claimed: a client made inside a dependency (oauth2.Config.Client, an SDK's own client); a
+// NOT covered, stated and not claimed: a nil VALUE of a replaced-module client field reached through a variable
+// (`var none *http.Client` then `HTTPClient: none`) or a later assignment (`c.HTTPClient = nil`): the walker sees a literal that
+// omits the field or gives nil / a conversion of nil, and takes any other expression as supplied (CHAOS-7921 patches the vendored
+// default so that nil follows no redirect by construction). The class is per FUNCTION: a function that calls httpguard for one
+// client and builds a second, following one derives "guarded" for both. ValidatePagerDutyCredential's choice of the
+// follow-and-drop client is pinned on the helper (pagerDutyValidationClient), not on that caller.
+//
+// Also not covered: a client made inside a dependency (oauth2.Config.Client, an SDK's own client); a
 // production file excluded by a build tag of the default build; the semantic content of a cite.
 //
 // Classes:
@@ -86,6 +93,23 @@ var guardFunctions = map[string]bool{"NoRedirects": true, "NoRedirectsDoer": tru
 // client site: internal/auth/keystore/open_other.go is the non-Linux, non-Darwin keystore (no network); tools.go is
 // `//go:build tools` (a list of tool imports).
 var pinnedOutOfScope = []string{"internal/auth/keystore/open_other.go", "tools.go"}
+
+// indexed is a function declaration with the type information of its own package.
+type indexed struct {
+	decl *ast.FuncDecl
+	info *types.Info
+}
+
+// scopeProblems compares the production files outside the walked builds with the pinned list: a file that joins or leaves
+// the list fails.
+func scopeProblems(outside, pinned []string) []string {
+	outside = append([]string(nil), outside...)
+	sort.Strings(outside)
+	if strings.Join(outside, " ") != strings.Join(pinned, " ") {
+		return []string{fmt.Sprintf("SCOPE LIMIT changed: production files outside the linux/amd64 and linux/arm64 builds are %v, pinned %v (add the file with its reason, or move it into the build)", outside, pinned)}
+	}
+	return nil
+}
 
 type fnKey struct{ file, symbol string }
 
@@ -148,10 +172,7 @@ func TestEveryHTTPClientSiteIsClassified(t *testing.T) {
 	problems = append(problems, compareSites(found, rows, root, facts)...)
 	// The scope limit is PINNED by name: a production file outside the linux/amd64 and linux/arm64 builds is not walked,
 	// so it must be listed here with its reason, and a file that joins or leaves the list fails.
-	sort.Strings(outside)
-	if strings.Join(outside, " ") != strings.Join(pinnedOutOfScope, " ") {
-		problems = append(problems, fmt.Sprintf("SCOPE LIMIT changed: production files outside the linux/amd64 and linux/arm64 builds are %v, pinned %v (add the file with its reason, or move it into the build)", outside, pinnedOutOfScope))
-	}
+	problems = append(problems, scopeProblems(outside, pinnedOutOfScope)...)
 	sort.Strings(problems)
 	for _, problem := range problems {
 		t.Error(problem)
@@ -307,12 +328,12 @@ func scanPackages(t *testing.T, root string, patterns, replaced []string, skip f
 			t.Fatalf("packages.Load: %v", err)
 		}
 		counts := map[site]int{}
-		index := map[string]*ast.FuncDecl{}
+		index := map[string]indexed{}
 		for _, pkg := range loaded {
 			for _, file := range pkg.Syntax {
 				for _, declaration := range file.Decls {
 					if fn, ok := declaration.(*ast.FuncDecl); ok && fn.Recv == nil && fn.Body != nil {
-						index[pkg.PkgPath+"."+fn.Name.Name] = fn
+						index[pkg.PkgPath+"."+fn.Name.Name] = indexed{fn, pkg.TypesInfo}
 					}
 				}
 			}
@@ -458,7 +479,7 @@ type walker struct {
 	module           string
 	replaced         []string
 	clientUnderlying types.Type
-	index            map[string]*ast.FuncDecl
+	index            map[string]indexed
 }
 
 // isClient: the type is exactly net/http.Client (not a pointer to it).
@@ -625,7 +646,7 @@ func (w walker) literalLeavesCarrierUnset(t types.Type, lit *ast.CompositeLit) b
 		structType := types.Unalias(t).(*types.Named).Underlying().(*types.Struct)
 		for _, index := range fields {
 			value, set := w.literalFieldValue(structType, lit, index)
-			if !set || w.info.Types[value].IsNil() {
+			if !set || w.isNilValue(value) {
 				return true
 			}
 		}
@@ -645,6 +666,21 @@ func (w walker) literalLeavesCarrierUnset(t types.Type, lit *ast.CompositeLit) b
 		}
 	case *types.Array: // the elements a literal does not give are zero values
 		return int64(len(lit.Elts)) < body.Len()
+	}
+	return false
+}
+
+// isNilValue: the expression is nil, or a conversion of nil ((*http.Client)(nil)). A nil VALUE reached through a variable or a
+// later assignment is NOT seen (stated in the package comment; CHAOS-7921 makes the vendored default safe by construction).
+func (w walker) isNilValue(expression ast.Expr) bool {
+	if w.info.Types[expression].IsNil() {
+		return true
+	}
+	if call, ok := expression.(*ast.CallExpr); ok && len(call.Args) == 1 && w.info.Types[call.Fun].IsType() {
+		return w.isNilValue(call.Args[0])
+	}
+	if paren, ok := expression.(*ast.ParenExpr); ok {
+		return w.isNilValue(paren.X)
 	}
 	return false
 }
@@ -724,7 +760,7 @@ func (w walker) noteFacts(node ast.Node, fact *fnFacts) {
 func (w walker) policyOf(value ast.Expr) string {
 	switch v := value.(type) {
 	case *ast.FuncLit:
-		return bodyPolicy(v.Body)
+		return bodyPolicy(v.Body, w.info)
 	case *ast.Ident, *ast.SelectorExpr:
 		var obj types.Object
 		if ident, ok := v.(*ast.Ident); ok {
@@ -743,15 +779,17 @@ func (w walker) policyOf(value ast.Expr) string {
 		if qualified == modulePath+"/internal/providerfoundation.DropCredentialsOnHostChange" {
 			return "drop"
 		}
-		if decl, ok := w.index[qualified]; ok {
-			return bodyPolicy(decl.Body)
+		if entry, ok := w.index[qualified]; ok {
+			return bodyPolicy(entry.decl.Body, entry.info)
 		}
 	}
 	return "custom"
 }
 
-// bodyPolicy: "refuse" when the function returns at least once and every return gives a non-nil value.
-func bodyPolicy(body *ast.BlockStmt) string {
+// bodyPolicy: "refuse" when the function returns at least once and EVERY return gives a value that is statically a
+// non-nil error: a package-level error variable (http.ErrUseLastResponse, an errors.New var) or a call of errors.New or
+// fmt.Errorf. A delegating call, a local variable, nil, or anything else makes the policy "custom": it may follow.
+func bodyPolicy(body *ast.BlockStmt, info *types.Info) string {
 	returns, refusing := 0, true
 	ast.Inspect(body, func(node ast.Node) bool {
 		switch n := node.(type) {
@@ -759,9 +797,7 @@ func bodyPolicy(body *ast.BlockStmt) string {
 			return false
 		case *ast.ReturnStmt:
 			returns++
-			if len(n.Results) != 1 {
-				refusing = false
-			} else if ident, ok := n.Results[0].(*ast.Ident); ok && ident.Name == "nil" {
+			if len(n.Results) != 1 || !staticallyNonNilError(n.Results[0], info) {
 				refusing = false
 			}
 		}
@@ -771,6 +807,24 @@ func bodyPolicy(body *ast.BlockStmt) string {
 		return "refuse"
 	}
 	return "custom"
+}
+
+func staticallyNonNilError(expression ast.Expr, info *types.Info) bool {
+	switch e := expression.(type) {
+	case *ast.Ident:
+		variable, ok := info.Uses[e].(*types.Var)
+		return ok && variable.Pkg() != nil && variable.Parent() == variable.Pkg().Scope() // a package-level variable
+	case *ast.SelectorExpr:
+		variable, ok := info.Uses[e.Sel].(*types.Var)
+		return ok && variable.Pkg() != nil && variable.Parent() == variable.Pkg().Scope()
+	case *ast.CallExpr:
+		if selector, ok := e.Fun.(*ast.SelectorExpr); ok {
+			if fn, ok := info.Uses[selector.Sel].(*types.Func); ok && fn.Pkg() != nil {
+				return (fn.Pkg().Path() == "errors" && fn.Name() == "New") || (fn.Pkg().Path() == "fmt" && fn.Name() == "Errorf")
+			}
+		}
+	}
+	return false
 }
 
 func isBuiltinCall(info *types.Info, call *ast.CallExpr) bool {
@@ -1002,7 +1056,7 @@ func TestTheSiteWalkerFindsEveryKind(t *testing.T) {
 		t.Fatal(err)
 	}
 	var patterns []string
-	for _, name := range []string{"literal", "newclient", "decl", "typedecl", "defaultclient", "calls", "external", "assign", "negative", "conversion", "instantiate", "outside", "nilfield", "method", "tagged", "importsupport", "policies", "outside/sub"} {
+	for _, name := range []string{"literal", "newclient", "decl", "typedecl", "defaultclient", "calls", "external", "assign", "negative", "conversion", "instantiate", "outside", "nilfield", "method", "tagged", "importsupport", "policies", "outside/sub", "fakedefault"} {
 		patterns = append(patterns, fixturesBase+"/"+name)
 	}
 	facts := map[fnKey]*fnFacts{}
@@ -1012,66 +1066,77 @@ func TestTheSiteWalkerFindsEveryKind(t *testing.T) {
 	}
 	prefix := "internal/httpguard/testdata/redirectsites/"
 	want := map[site]int{
-		{prefix + "literal/literal.go", "Aliased", "client-literal"}:                  1,
-		{prefix + "literal/literal.go", "Dot", "client-literal"}:                      1,
-		{prefix + "literal/literal.go", "Elided", "client-literal"}:                   4,
-		{prefix + "newclient/newclient.go", "Make", "client-new"}:                     1,
-		{prefix + "decl/decl.go", "var Zero", "client-decl"}:                          1,
-		{prefix + "decl/decl.go", "type Holder", "client-decl"}:                       2,
-		{prefix + "decl/decl.go", "Param", "client-decl"}:                             1,
-		{prefix + "decl/decl.go", "Result", "client-literal"}:                         1,
-		{prefix + "typedecl/typedecl.go", "type Alias", "client-type"}:                1,
-		{prefix + "typedecl/typedecl.go", "type Named", "client-type"}:                1,
-		{prefix + "defaultclient/defaultclient.go", "Use", "default-client"}:          1,
-		{prefix + "calls/calls.go", "Call", "http.Get"}:                               2,
-		{prefix + "calls/calls.go", "Call", "http.Post"}:                              1,
-		{prefix + "calls/calls.go", "Call", "http.PostForm"}:                          1,
-		{prefix + "calls/calls.go", "Call", "http.Head"}:                              1,
-		{prefix + "external/external.go", "Make", "external-client-call"}:             1,
-		{prefix + "assign/assign.go", "Direct", "checkredirect-assign"}:               1,
-		{prefix + "assign/assign.go", "Promoted", "checkredirect-assign"}:             1,
-		{prefix + "conversion/conversion.go", "type shaped", "client-type"}:           1,
-		{prefix + "conversion/conversion.go", "ToClient", "client-conversion"}:        1,
-		{prefix + "conversion/conversion.go", "FromClient", "client-conversion"}:      1,
-		{prefix + "instantiate/instantiate.go", "Make", "client-instantiate"}:         1,
-		{prefix + "nilfield/nilfield.go", "Unset", "nil-client-field-literal"}:        1,
-		{prefix + "nilfield/nilfield.go", "New", "nil-client-field-literal"}:          1,
-		{prefix + "nilfield/nilfield.go", "ExplicitNil", "nil-client-field-literal"}:  1,
-		{prefix + "nilfield/nilfield.go", "SubPackage", "nil-client-field-literal"}:   1,
-		{prefix + "nilfield/nilfield.go", "var Zero", "client-carrier-decl"}:          1,
-		{prefix + "nilfield/nilfield.go", "type Wrapper", "client-carrier-decl"}:      1,
-		{prefix + "nilfield/nilfield.go", "type Named", "client-carrier-decl"}:        1,
-		{prefix + "nilfield/nilfield.go", "Embedded", "nil-client-field-literal"}:     1,
-		{prefix + "nilfield/nilfield.go", "NamedField", "nil-client-field-literal"}:   1,
-		{prefix + "nilfield/nilfield.go", "Makes", "nil-client-field-literal"}:        1,
-		{prefix + "nilfield/nilfield.go", "var Array", "client-carrier-decl"}:         1,
-		{prefix + "method/method.go", "Call", "external-client-call"}:                 1,
-		{prefix + "method/method.go", "Value", "external-client-call"}:                1,
-		{prefix + "method/method.go", "Variable", "external-client-call"}:             2,
-		{prefix + "tagged/client_arm64.go", "Arm", "client-literal"}:                  1,
-		{prefix + "tagged/client_amd64.go", "Amd", "client-literal"}:                  1,
-		{prefix + "decl/decl.go", "var Deep", "client-decl"}:                          1,
-		{prefix + "decl/decl.go", "type Level1", "client-decl"}:                       4,
-		{prefix + "nilfield/nilfield.go", "ArrayLiteral", "nil-client-field-literal"}: 1,
-		{prefix + "nilfield/nilfield.go", "ArrayLiteral", "default-client"}:           1,
-		{prefix + "nilfield/nilfield.go", "Anonymous", "nil-client-field-literal"}:    1,
-		{prefix + "nilfield/nilfield.go", "Anonymous", "client-carrier-decl"}:         1,
-		{prefix + "nilfield/nilfield.go", "Generic", "client-instantiate"}:            1,
-		{prefix + "nilfield/nilfield.go", "var DeepCarrier", "client-carrier-decl"}:   1,
-		{prefix + "policies/policies.go", "RefuseLiteral", "client-literal"}:          1,
-		{prefix + "policies/policies.go", "RefuseFunction", "client-literal"}:         1,
-		{prefix + "policies/policies.go", "RefuseAssign", "checkredirect-assign"}:     1,
-		{prefix + "policies/policies.go", "Drop", "client-literal"}:                   1,
-		{prefix + "policies/policies.go", "Custom", "client-literal"}:                 1,
-		{prefix + "policies/policies.go", "Mixed", "checkredirect-assign"}:            2,
-		{prefix + "policies/policies.go", "Bare", "client-literal"}:                   1,
-		{prefix + "decl/decl.go", "var Arr", "client-decl"}:                           1,
-		{prefix + "decl/decl.go", "var InHolder", "client-decl"}:                      1,
-		{prefix + "decl/decl.go", "var Mp", "client-decl"}:                            1,
-		{prefix + "decl/decl.go", "var Ch", "client-decl"}:                            1,
-		{prefix + "decl/decl.go", "Makes", "client-new"}:                              2,
-		{prefix + "instantiate/instantiate.go", "Array", "client-instantiate"}:        1,
-		{prefix + "instantiate/instantiate.go", "Pointer", "client-instantiate"}:      1,
+		{prefix + "literal/literal.go", "Aliased", "client-literal"}:                   1,
+		{prefix + "literal/literal.go", "Dot", "client-literal"}:                       1,
+		{prefix + "literal/literal.go", "Elided", "client-literal"}:                    4,
+		{prefix + "newclient/newclient.go", "Make", "client-new"}:                      1,
+		{prefix + "decl/decl.go", "var Zero", "client-decl"}:                           1,
+		{prefix + "decl/decl.go", "type Holder", "client-decl"}:                        2,
+		{prefix + "decl/decl.go", "Param", "client-decl"}:                              1,
+		{prefix + "decl/decl.go", "Result", "client-literal"}:                          1,
+		{prefix + "typedecl/typedecl.go", "type Alias", "client-type"}:                 1,
+		{prefix + "typedecl/typedecl.go", "type Named", "client-type"}:                 1,
+		{prefix + "defaultclient/defaultclient.go", "Use", "default-client"}:           1,
+		{prefix + "calls/calls.go", "Call", "http.Get"}:                                2,
+		{prefix + "calls/calls.go", "Call", "http.Post"}:                               1,
+		{prefix + "calls/calls.go", "Call", "http.PostForm"}:                           1,
+		{prefix + "calls/calls.go", "Call", "http.Head"}:                               1,
+		{prefix + "external/external.go", "Make", "external-client-call"}:              1,
+		{prefix + "assign/assign.go", "Direct", "checkredirect-assign"}:                1,
+		{prefix + "assign/assign.go", "Promoted", "checkredirect-assign"}:              1,
+		{prefix + "conversion/conversion.go", "type shaped", "client-type"}:            1,
+		{prefix + "conversion/conversion.go", "ToClient", "client-conversion"}:         1,
+		{prefix + "conversion/conversion.go", "FromClient", "client-conversion"}:       1,
+		{prefix + "instantiate/instantiate.go", "Make", "client-instantiate"}:          1,
+		{prefix + "nilfield/nilfield.go", "Unset", "nil-client-field-literal"}:         1,
+		{prefix + "nilfield/nilfield.go", "New", "nil-client-field-literal"}:           1,
+		{prefix + "nilfield/nilfield.go", "ExplicitNil", "nil-client-field-literal"}:   1,
+		{prefix + "nilfield/nilfield.go", "SubPackage", "nil-client-field-literal"}:    1,
+		{prefix + "nilfield/nilfield.go", "var Zero", "client-carrier-decl"}:           1,
+		{prefix + "nilfield/nilfield.go", "type Wrapper", "client-carrier-decl"}:       1,
+		{prefix + "nilfield/nilfield.go", "type Named", "client-carrier-decl"}:         1,
+		{prefix + "nilfield/nilfield.go", "Embedded", "nil-client-field-literal"}:      1,
+		{prefix + "nilfield/nilfield.go", "NamedField", "nil-client-field-literal"}:    1,
+		{prefix + "nilfield/nilfield.go", "Makes", "nil-client-field-literal"}:         1,
+		{prefix + "nilfield/nilfield.go", "var Array", "client-carrier-decl"}:          1,
+		{prefix + "method/method.go", "Call", "external-client-call"}:                  1,
+		{prefix + "method/method.go", "Value", "external-client-call"}:                 1,
+		{prefix + "method/method.go", "Variable", "external-client-call"}:              2,
+		{prefix + "tagged/client_arm64.go", "Arm", "client-literal"}:                   1,
+		{prefix + "tagged/client_amd64.go", "Amd", "client-literal"}:                   1,
+		{prefix + "policies/policies.go", "Delegating", "client-literal"}:              1,
+		{prefix + "policies/policies.go", "LocalVariable", "client-literal"}:           1,
+		{prefix + "policies/policies.go", "Conditional", "client-literal"}:             1,
+		{prefix + "policies/policies.go", "ForeignCall", "client-literal"}:             1,
+		{prefix + "policies/policies.go", "FieldReturn", "client-literal"}:             1,
+		{prefix + "policies/policies.go", "RefuseErrorf", "client-literal"}:            1,
+		{prefix + "policies/policies.go", "RefusePackageVar", "client-literal"}:        1,
+		{prefix + "nilfield/nilfield.go", "TypedNil", "nil-client-field-literal"}:      1,
+		{prefix + "nilfield/nilfield.go", "var Chan", "client-carrier-decl"}:           1,
+		{prefix + "nilfield/nilfield.go", "var Map", "client-carrier-decl"}:            1,
+		{prefix + "fakedefault/fakedefault.go", "var DefaultClient", "client-literal"}: 1,
+		{prefix + "decl/decl.go", "var Deep", "client-decl"}:                           1,
+		{prefix + "decl/decl.go", "type Level1", "client-decl"}:                        4,
+		{prefix + "nilfield/nilfield.go", "ArrayLiteral", "nil-client-field-literal"}:  1,
+		{prefix + "nilfield/nilfield.go", "ArrayLiteral", "default-client"}:            1,
+		{prefix + "nilfield/nilfield.go", "Anonymous", "nil-client-field-literal"}:     1,
+		{prefix + "nilfield/nilfield.go", "Anonymous", "client-carrier-decl"}:          1,
+		{prefix + "nilfield/nilfield.go", "Generic", "client-instantiate"}:             1,
+		{prefix + "nilfield/nilfield.go", "var DeepCarrier", "client-carrier-decl"}:    1,
+		{prefix + "policies/policies.go", "RefuseLiteral", "client-literal"}:           1,
+		{prefix + "policies/policies.go", "RefuseFunction", "client-literal"}:          1,
+		{prefix + "policies/policies.go", "RefuseAssign", "checkredirect-assign"}:      1,
+		{prefix + "policies/policies.go", "Drop", "client-literal"}:                    1,
+		{prefix + "policies/policies.go", "Custom", "client-literal"}:                  1,
+		{prefix + "policies/policies.go", "Mixed", "checkredirect-assign"}:             2,
+		{prefix + "policies/policies.go", "Bare", "client-literal"}:                    1,
+		{prefix + "decl/decl.go", "var Arr", "client-decl"}:                            1,
+		{prefix + "decl/decl.go", "var InHolder", "client-decl"}:                       1,
+		{prefix + "decl/decl.go", "var Mp", "client-decl"}:                             1,
+		{prefix + "decl/decl.go", "var Ch", "client-decl"}:                             1,
+		{prefix + "decl/decl.go", "Makes", "client-new"}:                               2,
+		{prefix + "instantiate/instantiate.go", "Array", "client-instantiate"}:         1,
+		{prefix + "instantiate/instantiate.go", "Pointer", "client-instantiate"}:       1,
 	}
 	want[site{prefix + "decl/decl.go", "Result", "client-decl"}] = 0
 	delete(want, site{prefix + "decl/decl.go", "Result", "client-decl"})
@@ -1087,7 +1152,8 @@ func TestTheSiteWalkerFindsEveryKind(t *testing.T) {
 	}
 	// the class derived from the code of a function
 	derived := map[string]string{"Guarded": "guarded", "GuardedNew": "guarded", "RefuseLiteral": "never-follows", "RefuseFunction": "never-follows",
-		"RefuseAssign": "never-follows", "Drop": "drops-credential", "Custom": "custom-policy", "Mixed": "MIXED", "Bare": ""}
+		"RefuseAssign": "never-follows", "Delegating": "custom-policy", "LocalVariable": "custom-policy", "Conditional": "custom-policy",
+		"RefuseErrorf": "never-follows", "ForeignCall": "custom-policy", "FieldReturn": "custom-policy", "RefusePackageVar": "never-follows", "Drop": "drops-credential", "Custom": "custom-policy", "Mixed": "MIXED", "Bare": ""}
 	for symbol, class := range derived {
 		if got := facts[fnKey{prefix + "policies/policies.go", symbol}].derive(); got != class {
 			t.Errorf("derived class of %s: %q, want %q", symbol, got, class)
@@ -1145,7 +1211,7 @@ func TestFollowsRedirect(t *testing.T)    { redirect() }
 	}
 	k := func(symbol string) site { return site{"pkg/p.go", symbol, "client-literal"} }
 	symbols := []string{"ok", "unlisted", "count", "unclassified", "bogus", "nocite", "noprobe", "weakguard", "classdiff", "handoverderived", "weakpolicy", "policy",
-		"drops", "dropsweak", "custom", "mixed", "bare", "notderivable", "callee", "calleebad", "nocallee", "nocred", "nocredprobe", "crossdir", "unless"}
+		"drops", "dropsweak", "custom", "mixed", "bare", "notderivable", "callee", "calleebad", "calleebare", "nocallee", "nocred", "nocredprobe", "crossdir", "unless"}
 	found := map[site]int{}
 	for _, symbol := range symbols {
 		found[k(symbol)] = 1
@@ -1175,10 +1241,12 @@ func TestFollowsRedirect(t *testing.T)    { redirect() }
 		k("nocredprobe"):     {1, "no-credential", "TestRedirectProbe", "c"},
 		k("crossdir"):        {1, "guarded", "pkg:TestRedirectProbe", "c"},
 		k("unless"):          {1, "follows-unless-supplied", "TestNothingHere", "c"},
+		k("calleebare"):      {1, "guarded-in-callee", "TestRedirectProbe", "callee=pkg/p.go#bare"},
 		k("gone"):            {1, "guarded", "TestRedirectProbe", "c"},
 	}
 	got := strings.Join(compareSites(found, rows, root, verdictFacts()), "\n")
 	want := strings.Join([]string{
+		"CALLEE \"pkg/p.go#bare\" does not call httpguard or set a redirect policy: pkg/p.go calleebare client-literal",
 		"CALLEE \"pkg/p.go#nothing\" does not call httpguard or set a redirect policy: pkg/p.go calleebad client-literal",
 		"CALLEE not named (callee=file#Symbol): pkg/p.go nocallee client-literal",
 		"CLASS differs: pkg/p.go classdiff client-literal: row says never-follows, the code derives guarded",
@@ -1259,5 +1327,19 @@ func TestTheSiteWalkerReportsAPackageThatDoesNotLoad(t *testing.T) {
 	_, problems, _ := scanPackages(t, root, []string{fixturesBase + "/broken"}, nil, func(string) bool { return false }, "internal/httpguard/testdata/redirectsites/broken", nil)
 	if len(problems) == 0 || !strings.Contains(problems[0], "LOAD error") {
 		t.Fatalf("want a LOAD error problem, got %v", problems)
+	}
+}
+
+// The pinned scope list is compared by a function of its own: a file that joins or leaves the list fails.
+func TestTheScopePinFailsWhenTheListChanges(t *testing.T) {
+	pinned := []string{"a.go", "b.go"}
+	if got := scopeProblems([]string{"b.go", "a.go"}, pinned); len(got) != 0 {
+		t.Fatalf("the same set in another order must pass, got %v", got)
+	}
+	if got := scopeProblems([]string{"a.go", "b.go", "c_windows.go"}, pinned); len(got) != 1 {
+		t.Fatalf("a file that joins the list must fail, got %v", got)
+	}
+	if got := scopeProblems([]string{"a.go"}, pinned); len(got) != 1 {
+		t.Fatalf("a file that leaves the list must fail, got %v", got)
 	}
 }

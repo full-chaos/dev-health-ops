@@ -4,6 +4,8 @@ package negative
 import (
 	"net/http"
 	"net/url"
+
+	"github.com/full-chaos/dev-health-ops/internal/httpguard/testdata/redirectsites/fakedefault"
 )
 
 func build() *http.Client { return nil }
@@ -23,4 +25,10 @@ func Conversions(c *http.Client, n int) {
 	_ = (*http.Client)(c)
 	_ = int64(n)
 	_ = shapeless(struct{ n int }{n})
+}
+
+// Not sites: another package's DefaultClient, and a conversion of nil.
+func Others() {
+	_ = fakedefault.DefaultClient
+	_ = (*http.Client)(nil)
 }

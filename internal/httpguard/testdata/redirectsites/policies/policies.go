@@ -2,6 +2,9 @@
 package policies
 
 import (
+	"context"
+	"errors"
+	"fmt"
 	nethttp "net/http"
 
 	"github.com/full-chaos/dev-health-ops/internal/httpguard"
@@ -36,3 +39,47 @@ func Mixed(c *nethttp.Client, d *nethttp.Client) {
 }
 
 func Bare() *nethttp.Client { return &nethttp.Client{} }
+
+func allow(*nethttp.Request) error { return nil }
+
+func check(*nethttp.Request, []*nethttp.Request) error { return nil }
+
+var errNo = errors.New("no")
+
+func Delegating() *nethttp.Client {
+	return &nethttp.Client{CheckRedirect: func(r *nethttp.Request, via []*nethttp.Request) error { return allow(r) }}
+}
+
+func LocalVariable() *nethttp.Client {
+	return &nethttp.Client{CheckRedirect: func(r *nethttp.Request, via []*nethttp.Request) error {
+		var err error
+		return err
+	}}
+}
+
+func Conditional() *nethttp.Client {
+	return &nethttp.Client{CheckRedirect: func(r *nethttp.Request, via []*nethttp.Request) error {
+		if len(via) > 3 {
+			return errNo
+		}
+		return check(r, via)
+	}}
+}
+
+func RefuseErrorf() *nethttp.Client {
+	return &nethttp.Client{CheckRedirect: func(*nethttp.Request, []*nethttp.Request) error { return fmt.Errorf("no %d", 1) }}
+}
+
+func RefusePackageVar() *nethttp.Client {
+	return &nethttp.Client{CheckRedirect: func(*nethttp.Request, []*nethttp.Request) error { return errNo }}
+}
+
+func ForeignCall() *nethttp.Client {
+	return &nethttp.Client{CheckRedirect: func(r *nethttp.Request, via []*nethttp.Request) error { return context.Cause(r.Context()) }}
+}
+
+type failure struct{ err error }
+
+func FieldReturn(h failure) *nethttp.Client {
+	return &nethttp.Client{CheckRedirect: func(r *nethttp.Request, via []*nethttp.Request) error { return h.err }}
+}

@@ -56,3 +56,9 @@ func zeroPtr[T any]() *T { return new(T) }
 func Generic() *outside.Config { return zeroPtr[outside.Config]() }
 
 var DeepCarrier [1][1][1][1][1]outside.Config
+
+func TypedNil() *outside.Config { return &outside.Config{HTTPClient: (*nethttp.Client)(nil)} }
+
+var Chan chan outside.Config
+
+var Map map[string]outside.Config

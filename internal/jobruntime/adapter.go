@@ -731,7 +731,8 @@ func finishJobSpan(span oteltrace.Span, choice decision, err error) {
 
 // errorTypeName is the Go type of the innermost error of the chain: a name from the program text, never a message.
 func errorTypeName(err error) string {
-	for {
+	// bounded: an error whose Unwrap returns itself (or a cycle) must not stall the finalizer before span.End
+	for depth := 0; depth < 64; depth++ {
 		next := errors.Unwrap(err)
 		if next == nil {
 			break

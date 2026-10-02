@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"strings"
 	"testing"
+	"time"
 
 	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/codes"
@@ -121,3 +122,29 @@ func TestErrorTypeNameIsTheInnermostGoTypeNeverAMessage(t *testing.T) {
 type plantedValueError string
 
 func (e plantedValueError) Error() string { return string(e) }
+
+type cyclicError struct{}
+
+func (cyclic *cyclicError) Error() string { return "cyclic" }
+func (cyclic *cyclicError) Unwrap() error { return cyclic }
+
+// CHAOS-7896 r1: a self-unwrapping error must not stall the finalizer before span.End.
+func TestACyclicUnwrapChainDoesNotStallTheJobFinalizer(t *testing.T) {
+	exporter := tracetest.NewInMemoryExporter()
+	provider := sdktrace.NewTracerProvider(sdktrace.WithSyncer(exporter))
+	t.Cleanup(func() { _ = provider.Shutdown(context.Background()) })
+	_, span := provider.Tracer("cyclic-test").Start(context.Background(), "job")
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		finishJobSpan(span, decision{result: ResultRetry, category: CategoryPanic}, &cyclicError{})
+	}()
+	select {
+	case <-done:
+	case <-time.After(5 * time.Second):
+		t.Fatal("the finalizer is stuck on a self-unwrapping error")
+	}
+	if len(exporter.GetSpans()) != 1 {
+		t.Fatalf("exported %d spans, want 1", len(exporter.GetSpans()))
+	}
+}

@@ -118,7 +118,8 @@ func finishCoordinatorSpan(span oteltrace.Span, err error) {
 
 // errorTypeName is the Go type of the innermost error of the chain: a name from the program text, never a message.
 func errorTypeName(err error) string {
-	for {
+	// bounded: an error whose Unwrap returns itself (or a cycle) must not stall the finalizer before span.End
+	for depth := 0; depth < maxUnwrapDepth; depth++ {
 		next := errors.Unwrap(err)
 		if next == nil {
 			break
@@ -127,6 +128,37 @@ func errorTypeName(err error) string {
 	}
 	return fmt.Sprintf("%T", err)
 }
+
+// maxUnwrapDepth bounds the walk down an error chain: far deeper than any real chain.
+const maxUnwrapDepth = 64
+
+// coordinatorWorkError is what a coordinator Work returns to River: the text is fixed ("coordinator job failed: <Go type>")
+// and the original error stays reachable through Unwrap, so River's cancel and snooze handling and every errors.Is / errors.As
+// of the retry logic work as before. River's otelriver middleware and the job queue's error column copy err.Error(): that text
+// must not carry a URL, an id or a response body (CHAOS-7896 r1).
+type coordinatorWorkError struct{ cause error }
+
+func (err *coordinatorWorkError) Error() string {
+	return "coordinator job failed: " + errorTypeName(err.cause)
+}
+func (err *coordinatorWorkError) Unwrap() error { return err.cause }
+
+// finishCoordinatorWork is the deferred end of every coordinator Work: it finishes the span, and makes the error handed back to
+// River the fixed-text form. A panic marks the span as failed (a nil error return is not a success then) and continues to
+// propagate to River's own panic handling.
+func finishCoordinatorWork(span oteltrace.Span, returned *error) {
+	if recovered := recover(); recovered != nil {
+		finishCoordinatorSpan(span, errCoordinatorPanic)
+		panic(recovered)
+	}
+	finishCoordinatorSpan(span, *returned)
+	if *returned != nil {
+		*returned = &coordinatorWorkError{cause: *returned}
+	}
+}
+
+// errCoordinatorPanic stands for a panic on the span: a type name and a fixed status, never the panic value.
+var errCoordinatorPanic = errors.New("coordinator panic")
 
 // RegisterWorkers adds all four guarded at-least-once coordinator consumers.
 // Each worker carries only a durable domain reference and delegates execution
@@ -271,7 +303,7 @@ func (worker *dispatchWorker) Work(ctx context.Context, job *river.Job[DispatchS
 	// from worker.service still ends and exports the span before the panic
 	// continues propagating to River's own panic-to-failure handling; this
 	// does not recover the panic, only observes it.
-	defer func() { finishCoordinatorSpan(span, err) }()
+	defer finishCoordinatorWork(span, &err)
 	err = worker.service.Dispatch(ctx, job.Args)
 	return err
 }
@@ -295,7 +327,7 @@ func (worker *finalizeWorker) Work(ctx context.Context, job *river.Job[FinalizeS
 		return ErrWorkerRegistration
 	}
 	ctx, span := spanForCoordinatorJob(ctx, job.Args.Kind(), job.Args.SyncRunID(), job.Args.TraceParent)
-	defer func() { finishCoordinatorSpan(span, err) }()
+	defer finishCoordinatorWork(span, &err)
 	err = worker.service.Finalize(ctx, job.Args)
 	return err
 }
@@ -319,7 +351,7 @@ func (worker *postSyncWorker) Work(ctx context.Context, job *river.Job[PostSyncA
 		return ErrWorkerRegistration
 	}
 	ctx, span := spanForCoordinatorJob(ctx, job.Args.Kind(), job.Args.SyncRunID(), job.Args.TraceParent)
-	defer func() { finishCoordinatorSpan(span, err) }()
+	defer finishCoordinatorWork(span, &err)
 	err = worker.service.Fanout(ctx, job.Args)
 	return err
 }
@@ -363,7 +395,7 @@ func (worker *teamAutoimportWorker) Work(ctx context.Context, job *river.Job[Tea
 	// worker-outbox envelope, not a coordinator TransportArgs kind), so there
 	// is no TraceParent field to propagate here -- out of this ticket's scope.
 	ctx, span := spanForCoordinatorJob(ctx, job.Args.Kind(), job.Args.Payload.SyncRunID, "")
-	defer func() { finishCoordinatorSpan(span, err) }()
+	defer finishCoordinatorWork(span, &err)
 	err = worker.bridge.TeamAutoImport(ctx, DomainReference{
 		OrganizationID: job.Args.OrgID,
 		SyncRunID:      job.Args.Payload.SyncRunID,
@@ -394,7 +426,7 @@ func (worker *teamRepoOwnershipDerivationWorker) Work(ctx context.Context, job *
 		return err
 	}
 	ctx, span := spanForCoordinatorJob(ctx, job.Args.Kind(), job.Args.Payload.SyncRunID, "")
-	defer func() { finishCoordinatorSpan(span, err) }()
+	defer finishCoordinatorWork(span, &err)
 	written, retracted, inputsReady, armCounts, err := worker.service.Derive(ctx, job.Args.OrgID)
 	outcome := jobruntime.TeamRepoOwnershipDerivationOutcomeRowsWritten
 	switch {
@@ -448,7 +480,7 @@ func (worker *referenceDiscoveryWorker) Work(ctx context.Context, job *river.Job
 		return ErrWorkerRegistration
 	}
 	ctx, span := spanForCoordinatorJob(ctx, job.Args.Kind(), job.Args.SyncRunID(), job.Args.TraceParent)
-	defer func() { finishCoordinatorSpan(span, err) }()
+	defer finishCoordinatorWork(span, &err)
 	err = worker.service.Discover(ctx, job.Args)
 	return err
 }

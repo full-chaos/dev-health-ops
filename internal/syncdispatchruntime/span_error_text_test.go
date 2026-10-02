@@ -6,7 +6,11 @@ import (
 	"fmt"
 	"strings"
 	"testing"
+	"time"
 
+	"github.com/riverqueue/river"
+	"github.com/riverqueue/river/rivertype"
+	"github.com/riverqueue/rivercontrib/otelriver"
 	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/codes"
 	sdktrace "go.opentelemetry.io/otel/sdk/trace"
@@ -104,5 +108,129 @@ func TestErrorTypeNameIsTheInnermostGoTypeNeverAMessage(t *testing.T) {
 	}
 	if got := errorTypeName(fmt.Errorf("w: %w", &plantedFailure{message: "m"})); got != "*syncdispatchruntime.plantedFailure" {
 		t.Fatalf("errorTypeName of a wrapped pointer error = %q", got)
+	}
+}
+
+// CHAOS-7896 r1: what a coordinator Work hands back to River. River's otelriver middleware copies err.Error() into the parent
+// span and the job queue stores it: the text is fixed, the cause stays reachable.
+func coordinatorWork(t *testing.T, fn func() error) (err error, spans tracetest.SpanStubs) {
+	t.Helper()
+	exporter := tracetest.NewInMemoryExporter()
+	provider := sdktrace.NewTracerProvider(sdktrace.WithSyncer(exporter))
+	t.Cleanup(func() { _ = provider.Shutdown(context.Background()) })
+	_, span := provider.Tracer("coordinator-work-test").Start(context.Background(), "coordinator")
+	func() {
+		defer finishCoordinatorWork(span, &err)
+		err = fn()
+	}()
+	return err, exporter.GetSpans()
+}
+
+func TestACoordinatorWorkReturnsAFixedTextAndKeepsItsCause(t *testing.T) {
+	failure := plantedError()
+	returned, spans := coordinatorWork(t, func() error { return failure })
+	for _, marker := range []string{plantedMarker, plantedUser, plantedHost, "access_token", "orgs/42"} {
+		if strings.Contains(returned.Error(), marker) {
+			t.Fatalf("the error handed to River carries %q: %s", marker, returned)
+		}
+	}
+	if !strings.HasPrefix(returned.Error(), "coordinator job failed: ") {
+		t.Fatalf("returned text = %q", returned)
+	}
+	var planted *plantedFailure
+	if !errors.Is(returned, failure) || !errors.As(returned, &planted) {
+		t.Fatal("the cause is no longer reachable through errors.Is / errors.As")
+	}
+	var cancel *rivertype.JobCancelError
+	cancelled, _ := coordinatorWork(t, func() error { return river.JobCancel(failure) })
+	if !errors.As(cancelled, &cancel) {
+		t.Fatal("River's cancel classification no longer reaches the JobCancelError")
+	}
+	var snooze *river.JobSnoozeError
+	snoozed, _ := coordinatorWork(t, func() error { return river.JobSnooze(0) })
+	if !errors.As(snoozed, &snooze) {
+		t.Fatal("River's snooze classification no longer reaches the JobSnoozeError")
+	}
+	if len(spans) != 1 || spans[0].Status.Code != codes.Error {
+		t.Fatalf("spans = %v", spans)
+	}
+	if nilErr, _ := coordinatorWork(t, func() error { return nil }); nilErr != nil {
+		t.Fatalf("a successful Work returned %v", nilErr)
+	}
+}
+
+func TestAPanickingCoordinatorWorkIsAFailedSpanAndStillPanics(t *testing.T) {
+	exporter := tracetest.NewInMemoryExporter()
+	provider := sdktrace.NewTracerProvider(sdktrace.WithSyncer(exporter))
+	t.Cleanup(func() { _ = provider.Shutdown(context.Background()) })
+	_, span := provider.Tracer("coordinator-panic-test").Start(context.Background(), "coordinator")
+	var recovered any
+	func() {
+		defer func() { recovered = recover() }()
+		var err error
+		defer finishCoordinatorWork(span, &err)
+		panic(plantedMarker)
+	}()
+	if recovered != plantedMarker {
+		t.Fatalf("the panic did not continue to propagate: %v", recovered)
+	}
+	spans := exporter.GetSpans()
+	if len(spans) != 1 || spans[0].Status.Code != codes.Error || spans[0].Status.Description != "coordinator job failed" {
+		t.Fatalf("a panicking coordinator span = %+v, want Error / coordinator job failed", spans)
+	}
+	for _, event := range spans[0].Events {
+		for _, kv := range event.Attributes {
+			if strings.Contains(kv.Value.Emit(), plantedMarker) {
+				t.Fatalf("the panic value reached the span: %v", kv)
+			}
+		}
+	}
+}
+
+type cyclicError struct{}
+
+func (cyclic *cyclicError) Error() string { return "cyclic" }
+func (cyclic *cyclicError) Unwrap() error { return cyclic }
+
+func TestACyclicUnwrapChainDoesNotStallTheCoordinatorFinalizer(t *testing.T) {
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		_, _ = coordinatorWork(t, func() error { return &cyclicError{} })
+	}()
+	select {
+	case <-done:
+	case <-time.After(5 * time.Second):
+		t.Fatal("the finalizer is stuck on a self-unwrapping error")
+	}
+}
+
+// CHAOS-7896 r1, through the real River middleware: its river.work span takes its status description from err.Error().
+func TestTheRiverWorkSpanOfACoordinatorFailureCarriesNoErrorText(t *testing.T) {
+	exporter := tracetest.NewInMemoryExporter()
+	provider := sdktrace.NewTracerProvider(sdktrace.WithSyncer(exporter))
+	t.Cleanup(func() { _ = provider.Shutdown(context.Background()) })
+	middleware := otelriver.NewMiddleware(&otelriver.MiddlewareConfig{TracerProvider: provider})
+	err := middleware.Work(context.Background(), &rivertype.JobRow{Kind: "coordinator_test"}, func(ctx context.Context) (err error) {
+		_, span := provider.Tracer("coordinator-river-test").Start(ctx, "coordinator")
+		defer finishCoordinatorWork(span, &err)
+		return plantedError()
+	})
+	if err == nil {
+		t.Fatal("no error")
+	}
+	var river string
+	for _, span := range exporter.GetSpans() {
+		if span.Name == "river.work" {
+			river = span.Status.Description
+		}
+	}
+	if river == "" || !strings.HasPrefix(river, "coordinator job failed: ") {
+		t.Fatalf("river.work status description = %q, want the fixed coordinator text", river)
+	}
+	for _, marker := range []string{plantedMarker, plantedUser, plantedHost, "access_token", "orgs/42"} {
+		if strings.Contains(river, marker) {
+			t.Fatalf("the river.work span carries %q: %s", marker, river)
+		}
 	}
 }

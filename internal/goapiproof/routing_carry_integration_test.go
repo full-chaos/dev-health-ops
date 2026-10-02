@@ -5,6 +5,7 @@ package goapiproof
 import (
 	"context"
 	"errors"
+	"sort"
 	"strings"
 	"testing"
 	"time"
@@ -1184,5 +1185,91 @@ func TestCarryPrimaryOnlyRunSucceedsAndASkippedShadowCarriesNoEvidence(t *testin
 				t.Fatalf("hotspots = %+v, want a SKIP with no would-be evidence text", outcome)
 			}
 		}
+	}
+}
+
+// CHAOS-8144 (R311, after r1 found a path the body did not name): the RUN-LEVEL
+// decision table, every cell executed against real Postgres. Axes: the kinds of
+// live row present (served valid, served unfaithful, shadow valid, shadow stale,
+// python, a mix) x the run options (-operations, dry run). Row-level outcomes
+// are enumerated by TestDecideCarryOverItsWholeInputDomain; this table is what
+// the whole run does with them: refuse, succeed with writes, or succeed with
+// none. The same table is in the lane's invariant.md.
+func TestCarryRunLevelDecisionTable(t *testing.T) {
+	ctx := t.Context()
+	served := CarryRow{Operation: "featureFlags", DocumentDigest: testDocumentDigest, Mode: "canary", Build: verbsRunningBuild, Owner: "go", RolloutPercentage: 100, ReviewEvidence: "served"}
+	shadow := CarryRow{Operation: "hotspots", DocumentDigest: testDocumentDigest2, Mode: "shadow", Build: verbsRunningBuild, Owner: "go", ReviewEvidence: "shadow"}
+	staleShadow := shadow
+	staleShadow.Build = "some-older-build"
+	python := CarryRow{Operation: "savedReports", DocumentDigest: strings.Repeat("e", 64), Mode: "python", Build: verbsRunningBuild, Owner: "go", ReviewEvidence: "off"}
+	for name, tc := range map[string]struct {
+		rows     []CarryRow
+		mutate   func(*CarryRequest)
+		wantErr  error
+		wantRows []string // operations at the target digest after the run
+	}{
+		"R1 served valid only":                      {rows: []CarryRow{served}, wantRows: []string{"featureFlags"}},
+		"R2 shadow valid only":                      {rows: []CarryRow{shadow}, wantRows: []string{"hotspots"}},
+		"R3 shadow stale only (succeeds, no write)": {rows: []CarryRow{staleShadow}, wantRows: nil},
+		"R4 stale shadow + python (nothing kept)":   {rows: []CarryRow{staleShadow, python}, wantErr: ErrCarryNothingReachable},
+		"R5 served valid + shadow valid":            {rows: []CarryRow{served, shadow}, wantRows: []string{"featureFlags", "hotspots"}},
+		"R6 served valid + shadow stale":            {rows: []CarryRow{served, staleShadow}, wantRows: []string{"featureFlags"}},
+		"R7 served unfaithful + shadow valid (REFUSE, nothing written)": {
+			rows:    []CarryRow{served, shadow},
+			mutate:  func(r *CarryRequest) { r.Inputs.TargetDocumentDigest["featureFlags"] = strings.Repeat("7", 64) },
+			wantErr: ErrCarryDocumentMoved,
+		},
+		"R8 python only":                         {rows: []CarryRow{python}, wantErr: ErrCarryNothingReachable},
+		"R9 shadow valid + python (shadow kept)": {rows: []CarryRow{shadow, python}, wantRows: []string{"hotspots"}},
+		"R10 shadow valid + python, -operations on the python row only": {
+			rows:    []CarryRow{shadow, python},
+			mutate:  func(r *CarryRequest) { r.Operations = []string{"savedReports"} },
+			wantErr: ErrCarryNothingReachable,
+		},
+		"R11 shadow valid + python, -operations on the shadow row only": {
+			rows:     []CarryRow{shadow, python},
+			mutate:   func(r *CarryRequest) { r.Operations = []string{"hotspots"} },
+			wantRows: []string{"hotspots"},
+		},
+		"R12 shadow valid only, dry run (plan, no write)": {
+			rows:   []CarryRow{shadow},
+			mutate: func(r *CarryRequest) { r.DryRun = true },
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			pool := startAuditedRegistryPostgres(t)
+			request := carryIntegrationRequest()
+			for _, row := range tc.rows {
+				seedCarryRow(t, ctx, pool, carryIntegrationLiveDigest, row)
+			}
+			if tc.mutate != nil {
+				tc.mutate(&request)
+			}
+			outcomes, err := Carry(ctx, pool, request)
+			if tc.wantErr != nil {
+				if !errors.Is(err, tc.wantErr) {
+					t.Fatalf("err = %v, want %v", err, tc.wantErr)
+				}
+			} else if err != nil {
+				t.Fatalf("Carry: %v", err)
+			}
+			if tc.wantErr == nil {
+				for _, outcome := range outcomes {
+					if outcome.Action == CarryActionSkip && outcome.Reason == "" {
+						t.Fatalf("%s skipped with no reason", outcome.Operation)
+					}
+				}
+			}
+			var got []string
+			for _, row := range rowsAtDigest(t, ctx, pool, carryIntegrationTargetDigest) {
+				got = append(got, row.Operation)
+			}
+			sort.Strings(got)
+			want := append([]string(nil), tc.wantRows...)
+			sort.Strings(want)
+			if strings.Join(got, ",") != strings.Join(want, ",") {
+				t.Fatalf("rows at the target digest = %v, want %v", got, want)
+			}
+		})
 	}
 }

@@ -65,6 +65,7 @@ func tree(t *testing.T) string {
 	} {
 		write(t, repo, file, text)
 	}
+	write(t, repo, BeforeStampList, "# the closed list\na/testdata/golden/TestOld.json\n")
 	set(t, repo, Change{}, "a/testdata/golden/TestX.json")
 	set(t, repo, Change{DayOne: true}, "a/testdata/golden/TestOld.json")
 	set(t, repo, Change{Kind: HandWritten}, "a/testdata/case.json")
@@ -472,5 +473,79 @@ func TestTheBeforeStampSetOnlyShrinksWhenAGoldenIsRecordedAgain(t *testing.T) {
 	}
 	if got := found(t, repo, 1); len(got) != 0 {
 		t.Errorf("problems: %q", got)
+	}
+}
+
+// -day-one gives the kind header-before-stamp to a golden on the closed list
+// and to no other: a new golden with no stamp was not made by the verb.
+func TestDayOneAdmitsNoGoldenThatIsNotOnTheClosedList(t *testing.T) {
+	repo := tree(t)
+	write(t, repo, "a/testdata/golden/TestNew.json", strings.Replace(oldGoldenText, "TestOld", "TestNew", 1))
+	_, err := Set(repo, []string{"a/testdata/golden/TestNew.json"}, Change{DayOne: true})
+	if err == nil || !strings.Contains(err.Error(), "not on the closed list") || !strings.Contains(err.Error(), "-day-one does not admit it") {
+		t.Fatalf("err = %v, want a refusal naming the closed list", err)
+	}
+	if strings.Contains(read(t, repo, "a/testdata.manifest.tsv"), "TestNew") {
+		t.Fatal("the refused golden got a row")
+	}
+}
+
+func TestTheGuardRefusesABeforeStampRowOffTheClosedListAndAListThatGrew(t *testing.T) {
+	repo := tree(t)
+	roots, err := Roots(repo)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got, err := ceilingProblems(repo, roots, 1); err != nil || len(got) != 0 {
+		t.Fatalf("the tree is accepted: %q, %v", got, err)
+	}
+	if got, _ := ceilingProblems(repo, roots, 0); len(got) != 1 || !strings.Contains(got[0], "the list only shrinks") {
+		t.Fatalf("a list longer than the ceiling: %q", got)
+	}
+	write(t, repo, BeforeStampList, "# empty\n")
+	got, _ := ceilingProblems(repo, roots, 0)
+	if len(got) != 1 || !strings.Contains(got[0], "is not on the closed list") {
+		t.Fatalf("a row off the list: %q", got)
+	}
+}
+
+// Problems reports a before-stamp row that is off the closed list (the check
+// is wired into the guard, not only a function a test calls), and a list that is
+// SHORTER than the ceiling is refused too: the number goes down with the list.
+func TestProblemsReportsABeforeStampRowOffTheClosedListAndAStaleCeiling(t *testing.T) {
+	repo := tree(t)
+	write(t, repo, BeforeStampList, "# empty\n")
+	problems, err := Problems(repo)
+	if err != nil {
+		t.Fatal(err)
+	}
+	found := false
+	for _, problem := range problems {
+		if strings.Contains(problem, "a/testdata/golden/TestOld.json has the kind header-before-stamp and is not on the closed list") {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatalf("Problems did not report the row off the list: %q", problems)
+	}
+
+	repo = tree(t)
+	roots, err := Roots(repo)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got, _ := ceilingProblems(repo, roots, 2); len(got) != 1 || !strings.Contains(got[0], "the list only shrinks") {
+		t.Fatalf("a list shorter than the ceiling: %q", got)
+	}
+}
+
+// -day-one with no readable closed list admits nothing.
+func TestDayOneWithNoClosedListAdmitsNothing(t *testing.T) {
+	repo := tree(t)
+	remove(t, repo, BeforeStampList)
+	write(t, repo, "a/testdata/golden/TestNew.json", strings.Replace(oldGoldenText, "TestOld", "TestNew", 1))
+	_, err := Set(repo, []string{"a/testdata/golden/TestNew.json"}, Change{DayOne: true})
+	if err == nil || !strings.Contains(err.Error(), "cannot be read") {
+		t.Fatalf("err = %v, want a refusal that the closed list cannot be read", err)
 	}
 }

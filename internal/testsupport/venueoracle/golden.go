@@ -104,8 +104,13 @@ type GoldenSpec struct {
 type Golden struct {
 	spec      GoldenSpec
 	recording bool
-	loaded    goldenFile
-	recorded  goldenFile
+	// byVerb is whether the record verb started this recording. The test
+	// never writes the stamp itself: the verb writes it into the candidate
+	// after both runs agree (StampCandidate), and the replay refuses a
+	// candidate without it.
+	byVerb   bool
+	loaded   goldenFile
+	recorded goldenFile
 	// served counts the frozen answers handed out so far: a test may ask for
 	// the Python plane's answers in several calls (one per batch of requests),
 	// and the frozen file holds them in the order they were asked.
@@ -210,10 +215,12 @@ type goldenHeader struct {
 	PythonEnvVersion int    `json:"python_env_version,omitempty"`
 	// RecordedBy is the stamp of the record verb: the recording ran under the
 	// verb (its fixed environment, its two runs, its replay), not under a
-	// hand-started go test. A golden with no stamp was recorded before the
-	// stamp existed; the manifest of its directory holds it by digest
-	// (recordedfiles). The stamp stops an accident: a hand-made golden has
-	// none. It does not stop a hand edit that also writes the stamp.
+	// hand-started go test. The verb writes it (goldenrecord, into the
+	// candidate, after the two runs agree); the test process never does, so a
+	// hand-started test with the verb's variable set cannot make it. A golden
+	// with no stamp was recorded before the stamp existed; the manifest of its
+	// directory holds it by digest (recordedfiles). It does not stop a hand
+	// edit that also writes the stamp.
 	RecordedBy string `json:"recorded_by,omitempty"`
 	// Blanked lists, by pattern, the leaves the recording replaced by a
 	// placeholder, with how many: the paths the golden does not hold by value
@@ -221,6 +228,16 @@ type goldenHeader struct {
 	// run time). A recording always writes it (an empty list is "{}"); a golden
 	// recorded before it has none, and is then not checked against it.
 	Blanked map[string]int `json:"blanked"`
+}
+
+// candidateStampErr is an error unless the candidate the verb replays holds
+// the verb's stamp: the verb writes it after both recording runs agree, a
+// test never does.
+func candidateStampErr(spec GoldenSpec, header goldenHeader) error {
+	if header.RecordedBy != recordVerbName {
+		return fmt.Errorf("golden candidate %s holds no stamp of the record verb (recorded_by): the verb writes it after both recording runs agree, a test never does; record again: %s", spec.Path, spec.Recipe)
+	}
+	return nil
 }
 
 // recordVerbName is what the record verb's stamp holds.
@@ -408,6 +425,11 @@ func OpenGolden(t *testing.T, spec GoldenSpec) *Golden {
 		t.Fatal(err)
 	}
 	g.use = use
+	if !recording && os.Getenv(goldenCandidateEnv) == "1" {
+		if err := candidateStampErr(spec, g.loaded.Header); err != nil {
+			t.Fatal(err)
+		}
+	}
 	if recording {
 		// For the whole recording test: a Python child that inherits the
 		// process environment cannot start (producer.go).
@@ -429,7 +451,7 @@ func openGolden(spec GoldenSpec, test string, recording bool) (*Golden, error) {
 		// The record verb always sets goldenPassedEnv for its runs, with no
 		// names when it passed none: its presence is the verb.
 		if _, byVerb := os.LookupEnv(goldenPassedEnv); byVerb {
-			g.recorded.Header.RecordedBy = recordVerbName
+			g.byVerb = true
 		}
 		return g, nil
 	}
@@ -1277,7 +1299,7 @@ func (g *Golden) writeCandidate(failed bool) (string, error) {
 	if len(g.recorded.Header.ProducerDigest) != 64 {
 		return "", fmt.Errorf("recording %s: the Python producer was never verified (golden.PythonRoot was not called)", g.spec.Path)
 	}
-	if g.recorded.Header.RecordedBy != recordVerbName {
+	if !g.byVerb {
 		return "", fmt.Errorf("recording %s: this run was not started by the record verb, so no candidate was written: a golden is recorded under the verb's fixed environment, twice, and replayed before it is promoted (%s)", g.spec.Path, g.spec.Recipe)
 	}
 	g.recorded.Header.Blanked = g.blankedHeader()

@@ -258,3 +258,77 @@ func (b *syncBuffer) String() string {
 	defer b.mu.Unlock()
 	return b.buf.String()
 }
+
+// An overdue schedule (no failure, but MissingFor past its alert threshold)
+// fails the window at stage "schedule".
+func TestFixedLoopOverdueScheduleIsAnErrorSpanAtStageSchedule(t *testing.T) {
+	exporter := installFixedSpanRecorder(t)
+	schedule := heartbeatSchedule(t)
+	stepper := resultStepper{schedules: []Schedule{schedule}, results: []ScheduleResult{
+		{ScheduleID: schedule.ID, MissingFor: schedule.AlertThreshold + time.Hour},
+	}}
+	loop, _ := newFixedTestLoop(t, stepper)
+	if err := loop.step(context.Background(), mustTime(t, "2026-07-24T00:00:00Z")); !errors.Is(err, errScheduleOverdue) {
+		t.Fatalf("step = %v, want errScheduleOverdue", err)
+	}
+	for _, span := range exporter.GetSpans() {
+		if span.Name != "dev_health.scheduler.fixed_window" {
+			continue
+		}
+		if span.Status.Code != codes.Error {
+			t.Errorf("an overdue window must be an Error span")
+		}
+		if stage, _ := fixedAttr(span.Attributes, "dev_health.work.stage"); stage.AsString() != "schedule" {
+			t.Errorf("overdue stage = %q, want schedule", stage.AsString())
+		}
+		return
+	}
+	t.Fatal("no fixed_window span")
+}
+
+// logWindowFailure: a shutdown (also wrapped) is not a failed window and is
+// not logged; a timeout is.
+func TestLogWindowFailureSkipsShutdownOnly(t *testing.T) {
+	var logs syncBuffer
+	loop, _ := newFixedTestLoop(t, &scriptedStepper{schedules: []Schedule{heartbeatSchedule(t)}})
+	loop.config.Logger = slog.New(slog.NewJSONHandler(&logs, nil))
+	loop.logWindowFailure(context.Background(), context.Canceled)
+	loop.logWindowFailure(context.Background(), fmt.Errorf("window: %w", context.Canceled))
+	if logs.String() != "" {
+		t.Fatalf("a shutdown was logged as a failed window: %q", logs.String())
+	}
+	loop.logWindowFailure(context.Background(), fmt.Errorf("window timed out: %w", context.DeadlineExceeded))
+	if !strings.Contains(logs.String(), "fixed schedule window failed") || !strings.Contains(logs.String(), "timed out") {
+		t.Fatalf("a timed-out window was not logged: %q", logs.String())
+	}
+}
+
+// BOTH run paths log a failed window: the first window at Start and every
+// later ticker window.
+func TestFixedLoopLogsWindowFailureOnTheTickerPathToo(t *testing.T) {
+	var logs syncBuffer
+	clock := &fixedTestClock{now: mustTime(t, "2026-07-24T00:00:00Z")}
+	loop, err := newLoop(erroringStepper{schedules: []Schedule{heartbeatSchedule(t)}}, LoopConfig{
+		PollInterval: minLoopPollInterval,
+		StepTimeout:  time.Second,
+		MaxBackoff:   2 * minLoopPollInterval,
+		Registry:     health.NewRegistry(time.Second),
+		Logger:       slog.New(slog.NewJSONHandler(&logs, nil)),
+	}, clock)
+	if err != nil {
+		t.Fatal(err)
+	}
+	observed := make(chan struct{}, 8)
+	loop.stepObserved = func() { observed <- struct{}{} }
+	if err := loop.Start(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = loop.Shutdown(context.Background()) }()
+	waitForStepObserved(t, observed, "the first window")
+	clock.advance(4 * minLoopPollInterval)
+	clock.tick(clock.Now())
+	waitForStepObserved(t, observed, "the ticker window")
+	if got := strings.Count(logs.String(), "fixed schedule window failed"); got != 2 {
+		t.Fatalf("logged %d window failures, want 2 (initial + ticker): %q", got, logs.String())
+	}
+}

@@ -34,6 +34,16 @@ type netTimeoutError struct{}
 func (netTimeoutError) Error() string { return "dial tcp secret-payload.example:443: i/o timeout" }
 func (netTimeoutError) Timeout() bool { return true }
 
+type netPlainError struct{}
+
+func (netPlainError) Error() string { return "dial tcp secret-payload.example:443: refused" }
+func (netPlainError) Timeout() bool { return false }
+
+func jsonSyntaxError() error {
+	var v struct{ A int }
+	return json.Unmarshal([]byte(`{"A": secret-payload`), &v)
+}
+
 type sqlStateError struct{}
 
 func (sqlStateError) Error() string {
@@ -57,16 +67,19 @@ func TestEndWorkSpanClassifiesOutcomes(t *testing.T) {
 		wantType      string
 	}{
 		{name: "nil", err: nil},
-		{name: "plain", err: errors.New("boom"), wantError: true, wantType: ErrorClassOther},
-		{name: "wrapped payload error", err: fmt.Errorf("write: %w", payloadError{}), wantError: true, wantType: ErrorClassOther},
+		{name: "plain", err: errors.New("boom"), wantError: true, wantType: "other"},
+		{name: "wrapped payload error", err: fmt.Errorf("write: %w", payloadError{}), wantError: true, wantType: "other"},
 		{name: "bare cancel", err: context.Canceled, wantCancelled: true},
+		{name: "cancel with marker text", err: fmt.Errorf("secret-payload customer window: %w", context.Canceled), wantCancelled: true},
+		{name: "net error that is not a timeout", err: fmt.Errorf("dial: %w", netPlainError{}), wantError: true, wantType: "other"},
+		{name: "json syntax", err: fmt.Errorf("handle: %w", jsonSyntaxError()), wantError: true, wantType: "decode"},
 		{name: "wrapped cancel", err: fmt.Errorf("window: %w", context.Canceled), wantCancelled: true},
-		{name: "deadline is a failure", err: context.DeadlineExceeded, wantError: true, wantType: ErrorClassTimeout},
-		{name: "wrapped deadline is a failure", err: fmt.Errorf("window timed out: %w", context.DeadlineExceeded), wantError: true, wantType: ErrorClassTimeout},
-		{name: "joined failures", err: errors.Join(errors.New("a"), errors.New("b")), wantError: true, wantType: ErrorClassOther},
-		{name: "net timeout", err: fmt.Errorf("fetch: %w", netTimeoutError{}), wantError: true, wantType: ErrorClassTimeout},
-		{name: "json decode", err: fmt.Errorf("handle: %w", jsonDecodeError()), wantError: true, wantType: ErrorClassDecode},
-		{name: "sql state", err: fmt.Errorf("write: %w", sqlStateError{}), wantError: true, wantType: ErrorClassStore},
+		{name: "deadline is a failure", err: context.DeadlineExceeded, wantError: true, wantType: "timeout"},
+		{name: "wrapped deadline is a failure", err: fmt.Errorf("window timed out: %w", context.DeadlineExceeded), wantError: true, wantType: "timeout"},
+		{name: "joined failures", err: errors.Join(errors.New("a"), errors.New("b")), wantError: true, wantType: "other"},
+		{name: "net timeout", err: fmt.Errorf("fetch: %w", netTimeoutError{}), wantError: true, wantType: "timeout"},
+		{name: "json decode", err: fmt.Errorf("handle: %w", jsonDecodeError()), wantError: true, wantType: "decode"},
+		{name: "sql state", err: fmt.Errorf("write: %w", sqlStateError{}), wantError: true, wantType: "store"},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -140,4 +153,11 @@ func TestEndWorkSpanClassifiesOutcomes(t *testing.T) {
 
 func TestEndWorkSpanNilSpanIsSafe(t *testing.T) {
 	EndWorkSpan(nil, errors.New("x"))
+}
+
+// The class words are what a dashboard filters on: pin the literals.
+func TestErrorClassWordsArePinned(t *testing.T) {
+	if got := strings.Join(ErrorClasses, ","); got != "timeout,decode,store,other" {
+		t.Errorf("ErrorClasses = %q", got)
+	}
 }

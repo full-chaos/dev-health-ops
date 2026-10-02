@@ -13,6 +13,7 @@ import (
 	"go.opentelemetry.io/otel/codes"
 	sdktrace "go.opentelemetry.io/otel/sdk/trace"
 	"go.opentelemetry.io/otel/sdk/trace/tracetest"
+	oteltrace "go.opentelemetry.io/otel/trace"
 )
 
 // installLoopSpanRecorder swaps the global tracer provider for an in-memory
@@ -51,7 +52,9 @@ func spanAttrInts(attrs []attribute.KeyValue) map[string]int64 {
 // swapped attribute cannot pass.
 func TestLoopStepEmitsOneWindowSpanWithEveryCount(t *testing.T) {
 	exporter := installLoopSpanRecorder(t)
-	stepper := loopStepFunc(func(context.Context, time.Time, int, Coordinator) (HandoffResult, error) {
+	var stepperSpanID oteltrace.SpanID
+	stepper := loopStepFunc(func(ctx context.Context, _ time.Time, _ int, _ Coordinator) (HandoffResult, error) {
+		stepperSpanID = oteltrace.SpanContextFromContext(ctx).SpanID()
 		return HandoffResult{
 			Candidates: 11, TimingEligible: 10,
 			HandedOff: []Occurrence{{}, {}, {}}, Repeated: []Occurrence{{}},
@@ -68,6 +71,10 @@ func TestLoopStepEmitsOneWindowSpanWithEveryCount(t *testing.T) {
 		t.Fatalf("spans = %v, want exactly one dev_health.scheduler.sync_window", spans)
 	}
 	got := spans[0]
+	// The stepper (its own spans and queries) runs INSIDE the window span.
+	if stepperSpanID != got.SpanContext.SpanID() {
+		t.Errorf("the stepper's ctx carries span %s, want the window span %s", stepperSpanID, got.SpanContext.SpanID())
+	}
 	attrs := spanAttrInts(got.Attributes)
 	for key, want := range map[string]int64{
 		"dev_health.scheduler.candidates":              11,

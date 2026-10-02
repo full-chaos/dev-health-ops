@@ -1,0 +1,22 @@
+{
+  "header": {
+    "test": "TestSyncTeamsGitLabMatchesFrozenPython",
+    "python_build": "a4847c5e93607451a0c987b314d37e02fc43ce85",
+    "producer_digest": "6e1dc97e68624398015f60caee160cceee6ae601bd434d01b8b7d5975267e137",
+    "recipe": "git worktree add --detach $DIR a4847c5e93607451a0c987b314d37e02fc43ce85 (with its .venv: uv sync --frozen --no-install-project); then from the repository root: go run ./internal/testsupport/venueoracle/goldenrecord -pkg ./internal/synccli/ -test '^TestSyncTeamsGitLabMatchesFrozenPython$' -python-root $DIR",
+    "recorded_by": "goldenrecord",
+    "blanked": {}
+  },
+  "requests": [
+    {
+      "name": "teams gitlab corpus",
+      "method": "PYTHON",
+      "path": "program sha256 2aff31260cde75a405dc94e0a533e0b283e469146293569b3db3e540608b429b env sha256 6d559f8ad37593c5e087cdf9b2c0c3a4423cf5c9f84ed3ebf7d062a7c71f8bf4",
+      "body_sha256": "531eec3bbac8d6a4c6c1b7620e4dcf7cf7e0ed896b4cf9576d43927642da7b76",
+      "request_headers_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "status": 0,
+      "headers": {},
+      "body": "gzip+base64:H4sIAAAAAAAC/+yXQYvbTAyG/4rQJRcbdvm+k28plKU0bC/pKQ1G9mjjaeyZYUaTEEL+exk7cbMlC0sPbQq+WZY0ev36QXFWRzTUMRZoDYNYl7e84xY23kYHey0NdNxV7AOQUeC8/c61BMwwCG36vi1mWFuVrh8wQ6Gq5YDFEcfiwsS2zVCYuvJ8WqPd6/vn4tLuzZB+lfXs7O1UwGJ1RMWh9tqJtgYLXDYM87rj4SkwQ62wwE1bUN1xCkNJtegdY4GPmGFLQcpwMDWnum/x4eG/WnTH/VVq6MhEai/ascDVOt39Gc6o1TXPslllq1nKnU2dDwMNpWll/yhbPoxDnr8uFuMQ6zdlL9T6TZ5kOfJsZOjS6nbTxbYtH0ZdztudVuyxQMywt86RCHszlgQbfc1vntqPjPEqnYL/x3x0ioRVSXLLr9P6dMpGroyF67dz1+A8aVlQdYb/AssfYmei5poaut5Axo6Lp99CaVUNBk44TTi9Bydp0o/blg28eNvB06flYv6hXH75/PF5QmhC6D0I5TlFaWCvTQC7Yz9BNEH0Ox9Ded6/N9ABPL/EwOoNeB7/Cjwp+EXxsDjJHPYNe/5XhBM4UorVxfA7F+s5ncVqcPu+xRqIZmvs3ox/sO7Z2WEIeBuEPUhDAjUZYwUqBs+kIIh1AdI3go/3aP36xwBz9uLqpg8AAA=="
+    }
+  ]
+}

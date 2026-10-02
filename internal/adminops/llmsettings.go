@@ -124,7 +124,11 @@ func runLLMSet(ctx context.Context, env cli.Env) int {
 	flags.Var(&model, "model", "BYO LLM model")
 	flags.Var(&apiKey, "api-key", "BYO LLM API key (encrypted at rest)")
 	flags.Var(&baseURL, "base-url", "base URL")
+	apiKeyStdin := flags.Bool("api-key-stdin", false, "read the BYO LLM API key from the first line of standard input (instead of --api-key)")
 	if code, ok := parseArgs(flags, env); !ok {
+		return code
+	}
+	if code, ok := secretFromStdin(env, "api-key", &apiKey, *apiKeyStdin); !ok {
 		return code
 	}
 	if !provider.set {

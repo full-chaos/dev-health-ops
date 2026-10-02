@@ -39,7 +39,7 @@ func newIDs() ids {
 		&v.cfgC1, &v.cfgCPlanner, &v.orgD, &v.adminD, &v.intPairs, &v.intBadPairs, &v.intCustom, &v.srcTurkish, &v.srcSep,
 		&v.srcPairsMeta, &v.dsPairs,
 	} {
-		*target = uuid.New()
+		*target = nextID()
 	}
 	return v
 }
@@ -82,7 +82,7 @@ VALUES ($1, $2, true, true, $3, 0, now(), now())`, user.id, user.email, user.sup
 		role      string
 	}{{v.orgA, v.adminA, "admin"}, {v.orgA, v.memberA, "member"}, {v.orgB, v.adminB, "admin"}, {v.orgC, v.adminC, "admin"}, {v.orgD, v.adminD, "admin"}} {
 		exec(`INSERT INTO memberships (id, user_id, org_id, role, created_at, updated_at) VALUES ($1, $2, $3, $4, now(), now())`,
-			uuid.New(), member.user, member.org, member.role)
+			nextID(), member.user, member.org, member.role)
 	}
 
 	credential := func(id, org uuid.UUID, provider string) {

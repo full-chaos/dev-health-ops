@@ -8,7 +8,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"regexp"
 	"runtime"
@@ -116,8 +115,8 @@ func frozenScriptAnswer(t *testing.T, oracle scriptOracle) []byte {
 	keyed, passed := oraclePairEnvironment(t, oracle.name)
 	request := venueoracle.ProgramRequest(oracle.name, program, oracle.input, keyed)
 	answers := golden.Produce(t, root, []venueoracle.Request{request},
-		func(_ *venueoracle.Producer, _ []venueoracle.Request) []venueoracle.Response {
-			output := runPinnedScriptOracle(t, root, harness, oracle, passed)
+		func(producer *venueoracle.Producer, _ []venueoracle.Request) []venueoracle.Response {
+			output := runPinnedScriptOracle(t, producer, root, harness, oracle, passed)
 			if len(output) > oraclePairPackAbove {
 				return []venueoracle.Response{{Status: 0, Body: venueoracle.PackBody(output)}}
 			}
@@ -208,11 +207,12 @@ func scriptOracleProgram(t *testing.T, oracle scriptOracle, harness string) stri
 
 // runPinnedScriptOracle executes the oracle from the pinned checkout at root
 // and returns its stdout.
-func runPinnedScriptOracle(t *testing.T, root, harness string, oracle scriptOracle, passed []string) []byte {
+func runPinnedScriptOracle(t *testing.T, producer *venueoracle.Producer, root, harness string, oracle scriptOracle, passed []string) []byte {
 	t.Helper()
 	pinnedPackage := filepath.Join(root, "internal", "providersync")
 	assertPinnedHarness(t, oracle.name, root, harness)
-	python, environment := pinnedInterpreter(t, oracle.name, root, passed)
+	producer.RequireDeployed()
+	requirePinnedSources(t, oracle.name, producer, root, passed)
 
 	var arguments []string
 	if oracle.script != "" {
@@ -236,7 +236,7 @@ func runPinnedScriptOracle(t *testing.T, root, harness string, oracle scriptOrac
 		}
 		arguments = append(arguments, path)
 	}
-	command := exec.Command(python, arguments...)
+	command := pinnedCommand(t, producer, passed, arguments...)
 	if oracle.inputFile {
 		inputFile := filepath.Join(t.TempDir(), "oracle-input.json")
 		if err := os.WriteFile(inputFile, oracle.input, 0o600); err != nil {
@@ -246,12 +246,11 @@ func runPinnedScriptOracle(t *testing.T, root, harness string, oracle scriptOrac
 	} else {
 		command.Stdin = bytes.NewReader(oracle.input)
 	}
-	command.Env = environment
 	var stderr bytes.Buffer
 	command.Stderr = &stderr
 	output, err := command.Output()
 	if err != nil {
-		t.Fatalf("recording script oracle %q: %v", oracle.name, pyoracle.RunError(python, err, stderr.Bytes()))
+		t.Fatalf("recording script oracle %q: %v", oracle.name, pyoracle.RunError(command.Args[0], err, stderr.Bytes()))
 	}
 	return output
 }

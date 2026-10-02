@@ -5,6 +5,7 @@ package syncbudget
 import (
 	"context"
 	"errors"
+	"github.com/full-chaos/dev-health-ops/internal/syncdispatchruntime/synclog"
 	"io"
 	"log/slog"
 	"net/http"
@@ -95,7 +96,7 @@ VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10::json, 'light', 'full', 'planned
 
 func (f *loaderFixture) loader(env map[string]string) Loader {
 	return Loader{
-		DB: f.pool, Decryptor: f.decryptor, Logger: slog.New(slog.DiscardHandler),
+		DB: f.pool, Decryptor: f.decryptor, Logger: synclog.New(slog.New(slog.DiscardHandler)),
 		Getenv: func(name string) string { return env[name] },
 	}
 }

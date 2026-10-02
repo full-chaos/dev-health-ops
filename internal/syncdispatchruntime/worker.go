@@ -3,7 +3,7 @@ package syncdispatchruntime
 import (
 	"context"
 	"errors"
-	"log/slog"
+	"github.com/full-chaos/dev-health-ops/internal/syncdispatchruntime/synclog"
 
 	"github.com/full-chaos/dev-health-ops/internal/jobruntime"
 	"github.com/full-chaos/dev-health-ops/internal/syncdispatchcontract"
@@ -418,13 +418,7 @@ func (worker *teamRepoOwnershipDerivationWorker) Work(ctx context.Context, job *
 			_ = worker.observer.ObserveTeamRepoOwnershipDerivationResolutionArm(arm, armCounts[string(arm)])
 		}
 	}
-	slog.Default().InfoContext(ctx, "team_repo_ownership_derivation",
-		"outcome", string(outcome),
-		"org_id", job.Args.OrgID,
-		"sync_run_id", job.Args.Payload.SyncRunID,
-		"rows_written", written,
-		"rows_retracted", retracted,
-	)
+	synclog.Default().Info(ctx, synclog.MsgTeamRepoOwnershipDerivation, synclog.Text(synclog.KeyOutcome, synclog.ParseLabel(string(outcome))), synclog.Org(synclog.ParseID(job.Args.OrgID)), synclog.Run(synclog.ParseID(job.Args.Payload.SyncRunID)), synclog.Count(synclog.KeyRowsWritten, written), synclog.Count(synclog.KeyRowsRetracted, retracted))
 	return err
 }
 

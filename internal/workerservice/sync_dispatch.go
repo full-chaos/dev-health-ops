@@ -22,6 +22,7 @@ import (
 	valkeystore "github.com/full-chaos/dev-health-ops/internal/storage/valkey"
 	"github.com/full-chaos/dev-health-ops/internal/syncdispatchcontract"
 	"github.com/full-chaos/dev-health-ops/internal/syncdispatchruntime"
+	"github.com/full-chaos/dev-health-ops/internal/syncdispatchruntime/synclog"
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -454,7 +455,7 @@ func buildSyncCoordinatorWorker(
 		return workerFamily{}, errWorkerDependencyUnavailable
 	}
 	budgetEstimator, err := syncdispatchruntime.NewInProcessBudgetEstimator(syncdispatchruntime.BudgetEstimatorDependencies{
-		Pool: postgresDatabase.pools.Domain, Decryptor: credentialCipher, Getenv: envsecrets.ProcessGetenv, Logger: logger,
+		Pool: postgresDatabase.pools.Domain, Decryptor: credentialCipher, Getenv: envsecrets.ProcessGetenv, Logger: synclog.New(logger),
 		// The same PagerDuty hydration provider sync runs (provider_sync.go).
 		PagerDutyOAuth: providerfoundation.PagerDutyOAuthHydrator{
 			Repository: providerfoundation.PostgresPagerDutyOAuthTokenRepository{
@@ -505,7 +506,7 @@ func buildSyncCoordinatorWorker(
 		workGraphPostSyncWriter{writer: workGraphWriter},
 		teamAutoimportPostSyncWriter{producer: producer, registry: registry},
 		teamRepoOwnershipPostSyncWriter{producer: producer, registry: registry},
-		logger,
+		synclog.New(logger),
 	)
 	if err != nil {
 		closeClickHouse()
@@ -666,7 +667,7 @@ func buildSyncCoordinatorWorker(
 	}
 	referenceDiscovery, err := syncdispatchruntime.NewNativeReferenceDiscoveryService(
 		postgresDatabase.pools.Domain,
-		logger,
+		synclog.New(logger),
 		discoveryExecutor,
 	)
 	if err != nil {
@@ -701,7 +702,7 @@ func buildSyncCoordinatorWorker(
 	// domain role has no grant on it -- so it needs no jobroute.Controller.
 	dispatchSyncRun, err := syncdispatchruntime.NewNativeDispatchSyncRunService(
 		postgresDatabase.pools.Domain,
-		logger,
+		synclog.New(logger),
 		budgetEstimator,
 		producer,
 		registry,
@@ -829,7 +830,7 @@ func buildFinalizeSyncRunService(
 	if zeroUnitObserver, ok := observer.(jobruntime.ZeroUnitFinalizationObserver); ok {
 		zeroUnitObservers = append(zeroUnitObservers, zeroUnitObserver)
 	}
-	service, err := syncdispatchruntime.NewNativeFinalizeSyncRunService(pool, logger, zeroUnitObservers...)
+	service, err := syncdispatchruntime.NewNativeFinalizeSyncRunService(pool, synclog.New(logger), zeroUnitObservers...)
 	if err != nil {
 		return nil, err
 	}

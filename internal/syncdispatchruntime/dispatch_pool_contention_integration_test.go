@@ -6,6 +6,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"github.com/full-chaos/dev-health-ops/internal/syncdispatchruntime/synclog"
 	"io"
 	"log/slog"
 	"sync"
@@ -104,12 +105,12 @@ func newContentionDispatchService(t *testing.T, pool *pgxpool.Pool) *NativeDispa
 	}
 	estimator, err := newInProcessBudgetEstimator(pool, BudgetEstimatorDependencies{
 		Decryptor: unusedDecryptor{}, Getenv: func(string) string { return "" },
-		Logger: slog.New(slog.NewTextHandler(io.Discard, nil)),
+		Logger: synclog.New(slog.New(slog.NewTextHandler(io.Discard, nil))),
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
-	service, err := NewNativeDispatchSyncRunService(pool, slog.New(slog.NewTextHandler(io.Discard, nil)), estimator, producer, registry)
+	service, err := NewNativeDispatchSyncRunService(pool, synclog.New(slog.New(slog.NewTextHandler(io.Discard, nil))), estimator, producer, registry)
 	if err != nil {
 		t.Fatal(err)
 	}

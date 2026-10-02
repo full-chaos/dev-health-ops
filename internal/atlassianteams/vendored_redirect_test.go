@@ -95,25 +95,59 @@ func isNetHTTP(object types.Object, name string) bool {
 	return object != nil && object.Pkg() != nil && object.Pkg().Path() == "net/http" && object.Name() == name
 }
 
-// isHTTPClient reports whether t is net/http.Client or *net/http.Client.
-func isHTTPClient(t types.Type) (value bool, ok bool) {
-	pointer := false
-	if p, isPointer := t.(*types.Pointer); isPointer {
-		t, pointer = p.Elem(), true
-	}
-	named, isNamed := t.(*types.Named)
-	if !isNamed || !isNetHTTP(named.Obj(), "Client") {
-		return false, false
-	}
-	return !pointer, true
+// clientTypes answers, from the types alone, whether a type holds a net/http.Client VALUE (so creating a value of it creates a client
+// that follows redirects): net/http.Client itself, any alias of it, a defined type whose underlying type is net/http.Client's, a struct
+// with such a field (embedded or not), or an array, slice, map or channel of such values. A pointer does not: it holds no client.
+type clientTypes struct {
+	clientUnderlying types.Type
+	visiting         map[types.Type]bool
 }
 
-// vendoredRedirectScan is what the types say about every package: the places an http.Client value is CREATED (a composite literal,
-// new(), a var of the value type) or the redirect-following package-level client is used (http.DefaultClient, http.Get/Post/Head/
-// PostForm), each with the function that holds it; and the calls to the default-client helper, by enclosing function. It goes through
-// types.Info, so an import alias, a dot import or the depth of the file does not matter.
+func (c *clientTypes) holdsValue(t types.Type) bool {
+	t = types.Unalias(t)
+	if t == nil {
+		return false
+	}
+	if c.visiting[t] {
+		return false
+	}
+	c.visiting[t] = true
+	defer delete(c.visiting, t)
+	if named, ok := t.(*types.Named); ok {
+		if isNetHTTP(named.Obj(), "Client") {
+			return true
+		}
+		if c.clientUnderlying != nil && types.Identical(named.Underlying(), c.clientUnderlying) {
+			return true // a defined type over http.Client
+		}
+		return c.holdsValue(named.Underlying())
+	}
+	switch u := t.(type) {
+	case *types.Struct:
+		for i := 0; i < u.NumFields(); i++ {
+			if c.holdsValue(u.Field(i).Type()) {
+				return true
+			}
+		}
+	case *types.Array:
+		return c.holdsValue(u.Elem())
+	case *types.Slice:
+		return c.holdsValue(u.Elem())
+	case *types.Map:
+		return c.holdsValue(u.Key()) || c.holdsValue(u.Elem())
+	case *types.Chan:
+		return c.holdsValue(u.Elem())
+	}
+	return false
+}
+
+// vendoredRedirectScan is what the types say about every package: the places a value that holds an http.Client is CREATED (a composite
+// literal, new() or make(), a var, a struct field or a named result of such a type) or the redirect-following package-level client is
+// used (http.DefaultClient, http.Get/Post/Head/PostForm), each with the function that holds it; and the calls to the default-client
+// helper, by enclosing function. It goes through types.Info, so an import alias, a dot import, a type alias, a defined type or the
+// depth of the file does not matter.
 type vendoredRedirectScan struct {
-	creations []string // "<pkg>.<func>: <what>" for every creation outside the helper, and the helper's own
+	creations []string // "<pkg>.<func>: <what>" for every creation outside the helper
 	helperLit int      // composite literals of http.Client inside NewDefaultHTTPClient that set CheckRedirect
 	sites     map[string]int
 	packages  int
@@ -122,7 +156,19 @@ type vendoredRedirectScan struct {
 func scanVendored(t *testing.T, pattern string) vendoredRedirectScan {
 	t.Helper()
 	scan := vendoredRedirectScan{sites: map[string]int{}}
-	for _, pkg := range loadVendoredPackages(t, pattern) {
+	loaded := loadVendoredPackages(t, pattern)
+	holder := &clientTypes{visiting: map[types.Type]bool{}}
+	packages.Visit(loaded, nil, func(pkg *packages.Package) {
+		if pkg.PkgPath == "net/http" && pkg.Types != nil {
+			if object := pkg.Types.Scope().Lookup("Client"); object != nil {
+				holder.clientUnderlying = object.Type().Underlying()
+			}
+		}
+	})
+	if holder.clientUnderlying == nil {
+		t.Fatal("net/http.Client was not found among the loaded packages: the scan cannot recognise a client")
+	}
+	for _, pkg := range loaded {
 		scan.packages++
 		info := pkg.TypesInfo
 		for _, file := range pkg.Syntax {
@@ -134,8 +180,17 @@ func scanVendored(t *testing.T, pattern string) vendoredRedirectScan {
 				switch n := node.(type) {
 				case *ast.FuncDecl:
 					enclosing = n.Name.Name
+					if n.Type.Results != nil {
+						for _, result := range n.Type.Results.List {
+							for _, name := range result.Names {
+								if object := info.Defs[name]; object != nil && holder.holdsValue(object.Type()) {
+									report("a named result that holds an http.Client value")
+								}
+							}
+						}
+					}
 				case *ast.CompositeLit:
-					if _, ok := isHTTPClient(info.TypeOf(n)); ok {
+					if holder.holdsValue(info.TypeOf(n)) {
 						hasCheck := false
 						for _, element := range n.Elts {
 							if kv, ok := element.(*ast.KeyValueExpr); ok {
@@ -147,14 +202,21 @@ func scanVendored(t *testing.T, pattern string) vendoredRedirectScan {
 						if enclosing == "NewDefaultHTTPClient" && hasCheck {
 							scan.helperLit++
 						} else {
-							report("an http.Client literal (the helper's own literal must set CheckRedirect)")
+							report("a composite literal that holds an http.Client value (the helper's own literal must set CheckRedirect)")
 						}
 					}
 				case *ast.CallExpr:
 					if ident, ok := n.Fun.(*ast.Ident); ok {
-						if builtin, ok := info.Uses[ident].(*types.Builtin); ok && builtin.Name() == "new" && len(n.Args) == 1 {
-							if _, ok := isHTTPClient(info.TypeOf(n.Args[0])); ok {
-								report("new(http.Client)")
+						if builtin, ok := info.Uses[ident].(*types.Builtin); ok && len(n.Args) >= 1 {
+							switch builtin.Name() {
+							case "new":
+								if holder.holdsValue(info.TypeOf(n.Args[0])) {
+									report("new() of a type that holds an http.Client value")
+								}
+							case "make":
+								if holder.holdsValue(info.TypeOf(n)) {
+									report("make() of a type that holds http.Client values")
+								}
 							}
 						}
 					}
@@ -170,15 +232,21 @@ func scanVendored(t *testing.T, pattern string) vendoredRedirectScan {
 					}
 				case *ast.ValueSpec:
 					for _, name := range n.Names {
-						if value, ok := isHTTPClient(info.Defs[name].Type()); ok && value {
-							report("a var of type http.Client (a zero value)")
+						if object := info.Defs[name]; object != nil && holder.holdsValue(object.Type()) {
+							report("a var that holds an http.Client value (a zero value)")
+						}
+					}
+				case *ast.StructType:
+					for _, field := range n.Fields.List {
+						if holder.holdsValue(info.TypeOf(field.Type)) {
+							report("a struct field that holds an http.Client value")
 						}
 					}
 				case *ast.Ident:
 					object := info.Uses[n]
 					for _, member := range []string{"DefaultClient", "Get", "Post", "Head", "PostForm"} {
 						if isNetHTTP(object, member) {
-							if _, isMethod := object.(*types.Func); isMethod && object.(*types.Func).Type().(*types.Signature).Recv() != nil {
+							if function, isFunc := object.(*types.Func); isFunc && function.Type().(*types.Signature).Recv() != nil {
 								continue // (*http.Client).Get: a method of a client that already exists
 							}
 							report("net/http." + member + " (the redirect-following default client)")

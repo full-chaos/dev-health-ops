@@ -1,10 +1,8 @@
 package remaining
 
 import (
-	"errors"
 	"fmt"
 	"os"
-	"path/filepath"
 	"regexp"
 	"strings"
 	"testing"
@@ -15,55 +13,8 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/jobruntime"
 )
 
-// hostile is driver text the safe cause must NEVER carry: it stands for a table value, a query or a credential
-// that a ClickHouse or Postgres error message can embed.
+// hostile is driver text the safe cause must NEVER carry.
 const hostile = "tenant-acme password=hunter2 SELECT * FROM work_items"
-
-func TestStepFailureCarriesOnlyTheClosedStepAndCodes(t *testing.T) {
-	cases := []struct {
-		name string
-		err  error
-		want string
-	}{
-		{"plain error", errors.New(hostile), "step=query work_items"},
-		{"clickhouse exception", fmt.Errorf("read: %w", &clickhouse.Exception{Code: 241, Name: "DB::Exception", Message: hostile}), "step=query work_items ch_code=241"},
-		{"postgres error", fmt.Errorf("exec: %w", &pgconn.PgError{Code: "23514", Message: hostile}), "step=query work_items sqlstate=23514"},
-		{"postgres error with a hostile code is dropped", &pgconn.PgError{Code: "23514; DROP TABLE x", Message: hostile}, "step=query work_items"},
-		{"postgres error with a lowercase code is dropped", &pgconn.PgError{Code: "abcde", Message: hostile}, "step=query work_items"},
-	}
-	for _, test := range cases {
-		t.Run(test.name, func(t *testing.T) {
-			wrapped := stepFailure(stepQueryWorkItems, test.err)
-			cause, ok := jobruntime.SafeCause(wrapped)
-			if !ok || cause != test.want {
-				t.Fatalf("cause = %q ok=%v, want %q", cause, ok, test.want)
-			}
-			if strings.Contains(cause, "hunter2") || strings.Contains(cause, "tenant") || strings.Contains(cause, "SELECT") {
-				t.Fatalf("the safe cause carries driver text: %q", cause)
-			}
-			if !errors.Is(wrapped, test.err) {
-				t.Fatal("stepFailure broke errors.Is")
-			}
-			if got := wrapped.Error(); !strings.HasPrefix(got, "query work_items: ") {
-				t.Fatalf("the message lost its step prefix: %q", got)
-			}
-		})
-	}
-	if stepFailure(stepQueryWorkItems, nil) != nil {
-		t.Fatal("a nil error must stay nil")
-	}
-}
-
-func TestStepFailureKeepsTheTypedCauseReachable(t *testing.T) {
-	var exception *clickhouse.Exception
-	if !errors.As(stepFailure(stepCountWorkItems, &clickhouse.Exception{Code: 60}), &exception) || exception.Code != 60 {
-		t.Fatal("errors.As lost the ClickHouse exception")
-	}
-	var pgError *pgconn.PgError
-	if !errors.As(stepFailure(stepSendWorkItemTeamAttributionsBatch, &pgconn.PgError{Code: "40001"}), &pgError) || pgError.Code != "40001" {
-		t.Fatal("errors.As lost the Postgres error")
-	}
-}
 
 // The handler tests below pin the four Retryable return sites of PartitionHandler.Work: each one now names its step
 // in the safe cause, and none leaks the driver text. Removing a stepFailure wrap makes the matching case fail.
@@ -106,7 +57,7 @@ func TestPartitionHandlerRetryableFailuresNameTheirStep(t *testing.T) {
 // back to a bare fmt.Errorf("<step>: %w", err), which would leave a retryable failure with no named step again.
 // It FAILS when a file cannot be read or holds fewer wrapped sites than the 26 it had when this was written.
 //
-// The step LABEL is closed by the type system, not by this test: stepFailure takes the unexported named type stepLabel,
+// The step LABEL is closed by the type system, not by this test: stepcause.Failure takes the unexported named type stepLabel,
 // whose values are the constants of step_failure.go; a non-constant string cannot convert to it implicitly.
 func TestAttributionStepErrorsAreAllWrapped(t *testing.T) {
 	bare := regexp.MustCompile(`fmt\.Errorf\("[^"%]+: %w", err\)`)
@@ -119,38 +70,9 @@ func TestAttributionStepErrorsAreAllWrapped(t *testing.T) {
 		if found := bare.FindAll(source, -1); len(found) != 0 {
 			t.Fatalf("%s holds %d bare step error(s) again: %q", name, len(found), found[0])
 		}
-		wrapped += strings.Count(string(source), "stepFailure(step")
+		wrapped += strings.Count(string(source), "stepcause.Failure(stepcause.")
 	}
 	if wrapped < 26 {
-		t.Fatalf("only %d stepFailure sites in the attribution files, want at least 26", wrapped)
-	}
-}
-
-// TestNoStepLabelConversion closes the one hole the compiler leaves inside this package: an explicit stepLabel(x)
-// conversion would turn any string (including err.Error()) into a label. No file of the package may contain one,
-// and the constant block must keep the 30 labels it was written with (a count taken from the source, never assumed).
-func TestNoStepLabelConversion(t *testing.T) {
-	conversion := regexp.MustCompile(`\bstepLabel\(`)
-	declared := regexp.MustCompile(`(?m)^\tstep[A-Z][A-Za-z0-9]* +stepLabel += "[a-z0-9_ ()-]{3,60}"$`)
-	files, err := filepath.Glob("*.go")
-	if err != nil || len(files) == 0 {
-		t.Fatalf("list the package sources: %v (%d files)", err, len(files))
-	}
-	constants := 0
-	for _, name := range files {
-		if strings.HasSuffix(name, "_test.go") {
-			continue
-		}
-		source, err := os.ReadFile(name)
-		if err != nil {
-			t.Fatalf("read %s: %v", name, err)
-		}
-		if found := conversion.Find(source); found != nil {
-			t.Fatalf("%s converts a string to stepLabel explicitly: %q", name, found)
-		}
-		constants += len(declared.FindAll(source, -1))
-	}
-	if constants < 30 {
-		t.Fatalf("only %d step label constants declared, want at least 30", constants)
+		t.Fatalf("only %d stepcause.Failure sites in the attribution files, want at least 26", wrapped)
 	}
 }

@@ -11,6 +11,7 @@ import (
 	"github.com/ClickHouse/clickhouse-go/v2/lib/driver"
 	"github.com/google/uuid"
 
+	"github.com/full-chaos/dev-health-ops/internal/jobs/metrics/remaining/stepcause"
 	"github.com/full-chaos/dev-health-ops/internal/workitemcontract"
 )
 
@@ -210,7 +211,7 @@ func (w *WorkItemAttributionClickHouseWriter) WriteAttributions(
 (org_id, repo_id, work_item_id, provider, team_id, team_name, source,
 is_primary, confidence, evidence, computed_at, writer, run_id)`)
 	if err != nil {
-		return 0, stepFailure(stepPrepareWorkItemTeamAttributionsBatch, err)
+		return 0, stepcause.Failure(stepcause.PrepareWorkItemTeamAttributionsBatch, err)
 	}
 	for _, row := range rows {
 		if strings.TrimSpace(row.OrgID) == "" {
@@ -229,7 +230,7 @@ is_primary, confidence, evidence, computed_at, writer, run_id)`)
 			workitemcontract.AttributionVersionFold(row.ComputedAt, producer.Writer, workItemAttributionStampPrecision),
 			producer.Writer, producer.RunID,
 		); err != nil {
-			return 0, stepFailure(stepAppendWorkItemTeamAttributionsRow, err)
+			return 0, stepcause.Failure(stepcause.AppendWorkItemTeamAttributionsRow, err)
 		}
 	}
 	// #2276 confirmation-pass sweep (found independently before launching
@@ -244,7 +245,7 @@ is_primary, confidence, evidence, computed_at, writer, run_id)`)
 	// #2246/CHAOS-5078 on main, merged into this branch after that sweep
 	// already ran.
 	if err := batch.Send(); err != nil {
-		return len(rows), stepFailure(stepSendWorkItemTeamAttributionsBatch, err)
+		return len(rows), stepcause.Failure(stepcause.SendWorkItemTeamAttributionsBatch, err)
 	}
 	return len(rows), nil
 }
@@ -263,15 +264,15 @@ func (w *WorkItemAttributionClickHouseWriter) WriteAttributionRun(
 		org_id, run_id, completed_at, promoted_reason
 	)`)
 	if err != nil {
-		return stepFailure(stepPrepareWorkItemAttributionBackstopRunsBatch, err)
+		return stepcause.Failure(stepcause.PrepareWorkItemAttributionBackstopRunsBatch, err)
 	}
 	if err := batch.Append(
 		record.OrgID, record.RunID, record.CompletedAt.UTC(), record.PromotedReason,
 	); err != nil {
-		return stepFailure(stepAppendWorkItemAttributionBackstopRunsRow, err)
+		return stepcause.Failure(stepcause.AppendWorkItemAttributionBackstopRunsRow, err)
 	}
 	if err := batch.Send(); err != nil {
-		return stepFailure(stepSendWorkItemAttributionBackstopRunsBatch, err)
+		return stepcause.Failure(stepcause.SendWorkItemAttributionBackstopRunsBatch, err)
 	}
 	return nil
 }
@@ -291,7 +292,7 @@ func (w *WorkItemAttributionClickHouseWriter) WriteScopedAttributionRuns(
 		org_id, scope_kind, scope_id, run_id, completed_at
 	)`)
 	if err != nil {
-		return stepFailure(stepPrepareWorkItemAttributionBackstopScopedRunsBatch, err)
+		return stepcause.Failure(stepcause.PrepareWorkItemAttributionBackstopScopedRunsBatch, err)
 	}
 	for _, record := range records {
 		if strings.TrimSpace(record.OrgID) == "" {
@@ -301,11 +302,11 @@ func (w *WorkItemAttributionClickHouseWriter) WriteScopedAttributionRuns(
 			record.OrgID, record.ScopeKind, record.ScopeID,
 			record.RunID, record.CompletedAt.UTC(),
 		); err != nil {
-			return stepFailure(stepAppendWorkItemAttributionBackstopScopedRunsRow, err)
+			return stepcause.Failure(stepcause.AppendWorkItemAttributionBackstopScopedRunsRow, err)
 		}
 	}
 	if err := batch.Send(); err != nil {
-		return stepFailure(stepSendWorkItemAttributionBackstopScopedRunsBatch, err)
+		return stepcause.Failure(stepcause.SendWorkItemAttributionBackstopScopedRunsBatch, err)
 	}
 	return nil
 }

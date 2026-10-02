@@ -8,6 +8,7 @@ import (
 
 	"github.com/full-chaos/dev-health-ops/internal/jobcontract"
 	"github.com/full-chaos/dev-health-ops/internal/jobruntime"
+	"github.com/full-chaos/dev-health-ops/internal/jobs/metrics/remaining/stepcause"
 )
 
 type Store interface {
@@ -85,7 +86,7 @@ func (handler *PartitionHandler[T]) Work(
 		if errors.As(err, &active) {
 			return jobruntime.RetryableAfter(err, active.RetryAfter)
 		}
-		return jobruntime.Retryable(stepFailure(stepClaimPartition, err))
+		return jobruntime.Retryable(stepcause.Failure(stepcause.ClaimPartition, err))
 	}
 	if claim == nil {
 		return nil
@@ -96,7 +97,7 @@ func (handler *PartitionHandler[T]) Work(
 		if errors.Is(err, ErrInvalidState) {
 			return jobruntime.Permanent(err)
 		}
-		return jobruntime.Retryable(stepFailure(stepLoadRun, err))
+		return jobruntime.Retryable(stepcause.Failure(stepcause.LoadRun, err))
 	}
 	if claim.Partition.ID != payload.PartitionID ||
 		run.ID != claim.Partition.RunID || run.Status != "running" ||
@@ -139,14 +140,14 @@ func (handler *PartitionHandler[T]) Work(
 			return jobruntime.WithReason(jobruntime.Permanent(err), jobruntime.ReasonInvalidState)
 		}
 		releaseClaim(handler.store, ctx, *claim)
-		return jobruntime.Retryable(stepFailure(stepComputePartition, err))
+		return jobruntime.Retryable(stepcause.Failure(stepcause.ComputePartition, err))
 	}
 	if err := handler.store.CompletePartition(
 		ctx,
 		*claim,
 		compatibilityCompletionResult(claim.Partition.ID, outcome),
 	); err != nil {
-		return jobruntime.Retryable(stepFailure(stepCompletePartition, err))
+		return jobruntime.Retryable(stepcause.Failure(stepcause.CompletePartition, err))
 	}
 	return nil
 }

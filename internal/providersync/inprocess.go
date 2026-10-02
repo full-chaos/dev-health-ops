@@ -6,7 +6,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"github.com/full-chaos/dev-health-ops/internal/httpguard"
 	"net/http"
 	"sync"
 	"time"
@@ -485,7 +484,7 @@ func runToCompletion(
 // redirects refused).
 func inProcessHTTPDoer(doer providerfoundation.HTTPDoer) providerfoundation.HTTPDoer {
 	if doer != nil {
-		return httpguard.NoRedirectsDoer(doer) // the provider credential rides these requests (D4124)
+		return doer
 	}
 	return &http.Client{
 		Timeout: 45 * time.Second,

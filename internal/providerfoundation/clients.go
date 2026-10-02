@@ -300,7 +300,7 @@ func NewPagerDutyClientCredentialsAuth(credential Credential, doer HTTPDoer) (*P
 		subdomain:    subdomain.Reveal(),
 		region:       region,
 		scope:        pagerDutyReadScopes,
-		doer:         httpguard.NoRedirectsDoer(doer), // the client secret rides this request (D4124)
+		doer:         doer,
 		now:          time.Now,
 	}, nil
 }
@@ -335,7 +335,7 @@ func (a *PagerDutyClientCredentialsAuth) accessToken(ctx context.Context) (secre
 		return secrets.Value{}, ErrCredentialInvalid
 	}
 	request.Header.Set("Content-Type", "application/x-www-form-urlencoded")
-	response, err := a.doer.Do(request)
+	response, err := httpguard.NoRedirectsDoer(a.doer).Do(request) // the client secret rides the form body
 	if err != nil {
 		return secrets.Value{}, &ProviderError{Class: ErrorTransient}
 	}
@@ -419,7 +419,7 @@ func NewGitHubAppAuth(credential Credential, baseURL string, doer HTTPDoer) (*Gi
 	if err != nil || parsed.Scheme == "" || parsed.Host == "" {
 		return nil, credentialInvalid("base_url_invalid")
 	}
-	return &GitHubAppAuth{appID: appID.Reveal(), installationID: installationID.Reveal(), privateKey: privateKey, baseURL: strings.TrimRight(baseURL, "/"), doer: httpguard.NoRedirectsDoer(doer), now: time.Now}, nil
+	return &GitHubAppAuth{appID: appID.Reveal(), installationID: installationID.Reveal(), privateKey: privateKey, baseURL: strings.TrimRight(baseURL, "/"), doer: doer, now: time.Now}, nil
 }
 
 // readGitHubAppPrivateKeyFile mirrors github_credentials_from_mapping's
@@ -466,7 +466,7 @@ func (a *GitHubAppAuth) installationToken(ctx context.Context) (secrets.Value, e
 	}
 	request.Header.Set("Authorization", "Bearer "+jwt)
 	request.Header.Set("Accept", "application/vnd.github+json")
-	response, err := a.doer.Do(request)
+	response, err := httpguard.NoRedirectsDoer(a.doer).Do(request) // the app JWT rides this request
 	if err != nil {
 		return secrets.Value{}, &ProviderError{Class: ErrorTransient}
 	}

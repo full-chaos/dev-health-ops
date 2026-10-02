@@ -130,7 +130,7 @@ type openAICompatibleReadinessProber struct {
 func newOpenAICompatibleReadinessProber(doer providerfoundation.HTTPDoer) *openAICompatibleReadinessProber {
 	if doer != nil {
 		// the saved API key rides these requests: a supplied *http.Client follows no redirect (D4124)
-		return &openAICompatibleReadinessProber{client: httpguard.NoRedirectsDoer(doer)}
+		return &openAICompatibleReadinessProber{client: doer}
 	}
 	return &openAICompatibleReadinessProber{client: &http.Client{
 		// Codex r3 hardening-table audit (D3016, CHAOS-6976): matches
@@ -403,7 +403,7 @@ func (p *openAICompatibleReadinessProber) doCompletionOnce(
 	if apiKey != "" {
 		httpReq.Header.Set("Authorization", "Bearer "+apiKey)
 	}
-	resp, err := p.client.Do(httpReq)
+	resp, err := httpguard.NoRedirectsDoer(p.client).Do(httpReq) // the saved API key rides this request
 	if err != nil {
 		return nil, classifyTransportFailure(err)
 	}

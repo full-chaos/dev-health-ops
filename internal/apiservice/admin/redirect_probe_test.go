@@ -2,64 +2,53 @@ package admin
 
 import (
 	"context"
-	"github.com/full-chaos/dev-health-ops/internal/providerfoundation"
 	"net/http"
 	"testing"
 
+	"github.com/full-chaos/dev-health-ops/internal/providerfoundation"
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/redirectprobe"
 )
 
-// A caller-supplied client of the default redirect policy never carries the stored credential to another origin:
-// the base answers a redirect and the other origin sees no request at all (D4124).
-func TestASuppliedClientNeverFollowsARedirectToAnotherOrigin(t *testing.T) {
-	get := func(t *testing.T, url string) *http.Request {
+// A client of the default redirect policy never carries the stored credential to another origin: the base answers a
+// redirect and the other origin sees no request at all (D4124). Each call is the callee that sends the credential;
+// "supplied" is a client of net/http's default policy, "default" is the client production builds (Deps.HTTPDoer is nil
+// in production: apiservice/service.go:265 passes deps.HTTPDoer, which nothing assigns), its transport aside.
+func TestAClientNeverFollowsARedirectToAnotherOrigin(t *testing.T) {
+	services := func(t *testing.T, doer providerfoundation.HTTPDoer, probe *redirectprobe.Probe) {
 		t.Helper()
-		request, err := http.NewRequestWithContext(context.Background(), http.MethodGet, url, nil)
-		if err != nil {
-			t.Fatal(err)
-		}
-		request.Header.Set("Authorization", "Token token=SECRET")
-		return request
+		_, _ = (&handlers{}).pagerDutyGET(context.Background(), doer, probe.Base.URL+"/services", pagerDutyRequestAuth{header: "Token token=SECRET"})
 	}
-	t.Run("the PagerDuty services client", func(t *testing.T) {
-		probe := redirectprobe.New(t)
-		if response, err := pagerDutyServicesClient(probe.Client()).Do(get(t, probe.Base.URL+"/services")); err == nil {
-			response.Body.Close()
-		}
-		probe.Assert(t)
-	})
-	t.Run("the LLM settings readiness prober", func(t *testing.T) {
-		probe := redirectprobe.New(t)
-		prober := newOpenAICompatibleReadinessProber(probe.Client())
-		if response, err := prober.client.Do(get(t, probe.Base.URL+"/v1/models")); err == nil {
-			response.Body.Close()
-		}
-		probe.Assert(t)
-	})
-	t.Run("the revoke doer of the admin routes (supplied Deps.HTTPDoer)", func(t *testing.T) {
-		probe := redirectprobe.New(t)
-		doer := revokeDoer(probe.Client())
-		if response, err := doer.Do(get(t, probe.Base.URL+"/oauth/revoke")); err == nil {
-			response.Body.Close()
-		}
-		probe.Assert(t)
-	})
-	t.Run("the defaults production builds (pagerDutyServicesClient, readiness prober, revokeDoer with nil)", func(t *testing.T) {
-		probe := redirectprobe.New(t)
-		clients := map[string]providerfoundation.HTTPDoer{
-			"services": pagerDutyServicesClient(nil),
-			"prober":   newOpenAICompatibleReadinessProber(nil).client,
-			"revoke":   revokeDoer(nil),
-		}
-		for name, doer := range clients {
-			built, ok := doer.(*http.Client)
+	prober := func(t *testing.T, doer providerfoundation.HTTPDoer, probe *redirectprobe.Probe) {
+		t.Helper()
+		_, _ = newOpenAICompatibleReadinessProber(doer).doCompletionOnce(context.Background(), probe.Base.URL, "SECRET", chatCompletionRequest{})
+	}
+	revoke := func(t *testing.T, doer providerfoundation.HTTPDoer, probe *redirectprobe.Probe) {
+		t.Helper()
+		_ = providerfoundation.RevokePagerDutyOAuthToken(context.Background(), doer,
+			providerfoundation.PagerDutyRevokeConfig{ClientID: "c", RevokeURL: probe.Base.URL + "/oauth/revoke"}, "SECRET")
+	}
+	for name, call := range map[string]func(*testing.T, providerfoundation.HTTPDoer, *redirectprobe.Probe){"PagerDuty services": services, "LLM readiness prober": prober, "PagerDuty revoke": revoke} {
+		t.Run(name+", supplied", func(t *testing.T) {
+			probe := redirectprobe.New(t)
+			call(t, probe.Client(), probe)
+			probe.Assert(t)
+		})
+	}
+	defaults := map[string]func() providerfoundation.HTTPDoer{
+		"PagerDuty services":   func() providerfoundation.HTTPDoer { return pagerDutyServicesClient(nil) },
+		"LLM readiness prober": func() providerfoundation.HTTPDoer { return newOpenAICompatibleReadinessProber(nil).client },
+		"PagerDuty revoke":     func() providerfoundation.HTTPDoer { return revokeDoer(nil) },
+	}
+	calls := map[string]func(*testing.T, providerfoundation.HTTPDoer, *redirectprobe.Probe){"PagerDuty services": services, "LLM readiness prober": prober, "PagerDuty revoke": revoke}
+	for name, build := range defaults {
+		t.Run(name+", default", func(t *testing.T) {
+			probe := redirectprobe.New(t)
+			built, ok := build().(*http.Client)
 			if !ok {
-				t.Fatalf("%s: default is %T", name, doer)
+				t.Fatalf("the default is not an *http.Client")
 			}
-			if response, err := redirectprobe.Reach(built).Do(get(t, probe.Base.URL+"/x")); err == nil {
-				response.Body.Close()
-			}
-		}
-		probe.Assert(t)
-	})
+			calls[name](t, redirectprobe.Reach(built), probe)
+			probe.Assert(t)
+		})
+	}
 }

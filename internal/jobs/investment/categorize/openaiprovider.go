@@ -68,8 +68,7 @@ func NewOpenAIProvider(cfg OpenAIProviderConfig) *OpenAIProvider {
 	if cfg.MaxOutputTokens < openAIMinOutputTokens {
 		cfg.MaxOutputTokens = openAIMinOutputTokens
 	}
-	// A supplied client follows no redirect: the provider's API key rides every request (D4124).
-	client := httpguard.NoRedirects(cfg.HTTPClient)
+	client := cfg.HTTPClient
 	if client == nil {
 		client = newHardenedHTTPClient()
 	}
@@ -233,7 +232,7 @@ func (p *OpenAIProvider) executeResponsesRequest(ctx context.Context, body openA
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("Authorization", "Bearer "+p.cfg.APIKey)
 
-	resp, err := p.client.Do(req)
+	resp, err := httpguard.NoRedirects(p.client).Do(req) // the API key rides this request
 	if err != nil {
 		return openAICompletionText{}, "", &httpTransportError{cause: logging.TransportFailure(err)}
 	}

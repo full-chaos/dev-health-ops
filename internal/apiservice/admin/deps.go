@@ -11,7 +11,6 @@
 package admin
 
 import (
-	"github.com/full-chaos/dev-health-ops/internal/httpguard"
 	"log/slog"
 	"net/http"
 	"time"
@@ -175,10 +174,10 @@ var (
 
 // revokeDoer is the client of PagerDuty's token revoke, which carries a bearer token in its body: httpx does not
 // follow redirects and has a 10s timeout, so neither may this client (http.DefaultClient would replay a 307's body,
-// token included, to the redirect target). A supplied *http.Client follows no redirect either.
+// token included, to the redirect target). A supplied client is used as given: the revoke call itself (providerfoundation.RevokePagerDutyOAuthToken) follows no redirect.
 func revokeDoer(supplied providerfoundation.HTTPDoer) providerfoundation.HTTPDoer {
 	if supplied == nil {
 		return &http.Client{Timeout: 10 * time.Second, CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}
 	}
-	return httpguard.NoRedirectsDoer(supplied)
+	return supplied
 }

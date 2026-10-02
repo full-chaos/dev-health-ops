@@ -52,17 +52,20 @@ func TestASuppliedClientNeverFollowsARedirectToAnotherOrigin(t *testing.T) {
 			PagerDutyRevokeConfig{ClientID: "c", ClientSecret: "SECRET", TokenURL: probe.Base.URL + "/oauth/token"}, "code", "verifier", time.Now())
 		probe.Assert(t)
 	})
-	t.Run("the PagerDuty client-credentials auth keeps no redirect policy of the caller (its token URL is fixed)", func(t *testing.T) {
+	t.Run("the PagerDuty client-credentials token request (client_secret in the form body; constant URL moved to the probe once)", func(t *testing.T) {
+		probe := redirectprobe.New(t)
+		base, _ := url.Parse(probe.Base.URL)
+		supplied := probe.Client()
+		supplied.Transport = &rewriteTo{base: base}
 		credential := NewCredential("pagerduty", "probe", nil, map[string]secrets.Value{
 			"client_id": secrets.NewValue("c"), "client_secret": secrets.NewValue("SECRET"), "subdomain": secrets.NewValue("acme")})
-		auth, err := NewPagerDutyClientCredentialsAuth(credential, &http.Client{})
+		auth, err := NewPagerDutyClientCredentialsAuth(credential, supplied)
 		if err != nil {
 			t.Fatal(err)
 		}
-		client, ok := auth.doer.(*http.Client)
-		if !ok || client.CheckRedirect == nil || client.CheckRedirect(nil, nil) != http.ErrUseLastResponse {
-			t.Fatalf("the supplied client's redirect policy was kept: %#v", auth.doer)
-		}
+		request, _ := http.NewRequestWithContext(context.Background(), http.MethodGet, probe.Base.URL+"/x", nil)
+		_ = auth.Apply(request)
+		probe.Assert(t)
 	})
 	t.Run("the PagerDuty OAuth token revoke (the token rides the form body)", func(t *testing.T) {
 		probe := redirectprobe.New(t)

@@ -2,6 +2,9 @@ package credentials
 
 import (
 	"context"
+	"github.com/full-chaos/dev-health-ops/internal/api/githubcode"
+	"github.com/full-chaos/dev-health-ops/internal/api/gitlabcode"
+	"math/big"
 	"net/http"
 	"testing"
 	"time"
@@ -14,11 +17,9 @@ import (
 func TestASuppliedClientNeverFollowsARedirectToAnotherOrigin(t *testing.T) {
 	probe := redirectprobe.New(t)
 	h := newHandlers(Deps{HTTPClient: probe.Client()})
-	for _, client := range []*http.Client{h.client, h.repoClient} {
-		if response, err := client.Do(probeGet(t, probe.Base.URL+"/user")); err == nil {
-			response.Body.Close()
-		}
-	}
+	// the repository listings go through the same client into restcore
+	_, _ = githubcode.Client{Token: "SECRET", BaseURL: probe.Base.URL, HTTP: withTimeout(h.repoClient, time.Second)}.ListRepositories(context.Background(), githubcode.ListOptions{Org: "acme"})
+	_, _ = gitlabcode.Client{Token: "SECRET", BaseURL: probe.Base.URL, HTTP: withTimeout(h.repoClient, time.Second)}.ListProjects(context.Background(), gitlabcode.ListOptions{MaxProjects: big.NewInt(100)})
 	_, _ = h.send(context.Background(), 5*time.Second, http.MethodGet, probe.Base.URL+"/user", map[string]string{"Authorization": "token SECRET"}, nil)
 	probe.Assert(t)
 }
@@ -31,14 +32,4 @@ func TestTheDefaultClientNeverFollowsARedirectToAnotherOrigin(t *testing.T) {
 	h.client, h.repoClient = redirectprobe.Reach(h.client), redirectprobe.Reach(h.repoClient)
 	_, _ = h.send(context.Background(), 5*time.Second, http.MethodGet, probe.Base.URL+"/user", map[string]string{"PRIVATE-TOKEN": "SECRET"}, nil)
 	probe.Assert(t)
-}
-
-func probeGet(t *testing.T, url string) *http.Request {
-	t.Helper()
-	request, err := http.NewRequestWithContext(context.Background(), http.MethodGet, url, nil)
-	if err != nil {
-		t.Fatal(err)
-	}
-	request.Header.Set("Authorization", "token SECRET")
-	return request
 }

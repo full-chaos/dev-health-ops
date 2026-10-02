@@ -32,7 +32,6 @@
 package sso
 
 import (
-	"github.com/full-chaos/dev-health-ops/internal/httpguard"
 	"log/slog"
 	"net/http"
 	"time"
@@ -263,16 +262,6 @@ func (h handlers) oauthPair() http.Handler {
 	})
 }
 
-// httpClientFor is the client every IdP call uses: the default (SSRF-guarded transport, no redirects) when none is
-// supplied, else the supplied one with its redirect policy replaced by "follow nothing": the client secret, the
-// authorization code and the access token ride these requests (D4124).
-func httpClientFor(supplied *http.Client) *http.Client {
-	if supplied == nil {
-		return defaultOIDCClient()
-	}
-	return httpguard.NoRedirects(supplied)
-}
-
 // newHandlers is what Routes builds its handlers from: the defaults of Deps, and the client every IdP call uses.
 func newHandlers(deps Deps) handlers {
 	if deps.Logger == nil {
@@ -284,6 +273,8 @@ func newHandlers(deps Deps) handlers {
 	if deps.Write == nil {
 		deps.Write = httpapi.WriteError
 	}
-	deps.HTTPClient = httpClientFor(deps.HTTPClient)
+	if deps.HTTPClient == nil {
+		deps.HTTPClient = defaultOIDCClient()
+	}
 	return handlers{deps}
 }

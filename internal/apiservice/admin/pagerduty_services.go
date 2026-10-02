@@ -478,7 +478,7 @@ func (h *handlers) fetchPagerDutyServices(ctx context.Context, auth pagerDutyReq
 // redirect following. A supplied doer (a test's transport) is used as is.
 func pagerDutyServicesClient(doer providerfoundation.HTTPDoer) providerfoundation.HTTPDoer {
 	if doer != nil {
-		return httpguard.NoRedirectsDoer(doer) // the PagerDuty token rides these requests (D4124)
+		return doer
 	}
 	return &http.Client{Timeout: 30 * time.Second, CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}
 }
@@ -513,7 +513,7 @@ func (h *handlers) pagerDutyGET(ctx context.Context, client providerfoundation.H
 		}
 		request.Header.Set("Accept", "application/vnd.pagerduty+json;version=2")
 		request.Header.Set("Authorization", auth.header)
-		response, err := client.Do(request)
+		response, err := httpguard.NoRedirectsDoer(client).Do(request) // the PagerDuty token rides this request
 		if err != nil {
 			if !pagerDutyRetryableTransportError(err) {
 				return nil, servicesInternal("pagerduty request failed", err)

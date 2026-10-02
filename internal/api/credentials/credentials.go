@@ -9,7 +9,6 @@ package credentials
 import (
 	"context"
 	"errors"
-	"github.com/full-chaos/dev-health-ops/internal/httpguard"
 	"log/slog"
 	"net/http"
 	"net/netip"
@@ -72,15 +71,6 @@ func Routes(deps Deps) []httpapi.Route {
 		{Method: http.MethodPatch, Pattern: "/api/v1/admin/credentials/{provider}/{name}",
 			Handler: deps.Guard.BodyFirst(policy.AdminOrg, http.HandlerFunc(h.update))},
 	}
-}
-
-// probeClientFor is the client every probe and listing call uses: the default when none is supplied, else the supplied
-// one with its redirect policy replaced by "follow nothing": the stored credential rides these requests (D4124).
-func probeClientFor(supplied *http.Client) *http.Client {
-	if supplied == nil {
-		return defaultProbeClient()
-	}
-	return httpguard.NoRedirects(supplied)
 }
 
 // defaultProbeClient follows no redirects and dials only addresses the SSRF
@@ -599,13 +589,16 @@ func newHandlers(deps Deps) handlers {
 	if now == nil {
 		now = time.Now
 	}
-	client := probeClientFor(deps.HTTPClient)
+	client := deps.HTTPClient
+	if client == nil {
+		client = defaultProbeClient()
+	}
 	lookup := deps.HostLookup
 	if lookup == nil {
 		lookup = externalurl.ResolveHostAddrs
 	}
 	// The repository listing's clients each apply their provider's own
 	// timeout to this one (a test's client answers for both).
-	repoClient := probeClientFor(deps.HTTPClient)
+	repoClient := client
 	return handlers{pool: deps.Pool, cipher: deps.Cipher, logger: logger, now: now, client: client, repoClient: repoClient, lookup: lookup}
 }

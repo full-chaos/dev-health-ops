@@ -161,8 +161,6 @@ func NewSenderFromEnv(client *http.Client) (Sender, error) {
 		if client == nil {
 			client = &http.Client{Timeout: 30 * time.Second}
 		}
-		// A supplied client follows no redirect: the API key rides every request (D4124).
-		client = httpguard.NoRedirects(client)
 		return &resendSender{from: from, apiKey: key, client: client}, nil
 	case "smtp":
 		port := 1025
@@ -331,7 +329,7 @@ func (sender *resendSender) Send(ctx context.Context, message Message) error {
 	}
 	request = request.WithContext(httptrace.WithClientTrace(request.Context(), trace))
 
-	response, err := sender.client.Do(request)
+	response, err := httpguard.NoRedirects(sender.client).Do(request) // the API key rides this request
 	if err != nil {
 		if !wroteRequest {
 			// The request was never fully written to the wire at all -- a

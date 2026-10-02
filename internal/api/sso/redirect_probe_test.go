@@ -30,7 +30,7 @@ func TestTheOIDCTokenExchangeNeverFollowsARedirectToAnotherOrigin(t *testing.T) 
 	probe := redirectprobe.New(t)
 	h := newHandlers(Deps{HTTPClient: probe.Client()})
 	config := oauth2.Config{ClientID: "id", ClientSecret: "SECRET", Endpoint: oauth2.Endpoint{TokenURL: probe.Base.URL + "/token", AuthStyle: oauth2.AuthStyleInParams}}
-	_, _ = config.Exchange(context.WithValue(context.Background(), oauth2.HTTPClient, h.HTTPClient), "code")
+	_, _ = h.exchangeOIDCCode(context.Background(), config, "code", "verifier")
 	probe.Assert(t)
 }
 

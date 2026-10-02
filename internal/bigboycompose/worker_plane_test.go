@@ -218,3 +218,83 @@ func TestEveryBigboyWorkerServiceRunsTheCIOperatorImage(t *testing.T) {
 		}
 	}
 }
+
+// commandArguments returns the command of a service as a list of arguments (list or shell-form string).
+func commandArguments(command any) []string {
+	switch typed := command.(type) {
+	case string:
+		return strings.Fields(typed)
+	case []any:
+		var out []string
+		for _, item := range typed {
+			if text, ok := item.(string); ok {
+				out = append(out, text)
+			}
+		}
+		return out
+	}
+	return nil
+}
+
+func serviceByWorkerGroup(t *testing.T, composePath, group string) []string {
+	t.Helper()
+	raw, err := os.ReadFile(composePath)
+	if err != nil {
+		t.Fatalf("read %s: %v", composePath, err)
+	}
+	var doc struct {
+		Services map[string]struct {
+			Command any `yaml:"command"`
+		} `yaml:"services"`
+	}
+	if err := yaml.Unmarshal(raw, &doc); err != nil {
+		t.Fatalf("parse %s: %v", composePath, err)
+	}
+	for _, service := range doc.Services {
+		arguments := commandArguments(service.Command)
+		for _, argument := range arguments {
+			if argument == "--worker-group="+group {
+				return arguments
+			}
+		}
+	}
+	return nil
+}
+
+func flagName(argument string) string {
+	name, _, _ := strings.Cut(argument, "=")
+	return name
+}
+
+// The bigboy heavy worker is the BASE heavy command (CHAOS-7976, vet of a8772a0ce4): the five identity flags must be
+// identical to the base, and every other flag name of the base command (the DB mode, role, pooler, schema and log
+// flags) must be present, so the override cannot copy the omission the other bigboy workers show. An empty
+// derivation fails.
+func TestTheBigboyHeavyWorkerKeepsTheBaseHeavyCommand(t *testing.T) {
+	base := serviceByWorkerGroup(t, filepath.Join(opsRoot(t), "compose.yml"), "heavy")
+	if len(base) == 0 {
+		t.Fatalf("no base service with --worker-group=heavy in ops/compose.yml: the derivation is empty")
+	}
+	override := serviceByWorkerGroup(t, filepath.Join(toolsDir(t), "compose.bigboy.workers.yml"), "heavy")
+	if len(override) == 0 {
+		t.Fatalf("no heavy worker in ci/bigboy/compose.bigboy.workers.yml")
+	}
+	overrideByName := map[string]string{}
+	for _, argument := range override {
+		overrideByName[flagName(argument)] = argument
+	}
+	identity := map[string]bool{"--queues": true, "--queue-concurrency": true, "--worker-group": true, "--shutdown-timeout": true, "--http-addr": true}
+	for _, argument := range base {
+		if !strings.HasPrefix(argument, "--") {
+			continue
+		}
+		got, present := overrideByName[flagName(argument)]
+		if !present {
+			t.Errorf("the bigboy heavy worker drops the base flag %s", flagName(argument))
+			continue
+		}
+		if identity[flagName(argument)] && got != argument {
+			t.Errorf("the bigboy heavy worker has %q, the base has %q", got, argument)
+		}
+	}
+}

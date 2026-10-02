@@ -91,8 +91,17 @@ func NewHTTPClient(provider, base string, doer HTTPDoer, auth Auth, retry RetryP
 		return nil, credentialInvalid("lease_missing")
 	case !retry.valid():
 		return nil, credentialInvalid("retry_policy_invalid")
+	case !httpguard.Guardable(doer):
+		return nil, refuseUnguardableDoer()
 	}
 	return &HTTPClient{Provider: strings.ToLower(provider), BaseURL: parsed, Doer: originGuardedAtConstruction(doer), Auth: auth, Retry: retry, Lease: lease, entropy: rand.Reader}, nil
+}
+
+// refuseUnguardableDoer is the construction error for a doer the redirect guard cannot reach (a decorator that is not an
+// httpguard.Wrapper): loud, fixed text, and no request ever goes through it.
+func refuseUnguardableDoer() error {
+	slog.Error("provider client refused: the doer is a decorator the redirect guard cannot see inside (make it an httpguard.Wrapper)")
+	return credentialInvalid("http_doer_unguardable")
 }
 
 // resolveTarget is the URL a request path names under the client's base URL.

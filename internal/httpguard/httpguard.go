@@ -4,6 +4,7 @@ package httpguard
 
 import (
 	"net/http"
+	"reflect"
 	"time"
 )
 
@@ -64,4 +65,53 @@ func httpClientOrNil(client *http.Client) *http.Client { return NoRedirects(clie
 // no redirect followed (a 3xx is returned as the response).
 func NewClient(timeout time.Duration) *http.Client {
 	return &http.Client{Timeout: timeout, CheckRedirect: refuseRedirects}
+}
+
+// Guardable reports whether the guards can reach the client a doer sends through (CHAOS-7910 A2, fail closed): an *http.Client is
+// copied with its policy replaced; a Wrapper is guardable when the doer it wraps is; a struct (or pointer to a struct) that
+// holds another doer or an http.Client in a field is a decorator the guard cannot see inside, so it is NOT guardable unless it
+// is a Wrapper; a leaf (a function type, a struct with no inner doer) has nothing to hide. The provider constructors refuse a
+// doer that is not guardable, with an error and a fixed log line, and never send a request through it.
+func Guardable(doer interface {
+	Do(*http.Request) (*http.Response, error)
+}) bool {
+	if doer == nil {
+		return false
+	}
+	if _, ok := doer.(*http.Client); ok {
+		return true
+	}
+	if wrapper, ok := doer.(Wrapper); ok {
+		return Guardable(wrapper.Unwrap())
+	}
+	t := reflect.TypeOf(doer)
+	if t.Kind() == reflect.Pointer {
+		t = t.Elem()
+	}
+	if t.Kind() != reflect.Struct {
+		return true
+	}
+	doerType := reflect.TypeOf((*interface {
+		Do(*http.Request) (*http.Response, error)
+	})(nil)).Elem()
+	clientType := reflect.TypeOf(http.Client{})
+	for i := 0; i < t.NumField(); i++ {
+		field := t.Field(i).Type
+		if field.Kind() == reflect.Pointer {
+			field = field.Elem()
+		}
+		if field == clientType || (t.Field(i).Type.Kind() == reflect.Interface && t.Field(i).Type.Implements(doerType)) {
+			return false
+		}
+		if field.Kind() == reflect.Struct && field.Name() != "" && field != clientType {
+			// a nested struct that itself holds a doer (an observer holding the delegate)
+			for j := 0; j < field.NumField(); j++ {
+				inner := field.Field(j).Type
+				if inner.Kind() == reflect.Interface && inner.Implements(doerType) {
+					return false
+				}
+			}
+		}
+	}
+	return true
 }

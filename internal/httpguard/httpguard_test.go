@@ -86,3 +86,49 @@ func TestNoRedirectsDoerGuardsTheClientInsideAWrapper(t *testing.T) {
 		t.Fatal("a wrapper around a non-client doer stays as it is")
 	}
 }
+
+type observerHolder struct {
+	delegate interface {
+		Do(*http.Request) (*http.Response, error)
+	}
+}
+type observed struct{ observe *observerHolder }
+
+func (observed) Do(*http.Request) (*http.Response, error) { return nil, nil }
+
+type holdsClientDoer struct{ c *http.Client }
+
+func (holdsClientDoer) Do(*http.Request) (*http.Response, error) { return nil, nil }
+
+type funcDoer func(*http.Request) (*http.Response, error)
+
+func (f funcDoer) Do(r *http.Request) (*http.Response, error) { return f(r) }
+
+func TestGuardableAcceptsWhatTheGuardsReachAndRefusesWhatHidesAClient(t *testing.T) {
+	type doer interface {
+		Do(*http.Request) (*http.Response, error)
+	}
+	cases := []struct {
+		name string
+		doer doer
+		want bool
+	}{
+		{"an *http.Client", &http.Client{}, true},
+		{"a function doer", funcDoer(nil), true},
+		{"a leaf struct", plainDoer{}, true},
+		{"a wrapper around a client", countingWrapper{&http.Client{}}, true},
+		{"a wrapper around a hiding decorator", countingWrapper{holdsClientDoer{}}, false},
+		{"a decorator holding a doer", countingWrapper{plainDoer{}}.Unwrap().(doer), true},
+		{"a struct holding an *http.Client", holdsClientDoer{}, false},
+		{"a pointer to a struct holding a client", &holdsClientDoer{}, false},
+		{"a decorator holding an observer that holds a doer", observed{}, false},
+	}
+	for _, tc := range cases {
+		if got := Guardable(tc.doer); got != tc.want {
+			t.Errorf("%s: Guardable = %v, want %v", tc.name, got, tc.want)
+		}
+	}
+	if Guardable(nil) {
+		t.Error("nil is not guardable")
+	}
+}

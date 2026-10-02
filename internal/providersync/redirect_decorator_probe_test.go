@@ -104,3 +104,26 @@ func TestAContextDroppingDecoratorStillNeverSendsTheCredentialToAnotherOrigin(t 
 		t.Fatalf("want ONE warn line with the fixed text and no URL or value, got %q", got)
 	}
 }
+
+// The production construction path: CountRequests around a client (what CompleteRouteExecutor.Execute hands the constructors) is
+// accepted; every derived route decorator, handed to a constructor instead of being assigned onto a built client, is refused.
+func TestTheProductionConstructionPathIsAcceptedAndEveryRouteDecoratorHandedInIsRefused(t *testing.T) {
+	newClient := func(doer providerfoundation.HTTPDoer) error {
+		_, err := providerfoundation.NewHTTPClient("gitlab", "https://gitlab.example.test", doer,
+			providerfoundation.TokenAuth("PRIVATE-TOKEN", "", secrets.NewValue("SECRET")),
+			providerfoundation.RetryPolicy{MaxAttempts: 1, InitialWait: time.Nanosecond, MaxWait: time.Nanosecond},
+			providerfoundation.LeaseGuardFunc(func(context.Context) error { return nil }))
+		return err
+	}
+	if err := newClient(CountRequests(&http.Client{})); err != nil {
+		t.Fatalf("CountRequests around a client must construct: %v", err)
+	}
+	if err := newClient(CountRequests(CountRequests(&http.Client{}))); err != nil {
+		t.Fatalf("nested counters around a client must construct: %v", err)
+	}
+	for name, decorate := range generatedDecorators {
+		if err := newClient(decorate(&http.Client{}, new(int))); err == nil {
+			t.Errorf("%s handed to a constructor must be refused", name)
+		}
+	}
+}

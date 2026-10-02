@@ -241,3 +241,100 @@ func TestTotalCount_FollowsTheTeamScope(t *testing.T) {
 		t.Fatalf("a team owning nothing here: total=%d truncated=%v, want 0/false", total, truncated)
 	}
 }
+
+// ---- CHAOS-7787: bots and self pairs are excluded at read time ----------------------------
+
+type edgeSeed struct {
+	reviewer, author string
+	count            uint32
+}
+
+// newExclusionFixture starts a ClickHouse and seeds review_edges_daily with GitHub-shaped rows
+// (logins; a "[bot]" login is an App actor), GitLab-shaped rows (plain usernames) and self pairs.
+func newExclusionFixture(ctx context.Context, t *testing.T) QueryClient {
+	t.Helper()
+	ch, err := containers.StartClickHouse(ctx)
+	if err != nil {
+		t.Fatalf("start ClickHouse test dependency: %v", err)
+	}
+	t.Cleanup(func() { _ = ch.Close(context.Background()) })
+	chschema.Apply(ctx, t, ch)
+	options, err := stdclickhouse.ParseDSN(ch.URI)
+	if err != nil {
+		t.Fatalf("parse ClickHouse DSN: %v", err)
+	}
+	admin, err := stdclickhouse.Open(options)
+	if err != nil {
+		t.Fatalf("open admin connection: %v", err)
+	}
+	t.Cleanup(func() { _ = admin.Close() })
+	client, err := chquery.NewProductionClient(ch.URI)
+	if err != nil {
+		t.Fatalf("construct query client: %v", err)
+	}
+	t.Cleanup(func() { _ = client.Close() })
+
+	repo := uuid.New()
+	computed := time.Date(2026, 9, 1, 6, 0, 0, 0, time.UTC)
+	seeds := []edgeSeed{
+		// Kept: humans and gitlab-shaped usernames ("abbot" merely contains "bot"; a plain gitlab bot
+		// username has no "[bot]" suffix, so by the ruling it stays).
+		{"alice-reviewer", "bob-author", 5},
+		{"gl-reviewer", "gl-author", 4},
+		{"project_42_bot_abc", "gl-author", 20},
+		{"abbot", "gl-author", 3},
+		// Excluded: bot reviewers (case and padding), a bot author, self pairs (case-insensitive).
+		{"dependabot[bot]", "bob-author", 90},
+		{"Renovate[BOT]", "carol", 80},
+		{"alice-reviewer", "github-actions[bot]", 70},
+		{" Dependabot[bot] ", "bob-author", 60},
+		{"Bob", "bob", 50},
+		{"carol", "carol", 40},
+		{"gl-user", "gl-user", 30},
+	}
+	for i, e := range seeds {
+		if err := admin.Exec(ctx, `INSERT INTO review_edges_daily (repo_id, day, reviewer, author, reviews_count, computed_at, org_id) VALUES (?, ?, ?, ?, ?, ?, ?)`,
+			repo, time.Date(2026, 8, 1+i, 0, 0, 0, 0, time.UTC), e.reviewer, e.author, e.count, computed, teamScopeOrg); err != nil {
+			t.Fatalf("seed edge %d: %v", i, err)
+		}
+	}
+	return client
+}
+
+func TestExclusion_DropsBotsAndSelfPairsAndKeepsEveryoneElse(t *testing.T) {
+	ctx := context.Background()
+	client := newExclusionFixture(ctx, t)
+
+	got, err := ResolveScoped(ctx, client, teamScopeOrg, mustDate(t, "2026-08-01"), mustDate(t, "2026-08-31"), Scope{}, 500)
+	if err != nil {
+		t.Fatalf("ResolveScoped: %v", err)
+	}
+	var pairs []string
+	for _, e := range got.Edges {
+		pairs = append(pairs, e.Reviewer+">"+e.Author)
+	}
+	want := []string{"project_42_bot_abc>gl-author", "alice-reviewer>bob-author", "gl-reviewer>gl-author", "abbot>gl-author"}
+	if !equalStrings(pairs, want) {
+		t.Fatalf("edges = %v, want %v (bots by the [bot] suffix in either column, case and padding ignored; self pairs; nothing else)", pairs, want)
+	}
+	if got.TotalCount != 4 || got.Truncated {
+		t.Fatalf("totalCount=%d truncated=%v, want 4/false (the count excludes the same rows)", got.TotalCount, got.Truncated)
+	}
+}
+
+func TestExclusion_BotRowsNeverStarveTheCutOrInflateTheTotal(t *testing.T) {
+	ctx := context.Background()
+	client := newExclusionFixture(ctx, t)
+
+	// The bot rows carry the biggest counts. A cut of 2 must still return two KEPT rows.
+	got, err := ResolveScoped(ctx, client, teamScopeOrg, mustDate(t, "2026-08-01"), mustDate(t, "2026-08-31"), Scope{}, 2)
+	if err != nil {
+		t.Fatalf("ResolveScoped: %v", err)
+	}
+	if len(got.Edges) != 2 || got.Edges[0].Reviewer != "project_42_bot_abc" || got.Edges[1].Reviewer != "alice-reviewer" {
+		t.Fatalf("cut at 2 = %+v, want the two biggest KEPT rows (the 90/80/70/60 bot rows must not take the cut)", got.Edges)
+	}
+	if got.TotalCount != 4 || !got.Truncated {
+		t.Fatalf("totalCount=%d truncated=%v, want 4/true (four kept rows, two returned)", got.TotalCount, got.Truncated)
+	}
+}

@@ -77,6 +77,7 @@ func TestReviewEdgesMatchesTheFrozenGolden(t *testing.T) {
 			}
 			statement := strings.Join(strings.Fields(client.statement), " ")
 			statement = strings.Replace(statement, "{limit:UInt64}", fmt.Sprint(limit), 1)
+			statement = stripGoOnlyFragments(t, statement)
 			if statement != tc.PythonQuery {
 				t.Errorf("query text differs from the golden:\n got  %s\n want %s", statement, tc.PythonQuery)
 			}
@@ -109,5 +110,38 @@ func TestReviewEdgesMatchesTheFrozenGolden(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+// goldenStrippedFragments are the Go-only fragments the golden comparison removes from the Go
+// statement before comparing it to the python-recorded text. It holds EXACTLY one entry: the
+// read-time exclusion of bots and self pairs (CHAOS-7787), which Python never had. The recorded
+// file and its manifest are not edited; TestGoldenStripListIsExactlyTheExclusionFragment keeps
+// this list from growing.
+var goldenStrippedFragments = []string{ExcludedIdentitiesFragment}
+
+// goldenStripAnchor is the named place of the fragment in the Go statement: directly after the
+// window's upper bound, which is where the python-recorded text continues with the repo filter,
+// the GROUP BY or the closing parenthesis.
+const goldenStripAnchor = "AND day <= {until_date:Date} "
+
+func stripGoOnlyFragments(t *testing.T, statement string) string {
+	t.Helper()
+	for _, fragment := range goldenStrippedFragments {
+		normal := strings.Join(strings.Fields(fragment), " ")
+		if got := strings.Count(statement, normal); got != 1 {
+			t.Fatalf("the Go-only fragment must appear exactly once in the Go statement, found %d: %q in %s", got, normal, statement)
+		}
+		if !strings.Contains(statement, goldenStripAnchor+normal) {
+			t.Fatalf("the Go-only fragment is not at its named place (directly after %q): %s", goldenStripAnchor, statement)
+		}
+		statement = strings.Replace(statement, " "+normal, "", 1)
+	}
+	return statement
+}
+
+func TestGoldenStripListIsExactlyTheExclusionFragment(t *testing.T) {
+	if len(goldenStrippedFragments) != 1 || goldenStrippedFragments[0] != ExcludedIdentitiesFragment {
+		t.Fatalf("the golden strip list must be exactly [ExcludedIdentitiesFragment], got %d entries: %q", len(goldenStrippedFragments), goldenStrippedFragments)
 	}
 }

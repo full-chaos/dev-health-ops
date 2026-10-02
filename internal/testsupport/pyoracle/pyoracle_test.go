@@ -443,20 +443,29 @@ func TestInterpreterRefusesInARecordingOutsideTheClosedList(t *testing.T) {
 	}
 }
 
-// A LookPath of a python name cannot be refused in a recording (it is the
+// A LookPath or a launch of a python name cannot be refused in a recording (it is the
 // standard library), so the files that start a Python they looked up by name
-// are a frozen set: a new file that does is RED until it goes through the
+// (or start it by that name) are a frozen set: a new file that does is RED until it goes through the
 // producer's launcher. The exceptions below never record a golden (CHAOS-7820).
 var lookPathPythonDayOne = map[string]bool{
 	"internal/testsupport/pyoracle/pyoracle.go":             true, // the resolver itself
 	"internal/testsupport/venueoracle/venueoracle.go":       true, // the launcher's PATH check
 	"internal/apiservice/admin/orgdeletion_targets_test.go": true,
 	"internal/pgmigrate/preflight_test.go":                  true,
+	// Launches by the name "python3" (the venue puts the interpreter's
+	// directory first on PATH): started with the process environment, a
+	// recording's poison (PYTHONHOME) stops these, so none records today.
+	"internal/testsupport/programoracle/programoracle.go":                              true,
+	"internal/queryapi/people/summaryvenue/summary_venue_oracle_integration_test.go":   true,
+	"internal/queryapi/server/dict_order_venue_oracle_test.go":                         true,
+	"internal/queryapi/server/workunit_explain_provider_venue_oracle_test.go":          true,
+	"internal/apiservice/metricsvenue/counter_parity_venue_oracle_integration_test.go": true,
+	"internal/testsupport/venueoracle/producer.go":                                     true,
 }
 
 func TestNoNewFileLooksPythonUpByName(t *testing.T) {
 	root := repoRootOf(t)
-	pattern := regexp.MustCompile(`exec\.LookPath\(\s*"python`)
+	pattern := regexp.MustCompile(`exec\.(LookPath|Command|CommandContext)\(\s*(ctx,\s*)?"python`)
 	err := filepath.WalkDir(root, func(path string, entry fs.DirEntry, walkErr error) error {
 		if walkErr != nil {
 			return walkErr
@@ -493,3 +502,7 @@ func TestNoNewFileLooksPythonUpByName(t *testing.T) {
 		}
 	}
 }
+
+// NOT seen by the sweep above (named in the PR body): a name built at run time
+// (a variable, a concatenation), a launch through a shell, a helper that takes
+// the name as a parameter, and a launch of the interpreter by a path.

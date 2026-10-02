@@ -495,6 +495,11 @@ func TestListRepositoriesVenueOracleMatchesFrozenPython(t *testing.T) {
 		}
 		gotResult, _ := json.Marshal(got)
 		wantResult, _ := json.Marshal(pythonResult)
+		if strings.HasPrefix(fmt.Sprint(got), CrossOriginLinkClass+":") && !strings.HasPrefix(s.Known, notMeasured) {
+			// D4037: Go refuses a next page on another origin (no request, no token); Python follows it and sends the
+			// token. The scenario is a named known difference: Python must have made the cross-origin request.
+			s.Known = "D4037: Go refuses a next-page Link on another origin; Python follows it and sends the token"
+		}
 		if s.Known != "" {
 			var pythonRequests [][2]string
 			for _, request := range want[index].Requests {
@@ -506,6 +511,9 @@ func TestListRepositoriesVenueOracleMatchesFrozenPython(t *testing.T) {
 					pair[1] = *request[1]
 				}
 				pythonRequests = append(pythonRequests, pair)
+			}
+			if strings.HasPrefix(s.Known, "D4037") && len(pythonRequests) <= len(transport.seen) {
+				t.Errorf("scenario %d (%s): the D4037 note says Python followed the cross-origin link, but it made %d request(s) against Go's %d", index, describe(s), len(pythonRequests), len(transport.seen))
 			}
 			if string(gotResult) == string(wantResult) && fmt.Sprint(transport.seen) == fmt.Sprint(pythonRequests) {
 				t.Errorf("scenario %d (%s) is a known difference (%s) but Go now answers as Python: delete its note", index, describe(s), s.Known)

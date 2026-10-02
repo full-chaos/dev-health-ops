@@ -177,6 +177,8 @@ var perRunPythonEnv = map[string]perRunName{
 	"REDIS_URL":      {false, "the address of the run's own cache"},
 	"TMPDIR":         {false, "inherited: the host's directory for temporary files"},
 
+	"GO_API_QUERY_API_URL":                {true, "the address of the query-api the test starts for the run (a random loopback port)"},
+	"QUERY_API_INTERNAL_URL":              {true, "the address of the query-api the test starts for the run (a random loopback port)"},
 	"GITHUB_APP_PRIVATE_KEY":              {true, "a private key generated for the run (the GitHub App venue signs with a new RSA key every run)"},
 	"REQUESTS_CA_BUNDLE":                  {true, "a temporary certificate file of the test's fake TLS server"},
 	"SMTP_HOST":                           {true, "the address of the test's fake SMTP sink (a loopback host the sink listens on)"},
@@ -235,6 +237,10 @@ func pythonPlaneEnv(options Options, perRun map[string]string) []string {
 // and PythonEnv are the test's, the rest is the harness's.
 func planeEntries(options Options, perRun map[string]string) []envEntry {
 	entries := fromHarness(append(interpreterEnv(perRun), "PYTHONPATH="+perRun["PYTHONPATH"], "POSTGRES_URI="+perRun["POSTGRES_URI"])...)
+	if len(options.PythonPathRel) > 0 {
+		// The relative names are the declared input (the absolute PYTHONPATH is keyed by name only).
+		entries = append(entries, fromHarness("VENUE_PYTHONPATH_REL="+strings.Join(options.PythonPathRel, ":"))...)
+	}
 	entries = append(entries, fromTest("JWT_SECRET_KEY="+options.JWTKey)...)
 	entries = append(entries, fromHarness("OTEL_SDK_DISABLED=true", "DEV_HEALTH_ALLOW_CELERY_RIVER_CUTOVER=1",
 		// NullPool: TestClient gives each request its own event loop, and a

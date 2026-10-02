@@ -51,14 +51,45 @@ type Program struct {
 	// (PATH, HOME, the pinned sources on PYTHONPATH, no bytecode).
 	Env map[string]string
 	// PerRun gives the entries of one run only, such as the address of a
-	// database that exists for this run. It is called at a recording, the
-	// entries are set for the program by name, and they are not part of the
-	// request: a value that differs from run to run cannot be in a key. A
-	// recording fails when the program's answer holds such a value or a part
-	// of an address in it (perRunParts), and what the program wrote to
-	// stderr is logged with those parts replaced.
+	// database that exists for this run. It is called at a recording, once,
+	// just before the program starts; the entries are set for the program by
+	// name, and they are not part of the request: a value that differs from
+	// run to run cannot be in a key. A recording fails when the program's
+	// answer holds such a value or a part of an address in it (perRunParts),
+	// and what the program wrote to stderr is logged with those parts
+	// replaced.
 	PerRun func() map[string]string
+	// Answer makes the recorded answer from what the program printed, for a
+	// program whose effect is seen outside it: it sent a request to a server
+	// of the test, and the answer is what that server received. It is called
+	// at a recording, once, after the program exited with status 0, and what
+	// it returns is recorded in place of the program's stdout. The same rule
+	// holds for it as for stdout: no value of one run.
+	Answer func(stdout []byte) ([]byte, error)
+	// PerRunNames are the names of the entries PerRun gives: the same names, a
+	// run's PerRun must give exactly these. The names (not the values) are
+	// part of the request, so a program recorded with another set of per-run
+	// entries is another request and the golden must be recorded again; each
+	// name must be on the closed list perRunProgramNames. Required with
+	// PerRun, refused without it.
+	PerRunNames []string
 }
+
+// perRunProgramNames is the closed list of the names a program may be given
+// for one run, with why: the value of each is made for the run (a database that
+// exists for it, a gateway the test starts), so it cannot be in a key by value.
+// A name is added here with the test that needs it, in the same change.
+var perRunProgramNames = map[string]string{
+	"ORACLE_DATABASE_URI":      "the address of the run's own database (the scheduler venue oracles)",
+	"ATLASSIAN_ORACLE_GATEWAY": "the address of the Atlassian gateway the test starts (the teams-client oracle)",
+	"ORACLE_SMTP_ADDRESS":      "the address of the SMTP sink the test starts (the mail SMTP oracle)",
+	"ORACLE_CLICKHOUSE_URL":    "the HTTP address of the run's own ClickHouse database (the people summary oracle)",
+	"RESEND_API_URL":           "the address of the Resend API stand-in the test starts (the mail Resend oracle)",
+}
+
+// perRunNamesKey is the keyed entry that holds the sorted per-run names in a
+// request. It is never given to the program.
+const perRunNamesKey = "PROGRAMORACLE_PER_RUN_NAMES"
 
 // Answer is what one program gave: its exit code and its stdout. A program
 // that fails is an answer with a non-zero exit code, never an empty answer.
@@ -216,6 +247,50 @@ func programsErr(programs []Program) error {
 			return fmt.Errorf("programoracle: two programs are named %q: an answer is found by its program's name", program.Name)
 		}
 		seen[program.Name] = true
+		if err := perRunNamesErr(program); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// perRunNamesErr is an error when a program's declared per-run names are not
+// what PerRun needs: a name that is not on the closed list, a repeated name,
+// names with no PerRun, or a PerRun with no names.
+func perRunNamesErr(program Program) error {
+	if program.PerRun == nil && len(program.PerRunNames) > 0 {
+		return fmt.Errorf("programoracle: program %q declares per-run names %v and has no PerRun", program.Name, program.PerRunNames)
+	}
+	if program.PerRun != nil && len(program.PerRunNames) == 0 {
+		return fmt.Errorf("programoracle: program %q has a PerRun and declares no PerRunNames: the names of its per-run entries are part of its request", program.Name)
+	}
+	if _, held := program.Env[perRunNamesKey]; held {
+		return fmt.Errorf("programoracle: program %q sets %s in Env: it is the request's own entry", program.Name, perRunNamesKey)
+	}
+	seen := map[string]bool{}
+	for _, name := range program.PerRunNames {
+		if _, keyed := program.Env[name]; keyed {
+			return fmt.Errorf("programoracle: program %q gives %s both in Env (keyed by value) and as a per-run name: one name, one source", program.Name, name)
+		}
+		if _, listed := perRunProgramNames[name]; !listed {
+			return fmt.Errorf("programoracle: program %q: %s is not on the closed list of per-run names (perRunProgramNames); add it there with the reason", program.Name, name)
+		}
+		if seen[name] {
+			return fmt.Errorf("programoracle: program %q declares the per-run name %s twice", program.Name, name)
+		}
+		seen[name] = true
+	}
+	return nil
+}
+
+// perRunGivenErr is an error when the entries PerRun gave are not exactly the
+// declared names.
+func perRunGivenErr(program Program, given map[string]string) error {
+	want := append([]string(nil), program.PerRunNames...)
+	sort.Strings(want)
+	got := sortedNames(given)
+	if strings.Join(want, ",") != strings.Join(got, ",") {
+		return fmt.Errorf("programoracle: program %q gave the per-run entries %v, its PerRunNames are %v: the names are part of its request", program.Name, got, want)
 	}
 	return nil
 }
@@ -230,6 +305,11 @@ func keyedEnv(program Program) map[string]string {
 	for name, value := range program.Env {
 		keyed[name] = value
 	}
+	if len(program.PerRunNames) > 0 {
+		names := append([]string(nil), program.PerRunNames...)
+		sort.Strings(names)
+		keyed[perRunNamesKey] = strings.Join(names, ",")
+	}
 	return keyed
 }
 
@@ -242,6 +322,9 @@ func interpreterEnv(pinnedRoot string, program Program, perRun map[string]string
 	keyed := keyedEnv(program)
 	extra := make([]string, 0, len(keyed)+len(perRun))
 	for _, name := range sortedNames(keyed) {
+		if name == perRunNamesKey {
+			continue // the request's, never the program's
+		}
 		extra = append(extra, name+"="+keyed[name])
 	}
 	for _, name := range sortedNames(perRun) {
@@ -389,11 +472,21 @@ func executeErr(pinnedRoot string, program Program) (executed, error) {
 	var perRun map[string]string
 	if program.PerRun != nil {
 		perRun = program.PerRun()
+		if err := perRunGivenErr(program, perRun); err != nil {
+			return executed{}, err
+		}
 	}
 	command := interpreterCommand(pinnedRoot, program, perRun)
 	var stderr bytes.Buffer
 	command.Stderr = &stderr
 	stdout, err := command.Output()
+	if err == nil && program.Answer != nil {
+		answer, answerErr := program.Answer(stdout)
+		if answerErr != nil {
+			return executed{}, fmt.Errorf("programoracle: program %q: the answer could not be made: %w", program.Name, answerErr)
+		}
+		stdout = answer
+	}
 	result := executed{stdout: stdout, stderr: withoutPerRun(stderr.String(), perRun)}
 	if leak := perRunErr(program.Name, string(stdout), perRun); leak != nil {
 		return executed{}, leak

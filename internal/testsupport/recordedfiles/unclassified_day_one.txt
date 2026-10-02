@@ -830,7 +830,6 @@ internal/queryapi/server/testdata/rest_errors/method_not_allowed.json
 internal/queryapi/server/testdata/rest_errors/not_authenticated.json
 internal/queryapi/server/testdata/rest_errors/not_found.json
 internal/queryapi/server/testdata/rest_errors/quadrant_comparative_params.json
-internal/queryapi/server/testdata/venue_oracle_query_params.py
 internal/queryapi/server/testdata/wire_capture/README.md
 internal/queryapi/server/testdata/wire_capture/acr_repository_scopes_captured.graphql
 internal/queryapi/server/testdata/wire_capture/aiattributedprs_captured.graphql
@@ -894,9 +893,7 @@ internal/scheduler/fixed/testdata/python_ask_dev_feature_oracle.py
 internal/scheduler/sync/testdata/python_feature_decision_reason_oracle.py
 internal/scheduler/sync/testdata/python_planner_oracle.py
 internal/storage/clickhouse/testdata/api_grants.golden
-internal/syncbudget/testdata/budget_estimate_oracle.py
 internal/synccli/testdata/batch_loop_oracle.py
-internal/synccli/testdata/db_lookup_oracle.py
 internal/synccli/testdata/local_sync_oracle.py
 internal/synccli/testdata/sync_target_oracle.py
 internal/synccli/testdata/teams_sync_oracle.py

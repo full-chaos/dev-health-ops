@@ -42,11 +42,11 @@ func (v ids) get(name string) integ { return v.by[name] }
 func newIDs() ids {
 	v := ids{by: map[string]integ{}}
 	for _, target := range []*uuid.UUID{&v.orgA, &v.orgB, &v.adminA, &v.memberA, &v.adminB, &v.adminNoOrg, &v.cred, &v.credB} {
-		*target = uuid.New()
+		*target = nextID()
 	}
 	for _, group := range [][]string{sameNames, refusedNames, windowNames, otherNames} {
 		for _, name := range group {
-			v.by[name] = integ{id: uuid.New(), cfg: uuid.New(), srcs: []uuid.UUID{uuid.New(), uuid.New(), uuid.New()}}
+			v.by[name] = integ{id: nextID(), cfg: nextID(), srcs: []uuid.UUID{nextID(), nextID(), nextID()}}
 		}
 	}
 	return v
@@ -76,7 +76,7 @@ func seed(t *testing.T, ctx context.Context, admin *pgxpool.Pool, venue *venueor
 		exec(`INSERT INTO users (id, email, is_active, is_verified, is_superuser, token_version, created_at, updated_at)
 VALUES ($1, $2, true, true, false, 0, $3, $3)`, user.id, user.email, at)
 		exec(`INSERT INTO memberships (id, user_id, org_id, role, created_at, updated_at) VALUES ($1, $2, $3, $4, $5, $5)`,
-			uuid.New(), user.id, user.org, user.role, at)
+			nextID(), user.id, user.org, user.role, at)
 	}
 	exec(`INSERT INTO users (id, email, is_active, is_verified, is_superuser, token_version, created_at, updated_at)
 VALUES ($1, 'bf-noorg@example.com', true, true, false, 0, $2, $2)`, v.adminNoOrg, at)
@@ -108,7 +108,7 @@ VALUES ($1, $2, $3, 'github', 'repository', $4, $5, $4, $6::json, $7, $8, $8)`, 
 		}
 		for _, dataset := range []string{"commits", "prs"} {
 			exec(`INSERT INTO integration_datasets (id, org_id, integration_id, dataset_key, is_enabled, options) VALUES ($1, $2, $3, $4, true, '{}'::json)`,
-				uuid.New(), org.String(), i.id, dataset)
+				nextID(), org.String(), i.id, dataset)
 		}
 	}
 	for _, group := range [][]string{sameNames, windowNames, otherNames} {
@@ -127,5 +127,5 @@ VALUES ($1, $2, $3, 'github', 'repository', $4, $5, $4, $6::json, $7, $8, $8)`, 
 	// enabled source of the integration, the scheduler alone takes the tagged.
 	exec(`INSERT INTO integration_sources (id, org_id, integration_id, provider, source_type, external_id, name, full_name, metadata, is_enabled, discovered_at, last_seen_at)
 VALUES ($1, $2, $3, 'github', 'repository', 'acme/untagged-x', 'untagged-x', 'acme/untagged-x', '{}'::json, true, $4, $4)`,
-		uuid.New(), v.orgA.String(), v.by["untagged"].id, at)
+		nextID(), v.orgA.String(), v.by["untagged"].id, at)
 }

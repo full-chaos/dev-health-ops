@@ -5,8 +5,6 @@ package syncvenue
 import (
 	"strings"
 
-	"github.com/google/uuid"
-
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/venueoracle"
 )
 
@@ -45,11 +43,11 @@ func sameRequests(venue *venueoracle.Venue, v ids) []venueoracle.Request {
 		post(venue, "source_ids holds a number", v.incremental.id.String(), a, json(`{"source_ids": ["a", 1]}`)),
 		post(venue, "dataset_keys is an object", v.incremental.id.String(), a, json(`{"dataset_keys": {}}`)),
 		post(venue, "full_resync is not a bool", v.incremental.id.String(), a, json(`{"full_resync": "maybe"}`)),
-		post(venue, "the body is validated before the integration", uuid.NewString(), a, json(`{"full_resync": []}`)),
+		post(venue, "the body is validated before the integration", nextID().String(), a, json(`{"full_resync": []}`)),
 		post(venue, "a source id that is not a uuid", v.incremental.id.String(), a, json(`{"source_ids": ["not-a-uuid"]}`)),
 		post(venue, "the first source id that is not a uuid is named", v.incremental.id.String(), a,
 			json(`{"source_ids": ["`+v.incremental.srcs[0].String()+`", "{`+v.incremental.srcs[1].String()+`}", "nope", "worse"]}`)),
-		post(venue, "unknown integration", uuid.NewString(), a, json(`{}`)),
+		post(venue, "unknown integration", nextID().String(), a, json(`{}`)),
 		post(venue, "not a uuid", "zzz", a, json(`{}`)),
 		post(venue, "another org's integration", v.otherOrg.id.String(), a, json(`{}`)),
 		// clock: the run and its units carry ids each plane makes.

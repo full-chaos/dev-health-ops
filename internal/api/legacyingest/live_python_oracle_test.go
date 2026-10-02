@@ -9,7 +9,6 @@ import (
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
-	"os/exec"
 	"path/filepath"
 	"regexp"
 	"runtime"
@@ -166,7 +165,7 @@ func authCorpus() []oracleCase {
 }
 
 func TestLegacyIngestMatchesFrozenFastAPI(t *testing.T) {
-	spec := programGolden("legacy-ingest", t.Name(), "ac9b69160631589c43be785eb75e032045b2e0b371927198aa9546f332d2233f")
+	spec := programGolden("legacy-ingest", t.Name(), "de1b0f2c31e8ce7cc37635e0cde898fc3217afb3d27650d6097d99f59c810d99")
 	spec.Scrub = scrubGeneratedIDs
 	frozen := venueoracle.OpenGolden(t, spec)
 	_, file, _, _ := runtime.Caller(0)
@@ -182,14 +181,16 @@ func TestLegacyIngestMatchesFrozenFastAPI(t *testing.T) {
 	}
 	input, _ := json.Marshal(wire)
 	request := venueoracle.ProgramRequest("legacy ingest corpus", pythonProgram, input, producerEnv)
-	answers := frozen.Produce(t, root, []venueoracle.Request{request}, func(_ *venueoracle.Producer, _ []venueoracle.Request) []venueoracle.Response {
-		python := pyoracle.Resolve(t, root)
-		command := exec.Command(python, "-c", pythonProgram)
-		command.Env = producerCommandEnv(root)
+	answers := frozen.Produce(t, root, []venueoracle.Request{request}, func(producer *venueoracle.Producer, _ []venueoracle.Request) []venueoracle.Response {
+		producer.RequireDeployed()
+		command, err := producer.Command(context.Background(), producerEnv, nil, "-c", pythonProgram)
+		if err != nil {
+			t.Fatal(err)
+		}
 		command.Stdin = strings.NewReader(string(input))
 		output, err := command.CombinedOutput()
 		if err != nil {
-			t.Fatalf("live python: %v", pyoracle.RunError(python, err, output))
+			t.Fatalf("live python: %v", pyoracle.RunError(command.Path, err, output))
 		}
 		return []venueoracle.Response{{Status: 0, Body: withoutLogLines(output)}}
 	})

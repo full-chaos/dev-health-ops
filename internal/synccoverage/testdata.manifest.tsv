@@ -1,5 +1,9 @@
 # Every file under internal/synccoverage/testdata: sha256, kind, path. Written by `go run ./internal/testsupport/recordedfiles/manifest`; never edit it by hand.
 # python-recorded set: e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855 (0 files)
 # header-before-stamp set: e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855 (0 files)
+-	header	golden/effective-datasets.golden.json
+-	header	golden/payload.golden.json
 a8908607839e43ff009f4834d5f04507e32b4374975ab6ded02584fc3dab2ec5	hand-written	payload_oracle_case.json
+5d6a830ebb3fda466ff2dc92727d5401b5a71a363931716e8275dfcbddf50aa0	hand-written	payload_oracle_case_daily.json
+3574e71082f2ba11ab22db598a74d3673bdd5d0f074cbdd53fc6266c89239e8c	hand-written	payload_oracle_case_unscheduled.json
 12be555821198bacc8786d41fed0a112491210997761e632dbfb7c4c62445186	unclassified	python_payload_oracle.py

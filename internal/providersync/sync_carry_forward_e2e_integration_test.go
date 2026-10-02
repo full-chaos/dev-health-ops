@@ -3,8 +3,8 @@
 package providersync
 
 import (
-	"github.com/full-chaos/dev-health-ops/internal/testsupport/fakehttp"
 	"context"
+	"github.com/full-chaos/dev-health-ops/internal/testsupport/fakehttp"
 	"net/http"
 	"testing"
 	"time"

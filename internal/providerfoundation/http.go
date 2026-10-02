@@ -91,16 +91,30 @@ func NewHTTPClient(provider, base string, doer HTTPDoer, auth Auth, retry RetryP
 		return nil, credentialInvalid("lease_missing")
 	case !retry.valid():
 		return nil, credentialInvalid("retry_policy_invalid")
-	case !httpguard.Guardable(doer):
-		return nil, refuseUnguardableDoer()
+	}
+	if err := admitDoer(doer); err != nil {
+		return nil, err
 	}
 	return &HTTPClient{Provider: strings.ToLower(provider), BaseURL: parsed, Doer: originGuardedAtConstruction(doer), Auth: auth, Retry: retry, Lease: lease, entropy: rand.Reader}, nil
 }
 
+// admitDoer is the ONE admission every constructor that sends a credential through a doer calls (NewHTTPClient, NewGitHubAppAuth,
+// NewPagerDutyClientCredentialsAuth): the allow-list by reachability (httpguard.Guardable). A refused doer is a construction error
+// with fixed text, and no request goes through it. nil when the doer is admitted.
+func admitDoer(doer HTTPDoer) error {
+	if httpguard.Guardable(doer) {
+		return nil
+	}
+	return refuseUnguardableDoer()
+}
+
 // refuseUnguardableDoer is the construction error for a doer the redirect guard cannot reach (a decorator that is not an
 // httpguard.Wrapper): loud, fixed text, and no request ever goes through it.
+// unguardableDoerLog is the fixed text of the refusal line: no doer detail, no value.
+const unguardableDoerLog = "provider client refused: the doer is not an *http.Client or an httpguard.Wrapper chain that ends at one"
+
 func refuseUnguardableDoer() error {
-	slog.Error("provider client refused: the doer is a decorator the redirect guard cannot see inside (make it an httpguard.Wrapper)")
+	slog.Error(unguardableDoerLog)
 	return credentialInvalid("http_doer_unguardable")
 }
 

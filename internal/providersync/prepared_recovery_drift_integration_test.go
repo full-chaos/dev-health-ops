@@ -3,12 +3,12 @@
 package providersync
 
 import (
-	"github.com/full-chaos/dev-health-ops/internal/testsupport/fakehttp"
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
+	"github.com/full-chaos/dev-health-ops/internal/testsupport/fakehttp"
 	"net/http"
 	"strings"
 	"sync"

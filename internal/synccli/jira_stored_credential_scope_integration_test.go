@@ -3,9 +3,9 @@
 package synccli
 
 import (
-	"github.com/full-chaos/dev-health-ops/internal/testsupport/fakehttp"
 	"context"
 	"encoding/json"
+	"github.com/full-chaos/dev-health-ops/internal/testsupport/fakehttp"
 	"net/http"
 	"net/http/httptest"
 	"strings"

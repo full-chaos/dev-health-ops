@@ -3,9 +3,9 @@
 package syncbudget
 
 import (
-	"github.com/full-chaos/dev-health-ops/internal/testsupport/fakehttp"
 	"context"
 	"errors"
+	"github.com/full-chaos/dev-health-ops/internal/testsupport/fakehttp"
 	"io"
 	"log/slog"
 	"net/http"

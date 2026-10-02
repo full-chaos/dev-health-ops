@@ -3,9 +3,9 @@
 package providersync
 
 import (
-	"github.com/full-chaos/dev-health-ops/internal/testsupport/fakehttp"
 	"context"
 	"errors"
+	"github.com/full-chaos/dev-health-ops/internal/testsupport/fakehttp"
 	"net/http"
 	"strings"
 	"testing"

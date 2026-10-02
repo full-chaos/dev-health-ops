@@ -287,8 +287,8 @@ func NewPagerDutyClientCredentialsAuth(credential Credential, doer HTTPDoer) (*P
 	if doer == nil {
 		return nil, credentialInvalid("http_client_missing")
 	}
-	if !httpguard.Guardable(doer) {
-		return nil, refuseUnguardableDoer()
+	if err := admitDoer(doer); err != nil {
+		return nil, err
 	}
 	if missing := unconfiguredNames(map[string]secrets.Value{"client_id": clientID, "client_secret": clientSecret, "subdomain": subdomain}); len(missing) > 0 {
 		return nil, &credentialShapeError{missing: missing}
@@ -415,8 +415,8 @@ func NewGitHubAppAuth(credential Credential, baseURL string, doer HTTPDoer) (*Gi
 	if doer == nil {
 		return nil, credentialInvalid("http_client_missing")
 	}
-	if !httpguard.Guardable(doer) {
-		return nil, refuseUnguardableDoer()
+	if err := admitDoer(doer); err != nil {
+		return nil, err
 	}
 	if missing := unconfiguredNames(map[string]secrets.Value{"app_id": appID, "private_key": privateKey, "installation_id": installationID}); len(missing) > 0 {
 		return nil, &credentialShapeError{missing: missing}

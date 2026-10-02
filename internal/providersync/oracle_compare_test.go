@@ -493,3 +493,34 @@ func TestAKnownDefectGateNamesItsOwnReadsAndNoOthers(t *testing.T) {
 		}
 	}
 }
+
+// A known-defect gate CALLS the attribution helper: requireOracleRediscovers,
+// run for a defect with the right reads, passes, and with another read named
+// (or none) it fails. testing.RunTests runs it as its own test so the failure
+// is observed here and does not fail this one.
+func TestRequireOracleRediscoversAssertsTheDefectsOwnReads(t *testing.T) {
+	cases := oraclePullRequestCases()
+	buggyState := func(t *testing.T, input map[string]any) pullRequestRow {
+		return mustNormalizeOraclePullRequest(t, input, buggyNormalizePRStateStripsOnlySpaces, gitHubPullUserLogin)
+	}
+	passes := func(expected ...divergenceRead) bool {
+		match := func(string, string) (bool, error) { return true, nil }
+		// The pair's frozen answer is found by the test's and the subtest's names,
+		// so the probe runs under the names of the gate it stands for.
+		return testing.RunTests(match, []testing.InternalTest{{Name: "TestGenericOracleRediscoversRowConstructionDefects", F: func(t *testing.T) {
+			requireOracleRediscovers(t, "rediscovers pre-M7 state-normalization whitespace bug", "github/prs/row", cases, buggyState, oraclePullRequestGoOnlyFields, expected...)
+		}}})
+	}
+	if !passes(divergenceRead{"closed_with_trailing_cr", "state"}) {
+		t.Fatal("the gate failed for the defect's own read")
+	}
+	if passes(divergenceRead{"closed_with_trailing_cr", "closed_at"}) {
+		t.Error("the gate passed with another field named: it does not assert the defect's own read")
+	}
+	if passes(divergenceRead{"numeric_login_open_pr", "state"}) {
+		t.Error("the gate passed with another case named: it does not assert the defect's own read")
+	}
+	if passes() {
+		t.Error("the gate passed with no read named")
+	}
+}

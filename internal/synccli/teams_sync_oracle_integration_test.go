@@ -1108,7 +1108,7 @@ func openTeamsGolden(t *testing.T, provider, name, pin, program string, key []by
 // on teamsPythonBuild and are frozen in testdata/golden/teams_github.json (the recipe regenerates them by
 // execution). The rows differ by design in the columns teamsRules names; everything else must be equal.
 func TestSyncTeamsGitHubMatchesFrozenPython(t *testing.T) {
-	frozen, golden := openTeamsGolden(t, "github", "TestSyncTeamsGitHubMatchesFrozenPython", "eb542e7d27cff44d2985c6a1018c0b32de55f7c12ada7e7372da15f17717dbb6", teamsSyncOracleProgram, githubCorpusKey(),
+	frozen, golden := openTeamsGolden(t, "github", "TestSyncTeamsGitHubMatchesFrozenPython", "b8883eb487b4a98f4670d496c65cbae5e6553f0e6bd8535fcfd3f5baceedc4f7", teamsSyncOracleProgram, githubCorpusKey(),
 		func(t *testing.T, producer *venueoracle.Producer) []teamsFrozen {
 			o := newTeamsOracle(t)
 			o.startPython(producer, teamsSyncOracleProgram)

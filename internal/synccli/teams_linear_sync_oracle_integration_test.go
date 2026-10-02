@@ -513,7 +513,24 @@ func linearScenarios() []*linearScenario {
 		{name: "no token anywhere is refused", token: "", teams: two, wantExit: 1, wantRows: 0},
 		{name: "a team with no name takes its key", token: "tok", wantExit: 0, wantRows: 1,
 			teams: []fakeLinearTeam{{Key: "ENG", Name: "", Members: []fakeLinearMember{{ID: "u1", Name: "Alice", Email: "alice@example.com", Active: true}}}}},
-		{name: "a team with no key is skipped by both", token: "tok", wantExit: 0, wantRows: 1,
+		// A named divergence (recorded, not argued): Python skips a team that has no key (providers/teams.py:677-679)
+		// and writes the others, exit 0; the catalog refuses the whole run (linear_reference_catalog.go:303-305,
+		// ErrInvalidConfiguration -> sync_failed, exit 1) and writes nothing. Linear gives every team a key, so the
+		// case does not occur on real data; it is pinned so a change on either side is seen.
+		{name: "a team with no key: python skips it, the catalog refuses the run", token: "tok", wantExit: 0, wantRows: 1, goDiffers: true, goExit: 1, goRows: 0,
+			after: func(t *testing.T, o *teamsOracle, sc *linearScenario, run linearRun, python, goRows []map[string]string) {
+				if len(python) != 1 || python[0]["id"] != "linear:ENG" {
+					t.Errorf("python wrote %v, want only the team that has a key (linear:ENG)", python)
+				}
+				// Both planes are pinned: python's answer above (the recorded exit 0 and the one row), go's here: the
+				// exact refusal text today, which names no cause (a known gap, ticketed): a change on either side fails.
+				if len(goRows) != 0 || !strings.Contains(run.goStderr, `"code":"sync_failed"`) || !strings.Contains(run.goStderr, "provider sync configuration is invalid") {
+					t.Errorf("go wrote %d rows, stderr %q: want a refused run (sync_failed, provider sync configuration is invalid) and no row", len(goRows), run.goStderr)
+				}
+				if run.pythonCode != "0" {
+					t.Errorf("python exit %s: the recorded answer is exit 0 with the keyless team skipped", run.pythonCode)
+				}
+			},
 			teams: []fakeLinearTeam{
 				{Key: "", Name: "Keyless", Members: []fakeLinearMember{{ID: "u9", Name: "Zed", Email: "zed@example.com", Active: true}}},
 				{Key: "ENG", Name: "Engineering", Members: []fakeLinearMember{{ID: "u1", Name: "Alice", Email: "alice@example.com", Active: true}}},

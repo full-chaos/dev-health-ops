@@ -7,14 +7,11 @@ services:
     build: !reset null
     entrypoint: !override ["/usr/local/bin/dho"]
     command: !override ["worker", "--queues=sync,sync_provider", "--queue-concurrency=sync=${BIGBOY_SYNC_SLOTS:-4},sync_provider=2", "--worker-group=sync", "--shutdown-timeout=960s", "--http-addr=:8080", "--health-check-timeout=10s"]
-  # OPTION A (CHAOS-7976, lead D4233): the heavy group runs WITHOUT the investment queue on bigboy (investment.materialize calls an LLM
-  # provider); the test names that exclusion. To serve investment: add it to --queues and --queue-concurrency here and delete it from
-  # unservedOnBigboy in internal/bigboycompose/worker_plane_test.go.
   go-worker-heavy:
     image: ${BIGBOY_OPERATOR_IMAGE:?set BIGBOY_OPERATOR_IMAGE}
     build: !reset null
     entrypoint: !override ["/usr/local/bin/dho"]
-    command: !override ["worker", "--queues=metrics,reports,workgraph", "--queue-concurrency=metrics=2,reports=2,workgraph=1", "--worker-group=heavy", "--shutdown-timeout=7260s", "--http-addr=:8080", "--health-check-timeout=10s"]
+    command: !override ["worker", "--queues=investment,metrics,reports,workgraph", "--queue-concurrency=investment=1,metrics=2,reports=2,workgraph=1", "--worker-group=heavy", "--shutdown-timeout=7260s", "--http-addr=:8080", "--health-check-timeout=10s"]
   go-worker-ops:
     image: ${BIGBOY_OPERATOR_IMAGE:?set BIGBOY_OPERATOR_IMAGE}
     build: !reset null

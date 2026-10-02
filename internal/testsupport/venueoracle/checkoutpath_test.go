@@ -194,16 +194,22 @@ func TestPythonPathRelRefusesWhatIsNotARootRelativeDirectory(t *testing.T) {
 // The venue refuses a bad PythonPathRel when it binds the golden, recording or frozen: the relative name is the
 // declared input and must be one.
 func TestBindingRefusesABadPythonPathRelInBothModes(t *testing.T) {
+	const guardWords = "Options.PythonPathRel entry #0 is an absolute path"
 	options := Options{Root: t.TempDir(), JWTKey: "k", PythonPathRel: []string{"/abs/stub"}}
-	if err := recordingGolden(t).bindPythonEnv(options); err == nil || !strings.Contains(err.Error(), "PythonPathRel") {
-		t.Fatalf("a recording accepted an absolute PythonPathRel: %v", err)
+	if err := recordingGolden(t).bindPythonEnv(options); err == nil || !strings.Contains(err.Error(), guardWords) {
+		t.Fatalf("a recording did not refuse an absolute PythonPathRel with the guard's own words: %v", err)
+	}
+	// A frozen golden whose key is the key of the BAD options, so no other check can refuse the bind: only the guard can.
+	frozen, _ := frozenWithEnv(t, currentKey(t, options), pythonEnvKeyVersion)
+	if err := frozen.bindPythonEnv(options); err == nil || !strings.Contains(err.Error(), guardWords) {
+		t.Fatalf("a frozen run did not refuse an absolute PythonPathRel with the guard's own words: %v", err)
 	}
 	good := Options{Root: options.Root, JWTKey: "k", PythonPathRel: []string{"stub"}}
-	frozen, _ := frozenWithEnv(t, currentKey(t, good), pythonEnvKeyVersion)
-	if err := frozen.bindPythonEnv(options); err == nil || !strings.Contains(err.Error(), "PythonPathRel") {
-		t.Fatalf("a frozen run accepted an absolute PythonPathRel: %v", err)
-	}
 	if err := recordingGolden(t).bindPythonEnv(good); err != nil {
 		t.Fatalf("a root-relative PythonPathRel is refused: %v", err)
+	}
+	goodFrozen, _ := frozenWithEnv(t, currentKey(t, good), pythonEnvKeyVersion)
+	if err := goodFrozen.bindPythonEnv(good); err != nil {
+		t.Fatalf("a frozen run refuses a root-relative PythonPathRel: %v", err)
 	}
 }

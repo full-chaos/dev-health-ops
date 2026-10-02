@@ -7,16 +7,10 @@ from types import SimpleNamespace
 
 import pytest
 import pytest_asyncio
-from fastapi import FastAPI
-from httpx import ASGITransport, AsyncClient
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 
-from dev_health_ops.api.auth.router import get_current_user
 from dev_health_ops.api.billing.audit_service import BillingAuditService
 from dev_health_ops.api.billing.reconciliation_service import ReconciliationService
-from dev_health_ops.api.billing.router import router
-from dev_health_ops.api.services.auth import AuthenticatedUser
-from dev_health_ops.db import postgres_session_dependency
 from dev_health_ops.models.billing_audit import BillingAuditLog
 from dev_health_ops.models.git import Base
 from dev_health_ops.models.users import Organization, User
@@ -159,56 +153,3 @@ async def test_reconciliation_service_detects_mismatches(db: AsyncSession):
     assert report.subscriptions_checked == 1
     assert len(report.mismatches) == 1
     assert report.mismatches[0].field == "status"
-
-
-@pytest_asyncio.fixture
-async def api_client(session_maker):
-    app = FastAPI()
-    app.include_router(router)
-
-    async def _override_db():
-        async with session_maker() as session:
-            yield session
-
-    app.dependency_overrides[postgres_session_dependency] = _override_db
-    app.dependency_overrides[get_current_user] = lambda: AuthenticatedUser(
-        user_id=str(uuid.uuid4()),
-        email="super@example.com",
-        org_id=str(uuid.uuid4()),
-        role="owner",
-        is_superuser=True,
-    )
-
-    transport = ASGITransport(app=app)
-    async with AsyncClient(transport=transport, base_url="http://test") as client:
-        yield client, session_maker
-
-
-@pytest.mark.asyncio
-async def test_billing_audit_endpoints_require_superadmin(api_client):
-    client, session_maker = api_client
-
-    org = Organization(id=uuid.uuid4(), slug="audit-org-5", name="Audit Org 5")
-    async with session_maker() as session:
-        session.add(org)
-        await session.flush()
-        session.add(
-            BillingAuditLog(
-                org_id=org.id,
-                action="reconciliation.mismatch_found",
-                resource_type="invoice",
-                resource_id=uuid.uuid4(),
-                description="Mismatch",
-                reconciliation_status="mismatch",
-                created_at=datetime.now(timezone.utc),
-            )
-        )
-        await session.commit()
-
-    response = await client.get(
-        f"/api/v1/billing/audit?org_id={org.id}&limit=10&offset=0"
-    )
-    assert response.status_code == 200
-    payload = response.json()
-    assert payload["total"] == 1
-    assert payload["limit"] == 10

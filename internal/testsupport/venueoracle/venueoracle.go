@@ -514,17 +514,7 @@ func Start(t *testing.T, ctx context.Context, options Options) *Venue {
 		liveVenues.Store(rootTestName(t), struct{}{})
 	}
 	if !frozen {
-		python := pyoracle.Resolve(t, options.Root)
-		bin, err := interpreterDir(python)
-		if err != nil {
-			t.Fatalf("venue: %v", err)
-		}
-		// Activate the interpreter's environment as `source bin/activate` does:
-		// its directory goes first on PATH, and the program runs as "python3".
-		t.Setenv("PATH", bin+string(os.PathListSeparator)+os.Getenv("PATH"))
-		if found, err := exec.LookPath("python3"); err != nil || filepath.Dir(found) != bin {
-			t.Fatalf("venue: python3 on PATH is %q (%v), want the one in %s", found, err, bin)
-		}
+		bin := activateInterpreter(t, options.Root, "venue")
 		v.Python = filepath.Join(bin, "python3")
 	}
 	v.hostEnv = inheritedValues(map[string]string{})
@@ -671,6 +661,34 @@ func Start(t *testing.T, ctx context.Context, options Options) *Venue {
 	v.provisionRoles(t, ctx)
 	v.migrate(t, ctx, logger)
 	return v
+}
+
+// ActivateInterpreter is the one place a recording resolves the real
+// interpreter (pyoracle.ResolveLauncher, which gives it in a recording too,
+// where pyoracle.Resolve gives a stand-in), puts its directory first on PATH
+// for the rest of the test as `source bin/activate` does, and checks that the
+// python3 a command would start is the one in that directory. It returns that
+// directory. The venue, the producer and programoracle all start here.
+func ActivateInterpreter(t *testing.T, root string) (string, error) {
+	t.Helper()
+	bin, err := interpreterDir(pyoracle.ResolveLauncher(t, root))
+	if err != nil {
+		return "", err
+	}
+	t.Setenv("PATH", bin+string(os.PathListSeparator)+os.Getenv("PATH"))
+	if found, err := exec.LookPath("python3"); err != nil || filepath.Dir(found) != bin {
+		return "", fmt.Errorf("python3 on PATH is %q (%v), want the one in %s", found, err, bin)
+	}
+	return bin, nil
+}
+
+func activateInterpreter(t *testing.T, root, who string) string {
+	t.Helper()
+	bin, err := ActivateInterpreter(t, root)
+	if err != nil {
+		t.Fatalf("%s: %v", who, err)
+	}
+	return bin
 }
 
 // interpreterDir returns the directory of the interpreter pyoracle chose,

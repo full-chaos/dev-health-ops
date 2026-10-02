@@ -1,0 +1,458 @@
+[
+ {
+  "name": "docs only",
+  "format": "nul",
+  "paths": [
+   "docs/guide.md",
+   "README.md"
+  ]
+ },
+ {
+  "name": "go only",
+  "format": "nul",
+  "paths": [
+   "internal/jobs/metrics/daily/clickhouse.go"
+  ]
+ },
+ {
+  "name": "root go file and go.mod",
+  "format": "nul",
+  "paths": [
+   "main.go",
+   "go.mod",
+   "go.sum"
+  ]
+ },
+ {
+  "name": "chart only",
+  "format": "nul",
+  "paths": [
+   "deploy/helm/dev-health/values.yaml"
+  ]
+ },
+ {
+  "name": "chart sibling not covered",
+  "format": "nul",
+  "paths": [
+   "deploy/helm/other-chart/values.yaml"
+  ]
+ },
+ {
+  "name": "mixed docs and go",
+  "format": "nul",
+  "paths": [
+   "docs/a.md",
+   "internal/x/y.go",
+   "web/readme.md"
+  ]
+ },
+ {
+  "name": "deleted file reported as a plain path",
+  "format": "nul",
+  "paths": [
+   "internal/old/removed.go"
+  ]
+ },
+ {
+  "name": "rename reported as delete and add",
+  "format": "nul",
+  "paths": [
+   "internal/a.go",
+   "docs/a.md"
+  ]
+ },
+ {
+  "name": "rename to an irrelevant path only",
+  "format": "nul",
+  "paths": [
+   "notes/old.txt",
+   "notes/new.txt"
+  ]
+ },
+ {
+  "name": "single star does not cross a slash",
+  "format": "nul",
+  "paths": [
+   "internal/queryapi/x/y.json"
+  ]
+ },
+ {
+  "name": "double star json under internal",
+  "format": "nul",
+  "paths": [
+   "internal/queryapi/deep/er/file.json"
+  ]
+ },
+ {
+  "name": "testdata anywhere",
+  "format": "nul",
+  "paths": [
+   "pkg/sub/testdata/x.txt"
+  ]
+ },
+ {
+  "name": "manifest tsv anywhere",
+  "format": "nul",
+  "paths": [
+   "pkg/testdata.manifest.tsv"
+  ]
+ },
+ {
+  "name": "exact file entry",
+  "format": "nul",
+  "paths": [
+   "ci/check_go.sh"
+  ]
+ },
+ {
+  "name": "near miss of an exact entry",
+  "format": "nul",
+  "paths": [
+   "ci/check_go.sh.bak"
+  ]
+ },
+ {
+  "name": "python only source under a listed prefix",
+  "format": "nul",
+  "paths": [
+   "src/dev_health_ops/api/routes.py"
+  ]
+ },
+ {
+  "name": "python source outside the list",
+  "format": "nul",
+  "paths": [
+   "src/dev_health_ops/other/mod.py"
+  ]
+ },
+ {
+  "name": "regex special characters in a path",
+  "format": "nul",
+  "paths": [
+   "internal/a+b(c)/x.txt"
+  ]
+ },
+ {
+  "name": "non-ascii path",
+  "format": "nul",
+  "paths": [
+   "docs/résumé.md",
+   "internal/ünï/x.go"
+  ]
+ },
+ {
+  "name": "path with an embedded newline",
+  "format": "nul",
+  "paths": [
+   "internal/new\nline/module.go"
+  ]
+ },
+ {
+  "name": "embedded newline and an irrelevant path",
+  "format": "nul",
+  "paths": [
+   "docs/a\nb.md"
+  ]
+ },
+ {
+  "name": "more than twenty matches",
+  "format": "nul",
+  "paths": [
+   "internal/f00.go",
+   "internal/f01.go",
+   "internal/f02.go",
+   "internal/f03.go",
+   "internal/f04.go",
+   "internal/f05.go",
+   "internal/f06.go",
+   "internal/f07.go",
+   "internal/f08.go",
+   "internal/f09.go",
+   "internal/f10.go",
+   "internal/f11.go",
+   "internal/f12.go",
+   "internal/f13.go",
+   "internal/f14.go",
+   "internal/f15.go",
+   "internal/f16.go",
+   "internal/f17.go",
+   "internal/f18.go",
+   "internal/f19.go",
+   "internal/f20.go",
+   "internal/f21.go",
+   "internal/f22.go",
+   "internal/f23.go",
+   "internal/f24.go"
+  ]
+ },
+ {
+  "name": "exactly twenty matches",
+  "format": "nul",
+  "paths": [
+   "internal/f00.go",
+   "internal/f01.go",
+   "internal/f02.go",
+   "internal/f03.go",
+   "internal/f04.go",
+   "internal/f05.go",
+   "internal/f06.go",
+   "internal/f07.go",
+   "internal/f08.go",
+   "internal/f09.go",
+   "internal/f10.go",
+   "internal/f11.go",
+   "internal/f12.go",
+   "internal/f13.go",
+   "internal/f14.go",
+   "internal/f15.go",
+   "internal/f16.go",
+   "internal/f17.go",
+   "internal/f18.go",
+   "internal/f19.go"
+  ]
+ },
+ {
+  "name": "empty change set",
+  "format": "nul",
+  "paths": []
+ },
+ {
+  "name": "empty entries between NULs",
+  "format": "nul",
+  "paths": [
+   "",
+   "docs/a.md",
+   ""
+  ]
+ },
+ {
+  "name": "newline format one go path",
+  "format": "newline",
+  "paths": [
+   "internal/a.go"
+  ]
+ },
+ {
+  "name": "newline format blank lines and padding",
+  "format": "newline",
+  "paths": [
+   "",
+   "  docs/a.md  ",
+   "",
+   "internal/b.go "
+  ]
+ },
+ {
+  "name": "newline format irrelevant",
+  "format": "newline",
+  "paths": [
+   "docs/a.md",
+   "web/b.md"
+  ]
+ },
+ {
+  "name": "workflow file itself",
+  "format": "nul",
+  "paths": [
+   ".github/workflows/go-quality.yml"
+  ]
+ },
+ {
+  "name": "decider script itself",
+  "format": "nul",
+  "paths": [
+   "ci/go_relevance.py"
+  ]
+ },
+ {
+  "name": "dotfile entry",
+  "format": "nul",
+  "paths": [
+   ".dockerignore"
+  ]
+ },
+ {
+  "name": "double star spans several directories",
+  "format": "nul",
+  "paths": [
+   "scripts/a/b/c.sh"
+  ]
+ },
+ {
+  "name": "exactly twenty-one matches",
+  "format": "nul",
+  "paths": [
+   "internal/f00.go",
+   "internal/f01.go",
+   "internal/f02.go",
+   "internal/f03.go",
+   "internal/f04.go",
+   "internal/f05.go",
+   "internal/f06.go",
+   "internal/f07.go",
+   "internal/f08.go",
+   "internal/f09.go",
+   "internal/f10.go",
+   "internal/f11.go",
+   "internal/f12.go",
+   "internal/f13.go",
+   "internal/f14.go",
+   "internal/f15.go",
+   "internal/f16.go",
+   "internal/f17.go",
+   "internal/f18.go",
+   "internal/f19.go",
+   "internal/f20.go"
+  ]
+ },
+ {
+  "name": "newline format left padding only",
+  "format": "newline",
+  "paths": [
+   "  internal/b.go"
+  ]
+ },
+ {
+  "name": "newline format right padding only",
+  "format": "newline",
+  "paths": [
+   "internal/b.go  "
+  ]
+ },
+ {
+  "name": "NUL format with an unterminated last entry",
+  "format": "raw",
+  "paths": [],
+  "raw": "docs/a.md\u0000internal/b.go"
+ },
+ {
+  "name": "newline format with an unterminated last line",
+  "format": "raw",
+  "paths": [],
+  "raw": "docs/a.md\ninternal/b.go"
+ },
+ {
+  "name": "a path matching two entries is counted once",
+  "format": "nul",
+  "paths": [
+   "internal/x/testdata/a.go"
+  ]
+ },
+ {
+  "name": "dot in an entry is a literal dot",
+  "format": "nul",
+  "paths": [
+   "docs/cargo"
+  ]
+ },
+ {
+  "name": "entry is anchored at the start",
+  "format": "nul",
+  "paths": [
+   "docs/Makefile"
+  ]
+ },
+ {
+  "name": "single star stops at a slash in a pattern with a star",
+  "format": "nul",
+  "paths": [
+   "docs/sub/a.md"
+  ],
+  "workflow": "on:\n  pull_request:\n    paths:\n      - 'docs/*.md'\n"
+ },
+ {
+  "name": "single star matches within one directory",
+  "format": "nul",
+  "paths": [
+   "docs/a.md"
+  ],
+  "workflow": "on:\n  pull_request:\n    paths:\n      - 'docs/*.md'\n"
+ },
+ {
+  "name": "paths-ignore is not read as paths",
+  "format": "nul",
+  "paths": [
+   "docs/a.md"
+  ],
+  "workflow": "on:\n  pull_request:\n    paths-ignore:\n      - 'docs/**'\n    paths:\n      - '**/*.go'\n"
+ },
+ {
+  "name": "single-quoted entry with a trailing comment",
+  "format": "nul",
+  "paths": [
+   "docs/a.md"
+  ],
+  "workflow": "on:\n  pull_request:\n    paths:\n      # a comment line inside the list\n      - 'docs/**'  # trailing comment on a single-quoted entry\n      - \"scripts/**\"   # trailing comment on a double-quoted entry\n      - src/plain/**  # trailing comment on a plain entry\n      - plainfile.txt\n"
+ },
+ {
+  "name": "double-quoted entry with a trailing comment",
+  "format": "nul",
+  "paths": [
+   "scripts/b.sh"
+  ],
+  "workflow": "on:\n  pull_request:\n    paths:\n      # a comment line inside the list\n      - 'docs/**'  # trailing comment on a single-quoted entry\n      - \"scripts/**\"   # trailing comment on a double-quoted entry\n      - src/plain/**  # trailing comment on a plain entry\n      - plainfile.txt\n"
+ },
+ {
+  "name": "plain entry with a trailing comment",
+  "format": "nul",
+  "paths": [
+   "src/plain/x.txt"
+  ],
+  "workflow": "on:\n  pull_request:\n    paths:\n      # a comment line inside the list\n      - 'docs/**'  # trailing comment on a single-quoted entry\n      - \"scripts/**\"   # trailing comment on a double-quoted entry\n      - src/plain/**  # trailing comment on a plain entry\n      - plainfile.txt\n"
+ },
+ {
+  "name": "plain entry without a comment",
+  "format": "nul",
+  "paths": [
+   "plainfile.txt"
+  ],
+  "workflow": "on:\n  pull_request:\n    paths:\n      # a comment line inside the list\n      - 'docs/**'  # trailing comment on a single-quoted entry\n      - \"scripts/**\"   # trailing comment on a double-quoted entry\n      - src/plain/**  # trailing comment on a plain entry\n      - plainfile.txt\n"
+ },
+ {
+  "name": "path outside every quoted-form entry",
+  "format": "nul",
+  "paths": [
+   "other/z.txt"
+  ],
+  "workflow": "on:\n  pull_request:\n    paths:\n      # a comment line inside the list\n      - 'docs/**'  # trailing comment on a single-quoted entry\n      - \"scripts/**\"   # trailing comment on a double-quoted entry\n      - src/plain/**  # trailing comment on a plain entry\n      - plainfile.txt\n"
+ },
+ {
+  "name": "double-quoted on key",
+  "format": "nul",
+  "paths": [
+   "internal/a.go"
+  ],
+  "workflow": "\"on\":\n  pull_request:\n    paths:\n      - '**/*.go'\n"
+ },
+ {
+  "name": "single-quoted on key",
+  "format": "nul",
+  "paths": [
+   "internal/a.go"
+  ],
+  "workflow": "'on':\n  pull_request:\n    paths:\n      - '**/*.go'\n"
+ },
+ {
+  "name": "paths under another top-level key are not read",
+  "format": "nul",
+  "paths": [
+   "docs/a.md"
+  ],
+  "workflow": "on:\n  pull_request:\n    paths:\n      - '**/*.go'\nother:\n  pull_request:\n    paths:\n      - 'docs/**'\n"
+ },
+ {
+  "name": "empty change set with a workflow that would be refused",
+  "format": "raw",
+  "paths": [],
+  "raw": "",
+  "workflow": "on:\n  pull_request:\n    branches: [main]\n"
+ },
+ {
+  "name": "plain entry with trailing spaces and no comment",
+  "format": "nul",
+  "paths": [
+   "docs/a.md"
+  ],
+  "workflow": "on:\n  pull_request:\n    paths:\n      - docs/**   \n"
+ }
+]

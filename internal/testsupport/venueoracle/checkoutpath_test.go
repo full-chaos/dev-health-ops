@@ -28,12 +28,12 @@ func TestRecordingRefusesAKeyedValueThatHoldsTheCheckoutPath(t *testing.T) {
 	if strings.Contains(err.Error(), root) {
 		t.Fatalf("the refusal shows the path: %v", err)
 	}
-	// The same entry in a frozen run is not this guard's business (the key already differs per checkout).
-	frozen, ferr := openGolden(GoldenSpec{Path: filepath.Join(t.TempDir(), "g.json"), PythonBuild: goldenBuild, Recipe: "record it"}, t.Name(), false)
-	if ferr == nil {
-		if err := frozen.bindPythonEnv(options); err != nil && strings.Contains(err.Error(), "absolute path of a checkout") {
-			t.Fatalf("a frozen run refuses it as a recording would: %v", err)
-		}
+	// The same options in a FROZEN run are not this guard's business: the golden's key already differs per
+	// checkout and the replay compares it. A frozen golden is opened for them and must bind without this
+	// refusal (a guard that also ran frozen would fail here).
+	frozen, _ := frozenWithEnv(t, currentKey(t, options), pythonEnvKeyVersion)
+	if err := frozen.bindPythonEnv(options); err != nil {
+		t.Fatalf("a frozen run is refused as a recording is: %v", err)
 	}
 }
 
@@ -68,6 +68,9 @@ func TestHoldsPathFindsTheRootWhole(t *testing.T) {
 		"":                          false,
 		"relative/path":             false,
 		"--dir '" + root + "/data'": true,
+		// The first occurrence is a sibling name, the root comes after it: the search goes on.
+		"/work/tree/ops2/src:" + root + "/src": true,
+		"/work/tree/opsx/a:" + root:            true,
 	} {
 		if got := holdsPath(value, root); got != want {
 			t.Errorf("holdsPath(%q) = %v, want %v", value, got, want)
@@ -97,5 +100,55 @@ func TestProducerCommandRefusesADeclaredValueThatHoldsTheCheckoutPath(t *testing
 	_, err := producer.Command(t.Context(), map[string]string{"PYTHONPATH": filepath.Join(root, "src")}, nil, "-c", "pass")
 	if err == nil || !strings.Contains(err.Error(), "PYTHONPATH") || !strings.Contains(err.Error(), "absolute path of a checkout") || strings.Contains(err.Error(), root) {
 		t.Fatalf("a declared value holding the checkout path is not refused by name: %v", err)
+	}
+}
+
+// A variable a test set in the process (not through Options.PythonEnv) reaches the child and is keyed by
+// name and value: it is read too.
+func TestRecordingRefusesAProcessVariableThatHoldsTheCheckoutPath(t *testing.T) {
+	root := t.TempDir()
+	t.Setenv("SOME_TEST_DIR_FOR_CHECKOUT_GUARD", filepath.Join(root, "stub"))
+	err := recordingGolden(t).bindPythonEnv(Options{Root: root, JWTKey: "k"})
+	if err == nil || !strings.Contains(err.Error(), "SOME_TEST_DIR_FOR_CHECKOUT_GUARD") {
+		t.Fatalf("a process variable holding the checkout path is not refused: %v", err)
+	}
+}
+
+// A variable a test changes AFTER the venue was built is the call's own environment and is read the same way.
+func TestRecordingRefusesAVariableChangedAfterTheVenueThatHoldsTheCheckoutPath(t *testing.T) {
+	root := t.TempDir()
+	golden := recordingGolden(t)
+	golden.verifiedRoot = root
+	if err := golden.bindPythonEnv(Options{Root: root, JWTKey: "k"}); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("LATER_TEST_DIR_FOR_CHECKOUT_GUARD", filepath.Join(root, "later"))
+	if _, err := golden.callEnvKey(nil); err == nil || !strings.Contains(err.Error(), "LATER_TEST_DIR_FOR_CHECKOUT_GUARD") {
+		t.Fatalf("a variable changed after the venue, holding the checkout path, is not refused: %v", err)
+	}
+}
+
+// The guard also does not run for a frozen golden's calls.
+func TestAFrozenCallEntryThatHoldsAPathIsNotRefused(t *testing.T) {
+	root := t.TempDir()
+	options := Options{Root: root, JWTKey: "k"}
+	frozen, _ := frozenWithEnv(t, currentKey(t, options), pythonEnvKeyVersion)
+	frozen.verifiedRoot = root
+	if _, err := frozen.callEnvKey([]string{"EXTRA=" + filepath.Join(root, "x")}); err != nil && strings.Contains(err.Error(), "absolute path of a checkout") {
+		t.Fatalf("a frozen call is refused as a recording is: %v", err)
+	}
+}
+
+// The module root of the repository the test runs in is a root too, whatever Options.Root says.
+func TestRecordingRefusesAValueThatHoldsTheModuleRoot(t *testing.T) {
+	roots := checkoutRoots(Options{})
+	if len(roots) == 0 {
+		t.Fatal("no module root found from the test's directory")
+	}
+	moduleRoot := roots[0]
+	options := Options{Root: t.TempDir(), JWTKey: "k", PythonEnv: []string{"DATA_DIR=" + filepath.Join(moduleRoot, "internal")}}
+	err := recordingGolden(t).bindPythonEnv(options)
+	if err == nil || !strings.Contains(err.Error(), "DATA_DIR") {
+		t.Fatalf("a value holding the module root is not refused: %v", err)
 	}
 }

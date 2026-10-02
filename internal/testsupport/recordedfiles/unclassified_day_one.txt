@@ -974,3 +974,4 @@ tests/fixtures/test_metric_coherence.py
 tests/fixtures/test_product_telemetry_generator.py
 tests/fixtures/test_team_cooccurrence.py
 tests/fixtures/workgraph_components_split_edges.json
+internal/adminops/testdata/zz_planted_not_a_file.json

@@ -641,9 +641,10 @@ func staleExclusions(reads map[string]outcome) []string {
 // members. Anything else on such a read is a mismatch, so the pin cannot hide a wrong Go answer.
 var knownDivergences = map[string]struct {
 	pythonDetail string
-	goSubjects   []string
+	goRecords    []string // every non-excluded field of every Go record, "name=value", in order
 }{
-	"member-without-team users ": {pythonDetail: "TEAM_MEMBER relation requires team node", goSubjects: []string{"ari:cloud:identity::user/acc-7"}},
+	"member-without-team users ": {pythonDetail: "TEAM_MEMBER relation requires team node",
+		goRecords: []string{"subject_user_id=ari:cloud:identity::user/acc-7", "relation_type=TEAM_MEMBER"}},
 }
 
 func knownDivergenceFor(key string) (string, bool) {
@@ -665,17 +666,15 @@ func checkKnownDivergence(prefix string, py, gv outcome) string {
 		return fmt.Sprintf("Go no longer serves the members (status %s, %q)", gv.Status, gv.Detail)
 	}
 	var got []string
-	for _, r := range gv.Records {
+	for _, r := range withoutExcluded(gv).Records {
 		for _, f := range r {
-			if f[0] == "subject_user_id" {
-				if value, ok := f[1].(leaf); ok {
-					got = append(got, value.V)
-				}
-			}
+			name, _ := f[0].(string)
+			value, _ := f[1].(leaf)
+			got = append(got, name+"="+value.V)
 		}
 	}
-	if strings.Join(got, ",") != strings.Join(known.goSubjects, ",") {
-		return fmt.Sprintf("Go serves members %v, want %v", got, known.goSubjects)
+	if strings.Join(got, ",") != strings.Join(known.goRecords, ",") {
+		return fmt.Sprintf("Go serves %v, want %v", got, known.goRecords)
 	}
 	return ""
 }

@@ -36,14 +36,15 @@ func TestSanitizeIsTheCharacterizedFunction(t *testing.T) {
 		"[REDACTED] [REDACTED] [REDACTED] [REDACTED] [REDACTED] [REDACTED] [REDACTED]",
 		"[REDACTED]host/db and [REDACTED]host",
 		"no secret here token",
-		"SKIP",
-		"SKIP",
+		"",
+		"",
 		"mixed [REDACTED] and\n[REDACTED]",
 	}
+	// the two over-length corpus rows hold their exact expected text too: 4100 two-byte runes keep the
+	// first 3986 runes whole and end in the suffix; the 3995-rune row is under the cap and stays whole.
+	expected[18] = strings.Repeat("é", 3986) + "...[truncated]"
+	expected[19] = inputs[19]
 	for index, input := range inputs {
-		if expected[index] == "SKIP" {
-			continue
-		}
 		if got := Sanitize(input); got != expected[index] {
 			t.Errorf("Sanitize(%q) = %q; want %q", input, got, expected[index])
 		}

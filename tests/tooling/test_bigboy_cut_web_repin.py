@@ -321,18 +321,66 @@ def test_a_head_with_its_own_image_is_pinned_and_recorded(tmp_path: Path) -> Non
     )
 
 
-def test_the_cut_stops_before_any_recreate_when_the_web_repin_fails() -> None:
-    lines = _lines(CUT)
-    call_at = _first(lines, "bigboy-repin-web.sh")
-    migrate_at = _first(lines, "--no-deps migrate", start=call_at)
-    guard = [
-        i
-        for i in range(call_at, migrate_at)
-        if "rc_web" in lines[i] and "exit 1" in lines[i]
-    ]
-    assert guard, (
-        "bigboy-cut.sh must exit 1 on a failed web re-pin before migrate (CHAOS-7687)"
+def _entry_point_module():
+    """The real-entry-point harness of test_bigboy_cut_entry_point.py (stub docker and gh on PATH)."""
+    import importlib.util
+
+    path = Path(__file__).with_name("test_bigboy_cut_entry_point.py")
+    spec = importlib.util.spec_from_file_location(
+        "_bigboy_cut_entry_point_harness", path
     )
-    assert "st repin-web $rc_web" in lines[call_at], (
-        "the step line must keep naming the rc"
+    assert spec is not None and spec.loader is not None
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    return mod
+
+
+def _run_cut(
+    tmp_path: Path, *, web_image_exists: bool
+) -> subprocess.CompletedProcess[str]:
+    ep = _entry_point_module()
+    root = ep._build_bigboy_root(tmp_path)
+    stub_bin = tmp_path / "stubbin"
+    stub_bin.mkdir()
+    ep._docker_stub(
+        stub_bin, routing_response=ep._routing_json("carried"), routing_rc=0
     )
+    ep._gh_stub(stub_bin)
+    if not web_image_exists:
+        docker = stub_bin / "docker"
+        text = docker.read_text()
+        assert "dev-health-web:sha-" in text
+        docker.write_text(
+            text.replace("dev-health-web:sha-", "dev-health-web:NO-IMAGE-")
+        )
+    env = {
+        "PATH": f"{stub_bin}:/usr/bin:/bin",
+        "BIGBOY_ROOT": str(root),
+        "WEB_REPIN_WAIT_TRIES": "1",
+        "WEB_REPIN_WAIT_SECS": "0",
+    }
+    return subprocess.run(
+        ["bash", str(CUT), ep._OLD8, ep._NEW],
+        capture_output=True,
+        text=True,
+        timeout=120,
+        check=False,
+        env=env,
+    )
+
+
+def test_the_cut_stops_before_migrate_when_the_web_repin_fails(tmp_path: Path) -> None:
+    proc = _run_cut(tmp_path, web_image_exists=False)
+    assert "STEP repin-web rc=3" in proc.stdout, proc.stdout
+    assert proc.returncode == 1, (proc.returncode, proc.stdout)
+    assert "cut stops: web re-pin failed rc=3" in proc.stdout
+    assert (
+        "STEP migrate" not in proc.stdout and "STEP routing-carry" not in proc.stdout
+    ), proc.stdout
+
+
+def test_the_cut_goes_on_to_migrate_when_the_web_repin_succeeds(tmp_path: Path) -> None:
+    proc = _run_cut(tmp_path, web_image_exists=True)
+    assert "STEP repin-web rc=0" in proc.stdout, proc.stdout
+    assert "cut stops: web re-pin failed" not in proc.stdout
+    assert "STEP migrate rc=" in proc.stdout, proc.stdout

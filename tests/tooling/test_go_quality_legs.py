@@ -473,3 +473,21 @@ def test_a_race_leg_with_a_package_that_has_no_row_fails_before_any_test_runs(
     assert victim in proc.stderr
     assert calls == [], "go test must not run when a package has no row"
     assert "ci-leg race: OK" not in proc.stdout
+
+
+def test_a_race_leg_with_an_empty_weights_file_fails_before_any_test_runs(
+    tmp_path: Path,
+) -> None:
+    empty = tmp_path / "empty.tsv"
+    empty.write_text("# no rows\n")
+    proc, calls = _run_check_go(
+        tmp_path / "run",
+        "ci-leg",
+        "race",
+        "1",
+        "3",
+        extra_env={"GO_RACE_WEIGHTS": str(empty)},
+    )
+    assert proc.returncode != 0, proc.stdout[-800:]
+    assert "go_race_missing_rows.awk failed" in proc.stderr
+    assert calls == [], "go test must not run when the weights file holds no row"

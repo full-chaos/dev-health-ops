@@ -48,6 +48,11 @@
     "digest": "7ec8e919d784ed0dea1b87e85d64ffe18d05557379a397d07da0ab958694ffd1"
   },
   {
+    "operation": "capacityForecast",
+    "digest": "b4fb8f075aba9954714f10f7f4451242d969548d6392d778dae1177759f80780",
+    "legacy": true
+  },
+  {
     "operation": "capacityForecasts",
     "digest": "43890adbbf75ac3ad71c29f728a82e35d035c3f2c701f0ced116559fa28b6c20"
   },

@@ -63,7 +63,7 @@ func TestNoFileOutsideSynclogImportsTheLogPackages(t *testing.T) {
 	if len(violations) != 0 {
 		t.Fatalf("files of the package import the log packages: %v", violations)
 	}
-	synclogFiles, slogImporters := 0, 0
+	synclogFiles, slogImporters, plainLogImporters := 0, 0, 0
 	inner, err := os.ReadDir("synclog")
 	if err != nil {
 		t.Fatal(err)
@@ -78,10 +78,16 @@ func TestNoFileOutsideSynclogImportsTheLogPackages(t *testing.T) {
 		}
 		synclogFiles++
 		for _, spec := range file.Imports {
-			if path, _ := strconv.Unquote(spec.Path.Value); path == "log/slog" {
+			switch path, _ := strconv.Unquote(spec.Path.Value); path {
+			case "log/slog":
 				slogImporters++
+			case "log":
+				plainLogImporters++
 			}
 		}
+	}
+	if plainLogImporters != 0 {
+		t.Fatalf("synclog: %d files import the standard log package; only log/slog is allowed, in one file", plainLogImporters)
 	}
 	if synclogFiles == 0 || slogImporters != 1 {
 		t.Fatalf("synclog: %d files, %d import log/slog; want exactly one importer", synclogFiles, slogImporters)

@@ -24,7 +24,7 @@ func TransportFailure(err error) error {
 	}
 	op := "exchange"
 	var urlErr *url.Error
-	if chainAs(boundedChain(err), &urlErr) && urlErr.Op != "" {
+	if chainAs(boundedChain(err), &urlErr) && urlErr != nil && urlErr.Op != "" {
 		op = urlErr.Op
 	}
 	return &classifiedError{text: op + " request failed: " + TransportClass(err), cause: err}

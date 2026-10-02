@@ -272,6 +272,92 @@ func TestCollectSendsTheOrganizationSiteCredentialsAndOptIns(t *testing.T) {
 	}
 }
 
+// liveQueryContextRefusal is what the live gateway answered to a Teamwork Graph team-members read without the
+// X-Query-Context header (the message text of the executed run of CHAOS-7132, 2026-10-02): the gateway
+// refuses the read, it does not return an empty roster.
+const liveQueryContextRefusal = "Query context must not be null and should be a valid platform site or workspace ARI. Please send the required X-Query-Context header."
+
+// requireQueryContext serves the standard answers, except that a team-members or team-projects read without the
+// platform site ARI of params()'s site is refused with the live gateway's message, as the live gateway refuses it.
+func requireQueryContext(req request) (int, any) {
+	if (req.Operation == "TeamworkGraphTeamUsers" || req.Operation == "TeamworkGraphTeamActiveProjects") && req.Header.Get("X-Query-Context") != "ari:cloud:platform::site/site-uuid" {
+		return 200, map[string]any{"errors": []any{map[string]any{"message": liveQueryContextRefusal}}, "data": nil}
+	}
+	return standard(req)
+}
+
+func TestCollectSendsTheSiteQueryContextOnEveryTeamMembersAndProjectsRead(t *testing.T) {
+	g := newGateway(t, requireQueryContext)
+	rows, err := Collect(context.Background(), g.client(), params(everything))
+	if err != nil {
+		t.Fatalf("a team read was refused: %v", err)
+	}
+	if len(rows.Memberships) == 0 {
+		t.Fatal("no membership was read: the comparison measures nothing")
+	}
+	reads := map[string]int{}
+	for _, req := range g.requests {
+		switch req.Operation {
+		case "TeamworkGraphTeamUsers", "TeamworkGraphTeamActiveProjects":
+			reads[req.Operation]++
+			if got := req.Header.Get("X-Query-Context"); got != "ari:cloud:platform::site/site-uuid" {
+				t.Errorf("a %s read (page after %v) carried X-Query-Context %q, want the platform site ARI", req.Operation, req.Variables["after"], got)
+			}
+		case "TeamSearchV2":
+			// The search answered without the header on the live gateway: it is not marked.
+			if got := req.Header.Get("X-Query-Context"); got != "" {
+				t.Errorf("the team search carried X-Query-Context %q: only the team reads are marked", got)
+			}
+		}
+	}
+	if reads["TeamworkGraphTeamUsers"] < 3 || reads["TeamworkGraphTeamActiveProjects"] < 2 {
+		t.Errorf("reads = %v: the paginated members read (team A has two pages) and the projects reads were not exercised", reads)
+	}
+}
+
+// The negative control of the live probe: the same read without the context is refused by the gateway with the
+// recorded message, so the test above cannot pass by a gateway that never asks for the header.
+func TestATeamReadWithoutTheQueryContextIsRefusedByTheGateway(t *testing.T) {
+	g := newGateway(t, requireQueryContext)
+	if _, err := g.client().IterTeamUsers(context.Background(), teamA, 2); err == nil || !strings.Contains(err.Error(), "X-Query-Context") {
+		t.Fatalf("a members read with no query context = %v, want the gateway's refusal naming the header", err)
+	}
+	if _, err := g.client().IterTeamActiveProjects(context.Background(), teamA, 2); err == nil || !strings.Contains(err.Error(), "X-Query-Context") {
+		t.Fatalf("a projects read with no query context = %v, want the gateway's refusal naming the header", err)
+	}
+}
+
+// An empty query context sends no header at all (not an empty one): a read made under WithQueryContext(ctx, "")
+// is the read made before the context existed.
+func TestAnEmptyQueryContextSendsNoHeader(t *testing.T) {
+	g := newGateway(t, standard)
+	if _, err := g.client().IterTeamUsers(graph.WithQueryContext(context.Background(), ""), teamA, 2); err != nil {
+		t.Fatal(err)
+	}
+	if len(g.requests) == 0 {
+		t.Fatal("no request was made")
+	}
+	for _, req := range g.requests {
+		if values, present := req.Header["X-Query-Context"]; present {
+			t.Errorf("a read under an empty query context sent X-Query-Context %q", values)
+		}
+	}
+}
+
+func TestSiteQueryContext(t *testing.T) {
+	for _, tc := range []struct{ in, want string }{
+		{"", ""}, {"  ", ""},
+		{"3f78d8af-23e4-4efc-893c-67b48a6107d3", "ari:cloud:platform::site/3f78d8af-23e4-4efc-893c-67b48a6107d3"},
+		{" abc ", "ari:cloud:platform::site/abc"},
+		{"ari:cloud:jira::site/abc", "ari:cloud:jira::site/abc"},
+		{"ARI:cloud:platform::site/abc", "ARI:cloud:platform::site/abc"},
+	} {
+		if got := siteQueryContext(tc.in); got != tc.want {
+			t.Errorf("siteQueryContext(%q) = %q, want %q", tc.in, got, tc.want)
+		}
+	}
+}
+
 func basicAuth(header http.Header) (string, string, bool) {
 	r := &http.Request{Header: header}
 	return r.BasicAuth()

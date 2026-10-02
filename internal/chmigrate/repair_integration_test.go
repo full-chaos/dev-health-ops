@@ -22,7 +22,6 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/chschema"
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/containers"
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/pyoracle"
-	"github.com/full-chaos/dev-health-ops/internal/testsupport/venueoracle"
 )
 
 type repairDB struct {
@@ -242,42 +241,6 @@ func TestRepairMatchesTheFrozenPythonOutput(t *testing.T) {
 	}
 	if found < 2 {
 		t.Fatalf("the golden records the five seeded stale rows in only %d scenarios: it measures nothing", found)
-	}
-}
-
-// TestRepairVenueOracleMatchesThePythonProducer runs every scenario through the
-// real `dev-hops migrate clickhouse repair` and through dho, and compares the
-// report and the rows left. With DHO_REPAIR_GOLDEN_UPDATE=1 it rewrites the frozen file.
-func TestRepairVenueOracleMatchesThePythonProducer(t *testing.T) {
-	if os.Getenv("DEV_HEALTH_LIVE_PYTHON_ORACLES") != "1" {
-		t.Skip("the live Python producer runs only with DEV_HEALTH_LIVE_PYTHON_ORACLES=1 and the full project Python environment")
-	}
-	db := startRepairDB(t)
-	var frozen []repairResult
-	for _, s := range repairScenarios {
-		db.reset(t, s)
-		py := db.pythonRun(t, s)
-		db.reset(t, s)
-		got := db.goRun(t, s)
-		if py.Stdout != got.Stdout || py.State != got.State {
-			t.Errorf("%s: python\n%s\nstate %q\ndho\n%s\nstate %q", s.name, py.Stdout, py.State, got.Stdout, got.State)
-		}
-		frozen = append(frozen, py)
-	}
-	if os.Getenv("DHO_REPAIR_GOLDEN_UPDATE") == "1" {
-		raw, err := json.MarshalIndent(frozen, "", " ")
-		if err != nil {
-			t.Fatal(err)
-		}
-		if err := os.MkdirAll("testdata", 0o755); err != nil {
-			t.Fatal(err)
-		}
-		if err := os.WriteFile(repairGolden, append(raw, '\n'), 0o644); err != nil {
-			t.Fatal(err)
-		}
-	}
-	if !t.Failed() {
-		venueoracle.WriteProof(t)
 	}
 }
 

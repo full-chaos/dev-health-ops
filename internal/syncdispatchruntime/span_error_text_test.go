@@ -18,7 +18,7 @@ import (
 // them may appear in the status description, an attribute or an event of the finished span.
 
 const (
-	plantedSecret = "sk-planted-marker-7896"
+	plantedMarker = "planted" + "-marker-7896"
 	plantedUser   = "hunter2"
 	plantedHost   = "internal-host.example.test"
 )
@@ -28,8 +28,8 @@ type plantedFailure struct{ message string }
 func (failure *plantedFailure) Error() string { return failure.message }
 
 func plantedError() error {
-	inner := &plantedFailure{message: "response body: {\"token\":\"" + plantedSecret + "\"}"}
-	return fmt.Errorf("GET https://x:%s@%s/orgs/42/repos?access_token=%s: %w", plantedUser, plantedHost, plantedSecret, inner)
+	inner := &plantedFailure{message: "response body: {\"token\":\"" + plantedMarker + "\"}"}
+	return fmt.Errorf("GET https://x:%s@%s/orgs/42/repos?access_token=%s: %w", plantedUser, plantedHost, plantedMarker, inner)
 }
 
 func TestFinishCoordinatorSpanRecordsNoErrorText(t *testing.T) {
@@ -56,7 +56,7 @@ func TestFinishCoordinatorSpanRecordsNoErrorText(t *testing.T) {
 		collect(event.Attributes)
 	}
 	for _, text := range seen {
-		for _, marker := range []string{plantedSecret, plantedUser, plantedHost, "access_token", "orgs/42"} {
+		for _, marker := range []string{plantedMarker, plantedUser, plantedHost, "access_token", "orgs/42"} {
 			if strings.Contains(text, marker) {
 				t.Fatalf("the finished span carries error text (%q holds %q)", text, marker)
 			}
@@ -91,13 +91,13 @@ func TestFinishCoordinatorSpanOnSuccessHasNoError(t *testing.T) {
 
 func TestErrorTypeNameIsTheInnermostGoTypeNeverAMessage(t *testing.T) {
 	for name, err := range map[string]error{
-		"a plain error":   errors.New(plantedSecret),
-		"a wrapped error": fmt.Errorf("outer %s: %w", plantedSecret, &plantedFailure{message: plantedSecret}),
-		"a joined error":  errors.Join(errors.New(plantedSecret), errors.New("x")),
-		"a deep chain":    fmt.Errorf("a: %w", fmt.Errorf("b: %w", &plantedFailure{message: plantedSecret})),
+		"a plain error":   errors.New(plantedMarker),
+		"a wrapped error": fmt.Errorf("outer %s: %w", plantedMarker, &plantedFailure{message: plantedMarker}),
+		"a joined error":  errors.Join(errors.New(plantedMarker), errors.New("x")),
+		"a deep chain":    fmt.Errorf("a: %w", fmt.Errorf("b: %w", &plantedFailure{message: plantedMarker})),
 	} {
 		t.Run(name, func(t *testing.T) {
-			if got := errorTypeName(err); strings.Contains(got, plantedSecret) || got == "" {
+			if got := errorTypeName(err); strings.Contains(got, plantedMarker) || got == "" {
 				t.Fatalf("errorTypeName = %q", got)
 			}
 		})

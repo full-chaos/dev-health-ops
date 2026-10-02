@@ -18,7 +18,7 @@ import (
 // the status description, an attribute or an event of the finished span.
 
 const (
-	plantedSecret = "sk-planted-marker-7896"
+	plantedMarker = "planted" + "-marker-7896"
 	plantedUser   = "hunter2"
 	plantedHost   = "internal-host.example.test"
 )
@@ -29,8 +29,8 @@ type plantedFailure struct{ message string }
 func (failure *plantedFailure) Error() string { return failure.message }
 
 func plantedError() error {
-	inner := &plantedFailure{message: "response body: {\"token\":\"" + plantedSecret + "\"}"}
-	return fmt.Errorf("GET https://x:%s@%s/orgs/42/repos?access_token=%s: %w", plantedUser, plantedHost, plantedSecret, inner)
+	inner := &plantedFailure{message: "response body: {\"token\":\"" + plantedMarker + "\"}"}
+	return fmt.Errorf("GET https://x:%s@%s/orgs/42/repos?access_token=%s: %w", plantedUser, plantedHost, plantedMarker, inner)
 }
 
 func TestFinishJobSpanRecordsNoErrorText(t *testing.T) {
@@ -58,7 +58,7 @@ func TestFinishJobSpanRecordsNoErrorText(t *testing.T) {
 		collect(event.Attributes)
 	}
 	for _, text := range seen {
-		for _, marker := range []string{plantedSecret, plantedUser, plantedHost, "access_token", "orgs/42"} {
+		for _, marker := range []string{plantedMarker, plantedUser, plantedHost, "access_token", "orgs/42"} {
 			if strings.Contains(text, marker) {
 				t.Fatalf("the finished span carries error text (%q holds %q)", text, marker)
 			}
@@ -86,13 +86,13 @@ func TestFinishJobSpanStatusDescriptionIsAFixedClassForEveryCategory(t *testing.
 			exporter := tracetest.NewInMemoryExporter()
 			provider := sdktrace.NewTracerProvider(sdktrace.WithSyncer(exporter))
 			_, span := provider.Tracer("t").Start(context.Background(), "job")
-			finishJobSpan(span, decision{result: ResultRetry, category: category}, errors.New(plantedSecret))
+			finishJobSpan(span, decision{result: ResultRetry, category: category}, errors.New(plantedMarker))
 			description := exporter.GetSpans()[0].Status.Description
 			want := string(category)
 			if category == "" || category == CategoryNone {
 				want = "error"
 			}
-			if description != want || strings.Contains(description, plantedSecret) {
+			if description != want || strings.Contains(description, plantedMarker) {
 				t.Fatalf("status description = %q, want %q", description, want)
 			}
 		})
@@ -101,14 +101,14 @@ func TestFinishJobSpanStatusDescriptionIsAFixedClassForEveryCategory(t *testing.
 
 func TestErrorTypeNameIsTheInnermostGoTypeNeverAMessage(t *testing.T) {
 	for name, err := range map[string]error{
-		"a plain error":       errors.New(plantedSecret),
-		"a wrapped error":     fmt.Errorf("outer %s: %w", plantedSecret, &plantedFailure{message: plantedSecret}),
-		"a joined error":      errors.Join(errors.New(plantedSecret), errors.New("x")),
-		"a deeply wrapped":    fmt.Errorf("a: %w", fmt.Errorf("b: %w", &plantedFailure{message: plantedSecret})),
-		"a typed value error": plantedValueError(plantedSecret),
+		"a plain error":       errors.New(plantedMarker),
+		"a wrapped error":     fmt.Errorf("outer %s: %w", plantedMarker, &plantedFailure{message: plantedMarker}),
+		"a joined error":      errors.Join(errors.New(plantedMarker), errors.New("x")),
+		"a deeply wrapped":    fmt.Errorf("a: %w", fmt.Errorf("b: %w", &plantedFailure{message: plantedMarker})),
+		"a typed value error": plantedValueError(plantedMarker),
 	} {
 		t.Run(name, func(t *testing.T) {
-			if got := errorTypeName(err); strings.Contains(got, plantedSecret) || got == "" {
+			if got := errorTypeName(err); strings.Contains(got, plantedMarker) || got == "" {
 				t.Fatalf("errorTypeName = %q", got)
 			}
 		})

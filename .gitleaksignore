@@ -124,3 +124,11 @@ b1a8b551d0488ca836ac050956eab0b2baf08cd2:cmd/go-api-routing/verbs_integration_te
 b1a8b551d:cmd/go-api-routing/verbs_integration_test.go:jwt:56
 34403706667c2c8cee4bd0d9629ca1d1de9ae872:internal/goapiproof/routing_verbs_test.go:generic-api-key:601
 344037066:internal/goapiproof/routing_verbs_test.go:generic-api-key:601
+# CHAOS-8036: clause-corpus fixture rows internal/platform/errortext/clause_corpus_test.go lines 150 and 153 (keys api_key and apikey,
+# value abc123): the CI gitleaks scan (generic-api-key) reads a key-name + value pair; they are plain test literals that pin the
+# sanitizer's key-name clause (scan triage: not a credential, no real secret). Method B of CHAOS-8036, one row per fixture file + key;
+# full-SHA and short-id forms per this file's own convention above.
+e19204c1df1947664f583bfd61f66715daa1f589:internal/platform/errortext/clause_corpus_test.go:generic-api-key:150
+e19204c1df1947664f583bfd61f66715daa1f589:internal/platform/errortext/clause_corpus_test.go:generic-api-key:153
+e19204c1df:internal/platform/errortext/clause_corpus_test.go:generic-api-key:150
+e19204c1df:internal/platform/errortext/clause_corpus_test.go:generic-api-key:153

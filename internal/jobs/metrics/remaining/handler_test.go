@@ -568,3 +568,50 @@ func TestPartitionHandlerExhaustLogSurvivesATypedNilPostgresErrorAtEveryDepth(t 
 		})
 	}
 }
+
+type selfUnwrappingError struct{}
+
+func (e *selfUnwrappingError) Error() string { return "self" }
+func (e *selfUnwrappingError) Unwrap() error { return e }
+
+type cycleA struct{ next *cycleB }
+type cycleB struct{ next *cycleA }
+
+func (e *cycleA) Error() string { return "a" }
+func (e *cycleA) Unwrap() error { return e.next }
+func (e *cycleB) Error() string { return "b" }
+func (e *cycleB) Unwrap() error { return e.next }
+
+// CHAOS-8163 / D4407: a self-unwrapping error and a two-error cycle must not hang the exhaust log line (a hand-written
+// unwrap loop at the call site never terminates on them). Each runs under a short deadline so a hang FAILS the test
+// instead of blocking it; the bounded walker of logging.ErrorArgs returns.
+func TestPartitionHandlerExhaustLogSurvivesACyclicErrorChain(t *testing.T) {
+	cycleStart := &cycleA{}
+	cycleStart.next = &cycleB{next: cycleStart}
+	for name, exhaustErr := range map[string]error{
+		"self-unwrapping": &selfUnwrappingError{},
+		"two-error cycle": cycleStart,
+	} {
+		t.Run(name, func(t *testing.T) {
+			var buffer bytes.Buffer
+			previous := slog.Default()
+			slog.SetDefault(slog.New(slog.NewTextHandler(&buffer, nil)))
+			t.Cleanup(func() { slog.SetDefault(previous) })
+			store := &handlerStore{claimErr: errors.New("connection reset"), exhaustErr: exhaustErr}
+			handler, _ := NewPartitionHandler[jobruntime.RemainingCapacityArgs](store, &handlerExecutor{}, "capacity")
+			done := make(chan struct{})
+			go func() {
+				defer close(done)
+				_ = handler.Work(context.Background(), attemptedCapacityExecution(3, 3))
+			}()
+			select {
+			case <-done:
+			case <-time.After(3 * time.Second):
+				t.Fatal("the exhaust log line did not return on a cyclic error chain (an unbounded unwrap loop)")
+			}
+			if !strings.Contains(buffer.String(), "could not exhaust a last-attempt partition") {
+				t.Fatalf("exhaust failure not logged: %q", buffer.String())
+			}
+		})
+	}
+}

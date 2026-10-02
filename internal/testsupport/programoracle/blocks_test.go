@@ -265,7 +265,7 @@ func TestAKnownDefectMustBeFoundInItsBlock(t *testing.T) {
 		}
 	}
 	right := func(dst []byte) []byte { return append(dst, lines[BlockLines+500]...) }
-	if err := findsDefectErr("sweep", output, BlockLines+500, fixedLines(lines), right); err == nil || !strings.Contains(err.Error(), "block 1") {
+	if err := findsDefectErr("sweep", output, BlockLines+500, fixedLines(lines), right); err == nil || !strings.Contains(err.Error(), "block 1") || !strings.Contains(err.Error(), "accepts the defect") {
 		t.Errorf("the right answer passed as a defect: %v", err)
 	}
 	if err := findsDefectErr("sweep", output, len(lines), fixedLines(lines), wrong); err == nil || !strings.Contains(err.Error(), "is not one of the") {
@@ -304,8 +304,8 @@ func TestTheDefectGateRefusesABlockWhoseGoLinesAreNotTheFrozenAnswers(t *testing
 		t.Error("a block with one Go line wrong was judged")
 	}
 	// The control reads the WHOLE answers: a wrong line in another block refuses too.
-	if err := findsDefectErr("sweep", output, BlockLines+500, oneWrong, wrong); err == nil {
-		t.Error("a block elsewhere with a wrong Go line was judged: the control reads one block only")
+	if err := findsDefectErr("sweep", output, BlockLines+500, oneWrong, wrong); err == nil || !strings.Contains(err.Error(), "before any defect is planted") {
+		t.Errorf("a block elsewhere with a wrong Go line: err = %v, want the CONTROL to refuse it (it reads the whole answers, not the plant's block)", err)
 	}
 }
 
@@ -336,5 +336,14 @@ func TestTheDefectGateNamesThePlantedAnswersBlockAlone(t *testing.T) {
 	err = findsDefectErr("sweep", output, 0, drifting, wrong)
 	if err == nil || !strings.Contains(err.Error(), "does not name the planted answer's block alone") {
 		t.Fatalf("a second differing block: err = %v, want the attribution refusal", err)
+	}
+	// Exactly ONE block differs and it is not the plant's: the RIGHT answer is
+	// planted (its own block digests as frozen) while a Go line of another
+	// block drifts after the control pass.
+	passes.Store(0)
+	right := func(dst []byte) []byte { return append(dst, lines[0]...) }
+	err = findsDefectErr("sweep", output, 0, drifting, right)
+	if err == nil || !strings.Contains(err.Error(), "does not name the planted answer's block alone") {
+		t.Fatalf("one differing block that is not the plant's: err = %v, want the attribution refusal", err)
 	}
 }

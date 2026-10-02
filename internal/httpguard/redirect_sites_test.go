@@ -23,6 +23,9 @@ var updateSites = flag.Bool("update-sites", false, "rewrite redirect_sites.tsv f
 // The row set of redirect_sites.tsv is DERIVED from production code, by TYPE (go/packages + go/types), never written by
 // hand and never matched by spelling: an import alias, a dot import or a type alias cannot hide a site. A SITE is
 //
+//	client-conversion     a conversion between net/http.Client (or a pointer to it) and a defined type of its shape
+//	client-instantiate    a generic function or type instantiated with net/http.Client
+//	nil-client-field-literal  a literal (or new) of a replaced-module type that leaves an exported *http.Client field unset
 //	client-literal        a composite literal (elided ones too) whose type is net/http.Client
 //	client-new            new(net/http.Client)
 //	client-decl           a var, field (embedded too), parameter or result DECLARED with the non-pointer type net/http.Client
@@ -40,6 +43,11 @@ var updateSites = flag.Bool("update-sites", false, "rewrite redirect_sites.tsv f
 // then classify the new rows. Every walker clause has a planted fixture package under testdata/redirectsites that the
 // clause must find (TestTheSiteWalkerFindsEveryKind): a clause removed is RED.
 //
+// WALK SCOPE: the main module and every module go.mod replaces with a local path (compiled into production, read as source),
+// for GOOS=linux with GOARCH amd64 and arm64; the files outside those builds are PRINTED with their count (a stated limit).
+// Nested modules (tests/compatibility/river/nminus1) hold tests only; no production package may import internal/testsupport
+// (checked in the walk).
+//
 // A row names its PROBE, "Test" or "dir:Test" (a test of the package of the row, or of the dir named). The probe must exist,
 // and its class must agree with it: guarded and never-follows name a test that exercises a redirect (its body mentions
 // redirect), drops-credential names a test that asserts on Authorization, no-credential names none ("-") and its cite says
@@ -55,11 +63,14 @@ var updateSites = flag.Bool("update-sites", false, "rewrite redirect_sites.tsv f
 //	never-follows    the client is built with its own no-redirect policy, or refuses redirects.
 //	drops-credential the client follows, and the credential header is dropped off-origin (DropCredentialsOnHostChange).
 //	no-credential    the client follows and nothing credential-bearing travels in header, query or body (cite what).
+//	follows-unless-supplied  a replaced module's own default: it follows redirects when its HTTPClient is nil. Safe in production only
+//	                 because every construction of its types in production sets HTTPClient: a literal that leaves it unset is a
+//	                 nil-client-field-literal site that needs a row, so a new one FAILS here.
 type site struct {
 	file, symbol, kind string
 }
 
-var siteClasses = map[string]bool{"guarded": true, "never-follows": true, "drops-credential": true, "no-credential": true}
+var siteClasses = map[string]bool{"guarded": true, "never-follows": true, "drops-credential": true, "no-credential": true, "follows-unless-supplied": true}
 
 type row struct {
 	count              int
@@ -78,9 +89,14 @@ func TestEveryHTTPClientSiteIsClassified(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	found, problems := scanPackages(t, root, []string{"./..."}, func(path string) bool {
+	replaced := replacedModules(t, root)
+	patterns := []string{"./..."}
+	for _, module := range replaced {
+		patterns = append(patterns, module+"/...")
+	}
+	found, problems, _ := scanPackages(t, root, patterns, replaced, func(path string) bool {
 		return strings.HasPrefix(path, modulePath+"/internal/testsupport")
-	})
+	}, "")
 	rows := readRows(t, rowFile)
 	if *updateSites {
 		writeRows(t, rowFile, found, rows)
@@ -176,57 +192,118 @@ func testBody(dir, name string) (string, bool) {
 	return "", false
 }
 
-// scanPackages loads the packages matching patterns (non-test files only) under root and returns their sites by
-// (file, symbol, kind) with the count, and the problems of loading.
-func scanPackages(t *testing.T, root string, patterns []string, skip func(pkgPath string) bool) (map[site]int, []string) {
+// scanPackages loads the packages matching patterns (non-test files only) under root, once per production target
+// (linux/amd64 and linux/arm64), and returns their sites by (file, symbol, kind) with the largest count seen, and the
+// problems of loading. replaced names the module paths whose types are "replaced modules" (read as source): a literal of
+// one of their types that leaves an exported *http.Client field unset is a site.
+func scanPackages(t *testing.T, root string, patterns, replaced []string, skip func(pkgPath string) bool, scopeDir string) (map[site]int, []string, []string) {
 	t.Helper()
-	cfg := &packages.Config{
-		Dir:  root,
-		Mode: packages.NeedName | packages.NeedFiles | packages.NeedSyntax | packages.NeedTypes | packages.NeedTypesInfo | packages.NeedImports | packages.NeedModule,
-	}
-	loaded, err := packages.Load(cfg, patterns...)
-	if err != nil {
-		t.Fatalf("packages.Load: %v", err)
-	}
 	found := map[site]int{}
 	var problems []string
-	for _, pkg := range loaded {
-		if skip(pkg.PkgPath) {
-			continue
+	loadedFiles := map[string]bool{}
+	for _, arch := range []string{"amd64", "arm64"} {
+		cfg := &packages.Config{
+			Dir:  root,
+			Env:  append(os.Environ(), "GOOS=linux", "GOARCH="+arch),
+			Mode: packages.NeedName | packages.NeedFiles | packages.NeedCompiledGoFiles | packages.NeedSyntax | packages.NeedTypes | packages.NeedTypesInfo | packages.NeedImports | packages.NeedModule,
 		}
-		for _, loadErr := range pkg.Errors {
-			problems = append(problems, fmt.Sprintf("LOAD error in %s: %v", pkg.PkgPath, loadErr))
+		loaded, err := packages.Load(cfg, patterns...)
+		if err != nil {
+			t.Fatalf("packages.Load: %v", err)
 		}
-		if pkg.TypesInfo == nil {
-			continue
-		}
-		modPath := modulePath
-		if pkg.Module != nil {
-			modPath = pkg.Module.Path
-		}
-		w := walker{info: pkg.TypesInfo, module: modPath, clientUnderlying: netHTTPClientUnderlying(pkg.Types)}
-		for _, file := range pkg.Syntax {
-			name := pkg.Fset.Position(file.Pos()).Filename
-			if strings.HasSuffix(name, "_test.go") {
+		counts := map[site]int{}
+		for _, pkg := range loaded {
+			if skip(pkg.PkgPath) {
 				continue
 			}
-			rel, relErr := filepath.Rel(root, name)
-			if relErr != nil {
-				t.Fatal(relErr)
+			for _, loadErr := range pkg.Errors {
+				problems = append(problems, fmt.Sprintf("LOAD error in %s (%s): %v", pkg.PkgPath, arch, loadErr))
 			}
-			rel = filepath.ToSlash(rel)
-			for _, declaration := range file.Decls {
-				symbol := declSymbol(declaration)
-				ast.Inspect(declaration, func(node ast.Node) bool {
-					for _, kind := range w.kindsOf(node) {
-						found[site{rel, symbol, kind}]++
-					}
-					return true
-				})
+			for imported := range pkg.Imports {
+				if strings.HasPrefix(imported, modulePath+"/internal/testsupport") {
+					problems = append(problems, fmt.Sprintf("PRODUCTION package %s imports %s (a test-support package: its clients are outside the walk)", pkg.PkgPath, imported))
+				}
+			}
+			for _, goFile := range pkg.CompiledGoFiles {
+				loadedFiles[goFile] = true
+			}
+			if pkg.TypesInfo == nil {
+				continue
+			}
+			modPath := modulePath
+			if pkg.Module != nil {
+				modPath = pkg.Module.Path
+			}
+			w := walker{info: pkg.TypesInfo, module: modPath, replaced: replaced, clientUnderlying: netHTTPClientUnderlying(pkg.Types)}
+			for _, file := range pkg.Syntax {
+				name := pkg.Fset.Position(file.Pos()).Filename
+				if strings.HasSuffix(name, "_test.go") {
+					continue
+				}
+				rel, relErr := filepath.Rel(root, name)
+				if relErr != nil {
+					t.Fatal(relErr)
+				}
+				rel = filepath.ToSlash(rel)
+				for _, declaration := range file.Decls {
+					symbol := declSymbol(declaration)
+					ast.Inspect(declaration, func(node ast.Node) bool {
+						for _, kind := range w.kindsOf(node) {
+							counts[site{rel, symbol, kind}]++
+						}
+						return true
+					})
+				}
+			}
+		}
+		for key, count := range counts {
+			if count > found[key] {
+				found[key] = count
 			}
 		}
 	}
-	return found, problems
+	return found, uniqueStrings(problems), reportOutOfScope(t, root, scopeDir, loadedFiles)
+}
+
+// reportOutOfScope PRINTS the limit of the walk: the production .go files of the main module and of the replaced
+// module that no loaded package of linux/amd64 or linux/arm64 contains (another GOOS, a build tag): a stated limit,
+// not a silent one.
+func reportOutOfScope(t *testing.T, root, scopeDir string, loaded map[string]bool) []string {
+	t.Helper()
+	var outside []string
+	walkRoot := root
+	if scopeDir != "" {
+		walkRoot = filepath.Join(root, scopeDir)
+	}
+	_ = filepath.WalkDir(walkRoot, func(path string, entry os.DirEntry, err error) error {
+		if err != nil {
+			return nil
+		}
+		if entry.IsDir() {
+			switch entry.Name() {
+			case ".git", "node_modules":
+				return filepath.SkipDir
+			case "testsupport":
+				return filepath.SkipDir
+			case "testdata":
+				if scopeDir == "" {
+					return filepath.SkipDir
+				}
+			}
+			if rel, _ := filepath.Rel(root, path); filepath.ToSlash(rel) == "tests" {
+				return filepath.SkipDir
+			}
+			return nil
+		}
+		if strings.HasSuffix(path, ".go") && !strings.HasSuffix(path, "_test.go") && !loaded[path] {
+			rel, _ := filepath.Rel(root, path)
+			outside = append(outside, filepath.ToSlash(rel))
+		}
+		return nil
+	})
+	sort.Strings(outside)
+	t.Logf("SCOPE LIMIT: %d production .go files are outside the linux/amd64 and linux/arm64 builds (another GOOS or a build tag) and are NOT walked: %s", len(outside), strings.Join(outside, " "))
+	return outside
 }
 
 func declSymbol(declaration ast.Decl) string {
@@ -266,6 +343,7 @@ func receiverName(expression ast.Expr) string {
 type walker struct {
 	info             *types.Info
 	module           string
+	replaced         []string
 	clientUnderlying types.Type
 }
 
@@ -322,43 +400,151 @@ func inNetHTTP(obj types.Object) bool {
 	return obj != nil && obj.Pkg() != nil && obj.Pkg().Path() == "net/http"
 }
 
+// replacedType: the (named) type is declared in one of the replaced modules.
+func (w walker) replacedType(t types.Type) *types.Named {
+	named, ok := types.Unalias(t).(*types.Named)
+	if !ok || named.Obj().Pkg() == nil {
+		return nil
+	}
+	path := named.Obj().Pkg().Path()
+	for _, prefix := range w.replaced {
+		if path == prefix || strings.HasPrefix(path, prefix+"/") {
+			return named
+		}
+	}
+	return nil
+}
+
+// leavesClientFieldUnset: a literal of a replaced-module struct type with an exported *http.Client field that the
+// literal does not set (a positional literal sets every field).
+func (w walker) leavesClientFieldUnset(t types.Type, lit *ast.CompositeLit) bool {
+	named := w.replacedType(t)
+	if named == nil {
+		return false
+	}
+	structType, ok := named.Underlying().(*types.Struct)
+	if !ok {
+		return false
+	}
+	set := map[string]bool{}
+	for _, element := range lit.Elts {
+		switch e := element.(type) {
+		case *ast.KeyValueExpr:
+			if ident, ok := e.Key.(*ast.Ident); ok {
+				set[ident.Name] = true
+			}
+		default:
+			return false // positional: every field is set
+		}
+	}
+	for i := 0; i < structType.NumFields(); i++ {
+		field := structType.Field(i)
+		if !field.Exported() {
+			continue
+		}
+		if pointer, ok := field.Type().(*types.Pointer); ok && isClient(pointer.Elem()) && !set[field.Name()] {
+			return true
+		}
+	}
+	return false
+}
+
+// hasClientField: a replaced-module struct type with an exported *http.Client field.
+func (w walker) hasClientField(t types.Type) bool {
+	named := w.replacedType(t)
+	if named == nil {
+		return false
+	}
+	structType, ok := named.Underlying().(*types.Struct)
+	if !ok {
+		return false
+	}
+	for i := 0; i < structType.NumFields(); i++ {
+		field := structType.Field(i)
+		if pointer, ok := field.Type().(*types.Pointer); ok && field.Exported() && isClient(pointer.Elem()) {
+			return true
+		}
+	}
+	return false
+}
+
+func derefPointer(t types.Type) types.Type {
+	if pointer, ok := types.Unalias(t).(*types.Pointer); ok {
+		return pointer.Elem()
+	}
+	return t
+}
+
+// isClientShaped: the type is, or is a defined type of the same underlying struct as, net/http.Client.
+func (w walker) isClientShaped(t types.Type) bool {
+	if isClient(t) {
+		return true
+	}
+	named, ok := types.Unalias(t).(*types.Named)
+	return ok && w.clientUnderlying != nil && types.Identical(named.Underlying(), w.clientUnderlying)
+}
+
 func (w walker) kindsOf(node ast.Node) []string {
 	switch x := node.(type) {
 	case *ast.CompositeLit:
+		var kinds []string
 		if isClient(w.info.TypeOf(x)) {
-			return []string{"client-literal"}
+			kinds = append(kinds, "client-literal")
 		}
+		if w.leavesClientFieldUnset(w.info.TypeOf(x), x) {
+			kinds = append(kinds, "nil-client-field-literal")
+		}
+		return kinds
 	case *ast.CallExpr:
+		var kinds []string
 		if ident, ok := x.Fun.(*ast.Ident); ok {
-			if builtin, isBuiltin := w.info.Uses[ident].(*types.Builtin); isBuiltin && builtin.Name() == "new" && len(x.Args) == 1 && isClient(w.info.TypeOf(x.Args[0])) {
-				return []string{"client-new"}
+			if builtin, isBuiltin := w.info.Uses[ident].(*types.Builtin); isBuiltin && builtin.Name() == "new" && len(x.Args) == 1 {
+				arg := w.info.TypeOf(x.Args[0])
+				if isClient(arg) {
+					kinds = append(kinds, "client-new")
+				}
+				if w.hasClientField(arg) {
+					kinds = append(kinds, "nil-client-field-literal")
+				}
 			}
 		}
-		var callee types.Object
-		switch fun := x.Fun.(type) {
-		case *ast.Ident:
-			callee = w.info.Uses[fun]
-		case *ast.SelectorExpr:
-			callee = w.info.Uses[fun.Sel]
-		}
-		if fn, ok := callee.(*types.Func); ok && fn.Pkg() != nil && !strings.HasPrefix(fn.Pkg().Path(), w.module) && fn.Pkg().Path() != "net/http" {
-			if sig, ok := fn.Type().(*types.Signature); ok && holdsClient(sig.Results(), 0, map[types.Type]bool{}) {
-				return []string{"external-client-call"}
+		// a conversion between net/http.Client (or a pointer to it) and another type of its shape
+		if len(x.Args) == 1 && w.info.Types[x.Fun].IsType() {
+			to, from := derefPointer(w.info.TypeOf(x)), derefPointer(w.info.TypeOf(x.Args[0]))
+			if to != nil && from != nil && w.isClientShaped(to) && w.isClientShaped(from) && !types.Identical(to, from) {
+				kinds = append(kinds, "client-conversion")
 			}
 		}
+		return kinds
 	case *ast.Ident:
+		var kinds []string
+		if instance, ok := w.info.Instances[x]; ok {
+			for i := 0; i < instance.TypeArgs.Len(); i++ {
+				if isClient(derefPointer(instance.TypeArgs.At(i))) {
+					kinds = append(kinds, "client-instantiate")
+					break
+				}
+			}
+		}
 		if obj := w.info.Uses[x]; obj != nil {
 			switch o := obj.(type) {
 			case *types.Var:
 				if inNetHTTP(o) && o.Name() == "DefaultClient" {
-					return []string{"default-client"}
+					kinds = append(kinds, "default-client")
 				}
 			case *types.Func:
-				if sig, ok := o.Type().(*types.Signature); ok && inNetHTTP(o) && sig.Recv() == nil {
+				sig, ok := o.Type().(*types.Signature)
+				if !ok {
+					break
+				}
+				if inNetHTTP(o) && sig.Recv() == nil {
 					switch o.Name() {
 					case "Get", "Post", "PostForm", "Head":
-						return []string{"http." + o.Name()}
+						kinds = append(kinds, "http."+o.Name())
 					}
+				}
+				if o.Pkg() != nil && !strings.HasPrefix(o.Pkg().Path(), w.module) && o.Pkg().Path() != "net/http" && holdsClient(sig.Results(), 0, map[types.Type]bool{}) {
+					kinds = append(kinds, "external-client-call")
 				}
 			}
 		}
@@ -366,17 +552,17 @@ func (w walker) kindsOf(node ast.Node) []string {
 			switch o := obj.(type) {
 			case *types.Var:
 				if isClient(o.Type()) {
-					return []string{"client-decl"}
+					kinds = append(kinds, "client-decl")
 				}
 			case *types.TypeName:
 				if o.IsAlias() && isClient(o.Type()) {
-					return []string{"client-type"}
-				}
-				if named, ok := o.Type().(*types.Named); ok && !isClient(named) && w.clientUnderlying != nil && types.Identical(named.Underlying(), w.clientUnderlying) {
-					return []string{"client-type"}
+					kinds = append(kinds, "client-type")
+				} else if named, ok := o.Type().(*types.Named); ok && !isClient(named) && w.clientUnderlying != nil && types.Identical(named.Underlying(), w.clientUnderlying) {
+					kinds = append(kinds, "client-type")
 				}
 			}
 		}
+		return kinds
 	case *ast.AssignStmt:
 		var kinds []string
 		for _, left := range x.Lhs {
@@ -484,33 +670,43 @@ func TestTheSiteWalkerFindsEveryKind(t *testing.T) {
 		t.Fatal(err)
 	}
 	var patterns []string
-	for _, name := range []string{"literal", "newclient", "decl", "typedecl", "defaultclient", "calls", "external", "assign", "negative"} {
+	for _, name := range []string{"literal", "newclient", "decl", "typedecl", "defaultclient", "calls", "external", "assign", "negative", "conversion", "instantiate", "outside", "nilfield", "method", "tagged", "importsupport"} {
 		patterns = append(patterns, fixturesBase+"/"+name)
 	}
-	found, problems := scanPackages(t, root, patterns, func(string) bool { return false })
-	if len(problems) != 0 {
-		t.Fatalf("fixtures do not load: %v", problems)
+	found, problems, outside := scanPackages(t, root, patterns, []string{fixturesBase + "/outside"}, func(string) bool { return false }, "internal/httpguard/testdata/redirectsites")
+	if len(problems) != 1 || !strings.Contains(problems[0], "importsupport") || !strings.Contains(problems[0], "test-support package") {
+		t.Fatalf("want exactly the test-support import of the importsupport fixture as a problem, got %v", problems)
 	}
 	prefix := "internal/httpguard/testdata/redirectsites/"
 	want := map[site]int{
-		{prefix + "literal/literal.go", "Aliased", "client-literal"}:         1,
-		{prefix + "literal/literal.go", "Dot", "client-literal"}:             1,
-		{prefix + "literal/literal.go", "Elided", "client-literal"}:          2,
-		{prefix + "newclient/newclient.go", "Make", "client-new"}:            1,
-		{prefix + "decl/decl.go", "var Zero", "client-decl"}:                 1,
-		{prefix + "decl/decl.go", "type Holder", "client-decl"}:              2,
-		{prefix + "decl/decl.go", "Param", "client-decl"}:                    1,
-		{prefix + "decl/decl.go", "Result", "client-literal"}:                1,
-		{prefix + "typedecl/typedecl.go", "type Alias", "client-type"}:       1,
-		{prefix + "typedecl/typedecl.go", "type Named", "client-type"}:       1,
-		{prefix + "defaultclient/defaultclient.go", "Use", "default-client"}: 1,
-		{prefix + "calls/calls.go", "Call", "http.Get"}:                      2,
-		{prefix + "calls/calls.go", "Call", "http.Post"}:                     1,
-		{prefix + "calls/calls.go", "Call", "http.PostForm"}:                 1,
-		{prefix + "calls/calls.go", "Call", "http.Head"}:                     1,
-		{prefix + "external/external.go", "Make", "external-client-call"}:    1,
-		{prefix + "assign/assign.go", "Direct", "checkredirect-assign"}:      1,
-		{prefix + "assign/assign.go", "Promoted", "checkredirect-assign"}:    1,
+		{prefix + "literal/literal.go", "Aliased", "client-literal"}:             1,
+		{prefix + "literal/literal.go", "Dot", "client-literal"}:                 1,
+		{prefix + "literal/literal.go", "Elided", "client-literal"}:              2,
+		{prefix + "newclient/newclient.go", "Make", "client-new"}:                1,
+		{prefix + "decl/decl.go", "var Zero", "client-decl"}:                     1,
+		{prefix + "decl/decl.go", "type Holder", "client-decl"}:                  2,
+		{prefix + "decl/decl.go", "Param", "client-decl"}:                        1,
+		{prefix + "decl/decl.go", "Result", "client-literal"}:                    1,
+		{prefix + "typedecl/typedecl.go", "type Alias", "client-type"}:           1,
+		{prefix + "typedecl/typedecl.go", "type Named", "client-type"}:           1,
+		{prefix + "defaultclient/defaultclient.go", "Use", "default-client"}:     1,
+		{prefix + "calls/calls.go", "Call", "http.Get"}:                          2,
+		{prefix + "calls/calls.go", "Call", "http.Post"}:                         1,
+		{prefix + "calls/calls.go", "Call", "http.PostForm"}:                     1,
+		{prefix + "calls/calls.go", "Call", "http.Head"}:                         1,
+		{prefix + "external/external.go", "Make", "external-client-call"}:        1,
+		{prefix + "assign/assign.go", "Direct", "checkredirect-assign"}:          1,
+		{prefix + "assign/assign.go", "Promoted", "checkredirect-assign"}:        1,
+		{prefix + "conversion/conversion.go", "type shaped", "client-type"}:      1,
+		{prefix + "conversion/conversion.go", "ToClient", "client-conversion"}:   1,
+		{prefix + "conversion/conversion.go", "FromClient", "client-conversion"}: 1,
+		{prefix + "instantiate/instantiate.go", "Make", "client-instantiate"}:    1,
+		{prefix + "nilfield/nilfield.go", "Unset", "nil-client-field-literal"}:   1,
+		{prefix + "nilfield/nilfield.go", "New", "nil-client-field-literal"}:     1,
+		{prefix + "method/method.go", "Call", "external-client-call"}:            1,
+		{prefix + "method/method.go", "Value", "external-client-call"}:           1,
+		{prefix + "tagged/client_arm64.go", "Arm", "client-literal"}:             1,
+		{prefix + "tagged/client_amd64.go", "Amd", "client-literal"}:             1,
 	}
 	want[site{prefix + "decl/decl.go", "Result", "client-decl"}] = 0
 	delete(want, site{prefix + "decl/decl.go", "Result", "client-decl"})
@@ -523,6 +719,11 @@ func TestTheSiteWalkerFindsEveryKind(t *testing.T) {
 		if _, ok := want[key]; !ok {
 			t.Errorf("walker: unexpected %v x%d", key, count)
 		}
+	}
+	// the stated limit: another GOOS and a build tag are reported, not walked
+	joined := strings.Join(outside, " ")
+	if !strings.Contains(joined, "tagged/client_windows.go") || !strings.Contains(joined, "tagged/client_tag.go") || strings.Contains(joined, "tagged/tagged.go") {
+		t.Errorf("scope limit: want the windows and the tagged file reported out of scope, got %v", outside)
 	}
 }
 
@@ -583,4 +784,50 @@ func TestNoAuthHere(t *testing.T) { redirect() }
 	if got != want {
 		t.Errorf("verdict problems differ:\n got:\n%s\nwant:\n%s", got, want)
 	}
+}
+
+// replacedModules is every module path go.mod replaces with a local directory: compiled into production, read as source.
+func replacedModules(t *testing.T, root string) []string {
+	t.Helper()
+	source, err := os.ReadFile(filepath.Join(root, "go.mod"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var modules []string
+	inBlock := false
+	for _, line := range strings.Split(string(source), "\n") {
+		line = strings.TrimSpace(line)
+		switch {
+		case line == "replace (":
+			inBlock = true
+			continue
+		case inBlock && line == ")":
+			inBlock = false
+			continue
+		case strings.HasPrefix(line, "replace "):
+			line = strings.TrimPrefix(line, "replace ")
+		case !inBlock:
+			continue
+		}
+		if parts := strings.SplitN(line, "=>", 2); len(parts) == 2 {
+			target := strings.TrimSpace(parts[1])
+			if strings.HasPrefix(target, "./") || strings.HasPrefix(target, "../") {
+				modules = append(modules, strings.Fields(parts[0])[0])
+			}
+		}
+	}
+	sort.Strings(modules)
+	return modules
+}
+
+func uniqueStrings(values []string) []string {
+	seen := map[string]bool{}
+	var out []string
+	for _, value := range values {
+		if !seen[value] {
+			seen[value] = true
+			out = append(out, value)
+		}
+	}
+	return out
 }

@@ -812,12 +812,12 @@ const registeredCapacityForecastDocument = `query CapacityForecast($orgId: Strin
   }
 }`
 
-// registeredCapacityForecastDocumentV1 is the text capacityForecast accepted BEFORE it asked for
+// registeredCapacityForecastV1Document is the text capacityForecast accepted BEFORE it asked for
 // completionDistribution (CHAOS-7994, CHAOS-8000 dual accept). It stays a legacy text (see
 // legacyDigestsByOperation) so a web build still sending it keeps working while the new web rolls out; the
 // operation's ONE current document is registeredCapacityForecastDocument above. Wire form, same provenance:
 // testdata/wire_form/capacityForecast.v1.graphql.
-const registeredCapacityForecastDocumentV1 = `query CapacityForecast($orgId: String!, $input: CapacityForecastInput) {
+const registeredCapacityForecastV1Document = `query CapacityForecast($orgId: String!, $input: CapacityForecastInput) {
   capacityForecast(orgId: $orgId, input: $input) {
     forecastId
     computedAt
@@ -3605,7 +3605,7 @@ func newDocumentDispatchHandler(getenv getenvFunc, routeMux *routeswitch.Mux, op
 // digestByOperation. The literal below is cmd/registrydump's second parse target: keep its exact shape
 // (`"<operation>": {digestHex(<constIdent>), ...}`). Empty = every operation accepts one text.
 var legacyDigestsByOperation = map[string][]string{
-	"capacityForecast": {digestHex(registeredCapacityForecastDocumentV1)},
+	"capacityForecast": {digestHex(registeredCapacityForecastV1Document)},
 }
 
 // buildOperationByDigest is the reverse index digest -> operation over every accepted text: each operation's

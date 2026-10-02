@@ -4,7 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"log/slog"
+	"github.com/full-chaos/dev-health-ops/internal/syncdispatchruntime/synclog"
 	"strings"
 	"time"
 
@@ -50,7 +50,8 @@ type Loader struct {
 	// environment: environment credentials, SYNC_RUN_AUTH_STRICT and the
 	// Jira estimator's flags and base URL.
 	Getenv func(string) string
-	Logger *slog.Logger
+	// Logger receives the one warning the loader emits (the narrow synclog logger; nil logs through slog.Default()).
+	Logger *synclog.Logger
 	// PagerDutyOAuth and PagerDutyDoer run PagerDuty credential hydration
 	// (see hydratePagerDuty); a PagerDuty unit whose mode needs one that is
 	// nil fails its estimate.
@@ -349,10 +350,7 @@ func (loader Loader) resolveRunAuth(
 			if in(strict, "1", "true", "yes", "on") {
 				return nil, nil, bootstrapError("sync run auth fingerprint mismatch: stamped credential content changed mid-run")
 			}
-			if loader.Logger != nil {
-				loader.Logger.WarnContext(ctx, "sync_run_auth.fingerprint_mismatch",
-					slog.String("integration_id", integrationID), slog.Bool("strict", false))
-			}
+			loader.Logger.Warn(ctx, synclog.MsgSyncRunAuthFingerprintMismatch, synclog.Integration(synclog.ParseID(integrationID)), synclog.Flag(synclog.KeyStrict, false))
 		}
 	}
 	return credentialID, mapping, nil

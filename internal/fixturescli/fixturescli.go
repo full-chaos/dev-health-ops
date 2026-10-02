@@ -35,6 +35,7 @@ import (
 	pgstorage "github.com/full-chaos/dev-health-ops/internal/storage/postgres"
 	valkeystore "github.com/full-chaos/dev-health-ops/internal/storage/valkey"
 	"github.com/full-chaos/dev-health-ops/internal/syncdispatchruntime"
+	"github.com/full-chaos/dev-health-ops/internal/syncdispatchruntime/synclog"
 )
 
 // AllowEnvVar must be "1" for the verb to write: the executed-proof ledger it
@@ -222,7 +223,7 @@ func Finalize(ctx context.Context, pool *pgxpool.Pool, logger *slog.Logger, para
 	if err != nil {
 		return "", err
 	}
-	service, err := syncdispatchruntime.NewNativeFinalizeSyncRunService(pool, logger)
+	service, err := syncdispatchruntime.NewNativeFinalizeSyncRunService(pool, synclog.New(logger))
 	if err != nil {
 		return runID, fmt.Errorf("finalize service: %w", err)
 	}

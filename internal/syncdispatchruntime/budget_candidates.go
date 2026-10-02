@@ -3,7 +3,7 @@ package syncdispatchruntime
 import (
 	"context"
 	"fmt"
-	"log/slog"
+	"github.com/full-chaos/dev-health-ops/internal/syncdispatchruntime/synclog"
 	"sort"
 	"time"
 
@@ -123,12 +123,9 @@ func surplusRetryOrder(unit budgetUnit) (time.Time, time.Time, string) {
 // skipped, since a cooldown-deferred unit is waiting on the provider, not
 // the budget).
 func surplusRetryCandidates(
-	ctx context.Context, tx pgx.Tx, logger *slog.Logger, syncRunID string, ignoredUnitIDs map[string]bool,
+	ctx context.Context, tx pgx.Tx, logger *synclog.Logger, syncRunID string, ignoredUnitIDs map[string]bool,
 	slotHeadroom map[dispatchBucket]int, now time.Time,
 ) ([]budgetUnit, error) {
-	if logger == nil {
-		logger = slog.Default()
-	}
 	if len(slotHeadroom) == 0 {
 		return nil, nil
 	}
@@ -177,8 +174,7 @@ ORDER BY id`,
 	if len(deferred) > considered {
 		// A silent cap reads as "surplus considered everything and nothing
 		// else fitted", which is a different fact entirely.
-		logger.InfoContext(ctx, "dispatch_sync_run.budget_surplus_candidates_truncated",
-			slog.String("sync_run_id", syncRunID), slog.Int("deferred_units", len(deferred)), slog.Int("considered_units", considered))
+		logger.Info(ctx, synclog.MsgDispatchSyncRunBudgetSurplusCandidatesTruncated, synclog.Run(synclog.ParseID(syncRunID)), synclog.Count(synclog.KeyDeferredUnits, len(deferred)), synclog.Count(synclog.KeyConsideredUnits, considered))
 		deferred = deferred[:considered]
 	}
 	return deferred, nil

@@ -11,8 +11,27 @@ import (
 // ghr_, github_pat_), GitLab (glpat-, gloas-, glrt-, gldt-, glptt-, glsoat-,
 // glft-, glimt-, glagent-, glcbt-, glffct-), Linear (lin_api_, lin_oauth_),
 // Atlassian (ATATT, ATCTT), PagerDuty OAuth (pdus+_) and LaunchDarkly
-// (api-, sdk-, mob- followed by a UUID).
-var providerTokenPattern = regexp.MustCompile(`\b(?:gh[pousr]_[A-Za-z0-9]{16,}|github_pat_[A-Za-z0-9_]{16,}|gl(?:pat|oas|rt|dt|ptt|soat|ft|imt|agent|cbt|ffct)-[A-Za-z0-9_\-]{16,}|lin_(?:api|oauth)_[A-Za-z0-9]{16,}|AT[AC]TT[A-Za-z0-9_\-=]{16,}|pdus\+_[A-Za-z0-9_\-+/=]{16,}|(?:api|sdk|mob)-[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12})`)
+// (api-, sdk-, mob- followed by a UUID), LLM providers (sk-, sk-proj-, sk-ant-,
+// sk-or-: OpenAI, Anthropic, OpenRouter), Google (AIza), Stripe (sk_/rk_
+// live and test keys, whsec_), Slack (xox*-) and JWTs (three base64url parts).
+// A credential with no prefix (a hex or base64url secret, a legacy 20-character
+// key) cannot be told from an id by its shape: it stays with the registered-value
+// redactor (secrets) and with the fixed-class error helpers (CHAOS-7937).
+var providerTokenPattern = regexp.MustCompile(`(?:gh[pousr]_[A-Za-z0-9]{16,}|github_pat_[A-Za-z0-9_]{16,}|gl(?:pat|oas|rt|dt|ptt|soat|ft|imt|agent|cbt|ffct)-[A-Za-z0-9_\-]{16,}|lin_(?:api|oauth)_[A-Za-z0-9]{16,}|AT[AC]TT[A-Za-z0-9_\-=]{16,}|pdus\+_[A-Za-z0-9_\-+/=]{16,}|(?:api|sdk|mob)-[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12})`)
+
+var vendorKeyPattern = regexp.MustCompile(`(?:sk-(?:(?:proj|ant|or|svcacct|admin)-[A-Za-z0-9_\-]{20,}|[A-Za-z0-9]{20,})|(?:sk|rk)_(?:live|test)_[A-Za-z0-9]{16,}|whsec_[A-Za-z0-9]{16,}|AIza[A-Za-z0-9_\-]{30,}|xox[abcdeprs]-[A-Za-z0-9\-]{10,}|eyJ[A-Za-z0-9_\-]{8,}\.[A-Za-z0-9_\-]{8,}\.[A-Za-z0-9_\-]{8,})`)
+
+// vendorKeyLiterals are the literals vendorKeyPattern cannot match without.
+var vendorKeyLiterals = []string{"sk-", "sk_", "rk_", "whsec_", "AIza", "xox", "eyJ"}
+
+func mayHoldVendorKey(text string) bool {
+	for _, literal := range vendorKeyLiterals {
+		if strings.Contains(text, literal) {
+			return true
+		}
+	}
+	return false
+}
 
 // providerTokenLiterals are the literals providerTokenPattern cannot match
 // without; a text holding none of them skips the pattern.
@@ -248,35 +267,79 @@ func matchingBracket(text string, open int) int {
 // prose rather than as key/value pairs.
 var proseCredentialPattern = regexp.MustCompile(`(?i)\b(?:tokens?|secrets?|passwords?|passwd|apikeys?|api[ _-]keys?|client[ _-]secrets?|access[ _-]tokens?|private[ _-]tokens?|credentials?)[ \t]+([^\s"'<>,;()\[\]{}]+)`)
 
-// redactProseCredentials replaces the value after a credential word when the
-// value looks like a credential: at least 8 bytes holding a digit or one of
-// "-_./+=". "token is invalid" and "password expired" stay as they are.
+// contextCredentialPattern finds a credential word, at most three filler words of a rejection sentence ("provided:", "is",
+// "rejected", "for"), and a long value: "Incorrect API key provided: <value>", "invalid key <value> rejected", "secret is
+// <value>" (CHAOS-7937). The words are key, api key, secret, password, credential, token, authorization and bearer.
+var contextCredentialPattern = regexp.MustCompile(`(?i)\b(?:keys?|secrets?|passwords?|passwd|credentials?|tokens?|authorization|bearer)\b(?:` + contextSeparator + `+(?:is|was|for|provided|invalid|incorrect|rejected|expired|revoked|unknown|bad|failed|the|a|of)){0,3}` + contextSeparator + `+([A-Za-z0-9_+/=.\-]{20,})`)
+
+// contextSeparator is what stands between a credential word and its value: spaces, tabs, ":" and "=", an opening quote, bracket
+// or parenthesis, and the escaped forms a JSON body carries (a backslash and t, n, r, a quote, or \u0022 / \u0027).
+const contextSeparator = `(?:[ \t:=(\["']|\\[tnr"']|\\u00(?:22|27))`
+
+// opaqueCredentialShaped: at least 20 bytes of the base64url / hex alphabet holding a digit AND a letter. A hyphenated word
+// ("rotation-is-scheduled-for-next-quarter") has no digit and an id of digits only has no letter: both stay.
+func opaqueCredentialShaped(value string) bool {
+	if len(value) < 20 || value == redacted {
+		return false
+	}
+	return strings.ContainsAny(value, "0123456789") && strings.ContainsAny(value, "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ")
+}
+
+// redactProseCredentials replaces the value after a credential word when the value looks like a credential. The first rule
+// (credential word, whitespace, value of at least 8 bytes holding a digit or one of "-_./+=") keeps "token is invalid" and
+// "password expired" as they are; the second (contextCredentialPattern) reaches the value behind filler words.
 func redactProseCredentials(text string) string {
 	lower := strings.ToLower(text)
 	if !strings.Contains(lower, "token") && !strings.Contains(lower, "secret") && !strings.Contains(lower, "passw") &&
-		!strings.Contains(lower, "key") && !strings.Contains(lower, "credential") {
+		!strings.Contains(lower, "key") && !strings.Contains(lower, "credential") && !strings.Contains(lower, "authorization") &&
+		!strings.Contains(lower, "bearer") {
 		return text
 	}
-	matches := proseCredentialPattern.FindAllStringSubmatchIndex(text, -1)
+	text = redactAfterWord(text, proseCredentialPattern, credentialShaped)
+	return redactAfterWord(text, contextCredentialPattern, opaqueCredentialShaped)
+}
+
+func redactAfterWord(text string, pattern *regexp.Regexp, shaped func(string) bool) string {
+	matches := pattern.FindAllStringSubmatchIndex(text, -1)
 	if len(matches) == 0 {
 		return text
 	}
 	var out strings.Builder
 	written := 0
+	changed := false
 	for _, match := range matches {
 		start, end := match[2], match[3]
-		if !credentialShaped(text[start:end]) {
+		if !shaped(text[start:end]) {
 			continue
 		}
 		out.WriteString(text[written:start])
 		out.WriteString(redacted)
 		written = end
+		changed = true
 	}
-	if written == 0 {
+	if !changed {
 		return text
 	}
 	out.WriteString(text[written:])
 	return out.String()
+}
+
+// RedactCredentialShapes is the credential part of RedactText for text that must keep its other bytes: provider tokens by
+// documented prefix and a long value behind a credential word. The persisted error columns use it after their own
+// patterns (CHAOS-7937).
+func RedactCredentialShapes(value string) (result string) {
+	defer func() {
+		if recover() != nil {
+			result = redactionFailed
+		}
+	}()
+	if mayHoldProviderToken(value) {
+		value = providerTokenPattern.ReplaceAllString(value, redacted)
+	}
+	if mayHoldVendorKey(value) {
+		value = vendorKeyPattern.ReplaceAllString(value, redacted)
+	}
+	return redactProseCredentials(value)
 }
 
 func credentialShaped(value string) bool {

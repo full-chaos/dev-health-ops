@@ -2,7 +2,7 @@ package syncdispatchruntime
 
 import (
 	"context"
-	"log/slog"
+	"github.com/full-chaos/dev-health-ops/internal/syncdispatchruntime/synclog"
 	"time"
 
 	"github.com/jackc/pgx/v5"
@@ -31,12 +31,9 @@ import (
 // parity-pinned against Python's exactly for that reason: operator
 // dashboards may already parse dispatch_sync_run.budget_guard_dry_run.
 func observeRun(
-	ctx context.Context, tx pgx.Tx, bridge budgetEstimator, logger *slog.Logger,
+	ctx context.Context, tx pgx.Tx, bridge budgetEstimator, logger *synclog.Logger,
 	orgID, syncRunID string, cappedUnitIDs map[string]bool, now time.Time,
 ) ([]map[string]any, error) {
-	if logger == nil {
-		logger = slog.Default()
-	}
 
 	units, err := dispatchCandidateUnits(ctx, tx, syncRunID, cappedUnitIDs, now)
 	if err != nil {
@@ -81,8 +78,7 @@ func observeRun(
 			// unit in this chunk degrades to "no estimate" and is logged
 			// individually under Python's own per-unit failure message name.
 			for _, unitID := range chunk {
-				logger.WarnContext(ctx, "dispatch_sync_run.budget_guard_dry_run_failed",
-					attrsToAny(append(unitLogAttrs(syncRunID, unitsByID[unitID]), slog.String("error", bridgeErr.Error())))...)
+				logger.Warn(ctx, synclog.MsgDispatchSyncRunBudgetGuardDryRunFailed, append(unitLogAttrs(syncRunID, unitsByID[unitID]), synclog.Failure(bridgeErr))...)
 			}
 			continue
 		}
@@ -102,7 +98,7 @@ func observeRun(
 			// number pristine for.
 			observation := observeEstimate(estimate, logFields, consumedByBucket, limits, defaultLimit, now, deferralSeconds, true)
 			observations = append(observations, observation)
-			logger.InfoContext(ctx, "dispatch_sync_run.budget_guard_dry_run", observationToAnyArgs(observation)...)
+			logger.Info(ctx, synclog.MsgDispatchSyncRunBudgetGuardDryRun, observationAttrs(readObservation(observation))...)
 		}
 	}
 	return observations, nil

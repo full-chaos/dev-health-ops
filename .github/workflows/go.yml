@@ -106,6 +106,8 @@ on:
       # (pyoracle/unconverted_own_launch.txt, recordedfiles/header_before_stamp_ceiling.txt):
       # a change to one of them alone must run the guard that reads it.
       - 'internal/testsupport/**/*.txt'
+      # the golden secret scan reads its allowlist, stopwords and vectors (CHAOS-7890): a change to any data file of it alone must run the scan
+      - 'internal/testsupport/goldenscan/**'
       # Go tests read these directly (contracts/*.json via os.ReadFile,
       # internal/**/families.json via filepath.Join). Not under testdata/
       # or fixtures/, so the shared glob above does not reach them.
@@ -143,6 +145,8 @@ on:
       # CHAOS-6690: the go-quality race shards read these; a change to either
       # alone must run go-quality.
       - 'ci/go_race_shard.awk'
+      - 'ci/go_race_missing_rows.awk'
+      - 'ci/race_excluded_tests.tsv'
       - 'ci/go_race_weights.tsv'
       - 'ci/ratchets.tsv'
       - 'internal/httpguard/*.tsv'
@@ -292,6 +296,8 @@ on:
       # (pyoracle/unconverted_own_launch.txt, recordedfiles/header_before_stamp_ceiling.txt):
       # a change to one of them alone must run the guard that reads it.
       - 'internal/testsupport/**/*.txt'
+      # the golden secret scan reads its allowlist, stopwords and vectors (CHAOS-7890): a change to any data file of it alone must run the scan
+      - 'internal/testsupport/goldenscan/**'
       # Go tests read these directly (contracts/*.json via os.ReadFile,
       # internal/**/families.json via filepath.Join). Not under testdata/
       # or fixtures/, so the shared glob above does not reach them.
@@ -329,6 +335,8 @@ on:
       # CHAOS-6690: the go-quality race shards read these; a change to either
       # alone must run go-quality.
       - 'ci/go_race_shard.awk'
+      - 'ci/go_race_missing_rows.awk'
+      - 'ci/race_excluded_tests.tsv'
       - 'ci/go_race_weights.tsv'
       - 'ci/ratchets.tsv'
       - 'internal/httpguard/*.tsv'

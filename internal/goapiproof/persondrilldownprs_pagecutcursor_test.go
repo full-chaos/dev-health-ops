@@ -283,18 +283,6 @@ func cursorOracle(base, cand []enumRow, baseCursor, candCursor any, limit int) b
 	return b.Equal(baseLast) && c.Equal(candLast) && !c.After(b)
 }
 
-// TestPersonDrilldownPRs_EnumeratedCursorAdmissionImpliesTheInvariant runs
-// every generated baseline against every candidate of up to two rows,
-// with and without a page cut, under every pair of cursor choices,
-// through the person route's own bound Options. A comparison admitted with
-// a next_cursor finding naming a different instant on each leg must
-// satisfy cursorOracle. The integration build runs candidates up to three
-// rows.
-func TestPersonDrilldownPRs_EnumeratedCursorAdmissionImpliesTheInvariant(t *testing.T) {
-	t.Parallel()
-	runCursorEnumeration(t, 2)
-}
-
 func runCursorEnumeration(t *testing.T, maxLen int) {
 	baselines := enumBaselines()
 	candidates := enumCandidates(maxLen)

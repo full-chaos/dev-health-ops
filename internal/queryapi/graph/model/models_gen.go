@@ -909,6 +909,13 @@ type ImproveOpportunity struct {
 	Severity          string                 `json:"severity"`
 	EvidenceRefs      []string               `json:"evidenceRefs"`
 	RecommendedAction string                 `json:"recommendedAction"`
+	// The measured metric the rule compared, in `unit`. The same number the rationale states.
+	Value float64 `json:"value"`
+	// The rule's limit, in `unit`. A fixed constant of the detector, not a per-organization setting.
+	Threshold float64                `json:"threshold"`
+	Unit      ImproveOpportunityUnit `json:"unit"`
+	// Which side of the threshold fires the rule: ABOVE (value > threshold) or BELOW (value < threshold).
+	ThresholdDirection ThresholdDirection `json:"thresholdDirection"`
 }
 
 type MaintainerShare struct {
@@ -2064,6 +2071,49 @@ func (e ImproveOpportunityKind) MarshalGQL(w io.Writer) {
 	fmt.Fprint(w, strconv.Quote(e.String()))
 }
 
+type ImproveOpportunityUnit string
+
+const (
+	ImproveOpportunityUnitHours ImproveOpportunityUnit = "HOURS"
+	ImproveOpportunityUnitRatio ImproveOpportunityUnit = "RATIO"
+	ImproveOpportunityUnitItems ImproveOpportunityUnit = "ITEMS"
+)
+
+var AllImproveOpportunityUnit = []ImproveOpportunityUnit{
+	ImproveOpportunityUnitHours,
+	ImproveOpportunityUnitRatio,
+	ImproveOpportunityUnitItems,
+}
+
+func (e ImproveOpportunityUnit) IsValid() bool {
+	switch e {
+	case ImproveOpportunityUnitHours, ImproveOpportunityUnitRatio, ImproveOpportunityUnitItems:
+		return true
+	}
+	return false
+}
+
+func (e ImproveOpportunityUnit) String() string {
+	return string(e)
+}
+
+func (e *ImproveOpportunityUnit) UnmarshalGQL(v any) error {
+	str, ok := v.(string)
+	if !ok {
+		return fmt.Errorf("enums must be strings")
+	}
+
+	*e = ImproveOpportunityUnit(str)
+	if !e.IsValid() {
+		return fmt.Errorf("%s is not a valid ImproveOpportunityUnit", str)
+	}
+	return nil
+}
+
+func (e ImproveOpportunityUnit) MarshalGQL(w io.Writer) {
+	fmt.Fprint(w, strconv.Quote(e.String()))
+}
+
 type MeasureInput string
 
 const (
@@ -2514,6 +2564,47 @@ func (e *TeamAttributionSource) UnmarshalGQL(v any) error {
 }
 
 func (e TeamAttributionSource) MarshalGQL(w io.Writer) {
+	fmt.Fprint(w, strconv.Quote(e.String()))
+}
+
+type ThresholdDirection string
+
+const (
+	ThresholdDirectionAbove ThresholdDirection = "ABOVE"
+	ThresholdDirectionBelow ThresholdDirection = "BELOW"
+)
+
+var AllThresholdDirection = []ThresholdDirection{
+	ThresholdDirectionAbove,
+	ThresholdDirectionBelow,
+}
+
+func (e ThresholdDirection) IsValid() bool {
+	switch e {
+	case ThresholdDirectionAbove, ThresholdDirectionBelow:
+		return true
+	}
+	return false
+}
+
+func (e ThresholdDirection) String() string {
+	return string(e)
+}
+
+func (e *ThresholdDirection) UnmarshalGQL(v any) error {
+	str, ok := v.(string)
+	if !ok {
+		return fmt.Errorf("enums must be strings")
+	}
+
+	*e = ThresholdDirection(str)
+	if !e.IsValid() {
+		return fmt.Errorf("%s is not a valid ThresholdDirection", str)
+	}
+	return nil
+}
+
+func (e ThresholdDirection) MarshalGQL(w io.Writer) {
 	fmt.Fprint(w, strconv.Quote(e.String()))
 }
 

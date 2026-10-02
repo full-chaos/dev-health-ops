@@ -135,18 +135,18 @@ func rowsFor(path, key, shape string, count int) []Row {
 }
 
 func TestACheckPassesOnlyThroughAnExactRow(t *testing.T) {
-	g := golden(t, map[string]any{"credential_id": someUUID, "other": map[string]any{"credential_id": derivedUUID("another")}})
-	problems, err := Check("a/g.json", g, rowsFor("a/g.json", "credential_id", "uuid", 2))
+	g := golden(t, map[string]any{"client_secret": someUUID, "other": map[string]any{"client_secret": derivedUUID("another")}})
+	problems, err := Check("a/g.json", g, rowsFor("a/g.json", "client_secret", "uuid", 2))
 	if err != nil || len(problems) != 0 {
 		t.Fatalf("an exact row did not pass: %v %v", problems, err)
 	}
 	for name, rows := range map[string][]Row{
 		"no row":            nil,
-		"another file":      rowsFor("b/g.json", "credential_id", "uuid", 2),
-		"another key":       rowsFor("a/g.json", "credential_ref", "uuid", 2),
-		"count too high":    rowsFor("a/g.json", "credential_id", "uuid", 3),
-		"count too low":     rowsFor("a/g.json", "credential_id", "uuid", 1),
-		"another shape row": rowsFor("a/g.json", "credential_id", "hex64", 2),
+		"another file":      rowsFor("b/g.json", "client_secret", "uuid", 2),
+		"another key":       rowsFor("a/g.json", "client_secret_ref", "uuid", 2),
+		"count too high":    rowsFor("a/g.json", "client_secret", "uuid", 3),
+		"count too low":     rowsFor("a/g.json", "client_secret", "uuid", 1),
+		"another shape row": rowsFor("a/g.json", "client_secret", "hex64", 2),
 	} {
 		problems, err := Check("a/g.json", g, rows)
 		if err != nil || len(problems) == 0 {
@@ -161,16 +161,16 @@ func TestACheckPassesOnlyThroughAnExactRow(t *testing.T) {
 }
 
 func TestAValueOfAnotherShapeUnderARowKeyIsRefused(t *testing.T) {
-	g := golden(t, map[string]any{"credential_id": someUUID, "nested": []any{map[string]any{"credential_id": randomValue()}}})
-	problems, _ := Check("a/g.json", g, rowsFor("a/g.json", "credential_id", "uuid", 2))
+	g := golden(t, map[string]any{"client_secret": someUUID, "nested": []any{map[string]any{"client_secret": randomValue()}}})
+	problems, _ := Check("a/g.json", g, rowsFor("a/g.json", "client_secret", "uuid", 2))
 	if len(problems) == 0 {
 		t.Fatal("a random value under an allowlisted key passed beside a UUID")
 	}
 }
 
 func TestACheckReadsInsideAPackedBody(t *testing.T) {
-	g := golden(t, map[string]any{"body": pack(t, `{"credential_id": "`+someUUID+`", "x": {"api_key": "`+randomValue()+`"}}`)})
-	problems, _ := Check("a/g.json", g, rowsFor("a/g.json", "credential_id", "uuid", 1))
+	g := golden(t, map[string]any{"body": pack(t, `{"client_secret": "`+someUUID+`", "x": {"api_key": "`+randomValue()+`"}}`)})
+	problems, _ := Check("a/g.json", g, rowsFor("a/g.json", "client_secret", "uuid", 1))
 	if len(problems) != 1 || !strings.Contains(problems[0], `"api_key"`) {
 		t.Fatalf("a credential inside a packed body was not found or not named: %v", problems)
 	}
@@ -212,7 +212,7 @@ func TestTheShippedAllowlistParsesAndCitesItsTriage(t *testing.T) {
 }
 
 func TestACheckTreeFindsAStaleRowAndAMissingFile(t *testing.T) {
-	g := golden(t, map[string]any{"credential_id": someUUID})
+	g := golden(t, map[string]any{"client_secret": someUUID})
 	clean := golden(t, map[string]any{"name": "x"})
 	read := func(path string) ([]byte, error) {
 		if path == "a/clean.json" {
@@ -221,9 +221,9 @@ func TestACheckTreeFindsAStaleRowAndAMissingFile(t *testing.T) {
 		return g, nil
 	}
 	rows := []Row{
-		{Path: "a/g.json", Key: "credential_id", Shape: "uuid", Count: 1, Triage: "row 1"},
-		{Path: "a/clean.json", Key: "credential_id", Shape: "uuid", Count: 1, Triage: "row 2"},
-		{Path: "a/gone.json", Key: "credential_id", Shape: "uuid", Count: 1, Triage: "row 3"},
+		{Path: "a/g.json", Key: "client_secret", Shape: "uuid", Count: 1, Triage: "row 1"},
+		{Path: "a/clean.json", Key: "client_secret", Shape: "uuid", Count: 1, Triage: "row 2"},
+		{Path: "a/gone.json", Key: "client_secret", Shape: "uuid", Count: 1, Triage: "row 3"},
 	}
 	problems, err := CheckTree([]string{"a/clean.json", "a/g.json"}, read, rows)
 	if err != nil {
@@ -249,8 +249,8 @@ func TestTheWindowedScanEqualsTheExpressionOverTheWholeText(t *testing.T) {
 		}
 		text := b.String()
 		var want []string
-		for _, match := range generic.FindAllString(text, -1) {
-			if full, secret := secretOf(match); accepted(full, secret) {
+		for _, loc := range generic.FindAllStringIndex(text, -1) {
+			if full, secret := secretOf(text[loc[0]:loc[1]]); accepted(full, secret, lineOf(text, loc[0], loc[1])) {
 				want = append(want, secret)
 			}
 		}
@@ -282,5 +282,15 @@ func TestTextAfterTheJSONValueIsRefused(t *testing.T) {
 	}
 	if hits := Hits(leaves); len(hits) != 1 {
 		t.Fatalf("a JSON text with text after it was not scanned whole: %d hit(s)", len(hits))
+	}
+}
+
+// A second-form secret has no upper length: the secret found is the whole run, not the part a window cut (it decides the shape and the
+// allowlist row).
+func TestALongSecretIsFoundWhole(t *testing.T) {
+	value := valueOf(t, "r:alnum:400:86") // the vector second-form-400-no-keyword-inside, which the real scanner flags
+	got := SecretsIn(`"api_key": "` + value + `"`)
+	if len(got) != 1 || got[0] != value {
+		t.Fatalf("%d secret(s) found, want one of the whole 400 characters", len(got))
 	}
 }

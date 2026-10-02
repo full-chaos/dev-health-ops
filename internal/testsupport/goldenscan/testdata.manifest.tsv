@@ -1,4 +1,4 @@
 # Every file under internal/testsupport/goldenscan/testdata: sha256, kind, path. Written by `go run ./internal/testsupport/recordedfiles/manifest`; never edit it by hand.
 # python-recorded set: e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855 (0 files)
 # header-before-stamp set: e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855 (0 files)
-b0089d6f84bad038adf4d57a4dd1424595236aaeebc58ea027c30c622c3affa9	hand-written	scanner_vectors.tsv
+fe496a038676b2d525d6e6d042ed564d94a75f247f850ad2c4c8a27cfc2212f9	hand-written	scanner_vectors.tsv

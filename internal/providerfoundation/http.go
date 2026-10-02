@@ -5,7 +5,9 @@ import (
 	"context"
 	"crypto/rand"
 	"errors"
+	"github.com/full-chaos/dev-health-ops/internal/httpguard"
 	"io"
+	"log/slog"
 	"math/big"
 	"net/http"
 	"net/url"
@@ -90,7 +92,30 @@ func NewHTTPClient(provider, base string, doer HTTPDoer, auth Auth, retry RetryP
 	case !retry.valid():
 		return nil, credentialInvalid("retry_policy_invalid")
 	}
-	return &HTTPClient{Provider: strings.ToLower(provider), BaseURL: parsed, Doer: doer, Auth: auth, Retry: retry, Lease: lease, entropy: rand.Reader}, nil
+	if err := admitDoer(doer); err != nil {
+		return nil, err
+	}
+	return &HTTPClient{Provider: strings.ToLower(provider), BaseURL: parsed, Doer: originGuardedAtConstruction(doer), Auth: auth, Retry: retry, Lease: lease, entropy: rand.Reader}, nil
+}
+
+// admitDoer is the ONE admission every constructor that sends a credential through a doer calls (NewHTTPClient, NewGitHubAppAuth,
+// NewPagerDutyClientCredentialsAuth): the allow-list by reachability (httpguard.Guardable). A refused doer is a construction error
+// with fixed text, and no request goes through it. nil when the doer is admitted.
+func admitDoer(doer HTTPDoer) error {
+	if httpguard.Guardable(doer) {
+		return nil
+	}
+	return refuseUnguardableDoer()
+}
+
+// refuseUnguardableDoer is the construction error for a doer the redirect guard cannot reach (a decorator that is not an
+// httpguard.Wrapper): loud, fixed text, and no request ever goes through it.
+// unguardableDoerLog is the fixed text of the refusal line: no doer detail, no value.
+const unguardableDoerLog = "provider client refused: the doer is not an *http.Client or an httpguard.Wrapper chain that ends at one"
+
+func refuseUnguardableDoer() error {
+	slog.Error(unguardableDoerLog)
+	return credentialInvalid("http_doer_unguardable")
 }
 
 // resolveTarget is the URL a request path names under the client's base URL.
@@ -151,14 +176,80 @@ func DropCredentialsOnHostChange(req *http.Request, via []*http.Request) error {
 	return nil
 }
 
+// originKey carries, in the context of one request, the credential origin and the flag a refused redirect sets: the
+// guarded client reads it from the redirect request (net/http gives a redirect the context of the request it follows), so
+// the guard works however many route decorators sit between HTTPClient.Do and the client.
+type originKey struct{}
+
+type originState struct {
+	target *url.URL
+	left   *atomic.Bool
+}
+
+// originGuardedAtConstruction guards the supplied doer ONCE, where the origin is known, before any route decorates the
+// client (a route's counting decorator wraps client.Doer: the guard is already inside it, so no decorator has to opt in).
+// An *http.Client is copied with a CheckRedirect that stops at the first hop that leaves the request's credential origin
+// (the original policy decides every same-origin hop); a Wrapper is rebuilt around its guarded inner doer; any other doer is
+// a test's transport and is returned as it is.
+func originGuardedAtConstruction(doer HTTPDoer) HTTPDoer {
+	if wrapper, ok := doer.(httpguard.Wrapper); ok {
+		if rebuilt, ok := wrapper.Rewrap(originGuardedAtConstruction(wrapper.Unwrap())).(HTTPDoer); ok {
+			return rebuilt
+		}
+		return doer
+	}
+	hc, ok := doer.(*http.Client)
+	if !ok || hc == nil {
+		return doer
+	}
+	guarded := *hc
+	inner := hc.CheckRedirect
+	guarded.CheckRedirect = func(req *http.Request, via []*http.Request) error {
+		// The client's own policy decides first: a client that refuses the hop answers the 3xx to the caller (a route that
+		// handles a Location itself, with no credential, relies on it) and nothing is sent to the other origin.
+		if inner != nil {
+			if err := inner(req, via); err != nil {
+				return err
+			}
+		} else if len(via) >= 10 {
+			return errors.New("stopped after 10 redirects")
+		}
+		state, known := req.Context().Value(originKey{}).(*originState)
+		if !known {
+			// A decorator dropped the request context, so the credential origin is lost: fail closed. The hop is followed (a
+			// redirect to presigned storage must keep working) with EVERY credential header removed.
+			for _, name := range credentialHeaders {
+				req.Header.Del(name)
+			}
+			req.Header.Set(strippedMarker, "1")
+			slog.Warn("provider redirect without a credential origin in the request context: credential headers stripped")
+			return nil
+		}
+		// The hop would be followed: stop it where it leaves the credential origin and say so.
+		if !sameOrigin(req.URL, state.target) {
+			state.left.Store(true)
+			return http.ErrUseLastResponse
+		}
+		return nil
+	}
+	return &guarded
+}
+
 // originGuardedDoer makes the credential origin a property of HTTPClient, not
 // of whichever Doer was injected. A stock http.Client follows redirects and
 // copies custom auth headers (GitLab's PRIVATE-TOKEN) to the new origin, so for
 // an *http.Client the returned Doer is a shallow copy whose CheckRedirect stops
 // at the first hop that leaves target's origin (the original policy still
 // decides every same-origin hop) and sets the returned flag. Any other Doer is
-// returned as is; responseLeftOrigin still detects a redirect it followed.
+// returned as is (a decorator is rebuilt around its guarded inner doer); responseLeftOrigin still detects a redirect it followed.
 func originGuardedDoer(doer HTTPDoer, target *url.URL) (HTTPDoer, *atomic.Bool) {
+	if wrapper, ok := doer.(httpguard.Wrapper); ok { // a decorator cannot hide a following client from the origin guard
+		inner, left := originGuardedDoer(wrapper.Unwrap(), target)
+		if rebuilt, ok := wrapper.Rewrap(inner).(HTTPDoer); ok {
+			return rebuilt, left
+		}
+		return doer, left
+	}
 	left := new(atomic.Bool)
 	hc, ok := doer.(*http.Client)
 	if !ok || hc == nil {
@@ -167,19 +258,30 @@ func originGuardedDoer(doer HTTPDoer, target *url.URL) (HTTPDoer, *atomic.Bool) 
 	guarded := *hc
 	inner := hc.CheckRedirect
 	guarded.CheckRedirect = func(req *http.Request, via []*http.Request) error {
+		// the client's own policy decides first (a client that refuses the hop answers the 3xx to the caller)
+		if inner != nil {
+			if err := inner(req, via); err != nil {
+				return err
+			}
+		} else if len(via) >= 10 {
+			return errors.New("stopped after 10 redirects")
+		}
 		if !sameOrigin(req.URL, target) {
 			left.Store(true)
 			return http.ErrUseLastResponse
 		}
-		if inner != nil {
-			return inner(req, via)
-		}
-		if len(via) >= 10 {
-			return errors.New("stopped after 10 redirects")
-		}
 		return nil
 	}
 	return &guarded, left
+}
+
+// strippedMarker is set on a redirect request whose credential headers the origin guard removed because the credential origin was
+// lost (a decorator dropped the request context): the after-the-fact check lets such a followed hop through.
+const strippedMarker = "X-Origin-Guard-Stripped"
+
+// strippedOfCredentials: the last request a Doer sent is one the origin guard stripped.
+func strippedOfCredentials(request *http.Request) bool {
+	return request != nil && request.Header.Get(strippedMarker) != ""
 }
 
 // responseLeftOrigin is the after-the-fact check for a Doer that followed a
@@ -256,7 +358,8 @@ func (c *HTTPClient) Do(ctx context.Context, method, path string, body io.Reader
 		if err := c.Lease.Assert(ctx); err != nil {
 			return nil, err
 		}
-		request, err := http.NewRequestWithContext(ctx, method, target.String(), bytes.NewReader(requestBody))
+		callLeft := new(atomic.Bool)
+		request, err := http.NewRequestWithContext(context.WithValue(ctx, originKey{}, &originState{target: target, left: callLeft}), method, target.String(), bytes.NewReader(requestBody))
 		if err != nil {
 			return nil, ErrCredentialInvalid
 		}
@@ -266,7 +369,7 @@ func (c *HTTPClient) Do(ctx context.Context, method, path string, body io.Reader
 		var requestErr error
 		guarded, leftOrigin := originGuardedDoer(c.Doer, target)
 		response, requestErr = guarded.Do(request)
-		if leftOrigin.Load() || (requestErr == nil && responseLeftOrigin(response, target)) {
+		if callLeft.Load() || leftOrigin.Load() || (requestErr == nil && responseLeftOrigin(response, target) && !strippedOfCredentials(response.Request)) {
 			// A redirect took the authenticated request off the credential's
 			// origin. The header may already have been sent by the Doer, so
 			// this is never retried and the response is never returned.

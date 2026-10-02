@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"github.com/full-chaos/dev-health-ops/internal/httpguard"
 	"io"
 	"net/http"
 	"net/url"
@@ -170,7 +171,7 @@ func (h handlers) send(ctx context.Context, timeout time.Duration, method, targe
 	for key, value := range headers {
 		request.Header.Set(key, value)
 	}
-	reply, err := h.client.Do(request)
+	reply, err := httpguard.NoRedirects(h.client).Do(request) // the stored credential rides this request
 	if err != nil {
 		return response{}, err
 	}

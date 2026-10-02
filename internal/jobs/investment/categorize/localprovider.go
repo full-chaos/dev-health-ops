@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"github.com/full-chaos/dev-health-ops/internal/httpguard"
 	"io"
 	"net/http"
 
@@ -201,7 +202,7 @@ func (p *LocalProvider) executeChatCompletionRequest(ctx context.Context, body l
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("Authorization", "Bearer "+p.cfg.APIKey)
 
-	resp, err := p.client.Do(req)
+	resp, err := httpguard.NoRedirects(p.client).Do(req) // the API key rides this request
 	if err != nil {
 		return "", nil, &httpTransportError{cause: logging.TransportFailure(err)}
 	}

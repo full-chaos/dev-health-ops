@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"github.com/full-chaos/dev-health-ops/internal/testsupport/fakehttp"
 	"io"
 	"math"
 	"net/http"
@@ -38,7 +39,7 @@ func TestGitHubDeploymentsRouteMirrorsPythonEnrichmentAndWindow(t *testing.T) {
 	t.Parallel()
 	now := time.Date(2026, 7, 23, 12, 30, 0, 0, time.UTC)
 	doer := &gitHubDeploymentsDoer{}
-	client := gitHubRepositoryClient(t, doer, "https://api.github.com")
+	client := gitHubRepositoryClient(t, fakehttp.Client(doer), "https://api.github.com")
 	claim := nativeTestClaim("github", "deployments")
 	batch, err := (GitHubDeploymentsRouteHandler{}).Collect(context.Background(), claim, providerfoundation.Credential{}, client, now)
 	if err != nil {
@@ -109,7 +110,7 @@ func TestGitHubDeploymentsRouteCountsFailedAndRetriedAttempts(t *testing.T) {
 	now := time.Date(2026, 7, 23, 12, 30, 0, 0, time.UTC)
 	doer := &gitHubDeploymentsRetryOnceDoer{failPath: "/repos/acme/api/deployments/101/statuses"}
 	client, err := providerfoundation.NewHTTPClient(
-		"github", "https://api.github.com", doer,
+		"github", "https://api.github.com", fakehttp.Client(doer),
 		func(*http.Request) error { return nil },
 		providerfoundation.RetryPolicy{
 			MaxAttempts: 2, InitialWait: time.Nanosecond, MaxWait: time.Nanosecond,

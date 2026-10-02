@@ -12,7 +12,6 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
-	"runtime"
 	"sort"
 	"strconv"
 	"strings"
@@ -23,6 +22,7 @@ import (
 
 	"atlassian/atlassian/graph"
 	"atlassian/atlassian/graph/gen"
+	"github.com/full-chaos/dev-health-ops/internal/testsupport/moduleroot"
 )
 
 // CHAOS-7493: the Atlassian gateway refused the vendored members documents with
@@ -50,7 +50,7 @@ var typedScalarFragments = map[string]string{
 // the vendored package's generated sources, by constant name.
 func vendoredDocuments(t *testing.T) map[string]string {
 	t.Helper()
-	_, file, _, _ := runtime.Caller(0)
+	_, file, _, _ := moduleroot.Caller(0)
 	dir := filepath.Join(filepath.Dir(file), "..", "..", "third_party", "vendor", "atlassian", "atlassian", "graph")
 	var paths []string
 	for _, pattern := range []string{filepath.Join(dir, "gen", "*.go"), filepath.Join(dir, "*.go")} {
@@ -476,7 +476,7 @@ type executeCall struct{ where, document, operationName string }
 // vendoredExecuteCalls reads every Execute call of the vendored graph package from its source.
 func vendoredExecuteCalls(t *testing.T) []executeCall {
 	t.Helper()
-	_, file, _, _ := runtime.Caller(0)
+	_, file, _, _ := moduleroot.Caller(0)
 	dir := filepath.Join(filepath.Dir(file), "..", "..", "third_party", "vendor", "atlassian", "atlassian", "graph")
 	paths, err := filepath.Glob(filepath.Join(dir, "*.go"))
 	if err != nil {

@@ -4,10 +4,10 @@ package summaryvenue
 
 import (
 	"path/filepath"
-	"runtime"
 	"strings"
 	"testing"
 
+	"github.com/full-chaos/dev-health-ops/internal/testsupport/moduleroot"
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/venueoracle"
 )
 
@@ -31,7 +31,7 @@ var venueGoldenPins = map[string]string{
 // golden.
 func openVenueGolden(t *testing.T, name string) (*venueoracle.Golden, string) {
 	t.Helper()
-	_, file, _, ok := runtime.Caller(0)
+	_, file, _, ok := moduleroot.Caller(0)
 	if !ok {
 		t.Fatal("cannot locate the test source")
 	}

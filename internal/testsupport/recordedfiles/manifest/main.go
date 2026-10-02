@@ -16,6 +16,7 @@ import (
 	"os"
 	"strings"
 
+	"github.com/full-chaos/dev-health-ops/internal/testsupport/goldenscan"
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/recordedfiles"
 )
 
@@ -62,6 +63,17 @@ func run(args []string) int {
 		fmt.Fprintln(os.Stderr, err)
 		return 1
 	}
+	rows, err := goldenscan.Allowlist()
+	if err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		return 1
+	}
+	scanProblems, err := goldenscan.TreeProblems(repo, rows)
+	if err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		return 1
+	}
+	problems = append(problems, scanProblems...)
 	for _, problem := range problems {
 		fmt.Println(problem)
 	}

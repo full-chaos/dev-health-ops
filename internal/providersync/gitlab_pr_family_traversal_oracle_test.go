@@ -3,6 +3,7 @@ package providersync
 import (
 	"context"
 	"encoding/json"
+	"github.com/full-chaos/dev-health-ops/internal/testsupport/fakehttp"
 	"io"
 	"net/http"
 	"strings"
@@ -136,7 +137,7 @@ func buildGitLabPullRequestTraversalTrace(t *testing.T, input map[string]any) gi
 	normalizedAt := time.Date(2026, 8, 9, 12, 0, 0, 987000000, time.UTC)
 	batch, err := (GitLabPullRequestRouteHandler{PerPage: perPage}).Collect(
 		context.Background(), claim, providerfoundation.Credential{},
-		gitLabRepositoryClient(t, doer, "https://gitlab.test"), normalizedAt,
+		gitLabRepositoryClient(t, fakehttp.Client(doer), "https://gitlab.test"), normalizedAt,
 	)
 	if err != nil {
 		t.Fatal(err)

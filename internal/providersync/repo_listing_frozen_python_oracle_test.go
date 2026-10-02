@@ -6,6 +6,7 @@ import (
 	_ "embed"
 	"encoding/json"
 	"fmt"
+	"github.com/full-chaos/dev-health-ops/internal/testsupport/fakehttp"
 	"io"
 	"net/http"
 	"sort"
@@ -106,7 +107,7 @@ func goListing(kase listingCase) listingOutcome {
 	if kase.Provider == "gitlab" {
 		base = "https://gitlab.com" // the production shape: providerfoundation.NewGitLabClient takes the instance host
 	}
-	client, err := providerfoundation.NewHTTPClient(kase.Provider, base+kase.BasePath, doer,
+	client, err := providerfoundation.NewHTTPClient(kase.Provider, base+kase.BasePath, fakehttp.Client(doer),
 		func(*http.Request) error { return nil },
 		providerfoundation.RetryPolicy{MaxAttempts: 1, InitialWait: time.Nanosecond, MaxWait: time.Nanosecond},
 		providerfoundation.LeaseGuardFunc(func(context.Context) error { return nil }))

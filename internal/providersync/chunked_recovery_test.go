@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"github.com/full-chaos/dev-health-ops/internal/testsupport/fakehttp"
 	"sync"
 	"testing"
 	"time"
@@ -28,7 +29,7 @@ func TestGitHubTestsChunkRouteTerminalCursorDoesNotRefetch(t *testing.T) {
 	run := func(resume string) (emissions, finals int) {
 		if err := (GitHubTestsRouteHandler{}).CollectChunks(
 			context.Background(), claim, providerfoundation.Credential{},
-			githubTestsClient(t, doer), now, resume,
+			githubTestsClient(t, fakehttp.Client(doer)), now, resume,
 			func(emission ChunkRouteEmission) error {
 				emissions++
 				if emission.Final {
@@ -66,7 +67,7 @@ func TestGitLabTestsChunkRouteTerminalCursorDoesNotRefetch(t *testing.T) {
 		"coverage.info": githubTestsLCOVFixture,
 	})}
 	claim := nativeTestClaim("gitlab", "tests")
-	client := gitLabRepositoryClient(t, doer, "https://gitlab.example")
+	client := gitLabRepositoryClient(t, fakehttp.Client(doer), "https://gitlab.example")
 
 	var terminal string
 	run := func(resume string) (emissions, finals int) {
@@ -133,7 +134,7 @@ func TestGitHubTestsChunkRoutePageBudgetIsCumulative(t *testing.T) {
 	var final CompleteRouteBatch
 	err = (GitHubTestsRouteHandler{MaxRuns: 300}).CollectChunks(
 		context.Background(), claim, providerfoundation.Credential{},
-		githubTestsClient(t, doer), time.Date(2026, 8, 14, 12, 0, 0, 0, time.UTC), spent,
+		githubTestsClient(t, fakehttp.Client(doer)), time.Date(2026, 8, 14, 12, 0, 0, 0, time.UTC), spent,
 		func(emission ChunkRouteEmission) error {
 			terminal, final = emission.CursorAfter, emission.Batch
 			return nil

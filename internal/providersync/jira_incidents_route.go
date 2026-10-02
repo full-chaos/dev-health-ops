@@ -362,12 +362,15 @@ func collectJiraIncidentIssues(
 func jiraIncidentAdmissionClient(
 	client *providerfoundation.HTTPClient, claim Claim,
 ) (*providerfoundation.HTTPClient, error) {
-	admission, err := providerfoundation.NewHTTPClient(
-		"jira", jiraIncidentAPIOrigin, client.Doer, client.Auth, client.Retry, client.Lease,
-	)
-	if err != nil {
-		return nil, err
+	// A copy of the constructed client (its Doer is already guarded at construction, and may be a route decorator the
+	// constructor cannot see inside): re-pointed at the admission origin, never re-constructed from a decorated doer.
+	origin, err := url.Parse(jiraIncidentAPIOrigin)
+	if err != nil || origin.Scheme == "" || origin.Host == "" {
+		return nil, providerfoundation.ErrCredentialInvalid
 	}
+	copied := *client
+	admission := &copied
+	admission.Provider, admission.BaseURL = "jira", origin
 	admission.Budget, admission.Gate, admission.Metrics = client.Budget, client.Gate, client.Metrics
 	admission.BudgetKey = client.BudgetKey
 	admission.BudgetKey.Provider = "jira"

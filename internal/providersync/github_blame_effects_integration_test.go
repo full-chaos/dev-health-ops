@@ -6,6 +6,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"github.com/full-chaos/dev-health-ops/internal/testsupport/fakehttp"
 	"slices"
 	"testing"
 	"time"
@@ -276,9 +277,9 @@ func TestGitHubBlameZeroRangeProgressPreventsReselection(t *testing.T) {
 		t.Fatal(err)
 	}
 	attempted := []string{}
-	client := gitHubRepositoryClient(t, gitHubBlameDoer{
+	client := gitHubRepositoryClient(t, fakehttp.Client(gitHubBlameDoer{
 		t: t, fileCount: 1, blamePaths: &attempted,
-	}, "https://api.github.com")
+	}), "https://api.github.com")
 	batch, err := (GitHubBlameRouteHandler{
 		Coverage: GitHubBlameClickHouseCoverage{Conn: sink.Conn, Lease: sink.Lease},
 	}).Collect(ctx, claim, providerfoundation.Credential{}, client, now.Add(time.Minute))
@@ -328,7 +329,7 @@ func TestGitHubBlameCrashWindowRecoversWithoutDuplicateVersion(t *testing.T) {
 	defer cancel()
 	harness := startBlameReadbackHarness(t, ctx)
 	claim, sink, now := harness.claim, harness.sink, harness.now
-	client := gitHubRepositoryClient(t, gitHubBlameDoer{t: t, fileCount: 2}, "https://api.github.com")
+	client := gitHubRepositoryClient(t, fakehttp.Client(gitHubBlameDoer{t: t, fileCount: 2}), "https://api.github.com")
 	handler := GitHubBlameRouteHandler{
 		Coverage: GitHubBlameClickHouseCoverage{Conn: harness.conn, Lease: sink.Lease},
 		MaxFiles: 1,
@@ -396,7 +397,7 @@ func TestGitHubBlameCrashWindowRecoversWithoutDuplicateVersion(t *testing.T) {
 			Repository: githubBlameIntegrationCredentialRepository{},
 			Decryptor:  githubBlameIntegrationCredentialDecryptor{},
 		},
-		Doer: gitHubBlameDoer{t: t, fileCount: 2},
+		Doer: fakehttp.Client(gitHubBlameDoer{t: t, fileCount: 2}),
 		Retry: providerfoundation.RetryPolicy{
 			MaxAttempts: 1, InitialWait: time.Nanosecond, MaxWait: time.Nanosecond,
 		},
@@ -456,10 +457,10 @@ func TestGitHubBlameReplansWhenPreparedProgressIsProvablyAbsent(t *testing.T) {
 				MaxFiles: 1,
 			}).Collect(
 				ctx, claim, providerfoundation.Credential{},
-				gitHubRepositoryClient(t, gitHubBlameDoer{
+				gitHubRepositoryClient(t, fakehttp.Client(gitHubBlameDoer{
 					t: t, fileCount: 1,
 					graphQLErrPaths: map[string]bool{failedPath: true},
-				}, "https://api.github.com"),
+				}), "https://api.github.com"),
 				now,
 			)
 			if err != nil {
@@ -547,10 +548,10 @@ func TestGitHubBlameDoesNotReplanWritingProgressThatReachedClickHouse(t *testing
 		MaxFiles: 1,
 	}).Collect(
 		ctx, claim, providerfoundation.Credential{},
-		gitHubRepositoryClient(t, gitHubBlameDoer{
+		gitHubRepositoryClient(t, fakehttp.Client(gitHubBlameDoer{
 			t: t, fileCount: 1,
 			graphQLErrPaths: map[string]bool{failedPath: true},
-		}, "https://api.github.com"),
+		}), "https://api.github.com"),
 		now,
 	)
 	if err != nil {
@@ -610,10 +611,10 @@ func TestGitHubBlameConditionalReplanRejectsStaleLedgerSnapshot(t *testing.T) {
 		MaxFiles: 1,
 	}).Collect(
 		ctx, claim, providerfoundation.Credential{},
-		gitHubRepositoryClient(t, gitHubBlameDoer{
+		gitHubRepositoryClient(t, fakehttp.Client(gitHubBlameDoer{
 			t: t, fileCount: 1,
 			graphQLErrPaths: map[string]bool{"src/file-000.go": true},
-		}, "https://api.github.com"),
+		}), "https://api.github.com"),
 		now,
 	)
 	if err != nil {
@@ -697,7 +698,7 @@ func executeRecoveredGitHubBlame(
 			Repository: githubBlameIntegrationCredentialRepository{},
 			Decryptor:  githubBlameIntegrationCredentialDecryptor{},
 		},
-		Doer: doer,
+		Doer: fakehttp.Client(doer),
 		Retry: providerfoundation.RetryPolicy{
 			MaxAttempts: 1, InitialWait: time.Nanosecond, MaxWait: time.Nanosecond,
 		},

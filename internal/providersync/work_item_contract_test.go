@@ -3,10 +3,10 @@ package providersync
 import (
 	"bytes"
 	"encoding/json"
+	"github.com/full-chaos/dev-health-ops/internal/testsupport/moduleroot"
 	"os"
 	"os/exec"
 	"path/filepath"
-	"runtime"
 	"strconv"
 	"strings"
 	"testing"
@@ -39,7 +39,7 @@ import (
 
 func TestPythonOracleLoaderRejectsUnexpectedSource(t *testing.T) {
 	python := pythonExecutable(t)
-	_, currentFile, _, _ := runtime.Caller(0)
+	_, currentFile, _, _ := moduleroot.Caller(0)
 	packageDir := filepath.Dir(currentFile)
 	oracleScript := filepath.Join(packageDir, "testdata", "python_launchdarkly_normalization_oracle.py")
 	unexpectedSource := filepath.Join(
@@ -54,7 +54,7 @@ func TestPythonOracleLoaderRejectsUnexpectedSource(t *testing.T) {
 
 func TestPythonOracleLoaderIgnoresSiblingPythonPath(t *testing.T) {
 	python := pythonExecutable(t)
-	_, currentFile, _, _ := runtime.Caller(0)
+	_, currentFile, _, _ := moduleroot.Caller(0)
 	packageDir := filepath.Dir(currentFile)
 	root := filepath.Join(packageDir, "..", "..")
 	oracleScript := filepath.Join(packageDir, "testdata", "python_launchdarkly_normalization_oracle.py")
@@ -105,7 +105,7 @@ func TestPythonOracleLoaderIgnoresSiblingPythonPath(t *testing.T) {
 
 func TestPythonOracleLoaderPurgesForgedAndHostilePreloads(t *testing.T) {
 	python := pythonExecutable(t)
-	_, currentFile, _, _ := runtime.Caller(0)
+	_, currentFile, _, _ := moduleroot.Caller(0)
 	packageDir := filepath.Dir(currentFile)
 	adapterSource := filepath.Join(
 		packageDir, "..", "..", "src", "dev_health_ops", "processors", "dataset_adapters.py",
@@ -144,7 +144,7 @@ func TestPythonOracleLoaderPurgesForgedAndHostilePreloads(t *testing.T) {
 
 func TestParityOraclesRunWithoutSQLAlchemy(t *testing.T) {
 	python := pythonExecutable(t)
-	_, currentFile, _, _ := runtime.Caller(0)
+	_, currentFile, _, _ := moduleroot.Caller(0)
 	packageDir := filepath.Dir(currentFile)
 	root := filepath.Join(packageDir, "..", "..")
 
@@ -229,7 +229,7 @@ func TestParityOraclesRunWithoutSQLAlchemy(t *testing.T) {
 }
 
 func TestPythonOracleLoaderHasNoCallerControlledExecutionOrSubprocess(t *testing.T) {
-	_, currentFile, _, _ := runtime.Caller(0)
+	_, currentFile, _, _ := moduleroot.Caller(0)
 	loaderPath := filepath.Join(filepath.Dir(currentFile), "testdata", "python_oracle_loader.py")
 	contents, err := os.ReadFile(loaderPath)
 	if err != nil {

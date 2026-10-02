@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"bytes"
 	"context"
+	"github.com/full-chaos/dev-health-ops/internal/testsupport/fakehttp"
 	"io"
 	"log/slog"
 	"net"
@@ -21,7 +22,7 @@ func wireCount(t *testing.T, doer *http.Client, requests ...func(context.Context
 	t.Helper()
 	ledger := NewRequestLedger()
 	ctx := WithRequestLedger(context.Background(), ledger)
-	counting := CountRequests(doer)
+	counting := fakehttp.Client(CountRequests(doer))
 	for _, build := range requests {
 		response, err := counting.Do(build(ctx))
 		if err == nil {
@@ -229,7 +230,7 @@ func TestNestedCountingDoersCountOneSendOnce(t *testing.T) {
 	t.Cleanup(server.Close)
 	ledger := NewRequestLedger()
 	ctx := WithRequestLedger(context.Background(), ledger)
-	nested := CountRequests(passThroughDoer{delegate: CountRequests(server.Client())})
+	nested := CountRequests(fakehttp.Client(passThroughDoer{delegate: CountRequests(server.Client())}))
 	for range 3 {
 		request, err := http.NewRequestWithContext(ctx, http.MethodGet, server.URL, nil)
 		if err != nil {
@@ -269,7 +270,7 @@ func TestUsageRecordingNeverHoldsAUnitsPath(t *testing.T) {
 		executor := completeRouteExecutor(now, &spendingCompleteRouteHandler{
 			calls: 2, batch: completeRouteFixture(t, claim),
 		}, &memoryEffectLedger{}, &memoryEffectSink{})
-		executor.Doer = &scriptedDoer{}
+		executor.Doer = fakehttp.Client(&scriptedDoer{})
 		executor.RequestUsage = writer
 		started := time.Now()
 		result, err := executor.Execute(context.Background(), session, descriptor)

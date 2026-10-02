@@ -5,12 +5,12 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
-	"runtime"
 	"strings"
 	"testing"
 	"time"
 
 	chdriver "github.com/ClickHouse/clickhouse-go/v2/lib/driver"
+	"github.com/full-chaos/dev-health-ops/internal/testsupport/moduleroot"
 	"github.com/google/uuid"
 )
 
@@ -536,7 +536,7 @@ func TestSortingKeysDoNotCollideAcrossFieldBoundaries(t *testing.T) {
 // fails this test instead of quietly disagreeing with the readback.
 func TestAIAttributionResolveKeyMatchesTheMigrationSortingKey(t *testing.T) {
 	t.Parallel()
-	_, currentFile, _, _ := runtime.Caller(0)
+	_, currentFile, _, _ := moduleroot.Caller(0)
 	migration := filepath.Join(filepath.Dir(currentFile), "..", "..",
 		"src", "dev_health_ops", "migrations", "clickhouse",
 		"044_ai_attribution_repo_id_dedup_key.sql")

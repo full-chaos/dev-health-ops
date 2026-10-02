@@ -4,6 +4,7 @@ package providersync
 
 import (
 	"context"
+	"github.com/full-chaos/dev-health-ops/internal/testsupport/fakehttp"
 	"io"
 	"net/http"
 	"strings"
@@ -90,7 +91,7 @@ func TestRunInProcessWritesTheWorkersRowsWithoutAWorker(t *testing.T) {
 				OrgID: "org-inprocess", Provider: tc.provider, Dataset: "repo-metadata",
 				SourceExternalID: tc.external, SourceName: tc.external,
 				BeforeAt: time.Now().UTC(), Credential: tc.credential,
-				Config: map[string]string{"base_url": base}, Conn: conn, Doer: doer,
+				Config: map[string]string{"base_url": base}, Conn: conn, Doer: fakehttp.Client(doer),
 			}
 			result, err := RunInProcess(ctx, run)
 			if err != nil {

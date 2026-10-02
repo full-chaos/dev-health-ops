@@ -10,7 +10,6 @@ import (
 	"log/slog"
 	"net/http/httptest"
 	"path/filepath"
-	"runtime"
 	"strconv"
 	"testing"
 
@@ -22,12 +21,13 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/auth/edgetoken"
 	"github.com/full-chaos/dev-health-ops/internal/platform/config"
 	"github.com/full-chaos/dev-health-ops/internal/storage/valkey"
+	"github.com/full-chaos/dev-health-ops/internal/testsupport/moduleroot"
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/venueoracle"
 )
 
 func repoRoot(t *testing.T) string {
 	t.Helper()
-	_, file, _, ok := runtime.Caller(0)
+	_, file, _, ok := moduleroot.Caller(0)
 	if !ok {
 		t.Fatal("resolve package path")
 	}

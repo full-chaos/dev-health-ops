@@ -49,8 +49,8 @@ var updateSites = flag.Bool("update-sites", false, "rewrite redirect_sites.tsv f
 // (checked in the walk).
 //
 // A row names its PROBE, "Test" or "dir:Test" (a test of the package of the row, or of the dir named). The probe must exist,
-// and its class must agree with it: guarded and never-follows name a test that exercises a redirect (its body mentions
-// redirect), drops-credential names a test that asserts on Authorization, no-credential names none ("-") and its cite says
+// and its class must agree with it: guarded names a redirectprobe test (the other origin sees no request), never-follows names a test of the client's own
+// policy (CheckRedirect / ErrUseLastResponse), drops-credential names a test that asserts on Authorization, no-credential names none ("-") and its cite says
 // what travels. A class changed without a probe changed fails here; whether the probe is RED without the guard is shown
 // by the planted guard-off runs recorded in the PR, not by this test.
 //
@@ -95,7 +95,7 @@ func TestEveryHTTPClientSiteIsClassified(t *testing.T) {
 		patterns = append(patterns, module+"/...")
 	}
 	found, problems, _ := scanPackages(t, root, patterns, replaced, func(path string) bool {
-		return strings.HasPrefix(path, modulePath+"/internal/testsupport")
+		return path == modulePath+"/internal/testsupport" || strings.HasPrefix(path, modulePath+"/internal/testsupport/")
 	}, "")
 	rows := readRows(t, rowFile)
 	if *updateSites {
@@ -162,6 +162,14 @@ func checkProbe(root string, key site, got row) string {
 		if !strings.Contains(body, "Authorization") {
 			return fmt.Sprintf("PROBE does not assert on Authorization: %s (%s)", label, name)
 		}
+	case "guarded":
+		if !strings.Contains(body, "redirectprobe.") {
+			return fmt.Sprintf("PROBE of a guarded row does not use the redirect probe (the second origin must see no request): %s (%s)", label, name)
+		}
+	case "never-follows":
+		if !strings.Contains(body, "CheckRedirect") && !strings.Contains(body, "ErrUseLastResponse") {
+			return fmt.Sprintf("PROBE of a never-follows row does not assert the client's own policy: %s (%s)", label, name)
+		}
 	default:
 		if !strings.Contains(strings.ToLower(body), "redirect") {
 			return fmt.Sprintf("PROBE does not exercise a redirect: %s (%s)", label, name)
@@ -220,7 +228,7 @@ func scanPackages(t *testing.T, root string, patterns, replaced []string, skip f
 				problems = append(problems, fmt.Sprintf("LOAD error in %s (%s): %v", pkg.PkgPath, arch, loadErr))
 			}
 			for imported := range pkg.Imports {
-				if strings.HasPrefix(imported, modulePath+"/internal/testsupport") {
+				if imported == modulePath+"/internal/testsupport" || strings.HasPrefix(imported, modulePath+"/internal/testsupport/") {
 					problems = append(problems, fmt.Sprintf("PRODUCTION package %s imports %s (a test-support package: its clients are outside the walk)", pkg.PkgPath, imported))
 				}
 			}
@@ -396,6 +404,40 @@ func holdsClient(t types.Type, depth int, seen map[types.Type]bool) bool {
 	return false
 }
 
+// holdsClientByValue: the type is net/http.Client, or an array, slice, map, channel or struct (fields, to a few levels)
+// that holds one BY VALUE (a pointer does not: it is made elsewhere).
+func holdsClientByValue(t types.Type, depth int, seen map[types.Type]bool) bool {
+	if t == nil || depth > 3 || seen[t] {
+		return false
+	}
+	seen[t] = true
+	if isClient(t) {
+		return true
+	}
+	switch x := types.Unalias(t).(type) {
+	case *types.Array:
+		return holdsClientByValue(x.Elem(), depth+1, seen)
+	case *types.Slice:
+		return holdsClientByValue(x.Elem(), depth+1, seen)
+	case *types.Chan:
+		return holdsClientByValue(x.Elem(), depth+1, seen)
+	case *types.Map:
+		return holdsClientByValue(x.Elem(), depth+1, seen)
+	case *types.Named:
+		if x.Obj().Pkg() != nil && x.Obj().Pkg().Path() == "net/http" {
+			return false
+		}
+		return holdsClientByValue(x.Underlying(), depth+1, seen)
+	case *types.Struct:
+		for i := 0; i < x.NumFields(); i++ {
+			if holdsClientByValue(x.Field(i).Type(), depth+1, seen) {
+				return true
+			}
+		}
+	}
+	return false
+}
+
 func inNetHTTP(obj types.Object) bool {
 	return obj != nil && obj.Pkg() != nil && obj.Pkg().Path() == "net/http"
 }
@@ -500,12 +542,17 @@ func (w walker) kindsOf(node ast.Node) []string {
 		if ident, ok := x.Fun.(*ast.Ident); ok {
 			if builtin, isBuiltin := w.info.Uses[ident].(*types.Builtin); isBuiltin && builtin.Name() == "new" && len(x.Args) == 1 {
 				arg := w.info.TypeOf(x.Args[0])
-				if isClient(arg) {
+				if holdsClientByValue(arg, 0, map[types.Type]bool{}) {
 					kinds = append(kinds, "client-new")
 				}
 				if w.hasClientField(arg) {
 					kinds = append(kinds, "nil-client-field-literal")
 				}
+			}
+		}
+		if ident, ok := x.Fun.(*ast.Ident); ok {
+			if builtin, isBuiltin := w.info.Uses[ident].(*types.Builtin); isBuiltin && builtin.Name() == "make" && len(x.Args) >= 1 && holdsClientByValue(w.info.TypeOf(x.Args[0]), 0, map[types.Type]bool{}) {
+				kinds = append(kinds, "client-new")
 			}
 		}
 		// a conversion between net/http.Client (or a pointer to it) and another type of its shape
@@ -520,7 +567,7 @@ func (w walker) kindsOf(node ast.Node) []string {
 		var kinds []string
 		if instance, ok := w.info.Instances[x]; ok {
 			for i := 0; i < instance.TypeArgs.Len(); i++ {
-				if isClient(derefPointer(instance.TypeArgs.At(i))) {
+				if holdsClientByValue(derefPointer(instance.TypeArgs.At(i)), 0, map[types.Type]bool{}) {
 					kinds = append(kinds, "client-instantiate")
 					break
 				}
@@ -551,7 +598,7 @@ func (w walker) kindsOf(node ast.Node) []string {
 		if obj := w.info.Defs[x]; obj != nil {
 			switch o := obj.(type) {
 			case *types.Var:
-				if isClient(o.Type()) {
+				if holdsClientByValue(o.Type(), 0, map[types.Type]bool{}) {
 					kinds = append(kinds, "client-decl")
 				}
 			case *types.TypeName:
@@ -707,6 +754,12 @@ func TestTheSiteWalkerFindsEveryKind(t *testing.T) {
 		{prefix + "method/method.go", "Value", "external-client-call"}:           1,
 		{prefix + "tagged/client_arm64.go", "Arm", "client-literal"}:             1,
 		{prefix + "tagged/client_amd64.go", "Amd", "client-literal"}:             1,
+		{prefix + "decl/decl.go", "var Arr", "client-decl"}:                      1,
+		{prefix + "decl/decl.go", "var InHolder", "client-decl"}:                 1,
+		{prefix + "decl/decl.go", "var Mp", "client-decl"}:                       1,
+		{prefix + "decl/decl.go", "var Ch", "client-decl"}:                       1,
+		{prefix + "decl/decl.go", "Makes", "client-new"}:                         2,
+		{prefix + "instantiate/instantiate.go", "Array", "client-instantiate"}:   1,
 	}
 	want[site{prefix + "decl/decl.go", "Result", "client-decl"}] = 0
 	delete(want, site{prefix + "decl/decl.go", "Result", "client-decl"})
@@ -737,44 +790,51 @@ func TestTheSiteVerdictNamesEveryDefect(t *testing.T) {
 
 import "testing"
 
-func TestRedirectProbe(t *testing.T)   { redirect() }
-func TestNoRedirectHere(t *testing.T)  { other() }
+func TestRedirectProbe(t *testing.T)      { probe := redirectprobe.New(t); probe.Assert(t) }
+func TestPolicy(t *testing.T)             { _ = http.ErrUseLastResponse }
+func TestNothingHere(t *testing.T)        { other() }
 func TestDropsAuthorization(t *testing.T) { _ = "Authorization" }
-func TestNoAuthHere(t *testing.T) { redirect() }
+func TestFollowsRedirect(t *testing.T)    { redirect() }
 `
 	if err := os.WriteFile(filepath.Join(root, "pkg", "p_test.go"), []byte(probes), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	k := func(symbol, kind string) site { return site{"pkg/p.go", symbol, kind} }
-	found := map[site]int{
-		k("ok", "client-literal"): 1, k("unlisted", "client-literal"): 1, k("count", "client-literal"): 1,
-		k("unclassified", "client-literal"): 1, k("bogus", "client-literal"): 1, k("nocite", "client-literal"): 1,
-		k("noprobe", "client-literal"): 1, k("weak", "client-literal"): 1, k("drops", "client-literal"): 1,
-		k("dropsweak", "client-literal"): 1, k("nocred", "client-literal"): 1, k("nocredprobe", "client-literal"): 1,
-		k("crossdir", "client-literal"): 1,
+	k := func(symbol string) site { return site{"pkg/p.go", symbol, "client-literal"} }
+	symbols := []string{"ok", "unlisted", "count", "unclassified", "bogus", "nocite", "noprobe", "weakguard", "swapguard", "weakpolicy", "swappolicy", "drops", "dropsweak", "nocred", "nocredprobe", "crossdir", "unless"}
+	found := map[site]int{}
+	for _, symbol := range symbols {
+		found[k(symbol)] = 1
 	}
 	rows := map[site]row{
-		k("ok", "client-literal"):           {1, "guarded", "TestRedirectProbe", "c"},
-		k("count", "client-literal"):        {4, "guarded", "TestRedirectProbe", "c"},
-		k("unclassified", "client-literal"): {1, "UNCLASSIFIED", "TestRedirectProbe", "c"},
-		k("bogus", "client-literal"):        {1, "whatever", "TestRedirectProbe", "c"},
-		k("nocite", "client-literal"):       {1, "guarded", "TestRedirectProbe", "  "},
-		k("noprobe", "client-literal"):      {1, "never-follows", "TestMissing", "c"},
-		k("weak", "client-literal"):         {1, "guarded", "TestNoRedirectHere", "c"},
-		k("drops", "client-literal"):        {1, "drops-credential", "TestDropsAuthorization", "c"},
-		k("dropsweak", "client-literal"):    {1, "drops-credential", "TestNoAuthHere", "c"},
-		k("nocred", "client-literal"):       {1, "no-credential", "-", "c"},
-		k("nocredprobe", "client-literal"):  {1, "no-credential", "TestRedirectProbe", "c"},
-		k("crossdir", "client-literal"):     {1, "guarded", "pkg:TestRedirectProbe", "c"},
-		k("gone", "client-literal"):         {1, "guarded", "TestRedirectProbe", "c"},
+		k("ok"):           {1, "guarded", "TestRedirectProbe", "c"},
+		k("count"):        {4, "guarded", "TestRedirectProbe", "c"},
+		k("unclassified"): {1, "UNCLASSIFIED", "TestRedirectProbe", "c"},
+		k("bogus"):        {1, "whatever", "TestRedirectProbe", "c"},
+		k("nocite"):       {1, "guarded", "TestRedirectProbe", "  "},
+		k("noprobe"):      {1, "never-follows", "TestMissing", "c"},
+		k("weakguard"):    {1, "guarded", "TestNothingHere", "c"},
+		k("swapguard"):    {1, "guarded", "TestPolicy", "c"}, // a guarded row whose probe only shows a policy
+		k("weakpolicy"):   {1, "never-follows", "TestNothingHere", "c"},
+		k("swappolicy"):   {1, "never-follows", "TestRedirectProbe", "c"}, // guarded -> never-follows with the same probe
+		k("drops"):        {1, "drops-credential", "TestDropsAuthorization", "c"},
+		k("dropsweak"):    {1, "drops-credential", "TestNothingHere", "c"},
+		k("nocred"):       {1, "no-credential", "-", "c"},
+		k("nocredprobe"):  {1, "no-credential", "TestRedirectProbe", "c"},
+		k("crossdir"):     {1, "guarded", "pkg:TestRedirectProbe", "c"},
+		k("unless"):       {1, "follows-unless-supplied", "TestNothingHere", "c"},
+		k("gone"):         {1, "guarded", "TestRedirectProbe", "c"},
 	}
 	got := strings.Join(compareSites(found, rows, root), "\n")
 	want := strings.Join([]string{
 		"COUNT differs: pkg/p.go count client-literal: table 4, code 1",
 		"NO CITE: pkg/p.go nocite client-literal",
-		"PROBE does not assert on Authorization: pkg/p.go dropsweak client-literal (TestNoAuthHere)",
-		"PROBE does not exercise a redirect: pkg/p.go weak client-literal (TestNoRedirectHere)",
+		"PROBE does not assert on Authorization: pkg/p.go dropsweak client-literal (TestNothingHere)",
+		"PROBE does not exercise a redirect: pkg/p.go unless client-literal (TestNothingHere)",
 		"PROBE missing: pkg/p.go noprobe client-literal names TestMissing in pkg",
+		"PROBE of a guarded row does not use the redirect probe (the second origin must see no request): pkg/p.go swapguard client-literal (TestPolicy)",
+		"PROBE of a guarded row does not use the redirect probe (the second origin must see no request): pkg/p.go weakguard client-literal (TestNothingHere)",
+		"PROBE of a never-follows row does not assert the client's own policy: pkg/p.go swappolicy client-literal (TestRedirectProbe)",
+		"PROBE of a never-follows row does not assert the client's own policy: pkg/p.go weakpolicy client-literal (TestNothingHere)",
 		"PROBE on a no-credential row (must be -): pkg/p.go nocredprobe client-literal",
 		"STALE row: pkg/p.go gone client-literal",
 		`UNCLASSIFIED: pkg/p.go bogus client-literal (class "whatever")`,

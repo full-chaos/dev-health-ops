@@ -15,3 +15,17 @@ type Holder struct {
 func Param(c nethttp.Client, p *nethttp.Client) {}
 
 func Result() nethttp.Client { return nethttp.Client{} }
+
+var Arr [1]nethttp.Client
+
+var InHolder Holder
+
+func Makes() {
+	_ = make([]nethttp.Client, 1)
+	_ = new([2]nethttp.Client)
+	_ = make(map[string]*nethttp.Client)
+}
+
+var Mp map[string]nethttp.Client
+
+var Ch chan nethttp.Client

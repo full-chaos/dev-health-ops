@@ -1033,3 +1033,36 @@ func TestWorkerWiresItsConnectionLeaseAndCapIntoTheGitFamilySelector(t *testing.
 		t.Fatalf("only %d git-family routes compared", compared)
 	}
 }
+
+// TestBuildProviderSyncHandlerBudgetLimitsAreTheOneTable pins CHAOS-7807: the
+// executor the worker builds carries the cost-class limits of the same table
+// the dispatch admission cap reads (an empty map would make every write route
+// answer ErrInvalidConfiguration; a drifted one would let admission outrun the
+// budget again).
+func TestBuildProviderSyncHandlerBudgetLimitsAreTheOneTable(t *testing.T) {
+	t.Parallel()
+	handler, _ := buildProviderSyncHandler(
+		nil, nil, nil, nil, nil,
+		nil, nil, slog.Default(),
+	)
+	executor, err := handler.BuildExecutor(&providersync.LeaseSession{
+		Claim: providersync.Claim{Unit: providersync.Unit{
+			Provider: "launchdarkly", Dataset: "feature-flags",
+		}},
+	})
+	if err != nil {
+		t.Fatalf("BuildExecutor: %v", err)
+	}
+	want := providersync.BudgetLimitsByCostClass()
+	if len(executor.BudgetLimits) != len(want) {
+		t.Fatalf("executor.BudgetLimits = %v; want %v", executor.BudgetLimits, want)
+	}
+	for class, limit := range want {
+		if executor.BudgetLimits[class] != limit {
+			t.Fatalf("executor.BudgetLimits[%q] = %d; want %d", class, executor.BudgetLimits[class], limit)
+		}
+	}
+	if executor.BudgetLimits[providersync.CostHeavy] != 1 {
+		t.Fatalf("heavy limit = %d; want 1", executor.BudgetLimits[providersync.CostHeavy])
+	}
+}

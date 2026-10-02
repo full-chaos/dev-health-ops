@@ -3,13 +3,17 @@ package githubcode
 import (
 	"bytes"
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
+	"flag"
 	"fmt"
 	"io"
 	"math/big"
 	"net"
 	"net/http"
+	"os"
 	"strings"
 	"testing"
 	"time"
@@ -92,7 +96,10 @@ type scenario struct {
 	Max     *string `json:"max,omitempty"`
 	// Loose compares only the exception class of a failure: the text of a
 	// transport error is httpx's in Python and Go's here.
-	Loose     bool       `json:"loose,omitempty"`
+	Loose bool `json:"loose,omitempty"`
+	// Known names a difference between Go and Python the frozen answer shows (a finding, CHAOS-7532 follow-up):
+	// the scenario is recorded, and the test requires that Go still differs from the frozen answer (a fix flips it).
+	Known     string     `json:"-"`
 	Responses []scripted `json:"responses"`
 }
 
@@ -125,12 +132,46 @@ func page(items ...string) string { return "[" + strings.Join(items, ", ") + "]"
 
 func next(url string) [2]string { return [2]string{"Link", `<` + url + `>; rel="next"`} }
 
+// notMeasured prefixes the note of a scenario whose input the Python mock transport cannot represent: it is recorded,
+// never counted as agreeing, and listed apart.
+const notMeasured = "NOT MEASURED: "
+
+// knownLinkDifferences and knownBaseDifferences are the Link targets and base URLs whose frozen Python answer
+// differs from the Go client's today (findings of the CHAOS-7532 corpus-gap follow-up; each is recorded, none fixed here).
+var knownLinkDifferences = map[string]string{
+	"https://:80/x":                   "an authority with an empty host: httpx resolves it against the base, Go keeps the ':80' host",
+	"https://api.github.com/x#":       "an empty fragment is kept by httpx and dropped by Go",
+	"https://api.github.com/x?#":      "an empty fragment is kept by httpx and dropped by Go",
+	"https://api.github.com?":         "httpx keeps 'host?' without a slash, Go adds one",
+	"https://api.github.com#":         "httpx keeps 'host#' without a slash, Go adds one",
+	"ftp://x.test/y":                  notMeasured + "the Python mock transport does not refuse the scheme (harness); real httpx raises UnsupportedProtocol, as Go does",
+	"mailto:a@b":                      "a scheme without // joins as a path in httpx; Go resolves it to the base root",
+	"javascript:alert(1)":             "a scheme without // joins as a path in httpx; Go resolves it to the base root",
+	"/é?ü=1#ö":                        notMeasured + "a non-ASCII header value cannot be encoded by the Python mock transport (harness); Go percent-encodes it",
+	"https://ghé.test/x":              notMeasured + "a non-ASCII header value cannot be encoded by the Python mock transport (harness); Go percent-encodes the host",
+	"https://u@other.test/x":          "httpx turns userinfo into Basic authorization; Go keeps the token",
+	"https://u:p@other.test:99/x?q=1": "httpx turns userinfo into Basic authorization; Go keeps the token",
+	"/a\tb":                           "a tab in the target: httpx raises InvalidURL, Go sends %09",
+}
+
+var knownBaseDifferences = map[string]string{
+	"https://user:pw@ghe.test/api/v3": "httpx turns the base's userinfo into Basic authorization and keeps it in the URL; Go drops it and keeps the token",
+	"https://u@ghe.test":              "httpx turns the base's userinfo into Basic authorization and keeps it in the URL; Go drops it and keeps the token",
+	"https://ghe.test/api/v3#":        "an empty fragment is kept by httpx and dropped by Go",
+	"https://ghe.test/api/v3?#":       "an empty fragment is kept by httpx and dropped by Go",
+	"https://ghé.test/api/v3":         "httpx encodes a non-ASCII host as IDNA (xn--); Go percent-encodes it",
+	"https://ghe.test/a#b#c":          "a second '#' in the fragment: httpx keeps it, Go escapes it as %23",
+	"ghe.test/api/v3":                 "a base with no scheme: Python's transport tries the request and raises ValueError, Go refuses before any request",
+	"//ghe.test/api/v3":               "a base with no scheme: Python's transport tries the request and raises ValueError, Go refuses before any request",
+}
+
 func listScenarios() []scenario {
 	two := page(repoItem(1, "api"), repoItem(2, "web"))
 	str := func(s string) *string { return &s }
 	var out []scenario
+	known := ""
 	add := func(mode, base, org, search, pattern string, max *string, responses ...scripted) {
-		out = append(out, scenario{Base: base, Mode: mode, Org: org, Search: search, Pattern: pattern, Max: max, Responses: responses})
+		out = append(out, scenario{Base: base, Mode: mode, Org: org, Search: search, Pattern: pattern, Max: max, Responses: responses, Known: known})
 	}
 	repos := func(base, org string, responses ...scripted) { add("repos", base, org, "", "", nil, responses...) }
 	// Bases: the default, a GitHub Enterprise root with and without a
@@ -278,6 +319,67 @@ func listScenarios() []scenario {
 	repos("", "acme", ok(two, next("https://api.github.com/x?page=2")), status(404, `{}`))
 	repos("", "acme", ok(two, next("https://api.github.com/x?page=2")), status(401, `{}`))
 	repos("", "acme", ok(two, next("https://api.github.com/x?page=2")), ok(`{"a": 1}`))
+	// Corpus gaps the CHAOS-7532 vet named (follow-up): quoted owners inside an error text, Link headers with a scheme
+	// and no host, ending in "?" or "#", or with a scheme httpx refuses, secondary-limit wording, falsy non-null
+	// fields, and base URLs and links of the shapes httpx normalises (case, userinfo, non-ASCII, percent escapes).
+	for _, org := range []string{"a b", "a/b c", "q\"uote", "it's", "tab\there", "grüppe?&#", "a%b", "x\\y"} {
+		repos("", org, status(404, `{}`))
+		repos("", org, status(500, "boom"), status(500, "boom"), status(500, "boom"), status(500, "boom"), status(500, "boom"))
+		repos("", org, status(401, `{"message": "Bad credentials"}`))
+		add("repos", "", org, "w", "", nil, status(422, `{}`))
+	}
+	for _, link := range []string{"https://", "http://", "https:///x?page=2", "https://:80/x", "https://api.github.com/x?", "https://api.github.com/x#", "https://api.github.com/x?#",
+		"/x?", "/x#", "/x?#", "?", "#", "x?", "https://api.github.com?", "https://api.github.com#", "ftp://x.test/y", "file:///etc/passwd", "mailto:a@b",
+		"javascript:alert(1)", "HTTPS://API.GITHUB.COM/x?page=2", "Http://api.github.com/x", "/a?b?c", "/a#b#c", "/a%2fb", "/a%2Fb", "/%e2%82%ac", "/%E2%82%AC", "/é?ü=1#ö", "https://ghé.test/x",
+		"https://u@other.test/x", "https://u:p@other.test:99/x?q=1", "//u@other.test", "/a b", "/a\tb", "https://api.github.com/x?page=2&page=3", "https://api.github.com:443/x", "https://api.github.com:80/x", "http://api.github.com:80/x"} {
+		known = knownLinkDifferences[link]
+		repos("", "acme", ok(two, next(link)), ok(page(repoItem(3, "docs"))))
+		repos("https://ghe.test/api/v3", "acme", ok(two, next(link)), ok(page(repoItem(3, "docs"))))
+		known = ""
+	}
+	for _, base := range []string{"HTTPS://ghe.test/api/v3", "Https://GHE.test", "https://user:pw@ghe.test/api/v3", "https://u@ghe.test", "https://ghe.test/api/v3#", "https://ghe.test/api/v3?#",
+		"https://ghé.test/api/v3", "https://ghe.test/é/ü?ö=ä#å", "https://ghe.test/a%2fb", "https://ghe.test/a%2Fb/%e2%82%ac", "https://ghe.test/a?b?c", "https://ghe.test/a#b#c", "https://ghe.test/a b",
+		"https://ghe.test:0/x", "https://ghe.test:65535/x", "https://ghe.test:99999/x", "https://ghe.test:/x", "ftp://ghe.test/x", "ghe.test/api/v3", "//ghe.test/api/v3"} {
+		known = knownBaseDifferences[base]
+		repos(base, "acme", ok(two))
+		repos(base, "acme", ok(two, next("/orgs/acme/repos?page=2")), ok(page(repoItem(3, "docs"))))
+		add("installation", base, "", "", "", nil, ok(`{"repositories": []}`))
+		known = ""
+	}
+	// Terminal responses that are not a 403 and that the rate-limit triage's wording or headers match: only a 403 is
+	// triaged as a rate limit (vet gap, CHAOS-7813).
+	for _, code := range []int{401, 404, 418, 422, 429, 500, 502} {
+		for _, body := range []string{`rate limit`, `abuse`, `secondary`, `{"message": "API rate limit exceeded"}`, `You have exceeded a secondary rate limit`, `{}`} {
+			repos("", "acme", repeat(5, status(code, body))...)
+			repos("", "acme", repeat(5, status(code, body, [2]string{"Retry-After", "0"}))...)
+			repos("", "acme", repeat(5, status(code, body, [2]string{"X-RateLimit-Remaining", "0"}, [2]string{"X-RateLimit-Reset", "1"}))...)
+		}
+	}
+	// An item whose html_url is falsy or absent AND whose url is falsy but not null (the url fallback is read for its
+	// truthiness, not for nil).
+	var urlItems []string
+	for _, htmlURL := range []string{``, `, "html_url": 0`, `, "html_url": false`, `, "html_url": []`, `, "html_url": {}`, `, "html_url": ""`, `, "html_url": 0.0`, `, "html_url": null`} {
+		for _, url := range []string{`0`, `false`, `[]`, `{}`, `0.0`, `""`, `null`, `"https://api.test/repos/O/x"`} {
+			urlItems = append(urlItems, `{"id": 1, "name": "n", "full_name": "O/n"`+htmlURL+`, "url": `+url+`}`)
+		}
+	}
+	repos("", "acme", ok(page(urlItems...)))
+	for _, item := range urlItems {
+		repos("", "acme", ok(page(item)))
+	}
+	repos("", "acme", status(403, `secondary`))
+	repos("", "acme", status(403, `a Secondary limit`))
+	repos("", "acme", status(403, `SECONDARY RATE LIMIT`))
+	repos("", "acme", status(403, `rate limit`))
+	repos("", "acme", status(403, `abuse`))
+	repos("", "acme", status(403, `secondary`, [2]string{"Retry-After", "0"}), ok(two))
+	repos("", "acme", status(403, `rate limit exceeded`, [2]string{"Retry-After", "0"}), ok(two))
+	for _, falsy := range []string{"0", "false", "[]", "{}", `""`, "0.0"} {
+		repos("", "acme", ok(`[{"id": 1, "name": `+falsy+`, "full_name": "O/a"}, {"id": 2, "name": "b", "full_name": `+falsy+`}, {"id": 3, "name": "c", "full_name": "O/c", "html_url": `+falsy+`, "url": "https://api.test/repos/O/c"}, {"id": 4, "name": "d", "full_name": "O/d", "html_url": `+falsy+`}, {"id": 5, "name": "e", "full_name": "O/e", "html_url": "https://h.test/O/e", "url": `+falsy+`}, {"id": 6, "name": "f", "full_name": "O/f", "description": `+falsy+`}]`))
+		add("repos", "", "", "", "*a*", nil, ok(`[{"id": 1, "name": `+falsy+`, "full_name": "O/a"}, {"id": 2, "name": "b", "full_name": `+falsy+`}, {"id": 3, "name": `+falsy+`, "full_name": `+falsy+`}]`))
+		add("repos", "", "", "", "*0*", nil, ok(`[{"id": 1, "name": `+falsy+`, "full_name": "O/a"}, {"id": 2, "name": "b", "full_name": `+falsy+`}]`))
+		add("installation", "", "", "a", "", nil, ok(`{"repositories": [{"id": 1, "name": `+falsy+`, "full_name": "O/a"}, {"id": 2, "name": "b", "full_name": `+falsy+`}]}`))
+	}
 	add("installation", "", "", "", "", nil, status(403, `{"message": "Resource not accessible by integration"}`))
 	add("installation", "", "", "", "", nil, status(404, `{}`))
 	return out
@@ -328,6 +430,8 @@ func (timeoutError) Temporary() bool { return true }
 // class, the retry attempts, the rate-limit triage and malformed bodies.
 func TestListRepositoriesVenueOracleMatchesFrozenPython(t *testing.T) {
 	scenarios := listScenarios()
+	knownGo := loadKnownGoAnswers(t)
+	seenKnown := map[string]knownGoAnswer{}
 	input, err := json.Marshal(scenarios)
 	if err != nil {
 		t.Fatal(err)
@@ -391,6 +495,34 @@ func TestListRepositoriesVenueOracleMatchesFrozenPython(t *testing.T) {
 		}
 		gotResult, _ := json.Marshal(got)
 		wantResult, _ := json.Marshal(pythonResult)
+		if s.Known != "" {
+			var pythonRequests [][2]string
+			for _, request := range want[index].Requests {
+				pair := [2]string{}
+				if request[0] != nil {
+					pair[0] = *request[0]
+				}
+				if request[1] != nil {
+					pair[1] = *request[1]
+				}
+				pythonRequests = append(pythonRequests, pair)
+			}
+			if string(gotResult) == string(wantResult) && fmt.Sprint(transport.seen) == fmt.Sprint(pythonRequests) {
+				t.Errorf("scenario %d (%s) is a known difference (%s) but Go now answers as Python: delete its note", index, describe(s), s.Known)
+			} else {
+				t.Logf("known difference, scenario %d (%s): %s", index, describe(s), s.Known)
+			}
+			// Go's own answer is pinned too: a change to another answer fails here, not only a change to Python's.
+			key := knownKey(s)
+			seenKnown[key] = knownGoAnswer{Result: string(gotResult), Requests: fmt.Sprint(transport.seen),
+				PythonResult: string(wantResult), PythonRequests: fmt.Sprint(pythonRequests), NotMeasured: strings.HasPrefix(s.Known, notMeasured)}
+			if !*updateKnownGo {
+				if pinned, ok := knownGo[key]; !ok || pinned != seenKnown[key] {
+					t.Errorf("scenario %d (%s): the answer of Go or of Python for a known difference changed\n pinned %+v\n now    %+v\n(run with -update-known-go after a deliberate change)", index, describe(s), pinned, seenKnown[key])
+				}
+			}
+			continue
+		}
 		if string(gotResult) != string(wantResult) {
 			t.Errorf("scenario %d (%s): result\n go     %s\n python %s", index, describe(s), gotResult, wantResult)
 		}
@@ -409,8 +541,71 @@ func TestListRepositoriesVenueOracleMatchesFrozenPython(t *testing.T) {
 			t.Errorf("scenario %d (%s): requests\n go     %v\n python %v", index, describe(s), transport.seen, pythonRequests)
 		}
 	}
-	t.Logf("%d scenarios compared", len(scenarios))
+	if *updateKnownGo {
+		writeKnownGoAnswers(t, seenKnown)
+	} else if len(knownGo) != len(seenKnown) {
+		t.Errorf("testdata/known-go-answers.json pins %d known differences, the corpus has %d", len(knownGo), len(seenKnown))
+	}
+	unmeasured := 0
+	for _, answer := range seenKnown {
+		if answer.NotMeasured {
+			unmeasured++
+		}
+	}
+	t.Logf("%d scenarios: %d compared and agreeing, %d known differences pinned on both planes, %d NOT MEASURED (the Python mock cannot represent the input)",
+		len(scenarios), len(scenarios)-len(seenKnown), len(seenKnown)-unmeasured, unmeasured)
 	venueoracle.WriteGoOnlyProof(t, "Go's code-host listing against the frozen requests and results of Python's client")
+}
+
+var updateKnownGo = flag.Bool("update-known-go", false, "rewrite testdata/known-go-answers.json from Go's current answers for the known differences")
+
+// knownGoAnswer is what the Go client answered for a scenario with a known difference from Python.
+type knownGoAnswer struct {
+	Result   string `json:"result"`
+	Requests string `json:"requests"`
+	// PythonResult and PythonRequests are the frozen Python answer of the scenario, pinned beside Go's: a known
+	// difference fails when either plane changes.
+	PythonResult   string `json:"python_result"`
+	PythonRequests string `json:"python_requests"`
+	// NotMeasured is set where the Python mock cannot represent the input: the scenario is not counted as compared.
+	NotMeasured bool `json:"not_measured,omitempty"`
+}
+
+const knownGoAnswersPath = "testdata/known-go-answers.json"
+
+func loadKnownGoAnswers(t *testing.T) map[string]knownGoAnswer {
+	t.Helper()
+	pinned := map[string]knownGoAnswer{}
+	if *updateKnownGo {
+		return pinned
+	}
+	data, err := os.ReadFile(knownGoAnswersPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := json.Unmarshal(data, &pinned); err != nil {
+		t.Fatal(err)
+	}
+	return pinned
+}
+
+func writeKnownGoAnswers(t *testing.T, answers map[string]knownGoAnswer) {
+	t.Helper()
+	data, err := json.MarshalIndent(answers, "", "  ")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(knownGoAnswersPath, append(data, '\n'), 0o644); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// knownKey names a known difference by what the scenario is (its description and a digest of its scripted exchange),
+// not by its position: adding or removing a scenario does not move the pins of the others.
+func knownKey(s scenario) string {
+	raw, _ := json.Marshal(s)
+	sum := sha256.Sum256(raw)
+	return describe(s) + " #" + hex.EncodeToString(sum[:6])
 }
 
 // describe names a scenario in a failure.

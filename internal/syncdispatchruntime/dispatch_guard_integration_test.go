@@ -461,3 +461,90 @@ func TestAuthorizeRunLockSetMatchesExactlyTheStatusesItsMutatorsCanTouch(t *test
 		}
 	})
 }
+
+// authorizeCappedCount runs authorizeRun for the seeded run and returns how
+// many candidate units the concurrency cap held back.
+func authorizeCappedCount(t *testing.T, ctx context.Context, pool *pgxpool.Pool, now time.Time) (capped int, concurrencyCapped bool) {
+	t.Helper()
+	tx, err := pool.Begin(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
+	decision, err := authorizeRun(ctx, tx, nil, guardTestOrg, guardTestRun, now)
+	if err != nil {
+		t.Fatalf("authorizeRun: %v", err)
+	}
+	if !decision.allowed {
+		t.Fatalf("decision=%+v, want allowed", decision)
+	}
+	return len(decision.cappedUnitIDs), decision.concurrencyCapped
+}
+
+func guardUnitID(prefix string, i int) string {
+	return fmt.Sprintf("00000000-0000-4000-8000-%s%02x", prefix, i)
+}
+
+// TestAuthorizeRunAdmitsNoMoreHeavyUnitsThanTheHeavyBudgetServes pins
+// CHAOS-7434: a bucket holding eight planned heavy units dispatches one (the
+// heavy request budget is 1), not eight, so seven units are not dispatched
+// only to loop in budget-contention snoozes. The default
+// SYNC_UNIT_CONCURRENCY_PER_BUCKET (8) must not raise it.
+func TestAuthorizeRunAdmitsNoMoreHeavyUnitsThanTheHeavyBudgetServes(t *testing.T) {
+	withGuardPool(t, func(ctx context.Context, pool *pgxpool.Pool) {
+		now := pgNow()
+		for i := 0; i < 8; i++ {
+			insertGuardUnit(t, ctx, pool, guardUnitID("0000000002", i), "github", "heavy", syncRunUnitStatusPlanned, now, nil, nil, nil)
+		}
+		capped, concurrencyCapped := authorizeCappedCount(t, ctx, pool, now)
+		if !concurrencyCapped || capped != 7 {
+			t.Fatalf("heavy bucket of 8 planned units: capped=%d concurrencyCapped=%v; want 7 held back (1 admitted)", capped, concurrencyCapped)
+		}
+	})
+}
+
+// TestAuthorizeRunDoesNotDoubleCountTheRunningHeavyHolder pins that the one
+// running unit that holds the heavy budget occupies exactly the one slot:
+// with it live, a new planned heavy unit waits, and with it ABSENT the same
+// planned unit is admitted.
+func TestAuthorizeRunDoesNotDoubleCountTheRunningHeavyHolder(t *testing.T) {
+	withGuardPool(t, func(ctx context.Context, pool *pgxpool.Pool) {
+		now := pgNow()
+		live := now.Add(time.Hour)
+		insertGuardUnit(t, ctx, pool, guardUnitID("0000000003", 1), "github", "heavy", syncRunUnitStatusRunning, now, nil, &live, ptrString("holder"))
+		insertGuardUnit(t, ctx, pool, guardUnitID("0000000003", 2), "github", "heavy", syncRunUnitStatusPlanned, now, nil, nil, nil)
+		capped, concurrencyCapped := authorizeCappedCount(t, ctx, pool, now)
+		if !concurrencyCapped || capped != 1 {
+			t.Fatalf("running holder + 1 planned: capped=%d concurrencyCapped=%v; want the planned unit held back", capped, concurrencyCapped)
+		}
+	})
+	withGuardPool(t, func(ctx context.Context, pool *pgxpool.Pool) {
+		now := pgNow()
+		insertGuardUnit(t, ctx, pool, guardUnitID("0000000003", 2), "github", "heavy", syncRunUnitStatusPlanned, now, nil, nil, nil)
+		capped, concurrencyCapped := authorizeCappedCount(t, ctx, pool, now)
+		if concurrencyCapped || capped != 0 {
+			t.Fatalf("one planned heavy unit, empty bucket: capped=%d concurrencyCapped=%v; want it admitted", capped, concurrencyCapped)
+		}
+	})
+}
+
+// TestAuthorizeRunAdmitsMediumAndLightUpToTheirBudgetLimits pins the other two
+// rows of the one table: medium 2 and light 4.
+func TestAuthorizeRunAdmitsMediumAndLightUpToTheirBudgetLimits(t *testing.T) {
+	for _, tc := range []struct {
+		class    string
+		planned  int
+		wantHeld int
+	}{{"medium", 5, 3}, {"light", 6, 2}} {
+		withGuardPool(t, func(ctx context.Context, pool *pgxpool.Pool) {
+			now := pgNow()
+			for i := 0; i < tc.planned; i++ {
+				insertGuardUnit(t, ctx, pool, guardUnitID("0000000004", i), "github", tc.class, syncRunUnitStatusPlanned, now, nil, nil, nil)
+			}
+			capped, _ := authorizeCappedCount(t, ctx, pool, now)
+			if capped != tc.wantHeld {
+				t.Fatalf("%s bucket of %d planned units: capped=%d; want %d held back", tc.class, tc.planned, capped, tc.wantHeld)
+			}
+		})
+	}
+}

@@ -8,6 +8,7 @@ import (
 
 	"github.com/full-chaos/dev-health-ops/internal/jobcontract"
 	"github.com/full-chaos/dev-health-ops/internal/jobruntime"
+	"github.com/full-chaos/dev-health-ops/internal/jobs/metrics/remaining/stepcause"
 )
 
 type Store interface {
@@ -86,7 +87,7 @@ func (handler *PartitionHandler[T]) Work(
 		if errors.As(err, &active) {
 			return jobruntime.RetryableAfter(err, active.RetryAfter)
 		}
-		return jobruntime.Retryable(err)
+		return jobruntime.Retryable(stepcause.Failure(stepcause.ClaimPartition, err))
 	}
 	if claim == nil {
 		return nil
@@ -98,7 +99,7 @@ func (handler *PartitionHandler[T]) Work(
 			return jobruntime.Permanent(err)
 		}
 		releaseFailedAttempt(handler.store, ctx, *claim, execution)
-		return jobruntime.Retryable(err)
+		return jobruntime.Retryable(stepcause.Failure(stepcause.LoadRun, err))
 	}
 	if claim.Partition.ID != payload.PartitionID ||
 		run.ID != claim.Partition.RunID || run.Status != "running" ||
@@ -142,7 +143,14 @@ func (handler *PartitionHandler[T]) Work(
 			return jobruntime.WithReason(jobruntime.Permanent(err), jobruntime.ReasonInvalidState)
 		}
 		releaseFailedAttempt(handler.store, ctx, *claim, execution)
-		return jobruntime.Retryable(err)
+		// An error the executor already tagged with its exact step keeps that
+		// cause: a second, generic compute_partition step on top would repeat
+		// the codes and bury the specific step. Only an untagged error gets the
+		// handler's own step.
+		if _, tagged := jobruntime.SafeCause(err); tagged {
+			return jobruntime.Retryable(err)
+		}
+		return jobruntime.Retryable(stepcause.Failure(stepcause.ComputePartition, err))
 	}
 	if err := handler.store.CompletePartition(
 		ctx,
@@ -155,7 +163,7 @@ func (handler *PartitionHandler[T]) Work(
 		if finalAttempt(execution) {
 			releaseClaimTerminally(handler.store, ctx, *claim)
 		}
-		return jobruntime.Retryable(err)
+		return jobruntime.Retryable(stepcause.Failure(stepcause.CompletePartition, err))
 	}
 	return nil
 }

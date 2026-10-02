@@ -302,6 +302,7 @@ type handlerStore struct {
 	renewals    int
 	failRenewal bool
 	loadRunErr  error
+	claimErr    error
 	completeErr error
 	releases    int
 	// terminalReleases counts ReleasePartitionTerminally calls separately
@@ -321,6 +322,9 @@ func (store *handlerStore) LoadRun(context.Context, string) (Run, error) {
 	return store.run, nil
 }
 func (store *handlerStore) ClaimPartition(context.Context, string) (*Claim, error) {
+	if store.claimErr != nil {
+		return nil, store.claimErr
+	}
 	return store.claim, nil
 }
 func (store *handlerStore) RenewPartition(context.Context, Claim) error {
@@ -331,6 +335,9 @@ func (store *handlerStore) RenewPartition(context.Context, Claim) error {
 	return nil
 }
 func (store *handlerStore) CompletePartition(_ context.Context, _ Claim, evidence string) error {
+	if store.completeErr != nil {
+		return store.completeErr
+	}
 	store.completions++
 	store.evidence = evidence
 	return store.completeErr

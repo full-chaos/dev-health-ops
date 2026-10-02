@@ -94,7 +94,7 @@ func rootCause(err error) error {
 // clickHouseExceptionAttributes is the code and name of the ClickHouse exception the error chain holds, none when it holds none.
 func clickHouseExceptionAttributes(err error) []attribute.KeyValue {
 	var exception *clickhousedriver.Exception
-	if logging.ErrorAs(err, &exception) {
+	if logging.ErrorAs(err, &exception) && exception != nil {
 		return []attribute.KeyValue{
 			attribute.Int64("clickhouse_code", int64(exception.Code)),
 			attribute.String("clickhouse_exception", exception.Name),

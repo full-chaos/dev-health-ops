@@ -151,7 +151,7 @@ func defaultRecordInvestmentCoverageFailure(ctx context.Context, orgID string, m
 	}
 
 	var exception *clickhousedriver.Exception
-	if logging.ErrorAs(err, &exception) {
+	if logging.ErrorAs(err, &exception) && exception != nil {
 		spanAttrs = append(spanAttrs,
 			attribute.Int64("clickhouse_code", int64(exception.Code)),
 			attribute.String("clickhouse_exception", exception.Name),

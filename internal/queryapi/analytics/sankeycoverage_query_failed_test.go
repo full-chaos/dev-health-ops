@@ -346,7 +346,10 @@ func TestDefaultRecordInvestmentCoverageFailure_ErrorTextNeverReachesTheSpanOrTh
 	if len(*records) != 1 {
 		t.Fatalf("expected 1 log record, got %d", len(*records))
 	}
-	seen = append(seen, fmt.Sprint((*records)[0].attrs))
+	seen = append(seen, fmt.Sprint((*records)[0].attrs), (*records)[0].msg)
+	if (*records)[0].msg != "investment_coverage.query_failed" {
+		t.Fatalf("the log message is %q, want the constant event name", (*records)[0].msg)
+	}
 	for _, text := range seen {
 		for _, leak := range []string{"planted", "10.1.2.3", "ch.example.test", "x="} {
 			if strings.Contains(text, leak) {

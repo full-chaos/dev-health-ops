@@ -200,7 +200,11 @@ func corpus() []scenario {
 		name := func(base string) string { return base }
 
 		// Two team pages, an archived team, whitespace to trim, optional
-		// fields present and absent.
+		// fields present and absent. The member rows of this scenario keep a
+		// SYNTHETIC team column: the pinned Python client refuses a member row
+		// without one, and a refused read would end the scenario before its
+		// pagination, node-list and project reads are compared. The real shape
+		// (one user column) is the "member-without-team" scenario below.
 		n := name("paged")
 		t1, t2, t3 := teamARI(n, "1"), teamARI(n, "2"), teamARI(n, "3")
 		add(scenario{name: n, strict: strict, teamIDs: []string{t1, t2},
@@ -271,7 +275,10 @@ func corpus() []scenario {
 				projectsField + " " + m1: {graphPage(projectsField, nil, true, nil, false)},
 			}})
 
-		// A member row with no team column.
+		// A member row with no team column: the REAL gateway shape (one user column per edge, measured by a structure-only probe on
+		// 2026-10-02; the team is the request variable). The pinned Python client refuses it ("TEAM_MEMBER relation requires team node",
+		// mappers/teams.py:237-239 via iter_team_users, teamwork_graph.py:108-128); the Go client serves it with the team of the request
+		// (CHAOS-7902). This read is pinned as a Known divergence, "Go serves, the reference fails" (see knownDivergences).
 		n = name("member-without-team")
 		w1 := teamARI(n, "1")
 		add(scenario{name: n, strict: strict, teamIDs: []string{w1},
@@ -629,6 +636,50 @@ func staleExclusions(reads map[string]outcome) []string {
 }
 
 // compare returns one line per read whose outcomes differ.
+// knownDivergences pins the reads where Go intentionally serves what the pinned reference client refuses ("Go serves, the reference
+// fails"): the key prefix is "<scenario> users ", the reference must still answer the named error, and Go must answer the named
+// members. Anything else on such a read is a mismatch, so the pin cannot hide a wrong Go answer.
+var knownDivergences = map[string]struct {
+	pythonDetail string
+	goSubjects   []string
+}{
+	"member-without-team users ": {pythonDetail: "TEAM_MEMBER relation requires team node", goSubjects: []string{"ari:cloud:identity::user/acc-7"}},
+}
+
+func knownDivergenceFor(key string) (string, bool) {
+	for prefix := range knownDivergences {
+		if strings.HasPrefix(key, prefix) {
+			return prefix, true
+		}
+	}
+	return "", false
+}
+
+// checkKnownDivergence reports why a pinned read does NOT hold, or "" when it does.
+func checkKnownDivergence(prefix string, py, gv outcome) string {
+	known := knownDivergences[prefix]
+	if py.Status != "error" || !strings.Contains(py.Detail, known.pythonDetail) {
+		return fmt.Sprintf("the reference no longer answers %q (status %s, %q)", known.pythonDetail, py.Status, py.Detail)
+	}
+	if gv.Status != "ok" {
+		return fmt.Sprintf("Go no longer serves the members (status %s, %q)", gv.Status, gv.Detail)
+	}
+	var got []string
+	for _, r := range gv.Records {
+		for _, f := range r {
+			if f[0] == "subject_user_id" {
+				if value, ok := f[1].(leaf); ok {
+					got = append(got, value.V)
+				}
+			}
+		}
+	}
+	if strings.Join(got, ",") != strings.Join(known.goSubjects, ",") {
+		return fmt.Sprintf("Go serves members %v, want %v", got, known.goSubjects)
+	}
+	return ""
+}
+
 func compare(python, goSide map[string]outcome) []string {
 	keys := map[string]bool{}
 	for key := range python {
@@ -648,6 +699,12 @@ func compare(python, goSide map[string]outcome) []string {
 		gv, goOK := goSide[key]
 		if !pyOK || !goOK {
 			mismatches = append(mismatches, key+": read on one side only")
+			continue
+		}
+		if prefix, known := knownDivergenceFor(key); known {
+			if why := checkKnownDivergence(prefix, py, gv); why != "" {
+				mismatches = append(mismatches, key+": the pinned divergence does not hold: "+why)
+			}
 			continue
 		}
 		py, gv = withoutExcluded(py), withoutExcluded(gv)
@@ -751,6 +808,29 @@ func TestAtlassianTeamsClientMatchesFrozenPython(t *testing.T) {
 		}
 		return false
 	})
+	plant("known divergence: Go stops serving the member", func(reads map[string]outcome) bool {
+		for key, o := range reads {
+			if _, known := knownDivergenceFor(key); known {
+				reads[key] = outcome{Status: "error", Detail: o.Detail}
+				return true
+			}
+		}
+		return false
+	})
+	plant("known divergence: Go serves another member", func(reads map[string]outcome) bool {
+		for key, o := range reads {
+			if _, known := knownDivergenceFor(key); known && len(o.Records) > 0 {
+				for index := range o.Records[0] {
+					if o.Records[0][index][0] == "subject_user_id" {
+						o.Records[0][index][1] = typedString("ari:cloud:identity::user/planted")
+						reads[key] = o
+						return true
+					}
+				}
+			}
+		}
+		return false
+	})
 	plant("record dropped", func(reads map[string]outcome) bool {
 		for key, o := range reads {
 			if len(o.Records) > 1 {
@@ -761,5 +841,5 @@ func TestAtlassianTeamsClientMatchesFrozenPython(t *testing.T) {
 		}
 		return false
 	})
-	t.Logf("%d scenarios, %d reads compared (%v), %d records; 0 mismatches; 8 planted divergences found", len(scenarios), len(goSide), statuses, records)
+	t.Logf("%d scenarios, %d reads compared (%v), %d records; 0 mismatches; 10 planted divergences found", len(scenarios), len(goSide), statuses, records)
 }

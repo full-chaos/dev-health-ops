@@ -114,16 +114,10 @@ func ariNode(id, typename string, data map[string]any) map[string]any {
 	return map[string]any{"__typename": "GraphStoreCypherQueryV2AriNode", "id": id, "data": data}
 }
 
-func userEdge(team, account string) map[string]any {
-	return map[string]any{"node": map[string]any{"columns": []any{
-		map[string]any{"key": "team", "value": ariNode(team, "TeamV2", map[string]any{"id": team, "displayName": "T"})},
-		map[string]any{"key": "user", "value": ariNode("ari:cloud:identity::user/"+account, "AtlassianAccountUser", map[string]any{"id": "x", "accountId": account, "name": "N"})},
-	}}}
-}
-
-// userOnlyEdge is the shape the live gateway answers the team-users read with (a read-only probe of 2026-10-02, CHAOS-7902): one
-// column per edge, the user. The team is the request's own variable and is not in the row.
-func userOnlyEdge(account string) map[string]any {
+// userEdge is the shape the live gateway answers the team-users read with (a structure-only probe of 2026-10-02, CHAOS-7902): ONE
+// column per edge, the user. The team is the request's own variable and is not in the row, so the first argument (the team the read
+// is for) is not part of the row. (The projects edge below is NOT MEASURED on the real provider: shape not measured.)
+func userEdge(_, account string) map[string]any {
 	return map[string]any{"node": map[string]any{"columns": []any{
 		map[string]any{"key": "user", "value": ariNode("ari:cloud:identity::user/"+account, "AtlassianAccountUser", map[string]any{"id": "x", "accountId": account, "name": "N"})},
 	}}}
@@ -596,7 +590,7 @@ func TestCollectReadsMembersFromEdgesThatCarryOnlyTheUser(t *testing.T) {
 		case "TeamSearchV2":
 			return 200, searchPage("", teamNode(teamA, "Platform", "ACTIVE"))
 		case "TeamworkGraphTeamUsers":
-			return 200, connection("teamworkGraph_teamUsers", "", userOnlyEdge("Alice-1"), userOnlyEdge("bob-2"))
+			return 200, connection("teamworkGraph_teamUsers", "", userEdge(teamA, "Alice-1"), userEdge(teamA, "bob-2"))
 		case "TeamworkGraphTeamActiveProjects":
 			return 200, connection("teamworkGraph_teamActiveProjects", "")
 		}

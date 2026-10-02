@@ -12,6 +12,8 @@ import (
 	"testing"
 
 	"github.com/jackc/pgx/v5/pgconn"
+	"go/types"
+	"golang.org/x/tools/go/packages"
 )
 
 // CHAOS-7933 (D4262 a): Failure is the ONLY function that takes an error. Its output stays in a closed alphabet: a class from a
@@ -97,5 +99,102 @@ func TestParseIDsParsesEveryElement(t *testing.T) {
 	got := ParseIDs([]string{"123e4567-e89b-12d3-a456-426614174000", "the planted detail of ticket 7933 list", "sk-planted-marker-7933"})
 	if got[0].text != "123e4567-e89b-12d3-a456-426614174000" || got[1].text != "invalid" || got[2].text != "invalid" {
 		t.Fatalf("ParseIDs = %v", got)
+	}
+}
+
+// The exported API of this package is PINNED (D4262/F5): no exported function or method takes a string, an any, an error or a
+// list of strings, except the ones named here (the two parsers, the one error entry and the constructor); no exported struct has an
+// exported field; every exported variable is one of the opaque vocabulary types. A new function that widens the API fails here by
+// name, whatever its body does.
+func TestTheExportedAPIIsPinned(t *testing.T) {
+	allowed := map[string]string{
+		"New":        "*log/slog.Logger",
+		"ParseID":    "string",
+		"ParseIDs":   "[]string",
+		"ParseLabel": "string",
+		"Failure":    "error",
+	}
+	config := &packages.Config{Dir: ".", Mode: packages.NeedName | packages.NeedTypes | packages.NeedTypesInfo | packages.NeedSyntax | packages.NeedImports | packages.NeedDeps}
+	loaded, err := packages.Load(config, ".")
+	if err != nil || len(loaded) != 1 || len(loaded[0].Errors) > 0 {
+		t.Fatalf("load: %v %v", err, loaded)
+	}
+	scope := loaded[0].Types.Scope()
+	var forbidden func(kind types.Type) bool
+	forbidden = func(kind types.Type) bool {
+		switch typed := types.Unalias(kind).(type) {
+		case *types.Basic:
+			return typed.Info()&types.IsString != 0
+		case *types.Interface:
+			return true // any, error and every other interface
+		case *types.Slice:
+			return forbidden(typed.Elem())
+		case *types.Named:
+			if typed.String() == "context.Context" {
+				return false
+			}
+			if _, isInterface := typed.Underlying().(*types.Interface); isInterface {
+				return true
+			}
+		}
+		return false
+	}
+	checkSignature := func(name string, signature *types.Signature) {
+		params := signature.Params()
+		for index := 0; index < params.Len(); index++ {
+			kind := params.At(index).Type()
+			if variadic := signature.Variadic() && index == params.Len()-1; variadic {
+				kind = kind.(*types.Slice).Elem()
+			}
+			if forbidden(kind) {
+				if want, ok := allowed[name]; !ok || want != kind.String() {
+					t.Errorf("%s takes a %s: the exported API may not widen", name, kind)
+				}
+			}
+		}
+	}
+	exported, functions := 0, 0
+	for _, name := range scope.Names() {
+		object := scope.Lookup(name)
+		if !object.Exported() {
+			continue
+		}
+		exported++
+		switch typed := object.(type) {
+		case *types.Func:
+			functions++
+			checkSignature(name, typed.Type().(*types.Signature))
+		case *types.Var:
+			kind := types.Unalias(typed.Type())
+			if named, ok := kind.(*types.Named); !ok || named.Obj().Pkg() != loaded[0].Types || named.Obj().Name() == "Logger" {
+				t.Errorf("exported var %s has type %s: only the opaque vocabulary types are allowed", name, typed.Type())
+			}
+		case *types.TypeName:
+			named, ok := typed.Type().(*types.Named)
+			if !ok {
+				continue
+			}
+			if structure, ok := named.Underlying().(*types.Struct); ok {
+				for index := 0; index < structure.NumFields(); index++ {
+					if structure.Field(index).Exported() {
+						t.Errorf("%s has the exported field %s", name, structure.Field(index).Name())
+					}
+				}
+			}
+			for index := 0; index < named.NumMethods(); index++ {
+				method := named.Method(index)
+				if method.Exported() {
+					checkSignature(name+"."+method.Name(), method.Type().(*types.Signature))
+				}
+			}
+		}
+	}
+	if exported < 50 || functions < 15 {
+		t.Fatalf("saw %d exported objects and %d functions: the walk reads too little", exported, functions)
+	}
+	for name := range allowed {
+		if scope.Lookup(name) == nil {
+			t.Errorf("allowed entry %s no longer exists: delete it from the allow-list", name)
+		}
 	}
 }

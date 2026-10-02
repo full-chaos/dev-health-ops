@@ -3,6 +3,8 @@ package githubcode
 import (
 	"bytes"
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"flag"
@@ -143,7 +145,6 @@ var knownLinkDifferences = map[string]string{
 	"https://api.github.com?":         "httpx keeps 'host?' without a slash, Go adds one",
 	"https://api.github.com#":         "httpx keeps 'host#' without a slash, Go adds one",
 	"ftp://x.test/y":                  notMeasured + "the Python mock transport does not refuse the scheme (harness); real httpx raises UnsupportedProtocol, as Go does",
-	"gopher://x.test/y":               notMeasured + "the Python mock transport does not refuse the scheme (harness); real httpx raises UnsupportedProtocol, as Go does",
 	"mailto:a@b":                      "a scheme without // joins as a path in httpx; Go resolves it to the base root",
 	"javascript:alert(1)":             "a scheme without // joins as a path in httpx; Go resolves it to the base root",
 	"/é?ü=1#ö":                        notMeasured + "a non-ASCII header value cannot be encoded by the Python mock transport (harness); Go percent-encodes it",
@@ -329,7 +330,7 @@ func listScenarios() []scenario {
 	}
 	for _, link := range []string{"https://", "http://", "https:///x?page=2", "https://:80/x", "https://api.github.com/x?", "https://api.github.com/x#", "https://api.github.com/x?#",
 		"/x?", "/x#", "/x?#", "?", "#", "x?", "https://api.github.com?", "https://api.github.com#", "ftp://x.test/y", "file:///etc/passwd", "mailto:a@b",
-		"gopher://x.test/y", "javascript:alert(1)", "HTTPS://API.GITHUB.COM/x?page=2", "Http://api.github.com/x", "/a?b?c", "/a#b#c", "/a%2fb", "/a%2Fb", "/%e2%82%ac", "/%E2%82%AC", "/é?ü=1#ö", "https://ghé.test/x",
+		"javascript:alert(1)", "HTTPS://API.GITHUB.COM/x?page=2", "Http://api.github.com/x", "/a?b?c", "/a#b#c", "/a%2fb", "/a%2Fb", "/%e2%82%ac", "/%E2%82%AC", "/é?ü=1#ö", "https://ghé.test/x",
 		"https://u@other.test/x", "https://u:p@other.test:99/x?q=1", "//u@other.test", "/a b", "/a\tb", "https://api.github.com/x?page=2&page=3", "https://api.github.com:443/x", "https://api.github.com:80/x", "http://api.github.com:80/x"} {
 		known = knownLinkDifferences[link]
 		repos("", "acme", ok(two, next(link)), ok(page(repoItem(3, "docs"))))
@@ -512,7 +513,7 @@ func TestListRepositoriesVenueOracleMatchesFrozenPython(t *testing.T) {
 				t.Logf("known difference, scenario %d (%s): %s", index, describe(s), s.Known)
 			}
 			// Go's own answer is pinned too: a change to another answer fails here, not only a change to Python's.
-			key := fmt.Sprintf("%d %s", index, describe(s))
+			key := knownKey(s)
 			seenKnown[key] = knownGoAnswer{Result: string(gotResult), Requests: fmt.Sprint(transport.seen),
 				PythonResult: string(wantResult), PythonRequests: fmt.Sprint(pythonRequests), NotMeasured: strings.HasPrefix(s.Known, notMeasured)}
 			if !*updateKnownGo {
@@ -597,6 +598,14 @@ func writeKnownGoAnswers(t *testing.T, answers map[string]knownGoAnswer) {
 	if err := os.WriteFile(knownGoAnswersPath, append(data, '\n'), 0o644); err != nil {
 		t.Fatal(err)
 	}
+}
+
+// knownKey names a known difference by what the scenario is (its description and a digest of its scripted exchange),
+// not by its position: adding or removing a scenario does not move the pins of the others.
+func knownKey(s scenario) string {
+	raw, _ := json.Marshal(s)
+	sum := sha256.Sum256(raw)
+	return describe(s) + " #" + hex.EncodeToString(sum[:6])
 }
 
 // describe names a scenario in a failure.

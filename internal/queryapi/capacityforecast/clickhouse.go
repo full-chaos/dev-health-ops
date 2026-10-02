@@ -44,14 +44,25 @@ func newForecastID() string {
 // -- once in its outer WHERE and once inside the max(day) subquery. Two
 // separately written copies would be free to drift while both still looked
 // right.
-func capacityScopeFilters(orgID string, teamID, workScopeID *string) ([]string, []clickhouse.Binding) {
+func capacityScopeFilters(orgID string, teamIDs []string, workScopeID *string) ([]string, []clickhouse.Binding) {
 	conditions := []string{"org_id = {org_id:String}"}
 	bindings := []clickhouse.Binding{{Name: "org_id", Value: orgID}}
 	// Falsy checks, matching capacity_queries.py: an empty string is "unscoped",
 	// not "scoped to the empty id".
-	if teamID != nil && *teamID != "" {
+	// CHAOS-7964: every selected team counts, not the first. One team keeps
+	// the single-bind text it always had; several use one typed Array(String)
+	// bind under IN, never a string built from the ids. The table holds one
+	// pre-aggregated row per (org, provider, day, work_scope, team) -- there is
+	// no item key -- so SUM over the IN set adds each team's row once and an
+	// item cannot be counted twice.
+	switch len(teamIDs) {
+	case 0:
+	case 1:
 		conditions = append(conditions, "team_id = {team_id:String}")
-		bindings = append(bindings, clickhouse.Binding{Name: "team_id", Value: *teamID})
+		bindings = append(bindings, clickhouse.Binding{Name: "team_id", Value: teamIDs[0]})
+	default:
+		conditions = append(conditions, "team_id IN {team_ids:Array(String)}")
+		bindings = append(bindings, clickhouse.Binding{Name: "team_ids", Value: teamIDs})
 	}
 	if workScopeID != nil && *workScopeID != "" {
 		conditions = append(conditions, "work_scope_id = {work_scope_id:String}")
@@ -82,9 +93,9 @@ func countFromAggregate(column string, value uint64) (int, error) {
 // divergence.
 func loadThroughput(
 	ctx context.Context, client QueryClient, orgID string,
-	teamID, workScopeID *string, historyDays int, today time.Time,
+	teamIDs []string, workScopeID *string, historyDays int, today time.Time,
 ) ([]int, error) {
-	conditions, bindings := capacityScopeFilters(orgID, teamID, workScopeID)
+	conditions, bindings := capacityScopeFilters(orgID, teamIDs, workScopeID)
 	start := today.UTC().AddDate(0, 0, -historyDays).Format("2006-01-02")
 	// Python interpolates this date into the SQL rather than binding it
 	// (capacity_queries.py:26). The value is a formatted date built here and
@@ -133,9 +144,9 @@ func loadThroughput(
 
 // loadBacklog ports get_backlog_from_sink, including its self-joined max(day).
 func loadBacklog(
-	ctx context.Context, client QueryClient, orgID string, teamID, workScopeID *string,
+	ctx context.Context, client QueryClient, orgID string, teamIDs []string, workScopeID *string,
 ) (int, error) {
-	conditions, bindings := capacityScopeFilters(orgID, teamID, workScopeID)
+	conditions, bindings := capacityScopeFilters(orgID, teamIDs, workScopeID)
 	where := strings.Join(conditions, " AND ")
 
 	// The same predicate appears twice on purpose: the outer filter selects the

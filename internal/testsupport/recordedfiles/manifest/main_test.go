@@ -6,6 +6,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/full-chaos/dev-health-ops/internal/testsupport/goldenscan"
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/recordedfiles"
 )
 
@@ -65,5 +66,30 @@ func TestTheVerbFromInsideTheRepository(t *testing.T) {
 	run([]string{"-recorded-again", "-kind", "python-recorded", "a/testdata/recorded.json"})
 	if after, _ := os.ReadFile(filepath.Join(repo, "a", "testdata"+recordedfiles.ManifestSuffix)); string(after) == string(before) {
 		t.Error("with -recorded-again the row did not change")
+	}
+}
+
+// CHAOS-7890: `manifest -check` runs the unpacked secret scan on every golden of the tree. A golden with a keyed high-entropy value
+// and no allowlist row is a problem the check prints; a file with no golden header is not scanned.
+func TestTheCheckScansEveryGoldenOfTheTree(t *testing.T) {
+	repo := t.TempDir()
+	write(t, filepath.Join(repo, "go.mod"), "module example\n")
+	// made at run time: no secret-shaped literal is in the source
+	value := strings.Repeat("aB3x", 2) + "Zq9Lm2Pw7Rt5Yk8Nc4Vd6Hs" + "J1"
+	write(t, filepath.Join(repo, "a", "testdata", "bad.json"), `{"header":{"python_build":"x"},"requests":[{"body":"{\"client_secret\":\"`+value+`\"}"}]}`)
+	write(t, filepath.Join(repo, "a", "testdata", "clean.json"), `{"header":{"python_build":"x"},"requests":[{"body":"ok"}]}`)
+	write(t, filepath.Join(repo, "a", "testdata", "notagolden.json"), `{"client_secret":"`+value+`"}`)
+	problems, err := goldenscan.TreeProblems(repo, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	joined := strings.Join(problems, "\n")
+	if len(problems) != 1 || !strings.Contains(joined, "a/testdata/bad.json") || strings.Contains(joined, value) {
+		t.Fatalf("the tree scan found %d problem(s), want exactly the one of bad.json, with no value: %v", len(problems), problems)
+	}
+	stale := []goldenscan.Row{{Path: "a/testdata/clean.json", Key: "credential_id", Shape: "uuid", Count: 1, Triage: "row 1"}}
+	problems, err = goldenscan.TreeProblems(repo, stale)
+	if err != nil || len(problems) != 2 || !strings.Contains(strings.Join(problems, "\n"), "no hit any more") {
+		t.Fatalf("a stale allowlist row was not found: %v %v", problems, err)
 	}
 }

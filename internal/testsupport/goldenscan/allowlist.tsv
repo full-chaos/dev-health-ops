@@ -1,0 +1,13 @@
+# Scoped allowlist of the golden secret scan (CHAOS-7890). Columns: path, key, shape, count, triage line. ONE row per golden file and key, only for
+# a digest or id OUTPUT field the triage record accepts; shape is uuid, hex64 or sha256:<hex> (one exact composite value pinned by its sha256); every hit there must match; the count is exact.
+# No wildcard path, no rule-wide row. A row only goes when its hits go.
+internal/api/integrationsadmin/integrationsvenue/testdata/golden/integrations-admin-venue-oracle.json	credential_id	uuid	44	scan-triage rows 2 and 4: credential_id UUID seeded in integrationsvenue/seed_integration_test.go
+internal/api/syncadmin/testdata/golden/TestSyncAdminReadsVenueOracle.json	credential_id	uuid	19	scan-triage row 5: credential_id UUID, fixed ids seeded in the syncadmin venue tests
+internal/api/syncadmin/testdata/golden/TestSyncConfigBatchCreateVenueOracle.json	credential_id	uuid	14	scan-triage row 5: credential_id UUID, fixed ids seeded in the syncadmin venue tests
+internal/api/syncadmin/testdata/golden/TestSyncConfigCreateVenueOracle.json	credential_id	uuid	6	scan-triage row 5: credential_id UUID, fixed ids seeded in the syncadmin venue tests
+internal/api/syncadmin/testdata/golden/TestSyncConfigUpdateVenueOracle.json	credential_id	uuid	2	scan-triage row 5: credential_id UUID, fixed ids seeded in the syncadmin venue tests
+internal/api/syncadmin/testdata/manual_trigger_oracle.golden.json	rows	sha256:5c50a66e47b2cb43282974985b1124a9b17168b64d8f5f5d7135b92bca167b2d	1	scan-triage line 42 (ROW 8, CHAOS-7890 manual-trigger): occurrence_id (sha256 of the test config id and pinned time) + org id + pinned date, all test constants; the scanner matches the word credential in the config name
+internal/apiservice/admin/testdata/pagerduty/bindings.json	credential_id	uuid	15	scan-triage row 6: credential_id UUID seeded in apiservice/admin/pagerduty_bindings_oracle_test.go
+internal/apiservice/testdata/venue/venue-oracle-customer-push-writes.json	rows	uuid	2	scan-triage row 7: old_token_id UUID (stableVenueID of a seed name), inside the rows text
+internal/providersync/testdata/oracle_golden/gitlab_incidents_mapping.TestGenericOracleMatchesFrozenPythonGitLabIncidentRows.golden.json	v	uuid	2	scan-triage CLOSED line D4123 (the 4 ids): the captured value is a UUID id
+internal/syncbudget/testdata/golden/budget-estimate.golden.json	credential_fingerprint	hex64	12889	scan-triage row 1: credential_fingerprint 64-hex, made by the test oracle

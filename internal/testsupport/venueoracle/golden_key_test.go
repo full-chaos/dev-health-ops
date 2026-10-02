@@ -281,3 +281,22 @@ func TestACredentialShapedCorpusReachesNoGoldenThroughItsProgramKey(t *testing.T
 		t.Fatalf("the key holds %q of the body, want its sha256", entry.BodySHA256)
 	}
 }
+
+// CHAOS-7890: the record verb runs the unpacked secret scan on the candidate. A keyed high-entropy value (a leaf the token-shape scan
+// does not know) refuses the candidate, and nothing is written.
+func TestTheCandidateWriteRefusesAKeyedHighEntropyValue(t *testing.T) {
+	g := keyGolden(t, nil)
+	entry := g.keyOf(Request{Name: "r", Method: "GET", Path: "/x"})
+	entry.Status = 200
+	// made at run time: no secret-shaped literal is in the source
+	value := strings.Repeat("aB3x", 2) + "Zq9Lm2Pw7Rt5Yk8Nc4Vd6Hs" + "J1"
+	entry.Body = `{"client_secret":"` + value + `"}`
+	g.recorded.Requests = []goldenRequest{entry}
+	_, err := g.writeCandidate(false)
+	if err == nil || !strings.Contains(err.Error(), `"client_secret"`) || strings.Contains(err.Error(), value) {
+		t.Fatalf("a keyed high-entropy value was not refused, or the refusal shows it: %v", err)
+	}
+	if _, statErr := os.Stat(g.spec.Path + GoldenCandidateSuffix); statErr == nil {
+		t.Fatal("a candidate was written although the scan refused it")
+	}
+}

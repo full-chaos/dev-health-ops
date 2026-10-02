@@ -20,6 +20,8 @@ type clauseCase struct {
 
 func TestIsSafePublicIPRefusesEachSpecialPurposeRange(t *testing.T) {
 	for _, c := range []clauseCase{
+		{"100.64.0.0/10 shared address space (CGNAT)", []string{"100.64.0.0", "100.100.0.1", "100.127.255.255"}, []string{"100.63.255.255", "100.128.0.0"}},
+		{"192.0.2.0/24 documentation (TEST-NET-1)", []string{"192.0.2.0", "192.0.2.200", "192.0.2.255"}, []string{"192.0.1.255", "192.0.3.0"}},
 		{"192.0.0.0/24 IETF protocol assignments", []string{"192.0.0.0", "192.0.0.170", "192.0.0.255"}, []string{"191.255.255.255", "192.0.1.0"}},
 		{"192.88.99.0/24 6to4 relay anycast", []string{"192.88.99.0", "192.88.99.1", "192.88.99.255"}, []string{"192.88.98.255", "192.88.100.0"}},
 		{"198.18.0.0/15 benchmarking", []string{"198.18.0.0", "198.18.255.1", "198.19.255.255"}, []string{"198.17.255.255", "198.20.0.0"}},

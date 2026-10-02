@@ -33,8 +33,11 @@ func TestSchemaRevisionsMatchFrozenPythonAlembic(t *testing.T) {
 		t.Fatalf("decode: %v: %s", err, output)
 	}
 	var goRevisions []string
-	for revision := range satisfyingRevisions {
-		goRevisions = append(goRevisions, revision)
+	for revision, satisfies := range satisfyingRevisions {
+		// health.go reads the VALUE: an entry set to false is not a satisfying revision, so it is not listed.
+		if satisfies {
+			goRevisions = append(goRevisions, revision)
+		}
 	}
 	sort.Strings(goRevisions)
 	if result.Minimum != minimumSchemaRevision || strings.Join(result.Revisions, ",") != strings.Join(goRevisions, ",") {

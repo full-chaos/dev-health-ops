@@ -275,8 +275,10 @@ var liveDataGenerators = map[string]struct {
 // it stops being one -- same shape as TestExcludedGeneratorsAreStillUnrunnable
 // and TestExplicitCorpusPathsAreStillNeeded, applied to this map's own axis.
 func TestLiveDataGeneratorsGenuinelyNeedClickHouse(t *testing.T) {
+	// An empty list is a checked fact, not a skip: the test passes only while it is empty or every entry still
+	// earns its place below, so a planted entry that does not is red.
 	if len(liveDataGenerators) == 0 {
-		t.Skip("no live-data generators to verify")
+		t.Logf("liveDataGenerators is empty: nothing to verify")
 	}
 	fixturesDir := filepath.Join(repositoryRootPath(t), "tests", "fixtures")
 	for name := range liveDataGenerators {
@@ -487,8 +489,10 @@ func itoa(value int) string {
 // that file is what gets read. Environment-independent, and it tests the exact
 // condition recorded in removeWhen.
 func TestExcludedGeneratorsAreStillUnrunnable(t *testing.T) {
+	// An empty list is a checked fact, not a skip: the test passes only while it is empty or every entry still
+	// earns its place below, so a planted entry that does not is red.
 	if len(excludedGenerators) == 0 {
-		t.Skip("no exclusions to verify")
+		t.Logf("excludedGenerators is empty: nothing to verify")
 	}
 
 	repoRoot := repositoryRootPath(t)
@@ -540,8 +544,10 @@ func TestExcludedGeneratorsAreStillUnrunnable(t *testing.T) {
 // output path. If it starts declaring one, the entry is now a second source of
 // truth that can disagree with the source -- the same rot as a stale exclusion.
 func TestExplicitCorpusPathsAreStillNeeded(t *testing.T) {
+	// An empty list is a checked fact, not a skip: the test passes only while it is empty or every entry still
+	// earns its place below, so a planted entry that does not is red.
 	if len(explicitCorpusPaths) == 0 {
-		t.Skip("no explicit corpus paths to verify")
+		t.Logf("explicitCorpusPaths is empty: nothing to verify")
 	}
 	fixturesDir := filepath.Join(repositoryRootPath(t), "tests", "fixtures")
 	for name, corpus := range explicitCorpusPaths {

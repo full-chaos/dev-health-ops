@@ -10,6 +10,7 @@ import (
 
 	"github.com/full-chaos/dev-health-ops/internal/jobcontract"
 	"github.com/full-chaos/dev-health-ops/internal/jobruntime"
+	"github.com/full-chaos/dev-health-ops/internal/jobs/metrics/remaining/stepcause"
 )
 
 const (
@@ -411,6 +412,11 @@ func TestPartitionHandlerTerminalizesTheRunOnlyOnTheFinalAttemptOfARetryableFail
 		setup func(*handlerStore, *handlerExecutor)
 	}{
 		{"compute failure", func(_ *handlerStore, executor *handlerExecutor) { executor.computeErr = transient }},
+		// after the step-cause change every real executor failure carries a step tag; that is the path a real
+		// ClickHouse/Postgres failure takes, and it releases through the same release choice
+		{"step-tagged compute failure", func(_ *handlerStore, executor *handlerExecutor) {
+			executor.computeErr = stepcause.Failure(stepcause.QueryWorkItems, transient)
+		}},
 		{"load run failure", func(store *handlerStore, _ *handlerExecutor) { store.loadRunErr = transient }},
 		{"complete failure", func(store *handlerStore, _ *handlerExecutor) { store.completeErr = transient }},
 	}

@@ -6,11 +6,13 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"testing"
 	"time"
 
 	"github.com/full-chaos/dev-health-ops/internal/jobcontract"
 	"github.com/full-chaos/dev-health-ops/internal/jobruntime"
+	"github.com/full-chaos/dev-health-ops/internal/jobs/metrics/remaining/stepcause"
 )
 
 // capacityExecutionFor builds the execution River would hand the capacity handler for one real partition, at a
@@ -44,11 +46,6 @@ func TestARunIsNotLeftRunningWhenItsLastPartitionExhaustsItsRetries(t *testing.T
 	ctx := context.Background()
 	pool, store, _ := newRemainingRedriveTestStack(t)
 	store.now = func() time.Time { return time.Date(2026, 10, 2, 12, 0, 0, 0, time.UTC) }
-	executor := &handlerExecutor{computeErr: errors.New("clickhouse: connection reset")}
-	handler, err := NewPartitionHandler[jobruntime.RemainingCapacityArgs](store, executor, "capacity")
-	if err != nil {
-		t.Fatal(err)
-	}
 	status := func(t *testing.T, table, id string) string {
 		t.Helper()
 		var got string
@@ -59,34 +56,57 @@ func TestARunIsNotLeftRunningWhenItsLastPartitionExhaustsItsRetries(t *testing.T
 	}
 	const maxAttempts = 3
 
-	t.Run("the only partition", func(t *testing.T) {
-		orgID := "00000000-0000-4000-8000-000000008024"
-		run, err := store.StartRun(ctx, StartRunRequest{
-			OrganizationID: orgID, Family: "capacity", Generation: "exhaust-single", ScopeKey: "all-teams",
-			GenerationSeed: int64Pointer(1), Scopes: []json.RawMessage{capacityScopeJSON(90)},
-		})
+	// the executor error is tried untagged and step-tagged: after the step-cause change every real executor failure is
+	// tagged, so the tagged one is the path a real ClickHouse/Postgres failure takes
+	connection := errors.New("clickhouse: connection reset")
+	errorsByName := []struct {
+		name string
+		err  error
+	}{
+		{"untagged executor error", connection},
+		{"step-tagged executor error", stepcause.Failure(stepcause.QueryWorkItems, connection)},
+	}
+	for index, variant := range errorsByName {
+		variant := variant
+		executor := &handlerExecutor{computeErr: variant.err}
+		handler, err := NewPartitionHandler[jobruntime.RemainingCapacityArgs](store, executor, "capacity")
 		if err != nil {
 			t.Fatal(err)
 		}
-		partitionID := deterministicPartitionID(run.ID, 1)
-		for attempt := 1; attempt <= maxAttempts; attempt++ {
-			workErr := handler.Work(ctx, capacityExecutionFor(orgID, partitionID, run.ID, attempt, maxAttempts))
-			if workErr == nil {
-				t.Fatalf("attempt %d: expected a failure", attempt)
+		t.Run("the only partition, "+variant.name, func(t *testing.T) {
+			orgID := fmt.Sprintf("00000000-0000-4000-8000-00000000802%d", 4+index*2)
+			run, err := store.StartRun(ctx, StartRunRequest{
+				OrganizationID: orgID, Family: "capacity", Generation: "exhaust-single-" + variant.name, ScopeKey: "all-teams",
+				GenerationSeed: int64Pointer(1), Scopes: []json.RawMessage{capacityScopeJSON(90)},
+			})
+			if err != nil {
+				t.Fatal(err)
 			}
-			if got := status(t, "remaining_metric_partitions", partitionID); got != "failed" {
-				t.Fatalf("attempt %d: partition status = %q, want failed", attempt, got)
+			partitionID := deterministicPartitionID(run.ID, 1)
+			for attempt := 1; attempt <= maxAttempts; attempt++ {
+				workErr := handler.Work(ctx, capacityExecutionFor(orgID, partitionID, run.ID, attempt, maxAttempts))
+				if workErr == nil {
+					t.Fatalf("attempt %d: expected a failure", attempt)
+				}
+				if got := status(t, "remaining_metric_partitions", partitionID); got != "failed" {
+					t.Fatalf("attempt %d: partition status = %q, want failed", attempt, got)
+				}
+				wantRun := "running" // a retry is still coming: the run must not be finalized underneath it
+				if attempt == maxAttempts {
+					wantRun = "failed" // the job discards now: nothing else will ever finalize the run
+				}
+				if got := status(t, "remaining_metric_runs", run.ID); got != wantRun {
+					t.Fatalf("attempt %d of %d: run status = %q, want %q", attempt, maxAttempts, got, wantRun)
+				}
 			}
-			wantRun := "running" // a retry is still coming: the run must not be finalized underneath it
-			if attempt == maxAttempts {
-				wantRun = "failed" // the job discards now: nothing else will ever finalize the run
-			}
-			if got := status(t, "remaining_metric_runs", run.ID); got != wantRun {
-				t.Fatalf("attempt %d of %d: run status = %q, want %q", attempt, maxAttempts, got, wantRun)
-			}
-		}
-	})
+		})
+	}
 
+	executor := &handlerExecutor{computeErr: connection}
+	handler, err := NewPartitionHandler[jobruntime.RemainingCapacityArgs](store, executor, "capacity")
+	if err != nil {
+		t.Fatal(err)
+	}
 	t.Run("a sibling partition still pending keeps the run running", func(t *testing.T) {
 		orgID := "00000000-0000-4000-8000-000000008025"
 		run, err := store.StartRun(ctx, StartRunRequest{

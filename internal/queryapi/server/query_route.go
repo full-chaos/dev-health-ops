@@ -1278,6 +1278,7 @@ const registeredAiImpactSummaryDocument = `query AIImpactSummary($orgId: String!
       incidentRate
       testGapPrs
       testGapRate
+      day
       __typename
     }
     repoBreakdown {

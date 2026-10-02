@@ -442,6 +442,22 @@ func TestMCPRefusesARootFieldWhoseClassRowIsOff(t *testing.T) {
 	assertMCPRefused(t, rec, l.ch, http.StatusNotFound, mcpReasonRootFieldNotEnabled)
 }
 
+// CHAOS-7845: the dark-root refusal is a wire contract (acr keys its "root not enabled" handling on the literal reason), so it is asserted as
+// literals, not through the constants.
+func TestMCPDarkRootAnswersTheClosedWireReasonAndStatus(t *testing.T) {
+	sw := allMCPRootsEnabled()
+	sw[mcpRoutingOperationPrefix+"hotspots"] = false
+	l := newMCPTestListeners(t, &countingMCPClient{}, sw, mcpDefaultLimits())
+	rec := mcpDo(l.mcp, http.MethodPost, validMCPHeaders(), mcpBody(t, mcpHotspotsQuery, mcpHotspotsVariables(mcpTestOrg)))
+	if rec.Code != 404 {
+		t.Fatalf("status = %d, want 404", rec.Code)
+	}
+	reason, code := mcpReason(t, rec)
+	if reason != "root_field_not_enabled" || code != "MCP_REFUSED" {
+		t.Fatalf("reason/code = %q/%q, want root_field_not_enabled/MCP_REFUSED", reason, code)
+	}
+}
+
 // --- Transport shape ---
 
 func TestMCPRefusesOtherTransportShapes(t *testing.T) {

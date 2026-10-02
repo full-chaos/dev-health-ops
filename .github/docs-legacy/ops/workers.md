@@ -457,7 +457,7 @@ The bundled Docker Compose, Kubernetes, and Helm deployments already declare the
 | `SYNC_COST_CLASS_QUEUES` | `true` | Routes eligible GitHub/GitLab/Jira/Linear units to cost-class sub-queues after provider routing is enabled. |
 | `HIDE_MIGRATED_CHILD_CONFIGS` | `true` | Hides migrated child sync configs from operator-facing config lists. |
 | `SYNC_RUN_MAX_UNITS` | `1000` | Caps unit count for one planned sync run. |
-| `SYNC_UNIT_CONCURRENCY_PER_BUCKET` | `8` | Caps concurrently dispatchable units per org/provider/cost-class bucket. |
+| `SYNC_UNIT_CONCURRENCY_PER_BUCKET` | `8` | Upper clamp on concurrently dispatchable units per org/provider/cost-class bucket. The cap of each class is the worker request-budget limit (`providerfoundation.CostClassBudgetLimit`: light 4, medium 2, heavy 1); this variable can lower a class's cap, never raise it past the budget table (CHAOS-7434). |
 | `SYNC_UNIT_DISPATCH_STALE_SECONDS` | `900` | Reclaims stale `DISPATCHING` units after this age. |
 | `SYNC_UNIT_RUNNING_STALE_SECONDS` | `3600` | Treats long-running units as stale for reconciliation/reporting. |
 | `LINEAR_BACKFILL_MAX_WINDOW_DAYS` | `14` | Caps the window size (days) of a Linear work-item-family backfill chunk. CHAOS-2717 bounds each window's issue crawl to its own slice (`updatedAt` gte/lte), so the size balances a single unit's lease/soft-timeout budget against per-hour request volume; smaller windows re-multiply per-window teams/cycles fetches toward Linear's rate limit. Non-Linear backfills use the 7-day default. |

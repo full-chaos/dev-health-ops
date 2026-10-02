@@ -29,6 +29,9 @@ package server
 //   - a root field whose class routing row (go_api_routing_state, see
 //     mcpRoutingDigests) is not canary/primary.
 //
+// Which routing rows govern this route, and which govern the named-operation route acr's run_operation uses:
+// .github/docs-legacy/architecture/mcp-class-vs-document-routing-rows.md (CHAOS-7833).
+//
 // What passes runs on its OWN gqlgen server (same explicit options as
 // CHAOS-7078, re-checking the operation type and allowlist) over its OWN
 // ClickHouse client (CHAOS-7091: a read-bytes ceiling instead of the shared

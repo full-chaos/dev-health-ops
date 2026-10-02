@@ -20,7 +20,6 @@ import (
 
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/chschema"
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/containers"
-	"github.com/full-chaos/dev-health-ops/internal/testsupport/venueoracle"
 )
 
 // This file is the second mandated guard for CHAOS-3092 R1 (Option C).
@@ -450,11 +449,8 @@ var (
 	migratedInstances []*containers.Instance
 )
 
-func TestMain(m *testing.M) {
-	code := venueoracle.RunTests(m)
-	closeMigratedStores()
-	os.Exit(code)
-}
+// The package's untagged TestMain (main_test.go) runs RunTests, then this.
+func init() { afterTests = closeMigratedStores }
 
 func closeMigratedStores() {
 	migratedStoresLock.Lock()

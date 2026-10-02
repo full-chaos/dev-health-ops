@@ -103,7 +103,7 @@ func TestJiraRenameVenueOracleMatchesFrozenPython(t *testing.T) {
 	answer := programoracle.Produce(t, golden, root, []programoracle.Program{{
 		Name: "jira rename discovery", Text: pythonJiraRenameProgram, Stdin: input,
 		Env:    map[string]string{"OTEL_SDK_DISABLED": "true", "ENVIRONMENT": "test"},
-		PerRun: oracleDatabase(t, venue),
+		PerRun: oracleDatabase(t, venue), PerRunNames: []string{oracleDatabaseEnv},
 	}})[0]
 	if answer.ExitCode != 0 {
 		t.Fatalf("the Jira rename program exited %d when it was recorded: %s", answer.ExitCode, answer.Stdout)

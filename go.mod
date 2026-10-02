@@ -20,6 +20,7 @@ require (
 	github.com/jackc/pgx/v5 v5.10.0
 	github.com/pmezard/go-difflib v1.0.0
 	github.com/prometheus/client_golang v1.23.2
+	github.com/prometheus/client_model v0.6.2
 	github.com/prometheus/common v0.67.5
 	github.com/riverqueue/river v0.44.0
 	github.com/riverqueue/river/riverdriver/riverpgxv5 v0.44.0
@@ -29,7 +30,9 @@ require (
 	github.com/testcontainers/testcontainers-go v0.43.0
 	github.com/valkey-io/valkey-go v1.0.76
 	github.com/vektah/gqlparser/v2 v2.5.22
+	go.opentelemetry.io/contrib/bridges/prometheus v0.69.0
 	go.opentelemetry.io/otel v1.44.0
+	go.opentelemetry.io/otel/exporters/otlp/otlpmetric/otlpmetricgrpc v1.44.0
 	go.opentelemetry.io/otel/exporters/otlp/otlptrace/otlptracegrpc v1.44.0
 	go.opentelemetry.io/otel/exporters/prometheus v0.66.0
 	go.opentelemetry.io/otel/metric v1.44.0
@@ -101,7 +104,6 @@ require (
 	github.com/paulmach/orb v0.13.0 // indirect
 	github.com/pierrec/lz4/v4 v4.1.27 // indirect
 	github.com/power-devops/perfstat v0.0.0-20240221224432-82ca36839d55 // indirect
-	github.com/prometheus/client_model v0.6.2 // indirect
 	github.com/prometheus/otlptranslator v1.0.0 // indirect
 	github.com/prometheus/procfs v0.20.1 // indirect
 	github.com/riverqueue/river/riverdriver v0.44.0 // indirect

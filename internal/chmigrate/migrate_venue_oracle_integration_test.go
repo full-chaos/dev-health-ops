@@ -501,3 +501,13 @@ func TestMigrateClickHouseMatchesTheFrozenPythonOutput(t *testing.T) {
 		t.Fatal("the golden holds no upgrade digest or no applied versions: it measures nothing")
 	}
 }
+
+// The frozen facts in testdata/migrate_golden.json and testdata/repair_golden.json
+// were last proven equal to the live Python verbs on 2026-10-01 (CHAOS-7337 E),
+// by the live tests that stood here: Python at build
+// a4847c5e93607451a0c987b314d37e02fc43ce85's venv over the Python src of main,
+// both goldens rewritten and byte-equal to the checked-in files. The live tests
+// are deleted with the Python they ran, so the goldens cannot be recorded again
+// after the Python delete (CHAOS-7308); to re-prove them while Python still
+// exists, restore TestMigrateClickHouseVenueOracleMatchesThePythonRunner and
+// TestRepairVenueOracleMatchesThePythonProducer from this commit's parent.

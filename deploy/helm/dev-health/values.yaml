@@ -1012,15 +1012,6 @@ ingress:
     nginx.ingress.kubernetes.io/proxy-read-timeout: "60"
     nginx.ingress.kubernetes.io/proxy-send-timeout: "60"
     nginx.ingress.kubernetes.io/ssl-redirect: "true"
-  # -- A host entry may set `emitRules: false` (CHAOS-7451): the chart then runs
-  #    every check on that host (the Python allow-list rules, the go-api default
-  #    rules, the refused services and annotations) and renders NO rule for it.
-  #    It is for an umbrella chart that renders that host's rules itself, in one
-  #    Ingress object per host together with the paths of the other planes:
-  #    ingress-nginx's admission webhook denies an Ingress that claims a host and
-  #    path another live Ingress holds, so a path that moves between two objects
-  #    cannot be rolled in both directions. Absent means true; any value that is
-  #    not a boolean fails the render.
   hosts:
     - host: dev-health.example.com
       paths:

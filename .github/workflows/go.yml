@@ -125,6 +125,7 @@ on:
       # change to the relevance decider alone was classified non-Go and the gate
       # that depends on it passed vacuously.
       - 'ci/go_relevance.py'
+      - 'ci/go_relevance.sh'
       - 'docker/go-worker.Dockerfile'
       - 'tests/compatibility/river/**'
       - 'ci/check_go.sh'
@@ -302,6 +303,7 @@ on:
       # change to the relevance decider alone was classified non-Go and the gate
       # that depends on it passed vacuously.
       - 'ci/go_relevance.py'
+      - 'ci/go_relevance.sh'
       - 'docker/go-worker.Dockerfile'
       - 'tests/compatibility/river/**'
       - 'ci/check_go.sh'

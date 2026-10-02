@@ -282,7 +282,39 @@ func commitPreparedChunk(
 // ChunkContinuationError tells the provider-unit adapter that a durable
 // continuation is ready. It is not a source or sink failure and must be
 // translated to River's attempt-neutral snooze path.
-type ChunkContinuationError struct{ Next time.Time }
+//
+// Reason, Chunks and Elapsed say why THIS attempt stopped (CHAOS-7692): without
+// them an operator cannot tell a unit that stopped on the chunk-count bound
+// from one that stopped on the wall-time bound, and the continuation loop of a
+// large unit was visible only as hundreds of River snoozes.
+type ChunkContinuationError struct {
+	Next time.Time
+	// Reason is ChunkStopChunkBound or ChunkStopWallTime; empty when a caller
+	// that predates the signal built the error.
+	Reason string
+	// Chunks is the number of chunks this attempt committed before stopping.
+	Chunks int
+	// Elapsed is the wall time this attempt ran before stopping.
+	Elapsed time.Duration
+}
+
+// Stop reasons an attempt reports when it hands a unit to a continuation.
+const (
+	ChunkStopChunkBound = "chunk_bound"
+	ChunkStopWallTime   = "wall_time"
+)
+
+// newChunkContinuation builds the continuation error for an attempt that
+// committed `chunks` chunks in `elapsed`. The chunk-count bound is reported
+// first when both bounds are reached, because it is the one a policy change can
+// move without touching the lease.
+func newChunkContinuation(policy ChunkPolicy, next time.Time, chunks int, elapsed time.Duration) ChunkContinuationError {
+	reason := ChunkStopWallTime
+	if chunks >= policy.MaxChunksPerAttempt {
+		reason = ChunkStopChunkBound
+	}
+	return ChunkContinuationError{Next: next, Reason: reason, Chunks: chunks, Elapsed: elapsed}
+}
 
 func (err ChunkContinuationError) Error() string { return ErrChunkContinuation.Error() }
 func (err ChunkContinuationError) Unwrap() error { return ErrChunkContinuation }

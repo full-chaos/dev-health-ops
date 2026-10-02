@@ -61,3 +61,14 @@ func TestStepFailureKeepsTheTypedCauseReachable(t *testing.T) {
 		t.Fatal("errors.As lost the Postgres error")
 	}
 }
+
+func TestZeroStepFailsClosedToAFixedLabel(t *testing.T) {
+	wrapped := Failure(Step{}, errors.New(hostile))
+	cause, ok := jobruntime.SafeCause(wrapped)
+	if !ok || cause != "step=unknown_step" {
+		t.Fatalf("cause = %q ok=%v, want step=unknown_step", cause, ok)
+	}
+	if got := wrapped.Error(); !strings.HasPrefix(got, "unknown_step: ") {
+		t.Fatalf("message = %q", got)
+	}
+}

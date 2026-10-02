@@ -124,7 +124,7 @@ func (c *Client) IterTeamUsers(ctx context.Context, teamID string, pageSize int)
 			return nil, fmt.Errorf("decode TeamworkGraph_teamUsers: %w", err)
 		}
 		for _, edge := range conn.Edges {
-			mapped, err := mappers.TeamworkUserRelationFromGraphQL(&edge.Node, "TEAM_MEMBER", "")
+			mapped, err := mappers.TeamMemberRelationForTeam(&edge.Node, tid)
 			if err != nil {
 				return nil, err
 			}

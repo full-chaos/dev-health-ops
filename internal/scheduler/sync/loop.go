@@ -13,6 +13,8 @@ import (
 	"time"
 
 	"github.com/full-chaos/dev-health-ops/internal/platform/health"
+	"github.com/full-chaos/dev-health-ops/internal/platform/tracing"
+	"go.opentelemetry.io/otel/attribute"
 )
 
 const (
@@ -257,10 +259,35 @@ func (loop *Loop) run(ctx context.Context, ticker loopTicker, done chan struct{}
 	}
 }
 
-func (loop *Loop) step(parent context.Context, now time.Time) error {
+// loopTracerName scopes the scheduler loop's spans by package.
+const loopTracerName = "github.com/full-chaos/dev-health-ops/internal/scheduler/sync"
+
+// step runs one handoff window under one dev_health.scheduler.sync_window span
+// (CHAOS-7879). Attributes are counts only: a schedule's config id, an org id
+// and a cron expression are customer objects and never reach the span.
+func (loop *Loop) step(parent context.Context, now time.Time) (stepErr error) {
+	spanCtx, span := tracing.StartWorkSpan(parent, loopTracerName, "dev_health.scheduler.sync_window")
+	stage := "handoff"
+	defer func() {
+		if stepErr != nil {
+			span.SetAttributes(attribute.String(tracing.StageAttribute, stage))
+		}
+		tracing.EndWorkSpan(span, stepErr)
+	}()
+	parent = spanCtx
 	stepCtx, cancel := context.WithTimeout(parent, loop.config.StepTimeout)
 	defer cancel()
 	result, err := loop.stepper.HandoffDueResult(stepCtx, now.UTC(), loop.config.Limit, loop.coordinator)
+	span.SetAttributes(
+		attribute.Int("dev_health.scheduler.candidates", result.Candidates),
+		attribute.Int("dev_health.scheduler.timing_eligible", result.TimingEligible),
+		attribute.Int("dev_health.scheduler.minted", result.Minted()),
+		attribute.Int("dev_health.scheduler.handed_off", len(result.HandedOff)),
+		attribute.Int("dev_health.scheduler.repeated", len(result.Repeated)),
+		attribute.Int("dev_health.scheduler.unsupported_cron", result.UnsupportedCron),
+		attribute.Int("dev_health.scheduler.invalid_cron", result.InvalidCron),
+		attribute.Int("dev_health.scheduler.skipped", result.SkippedOrgMissing+result.SkippedFeatureDisabled+result.SkippedNotPlannerManaged),
+	)
 	if stepCtx.Err() != nil {
 		return stepCtx.Err()
 	}
@@ -273,6 +300,7 @@ func (loop *Loop) step(parent context.Context, now time.Time) error {
 		loop.skippedNotPlannerManaged += uint64(result.SkippedNotPlannerManaged)
 		loop.mu.Unlock()
 		if err == nil {
+			stage = "cron_fallback"
 			return ErrSchedulerFallbackRequired
 		}
 	}
@@ -281,10 +309,16 @@ func (loop *Loop) step(parent context.Context, now time.Time) error {
 	}
 	// Consume in the same window that produced. A separate cadence would let
 	// the marker advance while the occurrence it handed off sat unconsumed.
+	stage = "reconcile"
 	reconciled, err := loop.config.Occurrences.Reconcile(stepCtx, now.UTC(), loop.config.Limit)
 	if err != nil {
 		return fmt.Errorf("consume pending scheduled sync occurrences: %w", err)
 	}
+	span.SetAttributes(
+		attribute.Int("dev_health.scheduler.occurrences_completed", reconciled.Completed),
+		attribute.Int("dev_health.scheduler.occurrences_retried", reconciled.Retried),
+		attribute.Int("dev_health.scheduler.occurrences_quarantined", reconciled.Quarantined),
+	)
 	loop.mu.Lock()
 	if loop.stopping {
 		loop.mu.Unlock()

@@ -406,3 +406,37 @@ func TestTheClosedEnvironmentIsPinnedAsAnyGoldenWasRecordedUnderIt(t *testing.T)
 		t.Fatalf("ClosedEnv changed:\n got %q\nwant %q\nevery golden was recorded under the old closed environment: re-record all of them, then move this pin", got, want)
 	}
 }
+
+// Interpreter itself refuses in a recording for a package that is not on the
+// closed list: a new test that resolves the interpreter's path by itself and
+// starts it with the environment it built is not let through by skipping Resolve.
+func TestInterpreterRefusesInARecordingOutsideTheClosedList(t *testing.T) {
+	real := filepath.Join(t.TempDir(), "real-python")
+	if err := os.WriteFile(real, []byte("#!/bin/sh\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("DEV_HEALTH_PYTHON", real)
+	root := t.TempDir()
+
+	t.Setenv(RecordingEnv, "1")
+	if path, _, err := Interpreter(root); err == nil {
+		t.Fatalf("Interpreter gave %s in a recording to a package outside the closed list", path)
+	}
+	// A package UNDER a listed one is outside it (exact match).
+	t.Chdir(filepath.Join(repoRootOf(t), "internal", "apiservice", "admin"))
+	if _, _, err := Interpreter(root); err == nil {
+		t.Fatal("Interpreter gave the interpreter to a package under a listed one")
+	}
+	t.Chdir(filepath.Join(repoRootOf(t), "internal", "pgmigrate"))
+	if path, _, err := Interpreter(root); err != nil || path != real {
+		t.Fatalf("a package on the closed list: %s, %v", path, err)
+	}
+	t.Chdir(filepath.Join(repoRootOf(t), "internal", "testsupport", "pyoracle"))
+	if got := ResolveLauncher(t, root); got != real {
+		t.Fatalf("the launcher resolve was refused: %s", got)
+	}
+	t.Setenv(RecordingEnv, "")
+	if path, _, err := Interpreter(root); err != nil || path != real {
+		t.Fatalf("outside a recording: %s, %v", path, err)
+	}
+}

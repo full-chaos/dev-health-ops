@@ -3,17 +3,14 @@ package admin
 import (
 	"encoding/json"
 	"net/http"
-	"net/http/httptest"
-	"os"
-	"os/exec"
-	"path/filepath"
 	"reflect"
-	"strings"
 	"sync/atomic"
-	"testing"
-
-	"github.com/full-chaos/dev-health-ops/internal/testsupport/pyoracle"
 )
+
+// This file is the scripted provider of the readiness probe oracle
+// (llmreadinessprobe_golden_test.go). Its whole text is part of that golden's
+// key: the frozen Python answers are the answers to THIS stub, so a changed
+// stub must be recorded again.
 
 // jsonSemanticallyEqual compares two JSON documents by VALUE, not by byte
 // content: Go's encoding/json and Python's json.dumps do not agree on key
@@ -31,151 +28,6 @@ func jsonSemanticallyEqual(a, b []byte) bool {
 		return false
 	}
 	return reflect.DeepEqual(va, vb)
-}
-
-// TestReadinessProbeMatchesLivePython is the CHAOS-6976 differential oracle
-// (D2839 item 6): it runs THIS PORT'S readinessProber and readiness.py's
-// REAL, UNMODIFIED AgentReadinessService.certify/OpenAICompatibleAgentProvider
-// (testdata/llmreadinessoracle/certify_oracle.py -- see that file's doc
-// comment for why it calls certify() directly rather than going through the
-// full HTTP route: the settings-resolution/SSRF-gate layer around it is
-// UNCHANGED by this port and already covered by CHAOS-6252a's own
-// venue-oracle test, and SSRF-blocks a local stub base_url by design) against
-// ONE shared stub server, per scenario, and diffs outcome/safe_error_code.
-//
-// Scenarios cover "ready" and every safe_error_code this route can persist
-// EXCEPT "timeout": a real client-side deadline is exercised instead by
-// TestReadinessProbeTimeoutClassification (Go-only, fast, no live Python) --
-// see that test's doc comment for why a live round-trip timeout scenario
-// does not belong in this oracle.
-func TestReadinessProbeMatchesLivePython(t *testing.T) {
-	if os.Getenv("DEV_HEALTH_LIVE_PYTHON_ORACLES") != "1" {
-		t.Skip("live Python oracles run only through ci/check_go.sh live-python-oracles")
-	}
-	root := repoRootForReadinessOracle(t)
-	python := pyoracle.Resolve(t, root)
-	pyoracle.RequireDeployed(t, python, root)
-
-	server := httptest.NewServer(http.HandlerFunc(scriptedReadinessStub))
-	defer server.Close()
-
-	scenarios := []struct {
-		name  string
-		model string
-	}{
-		{"ready", "scripted-ready"},
-		{"unauthorized -> provider_not_configured", "scripted-unauthorized"},
-		{"rate limited -> rate_limited", "scripted-ratelimited"},
-		{"bad request -> invalid_request", "scripted-badrequest"},
-		{"model not found -> model_not_supported", "scripted-modelnotfound"},
-		{"server error -> provider_unavailable", "scripted-servererror"},
-		{"two tool calls -> provider_contract_violation", "scripted-contractviolation"},
-		{"finish_reason length -> output_exhausted", "scripted-outputexhausted"},
-		{"malformed final answer -> invalid_response", "scripted-invalidresponse"},
-		// D2908 condition 2 (codex r1's 4 P1s, each as its own oracle case
-		// against the live Python producer on the SAME stub -- red on
-		// 38f494576, green on fd13de082's fix):
-		{"extra envelope field -> invalid_response", "scripted-extrafield"},
-		{"quota exhaustion (429) -> provider_not_configured, not rate_limited", "scripted-quota"},
-		{"one transient 500 then success -> ready", "scripted-transient"},
-		{"redirect is not followed -> provider_unavailable", "scripted-redirect"},
-	}
-
-	scriptPath := filepath.Join(root, "internal", "apiservice", "admin", "testdata", "llmreadinessoracle", "certify_oracle.py")
-
-	for _, scenario := range scenarios {
-		t.Run(scenario.name, func(t *testing.T) {
-			// The "transient" scenario is STATEFUL (round 1 fails once, then
-			// succeeds): reset it immediately before EACH plane's own run so
-			// Go and Python each see the identical fresh sequence, never one
-			// plane consuming the other's retry state.
-			if scenario.model == "scripted-transient" {
-				atomic.StoreInt32(&transientRound1Attempts, 0)
-			}
-			prober := newOpenAICompatibleReadinessProber(nil)
-			goOutcome, goSafeErrorCode := prober.probe(t.Context(), "openai", scenario.model, server.URL, "go-oracle-key")
-
-			if scenario.model == "scripted-transient" {
-				atomic.StoreInt32(&transientRound1Attempts, 0)
-			}
-			cmd := exec.Command(python, scriptPath, server.URL, scenario.model)
-			cmd.Env = append(os.Environ(), "PYTHONPATH="+filepath.Join(root, "src"))
-			out, err := cmd.CombinedOutput()
-			if err != nil {
-				t.Fatalf("python producer: %v\n%s", err, out)
-			}
-			var pyResult struct {
-				Outcome       string  `json:"outcome"`
-				SafeErrorCode *string `json:"safe_error_code"`
-			}
-			lastLine := lastNonEmptyLine(string(out))
-			if jsonErr := json.Unmarshal([]byte(lastLine), &pyResult); jsonErr != nil {
-				t.Fatalf("decode python producer output: %v\n%s", jsonErr, out)
-			}
-
-			if goOutcome != pyResult.Outcome {
-				t.Errorf("outcome: go=%q python=%q", goOutcome, pyResult.Outcome)
-			}
-			goCode, pyCode := "", ""
-			if goSafeErrorCode != nil {
-				goCode = *goSafeErrorCode
-			}
-			if pyResult.SafeErrorCode != nil {
-				pyCode = *pyResult.SafeErrorCode
-			}
-			if goCode != pyCode {
-				t.Errorf("safe_error_code: go=%q python=%q", goCode, pyCode)
-			}
-		})
-	}
-
-	proof := os.Getenv("DEV_HEALTH_LIVE_PYTHON_ORACLE_PROOF_DIR")
-	if proof == "" {
-		t.Fatal("DEV_HEALTH_LIVE_PYTHON_ORACLE_PROOF_DIR is required")
-	}
-	if t.Failed() {
-		// A mismatch was found (t.Errorf inside a subtest marks the parent
-		// failed too, but execution still reaches here): never write an
-		// "executed" proof for a run that did not actually agree with
-		// Python. ci/check_go.sh's own `go test` exit-code check already
-		// halts the verb on this failure -- this guard is for anyone
-		// running the test directly and inspecting the proof dir by hand.
-		return
-	}
-	if err := os.WriteFile(filepath.Join(proof, "admin-llmreadiness-probe"), []byte("executed"), 0o600); err != nil {
-		t.Fatal(err)
-	}
-}
-
-func lastNonEmptyLine(s string) string {
-	lines := strings.Split(strings.TrimRight(s, "\n"), "\n")
-	for i := len(lines) - 1; i >= 0; i-- {
-		if strings.TrimSpace(lines[i]) != "" {
-			return lines[i]
-		}
-	}
-	return ""
-}
-
-func repoRootForReadinessOracle(t *testing.T) string {
-	t.Helper()
-	wd, err := os.Getwd()
-	if err != nil {
-		t.Fatalf("getwd: %v", err)
-	}
-	dir := wd
-	for i := 0; i < 8; i++ {
-		if _, statErr := os.Stat(filepath.Join(dir, "go.mod")); statErr == nil {
-			return dir
-		}
-		parent := filepath.Dir(dir)
-		if parent == dir {
-			break
-		}
-		dir = parent
-	}
-	t.Fatalf("could not locate repo root (go.mod) from %s", wd)
-	return ""
 }
 
 // transientRound1Attempts backs the "scripted-transient" scenario: round 1
@@ -483,6 +335,51 @@ func scriptedReadinessStub(w http.ResponseWriter, r *http.Request) {
 			completion(toolCallMessage(), "tool_calls")
 		} else {
 			completion(finalAnswerMessage(), "stop")
+		}
+	// One-signal scenarios (each failure carries ONE thing the classifier
+	// reads, so a clause that is not the only reason for an answer is
+	// observed on its own).
+	case "scripted-status401only":
+		writeJSON(401, map[string]any{"error": map[string]any{"message": "denied"}})
+	case "scripted-status429only":
+		writeJSON(429, map[string]any{"error": map[string]any{"message": "slow down"}})
+	case "scripted-status400only":
+		writeJSON(400, map[string]any{"error": map[string]any{"message": "bad"}})
+	case "scripted-mnfcode":
+		writeJSON(404, map[string]any{"error": map[string]any{"code": "model_not_found"}})
+	case "scripted-mnftext":
+		writeJSON(404, map[string]any{"error": map[string]any{"message": "model not found"}})
+	case "scripted-mnfexist":
+		writeJSON(404, map[string]any{"error": map[string]any{"message": "that model does not exist"}})
+	case "scripted-quotacode":
+		writeJSON(429, map[string]any{"error": map[string]any{"type": "insufficient_quota", "message": "no funds"}})
+	case "scripted-quotatext":
+		writeJSON(429, map[string]any{"error": map[string]any{"message": "you exceeded your current quota"}})
+	case "scripted-auth401mnf":
+		// A 401 whose body also holds model_not_found: errors.py checks the
+		// two in its own order; the recording says which wins.
+		writeJSON(401, map[string]any{"error": map[string]any{"code": "model_not_found", "message": "denied"}})
+	case "scripted-lengthround1":
+		// Round 1 stops on length with a well-formed tool call; round 2 would
+		// succeed. Only round 1's own check gives output_exhausted.
+		if !round2 {
+			completion(toolCallMessage(), "length")
+		} else {
+			completion(finalAnswerMessage(), "stop")
+		}
+	case "scripted-lengthround2":
+		if !round2 {
+			completion(toolCallMessage(), "tool_calls")
+		} else {
+			completion(finalAnswerMessage(), "length")
+		}
+	case "scripted-notoolcalls":
+		completion(map[string]any{"role": "assistant", "content": "I will not call a tool."}, "stop")
+	case "scripted-wrongkind":
+		if !round2 {
+			completion(toolCallMessage(), "tool_calls")
+		} else {
+			completion(map[string]any{"role": "assistant", "content": `{"kind":"tool_request","value":{"nonce":"ready-v1"}}`}, "stop")
 		}
 	case "scripted-redirect":
 		// D2908 condition 2 (codex r1 P1 #1): a 3xx must never be followed

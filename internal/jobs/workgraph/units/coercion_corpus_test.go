@@ -216,6 +216,10 @@ var pythonReprToGo = map[string]struct {
 	"'0.5'": {value: "0.5"},
 }
 
+// rowsWithoutAGoAnalogue is the closed set of type-axis rows that may be marked `unrepresentable` above. Today exactly
+// the Python tuple. A row added to pythonReprToGo as unrepresentable without being listed here fails its test.
+var rowsWithoutAGoAnalogue = map[string]bool{"()": true}
+
 // TestConfidenceFromValueMatchesPythonTypeAxis closes the axis gap recorded in
 // CHAOS-4803: before this, the string branch had a generated corpus and every
 // other branch had only a hand-written Go table -- including the bool case,
@@ -250,6 +254,12 @@ func TestConfidenceFromValueMatchesPythonTypeAxis(t *testing.T) {
 				)
 			}
 			if mapped.unrepresentable != "" {
+				// The rows allowed to leave the comparison are pinned by name: marking any other row unrepresentable
+				// would drop it from the Go comparison with no visible trace, so it fails here instead.
+				if !rowsWithoutAGoAnalogue[testCase.InputRepr] {
+					t.Fatalf("row %q is marked unrepresentable but is not one of the rows allowed to have no Go analogue %v; "+
+						"a row that leaves the Go comparison must be added to rowsWithoutAGoAnalogue deliberately", testCase.InputRepr, rowsWithoutAGoAnalogue)
+				}
 				// No Go value stands for this row, so nothing is compared with Go; what is checked is that the row is
 				// still accounted for: its reason is stated and the recorded Python rendering is one this harness reads.
 				if _, ok := parsePythonRendering(testCase.Expected); !ok {

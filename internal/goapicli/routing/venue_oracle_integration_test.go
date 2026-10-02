@@ -154,6 +154,9 @@ func (p oraclePlane) state(t *testing.T) []string {
 	if err := rows.Err(); err != nil {
 		t.Fatal(err)
 	}
+	// The query orders by the REAL digest; the Go plane's differs from the pin's, so what norm turned into the
+	// pin's digest is put in the order the pin's digest sorts in (the order the Python plane's rows came in).
+	sort.Strings(out)
 	return out
 }
 
@@ -662,6 +665,11 @@ func censusLines(text string) string {
 			}
 			out = append(out, line)
 		}
+	}
+	// The digest lines follow the heading in the order of the digests; the Go plane's own digest was read
+	// back as the pin's (oraclePlane.norm), so the lines are put in the order the digests sort in as read.
+	if len(out) > 1 {
+		sort.Strings(out[1:])
 	}
 	return strings.Join(out, "\n")
 }

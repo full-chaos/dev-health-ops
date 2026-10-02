@@ -1,12 +1,15 @@
 package workerservice
 
 import (
+	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"log/slog"
 	"net/http"
 	"reflect"
+	"strings"
 	"testing"
 
 	"github.com/ClickHouse/clickhouse-go/v2/lib/driver"
@@ -1064,5 +1067,63 @@ func TestBuildProviderSyncHandlerBudgetLimitsAreTheOneTable(t *testing.T) {
 	}
 	if executor.BudgetLimits[providersync.CostHeavy] != 1 {
 		t.Fatalf("heavy limit = %d; want 1", executor.BudgetLimits[providersync.CostHeavy])
+	}
+}
+
+// TestBuildProviderSyncHandlerLogsTheBudgetLimits pins CHAOS-7881 (worker
+// side): one Info line at handler construction carries the worker's request
+// budget limit per cost class, and nothing tenant-shaped. The admission caps
+// are logged where the dispatch guard runs (syncdispatchruntime).
+func TestBuildProviderSyncHandlerLogsTheBudgetLimits(t *testing.T) {
+	t.Parallel()
+	var logs bytes.Buffer
+	buildProviderSyncHandler(
+		nil, nil, nil, nil, nil,
+		nil, nil, slog.New(slog.NewJSONHandler(&logs, nil)),
+	)
+	var found map[string]any
+	for _, line := range strings.Split(strings.TrimSpace(logs.String()), "\n") {
+		var record map[string]any
+		if json.Unmarshal([]byte(line), &record) == nil && record["msg"] == "provider_sync_budget_limits" {
+			if found != nil {
+				t.Fatalf("more than one provider_sync_budget_limits line:\n%s", logs.String())
+			}
+			found = record
+		}
+	}
+	if found == nil {
+		t.Fatalf("no provider_sync_budget_limits line in:\n%s", logs.String())
+	}
+	if found["level"] != "INFO" {
+		t.Fatalf("%s line level = %v; want INFO (an operator filters the start lines on INFO): %v", found["msg"], found["level"], found)
+	}
+	want := map[string]float64{"budget_limit_light": 4, "budget_limit_medium": 2, "budget_limit_heavy": 1}
+	for key, value := range want {
+		if found[key] != value {
+			t.Fatalf("%s = %v; want %v in %v", key, found[key], value, found)
+		}
+	}
+	for key := range found {
+		if strings.Contains(key, "org") || strings.Contains(key, "tenant") || strings.HasPrefix(key, "admission") {
+			t.Fatalf("unexpected attribute %q on the worker-side line: %v", key, found)
+		}
+	}
+}
+
+// TestTheBuilderProductionReachesLogsTheEffectiveCaps is the reachability
+// control for CHAOS-7881: buildProviderSyncWorker calls
+// buildProviderSyncHandlerWithRuntimeDependencies directly, not the outer
+// buildProviderSyncHandler wrapper, so the line must be written by THIS
+// function (a call placed in the wrapper would pass the test above and never
+// run in production).
+func TestTheBuilderProductionReachesLogsTheEffectiveCaps(t *testing.T) {
+	var logs bytes.Buffer
+	buildProviderSyncHandlerWithRuntimeDependencies(
+		nil, nil, nil, nil, nil, nil, nil, nil,
+		slog.New(slog.NewJSONHandler(&logs, nil)),
+		workItemsRuntimeConfig{}, 0,
+	)
+	if got := strings.Count(logs.String(), `"msg":"provider_sync_budget_limits"`); got != 1 {
+		t.Fatalf("the production builder wrote %d provider_sync_budget_limits lines, want exactly 1:\n%s", got, logs.String())
 	}
 }

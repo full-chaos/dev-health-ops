@@ -1,9 +1,6 @@
 package providerfoundation
 
 import (
-	"os"
-	"testing"
-
 	"go.opentelemetry.io/otel"
 	sdkmetric "go.opentelemetry.io/otel/sdk/metric"
 )
@@ -13,8 +10,10 @@ import (
 // first provider set, so the counters under test read from this one.
 var meterReader *sdkmetric.ManualReader
 
-func TestMain(m *testing.M) {
+// InitMeterReader sets the one reader up. The test binary's TestMain is in the
+// external test package (it runs the tests through the opened-golden check,
+// which the package under test cannot import), and calls this first.
+func InitMeterReader() {
 	meterReader = sdkmetric.NewManualReader()
 	otel.SetMeterProvider(sdkmetric.NewMeterProvider(sdkmetric.WithReader(meterReader)))
-	os.Exit(m.Run())
 }

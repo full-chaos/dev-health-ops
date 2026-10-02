@@ -1,0 +1,22 @@
+{
+  "header": {
+    "test": "TestDBLookupsMatchFrozenPython",
+    "python_build": "a4847c5e93607451a0c987b314d37e02fc43ce85",
+    "producer_digest": "6e1dc97e68624398015f60caee160cceee6ae601bd434d01b8b7d5975267e137",
+    "recipe": "git worktree add --detach $DIR a4847c5e93607451a0c987b314d37e02fc43ce85 (with its .venv: uv sync --frozen --no-install-project); then from the repository root: go run ./internal/testsupport/venueoracle/goldenrecord -pkg ./internal/synccli/ -test '^TestDBLookupsMatchFrozenPython$' -python-root $DIR",
+    "recorded_by": "goldenrecord",
+    "blanked": {}
+  },
+  "requests": [
+    {
+      "name": "db lookup scenarios",
+      "method": "PYTHON",
+      "path": "program sha256 18e780bc9f622ad1317b47c7268e1fa786878140dcf9bfecfdf1dd0582378f99 env sha256 32e8fa53d1504687f08b54cab5dd7a746c0ec61fec11694b339628337744128e",
+      "body_sha256": "713b163cf88c4e01ca2287388c3c170da8d68f15c79dc85e1a7f574bfa928917",
+      "request_headers_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "status": 0,
+      "headers": {},
+      "body": "gzip+base64:H4sIAAAAAAAC/+xbXU/bQBD8K5afWikhjj+SOG+gUkAVVGrpU1tFG3vjnHDuXN+dBUL89yqGiNDE6gdU5GP8YCla+3wzsze3aytfb10qipFI3eGta9yhK22euy23coeue9dyx6R5ZMu8ISykNpTnZISSzYPMVMqLkDblQ6QgMw9Kmq0Jpjwhm9cXqDJbjXcfjnZ9CuenweLn4pjfXJSiIsOjK75pmJw2lK2ZgLqaB426Yrka/GY9L0j0lPyoN4w46XuTQdRlGjs5y2HXr+Ps3t21fqX3cYzQ/3d+H0fpN/NLRfEq/DbQxIOQ+jyh2At7NU1+sKDpb0R4QtAqv79J38ehp8YUetjpZFM+4GuaFTkfJGrWoUJ0qgC5/SBaMI4HFKYUdOk+t5tTG87xsuzOWOu1DzgXWguZOSfCnNqxk5ScsjSCcu28KUhrp90ma6YtR7NxTs4uT78cjS4/fji+aDmJkhOR2ZIXNx8WhTPJKdMdlpVTUalbjiqXrnt3tPyAtwfP5rWBNb4WZr9xYzVhNWE1AfdLusjSA16i2vS3ptoc+FGYBH5MsT94agbPKjaxmoAbuIEbuIEbuIEbuIEbuIEbXd9GdH1xHCUT36M4CaO66+uh68MbSbyRRFbtz/dmbP3ADdzADdzADdzAjbIQZSHoBb1oamCKSKutTqtdrB92B9Of5e7WCiVVW9tk2p4HUcdumWUnudgKu469rtcbRyGl3dqu442vsVhWolRyxnIrNkQ/SoP+mPr9yKdVhvd1zf6X0ctSlbUsN8Wa8JmsKBfpJ/5hWZvj+4sxF8ylYS4X6rNNpucqtTkvzWQnK6NXoPee2Atl3isrUxAMgkEwCH4SPiwzOy/zdp1afHgBbuDG4oWYeNuEDwTwCHjEJosJA4ABwABQ8UFMiAkxISbEBG7gBm6YNfoo9FHY4GEAEBNiQkxszdia8dclVD6wIuwrEBNiQkyIuZlifv85AMqmffCUaAAA"
+    }
+  ]
+}

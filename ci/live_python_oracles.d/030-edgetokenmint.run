@@ -1,0 +1,5 @@
+label=internal/edgetokenmint (Go-minted edge access token vs the live Python edge validator)
+package=./internal/edgetokenmint
+run=^TestGoMintedEdgeTokenIsJudgedByTheLiveEdgeExactlyLikeAPythonMintedOne$
+python=1
+proof=edgetokenmint-edge-oracle|the Go-minted edge access token was not judged by the live Python edge validator

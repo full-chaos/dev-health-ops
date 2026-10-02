@@ -1,0 +1,202 @@
+package timewindow
+
+import (
+	"encoding/json"
+	"fmt"
+	"math"
+	"math/big"
+	"os"
+	"path/filepath"
+	"runtime"
+	"strings"
+	"testing"
+	"time"
+
+	"github.com/full-chaos/dev-health-ops/internal/testsupport/programoracle"
+	"github.com/full-chaos/dev-health-ops/internal/testsupport/venueoracle"
+)
+
+// pythonTimeWindowProgram runs the real filtering.time_window (through a
+// MetricFilter, as the routes build it) and people._time_window, with
+// utc_today pinned, for each case on stdin, and prints the four dates or
+// "overflow" for an OverflowError. Any other exception fails the run.
+const pythonTimeWindowProgram = `
+import json, sys
+from datetime import date, timedelta
+import dev_health_ops.api.services.filtering as filtering
+import dev_health_ops.api.services.people as people
+from dev_health_ops.api.models.filters import MetricFilter
+cases = json.loads(sys.stdin.read())
+out = []
+for case in cases:
+    today = date.fromisoformat(case["today"])
+    filtering.utc_today = lambda: today
+    people.utc_today = lambda: today
+    try:
+        if case.get("subtract"):
+            out.append([(date.fromisoformat(case["end"]) - timedelta(days=int(case["range"]))).isoformat()])
+            continue
+        if case["people"]:
+            window = people._time_window(int(case["range"]), int(case["compare"]))
+        else:
+            window = filtering.time_window(MetricFilter(time={
+                "range_days": int(case["range"]), "compare_days": int(case["compare"]),
+                "start_date": case["start"], "end_date": case["end"],
+            }))
+        out.append([d.isoformat() for d in window])
+    except OverflowError:
+        out.append("overflow")
+print("RESULT " + json.dumps(out))
+`
+
+func TestMain(m *testing.M) { os.Exit(venueoracle.RunTests(m)) }
+
+// timeWindowGoldens is the set of this package's frozen Python answers. The
+// producers are the filtering and people services of the pinned build and the
+// filter model under them, so Identity names pydantic. A golden recorded by
+// another producer is refused.
+var timeWindowGoldens = programoracle.Set{
+	Package:       "./internal/queryapi/timewindow/",
+	Build:         "a4847c5e93607451a0c987b314d37e02fc43ce85",
+	Identity:      "python 3.14.7\nunicodedata 16.0.0\npydantic 2.13.5\npydantic-core 2.46.5",
+	Distributions: []string{"pydantic", "pydantic-core"},
+	// The goldenrecord verb writes each digest when it promotes a recording; a
+	// new golden starts as "PIN:" + its file name without ".json".
+	Pins: map[string]string{
+		"time-window.golden.json": "201117697dc0885ec6c922c9b0fe6da60fe516f18f708ae6020b9f8de8dc67d8",
+	},
+}
+
+// TestComputeMatchesFrozenPythonTimeWindow compares Compute with Python's
+// time_window and people._time_window on day counts and dates at the
+// edges of Python's date and timedelta limits. A day count past the Go int
+// range is sent to Python exactly and to Compute saturated, as the
+// validators hand it on.
+func TestComputeMatchesFrozenPythonTimeWindow(t *testing.T) {
+	_, file, _, ok := runtime.Caller(0)
+	if !ok {
+		t.Fatal("cannot locate the test source")
+	}
+	root := filepath.Clean(filepath.Join(filepath.Dir(file), "..", "..", ".."))
+
+	counts := []string{
+		"-1000000000000000000000", "-5", "0", "1", "14", "365",
+		"738000", "738522", "738523", "739000", "3652058", "3652059",
+		"999999999", "1000000000", "2147483648", "9223372036854775807", "1000000000000000000000000000000",
+	}
+	var dates []*string
+	for _, text := range []string{"", "0001-01-01", "0001-01-02", "2026-09-24", "9999-12-30", "9999-12-31"} {
+		if text == "" {
+			dates = append(dates, nil)
+			continue
+		}
+		dates = append(dates, &text)
+	}
+	type windowCase struct {
+		// Subtract is aggregated flame's own `end_day - timedelta(days=
+		// range_days)` (no max(1, ...)), checked against AddDays.
+		Subtract bool    `json:"subtract"`
+		People   bool    `json:"people"`
+		Range    string  `json:"range"`
+		Compare  string  `json:"compare"`
+		Start    *string `json:"start"`
+		End      *string `json:"end"`
+		Today    string  `json:"today"`
+	}
+	var cases []windowCase
+	for _, today := range []string{"2026-09-24", "9999-12-31", "0001-01-01"} {
+		for _, rangeDays := range counts {
+			for _, compareDays := range []string{"1", "14", "738522", "999999999", "1000000000", "1000000000000000000000000000000", "-3"} {
+				cases = append(cases, windowCase{People: true, Range: rangeDays, Compare: compareDays, Today: today})
+				for _, start := range dates {
+					for _, end := range dates {
+						cases = append(cases, windowCase{Range: rangeDays, Compare: compareDays, Start: start, End: end, Today: today})
+					}
+				}
+			}
+		}
+	}
+
+	for _, rangeDays := range counts {
+		for _, end := range []string{"0001-01-01", "0001-01-02", "2026-09-24", "9999-12-30", "9999-12-31"} {
+			cases = append(cases, windowCase{Subtract: true, Range: rangeDays, End: &end, Today: "2026-09-24"})
+		}
+	}
+
+	payload, err := json.Marshal(cases)
+	if err != nil {
+		t.Fatal(err)
+	}
+	output := timeWindowGoldens.Outputs(t, root, "time-window.golden.json", programoracle.Program{Name: "time window", Text: pythonTimeWindowProgram, Stdin: payload})[0]
+	var results []any
+	for _, line := range strings.Split(string(output), "\n") {
+		if rest, ok := strings.CutPrefix(line, "RESULT "); ok {
+			if err := json.Unmarshal([]byte(rest), &results); err != nil {
+				t.Fatal(err)
+			}
+		}
+	}
+	if len(results) != len(cases) {
+		t.Fatalf("python answered %d of %d cases", len(results), len(cases))
+	}
+	overflows, windows := 0, 0
+	for index, item := range cases {
+		today := mustDate(t, item.Today)
+		var start, end *time.Time
+		if item.Start != nil {
+			start = new(mustDate(t, *item.Start))
+		}
+		if item.End != nil {
+			end = new(mustDate(t, *item.End))
+		}
+		var got any = "overflow"
+		if item.Subtract {
+			if sum, err := AddDays(*end, -saturated(t, item.Range)); err == nil {
+				got = []any{day(sum)}
+			}
+		} else if window, err := Compute(saturated(t, item.Range), saturated(t, item.Compare), start, end, today); err == nil {
+			got = []any{day(window.StartDay), day(window.EndDay), day(window.CompareStart), day(window.CompareEnd)}
+		}
+		if fmt.Sprint(got) != fmt.Sprint(results[index]) {
+			t.Errorf("%+v: go %v, python %v", item, got, results[index])
+			continue
+		}
+		if got == "overflow" {
+			overflows++
+		} else {
+			windows++
+		}
+	}
+	if overflows == 0 || windows == 0 {
+		t.Fatalf("one-sided comparison: %d overflows, %d windows", overflows, windows)
+	}
+	t.Logf("%d cases match the frozen Python answers: %d windows, %d OverflowErrors", len(cases), windows, overflows)
+}
+
+func mustDate(t *testing.T, text string) time.Time {
+	t.Helper()
+	parsed, err := time.Parse(time.DateOnly, text)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return parsed
+}
+
+func day(t time.Time) string { return t.Format(time.DateOnly) }
+
+// saturated is the validators' reading of a Python int: clamped to the Go
+// int range.
+func saturated(t *testing.T, text string) int {
+	t.Helper()
+	number, ok := new(big.Int).SetString(text, 10)
+	if !ok {
+		t.Fatalf("bad count %q", text)
+	}
+	switch {
+	case number.Cmp(big.NewInt(math.MaxInt)) > 0:
+		return math.MaxInt
+	case number.Cmp(big.NewInt(math.MinInt)) < 0:
+		return math.MinInt
+	}
+	return int(number.Int64())
+}

@@ -2,7 +2,7 @@ package customerpush
 
 import (
 	"bytes"
-	"os/exec"
+	"context"
 	"path/filepath"
 	"runtime"
 	"testing"
@@ -25,17 +25,19 @@ print(json.dumps({
 // TestAdminSchemaMatchesLivePython executes the real producer and compares
 // it, key order included, with the embedded golden the route serves.
 func TestAdminSchemaMatchesFrozenPython(t *testing.T) {
-	frozen := venueoracle.OpenGolden(t, programGolden("admin-schema", t.Name(), "7b52180f1fc40527c46e2effb07a579610d496f9a6486c5d4fecd6acf1b7533c"))
+	frozen := venueoracle.OpenGolden(t, programGolden("admin-schema", t.Name(), "ed4fc8a511f464994c7d8681823eac426c348485f627967cbf020abce8b3380a"))
 	_, file, _, _ := runtime.Caller(0)
 	root := frozen.PythonRoot(t, filepath.Clean(filepath.Join(filepath.Dir(file), "..", "..", "..")))
 	request := venueoracle.ProgramRequest("admin schema producer", pythonAdminSchemaProgram, nil, producerEnv)
-	answers := frozen.Produce(t, root, []venueoracle.Request{request}, func(_ *venueoracle.Producer, _ []venueoracle.Request) []venueoracle.Response {
-		python := pyoracle.Resolve(t, root)
-		command := exec.Command(python, "-c", pythonAdminSchemaProgram)
-		command.Env = producerCommandEnv(root)
+	answers := frozen.Produce(t, root, []venueoracle.Request{request}, func(producer *venueoracle.Producer, _ []venueoracle.Request) []venueoracle.Response {
+		producer.RequireDeployed()
+		command, err := producer.Command(context.Background(), producerEnv, nil, "-c", pythonAdminSchemaProgram)
+		if err != nil {
+			t.Fatal(err)
+		}
 		output, err := command.Output()
 		if err != nil {
-			t.Fatalf("live python: %v", pyoracle.RunError(python, err, output))
+			t.Fatalf("live python: %v", pyoracle.RunError(command.Path, err, output))
 		}
 		return []venueoracle.Response{{Status: 0, Body: withoutLogLines(output)}}
 	})

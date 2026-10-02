@@ -24,7 +24,7 @@ const producerIdentity = "python 3.14.7\nunicodedata 16.0.0\npydantic 2.13.5\npy
 var goldenPins = map[string]string{
 	"dataplane-parse.golden.json":               "fc3a0dd51e2568241b8ded06600cadb2efb80da956923b917ed09b29d95fc001",
 	"envelope-validation.golden.json":           "4f8fea5edac8f69796101289dd68c271685fe6867fb41eae5667090242271a74",
-	"operational-provider-instance.golden.json": "9138bf2113cbf7cfbcdf7e0958328c77f92111df920ac3e261ebc9d111e1139b",
+	"operational-provider-instance.golden.json": "d47cf40874b8c62e77968bebacb3b7e26e78f09ee2e595ec362767c7912677ff",
 }
 
 // goldens is the set of this package's frozen Python answers.

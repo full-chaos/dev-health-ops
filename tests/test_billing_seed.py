@@ -5,15 +5,6 @@ from __future__ import annotations
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
-from fastapi import FastAPI
-
-from dev_health_ops.api.billing.plans import router as billing_router
-
-
-def _build_app() -> FastAPI:
-    app = FastAPI()
-    app.include_router(billing_router)
-    return app
 
 
 @pytest.mark.asyncio

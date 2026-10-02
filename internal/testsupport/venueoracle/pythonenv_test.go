@@ -1060,7 +1060,6 @@ func TestTheAddressesOfTheQueryAPIOfTheRunAreKeyedByNameWhateverTheirValue(t *te
 	}
 }
 
-
 // PythonPathRel keeps the checkout's path out of the key (CHAOS-7306): two options that differ
 // only in Root key alike, while a different relative name keys differently, and a
 // PYTHONPATH a test supplies itself keys by its own value (the path of its checkout).

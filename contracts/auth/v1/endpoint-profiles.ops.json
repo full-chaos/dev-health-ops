@@ -11105,1590 +11105,6 @@
       "disclosure_behavior": null
     },
     {
-      "id": "GET /api/v1/billing/invoices [dev-health-ops-api]",
-      "surface_kind": "rest",
-      "method": "GET",
-      "route": "/api/v1/billing/invoices",
-      "graphql_field_name": null,
-      "service": "dev-health-ops-api",
-      "source": {
-        "file": "src/dev_health_ops/api/billing/invoice_routes.py",
-        "line": 117,
-        "router_local_path": ""
-      },
-      "gaps": [
-        "billing/router.py has ~20 routes; only pull-stripe (require_superuser) and the two stripe-webhook rows were individually verified. The rest default to get_current_user by family pattern -- a small number may use get_current_user_optional for public plan-browsing reads; not exhaustively re-checked per route in this pass."
-      ],
-      "classification": "protected",
-      "public_rationale": null,
-      "accepted_credential_classes": [
-        "ops_access_token_hs256"
-      ],
-      "primary_validator": {
-        "description": "get_current_user (or get_current_user_optional on a small number of public-plan-listing GETs -- verified: 7 Depends(get_current_user)-family hits across this router; per-route optionality not exhaustively re-verified for every one of the ~20 billing routes in this pass).",
-        "anchor": {
-          "path": "src/dev_health_ops/api/auth/routers/dependencies.py",
-          "line": 37,
-          "note": "get_current_user dependency"
-        }
-      },
-      "token_shape": null,
-      "reachable_validators": [
-        {
-          "description": "OrgIdMiddleware.__call__ decodes the Authorization: Bearer value as an ops access-token JWT and resolves/validates X-Org-Id against it -- this IS the route's intended validator for ops_access_token_hs256.",
-          "anchor": {
-            "path": "src/dev_health_ops/api/middleware/__init__.py",
-            "line": 36,
-            "line_end": 91,
-            "note": "OrgIdMiddleware.__call__, ACR exemption at line 86"
-          },
-          "is_intended_validator": true,
-          "reachable_but_not_owner": false
-        },
-        {
-          "description": "ImpersonationMiddleware._may_be_superuser peeks at the Authorization bearer value with an UNVERIFIED base64 JSON decode of the JWT payload segment (token.split('.')[1]) on every request, superuser-or-not, with NO path exemption (unlike OrgIdMiddleware's /api/v1/internal/acr/ carve-out) -- runs even for ACR-authenticated requests. A non-JWT opaque token (svc_acr_*, fcpush_*, worker-bridge secret) fails the split/decode and is caught by a broad except, so this is benign but still 'observes' every credential class before its intended validator.",
-          "anchor": {
-            "path": "src/dev_health_ops/api/middleware/impersonation.py",
-            "line": 108,
-            "line_end": 141,
-            "note": "_may_be_superuser unverified JWT peek, no path exemption"
-          },
-          "is_intended_validator": false,
-          "reachable_but_not_owner": true
-        }
-      ],
-      "action": null,
-      "resource_resolver": null,
-      "tenant_requirement": "org_scoped",
-      "current_state_cache_behavior": null,
-      "impersonation_policy": "subject_to_impersonation_override",
-      "entitlement_requirement": null,
-      "disclosure_behavior": null
-    },
-    {
-      "id": "GET /api/v1/billing/invoices/{invoice_id} [dev-health-ops-api]",
-      "surface_kind": "rest",
-      "method": "GET",
-      "route": "/api/v1/billing/invoices/{invoice_id}",
-      "graphql_field_name": null,
-      "service": "dev-health-ops-api",
-      "source": {
-        "file": "src/dev_health_ops/api/billing/invoice_routes.py",
-        "line": 142,
-        "router_local_path": "/{invoice_id}"
-      },
-      "gaps": [
-        "billing/router.py has ~20 routes; only pull-stripe (require_superuser) and the two stripe-webhook rows were individually verified. The rest default to get_current_user by family pattern -- a small number may use get_current_user_optional for public plan-browsing reads; not exhaustively re-checked per route in this pass."
-      ],
-      "classification": "protected",
-      "public_rationale": null,
-      "accepted_credential_classes": [
-        "ops_access_token_hs256"
-      ],
-      "primary_validator": {
-        "description": "get_current_user (or get_current_user_optional on a small number of public-plan-listing GETs -- verified: 7 Depends(get_current_user)-family hits across this router; per-route optionality not exhaustively re-verified for every one of the ~20 billing routes in this pass).",
-        "anchor": {
-          "path": "src/dev_health_ops/api/auth/routers/dependencies.py",
-          "line": 37,
-          "note": "get_current_user dependency"
-        }
-      },
-      "token_shape": null,
-      "reachable_validators": [
-        {
-          "description": "OrgIdMiddleware.__call__ decodes the Authorization: Bearer value as an ops access-token JWT and resolves/validates X-Org-Id against it -- this IS the route's intended validator for ops_access_token_hs256.",
-          "anchor": {
-            "path": "src/dev_health_ops/api/middleware/__init__.py",
-            "line": 36,
-            "line_end": 91,
-            "note": "OrgIdMiddleware.__call__, ACR exemption at line 86"
-          },
-          "is_intended_validator": true,
-          "reachable_but_not_owner": false
-        },
-        {
-          "description": "ImpersonationMiddleware._may_be_superuser peeks at the Authorization bearer value with an UNVERIFIED base64 JSON decode of the JWT payload segment (token.split('.')[1]) on every request, superuser-or-not, with NO path exemption (unlike OrgIdMiddleware's /api/v1/internal/acr/ carve-out) -- runs even for ACR-authenticated requests. A non-JWT opaque token (svc_acr_*, fcpush_*, worker-bridge secret) fails the split/decode and is caught by a broad except, so this is benign but still 'observes' every credential class before its intended validator.",
-          "anchor": {
-            "path": "src/dev_health_ops/api/middleware/impersonation.py",
-            "line": 108,
-            "line_end": 141,
-            "note": "_may_be_superuser unverified JWT peek, no path exemption"
-          },
-          "is_intended_validator": false,
-          "reachable_but_not_owner": true
-        }
-      ],
-      "action": null,
-      "resource_resolver": null,
-      "tenant_requirement": "org_scoped",
-      "current_state_cache_behavior": null,
-      "impersonation_policy": "subject_to_impersonation_override",
-      "entitlement_requirement": null,
-      "disclosure_behavior": null
-    },
-    {
-      "id": "POST /api/v1/billing/invoices/{invoice_id}/void [dev-health-ops-api]",
-      "surface_kind": "rest",
-      "method": "POST",
-      "route": "/api/v1/billing/invoices/{invoice_id}/void",
-      "graphql_field_name": null,
-      "service": "dev-health-ops-api",
-      "source": {
-        "file": "src/dev_health_ops/api/billing/invoice_routes.py",
-        "line": 162,
-        "router_local_path": "/{invoice_id}/void"
-      },
-      "gaps": [
-        "billing/router.py has ~20 routes; only pull-stripe (require_superuser) and the two stripe-webhook rows were individually verified. The rest default to get_current_user by family pattern -- a small number may use get_current_user_optional for public plan-browsing reads; not exhaustively re-checked per route in this pass."
-      ],
-      "classification": "protected",
-      "public_rationale": null,
-      "accepted_credential_classes": [
-        "ops_access_token_hs256"
-      ],
-      "primary_validator": {
-        "description": "get_current_user (or get_current_user_optional on a small number of public-plan-listing GETs -- verified: 7 Depends(get_current_user)-family hits across this router; per-route optionality not exhaustively re-verified for every one of the ~20 billing routes in this pass).",
-        "anchor": {
-          "path": "src/dev_health_ops/api/auth/routers/dependencies.py",
-          "line": 37,
-          "note": "get_current_user dependency"
-        }
-      },
-      "token_shape": null,
-      "reachable_validators": [
-        {
-          "description": "OrgIdMiddleware.__call__ decodes the Authorization: Bearer value as an ops access-token JWT and resolves/validates X-Org-Id against it -- this IS the route's intended validator for ops_access_token_hs256.",
-          "anchor": {
-            "path": "src/dev_health_ops/api/middleware/__init__.py",
-            "line": 36,
-            "line_end": 91,
-            "note": "OrgIdMiddleware.__call__, ACR exemption at line 86"
-          },
-          "is_intended_validator": true,
-          "reachable_but_not_owner": false
-        },
-        {
-          "description": "ImpersonationMiddleware._may_be_superuser peeks at the Authorization bearer value with an UNVERIFIED base64 JSON decode of the JWT payload segment (token.split('.')[1]) on every request, superuser-or-not, with NO path exemption (unlike OrgIdMiddleware's /api/v1/internal/acr/ carve-out) -- runs even for ACR-authenticated requests. A non-JWT opaque token (svc_acr_*, fcpush_*, worker-bridge secret) fails the split/decode and is caught by a broad except, so this is benign but still 'observes' every credential class before its intended validator.",
-          "anchor": {
-            "path": "src/dev_health_ops/api/middleware/impersonation.py",
-            "line": 108,
-            "line_end": 141,
-            "note": "_may_be_superuser unverified JWT peek, no path exemption"
-          },
-          "is_intended_validator": false,
-          "reachable_but_not_owner": true
-        }
-      ],
-      "action": null,
-      "resource_resolver": null,
-      "tenant_requirement": "org_scoped",
-      "current_state_cache_behavior": null,
-      "impersonation_policy": "subject_to_impersonation_override",
-      "entitlement_requirement": null,
-      "disclosure_behavior": null
-    },
-    {
-      "id": "GET /api/v1/billing/plans [dev-health-ops-api]",
-      "surface_kind": "rest",
-      "method": "GET",
-      "route": "/api/v1/billing/plans",
-      "graphql_field_name": null,
-      "service": "dev-health-ops-api",
-      "source": {
-        "file": "src/dev_health_ops/api/billing/plans.py",
-        "line": 284,
-        "router_local_path": "/plans"
-      },
-      "gaps": [
-        "billing/router.py has ~20 routes; only pull-stripe (require_superuser) and the two stripe-webhook rows were individually verified. The rest default to get_current_user by family pattern -- a small number may use get_current_user_optional for public plan-browsing reads; not exhaustively re-checked per route in this pass."
-      ],
-      "classification": "protected",
-      "public_rationale": null,
-      "accepted_credential_classes": [
-        "ops_access_token_hs256"
-      ],
-      "primary_validator": {
-        "description": "get_current_user (or get_current_user_optional on a small number of public-plan-listing GETs -- verified: 7 Depends(get_current_user)-family hits across this router; per-route optionality not exhaustively re-verified for every one of the ~20 billing routes in this pass).",
-        "anchor": {
-          "path": "src/dev_health_ops/api/auth/routers/dependencies.py",
-          "line": 37,
-          "note": "get_current_user dependency"
-        }
-      },
-      "token_shape": null,
-      "reachable_validators": [
-        {
-          "description": "OrgIdMiddleware.__call__ decodes the Authorization: Bearer value as an ops access-token JWT and resolves/validates X-Org-Id against it -- this IS the route's intended validator for ops_access_token_hs256.",
-          "anchor": {
-            "path": "src/dev_health_ops/api/middleware/__init__.py",
-            "line": 36,
-            "line_end": 91,
-            "note": "OrgIdMiddleware.__call__, ACR exemption at line 86"
-          },
-          "is_intended_validator": true,
-          "reachable_but_not_owner": false
-        },
-        {
-          "description": "ImpersonationMiddleware._may_be_superuser peeks at the Authorization bearer value with an UNVERIFIED base64 JSON decode of the JWT payload segment (token.split('.')[1]) on every request, superuser-or-not, with NO path exemption (unlike OrgIdMiddleware's /api/v1/internal/acr/ carve-out) -- runs even for ACR-authenticated requests. A non-JWT opaque token (svc_acr_*, fcpush_*, worker-bridge secret) fails the split/decode and is caught by a broad except, so this is benign but still 'observes' every credential class before its intended validator.",
-          "anchor": {
-            "path": "src/dev_health_ops/api/middleware/impersonation.py",
-            "line": 108,
-            "line_end": 141,
-            "note": "_may_be_superuser unverified JWT peek, no path exemption"
-          },
-          "is_intended_validator": false,
-          "reachable_but_not_owner": true
-        }
-      ],
-      "action": null,
-      "resource_resolver": null,
-      "tenant_requirement": "org_scoped",
-      "current_state_cache_behavior": null,
-      "impersonation_policy": "subject_to_impersonation_override",
-      "entitlement_requirement": null,
-      "disclosure_behavior": null
-    },
-    {
-      "id": "POST /api/v1/billing/plans/pull-stripe [dev-health-ops-api]",
-      "surface_kind": "rest",
-      "method": "POST",
-      "route": "/api/v1/billing/plans/pull-stripe",
-      "graphql_field_name": null,
-      "service": "dev-health-ops-api",
-      "source": {
-        "file": "src/dev_health_ops/api/billing/plans.py",
-        "line": 306,
-        "router_local_path": "/plans/pull-stripe"
-      },
-      "gaps": [],
-      "classification": "protected",
-      "public_rationale": null,
-      "accepted_credential_classes": [
-        "ops_access_token_hs256"
-      ],
-      "primary_validator": {
-        "description": "require_superuser dependency.",
-        "anchor": {
-          "path": "src/dev_health_ops/api/admin/middleware.py",
-          "line": 17,
-          "line_end": 21
-        }
-      },
-      "token_shape": null,
-      "reachable_validators": [
-        {
-          "description": "OrgIdMiddleware.__call__ decodes the Authorization: Bearer value as an ops access-token JWT and resolves/validates X-Org-Id against it -- this IS the route's intended validator for ops_access_token_hs256.",
-          "anchor": {
-            "path": "src/dev_health_ops/api/middleware/__init__.py",
-            "line": 36,
-            "line_end": 91,
-            "note": "OrgIdMiddleware.__call__, ACR exemption at line 86"
-          },
-          "is_intended_validator": true,
-          "reachable_but_not_owner": false
-        },
-        {
-          "description": "ImpersonationMiddleware._may_be_superuser peeks at the Authorization bearer value with an UNVERIFIED base64 JSON decode of the JWT payload segment (token.split('.')[1]) on every request, superuser-or-not, with NO path exemption (unlike OrgIdMiddleware's /api/v1/internal/acr/ carve-out) -- runs even for ACR-authenticated requests. A non-JWT opaque token (svc_acr_*, fcpush_*, worker-bridge secret) fails the split/decode and is caught by a broad except, so this is benign but still 'observes' every credential class before its intended validator.",
-          "anchor": {
-            "path": "src/dev_health_ops/api/middleware/impersonation.py",
-            "line": 108,
-            "line_end": 141,
-            "note": "_may_be_superuser unverified JWT peek, no path exemption"
-          },
-          "is_intended_validator": false,
-          "reachable_but_not_owner": true
-        }
-      ],
-      "action": null,
-      "resource_resolver": null,
-      "tenant_requirement": "cross_org_superuser_only",
-      "current_state_cache_behavior": null,
-      "impersonation_policy": "subject_to_impersonation_override",
-      "entitlement_requirement": null,
-      "disclosure_behavior": null
-    },
-    {
-      "id": "GET /api/v1/billing/plans/{plan_id} [dev-health-ops-api]",
-      "surface_kind": "rest",
-      "method": "GET",
-      "route": "/api/v1/billing/plans/{plan_id}",
-      "graphql_field_name": null,
-      "service": "dev-health-ops-api",
-      "source": {
-        "file": "src/dev_health_ops/api/billing/plans.py",
-        "line": 315,
-        "router_local_path": "/plans/{plan_id}"
-      },
-      "gaps": [
-        "billing/router.py has ~20 routes; only pull-stripe (require_superuser) and the two stripe-webhook rows were individually verified. The rest default to get_current_user by family pattern -- a small number may use get_current_user_optional for public plan-browsing reads; not exhaustively re-checked per route in this pass."
-      ],
-      "classification": "protected",
-      "public_rationale": null,
-      "accepted_credential_classes": [
-        "ops_access_token_hs256"
-      ],
-      "primary_validator": {
-        "description": "get_current_user (or get_current_user_optional on a small number of public-plan-listing GETs -- verified: 7 Depends(get_current_user)-family hits across this router; per-route optionality not exhaustively re-verified for every one of the ~20 billing routes in this pass).",
-        "anchor": {
-          "path": "src/dev_health_ops/api/auth/routers/dependencies.py",
-          "line": 37,
-          "note": "get_current_user dependency"
-        }
-      },
-      "token_shape": null,
-      "reachable_validators": [
-        {
-          "description": "OrgIdMiddleware.__call__ decodes the Authorization: Bearer value as an ops access-token JWT and resolves/validates X-Org-Id against it -- this IS the route's intended validator for ops_access_token_hs256.",
-          "anchor": {
-            "path": "src/dev_health_ops/api/middleware/__init__.py",
-            "line": 36,
-            "line_end": 91,
-            "note": "OrgIdMiddleware.__call__, ACR exemption at line 86"
-          },
-          "is_intended_validator": true,
-          "reachable_but_not_owner": false
-        },
-        {
-          "description": "ImpersonationMiddleware._may_be_superuser peeks at the Authorization bearer value with an UNVERIFIED base64 JSON decode of the JWT payload segment (token.split('.')[1]) on every request, superuser-or-not, with NO path exemption (unlike OrgIdMiddleware's /api/v1/internal/acr/ carve-out) -- runs even for ACR-authenticated requests. A non-JWT opaque token (svc_acr_*, fcpush_*, worker-bridge secret) fails the split/decode and is caught by a broad except, so this is benign but still 'observes' every credential class before its intended validator.",
-          "anchor": {
-            "path": "src/dev_health_ops/api/middleware/impersonation.py",
-            "line": 108,
-            "line_end": 141,
-            "note": "_may_be_superuser unverified JWT peek, no path exemption"
-          },
-          "is_intended_validator": false,
-          "reachable_but_not_owner": true
-        }
-      ],
-      "action": null,
-      "resource_resolver": null,
-      "tenant_requirement": "org_scoped",
-      "current_state_cache_behavior": null,
-      "impersonation_policy": "subject_to_impersonation_override",
-      "entitlement_requirement": null,
-      "disclosure_behavior": null
-    },
-    {
-      "id": "POST /api/v1/billing/plans [dev-health-ops-api]",
-      "surface_kind": "rest",
-      "method": "POST",
-      "route": "/api/v1/billing/plans",
-      "graphql_field_name": null,
-      "service": "dev-health-ops-api",
-      "source": {
-        "file": "src/dev_health_ops/api/billing/plans.py",
-        "line": 340,
-        "router_local_path": "/plans"
-      },
-      "gaps": [
-        "billing/router.py has ~20 routes; only pull-stripe (require_superuser) and the two stripe-webhook rows were individually verified. The rest default to get_current_user by family pattern -- a small number may use get_current_user_optional for public plan-browsing reads; not exhaustively re-checked per route in this pass."
-      ],
-      "classification": "protected",
-      "public_rationale": null,
-      "accepted_credential_classes": [
-        "ops_access_token_hs256"
-      ],
-      "primary_validator": {
-        "description": "get_current_user (or get_current_user_optional on a small number of public-plan-listing GETs -- verified: 7 Depends(get_current_user)-family hits across this router; per-route optionality not exhaustively re-verified for every one of the ~20 billing routes in this pass).",
-        "anchor": {
-          "path": "src/dev_health_ops/api/auth/routers/dependencies.py",
-          "line": 37,
-          "note": "get_current_user dependency"
-        }
-      },
-      "token_shape": null,
-      "reachable_validators": [
-        {
-          "description": "OrgIdMiddleware.__call__ decodes the Authorization: Bearer value as an ops access-token JWT and resolves/validates X-Org-Id against it -- this IS the route's intended validator for ops_access_token_hs256.",
-          "anchor": {
-            "path": "src/dev_health_ops/api/middleware/__init__.py",
-            "line": 36,
-            "line_end": 91,
-            "note": "OrgIdMiddleware.__call__, ACR exemption at line 86"
-          },
-          "is_intended_validator": true,
-          "reachable_but_not_owner": false
-        },
-        {
-          "description": "ImpersonationMiddleware._may_be_superuser peeks at the Authorization bearer value with an UNVERIFIED base64 JSON decode of the JWT payload segment (token.split('.')[1]) on every request, superuser-or-not, with NO path exemption (unlike OrgIdMiddleware's /api/v1/internal/acr/ carve-out) -- runs even for ACR-authenticated requests. A non-JWT opaque token (svc_acr_*, fcpush_*, worker-bridge secret) fails the split/decode and is caught by a broad except, so this is benign but still 'observes' every credential class before its intended validator.",
-          "anchor": {
-            "path": "src/dev_health_ops/api/middleware/impersonation.py",
-            "line": 108,
-            "line_end": 141,
-            "note": "_may_be_superuser unverified JWT peek, no path exemption"
-          },
-          "is_intended_validator": false,
-          "reachable_but_not_owner": true
-        }
-      ],
-      "action": null,
-      "resource_resolver": null,
-      "tenant_requirement": "org_scoped",
-      "current_state_cache_behavior": null,
-      "impersonation_policy": "subject_to_impersonation_override",
-      "entitlement_requirement": null,
-      "disclosure_behavior": null
-    },
-    {
-      "id": "PUT /api/v1/billing/plans/{plan_id} [dev-health-ops-api]",
-      "surface_kind": "rest",
-      "method": "PUT",
-      "route": "/api/v1/billing/plans/{plan_id}",
-      "graphql_field_name": null,
-      "service": "dev-health-ops-api",
-      "source": {
-        "file": "src/dev_health_ops/api/billing/plans.py",
-        "line": 369,
-        "router_local_path": "/plans/{plan_id}"
-      },
-      "gaps": [
-        "billing/router.py has ~20 routes; only pull-stripe (require_superuser) and the two stripe-webhook rows were individually verified. The rest default to get_current_user by family pattern -- a small number may use get_current_user_optional for public plan-browsing reads; not exhaustively re-checked per route in this pass."
-      ],
-      "classification": "protected",
-      "public_rationale": null,
-      "accepted_credential_classes": [
-        "ops_access_token_hs256"
-      ],
-      "primary_validator": {
-        "description": "get_current_user (or get_current_user_optional on a small number of public-plan-listing GETs -- verified: 7 Depends(get_current_user)-family hits across this router; per-route optionality not exhaustively re-verified for every one of the ~20 billing routes in this pass).",
-        "anchor": {
-          "path": "src/dev_health_ops/api/auth/routers/dependencies.py",
-          "line": 37,
-          "note": "get_current_user dependency"
-        }
-      },
-      "token_shape": null,
-      "reachable_validators": [
-        {
-          "description": "OrgIdMiddleware.__call__ decodes the Authorization: Bearer value as an ops access-token JWT and resolves/validates X-Org-Id against it -- this IS the route's intended validator for ops_access_token_hs256.",
-          "anchor": {
-            "path": "src/dev_health_ops/api/middleware/__init__.py",
-            "line": 36,
-            "line_end": 91,
-            "note": "OrgIdMiddleware.__call__, ACR exemption at line 86"
-          },
-          "is_intended_validator": true,
-          "reachable_but_not_owner": false
-        },
-        {
-          "description": "ImpersonationMiddleware._may_be_superuser peeks at the Authorization bearer value with an UNVERIFIED base64 JSON decode of the JWT payload segment (token.split('.')[1]) on every request, superuser-or-not, with NO path exemption (unlike OrgIdMiddleware's /api/v1/internal/acr/ carve-out) -- runs even for ACR-authenticated requests. A non-JWT opaque token (svc_acr_*, fcpush_*, worker-bridge secret) fails the split/decode and is caught by a broad except, so this is benign but still 'observes' every credential class before its intended validator.",
-          "anchor": {
-            "path": "src/dev_health_ops/api/middleware/impersonation.py",
-            "line": 108,
-            "line_end": 141,
-            "note": "_may_be_superuser unverified JWT peek, no path exemption"
-          },
-          "is_intended_validator": false,
-          "reachable_but_not_owner": true
-        }
-      ],
-      "action": null,
-      "resource_resolver": null,
-      "tenant_requirement": "org_scoped",
-      "current_state_cache_behavior": null,
-      "impersonation_policy": "subject_to_impersonation_override",
-      "entitlement_requirement": null,
-      "disclosure_behavior": null
-    },
-    {
-      "id": "DELETE /api/v1/billing/plans/{plan_id} [dev-health-ops-api]",
-      "surface_kind": "rest",
-      "method": "DELETE",
-      "route": "/api/v1/billing/plans/{plan_id}",
-      "graphql_field_name": null,
-      "service": "dev-health-ops-api",
-      "source": {
-        "file": "src/dev_health_ops/api/billing/plans.py",
-        "line": 401,
-        "router_local_path": "/plans/{plan_id}"
-      },
-      "gaps": [
-        "billing/router.py has ~20 routes; only pull-stripe (require_superuser) and the two stripe-webhook rows were individually verified. The rest default to get_current_user by family pattern -- a small number may use get_current_user_optional for public plan-browsing reads; not exhaustively re-checked per route in this pass."
-      ],
-      "classification": "protected",
-      "public_rationale": null,
-      "accepted_credential_classes": [
-        "ops_access_token_hs256"
-      ],
-      "primary_validator": {
-        "description": "get_current_user (or get_current_user_optional on a small number of public-plan-listing GETs -- verified: 7 Depends(get_current_user)-family hits across this router; per-route optionality not exhaustively re-verified for every one of the ~20 billing routes in this pass).",
-        "anchor": {
-          "path": "src/dev_health_ops/api/auth/routers/dependencies.py",
-          "line": 37,
-          "note": "get_current_user dependency"
-        }
-      },
-      "token_shape": null,
-      "reachable_validators": [
-        {
-          "description": "OrgIdMiddleware.__call__ decodes the Authorization: Bearer value as an ops access-token JWT and resolves/validates X-Org-Id against it -- this IS the route's intended validator for ops_access_token_hs256.",
-          "anchor": {
-            "path": "src/dev_health_ops/api/middleware/__init__.py",
-            "line": 36,
-            "line_end": 91,
-            "note": "OrgIdMiddleware.__call__, ACR exemption at line 86"
-          },
-          "is_intended_validator": true,
-          "reachable_but_not_owner": false
-        },
-        {
-          "description": "ImpersonationMiddleware._may_be_superuser peeks at the Authorization bearer value with an UNVERIFIED base64 JSON decode of the JWT payload segment (token.split('.')[1]) on every request, superuser-or-not, with NO path exemption (unlike OrgIdMiddleware's /api/v1/internal/acr/ carve-out) -- runs even for ACR-authenticated requests. A non-JWT opaque token (svc_acr_*, fcpush_*, worker-bridge secret) fails the split/decode and is caught by a broad except, so this is benign but still 'observes' every credential class before its intended validator.",
-          "anchor": {
-            "path": "src/dev_health_ops/api/middleware/impersonation.py",
-            "line": 108,
-            "line_end": 141,
-            "note": "_may_be_superuser unverified JWT peek, no path exemption"
-          },
-          "is_intended_validator": false,
-          "reachable_but_not_owner": true
-        }
-      ],
-      "action": null,
-      "resource_resolver": null,
-      "tenant_requirement": "org_scoped",
-      "current_state_cache_behavior": null,
-      "impersonation_policy": "subject_to_impersonation_override",
-      "entitlement_requirement": null,
-      "disclosure_behavior": null
-    },
-    {
-      "id": "POST /api/v1/billing/plans/{plan_id}/sync-stripe [dev-health-ops-api]",
-      "surface_kind": "rest",
-      "method": "POST",
-      "route": "/api/v1/billing/plans/{plan_id}/sync-stripe",
-      "graphql_field_name": null,
-      "service": "dev-health-ops-api",
-      "source": {
-        "file": "src/dev_health_ops/api/billing/plans.py",
-        "line": 419,
-        "router_local_path": "/plans/{plan_id}/sync-stripe"
-      },
-      "gaps": [
-        "billing/router.py has ~20 routes; only pull-stripe (require_superuser) and the two stripe-webhook rows were individually verified. The rest default to get_current_user by family pattern -- a small number may use get_current_user_optional for public plan-browsing reads; not exhaustively re-checked per route in this pass."
-      ],
-      "classification": "protected",
-      "public_rationale": null,
-      "accepted_credential_classes": [
-        "ops_access_token_hs256"
-      ],
-      "primary_validator": {
-        "description": "get_current_user (or get_current_user_optional on a small number of public-plan-listing GETs -- verified: 7 Depends(get_current_user)-family hits across this router; per-route optionality not exhaustively re-verified for every one of the ~20 billing routes in this pass).",
-        "anchor": {
-          "path": "src/dev_health_ops/api/auth/routers/dependencies.py",
-          "line": 37,
-          "note": "get_current_user dependency"
-        }
-      },
-      "token_shape": null,
-      "reachable_validators": [
-        {
-          "description": "OrgIdMiddleware.__call__ decodes the Authorization: Bearer value as an ops access-token JWT and resolves/validates X-Org-Id against it -- this IS the route's intended validator for ops_access_token_hs256.",
-          "anchor": {
-            "path": "src/dev_health_ops/api/middleware/__init__.py",
-            "line": 36,
-            "line_end": 91,
-            "note": "OrgIdMiddleware.__call__, ACR exemption at line 86"
-          },
-          "is_intended_validator": true,
-          "reachable_but_not_owner": false
-        },
-        {
-          "description": "ImpersonationMiddleware._may_be_superuser peeks at the Authorization bearer value with an UNVERIFIED base64 JSON decode of the JWT payload segment (token.split('.')[1]) on every request, superuser-or-not, with NO path exemption (unlike OrgIdMiddleware's /api/v1/internal/acr/ carve-out) -- runs even for ACR-authenticated requests. A non-JWT opaque token (svc_acr_*, fcpush_*, worker-bridge secret) fails the split/decode and is caught by a broad except, so this is benign but still 'observes' every credential class before its intended validator.",
-          "anchor": {
-            "path": "src/dev_health_ops/api/middleware/impersonation.py",
-            "line": 108,
-            "line_end": 141,
-            "note": "_may_be_superuser unverified JWT peek, no path exemption"
-          },
-          "is_intended_validator": false,
-          "reachable_but_not_owner": true
-        }
-      ],
-      "action": null,
-      "resource_resolver": null,
-      "tenant_requirement": "org_scoped",
-      "current_state_cache_behavior": null,
-      "impersonation_policy": "subject_to_impersonation_override",
-      "entitlement_requirement": null,
-      "disclosure_behavior": null
-    },
-    {
-      "id": "POST /api/v1/billing/refunds [dev-health-ops-api]",
-      "surface_kind": "rest",
-      "method": "POST",
-      "route": "/api/v1/billing/refunds",
-      "graphql_field_name": null,
-      "service": "dev-health-ops-api",
-      "source": {
-        "file": "src/dev_health_ops/api/billing/refund_routes.py",
-        "line": 105,
-        "router_local_path": ""
-      },
-      "gaps": [
-        "billing/router.py has ~20 routes; only pull-stripe (require_superuser) and the two stripe-webhook rows were individually verified. The rest default to get_current_user by family pattern -- a small number may use get_current_user_optional for public plan-browsing reads; not exhaustively re-checked per route in this pass."
-      ],
-      "classification": "protected",
-      "public_rationale": null,
-      "accepted_credential_classes": [
-        "ops_access_token_hs256"
-      ],
-      "primary_validator": {
-        "description": "get_current_user (or get_current_user_optional on a small number of public-plan-listing GETs -- verified: 7 Depends(get_current_user)-family hits across this router; per-route optionality not exhaustively re-verified for every one of the ~20 billing routes in this pass).",
-        "anchor": {
-          "path": "src/dev_health_ops/api/auth/routers/dependencies.py",
-          "line": 37,
-          "note": "get_current_user dependency"
-        }
-      },
-      "token_shape": null,
-      "reachable_validators": [
-        {
-          "description": "OrgIdMiddleware.__call__ decodes the Authorization: Bearer value as an ops access-token JWT and resolves/validates X-Org-Id against it -- this IS the route's intended validator for ops_access_token_hs256.",
-          "anchor": {
-            "path": "src/dev_health_ops/api/middleware/__init__.py",
-            "line": 36,
-            "line_end": 91,
-            "note": "OrgIdMiddleware.__call__, ACR exemption at line 86"
-          },
-          "is_intended_validator": true,
-          "reachable_but_not_owner": false
-        },
-        {
-          "description": "ImpersonationMiddleware._may_be_superuser peeks at the Authorization bearer value with an UNVERIFIED base64 JSON decode of the JWT payload segment (token.split('.')[1]) on every request, superuser-or-not, with NO path exemption (unlike OrgIdMiddleware's /api/v1/internal/acr/ carve-out) -- runs even for ACR-authenticated requests. A non-JWT opaque token (svc_acr_*, fcpush_*, worker-bridge secret) fails the split/decode and is caught by a broad except, so this is benign but still 'observes' every credential class before its intended validator.",
-          "anchor": {
-            "path": "src/dev_health_ops/api/middleware/impersonation.py",
-            "line": 108,
-            "line_end": 141,
-            "note": "_may_be_superuser unverified JWT peek, no path exemption"
-          },
-          "is_intended_validator": false,
-          "reachable_but_not_owner": true
-        }
-      ],
-      "action": null,
-      "resource_resolver": null,
-      "tenant_requirement": "org_scoped",
-      "current_state_cache_behavior": null,
-      "impersonation_policy": "subject_to_impersonation_override",
-      "entitlement_requirement": null,
-      "disclosure_behavior": null
-    },
-    {
-      "id": "GET /api/v1/billing/refunds [dev-health-ops-api]",
-      "surface_kind": "rest",
-      "method": "GET",
-      "route": "/api/v1/billing/refunds",
-      "graphql_field_name": null,
-      "service": "dev-health-ops-api",
-      "source": {
-        "file": "src/dev_health_ops/api/billing/refund_routes.py",
-        "line": 137,
-        "router_local_path": ""
-      },
-      "gaps": [
-        "billing/router.py has ~20 routes; only pull-stripe (require_superuser) and the two stripe-webhook rows were individually verified. The rest default to get_current_user by family pattern -- a small number may use get_current_user_optional for public plan-browsing reads; not exhaustively re-checked per route in this pass."
-      ],
-      "classification": "protected",
-      "public_rationale": null,
-      "accepted_credential_classes": [
-        "ops_access_token_hs256"
-      ],
-      "primary_validator": {
-        "description": "get_current_user (or get_current_user_optional on a small number of public-plan-listing GETs -- verified: 7 Depends(get_current_user)-family hits across this router; per-route optionality not exhaustively re-verified for every one of the ~20 billing routes in this pass).",
-        "anchor": {
-          "path": "src/dev_health_ops/api/auth/routers/dependencies.py",
-          "line": 37,
-          "note": "get_current_user dependency"
-        }
-      },
-      "token_shape": null,
-      "reachable_validators": [
-        {
-          "description": "OrgIdMiddleware.__call__ decodes the Authorization: Bearer value as an ops access-token JWT and resolves/validates X-Org-Id against it -- this IS the route's intended validator for ops_access_token_hs256.",
-          "anchor": {
-            "path": "src/dev_health_ops/api/middleware/__init__.py",
-            "line": 36,
-            "line_end": 91,
-            "note": "OrgIdMiddleware.__call__, ACR exemption at line 86"
-          },
-          "is_intended_validator": true,
-          "reachable_but_not_owner": false
-        },
-        {
-          "description": "ImpersonationMiddleware._may_be_superuser peeks at the Authorization bearer value with an UNVERIFIED base64 JSON decode of the JWT payload segment (token.split('.')[1]) on every request, superuser-or-not, with NO path exemption (unlike OrgIdMiddleware's /api/v1/internal/acr/ carve-out) -- runs even for ACR-authenticated requests. A non-JWT opaque token (svc_acr_*, fcpush_*, worker-bridge secret) fails the split/decode and is caught by a broad except, so this is benign but still 'observes' every credential class before its intended validator.",
-          "anchor": {
-            "path": "src/dev_health_ops/api/middleware/impersonation.py",
-            "line": 108,
-            "line_end": 141,
-            "note": "_may_be_superuser unverified JWT peek, no path exemption"
-          },
-          "is_intended_validator": false,
-          "reachable_but_not_owner": true
-        }
-      ],
-      "action": null,
-      "resource_resolver": null,
-      "tenant_requirement": "org_scoped",
-      "current_state_cache_behavior": null,
-      "impersonation_policy": "subject_to_impersonation_override",
-      "entitlement_requirement": null,
-      "disclosure_behavior": null
-    },
-    {
-      "id": "GET /api/v1/billing/refunds/{refund_id} [dev-health-ops-api]",
-      "surface_kind": "rest",
-      "method": "GET",
-      "route": "/api/v1/billing/refunds/{refund_id}",
-      "graphql_field_name": null,
-      "service": "dev-health-ops-api",
-      "source": {
-        "file": "src/dev_health_ops/api/billing/refund_routes.py",
-        "line": 165,
-        "router_local_path": "/{refund_id}"
-      },
-      "gaps": [
-        "billing/router.py has ~20 routes; only pull-stripe (require_superuser) and the two stripe-webhook rows were individually verified. The rest default to get_current_user by family pattern -- a small number may use get_current_user_optional for public plan-browsing reads; not exhaustively re-checked per route in this pass."
-      ],
-      "classification": "protected",
-      "public_rationale": null,
-      "accepted_credential_classes": [
-        "ops_access_token_hs256"
-      ],
-      "primary_validator": {
-        "description": "get_current_user (or get_current_user_optional on a small number of public-plan-listing GETs -- verified: 7 Depends(get_current_user)-family hits across this router; per-route optionality not exhaustively re-verified for every one of the ~20 billing routes in this pass).",
-        "anchor": {
-          "path": "src/dev_health_ops/api/auth/routers/dependencies.py",
-          "line": 37,
-          "note": "get_current_user dependency"
-        }
-      },
-      "token_shape": null,
-      "reachable_validators": [
-        {
-          "description": "OrgIdMiddleware.__call__ decodes the Authorization: Bearer value as an ops access-token JWT and resolves/validates X-Org-Id against it -- this IS the route's intended validator for ops_access_token_hs256.",
-          "anchor": {
-            "path": "src/dev_health_ops/api/middleware/__init__.py",
-            "line": 36,
-            "line_end": 91,
-            "note": "OrgIdMiddleware.__call__, ACR exemption at line 86"
-          },
-          "is_intended_validator": true,
-          "reachable_but_not_owner": false
-        },
-        {
-          "description": "ImpersonationMiddleware._may_be_superuser peeks at the Authorization bearer value with an UNVERIFIED base64 JSON decode of the JWT payload segment (token.split('.')[1]) on every request, superuser-or-not, with NO path exemption (unlike OrgIdMiddleware's /api/v1/internal/acr/ carve-out) -- runs even for ACR-authenticated requests. A non-JWT opaque token (svc_acr_*, fcpush_*, worker-bridge secret) fails the split/decode and is caught by a broad except, so this is benign but still 'observes' every credential class before its intended validator.",
-          "anchor": {
-            "path": "src/dev_health_ops/api/middleware/impersonation.py",
-            "line": 108,
-            "line_end": 141,
-            "note": "_may_be_superuser unverified JWT peek, no path exemption"
-          },
-          "is_intended_validator": false,
-          "reachable_but_not_owner": true
-        }
-      ],
-      "action": null,
-      "resource_resolver": null,
-      "tenant_requirement": "org_scoped",
-      "current_state_cache_behavior": null,
-      "impersonation_policy": "subject_to_impersonation_override",
-      "entitlement_requirement": null,
-      "disclosure_behavior": null
-    },
-    {
-      "id": "POST /api/v1/billing/checkout [dev-health-ops-api]",
-      "surface_kind": "rest",
-      "method": "POST",
-      "route": "/api/v1/billing/checkout",
-      "graphql_field_name": null,
-      "service": "dev-health-ops-api",
-      "source": {
-        "file": "src/dev_health_ops/api/billing/router.py",
-        "line": 194,
-        "router_local_path": "/checkout"
-      },
-      "gaps": [
-        "billing/router.py has ~20 routes; only pull-stripe (require_superuser) and the two stripe-webhook rows were individually verified. The rest default to get_current_user by family pattern -- a small number may use get_current_user_optional for public plan-browsing reads; not exhaustively re-checked per route in this pass."
-      ],
-      "classification": "protected",
-      "public_rationale": null,
-      "accepted_credential_classes": [
-        "ops_access_token_hs256"
-      ],
-      "primary_validator": {
-        "description": "get_current_user (or get_current_user_optional on a small number of public-plan-listing GETs -- verified: 7 Depends(get_current_user)-family hits across this router; per-route optionality not exhaustively re-verified for every one of the ~20 billing routes in this pass).",
-        "anchor": {
-          "path": "src/dev_health_ops/api/auth/routers/dependencies.py",
-          "line": 37,
-          "note": "get_current_user dependency"
-        }
-      },
-      "token_shape": null,
-      "reachable_validators": [
-        {
-          "description": "OrgIdMiddleware.__call__ decodes the Authorization: Bearer value as an ops access-token JWT and resolves/validates X-Org-Id against it -- this IS the route's intended validator for ops_access_token_hs256.",
-          "anchor": {
-            "path": "src/dev_health_ops/api/middleware/__init__.py",
-            "line": 36,
-            "line_end": 91,
-            "note": "OrgIdMiddleware.__call__, ACR exemption at line 86"
-          },
-          "is_intended_validator": true,
-          "reachable_but_not_owner": false
-        },
-        {
-          "description": "ImpersonationMiddleware._may_be_superuser peeks at the Authorization bearer value with an UNVERIFIED base64 JSON decode of the JWT payload segment (token.split('.')[1]) on every request, superuser-or-not, with NO path exemption (unlike OrgIdMiddleware's /api/v1/internal/acr/ carve-out) -- runs even for ACR-authenticated requests. A non-JWT opaque token (svc_acr_*, fcpush_*, worker-bridge secret) fails the split/decode and is caught by a broad except, so this is benign but still 'observes' every credential class before its intended validator.",
-          "anchor": {
-            "path": "src/dev_health_ops/api/middleware/impersonation.py",
-            "line": 108,
-            "line_end": 141,
-            "note": "_may_be_superuser unverified JWT peek, no path exemption"
-          },
-          "is_intended_validator": false,
-          "reachable_but_not_owner": true
-        }
-      ],
-      "action": null,
-      "resource_resolver": null,
-      "tenant_requirement": "org_scoped",
-      "current_state_cache_behavior": null,
-      "impersonation_policy": "subject_to_impersonation_override",
-      "entitlement_requirement": null,
-      "disclosure_behavior": null
-    },
-    {
-      "id": "POST /api/v1/billing/portal [dev-health-ops-api]",
-      "surface_kind": "rest",
-      "method": "POST",
-      "route": "/api/v1/billing/portal",
-      "graphql_field_name": null,
-      "service": "dev-health-ops-api",
-      "source": {
-        "file": "src/dev_health_ops/api/billing/router.py",
-        "line": 255,
-        "router_local_path": "/portal"
-      },
-      "gaps": [
-        "billing/router.py has ~20 routes; only pull-stripe (require_superuser) and the two stripe-webhook rows were individually verified. The rest default to get_current_user by family pattern -- a small number may use get_current_user_optional for public plan-browsing reads; not exhaustively re-checked per route in this pass."
-      ],
-      "classification": "protected",
-      "public_rationale": null,
-      "accepted_credential_classes": [
-        "ops_access_token_hs256"
-      ],
-      "primary_validator": {
-        "description": "get_current_user (or get_current_user_optional on a small number of public-plan-listing GETs -- verified: 7 Depends(get_current_user)-family hits across this router; per-route optionality not exhaustively re-verified for every one of the ~20 billing routes in this pass).",
-        "anchor": {
-          "path": "src/dev_health_ops/api/auth/routers/dependencies.py",
-          "line": 37,
-          "note": "get_current_user dependency"
-        }
-      },
-      "token_shape": null,
-      "reachable_validators": [
-        {
-          "description": "OrgIdMiddleware.__call__ decodes the Authorization: Bearer value as an ops access-token JWT and resolves/validates X-Org-Id against it -- this IS the route's intended validator for ops_access_token_hs256.",
-          "anchor": {
-            "path": "src/dev_health_ops/api/middleware/__init__.py",
-            "line": 36,
-            "line_end": 91,
-            "note": "OrgIdMiddleware.__call__, ACR exemption at line 86"
-          },
-          "is_intended_validator": true,
-          "reachable_but_not_owner": false
-        },
-        {
-          "description": "ImpersonationMiddleware._may_be_superuser peeks at the Authorization bearer value with an UNVERIFIED base64 JSON decode of the JWT payload segment (token.split('.')[1]) on every request, superuser-or-not, with NO path exemption (unlike OrgIdMiddleware's /api/v1/internal/acr/ carve-out) -- runs even for ACR-authenticated requests. A non-JWT opaque token (svc_acr_*, fcpush_*, worker-bridge secret) fails the split/decode and is caught by a broad except, so this is benign but still 'observes' every credential class before its intended validator.",
-          "anchor": {
-            "path": "src/dev_health_ops/api/middleware/impersonation.py",
-            "line": 108,
-            "line_end": 141,
-            "note": "_may_be_superuser unverified JWT peek, no path exemption"
-          },
-          "is_intended_validator": false,
-          "reachable_but_not_owner": true
-        }
-      ],
-      "action": null,
-      "resource_resolver": null,
-      "tenant_requirement": "org_scoped",
-      "current_state_cache_behavior": null,
-      "impersonation_policy": "subject_to_impersonation_override",
-      "entitlement_requirement": null,
-      "disclosure_behavior": null
-    },
-    {
-      "id": "GET /api/v1/billing/entitlements/{org_id} [dev-health-ops-api]",
-      "surface_kind": "rest",
-      "method": "GET",
-      "route": "/api/v1/billing/entitlements/{org_id}",
-      "graphql_field_name": null,
-      "service": "dev-health-ops-api",
-      "source": {
-        "file": "src/dev_health_ops/api/billing/router.py",
-        "line": 344,
-        "router_local_path": "/entitlements/{org_id}"
-      },
-      "gaps": [
-        "billing/router.py has ~20 routes; only pull-stripe (require_superuser) and the two stripe-webhook rows were individually verified. The rest default to get_current_user by family pattern -- a small number may use get_current_user_optional for public plan-browsing reads; not exhaustively re-checked per route in this pass."
-      ],
-      "classification": "protected",
-      "public_rationale": null,
-      "accepted_credential_classes": [
-        "ops_access_token_hs256"
-      ],
-      "primary_validator": {
-        "description": "get_current_user (or get_current_user_optional on a small number of public-plan-listing GETs -- verified: 7 Depends(get_current_user)-family hits across this router; per-route optionality not exhaustively re-verified for every one of the ~20 billing routes in this pass).",
-        "anchor": {
-          "path": "src/dev_health_ops/api/auth/routers/dependencies.py",
-          "line": 37,
-          "note": "get_current_user dependency"
-        }
-      },
-      "token_shape": null,
-      "reachable_validators": [
-        {
-          "description": "OrgIdMiddleware.__call__ decodes the Authorization: Bearer value as an ops access-token JWT and resolves/validates X-Org-Id against it -- this IS the route's intended validator for ops_access_token_hs256.",
-          "anchor": {
-            "path": "src/dev_health_ops/api/middleware/__init__.py",
-            "line": 36,
-            "line_end": 91,
-            "note": "OrgIdMiddleware.__call__, ACR exemption at line 86"
-          },
-          "is_intended_validator": true,
-          "reachable_but_not_owner": false
-        },
-        {
-          "description": "ImpersonationMiddleware._may_be_superuser peeks at the Authorization bearer value with an UNVERIFIED base64 JSON decode of the JWT payload segment (token.split('.')[1]) on every request, superuser-or-not, with NO path exemption (unlike OrgIdMiddleware's /api/v1/internal/acr/ carve-out) -- runs even for ACR-authenticated requests. A non-JWT opaque token (svc_acr_*, fcpush_*, worker-bridge secret) fails the split/decode and is caught by a broad except, so this is benign but still 'observes' every credential class before its intended validator.",
-          "anchor": {
-            "path": "src/dev_health_ops/api/middleware/impersonation.py",
-            "line": 108,
-            "line_end": 141,
-            "note": "_may_be_superuser unverified JWT peek, no path exemption"
-          },
-          "is_intended_validator": false,
-          "reachable_but_not_owner": true
-        }
-      ],
-      "action": null,
-      "resource_resolver": null,
-      "tenant_requirement": "org_scoped",
-      "current_state_cache_behavior": null,
-      "impersonation_policy": "subject_to_impersonation_override",
-      "entitlement_requirement": null,
-      "disclosure_behavior": null
-    },
-    {
-      "id": "GET /api/v1/billing/audit [dev-health-ops-api]",
-      "surface_kind": "rest",
-      "method": "GET",
-      "route": "/api/v1/billing/audit",
-      "graphql_field_name": null,
-      "service": "dev-health-ops-api",
-      "source": {
-        "file": "src/dev_health_ops/api/billing/router.py",
-        "line": 360,
-        "router_local_path": "/audit"
-      },
-      "gaps": [
-        "billing/router.py has ~20 routes; only pull-stripe (require_superuser) and the two stripe-webhook rows were individually verified. The rest default to get_current_user by family pattern -- a small number may use get_current_user_optional for public plan-browsing reads; not exhaustively re-checked per route in this pass."
-      ],
-      "classification": "protected",
-      "public_rationale": null,
-      "accepted_credential_classes": [
-        "ops_access_token_hs256"
-      ],
-      "primary_validator": {
-        "description": "get_current_user (or get_current_user_optional on a small number of public-plan-listing GETs -- verified: 7 Depends(get_current_user)-family hits across this router; per-route optionality not exhaustively re-verified for every one of the ~20 billing routes in this pass).",
-        "anchor": {
-          "path": "src/dev_health_ops/api/auth/routers/dependencies.py",
-          "line": 37,
-          "note": "get_current_user dependency"
-        }
-      },
-      "token_shape": null,
-      "reachable_validators": [
-        {
-          "description": "OrgIdMiddleware.__call__ decodes the Authorization: Bearer value as an ops access-token JWT and resolves/validates X-Org-Id against it -- this IS the route's intended validator for ops_access_token_hs256.",
-          "anchor": {
-            "path": "src/dev_health_ops/api/middleware/__init__.py",
-            "line": 36,
-            "line_end": 91,
-            "note": "OrgIdMiddleware.__call__, ACR exemption at line 86"
-          },
-          "is_intended_validator": true,
-          "reachable_but_not_owner": false
-        },
-        {
-          "description": "ImpersonationMiddleware._may_be_superuser peeks at the Authorization bearer value with an UNVERIFIED base64 JSON decode of the JWT payload segment (token.split('.')[1]) on every request, superuser-or-not, with NO path exemption (unlike OrgIdMiddleware's /api/v1/internal/acr/ carve-out) -- runs even for ACR-authenticated requests. A non-JWT opaque token (svc_acr_*, fcpush_*, worker-bridge secret) fails the split/decode and is caught by a broad except, so this is benign but still 'observes' every credential class before its intended validator.",
-          "anchor": {
-            "path": "src/dev_health_ops/api/middleware/impersonation.py",
-            "line": 108,
-            "line_end": 141,
-            "note": "_may_be_superuser unverified JWT peek, no path exemption"
-          },
-          "is_intended_validator": false,
-          "reachable_but_not_owner": true
-        }
-      ],
-      "action": null,
-      "resource_resolver": null,
-      "tenant_requirement": "org_scoped",
-      "current_state_cache_behavior": null,
-      "impersonation_policy": "subject_to_impersonation_override",
-      "entitlement_requirement": null,
-      "disclosure_behavior": null
-    },
-    {
-      "id": "GET /api/v1/billing/audit/{audit_id} [dev-health-ops-api]",
-      "surface_kind": "rest",
-      "method": "GET",
-      "route": "/api/v1/billing/audit/{audit_id}",
-      "graphql_field_name": null,
-      "service": "dev-health-ops-api",
-      "source": {
-        "file": "src/dev_health_ops/api/billing/router.py",
-        "line": 397,
-        "router_local_path": "/audit/{audit_id}"
-      },
-      "gaps": [
-        "billing/router.py has ~20 routes; only pull-stripe (require_superuser) and the two stripe-webhook rows were individually verified. The rest default to get_current_user by family pattern -- a small number may use get_current_user_optional for public plan-browsing reads; not exhaustively re-checked per route in this pass."
-      ],
-      "classification": "protected",
-      "public_rationale": null,
-      "accepted_credential_classes": [
-        "ops_access_token_hs256"
-      ],
-      "primary_validator": {
-        "description": "get_current_user (or get_current_user_optional on a small number of public-plan-listing GETs -- verified: 7 Depends(get_current_user)-family hits across this router; per-route optionality not exhaustively re-verified for every one of the ~20 billing routes in this pass).",
-        "anchor": {
-          "path": "src/dev_health_ops/api/auth/routers/dependencies.py",
-          "line": 37,
-          "note": "get_current_user dependency"
-        }
-      },
-      "token_shape": null,
-      "reachable_validators": [
-        {
-          "description": "OrgIdMiddleware.__call__ decodes the Authorization: Bearer value as an ops access-token JWT and resolves/validates X-Org-Id against it -- this IS the route's intended validator for ops_access_token_hs256.",
-          "anchor": {
-            "path": "src/dev_health_ops/api/middleware/__init__.py",
-            "line": 36,
-            "line_end": 91,
-            "note": "OrgIdMiddleware.__call__, ACR exemption at line 86"
-          },
-          "is_intended_validator": true,
-          "reachable_but_not_owner": false
-        },
-        {
-          "description": "ImpersonationMiddleware._may_be_superuser peeks at the Authorization bearer value with an UNVERIFIED base64 JSON decode of the JWT payload segment (token.split('.')[1]) on every request, superuser-or-not, with NO path exemption (unlike OrgIdMiddleware's /api/v1/internal/acr/ carve-out) -- runs even for ACR-authenticated requests. A non-JWT opaque token (svc_acr_*, fcpush_*, worker-bridge secret) fails the split/decode and is caught by a broad except, so this is benign but still 'observes' every credential class before its intended validator.",
-          "anchor": {
-            "path": "src/dev_health_ops/api/middleware/impersonation.py",
-            "line": 108,
-            "line_end": 141,
-            "note": "_may_be_superuser unverified JWT peek, no path exemption"
-          },
-          "is_intended_validator": false,
-          "reachable_but_not_owner": true
-        }
-      ],
-      "action": null,
-      "resource_resolver": null,
-      "tenant_requirement": "org_scoped",
-      "current_state_cache_behavior": null,
-      "impersonation_policy": "subject_to_impersonation_override",
-      "entitlement_requirement": null,
-      "disclosure_behavior": null
-    },
-    {
-      "id": "POST /api/v1/billing/audit/{audit_id}/resolve [dev-health-ops-api]",
-      "surface_kind": "rest",
-      "method": "POST",
-      "route": "/api/v1/billing/audit/{audit_id}/resolve",
-      "graphql_field_name": null,
-      "service": "dev-health-ops-api",
-      "source": {
-        "file": "src/dev_health_ops/api/billing/router.py",
-        "line": 412,
-        "router_local_path": "/audit/{audit_id}/resolve"
-      },
-      "gaps": [
-        "billing/router.py has ~20 routes; only pull-stripe (require_superuser) and the two stripe-webhook rows were individually verified. The rest default to get_current_user by family pattern -- a small number may use get_current_user_optional for public plan-browsing reads; not exhaustively re-checked per route in this pass."
-      ],
-      "classification": "protected",
-      "public_rationale": null,
-      "accepted_credential_classes": [
-        "ops_access_token_hs256"
-      ],
-      "primary_validator": {
-        "description": "get_current_user (or get_current_user_optional on a small number of public-plan-listing GETs -- verified: 7 Depends(get_current_user)-family hits across this router; per-route optionality not exhaustively re-verified for every one of the ~20 billing routes in this pass).",
-        "anchor": {
-          "path": "src/dev_health_ops/api/auth/routers/dependencies.py",
-          "line": 37,
-          "note": "get_current_user dependency"
-        }
-      },
-      "token_shape": null,
-      "reachable_validators": [
-        {
-          "description": "OrgIdMiddleware.__call__ decodes the Authorization: Bearer value as an ops access-token JWT and resolves/validates X-Org-Id against it -- this IS the route's intended validator for ops_access_token_hs256.",
-          "anchor": {
-            "path": "src/dev_health_ops/api/middleware/__init__.py",
-            "line": 36,
-            "line_end": 91,
-            "note": "OrgIdMiddleware.__call__, ACR exemption at line 86"
-          },
-          "is_intended_validator": true,
-          "reachable_but_not_owner": false
-        },
-        {
-          "description": "ImpersonationMiddleware._may_be_superuser peeks at the Authorization bearer value with an UNVERIFIED base64 JSON decode of the JWT payload segment (token.split('.')[1]) on every request, superuser-or-not, with NO path exemption (unlike OrgIdMiddleware's /api/v1/internal/acr/ carve-out) -- runs even for ACR-authenticated requests. A non-JWT opaque token (svc_acr_*, fcpush_*, worker-bridge secret) fails the split/decode and is caught by a broad except, so this is benign but still 'observes' every credential class before its intended validator.",
-          "anchor": {
-            "path": "src/dev_health_ops/api/middleware/impersonation.py",
-            "line": 108,
-            "line_end": 141,
-            "note": "_may_be_superuser unverified JWT peek, no path exemption"
-          },
-          "is_intended_validator": false,
-          "reachable_but_not_owner": true
-        }
-      ],
-      "action": null,
-      "resource_resolver": null,
-      "tenant_requirement": "org_scoped",
-      "current_state_cache_behavior": null,
-      "impersonation_policy": "subject_to_impersonation_override",
-      "entitlement_requirement": null,
-      "disclosure_behavior": null
-    },
-    {
-      "id": "POST /api/v1/billing/reconcile [dev-health-ops-api]",
-      "surface_kind": "rest",
-      "method": "POST",
-      "route": "/api/v1/billing/reconcile",
-      "graphql_field_name": null,
-      "service": "dev-health-ops-api",
-      "source": {
-        "file": "src/dev_health_ops/api/billing/router.py",
-        "line": 436,
-        "router_local_path": "/reconcile"
-      },
-      "gaps": [
-        "billing/router.py has ~20 routes; only pull-stripe (require_superuser) and the two stripe-webhook rows were individually verified. The rest default to get_current_user by family pattern -- a small number may use get_current_user_optional for public plan-browsing reads; not exhaustively re-checked per route in this pass."
-      ],
-      "classification": "protected",
-      "public_rationale": null,
-      "accepted_credential_classes": [
-        "ops_access_token_hs256"
-      ],
-      "primary_validator": {
-        "description": "get_current_user (or get_current_user_optional on a small number of public-plan-listing GETs -- verified: 7 Depends(get_current_user)-family hits across this router; per-route optionality not exhaustively re-verified for every one of the ~20 billing routes in this pass).",
-        "anchor": {
-          "path": "src/dev_health_ops/api/auth/routers/dependencies.py",
-          "line": 37,
-          "note": "get_current_user dependency"
-        }
-      },
-      "token_shape": null,
-      "reachable_validators": [
-        {
-          "description": "OrgIdMiddleware.__call__ decodes the Authorization: Bearer value as an ops access-token JWT and resolves/validates X-Org-Id against it -- this IS the route's intended validator for ops_access_token_hs256.",
-          "anchor": {
-            "path": "src/dev_health_ops/api/middleware/__init__.py",
-            "line": 36,
-            "line_end": 91,
-            "note": "OrgIdMiddleware.__call__, ACR exemption at line 86"
-          },
-          "is_intended_validator": true,
-          "reachable_but_not_owner": false
-        },
-        {
-          "description": "ImpersonationMiddleware._may_be_superuser peeks at the Authorization bearer value with an UNVERIFIED base64 JSON decode of the JWT payload segment (token.split('.')[1]) on every request, superuser-or-not, with NO path exemption (unlike OrgIdMiddleware's /api/v1/internal/acr/ carve-out) -- runs even for ACR-authenticated requests. A non-JWT opaque token (svc_acr_*, fcpush_*, worker-bridge secret) fails the split/decode and is caught by a broad except, so this is benign but still 'observes' every credential class before its intended validator.",
-          "anchor": {
-            "path": "src/dev_health_ops/api/middleware/impersonation.py",
-            "line": 108,
-            "line_end": 141,
-            "note": "_may_be_superuser unverified JWT peek, no path exemption"
-          },
-          "is_intended_validator": false,
-          "reachable_but_not_owner": true
-        }
-      ],
-      "action": null,
-      "resource_resolver": null,
-      "tenant_requirement": "org_scoped",
-      "current_state_cache_behavior": null,
-      "impersonation_policy": "subject_to_impersonation_override",
-      "entitlement_requirement": null,
-      "disclosure_behavior": null
-    },
-    {
-      "id": "GET /api/v1/billing/subscriptions/list [dev-health-ops-api]",
-      "surface_kind": "rest",
-      "method": "GET",
-      "route": "/api/v1/billing/subscriptions/list",
-      "graphql_field_name": null,
-      "service": "dev-health-ops-api",
-      "source": {
-        "file": "src/dev_health_ops/api/billing/subscriptions.py",
-        "line": 114,
-        "router_local_path": "/list"
-      },
-      "gaps": [
-        "billing/router.py has ~20 routes; only pull-stripe (require_superuser) and the two stripe-webhook rows were individually verified. The rest default to get_current_user by family pattern -- a small number may use get_current_user_optional for public plan-browsing reads; not exhaustively re-checked per route in this pass."
-      ],
-      "classification": "protected",
-      "public_rationale": null,
-      "accepted_credential_classes": [
-        "ops_access_token_hs256"
-      ],
-      "primary_validator": {
-        "description": "get_current_user (or get_current_user_optional on a small number of public-plan-listing GETs -- verified: 7 Depends(get_current_user)-family hits across this router; per-route optionality not exhaustively re-verified for every one of the ~20 billing routes in this pass).",
-        "anchor": {
-          "path": "src/dev_health_ops/api/auth/routers/dependencies.py",
-          "line": 37,
-          "note": "get_current_user dependency"
-        }
-      },
-      "token_shape": null,
-      "reachable_validators": [
-        {
-          "description": "OrgIdMiddleware.__call__ decodes the Authorization: Bearer value as an ops access-token JWT and resolves/validates X-Org-Id against it -- this IS the route's intended validator for ops_access_token_hs256.",
-          "anchor": {
-            "path": "src/dev_health_ops/api/middleware/__init__.py",
-            "line": 36,
-            "line_end": 91,
-            "note": "OrgIdMiddleware.__call__, ACR exemption at line 86"
-          },
-          "is_intended_validator": true,
-          "reachable_but_not_owner": false
-        },
-        {
-          "description": "ImpersonationMiddleware._may_be_superuser peeks at the Authorization bearer value with an UNVERIFIED base64 JSON decode of the JWT payload segment (token.split('.')[1]) on every request, superuser-or-not, with NO path exemption (unlike OrgIdMiddleware's /api/v1/internal/acr/ carve-out) -- runs even for ACR-authenticated requests. A non-JWT opaque token (svc_acr_*, fcpush_*, worker-bridge secret) fails the split/decode and is caught by a broad except, so this is benign but still 'observes' every credential class before its intended validator.",
-          "anchor": {
-            "path": "src/dev_health_ops/api/middleware/impersonation.py",
-            "line": 108,
-            "line_end": 141,
-            "note": "_may_be_superuser unverified JWT peek, no path exemption"
-          },
-          "is_intended_validator": false,
-          "reachable_but_not_owner": true
-        }
-      ],
-      "action": null,
-      "resource_resolver": null,
-      "tenant_requirement": "org_scoped",
-      "current_state_cache_behavior": null,
-      "impersonation_policy": "subject_to_impersonation_override",
-      "entitlement_requirement": null,
-      "disclosure_behavior": null
-    },
-    {
-      "id": "GET /api/v1/billing/subscriptions [dev-health-ops-api]",
-      "surface_kind": "rest",
-      "method": "GET",
-      "route": "/api/v1/billing/subscriptions",
-      "graphql_field_name": null,
-      "service": "dev-health-ops-api",
-      "source": {
-        "file": "src/dev_health_ops/api/billing/subscriptions.py",
-        "line": 155,
-        "router_local_path": ""
-      },
-      "gaps": [
-        "billing/router.py has ~20 routes; only pull-stripe (require_superuser) and the two stripe-webhook rows were individually verified. The rest default to get_current_user by family pattern -- a small number may use get_current_user_optional for public plan-browsing reads; not exhaustively re-checked per route in this pass."
-      ],
-      "classification": "protected",
-      "public_rationale": null,
-      "accepted_credential_classes": [
-        "ops_access_token_hs256"
-      ],
-      "primary_validator": {
-        "description": "get_current_user (or get_current_user_optional on a small number of public-plan-listing GETs -- verified: 7 Depends(get_current_user)-family hits across this router; per-route optionality not exhaustively re-verified for every one of the ~20 billing routes in this pass).",
-        "anchor": {
-          "path": "src/dev_health_ops/api/auth/routers/dependencies.py",
-          "line": 37,
-          "note": "get_current_user dependency"
-        }
-      },
-      "token_shape": null,
-      "reachable_validators": [
-        {
-          "description": "OrgIdMiddleware.__call__ decodes the Authorization: Bearer value as an ops access-token JWT and resolves/validates X-Org-Id against it -- this IS the route's intended validator for ops_access_token_hs256.",
-          "anchor": {
-            "path": "src/dev_health_ops/api/middleware/__init__.py",
-            "line": 36,
-            "line_end": 91,
-            "note": "OrgIdMiddleware.__call__, ACR exemption at line 86"
-          },
-          "is_intended_validator": true,
-          "reachable_but_not_owner": false
-        },
-        {
-          "description": "ImpersonationMiddleware._may_be_superuser peeks at the Authorization bearer value with an UNVERIFIED base64 JSON decode of the JWT payload segment (token.split('.')[1]) on every request, superuser-or-not, with NO path exemption (unlike OrgIdMiddleware's /api/v1/internal/acr/ carve-out) -- runs even for ACR-authenticated requests. A non-JWT opaque token (svc_acr_*, fcpush_*, worker-bridge secret) fails the split/decode and is caught by a broad except, so this is benign but still 'observes' every credential class before its intended validator.",
-          "anchor": {
-            "path": "src/dev_health_ops/api/middleware/impersonation.py",
-            "line": 108,
-            "line_end": 141,
-            "note": "_may_be_superuser unverified JWT peek, no path exemption"
-          },
-          "is_intended_validator": false,
-          "reachable_but_not_owner": true
-        }
-      ],
-      "action": null,
-      "resource_resolver": null,
-      "tenant_requirement": "org_scoped",
-      "current_state_cache_behavior": null,
-      "impersonation_policy": "subject_to_impersonation_override",
-      "entitlement_requirement": null,
-      "disclosure_behavior": null
-    },
-    {
-      "id": "GET /api/v1/billing/subscriptions/history [dev-health-ops-api]",
-      "surface_kind": "rest",
-      "method": "GET",
-      "route": "/api/v1/billing/subscriptions/history",
-      "graphql_field_name": null,
-      "service": "dev-health-ops-api",
-      "source": {
-        "file": "src/dev_health_ops/api/billing/subscriptions.py",
-        "line": 185,
-        "router_local_path": "/history"
-      },
-      "gaps": [
-        "billing/router.py has ~20 routes; only pull-stripe (require_superuser) and the two stripe-webhook rows were individually verified. The rest default to get_current_user by family pattern -- a small number may use get_current_user_optional for public plan-browsing reads; not exhaustively re-checked per route in this pass."
-      ],
-      "classification": "protected",
-      "public_rationale": null,
-      "accepted_credential_classes": [
-        "ops_access_token_hs256"
-      ],
-      "primary_validator": {
-        "description": "get_current_user (or get_current_user_optional on a small number of public-plan-listing GETs -- verified: 7 Depends(get_current_user)-family hits across this router; per-route optionality not exhaustively re-verified for every one of the ~20 billing routes in this pass).",
-        "anchor": {
-          "path": "src/dev_health_ops/api/auth/routers/dependencies.py",
-          "line": 37,
-          "note": "get_current_user dependency"
-        }
-      },
-      "token_shape": null,
-      "reachable_validators": [
-        {
-          "description": "OrgIdMiddleware.__call__ decodes the Authorization: Bearer value as an ops access-token JWT and resolves/validates X-Org-Id against it -- this IS the route's intended validator for ops_access_token_hs256.",
-          "anchor": {
-            "path": "src/dev_health_ops/api/middleware/__init__.py",
-            "line": 36,
-            "line_end": 91,
-            "note": "OrgIdMiddleware.__call__, ACR exemption at line 86"
-          },
-          "is_intended_validator": true,
-          "reachable_but_not_owner": false
-        },
-        {
-          "description": "ImpersonationMiddleware._may_be_superuser peeks at the Authorization bearer value with an UNVERIFIED base64 JSON decode of the JWT payload segment (token.split('.')[1]) on every request, superuser-or-not, with NO path exemption (unlike OrgIdMiddleware's /api/v1/internal/acr/ carve-out) -- runs even for ACR-authenticated requests. A non-JWT opaque token (svc_acr_*, fcpush_*, worker-bridge secret) fails the split/decode and is caught by a broad except, so this is benign but still 'observes' every credential class before its intended validator.",
-          "anchor": {
-            "path": "src/dev_health_ops/api/middleware/impersonation.py",
-            "line": 108,
-            "line_end": 141,
-            "note": "_may_be_superuser unverified JWT peek, no path exemption"
-          },
-          "is_intended_validator": false,
-          "reachable_but_not_owner": true
-        }
-      ],
-      "action": null,
-      "resource_resolver": null,
-      "tenant_requirement": "org_scoped",
-      "current_state_cache_behavior": null,
-      "impersonation_policy": "subject_to_impersonation_override",
-      "entitlement_requirement": null,
-      "disclosure_behavior": null
-    },
-    {
-      "id": "POST /api/v1/billing/subscriptions/change-plan [dev-health-ops-api]",
-      "surface_kind": "rest",
-      "method": "POST",
-      "route": "/api/v1/billing/subscriptions/change-plan",
-      "graphql_field_name": null,
-      "service": "dev-health-ops-api",
-      "source": {
-        "file": "src/dev_health_ops/api/billing/subscriptions.py",
-        "line": 215,
-        "router_local_path": "/change-plan"
-      },
-      "gaps": [
-        "billing/router.py has ~20 routes; only pull-stripe (require_superuser) and the two stripe-webhook rows were individually verified. The rest default to get_current_user by family pattern -- a small number may use get_current_user_optional for public plan-browsing reads; not exhaustively re-checked per route in this pass."
-      ],
-      "classification": "protected",
-      "public_rationale": null,
-      "accepted_credential_classes": [
-        "ops_access_token_hs256"
-      ],
-      "primary_validator": {
-        "description": "get_current_user (or get_current_user_optional on a small number of public-plan-listing GETs -- verified: 7 Depends(get_current_user)-family hits across this router; per-route optionality not exhaustively re-verified for every one of the ~20 billing routes in this pass).",
-        "anchor": {
-          "path": "src/dev_health_ops/api/auth/routers/dependencies.py",
-          "line": 37,
-          "note": "get_current_user dependency"
-        }
-      },
-      "token_shape": null,
-      "reachable_validators": [
-        {
-          "description": "OrgIdMiddleware.__call__ decodes the Authorization: Bearer value as an ops access-token JWT and resolves/validates X-Org-Id against it -- this IS the route's intended validator for ops_access_token_hs256.",
-          "anchor": {
-            "path": "src/dev_health_ops/api/middleware/__init__.py",
-            "line": 36,
-            "line_end": 91,
-            "note": "OrgIdMiddleware.__call__, ACR exemption at line 86"
-          },
-          "is_intended_validator": true,
-          "reachable_but_not_owner": false
-        },
-        {
-          "description": "ImpersonationMiddleware._may_be_superuser peeks at the Authorization bearer value with an UNVERIFIED base64 JSON decode of the JWT payload segment (token.split('.')[1]) on every request, superuser-or-not, with NO path exemption (unlike OrgIdMiddleware's /api/v1/internal/acr/ carve-out) -- runs even for ACR-authenticated requests. A non-JWT opaque token (svc_acr_*, fcpush_*, worker-bridge secret) fails the split/decode and is caught by a broad except, so this is benign but still 'observes' every credential class before its intended validator.",
-          "anchor": {
-            "path": "src/dev_health_ops/api/middleware/impersonation.py",
-            "line": 108,
-            "line_end": 141,
-            "note": "_may_be_superuser unverified JWT peek, no path exemption"
-          },
-          "is_intended_validator": false,
-          "reachable_but_not_owner": true
-        }
-      ],
-      "action": null,
-      "resource_resolver": null,
-      "tenant_requirement": "org_scoped",
-      "current_state_cache_behavior": null,
-      "impersonation_policy": "subject_to_impersonation_override",
-      "entitlement_requirement": null,
-      "disclosure_behavior": null
-    },
-    {
-      "id": "POST /api/v1/billing/subscriptions/cancel [dev-health-ops-api]",
-      "surface_kind": "rest",
-      "method": "POST",
-      "route": "/api/v1/billing/subscriptions/cancel",
-      "graphql_field_name": null,
-      "service": "dev-health-ops-api",
-      "source": {
-        "file": "src/dev_health_ops/api/billing/subscriptions.py",
-        "line": 250,
-        "router_local_path": "/cancel"
-      },
-      "gaps": [
-        "billing/router.py has ~20 routes; only pull-stripe (require_superuser) and the two stripe-webhook rows were individually verified. The rest default to get_current_user by family pattern -- a small number may use get_current_user_optional for public plan-browsing reads; not exhaustively re-checked per route in this pass."
-      ],
-      "classification": "protected",
-      "public_rationale": null,
-      "accepted_credential_classes": [
-        "ops_access_token_hs256"
-      ],
-      "primary_validator": {
-        "description": "get_current_user (or get_current_user_optional on a small number of public-plan-listing GETs -- verified: 7 Depends(get_current_user)-family hits across this router; per-route optionality not exhaustively re-verified for every one of the ~20 billing routes in this pass).",
-        "anchor": {
-          "path": "src/dev_health_ops/api/auth/routers/dependencies.py",
-          "line": 37,
-          "note": "get_current_user dependency"
-        }
-      },
-      "token_shape": null,
-      "reachable_validators": [
-        {
-          "description": "OrgIdMiddleware.__call__ decodes the Authorization: Bearer value as an ops access-token JWT and resolves/validates X-Org-Id against it -- this IS the route's intended validator for ops_access_token_hs256.",
-          "anchor": {
-            "path": "src/dev_health_ops/api/middleware/__init__.py",
-            "line": 36,
-            "line_end": 91,
-            "note": "OrgIdMiddleware.__call__, ACR exemption at line 86"
-          },
-          "is_intended_validator": true,
-          "reachable_but_not_owner": false
-        },
-        {
-          "description": "ImpersonationMiddleware._may_be_superuser peeks at the Authorization bearer value with an UNVERIFIED base64 JSON decode of the JWT payload segment (token.split('.')[1]) on every request, superuser-or-not, with NO path exemption (unlike OrgIdMiddleware's /api/v1/internal/acr/ carve-out) -- runs even for ACR-authenticated requests. A non-JWT opaque token (svc_acr_*, fcpush_*, worker-bridge secret) fails the split/decode and is caught by a broad except, so this is benign but still 'observes' every credential class before its intended validator.",
-          "anchor": {
-            "path": "src/dev_health_ops/api/middleware/impersonation.py",
-            "line": 108,
-            "line_end": 141,
-            "note": "_may_be_superuser unverified JWT peek, no path exemption"
-          },
-          "is_intended_validator": false,
-          "reachable_but_not_owner": true
-        }
-      ],
-      "action": null,
-      "resource_resolver": null,
-      "tenant_requirement": "org_scoped",
-      "current_state_cache_behavior": null,
-      "impersonation_policy": "subject_to_impersonation_override",
-      "entitlement_requirement": null,
-      "disclosure_behavior": null
-    },
-    {
-      "id": "POST /api/v1/billing/subscriptions/reactivate [dev-health-ops-api]",
-      "surface_kind": "rest",
-      "method": "POST",
-      "route": "/api/v1/billing/subscriptions/reactivate",
-      "graphql_field_name": null,
-      "service": "dev-health-ops-api",
-      "source": {
-        "file": "src/dev_health_ops/api/billing/subscriptions.py",
-        "line": 277,
-        "router_local_path": "/reactivate"
-      },
-      "gaps": [
-        "billing/router.py has ~20 routes; only pull-stripe (require_superuser) and the two stripe-webhook rows were individually verified. The rest default to get_current_user by family pattern -- a small number may use get_current_user_optional for public plan-browsing reads; not exhaustively re-checked per route in this pass."
-      ],
-      "classification": "protected",
-      "public_rationale": null,
-      "accepted_credential_classes": [
-        "ops_access_token_hs256"
-      ],
-      "primary_validator": {
-        "description": "get_current_user (or get_current_user_optional on a small number of public-plan-listing GETs -- verified: 7 Depends(get_current_user)-family hits across this router; per-route optionality not exhaustively re-verified for every one of the ~20 billing routes in this pass).",
-        "anchor": {
-          "path": "src/dev_health_ops/api/auth/routers/dependencies.py",
-          "line": 37,
-          "note": "get_current_user dependency"
-        }
-      },
-      "token_shape": null,
-      "reachable_validators": [
-        {
-          "description": "OrgIdMiddleware.__call__ decodes the Authorization: Bearer value as an ops access-token JWT and resolves/validates X-Org-Id against it -- this IS the route's intended validator for ops_access_token_hs256.",
-          "anchor": {
-            "path": "src/dev_health_ops/api/middleware/__init__.py",
-            "line": 36,
-            "line_end": 91,
-            "note": "OrgIdMiddleware.__call__, ACR exemption at line 86"
-          },
-          "is_intended_validator": true,
-          "reachable_but_not_owner": false
-        },
-        {
-          "description": "ImpersonationMiddleware._may_be_superuser peeks at the Authorization bearer value with an UNVERIFIED base64 JSON decode of the JWT payload segment (token.split('.')[1]) on every request, superuser-or-not, with NO path exemption (unlike OrgIdMiddleware's /api/v1/internal/acr/ carve-out) -- runs even for ACR-authenticated requests. A non-JWT opaque token (svc_acr_*, fcpush_*, worker-bridge secret) fails the split/decode and is caught by a broad except, so this is benign but still 'observes' every credential class before its intended validator.",
-          "anchor": {
-            "path": "src/dev_health_ops/api/middleware/impersonation.py",
-            "line": 108,
-            "line_end": 141,
-            "note": "_may_be_superuser unverified JWT peek, no path exemption"
-          },
-          "is_intended_validator": false,
-          "reachable_but_not_owner": true
-        }
-      ],
-      "action": null,
-      "resource_resolver": null,
-      "tenant_requirement": "org_scoped",
-      "current_state_cache_behavior": null,
-      "impersonation_policy": "subject_to_impersonation_override",
-      "entitlement_requirement": null,
-      "disclosure_behavior": null
-    },
-    {
       "id": "GET /api/v1/external-ingest/schemas [dev-health-ops-api]",
       "surface_kind": "rest",
       "method": "GET",
@@ -13719,7 +12135,7 @@
       "service": "dev-health-ops-api",
       "source": {
         "file": "src/dev_health_ops/api/main.py",
-        "line": 161,
+        "line": 159,
         "router_local_path": "/health"
       },
       "gaps": [],
@@ -13769,7 +12185,7 @@
       "service": "dev-health-ops-api",
       "source": {
         "file": "src/dev_health_ops/api/main.py",
-        "line": 208,
+        "line": 206,
         "router_local_path": "/ready"
       },
       "gaps": [],
@@ -13819,7 +12235,7 @@
       "service": "dev-health-ops-api",
       "source": {
         "file": "src/dev_health_ops/api/main.py",
-        "line": 219,
+        "line": 217,
         "router_local_path": "/health/workers"
       },
       "gaps": [],
@@ -13869,7 +12285,7 @@
       "service": "dev-health-ops-api",
       "source": {
         "file": "src/dev_health_ops/api/main.py",
-        "line": 325,
+        "line": 323,
         "router_local_path": "/api/v1/meta"
       },
       "gaps": [],
@@ -13919,7 +12335,7 @@
       "service": "dev-health-ops-api",
       "source": {
         "file": "src/dev_health_ops/api/main.py",
-        "line": 331,
+        "line": 329,
         "router_local_path": "/api/v1/home"
       },
       "gaps": [],
@@ -13978,7 +12394,7 @@
       "service": "dev-health-ops-api",
       "source": {
         "file": "src/dev_health_ops/api/main.py",
-        "line": 341,
+        "line": 339,
         "router_local_path": "/api/v1/home"
       },
       "gaps": [],
@@ -14037,7 +12453,7 @@
       "service": "dev-health-ops-api",
       "source": {
         "file": "src/dev_health_ops/api/main.py",
-        "line": 357,
+        "line": 355,
         "router_local_path": "/api/v1/explain"
       },
       "gaps": [],
@@ -14096,7 +12512,7 @@
       "service": "dev-health-ops-api",
       "source": {
         "file": "src/dev_health_ops/api/main.py",
-        "line": 364,
+        "line": 362,
         "router_local_path": "/api/v1/explain"
       },
       "gaps": [],
@@ -14155,7 +12571,7 @@
       "service": "dev-health-ops-api",
       "source": {
         "file": "src/dev_health_ops/api/main.py",
-        "line": 381,
+        "line": 379,
         "router_local_path": "/api/v1/heatmap"
       },
       "gaps": [],
@@ -14214,7 +12630,7 @@
       "service": "dev-health-ops-api",
       "source": {
         "file": "src/dev_health_ops/api/main.py",
-        "line": 400,
+        "line": 398,
         "router_local_path": "/api/v1/work-units"
       },
       "gaps": [],
@@ -14273,7 +12689,7 @@
       "service": "dev-health-ops-api",
       "source": {
         "file": "src/dev_health_ops/api/main.py",
-        "line": 408,
+        "line": 406,
         "router_local_path": "/api/v1/work-units"
       },
       "gaps": [],
@@ -14332,7 +12748,7 @@
       "service": "dev-health-ops-api",
       "source": {
         "file": "src/dev_health_ops/api/main.py",
-        "line": 423,
+        "line": 421,
         "router_local_path": "/api/v1/work-units/{work_unit_id}/explain"
       },
       "gaps": [],
@@ -14391,7 +12807,7 @@
       "service": "dev-health-ops-api",
       "source": {
         "file": "src/dev_health_ops/api/main.py",
-        "line": 444,
+        "line": 442,
         "router_local_path": "/api/v1/flame"
       },
       "gaps": [],
@@ -14450,7 +12866,7 @@
       "service": "dev-health-ops-api",
       "source": {
         "file": "src/dev_health_ops/api/main.py",
-        "line": 455,
+        "line": 453,
         "router_local_path": "/api/v1/flame/aggregated"
       },
       "gaps": [],
@@ -14509,7 +12925,7 @@
       "service": "dev-health-ops-api",
       "source": {
         "file": "src/dev_health_ops/api/main.py",
-        "line": 475,
+        "line": 473,
         "router_local_path": "/api/v1/quadrant"
       },
       "gaps": [],
@@ -14568,7 +12984,7 @@
       "service": "dev-health-ops-api",
       "source": {
         "file": "src/dev_health_ops/api/main.py",
-        "line": 491,
+        "line": 489,
         "router_local_path": "/api/v1/drilldown/prs"
       },
       "gaps": [],
@@ -14627,7 +13043,7 @@
       "service": "dev-health-ops-api",
       "source": {
         "file": "src/dev_health_ops/api/main.py",
-        "line": 501,
+        "line": 499,
         "router_local_path": "/api/v1/drilldown/prs"
       },
       "gaps": [],
@@ -14686,7 +13102,7 @@
       "service": "dev-health-ops-api",
       "source": {
         "file": "src/dev_health_ops/api/main.py",
-        "line": 516,
+        "line": 514,
         "router_local_path": "/api/v1/drilldown/issues"
       },
       "gaps": [],
@@ -14745,7 +13161,7 @@
       "service": "dev-health-ops-api",
       "source": {
         "file": "src/dev_health_ops/api/main.py",
-        "line": 526,
+        "line": 524,
         "router_local_path": "/api/v1/drilldown/issues"
       },
       "gaps": [],
@@ -14804,7 +13220,7 @@
       "service": "dev-health-ops-api",
       "source": {
         "file": "src/dev_health_ops/api/main.py",
-        "line": 541,
+        "line": 539,
         "router_local_path": "/api/v1/people"
       },
       "gaps": [],
@@ -14863,7 +13279,7 @@
       "service": "dev-health-ops-api",
       "source": {
         "file": "src/dev_health_ops/api/main.py",
-        "line": 552,
+        "line": 550,
         "router_local_path": "/api/v1/people/{person_id}/summary"
       },
       "gaps": [],
@@ -14922,7 +13338,7 @@
       "service": "dev-health-ops-api",
       "source": {
         "file": "src/dev_health_ops/api/main.py",
-        "line": 564,
+        "line": 562,
         "router_local_path": "/api/v1/people/{person_id}/metric"
       },
       "gaps": [],
@@ -14981,7 +13397,7 @@
       "service": "dev-health-ops-api",
       "source": {
         "file": "src/dev_health_ops/api/main.py",
-        "line": 576,
+        "line": 574,
         "router_local_path": "/api/v1/people/{person_id}/drilldown/prs"
       },
       "gaps": [],
@@ -15040,7 +13456,7 @@
       "service": "dev-health-ops-api",
       "source": {
         "file": "src/dev_health_ops/api/main.py",
-        "line": 592,
+        "line": 590,
         "router_local_path": "/api/v1/people/{person_id}/drilldown/issues"
       },
       "gaps": [],
@@ -15099,7 +13515,7 @@
       "service": "dev-health-ops-api",
       "source": {
         "file": "src/dev_health_ops/api/main.py",
-        "line": 608,
+        "line": 606,
         "router_local_path": "/api/v1/opportunities"
       },
       "gaps": [],
@@ -15158,7 +13574,7 @@
       "service": "dev-health-ops-api",
       "source": {
         "file": "src/dev_health_ops/api/main.py",
-        "line": 624,
+        "line": 622,
         "router_local_path": "/api/v1/opportunities"
       },
       "gaps": [],
@@ -15217,7 +13633,7 @@
       "service": "dev-health-ops-api",
       "source": {
         "file": "src/dev_health_ops/api/main.py",
-        "line": 634,
+        "line": 632,
         "router_local_path": "/api/v1/investment"
       },
       "gaps": [],
@@ -15276,7 +13692,7 @@
       "service": "dev-health-ops-api",
       "source": {
         "file": "src/dev_health_ops/api/main.py",
-        "line": 649,
+        "line": 647,
         "router_local_path": "/api/v1/investment"
       },
       "gaps": [],
@@ -15335,7 +13751,7 @@
       "service": "dev-health-ops-api",
       "source": {
         "file": "src/dev_health_ops/api/main.py",
-        "line": 659,
+        "line": 657,
         "router_local_path": "/api/v1/investment/sunburst"
       },
       "gaps": [],
@@ -15394,7 +13810,7 @@
       "service": "dev-health-ops-api",
       "source": {
         "file": "src/dev_health_ops/api/main.py",
-        "line": 676,
+        "line": 674,
         "router_local_path": "/api/v1/investment/explain"
       },
       "gaps": [],
@@ -15453,7 +13869,7 @@
       "service": "dev-health-ops-api",
       "source": {
         "file": "src/dev_health_ops/api/main.py",
-        "line": 698,
+        "line": 696,
         "router_local_path": "/api/v1/investment/flow"
       },
       "gaps": [],
@@ -15512,7 +13928,7 @@
       "service": "dev-health-ops-api",
       "source": {
         "file": "src/dev_health_ops/api/main.py",
-        "line": 708,
+        "line": 706,
         "router_local_path": "/api/v1/investment/flow/repo-team"
       },
       "gaps": [],
@@ -15571,7 +13987,7 @@
       "service": "dev-health-ops-api",
       "source": {
         "file": "src/dev_health_ops/api/main.py",
-        "line": 716,
+        "line": 714,
         "router_local_path": "/api/v1/sankey"
       },
       "gaps": [],
@@ -15630,7 +14046,7 @@
       "service": "dev-health-ops-api",
       "source": {
         "file": "src/dev_health_ops/api/main.py",
-        "line": 734,
+        "line": 732,
         "router_local_path": "/api/v1/sankey"
       },
       "gaps": [],
@@ -15689,7 +14105,7 @@
       "service": "dev-health-ops-api",
       "source": {
         "file": "src/dev_health_ops/api/main.py",
-        "line": 744,
+        "line": 742,
         "router_local_path": "/api/v1/filters/options"
       },
       "gaps": [],

@@ -76,7 +76,7 @@ func TestRepairTiesMatchTheFrozenPythonProducer(t *testing.T) {
 	golden := venueoracle.OpenGolden(t, venueoracle.GoldenSpec{
 		Path:        "testdata/golden/repair-ties.json",
 		PythonBuild: repairTiesPythonBuild,
-		SHA256:      "PIN:repair-ties",
+		SHA256:      "413fd89869cb21a713edd4be802511fa33802844f7d627855d18c992ecc22f37",
 		Recipe: "git worktree add --detach $DIR " + repairTiesPythonBuild + " (with its .venv: uv sync --frozen --no-install-project); then from the repository root: " +
 			"go run ./internal/testsupport/venueoracle/goldenrecord -pkg ./internal/chmigrate/ -test '^TestRepairTiesMatchTheFrozenPythonProducer$' -python-root $DIR",
 	})

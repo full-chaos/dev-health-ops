@@ -14,6 +14,9 @@ import (
 	"time"
 
 	"github.com/full-chaos/dev-health-ops/internal/platform/health"
+	"github.com/full-chaos/dev-health-ops/internal/platform/tracing"
+	"go.opentelemetry.io/otel/attribute"
+	oteltrace "go.opentelemetry.io/otel/trace"
 )
 
 const (
@@ -292,10 +295,20 @@ func (loop *Loop) run(ctx context.Context, ticker loopTicker, done chan struct{}
 	}
 }
 
-func (loop *Loop) step(parent context.Context, now time.Time) error {
-	stepCtx, cancel := context.WithTimeout(parent, loop.config.StepTimeout)
+// loopTracerName scopes the fixed-schedule loop's spans by package.
+const loopTracerName = "github.com/full-chaos/dev-health-ops/internal/scheduler/fixed"
+
+// step runs one window under one dev_health.scheduler.fixed_window span, with
+// one dev_health.scheduler.fixed_schedule child per schedule decision in it
+// (CHAOS-7879). Schedule ids are compile-time constants; every other attribute
+// is a count or a fixed word, never a payload, org id or credential.
+func (loop *Loop) step(parent context.Context, now time.Time) (stepErr error) {
+	spanCtx, span := tracing.StartWorkSpan(parent, loopTracerName, "dev_health.scheduler.fixed_window")
+	defer func() { tracing.EndWorkSpan(span, stepErr) }()
+	stepCtx, cancel := context.WithTimeout(spanCtx, loop.config.StepTimeout)
 	defer cancel()
 	result, err := loop.stepper.Step(stepCtx, now.UTC())
+	traceScheduleDecisions(spanCtx, span, result)
 	if stepCtx.Err() != nil && parent.Err() == nil {
 		return fmt.Errorf("fixed schedule window timed out: %w", stepCtx.Err())
 	}
@@ -581,4 +594,55 @@ func writeCounter(output *strings.Builder, name, help string, value uint64) {
 
 func writeLabeled(output *strings.Builder, name, schedule, result string, value uint64) {
 	fmt.Fprintf(output, "%s{schedule=%q,result=%q} %d\n", name, schedule, result, value)
+}
+
+// scheduleDecided reports whether the window decided or did anything for the
+// schedule: work due, claimed, handed off, a baseline write, a staleness skip,
+// a fresh evaluation, or a failure.
+func scheduleDecided(schedule ScheduleResult) bool {
+	return schedule.Err != nil || schedule.Due > 0 || schedule.Claimed > 0 || schedule.Duplicate > 0 ||
+		schedule.Handoffs > 0 || schedule.Skipped > 0 || schedule.ColdStart || schedule.StaleSkipped || schedule.Evaluated
+}
+
+// traceScheduleDecisions stamps the window span with the window's totals and
+// emits one child span per schedule decision. The children are recorded after
+// the engine returns (the decision is already made), so they carry the outcome
+// rather than time the work.
+func traceScheduleDecisions(ctx context.Context, window oteltrace.Span, result WindowResult) {
+	var due, claimed, duplicate, handoffs, skipped, failed int
+	for _, schedule := range result.Schedules {
+		due += schedule.Due
+		claimed += schedule.Claimed
+		duplicate += schedule.Duplicate
+		handoffs += schedule.Handoffs
+		skipped += schedule.Skipped
+		if schedule.Err != nil {
+			failed++
+		}
+		if !scheduleDecided(schedule) {
+			// The loop polls every few seconds; most windows decide nothing for
+			// most schedules, and a span per idle schedule per poll is noise.
+			continue
+		}
+		_, child := tracing.StartWorkSpan(ctx, loopTracerName, "dev_health.scheduler.fixed_schedule",
+			attribute.String("dev_health.scheduler.schedule", schedule.ScheduleID),
+			attribute.Int("dev_health.scheduler.due", schedule.Due),
+			attribute.Int("dev_health.scheduler.claimed", schedule.Claimed),
+			attribute.Int("dev_health.scheduler.duplicate", schedule.Duplicate),
+			attribute.Int("dev_health.scheduler.handoffs", schedule.Handoffs),
+			attribute.Int("dev_health.scheduler.skipped", schedule.Skipped),
+			attribute.Bool("dev_health.scheduler.cold_start", schedule.ColdStart),
+			attribute.Bool("dev_health.scheduler.stale_skipped", schedule.StaleSkipped),
+		)
+		tracing.EndWorkSpan(child, schedule.Err)
+	}
+	window.SetAttributes(
+		attribute.Int("dev_health.scheduler.schedules", len(result.Schedules)),
+		attribute.Int("dev_health.scheduler.due", due),
+		attribute.Int("dev_health.scheduler.claimed", claimed),
+		attribute.Int("dev_health.scheduler.duplicate", duplicate),
+		attribute.Int("dev_health.scheduler.handoffs", handoffs),
+		attribute.Int("dev_health.scheduler.skipped", skipped),
+		attribute.Int("dev_health.scheduler.failed", failed),
+	)
 }

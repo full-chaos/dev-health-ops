@@ -14,6 +14,8 @@ import (
 	"time"
 
 	"github.com/full-chaos/dev-health-ops/internal/platform/health"
+	"github.com/full-chaos/dev-health-ops/internal/platform/tracing"
+	"go.opentelemetry.io/otel/attribute"
 )
 
 var errNotReady = errors.New("stream runner has not completed a successful stream window")
@@ -169,12 +171,31 @@ func (r *Runner) cycle(ctx context.Context, maintain bool) (bool, error) {
 		messages, err := r.transport.ReadNew(ctx, readStreams, r.config.ConsumerGroup, r.config.ConsumerName, perStreamCount, r.config.Block)
 		if err != nil {
 			failures = append(failures, fmt.Errorf("read streams: %w", err))
+			// A failed read is work that went wrong, not an idle cycle.
+			_, readSpan := tracing.StartWorkSpan(ctx, runnerTracerName, "dev_health.stream.read_failed",
+				attribute.String("dev_health.stream.runner", r.config.Name),
+				attribute.Int("dev_health.stream.lanes", len(readStreams)),
+			)
+			tracing.EndWorkSpan(readSpan, err)
 		} else {
 			active = active || len(messages) > 0
-			for _, message := range messages {
-				if err := r.process(ctx, message); err != nil {
-					failures = append(failures, err)
+			if len(messages) > 0 {
+				// One span per NON-EMPTY read batch: an idle cycle (no messages)
+				// repeats about once a second and would be noise.
+				batchCtx, batch := tracing.StartWorkSpan(ctx, runnerTracerName, "dev_health.stream.batch",
+					attribute.String("dev_health.stream.runner", r.config.Name),
+					attribute.Int("dev_health.stream.messages", len(messages)),
+					attribute.Int("dev_health.stream.lanes", len(readStreams)),
+				)
+				var batchFailures []error
+				for _, message := range messages {
+					if err := r.process(batchCtx, message); err != nil {
+						failures = append(failures, err)
+						batchFailures = append(batchFailures, err)
+					}
 				}
+				batch.SetAttributes(attribute.Int("dev_health.stream.failed", len(batchFailures)))
+				tracing.EndWorkSpan(batch, errors.Join(batchFailures...))
 			}
 		}
 	}
@@ -340,7 +361,24 @@ func sortedUnique(values []string) []string {
 	return slices.Compact(values)
 }
 
+// process handles one message under one dev_health.stream.handle span. The
+// span carries the runner name and a fixed outcome word; never the stream key,
+// the message id or any payload (CHAOS-7879).
 func (r *Runner) process(ctx context.Context, message Message) error {
+	ctx, span := tracing.StartWorkSpan(ctx, runnerTracerName, "dev_health.stream.handle",
+		attribute.String("dev_health.stream.runner", r.config.Name),
+	)
+	outcome, err := r.handle(ctx, message)
+	span.SetAttributes(attribute.String("dev_health.stream.outcome", outcome))
+	tracing.EndWorkSpan(span, err)
+	return err
+}
+
+// runnerTracerName scopes the stream runner's spans by package.
+const runnerTracerName = "github.com/full-chaos/dev-health-ops/internal/streamrunner"
+
+// handle is process's body; it returns a fixed outcome word with the error.
+func (r *Runner) handle(ctx context.Context, message Message) (string, error) {
 	if err := r.handler.Handle(ctx, message); err != nil {
 		if IsPermanent(err) {
 			reason := "invalid_message"
@@ -348,24 +386,27 @@ func (r *Runner) process(ctx context.Context, message Message) error {
 			if errors.As(err, &permanent) && permanent.Reason != "" {
 				reason = permanent.Reason
 			}
-			return r.quarantine(ctx, message, reason)
+			if err := r.quarantine(ctx, message, reason); err != nil {
+				return "quarantine_error", err
+			}
+			return "quarantined", nil
 		}
 		// A transient durable-write failure must leave the entry in the PEL.
 		r.mu.Lock()
 		r.retries++
 		r.mu.Unlock()
-		return fmt.Errorf("%w: %w", errTransientWrite, err)
+		return "transient_error", fmt.Errorf("%w: %w", errTransientWrite, err)
 	}
 	if err := r.transport.Ack(ctx, message.Stream, r.config.ConsumerGroup, message.ID); err != nil {
 		// The durable write committed but the ACK did not. Redelivery is safe only
 		// because handlers are required to be idempotent at their authoritative
 		// sink boundary; never turn this into an implicit success.
-		return fmt.Errorf("ack durable message: %w", err)
+		return "ack_error", fmt.Errorf("ack durable message: %w", err)
 	}
 	r.mu.Lock()
 	r.processed++
 	r.mu.Unlock()
-	return nil
+	return "acked", nil
 }
 
 func (r *Runner) quarantine(ctx context.Context, message Message, reason string) error {

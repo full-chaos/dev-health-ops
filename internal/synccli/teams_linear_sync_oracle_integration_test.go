@@ -229,7 +229,7 @@ func (o *teamsOracle) runGoLinear(fake *fakeLinear, orgID, token string, viaEnv 
 	args := []string{"--provider", "linear", "--org", orgID}
 	if viaEnv {
 		env["LINEAR_API_KEY"] = token
-	} else {
+	} else if token != "" { // a scenario with no token sends no --auth
 		args = append(args, "--auth", token)
 	}
 	lookup := func(key string) (string, bool) { v, ok := env[key]; return v, ok }
@@ -510,6 +510,14 @@ func linearScenarios() []*linearScenario {
 	return []*linearScenario{
 		{name: "two teams, one member without an email", token: "tok", teams: two, wantExit: 0, wantRows: 2},
 		{name: "the token from LINEAR_API_KEY", token: "env:tok", teams: two, wantExit: 0, wantRows: 2},
+		{name: "no token anywhere is refused", token: "", teams: two, wantExit: 1, wantRows: 0},
+		{name: "a team with no name takes its key", token: "tok", wantExit: 0, wantRows: 1,
+			teams: []fakeLinearTeam{{Key: "ENG", Name: "", Members: []fakeLinearMember{{ID: "u1", Name: "Alice", Email: "alice@example.com", Active: true}}}}},
+		{name: "a team with no key is skipped by both", token: "tok", wantExit: 0, wantRows: 1,
+			teams: []fakeLinearTeam{
+				{Key: "", Name: "Keyless", Members: []fakeLinearMember{{ID: "u9", Name: "Zed", Email: "zed@example.com", Active: true}}},
+				{Key: "ENG", Name: "Engineering", Members: []fakeLinearMember{{ID: "u1", Name: "Alice", Email: "alice@example.com", Active: true}}},
+			}},
 		{name: "a rejected token", token: "wrong", serverToken: "tok", teams: two, wantExit: 1, wantRows: 0},
 		{name: "an empty workspace is an error", token: "tok", teams: nil, wantExit: 1, wantRows: 0},
 		{name: "an empty workspace with --allow-empty", token: "tok", teams: nil, extra: []string{"--allow-empty"}, wantExit: 0, wantRows: 0},

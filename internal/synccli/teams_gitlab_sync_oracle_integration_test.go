@@ -175,14 +175,17 @@ func (o *teamsOracle) runGitLab(fake *fakeGitLab, orgID, owner, token string, sc
 	o.truncateAll()
 	viaEnv := strings.HasPrefix(token, "env:")
 	token = strings.TrimPrefix(token, "env:")
-	argv := []string{"--org", orgID, "sync", "teams", "--provider", "gitlab", "--owner", owner}
+	argv := []string{"--org", orgID, "sync", "teams", "--provider", "gitlab"}
+	if owner != "" { // a scenario with no owner omits the flag in both planes
+		argv = append(argv, "--owner", owner)
+	}
 	pythonEnv := map[string]string{"CLICKHOUSE_URI": o.pythonHTTPDSN, "GITLAB_URL": fake.base()}
 	if sc != nil && sc.envToken != "" {
 		pythonEnv["GITLAB_TOKEN"] = sc.envToken
 	}
 	if viaEnv {
 		pythonEnv["GITLAB_TOKEN"] = token
-	} else {
+	} else if token != "" { // a scenario with no token sends no --auth in either plane
 		argv = append(argv, "--auth", token)
 	}
 	argv = append(argv, extra...)
@@ -202,10 +205,13 @@ func (o *teamsOracle) runGoGitLab(fake *fakeGitLab, orgID, owner, token string, 
 		env["GITLAB_TOKEN"] = sc.envToken
 	}
 	lookup := func(key string) (string, bool) { v, ok := env[key]; return v, ok }
-	args := []string{"--provider", "gitlab", "--org", orgID, "--owner", owner}
+	args := []string{"--provider", "gitlab", "--org", orgID}
+	if owner != "" {
+		args = append(args, "--owner", owner)
+	}
 	if viaEnv {
 		env["GITLAB_TOKEN"] = token
-	} else {
+	} else if token != "" {
 		args = append(args, "--auth", token)
 	}
 	args = append(args, extra...)
@@ -509,6 +515,12 @@ func gitlabScenarios() []*gitlabScenario {
 			group: fakeGitLabGroup{ID: 1, FullPath: "acme", Name: "Acme", Members: []string{"alice"}}, users: map[string]string{"alice": ""}},
 		{name: "--auth wins over GITLAB_TOKEN", owner: "acme", token: "tok", envToken: "not-the-token", wantExit: 0, wantRows: 1,
 			group: fakeGitLabGroup{ID: 1, FullPath: "acme", Name: "Acme", Members: []string{"alice"}}, users: map[string]string{"alice": ""}},
+		{name: "no --owner is refused", owner: "", token: "tok", wantExit: 1, wantRows: 0,
+			group: fakeGitLabGroup{ID: 1, FullPath: "acme", Name: "Acme", Members: []string{"alice"}}},
+		{name: "no token anywhere is refused", owner: "acme", token: "", wantExit: 1, wantRows: 0,
+			group: fakeGitLabGroup{ID: 1, FullPath: "acme", Name: "Acme", Members: []string{"alice"}}},
+		{name: "a padded --owner", owner: " acme ", token: "tok", wantExit: 1, wantRows: 0, goDiffers: true, goExit: 0, goRows: 1,
+			group: fakeGitLabGroup{ID: 1, FullPath: "acme", Name: "Acme", Members: []string{"alice"}}},
 		{name: "a rejected token", owner: "acme", token: "wrong", serverToken: "tok", wantExit: 1, wantRows: 0,
 			group: fakeGitLabGroup{ID: 1, FullPath: "acme", Name: "Acme", Members: []string{"alice"}}},
 		{name: "an unknown group", owner: "nope", token: "tok", wantExit: 1, wantRows: 0,

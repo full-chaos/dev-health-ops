@@ -497,14 +497,17 @@ func (o *teamsOracle) runGitHub(fake *fakeGitHub, orgID, owner, token string, pr
 	}
 	viaEnv := strings.HasPrefix(token, "env:")
 	token = strings.TrimPrefix(token, "env:")
-	argv := []string{"--org", orgID, "sync", "teams", "--provider", "github", "--owner", owner}
+	argv := []string{"--org", orgID, "sync", "teams", "--provider", "github"}
+	if owner != "" { // a scenario with no owner omits the flag in both planes
+		argv = append(argv, "--owner", owner)
+	}
 	pythonEnv := map[string]string{"CLICKHOUSE_URI": o.pythonHTTPDSN}
 	if sc != nil && sc.envToken != "" {
 		pythonEnv["GITHUB_TOKEN"] = sc.envToken
 	}
 	if viaEnv {
 		pythonEnv["GITHUB_TOKEN"] = token
-	} else {
+	} else if token != "" { // a scenario with no token sends no --auth in either plane
 		argv = append(argv, "--auth", token)
 	}
 	argv = append(argv, extra...)
@@ -532,10 +535,13 @@ func (o *teamsOracle) runGo(fake *fakeGitHub, orgID, owner, token string, sc *te
 		env["GITHUB_TOKEN"] = sc.envToken
 	}
 	lookup := func(key string) (string, bool) { v, ok := env[key]; return v, ok }
-	args := []string{"--provider", "github", "--org", orgID, "--owner", owner}
+	args := []string{"--provider", "github", "--org", orgID}
+	if owner != "" {
+		args = append(args, "--owner", owner)
+	}
 	if viaEnv {
 		env["GITHUB_TOKEN"] = token
-	} else {
+	} else if token != "" {
 		args = append(args, "--auth", token)
 	}
 	args = append(args, extra...)
@@ -943,6 +949,9 @@ func githubScenarios() []*teamsScenario {
 		{name: "the token from GITHUB_TOKEN", org: "acme", owner: "acme", token: "env:tok", teams: two, users: emails("alice", "bob", "carol"), wantRows: 2},
 		{name: "--auth wins over GITHUB_TOKEN", org: "acme", owner: "acme", token: "tok", envToken: "not-the-token", teams: two, users: emails("alice", "bob", "carol"), wantRows: 2},
 		{name: "the GITHUB_URL spelling of the base URL", org: "acme", owner: "acme", token: "tok", baseEnv: "GITHUB_URL", teams: two, users: emails("alice", "bob", "carol"), wantRows: 2},
+		{name: "no --owner is refused", org: "acme", owner: "", token: "tok", teams: two, users: emails("alice", "bob", "carol"), wantExit: 1, wantRows: 0},
+		{name: "no token anywhere is refused", org: "acme", owner: "acme", token: "", teams: two, users: emails("alice", "bob", "carol"), wantExit: 1, wantRows: 0},
+		{name: "a padded --owner", org: "acme", owner: " acme ", token: "tok", teams: two, users: emails("alice", "bob", "carol"), wantExit: 1, wantRows: 0, goDiffers: true, goExit: 0, goRows: 2},
 		{name: "a rejected token", org: "acme", owner: "acme", token: "wrong", serverToken: "tok", teams: two, users: emails("alice", "bob", "carol"), wantExit: 1, wantRows: 0},
 		{name: "no teams is an error", org: "acme", owner: "acme", token: "tok", teams: nil, wantExit: 1, wantRows: 0},
 		{name: "no teams with --allow-empty", org: "acme", owner: "acme", token: "tok", teams: nil, extra: []string{"--allow-empty"}, wantExit: 0, wantRows: 0},

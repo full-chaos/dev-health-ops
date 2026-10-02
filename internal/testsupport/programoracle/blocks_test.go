@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"runtime"
 	"strings"
+	"sync/atomic"
 	"testing"
 
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/venueoracle"
@@ -302,7 +303,38 @@ func TestTheDefectGateRefusesABlockWhoseGoLinesAreNotTheFrozenAnswers(t *testing
 	if err := findsDefectErr("sweep", output, 0, oneWrong, wrong); err == nil {
 		t.Error("a block with one Go line wrong was judged")
 	}
-	if err := findsDefectErr("sweep", output, BlockLines+500, oneWrong, wrong); err != nil {
-		t.Errorf("a wrong line in another block refused this block: %v", err)
+	// The control reads the WHOLE answers: a wrong line in another block refuses too.
+	if err := findsDefectErr("sweep", output, BlockLines+500, oneWrong, wrong); err == nil {
+		t.Error("a block elsewhere with a wrong Go line was judged: the control reads one block only")
+	}
+}
+
+// The attribution: the one block that differs with the defect planted is the
+// block of the planted answer. A Go line that changes between the control and
+// the planted run (so another block differs too) is reported as such.
+func TestTheDefectGateNamesThePlantedAnswersBlockAlone(t *testing.T) {
+	lines := numberedLines(2*BlockLines + 2)
+	encoded, err := json.Marshal(frozenBlocks(lines))
+	if err != nil {
+		t.Fatal(err)
+	}
+	output := string(encoded)
+	wrong := func(dst []byte) []byte { return append(dst, "wrong"...) }
+	if err := findsDefectErr("sweep", output, 0, fixedLines(lines), wrong); err != nil {
+		t.Fatalf("a plant in block 0 with every other line right: %v", err)
+	}
+	var passes atomic.Int32
+	drifting := func(dst []byte, at int) []byte {
+		if at == 2*BlockLines && passes.Load() >= 1 { // after the control pass, block 2 drifts
+			return append(dst, "drifted"...)
+		}
+		if at == 2*BlockLines+1 {
+			passes.Store(1)
+		}
+		return fixedLines(lines)(dst, at)
+	}
+	err = findsDefectErr("sweep", output, 0, drifting, wrong)
+	if err == nil || !strings.Contains(err.Error(), "does not name the planted answer's block alone") {
+		t.Fatalf("a second differing block: err = %v, want the attribution refusal", err)
 	}
 }

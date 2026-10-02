@@ -836,3 +836,28 @@ func TestCheckRequiredReportsTheBoundedFailureClassOfEachCheck(t *testing.T) {
 		}
 	}
 }
+
+// TestMetricsResponseCarriesTheDeclaredTypeAndNoSniff pins the two headers the
+// /metrics text is served with: the Prometheus text content type and
+// X-Content-Type-Options: nosniff.
+func TestMetricsResponseCarriesTheDeclaredTypeAndNoSniff(t *testing.T) {
+	registry := NewRegistry(time.Second)
+	registry.SetLive(true)
+	server, err := NewServer(ServerOptions{Address: "127.0.0.1:0", Registry: registry, Service: "svc", Version: "v"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, path := range []string{"/metrics"} {
+		response := httptest.NewRecorder()
+		server.Handler().ServeHTTP(response, httptest.NewRequest(http.MethodGet, path, nil))
+		if response.Code != http.StatusOK {
+			t.Fatalf("%s answered %d", path, response.Code)
+		}
+		if got := response.Header().Get("Content-Type"); got != "text/plain; version=0.0.4; charset=utf-8" {
+			t.Errorf("%s Content-Type = %q", path, got)
+		}
+		if got := response.Header().Get("X-Content-Type-Options"); got != "nosniff" {
+			t.Errorf("%s X-Content-Type-Options = %q, want nosniff", path, got)
+		}
+	}
+}

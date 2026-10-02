@@ -1,6 +1,7 @@
 package logging
 
 import (
+	"errors"
 	"fmt"
 	"net"
 	"net/url"
@@ -37,5 +38,32 @@ func TestSharedTransportChecksSurviveTypedNilErrors(t *testing.T) {
 	}
 	if !RetryableTransport(real) {
 		t.Error("a dial failure is not retryable")
+	}
+}
+
+// CHAOS-8127: IsLocationParseRefusal answers yes only for net/http's own refusal and never panics on a typed-nil cause at any hop.
+func TestIsLocationParseRefusal(t *testing.T) {
+	phrase := errors.New("failed to parse Location header \"x\": planted detail")
+	var nilURL *url.Error
+	var nilOp *net.OpError
+	rows := map[string]struct {
+		err  error
+		want bool
+	}{
+		"the refusal":                    {&url.Error{Op: "Get", URL: "https://x.example.test", Err: phrase}, true},
+		"the refusal, wrapped":           {fmt.Errorf("w: %w", &url.Error{Op: "Get", URL: "https://x.example.test", Err: phrase}), true},
+		"an ordinary url error":          {&url.Error{Op: "Get", URL: "https://x.example.test", Err: errors.New("dial tcp: refused")}, false},
+		"the phrase with a cause":        {&url.Error{Op: "Get", URL: "https://x.example.test", Err: fmt.Errorf("failed to parse Location header \"x\": %w", errors.New("inner"))}, false},
+		"the phrase, no url error":       {phrase, false},
+		"typed-nil url error":            {error(nilURL), false},
+		"typed-nil url cause":            {&url.Error{Err: error(nilURL)}, false},
+		"typed-nil op cause":             {&url.Error{Err: error(nilOp)}, false},
+		"typed-nil url cause, depth two": {fmt.Errorf("a: %w", fmt.Errorf("b: %w", &url.Error{Err: error(nilURL)})), false},
+		"no error":                       {nil, false},
+	}
+	for name, row := range rows {
+		if got := IsLocationParseRefusal(row.err); got != row.want {
+			t.Errorf("%s: IsLocationParseRefusal = %v, want %v", name, got, row.want)
+		}
 	}
 }

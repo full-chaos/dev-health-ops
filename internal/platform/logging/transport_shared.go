@@ -4,6 +4,7 @@ import (
 	"errors"
 	"net"
 	"net/url"
+	"strings"
 )
 
 // URLError is the *url.Error in the error's chain; nil when the chain holds none or holds a typed-nil one (the nil pointer): errors.As reports a
@@ -30,19 +31,19 @@ func RetryableTransport(err error) bool {
 	return chainAs(chain, &operation) && operation != nil && operation.Op == "dial"
 }
 
-// URLErrorLeafText is the text of the cause of the *url.Error in the error's chain when that cause is a leaf (it unwraps to
-// nothing), and false when the chain holds no url error, the url error has no cause, the cause has a cause of its own, or ANY of
-// these reads panics (a typed-nil cause answers Unwrap and Error by dereferencing nil): the whole read is under recover, so it
-// holds at every hop of the chain (CHAOS-8127).
-func URLErrorLeafText(err error) (text string, ok bool) {
+// IsLocationParseRefusal reports whether the error is net/http's refusal of a redirect whose Location does not parse: a
+// *url.Error whose cause is a leaf (it unwraps to nothing) with the refusal's own words. It answers a yes or a no and never hands
+// the text out (the text holds the whole Location). The whole read is under recover, so a typed-nil cause at any hop of the chain
+// (it answers Unwrap and Error by dereferencing nil) is a "no" (CHAOS-8127).
+func IsLocationParseRefusal(err error) (refusal bool) {
 	defer func() {
 		if recover() != nil {
-			text, ok = "", false
+			refusal = false
 		}
 	}()
 	urlErr := URLError(err)
 	if urlErr == nil || urlErr.Err == nil || errors.Unwrap(urlErr.Err) != nil {
-		return "", false
+		return false
 	}
-	return urlErr.Err.Error(), true
+	return strings.HasPrefix(urlErr.Err.Error(), "failed to parse Location header ")
 }

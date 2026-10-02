@@ -290,10 +290,7 @@ func (w *redirectWitness) RoundTrip(request *http.Request) (*http.Response, erro
 // isLocationParseFailure: net/http refused a redirect whose Location does not parse. Its error is a *url.Error wrapping an
 // unwrappable error whose text STARTS with the phrase; a transport error that merely mentions the phrase, or wraps a cause,
 // is an ordinary transport error and keeps its class (CHAOS-7927 r1).
-func isLocationParseFailure(err error) bool {
-	text, ok := logging.URLErrorLeafText(err)
-	return ok && strings.HasPrefix(text, "failed to parse Location header ")
-}
+func isLocationParseFailure(err error) bool { return logging.IsLocationParseRefusal(err) }
 
 // redactRequestURL is the request URL as it appears in the text of a NotFound error, with what can hold a credential taken out:
 // the userinfo, the value of every query parameter whose NAME is a protected key (token, secret, password, key, ...) and the

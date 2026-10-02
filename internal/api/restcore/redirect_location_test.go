@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"net"
 	"net/http"
 	"net/http/httptest"
@@ -312,5 +313,34 @@ func TestEveryHopOfAHostileChainAfterAWitnessedRedirectIsSurvived(t *testing.T) 
 				t.Errorf("%s: Core.Get did not return", label)
 			}
 		}
+	}
+}
+
+type timeoutError struct{}
+
+func (timeoutError) Error() string   { return "i/o timeout" }
+func (timeoutError) Timeout() bool   { return true }
+func (timeoutError) Temporary() bool { return true }
+
+type timeoutThenOK struct{ calls int }
+
+func (t *timeoutThenOK) RoundTrip(request *http.Request) (*http.Response, error) {
+	t.calls++
+	if t.calls == 1 {
+		return nil, timeoutError{}
+	}
+	return &http.Response{StatusCode: 200, Status: "200 OK", Proto: "HTTP/1.1", ProtoMajor: 1, ProtoMinor: 1, Header: http.Header{}, Body: io.NopCloser(strings.NewReader("{}")), Request: request}, nil
+}
+
+// CHAOS-8127 vet (U6): a timeout of any phase is retried; the clause that says so has its own row (a dial failure has another).
+func TestATimeoutIsRetriedByTheCore(t *testing.T) {
+	transport := &timeoutThenOK{}
+	core := Core{Provider: "github", RetryAfter: func(Response) time.Duration { return 0 }, Sleep: func(context.Context, time.Duration) error { return nil }, HTTP: &http.Client{Transport: transport}}
+	response, err := core.Get(context.Background(), "https://api.example.test/x", "GET /probe")
+	if err != nil || response.Status != 200 {
+		t.Fatalf("Get = %v, %v, want the second attempt's 200", response.Status, err)
+	}
+	if transport.calls != 2 {
+		t.Fatalf("the transport was called %d times, want 2 (one timeout, one retry)", transport.calls)
 	}
 }

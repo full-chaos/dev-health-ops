@@ -151,15 +151,28 @@ func Record(ctx context.Context, cfg Config) (Result, error) {
 	sort.Strings(passed)
 	base := []string{"DEV_HEALTH_LIVE_PYTHON_ORACLES=1", "DEV_HEALTH_LIVE_PYTHON_ORACLE_PROOF_DIR=" + proofDir, passedEnvName + "=" + strings.Join(passed, ",")}
 	discard := func() { removeAll(packageDir) }
-	// Both recording runs get this one list: they may differ in time only.
+	// Both recording runs get this one list: they may differ in time and in their scratch directory (TMPDIR) only.
 	recordEnv := append(append([]string{}, base...), "DHO_VENUE_GOLDEN_UPDATE=1", "DHO_VENUE_GOLDEN_PYTHON_ROOT="+cfg.PythonRoot, "PYTHONDONTWRITEBYTECODE=1")
+	// The two runs get a scratch directory (TMPDIR) of a different depth and a different name: an answer that holds
+	// a path of the scratch directory (a temp path that was 8 components deep in one run and 9 in another)
+	// differs between the two runs and is refused at record time, instead of pinning the depth of one machine.
+	firstScratch, secondScratch, cleanScratch, err := scratchDirs()
+	if err != nil {
+		return Result{}, fmt.Errorf("the two recording runs need scratch directories of different depths: %w", err)
+	}
+	defer cleanScratch()
+	if err := differentScratch(firstScratch, secondScratch); err != nil {
+		return Result{}, err
+	}
+	firstEnv := append(append([]string{}, recordEnv...), "TMPDIR="+firstScratch)
+	secondEnv := append(append([]string{}, recordEnv...), "TMPDIR="+secondScratch)
 
 	// A bytecode cache in the pinned checkout can run code older than its source:
 	// clear it, and stop the recording writing a new one.
 	if err := clearBytecode(filepath.Join(cfg.PythonRoot, "src")); err != nil {
 		return Result{}, fmt.Errorf("clearing the bytecode cache of %s: %w", cfg.PythonRoot, err)
 	}
-	if err := cfg.Run(cfg, recordEnv); err != nil {
+	if err := cfg.Run(cfg, firstEnv); err != nil {
 		discard()
 		return Result{}, fmt.Errorf("the recording run failed (a golden is only recorded from a run that passed every check, cleanups included): %w", err)
 	}
@@ -200,7 +213,7 @@ func Record(ctx context.Context, cfg Config) (Result, error) {
 			return Result{}, err
 		}
 	}
-	if err := cfg.Run(cfg, recordEnv); err != nil {
+	if err := cfg.Run(cfg, secondEnv); err != nil {
 		discard()
 		return Result{}, fmt.Errorf("the second recording run failed: %w", err)
 	}
@@ -496,6 +509,38 @@ func recordingEnv(ambient, extra []string) []string {
 		}
 	}
 	return append(out, "LANG=C.UTF-8", "LC_ALL=C.UTF-8")
+}
+
+// scratchDirs makes the scratch directory (TMPDIR) of each of the two recording runs: the first directly
+// under the system temp directory, the second three levels deeper under a differently named directory. It is
+// a variable so a test can make it fail.
+var scratchDirs = func() (first, second string, cleanup func(), err error) {
+	first, err = os.MkdirTemp("", "goldenrecord-a-")
+	if err != nil {
+		return "", "", nil, err
+	}
+	top, err := os.MkdirTemp("", "gr-b-")
+	if err != nil {
+		os.RemoveAll(first)
+		return "", "", nil, err
+	}
+	second = filepath.Join(top, "x1", "x2", "second-run-scratch")
+	if err := os.MkdirAll(second, 0o755); err != nil {
+		os.RemoveAll(first)
+		os.RemoveAll(top)
+		return "", "", nil, err
+	}
+	return first, second, func() { os.RemoveAll(first); os.RemoveAll(top) }, nil
+}
+
+// differentScratch is an error unless the two scratch directories differ in depth and in the name of the
+// last component: a second run that cannot use another depth proves nothing about a path-dependent answer.
+func differentScratch(first, second string) error {
+	depth := func(path string) int { return len(strings.Split(filepath.ToSlash(filepath.Clean(path)), "/")) }
+	if depth(first) == depth(second) || filepath.Base(first) == filepath.Base(second) {
+		return fmt.Errorf("the two recording runs would run under scratch directories of the same depth or name (%d and %d components): an answer that depends on the depth of a temp path could not be seen", depth(first), depth(second))
+	}
+	return nil
 }
 
 // goTest is the default runner.

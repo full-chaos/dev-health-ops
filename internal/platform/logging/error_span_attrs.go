@@ -7,7 +7,7 @@ import (
 )
 
 // ErrorSpanAttributes is ErrorAttrs for a span event or span: `error.class`, `error.type` and, for a PostgreSQL error,
-// `error.code` and the schema names. Identity-derived only: no text of the error (CHAOS-7936, same rule as ErrorAttrs).
+// `error.code` (the SQLSTATE). Identity-derived only: no text of the error (CHAOS-7936, same rule as ErrorAttrs).
 func ErrorSpanAttributes(err error) []attribute.KeyValue {
 	attrs := ErrorAttrs(err)
 	out := make([]attribute.KeyValue, 0, len(attrs))

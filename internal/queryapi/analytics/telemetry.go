@@ -78,8 +78,9 @@ func defaultRecordDegradation(ctx context.Context, phase string, err error) {
 // an operator could not tell a missing table from a timeout from a
 // syntax error.
 //
-// err.Error() is still recorded alongside, because the wrapper chain is
-// what identifies WHICH query degraded; the cause is what says why.
+// NOTE (the span-text change): neither err.Error() nor the root cause's text is put on a span any more: the degraded event and
+// the coverage event carry error.class, error.type and the ClickHouse exception's code and name (logging.ErrorAs finds it
+// through the bounded walk). rootCause is still used by the resolver's own log line (resolve.go), which is a named follow-up.
 func rootCause(err error) error {
 	for {
 		next := errors.Unwrap(err)

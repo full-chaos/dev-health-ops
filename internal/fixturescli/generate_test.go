@@ -41,7 +41,7 @@ func TestFrozenWorldFilesAreTheFilesTheDigestsPin(t *testing.T) {
 		}
 		sum := sha256.Sum256(raw)
 		if got := hex.EncodeToString(sum[:]); got != want {
-			t.Fatalf("%s digest = %s, want %s: the frozen rows changed without their digest. They are only rewritten from the live Python producer (TestFreezeGenerateWorlds), then the digest is updated", path, got, want)
+			t.Fatalf("%s digest = %s, want %s: the frozen rows changed without their digest. They are not rewritten: the Python producer that froze them cannot run again (CHAOS-7793)", path, got, want)
 		}
 		world, err := decodeWorld(raw)
 		if err != nil {
@@ -56,11 +56,11 @@ func TestFrozenWorldFilesAreTheFilesTheDigestsPin(t *testing.T) {
 		if !uuidText.MatchString(world.OrgID) {
 			t.Fatalf("%s: organization %q is not a UUID", path, world.OrgID)
 		}
-		// The producer ran with its clock pinned to frozen_at (TestFreezeGenerateWorlds), and the gated
+		// The producer ran with its clock pinned to frozen_at (the freezer, TestFreezeGenerateWorlds, was removed with CHAOS-7793), and the gated
 		// oracle pins a fresh run to it: a world from a freezer that let the producer read the real
 		// clock (frozen_at written with another precision) cannot be checked on a later day.
 		if at, err := time.Parse(producerClockLayout, world.FrozenAt); err != nil || at.UTC().Format(producerClockLayout) != world.FrozenAt {
-			t.Fatalf("%s: frozen_at %q is not a pinned producer instant (%s, UTC): re-freeze the world with TestFreezeGenerateWorlds", path, world.FrozenAt, producerClockLayout)
+			t.Fatalf("%s: frozen_at %q is not a pinned producer instant (%s, UTC): the producer that froze it cannot run any more (CHAOS-7793), so a world is not re-frozen", path, world.FrozenAt, producerClockLayout)
 		}
 		at, _ := time.Parse(producerClockLayout, world.FrozenAt)
 		// The unpinned columns of the frozen rows hold what their class allows: a stamp of the freeze

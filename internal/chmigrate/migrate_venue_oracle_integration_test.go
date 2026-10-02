@@ -11,11 +11,8 @@ import (
 	"fmt"
 	"net/url"
 	"os"
-	"os/exec"
 	"reflect"
-	"regexp"
 	"sort"
-	"strconv"
 	"strings"
 	"testing"
 
@@ -24,8 +21,6 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/chmigrate"
 	"github.com/full-chaos/dev-health-ops/internal/cli"
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/containers"
-	"github.com/full-chaos/dev-health-ops/internal/testsupport/pyoracle"
-	"github.com/full-chaos/dev-health-ops/internal/testsupport/venueoracle"
 )
 
 // The executed proof of `dho migrate clickhouse upgrade|status` (CHAOS-6899):
@@ -89,43 +84,6 @@ const (
 	migrateGoldenSHA256 = "f89c4921546a322d0323dcbd6b88dfbac77f606a0da6e98ab80841622d356113"
 )
 
-var (
-	pythonAppliedLine = regexp.MustCompile(`^\s+\[applied [^\]]*\]\s+(\S+)\s*$`)
-	pythonPendingLine = regexp.MustCompile(`^\s+\[pending\]\s+(\S+)\s*$`)
-	pythonSummaryLine = regexp.MustCompile(`^(\d+) applied, (\d+) pending, (\d+) total$`)
-)
-
-// parsePythonStatus reads the applied and pending versions out of Python's
-// `migrate clickhouse status` text and requires its own summary line to agree
-// with them.
-func parsePythonStatus(t *testing.T, stdout string) (applied, pending []string, total int) {
-	t.Helper()
-	summary := ""
-	for _, line := range strings.Split(stdout, "\n") {
-		switch {
-		case pythonAppliedLine.MatchString(line):
-			applied = append(applied, pythonAppliedLine.FindStringSubmatch(line)[1])
-		case pythonPendingLine.MatchString(line):
-			pending = append(pending, pythonPendingLine.FindStringSubmatch(line)[1])
-		case pythonSummaryLine.MatchString(line):
-			summary = line
-		}
-	}
-	match := pythonSummaryLine.FindStringSubmatch(summary)
-	if match == nil {
-		t.Fatalf("python status printed no summary line:\n%s", stdout)
-	}
-	a, _ := strconv.Atoi(match[1])
-	p, _ := strconv.Atoi(match[2])
-	total, _ = strconv.Atoi(match[3])
-	if a != len(applied) || p != len(pending) || total != a+p {
-		t.Fatalf("python status summary %q disagrees with its own list (%d applied, %d pending):\n%s", summary, len(applied), len(pending), stdout)
-	}
-	sort.Strings(applied)
-	sort.Strings(pending)
-	return applied, pending, total
-}
-
 // migrateEnv is one database on the shared server, seen by both planes.
 type migrateEnv struct {
 	instance *containers.Instance
@@ -133,8 +91,6 @@ type migrateEnv struct {
 	baseline chmigrate.Baseline
 	chain    []chmigrate.ChainFile
 	frozen   map[string]migrateFact
-	live     bool
-	recorded []migrateFact
 }
 
 func (e *migrateEnv) nativeURI(t *testing.T, database string) string {
@@ -169,32 +125,6 @@ func (e *migrateEnv) goVerb(t *testing.T, database, verb, contract string, args 
 	return code, stdout.String(), stderr.String()
 }
 
-// pythonVerb runs the real `dev-hops migrate clickhouse <verb>` on database.
-func (e *migrateEnv) pythonVerb(t *testing.T, database, verb, contract string, args ...string) (int, string, string) {
-	t.Helper()
-	root := pyoracle.Root(t)
-	python := pyoracle.Resolve(t, root)
-	program := "import sys\nfrom dev_health_ops import cli\nraise SystemExit(cli.main(sys.argv[1:]))\n"
-	command := exec.Command(python, append([]string{"-c", program, "migrate", "clickhouse", verb}, args...)...)
-	// A closed environment (CHAOS-7471): the DSN and the contract the scenario names, nothing inherited.
-	extra := []string{"CLICKHOUSE_URI=" + httpDSN(t, context.Background(), e.instance, database)}
-	if contract != "" {
-		extra = append(extra, chmigrate.OrderingContractEnv+"="+contract)
-	}
-	command.Env = pyoracle.ClosedEnv(root, extra...)
-	var stdout, stderr bytes.Buffer
-	command.Stdout, command.Stderr = &stdout, &stderr
-	code := 0
-	if err := command.Run(); err != nil {
-		exit, ok := err.(*exec.ExitError)
-		if !ok {
-			t.Fatalf("run python: %v", pyoracle.RunError(python, err, []byte(stderr.String())))
-		}
-		code = exit.ExitCode()
-	}
-	return code, stdout.String(), stderr.String()
-}
-
 // schemaDigest is the digest of the database as an upgrade leaves it.
 func (e *migrateEnv) schemaDigest(t *testing.T, database string) string {
 	t.Helper()
@@ -209,34 +139,15 @@ func (e *migrateEnv) schemaDigest(t *testing.T, database string) string {
 
 func (e *migrateEnv) newDatabase(t *testing.T) string { return scratchDatabase(t, e.admin) }
 
-// pythonFact is the Python plane's fact for the step: executed while
-// recording (and comparing live), read from the golden otherwise.
-func (e *migrateEnv) pythonFact(t *testing.T, name string, run func() migrateFact) migrateFact {
+// pythonFact is the Python plane's fact for the step, read from the frozen golden
+// (the Python producer cannot run any more: CHAOS-7793).
+func (e *migrateEnv) pythonFact(t *testing.T, name string) migrateFact {
 	t.Helper()
-	if e.live {
-		fact := run()
-		fact.Name = name
-		e.recorded = append(e.recorded, fact)
-		return fact
-	}
 	fact, ok := e.frozen[name]
 	if !ok {
-		t.Fatalf("%s: the golden holds no Python fact for this step; regenerate it with DHO_MIGRATE_GOLDEN_UPDATE=1", name)
+		t.Fatalf("%s: the golden holds no Python fact for this step", name)
 	}
 	return fact
-}
-
-func (e *migrateEnv) pythonStatus(t *testing.T, database string, args ...string) migrateFact {
-	t.Helper()
-	code, stdout, stderr := e.pythonVerb(t, database, "status", "2", args...)
-	if code != 0 && code != 1 {
-		t.Fatalf("python status exit %d: %s", code, stderr)
-	}
-	applied, pending, total := parsePythonStatus(t, stdout)
-	return migrateFact{
-		Exit: code, AppliedN: len(applied), PendingN: len(pending), Total: total,
-		AppliedDigests: nameDigests(applied), PendingDigests: nameDigests(pending),
-	}
 }
 
 func (e *migrateEnv) goStatus(t *testing.T, database string, args ...string) (migrateFact, chmigrate.Status) {
@@ -333,7 +244,7 @@ func sortedCopy(in []string) []string {
 	return out
 }
 
-func newMigrateEnv(t *testing.T, live bool) *migrateEnv {
+func newMigrateEnv(t *testing.T) *migrateEnv {
 	t.Helper()
 	ctx := context.Background()
 	instance, err := containers.StartClickHouse(ctx)
@@ -349,20 +260,19 @@ func newMigrateEnv(t *testing.T, live bool) *migrateEnv {
 	if err != nil {
 		t.Fatal(err)
 	}
-	env := &migrateEnv{instance: instance, admin: openDatabase(t, instance.URI, ""), baseline: baseline, chain: chain, live: live, frozen: map[string]migrateFact{}}
-	if !live {
-		raw, err := os.ReadFile(migrateGolden)
-		if err != nil {
-			t.Fatal(err)
-		}
-		var facts []migrateFact
-		if err := json.Unmarshal(raw, &facts); err != nil {
-			t.Fatal(err)
-		}
-		for _, fact := range facts {
-			env.frozen[fact.Name] = fact
-		}
+	env := &migrateEnv{instance: instance, admin: openDatabase(t, instance.URI, ""), baseline: baseline, chain: chain, frozen: map[string]migrateFact{}}
+	raw, err := os.ReadFile(migrateGolden)
+	if err != nil {
+		t.Fatal(err)
 	}
+	var facts []migrateFact
+	if err := json.Unmarshal(raw, &facts); err != nil {
+		t.Fatal(err)
+	}
+	for _, fact := range facts {
+		env.frozen[fact.Name] = fact
+	}
+
 	return env
 }
 
@@ -380,17 +290,17 @@ func TestMigrateGoldenIsTheFileTheDigestPins(t *testing.T) {
 // runMigrateScenarios is the whole proof: live it runs both planes and
 // compares them (and records the Python facts), frozen it runs dho against
 // the recorded Python facts.
-func runMigrateScenarios(t *testing.T, live bool) *migrateEnv {
+func runMigrateScenarios(t *testing.T) *migrateEnv {
 	t.Helper()
 	ctx := context.Background()
-	e := newMigrateEnv(t, live)
+	e := newMigrateEnv(t)
 	totalVersions := len(e.baseline.Versions) + len(e.chain)
 
 	// ---- status of a database no verb has touched ----
-	emptyPy, emptyGo := e.newDatabase(t), e.newDatabase(t)
+	emptyGo := e.newDatabase(t)
 	for _, args := range [][]string{{"--check"}, nil} {
 		name := "status empty" + strings.Join(append([]string{""}, args...), " ")
-		py := e.pythonFact(t, name, func() migrateFact { return e.pythonStatus(t, emptyPy, args...) })
+		py := e.pythonFact(t, name)
 		goFact, status := e.goStatus(t, emptyGo, args...)
 		wantExit := py.Exit // both exit 1 under --check (all pending), 0 without
 		e.requireSameStatus(t, name, emptyGo, py, goFact, status, wantExit)
@@ -400,16 +310,12 @@ func runMigrateScenarios(t *testing.T, live bool) *migrateEnv {
 	}
 
 	// ---- status of a foreign database (an unrelated table, no versions) ----
-	foreignPy, foreignGo := e.newDatabase(t), e.newDatabase(t)
-	for _, database := range []string{foreignPy, foreignGo} {
-		if e.live || database == foreignGo {
-			if err := openDatabase(t, e.instance.URI, database).Exec(ctx, "CREATE TABLE unrelated_sentinel (x Int8) ENGINE = Memory"); err != nil {
-				t.Fatal(err)
-			}
-		}
+	foreignGo := e.newDatabase(t)
+	if err := openDatabase(t, e.instance.URI, foreignGo).Exec(ctx, "CREATE TABLE unrelated_sentinel (x Int8) ENGINE = Memory"); err != nil {
+		t.Fatal(err)
 	}
 	name := "status foreign --check"
-	py := e.pythonFact(t, name, func() migrateFact { return e.pythonStatus(t, foreignPy, "--check") })
+	py := e.pythonFact(t, name)
 	goFact, status := e.goStatus(t, foreignGo, "--check")
 	e.requireSameStatus(t, name, foreignGo, py, goFact, status, py.Exit)
 	if status.State != "foreign" || py.PendingN != totalVersions {
@@ -417,14 +323,8 @@ func runMigrateScenarios(t *testing.T, live bool) *migrateEnv {
 	}
 
 	// ---- upgrade a fresh database ----
-	pyHead, goHead := e.newDatabase(t), e.newDatabase(t)
-	up := e.pythonFact(t, "upgrade fresh", func() migrateFact {
-		code, _, stderr := e.pythonVerb(t, pyHead, "upgrade", "2")
-		if code != 0 {
-			t.Fatalf("python upgrade of a fresh database exit %d: %s", code, stderr)
-		}
-		return migrateFact{Exit: code, Schema: e.schemaDigest(t, pyHead)}
-	})
+	goHead := e.newDatabase(t)
+	up := e.pythonFact(t, "upgrade fresh")
 	code, stdout, stderr := e.goVerb(t, goHead, "upgrade", "2")
 	if code != 0 {
 		t.Fatalf("dho upgrade of a fresh database exit %d: %s%s", code, stdout, stderr)
@@ -440,7 +340,7 @@ func runMigrateScenarios(t *testing.T, live bool) *migrateEnv {
 	// ---- status at the head, each database built by the other plane's runner too ----
 	for _, args := range [][]string{{"--check"}, nil} {
 		name := "status head" + strings.Join(append([]string{""}, args...), " ")
-		py := e.pythonFact(t, name, func() migrateFact { return e.pythonStatus(t, pyHead, args...) })
+		py := e.pythonFact(t, name)
 		goFact, status := e.goStatus(t, goHead, args...)
 		e.requireSameStatus(t, name, goHead, py, goFact, status, py.Exit)
 		if status.State != "at_head" || py.Exit != 0 || py.PendingN != 0 || py.AppliedN != totalVersions {
@@ -448,20 +348,13 @@ func runMigrateScenarios(t *testing.T, live bool) *migrateEnv {
 		}
 	}
 	// Python's own reading of the database dho built: nothing pending.
-	crossPy := e.pythonFact(t, "status python reads the dho-built database", func() migrateFact { return e.pythonStatus(t, goHead, "--check") })
+	crossPy := e.pythonFact(t, "status python reads the dho-built database")
 	if crossPy.Exit != 0 || crossPy.PendingN != 0 {
 		t.Errorf("python reads the dho-built database as %+v: its runner would still apply migrations", crossPy)
 	}
 
 	// ---- upgrade is a no-op on a database the other runner built ----
-	noopGo := e.pythonFact(t, "upgrade python on the dho-built database", func() migrateFact {
-		before := e.schemaDigest(t, goHead)
-		code, _, stderr := e.pythonVerb(t, goHead, "upgrade", "2")
-		if code != 0 {
-			t.Fatalf("python upgrade over the dho-built database exit %d: %s", code, stderr)
-		}
-		return migrateFact{Exit: code, Schema: before + "=" + e.schemaDigest(t, goHead)}
-	})
+	noopGo := e.pythonFact(t, "upgrade python on the dho-built database")
 	if halves := strings.Split(noopGo.Schema, "="); noopGo.Exit != 0 || len(halves) != 2 || halves[0] != halves[1] || halves[0] != up.Schema {
 		t.Errorf("python's upgrade changed the dho-built database or it differs from python's own: %+v (want %s)", noopGo, up.Schema)
 	}
@@ -473,16 +366,12 @@ func runMigrateScenarios(t *testing.T, live bool) *migrateEnv {
 
 	// ---- below the head: one version unrecorded ----
 	dropped := e.baseline.Versions[len(e.baseline.Versions)/2]
-	for _, database := range []string{pyHead, goHead} {
-		if e.live || database == goHead {
-			if err := openDatabase(t, e.instance.URI, database).Exec(ctx, "ALTER TABLE schema_migrations DELETE WHERE version = ? SETTINGS mutations_sync = 2", dropped); err != nil {
-				t.Fatal(err)
-			}
-		}
+	if err := openDatabase(t, e.instance.URI, goHead).Exec(ctx, "ALTER TABLE schema_migrations DELETE WHERE version = ? SETTINGS mutations_sync = 2", dropped); err != nil {
+		t.Fatal(err)
 	}
 	for _, args := range [][]string{{"--check"}, nil} {
 		name := "status below head" + strings.Join(append([]string{""}, args...), " ")
-		py := e.pythonFact(t, name, func() migrateFact { return e.pythonStatus(t, pyHead, args...) })
+		py := e.pythonFact(t, name)
 		goFact, status := e.goStatus(t, goHead, args...)
 		e.requireSameStatus(t, name, goHead, py, goFact, status, py.Exit)
 		if status.State != "below_head" || !reflect.DeepEqual(py.PendingDigests, nameDigests([]string{dropped})) || !reflect.DeepEqual(status.Missing, []string{dropped}) {
@@ -496,13 +385,7 @@ func runMigrateScenarios(t *testing.T, live bool) *migrateEnv {
 	if code != cli.ExitFailure || !strings.Contains(stderr, `"code":"below_head"`) || stdout != "" || e.schemaDigest(t, goHead) != before {
 		t.Errorf("dho upgrade below the head: exit %d, stdout %q, stderr %q, database changed %v: want a below_head refusal that writes nothing", code, stdout, stderr, e.schemaDigest(t, goHead) != before)
 	}
-	pyBelow := e.pythonFact(t, "upgrade python below the head", func() migrateFact {
-		code, _, stderr := e.pythonVerb(t, pyHead, "upgrade", "2")
-		if code != 0 {
-			t.Fatalf("python upgrade below the head exit %d: %s", code, stderr)
-		}
-		return migrateFact{Exit: code, Schema: e.schemaDigest(t, pyHead)}
-	})
+	pyBelow := e.pythonFact(t, "upgrade python below the head")
 	if pyBelow.Exit != 0 || pyBelow.Schema != up.Schema {
 		t.Errorf("python re-applied the missing migration and left %+v, want exit 0 and the head database %s", pyBelow, up.Schema)
 	}
@@ -518,15 +401,11 @@ func runMigrateScenarios(t *testing.T, live bool) *migrateEnv {
 			break
 		}
 	}
-	for _, database := range []string{pyHead, goHead} {
-		if e.live || database == goHead {
-			if err := openDatabase(t, e.instance.URI, database).Exec(ctx, "DROP VIEW "+view.Name); err != nil {
-				t.Fatal(err)
-			}
-		}
+	if err := openDatabase(t, e.instance.URI, goHead).Exec(ctx, "DROP VIEW "+view.Name); err != nil {
+		t.Fatal(err)
 	}
 	name = "status schema mismatch --check"
-	py = e.pythonFact(t, name, func() migrateFact { return e.pythonStatus(t, pyHead, "--check") })
+	py = e.pythonFact(t, name)
 	goFact, status = e.goStatus(t, goHead, "--check")
 	// Named divergence: Python reads only the version rows (exit 0, nothing
 	// pending); dho reads the schema too and exits 1. Once a chain file is
@@ -549,13 +428,7 @@ func runMigrateScenarios(t *testing.T, live bool) *migrateEnv {
 	if code != cli.ExitFailure || !strings.Contains(stderr, `"code":"foreign_database"`) || stdout != "" || e.schemaDigest2(t, foreignGo) != before {
 		t.Errorf("dho upgrade over a foreign database: exit %d, stdout %q, stderr %q: want a foreign_database refusal that writes nothing", code, stdout, stderr)
 	}
-	pyForeign := e.pythonFact(t, "upgrade python over a foreign database", func() migrateFact {
-		code, _, stderr := e.pythonVerb(t, foreignPy, "upgrade", "2")
-		if code != 0 {
-			t.Fatalf("python upgrade over a foreign database exit %d: %s", code, stderr)
-		}
-		return migrateFact{Exit: code, Tables: e.tables(t, foreignPy, "unrelated_sentinel")}
-	})
+	pyForeign := e.pythonFact(t, "upgrade python over a foreign database")
 	if pyForeign.Exit != 0 || !reflect.DeepEqual(pyForeign.Tables, []string{"unrelated_sentinel"}) {
 		t.Errorf("python over a foreign database: %+v, want exit 0 with the unrelated table kept", pyForeign)
 	}
@@ -615,36 +488,11 @@ func (e *migrateEnv) schemaDigest2(t *testing.T, database string) string {
 	return hex.EncodeToString(sum[:])
 }
 
-// TestMigrateClickHouseVenueOracleMatchesThePythonRunner runs the scenarios
-// through the real Python verbs and through dho on a scratch ClickHouse. With
-// DHO_MIGRATE_GOLDEN_UPDATE=1 it rewrites the frozen file.
-func TestMigrateClickHouseVenueOracleMatchesThePythonRunner(t *testing.T) {
-	if os.Getenv("DEV_HEALTH_LIVE_PYTHON_ORACLES") != "1" {
-		t.Skip("the live Python producer runs only with DEV_HEALTH_LIVE_PYTHON_ORACLES=1 and the full project Python environment")
-	}
-	e := runMigrateScenarios(t, true)
-	if os.Getenv("DHO_MIGRATE_GOLDEN_UPDATE") == "1" && !t.Failed() {
-		raw, err := json.MarshalIndent(e.recorded, "", " ")
-		if err != nil {
-			t.Fatal(err)
-		}
-		if err := os.MkdirAll("testdata", 0o755); err != nil {
-			t.Fatal(err)
-		}
-		if err := os.WriteFile(migrateGolden, append(raw, '\n'), 0o644); err != nil {
-			t.Fatal(err)
-		}
-	}
-	if !t.Failed() {
-		venueoracle.WriteProof(t)
-	}
-}
-
 // TestMigrateClickHouseMatchesTheFrozenPythonOutput runs dho through the same
 // scenarios against the facts the real Python verbs produced (frozen; no
 // Python needed).
 func TestMigrateClickHouseMatchesTheFrozenPythonOutput(t *testing.T) {
-	e := runMigrateScenarios(t, false)
+	e := runMigrateScenarios(t)
 	// A comparison against an empty golden passes for any implementation.
 	if len(e.frozen) < 12 {
 		t.Fatalf("the golden holds %d Python facts: it measures nothing", len(e.frozen))

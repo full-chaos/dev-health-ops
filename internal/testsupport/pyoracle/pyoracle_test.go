@@ -199,9 +199,6 @@ func TestClosedEnvInheritsNothingAndCarriesTheExtras(t *testing.T) {
 // ClosedEnv and must not call os.Environ().
 func TestTheClosedEnvironmentRecordersDoNotInheritTheEnvironment(t *testing.T) {
 	for _, file := range []string{
-		"../../chmigrate/migrate_venue_oracle_integration_test.go",
-		"../../chmigrate/repair_integration_test.go",
-		"../../chmigrate/chain_record_integration_test.go",
 		"../../operationalbackfill/backfill_integration_test.go",
 	} {
 		raw, err := os.ReadFile(file)

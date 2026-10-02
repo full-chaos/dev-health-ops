@@ -74,6 +74,8 @@ type Program struct {
 var perRunProgramNames = map[string]string{
 	"ORACLE_DATABASE_URI":      "the address of the run's own database (the scheduler venue oracles)",
 	"ATLASSIAN_ORACLE_GATEWAY": "the address of the Atlassian gateway the test starts (the teams-client oracle)",
+	"ORACLE_SMTP_ADDRESS":      "the address of the SMTP sink the test starts (the mail SMTP oracle)",
+	"RESEND_API_URL":           "the address of the Resend API stand-in the test starts (the mail Resend oracle)",
 }
 
 // perRunNamesKey is the keyed entry that holds the sorted per-run names in a

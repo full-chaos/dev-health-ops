@@ -1,0 +1,257 @@
+package httpapi
+
+import (
+	"context"
+	"net/http"
+	"net/http/httptest"
+	"strings"
+	"testing"
+
+	tracepb "go.opentelemetry.io/proto/otlp/trace/v1"
+)
+
+// CHAOS-7932: a 404 server span carries a CLOSED-enum cause; no other status
+// does; nothing but the enum can reach it.
+
+func causeOf(span *tracepb.Span) (string, bool) { return attrString(span, NotFoundCauseAttribute) }
+
+func routeAnswering(pattern string, status int, record func(r *http.Request)) Route {
+	return Route{Method: http.MethodGet, Pattern: pattern, Handler: http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if record != nil {
+			record(r)
+		}
+		w.WriteHeader(status)
+	})}
+}
+
+func TestA404SpanCarriesTheCauseTheHandlerRecordedAndOnlyFromTheEnum(t *testing.T) {
+	for _, cause := range NotFoundCauseList() {
+		cause := cause
+		t.Run(string(cause), func(t *testing.T) {
+			read := tracedEnv(t, "1")
+			route := routeAnswering("/v1/gone", http.StatusNotFound, func(r *http.Request) { RecordNotFoundCause(r.Context(), cause) })
+			get(spanHandler(t, "public", false, route), "/v1/gone", nil)
+			spans := read()
+			if len(spans) != 1 {
+				t.Fatalf("got %d spans, want 1", len(spans))
+			}
+			if got, ok := causeOf(spans[0]); !ok || got != string(cause) {
+				t.Errorf("%s = %q (present %v), want %q", NotFoundCauseAttribute, got, ok, cause)
+			}
+		})
+	}
+}
+
+func TestAnUnknownOrFreeTextCauseIsRecordedAsOtherNeverVerbatim(t *testing.T) {
+	read := tracedEnv(t, "1")
+	route := routeAnswering("/v1/gone", http.StatusNotFound, func(r *http.Request) {
+		RecordNotFoundCause(r.Context(), NotFoundCause("document query { secret9183 } digest abc123"))
+	})
+	get(spanHandler(t, "public", false, route), "/v1/gone", nil)
+	spans := read()
+	if len(spans) != 1 {
+		t.Fatalf("got %d spans, want 1", len(spans))
+	}
+	if got, _ := causeOf(spans[0]); got != string(NotFoundOther) {
+		t.Errorf("cause = %q, want %q", got, NotFoundOther)
+	}
+	if strings.Contains(spanFieldTextForCause(spans[0]), "secret9183") {
+		t.Errorf("free text reached the span")
+	}
+}
+
+func TestA404WithNoRecordedCauseIsOtherOnAMatchedRouteAndNotFoundWhenNoRouteMatched(t *testing.T) {
+	read := tracedEnv(t, "1")
+	handler := spanHandler(t, "public", false, routeAnswering("/v1/gone", http.StatusNotFound, nil))
+	get(handler, "/v1/gone", nil)
+	get(handler, "/no/such/path", nil)
+	spans := read()
+	if len(spans) != 2 {
+		t.Fatalf("got %d spans, want 2", len(spans))
+	}
+	got := map[string]string{}
+	for _, span := range spans {
+		cause, _ := causeOf(span)
+		got[span.GetName()] = cause
+	}
+	if got["GET /v1/gone"] != string(NotFoundOther) || got["GET "+UnmatchedRoute] != string(NotFoundNoRoute) {
+		t.Errorf("causes by span = %v, want matched=other and unmatched=not_found", got)
+	}
+}
+
+func TestOnlyA404SpanCarriesACause(t *testing.T) {
+	read := tracedEnv(t, "1")
+	record := func(r *http.Request) { RecordNotFoundCause(r.Context(), NotFoundIDEOff) }
+	handler := spanHandler(t, "public", false,
+		routeAnswering("/v1/ok", http.StatusNoContent, record),
+		routeAnswering("/v1/boom", http.StatusInternalServerError, record),
+		routeAnswering("/v1/denied", http.StatusForbidden, record),
+	)
+	for _, path := range []string{"/v1/ok", "/v1/boom", "/v1/denied"} {
+		get(handler, path, nil)
+	}
+	spans := read()
+	if len(spans) != 3 {
+		t.Fatalf("got %d spans, want 3", len(spans))
+	}
+	for _, span := range spans {
+		if cause, ok := causeOf(span); ok {
+			t.Errorf("span %s carries a not-found cause %q although its status is not 404", span.GetName(), cause)
+		}
+	}
+}
+
+func TestTheLastRecordedCauseWins(t *testing.T) {
+	read := tracedEnv(t, "1")
+	route := routeAnswering("/v1/gone", http.StatusNotFound, func(r *http.Request) {
+		RecordNotFoundCause(r.Context(), NotFoundUnregisteredDocument)
+		RecordNotFoundCause(r.Context(), NotFoundIDEOff)
+	})
+	get(spanHandler(t, "public", false, route), "/v1/gone", nil)
+	if got, _ := causeOf(read()[0]); got != string(NotFoundIDEOff) {
+		t.Errorf("cause = %q, want the last recorded (ide_off)", got)
+	}
+}
+
+// RecordNotFoundCause on a context with no observer (a probe path, an untraced
+// listener) is a no-op, never a panic.
+func TestRecordNotFoundCauseWithoutAnObserverIsANoOp(t *testing.T) {
+	RecordNotFoundCause(httptest.NewRequest(http.MethodGet, "/x", nil).Context(), NotFoundIDEOff)
+}
+
+// The TraceHandler listeners (the query-api's) stamp the cause the same way,
+// including NotFoundNoRoute for a path no mux pattern matched.
+func TestTraceHandlerStampsTheCauseToo(t *testing.T) {
+	read := tracedEnv(t, "1")
+	mux := http.NewServeMux()
+	mux.HandleFunc("GET /v1/gone", func(w http.ResponseWriter, r *http.Request) {
+		RecordNotFoundCause(r.Context(), NotFoundUnregisteredDocument)
+		w.WriteHeader(http.StatusNotFound)
+	})
+	handler := TraceHandler(mux, TraceOptions{Listener: "public"})
+	get(handler, "/v1/gone", nil)
+	get(handler, "/nope", nil)
+	spans := read()
+	if len(spans) != 2 {
+		t.Fatalf("got %d spans, want 2", len(spans))
+	}
+	got := map[string]string{}
+	for _, span := range spans {
+		cause, _ := causeOf(span)
+		got[span.GetName()] = cause
+	}
+	if got["GET /v1/gone"] != string(NotFoundUnregisteredDocument) || got["GET "+UnmatchedRoute] != string(NotFoundNoRoute) {
+		t.Errorf("causes by span = %v", got)
+	}
+}
+
+// spanFieldTextForCause: every attribute value + name of the span (no ids).
+func spanFieldTextForCause(span *tracepb.Span) string {
+	parts := []string{span.GetName()}
+	for _, kv := range span.GetAttributes() {
+		parts = append(parts, kv.GetKey(), kv.GetValue().GetStringValue())
+	}
+	return strings.Join(parts, "\n")
+}
+
+// The literal names are the wire contract (a dashboard and a query filter on
+// them): pinned as text, not through the constants (vetter-3 N18, N22).
+func TestNotFoundCauseWireNamesArePinnedAsLiterals(t *testing.T) {
+	if NotFoundCauseAttribute != "dev_health.http.not_found_cause" {
+		t.Errorf("attribute name = %q", NotFoundCauseAttribute)
+	}
+	got := []string{}
+	for _, cause := range NotFoundCauseList() {
+		got = append(got, string(cause))
+	}
+	if strings.Join(got, ",") != "unregistered_document,ide_off,not_found,other" {
+		t.Errorf("enum words = %v", got)
+	}
+	// And on the wire: an unknown cause and a 404 with no record both read "other" on a matched route.
+	read := tracedEnv(t, "1")
+	route := routeAnswering("/v1/gone", http.StatusNotFound, func(r *http.Request) { RecordNotFoundCause(r.Context(), NotFoundCause("whatever")) })
+	get(spanHandler(t, "public", false, route), "/v1/gone", nil)
+	spans := read()
+	if len(spans) != 1 {
+		t.Fatalf("got %d spans, want 1", len(spans))
+	}
+	if v, ok := attrString(spans[0], "dev_health.http.not_found_cause"); !ok || v != "other" {
+		t.Errorf("literal attribute read = %q (present %v), want other", v, ok)
+	}
+}
+
+// r1 P1: the list that decides what a span may carry cannot be extended by a
+// caller: NotFoundCauseList returns a fresh copy, and validation is a switch
+// over the constants, so an appended or overwritten entry changes nothing.
+func TestTheCauseListCannotBeExtendedByACaller(t *testing.T) {
+	evil := NotFoundCause("request-derived text 9183 and more")
+	list := NotFoundCauseList()
+	for i := range list {
+		list[i] = evil // overwrite IN PLACE: shared backing state would show here
+	}
+	fresh := NotFoundCauseList()
+	if len(fresh) != 4 || fresh[0] != NotFoundUnregisteredDocument || fresh[1] != NotFoundIDEOff || fresh[2] != NotFoundNoRoute || fresh[3] != NotFoundOther {
+		t.Fatalf("the list is shared state: %v", fresh)
+	}
+	read := tracedEnv(t, "1")
+	route := routeAnswering("/v1/gone", http.StatusNotFound, func(r *http.Request) { RecordNotFoundCause(r.Context(), evil) })
+	get(spanHandler(t, "public", false, route), "/v1/gone", nil)
+	spans := read()
+	if len(spans) != 1 {
+		t.Fatalf("got %d spans, want 1", len(spans))
+	}
+	if v, _ := causeOf(spans[0]); v != string(NotFoundOther) {
+		t.Errorf("a mutated list let %q through as the cause", v)
+	}
+	if strings.Contains(spanFieldTextForCause(spans[0]), "9183") {
+		t.Errorf("request-derived text reached the span")
+	}
+}
+
+// r1 P1: recording and reading the cause allocate nothing; the only per-request
+// cost of the feature is one context value on the TraceHandler path (the access
+// observer reuses the observedRoute it already stores in the context).
+func TestRecordingACauseAllocatesNothing(t *testing.T) {
+	match := &observedRoute{}
+	ctx := context.WithValue(context.Background(), observedRouteKey{}, match)
+	if allocs := testing.AllocsPerRun(200, func() { RecordNotFoundCause(ctx, NotFoundIDEOff) }); allocs != 0 {
+		t.Errorf("RecordNotFoundCause (access observer sink) allocates %v, want 0", allocs)
+	}
+	recorder := &accessRecorder{}
+	ctx2 := context.WithValue(context.Background(), notFoundCauseKey{}, recorder)
+	if allocs := testing.AllocsPerRun(200, func() { RecordNotFoundCause(ctx2, NotFoundUnregisteredDocument) }); allocs != 0 {
+		t.Errorf("RecordNotFoundCause (TraceHandler sink) allocates %v, want 0", allocs)
+	}
+	if got := notFoundCauseFor(match.notFoundCause.Load(), true); got != NotFoundIDEOff {
+		t.Errorf("access sink stored %q, want ide_off", got)
+	}
+	if got := notFoundCauseFor(recorder.notFoundCause.Load(), true); got != NotFoundUnregisteredDocument {
+		t.Errorf("TraceHandler sink stored %q, want unregistered_document", got)
+	}
+}
+
+// A whole request through each observer: a handler that records a cause costs
+// no more allocations than one that does not.
+func TestARequestThatRecordsACauseAllocatesNoMoreThanOneThatDoesNot(t *testing.T) {
+	_ = tracedEnv(t, "0") // sampled out: the exporter's own allocations are not the subject
+	count := func(handler http.Handler) float64 {
+		return testing.AllocsPerRun(100, func() {
+			handler.ServeHTTP(httptest.NewRecorder(), httptest.NewRequest(http.MethodGet, "/v1/gone", nil))
+		})
+	}
+	plain := routeAnswering("/v1/gone", http.StatusNotFound, nil)
+	recording := routeAnswering("/v1/gone", http.StatusNotFound, func(r *http.Request) { RecordNotFoundCause(r.Context(), NotFoundIDEOff) })
+	withoutAccess := count(spanHandler(t, "public", false, plain))
+	withAccess := count(spanHandler(t, "public", false, recording))
+	if withAccess > withoutAccess {
+		t.Errorf("access observer: recording costs %v allocs vs %v without", withAccess, withoutAccess)
+	}
+	traceOf := func(route Route) http.Handler {
+		mux := http.NewServeMux()
+		mux.Handle("GET /v1/gone", route.Handler)
+		return TraceHandler(mux, TraceOptions{Listener: "public"})
+	}
+	if a, b := count(traceOf(recording)), count(traceOf(plain)); a > b {
+		t.Errorf("TraceHandler: recording costs %v allocs vs %v without", a, b)
+	}
+}

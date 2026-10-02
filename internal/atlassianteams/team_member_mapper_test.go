@@ -58,6 +58,7 @@ func TestTeamMemberRelationForTeamRefusals(t *testing.T) {
 		{"nil row", nil, "ari:cloud:identity::team/t", "node is required"},
 		{"empty requested team", &gen.GraphStoreCypherQueryV2Node{Columns: []gen.GraphStoreCypherQueryV2Column{user}}, "  ", "team id is required"},
 		{"no user", &gen.GraphStoreCypherQueryV2Node{}, "ari:cloud:identity::team/t", "requires a subject user"},
+		{"explicit team node with a blank id", &gen.GraphStoreCypherQueryV2Node{Columns: []gen.GraphStoreCypherQueryV2Column{ariColumn("team", "  ", "TeamV2"), user}}, "ari:cloud:identity::team/t", "team.id is required"},
 		{"empty user id", &gen.GraphStoreCypherQueryV2Node{Columns: []gen.GraphStoreCypherQueryV2Column{ariColumn("user", "  ", "AtlassianAccountUser")}}, "ari:cloud:identity::team/t", "user.id is required"},
 	}
 	for _, c := range cases {

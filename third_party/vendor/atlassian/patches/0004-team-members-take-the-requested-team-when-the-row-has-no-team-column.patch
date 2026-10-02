@@ -1,9 +1,9 @@
 diff --git a/third_party/vendor/atlassian/atlassian/graph/mappers/team_member.go b/third_party/vendor/atlassian/atlassian/graph/mappers/team_member.go
 new file mode 100644
-index 0000000000..0f2f81ccee
+index 0000000000..c9267ef865
 --- /dev/null
 +++ b/third_party/vendor/atlassian/atlassian/graph/mappers/team_member.go
-@@ -0,0 +1,46 @@
+@@ -0,0 +1,50 @@
 +package mappers
 +
 +import (
@@ -44,9 +44,13 @@ index 0000000000..0f2f81ccee
 +		teamNode = selectNode(node.Columns, isTeamNode)
 +	}
 +	if teamNode != nil {
-+		if id := strings.TrimSpace(teamNode.ID); id != "" {
-+			tid = id
++		// A team node the row DOES carry must name its team: an explicit node with a blank id is malformed and is refused (as the
++		// mapper did before CHAOS-7902), not replaced by the requested team.
++		id := strings.TrimSpace(teamNode.ID)
++		if id == "" {
++			return atlassian.TeamworkUserRelation{}, errors.New("team.id is required")
 +		}
++		tid = id
 +	}
 +	return atlassian.TeamworkUserRelation{SubjectUserID: subjectID, RelationType: "TEAM_MEMBER", TeamID: &tid}, nil
 +}

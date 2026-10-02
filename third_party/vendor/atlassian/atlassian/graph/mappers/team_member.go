@@ -38,9 +38,13 @@ func TeamMemberRelationForTeam(node *gen.GraphStoreCypherQueryV2Node, teamID str
 		teamNode = selectNode(node.Columns, isTeamNode)
 	}
 	if teamNode != nil {
-		if id := strings.TrimSpace(teamNode.ID); id != "" {
-			tid = id
+		// A team node the row DOES carry must name its team: an explicit node with a blank id is malformed and is refused (as the
+		// mapper did before CHAOS-7902), not replaced by the requested team.
+		id := strings.TrimSpace(teamNode.ID)
+		if id == "" {
+			return atlassian.TeamworkUserRelation{}, errors.New("team.id is required")
 		}
+		tid = id
 	}
 	return atlassian.TeamworkUserRelation{SubjectUserID: subjectID, RelationType: "TEAM_MEMBER", TeamID: &tid}, nil
 }

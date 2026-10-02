@@ -649,3 +649,24 @@ func TestCollectRefusesAMemberRowWithAnEmptyUserIdLoudly(t *testing.T) {
 		t.Fatalf("err = %v, want the mapper's empty-user-id refusal", err)
 	}
 }
+
+// TestCollectRefusesAMemberRowWhoseExplicitTeamNodeHasABlankId pins (r1 of CHAOS-7902) that a row carrying a team node with a blank id is
+// refused loudly, not written under the requested team: the sync must not report success for a malformed explicit team node.
+func TestCollectRefusesAMemberRowWhoseExplicitTeamNodeHasABlankId(t *testing.T) {
+	g := newGateway(t, func(req request) (int, any) {
+		switch req.Operation {
+		case "TeamSearchV2":
+			return 200, searchPage("", teamNode(teamA, "Platform", "ACTIVE"))
+		case "TeamworkGraphTeamUsers":
+			blank := map[string]any{"node": map[string]any{"columns": []any{
+				map[string]any{"key": "team", "value": ariNode("", "TeamV2", map[string]any{"id": "x"})},
+				map[string]any{"key": "user", "value": ariNode("ari:cloud:identity::user/alice-1", "AtlassianAccountUser", map[string]any{"id": "x"})},
+			}}}
+			return 200, connection("teamworkGraph_teamUsers", "", blank)
+		}
+		return 200, connection("teamworkGraph_teamActiveProjects", "")
+	})
+	if _, err := Collect(context.Background(), g.client(), params(everything)); err == nil || !strings.Contains(err.Error(), "team.id is required") {
+		t.Fatalf("err = %v, want the blank team id refusal", err)
+	}
+}

@@ -1,8 +1,8 @@
 package sync
 
 import (
+	"github.com/full-chaos/dev-health-ops/internal/httpguard"
 	"log/slog"
-	"net/http"
 	"time"
 
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -25,9 +25,7 @@ func NewAPISourceDiscovery(
 		return nil, ErrSourceDiscoveryUnavailable
 	}
 	if client == nil {
-		client = &http.Client{Timeout: 45 * time.Second, CheckRedirect: func(*http.Request, []*http.Request) error {
-			return http.ErrUseLastResponse
-		}}
+		client = httpguard.NewClient(45 * time.Second)
 	}
 	discovery, err := NewNativeSourceDiscoveryService(pool, providerfoundation.CredentialResolver{
 		Repository: providerfoundation.PostgresCredentialRepository{Pool: pool},

@@ -2,7 +2,10 @@
 // *http.Client a caller supplies: it follows no redirect.
 package httpguard
 
-import "net/http"
+import (
+	"net/http"
+	"time"
+)
 
 func refuseRedirects(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }
 
@@ -36,3 +39,9 @@ func NoRedirectsDoer[D interface {
 }
 
 func httpClientOrNil(client *http.Client) *http.Client { return NoRedirects(client) }
+
+// NewClient is the client a production binary builds when it has no client of its own to guard: the given timeout and
+// no redirect followed (a 3xx is returned as the response).
+func NewClient(timeout time.Duration) *http.Client {
+	return &http.Client{Timeout: timeout, CheckRedirect: refuseRedirects}
+}

@@ -3,6 +3,7 @@ package httpguard
 import (
 	"net/http"
 	"testing"
+	"time"
 )
 
 func TestNoRedirectsKeepsTheClientAndRefusesTheRedirect(t *testing.T) {
@@ -33,5 +34,15 @@ func TestNoRedirectsDoerWrapsAClientAndLeavesOtherDoersAlone(t *testing.T) {
 	var other doer = &decorator{}
 	if NoRedirectsDoer(other) != other {
 		t.Fatal("a doer that is not an *http.Client must be returned as it is")
+	}
+}
+
+func TestNewClientRefusesRedirectsAndKeepsTheTimeout(t *testing.T) {
+	client := NewClient(7 * time.Second)
+	if client.Timeout != 7*time.Second {
+		t.Fatalf("timeout %v", client.Timeout)
+	}
+	if client.CheckRedirect == nil || client.CheckRedirect(nil, nil) != http.ErrUseLastResponse {
+		t.Fatal("NewClient follows redirects")
 	}
 }

@@ -480,7 +480,7 @@ func pagerDutyServicesClient(doer providerfoundation.HTTPDoer) providerfoundatio
 	if doer != nil {
 		return doer
 	}
-	return &http.Client{Timeout: 30 * time.Second, CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}
+	return httpguard.NewClient(30 * time.Second)
 }
 
 const (

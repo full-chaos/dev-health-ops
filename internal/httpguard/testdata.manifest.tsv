@@ -1,0 +1,12 @@
+# Every file under internal/httpguard/testdata: sha256, kind, path. Written by `go run ./internal/testsupport/recordedfiles/manifest`; never edit it by hand.
+# python-recorded set: e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855 (0 files)
+# header-before-stamp set: e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855 (0 files)
+04e3d4ccaa41772812ceec863b56e65045a409170726ccafd36a0988134873e2	hand-written	redirectsites/assign/assign.go
+35fd78c2ca309b5488b4df955b1f6883c0e6dcd4b91ed12d61be88db4ed4b1b9	hand-written	redirectsites/calls/calls.go
+797da0afc32c4702f87e5e108d8b042b8e0eb2193c879eb9463714c29e5242c9	hand-written	redirectsites/decl/decl.go
+6031c06eed19f747c1bba986aa0ef4a1dabc93c3ebc6a27da9f54e0152b5a3f9	hand-written	redirectsites/defaultclient/defaultclient.go
+de65677090e9cecc4a1d3874b80410ad9c412c5912b1fb578164481b2aba7678	hand-written	redirectsites/external/external.go
+afe66f4826b57fbd74acd4ec3234ea4d113f7f7f6fbd5fef8ba839c16b7d9739	hand-written	redirectsites/literal/literal.go
+8814b1851162be2ae4262c5e7c116d10152eed7a69366503dcec7c44dd82c3b2	hand-written	redirectsites/negative/negative.go
+277023a55017ce7fe81243c859b3fd936261ab1af452b846ce10df3627aefd4f	hand-written	redirectsites/newclient/newclient.go
+d28b736ed952ed5dc360afafe3be74e0d1ef812b679a20eaa14d627964225e04	hand-written	redirectsites/typedecl/typedecl.go

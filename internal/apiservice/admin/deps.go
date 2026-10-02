@@ -11,8 +11,8 @@
 package admin
 
 import (
+	"github.com/full-chaos/dev-health-ops/internal/httpguard"
 	"log/slog"
-	"net/http"
 	"time"
 
 	"github.com/ClickHouse/clickhouse-go/v2/lib/driver"
@@ -177,7 +177,7 @@ var (
 // token included, to the redirect target). A supplied client is used as given: the revoke call itself (providerfoundation.RevokePagerDutyOAuthToken) follows no redirect.
 func revokeDoer(supplied providerfoundation.HTTPDoer) providerfoundation.HTTPDoer {
 	if supplied == nil {
-		return &http.Client{Timeout: 10 * time.Second, CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}
+		return httpguard.NewClient(10 * time.Second)
 	}
 	return supplied
 }

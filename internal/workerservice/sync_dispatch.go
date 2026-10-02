@@ -3,9 +3,9 @@ package workerservice
 import (
 	"context"
 	"encoding/json"
+	"github.com/full-chaos/dev-health-ops/internal/httpguard"
 	envsecrets "github.com/full-chaos/dev-health-ops/internal/platform/secrets"
 	"log/slog"
-	"net/http"
 	"time"
 
 	"github.com/full-chaos/dev-health-ops/internal/cacheinvalidation"
@@ -622,12 +622,7 @@ func buildSyncCoordinatorWorker(
 				},
 			},
 			Conn: clickhouseConnection,
-			Doer: &http.Client{
-				Timeout: 45 * time.Second,
-				CheckRedirect: func(*http.Request, []*http.Request) error {
-					return http.ErrUseLastResponse
-				},
-			},
+			Doer: httpguard.NewClient(45 * time.Second),
 		},
 	}
 	teamCatalogClients := teamCatalogClientResolver{
@@ -638,12 +633,7 @@ func buildSyncCoordinatorWorker(
 			},
 			Decryptor: catalogDecryptor,
 		},
-		doer: &http.Client{
-			Timeout: 45 * time.Second,
-			CheckRedirect: func(*http.Request, []*http.Request) error {
-				return http.ErrUseLastResponse
-			},
-		},
+		doer:  httpguard.NewClient(45 * time.Second),
 		retry: providerfoundation.DefaultRetryPolicy(),
 	}
 	teamCatalogSelections := teamCatalogSelectionsResolver{pool: postgresDatabase.pools.Domain}

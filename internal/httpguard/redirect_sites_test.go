@@ -473,7 +473,7 @@ func isClient(t types.Type) bool {
 
 // holdsClient: the type is, points to, or has a field (to a few levels) of net/http.Client.
 func holdsClient(t types.Type, depth int, seen map[types.Type]bool) bool {
-	if t == nil || depth > 3 || seen[t] {
+	if t == nil || seen[t] {
 		return false
 	}
 	seen[t] = true
@@ -513,7 +513,7 @@ func holdsClient(t types.Type, depth int, seen map[types.Type]bool) bool {
 // holdsClientByValue: the type is net/http.Client, or an array, slice, map, channel or struct (fields, to a few levels)
 // that holds one BY VALUE (a pointer does not: it is made elsewhere).
 func holdsClientByValue(t types.Type, depth int, seen map[types.Type]bool) bool {
-	if t == nil || depth > 3 || seen[t] {
+	if t == nil || seen[t] {
 		return false
 	}
 	seen[t] = true
@@ -587,7 +587,7 @@ func (w walker) carrierFields(t types.Type) []int {
 // holdsCarrierByValue: the type is a carrier, or an array, slice, map, channel or struct (fields, embedded ones too) that
 // holds one BY VALUE at any depth (a pointer does not: it is made elsewhere).
 func (w walker) holdsCarrierByValue(t types.Type, depth int, seen map[types.Type]bool) bool {
-	if t == nil || depth > 4 || seen[t] {
+	if t == nil || seen[t] {
 		return false
 	}
 	seen[t] = true
@@ -631,20 +631,20 @@ func (w walker) literalLeavesCarrierUnset(t types.Type, lit *ast.CompositeLit) b
 		}
 		return false
 	}
-	structType, ok := types.Unalias(t).(*types.Named)
-	if !ok {
+	if !w.holdsCarrierByValue(t, 0, map[types.Type]bool{}) {
 		return false
 	}
-	body, ok := structType.Underlying().(*types.Struct)
-	if !ok || !w.holdsCarrierByValue(t, 0, map[types.Type]bool{}) {
-		return false
-	}
-	for i := 0; i < body.NumFields(); i++ {
-		if w.holdsCarrierByValue(body.Field(i).Type(), 0, map[types.Type]bool{}) {
-			if _, set := w.literalFieldValue(body, lit, i); !set {
-				return true
+	switch body := t.Underlying().(type) {
+	case *types.Struct: // named or anonymous
+		for i := 0; i < body.NumFields(); i++ {
+			if w.holdsCarrierByValue(body.Field(i).Type(), 0, map[types.Type]bool{}) {
+				if _, set := w.literalFieldValue(body, lit, i); !set {
+					return true
+				}
 			}
 		}
+	case *types.Array: // the elements a literal does not give are zero values
+		return int64(len(lit.Elts)) < body.Len()
 	}
 	return false
 }
@@ -849,7 +849,7 @@ func (w walker) kindsOf(node ast.Node) []string {
 		var kinds []string
 		if instance, ok := w.info.Instances[x]; ok {
 			for i := 0; i < instance.TypeArgs.Len(); i++ {
-				if holdsClientByValue(derefPointer(instance.TypeArgs.At(i)), 0, map[types.Type]bool{}) {
+				if holdsClientByValue(derefPointer(instance.TypeArgs.At(i)), 0, map[types.Type]bool{}) || w.holdsCarrierByValue(derefPointer(instance.TypeArgs.At(i)), 0, map[types.Type]bool{}) {
 					kinds = append(kinds, "client-instantiate")
 					break
 				}
@@ -1012,58 +1012,66 @@ func TestTheSiteWalkerFindsEveryKind(t *testing.T) {
 	}
 	prefix := "internal/httpguard/testdata/redirectsites/"
 	want := map[site]int{
-		{prefix + "literal/literal.go", "Aliased", "client-literal"}:                 1,
-		{prefix + "literal/literal.go", "Dot", "client-literal"}:                     1,
-		{prefix + "literal/literal.go", "Elided", "client-literal"}:                  4,
-		{prefix + "newclient/newclient.go", "Make", "client-new"}:                    1,
-		{prefix + "decl/decl.go", "var Zero", "client-decl"}:                         1,
-		{prefix + "decl/decl.go", "type Holder", "client-decl"}:                      2,
-		{prefix + "decl/decl.go", "Param", "client-decl"}:                            1,
-		{prefix + "decl/decl.go", "Result", "client-literal"}:                        1,
-		{prefix + "typedecl/typedecl.go", "type Alias", "client-type"}:               1,
-		{prefix + "typedecl/typedecl.go", "type Named", "client-type"}:               1,
-		{prefix + "defaultclient/defaultclient.go", "Use", "default-client"}:         1,
-		{prefix + "calls/calls.go", "Call", "http.Get"}:                              2,
-		{prefix + "calls/calls.go", "Call", "http.Post"}:                             1,
-		{prefix + "calls/calls.go", "Call", "http.PostForm"}:                         1,
-		{prefix + "calls/calls.go", "Call", "http.Head"}:                             1,
-		{prefix + "external/external.go", "Make", "external-client-call"}:            1,
-		{prefix + "assign/assign.go", "Direct", "checkredirect-assign"}:              1,
-		{prefix + "assign/assign.go", "Promoted", "checkredirect-assign"}:            1,
-		{prefix + "conversion/conversion.go", "type shaped", "client-type"}:          1,
-		{prefix + "conversion/conversion.go", "ToClient", "client-conversion"}:       1,
-		{prefix + "conversion/conversion.go", "FromClient", "client-conversion"}:     1,
-		{prefix + "instantiate/instantiate.go", "Make", "client-instantiate"}:        1,
-		{prefix + "nilfield/nilfield.go", "Unset", "nil-client-field-literal"}:       1,
-		{prefix + "nilfield/nilfield.go", "New", "nil-client-field-literal"}:         1,
-		{prefix + "nilfield/nilfield.go", "ExplicitNil", "nil-client-field-literal"}: 1,
-		{prefix + "nilfield/nilfield.go", "SubPackage", "nil-client-field-literal"}:  1,
-		{prefix + "nilfield/nilfield.go", "var Zero", "client-carrier-decl"}:         1,
-		{prefix + "nilfield/nilfield.go", "type Wrapper", "client-carrier-decl"}:     1,
-		{prefix + "nilfield/nilfield.go", "type Named", "client-carrier-decl"}:       1,
-		{prefix + "nilfield/nilfield.go", "Embedded", "nil-client-field-literal"}:    1,
-		{prefix + "nilfield/nilfield.go", "NamedField", "nil-client-field-literal"}:  1,
-		{prefix + "nilfield/nilfield.go", "Makes", "nil-client-field-literal"}:       1,
-		{prefix + "nilfield/nilfield.go", "var Array", "client-carrier-decl"}:        1,
-		{prefix + "method/method.go", "Call", "external-client-call"}:                1,
-		{prefix + "method/method.go", "Value", "external-client-call"}:               1,
-		{prefix + "method/method.go", "Variable", "external-client-call"}:            2,
-		{prefix + "tagged/client_arm64.go", "Arm", "client-literal"}:                 1,
-		{prefix + "tagged/client_amd64.go", "Amd", "client-literal"}:                 1,
-		{prefix + "policies/policies.go", "RefuseLiteral", "client-literal"}:         1,
-		{prefix + "policies/policies.go", "RefuseFunction", "client-literal"}:        1,
-		{prefix + "policies/policies.go", "RefuseAssign", "checkredirect-assign"}:    1,
-		{prefix + "policies/policies.go", "Drop", "client-literal"}:                  1,
-		{prefix + "policies/policies.go", "Custom", "client-literal"}:                1,
-		{prefix + "policies/policies.go", "Mixed", "checkredirect-assign"}:           2,
-		{prefix + "policies/policies.go", "Bare", "client-literal"}:                  1,
-		{prefix + "decl/decl.go", "var Arr", "client-decl"}:                          1,
-		{prefix + "decl/decl.go", "var InHolder", "client-decl"}:                     1,
-		{prefix + "decl/decl.go", "var Mp", "client-decl"}:                           1,
-		{prefix + "decl/decl.go", "var Ch", "client-decl"}:                           1,
-		{prefix + "decl/decl.go", "Makes", "client-new"}:                             2,
-		{prefix + "instantiate/instantiate.go", "Array", "client-instantiate"}:       1,
-		{prefix + "instantiate/instantiate.go", "Pointer", "client-instantiate"}:     1,
+		{prefix + "literal/literal.go", "Aliased", "client-literal"}:                  1,
+		{prefix + "literal/literal.go", "Dot", "client-literal"}:                      1,
+		{prefix + "literal/literal.go", "Elided", "client-literal"}:                   4,
+		{prefix + "newclient/newclient.go", "Make", "client-new"}:                     1,
+		{prefix + "decl/decl.go", "var Zero", "client-decl"}:                          1,
+		{prefix + "decl/decl.go", "type Holder", "client-decl"}:                       2,
+		{prefix + "decl/decl.go", "Param", "client-decl"}:                             1,
+		{prefix + "decl/decl.go", "Result", "client-literal"}:                         1,
+		{prefix + "typedecl/typedecl.go", "type Alias", "client-type"}:                1,
+		{prefix + "typedecl/typedecl.go", "type Named", "client-type"}:                1,
+		{prefix + "defaultclient/defaultclient.go", "Use", "default-client"}:          1,
+		{prefix + "calls/calls.go", "Call", "http.Get"}:                               2,
+		{prefix + "calls/calls.go", "Call", "http.Post"}:                              1,
+		{prefix + "calls/calls.go", "Call", "http.PostForm"}:                          1,
+		{prefix + "calls/calls.go", "Call", "http.Head"}:                              1,
+		{prefix + "external/external.go", "Make", "external-client-call"}:             1,
+		{prefix + "assign/assign.go", "Direct", "checkredirect-assign"}:               1,
+		{prefix + "assign/assign.go", "Promoted", "checkredirect-assign"}:             1,
+		{prefix + "conversion/conversion.go", "type shaped", "client-type"}:           1,
+		{prefix + "conversion/conversion.go", "ToClient", "client-conversion"}:        1,
+		{prefix + "conversion/conversion.go", "FromClient", "client-conversion"}:      1,
+		{prefix + "instantiate/instantiate.go", "Make", "client-instantiate"}:         1,
+		{prefix + "nilfield/nilfield.go", "Unset", "nil-client-field-literal"}:        1,
+		{prefix + "nilfield/nilfield.go", "New", "nil-client-field-literal"}:          1,
+		{prefix + "nilfield/nilfield.go", "ExplicitNil", "nil-client-field-literal"}:  1,
+		{prefix + "nilfield/nilfield.go", "SubPackage", "nil-client-field-literal"}:   1,
+		{prefix + "nilfield/nilfield.go", "var Zero", "client-carrier-decl"}:          1,
+		{prefix + "nilfield/nilfield.go", "type Wrapper", "client-carrier-decl"}:      1,
+		{prefix + "nilfield/nilfield.go", "type Named", "client-carrier-decl"}:        1,
+		{prefix + "nilfield/nilfield.go", "Embedded", "nil-client-field-literal"}:     1,
+		{prefix + "nilfield/nilfield.go", "NamedField", "nil-client-field-literal"}:   1,
+		{prefix + "nilfield/nilfield.go", "Makes", "nil-client-field-literal"}:        1,
+		{prefix + "nilfield/nilfield.go", "var Array", "client-carrier-decl"}:         1,
+		{prefix + "method/method.go", "Call", "external-client-call"}:                 1,
+		{prefix + "method/method.go", "Value", "external-client-call"}:                1,
+		{prefix + "method/method.go", "Variable", "external-client-call"}:             2,
+		{prefix + "tagged/client_arm64.go", "Arm", "client-literal"}:                  1,
+		{prefix + "tagged/client_amd64.go", "Amd", "client-literal"}:                  1,
+		{prefix + "decl/decl.go", "var Deep", "client-decl"}:                          1,
+		{prefix + "decl/decl.go", "type Level1", "client-decl"}:                       4,
+		{prefix + "nilfield/nilfield.go", "ArrayLiteral", "nil-client-field-literal"}: 1,
+		{prefix + "nilfield/nilfield.go", "ArrayLiteral", "default-client"}:           1,
+		{prefix + "nilfield/nilfield.go", "Anonymous", "nil-client-field-literal"}:    1,
+		{prefix + "nilfield/nilfield.go", "Anonymous", "client-carrier-decl"}:         1,
+		{prefix + "nilfield/nilfield.go", "Generic", "client-instantiate"}:            1,
+		{prefix + "nilfield/nilfield.go", "var DeepCarrier", "client-carrier-decl"}:   1,
+		{prefix + "policies/policies.go", "RefuseLiteral", "client-literal"}:          1,
+		{prefix + "policies/policies.go", "RefuseFunction", "client-literal"}:         1,
+		{prefix + "policies/policies.go", "RefuseAssign", "checkredirect-assign"}:     1,
+		{prefix + "policies/policies.go", "Drop", "client-literal"}:                   1,
+		{prefix + "policies/policies.go", "Custom", "client-literal"}:                 1,
+		{prefix + "policies/policies.go", "Mixed", "checkredirect-assign"}:            2,
+		{prefix + "policies/policies.go", "Bare", "client-literal"}:                   1,
+		{prefix + "decl/decl.go", "var Arr", "client-decl"}:                           1,
+		{prefix + "decl/decl.go", "var InHolder", "client-decl"}:                      1,
+		{prefix + "decl/decl.go", "var Mp", "client-decl"}:                            1,
+		{prefix + "decl/decl.go", "var Ch", "client-decl"}:                            1,
+		{prefix + "decl/decl.go", "Makes", "client-new"}:                              2,
+		{prefix + "instantiate/instantiate.go", "Array", "client-instantiate"}:        1,
+		{prefix + "instantiate/instantiate.go", "Pointer", "client-instantiate"}:      1,
 	}
 	want[site{prefix + "decl/decl.go", "Result", "client-decl"}] = 0
 	delete(want, site{prefix + "decl/decl.go", "Result", "client-decl"})

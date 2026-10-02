@@ -29,3 +29,11 @@ func Makes() {
 var Mp map[string]nethttp.Client
 
 var Ch chan nethttp.Client
+
+var Deep [1][1][1][1][1]nethttp.Client
+
+type Level1 struct {
+	L2 struct {
+		L3 struct{ L4 struct{ L5 nethttp.Client } }
+	}
+}

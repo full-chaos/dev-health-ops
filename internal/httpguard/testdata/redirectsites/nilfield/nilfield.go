@@ -46,3 +46,13 @@ func Makes() { _ = make([]outside.Config, 2) }
 var Array [1]outside.Config
 
 var PointerOnly *outside.Config
+
+func ArrayLiteral() { _ = [2]outside.Config{{HTTPClient: nethttp.DefaultClient}} }
+
+func Anonymous() { _ = struct{ c outside.Config }{} }
+
+func zeroPtr[T any]() *T { return new(T) }
+
+func Generic() *outside.Config { return zeroPtr[outside.Config]() }
+
+var DeepCarrier [1][1][1][1][1]outside.Config

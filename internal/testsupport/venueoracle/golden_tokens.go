@@ -25,6 +25,10 @@ type tokenShape struct {
 	re   *regexp.Regexp
 	// match, when set, decides instead of re (the JWT shape needs a decode).
 	match func(text string) bool
+	// anyOf, when set, lists literals of which a text must hold at least one to hold the shape: re is not run on a
+	// text that holds none (a regexp that begins with \b or a class cannot use its literal prefix, and the walk
+	// over every golden in the repo spent most of its time there: CHAOS-7955). Every literal is necessary for a match.
+	anyOf []string
 }
 
 // jwtCandidate is the text that may be a JWT or JWE: three to five dotted
@@ -46,12 +50,82 @@ func jwtParts(candidate string) ([]string, bool) {
 
 // hasJWT reports whether text holds a JWT or JWE.
 func hasJWT(text string) bool {
-	for _, candidate := range jwtCandidate.FindAllString(text, -1) {
+	for _, candidate := range jwtCandidates(text) {
 		if _, ok := jwtParts(candidate); ok {
 			return true
 		}
 	}
 	return false
+}
+
+func isBase64URLByte(c byte) bool {
+	return c >= 'a' && c <= 'z' || c >= 'A' && c <= 'Z' || c >= '0' && c <= '9' || c == '_' || c == '-'
+}
+
+// jwtCandidates is jwtCandidate.FindAllString(text, -1) without the regexp: the matches of
+// `[A-Za-z0-9_-]{2,}(?:\.[A-Za-z0-9_-]*){2,4}`, found by one pass over the bytes (the regexp engine made the scan of
+// every golden in the repo cost minutes under -race: CHAOS-7955). A match starts at the first byte of a run of two or
+// more name bytes (a start inside a run has the same end, so it cannot match when the run does not), takes the run
+// whole (a shorter run would be followed by a name byte, never by a dot), then up to four dotted groups (a dot and any
+// number of name bytes, none included), and needs at least two; the search resumes after a match. A differential test
+// holds it equal to the regexp.
+func jwtCandidates(text string) []string {
+	var found []string
+	for i := 0; i < len(text); {
+		if !isBase64URLByte(text[i]) {
+			i++
+			continue
+		}
+		start := i
+		for i < len(text) && isBase64URLByte(text[i]) {
+			i++
+		}
+		if i-start < 2 {
+			continue
+		}
+		end, groups := i, 0
+		for groups < 4 && end < len(text) && text[end] == '.' {
+			end++
+			for end < len(text) && isBase64URLByte(text[end]) {
+				end++
+			}
+			groups++
+		}
+		if groups < 2 {
+			continue // i stays at the end of the run: the next search starts there
+		}
+		found = append(found, text[start:end])
+		i = end
+	}
+	return found
+}
+
+// encodedRuns is encodedRun.FindAllString(text, limit) without the regexp: the matches of
+// `[A-Za-z0-9+/_-]{24,}={0,2}` (the maximal run of base64 bytes of both alphabets when it holds 24 or more, then up to two
+// padding signs). A differential test holds it equal to the regexp.
+func encodedRuns(text string, limit int) []string {
+	var found []string
+	isRun := func(c byte) bool { return isBase64URLByte(c) || c == '+' || c == '/' }
+	for i := 0; i < len(text) && len(found) < limit; {
+		if !isRun(text[i]) {
+			i++
+			continue
+		}
+		start := i
+		for i < len(text) && isRun(text[i]) {
+			i++
+		}
+		if i-start < 24 {
+			continue
+		}
+		end := i
+		for pad := 0; pad < 2 && end < len(text) && text[end] == '='; pad++ {
+			end++
+		}
+		found = append(found, text[start:end])
+		i = end
+	}
+	return found
 }
 
 // undecodableJWT starts the projection of a token whose header or payload is
@@ -69,16 +143,16 @@ var tokenShapes []tokenShape
 func init() {
 	tokenShapes = []tokenShape{
 		{name: "jwt", match: hasJWT},
-		{name: "github-token", re: regexp.MustCompile(`\bgh[pousr]_[A-Za-z0-9]{36,}`)},
+		{name: "github-token", re: regexp.MustCompile(`\bgh[pousr]_[A-Za-z0-9]{36,}`), anyOf: []string{"ghp_", "gho_", "ghu_", "ghs_", "ghr_"}},
 		{name: "github-fine-grained-pat", re: regexp.MustCompile(`github_pat_[A-Za-z0-9_]{22,}`)},
 		{name: "gitlab-pat", re: regexp.MustCompile(`glpat-[A-Za-z0-9_-]{20,}`)},
 		{name: "slack-token", re: regexp.MustCompile(`xox[abprs]-[A-Za-z0-9-]{10,}`)},
-		{name: "stripe-key", re: regexp.MustCompile(`\b[sr]k_(live|test)_[A-Za-z0-9]{16,}`)},
-		{name: "aws-access-key", re: regexp.MustCompile(`\b(AKIA|ASIA)[A-Z0-9]{16}\b`)},
+		{name: "stripe-key", re: regexp.MustCompile(`\b[sr]k_(live|test)_[A-Za-z0-9]{16,}`), anyOf: []string{"k_live_", "k_test_"}},
+		{name: "aws-access-key", re: regexp.MustCompile(`\b(AKIA|ASIA)[A-Z0-9]{16}\b`), anyOf: []string{"AKIA", "ASIA"}},
 		{name: "google-api-key", re: regexp.MustCompile(`AIza[A-Za-z0-9_-]{35}`)},
 		{name: "private-key-block", re: regexp.MustCompile(`-----BEGIN [A-Z ]*PRIVATE KEY-----`)},
 		{name: "anthropic-key", re: regexp.MustCompile(`sk-ant-[A-Za-z0-9_-]{20,}`)},
-		{name: "openai-key", re: regexp.MustCompile(`\bsk-(proj-)?[A-Za-z0-9_-]{32,}`)},
+		{name: "openai-key", re: regexp.MustCompile(`\bsk-(proj-)?[A-Za-z0-9_-]{32,}`), anyOf: []string{"sk-"}},
 		{name: "linear-key", re: regexp.MustCompile(`lin_api_[A-Za-z0-9]{30,}`)},
 		{name: "customer-push-token", re: regexp.MustCompile(`fcpush_[A-Za-z0-9_-]{16,}`)},
 		{name: "authorization-credential", match: hasAuthorizationCredential},
@@ -94,6 +168,9 @@ var authorizationScheme = regexp.MustCompile(`(?i)\b(?:bearer|basic)\s+([A-Za-z0
 // hasAuthorizationCredential reports a Bearer or Basic credential: long, or
 // short with a digit in it. A short word after "Basic" in prose has neither.
 func hasAuthorizationCredential(text string) bool {
+	if lowered := strings.ToLower(text); !strings.Contains(lowered, "bearer") && !strings.Contains(lowered, "basic") {
+		return false // the scheme words are necessary for a match, whatever their case
+	}
 	for _, match := range authorizationScheme.FindAllStringSubmatch(text, -1) {
 		if len(match[1]) >= 20 || strings.ContainsAny(match[1], "0123456789") {
 			return true
@@ -112,7 +189,7 @@ func hasEncodedCredential(text string, depth int) bool {
 	if depth <= 0 {
 		return false
 	}
-	for _, run := range encodedRun.FindAllString(text, 2000) {
+	for _, run := range encodedRuns(text, 2000) {
 		run = strings.TrimRight(run, "=")
 		for _, encoding := range []*base64.Encoding{base64.RawStdEncoding, base64.RawURLEncoding} {
 			raw, err := encoding.DecodeString(run)
@@ -124,7 +201,7 @@ func hasEncodedCredential(text string, depth int) bool {
 				if shape.name == "encoded-credential" {
 					continue
 				}
-				if shape.match != nil && shape.match(decoded) || shape.re != nil && shape.re.MatchString(decoded) {
+				if shape.holds(decoded) {
 					return true
 				}
 			}
@@ -145,11 +222,29 @@ func TokenShapeNames() []string {
 	return names
 }
 
+// holds reports whether text holds the shape: the literal prefilter first (a text without any necessary literal
+// cannot match), then the regexp or the decision function.
+func (shape tokenShape) holds(text string) bool {
+	if len(shape.anyOf) > 0 {
+		present := false
+		for _, literal := range shape.anyOf {
+			if strings.Contains(text, literal) {
+				present = true
+				break
+			}
+		}
+		if !present {
+			return false
+		}
+	}
+	return shape.match != nil && shape.match(text) || shape.re != nil && shape.re.MatchString(text)
+}
+
 // TokenShapesIn is the sorted names of the token shapes text holds.
 func TokenShapesIn(text string) []string {
 	var found []string
 	for _, shape := range tokenShapes {
-		if shape.match != nil && shape.match(text) || shape.re != nil && shape.re.MatchString(text) {
+		if shape.holds(text) {
 			found = append(found, shape.name)
 		}
 	}

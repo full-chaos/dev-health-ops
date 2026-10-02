@@ -47,6 +47,10 @@ def test_resolved_web_service_carries_backend_url_and_auth_url(tmp_path: Path) -
     (tools / "compose.bigboy.billing-edge.yml").write_text(
         (ROUTER.parent / "compose.bigboy.billing-edge.yml").read_text()
     )
+    # CHAOS-7976: the workers overlay moved from the untracked host file compose/compose.bigboy.workers.yml
+    # into the chain through $HERE. It requires BIGBOY_OPERATOR_IMAGE and resets services this stub base does
+    # not define, so the test stages the same empty overlay the stubbed host path used to get.
+    (tools / "compose.bigboy.workers.yml").write_text("services: {}\n")
     users_file = tmp_path / "dho_api_ch.xml"
     users_file.write_text("<clickhouse/>")
     chain = [entry.replace("$HERE", str(tools)) for entry in _chain()]

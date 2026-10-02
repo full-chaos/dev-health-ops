@@ -72,11 +72,56 @@ def unregistered(root: Path, script: str) -> list[str]:
     ]
 
 
+# The live-Python oracle tests CI must register, as a closed list by name (one name per line, so two freeze PRs that remove different
+# names never edit the same line). A freeze PR deletes the names of the oracles it freezes in the same change; a new live oracle
+# adds its name. The test fails BY NAME in both directions, and an empty enumeration fails.
+EXPECTED_LIVE_ORACLES: frozenset[str] = frozenset(
+    {
+        "TestBackfillDiagnosticsVenueOracleMatchesLivePython",
+        "TestBackfillRequestMatchesTheLiveFastAPIRoute",
+        "TestClickHouseStringDecodeGoldenMatchesLivePython",
+        "TestCoverageModelVenueOracleMatchesLivePydantic",
+        "TestCreateValidationVenueOracleMatchesLivePython",
+        "TestCreateWriteEnginesVenueOracleMatchesLivePython",
+        "TestCreateWriteVenueOracleSequenceUnderTheAPIRole",
+        "TestEdgeShapesGoldenMatchesLivePython",
+        "TestFloatTextGoldenMatchesLivePython",
+        "TestFrozenPythonGoldenStillMatchesLivePython",
+        "TestGoMintedEdgeTokenIsJudgedByTheLiveEdgeExactlyLikeAPythonMintedOne",
+        "TestListFieldVenueOracle",
+        "TestManualTriggerVenueOracleFrozen",
+        "TestOperatorControlledDatasetKeysVenueOracleMatchesLivePython",
+        "TestPreflightVenueOracleOverRealAlembicStates",
+        "TestPrincipalMatchesLivePythonAuthService",
+        "TestPythonJSONGoldenMatchesLivePython",
+        "TestPythonJSONInsertionOrderGoldenMatchesLivePython",
+        "TestPythonMetricsTableSweepVenueOracle",
+        "TestReprBandGoldenMatchesLivePython",
+        "TestRunUnitsModelVenueOracleMatchesLivePython",
+        "TestSumGoldenMatchesLivePython",
+        "TestTeamCatalogFingerprintVenueOracleMatchesLivePython",
+        "TestVenueOracleDiscoverGitHubMatchesPython",
+        "TestVenueOracleDiscoverGitLabMatchesPython",
+        "TestVenueOracleDiscoverJiraMatchesPython",
+        "TestVenueOracleDiscoverLinearMatchesPython",
+        "TestVerifierMatchesLivePythonIssuedEnvelope",
+        "TestWebhookHandoffVenueOracleMatchesLivePython",
+        "TestWhitespaceGoldenMatchesLivePython",
+    }
+)
+
+
 def test_every_live_oracle_test_is_run_by_ci() -> None:
     oracles = live_oracle_tests(ROOT)
     # The enumeration itself must not silently go empty (rule: a measurement
     # that did not happen fails).
-    assert len(oracles) >= 40, f"only {len(oracles)} live-oracle tests found"
+    assert oracles, "no live-oracle test found: the enumeration went blind"
+    found = {name for _, name in oracles}
+    assert found == EXPECTED_LIVE_ORACLES, (
+        "the live-Python oracle tests are not the closed list EXPECTED_LIVE_ORACLES "
+        "(edit the list in the same PR as the change): "
+        f"added={sorted(found - EXPECTED_LIVE_ORACLES)} removed={sorted(EXPECTED_LIVE_ORACLES - found)}"
+    )
     entries = entry_selectors(ORACLE_ENTRIES)
     assert entries, (
         f"{ORACLE_ENTRIES} holds no -run selector: the entries moved and this guard went blind"

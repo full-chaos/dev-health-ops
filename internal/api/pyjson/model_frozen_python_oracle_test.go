@@ -1,4 +1,4 @@
-package pyjson
+package pyjson_test
 
 import (
 	"encoding/binary"
@@ -7,14 +7,11 @@ import (
 	"errors"
 	"math"
 	"math/rand"
-	"os"
-	"os/exec"
-	"path/filepath"
-	"runtime"
 	"strings"
 	"testing"
 
-	"github.com/full-chaos/dev-health-ops/internal/testsupport/pyoracle"
+	"github.com/full-chaos/dev-health-ops/internal/api/pyjson"
+	"github.com/full-chaos/dev-health-ops/internal/testsupport/programoracle"
 )
 
 // pythonModelProgram answers, per decoded corpus document: its
@@ -50,17 +47,11 @@ for bits in payload["floats"]:
 print(json.dumps(out))
 `
 
-// TestMarshalModelAndReprMatchLivePydantic pins MarshalModel against
+// TestMarshalModelAndReprMatchFrozenPydantic pins MarshalModel against
 // pydantic-core's dump_json, and Repr/Str/Truthy against Python's
 // repr()/str()/bool(), over the shared corpus and 20,000 random doubles
 // (every exponent band, NaN and the infinities included).
-func TestMarshalModelAndReprMatchLivePydantic(t *testing.T) {
-	if os.Getenv("DEV_HEALTH_LIVE_PYTHON_ORACLES") != "1" {
-		t.Skip("live Python oracles run only through ci/check_go.sh live-python-oracles")
-	}
-	_, file, _, _ := runtime.Caller(0)
-	root := filepath.Clean(filepath.Join(filepath.Dir(file), "..", "..", ".."))
-	python := pyoracle.Resolve(t, root)
+func TestMarshalModelAndReprMatchFrozenPydantic(t *testing.T) {
 
 	random := rand.New(rand.NewSource(7))
 	floats := make([]float64, 0, 20005)
@@ -81,26 +72,20 @@ func TestMarshalModelAndReprMatchLivePydantic(t *testing.T) {
 		`{"a":1e-5,"b":1e-7,"c":[2.5e-08,1e+16,1e22]}`, `""`, `"x"`, `0`, `7`, `0.0`, `-0.5`, `[]`, `[0]`, `{}`,
 		`{"k":null}`, `false`, `null`, `"it's \"q\""`, `["it's \"q\""]`)
 	input, _ := json.Marshal(map[string]any{"docs": docs, "floats": bits})
-	command := exec.Command(python, "-c", pythonModelProgram)
-	command.Stdin = strings.NewReader(string(input))
-	output, err := command.CombinedOutput()
-	if err != nil {
-		t.Fatalf("live pydantic dump_json: %v", pyoracle.RunError(python, err, output))
-	}
+	output := frozenPython(t, "model.golden.json", programoracle.Program{Name: "pydantic dump_json and repr", Text: pythonModelProgram, Stdin: input})[0]
 	var want struct {
 		Docs   [][]any  `json:"docs"`
 		Floats []string `json:"floats"`
 	}
-	lines := strings.Split(strings.TrimSpace(string(output)), "\n")
-	if err := json.Unmarshal([]byte(lines[len(lines)-1]), &want); err != nil {
+	if err := json.Unmarshal([]byte(strings.TrimSpace(output)), &want); err != nil {
 		t.Fatal(err)
 	}
 	checked := 0
 	for index, text := range docs {
-		value, err := DecodeString(text)
+		value, err := pyjson.DecodeString(text)
 		if want.Docs[index] == nil {
-			var syntax *SyntaxError
-			var limit *IntLimitError
+			var syntax *pyjson.SyntaxError
+			var limit *pyjson.IntLimitError
 			if !errors.As(err, &syntax) && !errors.As(err, &limit) {
 				t.Errorf("%s: Go decoded, Python refused", text)
 			}
@@ -111,7 +96,7 @@ func TestMarshalModelAndReprMatchLivePydantic(t *testing.T) {
 			continue
 		}
 		dumped := "error:PydanticSerializationError"
-		if got, err := MarshalModel(value); err == nil {
+		if got, err := pyjson.MarshalModel(value); err == nil {
 			dumped = string(got)
 		}
 		row := want.Docs[index]
@@ -119,22 +104,22 @@ func TestMarshalModelAndReprMatchLivePydantic(t *testing.T) {
 			t.Errorf("%s dump_json:\n Go     %s\n Python %s", text, dumped, row[0])
 		}
 		if row[1] != "error" {
-			if got := Repr(value); got != row[1] {
+			if got := pyjson.Repr(value); got != row[1] {
 				t.Errorf("%s repr:\n Go     %s\n Python %s", text, got, row[1])
 			}
 			// A lone surrogate cannot cross the JSON pipe from Python
 			// intact, so str() of one is compared only through repr().
-			if got := Str(value); !HasSurrogate(got) && got != row[2] {
+			if got := pyjson.Str(value); !pyjson.HasSurrogate(got) && got != row[2] {
 				t.Errorf("%s str:\n Go     %s\n Python %s", text, got, row[2])
 			}
 		}
-		if got := Truthy(value); got != row[3] {
+		if got := pyjson.Truthy(value); got != row[3] {
 			t.Errorf("%s bool: Go %v, Python %v", text, got, row[3])
 		}
 		checked++
 	}
 	for index, value := range floats {
-		got, err := MarshalModel(Float(value))
+		got, err := pyjson.MarshalModel(pyjson.Float(value))
 		if err != nil || string(got) != want.Floats[index] {
 			t.Errorf("float %s (%v): Go %s %v, Python %s", bits[index], value, got, err, want.Floats[index])
 		}
@@ -147,12 +132,5 @@ func TestMarshalModelAndReprMatchLivePydantic(t *testing.T) {
 	}
 	if checked != decodable || decodable < 20 {
 		t.Fatalf("%d of %d decodable documents compared", checked, decodable)
-	}
-	proofDir := os.Getenv("DEV_HEALTH_LIVE_PYTHON_ORACLE_PROOF_DIR")
-	if proofDir == "" {
-		t.Fatal("DEV_HEALTH_LIVE_PYTHON_ORACLE_PROOF_DIR is required")
-	}
-	if err := os.WriteFile(filepath.Join(proofDir, "api-pyjson-model"), []byte("executed"), 0o600); err != nil {
-		t.Fatal(err)
 	}
 }

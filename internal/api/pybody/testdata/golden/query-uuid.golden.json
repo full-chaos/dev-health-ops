@@ -1,0 +1,32 @@
+{
+  "header": {
+    "test": "TestQueryUUIDMatchesFrozenPydantic",
+    "python_build": "a4847c5e93607451a0c987b314d37e02fc43ce85",
+    "producer_digest": "6e1dc97e68624398015f60caee160cceee6ae601bd434d01b8b7d5975267e137",
+    "recipe": "git worktree add --detach $DIR a4847c5e93607451a0c987b314d37e02fc43ce85 (with its .venv: uv sync --frozen --no-install-project); then from the repository root: go run ./internal/testsupport/venueoracle/goldenrecord -pkg ./internal/api/pybody/ -test '^TestQueryUUIDMatchesFrozenPydantic$' -python-root $DIR",
+    "recorded_by": "goldenrecord",
+    "blanked": {}
+  },
+  "requests": [
+    {
+      "name": "producer identity",
+      "method": "PYTHON",
+      "path": "program sha256 266110536ce25f0dd99ff254fe73e4b800f772f070c887e7153e326731c20c32 env sha256 969169a1702b285f3a9e4b602d19052b0d6a3c6b2a44dd7425bef0f696436295",
+      "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "request_headers_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "status": 0,
+      "headers": {},
+      "body": "python 3.14.7\nunicodedata 16.0.0\nemail-validator 2.3.0\nfastapi 0.136.3\npydantic 2.13.5\npydantic_core 2.46.5\nstarlette 1.7.0\n"
+    },
+    {
+      "name": "query-uuid",
+      "method": "PYTHON",
+      "path": "program sha256 0b75786d8054690e6aa600e5fc1839334c7923136e059700085a8e6f57d36e97 env sha256 969169a1702b285f3a9e4b602d19052b0d6a3c6b2a44dd7425bef0f696436295",
+      "body_sha256": "763d8d8db1bafe11ff46c51b4f8148c9d6f400d8ad48b005ebbb57b96f8b78df",
+      "request_headers_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "status": 0,
+      "headers": {},
+      "body": "gzip+base64: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"
+    }
+  ]
+}

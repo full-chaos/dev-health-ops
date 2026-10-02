@@ -2488,8 +2488,11 @@ check_python_free_unit() {
 
 # check_python_free_listed (CHAOS-7853): the listed tests only, so a pull request that freezes a test and keeps its
 # row is red before it merges. Each package's listed tests run by name, once untagged and once with -tags
-# integration (a test sits in either build), both under the tripwire; the hits go to PYTHON_FREE_OUT for
-# `ci/python_free_ratchet.sh compare`, which then holds the hit set to the whole list.
+# integration (a listed test may sit in either build; today all of them are in the integration build, and the untagged
+# run is what catches one that moves to an untagged file), both under the tripwire. PYTHON_FREE_OUT receives each run's
+# `*.hits` file and its `go test -json` stream: `ci/python_free_ratchet.sh compare KNOWN DIR` reads every file of DIR, so
+# the workflow compares only the downloaded hit files; by hand, copy the `*.hits` files to a directory first. A listed test
+# under a build tag other than integration reads as STALE (the run fails closed).
 check_python_free_listed() {
   python_free_enabled || die "python-free-listed needs GO_PYTHON_FREE=1 (it is the go-python-free workflow's pull-request leg)"
   local known="${ROOT}/ci/python_free_known.tsv" package tests index=0 relative

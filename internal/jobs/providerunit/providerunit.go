@@ -6,6 +6,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/binary"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"log/slog"
@@ -911,7 +912,7 @@ func (handler *Handler) Work(
 	// the domain deferral before returning River's attempt-neutral snooze so a
 	// process restart keeps the same not-before fence and operator evidence.
 	if errors.Is(err, providerfoundation.ErrBudgetContended) {
-		delay := providerBudgetContentionDelay(session.Claim.ID)
+		delay := providerBudgetContentionDelay(session.Claim.ID, budgetContentionDeferrals(session.Claim))
 		availableAt := completedAt.Add(delay)
 		deferrals, deferErr := handler.Repository.DeferForBudgetContention(
 			context.WithoutCancel(ctx), session.Claim, availableAt, completedAt,
@@ -1010,10 +1011,58 @@ const (
 	deferralReasonChunkContinuation = "chunk_continuation"
 )
 
-func providerBudgetContentionDelay(unitID string) time.Duration {
+// budgetContentionMaxBackoff caps the contention delay's growth (CHAOS-7434).
+// The first deferral of a unit keeps the original 1-2 s; each further one
+// doubles the base up to this cap, plus the per-unit jitter, so a unit that
+// keeps losing the request reservation (the admission cap normally prevents
+// that; this is the safety net for two dispatchers racing or two hosts under
+// one bucket) stops re-claiming a worker slot every second. The bound is well
+// under DeferForBudgetContention's 5 minute limit.
+const budgetContentionMaxBackoff = 30 * time.Second
+
+// providerBudgetContentionDelay is the not-before delay of the unit's next
+// attempt after a budget-contention denial: min(1 s << prior, 30 s) plus a
+// deterministic per-unit jitter in [0, 1 s). prior is how many contention
+// deferrals the unit already has (0 for its first).
+func providerBudgetContentionDelay(unitID string, prior int) time.Duration {
 	digest := sha256.Sum256([]byte(unitID))
 	jitter := time.Duration(binary.BigEndian.Uint64(digest[:8])%1000) * time.Millisecond
-	return time.Second + jitter
+	if prior < 0 {
+		prior = 0
+	}
+	if prior > 5 {
+		prior = 5
+	}
+	base := time.Second << uint(prior)
+	if base > budgetContentionMaxBackoff {
+		base = budgetContentionMaxBackoff
+	}
+	return base + jitter
+}
+
+// budgetContentionDeferrals reads how many budget-contention deferrals the
+// claimed unit already carries (result.provider_budget_contention_deferrals,
+// written by DeferForBudgetContention). A missing or malformed value is 0.
+func budgetContentionDeferrals(claim providersync.Claim) int {
+	switch value := claim.Result["provider_budget_contention_deferrals"].(type) {
+	case float64:
+		if value >= 0 && value < 1e9 {
+			return int(value)
+		}
+	case int:
+		if value >= 0 {
+			return value
+		}
+	case int64:
+		if value >= 0 && value < 1e9 {
+			return int(value)
+		}
+	case json.Number:
+		if parsed, err := value.Int64(); err == nil && parsed >= 0 && parsed < 1e9 {
+			return int(parsed)
+		}
+	}
+	return 0
 }
 
 func cloneResult(input map[string]any) map[string]any {

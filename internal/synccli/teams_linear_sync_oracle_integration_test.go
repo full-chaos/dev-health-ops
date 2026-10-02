@@ -9,7 +9,6 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
-	"os"
 	"sort"
 	"strconv"
 	"strings"
@@ -215,14 +214,11 @@ func (o *teamsOracle) runLinear(fake *fakeLinear, orgID, token string, sc *linea
 	argv := []string{"--org", orgID, "sync", "teams", "--provider", "linear"}
 	pythonEnv := map[string]string{"CLICKHOUSE_URI": o.pythonHTTPDSN, "LINEAR_API_KEY": token}
 	argv = append(argv, extra...)
-	answer := o.ask(map[string]any{"argv": argv, "env": pythonEnv, "linear_base": fake.base()})
-	value := func(key string) string {
-		if item, ok := answer[key].(map[string]any); ok {
-			return fmt.Sprint(item["v"])
-		}
-		return ""
+	o.python(sc.name, map[string]any{"argv": argv, "env": pythonEnv, "linear_base": fake.base()})
+	run := linearRun{pythonStage: o.cur.Stage, pythonCode: o.cur.Code}
+	if o.recording {
+		return run // the recording asks Python only: the Go plane runs in the comparison
 	}
-	run := linearRun{pythonStage: value("stage"), pythonCode: value("code")}
 	run.goCode, run.goStdout, run.goStderr = o.runGoLinear(fake, orgID, token, viaEnv, extra...)
 	return run
 }
@@ -233,7 +229,7 @@ func (o *teamsOracle) runGoLinear(fake *fakeLinear, orgID, token string, viaEnv 
 	args := []string{"--provider", "linear", "--org", orgID}
 	if viaEnv {
 		env["LINEAR_API_KEY"] = token
-	} else {
+	} else if token != "" { // a scenario with no token sends no --auth
 		args = append(args, "--auth", token)
 	}
 	lookup := func(key string) (string, bool) { v, ok := env[key]; return v, ok }
@@ -268,7 +264,10 @@ type linearScenario struct {
 	goDiffers bool
 	goExit    int
 	goRows    int
-	after     func(t *testing.T, o *teamsOracle, sc *linearScenario, run linearRun, python, goRows []map[string]string)
+	// wantGoCode, when set, is the error code the Go verb must print on stderr: the CLI's own refusal, told from a
+	// later failure that also ends in exit 1 and no rows.
+	wantGoCode string
+	after      func(t *testing.T, o *teamsOracle, sc *linearScenario, run linearRun, python, goRows []map[string]string)
 }
 
 // wantToken is the token the fake actually requires: serverToken when the
@@ -388,9 +387,8 @@ func linearTeamsRules() map[string]linearTeamsRule {
 		}, why: "legacy: email-or-name identities; catalog: provider-scoped identity facets (email-or-id, lower-cased)"},
 		"team_uuid": {check: func(sc *linearScenario, team fakeLinearTeam, py, gr map[string]string) string {
 			wantGo := uuid.NewSHA1(uuid.NameSpaceURL, []byte("team:"+team.Key)).String()
-			parsed, err := uuid.Parse(py["team_uuid"])
-			if err != nil || parsed.Version() != 4 {
-				return fmt.Sprintf("team_uuid: python's is a random uuid4, got %q", py["team_uuid"])
+			if py["team_uuid"] != "<uuid4>" { // the golden stores python's random uuid4 as its kind
+				return fmt.Sprintf("team_uuid: python's is a random uuid4 (stored as <uuid4>), got %q", py["team_uuid"])
 			}
 			if gr["team_uuid"] != wantGo {
 				return fmt.Sprintf("team_uuid: go's is uuid5(URL, \"team:<key>\") = %s, got %s", wantGo, gr["team_uuid"])
@@ -410,13 +408,13 @@ func linearTeamsRules() map[string]linearTeamsRule {
 			return ""
 		}, why: "legacy rows carry no native key; the catalog keys the team by its key"},
 		"updated_at": {check: func(sc *linearScenario, team fakeLinearTeam, py, gr map[string]string) string {
-			if py["updated_at"] == "" || gr["updated_at"] != "2026-09-26 12:00:00.000000" {
+			if py["updated_at"] != "<time>" || gr["updated_at"] != "2026-09-26 12:00:00.000000" {
 				return fmt.Sprintf("updated_at: python %q, go %q (want the run's clock)", py["updated_at"], gr["updated_at"])
 			}
 			return ""
 		}, why: "time of the run (python: its own clock)"},
 		"last_synced": {check: func(sc *linearScenario, team fakeLinearTeam, py, gr map[string]string) string {
-			if py["last_synced"] == "" || gr["last_synced"] == "" {
+			if py["last_synced"] != "<time>" || gr["last_synced"] == "" {
 				return "last_synced is empty"
 			}
 			return ""
@@ -424,11 +422,18 @@ func linearTeamsRules() map[string]linearTeamsRule {
 	}
 }
 
+// arrangeAndRunLinear sets the fake and runs the scenario: both planes when comparing, the legacy verb alone when
+// recording.
+func (o *teamsOracle) arrangeAndRunLinear(sc *linearScenario, fake *fakeLinear) linearRun {
+	o.t.Helper()
+	fake.set(sc.wantToken(), sc.teams)
+	return o.runLinear(fake, "org-1", sc.token, sc, sc.extra...)
+}
+
 func (o *teamsOracle) compareLinear(sc *linearScenario, fake *fakeLinear) {
 	t := o.t
 	t.Helper()
-	fake.set(sc.wantToken(), sc.teams)
-	run := o.runLinear(fake, "org-1", sc.token, sc, sc.extra...)
+	run := o.arrangeAndRunLinear(sc, fake)
 	if run.pythonStage != "ok" && run.pythonStage != "exit" {
 		t.Fatalf("%s: python ended %s (%s)", sc.name, run.pythonStage, run.pythonCode)
 	}
@@ -440,7 +445,10 @@ func (o *teamsOracle) compareLinear(sc *linearScenario, fake *fakeLinear) {
 	if run.pythonCode != wantPython || run.goCode != wantGoExit {
 		t.Fatalf("%s: exit codes: python %s (stage %s, want %d), go %d (want %d)\ngo stderr: %s", sc.name, run.pythonCode, run.pythonStage, sc.wantExit, run.goCode, wantGoExit, run.goStderr)
 	}
-	python := o.rows(o.pythonDatabase, "teams", "org-1")
+	if sc.wantGoCode != "" && !strings.Contains(run.goStderr, `"code":"`+sc.wantGoCode+`"`) {
+		t.Fatalf("%s: go stderr %q does not carry the refusal code %q", sc.name, run.goStderr, sc.wantGoCode)
+	}
+	python := o.pythonRows("teams")
 	goRows := o.rows(o.goDatabase, "teams", "org-1")
 	if len(python) != sc.wantRows || len(goRows) != wantGoRows {
 		t.Fatalf("%s: teams written: python %d (want %d), go %d (want %d)", sc.name, len(python), sc.wantRows, len(goRows), wantGoRows)
@@ -493,13 +501,7 @@ func (o *teamsOracle) compareLinear(sc *linearScenario, fake *fakeLinear) {
 	}
 }
 
-func TestSyncTeamsLinearVenueOracleMatchesThePythonProducer(t *testing.T) {
-	if os.Getenv("DEV_HEALTH_LIVE_PYTHON_ORACLES") != "1" {
-		t.Skip("the live Python producer runs only with DEV_HEALTH_LIVE_PYTHON_ORACLES=1 and the full project Python environment")
-	}
-	o := newTeamsOracleFor(t, teamsSyncOracleLinearProgram)
-	fake := newFakeLinear(t)
-
+func linearScenarios() []*linearScenario {
 	two := []fakeLinearTeam{
 		{Key: "ENG", Name: "Engineering", Description: strPtr("The eng team"), Members: []fakeLinearMember{
 			{ID: "u1", Name: "Alice", Email: "alice@example.com", Active: true},
@@ -511,9 +513,34 @@ func TestSyncTeamsLinearVenueOracleMatchesThePythonProducer(t *testing.T) {
 		}},
 	}
 
-	scenarios := []*linearScenario{
+	return []*linearScenario{
 		{name: "two teams, one member without an email", token: "tok", teams: two, wantExit: 0, wantRows: 2},
 		{name: "the token from LINEAR_API_KEY", token: "env:tok", teams: two, wantExit: 0, wantRows: 2},
+		{name: "no token anywhere is refused", token: "", teams: two, wantExit: 1, wantRows: 0, wantGoCode: "token_required"},
+		{name: "a team with no name takes its key", token: "tok", wantExit: 0, wantRows: 1,
+			teams: []fakeLinearTeam{{Key: "ENG", Name: "", Members: []fakeLinearMember{{ID: "u1", Name: "Alice", Email: "alice@example.com", Active: true}}}}},
+		// A named divergence (recorded, not argued): Python skips a team that has no key (providers/teams.py:677-679)
+		// and writes the others, exit 0; the catalog refuses the whole run (linear_reference_catalog.go:303-305,
+		// ErrInvalidConfiguration -> sync_failed, exit 1) and writes nothing. Linear gives every team a key, so the
+		// case does not occur on real data; it is pinned so a change on either side is seen.
+		{name: "a team with no key: python skips it, the catalog refuses the run", token: "tok", wantExit: 0, wantRows: 1, goDiffers: true, goExit: 1, goRows: 0,
+			after: func(t *testing.T, o *teamsOracle, sc *linearScenario, run linearRun, python, goRows []map[string]string) {
+				if len(python) != 1 || python[0]["id"] != "linear:ENG" {
+					t.Errorf("python wrote %v, want only the team that has a key (linear:ENG)", python)
+				}
+				// Both planes are pinned: python's answer above (the recorded exit 0 and the one row), go's here: the
+				// exact refusal text today, which names no cause (a known gap, ticketed): a change on either side fails.
+				if len(goRows) != 0 || !strings.Contains(run.goStderr, `"code":"sync_failed"`) || !strings.Contains(run.goStderr, "provider sync configuration is invalid") {
+					t.Errorf("go wrote %d rows, stderr %q: want a refused run (sync_failed, provider sync configuration is invalid) and no row", len(goRows), run.goStderr)
+				}
+				if run.pythonCode != "0" {
+					t.Errorf("python exit %s: the recorded answer is exit 0 with the keyless team skipped", run.pythonCode)
+				}
+			},
+			teams: []fakeLinearTeam{
+				{Key: "", Name: "Keyless", Members: []fakeLinearMember{{ID: "u9", Name: "Zed", Email: "zed@example.com", Active: true}}},
+				{Key: "ENG", Name: "Engineering", Members: []fakeLinearMember{{ID: "u1", Name: "Alice", Email: "alice@example.com", Active: true}}},
+			}},
 		{name: "a rejected token", token: "wrong", serverToken: "tok", teams: two, wantExit: 1, wantRows: 0},
 		{name: "an empty workspace is an error", token: "tok", teams: nil, wantExit: 1, wantRows: 0},
 		{name: "an empty workspace with --allow-empty", token: "tok", teams: nil, extra: []string{"--allow-empty"}, wantExit: 0, wantRows: 0},
@@ -549,6 +576,15 @@ func TestSyncTeamsLinearVenueOracleMatchesThePythonProducer(t *testing.T) {
 				if strings.Join(goLogins, ",") != "alice@example.com" {
 					t.Errorf("go members = %v, want only alice (the catalog always excludes inactive members)", goLogins)
 				}
+				// The membership rows are the other place an inactive member could land: only alice has one.
+				var membershipUsers []string
+				for _, row := range o.rows(o.goDatabase, "team_memberships", "org-1") {
+					membershipUsers = append(membershipUsers, row["member_id"])
+				}
+				sort.Strings(membershipUsers)
+				if strings.Join(membershipUsers, ",") != "linear:alice@example.com" {
+					t.Errorf("go wrote team_memberships for %v, want only linear:alice@example.com (an inactive member has no membership)", membershipUsers)
+				}
 			}},
 		// codex r1 relaunch, CHAOS-6908 (P2): NOT a divergence, corrected from
 		// an earlier draft that claimed one. providers/teams.py's `archivedAt`
@@ -571,13 +607,49 @@ func TestSyncTeamsLinearVenueOracleMatchesThePythonProducer(t *testing.T) {
 				{Key: "OLD", Name: "Retired", Members: []fakeLinearMember{{ID: "u5", Name: "Eve", Email: "eve@example.com", Active: true}}},
 			}},
 	}
-	for _, sc := range scenarios {
+}
+
+// linearCorpusKey is the golden's request key: every scenario's inputs.
+func linearCorpusKey() []byte {
+	type entry struct {
+		Name, Token, ServerToken string
+		Teams                    []fakeLinearTeam
+		Extra                    []string
+	}
+	var entries []entry
+	for _, sc := range linearScenarios() {
+		entries = append(entries, entry{sc.name, sc.token, sc.serverToken, sc.teams, sc.extra})
+	}
+	return teamsCorpusKey("linear", entries)
+}
+
+// TestSyncTeamsLinearMatchesFrozenPython compares `dho sync teams --provider linear` (the Go team catalog) with what
+// the REAL legacy verb (LinearClient pointed at a fake) did over the same fake Linear workspace: how each run ended
+// and, column by column, the `teams` rows it wrote. Executed once on teamsPythonBuild and frozen in
+// testdata/golden/teams_linear.json.
+func TestSyncTeamsLinearMatchesFrozenPython(t *testing.T) {
+	frozen, golden := openTeamsGolden(t, "linear", "TestSyncTeamsLinearMatchesFrozenPython", "748704d189fd6ceb08ba5b0b3ae36d5089d52592b514e3a81f2aad54554895f3", teamsSyncOracleLinearProgram, linearCorpusKey(),
+		func(t *testing.T, producer *venueoracle.Producer) []teamsFrozen {
+			o := newTeamsOracle(t)
+			o.startPython(producer, teamsSyncOracleLinearProgram)
+			fake := newFakeLinear(t)
+			for _, sc := range linearScenarios() {
+				o.arrangeAndRunLinear(sc, fake)
+			}
+			return o.recorded
+		})
+	o := newTeamsOracle(t)
+	o.frozen = frozen
+	fake := newFakeLinear(t)
+	for _, sc := range linearScenarios() {
 		t.Run(sc.name, func(t *testing.T) {
 			o.t = t
 			o.compareLinear(sc, fake)
 		})
 	}
-	if !t.Failed() {
-		venueoracle.WriteProof(t)
+	if o.next != len(frozen) {
+		t.Fatalf("the golden holds %d runs, the corpus runs %d", len(frozen), o.next)
 	}
+	golden.SkipDiff(t)
+	golden.Finish(t)
 }

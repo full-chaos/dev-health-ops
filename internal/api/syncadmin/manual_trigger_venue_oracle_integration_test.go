@@ -343,7 +343,12 @@ func divergingRequests(venue *venueoracle.Venue, v manualIDs) []venueoracle.Requ
 
 var manualUUID = regexp.MustCompile(`[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}`)
 
-// TestManualTriggerVenueOracle sends POST /sync-configs/{id}/trigger and
+// manualGoldenBuild is the last Python-bearing build the frozen answers were
+// executed on: the commit that carried the Python trigger and backfill bodies
+// when CHAOS-6875 recorded them.
+const manualGoldenBuild = "c2b14a3f2ed3d43bef927d88025a9c18eda4ce6e"
+
+// TestManualTriggerVenueOracleFrozen sends POST /sync-configs/{id}/trigger and
 // /backfill to the real Python api and the Go api, each over its own copy of one
 // seeded database and each with the real Go scheduler (the materializer and the
 // occurrence reconciler) running over its copy, on one pinned clock. Python's
@@ -351,17 +356,10 @@ var manualUUID = regexp.MustCompile(`[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f
 // path), so both planes are compared on the same answers and the same
 // scheduled_sync_occurrences, sync_manual_triggers, sync_runs, sync_run_units
 // and backfill_jobs rows.
-func TestManualTriggerVenueOracle(t *testing.T) { runManualTriggerOracle(t, nil) }
-
-// manualGoldenBuild is the last Python-bearing build the frozen answers were
-// executed on: the commit that carried the Python trigger and backfill bodies
-// when CHAOS-6875 recorded them.
-const manualGoldenBuild = "c2b14a3f2ed3d43bef927d88025a9c18eda4ce6e"
-
-// TestManualTriggerVenueOracleFrozen is TestManualTriggerVenueOracle with the
-// Python plane's answers and row snapshots read from a golden executed once on
-// manualGoldenBuild, so the comparison survives the deletion of the Python
-// route bodies (CHAOS-6875). Same seed, same requests, same comparisons.
+//
+// The Python plane's answers and row snapshots are read from a golden executed
+// once on manualGoldenBuild, so the comparison survives the deletion of the
+// Python route bodies (CHAOS-6875).
 func TestManualTriggerVenueOracleFrozen(t *testing.T) {
 	golden := venueoracle.OpenGolden(t, venueoracle.GoldenSpec{
 		Path:        "testdata/manual_trigger_oracle.golden.json",

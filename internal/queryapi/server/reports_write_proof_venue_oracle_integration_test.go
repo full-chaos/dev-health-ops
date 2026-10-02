@@ -5,6 +5,7 @@ package server
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"fmt"
 	"io"
 	"net/http"
@@ -36,15 +37,20 @@ import (
 // plane, and the committed digest is what a real run produces, not what was
 // written down.
 //
+// The golden holds, per case, the digest the Python plane's write persisted ("write proof <case>"), and one
+// warm-up request. The BODY of the recorded Python answer is not in the golden: a red frozen run names the
+// case whose digest differs, and seeing the difference needs a re-record at the pinned build.
+//
 // The two planes use different run tags on purpose: the digest must not depend
 // on the tag (the Normalizer masks it), and equal digests under different tags
 // prove that it does not.
 func TestSavedReportWriteProofBaselinesVenueOracle(t *testing.T) {
 	ctx := context.Background()
 	root := repoRootFromHere(t)
-	user := uuid.New()
+	golden := venueoracle.OpenGolden(t, venueGolden("saved-report-write-proof", t.Name(), "527a21c98dc994c6d1821cc0b50f8bbc358908918651dbe5c725535974e9306d"))
+	user := stableVenueID("saved-report-write-proof/user")
 	venue := venueoracle.Start(t, ctx, venueoracle.Options{
-		Root: root, JWTKey: oracleJWTKey,
+		Golden: golden, Root: golden.PythonRoot(t, root), JWTKey: oracleJWTKey,
 		Seed: func(t *testing.T, ctx context.Context, admin *pgxpool.Pool, _ *venueoracle.Venue) map[string]map[string]any {
 			for _, statement := range []struct {
 				sql  string
@@ -67,23 +73,40 @@ VALUES ($1, $2, $3, 'admin', now(), now(), now())`, []any{uuid.New(), oracleOrgA
 		},
 	})
 
-	pythonDB, err := pgxpool.New(ctx, venue.AdminURI(t, venue.SourceDB))
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(pythonDB.Close)
 	goDB, err := pgxpool.New(ctx, venue.AdminURI(t, venue.GoDB))
 	if err != nil {
 		t.Fatal(err)
 	}
 	t.Cleanup(goDB.Close)
+	// The Python plane exists only while recording: its database, its answers and the effects of
+	// each case are produced then and frozen (the golden's rows hold them per case).
+	var pythonDB *pgxpool.Pool
+	if golden.Recording() {
+		var err error
+		pythonDB, err = pgxpool.New(ctx, venue.AdminURI(t, venue.SourceDB))
+		if err != nil {
+			t.Fatal(err)
+		}
+		t.Cleanup(pythonDB.Close)
+	}
 	goHandler, closeGo := startGoMutationServer(t, ctx, venue)
 	defer closeGo()
+
+	// One real request puts the golden in its Python state: the per-case rows below are compared
+	// after it, and the file's order is OpenGolden, Python, comparisons, Finish.
+	warmUp := golden.Python(t, venue, []venueoracle.Request{{
+		Name: "write proof warm-up", Method: "POST", Path: "/graphql",
+		Headers: map[string]string{"Authorization": "Bearer " + venue.Tokens["a"], "Content-Type": "application/json"},
+		Body:    venueoracle.B64(`{"query": "{ __typename }"}`),
+	}})
+	golden.Consumed(t, warmUp...)
 
 	docs := oracleDocuments()
 	pythonPoster := func(name string) writeproof.Poster {
 		return func(_ context.Context, document, variables string) (writeproof.Response, error) {
 			body := `{"query": ` + jsonString(document) + `, "variables": ` + variables + `}`
+			// While recording only: the case's digest is computed on the Python plane's own answer, as the
+			// plane gave it; the golden freezes the digest (CompareRows below), not the HTTP answer.
 			answer := venue.ServePython(t, []venueoracle.Request{{
 				Name: name, Method: "POST", Path: "/graphql",
 				Headers: map[string]string{"Authorization": "Bearer " + venue.Tokens["a"], "Content-Type": "application/json"},
@@ -117,26 +140,40 @@ VALUES ($1, $2, $3, 'admin', now(), now(), now())`, []any{uuid.New(), oracleOrgA
 	produced := map[string]string{}
 	var receipt strings.Builder
 	for _, c := range writeproofcases.Build(placeholders) {
-		pythonRun := writeproof.RunTag("wporaclepy" + strings.ReplaceAll(c.Name, "saved-report-", ""))
 		goRun := writeproof.RunTag("wporaclego" + strings.ReplaceAll(c.Name, "saved-report-", ""))
-		pythonResult, pythonErr := writeproof.Execute(ctx, pythonDB, oracleOrgA, c, pythonRun, docs[c.Operation], pythonPoster(c.Name))
 		goResult, goErr := writeproof.Execute(ctx, goDB, oracleOrgA, c, goRun, docs[c.Operation], goPoster)
-		if pythonErr != nil || goErr != nil {
-			t.Errorf("%s: execute failed: python=%v go=%v", c.Name, pythonErr, goErr)
+		if goErr != nil {
+			t.Errorf("%s: execute failed on the Go plane: %v", c.Name, goErr)
 			continue
 		}
-		for plane, result := range map[string]writeproof.Result{"python": pythonResult, "go": goResult} {
-			if result.TerminalState == writeproof.StateProofFailed {
-				t.Errorf("%s: the %s plane did not produce a usable observation: %s", c.Name, plane, result.Detail)
-			}
-			if problem := answerProblem(c, result); problem != "" {
-				t.Errorf("%s: the %s plane's answer is not the one the case was written for: %s", c.Name, plane, problem)
-			}
+		if goResult.TerminalState == writeproof.StateProofFailed {
+			t.Errorf("%s: the go plane did not produce a usable observation: %s", c.Name, goResult.Detail)
 		}
-		if pythonResult.Digest != goResult.Digest {
-			pythonEffects, _ := pythonResult.Effects.Canonical()
-			goEffects, _ := goResult.Effects.Canonical()
-			t.Errorf("%s: the planes persisted different effects\n python: %s\n go:     %s", c.Name, pythonEffects, goEffects)
+		if problem := answerProblem(c, goResult); problem != "" {
+			t.Errorf("%s: the go plane's answer is not the one the case was written for: %s", c.Name, problem)
+		}
+		goEffects, _ := goResult.Effects.Canonical()
+		// The Python plane's digest and effects of this case: executed while recording (the same
+		// writeproof.Execute on its own database, under its own run tag, with its checks), frozen after.
+		// The digest is what the case's baseline holds, and what the planes are required to agree on.
+		pythonSummary := golden.CompareRows(t, "write proof "+c.Name, func() string {
+			pythonRun := writeproof.RunTag("wporaclepy" + strings.ReplaceAll(c.Name, "saved-report-", ""))
+			pythonResult, pythonErr := writeproof.Execute(ctx, pythonDB, oracleOrgA, c, pythonRun, docs[c.Operation], pythonPoster(c.Name))
+			if pythonErr != nil {
+				t.Fatalf("%s: execute failed on the Python plane: %v", c.Name, pythonErr)
+			}
+			if pythonResult.TerminalState == writeproof.StateProofFailed {
+				t.Errorf("%s: the python plane did not produce a usable observation: %s", c.Name, pythonResult.Detail)
+			}
+			if problem := answerProblem(c, pythonResult); problem != "" {
+				t.Errorf("%s: the python plane's answer is not the one the case was written for: %s", c.Name, problem)
+			}
+			return pythonResult.Digest
+		}, goResult.Digest)
+		if pythonSummary != goResult.Digest {
+			// The planes persisted different effects; CompareRows has failed the test with both digests.
+			pythonEffects := "(the Python plane's effects are not frozen: only its digest is)"
+			t.Logf("%s: python digest %s, go digest %s, go effects: %s %s", c.Name, pythonSummary, goResult.Digest, goEffects, pythonEffects)
 			continue
 		}
 		produced[c.Name] = goResult.Digest
@@ -150,7 +187,7 @@ VALUES ($1, $2, $3, 'admin', now(), now(), now())`, []any{uuid.New(), oracleOrgA
 			goEffects, _ := goResult.Effects.Canonical()
 			t.Errorf("%s: both planes agree (%s) but not with the committed baseline %s\n effects: %s", c.Name, goResult.Digest, c.BaselineDigest, goEffects)
 		}
-		fmt.Fprintf(&receipt, "%-24s python=%s go=%s %s rows=%d\n", c.Name, pythonResult.Digest[:19], goResult.Digest[:19], state, goResult.Effects.Rows())
+		fmt.Fprintf(&receipt, "%-24s python=%s go=%s %s rows=%d\n", c.Name, pythonSummary[:19], goResult.Digest[:19], state, goResult.Effects.Rows())
 		if goResult.Kept != nil && goResult.TeardownErr != nil {
 			t.Errorf("%s: teardown failed on the Go plane: %v", c.Name, goResult.TeardownErr)
 		}
@@ -172,9 +209,9 @@ VALUES ($1, $2, $3, 'admin', now(), now(), now())`, []any{uuid.New(), oracleOrgA
 		sort.Strings(names)
 		t.Errorf("the committed baselines name %v but %d cases were measured", names, len(produced))
 	}
-	if !t.Failed() {
-		venueoracle.WriteProof(t)
-	}
+	golden.SkipDiff(t)
+	golden.Finish(t)
+	venueoracle.WriteGoOnlyProof(t, "Go's saved-report write effects against the frozen digests of the Python resolvers' writes, and the committed baselines")
 }
 
 // answerProblem is why a plane's response is not the mutation succeeding, or
@@ -197,4 +234,32 @@ func answerProblem(c writeproof.Case, result writeproof.Result) string {
 		return fmt.Sprintf("data.deleteSavedReport is %v, want true", value)
 	}
 	return ""
+}
+
+// TestWriteProofGoldenHoldsOneRequestAndOneDigestPerCase pins the shape of the frozen file: one Python
+// request (the warm-up) and one row comparison per registered case. A frozen run that asked the golden for
+// more or fewer answers than it holds is refused by the harness; this names what the file must hold.
+func TestWriteProofGoldenHoldsOneRequestAndOneDigestPerCase(t *testing.T) {
+	raw, err := os.ReadFile(filepath.Join("testdata", "venue", "saved-report-write-proof.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var file struct {
+		Requests []json.RawMessage          `json:"requests"`
+		Rows     map[string]json.RawMessage `json:"rows"`
+	}
+	if err := json.Unmarshal(raw, &file); err != nil {
+		t.Fatal(err)
+	}
+	if len(file.Requests) != 1 {
+		t.Errorf("the golden holds %d Python requests, want exactly the warm-up", len(file.Requests))
+	}
+	for _, name := range writeproofcases.Names() {
+		if _, ok := file.Rows["write proof "+name]; !ok {
+			t.Errorf("the golden has no recorded digest for case %s", name)
+		}
+	}
+	if len(file.Rows) != len(writeproofcases.Names()) {
+		t.Errorf("the golden holds %d row comparisons for %d cases", len(file.Rows), len(writeproofcases.Names()))
+	}
 }

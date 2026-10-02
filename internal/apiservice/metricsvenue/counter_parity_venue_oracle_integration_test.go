@@ -345,6 +345,11 @@ var expositionSample = regexp.MustCompile(`(?m)^([a-zA-Z_:][a-zA-Z0-9_:]*(?:\{[^
 // The rest of the values (process memory and CPU, start and *_created times, request durations) differ
 // between two runs of the same recording and are not compared. A text that is not an exposition is
 // unchanged. Deterministic and idempotent: the placeholder is not a number.
+//
+// Not pinned at replay: a frozen run reads the already-scrubbed golden, so a Scrub that keeps nothing,
+// or a placeholder of "0", would still replay. What guards the scrub is the record verb's two identical
+// runs and its fresh-process replay, and the replay's own checks of the compared counters (a counter
+// value changed, removed or replaced by the placeholder fails at the counter comparison).
 func scrubExposition(text string) string {
 	if !strings.Contains(text, "# HELP ") {
 		return text

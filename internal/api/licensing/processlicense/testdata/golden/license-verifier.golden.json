@@ -1,0 +1,32 @@
+{
+  "header": {
+    "test": "TestVerifierMatchesFrozenPythonLicenseValidator",
+    "python_build": "a4847c5e93607451a0c987b314d37e02fc43ce85",
+    "producer_digest": "6e1dc97e68624398015f60caee160cceee6ae601bd434d01b8b7d5975267e137",
+    "recipe": "git worktree add --detach $DIR a4847c5e93607451a0c987b314d37e02fc43ce85 (with its .venv: uv sync --frozen --no-install-project); then from the repository root: go run ./internal/testsupport/venueoracle/goldenrecord -pkg ./internal/api/licensing/processlicense/ -test '^TestVerifierMatchesFrozenPythonLicenseValidator$' -python-root $DIR",
+    "recorded_by": "goldenrecord",
+    "blanked": {}
+  },
+  "requests": [
+    {
+      "name": "producer identity",
+      "method": "PYTHON",
+      "path": "program sha256 37c184d40e81e3a4cefdf001bd26e71fc78f3ec4caf9d1b886be8f774b8e7b0e env sha256 969169a1702b285f3a9e4b602d19052b0d6a3c6b2a44dd7425bef0f696436295",
+      "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "request_headers_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "status": 0,
+      "headers": {},
+      "body": "python 3.14.7\nunicodedata 16.0.0\npydantic 2.13.5\npydantic-core 2.46.5\npynacl 1.6.2\n"
+    },
+    {
+      "name": "license verifier",
+      "method": "PYTHON",
+      "path": "program sha256 0c4e97a7986689ab9a9969ca614b4863972a8a48aa68d5b6022f4960d4559be6 env sha256 969169a1702b285f3a9e4b602d19052b0d6a3c6b2a44dd7425bef0f696436295",
+      "body_sha256": "f31f033ce15870b24c16d3c2bd41f9d76838a0fee15091f39286f739a386c5f6",
+      "request_headers_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "status": 0,
+      "headers": {},
+      "body": "gzip+base64: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"
+    }
+  ]
+}

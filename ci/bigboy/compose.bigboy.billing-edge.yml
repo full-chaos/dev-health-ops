@@ -1,0 +1,31 @@
+# CHAOS-7055: bigboy serves the Stripe webhook host from the go-api billing-edge listener (:8010), as prod does
+# (CHAOS-6903, CHAOS-6925), and the Python `billing-edge` service is retired. Applies with the bigboy cut that
+# restarts go-api; never on its own while go-api is in use.
+#   * go-api gains `--api-billing-edge-addr=:8010` (the images overlay's command is just ["api"]; every other
+#     listener setting stays as it is) and a traefik router for the host the Python service answered
+#     (Host(`billing.localhost`), the same rule and entrypoint it carried), now to port 8010.
+#   * the three values the listener needs reach go-api BY NAME from the stack's env file (--env-file ops/.env):
+#     they are never written here. Unset, the listener's /health names the missing one (503), as the Python edge did.
+#   * `billing-edge` is moved to a profile nothing enables, so `up` never starts it and `ps` never lists it;
+#     the existing container is removed BEFORE the cut's `up` (`docker compose ... rm -sf billing-edge`, one approved
+#     line on the lead's GO): until it is gone two containers claim Host(`billing.localhost`). The go-api router is
+#     named `billing-go`, not `billing`, so the old container's router `billing` is never redefined while both exist.
+services:
+  go-api:
+    command: !override
+      - api
+      - --api-billing-edge-addr=:8010
+    environment:
+      STRIPE_SECRET_KEY: ${STRIPE_SECRET_KEY:-}
+      STRIPE_WEBHOOK_SECRET: ${STRIPE_WEBHOOK_SECRET:-}
+      LICENSE_PRIVATE_KEY: ${LICENSE_PRIVATE_KEY:-}
+    labels:
+      traefik.enable: "true"
+      traefik.scope: dev-health
+      traefik.http.routers.billing-go.rule: Host(`billing.localhost`)
+      traefik.http.routers.billing-go.entrypoints: web
+      traefik.http.routers.billing-go.service: billing-go
+      traefik.http.services.billing-go.loadbalancer.server.port: "8010"
+  billing-edge:
+    profiles:
+      - retired-billing-edge

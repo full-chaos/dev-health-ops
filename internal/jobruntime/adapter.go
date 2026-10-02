@@ -709,10 +709,17 @@ func finishJobSpan(span oteltrace.Span, choice decision, err error) {
 		attribute.String("dev_health.job.result", string(choice.result)),
 		attribute.String("dev_health.job.error_category", string(choice.category)),
 	)
-	if err != nil {
+	switch {
+	case err != nil && choice.snooze > 0:
+		// A planned snooze (RetryableAfter / BudgetContention / RateLimited)
+		// is the handler asking River to run it again later; it is not a
+		// failure and consumes no attempt (CHAOS-7685). Leave the status
+		// unset and mark the span so it is still separable from a success.
+		span.SetAttributes(attribute.Bool("dev_health.job.snoozed", true))
+	case err != nil:
 		span.RecordError(err)
 		span.SetStatus(codes.Error, err.Error())
-	} else {
+	default:
 		span.SetStatus(codes.Ok, "")
 	}
 	span.End()

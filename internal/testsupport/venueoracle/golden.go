@@ -259,6 +259,11 @@ func (g *Golden) bindPythonEnv(options Options) error {
 	}
 	var key string
 	var err error
+	if g.recording {
+		if err := keyedCheckoutPathErr(append(fromTest(testSet...), planeEntries(options, nil)...), checkoutRoots(options)); err != nil {
+			return fmt.Errorf("golden %s: %w", g.spec.Path, err)
+		}
+	}
 	switch version {
 	case pythonEnvKeyVersion:
 		key, err = venuePythonEnvKey(testSet, options)
@@ -318,6 +323,11 @@ func (g *Golden) callEnvKey(extra []string) (string, error) {
 	}
 	if extra == nil && len(changed) == 0 {
 		return "", nil
+	}
+	if g.recording {
+		if err := keyedCheckoutPathErr(append(fromTest(changed...), fromTest(extra...)...), checkoutRoots(Options{Root: g.verifiedRoot})); err != nil {
+			return "", fmt.Errorf("golden %s: %w", g.spec.Path, err)
+		}
 	}
 	return pythonEnvKey(append(fromTest(changed...), fromTest(extra...)...))
 }

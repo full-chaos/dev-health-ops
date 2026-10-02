@@ -1,0 +1,4 @@
+label=internal/syncdispatchruntime (CHAOS-4175 native finalize_sync_run zero-unit classification vs live Python)
+package=./internal/syncdispatchruntime/...
+proof=sync-dispatch-finalize|native finalize_sync_run live Python oracle measurement did not occur
+proof=sync-dispatch-admission|native dispatch_sync_run budget-admission live Python oracle measurement did not occur

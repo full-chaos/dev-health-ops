@@ -766,10 +766,7 @@ internal/queryapi/investmentflow/testdata/team_category_subcategory_repo.json
 internal/queryapi/investmentflow/testdata/team_subcategory_repo.json
 internal/queryapi/meta/testdata/meta.json
 internal/queryapi/opportunities/testdata/no_cards_fallback.json
-internal/queryapi/opportunities/testdata/org_default.json
 internal/queryapi/opportunities/testdata/pr_rework_ratio_default_experiments.json
-internal/queryapi/opportunities/testdata/repo_scoped.json
-internal/queryapi/opportunities/testdata/team_scoped.json
 internal/queryapi/people/summaryvenue/testdata/summary_producer.py
 internal/queryapi/people/testdata/alias_mapping.json
 internal/queryapi/people/testdata/no_alias_mapping.json

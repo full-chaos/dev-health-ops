@@ -221,8 +221,9 @@ func TestSpanFieldTextSeesEveryRequestCarryingFieldAndNoIDOrTime(t *testing.T) {
 		"link attribute": func(sp *tracepb.Span) {
 			sp.Links = []*tracepb.Span_Link{{Attributes: []*commonpb.KeyValue{{Key: "k", Value: str("9183")}}}}
 		},
-		"trace state":    func(sp *tracepb.Span) { sp.TraceState = "vendor=9183" },
-		"status message": func(sp *tracepb.Span) { sp.Status = &tracepb.Status{Message: "failed for 9183"} },
+		"link trace state": func(sp *tracepb.Span) { sp.Links = []*tracepb.Span_Link{{TraceState: "vendor=9183"}} },
+		"trace state":      func(sp *tracepb.Span) { sp.TraceState = "vendor=9183" },
+		"status message":   func(sp *tracepb.Span) { sp.Status = &tracepb.Status{Message: "failed for 9183"} },
 	}
 	for name, set := range carriers {
 		span := benign()

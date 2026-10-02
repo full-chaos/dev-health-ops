@@ -1,12 +1,12 @@
 # Every file under internal/apiservice/testdata: sha256, kind, path. Written by `go run ./internal/testsupport/recordedfiles/manifest`; never edit it by hand.
 # python-recorded set: a407b3c6bb1e8901efbad26c7e14225574ca6cf364b13b0fba0e1dcc681cf791 (1 files)
-# header-before-stamp set: dbd7cec7993f6881c4bf6194d45a44c36ffe45601b27ee779fd17961e7de8a41 (16 files)
+# header-before-stamp set: b5eed2d5ae918c908e77c8a3b70ac7961b9bfc9f720255d63e01cc5ce7ebab9d (14 files)
 9db3578c81c491eed1fedadf7ac090dffaa9d8d79cf59290df18dbc737be0207	header-before-stamp	credentials/admin.json
 5188eed6d4fb649b9b040812f223e7e5414881c8eb3a0e70a87769a7151daf84	header-before-stamp	credentials/connection_test.json
 420eafdfeee9b0ab999529686f13257ea883d7bd94efd72a3fed1ed7b668f147	unclassified	gen_raw_http_golden.py
 47bb17edea43048e76f69586a650ac5de60470f5fd2e9225a2bdacec667b387b	unclassified	gen_transport_golden.py
-1044e4342d107474f8f42de4ee0d8cdd04e9e6da67492eaad3bc9172b393fc7c	header-before-stamp	program/cors-starlette.json
-cdd360911251cf04b25a7adff727ac6a4a09639f64f94470bf16e0d0a7fcdd31	header-before-stamp	program/route-response-models.json
+-	header	program/cors-starlette.json
+-	header	program/route-response-models.json
 e5bbe7da61afaca8ec9fce01700b2a275df0a9eb670a5e6294fb18c19385a022	unclassified	provider_stub/sitecustomize.py
 43c2db2b9ebfe6e926839dd4217ff564f34e9ddd657c4d85b5324cffc1a872cd	unclassified	python_raw_http_golden.json.gz
 d29e38749982e902a70b615ef6e0b46fcd561aca15c0d12d5a399c5a8e7bc412	python-recorded	python_transport_golden.json

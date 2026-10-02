@@ -3,6 +3,7 @@
 package providersync
 
 import (
+	"github.com/full-chaos/dev-health-ops/internal/testsupport/fakehttp"
 	"context"
 	"encoding/json"
 	"testing"
@@ -71,7 +72,7 @@ func TestGitHubProjectsV2PullRequestReachesClickHouseThroughTheEffectPath(t *tes
 	}}
 	fetched, err := (GitHubProjectV2Fetcher{}).Fetch(
 		ctx, claim, providerfoundation.Credential{Provider: "github", ID: claim.CredentialID},
-		githubProjectV2TestClient(t, doer), normalizedAt, nil,
+		githubProjectV2TestClient(t, fakehttp.Client(doer)), normalizedAt, nil,
 	)
 	if err != nil {
 		t.Fatal(err)

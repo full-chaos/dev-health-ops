@@ -3,6 +3,7 @@
 package providersync
 
 import (
+	"github.com/full-chaos/dev-health-ops/internal/testsupport/fakehttp"
 	"context"
 	"encoding/json"
 	"testing"
@@ -357,7 +358,7 @@ func TestGitHubPullRequestCrashWindowRecoversWithoutDuplicateVersion(t *testing.
 	fixtures := defaultGitHubPullRequestFixtures()
 	firstBatch, err := (GitHubPullRequestRouteHandler{}).Collect(
 		ctx, claim, providerfoundation.Credential{},
-		gitHubPullRequestClient(t, &gitHubPullRequestDoer{t: t, bodies: fixtures}, "https://api.github.com"),
+		gitHubPullRequestClient(t, fakehttp.Client(&gitHubPullRequestDoer{t: t, bodies: fixtures}), "https://api.github.com"),
 		collectedAt,
 	)
 	if err != nil {
@@ -407,7 +408,7 @@ func TestGitHubPullRequestCrashWindowRecoversWithoutDuplicateVersion(t *testing.
 	}
 	recoveredBatch, err := (GitHubPullRequestRouteHandler{}).Collect(
 		ctx, recovered, providerfoundation.Credential{},
-		gitHubPullRequestClient(t, &gitHubPullRequestDoer{t: t, bodies: fixtures}, "https://api.github.com"),
+		gitHubPullRequestClient(t, fakehttp.Client(&gitHubPullRequestDoer{t: t, bodies: fixtures}), "https://api.github.com"),
 		persisted.CreatedAt.UTC(),
 	)
 	if err != nil {

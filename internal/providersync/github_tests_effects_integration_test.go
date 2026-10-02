@@ -3,6 +3,7 @@
 package providersync
 
 import (
+	"github.com/full-chaos/dev-health-ops/internal/testsupport/fakehttp"
 	"bytes"
 	"context"
 	"encoding/json"
@@ -34,7 +35,7 @@ func TestGitHubTestsIncompleteBatchCommitsOnceAndRemainsTenantScoped(t *testing.
 		t.Helper()
 		doer := &githubTestsRouteDoer{t: t, archive: archive}
 		batch, err := (GitHubTestsRouteHandler{}).Collect(
-			ctx, claim, providerfoundation.Credential{}, githubTestsClient(t, doer), now,
+			ctx, claim, providerfoundation.Credential{}, githubTestsClient(t, fakehttp.Client(doer)), now,
 		)
 		if err != nil {
 			t.Fatal(err)

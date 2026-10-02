@@ -2,6 +2,7 @@ package providersync
 
 import (
 	"context"
+	"github.com/full-chaos/dev-health-ops/internal/testsupport/fakehttp"
 	"io"
 	"net/http"
 	"strings"
@@ -120,7 +121,7 @@ func collectLateArtifact(
 	t.Helper()
 	err := GitHubTestsRouteHandler{}.CollectChunks(
 		context.Background(), claim, providerfoundation.Credential{},
-		githubTestsClient(t, doer), normalizedAt, "",
+		githubTestsClient(t, fakehttp.Client(doer)), normalizedAt, "",
 		func(emission ChunkRouteEmission) error {
 			for _, effect := range emission.Batch.Effects {
 				switch effect.Destination {

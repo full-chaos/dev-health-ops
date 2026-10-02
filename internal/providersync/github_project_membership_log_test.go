@@ -2,6 +2,7 @@ package providersync
 
 import (
 	"context"
+	"github.com/full-chaos/dev-health-ops/internal/testsupport/fakehttp"
 	"log/slog"
 	"testing"
 	"time"
@@ -54,7 +55,7 @@ func fetchGitHubProjectV2ForLogging(t *testing.T, reply string) GitHubProjectV2F
 	}}
 	credential := providerfoundation.Credential{Provider: "github", ID: claim.CredentialID}
 	result, err := (GitHubProjectV2Fetcher{}).Fetch(
-		context.Background(), claim, credential, githubProjectV2TestClient(t, doer),
+		context.Background(), claim, credential, githubProjectV2TestClient(t, fakehttp.Client(doer)),
 		time.Date(2026, 8, 4, 12, 0, 0, 0, time.UTC), nil,
 	)
 	if err != nil {

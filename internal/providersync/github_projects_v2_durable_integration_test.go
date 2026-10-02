@@ -3,6 +3,7 @@
 package providersync
 
 import (
+	"github.com/full-chaos/dev-health-ops/internal/testsupport/fakehttp"
 	"bytes"
 	"context"
 	"encoding/json"
@@ -174,7 +175,7 @@ VALUES ($1, $3, $2, 'work-items',
 					Repository: projectsV2DurableCredentialRepository{},
 					Decryptor:  projectsV2DurableCredentialDecryptor{},
 				},
-				Doer: projectsV2DurableDoer(t, test.graphqlReply),
+				Doer: fakehttp.Client(projectsV2DurableDoer(t, test.graphqlReply)),
 				Retry: providerfoundation.RetryPolicy{
 					MaxAttempts: 1, InitialWait: time.Nanosecond, MaxWait: time.Nanosecond,
 				},

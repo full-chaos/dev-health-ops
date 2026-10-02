@@ -4,7 +4,6 @@ package httpguard
 
 import (
 	"net/http"
-	"reflect"
 	"time"
 )
 
@@ -67,51 +66,25 @@ func NewClient(timeout time.Duration) *http.Client {
 	return &http.Client{Timeout: timeout, CheckRedirect: refuseRedirects}
 }
 
-// Guardable reports whether the guards can reach the client a doer sends through (CHAOS-7910 A2, fail closed): an *http.Client is
-// copied with its policy replaced; a Wrapper is guardable when the doer it wraps is; a struct (or pointer to a struct) that
-// holds another doer or an http.Client in a field is a decorator the guard cannot see inside, so it is NOT guardable unless it
-// is a Wrapper; a leaf (a function type, a struct with no inner doer) has nothing to hide. The provider constructors refuse a
-// doer that is not guardable, with an error and a fixed log line, and never send a request through it.
+// Guardable is the ALLOW-LIST BY REACHABILITY (CHAOS-7910): a provider client constructor accepts a doer only if the guard can be
+// installed on the client it ends at: an *http.Client, or a Wrapper whose unwrap chain ends at an *http.Client. Every other
+// dynamic type (a function type, a struct, a slice, a test fake) is refused: there is no deny-list and no inspection of its
+// fields. A test fake goes through http.Client{Transport: fake}.
 func Guardable(doer interface {
 	Do(*http.Request) (*http.Response, error)
 }) bool {
-	if doer == nil {
-		return false
-	}
-	if _, ok := doer.(*http.Client); ok {
-		return true
-	}
-	if wrapper, ok := doer.(Wrapper); ok {
-		return Guardable(wrapper.Unwrap())
-	}
-	t := reflect.TypeOf(doer)
-	if t.Kind() == reflect.Pointer {
-		t = t.Elem()
-	}
-	if t.Kind() != reflect.Struct {
-		return true
-	}
-	doerType := reflect.TypeOf((*interface {
-		Do(*http.Request) (*http.Response, error)
-	})(nil)).Elem()
-	clientType := reflect.TypeOf(http.Client{})
-	for i := 0; i < t.NumField(); i++ {
-		field := t.Field(i).Type
-		if field.Kind() == reflect.Pointer {
-			field = field.Elem()
-		}
-		if field == clientType || (t.Field(i).Type.Kind() == reflect.Interface && t.Field(i).Type.Implements(doerType)) {
+	for depth := 0; depth < 32; depth++ {
+		switch d := doer.(type) {
+		case *http.Client:
+			return d != nil
+		case Wrapper:
+			doer = d.Unwrap()
+			if doer == nil {
+				return false
+			}
+		default:
 			return false
 		}
-		if field.Kind() == reflect.Struct && field.Name() != "" && field != clientType {
-			// a nested struct that itself holds a doer (an observer holding the delegate)
-			for j := 0; j < field.NumField(); j++ {
-				inner := field.Field(j).Type
-				if inner.Kind() == reflect.Interface && inner.Implements(doerType) {
-					return false
-				}
-			}
-		}
 	}
-	return true
+	return false
 }

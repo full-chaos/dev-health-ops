@@ -3,6 +3,7 @@
 package providersync
 
 import (
+	"github.com/full-chaos/dev-health-ops/internal/testsupport/fakehttp"
 	"context"
 	"errors"
 	"net/http"
@@ -26,7 +27,7 @@ func githubTeamCatalogAdapterDoer(t *testing.T) *githubTeamCatalogFixtureDoer {
 func githubTeamCatalogAdapterClient(t *testing.T, doer providerfoundation.HTTPDoer) *providerfoundation.HTTPClient {
 	t.Helper()
 	client, err := providerfoundation.NewHTTPClient(
-		"github", "https://api.github.com", doer,
+		"github", "https://api.github.com", fakehttp.Client(doer),
 		func(*http.Request) error { return nil },
 		providerfoundation.RetryPolicy{MaxAttempts: 1, InitialWait: time.Nanosecond, MaxWait: time.Nanosecond},
 		providerfoundation.LeaseGuardFunc(func(context.Context) error { return nil }),
@@ -45,7 +46,7 @@ func TestGitHubTeamCatalogCollectorWritesTeamsAndMemberships(t *testing.T) {
 		Sink: GitHubTeamCatalogClickHouseEffects{Conn: conn},
 	}
 	credential := providerfoundation.Credential{Provider: "github", Config: map[string]string{"org": "acme"}}
-	client := githubTeamCatalogAdapterClient(t, doer)
+	client := githubTeamCatalogAdapterClient(t, fakehttp.Client(doer))
 	now := time.Date(2026, 8, 10, 12, 0, 0, 0, time.UTC)
 
 	result, err := adapter.CollectTeamCatalog(
@@ -123,7 +124,7 @@ func TestGitHubTeamCatalogCollectorPreservesRosterOnMembersOffRun(t *testing.T) 
 	}}
 	adapter := GitHubTeamCatalogCollector{Sink: sink}
 	credential := providerfoundation.Credential{Provider: "github", Config: map[string]string{"org": "acme"}}
-	client := githubTeamCatalogAdapterClient(t, doer)
+	client := githubTeamCatalogAdapterClient(t, fakehttp.Client(doer))
 
 	result, err := adapter.CollectTeamCatalog(
 		ctx, TeamCatalogReference{OrgID: orgID, SyncRunID: "run-1"},
@@ -163,7 +164,7 @@ func TestGitHubTeamCatalogCollectorSkipsWhenOrgNameMissing(t *testing.T) {
 	doer := &githubTeamCatalogFixtureDoer{t: t, byPath: map[string]string{}}
 	adapter := GitHubTeamCatalogCollector{Sink: GitHubTeamCatalogClickHouseEffects{Conn: conn}}
 	credential := providerfoundation.Credential{Provider: "github"}
-	client := githubTeamCatalogAdapterClient(t, doer)
+	client := githubTeamCatalogAdapterClient(t, fakehttp.Client(doer))
 	now := time.Date(2026, 8, 10, 12, 0, 0, 0, time.UTC)
 
 	result, err := adapter.CollectTeamCatalog(
@@ -191,7 +192,7 @@ func TestGitHubTeamCatalogCollectorFailsClosedOnMissingOrgUnderStrict(t *testing
 	doer := &githubTeamCatalogFixtureDoer{t: t, byPath: map[string]string{}}
 	adapter := GitHubTeamCatalogCollector{Sink: GitHubTeamCatalogClickHouseEffects{Conn: conn}}
 	credential := providerfoundation.Credential{Provider: "github"}
-	client := githubTeamCatalogAdapterClient(t, doer)
+	client := githubTeamCatalogAdapterClient(t, fakehttp.Client(doer))
 	now := time.Date(2026, 8, 10, 12, 0, 0, 0, time.UTC)
 
 	if _, err := adapter.CollectTeamCatalog(
@@ -212,7 +213,7 @@ func TestGitHubTeamCatalogCollectorFallsBackToSyncOptionsOrgName(t *testing.T) {
 	doer := githubTeamCatalogAdapterDoer(t)
 	adapter := GitHubTeamCatalogCollector{Sink: GitHubTeamCatalogClickHouseEffects{Conn: conn}}
 	credential := providerfoundation.Credential{Provider: "github"}
-	client := githubTeamCatalogAdapterClient(t, doer)
+	client := githubTeamCatalogAdapterClient(t, fakehttp.Client(doer))
 	now := time.Date(2026, 8, 10, 12, 0, 0, 0, time.UTC)
 
 	result, err := adapter.CollectTeamCatalog(
@@ -259,7 +260,7 @@ func TestGitHubTeamCatalogCollectorPreservesRosterAfterPerTeamFetchFailure(t *te
 	}}
 	adapter := GitHubTeamCatalogCollector{Sink: sink}
 	credential := providerfoundation.Credential{Provider: "github", Config: map[string]string{"org": "acme"}}
-	client := githubTeamCatalogAdapterClient(t, doer)
+	client := githubTeamCatalogAdapterClient(t, fakehttp.Client(doer))
 
 	result, err := adapter.CollectTeamCatalog(
 		ctx, TeamCatalogReference{OrgID: orgID, SyncRunID: "run-1"},
@@ -330,7 +331,7 @@ func TestGitHubTeamCatalogCollectorWritesHealthyTeamsEvenWhenAnotherTeamsRosterC
 	}}
 	adapter := GitHubTeamCatalogCollector{Sink: GitHubTeamCatalogClickHouseEffects{Conn: conn}}
 	credential := providerfoundation.Credential{Provider: "github", Config: map[string]string{"org": "acme"}}
-	client := githubTeamCatalogAdapterClient(t, doer)
+	client := githubTeamCatalogAdapterClient(t, fakehttp.Client(doer))
 
 	result, err := adapter.CollectTeamCatalog(
 		ctx, TeamCatalogReference{OrgID: orgID, SyncRunID: "run-1"},
@@ -383,7 +384,7 @@ func TestGitHubTeamCatalogCollectorSkipsTeamsOnlyWriteEntirelyWhenRosterConfirmR
 	doer := githubTeamCatalogAdapterDoer(t) // team "platform", member "octocat" (never fetched -- Members is off)
 	adapter := GitHubTeamCatalogCollector{Sink: GitHubTeamCatalogClickHouseEffects{Conn: conn}}
 	credential := providerfoundation.Credential{Provider: "github", Config: map[string]string{"org": "acme"}}
-	client := githubTeamCatalogAdapterClient(t, doer)
+	client := githubTeamCatalogAdapterClient(t, fakehttp.Client(doer))
 
 	result, err := adapter.CollectTeamCatalog(
 		ctx, TeamCatalogReference{OrgID: orgID, SyncRunID: "run-1"},
@@ -438,7 +439,7 @@ func TestGitHubTeamCatalogCollectorSkipsNativeMembershipConflictingWithManualPin
 	doer := githubTeamCatalogAdapterDoer(t) // team "platform", member "octocat"
 	adapter := GitHubTeamCatalogCollector{Sink: GitHubTeamCatalogClickHouseEffects{Conn: conn}}
 	credential := providerfoundation.Credential{Provider: "github", Config: map[string]string{"org": "acme"}}
-	client := githubTeamCatalogAdapterClient(t, doer)
+	client := githubTeamCatalogAdapterClient(t, fakehttp.Client(doer))
 	now := time.Date(2026, 8, 10, 12, 0, 0, 0, time.UTC)
 
 	if _, err := adapter.CollectTeamCatalog(
@@ -488,7 +489,7 @@ func TestGitHubTeamCatalogCollectorSkipsWritingATeamFlaggedForManualSyncPolicy(t
 	doer := githubTeamCatalogAdapterDoer(t) // team "platform"
 	adapter := GitHubTeamCatalogCollector{Sink: GitHubTeamCatalogClickHouseEffects{Conn: conn}}
 	credential := providerfoundation.Credential{Provider: "github", Config: map[string]string{"org": "acme"}}
-	client := githubTeamCatalogAdapterClient(t, doer)
+	client := githubTeamCatalogAdapterClient(t, fakehttp.Client(doer))
 	now := time.Date(2026, 8, 10, 12, 0, 0, 0, time.UTC)
 
 	if _, err := adapter.CollectTeamCatalog(

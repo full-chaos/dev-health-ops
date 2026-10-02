@@ -3,6 +3,7 @@ package providersync
 import (
 	"context"
 	"encoding/json"
+	"github.com/full-chaos/dev-health-ops/internal/testsupport/fakehttp"
 	"testing"
 	"time"
 
@@ -32,10 +33,10 @@ func TestGitHubBlamePerFileFailureMatchesFrozenPython(t *testing.T) {
 			for _, path := range stringsFromOracleInput(t, input["failed_paths"]) {
 				failed[path] = true
 			}
-			client := gitHubRepositoryClient(t, gitHubBlameDoer{
+			client := gitHubRepositoryClient(t, fakehttp.Client(gitHubBlameDoer{
 				t: t, fileCount: len(stringsFromOracleInput(t, input["file_paths"])),
 				blamePaths: &attempted, graphQLErrPaths: failed,
-			}, "https://api.github.com")
+			}), "https://api.github.com")
 			batch, err := (GitHubBlameRouteHandler{
 				Coverage: staticGitHubBlameCoverage{}, MaxFiles: gitHubBlameMaxFiles,
 			}).Collect(

@@ -3,6 +3,7 @@
 package syncbudget
 
 import (
+	"github.com/full-chaos/dev-health-ops/internal/testsupport/fakehttp"
 	"context"
 	"errors"
 	"io"
@@ -420,7 +421,7 @@ func TestLoaderHydratesPagerDutyLikeResolveRunAuth(t *testing.T) {
 		doer := &fakeTokenDoer{status: http.StatusOK}
 		loader := func(env map[string]string) Loader {
 			l := f.loader(env)
-			l.PagerDutyOAuth, l.PagerDutyDoer = oauth, doer
+			l.PagerDutyOAuth, l.PagerDutyDoer = oauth, fakehttp.Client(doer)
 			return l
 		}
 
@@ -501,7 +502,7 @@ func TestLoaderRoundTwoParity(t *testing.T) {
 			second := f.unit("pagerduty", "services", nil)
 			doer := &sequenceDoer{statuses: []int{http.StatusTooManyRequests, http.StatusOK}}
 			loader := f.loader(nil)
-			loader.PagerDutyOAuth, loader.PagerDutyDoer = &fakePagerDutyOAuth{}, doer
+			loader.PagerDutyOAuth, loader.PagerDutyDoer = &fakePagerDutyOAuth{}, fakehttp.Client(doer)
 			results, err := loader.EstimateUnits(f.ctx, f.orgID, f.runID, []string{first, second})
 			if err != nil {
 				t.Fatal(err)

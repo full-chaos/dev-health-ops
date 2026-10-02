@@ -3,6 +3,7 @@
 package providersync
 
 import (
+	"github.com/full-chaos/dev-health-ops/internal/testsupport/fakehttp"
 	"context"
 	"encoding/json"
 	"testing"
@@ -287,7 +288,7 @@ func TestGitHubRepositoryCrashWindowRecoversWithoutDuplicateVersion(t *testing.T
 	firstBatch, err := (GitHubRepositoryRouteHandler{}).Collect(
 		ctx, claim, providerfoundation.Credential{},
 		gitHubRepositoryClient(
-			t, &gitHubRepositoryDoer{t: t, body: gitHubRepositoryFixture},
+			t, fakehttp.Client(&gitHubRepositoryDoer{t: t, body: gitHubRepositoryFixture}),
 			"https://api.github.com",
 		),
 		collectedAt,
@@ -349,7 +350,7 @@ func TestGitHubRepositoryCrashWindowRecoversWithoutDuplicateVersion(t *testing.T
 	recoveredBatch, err := (GitHubRepositoryRouteHandler{}).Collect(
 		ctx, recovered, providerfoundation.Credential{},
 		gitHubRepositoryClient(
-			t, &gitHubRepositoryDoer{t: t, body: gitHubRepositoryFixture},
+			t, fakehttp.Client(&gitHubRepositoryDoer{t: t, body: gitHubRepositoryFixture}),
 			"https://api.github.com",
 		),
 		persisted.CreatedAt.UTC(),

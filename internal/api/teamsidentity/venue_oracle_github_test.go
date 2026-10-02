@@ -5,6 +5,7 @@ package teamsidentity
 import (
 	"errors"
 	"fmt"
+	"github.com/full-chaos/dev-health-ops/internal/testsupport/fakehttp"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -219,10 +220,12 @@ func TestVenueOracleDiscoverGitHubMatchesPython(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	previousClient, previousExchange := discoveryHTTPClient, discoveryAppExchangeClient
+	previousClient, previousExchange := fakehttp.Client(discoveryHTTPClient), fakehttp.Client(discoveryAppExchangeClient)
 	discoveryHTTPClient = &http.Client{Transport: rewriteHostTransport{target: stubURL}}
-	discoveryAppExchangeClient = discoveryHTTPClient
-	t.Cleanup(func() { discoveryHTTPClient, discoveryAppExchangeClient = previousClient, previousExchange })
+	discoveryAppExchangeClient = fakehttp.Client(discoveryHTTPClient)
+	t.Cleanup(func() {
+		discoveryHTTPClient, discoveryAppExchangeClient = fakehttp.Client(previousClient), fakehttp.Client(previousExchange)
+	})
 
 	goTeams, err := discoverGitHub(t.Context(), credential, org)
 	if err != nil {

@@ -3,6 +3,7 @@ package providersync
 import (
 	"context"
 	"encoding/json"
+	"github.com/full-chaos/dev-health-ops/internal/testsupport/fakehttp"
 	"io"
 	"net/http"
 	"strings"
@@ -106,10 +107,10 @@ func buildJiraAtlassianOracleSurfaces(t *testing.T, input map[string]any) jiraAt
 		refs = append(refs, row)
 	}
 	doer := &jiraAtlassianOracleDoer{t: t, issue: issue, worklogs: worklogs, boardSprints: boardSprints}
-	client := jiraWorkItemsTestClient(t, doer, providerfoundation.LeaseGuardFunc(func(context.Context) error { return nil }))
+	client := jiraWorkItemsTestClient(t, fakehttp.Client(doer), providerfoundation.LeaseGuardFunc(func(context.Context) error { return nil }))
 	var graphqlClient *providerfoundation.HTTPClient
 	if jiraBatchBool(input["graphql_fallback"], false) {
-		graphqlClient = jiraWorkItemsTestClient(t, &jiraAtlassianOracleDoer{t: t, graphqlFailure: true}, providerfoundation.LeaseGuardFunc(func(context.Context) error { return nil }))
+		graphqlClient = jiraWorkItemsTestClient(t, fakehttp.Client(&jiraAtlassianOracleDoer{t: t, graphqlFailure: true}), providerfoundation.LeaseGuardFunc(func(context.Context) error { return nil }))
 	}
 	handler := jiraAtlassianCompleteHandler(t)
 	handler.Identity = jiraOracleIdentity

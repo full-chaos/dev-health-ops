@@ -3,6 +3,7 @@
 package providersync
 
 import (
+	"github.com/full-chaos/dev-health-ops/internal/testsupport/fakehttp"
 	"context"
 	"errors"
 	"testing"
@@ -113,7 +114,7 @@ func TestGitHubPullRequestReviewCompositeCrashRecoveryIsExact(t *testing.T) {
 		}
 		batch, err := (GitHubPullRequestReviewRouteHandler{}).Collect(
 			ctx, current, providerfoundation.Credential{},
-			gitHubPullRequestClient(t, doer, "https://api.github.com"), stamp,
+			gitHubPullRequestClient(t, fakehttp.Client(doer), "https://api.github.com"), stamp,
 		)
 		if err != nil {
 			t.Fatal(err)

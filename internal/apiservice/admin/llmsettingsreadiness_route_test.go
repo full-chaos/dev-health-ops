@@ -3,6 +3,7 @@
 package admin_test
 
 import (
+	"github.com/full-chaos/dev-health-ops/internal/testsupport/fakehttp"
 	"context"
 	"encoding/json"
 	"io"
@@ -177,7 +178,7 @@ VALUES ($1, $2, 'llm', $3, $4, false, NULL, now(), now())`, uuid.New(), org.Stri
 	}
 
 	t.Run("ready", func(t *testing.T) {
-		base, _ := startGoServer(t, ctx, venue, jwtKey, func(d *apiservice.Deps) { d.HTTPDoer = readyDoer() })
+		base, _ := startGoServer(t, ctx, venue, jwtKey, func(d *apiservice.Deps) { d.HTTPDoer = fakehttp.Client(readyDoer()) })
 
 		postResp := doRouteRequest(t, base, "POST", "/api/v1/admin/llm-settings/readiness", auth("ready"))
 		if postResp.status != 200 {
@@ -247,7 +248,7 @@ VALUES ($1, $2, 'llm', $3, $4, false, NULL, now(), now())`, uuid.New(), org.Stri
 	})
 
 	t.Run("failed", func(t *testing.T) {
-		base, _ := startGoServer(t, ctx, venue, jwtKey, func(d *apiservice.Deps) { d.HTTPDoer = failingDoer() })
+		base, _ := startGoServer(t, ctx, venue, jwtKey, func(d *apiservice.Deps) { d.HTTPDoer = fakehttp.Client(failingDoer()) })
 
 		postResp := doRouteRequest(t, base, "POST", "/api/v1/admin/llm-settings/readiness", auth("fail"))
 		if postResp.status != 200 {
@@ -283,7 +284,7 @@ VALUES ($1, $2, 'llm', $3, $4, false, NULL, now(), now())`, uuid.New(), org.Stri
 
 	t.Run("ssrf_refused_base_url_never_reaches_the_network", func(t *testing.T) {
 		doer := &poisonDoer{}
-		base, _ := startGoServer(t, ctx, venue, jwtKey, func(d *apiservice.Deps) { d.HTTPDoer = doer })
+		base, _ := startGoServer(t, ctx, venue, jwtKey, func(d *apiservice.Deps) { d.HTTPDoer = fakehttp.Client(doer) })
 
 		postResp := doRouteRequest(t, base, "POST", "/api/v1/admin/llm-settings/readiness", auth("ssrf"))
 		if postResp.status != 404 {

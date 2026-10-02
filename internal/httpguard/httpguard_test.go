@@ -104,7 +104,7 @@ type funcDoer func(*http.Request) (*http.Response, error)
 
 func (f funcDoer) Do(r *http.Request) (*http.Response, error) { return f(r) }
 
-func TestGuardableAcceptsWhatTheGuardsReachAndRefusesWhatHidesAClient(t *testing.T) {
+func TestGuardableIsAnAllowListByReachability(t *testing.T) {
 	type doer interface {
 		Do(*http.Request) (*http.Response, error)
 	}
@@ -114,21 +114,24 @@ func TestGuardableAcceptsWhatTheGuardsReachAndRefusesWhatHidesAClient(t *testing
 		want bool
 	}{
 		{"an *http.Client", &http.Client{}, true},
-		{"a function doer", funcDoer(nil), true},
-		{"a leaf struct", plainDoer{}, true},
 		{"a wrapper around a client", countingWrapper{&http.Client{}}, true},
-		{"a wrapper around a hiding decorator", countingWrapper{holdsClientDoer{}}, false},
-		{"a decorator holding a doer", countingWrapper{plainDoer{}}.Unwrap().(doer), true},
+		{"a wrapper around a wrapper around a client", countingWrapper{countingWrapper{&http.Client{}}}, true},
+		{"a function doer", funcDoer(nil), false},
+		{"a leaf struct", plainDoer{}, false},
 		{"a struct holding an *http.Client", holdsClientDoer{}, false},
 		{"a pointer to a struct holding a client", &holdsClientDoer{}, false},
 		{"a decorator holding an observer that holds a doer", observed{}, false},
+		{"a wrapper around a leaf", countingWrapper{plainDoer{}}, false},
+		{"a wrapper around a hiding decorator", countingWrapper{holdsClientDoer{}}, false},
+		{"a wrapper around a function doer", countingWrapper{funcDoer(nil)}, false},
 	}
 	for _, tc := range cases {
 		if got := Guardable(tc.doer); got != tc.want {
 			t.Errorf("%s: Guardable = %v, want %v", tc.name, got, tc.want)
 		}
 	}
-	if Guardable(nil) {
+	var nilClient *http.Client
+	if Guardable(nil) || Guardable(nilClient) {
 		t.Error("nil is not guardable")
 	}
 }

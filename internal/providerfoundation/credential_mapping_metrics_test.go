@@ -2,6 +2,7 @@ package providerfoundation
 
 import (
 	"context"
+	"github.com/full-chaos/dev-health-ops/internal/testsupport/fakehttp"
 	"testing"
 
 	"go.opentelemetry.io/otel/sdk/metric/metricdata"
@@ -94,7 +95,9 @@ func TestNewJiraClientCountsEveryMappingItRejects(t *testing.T) {
 	} {
 		credential := testCredential(c.provider, c.values)
 		credential.Config = c.config
-		moved := movedBy(t, func() { _, _ = NewJiraClient(credential, &headerCaptureDoer{}, jiraTestRetry(), jiraTestLease()) })
+		moved := movedBy(t, func() {
+			_, _ = NewJiraClient(credential, fakehttp.Client(&headerCaptureDoer{}), jiraTestRetry(), jiraTestLease())
+		})
 		if len(moved) != len(c.want) {
 			t.Errorf("%s: moved %v, want %v", c.name, moved, c.want)
 			continue

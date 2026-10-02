@@ -2,6 +2,7 @@ package admin
 
 import (
 	"context"
+	"github.com/full-chaos/dev-health-ops/internal/testsupport/fakehttp"
 	"net/http"
 	"testing"
 
@@ -16,15 +17,15 @@ import (
 func TestAClientNeverFollowsARedirectToAnotherOrigin(t *testing.T) {
 	services := func(t *testing.T, doer providerfoundation.HTTPDoer, probe *redirectprobe.Probe) {
 		t.Helper()
-		_, _ = (&handlers{}).pagerDutyGET(context.Background(), doer, probe.Base.URL+"/services", pagerDutyRequestAuth{header: "Token token=SECRET"})
+		_, _ = (&handlers{}).pagerDutyGET(context.Background(), fakehttp.Client(doer), probe.Base.URL+"/services", pagerDutyRequestAuth{header: "Token token=SECRET"})
 	}
 	prober := func(t *testing.T, doer providerfoundation.HTTPDoer, probe *redirectprobe.Probe) {
 		t.Helper()
-		_, _ = newOpenAICompatibleReadinessProber(doer).doCompletionOnce(context.Background(), probe.Base.URL, "SECRET", chatCompletionRequest{})
+		_, _ = newOpenAICompatibleReadinessProber(fakehttp.Client(doer)).doCompletionOnce(context.Background(), probe.Base.URL, "SECRET", chatCompletionRequest{})
 	}
 	revoke := func(t *testing.T, doer providerfoundation.HTTPDoer, probe *redirectprobe.Probe) {
 		t.Helper()
-		_ = providerfoundation.RevokePagerDutyOAuthToken(context.Background(), doer,
+		_ = providerfoundation.RevokePagerDutyOAuthToken(context.Background(), fakehttp.Client(doer),
 			providerfoundation.PagerDutyRevokeConfig{ClientID: "c", RevokeURL: probe.Base.URL + "/oauth/revoke"}, "SECRET")
 	}
 	for name, call := range map[string]func(*testing.T, providerfoundation.HTTPDoer, *redirectprobe.Probe){"PagerDuty services": services, "LLM readiness prober": prober, "PagerDuty revoke": revoke} {

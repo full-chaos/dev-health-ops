@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"github.com/full-chaos/dev-health-ops/internal/platform/secrets"
+	"github.com/full-chaos/dev-health-ops/internal/testsupport/fakehttp"
 	"net/http"
 	"net/http/httptest"
 	"testing"
@@ -18,7 +19,7 @@ func TestNewHTTPClientRefusalsNameTheirCause(t *testing.T) {
 			LeaseGuardFunc(func(context.Context) error { return nil }), DefaultRetryPolicy()
 	}
 	base, doer, auth, lease, retry := good()
-	if _, err := NewHTTPClient("jira", base, doer, auth, retry, lease); err != nil {
+	if _, err := NewHTTPClient("jira", base, fakehttp.Client(doer), auth, retry, lease); err != nil {
 		t.Fatalf("the good arguments are refused: %v", err)
 	}
 	for name, tc := range map[string]struct {
@@ -34,7 +35,7 @@ func TestNewHTTPClientRefusalsNameTheirCause(t *testing.T) {
 	} {
 		base, doer, auth, lease, retry := good()
 		tc.mutate(&base, &doer, &auth, &lease, &retry)
-		_, err := NewHTTPClient("jira", base, doer, auth, retry, lease)
+		_, err := NewHTTPClient("jira", base, fakehttp.Client(doer), auth, retry, lease)
 		if !errors.Is(err, ErrCredentialInvalid) {
 			t.Errorf("%s: %v is not a credential refusal", name, err)
 			continue

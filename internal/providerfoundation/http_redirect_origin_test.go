@@ -3,6 +3,7 @@ package providerfoundation
 import (
 	"context"
 	"errors"
+	"github.com/full-chaos/dev-health-ops/internal/testsupport/fakehttp"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -45,7 +46,7 @@ func newOriginPair(t *testing.T, redirectTo func(destinationURL string) string) 
 
 func tokenClient(t *testing.T, base string, doer HTTPDoer) *HTTPClient {
 	t.Helper()
-	client, err := NewHTTPClient("gitlab", base, doer,
+	client, err := NewHTTPClient("gitlab", base, fakehttp.Client(doer),
 		func(r *http.Request) error { r.Header.Set("PRIVATE-TOKEN", "review-secret"); return nil },
 		RetryPolicy{MaxAttempts: 3, InitialWait: time.Nanosecond, MaxWait: time.Nanosecond},
 		LeaseGuardFunc(func(context.Context) error { return nil }))
@@ -63,7 +64,7 @@ func TestDoNeverForwardsTheCredentialToAnotherOrigin(t *testing.T) {
 	} {
 		t.Run(name, func(t *testing.T) {
 			p := newOriginPair(t, func(d string) string { return d + "/captured" })
-			response, err := tokenClient(t, p.origin.URL+"/c/ok", doer).Do(context.Background(), http.MethodGet, "/api/v4/projects", nil)
+			response, err := tokenClient(t, p.origin.URL+"/c/ok", fakehttp.Client(doer)).Do(context.Background(), http.MethodGet, "/api/v4/projects", nil)
 			if !errors.Is(err, ErrCredentialInvalid) || response != nil {
 				t.Fatalf("Do = (%v, %v), want (nil, ErrCredentialInvalid)", response, err)
 			}
@@ -81,7 +82,7 @@ func TestDoRefusesADoerThatFollowedARedirectOffOrigin(t *testing.T) {
 		other.Response = &http.Response{StatusCode: http.StatusFound} // what net/http sets on a request a redirect created
 		return &http.Response{StatusCode: 200, Header: http.Header{}, Body: body, Request: other}, nil
 	})
-	response, err := baseURLClient(t, "https://gitlab.example.com/gitlab", doer).Do(context.Background(), http.MethodGet, "/api/v4/projects", nil)
+	response, err := baseURLClient(t, "https://gitlab.example.com/gitlab", fakehttp.Client(doer)).Do(context.Background(), http.MethodGet, "/api/v4/projects", nil)
 	if !errors.Is(err, ErrCredentialInvalid) || response != nil {
 		t.Fatalf("Do = (%v, %v), want (nil, ErrCredentialInvalid)", response, err)
 	}
@@ -141,7 +142,7 @@ func TestDoAcceptsATransportThatRewritesTheHost(t *testing.T) {
 	_ = response.Body.Close()
 	// The same through a Doer that is not an *http.Client: only response.Request is seen.
 	wrapped := doerFunc(func(r *http.Request) (*http.Response, error) { return doer.Do(r) })
-	response, err = baseURLClient(t, "https://api.github.com", wrapped).Do(context.Background(), http.MethodGet, "/user/repos", nil)
+	response, err = baseURLClient(t, "https://api.github.com", fakehttp.Client(wrapped)).Do(context.Background(), http.MethodGet, "/user/repos", nil)
 	if err != nil {
 		t.Fatalf("a wrapped host-rewriting transport was refused: %v", err)
 	}

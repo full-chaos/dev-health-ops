@@ -3,6 +3,7 @@
 package providersync
 
 import (
+	"github.com/full-chaos/dev-health-ops/internal/testsupport/fakehttp"
 	"context"
 	"net/http"
 	"testing"
@@ -29,7 +30,7 @@ func TestGitHubDeploymentsCarryPullRequestForwardFromRouteToClickHouse(t *testin
 	doer := &githubDeploymentPullLookupDoer{pullStatus: http.StatusOK, pullBody: `[{"number":5,"merged_at":"2026-07-22T09:00:00Z","merge_commit_sha":"abc123"}]`}
 	collect := func(at time.Time) EffectBatch {
 		t.Helper()
-		batch, err := (GitHubDeploymentsRouteHandler{}).Collect(ctx, claim, providerfoundation.Credential{}, gitHubRepositoryClient(t, doer, "https://api.github.com"), at)
+		batch, err := (GitHubDeploymentsRouteHandler{}).Collect(ctx, claim, providerfoundation.Credential{}, gitHubRepositoryClient(t, fakehttp.Client(doer), "https://api.github.com"), at)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -73,7 +74,7 @@ func TestGitHubPullRequestSocialCarriesReviewsForwardFromRouteToClickHouse(t *te
 	}
 	collect := func(at time.Time) []EffectBatch {
 		t.Helper()
-		batch, err := (GitHubPullRequestReviewRouteHandler{}).Collect(ctx, claim, providerfoundation.Credential{}, gitHubPullRequestClient(t, doer, "https://api.github.com"), at)
+		batch, err := (GitHubPullRequestReviewRouteHandler{}).Collect(ctx, claim, providerfoundation.Credential{}, gitHubPullRequestClient(t, fakehttp.Client(doer), "https://api.github.com"), at)
 		if err != nil {
 			t.Fatal(err)
 		}

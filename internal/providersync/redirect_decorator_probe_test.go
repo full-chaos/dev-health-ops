@@ -127,3 +127,32 @@ func TestTheProductionConstructionPathIsAcceptedAndEveryRouteDecoratorHandedInIs
 		}
 	}
 }
+
+// The Jira incident admission client is built from a constructed client whose Doer is a route decorator: it is a copy of that
+// client (never a re-construction from the decorated doer, which the allow-list would refuse), and it still never lets the
+// credential reach another origin.
+func TestTheJiraAdmissionClientIsACopyOfTheConstructedClientAndStillGuarded(t *testing.T) {
+	probe := redirectprobe.New(t)
+	built, err := providerfoundation.NewHTTPClient("jira", probe.Base.URL, probe.Client(),
+		providerfoundation.TokenAuth("Authorization", "Bearer ", secrets.NewValue("SECRET")),
+		providerfoundation.RetryPolicy{MaxAttempts: 1, InitialWait: time.Nanosecond, MaxWait: time.Nanosecond},
+		providerfoundation.LeaseGuardFunc(func(context.Context) error { return nil }))
+	if err != nil {
+		t.Fatal(err)
+	}
+	requests := 0
+	decorated := *built
+	decorated.Doer = jiraAtlassianCountingDoer{delegate: built.Doer, attempts: &requests}
+	admission, err := jiraIncidentAdmissionClient(&decorated, Claim{})
+	if err != nil {
+		t.Fatalf("the admission client must be built from the decorated client: %v", err)
+	}
+	if admission.BaseURL.String() != jiraIncidentAPIOrigin {
+		t.Fatalf("admission base %s", admission.BaseURL)
+	}
+	admission.BaseURL = built.BaseURL // point the copy at the probe: the guard must still hold
+	if response, err := admission.Do(context.Background(), http.MethodGet, "/rest", nil); err == nil && response != nil {
+		response.Body.Close()
+	}
+	probe.Assert(t)
+}

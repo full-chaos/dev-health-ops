@@ -2,6 +2,7 @@ package providersync
 
 import (
 	"context"
+	"github.com/full-chaos/dev-health-ops/internal/testsupport/fakehttp"
 	"io"
 	"net/http"
 	"strings"
@@ -20,7 +21,7 @@ func (d *urlRecordingDoer) Do(request *http.Request) (*http.Response, error) {
 
 func prefixedClient(t *testing.T, provider, base string, doer providerfoundation.HTTPDoer) *providerfoundation.HTTPClient {
 	t.Helper()
-	client, err := providerfoundation.NewHTTPClient(provider, base, doer, func(*http.Request) error { return nil },
+	client, err := providerfoundation.NewHTTPClient(provider, base, fakehttp.Client(doer), func(*http.Request) error { return nil },
 		providerfoundation.RetryPolicy{MaxAttempts: 1, InitialWait: time.Nanosecond, MaxWait: time.Nanosecond},
 		providerfoundation.LeaseGuardFunc(func(context.Context) error { return nil }))
 	if err != nil {
@@ -55,7 +56,7 @@ func TestRoutePathsKeepTheCredentialBasePathExactlyOnce(t *testing.T) {
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			doer := &urlRecordingDoer{}
-			client := prefixedClient(t, tc.provider, tc.base, doer)
+			client := prefixedClient(t, tc.provider, tc.base, fakehttp.Client(doer))
 			response, err := client.Do(context.Background(), http.MethodGet, tc.path(client), nil)
 			if err != nil {
 				t.Fatal(err)

@@ -3,6 +3,7 @@
 package providersync
 
 import (
+	"github.com/full-chaos/dev-health-ops/internal/testsupport/fakehttp"
 	"context"
 	"encoding/json"
 	"testing"
@@ -62,7 +63,7 @@ func TestGitHubProjectV2SnapshotDiffAddsIssueAndRetiresARemovedSubjectFromPresen
 			`],"pageInfo":{"hasNextPage":false,"endCursor":null}}}}}}`,
 	}}
 	firstFetch, err := (GitHubProjectV2Fetcher{}).Fetch(
-		ctx, claim, credential, githubProjectV2TestClient(t, firstDoer), firstSyncAt, nil,
+		ctx, claim, credential, githubProjectV2TestClient(t, fakehttp.Client(firstDoer)), firstSyncAt, nil,
 	)
 	if err != nil {
 		t.Fatal(err)
@@ -123,7 +124,7 @@ WHERE org_id = ? AND subject_kind = 'work_item' AND subject_id = ?`,
 			`],"pageInfo":{"hasNextPage":false,"endCursor":null}}}}}}`,
 	}}
 	secondFetch, err := (GitHubProjectV2Fetcher{}).Fetch(
-		ctx, claim, credential, githubProjectV2TestClient(t, secondDoer), secondSyncAt, nil,
+		ctx, claim, credential, githubProjectV2TestClient(t, fakehttp.Client(secondDoer)), secondSyncAt, nil,
 	)
 	if err != nil {
 		t.Fatal(err)

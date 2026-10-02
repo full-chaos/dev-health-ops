@@ -3,6 +3,7 @@ package providersync
 import (
 	"context"
 	"errors"
+	"github.com/full-chaos/dev-health-ops/internal/testsupport/fakehttp"
 	"net/http"
 	"strconv"
 	"strings"
@@ -147,7 +148,7 @@ func walkGitHubTestsChunks(
 func TestGitHubTestsChunkRouteCountsEachInventoryPageOnce(t *testing.T) {
 	doer := &githubTestsPagedDoer{t: t, pages: 2, perPage: 3}
 	claim := nativeTestClaim("github", "tests")
-	walk := walkGitHubTestsChunks(t, GitHubTestsRouteHandler{}, claim, githubTestsClient(t, doer), 2)
+	walk := walkGitHubTestsChunks(t, GitHubTestsRouteHandler{}, claim, githubTestsClient(t, fakehttp.Client(doer)), 2)
 
 	if walk.cursor.RunPages != 2 {
 		t.Fatalf("RunPages=%d, want 2 (one charge per real page, not per visit)", walk.cursor.RunPages)
@@ -180,7 +181,7 @@ func TestGitHubTestsChunkRouteFinalizesTruncatedInventoryInsteadOfCancelling(t *
 	doer := &githubTestsPagedDoer{t: t, pages: 3, perPage: 2}
 	claim := nativeTestClaim("github", "tests")
 	// MaxRuns=100 is one page of budget per phase against three real pages.
-	walk := walkGitHubTestsChunks(t, GitHubTestsRouteHandler{MaxRuns: 100}, claim, githubTestsClient(t, doer), 2)
+	walk := walkGitHubTestsChunks(t, GitHubTestsRouteHandler{MaxRuns: 100}, claim, githubTestsClient(t, fakehttp.Client(doer)), 2)
 
 	if walk.chunks == 0 {
 		t.Fatal("truncated unit committed nothing; the rows before the cap must still land")
@@ -356,7 +357,7 @@ func TestGitHubTestsChunkRouteSinglePassCapReachedFinalizes(t *testing.T) {
 	// stops at the paginator's cap rather than at a cumulative refusal.
 	err := (GitHubTestsRouteHandler{MaxRuns: 100}).CollectChunks(
 		context.Background(), claim, providerfoundation.Credential{},
-		githubTestsClient(t, doer), time.Date(2026, 8, 14, 12, 0, 0, 0, time.UTC), "",
+		githubTestsClient(t, fakehttp.Client(doer)), time.Date(2026, 8, 14, 12, 0, 0, 0, time.UTC), "",
 		func(emission ChunkRouteEmission) error {
 			terminal = emission.CursorAfter
 			if emission.Final {

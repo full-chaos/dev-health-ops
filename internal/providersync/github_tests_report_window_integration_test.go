@@ -3,6 +3,7 @@
 package providersync
 
 import (
+	"github.com/full-chaos/dev-health-ops/internal/testsupport/fakehttp"
 	"context"
 	"encoding/json"
 	"testing"
@@ -35,7 +36,7 @@ func githubTestsCommitReportWindowPass(
 	rowsByDestination := map[string][]json.RawMessage{}
 	recoveryByDestination := map[string]EffectRecoveryPolicy{}
 	err := GitHubTestsRouteHandler{}.CollectChunks(
-		ctx, claim, providerfoundation.Credential{}, githubTestsClient(t, doer), normalizedAt, "",
+		ctx, claim, providerfoundation.Credential{}, githubTestsClient(t, fakehttp.Client(doer)), normalizedAt, "",
 		func(emission ChunkRouteEmission) error {
 			for _, effect := range emission.Batch.Effects {
 				if _, seen := rowsByDestination[effect.Destination]; !seen {
@@ -112,7 +113,7 @@ func TestGitHubTestsReportPhaseIntegrationSkipsAStaleRunAcrossPasses(t *testing.
 	orgID := "org-stale-" + uuid.NewString()
 
 	first := githubTestsReportWindowDoerFor(t, "2026-07-22T10:05:00Z")
-	written := githubTestsCommitReportWindowPass(t, ctx, sink, first, orgID,
+	written := githubTestsCommitReportWindowPass(t, ctx, sink, fakehttp.Client(first), orgID,
 		time.Date(2026, 7, 22, 10, 0, 0, 0, time.UTC),
 		time.Date(2026, 7, 22, 11, 0, 0, 0, time.UTC),
 		time.Date(2026, 7, 22, 11, 5, 0, 0, time.UTC))
@@ -123,7 +124,7 @@ func TestGitHubTestsReportPhaseIntegrationSkipsAStaleRunAcrossPasses(t *testing.
 	// Same run, unchanged, two days later -- far outside any grace tied to a
 	// one-hour window.
 	second := githubTestsReportWindowDoerFor(t, "2026-07-22T10:05:00Z")
-	githubTestsCommitReportWindowPass(t, ctx, sink, second, orgID,
+	githubTestsCommitReportWindowPass(t, ctx, sink, fakehttp.Client(second), orgID,
 		time.Date(2026, 7, 24, 10, 0, 0, 0, time.UTC),
 		time.Date(2026, 7, 24, 11, 0, 0, 0, time.UTC),
 		time.Date(2026, 7, 24, 11, 5, 0, 0, time.UTC))
@@ -145,7 +146,7 @@ func TestGitHubTestsReportPhaseIntegrationRawRowsStaySingleAcrossPasses(t *testi
 
 	pass := func(updatedAt string, since, before, normalizedAt time.Time) {
 		doer := githubTestsReportWindowDoerFor(t, updatedAt)
-		githubTestsCommitReportWindowPass(t, ctx, sink, doer, orgID, since, before, normalizedAt)
+		githubTestsCommitReportWindowPass(t, ctx, sink, fakehttp.Client(doer), orgID, since, before, normalizedAt)
 	}
 	pass("2026-07-22T10:05:00Z",
 		time.Date(2026, 7, 22, 10, 0, 0, 0, time.UTC),
@@ -180,7 +181,7 @@ func TestGitHubTestsReportPhaseIntegrationStillWritesAGenuinelyUpdatedRunOnASeco
 	orgID := "org-rerun-" + uuid.NewString()
 
 	first := githubTestsReportWindowDoerFor(t, "2026-07-22T10:05:00Z")
-	githubTestsCommitReportWindowPass(t, ctx, sink, first, orgID,
+	githubTestsCommitReportWindowPass(t, ctx, sink, fakehttp.Client(first), orgID,
 		time.Date(2026, 7, 22, 10, 0, 0, 0, time.UTC),
 		time.Date(2026, 7, 22, 11, 0, 0, 0, time.UTC),
 		time.Date(2026, 7, 22, 11, 5, 0, 0, time.UTC))
@@ -188,7 +189,7 @@ func TestGitHubTestsReportPhaseIntegrationStillWritesAGenuinelyUpdatedRunOnASeco
 	// The run was re-triggered: updated_at moves into window 2, two days
 	// later. It must be fetched and written again despite the two-day gap.
 	second := githubTestsReportWindowDoerFor(t, "2026-07-24T10:30:00Z")
-	writtenSecond := githubTestsCommitReportWindowPass(t, ctx, sink, second, orgID,
+	writtenSecond := githubTestsCommitReportWindowPass(t, ctx, sink, fakehttp.Client(second), orgID,
 		time.Date(2026, 7, 24, 10, 0, 0, 0, time.UTC),
 		time.Date(2026, 7, 24, 11, 0, 0, 0, time.UTC),
 		time.Date(2026, 7, 24, 11, 5, 0, 0, time.UTC))
@@ -214,7 +215,7 @@ func TestGitHubTestsReportPhaseIntegrationLatePublishedArtifactStillReachesClick
 	const settled = "2026-07-22T10:44:59Z" // inside window 1, and inside window 2's grace
 
 	first := &githubTestsLateArtifactDoer{t: t, archive: archive, updatedAt: settled, artifactsLive: false}
-	written := githubTestsCommitReportWindowPass(t, ctx, sink, first, orgID,
+	written := githubTestsCommitReportWindowPass(t, ctx, sink, fakehttp.Client(first), orgID,
 		time.Date(2026, 7, 22, 10, 0, 0, 0, time.UTC),
 		time.Date(2026, 7, 22, 11, 0, 0, 0, time.UTC),
 		time.Date(2026, 7, 22, 13, 5, 0, 0, time.UTC))
@@ -228,7 +229,7 @@ func TestGitHubTestsReportPhaseIntegrationLatePublishedArtifactStillReachesClick
 
 	// The artifact is now listable; the run itself did not change.
 	second := &githubTestsLateArtifactDoer{t: t, archive: archive, updatedAt: settled, artifactsLive: true}
-	githubTestsCommitReportWindowPass(t, ctx, sink, second, orgID,
+	githubTestsCommitReportWindowPass(t, ctx, sink, fakehttp.Client(second), orgID,
 		time.Date(2026, 7, 22, 11, 0, 0, 0, time.UTC),
 		time.Date(2026, 7, 22, 12, 0, 0, 0, time.UTC),
 		time.Date(2026, 7, 22, 13, 5, 0, 0, time.UTC))

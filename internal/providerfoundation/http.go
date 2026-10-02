@@ -244,15 +244,17 @@ func originGuardedDoer(doer HTTPDoer, target *url.URL) (HTTPDoer, *atomic.Bool) 
 	guarded := *hc
 	inner := hc.CheckRedirect
 	guarded.CheckRedirect = func(req *http.Request, via []*http.Request) error {
+		// the client's own policy decides first (a client that refuses the hop answers the 3xx to the caller)
+		if inner != nil {
+			if err := inner(req, via); err != nil {
+				return err
+			}
+		} else if len(via) >= 10 {
+			return errors.New("stopped after 10 redirects")
+		}
 		if !sameOrigin(req.URL, target) {
 			left.Store(true)
 			return http.ErrUseLastResponse
-		}
-		if inner != nil {
-			return inner(req, via)
-		}
-		if len(via) >= 10 {
-			return errors.New("stopped after 10 redirects")
 		}
 		return nil
 	}

@@ -7,11 +7,11 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
-	"runtime"
 	"testing"
 	"time"
 
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/containers"
+	"github.com/full-chaos/dev-health-ops/internal/testsupport/moduleroot"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
@@ -36,9 +36,9 @@ import (
 // `go test` happens to run from.
 func provisionScriptPath(t *testing.T) string {
 	t.Helper()
-	_, file, _, ok := runtime.Caller(0)
+	_, file, _, ok := moduleroot.Caller(0)
 	if !ok {
-		t.Fatal("could not resolve this test file's path via runtime.Caller")
+		t.Fatal("could not resolve this test file's path via moduleroot.Caller")
 	}
 	// internal/storage/postgres -> repo root is three directories up.
 	root := filepath.Join(filepath.Dir(file), "..", "..", "..")

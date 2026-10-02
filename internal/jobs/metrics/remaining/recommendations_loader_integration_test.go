@@ -10,7 +10,6 @@ import (
 	"net/url"
 	"os/exec"
 	"path/filepath"
-	"runtime"
 	"strings"
 	"testing"
 	"time"
@@ -20,6 +19,7 @@ import (
 
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/chschema"
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/containers"
+	"github.com/full-chaos/dev-health-ops/internal/testsupport/moduleroot"
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/pyoracle"
 )
 
@@ -1266,7 +1266,7 @@ func assertArgMaxKeysAreUnique(t *testing.T, ctx context.Context, conn driver.Co
 // close, so a missing interpreter is a hard failure.
 func loaderPythonBinary(t *testing.T) string {
 	t.Helper()
-	_, file, _, _ := runtime.Caller(0)
+	_, file, _, _ := moduleroot.Caller(0)
 	python, rule, err := pyoracle.Interpreter(filepath.Join(filepath.Dir(file), "..", "..", "..", ".."))
 	if err != nil {
 		t.Fatalf("no Python to run the reference loader: %v. This test compares the "+

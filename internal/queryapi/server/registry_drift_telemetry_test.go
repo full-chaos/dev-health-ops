@@ -11,6 +11,8 @@ import (
 	"go.opentelemetry.io/otel"
 	sdkmetric "go.opentelemetry.io/otel/sdk/metric"
 	"go.opentelemetry.io/otel/sdk/metric/metricdata"
+
+	"github.com/full-chaos/dev-health-ops/internal/testsupport/venueoracle"
 )
 
 // driftMeterReader is the ONE real OTel SDK meter reader for this test
@@ -26,7 +28,7 @@ var driftMeterReader *sdkmetric.ManualReader
 func TestMain(m *testing.M) {
 	driftMeterReader = sdkmetric.NewManualReader()
 	otel.SetMeterProvider(sdkmetric.NewMeterProvider(sdkmetric.WithReader(driftMeterReader)))
-	os.Exit(m.Run())
+	os.Exit(venueoracle.RunTests(m))
 }
 
 // collectGaugeForDigest reads the named gauge's data point tagged with

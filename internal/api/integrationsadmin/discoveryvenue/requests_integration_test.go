@@ -39,7 +39,7 @@ func seed(t *testing.T, ctx context.Context, admin *pgxpool.Pool, venue *venueor
 		exec(`INSERT INTO users (id, email, is_active, is_verified, is_superuser, token_version, created_at, updated_at)
 VALUES ($1, $2, true, true, false, 0, $3, $3)`, user.id, user.email, at)
 		exec(`INSERT INTO memberships (id, user_id, org_id, role, created_at, updated_at) VALUES ($1, $2, $3, $4, $5, $5)`,
-			uuid.New(), user.id, user.org, user.role, at)
+			nextID(), user.id, user.org, user.role, at)
 	}
 	exec(`INSERT INTO users (id, email, is_active, is_verified, is_superuser, token_version, created_at, updated_at)
 VALUES ($1, 'disc-noorg@example.com', true, true, false, 0, $2, $2)`, v.adminNoOrg, at)
@@ -154,7 +154,7 @@ func discoverRequests(venue *venueoracle.Venue, v ids) []venueoracle.Request {
 	}
 	out = append(out, venueoracle.Request{Name: "guard bad scheme", Method: "POST", Path: discoverPath + v.intJira.String() + "/discover",
 		Headers: map[string]string{"Authorization": "Basic abc"}})
-	post("unknown integration", uuid.NewString(), "adminA")
+	post("unknown integration", nextID().String(), "adminA")
 	post("not a uuid", "zzz", "adminA")
 	post("another org's integration", v.intB.String(), "adminA")
 	post("empty scope: no such project", v.intEmpty.String(), "adminA")

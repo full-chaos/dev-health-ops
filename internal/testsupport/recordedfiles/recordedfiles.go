@@ -76,19 +76,14 @@ var Kinds = []string{PythonRecorded, ProviderRecorded, HandWritten, GoGenerated,
 // (venueoracle's recorded_by).
 const recordVerbStamp = "goldenrecord"
 
-// unclassifiedDayOne is how many files the day-one list holds. It only goes
-// down: a file leaves the list when it gets a kind, and no file is added.
-const unclassifiedDayOne = 975
-
+// The day-one list only shrinks: a file leaves it when it gets a kind, and no file is added. Its size is held to the
+// merge base by ci/ratchets.tsv (package ratchet), not by a number written here that every pull request would edit.
 // DayOneList is the list of the files that were unclassified when the
 // manifests were first written, one repository path per line.
 const DayOneList = "internal/testsupport/recordedfiles/unclassified_day_one.txt"
 
-// headerBeforeStampCeiling is how many goldens may hold the kind
-// header-before-stamp: the ones that were in the tree when the stamp became the
-// verb's (CHAOS-7707). It only goes down.
-const headerBeforeStampCeiling = 254
-
+// The goldens that may hold the kind header-before-stamp are the ones that were in the tree when the stamp became the
+// verb's (CHAOS-7707): a closed list that only shrinks, held to the merge base by ci/ratchets.tsv.
 // BeforeStampList is the closed list of those goldens, one repository path per
 // line. -day-one gives the kind header-before-stamp to a path on it and to no
 // other: a new golden with no stamp was not recorded by the verb.
@@ -400,11 +395,11 @@ func Problems(repo string) ([]string, error) {
 	if err != nil {
 		return nil, err
 	}
-	found, err := problems(repo, roots, dayOne, unclassifiedDayOne)
+	found, err := problems(repo, roots, dayOne)
 	if err != nil {
 		return nil, err
 	}
-	ceiling, err := ceilingProblems(repo, roots, headerBeforeStampCeiling)
+	ceiling, err := ceilingProblems(repo, roots)
 	if err != nil {
 		return nil, err
 	}
@@ -412,9 +407,9 @@ func Problems(repo string) ([]string, error) {
 }
 
 // ceilingProblems is what is wrong with the header-before-stamp rows against
-// the closed list: a row whose path is not on it, and a list whose length is not
-// the ceiling.
-func ceilingProblems(repo string, roots []string, ceiling int) ([]string, error) {
+// the closed list: a row whose path is not on it. The list's size is held by
+// ci/ratchets.tsv.
+func ceilingProblems(repo string, roots []string) ([]string, error) {
 	listed, err := BeforeStamp(repo)
 	if err != nil {
 		return nil, err
@@ -435,13 +430,10 @@ func ceilingProblems(repo string, roots []string, ceiling int) ([]string, error)
 			}
 		}
 	}
-	if len(listed) != ceiling {
-		out = append(out, fmt.Sprintf("the closed list (%s) holds %d files and headerBeforeStampCeiling says %d: the list only shrinks, and the number goes down with it", BeforeStampList, len(listed), ceiling))
-	}
 	return out, nil
 }
 
-func problems(repo string, roots, dayOne []string, dayOneCount int) ([]string, error) {
+func problems(repo string, roots, dayOne []string) ([]string, error) {
 	var out []string
 	listed := map[string]bool{}
 	for _, file := range dayOne {
@@ -537,11 +529,8 @@ func problems(repo string, roots, dayOne []string, dayOneCount int) ([]string, e
 	}
 	for _, file := range dayOne {
 		if !unclassified[file] && !under(unread, file) {
-			out = append(out, fmt.Sprintf("%s is on the day-one list (%s) and is not an %s file any more: give it its kind with the verb, which writes the list (%s -kind <kind> %s), and lower unclassifiedDayOne by one", file, DayOneList, Unclassified, Verb, file))
+			out = append(out, fmt.Sprintf("%s is on the day-one list (%s) and is not an %s file any more: give it its kind with the verb, which writes the list (%s -kind <kind> %s)", file, DayOneList, Unclassified, Verb, file))
 		}
-	}
-	if len(dayOne) != dayOneCount {
-		out = append(out, fmt.Sprintf("the day-one list (%s) holds %d files and unclassifiedDayOne says %d: the list only shrinks, and the number goes down with it", DayOneList, len(dayOne), dayOneCount))
 	}
 	return out, nil
 }
@@ -721,9 +710,6 @@ func Set(repo string, files []string, change Change) ([]string, error) {
 		if err := writeDayOne(repo, listed); err != nil {
 			return nil, err
 		}
-		if len(listed) != unclassifiedDayOne {
-			notes = append(notes, fmt.Sprintf("the day-one list now holds %d files: set unclassifiedDayOne to %d in internal/testsupport/recordedfiles/recordedfiles.go", len(listed), len(listed)))
-		}
 	}
 	return notes, nil
 }
@@ -833,7 +819,6 @@ func Sync(repo string, change Change) ([]string, error) {
 		if err := writeDayOne(repo, listed); err != nil {
 			return nil, err
 		}
-		notes = append(notes, fmt.Sprintf("the day-one list now holds %d files: set unclassifiedDayOne to %d in internal/testsupport/recordedfiles/recordedfiles.go", len(listed), len(listed)))
 	}
 	return notes, nil
 }

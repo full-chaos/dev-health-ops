@@ -78,6 +78,13 @@ type ForecastResult struct {
 	SimulationCount              int
 	InsufficientHistory          bool
 	HighVariance                 bool
+	// DaysHistogram and ItemsHistogram are the whole Monte Carlo distributions
+	// the percentiles above were taken from (CHAOS-7624): completion days for
+	// the fixed-scope mode, items completed for the fixed-date mode. nil when
+	// that mode did not simulate (no target, or no days available): nil is "no
+	// distribution", never a distribution of zeros.
+	DaysHistogram  *Histogram
+	ItemsHistogram *Histogram
 }
 
 // ErrNoForecastTarget and ErrEmptyHistory mirror Python's two ValueErrors.
@@ -137,6 +144,8 @@ func ForecastCapacity(request ForecastRequest, today time.Time) (ForecastResult,
 		if err != nil {
 			return ForecastResult{}, err
 		}
+		daysHistogram := NewHistogram(days)
+		result.DaysHistogram = &daysHistogram
 		quantiles := IntegerPercentiles(days, []float64{50, 85, 95})
 		result.P50Days, result.P85Days, result.P95Days =
 			&quantiles[0], &quantiles[1], &quantiles[2]
@@ -161,6 +170,8 @@ func ForecastCapacity(request ForecastRequest, today time.Time) (ForecastResult,
 			if err != nil {
 				return ForecastResult{}, err
 			}
+			itemsHistogram := NewHistogram(items)
+			result.ItemsHistogram = &itemsHistogram
 			// [50, 15, 5] -- see (2) above.
 			quantiles := IntegerPercentiles(items, []float64{50, 15, 5})
 			result.P50Items, result.P85Items, result.P95Items =

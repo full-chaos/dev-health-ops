@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"github.com/full-chaos/dev-health-ops/internal/testsupport/fakehttp"
 	"io"
 	"net/http"
 	"strings"
@@ -45,7 +46,7 @@ func (doer *gitLabWorkItemsDoer) Do(request *http.Request) (*http.Response, erro
 func gitLabWorkItemsClient(t *testing.T, doer providerfoundation.HTTPDoer) *providerfoundation.HTTPClient {
 	t.Helper()
 	client, err := providerfoundation.NewHTTPClient(
-		"gitlab", "https://gitlab.example", doer,
+		"gitlab", "https://gitlab.example", fakehttp.Client(doer),
 		func(*http.Request) error { return nil },
 		providerfoundation.RetryPolicy{MaxAttempts: 1, InitialWait: time.Nanosecond, MaxWait: time.Nanosecond},
 		providerfoundation.LeaseGuardFunc(func(context.Context) error { return nil }),
@@ -79,7 +80,7 @@ func TestGitLabWorkItemsRouteNormalizesSixRawFactsAndReportsDerivedGap(t *testin
 	batch, err := (GitLabWorkItemsRouteHandler{StatusMapping: loadRealStatusMapping(t), PerPage: 2, MaxPages: 10, NestedMaxPages: 10}).Collect(
 		context.Background(), claim,
 		providerfoundation.Credential{Provider: "gitlab", ID: claim.CredentialID},
-		gitLabWorkItemsClient(t, doer), now,
+		gitLabWorkItemsClient(t, fakehttp.Client(doer)), now,
 	)
 	if err != nil {
 		paths := make([]string, 0, len(doer.requests))
@@ -174,7 +175,7 @@ func TestGitLabWorkItemsRouteRejectsPaginationCapAndMissingMapping(t *testing.T)
 	_, err := (GitLabWorkItemsRouteHandler{StatusMapping: loadRealStatusMapping(t), PerPage: 1, MaxPages: 1, FetchComments: &no, FetchHistory: &no, FetchLabels: &no, FetchLinks: &no, FetchMilestones: &no, IncludeMRs: &no}).Collect(
 		context.Background(), claim,
 		providerfoundation.Credential{Provider: "gitlab", ID: claim.CredentialID},
-		gitLabWorkItemsClient(t, &gitLabWorkItemsDoer{responses: responses}), time.Date(2026, 8, 3, 12, 0, 0, 0, time.UTC),
+		gitLabWorkItemsClient(t, fakehttp.Client(&gitLabWorkItemsDoer{responses: responses})), time.Date(2026, 8, 3, 12, 0, 0, 0, time.UTC),
 	)
 	if err != ErrPaginationCapExceeded {
 		t.Fatalf("cap error=%v", err)
@@ -182,7 +183,7 @@ func TestGitLabWorkItemsRouteRejectsPaginationCapAndMissingMapping(t *testing.T)
 	_, err = (GitLabWorkItemsRouteHandler{}).Collect(
 		context.Background(), claim,
 		providerfoundation.Credential{Provider: "gitlab", ID: claim.CredentialID},
-		gitLabWorkItemsClient(t, &gitLabWorkItemsDoer{responses: gitLabWorkItemResponses()}), time.Date(2026, 8, 3, 12, 0, 0, 0, time.UTC),
+		gitLabWorkItemsClient(t, fakehttp.Client(&gitLabWorkItemsDoer{responses: gitLabWorkItemResponses()})), time.Date(2026, 8, 3, 12, 0, 0, 0, time.UTC),
 	)
 	if err != ErrInvalidConfiguration {
 		t.Fatalf("mapping error=%v", err)
@@ -193,7 +194,7 @@ func TestGitLabWorkItemsRouteRejectsInvalidScopeBeforeRequests(t *testing.T) {
 	canonical := nativeTestClaim("gitlab", "work-items")
 	now := time.Date(2026, 8, 3, 12, 0, 0, 0, time.UTC)
 	validCredential := providerfoundation.Credential{Provider: "gitlab", ID: canonical.CredentialID}
-	validClient := gitLabWorkItemsClient(t, &gitLabWorkItemsDoer{responses: gitLabWorkItemResponses()})
+	validClient := gitLabWorkItemsClient(t, fakehttp.Client(&gitLabWorkItemsDoer{responses: gitLabWorkItemResponses()}))
 	wrongClient := *validClient
 	wrongClient.Provider = "github"
 	noBefore := canonical
@@ -226,7 +227,7 @@ func TestGitLabWorkItemsRouteRejectsInvalidScopeBeforeRequests(t *testing.T) {
 			client := test.client
 			if client != nil {
 				copy := *client
-				copy.Doer = doer
+				copy.Doer = fakehttp.Client(doer)
 				client = &copy
 			}
 			normalizedAt := now
@@ -252,7 +253,7 @@ func TestGitLabWorkItemsRouteAcceptsOnlyCanonicalClaimAcrossFiveAliases(t *testi
 			_, err := (GitLabWorkItemsRouteHandler{StatusMapping: loadRealStatusMapping(t)}).Collect(
 				context.Background(), claim,
 				providerfoundation.Credential{Provider: "gitlab", ID: claim.CredentialID},
-				gitLabWorkItemsClient(t, &gitLabWorkItemsDoer{responses: gitLabWorkItemResponses()}),
+				gitLabWorkItemsClient(t, fakehttp.Client(&gitLabWorkItemsDoer{responses: gitLabWorkItemResponses()})),
 				time.Date(2026, 8, 3, 12, 0, 0, 0, time.UTC),
 			)
 			if dataset == "work-items" {

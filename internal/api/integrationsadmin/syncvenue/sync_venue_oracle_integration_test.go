@@ -11,7 +11,6 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
-	"runtime"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -27,6 +26,7 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/platform/secrets"
 	"github.com/full-chaos/dev-health-ops/internal/providerfoundation"
 	schedsync "github.com/full-chaos/dev-health-ops/internal/scheduler/sync"
+	"github.com/full-chaos/dev-health-ops/internal/testsupport/moduleroot"
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/venueoracle"
 )
 
@@ -55,12 +55,13 @@ const (
 // the wait answers 202 "pending" with the occurrence id. The last two kinds
 // are asserted below, not compared.
 func TestIntegrationSyncVenueOracle(t *testing.T) {
+	golden := venueoracle.OpenGolden(t, venueGolden("integration-sync-venue-oracle", t.Name(), "c26ea95ab447e12f6bd230ee7651ed9ed5515e75c07f529ec8c2763293decd38"))
 	ctx := context.Background()
 	root := repoRoot(t)
 	const jwtKey = "venue-oracle-test-secret-key-for-integration-sync!"
 	v := newIDs()
 	venue := venueoracle.Start(t, ctx, venueoracle.Options{
-		Root:   root,
+		Golden: golden, Root: golden.PythonRoot(t, root),
 		JWTKey: jwtKey,
 		PythonEnv: []string{
 			"SETTINGS_ENCRYPTION_KEY=" + venueKey,
@@ -132,8 +133,8 @@ func TestIntegrationSyncVenueOracle(t *testing.T) {
 	t.Cleanup(func() { stop(); <-done })
 
 	same := sameRequests(venue, v)
-	python := venue.ServePython(t, same)
-	receipt := venueoracle.Diff(t, base, same, python, venueoracle.DiffOptions{Normalize: normalize})
+	python := golden.Python(t, venue, same)
+	receipt := venueoracle.Diff(t, base, same, python, venueoracle.DiffOptions{Golden: golden, Normalize: normalize})
 	t.Logf("receipt (%d requests):\n%s", len(same), receipt)
 
 	// The rows each plane planned, columns that are ids or a ruled difference
@@ -153,11 +154,10 @@ u.status, u.attempts, u.processor_flags::text FROM sync_run_units u WHERE u.inte
 ORDER BY u.integration_id::text, u.source_id::text, u.dataset_key`, 14},
 	}
 	for _, table := range compare {
-		pythonRows := venueoracle.TableRows(t, ctx, venue.AdminURI(t, venue.SourceDB), table.query)
 		goRows := venueoracle.TableRows(t, ctx, venue.AdminURI(t, venue.GoDB), table.query)
-		if pythonRows != goRows {
-			t.Errorf("%s differ\n python:\n%.4000s\n go:\n%.4000s", table.name, pythonRows, goRows)
-		}
+		pythonRows := golden.CompareRows(t, table.name, func() string {
+			return venueoracle.TableRows(t, ctx, venue.AdminURI(t, venue.SourceDB), table.query)
+		}, goRows)
 		if strings.Count(pythonRows, " | ") < table.minSeparators {
 			t.Errorf("%s: too few rows compared:\n%s", table.name, pythonRows)
 		}
@@ -165,7 +165,8 @@ ORDER BY u.integration_id::text, u.source_id::text, u.dataset_key`, 14},
 
 	// Ruled divergences, both planes asked.
 	diverging := divergingRequests(venue, v)
-	pythonDiverging := venue.ServePython(t, diverging)
+	pythonDiverging := golden.Python(t, venue, diverging)
+	golden.Consumed(t, pythonDiverging...)
 	for index, request := range diverging {
 		goResponse := venueoracle.Do(t, base, request)
 		if pythonDiverging[index].Status != 202 || !strings.Contains(pythonDiverging[index].Body, `"status":"accepted"`) {
@@ -197,16 +198,24 @@ JOIN sync_manual_triggers m USING (occurrence_id) JOIN sync_configurations c ON 
 		t.Errorf("pending occurrence: status %s mode %s triggered_by %s", status, mode, triggeredBy)
 	}
 	paused.Store(false)
+	golden.Finish(t)
 }
 
 var anyUUID = regexp.MustCompile(`[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}`)
 
 // normalize names each distinct uuid of a "clock: " request by its first
 // appearance, so a run named twice reads as one run and two runs never do.
+// syncRunID is the run id field of an accepted answer, as the golden holds it
+// (<id>) or as the Go api answers it (a uuid).
+var syncRunID = regexp.MustCompile(`"sync_run_id":"(?:<id>|[0-9a-fA-F-]{36})"`)
+
 func normalize(request venueoracle.Request, body string) string {
 	if !strings.HasPrefix(request.Name, "clock: ") {
 		return body
 	}
+	// The run id is a ruled difference: the Python plane draws a random one (the
+	// scrub blanked it in the golden) and the Go api derives its own.
+	body = syncRunID.ReplaceAllString(body, `"sync_run_id":"<id>"`)
 	seen := map[string]int{}
 	return anyUUID.ReplaceAllStringFunc(body, func(id string) string {
 		if _, ok := seen[id]; !ok {
@@ -251,7 +260,7 @@ func startGoServer(t *testing.T, ctx context.Context, venue *venueoracle.Venue, 
 
 func repoRoot(t *testing.T) string {
 	t.Helper()
-	_, file, _, ok := runtime.Caller(0)
+	_, file, _, ok := moduleroot.Caller(0)
 	if !ok {
 		t.Fatal("cannot locate this test's source file")
 	}

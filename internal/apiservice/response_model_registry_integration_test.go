@@ -3,6 +3,7 @@
 package apiservice
 
 import (
+	"context"
 	"encoding/json"
 	"github.com/full-chaos/dev-health-ops/internal/api/session"
 	"github.com/full-chaos/dev-health-ops/internal/api/sso"
@@ -11,10 +12,8 @@ import (
 	"io"
 	"log/slog"
 	"net/http/httptest"
-	"os/exec"
 	"path/filepath"
 	"regexp"
-	"runtime"
 	"strings"
 	"testing"
 
@@ -23,6 +22,7 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/api/teamsidentity"
 	"github.com/full-chaos/dev-health-ops/internal/apiservice/admin"
 	"github.com/full-chaos/dev-health-ops/internal/auth/httpapi"
+	"github.com/full-chaos/dev-health-ops/internal/testsupport/moduleroot"
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/pyoracle"
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/venueoracle"
 )
@@ -97,17 +97,19 @@ func routeShape(method, path string) string {
 // fail on a WriteJSON success body there), every other route must not be,
 // and each named exception must still be what it says.
 func TestRouteResponseModelsMatchTheFrozenFastAPITable(t *testing.T) {
-	golden := venueoracle.OpenGolden(t, programGolden("route-response-models", t.Name(), "cdd360911251cf04b25a7adff727ac6a4a09639f64f94470bf16e0d0a7fcdd31"))
-	_, file, _, _ := runtime.Caller(0)
+	golden := venueoracle.OpenGolden(t, programGolden("route-response-models", t.Name(), "53ccf0751052b5ecd6adf2c0ee773956b0b8737bdf227bec1cc23c209d3255fe"))
+	_, file, _, _ := moduleroot.Caller(0)
 	root := golden.PythonRoot(t, filepath.Clean(filepath.Join(filepath.Dir(file), "..", "..")))
 	request := venueoracle.ProgramRequest("fastapi route table", pythonRouteTableProgram, nil, producerEnv)
-	answers := golden.Produce(t, root, []venueoracle.Request{request}, func(_ *venueoracle.Producer, _ []venueoracle.Request) []venueoracle.Response {
-		python := pyoracle.Resolve(t, root)
-		command := exec.Command(python, "-c", pythonRouteTableProgram)
-		command.Env = producerCommandEnv(root)
+	answers := golden.Produce(t, root, []venueoracle.Request{request}, func(producer *venueoracle.Producer, _ []venueoracle.Request) []venueoracle.Response {
+		producer.RequireDeployed()
+		command, err := producer.Command(context.Background(), producerEnv, nil, "-c", pythonRouteTableProgram)
+		if err != nil {
+			t.Fatal(err)
+		}
 		output, err := command.Output()
 		if err != nil {
-			t.Fatalf("live FastAPI route table: %v", pyoracle.RunError(python, err, output))
+			t.Fatalf("live FastAPI route table: %v", pyoracle.RunError(command.Path, err, output))
 		}
 		return []venueoracle.Response{{Status: 0, Body: withoutLogLines(output)}}
 	})

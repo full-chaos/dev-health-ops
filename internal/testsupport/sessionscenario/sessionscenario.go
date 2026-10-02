@@ -3,10 +3,14 @@
 // IT issued from step to step), one normalization and one set of row
 // queries, shared by two runners:
 //
-//   - the venue oracle (internal/apiservice/sessionvenue TestSessionVenueOracle), where
-//     the REAL Python api answers every batch through TestClient and the
-//     Go api answers the same batch; it also records the Python side as a
-//     golden and fails when the committed golden differs;
+//   - the recorder (Harness with Python set), which ran the REAL Python api
+//     beside the Go api through TestClient and recorded the Python side as
+//     python_golden.json. The venue oracle that drove it (internal/apiservice/
+//     sessionvenue TestSessionVenueOracle) was retired with the Python api
+//     (CHAOS-7306): its requests carry tokens signed at run time, so they cannot
+//     be frozen as the other venue goldens are, and the replay below compares
+//     the same answers and rows. python_golden.json keeps the answers that last live
+//     run recorded;
 //   - the golden replay (internal/api/session TestSessionRoutesMatchGolden),
 //     where only the Go route set runs, against Postgres/ClickHouse/Valkey
 //     containers, and every answer and row is compared with that golden.
@@ -20,7 +24,9 @@ package sessionscenario
 import (
 	"bytes"
 	"context"
+	"crypto/sha256"
 	"encoding/base64"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -28,7 +34,6 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
-	"runtime"
 	"sort"
 	"strings"
 	"sync"
@@ -40,6 +45,7 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/api/oauthprovider"
 	"github.com/full-chaos/dev-health-ops/internal/api/pyjson"
 	"github.com/full-chaos/dev-health-ops/internal/auth/edgetoken"
+	"github.com/full-chaos/dev-health-ops/internal/testsupport/moduleroot"
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/venueoracle"
 )
 
@@ -350,9 +356,16 @@ type Recording struct {
 
 // GoldenPath is the committed Recording.
 func GoldenPath() string {
-	_, file, _, _ := runtime.Caller(0)
+	_, file, _, _ := moduleroot.Caller(0)
 	return filepath.Join(filepath.Dir(file), "testdata", "python_golden.json")
 }
+
+// goldenSHA256 pins python_golden.json (CHAOS-7306, D3855). Its recorder, the
+// session venue oracle, is retired: the file is the Python api's answers from the
+// last live run, which passed once more on build a4847c5e93607451a0c987b314d37e02fc43ce85
+// before the oracle was deleted. A changed file fails here: it cannot be
+// re-recorded, so a change is an edit by hand.
+const goldenSHA256 = "457096365286840fb50dffac99d5418e9532183070962fbbadf81e51794b4ae5"
 
 // LoadGolden reads the committed Recording.
 func LoadGolden(t *testing.T) *Recording {
@@ -360,6 +373,9 @@ func LoadGolden(t *testing.T) *Recording {
 	raw, err := os.ReadFile(GoldenPath())
 	if err != nil {
 		t.Fatal(err)
+	}
+	if sum := sha256.Sum256(raw); hex.EncodeToString(sum[:]) != goldenSHA256 {
+		t.Fatalf("python_golden.json sha256 %s, pinned %s: the golden was edited or replaced, and its recorder is retired", hex.EncodeToString(sum[:]), goldenSHA256)
 	}
 	var golden Recording
 	if err := json.Unmarshal(raw, &golden); err != nil {

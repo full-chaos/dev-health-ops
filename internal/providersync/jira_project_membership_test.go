@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"github.com/full-chaos/dev-health-ops/internal/testsupport/fakehttp"
 	"io"
 	"net/http"
 	"strings"
@@ -132,7 +133,7 @@ func TestResolveJiraProjectCatalogPreservesTheKnownKeyOnALookupFailure(t *testin
 		}, nil
 	})
 	client, err := providerfoundation.NewHTTPClient(
-		"jira", "https://acme.atlassian.net", doer,
+		"jira", "https://acme.atlassian.net", fakehttp.Client(doer),
 		func(request *http.Request) error { return nil },
 		providerfoundation.RetryPolicy{MaxAttempts: 1, InitialWait: time.Millisecond, MaxWait: time.Millisecond},
 		providerfoundation.LeaseGuardFunc(func(context.Context) error { return nil }),
@@ -168,7 +169,7 @@ func TestResolveJiraProjectCatalogLeavesTheKeyBlankWhenNoCurrentProjectIsKnown(t
 		}, nil
 	})
 	client, err := providerfoundation.NewHTTPClient(
-		"jira", "https://acme.atlassian.net", doer,
+		"jira", "https://acme.atlassian.net", fakehttp.Client(doer),
 		func(request *http.Request) error { return nil },
 		providerfoundation.RetryPolicy{MaxAttempts: 1, InitialWait: time.Millisecond, MaxWait: time.Millisecond},
 		providerfoundation.LeaseGuardFunc(func(context.Context) error { return nil }),
@@ -205,7 +206,7 @@ func TestResolveJiraProjectCatalogDoesNotFreezeAnIncompleteCacheEntry(t *testing
 		}, nil
 	})
 	client, err := providerfoundation.NewHTTPClient(
-		"jira", "https://acme.atlassian.net", doer,
+		"jira", "https://acme.atlassian.net", fakehttp.Client(doer),
 		func(request *http.Request) error { return nil },
 		providerfoundation.RetryPolicy{MaxAttempts: 1, InitialWait: time.Millisecond, MaxWait: time.Millisecond},
 		providerfoundation.LeaseGuardFunc(func(context.Context) error { return nil }),
@@ -287,7 +288,7 @@ func TestResolveJiraProjectCatalogCountsFailedAndRetriedAttempts(t *testing.T) {
 		}
 	})
 	client, err := providerfoundation.NewHTTPClient(
-		"jira", "https://acme.atlassian.net", doer,
+		"jira", "https://acme.atlassian.net", fakehttp.Client(doer),
 		func(request *http.Request) error { return nil },
 		providerfoundation.RetryPolicy{MaxAttempts: 2, InitialWait: time.Millisecond, MaxWait: time.Millisecond},
 		providerfoundation.LeaseGuardFunc(func(context.Context) error { return nil }),
@@ -297,7 +298,7 @@ func TestResolveJiraProjectCatalogCountsFailedAndRetriedAttempts(t *testing.T) {
 	}
 	requests := 0
 	counted := *client
-	counted.Doer = jiraWorkItemsCountingDoer{delegate: client.Doer, attempts: &requests}
+	counted.Doer = jiraWorkItemsCountingDoer{delegate: fakehttp.Client(client.Doer), attempts: &requests}
 	countedClient := &counted
 
 	cache := make(map[string]jiraProjectCatalogEntry)
@@ -335,7 +336,7 @@ func TestResolveJiraProjectCatalogCachesAndUpgradesAFallbackEntry(t *testing.T) 
 		}, nil
 	})
 	client, err := providerfoundation.NewHTTPClient(
-		"jira", "https://acme.atlassian.net", doer,
+		"jira", "https://acme.atlassian.net", fakehttp.Client(doer),
 		func(request *http.Request) error { return nil },
 		providerfoundation.RetryPolicy{MaxAttempts: 1, InitialWait: time.Millisecond, MaxWait: time.Millisecond},
 		providerfoundation.LeaseGuardFunc(func(context.Context) error { return nil }),

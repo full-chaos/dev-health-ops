@@ -739,7 +739,7 @@ func TestStartRefusesAGoldenRecordedUnderAnotherPythonEnvironment(t *testing.T) 
 
 // legacyKeyGoldenCount is how many goldens the closed list holds. It only goes
 // down, with every row that is deleted: there is no room above it.
-const legacyKeyGoldenCount = 52
+const legacyKeyGoldenCount = 51
 
 // legacyRow is one row of the closed list: a golden of the first key version
 // by its repository path, and the sha256 of its bytes.
@@ -979,7 +979,7 @@ func TestThePerRunNamesAreExactlyTheClosedListWithTheirSide(t *testing.T) {
 		"CLICKHOUSE_URI": false, "HOME": false, "PATH": false, "POSTGRES_URI": false, "PYTHONPATH": false, "REDIS_URL": false, "TMPDIR": false,
 		"GITHUB_APP_PRIVATE_KEY": true, "REQUESTS_CA_BUNDLE": true, "TELEMETRY_ENDPOINT": true,
 		"VENUE_PAGERDUTY_API_BASE_OVERRIDE": true, "VENUE_PAGERDUTY_REVOKE_URL_OVERRIDE": true, "VENUE_PAGERDUTY_TOKEN_URL_OVERRIDE": true,
-		"SMTP_HOST": true, "SMTP_PORT": true,
+		"SMTP_HOST": true, "SMTP_PORT": true, "GO_API_QUERY_API_URL": true, "QUERY_API_INTERNAL_URL": true,
 		"VENUE_PROVIDER_STUB_PORT": true, "VENUE_STRIPE_API_BASE": true,
 	}
 	for name, listed := range perRunPythonEnv {
@@ -1028,5 +1028,57 @@ func TestTheAddressOfAFakeSMTPSinkIsKeyedByNameWhateverItsValue(t *testing.T) {
 		if key(tagged([]string{name + "=a"}, false)...) == key(tagged([]string{name + "=b"}, false)...) {
 			t.Fatalf("%s supplied by the harness or the host is keyed by name only", name)
 		}
+	}
+}
+
+// TestTheAddressesOfTheQueryAPIOfTheRunAreKeyedByNameWhateverTheirValue pins
+// GO_API_QUERY_API_URL and QUERY_API_INTERNAL_URL, the loopback addresses of the
+// query-api a test starts for one run (a random port each run): two runs with
+// other ports are one Python environment, another setting still changes the key,
+// and the same names supplied by the harness or the host are keyed by value.
+func TestTheAddressesOfTheQueryAPIOfTheRunAreKeyedByNameWhateverTheirValue(t *testing.T) {
+	key := func(entries ...envEntry) string {
+		t.Helper()
+		out, err := pythonEnvKey(entries)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return out
+	}
+	one := key(fromTest("GO_API_QUERY_API_URL=http://127.0.0.1:40001", "QUERY_API_INTERNAL_URL=http://127.0.0.1:40001", "LOG_LEVEL=info")...)
+	two := key(fromTest("GO_API_QUERY_API_URL=http://127.0.0.1:40002", "QUERY_API_INTERNAL_URL=http://127.0.0.1:40002", "LOG_LEVEL=info")...)
+	if one != two {
+		t.Fatal("the address of the run's query-api changes the Python environment key")
+	}
+	if one == key(fromTest("GO_API_QUERY_API_URL=http://127.0.0.1:40001", "QUERY_API_INTERNAL_URL=http://127.0.0.1:40001", "LOG_LEVEL=debug")...) {
+		t.Fatal("a changed LOG_LEVEL no longer changes the key")
+	}
+	for _, name := range []string{"GO_API_QUERY_API_URL", "QUERY_API_INTERNAL_URL"} {
+		if key(tagged([]string{name + "=a"}, false)...) == key(tagged([]string{name + "=b"}, false)...) {
+			t.Fatalf("%s supplied by the harness or the host is keyed by name only", name)
+		}
+	}
+}
+
+// PythonPathRel keeps the checkout's path out of the key (CHAOS-7306): two options that differ
+// only in Root key alike, while a different relative name keys differently, and a
+// PYTHONPATH a test supplies itself keys by its own value (the path of its checkout).
+func TestPythonPathRelKeysTheRelativeNameAndNeverACheckoutPath(t *testing.T) {
+	rel := []string{"internal/apiservice/testdata/provider_stub"}
+	a := currentKey(t, Options{Root: "/checkout/one", PythonPathRel: rel})
+	b := currentKey(t, Options{Root: "/checkout/two", PythonPathRel: rel})
+	if a != b {
+		t.Fatalf("the key holds the checkout's path: %s in one checkout, %s in another", a, b)
+	}
+	if other := currentKey(t, Options{Root: "/checkout/one", PythonPathRel: []string{"internal/other"}}); other == a {
+		t.Fatal("a different relative name keys alike: the declared input is not in the key")
+	}
+	if none := currentKey(t, Options{Root: "/checkout/one"}); none == a {
+		t.Fatal("no relative name keys like one: the declared input is not in the key")
+	}
+	own1 := currentKey(t, Options{Root: "/checkout/one", PythonEnv: []string{"PYTHONPATH=/checkout/one/stub:/checkout/one/src"}})
+	own2 := currentKey(t, Options{Root: "/checkout/two", PythonEnv: []string{"PYTHONPATH=/checkout/two/stub:/checkout/two/src"}})
+	if own1 == own2 {
+		t.Fatal("a PYTHONPATH the test supplies keys by name only: the rule of perRunPythonEnv changed")
 	}
 }

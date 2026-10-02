@@ -1,0 +1,6 @@
+# Every file under internal/goapicli/routing/testdata: sha256, kind, path. Written by `go run ./internal/testsupport/recordedfiles/manifest`; never edit it by hand.
+# python-recorded set: 1aa6ce64bc3d557c47911521ce2808294920007fdad2e0a520c05bfe82aeafbf (2 files)
+# header-before-stamp set: e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855 (0 files)
+-	header	golden/routing.json
+aa383265a08328bc60007bc303aa09af7968b522ec49090fd632a5813b6ee4bc	python-recorded	pin_catalog.json
+089b6f320e2f0b7ed930b6057469c6da0ef1246f6559cdf6cfd6391615e6d920	python-recorded	pin_schema_digest.txt

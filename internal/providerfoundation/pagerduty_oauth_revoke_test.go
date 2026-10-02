@@ -2,6 +2,7 @@ package providerfoundation
 
 import (
 	"context"
+	"github.com/full-chaos/dev-health-ops/internal/testsupport/fakehttp"
 	"io"
 	"net/http"
 	"strings"
@@ -19,7 +20,7 @@ func TestRevokePagerDutyOAuthTokenRefusesAnyNon2xxAnswer(t *testing.T) {
 		doer := revokeDoerFunc(func(*http.Request) (*http.Response, error) {
 			return &http.Response{StatusCode: status, Header: http.Header{}, Body: io.NopCloser(strings.NewReader(""))}, nil
 		})
-		err := RevokePagerDutyOAuthToken(context.Background(), doer, PagerDutyRevokeConfig{ClientID: "id"}, "tok")
+		err := RevokePagerDutyOAuthToken(context.Background(), fakehttp.Client(doer), PagerDutyRevokeConfig{ClientID: "id"}, "tok")
 		if (err != nil) != wantErr {
 			t.Errorf("status %d: err = %v, want error %v", status, err, wantErr)
 		}

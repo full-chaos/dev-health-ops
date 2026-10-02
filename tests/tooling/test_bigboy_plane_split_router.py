@@ -15,6 +15,8 @@ from __future__ import annotations
 
 import importlib.util
 import re
+import shutil
+import subprocess
 from pathlib import Path
 from types import ModuleType
 from typing import Any
@@ -169,15 +171,13 @@ def _route(doc: dict, path: str) -> str:
     best = None
     for router in doc["http"]["routers"].values():
         rule = router["rule"]
-        m = re.search(r"PathRegexp\(`([^`]+)`\)", rule)
-        if m:
-            ok = re.match(m.group(1), path) is not None
-        elif "&&" in rule:
-            terms = re.findall(r"(Path|PathPrefix)\(`([^`]+)`\)", rule)
+        terms = re.findall(r"(PathRegexp|PathPrefix|Path)\(`([^`]+)`\)", rule)
+        if terms:
             ok = any(
-                (k == "Path" and path == v)
-                or (k == "PathPrefix" and path.startswith(v))
-                for k, v in terms
+                (kind == "PathRegexp" and re.match(value, path) is not None)
+                or (kind == "Path" and path == value)
+                or (kind == "PathPrefix" and path.startswith(value))
+                for kind, value in terms
             )
         else:
             ok = True
@@ -246,10 +246,11 @@ def test_anchored_allow_list_entry_emits_one_exact_path_term(gen: ModuleType) ->
             ("/api/v1/internal", "Prefix"),
         ]
     )
-    assert "Path(`/graphql`)" in rule
+    # CHAOS-7925: one case-insensitive whole-path regex per anchored entry (regex mode is `~*`)
+    assert "PathRegexp(`(?i)^/graphql$`)" in rule
     assert "PathPrefix(`/graphql/`)" not in rule
-    assert "Path(`/openapi.json`)" in rule
-    assert "$" not in rule and "\\" not in rule
+    assert "PathRegexp(`(?i)^/openapi[.]json$`)" in rule
+    assert "\\" not in rule
     assert "PathPrefix(`/api/v1/internal/`)" in rule
 
 
@@ -814,14 +815,19 @@ def test_an_entry_with_service_api_or_no_key_stays_on_python(gen: ModuleType) ->
 def test_the_named_backend_gives_the_router_of_a_query_api_paths_entry(
     gen: ModuleType,
 ) -> None:
-    """Both ways of sending /graphql to query-api give bigboy the same router, so a proof on
-    bigboy holds for either."""
+    """Both ways of sending /graphql to query-api route the path and its lookalikes the same
+    way, so a proof on bigboy holds for either. CHAOS-7925: they differ in case only, on purpose:
+    an anchored entry is matched case-insensitively (the chart's regex mode), a table path is
+    an exact string."""
     by_entry = _named_backend_values([_GRAPHQL_QUERY])
     by_table = _named_backend_values([])
     by_table["ingress"]["queryApiPaths"].append(
         {"path": "/graphql", "pathType": "Exact"}
     )
-    assert _emit(gen, by_entry) == _emit(gen, by_table)
+    for path in ("/graphql", "/graphqlx", "/graphql/", "/graphql/x", "/other"):
+        assert _route(_emit(gen, by_entry), path) == _route(_emit(gen, by_table), path)
+    assert _route(_emit(gen, by_entry), "/GRAPHQL") == "http://query-api:8090"
+    assert _route(_emit(gen, by_table), "/GRAPHQL") == "http://go-api:8000"
 
 
 @pytest.mark.parametrize(
@@ -940,7 +946,8 @@ def test_the_shipped_host_shape_is_accepted(gen: ModuleType, tmp_path: Path) -> 
     by_table["ingress"]["queryApiPaths"].append(
         {"path": "/graphql", "pathType": "Exact"}
     )
-    assert _emit(gen, doc) == _emit(gen, by_table)
+    for path in ("/graphql", "/graphqlx", "/graphql/", "/graphql/x"):
+        assert _route(_emit(gen, doc), path) == _route(_emit(gen, by_table), path)
 
 
 @pytest.mark.parametrize(
@@ -1195,3 +1202,289 @@ def test_a_named_backend_this_router_cannot_route_is_refused(
         with pytest.raises(SystemExit) as refused:
             gen.main([str(values), "--format", "dynamic"])
         assert reason in str(refused.value), refused.value
+
+
+# ---- CHAOS-7536: a differential test of the router generator against the chart's own render ----
+# The generator is a SECOND reading of the values beside the chart (five differences were found
+# across two review rounds of CHAOS-7487). Here the chart is rendered with `helm template` over a
+# values matrix, every rendered Ingress rule is resolved the way ingress-nginx resolves it, and the
+# backend the chart gives a path is compared with the backend the generator's router gives the same
+# path on Host(`traefik`). A case the generator refuses (exit != 0) must be one the matrix names as
+# refused; a case the chart refuses to render must be named too. Nothing here is skipped silently:
+# without helm the whole block FAILS (a measurement that did not happen must not read as a pass).
+
+CHART = ROOT / "deploy" / "helm" / "dev-health"
+_BACKEND = {
+    "http://go-api:8000": "go-api",
+    "http://query-api:8090": "query-api",
+    "http://api:8000": "api",
+}
+_HOST_API = "api.example"
+_GO_DEFAULT_ONLY = [{"path": "/", "pathType": "Prefix", "service": "go-api"}]
+
+
+def _render_chart(chart_values: dict) -> list[dict]:
+    helm = shutil.which("helm")
+    assert helm is not None, "helm is required for the CHAOS-7536 differential test"
+    out = subprocess.run(
+        [
+            helm,
+            "template",
+            "differential",
+            str(CHART),
+            "-f",
+            "-",
+            "--show-only",
+            "templates/ingress.yaml",
+        ],
+        input=yaml.safe_dump(chart_values),
+        capture_output=True,
+        text=True,
+        timeout=120,
+        check=False,
+    )
+    if out.returncode != 0:
+        raise ChartRefused(
+            out.stderr.strip().splitlines()[-1] if out.stderr.strip() else "helm failed"
+        )
+    return [d for d in yaml.safe_load_all(out.stdout) if d]
+
+
+class ChartRefused(Exception):
+    pass
+
+
+def _chart_backend(ingresses: list[dict], host: str, path: str) -> str:
+    """The Service the chart's rendered rules give `path` on `host`, resolved as ingress-nginx does.
+
+    Without regex mode: an Exact rule matches that path only; a Prefix rule matches the path and
+    anything below it on a segment boundary; the longest match wins. With regex mode (an Ingress on
+    the host carries use-regex): every rule is a case-insensitive regex tried longest path first,
+    a Prefix/Exact rule unanchored at the end, an ImplementationSpecific rule verbatim."""
+    rules = []
+    regex_mode = False
+    for ing in ingresses:
+        ann = ing["metadata"].get("annotations") or {}
+        for rule in ing["spec"]["rules"]:
+            if rule["host"] != host:
+                continue
+            regex_mode = (
+                regex_mode or ann.get("nginx.ingress.kubernetes.io/use-regex") == "true"
+            )
+            for item in rule["http"]["paths"]:
+                svc = item["backend"]["service"]["name"].removeprefix(
+                    "differential-dev-health-"
+                )
+                rules.append((item["path"], item["pathType"], svc))
+    rules.sort(key=lambda r: len(r[0]), reverse=True)
+    if regex_mode:
+        for rpath, rtype, svc in rules:
+            pattern = (
+                rpath if rtype == "ImplementationSpecific" else "^" + re.escape(rpath)
+            )
+            if rtype != "ImplementationSpecific" and not pattern.startswith("^"):
+                pattern = "^" + pattern
+            if re.search(
+                pattern if pattern.startswith("^") else "^" + pattern,
+                path,
+                re.IGNORECASE,
+            ):
+                return svc
+        raise AssertionError(f"no rule for {path} on {host}")
+    exact = [svc for rpath, rtype, svc in rules if rtype == "Exact" and rpath == path]
+    if exact:
+        return exact[0]
+    for rpath, rtype, svc in rules:
+        if rtype == "Prefix" and (
+            rpath == "/"
+            or path == rpath.rstrip("/")
+            or path.startswith(rpath.rstrip("/") + "/")
+        ):
+            return svc
+    raise AssertionError(f"no rule for {path} on {host}")
+
+
+def _sample_paths(shared: list[dict], own: list[dict]) -> list[str]:
+    base = {"/", "/unrelated", "/api/v1/unrelated"}
+    for entry in [*shared, *own]:
+        lit = entry["path"].replace("\\.", ".").removesuffix("$")
+        base.add(lit)
+    out: set[str] = set()
+    for lit in base:
+        out |= {lit, lit + "x", lit + "/", lit + "/x", lit.upper(), lit.capitalize()}
+    return sorted(out)
+
+
+_Q = {"path": "/graphql", "pathType": "Exact", "service": "query-api"}
+_QA = {
+    "path": "/graphql$",
+    "pathType": "ImplementationSpecific",
+    "service": "query-api",
+}
+_PY_PREFIX = {"path": "/ops-status", "pathType": "Prefix"}
+_PY_EXACT = {"path": "/status", "pathType": "Exact"}
+_PY_ANCHORED = {"path": "/about$", "pathType": "ImplementationSpecific"}
+_PY_DOTTED = {"path": "/feed\\.xml$", "pathType": "ImplementationSpecific"}
+
+# (id, shared allow-list, own allow-list of a second host or None, outcome)
+_MATRIX = [
+    ("plain-query-exact", [_Q, _PY_PREFIX, _PY_EXACT], None, "generator-refuses"),
+    (
+        "plain-python-only",
+        [_PY_PREFIX, _PY_EXACT, _QA | {"service": "query-api"}],
+        None,
+        "chart-refuses",
+    ),
+    ("anchored-query", [_QA, _PY_ANCHORED], None, "compare"),
+    ("anchored-query-and-prefix", [_QA, _PY_PREFIX, _PY_ANCHORED], None, "compare"),
+    ("anchored-dotted", [_QA, _PY_DOTTED], None, "compare"),
+    ("own-list-on-second-host", [_QA, _PY_ANCHORED], [_QA, _PY_PREFIX], "compare"),
+    ("own-list-plain", [_Q, _PY_PREFIX], [_Q, _PY_EXACT], "generator-refuses"),
+    (
+        "query-api-entry-only-on-one-host",
+        [_PY_PREFIX, _QA],
+        [_PY_PREFIX],
+        "generator-refuses",
+    ),
+]
+
+
+@pytest.mark.parametrize(
+    ("case", "shared", "own", "outcome"), _MATRIX, ids=[m[0] for m in _MATRIX]
+)
+def test_the_router_gives_every_path_the_backend_the_chart_gives_it(
+    gen: ModuleType,
+    tmp_path: Path,
+    case: str,
+    shared: list[dict],
+    own: list[dict] | None,
+    outcome: str,
+) -> None:
+    hosts: list[dict] = [
+        {"host": _HOST_API, "pythonAllowList": True, "paths": _GO_DEFAULT_ONLY}
+    ]
+    if own is not None:
+        hosts.append(
+            {
+                "host": "in-cluster.example",
+                "pythonAllowList": own,
+                "paths": _GO_DEFAULT_ONLY,
+            }
+        )
+    chart_values = {
+        "ingress": {
+            "enabled": True,
+            "className": "nginx",
+            "pythonAllowList": shared,
+            "hosts": hosts,
+        },
+        "goApi": {"enabled": True},
+        "api": {"enabled": True},
+        "queryApi": {"enabled": True},
+    }
+    doc = yaml.safe_load(yaml.safe_dump(VALUES))
+    doc["ops"] = {"ingress": chart_values["ingress"]}
+
+    try:
+        ingresses = _render_chart(chart_values)
+    except ChartRefused:
+        assert outcome == "chart-refuses", (
+            f"{case}: the chart refused to render a case the matrix says it renders"
+        )
+        return
+    assert outcome != "chart-refuses", (
+        f"{case}: the matrix says the chart refuses, and it rendered"
+    )
+
+    try:
+        code = _run(gen, tmp_path, doc)
+    except (
+        SystemExit
+    ) as exit_:  # the generator refuses some shapes by exiting with a message
+        code = exit_.code if isinstance(exit_.code, int) else 1
+    if outcome == "generator-refuses":
+        assert code != 0, (
+            f"{case}: the generator emitted a router for values it must refuse"
+        )
+        return
+    assert code == 0, (
+        f"{case}: the generator refused values the chart renders (exit {code})"
+    )
+    routed = _emit(gen, doc)
+    differences = []
+    for path in _sample_paths(shared, own or []):
+        got = _BACKEND[_route(routed, path)]
+        for host in [h["host"] for h in hosts]:
+            want = _chart_backend(ingresses, host, path)
+            if want != got:
+                differences.append(f"{host} {path}")
+    known = sorted(_KNOWN_DIFFERENCES.get(case, {}))
+    assert sorted(differences) == known, (
+        f"{case}: the differences between the router and the chart are not the known ones.\n"
+        f"found: {sorted(differences)}\nknown: {known}"
+    )
+
+
+# Differences the matrix FOUND (CHAOS-7536) and that stay open. Each is pinned exactly: the test
+# fails when one disappears (a fix: delete the entry) and when a new one appears. They are
+# findings about the chart or the one-host router, not defects this test hides.
+_KNOWN_DIFFERENCES: dict[str, dict[str, str]] = {
+    "anchored-query-and-prefix": {
+        "api.example /OPS-STATUS": (
+            "the same unanchored, case-insensitive regex reading of a Prefix rule: the chart sends "
+            "/OPS-STATUS to the Python api, the router (case-sensitive segment prefix) to go-api"
+        ),
+        "api.example /ops-statusx": (
+            "regex mode makes a Prefix rule an UNANCHORED regex on a host with an anchored entry: "
+            "the chart sends /ops-statusx to the Python api, the router (a segment prefix) to go-api"
+        ),
+    },
+    "own-list-on-second-host": {
+        f"in-cluster.example {path}": (
+            "the router has one host and one Python list (the shared one); the in-cluster host's "
+            "own list differs from it"
+        )
+        for path in (
+            "/ABOUT",
+            "/OPS-STATUS",
+            "/about",
+            "/ops-status",
+            "/ops-status/",
+            "/ops-status/x",
+            "/ops-statusx",
+        )
+    },
+}
+
+
+@pytest.mark.parametrize(
+    ("path", "backend"),
+    [
+        ("/GRAPHQL", "query-api"),
+        ("/Graphql", "query-api"),
+        ("/ABOUT", "api"),
+        ("/About", "api"),
+    ],
+)
+def test_an_anchored_entry_matches_case_insensitively_like_regex_mode_does(
+    gen: ModuleType, path: str, backend: str
+) -> None:
+    """CHAOS-7925 (1): on a host with an anchored entry ingress-nginx matches paths case-insensitively
+    (`~*`): /GRAPHQL reaches query-api and /ABOUT the Python api there. The router matches the same
+    way (it was case-sensitive and sent both to go-api: the old router fails this test)."""
+    hosts = [{"host": _HOST_API, "pythonAllowList": True, "paths": _GO_DEFAULT_ONLY}]
+    chart_values = {
+        "ingress": {
+            "enabled": True,
+            "className": "nginx",
+            "pythonAllowList": [_QA, _PY_ANCHORED],
+            "hosts": hosts,
+        },
+        "goApi": {"enabled": True},
+        "api": {"enabled": True},
+        "queryApi": {"enabled": True},
+    }
+    doc = yaml.safe_load(yaml.safe_dump(VALUES))
+    doc["ops"] = {"ingress": chart_values["ingress"]}
+    assert _chart_backend(_render_chart(chart_values), _HOST_API, path) == backend
+    assert _BACKEND[_route(_emit(gen, doc), path)] == backend

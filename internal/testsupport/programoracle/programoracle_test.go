@@ -1,14 +1,15 @@
 package programoracle
 
 import (
+	"errors"
 	"io"
 	"os"
 	"path/filepath"
-	"runtime"
 	"slices"
 	"strings"
 	"testing"
 
+	"github.com/full-chaos/dev-health-ops/internal/testsupport/moduleroot"
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/pyoracle"
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/venueoracle"
 )
@@ -21,7 +22,7 @@ const runGoldenPythonBuild = "a4847c5e93607451a0c987b314d37e02fc43ce85"
 // recorded: its exit code and its stdout are both kept, so a failed producer
 // is never an empty success. No Python runs here.
 func TestRunAnswersFromTheGolden(t *testing.T) {
-	_, file, _, _ := runtime.Caller(0)
+	_, file, _, _ := moduleroot.Caller(0)
 	root := filepath.Clean(filepath.Join(filepath.Dir(file), "..", "..", ".."))
 	spec := venueoracle.GoldenSpec{
 		Path:        "testdata/golden/run.golden.json",
@@ -51,7 +52,7 @@ func TestRunAnswersFromTheGolden(t *testing.T) {
 // starts with a __future__ import, which only the head of a file may hold, and
 // prints where it believes it is, its module name and its input.
 func TestAScriptRunsAsItsFileInThePinnedCheckout(t *testing.T) {
-	_, file, _, _ := runtime.Caller(0)
+	_, file, _, _ := moduleroot.Caller(0)
 	root := filepath.Clean(filepath.Join(filepath.Dir(file), "..", "..", ".."))
 	spec := venueoracle.GoldenSpec{
 		Path:        "testdata/golden/script.golden.json",
@@ -236,6 +237,36 @@ func TestAPerRunEntryReachesTheProgramAndIsNotInTheRequest(t *testing.T) {
 	}
 	if without := interpreterEnv("/pinned", Program{Env: map[string]string{"TZ": "UTC"}}, nil); len(without) != len(environment)-2 {
 		t.Fatalf("a program with no per-run entry gets %d entries, want %d", len(without), len(environment)-2)
+	}
+}
+
+// TestAnAnswerHookReplacesStdoutAndIsHeldToTheSameRules pins Program.Answer:
+// what it returns is the answer, it runs only after an exit with status 0, its
+// error stops the recording, and an answer it makes with a per-run value is
+// refused like a printed one.
+func TestAnAnswerHookReplacesStdoutAndIsHeldToTheSameRules(t *testing.T) {
+	fakeInterpreter(t)
+	address, _, _, _ := perRunAddress()
+	perRun := func() map[string]string { return map[string]string{"ORACLE_DATABASE_URI": address} }
+	root := t.TempDir()
+	calls := 0
+	seen := func(stdout []byte) ([]byte, error) {
+		calls++
+		return []byte("seen by the server after " + string(stdout)), nil
+	}
+	if result, err := executeErr(root, Program{Name: "clean", Text: "clean", PerRun: perRun, PerRunNames: []string{"ORACLE_DATABASE_URI"}, Answer: seen}); err != nil || string(result.stdout) != "seen by the server after ok" || calls != 1 {
+		t.Fatalf("the answer of the hook = %q, %v after %d calls", result.stdout, err, calls)
+	}
+	if result, err := executeErr(root, Program{Name: "fails", Text: "fail", PerRun: perRun, PerRunNames: []string{"ORACLE_DATABASE_URI"}, Answer: seen}); err != nil || result.exitCode != 3 || string(result.stdout) != "part" || calls != 1 {
+		t.Fatalf("a program that exits 3 = %+v, %v after %d calls: the hook runs only after status 0", result, err, calls)
+	}
+	refused := func([]byte) ([]byte, error) { return nil, errors.New("the server received nothing") }
+	if _, err := executeErr(root, Program{Name: "nothing", Text: "clean", Answer: refused}); err == nil || !strings.Contains(err.Error(), "the server received nothing") {
+		t.Fatalf("an error of the hook = %v, want it to stop the recording", err)
+	}
+	leaking := func([]byte) ([]byte, error) { return []byte("the server saw " + address), nil }
+	if _, err := executeErr(root, Program{Name: "leaks", Text: "clean", PerRun: perRun, PerRunNames: []string{"ORACLE_DATABASE_URI"}, Answer: leaking}); err == nil || !strings.Contains(err.Error(), "value of the per-run entry ORACLE_DATABASE_URI") {
+		t.Fatalf("an answer of the hook with the address = %v, want it refused by the name of the entry", err)
 	}
 }
 

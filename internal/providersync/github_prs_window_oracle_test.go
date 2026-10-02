@@ -188,5 +188,6 @@ func TestGenericOracleRediscoversWindowGuardDefect(t *testing.T) {
 	requireOracleRediscovers(
 		t, "rediscovers pre-H3 null-updated_at window guard bug",
 		"github/prs/window", cases, buggyBuilder, nil,
+		divergenceRead{"null_updated_at_included", "excluded"},
 	)
 }

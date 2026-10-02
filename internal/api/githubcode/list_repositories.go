@@ -15,14 +15,17 @@ import (
 	"math"
 	"math/big"
 	"net/http"
+	"net/netip"
 	"net/url"
 	"regexp"
+	"strconv"
 	"strings"
 	"time"
 
 	"github.com/full-chaos/dev-health-ops/internal/api/pyjson"
 	"github.com/full-chaos/dev-health-ops/internal/api/restcore"
 	"github.com/full-chaos/dev-health-ops/internal/pythonparity"
+	"github.com/full-chaos/dev-health-ops/internal/pythonparity/pyidna"
 )
 
 const (
@@ -110,6 +113,7 @@ func (c Client) listPages(ctx context.Context, path, operation, dataKey, extra, 
 	loweredPattern := pythonparity.Lower(pattern)
 	var repos []Repo
 	next := normalizeURL(merge(base, path, "per_page="+fmt.Sprint(perPage)+extra))
+	baseOrigin := originOf(next)
 	for pages := 0; ; pages++ {
 		if pages >= maxPages {
 			break
@@ -163,8 +167,49 @@ func (c Client) listPages(ctx context.Context, path, operation, dataKey, extra, 
 			return nil, err
 		}
 		next = normalizeURL(next)
+		// The token goes only to the origin it was configured for: a next page on another origin is refused, not
+		// followed without the token (an unauthenticated page 2 could return a silent partial list).
+		if nextOrigin := originOf(next); nextOrigin == (origin{}) || nextOrigin != baseOrigin {
+			return nil, &Error{Class: CrossOriginLinkClass, Message: "refused a next page link on another origin"}
+		}
 	}
 	return repos, nil
+}
+
+// CrossOriginLinkClass is the error class of a Link next URL whose origin differs from the base URL's.
+const CrossOriginLinkClass = "link_cross_origin_refused"
+
+// origin is where a request goes: the scheme, the host in its IDNA form and the port. Userinfo, path, query and
+// fragment are not part of it. Its zero value is "no origin": a URL that does not parse, or a host IDNA cannot
+// encode. The check fails closed: a next page whose origin is the zero value is refused, even when the base's is too
+// (Go's transport may dial a host Python's IDNA refuses, so an origin we cannot compute is never trusted).
+//
+// originOf reads URLs that normalizeURL has already put in httpx's form: that is what lower-cases the host and drops
+// a default port (https://H:443 and https://h are one origin).
+type origin struct{ scheme, host, port string }
+
+func originOf(raw string) origin {
+	parsed, err := url.Parse(raw)
+	if err != nil {
+		return origin{}
+	}
+	host, err := pyidna.CodecEncode(parsed.Hostname())
+	if err != nil {
+		return origin{}
+	}
+	// An IP literal is one address however it is spelled (case, zeros, compression).
+	if address, err := netip.ParseAddr(host); err == nil {
+		host = address.String()
+	}
+	// A port is a number: "0443" is 443, and the scheme's default port is the same origin as none.
+	port := parsed.Port()
+	if number, err := strconv.Atoi(port); err == nil {
+		port = strconv.Itoa(number)
+	}
+	if (parsed.Scheme == "https" && port == "443") || (parsed.Scheme == "http" && port == "80") {
+		port = ""
+	}
+	return origin{scheme: parsed.Scheme, host: host, port: port}
 }
 
 func orDefault(base string) string {

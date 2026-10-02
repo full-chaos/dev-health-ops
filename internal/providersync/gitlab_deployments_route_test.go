@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"github.com/full-chaos/dev-health-ops/internal/testsupport/fakehttp"
 	"io"
 	"net/http"
 	"strings"
@@ -63,7 +64,7 @@ func TestGitLabDeploymentsRouteMirrorsPythonReleaseMRWindowSinglePageAndEvidence
 	claim := nativeTestClaim("gitlab", "deployments")
 	batch, err := (GitLabDeploymentsRouteHandler{}).Collect(
 		context.Background(), claim, providerfoundation.Credential{},
-		gitLabRepositoryClient(t, doer, "https://gitlab.example"), normalizedAt,
+		gitLabRepositoryClient(t, fakehttp.Client(doer), "https://gitlab.example"), normalizedAt,
 	)
 	if err != nil {
 		t.Fatal(err)
@@ -123,7 +124,7 @@ func TestGitLabDeploymentsRouteMirrorsPythonCoreFailureAsEmptySuccess(t *testing
 	claim := nativeTestClaim("gitlab", "deployments")
 	batch, err := (GitLabDeploymentsRouteHandler{}).Collect(
 		context.Background(), claim, providerfoundation.Credential{},
-		gitLabRepositoryClient(t, doer, "https://gitlab.example"),
+		gitLabRepositoryClient(t, fakehttp.Client(doer), "https://gitlab.example"),
 		time.Date(2026, 8, 9, 12, 0, 0, 0, time.UTC),
 	)
 	if err != nil {
@@ -148,7 +149,7 @@ func TestGitLabDeploymentsRouteMirrorsPythonSkipsNonObjectCorePayloadAndContinue
 	claim := nativeTestClaim("gitlab", "deployments")
 	batch, err := (GitLabDeploymentsRouteHandler{}).Collect(
 		context.Background(), claim, providerfoundation.Credential{},
-		gitLabRepositoryClient(t, doer, "https://gitlab.example"),
+		gitLabRepositoryClient(t, fakehttp.Client(doer), "https://gitlab.example"),
 		time.Date(2026, 8, 9, 12, 0, 0, 0, time.UTC),
 	)
 	if err != nil {
@@ -184,7 +185,7 @@ func TestGitLabDeploymentsRouteMirrorsPythonBestEffortReleaseAndMRErrors(t *test
 	claim := nativeTestClaim("gitlab", "deployments")
 	batch, err := (GitLabDeploymentsRouteHandler{}).Collect(
 		context.Background(), claim, providerfoundation.Credential{},
-		gitLabRepositoryClient(t, doer, "https://gitlab.example"),
+		gitLabRepositoryClient(t, fakehttp.Client(doer), "https://gitlab.example"),
 		time.Date(2026, 8, 9, 12, 0, 0, 0, time.UTC),
 	)
 	if err != nil {
@@ -266,7 +267,7 @@ func TestGitLabDeploymentsRouteRejectsInvalidClaimClientAndMaxBeforeRequests(t *
 		test := test
 		t.Run(test.name, func(t *testing.T) {
 			doer := &gitLabDeploymentsDoer{t: t}
-			client := gitLabRepositoryClient(t, doer, "https://gitlab.example")
+			client := gitLabRepositoryClient(t, fakehttp.Client(doer), "https://gitlab.example")
 			if test.clientMut != nil {
 				test.clientMut(client)
 			}
@@ -299,7 +300,7 @@ func TestGitLabDeploymentsRouteRejectsProjectIDMismatchBeforeListRequests(t *tes
 	}}
 	batch, err := (GitLabDeploymentsRouteHandler{}).Collect(
 		context.Background(), nativeTestClaim("gitlab", "deployments"), providerfoundation.Credential{},
-		gitLabRepositoryClient(t, doer, "https://gitlab.example"),
+		gitLabRepositoryClient(t, fakehttp.Client(doer), "https://gitlab.example"),
 		time.Date(2026, 8, 9, 12, 0, 0, 0, time.UTC),
 	)
 	if !errors.Is(err, providerfoundation.ErrNormalizationInvalid) {

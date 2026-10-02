@@ -196,30 +196,6 @@ func TestClosedEnvInheritsNothingAndCarriesTheExtras(t *testing.T) {
 	}
 }
 
-// The recorders of the goldens that were hand-recorded with the whole shell environment run Python
-// through ClosedEnv and never inherit it: a closed list of the test files, each of which must call
-// ClosedEnv and must not call os.Environ(). A package converted to the launcher (venueoracle.Producer.Command)
-// leaves this list: the launcher builds the closed environment itself.
-func TestTheClosedEnvironmentRecordersDoNotInheritTheEnvironment(t *testing.T) {
-	for _, file := range []string{
-		"../../chmigrate/migrate_venue_oracle_integration_test.go",
-		"../../chmigrate/repair_integration_test.go",
-		"../../chmigrate/chain_record_integration_test.go",
-	} {
-		raw, err := os.ReadFile(file)
-		if err != nil {
-			t.Fatal(err)
-		}
-		text := string(raw)
-		if strings.Contains(text, "os.Environ()") {
-			t.Errorf("%s inherits the environment (os.Environ()): a recording must run in pyoracle.ClosedEnv", file)
-		}
-		if !strings.Contains(text, "pyoracle.ClosedEnv(") {
-			t.Errorf("%s does not run Python through pyoracle.ClosedEnv", file)
-		}
-	}
-}
-
 // refusingInterpreter is a stand-in interpreter that behaves like the real one
 // under a recording test's guard: with PYTHONHOME set it cannot start (it says
 // why on standard error and exits 1); otherwise it writes the environment it
@@ -347,11 +323,11 @@ func repoRootOf(t *testing.T) string {
 	}
 }
 
-// The closed list only shrinks, and names directories that exist.
+// The closed list names directories that exist (it only shrinks: ci/ratchets.tsv holds its size to the merge base).
 func TestTheClosedListOfOwnLaunchPackagesOnlyShrinks(t *testing.T) {
 	list := UnconvertedOwnLaunch()
-	if len(list) != unconvertedOwnLaunchCeiling {
-		t.Fatalf("the list holds %d packages and unconvertedOwnLaunchCeiling says %d: the list only shrinks, and the number goes down with it", len(list), unconvertedOwnLaunchCeiling)
+	if len(list) == 0 {
+		t.Fatal("the closed list is empty: this test then checks nothing; when the last package is converted, delete the list and this test together")
 	}
 	root := repoRootOf(t)
 	for _, dir := range list {
@@ -448,19 +424,14 @@ func TestInterpreterRefusesInARecordingOutsideTheClosedList(t *testing.T) {
 // (or start it by that name) are a frozen set: a new file that does is RED until it goes through the
 // producer's launcher. The exceptions below never record a golden (CHAOS-7820).
 var lookPathPythonDayOne = map[string]bool{
-	"internal/testsupport/pyoracle/pyoracle.go":             true, // the resolver itself
-	"internal/testsupport/venueoracle/venueoracle.go":       true, // the launcher's PATH check
-	"internal/apiservice/admin/orgdeletion_targets_test.go": true,
-	"internal/pgmigrate/preflight_test.go":                  true,
+	"internal/testsupport/pyoracle/pyoracle.go":       true, // the resolver itself
+	"internal/testsupport/venueoracle/venueoracle.go": true, // the launcher's PATH check
+	"internal/pgmigrate/preflight_test.go":            true,
 	// Launches by the name "python3" (the venue puts the interpreter's
 	// directory first on PATH): started with the process environment, a
 	// recording's poison (PYTHONHOME) stops these, so none records today.
-	"internal/testsupport/programoracle/programoracle.go":                              true,
-	"internal/queryapi/people/summaryvenue/summary_venue_oracle_integration_test.go":   true,
-	"internal/queryapi/server/dict_order_venue_oracle_test.go":                         true,
-	"internal/queryapi/server/workunit_explain_provider_venue_oracle_test.go":          true,
-	"internal/apiservice/metricsvenue/counter_parity_venue_oracle_integration_test.go": true,
-	"internal/testsupport/venueoracle/producer.go":                                     true,
+	"internal/testsupport/programoracle/programoracle.go": true,
+	"internal/testsupport/venueoracle/producer.go":        true,
 }
 
 func TestNoNewFileLooksPythonUpByName(t *testing.T) {

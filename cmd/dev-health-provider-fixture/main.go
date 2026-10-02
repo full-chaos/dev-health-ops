@@ -4,9 +4,12 @@
 package main
 
 import (
+	"log/slog"
+
 	"encoding/json"
 	"flag"
 	"fmt"
+	"github.com/full-chaos/dev-health-ops/internal/platform/logging"
 	"io"
 	"net/http"
 	"os"
@@ -69,6 +72,8 @@ func run(args []string, stdout io.Writer) error {
 }
 
 func main() {
+	// the provider packages log a fixed-text line when they refuse a doer: through the redacting handler, to stderr
+	logging.InstallDefault(logging.NewJSON(os.Stderr, slog.LevelInfo))
 	if err := run(os.Args[1:], os.Stdout); err != nil {
 		fmt.Fprintln(os.Stderr, "provider fixture evaluation failed")
 		os.Exit(1)

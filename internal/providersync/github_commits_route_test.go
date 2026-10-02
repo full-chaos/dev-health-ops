@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"github.com/full-chaos/dev-health-ops/internal/testsupport/fakehttp"
 	"io"
 	"net/http"
 	"strings"
@@ -58,7 +59,7 @@ func TestGitHubCommitsRouteEmitsCompleteEffect(t *testing.T) {
 		{body: gitHubRepositoryFixture},
 		{body: `[{"sha":"sha-1","commit":{"message":"ship it","author":{"name":"Ada","date":"2026-07-20T09:00:00Z"},"committer":{"name":"Grace","date":"2026-07-20T10:00:00Z"}},"parents":[]}]`},
 	}}
-	client := gitHubRepositoryClient(t, doer, "https://api.github.com")
+	client := gitHubRepositoryClient(t, fakehttp.Client(doer), "https://api.github.com")
 	claim := nativeTestClaim("github", "commits")
 	batch, err := (GitHubCommitsRouteHandler{}).Collect(
 		context.Background(), claim, providerfoundation.Credential{}, client, normalizedAt,
@@ -100,7 +101,7 @@ func TestGitHubCommitsRouteCountsFailedAndRetriedAttempts(t *testing.T) {
 		},
 	}
 	client, err := providerfoundation.NewHTTPClient(
-		"github", "https://api.github.com", doer,
+		"github", "https://api.github.com", fakehttp.Client(doer),
 		func(*http.Request) error { return nil },
 		providerfoundation.RetryPolicy{
 			MaxAttempts: 2, InitialWait: time.Nanosecond, MaxWait: time.Nanosecond,

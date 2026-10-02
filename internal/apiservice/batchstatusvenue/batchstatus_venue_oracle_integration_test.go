@@ -12,17 +12,16 @@ import (
 	"math/rand"
 	"os"
 	"path/filepath"
-	"runtime"
 	"strconv"
 	"strings"
 	"testing"
 
-	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/full-chaos/dev-health-ops/internal/apiservice"
 	"github.com/full-chaos/dev-health-ops/internal/platform/config"
 	"github.com/full-chaos/dev-health-ops/internal/storage/valkey"
+	"github.com/full-chaos/dev-health-ops/internal/testsupport/moduleroot"
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/venueoracle"
 )
 
@@ -93,7 +92,7 @@ var fixed = []shape{
 
 func repoRoot(t *testing.T) string {
 	t.Helper()
-	_, file, _, ok := runtime.Caller(0)
+	_, file, _, ok := moduleroot.Caller(0)
 	if !ok {
 		t.Fatal("resolve package path")
 	}
@@ -142,17 +141,18 @@ func seededInt(name string, fallback int64) int64 {
 // objects (seeded: BATCHSTATUS_ORACLE_SEED, default 6766). Both
 // planes read the identical rows; every DIFF fails the test.
 func TestBatchStatusShapeVenueOracle(t *testing.T) {
+	golden := venueoracle.OpenGolden(t, venueGolden("batch-status-shape-venue-oracle", t.Name(), "23997b71255aa4744ce023669f7a4217e120b8a083d5bfb45817f790e1f3e57a"))
 	// The peer is the loopback address (Go plane) or the FastAPI TestClient host
 	// (Python plane): trust it as a proxy so each request's X-Forwarded-For is
 	// its own rate-limit bucket.
 	t.Setenv("TRUSTED_PROXIES", "127.0.0.1,::1,testclient")
 	ctx := context.Background()
-	orgID, sourceID := uuid.New().String(), uuid.New().String()
-	token := "fcpush_venue-oracle-" + uuid.New().String()
+	orgID, sourceID := nextID().String(), nextID().String()
+	token := "fcpush_venue-oracle-" + nextID().String()
 
 	var scenarios []scenario
 	add := func(col column, s shape) {
-		scenarios = append(scenarios, scenario{col: col, shape: s, id: uuid.New().String()})
+		scenarios = append(scenarios, scenario{col: col, shape: s, id: nextID().String()})
 	}
 	for _, col := range []column{recordCounts, errorSummary, recomputeScope} {
 		for _, s := range fixed {
@@ -172,7 +172,7 @@ func TestBatchStatusShapeVenueOracle(t *testing.T) {
 	}
 
 	venue := venueoracle.Start(t, ctx, venueoracle.Options{
-		Root:   repoRoot(t),
+		Golden: golden, Root: golden.PythonRoot(t, repoRoot(t)),
 		JWTKey: "venue-oracle-jwt-signing-key-32-bytes-min",
 		Seed: func(t *testing.T, ctx context.Context, admin *pgxpool.Pool, _ *venueoracle.Venue) map[string]map[string]any {
 			exec := func(sql string, args ...any) {
@@ -186,7 +186,7 @@ func TestBatchStatusShapeVenueOracle(t *testing.T) {
 VALUES ($1::uuid, $2, 'github', 'acme/venue-repo', 'legacy', 'customer_push', true, now(), now())`, sourceID, orgID)
 			exec(`INSERT INTO external_ingest_tokens (id, org_id, source_id, name, token_hash, token_prefix, scopes, created_at)
 VALUES ($1::uuid, $2, $3::uuid, 'venue oracle token', $4, 'fcpush_venue', $5::jsonb, now())`,
-				uuid.New().String(), orgID, sourceID, tokenHash(token), `["schema:read","ingest:write","ingest:status"]`)
+				nextID().String(), orgID, sourceID, tokenHash(token), `["schema:read","ingest:write","ingest:status"]`)
 			for i, sc := range scenarios {
 				cols := map[column]any{recordCounts: `{}`, errorSummary: `{}`, recomputeScope: `{}`}
 				if sc.shape.sqlNull {
@@ -264,7 +264,8 @@ VALUES ($1::uuid, $2, $3, $4, 'github', 'acme/venue-repo', 'external-ingest.v1',
 			Body:    venueoracle.B64(body),
 		})
 	}
-	python := venue.ServePython(t, requests)
-	receipt := venueoracle.Diff(t, goBase, requests, python, venueoracle.DiffOptions{})
+	python := golden.Python(t, venue, requests)
+	receipt := venueoracle.Diff(t, goBase, requests, python, venueoracle.DiffOptions{Golden: golden})
 	t.Log(receipt)
+	golden.Finish(t)
 }

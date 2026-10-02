@@ -15,7 +15,6 @@ import (
 	"path/filepath"
 	"reflect"
 	"regexp"
-	"runtime"
 	"strings"
 	"testing"
 
@@ -32,6 +31,7 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/platform/secrets"
 	"github.com/full-chaos/dev-health-ops/internal/providerfoundation"
 	"github.com/full-chaos/dev-health-ops/internal/storage/valkey"
+	"github.com/full-chaos/dev-health-ops/internal/testsupport/moduleroot"
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/venueoracle"
 )
 
@@ -40,7 +40,7 @@ const encryptionKey = "venue-ownership-settings-encryption-key"
 
 func repoRoot(t *testing.T) string {
 	t.Helper()
-	_, file, _, ok := runtime.Caller(0)
+	_, file, _, ok := moduleroot.Caller(0)
 	if !ok {
 		t.Fatal("resolve package path")
 	}
@@ -257,7 +257,9 @@ func normalize(_ venueoracle.Request, body string) string {
 // per credential state (an organization's managed sources are all compared, so
 // one unreadable credential decides every request in it), each asked about the
 // host its credential resolves to, another host and the default host.
-func TestOwnershipVenueOracle(t *testing.T) { runOwnership(t, scenarios(), true) }
+func TestOwnershipVenueOracle(t *testing.T) {
+	runOwnership(t, venueoracle.OpenGolden(t, venueGolden("ownership-venue-oracle", t.Name(), "19bb11b831208f4b4e27effb19203cfc75f9bb23e50552d1a00ca479c9d222eb")), scenarios(), true)
+}
 
 // TestOwnershipVenueNoKeyOracle runs a credential whose stored payload cannot
 // be decrypted because neither api holds SETTINGS_ENCRYPTION_KEY: Python's
@@ -272,27 +274,29 @@ func TestOwnershipVenueNoKeyOracle(t *testing.T) {
 	// The key check comes before the provider check in Python too.
 	otherProvider := scenario{name: "no key, another provider's stored payload", system: "github", credProvider: "gitlab", credConfig: "{}",
 		cred: garbled, intConfig: "{}", sourceOn: true, intActive: true}
-	runOwnership(t, []scenario{garbledGitHub, noPayloadGitHub, otherProvider}, false)
+	runOwnership(t, venueoracle.OpenGolden(t, venueGolden("ownership-venue-no-key-oracle", t.Name(), "d91fb1e4d22b85d22b3896c8ac705663b3c038dc1b9729c44b148f8c09a44fea")), []scenario{garbledGitHub, noPayloadGitHub, otherProvider}, false)
 }
 
-func runOwnership(t *testing.T, cases []scenario, withKey bool) {
+func runOwnership(t *testing.T, golden *venueoracle.Golden, cases []scenario, withKey bool) {
 	// The peer is the loopback address (Go plane) or the FastAPI TestClient host
 	// (Python plane): trust it as a proxy so
 	// each scenario's X-Forwarded-For is its own rate-limit bucket.
 	t.Setenv("TRUSTED_PROXIES", "127.0.0.1,::1,testclient")
 	ctx := context.Background()
-	root := repoRoot(t)
+	idSeq = 0 // each oracle numbers its ids from 1, whichever tests ran before it
+	root := golden.PythonRoot(t, repoRoot(t))
 	const jwtKey = "venue-oracle-test-secret-key-for-ownership-32-bytes!"
 	all := make([]ids, len(cases))
 	for i := range cases {
-		all[i] = ids{pushOrg: uuid.New(), batchOrg: uuid.New(), pushAdmin: uuid.New(),
-			cred: uuid.New(), integration: uuid.New(), source: uuid.New()}
+		all[i] = ids{pushOrg: nextID(), batchOrg: nextID(), pushAdmin: nextID(),
+			cred: nextID(), integration: nextID(), source: nextID()}
 	}
 	type batchSource struct{ token, host string }
 	batchTokens := make([][]batchSource, len(cases))
 
 	venue := venueoracle.Start(t, ctx, venueoracle.Options{
-		Root: root, JWTKey: jwtKey,
+		Golden: golden,
+		Root:   root, JWTKey: jwtKey,
 		PythonEnv: pythonEnv(withKey),
 		Seed: func(t *testing.T, ctx context.Context, admin *pgxpool.Pool, v *venueoracle.Venue) map[string]map[string]any {
 			exec := func(sql string, args ...any) {
@@ -328,7 +332,7 @@ VALUES ($1, $2, $2, 'enterprise', 'stripe', true, now(), now())`, org, "own-"+or
 					// The credential, integration and source of the scenario.
 					var credential any
 					if c.credProvider != "" {
-						credentialID := uuid.New()
+						credentialID := nextID()
 						var cipher any
 						switch c.cred.kind {
 						case "raw":
@@ -340,7 +344,7 @@ VALUES ($1, $2, $2, 'enterprise', 'stripe', true, now(), now())`, org, "own-"+or
 VALUES ($1, $2, $3, 'cred', true, $4, $5::json, now(), now())`, credentialID, org.String(), c.credProvider, cipher, c.credConfig)
 						credential = credentialID
 					}
-					integrationID := uuid.New()
+					integrationID := nextID()
 					exec(`INSERT INTO integrations (id, org_id, provider, credential_id, name, config, is_active, created_at, updated_at)
 VALUES ($1, $2, $3, $4, 'managed', $5::json, $6, now(), now())`, integrationID, org.String(), c.system, credential, c.intConfig, c.intActive)
 					exec(`INSERT INTO integration_sources (id, org_id, integration_id, provider, source_type, external_id, name, full_name, metadata, is_enabled, discovered_at, last_seen_at)
@@ -352,16 +356,16 @@ VALUES (gen_random_uuid(), $1, $2, $3, 'repository', 'acme/managed', 'managed', 
 				exec(`INSERT INTO users (id, email, is_active, is_verified, is_superuser, token_version, created_at, updated_at)
 VALUES ($1, $2, true, true, false, 0, now(), now())`, id.pushAdmin, email)
 				exec(`INSERT INTO memberships (id, org_id, user_id, role, joined_at, created_at, updated_at)
-VALUES ($1, $2, $3, 'admin', now(), now(), now())`, uuid.New(), id.pushOrg, id.pushAdmin)
+VALUES ($1, $2, $3, 'admin', now(), now(), now())`, nextID(), id.pushOrg, id.pushAdmin)
 				tokens[fmt.Sprintf("admin%d", i)] = map[string]any{"user_id": id.pushAdmin.String(), "email": email, "org_id": id.pushOrg.String(), "role": "admin"}
 				// The batch organization's registered sources and their tokens.
 				for j, host := range c.hosts() {
-					sourceID := uuid.New()
+					sourceID := nextID()
 					exec(`INSERT INTO external_ingest_sources (id, org_id, system, instance, entity_family, mode, enabled, created_at, updated_at)
 VALUES ($1, $2, $3, $4, $5, 'customer_push', true, now(), now())`, sourceID, id.batchOrg.String(), c.system, host, c.entityFamily())
-					token := fmt.Sprintf("fcpush_own%d_%d_%s", i, j, uuid.NewString()[:8])
+					token := fmt.Sprintf("fcpush_own%d_%d_%s", i, j, nextID().String()[:8])
 					exec(`INSERT INTO external_ingest_tokens (id, org_id, source_id, name, token_hash, token_prefix, scopes, created_at)
-VALUES ($1, $2, $3, 'venue', $4, 'fcpush_venue', $5::jsonb, now())`, uuid.New(), id.batchOrg.String(), sourceID, tokenHash(token), `["schema:read","ingest:write","ingest:status"]`)
+VALUES ($1, $2, $3, 'venue', $4, 'fcpush_venue', $5::jsonb, now())`, nextID(), id.batchOrg.String(), sourceID, tokenHash(token), `["schema:read","ingest:write","ingest:status"]`)
 					batchTokens[i] = append(batchTokens[i], batchSource{token: token, host: host})
 				}
 			}
@@ -395,18 +399,20 @@ VALUES ($1, $2, $3, 'venue', $4, 'fcpush_venue', $5::jsonb, now())`, uuid.New(),
 		}
 	}
 	scrape := venueoracle.Request{Name: "metrics", Method: "GET", Path: "/metrics"}
-	python := venue.ServePython(t, append(append([]venueoracle.Request{}, requests...), scrape))
+	python := golden.Python(t, venue, append(append([]venueoracle.Request{}, requests...), scrape))
 	pythonMetrics := python[len(python)-1]
+	golden.Consumed(t, pythonMetrics)
 	if pythonMetrics.Status != 200 {
 		t.Fatalf("python /metrics answered %d", pythonMetrics.Status)
 	}
 
 	goBase, operator := startGoServer(t, ctx, venue, jwtKey, withKey)
-	receipt := venueoracle.Diff(t, goBase, requests, python[:len(requests)], venueoracle.DiffOptions{Normalize: normalize})
+	receipt := venueoracle.Diff(t, goBase, requests, python[:len(requests)], venueoracle.DiffOptions{Golden: golden, Normalize: normalize})
 	t.Log(receipt)
 	if withKey {
 		compareDecryptFailed(t, pythonMetrics.Body, operator())
 	}
+	golden.Finish(t)
 }
 
 // decryptFailedCounts reads devhealth_integration_credential_decrypt_failed_total

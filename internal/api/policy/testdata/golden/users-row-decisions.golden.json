@@ -1,0 +1,32 @@
+{
+  "header": {
+    "test": "TestAuthenticateDecisionsMatchFrozenPython",
+    "python_build": "a4847c5e93607451a0c987b314d37e02fc43ce85",
+    "producer_digest": "6e1dc97e68624398015f60caee160cceee6ae601bd434d01b8b7d5975267e137",
+    "recipe": "git worktree add --detach $DIR a4847c5e93607451a0c987b314d37e02fc43ce85 (with its .venv: uv sync --frozen --no-install-project); then from the repository root: go run ./internal/testsupport/venueoracle/goldenrecord -pkg ./internal/api/policy/ -test '^TestAuthenticateDecisionsMatchFrozenPython$' -python-root $DIR",
+    "recorded_by": "goldenrecord",
+    "blanked": {}
+  },
+  "requests": [
+    {
+      "name": "producer identity",
+      "method": "PYTHON",
+      "path": "program sha256 92444c0454ed5d0e22662eaebfab5442c6405fbf1f880783deb6a557dba43757 env sha256 969169a1702b285f3a9e4b602d19052b0d6a3c6b2a44dd7425bef0f696436295",
+      "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "request_headers_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "status": 0,
+      "headers": {},
+      "body": "python 3.14.7\nunicodedata 16.0.0\npyjwt 2.15.0\n"
+    },
+    {
+      "name": "authenticate decisions",
+      "method": "PYTHON",
+      "path": "program sha256 8e26ff0c25a41342eb0e4afe86619f7372fb0191167c3d9c02641e70ad7effb9 env sha256 d3cd4d02d0400df020236ae7182067dd10c7e15f4f101629f774309d9bcee8a1",
+      "body_sha256": "d8f511a2712fc8307f6169a0ab6376dcf710a33b00da782c119cdf7702935277",
+      "request_headers_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "status": 0,
+      "headers": {},
+      "body": "[{\"name\": \"active, the same version\", \"accepted\": true, \"is_superuser\": false, \"token_version\": 2}, {\"name\": \"active superuser row\", \"accepted\": true, \"is_superuser\": true, \"token_version\": 0}, {\"name\": \"the token claims superuser, the row does not\", \"accepted\": true, \"is_superuser\": false, \"token_version\": 0}, {\"name\": \"no users row\", \"accepted\": false}, {\"name\": \"inactive user\", \"accepted\": false}, {\"name\": \"inactive superuser\", \"accepted\": false}, {\"name\": \"the row's version is ahead\", \"accepted\": false}, {\"name\": \"the token's version is ahead\", \"accepted\": false}, {\"name\": \"tv absent, row at 0\", \"accepted\": true, \"is_superuser\": false, \"token_version\": 0}, {\"name\": \"tv absent, row at 1\", \"accepted\": false}, {\"name\": \"tv null, row at 0\", \"accepted\": true, \"is_superuser\": false, \"token_version\": 0}, {\"name\": \"tv null, row at 1\", \"accepted\": false}, {\"name\": \"the row's version is null\", \"accepted\": true, \"is_superuser\": false, \"token_version\": 0}, {\"name\": \"tv a numeric string that is the row's version\", \"accepted\": true, \"is_superuser\": false, \"token_version\": 7}, {\"name\": \"tv a numeric string that is not the row's version\", \"accepted\": false}, {\"name\": \"tv unreadable\", \"accepted\": false}, {\"name\": \"tv with a plus sign\", \"accepted\": true, \"is_superuser\": false, \"token_version\": 7}, {\"name\": \"tv with a plus sign and then an underscore\", \"accepted\": false}, {\"name\": \"tv with a minus sign and then an underscore\", \"accepted\": false}, {\"name\": \"tv with a leading underscore\", \"accepted\": false}, {\"name\": \"tv with a trailing underscore\", \"accepted\": false}, {\"name\": \"tv with one underscore between digits\", \"accepted\": true, \"is_superuser\": false, \"token_version\": 10}, {\"name\": \"tv with two underscores between digits\", \"accepted\": false}, {\"name\": \"tv a float that truncates to the row's version\", \"accepted\": true, \"is_superuser\": false, \"token_version\": 2}, {\"name\": \"tv true, row at 1\", \"accepted\": true, \"is_superuser\": false, \"token_version\": 1}, {\"name\": \"sub is not a UUID\", \"accepted\": false}]\n"
+    }
+  ]
+}

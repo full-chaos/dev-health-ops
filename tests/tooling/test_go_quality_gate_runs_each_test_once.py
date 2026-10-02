@@ -60,6 +60,7 @@ executes, which is the same error in a new place.
 
 from __future__ import annotations
 
+import hashlib
 import os
 import re
 import subprocess
@@ -136,7 +137,7 @@ def _expand(block: str, values: dict[str, str]) -> str:
     return block
 
 
-def _invocations() -> list[tuple[str | None, list[str]]]:
+def _invocation_records() -> list[tuple[str, str | None, list[str]]]:
     """Every LIVE-ORACLE `go test` command as (selector or None, packages).
 
     # PARSED BY WALKING THE CONTINUATION CHAIN, NOT BY ONE REGEX
@@ -161,7 +162,7 @@ def _invocations() -> list[tuple[str | None, list[str]]]:
     """
     raw_source = CHECK_GO.read_text(encoding="utf-8")
     lines = raw_source.splitlines()
-    found: list[tuple[str | None, list[str]]] = []
+    found: list[tuple[str, str | None, list[str]]] = []
     for index, line in enumerate(lines):
         if not GO_TEST.search(line):
             continue
@@ -193,8 +194,52 @@ def _invocations() -> list[tuple[str | None, list[str]]]:
         if "-tags=integration" in block or "-tags integration" in block:
             continue
         match = SELECTOR.search(block)
-        found.append(((match.group(1) or match.group(2)) if match else None, packages))
+        selector = (match.group(1) or match.group(2)) if match else None
+        found.append(
+            (
+                f"check_go.sh: {selector or '(no -run)'} {' '.join(packages)}",
+                selector,
+                packages,
+            )
+        )
+    # CHAOS-7656: the live-oracle commands are the entries of ci/live_python_oracles.d
+    # (check_live_python_oracles runs each with DEV_HEALTH_LIVE_PYTHON_ORACLES=1, no
+    # build tag), not literal lines of check_go.sh any more.
+    entries = sorted((REPO_ROOT / "ci" / "live_python_oracles.d").glob("*.run"))
+    assert entries, (
+        "ci/live_python_oracles.d holds no .run entry: the gate measures nothing"
+    )
+    for entry in entries:
+        fields = dict(
+            line.split("=", 1) for line in entry.read_text("utf-8").splitlines() if line
+        )
+        found.append((entry.name, fields.get("run"), [fields["package"]]))
     return found
+
+
+def _invocations() -> list[tuple[str | None, list[str]]]:
+    return [(selector, packages) for _, selector, packages in _invocation_records()]
+
+
+def _run_digest(selector: str | None) -> str | None:
+    return hashlib.sha256(selector.encode()).hexdigest()[:12] if selector else None
+
+
+# CHAOS-7954: the closed list of the live-Python oracle invocations the gate runs. It replaces a
+# loose floor (">= 15") that went red by surprise when freeze merges removed entries one after
+# another (29 -> 26 -> 20 -> 13 -> 12): each PR was green alone and the sum was red. Now an
+# invocation can leave or join ONLY by an explicit edit of this list in the same PR, and the test
+# fails by name; a parser that loses an invocation cannot hide under a floor either. Each name pins
+# its package and the first 12 hex of the sha256 of its `run=` selector (None = no selector).
+EXPECTED_ORACLE_INVOCATIONS: dict[str, tuple[str, str | None]] = {
+    "010-providersync-all.run": ("./internal/providersync/...", None),
+    "030-edgetokenmint.run": ("./internal/edgetokenmint", "32743eba7079"),
+    "050-api-policy.run": ("./internal/api/policy", "5089e8ae2457"),
+    "110-api-syncadmin.run": ("./internal/api/syncadmin", "36e071e2a481"),
+    "280-pythonparity.run": ("./internal/pythonparity", "24b62b885bc4"),
+    "390-queryapi-principal.run": ("./internal/queryapi/principal", "fcb55540375a"),
+    "400-pythonparity-all.run": ("./internal/pythonparity/...", "1ad5a1bc1165"),
+}
 
 
 def _tests_declared_in(package_argument: str) -> set[str]:
@@ -281,10 +326,25 @@ def test_the_parser_finds_a_plausible_number_of_invocations() -> None:
     for selector, packages in invocations:
         executed |= _tests_executed_by(selector, packages)
 
-    assert len(invocations) >= 15, (
-        f"only {len(invocations)} `go test` invocation(s) parsed from "
-        "ci/check_go.sh; the gate runs far more, so the parse has broken rather "
-        "than the script having shrunk"
+    records = _invocation_records()
+    names = [name for name, _, _ in records]
+    assert len(names) == len(set(names)), (
+        f"an invocation name is listed twice: {sorted(names)}"
+    )
+    actual = {
+        name: (
+            packages[0] if len(packages) == 1 else " ".join(packages),
+            _run_digest(selector),
+        )
+        for name, selector, packages in records
+    }
+    assert actual == EXPECTED_ORACLE_INVOCATIONS, (
+        "the live-oracle invocations of the gate are not the closed list "
+        "EXPECTED_ORACLE_INVOCATIONS (edit the list in the same PR as the change): "
+        f"added={sorted(set(actual) - set(EXPECTED_ORACLE_INVOCATIONS))} "
+        f"removed={sorted(set(EXPECTED_ORACLE_INVOCATIONS) - set(actual))} "
+        f"changed={sorted(n for n in actual if n in EXPECTED_ORACLE_INVOCATIONS and actual[n] != EXPECTED_ORACLE_INVOCATIONS[n])} "
+        f"parsed={len(records)}"
     )
     assert len(executed) >= 30, (
         f"only {len(executed)} test(s) resolved across those invocations; the "

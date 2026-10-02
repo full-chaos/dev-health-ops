@@ -39,7 +39,6 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"os"
 	"os/exec"
 	"path/filepath"
 	"reflect"
@@ -136,32 +135,20 @@ const routingPythonProgram = "import sys\nfrom dev_health_ops import cli\nraise 
 // address is a per-run value, appended by name.
 var routingPythonSettings = map[string]string{"PYTHONHASHSEED": "0", "OTEL_ENABLED": "false", "DEV_HOPS_OPERATOR": oracleOperator, "GO_API_QUERY_API_URL": ""}
 
-func routingPythonEnv(root string) []string {
-	env := []string{"PATH=" + os.Getenv("PATH"), "HOME=" + os.Getenv("HOME"), "PYTHONPATH=" + filepath.Join(root, "src"), "PYTHONDONTWRITEBYTECODE=1"}
-	names := make([]string, 0, len(routingPythonSettings))
-	for name := range routingPythonSettings {
-		names = append(names, name)
-	}
-	sort.Strings(names)
-	for _, name := range names {
-		env = append(env, name+"="+routingPythonSettings[name])
-	}
-	return env
-}
-
-func oraclePython(t *testing.T, root string, plane oraclePlane, args ...string) (int, string, string) {
+func oraclePython(t *testing.T, producer *venueoracle.Producer, plane oraclePlane, args ...string) (int, string, string) {
 	t.Helper()
-	python := pyoracle.Resolve(t, root)
-	command := exec.Command(python, append([]string{"-c", routingPythonProgram, "go-api", "routing"}, args...)...)
 	uri := strings.Replace(plane.dsn, "postgres://", "postgresql://", 1)
-	command.Env = append(routingPythonEnv(root), "POSTGRES_URI="+uri, "DATABASE_URI="+uri)
+	command, err := producer.Command(context.Background(), routingPythonSettings, []string{"POSTGRES_URI=" + uri, "DATABASE_URI=" + uri}, append([]string{"-c", routingPythonProgram, "go-api", "routing"}, args...)...)
+	if err != nil {
+		t.Fatal(err)
+	}
 	var stdout, stderr strings.Builder
 	command.Stdout, command.Stderr = &stdout, &stderr
 	code := 0
 	if err := command.Run(); err != nil {
 		exit, ok := err.(*exec.ExitError)
 		if !ok {
-			t.Fatalf("run python: %v", pyoracle.RunError(python, err, []byte(stderr.String())))
+			t.Fatalf("run python: %v", pyoracle.RunError(command.Path, err, []byte(stderr.String())))
 		}
 		code = exit.ExitCode()
 	}
@@ -484,17 +471,17 @@ func TestGoAPIRoutingMatchesFrozenPython(t *testing.T) {
 	}
 	request := venueoracle.ProgramRequest("go-api routing scenarios", routingPythonProgram, input, routingPythonSettings)
 	answers := golden.Produce(t, pyRoot, []venueoracle.Request{request}, func(producer *venueoracle.Producer, _ []venueoracle.Request) []venueoracle.Response {
-		root := producer.Root
+		producer.RequireDeployed()
 		pyPool, pyDSN := startVerbPostgres(t)
 		py := oraclePlane{pyPool, pyDSN}
 		var recorded routingRecorded
 		for _, sc := range scenarios {
 			py.seed(t, rowsFor(sc))
 			pyArgs, _ := runArgs(sc)
-			code, out, _ := oraclePython(t, root, py, pyArgs...)
+			code, out, _ := oraclePython(t, producer, py, pyArgs...)
 			recorded.Scenarios = append(recorded.Scenarios, recordedRun{Name: sc.name, Code: code, State: py.state(t), Plan: planLines(out)})
 		}
-		recorded.Status = routingStatusPython(t, root, py, catalog, ops, live, stale)
+		recorded.Status = routingStatusPython(t, producer, py, catalog, ops, live, stale)
 		body, err := json.Marshal(recorded)
 		if err != nil {
 			t.Fatal(err)
@@ -624,7 +611,7 @@ func normalizeStatus(raw string) string {
 
 // routingStatusPython runs the four `status --json` states of the producer: the same seeds and query-api
 // fakes oracleStatus compares dho against.
-func routingStatusPython(t *testing.T, root string, py oraclePlane, catalog map[string]string, ops []string, live, stale string) []recordedStatus {
+func routingStatusPython(t *testing.T, producer *venueoracle.Producer, py oraclePlane, catalog map[string]string, ops []string, live, stale string) []recordedStatus {
 	t.Helper()
 	record := func(code int, out string) recordedStatus {
 		return recordedStatus{Code: code, Out: normalizeStatus(out)}
@@ -638,14 +625,14 @@ func routingStatusPython(t *testing.T, root string, py oraclePlane, catalog map[
 	}
 	py.seed(t, rows)
 	server := startQueryAPI(t, live, catalog)
-	code, out, _ := oraclePython(t, root, py, "status", "--json", "--query-api-url", server.URL)
+	code, out, _ := oraclePython(t, producer, py, "status", "--json", "--query-api-url", server.URL)
 	var recorded []recordedStatus
 	recorded = append(recorded, record(code, out))
 	// The text form of the same planes-agree state: the census lines an operator reads (live / STALE markers).
-	textCode, textOut, _ := oraclePython(t, root, py, "status", "--query-api-url", server.URL)
+	textCode, textOut, _ := oraclePython(t, producer, py, "status", "--query-api-url", server.URL)
 	recorded = append(recorded, recordedStatus{Code: textCode, Out: censusLines(textOut)})
 	server.Close()
-	code, out, _ = oraclePython(t, root, py, "status", "--json")
+	code, out, _ = oraclePython(t, producer, py, "status", "--json")
 	recorded = append(recorded, record(code, out))
 
 	drift := "sha256:" + strings.Repeat("9", 64)
@@ -655,12 +642,12 @@ func routingStatusPython(t *testing.T, root string, py oraclePlane, catalog map[
 		{live, "sha256:" + strings.Repeat("8", 64), "notInTheCatalog", oracleBuildB, "canary", 5},
 	})
 	server = startQueryAPI(t, live, catalog)
-	code, out, _ = oraclePython(t, root, py, "status", "--json", "--query-api-url", server.URL)
+	code, out, _ = oraclePython(t, producer, py, "status", "--json", "--query-api-url", server.URL)
 	recorded = append(recorded, record(code, out))
 	server.Close()
 	other := startQueryAPI(t, stale, catalog)
 	defer other.Close()
-	code, out, _ = oraclePython(t, root, py, "status", "--json", "--query-api-url", other.URL)
+	code, out, _ = oraclePython(t, producer, py, "status", "--json", "--query-api-url", other.URL)
 	recorded = append(recorded, record(code, out))
 	return recorded
 }

@@ -268,3 +268,19 @@ func TestATextWithRelocatedLowerCaseIsStillScanned(t *testing.T) {
 		t.Fatalf("%d secret(s) found after a run of relocating characters, want 1", len(got))
 	}
 }
+
+// Text after the JSON value is not a JSON document: the walk refuses it (a measurement that did not happen is a failure), and a JSON
+// text inside a leaf that has text after it is scanned whole instead of being half-read.
+func TestTextAfterTheJSONValueIsRefused(t *testing.T) {
+	if _, err := Leaves([]byte(`{"a": "b"} trailing`)); err == nil {
+		t.Fatal("a document with text after its value was read")
+	}
+	inner := `{"api_key": "` + randomValue() + `"} and more text`
+	leaves, err := Leaves(golden(t, map[string]any{"body": inner}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if hits := Hits(leaves); len(hits) != 1 {
+		t.Fatalf("a JSON text with text after it was not scanned whole: %d hit(s)", len(hits))
+	}
+}

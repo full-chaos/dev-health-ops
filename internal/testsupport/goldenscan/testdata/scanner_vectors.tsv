@@ -74,3 +74,8 @@ only-the-digit-zero	api_key	abcdefghijklmn0	none
 false-inside	api_key	r:alnum:10:51+false+r:alnum:12:52	none
 global-stopword-uuid	api_key	014df517-39d1-4453-b7b3-9930c563627c	none
 long-s-in-the-keyword	ſecret	r:alnum:30:41	none
+rule-allow-credentialsid-upper	CREDENTIALSID	r:alnum:24:61	hit
+rule-allow-public-token-far	public_token_bcdfghjlmnqrsvwxz_secret	r:alnum:24:62	hit
+operator-greater-than	note	auth>+r:alnum:24:63	hit
+terminator-pipe	note	key=+r:alnum:24:64+|tail	hit
+three-runs-of-eleven	token	r:alnum:11:65+_+r:alnum:11:66+_+r:alnum:11:67	hit

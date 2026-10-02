@@ -733,7 +733,35 @@ WHERE org_id = ? AND (
   has(?, work_item_id)
   OR (provider IN ('linear', 'jira') AND has(?, upper(splitByChar(':', work_item_id)[-1])))
 )`
-	return querySubjectsInto(ctx, conn, query, orgID, donorIDs, donorKeys)
+	// Both arrays grow with org size and are rendered into the statement text
+	// (see workItemAttributionMaxArrayBytes): one statement per chunk pair, the
+	// subject maps unioned. A row matches by id OR by key, so it is found by
+	// whichever chunk carries its id or its key; the map union dedupes a row
+	// that two chunks both return.
+	idChunks := chunkStringsByRenderedBytes(donorIDs, workItemAttributionMaxArrayBytes)
+	keyChunks := chunkStringsByRenderedBytes(donorKeys, workItemAttributionMaxArrayBytes)
+	statements := len(idChunks)
+	if len(keyChunks) > statements {
+		statements = len(keyChunks)
+	}
+	merged := map[string]teamattribution.GithubWorkItemDerivationSubject{}
+	for i := 0; i < statements; i++ {
+		ids, keys := []string{}, []string{}
+		if i < len(idChunks) {
+			ids = idChunks[i]
+		}
+		if i < len(keyChunks) {
+			keys = keyChunks[i]
+		}
+		part, err := querySubjectsInto(ctx, conn, query, orgID, ids, keys)
+		if err != nil {
+			return nil, err
+		}
+		for id, subject := range part {
+			merged[id] = subject
+		}
+	}
+	return merged, nil
 }
 
 // WorkItemDerivationSubjectColumns is the SELECT list every subject query must
@@ -816,10 +844,28 @@ func LoadWorkItemDependencyEdges(
 	for id := range subjects {
 		ids = append(ids, id)
 	}
+	var result []teamattribution.GithubWorkItemDerivationDependencyEdge
+	// The id array is rendered into the statement text and the org-wide path
+	// passes EVERY work item id: one statement per bounded chunk (see
+	// workItemAttributionMaxArrayBytes). An edge has one source, so it is
+	// returned by exactly one chunk.
+	for _, chunk := range chunkStringsByRenderedBytes(ids, workItemAttributionMaxArrayBytes) {
+		edges, err := queryDependencyEdgesBySource(ctx, conn, orgID, chunk)
+		if err != nil {
+			return nil, err
+		}
+		result = append(result, edges...)
+	}
+	return result, nil
+}
+
+func queryDependencyEdgesBySource(
+	ctx context.Context, conn driver.Conn, orgID string, sourceIDs []string,
+) ([]teamattribution.GithubWorkItemDerivationDependencyEdge, error) {
 	rows, err := conn.Query(ctx, `
 SELECT source_work_item_id, target_work_item_id, relationship_type, last_synced
 FROM work_item_dependencies FINAL
-WHERE org_id = ? AND has(?, source_work_item_id)`, orgID, ids)
+WHERE org_id = ? AND has(?, source_work_item_id)`, orgID, sourceIDs)
 	if err != nil {
 		return nil, stepcause.Failure(stepcause.QueryWorkItemDependencies, err)
 	}
@@ -1003,27 +1049,18 @@ func (executor *WorkItemAttributionExecutor) loadInheritableDependencySourcesTar
 	for id := range targetIDs {
 		ids = append(ids, id)
 	}
-	rows, err := executor.conn.Query(ctx, `
-SELECT source_work_item_id, target_work_item_id, relationship_type, last_synced
-FROM work_item_dependencies FINAL
-WHERE org_id = ? AND has(?, target_work_item_id)`, orgID, ids)
-	if err != nil {
-		return nil, stepcause.Failure(stepcause.QueryWorkItemDependenciesReverseClosure, err)
-	}
-	defer func() { _ = rows.Close() }()
 	var edges []teamattribution.GithubWorkItemDerivationDependencyEdge
-	for rows.Next() {
-		var edge teamattribution.GithubWorkItemDerivationDependencyEdge
-		if err := rows.Scan(
-			&edge.SourceWorkItemID, &edge.TargetWorkItemID, &edge.RelationshipType, &edge.LastSynced,
-		); err != nil {
-			return nil, stepcause.Failure(stepcause.ScanWorkItemDependenciesRowReverseClosure, err)
+	// The target-id array is rendered into the statement text and grows with the
+	// affected set (the whole org on the org-wide path): one statement per
+	// bounded chunk (see workItemAttributionMaxArrayBytes). An edge has one
+	// target, so exactly one chunk returns it, and the latest-edge dedupe below
+	// keys on (source, target) so it is unaffected by the split.
+	for _, chunk := range chunkStringsByRenderedBytes(ids, workItemAttributionMaxArrayBytes) {
+		part, err := executor.queryReverseClosureEdges(ctx, orgID, chunk)
+		if err != nil {
+			return nil, err
 		}
-		edge.OrgID = orgID
-		edges = append(edges, edge)
-	}
-	if err := rows.Err(); err != nil {
-		return nil, stepcause.Failure(stepcause.IterateWorkItemDependenciesReverseClosure, err)
+		edges = append(edges, part...)
 	}
 	seen := map[string]struct{}{}
 	var sources []string
@@ -1041,6 +1078,31 @@ WHERE org_id = ? AND has(?, target_work_item_id)`, orgID, ids)
 		sources = append(sources, edge.SourceWorkItemID)
 	}
 	return sources, nil
+}
+
+func (executor *WorkItemAttributionExecutor) queryReverseClosureEdges(
+	ctx context.Context, orgID string, targetIDs []string,
+) ([]teamattribution.GithubWorkItemDerivationDependencyEdge, error) {
+	rows, err := executor.conn.Query(ctx, `
+SELECT source_work_item_id, target_work_item_id, relationship_type, last_synced
+FROM work_item_dependencies FINAL
+WHERE org_id = ? AND has(?, target_work_item_id)`, orgID, targetIDs)
+	if err != nil {
+		return nil, stepcause.Failure(stepcause.QueryWorkItemDependenciesReverseClosure, err)
+	}
+	defer func() { _ = rows.Close() }()
+	var edges []teamattribution.GithubWorkItemDerivationDependencyEdge
+	for rows.Next() {
+		var edge teamattribution.GithubWorkItemDerivationDependencyEdge
+		if err := rows.Scan(
+			&edge.SourceWorkItemID, &edge.TargetWorkItemID, &edge.RelationshipType, &edge.LastSynced,
+		); err != nil {
+			return nil, stepcause.Failure(stepcause.ScanWorkItemDependenciesRowReverseClosure, err)
+		}
+		edge.OrgID = orgID
+		edges = append(edges, edge)
+	}
+	return edges, stepcause.Failure(stepcause.IterateWorkItemDependenciesReverseClosure, rows.Err())
 }
 
 // orgItemCount returns the org's total work-item count, the denominator
@@ -1126,23 +1188,37 @@ func (executor *WorkItemAttributionExecutor) alreadyCoveredToday(
 	for id := range ids {
 		idList = append(idList, id)
 	}
+	// The id array is rendered into the statement text and the org-wide path
+	// passes every affected id: one statement per bounded chunk (see
+	// workItemAttributionMaxArrayBytes), the covered sets unioned.
+	for _, chunk := range chunkStringsByRenderedBytes(idList, workItemAttributionMaxArrayBytes) {
+		if err := executor.collectAlreadyCoveredToday(ctx, orgID, now, chunk, covered); err != nil {
+			return nil, err
+		}
+	}
+	return covered, nil
+}
+
+func (executor *WorkItemAttributionExecutor) collectAlreadyCoveredToday(
+	ctx context.Context, orgID string, now time.Time, ids []string, covered map[string]struct{},
+) error {
 	rows, err := executor.conn.Query(ctx, `
 SELECT DISTINCT work_item_id
 FROM work_item_team_attributions
 WHERE org_id = ? AND has(?, work_item_id) AND toDate(computed_at) = toDate(?)`,
-		orgID, idList, now)
+		orgID, ids, now)
 	if err != nil {
-		return nil, stepcause.Failure(stepcause.QueryAlreadyCoveredTodayAttributions, err)
+		return stepcause.Failure(stepcause.QueryAlreadyCoveredTodayAttributions, err)
 	}
 	defer func() { _ = rows.Close() }()
 	for rows.Next() {
 		var id string
 		if err := rows.Scan(&id); err != nil {
-			return nil, stepcause.Failure(stepcause.ScanAlreadyCoveredTodayRow, err)
+			return stepcause.Failure(stepcause.ScanAlreadyCoveredTodayRow, err)
 		}
 		covered[id] = struct{}{}
 	}
-	return covered, stepcause.Failure(stepcause.IterateAlreadyCoveredTodayRows, rows.Err())
+	return stepcause.Failure(stepcause.IterateAlreadyCoveredTodayRows, rows.Err())
 }
 
 // publishRunMarkers writes the completion marker(s) for a completed run:

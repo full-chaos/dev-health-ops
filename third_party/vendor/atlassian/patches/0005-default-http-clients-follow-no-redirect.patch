@@ -1,0 +1,111 @@
+diff --git a/third_party/vendor/atlassian/atlassian/default_http_client.go b/third_party/vendor/atlassian/atlassian/default_http_client.go
+new file mode 100644
+index 0000000000..b136b0f3ce
+--- /dev/null
++++ b/third_party/vendor/atlassian/atlassian/default_http_client.go
+@@ -0,0 +1,17 @@
++package atlassian
++
++import (
++	"net/http"
++	"time"
++)
++
++func refuseRedirects(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }
++
++// NewDefaultHTTPClient is the client every call in this module builds when its caller supplied none: the given timeout and NO redirect
++// followed (a 3xx is returned as the response). Local modification, patch 0005 (CHAOS-7921): the upstream defaults were a plain
++// `&http.Client{Timeout: ...}`, which follows up to ten redirects and re-sends custom headers to a new host. Production supplies its own
++// guarded client; this default only matters when none is supplied, so a caller that needs a cross-host redirect must supply a guarded
++// client.
++func NewDefaultHTTPClient(timeout time.Duration) *http.Client {
++	return &http.Client{Timeout: timeout, CheckRedirect: refuseRedirects}
++}
+diff --git a/third_party/vendor/atlassian/atlassian/graph/client.go b/third_party/vendor/atlassian/atlassian/graph/client.go
+index 58dab1d6cf..83c6bbf0b7 100644
+--- a/third_party/vendor/atlassian/atlassian/graph/client.go
++++ b/third_party/vendor/atlassian/atlassian/graph/client.go
+@@ -60,7 +60,7 @@ func (c *Client) Execute(ctx context.Context, query string, variables map[string
+ 
+ 	httpClient := c.HTTPClient
+ 	if httpClient == nil {
+-		httpClient = &http.Client{Timeout: defaultTimeout}
++		httpClient = atlassian.NewDefaultHTTPClient(defaultTimeout)
+ 	}
+ 
+ 	nowFn := c.Now
+@@ -302,7 +302,7 @@ func (c *Client) ExecuteWithExtraHeaders(ctx context.Context, query string, vari
+ 
+ 	httpClient := c.HTTPClient
+ 	if httpClient == nil {
+-		httpClient = &http.Client{Timeout: defaultTimeout}
++		httpClient = atlassian.NewDefaultHTTPClient(defaultTimeout)
+ 	}
+ 
+ 	nowFn := c.Now
+diff --git a/third_party/vendor/atlassian/atlassian/graph/schema_fetcher.go b/third_party/vendor/atlassian/atlassian/graph/schema_fetcher.go
+index 352130744d..03fd5a946f 100644
+--- a/third_party/vendor/atlassian/atlassian/graph/schema_fetcher.go
++++ b/third_party/vendor/atlassian/atlassian/graph/schema_fetcher.go
+@@ -143,7 +143,7 @@ func FetchSchemaIntrospection(
+ 
+ 	httpClient := opts.HTTPClient
+ 	if httpClient == nil {
+-		httpClient = &http.Client{Timeout: clientTimeout}
++		httpClient = atlassian.NewDefaultHTTPClient(clientTimeout)
+ 	} else if httpClient.Timeout == 0 {
+ 		copied := *httpClient
+ 		copied.Timeout = clientTimeout
+diff --git a/third_party/vendor/atlassian/atlassian/oauth_3lo.go b/third_party/vendor/atlassian/atlassian/oauth_3lo.go
+index 49d87fb4eb..6e18fc95ef 100644
+--- a/third_party/vendor/atlassian/atlassian/oauth_3lo.go
++++ b/third_party/vendor/atlassian/atlassian/oauth_3lo.go
+@@ -131,7 +131,7 @@ func postOAuthToken(ctx context.Context, payload map[string]string, opts OAuthTo
+ 	}
+ 	httpClient := opts.HTTPClient
+ 	if httpClient == nil {
+-		httpClient = &http.Client{Timeout: timeout}
++		httpClient = NewDefaultHTTPClient(timeout)
+ 	} else if httpClient.Timeout == 0 {
+ 		copied := *httpClient
+ 		copied.Timeout = timeout
+@@ -206,7 +206,7 @@ func FetchAccessibleResources(ctx context.Context, accessToken string, opts Acce
+ 	}
+ 	httpClient := opts.HTTPClient
+ 	if httpClient == nil {
+-		httpClient = &http.Client{Timeout: timeout}
++		httpClient = NewDefaultHTTPClient(timeout)
+ 	} else if httpClient.Timeout == 0 {
+ 		copied := *httpClient
+ 		copied.Timeout = timeout
+diff --git a/third_party/vendor/atlassian/atlassian/rest/client.go b/third_party/vendor/atlassian/atlassian/rest/client.go
+index 5df64c4aaa..a403ec5d03 100644
+--- a/third_party/vendor/atlassian/atlassian/rest/client.go
++++ b/third_party/vendor/atlassian/atlassian/rest/client.go
+@@ -48,7 +48,7 @@ func (c *JiraRESTClient) GetJSON(ctx context.Context, path string, query map[str
+ 
+ 	httpClient := c.HTTPClient
+ 	if httpClient == nil {
+-		httpClient = &http.Client{Timeout: defaultTimeout}
++		httpClient = atlassian.NewDefaultHTTPClient(defaultTimeout)
+ 	}
+ 
+ 	nowFn := c.Now
+@@ -244,7 +244,7 @@ func (c *JiraRESTClient) Delete(ctx context.Context, path string) error {
+ 
+ 	httpClient := c.HTTPClient
+ 	if httpClient == nil {
+-		httpClient = &http.Client{Timeout: defaultTimeout}
++		httpClient = atlassian.NewDefaultHTTPClient(defaultTimeout)
+ 	}
+ 
+ 	req, err := http.NewRequestWithContext(ctx, http.MethodDelete, url, nil)
+@@ -303,7 +303,7 @@ func (c *JiraRESTClient) requestJSON(ctx context.Context, method, path string, d
+ 
+ 	httpClient := c.HTTPClient
+ 	if httpClient == nil {
+-		httpClient = &http.Client{Timeout: defaultTimeout}
++		httpClient = atlassian.NewDefaultHTTPClient(defaultTimeout)
+ 	}
+ 
+ 	req, err := http.NewRequestWithContext(ctx, method, url, bodyReader)

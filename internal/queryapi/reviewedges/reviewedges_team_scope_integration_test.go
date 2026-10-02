@@ -31,6 +31,7 @@ var teamScopeAsOf = time.Date(2026, 9, 1, 0, 0, 0, 0, time.UTC)
 
 type teamScopeFixture struct {
 	client                                 QueryClient
+	admin                                  stdclickhouse.Conn
 	repoA, repoB, repoRevoked, repoUnowned uuid.UUID
 }
 
@@ -58,7 +59,7 @@ func newTeamScopeFixture(ctx context.Context, t *testing.T) teamScopeFixture {
 	}
 	t.Cleanup(func() { _ = queryClient.Close() })
 
-	f := teamScopeFixture{client: queryClient, repoA: uuid.New(), repoB: uuid.New(), repoRevoked: uuid.New(), repoUnowned: uuid.New()}
+	f := teamScopeFixture{client: queryClient, admin: admin, repoA: uuid.New(), repoB: uuid.New(), repoRevoked: uuid.New(), repoUnowned: uuid.New()}
 	synced := time.Date(2026, 8, 1, 0, 0, 0, 0, time.UTC)
 	for name, id := range map[string]uuid.UUID{"acme/a": f.repoA, "acme/b": f.repoB, "acme/revoked": f.repoRevoked, "acme/unowned": f.repoUnowned} {
 		if err := admin.Exec(ctx, `INSERT INTO repos (id, repo, provider, org_id, created_at, last_synced) VALUES (?, ?, ?, ?, ?, ?)`,
@@ -187,5 +188,56 @@ func TestTeamScope_ATeamOfAnotherOrgMatchesNothing(t *testing.T) {
 	got := f.resolve(ctx, t, Scope{TeamIDs: []string{teamElsewhere}}, 500)
 	if len(got) != 0 {
 		t.Fatalf("a team owning a repo in another org must match nothing here, got %v", got)
+	}
+}
+
+func (f teamScopeFixture) resolveResult(ctx context.Context, t *testing.T, scope Scope, limit int) (total int, truncated bool, returned int) {
+	t.Helper()
+	scope.AsOf = teamScopeAsOf
+	got, err := ResolveScoped(ctx, f.client, teamScopeOrg, mustDate(t, "2026-08-01"), mustDate(t, "2026-08-31"), scope, limit)
+	if err != nil {
+		t.Fatalf("ResolveScoped: %v", err)
+	}
+	return got.TotalCount, got.Truncated, len(got.Edges)
+}
+
+// CHAOS-7786: totalCount is the number of deduplicated (pair, day) rows the filters match, and
+// truncated says the list was cut.
+func TestTotalCount_CountsTheDedupedRowsAndFlagsTheCut(t *testing.T) {
+	ctx := context.Background()
+	f := newTeamScopeFixture(ctx, t)
+
+	// A recompute wrote an OLDER copy of one key; the dedup (argMax) must count the key once.
+	if err := f.admin.Exec(ctx, `INSERT INTO review_edges_daily (repo_id, day, reviewer, author, reviews_count, computed_at, org_id) VALUES (?, ?, ?, ?, ?, ?, ?)`,
+		f.repoA, time.Date(2026, 8, 1, 0, 0, 0, 0, time.UTC), "rev-1", "auth-1", uint32(1), time.Date(2026, 8, 2, 0, 0, 0, 0, time.UTC), teamScopeOrg); err != nil {
+		t.Fatalf("seed older duplicate: %v", err)
+	}
+
+	total, truncated, returned := f.resolveResult(ctx, t, Scope{}, 3)
+	if total != 9 || returned != 3 || !truncated {
+		t.Fatalf("cut at 3: total=%d truncated=%v returned=%d, want 9/true/3 (9 deduped rows, the older copy not counted twice)", total, truncated, returned)
+	}
+	total, truncated, returned = f.resolveResult(ctx, t, Scope{}, 500)
+	if total != 9 || returned != 9 || truncated {
+		t.Fatalf("not cut: total=%d truncated=%v returned=%d, want 9/false/9", total, truncated, returned)
+	}
+	// Exactly at the cap is not a cut.
+	total, truncated, returned = f.resolveResult(ctx, t, Scope{}, 9)
+	if total != 9 || returned != 9 || truncated {
+		t.Fatalf("at the cap: total=%d truncated=%v returned=%d, want 9/false/9", total, truncated, returned)
+	}
+}
+
+func TestTotalCount_FollowsTheTeamScope(t *testing.T) {
+	ctx := context.Background()
+	f := newTeamScopeFixture(ctx, t)
+
+	total, truncated, returned := f.resolveResult(ctx, t, Scope{TeamIDs: []string{teamA}}, 1)
+	if total != 2 || returned != 1 || !truncated {
+		t.Fatalf("team A cut at 1: total=%d truncated=%v returned=%d, want 2/true/1 (the count uses the same team filter as the rows)", total, truncated, returned)
+	}
+	total, truncated, _ = f.resolveResult(ctx, t, Scope{TeamIDs: []string{teamElsewhere}}, 500)
+	if total != 0 || truncated {
+		t.Fatalf("a team owning nothing here: total=%d truncated=%v, want 0/false", total, truncated)
 	}
 }

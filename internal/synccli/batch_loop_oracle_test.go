@@ -161,7 +161,7 @@ func TestBatchLoopMatchesFrozenPython(t *testing.T) {
 	golden := venueoracle.OpenGolden(t, venueoracle.GoldenSpec{
 		Path:        "testdata/golden/batch_loop.json",
 		PythonBuild: batchLoopPythonBuild,
-		SHA256:      "3854111e8b8526c33345b06605def4dfb8c1698eaa3e0a98bf94bf3122dbff0b",
+		SHA256:      "294e3556daa8a229e271ee4505f8fb97759ef1208c842538aaa90b9f4c77ecd0",
 		Recipe: "git worktree add --detach $DIR " + batchLoopPythonBuild + " (with its .venv: uv sync --frozen --no-install-project); then from the repository root: " +
 			"go run ./internal/testsupport/venueoracle/goldenrecord -pkg ./internal/synccli/ -test '^TestBatchLoopMatchesFrozenPython$' -python-root $DIR",
 	})

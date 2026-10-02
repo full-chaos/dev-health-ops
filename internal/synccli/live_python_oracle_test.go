@@ -258,7 +258,7 @@ func TestSyncTargetMatchesFrozenPython(t *testing.T) {
 	golden := venueoracle.OpenGolden(t, venueoracle.GoldenSpec{
 		Path:        "testdata/golden/sync_target.json",
 		PythonBuild: syncTargetPythonBuild,
-		SHA256:      "99fdb1953f048ad24c208ee0587eff28593ea730f41ee0a4190414eca2feef11",
+		SHA256:      "fb4c6adecbf93c5ba22701dfd3d3eccc1beb28a0a856f7b5bd95be33f29245f9",
 		Recipe: "git worktree add --detach $DIR " + syncTargetPythonBuild + " (with its .venv: uv sync --frozen --no-install-project); then from the repository root: " +
 			"go run ./internal/testsupport/venueoracle/goldenrecord -pkg ./internal/synccli/ -test '^TestSyncTargetMatchesFrozenPython$' -python-root $DIR",
 	})

@@ -65,7 +65,9 @@ var updateSites = flag.Bool("update-sites", false, "rewrite redirect_sites.tsv f
 //
 // Also not covered (r1): a no-credential row is hand-classified: nothing inspects the headers, query or body of its request, so a
 // credential added to such a request is not seen; doer decorators (Wrapper implementations) are not inventoried as sites: the
-// guard reaches the client inside them (httpguard.Wrapper), proven by the decorator probe in internal/providersync; the probes assert
+// provider origin guard sits INSIDE the client from NewHTTPClient, below every route decorator (they wrap client.Doer after it was
+// built), and looks through a Wrapper handed to the constructor (decorator probes in internal/providersync); NOT covered: a decorator
+// that is not a Wrapper handed INTO a provider client constructor (none known: the executor's CountRequests is a Wrapper); the probes assert
 // that the base origin was reached and the other saw nothing, not the status the caller got back.
 //
 // Also not covered: a client made inside a dependency (oauth2.Config.Client, an SDK's own client); a

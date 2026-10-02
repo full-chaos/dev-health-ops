@@ -153,6 +153,13 @@ func TestTheExportedAPIIsPinned(t *testing.T) {
 			}
 		}
 	}
+	// the exported identifiers are an ALLOW-LIST: a new function, type or method fails until this list is edited in the same diff
+	// (the vocabulary vars of vocab.go are matched by their type, not listed one by one)
+	allowedFunctions := map[string]bool{"New": true, "Default": true, "ParseID": true, "ParseIDs": true, "ParseLabel": true, "Run": true, "Unit": true,
+		"Org": true, "Integration": true, "Source": true, "Dispatch": true, "Provider": true, "Text": true, "Count": true, "Flag": true,
+		"Elapsed": true, "Instant": true, "IDs": true, "Group": true, "Failure": true}
+	allowedTypes := map[string]bool{"Msg": true, "Key": true, "Label": true, "ID": true, "Attr": true, "Logger": true}
+	allowedMethods := map[string]bool{"Logger.Debug": true, "Logger.Info": true, "Logger.Warn": true, "Logger.Error": true}
 	exported, functions := 0, 0
 	for _, name := range scope.Names() {
 		object := scope.Lookup(name)
@@ -160,6 +167,16 @@ func TestTheExportedAPIIsPinned(t *testing.T) {
 			continue
 		}
 		exported++
+		switch object.(type) {
+		case *types.Func:
+			if !allowedFunctions[name] {
+				t.Errorf("exported function %s is not on the allow-list", name)
+			}
+		case *types.TypeName:
+			if !allowedTypes[name] {
+				t.Errorf("exported type %s is not on the allow-list", name)
+			}
+		}
 		switch typed := object.(type) {
 		case *types.Func:
 			functions++
@@ -184,6 +201,9 @@ func TestTheExportedAPIIsPinned(t *testing.T) {
 			for index := 0; index < named.NumMethods(); index++ {
 				method := named.Method(index)
 				if method.Exported() {
+					if !allowedMethods[name+"."+method.Name()] {
+						t.Errorf("exported method %s.%s is not on the allow-list", name, method.Name())
+					}
 					checkSignature(name+"."+method.Name(), method.Type().(*types.Signature))
 				}
 			}

@@ -22,6 +22,14 @@ import (
 // received error and at an in-memory span exporter: no exported string (status, every attribute value, every event name and
 // attribute, span names) and no byte of the error text holds the marker; the error text is the fixed prefix and a Go type.
 
+type driveMode int
+
+const (
+	driveFail driveMode = iota
+	drivePanic
+	drivePanicNil
+)
+
 const behaviourMarker = "the planted detail of ticket 7896 behaviour"
 
 const (
@@ -34,18 +42,24 @@ type markerFailure struct{ text string }
 
 func (failure *markerFailure) Error() string { return failure.text }
 
-type failingImporter struct{ panics bool }
+type failingImporter struct{ panics, panicNil bool }
 
 func (importer failingImporter) TeamAutoImport(context.Context, DomainReference) error {
+	if importer.panicNil {
+		panic(nil)
+	}
 	if importer.panics {
 		panic(behaviourMarker)
 	}
 	return fmt.Errorf("GET https://u:p@host.example.test/x: %w", &markerFailure{behaviourMarker})
 }
 
-type failingDeriver struct{ panics bool }
+type failingDeriver struct{ panics, panicNil bool }
 
 func (deriver failingDeriver) Derive(context.Context, string) (int, int, bool, map[string]int, error) {
+	if deriver.panicNil {
+		panic(nil)
+	}
 	if deriver.panics {
 		panic(behaviourMarker)
 	}
@@ -61,39 +75,39 @@ func envelope() (jobcontract.DomainLink, string) {
 }
 
 // cases are keyed by the worker TYPE name; the registration set is derived from worker.go and every registered type must have a case.
-func behaviourCases() map[string]func(panics bool) func(ctx context.Context) error {
+func behaviourCases() map[string]func(mode driveMode) func(ctx context.Context) error {
 	domain, run := envelope()
-	return map[string]func(bool) func(context.Context) error{
-		"dispatchWorker": func(bool) func(context.Context) error {
+	return map[string]func(driveMode) func(context.Context) error{
+		"dispatchWorker": func(driveMode) func(context.Context) error {
 			return func(ctx context.Context) error {
 				return (&dispatchWorker{service: &NativeDispatchSyncRunService{}}).Work(ctx, &river.Job[DispatchSyncRunArgs]{Args: DispatchSyncRunArgs{transport()}})
 			}
 		},
-		"finalizeWorker": func(bool) func(context.Context) error {
+		"finalizeWorker": func(driveMode) func(context.Context) error {
 			return func(ctx context.Context) error {
 				return (&finalizeWorker{service: &NativeFinalizeSyncRunService{}}).Work(ctx, &river.Job[FinalizeSyncRunArgs]{Args: FinalizeSyncRunArgs{transport()}})
 			}
 		},
-		"postSyncWorker": func(bool) func(context.Context) error {
+		"postSyncWorker": func(driveMode) func(context.Context) error {
 			return func(ctx context.Context) error {
 				return (&postSyncWorker{service: &NativePostSyncService{}}).Work(ctx, &river.Job[PostSyncArgs]{Args: PostSyncArgs{transport()}})
 			}
 		},
-		"referenceDiscoveryWorker": func(bool) func(context.Context) error {
+		"referenceDiscoveryWorker": func(driveMode) func(context.Context) error {
 			return func(ctx context.Context) error {
 				return (&referenceDiscoveryWorker{service: &NativeReferenceDiscoveryService{}}).Work(ctx, &river.Job[ReferenceDiscoveryArgs]{Args: ReferenceDiscoveryArgs{transport()}})
 			}
 		},
-		"teamAutoimportWorker": func(panics bool) func(context.Context) error {
+		"teamAutoimportWorker": func(mode driveMode) func(context.Context) error {
 			return func(ctx context.Context) error {
 				args := TeamAutoimportJobArgs{Version: ContractVersionV1, OrgID: behaviourOrg, CorrelationID: "c", Idempotency: "i", Domain: domain, Payload: jobcontract.TeamAutoimportPayload{SyncRunID: run}}
-				return (&teamAutoimportWorker{bridge: failingImporter{panics}}).Work(ctx, &river.Job[TeamAutoimportJobArgs]{Args: args})
+				return (&teamAutoimportWorker{bridge: failingImporter{panics: mode == drivePanic, panicNil: mode == drivePanicNil}}).Work(ctx, &river.Job[TeamAutoimportJobArgs]{Args: args})
 			}
 		},
-		"teamRepoOwnershipDerivationWorker": func(panics bool) func(context.Context) error {
+		"teamRepoOwnershipDerivationWorker": func(mode driveMode) func(context.Context) error {
 			return func(ctx context.Context) error {
 				args := TeamRepoOwnershipDerivationJobArgs{Version: ContractVersionV1, OrgID: behaviourOrg, CorrelationID: "c", Idempotency: "i", Domain: domain, Payload: jobcontract.TeamRepoOwnershipDerivationPayload{SyncRunID: run}}
-				return (&teamRepoOwnershipDerivationWorker{service: failingDeriver{panics}}).Work(ctx, &river.Job[TeamRepoOwnershipDerivationJobArgs]{Args: args})
+				return (&teamRepoOwnershipDerivationWorker{service: failingDeriver{panics: mode == drivePanic, panicNil: mode == drivePanicNil}}).Work(ctx, &river.Job[TeamRepoOwnershipDerivationJobArgs]{Args: args})
 			}
 		},
 	}
@@ -138,7 +152,7 @@ func TestEveryRegisteredCoordinatorWorkHandsRiverAFixedErrorAndExportsNoMarker(t
 			otel.SetTracerProvider(provider)
 			t.Cleanup(func() { otel.SetTracerProvider(previous); _ = provider.Shutdown(context.Background()) })
 			middleware := otelriver.NewMiddleware(&otelriver.MiddlewareConfig{TracerProvider: provider})
-			err := middleware.Work(context.Background(), &rivertype.JobRow{Kind: name}, build(false))
+			err := middleware.Work(context.Background(), &rivertype.JobRow{Kind: name}, build(driveFail))
 			if err == nil {
 				t.Fatal("Work returned nil for a failing dependency")
 			}
@@ -182,7 +196,7 @@ func TestEveryRegisteredCoordinatorWorkHandsRiverAFixedErrorAndExportsNoMarker(t
 			var recovered any
 			func() {
 				defer func() { recovered = recover() }()
-				_ = build(true)(context.Background())
+				_ = build(drivePanic)(context.Background())
 			}()
 			if recovered != behaviourMarker {
 				t.Fatalf("the panic did not propagate: %v", recovered)
@@ -204,6 +218,33 @@ func TestEveryRegisteredCoordinatorWorkHandsRiverAFixedErrorAndExportsNoMarker(t
 				if strings.Contains(text, behaviourMarker) {
 					t.Fatalf("the panic value is on an exported span: %q", text)
 				}
+			}
+		})
+		t.Run(name+"/panic-nil", func(t *testing.T) {
+			t.Setenv("GODEBUG", "panicnil=1")
+			exporter := tracetest.NewInMemoryExporter()
+			provider := sdktrace.NewTracerProvider(sdktrace.WithSyncer(exporter))
+			previous := otel.GetTracerProvider()
+			otel.SetTracerProvider(provider)
+			t.Cleanup(func() { otel.SetTracerProvider(previous); _ = provider.Shutdown(context.Background()) })
+			returnedNormally := false
+			func() {
+				// a swallowed panic(nil) lets this closure go on; a propagated one skips the last line
+				defer func() { _ = recover() }()
+				_ = build(drivePanicNil)(context.Background())
+				returnedNormally = true
+			}()
+			if returnedNormally {
+				t.Fatal("panic(nil) was swallowed: Work returned normally")
+			}
+			failed := false
+			for _, span := range exporter.GetSpans() {
+				if span.Status.Code == 1 {
+					failed = true
+				}
+			}
+			if !failed {
+				t.Fatal("a Work that panicked with nil exported no failed span")
 			}
 		})
 	}

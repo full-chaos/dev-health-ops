@@ -327,16 +327,21 @@ func TestAPanicNilIsAFailedSpanAndStillPanics(t *testing.T) {
 	provider := sdktrace.NewTracerProvider(sdktrace.WithSyncer(exporter))
 	t.Cleanup(func() { _ = provider.Shutdown(context.Background()) })
 	_, span := provider.Tracer("panic-nil-test").Start(context.Background(), "coordinator")
-	panicked := false
+	returnedNormally := false
 	func() {
-		defer func() { _ = recover(); panicked = true }()
-		var err error
-		completed := false
-		defer finishCoordinatorWork(span, &err, &completed)
-		panic(nil)
+		// a swallowed panic lets this closure continue and set returnedNormally; a propagated one skips that line (under
+		// panicnil=1 recover() is nil for panic(nil) too, so the recover() value cannot tell the two apart)
+		defer func() { _ = recover() }()
+		func() {
+			var err error
+			completed := false
+			defer finishCoordinatorWork(span, &err, &completed)
+			panic(nil)
+		}()
+		returnedNormally = true
 	}()
 	spans := exporter.GetSpans()
-	if !panicked || len(spans) != 1 || spans[0].Status.Code != codes.Error {
-		t.Fatalf("panicked=%v spans=%v, want a failed span and a propagated panic", panicked, spans)
+	if returnedNormally || len(spans) != 1 || spans[0].Status.Code != codes.Error {
+		t.Fatalf("returnedNormally=%v spans=%v, want a failed span and a propagated panic", returnedNormally, spans)
 	}
 }

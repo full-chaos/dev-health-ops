@@ -46,10 +46,19 @@ const (
 	someHex  = "9f86d081884c7d659a2feaa0c55ad015a3bf4f1b2b0b822cd15d6c15b0f00a08"
 )
 
-// a synthetic random-looking value made at run time, so no secret-shaped literal is in the source
-func randomValue() string {
-	return strings.Repeat("aB3x", 2) + "Zq9Lm2Pw7Rt5Yk8Nc4Vd6Hs" + "J1"
+// generatedValue is a high-entropy value made at run time from a fixed-seed generator (36 characters of letters and digits): no
+// literal fragment of it is in the source, and it is the same on every run.
+func generatedValue(seed int64) string {
+	r := rand.New(rand.NewSource(seed))
+	const alphabet = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789"
+	out := make([]byte, 36)
+	for i := range out {
+		out[i] = alphabet[r.Intn(len(alphabet))]
+	}
+	return string(out)
 }
+
+func randomValue() string { return generatedValue(7890) }
 
 func TestLeavesWalkPackedBodiesAndJSONTextsWithTheirKey(t *testing.T) {
 	inner, _ := json.Marshal(map[string]any{"api_key": "innerValue1234"})
@@ -116,7 +125,7 @@ func TestTheRuleLeavesWhatTheScannerLeaves(t *testing.T) {
 }
 
 func TestShapes(t *testing.T) {
-	if Shape(someUUID) != "uuid" || Shape(strings.ToUpper(someUUID)) != "uuid" || Shape(someHex) != "hex64" || Shape(someHex[:63]) != "other" || Shape(someUUID+"x") != "other" {
+	if Shape(someUUID) != "uuid" || Shape(strings.ToUpper(someUUID)) != "uuid" || Shape(someHex) != "hex64" || Shape(someHex[:32]) != "hex32" || Shape(someHex[:63]) != "other" || Shape(someUUID+"x") != "other" {
 		t.Error("a shape is wrong")
 	}
 }
@@ -229,7 +238,7 @@ func TestACheckTreeFindsAStaleRowAndAMissingFile(t *testing.T) {
 // The windowed scan is the expression over the whole text (CHAOS-7890: the expression over a long leaf took 74 s over the tree).
 func TestTheWindowedScanEqualsTheExpressionOverTheWholeText(t *testing.T) {
 	r := rand.New(rand.NewSource(7890))
-	pieces := []string{"api_key", "API:", "Api-token=", "password: ", "secret", `"`, " ", "\n", "=", ":", "aB3xZq9Lm2Pw7Rt5Yk8", strings.Repeat("a1", 40), strings.Repeat("Zx9", 60), "plain words here", "key", "KEY", "ſecret", "token\\n", "access ", "creds=", "|", "auth_", "x-y.z", strings.Repeat("\u023a", 70), "\u212a"}
+	pieces := []string{"api_key", "API:", "Api-token=", "password: ", "secret", `"`, " ", "\n", "=", ":", generatedValue(1)[:19], strings.Repeat("a1", 40), strings.Repeat("Zx9", 60), "plain words here", "key", "KEY", "ſecret", "token\\n", "access ", "creds=", "|", "auth_", "x-y.z", strings.Repeat("\u023a", 70), "\u212a"}
 	for iter := 0; iter < 3000; iter++ {
 		var b strings.Builder
 		for n := r.Intn(14); n >= 0; n-- {

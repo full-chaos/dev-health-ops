@@ -48,8 +48,8 @@ func ParseAllowlist(text string) ([]Row, error) {
 			return nil, fmt.Errorf("allowlist line %d: a row names one file and one key", number+1)
 		case strings.ContainsAny(row.Path+row.Key, "*?[]"):
 			return nil, fmt.Errorf("allowlist line %d: no wildcard in a path or a key", number+1)
-		case row.Shape != "uuid" && row.Shape != "hex64":
-			return nil, fmt.Errorf("allowlist line %d: shape %q is not uuid or hex64", number+1, row.Shape)
+		case row.Shape != "uuid" && row.Shape != "hex64" && row.Shape != "hex32":
+			return nil, fmt.Errorf("allowlist line %d: shape %q is not uuid, hex64 or hex32", number+1, row.Shape)
 		case row.Triage == "":
 			return nil, fmt.Errorf("allowlist line %d: a row cites the triage line that accepts it", number+1)
 		case seen[row.Path+"\x00"+row.Key]:

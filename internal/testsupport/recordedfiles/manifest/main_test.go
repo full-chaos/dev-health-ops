@@ -1,6 +1,7 @@
 package main
 
 import (
+	"math/rand"
 	"os"
 	"path/filepath"
 	"strings"
@@ -69,27 +70,42 @@ func TestTheVerbFromInsideTheRepository(t *testing.T) {
 	}
 }
 
-// CHAOS-7890: `manifest -check` runs the unpacked secret scan on every golden of the tree. A golden with a keyed high-entropy value
-// and no allowlist row is a problem the check prints; a file with no golden header is not scanned.
-func TestTheCheckScansEveryGoldenOfTheTree(t *testing.T) {
+// CHAOS-7890: `manifest -check` runs the unpacked secret scan on every JSON file under a manifest root. A file with a keyed
+// high-entropy value and no allowlist row is a problem the check prints; a file that is not JSON by name is not scanned; a .json
+// file that cannot be read as JSON is an error, never a pass.
+func TestTheCheckScansEveryJSONFileOfTheTree(t *testing.T) {
 	repo := t.TempDir()
 	write(t, filepath.Join(repo, "go.mod"), "module example\n")
-	// made at run time: no secret-shaped literal is in the source
-	value := strings.Repeat("aB3x", 2) + "Zq9Lm2Pw7Rt5Yk8Nc4Vd6Hs" + "J1"
+	value := generatedValue(7890)
 	write(t, filepath.Join(repo, "a", "testdata", "bad.json"), `{"header":{"python_build":"x"},"requests":[{"body":"{\"client_secret\":\"`+value+`\"}"}]}`)
 	write(t, filepath.Join(repo, "a", "testdata", "clean.json"), `{"header":{"python_build":"x"},"requests":[{"body":"ok"}]}`)
-	write(t, filepath.Join(repo, "a", "testdata", "notagolden.json"), `{"client_secret":"`+value+`"}`)
+	write(t, filepath.Join(repo, "a", "testdata", "plain.json"), `{"client_secret":"`+value+`"}`)
+	write(t, filepath.Join(repo, "a", "testdata", "note.txt"), `client_secret = "`+value+`"`)
 	problems, err := goldenscan.TreeProblems(repo, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
 	joined := strings.Join(problems, "\n")
-	if len(problems) != 1 || !strings.Contains(joined, "a/testdata/bad.json") || strings.Contains(joined, value) {
-		t.Fatalf("the tree scan found %d problem(s), want exactly the one of bad.json, with no value: %v", len(problems), problems)
+	if len(problems) != 2 || !strings.Contains(joined, "a/testdata/bad.json") || !strings.Contains(joined, "a/testdata/plain.json") || strings.Contains(joined, "note.txt") || strings.Contains(joined, value) {
+		t.Fatalf("the tree scan found %d problem(s), want bad.json and plain.json only, with no value: %v", len(problems), problems)
 	}
 	stale := []goldenscan.Row{{Path: "a/testdata/clean.json", Key: "credential_id", Shape: "uuid", Count: 1, Triage: "row 1"}}
 	problems, err = goldenscan.TreeProblems(repo, stale)
-	if err != nil || len(problems) != 2 || !strings.Contains(strings.Join(problems, "\n"), "no hit any more") {
+	if err != nil || len(problems) != 3 || !strings.Contains(strings.Join(problems, "\n"), "no hit any more") {
 		t.Fatalf("a stale allowlist row was not found: %v %v", problems, err)
 	}
+	write(t, filepath.Join(repo, "a", "testdata", "broken.json"), `{"a": `)
+	if _, err := goldenscan.TreeProblems(repo, nil); err == nil {
+		t.Fatal("a .json file that is not JSON was passed over")
+	}
+}
+
+func generatedValue(seed int64) string {
+	r := rand.New(rand.NewSource(seed))
+	const alphabet = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789"
+	out := make([]byte, 36)
+	for i := range out {
+		out[i] = alphabet[r.Intn(len(alphabet))]
+	}
+	return string(out)
 }

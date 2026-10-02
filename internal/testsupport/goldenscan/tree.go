@@ -23,7 +23,7 @@ func TreeProblems(repo string, rows []Row) ([]string, error) {
 		}
 		for _, file := range files {
 			path := root + "/" + file
-			if strings.HasSuffix(path, ".json") && recordedfiles.HasGoldenHeader(repo, path) {
+			if strings.HasSuffix(path, ".json") {
 				paths = append(paths, path)
 			}
 		}

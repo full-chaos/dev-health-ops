@@ -14,7 +14,7 @@ import (
 )
 
 // scanner_vectors.tsv holds the verdict of the REAL scanner (gitleaks v8.21.2, default config) on a set of vectors, recorded by the
-// verb below; the port must repeat every verdict, so its parity is executed, not argued. A vector is a key and a value spec; the
+// verb below; the port must report a hit on every vector the scanner does (Go-hit is a superset of gitleaks-hit, so it may be stricter, never looser), so its parity is executed, not argued. A vector is a key and a value spec; the
 // value is made at run time, so no secret-shaped text is in the file.
 
 const (
@@ -91,24 +91,46 @@ func goVerdict(v vector, value string) string {
 	return "none"
 }
 
-func TestThePortRepeatsEveryVerdictOfTheRealScanner(t *testing.T) {
+// The port reports a hit on every vector the real scanner does (Go-hit is a superset of gitleaks-hit): a miss is a fail-open and fails
+// the test; a vector the port is stricter on is allowed and counted.
+func TestThePortNeverMissesWhatTheRealScannerFinds(t *testing.T) {
 	_, vectors := readVectors(t)
 	if len(vectors) < 60 {
 		t.Fatalf("only %d vectors", len(vectors))
 	}
 	seen := map[string]int{}
+	stricter := 0
 	for _, v := range vectors {
 		if v.verdict != "hit" && v.verdict != "none" {
 			t.Errorf("vector %s has no recorded verdict (%q): record it with %s", v.name, v.verdict, recordEnv)
 			continue
 		}
 		seen[v.verdict]++
-		if got := goVerdict(v, valueOf(t, v.spec)); got != v.verdict {
-			t.Errorf("vector %s (key %s): the scanner says %s, the port says %s", v.name, v.key, v.verdict, got)
+		got := goVerdict(v, valueOf(t, v.spec))
+		switch {
+		case v.verdict == "hit" && got != "hit":
+			t.Errorf("vector %s (key %s): the scanner flags it and the port does not: the port is looser than the scanner", v.name, v.key)
+		case v.verdict == "none" && got == "hit":
+			stricter++
+			t.Logf("vector %s (key %s): the port is stricter than the scanner", v.name, v.key)
 		}
 	}
 	if seen["hit"] < 10 || seen["none"] < 10 {
 		t.Errorf("the vectors do not hold both verdicts: %v", seen)
+	}
+	if stricter != 0 {
+		t.Logf("%d vector(s) where the port is stricter", stricter)
+	}
+}
+
+// The port is also exactly as strict as the scanner on today's vectors: a stricter port is allowed by the contract above, but it is a
+// change to look at, so it is pinned here (to accept a stricter vector on purpose, say so in the vector's name and relax this test).
+func TestThePortIsAsStrictAsTheRealScannerOnTheVectors(t *testing.T) {
+	_, vectors := readVectors(t)
+	for _, v := range vectors {
+		if got := goVerdict(v, valueOf(t, v.spec)); v.verdict == "none" && got == "hit" {
+			t.Errorf("vector %s (key %s): the port is stricter than the scanner (allowed by the contract, but a change to review)", v.name, v.key)
+		}
 	}
 }
 

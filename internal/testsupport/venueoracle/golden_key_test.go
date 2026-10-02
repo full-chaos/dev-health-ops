@@ -2,6 +2,7 @@ package venueoracle
 
 import (
 	"encoding/json"
+	"math/rand"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -288,8 +289,7 @@ func TestTheCandidateWriteRefusesAKeyedHighEntropyValue(t *testing.T) {
 	g := keyGolden(t, nil)
 	entry := g.keyOf(Request{Name: "r", Method: "GET", Path: "/x"})
 	entry.Status = 200
-	// made at run time: no secret-shaped literal is in the source
-	value := strings.Repeat("aB3x", 2) + "Zq9Lm2Pw7Rt5Yk8Nc4Vd6Hs" + "J1"
+	value := generatedValue(7890)
 	entry.Body = `{"client_secret":"` + value + `"}`
 	g.recorded.Requests = []goldenRequest{entry}
 	_, err := g.writeCandidate(false)
@@ -299,4 +299,16 @@ func TestTheCandidateWriteRefusesAKeyedHighEntropyValue(t *testing.T) {
 	if _, statErr := os.Stat(g.spec.Path + GoldenCandidateSuffix); statErr == nil {
 		t.Fatal("a candidate was written although the scan refused it")
 	}
+}
+
+// generatedValue is a high-entropy value made at run time from a fixed-seed generator (36 characters of letters and digits): no
+// literal fragment of it is in the source, and it is the same on every run.
+func generatedValue(seed int64) string {
+	r := rand.New(rand.NewSource(seed))
+	const alphabet = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789"
+	out := make([]byte, 36)
+	for i := range out {
+		out[i] = alphabet[r.Intn(len(alphabet))]
+	}
+	return string(out)
 }

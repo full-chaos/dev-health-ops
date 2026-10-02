@@ -4,10 +4,11 @@
 //
 // What it finds is what the generic-api-key rule of gitleaks v8.21.2 finds and the token-shape scan of the venueoracle package does not
 // (a credential word, a separator, then ten to 150 characters of a key, a token or a base64 text). The rule is a PORT of that scanner's
-// own: the same expression (rule.go, copied from config/gitleaks.toml), the same filters in the same order (global allowlist regexes,
-// the rule allowlist regex on the match, the rule's 1476 stopwords from stopwords.txt, entropy above 3.5, one digit from 1 to 9), and
-// scanner_vectors.tsv holds the verdict of the real binary on a set of vectors, which the port must repeat. What it does not do: the
-// scanner's own base64 and percent decoding of the text it reads (the walk here unpacks packed bodies and JSON texts instead).
+// own (rule expression, filters, stopwords: see goldenscan.go and stopwords.txt), and the parity claim is exactly this: on every vector of
+// testdata/scanner_vectors.tsv, whose verdicts were recorded from the REAL binary, the port reports a hit wherever the scanner does
+// (Go-hit is a superset of gitleaks-hit; the port may be stricter on a vector, never looser). Beyond the vectors parity is not proved. What
+// the port does not do: the scanner's own base64 and percent decoding of the text it reads (the walk unpacks packed bodies and JSON
+// texts instead).
 //
 // A hit passes only through a row of allowlist.tsv: ONE row per golden file and key, for a digest or id OUTPUT field the triage record
 // accepts, with the exact value shape, the exact count and the triage line it cites. There is no wildcard path and no rule-wide row,
@@ -40,8 +41,8 @@ type Leaf struct{ Key, Value string }
 // Leaves is every string leaf of the golden, each as its own unit with its key. A packed body is unpacked first; a leaf (packed or not)
 // that is itself JSON text of an object or a list is walked the same way, leaf by leaf; a packed body that is not JSON is one leaf.
 func Leaves(golden []byte) ([]Leaf, error) {
-	var doc any
-	if err := json.Unmarshal(golden, &doc); err != nil {
+	doc, err := decodeJSON(golden)
+	if err != nil {
 		return nil, fmt.Errorf("golden is not JSON: %w", err)
 	}
 	var leaves []Leaf
@@ -49,6 +50,20 @@ func Leaves(golden []byte) ([]Leaf, error) {
 		return nil, err
 	}
 	return leaves, nil
+}
+
+// decodeJSON reads one JSON document with numbers kept as text (a number too large for a float is still a number).
+func decodeJSON(raw []byte) (any, error) {
+	decoder := json.NewDecoder(bytes.NewReader(raw))
+	decoder.UseNumber()
+	var doc any
+	if err := decoder.Decode(&doc); err != nil {
+		return nil, err
+	}
+	if decoder.More() {
+		return nil, fmt.Errorf("text after the JSON value")
+	}
+	return doc, nil
 }
 
 func walk(node any, key string, depth int, out *[]Leaf) error {
@@ -66,8 +81,7 @@ func walk(node any, key string, depth int, out *[]Leaf) error {
 			text = unpacked
 		}
 		if trimmed := strings.TrimSpace(text); strings.HasPrefix(trimmed, "{") || strings.HasPrefix(trimmed, "[") {
-			var inner any
-			if json.Unmarshal([]byte(trimmed), &inner) == nil {
+			if inner, err := decodeJSON([]byte(trimmed)); err == nil {
 				return walk(inner, key, depth+1, out)
 			}
 		}
@@ -163,15 +177,18 @@ type Hit struct {
 var (
 	uuidShape = regexp.MustCompile(`^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$`)
 	hex64     = regexp.MustCompile(`^[0-9a-f]{64}$`)
+	hex32     = regexp.MustCompile(`^[0-9a-f]{32}$`)
 )
 
-// Shape names the shape of a value for the allowlist: uuid, hex64, or other.
+// Shape names the shape of a value for the allowlist: uuid, hex64, hex32, or other.
 func Shape(v string) string {
 	switch {
 	case uuidShape.MatchString(v):
 		return "uuid"
 	case hex64.MatchString(v):
 		return "hex64"
+	case hex32.MatchString(v):
+		return "hex32"
 	}
 	return "other"
 }

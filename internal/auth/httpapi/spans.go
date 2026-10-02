@@ -3,6 +3,7 @@ package httpapi
 import (
 	"context"
 	"net/http"
+	"sync/atomic"
 
 	"go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/attribute"
@@ -88,6 +89,9 @@ func (s spanObserver) start(r *http.Request) (context.Context, trace.Span) {
 	} else {
 		options = append(options, trace.WithNewRoot())
 	}
+	// The box a handler records its 404 cause into (RecordNotFoundCause); read
+	// once, by finish.
+	ctx = context.WithValue(ctx, notFoundCauseKey{}, &notFoundCauseBox{})
 	method := boundedMethod(r.Method)
 	options = append(options, trace.WithAttributes(
 		attribute.String("http.request.method", method),
@@ -100,11 +104,12 @@ func (s spanObserver) start(r *http.Request) (context.Context, trace.Span) {
 // return (http.ErrAbortHandler re-panicked to net/http): the response was cut
 // off, whatever status had been committed before, so the span is an error one.
 // status is 0 when none was committed.
-func (s spanObserver) finish(span trace.Span, method, pattern string, status int, aborted bool) {
+func (s spanObserver) finish(ctx context.Context, span trace.Span, method, pattern string, status int, aborted bool) {
 	if span == nil {
 		return
 	}
-	if pattern == "" {
+	matched := pattern != ""
+	if !matched {
 		pattern = UnmatchedRoute
 	} else {
 		span.SetAttributes(attribute.String("http.route", pattern))
@@ -112,6 +117,9 @@ func (s spanObserver) finish(span trace.Span, method, pattern string, status int
 	span.SetName(method + " " + pattern)
 	if status > 0 {
 		span.SetAttributes(attribute.Int("http.response.status_code", status))
+	}
+	if status == http.StatusNotFound {
+		span.SetAttributes(attribute.String(NotFoundCauseAttribute, string(notFoundCause(ctx, matched))))
 	}
 	switch {
 	case aborted:
@@ -143,4 +151,64 @@ func RecordGraphQLErrorCount(ctx context.Context, count int) {
 		return
 	}
 	span.SetAttributes(attribute.Int(GraphQLErrorCountAttribute, count))
+}
+
+// NotFoundCause is why a request was answered 404: a CLOSED enum, never a
+// document, digest, path or org value.
+type NotFoundCause string
+
+const (
+	// NotFoundUnregisteredDocument: a GraphQL document whose digest is not
+	// registered (the safe default: it is not served by Go).
+	NotFoundUnregisteredDocument NotFoundCause = "unregistered_document"
+	// NotFoundIDEOff: a browser GET to /graphql while the GraphQL IDE is off.
+	NotFoundIDEOff NotFoundCause = "ide_off"
+	// NotFoundNoRoute: no route matched (the mux's own 404), or a catch-all that
+	// answers "does not exist".
+	NotFoundNoRoute NotFoundCause = "not_found"
+	// NotFoundOther: a 404 whose handler recorded no cause, or an unknown one.
+	NotFoundOther NotFoundCause = "other"
+)
+
+// NotFoundCauses is the closed list, for tests and docs.
+var NotFoundCauses = []NotFoundCause{NotFoundUnregisteredDocument, NotFoundIDEOff, NotFoundNoRoute, NotFoundOther}
+
+// NotFoundCauseAttribute is the server-span attribute that says why a 404 was
+// answered; it is set only on a span whose status is 404.
+const NotFoundCauseAttribute = "dev_health.http.not_found_cause"
+
+type notFoundCauseKey struct{}
+
+type notFoundCauseBox struct{ cause atomic.Value }
+
+// RecordNotFoundCause records why the handler is about to answer 404. The last
+// call wins. A value outside the closed list is recorded as NotFoundOther, so
+// the attribute can never carry free text. A no-op on a context without a span
+// observer (a probe path, an untraced listener).
+func RecordNotFoundCause(ctx context.Context, cause NotFoundCause) {
+	box, ok := ctx.Value(notFoundCauseKey{}).(*notFoundCauseBox)
+	if !ok {
+		return
+	}
+	for _, known := range NotFoundCauses {
+		if cause == known {
+			box.cause.Store(cause)
+			return
+		}
+	}
+	box.cause.Store(NotFoundOther)
+}
+
+// notFoundCause is the cause finish stamps on a 404 span: what the handler
+// recorded, else NotFoundNoRoute when no route matched, else NotFoundOther.
+func notFoundCause(ctx context.Context, matched bool) NotFoundCause {
+	if box, ok := ctx.Value(notFoundCauseKey{}).(*notFoundCauseBox); ok {
+		if cause, ok := box.cause.Load().(NotFoundCause); ok {
+			return cause
+		}
+	}
+	if !matched {
+		return NotFoundNoRoute
+	}
+	return NotFoundOther
 }

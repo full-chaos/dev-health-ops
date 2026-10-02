@@ -39,7 +39,7 @@ func TraceHandler(next http.Handler, options TraceOptions) http.Handler {
 		traced := r.WithContext(ctx)
 		returned := false
 		defer func() {
-			observer.finish(span, boundedMethod(r.Method), registeredPattern(traced), recorder.status, !returned)
+			observer.finish(ctx, span, boundedMethod(r.Method), registeredPattern(traced), recorder.status, !returned)
 		}()
 		next.ServeHTTP(recorder, traced)
 		returned = true

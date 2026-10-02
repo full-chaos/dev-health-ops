@@ -127,7 +127,7 @@ func (o *accessObserver) wrap(next http.Handler) http.Handler {
 		// http.ErrAbortHandler (Recover re-panics it): an aborted request is
 		// still a request that reached the route.
 		defer func() {
-			o.spans.finish(span, boundedMethod(r.Method), match.pattern, recorder.status, !returned)
+			o.spans.finish(spanCtx, span, boundedMethod(r.Method), match.pattern, recorder.status, !returned)
 			o.observe(r, match.pattern, recorder.status, time.Now().Sub(start))
 		}()
 		next.ServeHTTP(recorder, r.WithContext(context.WithValue(spanCtx, observedRouteKey{}, match)))

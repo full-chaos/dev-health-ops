@@ -111,7 +111,10 @@ def _key(mod: str, pkg: str) -> str:
 
 
 def _run_check_go(
-    tmp_path: Path, *args: str, fail: bool = False, extra_env: dict[str, str] | None = None
+    tmp_path: Path,
+    *args: str,
+    fail: bool = False,
+    extra_env: dict[str, str] | None = None,
 ) -> tuple[subprocess.CompletedProcess[str], list[str]]:
     real_go = shutil.which("go")
     assert real_go
@@ -207,7 +210,9 @@ def test_race_shards_partition_the_package_list_and_balance() -> None:
         sum(weights.get(_key(mod, p), DEFAULT_WEIGHT) for p in _shard(mod, pkgs, k, 3))
         for k in (1, 2, 3)
     ]
-    assert max(three) <= 1.1 * (sum(three) / 3), f"3-way race slices unbalanced: {three}"
+    assert max(three) <= 1.1 * (sum(three) / 3), (
+        f"3-way race slices unbalanced: {three}"
+    )
 
 
 def test_the_race_weights_table_is_clean() -> None:
@@ -409,7 +414,9 @@ def test_only_the_static_leg_runs_the_static_only_steps() -> None:
 # ---------------------------------------------------------------------------
 
 
-def _missing_awk(mod: str, weights_file: Path, packages: str) -> subprocess.CompletedProcess[str]:
+def _missing_awk(
+    mod: str, weights_file: Path, packages: str
+) -> subprocess.CompletedProcess[str]:
     return subprocess.run(
         [
             "awk",
@@ -444,13 +451,19 @@ def test_the_missing_row_awk_names_a_removed_row_and_refuses_empty_input(
     victim = "internal/httpguard"
     assert victim in weights
     trimmed = tmp_path / "trimmed.tsv"
-    trimmed.write_text("".join(f"{k}\t{v}\n" for k, v in weights.items() if k != victim))
+    trimmed.write_text(
+        "".join(f"{k}\t{v}\n" for k, v in weights.items() if k != victim)
+    )
     red = _missing_awk(mod, trimmed, text)
     assert red.stdout.split() == [victim], red
     empty = tmp_path / "empty.tsv"
     empty.write_text("# no rows\n")
-    assert _missing_awk(mod, empty, text).returncode != 0, "an empty weights file must fail loudly"
-    assert _missing_awk(mod, WEIGHTS, "").returncode != 0, "an empty package list must fail loudly"
+    assert _missing_awk(mod, empty, text).returncode != 0, (
+        "an empty weights file must fail loudly"
+    )
+    assert _missing_awk(mod, WEIGHTS, "").returncode != 0, (
+        "an empty package list must fail loudly"
+    )
 
 
 def test_a_race_leg_with_a_package_that_has_no_row_fails_before_any_test_runs(
@@ -459,7 +472,9 @@ def test_a_race_leg_with_a_package_that_has_no_row_fails_before_any_test_runs(
     weights = _weights()
     victim = "internal/httpguard"
     trimmed = tmp_path / "trimmed.tsv"
-    trimmed.write_text("".join(f"{k}\t{v}\n" for k, v in weights.items() if k != victim))
+    trimmed.write_text(
+        "".join(f"{k}\t{v}\n" for k, v in weights.items() if k != victim)
+    )
     proc, calls = _run_check_go(
         tmp_path / "run",
         "ci-leg",

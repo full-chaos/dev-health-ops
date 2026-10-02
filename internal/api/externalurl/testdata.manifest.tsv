@@ -1,5 +1,5 @@
 # Every file under internal/api/externalurl/testdata: sha256, kind, path. Written by `go run ./internal/testsupport/recordedfiles/manifest`; never edit it by hand.
 # python-recorded set: e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855 (0 files)
-# header-before-stamp set: 0f37cbeb66271d738dfc33b934be4ea07b0e2347d188626bacba3efc77c8cee3 (1 files)
-5a99ba9a5d5b43c632b303e23c8a3d9454c7bc132355534cd3172ad42436f8bb	header-before-stamp	golden/validate-external-url.golden.json
+# header-before-stamp set: e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855 (0 files)
+-	header	golden/validate-external-url.golden.json
 5bc4c3dcd90eed2d5a6ac150366240ee3d7bf2bbc3c8e68caa1433c3b760e490	unclassified	venue_oracle_validate_external_url.py

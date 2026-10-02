@@ -1,5 +1,5 @@
 # Every file under internal/streamhandlers/testdata: sha256, kind, path. Written by `go run ./internal/testsupport/recordedfiles/manifest`; never edit it by hand.
 # python-recorded set: c6b3525ad368e6f664779ca0af3b25bb9ae08ba8586308795e0cd3b96e90f569 (1 files)
-# header-before-stamp set: 82f62ad77869e17c9b243968588265f81e7a9fff7459807e6a2c2b0e4d579a0d (1 files)
-9cc119c8e5fe2cd6dc301bf7460a4e1c38f40cf833c99bf5ac95c053cd59fa4d	header-before-stamp	golden/normalize-batch.golden.json
+# header-before-stamp set: e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855 (0 files)
+-	header	golden/normalize-batch.golden.json
 f7b08e902830a5b458851cf3c15df2d85b6d08873766c7cff50e9abe93fe9f9e	python-recorded	product_telemetry_python_stored.json

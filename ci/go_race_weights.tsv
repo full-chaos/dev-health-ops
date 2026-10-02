@@ -299,6 +299,7 @@ internal/testsupport/chlogin	1
 internal/testsupport/chquery	1
 internal/testsupport/chschema	2
 internal/testsupport/containers	1
+internal/testsupport/credentialshapes	1
 internal/testsupport/crossorg	1
 internal/testsupport/fakehttp	1
 internal/testsupport/fakepg	1

@@ -16,7 +16,7 @@ import (
 
 const plantedLocationSecret = "sk-planted-location-7927"
 
-func redirectError(t *testing.T, location string, setLocation bool) string {
+func redirectError(t *testing.T, location string, setLocation bool) (class, message string) {
 	t.Helper()
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if setLocation {
@@ -30,7 +30,7 @@ func redirectError(t *testing.T, location string, setLocation bool) string {
 	if !errors.As(err, &apiErr) {
 		t.Fatalf("err = %v, want an *Error", err)
 	}
-	return apiErr.Message
+	return apiErr.Class, apiErr.Message
 }
 
 func TestRedirectErrorCarriesTheSchemeAndHostOnly(t *testing.T) {
@@ -43,7 +43,10 @@ func TestRedirectErrorCarriesTheSchemeAndHostOnly(t *testing.T) {
 		{"an IPv6 host", "http://[2001:db8::1]:9/x?k=" + plantedLocationSecret, "http://[2001:db8::1]:9"},
 	} {
 		t.Run(row.name, func(t *testing.T) {
-			message := redirectError(t, row.location, true)
+			class, message := redirectError(t, row.location, true)
+			if class != "APIException" {
+				t.Fatalf("the error class is %q, want APIException (a redirect is an API exception, not a transport error)", class)
+			}
 			for _, leak := range []string{plantedLocationSecret, "admin", "orgs/42", "access_token", "frag", "token=", "k="} {
 				if strings.Contains(message, leak) {
 					t.Fatalf("the error text carries %q: %s", leak, message)
@@ -69,7 +72,10 @@ func TestRedirectErrorNamesNoTargetForARelativeUnparsableOrMissingLocation(t *te
 		{"no Location header", "", false, "<no Location header>"},
 	} {
 		t.Run(row.name, func(t *testing.T) {
-			message := redirectError(t, row.location, row.set)
+			class, message := redirectError(t, row.location, row.set)
+			if class != "APIException" {
+				t.Fatalf("the error class is %q, want APIException: net/http's own refusal of an unparsable Location must not change the class", class)
+			}
 			if strings.Contains(message, plantedLocationSecret) || strings.Contains(message, "orgs/42") {
 				t.Fatalf("the error text carries part of the Location: %s", message)
 			}
@@ -92,5 +98,28 @@ func TestRedirectTargetIsTheSchemeAndHostOfALocation(t *testing.T) {
 		if got := RedirectTarget(location); got != want {
 			t.Errorf("RedirectTarget(%q) = %q, want %q", location, got, want)
 		}
+	}
+}
+
+// A transport error that is not a redirect keeps its class and its text: only net/http's refusal of a Location is reworded.
+type failingTransport struct{ err error }
+
+func (transport failingTransport) RoundTrip(*http.Request) (*http.Response, error) {
+	return nil, transport.err
+}
+
+func TestAnOrdinaryTransportErrorKeepsItsClassAndText(t *testing.T) {
+	core := Core{
+		Provider:   "github",
+		RetryAfter: func(Response) time.Duration { return 0 },
+		HTTP:       &http.Client{Transport: failingTransport{err: errors.New("tls: handshake exploded")}},
+	}
+	_, err := core.Get(context.Background(), "https://api.example.test/x", "GET /probe")
+	var apiErr *Error
+	if !errors.As(err, &apiErr) || apiErr.Class != "TransportError" || !strings.Contains(apiErr.Message, "tls: handshake exploded") {
+		t.Fatalf("err = %v, want a TransportError that keeps the transport's text", err)
+	}
+	if strings.Contains(apiErr.Message, "unexpected redirect") {
+		t.Fatalf("an ordinary transport error was reworded as a redirect: %s", apiErr.Message)
 	}
 }

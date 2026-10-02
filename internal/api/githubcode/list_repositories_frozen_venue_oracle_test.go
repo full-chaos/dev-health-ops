@@ -345,6 +345,27 @@ func listScenarios() []scenario {
 		add("installation", base, "", "", "", nil, ok(`{"repositories": []}`))
 		known = ""
 	}
+	// Terminal responses that are not a 403 and that the rate-limit triage's wording or headers match: only a 403 is
+	// triaged as a rate limit (vet gap, CHAOS-7813).
+	for _, code := range []int{401, 404, 418, 422, 429, 500, 502} {
+		for _, body := range []string{`rate limit`, `abuse`, `secondary`, `{"message": "API rate limit exceeded"}`, `You have exceeded a secondary rate limit`, `{}`} {
+			repos("", "acme", repeat(5, status(code, body))...)
+			repos("", "acme", repeat(5, status(code, body, [2]string{"Retry-After", "0"}))...)
+			repos("", "acme", repeat(5, status(code, body, [2]string{"X-RateLimit-Remaining", "0"}, [2]string{"X-RateLimit-Reset", "1"}))...)
+		}
+	}
+	// An item whose html_url is falsy or absent AND whose url is falsy but not null (the url fallback is read for its
+	// truthiness, not for nil).
+	var urlItems []string
+	for _, htmlURL := range []string{``, `, "html_url": 0`, `, "html_url": false`, `, "html_url": []`, `, "html_url": {}`, `, "html_url": ""`, `, "html_url": 0.0`, `, "html_url": null`} {
+		for _, url := range []string{`0`, `false`, `[]`, `{}`, `0.0`, `""`, `null`, `"https://api.test/repos/O/x"`} {
+			urlItems = append(urlItems, `{"id": 1, "name": "n", "full_name": "O/n"`+htmlURL+`, "url": `+url+`}`)
+		}
+	}
+	repos("", "acme", ok(page(urlItems...)))
+	for _, item := range urlItems {
+		repos("", "acme", ok(page(item)))
+	}
 	repos("", "acme", status(403, `secondary`))
 	repos("", "acme", status(403, `a Secondary limit`))
 	repos("", "acme", status(403, `SECONDARY RATE LIMIT`))

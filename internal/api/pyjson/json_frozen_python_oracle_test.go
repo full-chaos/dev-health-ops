@@ -194,6 +194,11 @@ var bodyCorpus = func() []string {
 		utf16le("1", false), utf16be("1", false),
 		{0xff, 0xfe, 0x22, 0x00, 0x00, 0xd8, 0x22, 0x00}, // UTF-16LE lone surrogate
 		{0x7b, 0x00, 0x00, 0x00, 0x31},                   // looks UTF-32LE, truncated
+		// Escaped surrogates in every order (corpus gap of the CHAOS-7531 vet): a LOW surrogate first stays a lone
+		// surrogate, a high one is joined only to a low one that follows it.
+		[]byte(`"\udc00\udc00"`), []byte(`"\ude00\ud83d\ude00"`), []byte(`"\ude00` + "\U0001F600" + `"`), []byte(`"\udc00\ud800"`),
+		[]byte(`"\ud800\ud800\udc00"`), []byte(`"\udbff\udfff"`), []byte(`"\udbff\udbff"`), []byte(`"\ud800\udbff"`),
+		[]byte(`"\udfff\udc00\ud800\udc00"`), []byte(`"\ud800\u0041"`), []byte(`"\udc00\u0041"`), []byte(`"a\udc00\udc00b"`),
 	}
 	out := make([]string, len(bodies))
 	for index, body := range bodies {

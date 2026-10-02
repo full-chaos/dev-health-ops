@@ -22,7 +22,7 @@ const producerIdentity = "python 3.14.7\nunicodedata 16.0.0\npydantic 2.13.5\npy
 // goldenrecord verb writes each digest when it promotes a recording; a new
 // golden starts as "PIN:" + its file name without ".json".
 var goldenPins = map[string]string{
-	"decode-body.golden.json":       "50f908b13523839a484ffe208c0e28ba41313ff8f44078acf486c182e74556f5",
+	"decode-body.golden.json":       "a5b797330fcdf7f40ff87930c397cad1b8a27d143a591ae57941b4d1f8c66823",
 	"dumps-default.golden.json":     "dac79839e21dcc4e7d30e5f0292ac11c1ea2c3ca291faa872590125e16882f2c",
 	"marshal.golden.json":           "07c3bb12bfbd04be5237c90af456a5d288912c74f62a0a7bb81d2cb7beb57c6d",
 	"model.golden.json":             "1c03f955b30851bdb9cc7995e058e25cbd55c23ba5d774107b9631fe75bde205",

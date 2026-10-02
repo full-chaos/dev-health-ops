@@ -1,9 +1,13 @@
 package pyoracle
 
 import (
+	"errors"
+	"io/fs"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"reflect"
+	"regexp"
 	"strings"
 	"testing"
 )
@@ -282,3 +286,223 @@ func TestAProbeThatCannotStartSaysWhatTheInterpreterWrote(t *testing.T) {
 		t.Fatalf("an older release was not refused by what it said: %v", err)
 	}
 }
+
+// In a recording a test that is not on the closed list resolves a stand-in
+// that runs nothing, and a package on it, a run that is no recording, and the
+// launcher get the interpreter.
+func TestInARecordingATestOutsideTheClosedListIsGivenAnInterpreterThatRefuses(t *testing.T) {
+	real := filepath.Join(t.TempDir(), "real-python")
+	if err := os.WriteFile(real, []byte("#!/bin/sh\necho real\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("DEV_HEALTH_PYTHON", real)
+	root := t.TempDir()
+
+	t.Setenv(RecordingEnv, "1")
+	standIn := Resolve(t, root)
+	if standIn == real {
+		t.Fatal("a test outside the closed list was given the real interpreter in a recording")
+	}
+	out, err := exec.Command(standIn).CombinedOutput()
+	var exit *exec.ExitError
+	if !errors.As(err, &exit) || exit.ExitCode() != 97 || !strings.Contains(string(out), "producer launcher") {
+		t.Fatalf("the stand-in ran as %v with %q, want exit 97 and the way out", err, out)
+	}
+	if got := ResolveLauncher(t, root); got != real {
+		t.Fatalf("the launcher was given %s, want the real interpreter", got)
+	}
+
+	t.Chdir(filepath.Join(repoRootOf(t), "internal", "pgmigrate"))
+	if got := Resolve(t, root); got != real {
+		t.Fatalf("a package on the closed list was given %s in a recording, want the real interpreter", got)
+	}
+
+	// The match is exact: a package UNDER a listed one is not on the list
+	// (internal/apiservice is listed, internal/apiservice/admin is not).
+	t.Chdir(filepath.Join(repoRootOf(t), "internal", "apiservice", "admin"))
+	if got := Resolve(t, root); got == real {
+		t.Fatal("a package under a listed one was given the real interpreter in a recording")
+	}
+
+	t.Setenv(RecordingEnv, "")
+	t.Chdir(filepath.Join(repoRootOf(t), "internal", "testsupport", "pyoracle"))
+	if got := Resolve(t, root); got != real {
+		t.Fatalf("outside a recording the test was given %s, want the real interpreter", got)
+	}
+}
+
+func repoRootOf(t *testing.T) string {
+	t.Helper()
+	wd, err := os.Getwd()
+	if err != nil {
+		t.Fatal(err)
+	}
+	for dir := wd; ; dir = filepath.Dir(dir) {
+		if _, err := os.Stat(filepath.Join(dir, "go.mod")); err == nil {
+			return dir
+		}
+		if filepath.Dir(dir) == dir {
+			t.Fatal("no go.mod")
+		}
+	}
+}
+
+// The closed list names directories that exist (it only shrinks: ci/ratchets.tsv holds its size to the merge base).
+func TestTheClosedListOfOwnLaunchPackagesOnlyShrinks(t *testing.T) {
+	list := UnconvertedOwnLaunch()
+	if len(list) == 0 {
+		t.Fatal("the closed list is empty: this test then checks nothing; when the last package is converted, delete the list and this test together")
+	}
+	root := repoRootOf(t)
+	for _, dir := range list {
+		if info, err := os.Stat(filepath.Join(root, filepath.FromSlash(dir))); err != nil || !info.IsDir() {
+			t.Errorf("%s is on the closed list and is not a directory: a converted or removed package leaves the list", dir)
+		}
+	}
+}
+
+// unconvertedDayOne is the closed list as it was when the guard began
+// (CHAOS-7707). An entry that is not in it is a package added to the list,
+// which this change cannot do: a package that starts its own Python child
+// converts to the launcher instead. Removing a line from the list is allowed,
+// so a swap (one out, one in) and a raise of the ceiling both fail here.
+var unconvertedDayOne = map[string]bool{
+	"internal/adminops":                true,
+	"internal/api/externalingest":      true,
+	"internal/api/legacyingest":        true,
+	"internal/apiservice":              true,
+	"internal/apiservice/customerpush": true,
+	"internal/backfillrun":             true,
+	"internal/chmigrate":               true,
+	"internal/fixturescli":             true,
+	"internal/maintenancecli":          true,
+	"internal/metricscli":              true,
+	"internal/operationalbackfill":     true,
+	"internal/pgmigrate":               true,
+	"internal/providersync":            true,
+	"internal/pushcli":                 true,
+}
+
+func TestTheClosedListHoldsNoPackageThatWasNotThereOnDayOne(t *testing.T) {
+	for _, dir := range UnconvertedOwnLaunch() {
+		if !unconvertedDayOne[dir] {
+			t.Errorf("%s is on unconverted_own_launch.txt and was not on the day-one list: convert its Python launch to the producer's launcher instead of listing it", dir)
+		}
+	}
+}
+
+// The closed child environment is pinned as a literal. Every golden was
+// recorded under it and no key holds its constants, so a change here changes
+// no golden's key and no replay refuses: the answers of the old environment
+// would be served as the new one's.
+func TestTheClosedEnvironmentIsPinnedAsAnyGoldenWasRecordedUnderIt(t *testing.T) {
+	want := []string{
+		"PATH=/usr/local/bin:/usr/bin:/bin",
+		"LANG=C.UTF-8", "LC_ALL=C.UTF-8", "TZ=UTC",
+		"PYTHONHASHSEED=0", "PYTHONDONTWRITEBYTECODE=1",
+		"PYTHONPATH=/ROOT/src",
+		"OTEL_ENABLED=false",
+	}
+	got := ClosedEnv("/ROOT")
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("ClosedEnv changed:\n got %q\nwant %q\nevery golden was recorded under the old closed environment: re-record all of them, then move this pin", got, want)
+	}
+}
+
+// Interpreter itself refuses in a recording for a package that is not on the
+// closed list: a new test that resolves the interpreter's path by itself and
+// starts it with the environment it built is not let through by skipping Resolve.
+func TestInterpreterRefusesInARecordingOutsideTheClosedList(t *testing.T) {
+	real := filepath.Join(t.TempDir(), "real-python")
+	if err := os.WriteFile(real, []byte("#!/bin/sh\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("DEV_HEALTH_PYTHON", real)
+	root := t.TempDir()
+
+	t.Setenv(RecordingEnv, "1")
+	if path, _, err := Interpreter(root); err == nil {
+		t.Fatalf("Interpreter gave %s in a recording to a package outside the closed list", path)
+	}
+	// A package UNDER a listed one is outside it (exact match).
+	t.Chdir(filepath.Join(repoRootOf(t), "internal", "apiservice", "admin"))
+	if _, _, err := Interpreter(root); err == nil {
+		t.Fatal("Interpreter gave the interpreter to a package under a listed one")
+	}
+	t.Chdir(filepath.Join(repoRootOf(t), "internal", "pgmigrate"))
+	if path, _, err := Interpreter(root); err != nil || path != real {
+		t.Fatalf("a package on the closed list: %s, %v", path, err)
+	}
+	t.Chdir(filepath.Join(repoRootOf(t), "internal", "testsupport", "pyoracle"))
+	if got := ResolveLauncher(t, root); got != real {
+		t.Fatalf("the launcher resolve was refused: %s", got)
+	}
+	t.Setenv(RecordingEnv, "")
+	if path, _, err := Interpreter(root); err != nil || path != real {
+		t.Fatalf("outside a recording: %s, %v", path, err)
+	}
+}
+
+// A LookPath or a launch of a python name cannot be refused in a recording (it is the
+// standard library), so the files that start a Python they looked up by name
+// (or start it by that name) are a frozen set: a new file that does is RED until it goes through the
+// producer's launcher. The exceptions below never record a golden (CHAOS-7820).
+var lookPathPythonDayOne = map[string]bool{
+	"internal/testsupport/pyoracle/pyoracle.go":             true, // the resolver itself
+	"internal/testsupport/venueoracle/venueoracle.go":       true, // the launcher's PATH check
+	"internal/apiservice/admin/orgdeletion_targets_test.go": true,
+	"internal/pgmigrate/preflight_test.go":                  true,
+	// Launches by the name "python3" (the venue puts the interpreter's
+	// directory first on PATH): started with the process environment, a
+	// recording's poison (PYTHONHOME) stops these, so none records today.
+	"internal/testsupport/programoracle/programoracle.go":                              true,
+	"internal/queryapi/people/summaryvenue/summary_venue_oracle_integration_test.go":   true,
+	"internal/queryapi/server/dict_order_venue_oracle_test.go":                         true,
+	"internal/queryapi/server/workunit_explain_provider_venue_oracle_test.go":          true,
+	"internal/apiservice/metricsvenue/counter_parity_venue_oracle_integration_test.go": true,
+	"internal/testsupport/venueoracle/producer.go":                                     true,
+}
+
+func TestNoNewFileLooksPythonUpByName(t *testing.T) {
+	root := repoRootOf(t)
+	pattern := regexp.MustCompile(`exec\.(LookPath|Command)\(\s*"python|exec\.CommandContext\([^,]+,\s*"python`)
+	err := filepath.WalkDir(root, func(path string, entry fs.DirEntry, walkErr error) error {
+		if walkErr != nil {
+			return walkErr
+		}
+		if entry.IsDir() {
+			switch entry.Name() {
+			case ".git", ".venv", "node_modules", "vendor":
+				return filepath.SkipDir
+			}
+			return nil
+		}
+		if !strings.HasSuffix(path, ".go") {
+			return nil
+		}
+		raw, err := os.ReadFile(path)
+		if err != nil {
+			return err
+		}
+		rel, _ := filepath.Rel(root, path)
+		rel = filepath.ToSlash(rel)
+		if pattern.Match(raw) && !lookPathPythonDayOne[rel] {
+			t.Errorf("%s looks Python up by name (exec.LookPath): a recording must start Python only through the producer's launcher (venueoracle Producer.Command)", rel)
+		}
+		return nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	// A listed exception that no longer looks Python up leaves the set.
+	for rel := range lookPathPythonDayOne {
+		raw, err := os.ReadFile(filepath.Join(root, filepath.FromSlash(rel)))
+		if err == nil && !pattern.Match(raw) {
+			t.Errorf("%s no longer looks Python up by name: remove it from lookPathPythonDayOne", rel)
+		}
+	}
+}
+
+// NOT seen by the sweep above (named in the PR body): a name built at run time
+// (a variable, a concatenation), a launch through a shell, a helper that takes
+// the name as a parameter, and a launch of the interpreter by a path.

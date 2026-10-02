@@ -1,0 +1,118 @@
+# The `venue-oracles-changed` job (CHAOS-7653): the venue oracles of the packages
+# a pull request changes, and only those. It is INFORMATIONAL (R430), not a
+# required check: the full suite stays on main and by hand in venue-oracles.yml,
+# which is deliberately not a pull_request workflow.
+#
+# WHAT IT RUNS. `ci/check_go.sh venue-oracles --changed FILE` selects the rows of
+# ci/venue_oracle_registry.d/ whose package directory holds a path the PR changes
+# (whole path segments: internal/apiservice/admin does not select
+# internal/apiservice/adminllmvenue). A frozen venue test (golden replay) is the
+# main target: a PR that touches a frozen venue sees its replay before merge.
+# Nothing selected is a plain notice and the heavy steps do not run.
+#
+# COST PER PR. The measured seconds of the selected rows (ci/venue_oracle_weights.d/):
+# most venue packages are 1-10 minutes; internal/apiservice/admin alone is about 36.
+# The job timeout is 60 minutes. A PR that changes no package with a registered venue
+# test costs the checkout and the selection (seconds): the path filter below starts it
+# only for changes under internal/, the registry, or the gate itself.
+#
+# NOT COVERED, on purpose: a change to the harness (internal/testsupport/venueoracle),
+# a shared helper outside a venue package, or the registry itself selects no package
+# here; they are what the full main run is for. This is a bounded-cost early signal,
+# never a substitute for it.
+name: Venue oracles (changed packages)
+
+on:
+  pull_request:
+    paths:
+      - 'internal/**'
+      - 'ci/venue_oracle_registry.d/**'
+      - 'ci/check_go.sh'
+      - '.github/workflows/venue-oracles-changed.yml'
+
+permissions:
+  contents: read
+  packages: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+jobs:
+  venue-oracles-changed:
+    name: venue-oracles (changed packages)
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    env:
+      TESTCONTAINERS_HUB_IMAGE_NAME_PREFIX: ghcr.io/${{ github.repository_owner }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+
+      - name: Select the venue oracles of the changed packages
+        id: select
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: |
+          set -euo pipefail
+          git diff --name-only -z "${BASE_SHA}...${HEAD_SHA}" > changed.txt
+          bash ci/check_go.sh venue-oracles --changed changed.txt --list | grep '^SELECT' > selected.txt || true
+          count="$(wc -l < selected.txt | tr -d ' ')"
+          echo "selected ${count} venue oracle test(s):"
+          cat selected.txt
+          if [ "${count}" -eq 0 ]; then
+            echo "::notice title=VENUE ORACLES NOT RUN::no changed path lies in a package with a registered venue oracle. This green is NOT oracle evidence."
+            printf 'run=false\n' >> "${GITHUB_OUTPUT}"
+          else
+            printf 'run=true\n' >> "${GITHUB_OUTPUT}"
+          fi
+
+      - name: Set up Go
+        if: steps.select.outputs.run == 'true'
+        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.mod
+          cache-dependency-path: '**/go.sum'
+
+      - name: Install uv
+        if: steps.select.outputs.run == 'true'
+        uses: astral-sh/setup-uv@bec219d24cd3e171d82865faccec33120bb574f4 # v10.1.0
+        with:
+          python-version: '3.14'
+
+      # The full project environment, as in venue-oracles.yml: a package selected here may
+      # still hold a venue test that runs the real Python api (not yet frozen).
+      - name: Install the full Python project
+        if: steps.select.outputs.run == 'true'
+        run: uv sync --frozen --all-extras --dev
+
+      - name: Log in to GitHub Container Registry
+        if: steps.select.outputs.run == 'true'
+        uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4.6.0
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Pre-pull pinned test dependency images with bounded retry
+        if: steps.select.outputs.run == 'true'
+        run: bash ci/check_go.sh integration-prepull
+
+      - name: Run the venue oracles of the changed packages
+        if: steps.select.outputs.run == 'true'
+        env:
+          DEV_HEALTH_LIVE_PYTHON_ORACLES: '1'
+        run: |
+          set -euo pipefail
+          mkdir -p "${RUNNER_TEMP}/venue-oracle-receipt"
+          bash ci/check_go.sh venue-oracles --changed changed.txt 2>&1 | tee "${RUNNER_TEMP}/venue-oracle-receipt/receipt.log"
+
+      - name: Upload the venue oracle receipt
+        if: steps.select.outputs.run == 'true' && always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: venue-oracle-receipt-changed-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/venue-oracle-receipt/receipt.log
+          if-no-files-found: ignore

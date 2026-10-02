@@ -1,0 +1,645 @@
+{
+  "header": {
+    "test": "TestSavedReportMutationsCronDialectVenueOracle",
+    "python_build": "a4847c5e93607451a0c987b314d37e02fc43ce85",
+    "producer_digest": "6e1dc97e68624398015f60caee160cceee6ae601bd434d01b8b7d5975267e137",
+    "recipe": "git worktree add --detach $DIR a4847c5e93607451a0c987b314d37e02fc43ce85 (with its .venv: uv sync --frozen --no-install-project); then from the repository root: go run ./internal/testsupport/venueoracle/goldenrecord -pkg ./internal/queryapi/server/ -test '^TestSavedReportMutationsCronDialectVenueOracle$' -python-root $DIR (records on the pinned build, replays the candidate in a fresh process, and only then promotes it and pins its digest)",
+    "python_env": "ab1425c1baaee5952bfb1c80baa4acfbe6908347d489e6f3a5707280f90d9413",
+    "python_env_version": 2,
+    "recorded_by": "goldenrecord",
+    "blanked": {
+      "body $.data.createSavedReport.createdAt": 22,
+      "body $.data.createSavedReport.id": 22,
+      "body $.data.createSavedReport.updatedAt": 22,
+      "header content-length": 22,
+      "header x-request-id": 31
+    }
+  },
+  "requests": [
+    {
+      "name": "cron dialect 00 \"٠ ٠ ١ ١ *\"",
+      "method": "POST",
+      "path": "/graphql",
+      "body_sha256": "14e96f29fe7e374ef16e9e6052b4a64fe3b2ef80fc99a1041f41ddfa15aa2c89",
+      "request_headers_sha256": "5ed307c4bb9b7d27971431ff905a8d8e6a02e81dfc1561964612d75590518163",
+      "status": 200,
+      "headers": {
+        "content-length": "\u003clength of projected body\u003e",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "\u003cvolatile\u003e"
+      },
+      "body": "{\"data\":{\"createSavedReport\":{\"id\":\"\u003cuuid#1\u003e\",\"orgId\":\"0a0a0a0a-0a0a-4a0a-8a0a-0a0a0a0a0a0a\",\"name\":\"dialect 0\",\"description\":null,\"reportPlan\":{},\"isTemplate\":false,\"isActive\":true,\"createdAt\":\"\u003cts:frac:+00:00\u003e\",\"updatedAt\":\"\u003cts:frac:+00:00\u003e\",\"__typename\":\"SavedReportType\"}}}"
+    },
+    {
+      "name": "cron dialect 01 \"R R * * *\"",
+      "method": "POST",
+      "path": "/graphql",
+      "body_sha256": "b9c6d289883413bd7a234aafc6368a440c4fc1a6eba7a9419d52161a1c4bc507",
+      "request_headers_sha256": "5ed307c4bb9b7d27971431ff905a8d8e6a02e81dfc1561964612d75590518163",
+      "status": 200,
+      "headers": {
+        "content-length": "\u003clength of projected body\u003e",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "\u003cvolatile\u003e"
+      },
+      "body": "{\"data\":{\"createSavedReport\":{\"id\":\"\u003cuuid#1\u003e\",\"orgId\":\"0a0a0a0a-0a0a-4a0a-8a0a-0a0a0a0a0a0a\",\"name\":\"dialect 1\",\"description\":null,\"reportPlan\":{},\"isTemplate\":false,\"isActive\":true,\"createdAt\":\"\u003cts:frac:+00:00\u003e\",\"updatedAt\":\"\u003cts:frac:+00:00\u003e\",\"__typename\":\"SavedReportType\"}}}"
+    },
+    {
+      "name": "cron dialect 02 \"0 0 * * 1#2\"",
+      "method": "POST",
+      "path": "/graphql",
+      "body_sha256": "497cce71e0310735ae46d895d5f7d9303099e9d9ec4b6f017b4fa27619709e8f",
+      "request_headers_sha256": "5ed307c4bb9b7d27971431ff905a8d8e6a02e81dfc1561964612d75590518163",
+      "status": 200,
+      "headers": {
+        "content-length": "\u003clength of projected body\u003e",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "\u003cvolatile\u003e"
+      },
+      "body": "{\"data\":{\"createSavedReport\":{\"id\":\"\u003cuuid#1\u003e\",\"orgId\":\"0a0a0a0a-0a0a-4a0a-8a0a-0a0a0a0a0a0a\",\"name\":\"dialect 2\",\"description\":null,\"reportPlan\":{},\"isTemplate\":false,\"isActive\":true,\"createdAt\":\"\u003cts:frac:+00:00\u003e\",\"updatedAt\":\"\u003cts:frac:+00:00\u003e\",\"__typename\":\"SavedReportType\"}}}"
+    },
+    {
+      "name": "cron dialect 03 \"0 0 L * 1\"",
+      "method": "POST",
+      "path": "/graphql",
+      "body_sha256": "09ef791d8ad0a9518bd44c14cae7cd7e9b7a37c1a0659a3c32873e0925f9bf93",
+      "request_headers_sha256": "5ed307c4bb9b7d27971431ff905a8d8e6a02e81dfc1561964612d75590518163",
+      "status": 200,
+      "headers": {
+        "content-length": "\u003clength of projected body\u003e",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "\u003cvolatile\u003e"
+      },
+      "body": "{\"data\":{\"createSavedReport\":{\"id\":\"\u003cuuid#1\u003e\",\"orgId\":\"0a0a0a0a-0a0a-4a0a-8a0a-0a0a0a0a0a0a\",\"name\":\"dialect 3\",\"description\":null,\"reportPlan\":{},\"isTemplate\":false,\"isActive\":true,\"createdAt\":\"\u003cts:frac:+00:00\u003e\",\"updatedAt\":\"\u003cts:frac:+00:00\u003e\",\"__typename\":\"SavedReportType\"}}}"
+    },
+    {
+      "name": "cron dialect 04 \"0 0 1W * *\"",
+      "method": "POST",
+      "path": "/graphql",
+      "body_sha256": "b684436860ac884704e48a6e5b9b68417c8d52298e8f5a05675ebfc3317f1c25",
+      "request_headers_sha256": "5ed307c4bb9b7d27971431ff905a8d8e6a02e81dfc1561964612d75590518163",
+      "status": 200,
+      "headers": {
+        "content-length": "\u003clength of projected body\u003e",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "\u003cvolatile\u003e"
+      },
+      "body": "{\"data\":{\"createSavedReport\":{\"id\":\"\u003cuuid#1\u003e\",\"orgId\":\"0a0a0a0a-0a0a-4a0a-8a0a-0a0a0a0a0a0a\",\"name\":\"dialect 4\",\"description\":null,\"reportPlan\":{},\"isTemplate\":false,\"isActive\":true,\"createdAt\":\"\u003cts:frac:+00:00\u003e\",\"updatedAt\":\"\u003cts:frac:+00:00\u003e\",\"__typename\":\"SavedReportType\"}}}"
+    },
+    {
+      "name": "cron dialect 05 \"0 0 * * L\"",
+      "method": "POST",
+      "path": "/graphql",
+      "body_sha256": "06adc537c02617a2540ba0c5c911597455fe7ce545599961ec07dddd96937f35",
+      "request_headers_sha256": "5ed307c4bb9b7d27971431ff905a8d8e6a02e81dfc1561964612d75590518163",
+      "status": 200,
+      "headers": {
+        "content-length": "186",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "\u003cvolatile\u003e"
+      },
+      "body": "{\"data\":null,\"errors\":[{\"message\":\"Invalid report schedule cron expression '0 0 * * L': [0 0 * * l] is not acceptable\",\"locations\":[{\"line\":2,\"column\":3}],\"path\":[\"createSavedReport\"]}]}"
+    },
+    {
+      "name": "cron dialect 06 \"0 0 ? * *\"",
+      "method": "POST",
+      "path": "/graphql",
+      "body_sha256": "fff24fa36fd4bdb74f38b1b59e94f9db6e0de17001ffa37acb3540e47c0eb7d3",
+      "request_headers_sha256": "5ed307c4bb9b7d27971431ff905a8d8e6a02e81dfc1561964612d75590518163",
+      "status": 200,
+      "headers": {
+        "content-length": "\u003clength of projected body\u003e",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "\u003cvolatile\u003e"
+      },
+      "body": "{\"data\":{\"createSavedReport\":{\"id\":\"\u003cuuid#1\u003e\",\"orgId\":\"0a0a0a0a-0a0a-4a0a-8a0a-0a0a0a0a0a0a\",\"name\":\"dialect 6\",\"description\":null,\"reportPlan\":{},\"isTemplate\":false,\"isActive\":true,\"createdAt\":\"\u003cts:frac:+00:00\u003e\",\"updatedAt\":\"\u003cts:frac:+00:00\u003e\",\"__typename\":\"SavedReportType\"}}}"
+    },
+    {
+      "name": "cron dialect 07 \"0 0 1-31/2 * *\"",
+      "method": "POST",
+      "path": "/graphql",
+      "body_sha256": "61f2acb07850fe62105577730a81047515e832dd93cfa5e2c9aa5a9a23808ea4",
+      "request_headers_sha256": "5ed307c4bb9b7d27971431ff905a8d8e6a02e81dfc1561964612d75590518163",
+      "status": 200,
+      "headers": {
+        "content-length": "\u003clength of projected body\u003e",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "\u003cvolatile\u003e"
+      },
+      "body": "{\"data\":{\"createSavedReport\":{\"id\":\"\u003cuuid#1\u003e\",\"orgId\":\"0a0a0a0a-0a0a-4a0a-8a0a-0a0a0a0a0a0a\",\"name\":\"dialect 7\",\"description\":null,\"reportPlan\":{},\"isTemplate\":false,\"isActive\":true,\"createdAt\":\"\u003cts:frac:+00:00\u003e\",\"updatedAt\":\"\u003cts:frac:+00:00\u003e\",\"__typename\":\"SavedReportType\"}}}"
+    },
+    {
+      "name": "cron dialect 08 \"59 23 31 12 *\"",
+      "method": "POST",
+      "path": "/graphql",
+      "body_sha256": "6686f1ee52dd0b9c245a8a1d8491788829f5f8e85abd4c90a8bfe8c759e581c5",
+      "request_headers_sha256": "5ed307c4bb9b7d27971431ff905a8d8e6a02e81dfc1561964612d75590518163",
+      "status": 200,
+      "headers": {
+        "content-length": "\u003clength of projected body\u003e",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "\u003cvolatile\u003e"
+      },
+      "body": "{\"data\":{\"createSavedReport\":{\"id\":\"\u003cuuid#1\u003e\",\"orgId\":\"0a0a0a0a-0a0a-4a0a-8a0a-0a0a0a0a0a0a\",\"name\":\"dialect 8\",\"description\":null,\"reportPlan\":{},\"isTemplate\":false,\"isActive\":true,\"createdAt\":\"\u003cts:frac:+00:00\u003e\",\"updatedAt\":\"\u003cts:frac:+00:00\u003e\",\"__typename\":\"SavedReportType\"}}}"
+    },
+    {
+      "name": "cron dialect 09 \"0 0 30 2 *\"",
+      "method": "POST",
+      "path": "/graphql",
+      "body_sha256": "95e2c9675232c0bf8850c68693a4436726e7c9835c04339681dd30e7a1fd4cb3",
+      "request_headers_sha256": "5ed307c4bb9b7d27971431ff905a8d8e6a02e81dfc1561964612d75590518163",
+      "status": 200,
+      "headers": {
+        "content-length": "182",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "\u003cvolatile\u003e"
+      },
+      "body": "{\"data\":null,\"errors\":[{\"message\":\"Invalid report schedule cron expression '0 0 30 2 *': failed to find next date\",\"locations\":[{\"line\":2,\"column\":3}],\"path\":[\"createSavedReport\"]}]}"
+    },
+    {
+      "name": "cron dialect 10 \"*/0 * * * *\"",
+      "method": "POST",
+      "path": "/graphql",
+      "body_sha256": "8424acd655f43aaffea9aed92e63bf3b3e5f77339b913dbed5fde24527d82258",
+      "request_headers_sha256": "5ed307c4bb9b7d27971431ff905a8d8e6a02e81dfc1561964612d75590518163",
+      "status": 200,
+      "headers": {
+        "content-length": "210",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "\u003cvolatile\u003e"
+      },
+      "body": "{\"data\":null,\"errors\":[{\"message\":\"Invalid report schedule cron expression '*/0 * * * *': [*/0 * * * *] step '0' in field 0 is not acceptable\",\"locations\":[{\"line\":2,\"column\":3}],\"path\":[\"createSavedReport\"]}]}"
+    },
+    {
+      "name": "cron dialect 11 \"0-0 0 * * *\"",
+      "method": "POST",
+      "path": "/graphql",
+      "body_sha256": "5cf2d4997d97e224f1640d55c7538e582b99ac4e9874967fafa86a7f261c71d6",
+      "request_headers_sha256": "5ed307c4bb9b7d27971431ff905a8d8e6a02e81dfc1561964612d75590518163",
+      "status": 200,
+      "headers": {
+        "content-length": "\u003clength of projected body\u003e",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "\u003cvolatile\u003e"
+      },
+      "body": "{\"data\":{\"createSavedReport\":{\"id\":\"\u003cuuid#1\u003e\",\"orgId\":\"0a0a0a0a-0a0a-4a0a-8a0a-0a0a0a0a0a0a\",\"name\":\"dialect 11\",\"description\":null,\"reportPlan\":{},\"isTemplate\":false,\"isActive\":true,\"createdAt\":\"\u003cts:frac:+00:00\u003e\",\"updatedAt\":\"\u003cts:frac:+00:00\u003e\",\"__typename\":\"SavedReportType\"}}}"
+    },
+    {
+      "name": "cron dialect 12 \"0 0 * * 7\"",
+      "method": "POST",
+      "path": "/graphql",
+      "body_sha256": "2a8bd8a95cdd30afe323c64dac67ea9eff10364cfc98fd032ba273eda52f82fe",
+      "request_headers_sha256": "5ed307c4bb9b7d27971431ff905a8d8e6a02e81dfc1561964612d75590518163",
+      "status": 200,
+      "headers": {
+        "content-length": "\u003clength of projected body\u003e",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "\u003cvolatile\u003e"
+      },
+      "body": "{\"data\":{\"createSavedReport\":{\"id\":\"\u003cuuid#1\u003e\",\"orgId\":\"0a0a0a0a-0a0a-4a0a-8a0a-0a0a0a0a0a0a\",\"name\":\"dialect 12\",\"description\":null,\"reportPlan\":{},\"isTemplate\":false,\"isActive\":true,\"createdAt\":\"\u003cts:frac:+00:00\u003e\",\"updatedAt\":\"\u003cts:frac:+00:00\u003e\",\"__typename\":\"SavedReportType\"}}}"
+    },
+    {
+      "name": "cron dialect 13 \"0 0 * * 0-7\"",
+      "method": "POST",
+      "path": "/graphql",
+      "body_sha256": "e199476b3bb725e18fd6c79a6e38a34f3f005f5b8ebbecd0746a48bc48a551be",
+      "request_headers_sha256": "5ed307c4bb9b7d27971431ff905a8d8e6a02e81dfc1561964612d75590518163",
+      "status": 200,
+      "headers": {
+        "content-length": "\u003clength of projected body\u003e",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "\u003cvolatile\u003e"
+      },
+      "body": "{\"data\":{\"createSavedReport\":{\"id\":\"\u003cuuid#1\u003e\",\"orgId\":\"0a0a0a0a-0a0a-4a0a-8a0a-0a0a0a0a0a0a\",\"name\":\"dialect 13\",\"description\":null,\"reportPlan\":{},\"isTemplate\":false,\"isActive\":true,\"createdAt\":\"\u003cts:frac:+00:00\u003e\",\"updatedAt\":\"\u003cts:frac:+00:00\u003e\",\"__typename\":\"SavedReportType\"}}}"
+    },
+    {
+      "name": "cron dialect 14 \"0,30 * * * *\"",
+      "method": "POST",
+      "path": "/graphql",
+      "body_sha256": "0ccc56b1a96d5e559d4fd4a88c71d846423ddd13057b163de0a9c44645bf21a8",
+      "request_headers_sha256": "5ed307c4bb9b7d27971431ff905a8d8e6a02e81dfc1561964612d75590518163",
+      "status": 200,
+      "headers": {
+        "content-length": "\u003clength of projected body\u003e",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "\u003cvolatile\u003e"
+      },
+      "body": "{\"data\":{\"createSavedReport\":{\"id\":\"\u003cuuid#1\u003e\",\"orgId\":\"0a0a0a0a-0a0a-4a0a-8a0a-0a0a0a0a0a0a\",\"name\":\"dialect 14\",\"description\":null,\"reportPlan\":{},\"isTemplate\":false,\"isActive\":true,\"createdAt\":\"\u003cts:frac:+00:00\u003e\",\"updatedAt\":\"\u003cts:frac:+00:00\u003e\",\"__typename\":\"SavedReportType\"}}}"
+    },
+    {
+      "name": "cron dialect 15 \"1,1 * * * *\"",
+      "method": "POST",
+      "path": "/graphql",
+      "body_sha256": "6d0492a31e2439c5bf28ff15a03ef9713c8ff7a15440c94e563b80bd3ac6fdf1",
+      "request_headers_sha256": "5ed307c4bb9b7d27971431ff905a8d8e6a02e81dfc1561964612d75590518163",
+      "status": 200,
+      "headers": {
+        "content-length": "\u003clength of projected body\u003e",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "\u003cvolatile\u003e"
+      },
+      "body": "{\"data\":{\"createSavedReport\":{\"id\":\"\u003cuuid#1\u003e\",\"orgId\":\"0a0a0a0a-0a0a-4a0a-8a0a-0a0a0a0a0a0a\",\"name\":\"dialect 15\",\"description\":null,\"reportPlan\":{},\"isTemplate\":false,\"isActive\":true,\"createdAt\":\"\u003cts:frac:+00:00\u003e\",\"updatedAt\":\"\u003cts:frac:+00:00\u003e\",\"__typename\":\"SavedReportType\"}}}"
+    },
+    {
+      "name": "cron dialect 16 \"*/5,7 * * * *\"",
+      "method": "POST",
+      "path": "/graphql",
+      "body_sha256": "039e901469798aa70960f313498e426d3f48e4d116c568d876de79e7ac08f304",
+      "request_headers_sha256": "5ed307c4bb9b7d27971431ff905a8d8e6a02e81dfc1561964612d75590518163",
+      "status": 200,
+      "headers": {
+        "content-length": "\u003clength of projected body\u003e",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "\u003cvolatile\u003e"
+      },
+      "body": "{\"data\":{\"createSavedReport\":{\"id\":\"\u003cuuid#1\u003e\",\"orgId\":\"0a0a0a0a-0a0a-4a0a-8a0a-0a0a0a0a0a0a\",\"name\":\"dialect 16\",\"description\":null,\"reportPlan\":{},\"isTemplate\":false,\"isActive\":true,\"createdAt\":\"\u003cts:frac:+00:00\u003e\",\"updatedAt\":\"\u003cts:frac:+00:00\u003e\",\"__typename\":\"SavedReportType\"}}}"
+    },
+    {
+      "name": "cron dialect 17 \"0 0 1 2-4 *\"",
+      "method": "POST",
+      "path": "/graphql",
+      "body_sha256": "2a6cdae197efbd32dc95a019950100e4e479c7ea1ed6a7a6c1508c4c8c4fa6a4",
+      "request_headers_sha256": "5ed307c4bb9b7d27971431ff905a8d8e6a02e81dfc1561964612d75590518163",
+      "status": 200,
+      "headers": {
+        "content-length": "\u003clength of projected body\u003e",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "\u003cvolatile\u003e"
+      },
+      "body": "{\"data\":{\"createSavedReport\":{\"id\":\"\u003cuuid#1\u003e\",\"orgId\":\"0a0a0a0a-0a0a-4a0a-8a0a-0a0a0a0a0a0a\",\"name\":\"dialect 17\",\"description\":null,\"reportPlan\":{},\"isTemplate\":false,\"isActive\":true,\"createdAt\":\"\u003cts:frac:+00:00\u003e\",\"updatedAt\":\"\u003cts:frac:+00:00\u003e\",\"__typename\":\"SavedReportType\"}}}"
+    },
+    {
+      "name": "cron dialect 18 \"0 0 1 feb-apr *\"",
+      "method": "POST",
+      "path": "/graphql",
+      "body_sha256": "c281fa1392cb36c07ee10412ba075c0b6e07284fbe587c965e8c8fb49d6bc55e",
+      "request_headers_sha256": "5ed307c4bb9b7d27971431ff905a8d8e6a02e81dfc1561964612d75590518163",
+      "status": 200,
+      "headers": {
+        "content-length": "\u003clength of projected body\u003e",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "\u003cvolatile\u003e"
+      },
+      "body": "{\"data\":{\"createSavedReport\":{\"id\":\"\u003cuuid#1\u003e\",\"orgId\":\"0a0a0a0a-0a0a-4a0a-8a0a-0a0a0a0a0a0a\",\"name\":\"dialect 18\",\"description\":null,\"reportPlan\":{},\"isTemplate\":false,\"isActive\":true,\"createdAt\":\"\u003cts:frac:+00:00\u003e\",\"updatedAt\":\"\u003cts:frac:+00:00\u003e\",\"__typename\":\"SavedReportType\"}}}"
+    },
+    {
+      "name": "cron dialect 19 \"0 0 * * sun,MON\"",
+      "method": "POST",
+      "path": "/graphql",
+      "body_sha256": "1fa276f563b51dfeabf624f75734c9a464e2246c23a615b027c180bc806d4abc",
+      "request_headers_sha256": "5ed307c4bb9b7d27971431ff905a8d8e6a02e81dfc1561964612d75590518163",
+      "status": 200,
+      "headers": {
+        "content-length": "\u003clength of projected body\u003e",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "\u003cvolatile\u003e"
+      },
+      "body": "{\"data\":{\"createSavedReport\":{\"id\":\"\u003cuuid#1\u003e\",\"orgId\":\"0a0a0a0a-0a0a-4a0a-8a0a-0a0a0a0a0a0a\",\"name\":\"dialect 19\",\"description\":null,\"reportPlan\":{},\"isTemplate\":false,\"isActive\":true,\"createdAt\":\"\u003cts:frac:+00:00\u003e\",\"updatedAt\":\"\u003cts:frac:+00:00\u003e\",\"__typename\":\"SavedReportType\"}}}"
+    },
+    {
+      "name": "cron dialect 20 \"60 * * * *\"",
+      "method": "POST",
+      "path": "/graphql",
+      "body_sha256": "1325ca2113ac3b79f3f38a0d27f491921674bfa4952262082932c963c066fd27",
+      "request_headers_sha256": "5ed307c4bb9b7d27971431ff905a8d8e6a02e81dfc1561964612d75590518163",
+      "status": 200,
+      "headers": {
+        "content-length": "202",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "\u003cvolatile\u003e"
+      },
+      "body": "{\"data\":null,\"errors\":[{\"message\":\"Invalid report schedule cron expression '60 * * * *': [60 * * * *] is not acceptable, out of range\",\"locations\":[{\"line\":2,\"column\":3}],\"path\":[\"createSavedReport\"]}]}"
+    },
+    {
+      "name": "cron dialect 21 \"0 24 * * *\"",
+      "method": "POST",
+      "path": "/graphql",
+      "body_sha256": "1af0a5f5009eb350430d6dc98f69c9f08e1c7f2b32d49566794fb664a2ee29eb",
+      "request_headers_sha256": "5ed307c4bb9b7d27971431ff905a8d8e6a02e81dfc1561964612d75590518163",
+      "status": 200,
+      "headers": {
+        "content-length": "202",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "\u003cvolatile\u003e"
+      },
+      "body": "{\"data\":null,\"errors\":[{\"message\":\"Invalid report schedule cron expression '0 24 * * *': [0 24 * * *] is not acceptable, out of range\",\"locations\":[{\"line\":2,\"column\":3}],\"path\":[\"createSavedReport\"]}]}"
+    },
+    {
+      "name": "cron dialect 22 \"0 0 32 * *\"",
+      "method": "POST",
+      "path": "/graphql",
+      "body_sha256": "5166094989d96b0d0f3d172b1dd8d40fd7c16fd6a24bdce19cb7d8bf61890fb6",
+      "request_headers_sha256": "5ed307c4bb9b7d27971431ff905a8d8e6a02e81dfc1561964612d75590518163",
+      "status": 200,
+      "headers": {
+        "content-length": "202",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "\u003cvolatile\u003e"
+      },
+      "body": "{\"data\":null,\"errors\":[{\"message\":\"Invalid report schedule cron expression '0 0 32 * *': [0 0 32 * *] is not acceptable, out of range\",\"locations\":[{\"line\":2,\"column\":3}],\"path\":[\"createSavedReport\"]}]}"
+    },
+    {
+      "name": "cron dialect 23 \"0 0 * 13 *\"",
+      "method": "POST",
+      "path": "/graphql",
+      "body_sha256": "890ffa4455e15ce1743ac7fe1236cf43ce0012d304f55911cfd78ce92e5f42db",
+      "request_headers_sha256": "5ed307c4bb9b7d27971431ff905a8d8e6a02e81dfc1561964612d75590518163",
+      "status": 200,
+      "headers": {
+        "content-length": "202",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "\u003cvolatile\u003e"
+      },
+      "body": "{\"data\":null,\"errors\":[{\"message\":\"Invalid report schedule cron expression '0 0 * 13 *': [0 0 * 13 *] is not acceptable, out of range\",\"locations\":[{\"line\":2,\"column\":3}],\"path\":[\"createSavedReport\"]}]}"
+    },
+    {
+      "name": "cron dialect 24 \"-1 * * * *\"",
+      "method": "POST",
+      "path": "/graphql",
+      "body_sha256": "76f96cd8070792835e4d3e2c2fa60840e996423f6f22e79cc44fb1283d77f398",
+      "request_headers_sha256": "5ed307c4bb9b7d27971431ff905a8d8e6a02e81dfc1561964612d75590518163",
+      "status": 200,
+      "headers": {
+        "content-length": "218",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "\u003cvolatile\u003e"
+      },
+      "body": "{\"data\":null,\"errors\":[{\"message\":\"Invalid report schedule cron expression '-1 * * * *': [-1 * * * *] is not acceptable, negative numbers not allowed\",\"locations\":[{\"line\":2,\"column\":3}],\"path\":[\"createSavedReport\"]}]}"
+    },
+    {
+      "name": "cron dialect 25 \"1-2-3 * * * *\"",
+      "method": "POST",
+      "path": "/graphql",
+      "body_sha256": "6f398e5171f153e556957a71abc21b9dc55dd2246d032abcf01288a5deabb4ce",
+      "request_headers_sha256": "5ed307c4bb9b7d27971431ff905a8d8e6a02e81dfc1561964612d75590518163",
+      "status": 200,
+      "headers": {
+        "content-length": "194",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "\u003cvolatile\u003e"
+      },
+      "body": "{\"data\":null,\"errors\":[{\"message\":\"Invalid report schedule cron expression '1-2-3 * * * *': [1-2-3 * * * *] is not acceptable\",\"locations\":[{\"line\":2,\"column\":3}],\"path\":[\"createSavedReport\"]}]}"
+    },
+    {
+      "name": "cron dialect 26 \"0 0 * * *\\t\"",
+      "method": "POST",
+      "path": "/graphql",
+      "body_sha256": "4e611ccf927c5a08d263705f212631b87a2c21b3776688004b13407e5a5c3f98",
+      "request_headers_sha256": "5ed307c4bb9b7d27971431ff905a8d8e6a02e81dfc1561964612d75590518163",
+      "status": 200,
+      "headers": {
+        "content-length": "\u003clength of projected body\u003e",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "\u003cvolatile\u003e"
+      },
+      "body": "{\"data\":{\"createSavedReport\":{\"id\":\"\u003cuuid#1\u003e\",\"orgId\":\"0a0a0a0a-0a0a-4a0a-8a0a-0a0a0a0a0a0a\",\"name\":\"dialect 26\",\"description\":null,\"reportPlan\":{},\"isTemplate\":false,\"isActive\":true,\"createdAt\":\"\u003cts:frac:+00:00\u003e\",\"updatedAt\":\"\u003cts:frac:+00:00\u003e\",\"__typename\":\"SavedReportType\"}}}"
+    },
+    {
+      "name": "cron dialect 27 \"0 0 29 2 *\"",
+      "method": "POST",
+      "path": "/graphql",
+      "body_sha256": "9d3e700ba23d6edb4375bfd077c7953f15629a5f39864b1a2b348e845ab13efc",
+      "request_headers_sha256": "5ed307c4bb9b7d27971431ff905a8d8e6a02e81dfc1561964612d75590518163",
+      "status": 200,
+      "headers": {
+        "content-length": "\u003clength of projected body\u003e",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "\u003cvolatile\u003e"
+      },
+      "body": "{\"data\":{\"createSavedReport\":{\"id\":\"\u003cuuid#1\u003e\",\"orgId\":\"0a0a0a0a-0a0a-4a0a-8a0a-0a0a0a0a0a0a\",\"name\":\"dialect 27\",\"description\":null,\"reportPlan\":{},\"isTemplate\":false,\"isActive\":true,\"createdAt\":\"\u003cts:frac:+00:00\u003e\",\"updatedAt\":\"\u003cts:frac:+00:00\u003e\",\"__typename\":\"SavedReportType\"}}}"
+    },
+    {
+      "name": "cron dialect 28 \"*/7 */5 * * *\"",
+      "method": "POST",
+      "path": "/graphql",
+      "body_sha256": "d126186431bdfaed25f485de10cb099aaad156fc2053e6f7b5bb0799f107e066",
+      "request_headers_sha256": "5ed307c4bb9b7d27971431ff905a8d8e6a02e81dfc1561964612d75590518163",
+      "status": 200,
+      "headers": {
+        "content-length": "\u003clength of projected body\u003e",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "\u003cvolatile\u003e"
+      },
+      "body": "{\"data\":{\"createSavedReport\":{\"id\":\"\u003cuuid#1\u003e\",\"orgId\":\"0a0a0a0a-0a0a-4a0a-8a0a-0a0a0a0a0a0a\",\"name\":\"dialect 28\",\"description\":null,\"reportPlan\":{},\"isTemplate\":false,\"isActive\":true,\"createdAt\":\"\u003cts:frac:+00:00\u003e\",\"updatedAt\":\"\u003cts:frac:+00:00\u003e\",\"__typename\":\"SavedReportType\"}}}"
+    },
+    {
+      "name": "cron dialect 29 \"0 0 L * *\"",
+      "method": "POST",
+      "path": "/graphql",
+      "body_sha256": "28b322346675378deecf0728fb059efde1b4a6a554cfebce275238c1cd3090a7",
+      "request_headers_sha256": "5ed307c4bb9b7d27971431ff905a8d8e6a02e81dfc1561964612d75590518163",
+      "status": 200,
+      "headers": {
+        "content-length": "\u003clength of projected body\u003e",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "\u003cvolatile\u003e"
+      },
+      "body": "{\"data\":{\"createSavedReport\":{\"id\":\"\u003cuuid#1\u003e\",\"orgId\":\"0a0a0a0a-0a0a-4a0a-8a0a-0a0a0a0a0a0a\",\"name\":\"dialect 29\",\"description\":null,\"reportPlan\":{},\"isTemplate\":false,\"isActive\":true,\"createdAt\":\"\u003cts:frac:+00:00\u003e\",\"updatedAt\":\"\u003cts:frac:+00:00\u003e\",\"__typename\":\"SavedReportType\"}}}"
+    },
+    {
+      "name": "cron dialect 30 \"0 0 * * mon#1\"",
+      "method": "POST",
+      "path": "/graphql",
+      "body_sha256": "2cdcb33e898104b584a30a2723464efa28ced573ade574a69b782951ff37e81c",
+      "request_headers_sha256": "5ed307c4bb9b7d27971431ff905a8d8e6a02e81dfc1561964612d75590518163",
+      "status": 200,
+      "headers": {
+        "content-length": "\u003clength of projected body\u003e",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "\u003cvolatile\u003e"
+      },
+      "body": "{\"data\":{\"createSavedReport\":{\"id\":\"\u003cuuid#1\u003e\",\"orgId\":\"0a0a0a0a-0a0a-4a0a-8a0a-0a0a0a0a0a0a\",\"name\":\"dialect 30\",\"description\":null,\"reportPlan\":{},\"isTemplate\":false,\"isActive\":true,\"createdAt\":\"\u003cts:frac:+00:00\u003e\",\"updatedAt\":\"\u003cts:frac:+00:00\u003e\",\"__typename\":\"SavedReportType\"}}}"
+    }
+  ],
+  "rows": {
+    "saved report count": {
+      "rows": "32"
+    }
+  }
+}

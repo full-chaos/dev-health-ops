@@ -76,13 +76,33 @@ var Kinds = []string{PythonRecorded, ProviderRecorded, HandWritten, GoGenerated,
 // (venueoracle's recorded_by).
 const recordVerbStamp = "goldenrecord"
 
-// unclassifiedDayOne is how many files the day-one list holds. It only goes
-// down: a file leaves the list when it gets a kind, and no file is added.
-const unclassifiedDayOne = 976
-
+// The day-one list only shrinks: a file leaves it when it gets a kind, and no file is added. Its size is held to the
+// merge base by ci/ratchets.tsv (package ratchet), not by a number written here that every pull request would edit.
 // DayOneList is the list of the files that were unclassified when the
 // manifests were first written, one repository path per line.
 const DayOneList = "internal/testsupport/recordedfiles/unclassified_day_one.txt"
+
+// The goldens that may hold the kind header-before-stamp are the ones that were in the tree when the stamp became the
+// verb's (CHAOS-7707): a closed list that only shrinks, held to the merge base by ci/ratchets.tsv.
+// BeforeStampList is the closed list of those goldens, one repository path per
+// line. -day-one gives the kind header-before-stamp to a path on it and to no
+// other: a new golden with no stamp was not recorded by the verb.
+const BeforeStampList = "internal/testsupport/recordedfiles/header_before_stamp_ceiling.txt"
+
+// BeforeStamp is the closed list of the goldens that may have no stamp.
+func BeforeStamp(repo string) ([]string, error) {
+	raw, err := os.ReadFile(filepath.Join(repo, filepath.FromSlash(BeforeStampList)))
+	if err != nil {
+		return nil, err
+	}
+	var list []string
+	for _, line := range strings.Split(string(raw), "\n") {
+		if line != "" && !strings.HasPrefix(line, "#") {
+			list = append(list, line)
+		}
+	}
+	return list, nil
+}
 
 // ManifestSuffix is what a manifest's name adds to its directory's.
 const ManifestSuffix = ".manifest.tsv"
@@ -375,10 +395,45 @@ func Problems(repo string) ([]string, error) {
 	if err != nil {
 		return nil, err
 	}
-	return problems(repo, roots, dayOne, unclassifiedDayOne)
+	found, err := problems(repo, roots, dayOne)
+	if err != nil {
+		return nil, err
+	}
+	ceiling, err := ceilingProblems(repo, roots)
+	if err != nil {
+		return nil, err
+	}
+	return append(found, ceiling...), nil
 }
 
-func problems(repo string, roots, dayOne []string, dayOneCount int) ([]string, error) {
+// ceilingProblems is what is wrong with the header-before-stamp rows against
+// the closed list: a row whose path is not on it. The list's size is held by
+// ci/ratchets.tsv.
+func ceilingProblems(repo string, roots []string) ([]string, error) {
+	listed, err := BeforeStamp(repo)
+	if err != nil {
+		return nil, err
+	}
+	onList := map[string]bool{}
+	for _, file := range listed {
+		onList[file] = true
+	}
+	var out []string
+	for _, root := range roots {
+		manifest, err := Read(repo, root)
+		if err != nil {
+			continue // the other checks report an unreadable manifest
+		}
+		for _, row := range manifest.Rows {
+			if full := root + "/" + row.Path; row.Kind == HeaderBeforeStamp && !onList[full] {
+				out = append(out, fmt.Sprintf("%s has the kind %s and is not on the closed list (%s): a golden with no stamp that was not in the tree when the stamp became the verb's was not recorded by the verb; record it with the verb", full, HeaderBeforeStamp, BeforeStampList))
+			}
+		}
+	}
+	return out, nil
+}
+
+func problems(repo string, roots, dayOne []string) ([]string, error) {
 	var out []string
 	listed := map[string]bool{}
 	for _, file := range dayOne {
@@ -474,11 +529,8 @@ func problems(repo string, roots, dayOne []string, dayOneCount int) ([]string, e
 	}
 	for _, file := range dayOne {
 		if !unclassified[file] && !under(unread, file) {
-			out = append(out, fmt.Sprintf("%s is on the day-one list (%s) and is not an %s file any more: give it its kind with the verb, which writes the list (%s -kind <kind> %s), and lower unclassifiedDayOne by one", file, DayOneList, Unclassified, Verb, file))
+			out = append(out, fmt.Sprintf("%s is on the day-one list (%s) and is not an %s file any more: give it its kind with the verb, which writes the list (%s -kind <kind> %s)", file, DayOneList, Unclassified, Verb, file))
 		}
-	}
-	if len(dayOne) != dayOneCount {
-		out = append(out, fmt.Sprintf("the day-one list (%s) holds %d files and unclassifiedDayOne says %d: the list only shrinks, and the number goes down with it", DayOneList, len(dayOne), dayOneCount))
 	}
 	return out, nil
 }
@@ -592,7 +644,11 @@ func Set(repo string, files []string, change Change) ([]string, error) {
 		case golden && stamped:
 			kind = Header
 		case golden && change.DayOne:
-			// The first manifests: a golden recorded before the stamp existed.
+			// A golden recorded before the stamp existed: only the ones on the
+			// closed list; any other golden with no stamp was made by hand.
+			if err := onBeforeStampList(repo, file); err != nil {
+				return nil, err
+			}
 			kind = HeaderBeforeStamp
 		case golden:
 			return nil, fmt.Errorf("%s holds a golden header and no stamp of the record verb (recorded_by): the verb did not make it. A golden is recorded by the verb, never by hand (its test's recipe names the command)", file)
@@ -654,11 +710,21 @@ func Set(repo string, files []string, change Change) ([]string, error) {
 		if err := writeDayOne(repo, listed); err != nil {
 			return nil, err
 		}
-		if len(listed) != unclassifiedDayOne {
-			notes = append(notes, fmt.Sprintf("the day-one list now holds %d files: set unclassifiedDayOne to %d in internal/testsupport/recordedfiles/recordedfiles.go", len(listed), len(listed)))
-		}
 	}
 	return notes, nil
+}
+
+func onBeforeStampList(repo, file string) error {
+	listed, err := BeforeStamp(repo)
+	if err != nil {
+		return fmt.Errorf("%s holds a golden header and no stamp of the record verb, and the closed list of the goldens that may have none cannot be read: %w", file, err)
+	}
+	for _, entry := range listed {
+		if entry == file {
+			return nil
+		}
+	}
+	return fmt.Errorf("%s holds a golden header and no stamp of the record verb (recorded_by), and it is not on the closed list of the goldens recorded before the stamp (%s): -day-one does not admit it. A golden is recorded by the verb, never by hand (its test's recipe names the command)", file, BeforeStampList)
 }
 
 func writeDayOne(repo string, listed map[string]bool) error {
@@ -753,7 +819,6 @@ func Sync(repo string, change Change) ([]string, error) {
 		if err := writeDayOne(repo, listed); err != nil {
 			return nil, err
 		}
-		notes = append(notes, fmt.Sprintf("the day-one list now holds %d files: set unclassifiedDayOne to %d in internal/testsupport/recordedfiles/recordedfiles.go", len(listed), len(listed)))
 	}
 	return notes, nil
 }

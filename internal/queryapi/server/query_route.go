@@ -3274,10 +3274,13 @@ func newGraphQLServerWithLimits(resolver *graph.Resolver, complexityLimit, depth
 	//     for the pin.
 	gqlHandler := gqlhandler.New(schema)
 	gqlHandler.AddTransport(transport.POST{})
+	// Outermost, so refusals by the limits and the org guard are counted too.
+	gqlHandler.AroundOperations(recordOperationErrorCount)
 	gqlHandler.Use(extension.FixedComplexityLimit(complexityLimit))
 	gqlHandler.Use(depthLimit{Max: depthMax})
 	gqlHandler.AroundFields(graph.RefuseNullForNonNullArguments)
 	gqlHandler.Use(graph.OperationOrgGuard{})
+	gqlHandler.AroundResponses(recordErrorCount)
 	// CHAOS-4647 diagnostic: the process log carries nothing per-request,
 	// and gqlgen's default presenter surfaces only err.Error() -- which for
 	// a dev-health-go *operationError (clickhouse/client.go) is the fixed

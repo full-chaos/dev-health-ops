@@ -1,0 +1,22 @@
+{
+  "header": {
+    "test": "TestPythonAtoiMatchesLivePythonAroundTheInt64Boundary",
+    "python_build": "a4847c5e93607451a0c987b314d37e02fc43ce85",
+    "producer_digest": "6e1dc97e68624398015f60caee160cceee6ae601bd434d01b8b7d5975267e137",
+    "recipe": "git worktree add --detach $DIR a4847c5e93607451a0c987b314d37e02fc43ce85 (with its .venv: uv sync --frozen --no-install-project); then from the repository root: go run ./internal/testsupport/venueoracle/goldenrecord -pkg ./internal/jobs/workgraph/textrefs/ -test '^TestPythonAtoiMatchesLivePythonAroundTheInt64Boundary$' -python-root $DIR",
+    "recorded_by": "goldenrecord",
+    "blanked": {}
+  },
+  "requests": [
+    {
+      "name": "atoi boundary",
+      "method": "PYTHON",
+      "path": "program sha256 21636410ad32c07381ce3671dabe9d78d3166f3854ae3d148c8e81baa69774eb env sha256 969169a1702b285f3a9e4b602d19052b0d6a3c6b2a44dd7425bef0f696436295",
+      "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "request_headers_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "status": 0,
+      "headers": {},
+      "body": "[{\"run\": \"0\", \"value\": \"0\"}, {\"run\": \"7\", \"value\": \"7\"}, {\"run\": \"00042\", \"value\": \"42\"}, {\"run\": \"9223372036854775799\", \"value\": \"9223372036854775799\"}, {\"run\": \"9223372036854775800\", \"value\": \"9223372036854775800\"}, {\"run\": \"9223372036854775806\", \"value\": \"9223372036854775806\"}, {\"run\": \"9223372036854775807\", \"value\": \"9223372036854775807\"}, {\"run\": \"09223372036854775807\", \"value\": \"9223372036854775807\"}, {\"run\": \"9223372036854775808\", \"value\": \"9223372036854775808\"}, {\"run\": \"9223372036854775809\", \"value\": \"9223372036854775809\"}, {\"run\": \"9223372036854775810\", \"value\": \"9223372036854775810\"}, {\"run\": \"9223372036854775817\", \"value\": \"9223372036854775817\"}, {\"run\": \"9223372036854775907\", \"value\": \"9223372036854775907\"}, {\"run\": \"9223372036854776807\", \"value\": \"9223372036854776807\"}, {\"run\": \"92233720368547758070\", \"value\": \"92233720368547758070\"}, {\"run\": \"18446744073709551615\", \"value\": \"18446744073709551615\"}, {\"run\": \"5000000000000000000\", \"value\": \"5000000000000000000\"}, {\"run\": \"\\uff19\\uff12\\uff12\\uff13\\uff13\\uff17\\uff12\\uff10\\uff13\\uff16\\uff18\\uff15\\uff14\\uff17\\uff17\\uff15\\uff18\\uff10\\uff17\", \"value\": \"9223372036854775807\"}, {\"run\": \"\\uff19\\uff12\\uff12\\uff13\\uff13\\uff17\\uff12\\uff10\\uff13\\uff16\\uff18\\uff15\\uff14\\uff17\\uff17\\uff15\\uff18\\uff10\\uff18\", \"value\": \"9223372036854775808\"}]\n"
+    }
+  ]
+}

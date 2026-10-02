@@ -11,6 +11,7 @@
 package admin
 
 import (
+	"github.com/full-chaos/dev-health-ops/internal/httpguard"
 	"log/slog"
 	"net/http"
 	"time"
@@ -87,14 +88,7 @@ func Routes(deps Deps) []httpapi.Route {
 	if deps.Now != nil {
 		cache.now = deps.Now
 	}
-	httpDoer := deps.HTTPDoer
-	if httpDoer == nil {
-		// PagerDuty's revoke carries a bearer token in its body: httpx does
-		// not follow redirects and has a 10s timeout, so neither may this
-		// client (http.DefaultClient would replay a 307's body, token
-		// included, to the redirect target).
-		httpDoer = &http.Client{Timeout: 10 * time.Second, CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}
-	}
+	httpDoer := revokeDoer(deps.HTTPDoer)
 	limits := deps.Limits
 	if limits == nil {
 		limits = httpapi.NewMemoryCounters(deps.Now)
@@ -178,3 +172,13 @@ var (
 	passwordLimit = httpapi.Limit{ID: "admin_password", Count: 5, Window: time.Hour}
 	inviteLimit   = httpapi.Limit{ID: "admin_org_invite", Count: 10, Window: time.Hour}
 )
+
+// revokeDoer is the client of PagerDuty's token revoke, which carries a bearer token in its body: httpx does not
+// follow redirects and has a 10s timeout, so neither may this client (http.DefaultClient would replay a 307's body,
+// token included, to the redirect target). A supplied *http.Client follows no redirect either.
+func revokeDoer(supplied providerfoundation.HTTPDoer) providerfoundation.HTTPDoer {
+	if supplied == nil {
+		return &http.Client{Timeout: 10 * time.Second, CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}
+	}
+	return httpguard.NoRedirectsDoer(supplied)
+}

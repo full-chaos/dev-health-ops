@@ -9,7 +9,6 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
-	"net/http"
 	"strings"
 	"time"
 	"unicode/utf8"
@@ -518,10 +517,7 @@ func (o Operator) DeleteOrg(ctx context.Context, orgID string, dryRun bool, conf
 	if err != nil {
 		return nil, refuse("Invalid organization id")
 	}
-	httpDoer := config.HTTPDoer
-	if httpDoer == nil {
-		httpDoer = &http.Client{Timeout: 10 * time.Second, CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}
-	}
+	httpDoer := revokeDoer(config.HTTPDoer)
 	h := &handlers{
 		store:         o.store(o.Pool),
 		logger:        slog.New(slog.NewTextHandler(io.Discard, nil)),

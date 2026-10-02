@@ -3,6 +3,7 @@ package providerfoundation
 import (
 	"context"
 	"encoding/json"
+	"github.com/full-chaos/dev-health-ops/internal/httpguard"
 	"io"
 	"net/http"
 	"net/url"
@@ -204,7 +205,7 @@ func (h PagerDutyOAuthHydrator) refreshTokens(
 		return Credential{}, PagerDutyOAuthTokenRotation{}, ErrCredentialInvalid
 	}
 	request.Header.Set("Content-Type", "application/x-www-form-urlencoded")
-	response, err := h.Doer.Do(request)
+	response, err := httpguard.NoRedirectsDoer(h.Doer).Do(request) // client_secret and refresh_token ride the form body
 	if err != nil {
 		return Credential{}, PagerDutyOAuthTokenRotation{}, &ProviderError{Class: ErrorTransient}
 	}

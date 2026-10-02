@@ -35,4 +35,12 @@ func TestASuppliedClientNeverFollowsARedirectToAnotherOrigin(t *testing.T) {
 		}
 		probe.Assert(t)
 	})
+	t.Run("the revoke doer of the admin routes (supplied Deps.HTTPDoer)", func(t *testing.T) {
+		probe := redirectprobe.New(t)
+		doer := revokeDoer(probe.Client())
+		if response, err := doer.Do(get(t, probe.Base.URL+"/oauth/revoke")); err == nil {
+			response.Body.Close()
+		}
+		probe.Assert(t)
+	})
 }

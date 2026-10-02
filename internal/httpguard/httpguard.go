@@ -21,8 +21,9 @@ func NoRedirects(client *http.Client) *http.Client {
 }
 
 // NoRedirectsDoer is NoRedirects for a value that is only known by its Do method (an HTTPDoer): an *http.Client goes
-// through NoRedirects; anything else (a test's transport wrapper, a counting or retrying decorator) cannot follow a
-// redirect by itself and is returned as it is.
+// through NoRedirects. Any other doer is returned as it is: the helper cannot see inside a decorator (a counting or
+// retrying wrapper), whose inner client follows whatever its own policy says. Guard at the place where that inner
+// client is made.
 func NoRedirectsDoer[D interface {
 	Do(*http.Request) (*http.Response, error)
 }](doer D) D {

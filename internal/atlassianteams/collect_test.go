@@ -608,6 +608,7 @@ func TestCollectReadsMembersFromEdgesThatCarryOnlyTheUser(t *testing.T) {
 	}
 	var got []string
 	for _, m := range rows.Memberships {
+		// the collector writes its own team id here; the mapper's team id is pinned by team_member_mapper_test.go
 		if m.TeamID != "aaaaaaaa-0000-4000-8000-000000000001" {
 			t.Errorf("member %q attached to team %q, want the requested team A", m.MemberID, m.TeamID)
 		}

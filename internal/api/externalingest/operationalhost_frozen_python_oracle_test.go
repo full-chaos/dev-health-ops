@@ -3,14 +3,10 @@ package externalingest
 import (
 	"encoding/json"
 	"math/rand"
-	"os"
-	"os/exec"
-	"path/filepath"
-	"runtime"
 	"strings"
 	"testing"
 
-	"github.com/full-chaos/dev-health-ops/internal/testsupport/pyoracle"
+	"github.com/full-chaos/dev-health-ops/internal/testsupport/programoracle"
 )
 
 const pythonOperationalHostProgram = `
@@ -67,29 +63,18 @@ func operationalHostCorpus() []string {
 	return corpus
 }
 
-// TestOperationalProviderInstanceMatchesLivePython compares
+// TestOperationalProviderInstanceMatchesFrozenPython compares
 // OperationalProviderInstance with
 // normalized_operational_provider_instance for github and gitlab (None and
 // a raised ValueError both being "refused").
-func TestOperationalProviderInstanceMatchesLivePython(t *testing.T) {
-	if os.Getenv("DEV_HEALTH_LIVE_PYTHON_ORACLES") != "1" {
-		t.Skip("live Python oracles run only through ci/check_go.sh live-python-oracles")
-	}
-	_, file, _, _ := runtime.Caller(0)
-	root := filepath.Clean(filepath.Join(filepath.Dir(file), "..", "..", ".."))
-	python := pyoracle.Resolve(t, root)
+func TestOperationalProviderInstanceMatchesFrozenPython(t *testing.T) {
 	var cases [][2]string
 	for _, raw := range operationalHostCorpus() {
 		cases = append(cases, [2]string{"github", raw}, [2]string{"gitlab", raw})
 	}
 	input, _ := json.Marshal(cases)
-	command := exec.Command(python, "-c", pythonOperationalHostProgram)
-	command.Env = append(os.Environ(), "PYTHONPATH="+filepath.Join(root, "src"))
-	command.Stdin = strings.NewReader(string(input))
-	output, err := command.CombinedOutput()
-	if err != nil {
-		t.Fatalf("live python: %v", pyoracle.RunError(python, err, output))
-	}
+	output := frozenPython(t, "operational-provider-instance.golden.json",
+		programoracle.Program{Name: "operational-provider-instance", Text: pythonOperationalHostProgram, Stdin: []byte(string(input))})[0]
 	lines := strings.Split(strings.TrimSpace(string(output)), "\n")
 	var want []any
 	if err := json.Unmarshal([]byte(lines[len(lines)-1]), &want); err != nil {
@@ -111,13 +96,6 @@ func TestOperationalProviderInstanceMatchesLivePython(t *testing.T) {
 	}
 	if mismatches > 0 {
 		t.Fatalf("%d of %d cases differ", mismatches, len(cases))
-	}
-	proof := os.Getenv("DEV_HEALTH_LIVE_PYTHON_ORACLE_PROOF_DIR")
-	if proof == "" {
-		t.Fatal("DEV_HEALTH_LIVE_PYTHON_ORACLE_PROOF_DIR is required")
-	}
-	if err := os.WriteFile(filepath.Join(proof, "externalingest-operational-host"), []byte("executed"), 0o600); err != nil {
-		t.Fatal(err)
 	}
 	t.Logf("%d cases compared; 0 mismatches", len(cases))
 }

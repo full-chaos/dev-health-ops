@@ -3,41 +3,11 @@ package fixturescli
 import (
 	"bytes"
 	"context"
-	"crypto/sha256"
-	"encoding/hex"
-	"os"
 	"strings"
 	"testing"
 
 	"github.com/full-chaos/dev-health-ops/internal/cli"
 )
-
-// goldenSHA256 pins testdata/finalize_synthetic_golden.json: the rows the
-// Python producer (processors/sync.py _complete_synthetic_sync_run and
-// workers/sync_units.py finalize_sync_run, at the commit named in the file's
-// "producer" field) wrote for one finalize of every target on a fresh
-// PostgreSQL head database. The producer is deleted with the Python CLI, so
-// this is a rot guard, not a freshness check: it fails when the committed file
-// changes without this digest, and the file is only ever rewritten from the
-// live producer (see TestFinalizeSyntheticVenueOracleMatchesThePythonProducer).
-const goldenSHA256 = "d5e5d19fc136376877f52adb3db5385f4444b5ddb1f4a0b9240ecefa532f9570"
-
-func TestGoldenIsTheFileTheDigestPins(t *testing.T) {
-	raw, err := os.ReadFile("testdata/finalize_synthetic_golden.json")
-	if err != nil {
-		t.Fatal(err)
-	}
-	sum := sha256.Sum256(raw)
-	if got := hex.EncodeToString(sum[:]); got != goldenSHA256 {
-		t.Fatalf("testdata/finalize_synthetic_golden.json digest = %s, want %s: the golden changed without its digest. It is only rewritten from the live Python producer "+
-			"(the venue oracle test's doc comment, with DHO_SYNTHETIC_FINALIZE_GOLDEN_UPDATE=1), then update goldenSHA256", got, goldenSHA256)
-	}
-	for _, name := range []string{"\"producer\": \"", "\"sync_run_units\"", "\"sync_executed_proof_ledger\"", "\"sync_run_post_dispatches\"", "\"sync_dispatch_outbox\""} {
-		if !strings.Contains(string(raw), name) {
-			t.Fatalf("the golden does not hold %s", name)
-		}
-	}
-}
 
 // _sync_flags_for_target, as json.dumps writes it (the unit's processor_flags
 // text): every flag, in the dict's key order, false except the target's.

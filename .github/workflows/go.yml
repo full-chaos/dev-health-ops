@@ -144,6 +144,7 @@ on:
       # alone must run go-quality.
       - 'ci/go_race_shard.awk'
       - 'ci/go_race_weights.tsv'
+      - 'ci/ratchets.tsv'
       - 'ci/venue_oracle_discovery.awk'
       - 'ci/venue_oracle_names.awk'
       - 'ci/venue_oracle_proof.awk'
@@ -328,6 +329,7 @@ on:
       # alone must run go-quality.
       - 'ci/go_race_shard.awk'
       - 'ci/go_race_weights.tsv'
+      - 'ci/ratchets.tsv'
       - 'ci/venue_oracle_discovery.awk'
       - 'ci/venue_oracle_names.awk'
       - 'ci/venue_oracle_proof.awk'

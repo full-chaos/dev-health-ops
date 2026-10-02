@@ -1,0 +1,4 @@
+label=internal/llmorgsettings (validate_llm_base_url vs live Python)
+package=./internal/llmorgsettings
+run=^(TestValidateBaseURLMatchesLivePython)$
+proof=llmorgsettings-validate-base-url|api live Python oracle llmorgsettings-validate-base-url did not run

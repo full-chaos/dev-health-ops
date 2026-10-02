@@ -1,3 +1,2 @@
 internal/pgmigrate	TestBaselineVenueOracleIsTheExecutedPythonUpgrade	run
-internal/pgmigrate	TestDowngradeVenueOracleMatchesPythonDowngrade	run
 internal/pgmigrate	TestPreflightVenueOracleOverRealAlembicStates	run

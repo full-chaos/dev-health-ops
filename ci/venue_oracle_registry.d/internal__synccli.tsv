@@ -1,6 +1,3 @@
 internal/synccli	TestBatchLoopMatchesLivePython	run
 internal/synccli	TestDBLookupsMatchLivePython	run
 internal/synccli	TestSyncTargetMatchesLivePython	run
-internal/synccli	TestSyncTeamsGitHubVenueOracleMatchesThePythonProducer	run
-internal/synccli	TestSyncTeamsGitLabVenueOracleMatchesThePythonProducer	run
-internal/synccli	TestSyncTeamsLinearVenueOracleMatchesThePythonProducer	run

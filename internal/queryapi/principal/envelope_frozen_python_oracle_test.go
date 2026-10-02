@@ -8,13 +8,13 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
-	"runtime"
 	"testing"
 	"time"
 
 	"github.com/golang-jwt/jwt/v5"
 	"github.com/google/uuid"
 
+	"github.com/full-chaos/dev-health-ops/internal/testsupport/moduleroot"
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/programoracle"
 )
 
@@ -134,7 +134,7 @@ answer_stream.write(json.dumps({
 // the signature bytes of the Python issuer (the key is generated per issuance and never recorded); the live
 // TestVerifierMatchesLivePythonIssuedEnvelope stays until the Python delete (CHAOS-7308) for that.
 func TestVerifierMatchesFrozenPythonIssuedEnvelopeStructure(t *testing.T) {
-	_, file, _, ok := runtime.Caller(0)
+	_, file, _, ok := moduleroot.Caller(0)
 	if !ok {
 		t.Fatal("resolve principal package path")
 	}

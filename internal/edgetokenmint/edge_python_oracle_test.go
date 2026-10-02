@@ -7,12 +7,12 @@ import (
 	"os/exec"
 	"path/filepath"
 	"reflect"
-	"runtime"
 	"sort"
 	"strings"
 	"testing"
 	"time"
 
+	"github.com/full-chaos/dev-health-ops/internal/testsupport/moduleroot"
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/pyoracle"
 )
 
@@ -215,7 +215,7 @@ func TestGoMintedEdgeTokenIsJudgedByTheLiveEdgeExactlyLikeAPythonMintedOne(t *te
 	if proofDir == "" {
 		t.Fatal("DEV_HEALTH_LIVE_PYTHON_ORACLE_PROOF_DIR is required")
 	}
-	_, currentFile, _, ok := runtime.Caller(0)
+	_, currentFile, _, ok := moduleroot.Caller(0)
 	if !ok {
 		t.Fatal("resolve edgetokenmint package path")
 	}

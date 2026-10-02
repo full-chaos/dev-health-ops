@@ -14,7 +14,6 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
-	"runtime"
 	"sort"
 	"strings"
 	"sync"
@@ -26,6 +25,7 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/api/pybody"
 	"github.com/full-chaos/dev-health-ops/internal/api/pyjson"
 	"github.com/full-chaos/dev-health-ops/internal/platform/secrets"
+	"github.com/full-chaos/dev-health-ops/internal/testsupport/moduleroot"
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/pyoracle"
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/venueoracle"
 )
@@ -250,7 +250,7 @@ func memberIdentities(t *testing.T) []Identity {
 
 func runMemberOracle(t *testing.T, python string, args ...string) []byte {
 	t.Helper()
-	_, currentFile, _, _ := runtime.Caller(0)
+	_, currentFile, _, _ := moduleroot.Caller(0)
 	script := filepath.Join(filepath.Dir(currentFile), "testdata", "venue_oracle_members.py")
 	out, err := exec.Command(python, append([]string{script}, args...)...).Output()
 	if err != nil {
@@ -271,7 +271,7 @@ func requireMemberOracleEnv(t *testing.T) string {
 	if os.Getenv("DEV_HEALTH_LIVE_PYTHON_ORACLE_PROOF_DIR") == "" {
 		t.Fatal("live Python oracle opt-in requires a proof directory from ci/check_go.sh")
 	}
-	_, currentFile, _, _ := runtime.Caller(0)
+	_, currentFile, _, _ := moduleroot.Caller(0)
 	repoRoot := filepath.Dir(filepath.Dir(filepath.Dir(filepath.Dir(currentFile))))
 	python := pyoracle.Resolve(t, repoRoot)
 	pyoracle.RequireDeployed(t, python, repoRoot)

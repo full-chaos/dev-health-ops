@@ -14,7 +14,6 @@ import (
 	"io"
 	"log/slog"
 	"path/filepath"
-	"runtime"
 	"strings"
 	"testing"
 
@@ -23,6 +22,7 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/apiservice"
 	"github.com/full-chaos/dev-health-ops/internal/platform/config"
 	"github.com/full-chaos/dev-health-ops/internal/storage/valkey"
+	"github.com/full-chaos/dev-health-ops/internal/testsupport/moduleroot"
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/venueoracle"
 )
 
@@ -128,7 +128,7 @@ func TestExternalIngestLimiterVenueOracle(t *testing.T) {
 
 func repoRoot(t *testing.T) string {
 	t.Helper()
-	_, file, _, ok := runtime.Caller(0)
+	_, file, _, ok := moduleroot.Caller(0)
 	if !ok {
 		t.Fatal("resolve package path")
 	}

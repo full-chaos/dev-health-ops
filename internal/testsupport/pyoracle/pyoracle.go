@@ -91,7 +91,7 @@ const RecordingEnv = "DHO_VENUE_GOLDEN_UPDATE"
 
 // unconvertedOwnLaunchCeiling is how many packages the closed list holds. It
 // only goes down.
-const unconvertedOwnLaunchCeiling = 13
+const unconvertedOwnLaunchCeiling = 12
 
 //go:embed unconverted_own_launch.txt
 var unconvertedOwnLaunch string

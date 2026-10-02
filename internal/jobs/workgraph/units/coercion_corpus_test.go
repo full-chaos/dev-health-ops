@@ -250,7 +250,13 @@ func TestConfidenceFromValueMatchesPythonTypeAxis(t *testing.T) {
 				)
 			}
 			if mapped.unrepresentable != "" {
-				t.Skipf("no Go analogue: %s", mapped.unrepresentable)
+				// No Go value stands for this row, so nothing is compared with Go; what is checked is that the row is
+				// still accounted for: its reason is stated and the recorded Python rendering is one this harness reads.
+				if _, ok := parsePythonRendering(testCase.Expected); !ok {
+					t.Fatalf("unrepresentable row %q holds an unrenderable recorded expectation %q", testCase.InputRepr, testCase.Expected)
+				}
+				t.Logf("no Go analogue (accounted for): %s", mapped.unrepresentable)
+				return
 			}
 
 			expected, ok := parsePythonRendering(testCase.Expected)

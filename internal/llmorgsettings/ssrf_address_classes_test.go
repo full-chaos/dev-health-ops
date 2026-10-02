@@ -172,13 +172,14 @@ func checkRecording(t *testing.T, recorded map[string]bool) {
 	}
 }
 
-// knownStricter are the ranges where the Go guard refuses what the reference accepts, on purpose: the whole of
+// knownStricter are the ranges where the Go guard refuses what the reference accepts, on purpose: fec0::/10 and the whole of
 // 192.0.0.0/24 (the reference refuses only 192.0.0.0/29 and 192.0.0.170/31 and accepts the rest, including 192.0.0.9 and
 // 192.0.0.10, which RFC 7600 and RFC 8155 name globally reachable) and 192.88.99.0/24 (RFC 7526 6to4 relay anycast,
 // deprecated; the reference accepts it). Any other disagreement is a defect.
 var knownStricter = []netip.Prefix{
 	netip.MustParsePrefix("192.0.0.0/24"),
 	netip.MustParsePrefix("192.88.99.0/24"),
+	netip.MustParsePrefix("fec0::/10"), // deprecated site-local (RFC 3879): internal-use space the reference accepts
 }
 
 func inKnownStricter(addr netip.Addr) bool {

@@ -153,7 +153,7 @@ func normalizeHost(host string) (string, string) {
 // 198.51.100.0/24, 203.0.113.0/24, 240.0.0.0/4, 255.255.255.255/32, ...) and the 100.64.0.0/10 carve-out of
 // IPv4Address.is_global; IPv6Address._private_networks with its _private_networks_exceptions; IPv6Address._reserved_networks.
 //
-// Two ranges are stricter than the reference ON PURPOSE (a pinned Known, ssrf_address_classes_test.go knownStricter): the
+// Three ranges are stricter than the reference ON PURPOSE (a pinned Known, ssrf_address_classes_test.go knownStricter): fec0::/10 (deprecated site-local, internal use) and the
 // whole of 192.0.0.0/24 (the reference refuses only 192.0.0.0/29 and 192.0.0.170/31 and accepts 192.0.0.9 and 192.0.0.10,
 // the RFC 7600 and RFC 8155 globally reachable addresses) and 192.88.99.0/24 (RFC 7526 6to4 relay anycast, deprecated).
 
@@ -180,6 +180,9 @@ var nonGlobalV6 = []netip.Prefix{
 	netip.MustParsePrefix("2001:db8::/32"),
 	netip.MustParsePrefix("2002::/16"),
 	netip.MustParsePrefix("3fff::/20"),
+	// Stricter than the reference on purpose (a pinned Known): the deprecated site-local range fec0::/10, which the
+	// reference accepts. It is internal-use address space (RFC 3879).
+	netip.MustParsePrefix("fec0::/10"),
 }
 
 // globalExceptionsV6 are IPv6Address._private_networks_exceptions: inside a range of nonGlobalV6 yet globally reachable.

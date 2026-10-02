@@ -73,11 +73,15 @@ func TestEnumerate_LegacyRefusals(t *testing.T) {
 		want   string
 	}{
 		"legacy for an operation digestByOperation does not register": {
-			func(s string) string { return strings.Replace(s, `"Foo": {digestHex(registeredFooV1Document)}`, `"Ghost": {digestHex(registeredFooV1Document)}`, 1) },
+			func(s string) string {
+				return strings.Replace(s, `"Foo": {digestHex(registeredFooV1Document)}`, `"Ghost": {digestHex(registeredFooV1Document)}`, 1)
+			},
 			"not in digestByOperation",
 		},
 		"a const named both current and legacy": {
-			func(s string) string { return strings.Replace(s, `"Foo": {digestHex(registeredFooV1Document)}`, `"Foo": {digestHex(registeredFooDocument)}`, 1) },
+			func(s string) string {
+				return strings.Replace(s, `"Foo": {digestHex(registeredFooV1Document)}`, `"Foo": {digestHex(registeredFooDocument)}`, 1)
+			},
 			"not found among the unreferenced",
 		},
 		"a legacy text with the same digest as another document": {
@@ -87,7 +91,9 @@ func TestEnumerate_LegacyRefusals(t *testing.T) {
 			"already registered for",
 		},
 		"a legacy const that does not exist": {
-			func(s string) string { return strings.Replace(s, "digestHex(registeredFooV1Document)", "digestHex(registeredNopeDocument)", 1) },
+			func(s string) string {
+				return strings.Replace(s, "digestHex(registeredFooV1Document)", "digestHex(registeredNopeDocument)", 1)
+			},
 			"not found among the unreferenced",
 		},
 		"a legacy entry with no text": {
@@ -106,7 +112,9 @@ func TestEnumerate_LegacyRefusals(t *testing.T) {
 			"twice",
 		},
 		"a const left unreferenced by both maps": {
-			func(s string) string { return strings.Replace(s, `"Foo": {digestHex(registeredFooV1Document)},`, "", 1) },
+			func(s string) string {
+				return strings.Replace(s, `"Foo": {digestHex(registeredFooV1Document)},`, "", 1)
+			},
 			"no digestByOperation entry",
 		},
 	}

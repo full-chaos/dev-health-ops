@@ -435,7 +435,7 @@ func TestPushNetMatchesTheFrozenPythonOutput(t *testing.T) {
 	golden := venueoracle.OpenGolden(t, venueoracle.GoldenSpec{
 		Path:        "testdata/golden/push_net.json",
 		PythonBuild: netPythonBuild,
-		SHA256:      "4f320314de5108821f1fb8570ac4d4581ef3efaa1a3e8b801fd090d04c1ea723",
+		SHA256:      "589f2ab0c8c17f047cefbc89ffb9d9b2abca86a98fba5bbca8b58115fdeb5c91",
 		Recipe: "git worktree add --detach $DIR " + netPythonBuild + " (with its .venv: uv sync --frozen --no-install-project); then from the repository root: " +
 			"go run ./internal/testsupport/venueoracle/goldenrecord -pkg ./internal/pushcli/ -test '^TestPushNetMatchesTheFrozenPythonOutput$' -python-root $DIR",
 	})

@@ -244,6 +244,7 @@ func TestExternalSinkOutcomesMatchFrozenPythonAgainstClickHouse(t *testing.T) {
 		t.Fatalf("the golden holds %d outcomes and %d row sets for %d cases", len(results), len(frozen.Stored), len(cases))
 	}
 
+	var skipped []string
 	sink, err := NewClickHouseExternalBatchSink(conn)
 	if err != nil {
 		t.Fatal(err)
@@ -268,6 +269,7 @@ func TestExternalSinkOutcomesMatchFrozenPythonAgainstClickHouse(t *testing.T) {
 		// a float field: CHAOS-6491), so this comparison skips them rather
 		// than claim they agree; the sink still refuses that value.
 		if rejections, _ := results[i]["rejections"].([]any); len(rejections) > 0 {
+			skipped = append(skipped, item.Name)
 			continue
 		}
 		sinkErrors, _ := results[i]["sink_errors"].([]any)
@@ -282,6 +284,12 @@ func TestExternalSinkOutcomesMatchFrozenPythonAgainstClickHouse(t *testing.T) {
 		if pythonStored != goStored {
 			t.Errorf("%s: stored rows differ: python %s, go %s", item.Name, pythonStored, goStored)
 		}
+	}
+	// Which cases the comparison skips is part of what the golden pins: a rejection added to or removed
+	// from a recorded case would otherwise change the set unseen.
+	wantSkipped := []string{"pull request number -1", "work item storyPoints integer literal of 401 digits"}
+	if strings.Join(skipped, "\n") != strings.Join(wantSkipped, "\n") {
+		t.Errorf("the cases skipped because Python rejects the record are %q, want %q", skipped, wantSkipped)
 	}
 	golden.SkipDiff(t)
 	golden.Finish(t)

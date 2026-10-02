@@ -306,7 +306,13 @@ const loopTracerName = "github.com/full-chaos/dev-health-ops/internal/scheduler/
 // is a count or a fixed word, never a payload, org id or credential.
 func (loop *Loop) step(parent context.Context, now time.Time) (stepErr error) {
 	spanCtx, span := tracing.StartWorkSpan(parent, loopTracerName, "dev_health.scheduler.fixed_window")
-	defer func() { tracing.EndWorkSpan(span, stepErr) }()
+	stage := "engine"
+	defer func() {
+		if stepErr != nil {
+			span.SetAttributes(attribute.String(tracing.StageAttribute, stage))
+		}
+		tracing.EndWorkSpan(span, stepErr)
+	}()
 	stepCtx, cancel := context.WithTimeout(spanCtx, loop.config.StepTimeout)
 	defer cancel()
 	result, err := loop.stepper.Step(stepCtx, now.UTC())
@@ -319,6 +325,7 @@ func (loop *Loop) step(parent context.Context, now time.Time) (stepErr error) {
 	}
 	loop.record(result, now)
 	if result.Failed() {
+		stage = "schedule"
 		// Name every schedule that failed and why. Schedule IDs are declared
 		// compile-time constants, and the errors underneath are domain
 		// validation and durability failures that name fields and rules rather
@@ -336,6 +343,7 @@ func (loop *Loop) step(parent context.Context, now time.Time) (stepErr error) {
 		return result.Err()
 	}
 	if overdue := loop.overdueSchedules(); len(overdue) > 0 {
+		stage = "schedule"
 		return fmt.Errorf("%w: %s", errScheduleOverdue, strings.Join(overdue, ", "))
 	}
 	loop.mu.Lock()

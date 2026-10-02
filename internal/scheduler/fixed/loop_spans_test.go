@@ -91,6 +91,9 @@ func TestFixedLoopStepEmitsWindowAndDecisionSpans(t *testing.T) {
 	if window.Status.Code != codes.Error {
 		t.Errorf("a window with a failed schedule must be an Error span")
 	}
+	if stage, _ := fixedAttr(window.Attributes, "dev_health.work.stage"); stage.AsString() != "schedule" {
+		t.Errorf("window stage = %q, want schedule", stage.AsString())
+	}
 	wantWindow := map[string]int64{
 		"dev_health.scheduler.schedules": 3, "dev_health.scheduler.due": 2, "dev_health.scheduler.claimed": 3,
 		"dev_health.scheduler.duplicate": 4, "dev_health.scheduler.handoffs": 5, "dev_health.scheduler.skipped": 6,
@@ -158,6 +161,9 @@ func TestFixedLoopCleanWindowIsNotAnErrorSpan(t *testing.T) {
 		if span.Status.Code == codes.Error {
 			t.Errorf("span %s of a clean window is an Error span", span.Name)
 		}
+		if _, ok := fixedAttr(span.Attributes, "dev_health.work.stage"); ok {
+			t.Errorf("span %s of a clean window carries a stage", span.Name)
+		}
 	}
 }
 
@@ -217,10 +223,23 @@ func TestFixedLoopLogsAWindowFailureThatSpansOnlyClassify(t *testing.T) {
 	if !strings.Contains(logs.String(), "fixed schedule window failed") || !strings.Contains(logs.String(), "marker-in-error") {
 		t.Errorf("window failure text not logged: %q", logs.String())
 	}
+	var sawWindow bool
 	for _, span := range exporter.GetSpans() {
 		if strings.Contains(fmt.Sprint(span), "marker-in-error") {
 			t.Errorf("error text reached span %s", span.Name)
 		}
+		if span.Name == "dev_health.scheduler.fixed_window" {
+			sawWindow = true
+			if span.Status.Code != codes.Error {
+				t.Errorf("an engine error window must be an Error span")
+			}
+			if stage, _ := fixedAttr(span.Attributes, "dev_health.work.stage"); stage.AsString() != "engine" {
+				t.Errorf("window stage = %q, want engine", stage.AsString())
+			}
+		}
+	}
+	if !sawWindow {
+		t.Error("no fixed_window span")
 	}
 }
 

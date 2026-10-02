@@ -23,6 +23,11 @@ func StartWorkSpan(ctx context.Context, scope, name string, attributes ...attrib
 	return otel.Tracer(scope).Start(ctx, name, oteltrace.WithAttributes(attributes...))
 }
 
+// StageAttribute names WHERE a unit of work failed (read, handle, handoff,
+// reconcile, engine, schedule, ...): a fixed word set by the loop, so an Error
+// span is actionable without the error text.
+const StageAttribute = "dev_health.work.stage"
+
 // Closed list of error classes a work span may carry (error.type). Anything
 // not recognised is ErrorClassOther; the list is the whole vocabulary, so a
 // span can never carry free text from an error.

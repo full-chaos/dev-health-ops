@@ -27,6 +27,15 @@ func installLoopSpanRecorder(t *testing.T) *tracetest.InMemoryExporter {
 	return exporter
 }
 
+func spanStage(attrs []attribute.KeyValue) (string, bool) {
+	for _, kv := range attrs {
+		if string(kv.Key) == "dev_health.work.stage" {
+			return kv.Value.AsString(), true
+		}
+	}
+	return "", false
+}
+
 func spanAttrInts(attrs []attribute.KeyValue) map[string]int64 {
 	out := map[string]int64{}
 	for _, kv := range attrs {
@@ -81,6 +90,9 @@ func TestLoopStepEmitsOneWindowSpanWithEveryCount(t *testing.T) {
 	if got.Status.Code == codes.Error {
 		t.Errorf("a clean window carries status Error")
 	}
+	if stage, ok := spanStage(got.Attributes); ok {
+		t.Errorf("a clean window carries stage %q", stage)
+	}
 }
 
 // A window that finds unsupported or invalid cron fails closed
@@ -98,6 +110,9 @@ func TestLoopStepFallbackWindowIsAnErrorSpanWithCronCounts(t *testing.T) {
 	spans := exporter.GetSpans()
 	if len(spans) != 1 || spans[0].Status.Code != codes.Error {
 		t.Fatalf("spans = %v, want one Error span", spans)
+	}
+	if stage, _ := spanStage(spans[0].Attributes); stage != "cron_fallback" {
+		t.Errorf("stage = %q, want cron_fallback", stage)
 	}
 	attrs := spanAttrInts(spans[0].Attributes)
 	if attrs["dev_health.scheduler.unsupported_cron"] != 8 || attrs["dev_health.scheduler.invalid_cron"] != 9 {
@@ -118,6 +133,9 @@ func TestLoopStepFailureIsAnErrorSpanAndShutdownCancelIsNot(t *testing.T) {
 	if len(spans) != 1 || spans[0].Status.Code != codes.Error || len(spans[0].Events) != 1 {
 		t.Fatalf("a failed window must be an Error span with one exception event: %v", spans)
 	}
+	if stage, _ := spanStage(spans[0].Attributes); stage != "handoff" {
+		t.Errorf("stage = %q, want handoff", stage)
+	}
 	if spans[0].Status.Description != "other" || strings.Contains(fmt.Sprint(spans[0]), "payload-in-error") {
 		t.Errorf("status description %q / error text on the span; want the class only", spans[0].Status.Description)
 	}
@@ -129,5 +147,25 @@ func TestLoopStepFailureIsAnErrorSpanAndShutdownCancelIsNot(t *testing.T) {
 	spans = exporter.GetSpans()
 	if len(spans) != 1 || spans[0].Status.Code == codes.Error {
 		t.Fatalf("a shutdown cancel must not be an Error span: %v", spans)
+	}
+}
+
+func TestLoopStepReconcileFailureIsAnErrorSpanAtStageReconcile(t *testing.T) {
+	exporter := installLoopSpanRecorder(t)
+	ok := loopStepFunc(func(context.Context, time.Time, int, Coordinator) (HandoffResult, error) { return HandoffResult{}, nil })
+	loop, _ := newTestLoop(t, ok, &testLoopClock{now: time.Unix(1_700_000_000, 0)})
+	loop.config.Occurrences = &stubOccurrences{err: errors.New("consume failed {payload-in-error}")}
+	if err := loop.step(context.Background(), time.Unix(1_700_000_000, 0)); err == nil {
+		t.Fatal("step returned nil for a failing reconcile")
+	}
+	spans := exporter.GetSpans()
+	if len(spans) != 1 || spans[0].Status.Code != codes.Error {
+		t.Fatalf("spans = %v, want one Error span", spans)
+	}
+	if stage, _ := spanStage(spans[0].Attributes); stage != "reconcile" {
+		t.Errorf("stage = %q, want reconcile", stage)
+	}
+	if strings.Contains(fmt.Sprint(spans[0]), "payload-in-error") {
+		t.Errorf("error text reached the span")
 	}
 }

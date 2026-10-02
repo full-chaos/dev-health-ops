@@ -120,6 +120,9 @@ func TestRunnerEmitsBatchAndHandleSpansWithOutcomes(t *testing.T) {
 	if batch.Status.Code != codes.Error {
 		t.Errorf("a batch with a failed event must be an Error span")
 	}
+	if got := spanStrAttr(batch, "dev_health.work.stage"); got != "handle" {
+		t.Errorf("failed batch stage = %q, want handle", got)
+	}
 	// The handler runs INSIDE its handle span: the ctx it receives carries it, so
 	// the sink's own spans nest under the event.
 	handleIDs := map[oteltrace.SpanID]bool{}
@@ -210,6 +213,9 @@ func TestRunnerFailedReadEmitsAnErrorSpan(t *testing.T) {
 	if len(reads) != 1 || reads[0].Status.Code != codes.Error {
 		t.Fatalf("read_failed spans = %v, want one Error span", reads)
 	}
+	if got := spanStrAttr(reads[0], "dev_health.work.stage"); got != "read" {
+		t.Errorf("read_failed stage = %q, want read", got)
+	}
 	if spanStrAttr(reads[0], "dev_health.stream.runner") != "stream_test" || spanStrAttr(reads[0], "dev_health.stream.lanes") != "1" {
 		t.Errorf("read_failed attrs = %v", reads[0].Attributes)
 	}
@@ -217,4 +223,25 @@ func TestRunnerFailedReadEmitsAnErrorSpan(t *testing.T) {
 		t.Errorf("a failed read produced a batch span")
 	}
 	assertNoIdentity(t, exporter)
+}
+
+// A clean batch is not an Error span and carries no stage.
+func TestRunnerCleanBatchHasNoErrorOrStage(t *testing.T) {
+	exporter := installStreamSpanRecorder(t)
+	transport := &fakeTransport{new: []Message{{Stream: "test:stream", ID: "1-0"}}}
+	runner, err := New(transport, handlerFunc(func(context.Context, Message) error { return nil }), testConfig(), health.NewRegistry(time.Second))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := runner.window(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	for _, span := range exporter.GetSpans() {
+		if span.Status.Code == codes.Error || spanStrAttr(span, "dev_health.work.stage") != "" {
+			t.Errorf("span %s of a clean batch has Error status or a stage", span.Name)
+		}
+	}
+	if got := spanStrAttr(spansByName(exporter, "dev_health.stream.batch")[0], "dev_health.stream.failed"); got != "0" {
+		t.Errorf("clean batch failed = %q, want 0", got)
+	}
 }

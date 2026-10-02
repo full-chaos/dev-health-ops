@@ -267,7 +267,13 @@ const loopTracerName = "github.com/full-chaos/dev-health-ops/internal/scheduler/
 // and a cron expression are customer objects and never reach the span.
 func (loop *Loop) step(parent context.Context, now time.Time) (stepErr error) {
 	spanCtx, span := tracing.StartWorkSpan(parent, loopTracerName, "dev_health.scheduler.sync_window")
-	defer func() { tracing.EndWorkSpan(span, stepErr) }()
+	stage := "handoff"
+	defer func() {
+		if stepErr != nil {
+			span.SetAttributes(attribute.String(tracing.StageAttribute, stage))
+		}
+		tracing.EndWorkSpan(span, stepErr)
+	}()
 	parent = spanCtx
 	stepCtx, cancel := context.WithTimeout(parent, loop.config.StepTimeout)
 	defer cancel()
@@ -294,6 +300,7 @@ func (loop *Loop) step(parent context.Context, now time.Time) (stepErr error) {
 		loop.skippedNotPlannerManaged += uint64(result.SkippedNotPlannerManaged)
 		loop.mu.Unlock()
 		if err == nil {
+			stage = "cron_fallback"
 			return ErrSchedulerFallbackRequired
 		}
 	}
@@ -302,6 +309,7 @@ func (loop *Loop) step(parent context.Context, now time.Time) (stepErr error) {
 	}
 	// Consume in the same window that produced. A separate cadence would let
 	// the marker advance while the occurrence it handed off sat unconsumed.
+	stage = "reconcile"
 	reconciled, err := loop.config.Occurrences.Reconcile(stepCtx, now.UTC(), loop.config.Limit)
 	if err != nil {
 		return fmt.Errorf("consume pending scheduled sync occurrences: %w", err)

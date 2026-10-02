@@ -175,6 +175,7 @@ func (r *Runner) cycle(ctx context.Context, maintain bool) (bool, error) {
 			_, readSpan := tracing.StartWorkSpan(ctx, runnerTracerName, "dev_health.stream.read_failed",
 				attribute.String("dev_health.stream.runner", r.config.Name),
 				attribute.Int("dev_health.stream.lanes", len(readStreams)),
+				attribute.String(tracing.StageAttribute, "read"),
 			)
 			tracing.EndWorkSpan(readSpan, err)
 		} else {
@@ -195,6 +196,9 @@ func (r *Runner) cycle(ctx context.Context, maintain bool) (bool, error) {
 					}
 				}
 				batch.SetAttributes(attribute.Int("dev_health.stream.failed", len(batchFailures)))
+				if len(batchFailures) > 0 {
+					batch.SetAttributes(attribute.String(tracing.StageAttribute, "handle"))
+				}
 				tracing.EndWorkSpan(batch, errors.Join(batchFailures...))
 			}
 		}

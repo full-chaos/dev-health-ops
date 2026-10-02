@@ -217,6 +217,13 @@ func Collect(ctx context.Context, client Client, params Params) (Rows, error) {
 		resolver = identityalias.LoadDefault()
 	}
 
+	// The Teamwork Graph team reads (members, active projects) must name the site they query (CHAOS-7132: the
+	// live gateway refuses both without X-Query-Context; read-only probes on 2026-10-02 had the platform site
+	// ARI, the Jira site ARI and the organization ARI each accepted by the members read, and the platform site
+	// ARI accepted by the projects read, no header refused by either). The search and tenant reads answered
+	// without it and are not marked.
+	siteCtx := graph.WithQueryContext(ctx, siteQueryContext(params.SiteID))
+
 	teams, err := client.SearchTeams(ctx, organizationARI(params.OrganizationID), params.SiteID, "", page)
 	if err != nil {
 		return Rows{}, fmt.Errorf("search atlassian teams: %w", err)
@@ -245,11 +252,7 @@ func Collect(ctx context.Context, client Client, params Params) (Rows, error) {
 		// An archived team keeps its row (inactive) and has no members or
 		// project links to read.
 		if active && params.Selections.Members {
-			// The Teamwork Graph team-members read must name the site it queries (CHAOS-7132: the live gateway
-			// refuses it without X-Query-Context; a read-only probe on 2026-10-02 had the platform site ARI, the
-			// Jira site ARI and the organization ARI each accepted and no header refused). Only this read is
-			// marked: the other reads were not probed with it.
-			relations, err := client.IterTeamUsers(graph.WithQueryContext(ctx, siteQueryContext(params.SiteID)), team.ID, page)
+			relations, err := client.IterTeamUsers(siteCtx, team.ID, page)
 			if err != nil {
 				return Rows{}, fmt.Errorf("read members of team %s: %w", id, err)
 			}
@@ -279,7 +282,7 @@ func Collect(ctx context.Context, client Client, params Params) (Rows, error) {
 			}
 		}
 		if active && params.Selections.Projects {
-			projects, err := client.IterTeamActiveProjects(ctx, team.ID, page)
+			projects, err := client.IterTeamActiveProjects(siteCtx, team.ID, page)
 			if err != nil {
 				return Rows{}, fmt.Errorf("read projects of team %s: %w", id, err)
 			}

@@ -277,46 +277,53 @@ func TestCollectSendsTheOrganizationSiteCredentialsAndOptIns(t *testing.T) {
 // refuses the read, it does not return an empty roster.
 const liveQueryContextRefusal = "Query context must not be null and should be a valid platform site or workspace ARI. Please send the required X-Query-Context header."
 
-// requireQueryContext serves the standard answers, except that a team-members read without the platform site
-// ARI of params()'s site is refused with the live gateway's message, as the live gateway refuses it.
+// requireQueryContext serves the standard answers, except that a team-members or team-projects read without the
+// platform site ARI of params()'s site is refused with the live gateway's message, as the live gateway refuses it.
 func requireQueryContext(req request) (int, any) {
-	if req.Operation == "TeamworkGraphTeamUsers" && req.Header.Get("X-Query-Context") != "ari:cloud:platform::site/site-uuid" {
+	if (req.Operation == "TeamworkGraphTeamUsers" || req.Operation == "TeamworkGraphTeamActiveProjects") && req.Header.Get("X-Query-Context") != "ari:cloud:platform::site/site-uuid" {
 		return 200, map[string]any{"errors": []any{map[string]any{"message": liveQueryContextRefusal}}, "data": nil}
 	}
 	return standard(req)
 }
 
-func TestCollectSendsTheSiteQueryContextOnEveryTeamMembersRead(t *testing.T) {
+func TestCollectSendsTheSiteQueryContextOnEveryTeamMembersAndProjectsRead(t *testing.T) {
 	g := newGateway(t, requireQueryContext)
 	rows, err := Collect(context.Background(), g.client(), params(everything))
 	if err != nil {
-		t.Fatalf("the members read was refused: %v", err)
+		t.Fatalf("a team read was refused: %v", err)
 	}
 	if len(rows.Memberships) == 0 {
 		t.Fatal("no membership was read: the comparison measures nothing")
 	}
-	reads := 0
+	reads := map[string]int{}
 	for _, req := range g.requests {
-		if req.Operation != "TeamworkGraphTeamUsers" {
-			continue
-		}
-		reads++
-		if got := req.Header.Get("X-Query-Context"); got != "ari:cloud:platform::site/site-uuid" {
-			t.Errorf("a team-members read (page after %v) carried X-Query-Context %q, want the platform site ARI", req.Variables["after"], got)
+		switch req.Operation {
+		case "TeamworkGraphTeamUsers", "TeamworkGraphTeamActiveProjects":
+			reads[req.Operation]++
+			if got := req.Header.Get("X-Query-Context"); got != "ari:cloud:platform::site/site-uuid" {
+				t.Errorf("a %s read (page after %v) carried X-Query-Context %q, want the platform site ARI", req.Operation, req.Variables["after"], got)
+			}
+		case "TeamSearchV2":
+			// The search answered without the header on the live gateway: it is not marked.
+			if got := req.Header.Get("X-Query-Context"); got != "" {
+				t.Errorf("the team search carried X-Query-Context %q: only the team reads are marked", got)
+			}
 		}
 	}
-	if reads < 3 {
-		t.Errorf("only %d team-members reads: the paginated read (team A has two pages) was not exercised", reads)
+	if reads["TeamworkGraphTeamUsers"] < 3 || reads["TeamworkGraphTeamActiveProjects"] < 2 {
+		t.Errorf("reads = %v: the paginated members read (team A has two pages) and the projects reads were not exercised", reads)
 	}
 }
 
 // The negative control of the live probe: the same read without the context is refused by the gateway with the
 // recorded message, so the test above cannot pass by a gateway that never asks for the header.
-func TestATeamMembersReadWithoutTheQueryContextIsRefusedByTheGateway(t *testing.T) {
+func TestATeamReadWithoutTheQueryContextIsRefusedByTheGateway(t *testing.T) {
 	g := newGateway(t, requireQueryContext)
-	_, err := g.client().IterTeamUsers(context.Background(), teamA, 2)
-	if err == nil || !strings.Contains(err.Error(), "X-Query-Context") {
+	if _, err := g.client().IterTeamUsers(context.Background(), teamA, 2); err == nil || !strings.Contains(err.Error(), "X-Query-Context") {
 		t.Fatalf("a members read with no query context = %v, want the gateway's refusal naming the header", err)
+	}
+	if _, err := g.client().IterTeamActiveProjects(context.Background(), teamA, 2); err == nil || !strings.Contains(err.Error(), "X-Query-Context") {
+		t.Fatalf("a projects read with no query context = %v, want the gateway's refusal naming the header", err)
 	}
 }
 

@@ -1070,12 +1070,12 @@ func TestBuildProviderSyncHandlerBudgetLimitsAreTheOneTable(t *testing.T) {
 	}
 }
 
-// TestBuildProviderSyncHandlerLogsTheEffectiveCapsAndBudgetLimits pins
-// CHAOS-7881: one Info line at handler construction carries, per cost class,
-// the worker's request-budget limit and the dispatch admission cap, plus the
-// clamp, and nothing tenant-shaped.
-func TestBuildProviderSyncHandlerLogsTheEffectiveCapsAndBudgetLimits(t *testing.T) {
-	t.Setenv("SYNC_UNIT_CONCURRENCY_PER_BUCKET", "3")
+// TestBuildProviderSyncHandlerLogsTheBudgetLimits pins CHAOS-7881 (worker
+// side): one Info line at handler construction carries the worker's request
+// budget limit per cost class, and nothing tenant-shaped. The admission caps
+// are logged where the dispatch guard runs (syncdispatchruntime).
+func TestBuildProviderSyncHandlerLogsTheBudgetLimits(t *testing.T) {
+	t.Parallel()
 	var logs bytes.Buffer
 	buildProviderSyncHandler(
 		nil, nil, nil, nil, nil,
@@ -1084,30 +1084,25 @@ func TestBuildProviderSyncHandlerLogsTheEffectiveCapsAndBudgetLimits(t *testing.
 	var found map[string]any
 	for _, line := range strings.Split(strings.TrimSpace(logs.String()), "\n") {
 		var record map[string]any
-		if json.Unmarshal([]byte(line), &record) == nil && record["msg"] == "provider_sync_admission_and_budget_limits" {
+		if json.Unmarshal([]byte(line), &record) == nil && record["msg"] == "provider_sync_budget_limits" {
 			if found != nil {
-				t.Fatalf("more than one provider_sync_admission_and_budget_limits line:\n%s", logs.String())
+				t.Fatalf("more than one provider_sync_budget_limits line:\n%s", logs.String())
 			}
 			found = record
 		}
 	}
 	if found == nil {
-		t.Fatalf("no provider_sync_admission_and_budget_limits line in:\n%s", logs.String())
+		t.Fatalf("no provider_sync_budget_limits line in:\n%s", logs.String())
 	}
-	want := map[string]float64{
-		"budget_limit_light": 4, "budget_limit_medium": 2, "budget_limit_heavy": 1,
-		// The clamp (3) lowers light (4) to 3 and leaves medium (2) and heavy (1).
-		"admission_cap_light": 3, "admission_cap_medium": 2, "admission_cap_heavy": 1,
-		"admission_clamp": 3,
-	}
+	want := map[string]float64{"budget_limit_light": 4, "budget_limit_medium": 2, "budget_limit_heavy": 1}
 	for key, value := range want {
 		if found[key] != value {
 			t.Fatalf("%s = %v; want %v in %v", key, found[key], value, found)
 		}
 	}
 	for key := range found {
-		if strings.Contains(key, "org") || strings.Contains(key, "tenant") {
-			t.Fatalf("line carries a tenant-shaped attribute %q: %v", key, found)
+		if strings.Contains(key, "org") || strings.Contains(key, "tenant") || strings.HasPrefix(key, "admission") {
+			t.Fatalf("unexpected attribute %q on the worker-side line: %v", key, found)
 		}
 	}
 }
@@ -1125,7 +1120,7 @@ func TestTheBuilderProductionReachesLogsTheEffectiveCaps(t *testing.T) {
 		slog.New(slog.NewJSONHandler(&logs, nil)),
 		workItemsRuntimeConfig{}, 0,
 	)
-	if got := strings.Count(logs.String(), `"msg":"provider_sync_admission_and_budget_limits"`); got != 1 {
-		t.Fatalf("the production builder wrote %d provider_sync_admission_and_budget_limits lines, want exactly 1:\n%s", got, logs.String())
+	if got := strings.Count(logs.String(), `"msg":"provider_sync_budget_limits"`); got != 1 {
+		t.Fatalf("the production builder wrote %d provider_sync_budget_limits lines, want exactly 1:\n%s", got, logs.String())
 	}
 }

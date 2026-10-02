@@ -18,7 +18,6 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/providersync"
 	clickhousestore "github.com/full-chaos/dev-health-ops/internal/storage/clickhouse"
 	valkeystore "github.com/full-chaos/dev-health-ops/internal/storage/valkey"
-	"github.com/full-chaos/dev-health-ops/internal/syncdispatchruntime"
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/riverqueue/river"
 	valkeygo "github.com/valkey-io/valkey-go"
@@ -165,26 +164,22 @@ func pagerDutyEffectsFactory(
 // this is a mutation-tested seam (CHAOS-3118) — reintroducing a second
 // providerfoundation.NewMetrics() call inside BuildExecutor, the exact defect
 // this ticket exists to eliminate, must fail that test.
-// logProviderBudgetConfig writes ONE Info line with the numbers this process
-// enforces per cost class: the worker's concurrent-request budget limit and the
-// dispatch admission cap (CHAOS-7881). Both come from the one class-limit table
-// (providerfoundation.CostClassBudgetLimit); an operator reading a quiet bucket
-// can see at once that the cap and the budget agree, or that the clamp variable
-// lowered the cap. No org id or any tenant data.
+// logProviderBudgetConfig writes ONE Info line with the worker's concurrent
+// request budget limit per cost class (CHAOS-7881): the numbers THIS process
+// enforces when a provider unit asks for the request reservation. The matching
+// dispatch admission caps are logged by the process that RUNS the guard
+// (syncdispatchruntime.NewNativeDispatchSyncRunService, line
+// `sync_dispatch_admission_caps`), which can be another deployment. No org id
+// or tenant data.
 func logProviderBudgetConfig(logger *slog.Logger) {
 	if logger == nil {
 		logger = slog.Default()
 	}
 	limits := providersync.BudgetLimitsByCostClass()
-	clamp, caps := syncdispatchruntime.EffectiveAdmissionCaps()
-	logger.Info("provider_sync_admission_and_budget_limits",
+	logger.Info("provider_sync_budget_limits",
 		"budget_limit_light", limits[providersync.CostLight],
 		"budget_limit_medium", limits[providersync.CostMedium],
 		"budget_limit_heavy", limits[providersync.CostHeavy],
-		"admission_cap_light", caps["light"],
-		"admission_cap_medium", caps["medium"],
-		"admission_cap_heavy", caps["heavy"],
-		"admission_clamp", clamp,
 	)
 }
 

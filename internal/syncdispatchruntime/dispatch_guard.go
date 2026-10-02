@@ -124,6 +124,32 @@ func EffectiveAdmissionCaps() (clamp int, caps map[string]int) {
 	return syncUnitConcurrencyPerBucket(), caps
 }
 
+// logAdmissionCaps writes ONE Info line, when the service that runs the guard
+// is constructed, with the cap the guard applies per cost class, the clamp it
+// read from THIS process's environment and the worker budget limit of the same
+// class from the one table, so a cap/budget mismatch or a lowered clamp is
+// visible at Info where the cap is enforced (CHAOS-7881). No org id or tenant
+// data.
+func logAdmissionCaps(logger *slog.Logger) {
+	if logger == nil {
+		logger = slog.Default()
+	}
+	clamp, caps := EffectiveAdmissionCaps()
+	budget := func(class string) int {
+		limit, _ := providerfoundation.CostClassBudgetLimit(class)
+		return limit
+	}
+	logger.Info("sync_dispatch_admission_caps",
+		"admission_cap_light", caps["light"],
+		"admission_cap_medium", caps["medium"],
+		"admission_cap_heavy", caps["heavy"],
+		"budget_limit_light", budget("light"),
+		"budget_limit_medium", budget("medium"),
+		"budget_limit_heavy", budget("heavy"),
+		"admission_clamp", clamp,
+	)
+}
+
 // concurrencyCapForCostClass is the admission cap of one (org, provider,
 // cost_class) bucket (CHAOS-7434). It is the worker budget's limit for that
 // class (providerfoundation.CostClassBudgetLimit, the same table the worker's

@@ -131,7 +131,7 @@ func postOAuthToken(ctx context.Context, payload map[string]string, opts OAuthTo
 	}
 	httpClient := opts.HTTPClient
 	if httpClient == nil {
-		httpClient = &http.Client{Timeout: timeout}
+		httpClient = NewDefaultHTTPClient(timeout)
 	} else if httpClient.Timeout == 0 {
 		copied := *httpClient
 		copied.Timeout = timeout
@@ -206,7 +206,7 @@ func FetchAccessibleResources(ctx context.Context, accessToken string, opts Acce
 	}
 	httpClient := opts.HTTPClient
 	if httpClient == nil {
-		httpClient = &http.Client{Timeout: timeout}
+		httpClient = NewDefaultHTTPClient(timeout)
 	} else if httpClient.Timeout == 0 {
 		copied := *httpClient
 		copied.Timeout = timeout

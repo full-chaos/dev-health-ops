@@ -103,13 +103,7 @@ func TestRedirectTargetIsTheSchemeAndHostOfALocation(t *testing.T) {
 	}
 }
 
-// A transport error that is not a redirect keeps its class and its text: only net/http's refusal of a Location is reworded.
-type failingTransport struct{ err error }
-
-func (transport failingTransport) RoundTrip(*http.Request) (*http.Response, error) {
-	return nil, transport.err
-}
-
+// A transport error that is not a redirect keeps its class and its (class-only) text: only net/http's refusal of a Location is reworded.
 func TestAnOrdinaryTransportErrorKeepsItsClassAndText(t *testing.T) {
 	core := Core{
 		Provider:   "github",
@@ -118,8 +112,8 @@ func TestAnOrdinaryTransportErrorKeepsItsClassAndText(t *testing.T) {
 	}
 	_, err := core.Get(context.Background(), "https://api.example.test/x", "GET /probe")
 	var apiErr *Error
-	if !errors.As(err, &apiErr) || apiErr.Class != "TransportError" || !strings.Contains(apiErr.Message, "tls: handshake exploded") {
-		t.Fatalf("err = %v, want a TransportError that keeps the transport's text", err)
+	if !errors.As(err, &apiErr) || apiErr.Class != "TransportError" || apiErr.Message != "Get request failed: protocol" {
+		t.Fatalf("err = %v, want a TransportError with the class-only text", err)
 	}
 	if strings.Contains(apiErr.Message, "unexpected redirect") {
 		t.Fatalf("an ordinary transport error was reworded as a redirect: %s", apiErr.Message)

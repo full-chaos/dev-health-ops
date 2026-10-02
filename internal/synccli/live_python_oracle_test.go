@@ -1,7 +1,11 @@
 package synccli
 
 import (
+	"bytes"
+	"context"
+	"crypto/sha256"
 	_ "embed"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"math"
@@ -9,7 +13,6 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
-	"runtime"
 	"sort"
 	"strconv"
 	"strings"
@@ -198,75 +201,151 @@ func credentialView(run map[string]any, creds *GitHubCredentials) {
 	run["credential_base_url"] = tOptStr(creds.BaseURL)
 }
 
-func requireSyncOracleEnv(t *testing.T) string {
-	t.Helper()
-	if os.Getenv("DEV_HEALTH_LIVE_PYTHON_ORACLES") != "1" {
-		t.Skip("live Python oracles run only through ci/check_go.sh live-python-oracles")
+// syncTargetPythonBuild is the build whose Python `dev-hops sync` path answered the corpus: a build that
+// still carried the Python CLI.
+const syncTargetPythonBuild = "a4847c5e93607451a0c987b314d37e02fc43ce85"
+
+// syncTargetKeyPlaceholder stands for the GitHub App key file the corpus names: the golden's key must not hold
+// a per-run temporary path, so the producer swaps it for a real file and swaps it back in the answers.
+const syncTargetKeyPlaceholder = "/tmp/dho-sync-target-app-key.pem"
+
+// syncTargetPythonSettings are the variables that shape the producer's answers, as constants: the producer's
+// environment AND part of the golden's request key (a changed value fails the frozen replay). The corpus's own
+// environment (the variables each case sets for the verb) is DATA the Python program applies itself.
+var syncTargetPythonSettings = map[string]string{"PYTHONHASHSEED": "0", "OTEL_ENABLED": "false"}
+
+// redactSecrets replaces the value of every "token" field of an answer by a digest and a length: an
+// environment credential is never stored in a golden (CHAOS-6735), yet two different tokens still differ.
+func redactSecrets(value any) any {
+	switch typed := value.(type) {
+	case map[string]any:
+		out := make(map[string]any, len(typed))
+		for key, child := range typed {
+			if key == "token" {
+				if leaf, ok := child.(map[string]any); ok && leaf["t"] == "str" {
+					text, _ := leaf["v"].(string)
+					sum := sha256.Sum256([]byte(text))
+					out[key] = map[string]any{"t": "str", "v": fmt.Sprintf("<sha256:%s len:%d>", hex.EncodeToString(sum[:6]), len(text))}
+					continue
+				}
+			}
+			out[key] = redactSecrets(child)
+		}
+		return out
+	case []any:
+		out := make([]any, len(typed))
+		for index, child := range typed {
+			out[index] = redactSecrets(child)
+		}
+		return out
 	}
-	if os.Getenv("DEV_HEALTH_LIVE_PYTHON_ORACLE_PROOF_DIR") == "" {
-		t.Fatal("live Python oracle opt-in requires a proof directory from ci/check_go.sh")
-	}
-	_, currentFile, _, _ := runtime.Caller(0)
-	repoRoot := filepath.Dir(filepath.Dir(filepath.Dir(currentFile)))
-	python := pyoracle.Resolve(t, repoRoot)
-	pyoracle.RequireDeployed(t, python, repoRoot)
-	return python
+	return value
 }
 
-// TestSyncTargetMatchesLivePython compares BuildPlan with the real
-// dev-hops path -- build_parser().parse_args, main()'s org resolution,
-// run_preflight_checks and run_sync_target with only its I/O seams replaced --
-// over every corpus command line: the stage that refuses (argparse, preflight,
-// SystemExit) with its exit code or message, or, when the request runs, every
-// argument the processor would have been called with.
-func TestSyncTargetMatchesLivePython(t *testing.T) {
-	python := requireSyncOracleEnv(t)
-	keyFile := filepath.Join(t.TempDir(), "app-key.pem")
-	if err := os.WriteFile(keyFile, []byte("-----BEGIN KEY-----\n"), 0o600); err != nil {
+// TestSyncTargetMatchesFrozenPython compares BuildPlan with what the REAL dev-hops path (build_parser().
+// parse_args, main()'s org resolution, run_preflight_checks and run_sync_target with only its I/O seams
+// replaced) answered over every corpus command line: the stage that refuses (argparse, preflight, SystemExit)
+// with its exit code or message, or, when the request runs, every argument the processor would have been
+// called with. The answers were executed once on syncTargetPythonBuild and are frozen in
+// testdata/golden/sync_target.json (the recipe regenerates them by execution); the digest of the corpus and of
+// the program are the golden's key. Environment credentials of the corpus are never stored: the key holds the
+// corpus's digest, and the answers hold a digest and a length in place of a token.
+func TestSyncTargetMatchesFrozenPython(t *testing.T) {
+	repoRoot, err := filepath.Abs(filepath.Join("..", ".."))
+	if err != nil {
 		t.Fatal(err)
 	}
-	corpus := syncTargetCorpus(keyFile)
+	golden := venueoracle.OpenGolden(t, venueoracle.GoldenSpec{
+		Path:        "testdata/golden/sync_target.json",
+		PythonBuild: syncTargetPythonBuild,
+		SHA256:      "fb4c6adecbf93c5ba22701dfd3d3eccc1beb28a0a856f7b5bd95be33f29245f9",
+		Recipe: "git worktree add --detach $DIR " + syncTargetPythonBuild + " (with its .venv: uv sync --frozen --no-install-project); then from the repository root: " +
+			"go run ./internal/testsupport/venueoracle/goldenrecord -pkg ./internal/synccli/ -test '^TestSyncTargetMatchesFrozenPython$' -python-root $DIR",
+	})
+	root := golden.PythonRoot(t, repoRoot)
+
+	corpus := syncTargetCorpus(syncTargetKeyPlaceholder)
 	input, err := json.Marshal(corpus)
 	if err != nil {
 		t.Fatal(err)
 	}
-	command := exec.Command(python, "-c", syncTargetOracleProgram)
-	command.Stdin = strings.NewReader(string(input))
-	command.Env = append(os.Environ(), "PYTHONHASHSEED=0")
-	output, err := command.Output()
-	if err != nil {
-		var stderr []byte
-		if exitErr, ok := err.(*exec.ExitError); ok {
-			stderr = exitErr.Stderr
+	keySum := sha256.Sum256(input)
+	// The key names the corpus by its digest (the corpus holds test environment credentials, which a golden
+	// does not store); a changed corpus is another request.
+	request := venueoracle.ProgramRequest("sync target corpus", syncTargetOracleProgram, []byte("corpus sha256 "+hex.EncodeToString(keySum[:])), syncTargetPythonSettings)
+	answers := golden.Produce(t, root, []venueoracle.Request{request}, func(producer *venueoracle.Producer, _ []venueoracle.Request) []venueoracle.Response {
+		producer.RequireDeployed()
+		keyFile := filepath.Join(t.TempDir(), "app-key.pem")
+		if err := os.WriteFile(keyFile, []byte("-----BEGIN KEY-----\n"), 0o600); err != nil {
+			t.Fatal(err)
 		}
-		t.Fatalf("live python: %v", pyoracle.RunError(python, err, stderr))
-	}
+		command, err := producer.Command(context.Background(), syncTargetPythonSettings, nil, "-c", syncTargetOracleProgram)
+		if err != nil {
+			t.Fatal(err)
+		}
+		command.Stdin = bytes.NewReader(bytes.ReplaceAll(input, []byte(syncTargetKeyPlaceholder), []byte(keyFile)))
+		output, err := command.Output()
+		if err != nil {
+			var stderr []byte
+			if exitErr, ok := err.(*exec.ExitError); ok {
+				stderr = exitErr.Stderr
+			}
+			t.Fatalf("live python: %v", pyoracle.RunError(command.Path, err, stderr))
+		}
+		var answered []any
+		if err := json.Unmarshal(bytes.ReplaceAll(output, []byte(keyFile), []byte(syncTargetKeyPlaceholder)), &answered); err != nil {
+			t.Fatalf("decode python answer: %v", err)
+		}
+		body, err := json.Marshal(redactSecrets(answered))
+		if err != nil {
+			t.Fatal(err)
+		}
+		return []venueoracle.Response{{Status: 0, Body: venueoracle.PackBody(body)}}
+	})
+	golden.Consumed(t, answers...)
 	var want []map[string]any
-	if err := json.Unmarshal(output, &want); err != nil {
+	if err := json.Unmarshal([]byte(venueoracle.UnpackBody(t, answers[0].Body)), &want); err != nil {
 		t.Fatalf("decode python answer: %v", err)
 	}
 	if len(want) != len(corpus) {
 		t.Fatalf("python answered %d for %d cases", len(want), len(corpus))
 	}
 
+	// dho reads the App key file by its real path: the placeholder is swapped for a real file here and swapped
+	// back in the answer it renders.
+	goKeyFile := filepath.Join(t.TempDir(), "app-key.pem")
+	if err := os.WriteFile(goKeyFile, []byte("-----BEGIN KEY-----\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	swap := func(text string) string { return strings.ReplaceAll(text, syncTargetKeyPlaceholder, goKeyFile) }
 	stages := map[string]int{}
 	mismatches := 0
 	for index, c := range corpus {
-		target, args := c.Args[0], c.Args[1:]
-		env := c.Env
+		target := c.Args[0]
+		args := make([]string, len(c.Args)-1)
+		for i, arg := range c.Args[1:] {
+			args[i] = swap(arg)
+		}
+		env := map[string]string{}
+		for name, value := range c.Env {
+			env[name] = swap(value)
+		}
 		in := Inputs{
 			Lookup: func(name string) (string, bool) { v, ok := env[name]; return v, ok },
 			Now:    func() time.Time { return time.Date(2026, 9, 25, 12, 0, 0, 0, time.UTC) },
 		}
 		got := goResult(target, oracleCase{Args: args, Env: env}, in)
-		gotJSON, _ := json.Marshal(got)
+		gotRedacted, _ := redactSecrets(mustGeneric(got)).(map[string]any)
+		gotJSON, _ := json.Marshal(gotRedacted)
+		gotJSON = []byte(strings.ReplaceAll(string(gotJSON), goKeyFile, syncTargetKeyPlaceholder))
+		_ = json.Unmarshal(gotJSON, &gotRedacted)
 		wantJSON, _ := json.Marshal(want[index])
 		stage, _ := want[index]["stage"].(map[string]any)
 		stages[fmt.Sprint(stage["v"])]++
 		if canonical(gotJSON) != canonical(wantJSON) {
 			mismatches++
 			if mismatches <= 40 {
-				t.Errorf("case %d %q env=%v: %s", index, c.Args, env, diffLeaves(got, want[index]))
+				t.Errorf("case %d %q: %s", index, c.Args, diffLeaves(gotRedacted, want[index]))
 			}
 		}
 	}
@@ -286,25 +365,8 @@ func TestSyncTargetMatchesLivePython(t *testing.T) {
 	if mismatches > 0 {
 		t.Fatalf("%d of %d command lines differ", mismatches, len(corpus))
 	}
-	proof := os.Getenv("DEV_HEALTH_LIVE_PYTHON_ORACLE_PROOF_DIR")
-	if err := os.WriteFile(filepath.Join(proof, "cli-sync-target"), []byte("executed"), 0o600); err != nil {
-		t.Fatal(err)
-	}
-	writeVenueProof(t)
-}
-
-// writeVenueProof records that the running test made a real comparison against
-// the live Python producer: venueoracle.WriteProof writes the proof file the
-// venue-oracles verb (ci/check_go.sh, registry ci/venue_oracle_registry.d/
-// internal__synccli.tsv) reads under the test's own name, and the registry guard
-// (CHAOS-6806) requires a run row's test to reach it. Only a test that has not
-// failed writes it.
-func writeVenueProof(t *testing.T) {
-	t.Helper()
-	if t.Failed() {
-		return
-	}
-	venueoracle.WriteProof(t)
+	golden.SkipDiff(t)
+	golden.Finish(t)
 }
 
 // canonical re-marshals through a map so key order never matters.

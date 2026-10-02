@@ -143,7 +143,7 @@ func FetchSchemaIntrospection(
 
 	httpClient := opts.HTTPClient
 	if httpClient == nil {
-		httpClient = &http.Client{Timeout: clientTimeout}
+		httpClient = atlassian.NewDefaultHTTPClient(clientTimeout)
 	} else if httpClient.Timeout == 0 {
 		copied := *httpClient
 		copied.Timeout = clientTimeout

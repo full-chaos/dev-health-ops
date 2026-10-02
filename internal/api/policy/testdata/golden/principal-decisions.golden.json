@@ -1,0 +1,32 @@
+{
+  "header": {
+    "test": "TestPrincipalDecisionsMatchFrozenPython",
+    "python_build": "a4847c5e93607451a0c987b314d37e02fc43ce85",
+    "producer_digest": "6e1dc97e68624398015f60caee160cceee6ae601bd434d01b8b7d5975267e137",
+    "recipe": "git worktree add --detach $DIR a4847c5e93607451a0c987b314d37e02fc43ce85 (with its .venv: uv sync --frozen --no-install-project); then from the repository root: go run ./internal/testsupport/venueoracle/goldenrecord -pkg ./internal/api/policy/ -test '^TestPrincipalDecisionsMatchFrozenPython$' -python-root $DIR",
+    "recorded_by": "goldenrecord",
+    "blanked": {}
+  },
+  "requests": [
+    {
+      "name": "producer identity",
+      "method": "PYTHON",
+      "path": "program sha256 92444c0454ed5d0e22662eaebfab5442c6405fbf1f880783deb6a557dba43757 env sha256 969169a1702b285f3a9e4b602d19052b0d6a3c6b2a44dd7425bef0f696436295",
+      "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "request_headers_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "status": 0,
+      "headers": {},
+      "body": "python 3.14.7\nunicodedata 16.0.0\npyjwt 2.15.0\n"
+    },
+    {
+      "name": "principal decisions",
+      "method": "PYTHON",
+      "path": "program sha256 dfdfb5ee96699b186d011bb312193db516ee93c94ba25e1446cb8b27455a7079 env sha256 d3cd4d02d0400df020236ae7182067dd10c7e15f4f101629f774309d9bcee8a1",
+      "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "request_headers_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "status": 0,
+      "headers": {},
+      "body": "[{\"name\": \"minted\", \"decision\": \"accepted\", \"tv\": {\"value\": 3}}, {\"name\": \"minted superuser\", \"decision\": \"accepted\", \"tv\": {\"value\": 0}}, {\"name\": \"minted impersonating\", \"decision\": \"accepted\", \"tv\": {\"value\": 0}}, {\"name\": \"refresh\", \"decision\": \"refused\", \"tv\": null}, {\"name\": \"minted expired\", \"decision\": \"refused\", \"tv\": null}, {\"name\": \"other key\", \"decision\": \"refused\", \"tv\": null}, {\"name\": \"hs512\", \"decision\": \"refused\", \"tv\": null}, {\"name\": \"alg none\", \"decision\": \"refused\", \"tv\": null}, {\"name\": \"tampered\", \"decision\": \"refused\", \"tv\": null}, {\"name\": \"garbage\", \"decision\": \"refused\", \"tv\": null}, {\"name\": \"no aud no iss\", \"decision\": \"accepted\", \"tv\": {\"value\": 0}}, {\"name\": \"wrong aud\", \"decision\": \"refused\", \"tv\": null}, {\"name\": \"wrong iss\", \"decision\": \"refused\", \"tv\": null}, {\"name\": \"aud list with match\", \"decision\": \"accepted\", \"tv\": {\"value\": 0}}, {\"name\": \"missing sub\", \"decision\": \"refused\", \"tv\": null}, {\"name\": \"missing type\", \"decision\": \"refused\", \"tv\": null}, {\"name\": \"missing exp\", \"decision\": \"refused\", \"tv\": null}, {\"name\": \"wrong type\", \"decision\": \"refused\", \"tv\": null}, {\"name\": \"type not a string\", \"decision\": \"refused\", \"tv\": null}, {\"name\": \"iat future\", \"decision\": \"refused\", \"tv\": null}, {\"name\": \"nbf future\", \"decision\": \"refused\", \"tv\": null}, {\"name\": \"nbf past\", \"decision\": \"accepted\", \"tv\": {\"value\": 0}}, {\"name\": \"sub empty\", \"decision\": \"accepted\", \"tv\": {\"value\": 0}}, {\"name\": \"tv absent\", \"decision\": \"accepted\", \"tv\": {\"value\": 0}}, {\"name\": \"tv null\", \"decision\": \"accepted\", \"tv\": {\"value\": 0}}, {\"name\": \"tv int\", \"decision\": \"accepted\", \"tv\": {\"value\": 4}}, {\"name\": \"tv true\", \"decision\": \"accepted\", \"tv\": {\"value\": 1}}, {\"name\": \"tv float\", \"decision\": \"accepted\", \"tv\": {\"value\": 2}}, {\"name\": \"tv negative float\", \"decision\": \"accepted\", \"tv\": {\"value\": -2}}, {\"name\": \"tv numeric string\", \"decision\": \"accepted\", \"tv\": {\"value\": 7}}, {\"name\": \"tv underscore string\", \"decision\": \"accepted\", \"tv\": {\"value\": 10}}, {\"name\": \"tv signed string\", \"decision\": \"accepted\", \"tv\": {\"value\": -3}}, {\"name\": \"tv bad string\", \"decision\": \"accepted\", \"tv\": {\"unreadable\": true}}, {\"name\": \"tv float string\", \"decision\": \"accepted\", \"tv\": {\"unreadable\": true}}, {\"name\": \"tv list\", \"decision\": \"accepted\", \"tv\": {\"unreadable\": true}}, {\"name\": \"tv object\", \"decision\": \"accepted\", \"tv\": {\"unreadable\": true}}]\n"
+    }
+  ]
+}

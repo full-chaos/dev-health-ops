@@ -48,7 +48,7 @@ func (c *JiraRESTClient) GetJSON(ctx context.Context, path string, query map[str
 
 	httpClient := c.HTTPClient
 	if httpClient == nil {
-		httpClient = &http.Client{Timeout: defaultTimeout}
+		httpClient = atlassian.NewDefaultHTTPClient(defaultTimeout)
 	}
 
 	nowFn := c.Now
@@ -244,7 +244,7 @@ func (c *JiraRESTClient) Delete(ctx context.Context, path string) error {
 
 	httpClient := c.HTTPClient
 	if httpClient == nil {
-		httpClient = &http.Client{Timeout: defaultTimeout}
+		httpClient = atlassian.NewDefaultHTTPClient(defaultTimeout)
 	}
 
 	req, err := http.NewRequestWithContext(ctx, http.MethodDelete, url, nil)
@@ -303,7 +303,7 @@ func (c *JiraRESTClient) requestJSON(ctx context.Context, method, path string, d
 
 	httpClient := c.HTTPClient
 	if httpClient == nil {
-		httpClient = &http.Client{Timeout: defaultTimeout}
+		httpClient = atlassian.NewDefaultHTTPClient(defaultTimeout)
 	}
 
 	req, err := http.NewRequestWithContext(ctx, method, url, bodyReader)

@@ -36,7 +36,7 @@ done
 # CHAOS-7162: dho_api_ch is declared by a host file mounted into ClickHouse's users.d (compose.bigboy.clickhouse-users.yml), so a
 # ClickHouse recreate no longer loses it. The overlay requires the path; the default is the credentials directory's file.
 export DHO_API_CH_USERS_XML="${DHO_API_CH_USERS_XML:-$R/.go-api-dev/dho_api_ch.xml}"
-export COMPOSE_FILE=compose.yml:compose/compose.go.workers.yml:compose/compose.metrics-api.local.yml:.remember/lanes/team-lead/reconciler-sweep-override.yml:compose/compose.bigboy.images.yml:compose/compose.bigboy.workers.yml:$HERE/compose.bigboy.clickhouse-users.yml:$HERE/compose.bigboy.billing-edge.yml:$HERE/compose.bigboy.router.yml
+export COMPOSE_FILE=compose.yml:compose/compose.go.workers.yml:compose/compose.metrics-api.local.yml:.remember/lanes/team-lead/reconciler-sweep-override.yml:compose/compose.bigboy.images.yml:$HERE/compose.bigboy.workers.yml:$HERE/compose.bigboy.clickhouse-users.yml:$HERE/compose.bigboy.billing-edge.yml:$HERE/compose.bigboy.router.yml
 cd "$R"
 st() { echo "STEP $1 rc=$2 $(date -u +%T)"; }
 echo "cut start $(date -u +%T) new=$NEW root=$R tools=$HERE"
@@ -96,7 +96,7 @@ if [ -n "$VALUES" ]; then
   # CHAOS-6987 (team-lead, hard rule): `docker compose config` output never reaches a pipe, a
   # file, or a screen except through ONE redacting filter (compose-config-redacted.sh) -- it
   # emits NAME=<length> only, never a resolved value, even for a length-only check like this one.
-  REDACTED=$($HERE/compose-config-redacted.sh --env-file ops/.env -f compose.yml -f compose/compose.go.workers.yml -f compose/compose.metrics-api.local.yml -f .remember/lanes/team-lead/reconciler-sweep-override.yml -f compose/compose.bigboy.images.yml -f compose/compose.bigboy.workers.yml); RED_RC=$?
+  REDACTED=$($HERE/compose-config-redacted.sh --env-file ops/.env -f compose.yml -f compose/compose.go.workers.yml -f compose/compose.metrics-api.local.yml -f .remember/lanes/team-lead/reconciler-sweep-override.yml -f compose/compose.bigboy.images.yml -f $HERE/compose.bigboy.workers.yml); RED_RC=$?
   BLANK=""
   for entry in $(awk -F': \\$\\{' '/\$\{[A-Z_]+\}$/{print $1}' "$REC.query-api-enabled-flags.generated" | tr -d ' '); do
     LEN=$(echo "$REDACTED" | awk -F= -v n="$entry" '$1==n{print $2}')
@@ -136,7 +136,14 @@ $HERE/bigboy-repin.sh $OLD8 $NEW > $REC.repin.out 2>&1; st repin $?
 # pages the backend underneath had already changed shape for. compose.bigboy.images.yml now
 # pins `web` by digest too (build: !reset null); this STEP repins it to the CI image for web's
 # OWN main branch HEAD, every cut, no host build, before `up` recreates it below.
-$HERE/bigboy-repin-web.sh > $REC.repin-web.out 2>&1; st repin-web $?
+# CHAOS-7901: the caller picks the web build by the environment of THIS script: WEB_REPIN=skip (web stays as it is),
+# WEB_REPIN=<40-hex web commit> (that build) or unset/`head` (web main HEAD, the default). Cut 4 waited 10 minutes and
+# ended `repin-web rc=3` because web main HEAD was a CI-only commit with no image; WEB_REPIN=skip avoids that wait.
+$HERE/bigboy-repin-web.sh > $REC.repin-web.out 2>&1; rc_web=$?; st repin-web $rc_web
+# CHAOS-7687: a re-pin that could not resolve an image FAILS the cut here, before migrate and before any recreate
+# (a web smoke on the OLD web, with no failed cut, read as a measurement that did not happen). WEB_REPIN=skip is the
+# explicit way to keep the current web pin.
+[ $rc_web = 0 ] || { echo "cut stops: web re-pin failed rc=$rc_web (see $REC.repin-web.out); WEB_REPIN=skip keeps the current web pin"; exit 1; }
 
 for f in $R/_records/bigboy-$OLD8/pass-bigboy-corpus-admin7.sh; do [ -f $f ] && cp -n $f $REC/; done
 # CHAOS-7022 (D2804/D2811): pre-roll routing carry, refuse-not-skip. Runs HERE -- after repin
@@ -247,7 +254,7 @@ docker compose --env-file ops/.env up -d --no-deps --no-build api query-api go-a
 # CHAOS-7131: the recreated web must still carry the names the router overlay sets (names only, never values).
 "$HERE/container-env-names.sh" dev-health-web-1 > "$REC.web-env-names-after-up" 2>/dev/null
 "$HERE/check-web-env-required.sh" "$REC.web-env-names-after-up" BACKEND_URL AUTH_URL; st web-env-after-up $?
-docker compose --env-file ops/.env up -d --no-deps --no-build go-worker go-worker-ops go-scheduler go-reconciler go-stream-ingest go-stream-external go-stream-pagerduty > $REC/up-workers.out 2>&1; rcw=$?; st up-workers $rcw; [ $rcw = 0 ] || { echo "ABORT: worker plane not recreated = INCOMPLETE pass (Trap #420)"; exit 1; }   # Trap #420: every plane from the cut's CI digests
+docker compose --env-file ops/.env up -d --no-deps --no-build go-worker go-worker-heavy go-worker-ops go-scheduler go-reconciler go-stream-ingest go-stream-external go-stream-pagerduty > $REC/up-workers.out 2>&1; rcw=$?; st up-workers $rcw; [ $rcw = 0 ] || { echo "ABORT: worker plane not recreated = INCOMPLETE pass (Trap #420)"; exit 1; }   # Trap #420: every plane from the cut's CI digests
 sleep 45; curl -s -o /dev/null -w "%{http_code}" http://127.0.0.1:8093/ready | grep -q 200; st go-api-ready $?
 # R467: every path the router sends to a Go plane has a handler in the build just started (405/401 to a
 # ROUTEPROBE request; 404 = values ahead of the build). Runs only with pinned values.

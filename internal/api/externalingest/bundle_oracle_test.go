@@ -2,10 +2,10 @@ package externalingest
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"github.com/full-chaos/dev-health-ops/internal/api/pyjson"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"testing"
 
@@ -32,7 +32,7 @@ import (
 // this package's Go-side merge (schemaDocument) + ETag computation
 // (computeETag) agree with Python's on the full document, not just a hash.
 func TestSchemaBundleMatchesFrozenPython(t *testing.T) {
-	frozen := venueoracle.OpenGolden(t, programGolden("schema-bundle", t.Name(), "c96c4a203c46909b88988216a290c0af91c10a03b07ae87559a77fdc21ebde0b"))
+	frozen := venueoracle.OpenGolden(t, programGolden("schema-bundle", t.Name(), "e8a475f2d99ec02ebd7b102e4636464e3fe64309ba9bd7f52b0e9565e67370a8"))
 	root, err := filepath.Abs(filepath.Join("..", "..", ".."))
 	if err != nil {
 		t.Fatal(err)
@@ -43,17 +43,19 @@ func TestSchemaBundleMatchesFrozenPython(t *testing.T) {
 		t.Fatal(err)
 	}
 	request := venueoracle.ProgramRequest("schema bundle producer", string(program), nil, producerEnv)
-	answers := frozen.Produce(t, root, []venueoracle.Request{request}, func(_ *venueoracle.Producer, _ []venueoracle.Request) []venueoracle.Response {
-		python := pyoracle.Resolve(t, root)
-		command := exec.Command(python, "testdata/python_schema_bundle_oracle.py")
+	answers := frozen.Produce(t, root, []venueoracle.Request{request}, func(producer *venueoracle.Producer, _ []venueoracle.Request) []venueoracle.Response {
+		producer.RequireDeployed()
+		command, err := producer.Command(context.Background(), producerEnv, nil, "testdata/python_schema_bundle_oracle.py")
+		if err != nil {
+			t.Fatal(err)
+		}
 		command.Dir = filepath.Join(root, "internal", "api", "externalingest")
-		command.Env = producerCommandEnv(root)
 		var stdout, stderr bytes.Buffer
 		command.Stdout = &stdout
 		command.Stderr = &stderr
 		if err := command.Run(); err != nil {
 			t.Fatalf("execute production Python schema-bundle oracle: %v\nstdout:\n%s",
-				pyoracle.RunError(python, err, stderr.Bytes()), stdout.Bytes())
+				pyoracle.RunError(command.Path, err, stderr.Bytes()), stdout.Bytes())
 		}
 		return []venueoracle.Response{{Status: 0, Body: withoutLogLines(stdout.Bytes())}}
 	})

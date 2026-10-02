@@ -49,6 +49,7 @@ func TestPythonOracleLoaderRejectsUnexpectedSource(t *testing.T) {
 	if err == nil || !strings.Contains(string(output), "unexpected oracle source") {
 		t.Fatalf("unexpected source error=%v output=%s", err, output)
 	}
+	writeLoaderProof(t, "providersync-loader-rejects-unexpected-source")
 }
 
 func TestPythonOracleLoaderIgnoresSiblingPythonPath(t *testing.T) {
@@ -99,6 +100,7 @@ func TestPythonOracleLoaderIgnoresSiblingPythonPath(t *testing.T) {
 	if _, err := os.Stat(sentinel); err == nil || !os.IsNotExist(err) {
 		t.Fatalf("sibling module executed: stat error=%v output=%s", err, output)
 	}
+	writeLoaderProof(t, "providersync-loader-ignores-sibling-pythonpath")
 }
 
 func TestPythonOracleLoaderPurgesForgedAndHostilePreloads(t *testing.T) {
@@ -137,6 +139,7 @@ func TestPythonOracleLoaderPurgesForgedAndHostilePreloads(t *testing.T) {
 		origin != expectedOrigin {
 		t.Fatalf("Python oracle origin=%q err=%v", result.Origin, err)
 	}
+	writeLoaderProof(t, "providersync-loader-purges-preloads")
 }
 
 func TestParityOraclesRunWithoutSQLAlchemy(t *testing.T) {
@@ -222,6 +225,7 @@ func TestParityOraclesRunWithoutSQLAlchemy(t *testing.T) {
 			}
 		})
 	}
+	writeLoaderProof(t, "providersync-oracles-without-sqlalchemy")
 }
 
 func TestPythonOracleLoaderHasNoCallerControlledExecutionOrSubprocess(t *testing.T) {
@@ -244,5 +248,20 @@ func TestPythonOracleLoaderHasNoCallerControlledExecutionOrSubprocess(t *testing
 		if strings.Contains(string(contents), forbidden) {
 			t.Fatalf("oracle loader must not use %q", forbidden)
 		}
+	}
+	writeLoaderProof(t, "providersync-loader-no-caller-controlled-execution")
+}
+
+// writeLoaderProof records, for ci/check_go.sh live-python-oracles, that the named loader test ran to its end: the
+// entry ci/live_python_oracles.d/010-providersync-loader.run requires each proof file. It writes nothing outside that
+// verb (no proof directory), so a plain `go test` is unchanged.
+func writeLoaderProof(t *testing.T, name string) {
+	t.Helper()
+	dir := os.Getenv(livePythonOracleProofDir)
+	if dir == "" {
+		return
+	}
+	if err := os.WriteFile(filepath.Join(dir, name), []byte("executed"), 0o600); err != nil {
+		t.Fatal(err)
 	}
 }

@@ -224,6 +224,36 @@ func (r *Registry) WriteMetricsPartial(output io.Writer) ([]MetricsSourceOutcome
 	return outcomes, nil
 }
 
+// EachMetricsFragment calls fn once per registered source, in stable name
+// order, skipping the names in skip: with the source's complete fragment, or
+// with its error and no fragment when it fails (a failing source never
+// leaves a truncated fragment). It is for consumers that need the families
+// rather than the text, such as the OTLP bridge.
+func (r *Registry) EachMetricsFragment(skip map[string]bool, fn func(source string, fragment []byte, err error)) {
+	r.mu.RLock()
+	sources := make(map[string]MetricsSource, len(r.metricsSource))
+	for name, source := range r.metricsSource {
+		if !skip[name] {
+			sources[name] = source
+		}
+	}
+	r.mu.RUnlock()
+
+	names := make([]string, 0, len(sources))
+	for name := range sources {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+	for _, name := range names {
+		var fragment bytes.Buffer
+		if err := sources[name].WritePrometheus(&fragment); err != nil {
+			fn(name, nil, fmt.Errorf("write metrics source %q: %w", name, err))
+			continue
+		}
+		fn(name, fragment.Bytes(), nil)
+	}
+}
+
 // WriteMetrics writes registered sources in stable name order, failing on the
 // first source that errors, with NOTHING reaching output unless every source
 // succeeds. Prefer WriteMetricsPartial for anything serving a scrape; this

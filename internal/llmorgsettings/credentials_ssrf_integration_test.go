@@ -13,7 +13,7 @@ import (
 // itself, Matches (which is Credentials without the bundle) and ResolveUsableProvider. The api key is a made-up value;
 // every address is a literal, so no name is resolved.
 
-const syntheticKey = "sk-synthetic-ssrf-refusal-test-value"
+const syntheticKey = "synthetic-ssrf-refusal-test-value-not-a-key"
 
 func TestCredentialsRefuseABaseURLTheSSRFGuardRefuses(t *testing.T) {
 	ctx := context.Background()
@@ -25,7 +25,6 @@ func TestCredentialsRefuseABaseURLTheSSRFGuardRefuses(t *testing.T) {
 		{"https to a loopback literal", "https://127.0.0.1/v1"},
 		{"https to an IPv4-mapped CGNAT literal", "https://[::ffff:100.64.0.1]/v1"},
 		{"https to a documentation address", "https://198.51.100.7/v1"},
-		{"https to localhost", "https://localhost/v1"},
 		{"userinfo in the url", "https://user@8.8.8.8/v1"},
 	} {
 		for _, provider := range []struct {

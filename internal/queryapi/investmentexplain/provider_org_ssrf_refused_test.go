@@ -13,7 +13,7 @@ import (
 // a double that ALSO fills the bundle shows what a caller does with key material it must not use. The key is a made-up
 // value; the base_url is one the SSRF guard refuses.
 
-const refusedBundleKey = "sk-synthetic-refused-bundle-value"
+const refusedBundleKey = "synthetic-refused-bundle-value-not-a-key"
 
 func refusedBundleResolver() *fakeOrgResolver {
 	return &fakeOrgResolver{

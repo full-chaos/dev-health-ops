@@ -17,6 +17,7 @@ import (
 	"path/filepath"
 	"regexp"
 	"runtime"
+	"sort"
 	"strconv"
 	"strings"
 	"sync"
@@ -329,23 +330,22 @@ var netCredentialConstants = map[string]bool{
 // replay), and the plants of CHAOS-7790 (a different token = RED, the scrub removed = RED). CHAOS-7898 moves push_net to a
 // recorder-side digest scrub for a declared credential constant; no other golden uses a producer-side scrub.
 func netScrub(text string) string {
-	digest := func(value string) string {
-		sum := sha256.Sum256([]byte(value))
-		return hex.EncodeToString(sum[:6])
+	// Exact constants only, longest first (fcpush_f is a prefix of fcpush_flag): no pattern decides what is replaced.
+	constants := make([]string, 0, len(netCredentialConstants))
+	for value := range netCredentialConstants {
+		constants = append(constants, value)
 	}
-	text = netAuthScheme.ReplaceAllStringFunc(text, func(match string) string {
-		parts := netAuthScheme.FindStringSubmatch(match)
-		if !netCredentialConstants[parts[2]] {
-			return match // not a listed credential: left as it is, netUnscrubbed names it
+	sort.Slice(constants, func(i, j int) bool {
+		if len(constants[i]) != len(constants[j]) {
+			return len(constants[i]) > len(constants[j])
 		}
-		return parts[1] + " <credential sha256:" + digest(parts[2]) + ">"
+		return constants[i] < constants[j]
 	})
-	return netPushToken.ReplaceAllStringFunc(text, func(match string) string {
-		if !netCredentialConstants[match] {
-			return match
-		}
-		return "<push token sha256:" + digest(match) + ">"
-	})
+	for _, value := range constants {
+		sum := sha256.Sum256([]byte(value))
+		text = strings.ReplaceAll(text, value, "<credential sha256:"+hex.EncodeToString(sum[:6])+">")
+	}
+	return text
 }
 
 // netUnscrubbed is the credential-shaped text still in text after netScrub: a push token of the real shape, or the value of a

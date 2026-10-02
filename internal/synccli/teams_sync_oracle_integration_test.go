@@ -5,16 +5,17 @@ package synccli
 import (
 	"bufio"
 	"context"
+	"crypto/sha256"
 	_ "embed"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
-	"os"
-	"os/exec"
 	"path/filepath"
+	"regexp"
 	"sort"
 	"strconv"
 	"strings"
@@ -29,7 +30,6 @@ import (
 	clickhousestore "github.com/full-chaos/dev-health-ops/internal/storage/clickhouse"
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/chschema"
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/containers"
-	"github.com/full-chaos/dev-health-ops/internal/testsupport/pyoracle"
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/venueoracle"
 )
 
@@ -216,27 +216,113 @@ type teamsOracle struct {
 	goConn           driver.Conn
 	ask              func(map[string]any) map[string]any
 	tablesWrittenAny []string
+
+	// recording is true only while the golden is being recorded: the Python child answers each scenario and
+	// recorded keeps what it did. Otherwise frozen holds those answers and next is the position of the
+	// scenario being compared; cur is the answer of the scenario in hand either way.
+	recording bool
+	recorded  []teamsFrozen
+	frozen    []teamsFrozen
+	next      int
+	cur       *teamsFrozen
 }
 
+// teamsFrozen is what the real Python verb did for one scenario, executed once and frozen in the golden: how
+// the run ended and the rows it left in every table the comparison reads. The columns Python fills from its own
+// clock or its own random source (team_uuid, updated_at, last_synced) are stored as <uuid4> and <time>: the
+// comparison only ever asked whether they were set, and a recording must be the same bytes every time.
+type teamsFrozen struct {
+	Name   string                         `json:"name"`
+	Stage  string                         `json:"stage"`
+	Code   string                         `json:"code"`
+	Tables map[string][]map[string]string `json:"tables"`
+}
+
+// teamsPythonTables are the tables the comparison reads on Python's side.
+var teamsPythonTables = []string{"teams", "team_memberships", "team_repo_ownership", "team_project_ownership", "projects"}
+
+// teamsPythonSettings are the constants of the producer's environment: the entries its answers depend on,
+// part of the golden's request.
+var teamsPythonSettings = map[string]string{"PYTHONHASHSEED": "0", "PYTHONDONTWRITEBYTECODE": "1"}
+
+// teamsCorpusKey is the golden's request key: the scenarios' inputs, hashed. A closure (a seed, an assertion)
+// is named by the text it runs, never by its address.
+func teamsCorpusKey(provider string, entries any) []byte {
+	raw, err := json.Marshal(entries)
+	if err != nil {
+		panic(err)
+	}
+	sum := sha256.Sum256(raw)
+	return []byte("teams " + provider + " corpus sha256 " + hex.EncodeToString(sum[:]))
+}
+
+var teamsUUID4 = regexp.MustCompile(`^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$`)
+
+// normalizePythonTeam replaces the values Python generates (see teamsFrozen) by their kind.
+func normalizePythonTeam(row map[string]string) map[string]string {
+	out := map[string]string{}
+	for column, value := range row {
+		switch {
+		case column == "team_uuid" && teamsUUID4.MatchString(value):
+			value = "<uuid4>"
+		case (column == "updated_at" || column == "last_synced") && value != "" && value != "<NULL>":
+			value = "<time>"
+		}
+		out[column] = value
+	}
+	return out
+}
+
+// python runs (recording) or replays (comparing) the legacy verb for the scenario name: afterwards cur holds
+// how it ended and what it wrote. A golden that does not hold the scenario at this position is a corpus that
+// changed without a re-record.
+func (o *teamsOracle) python(name string, request map[string]any) {
+	o.t.Helper()
+	if o.recording {
+		answer := o.ask(request)
+		value := func(key string) string {
+			if item, ok := answer[key].(map[string]any); ok {
+				return fmt.Sprint(item["v"])
+			}
+			return ""
+		}
+		record := teamsFrozen{Name: name, Stage: value("stage"), Code: value("code"), Tables: map[string][]map[string]string{}}
+		for _, table := range teamsPythonTables {
+			rows := o.rows(o.pythonDatabase, table, "org-1")
+			if table == "teams" {
+				for i := range rows {
+					rows[i] = normalizePythonTeam(rows[i])
+				}
+			}
+			record.Tables[table] = rows
+		}
+		o.recorded = append(o.recorded, record)
+		o.cur = &o.recorded[len(o.recorded)-1]
+		return
+	}
+	if o.next >= len(o.frozen) || o.frozen[o.next].Name != name {
+		o.t.Fatalf("the golden does not hold the scenario %q at position %d: the corpus changed without a re-record", name, o.next)
+	}
+	o.cur = &o.frozen[o.next]
+	o.next++
+}
+
+// pythonRows is what the legacy verb left in table for the scenario in hand.
+func (o *teamsOracle) pythonRows(table string) []map[string]string {
+	o.t.Helper()
+	rows, ok := o.cur.Tables[table]
+	if !ok {
+		o.t.Fatalf("the golden holds no %s rows for %q", table, o.cur.Name)
+	}
+	return rows
+}
+
+// newTeamsOracle builds the two ClickHouse databases and the migration chain both planes write to. It starts no
+// Python: a recording asks startPython for the child, a comparison replays the golden.
 func newTeamsOracle(t *testing.T) *teamsOracle {
-	t.Helper()
-	return newTeamsOracleFor(t, teamsSyncOracleProgram)
-}
-
-// newTeamsOracleFor is newTeamsOracle parameterized on the Python program run
-// as the live-producer child -- the github oracle's program and the gitlab
-// oracle's (teams_sync_oracle_gitlab.py) share every other piece of this
-// harness (the two ClickHouse databases, the migration chain, the line
-// protocol child-process wiring).
-func newTeamsOracleFor(t *testing.T, program string) *teamsOracle {
 	t.Helper()
 	ctx, cancel := context.WithTimeout(context.Background(), 40*time.Minute)
 	t.Cleanup(cancel)
-	root, err := filepath.Abs(filepath.Join("..", ".."))
-	if err != nil {
-		t.Fatal(err)
-	}
-	python := pyoracle.Resolve(t, root)
 	instance, err := containers.StartClickHouse(ctx)
 	if err != nil {
 		t.Fatal(err)
@@ -288,8 +374,20 @@ func newTeamsOracleFor(t *testing.T, program string) *teamsOracle {
 	}
 	t.Cleanup(func() { _ = goConn.Close() })
 
-	command := exec.Command(python, "-c", program)
-	command.Env = append(os.Environ(), "PYTHONHASHSEED=0", "PYTHONPATH="+filepath.Join(root, "src"))
+	return &teamsOracle{t: t, ctx: ctx, admin: admin, pythonDatabase: pythonDatabase, goDatabase: goDatabase,
+		pythonHTTPDSN: httpDSN, goNativeDSN: goURL.String(), goConn: goConn, tablesWrittenAny: names}
+}
+
+// startPython starts the legacy verb's long-lived child (the producer only), in the closed environment the
+// producer gives it: the fixed set of the harness, the declared constants (teamsPythonSettings) and nothing of
+// the test process's environment.
+func (o *teamsOracle) startPython(producer *venueoracle.Producer, program string) {
+	t := o.t
+	t.Helper()
+	command, err := producer.Command(o.ctx, teamsPythonSettings, nil, "-c", program)
+	if err != nil {
+		t.Fatal(err)
+	}
 	stdin, err := command.StdinPipe()
 	if err != nil {
 		t.Fatal(err)
@@ -305,7 +403,8 @@ func newTeamsOracleFor(t *testing.T, program string) *teamsOracle {
 	}
 	t.Cleanup(func() { _ = stdin.Close(); _ = command.Wait() })
 	reader := bufio.NewReaderSize(stdout, 1<<20)
-	ask := func(request map[string]any) map[string]any {
+	o.recording = true
+	o.ask = func(request map[string]any) map[string]any {
 		raw, _ := json.Marshal(request)
 		if _, err := io.WriteString(stdin, string(raw)+"\n"); err != nil {
 			t.Fatalf("python stdin: %v", err)
@@ -320,8 +419,6 @@ func newTeamsOracleFor(t *testing.T, program string) *teamsOracle {
 		}
 		return answer
 	}
-	return &teamsOracle{t: t, ctx: ctx, admin: admin, pythonDatabase: pythonDatabase, goDatabase: goDatabase,
-		pythonHTTPDSN: httpDSN, goNativeDSN: goURL.String(), goConn: goConn, ask: ask, tablesWrittenAny: names}
 }
 
 func (o *teamsOracle) truncateAll() {
@@ -389,7 +486,8 @@ type githubRun struct {
 	goStderr    string
 }
 
-// runGitHub runs both planes on the same scenario.
+// runGitHub runs both planes on the same scenario: the legacy verb is the golden's answer (the real one while
+// recording), the Go verb always runs.
 func (o *teamsOracle) runGitHub(fake *fakeGitHub, orgID, owner, token string, prepare func(), sc *teamsScenario, extra ...string) githubRun {
 	o.t.Helper()
 	o.truncateAll()
@@ -399,25 +497,25 @@ func (o *teamsOracle) runGitHub(fake *fakeGitHub, orgID, owner, token string, pr
 	}
 	viaEnv := strings.HasPrefix(token, "env:")
 	token = strings.TrimPrefix(token, "env:")
-	argv := []string{"--org", orgID, "sync", "teams", "--provider", "github", "--owner", owner}
+	argv := []string{"--org", orgID, "sync", "teams", "--provider", "github"}
+	if owner != "" { // a scenario with no owner omits the flag in both planes
+		argv = append(argv, "--owner", owner)
+	}
 	pythonEnv := map[string]string{"CLICKHOUSE_URI": o.pythonHTTPDSN}
 	if sc != nil && sc.envToken != "" {
 		pythonEnv["GITHUB_TOKEN"] = sc.envToken
 	}
 	if viaEnv {
 		pythonEnv["GITHUB_TOKEN"] = token
-	} else {
+	} else if token != "" { // a scenario with no token sends no --auth in either plane
 		argv = append(argv, "--auth", token)
 	}
 	argv = append(argv, extra...)
-	answer := o.ask(map[string]any{"argv": argv, "github_base": fake.base(), "env": pythonEnv})
-	value := func(key string) string {
-		if item, ok := answer[key].(map[string]any); ok {
-			return fmt.Sprint(item["v"])
-		}
-		return ""
+	o.python(sc.name, map[string]any{"argv": argv, "github_base": fake.base(), "env": pythonEnv})
+	run := githubRun{pythonStage: o.cur.Stage, pythonCode: o.cur.Code}
+	if o.recording {
+		return run // the recording asks Python only: the Go plane runs in the comparison
 	}
-	run := githubRun{pythonStage: value("stage"), pythonCode: value("code")}
 
 	run.goCode, run.goStdout, run.goStderr = o.runGo(fake, orgID, owner, token, sc, extra...)
 	return run
@@ -437,10 +535,13 @@ func (o *teamsOracle) runGo(fake *fakeGitHub, orgID, owner, token string, sc *te
 		env["GITHUB_TOKEN"] = sc.envToken
 	}
 	lookup := func(key string) (string, bool) { v, ok := env[key]; return v, ok }
-	args := []string{"--provider", "github", "--org", orgID, "--owner", owner}
+	args := []string{"--provider", "github", "--org", orgID}
+	if owner != "" {
+		args = append(args, "--owner", owner)
+	}
 	if viaEnv {
 		env["GITHUB_TOKEN"] = token
-	} else {
+	} else if token != "" {
 		args = append(args, "--auth", token)
 	}
 	args = append(args, extra...)
@@ -489,11 +590,24 @@ func (o *teamsOracle) requireSeedsOlderThanTheFrozenClock() {
 // never read the policy.
 func seedSyncPolicy(o *teamsOracle, teamID string) {
 	for _, database := range []string{o.pythonDatabase, o.goDatabase} {
-		if err := o.admin.Exec(o.ctx, fmt.Sprintf("INSERT INTO %s.team_sync_policies (org_id, team_id, sync_policy, managed_fields, updated_by, updated_at) VALUES ('org-1', '%s', 2, [], NULL, now64(6))", database, teamID)); err != nil {
+		if err := o.admin.Exec(o.ctx, syncPolicySeedSQL(database, teamID)); err != nil {
 			o.t.Fatal(err)
 		}
 	}
 }
+
+// syncPolicySeedSQL is the statement seedSyncPolicy runs: the golden's key holds its text, so a changed seed is another request.
+func syncPolicySeedSQL(database, teamID string) string {
+	return fmt.Sprintf("INSERT INTO %s.team_sync_policies (org_id, team_id, sync_policy, managed_fields, updated_by, updated_at) VALUES ('org-1', '%s', 2, [], NULL, now64(6))", database, teamID)
+}
+
+// adminOverrideSeedSQL is the existing `teams` row an admin's override scenario starts from.
+func adminOverrideSeedSQL(database string) string {
+	return fmt.Sprintf(`INSERT INTO %s.teams (id, team_uuid, name, description, members, manual_members, project_keys, repo_patterns, is_active, updated_at, last_synced, org_id, provider) VALUES ('gh:platform', generateUUIDv4(), 'Platform', 'old', ['old'], ['override@example.com'], [], [], 1, toDateTime64('%s', 6), toDateTime64('%s', 6), 'org-1', 'github')`, database, teamsSeedInstant, teamsSeedInstant)
+}
+
+// renameOwnershipSeed names the Go-only seed of the part-way write scenario (it renames a table of the Go database).
+const renameOwnershipSeed = "RENAME TABLE <go>.team_repo_ownership TO <go>.team_repo_ownership_off"
 
 // teamsRule says what the comparison requires of one column of `teams` (every column of the
 // table must have one: the set is read from the schema, so a column added later fails until it is
@@ -522,8 +636,10 @@ type teamsScenario struct {
 	teams       []fakeTeam
 	users       map[string]string
 	prepare     func(o *teamsOracle, fake *fakeGitHub)
-	extra       []string
-	failPath    map[string]int // path -> status, injected before the run
+	// prepareKey is the text of what prepare seeds, for the golden's request: a seed is a closure and cannot be hashed.
+	prepareKey string
+	extra      []string
+	failPath   map[string]int // path -> status, injected before the run
 	// wantExit is the exit code both planes must end with (Python's: 0 or 1).
 	wantExit int
 	// wantRows is how many teams both planes must have written.
@@ -534,6 +650,9 @@ type teamsScenario struct {
 	goDiffers bool
 	goExit    int
 	goRows    int
+	// wantGoCode, when set, is the error code the Go verb must print on stderr: the CLI's own refusal, told from a
+	// later failure that also ends in exit 1 and no rows.
+	wantGoCode string
 	// after asserts more about what the planes did.
 	after func(t *testing.T, o *teamsOracle, fake *fakeGitHub, sc *teamsScenario, run githubRun, python, goRows []map[string]string)
 }
@@ -616,9 +735,8 @@ func teamsRules() map[string]teamsRule {
 		}, why: "legacy: bare logins; catalog: provider-scoped identity facets"},
 		"team_uuid": {check: func(sc *teamsScenario, team fakeTeam, py, gr map[string]string) string {
 			wantGo := uuid.NewSHA1(uuid.NameSpaceURL, []byte("team:"+py["id"])).String()
-			parsed, err := uuid.Parse(py["team_uuid"])
-			if err != nil || parsed.Version() != 4 {
-				return fmt.Sprintf("team_uuid: python's is a random uuid4, got %q", py["team_uuid"])
+			if py["team_uuid"] != "<uuid4>" { // the golden stores python's random uuid4 as its kind
+				return fmt.Sprintf("team_uuid: python's is a random uuid4 (stored as <uuid4>), got %q", py["team_uuid"])
 			}
 			if gr["team_uuid"] != wantGo {
 				return fmt.Sprintf("team_uuid: go's is uuid5(URL, \"team:<id>\") = %s, got %s", wantGo, gr["team_uuid"])
@@ -651,13 +769,13 @@ func teamsRules() map[string]teamsRule {
 			return ""
 		}, why: "legacy: none; catalog: the team's repositories as owner/name (its ownership grants)"},
 		"updated_at": {check: func(sc *teamsScenario, team fakeTeam, py, gr map[string]string) string {
-			if py["updated_at"] == "" || gr["updated_at"] != "2026-09-26 12:00:00.000000" {
+			if py["updated_at"] != "<time>" || gr["updated_at"] != "2026-09-26 12:00:00.000000" {
 				return fmt.Sprintf("updated_at: python %q, go %q (want the run's clock)", py["updated_at"], gr["updated_at"])
 			}
 			return ""
 		}, why: "time of the run (python: its own clock)"},
 		"last_synced": {check: func(sc *teamsScenario, team fakeTeam, py, gr map[string]string) string {
-			if py["last_synced"] == "" || gr["last_synced"] == "" {
+			if py["last_synced"] != "<time>" || gr["last_synced"] == "" {
 				return "last_synced is empty"
 			}
 			return ""
@@ -665,11 +783,10 @@ func teamsRules() map[string]teamsRule {
 	}
 }
 
-// compareGitHub checks one scenario: exit codes, then the `teams` rows column by column under teamsRules,
-// then the tables only the catalog writes.
-func (o *teamsOracle) compareGitHub(sc *teamsScenario, fake *fakeGitHub) {
-	t := o.t
-	t.Helper()
+// arrangeAndRunGitHub sets the fake, the failures and the seeds the scenario names and runs it: both planes when
+// comparing, the legacy verb alone when recording.
+func (o *teamsOracle) arrangeAndRunGitHub(sc *teamsScenario, fake *fakeGitHub) githubRun {
+	o.t.Helper()
 	fake.set(sc.org, sc.wantToken(), sc.teams, sc.users)
 	for path, status := range sc.failPath {
 		fake.failing[path] = status
@@ -678,7 +795,15 @@ func (o *teamsOracle) compareGitHub(sc *teamsScenario, fake *fakeGitHub) {
 	if sc.prepare != nil {
 		prepare = func() { sc.prepare(o, fake) }
 	}
-	run := o.runGitHub(fake, "org-1", sc.owner, sc.token, prepare, sc, sc.extra...)
+	return o.runGitHub(fake, "org-1", sc.owner, sc.token, prepare, sc, sc.extra...)
+}
+
+// compareGitHub checks one scenario: exit codes, then the `teams` rows column by column under teamsRules,
+// then the tables only the catalog writes.
+func (o *teamsOracle) compareGitHub(sc *teamsScenario, fake *fakeGitHub) {
+	t := o.t
+	t.Helper()
+	run := o.arrangeAndRunGitHub(sc, fake)
 	if run.pythonStage != "ok" && run.pythonStage != "exit" {
 		t.Fatalf("%s: python ended %s (%s)", sc.name, run.pythonStage, run.pythonCode)
 	}
@@ -690,7 +815,10 @@ func (o *teamsOracle) compareGitHub(sc *teamsScenario, fake *fakeGitHub) {
 	if run.pythonCode != wantPython || run.goCode != wantGoExit {
 		t.Fatalf("%s: exit codes: python %s (stage %s, want %d), go %d (want %d)\ngo stderr: %s", sc.name, run.pythonCode, run.pythonStage, sc.wantExit, run.goCode, wantGoExit, run.goStderr)
 	}
-	python := o.rows(o.pythonDatabase, "teams", "org-1")
+	if sc.wantGoCode != "" && !strings.Contains(run.goStderr, `"code":"`+sc.wantGoCode+`"`) {
+		t.Fatalf("%s: go stderr %q does not carry the refusal code %q", sc.name, run.goStderr, sc.wantGoCode)
+	}
+	python := o.pythonRows("teams")
 	goRows := o.rows(o.goDatabase, "teams", "org-1")
 	if len(python) != sc.wantRows || len(goRows) != wantGoRows {
 		t.Fatalf("%s: teams written: python %d (want %d), go %d (want %d)", sc.name, len(python), sc.wantRows, len(goRows), wantGoRows)
@@ -744,7 +872,7 @@ func (o *teamsOracle) compareGitHub(sc *teamsScenario, fake *fakeGitHub) {
 	}
 	// Python wrote nothing but `teams`; the catalog also writes memberships and repository ownership.
 	for _, table := range []string{"team_memberships", "team_repo_ownership"} {
-		if rows := o.rows(o.pythonDatabase, table, "org-1"); len(rows) != 0 {
+		if rows := o.pythonRows(table); len(rows) != 0 {
 			t.Errorf("%s: python wrote %d %s rows", sc.name, len(rows), table)
 		}
 	}
@@ -827,6 +955,9 @@ func githubScenarios() []*teamsScenario {
 		{name: "the token from GITHUB_TOKEN", org: "acme", owner: "acme", token: "env:tok", teams: two, users: emails("alice", "bob", "carol"), wantRows: 2},
 		{name: "--auth wins over GITHUB_TOKEN", org: "acme", owner: "acme", token: "tok", envToken: "not-the-token", teams: two, users: emails("alice", "bob", "carol"), wantRows: 2},
 		{name: "the GITHUB_URL spelling of the base URL", org: "acme", owner: "acme", token: "tok", baseEnv: "GITHUB_URL", teams: two, users: emails("alice", "bob", "carol"), wantRows: 2},
+		{name: "no --owner is refused", org: "acme", owner: "", token: "tok", teams: two, users: emails("alice", "bob", "carol"), wantExit: 1, wantRows: 0, wantGoCode: "owner_required"},
+		{name: "no token anywhere is refused", org: "acme", owner: "acme", token: "", teams: two, users: emails("alice", "bob", "carol"), wantExit: 1, wantRows: 0, wantGoCode: "token_required"},
+		{name: "a padded --owner", org: "acme", owner: " acme ", token: "tok", teams: two, users: emails("alice", "bob", "carol"), wantExit: 1, wantRows: 0, goDiffers: true, goExit: 0, goRows: 2},
 		{name: "a rejected token", org: "acme", owner: "acme", token: "wrong", serverToken: "tok", teams: two, users: emails("alice", "bob", "carol"), wantExit: 1, wantRows: 0},
 		{name: "no teams is an error", org: "acme", owner: "acme", token: "tok", teams: nil, wantExit: 1, wantRows: 0},
 		{name: "no teams with --allow-empty", org: "acme", owner: "acme", token: "tok", teams: nil, extra: []string{"--allow-empty"}, wantExit: 0, wantRows: 0},
@@ -838,7 +969,8 @@ func githubScenarios() []*teamsScenario {
 			users: emails("Alice-Upper", "bob")},
 		{name: "a sync policy leaves one team untouched", org: "acme", owner: "acme", token: "tok", teams: two, users: emails("alice", "bob", "carol"),
 			wantRows: 2, goDiffers: true, goExit: 0, goRows: 1,
-			prepare: func(o *teamsOracle, fake *fakeGitHub) { seedSyncPolicy(o, "gh:platform") },
+			prepare:    func(o *teamsOracle, fake *fakeGitHub) { seedSyncPolicy(o, "gh:platform") },
+			prepareKey: syncPolicySeedSQL("<db>", "gh:platform"),
 			after: func(t *testing.T, o *teamsOracle, fake *fakeGitHub, sc *teamsScenario, run githubRun, python, goRows []map[string]string) {
 				// The legacy verb overwrote both teams; the catalog leaves the team whose policy is not auto-apply
 				// alone (the contract) and says so.
@@ -848,7 +980,8 @@ func githubScenarios() []*teamsScenario {
 			}},
 		{name: "every team is protected by its sync policy", org: "acme", owner: "acme", token: "tok", wantRows: 1, goDiffers: true, goExit: 0, goRows: 0,
 			teams: two[:1], users: emails("alice", "bob"),
-			prepare: func(o *teamsOracle, fake *fakeGitHub) { seedSyncPolicy(o, "gh:platform") },
+			prepare:    func(o *teamsOracle, fake *fakeGitHub) { seedSyncPolicy(o, "gh:platform") },
+			prepareKey: syncPolicySeedSQL("<db>", "gh:platform"),
 			after: func(t *testing.T, o *teamsOracle, fake *fakeGitHub, sc *teamsScenario, run githubRun, python, goRows []map[string]string) {
 				// Teams found and left alone are not an empty catalog: no "No teams found" refusal.
 				if run.goCode != 0 || !strings.Contains(run.goStdout, "teams=0 teams_skipped_policy=1") {
@@ -866,6 +999,7 @@ func githubScenarios() []*teamsScenario {
 			}},
 		{name: "a write that fails part way is finished by the next run", org: "acme", owner: "acme", token: "tok", teams: two, users: emails("alice", "bob", "carol"),
 			wantRows: 2, goDiffers: true, goExit: 1, goRows: 2,
+			prepareKey: renameOwnershipSeed,
 			prepare: func(o *teamsOracle, fake *fakeGitHub) {
 				// The repository-ownership insert fails: the teams were written before it, the memberships never are.
 				if err := o.admin.Exec(o.ctx, "RENAME TABLE "+o.goDatabase+".team_repo_ownership TO "+o.goDatabase+".team_repo_ownership_off"); err != nil {
@@ -899,9 +1033,10 @@ func githubScenarios() []*teamsScenario {
 				}
 			}},
 		{name: "an admin override survives", org: "acme", owner: "acme", token: "tok", teams: two, users: emails("alice", "bob", "carol"), wantRows: 2,
+			prepareKey: adminOverrideSeedSQL("<db>"),
 			prepare: func(o *teamsOracle, fake *fakeGitHub) {
 				for _, database := range []string{o.pythonDatabase, o.goDatabase} {
-					if err := o.admin.Exec(o.ctx, fmt.Sprintf(`INSERT INTO %s.teams (id, team_uuid, name, description, members, manual_members, project_keys, repo_patterns, is_active, updated_at, last_synced, org_id, provider) VALUES ('gh:platform', generateUUIDv4(), 'Platform', 'old', ['old'], ['override@example.com'], [], [], 1, toDateTime64('%s', 6), toDateTime64('%s', 6), 'org-1', 'github')`, database, teamsSeedInstant, teamsSeedInstant)); err != nil {
+					if err := o.admin.Exec(o.ctx, adminOverrideSeedSQL(database)); err != nil {
 						o.t.Fatal(err)
 					}
 				}
@@ -922,15 +1057,75 @@ func githubScenarios() []*teamsScenario {
 	}
 }
 
-// TestSyncTeamsGitHubVenueOracleMatchesThePythonProducer runs `dev-hops sync teams --provider github` (the real verb, PyGithub
-// pointed at a fake) and `dho sync teams --provider github` (the Go team catalog) over one fake GitHub and
-// compares exit codes and, column by column, the `teams` rows each wrote. The rows differ by design in the
-// columns teamsRules names; everything else must be equal.
-func TestSyncTeamsGitHubVenueOracleMatchesThePythonProducer(t *testing.T) {
-	if os.Getenv("DEV_HEALTH_LIVE_PYTHON_ORACLES") != "1" {
-		t.Skip("the live Python producer runs only with DEV_HEALTH_LIVE_PYTHON_ORACLES=1 and the full project Python environment")
+// githubCorpusKey is the golden's request key: every scenario's inputs (the closures by the text they seed).
+func githubCorpusKey() []byte {
+	type entry struct {
+		Name, Org, Owner, Token, EnvToken, BaseEnv, ServerToken string
+		Teams                                                   []fakeTeam
+		Users                                                   map[string]string
+		PrepareKey                                              string
+		Extra                                                   []string
+		FailPath                                                map[string]int
 	}
+	var entries []entry
+	for _, sc := range githubScenarios() {
+		entries = append(entries, entry{sc.name, sc.org, sc.owner, sc.token, sc.envToken, sc.baseEnv, sc.serverToken, sc.teams, sc.users, sc.prepareKey, sc.extra, sc.failPath})
+	}
+	return teamsCorpusKey("github", entries)
+}
+
+const teamsPythonBuild = "a4847c5e93607451a0c987b314d37e02fc43ce85"
+
+// openTeamsGolden opens the golden of one provider's teams oracle and returns the answers frozen in it (the
+// legacy verb's, one per scenario) once it has been recorded by executing the real verb on teamsPythonBuild.
+func openTeamsGolden(t *testing.T, provider, name, pin, program string, key []byte, record func(t *testing.T, producer *venueoracle.Producer) []teamsFrozen) ([]teamsFrozen, *venueoracle.Golden) {
+	t.Helper()
+	repoRoot, err := filepath.Abs(filepath.Join("..", ".."))
+	if err != nil {
+		t.Fatal(err)
+	}
+	golden := venueoracle.OpenGolden(t, venueoracle.GoldenSpec{
+		Path:        "testdata/golden/teams_" + provider + ".json",
+		PythonBuild: teamsPythonBuild,
+		SHA256:      pin,
+		Recipe: "git worktree add --detach $DIR " + teamsPythonBuild + " (with its .venv: uv sync --frozen --no-install-project); then from the repository root: " +
+			"go run ./internal/testsupport/venueoracle/goldenrecord -pkg ./internal/synccli/ -test '^" + name + "$' -python-root $DIR",
+	})
+	root := golden.PythonRoot(t, repoRoot)
+	request := venueoracle.ProgramRequest("teams "+provider+" corpus", program, key, teamsPythonSettings)
+	answers := golden.Produce(t, root, []venueoracle.Request{request}, func(producer *venueoracle.Producer, _ []venueoracle.Request) []venueoracle.Response {
+		body, err := json.Marshal(record(t, producer))
+		if err != nil {
+			t.Fatal(err)
+		}
+		return []venueoracle.Response{{Status: 0, Body: venueoracle.PackBody(body)}}
+	})
+	golden.Consumed(t, answers...)
+	var frozen []teamsFrozen
+	if err := json.Unmarshal([]byte(venueoracle.UnpackBody(t, answers[0].Body)), &frozen); err != nil {
+		t.Fatal(err)
+	}
+	return frozen, golden
+}
+
+// TestSyncTeamsGitHubMatchesFrozenPython compares `dho sync teams --provider github` (the Go team catalog) with what
+// the REAL legacy verb (`dev-hops sync teams --provider github`, PyGithub pointed at a fake) did over the same
+// fake GitHub: how each run ended and, column by column, the `teams` rows it wrote. The answers were executed once
+// on teamsPythonBuild and are frozen in testdata/golden/teams_github.json (the recipe regenerates them by
+// execution). The rows differ by design in the columns teamsRules names; everything else must be equal.
+func TestSyncTeamsGitHubMatchesFrozenPython(t *testing.T) {
+	frozen, golden := openTeamsGolden(t, "github", "TestSyncTeamsGitHubMatchesFrozenPython", "b8883eb487b4a98f4670d496c65cbae5e6553f0e6bd8535fcfd3f5baceedc4f7", teamsSyncOracleProgram, githubCorpusKey(),
+		func(t *testing.T, producer *venueoracle.Producer) []teamsFrozen {
+			o := newTeamsOracle(t)
+			o.startPython(producer, teamsSyncOracleProgram)
+			fake := newFakeGitHub(t)
+			for _, sc := range githubScenarios() {
+				o.arrangeAndRunGitHub(sc, fake)
+			}
+			return o.recorded
+		})
 	o := newTeamsOracle(t)
+	o.frozen = frozen
 	fake := newFakeGitHub(t)
 	for _, sc := range githubScenarios() {
 		t.Run(sc.name, func(t *testing.T) {
@@ -938,7 +1133,9 @@ func TestSyncTeamsGitHubVenueOracleMatchesThePythonProducer(t *testing.T) {
 			o.compareGitHub(sc, fake)
 		})
 	}
-	if !t.Failed() {
-		venueoracle.WriteProof(t)
+	if o.next != len(frozen) {
+		t.Fatalf("the golden holds %d runs, the corpus runs %d", len(frozen), o.next)
 	}
+	golden.SkipDiff(t)
+	golden.Finish(t)
 }

@@ -39,6 +39,22 @@ from datetime import datetime, timedelta, timezone
 from types import SimpleNamespace
 from typing import Any
 
+from cryptography.fernet import Fernet
+
+# Fernet seals with a random IV and the clock, so a recording would differ
+# from run to run. The IV is a counter and the time a constant: the token is
+# still the production Fernet format, made by the real encrypt_value.
+_PIN_COUNTER = itertools.count(1)
+
+
+def _pinned_encrypt(self: Fernet, data: bytes) -> bytes:
+    return self._encrypt_from_parts(
+        data, 1700000000, next(_PIN_COUNTER).to_bytes(16, "big")
+    )
+
+
+setattr(Fernet, "encrypt", _pinned_encrypt)
+
 ORG = "00000000-0000-4000-8000-000000000001"
 INTEGRATION = "00000000-0000-4000-8000-000000000002"
 ROW_UUID = "00000000-0000-4000-8000-000000000003"

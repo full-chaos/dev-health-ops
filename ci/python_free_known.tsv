@@ -19,4 +19,3 @@ github.com/full-chaos/dev-health-ops/internal/pgmigrate	TestHookVerbUpgradesAnOl
 github.com/full-chaos/dev-health-ops/internal/synccli	TestDBLookupsMatchLivePython	CHAOS-7319	tripwire
 github.com/full-chaos/dev-health-ops/internal/synccli	TestLocalSyncMatchesLivePython	CHAOS-7319	tripwire
 github.com/full-chaos/dev-health-ops/internal/synccli	TestLocalSyncRerunKeepsHeldColumnsUnlikePython	CHAOS-7319	tripwire
-github.com/full-chaos/dev-health-ops/internal/externalrecompute	TestPythonIntMatchesRealCPython	CHAOS-7337	skips-without-python

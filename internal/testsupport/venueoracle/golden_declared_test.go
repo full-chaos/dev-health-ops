@@ -6,6 +6,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"math/rand"
 	"net/url"
 	"os"
 	"path/filepath"
@@ -554,6 +555,26 @@ func TestAnEncodedFormInsideAnEscapedJSONTextIsRefused(t *testing.T) {
 		got := leakFormsOf(t, leaf, declaredQuoted)
 		if !strings.Contains(got, "#0 (base64)") && !strings.Contains(got, "#0 (URL-escaped)") {
 			t.Errorf("%s: not refused: %q", name, got)
+		}
+	}
+}
+
+// The escape layer is encoding/json's: for any text that is a valid JSON string body, jsonUnescapedText equals what
+// json.Unmarshal makes of it (so a second decoder cannot disagree with the real one).
+func TestTheEscapeLayerEqualsEncodingJSON(t *testing.T) {
+	pieces := []string{`a`, ` `, `/`, `\/`, `\"`, `\\`, `\b`, `\f`, `\n`, `\r`, `\t`, `ä`, `ä`, `/`, `\u0000`, `🔑`, `🔑`, `\ud83d`, `\udd11`, `\ud83dx`, `é`, `%2F`}
+	r := rand.New(rand.NewSource(7898))
+	for iter := 0; iter < 20000; iter++ {
+		var body strings.Builder
+		for n := r.Intn(8); n >= 0; n-- {
+			body.WriteString(pieces[r.Intn(len(pieces))])
+		}
+		var want string
+		if err := json.Unmarshal([]byte(`"`+body.String()+`"`), &want); err != nil {
+			t.Fatalf("fixture %q is not a JSON string body: %v", body.String(), err)
+		}
+		if got := jsonUnescapedText(body.String()); got != want {
+			t.Fatalf("jsonUnescapedText(%q) = %q, encoding/json makes %q", body.String(), got, want)
 		}
 	}
 }

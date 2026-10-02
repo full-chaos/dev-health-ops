@@ -9,7 +9,6 @@ import (
 	"regexp"
 	"sort"
 	"strings"
-	"unicode/utf8"
 )
 
 // A credential constant a test sends on purpose (a push token, a password the CLI puts in a header) is the same
@@ -279,78 +278,21 @@ func declaredDecodedLeaks(text string, constants []string) []string {
 	return found
 }
 
-// jsonUnescapedText is text with every valid JSON escape resolved (\" \\ \/ \b \f \n \r \t and \uXXXX, a surrogate
-// pair as one rune), wherever it stands: the text is not parsed, so it may be a fragment of JSON. An invalid escape
-// stays as it is.
-func jsonUnescapedText(text string) string {
-	var out strings.Builder
-	for i := 0; i < len(text); i++ {
-		c := text[i]
-		if c != '\\' || i+1 >= len(text) {
-			out.WriteByte(c)
-			continue
-		}
-		switch next := text[i+1]; next {
-		case '"', '\\', '/':
-			out.WriteByte(next)
-			i++
-		case 'b':
-			out.WriteByte('\b')
-			i++
-		case 'f':
-			out.WriteByte('\f')
-			i++
-		case 'n':
-			out.WriteByte('\n')
-			i++
-		case 'r':
-			out.WriteByte('\r')
-			i++
-		case 't':
-			out.WriteByte('\t')
-			i++
-		case 'u':
-			r, width := jsonRuneEscape(text[i:])
-			if width == 0 {
-				out.WriteByte(c)
-				continue
-			}
-			out.WriteRune(r)
-			i += width - 1
-		default:
-			out.WriteByte(c)
-		}
-	}
-	return out.String()
-}
+// jsonEscape finds the JSON escape sequences in a text that may be a fragment (a surrogate pair first, so it is one
+// unit). It only RECOGNISES them: encoding/json decodes each one (jsonUnescapedText), so there is no second
+// implementation of the decoder.
+var jsonEscape = regexp.MustCompile(`\\u[dD][89abAB][0-9a-fA-F]{2}\\u[dD][c-fC-F][0-9a-fA-F]{2}|\\u[0-9a-fA-F]{4}|\\["\\/bfnrt]`)
 
-// jsonRuneEscape reads \uXXXX (and a following \uXXXX low surrogate) at the start of text: the rune and the bytes used,
-// or width 0 when text does not start with a valid escape.
-func jsonRuneEscape(text string) (rune, int) {
-	hex4 := func(at int) (rune, bool) {
-		if len(text) < at+6 || text[at] != '\\' || text[at+1] != 'u' {
-			return 0, false
+// jsonUnescapedText is text with every JSON escape sequence in it decoded by encoding/json, wherever it stands: the
+// text is not parsed as a whole, so it may be a fragment of JSON. Text that is not an escape stays as it is.
+func jsonUnescapedText(text string) string {
+	return jsonEscape.ReplaceAllStringFunc(text, func(escape string) string {
+		var decoded string
+		if err := json.Unmarshal([]byte(`"`+escape+`"`), &decoded); err != nil {
+			return escape // unreachable: the pattern matches only valid escapes (a test holds the layer equal to encoding/json)
 		}
-		var r rune
-		for _, c := range []byte(text[at+2 : at+6]) {
-			if !isHex(c) {
-				return 0, false
-			}
-			r = r<<4 | rune(unhex(c))
-		}
-		return r, true
-	}
-	first, ok := hex4(0)
-	if !ok {
-		return 0, 0
-	}
-	if first >= 0xD800 && first < 0xDC00 {
-		if second, ok := hex4(6); ok && second >= 0xDC00 && second < 0xE000 {
-			return 0x10000 + (first-0xD800)<<10 + (second - 0xDC00), 12
-		}
-		return utf8.RuneError, 6
-	}
-	return first, 6
+		return decoded
+	})
 }
 
 // percentDecoded is text with every valid %XX (either hex case) replaced by its byte, whatever encoder wrote it; an

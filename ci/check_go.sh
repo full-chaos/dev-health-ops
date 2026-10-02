@@ -79,7 +79,7 @@ fi
 usage() {
   # Backticks in the literal help text document commands; they are not substitutions.
   # shellcheck disable=SC2016
-  printf '%s\n' 'Usage: ci/check_go.sh [fmt|vet|test|race|live-python-oracles|venue-oracles [SHARD COUNT]|venue-oracle-plan COUNT|ci-leg LEG [SHARD COUNT]|build|contract|multi-replica-workers|integration-vet|integration-coverage|python-free-unit|python-free-listed|integration-shard-plan|integration-prepull|integration-shard|integration|fast|ci|all]
+  printf '%s\n' 'Usage: ci/check_go.sh [fmt|vet|test|race|live-python-oracles|venue-oracles [SHARD COUNT]|venue-oracle-plan COUNT|ci-leg LEG [SHARD COUNT]|build|contract|ratchets|multi-replica-workers|integration-vet|integration-coverage|python-free-unit|python-free-listed|integration-shard-plan|integration-prepull|integration-shard|integration|fast|ci|all]
 
   fmt    Check gofmt without modifying files.
   vet    Run go vet ./... in every Go module.
@@ -172,6 +172,12 @@ usage() {
          derive deterministic longest-processing-time-first shard assignments,
          print the complete assignment, and write a GitHub Actions `matrix`
          output when GITHUB_OUTPUT is set. No Docker required.
+  ratchets
+         Hold every closed list named in ci/ratchets.tsv to its size on the merge base: a list may
+         shrink and never grow, and no pull request edits a shared number to say so (CHAOS-7904).
+         The base is RATCHET_BASE_SHA when set (CI sets it to the base commit of the pull request), else the merge
+         base with origin/main (the parent when HEAD is origin/main). A base that cannot be read is a
+         failure, never a pass.
   python-free-unit
          The unit leg of the go-python-free workflow (GO_PYTHON_FREE=1, PYTHON_FREE_OUT=DIR):
          the plain untagged go test of every module with Python unreachable
@@ -387,6 +393,16 @@ check_race_shard() {
 # leg's log says where its minutes went (CHAOS-6690). No `if`/`||` around the
 # command on purpose: errexit is suppressed inside a function called in a
 # condition, which would let a failing command in the middle of a stage pass.
+# check_ratchets (CHAOS-7904): the closed lists of ci/ratchets.tsv against the merge base. Reads the base from git
+# (RATCHET_BASE_SHA, else origin/main), so two pull requests that each shorten a list edit different lines and do not conflict.
+check_ratchets() {
+  printf 'ratchets: closed lists against the merge base\n'
+  (
+    cd "${ROOT}"
+    "${GO_ENV_OFF[@]}" GOWORK=off go run -mod=readonly ./internal/testsupport/ratchet/cmd/ratchets
+  )
+}
+
 ci_leg_stage() {
   local name="$1" started
   shift
@@ -399,7 +415,7 @@ ci_leg_stage() {
 # check_ci_leg LEG [SHARD COUNT]: one parallel slice of `ci` for the go-quality
 # workflow (CHAOS-6690). The legs together run exactly the steps of `ci`
 # (tests/tooling/test_go_quality_legs.py pins the union against the `ci` case):
-#   static   format, vet, build, contract, integration-vet, the shard plans
+#   static   format, vet, build, contract, ratchets, integration-vet, the shard plans
 #   test     go test ./... and the multi-replica worker gate
 #   race     go test -race, slice SHARD of COUNT (weight-balanced)
 #   oracles  the live-Python oracle blocks
@@ -411,6 +427,7 @@ check_ci_leg() {
       ci_leg_stage vet check_vet
       ci_leg_stage build check_build
       ci_leg_stage contract check_contract
+      ci_leg_stage ratchets check_ratchets
       ci_leg_stage integration-vet check_integration_vet
       ci_leg_stage plan-integration-shards plan_integration_shards
       ci_leg_stage plan-providersync-shards plan_providersync_test_shards
@@ -2818,6 +2835,10 @@ case "${1:-all}" in
     [ "$#" -eq 1 ] || die "integration-prepull accepts no arguments"
     check_integration_prepull
     ;;
+  ratchets)
+    [ "$#" -eq 1 ] || die "ratchets accepts no arguments"
+    check_ratchets
+    ;;
   python-free-unit)
     check_python_free_unit
     ;;
@@ -2841,6 +2862,7 @@ case "${1:-all}" in
     check_live_python_oracles
     check_build
     check_contract
+    check_ratchets
     check_integration_vet
     plan_integration_shards
     plan_providersync_test_shards
@@ -2863,6 +2885,7 @@ case "${1:-all}" in
     check_live_python_oracles
     check_build
     check_contract
+    check_ratchets
     check_integration_vet
     plan_integration_shards
     plan_providersync_test_shards
@@ -2876,6 +2899,7 @@ case "${1:-all}" in
     check_live_python_oracles
     check_build
     check_contract
+    check_ratchets
     check_integration_vet
     check_integration
     check_multi_replica_workers

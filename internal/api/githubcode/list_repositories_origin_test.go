@@ -121,3 +121,15 @@ func TestNonASCIIBaseHostIsDialledInIDNAForm(t *testing.T) {
 		t.Fatalf("dialled %q, want [xn--gh-cja.test:443]", dialled)
 	}
 }
+
+// A link host that IDNA cannot encode (a label of 64 characters or more) is another origin: refused, no request.
+func TestAnUnencodableLinkHostIsRefused(t *testing.T) {
+	long := strings.Repeat("a", 70)
+	transport := &scriptedTransport{responses: []scripted{ok(page(repoItem(1, "api")), next("https://"+long+".ghe.test/orgs/acme/repos?page=2")), ok(`[]`)}}
+	client := Client{Token: "tok", BaseURL: "https://ghe.test", HTTP: &http.Client{Transport: transport}}
+	_, err := client.ListRepositories(context.Background(), ListOptions{Org: "acme"})
+	var typed *Error
+	if !errors.As(err, &typed) || typed.Class != CrossOriginLinkClass || len(transport.seen) != 1 {
+		t.Fatalf("want %s after one request, got %v after %d", CrossOriginLinkClass, err, len(transport.seen))
+	}
+}

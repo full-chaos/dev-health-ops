@@ -111,7 +111,7 @@ func (c Client) listPages(ctx context.Context, path, operation, dataKey, extra, 
 	loweredPattern := pythonparity.Lower(pattern)
 	var repos []Repo
 	next := normalizeURL(merge(base, path, "per_page="+fmt.Sprint(perPage)+extra))
-	baseOrigin, haveBaseOrigin := originOf(next)
+	baseOrigin := originOf(next)
 	for pages := 0; ; pages++ {
 		if pages >= maxPages {
 			break
@@ -167,10 +167,8 @@ func (c Client) listPages(ctx context.Context, path, operation, dataKey, extra, 
 		next = normalizeURL(next)
 		// The token goes only to the origin it was configured for: a next page on another origin is refused, not
 		// followed without the token (an unauthenticated page 2 could return a silent partial list).
-		if haveBaseOrigin {
-			if nextOrigin, ok := originOf(next); !ok || nextOrigin != baseOrigin {
-				return nil, &Error{Class: CrossOriginLinkClass, Message: "refused a next page link on another origin"}
-			}
+		if originOf(next) != baseOrigin {
+			return nil, &Error{Class: CrossOriginLinkClass, Message: "refused a next page link on another origin"}
 		}
 	}
 	return repos, nil
@@ -179,30 +177,21 @@ func (c Client) listPages(ctx context.Context, path, operation, dataKey, extra, 
 // CrossOriginLinkClass is the error class of a Link next URL whose origin differs from the base URL's.
 const CrossOriginLinkClass = "link_cross_origin_refused"
 
-// origin is where a request goes: the scheme, the host in its IDNA form (lower case) and the port, the scheme's
-// default when the URL names none. Userinfo, path, query and fragment are not part of it.
+// origin is where a request goes: the scheme, the host in its IDNA form and the port. Userinfo, path, query and
+// fragment are not part of it. Its zero value is "no origin": a URL that does not parse.
+//
+// originOf reads URLs that normalizeURL has already put in httpx's form: that is what lower-cases the host and drops
+// a default port (https://H:443 and https://h are one origin). A host IDNA cannot encode, or none, comes out empty, which
+// equals no base's host, so such a link is refused (pinned by TestAnUnencodableLinkHostIsRefused).
 type origin struct{ scheme, host, port string }
 
-func originOf(raw string) (origin, bool) {
+func originOf(raw string) origin {
 	parsed, err := url.Parse(raw)
-	if err != nil || parsed.Host == "" {
-		return origin{}, false
+	if err != nil {
+		return origin{}
 	}
-	scheme := strings.ToLower(parsed.Scheme)
-	encoded, err := pyidna.CodecEncode(strings.ToLower(parsed.Hostname()))
-	if err != nil || encoded == "" {
-		return origin{}, false
-	}
-	port := parsed.Port()
-	if port == "" {
-		switch scheme {
-		case "https":
-			port = "443"
-		case "http":
-			port = "80"
-		}
-	}
-	return origin{scheme: scheme, host: strings.ToLower(encoded), port: port}, true
+	host, _ := pyidna.CodecEncode(parsed.Hostname())
+	return origin{scheme: parsed.Scheme, host: host, port: parsed.Port()}
 }
 
 func orDefault(base string) string {

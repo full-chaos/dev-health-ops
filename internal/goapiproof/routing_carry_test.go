@@ -323,6 +323,40 @@ func TestDecideCarryRefusesWhenThisImagesOwnArtifactsDisagree(t *testing.T) {
 	}
 }
 
+// CHAOS-8144: the same two catalog disagreements on a SHADOW row are a
+// SKIP naming the catalog, never a carry (fail-open) and never a refusal.
+func TestDecideCarrySkipsAShadowRowWhenThisImagesCatalogDisagrees(t *testing.T) {
+	row := CarryRow{Operation: "hotspots", DocumentDigest: carryDocument, Mode: TargetModeShadow, Build: carryBuild, Owner: "go", RolloutPercentage: 0}
+	for name, catalog := range map[string]map[string]string{
+		"catalog does not carry the operation": {},
+		"catalog names another document":       {"hotspots": carryOtherDoc},
+	} {
+		catalog := catalog
+		t.Run(name, func(t *testing.T) {
+			got := DecideCarry(row, CarryInputs{
+				LiveDocumentDigest:    map[string]string{"hotspots": carryDocument},
+				TargetDocumentDigest:  map[string]string{"hotspots": carryDocument},
+				CatalogDocumentDigest: catalog,
+			})
+			if got.Action != CarryActionSkip || got.Refusal != nil {
+				t.Fatalf("got %s (%v: %s), want a SKIP with no refusal", got.Action, got.Refusal, got.Reason)
+			}
+			if !strings.Contains(got.Reason, "edge catalog does not agree") {
+				t.Fatalf("reason %q does not name the catalog", got.Reason)
+			}
+		})
+	}
+	// Control: the same row with an agreeing catalog is carried.
+	got := DecideCarry(row, CarryInputs{
+		LiveDocumentDigest:    map[string]string{"hotspots": carryDocument},
+		TargetDocumentDigest:  map[string]string{"hotspots": carryDocument},
+		CatalogDocumentDigest: map[string]string{"hotspots": carryDocument},
+	})
+	if got.Action != CarryActionCarry {
+		t.Fatalf("control: got %s (%s), want CARRY", got.Action, got.Reason)
+	}
+}
+
 // NULL and an empty JSON container are different recorded intents, and a
 // verb whose whole claim is that it preserves the row must not collapse
 // one into the other -- nor report a row as already-carried when the two

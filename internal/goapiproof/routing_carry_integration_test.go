@@ -1111,3 +1111,36 @@ func TestCarryAccountsForEveryLiveRowWithOneOutcome(t *testing.T) {
 		}
 	}
 }
+
+// CHAOS-8144: a run whose only kept row is PRIMARY still counts as having
+// preserved reachability (the served-mode clause must admit primary, not
+// just canary), and a stale shadow row beside it is skipped with no
+// evidence text written for it.
+func TestCarryPrimaryOnlyRunSucceedsAndASkippedShadowCarriesNoEvidence(t *testing.T) {
+	ctx := t.Context()
+	pool := startAuditedRegistryPostgres(t)
+	seedCarryRow(t, ctx, pool, carryIntegrationLiveDigest, CarryRow{
+		Operation: "featureFlags", DocumentDigest: testDocumentDigest, Mode: "primary",
+		Build: verbsRunningBuild, Owner: "go", RolloutPercentage: 100, ReviewEvidence: "primary",
+	})
+	seedCarryRow(t, ctx, pool, carryIntegrationLiveDigest, CarryRow{
+		Operation: "hotspots", DocumentDigest: testDocumentDigest2, Mode: "shadow",
+		Build: "some-older-build", Owner: "go", RolloutPercentage: 0, ReviewEvidence: "stale shadow",
+	})
+	outcomes, err := Carry(ctx, pool, carryIntegrationRequest())
+	if err != nil {
+		t.Fatalf("Carry: %v (a primary row alone is reachability)", err)
+	}
+	for _, outcome := range outcomes {
+		switch outcome.Operation {
+		case "featureFlags":
+			if outcome.Action != CarryActionCarry {
+				t.Fatalf("featureFlags = %+v, want CARRY", outcome)
+			}
+		case "hotspots":
+			if outcome.Action != CarryActionSkip || outcome.ReviewEvidence != "" {
+				t.Fatalf("hotspots = %+v, want a SKIP with no would-be evidence text", outcome)
+			}
+		}
+	}
+}

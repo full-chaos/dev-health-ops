@@ -1,6 +1,14 @@
 package providerfoundation
 
-import "github.com/full-chaos/dev-health-ops/internal/platform/secrets"
+import (
+	"bytes"
+	"crypto/sha256"
+	"time"
+
+	"golang.org/x/crypto/pbkdf2"
+
+	"github.com/full-chaos/dev-health-ops/internal/platform/secrets"
+)
 
 // DecodeCredential is decodeCredential for the external test package of the
 // frozen credential oracles, which cannot import the program helper from
@@ -72,4 +80,24 @@ func GridGoField(credential Credential, provider, field string) *string {
 		return text("api_key")
 	}
 	return nil
+}
+
+// SealFernetAsPythonDoes is what the Go cipher's Encrypt emits for the key, salt and plaintext when the clock is
+// 1700000000 and the IV is bytes 0..15: the two inputs the frozen Python exchange pins (fernetExchangeProgram), so the
+// result is byte-comparable with the recorded Python ciphertext.
+func SealFernetAsPythonDoes(key, salt string, plaintext []byte) (string, error) {
+	decryptor, err := NewFernetDecryptor(secrets.NewValue(key), salt)
+	if err != nil {
+		return "", err
+	}
+	derived := pbkdf2.Key([]byte(decryptor.key.Reveal()), []byte(decryptor.salt), 600000, 32, sha256.New)
+	iv := make([]byte, 16)
+	for index := range iv {
+		iv[index] = byte(index)
+	}
+	token, err := encryptFernet(plaintext, derived, time.Unix(1700000000, 0), bytes.NewReader(iv))
+	if err != nil {
+		return "", err
+	}
+	return credentialCiphertextV1 + token, nil
 }

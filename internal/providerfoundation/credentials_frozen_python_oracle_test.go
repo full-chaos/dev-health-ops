@@ -86,6 +86,10 @@ func TestFernetCipherMatchesFrozenPythonCustomSalt(t *testing.T) {
 		t.Fatalf("Go opens its recorded ciphertext: plaintext=%q err=%v", opened, err)
 	}
 	exchange := fernetExchangeOf(t, "fernet-custom-salt.golden.json", key, salt, goCustomSaltCiphertext, plaintext)
+	// What Encrypt emits is compared with Python's ciphertext of the same pinned clock and IV, byte for byte.
+	if sealed, err := providerfoundation.SealFernetAsPythonDoes(key, salt, []byte(plaintext)); err != nil || sealed != exchange.PythonCiphertext {
+		t.Fatalf("Go seals %q (err %v), Python sealed %q", sealed, err, exchange.PythonCiphertext)
+	}
 	if exchange.PythonOpensGo != plaintext {
 		t.Fatalf("Python decrypted Go ciphertext as %q", exchange.PythonOpensGo)
 	}
@@ -121,6 +125,9 @@ func TestFernetCipherMatchesFrozenPythonDefaultSalt(t *testing.T) {
 		t.Fatalf("Go opens its recorded ciphertext: plaintext=%q err=%v", opened, err)
 	}
 	exchange := fernetExchangeOf(t, "fernet-default-salt.golden.json", key, "", goDefaultSaltCiphertext, plaintext)
+	if sealed, err := providerfoundation.SealFernetAsPythonDoes(key, "", []byte(plaintext)); err != nil || sealed != exchange.PythonCiphertext {
+		t.Fatalf("Go seals %q (err %v), Python sealed %q", sealed, err, exchange.PythonCiphertext)
+	}
 	if exchange.SaltInEnvironment {
 		t.Fatal("the default-salt exchange ran with a salt in the environment")
 	}

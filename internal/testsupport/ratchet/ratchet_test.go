@@ -57,9 +57,11 @@ func checkNow(t *testing.T, repo, base string) (Result, string, error) {
 	return Check(repo, base, entries[0])
 }
 
-func TestCountIgnoresCommentsAndBlankLines(t *testing.T) {
-	if got := Count([]byte("# c\n\n a \n\t\n#x\nb\n")); got != 2 {
-		t.Fatalf("Count = %d, want 2", got)
+func TestCountIgnoresCommentsAndEmptyLinesAndDoesNotTrim(t *testing.T) {
+	// A whitespace-only line counts, as it does for the recordedfiles parsers (which do not trim): the count can only be
+	// larger than a parser's, never smaller.
+	if got := Count([]byte("# c\n\n a \n\t\n#x\nb\n")); got != 3 {
+		t.Fatalf("Count = %d, want 3", got)
 	}
 }
 
@@ -137,7 +139,7 @@ func TestABaseThatCannotBeReadFails(t *testing.T) {
 	})
 	t.Run("an empty or malformed manifest", func(t *testing.T) {
 		bad := newRepo(t)
-		for _, text := range []string{"", "# only a comment\n", "name-only\n", "a\tb\n", "a\tb\tc\na\td\te\n"} {
+		for _, text := range []string{"", "# only a comment\n", "   \n\n", "name-only\n", "a\tb\n", "a\tb\tc\na\td\te\n", "\tb\tc\n", "a\t\tc\n", "a\tb\t\n", "a\t \tc\n", "a\tb\tc\nd\tb\te\n"} {
 			write(t, bad, ManifestPath, text)
 			if _, err := ReadManifest(bad); err == nil {
 				t.Fatalf("manifest %q was accepted", text)
@@ -220,5 +222,141 @@ func TestAPullRequestThatRaisesTheListIsRedAfterTheMerge(t *testing.T) {
 	run(t, repo, "commit", "-q", "-am", "raise")
 	if _, grew, err := checkNow(t, repo, base); err != nil || grew == "" {
 		t.Fatalf("a list one entry longer than on the base: grew=%q err=%v, want a failure text", grew, err)
+	}
+}
+
+// Resolve with a base GIVEN (the CI path) returns exactly that commit, not HEAD and not a neighbour.
+func TestResolveWithABaseReturnsThatCommit(t *testing.T) {
+	repo := newRepo(t)
+	first := run(t, repo, "rev-parse", "HEAD")
+	write(t, repo, listPath, list("a", "b"))
+	run(t, repo, "commit", "-q", "-am", "second")
+	write(t, repo, listPath, list("a"))
+	run(t, repo, "commit", "-q", "-am", "third")
+	for _, given := range []string{first, "HEAD~1", run(t, repo, "rev-parse", "HEAD")} {
+		want := run(t, repo, "rev-parse", given)
+		got, err := Resolve(repo, given)
+		if err != nil || got != want {
+			t.Fatalf("Resolve(%q) = %q, %v, want %q", given, got, err, want)
+		}
+	}
+	head := run(t, repo, "rev-parse", "HEAD")
+	if got, _ := Resolve(repo, first); got == head {
+		t.Fatal("Resolve returned HEAD for an older commit: the tree would be compared with itself")
+	}
+}
+
+// The merge base of a branch of two commits whose main moved on after the fork is the fork point: not the tip of origin/main,
+// not the parent of HEAD.
+func TestResolveOnABranchIsTheForkPointWhenMainMovedOn(t *testing.T) {
+	repo := newRepo(t)
+	fork := run(t, repo, "rev-parse", "HEAD")
+	run(t, repo, "checkout", "-q", "-b", "topic")
+	write(t, repo, listPath, list("a", "b", "c", "d"))
+	run(t, repo, "commit", "-q", "-am", "topic one")
+	write(t, repo, listPath, list("a", "b", "c"))
+	run(t, repo, "commit", "-q", "-am", "topic two")
+	run(t, repo, "checkout", "-q", "main")
+	write(t, repo, "other.txt", "main moved on\n")
+	run(t, repo, "add", "-A")
+	run(t, repo, "commit", "-q", "-m", "main one")
+	write(t, repo, "other.txt", "main moved on again\n")
+	run(t, repo, "commit", "-q", "-am", "main two")
+	run(t, repo, "update-ref", "refs/remotes/origin/main", "main")
+	run(t, repo, "checkout", "-q", "topic")
+	got, err := Resolve(repo, "")
+	if err != nil || got != fork {
+		t.Fatalf("Resolve = %q, %v, want the fork point %s (origin/main is %s, HEAD^ is %s)", got, err, fork, run(t, repo, "rev-parse", "origin/main"), run(t, repo, "rev-parse", "HEAD^"))
+	}
+}
+
+func TestResolveFailsWhenThereIsNoParentOrNoMergeBase(t *testing.T) {
+	t.Run("HEAD is origin/main with no parent", func(t *testing.T) {
+		repo := newRepo(t)
+		run(t, repo, "update-ref", "refs/remotes/origin/main", "HEAD")
+		if _, err := Resolve(repo, ""); err == nil || !strings.Contains(err.Error(), "no parent") {
+			t.Fatalf("Resolve = %v, want a failure for a first commit", err)
+		}
+	})
+	t.Run("a branch that shares no history with origin/main", func(t *testing.T) {
+		repo := newRepo(t)
+		run(t, repo, "update-ref", "refs/remotes/origin/main", "HEAD")
+		run(t, repo, "checkout", "-q", "--orphan", "island")
+		write(t, repo, "island.txt", "x\n")
+		run(t, repo, "add", "-A")
+		run(t, repo, "commit", "-q", "-m", "island")
+		if _, err := Resolve(repo, ""); err == nil || !strings.Contains(err.Error(), "merge base") {
+			t.Fatalf("Resolve = %v, want a failure for unrelated histories", err)
+		}
+	})
+}
+
+// The command: every list of the manifest is measured, and a list that grew makes the exit status non-zero, whichever list
+// it is.
+func TestRunChecksEveryListAndFailsOnAnyThatGrew(t *testing.T) {
+	repo := newRepo(t)
+	write(t, repo, "lists/two.txt", list("p", "q"))
+	write(t, repo, "lists/three.txt", list("x", "y", "z"))
+	write(t, repo, ManifestPath, "# test\nclosed\t"+listPath+"\tt\ntwo\tlists/two.txt\tt\nthree\tlists/three.txt\tt\n")
+	run(t, repo, "add", "-A")
+	run(t, repo, "commit", "-q", "-m", "three lists")
+	base := run(t, repo, "rev-parse", "HEAD")
+
+	var out, errOut strings.Builder
+	if code := Run(repo, base, &out, &errOut); code != 0 || !strings.Contains(out.String(), "ratchets: OK (3 lists") {
+		t.Fatalf("an unchanged tree: code %d, out %q, err %q", code, out.String(), errOut.String())
+	}
+	for _, grown := range []string{listPath, "lists/two.txt", "lists/three.txt"} {
+		t.Run("only "+grown+" grew", func(t *testing.T) {
+			original := read(t, repo, grown)
+			write(t, repo, grown, original+"added-entry\n")
+			defer write(t, repo, grown, original)
+			var out, errOut strings.Builder
+			code := Run(repo, base, &out, &errOut)
+			if code == 0 {
+				t.Fatalf("a grown list passed: out %q", out.String())
+			}
+			if !strings.Contains(errOut.String(), grown) || strings.Count(out.String(), ": ok") != 2 {
+				t.Fatalf("code %d: every list must be measured and the grown one named: out %q err %q", code, out.String(), errOut.String())
+			}
+		})
+	}
+	t.Run("a base that is not a commit", func(t *testing.T) {
+		var out, errOut strings.Builder
+		if code := Run(repo, strings.Repeat("0", 40), &out, &errOut); code == 0 || out.Len() != 0 {
+			t.Fatalf("code %d out %q: nothing may be reported ok without a base", code, out.String())
+		}
+	})
+}
+
+func read(t *testing.T, repo, path string) string {
+	t.Helper()
+	raw, err := os.ReadFile(filepath.Join(repo, filepath.FromSlash(path)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	return string(raw)
+}
+
+// A manifest row removed, or pointed at another file, takes a list out of the check: that fails.
+func TestAListCannotLeaveTheCheckByEditingTheManifest(t *testing.T) {
+	repo := newRepo(t)
+	write(t, repo, "lists/two.txt", list("p", "q"))
+	write(t, repo, "lists/other.txt", list("x"))
+	write(t, repo, ManifestPath, "# test\nclosed\t"+listPath+"\tt\ntwo\tlists/two.txt\tt\n")
+	run(t, repo, "add", "-A")
+	run(t, repo, "commit", "-q", "-m", "two lists")
+	base := run(t, repo, "rev-parse", "HEAD")
+	for _, row := range []struct{ name, manifest string }{
+		{"a row removed", "closed\t" + listPath + "\tt\n"},
+		{"a row pointed at another file", "closed\t" + listPath + "\tt\ntwo\tlists/other.txt\tt\n"},
+	} {
+		t.Run(row.name, func(t *testing.T) {
+			write(t, repo, ManifestPath, row.manifest)
+			var out, errOut strings.Builder
+			if code := Run(repo, base, &out, &errOut); code == 0 {
+				t.Fatalf("a list left the check and the command passed: %q", out.String())
+			}
+		})
 	}
 }

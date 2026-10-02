@@ -13,6 +13,7 @@ import (
 	"bytes"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -58,11 +59,13 @@ func ReadManifest(repo string) ([]Entry, error) {
 	return entries, nil
 }
 
-// Count is the number of entries of a closed list: the lines that are not blank and do not start with `#`.
+// Count is the number of entries of a closed list: the lines that are not empty and do not start with `#`. Lines are not
+// trimmed, which is how the parsers of recordedfiles read their lists; pyoracle's parser trims, so a whitespace-only line
+// counts here and not there: the count can only be larger than the parser's, never smaller (the check fails closed).
 func Count(data []byte) int {
 	count := 0
 	for _, line := range strings.Split(string(data), "\n") {
-		if line = strings.TrimSpace(line); line != "" && !strings.HasPrefix(line, "#") {
+		if line != "" && !strings.HasPrefix(line, "#") {
 			count++
 		}
 	}
@@ -142,4 +145,81 @@ func Check(repo, base string, entry Entry) (Result, string, error) {
 		return result, fmt.Sprintf("%s: %s holds %d entries and held %d on the base: a closed list only shrinks", entry.Name, entry.Path, result.NowCount, result.BaseCount), nil
 	}
 	return result, "", nil
+}
+
+// KeptNames fails when the manifest at the base names a list that the manifest in the working tree no longer names, or
+// names at another path: removing a row (or pointing it at another file) would otherwise take a list out of the check
+// with a pass. A base with no manifest (this file's first introduction) has nothing to keep.
+func KeptNames(repo, base string, now []Entry) error {
+	raw, err := git(repo, "show", base+":"+ManifestPath)
+	if err != nil {
+		return nil
+	}
+	dir, err := os.MkdirTemp("", "ratchet-base-")
+	if err != nil {
+		return err
+	}
+	defer os.RemoveAll(dir)
+	if err := os.MkdirAll(filepath.Join(dir, "ci"), 0o755); err != nil {
+		return err
+	}
+	if err := os.WriteFile(filepath.Join(dir, filepath.FromSlash(ManifestPath)), raw, 0o600); err != nil {
+		return err
+	}
+	was, err := ReadManifest(dir)
+	if err != nil {
+		return fmt.Errorf("the manifest at the base: %w", err)
+	}
+	paths := map[string]string{}
+	for _, entry := range now {
+		paths[entry.Name] = entry.Path
+	}
+	for _, entry := range was {
+		path, kept := paths[entry.Name]
+		switch {
+		case !kept:
+			return fmt.Errorf("%s names the list %q on the base and no longer does: a closed list leaves the check only when it is deleted, in a PR that says so", ManifestPath, entry.Name)
+		case path != entry.Path:
+			return fmt.Errorf("%s points the list %q at %s and it pointed at %s on the base: a moved list has no base to be compared with", ManifestPath, entry.Name, path, entry.Path)
+		}
+	}
+	return nil
+}
+
+// Run holds every list of the manifest to the base and writes one line per list; it returns the exit status of the
+// command (0 only when every list was measured and none grew).
+func Run(repo, base string, stdout, stderr io.Writer) int {
+	entries, err := ReadManifest(repo)
+	if err != nil {
+		fmt.Fprintf(stderr, "ratchets: FAIL: %v\n", err)
+		return 1
+	}
+	commit, err := Resolve(repo, base)
+	if err != nil {
+		fmt.Fprintf(stderr, "ratchets: FAIL: %v\n", err)
+		return 1
+	}
+	failed := false
+	if err := KeptNames(repo, commit, entries); err != nil {
+		fmt.Fprintf(stderr, "ratchets: FAIL: %v\n", err)
+		failed = true
+	}
+	for _, entry := range entries {
+		result, grew, err := Check(repo, commit, entry)
+		switch {
+		case err != nil:
+			fmt.Fprintf(stderr, "ratchets: FAIL: %v\n", err)
+			failed = true
+		case grew != "":
+			fmt.Fprintf(stderr, "ratchets: FAIL: %s\n", grew)
+			failed = true
+		default:
+			fmt.Fprintf(stdout, "ratchet %s: base %d, now %d: ok\n", entry.Name, result.BaseCount, result.NowCount)
+		}
+	}
+	if failed {
+		return 1
+	}
+	fmt.Fprintf(stdout, "ratchets: OK (%d lists, base %s)\n", len(entries), commit[:12])
+	return 0
 }

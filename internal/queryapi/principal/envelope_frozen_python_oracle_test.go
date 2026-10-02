@@ -251,4 +251,21 @@ func TestVerifierMatchesFrozenPythonIssuedEnvelopeStructure(t *testing.T) {
 	if got.ImpersonatedBy == nil || *got.ImpersonatedBy != impersonator {
 		t.Errorf("ImpersonatedBy = %v, want %s", got.ImpersonatedBy, impersonator)
 	}
+
+	// 3. One flag at a time: with all three set at once, two names crossed in the verifier's struct would still
+	// return three true flags. Each envelope here sets ONLY one flag; the other two must come back false.
+	for _, only := range []string{"is_superuser", "is_superuser_verified", "impersonation_active"} {
+		single := map[string]any{}
+		for name, value := range want.Claims {
+			single[name] = value
+		}
+		single[only] = true
+		got = verifyWith("only "+only, single)
+		flags := map[string]bool{"is_superuser": got.IsSuperuser, "is_superuser_verified": got.IsSuperuserVerified, "impersonation_active": got.ImpersonationActive}
+		for name, value := range flags {
+			if value != (name == only) {
+				t.Errorf("an envelope that sets only %s returned %s = %v", only, name, value)
+			}
+		}
+	}
 }

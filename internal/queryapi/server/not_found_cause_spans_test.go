@@ -104,3 +104,52 @@ func spanFieldTextForServer(span *tracepb.Span) string {
 	}
 	return strings.Join(parts, "\n")
 }
+
+// Q7 (vetter-3): the NON-edge dispatch (the internal /query listener) records the
+// same cause for an unregistered document; the edge is not the only door.
+func TestInternalQueryUnregisteredDocument404SpanSaysUnregisteredDocument(t *testing.T) {
+	read := installSpanTracing(t, "1")
+	verifier, _ := iaVerifier(t)
+	handler, _ := iaDispatch(t, verifier)
+	traced := httpapi.TraceHandler(handler, httpapi.TraceOptions{Listener: "internal", TrustRemoteSampling: true, ProbePaths: queryProbePaths})
+	body := strings.NewReader(`{"query":"query { notRegistered { id } }"}`)
+	req := httptest.NewRequest(http.MethodPost, "/query", body)
+	iaHeaders("org-1", "member", false, false)(req)
+	recorder := httptest.NewRecorder()
+	traced.ServeHTTP(recorder, req)
+	if recorder.Code != http.StatusNotFound {
+		t.Fatalf("status = %d, want 404", recorder.Code)
+	}
+	spans := read()
+	if len(spans) != 1 {
+		t.Fatalf("got %d spans, want 1", len(spans))
+	}
+	if cause, _ := spanString(spans[0], httpapi.NotFoundCauseAttribute); cause != "unregistered_document" {
+		t.Errorf("cause = %q, want unregistered_document", cause)
+	}
+}
+
+// Q12 (vetter-3): the REAL server mux (Build) answers /api/v1/<nothing> through
+// its catch-all and the span says not_found; an inline handler that records
+// nothing would read "other".
+func TestBuildMuxAPIV1CatchAll404SpanSaysNotFound(t *testing.T) {
+	read := installSpanTracing(t, "1")
+	plane, err := Build(func(string) string { return "" })
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer plane.Close()
+	traced := traceListener(plane.Handler, "public", false)
+	recorder := httptest.NewRecorder()
+	traced.ServeHTTP(recorder, httptest.NewRequest(http.MethodGet, "/api/v1/not-a-route", nil))
+	if recorder.Code != http.StatusNotFound {
+		t.Fatalf("status = %d, want 404", recorder.Code)
+	}
+	spans := read()
+	if len(spans) != 1 {
+		t.Fatalf("got %d spans, want 1", len(spans))
+	}
+	if cause, _ := spanString(spans[0], httpapi.NotFoundCauseAttribute); cause != "not_found" {
+		t.Errorf("cause = %q, want not_found (the Build mux's /api/v1/ catch-all)", cause)
+	}
+}

@@ -152,3 +152,29 @@ func spanFieldTextForCause(span *tracepb.Span) string {
 	}
 	return strings.Join(parts, "\n")
 }
+
+// The literal names are the wire contract (a dashboard and a query filter on
+// them): pinned as text, not through the constants (vetter-3 N18, N22).
+func TestNotFoundCauseWireNamesArePinnedAsLiterals(t *testing.T) {
+	if NotFoundCauseAttribute != "dev_health.http.not_found_cause" {
+		t.Errorf("attribute name = %q", NotFoundCauseAttribute)
+	}
+	got := []string{}
+	for _, cause := range NotFoundCauses {
+		got = append(got, string(cause))
+	}
+	if strings.Join(got, ",") != "unregistered_document,ide_off,not_found,other" {
+		t.Errorf("enum words = %v", got)
+	}
+	// And on the wire: an unknown cause and a 404 with no record both read "other" on a matched route.
+	read := tracedEnv(t, "1")
+	route := routeAnswering("/v1/gone", http.StatusNotFound, func(r *http.Request) { RecordNotFoundCause(r.Context(), NotFoundCause("whatever")) })
+	get(spanHandler(t, "public", false, route), "/v1/gone", nil)
+	spans := read()
+	if len(spans) != 1 {
+		t.Fatalf("got %d spans, want 1", len(spans))
+	}
+	if v, ok := attrString(spans[0], "dev_health.http.not_found_cause"); !ok || v != "other" {
+		t.Errorf("literal attribute read = %q (present %v), want other", v, ok)
+	}
+}

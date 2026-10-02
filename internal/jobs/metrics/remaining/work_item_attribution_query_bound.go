@@ -16,7 +16,9 @@ import "strings"
 // 64 KiB per array keeps the worst statement (three arrays, in
 // loadAffectedSubjects, all small in practice; at most two here: donor ids +
 // keys) at about 128 KiB plus the fixed query text, half of the server limit.
-const workItemAttributionMaxArrayBytes = 64 * 1024
+// It is a variable only so the integration equivalence test can force many
+// chunks with a tiny cap; nothing in production assigns it.
+var workItemAttributionMaxArrayBytes = 64 * 1024
 
 var clickhouseStringQuote = strings.NewReplacer(`\`, `\\`, `'`, `\'`)
 

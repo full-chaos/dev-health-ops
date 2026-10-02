@@ -3,6 +3,7 @@ package providersync
 import (
 	"context"
 	"encoding/json"
+	"github.com/full-chaos/dev-health-ops/internal/testsupport/fakehttp"
 	"net/http"
 	"testing"
 	"time"
@@ -280,7 +281,7 @@ func buildGitLabDeploymentTraversalTrace(t *testing.T, input map[string]any) git
 	claim.BeforeAt = oracleGitLabDeploymentTraceTime(t, input, "until")
 	batch, err := (GitLabDeploymentsRouteHandler{MaxDeployments: input["max_deployments"].(int)}).Collect(
 		context.Background(), claim, providerfoundation.Credential{},
-		gitLabRepositoryClient(t, doer, "https://gitlab.test"), oracleGitLabDeploymentsNormalizedAt,
+		gitLabRepositoryClient(t, fakehttp.Client(doer), "https://gitlab.test"), oracleGitLabDeploymentsNormalizedAt,
 	)
 	if err != nil {
 		t.Fatal(err)

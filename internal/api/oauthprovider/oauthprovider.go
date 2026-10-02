@@ -22,6 +22,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"github.com/full-chaos/dev-health-ops/internal/httpguard"
 	"io"
 	"net/http"
 	"strings"
@@ -143,9 +144,7 @@ func (c *Client) get(ctx context.Context, url string, headers map[string]string,
 	}
 	// httpx does not follow redirects by default, and raise_for_status
 	// refuses a 3xx: the redirect is returned, not followed.
-	noRedirect := *client
-	noRedirect.CheckRedirect = func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }
-	response, err := noRedirect.Do(request)
+	response, err := httpguard.NoRedirects(client).Do(request)
 	if err != nil {
 		return nil, &UserInfoError{Reason: what + " request failed"}
 	}

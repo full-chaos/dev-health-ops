@@ -2,6 +2,7 @@ package providersync
 
 import (
 	"context"
+	"github.com/full-chaos/dev-health-ops/internal/testsupport/fakehttp"
 	"io"
 	"net/http"
 	"strings"
@@ -60,7 +61,7 @@ func TestJiraAtlassianRouteMigratedFromRetiredSearchEndpoint(t *testing.T) {
 	claim := nativeTestClaim("jira", "work-items")
 	claim.SourceExternalID = "SUP"
 	client := jiraWorkItemsTestClient(
-		t, jiraSearchJQLMigrationDoer{t: t},
+		t, fakehttp.Client(jiraSearchJQLMigrationDoer{t: t}),
 		providerfoundation.LeaseGuardFunc(func(context.Context) error { return nil }),
 	)
 	handler := JiraAtlassianRouteHandler{StatusMapping: loadRealStatusMapping(t), Identity: jiraRouteIdentity}

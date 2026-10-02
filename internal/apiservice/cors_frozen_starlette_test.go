@@ -1,19 +1,19 @@
 package apiservice
 
 import (
+	"context"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
-	"os/exec"
 	"path/filepath"
 	"reflect"
-	"runtime"
 	"sort"
 	"strings"
 	"testing"
 
 	"github.com/full-chaos/dev-health-ops/internal/api/pyheaders"
 	"github.com/full-chaos/dev-health-ops/internal/platform/config"
+	"github.com/full-chaos/dev-health-ops/internal/testsupport/moduleroot"
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/pyoracle"
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/venueoracle"
 )
@@ -84,8 +84,8 @@ type corsCase struct {
 // middleware module, so it needs the full project environment: it runs in
 // the venue-oracles job, which discovers it by name and requires its proof.
 func TestCORSMatchesFrozenStarlette(t *testing.T) {
-	golden := venueoracle.OpenGolden(t, programGolden("cors-starlette", t.Name(), "1044e4342d107474f8f42de4ee0d8cdd04e9e6da67492eaad3bc9172b393fc7c"))
-	_, file, _, _ := runtime.Caller(0)
+	golden := venueoracle.OpenGolden(t, programGolden("cors-starlette", t.Name(), "b9b95dc21c75108e286bb853e53a8158b7b50aae8fec00a9d94c72828cb09074"))
+	_, file, _, _ := moduleroot.Caller(0)
 	root := golden.PythonRoot(t, filepath.Clean(filepath.Join(filepath.Dir(file), "..", "..")))
 
 	configs := map[string]*string{
@@ -115,14 +115,16 @@ func TestCORSMatchesFrozenStarlette(t *testing.T) {
 	}
 	input, _ := json.Marshal(map[string]any{"configs": configs, "cases": cases})
 	request := venueoracle.ProgramRequest("cors matrix", pythonCORSProgram, input, producerEnv)
-	answers := golden.Produce(t, root, []venueoracle.Request{request}, func(_ *venueoracle.Producer, _ []venueoracle.Request) []venueoracle.Response {
-		python := pyoracle.Resolve(t, root)
-		command := exec.Command(python, "-c", pythonCORSProgram)
-		command.Env = producerCommandEnv(root)
+	answers := golden.Produce(t, root, []venueoracle.Request{request}, func(producer *venueoracle.Producer, _ []venueoracle.Request) []venueoracle.Response {
+		producer.RequireDeployed()
+		command, err := producer.Command(context.Background(), producerEnv, nil, "-c", pythonCORSProgram)
+		if err != nil {
+			t.Fatal(err)
+		}
 		command.Stdin = strings.NewReader(string(input))
 		output, err := command.CombinedOutput()
 		if err != nil {
-			t.Fatalf("live Starlette: %v", pyoracle.RunError(python, err, output))
+			t.Fatalf("live Starlette: %v", pyoracle.RunError(command.Path, err, output))
 		}
 		return []venueoracle.Response{{Status: 0, Body: withoutLogLines(output)}}
 	})

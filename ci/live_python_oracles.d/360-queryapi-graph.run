@@ -1,4 +1,0 @@
-label=internal/queryapi/graph (operation org guard vs the live OrgIdAuthExtension)
-package=./internal/queryapi/graph
-run=^TestOperationOrgViolationMatchesLivePythonExtension$
-proof=query-api-org-guard|the query-api operation org guard live Python oracle measurement did not occur

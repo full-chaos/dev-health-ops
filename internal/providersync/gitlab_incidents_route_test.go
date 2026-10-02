@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"github.com/full-chaos/dev-health-ops/internal/testsupport/fakehttp"
 	"net/http"
 	"strings"
 	"testing"
@@ -29,7 +30,7 @@ func TestGitLabIncidentsRouteEmitsCompleteCanonicalBatch(t *testing.T) {
 	claim := nativeTestClaim("gitlab", "incidents")
 	batch, err := (GitLabIncidentsRouteHandler{PerPage: 5, MaxIssues: 10}).Collect(
 		context.Background(), claim, providerfoundation.Credential{},
-		gitLabRepositoryClient(t, doer, "https://GITLAB.example:443"), normalizedAt,
+		gitLabRepositoryClient(t, fakehttp.Client(doer), "https://GITLAB.example:443"), normalizedAt,
 	)
 	if err != nil {
 		t.Fatal(err)
@@ -125,7 +126,7 @@ func TestGitLabIncidentsRouteEmitsThreeEmptyEffects(t *testing.T) {
 	batch, err := (GitLabIncidentsRouteHandler{}).Collect(
 		context.Background(), nativeTestClaim("gitlab", "incidents"),
 		providerfoundation.Credential{},
-		gitLabRepositoryClient(t, doer, "https://gitlab.example"),
+		gitLabRepositoryClient(t, fakehttp.Client(doer), "https://gitlab.example"),
 		time.Date(2026, 8, 3, 12, 0, 0, 0, time.UTC),
 	)
 	if err != nil {
@@ -156,7 +157,7 @@ func TestGitLabIncidentsRouteCountsPhysicalRetryAttempts(t *testing.T) {
 		{body: `[{"id":1,"iid":1,"issue_type":"incident","state":"opened","title":"one","created_at":"2026-07-20T10:00:00Z"}]`},
 	}}
 	client, err := providerfoundation.NewHTTPClient(
-		"gitlab", "https://gitlab.example", doer,
+		"gitlab", "https://gitlab.example", fakehttp.Client(doer),
 		func(*http.Request) error { return nil },
 		providerfoundation.RetryPolicy{
 			MaxAttempts: 2, InitialWait: time.Nanosecond, MaxWait: time.Nanosecond,
@@ -233,7 +234,7 @@ func TestGitLabIncidentsRouteFailsClosedOnIncompleteOrMalformedInventory(t *test
 			batch, err := test.handler.Collect(
 				context.Background(), nativeTestClaim("gitlab", "incidents"),
 				providerfoundation.Credential{},
-				gitLabRepositoryClient(t, doer, "https://gitlab.example"), now,
+				gitLabRepositoryClient(t, fakehttp.Client(doer), "https://gitlab.example"), now,
 			)
 			if err == nil || batch.Watermark != nil || len(batch.Effects) != 0 {
 				t.Fatalf("batch=%+v error=%v", batch, err)

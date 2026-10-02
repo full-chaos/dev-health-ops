@@ -247,7 +247,9 @@ func (executor *CapacityExecutor) writeForecasts(
             simulation_count, p50_days, p85_days, p95_days,
             p50_date, p85_date, p95_date, p50_items, p85_items, p95_items,
             throughput_mean, throughput_stddev, insufficient_history,
-            high_variance, org_id
+            high_variance, org_id,
+            completion_days_values, completion_days_counts,
+            completion_items_values, completion_items_counts
         )`)
 	if err != nil {
 		return 0, fmt.Errorf("prepare capacity batch: %w", err)
@@ -276,6 +278,11 @@ func (executor *CapacityExecutor) writeForecasts(
 			boolToUInt8(row.Forecast.InsufficientHistory),
 			boolToUInt8(row.Forecast.HighVariance),
 			row.OrgID,
+			// CHAOS-7624, migration 101: the Monte Carlo distribution, last in
+			// the column list so every position above is unchanged. Empty (never
+			// nil) slices are the "no distribution" value.
+			narrowed.daysValues, narrowed.daysCounts,
+			narrowed.itemsValues, narrowed.itemsCounts,
 		); err != nil {
 			return 0, fmt.Errorf("append capacity row: %w", err)
 		}
@@ -306,6 +313,13 @@ type narrowedCapacityRow struct {
 	simulationCount              uint32
 	p50Days, p85Days, p95Days    *uint16
 	p50Items, p85Items, p95Items *uint32
+
+	// The persisted distribution (migration 101): parallel value / count slices.
+	// Non-nil and empty when that mode did not simulate.
+	daysValues  []uint16
+	daysCounts  []uint32
+	itemsValues []uint32
+	itemsCounts []uint32
 }
 
 // narrowCapacityRow converts every integer this row writes, naming the first
@@ -359,7 +373,67 @@ func narrowCapacityRow(row capacityRow) (narrowedCapacityRow, error) {
 		"p95_items", row.Forecast.P95Items); err != nil {
 		return narrowedCapacityRow{}, err
 	}
+	if narrowed.daysValues, narrowed.daysCounts, err = narrowCapacityDaysHistogram(
+		row.Forecast.DaysHistogram); err != nil {
+		return narrowedCapacityRow{}, err
+	}
+	if narrowed.itemsValues, narrowed.itemsCounts, err = narrowCapacityItemsHistogram(
+		row.Forecast.ItemsHistogram); err != nil {
+		return narrowedCapacityRow{}, err
+	}
 	return narrowed, nil
+}
+
+// narrowCapacityDaysHistogram narrows a completion-days histogram for the
+// Array(UInt16) / Array(UInt32) pair. A nil histogram (that mode did not run)
+// is a non-nil EMPTY pair: the driver binds an Array from a slice, and empty is
+// the persisted meaning of "no distribution".
+func narrowCapacityDaysHistogram(
+	histogram *numerical.Histogram,
+) ([]uint16, []uint32, error) {
+	if histogram == nil {
+		return []uint16{}, []uint32{}, nil
+	}
+	values := make([]uint16, 0, len(histogram.Values))
+	counts := make([]uint32, 0, len(histogram.Counts))
+	for index, value := range histogram.Values {
+		narrowedValue, err := capacityUint16("completion_days_values", value)
+		if err != nil {
+			return nil, nil, err
+		}
+		narrowedCount, err := capacityUint32("completion_days_counts", histogram.Counts[index])
+		if err != nil {
+			return nil, nil, err
+		}
+		values = append(values, narrowedValue)
+		counts = append(counts, narrowedCount)
+	}
+	return values, counts, nil
+}
+
+// narrowCapacityItemsHistogram is the items-completed twin, Array(UInt32) on
+// both sides.
+func narrowCapacityItemsHistogram(
+	histogram *numerical.Histogram,
+) ([]uint32, []uint32, error) {
+	if histogram == nil {
+		return []uint32{}, []uint32{}, nil
+	}
+	values := make([]uint32, 0, len(histogram.Values))
+	counts := make([]uint32, 0, len(histogram.Counts))
+	for index, value := range histogram.Values {
+		narrowedValue, err := capacityUint32("completion_items_values", value)
+		if err != nil {
+			return nil, nil, err
+		}
+		narrowedCount, err := capacityUint32("completion_items_counts", histogram.Counts[index])
+		if err != nil {
+			return nil, nil, err
+		}
+		values = append(values, narrowedValue)
+		counts = append(counts, narrowedCount)
+	}
+	return values, counts, nil
 }
 
 func boolToUInt8(value bool) uint8 {
@@ -506,6 +580,11 @@ var capacityTableRequirements = map[string]capacityTableRequirement{
 			"p50_date", "p85_date", "p95_date", "p50_items", "p85_items", "p95_items",
 			"throughput_mean", "throughput_stddev", "insufficient_history",
 			"high_variance",
+			// Migration 101 (CHAOS-7624). Required, so a database that has not
+			// applied it is refused at construction instead of failing every
+			// insert.
+			"completion_days_values", "completion_days_counts",
+			"completion_items_values", "completion_items_counts",
 		},
 		// Written, never read back with FINAL, so this code does not depend on
 		// the engine collapsing anything here.

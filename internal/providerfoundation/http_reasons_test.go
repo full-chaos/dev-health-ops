@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"github.com/full-chaos/dev-health-ops/internal/platform/secrets"
+	"github.com/full-chaos/dev-health-ops/internal/testsupport/fakehttp"
 	"net/http"
 	"net/http/httptest"
 	"testing"
@@ -18,7 +19,7 @@ func TestNewHTTPClientRefusalsNameTheirCause(t *testing.T) {
 			LeaseGuardFunc(func(context.Context) error { return nil }), DefaultRetryPolicy()
 	}
 	base, doer, auth, lease, retry := good()
-	if _, err := NewHTTPClient("jira", base, doer, auth, retry, lease); err != nil {
+	if _, err := NewHTTPClient("jira", base, fakehttp.Client(doer), auth, retry, lease); err != nil {
 		t.Fatalf("the good arguments are refused: %v", err)
 	}
 	for name, tc := range map[string]struct {
@@ -34,7 +35,7 @@ func TestNewHTTPClientRefusalsNameTheirCause(t *testing.T) {
 	} {
 		base, doer, auth, lease, retry := good()
 		tc.mutate(&base, &doer, &auth, &lease, &retry)
-		_, err := NewHTTPClient("jira", base, doer, auth, retry, lease)
+		_, err := NewHTTPClient("jira", base, fakehttp.Client(doer), auth, retry, lease)
 		if !errors.Is(err, ErrCredentialInvalid) {
 			t.Errorf("%s: %v is not a credential refusal", name, err)
 			continue
@@ -139,7 +140,28 @@ func TestPagerDutyValidationClientDropsTheTokenOnAHostChange(t *testing.T) {
 	defer origin.Close()
 	request, _ := http.NewRequest(http.MethodGet, origin.URL, nil)
 	request.Header.Set("Authorization", "Token token=fake")
-	response, err := pagerDutyClient(nil, true, 5*time.Second).Do(request)
+	response, err := pagerDutyValidationClient(nil, 5*time.Second).Do(request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_ = response.Body.Close()
+	if !hit || got != "" {
+		t.Fatalf("followed=%v, Authorization on the other host %q: want followed with none", hit, got)
+	}
+}
+
+// The same for a SUPPLIED client: the validation read follows a redirect (httpx does) but a supplied client of the
+// default policy must not replay the token to the other host (pagerDutyClient, followRedirects = true).
+func TestPagerDutyValidationSuppliedClientDropsTheTokenOnAHostChange(t *testing.T) {
+	var got string
+	var hit bool
+	target := httptest.NewServer(http.HandlerFunc(func(_ http.ResponseWriter, r *http.Request) { hit, got = true, r.Header.Get("Authorization") }))
+	defer target.Close()
+	origin := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { http.Redirect(w, r, target.URL, http.StatusFound) }))
+	defer origin.Close()
+	request, _ := http.NewRequest(http.MethodGet, origin.URL, nil)
+	request.Header.Set("Authorization", "Token token=fake")
+	response, err := pagerDutyValidationClient(&http.Client{}, 5*time.Second).Do(request)
 	if err != nil {
 		t.Fatal(err)
 	}

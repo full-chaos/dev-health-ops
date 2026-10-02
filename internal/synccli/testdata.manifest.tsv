@@ -2,9 +2,12 @@
 # python-recorded set: e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855 (0 files)
 # header-before-stamp set: e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855 (0 files)
 bdbfe76e9ec9080b7012e3e806c0a042fce449301e22a41a0fa04ed4e4a16641	unclassified	batch_loop_oracle.py
-56b17e551d28990ec6908c45baa088cfce406dc3aac4411b81e0221f701a6cd5	unclassified	db_lookup_oracle.py
+18e780bc9f622ad1317b47c7268e1fa786878140dcf9bfecfdf1dd0582378f99	hand-written	db_lookup_oracle.py
+-	header	golden/batch_loop.json
+-	header	golden/db_lookup.json
 -	header	golden/local_rerun.json
 -	header	golden/local_sync.json
+-	header	golden/sync_target.json
 -	header	golden/teams_github.json
 -	header	golden/teams_gitlab.json
 -	header	golden/teams_linear.json

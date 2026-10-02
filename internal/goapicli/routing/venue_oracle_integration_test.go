@@ -32,13 +32,24 @@ package routing
 //     of an operation the catalog does not register is listed alike by both (UNREGISTERED).
 //     The status states below assert both.
 //
+// The oracle does not depend on this tree's schema or catalog (CHAOS-7978): both sides read the checked-in
+// byte copy of the pinned checkout's catalog (testdata/pin_catalog.json) and the Go plane runs as if its SDL
+// digest were the pin's (testdata/pin_schema_digest.txt; see oraclePlane), so a schema change does not need the
+// golden recorded again. NOT compared to Python: a catalog that names TWO documents per operation (the dual
+// accept of CHAOS-8000): the pinned Python reads one digest per operation and has no answer for it; those
+// scenarios are Go-only named differences, asserted in the Go tests of the dispatcher and the verbs.
+//
 // The Python verbs' answers were executed once on routingPythonBuild and are frozen in
 // testdata/golden/routing.json (the recipe regenerates them by execution): no Python runs in the test.
 
 import (
+	"bytes"
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"os"
 	"os/exec"
 	"path/filepath"
 	"reflect"
@@ -68,9 +79,32 @@ type oracleRow struct {
 	rollout                                  int
 }
 
+// oraclePlane is one database the verbs run against. The Python producer runs from the PINNED checkout, so
+// the schema digest it calls live is the pin's (pinDigest). The Go verbs compute theirs from this tree's SDL
+// (local), which a schema change moves: for the Go plane the oracle seeds and serves local where the
+// scenarios say pinDigest (real) and reads every digest the Go side prints or stores back as pinDigest
+// (norm), so that the two planes are compared as if they ran the same SDL, whatever the SDL of this tree is.
 type oraclePlane struct {
 	pool *pgxpool.Pool
 	dsn  string
+	// local and pin are set for the Go plane only.
+	local, pin string
+}
+
+// real is the digest the plane really stores and serves where a scenario names d.
+func (p oraclePlane) real(d string) string {
+	if p.local != "" && d == p.pin {
+		return p.local
+	}
+	return d
+}
+
+// norm is s with the plane's own schema digest read as the pin's.
+func (p oraclePlane) norm(s string) string {
+	if p.local == "" {
+		return s
+	}
+	return strings.ReplaceAll(s, p.local, p.pin)
 }
 
 func (p oraclePlane) seed(t *testing.T, rows []oracleRow) {
@@ -85,13 +119,13 @@ func (p oraclePlane) seed(t *testing.T, rows []oracleRow) {
 	}
 	for _, row := range rows {
 		if _, err := p.pool.Exec(ctx, `INSERT INTO go_api_candidate_build (schema_digest, document_digest, selected_operation, candidate_build)
-			VALUES ($1,$2,$3,$4) ON CONFLICT DO NOTHING`, row.schema, row.document, row.operation, row.build); err != nil {
+			VALUES ($1,$2,$3,$4) ON CONFLICT DO NOTHING`, p.real(row.schema), row.document, row.operation, row.build); err != nil {
 			t.Fatal(err)
 		}
 		if _, err := p.pool.Exec(ctx, `INSERT INTO go_api_routing_state
 			(schema_digest, document_digest, selected_operation, current_candidate_build, owner, mode, rollout_percentage, review_evidence, recorded_by, updated_at)
 			VALUES ($1,$2,$3,$4,'go',$5,$6,'seeded','seed','2026-01-01T00:00:00Z')`,
-			row.schema, row.document, row.operation, row.build, row.mode, row.rollout); err != nil {
+			p.real(row.schema), row.document, row.operation, row.build, row.mode, row.rollout); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -115,11 +149,14 @@ func (p oraclePlane) state(t *testing.T) []string {
 		if err := rows.Scan(&schema, &document, &operation, &build, &owner, &mode, &eligible, &rollout, &evidence, &by, &moved); err != nil {
 			t.Fatal(err)
 		}
-		out = append(out, fmt.Sprintf("%s|%s|%s|%s|%s|%s|%s|%d|%s|%s|moved=%v", schema, document, operation, build, owner, mode, eligible, rollout, evidence, by, moved))
+		out = append(out, p.norm(fmt.Sprintf("%s|%s|%s|%s|%s|%s|%s|%d|%s|%s|moved=%v", schema, document, operation, build, owner, mode, eligible, rollout, evidence, by, moved)))
 	}
 	if err := rows.Err(); err != nil {
 		t.Fatal(err)
 	}
+	// The query orders by the REAL digest; the Go plane's differs from the pin's, so what norm turned into the
+	// pin's digest is put in the order the pin's digest sorts in (the order the Python plane's rows came in).
+	sort.Strings(out)
 	return out
 }
 
@@ -162,7 +199,8 @@ func oracleGo(t *testing.T, plane oraclePlane, catalogPath string, args ...strin
 	t.Helper()
 	argv := append(append([]string{}, args...), "-postgres-uri", plane.dsn, "-catalog", catalogPath)
 	out, errOut, err := captureVerb(t, argv...)
-	return exitCodeFor(err), out, errOut
+	requireCensusAscending(t, out)
+	return exitCodeFor(err), plane.norm(out), plane.norm(errOut)
 }
 
 var (
@@ -259,7 +297,28 @@ type recordedStatus struct {
 type routingRecorded struct {
 	Scenarios []recordedRun    `json:"scenarios"`
 	Status    []recordedStatus `json:"status"`
+	// PinSchemaDigest is the schema digest the pinned checkout's own Python computed: the frozen run requires it
+	// to be the constant the oracle seeds as "live" (testdata/pin_schema_digest.txt).
+	PinSchemaDigest string `json:"pin_schema_digest"`
 }
+
+const (
+	// pinCatalogPath is the byte copy of the pinned checkout's go_api_operations.json both sides read.
+	pinCatalogPath = "testdata/pin_catalog.json"
+	// pinSchemaDigestPath holds the schema digest the pinned checkout computes.
+	pinSchemaDigestPath = "testdata/pin_schema_digest.txt"
+	pinSchemaProgram    = "import sys\nfrom dev_health_ops.api.graphql.go_api_schema_digest import current_schema_digest\nsys.stdout.write(current_schema_digest())\n"
+)
+
+// pinSchemaDigest is the live schema digest of the pinned checkout, a constant of the oracle: the SDL of this
+// tree is not what the Python answers were recorded under.
+var pinSchemaDigest = func() string {
+	raw, err := os.ReadFile(pinSchemaDigestPath)
+	if err != nil {
+		panic(fmt.Sprintf("the routing oracle needs %s: %v", pinSchemaDigestPath, err))
+	}
+	return strings.TrimSpace(string(raw))
+}()
 
 func TestGoAPIRoutingMatchesFrozenPython(t *testing.T) {
 	repoRoot, err := filepath.Abs(filepath.Join("..", "..", ".."))
@@ -269,12 +328,37 @@ func TestGoAPIRoutingMatchesFrozenPython(t *testing.T) {
 	golden := venueoracle.OpenGolden(t, venueoracle.GoldenSpec{
 		Path:        "testdata/golden/routing.json",
 		PythonBuild: routingPythonBuild,
-		SHA256:      "4cf78572bf7693696856d2941a903468365883e6fb72270b5178daaf0b90678c",
+		SHA256:      "2301550890b33b1bdc4132400f6349ccb1660aa8d3b57f59f57af6938d1f0adb",
 		Recipe: "git worktree add --detach $DIR " + routingPythonBuild + " (with its .venv: uv sync --frozen --no-install-project); then from the repository root: " +
 			"go run ./internal/testsupport/venueoracle/goldenrecord -pkg ./internal/goapicli/routing/ -test '^TestGoAPIRoutingMatchesFrozenPython$' -python-root $DIR",
 	})
 	pyRoot := golden.PythonRoot(t, repoRoot)
-	catalogPath := filepath.Join(repoRoot, goapiproof.DefaultCatalogPath)
+	if golden.Recording() {
+		// In a recording the pinned checkout is there: the copy both sides read must BE its catalog, byte for
+		// byte. Missing or different is a failure, never a skip.
+		pinned, err := os.ReadFile(filepath.Join(pyRoot, goapiproof.DefaultCatalogPath))
+		if err != nil {
+			t.Fatalf("the pinned checkout's catalog cannot be read: %v", err)
+		}
+		copied, err := os.ReadFile(pinCatalogPath)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !bytes.Equal(pinned, copied) {
+			t.Fatalf("%s is not the pinned checkout's %s: copy it again from the pin (cp $DIR/%s %s)", pinCatalogPath, goapiproof.DefaultCatalogPath, goapiproof.DefaultCatalogPath, pinCatalogPath)
+		}
+	}
+	catalogBytes, err := os.ReadFile(pinCatalogPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	catalogSum := sha256.Sum256(catalogBytes)
+	// Both sides read ONE catalog: the checked-in byte copy of the pinned checkout's own. The catalog of this
+	// tree moves with every schema change; the oracle compares the verbs' behaviour, not the catalog's content.
+	catalogPath, err := filepath.Abs(pinCatalogPath)
+	if err != nil {
+		t.Fatal(err)
+	}
 	catalog, err := goapiproof.LoadOperationCatalog(catalogPath)
 	if err != nil {
 		t.Fatal(err)
@@ -288,11 +372,11 @@ func TestGoAPIRoutingMatchesFrozenPython(t *testing.T) {
 		t.Fatalf("the catalog registers %d operations; the oracle needs at least 6", len(ops))
 	}
 	ops = ops[:6]
-	live := localSchemaDigest()
+	live := pinSchemaDigest
 	stale := "sha256:" + strings.Repeat("7", 64)
 
 	goPool, goDSN := startVerbPostgres(t)
-	goPlane := oraclePlane{goPool, goDSN}
+	goPlane := oraclePlane{pool: goPool, dsn: goDSN, local: localSchemaDigest(), pin: pinSchemaDigest}
 
 	scenarios := []oracleScenario{
 		{name: "dry run, every registered operation", args: []string{"disable", "--mode", "disabled"}},
@@ -465,7 +549,7 @@ func TestGoAPIRoutingMatchesFrozenPython(t *testing.T) {
 		}
 		keys[index] = key
 	}
-	input, err := json.Marshal(map[string]any{"scenarios": keys, "live": live, "catalogOperations": ops})
+	input, err := json.Marshal(map[string]any{"scenarios": keys, "live": live, "catalogOperations": ops, "pinCatalogSha256": hex.EncodeToString(catalogSum[:])})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -473,7 +557,7 @@ func TestGoAPIRoutingMatchesFrozenPython(t *testing.T) {
 	answers := golden.Produce(t, pyRoot, []venueoracle.Request{request}, func(producer *venueoracle.Producer, _ []venueoracle.Request) []venueoracle.Response {
 		producer.RequireDeployed()
 		pyPool, pyDSN := startVerbPostgres(t)
-		py := oraclePlane{pyPool, pyDSN}
+		py := oraclePlane{pool: pyPool, dsn: pyDSN}
 		var recorded routingRecorded
 		for _, sc := range scenarios {
 			py.seed(t, rowsFor(sc))
@@ -482,6 +566,19 @@ func TestGoAPIRoutingMatchesFrozenPython(t *testing.T) {
 			recorded.Scenarios = append(recorded.Scenarios, recordedRun{Name: sc.name, Code: code, State: py.state(t), Plan: planLines(out)})
 		}
 		recorded.Status = routingStatusPython(t, producer, py, catalog, ops, live, stale)
+		schemaCommand, err := producer.Command(context.Background(), routingPythonSettings, nil, "-c", pinSchemaProgram)
+		if err != nil {
+			t.Fatal(err)
+		}
+		schemaCommand.Dir = producer.Root
+		schemaOut, err := schemaCommand.Output()
+		if err != nil {
+			t.Fatalf("the pinned checkout's schema digest: %v", err)
+		}
+		if got := strings.TrimSpace(string(schemaOut)); got != live {
+			t.Fatalf("the pinned checkout computes the schema digest %s, %s holds %s: write it there", got, pinSchemaDigestPath, live)
+		}
+		recorded.PinSchemaDigest = live
 		body, err := json.Marshal(recorded)
 		if err != nil {
 			t.Fatal(err)
@@ -492,6 +589,9 @@ func TestGoAPIRoutingMatchesFrozenPython(t *testing.T) {
 	var frozen routingRecorded
 	if err := json.Unmarshal([]byte(answers[0].Body), &frozen); err != nil {
 		t.Fatal(err)
+	}
+	if frozen.PinSchemaDigest != live {
+		t.Fatalf("the golden was recorded under the pin's schema digest %q, %s holds %q", frozen.PinSchemaDigest, pinSchemaDigestPath, live)
 	}
 	if len(frozen.Scenarios) != len(scenarios) || len(frozen.Status) != 5 {
 		t.Fatalf("the golden holds %d scenarios and %d status runs, the test runs %d and 5", len(frozen.Scenarios), len(frozen.Status), len(scenarios))
@@ -552,6 +652,32 @@ func TestGoAPIRoutingMatchesFrozenPython(t *testing.T) {
 
 // censusLines is the `rows by schema_digest:` block of a text `status`: the heading and the digest lines up to
 // the first blank line, which both producers print alike.
+// requireCensusAscending fails when the digest lines of a text `status` census, AS THE VERB PRINTED THEM (before
+// the Go plane's digest is read as the pin's, and before censusLines orders them for the comparison), are not in
+// ascending order of the digest: the order is part of what the verb prints, and the comparison's own sort
+// would otherwise hide a verb that printed them in another order.
+func requireCensusAscending(t *testing.T, text string) {
+	t.Helper()
+	var digests []string
+	in := false
+	for _, line := range strings.Split(text, "\n") {
+		if strings.HasPrefix(line, "rows by schema_digest:") {
+			in = true
+			continue
+		}
+		if !in {
+			continue
+		}
+		if strings.TrimSpace(line) == "" {
+			break
+		}
+		digests = append(digests, strings.Fields(line)[0])
+	}
+	if !sort.StringsAreSorted(digests) {
+		t.Errorf("the census digests are not printed in ascending order of the digest: %v", digests)
+	}
+}
+
 func censusLines(text string) string {
 	lines := strings.Split(text, "\n")
 	var out []string
@@ -566,6 +692,11 @@ func censusLines(text string) string {
 			}
 			out = append(out, line)
 		}
+	}
+	// The digest lines follow the heading in the order of the digests; the Go plane's own digest was read
+	// back as the pin's (oraclePlane.norm), so the lines are put in the order the digests sort in as read.
+	if len(out) > 1 {
+		sort.Strings(out[1:])
 	}
 	return strings.Join(out, "\n")
 }
@@ -666,7 +797,7 @@ func oracleStatus(t *testing.T, goPlane oraclePlane, catalogPath string, catalog
 		{live, catalog[ops[4]], ops[4], oracleBuildB, "disabled", 0},
 	}
 	goPlane.seed(t, rows)
-	server := startQueryAPI(t, live, catalog)
+	server := startQueryAPI(t, goPlane.real(live), catalog)
 	goCode, goOut, goErr := oracleGo(t, goPlane, catalogPath, "status", "-json", "-registry-url", server.URL+"/registry")
 	compareStatus(t, "planes agree", false, pyStatus[0].Code, pyStatus[0].Out, "", goCode, goOut, goErr)
 	textCode, textOut, textErr := oracleGo(t, goPlane, catalogPath, "status", "-registry-url", server.URL+"/registry")
@@ -687,7 +818,7 @@ func oracleStatus(t *testing.T, goPlane oraclePlane, catalogPath string, catalog
 		{live, "sha256:" + strings.Repeat("8", 64), "notInTheCatalog", oracleBuildB, "canary", 5},
 	}
 	goPlane.seed(t, rows)
-	server = startQueryAPI(t, live, catalog)
+	server = startQueryAPI(t, goPlane.real(live), catalog)
 	defer server.Close()
 	pyCode, pyOut := pyStatus[3].Code, pyStatus[3].Out
 	goCode, goOut, goErr = oracleGo(t, goPlane, catalogPath, "status", "-json", "-registry-url", server.URL+"/registry")

@@ -29,6 +29,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"github.com/full-chaos/dev-health-ops/internal/httpguard"
 	envsecrets "github.com/full-chaos/dev-health-ops/internal/platform/secrets"
 	"io"
 	"log/slog"
@@ -328,7 +329,7 @@ func (sender *resendSender) Send(ctx context.Context, message Message) error {
 	}
 	request = request.WithContext(httptrace.WithClientTrace(request.Context(), trace))
 
-	response, err := sender.client.Do(request)
+	response, err := httpguard.NoRedirects(sender.client).Do(request) // the API key rides this request
 	if err != nil {
 		if !wroteRequest {
 			// The request was never fully written to the wire at all -- a

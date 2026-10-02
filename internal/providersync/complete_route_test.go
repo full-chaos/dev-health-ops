@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"github.com/full-chaos/dev-health-ops/internal/testsupport/fakehttp"
 	"io"
 	"net/http"
 	"strings"
@@ -120,7 +121,7 @@ func TestCompleteRouteExecutorRejectsAliasActivation(t *testing.T) {
 	) providerfoundation.BackoffGate {
 		return gate
 	}
-	executor.Doer = doer
+	executor.Doer = fakehttp.Client(doer)
 	_, err := executor.Execute(context.Background(), session, descriptor)
 	if !errors.Is(err, ErrInvalidConfiguration) {
 		t.Fatalf("alias execution error=%v", err)
@@ -163,7 +164,7 @@ func TestCompleteRouteExecutorRejectsNonPlannableDescriptorBeforeAnyIO(t *testin
 	) providerfoundation.BackoffGate {
 		return gate
 	}
-	executor.Doer = doer
+	executor.Doer = fakehttp.Client(doer)
 	_, err := executor.Execute(context.Background(), session, descriptor)
 	if !errors.Is(err, ErrInvalidConfiguration) {
 		t.Fatalf("non-plannable execution error=%v", err)
@@ -282,7 +283,7 @@ func completeRouteExecutorWithCommitClock(
 			Repository: completeRouteCredentialRepository{},
 			Decryptor:  completeRouteCredentialDecryptor{},
 		},
-		Doer: noRequestDoer{},
+		Doer: fakehttp.Client(noRequestDoer{}),
 		Retry: providerfoundation.RetryPolicy{
 			MaxAttempts: 1, InitialWait: time.Nanosecond, MaxWait: time.Nanosecond,
 		},

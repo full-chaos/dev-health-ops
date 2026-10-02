@@ -6,21 +6,17 @@ import (
 	"bytes"
 	"context"
 	"crypto/md5"
-	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
-	"os"
-	"os/exec"
 	"path/filepath"
-	"runtime"
+	"regexp"
 	"strings"
 	"testing"
 	"time"
 
 	dhclickhouse "github.com/full-chaos/dev-health-go/clickhouse"
-	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/full-chaos/dev-health-ops/internal/api/pyjson"
@@ -31,6 +27,7 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/queryapi/investmentexplain"
 	"github.com/full-chaos/dev-health-ops/internal/queryapi/people"
 	chclickhouse "github.com/full-chaos/dev-health-ops/internal/storage/clickhouse"
+	"github.com/full-chaos/dev-health-ops/internal/testsupport/moduleroot"
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/venueoracle"
 )
 
@@ -44,7 +41,10 @@ import (
 // route's `except Exception: raise HTTPException(503, "Data
 // unavailable")`.
 const pythonDictOrderProgram = `
-import asyncio, base64, datetime, json, os, sys, traceback
+import sys
+# The answer is the only thing on stdout: whatever the services (or the libraries they import) print goes to stderr.
+answer_stream, sys.stdout = sys.stdout, sys.stderr
+import asyncio, datetime, json, os, traceback
 from fastapi.routing import APIRoute
 from dev_health_ops.api.main import app
 from dev_health_ops.api.models.filters import MetricFilter
@@ -101,7 +101,8 @@ for case in json.loads(sys.stdin.read()):
     try:
         value = asyncio.run(call(case))
     except Exception:
-        out.append({"status": 503, "body": base64.b64encode(b'{"detail":"Data unavailable"}').decode(), "error": traceback.format_exc()[-2000:]})
+        sys.stderr.write(case["name"] + ": " + traceback.format_exc()[-2000:] + "\n")
+        out.append({"status": 503, "body": '{"detail":"Data unavailable"}'})
         continue
     field = route.response_field
     validated, errors = field.validate(value, {}, loc=("response",))
@@ -116,8 +117,14 @@ for case in json.loads(sys.stdin.read()):
         exclude_defaults=route.response_model_exclude_defaults,
         exclude_none=route.response_model_exclude_none,
     )
-    out.append({"status": 200, "body": base64.b64encode(body).decode()})
-print("RESULT " + json.dumps(out))
+    text = body.decode("utf-8")
+    if case["kind"] == "people_summary":
+        # Only the freshness object (it holds sources, the dict under test): the summary's other lists (sections.flow_breakdown,
+        # sections.collaboration) come from a UNION ALL with no ORDER BY in the Python query itself, so their row order is ClickHouse's,
+        # run to run, and a recording of the whole body would differ from the next one. The spark timestamps are CHAOS-6605.
+        text = json.dumps(json.loads(text)["freshness"], separators=(",", ":"), ensure_ascii=False)
+    out.append({"status": 200, "body": text})
+answer_stream.write("RESULT " + json.dumps(out) + "\n")
 `
 
 // dictOrderCase is one route request, answered by the Go handler and by
@@ -162,6 +169,14 @@ type dictOrderPythonAnswer struct {
 	Error  string `json:"error"`
 }
 
+// NOT pinned by this oracle (stated, not hidden):
+//   - date and time values in the answers: every date or time the planes read from the clock during the run (the last 30 days up to now) is scrubbed to
+//     a placeholder, so a one-day difference in such a value is not seen; the aggregated-flame window is a FIXED one (2026-01-01 to 2026-01-08) and
+//     is compared by value. A scrubbed value keeps its shape (fractional or not, which offset form), which IS compared.
+//   - people_summary: only its freshness object is held and compared (as the live oracle did); the order of sections.* lists and the spark
+//     timestamps (CHAOS-6605) are NOT measured.
+//   - the cycle_breakdown mode of the flame route (both planes answer 503 on a migrated database; its filters order is pinned by a unit test).
+//
 // TestVenueOracleQueryAPIDictOrder compares the query-api's response bodies
 // with the Python service's, byte for byte, for the routes whose response
 // holds a dict the Python code builds in a fixed key order (a Python dict
@@ -173,14 +188,15 @@ type dictOrderPythonAnswer struct {
 // with an error fails too: it compares no dict.
 func TestVenueOracleQueryAPIDictOrder(t *testing.T) {
 	ctx := context.Background()
-	_, file, _, _ := runtime.Caller(0)
+	_, file, _, _ := moduleroot.Caller(0)
 	root := filepath.Clean(filepath.Join(filepath.Dir(file), "..", "..", ".."))
-	orgID := uuid.NewString()
+	// The ids are named, not random: the recording and every frozen run seed and send the same ones.
+	orgID := stableVenueID("dict-order/org").String()
+	golden := venueoracle.OpenGolden(t, dictOrderGolden(t.Name(), dictOrderPin))
 	venue := venueoracle.Start(t, ctx, venueoracle.Options{
-		Root: root,
-		// A key made per run: no route here checks a token, and a fixed
-		// literal would read as a secret to the secret scan.
-		JWTKey: uuid.NewString() + uuid.NewString(),
+		Golden: golden, Root: golden.PythonRoot(t, root),
+		// No route here checks a token; the key is the one the other venue oracles of this package use.
+		JWTKey: oracleJWTKey,
 	})
 
 	// One identity with a work-item metrics row on both databases, so the
@@ -189,7 +205,7 @@ func TestVenueOracleQueryAPIDictOrder(t *testing.T) {
 	// md5 of the identity).
 	identity := "venue-dict-order@example.com"
 	personID := fmt.Sprintf("%x", md5.Sum([]byte(identity)))
-	for _, database := range []string{venue.PythonClickHouseDB, venue.GoClickHouseDB} {
+	for _, database := range dictOrderDatabases(venue, golden) {
 		conn, err := chclickhouse.Open(ctx, chclickhouse.DefaultConfig(venue.AdminClickHouseURI(t, database)))
 		if err != nil {
 			t.Fatal(err)
@@ -201,6 +217,29 @@ func TestVenueOracleQueryAPIDictOrder(t *testing.T) {
 		_ = conn.Close()
 	}
 
+	// The aggregated-flame case takes explicit dates, so its window is FIXED and its rows are seeded inside it with fixed dates (a work item
+	// completed on 2026-01-03, attributed to team-a): the case compares two non-empty answers, not two empty ones.
+	flameRepo := stableVenueID("dict-order/repo").String()
+	for _, database := range dictOrderDatabases(venue, golden) {
+		conn, err := chclickhouse.Open(ctx, chclickhouse.DefaultConfig(venue.AdminClickHouseURI(t, database)))
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, statement := range []string{
+			fmt.Sprintf(`INSERT INTO work_item_cycle_times (work_item_id, provider, day, work_scope_id, team_id, team_name, assignee, type,
+				status, created_at, started_at, completed_at, cycle_time_hours, lead_time_hours, computed_at, org_id)
+			VALUES ('wi-flame', 'github', '2026-01-03', 'scope-1', 'team-a', 'Team A', 'dev', 'issue', 'done',
+				toDateTime('2026-01-01 09:00:00'), toDateTime('2026-01-02 09:00:00'), toDateTime('2026-01-03 09:00:00'), 24.0, 48.0, toDateTime('2026-01-04 00:00:00'), '%s')`, orgID),
+			fmt.Sprintf(`INSERT INTO work_item_team_attributions (org_id, repo_id, work_item_id, provider, team_id, team_name, source, is_primary, confidence, evidence, computed_at)
+			VALUES ('%s', '%s', 'wi-flame', 'github', 'team-a', 'Team A', 'native_team', 1, 'high', 'seed', toDateTime64('2026-01-04 00:00:00', 3))`, orgID, flameRepo),
+		} {
+			if err := conn.Exec(ctx, statement); err != nil {
+				t.Fatalf("seed flame %s: %v\n%s", database, err, statement)
+			}
+		}
+		_ = conn.Close()
+	}
+
 	// One work unit whose dicts are not in sorted order: its theme and
 	// subcategory maps, its stored structural JSON (nested too) and one
 	// evidence quote. The Python services keep each of those orders.
@@ -208,7 +247,7 @@ func TestVenueOracleQueryAPIDictOrder(t *testing.T) {
 	seedNow := time.Now().UTC()
 	fromTS := seedNow.AddDate(0, 0, -3).Format("2006-01-02 15:04:05")
 	toTS := seedNow.AddDate(0, 0, -1).Format("2006-01-02 15:04:05")
-	for _, database := range []string{venue.PythonClickHouseDB, venue.GoClickHouseDB} {
+	for _, database := range dictOrderDatabases(venue, golden) {
 		conn, err := chclickhouse.Open(ctx, chclickhouse.DefaultConfig(venue.AdminClickHouseURI(t, database)))
 		if err != nil {
 			t.Fatal(err)
@@ -301,10 +340,9 @@ func TestVenueOracleQueryAPIDictOrder(t *testing.T) {
 		})
 	}
 
-	today := time.Now().UTC()
-	start := today.AddDate(0, 0, -7).Format(time.DateOnly)
-	end := today.Format(time.DateOnly)
-	repoID := uuid.NewString()
+	// A FIXED window (the route takes explicit dates): its answer holds them as written, the same in every run, so they are pinned and compared by value.
+	start, end := "2026-01-01", "2026-01-08"
+	repoID := stableVenueID("dict-order/repo").String()
 	window := map[string]any{"time": map[string]any{"range_days": 7}}
 	cases := []dictOrderCase{
 		{Name: "explain drilldown_links", Route: "GET /api/v1/explain", Kind: "explain",
@@ -338,7 +376,7 @@ func TestVenueOracleQueryAPIDictOrder(t *testing.T) {
 		cases[index].OrgID = orgID
 	}
 
-	python := runDictOrderPython(t, venue, root, cases)
+	python := runDictOrderPython(t, golden, venue, root, cases)
 	same := 0
 	for index, tc := range cases {
 		request := httptest.NewRequest(tc.method, tc.path, strings.NewReader(tc.body))
@@ -348,7 +386,10 @@ func TestVenueOracleQueryAPIDictOrder(t *testing.T) {
 		recorder := httptest.NewRecorder()
 		mux.ServeHTTP(recorder, request)
 		answer := python[index]
-		goBody, pythonBody := recorder.Body.String(), answer.Body
+		// The golden holds its answers projected (the run values of a plane become placeholders), and the Go answer is projected
+		// the same way before the two are compared.
+		goBody := golden.Project(t, venueoracle.Response{Status: recorder.Code, Body: recorder.Body.String()}).Body
+		pythonBody := golden.Project(t, venueoracle.Response{Status: answer.Status, Body: answer.Body}).Body
 		if tc.Kind == "people_summary" && recorder.Code == http.StatusOK && answer.Status == http.StatusOK {
 			// The person summary is compared on its freshness object only
 			// (it holds sources, the dict under test). Its other lists
@@ -356,11 +397,14 @@ func TestVenueOracleQueryAPIDictOrder(t *testing.T) {
 			// a UNION ALL with no ORDER BY in the Python query itself, so
 			// their row order is ClickHouse's, run to run, on either
 			// side; and its spark timestamps are CHAOS-6605.
-			goBody, pythonBody = freshnessObject(t, goBody), freshnessObject(t, pythonBody)
+			goBody = freshnessObject(t, goBody)
 		}
 		if recorder.Code != answer.Status || goBody != pythonBody {
 			t.Errorf("%s: DIFF\n python %d %s %s\n go     %d %s", tc.Name, answer.Status, pythonBody, answer.Error, recorder.Code, goBody)
 			continue
+		}
+		if tc.Kind == "aggflame" && !strings.Contains(pythonBody, "Team A") {
+			t.Errorf("%s: the recorded Python answer holds no seeded row (it would compare two empty answers): %s", tc.Name, pythonBody)
 		}
 		if answer.Status != http.StatusOK {
 			t.Errorf("%s: both answered %d, so the case compares no dict (python: %s)", tc.Name, answer.Status, answer.Error)
@@ -369,29 +413,57 @@ func TestVenueOracleQueryAPIDictOrder(t *testing.T) {
 		same++
 	}
 	t.Logf("%d of %d cases byte-identical to the Python service's response_model body", same, len(cases))
-	venueoracle.WriteProof(t)
+	golden.SkipDiff(t)
+	venueoracle.WriteGoOnlyProof(t, "the Go query-api's response bodies against the frozen answers of the Python services")
+	golden.Finish(t)
 }
 
-func runDictOrderPython(t *testing.T, venue *venueoracle.Venue, root string, cases []dictOrderCase) []dictOrderPythonAnswer {
+// dictOrderDeclared holds the environment entries that shape the Python program's answers. The address of the run's own ClickHouse database is
+// not one of them: it is made for the run and passed as a per-run entry (CLICKHOUSE_URI).
+var dictOrderDeclared = map[string]string{"OTEL_SDK_DISABLED": "true", "ENVIRONMENT": "test"}
+
+// dictOrderDatabases are the databases a test seeds: the Go plane's always, the Python plane's only while its answers are recorded.
+func dictOrderDatabases(venue *venueoracle.Venue, golden *venueoracle.Golden) []string {
+	if golden.Recording() {
+		return []string{venue.PythonClickHouseDB, venue.GoClickHouseDB}
+	}
+	return []string{venue.GoClickHouseDB}
+}
+
+func runDictOrderPython(t *testing.T, golden *venueoracle.Golden, venue *venueoracle.Venue, root string, cases []dictOrderCase) []dictOrderPythonAnswer {
 	t.Helper()
 	payload, err := json.Marshal(cases)
 	if err != nil {
 		t.Fatal(err)
 	}
-	// venueoracle.Start put the chosen interpreter first on PATH.
-	command := exec.Command("python3", "-c", pythonDictOrderProgram)
-	command.Dir = root
-	command.Env = append(os.Environ(),
-		"PYTHONPATH="+filepath.Join(root, "src"),
-		"CLICKHOUSE_URI="+venue.AdminClickHouseHTTPURI(t, venue.PythonClickHouseDB))
-	command.Stdin = bytes.NewReader(payload)
-	var stdout, stderr bytes.Buffer
-	command.Stdout, command.Stderr = &stdout, &stderr
-	if err := command.Run(); err != nil {
-		t.Fatalf("python: %v\n%s", err, stderr.String())
+	// The launcher form: the harness's own producer starts the program in the closed environment; the address of the run's own Python
+	// ClickHouse database is the one per-run entry, passed as an extra (it is not part of the request's key).
+	request := venueoracle.ProgramRequest("dict order services", pythonDictOrderProgram, payload, dictOrderDeclared)
+	answers := golden.Produce(t, golden.PythonRoot(t, root), []venueoracle.Request{request},
+		func(producer *venueoracle.Producer, _ []venueoracle.Request) []venueoracle.Response {
+			command, err := producer.Command(context.Background(), dictOrderDeclared,
+				[]string{"CLICKHOUSE_URI=" + venue.AdminClickHouseHTTPURI(t, venue.PythonClickHouseDB)}, "-c", pythonDictOrderProgram)
+			if err != nil {
+				t.Fatal(err)
+			}
+			command.Dir = producer.Root
+			command.Stdin = bytes.NewReader(payload)
+			var stdout, stderr bytes.Buffer
+			command.Stdout, command.Stderr = &stdout, &stderr
+			if err := command.Run(); err != nil {
+				t.Fatalf("the python program failed: %v\n%s", err, dictOrderWithoutAddress(stderr.String(), venue, t))
+			}
+			return []venueoracle.Response{{Status: 0, Body: stdout.String()}}
+		})
+	golden.Consumed(t, answers...)
+	if answers[0].Status != 0 {
+		t.Fatalf("the python program exited %d when it was recorded", answers[0].Status)
+	}
+	if golden.Recording() && strings.Contains(answers[0].Body, venue.AdminClickHouseHTTPURI(t, venue.PythonClickHouseDB)) {
+		t.Fatal("the recorded answer holds the address of the run's own database: a golden cannot hold a value of one run")
 	}
 	var result []dictOrderPythonAnswer
-	for _, line := range strings.Split(stdout.String(), "\n") {
+	for _, line := range strings.Split(answers[0].Body, "\n") {
 		if rest, ok := strings.CutPrefix(line, "RESULT "); ok {
 			if err := json.Unmarshal([]byte(rest), &result); err != nil {
 				t.Fatal(err)
@@ -399,14 +471,62 @@ func runDictOrderPython(t *testing.T, venue *venueoracle.Venue, root string, cas
 		}
 	}
 	if len(result) != len(cases) {
-		t.Fatalf("python answered %d of %d cases\n%s", len(result), len(cases), stderr.String())
-	}
-	for index := range result {
-		raw, err := base64.StdEncoding.DecodeString(result[index].Body)
-		if err != nil {
-			t.Fatal(err)
-		}
-		result[index].Body = string(raw)
+		t.Fatalf("python answered %d of %d cases", len(result), len(cases))
 	}
 	return result
+}
+
+// The golden's pin is the digest the record verb writes; PIN: names the golden until it does.
+const dictOrderPin = "3c7b4dde602aba9f20e31c5ebdb3fb1e485e1eb55014e96f58d1a2689f29f0a2"
+
+// dictOrderGolden is the spec of the frozen dict-order oracle. Its Scrub also turns the dates and the times a plane reads from the clock
+// during the run (every one in [dictOrderClockFloor, 2100)) into placeholders: the windows of these routes are "the last 7 days", so the recorded
+// answers hold the recording day's dates and a later run would not.
+func dictOrderGolden(test, pin string) venueoracle.GoldenSpec {
+	spec := venueGolden("dict-order", test, pin)
+	spec.Scrub = dictOrderScrub
+	return spec
+}
+
+// dictOrderClockFloor is the oldest instant a plane reads from the clock for these routes: 30 days before the run (their windows are 7 and 14 days).
+// It is taken at the run, so the scrub is as narrow as the answers allow: a date or time before it stays as written and is compared by value.
+func dictOrderClockFloor() time.Time {
+	return time.Now().UTC().AddDate(0, 0, -30).Truncate(24 * time.Hour)
+}
+
+var dictOrderDate = regexp.MustCompile(`\b(20\d\d)-(\d\d)-(\d\d)\b`)
+
+// dictOrderScrub keeps the placeholders of runValueScrub (and its fractional/offset shapes) for the times at or after the run-value floor, extends
+// them to the times from dictOrderClockFloor on, and turns a plain date of that window into "<date>". It is deterministic and idempotent.
+func dictOrderScrub(text string) string {
+	text = oracleTime.ReplaceAllStringFunc(text, func(stamp string) string {
+		parsed, err := time.Parse(time.RFC3339Nano, stamp)
+		if err != nil || parsed.Before(dictOrderClockFloor()) || !parsed.Before(runValueFloor) {
+			return stamp
+		}
+		shape := "nofrac"
+		if strings.Contains(stamp, ".") {
+			shape = "frac"
+		}
+		offset := "Z"
+		if strings.HasSuffix(stamp, "+00:00") {
+			offset = "+00:00"
+		} else if !strings.HasSuffix(stamp, "Z") {
+			offset = "other"
+		}
+		return "<ts:" + shape + ":" + offset + ">"
+	})
+	text = runValueScrub(text)
+	return dictOrderDate.ReplaceAllStringFunc(text, func(date string) string {
+		parsed, err := time.Parse(time.DateOnly, date)
+		if err != nil || parsed.Before(dictOrderClockFloor()) || !parsed.Before(runValueCeiling) {
+			return date
+		}
+		return "<date>"
+	})
+}
+
+// dictOrderWithoutAddress is text with the run's own database address taken out, for a failure message.
+func dictOrderWithoutAddress(text string, venue *venueoracle.Venue, t *testing.T) string {
+	return strings.ReplaceAll(text, venue.AdminClickHouseHTTPURI(t, venue.PythonClickHouseDB), "<CLICKHOUSE_URI>")
 }

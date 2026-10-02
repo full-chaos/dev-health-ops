@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"github.com/full-chaos/dev-health-ops/internal/testsupport/fakehttp"
 	"io"
 	"net/http"
 	"strconv"
@@ -93,7 +94,7 @@ func TestGitHubWorkItemPRSocialFetcherBatchesFiftyAndReportsActualUsage(t *testi
 		`{"data":{"repository":{"pr0":{"number":51,"comments":` + gitHubWorkItemPRSocialConnectionJSON(`[]`, false, nil) +
 			`,"timelineItems":` + gitHubWorkItemPRSocialConnectionJSON(`[]`, false, nil) + `}}}}`,
 	}}
-	client := gitHubPullRequestClient(t, doer, "https://api.github.com")
+	client := gitHubPullRequestClient(t, fakehttp.Client(doer), "https://api.github.com")
 	budget := &gitHubPullRequestReviewBudget{}
 	gate := &gitHubPullRequestReviewGate{}
 	client.Budget = budget
@@ -156,7 +157,7 @@ func TestGitHubWorkItemPRSocialFetcherDrainsCommentAndEventCursorsIndependently(
 	}}
 	result, err := (GitHubWorkItemPRSocialFetcher{MaxRequests: 3}).Fetch(
 		context.Background(), gitHubWorkItemPRSocialClaim(),
-		gitHubPullRequestClient(t, doer, "https://api.github.com"), []int{42}, 500, 1000,
+		gitHubPullRequestClient(t, fakehttp.Client(doer), "https://api.github.com"), []int{42}, 500, 1000,
 	)
 	if err != nil || !result.Complete() {
 		t.Fatalf("result=%+v error=%v", result, err)
@@ -184,7 +185,7 @@ func TestGitHubWorkItemPRSocialFetcherHonorsDeclaredLimitsWithoutOverfetch(t *te
 	}}
 	result, err := (GitHubWorkItemPRSocialFetcher{}).Fetch(
 		context.Background(), gitHubWorkItemPRSocialClaim(),
-		gitHubPullRequestClient(t, doer, "https://api.github.com"), []int{42}, 2, 1,
+		gitHubPullRequestClient(t, fakehttp.Client(doer), "https://api.github.com"), []int{42}, 2, 1,
 	)
 	if err != nil || !result.Complete() || doer.requests != 1 ||
 		len(result.Payloads[42].Comments) != 2 || len(result.Payloads[42].Events) != 1 {
@@ -233,7 +234,7 @@ func TestGitHubWorkItemPRSocialFetcherRejectsMissingAndStalledCursors(t *testing
 			doer := &gitHubWorkItemPRSocialFetchDoer{t: t, replies: test.replies}
 			result, err := (GitHubWorkItemPRSocialFetcher{}).Fetch(
 				context.Background(), gitHubWorkItemPRSocialClaim(),
-				gitHubPullRequestClient(t, doer, "https://api.github.com"), []int{42}, test.commentsLimit, test.eventsLimit,
+				gitHubPullRequestClient(t, fakehttp.Client(doer), "https://api.github.com"), []int{42}, test.commentsLimit, test.eventsLimit,
 			)
 			if err != nil || result.Complete() || result.Incomplete == nil || result.Incomplete.Cause != "invalid_pagination" || result.Payloads != nil {
 				t.Fatalf("result=%+v error=%v", result, err)
@@ -263,7 +264,7 @@ func TestGitHubWorkItemPRSocialFetcherReturnsTypedGraphQLAndCapIncomplete(t *tes
 			doer := &gitHubWorkItemPRSocialFetchDoer{t: t, replies: test.replies}
 			result, err := (GitHubWorkItemPRSocialFetcher{MaxRequests: test.max}).Fetch(
 				context.Background(), gitHubWorkItemPRSocialClaim(),
-				gitHubPullRequestClient(t, doer, "https://api.github.com"), []int{42}, 500, 0,
+				gitHubPullRequestClient(t, fakehttp.Client(doer), "https://api.github.com"), []int{42}, 500, 0,
 			)
 			if err != nil || result.Complete() || result.Incomplete == nil || result.Incomplete.Cause != test.wantCause || result.Payloads != nil {
 				t.Fatalf("result=%+v error=%v", result, err)
@@ -280,7 +281,7 @@ func TestGitHubWorkItemPRSocialFetcherPropagatesRateLimitCancelAndLeaseLoss(t *t
 		doer := &gitHubWorkItemPRSocialFetchDoer{t: t, status: []int{http.StatusForbidden}, replies: []string{`{"message":"rate limited"}`}}
 		result, err := (GitHubWorkItemPRSocialFetcher{}).Fetch(
 			context.Background(), gitHubWorkItemPRSocialClaim(),
-			gitHubPullRequestClient(t, doer, "https://api.github.com"), []int{42}, 500, 1000,
+			gitHubPullRequestClient(t, fakehttp.Client(doer), "https://api.github.com"), []int{42}, 500, 1000,
 		)
 		var providerErr *providerfoundation.ProviderError
 		if !errors.As(err, &providerErr) || providerErr.Class != providerfoundation.ErrorRateLimited ||
@@ -295,7 +296,7 @@ func TestGitHubWorkItemPRSocialFetcherPropagatesRateLimitCancelAndLeaseLoss(t *t
 		doer := &gitHubWorkItemPRSocialFetchDoer{t: t}
 		result, err := (GitHubWorkItemPRSocialFetcher{}).Fetch(
 			ctx, gitHubWorkItemPRSocialClaim(),
-			gitHubPullRequestClient(t, doer, "https://api.github.com"), []int{42}, 500, 1000,
+			gitHubPullRequestClient(t, fakehttp.Client(doer), "https://api.github.com"), []int{42}, 500, 1000,
 		)
 		if !errors.Is(err, context.Canceled) || result.Incomplete != nil || doer.requests != 0 {
 			t.Fatalf("result=%+v error=%v requests=%d", result, err, doer.requests)
@@ -305,7 +306,7 @@ func TestGitHubWorkItemPRSocialFetcherPropagatesRateLimitCancelAndLeaseLoss(t *t
 	t.Run("lease loss", func(t *testing.T) {
 		doer := &gitHubWorkItemPRSocialFetchDoer{t: t}
 		client, err := providerfoundation.NewHTTPClient(
-			"github", "https://api.github.com", doer, func(*http.Request) error { return nil },
+			"github", "https://api.github.com", fakehttp.Client(doer), func(*http.Request) error { return nil },
 			providerfoundation.RetryPolicy{MaxAttempts: 1, InitialWait: time.Nanosecond, MaxWait: time.Nanosecond},
 			providerfoundation.LeaseGuardFunc(func(context.Context) error { return providerfoundation.ErrLeaseLost }),
 		)
@@ -323,7 +324,7 @@ func TestGitHubWorkItemPRSocialFetcherPropagatesRateLimitCancelAndLeaseLoss(t *t
 
 func TestGitHubWorkItemPRSocialFetcherMarksNonRateProviderFailureIncomplete(t *testing.T) {
 	doer := &gitHubWorkItemPRSocialFetchDoer{t: t, status: []int{http.StatusServiceUnavailable}, replies: []string{`{"message":"unavailable"}`}}
-	client := gitHubPullRequestClient(t, doer, "https://api.github.com")
+	client := gitHubPullRequestClient(t, fakehttp.Client(doer), "https://api.github.com")
 	client.Retry.MaxAttempts = 1
 	result, err := (GitHubWorkItemPRSocialFetcher{}).Fetch(
 		context.Background(), gitHubWorkItemPRSocialClaim(), client, []int{42}, 500, 1000,
@@ -342,7 +343,7 @@ func TestGitHubWorkItemPRSocialFetcherCountsRetryAttemptsButOneLogicalPage(t *te
 			`{"data":{"repository":{"pr0":{"number":42,"comments":` + gitHubWorkItemPRSocialConnectionJSON(`[{"id":"9007199254740993","body":"preserved"}]`, false, nil) + `}}}}`,
 		},
 	}
-	client := gitHubPullRequestClient(t, doer, "https://api.github.com")
+	client := gitHubPullRequestClient(t, fakehttp.Client(doer), "https://api.github.com")
 	client.Retry.MaxAttempts = 2
 	budget := &gitHubPullRequestReviewBudget{}
 	client.Budget = budget
@@ -377,7 +378,7 @@ func TestGitHubWorkItemPRSocialFetchAdaptsIntoCompletePRSemanticBundle(t *testin
 	}}
 	result, err := (GitHubWorkItemPRSocialFetcher{}).Fetch(
 		context.Background(), gitHubWorkItemPRSocialClaim(),
-		gitHubPullRequestClient(t, doer, "https://api.github.com"), []int{42}, 500, 1000,
+		gitHubPullRequestClient(t, fakehttp.Client(doer), "https://api.github.com"), []int{42}, 500, 1000,
 	)
 	if err != nil || !result.Complete() {
 		t.Fatalf("fetch result=%+v error=%v", result, err)
@@ -457,7 +458,7 @@ func TestGitHubWorkItemPRSocialFetcherSignalsClosingReferenceTruncation(t *testi
 	}}
 	result, err := (GitHubWorkItemPRSocialFetcher{}).Fetch(
 		context.Background(), gitHubWorkItemPRSocialClaim(),
-		gitHubPullRequestClient(t, doer, "https://api.github.com"), []int{42}, 500, 1000,
+		gitHubPullRequestClient(t, fakehttp.Client(doer), "https://api.github.com"), []int{42}, 500, 1000,
 	)
 	if err != nil || !result.Complete() {
 		t.Fatalf("fetch result=%+v error=%v", result, err)
@@ -486,7 +487,7 @@ func TestGitHubWorkItemPRSocialFetcherClosingReferenceCompletePageIsNotTruncated
 	}}
 	result, err := (GitHubWorkItemPRSocialFetcher{}).Fetch(
 		context.Background(), gitHubWorkItemPRSocialClaim(),
-		gitHubPullRequestClient(t, doer, "https://api.github.com"), []int{42}, 500, 1000,
+		gitHubPullRequestClient(t, fakehttp.Client(doer), "https://api.github.com"), []int{42}, 500, 1000,
 	)
 	if err != nil || !result.Complete() {
 		t.Fatalf("fetch result=%+v error=%v", result, err)

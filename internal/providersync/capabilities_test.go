@@ -7,12 +7,13 @@ import (
 	"os/exec"
 	"path/filepath"
 	"reflect"
-	"runtime"
 	"sort"
 	"strings"
 	"sync"
 	"testing"
 
+	"github.com/full-chaos/dev-health-ops/internal/testsupport/moduleroot"
+	"github.com/full-chaos/dev-health-ops/internal/testsupport/programoracle"
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/pyoracle"
 )
 
@@ -31,16 +32,38 @@ func requireLivePythonOracles(t *testing.T) {
 	}
 }
 
-func TestCapabilitiesMatchPythonProviderRegistry(t *testing.T) {
-	python := pythonExecutable(t)
-	_, currentFile, _, _ := runtime.Caller(0)
+// capabilityGoldens is the set of this package's frozen Python registry answers: the dataset registry of
+// the pinned build, read by its own supported_datasets, executed once and frozen. The producer is the
+// standard library and dev_health_ops.sync.datasets only. A golden recorded by another producer is refused.
+var capabilityGoldens = programoracle.Set{
+	Package:  "./internal/providersync/",
+	Build:    "a4847c5e93607451a0c987b314d37e02fc43ce85",
+	Identity: "python 3.14.7\nunicodedata 16.0.0",
+	// The goldenrecord verb writes each digest when it promotes a recording; a new golden starts as
+	// "PIN:" + its file name without ".json".
+	Pins: map[string]string{
+		"capabilities-registry.golden.json": "b5a505262fb16113e7fe3bcd7ad2b37e68db4dddfd5acdcb11a0a0d9b64b14d4",
+	},
+}
+
+// TestCapabilitiesMatchFrozenPythonProviderRegistry compares the Go capability registry with the frozen
+// answer of the Python registry (testdata/python_registry_oracle.py on src/dev_health_ops/sync/datasets.py of
+// the pinned build).
+func TestCapabilitiesMatchFrozenPythonProviderRegistry(t *testing.T) {
+	_, currentFile, _, _ := moduleroot.Caller(0)
 	packageDir := filepath.Dir(currentFile)
-	datasetsSource := filepath.Join(packageDir, "..", "..", "src", "dev_health_ops", "sync", "datasets.py")
-	oracleScript := filepath.Join(packageDir, "testdata", "python_registry_oracle.py")
-	output, err := exec.Command(python, oracleScript, datasetsSource).CombinedOutput()
+	root := filepath.Clean(filepath.Join(packageDir, "..", ".."))
+	script, err := os.ReadFile(filepath.Join(packageDir, "testdata", "python_registry_oracle.py"))
 	if err != nil {
-		t.Fatalf("execute Python registry oracle: %v", pyoracle.RunError(python, err, output))
+		t.Fatal(err)
 	}
+	// The program runs in the pinned checkout: the datasets module is read from there.
+	const future = "from __future__ import annotations\n"
+	if !strings.Contains(string(script), future) {
+		t.Fatal("the registry oracle no longer starts with its __future__ import: place the argument line after it")
+	}
+	program := strings.Replace(string(script), future, future+"import sys as _argument_holder\n_argument_holder.argv = ['python_registry_oracle', 'src/dev_health_ops/sync/datasets.py']\n", 1)
+	output := []byte(capabilityGoldens.Outputs(t, root, "capabilities-registry.golden.json", programoracle.Program{Name: "dataset registry", Text: program})[0])
 	var want map[string][]registryEntry
 	if err := json.Unmarshal(output, &want); err != nil {
 		t.Fatalf("decode Python registry oracle: %v: %s", err, output)
@@ -65,7 +88,7 @@ func TestCapabilitiesMatchPythonProviderRegistry(t *testing.T) {
 	}
 	if !reflect.DeepEqual(got, want) {
 		gotJSON, _ := json.Marshal(got)
-		t.Fatalf("Go registry drifted from live Python registry:\ngot  %s\nwant %s", gotJSON, output)
+		t.Fatalf("Go registry drifted from the frozen Python registry:\ngot  %s\nwant %s", gotJSON, output)
 	}
 }
 
@@ -81,7 +104,7 @@ type registryEntry struct {
 func pythonExecutable(t *testing.T) string {
 	t.Helper()
 	requireLivePythonOracles(t)
-	_, currentFile, _, _ := runtime.Caller(0)
+	_, currentFile, _, _ := moduleroot.Caller(0)
 	root := filepath.Dir(filepath.Dir(filepath.Dir(currentFile)))
 	resolved := pyoracle.Resolve(t, root)
 	assertPythonProducerIsThisWorktree(t, resolved)
@@ -131,7 +154,7 @@ func assertPythonProducerIsThisWorktree(t *testing.T, python string) {
 			"would compare against nothing. Set PYTHONPATH to this worktree's src/, "+
 			"or run through ci/check_go.sh, which does it for you", python)
 	}
-	_, currentFile, _, _ := runtime.Caller(0)
+	_, currentFile, _, _ := moduleroot.Caller(0)
 	root := filepath.Dir(filepath.Dir(filepath.Dir(currentFile)))
 	if !strings.HasPrefix(pythonProducerOrigin, root+string(filepath.Separator)) {
 		t.Fatalf("live-Python oracle producer is NOT in this worktree:\n"+

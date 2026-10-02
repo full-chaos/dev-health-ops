@@ -3,7 +3,6 @@ package venueoracle
 import (
 	"context"
 	"fmt"
-	"os"
 	"os/exec"
 	"path/filepath"
 	"sort"
@@ -110,13 +109,9 @@ func (p *Producer) activate() error {
 	if p.python != "" {
 		return nil
 	}
-	bin, err := interpreterDir(pyoracle.ResolveLauncher(p.t, p.Root))
+	bin, err := ActivateInterpreter(p.t, p.Root)
 	if err != nil {
 		return fmt.Errorf("produce: %w", err)
-	}
-	p.t.Setenv("PATH", bin+string(os.PathListSeparator)+os.Getenv("PATH"))
-	if found, err := exec.LookPath("python3"); err != nil || filepath.Dir(found) != bin {
-		return fmt.Errorf("produce: python3 on PATH is %q (%v), want the one in %s", found, err, bin)
 	}
 	p.python = filepath.Join(bin, "python3")
 	return nil

@@ -315,6 +315,13 @@ func TestInARecordingATestOutsideTheClosedListIsGivenAnInterpreterThatRefuses(t 
 		t.Fatalf("a package on the closed list was given %s in a recording, want the real interpreter", got)
 	}
 
+	// The match is exact: a package UNDER a listed one is not on the list
+	// (internal/apiservice is listed, internal/apiservice/admin is not).
+	t.Chdir(filepath.Join(repoRootOf(t), "internal", "apiservice", "admin"))
+	if got := Resolve(t, root); got == real {
+		t.Fatal("a package under a listed one was given the real interpreter in a recording")
+	}
+
 	t.Setenv(RecordingEnv, "")
 	t.Chdir(filepath.Join(repoRootOf(t), "internal", "testsupport", "pyoracle"))
 	if got := Resolve(t, root); got != real {
@@ -348,6 +355,36 @@ func TestTheClosedListOfOwnLaunchPackagesOnlyShrinks(t *testing.T) {
 	for _, dir := range list {
 		if info, err := os.Stat(filepath.Join(root, filepath.FromSlash(dir))); err != nil || !info.IsDir() {
 			t.Errorf("%s is on the closed list and is not a directory: a converted or removed package leaves the list", dir)
+		}
+	}
+}
+
+// unconvertedDayOne is the closed list as it was when the guard began
+// (CHAOS-7707). An entry that is not in it is a package added to the list,
+// which this change cannot do: a package that starts its own Python child
+// converts to the launcher instead. Removing a line from the list is allowed,
+// so a swap (one out, one in) and a raise of the ceiling both fail here.
+var unconvertedDayOne = map[string]bool{
+	"internal/adminops":                true,
+	"internal/api/externalingest":      true,
+	"internal/api/legacyingest":        true,
+	"internal/apiservice":              true,
+	"internal/apiservice/customerpush": true,
+	"internal/backfillrun":             true,
+	"internal/chmigrate":               true,
+	"internal/fixturescli":             true,
+	"internal/maintenancecli":          true,
+	"internal/metricscli":              true,
+	"internal/operationalbackfill":     true,
+	"internal/pgmigrate":               true,
+	"internal/providersync":            true,
+	"internal/pushcli":                 true,
+}
+
+func TestTheClosedListHoldsNoPackageThatWasNotThereOnDayOne(t *testing.T) {
+	for _, dir := range UnconvertedOwnLaunch() {
+		if !unconvertedDayOne[dir] {
+			t.Errorf("%s is on unconverted_own_launch.txt and was not on the day-one list: convert its Python launch to the producer's launcher instead of listing it", dir)
 		}
 	}
 }

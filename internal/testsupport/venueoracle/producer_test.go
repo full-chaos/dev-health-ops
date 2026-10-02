@@ -333,3 +333,18 @@ func TestTheLauncherIsGivenTheRealInterpreterInARecording(t *testing.T) {
 		t.Fatalf("the launcher's interpreter is in %s, want %s", dir, want)
 	}
 }
+
+// ActivateInterpreter is the one resolve of the venue, the producer and
+// programoracle: in a recording, from a package that is not on the closed list,
+// it gives the real interpreter's directory, not the stand-in's.
+func TestActivateInterpreterGivesTheRealInterpreterInARecording(t *testing.T) {
+	root := checkoutWithInterpreter(t)
+	t.Setenv(pyoracle.RecordingEnv, "1")
+	bin, err := ActivateInterpreter(t, root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want := filepath.Join(root, ".venv", "bin"); bin != want {
+		t.Fatalf("ActivateInterpreter gave %s, want %s", bin, want)
+	}
+}

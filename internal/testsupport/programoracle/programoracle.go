@@ -75,6 +75,7 @@ var perRunProgramNames = map[string]string{
 	"ORACLE_DATABASE_URI":      "the address of the run's own database (the scheduler venue oracles)",
 	"ATLASSIAN_ORACLE_GATEWAY": "the address of the Atlassian gateway the test starts (the teams-client oracle)",
 	"ORACLE_SMTP_ADDRESS":      "the address of the SMTP sink the test starts (the mail SMTP oracle)",
+	"CLICKHOUSE_URI":           "the HTTP address of the run's own ClickHouse database (the query-api dict-order oracle)",
 	"ORACLE_CLICKHOUSE_URL":    "the HTTP address of the run's own ClickHouse database (the people summary oracle)",
 	"RESEND_API_URL":           "the address of the Resend API stand-in the test starts (the mail Resend oracle)",
 }

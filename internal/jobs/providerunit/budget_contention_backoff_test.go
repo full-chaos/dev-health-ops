@@ -45,6 +45,8 @@ func TestBudgetContentionDeferralsReadsTheUnitsResultKey(t *testing.T) {
 		"nil result":     {nil, 0},
 		"float64 (json)": {map[string]any{"provider_budget_contention_deferrals": float64(7)}, 7},
 		"int":            {map[string]any{"provider_budget_contention_deferrals": 3}, 3},
+		"int64":          {map[string]any{"provider_budget_contention_deferrals": int64(5)}, 5},
+		"int64 negative": {map[string]any{"provider_budget_contention_deferrals": int64(-5)}, 0},
 		"json number":    {map[string]any{"provider_budget_contention_deferrals": json.Number("12")}, 12},
 		"negative":       {map[string]any{"provider_budget_contention_deferrals": float64(-4)}, 0},
 		"huge":           {map[string]any{"provider_budget_contention_deferrals": float64(1e12)}, 0},

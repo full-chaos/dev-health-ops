@@ -1,0 +1,53 @@
+{
+  "header": {
+    "test": "TestSavedReportWriteProofBaselinesVenueOracle",
+    "python_build": "a4847c5e93607451a0c987b314d37e02fc43ce85",
+    "producer_digest": "6e1dc97e68624398015f60caee160cceee6ae601bd434d01b8b7d5975267e137",
+    "recipe": "git worktree add --detach $DIR a4847c5e93607451a0c987b314d37e02fc43ce85 (with its .venv: uv sync --frozen --no-install-project); then from the repository root: go run ./internal/testsupport/venueoracle/goldenrecord -pkg ./internal/queryapi/server/ -test '^TestSavedReportWriteProofBaselinesVenueOracle$' -python-root $DIR (records on the pinned build, replays the candidate in a fresh process, and only then promotes it and pins its digest)",
+    "python_env": "ab1425c1baaee5952bfb1c80baa4acfbe6908347d489e6f3a5707280f90d9413",
+    "python_env_version": 2,
+    "recorded_by": "goldenrecord",
+    "blanked": {
+      "header x-request-id": 1
+    }
+  },
+  "requests": [
+    {
+      "name": "write proof warm-up",
+      "method": "POST",
+      "path": "/graphql",
+      "body_sha256": "857b47e5b5e93abfe5d3ad98b8d7cc3d5a54c07a5e9debe2db0797a69586dcfc",
+      "request_headers_sha256": "69cd99f80c0359d864753494ef351c29c0c36baab62bbe8e60242e70bb8d80f6",
+      "status": 200,
+      "headers": {
+        "content-length": "31",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "\u003cvolatile\u003e"
+      },
+      "body": "{\"data\":{\"__typename\":\"Query\"}}"
+    }
+  ],
+  "rows": {
+    "write proof saved-report-clone": {
+      "rows": "sha256:144d824d6f45bcd9beae2d89d9598a5a26da98f1ff4f367e6a343d4b9bd11d8d"
+    },
+    "write proof saved-report-create": {
+      "rows": "sha256:9bad6cd9dd70be2b98ea480e6ce0a210ab04e6a8abcc08ec077c85d047349090"
+    },
+    "write proof saved-report-delete": {
+      "rows": "sha256:17dd20091857013b8a948b704594b52ca401ce6de38e1fbe1d7359c01874e839"
+    },
+    "write proof saved-report-trigger": {
+      "rows": "sha256:fbfc193e7edc961c65c90f336157964b213b32ffd575fdc02e99ee47401acf8c"
+    },
+    "write proof saved-report-update": {
+      "rows": "sha256:c46e7c98fec408c6d4f1fb7b99b230837678895e1747c45e6e786429212b9902"
+    }
+  }
+}

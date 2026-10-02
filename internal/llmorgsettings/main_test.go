@@ -4,6 +4,7 @@ import (
 	"os"
 	"testing"
 
+	"github.com/full-chaos/dev-health-ops/internal/testsupport/venueoracle"
 	"go.opentelemetry.io/otel"
 	sdkmetric "go.opentelemetry.io/otel/sdk/metric"
 )
@@ -18,5 +19,5 @@ var realMeterReader *sdkmetric.ManualReader
 func TestMain(m *testing.M) {
 	realMeterReader = sdkmetric.NewManualReader()
 	otel.SetMeterProvider(sdkmetric.NewMeterProvider(sdkmetric.WithReader(realMeterReader)))
-	os.Exit(m.Run())
+	os.Exit(venueoracle.RunTests(m))
 }

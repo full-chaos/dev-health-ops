@@ -6,6 +6,9 @@ bdbfe76e9ec9080b7012e3e806c0a042fce449301e22a41a0fa04ed4e4a16641	unclassified	ba
 -	header	golden/batch_loop.json
 -	header	golden/db_lookup.json
 -	header	golden/sync_target.json
+-	header	golden/teams_github.json
+-	header	golden/teams_gitlab.json
+-	header	golden/teams_linear.json
 cea59ea490b8b8f183f134cfdf08ebe7c9230b3610c0acb5a4de5b7c307e6163	unclassified	local_sync_oracle.py
 f7d489d5cb9f1170425f9d8236e7edd06fe8531b45355f93e314eb3979a4c4bd	unclassified	sync_target_oracle.py
 8e2385819368c2e23ad0f11afc91b44c6623e1a243b68c39fbdb7bb06b869ad1	unclassified	teams_sync_oracle.py

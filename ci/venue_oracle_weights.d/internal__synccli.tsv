@@ -1,5 +1,2 @@
 internal/synccli	TestLocalSyncMatchesLivePython	469
 internal/synccli	TestLocalSyncRerunKeepsHeldColumnsUnlikePython	27
-internal/synccli	TestSyncTeamsGitHubVenueOracleMatchesThePythonProducer	120
-internal/synccli	TestSyncTeamsGitLabVenueOracleMatchesThePythonProducer	600
-internal/synccli	TestSyncTeamsLinearVenueOracleMatchesThePythonProducer	48

@@ -88,16 +88,29 @@ func TestRootIsTheModuleOfTheTestedPackage(t *testing.T) {
 	}
 }
 
-// No test or helper may call runtime.Caller directly: it breaks under -trimpath. The walk is derived from the
-// module itself; finding no Go file at all would prove nothing, so it fails.
-func TestNoRuntimeCallerOutsideThisPackage(t *testing.T) {
+// permittedRuntimeCaller names every file in scope of the guard below that may still call runtime.Caller directly,
+// with the reason. It is empty today. An entry must still exist and still call runtime.Caller (a stale entry
+// fails), so the list cannot rot into a silent exemption.
+var permittedRuntimeCaller = map[string]string{}
+
+// inGuardScope: the guard covers test files and test support, where runtime.Caller is used to find files on disk
+// and breaks under -trimpath. Product code may use runtime.Caller for caller info in logs or stacks; it is not
+// covered (a file-lookup there would have to be fixed in its own change).
+func inGuardScope(rel string) bool {
+	return strings.HasSuffix(rel, "_test.go") || strings.HasPrefix(rel, "internal/testsupport/")
+}
+
+// No test or test-support file may call runtime.Caller directly: it breaks under -trimpath. The walk is derived
+// from the module itself; finding no in-scope Go file at all would prove nothing, so it fails.
+func TestNoRuntimeCallerInTestsOrTestSupportOutsideThisPackage(t *testing.T) {
 	root, err := Root()
 	if err != nil {
 		t.Fatal(err)
 	}
 	fset := token.NewFileSet()
-	parsed := 0
+	inScope := 0
 	var offenders []string
+	used := map[string]bool{}
 	walkErr := filepath.Walk(root, func(path string, info os.FileInfo, err error) error {
 		if err != nil {
 			return err
@@ -112,11 +125,19 @@ func TestNoRuntimeCallerOutsideThisPackage(t *testing.T) {
 		if !strings.HasSuffix(path, ".go") {
 			return nil
 		}
+		rel, relErr := filepath.Rel(root, path)
+		if relErr != nil {
+			return relErr
+		}
+		rel = filepath.ToSlash(rel)
+		if !inGuardScope(rel) {
+			return nil
+		}
 		file, parseErr := parser.ParseFile(fset, path, nil, 0)
 		if parseErr != nil {
 			return nil // a file that does not parse is another gate's finding
 		}
-		parsed++
+		inScope++
 		ast.Inspect(file, func(node ast.Node) bool {
 			call, ok := node.(*ast.CallExpr)
 			if !ok {
@@ -127,8 +148,11 @@ func TestNoRuntimeCallerOutsideThisPackage(t *testing.T) {
 				return true
 			}
 			if pkg, ok := selector.X.(*ast.Ident); ok && pkg.Name == "runtime" && selector.Sel.Name == "Caller" {
-				rel, _ := filepath.Rel(root, path)
-				offenders = append(offenders, fmt.Sprintf("%s:%d", filepath.ToSlash(rel), fset.Position(call.Pos()).Line))
+				if _, permitted := permittedRuntimeCaller[rel]; permitted {
+					used[rel] = true
+					return true
+				}
+				offenders = append(offenders, fmt.Sprintf("%s:%d", rel, fset.Position(call.Pos()).Line))
 			}
 			return true
 		})
@@ -137,10 +161,15 @@ func TestNoRuntimeCallerOutsideThisPackage(t *testing.T) {
 	if walkErr != nil {
 		t.Fatalf("walk: %v", walkErr)
 	}
-	if parsed < 100 {
-		t.Fatalf("parsed only %d Go files under %s: the derivation is empty or broken", parsed, root)
+	if inScope < 100 {
+		t.Fatalf("only %d in-scope Go files under %s: the derivation is empty or broken", inScope, root)
+	}
+	for rel, reason := range permittedRuntimeCaller {
+		if !used[rel] {
+			t.Errorf("permittedRuntimeCaller names %s (%s) but it no longer calls runtime.Caller: delete the entry", rel, reason)
+		}
 	}
 	if len(offenders) != 0 {
-		t.Fatalf("%d runtime.Caller call(s) outside internal/testsupport/moduleroot (use moduleroot.Caller; -trimpath breaks the runtime form): %v", len(offenders), offenders)
+		t.Fatalf("%d runtime.Caller call(s) in test code or test support (use moduleroot.Caller; -trimpath breaks the runtime form): %v", len(offenders), offenders)
 	}
 }

@@ -39,6 +39,17 @@ func (panickingIs) SQLState() string { panic("state") }
 func (panickingIs) Timeout() bool    { panic("timeout") }
 func (panickingIs) Unwrap() []error  { panic("unwrap") }
 
+type panickingAs struct{ cause error }
+
+func (panickingAs) Error() string   { return "panicking as" }
+func (panickingAs) As(any) bool     { panic("as") }
+func (e panickingAs) Unwrap() error { return e.cause }
+
+type panickingTimeout struct{}
+
+func (panickingTimeout) Error() string { return "panicking timeout" }
+func (panickingTimeout) Timeout() bool { panic("timeout") }
+
 func withinASecond(t *testing.T, name string, run func()) {
 	t.Helper()
 	done := make(chan struct{})
@@ -63,13 +74,17 @@ func hostileErrors() map[string]error {
 		deep = fmt.Errorf("layer %d: %w", index, deep)
 	}
 	return map[string]error{
-		"self unwrap":  &selfUnwrap{},
-		"two-cycle":    a,
-		"typed nil":    typedNil,
-		"panicking":    panickingIs{},
-		"joined cycle": errors.Join(&selfUnwrap{}, a),
-		"5000 deep":    deep,
-		"wrapped self": fmt.Errorf("x: %w", &selfUnwrap{}),
+		"self unwrap":           &selfUnwrap{},
+		"two-cycle":             a,
+		"typed nil":             typedNil,
+		"panicking":             panickingIs{},
+		"joined cycle":          errors.Join(&selfUnwrap{}, a),
+		"5000 deep":             deep,
+		"wrapped self":          fmt.Errorf("x: %w", &selfUnwrap{}),
+		"panicking As":          panickingAs{cause: io.ErrUnexpectedEOF},
+		"wrapped panicking As":  fmt.Errorf("x: %w", panickingAs{}),
+		"panicking Timeout":     panickingTimeout{},
+		"panicking Is, wrapped": fmt.Errorf("x: %w", panickingIs{}),
 	}
 }
 
@@ -119,5 +134,16 @@ func TestAHostileErrorStillGetsItsFixedAlphabet(t *testing.T) {
 	}
 	if got := ErrorClass(errors.Join(errors.New("x"), context.Canceled)); got != ErrorClassCanceled {
 		t.Fatalf("joined canceled class = %q", got)
+	}
+}
+
+// An As method that panics must not stop the walk, and the chain beyond it is still classified.
+func TestAPanickingAsDoesNotHideTheRestOfTheChain(t *testing.T) {
+	err := fmt.Errorf("x: %w", panickingAs{cause: io.ErrUnexpectedEOF})
+	if got := TransportClass(err); got != "eof" {
+		t.Fatalf("class behind a panicking As = %q, want eof", got)
+	}
+	if got := TransportClass(panickingTimeout{}); got == "timeout" {
+		t.Fatalf("a panicking Timeout was trusted: %q", got)
 	}
 }

@@ -1,6 +1,5 @@
-label=internal/providersync (the Python oracle loader harness: tests of the loader itself, class (c))
-package=./internal/providersync
-run=^(TestPythonOracleLoaderRejectsUnexpectedSource|TestPythonOracleLoaderIgnoresSiblingPythonPath|TestPythonOracleLoaderPurgesForgedAndHostilePreloads|TestParityOraclesRunWithoutSQLAlchemy|TestPythonOracleLoaderHasNoCallerControlledExecutionOrSubprocess)$
+label=internal/providersync (live Python oracle sources are outside the Go embed/cache boundary; the loader-harness tests, class (c), prove themselves)
+package=./internal/providersync/...
 python=1
 proof=providersync-loader-rejects-unexpected-source|the providersync Python oracle loader test RejectsUnexpectedSource did not run
 proof=providersync-loader-ignores-sibling-pythonpath|the providersync Python oracle loader test IgnoresSiblingPythonPath did not run

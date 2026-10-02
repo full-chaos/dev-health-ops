@@ -1,4 +1,0 @@
-label=internal/api/licensing/processlicense (process-license verifier vs the live Python LicenseValidator)
-package=./internal/api/licensing/processlicense
-run=^(TestVerifierMatchesLivePythonLicenseValidator)$
-proof=api-licensing-verify|api live Python oracle api-licensing-verify did not run

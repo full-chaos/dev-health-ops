@@ -567,6 +567,47 @@ func (handler *Handler) logLifecycle(
 	logger.InfoContext(ctx, event, attributes...)
 }
 
+// logChunkAttempt says why a chunked attempt stopped and how much it did
+// (CHAOS-7692): chunks committed, wall time, and the bound that ended it. A
+// unit that needs hundreds of attempts is otherwise visible only as River
+// snoozes, and nothing told the bounds apart. Counts, milliseconds and a closed
+// reason vocabulary only: no cursor, row or payload content.
+func (handler *Handler) logChunkAttempt(
+	ctx context.Context,
+	execution *jobruntime.Execution[jobruntime.ProviderUnitArgs],
+	claim providersync.Claim,
+	err error,
+	delay time.Duration,
+) {
+	if execution == nil {
+		return
+	}
+	var continuation providersync.ChunkContinuationError
+	if !errors.As(err, &continuation) {
+		return
+	}
+	logger := execution.Logger
+	if logger == nil {
+		logger = slog.Default()
+	}
+	reason := continuation.Reason
+	if reason == "" {
+		reason = "unspecified"
+	}
+	logger.InfoContext(ctx, "sync_provider_unit_chunk_attempt",
+		"provider", claim.Provider,
+		"dataset", claim.Dataset,
+		"job_id", execution.JobID,
+		"attempt", execution.Attempt,
+		"sync_run_id", claim.SyncRunID,
+		"sync_unit_id", claim.ID,
+		"stop_reason", reason,
+		"chunks_committed", continuation.Chunks,
+		"elapsed_ms", continuation.Elapsed.Milliseconds(),
+		"continue_in_ms", delay.Milliseconds(),
+	)
+}
+
 func lifecycleErrorDetail(err error) string {
 	if err == nil {
 		return ""
@@ -801,6 +842,7 @@ func (handler *Handler) Work(
 		handler.ProviderMetrics.RecordChunkContinuation(session.Claim.Provider, session.Claim.Dataset)
 		handler.observeLeaseRecovery(session.Claim, jobruntime.SyncLeaseResultRetrying)
 		handler.logLifecycle(ctx, execution, session.Claim, "sync_provider_unit_finished", "continued", err)
+		handler.logChunkAttempt(ctx, execution, session.Claim, err, delay)
 		return jobruntime.RetryableAfter(err, delay)
 	}
 	// A provider rate limit is the provider scheduling us, not the unit

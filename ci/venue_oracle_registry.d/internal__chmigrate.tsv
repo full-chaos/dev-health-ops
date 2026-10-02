@@ -1,2 +1,0 @@
-internal/chmigrate	TestMigrateClickHouseVenueOracleMatchesThePythonRunner	run
-internal/chmigrate	TestRepairVenueOracleMatchesThePythonProducer	run

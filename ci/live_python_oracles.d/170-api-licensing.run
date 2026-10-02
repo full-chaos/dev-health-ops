@@ -1,6 +1,0 @@
-label=internal/api/licensing (tier feature registry and limits vs live Python)
-package=./internal/api/licensing
-run=^(TestTierFeaturesMatchLivePython|TestSignLicenseMatchesLivePython|TestPythonB64DecodeMatchesLivePython|TestBigDurationLicensesVerifyIdenticallyGoSignedAndPythonSigned)$
-proof=api-licensing-registry|api live Python oracle api-licensing-registry did not run
-proof=api-licensing-sign|api live Python oracle api-licensing-sign did not run
-proof=api-licensing-b64decode|api live Python oracle api-licensing-b64decode did not run

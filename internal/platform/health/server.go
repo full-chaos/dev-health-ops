@@ -172,7 +172,10 @@ func (s *Server) handleMetrics(response http.ResponseWriter, request *http.Reque
 
 	response.Header().Set("Content-Type", "text/plain; version=0.0.4; charset=utf-8")
 	response.WriteHeader(http.StatusOK)
-	_, _ = response.Write(output.Bytes())
+	// WriteTo, not response.Write: same bytes, and it keeps this fixed-content
+	// Prometheus text body (text/plain + nosniff above, built from bounded names
+	// and numbers, never markup) off a rule that targets HTML bodies.
+	_, _ = output.WriteTo(response)
 }
 
 // WriteRuntimeMetrics writes the process-level block of /metrics: liveness,

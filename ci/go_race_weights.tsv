@@ -114,7 +114,7 @@ internal/goapidigest	1
 internal/goapiproof	130
 internal/goapiproof/writeproof	1
 internal/gqlgenguard	414
-internal/httpguard	324
+internal/httpguard	10
 internal/identityalias	1
 internal/jobcontract	2
 internal/joboperator	2

@@ -11,8 +11,9 @@ type Feature struct {
 
 // StandardFeatures is the feature registry `admin features seed` writes, in
 // its order. It is a port of STANDARD_FEATURES in
-// src/dev_health_ops/licensing/registry.py; while that file exists,
-// TestStandardFeaturesVenueOracleMatchesPythonRegistry runs it and requires this list to equal it.
+// src/dev_health_ops/licensing/registry.py:
+// TestStandardFeaturesMatchThePythonRegistry requires this list to equal the
+// registry as the pinned Python build printed it (a frozen golden).
 var StandardFeatures = []Feature{
 	{Key: "git_sync", Name: "Git Sync", Category: "core", MinTier: "community", Description: "Sync git commits and PRs"},
 	{Key: "work_items_sync", Name: "Work Items Sync", Category: "core", MinTier: "community", Description: "Sync work items from providers"},

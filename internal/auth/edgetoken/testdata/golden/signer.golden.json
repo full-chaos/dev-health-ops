@@ -1,0 +1,32 @@
+{
+  "header": {
+    "test": "TestSignerMatchesFrozenAuthService",
+    "python_build": "a4847c5e93607451a0c987b314d37e02fc43ce85",
+    "producer_digest": "6e1dc97e68624398015f60caee160cceee6ae601bd434d01b8b7d5975267e137",
+    "recipe": "git worktree add --detach $DIR a4847c5e93607451a0c987b314d37e02fc43ce85 (with its .venv: uv sync --frozen --no-install-project); then from the repository root: go run ./internal/testsupport/venueoracle/goldenrecord -pkg ./internal/auth/edgetoken/ -test '^TestSignerMatchesFrozenAuthService$' -python-root $DIR",
+    "recorded_by": "goldenrecord",
+    "blanked": {}
+  },
+  "requests": [
+    {
+      "name": "producer identity",
+      "method": "PYTHON",
+      "path": "program sha256 92444c0454ed5d0e22662eaebfab5442c6405fbf1f880783deb6a557dba43757 env sha256 969169a1702b285f3a9e4b602d19052b0d6a3c6b2a44dd7425bef0f696436295",
+      "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "request_headers_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "status": 0,
+      "headers": {},
+      "body": "python 3.14.7\nunicodedata 16.0.0\npyjwt 2.15.0\n"
+    },
+    {
+      "name": "auth service signer",
+      "method": "PYTHON",
+      "path": "program sha256 39f0c2a6dddc08e973c9ddef05f258441a18e7ea83db5b1b4503f08f1a4f8399 env sha256 969169a1702b285f3a9e4b602d19052b0d6a3c6b2a44dd7425bef0f696436295",
+      "body_sha256": "56f8f7c745863a414f68574a2afde75d9472897ec70cf76dfa07f5fc63d0f33f",
+      "request_headers_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "status": 0,
+      "headers": {},
+      "body": "[{\"token\": {\"sha256\": \"6a7f3bd63f690b55e9c16e5981c4b587ce48ec3874753e1449b40ac2b97fe460\", \"length\": 385}, \"accepted\": true}, {\"token\": {\"sha256\": \"45aa6112ee5e9aaea22cfc8ceecf91300ce9d43af41871d9364d87683c7503b2\", \"length\": 521}, \"accepted\": true}, {\"token\": {\"sha256\": \"8ae9d718d91d492b26c59dccd83d0d8171c9126e620388a8979d0e694163e1a6\", \"length\": 388}, \"accepted\": true}, {\"token\": {\"sha256\": \"27251186b8859c9ac29cee57e48366047eb3336c691849d616fa959f8bb42da1\", \"length\": 431}, \"accepted\": true}, {\"token\": {\"sha256\": \"9baedd83bc516862e0d6a6e66b4bfc7bd2590d0745dff6402869fb8679b02ad9\", \"length\": 453}, \"accepted\": true}, {\"token\": {\"sha256\": \"c5765d85361c9180b5e7881a4471d06bf19dfc02ac1c8b1e0a54cc216cafe0e2\", \"length\": 384}, \"accepted\": true}, {\"token\": {\"sha256\": \"006e6645a7251306c06fe95280b251853e68ad2b16f351af3b5aca139e37da6a\", \"length\": 335}, \"accepted\": true}, {\"token\": {\"sha256\": \"96f4cc22e95ed6ac1a8e924f2bb1058f8cdb183b97f29af69e44334fc7089e7e\", \"length\": 331}, \"accepted\": true}]\n"
+    }
+  ]
+}

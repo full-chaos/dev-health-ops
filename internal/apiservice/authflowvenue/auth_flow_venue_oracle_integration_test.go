@@ -5,6 +5,7 @@ package authflowvenue_test
 import (
 	"context"
 	"encoding/base64"
+	"encoding/json"
 	"fmt"
 	"io"
 	"log/slog"
@@ -213,7 +214,21 @@ func normalize(body string) string {
 	})
 }
 
+// recordedMail is a sentMail as a golden holds it.
+type recordedMail struct {
+	MailFrom, RcptTo, From, To, Subject, PartType, HTML, Token string
+}
+
+func (m sentMail) record() recordedMail {
+	return recordedMail{m.mailFrom, m.rcptTo, m.from, m.to, m.subject, m.partType, m.html, m.token}
+}
+
+func (m recordedMail) sent() sentMail {
+	return sentMail{mailFrom: m.MailFrom, rcptTo: m.RcptTo, from: m.From, to: m.To, subject: m.Subject, partType: m.PartType, html: m.HTML, token: m.Token}
+}
+
 type runner struct {
+	golden         *venueoracle.Golden
 	t              *testing.T
 	ctx            context.Context
 	venue          *venueoracle.Venue
@@ -234,14 +249,18 @@ func (r *runner) batch(label string, steps []step) map[string][2]venueoracle.Res
 	for index, s := range steps {
 		pyRequests[index] = s.python
 	}
-	pyResponses := r.venue.ServePython(r.t, pyRequests)
+	pyResponses := r.golden.Python(r.t, r.venue, pyRequests)
+	r.golden.Consumed(r.t, pyResponses...)
 	out := map[string][2]venueoracle.Response{}
 	fmt.Fprintf(&r.receipt, "-- %s\n", label)
 	for index, s := range steps {
 		goResponse := venueoracle.Do(r.t, r.goBase, s.goSide)
-		same, compared, pyShown, goShown := venueoracle.Compare(s.python, pyResponses[index], goResponse,
+		// The golden holds the Python answer projected (tokens to their claims,
+		// generated ids and times blanked); the Go answer is compared the same way.
+		goProjected := r.golden.Project(r.t, goResponse)
+		same, compared, pyShown, goShown := venueoracle.Compare(s.python, pyResponses[index], goProjected,
 			venueoracle.DiffOptions{Normalize: func(_ venueoracle.Request, body string) string { return normalize(body) }})
-		fmt.Fprintf(&r.receipt, "%-70s python=%d go=%d %s\n", s.name, pyResponses[index].Status, goResponse.Status, venueoracle.Mark(same))
+		fmt.Fprintf(&r.receipt, "%-70s python=%d go=%d %s\n", s.name, pyResponses[index].Status, goProjected.Status, venueoracle.Mark(same))
 		if !same {
 			r.t.Errorf("%s:\n python %d %s %v\n go     %d %s %v", s.name, pyShown.Status, pyShown.Body, pick(pyShown.Headers, compared),
 				goShown.Status, goShown.Body, pick(goShown.Headers, compared))
@@ -267,13 +286,42 @@ func pick(headers map[string]string, names []string) map[string]string {
 func (r *runner) compareMail(label string) {
 	r.t.Helper()
 	planes := map[string][]sentMail{}
-	for plane, sink := range map[string]*smtpcapture.Server{"python": r.pySink, "go": r.goSink} {
-		for _, captured := range sink.Drain(r.t) {
-			decoded := decodeMail(r.t, captured)
-			planes[plane] = append(planes[plane], decoded)
-			key := decoded.rcptTo + "|" + decoded.subject
-			r.mails[plane][key] = append(r.mails[plane][key], decoded)
+	// The Python plane's messages are captured off its SMTP sink while recording
+	// and frozen with their link tokens: a later request carries the token the
+	// Python plane mailed, and the frozen token keeps that request the same bytes.
+	var pythonMails []recordedMail
+	var rawMails string
+	pythonText := r.golden.InspectRows(r.t, "python mails: "+label, func() string {
+		var recorded []recordedMail
+		for _, captured := range r.pySink.Drain(r.t) {
+			recorded = append(recorded, decodeMail(r.t, captured).record())
 		}
+		raw, err := json.Marshal(recorded)
+		if err != nil {
+			r.t.Fatal(err)
+		}
+		rawMails = string(raw)
+		return rawMails
+	})
+	if r.golden.Recording() {
+		// The links the Python plane mailed are followed by a later request of
+		// this recording; the golden holds them as a placeholder.
+		pythonText = rawMails
+	}
+	if err := json.Unmarshal([]byte(pythonText), &pythonMails); err != nil {
+		r.t.Fatalf("python mails %q: %v", label, err)
+	}
+	for _, recorded := range pythonMails {
+		decoded := recorded.sent()
+		planes["python"] = append(planes["python"], decoded)
+		key := decoded.rcptTo + "|" + decoded.subject
+		r.mails["python"][key] = append(r.mails["python"][key], decoded)
+	}
+	for _, captured := range r.goSink.Drain(r.t) {
+		decoded := decodeMail(r.t, captured)
+		planes["go"] = append(planes["go"], decoded)
+		key := decoded.rcptTo + "|" + decoded.subject
+		r.mails["go"][key] = append(r.mails["go"][key], decoded)
 	}
 	py, gv := planes["python"], planes["go"]
 	same := len(py) == len(gv)
@@ -312,12 +360,14 @@ func keys(m map[string][]sentMail) []string {
 
 func (r *runner) rows(name, query string) {
 	r.t.Helper()
-	pyRows := venueoracle.TableRows(r.t, r.ctx, r.venue.AdminURI(r.t, r.venue.SourceDB), query)
 	goRows := venueoracle.TableRows(r.t, r.ctx, r.venue.AdminURI(r.t, r.venue.GoDB), query)
+	pyRows := r.golden.CompareRows(r.t, name, func() string {
+		return venueoracle.TableRows(r.t, r.ctx, r.venue.AdminURI(r.t, r.venue.SourceDB), query)
+	}, goRows)
 	same := pyRows == goRows && pyRows != ""
 	fmt.Fprintf(&r.receipt, "%s rows after the scenario: %s\n", name, venueoracle.Mark(same))
-	if !same {
-		r.t.Errorf("%s rows differ (or are empty):\n python %s\n go     %s", name, pyRows, goRows)
+	if pyRows == "" {
+		r.t.Errorf("%s rows are empty", name)
 	}
 }
 
@@ -394,6 +444,14 @@ VALUES ($1, $2, $3, now() - interval '1 hour', now() - interval '2 hours')`, exp
 // memberships, link-token, org_invites, refresh_tokens and audit_logs rows
 // are compared at the end.
 func TestAuthFlowVenueOracle(t *testing.T) {
+	spec := venueGolden("auth-flow-venue-oracle", t.Name(), "7783ad744176666041e916fb2a1f92d4337bee8a3cb46759dcb25079cfbb207b")
+	spec.Scrub, spec.KeyScrub = authScrub, requestKeyScrub
+	// Recording, the Python plane's answers reach the test unprojected here, in
+	// memory only: a later request carries the refresh token Python issued. The
+	// golden holds the projected answer.
+	rawPython := map[string]venueoracle.Response{}
+	spec.RawSink = func(request venueoracle.Request, answer venueoracle.Response) { rawPython[request.Name] = answer }
+	golden := venueoracle.OpenGolden(t, spec)
 	// CHAOS-7204: Go records the client IP behind a trusted peer only; Python records
 	// the header's first hop. Trust this test's loopback peer so both planes agree.
 	t.Setenv("TRUSTED_PROXIES", "127.0.0.1,::1,testclient")
@@ -402,7 +460,7 @@ func TestAuthFlowVenueOracle(t *testing.T) {
 	pySink, goSink := smtpcapture.Start(t), smtpcapture.Start(t)
 	pyHost, pyPort := pySink.HostPort(t)
 	venue := venueoracle.Start(t, ctx, venueoracle.Options{
-		Root: venueRoot(), JWTKey: sessionscenario.Key, Logger: slog.New(slog.NewTextHandler(io.Discard, nil)),
+		Golden: golden, Root: golden.PythonRoot(t, venueRoot()), JWTKey: sessionscenario.Key, Logger: slog.New(slog.NewTextHandler(io.Discard, nil)),
 		PythonEnv: []string{"EMAIL_PROVIDER=smtp", "EMAIL_FROM_ADDRESS=" + fromAddress,
 			"SMTP_HOST=" + pyHost, "SMTP_PORT=" + strconv.Itoa(pyPort), "APP_BASE_URL=" + appBaseURL},
 		Seed: seed,
@@ -433,7 +491,7 @@ func TestAuthFlowVenueOracle(t *testing.T) {
 	if err != nil {
 		t.Fatalf("go mail sender: %v", err)
 	}
-	r := &runner{t: t, ctx: ctx, venue: venue, pySink: pySink, goSink: goSink,
+	r := &runner{golden: golden, t: t, ctx: ctx, venue: venue, pySink: pySink, goSink: goSink,
 		mails:  map[string]map[string][]sentMail{"python": {}, "go": {}},
 		goBase: startGoAPI(t, ctx, venue, admin.InviteConfig{Mail: goSender, TokenSecret: sessionscenario.Key, AppBaseURL: appBaseURL, AppBaseURLSet: true})}
 	tok := venue.Tokens
@@ -584,7 +642,11 @@ func TestAuthFlowVenueOracle(t *testing.T) {
 		if plane == "go" {
 			index = 1
 		}
-		return sessionscenario.Field(first["login: alice (a refresh token the reset revokes)"][index].Body, "refresh_token")
+		body := first["login: alice (a refresh token the reset revokes)"][index].Body
+		if plane == "python" && golden.Recording() {
+			body = rawPython["login: alice (a refresh token the reset revokes)"].Body
+		}
+		return sessionscenario.Field(body, "refresh_token")
 	}
 	r.batch("links", []step{
 		visit("verify: nina's link", verify, verifyNina),
@@ -661,7 +723,6 @@ func TestAuthFlowVenueOracle(t *testing.T) {
 		FROM audit_logs a LEFT JOIN organizations o ON o.id = a.org_id LEFT JOIN users u ON u.id = a.user_id
 		ORDER BY a.created_at, a.action`)
 
-	venueoracle.WriteProof(t)
 	if violations := policy.WriterViolations(); violations > 0 {
 		t.Errorf("%d body writes used the wrong writer for their route", violations)
 	}
@@ -670,6 +731,11 @@ func TestAuthFlowVenueOracle(t *testing.T) {
 		_ = os.WriteFile(path, []byte(receipt), 0o600)
 	}
 	t.Log("\n" + receipt)
+	golden.SkipDiff(t)
+	golden.Finish(t)
+	if !golden.Recording() {
+		venueoracle.WriteGoOnlyProof(t, "Go auth flow, e-mail and rows against the Python plane's answers frozen on build "+venuePythonBuild)
+	}
 }
 
 func flushValkey(t *testing.T, ctx context.Context, uris ...string) {
@@ -746,4 +812,42 @@ func startGoAPI(t *testing.T, ctx context.Context, venue *venueoracle.Venue, mai
 func venueRoot() string {
 	_, file, _, _ := runtime.Caller(0)
 	return filepath.Clean(filepath.Join(filepath.Dir(file), "..", "..", ".."))
+}
+
+// linkTokenPattern is the link token a plane mails: 32 and 64 hex digits.
+var linkTokenPattern = regexp.MustCompile(`[0-9a-f]{32}\.[0-9a-f]{64}`)
+
+// seededIDPattern is an id this test seeds (it has the shape of a random id and
+// is compared by value): the fixed ids all carry the zero group.
+var seededIDPattern = regexp.MustCompile(`[0-9a-f]{8}-0000-4000-8000-[0-9a-f]{12}`)
+
+// linkTokenScrub turns a mailed link token into a placeholder, for a request's
+// key.
+func linkTokenScrub(text string) string {
+	return linkTokenPattern.ReplaceAllString(text, "<link-token>")
+}
+
+// refreshTokenInRequest is the refresh token a request body sends back: the
+// Python plane issued it earlier in this run, so its value differs per run.
+var refreshTokenInRequest = regexp.MustCompile(`("refresh_token"\s*:\s*")[^"]*(")`)
+
+// requestKeyScrub is the request key's scrub: link tokens and the refresh token
+// a request sends back are placeholders (idempotent).
+func requestKeyScrub(text string) string {
+	return refreshTokenInRequest.ReplaceAllString(linkTokenScrub(text), "${1}<refresh-token>${2}")
+}
+
+// authScrub is the golden's scrub: link tokens and generated ids and times are
+// placeholders, the seeded ids stay.
+func authScrub(text string) string {
+	var kept []string
+	text = seededIDPattern.ReplaceAllStringFunc(text, func(id string) string {
+		kept = append(kept, id)
+		return fmt.Sprintf("\x00%d\x00", len(kept)-1)
+	})
+	text = venueoracle.ScrubRunValues(runFloor, runCeiling)(linkTokenScrub(text))
+	for index, id := range kept {
+		text = strings.ReplaceAll(text, fmt.Sprintf("\x00%d\x00", index), id)
+	}
+	return text
 }

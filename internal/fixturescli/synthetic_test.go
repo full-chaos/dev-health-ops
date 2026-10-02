@@ -16,9 +16,8 @@ import (
 // the real Python `sync <target> --provider synthetic` wrote for one
 // (organization, repository, window) CI runs, at the commit its "producer"
 // field names; the producer is deleted with the Python CLI (S10i), so this is a
-// rot guard, not a freshness check: a file changes only by re-running
-// TestFreezeSyntheticRows against the live producer, and then its digest is
-// updated here.
+// rot guard, not a freshness check: a file is not rewritten (its freezer,
+// TestFreezeSyntheticRows, was removed with CHAOS-7793: the producer cannot run again).
 var frozenSetDigests = map[string]string{
 	"testdata/synthetic/11111111-2222-4333-8444-555555555555_acme__live-e2e_14d.json.gz":                 "791791ad5e64f294f89cf6311c548a623f977ae2a9830009c2970192ee5ff2ce",
 	"testdata/synthetic/c0ffee00-dead-4bee-8bad-f00dfeedface_ci-metrics-executed-proof__repo_7d.json.gz": "aca986cc454b3a85cbf927bc6a0d24e2cff4c766f60d87e8bf2973185062aa9b",
@@ -39,7 +38,7 @@ func TestFrozenSyntheticFilesAreTheFilesTheDigestsPin(t *testing.T) {
 		}
 		sum := sha256.Sum256(raw)
 		if got := hex.EncodeToString(sum[:]); got != want {
-			t.Fatalf("%s digest = %s, want %s: the frozen rows changed without their digest. They are only rewritten from the live Python producer (TestFreezeSyntheticRows), then the digest is updated", path, got, want)
+			t.Fatalf("%s digest = %s, want %s: the frozen rows changed without their digest. They are not rewritten: the Python producer that froze them cannot run again (CHAOS-7793)", path, got, want)
 		}
 		set, err := decodeFrozenSet(raw)
 		if err != nil {

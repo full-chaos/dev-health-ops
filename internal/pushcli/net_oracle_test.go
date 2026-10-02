@@ -436,7 +436,6 @@ func TestPushNetMatchesTheFrozenPythonOutput(t *testing.T) {
 		Path:        "testdata/golden/push_net.json",
 		PythonBuild: netPythonBuild,
 		SHA256:      "4f320314de5108821f1fb8570ac4d4581ef3efaa1a3e8b801fd090d04c1ea723",
-		Scrub:       netScrub,
 		Recipe: "git worktree add --detach $DIR " + netPythonBuild + " (with its .venv: uv sync --frozen --no-install-project); then from the repository root: " +
 			"go run ./internal/testsupport/venueoracle/goldenrecord -pkg ./internal/pushcli/ -test '^TestPushNetMatchesTheFrozenPythonOutput$' -python-root $DIR",
 	})
@@ -467,6 +466,12 @@ func TestPushNetMatchesTheFrozenPythonOutput(t *testing.T) {
 	answers := golden.Produce(t, root, []venueoracle.Request{request}, func(producer *venueoracle.Producer, _ []venueoracle.Request) []venueoracle.Response {
 		producer.RequireDeployed()
 		results := netPythonRun(t, producer, cases, input)
+		// The credentials the corpus sends are test constants shaped like credentials: the golden stores their
+		// digest (netScrub), never the value. Scrubbed here, before the answers are stored, so the record verb
+		// has no run-value scrub of its own to check.
+		for index := range results {
+			results[index] = netScrubResult(results[index])
+		}
 		body, err := json.Marshal(results)
 		if err != nil {
 			t.Fatal(err)

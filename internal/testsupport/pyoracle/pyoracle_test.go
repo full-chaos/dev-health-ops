@@ -201,9 +201,6 @@ func TestClosedEnvInheritsNothingAndCarriesTheExtras(t *testing.T) {
 // ClosedEnv and must not call os.Environ().
 func TestTheClosedEnvironmentRecordersDoNotInheritTheEnvironment(t *testing.T) {
 	for _, file := range []string{
-		"../../chmigrate/migrate_venue_oracle_integration_test.go",
-		"../../chmigrate/repair_integration_test.go",
-		"../../chmigrate/chain_record_integration_test.go",
 		"../../operationalbackfill/backfill_integration_test.go",
 	} {
 		raw, err := os.ReadFile(file)
@@ -457,8 +454,6 @@ var lookPathPythonDayOne = map[string]bool{
 	// recording's poison (PYTHONHOME) stops these, so none records today.
 	"internal/testsupport/programoracle/programoracle.go":                              true,
 	"internal/queryapi/people/summaryvenue/summary_venue_oracle_integration_test.go":   true,
-	"internal/queryapi/server/dict_order_venue_oracle_test.go":                         true,
-	"internal/queryapi/server/workunit_explain_provider_venue_oracle_test.go":          true,
 	"internal/apiservice/metricsvenue/counter_parity_venue_oracle_integration_test.go": true,
 	"internal/testsupport/venueoracle/producer.go":                                     true,
 }

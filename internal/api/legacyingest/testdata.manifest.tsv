@@ -1,4 +1,4 @@
 # Every file under internal/api/legacyingest/testdata: sha256, kind, path. Written by `go run ./internal/testsupport/recordedfiles/manifest`; never edit it by hand.
 # python-recorded set: e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855 (0 files)
-# header-before-stamp set: a1937a9ff9eb9de1ab91a00b78f05f110df8df9c3be9d9164547978dbde39608 (1 files)
-ac9b69160631589c43be785eb75e032045b2e0b371927198aa9546f332d2233f	header-before-stamp	golden/legacy-ingest.json
+# header-before-stamp set: e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855 (0 files)
+-	header	golden/legacy-ingest.json

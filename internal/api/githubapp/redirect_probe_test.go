@@ -1,6 +1,8 @@
 package githubapp
 
 import (
+	"context"
+	"math/big"
 	"net/http"
 	"testing"
 
@@ -18,5 +20,14 @@ func TestASuppliedClientNeverFollowsARedirectToAnotherOrigin(t *testing.T) {
 	}
 	request.Header.Set("Authorization", "Bearer SECRET-TOKEN")
 	_, _, _ = h.fetchJSON(request)
+	probe.Assert(t)
+}
+
+// The OAuth code exchange carries client_secret in the form BODY, which a 307 would send again to any host.
+func TestTheCodeExchangeNeverFollowsARedirectToAnotherOrigin(t *testing.T) {
+	probe := redirectprobe.New(t)
+	h := handlers{Deps: Deps{HTTPClient: probe.Client(), GitHubURL: probe.Base.URL, GitHubAPIURL: probe.Base.URL,
+		Config: Config{ClientID: "id", ClientSecret: "SECRET"}}}
+	_, _ = h.verifyInstallerAccess(context.Background(), big.NewInt(1), "code")
 	probe.Assert(t)
 }

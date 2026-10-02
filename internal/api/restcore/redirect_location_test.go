@@ -3,6 +3,7 @@ package restcore
 import (
 	"context"
 	"errors"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -121,5 +122,48 @@ func TestAnOrdinaryTransportErrorKeepsItsClassAndText(t *testing.T) {
 	}
 	if strings.Contains(apiErr.Message, "unexpected redirect") {
 		t.Fatalf("an ordinary transport error was reworded as a redirect: %s", apiErr.Message)
+	}
+}
+
+// CHAOS-7927 r1: an ordinary transport error that merely mentions net/http's phrase, or wraps a cause behind it, keeps its class.
+func TestATransportErrorMentioningTheLocationPhraseKeepsItsClass(t *testing.T) {
+	for name, cause := range map[string]error{
+		"mentioned in the middle": errors.New("the proxy said: failed to parse Location header for the planted detail"),
+		"wrapped cause behind it": fmt.Errorf("failed to parse Location header %q: %w", "x", errors.New("inner cause")),
+	} {
+		core := Core{Provider: "github", RetryAfter: func(Response) time.Duration { return 0 }, HTTP: &http.Client{Transport: failingTransport{err: cause}}}
+		_, err := core.Get(context.Background(), "https://api.example.test/x", "GET /probe")
+		var apiErr *Error
+		if !errors.As(err, &apiErr) || apiErr.Class != "TransportError" || strings.Contains(apiErr.Message, "unexpected redirect") {
+			t.Fatalf("%s: err = %v, want a TransportError that is not reworded as a redirect", name, err)
+		}
+	}
+}
+
+// CHAOS-7927 r1: a supplied client with the DEFAULT redirect policy must not follow a Location (the core never does): the second
+// server sees no request and the error is the host-only 3xx text.
+func TestASuppliedClientWithTheDefaultPolicyDoesNotFollowARedirect(t *testing.T) {
+	var followed int
+	second := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { followed++ }))
+	defer second.Close()
+	first := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		http.Redirect(w, r, second.URL+"/private/record-42?planted=detail", http.StatusFound)
+	}))
+	defer first.Close()
+	supplied := &http.Client{}
+	core := Core{Provider: "gitlab", RetryAfter: func(Response) time.Duration { return 0 }, HTTP: supplied}
+	_, err := core.Get(context.Background(), first.URL+"/x", "GET /probe")
+	if supplied.CheckRedirect != nil {
+		t.Fatal("the core changed the redirect policy of the caller's client")
+	}
+	var apiErr *Error
+	if !errors.As(err, &apiErr) || apiErr.Class != "APIException" || !strings.Contains(apiErr.Message, "unexpected redirect") {
+		t.Fatalf("err = %v, want the 3xx APIException", err)
+	}
+	if followed != 0 {
+		t.Fatalf("the redirect was followed %d time(s)", followed)
+	}
+	if strings.Contains(apiErr.Message, "record-42") || strings.Contains(apiErr.Message, "planted") {
+		t.Fatalf("the text carries the Location's path or query: %s", apiErr.Message)
 	}
 }

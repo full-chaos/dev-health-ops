@@ -104,10 +104,16 @@ func DefaultRetryable(r Response) bool {
 // place on a timeout or refused connection and on a retryable status, a 3xx
 // an APIException, then classified by _raise_for_status.
 func (c Core) Get(ctx context.Context, target, operation string) (Response, error) {
+	// The core never follows a redirect (httpx's default: follow_redirects=False): a supplied client gets the same policy on a
+	// copy, so a client with the default policy cannot follow a Location and quote it in a later error (CHAOS-7927 r1).
 	httpClient := c.HTTP
 	if httpClient == nil {
-		httpClient = &http.Client{Timeout: DefaultTimeout, CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}
+		httpClient = &http.Client{Timeout: DefaultTimeout}
+	} else {
+		clone := *httpClient
+		httpClient = &clone
 	}
+	httpClient.CheckRedirect = func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }
 	sleep := c.Sleep
 	if sleep == nil {
 		sleep = sleepContext
@@ -142,7 +148,7 @@ func (c Core) Get(ctx context.Context, target, operation string) (Response, erro
 			body, err = io.ReadAll(response.Body)
 			response.Body.Close()
 		}
-		if err != nil && strings.Contains(err.Error(), "failed to parse Location header") {
+		if err != nil && isLocationParseFailure(err) {
 			// net/http refused the redirect itself and its error text quotes the whole Location (CHAOS-7927): say that
 			// the redirect was refused, not where to.
 			return Response{}, &Error{"APIException", fmt.Sprintf("%s unexpected redirect on %s: the Location header is not a valid URL (%s); the instrumented core does not follow redirects", c.Provider, operation, redirectUnparsable)}
@@ -259,4 +265,15 @@ func sleepContext(ctx context.Context, wait time.Duration) error {
 	case <-timer.C:
 		return nil
 	}
+}
+
+// isLocationParseFailure: net/http refused a redirect whose Location does not parse. Its error is a *url.Error wrapping an
+// unwrappable error whose text STARTS with the phrase; a transport error that merely mentions the phrase, or wraps a cause,
+// is an ordinary transport error and keeps its class (CHAOS-7927 r1).
+func isLocationParseFailure(err error) bool {
+	var urlErr *url.Error
+	if !errors.As(err, &urlErr) || urlErr.Err == nil || errors.Unwrap(urlErr.Err) != nil {
+		return false
+	}
+	return strings.HasPrefix(urlErr.Err.Error(), "failed to parse Location header ")
 }

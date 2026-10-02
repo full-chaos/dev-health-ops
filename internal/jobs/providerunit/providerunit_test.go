@@ -804,16 +804,16 @@ func (repository *memoryUnitRepository) DeferForBudgetContention(
 	claim providersync.Claim,
 	availableAt time.Time,
 	_ time.Time,
-) error {
+) (int, error) {
 	repository.mu.Lock()
 	defer repository.mu.Unlock()
 	if repository.status != "running" || repository.lastClaim.Owner != claim.Owner {
-		return providersync.ErrLeaseLost
+		return 0, providersync.ErrLeaseLost
 	}
 	repository.contentionDeferrals++
 	repository.availableAt = availableAt
 	repository.status = "dispatching"
-	return nil
+	return repository.contentionDeferrals, nil
 }
 
 func (repository *memoryUnitRepository) RateLimitEpisode(

@@ -15,3 +15,12 @@ func NotSites(c *http.Client, r *http.Request) {
 	_, _ = c.Do(r)
 	_, _ = c.Get("")
 }
+
+type shapeless struct{ n int }
+
+// Conversions that are not between a client and a type of its shape.
+func Conversions(c *http.Client, n int) {
+	_ = (*http.Client)(c)
+	_ = int64(n)
+	_ = shapeless(struct{ n int }{n})
+}

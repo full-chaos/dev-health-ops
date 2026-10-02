@@ -8,3 +8,10 @@ type Config struct {
 	HTTPClient *nethttp.Client
 	Name       string
 }
+
+// Hidden has only an unexported *http.Client field: not a carrier (its client cannot be set from outside, so a literal
+// cannot "leave it unset").
+type Hidden struct {
+	client *nethttp.Client
+	Name   string
+}

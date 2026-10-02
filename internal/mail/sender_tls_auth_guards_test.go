@@ -164,7 +164,12 @@ func (server *recordingSMTPServer) serve(conn net.Conn, greet bool) {
 				continue
 			}
 			reply("220 Ready to start TLS")
-			tlsConn := tls.Server(conn, &tls.Config{Certificates: []tls.Certificate{*server.cert}, MaxVersion: server.maxTLSVersion})
+			relayConfig := &tls.Config{Certificates: []tls.Certificate{*server.cert}, MaxVersion: server.maxTLSVersion}
+			if server.maxTLSVersion != 0 {
+				// A relay capped below TLS 1.2 must really offer that version: the server default minimum is TLS 1.2, which would leave it offering none.
+				relayConfig.MinVersion = tls.VersionTLS10
+			}
+			tlsConn := tls.Server(conn, relayConfig)
 			if err := tlsConn.Handshake(); err != nil {
 				return
 			}
@@ -387,41 +392,30 @@ func TestNewSenderFromEnvRefusesACAFileWithNoPEMCertificate(t *testing.T) {
 	}
 }
 
-// A relay that speaks only TLS 1.1 is refused (the sender never negotiates below TLS 1.2), whether the tls.Config is the constructor's or the
-// struct-literal default; the relay sees no MAIL FROM. (On the toolchain of this repository Go's own client default is also TLS 1.2, so removing the
-// explicit MinVersion from either config is NOT distinguishable here: stated NOT pinned in the PR body, executed.)
+// A relay that speaks only TLS 1.1 is refused: the constructor's tls.Config never negotiates below TLS 1.2, and the relay sees no MAIL FROM. The relay
+// trusts nothing special: the CA file makes the certificate valid, so the refusal is the protocol version (an explicit MinVersion LOWERED below
+// 1.2 is RED). Removing the MinVersion field is NOT distinguishable: Go's client default is also TLS 1.2 on this toolchain (stated NOT pinned in the
+// PR body, executed). The struct-literal default (no tlsConfig) cannot trust the relay's CA, so it would refuse the certificate and show nothing about
+// the version: it is not tested here.
 func TestSMTPSendRefusesARelayThatOffersOnlyTLS11(t *testing.T) {
 	cert, certPEM := generateSelfSignedSMTPCert(t, "127.0.0.1")
-	for _, test := range []struct {
-		name string
-		make func(t *testing.T, host string, port int) Sender
-	}{
-		{"struct literal without a tlsConfig", func(t *testing.T, host string, port int) Sender {
-			return &smtpSender{from: "noreply@example.test", host: host, port: port, useTLS: true}
-		}},
-		{"constructor config", func(t *testing.T, host string, port int) Sender {
-			smtpEnv(t, host, port, map[string]string{"SMTP_USE_TLS": "true", "SMTP_TLS_CA_FILE": writeCAFile(t, certPEM)})
-			sender, err := NewSenderFromEnv(nil)
-			if err != nil {
-				t.Fatal(err)
-			}
-			return sender
-		}},
-	} {
-		t.Run(test.name, func(t *testing.T) {
-			server := newRecordingSMTPServer(t, func(s *recordingSMTPServer) {
-				s.advertiseSTARTTLS = true
-				s.cert = &cert
-				s.maxTLSVersion = tls.VersionTLS11
-			})
-			host, port := server.addr()
-			err := test.make(t, host, port).Send(context.Background(), guardMessage())
-			if err == nil {
-				t.Fatal("Send() = nil: a TLS 1.1-only relay was accepted")
-			}
-			if seen := server.commands(t); hasVerb(seen, "MAIL") {
-				t.Fatalf("the relay saw MAIL FROM after the failed handshake (commands: %v)", seen)
-			}
-		})
+	server := newRecordingSMTPServer(t, func(s *recordingSMTPServer) {
+		s.advertiseSTARTTLS = true
+		s.cert = &cert
+		s.maxTLSVersion = tls.VersionTLS11
+	})
+	host, port := server.addr()
+	smtpEnv(t, host, port, map[string]string{"SMTP_USE_TLS": "true", "SMTP_TLS_CA_FILE": writeCAFile(t, certPEM)})
+	sender, err := NewSenderFromEnv(nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := sender.Send(context.Background(), guardMessage()); err == nil {
+		t.Fatal("Send() = nil: a TLS 1.1-only relay was accepted")
+	} else if strings.Contains(err.Error(), "unknown authority") {
+		t.Fatalf("Send() = %v: the relay was refused for its certificate, not for its protocol version", err)
+	}
+	if seen := server.commands(t); hasVerb(seen, "MAIL") {
+		t.Fatalf("the relay saw MAIL FROM after the failed handshake (commands: %v)", seen)
 	}
 }

@@ -129,6 +129,59 @@ func (f *fixtureClientD) Query(_ context.Context, st string, b []clickhouse.Bind
 	return nil, errors.New("fixtureClientD: unscripted statement: " + st)
 }
 
+// flowGoOnlyKeys are the only response keys the Go flow detector returns that the Python detector does
+// not (CHAOS-7626): the measured value, the rule's threshold, their unit and the side of the threshold
+// that fires. They are a declared Go-only extension of ImproveOpportunity (the Go plane owns the SDL;
+// Python must only be a subset of it). Everything else is still compared whole against Python. The list
+// is pinned by TestFlowGoOnlyKeysAreExactlyTheDeclaredFour: it cannot grow unnoticed.
+var flowGoOnlyKeys = []string{"threshold", "thresholdDirection", "unit", "value"}
+
+// checkAndStripFlowGoOnly requires every flow opportunity to carry the Go-only keys, typed, and removes
+// them so the rest of the response can be compared with the Python one.
+func checkAndStripFlowGoOnly(t *testing.T, got map[string]any) {
+	t.Helper()
+	list, _ := got["opportunities"].([]any)
+	for i, item := range list {
+		o, ok := item.(map[string]any)
+		if !ok {
+			t.Fatalf("opportunities[%d] is not an object", i)
+		}
+		for _, key := range flowGoOnlyKeys {
+			if _, present := o[key]; !present {
+				t.Errorf("opportunities[%d] lacks the Go-only key %q", i, key)
+			}
+		}
+		if _, ok := o["value"].(float64); !ok {
+			t.Errorf("opportunities[%d].value = %T, want a number", i, o["value"])
+		}
+		if th, ok := o["threshold"].(float64); !ok || th <= 0 {
+			t.Errorf("opportunities[%d].threshold = %v, want a positive number", i, o["threshold"])
+		}
+		switch o["unit"] {
+		case "HOURS", "RATIO", "ITEMS":
+		default:
+			t.Errorf("opportunities[%d].unit = %v, want HOURS, RATIO or ITEMS", i, o["unit"])
+		}
+		switch o["thresholdDirection"] {
+		case "ABOVE", "BELOW":
+		default:
+			t.Errorf("opportunities[%d].thresholdDirection = %v, want ABOVE or BELOW", i, o["thresholdDirection"])
+		}
+		for _, key := range flowGoOnlyKeys {
+			delete(o, key)
+		}
+	}
+}
+
+// TestFlowGoOnlyKeysAreExactlyTheDeclaredFour fails if the strip list ever holds a key that is not one
+// of the four CHAOS-7626 fields, so the Go-only allowance cannot grow quietly.
+func TestFlowGoOnlyKeysAreExactlyTheDeclaredFour(t *testing.T) {
+	want := []string{"threshold", "thresholdDirection", "unit", "value"}
+	if !reflect.DeepEqual(flowGoOnlyKeys, want) {
+		t.Fatalf("flowGoOnlyKeys = %v, want exactly %v", flowGoOnlyKeys, want)
+	}
+}
+
 // TestOpportunityDetectors_MatchPythonDetectors replays captured Python
 // cases of the AI opportunity detector and the flow detector -- every rule
 // threshold, formatted rationale, score, ordering and clamp -- and requires
@@ -167,6 +220,9 @@ func TestOpportunityDetectors_MatchPythonDetectors(t *testing.T) {
 			enc, _ := json.Marshal(got)
 			var gotMap map[string]any
 			_ = json.Unmarshal(enc, &gotMap)
+			if c.Kind != "ai" {
+				checkAndStripFlowGoOnly(t, gotMap)
+			}
 			g, w := normalizeD(gotMap), normalizeD(c.Expected)
 			if !reflect.DeepEqual(g, w) {
 				gj, _ := json.MarshalIndent(g, "", " ")

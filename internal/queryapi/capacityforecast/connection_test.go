@@ -12,7 +12,7 @@ import (
 )
 
 // persistedRow builds one capacity_forecasts row in the SELECT's column order,
-// with each value at the width migration 023 declares. The order is the thing
+// with each value at the width migrations 023 and 101 declare. The order is the thing
 // under test as much as the values: ClickHouse binds by position, so two
 // same-typed columns swapped would scan silently crossed.
 func persistedRow(t *testing.T, forecastID string, computedAt time.Time) []any {
@@ -34,6 +34,9 @@ func persistedRow(t *testing.T, forecastID string, computedAt time.Time) []any {
 		nil, nil, nil, // p50/p85/p95 items -- unset on a fixed-scope forecast
 		4.25, 1.5, uint16(90),
 		uint8(0), uint8(1),
+		// Migration 101: the four distribution arrays. Empty is what every row
+		// written before it reads, and what a mode that did not run holds.
+		[]uint16{}, []uint32{}, []uint32{}, []uint32{},
 	}
 }
 
@@ -276,5 +279,78 @@ func TestResolveForecastsPropagatesAQueryFailure(t *testing.T) {
 	client := &fakeClient{errs: []error{boom}}
 	if _, err := ResolveForecasts(context.Background(), client, "org-1", nil); !errors.Is(err, boom) {
 		t.Fatalf("got %v, want the ClickHouse failure to propagate", err)
+	}
+}
+
+// withDistribution replaces the four trailing distribution cells of a
+// persistedRow (migration 101): days values / counts, then items values /
+// counts.
+func withDistribution(row []any, daysValues []uint16, daysCounts, itemsValues, itemsCounts []uint32) []any {
+	out := append([]any(nil), row...)
+	n := len(out)
+	out[n-4], out[n-3], out[n-2], out[n-1] = daysValues, daysCounts, itemsValues, itemsCounts
+	return out
+}
+
+func resolvePersistedDistribution(t *testing.T, row []any) *model.CapacityForecast {
+	t.Helper()
+	client := &fakeClient{responses: []*fakeRowScanner{{rows: [][]any{flatten(row)}}}}
+	got, err := ResolveForecasts(context.Background(), client, "org-1", nil)
+	if err != nil {
+		t.Fatalf("ResolveForecasts: %v", err)
+	}
+	if len(got.Edges) != 1 {
+		t.Fatalf("edges: got %d, want 1", len(got.Edges))
+	}
+	return &got.Edges[0].Node
+}
+
+// CHAOS-7624: a row written before migration 101 reads empty arrays. That is
+// "no distribution" -- a null object -- and must never become a distribution of
+// zero bins.
+func TestResolveForecastsLegacyRowHasNoDistribution(t *testing.T) {
+	computedAt := time.Date(2026, 9, 1, 12, 30, 0, 0, time.UTC)
+	node := resolvePersistedDistribution(t, persistedRow(t, "legacy", computedAt))
+	if node.CompletionDistribution != nil {
+		t.Errorf("completionDistribution: got %+v, want nil for a row with empty arrays", node.CompletionDistribution)
+	}
+}
+
+func TestResolveForecastsMapsAPersistedDistribution(t *testing.T) {
+	computedAt := time.Date(2026, 9, 1, 12, 30, 0, 0, time.UTC)
+	row := withDistribution(persistedRow(t, "with-dist", computedAt),
+		[]uint16{18, 19, 24}, []uint32{50, 120, 30}, []uint32{}, []uint32{})
+	node := resolvePersistedDistribution(t, row)
+
+	if node.CompletionDistribution == nil {
+		t.Fatal("completionDistribution: got nil, want the persisted days histogram")
+	}
+	want := []model.CapacityDistributionBin{{Value: 18, Count: 50}, {Value: 19, Count: 120}, {Value: 24, Count: 30}}
+	if got := node.CompletionDistribution.Days; len(got) != len(want) {
+		t.Fatalf("days: got %v, want %v", got, want)
+	} else {
+		for i := range want {
+			if got[i] != want[i] {
+				t.Errorf("days[%d]: got %+v, want %+v", i, got[i], want[i])
+			}
+		}
+	}
+	// This row has no fixed-date run: the items list is null, not [].
+	if node.CompletionDistribution.Items != nil {
+		t.Errorf("items: got %v, want nil for a mode that did not simulate", node.CompletionDistribution.Items)
+	}
+}
+
+func TestResolveForecastsMapsAnItemsOnlyDistribution(t *testing.T) {
+	computedAt := time.Date(2026, 9, 1, 12, 30, 0, 0, time.UTC)
+	row := withDistribution(persistedRow(t, "items-only", computedAt),
+		[]uint16{}, []uint32{}, []uint32{40, 55}, []uint32{9000, 1000})
+	node := resolvePersistedDistribution(t, row)
+
+	if node.CompletionDistribution == nil || node.CompletionDistribution.Days != nil {
+		t.Fatalf("completionDistribution: got %+v, want an object with null days", node.CompletionDistribution)
+	}
+	if got := node.CompletionDistribution.Items; len(got) != 2 || got[0].Value != 40 || got[1].Count != 1000 {
+		t.Errorf("items: got %v", got)
 	}
 }

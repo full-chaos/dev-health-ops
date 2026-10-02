@@ -56,3 +56,21 @@ func TestSanitizeIsTheCharacterizedFunction(t *testing.T) {
 		t.Errorf("3995-rune input changed: %d runes", len([]rune(got)))
 	}
 }
+
+// TestSanitizeCapBoundaries pins the two cap boundaries the characterization
+// corpus does not reach (vet of CHAOS-7943): text of exactly the cap comes back
+// whole, and the cap counts runes, not bytes.
+func TestSanitizeCapBoundaries(t *testing.T) {
+	exact := strings.Repeat("x", 4000)
+	if got := Sanitize(exact); got != exact {
+		t.Errorf("4000 runes changed: %d runes", len([]rune(got)))
+	}
+	multi := strings.Repeat("é", 2100) // 4200 bytes, 2100 runes: under the rune cap
+	if got := Sanitize(multi); got != multi {
+		t.Errorf("2100 two-byte runes changed: %d runes", len([]rune(got)))
+	}
+	over := strings.Repeat("x", 4001)
+	if got := Sanitize(over); len([]rune(got)) != 4000 || !strings.HasSuffix(got, "...[truncated]") {
+		t.Errorf("4001 runes: %d runes, suffix %v", len([]rune(got)), strings.HasSuffix(got, "...[truncated]"))
+	}
+}

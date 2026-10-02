@@ -1,6 +1,9 @@
 # Every file under internal/api/externalingest/testdata: sha256, kind, path. Written by `go run ./internal/testsupport/recordedfiles/manifest`; never edit it by hand.
 # python-recorded set: e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855 (0 files)
 # header-before-stamp set: 5b06cd406187fc67c889571eb100e8772c10a89227ab5a80db3b67b700940437 (1 files)
+-	header	golden/dataplane-parse.golden.json
+-	header	golden/envelope-validation.golden.json
+-	header	golden/operational-provider-instance.golden.json
 c96c4a203c46909b88988216a290c0af91c10a03b07ae87559a77fdc21ebde0b	header-before-stamp	golden/schema-bundle.json
 5bf759094840d4dc1305b295f02a32740fd93b01a9eeaf4188e84286f9108527	unclassified	python_schema_bundle_oracle.py
 3d257b6b1b60f0b5ef0af898f67536664ff300c40761b6a3f2652f0a172d031e	unclassified	schema_bundle.v1.json

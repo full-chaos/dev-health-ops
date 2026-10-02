@@ -6,6 +6,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/binary"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"log/slog"
@@ -301,7 +302,7 @@ type UnitRepository interface {
 		time.Time,
 	) error
 	ReleaseForRetry(context.Context, providersync.Claim, time.Time) error
-	DeferForBudgetContention(context.Context, providersync.Claim, time.Time, time.Time) error
+	DeferForBudgetContention(context.Context, providersync.Claim, time.Time, time.Time) (int, error)
 	Fail(
 		context.Context,
 		providersync.Claim,
@@ -540,6 +541,21 @@ func (handler *Handler) logLifecycle(
 	result string,
 	err error,
 ) {
+	handler.logLifecycleWith(ctx, execution, claim, event, result, err)
+}
+
+// logLifecycleWith is logLifecycle plus extra structured attributes. A
+// deferral line uses it to carry the closed reason, how many times this unit
+// has been deferred for that reason and the delay (CHAOS-7434).
+func (handler *Handler) logLifecycleWith(
+	ctx context.Context,
+	execution *jobruntime.Execution[jobruntime.ProviderUnitArgs],
+	claim providersync.Claim,
+	event string,
+	result string,
+	err error,
+	extra ...any,
+) {
 	if execution == nil {
 		return
 	}
@@ -564,7 +580,49 @@ func (handler *Handler) logLifecycle(
 	if detail := lifecycleErrorDetail(err); detail != "" {
 		attributes = append(attributes, "error_detail", detail)
 	}
+	attributes = append(attributes, extra...)
 	logger.InfoContext(ctx, event, attributes...)
+}
+
+// logChunkAttempt says why a chunked attempt stopped and how much it did
+// (CHAOS-7692): chunks committed, wall time, and the bound that ended it. A
+// unit that needs hundreds of attempts is otherwise visible only as River
+// snoozes, and nothing told the bounds apart. Counts, milliseconds and a closed
+// reason vocabulary only: no cursor, row or payload content.
+func (handler *Handler) logChunkAttempt(
+	ctx context.Context,
+	execution *jobruntime.Execution[jobruntime.ProviderUnitArgs],
+	claim providersync.Claim,
+	err error,
+	delay time.Duration,
+) {
+	if execution == nil {
+		return
+	}
+	var continuation providersync.ChunkContinuationError
+	if !errors.As(err, &continuation) {
+		return
+	}
+	logger := execution.Logger
+	if logger == nil {
+		logger = slog.Default()
+	}
+	reason := continuation.Reason
+	if reason == "" {
+		reason = "unspecified"
+	}
+	logger.InfoContext(ctx, "sync_provider_unit_chunk_attempt",
+		"provider", claim.Provider,
+		"dataset", claim.Dataset,
+		"job_id", execution.JobID,
+		"attempt", execution.Attempt,
+		"sync_run_id", claim.SyncRunID,
+		"sync_unit_id", claim.ID,
+		"stop_reason", reason,
+		"chunks_committed", continuation.Chunks,
+		"elapsed_ms", continuation.Elapsed.Milliseconds(),
+		"continue_in_ms", delay.Milliseconds(),
+	)
 }
 
 func lifecycleErrorDetail(err error) string {
@@ -799,8 +857,11 @@ func (handler *Handler) Work(
 				safeCause(retryCauseChunkDeferFailed, session.Claim, execution, deferErr)))
 		}
 		handler.ProviderMetrics.RecordChunkContinuation(session.Claim.Provider, session.Claim.Dataset)
+		handler.ProviderMetrics.RecordUnitDeferred(session.Claim.Provider, session.Claim.Dataset, deferralReasonChunkContinuation)
 		handler.observeLeaseRecovery(session.Claim, jobruntime.SyncLeaseResultRetrying)
-		handler.logLifecycle(ctx, execution, session.Claim, "sync_provider_unit_finished", "continued", err)
+		handler.logLifecycleWith(ctx, execution, session.Claim, "sync_provider_unit_finished", "continued", err,
+			"deferral_reason", deferralReasonChunkContinuation, "delay_ms", delay.Milliseconds())
+		handler.logChunkAttempt(ctx, execution, session.Claim, err, delay)
 		return jobruntime.RetryableAfter(err, delay)
 	}
 	// A provider rate limit is the provider scheduling us, not the unit
@@ -823,8 +884,11 @@ func (handler *Handler) Work(
 					return jobruntime.Retryable(jobruntime.WithSafeCauseText(deferErr,
 						safeCause(retryCauseRateLimitDeferFailed, session.Claim, execution, deferErr)))
 				}
+				handler.ProviderMetrics.RecordUnitDeferred(session.Claim.Provider, session.Claim.Dataset, deferralReasonRateLimited)
 				handler.observeLeaseRecovery(session.Claim, jobruntime.SyncLeaseResultRetrying)
-				handler.logLifecycle(ctx, execution, session.Claim, "sync_provider_unit_finished", "rate_limited", err)
+				handler.logLifecycleWith(ctx, execution, session.Claim, "sync_provider_unit_finished", "rate_limited", err,
+					"deferral_reason", deferralReasonRateLimited, "deferrals", episode.Deferrals+1,
+					"delay_ms", plan.countdown.Milliseconds())
 				return jobruntime.RateLimited(err, plan.countdown)
 			}
 			// The episode's count or wall-clock budget is spent. Fail with the
@@ -848,16 +912,20 @@ func (handler *Handler) Work(
 	// the domain deferral before returning River's attempt-neutral snooze so a
 	// process restart keeps the same not-before fence and operator evidence.
 	if errors.Is(err, providerfoundation.ErrBudgetContended) {
-		delay := providerBudgetContentionDelay(session.Claim.ID)
+		delay := providerBudgetContentionDelay(session.Claim.ID, budgetContentionDeferrals(session.Claim))
 		availableAt := completedAt.Add(delay)
-		if deferErr := handler.Repository.DeferForBudgetContention(
+		deferrals, deferErr := handler.Repository.DeferForBudgetContention(
 			context.WithoutCancel(ctx), session.Claim, availableAt, completedAt,
-		); deferErr != nil {
+		)
+		if deferErr != nil {
 			return jobruntime.Retryable(jobruntime.WithSafeCauseText(deferErr,
 				safeCause(retryCauseBudgetDeferFailed, session.Claim, execution, deferErr)))
 		}
+		handler.ProviderMetrics.RecordUnitDeferred(session.Claim.Provider, session.Claim.Dataset, deferralReasonBudgetContention)
 		handler.observeLeaseRecovery(session.Claim, jobruntime.SyncLeaseResultRetrying)
-		handler.logLifecycle(ctx, execution, session.Claim, "sync_provider_unit_finished", "deferred", err)
+		handler.logLifecycleWith(ctx, execution, session.Claim, "sync_provider_unit_finished", "deferred", err,
+			"deferral_reason", deferralReasonBudgetContention, "deferrals", deferrals,
+			"delay_ms", delay.Milliseconds())
 		return jobruntime.BudgetContention(err, delay)
 	}
 	// A deterministic fault cannot succeed on a later attempt. Burning the
@@ -934,10 +1002,67 @@ func providerRateLimitDelay(err error) (time.Duration, bool) {
 	return providerErr.RetryAfter, true
 }
 
-func providerBudgetContentionDelay(unitID string) time.Duration {
+// The closed vocabulary of attempt-neutral deferral reasons. It is the same set
+// providerfoundation.MetricUnitDeferralReasonLabel accepts; a value outside it
+// would collapse to "other" on the counter.
+const (
+	deferralReasonBudgetContention  = "budget_contention"
+	deferralReasonRateLimited       = "rate_limited"
+	deferralReasonChunkContinuation = "chunk_continuation"
+)
+
+// budgetContentionMaxBackoff caps the contention delay's growth (CHAOS-7434).
+// The first deferral of a unit keeps the original 1-2 s; each further one
+// doubles the base up to this cap, plus the per-unit jitter, so a unit that
+// keeps losing the request reservation (the admission cap normally prevents
+// that; this is the safety net for two dispatchers racing or two hosts under
+// one bucket) stops re-claiming a worker slot every second. The bound is well
+// under DeferForBudgetContention's 5 minute limit.
+const budgetContentionMaxBackoff = 30 * time.Second
+
+// providerBudgetContentionDelay is the not-before delay of the unit's next
+// attempt after a budget-contention denial: min(1 s << prior, 30 s) plus a
+// deterministic per-unit jitter in [0, 1 s). prior is how many contention
+// deferrals the unit already has (0 for its first).
+func providerBudgetContentionDelay(unitID string, prior int) time.Duration {
 	digest := sha256.Sum256([]byte(unitID))
 	jitter := time.Duration(binary.BigEndian.Uint64(digest[:8])%1000) * time.Millisecond
-	return time.Second + jitter
+	if prior < 0 {
+		prior = 0
+	}
+	if prior > 5 {
+		prior = 5
+	}
+	base := time.Second << uint(prior)
+	if base > budgetContentionMaxBackoff {
+		base = budgetContentionMaxBackoff
+	}
+	return base + jitter
+}
+
+// budgetContentionDeferrals reads how many budget-contention deferrals the
+// claimed unit already carries (result.provider_budget_contention_deferrals,
+// written by DeferForBudgetContention). A missing or malformed value is 0.
+func budgetContentionDeferrals(claim providersync.Claim) int {
+	switch value := claim.Result["provider_budget_contention_deferrals"].(type) {
+	case float64:
+		if value >= 0 && value < 1e9 {
+			return int(value)
+		}
+	case int:
+		if value >= 0 {
+			return value
+		}
+	case int64:
+		if value >= 0 && value < 1e9 {
+			return int(value)
+		}
+	case json.Number:
+		if parsed, err := value.Int64(); err == nil && parsed >= 0 && parsed < 1e9 {
+			return int(parsed)
+		}
+	}
+	return 0
 }
 
 func cloneResult(input map[string]any) map[string]any {

@@ -321,13 +321,9 @@ func withoutPerRun(text string, perRun map[string]string) string {
 // A recording starts the program as "python3", never by a path.
 func activateInterpreter(t *testing.T, pinnedRoot string) {
 	t.Helper()
-	bin, err := interpreterDir(pyoracle.Resolve(t, pinnedRoot))
+	bin, err := venueoracle.ActivateInterpreter(t, pinnedRoot)
 	if err != nil {
 		t.Fatalf("programoracle: %v", err)
-	}
-	t.Setenv("PATH", bin+string(os.PathListSeparator)+os.Getenv("PATH"))
-	if found, err := exec.LookPath("python3"); err != nil || filepath.Dir(found) != bin {
-		t.Fatalf("programoracle: python3 on PATH is %q (%v), want the one in %s", found, err, bin)
 	}
 	// The probe starts the interpreter by its path, in the closed environment:
 	// nothing of the test process's environment reaches it.

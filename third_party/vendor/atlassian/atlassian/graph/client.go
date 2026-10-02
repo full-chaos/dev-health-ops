@@ -145,6 +145,9 @@ func (c *Client) Execute(ctx context.Context, query string, variables map[string
 				headers.Add("X-ExperimentalApi", beta)
 			}
 		}
+		for name, value := range queryContextHeaders(ctx) {
+			headers.Set(name, value)
+		}
 
 		if c.Auth != nil {
 			if err := c.Auth.Apply(req); err != nil {

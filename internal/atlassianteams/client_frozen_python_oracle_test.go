@@ -758,65 +758,77 @@ func TestAtlassianTeamsClientMatchesFrozenPython(t *testing.T) {
 		t.Fatalf("%d of %d reads differ", len(mismatches), len(goSide))
 	}
 
-	// Known-defect gate: each planted divergence must be found.
-	plant := func(family string, mutate func(map[string]outcome) bool) {
-		t.Helper()
+	// Known-defect gate: each planted divergence must be found. A plant is a pure change of ONE read; the gate applies it to EVERY
+	// eligible read in turn (sorted keys, no random pick) and requires, for each: the unplanted copy has 0 mismatches, the planted
+	// read is among the mismatches, and no other read is.
+	sortedKeys := make([]string, 0, len(goSide))
+	for key := range goSide {
+		sortedKeys = append(sortedKeys, key)
+	}
+	sort.Strings(sortedKeys)
+	copyOf := func(o outcome) outcome {
+		// A nil record list stays nil (an error read has none): turning it into an empty list would make the copy differ from the
+		// recorded reference on every error read, and compare() would report mismatches for ANY plant, or for none.
+		var records []record
+		if o.Records != nil {
+			records = make([]record, len(o.Records))
+			for index, r := range o.Records {
+				records[index] = append(record(nil), r...)
+			}
+		}
+		return outcome{Status: o.Status, Records: records, Detail: o.Detail}
+	}
+	withRead := func(key string, o outcome) map[string]outcome {
 		copied := map[string]outcome{}
-		for key, o := range goSide {
-			// A nil record list stays nil (an error read has none): turning it into an empty list would make the copy differ from
-			// the recorded reference on every error read, and compare() would report mismatches for ANY plant, or for none.
-			var records []record
-			if o.Records != nil {
-				records = make([]record, len(o.Records))
-				for index, r := range o.Records {
-					records[index] = append(record(nil), r...)
-				}
+		for k, v := range goSide {
+			copied[k] = copyOf(v)
+		}
+		copied[key] = o
+		return copied
+	}
+	if unplanted := compare(python, withRead(sortedKeys[0], copyOf(goSide[sortedKeys[0]]))); len(unplanted) != 0 {
+		t.Fatalf("known-defect gate: the unplanted copy already differs from the reference: %v", unplanted)
+	}
+	plant := func(family string, mutate func(outcome) (outcome, bool)) {
+		t.Helper()
+		eligible := 0
+		for _, key := range sortedKeys {
+			changed, ok := mutate(copyOf(goSide[key]))
+			if !ok {
+				continue
 			}
-			copied[key] = outcome{Status: o.Status, Records: records, Detail: o.Detail}
-		}
-		if len(compare(python, copied)) != 0 {
-			t.Fatalf("known-defect gate %s: the unplanted copy already differs from the reference: %v", family, compare(python, copied))
-		}
-		if !mutate(copied) {
-			t.Fatalf("known-defect gate %s: the corpus has nothing to plant it in", family)
-		}
-		// The planted read itself must be among the mismatches, not just some mismatch.
-		var planted []string
-		for key, o := range copied {
-			if normalize(withoutExcluded(o)) != normalize(withoutExcluded(goSide[key])) || o.Status != goSide[key].Status {
-				planted = append(planted, key)
-			}
-		}
-		if len(planted) == 0 {
-			t.Fatalf("known-defect gate %s: the plant changed no read", family)
-		}
-		found := compare(python, copied)
-		for _, key := range planted {
-			hit := false
+			eligible++
+			found := compare(python, withRead(key, changed))
+			planted := false
 			for _, m := range found {
 				if strings.HasPrefix(m, key+":") {
-					hit = true
+					planted = true
+				} else {
+					t.Errorf("known-defect gate %s on %q: another read is reported: %s", family, key, m)
 				}
 			}
-			if !hit {
+			if !planted {
 				t.Errorf("known-defect gate %s: the planted divergence in %q was not found (%d mismatches)", family, key, len(found))
 			}
 		}
+		if eligible == 0 {
+			t.Errorf("known-defect gate %s: the corpus has nothing to plant it in", family)
+		}
 	}
-	setField := func(field string, to leaf) func(map[string]outcome) bool {
-		return func(reads map[string]outcome) bool {
-			for key, o := range reads {
-				for _, r := range o.Records {
-					for index := range r {
-						if r[index][0] == field {
-							r[index][1] = to
-							reads[key] = o
-							return true
+	setField := func(field string, to leaf) func(outcome) (outcome, bool) {
+		return func(o outcome) (outcome, bool) {
+			for _, r := range o.Records {
+				for index := range r {
+					if r[index][0] == field {
+						if value, _ := r[index][1].(leaf); value == to {
+							return o, false // already that value: not a change
 						}
+						r[index][1] = to
+						return o, true
 					}
 				}
 			}
-			return false
+			return o, false
 		}
 	}
 	plant("team state", setField("state", typedString("ARCHIVED-OR-NOT")))
@@ -825,47 +837,18 @@ func TestAtlassianTeamsClientMatchesFrozenPython(t *testing.T) {
 	plant("relation type", setField("relation_type", typedString("MANAGES")))
 	plant("user subject", setField("subject_user_id", typedString("ari:cloud:identity::user/planted")))
 	plant("project key", setField("project_key", leaf{T: "null"}))
-	plant("outcome", func(reads map[string]outcome) bool {
-		for key, o := range reads {
-			if o.Status == "ok" {
-				reads[key] = outcome{Status: "error"}
-				return true
-			}
+	plant("outcome", func(o outcome) (outcome, bool) {
+		if o.Status == "ok" {
+			return outcome{Status: "error"}, true
 		}
-		return false
+		return o, false
 	})
-	plant("known divergence: Go stops serving the member", func(reads map[string]outcome) bool {
-		for key, o := range reads {
-			if _, known := knownDivergenceFor(key); known {
-				reads[key] = outcome{Status: "error", Detail: o.Detail}
-				return true
-			}
+	plant("record dropped", func(o outcome) (outcome, bool) {
+		if len(o.Records) > 1 {
+			o.Records = o.Records[1:]
+			return o, true
 		}
-		return false
+		return o, false
 	})
-	plant("known divergence: Go serves another member", func(reads map[string]outcome) bool {
-		for key, o := range reads {
-			if _, known := knownDivergenceFor(key); known && len(o.Records) > 0 {
-				for index := range o.Records[0] {
-					if o.Records[0][index][0] == "subject_user_id" {
-						o.Records[0][index][1] = typedString("ari:cloud:identity::user/planted")
-						reads[key] = o
-						return true
-					}
-				}
-			}
-		}
-		return false
-	})
-	plant("record dropped", func(reads map[string]outcome) bool {
-		for key, o := range reads {
-			if len(o.Records) > 1 {
-				o.Records = o.Records[1:]
-				reads[key] = o
-				return true
-			}
-		}
-		return false
-	})
-	t.Logf("%d scenarios, %d reads compared (%v), %d records; 0 mismatches; 10 planted divergences found", len(scenarios), len(goSide), statuses, records)
+	t.Logf("%d scenarios, %d reads compared (%v), %d records; 0 mismatches; 8 planted divergence kinds found on every eligible read (the pinned read included)", len(scenarios), len(goSide), statuses, records)
 }

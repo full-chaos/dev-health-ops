@@ -22,7 +22,7 @@ func TestNextPageHeadersNeverLeaveTheBase(t *testing.T) {
 	defer other.Close()
 	for name, headers := range map[string]map[string]string{
 		"X-Next-Page is a URL":    {"X-Next-Page": other.URL + "/api/v4/projects?page=2"},
-		"Link names another host": {"Link": "<" + other.URL + `/api/v4/projects?page=2>; rel="next"`, "X-Next-Page": "2"},
+		"Link names another host": {"Link": "<" + other.URL + `/api/v4/projects?page=2>; rel="next"`},
 		"X-Next-Page host-ish":    {"X-Next-Page": "//" + other.Listener.Addr().String() + "/x"},
 	} {
 		t.Run(name, func(t *testing.T) {

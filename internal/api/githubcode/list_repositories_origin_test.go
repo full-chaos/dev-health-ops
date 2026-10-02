@@ -3,6 +3,7 @@ package githubcode
 import (
 	"context"
 	"errors"
+	"io"
 	"net"
 	"net/http"
 	"net/http/httptest"
@@ -71,6 +72,10 @@ func TestSameOriginLinkIsFollowedInAnySpelling(t *testing.T) {
 		{"unicode host, xn-- link", "https://ghé.test/api/v3", "https://xn--gh-cja.test/orgs/acme/repos?page=2"},
 		{"xn-- base, unicode link", "https://xn--gh-cja.test/api/v3", "https://ghé.test/orgs/acme/repos?page=2"},
 		{"relative link", "https://ghe.test/api/v3", "/orgs/acme/repos?page=2"},
+		{"IPv6 literal, case", "https://[2001:DB8::1]/api/v3", "https://[2001:db8::1]/orgs/acme/repos?page=2"},
+		{"IPv6 literal, expanded", "https://[2001:db8::1]/api/v3", "https://[2001:0db8:0000:0000:0000:0000:0000:0001]/orgs/acme/repos?page=2"},
+		{"zero-padded default port", "https://ghe.test/api/v3", "https://ghe.test:0443/orgs/acme/repos?page=2"},
+		{"zero-padded explicit port", "https://ghe.test:8443/api/v3", "https://ghe.test:08443/orgs/acme/repos?page=2"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			transport := &scriptedTransport{responses: []scripted{ok(two, next(tc.link)), ok(page(repoItem(2, "web")))}}
@@ -166,3 +171,28 @@ func TestACrossOriginLinkOnALaterPageIsRefused(t *testing.T) {
 		}
 	}
 }
+
+// A client supplied by the caller (its own redirect policy) never carries the token across a redirect: the listing
+// answers a 3xx as a failure, as the default client does, instead of following it (Go forwards Authorization to a
+// subdomain of the original host).
+func TestASuppliedClientNeverFollowsARedirectWithTheToken(t *testing.T) {
+	var seen []string
+	transport := roundTripFunc(func(request *http.Request) (*http.Response, error) {
+		seen = append(seen, request.URL.Host+" "+request.Header.Get("Authorization"))
+		if request.URL.Host == "ghe.test" {
+			return &http.Response{StatusCode: 302, Header: http.Header{"Location": {"https://api.ghe.test/orgs/acme/repos"}}, Body: io.NopCloser(strings.NewReader("")), Request: request}, nil
+		}
+		return &http.Response{StatusCode: 200, Header: http.Header{}, Body: io.NopCloser(strings.NewReader("[]")), Request: request}, nil
+	})
+	client := Client{Token: "SECRET-TOKEN", BaseURL: "https://ghe.test", HTTP: &http.Client{Transport: transport}}
+	_, _ = client.ListRepositories(context.Background(), ListOptions{Org: "acme"})
+	for _, entry := range seen {
+		if strings.HasPrefix(entry, "api.ghe.test") {
+			t.Fatalf("the redirect was followed with the token: %q", seen)
+		}
+	}
+}
+
+type roundTripFunc func(*http.Request) (*http.Response, error)
+
+func (f roundTripFunc) RoundTrip(request *http.Request) (*http.Response, error) { return f(request) }

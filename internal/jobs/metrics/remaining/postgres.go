@@ -579,7 +579,7 @@ func (store *PostgresStore) ClaimPartition(ctx context.Context, partitionID stri
 WITH claimed AS (
 UPDATE public.remaining_metric_partitions AS partition
 SET status = 'running', claim_token = $2, lease_expires_at = $3,
-    attempt_count = attempt_count + 1, updated_at = $1
+    attempt_count = attempt_count + 1, completed_at = NULL, updated_at = $1
 WHERE partition.id = $4::uuid AND (
     status IN ('pending', 'failed') OR
     (status = 'running' AND lease_expires_at <= $1)
@@ -706,6 +706,16 @@ WHERE run.id = $2::uuid AND run.status = 'running'
 	if err != nil {
 		return store.wrapUnavailable(ctx, "complete run", err)
 	}
+	var runFailedRows int64
+	if runTransition.RowsAffected() != 1 {
+		// this partition may have been the last one still live while another is already exhausted: the run can then
+		// never succeed, and nothing else will finalize it (CHAOS-8024)
+		failedTransition, failErr := tx.Exec(ctx, terminalizeRunSQL, now, claim.Partition.RunID)
+		if failErr != nil {
+			return store.wrapUnavailable(ctx, "terminalize run after complete", failErr)
+		}
+		runFailedRows = failedTransition.RowsAffected()
+	}
 	if runTransition.RowsAffected() == 1 {
 		completionKey, keyErr := joboutbox.CompletionKey(
 			"remaining_metric_run", claim.Partition.RunID,
@@ -720,6 +730,7 @@ WHERE run.id = $2::uuid AND run.status = 'running'
 	if err := tx.Commit(ctx); err != nil {
 		return store.wrapUnavailable(ctx, "commit complete-partition tx", err)
 	}
+	store.logRunTerminalized(ctx, runFailedRows, claim.Partition.RunID, claim.Partition.ID)
 	return nil
 }
 
@@ -793,9 +804,12 @@ func (store *PostgresStore) ReleasePartitionTerminally(ctx context.Context, clai
 	// snapshot, so the second one correctly observes the first one's
 	// write -- the same two-statement shape CompletePartition already uses
 	// for its own "release/complete, then maybe transition the run" pair.
+	// completed_at is the EXHAUSTED marker: a failed partition whose job will not retry (a Permanent failure or the
+	// job's last attempt) carries it; a failed partition awaiting its River retry does not (ClaimPartition clears it
+	// again). The run is only finalized when no sibling is live OR awaiting a retry (CHAOS-8024).
 	command, err := tx.Exec(ctx, `
 UPDATE public.remaining_metric_partitions
-SET status = 'failed', claim_token = NULL, lease_expires_at = NULL, updated_at = $1
+SET status = 'failed', claim_token = NULL, lease_expires_at = NULL, completed_at = $1, updated_at = $1
 WHERE id = $2::uuid AND run_id = $3::uuid AND status = 'running'
   AND claim_token = $4::uuid AND lease_expires_at > $1
   AND EXISTS (
@@ -809,29 +823,45 @@ WHERE id = $2::uuid AND run_id = $3::uuid AND status = 'running'
 		store.observeReleaseLost()
 		return ErrLeaseLost
 	}
-	runTransition, err := tx.Exec(ctx, `
-UPDATE public.remaining_metric_runs AS run
-SET status = 'failed', updated_at = $1
-WHERE run.id = $2::uuid AND run.status = 'running'
-  AND NOT EXISTS (
-      SELECT 1 FROM public.remaining_metric_partitions AS partition
-      WHERE partition.run_id = run.id AND partition.status IN ('pending', 'running')
-  )`, now, claim.Partition.RunID)
+	runTransition, err := tx.Exec(ctx, terminalizeRunSQL, now, claim.Partition.RunID)
 	if err != nil {
 		return store.wrapUnavailable(ctx, "terminalize run", err)
 	}
 	if err := tx.Commit(ctx); err != nil {
 		return store.wrapUnavailable(ctx, "commit terminal release tx", err)
 	}
-	if runTransition.RowsAffected() == 1 {
-		logger := store.logger
-		if logger == nil {
-			logger = slog.Default()
-		}
-		logger.WarnContext(ctx, "remaining metrics run terminalized failed",
-			"run_id", claim.Partition.RunID, "partition_id", claim.Partition.ID)
-	}
+	store.logRunTerminalized(ctx, runTransition.RowsAffected(), claim.Partition.RunID, claim.Partition.ID)
 	return nil
+}
+
+// terminalizeRunSQL finalizes a running run 'failed' once nothing of it can still make progress: no partition is
+// pending or running, and none is 'failed' while awaiting its River retry (completed_at NULL: a partition released
+// by an ordinary retryable failure; the retry must still be able to claim it, so the run has to stay live). At
+// least one partition must be failed. Arguments: $1 = now, $2 = run id.
+const terminalizeRunSQL = `
+UPDATE public.remaining_metric_runs AS run
+SET status = 'failed', updated_at = $1
+WHERE run.id = $2::uuid AND run.status = 'running'
+  AND EXISTS (
+      SELECT 1 FROM public.remaining_metric_partitions AS partition
+      WHERE partition.run_id = run.id AND partition.status = 'failed'
+  )
+  AND NOT EXISTS (
+      SELECT 1 FROM public.remaining_metric_partitions AS partition
+      WHERE partition.run_id = run.id
+        AND (partition.status IN ('pending', 'running')
+             OR (partition.status = 'failed' AND partition.completed_at IS NULL))
+  )`
+
+func (store *PostgresStore) logRunTerminalized(ctx context.Context, rows int64, runID, partitionID string) {
+	if rows != 1 {
+		return
+	}
+	logger := store.logger
+	if logger == nil {
+		logger = slog.Default()
+	}
+	logger.WarnContext(ctx, "remaining metrics run terminalized failed", "run_id", runID, "partition_id", partitionID)
 }
 
 // HasSucceededPartition reports whether ANY run of this organization/family

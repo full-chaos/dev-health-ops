@@ -98,3 +98,7 @@ second-form-400	api_key	r:alnum:400:85	hit
 line-docker-secret-mount	note	--mount=type=secret,id=+r:alnum:24:86	none
 line-js-import	note	import { token, +r:alnum:24:87+ } from 'x'	none
 second-form-400-no-keyword-inside	api_key	r:alnum:400:86	hit
+global-allow-true-inside	api_key	r:alnum:10:91+true+r:alnum:10:92	hit
+rule-allow-public-api-key	public_api_key	r:alnum:24:93	hit
+allow-word-fifty-one-before-the-keyword	public_token_bcdfghjlmnpqrstvwxzbcdfghjlmnpqrstvwxzb_secret	r:alnum:24:94	hit
+second-form-12-characters	api_key	ab1c<plus>de2f/g3	hit

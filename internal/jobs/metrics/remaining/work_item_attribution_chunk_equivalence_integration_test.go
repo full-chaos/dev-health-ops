@@ -52,19 +52,6 @@ func seedJiraWorkItem(t *testing.T, ctx context.Context, conn driver.Conn, orgID
 	}
 }
 
-func sortedEdges(
-	edges []teamattribution.GithubWorkItemDerivationDependencyEdge,
-) []teamattribution.GithubWorkItemDerivationDependencyEdge {
-	out := append([]teamattribution.GithubWorkItemDerivationDependencyEdge(nil), edges...)
-	sort.Slice(out, func(i, j int) bool {
-		if out[i].SourceWorkItemID != out[j].SourceWorkItemID {
-			return out[i].SourceWorkItemID < out[j].SourceWorkItemID
-		}
-		return out[i].TargetWorkItemID < out[j].TargetWorkItemID
-	})
-	return out
-}
-
 // TestChunkedAttributionReadsEqualTheUnchunkedReads is the real-engine
 // equivalence proof for the statement-text bound: for each of the four
 // array sites, the result with a cap so small that every array is split into

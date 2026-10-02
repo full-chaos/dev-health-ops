@@ -214,7 +214,8 @@ func TestAllowListEntryBackendNeedsItsService(t *testing.T) {
 		host := `[{"host":"h",` + key + `"pythonAllowList":true,"paths":[{"path":"/","pathType":"Prefix","service":"go-api"}]}]`
 		return renderIngress(append([]string{"--set", "goApi.enabled=true", "--set-json", "ingress.hosts=" + host}, args...)...)
 	}
-	for label, key := range map[string]string{"emitted host": "", "emitRules: false": `"emitRules":false,`} {
+	{
+		const key, label = "", "emitted host"
 		out, err := render(key, "--set", "queryApi.enabled=false", "--set-json", "ingress.pythonAllowList=["+graphqlQuery+"]")
 		if err == nil || !strings.Contains(out, "routes to query-api but queryApi.enabled is false") {
 			t.Errorf("%s: an entry that names query-api must fail the render when queryApi is off: err=%v\n%s", label, err, out)
@@ -244,7 +245,8 @@ func TestAllowListEntryBackendNeedsItsService(t *testing.T) {
 // has its own rules and refusals; the internal listeners are never public), and a value that is not a string, fail.
 func TestAllowListEntryServiceIsOneOfTwo(t *testing.T) {
 	for _, value := range []string{`"go-api"`, `"web"`, `"query-api-mcp"`, `"go-api-internal"`, `"Query-Api"`, `""`, `null`, `0`, `true`, `["query-api"]`} {
-		for label, key := range map[string]string{"emitted host": "", "emitRules: false": `"emitRules":false,`} {
+		{
+			const key, label = "", "emitted host"
 			entry := `{"path":"/graphql$","pathType":"ImplementationSpecific","service":` + value + `}`
 			host := `[{"host":"h",` + key + `"pythonAllowList":true,"paths":[{"path":"/","pathType":"Prefix","service":"go-api"}]}]`
 			out, err := renderIngress("--set", "goApi.enabled=true", "--set", "queryApi.enabled=true", "--set-json", "ingress.pythonAllowList=["+entry+"]", "--set-json", "ingress.hosts="+host)

@@ -592,3 +592,53 @@ func TestScrubbedLeavesThatDifferBetweenRecordingsPromoteAndLeaveNoSidecar(t *te
 		t.Fatal("the golden was not promoted, or the sidecar was left on disk")
 	}
 }
+
+func TestMain(m *testing.M) {
+	// The fixtures above write candidate bodies that are not goldens.
+	stamp = func(raw []byte) ([]byte, error) { return raw, nil }
+	os.Exit(m.Run())
+}
+
+// realCandidate is a candidate in the form venueoracle's Finish writes.
+const realCandidate = "{\n  \"header\": {\n    \"test\": \"TestX\",\n    \"python_build\": \"b\",\n    \"producer_digest\": \"d\",\n    \"recipe\": \"r\",\n    \"python_env\": \"k\",\n    \"python_env_version\": 2,\n    \"blanked\": {}\n  },\n  \"requests\": [],\n  \"rows\": {\n    \"blanked\": {\n      \"rows\": \"x\"\n    }\n  }\n}\n"
+
+func TestTheVerbWritesTheStampInTheHeaderBeforeBlanked(t *testing.T) {
+	got, err := stampCandidate([]byte(realCandidate))
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := strings.Replace(realCandidate, "    \"blanked\": {}\n", "    \"recorded_by\": \"goldenrecord\",\n    \"blanked\": {}\n", 1)
+	if string(got) != want {
+		t.Fatalf("stamped candidate:\n%s\nwant:\n%s", got, want)
+	}
+}
+
+func TestACandidateThatAlreadyHoldsAStampOrHasNoHeaderIsNotStamped(t *testing.T) {
+	stamped := strings.Replace(realCandidate, "    \"blanked\": {}\n", "    \"recorded_by\": \"goldenrecord\",\n    \"blanked\": {}\n", 1)
+	for name, body := range map[string]string{
+		"a stamp a test wrote": stamped,
+		"no header":            "NEW GOLDEN\n",
+		"no blanked key":       strings.Replace(realCandidate, "    \"blanked\": {}\n", "", 1),
+	} {
+		if _, err := stampCandidate([]byte(body)); err == nil {
+			t.Errorf("%s: stamped", name)
+		}
+	}
+}
+
+func TestTheRecordVerbPromotesTheStampedBytes(t *testing.T) {
+	stamp = stampCandidate
+	defer func() { stamp = func(raw []byte) ([]byte, error) { return raw, nil } }()
+	cfg, fake, dir := fixture(t, "OLD GOLDEN\n")
+	fake.candidateBody = realCandidate
+	if _, err := Record(context.Background(), cfg); err != nil {
+		t.Fatal(err)
+	}
+	got, err := os.ReadFile(filepath.Join(dir, "testdata", "g.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(got), "\"recorded_by\": \"goldenrecord\"") || fake.replayReadBody != string(got) {
+		t.Fatalf("promoted %q, replayed %q", got, fake.replayReadBody)
+	}
+}

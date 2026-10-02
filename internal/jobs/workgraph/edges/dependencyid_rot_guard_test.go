@@ -2,16 +2,10 @@ package edges
 
 import (
 	"encoding/json"
-	"errors"
-	"os"
-	"os/exec"
-	"path/filepath"
 	"strconv"
 	"strings"
 	"testing"
 	"unicode"
-
-	"github.com/full-chaos/dev-health-ops/internal/testsupport/pyoracle"
 )
 
 // TestNumericTypeDigitTableMatchesLivePython re-derives numericTypeDigitNotDecimal
@@ -26,15 +20,7 @@ import (
 // The derivation is the definition, not an approximation of it: every rune where
 // `isdigit()` is True and `int()` raises.
 func TestNumericTypeDigitTableMatchesLivePython(t *testing.T) {
-	if os.Getenv("DEV_HEALTH_LIVE_PYTHON_ORACLES") != "1" {
-		t.Skip("live Python oracles run only through ci/check_go.sh live-python-oracles")
-	}
-	proofDirectory := os.Getenv("DEV_HEALTH_LIVE_PYTHON_ORACLE_PROOF_DIR")
-	if proofDirectory == "" {
-		t.Fatal("DEV_HEALTH_LIVE_PYTHON_ORACLE_PROOF_DIR is required")
-	}
 
-	python := edgesLivePython(t)
 	const derive = `
 import json, sys
 out = []
@@ -48,16 +34,7 @@ for cp in range(0x110000):
         out.append(cp)
 json.dump(out, sys.stdout)
 `
-	command := exec.Command(python, "-c", derive)
-	rendered, err := command.Output()
-	if err != nil {
-		var stderr []byte
-		var exitErr *exec.ExitError
-		if errors.As(err, &exitErr) {
-			stderr = exitErr.Stderr
-		}
-		t.Fatalf("derive the Numeric_Type=Digit set from live Python: %v", pyoracle.RunError(python, err, stderr))
-	}
+	rendered := []byte(edgesProgram(t, "numeric_type_digit_table", "TestNumericTypeDigitTableMatchesLivePython", "numeric type digit set", derive))
 	var live []rune
 	if err := json.Unmarshal(rendered, &live); err != nil {
 		t.Fatalf("decode derived set: %v", err)
@@ -97,11 +74,6 @@ json.dump(out, sys.stdout)
 		t.Fatalf("table drift: %d missing, %d extra (live set has %d runes)", missing, extra, len(live))
 	}
 
-	if err := os.WriteFile(
-		filepath.Join(proofDirectory, "workgraph-numeric-digit-table"), []byte("executed"), 0o644,
-	); err != nil {
-		t.Fatalf("write live-python-oracle proof: %v", err)
-	}
 	t.Logf("table matches live Python: %d runes", len(live))
 }
 
@@ -113,21 +85,9 @@ json.dump(out, sys.stdout)
 // raised or lowered it would leave this port disagreeing with the reference
 // about which ids are convertible, silently, in the direction that mislabels a
 // crashing row as an ordinary PR.
-//
-// Proof marker: workgraph-int-max-str-digits
 func TestIntMaxStrDigitsMatchesLivePython(t *testing.T) {
-	if os.Getenv("DEV_HEALTH_LIVE_PYTHON_ORACLES") != "1" {
-		t.Skip("live Python oracles run only through ci/check_go.sh live-python-oracles")
-	}
-	proofDirectory := os.Getenv("DEV_HEALTH_LIVE_PYTHON_ORACLE_PROOF_DIR")
-	if proofDirectory == "" {
-		t.Fatal("DEV_HEALTH_LIVE_PYTHON_ORACLE_PROOF_DIR is required")
-	}
-	python := edgesLivePython(t)
-	output, err := exec.Command(python, "-c", "import sys; print(sys.get_int_max_str_digits())").Output()
-	if err != nil {
-		t.Fatalf("read int_max_str_digits from live python: %v", pyoracle.RunError(python, err, nil))
-	}
+	output := []byte(edgesProgram(t, "int_max_str_digits", "TestIntMaxStrDigitsMatchesLivePython", "int max str digits",
+		"import sys; print(sys.get_int_max_str_digits())"))
 	live, err := strconv.Atoi(strings.TrimSpace(string(output)))
 	if err != nil {
 		t.Fatalf("parse int_max_str_digits %q: %v", output, err)
@@ -142,11 +102,6 @@ func TestIntMaxStrDigitsMatchesLivePython(t *testing.T) {
 	}
 	if _, _, _, ok := pythonIntFromDigits(strings.Repeat("9", live+1)); ok {
 		t.Errorf("%d digits must NOT convert; python raises", live+1)
-	}
-	if err := os.WriteFile(
-		filepath.Join(proofDirectory, "workgraph-int-max-str-digits"), []byte("executed"), 0o644,
-	); err != nil {
-		t.Fatalf("write proof marker: %v", err)
 	}
 }
 
@@ -163,17 +118,7 @@ func TestIntMaxStrDigitsMatchesLivePython(t *testing.T) {
 // this went wrong: Go 1.27 is Unicode 17 and the interpreter is 16, so U+11DE5
 // is Nd to Go and unassigned to Python. A guard that only checked the tables
 // would pass on the day the versions diverged and say nothing about why.
-//
-// Proof marker: workgraph-python-decimal-blocks
 func TestPythonDecimalBlocksMatchLivePython(t *testing.T) {
-	if os.Getenv("DEV_HEALTH_LIVE_PYTHON_ORACLES") != "1" {
-		t.Skip("live Python oracles run only through ci/check_go.sh live-python-oracles")
-	}
-	proofDirectory := os.Getenv("DEV_HEALTH_LIVE_PYTHON_ORACLE_PROOF_DIR")
-	if proofDirectory == "" {
-		t.Fatal("DEV_HEALTH_LIVE_PYTHON_ORACLE_PROOF_DIR is required")
-	}
-	python := edgesLivePython(t)
 
 	const derive = `
 import json, unicodedata
@@ -197,10 +142,7 @@ print(json.dumps({
     "unicode_version": unicodedata.unidata_version,
 }))
 `
-	output, err := exec.Command(python, "-c", derive).Output()
-	if err != nil {
-		t.Fatalf("derive decimal blocks from live python: %v", pyoracle.RunError(python, err, nil))
-	}
+	output := []byte(edgesProgram(t, "python_decimal_blocks", "TestPythonDecimalBlocksMatchLivePython", "python decimal blocks", derive))
 	var live struct {
 		Blocks         []int  `json:"blocks"`
 		Total          int    `json:"total"`
@@ -276,9 +218,4 @@ print(json.dumps({
 		t.Logf("%d runes differ between the planes; all resolved in Python's favour", divergent)
 	}
 
-	if err := os.WriteFile(
-		filepath.Join(proofDirectory, "workgraph-python-decimal-blocks"), []byte("executed"), 0o644,
-	); err != nil {
-		t.Fatalf("write proof marker: %v", err)
-	}
 }

@@ -457,7 +457,6 @@ var lookPathPythonDayOne = map[string]bool{
 	// recording's poison (PYTHONHOME) stops these, so none records today.
 	"internal/testsupport/programoracle/programoracle.go":                              true,
 	"internal/queryapi/people/summaryvenue/summary_venue_oracle_integration_test.go":   true,
-	"internal/queryapi/server/dict_order_venue_oracle_test.go":                         true,
 	"internal/queryapi/server/workunit_explain_provider_venue_oracle_test.go":          true,
 	"internal/apiservice/metricsvenue/counter_parity_venue_oracle_integration_test.go": true,
 	"internal/testsupport/venueoracle/producer.go":                                     true,

@@ -7,8 +7,6 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"os"
-	"os/exec"
 	"path/filepath"
 	"runtime"
 	"strings"
@@ -22,6 +20,7 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/chschema"
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/containers"
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/pyoracle"
+	"github.com/full-chaos/dev-health-ops/internal/testsupport/venueoracle"
 )
 
 // overflowCase is one batch both planes write: records are (kind, externalId,
@@ -115,13 +114,13 @@ func overflowRecords(raw [][3]string) ([]externalSinkRecord, error) {
 	return records, nil
 }
 
-// TestExternalSinkOutcomesMatchPythonAgainstClickHouse runs the same records
-// through the real Python sink (normalize_batch + write_batch) and the Go sink
+// TestExternalSinkOutcomesMatchFrozenPythonAgainstClickHouse runs the same records
+// through the frozen outcomes of the real Python sink (normalize_batch + write_batch) and the Go sink
 // against the same real ClickHouse schema (CHAOS-6415), logs both outcomes as
 // data, and asserts: a batch fails on one plane exactly when it fails on the
 // other, and the stored rows are equal (a failing kind is skipped whole and
 // every other kind is written, on both planes).
-func TestExternalSinkOutcomesMatchPythonAgainstClickHouse(t *testing.T) {
+func TestExternalSinkOutcomesMatchFrozenPythonAgainstClickHouse(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Minute)
 	defer cancel()
 	instance, err := containers.StartClickHouse(ctx)
@@ -153,31 +152,11 @@ func TestExternalSinkOutcomesMatchPythonAgainstClickHouse(t *testing.T) {
 	pythonOrgs, goOrgs := make([]string, len(cases)), make([]string, len(cases))
 	input := make([]pythonCase, len(cases))
 	for i, item := range cases {
-		pythonOrgs[i], goOrgs[i] = uuid.NewString(), uuid.NewString()
+		// The Python orgs are named, so the recording and a frozen run send the same input.
+		pythonOrgs[i], goOrgs[i] = venueoracle.StableUUID("external-overflow/python/"+item.Name), uuid.NewString()
 		input[i] = pythonCase{Name: item.Name, Org: pythonOrgs[i], Records: item.Records}
 	}
 	encoded, _ := json.Marshal(input)
-	_, file, _, _ := runtime.Caller(0)
-	root := filepath.Clean(filepath.Join(filepath.Dir(file), "..", ".."))
-	python := pyoracle.Resolve(t, root)
-	command := exec.CommandContext(ctx, python, "-c", pythonSinkProgram, httpDSN)
-	command.Env = append(os.Environ(), "PYTHONPATH="+filepath.Join(root, "src"))
-	command.Stdin = bytes.NewReader(encoded)
-	output, err := command.CombinedOutput()
-	if err != nil {
-		t.Fatalf("python: %v\n%s", pyoracle.RunError(python, err, output), output)
-	}
-	var results []map[string]any
-	for _, line := range strings.Split(string(output), "\n") {
-		if text, ok := strings.CutPrefix(line, "RESULT "); ok {
-			if err := json.Unmarshal([]byte(text), &results); err != nil {
-				t.Fatal(err)
-			}
-		}
-	}
-	if len(results) != len(cases) {
-		t.Fatalf("python returned %d results for %d cases\n%s", len(results), len(cases), output)
-	}
 
 	stored := func(org string) string {
 		var parts []string
@@ -204,13 +183,75 @@ func TestExternalSinkOutcomesMatchPythonAgainstClickHouse(t *testing.T) {
 		return strings.Join(parts, " ")
 	}
 
+	// The Python plane's outcome and the rows it stored, per case: executed on the pinned build while
+	// recording (the real normalize_batch and write_batch, through the record verb's launcher, against this
+	// test's ClickHouse), frozen after. The golden holds the outcome and the stored rows of each case.
+	_, file, _, _ := runtime.Caller(0)
+	root := filepath.Clean(filepath.Join(filepath.Dir(file), "..", ".."))
+	golden := venueoracle.OpenGolden(t, venueoracle.GoldenSpec{
+		Path:        "testdata/golden/external-overflow-python-outcomes.golden.json",
+		PythonBuild: "a4847c5e93607451a0c987b314d37e02fc43ce85",
+		SHA256:      "02230f3e2b67fabc3cc754b91ade3c144e8376da9694eda04741ccf84ca11232",
+		Recipe: "git worktree add --detach $DIR a4847c5e93607451a0c987b314d37e02fc43ce85 (with its .venv: uv sync --frozen --no-install-project); then from the repository root: " +
+			"go run ./internal/testsupport/venueoracle/goldenrecord -pkg ./internal/streamhandlers/ -test '^TestExternalSinkOutcomesMatchFrozenPythonAgainstClickHouse$' -python-root $DIR",
+	})
+	pythonRoot := golden.PythonRoot(t, root)
+	declared := map[string]string{}
+	request := venueoracle.ProgramRequest("external overflow sink outcomes", pythonSinkProgram, encoded, declared)
+	answers := golden.Produce(t, pythonRoot, []venueoracle.Request{request},
+		func(producer *venueoracle.Producer, _ []venueoracle.Request) []venueoracle.Response {
+			producer.RequireDeployed()
+			command, err := producer.Command(ctx, declared, nil, "-c", pythonSinkProgram, httpDSN)
+			if err != nil {
+				t.Fatal(err)
+			}
+			command.Stdin = bytes.NewReader(encoded)
+			output, err := command.CombinedOutput()
+			if err != nil {
+				t.Fatalf("python: %v\n%s", pyoracle.RunError(command.Args[0], err, output), output)
+			}
+			var recorded []map[string]any
+			for _, line := range strings.Split(string(output), "\n") {
+				if text, ok := strings.CutPrefix(line, "RESULT "); ok {
+					if err := json.Unmarshal([]byte(text), &recorded); err != nil {
+						t.Fatal(err)
+					}
+				}
+			}
+			if len(recorded) != len(cases) {
+				t.Fatalf("python returned %d results for %d cases\n%s", len(recorded), len(cases), output)
+			}
+			rows := make([]string, len(cases))
+			for i := range cases {
+				rows[i] = stored(pythonOrgs[i])
+			}
+			body, err := json.Marshal(map[string]any{"results": recorded, "stored": rows})
+			if err != nil {
+				t.Fatal(err)
+			}
+			return []venueoracle.Response{{Status: 0, Body: string(body)}}
+		})
+	golden.Consumed(t, answers...)
+	var frozen struct {
+		Results []map[string]any `json:"results"`
+		Stored  []string         `json:"stored"`
+	}
+	if err := json.Unmarshal([]byte(answers[0].Body), &frozen); err != nil {
+		t.Fatal(err)
+	}
+	results := frozen.Results
+	if len(results) != len(cases) || len(frozen.Stored) != len(cases) {
+		t.Fatalf("the golden holds %d outcomes and %d row sets for %d cases", len(results), len(frozen.Stored), len(cases))
+	}
+
+	var skipped []string
 	sink, err := NewClickHouseExternalBatchSink(conn)
 	if err != nil {
 		t.Fatal(err)
 	}
 	for i, item := range cases {
 		python, _ := json.Marshal(results[i])
-		pythonStored := stored(pythonOrgs[i])
+		pythonStored := frozen.Stored[i]
 		t.Logf("python %-55s %s stored: %s", item.Name, python, pythonStored)
 		records, err := overflowRecords(item.Records)
 		if err != nil {
@@ -228,6 +269,7 @@ func TestExternalSinkOutcomesMatchPythonAgainstClickHouse(t *testing.T) {
 		// a float field: CHAOS-6491), so this comparison skips them rather
 		// than claim they agree; the sink still refuses that value.
 		if rejections, _ := results[i]["rejections"].([]any); len(rejections) > 0 {
+			skipped = append(skipped, item.Name)
 			continue
 		}
 		sinkErrors, _ := results[i]["sink_errors"].([]any)
@@ -243,4 +285,12 @@ func TestExternalSinkOutcomesMatchPythonAgainstClickHouse(t *testing.T) {
 			t.Errorf("%s: stored rows differ: python %s, go %s", item.Name, pythonStored, goStored)
 		}
 	}
+	// Which cases the comparison skips is part of what the golden pins: a rejection added to or removed
+	// from a recorded case would otherwise change the set unseen.
+	wantSkipped := []string{"pull request number -1", "work item storyPoints integer literal of 401 digits"}
+	if strings.Join(skipped, "\n") != strings.Join(wantSkipped, "\n") {
+		t.Errorf("the cases skipped because Python rejects the record are %q, want %q", skipped, wantSkipped)
+	}
+	golden.SkipDiff(t)
+	golden.Finish(t)
 }

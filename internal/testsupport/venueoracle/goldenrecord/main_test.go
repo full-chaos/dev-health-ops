@@ -612,26 +612,49 @@ func TestAnAnswerThatDependsOnTheDepthOfTheScratchDirectoryIsRefused(t *testing.
 	}
 }
 
-// If the second run cannot use another depth, the verb fails loudly instead of recording a weaker check.
+// If the second run cannot use another depth AND another name, the verb fails loudly instead of recording a
+// weaker check: each clause is pinned alone (the same depth with different names; another depth with the same
+// last name; both the same), and a failing setup is reported.
 func TestARecordingThatCannotUseAnotherDepthFailsLoudly(t *testing.T) {
-	cfg, fake, _ := fixture(t, "")
 	old := scratchDirs
 	defer func() { scratchDirs = old }()
-	scratchDirs = func() (string, string, func(), error) {
-		a, b := t.TempDir(), t.TempDir()
-		return a + "/same", b + "/same", func() {}, nil
+	cases := map[string]func(a, b string) (string, string){
+		"same depth, different names":   func(a, b string) (string, string) { return a + "/one", b + "/two" },
+		"another depth, same last name": func(a, b string) (string, string) { return a + "/same", b + "/x/same" },
+		"same depth and same name":      func(a, b string) (string, string) { return a + "/same", b + "/same" },
 	}
-	_, err := Record(context.Background(), cfg)
-	if err == nil || !strings.Contains(err.Error(), "same depth or name") {
-		t.Fatalf("same-depth scratch directories were accepted: %v", err)
+	for name, make := range cases {
+		t.Run(name, func(t *testing.T) {
+			cfg, fake, _ := fixture(t, "")
+			scratchDirs = func() (string, string, func(), error) {
+				first, second := make(t.TempDir(), t.TempDir())
+				return first, second, func() {}, nil
+			}
+			_, err := Record(context.Background(), cfg)
+			if err == nil || !strings.Contains(err.Error(), "same depth or name") {
+				t.Fatalf("scratch directories that do not differ in depth and name were accepted: %v", err)
+			}
+			if len(fake.calls) != 0 {
+				t.Fatalf("a run started although the scratch directories were not different: %v", fake.calls)
+			}
+		})
 	}
-	if len(fake.calls) != 0 {
-		t.Fatalf("a run started although the scratch directories were not different: %v", fake.calls)
-	}
-	scratchDirs = func() (string, string, func(), error) { return "", "", nil, errors.New("no space") }
-	if _, err := Record(context.Background(), cfg); err == nil || !strings.Contains(err.Error(), "scratch directories of different depths") {
-		t.Fatalf("a failing scratch setup was not reported: %v", err)
-	}
+	t.Run("another depth and another name is accepted", func(t *testing.T) {
+		cfg, _, _ := fixture(t, "")
+		scratchDirs = func() (string, string, func(), error) {
+			return t.TempDir() + "/one", t.TempDir() + "/x/y/two", func() {}, nil
+		}
+		if _, err := Record(context.Background(), cfg); err != nil {
+			t.Fatalf("scratch directories of another depth and name were refused: %v", err)
+		}
+	})
+	t.Run("a failing setup is reported", func(t *testing.T) {
+		cfg, _, _ := fixture(t, "")
+		scratchDirs = func() (string, string, func(), error) { return "", "", nil, errors.New("no space") }
+		if _, err := Record(context.Background(), cfg); err == nil || !strings.Contains(err.Error(), "scratch directories of different depths") {
+			t.Fatalf("a failing scratch setup was not reported: %v", err)
+		}
+	})
 }
 
 func TestAJSONKeyIsNeverPrintedInARefusal(t *testing.T) {

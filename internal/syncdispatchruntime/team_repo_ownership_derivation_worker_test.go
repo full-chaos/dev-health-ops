@@ -1,8 +1,12 @@
 package syncdispatchruntime
 
 import (
+	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
+	"log/slog"
+	"strings"
 	"testing"
 
 	"github.com/full-chaos/dev-health-ops/internal/jobcontract"
@@ -134,6 +138,7 @@ func TestTeamRepoOwnershipDerivationWorkerSeparatesUnchangedFromNoSignal(t *test
 		want  jobruntime.TeamRepoOwnershipDerivationOutcome
 	}{
 		{"all derived facts unchanged", providersync.TeamRepoOwnershipDerivationStats{Derived: 8, Unchanged: 8}, jobruntime.TeamRepoOwnershipDerivationOutcomeUnchanged},
+		{"one derived fact, unchanged", providersync.TeamRepoOwnershipDerivationStats{Derived: 1, Unchanged: 1}, jobruntime.TeamRepoOwnershipDerivationOutcomeUnchanged},
 		{"derived nothing", providersync.TeamRepoOwnershipDerivationStats{}, jobruntime.TeamRepoOwnershipDerivationOutcomeNoSignal},
 		{"derived some, only some unchanged, none written", providersync.TeamRepoOwnershipDerivationStats{Derived: 8, Unchanged: 5}, jobruntime.TeamRepoOwnershipDerivationOutcomeNoSignal},
 	}
@@ -149,6 +154,37 @@ func TestTeamRepoOwnershipDerivationWorkerSeparatesUnchangedFromNoSignal(t *test
 				t.Fatalf("observed outcomes = %v, want [%s]", observer.outcomes, tc.want)
 			}
 		})
+	}
+}
+
+// TestTeamRepoOwnershipDerivationWorkerLogsTheDerivedAndUnchangedCounts pins the log line CHAOS-8148 adds: it is the only place the counts are
+// recorded, so a field dropped or filled with the wrong number would pass every other test. Not parallel: it replaces the default logger.
+func TestTeamRepoOwnershipDerivationWorkerLogsTheDerivedAndUnchangedCounts(t *testing.T) {
+	var logged bytes.Buffer
+	previous := slog.Default()
+	slog.SetDefault(slog.New(slog.NewJSONHandler(&logged, nil)))
+	t.Cleanup(func() { slog.SetDefault(previous) })
+
+	runner := &recordingDerivationRunner{written: 0, retracted: 0, inputsReady: true, stats: providersync.TeamRepoOwnershipDerivationStats{Derived: 7, Unchanged: 5}}
+	worker := &teamRepoOwnershipDerivationWorker{service: runner, observer: &recordingDerivationObserver{}}
+	if err := worker.Work(context.Background(), &river.Job[TeamRepoOwnershipDerivationJobArgs]{Args: validTeamRepoOwnershipDerivationJobArgs()}); err != nil {
+		t.Fatalf("Work() error = %v, want nil", err)
+	}
+	var found map[string]any
+	for _, line := range strings.Split(strings.TrimSpace(logged.String()), "\n") {
+		var record map[string]any
+		if json.Unmarshal([]byte(line), &record) == nil && record["msg"] == "team_repo_ownership_derivation" {
+			found = record
+		}
+	}
+	if found == nil {
+		t.Fatalf("no team_repo_ownership_derivation log line in %q", logged.String())
+	}
+	if found["facts_derived"] != float64(7) || found["facts_unchanged"] != float64(5) {
+		t.Fatalf("log fields facts_derived=%v facts_unchanged=%v, want 7 and 5", found["facts_derived"], found["facts_unchanged"])
+	}
+	if found["outcome"] != "no_signal" {
+		t.Fatalf("outcome = %v, want no_signal (7 derived, 5 unchanged: not all unchanged)", found["outcome"])
 	}
 }
 

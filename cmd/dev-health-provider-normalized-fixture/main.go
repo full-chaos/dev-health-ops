@@ -3,10 +3,13 @@
 package main
 
 import (
+	"log/slog"
+
 	"bytes"
 	"encoding/json"
 	"flag"
 	"fmt"
+	"github.com/full-chaos/dev-health-ops/internal/platform/logging"
 	"io"
 	"os"
 
@@ -120,6 +123,8 @@ func deriveEnvelope(item fixtureCase) (providerfoundation.NormalizedEnvelope, er
 }
 
 func main() {
+	// the provider packages log a fixed-text line when they refuse a doer: through the redacting handler, to stderr
+	logging.InstallDefault(logging.NewJSON(os.Stderr, slog.LevelInfo))
 	if err := run(os.Args[1:], os.Stdout); err != nil {
 		fmt.Fprintln(os.Stderr, "normalized provider fixture evaluation failed")
 		os.Exit(1)

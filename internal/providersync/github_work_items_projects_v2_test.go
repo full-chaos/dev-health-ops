@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"github.com/full-chaos/dev-health-ops/internal/testsupport/fakehttp"
 	"io"
 	"net/http"
 	"reflect"
@@ -88,7 +89,7 @@ func TestGitHubProjectV2EnvironmentTargetsAreNeverAFallback(t *testing.T) {
 	result, err := (GitHubProjectV2Fetcher{}).Fetch(
 		context.Background(), claim,
 		providerfoundation.Credential{Provider: "github", ID: claim.CredentialID},
-		githubProjectV2TestClient(t, doer), time.Now().UTC(), nil,
+		githubProjectV2TestClient(t, fakehttp.Client(doer)), time.Now().UTC(), nil,
 	)
 	if err != nil {
 		t.Fatal(err)
@@ -128,7 +129,7 @@ func TestGitHubProjectV2RefusesEnvironmentTokenWhenClaimCredentialIsUnusable(t *
 			doer := &gitHubProjectV2Doer{t: t}
 			_, err := (GitHubProjectV2Fetcher{}).Fetch(
 				context.Background(), claim, test.credential,
-				githubProjectV2TestClient(t, doer), time.Now().UTC(), nil,
+				githubProjectV2TestClient(t, fakehttp.Client(doer)), time.Now().UTC(), nil,
 			)
 			if !errors.Is(err, ErrInvalidConfiguration) {
 				t.Fatalf("error=%v want ErrInvalidConfiguration", err)
@@ -175,7 +176,7 @@ func TestGitHubProjectV2RefusesClaimsAuthoredFromTheEnvironment(t *testing.T) {
 	doer := &gitHubProjectV2Doer{t: t}
 	if _, err := (GitHubProjectV2Fetcher{}).Fetch(
 		context.Background(), claim, credential,
-		githubProjectV2TestClient(t, doer), time.Now().UTC(), nil,
+		githubProjectV2TestClient(t, fakehttp.Client(doer)), time.Now().UTC(), nil,
 	); !errors.Is(err, ErrInvalidConfiguration) {
 		t.Fatalf("error=%v want ErrInvalidConfiguration", err)
 	}
@@ -367,7 +368,7 @@ func TestGitHubProjectV2FetcherCompletesOuterAndNestedPagination(t *testing.T) {
 		`{"data":{"node":{"changes":{"nodes":[{"field":{"name":"Status"},"previousValue":{"name":"Doing"},"newValue":{"name":"Done"},"createdAt":"2026-08-02T09:00:00Z","actor":{"login":"octocat"}}],"pageInfo":{"hasNextPage":false,"endCursor":null}}}}}`,
 		`{"data":{"organization":{"projectV2":{"items":{"nodes":[{"id":"PVTI_2","content":{"__typename":"PullRequest","number":8,"title":"not a work item"},"fieldValues":{"nodes":[]},"changes":{"nodes":[],"pageInfo":{"hasNextPage":false,"endCursor":null}}}],"pageInfo":{"hasNextPage":false,"endCursor":null}}}}}}`,
 	}}
-	client := githubProjectV2TestClient(t, doer)
+	client := githubProjectV2TestClient(t, fakehttp.Client(doer))
 	claim := githubWorkItemOracleClaim()
 	claim.IntegrationConfig = map[string]any{"github_projects_v2": []any{map[string]any{"org_login": "acme", "project_number": 3}}}
 	credential := providerfoundation.Credential{Provider: "github", ID: claim.CredentialID}
@@ -512,7 +513,7 @@ func TestGitHubProjectV2FetcherCompletesOuterAndNestedPagination(t *testing.T) {
 				result, err := (GitHubProjectV2Fetcher{}).Fetch(
 					context.Background(), claim,
 					providerfoundation.Credential{Provider: "github", ID: claim.CredentialID},
-					githubProjectV2TestClient(t, doer), normalizedAt, nil,
+					githubProjectV2TestClient(t, fakehttp.Client(doer)), normalizedAt, nil,
 				)
 				if err != nil {
 					t.Fatal(err)
@@ -570,7 +571,7 @@ func TestGitHubProjectV2FetcherCompletesOuterAndNestedPagination(t *testing.T) {
 		result, err := (GitHubProjectV2Fetcher{}).Fetch(
 			context.Background(), claim,
 			providerfoundation.Credential{Provider: "github", ID: claim.CredentialID},
-			githubProjectV2TestClient(t, doer), time.Date(2026, 8, 4, 12, 0, 0, 0, time.UTC), nil,
+			githubProjectV2TestClient(t, fakehttp.Client(doer)), time.Date(2026, 8, 4, 12, 0, 0, 0, time.UTC), nil,
 		)
 		if err != nil {
 			t.Fatal(err)
@@ -605,7 +606,7 @@ func TestGitHubProjectV2FetcherFailsClosedOnUnusableCursors(t *testing.T) {
 		claim.IntegrationConfig = map[string]any{"github_projects_v2": []any{map[string]any{"org_login": "acme", "project_number": 3}}}
 		_, err := (GitHubProjectV2Fetcher{}).Fetch(context.Background(), claim,
 			providerfoundation.Credential{Provider: "github", ID: claim.CredentialID},
-			githubProjectV2TestClient(t, doer), time.Now().UTC(), nil)
+			githubProjectV2TestClient(t, fakehttp.Client(doer)), time.Now().UTC(), nil)
 		if !errors.Is(err, providerfoundation.ErrPaginationInvalid) {
 			t.Fatalf("replies=%v error=%v", replies, err)
 		}
@@ -615,9 +616,9 @@ func TestGitHubProjectV2FetcherFailsClosedOnUnusableCursors(t *testing.T) {
 func TestGitHubProjectV2FetcherRequiresClaimResolvedCredentialAndClient(t *testing.T) {
 	claim := githubWorkItemOracleClaim()
 	claim.IntegrationConfig = map[string]any{"github_projects_v2": []any{map[string]any{"org_login": "acme", "project_number": 3}}}
-	client := githubProjectV2TestClient(t, &gitHubProjectV2Doer{t: t, replies: []string{
+	client := githubProjectV2TestClient(t, fakehttp.Client(&gitHubProjectV2Doer{t: t, replies: []string{
 		`{"data":{"organization":{"projectV2":{"items":{"nodes":[],"pageInfo":{"hasNextPage":false,"endCursor":null}}}}}}`,
-	}})
+	}}))
 	for _, credential := range []providerfoundation.Credential{
 		{Provider: "github", ID: "77777777-7777-4777-8777-777777777777"},
 		{Provider: "gitlab", ID: claim.CredentialID},
@@ -636,7 +637,7 @@ func TestGitHubProjectV2FetcherCountsPhysicalRetriesButReservesOnce(t *testing.T
 			`{"data":{"organization":{"projectV2":{"items":{"nodes":[],"pageInfo":{"hasNextPage":false,"endCursor":null}}}}}}`,
 		},
 	}
-	client := githubProjectV2TestClient(t, doer)
+	client := githubProjectV2TestClient(t, fakehttp.Client(doer))
 	client.Retry.MaxAttempts = 2
 	budget := &gitHubProjectV2Budget{}
 	client.Budget = budget
@@ -670,7 +671,7 @@ func TestGitHubProjectV2FetcherRetainsPhysicalUsageOnTerminalError(t *testing.T)
 		t: t, statuses: []int{http.StatusServiceUnavailable, http.StatusServiceUnavailable},
 		replies: []string{`{"message":"unavailable"}`, `{"message":"still unavailable"}`},
 	}
-	client := githubProjectV2TestClient(t, doer)
+	client := githubProjectV2TestClient(t, fakehttp.Client(doer))
 	client.Retry.MaxAttempts = 2
 	budget := &gitHubProjectV2Budget{}
 	client.Budget = budget
@@ -702,7 +703,7 @@ func TestGitHubProjectV2FetcherPreservesTemporaryPerClaimFanout(t *testing.T) {
 		`{"data":{"organization":{"projectV2":{"items":{"nodes":[],"pageInfo":{"hasNextPage":false,"endCursor":null}}}}}}`,
 		`{"data":{"organization":{"projectV2":{"items":{"nodes":[],"pageInfo":{"hasNextPage":false,"endCursor":null}}}}}}`,
 	}}
-	client := githubProjectV2TestClient(t, doer)
+	client := githubProjectV2TestClient(t, fakehttp.Client(doer))
 	for _, source := range []string{"acme/api", "acme/web"} {
 		claim := githubWorkItemOracleClaim()
 		claim.SourceExternalID = source
@@ -745,7 +746,7 @@ func TestMergeGitHubProjectV2RowsPreservesPythonLastWinsAndTransitionAppend(t *t
 func githubProjectV2TestClient(t *testing.T, doer providerfoundation.HTTPDoer) *providerfoundation.HTTPClient {
 	t.Helper()
 	client, err := providerfoundation.NewHTTPClient(
-		"github", "https://api.github.com", doer, func(*http.Request) error { return nil },
+		"github", "https://api.github.com", fakehttp.Client(doer), func(*http.Request) error { return nil },
 		providerfoundation.RetryPolicy{MaxAttempts: 1, InitialWait: time.Nanosecond, MaxWait: time.Nanosecond},
 		providerfoundation.LeaseGuardFunc(func(context.Context) error { return nil }),
 	)
@@ -789,7 +790,7 @@ func TestGitHubProjectV2FetcherEmitsPullRequestBoardMembership(t *testing.T) {
 	doer := &gitHubProjectV2Doer{t: t, replies: []string{
 		`{"data":{"organization":{"projectV2":{"items":{"nodes":[{"id":"PVTI_PR","createdAt":"2026-08-01T08:00:00Z","content":{"__typename":"PullRequest","number":42,"title":"A PR","repository":{"nameWithOwner":"acme/api"}},"fieldValues":{"nodes":[]},"changes":{"nodes":[],"pageInfo":{"hasNextPage":false,"endCursor":null}}}],"pageInfo":{"hasNextPage":false,"endCursor":null}}}}}}`,
 	}}
-	client := githubProjectV2TestClient(t, doer)
+	client := githubProjectV2TestClient(t, fakehttp.Client(doer))
 	claim := githubWorkItemOracleClaim()
 	claim.IntegrationConfig = map[string]any{"github_projects_v2": []any{map[string]any{"org_login": "acme", "project_number": 3}}}
 	credential := providerfoundation.Credential{Provider: "github", ID: claim.CredentialID}
@@ -865,7 +866,7 @@ func TestGitHubProjectV2MembershipEventIDIsStableAcrossResyncs(t *testing.T) {
 	} {
 		doer := &gitHubProjectV2Doer{t: t, replies: []string{reply}}
 		result, err := (GitHubProjectV2Fetcher{}).Fetch(
-			context.Background(), claim, credential, githubProjectV2TestClient(t, doer), normalizedAt, nil,
+			context.Background(), claim, credential, githubProjectV2TestClient(t, fakehttp.Client(doer)), normalizedAt, nil,
 		)
 		if err != nil {
 			t.Fatal(err)
@@ -897,7 +898,7 @@ func TestGitHubProjectV2SnapshotCompleteAcrossEveryIdentificationOutcome(t *test
 		t.Helper()
 		doer := &gitHubProjectV2Doer{t: t, replies: []string{reply}}
 		result, err := (GitHubProjectV2Fetcher{}).Fetch(
-			context.Background(), claim, credential, githubProjectV2TestClient(t, doer), normalizedAt, nil,
+			context.Background(), claim, credential, githubProjectV2TestClient(t, fakehttp.Client(doer)), normalizedAt, nil,
 		)
 		if err != nil {
 			t.Fatal(err)

@@ -2,6 +2,7 @@ package workerservice
 
 import (
 	"context"
+	"github.com/full-chaos/dev-health-ops/internal/testsupport/fakehttp"
 	"io"
 	"log/slog"
 	"net/http"
@@ -59,7 +60,7 @@ func TestPagerDutyOAuthDoerCountsRefreshesAsExecutionSpend(t *testing.T) {
 		writer.WriteHeader(http.StatusOK)
 	}))
 	t.Cleanup(server.Close)
-	doer := pagerDutyOAuthDoer()
+	doer := fakehttp.Client(pagerDutyOAuthDoer())
 	ledger := providersync.NewRequestLedger()
 	ctx := providersync.WithRequestLedger(context.Background(), ledger)
 	for _, path := range []string{"/token", "/redirect"} {

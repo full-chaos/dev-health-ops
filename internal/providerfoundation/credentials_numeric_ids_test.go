@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"errors"
 	"fmt"
+	"github.com/full-chaos/dev-health-ops/internal/testsupport/fakehttp"
 	"log/slog"
 	"os"
 	"path/filepath"
@@ -45,11 +46,11 @@ func TestDecodeCredentialAcceptsNumericGitHubAppIdentifiers(t *testing.T) {
 	if err := ValidateCredentialShape(numeric); err != nil {
 		t.Errorf("ValidateCredentialShape refused a numeric-id App credential: %v", err)
 	}
-	numericAuth, err := NewGitHubAppAuth(numeric, githubAPIBase, &githubAppDoer{})
+	numericAuth, err := NewGitHubAppAuth(numeric, githubAPIBase, fakehttp.Client(&githubAppDoer{}))
 	if err != nil {
 		t.Fatalf("NewGitHubAppAuth: %v", err)
 	}
-	stringAuth, err := NewGitHubAppAuth(stringed, githubAPIBase, &githubAppDoer{})
+	stringAuth, err := NewGitHubAppAuth(stringed, githubAPIBase, fakehttp.Client(&githubAppDoer{}))
 	if err != nil {
 		t.Fatal(err)
 	}

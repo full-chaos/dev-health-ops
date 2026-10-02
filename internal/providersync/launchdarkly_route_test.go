@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"github.com/full-chaos/dev-health-ops/internal/testsupport/fakehttp"
 	"io"
 	"net/http"
 	"reflect"
@@ -70,7 +71,7 @@ func TestLaunchDarklyRouteFetchesCompleteUnitAndUsesEventReadbackPolicy(t *testi
 	client, err := providerfoundation.NewHTTPClient(
 		"launchdarkly",
 		"https://app.launchdarkly.com",
-		doer,
+		fakehttp.Client(doer),
 		func(*http.Request) error { return nil },
 		providerfoundation.RetryPolicy{
 			MaxAttempts: 1, InitialWait: time.Nanosecond, MaxWait: time.Nanosecond,
@@ -159,7 +160,7 @@ func TestLaunchDarklyRouteCountsFailedAndRetriedAttempts(t *testing.T) {
 		failPath: "/api/v2/flags/payments",
 	}
 	client, err := providerfoundation.NewHTTPClient(
-		"launchdarkly", "https://app.launchdarkly.com", doer,
+		"launchdarkly", "https://app.launchdarkly.com", fakehttp.Client(doer),
 		func(*http.Request) error { return nil },
 		providerfoundation.RetryPolicy{
 			MaxAttempts: 2, InitialWait: time.Nanosecond, MaxWait: time.Nanosecond,
@@ -201,7 +202,7 @@ func TestLaunchDarklyRouteKeepsCodeReferencesBestEffort(t *testing.T) {
 	client, err := providerfoundation.NewHTTPClient(
 		"launchdarkly",
 		"https://app.launchdarkly.com",
-		doer,
+		fakehttp.Client(doer),
 		func(*http.Request) error { return nil },
 		providerfoundation.RetryPolicy{
 			MaxAttempts: 1, InitialWait: time.Nanosecond, MaxWait: time.Nanosecond,
@@ -251,7 +252,7 @@ func TestLaunchDarklyRouteFailsClosedOnCodeReferencePayloadFaults(t *testing.T) 
 			client, err := providerfoundation.NewHTTPClient(
 				"launchdarkly",
 				"https://app.launchdarkly.com",
-				doer,
+				fakehttp.Client(doer),
 				func(*http.Request) error { return nil },
 				providerfoundation.RetryPolicy{
 					MaxAttempts: 1,
@@ -289,7 +290,7 @@ func TestLaunchDarklyRouteFailsClosedOnFlagPaginationCap(t *testing.T) {
 	client, err := providerfoundation.NewHTTPClient(
 		"launchdarkly",
 		"https://app.launchdarkly.com",
-		doer,
+		fakehttp.Client(doer),
 		func(*http.Request) error { return nil },
 		providerfoundation.RetryPolicy{
 			MaxAttempts: 1,

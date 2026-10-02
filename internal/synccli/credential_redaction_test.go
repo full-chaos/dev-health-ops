@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"github.com/full-chaos/dev-health-ops/internal/testsupport/fakehttp"
 	"log/slog"
 	"net/http"
 	"strings"
@@ -163,7 +164,7 @@ func TestSyncTeamsLogsNeitherClickHouseLoginNorPassword(t *testing.T) {
 		"catalog": func() (map[string]string, deps, []string) {
 			env := map[string]string{"CLICKHOUSE_URI": plantedEnv()["CLICKHOUSE_URI"]}
 			d := stubDeps(&recorded{}, failingClient{}, nil)
-			d.doer = loggingDoer{}
+			d.doer = fakehttp.Client(loggingDoer{})
 			return env, d, []string{"--provider", "github", "--org", "org-1", "--owner", "acme", "--auth", "ghp-test"}
 		},
 	} {

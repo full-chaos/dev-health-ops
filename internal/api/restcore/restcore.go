@@ -13,6 +13,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"github.com/full-chaos/dev-health-ops/internal/httpguard"
 	"io"
 	"net"
 	"net/http"
@@ -105,16 +106,12 @@ func DefaultRetryable(r Response) bool {
 // place on a timeout or refused connection and on a retryable status, a 3xx
 // an APIException, then classified by _raise_for_status.
 func (c Core) Get(ctx context.Context, target, operation string) (Response, error) {
-	// The core never follows a redirect (httpx's default: follow_redirects=False): a supplied client gets the same policy on a
-	// copy, so a client with the default policy cannot follow a Location and quote it in a later error (CHAOS-7927 r1).
-	httpClient := c.HTTP
-	if httpClient == nil {
-		httpClient = &http.Client{Timeout: DefaultTimeout}
-	} else {
-		clone := *httpClient
-		httpClient = &clone
+	supplied := c.HTTP
+	if supplied == nil {
+		supplied = &http.Client{Timeout: DefaultTimeout}
 	}
-	httpClient.CheckRedirect = func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }
+	// The one guard layer: whatever client came in (a caller's, or this default), the credential never follows a redirect.
+	httpClient := httpguard.NoRedirects(supplied)
 	sleep := c.Sleep
 	if sleep == nil {
 		sleep = sleepContext

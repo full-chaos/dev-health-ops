@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"github.com/full-chaos/dev-health-ops/internal/testsupport/fakehttp"
 	"net/http"
 	"strconv"
 	"strings"
@@ -101,7 +102,7 @@ func githubTestsResumeCollectCursor(
 func TestGitHubTestsResumeWithinPageCompletes(t *testing.T) {
 	doer := &githubTestsShrinkingRunsDoer{t: t, items: 5}
 
-	_, finals, err := githubTestsResumeCollect(t, githubTestsClient(t, doer), githubTestsRunsResumeCursor(2))
+	_, finals, err := githubTestsResumeCollect(t, githubTestsClient(t, fakehttp.Client(doer)), githubTestsRunsResumeCursor(2))
 	if err != nil {
 		t.Fatalf("resume within the page returned err=%v, want completion", err)
 	}
@@ -151,7 +152,7 @@ func TestGitHubTestsResumeAfterPageShrankDoesNotBurnAnAttempt(t *testing.T) {
 	// unit resumes only 2 remain addressable on it.
 	doer := &githubTestsShrinkingRunsDoer{t: t, items: 2}
 
-	_, finals, err := githubTestsResumeCollect(t, githubTestsClient(t, doer), githubTestsRunsResumeCursor(4))
+	_, finals, err := githubTestsResumeCollect(t, githubTestsClient(t, fakehttp.Client(doer)), githubTestsRunsResumeCursor(4))
 
 	if errors.Is(err, ErrChunkCheckpointConflict) {
 		t.Fatalf(
@@ -175,7 +176,7 @@ func TestGitHubTestsResumeAfterPageShrankDoesNotBurnAnAttempt(t *testing.T) {
 // is asserted through the ROUTE rather than by calling the recorder.
 func TestGitHubTestsResumeReanchorIsCounted(t *testing.T) {
 	doer := &githubTestsShrinkingRunsDoer{t: t, items: 2}
-	client := githubTestsClient(t, doer)
+	client := githubTestsClient(t, fakehttp.Client(doer))
 	// The executors attach Metrics before handing the client to a route
 	// (chunked_stream_executor.go:147). githubTestsClient leaves it nil, so
 	// attach one or the assertion below would pass against a nil recorder.
@@ -199,7 +200,7 @@ func TestGitHubTestsResumeReanchorIsCounted(t *testing.T) {
 // becomes noise and the deploy check above means nothing.
 func TestGitHubTestsResumeWithinPageIsNotCountedAsReanchor(t *testing.T) {
 	doer := &githubTestsShrinkingRunsDoer{t: t, items: 5}
-	client := githubTestsClient(t, doer)
+	client := githubTestsClient(t, fakehttp.Client(doer))
 	client.Metrics = providerfoundation.NewMetrics()
 
 	if _, _, err := githubTestsResumeCollect(t, client, githubTestsRunsResumeCursor(2)); err != nil {
@@ -225,7 +226,7 @@ func TestGitHubTestsResumeWithinPageIsNotCountedAsReanchor(t *testing.T) {
 // because a guessed URL failed to match the page.
 func TestGitHubTestsArtifactsPhaseResumeAfterPageShrankDoesNotBurnAnAttempt(t *testing.T) {
 	discover := &githubTestsShrinkingRunsDoer{t: t, items: 5}
-	if _, _, err := githubTestsResumeCollect(t, githubTestsClient(t, discover), ""); err != nil {
+	if _, _, err := githubTestsResumeCollect(t, githubTestsClient(t, fakehttp.Client(discover)), ""); err != nil {
 		t.Fatalf("discovery pass: %v", err)
 	}
 	if discover.artifactPhaseURL == "" {
@@ -236,7 +237,7 @@ func TestGitHubTestsArtifactsPhaseResumeAfterPageShrankDoesNotBurnAnAttempt(t *t
 		`,"index":4,"run_pages":1,"artifact_pages":1,"repo":"acme/api"}`
 
 	doer := &githubTestsShrinkingRunsDoer{t: t, items: 2}
-	client := githubTestsClient(t, doer)
+	client := githubTestsClient(t, fakehttp.Client(doer))
 	client.Metrics = providerfoundation.NewMetrics()
 
 	_, finals, err := githubTestsResumeCollect(t, client, resume)
@@ -285,7 +286,7 @@ func TestGitHubTestsResumeWhenPageShrankExactlyToIndexReAnchors(t *testing.T) {
 	// Index 2 was persisted while the page held at least 3 items. It now holds
 	// exactly 2, so index 2 addresses nothing.
 	doer := &githubTestsShrinkingRunsDoer{t: t, items: 2}
-	client := githubTestsClient(t, doer)
+	client := githubTestsClient(t, fakehttp.Client(doer))
 	client.Metrics = providerfoundation.NewMetrics()
 
 	cursor, _, finals, err := githubTestsResumeCollectCursor(t, client, githubTestsRunsResumeCursor(2))
@@ -327,7 +328,7 @@ func TestGitHubTestsResumeWhenPageShrankExactlyToIndexReAnchors(t *testing.T) {
 // worse than no signal, because this counter is what a deploy is verified with.
 func TestGitHubTestsResumeAtIndexZeroOnEmptyPageIsNotAReanchor(t *testing.T) {
 	doer := &githubTestsShrinkingRunsDoer{t: t, items: 0}
-	client := githubTestsClient(t, doer)
+	client := githubTestsClient(t, fakehttp.Client(doer))
 	client.Metrics = providerfoundation.NewMetrics()
 
 	if _, _, err := githubTestsResumeCollect(t, client, githubTestsRunsResumeCursor(0)); err != nil {

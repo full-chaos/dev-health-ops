@@ -38,7 +38,7 @@ from cryptography.fernet import Fernet as _PinFernet
 _PIN_COUNTER = _pin_itertools.count(1)
 def _pinned_encrypt(self, data):
     return self._encrypt_from_parts(data, 1700000000, next(_PIN_COUNTER).to_bytes(16, "big"))
-_PinFernet.encrypt = _pinned_encrypt
+setattr(_PinFernet, "encrypt", _pinned_encrypt)
 
 import contextlib
 import itertools

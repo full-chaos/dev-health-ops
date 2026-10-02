@@ -24,7 +24,9 @@ package sessionscenario
 import (
 	"bytes"
 	"context"
+	"crypto/sha256"
 	"encoding/base64"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -358,12 +360,22 @@ func GoldenPath() string {
 	return filepath.Join(filepath.Dir(file), "testdata", "python_golden.json")
 }
 
+// goldenSHA256 pins python_golden.json (CHAOS-7306, D3855). Its recorder, the
+// session venue oracle, is retired: the file is the Python api's answers from the
+// last live run, which passed once more on build a4847c5e93607451a0c987b314d37e02fc43ce85
+// before the oracle was deleted. A changed file fails here: it cannot be
+// re-recorded, so a change is an edit by hand.
+const goldenSHA256 = "457096365286840fb50dffac99d5418e9532183070962fbbadf81e51794b4ae5"
+
 // LoadGolden reads the committed Recording.
 func LoadGolden(t *testing.T) *Recording {
 	t.Helper()
 	raw, err := os.ReadFile(GoldenPath())
 	if err != nil {
 		t.Fatal(err)
+	}
+	if sum := sha256.Sum256(raw); hex.EncodeToString(sum[:]) != goldenSHA256 {
+		t.Fatalf("python_golden.json sha256 %s, pinned %s: the golden was edited or replaced, and its recorder is retired", hex.EncodeToString(sum[:]), goldenSHA256)
 	}
 	var golden Recording
 	if err := json.Unmarshal(raw, &golden); err != nil {

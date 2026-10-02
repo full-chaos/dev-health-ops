@@ -264,6 +264,17 @@ func findsDefectErr(name, output string, index int, line func(dst []byte, index 
 		return fmt.Errorf("%s: answer %d is not one of the %d answers", name, index, blocks.Lines)
 	}
 	block := index / BlockLines
+	// The control: with the right answer at index (line as it is) the block must
+	// digest to the frozen digest. If it does not, the Go lines of the block are
+	// not the frozen answers, and ANY defect planted in it would "differ" for
+	// that reason alone: the gate would pass on a plant that did nothing.
+	control, _, err := blocks.digest(nil, block, line)
+	if err != nil {
+		return fmt.Errorf("%s: %w", name, err)
+	}
+	if control != blocks.Blocks[block].SHA256 {
+		return fmt.Errorf("%s: block %d of the Go answers does not digest to the frozen digest before any defect is planted: the gate cannot tell a planted defect from the answers that already differ", name, block)
+	}
 	found, _, err := blocks.digest(nil, block, func(dst []byte, at int) []byte {
 		if at == index {
 			return defect(dst)

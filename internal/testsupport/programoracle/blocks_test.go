@@ -271,3 +271,38 @@ func TestAKnownDefectMustBeFoundInItsBlock(t *testing.T) {
 		t.Errorf("a defect outside the sweep: %v", err)
 	}
 }
+
+// The gate carries its own control: when the Go lines of the block are not the
+// frozen answers, no plant is judged, because every plant would "differ" for
+// that reason alone (CHAOS-7945: with every Go line wrong, even the RIGHT answer
+// planted was reported as a found defect).
+func TestTheDefectGateRefusesABlockWhoseGoLinesAreNotTheFrozenAnswers(t *testing.T) {
+	lines := numberedLines(2*BlockLines + 2)
+	encoded, err := json.Marshal(frozenBlocks(lines))
+	if err != nil {
+		t.Fatal(err)
+	}
+	output := string(encoded)
+	skewed := func(dst []byte, at int) []byte { return append(dst, "skewed"...) }
+	wrong := func(dst []byte) []byte { return append(dst, "wrong"...) }
+	right := func(dst []byte) []byte { return append(dst, lines[0]...) }
+	for name, defect := range map[string]func([]byte) []byte{"a wrong answer planted": wrong, "the right answer planted": right} {
+		err := findsDefectErr("sweep", output, 0, skewed, defect)
+		if err == nil || !strings.Contains(err.Error(), "does not digest to the frozen digest before any defect is planted") {
+			t.Errorf("%s with every Go line wrong: err = %v, want the control to refuse the block", name, err)
+		}
+	}
+	// One Go line wrong in the defect's own block: refused too; in ANOTHER block: judged.
+	oneWrong := func(dst []byte, at int) []byte {
+		if at == 3 {
+			return append(dst, "skewed"...)
+		}
+		return fixedLines(lines)(dst, at)
+	}
+	if err := findsDefectErr("sweep", output, 0, oneWrong, wrong); err == nil {
+		t.Error("a block with one Go line wrong was judged")
+	}
+	if err := findsDefectErr("sweep", output, BlockLines+500, oneWrong, wrong); err != nil {
+		t.Errorf("a wrong line in another block refused this block: %v", err)
+	}
+}

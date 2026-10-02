@@ -148,10 +148,87 @@ func TestARoutedRequestMakesOneServerSpanNamedByThePatternAndCarryingNoRequestVa
 	if status, _ := attrInt(span, "http.response.status_code"); status != http.StatusNoContent {
 		t.Errorf("status attribute = %d, want 204", status)
 	}
-	dump := fmt.Sprint(span)
+	// The FIELDS a request value could ride on, never the span's own random
+	// trace/span id bytes or timestamps (fmt.Sprint(span) holds them, and "9183"
+	// appears in them by chance: CHAOS-7912).
+	dump := spanFieldText(span)
 	for _, canary := range []string{"9183", "querycanary", "headercanary", "orgcanary", "token"} {
 		if strings.Contains(dump, canary) {
 			t.Errorf("the span carries %q, a request value: %s", canary, dump)
+		}
+	}
+}
+
+// spanFieldText is every field of the span that can carry a request value: the
+// name, the attributes (key and value), the events (name and attributes), the
+// links' attributes, the trace state and the status message. It leaves out the
+// trace id, span id, parent span id and the timestamps: random or clock
+// bytes/numbers that can contain any digit string by chance.
+func spanFieldText(span *tracepb.Span) string {
+	parts := []string{span.GetName(), span.GetTraceState(), span.GetStatus().GetMessage()}
+	addAttrs := func(attrs []*commonpb.KeyValue) {
+		for _, kv := range attrs {
+			parts = append(parts, kv.GetKey(), fmt.Sprint(kv.GetValue()))
+		}
+	}
+	addAttrs(span.GetAttributes())
+	for _, event := range span.GetEvents() {
+		parts = append(parts, event.GetName())
+		addAttrs(event.GetAttributes())
+	}
+	for _, link := range span.GetLinks() {
+		parts = append(parts, link.GetTraceState())
+		addAttrs(link.GetAttributes())
+	}
+	return strings.Join(parts, "\n")
+}
+
+// CHAOS-7912: the guard still sees a request value in any field, and is blind to
+// the ids and timestamps that merely contain the digits.
+func TestSpanFieldTextSeesEveryRequestCarryingFieldAndNoIDOrTime(t *testing.T) {
+	str := func(v string) *commonpb.AnyValue {
+		return &commonpb.AnyValue{Value: &commonpb.AnyValue_StringValue{StringValue: v}}
+	}
+	benign := func() *tracepb.Span {
+		return &tracepb.Span{
+			Name:              "GET /v1/items/{id}",
+			TraceId:           []byte("9183918391839183"),
+			SpanId:            []byte("91839183"),
+			ParentSpanId:      []byte("91839183"),
+			StartTimeUnixNano: 1791839183000000000,
+			EndTimeUnixNano:   1791839183918300000,
+			Attributes:        []*commonpb.KeyValue{{Key: "http.route", Value: str("/v1/items/{id}")}},
+		}
+	}
+	if text := spanFieldText(benign()); strings.Contains(text, "9183") {
+		t.Fatalf("ids/times leaked into the field text: %q", text)
+	}
+	if !strings.Contains(fmt.Sprint(benign()), "9183") {
+		t.Fatal("the control no longer shows why fmt.Sprint(span) is the wrong haystack")
+	}
+	carriers := map[string]func(*tracepb.Span){
+		"name": func(sp *tracepb.Span) { sp.Name = "GET /v1/items/9183" },
+		"attribute value": func(sp *tracepb.Span) {
+			sp.Attributes = append(sp.Attributes, &commonpb.KeyValue{Key: "url.path", Value: str("/v1/items/9183")})
+		},
+		"attribute key": func(sp *tracepb.Span) {
+			sp.Attributes = append(sp.Attributes, &commonpb.KeyValue{Key: "item.9183", Value: str("x")})
+		},
+		"event name": func(sp *tracepb.Span) { sp.Events = []*tracepb.Span_Event{{Name: "saw 9183"}} },
+		"event attribute": func(sp *tracepb.Span) {
+			sp.Events = []*tracepb.Span_Event{{Name: "e", Attributes: []*commonpb.KeyValue{{Key: "k", Value: str("9183")}}}}
+		},
+		"link attribute": func(sp *tracepb.Span) {
+			sp.Links = []*tracepb.Span_Link{{Attributes: []*commonpb.KeyValue{{Key: "k", Value: str("9183")}}}}
+		},
+		"trace state":    func(sp *tracepb.Span) { sp.TraceState = "vendor=9183" },
+		"status message": func(sp *tracepb.Span) { sp.Status = &tracepb.Status{Message: "failed for 9183"} },
+	}
+	for name, set := range carriers {
+		span := benign()
+		set(span)
+		if !strings.Contains(spanFieldText(span), "9183") {
+			t.Errorf("a request value in the span's %s is not seen by the guard", name)
 		}
 	}
 }

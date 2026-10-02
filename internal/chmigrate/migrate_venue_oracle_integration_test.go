@@ -81,7 +81,7 @@ const (
 	// migrateGolden was recorded again in a closed environment (CHAOS-7471, byte-identical) with
 	// the Python src of main 7b5903cdfc72a100c19df267d90d88df1ce641e2 (an ancestor of origin/main), NOT at pythonGoldenBuild:
 	// that build stops at migration 099 and the golden holds the 110-version chain.
-	migrateGoldenSHA256 = "f89c4921546a322d0323dcbd6b88dfbac77f606a0da6e98ab80841622d356113"
+	migrateGoldenSHA256 = "a835c8cd04c4b5112cdb1ace1fff4cc3fa355c8a6466eed1498950b8c2947370"
 )
 
 // migrateEnv is one database on the shared server, seen by both planes.

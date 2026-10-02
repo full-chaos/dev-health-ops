@@ -5,6 +5,9 @@ package server
 // run_operation calls (the internal listener, /query), so a root that is dark on :8092 is dark on :8091 too. The document rows (routeMux) stay as
 // they are: this check runs IN FRONT of them.
 //
+// The identity reads go through mcpProofAdmit / mcpIdentityHeadersPresent (mcp_route.go): TestOnlyInternalPathsReadTheInternalIdentity pins which
+// files may import the identity package, and this one may not.
+//
 // Scope: only a request that arrived on the INTERNAL listener AND carries the acr identity headers (run_operation's carrier). The web app and
 // ops-api reach /query with an envelope or edge bearer (and the public listener drops the headers), and a dark class root must not go dark for them.
 //
@@ -19,7 +22,6 @@ import (
 
 	"github.com/full-chaos/dev-health-ops/internal/mcpclass"
 	"github.com/full-chaos/dev-health-ops/internal/queryapi/graph"
-	"github.com/full-chaos/dev-health-ops/internal/queryapi/internalidentity"
 	"github.com/full-chaos/dev-health-ops/internal/queryapi/routeswitch"
 )
 
@@ -31,9 +33,12 @@ const classRowRefusalMessage = "a root field is not enabled for the MCP caller c
 // newClassRowGate builds the gate over sw, the class-row switch (the one type :8092 uses: routeswitch.NewPostgresSwitch over mcpRoutingDigests()).
 func newClassRowGate(sw routeswitch.Switch) documentGate {
 	schema := graph.NewExecutableSchema(graph.Config{}).Schema()
-	var rootsByOperation sync.Map // operation -> []string; the root fields of its registered document
-	rootsOf := func(operation, query string) ([]string, bool) {
-		if cached, ok := rootsByOperation.Load(operation); ok {
+	// digest of the document text -> []string, the root fields of that document. Keyed by the DOCUMENT digest, not the operation name: an operation
+	// may be registered under more than one document (CHAOS-8000), and each document's own roots decide, so the check holds for every one of them.
+	var rootsByDocument sync.Map
+	rootsOf := func(query string) ([]string, bool) {
+		key := digestHex(query)
+		if cached, ok := rootsByDocument.Load(key); ok {
 			return cached.([]string), true
 		}
 		doc, errs := gqlparser.LoadQuery(schema, query)
@@ -41,15 +46,15 @@ func newClassRowGate(sw routeswitch.Switch) documentGate {
 			return nil, false
 		}
 		roots, _ := mcpRootFields(doc.Operations[0].SelectionSet, doc.Fragments)
-		rootsByOperation.Store(operation, roots)
+		rootsByDocument.Store(key, roots)
 		return roots, true
 	}
 	allowed := mcpclass.AllowedRoots()
 	return func(w http.ResponseWriter, r *http.Request, operation, query string) bool {
-		if !internalidentity.OnInternalListener(r.Context()) || !internalidentity.Present(r.Header) {
+		if !mcpProofAdmit(r.Context()) || !mcpIdentityHeadersPresent(r.Header) {
 			return false
 		}
-		roots, ok := rootsOf(operation, query)
+		roots, ok := rootsOf(query)
 		if !ok {
 			// A registered document that cannot be read cannot be shown to be outside the class: fail closed.
 			writeMCPRefusal(w, http.StatusNotFound, mcpReasonRootFieldNotEnabled, classRowRefusalMessage)

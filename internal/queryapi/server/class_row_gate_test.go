@@ -346,3 +346,23 @@ func TestRunOperationRefusalIsByteIdenticalToTheMCPListenerRefusal(t *testing.T)
 		t.Fatal("the refusal does not carry its reason")
 	}
 }
+
+// An operation may be registered under MORE THAN ONE document (CHAOS-8000: the old and the new document of an operation): the check holds for EVERY
+// document, because each document's own roots decide. Two documents under one operation name, one root lit and one dark: only the dark one is refused,
+// whichever is asked first.
+func TestClassGateDecidesPerDocumentWhenAnOperationHasTwoDocuments(t *testing.T) {
+	lit, dark := classOperationDocuments["hotspots"], classOperationDocuments["catalogValues"]
+	for _, order := range [][2]string{{lit, dark}, {dark, lit}} {
+		gate := newClassRowGate(routeswitch.StaticSwitch{"mcp:hotspots": true}) // hotspots lit, catalog dark
+		for _, document := range order {
+			request := httptest.NewRequest(http.MethodPost, "/query", nil)
+			*request = *request.WithContext(iaInternalCtx(request.Context()))
+			request.Header.Set(internalidentity.HeaderOrgID, "org-1")
+			recorder := httptest.NewRecorder()
+			refused := gate(recorder, request, "oneOperationTwoDocuments", document)
+			if want := document == dark; refused != want {
+				t.Fatalf("document with roots lit=%t: refused = %t, want %t (the answer of the first document was reused for the second)", document == lit, refused, want)
+			}
+		}
+	}
+}

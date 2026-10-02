@@ -6,57 +6,47 @@ import (
 	"fmt"
 	"math/rand"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"testing"
 	"time"
 
 	"github.com/google/uuid"
 
-	"github.com/full-chaos/dev-health-ops/internal/testsupport/pyoracle"
+	"github.com/full-chaos/dev-health-ops/internal/testsupport/programoracle"
+	"github.com/full-chaos/dev-health-ops/internal/testsupport/rotguard"
 )
 
-// runPythonOracle executes testdata/python_governance_oracle.py and, on
-// success, writes a proof marker into DEV_HEALTH_LIVE_PYTHON_ORACLE_PROOF_DIR
-// -- required, not merely read: ci/check_go.sh's live-python-oracles verb
-// checks the marker exists and reads "executed" after the run, so this oracle
-// cannot be silently skipped, renamed, or filtered out of a -run pattern
-// without the standing gate noticing. Same shape as
-// internal/jobs/metrics/testops/compute_test.go's helper of the same name.
-func runPythonOracle(t *testing.T, markerName string) pythonOracleOutput {
+// runPythonOracle returns the answers of the production Python governance evaluation over the fixture
+// (testdata/python_governance_oracle.py). The script was executed once on the last build that carried the
+// Python sources and its stdout is frozen in testdata/golden/governance_oracle.json (recipe in the golden's
+// spec); a frozen run reads it and runs no Python. The script's text is part of the request, so a changed
+// script is refused until it is recorded again.
+func runPythonOracle(t *testing.T) pythonOracleOutput {
 	t.Helper()
-	if os.Getenv("DEV_HEALTH_LIVE_PYTHON_ORACLES") != "1" {
-		t.Skip("live Python oracles run only through ci/check_go.sh live-python-oracles")
-	}
-	proofDirectory := os.Getenv("DEV_HEALTH_LIVE_PYTHON_ORACLE_PROOF_DIR")
-	if proofDirectory == "" {
-		t.Fatal("DEV_HEALTH_LIVE_PYTHON_ORACLE_PROOF_DIR is required")
-	}
 	root, err := filepath.Abs(filepath.Join("..", "..", "..", ".."))
 	if err != nil {
 		t.Fatal(err)
 	}
-	python := pyoracle.Resolve(t, root)
-	command := exec.Command(python, filepath.Join("testdata", "python_governance_oracle.py"))
-	command.Dir = filepath.Join(root, "internal", "jobs", "metrics", "aigovernance")
-	command.Env = append(os.Environ(), "PYTHONPATH="+filepath.Join(root, "src"))
-	var stdout, stderr bytes.Buffer
-	command.Stdout = &stdout
-	command.Stderr = &stderr
-	if err := command.Run(); err != nil {
-		t.Fatalf("execute production Python oracle: %v\nstdout:\n%s",
-			pyoracle.RunError(python, err, stderr.Bytes()), stdout.String())
+	const scriptPath = "internal/jobs/metrics/aigovernance/testdata/python_governance_oracle.py"
+	source, err := os.ReadFile(filepath.Join(root, filepath.FromSlash(scriptPath)))
+	if err != nil {
+		t.Fatal(err)
 	}
-	output := bytes.TrimSpace(stdout.Bytes())
+	spec := rotguard.Spec("testdata/golden/governance_oracle.json", "5c92eb0d945bfc97cdbebb35edfe801d2566dc4b8452ea144afd278cc8fc4439",
+		"./internal/jobs/metrics/aigovernance/", "^TestGovernanceRowsMatchLivePythonProduction$")
+	answers := programoracle.Run(t, spec, root, []programoracle.Program{
+		programoracle.Script("governance oracle", scriptPath, string(source), nil),
+	})
+	if answers[0].ExitCode != 0 {
+		t.Fatalf("the governance oracle exited %d (stdout %q)", answers[0].ExitCode, answers[0].Stdout)
+	}
+	output := bytes.TrimSpace([]byte(answers[0].Stdout))
 	if lastLine := bytes.LastIndexByte(output, '\n'); lastLine >= 0 {
 		output = output[lastLine+1:]
 	}
 	var decoded pythonOracleOutput
 	if err := json.Unmarshal(output, &decoded); err != nil {
 		t.Fatalf("decode production Python oracle output %q: %v", output, err)
-	}
-	if writeErr := os.WriteFile(filepath.Join(proofDirectory, markerName), []byte("executed"), 0o644); writeErr != nil {
-		t.Fatalf("write live-python-oracle proof: %v", writeErr)
 	}
 	return decoded
 }
@@ -205,6 +195,11 @@ func fixtureArtifacts() []Artifact {
 			a.Evidence.Source = stringPtr("pr_body")
 			a.Evidence.Confidence = &zero
 		}),
+		fixtureArtifact(func(a *Artifact) { a.SubjectID = "21"; a.SubjectType = "commit" }),
+		fixtureArtifact(func(a *Artifact) { a.SubjectID = "22"; a.SensitiveRepo = false; a.RepoAllowsAI = false }),
+		fixtureArtifact(func(a *Artifact) { a.SubjectID = "23"; a.ToolAllowlistStatus = AllowlistUnknown }),
+		fixtureArtifact(func(a *Artifact) { a.SubjectID = "24"; a.ObservedAt = time.Date(2025, 9, 3, 12, 0, 0, 0, time.UTC) }),
+		fixtureArtifact(func(a *Artifact) { a.SubjectID = "25"; a.ObservedAt = time.Date(2026, 8, 3, 12, 0, 0, 0, time.UTC) }),
 	}
 }
 
@@ -216,7 +211,7 @@ func fixtureArtifacts() []Artifact {
 // (the standing rot-guard rule: compare the payload, never provenance).
 // event_id's own contract is pinned by TestDeriveEventIDIsStableAndKeyDependent.
 func TestGovernanceRowsMatchLivePythonProduction(t *testing.T) {
-	want := runPythonOracle(t, "ai-governance-golden")
+	want := runPythonOracle(t)
 	artifacts := fixtureArtifacts()
 
 	gotViolations := EvaluateArtifacts(artifacts)

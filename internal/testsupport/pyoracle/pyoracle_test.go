@@ -388,3 +388,21 @@ func TestTheClosedListHoldsNoPackageThatWasNotThereOnDayOne(t *testing.T) {
 		}
 	}
 }
+
+// The closed child environment is pinned as a literal. Every golden was
+// recorded under it and no key holds its constants, so a change here changes
+// no golden's key and no replay refuses: the answers of the old environment
+// would be served as the new one's.
+func TestTheClosedEnvironmentIsPinnedAsAnyGoldenWasRecordedUnderIt(t *testing.T) {
+	want := []string{
+		"PATH=/usr/local/bin:/usr/bin:/bin",
+		"LANG=C.UTF-8", "LC_ALL=C.UTF-8", "TZ=UTC",
+		"PYTHONHASHSEED=0", "PYTHONDONTWRITEBYTECODE=1",
+		"PYTHONPATH=/ROOT/src",
+		"OTEL_ENABLED=false",
+	}
+	got := ClosedEnv("/ROOT")
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("ClosedEnv changed:\n got %q\nwant %q\nevery golden was recorded under the old closed environment: re-record all of them, then move this pin", got, want)
+	}
+}

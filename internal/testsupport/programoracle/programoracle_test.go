@@ -132,17 +132,17 @@ func TestARunRefusesAnAnswerWithAPerRunValueAndLogsNone(t *testing.T) {
 	address, host, _, _ := perRunAddress()
 	perRun := func() map[string]string { return map[string]string{"ORACLE_DATABASE_URI": address} }
 	root := t.TempDir()
-	if result, err := executeErr(root, Program{Name: "clean", Text: "clean", PerRun: perRun}); err != nil || result.exitCode != 0 || string(result.stdout) != "ok" {
+	if result, err := executeErr(root, Program{Name: "clean", Text: "clean", PerRun: perRun, PerRunNames: []string{"ORACLE_DATABASE_URI"}}); err != nil || result.exitCode != 0 || string(result.stdout) != "ok" {
 		t.Fatalf("a clean answer = %+v, %v", result, err)
 	}
-	result, err := executeErr(root, Program{Name: "leaks", Text: "leak", PerRun: perRun})
+	result, err := executeErr(root, Program{Name: "leaks", Text: "leak", PerRun: perRun, PerRunNames: []string{"ORACLE_DATABASE_URI"}})
 	if err == nil || !strings.Contains(err.Error(), "value of the per-run entry ORACLE_DATABASE_URI") {
 		t.Fatalf("an answer that holds the address = %+v, %v: want it refused by the name of the entry", result, err)
 	}
 	if strings.Contains(err.Error(), host) || len(result.stdout) != 0 {
 		t.Fatalf("the refusal hands the address on: %v, stdout %q", err, result.stdout)
 	}
-	result, err = executeErr(root, Program{Name: "fails", Text: "fail", PerRun: perRun})
+	result, err = executeErr(root, Program{Name: "fails", Text: "fail", PerRun: perRun, PerRunNames: []string{"ORACLE_DATABASE_URI"}})
 	if err != nil || result.exitCode != 3 || string(result.stdout) != "part" {
 		t.Fatalf("a program that exits 3 = %+v, %v", result, err)
 	}
@@ -218,19 +218,20 @@ func TestTheInterpreterGetsNothingOfTheProcessEnvironment(t *testing.T) {
 // keyed environment (what the request holds) does not have them.
 func TestAPerRunEntryReachesTheProgramAndIsNotInTheRequest(t *testing.T) {
 	calls := 0
-	program := Program{Env: map[string]string{"TZ": "UTC"}, PerRun: func() map[string]string {
+	program := Program{Env: map[string]string{"TZ": "UTC"}, PerRunNames: []string{"ORACLE_DATABASE_URI", "ATLASSIAN_ORACLE_GATEWAY"}, PerRun: func() map[string]string {
 		calls++
-		return map[string]string{"ORACLE_DATABASE": "address-of-this-run", "ANOTHER": "x"}
+		return map[string]string{"ORACLE_DATABASE_URI": "address-of-this-run", "ATLASSIAN_ORACLE_GATEWAY": "x"}
 	}}
-	if keyed := keyedEnv(program); len(keyed) != 3 || keyed["ORACLE_DATABASE"] != "" {
-		t.Fatalf("the keyed environment = %v: a per-run entry is in the request", keyed)
+	// The request holds the per-run NAMES (one entry), never a value.
+	if keyed := keyedEnv(program); len(keyed) != 4 || keyed[perRunNamesKey] != "ATLASSIAN_ORACLE_GATEWAY,ORACLE_DATABASE_URI" || keyed["ORACLE_DATABASE_URI"] != "" {
+		t.Fatalf("the keyed environment = %v: a per-run value is in the request or its names are not", keyed)
 	}
 	if calls != 0 {
 		t.Fatalf("PerRun was called %d times to build the request: it is for a recording only", calls)
 	}
 	environment := interpreterEnv("/pinned", program, program.PerRun())
 	tail := environment[len(environment)-5:]
-	if want := []string{"PYTHONHASHSEED=0", "PYTHONUTF8=1", "TZ=UTC", "ANOTHER=x", "ORACLE_DATABASE=address-of-this-run"}; strings.Join(tail, "\n") != strings.Join(want, "\n") {
+	if want := []string{"PYTHONHASHSEED=0", "PYTHONUTF8=1", "TZ=UTC", "ATLASSIAN_ORACLE_GATEWAY=x", "ORACLE_DATABASE_URI=address-of-this-run"}; strings.Join(tail, "\n") != strings.Join(want, "\n") {
 		t.Fatalf("interpreter environment ends with %q, want %q", tail, want)
 	}
 	if without := interpreterEnv("/pinned", Program{Env: map[string]string{"TZ": "UTC"}}, nil); len(without) != len(environment)-2 {
@@ -431,5 +432,80 @@ func TestTheRecordingGuardDoesNotStopTheHelpersOwnPython(t *testing.T) {
 	exitCode, stdout := execute(t, root, Program{Name: "p", Text: "print('x')"})
 	if exitCode != 0 || string(stdout) != "ran" {
 		t.Fatalf("the program under the guard: exit %d, stdout %q", exitCode, stdout)
+	}
+}
+
+// The names of a program's per-run entries are part of its request: a closed
+// list, declared with PerRun, exactly what a recording gives.
+func TestThePerRunNamesAreInTheRequestFromAClosedList(t *testing.T) {
+	give := func(names ...string) func() map[string]string {
+		return func() map[string]string {
+			given := map[string]string{}
+			for _, name := range names {
+				given[name] = "v"
+			}
+			return given
+		}
+	}
+	base := Program{Name: "p", Text: "t"}
+	with := func(names []string, perRun func() map[string]string) Program {
+		program := base
+		program.PerRunNames, program.PerRun = names, perRun
+		return program
+	}
+	// One more name, one fewer, another name: another request.
+	one := keyedEnv(with([]string{"ORACLE_DATABASE_URI"}, give("ORACLE_DATABASE_URI")))
+	two := keyedEnv(with([]string{"ORACLE_DATABASE_URI", "ATLASSIAN_ORACLE_GATEWAY"}, give("ORACLE_DATABASE_URI", "ATLASSIAN_ORACLE_GATEWAY")))
+	other := keyedEnv(with([]string{"ATLASSIAN_ORACLE_GATEWAY"}, give("ATLASSIAN_ORACLE_GATEWAY")))
+	none := keyedEnv(base)
+	if one[perRunNamesKey] == two[perRunNamesKey] || one[perRunNamesKey] == other[perRunNamesKey] || none[perRunNamesKey] != "" {
+		t.Fatalf("per-run names in the key: one %q two %q other %q none %q", one[perRunNamesKey], two[perRunNamesKey], other[perRunNamesKey], none[perRunNamesKey])
+	}
+	// The order of the declaration is not the key's.
+	reordered := keyedEnv(with([]string{"ORACLE_DATABASE_URI", "ATLASSIAN_ORACLE_GATEWAY"}, give()))
+	reversed := keyedEnv(with([]string{"ATLASSIAN_ORACLE_GATEWAY", "ORACLE_DATABASE_URI"}, give()))
+	if reordered[perRunNamesKey] != reversed[perRunNamesKey] {
+		t.Fatal("the order of the declared names changes the key")
+	}
+	// The closed list and the declaration rules.
+	for name, program := range map[string]Program{
+		"a name off the list":        with([]string{"ANYTHING"}, give("ANYTHING")),
+		"a repeated name":            with([]string{"ORACLE_DATABASE_URI", "ORACLE_DATABASE_URI"}, give("ORACLE_DATABASE_URI")),
+		"PerRun with no names":       with(nil, give("ORACLE_DATABASE_URI")),
+		"names with no PerRun":       with([]string{"ORACLE_DATABASE_URI"}, nil),
+		"a name that is also in Env": {Name: "p", Text: "t", Env: map[string]string{"ORACLE_DATABASE_URI": "x"}, PerRunNames: []string{"ORACLE_DATABASE_URI"}, PerRun: give("ORACLE_DATABASE_URI")},
+		"the request's own entry":    {Name: "p", Text: "t", Env: map[string]string{perRunNamesKey: "x"}},
+	} {
+		if err := programsErr([]Program{program}); err == nil {
+			t.Errorf("%s: the program was accepted", name)
+		}
+	}
+	if err := programsErr([]Program{with([]string{"ORACLE_DATABASE_URI"}, give("ORACLE_DATABASE_URI"))}); err != nil {
+		t.Errorf("a declared, listed name: %v", err)
+	}
+	// A recording that gives other names than declared fails.
+	fakeInterpreter(t)
+	root := t.TempDir()
+	for name, program := range map[string]Program{
+		"an added name":  with([]string{"ORACLE_DATABASE_URI"}, give("ORACLE_DATABASE_URI", "ATLASSIAN_ORACLE_GATEWAY")),
+		"a removed name": with([]string{"ORACLE_DATABASE_URI", "ATLASSIAN_ORACLE_GATEWAY"}, give("ORACLE_DATABASE_URI")),
+		"another name":   with([]string{"ORACLE_DATABASE_URI"}, give("ATLASSIAN_ORACLE_GATEWAY")),
+	} {
+		program.Name, program.Text = "clean", "clean"
+		if _, err := executeErr(root, program); err == nil || !strings.Contains(err.Error(), "its PerRunNames are") {
+			t.Errorf("%s: err = %v", name, err)
+		}
+	}
+	good := with([]string{"ORACLE_DATABASE_URI"}, give("ORACLE_DATABASE_URI"))
+	good.Name, good.Text = "clean", "clean"
+	if _, err := executeErr(root, good); err != nil {
+		t.Errorf("the declared names: %v", err)
+	}
+	// The pseudo-entry never reaches the program.
+	environment := interpreterEnv("/pinned", good, good.PerRun())
+	for _, entry := range environment {
+		if strings.HasPrefix(entry, perRunNamesKey) {
+			t.Errorf("the request's per-run names reach the program: %q", entry)
+		}
 	}
 }

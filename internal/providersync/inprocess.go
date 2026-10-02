@@ -359,7 +359,21 @@ type InProcessRun struct {
 var ErrNotAGitFamilyRoute = errors.New("providersync: not a git-family route")
 
 // inProcessBudgetLimits are the worker's per-cost-class concurrency limits.
-var inProcessBudgetLimits = map[CostClass]int{CostLight: 4, CostMedium: 2, CostHeavy: 1}
+var inProcessBudgetLimits = BudgetLimitsByCostClass()
+
+// BudgetLimitsByCostClass returns the per-cost-class concurrent-request limits
+// of the worker's provider budget, read from the ONE table the dispatch
+// admission cap also reads (providerfoundation.CostClassBudgetLimit,
+// CHAOS-7434). Callers get a fresh map they may keep.
+func BudgetLimitsByCostClass() map[CostClass]int {
+	limits := make(map[CostClass]int, 3)
+	for _, class := range []CostClass{CostLight, CostMedium, CostHeavy} {
+		if limit, ok := providerfoundation.CostClassBudgetLimit(string(class)); ok {
+			limits[class] = limit
+		}
+	}
+	return limits
+}
 
 // RunInProcess runs one git-family route through the worker's executor with
 // in-process collaborators, and returns what the executor returns.

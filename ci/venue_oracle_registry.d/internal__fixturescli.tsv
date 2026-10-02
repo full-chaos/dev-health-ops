@@ -1,3 +1,2 @@
-internal/fixturescli	TestFinalizeSyntheticVenueOracleMatchesThePythonProducer	run
 internal/fixturescli	TestGenerateVenueOracleMatchesThePythonProducer	run
 internal/fixturescli	TestLoadSyntheticVenueOracleMatchesThePythonProducer	run

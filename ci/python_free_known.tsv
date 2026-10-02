@@ -20,5 +20,4 @@ github.com/full-chaos/dev-health-ops/internal/queryapi/server	TestDailyFamilyTab
 github.com/full-chaos/dev-health-ops/internal/streamhandlers	TestExternalSinkOutcomesMatchPythonAgainstClickHouse	CHAOS-7307	tripwire
 github.com/full-chaos/dev-health-ops/internal/synccli	TestLocalSyncMatchesLivePython	CHAOS-7319	tripwire
 github.com/full-chaos/dev-health-ops/internal/synccli	TestLocalSyncRerunKeepsHeldColumnsUnlikePython	CHAOS-7319	tripwire
-github.com/full-chaos/dev-health-ops/internal/gqlgenguard	TestTheGuardsInputsAreClassifiedRelevantByTheRelevanceScript	CHAOS-7387	tripwire
 github.com/full-chaos/dev-health-ops/internal/externalrecompute	TestPythonIntMatchesRealCPython	CHAOS-7337	skips-without-python

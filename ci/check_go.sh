@@ -498,7 +498,15 @@ check_live_python_oracles() {
     rm -rf -- "${proof_dir}"
     return 1
   fi
-  for proof_name in providerfoundation-credentials providerfoundation-credentials-default-salt providerfoundation-credentials-no-key providerfoundation-credential-field-reads providerfoundation-credential-field-grid; do
+  # One name per line: a PR that drops one name edits one line, so two PRs dropping different names do not conflict.
+  proof_names=(
+    providerfoundation-credentials
+    providerfoundation-credentials-default-salt
+    providerfoundation-credentials-no-key
+    providerfoundation-credential-field-reads
+    providerfoundation-credential-field-grid
+  )
+  for proof_name in "${proof_names[@]}"; do
     proof_file="${proof_dir}/${proof_name}"
     if [ ! -f "${proof_file}" ] || [ "$(cat "${proof_file}")" != "executed" ]; then
       printf 'ERROR: providerfoundation live Python encryption measurement %s did not occur\n' "${proof_name}" >&2
@@ -718,7 +726,35 @@ check_live_python_oracles() {
     rm -rf -- "${proof_dir}"
     return 1
   fi
-  for proof_name in api-policy-principal api-pyjson api-pyjson-dumps api-pyjson-model api-pyjson-syntax-error-text api-pytime api-pytime-date api-pytime-datereason api-pybody-date-aware api-syncadmin-backfill-request api-pytime-fromisoformat api-pytime-pydantic api-pybody-queryint api-pybody-querybool api-pybody-bodyint edgetoken-signer api-pybody-string api-pybody-emailstr llmorgsettings-validate-base-url httpapi-forwarded-scheme api-pybody-queryuuid httpapi-limit-string auth-signedtoken atlassianteams-python-client admin-llmreadiness-probe; do
+  # One name per line: a PR that drops one name edits one line, so two PRs dropping different names do not conflict.
+  proof_names=(
+    api-policy-principal
+    api-pyjson
+    api-pyjson-dumps
+    api-pyjson-model
+    api-pyjson-syntax-error-text
+    api-pytime
+    api-pytime-date
+    api-pytime-datereason
+    api-pybody-date-aware
+    api-syncadmin-backfill-request
+    api-pytime-fromisoformat
+    api-pytime-pydantic
+    api-pybody-queryint
+    api-pybody-querybool
+    api-pybody-bodyint
+    edgetoken-signer
+    api-pybody-string
+    api-pybody-emailstr
+    llmorgsettings-validate-base-url
+    httpapi-forwarded-scheme
+    api-pybody-queryuuid
+    httpapi-limit-string
+    auth-signedtoken
+    atlassianteams-python-client
+    admin-llmreadiness-probe
+  )
+  for proof_name in "${proof_names[@]}"; do
     proof_file="${proof_dir}/${proof_name}"
     if [ ! -f "${proof_file}" ] || [ "$(cat "${proof_file}")" != "executed" ]; then
       printf 'ERROR: api live Python oracle %s did not run\n' "${proof_name}" >&2

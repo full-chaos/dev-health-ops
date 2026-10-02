@@ -1,0 +1,4 @@
+label=internal/api/policy (api decisions vs live Python)
+package=./internal/api/policy
+run=^(TestPrincipalMatchesLivePythonAuthService)$
+proof=api-policy-principal|api live Python oracle api-policy-principal did not run

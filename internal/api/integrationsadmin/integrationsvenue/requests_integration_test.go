@@ -38,18 +38,18 @@ func integrationRequests(venue *venueoracle.Venue, v ids) []venueoracle.Request 
 	get("list org A", "", "adminA")
 	get("list org B", "", "adminB")
 	get("list org C", "", "adminC")
-	for name, u := range map[string]uuid.UUID{
+	for name, u := range ordered(map[string]uuid.UUID{
 		"github": v.intGitHub, "jira inactive": v.intJira, "linear null config": v.intLinear, "pagerduty empty-list config": v.intPagerDuty,
 		"empty gitlab": v.intEmpty, "upper-case provider": v.intUpper,
-	} {
+	}) {
 		get("get "+name, "/"+id(u), "adminA")
 	}
 	get("get other org integration", "/"+id(v.intB), "adminA")
-	get("get unknown integration", "/"+uuid.NewString(), "adminA")
-	for name, spelling := range map[string]string{
+	get("get unknown integration", "/"+nextID().String(), "adminA")
+	for name, spelling := range ordered(map[string]string{
 		"upper-case uuid": strings.ToUpper(id(v.intGitHub)), "braces": "{" + id(v.intGitHub) + "}", "urn": "urn:uuid:" + id(v.intGitHub),
 		"hex32": strings.ReplaceAll(id(v.intGitHub), "-", ""), "not a uuid": "nope", "empty-ish": "%20", "percent space": "%20" + id(v.intGitHub),
-	} {
+	}) {
 		get("get spelling "+name, "/"+spelling, "adminA")
 	}
 	get("get trailing slash", "/"+id(v.intGitHub)+"/", "adminA")
@@ -57,7 +57,7 @@ func integrationRequests(venue *venueoracle.Venue, v ids) []venueoracle.Request 
 	get("sources jira", "/"+id(v.intJira)+"/sources", "adminA")
 	get("sources empty", "/"+id(v.intEmpty)+"/sources", "adminA")
 	get("sources other org", "/"+id(v.intB)+"/sources", "adminA")
-	get("sources unknown", "/"+uuid.NewString()+"/sources", "adminA")
+	get("sources unknown", "/"+nextID().String()+"/sources", "adminA")
 	get("sources not a uuid", "/zzz/sources", "adminA")
 	get("datasets github", "/"+id(v.intGitHub)+"/datasets", "adminA")
 	get("datasets jira", "/"+id(v.intJira)+"/datasets", "adminA")
@@ -93,7 +93,7 @@ func integrationRequests(venue *venueoracle.Venue, v ids) []venueoracle.Request 
 	}
 
 	// --- create: validation (no rows written) -------------------------
-	for name, body := range map[string]string{
+	for name, body := range ordered(map[string]string{
 		"empty body object": `{}`, "missing name": `{"provider":"github"}`, "missing provider": `{"name":"x"}`,
 		"empty name": `{"name":"","provider":"github"}`, "empty provider": `{"name":"x","provider":""}`,
 		"name 256":  `{"name":"` + strings.Repeat("n", 256) + `","provider":"github"}`,
@@ -105,22 +105,22 @@ func integrationRequests(venue *venueoracle.Venue, v ids) []venueoracle.Request 
 		"timezone list": `{"name":"x","provider":"github","timezone":[]}`, "credential int": `{"name":"x","provider":"github","credential_id":5}`,
 		"body list": `[1]`, "body string": `"x"`, "body null": `null`, "body number": `5`, "invalid json": `{"name":`, "empty body": ``,
 		"several errors": `{"name":"","provider":1,"config":3,"is_active":"z","timezone":1}`,
-	} {
+	}) {
 		send("create invalid: "+name, "POST", "", "adminA", body)
 	}
-	for name, body := range map[string]string{
+	for name, body := range ordered(map[string]string{
 		"credential not a uuid":     `{"name":"x","provider":"github","credential_id":"zzz"}`,
 		"credential empty string":   `{"name":"x","provider":"github","credential_id":""}`,
-		"credential unknown":        `{"name":"x","provider":"github","credential_id":"` + uuid.NewString() + `"}`,
+		"credential unknown":        `{"name":"x","provider":"github","credential_id":"` + nextID().String() + `"}`,
 		"credential other org":      `{"name":"x","provider":"github","credential_id":"` + id(v.credGitHubB) + `"}`,
 		"credential wrong provider": `{"name":"x","provider":"jira","credential_id":"` + id(v.credGitHub) + `"}`,
 		"credential provider case":  `{"name":"x","provider":"GitHub","credential_id":"` + id(v.credGitHub) + `"}`,
-	} {
+	}) {
 		send("create refused: "+name, "POST", "", "adminA", body)
 	}
 
 	// --- create: rows written ------------------------------------------
-	for name, body := range map[string]string{
+	for name, body := range ordered(map[string]string{
 		"minimal":                   `{"name":"created-min","provider":"github"}`,
 		"full":                      `{"name":"created-full","provider":"github","credential_id":"` + id(v.credGitHub) + `","config":{"owner":"acme","f":1.0,"e":1e2,"big":12345678901234567890,"uni":"café 😀","nested":{"b":1,"a":[1.5,"x",null,true]},"dup":1,"dup":2},"is_active":false,"schedule_cron":"*/5 * * * *","timezone":"Europe/Paris"}`,
 		"credential spelling upper": `{"name":"created-upper","provider":"github","credential_id":"` + strings.ToUpper(id(v.credGitHub)) + `"}`,
@@ -133,7 +133,7 @@ func integrationRequests(venue *venueoracle.Venue, v ids) []venueoracle.Request 
 		"empty cron and timezone":   `{"name":"created-empty","provider":"gitlab","schedule_cron":"","timezone":""}`,
 		"provider with spaces":      `{"name":"created-spaced","provider":" Jira "}`,
 		"config float exponent":     `{"name":"created-floats","provider":"github","config":{"a":1e400,"b":-0.0,"c":5e-324,"d":1.7976931348623157e308,"e":100000000000000000000.0}}`,
-	} {
+	}) {
 		send("clock: create "+name, "POST", "", "adminA", body)
 	}
 	send("clock: create in org B", "POST", "", "adminB", `{"name":"created-b","provider":"jira"}`)
@@ -141,43 +141,43 @@ func integrationRequests(venue *venueoracle.Venue, v ids) []venueoracle.Request 
 	get("clock: list after creates B", "", "adminB")
 
 	// --- update -----------------------------------------------------------
-	for name, body := range map[string]string{
+	for name, body := range ordered(map[string]string{
 		"body list": `[1]`, "body null": `null`, "invalid json": `{"name":`, "empty body": ``, "config list": `{"config":[1]}`,
 		"is_active maybe": `{"is_active":"maybe"}`, "name int": `{"name":5}`, "cron list": `{"schedule_cron":[]}`, "several": `{"name":1,"config":2,"is_active":"z"}`,
 		"credential int": `{"credential_id":5}`,
-	} {
+	}) {
 		send("update invalid: "+name, "PATCH", "/"+id(v.intGitHub), "adminA", body)
 	}
-	send("update invalid body before 404", "PATCH", "/"+uuid.NewString(), "adminA", `{"name":5}`)
-	send("update unknown", "PATCH", "/"+uuid.NewString(), "adminA", `{"name":"x"}`)
+	send("update invalid body before 404", "PATCH", "/"+nextID().String(), "adminA", `{"name":5}`)
+	send("update unknown", "PATCH", "/"+nextID().String(), "adminA", `{"name":"x"}`)
 	send("update other org", "PATCH", "/"+id(v.intB), "adminA", `{"name":"x"}`)
 	send("update not a uuid", "PATCH", "/zzz", "adminA", `{"name":"x"}`)
-	for name, body := range map[string]string{
+	for name, body := range ordered(map[string]string{
 		"credential not a uuid": `{"credential_id":"zzz"}`, "credential other org": `{"credential_id":"` + id(v.credGitHubB) + `"}`,
-		"credential wrong provider": `{"credential_id":"` + id(v.credJira) + `"}`, "credential unknown": `{"credential_id":"` + uuid.NewString() + `"}`,
+		"credential wrong provider": `{"credential_id":"` + id(v.credJira) + `"}`, "credential unknown": `{"credential_id":"` + nextID().String() + `"}`,
 		"credential empty": `{"credential_id":""}`,
-	} {
+	}) {
 		send("update refused: "+name, "PATCH", "/"+id(v.intGitHub), "adminA", body)
 	}
 	// No-op updates emit no UPDATE: updated_at is unchanged and compared
 	// exactly (no "clock:" prefix).
-	for name, body := range map[string]string{
+	for name, body := range ordered(map[string]string{
 		"empty object": `{}`, "all nulls": `{"name":null,"credential_id":null,"config":null,"is_active":null,"schedule_cron":null,"timezone":null}`,
 		"same name": `{"name":"seed-a-github"}`, "same credential": `{"credential_id":"` + id(v.credGitHub) + `"}`,
 		"same credential upper": `{"credential_id":"` + strings.ToUpper(id(v.credGitHub)) + `"}`, "same is_active": `{"is_active":true}`,
 		"same is_active spelled": `{"is_active":"on"}`, "same cron": `{"schedule_cron":"0 * * * *"}`, "same timezone": `{"timezone":"UTC"}`,
 		"equal config":                    `{"config":{"owner":"acme","n":1,"f":1.0,"e":100.0,"big":12345678901234567890,"tiny":1e-7,"uni":"café 😀","dup":2,"nested":{"b":1,"a":[1.5,"x",null,true]}}}`,
 		"equal config other number types": `{"config":{"owner":"acme","n":1.0,"f":1,"e":100,"big":12345678901234567890,"tiny":1e-7,"uni":"café 😀","dup":2,"nested":{"b":true,"a":[1.5,"x",null,true]}}}`,
-	} {
+	}) {
 		send("update noop: "+name, "PATCH", "/"+id(v.intGitHub), "adminA", body)
 	}
-	for name, body := range map[string]string{
+	for name, body := range ordered(map[string]string{
 		"name": `{"name":"seed-a-github-renamed"}`, "is_active": `{"is_active":false}`, "cron": `{"schedule_cron":"1 2 3 4 5"}`,
 		"timezone": `{"timezone":"Asia/Tokyo"}`, "empty cron": `{"schedule_cron":""}`,
 		"config": `{"config":{"replaced":true,"list":[1,2.5,"é"]}}`, "empty config": `{"config":{}}`,
 		"credential": `{"credential_id":"` + id(v.credGitHub) + `"}`,
 		"everything": `{"name":"seed-a-github-final","config":{"z":1},"is_active":true,"schedule_cron":"9 9 9 9 9","timezone":"UTC"}`,
-	} {
+	}) {
 		send("clock: update "+name, "PATCH", "/"+id(v.intGitHub), "adminA", body)
 	}
 	send("clock: update jira set credential", "PATCH", "/"+id(v.intJira), "adminA", `{"credential_id":"`+id(v.credJira)+`","is_active":true}`)
@@ -188,15 +188,15 @@ func integrationRequests(venue *venueoracle.Venue, v ids) []venueoracle.Request 
 
 	// --- sources ------------------------------------------------------------
 	source := func(integration, src uuid.UUID) string { return "/" + id(integration) + "/sources/" + id(src) }
-	for name, body := range map[string]string{
+	for name, body := range ordered(map[string]string{
 		"missing is_enabled": `{}`, "null": `{"is_enabled":null}`, "string yes": `{"is_enabled":"yes"}`, "maybe": `{"is_enabled":"maybe"}`,
 		"int 2": `{"is_enabled":2}`, "list": `{"is_enabled":[]}`, "body list": `[1]`, "body null": `null`, "empty body": ``, "invalid json": `{"is_en`,
-	} {
+	}) {
 		send("source invalid: "+name, "PATCH", source(v.intGitHub, v.srcGit), "adminA", body)
 	}
-	send("source invalid body before 404", "PATCH", "/"+uuid.NewString()+"/sources/"+uuid.NewString(), "adminA", `{}`)
-	send("source unknown integration", "PATCH", "/"+uuid.NewString()+"/sources/"+id(v.srcGit), "adminA", `{"is_enabled":true}`)
-	send("source unknown source", "PATCH", "/"+id(v.intGitHub)+"/sources/"+uuid.NewString(), "adminA", `{"is_enabled":true}`)
+	send("source invalid body before 404", "PATCH", "/"+nextID().String()+"/sources/"+nextID().String(), "adminA", `{}`)
+	send("source unknown integration", "PATCH", "/"+nextID().String()+"/sources/"+id(v.srcGit), "adminA", `{"is_enabled":true}`)
+	send("source unknown source", "PATCH", "/"+id(v.intGitHub)+"/sources/"+nextID().String(), "adminA", `{"is_enabled":true}`)
 	send("source not a uuid", "PATCH", "/"+id(v.intGitHub)+"/sources/zzz", "adminA", `{"is_enabled":true}`)
 	send("source of another integration", "PATCH", source(v.intGitHub, v.srcCapped), "adminA", `{"is_enabled":true}`)
 	send("source of another org", "PATCH", "/"+id(v.intB)+"/sources/"+id(v.srcB), "adminA", `{"is_enabled":true}`)
@@ -244,18 +244,18 @@ func integrationRequests(venue *venueoracle.Venue, v ids) []venueoracle.Request 
 	send("source separator-padded provider enable (jira: over the limit)", "PATCH", source(v.intJira, v.srcSep), "adminA", `{"is_enabled":true}`)
 
 	// --- datasets -----------------------------------------------------------
-	for name, body := range map[string]string{
+	for name, body := range ordered(map[string]string{
 		"missing datasets": `{}`, "null datasets": `{"datasets":null}`, "datasets dict": `{"datasets":{}}`, "datasets string": `{"datasets":"a"}`,
 		"item not object": `{"datasets":[1]}`, "item null": `{"datasets":[null]}`, "item missing key": `{"datasets":[{"is_enabled":true}]}`,
 		"item missing enabled": `{"datasets":[{"dataset_key":"commits"}]}`, "key int": `{"datasets":[{"dataset_key":5,"is_enabled":true}]}`,
 		"key null": `{"datasets":[{"dataset_key":null,"is_enabled":true}]}`, "enabled maybe": `{"datasets":[{"dataset_key":"commits","is_enabled":"maybe"}]}`,
 		"enabled null": `{"datasets":[{"dataset_key":"commits","is_enabled":null}]}`, "several items bad": `{"datasets":[{"dataset_key":1},{"is_enabled":"x"},3]}`,
 		"body list": `[1]`, "body null": `null`, "empty body": ``, "invalid json": `{"datasets":[`,
-	} {
+	}) {
 		send("datasets invalid: "+name, "PATCH", dsPath(v.intGitHub), "adminA", body)
 	}
-	send("datasets invalid body before 404", "PATCH", "/"+uuid.NewString()+"/datasets", "adminA", `{}`)
-	send("datasets unknown integration", "PATCH", "/"+uuid.NewString()+"/datasets", "adminA", `{"datasets":[]}`)
+	send("datasets invalid body before 404", "PATCH", "/"+nextID().String()+"/datasets", "adminA", `{}`)
+	send("datasets unknown integration", "PATCH", "/"+nextID().String()+"/datasets", "adminA", `{"datasets":[]}`)
 	send("datasets other org", "PATCH", dsPath(v.intB), "adminA", `{"datasets":[]}`)
 	send("datasets not a uuid", "PATCH", "/zzz/datasets", "adminA", `{"datasets":[]}`)
 	send("datasets empty batch", "PATCH", dsPath(v.intGitHub), "adminA", `{"datasets":[]}`)

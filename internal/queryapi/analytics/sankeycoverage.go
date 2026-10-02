@@ -114,7 +114,7 @@ var recordInvestmentCoverageFailure = defaultRecordInvestmentCoverageFailure
 // the id resolveSankeyCoverage itself minted and bound to the request via
 // clickhousedriver.WithQueryID -- the same id ClickHouse records in
 // system.query_log, not a value invented after the fact. The exception
-// fields use errors.As over the SAME unwrap chain
+// fields use logging.ErrorAs (a bounded errors.As) over the SAME unwrap chain
 // isMissingTable/QueryBudgetExceededCode already rely on (dev-health-go's
 // operationError.Unwrap() to the driver's *clickhousedriver.Exception), so
 // a non-exception failure (context cancellation, a transport error) simply
@@ -151,7 +151,7 @@ func defaultRecordInvestmentCoverageFailure(ctx context.Context, orgID string, m
 	}
 
 	var exception *clickhousedriver.Exception
-	if errors.As(err, &exception) {
+	if logging.ErrorAs(err, &exception) {
 		spanAttrs = append(spanAttrs,
 			attribute.Int64("clickhouse_code", int64(exception.Code)),
 			attribute.String("clickhouse_exception", exception.Name),

@@ -2,6 +2,7 @@ package synccli
 
 import (
 	"bytes"
+	"context"
 	"crypto/sha256"
 	_ "embed"
 	"encoding/hex"
@@ -213,14 +214,6 @@ const syncTargetKeyPlaceholder = "/tmp/dho-sync-target-app-key.pem"
 // environment (the variables each case sets for the verb) is DATA the Python program applies itself.
 var syncTargetPythonSettings = map[string]string{"PYTHONHASHSEED": "0", "OTEL_ENABLED": "false"}
 
-func syncTargetPythonEnv(root string) []string {
-	env := []string{"PATH=" + os.Getenv("PATH"), "HOME=" + os.Getenv("HOME"), "PYTHONPATH=" + filepath.Join(root, "src"), "PYTHONDONTWRITEBYTECODE=1"}
-	for _, name := range []string{"OTEL_ENABLED", "PYTHONHASHSEED"} {
-		env = append(env, name+"="+syncTargetPythonSettings[name])
-	}
-	return env
-}
-
 // redactSecrets replaces the value of every "token" field of an answer by a digest and a length: an
 // environment credential is never stored in a golden (CHAOS-6735), yet two different tokens still differ.
 func redactSecrets(value any) any {
@@ -281,22 +274,23 @@ func TestSyncTargetMatchesFrozenPython(t *testing.T) {
 	// does not store); a changed corpus is another request.
 	request := venueoracle.ProgramRequest("sync target corpus", syncTargetOracleProgram, []byte("corpus sha256 "+hex.EncodeToString(keySum[:])), syncTargetPythonSettings)
 	answers := golden.Produce(t, root, []venueoracle.Request{request}, func(producer *venueoracle.Producer, _ []venueoracle.Request) []venueoracle.Response {
-		root := producer.Root
-		python := pyoracle.Resolve(t, root)
+		producer.RequireDeployed()
 		keyFile := filepath.Join(t.TempDir(), "app-key.pem")
 		if err := os.WriteFile(keyFile, []byte("-----BEGIN KEY-----\n"), 0o600); err != nil {
 			t.Fatal(err)
 		}
-		command := exec.Command(python, "-c", syncTargetOracleProgram)
+		command, err := producer.Command(context.Background(), syncTargetPythonSettings, nil, "-c", syncTargetOracleProgram)
+		if err != nil {
+			t.Fatal(err)
+		}
 		command.Stdin = bytes.NewReader(bytes.ReplaceAll(input, []byte(syncTargetKeyPlaceholder), []byte(keyFile)))
-		command.Env = syncTargetPythonEnv(root)
 		output, err := command.Output()
 		if err != nil {
 			var stderr []byte
 			if exitErr, ok := err.(*exec.ExitError); ok {
 				stderr = exitErr.Stderr
 			}
-			t.Fatalf("live python: %v", pyoracle.RunError(python, err, stderr))
+			t.Fatalf("live python: %v", pyoracle.RunError(command.Path, err, stderr))
 		}
 		var answered []any
 		if err := json.Unmarshal(bytes.ReplaceAll(output, []byte(keyFile), []byte(syncTargetKeyPlaceholder)), &answered); err != nil {

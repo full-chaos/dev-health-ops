@@ -1,11 +1,11 @@
 package synccli
 
 import (
+	"context"
 	_ "embed"
 	"encoding/json"
 	"fmt"
 	"math/big"
-	"os"
 	"os/exec"
 	"path/filepath"
 	"sort"
@@ -141,14 +141,6 @@ const batchLoopPythonBuild = "a4847c5e93607451a0c987b314d37e02fc43ce85"
 
 var batchLoopPythonSettings = map[string]string{"PYTHONHASHSEED": "0", "OTEL_ENABLED": "false"}
 
-func batchLoopPythonEnv(root string) []string {
-	env := []string{"PATH=" + os.Getenv("PATH"), "HOME=" + os.Getenv("HOME"), "PYTHONPATH=" + filepath.Join(root, "src"), "PYTHONDONTWRITEBYTECODE=1"}
-	for _, name := range []string{"OTEL_ENABLED", "PYTHONHASHSEED"} {
-		env = append(env, name+"="+batchLoopPythonSettings[name])
-	}
-	return env
-}
-
 // TestBatchLoopMatchesFrozenPython runs the batch LOOP of `dho sync <target> --search` and compares each run's
 // shape with what the REAL process_github_repos_batch / process_gitlab_projects_batch did with the network and
 // the store replaced (testdata/batch_loop_oracle.py): the same scripted repositories, batch size and
@@ -187,18 +179,19 @@ func TestBatchLoopMatchesFrozenPython(t *testing.T) {
 	}
 	request := venueoracle.ProgramRequest("batch loop corpus", batchLoopOracleProgram, []byte(input.String()), batchLoopPythonSettings)
 	answers := golden.Produce(t, root, []venueoracle.Request{request}, func(producer *venueoracle.Producer, _ []venueoracle.Request) []venueoracle.Response {
-		root := producer.Root
-		python := pyoracle.Resolve(t, root)
-		command := exec.Command(python, "-c", batchLoopOracleProgram)
+		producer.RequireDeployed()
+		command, err := producer.Command(context.Background(), batchLoopPythonSettings, nil, "-c", batchLoopOracleProgram)
+		if err != nil {
+			t.Fatal(err)
+		}
 		command.Stdin = strings.NewReader(input.String())
-		command.Env = batchLoopPythonEnv(root)
 		output, err := command.Output()
 		if err != nil {
 			var stderr []byte
 			if exitErr, ok := err.(*exec.ExitError); ok {
 				stderr = exitErr.Stderr
 			}
-			t.Fatalf("live python: %v", pyoracle.RunError(python, err, stderr))
+			t.Fatalf("live python: %v", pyoracle.RunError(command.Path, err, stderr))
 		}
 		lines := strings.Split(strings.TrimSpace(string(output)), "\n")
 		if len(lines) != len(corpus) {

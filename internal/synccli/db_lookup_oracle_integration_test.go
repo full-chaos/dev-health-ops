@@ -12,7 +12,6 @@ import (
 	"io"
 	"net/url"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"sort"
 	"strings"
@@ -34,7 +33,7 @@ const upgradeProgram = `
 import argparse, os, sys
 from dev_health_ops.db import normalize_async_postgres_uri
 from dev_health_ops.migrate import _run_upgrade
-sys.exit(_run_upgrade(argparse.Namespace(db=normalize_async_postgres_uri(os.environ["DHO_ORACLE_DB_URL"]), revision="head")))
+sys.exit(_run_upgrade(argparse.Namespace(db=normalize_async_postgres_uri(os.environ["DATABASE_URI"]), revision="head")))
 `
 
 type dbOrg struct {
@@ -215,16 +214,8 @@ const dbLookupPythonBuild = "a4847c5e93607451a0c987b314d37e02fc43ce85"
 
 // dbLookupPythonSettings are the variables that shape the producer's answers, as constants: the producer's
 // environment AND part of the golden's request key (a changed value fails the frozen replay). The database
-// address (DHO_ORACLE_DB_URL) is a per-run value, appended by name.
+// address (DATABASE_URI, a launcher extra) is a per-run value, given by name.
 var dbLookupPythonSettings = map[string]string{"PYTHONHASHSEED": "0", "OTEL_ENABLED": "false"}
-
-func dbLookupPythonEnv(root string) []string {
-	env := []string{"PATH=" + os.Getenv("PATH"), "HOME=" + os.Getenv("HOME"), "PYTHONPATH=" + filepath.Join(root, "src"), "PYTHONDONTWRITEBYTECODE=1"}
-	for _, name := range []string{"OTEL_ENABLED", "PYTHONHASHSEED"} {
-		env = append(env, name+"="+dbLookupPythonSettings[name])
-	}
-	return env
-}
 
 // dbKeyPlaceholder stands for the GitHub App key file some scenarios name (a per-run path).
 const dbKeyPlaceholder = "/tmp/dho-db-lookup-app-key.pem"
@@ -280,8 +271,8 @@ func TestDBLookupsMatchFrozenPython(t *testing.T) {
 	}
 	request := venueoracle.ProgramRequest("db lookup scenarios", dbLookupOracleProgram, keyBytes, dbLookupPythonSettings)
 	answers := golden.Produce(t, root, []venueoracle.Request{request}, func(producer *venueoracle.Producer, _ []venueoracle.Request) []venueoracle.Response {
-		root := producer.Root
-		produced := produceDBLookupAnswers(ctx, t, root, scenarios)
+		producer.RequireDeployed()
+		produced := produceDBLookupAnswers(ctx, t, producer, scenarios)
 		body, err := json.Marshal(produced)
 		if err != nil {
 			t.Fatal(err)
@@ -391,20 +382,21 @@ func redactDBSecrets(value any) any {
 
 // produceDBLookupAnswers runs the REAL Python producers over the scenarios against a database the Python side
 // migrates and seeds itself (core.encryption's own ciphertext), and returns one redacted answer per scenario.
-func produceDBLookupAnswers(ctx context.Context, t *testing.T, root string, scenarios []dbScenario) []any {
+func produceDBLookupAnswers(ctx context.Context, t *testing.T, producer *venueoracle.Producer, scenarios []dbScenario) []any {
 	t.Helper()
-	python := pyoracle.Resolve(t, root)
 	instance, err := containers.StartPostgres(ctx)
 	if err != nil {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = instance.Close(context.Background()) })
 
-	upgrade := exec.Command(python, "-c", upgradeProgram)
-	// The database URL goes by environment, never argv (a process listing shows argv).
-	upgrade.Env = append(dbLookupPythonEnv(root), "DHO_ORACLE_DB_URL="+instance.URI)
+	// The database URL goes by environment (a launcher extra, DATABASE_URI), never argv (a process listing shows argv).
+	upgrade, err := producer.Command(ctx, dbLookupPythonSettings, []string{"DATABASE_URI=" + instance.URI}, "-c", upgradeProgram)
+	if err != nil {
+		t.Fatal(err)
+	}
 	if output, err := upgrade.CombinedOutput(); err != nil {
-		t.Fatalf("python upgrade: %v", pyoracle.RunError(python, err, output))
+		t.Fatalf("python upgrade: %v", pyoracle.RunError(upgrade.Path, err, output))
 	}
 	parsed, err := url.Parse(instance.URI)
 	if err != nil {
@@ -417,8 +409,10 @@ func produceDBLookupAnswers(ctx context.Context, t *testing.T, root string, scen
 	if err := os.WriteFile(keyFile, []byte("-----BEGIN KEY-----\nfrom-file\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	command := exec.Command(python, "-c", dbLookupOracleProgram)
-	command.Env = append(dbLookupPythonEnv(root), "DHO_ORACLE_DB_URL="+baseURL)
+	command, err := producer.Command(ctx, dbLookupPythonSettings, []string{"DATABASE_URI=" + baseURL}, "-c", dbLookupOracleProgram)
+	if err != nil {
+		t.Fatal(err)
+	}
 	stdin, err := command.StdinPipe()
 	if err != nil {
 		t.Fatal(err)

@@ -15,6 +15,8 @@
 package pyoracle
 
 import (
+	"bytes"
+	_ "embed"
 	"fmt"
 	"os"
 	"os/exec"
@@ -52,7 +54,27 @@ func Interpreter(root string) (path string, rule string, err error) {
 // resolves the interpreter under root, logs the resolved path and which rule
 // matched (so a wrong-but-passing run is never silent), and fails the test
 // naming the interpreter search when none can be found.
+//
+// In a recording (the record verb sets RecordingEnv for its runs) a test that
+// is not on the closed list of packages that still launch their own Python
+// (unconverted_own_launch.txt) gets a stand-in that refuses to run: a Python
+// child a test starts itself would copy the process's environment, and only the
+// producer's launcher (venueoracle's Producer.Command, which resolves through
+// ResolveLauncher) starts Python in a recording.
 func Resolve(t *testing.T, root string) string {
+	t.Helper()
+	if os.Getenv(RecordingEnv) == "1" {
+		if dir, err := testPackageDir(); err != nil || !unconverted(dir) {
+			return refusingStandIn(t, dir, err)
+		}
+	}
+	return ResolveLauncher(t, root)
+}
+
+// ResolveLauncher is Resolve for the code that starts Python for a recording:
+// the producer's launcher and the venue. It gives the real interpreter in a
+// recording too.
+func ResolveLauncher(t *testing.T, root string) string {
 	t.Helper()
 	python, rule, err := Interpreter(root)
 	if err != nil {
@@ -60,6 +82,75 @@ func Resolve(t *testing.T, root string) string {
 	}
 	t.Logf("pyoracle: resolved interpreter %s (%s)", python, rule)
 	return python
+}
+
+// RecordingEnv is the variable the record verb sets for the runs that execute
+// Python (venueoracle's goldenUpdateEnv; a test of venueoracle holds the two
+// equal).
+const RecordingEnv = "DHO_VENUE_GOLDEN_UPDATE"
+
+// unconvertedOwnLaunchCeiling is how many packages the closed list holds. It
+// only goes down.
+const unconvertedOwnLaunchCeiling = 14
+
+//go:embed unconverted_own_launch.txt
+var unconvertedOwnLaunch string
+
+// UnconvertedOwnLaunch is the closed list: repository directories of the test
+// packages that may still start their own Python child in a recording.
+func UnconvertedOwnLaunch() []string {
+	var list []string
+	for _, line := range strings.Split(unconvertedOwnLaunch, "\n") {
+		if line = strings.TrimSpace(line); line != "" && !strings.HasPrefix(line, "#") {
+			list = append(list, line)
+		}
+	}
+	return list
+}
+
+func unconverted(dir string) bool {
+	for _, entry := range UnconvertedOwnLaunch() {
+		if entry == dir {
+			return true
+		}
+	}
+	return false
+}
+
+// testPackageDir is the repository-relative directory of the package under
+// test (a test runs in its package's directory).
+func testPackageDir() (string, error) {
+	wd, err := os.Getwd()
+	if err != nil {
+		return "", err
+	}
+	for dir := wd; ; dir = filepath.Dir(dir) {
+		if _, statErr := os.Stat(filepath.Join(dir, "go.mod")); statErr == nil {
+			rel, relErr := filepath.Rel(dir, wd)
+			return filepath.ToSlash(rel), relErr
+		}
+		if filepath.Dir(dir) == dir {
+			return "", fmt.Errorf("no go.mod above %s", wd)
+		}
+	}
+}
+
+// refusingStandIn writes a stand-in "interpreter" that runs nothing and
+// exits 97 with a message that says what to do, and returns its path. A test
+// that starts it as a Python child fails at that child, not later.
+func refusingStandIn(t *testing.T, dir string, cause error) string {
+	t.Helper()
+	why := "package " + dir + " starts its own Python child in a recording"
+	if cause != nil {
+		why = "the package of this test cannot be found (" + cause.Error() + ")"
+	}
+	shim := filepath.Join(t.TempDir(), "python")
+	script := "#!/bin/sh\necho 'a recording starts Python only through the producer launcher (venueoracle Producer.Command with golden.Produce): " + strings.ReplaceAll(why, "'", "") + "; convert the site' >&2\nexit 97\n"
+	if err := os.WriteFile(shim, []byte(script), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Logf("pyoracle: a recording resolves no interpreter for %s: the stand-in %s refuses to run", dir, shim)
+	return shim
 }
 
 // RunError wraps an error from executing a resolved interpreter so the
@@ -86,11 +177,11 @@ const (
 	DeployedMinor = 14
 )
 
-// VersionProbeArgs are the arguments that make an interpreter print its
-// "major.minor" version. The caller runs them (exec of the resolved
-// interpreter stays in test files, where every oracle already does it) and
-// hands the output to RequireDeployed.
-var VersionProbeArgs = []string{"-c", "import sys; print('%d.%d' % sys.version_info[:2])"}
+// versionProbeProgram is the program that makes an interpreter print its
+// "major.minor" version. They are not exported: the probe is a Python child
+// like any other, and this package starts it (RequireDeployed), in the closed
+// environment, so no test starts it with the environment it inherited.
+const versionProbeProgram = "import sys; print('%d.%d' % sys.version_info[:2])"
 
 // DeployedVersionError reports why an interpreter that answered the version
 // probe with output (or failed with runErr) is not at least the deployed
@@ -111,13 +202,86 @@ func DeployedVersionError(python string, output []byte, runErr error) error {
 	return nil
 }
 
-// RequireDeployed fails (never skips) the test when the interpreter is older
-// than the deployed release. Call it right after Resolve in every oracle
-// whose answer depends on the Python release, passing the output of
-// exec.Command(python, VersionProbeArgs...).Output().
-func RequireDeployed(t *testing.T, python string, versionOutput []byte, runErr error) {
+// probeDeployed asks the interpreter at python for its version and reports why
+// it is not at least the deployed release, or nil when it is. The probe runs
+// in ClosedEnv(root) and takes nothing of the process's environment: a probe
+// that inherits it answers for the shell of the day, and a recording test
+// holds a variable in its process that stops every Python child that inherits
+// it (venueoracle's producer guard). When the interpreter fails to start, the
+// error holds the end of what it wrote to standard error, which says why.
+//
+// The interpreter is started as every harness child is: under the constant
+// name "python3", looked up through PATH with the interpreter's own directory
+// put first for the rest of the test (what an activated virtualenv does), and
+// only when that lookup gives the python3 of that directory.
+func probeDeployed(t *testing.T, python, root string) error {
 	t.Helper()
-	if err := DeployedVersionError(python, versionOutput, runErr); err != nil {
+	python3, err := python3Beside(python)
+	if err != nil {
+		return err
+	}
+	t.Setenv("PATH", filepath.Dir(python3)+string(os.PathListSeparator)+os.Getenv("PATH"))
+	command := exec.Command("python3", "-c", versionProbeProgram)
+	if command.Err != nil || command.Path != python3 {
+		return fmt.Errorf("read the interpreter version of %s: python3 through PATH is %q (%v), not that interpreter", python, command.Path, command.Err)
+	}
+	// The closed environment's PATH does not hold the interpreter's
+	// directory: the child is started under its full path, so it finds its
+	// own installed packages.
+	command.Args[0] = python3
+	command.Env = ClosedEnv(root)
+	var stderr bytes.Buffer
+	command.Stderr = &stderr
+	output, runErr := command.Output()
+	if runErr != nil {
+		said := strings.TrimSpace(stderr.String())
+		if len(said) > probeStderrLimit {
+			said = "..." + said[len(said)-probeStderrLimit:]
+		}
+		if said != "" {
+			runErr = fmt.Errorf("%w; it wrote: %s", runErr, said)
+		}
+	}
+	return DeployedVersionError(python3, output, runErr)
+}
+
+// python3Beside is the absolute path of the python3 in the directory of the
+// interpreter at python (a name is looked up through PATH first). Every
+// virtualenv and every Python 3 install directory holds one.
+func python3Beside(python string) (string, error) {
+	if !filepath.IsAbs(python) {
+		found, err := exec.LookPath(python)
+		if err != nil {
+			return "", fmt.Errorf("interpreter %q: %w", python, err)
+		}
+		python = found
+	}
+	dir, err := filepath.Abs(filepath.Dir(python))
+	if err != nil {
+		return "", err
+	}
+	python3 := filepath.Join(dir, "python3")
+	info, err := os.Stat(python3)
+	if err != nil {
+		return "", fmt.Errorf("interpreter %q: no python3 beside it: %w", python, err)
+	}
+	if !info.Mode().IsRegular() || info.Mode().Perm()&0o111 == 0 {
+		return "", fmt.Errorf("interpreter %q: %s is not an executable file", python, python3)
+	}
+	return python3, nil
+}
+
+// probeStderrLimit is how much of a failed probe's standard error an error
+// message carries.
+const probeStderrLimit = 600
+
+// RequireDeployed fails (never skips) the test when the interpreter at python
+// is older than the deployed release or does not start. Call it right after
+// Resolve in every oracle whose answer depends on the Python release; root is
+// the checkout the oracle's Python runs from.
+func RequireDeployed(t *testing.T, python, root string) {
+	t.Helper()
+	if err := probeDeployed(t, python, root); err != nil {
 		t.Fatalf("pyoracle: %v", err)
 	}
 }

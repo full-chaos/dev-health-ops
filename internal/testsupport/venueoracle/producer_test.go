@@ -15,6 +15,11 @@ import (
 // own virtual environment, whose python3 prints the named variables it sees.
 func checkoutWithInterpreter(t *testing.T, names ...string) string {
 	t.Helper()
+	// The checkout's own interpreter is the one under test: an override the
+	// process holds (a developer's shell, the Python-free job's tripwire, which
+	// points both names at its shim) would replace it.
+	t.Setenv("DEV_HEALTH_PYTHON", "")
+	t.Setenv("PYTHON", "")
 	root := t.TempDir()
 	script := "#!/bin/sh\nfor n in " + strings.Join(names, " ") + "; do eval \"v=\\${$n-<unset>}\"; echo \"$n=$v\"; done\n"
 	for _, name := range []string{"python", "python3"} {
@@ -225,8 +230,121 @@ func TestOnlyARecordingTheVerbStartedWritesACandidateAndItHoldsTheStamp(t *testi
 		if err != nil {
 			t.Fatal(err)
 		}
-		if !strings.Contains(string(raw), `"recorded_by": "goldenrecord"`) {
-			t.Fatalf("the candidate holds no stamp of the verb:\n%s", raw)
+		// The stamp is the verb's (goldenrecord writes it into the candidate):
+		// a test process holding the verb's variable writes none.
+		if strings.Contains(string(raw), "recorded_by") {
+			t.Fatalf("the test process wrote the stamp of the verb into the candidate:\n%s", raw)
 		}
 	})
+}
+
+// The replay of a candidate refuses one without the verb's stamp.
+func TestTheReplayOfACandidateRefusesOneWithoutTheStamp(t *testing.T) {
+	spec := GoldenSpec{Path: "g.json.recording", Recipe: "record it"}
+	if err := candidateStampErr(spec, goldenHeader{}); err == nil {
+		t.Fatal("a candidate with no stamp was accepted")
+	}
+	if err := candidateStampErr(spec, goldenHeader{RecordedBy: "someone"}); err == nil {
+		t.Fatal("a candidate with another stamp was accepted")
+	}
+	if err := candidateStampErr(spec, goldenHeader{RecordedBy: recordVerbName}); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// The producer's version probe runs in the closed environment too: in a
+// recording test, whose process holds the guard's variable, it passes, and it
+// judges the interpreter by what it says.
+func TestTheProducersVersionProbeIsNotStoppedByTheGuard(t *testing.T) {
+	root := t.TempDir()
+	probed := filepath.Join(root, "probed")
+	script := "#!/bin/sh\nif [ -n \"${" + producerPoisonName + "+set}\" ]; then echo 'Fatal Python error: cannot start' >&2; exit 1; fi\n: > '" + probed + "'\necho 3.14\n"
+	for _, name := range []string{"python", "python3"} {
+		file := filepath.Join(root, ".venv", "bin", name)
+		if err := os.MkdirAll(filepath.Dir(file), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(file, []byte(script), 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	t.Setenv("DEV_HEALTH_PYTHON", "")
+	t.Setenv("PYTHON", "")
+	poisonInheritedEnvironment(t)
+	producer := &Producer{Root: root, t: t}
+	producer.RequireDeployed()
+	if got := filepath.Join(root, ".venv", "bin", "python3"); producer.python != got {
+		t.Fatalf("the producer's interpreter is %q, want the checkout's %s", producer.python, got)
+	}
+	if _, err := os.Stat(probed); err != nil {
+		t.Fatalf("the checkout's interpreter was not the one probed: %v", err)
+	}
+}
+
+// An extra entry is a value made for one run: only the closed list of names
+// may be passed so. A name that shapes the answer (HOME, PATH, PYTHONPATH, a
+// setting) goes in declared, where the request's key holds it by value.
+func TestAnExtraEntryOutsideTheClosedListIsRefused(t *testing.T) {
+	root := checkoutWithInterpreter(t)
+	producer := &Producer{Root: root, t: t}
+	for name, row := range map[string]struct {
+		declared map[string]string
+		extra    []string
+		allowed  bool
+	}{
+		"the run's database":      {nil, []string{"POSTGRES_URI=postgresql://run", "DATABASE_URI=postgresql://run", "CLICKHOUSE_URI=http://run", "REDIS_URL=redis://run"}, true},
+		"a fake server's address": {nil, []string{"SMTP_HOST=127.0.0.1", "SMTP_PORT=2525"}, true},
+		"HOME":                    {nil, []string{"HOME=/elsewhere"}, false},
+		"PATH":                    {nil, []string{"PATH=/elsewhere"}, false},
+		"PYTHONPATH":              {nil, []string{"PYTHONPATH=/elsewhere"}, false},
+		"TZ":                      {nil, []string{"TZ=Pacific/Auckland"}, false},
+		"a name of the harness":   {nil, []string{"TMPDIR=/elsewhere"}, false},
+		"an unknown name":         {nil, []string{"ANYTHING=1"}, false},
+		"no equals sign":          {nil, []string{"POSTGRES_URI"}, false},
+		"the same name twice":     {nil, []string{"POSTGRES_URI=a", "POSTGRES_URI=b"}, false},
+		"a name that is declared": {map[string]string{"POSTGRES_URI": "x"}, []string{"POSTGRES_URI=a"}, false},
+	} {
+		_, err := producer.Command(context.Background(), row.declared, row.extra, "-c", "pass")
+		if (err == nil) != row.allowed {
+			t.Errorf("%s: err = %v, allowed = %v", name, err, row.allowed)
+		}
+	}
+}
+
+// pyoracle cannot import this package, so it holds the recording variable by
+// name: the two must be the same.
+func TestPyoracleNamesTheRecordingVariableOfThisPackage(t *testing.T) {
+	if pyoracle.RecordingEnv != goldenUpdateEnv {
+		t.Fatalf("pyoracle names %q as the recording variable, venueoracle %q", pyoracle.RecordingEnv, goldenUpdateEnv)
+	}
+}
+
+// The launcher gets the real interpreter in a recording: it is the one place
+// that starts Python there.
+func TestTheLauncherIsGivenTheRealInterpreterInARecording(t *testing.T) {
+	root := checkoutWithInterpreter(t)
+	t.Setenv(pyoracle.RecordingEnv, "1")
+	producer := &Producer{Root: root, t: t}
+	dir, err := producer.PythonDir()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want := filepath.Join(root, ".venv", "bin"); dir != want {
+		t.Fatalf("the launcher's interpreter is in %s, want %s", dir, want)
+	}
+}
+
+// ActivateInterpreter is the one resolve of the venue, the producer and
+// programoracle: in a recording, from a package that is not on the closed list,
+// it gives the real interpreter's directory, not the stand-in's.
+func TestActivateInterpreterGivesTheRealInterpreterInARecording(t *testing.T) {
+	root := checkoutWithInterpreter(t)
+	t.Setenv(pyoracle.RecordingEnv, "1")
+	bin, err := ActivateInterpreter(t, root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want := filepath.Join(root, ".venv", "bin"); bin != want {
+		t.Fatalf("ActivateInterpreter gave %s, want %s", bin, want)
+	}
 }

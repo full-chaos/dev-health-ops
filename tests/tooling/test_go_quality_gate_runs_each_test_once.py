@@ -232,7 +232,7 @@ def _run_digest(selector: str | None) -> str | None:
 # fails by name; a parser that loses an invocation cannot hide under a floor either. Each name pins
 # its package and the first 12 hex of the sha256 of its `run=` selector (None = no selector).
 EXPECTED_ORACLE_INVOCATIONS: dict[str, tuple[str, str | None]] = {
-    "010-providersync-all.run": ("./internal/providersync/...", None),
+    "010-providersync-loader.run": ("./internal/providersync", "d4642d8687e4"),
     "030-edgetokenmint.run": ("./internal/edgetokenmint", "32743eba7079"),
     "050-api-policy.run": ("./internal/api/policy", "5089e8ae2457"),
     "060-api-pyjson.run": ("./internal/api/pyjson", "c6eb4be541e3"),

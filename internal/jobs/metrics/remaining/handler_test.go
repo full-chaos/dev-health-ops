@@ -545,18 +545,26 @@ func TestPartitionHandlerLogsAFailedExhaustWithoutTheErrorText(t *testing.T) {
 	}
 }
 
-// CHAOS-8163: the class attributes must not panic on a typed-nil *pgconn.PgError in the chain (the case that made the
-// stdlib errors.As walk unsafe on a log path); the line is still written and carries no error text.
-func TestPartitionHandlerExhaustLogSurvivesATypedNilPostgresError(t *testing.T) {
-	var buffer bytes.Buffer
-	previous := slog.Default()
-	slog.SetDefault(slog.New(slog.NewTextHandler(&buffer, nil)))
-	t.Cleanup(func() { slog.SetDefault(previous) })
+// CHAOS-8163 / D4407: the class attributes must not panic on a typed-nil *pgconn.PgError at ANY depth of the chain
+// (the case that made the stdlib errors.As walk unsafe on a log path): the line is still written, with no error text.
+func TestPartitionHandlerExhaustLogSurvivesATypedNilPostgresErrorAtEveryDepth(t *testing.T) {
 	var typedNil *pgconn.PgError
-	store := &handlerStore{claimErr: errors.New("connection reset"), exhaustErr: fmt.Errorf("wrap: %w", typedNil)}
-	handler, _ := NewPartitionHandler[jobruntime.RemainingCapacityArgs](store, &handlerExecutor{}, "capacity")
-	_ = handler.Work(context.Background(), attemptedCapacityExecution(3, 3))
-	if !strings.Contains(buffer.String(), "could not exhaust a last-attempt partition") {
-		t.Fatalf("exhaust failure not logged: %q", buffer.String())
+	for depth, exhaustErr := range []error{
+		typedNil,
+		fmt.Errorf("wrap1: %w", typedNil),
+		fmt.Errorf("wrap2: %w", fmt.Errorf("wrap1: %w", typedNil)),
+	} {
+		t.Run(fmt.Sprintf("depth %d", depth), func(t *testing.T) {
+			var buffer bytes.Buffer
+			previous := slog.Default()
+			slog.SetDefault(slog.New(slog.NewTextHandler(&buffer, nil)))
+			t.Cleanup(func() { slog.SetDefault(previous) })
+			store := &handlerStore{claimErr: errors.New("connection reset"), exhaustErr: exhaustErr}
+			handler, _ := NewPartitionHandler[jobruntime.RemainingCapacityArgs](store, &handlerExecutor{}, "capacity")
+			_ = handler.Work(context.Background(), attemptedCapacityExecution(3, 3))
+			if !strings.Contains(buffer.String(), "could not exhaust a last-attempt partition") {
+				t.Fatalf("exhaust failure not logged: %q", buffer.String())
+			}
+		})
 	}
 }

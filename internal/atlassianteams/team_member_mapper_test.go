@@ -47,6 +47,22 @@ func TestTeamMemberRelationForTeamKeepsATeamNodeOfTheRow(t *testing.T) {
 	}
 }
 
+// A team node under a key the mapper does not name is still found (by its TeamV2 type) and its own id wins. NOT MEASURED on the real
+// provider: hand-written shape.
+func TestTeamMemberRelationForTeamFindsATeamNodeUnderAnotherKey(t *testing.T) {
+	row := &gen.GraphStoreCypherQueryV2Node{Columns: []gen.GraphStoreCypherQueryV2Column{
+		ariColumn("squad", "ari:cloud:identity::team/in-row", "TeamV2"),
+		ariColumn("user", "ari:cloud:identity::user/u-1", "AtlassianAccountUser"),
+	}}
+	got, err := mappers.TeamMemberRelationForTeam(row, "ari:cloud:identity::team/requested")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.TeamID == nil || *got.TeamID != "ari:cloud:identity::team/in-row" {
+		t.Errorf("team id = %v, want the team node found by type, not the requested team", got.TeamID)
+	}
+}
+
 func TestTeamMemberRelationForTeamRefusals(t *testing.T) {
 	user := ariColumn("user", "ari:cloud:identity::user/u-1", "AtlassianAccountUser")
 	cases := []struct {
@@ -58,6 +74,8 @@ func TestTeamMemberRelationForTeamRefusals(t *testing.T) {
 		{"nil row", nil, "ari:cloud:identity::team/t", "node is required"},
 		{"empty requested team", &gen.GraphStoreCypherQueryV2Node{Columns: []gen.GraphStoreCypherQueryV2Column{user}}, "  ", "team id is required"},
 		{"no user", &gen.GraphStoreCypherQueryV2Node{}, "ari:cloud:identity::team/t", "requires a subject user"},
+		// A team node under a key the mapper does not name (found by its TeamV2 type): a blank id is refused here too.
+		{"team node under another key with a blank id", &gen.GraphStoreCypherQueryV2Node{Columns: []gen.GraphStoreCypherQueryV2Column{ariColumn("squad", "  ", "TeamV2"), user}}, "ari:cloud:identity::team/t", "team.id is required"},
 		{"explicit team node with a blank id", &gen.GraphStoreCypherQueryV2Node{Columns: []gen.GraphStoreCypherQueryV2Column{ariColumn("team", "  ", "TeamV2"), user}}, "ari:cloud:identity::team/t", "team.id is required"},
 		{"empty user id", &gen.GraphStoreCypherQueryV2Node{Columns: []gen.GraphStoreCypherQueryV2Column{ariColumn("user", "  ", "AtlassianAccountUser")}}, "ari:cloud:identity::team/t", "user.id is required"},
 	}

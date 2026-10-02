@@ -78,6 +78,10 @@ func TestRunOperationRouteFollowsTheClassRowOfItsRoot(t *testing.T) {
 		if newClassRowSwitch(pool, itTestSchemaDigest).Enabled(hotspots) {
 			t.Fatal("the class-row switch enabled a shadow row")
 		}
+		// The same shadow row on the MCP listener (:8092), built over the same constructor, is refused too: one decision on both ports.
+		ch := &countingMCPClient{}
+		mcpListener := internalidentity.MCP(newMCPHandlerWithLimits(ch, nil, newClassRowSwitch(pool, itTestSchemaDigest), func(string) string { return "" }, mcpDefaultLimits()))
+		assertMCPRefused(t, classHotspots(t, mcpListener), ch, http.StatusNotFound, mcpReasonRootFieldNotEnabled)
 	})
 
 	t.Run("a dark class root does not gate the envelope caller (web)", func(t *testing.T) {

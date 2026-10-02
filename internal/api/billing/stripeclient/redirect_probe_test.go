@@ -14,3 +14,11 @@ func TestASuppliedClientNeverFollowsARedirectToAnotherOrigin(t *testing.T) {
 	_, _ = provider.RawGet(context.Background(), "/v1/customers/cus_probe")
 	probe.Assert(t)
 }
+
+// The client production builds (no HTTPClient in Options) follows no redirect either.
+func TestTheDefaultClientNeverFollowsARedirectToAnotherOrigin(t *testing.T) {
+	probe := redirectprobe.New(t)
+	provider := New(Options{Key: "sk_test_redirect_probe", BaseURL: probe.Base.URL})
+	_, _ = provider.RawGet(context.Background(), "/v1/customers/cus_probe")
+	probe.Assert(t)
+}

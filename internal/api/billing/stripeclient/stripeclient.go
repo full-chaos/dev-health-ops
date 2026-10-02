@@ -48,9 +48,10 @@ func New(options Options) *Provider {
 	}
 	client := &http.Client{Timeout: 80 * time.Second}
 	if options.HTTPClient != nil {
-		// A supplied client follows no redirect: the secret key rides every request (D4124).
-		client = httpguard.NoRedirects(options.HTTPClient)
+		client = options.HTTPClient
 	}
+	// Neither the default nor a supplied client follows a redirect: the secret key rides every request (D4124).
+	client = httpguard.NoRedirects(client)
 	base := client.Transport
 	if base == nil {
 		base = http.DefaultTransport

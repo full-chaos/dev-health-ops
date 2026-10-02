@@ -95,6 +95,7 @@ func TestRedirectTargetIsTheSchemeAndHostOfALocation(t *testing.T) {
 		"/only/a/path":                     "<relative Location>",
 		"":                                 "<relative Location>",
 		"%zz":                              "<unparsable Location>",
+		"  https://h.example.test/x \t":    "https://h.example.test",
 	} {
 		if got := RedirectTarget(location); got != want {
 			t.Errorf("RedirectTarget(%q) = %q, want %q", location, got, want)

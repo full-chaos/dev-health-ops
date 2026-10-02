@@ -63,6 +63,11 @@ var updateSites = flag.Bool("update-sites", false, "rewrite redirect_sites.tsv f
 // client and builds a second, following one derives "guarded" for both. ValidatePagerDutyCredential's choice of the
 // follow-and-drop client is pinned on the helper (pagerDutyValidationClient), not on that caller.
 //
+// Also not covered (r1): a no-credential row is hand-classified: nothing inspects the headers, query or body of its request, so a
+// credential added to such a request is not seen; doer decorators (Wrapper implementations) are not inventoried as sites: the
+// guard reaches the client inside them (httpguard.Wrapper), proven by the decorator probe in internal/providersync; the probes assert
+// that the base origin was reached and the other saw nothing, not the status the caller got back.
+//
 // Also not covered: a client made inside a dependency (oauth2.Config.Client, an SDK's own client); a
 // production file excluded by a build tag of the default build; the semantic content of a cite.
 //

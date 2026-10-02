@@ -5,6 +5,7 @@ import (
 	"context"
 	"crypto/rand"
 	"errors"
+	"github.com/full-chaos/dev-health-ops/internal/httpguard"
 	"io"
 	"math/big"
 	"net/http"
@@ -157,8 +158,15 @@ func DropCredentialsOnHostChange(req *http.Request, via []*http.Request) error {
 // an *http.Client the returned Doer is a shallow copy whose CheckRedirect stops
 // at the first hop that leaves target's origin (the original policy still
 // decides every same-origin hop) and sets the returned flag. Any other Doer is
-// returned as is; responseLeftOrigin still detects a redirect it followed.
+// returned as is (a decorator is rebuilt around its guarded inner doer); responseLeftOrigin still detects a redirect it followed.
 func originGuardedDoer(doer HTTPDoer, target *url.URL) (HTTPDoer, *atomic.Bool) {
+	if wrapper, ok := doer.(httpguard.Wrapper); ok { // a decorator cannot hide a following client from the origin guard
+		inner, left := originGuardedDoer(wrapper.Unwrap(), target)
+		if rebuilt, ok := wrapper.Rewrap(inner).(HTTPDoer); ok {
+			return rebuilt, left
+		}
+		return doer, left
+	}
 	left := new(atomic.Bool)
 	hc, ok := doer.(*http.Client)
 	if !ok || hc == nil {

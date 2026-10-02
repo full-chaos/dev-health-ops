@@ -46,3 +46,43 @@ func TestNewClientRefusesRedirectsAndKeepsTheTimeout(t *testing.T) {
 		t.Fatal("NewClient follows redirects")
 	}
 }
+
+type countingWrapper struct {
+	inner interface {
+		Do(*http.Request) (*http.Response, error)
+	}
+}
+
+func (w countingWrapper) Do(r *http.Request) (*http.Response, error) { return w.inner.Do(r) }
+func (w countingWrapper) Unwrap() interface {
+	Do(*http.Request) (*http.Response, error)
+} {
+	return w.inner
+}
+func (w countingWrapper) Rewrap(inner interface {
+	Do(*http.Request) (*http.Response, error)
+}) interface {
+	Do(*http.Request) (*http.Response, error)
+} {
+	return countingWrapper{inner}
+}
+
+type plainDoer struct{}
+
+func (plainDoer) Do(*http.Request) (*http.Response, error) { return nil, nil }
+
+func TestNoRedirectsDoerGuardsTheClientInsideAWrapper(t *testing.T) {
+	type doer interface {
+		Do(*http.Request) (*http.Response, error)
+	}
+	var wrapped doer = countingWrapper{&http.Client{}}
+	guarded := NoRedirectsDoer(wrapped)
+	inner, ok := guarded.(countingWrapper).inner.(*http.Client)
+	if !ok || inner.CheckRedirect == nil || inner.CheckRedirect(nil, nil) != http.ErrUseLastResponse {
+		t.Fatalf("the client inside the wrapper must refuse redirects, got %#v", guarded)
+	}
+	var plain doer = countingWrapper{plainDoer{}}
+	if _, ok := NoRedirectsDoer(plain).(countingWrapper).inner.(plainDoer); !ok {
+		t.Fatal("a wrapper around a non-client doer stays as it is")
+	}
+}

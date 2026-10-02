@@ -23,15 +23,35 @@ func NoRedirects(client *http.Client) *http.Client {
 	return &copied
 }
 
+// Wrapper is a doer that decorates another (a request counter, a retrier): it can say what it wraps and be rebuilt around
+// another doer, so a guard can reach the client inside it.
+type Wrapper interface {
+	Do(*http.Request) (*http.Response, error)
+	// Unwrap is the doer this one delegates to.
+	Unwrap() interface {
+		Do(*http.Request) (*http.Response, error)
+	}
+	// Rewrap is the same decorator around inner.
+	Rewrap(inner interface {
+		Do(*http.Request) (*http.Response, error)
+	}) interface {
+		Do(*http.Request) (*http.Response, error)
+	}
+}
+
 // NoRedirectsDoer is NoRedirects for a value that is only known by its Do method (an HTTPDoer): an *http.Client goes
-// through NoRedirects. Any other doer is returned as it is: the helper cannot see inside a decorator (a counting or
-// retrying wrapper), whose inner client follows whatever its own policy says. Guard at the place where that inner
-// client is made.
+// through NoRedirects; a Wrapper is rebuilt around its guarded inner doer (so a counting or retrying decorator cannot hide
+// a following client); any other doer is a test's transport and is returned as it is.
 func NoRedirectsDoer[D interface {
 	Do(*http.Request) (*http.Response, error)
 }](doer D) D {
 	if client, ok := any(doer).(*http.Client); ok {
 		if guarded, ok := any(httpClientOrNil(client)).(D); ok {
+			return guarded
+		}
+	}
+	if wrapper, ok := any(doer).(Wrapper); ok {
+		if guarded, ok := wrapper.Rewrap(NoRedirectsDoer(wrapper.Unwrap())).(D); ok {
 			return guarded
 		}
 	}

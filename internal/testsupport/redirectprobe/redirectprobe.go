@@ -18,6 +18,7 @@ type Probe struct {
 	// Other counts the requests it receives.
 	Other *httptest.Server
 	hits  atomic.Int64
+	base  atomic.Int64
 }
 
 // New starts both servers; they stop with the test.
@@ -31,6 +32,7 @@ func New(t testing.TB) *Probe {
 	}))
 	t.Cleanup(p.Other.Close)
 	p.Base = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		p.base.Add(1)
 		target := p.Other.URL + r.URL.Path
 		if r.URL.RawQuery != "" {
 			target += "?" + r.URL.RawQuery
@@ -47,9 +49,16 @@ func (p *Probe) Client() *http.Client { return &http.Client{} }
 // Hits is how many requests the second server has seen.
 func (p *Probe) Hits() int { return int(p.hits.Load()) }
 
-// Assert fails the test when the second server saw a request.
+// BaseHits is how many requests the base server has seen.
+func (p *Probe) BaseHits() int { return int(p.base.Load()) }
+
+// Assert fails the test when the second server saw a request, and when the base server saw none (a call that failed before
+// it was sent proves nothing).
 func (p *Probe) Assert(t testing.TB) {
 	t.Helper()
+	if n := p.BaseHits(); n == 0 {
+		t.Fatal("the base origin saw no request: the call failed before it was sent, so nothing was measured")
+	}
 	if n := p.Hits(); n != 0 {
 		t.Fatalf("the redirect was followed: the other origin saw %d request(s)", n)
 	}

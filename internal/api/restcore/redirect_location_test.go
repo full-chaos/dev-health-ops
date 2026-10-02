@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -212,5 +213,57 @@ func TestAWitnessedRedirectWhoseBodyReadFailsStaysATransportError(t *testing.T) 
 		if !errors.As(err, &apiErr) || strings.Contains(apiErr.Message, "unexpected redirect") {
 			t.Fatalf("%s: err = %v, want an error that is not reworded as a redirect", name, err)
 		}
+	}
+}
+
+// CHAOS-8127: errors.As reports a match with a nil target for a typed-nil *url.Error in the chain; the refusal check must not
+// read its fields. A witnessed 3xx whose body read fails with such an error is an ordinary transport error.
+func TestATypedNilURLErrorAfterAWitnessedRedirectDoesNotPanic(t *testing.T) {
+	var nilURLError *url.Error
+	for name, cause := range map[string]error{
+		"bare":    error(nilURLError),
+		"wrapped": fmt.Errorf("read: %w", error(nilURLError)),
+	} {
+		core := Core{Provider: "github", RetryAfter: func(Response) time.Duration { return 0 }, HTTP: &http.Client{Transport: redirectThenBrokenBody{err: cause}}}
+		var apiErr *Error
+		func() {
+			defer func() {
+				if recovered := recover(); recovered != nil {
+					t.Fatalf("%s: Core.Get panicked: %v", name, recovered)
+				}
+			}()
+			_, err := core.Get(context.Background(), "https://api.example.test/x", "GET /probe")
+			if !errors.As(err, &apiErr) || strings.Contains(apiErr.Message, "unexpected redirect") {
+				t.Fatalf("%s: err = %v, want an error that is not reworded as a redirect", name, err)
+			}
+		}()
+	}
+	if isLocationParseFailure(error(nilURLError)) {
+		t.Fatal("a typed-nil url error was taken for a refused Location")
+	}
+	var nilOpError *net.OpError
+	if retryableTransport(error(nilOpError)) || retryableTransport(error(nilURLError)) {
+		t.Fatal("a typed-nil transport error was taken for a retryable one")
+	}
+}
+
+type selfUnwrappingError struct{}
+
+func (e *selfUnwrappingError) Error() string { return "loop" }
+func (e *selfUnwrappingError) Unwrap() error { return e }
+
+// CHAOS-8127: the refusal check and the retry check walk the error through the bounded chain: an error whose Unwrap returns
+// itself must not stall the request path.
+func TestTheRequestPathChecksAreBoundedOnASelfUnwrappingError(t *testing.T) {
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		_ = isLocationParseFailure(&selfUnwrappingError{})
+		_ = retryableTransport(&selfUnwrappingError{})
+	}()
+	select {
+	case <-done:
+	case <-time.After(5 * time.Second):
+		t.Fatal("a check did not return on a self-unwrapping error")
 	}
 }

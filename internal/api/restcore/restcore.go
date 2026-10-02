@@ -15,7 +15,6 @@ import (
 	"fmt"
 	"github.com/full-chaos/dev-health-ops/internal/httpguard"
 	"io"
-	"net"
 	"net/http"
 	"net/url"
 	"strings"
@@ -257,14 +256,7 @@ func (c Core) raise(r Response, operation string) error {
 // retryableTransport is `except (httpx.TimeoutException, httpx.ConnectError)`:
 // a timeout of any phase, or a failure to connect (a refused connection, an
 // unreachable host, a name that does not resolve).
-func retryableTransport(err error) bool {
-	var timeout interface{ Timeout() bool }
-	if errors.As(err, &timeout) && timeout.Timeout() {
-		return true
-	}
-	var operation *net.OpError
-	return errors.As(err, &operation) && operation.Op == "dial"
-}
+func retryableTransport(err error) bool { return logging.RetryableTransport(err) }
 
 func sleepContext(ctx context.Context, wait time.Duration) error {
 	timer := time.NewTimer(wait)
@@ -300,8 +292,8 @@ func (w *redirectWitness) RoundTrip(request *http.Request) (*http.Response, erro
 // unwrappable error whose text STARTS with the phrase; a transport error that merely mentions the phrase, or wraps a cause,
 // is an ordinary transport error and keeps its class (CHAOS-7927 r1).
 func isLocationParseFailure(err error) bool {
-	var urlErr *url.Error
-	if !errors.As(err, &urlErr) || urlErr.Err == nil || errors.Unwrap(urlErr.Err) != nil {
+	urlErr := logging.URLError(err)
+	if urlErr == nil || urlErr.Err == nil || errors.Unwrap(urlErr.Err) != nil {
 		return false
 	}
 	return strings.HasPrefix(urlErr.Err.Error(), "failed to parse Location header ")

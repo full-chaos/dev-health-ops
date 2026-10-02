@@ -35,6 +35,12 @@ var tieRows = [][4]string{
 	{"a0000000-0000-4000-8000-000000000007", "acme/tie-three", orgOne, "2026-02-01 00:00:00"},
 	{"a0000000-0000-4000-8000-000000000007", "acme/tie-three", orgTwo, "2026-03-15 00:00:00"},
 	{"a0000000-0000-4000-8000-000000000007", "acme/tie-three", orgThree, "2026-03-15 00:00:00"},
+	// No tie: the newest row is in the organisation with the SMALLEST id (argMax by last_synced, not the largest org id).
+	{"a0000000-0000-4000-8000-000000000008", "acme/small-org-newest", orgOne, "2026-03-20 00:00:00"},
+	{"a0000000-0000-4000-8000-000000000008", "acme/small-org-newest", orgTwo, "2026-03-10 00:00:00"},
+	{"a0000000-0000-4000-8000-000000000009", "acme/small-org-newest-of-three", orgTwo, "2026-02-10 00:00:00"},
+	{"a0000000-0000-4000-8000-000000000009", "acme/small-org-newest-of-three", orgThree, "2026-02-20 00:00:00"},
+	{"a0000000-0000-4000-8000-000000000009", "acme/small-org-newest-of-three", orgOne, "2026-03-30 12:00:00.5"},
 }
 
 // seedTies writes the tie rows into an empty repos table.
@@ -52,6 +58,9 @@ var tieScenarios = []repairScenario{
 	{name: "apply with a tie on last_synced", args: []string{"--apply"}},
 	{name: "dry run for one org with a tie on last_synced", args: []string{"--org", orgTwo}},
 	{name: "apply for one org with a tie on last_synced", args: []string{"--apply", "--org", orgTwo}},
+	{name: "dry run for the smallest org that owns the newest rows", args: []string{"--org", orgOne}},
+	{name: "apply for the smallest org that owns the newest rows", args: []string{"--apply", "--org", orgOne}},
+	{name: "dry run for the org that owns only older rows of those ids", args: []string{"--org", orgThree}},
 }
 
 // tieRequest is a scenario as a golden request: its path holds the producer's environment, the seeded rows and the
@@ -76,7 +85,7 @@ func TestRepairTiesMatchTheFrozenPythonProducer(t *testing.T) {
 	golden := venueoracle.OpenGolden(t, venueoracle.GoldenSpec{
 		Path:        "testdata/golden/repair-ties.json",
 		PythonBuild: repairTiesPythonBuild,
-		SHA256:      "413fd89869cb21a713edd4be802511fa33802844f7d627855d18c992ecc22f37",
+		SHA256:      "2bd9e39b932a6f726a77d73df2d7e4acfb126ad819eaf276e4b8d6f3c0247003",
 		Recipe: "git worktree add --detach $DIR " + repairTiesPythonBuild + " (with its .venv: uv sync --frozen --no-install-project); then from the repository root: " +
 			"go run ./internal/testsupport/venueoracle/goldenrecord -pkg ./internal/chmigrate/ -test '^TestRepairTiesMatchTheFrozenPythonProducer$' -python-root $DIR",
 	})

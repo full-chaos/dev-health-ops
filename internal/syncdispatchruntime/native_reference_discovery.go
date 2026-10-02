@@ -914,6 +914,12 @@ func discoveryHeartbeatInterval() time.Duration {
 	return quarter
 }
 
+// envPositiveIntSet reports whether envPositiveInt would use the environment value (set, an integer, at least 1).
+func envPositiveIntSet(name string) bool {
+	value, err := strconv.Atoi(os.Getenv(name))
+	return err == nil && value >= 1
+}
+
 func envPositiveInt(name string, fallback int) int {
 	raw := os.Getenv(name)
 	if raw == "" {

@@ -2,9 +2,11 @@ package atlassianteams
 
 import (
 	"context"
+	"fmt"
 	"go/ast"
 	"go/parser"
 	"go/token"
+	"io/fs"
 	"net/http"
 	"net/http/httptest"
 	"path/filepath"
@@ -66,35 +68,54 @@ var defaultClientSites = map[string]func(t *testing.T, base string){
 	},
 }
 
-// vendoredGoFiles parses every non-test Go file of the vendored atlassian module.
+// vendoredGoFiles parses every non-test Go file of the vendored atlassian module, at any depth.
 func vendoredGoFiles(t *testing.T) map[string]*ast.File {
 	t.Helper()
 	_, file, _, _ := runtime.Caller(0)
 	root := filepath.Join(filepath.Dir(file), "..", "..", "third_party", "vendor", "atlassian", "atlassian")
-	var paths []string
-	for _, pattern := range []string{"*.go", "*/*.go", "*/*/*.go"} {
-		found, err := filepath.Glob(filepath.Join(root, pattern))
-		if err != nil {
-			t.Fatal(err)
-		}
-		paths = append(paths, found...)
-	}
 	files := map[string]*ast.File{}
 	fset := token.NewFileSet()
-	for _, path := range paths {
-		if strings.HasSuffix(path, "_test.go") {
-			continue
+	err := filepath.WalkDir(root, func(path string, entry fs.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+		if entry.IsDir() || !strings.HasSuffix(path, ".go") || strings.HasSuffix(path, "_test.go") {
+			return nil
 		}
 		parsed, err := parser.ParseFile(fset, path, nil, 0)
 		if err != nil {
-			t.Fatalf("%s: %v", path, err)
+			return fmt.Errorf("%s: %w", path, err)
 		}
 		files[path] = parsed
+		return nil
+	})
+	if err != nil {
+		t.Fatal(err)
 	}
 	if len(files) == 0 {
 		t.Fatal("no vendored Go file found")
 	}
 	return files
+}
+
+// netHTTPName is the local name a file gives the net/http import ("" when it does not import it); a dot or blank import is refused,
+// because it would hide every http.X use from the scan.
+func netHTTPName(t *testing.T, path string, file *ast.File) string {
+	t.Helper()
+	for _, spec := range file.Imports {
+		if spec.Path.Value != `"net/http"` {
+			continue
+		}
+		if spec.Name == nil {
+			return "http"
+		}
+		if spec.Name.Name == "." || spec.Name.Name == "_" {
+			t.Errorf("%s: net/http imported as %q: the redirect scan cannot see its uses", path, spec.Name.Name)
+			return ""
+		}
+		return spec.Name.Name
+	}
+	return ""
 }
 
 // TestEveryVendoredHTTPClientRefusesRedirects derives, from the vendored source, every http.Client the module builds and every
@@ -104,47 +125,60 @@ func TestEveryVendoredHTTPClientRefusesRedirects(t *testing.T) {
 	sites := map[string]int{}
 	literals := 0
 	for path, file := range vendoredGoFiles(t) {
+		name := netHTTPName(t, path, file)
+		isHTTP := func(expr ast.Expr, member string) bool {
+			selector, ok := expr.(*ast.SelectorExpr)
+			if !ok || name == "" {
+				return false
+			}
+			pkg, ok := selector.X.(*ast.Ident)
+			return ok && pkg.Name == name && selector.Sel.Name == member
+		}
 		var enclosing string
 		ast.Inspect(file, func(node ast.Node) bool {
 			switch n := node.(type) {
 			case *ast.FuncDecl:
 				enclosing = n.Name.Name
 			case *ast.CompositeLit:
-				if selector, ok := n.Type.(*ast.SelectorExpr); ok {
-					if pkg, ok := selector.X.(*ast.Ident); ok && pkg.Name == "http" && selector.Sel.Name == "Client" {
-						literals++
-						if enclosing != "NewDefaultHTTPClient" {
-							t.Errorf("%s: an http.Client literal in %s: build it with NewDefaultHTTPClient (no redirect followed)", path, enclosing)
-						}
-						hasCheck := false
-						for _, element := range n.Elts {
-							if kv, ok := element.(*ast.KeyValueExpr); ok {
-								if key, ok := kv.Key.(*ast.Ident); ok && key.Name == "CheckRedirect" {
-									hasCheck = true
-								}
+				if isHTTP(n.Type, "Client") {
+					literals++
+					if enclosing != "NewDefaultHTTPClient" {
+						t.Errorf("%s: an http.Client literal in %s: build it with NewDefaultHTTPClient (no redirect followed)", path, enclosing)
+					}
+					hasCheck := false
+					for _, element := range n.Elts {
+						if kv, ok := element.(*ast.KeyValueExpr); ok {
+							if key, ok := kv.Key.(*ast.Ident); ok && key.Name == "CheckRedirect" {
+								hasCheck = true
 							}
 						}
-						if !hasCheck {
-							t.Errorf("%s: an http.Client literal in %s with no CheckRedirect", path, enclosing)
-						}
+					}
+					if !hasCheck {
+						t.Errorf("%s: an http.Client literal in %s with no CheckRedirect", path, enclosing)
 					}
 				}
+			case *ast.ValueSpec: // var client http.Client
+				if isHTTP(n.Type, "Client") {
+					t.Errorf("%s: a non-pointer http.Client value in %s: build it with NewDefaultHTTPClient", path, enclosing)
+				}
 			case *ast.SelectorExpr:
-				if pkg, ok := n.X.(*ast.Ident); ok && pkg.Name == "http" {
-					switch n.Sel.Name {
-					case "DefaultClient", "Get", "Post", "Head", "PostForm":
-						t.Errorf("%s: http.%s in %s uses the redirect-following default client", path, n.Sel.Name, enclosing)
+				for _, member := range []string{"DefaultClient", "Get", "Post", "Head", "PostForm"} {
+					if isHTTP(n, member) {
+						t.Errorf("%s: http.%s in %s uses the redirect-following default client", path, member, enclosing)
 					}
 				}
 			case *ast.CallExpr:
-				name := ""
+				if ident, ok := n.Fun.(*ast.Ident); ok && ident.Name == "new" && len(n.Args) == 1 && isHTTP(n.Args[0], "Client") {
+					t.Errorf("%s: new(http.Client) in %s: build it with NewDefaultHTTPClient", path, enclosing)
+				}
+				callee := ""
 				switch fun := n.Fun.(type) {
 				case *ast.Ident:
-					name = fun.Name
+					callee = fun.Name
 				case *ast.SelectorExpr:
-					name = fun.Sel.Name
+					callee = fun.Sel.Name
 				}
-				if name == "NewDefaultHTTPClient" && enclosing != "NewDefaultHTTPClient" {
+				if callee == "NewDefaultHTTPClient" && enclosing != "NewDefaultHTTPClient" {
 					sites[enclosing]++
 				}
 			}

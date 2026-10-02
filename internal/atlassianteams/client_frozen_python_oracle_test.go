@@ -11,7 +11,6 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
-	"runtime"
 	"sort"
 	"strconv"
 	"strings"
@@ -24,6 +23,7 @@ import (
 	"atlassian/atlassian/graph"
 	"atlassian/atlassian/graph/gen"
 
+	"github.com/full-chaos/dev-health-ops/internal/testsupport/moduleroot"
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/programoracle"
 )
 
@@ -726,7 +726,7 @@ func compare(python, goSide map[string]outcome) []string {
 // team field, a user relation, a project link, an outcome) and requires the
 // comparison to report it.
 func TestAtlassianTeamsClientMatchesFrozenPython(t *testing.T) {
-	_, file, _, _ := runtime.Caller(0)
+	_, file, _, _ := moduleroot.Caller(0)
 	root := filepath.Clean(filepath.Join(filepath.Dir(file), "..", ".."))
 	scenarios := corpus()
 	gw := newOracleGateway(scenarios)

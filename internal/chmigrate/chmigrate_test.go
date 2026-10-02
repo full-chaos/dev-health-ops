@@ -8,13 +8,13 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
-	"runtime"
 	"sort"
 	"strings"
 	"testing"
 
 	"github.com/full-chaos/dev-health-ops/internal/cli"
 	"github.com/full-chaos/dev-health-ops/internal/platform/secrets"
+	"github.com/full-chaos/dev-health-ops/internal/testsupport/moduleroot"
 )
 
 func testBaseline() Baseline {
@@ -316,7 +316,7 @@ func TestCheckContract(t *testing.T) {
 // chain. A .py migration after the head cannot be applied by dho, so it is
 // refused outright.
 func TestChainAfterHeadMatchesThePythonChain(t *testing.T) {
-	_, file, _, _ := runtime.Caller(0)
+	_, file, _, _ := moduleroot.Caller(0)
 	pythonDir := filepath.Join(filepath.Dir(file), "..", "..", "src", "dev_health_ops", "migrations", "clickhouse")
 	entries, err := os.ReadDir(pythonDir)
 	if err != nil {

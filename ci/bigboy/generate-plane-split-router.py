@@ -21,6 +21,10 @@ unless it names its backend with `service: query-api`: prod changes the backend 
 way INSIDE the Ingress object that holds it (ingress-nginx's admission denies a path that moves
 to another live object). Such an entry is a query-api path of this router.
 
+Case (CHAOS-7925): an ANCHORED allow-list entry (`/literal$`) is matched case-insensitively, as ingress-nginx
+does on the host that carries it (regex mode, `~*`): /GRAPHQL goes where /graphql goes. Every other path of this
+router is case-sensitive.
+
 Usage:
   generate-plane-split-router.py <values.prod.yaml> [--format labels|dynamic]
   generate-plane-split-router.py --deploy-repo <deploy repo> --deploy-sha <sha> --expect-ops-sha <ops sha>
@@ -163,7 +167,8 @@ def paths_from_doc(doc: dict) -> tuple[list[str], list[str]]:
     # hosts do not agree on such a path (query_api_paths_that_differ_by_host), so the lists
     # name the same paths and each is routed once.
     for _, _, _, segments in query_api_allow_list_entries(doc):
-        if (regex := _segments_regex(segments)) not in query_paths:
+        # CHAOS-7925: an anchored entry matches case-insensitively on the host that carries it (regex mode).
+        if (regex := f"(?i:{_segments_regex(segments)})") not in query_paths:
             query_paths.append(regex)
     if not go_paths:
         raise SystemExit(
@@ -550,7 +555,13 @@ def _traefik_path_rule(entries: list[tuple[str, str]]) -> str:
     terms: list[str] = []
     for path, path_type in entries:
         if path_type == "ImplementationSpecific":
-            terms.append(f"Path(`{allow_list_literal(path, path_type)}`)")
+            # CHAOS-7925: the chart puts a host with an anchored entry in ingress-nginx regex mode, where every
+            # location is a case-insensitive regex (`~*`): /DOCS reaches the same backend as /docs there. Traefik's
+            # Path() is case-sensitive, so the anchored entry is one case-insensitive whole-path regex. A dot is
+            # written `[.]`: the rule sits in a double-quoted YAML scalar, which cannot carry a `\.` escape.
+            literal = allow_list_literal(path, path_type)
+            body = _unescape_hyphen(re.escape(literal)).replace("\\.", "[.]")
+            terms.append(f"PathRegexp(`(?i)^{body}$`)")
             continue
         terms.append(f"Path(`{path}`)")
         if path_type == "Prefix":

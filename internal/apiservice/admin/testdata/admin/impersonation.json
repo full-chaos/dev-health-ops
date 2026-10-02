@@ -1,0 +1,272 @@
+{
+  "header": {
+    "test": "TestImpersonationStartStopMatchesThePythonAPI",
+    "python_build": "a4847c5e93607451a0c987b314d37e02fc43ce85",
+    "producer_digest": "6e1dc97e68624398015f60caee160cceee6ae601bd434d01b8b7d5975267e137",
+    "recipe": "git worktree add --detach $DIR a4847c5e93607451a0c987b314d37e02fc43ce85 (with its .venv: uv sync --frozen --no-install-project); then from the repository root: go run ./internal/testsupport/venueoracle/goldenrecord -pkg ./internal/apiservice/admin/ -test '^TestImpersonationStartStopMatchesThePythonAPI$' -python-root $DIR (records on the pinned build, replays the candidate in a fresh process, and only then promotes it and pins its digest)",
+    "python_env": "96bd22c045ea4c15f8c43ccf4ac2aeb7bd87435bfc33c40b3c8c772f7f1f9f64",
+    "python_env_version": 2,
+    "recorded_by": "goldenrecord",
+    "blanked": {
+      "body $.expires_at": 4,
+      "header content-length": 4,
+      "header date": 12,
+      "header x-dev-health-plane": 12,
+      "header x-request-id": 24
+    }
+  },
+  "requests": [
+    {
+      "name": "status before",
+      "method": "GET",
+      "path": "/api/v1/admin/impersonate/status",
+      "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "request_headers_sha256": "7324a7ce2114a5073603a50163ace7e38087880dcb37c0db5cb14a047f481b26",
+      "status": 200,
+      "headers": {
+        "content-length": "107",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "\u003cvolatile\u003e"
+      },
+      "body": "{\"is_impersonating\":false,\"target_user_id\":null,\"target_email\":null,\"target_org_id\":null,\"expires_at\":null}"
+    },
+    {
+      "name": "stop with no active session",
+      "method": "POST",
+      "path": "/api/v1/admin/impersonate/stop",
+      "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "request_headers_sha256": "357463bb8454ee009494542bd1ead34b2d453860bc09d792e6c6e819d6e6e8ed",
+      "status": 400,
+      "headers": {
+        "content-length": "44",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "\u003cvolatile\u003e"
+      },
+      "body": "{\"detail\":\"No active impersonation session\"}"
+    },
+    {
+      "name": "target not found",
+      "method": "POST",
+      "path": "/api/v1/admin/impersonate",
+      "body_sha256": "39aa4a0bcc17846628c2433c738daa8ca3cd7317db84436742c26454cda4e4fe",
+      "request_headers_sha256": "357463bb8454ee009494542bd1ead34b2d453860bc09d792e6c6e819d6e6e8ed",
+      "status": 404,
+      "headers": {
+        "content-length": "34",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "\u003cvolatile\u003e"
+      },
+      "body": "{\"detail\":\"Target user not found\"}"
+    },
+    {
+      "name": "target inactive",
+      "method": "POST",
+      "path": "/api/v1/admin/impersonate",
+      "body_sha256": "5cd7dfb5d5d2122eb1c656f7011f94959b4b31d9cd067fe1b1b348243723a7be",
+      "request_headers_sha256": "357463bb8454ee009494542bd1ead34b2d453860bc09d792e6c6e819d6e6e8ed",
+      "status": 400,
+      "headers": {
+        "content-length": "38",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "\u003cvolatile\u003e"
+      },
+      "body": "{\"detail\":\"Target user is not active\"}"
+    },
+    {
+      "name": "target superuser",
+      "method": "POST",
+      "path": "/api/v1/admin/impersonate",
+      "body_sha256": "984f7c54c0f9361bed767153430019cb674a4d29f7a8a6bb80a2d455251c77f1",
+      "request_headers_sha256": "357463bb8454ee009494542bd1ead34b2d453860bc09d792e6c6e819d6e6e8ed",
+      "status": 403,
+      "headers": {
+        "content-length": "43",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "\u003cvolatile\u003e"
+      },
+      "body": "{\"detail\":\"Cannot impersonate a superuser\"}"
+    },
+    {
+      "name": "target with no membership",
+      "method": "POST",
+      "path": "/api/v1/admin/impersonate",
+      "body_sha256": "c27dc4136b2898916d4a6da73e52ff18ade32f017b035279a584f671a1d5ec19",
+      "request_headers_sha256": "357463bb8454ee009494542bd1ead34b2d453860bc09d792e6c6e819d6e6e8ed",
+      "status": 404,
+      "headers": {
+        "content-length": "55",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "\u003cvolatile\u003e"
+      },
+      "body": "{\"detail\":\"Target user has no organization membership\"}"
+    },
+    {
+      "name": "start",
+      "method": "POST",
+      "path": "/api/v1/admin/impersonate",
+      "body_sha256": "9ea14aeff960d6673c075bd1591c965d4dfa667a268d7e864921e9fcd1b6d53a",
+      "request_headers_sha256": "357463bb8454ee009494542bd1ead34b2d453860bc09d792e6c6e819d6e6e8ed",
+      "status": 200,
+      "headers": {
+        "content-length": "\u003clength of projected body\u003e",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "\u003cvolatile\u003e"
+      },
+      "body": "{\"status\":\"active\",\"target_user\":{\"id\":\"542da722-da68-5b8d-a5cc-814760b1cb12\",\"email\":\"venue-target@example.com\",\"org_id\":\"99cb726c-9e8c-5ab4-a17f-22538b42c24b\",\"role\":\"member\"},\"expires_at\":\"\u003cnow\u003e\"}"
+    },
+    {
+      "name": "status during",
+      "method": "GET",
+      "path": "/api/v1/admin/impersonate/status",
+      "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "request_headers_sha256": "7324a7ce2114a5073603a50163ace7e38087880dcb37c0db5cb14a047f481b26",
+      "status": 200,
+      "headers": {
+        "content-length": "\u003clength of projected body\u003e",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-impersonated-user-id": "542da722-da68-5b8d-a5cc-814760b1cb12",
+        "x-impersonating": "true",
+        "x-request-id": "\u003cvolatile\u003e"
+      },
+      "body": "{\"is_impersonating\":true,\"target_user_id\":\"542da722-da68-5b8d-a5cc-814760b1cb12\",\"target_email\":\"venue-target@example.com\",\"target_org_id\":\"99cb726c-9e8c-5ab4-a17f-22538b42c24b\",\"expires_at\":\"\u003cnow\u003e\"}"
+    },
+    {
+      "name": "stop",
+      "method": "POST",
+      "path": "/api/v1/admin/impersonate/stop",
+      "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "request_headers_sha256": "357463bb8454ee009494542bd1ead34b2d453860bc09d792e6c6e819d6e6e8ed",
+      "status": 200,
+      "headers": {
+        "content-length": "20",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-impersonated-user-id": "542da722-da68-5b8d-a5cc-814760b1cb12",
+        "x-impersonating": "true",
+        "x-request-id": "\u003cvolatile\u003e"
+      },
+      "body": "{\"status\":\"stopped\"}"
+    },
+    {
+      "name": "status after",
+      "method": "GET",
+      "path": "/api/v1/admin/impersonate/status",
+      "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "request_headers_sha256": "7324a7ce2114a5073603a50163ace7e38087880dcb37c0db5cb14a047f481b26",
+      "status": 200,
+      "headers": {
+        "content-length": "107",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "\u003cvolatile\u003e"
+      },
+      "body": "{\"is_impersonating\":false,\"target_user_id\":null,\"target_email\":null,\"target_org_id\":null,\"expires_at\":null}"
+    },
+    {
+      "name": "self-impersonate refused",
+      "method": "POST",
+      "path": "/api/v1/admin/impersonate",
+      "body_sha256": "83a5badecfe1555c03848b5ac485730d6615e9442cea7033b22f096e961554e9",
+      "request_headers_sha256": "357463bb8454ee009494542bd1ead34b2d453860bc09d792e6c6e819d6e6e8ed",
+      "status": 400,
+      "headers": {
+        "content-length": "40",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "\u003cvolatile\u003e"
+      },
+      "body": "{\"detail\":\"Cannot impersonate yourself\"}"
+    },
+    {
+      "name": "unauthenticated malformed body",
+      "method": "POST",
+      "path": "/api/v1/admin/impersonate",
+      "body_sha256": "28e9bafc45d8e9d77bb0a8df443097a32dd967a6099b003712d0ef3725b43c5e",
+      "request_headers_sha256": "b58ddd4bb261e78693972b6634accd44bf966020d79a21c501cd73d1a3dee206",
+      "status": 422,
+      "headers": {
+        "content-length": "158",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "\u003cvolatile\u003e"
+      },
+      "body": "{\"detail\":[{\"type\":\"json_invalid\",\"loc\":[\"body\",1],\"msg\":\"JSON decode error\",\"input\":{},\"ctx\":{\"error\":\"Expecting property name enclosed in double quotes\"}}]}"
+    }
+  ],
+  "rows": {
+    "audit_logs rows": {
+      "rows": "[153 203 114 108 158 140 90 180 161 127 34 83 139 66 194 75] [118 73 247 17 58 206 81 10 176 58 121 230 57 130 28 183]impersonation_startsession542da722-da68-5b8d-a5cc-814760b1cb12success | [153 203 114 108 158 140 90 180 161 127 34 83 139 66 194 75] [118 73 247 17 58 206 81 10 176 58 121 230 57 130 28 183]impersonation_stopsession542da722-da68-5b8d-a5cc-814760b1cb12success"
+    },
+    "audit_logs.request_metadata JSON text where user_id = '7649f711-3ace-510a-b03a-79e639821cb7' AND resource_id = '542da722-da68-5b8d-a5cc-814760b1cb12'": {
+      "rows": "{}\u001e{\"impersonated_by\": \"7649f711-3ace-510a-b03a-79e639821cb7\", \"impersonation_target\": \"542da722-da68-5b8d-a5cc-814760b1cb12\", \"impersonation_org\": \"99cb726c-9e8c-5ab4-a17f-22538b42c24b\"}"
+    }
+  }
+}

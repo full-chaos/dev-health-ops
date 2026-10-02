@@ -4,10 +4,14 @@ import (
 	"bytes"
 	"embed"
 	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
 	"reflect"
+	"regexp"
 	"runtime"
+	"sort"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -183,6 +187,75 @@ func oracleDivergences(
 	output := frozenPairAnswer(t, pairID, encoded)
 	pythonRows, excludedFields := decodeGenericRowOracleOutput(t, pairID, output)
 	return diffAgainstPythonRows(t, cases, pythonRows, excludedFields, goRowBuilder, goOnlyFields)
+}
+
+// divergenceRead is one read a divergence names: a case and a field of its row.
+type divergenceRead struct{ Case, Field string }
+
+var divergenceReadPattern = regexp.MustCompile(`^case ("(?:[^"\\]|\\.)*"), field ("(?:[^"\\]|\\.)*"):`)
+
+// requireDivergencesAre fails unless the divergences name exactly the reads a
+// known defect is expected to change: its OWN case and field, no other and none
+// missing. A known-defect gate that only asks for "some divergence" passes on a
+// divergence of anything else (a setup error, an unrelated field), so the plant
+// could have done nothing. A message that is not a "case X, field Y" divergence
+// (an empty row, an exclusion error) is a failure, never a find.
+func requireDivergencesAre(t *testing.T, divergences []string, expected ...divergenceRead) {
+	t.Helper()
+	reportDivergenceReadProblems(t, divergenceReadProblems(divergences, expected))
+}
+
+// reportDivergenceReadProblems is how a known-defect gate reports what
+// divergenceReadProblems found: each problem fails the gate's test. It is a
+// variable so the test that pins "a gate calls the helper" can observe the
+// problems of a probe without failing, which would put a failed test into the
+// package's -json events (the python-free classifier reads those).
+var reportDivergenceReadProblems = func(t testing.TB, problems []string) {
+	t.Helper()
+	for _, problem := range problems {
+		t.Error(problem)
+	}
+}
+
+// divergenceReadProblems is what requireDivergencesAre reports: each
+// divergence that is not one of the expected reads, each expected read that is
+// missing, and a gate that names no read at all.
+func divergenceReadProblems(divergences []string, expected []divergenceRead) []string {
+	var problems []string
+	got := map[divergenceRead]bool{}
+	for _, message := range divergences {
+		match := divergenceReadPattern.FindStringSubmatch(message)
+		if match == nil {
+			problems = append(problems, "a divergence that names no case and field is not a find of the planted defect: "+message)
+			continue
+		}
+		caseID, caseErr := strconv.Unquote(match[1])
+		field, fieldErr := strconv.Unquote(match[2])
+		if caseErr != nil || fieldErr != nil {
+			problems = append(problems, fmt.Sprintf("divergence %q: unquote: %v %v", message, caseErr, fieldErr))
+			continue
+		}
+		got[divergenceRead{caseID, field}] = true
+	}
+	want := map[divergenceRead]bool{}
+	for _, read := range expected {
+		want[read] = true
+		if !got[read] {
+			problems = append(problems, fmt.Sprintf("the planted defect's own read (case %q, field %q) is not among the divergences", read.Case, read.Field))
+		}
+	}
+	var extra []string
+	for read := range got {
+		if !want[read] {
+			extra = append(extra, fmt.Sprintf("divergence at case %q, field %q is not a read this defect changes: the gate would pass on a plant that did something else", read.Case, read.Field))
+		}
+	}
+	sort.Strings(extra)
+	problems = append(problems, extra...)
+	if len(expected) == 0 {
+		problems = append(problems, "a known-defect gate must name the reads its defect changes")
+	}
+	return problems
 }
 
 // frozenOracleDivergences is oracleDivergences' frozen-golden twin: same
@@ -401,3 +474,88 @@ func assertOracleSourcesUnchangedSinceBuild(t *testing.T) {
 		t, embeddedOracleSources, filepath.Dir(currentFile),
 	)
 }
+
+func TestAKnownDefectGateNamesItsOwnReadsAndNoOthers(t *testing.T) {
+	read := func(caseID, field string) string {
+		return fmt.Sprintf("case %q, field %q: python=%#v go=%#v", caseID, field, "a", "b")
+	}
+	want := []divergenceRead{{"c1", "state"}, {"c2", "author_name"}}
+	right := []string{read("c1", "state"), read("c2", "author_name")}
+	if problems := divergenceReadProblems(right, want); len(problems) != 0 {
+		t.Fatalf("the defect's own reads: %v", problems)
+	}
+	for name, row := range map[string]struct {
+		divergences []string
+		expected    []divergenceRead
+		contains    string
+	}{
+		"an own read missing":            {right[:1], want, "is not among the divergences"},
+		"another field of the case":      {append(append([]string{}, right...), read("c1", "closed_at")), want, "is not a read this defect changes"},
+		"another case":                   {append(append([]string{}, right...), read("c9", "state")), want, "is not a read this defect changes"},
+		"the wrong field for the case":   {[]string{read("c1", "closed_at"), read("c2", "author_name")}, want, "is not among the divergences"},
+		"an empty-row setup error":       {[]string{`case "c1": both rows are empty -- nothing was compared`}, want, "names no case and field"},
+		"a gate that names no read":      {right, nil, "must name the reads"},
+		"no divergence for a named read": {nil, want, "is not among the divergences"},
+	} {
+		problems := strings.Join(divergenceReadProblems(row.divergences, row.expected), "\n")
+		if !strings.Contains(problems, row.contains) {
+			t.Errorf("%s: problems = %q, want one holding %q", name, problems, row.contains)
+		}
+	}
+}
+
+// A known-defect gate CALLS the attribution helper: requireOracleRediscovers,
+// run for a defect with the right reads, reports no problem, and with another
+// read named (or none) it reports one. The probe runs as its own test
+// (testing.RunTests) under the names of the gate it stands for (the pair's frozen
+// answer is found by them) and PASSES: the problems are recorded, never reported
+// as failures, so no failed test appears in the package's -json events.
+func TestRequireOracleRediscoversAssertsTheDefectsOwnReads(t *testing.T) {
+	// The DEFAULT reporter fails the gate's test once per problem: observed on a
+	// recording TB (the pin below swaps the reporter out, so nothing else runs
+	// the default body).
+	recording := &recordingTB{}
+	reportDivergenceReadProblems(recording, []string{"p1", "p2"})
+	if len(recording.errors) != 2 {
+		t.Fatalf("the default reporter failed the test %d time(s) for 2 problems", len(recording.errors))
+	}
+	cases := oraclePullRequestCases()
+	buggyState := func(t *testing.T, input map[string]any) pullRequestRow {
+		return mustNormalizeOraclePullRequest(t, input, buggyNormalizePRStateStripsOnlySpaces, gitHubPullUserLogin)
+	}
+	probe := func(expected ...divergenceRead) []string {
+		var recorded []string
+		saved := reportDivergenceReadProblems
+		reportDivergenceReadProblems = func(_ testing.TB, problems []string) { recorded = append(recorded, problems...) }
+		defer func() { reportDivergenceReadProblems = saved }()
+		match := func(string, string) (bool, error) { return true, nil }
+		ok := testing.RunTests(match, []testing.InternalTest{{Name: "TestGenericOracleRediscoversRowConstructionDefects", F: func(t *testing.T) {
+			requireOracleRediscovers(t, "rediscovers pre-M7 state-normalization whitespace bug", "github/prs/row", cases, buggyState, oraclePullRequestGoOnlyFields, expected...)
+		}}})
+		if !ok {
+			t.Fatal("the probe failed as a test: it must report through reportDivergenceReadProblems only")
+		}
+		return recorded
+	}
+	if problems := probe(divergenceRead{"closed_with_trailing_cr", "state"}); len(problems) != 0 {
+		t.Fatalf("the gate reported problems for the defect's own read: %v", problems)
+	}
+	for name, expected := range map[string][]divergenceRead{
+		"another field named": {{"closed_with_trailing_cr", "closed_at"}},
+		"another case named":  {{"numeric_login_open_pr", "state"}},
+		"no read named":       nil,
+	} {
+		if problems := probe(expected...); len(problems) == 0 {
+			t.Errorf("%s: the gate reported nothing: it does not assert the defect's own read", name)
+		}
+	}
+}
+
+// recordingTB is a testing.TB that records Error calls instead of failing.
+type recordingTB struct {
+	testing.TB
+	errors []string
+}
+
+func (r *recordingTB) Helper()           { /* nothing to mark */ }
+func (r *recordingTB) Error(args ...any) { r.errors = append(r.errors, fmt.Sprint(args...)) }

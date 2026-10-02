@@ -171,15 +171,13 @@ def _route(doc: dict, path: str) -> str:
     best = None
     for router in doc["http"]["routers"].values():
         rule = router["rule"]
-        m = re.search(r"PathRegexp\(`([^`]+)`\)", rule)
-        if m:
-            ok = re.match(m.group(1), path) is not None
-        elif "&&" in rule:
-            terms = re.findall(r"(Path|PathPrefix)\(`([^`]+)`\)", rule)
+        terms = re.findall(r"(PathRegexp|PathPrefix|Path)\(`([^`]+)`\)", rule)
+        if terms:
             ok = any(
-                (k == "Path" and path == v)
-                or (k == "PathPrefix" and path.startswith(v))
-                for k, v in terms
+                (kind == "PathRegexp" and re.match(value, path) is not None)
+                or (kind == "Path" and path == value)
+                or (kind == "PathPrefix" and path.startswith(value))
+                for kind, value in terms
             )
         else:
             ok = True
@@ -248,10 +246,11 @@ def test_anchored_allow_list_entry_emits_one_exact_path_term(gen: ModuleType) ->
             ("/api/v1/internal", "Prefix"),
         ]
     )
-    assert "Path(`/graphql`)" in rule
+    # CHAOS-7925: one case-insensitive whole-path regex per anchored entry (regex mode is `~*`)
+    assert "PathRegexp(`(?i)^/graphql$`)" in rule
     assert "PathPrefix(`/graphql/`)" not in rule
-    assert "Path(`/openapi.json`)" in rule
-    assert "$" not in rule and "\\" not in rule
+    assert "PathRegexp(`(?i)^/openapi[.]json$`)" in rule
+    assert "\\" not in rule
     assert "PathPrefix(`/api/v1/internal/`)" in rule
 
 
@@ -816,14 +815,19 @@ def test_an_entry_with_service_api_or_no_key_stays_on_python(gen: ModuleType) ->
 def test_the_named_backend_gives_the_router_of_a_query_api_paths_entry(
     gen: ModuleType,
 ) -> None:
-    """Both ways of sending /graphql to query-api give bigboy the same router, so a proof on
-    bigboy holds for either."""
+    """Both ways of sending /graphql to query-api route the path and its lookalikes the same
+    way, so a proof on bigboy holds for either. CHAOS-7925: they differ in case only, on purpose:
+    an anchored entry is matched case-insensitively (the chart's regex mode), a table path is
+    an exact string."""
     by_entry = _named_backend_values([_GRAPHQL_QUERY])
     by_table = _named_backend_values([])
     by_table["ingress"]["queryApiPaths"].append(
         {"path": "/graphql", "pathType": "Exact"}
     )
-    assert _emit(gen, by_entry) == _emit(gen, by_table)
+    for path in ("/graphql", "/graphqlx", "/graphql/", "/graphql/x", "/other"):
+        assert _route(_emit(gen, by_entry), path) == _route(_emit(gen, by_table), path)
+    assert _route(_emit(gen, by_entry), "/GRAPHQL") == "http://query-api:8090"
+    assert _route(_emit(gen, by_table), "/GRAPHQL") == "http://go-api:8000"
 
 
 @pytest.mark.parametrize(
@@ -942,7 +946,8 @@ def test_the_shipped_host_shape_is_accepted(gen: ModuleType, tmp_path: Path) -> 
     by_table["ingress"]["queryApiPaths"].append(
         {"path": "/graphql", "pathType": "Exact"}
     )
-    assert _emit(gen, doc) == _emit(gen, by_table)
+    for path in ("/graphql", "/graphqlx", "/graphql/", "/graphql/x"):
+        assert _route(_emit(gen, doc), path) == _route(_emit(gen, by_table), path)
 
 
 @pytest.mark.parametrize(
@@ -1306,7 +1311,7 @@ def _sample_paths(shared: list[dict], own: list[dict]) -> list[str]:
         base.add(lit)
     out: set[str] = set()
     for lit in base:
-        out |= {lit, lit + "x", lit + "/", lit + "/x"}
+        out |= {lit, lit + "x", lit + "/", lit + "/x", lit.upper(), lit.capitalize()}
     return sorted(out)
 
 
@@ -1425,6 +1430,10 @@ def test_the_router_gives_every_path_the_backend_the_chart_gives_it(
 # findings about the chart or the one-host router, not defects this test hides.
 _KNOWN_DIFFERENCES: dict[str, dict[str, str]] = {
     "anchored-query-and-prefix": {
+        "api.example /OPS-STATUS": (
+            "the same unanchored, case-insensitive regex reading of a Prefix rule: the chart sends "
+            "/OPS-STATUS to the Python api, the router (case-sensitive segment prefix) to go-api"
+        ),
         "api.example /ops-statusx": (
             "regex mode makes a Prefix rule an UNANCHORED regex on a host with an anchored entry: "
             "the chart sends /ops-statusx to the Python api, the router (a segment prefix) to go-api"
@@ -1436,6 +1445,8 @@ _KNOWN_DIFFERENCES: dict[str, dict[str, str]] = {
             "own list differs from it"
         )
         for path in (
+            "/ABOUT",
+            "/OPS-STATUS",
             "/about",
             "/ops-status",
             "/ops-status/",
@@ -1446,19 +1457,27 @@ _KNOWN_DIFFERENCES: dict[str, dict[str, str]] = {
 }
 
 
-@pytest.mark.parametrize("path", ["/GRAPHQL", "/Graphql"])
-def test_known_difference_regex_mode_is_case_insensitive_and_the_router_is_not(
-    gen: ModuleType, tmp_path: Path, path: str
+@pytest.mark.parametrize(
+    ("path", "backend"),
+    [
+        ("/GRAPHQL", "query-api"),
+        ("/Graphql", "query-api"),
+        ("/ABOUT", "api"),
+        ("/About", "api"),
+    ],
+)
+def test_an_anchored_entry_matches_case_insensitively_like_regex_mode_does(
+    gen: ModuleType, path: str, backend: str
 ) -> None:
-    """On a host with an anchored entry ingress-nginx matches paths case-insensitively (`~*`):
-    /GRAPHQL reaches query-api there. Traefik's Path() is case-sensitive and the router sends it
-    to go-api. Pinned as found; when the router is made case-insensitive, change this test."""
+    """CHAOS-7925 (1): on a host with an anchored entry ingress-nginx matches paths case-insensitively
+    (`~*`): /GRAPHQL reaches query-api and /ABOUT the Python api there. The router matches the same
+    way (it was case-sensitive and sent both to go-api: the old router fails this test)."""
     hosts = [{"host": _HOST_API, "pythonAllowList": True, "paths": _GO_DEFAULT_ONLY}]
     chart_values = {
         "ingress": {
             "enabled": True,
             "className": "nginx",
-            "pythonAllowList": [_QA],
+            "pythonAllowList": [_QA, _PY_ANCHORED],
             "hosts": hosts,
         },
         "goApi": {"enabled": True},
@@ -1467,5 +1486,5 @@ def test_known_difference_regex_mode_is_case_insensitive_and_the_router_is_not(
     }
     doc = yaml.safe_load(yaml.safe_dump(VALUES))
     doc["ops"] = {"ingress": chart_values["ingress"]}
-    assert _chart_backend(_render_chart(chart_values), _HOST_API, path) == "query-api"
-    assert _BACKEND[_route(_emit(gen, doc), path)] == "go-api"
+    assert _chart_backend(_render_chart(chart_values), _HOST_API, path) == backend
+    assert _BACKEND[_route(_emit(gen, doc), path)] == backend

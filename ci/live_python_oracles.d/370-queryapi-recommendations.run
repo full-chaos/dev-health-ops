@@ -1,4 +1,0 @@
-label=internal/queryapi/recommendations (evidence and window goldens vs the live Python)
-package=./internal/queryapi/recommendations
-run=^TestGoldensAreWhatPythonProducesNow$
-proof=query-api-recommendations-evidence|the recommendations goldens live Python measurement did not occur

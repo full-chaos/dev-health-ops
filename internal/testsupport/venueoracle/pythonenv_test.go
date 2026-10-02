@@ -979,7 +979,7 @@ func TestThePerRunNamesAreExactlyTheClosedListWithTheirSide(t *testing.T) {
 		"CLICKHOUSE_URI": false, "HOME": false, "PATH": false, "POSTGRES_URI": false, "PYTHONPATH": false, "REDIS_URL": false, "TMPDIR": false,
 		"GITHUB_APP_PRIVATE_KEY": true, "REQUESTS_CA_BUNDLE": true, "TELEMETRY_ENDPOINT": true,
 		"VENUE_PAGERDUTY_API_BASE_OVERRIDE": true, "VENUE_PAGERDUTY_REVOKE_URL_OVERRIDE": true, "VENUE_PAGERDUTY_TOKEN_URL_OVERRIDE": true,
-		"SMTP_HOST": true, "SMTP_PORT": true,
+		"SMTP_HOST": true, "SMTP_PORT": true, "GO_API_QUERY_API_URL": true, "QUERY_API_INTERNAL_URL": true,
 		"VENUE_PROVIDER_STUB_PORT": true, "VENUE_STRIPE_API_BASE": true,
 	}
 	for name, listed := range perRunPythonEnv {
@@ -1025,6 +1025,35 @@ func TestTheAddressOfAFakeSMTPSinkIsKeyedByNameWhateverItsValue(t *testing.T) {
 		t.Fatal("a changed EMAIL_PROVIDER no longer changes the key")
 	}
 	for _, name := range []string{"SMTP_HOST", "SMTP_PORT"} {
+		if key(tagged([]string{name + "=a"}, false)...) == key(tagged([]string{name + "=b"}, false)...) {
+			t.Fatalf("%s supplied by the harness or the host is keyed by name only", name)
+		}
+	}
+}
+
+// TestTheAddressesOfTheQueryAPIOfTheRunAreKeyedByNameWhateverTheirValue pins
+// GO_API_QUERY_API_URL and QUERY_API_INTERNAL_URL, the loopback addresses of the
+// query-api a test starts for one run (a random port each run): two runs with
+// other ports are one Python environment, another setting still changes the key,
+// and the same names supplied by the harness or the host are keyed by value.
+func TestTheAddressesOfTheQueryAPIOfTheRunAreKeyedByNameWhateverTheirValue(t *testing.T) {
+	key := func(entries ...envEntry) string {
+		t.Helper()
+		out, err := pythonEnvKey(entries)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return out
+	}
+	one := key(fromTest("GO_API_QUERY_API_URL=http://127.0.0.1:40001", "QUERY_API_INTERNAL_URL=http://127.0.0.1:40001", "LOG_LEVEL=info")...)
+	two := key(fromTest("GO_API_QUERY_API_URL=http://127.0.0.1:40002", "QUERY_API_INTERNAL_URL=http://127.0.0.1:40002", "LOG_LEVEL=info")...)
+	if one != two {
+		t.Fatal("the address of the run's query-api changes the Python environment key")
+	}
+	if one == key(fromTest("GO_API_QUERY_API_URL=http://127.0.0.1:40001", "QUERY_API_INTERNAL_URL=http://127.0.0.1:40001", "LOG_LEVEL=debug")...) {
+		t.Fatal("a changed LOG_LEVEL no longer changes the key")
+	}
+	for _, name := range []string{"GO_API_QUERY_API_URL", "QUERY_API_INTERNAL_URL"} {
 		if key(tagged([]string{name + "=a"}, false)...) == key(tagged([]string{name + "=b"}, false)...) {
 			t.Fatalf("%s supplied by the harness or the host is keyed by name only", name)
 		}

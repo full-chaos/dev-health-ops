@@ -25,6 +25,7 @@ must never silently drop a stage, so this file pins:
 
 from __future__ import annotations
 
+import json
 import os
 import re
 import shutil
@@ -525,21 +526,51 @@ def _race_excluded_rows() -> list[tuple[str, str]]:
     return rows  # type: ignore[return-value]
 
 
-def test_every_race_excluded_test_is_listed_and_lives_in_a_not_race_file() -> None:
-    listed = set(_race_excluded_rows())
+def _go_list_test_files(*tags: str) -> dict[str, set[str]]:
+    """Package import path -> the _test.go files `go list` compiles with these tags (whole module)."""
+    real_go = shutil.which("go")
+    assert real_go, "go is required"
+    env = {**os.environ, "GOWORK": "off", "GOFLAGS": "-mod=readonly"}
+    cmd = [real_go, "list", "-json=ImportPath,Dir,TestGoFiles,XTestGoFiles"]
+    if tags:
+        cmd += ["-tags", ",".join(tags)]
+    proc = subprocess.run(
+        [*cmd, "./..."], cwd=ROOT, env=env, capture_output=True, text=True, check=True
+    )
+    decoder = json.JSONDecoder()
+    text, index, files = proc.stdout, 0, {}
+    while index < len(text):
+        while index < len(text) and text[index].isspace():
+            index += 1
+        if index >= len(text):
+            break
+        pkg, index = decoder.raw_decode(text, index)
+        names = pkg.get("TestGoFiles", []) + pkg.get("XTestGoFiles", [])
+        files[pkg["ImportPath"]] = {str(Path(pkg["Dir"]) / n) for n in names}
+    return files
+
+
+def test_every_race_excluded_test_is_listed() -> None:
+    # Derived from Go itself over the whole module: the _test.go files `go list` compiles WITHOUT the race tag and not WITH
+    # it (whatever the constraint form: `!race && linux`, a license header before it, any directory), and their Test
+    # functions, must be exactly the rows of ci/race_excluded_tests.tsv.
+    mod, _ = _go_list()
+    plain = _go_list_test_files()
+    raced = _go_list_test_files("race")
+    assert plain, "go list found no package"
     found: set[tuple[str, str]] = set()
-    for source in (ROOT / "internal").rglob("*_test.go"):
-        text = source.read_text(encoding="utf-8")
-        if not text.startswith("//go:build !race\n"):
-            continue
-        package = str(source.parent.relative_to(ROOT))
-        found |= {
-            (package, name)
-            for name in re.findall(r"^func (Test\w+)\(", text, flags=re.M)
-        }
+    for pkg, names in plain.items():
+        for source in sorted(names - raced.get(pkg, set())):
+            text = Path(source).read_text(encoding="utf-8")
+            package = _key(mod, pkg)
+            found |= {
+                (package, name)
+                for name in re.findall(r"^func (Test\w+)\(", text, flags=re.M)
+            }
+    listed = set(_race_excluded_rows())
     assert found == listed, (
-        f"`!race` test files and ci/race_excluded_tests.tsv differ: "
-        f"unlisted {sorted(found - listed)}, listed but not in a `!race` file {sorted(listed - found)}"
+        "tests compiled without -race only and ci/race_excluded_tests.tsv differ: "
+        f"unlisted {sorted(found - listed)}, listed but compiled in the race leg {sorted(listed - found)}"
     )
 
 

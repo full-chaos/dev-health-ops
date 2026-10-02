@@ -101,7 +101,8 @@
     "result": "\"link_cross_origin_refused: refused a next page link on another origin\"",
     "requests": "[[https://api.github.com/orgs/acme/repos?per_page=100 token tok]]",
     "python_result": "\"UnicodeEncodeError: 'ascii' codec can't encode character '\\\\xe9' in position 11: ordinal not in range(128)\"",
-    "python_requests": "[[https://api.github.com/orgs/acme/repos?per_page=100 token tok]]"
+    "python_requests": "[[https://api.github.com/orgs/acme/repos?per_page=100 token tok]]",
+    "not_measured": true
   },
   "repos base=\"\" org=\"acme\" search=\"\" pattern=\"\" max=\u003cnone\u003e #7eeafbbbc96e": {
     "result": "[[\"api\",\"Org/api\",\"about api\",\"https://github.example.test/Org/api\"],[\"web\",\"Org/web\",\"about web\",\"https://github.example.test/Org/web\"],[\"docs\",\"Org/docs\",\"about docs\",\"https://github.example.test/Org/docs\"]]",
@@ -234,7 +235,8 @@
     "result": "\"link_cross_origin_refused: refused a next page link on another origin\"",
     "requests": "[[https://ghe.test/api/v3/orgs/acme/repos?per_page=100 token tok]]",
     "python_result": "\"UnicodeEncodeError: 'ascii' codec can't encode character '\\\\xe9' in position 11: ordinal not in range(128)\"",
-    "python_requests": "[[https://ghe.test/api/v3/orgs/acme/repos?per_page=100 token tok]]"
+    "python_requests": "[[https://ghe.test/api/v3/orgs/acme/repos?per_page=100 token tok]]",
+    "not_measured": true
   },
   "repos base=\"https://ghe.test/api/v3\" org=\"acme\" search=\"\" pattern=\"\" max=\u003cnone\u003e #0e1b0eec8c6e": {
     "result": "\"link_cross_origin_refused: refused a next page link on another origin\"",

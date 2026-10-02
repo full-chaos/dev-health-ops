@@ -209,6 +209,40 @@ def _invocations() -> list[tuple[str | None, list[str]]]:
     return found
 
 
+def _invocation_names() -> list[str]:
+    """The identity of every invocation `_invocations()` returns, in the same order: an entry
+    of ci/live_python_oracles.d by its file name, a literal block of ci/check_go.sh by
+    `check_go.sh: <selector> <packages>` (none exist today)."""
+    entries = sorted((REPO_ROOT / "ci" / "live_python_oracles.d").glob("*.run"))
+    literal = _invocations()[: len(_invocations()) - len(entries)]
+    names = [
+        f"check_go.sh: {selector or '(no -run)'} {' '.join(packages)}"
+        for selector, packages in literal
+    ]
+    return names + [entry.name for entry in entries]
+
+
+# CHAOS-7954: the closed list of the live-Python oracle invocations the gate runs. It replaces a
+# loose floor (">= 15") that went red by surprise when freeze merges removed entries one after
+# another (29 -> 26 -> 20 -> 13 -> 12): each PR was green alone and the sum was red. Now an
+# invocation can leave or join ONLY by an explicit edit of this list in the same PR, and the test
+# fails by name; a parser that loses an invocation cannot hide under a floor either.
+EXPECTED_ORACLE_INVOCATIONS = [
+    "010-providersync-all.run",
+    "030-edgetokenmint.run",
+    "050-api-policy.run",
+    "060-api-pyjson.run",
+    "080-api-pytime.run",
+    "100-api-pybody.run",
+    "110-api-syncadmin.run",
+    "190-apiservice-admin.run",
+    "270-jobs-investment.run",
+    "280-pythonparity.run",
+    "390-queryapi-principal.run",
+    "400-pythonparity-all.run",
+]
+
+
 def _tests_declared_in(package_argument: str) -> set[str]:
     """Test functions declared under a `./path` or `./path/...` argument."""
     relative = package_argument.lstrip("./").removesuffix("/...")
@@ -293,10 +327,17 @@ def test_the_parser_finds_a_plausible_number_of_invocations() -> None:
     for selector, packages in invocations:
         executed |= _tests_executed_by(selector, packages)
 
-    assert len(invocations) >= 15, (
-        f"only {len(invocations)} `go test` invocation(s) parsed from "
-        "ci/check_go.sh; the gate runs far more, so the parse has broken rather "
-        "than the script having shrunk"
+    names = _invocation_names()
+    assert len(names) == len(invocations), (
+        "the invocation names and the parsed invocations disagree in count: "
+        f"{len(names)} names, {len(invocations)} invocations"
+    )
+    assert sorted(names) == sorted(EXPECTED_ORACLE_INVOCATIONS), (
+        "the live-oracle invocations of the gate are not the closed list "
+        "EXPECTED_ORACLE_INVOCATIONS (edit the list in the same PR as the change): "
+        f"added={sorted(set(names) - set(EXPECTED_ORACLE_INVOCATIONS))} "
+        f"removed={sorted(set(EXPECTED_ORACLE_INVOCATIONS) - set(names))} "
+        f"parsed={len(invocations)}"
     )
     assert len(executed) >= 30, (
         f"only {len(executed)} test(s) resolved across those invocations; the "

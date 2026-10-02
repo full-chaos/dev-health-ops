@@ -1,0 +1,32 @@
+{
+  "header": {
+    "test": "TestDailyFamilyTablesCollapseCopiesWithoutChangingReaderRows",
+    "python_build": "a4847c5e93607451a0c987b314d37e02fc43ce85",
+    "producer_digest": "6e1dc97e68624398015f60caee160cceee6ae601bd434d01b8b7d5975267e137",
+    "recipe": "git worktree add --detach $DIR a4847c5e93607451a0c987b314d37e02fc43ce85 (with its .venv: uv sync --frozen --no-install-project); then from the repository root: go run ./internal/testsupport/venueoracle/goldenrecord -pkg ./internal/queryapi/server/ -test '^TestDailyFamilyTablesCollapseCopiesWithoutChangingReaderRows$' -python-root $DIR",
+    "recorded_by": "goldenrecord",
+    "blanked": {}
+  },
+  "requests": [
+    {
+      "name": "producer identity",
+      "method": "PYTHON",
+      "path": "program sha256 628419b830b7036474e09ad0528bf34d795b2cfba85f04bc4eb459060d57c0b5 env sha256 969169a1702b285f3a9e4b602d19052b0d6a3c6b2a44dd7425bef0f696436295",
+      "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "request_headers_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "status": 0,
+      "headers": {},
+      "body": "python 3.14.7\nunicodedata 16.0.0\n"
+    },
+    {
+      "name": "dedup sources",
+      "method": "PYTHON",
+      "path": "program sha256 8b3bb09dd850f3f3e91d2fe5d517911f0810b9b01bf9671fd6bbfcdf2bbccb24 env sha256 969169a1702b285f3a9e4b602d19052b0d6a3c6b2a44dd7425bef0f696436295",
+      "body_sha256": "3f961bb5f02ff0a80600dec31eed95feb463f5191dcda934e5a98f61c8f0c98b",
+      "request_headers_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "status": 0,
+      "headers": {},
+      "body": "{\"cicd_metrics_daily\": \"(\\n            SELECT *\\n            FROM cicd_metrics_daily\\n            ORDER BY computed_at DESC\\n            LIMIT 1 BY org_id, repo_id, day\\n        ) AS cicd_metrics_daily\", \"commit_metrics\": \"(\\n            SELECT *\\n            FROM commit_metrics\\n            ORDER BY computed_at DESC\\n            LIMIT 1 BY org_id, repo_id, day, author_email, commit_hash\\n        ) AS commit_metrics\", \"deploy_metrics_daily\": \"(\\n            SELECT *\\n            FROM deploy_metrics_daily\\n            ORDER BY computed_at DESC\\n            LIMIT 1 BY org_id, repo_id, day\\n        ) AS deploy_metrics_daily\", \"file_hotspot_daily\": \"(\\n            SELECT *\\n            FROM file_hotspot_daily\\n            ORDER BY computed_at DESC\\n            LIMIT 1 BY org_id, repo_id, day, file_path\\n        ) AS file_hotspot_daily\", \"file_metrics_daily\": \"(\\n            SELECT *\\n            FROM file_metrics_daily\\n            ORDER BY computed_at DESC\\n            LIMIT 1 BY org_id, repo_id, day, path\\n        ) AS file_metrics_daily\", \"incident_metrics_daily\": \"(\\n            SELECT *\\n            FROM incident_metrics_daily\\n            ORDER BY computed_at DESC\\n            LIMIT 1 BY org_id, repo_id, day\\n        ) AS incident_metrics_daily\", \"repo_metrics_daily\": \"(\\n            SELECT *\\n            FROM repo_metrics_daily\\n            ORDER BY computed_at DESC\\n            LIMIT 1 BY org_id, repo_id, day\\n        ) AS repo_metrics_daily\", \"review_edges_daily\": \"(\\n            SELECT *\\n            FROM review_edges_daily\\n            ORDER BY computed_at DESC\\n            LIMIT 1 BY org_id, repo_id, reviewer, author, day\\n        ) AS review_edges_daily\", \"team_metrics_daily\": \"(\\n            SELECT *\\n            FROM team_metrics_daily\\n            ORDER BY computed_at DESC\\n            LIMIT 1 BY org_id, team_id, repo_id, day\\n        ) AS team_metrics_daily\", \"testops_coverage_metrics_daily\": \"(\\n            SELECT *\\n            FROM testops_coverage_metrics_daily\\n            ORDER BY computed_at DESC\\n            LIMIT 1 BY org_id, repo_id, day\\n        ) AS testops_coverage_metrics_daily\", \"testops_pipeline_metrics_daily\": \"(\\n            SELECT *\\n            FROM testops_pipeline_metrics_daily\\n            ORDER BY computed_at DESC\\n            LIMIT 1 BY org_id, repo_id, day\\n        ) AS testops_pipeline_metrics_daily\", \"testops_pipeline_stability\": \"(\\n            SELECT *\\n            FROM testops_pipeline_stability\\n            ORDER BY computed_at DESC\\n            LIMIT 1 BY org_id, repo_id, day\\n        ) AS testops_pipeline_stability\", \"testops_quality_drag\": \"(\\n            SELECT *\\n            FROM testops_quality_drag\\n            ORDER BY computed_at DESC\\n            LIMIT 1 BY org_id, repo_id, day\\n        ) AS testops_quality_drag\", \"testops_release_confidence\": \"(\\n            SELECT *\\n            FROM testops_release_confidence\\n            ORDER BY computed_at DESC\\n            LIMIT 1 BY org_id, repo_id, day\\n        ) AS testops_release_confidence\", \"testops_test_metrics_daily\": \"(\\n            SELECT *\\n            FROM testops_test_metrics_daily\\n            ORDER BY computed_at DESC\\n            LIMIT 1 BY org_id, repo_id, day\\n        ) AS testops_test_metrics_daily\", \"user_metrics_daily\": \"(\\n            SELECT *\\n            FROM user_metrics_daily\\n            ORDER BY computed_at DESC\\n            LIMIT 1 BY org_id, repo_id, author_email, day\\n        ) AS user_metrics_daily\"}\n"
+    }
+  ]
+}

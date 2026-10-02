@@ -37,6 +37,8 @@ func TestUsersVerbsRefuseBadArgumentsBeforeConnecting(t *testing.T) {
 		{"create needs --email", runUsersCreate, []string{"--password", "password1"}},
 		{"create needs --password", runUsersCreate, []string{"--email", "a@example.com"}},
 		{"create refuses a positional", runUsersCreate, []string{"--email", "a@example.com", "--password", "password1", "x"}},
+		{"create refuses --password with --password-stdin", runUsersCreate, []string{"--email", "a@example.com", "--password", "password1", "--password-stdin"}},
+		{"create --password-stdin needs a password line", runUsersCreate, []string{"--email", "a@example.com", "--password-stdin"}},
 		{"orgs create needs --name", runOrgsCreate, nil},
 		{"update refuses an unknown role", runUsersUpdate, []string{"--email", "a@example.com", "--org", "x", "--role", "root"}},
 		{"list refuses a positional", runUsersList, []string{"x"}},
@@ -82,5 +84,90 @@ func TestUsersVerbsRefuseBadArgumentsBeforeConnecting(t *testing.T) {
 	}
 	if fresh := (&optBool{}); fresh.ptr() != nil {
 		t.Fatal("an unset tri-state flag must be nil")
+	}
+}
+
+// --password-stdin takes the first line of standard input as the password and
+// never an empty one; a good line reaches the database step (no database here,
+// so a failure, not a usage refusal).
+func TestUsersCreatePasswordStdin(t *testing.T) {
+	for in, want := range map[string]string{"pw12345678\n": "pw12345678", "pw12345678\r\nrest\n": "pw12345678", "pw12345678": "pw12345678", " sp ace \n": " sp ace ", "pw12345678\r": "pw12345678\r", "pw12345678\r\r\n": "pw12345678\r"} {
+		if got, err := readPasswordLine(strings.NewReader(in)); err != nil || got != want {
+			t.Errorf("readPasswordLine(%q) = %q, %v; want %q", in, got, err, want)
+		}
+	}
+	for _, in := range []string{"", "\n", "\r\n"} {
+		if got, err := readPasswordLine(strings.NewReader(in)); err == nil {
+			t.Errorf("readPasswordLine(%q) = %q, nil; want an error", in, got)
+		}
+	}
+	if _, err := readPasswordLine(nil); err == nil {
+		t.Error("a nil stdin must be an error")
+	}
+	noDatabase := func(string) (string, bool) { return "", false }
+	var stdout, stderr bytes.Buffer
+	code := runUsersCreate(context.Background(), cli.Env{
+		Args: []string{"--email", "a@example.com", "--password-stdin"}, Stdin: strings.NewReader("pw12345678\n"),
+		Stdout: &stdout, Stderr: &stderr, Lookup: noDatabase,
+	})
+	if code != cli.ExitFailure {
+		t.Errorf("a good stdin password gave exit %d, want %d (stderr %q)", code, cli.ExitFailure, stderr.String())
+	}
+	// Both given, with a good stdin line: still a usage refusal, not a silent pick.
+	stderr.Reset()
+	code = runUsersCreate(context.Background(), cli.Env{
+		Args: []string{"--email", "a@example.com", "--password", "password1", "--password-stdin"}, Stdin: strings.NewReader("pw12345678\n"),
+		Stdout: &stdout, Stderr: &stderr, Lookup: noDatabase,
+	})
+	if code != cli.ExitUsage || !strings.Contains(stderr.String(), "mutually exclusive") {
+		t.Errorf("--password with --password-stdin gave exit %d (stderr %q), want a mutually-exclusive refusal", code, stderr.String())
+	}
+	if strings.Contains(stderr.String()+stdout.String(), "pw12345678") {
+		t.Error("the password was echoed")
+	}
+}
+
+// An argv secret still works, with a WARN that names the flag and never the
+// value; the stdin forms of update and llm-settings set follow the same rules.
+func TestSecretFlagsWarnAndStdinForms(t *testing.T) {
+	const secret = "s3cr3t-value-9f2"
+	noDatabase := func(string) (string, bool) { return "", false }
+	cases := []struct {
+		name     string
+		run      func(context.Context, cli.Env) int
+		args     []string
+		stdin    string
+		wantCode int
+		wantWarn string
+		wantErr  string
+	}{
+		{"create argv warns", runUsersCreate, []string{"--email", "a@example.com", "--password", secret}, "", cli.ExitFailure, "WARN: --password ", ""},
+		{"update argv warns", runUsersUpdate, []string{"--email", "a@example.com", "--password", secret}, "", cli.ExitFailure, "WARN: --password ", ""},
+		{"llm set argv warns", runLLMSet, []string{"--org", "o", "--provider", "p", "--api-key", secret}, "", cli.ExitFailure, "WARN: --api-key ", ""},
+		{"update stdin reaches the database", runUsersUpdate, []string{"--email", "a@example.com", "--password-stdin"}, secret + "\n", cli.ExitFailure, "", ""},
+		{"update both forms refused", runUsersUpdate, []string{"--email", "a@example.com", "--password", secret, "--password-stdin"}, secret + "\n", cli.ExitUsage, "", "mutually exclusive"},
+		{"update empty stdin refused", runUsersUpdate, []string{"--email", "a@example.com", "--password-stdin"}, "\n", cli.ExitUsage, "", "first line of standard input"},
+		{"llm set stdin reaches the database", runLLMSet, []string{"--org", "o", "--provider", "p", "--api-key-stdin"}, secret + "\n", cli.ExitFailure, "", ""},
+		{"llm set both forms refused", runLLMSet, []string{"--org", "o", "--provider", "p", "--api-key", secret, "--api-key-stdin"}, secret + "\n", cli.ExitUsage, "", "mutually exclusive"},
+		{"llm set empty stdin refused", runLLMSet, []string{"--org", "o", "--provider", "p", "--api-key-stdin"}, "", cli.ExitUsage, "", "first line of standard input"},
+	}
+	for _, c := range cases {
+		var stdout, stderr bytes.Buffer
+		code := c.run(context.Background(), cli.Env{Args: c.args, Stdin: strings.NewReader(c.stdin), Stdout: &stdout, Stderr: &stderr, Lookup: noDatabase})
+		if code != c.wantCode {
+			t.Errorf("%s: exit %d, want %d (stderr %q)", c.name, code, c.wantCode, stderr.String())
+		}
+		if c.wantWarn != "" && !strings.Contains(stderr.String(), c.wantWarn) {
+			t.Errorf("%s: stderr %q lacks %q", c.name, stderr.String(), c.wantWarn)
+		}
+		if c.wantWarn == "" && strings.Contains(stderr.String(), "WARN: --") {
+			t.Errorf("%s: unexpected argv WARN %q", c.name, stderr.String())
+		}
+		if c.wantErr != "" && !strings.Contains(stderr.String(), c.wantErr) {
+			t.Errorf("%s: stderr %q lacks %q", c.name, stderr.String(), c.wantErr)
+		}
+		if strings.Contains(stdout.String()+stderr.String(), secret) {
+			t.Errorf("%s: the secret reached the output", c.name)
+		}
 	}
 }

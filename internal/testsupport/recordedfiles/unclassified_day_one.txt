@@ -1,6 +1,5 @@
 # The files that had no kind when the manifests were first written. The list only shrinks:
 # a file leaves it when it gets a kind (go run ./internal/testsupport/recordedfiles/manifest -kind <kind> <file>), and no file is added.
-internal/adminops/testdata/reconcile_fixtures.json
 internal/adminops/testdata/service_credentials_args_oracle.py
 internal/adminops/testdata/stripe_fixtures.json
 internal/api/externalingest/testdata/python_schema_bundle_oracle.py

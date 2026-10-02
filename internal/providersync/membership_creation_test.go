@@ -3,6 +3,7 @@ package providersync
 import (
 	"context"
 	"encoding/json"
+	"github.com/full-chaos/dev-health-ops/internal/testsupport/fakehttp"
 	"io"
 	"net/http"
 	"sort"
@@ -96,7 +97,7 @@ func linearCreationBatch(t *testing.T, issueJSON string, fetchHistory bool) Comp
 	batch, err := handler.Collect(
 		context.Background(), claim,
 		providerfoundation.Credential{Provider: "linear", ID: claim.CredentialID},
-		linearWorkItemsClient(t, doer), time.Date(2026, 8, 3, 12, 0, 0, 0, time.UTC),
+		linearWorkItemsClient(t, fakehttp.Client(doer)), time.Date(2026, 8, 3, 12, 0, 0, 0, time.UTC),
 	)
 	if err != nil {
 		t.Fatal(err)
@@ -257,7 +258,7 @@ func jiraCreationBatch(t *testing.T, created, changelogValues string) CompleteRo
 	doer := &jiraCreationDoer{t: t, issue: issue, changelog: `{"values":[` + changelogValues + `],"total":` + strconv.Itoa(strings.Count(changelogValues, `"items"`)) + `,"isLast":true}`}
 	claim := jiraAtlassianClaim()
 	claim.DatasetOptions = map[string]any{"fetch_worklogs": false, "fetch_board_sprints": false, "fetch_comments": false}
-	client := jiraWorkItemsTestClient(t, doer, providerfoundation.LeaseGuardFunc(func(context.Context) error { return nil }))
+	client := jiraWorkItemsTestClient(t, fakehttp.Client(doer), providerfoundation.LeaseGuardFunc(func(context.Context) error { return nil }))
 	batch, err := jiraAtlassianCompleteHandler(t).Collect(
 		context.Background(), claim, providerfoundation.Credential{}, client,
 		time.Date(2026, 8, 10, 12, 0, 0, 0, time.UTC),

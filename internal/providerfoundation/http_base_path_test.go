@@ -2,6 +2,7 @@ package providerfoundation
 
 import (
 	"context"
+	"github.com/full-chaos/dev-health-ops/internal/testsupport/fakehttp"
 	"io"
 	"net/http"
 	"strings"
@@ -18,7 +19,7 @@ func (d *recordingDoer) Do(request *http.Request) (*http.Response, error) {
 
 func baseURLClient(t *testing.T, base string, doer HTTPDoer) *HTTPClient {
 	t.Helper()
-	client, err := NewHTTPClient("gitlab", base, doer, func(*http.Request) error { return nil },
+	client, err := NewHTTPClient("gitlab", base, fakehttp.Client(doer), func(*http.Request) error { return nil },
 		RetryPolicy{MaxAttempts: 1, InitialWait: time.Nanosecond, MaxWait: time.Nanosecond},
 		LeaseGuardFunc(func(context.Context) error { return nil }))
 	if err != nil {
@@ -46,7 +47,7 @@ func TestDoKeepsTheBaseURLPath(t *testing.T) {
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			doer := &recordingDoer{}
-			response, err := baseURLClient(t, tc.base, doer).Do(context.Background(), http.MethodGet, tc.path, nil)
+			response, err := baseURLClient(t, tc.base, fakehttp.Client(doer)).Do(context.Background(), http.MethodGet, tc.path, nil)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -61,7 +62,7 @@ func TestDoKeepsTheBaseURLPath(t *testing.T) {
 func TestDoRefusesAnotherOriginWhateverThePathForm(t *testing.T) {
 	for _, path := range []string{"https://evil.example/x", "http://gitlab.example.com/x", "//evil.example/x", "https://gitlab.example.com:8443/x"} {
 		doer := &recordingDoer{}
-		if _, err := baseURLClient(t, "https://gitlab.example.com/gitlab", doer).Do(context.Background(), http.MethodGet, path, nil); err == nil || len(doer.urls) != 0 {
+		if _, err := baseURLClient(t, "https://gitlab.example.com/gitlab", fakehttp.Client(doer)).Do(context.Background(), http.MethodGet, path, nil); err == nil || len(doer.urls) != 0 {
 			t.Fatalf("path %q: err %v, requests %v; a request must never leave the base origin", path, err, doer.urls)
 		}
 	}

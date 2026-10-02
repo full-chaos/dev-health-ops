@@ -51,7 +51,7 @@ func validationFailure(code string) error { return &PagerDutyValidationError{Cod
 // bounded read of /services?limit=1 as the proof of usable access. Every
 // request follows redirects and has httpx's default 5s timeout.
 func ValidatePagerDutyCredential(ctx context.Context, doer HTTPDoer, config PagerDutyRevokeConfig, candidate PagerDutyCredentialCandidate, requiredScopes []string) (ValidatedPagerDutyCredential, error) {
-	client := pagerDutyClient(doer, true, 5*time.Second)
+	client := pagerDutyValidationClient(doer, 5*time.Second)
 	switch candidate.AuthMode {
 	case "api_token":
 		if candidate.APIToken == "" {
@@ -88,7 +88,7 @@ func ValidatePagerDutyCredential(ctx context.Context, doer HTTPDoer, config Page
 		// or 308 replays to the redirect target. httpx (follow_redirects=True)
 		// would follow it; this request does not -- a redirect is a failed
 		// read here, and PagerDuty's token endpoint never redirects.
-		access, granted, err := pagerDutyExchangeClientCredentials(ctx, pagerDutyClient(doer, false, 5*time.Second), config, candidate, requiredScopes)
+		access, granted, err := pagerDutyExchangeClientCredentials(ctx, pagerDutyFormClient(doer, 5*time.Second), config, candidate, requiredScopes)
 		if err != nil {
 			return ValidatedPagerDutyCredential{}, err
 		}

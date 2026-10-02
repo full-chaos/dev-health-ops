@@ -3,6 +3,7 @@ package providersync
 import (
 	"context"
 	"encoding/json"
+	"github.com/full-chaos/dev-health-ops/internal/testsupport/fakehttp"
 	"testing"
 	"time"
 
@@ -29,9 +30,9 @@ func buildGitLabRepositoryRowForOracle(
 	batch, err := (GitLabRepositoryRouteHandler{}).Collect(
 		context.Background(), nativeTestClaim("gitlab", "repo-metadata"),
 		providerfoundation.Credential{},
-		gitLabRepositoryClient(t, &gitLabRepositoryDoer{
+		gitLabRepositoryClient(t, fakehttp.Client(&gitLabRepositoryDoer{
 			t: t, body: string(encoded),
-		}, input["gitlab_url"].(string)), normalizedAt,
+		}), input["gitlab_url"].(string)), normalizedAt,
 	)
 	if err != nil {
 		t.Fatal(err)

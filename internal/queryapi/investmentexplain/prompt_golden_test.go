@@ -3,9 +3,9 @@ package investmentexplain
 import (
 	"encoding/json"
 	"fmt"
+	"github.com/full-chaos/dev-health-ops/internal/testsupport/moduleroot"
 	"os"
 	"path/filepath"
-	"runtime"
 	"testing"
 )
 
@@ -13,7 +13,7 @@ import (
 // same pattern as internal/jobs/investment/categorize/prompts_golden_test.go's
 // categorizeRepositoryRoot.
 func repositoryRoot() (string, error) {
-	_, file, _, ok := runtime.Caller(0)
+	_, file, _, ok := moduleroot.Caller(0)
 	if !ok {
 		return "", fmt.Errorf("could not determine caller for repository root resolution")
 	}

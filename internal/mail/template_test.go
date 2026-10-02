@@ -1,9 +1,9 @@
 package mail
 
 import (
+	"github.com/full-chaos/dev-health-ops/internal/testsupport/moduleroot"
 	"os"
 	"path/filepath"
-	"runtime"
 	"strings"
 	"testing"
 )
@@ -13,7 +13,7 @@ import (
 // copies (go:embed cannot reach outside the package), so this is the only
 // thing keeping the two planes' invite mail identical.
 func TestEmbeddedTemplatesMatchThePythonOnes(t *testing.T) {
-	_, file, _, ok := runtime.Caller(0)
+	_, file, _, ok := moduleroot.Caller(0)
 	if !ok {
 		t.Fatal("cannot locate this test's source file")
 	}

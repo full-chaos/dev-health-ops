@@ -17,6 +17,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"github.com/full-chaos/dev-health-ops/internal/auth/httpapi"
 	"io"
 	"log"
 	"log/slog"
@@ -3488,6 +3489,7 @@ func newDocumentDispatchHandler(getenv getenvFunc, routeMux *routeswitch.Mux, op
 				"query-api: unregistered document digest-miss: digest=%s query=%s",
 				digestHex(query), truncateForLog(query, maxUnwrapChainLogBytes),
 			)
+			httpapi.RecordNotFoundCause(r.Context(), httpapi.NotFoundUnregisteredDocument)
 			if edge {
 				refuseGraphQLEdgeUnregistered(w)
 				return

@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"github.com/full-chaos/dev-health-ops/internal/testsupport/fakehttp"
 	"io"
 	"net/http"
 	"testing"
@@ -50,9 +51,9 @@ func TestDiscoverLinearWalksEveryPage(t *testing.T) {
 		`{"data":{"teams":{"nodes":[{"key":"ENG","name":"Engineering","description":"core"}],"pageInfo":{"hasNextPage":true,"endCursor":"cursor-1"}}}}`,
 		`{"data":{"teams":{"nodes":[{"key":"DESIGN","name":"Design","description":null}],"pageInfo":{"hasNextPage":false,"endCursor":""}}}}`,
 	}}
-	oldClient := discoveryHTTPClient
-	discoveryHTTPClient = doer
-	defer func() { discoveryHTTPClient = oldClient }()
+	oldClient := fakehttp.Client(discoveryHTTPClient)
+	discoveryHTTPClient = fakehttp.Client(doer)
+	defer func() { discoveryHTTPClient = fakehttp.Client(oldClient) }()
 
 	teams, err := discoverLinear(context.Background(), linearTestCredential())
 	if err != nil {

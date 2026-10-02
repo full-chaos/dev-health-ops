@@ -7,13 +7,13 @@ import (
 	"io"
 	"log/slog"
 	"path/filepath"
-	"runtime"
 	"testing"
 	"time"
 
 	"github.com/full-chaos/dev-health-ops/internal/jobruntime"
 	"github.com/full-chaos/dev-health-ops/internal/syncdispatchcontract"
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/containers"
+	"github.com/full-chaos/dev-health-ops/internal/testsupport/moduleroot"
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/riverqueue/river"
 	"github.com/riverqueue/river/riverdriver/riverpgxv5"
@@ -58,7 +58,7 @@ func TestPartialQueueClientDoesNotDiscardAnotherQueuesStuckJob(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	_, file, _, ok := runtime.Caller(0)
+	_, file, _, ok := moduleroot.Caller(0)
 	if !ok {
 		t.Fatal("resolve test path")
 	}

@@ -3,6 +3,7 @@ package providerfoundation
 import (
 	"context"
 	"errors"
+	"github.com/full-chaos/dev-health-ops/internal/testsupport/fakehttp"
 	"io"
 	"net/http"
 	"strings"
@@ -78,13 +79,13 @@ func TestExchangePagerDutyAuthorizationCodeStatusClasses(t *testing.T) {
 		doer := callbackDoerFunc(func(r *http.Request) (*http.Response, error) {
 			return jsonResponse(status, `{"access_token":"a"}`), nil
 		})
-		_, err := ExchangePagerDutyAuthorizationCode(context.Background(), doer, PagerDutyRevokeConfig{ClientID: "id"}, "code", "verifier", time.Now())
+		_, err := ExchangePagerDutyAuthorizationCode(context.Background(), fakehttp.Client(doer), PagerDutyRevokeConfig{ClientID: "id"}, "code", "verifier", time.Now())
 		if !errors.Is(err, want) && !(want == nil && err == nil) {
 			t.Errorf("status %d: err = %v, want %v", status, err, want)
 		}
 	}
 	failing := callbackDoerFunc(func(*http.Request) (*http.Response, error) { return nil, errors.New("down") })
-	if _, err := ExchangePagerDutyAuthorizationCode(context.Background(), failing, PagerDutyRevokeConfig{}, "c", "v", time.Now()); !errors.Is(err, ErrPagerDutyExchangeUnavailable) {
+	if _, err := ExchangePagerDutyAuthorizationCode(context.Background(), fakehttp.Client(failing), PagerDutyRevokeConfig{}, "c", "v", time.Now()); !errors.Is(err, ErrPagerDutyExchangeUnavailable) {
 		t.Fatalf("transport failure: %v", err)
 	}
 }
@@ -126,7 +127,7 @@ func TestExchangePagerDutyAuthorizationCodeBodyReadFailureIsUnavailable(t *testi
 		doer := callbackDoerFunc(func(*http.Request) (*http.Response, error) {
 			return &http.Response{StatusCode: status, Header: http.Header{}, Body: io.NopCloser(failingReader{})}, nil
 		})
-		_, err := ExchangePagerDutyAuthorizationCode(context.Background(), doer, PagerDutyRevokeConfig{ClientID: "id"}, "c", "v", time.Now())
+		_, err := ExchangePagerDutyAuthorizationCode(context.Background(), fakehttp.Client(doer), PagerDutyRevokeConfig{ClientID: "id"}, "c", "v", time.Now())
 		if !errors.Is(err, ErrPagerDutyExchangeUnavailable) {
 			t.Errorf("status %d with a body that fails to read: err = %v, want unavailable", status, err)
 		}

@@ -4,11 +4,11 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"github.com/full-chaos/dev-health-ops/internal/testsupport/moduleroot"
 	"io/fs"
 	"os"
 	"path/filepath"
 	"regexp"
-	"runtime"
 	"sort"
 	"strings"
 	"sync"
@@ -32,7 +32,7 @@ var topLevelTestFunction = regexp.MustCompile(`(?m)^func (Test\w+)\(`)
 // A pair without a golden, or a golden without a test, is a comparison that no
 // longer happens: it fails here by name.
 func TestEveryOraclePairHasAFrozenGolden(t *testing.T) {
-	_, currentFile, _, _ := runtime.Caller(0)
+	_, currentFile, _, _ := moduleroot.Caller(0)
 	packageDir := filepath.Dir(currentFile)
 
 	pairs := map[string]bool{}

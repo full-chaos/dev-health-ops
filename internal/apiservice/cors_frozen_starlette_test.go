@@ -7,13 +7,13 @@ import (
 	"net/http/httptest"
 	"path/filepath"
 	"reflect"
-	"runtime"
 	"sort"
 	"strings"
 	"testing"
 
 	"github.com/full-chaos/dev-health-ops/internal/api/pyheaders"
 	"github.com/full-chaos/dev-health-ops/internal/platform/config"
+	"github.com/full-chaos/dev-health-ops/internal/testsupport/moduleroot"
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/pyoracle"
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/venueoracle"
 )
@@ -85,7 +85,7 @@ type corsCase struct {
 // the venue-oracles job, which discovers it by name and requires its proof.
 func TestCORSMatchesFrozenStarlette(t *testing.T) {
 	golden := venueoracle.OpenGolden(t, programGolden("cors-starlette", t.Name(), "b9b95dc21c75108e286bb853e53a8158b7b50aae8fec00a9d94c72828cb09074"))
-	_, file, _, _ := runtime.Caller(0)
+	_, file, _, _ := moduleroot.Caller(0)
 	root := golden.PythonRoot(t, filepath.Clean(filepath.Join(filepath.Dir(file), "..", "..")))
 
 	configs := map[string]*string{

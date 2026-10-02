@@ -13,12 +13,16 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"github.com/full-chaos/dev-health-ops/internal/httpguard"
 	"io"
 	"net"
 	"net/http"
+	"net/url"
 	"strings"
+	"sync/atomic"
 	"time"
 
+	"github.com/full-chaos/dev-health-ops/internal/platform/logging"
 	"github.com/full-chaos/dev-health-ops/internal/pythonparity"
 )
 
@@ -103,10 +107,17 @@ func DefaultRetryable(r Response) bool {
 // place on a timeout or refused connection and on a retryable status, a 3xx
 // an APIException, then classified by _raise_for_status.
 func (c Core) Get(ctx context.Context, target, operation string) (Response, error) {
-	httpClient := c.HTTP
-	if httpClient == nil {
-		httpClient = &http.Client{Timeout: DefaultTimeout, CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}
+	supplied := c.HTTP
+	if supplied == nil {
+		supplied = &http.Client{Timeout: DefaultTimeout}
 	}
+	// The one guard layer: whatever client came in (a caller's, or this default), the credential never follows a redirect.
+	httpClient := httpguard.NoRedirects(supplied)
+	// A copy of the client (NoRedirects never changes the caller's): its transport also records whether a 3xx answer with a
+	// Location came back, the one fact that tells net/http's refusal of that Location from an ordinary transport error whose
+	// text happens to start with the same words (CHAOS-7927 r2).
+	witness := &redirectWitness{base: httpClient.Transport}
+	httpClient.Transport = witness
 	sleep := c.Sleep
 	if sleep == nil {
 		sleep = sleepContext
@@ -130,16 +141,23 @@ func (c Core) Get(ctx context.Context, target, operation string) (Response, erro
 	for attempt := 0; attempt < retries; attempt++ {
 		request, err := http.NewRequestWithContext(ctx, http.MethodGet, target, nil)
 		if err != nil {
-			return Response{}, &Error{"APIException", err.Error()}
+			// The text of a URL error quotes the whole target, query included (CHAOS-7935).
+			return Response{}, &Error{"APIException", fmt.Sprintf("%s request failed on %s: invalid request URL", c.Provider, operation)}
 		}
 		for name, value := range c.Headers {
 			request.Header.Set(name, value)
 		}
+		witness.seen.Store(false)
 		response, err := httpClient.Do(request)
 		var body []byte
 		if err == nil {
 			body, err = io.ReadAll(response.Body)
 			response.Body.Close()
+		}
+		if err != nil && witness.seen.Load() && isLocationParseFailure(err) {
+			// net/http refused the redirect itself and its error text quotes the whole Location (CHAOS-7927): say that
+			// the redirect was refused, not where to.
+			return Response{}, &Error{"APIException", fmt.Sprintf("%s unexpected redirect on %s: the Location header is not a valid URL (%s); the instrumented core does not follow redirects", c.Provider, operation, redirectUnparsable)}
 		}
 		if err != nil {
 			// Only a timeout and a connection failure are retried
@@ -147,7 +165,10 @@ func (c Core) Get(ctx context.Context, target, operation string) (Response, erro
 			// transport error is raised at once as the httpx exception
 			// itself, which no route handles.
 			if !retryableTransport(err) {
-				return Response{}, &Error{Class: "TransportError", Message: err.Error()}
+				// net/http's text quotes the whole request URL, query included: the text is the operation and the class only
+				// (logging.TransportFailure). The cause is NOT kept: Error holds only Class and Message and has no Unwrap, so
+				// errors.Is / errors.As do not reach it (pinned by TestAnErrorOfTheCoreHasNoCauseToUnwrap); the class names it.
+				return Response{}, &Error{Class: "TransportError", Message: logging.TransportFailure(err).Error()}
 			}
 			if attempt < retries-1 {
 				if err := sleep(ctx, delay); err != nil {
@@ -156,19 +177,20 @@ func (c Core) Get(ctx context.Context, target, operation string) (Response, erro
 				delay = min(delay*2, maxBackoff)
 				continue
 			}
-			// httpx's own exception text differs from Go's (named limit).
-			return Response{}, &Error{Class: "APIException", Message: fmt.Sprintf("%s request failed on %s: %v", c.Provider, operation, err)}
+			// httpx's own exception text differs from Go's (named limit); Go's quotes the request URL, so the text carries
+			// the class of the failure only (CHAOS-7935).
+			return Response{}, &Error{Class: "APIException", Message: fmt.Sprintf("%s request failed on %s: %s", c.Provider, operation, logging.TransportClass(err))}
 		}
 		got := Response{Status: response.StatusCode, Header: response.Header, Body: body, URL: target}
 		if got.Status < 300 {
 			return got, nil
 		}
 		if got.Status < 400 {
-			location, present := got.HeaderText("Location")
-			if !present {
-				location = "<no Location header>"
+			target := "<no Location header>"
+			if location, present := got.HeaderText("Location"); present {
+				target = RedirectTarget(location)
 			}
-			return Response{}, &Error{"APIException", fmt.Sprintf("%s unexpected redirect on %s: HTTP %d -> %s; the instrumented core does not follow redirects (pass raw_redirect=True to receive the redirect response and handle Location manually)", c.Provider, operation, got.Status, location)}
+			return Response{}, &Error{"APIException", fmt.Sprintf("%s unexpected redirect on %s: HTTP %d -> %s; the instrumented core does not follow redirects (pass raw_redirect=True to receive the redirect response and handle Location manually)", c.Provider, operation, got.Status, target)}
 		}
 		if retryable(got) && attempt < retries-1 {
 			wait := c.RetryAfter(got)
@@ -186,6 +208,29 @@ func (c Core) Get(ctx context.Context, target, operation string) (Response, erro
 	return Response{}, &Error{"APIException", fmt.Sprintf("%s request failed on %s: unknown error", c.Provider, operation)}
 }
 
+const (
+	redirectRelative   = "<relative Location>"
+	redirectUnparsable = "<unparsable Location>"
+)
+
+// RedirectTarget is what an error text may say of a redirect's Location: the scheme and the host (with its port), never
+// the userinfo, the path, the query or the fragment, which can carry a credential or an id (CHAOS-7927). A Location with no
+// host is "<relative Location>"; one that does not parse is "<unparsable Location>". Python's text carries the raw header;
+// this is a named difference.
+func RedirectTarget(location string) string {
+	parsed, err := url.Parse(strings.TrimSpace(location))
+	if err != nil {
+		return redirectUnparsable
+	}
+	if parsed.Host == "" {
+		return redirectRelative
+	}
+	if parsed.Scheme == "" {
+		return "//" + parsed.Host
+	}
+	return parsed.Scheme + "://" + parsed.Host
+}
+
 // raise is _raise_for_status: classify_error first, then the generic
 // 401/403/404/429/5xx classification.
 func (c Core) raise(r Response, operation string) error {
@@ -200,7 +245,7 @@ func (c Core) raise(r Response, operation string) error {
 	case r.Status == 403:
 		return &Error{"AuthenticationException", fmt.Sprintf("%s forbidden on %s: %s", c.Provider, operation, r.Text())}
 	case r.Status == 404:
-		return &Error{"NotFoundException", fmt.Sprintf("%s resource not found on %s: %s", c.Provider, operation, r.URL)}
+		return &Error{"NotFoundException", fmt.Sprintf("%s resource not found on %s: %s", c.Provider, operation, redactRequestURL(r.URL))}
 	case r.Status == 429:
 		return &Error{"RateLimitException", fmt.Sprintf("%s rate limit exceeded on %s", c.Provider, operation)}
 	case r.Status >= 500:
@@ -230,4 +275,67 @@ func sleepContext(ctx context.Context, wait time.Duration) error {
 	case <-timer.C:
 		return nil
 	}
+}
+
+// redirectWitness is a transport that notes a 3xx answer carrying a Location header: net/http parses that header AFTER the
+// round trip, so an error about it can only follow such an answer.
+type redirectWitness struct {
+	base http.RoundTripper
+	seen atomic.Bool
+}
+
+func (w *redirectWitness) RoundTrip(request *http.Request) (*http.Response, error) {
+	base := w.base
+	if base == nil {
+		base = http.DefaultTransport
+	}
+	response, err := base.RoundTrip(request)
+	if err == nil && response != nil && response.StatusCode >= 300 && response.StatusCode < 400 && response.Header.Get("Location") != "" {
+		w.seen.Store(true)
+	}
+	return response, err
+}
+
+// isLocationParseFailure: net/http refused a redirect whose Location does not parse. Its error is a *url.Error wrapping an
+// unwrappable error whose text STARTS with the phrase; a transport error that merely mentions the phrase, or wraps a cause,
+// is an ordinary transport error and keeps its class (CHAOS-7927 r1).
+func isLocationParseFailure(err error) bool {
+	var urlErr *url.Error
+	if !errors.As(err, &urlErr) || urlErr.Err == nil || errors.Unwrap(urlErr.Err) != nil {
+		return false
+	}
+	return strings.HasPrefix(urlErr.Err.Error(), "failed to parse Location header ")
+}
+
+// redactRequestURL is the request URL as it appears in the text of a NotFound error, with what can hold a credential taken out:
+// the userinfo, the value of every query parameter whose NAME is a protected key (token, secret, password, key, ...) and the
+// fragment. Every other byte is kept as it is, so the answer stays byte-identical to Python's for a URL without them (the
+// frozen venue oracles of the sync admin routes pin that text). Both providers authenticate by header (Authorization,
+// PRIVATE-TOKEN), so the URL the callers build holds no credential today; this is the guard for a base URL an operator
+// configured with one (CHAOS-7935).
+func redactRequestURL(raw string) string {
+	rest, _, _ := strings.Cut(raw, "#")
+	if scheme := strings.Index(rest, "://"); scheme >= 0 {
+		authorityEnd := len(rest)
+		if cut := strings.IndexAny(rest[scheme+3:], "/?"); cut >= 0 {
+			authorityEnd = scheme + 3 + cut
+		}
+		if at := strings.LastIndex(rest[scheme+3:authorityEnd], "@"); at >= 0 {
+			rest = rest[:scheme+3] + "[REDACTED]@" + rest[scheme+3+at+1:]
+		}
+	}
+	if path, query, hasQuery := strings.Cut(rest, "?"); hasQuery {
+		pairs := strings.Split(query, "&")
+		for index, pair := range pairs {
+			name, _, hasValue := strings.Cut(pair, "=")
+			if unescaped, err := url.QueryUnescape(name); err == nil {
+				name = unescaped
+			}
+			if hasValue && logging.ProtectedKey(name) {
+				pairs[index] = pair[:strings.Index(pair, "=")+1] + "[REDACTED]"
+			}
+		}
+		rest = path + "?" + strings.Join(pairs, "&")
+	}
+	return rest
 }

@@ -3,19 +3,19 @@ package jobrescue
 import (
 	"path/filepath"
 	"reflect"
-	"runtime"
 	"sort"
 	"testing"
 	"time"
 
 	"github.com/full-chaos/dev-health-ops/internal/jobruntime"
 	"github.com/full-chaos/dev-health-ops/internal/syncdispatchcontract"
+	"github.com/full-chaos/dev-health-ops/internal/testsupport/moduleroot"
 	"github.com/riverqueue/river"
 	"github.com/riverqueue/river/rivertype"
 )
 
 func TestRegisterMissingWorkersCoversEveryRuntimeKind(t *testing.T) {
-	_, file, _, ok := runtime.Caller(0)
+	_, file, _, ok := moduleroot.Caller(0)
 	if !ok {
 		t.Fatal("resolve test path")
 	}

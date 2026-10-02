@@ -9,7 +9,6 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"path/filepath"
-	"runtime"
 	"strings"
 	"testing"
 
@@ -18,6 +17,7 @@ import (
 
 	"github.com/full-chaos/dev-health-ops/internal/llmorgsettings"
 	"github.com/full-chaos/dev-health-ops/internal/queryapi/authctx"
+	"github.com/full-chaos/dev-health-ops/internal/testsupport/moduleroot"
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/venueoracle"
 )
 
@@ -80,7 +80,7 @@ var llmEnvironment = []string{
 // rows (the venue copies the seeded database for Go).
 func TestVenueOracleWorkUnitExplainProviderResolution(t *testing.T) {
 	ctx := context.Background()
-	_, file, _, _ := runtime.Caller(0)
+	_, file, _, _ := moduleroot.Caller(0)
 	root := filepath.Clean(filepath.Join(filepath.Dir(file), "..", "..", ".."))
 	// The ids are named, not random: the recording and every frozen run seed the same ones.
 	unparsable, refused, unsupported := stableVenueID("provider/unparsable"), stableVenueID("provider/refused"), stableVenueID("provider/unsupported")

@@ -4,7 +4,6 @@ import (
 	"encoding/json"
 	"path/filepath"
 	"reflect"
-	"runtime"
 	"strings"
 	"testing"
 	"time"
@@ -12,6 +11,7 @@ import (
 	"github.com/golang-jwt/jwt/v5"
 	"github.com/google/uuid"
 
+	"github.com/full-chaos/dev-health-ops/internal/testsupport/moduleroot"
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/programoracle"
 )
 
@@ -152,7 +152,7 @@ type frozenEdgeAnswer struct {
 // validator judge the Go token as it judged the Python one. The live test stays until the Python delete
 // (CHAOS-7308) for the judgement of the Go token itself.
 func TestGoMintedEdgeTokenMatchesTheFrozenEdgeDecisions(t *testing.T) {
-	_, currentFile, _, ok := runtime.Caller(0)
+	_, currentFile, _, ok := moduleroot.Caller(0)
 	if !ok {
 		t.Fatal("resolve edgetokenmint package path")
 	}

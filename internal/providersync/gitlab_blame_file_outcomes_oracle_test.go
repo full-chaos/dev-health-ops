@@ -3,6 +3,7 @@ package providersync
 import (
 	"context"
 	"encoding/json"
+	"github.com/full-chaos/dev-health-ops/internal/testsupport/fakehttp"
 	"testing"
 	"time"
 
@@ -34,10 +35,10 @@ func TestGitLabBlamePerFileFailureMatchesFrozenPython(t *testing.T) {
 				failed[path] = true
 			}
 			attempted := []string{}
-			client := gitLabRepositoryClient(t, &gitLabBlameDoer{
+			client := gitLabRepositoryClient(t, fakehttp.Client(&gitLabBlameDoer{
 				t: t, fileCount: len(filePaths), paths: &attempted, failedPaths: failed,
 				blameLines: 1,
-			}, "https://gitlab.example")
+			}), "https://gitlab.example")
 			batch, err := (GitLabBlameRouteHandler{
 				Coverage: staticGitLabBlameCoverage{}, MaxFiles: gitLabBlameMaxFiles,
 			}).Collect(context.Background(), nativeTestClaim("gitlab", "blame"),

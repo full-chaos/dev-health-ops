@@ -179,6 +179,7 @@ func runPythonSummary(t *testing.T, root string, golden *venueoracle.Golden, ven
 	program.PerRun = func() map[string]string {
 		return map[string]string{pythonSummaryEnv: venue.AdminClickHouseHTTPURI(t, venue.PythonClickHouseDB)}
 	}
+	program.PerRunNames = []string{pythonSummaryEnv}
 	answer := programoracle.Produce(t, golden, root, []programoracle.Program{program})[0]
 	if answer.ExitCode != 0 {
 		t.Fatalf("the python producer exited %d when it was recorded: %s", answer.ExitCode, answer.Stdout)

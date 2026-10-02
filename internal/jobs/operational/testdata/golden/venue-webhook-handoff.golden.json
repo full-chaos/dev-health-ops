@@ -6,13 +6,14 @@
     "recipe": "git worktree add --detach $DIR a4847c5e93607451a0c987b314d37e02fc43ce85 (with its .venv: uv sync --frozen --no-install-project); then from the repository root: go run ./internal/testsupport/venueoracle/goldenrecord -pkg ./internal/jobs/operational/ -test '^TestWebhookHandoffVenueOracleMatchesFrozenPython$' -python-root $DIR",
     "python_env": "dcad7815282bb1f86b2a7d0025447672a4f8597815ee6bc618d8d4aafead5cff",
     "python_env_version": 2,
+    "recorded_by": "goldenrecord",
     "blanked": {}
   },
   "requests": [
     {
       "name": "sync now",
       "method": "PYTHON",
-      "path": "program sha256 0e88b49f30583b3a52bd9be343c770461c06dbe4c2caedf1280b6433d963273c env sha256 e71f5c8f595123e07621cebc09aff3eed474b7d0d1abe6a983a9ca0ba428a2e9",
+      "path": "program sha256 0e88b49f30583b3a52bd9be343c770461c06dbe4c2caedf1280b6433d963273c env sha256 ec3d1f2795d4ad672d01230592275d0751db8658949d44a3c71f21b0046a7f49",
       "body_sha256": "6c9849af528cdf87719b9190b2081b0bae9a30ba128f8f821c44b88f32eba9d9",
       "request_headers_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
       "status": 0,

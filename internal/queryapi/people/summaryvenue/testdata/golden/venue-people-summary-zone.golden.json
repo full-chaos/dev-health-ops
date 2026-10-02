@@ -6,13 +6,14 @@
     "recipe": "git worktree add --detach $DIR a4847c5e93607451a0c987b314d37e02fc43ce85 (with its .venv: uv sync --frozen --no-install-project); then from the repository root: go run ./internal/testsupport/venueoracle/goldenrecord -pkg ./internal/queryapi/people/summaryvenue/ -test '^TestPeopleSummaryServerZoneVenueOracle$' -python-root $DIR",
     "python_env": "36cac503ad8e97518c25e8da43c029dc4b55778b6a1bf14f684bd4762c7adebe",
     "python_env_version": 2,
+    "recorded_by": "goldenrecord",
     "blanked": {}
   },
   "requests": [
     {
       "name": "people summary producer",
       "method": "PYTHON",
-      "path": "program sha256 05008a665fed91b62874d100dd746de7d38673a9c10081316fb4bdf6de6225cf env sha256 c659dff657aefac3f8ef19707e3394a517f84529d04d975352908e6a27f1f605",
+      "path": "program sha256 05008a665fed91b62874d100dd746de7d38673a9c10081316fb4bdf6de6225cf env sha256 28de09203db2206f4bcf6c39d21aaca55b8f6cdefeb8e5dcfe5b1b024ff0cdfa",
       "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
       "request_headers_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
       "status": 0,

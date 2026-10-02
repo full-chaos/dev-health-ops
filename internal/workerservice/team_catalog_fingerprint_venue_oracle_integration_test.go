@@ -92,7 +92,7 @@ func TestTeamCatalogFingerprintVenueOracleMatchesFrozenPython(t *testing.T) {
 	answer := programoracle.Produce(t, golden, root, []programoracle.Program{{
 		Name: "team catalog credential stamp", Text: pythonTeamCatalogStampProgram, Stdin: input,
 		Env:    map[string]string{"OTEL_SDK_DISABLED": "true", "ENVIRONMENT": "test", "SETTINGS_ENCRYPTION_KEY": teamCatalogFingerprintVenueKey},
-		PerRun: oracleDatabase(t, venue),
+		PerRun: oracleDatabase(t, venue), PerRunNames: []string{oracleDatabaseEnv},
 	}})[0]
 	if answer.ExitCode != 0 {
 		t.Fatalf("the team catalog stamp program exited %d when it was recorded: %s", answer.ExitCode, answer.Stdout)

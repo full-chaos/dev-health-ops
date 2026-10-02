@@ -6,13 +6,14 @@
     "recipe": "git worktree add --detach $DIR a4847c5e93607451a0c987b314d37e02fc43ce85 (with its .venv: uv sync --frozen --no-install-project); then from the repository root: go run ./internal/testsupport/venueoracle/goldenrecord -pkg ./internal/workerservice/ -test '^TestTeamCatalogFingerprintVenueOracleMatchesFrozenPython$' -python-root $DIR",
     "python_env": "d59e90712b27dd17b94abd11c96426234b9bbf6a754d7b5454f4aa50ebdcc485",
     "python_env_version": 2,
+    "recorded_by": "goldenrecord",
     "blanked": {}
   },
   "requests": [
     {
       "name": "team catalog credential stamp",
       "method": "PYTHON",
-      "path": "program sha256 0aef77ee13d46720c192e910441c4c7a8e752bc57b28e4b9d8cc5fea70b380fc env sha256 eb3d7134b85ce291b10e39b6c591e45b3c87b9e016f6f3f220da024ef7da4565",
+      "path": "program sha256 0aef77ee13d46720c192e910441c4c7a8e752bc57b28e4b9d8cc5fea70b380fc env sha256 16c84df17d1409ef2dcbceebbba9db6e73143e3c8cfe5a65bde487bcf45c9adf",
       "body_sha256": "c078d25dade31765802ee1ef0b22b1978fe02fda5697dba6f9789fcba71c36f5",
       "request_headers_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
       "status": 0,

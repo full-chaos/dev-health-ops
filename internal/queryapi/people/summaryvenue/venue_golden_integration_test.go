@@ -20,8 +20,8 @@ const venueGoldenPythonBuild = "a4847c5e93607451a0c987b314d37e02fc43ce85"
 // The goldenrecord verb writes each digest when it promotes a recording; a new
 // golden starts as "PIN:" + its file name without ".json".
 var venueGoldenPins = map[string]string{
-	"venue-people-summary-zone.golden.json": "b1e08d5958e425eb637089d53b3a656a7fbf27ddef8d6d57b919454295e7e178",
-	"venue-people-summary.golden.json":      "2c32d59b606ab770eb9b673192adff999c631d17323c7c83201439f1c8e46c39",
+	"venue-people-summary-zone.golden.json": "a6c24ca7ace4d4e5f72e5b850a8a67b2ba6bff8cf466123eecf56fc14bc74d64",
+	"venue-people-summary.golden.json":      "2f8cb3913e0ac2de0492f6f4fc0667d9ac6d12e4989067ac37ceb9c532110e8a",
 }
 
 // openVenueGolden opens the golden of the running venue test and returns it

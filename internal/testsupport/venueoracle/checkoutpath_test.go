@@ -152,3 +152,58 @@ func TestRecordingRefusesAValueThatHoldsTheModuleRoot(t *testing.T) {
 		t.Fatalf("a value holding the module root is not refused: %v", err)
 	}
 }
+
+// A PythonPathRel name is root-relative by contract (the golden's key holds it): an absolute path, a name that
+// leaves the root, an empty name and a name with a ':' are refused, by position and never by value.
+func TestPythonPathRelRefusesWhatIsNotARootRelativeDirectory(t *testing.T) {
+	cases := map[string]struct {
+		rel  []string
+		want string
+	}{
+		"absolute":                 {[]string{"/abs/stub"}, "absolute"},
+		"windows-style root":       {[]string{`\\server\share`}, "absolute"},
+		"parent only":              {[]string{".."}, "(..)"},
+		"parent first":             {[]string{"../stub"}, "(..)"},
+		"parent in the middle":     {[]string{"a/../../b"}, "(..)"},
+		"parent that stays inside": {[]string{"a/../b"}, "(..)"},
+		"drive letter":             {[]string{`C:\\x`}, "':'"},
+		"empty":                    {[]string{""}, "empty"},
+		"dot":                      {[]string{"."}, "empty"},
+		"colon":                    {[]string{"stub:other"}, "':'"},
+		"second entry is bad":      {[]string{"ok/dir", "/abs"}, "#1"},
+	}
+	for name, tc := range cases {
+		err := pythonPathRelErr(tc.rel)
+		if err == nil || !strings.Contains(err.Error(), tc.want) {
+			t.Errorf("%s: want a refusal naming %q, got %v", name, tc.want, err)
+			continue
+		}
+		for _, entry := range tc.rel {
+			if len(entry) > 3 && strings.Contains(err.Error(), entry) {
+				t.Errorf("%s: the refusal shows the value %q: %v", name, entry, err)
+			}
+		}
+	}
+	for _, ok := range [][]string{nil, {"internal/apiservice/testdata/provider_stub"}, {"a", "b/c", "d.e/f"}} {
+		if err := pythonPathRelErr(ok); err != nil {
+			t.Errorf("%v is refused: %v", ok, err)
+		}
+	}
+}
+
+// The venue refuses a bad PythonPathRel when it binds the golden, recording or frozen: the relative name is the
+// declared input and must be one.
+func TestBindingRefusesABadPythonPathRelInBothModes(t *testing.T) {
+	options := Options{Root: t.TempDir(), JWTKey: "k", PythonPathRel: []string{"/abs/stub"}}
+	if err := recordingGolden(t).bindPythonEnv(options); err == nil || !strings.Contains(err.Error(), "PythonPathRel") {
+		t.Fatalf("a recording accepted an absolute PythonPathRel: %v", err)
+	}
+	good := Options{Root: options.Root, JWTKey: "k", PythonPathRel: []string{"stub"}}
+	frozen, _ := frozenWithEnv(t, currentKey(t, good), pythonEnvKeyVersion)
+	if err := frozen.bindPythonEnv(options); err == nil || !strings.Contains(err.Error(), "PythonPathRel") {
+		t.Fatalf("a frozen run accepted an absolute PythonPathRel: %v", err)
+	}
+	if err := recordingGolden(t).bindPythonEnv(good); err != nil {
+		t.Fatalf("a root-relative PythonPathRel is refused: %v", err)
+	}
+}

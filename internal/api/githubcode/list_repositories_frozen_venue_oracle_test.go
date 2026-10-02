@@ -130,6 +130,10 @@ func page(items ...string) string { return "[" + strings.Join(items, ", ") + "]"
 
 func next(url string) [2]string { return [2]string{"Link", `<` + url + `>; rel="next"`} }
 
+// notMeasured prefixes the note of a scenario whose input the Python mock transport cannot represent: it is recorded,
+// never counted as agreeing, and listed apart.
+const notMeasured = "NOT MEASURED: "
+
 // knownLinkDifferences and knownBaseDifferences are the Link targets and base URLs whose frozen Python answer
 // differs from the Go client's today (findings of the CHAOS-7532 corpus-gap follow-up; each is recorded, none fixed here).
 var knownLinkDifferences = map[string]string{
@@ -138,12 +142,12 @@ var knownLinkDifferences = map[string]string{
 	"https://api.github.com/x?#":      "an empty fragment is kept by httpx and dropped by Go",
 	"https://api.github.com?":         "httpx keeps 'host?' without a slash, Go adds one",
 	"https://api.github.com#":         "httpx keeps 'host#' without a slash, Go adds one",
-	"ftp://x.test/y":                  "the Python mock transport does not refuse the scheme (harness); real httpx raises UnsupportedProtocol, as Go does",
-	"ws://x.test/y":                   "the Python mock transport does not refuse the scheme (harness); real httpx raises UnsupportedProtocol, as Go does",
+	"ftp://x.test/y":                  notMeasured + "the Python mock transport does not refuse the scheme (harness); real httpx raises UnsupportedProtocol, as Go does",
+	"ws://x.test/y":                   notMeasured + "the Python mock transport does not refuse the scheme (harness); real httpx raises UnsupportedProtocol, as Go does",
 	"mailto:a@b":                      "a scheme without // joins as a path in httpx; Go resolves it to the base root",
 	"javascript:alert(1)":             "a scheme without // joins as a path in httpx; Go resolves it to the base root",
-	"/é?ü=1#ö":                        "a non-ASCII header value cannot be encoded by the Python mock transport (harness); Go percent-encodes it",
-	"https://ghé.test/x":              "a non-ASCII header value cannot be encoded by the Python mock transport (harness); Go percent-encodes the host",
+	"/é?ü=1#ö":                        notMeasured + "a non-ASCII header value cannot be encoded by the Python mock transport (harness); Go percent-encodes it",
+	"https://ghé.test/x":              notMeasured + "a non-ASCII header value cannot be encoded by the Python mock transport (harness); Go percent-encodes the host",
 	"https://u@other.test/x":          "httpx turns userinfo into Basic authorization; Go keeps the token",
 	"https://u:p@other.test:99/x?q=1": "httpx turns userinfo into Basic authorization; Go keeps the token",
 	"/a\tb":                           "a tab in the target: httpx raises InvalidURL, Go sends %09",
@@ -488,10 +492,11 @@ func TestListRepositoriesVenueOracleMatchesFrozenPython(t *testing.T) {
 			}
 			// Go's own answer is pinned too: a change to another answer fails here, not only a change to Python's.
 			key := fmt.Sprintf("%d %s", index, describe(s))
-			seenKnown[key] = knownGoAnswer{Result: string(gotResult), Requests: fmt.Sprint(transport.seen)}
+			seenKnown[key] = knownGoAnswer{Result: string(gotResult), Requests: fmt.Sprint(transport.seen),
+				PythonResult: string(wantResult), PythonRequests: fmt.Sprint(pythonRequests), NotMeasured: strings.HasPrefix(s.Known, notMeasured)}
 			if !*updateKnownGo {
 				if pinned, ok := knownGo[key]; !ok || pinned != seenKnown[key] {
-					t.Errorf("scenario %d (%s): Go's answer for a known difference changed\n pinned %+v\n go     %+v\n(run with -update-known-go after a deliberate change)", index, describe(s), pinned, seenKnown[key])
+					t.Errorf("scenario %d (%s): the answer of Go or of Python for a known difference changed\n pinned %+v\n now    %+v\n(run with -update-known-go after a deliberate change)", index, describe(s), pinned, seenKnown[key])
 				}
 			}
 			continue
@@ -519,7 +524,14 @@ func TestListRepositoriesVenueOracleMatchesFrozenPython(t *testing.T) {
 	} else if len(knownGo) != len(seenKnown) {
 		t.Errorf("testdata/known-go-answers.json pins %d known differences, the corpus has %d", len(knownGo), len(seenKnown))
 	}
-	t.Logf("%d scenarios compared", len(scenarios))
+	unmeasured := 0
+	for _, answer := range seenKnown {
+		if answer.NotMeasured {
+			unmeasured++
+		}
+	}
+	t.Logf("%d scenarios: %d compared and agreeing, %d known differences pinned on both planes, %d NOT MEASURED (the Python mock cannot represent the input)",
+		len(scenarios), len(scenarios)-len(seenKnown), len(seenKnown)-unmeasured, unmeasured)
 	venueoracle.WriteGoOnlyProof(t, "Go's code-host listing against the frozen requests and results of Python's client")
 }
 
@@ -529,6 +541,12 @@ var updateKnownGo = flag.Bool("update-known-go", false, "rewrite testdata/known-
 type knownGoAnswer struct {
 	Result   string `json:"result"`
 	Requests string `json:"requests"`
+	// PythonResult and PythonRequests are the frozen Python answer of the scenario, pinned beside Go's: a known
+	// difference fails when either plane changes.
+	PythonResult   string `json:"python_result"`
+	PythonRequests string `json:"python_requests"`
+	// NotMeasured is set where the Python mock cannot represent the input: the scenario is not counted as compared.
+	NotMeasured bool `json:"not_measured,omitempty"`
 }
 
 const knownGoAnswersPath = "testdata/known-go-answers.json"

@@ -24,7 +24,9 @@ import pytest
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from dev_health_ops.api.graphql import go_api_cli
-from dev_health_ops.api.graphql.go_api_operation_catalog import catalog_entries
+from dev_health_ops.api.graphql.go_api_operation_catalog import (
+    current_catalog_entries,
+)
 from dev_health_ops.api.graphql.go_api_routing_admin import (
     DISABLE_MODES,
     ModeChange,
@@ -68,7 +70,7 @@ def test_disable_refuses_a_catalog_that_registers_one_operation_twice(
     documents to whichever digest sorts last."""
     monkeypatch.setattr(
         go_api_cli,
-        "catalog_entries",
+        "current_catalog_entries",
         lambda: (("featureFlags", "doc-a"), ("featureFlags", "doc-b")),
     )
     assert _disable() == 2
@@ -101,7 +103,7 @@ def test_an_unknown_operation_is_refused(capsys: pytest.CaptureFixture[str]) -> 
 
 
 def test_all_registered_resolves_from_the_catalog() -> None:
-    catalog = dict(catalog_entries())
+    catalog = dict(current_catalog_entries())
     resolved, error = go_api_cli._resolve_requested_operations(
         "all-registered", catalog
     )

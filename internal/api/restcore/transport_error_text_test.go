@@ -132,10 +132,17 @@ func TestAnErrorOfTheCoreHasNoCauseToUnwrap(t *testing.T) {
 
 // Every status path of the core, driven with a request URL that holds a marker in its userinfo, path, query and fragment (the
 // response body is clean: a provider body is the provider's own text, named in RISK-NOTES): no error text holds any of them.
-type statusTransport struct{ status int }
+type statusTransport struct {
+	status   int
+	location string
+}
 
 func (transport statusTransport) RoundTrip(request *http.Request) (*http.Response, error) {
-	return &http.Response{StatusCode: transport.status, Header: http.Header{}, Body: io.NopCloser(strings.NewReader("provider says no")), Request: request}, nil
+	header := http.Header{}
+	if transport.location != "" {
+		header.Set("Location", transport.location)
+	}
+	return &http.Response{StatusCode: transport.status, Header: header, Body: io.NopCloser(strings.NewReader("provider says no")), Request: request}, nil
 }
 
 func TestNoErrorTextOfAStatusPathHoldsAMarkerOfTheRequestURL(t *testing.T) {
@@ -192,6 +199,28 @@ func TestRedactRequestURLKeepsEveryOtherByte(t *testing.T) {
 	} {
 		if got := redactRequestURL(raw); got != want {
 			t.Fatalf("redactRequestURL(%q) = %q, want %q", raw, got, want)
+		}
+	}
+}
+
+// the 3xx rows of the derived status test: a Location that holds a marker in userinfo, path, query and fragment (the redirect-text
+// change keeps only scheme and host); the core follows nothing.
+func TestNoErrorTextOfARedirectHoldsAMarkerOfTheLocation(t *testing.T) {
+	for _, status := range []int{301, 302, 303, 307, 308} {
+		core := coreWith(nil, nil)
+		core.HTTP = &http.Client{Transport: statusTransport{status: status, location: plantedTarget}}
+		core.IsRetryable = func(Response) bool { return false }
+		_, err := core.Get(context.Background(), "https://api.example.test/start", "GET /probe")
+		if err == nil {
+			t.Fatalf("status %d: no error", status)
+		}
+		for _, leak := range []string{plantedTransportMarker, "planteduser", "plantedsecret", "orgs/42", "access_token", "planted-fragment"} {
+			if strings.Contains(err.Error(), leak) {
+				t.Fatalf("status %d: the redirect text carries %q: %s", status, leak, err)
+			}
+		}
+		if !strings.Contains(err.Error(), "https://internal-host-7935.example.test") {
+			t.Fatalf("status %d: the host of the Location is missing: %s", status, err)
 		}
 	}
 }

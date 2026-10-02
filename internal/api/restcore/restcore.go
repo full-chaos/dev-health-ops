@@ -19,6 +19,7 @@ import (
 	"net/http"
 	"net/url"
 	"strings"
+	"sync/atomic"
 	"time"
 
 	"github.com/full-chaos/dev-health-ops/internal/platform/logging"
@@ -112,6 +113,11 @@ func (c Core) Get(ctx context.Context, target, operation string) (Response, erro
 	}
 	// The one guard layer: whatever client came in (a caller's, or this default), the credential never follows a redirect.
 	httpClient := httpguard.NoRedirects(supplied)
+	// A copy of the client (NoRedirects never changes the caller's): its transport also records whether a 3xx answer with a
+	// Location came back, the one fact that tells net/http's refusal of that Location from an ordinary transport error whose
+	// text happens to start with the same words (CHAOS-7927 r2).
+	witness := &redirectWitness{base: httpClient.Transport}
+	httpClient.Transport = witness
 	sleep := c.Sleep
 	if sleep == nil {
 		sleep = sleepContext
@@ -141,11 +147,17 @@ func (c Core) Get(ctx context.Context, target, operation string) (Response, erro
 		for name, value := range c.Headers {
 			request.Header.Set(name, value)
 		}
+		witness.seen.Store(false)
 		response, err := httpClient.Do(request)
 		var body []byte
 		if err == nil {
 			body, err = io.ReadAll(response.Body)
 			response.Body.Close()
+		}
+		if err != nil && witness.seen.Load() && isLocationParseFailure(err) {
+			// net/http refused the redirect itself and its error text quotes the whole Location (CHAOS-7927): say that
+			// the redirect was refused, not where to.
+			return Response{}, &Error{"APIException", fmt.Sprintf("%s unexpected redirect on %s: the Location header is not a valid URL (%s); the instrumented core does not follow redirects", c.Provider, operation, redirectUnparsable)}
 		}
 		if err != nil {
 			// Only a timeout and a connection failure are retried
@@ -174,11 +186,11 @@ func (c Core) Get(ctx context.Context, target, operation string) (Response, erro
 			return got, nil
 		}
 		if got.Status < 400 {
-			location, present := got.HeaderText("Location")
-			if !present {
-				location = "<no Location header>"
+			target := "<no Location header>"
+			if location, present := got.HeaderText("Location"); present {
+				target = RedirectTarget(location)
 			}
-			return Response{}, &Error{"APIException", fmt.Sprintf("%s unexpected redirect on %s: HTTP %d -> %s; the instrumented core does not follow redirects (pass raw_redirect=True to receive the redirect response and handle Location manually)", c.Provider, operation, got.Status, location)}
+			return Response{}, &Error{"APIException", fmt.Sprintf("%s unexpected redirect on %s: HTTP %d -> %s; the instrumented core does not follow redirects (pass raw_redirect=True to receive the redirect response and handle Location manually)", c.Provider, operation, got.Status, target)}
 		}
 		if retryable(got) && attempt < retries-1 {
 			wait := c.RetryAfter(got)
@@ -194,6 +206,29 @@ func (c Core) Get(ctx context.Context, target, operation string) (Response, erro
 		return Response{}, c.raise(got, operation)
 	}
 	return Response{}, &Error{"APIException", fmt.Sprintf("%s request failed on %s: unknown error", c.Provider, operation)}
+}
+
+const (
+	redirectRelative   = "<relative Location>"
+	redirectUnparsable = "<unparsable Location>"
+)
+
+// RedirectTarget is what an error text may say of a redirect's Location: the scheme and the host (with its port), never
+// the userinfo, the path, the query or the fragment, which can carry a credential or an id (CHAOS-7927). A Location with no
+// host is "<relative Location>"; one that does not parse is "<unparsable Location>". Python's text carries the raw header;
+// this is a named difference.
+func RedirectTarget(location string) string {
+	parsed, err := url.Parse(strings.TrimSpace(location))
+	if err != nil {
+		return redirectUnparsable
+	}
+	if parsed.Host == "" {
+		return redirectRelative
+	}
+	if parsed.Scheme == "" {
+		return "//" + parsed.Host
+	}
+	return parsed.Scheme + "://" + parsed.Host
 }
 
 // raise is _raise_for_status: classify_error first, then the generic
@@ -240,6 +275,36 @@ func sleepContext(ctx context.Context, wait time.Duration) error {
 	case <-timer.C:
 		return nil
 	}
+}
+
+// redirectWitness is a transport that notes a 3xx answer carrying a Location header: net/http parses that header AFTER the
+// round trip, so an error about it can only follow such an answer.
+type redirectWitness struct {
+	base http.RoundTripper
+	seen atomic.Bool
+}
+
+func (w *redirectWitness) RoundTrip(request *http.Request) (*http.Response, error) {
+	base := w.base
+	if base == nil {
+		base = http.DefaultTransport
+	}
+	response, err := base.RoundTrip(request)
+	if err == nil && response != nil && response.StatusCode >= 300 && response.StatusCode < 400 && response.Header.Get("Location") != "" {
+		w.seen.Store(true)
+	}
+	return response, err
+}
+
+// isLocationParseFailure: net/http refused a redirect whose Location does not parse. Its error is a *url.Error wrapping an
+// unwrappable error whose text STARTS with the phrase; a transport error that merely mentions the phrase, or wraps a cause,
+// is an ordinary transport error and keeps its class (CHAOS-7927 r1).
+func isLocationParseFailure(err error) bool {
+	var urlErr *url.Error
+	if !errors.As(err, &urlErr) || urlErr.Err == nil || errors.Unwrap(urlErr.Err) != nil {
+		return false
+	}
+	return strings.HasPrefix(urlErr.Err.Error(), "failed to parse Location header ")
 }
 
 // redactRequestURL is the request URL as it appears in the text of a NotFound error, with what can hold a credential taken out:

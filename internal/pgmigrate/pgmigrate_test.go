@@ -8,12 +8,12 @@ import (
 	"path/filepath"
 	"reflect"
 	"regexp"
-	"runtime"
 	"strings"
 	"testing"
 
 	"github.com/full-chaos/dev-health-ops/internal/cli"
 	"github.com/full-chaos/dev-health-ops/internal/platform/secrets"
+	"github.com/full-chaos/dev-health-ops/internal/testsupport/moduleroot"
 )
 
 func TestDecide(t *testing.T) {
@@ -158,7 +158,7 @@ var alembicRevision = regexp.MustCompile(`^([0-9]{4})_[a-z0-9_]+\.py$`)
 // dho builds would lack it; TestChainCoversEveryAlembicRevision proves each file,
 // the integration oracle proves the content, this proves the head without a database.
 func TestBaselineHeadIsTheAlembicHead(t *testing.T) {
-	_, file, _, _ := runtime.Caller(0)
+	_, file, _, _ := moduleroot.Caller(0)
 	directory := filepath.Join(filepath.Dir(file), "..", "..", "src", "dev_health_ops", "alembic", "versions")
 	entries, err := os.ReadDir(directory)
 	if err != nil {

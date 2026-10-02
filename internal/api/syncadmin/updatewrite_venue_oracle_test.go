@@ -5,12 +5,12 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
-	"runtime"
 	"sort"
 	"strings"
 	"testing"
 
 	"github.com/full-chaos/dev-health-ops/internal/providersync"
+	"github.com/full-chaos/dev-health-ops/internal/testsupport/moduleroot"
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/pyoracle"
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/venueoracle"
 )
@@ -31,7 +31,7 @@ func TestOperatorControlledDatasetKeysVenueOracleMatchesLivePython(t *testing.T)
 	if os.Getenv("DEV_HEALTH_LIVE_PYTHON_ORACLES") != "1" {
 		t.Skip("the controlled-keys oracle needs the full project Python environment; ci/check_go.sh venue-oracles runs it")
 	}
-	_, file, _, _ := runtime.Caller(0)
+	_, file, _, _ := moduleroot.Caller(0)
 	root := filepath.Clean(filepath.Join(filepath.Dir(file), "..", "..", ".."))
 	python := pyoracle.Resolve(t, root)
 	providers := []string{"github", "gitlab", "jira", "linear", "launchdarkly", "pagerduty", "GitHub", "GITLAB", "PagerDuty",

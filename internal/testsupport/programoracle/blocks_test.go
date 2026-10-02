@@ -6,11 +6,11 @@ import (
 	"encoding/json"
 	"fmt"
 	"path/filepath"
-	"runtime"
 	"strings"
 	"sync/atomic"
 	"testing"
 
+	"github.com/full-chaos/dev-health-ops/internal/testsupport/moduleroot"
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/venueoracle"
 )
 
@@ -41,7 +41,7 @@ func fixedLines(lines []string) func(dst []byte, index int) []byte {
 // the Go half here over the same answers: no block differs. One changed
 // answer makes exactly its block differ.
 func TestTheGoHalfOfTheBlockDigestsIsThePythonHalf(t *testing.T) {
-	_, file, _, _ := runtime.Caller(0)
+	_, file, _, _ := moduleroot.Caller(0)
 	root := filepath.Clean(filepath.Join(filepath.Dir(file), "..", "..", ".."))
 	spec := venueoracle.GoldenSpec{
 		Path:        "testdata/golden/blocks.golden.json",

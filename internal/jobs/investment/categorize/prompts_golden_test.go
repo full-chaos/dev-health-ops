@@ -4,11 +4,11 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
-	"runtime"
 	"strings"
 	"testing"
 
 	"github.com/full-chaos/dev-health-ops/internal/jobs/workgraph/units"
+	"github.com/full-chaos/dev-health-ops/internal/testsupport/moduleroot"
 )
 
 type promptGoldenCase struct {
@@ -32,7 +32,7 @@ type promptGoldenDocument struct {
 
 func categorizeRepositoryRoot(t *testing.T) string {
 	t.Helper()
-	_, file, _, ok := runtime.Caller(0)
+	_, file, _, ok := moduleroot.Caller(0)
 	if !ok {
 		t.Fatal("could not determine caller for repository root resolution")
 	}

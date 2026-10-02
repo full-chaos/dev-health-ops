@@ -25,6 +25,7 @@ must never silently drop a stage, so this file pins:
 
 from __future__ import annotations
 
+import json
 import os
 import re
 import shutil
@@ -111,7 +112,10 @@ def _key(mod: str, pkg: str) -> str:
 
 
 def _run_check_go(
-    tmp_path: Path, *args: str, fail: bool = False
+    tmp_path: Path,
+    *args: str,
+    fail: bool = False,
+    extra_env: dict[str, str] | None = None,
 ) -> tuple[subprocess.CompletedProcess[str], list[str]]:
     real_go = shutil.which("go")
     assert real_go
@@ -130,6 +134,7 @@ def _run_check_go(
         "TMPDIR": str(tmp_path / "tmp"),
     }
     env.pop("FAKE_GO_FAIL", None)
+    env.update(extra_env or {})
     if fail:
         env["FAKE_GO_FAIL"] = "1"
     proc = subprocess.run(
@@ -201,6 +206,14 @@ def test_race_shards_partition_the_package_list_and_balance() -> None:
         for k in (1, 2)
     ]
     assert max(two) <= 1.1 * (sum(two) / 2), f"2-way race slices unbalanced: {two}"
+    # CHAOS-8135: the workflow runs three legs; no leg may exceed the mean by more than 10%.
+    three = [
+        sum(weights.get(_key(mod, p), DEFAULT_WEIGHT) for p in _shard(mod, pkgs, k, 3))
+        for k in (1, 2, 3)
+    ]
+    assert max(three) <= 1.1 * (sum(three) / 3), (
+        f"3-way race slices unbalanced: {three}"
+    )
 
 
 def test_the_race_weights_table_is_clean() -> None:
@@ -395,3 +408,173 @@ def test_only_the_static_leg_runs_the_static_only_steps() -> None:
     assert "matrix.name" not in str(deps[0].get("if", "")), (
         "the oracle dependencies must be installed on every leg, not only one"
     )
+
+
+# ---------------------------------------------------------------------------
+# 5. CHAOS-8135: every race package has an explicit weights row (static guard).
+# ---------------------------------------------------------------------------
+
+
+def _missing_awk(
+    mod: str, weights_file: Path, packages: str
+) -> subprocess.CompletedProcess[str]:
+    return subprocess.run(
+        [
+            "awk",
+            "-v",
+            f"mod={mod}",
+            "-v",
+            f"weights={weights_file}",
+            "-f",
+            str(ROOT / "ci" / "go_race_missing_rows.awk"),
+        ],  # fmt: skip
+        input=packages,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+
+def test_every_package_of_the_root_module_has_a_weights_row() -> None:
+    mod, pkgs = _go_list()
+    missing = sorted(_key(mod, p) for p in pkgs if _key(mod, p) not in _weights())
+    assert not missing, f"packages with no row in ci/go_race_weights.tsv: {missing}"
+
+
+def test_the_missing_row_awk_names_a_removed_row_and_refuses_empty_input(
+    tmp_path: Path,
+) -> None:
+    mod, pkgs = _go_list()
+    text = "\n".join(pkgs) + "\n"
+    green = _missing_awk(mod, WEIGHTS, text)
+    assert green.returncode == 0 and green.stdout == "", green
+    weights = _weights()
+    victim = "internal/httpguard"
+    assert victim in weights
+    trimmed = tmp_path / "trimmed.tsv"
+    trimmed.write_text(
+        "".join(f"{k}\t{v}\n" for k, v in weights.items() if k != victim)
+    )
+    red = _missing_awk(mod, trimmed, text)
+    assert red.stdout.split() == [victim], red
+    empty = tmp_path / "empty.tsv"
+    empty.write_text("# no rows\n")
+    assert _missing_awk(mod, empty, text).returncode != 0, (
+        "an empty weights file must fail loudly"
+    )
+    assert _missing_awk(mod, WEIGHTS, "").returncode != 0, (
+        "an empty package list must fail loudly"
+    )
+
+
+def test_a_race_leg_with_a_package_that_has_no_row_fails_before_any_test_runs(
+    tmp_path: Path,
+) -> None:
+    weights = _weights()
+    victim = "internal/httpguard"
+    trimmed = tmp_path / "trimmed.tsv"
+    trimmed.write_text(
+        "".join(f"{k}\t{v}\n" for k, v in weights.items() if k != victim)
+    )
+    proc, calls = _run_check_go(
+        tmp_path / "run",
+        "ci-leg",
+        "race",
+        "1",
+        "3",
+        extra_env={"GO_RACE_WEIGHTS": str(trimmed)},
+    )
+    assert proc.returncode != 0, proc.stdout[-800:]
+    assert "NO row in ci/go_race_weights.tsv" in proc.stderr
+    assert victim in proc.stderr
+    assert calls == [], "go test must not run when a package has no row"
+    assert "ci-leg race: OK" not in proc.stdout
+
+
+def test_a_race_leg_with_an_empty_weights_file_fails_before_any_test_runs(
+    tmp_path: Path,
+) -> None:
+    empty = tmp_path / "empty.tsv"
+    empty.write_text("# no rows\n")
+    proc, calls = _run_check_go(
+        tmp_path / "run",
+        "ci-leg",
+        "race",
+        "1",
+        "3",
+        extra_env={"GO_RACE_WEIGHTS": str(empty)},
+    )
+    assert proc.returncode != 0, proc.stdout[-800:]
+    assert "go_race_missing_rows.awk failed" in proc.stderr
+    assert calls == [], "go test must not run when the weights file holds no row"
+
+
+# ---------------------------------------------------------------------------
+# 6. CHAOS-8135: tests compiled out of the race leg are listed and still run without it.
+# ---------------------------------------------------------------------------
+
+RACE_EXCLUDED = ROOT / "ci" / "race_excluded_tests.tsv"
+
+
+def _race_excluded_rows() -> list[tuple[str, str]]:
+    rows = [
+        tuple(line.split("\t"))
+        for line in RACE_EXCLUDED.read_text().splitlines()
+        if line.strip() and not line.startswith("#")
+    ]
+    assert rows, "ci/race_excluded_tests.tsv lists no test"
+    return rows  # type: ignore[return-value]
+
+
+def _go_list_test_files(*tags: str) -> dict[str, set[str]]:
+    """Package import path -> the _test.go files `go list` compiles with these tags (whole module)."""
+    real_go = shutil.which("go")
+    assert real_go, "go is required"
+    env = {**os.environ, "GOWORK": "off", "GOFLAGS": "-mod=readonly"}
+    cmd = [real_go, "list", "-json=ImportPath,Dir,TestGoFiles,XTestGoFiles"]
+    if tags:
+        cmd += ["-tags", ",".join(tags)]
+    proc = subprocess.run(
+        [*cmd, "./..."], cwd=ROOT, env=env, capture_output=True, text=True, check=True
+    )
+    decoder = json.JSONDecoder()
+    text, index, files = proc.stdout, 0, {}
+    while index < len(text):
+        while index < len(text) and text[index].isspace():
+            index += 1
+        if index >= len(text):
+            break
+        pkg, index = decoder.raw_decode(text, index)
+        names = pkg.get("TestGoFiles", []) + pkg.get("XTestGoFiles", [])
+        files[pkg["ImportPath"]] = {str(Path(pkg["Dir"]) / n) for n in names}
+    return files
+
+
+def test_every_race_excluded_test_is_listed() -> None:
+    # Derived from Go itself over the whole module: the _test.go files `go list` compiles WITHOUT the race tag and not WITH
+    # it (whatever the constraint form: `!race && linux`, a license header before it, any directory), and their Test
+    # functions, must be exactly the rows of ci/race_excluded_tests.tsv.
+    mod, _ = _go_list()
+    plain = _go_list_test_files()
+    raced = _go_list_test_files("race")
+    assert plain, "go list found no package"
+    found: set[tuple[str, str]] = set()
+    for pkg, names in plain.items():
+        for source in sorted(names - raced.get(pkg, set())):
+            text = Path(source).read_text(encoding="utf-8")
+            package = _key(mod, pkg)
+            found |= {
+                (package, name)
+                for name in re.findall(r"^func (Test\w+)\(", text, flags=re.M)
+            }
+    listed = set(_race_excluded_rows())
+    assert found == listed, (
+        "tests compiled without -race only and ci/race_excluded_tests.tsv differ: "
+        f"unlisted {sorted(found - listed)}, listed but compiled in the race leg {sorted(listed - found)}"
+    )
+
+
+def test_check_test_runs_the_race_excluded_proof() -> None:
+    script = CHECK_GO.read_text(encoding="utf-8")
+    body = _case_block(script, "check_test() {", "\n}\n")
+    assert "check_race_excluded_ran" in body

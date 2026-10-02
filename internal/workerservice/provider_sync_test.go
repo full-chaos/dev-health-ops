@@ -1111,3 +1111,21 @@ func TestBuildProviderSyncHandlerLogsTheEffectiveCapsAndBudgetLimits(t *testing.
 		}
 	}
 }
+
+// TestTheBuilderProductionReachesLogsTheEffectiveCaps is the reachability
+// control for CHAOS-7881: buildProviderSyncWorker calls
+// buildProviderSyncHandlerWithRuntimeDependencies directly, not the outer
+// buildProviderSyncHandler wrapper, so the line must be written by THIS
+// function (a call placed in the wrapper would pass the test above and never
+// run in production).
+func TestTheBuilderProductionReachesLogsTheEffectiveCaps(t *testing.T) {
+	var logs bytes.Buffer
+	buildProviderSyncHandlerWithRuntimeDependencies(
+		nil, nil, nil, nil, nil, nil, nil, nil,
+		slog.New(slog.NewJSONHandler(&logs, nil)),
+		workItemsRuntimeConfig{}, 0,
+	)
+	if got := strings.Count(logs.String(), `"msg":"provider_sync_admission_and_budget_limits"`); got != 1 {
+		t.Fatalf("the production builder wrote %d provider_sync_admission_and_budget_limits lines, want exactly 1:\n%s", got, logs.String())
+	}
+}

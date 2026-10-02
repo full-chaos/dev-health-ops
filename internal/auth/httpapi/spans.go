@@ -3,7 +3,6 @@ package httpapi
 import (
 	"context"
 	"net/http"
-	"sync/atomic"
 
 	"go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/attribute"
@@ -89,9 +88,6 @@ func (s spanObserver) start(r *http.Request) (context.Context, trace.Span) {
 	} else {
 		options = append(options, trace.WithNewRoot())
 	}
-	// The box a handler records its 404 cause into (RecordNotFoundCause); read
-	// once, by finish.
-	ctx = context.WithValue(ctx, notFoundCauseKey{}, &notFoundCauseBox{})
 	method := boundedMethod(r.Method)
 	options = append(options, trace.WithAttributes(
 		attribute.String("http.request.method", method),
@@ -104,7 +100,7 @@ func (s spanObserver) start(r *http.Request) (context.Context, trace.Span) {
 // return (http.ErrAbortHandler re-panicked to net/http): the response was cut
 // off, whatever status had been committed before, so the span is an error one.
 // status is 0 when none was committed.
-func (s spanObserver) finish(ctx context.Context, span trace.Span, method, pattern string, status int, aborted bool) {
+func (s spanObserver) finish(span trace.Span, method, pattern string, status int, aborted bool, recorded uint32) {
 	if span == nil {
 		return
 	}
@@ -119,7 +115,7 @@ func (s spanObserver) finish(ctx context.Context, span trace.Span, method, patte
 		span.SetAttributes(attribute.Int("http.response.status_code", status))
 	}
 	if status == http.StatusNotFound {
-		span.SetAttributes(attribute.String(NotFoundCauseAttribute, string(notFoundCause(ctx, matched))))
+		span.SetAttributes(attribute.String(NotFoundCauseAttribute, string(notFoundCauseFor(recorded, matched))))
 	}
 	switch {
 	case aborted:
@@ -170,42 +166,72 @@ const (
 	NotFoundOther NotFoundCause = "other"
 )
 
-// NotFoundCauses is the closed list, for tests and docs.
-var NotFoundCauses = []NotFoundCause{NotFoundUnregisteredDocument, NotFoundIDEOff, NotFoundNoRoute, NotFoundOther}
-
 // NotFoundCauseAttribute is the server-span attribute that says why a 404 was
 // answered; it is set only on a span whose status is 404.
 const NotFoundCauseAttribute = "dev_health.http.not_found_cause"
 
-type notFoundCauseKey struct{}
+// NotFoundCauseList returns the closed list (a fresh copy each call: the list
+// that decides what a span may carry is not a variable anyone can extend).
+func NotFoundCauseList() []NotFoundCause {
+	return []NotFoundCause{NotFoundUnregisteredDocument, NotFoundIDEOff, NotFoundNoRoute, NotFoundOther}
+}
 
-type notFoundCauseBox struct{ cause atomic.Value }
+// The recorded cause travels as a small index (0 = nothing recorded) in a field
+// of a struct the observers already allocate per request (observedRoute for the
+// access observer, accessRecorder for TraceHandler): no box, no boxed string,
+// zero allocations to record or to read.
+const (
+	causeNone uint32 = iota
+	causeUnregisteredDocument
+	causeIDEOff
+	causeNoRoute
+	causeOther
+)
+
+// causeIndex is the immutable validation: a switch over the four constants.
+// A value outside them is "other", so free text can never become a cause.
+func causeIndex(cause NotFoundCause) uint32 {
+	switch cause {
+	case NotFoundUnregisteredDocument:
+		return causeUnregisteredDocument
+	case NotFoundIDEOff:
+		return causeIDEOff
+	case NotFoundNoRoute:
+		return causeNoRoute
+	default:
+		return causeOther
+	}
+}
+
+type notFoundCauseKey struct{}
 
 // RecordNotFoundCause records why the handler is about to answer 404. The last
 // call wins. A value outside the closed list is recorded as NotFoundOther, so
 // the attribute can never carry free text. A no-op on a context without a span
 // observer (a probe path, an untraced listener).
 func RecordNotFoundCause(ctx context.Context, cause NotFoundCause) {
-	box, ok := ctx.Value(notFoundCauseKey{}).(*notFoundCauseBox)
-	if !ok {
+	index := causeIndex(cause)
+	if match, ok := ctx.Value(observedRouteKey{}).(*observedRoute); ok {
+		match.notFoundCause.Store(index)
 		return
 	}
-	for _, known := range NotFoundCauses {
-		if cause == known {
-			box.cause.Store(cause)
-			return
-		}
+	if recorder, ok := ctx.Value(notFoundCauseKey{}).(*accessRecorder); ok {
+		recorder.notFoundCause.Store(index)
 	}
-	box.cause.Store(NotFoundOther)
 }
 
-// notFoundCause is the cause finish stamps on a 404 span: what the handler
+// notFoundCauseFor is the cause finish stamps on a 404 span: what the handler
 // recorded, else NotFoundNoRoute when no route matched, else NotFoundOther.
-func notFoundCause(ctx context.Context, matched bool) NotFoundCause {
-	if box, ok := ctx.Value(notFoundCauseKey{}).(*notFoundCauseBox); ok {
-		if cause, ok := box.cause.Load().(NotFoundCause); ok {
-			return cause
-		}
+func notFoundCauseFor(recorded uint32, matched bool) NotFoundCause {
+	switch recorded {
+	case causeUnregisteredDocument:
+		return NotFoundUnregisteredDocument
+	case causeIDEOff:
+		return NotFoundIDEOff
+	case causeNoRoute:
+		return NotFoundNoRoute
+	case causeOther:
+		return NotFoundOther
 	}
 	if !matched {
 		return NotFoundNoRoute

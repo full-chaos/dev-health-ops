@@ -1,6 +1,7 @@
 package httpapi
 
 import (
+	"context"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -24,7 +25,7 @@ func routeAnswering(pattern string, status int, record func(r *http.Request)) Ro
 }
 
 func TestA404SpanCarriesTheCauseTheHandlerRecordedAndOnlyFromTheEnum(t *testing.T) {
-	for _, cause := range NotFoundCauses {
+	for _, cause := range NotFoundCauseList() {
 		cause := cause
 		t.Run(string(cause), func(t *testing.T) {
 			read := tracedEnv(t, "1")
@@ -160,7 +161,7 @@ func TestNotFoundCauseWireNamesArePinnedAsLiterals(t *testing.T) {
 		t.Errorf("attribute name = %q", NotFoundCauseAttribute)
 	}
 	got := []string{}
-	for _, cause := range NotFoundCauses {
+	for _, cause := range NotFoundCauseList() {
 		got = append(got, string(cause))
 	}
 	if strings.Join(got, ",") != "unregistered_document,ide_off,not_found,other" {
@@ -176,5 +177,81 @@ func TestNotFoundCauseWireNamesArePinnedAsLiterals(t *testing.T) {
 	}
 	if v, ok := attrString(spans[0], "dev_health.http.not_found_cause"); !ok || v != "other" {
 		t.Errorf("literal attribute read = %q (present %v), want other", v, ok)
+	}
+}
+
+// r1 P1: the list that decides what a span may carry cannot be extended by a
+// caller: NotFoundCauseList returns a fresh copy, and validation is a switch
+// over the constants, so an appended or overwritten entry changes nothing.
+func TestTheCauseListCannotBeExtendedByACaller(t *testing.T) {
+	evil := NotFoundCause("request-derived text 9183 and more")
+	list := NotFoundCauseList()
+	for i := range list {
+		list[i] = evil // overwrite IN PLACE: shared backing state would show here
+	}
+	fresh := NotFoundCauseList()
+	if len(fresh) != 4 || fresh[0] != NotFoundUnregisteredDocument || fresh[1] != NotFoundIDEOff || fresh[2] != NotFoundNoRoute || fresh[3] != NotFoundOther {
+		t.Fatalf("the list is shared state: %v", fresh)
+	}
+	read := tracedEnv(t, "1")
+	route := routeAnswering("/v1/gone", http.StatusNotFound, func(r *http.Request) { RecordNotFoundCause(r.Context(), evil) })
+	get(spanHandler(t, "public", false, route), "/v1/gone", nil)
+	spans := read()
+	if len(spans) != 1 {
+		t.Fatalf("got %d spans, want 1", len(spans))
+	}
+	if v, _ := causeOf(spans[0]); v != string(NotFoundOther) {
+		t.Errorf("a mutated list let %q through as the cause", v)
+	}
+	if strings.Contains(spanFieldTextForCause(spans[0]), "9183") {
+		t.Errorf("request-derived text reached the span")
+	}
+}
+
+// r1 P1: recording and reading the cause allocate nothing; the only per-request
+// cost of the feature is one context value on the TraceHandler path (the access
+// observer reuses the observedRoute it already stores in the context).
+func TestRecordingACauseAllocatesNothing(t *testing.T) {
+	match := &observedRoute{}
+	ctx := context.WithValue(context.Background(), observedRouteKey{}, match)
+	if allocs := testing.AllocsPerRun(200, func() { RecordNotFoundCause(ctx, NotFoundIDEOff) }); allocs != 0 {
+		t.Errorf("RecordNotFoundCause (access observer sink) allocates %v, want 0", allocs)
+	}
+	recorder := &accessRecorder{}
+	ctx2 := context.WithValue(context.Background(), notFoundCauseKey{}, recorder)
+	if allocs := testing.AllocsPerRun(200, func() { RecordNotFoundCause(ctx2, NotFoundUnregisteredDocument) }); allocs != 0 {
+		t.Errorf("RecordNotFoundCause (TraceHandler sink) allocates %v, want 0", allocs)
+	}
+	if got := notFoundCauseFor(match.notFoundCause.Load(), true); got != NotFoundIDEOff {
+		t.Errorf("access sink stored %q, want ide_off", got)
+	}
+	if got := notFoundCauseFor(recorder.notFoundCause.Load(), true); got != NotFoundUnregisteredDocument {
+		t.Errorf("TraceHandler sink stored %q, want unregistered_document", got)
+	}
+}
+
+// A whole request through each observer: a handler that records a cause costs
+// no more allocations than one that does not.
+func TestARequestThatRecordsACauseAllocatesNoMoreThanOneThatDoesNot(t *testing.T) {
+	_ = tracedEnv(t, "0") // sampled out: the exporter's own allocations are not the subject
+	count := func(handler http.Handler) float64 {
+		return testing.AllocsPerRun(100, func() {
+			handler.ServeHTTP(httptest.NewRecorder(), httptest.NewRequest(http.MethodGet, "/v1/gone", nil))
+		})
+	}
+	plain := routeAnswering("/v1/gone", http.StatusNotFound, nil)
+	recording := routeAnswering("/v1/gone", http.StatusNotFound, func(r *http.Request) { RecordNotFoundCause(r.Context(), NotFoundIDEOff) })
+	withoutAccess := count(spanHandler(t, "public", false, plain))
+	withAccess := count(spanHandler(t, "public", false, recording))
+	if withAccess > withoutAccess {
+		t.Errorf("access observer: recording costs %v allocs vs %v without", withAccess, withoutAccess)
+	}
+	traceOf := func(route Route) http.Handler {
+		mux := http.NewServeMux()
+		mux.Handle("GET /v1/gone", route.Handler)
+		return TraceHandler(mux, TraceOptions{Listener: "public"})
+	}
+	if a, b := count(traceOf(recording)), count(traceOf(plain)); a > b {
+		t.Errorf("TraceHandler: recording costs %v allocs vs %v without", a, b)
 	}
 }

@@ -5,6 +5,7 @@ import (
 	"log/slog"
 	"net/http"
 	"strconv"
+	"sync/atomic"
 	"time"
 
 	"go.opentelemetry.io/otel"
@@ -39,7 +40,11 @@ type observedRouteKey struct{}
 
 // observedRoute is filled by the route chain (or a 405) with the registered
 // pattern that took the request; it stays empty for an unmatched one.
-type observedRoute struct{ pattern string }
+type observedRoute struct {
+	pattern string
+	// notFoundCause is what RecordNotFoundCause stored (an index; 0 = nothing).
+	notFoundCause atomic.Uint32
+}
 
 // recordRoute notes the registered pattern that took r, for the access
 // observer. It is a no-op for a server built without one.
@@ -55,6 +60,9 @@ func recordRoute(r *http.Request, pattern string) {
 type accessRecorder struct {
 	http.ResponseWriter
 	status int
+	// notFoundCause is what RecordNotFoundCause stored when this recorder is
+	// the cause sink (TraceHandler); the access observer uses observedRoute.
+	notFoundCause atomic.Uint32
 }
 
 func (a *accessRecorder) WriteHeader(status int) {
@@ -127,7 +135,7 @@ func (o *accessObserver) wrap(next http.Handler) http.Handler {
 		// http.ErrAbortHandler (Recover re-panics it): an aborted request is
 		// still a request that reached the route.
 		defer func() {
-			o.spans.finish(spanCtx, span, boundedMethod(r.Method), match.pattern, recorder.status, !returned)
+			o.spans.finish(span, boundedMethod(r.Method), match.pattern, recorder.status, !returned, match.notFoundCause.Load())
 			o.observe(r, match.pattern, recorder.status, time.Now().Sub(start))
 		}()
 		next.ServeHTTP(recorder, r.WithContext(context.WithValue(spanCtx, observedRouteKey{}, match)))

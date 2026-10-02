@@ -148,3 +148,10 @@ func TestACyclicUnwrapChainDoesNotStallTheJobFinalizer(t *testing.T) {
 		t.Fatalf("exported %d spans, want 1", len(exporter.GetSpans()))
 	}
 }
+
+func TestTheInnermostTypeOfADeepChainIsNamed(t *testing.T) {
+	err := fmt.Errorf("a: %w", fmt.Errorf("b: %w", fmt.Errorf("c: %w", &plantedFailure{message: plantedMarker})))
+	if got := errorTypeName(err); got != "*jobruntime.plantedFailure" {
+		t.Fatalf("errorTypeName = %q", got)
+	}
+}

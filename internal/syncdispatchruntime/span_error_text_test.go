@@ -4,6 +4,9 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"go/ast"
+	"go/parser"
+	"go/token"
 	"strings"
 	"testing"
 	"time"
@@ -178,11 +181,19 @@ func TestAPanickingCoordinatorWorkIsAFailedSpanAndStillPanics(t *testing.T) {
 	if len(spans) != 1 || spans[0].Status.Code != codes.Error || spans[0].Status.Description != "coordinator job failed" {
 		t.Fatalf("a panicking coordinator span = %+v, want Error / coordinator job failed", spans)
 	}
+	seen := []string{spans[0].Name, spans[0].Status.Description}
+	for _, kv := range spans[0].Attributes {
+		seen = append(seen, string(kv.Key), kv.Value.Emit())
+	}
 	for _, event := range spans[0].Events {
+		seen = append(seen, event.Name)
 		for _, kv := range event.Attributes {
-			if strings.Contains(kv.Value.Emit(), plantedMarker) {
-				t.Fatalf("the panic value reached the span: %v", kv)
-			}
+			seen = append(seen, string(kv.Key), kv.Value.Emit())
+		}
+	}
+	for _, text := range seen {
+		if strings.Contains(text, plantedMarker) {
+			t.Fatalf("the panic value reached the span: %q", text)
 		}
 	}
 }
@@ -232,5 +243,82 @@ func TestTheRiverWorkSpanOfACoordinatorFailureCarriesNoErrorText(t *testing.T) {
 		if strings.Contains(river, marker) {
 			t.Fatalf("the river.work span carries %q: %s", marker, river)
 		}
+	}
+}
+
+// CHAOS-7896 r1 (vet): the set of coordinator Works is DERIVED from the source, not listed: every worker type that a Register*
+// function of worker.go adds to River (`&xWorker{`) must have a Work method whose body defers finishCoordinatorWork(span, &err)
+// with a named error result, and no Work may call finishCoordinatorSpan itself (that would hand River the raw error again).
+func TestEveryRegisteredCoordinatorWorkDefersTheFixedTextFinisher(t *testing.T) {
+	fset := token.NewFileSet()
+	file, err := parser.ParseFile(fset, "worker.go", nil, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	registered := map[string]bool{}
+	works := map[string]*ast.FuncDecl{}
+	for _, decl := range file.Decls {
+		fn, ok := decl.(*ast.FuncDecl)
+		if !ok {
+			continue
+		}
+		if fn.Recv != nil && fn.Name.Name == "Work" {
+			if star, ok := fn.Recv.List[0].Type.(*ast.StarExpr); ok {
+				if ident, ok := star.X.(*ast.Ident); ok {
+					works[ident.Name] = fn
+				}
+			}
+		}
+		if fn.Recv == nil && strings.HasPrefix(fn.Name.Name, "Register") && fn.Body != nil {
+			ast.Inspect(fn.Body, func(node ast.Node) bool {
+				if unary, ok := node.(*ast.UnaryExpr); ok && unary.Op == token.AND {
+					if lit, ok := unary.X.(*ast.CompositeLit); ok {
+						if ident, ok := lit.Type.(*ast.Ident); ok && strings.HasSuffix(ident.Name, "Worker") {
+							registered[ident.Name] = true
+						}
+					}
+				}
+				return true
+			})
+		}
+	}
+	if len(registered) < 6 {
+		t.Fatalf("derived %d registered worker types %v, want at least 6", len(registered), registered)
+	}
+	for name := range registered {
+		fn := works[name]
+		if fn == nil {
+			t.Fatalf("registered worker %s has no Work method in worker.go", name)
+		}
+		results := fn.Type.Results
+		if results == nil || len(results.List) != 1 || len(results.List[0].Names) != 1 || results.List[0].Names[0].Name != "err" {
+			t.Fatalf("%s.Work has no named error result err", name)
+		}
+		deferred, direct := false, false
+		ast.Inspect(fn.Body, func(node ast.Node) bool {
+			switch typed := node.(type) {
+			case *ast.DeferStmt:
+				if ident, ok := typed.Call.Fun.(*ast.Ident); ok && ident.Name == "finishCoordinatorWork" {
+					deferred = true
+				}
+			case *ast.CallExpr:
+				if ident, ok := typed.Fun.(*ast.Ident); ok && ident.Name == "finishCoordinatorSpan" {
+					direct = true
+				}
+			}
+			return true
+		})
+		if !deferred || direct {
+			t.Fatalf("%s.Work: defers finishCoordinatorWork=%v, calls finishCoordinatorSpan directly=%v", name, deferred, direct)
+		}
+	}
+	t.Logf("derived coordinator workers: %v", registered)
+}
+
+// the innermost type of a chain deeper than one wrapper is what the span and River text name
+func TestTheInnermostTypeOfADeepChainIsNamed(t *testing.T) {
+	err := fmt.Errorf("a: %w", fmt.Errorf("b: %w", fmt.Errorf("c: %w", &plantedFailure{message: plantedMarker})))
+	if got := errorTypeName(err); got != "*syncdispatchruntime.plantedFailure" {
+		t.Fatalf("errorTypeName = %q", got)
 	}
 }

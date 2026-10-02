@@ -1094,6 +1094,9 @@ func TestBuildProviderSyncHandlerLogsTheBudgetLimits(t *testing.T) {
 	if found == nil {
 		t.Fatalf("no provider_sync_budget_limits line in:\n%s", logs.String())
 	}
+	if found["level"] != "INFO" {
+		t.Fatalf("%s line level = %v; want INFO (an operator filters the start lines on INFO): %v", found["msg"], found["level"], found)
+	}
 	want := map[string]float64{"budget_limit_light": 4, "budget_limit_medium": 2, "budget_limit_heavy": 1}
 	for key, value := range want {
 		if found[key] != value {

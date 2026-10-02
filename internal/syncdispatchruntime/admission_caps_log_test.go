@@ -52,6 +52,9 @@ func TestDispatchServiceConstructionLogsTheAdmissionCaps(t *testing.T) {
 	if found == nil {
 		t.Fatalf("no sync_dispatch_admission_caps line in:\n%s", logs.String())
 	}
+	if found["level"] != "INFO" {
+		t.Fatalf("%s line level = %v; want INFO (an operator filters the start lines on INFO): %v", found["msg"], found["level"], found)
+	}
 	want := map[string]float64{
 		"admission_cap_light": 3, "admission_cap_medium": 2, "admission_cap_heavy": 1,
 		"budget_limit_light": 4, "budget_limit_medium": 2, "budget_limit_heavy": 1,
@@ -92,6 +95,9 @@ func TestDispatchServiceConstructionLogsTheClampWhereItDiffersFromEveryCap(t *te
 	if found == nil {
 		t.Fatalf("no sync_dispatch_admission_caps line in:\n%s", logs.String())
 	}
+	if found["level"] != "INFO" {
+		t.Fatalf("%s line level = %v; want INFO (an operator filters the start lines on INFO): %v", found["msg"], found["level"], found)
+	}
 	want := map[string]float64{
 		"admission_cap_light": 4, "admission_cap_medium": 2, "admission_cap_heavy": 1,
 		"budget_limit_light": 4, "budget_limit_medium": 2, "budget_limit_heavy": 1,
@@ -126,6 +132,9 @@ func TestDispatchServiceConstructionLogsEveryCapBelowItsBudgetLimit(t *testing.T
 	}
 	if found == nil {
 		t.Fatalf("no sync_dispatch_admission_caps line in:\n%s", logs.String())
+	}
+	if found["level"] != "INFO" {
+		t.Fatalf("%s line level = %v; want INFO (an operator filters the start lines on INFO): %v", found["msg"], found["level"], found)
 	}
 	want := map[string]float64{
 		"admission_cap_light": 1, "admission_cap_medium": 1, "admission_cap_heavy": 1,

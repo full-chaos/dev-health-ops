@@ -918,6 +918,9 @@
     }
   ],
   "rows": {
+    "created orgs tier and managed_by": {
+      "rows": "a-new-orgcommunitystripe | team-tier-orgteammanual"
+    },
     "org_licenses row": {
       "rows": "enterprisemanual{}{}"
     },

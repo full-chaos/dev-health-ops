@@ -34,7 +34,7 @@ func scrubSlugSuffix(text string) string {
 
 func TestOrgCRUDMatchesThePythonAPI(t *testing.T) {
 	ctx := context.Background()
-	golden := venueoracle.OpenGolden(t, adminRunValuesGolden("orgs_crud", t.Name(), "34dc218cc9287e4316c49980d6099e2face9cf4b4aec5380a43c78c68d51e3d5", scrubSlugSuffix))
+	golden := venueoracle.OpenGolden(t, adminRunValuesGolden("orgs_crud", t.Name(), "f0fa55b5949c42974898aac8801e38bafe50ced53bd056a54225e8f2919afa13", scrubSlugSuffix))
 	root := golden.PythonRoot(t, repoRoot(t))
 	nextID := goldenIDs("orgs")
 	const jwtKey = "venue-oracle-test-secret-key-for-org-crud-flow-32-bytes!!!"
@@ -295,6 +295,16 @@ VALUES ($1, $2, $3, 'member', now(), now(), now())`, nextID(), orgID, newMemberI
 	golden.CompareRows(t, "orphan organization count", func() string {
 		return venueoracle.TableRows(t, ctx, venue.AdminURI(t, venue.SourceDB), orphanQuery)
 	}, goOrphans)
+
+	// managed_by is not in the create response: a community org is managed by
+	// stripe, any other tier manually. Compared as a row on both planes.
+	managedByQuery := `SELECT slug, tier, managed_by FROM organizations WHERE slug IN ('a-new-org', 'team-tier-org') ORDER BY slug`
+	goManagedBy := venueoracle.TableRows(t, ctx, venue.AdminURI(t, venue.GoDB), managedByQuery)
+	if source := golden.CompareRows(t, "created orgs tier and managed_by", func() string {
+		return venueoracle.TableRows(t, ctx, venue.AdminURI(t, venue.SourceDB), managedByQuery)
+	}, goManagedBy); !strings.Contains(source, "team-tier-orgteammanual") || !strings.Contains(source, "a-new-orgcommunitystripe") {
+		t.Errorf("created orgs tier and managed_by rows = %q, want community/stripe and team/manual", source)
+	}
 
 	// Finding: a tier PATCH that actually changes the tier must sync a
 	// PRE-EXISTING org_licenses row's own tier/managed_by, on both planes.

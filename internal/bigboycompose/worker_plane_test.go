@@ -85,9 +85,17 @@ func cutUpList(t *testing.T) []string {
 	}
 	pattern := regexp.MustCompile(`up -d --no-deps --no-build ((?:go-[a-z-]+ ?)+)`)
 	var found []string
-	for _, match := range pattern.FindAllStringSubmatch(string(raw), -1) {
-		if strings.Contains(match[1], "go-worker") {
-			found = append(found, strings.Fields(match[1])...)
+	for _, line := range strings.Split(string(raw), "\n") {
+		if strings.HasPrefix(strings.TrimSpace(line), "#") {
+			continue // a comment line naming a service starts nothing
+		}
+		if cut, _, ok := strings.Cut(line, " #"); ok {
+			line = cut // a trailing comment is not part of the command
+		}
+		for _, match := range pattern.FindAllStringSubmatch(line, -1) {
+			if strings.Contains(match[1], "go-worker") {
+				found = append(found, strings.Fields(match[1])...)
+			}
 		}
 	}
 	return found
@@ -137,5 +145,76 @@ func TestEveryQueueServingBigboyServiceIsInTheCutUpList(t *testing.T) {
 	sort.Strings(missing)
 	if len(missing) != 0 {
 		t.Fatalf("queue-serving services of the bigboy override that bigboy-cut.sh never starts: %v (up list %v)", missing, upList)
+	}
+}
+
+// bigboyCutLines returns the non-comment lines of bigboy-cut.sh.
+func bigboyCutLines(t *testing.T) []string {
+	t.Helper()
+	raw, err := os.ReadFile(filepath.Join(toolsDir(t), "bigboy-cut.sh"))
+	if err != nil {
+		t.Fatalf("read bigboy-cut.sh: %v", err)
+	}
+	var lines []string
+	for _, line := range strings.Split(string(raw), "\n") {
+		if !strings.HasPrefix(strings.TrimSpace(line), "#") {
+			lines = append(lines, line)
+		}
+	}
+	return lines
+}
+
+// The test reads ci/bigboy/compose.bigboy.workers.yml, so the cut must run THAT file: the COMPOSE_FILE chain and
+// the redacted-config `-f` list name it through $HERE, and no entry still names the untracked host copy
+// (compose/compose.bigboy.workers.yml) that this change replaces.
+func TestTheCutRunsTheTrackedWorkersOverlay(t *testing.T) {
+	const tracked = "$HERE/compose.bigboy.workers.yml"
+	const hostCopy = "compose/compose.bigboy.workers.yml"
+	var composeFile, redactedConfig string
+	for _, line := range bigboyCutLines(t) {
+		switch {
+		case strings.HasPrefix(strings.TrimSpace(line), "export COMPOSE_FILE="):
+			composeFile = line
+		case strings.Contains(line, "compose-config-redacted.sh") && strings.Contains(line, " -f "):
+			redactedConfig = line
+		}
+		if strings.Contains(line, hostCopy) {
+			t.Errorf("bigboy-cut.sh still names the untracked host copy %s: %s", hostCopy, line)
+		}
+	}
+	if composeFile == "" || redactedConfig == "" {
+		t.Fatalf("bigboy-cut.sh has no COMPOSE_FILE export (%v) or no redacted-config -f line (%v)", composeFile != "", redactedConfig != "")
+	}
+	for name, line := range map[string]string{"COMPOSE_FILE": composeFile, "redacted-config -f list": redactedConfig} {
+		if !strings.Contains(line, tracked) {
+			t.Errorf("%s does not name %s: %s", name, tracked, line)
+		}
+	}
+}
+
+// Every override service runs the CI operator digest and never a local build: the cut recreates the plane from
+// CI digests (Trap #420), and one service on a local tag would be the 09-20 local build again.
+func TestEveryBigboyWorkerServiceRunsTheCIOperatorImage(t *testing.T) {
+	raw, err := os.ReadFile(filepath.Join(toolsDir(t), "compose.bigboy.workers.yml"))
+	if err != nil {
+		t.Fatalf("read the override: %v", err)
+	}
+	var doc struct {
+		Services map[string]map[string]yaml.Node `yaml:"services"`
+	}
+	if err := yaml.Unmarshal(raw, &doc); err != nil {
+		t.Fatalf("parse the override: %v", err)
+	}
+	if len(doc.Services) == 0 {
+		t.Fatalf("no service in the override: the check proves nothing")
+	}
+	for name, service := range doc.Services {
+		image, ok := service["image"]
+		if !ok || image.Value != "${BIGBOY_OPERATOR_IMAGE:?set BIGBOY_OPERATOR_IMAGE}" {
+			t.Errorf("service %s image = %q, want the required ${BIGBOY_OPERATOR_IMAGE}", name, image.Value)
+		}
+		if build, ok := service["build"]; !ok || build.Tag != "!reset" {
+			t.Errorf("service %s does not reset the base build (`build: !reset null`): a local build would replace the CI image", name)
+		}
 	}
 }

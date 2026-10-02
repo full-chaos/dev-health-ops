@@ -271,6 +271,23 @@ func TestVerifierMatchesFrozenPythonIssuedEnvelopeStructure(t *testing.T) {
 		}
 	}
 
+	// The issuer never sets impersonation_active without impersonated_by, so the recorded envelopes cannot tell a
+	// verifier that derives one from the other. This envelope is TEST-SET (not recorded): the recorded plain claims
+	// with only impersonation_active true and impersonated_by null; the verifier must read the flag as it is and
+	// the other two flags as false.
+	plain := want.Envelopes["plain"]
+	testSet := map[string]any{}
+	for name, value := range plain.Claims {
+		testSet[name] = value
+	}
+	testSet["impersonation_active"] = true
+	testSet["impersonated_by"] = nil
+	got := verifyWith("test-set: impersonation_active alone", plain.Header, plain.TTLSeconds, testSet)
+	if got.IsSuperuser || got.IsSuperuserVerified || !got.ImpersonationActive || got.ImpersonatedBy != nil {
+		t.Errorf("test-set envelope with only impersonation_active: flags (%v, %v, %v), impersonated_by %v; want (false, false, true) and nil",
+			got.IsSuperuser, got.IsSuperuserVerified, got.ImpersonationActive, got.ImpersonatedBy)
+	}
+
 	// The three flags are recorded one at a time: each recorded envelope must set exactly its own flag.
 	flagsOf := func(label string) [3]bool {
 		c := want.Envelopes[label].Claims

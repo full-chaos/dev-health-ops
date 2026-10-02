@@ -259,53 +259,72 @@ func documentOperationName(document string) string {
 	return ""
 }
 
-func TestGraphQLEdgeVenueOracle(t *testing.T) {
-	ctx := context.Background()
-	root := repoRootFromHere(t)
-	docs := registeredEdgeDocuments(t, root)
-	users := edgeUsers()
-	schemaDigest := digest.Schema(schemav1.SDL)
-
-	venue := venueoracle.Start(t, ctx, venueoracle.Options{
-		Root: root, JWTKey: edgeOracleJWTKey,
-		Seed: func(t *testing.T, ctx context.Context, admin *pgxpool.Pool, _ *venueoracle.Venue) map[string]map[string]any {
-			exec := func(sql string, args ...any) {
-				t.Helper()
-				if _, err := admin.Exec(ctx, sql, args...); err != nil {
-					t.Fatalf("seed: %v\n%s", err, sql)
-				}
+// edgeSeed seeds the venue databases: the orgs, the principals, the impersonation, and a routing row to Go
+// for every registered operation, as prod runs it.
+func edgeSeed(users []edgeUser, docs []registeredEdgeDocument, schemaDigest string) func(t *testing.T, ctx context.Context, admin *pgxpool.Pool, _ *venueoracle.Venue) map[string]map[string]any {
+	return func(t *testing.T, ctx context.Context, admin *pgxpool.Pool, _ *venueoracle.Venue) map[string]map[string]any {
+		exec := func(sql string, args ...any) {
+			t.Helper()
+			if _, err := admin.Exec(ctx, sql, args...); err != nil {
+				t.Fatalf("seed: %v\n%s", err, sql)
 			}
-			for i, org := range []string{edgeOrgA, edgeOrgB} {
-				exec(`INSERT INTO organizations (id, slug, name, tier, managed_by, is_active, created_at, updated_at)
+		}
+		for i, org := range []string{edgeOrgA, edgeOrgB} {
+			exec(`INSERT INTO organizations (id, slug, name, tier, managed_by, is_active, created_at, updated_at)
 VALUES ($1, $2, $3, 'community', 'stripe', true, now(), now())`, org, fmt.Sprintf("edge-%d", i), fmt.Sprintf("Edge %d", i))
-			}
-			specs := map[string]map[string]any{}
-			for _, u := range users {
-				exec(`INSERT INTO users (id, email, is_active, is_verified, is_superuser, token_version, created_at, updated_at)
+		}
+		specs := map[string]map[string]any{}
+		for _, u := range users {
+			exec(`INSERT INTO users (id, email, is_active, is_verified, is_superuser, token_version, created_at, updated_at)
 VALUES ($1, $2, $3, true, $4, $5, now(), now())`, u.id, u.name+"@example.com", u.active, u.superuser, u.dbVersion)
-				for org, role := range u.memberships {
-					exec(`INSERT INTO memberships (id, org_id, user_id, role, joined_at, created_at, updated_at)
+			for org, role := range u.memberships {
+				exec(`INSERT INTO memberships (id, org_id, user_id, role, joined_at, created_at, updated_at)
 VALUES ($1, $2, $3, $4, now(), now(), now())`, uuid.New(), org, u.id, role)
-				}
-				specs[u.name] = map[string]any{"user_id": u.id.String(), "email": u.name + "@example.com",
-					"org_id": u.tokenOrg, "role": u.tokenRole, "is_superuser": u.superuser, "token_version": 0}
 			}
-			// The impersonator is impersonating the viewer, in org A.
-			exec(`INSERT INTO impersonation_sessions (id, admin_user_id, target_user_id, target_org_id, target_role, created_at, expires_at)
+			specs[u.name] = map[string]any{"user_id": u.id.String(), "email": u.name + "@example.com",
+				"org_id": u.tokenOrg, "role": u.tokenRole, "is_superuser": u.superuser, "token_version": 0}
+		}
+		// The impersonator is impersonating the viewer, in org A.
+		exec(`INSERT INTO impersonation_sessions (id, admin_user_id, target_user_id, target_org_id, target_role, created_at, expires_at)
 VALUES ($1, $2, $3, $4, 'viewer', now(), now() + interval '1 day')`,
-				uuid.New(), users[3].id, users[1].id, edgeOrgA)
-			// Every registered operation routed to Go, as prod runs it.
-			for _, doc := range docs {
-				exec(`INSERT INTO go_api_candidate_build (schema_digest, document_digest, selected_operation, candidate_build)
+			uuid.New(), users[3].id, users[1].id, edgeOrgA)
+		// Every registered operation routed to Go, as prod runs it.
+		for _, doc := range docs {
+			exec(`INSERT INTO go_api_candidate_build (schema_digest, document_digest, selected_operation, candidate_build)
 VALUES ($1, $2, $3, 'venue') ON CONFLICT DO NOTHING`, schemaDigest, doc.Digest, doc.Operation)
-				exec(`INSERT INTO go_api_routing_state
+			exec(`INSERT INTO go_api_routing_state
 (schema_digest, document_digest, selected_operation, current_candidate_build, owner, mode, rollout_percentage, review_evidence, recorded_by, updated_at)
 VALUES ($1, $2, $3, 'venue', 'go', 'canary', 100, 'venue', 'venue', now())`, schemaDigest, doc.Digest, doc.Operation)
-			}
-			return specs
-		},
-	})
+		}
+		return specs
+	}
+}
 
+// enterRepositoryRoot makes the repository root the working directory until the test ends. The report writer stages
+// its job contracts from a path relative to the working directory, as the image lays them out. It is os.Chdir, not
+// t.Chdir: t.Chdir also sets PWD, and a golden's key must not hold the absolute path of a checkout.
+//
+// It returns the function that goes back to the previous directory (also run at the end of the test): a frozen test
+// calls it before it finishes its golden, whose file path is relative to the package directory.
+func enterRepositoryRoot(t *testing.T, root string) (leave func()) {
+	t.Helper()
+	previous, err := os.Getwd()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chdir(root); err != nil {
+		t.Fatal(err)
+	}
+	leave = func() { _ = os.Chdir(previous) }
+	t.Cleanup(leave)
+	return leave
+}
+
+// startEdgePlane builds query-api over the venue as prod does (the real Build over the real settings, the
+// real Listeners) and returns its settings, the base of its public listener and the environment the Python
+// plane needs to reach it.
+func startEdgePlane(t *testing.T, ctx context.Context, venue *venueoracle.Venue, root string) (map[string]string, string, []string, func()) {
+	t.Helper()
 	// query-api: the real Build over the real settings, the real Listeners.
 	jwksPath, _ := edgeOracleJWKS(t)
 	settings := map[string]string{
@@ -320,7 +339,7 @@ VALUES ($1, $2, $3, 'venue', 'go', 'canary', 100, 'venue', 'venue', now())`, sch
 	// The report writer stages its job contracts from a path relative to the
 	// working directory, as the image lays them out: run from the repo root
 	// so triggerReport is the real, contract-backed mutation.
-	t.Chdir(root)
+	leave := enterRepositoryRoot(t, root)
 	plane, err := Build(func(key string) string { return settings[key] })
 	if err != nil {
 		t.Fatalf("build query-api: %v", err)
@@ -345,7 +364,26 @@ VALUES ($1, $2, $3, 'venue', 'go', 'canary', 100, 'venue', 'venue', now())`, sch
 		"VENUE_PY_LOGGING=1",
 		"CORS_ALLOWED_ORIGINS=" + edgeOracleOrigin,
 	}
+	return settings, goBase, pythonEnv, leave
+}
 
+// edgeSuite is the requests of the edge oracle and the documents its later phases use.
+type edgeSuite struct {
+	cases, writes   []edgeCase
+	query, mutation registeredEdgeDocument
+	queryBody       string
+	member          string
+}
+
+// edgeOracleCases builds the requests of the edge oracle. mint signs the two time-bound tokens the venue's mint
+// mode cannot express: one signed with another key (valid in time) and one expired.
+//
+// schemeToken is the credential of the two cases that present a valid token under another scheme ("bearer", "Basic"):
+// empty means the venue's member token (the live oracle); the frozen oracle gives a valid token with fixed instants,
+// because the golden's request key holds a token sent under another scheme as written, and the venue's own token is
+// new in every run.
+func edgeOracleCases(t *testing.T, docs []registeredEdgeDocument, users []edgeUser, venue *venueoracle.Venue, mint func(key string, user edgeUser, expired bool) string, schemeToken string) edgeSuite {
+	t.Helper()
 	token := func(name string) string {
 		value, ok := venue.Tokens[name]
 		if !ok {
@@ -354,6 +392,10 @@ VALUES ($1, $2, $3, 'venue', 'go', 'canary', 100, 'venue', 'venue', now())`, sch
 		return value
 	}
 	member := token("member")
+	schemeCredential := member
+	if schemeToken != "" {
+		schemeCredential = schemeToken
+	}
 
 	var cases []edgeCase
 	var writes []edgeCase
@@ -391,8 +433,8 @@ VALUES ($1, $2, $3, 'venue', 'go', 'canary', 100, 'venue', 'venue', now())`, sch
 		for _, c := range []struct{ name, token string }{
 			{"no credential", ""},
 			{"garbage bearer", "not-a-jwt"},
-			{"wrong key", edgeOracleToken(t, "another-key-another-key-another-key-32b", users[0], time.Now().Add(time.Hour))},
-			{"expired", edgeOracleToken(t, edgeOracleJWTKey, users[0], time.Now().Add(-time.Hour))},
+			{"wrong key", mint("another-key-another-key-another-key-32b", users[0], false)},
+			{"expired", mint(edgeOracleJWTKey, users[0], true)},
 			{"inactive user", token("inactive")},
 			{"revoked token version", token("revoked")},
 			{"viewer", token("viewer")},
@@ -402,8 +444,8 @@ VALUES ($1, $2, $3, 'venue', 'go', 'canary', 100, 'venue', 'venue', now())`, sch
 			cases = append(cases, edgeCase{request: edgePost(doc.Operation+" as "+c.name, c.token, body, nil)})
 		}
 		cases = append(cases,
-			edgeCase{request: edgePost(doc.Operation+" lower-case scheme", "", body, map[string]string{"Authorization": "bearer " + member})},
-			edgeCase{request: edgePost(doc.Operation+" basic scheme", "", body, map[string]string{"Authorization": "Basic " + member})},
+			edgeCase{request: edgePost(doc.Operation+" lower-case scheme", "", body, map[string]string{"Authorization": "bearer " + schemeCredential})},
+			edgeCase{request: edgePost(doc.Operation+" basic scheme", "", body, map[string]string{"Authorization": "Basic " + schemeCredential})},
 			edgeCase{request: edgePost(doc.Operation+" text/plain", member, body, map[string]string{"Content-Type": "text/plain"})},
 		)
 	}
@@ -436,6 +478,10 @@ VALUES ($1, $2, $3, 'venue', 'go', 'canary', 100, 'venue', 'venue', now())`, sch
 		)
 	}
 	cases = append(cases,
+		// A preflight that asks for a method outside the allowed list (GET POST PUT PATCH DELETE OPTIONS) is a 400
+		// "Disallowed CORS method": every other preflight here asks POST.
+		edgeCase{request: venueoracle.Request{Name: "preflight allowed origin, method outside the list", Method: "OPTIONS", Path: "/graphql",
+			Headers: map[string]string{"Origin": edgeOracleOrigin, "Access-Control-Request-Method": "TRACE", "Access-Control-Request-Headers": "authorization,content-type"}}},
 		edgeCase{request: venueoracle.Request{Name: "OPTIONS without a preflight", Method: "OPTIONS", Path: "/graphql"}},
 		edgeCase{request: venueoracle.Request{Name: "HEAD", Method: "HEAD", Path: "/graphql", Headers: map[string]string{"Authorization": "Bearer " + member}}},
 		nosniffOnly(venueoracle.Request{Name: "PATCH oversize", Method: "PATCH", Path: "/graphql", Body: venueoracle.B64(strings.Repeat("x", defaultGraphQLMaxQueryBytes+1))}),
@@ -543,57 +589,96 @@ VALUES ($1, $2, $3, 'venue', 'go', 'canary', 100, 'venue', 'venue', now())`, sch
 			declared: "unregistered document: Python's Strawberry answers it, query-api serves registered documents only",
 			pyWant:   edgeAnswer{status: 200, body: map[bool]string{true: `"__typename"`, false: `"errors"`}[c.name == "typename"]}, goWant: edgeAnswer{status: 404}})
 	}
+	return edgeSuite{cases: cases, writes: writes, query: query, mutation: mutation, queryBody: queryBody, member: member}
+}
 
-	requests := func(cs []edgeCase) []venueoracle.Request {
-		out := make([]venueoracle.Request, len(cs))
-		for i, c := range cs {
-			out[i] = c.request
-		}
-		return out
+// edgeRequests is the requests of the cases, in order.
+func edgeRequests(cs []edgeCase) []venueoracle.Request {
+	out := make([]venueoracle.Request, len(cs))
+	for i, c := range cs {
+		out[i] = c.request
 	}
+	return out
+}
+
+// edgeCompare compares the Python plane's answers with the Go plane's: a declared divergence is asserted on both
+// sides, every other case goes through venueoracle.Diff. golden is the frozen golden the answers came from (nil
+// for the live oracle): the answers of the declared cases are then declared inspected, and Diff compares the rest
+// as the golden requires.
+func edgeCompare(t *testing.T, goBase string, cs []edgeCase, python []venueoracle.Response, normalize func(venueoracle.Request, string) string, golden *venueoracle.Golden) {
+	t.Helper()
+	var parity []venueoracle.Request
+	var parityPython []venueoracle.Response
+	var receipt strings.Builder
+	for i, c := range cs {
+		if c.declared == "" {
+			parity = append(parity, c.request)
+			parityPython = append(parityPython, python[i])
+			continue
+		}
+		goResponse := venueoracle.Do(t, goBase, c.request)
+		if golden != nil {
+			golden.Consumed(t, python[i])
+		}
+		var holds bool
+		if c.header != "" {
+			// One header differs, as declared; the rest must be SAME.
+			pyRest, goRest := withoutHeader(python[i], c.header), withoutHeader(goResponse, c.header)
+			same, _, _, _ := venueoracle.Compare(c.request, pyRest, goRest, venueoracle.DiffOptions{})
+			holds = same && python[i].Headers[c.header] == c.pyWant.header && goResponse.Headers[c.header] == c.goWant.header
+		} else {
+			holds = python[i].Status == c.pyWant.status && strings.Contains(python[i].Body, c.pyWant.body) &&
+				goResponse.Status == c.goWant.status && strings.Contains(goResponse.Body, c.goWant.body)
+			// The status and body differ as declared; every header must
+			// still be the same (content-length aside: the bodies differ).
+			// A header that differs is a divergence nobody declared: it
+			// fails here, by name, never passes unseen.
+			if differing := headersThatDiffer(c.request, python[i], goResponse); len(differing) > 0 {
+				holds = false
+				t.Errorf("%s: declared divergence (%s) also differs in undeclared headers %v\n python %v\n go     %v",
+					c.request.Name, c.declared, differing, python[i].Headers, goResponse.Headers)
+			}
+		}
+		fmt.Fprintf(&receipt, "%-58s python=%d go=%d DECLARED holds=%v\n", c.request.Name, python[i].Status, goResponse.Status, holds)
+		if !holds {
+			t.Errorf("%s: declared divergence (%s) does not hold\n python %d %s\n go     %d %s", c.request.Name, c.declared,
+				python[i].Status, truncateOracleBody(python[i].Body), goResponse.Status, truncateOracleBody(goResponse.Body))
+		}
+	}
+	receipt.WriteString(venueoracle.Diff(t, goBase, parity, parityPython, venueoracle.DiffOptions{
+		Normalize: normalize,
+		Golden:    golden,
+	}))
+	t.Log("\n" + receipt.String())
+}
+
+func TestGraphQLEdgeVenueOracle(t *testing.T) {
+	ctx := context.Background()
+	root := repoRootFromHere(t)
+	docs := registeredEdgeDocuments(t, root)
+	users := edgeUsers()
+	schemaDigest := digest.Schema(schemav1.SDL)
+
+	venue := venueoracle.Start(t, ctx, venueoracle.Options{
+		Root: root, JWTKey: edgeOracleJWTKey,
+		Seed: edgeSeed(users, docs, schemaDigest),
+	})
+
+	settings, goBase, pythonEnv, _ := startEdgePlane(t, ctx, venue, root)
+
+	mint := func(key string, user edgeUser, expired bool) string {
+		expires := time.Now().Add(time.Hour)
+		if expired {
+			expires = time.Now().Add(-time.Hour)
+		}
+		return edgeOracleToken(t, key, user, expires)
+	}
+	suite := edgeOracleCases(t, docs, users, venue, mint, "")
+	cases, writes, query, mutation, queryBody, member := suite.cases, suite.writes, suite.query, suite.mutation, suite.queryBody, suite.member
 
 	run := func(cs []edgeCase, normalize func(venueoracle.Request, string) string) {
-		reqs := requests(cs)
-		python := venue.ServePythonWithEnv(t, pythonEnv, reqs)
-		var parity []venueoracle.Request
-		var parityPython []venueoracle.Response
-		var receipt strings.Builder
-		for i, c := range cs {
-			if c.declared == "" {
-				parity = append(parity, c.request)
-				parityPython = append(parityPython, python[i])
-				continue
-			}
-			goResponse := venueoracle.Do(t, goBase, c.request)
-			var holds bool
-			if c.header != "" {
-				// One header differs, as declared; the rest must be SAME.
-				pyRest, goRest := withoutHeader(python[i], c.header), withoutHeader(goResponse, c.header)
-				same, _, _, _ := venueoracle.Compare(c.request, pyRest, goRest, venueoracle.DiffOptions{})
-				holds = same && python[i].Headers[c.header] == c.pyWant.header && goResponse.Headers[c.header] == c.goWant.header
-			} else {
-				holds = python[i].Status == c.pyWant.status && strings.Contains(python[i].Body, c.pyWant.body) &&
-					goResponse.Status == c.goWant.status && strings.Contains(goResponse.Body, c.goWant.body)
-				// The status and body differ as declared; every header must
-				// still be the same (content-length aside: the bodies differ).
-				// A header that differs is a divergence nobody declared: it
-				// fails here, by name, never passes unseen.
-				if differing := headersThatDiffer(c.request, python[i], goResponse); len(differing) > 0 {
-					holds = false
-					t.Errorf("%s: declared divergence (%s) also differs in undeclared headers %v\n python %v\n go     %v",
-						c.request.Name, c.declared, differing, python[i].Headers, goResponse.Headers)
-				}
-			}
-			fmt.Fprintf(&receipt, "%-58s python=%d go=%d DECLARED holds=%v\n", c.request.Name, python[i].Status, goResponse.Status, holds)
-			if !holds {
-				t.Errorf("%s: declared divergence (%s) does not hold\n python %d %s\n go     %d %s", c.request.Name, c.declared,
-					python[i].Status, truncateOracleBody(python[i].Body), goResponse.Status, truncateOracleBody(goResponse.Body))
-			}
-		}
-		receipt.WriteString(venueoracle.Diff(t, goBase, parity, parityPython, venueoracle.DiffOptions{
-			Normalize: normalize,
-		}))
-		t.Log("\n" + receipt.String())
+		python := venue.ServePythonWithEnv(t, pythonEnv, edgeRequests(cs))
+		edgeCompare(t, goBase, cs, python, normalize, nil)
 	}
 	// Both legs reach the same resolvers, so a timestamp that differs between
 	// them is a clock reading taken per call (generatedAt, computedAt), never

@@ -6,28 +6,28 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
-	"os/exec"
-	"path/filepath"
-	"runtime"
-	"sort"
 	"strconv"
 	"strings"
 	"testing"
 
-	"github.com/full-chaos/dev-health-ops/internal/testsupport/pyoracle"
+	"github.com/full-chaos/dev-health-ops/internal/testsupport/programoracle"
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/smtpcapture"
 )
 
 // smtpOracleProgram drives the REAL Python mail path
 // (src/dev_health_ops/api/services/email.py): EmailService over
 // SmtpEmailProvider, the exact classes `send_invite_email` and every other
-// Python mail caller use. Inputs arrive on stdin, so nothing reaches argv.
+// Python mail caller use. Inputs arrive on stdin, so nothing reaches argv;
+// the address of the test's mail server is ORACLE_SMTP_ADDRESS in its
+// environment (host:port, new in every run). It prints "sent", or the class
+// of the exception the service raised.
 const smtpOracleProgram = `
-import asyncio, json, sys
+import asyncio, json, os, sys
 from dev_health_ops.api.services.email import EmailService, SmtpEmailProvider
 
 spec = json.load(sys.stdin)
-service = EmailService(SmtpEmailProvider(host=spec["host"], port=spec["port"]), spec["from"])
+host, port = os.environ["ORACLE_SMTP_ADDRESS"].rsplit(":", 1)
+service = EmailService(SmtpEmailProvider(host=host, port=int(port)), spec["from"])
 
 async def run():
     if spec.get("template"):
@@ -38,7 +38,11 @@ async def run():
         await service.send_email(
             to_address=spec["to"], subject=spec["subject"], html_content=spec["html"])
 
-asyncio.run(run())
+try:
+    asyncio.run(run())
+    print(json.dumps({"sent": True}))
+except Exception as error:
+    print(json.dumps({"sent": False, "error": type(error).__name__}))
 `
 
 type smtpOracleCase struct {
@@ -55,11 +59,27 @@ type smtpOracleCase struct {
 	Refused bool
 }
 
-func runPythonSMTP(t *testing.T, interpreter, root string, host string, port int, c smtpOracleCase) error {
+// smtpAnswer is what one run of the Python service gave: whether it sent, the
+// class of the exception it raised, and the message the test's mail server
+// received from it (MIME boundary normalized), or none.
+type smtpAnswer struct {
+	Sent  bool        `json:"sent"`
+	Error string      `json:"error,omitempty"`
+	Mail  *smtpRecord `json:"mail"`
+}
+
+type smtpRecord struct {
+	MailFrom string   `json:"mail_from"`
+	RcptTo   []string `json:"rcpt_to"`
+	Data     string   `json:"data"`
+}
+
+// smtpProgram is one run of the Python service for c. When the golden is
+// recorded, the mail server is started once for all runs, and the recorded
+// answer is the outcome with every message the server received in that run.
+func smtpProgram(t *testing.T, c smtpOracleCase, server func() *smtpcapture.Server) programoracle.Program {
 	t.Helper()
-	spec := map[string]any{
-		"host": host, "port": port, "from": c.From, "to": c.To, "subject": c.Subject,
-	}
+	spec := map[string]any{"from": c.From, "to": c.To, "subject": c.Subject}
 	if c.Template != "" {
 		spec["template"] = c.Template
 		spec["context"] = c.Context
@@ -70,15 +90,29 @@ func runPythonSMTP(t *testing.T, interpreter, root string, host string, port int
 	if err != nil {
 		t.Fatal(err)
 	}
-	command := exec.Command(interpreter, "-c", smtpOracleProgram)
-	command.Dir = root
-	command.Env = append(os.Environ(), "PYTHONPATH="+filepath.Join(root, "src"))
-	command.Stdin = bytes.NewReader(input)
-	output, err := command.CombinedOutput()
-	if err != nil {
-		return fmt.Errorf("python send: %w\n%s", err, output)
+	return programoracle.Program{
+		Name: c.Name, Text: smtpOracleProgram, Stdin: input,
+		PerRunNames: []string{"ORACLE_SMTP_ADDRESS"},
+		PerRun: func() map[string]string {
+			host, port := server().HostPort(t)
+			return map[string]string{"ORACLE_SMTP_ADDRESS": host + ":" + strconv.Itoa(port)}
+		},
+		Answer: func(stdout []byte) ([]byte, error) {
+			var answer smtpAnswer
+			if err := json.Unmarshal(bytes.TrimSpace(stdout), &answer); err != nil {
+				return nil, fmt.Errorf("decode the service's outcome: %w", err)
+			}
+			received := server().Drain(t)
+			if len(received) > 1 {
+				return nil, fmt.Errorf("the mail server received %d messages from one send", len(received))
+			}
+			if len(received) == 1 {
+				mail := smtpcapture.Normalize(received[0])
+				answer.Mail = &smtpRecord{MailFrom: mail.MailFrom, RcptTo: mail.RcptTo, Data: mail.Data}
+			}
+			return json.Marshal(answer)
+		},
 	}
-	return nil
 }
 
 func runGoSMTP(t *testing.T, host string, port int, c smtpOracleCase, html string) error {
@@ -103,25 +137,13 @@ func runGoSMTP(t *testing.T, host string, port int, c smtpOracleCase, html strin
 	return sender.Send(context.Background(), Message{To: c.To, Subject: c.Subject, HTML: html})
 }
 
-// TestSMTPSenderMatchesLivePythonSMTPProvider is the cross-runtime proof for
-// the wire format: for every case, the live Python SmtpEmailProvider and the
-// Go SMTP sender deliver the same message to the same SMTP server, and the
-// bytes on the wire (envelope + DATA, MIME boundary normalized) must match.
-func TestSMTPSenderMatchesLivePythonSMTPProvider(t *testing.T) {
-	if os.Getenv("DEV_HEALTH_LIVE_PYTHON_ORACLES") != "1" {
-		t.Skip("live Python oracles run only through ci/check_go.sh live-python-oracles")
-	}
-	proofDir := os.Getenv("DEV_HEALTH_LIVE_PYTHON_ORACLE_PROOF_DIR")
-	if proofDir == "" {
-		t.Fatal("DEV_HEALTH_LIVE_PYTHON_ORACLE_PROOF_DIR is required")
-	}
-	_, currentFile, _, ok := runtime.Caller(0)
-	if !ok {
-		t.Fatal("resolve mail package path")
-	}
-	root := filepath.Clean(filepath.Join(filepath.Dir(currentFile), "..", ".."))
-	interpreter := pyoracle.Resolve(t, root)
-
+// TestSMTPSenderMatchesFrozenPythonSMTPProvider is the cross-runtime proof for
+// the wire format: for every case, the Go SMTP sender delivers the message the
+// Python SmtpEmailProvider delivered to a mail server when the golden was
+// recorded on the pinned build, and the bytes on the wire (envelope + DATA,
+// MIME boundary normalized) must match; a message the case says must be
+// refused is refused by both, and neither sends anything.
+func TestSMTPSenderMatchesFrozenPythonSMTPProvider(t *testing.T) {
 	const sender = "dev-health@example.com"
 	const recipient = "owner@example.test"
 	long := func(unit string, n int) string { return strings.Repeat(unit, n) }
@@ -178,18 +200,33 @@ func TestSMTPSenderMatchesLivePythonSMTPProvider(t *testing.T) {
 		{Name: "refused: non-ascii sender address", From: "d\u00e9v@example.test", To: recipient, Subject: "Hello", HTML: "<p>x</p>", Refused: true},
 		{Name: "refused: newline in to", From: sender, To: "owner@example.test\nBcc: evil@example.test", Subject: "Hello", HTML: "<p>x</p>", Refused: true},
 	}
-	names := make([]string, 0, len(cases))
-	for _, c := range cases {
-		names = append(names, c.Name)
+	// The mail server of a recording: one for every Python run, started only
+	// when the golden is recorded.
+	var recording *smtpcapture.Server
+	recordingServer := func() *smtpcapture.Server {
+		if recording == nil {
+			recording = smtpcapture.Start(t)
+		}
+		return recording
 	}
-	sort.Strings(names)
+	programs := make([]programoracle.Program, len(cases))
+	for index, c := range cases {
+		programs[index] = smtpProgram(t, c, recordingServer)
+	}
+	outputs := frozenPython(t, "smtp.golden.json", programs...)
+	answers := make([]smtpAnswer, len(outputs))
+	for index, output := range outputs {
+		if err := json.Unmarshal([]byte(output), &answers[index]); err != nil {
+			t.Fatalf("decode answer %d: %v", index, err)
+		}
+	}
 
-	for _, c := range cases {
+	for index, c := range cases {
 		t.Run(c.Name, func(t *testing.T) {
 			server := smtpcapture.Start(t)
 			host, port := server.HostPort(t)
 
-			pythonErr := runPythonSMTP(t, interpreter, root, host, port, c)
+			answer := answers[index]
 			html := c.HTML
 			if c.Template != "" {
 				var err error
@@ -199,20 +236,19 @@ func TestSMTPSenderMatchesLivePythonSMTPProvider(t *testing.T) {
 				}
 			}
 			if c.Refused {
-				if pythonErr == nil {
-					t.Fatal("Python sent a message the case says must be refused")
+				if answer.Sent || answer.Mail != nil {
+					t.Fatalf("Python sent a message the case says must be refused (sent %v, the server received %v)", answer.Sent, answer.Mail != nil)
 				}
-				server.AssertNone(t)
 				if err := runGoSMTP(t, host, port, c, html); err == nil {
 					t.Fatal("Go sent a message the case says must be refused")
 				}
 				server.AssertNone(t)
 				return
 			}
-			if pythonErr != nil {
-				t.Fatalf("%v", pythonErr)
+			if !answer.Sent || answer.Mail == nil {
+				t.Fatalf("Python did not deliver the message when it was recorded: sent %v (%s), the server received %v", answer.Sent, answer.Error, answer.Mail != nil)
 			}
-			python := smtpcapture.Normalize(server.Take(t))
+			python := smtpcapture.Mail{MailFrom: answer.Mail.MailFrom, RcptTo: answer.Mail.RcptTo, Data: answer.Mail.Data}
 			if err := runGoSMTP(t, host, port, c, html); err != nil {
 				t.Fatalf("Go send: %v", err)
 			}
@@ -229,9 +265,5 @@ func TestSMTPSenderMatchesLivePythonSMTPProvider(t *testing.T) {
 					python.Data, goMail.Data, python.Data, goMail.Data)
 			}
 		})
-	}
-
-	if err := os.WriteFile(filepath.Join(proofDir, "mail-smtp-oracle"), []byte("executed"), 0o600); err != nil {
-		t.Fatal(err)
 	}
 }

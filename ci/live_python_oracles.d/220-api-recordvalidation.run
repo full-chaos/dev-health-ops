@@ -1,0 +1,6 @@
+label=internal/api/recordvalidation (record models and record validation vs live Python)
+package=./internal/api/recordvalidation
+run=^(TestRecordModelsGoldenMatchesLivePython|TestRecordValidationMatchesLivePython)$
+python=1
+proof=externalingest-record-models|externalingest live Python oracle externalingest-record-models did not run
+proof=externalingest-record-validation|externalingest live Python oracle externalingest-record-validation did not run

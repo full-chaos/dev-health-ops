@@ -20,7 +20,7 @@
       "operation": "aiAttributedPrs",
       "mode": "canary",
       "schema_digest": "sha256:19485ec136d04de0935717dca8b4f5fd27dd0351fe96b854d40f433229468fd0",
-      "document_digest": "6ed54ebe5a535e28c16c1e903f64eda9fbbc32577465ccebe7fa30e2075f2f3e",
+      "document_digest": "186aa8ced0a7ab707911c61c829f561157913dc9c5176d665705394cc84f6bba",
       "candidate_build": "22e1e8c5fe1e729f057e3c231a3db0c807658da5",
       "live": false,
       "proven": "0e2dc519-c621-4c96-8316-82e0a2f6dca0"
@@ -416,7 +416,7 @@
       "operation": "aiAttributedPrs",
       "mode": "canary",
       "schema_digest": "sha256:898250a995e65f792e0383a07d7a683251894cbe51f426a4dcf520bcd82bf91e",
-      "document_digest": "6ed54ebe5a535e28c16c1e903f64eda9fbbc32577465ccebe7fa30e2075f2f3e",
+      "document_digest": "186aa8ced0a7ab707911c61c829f561157913dc9c5176d665705394cc84f6bba",
       "candidate_build": "bd25cd0a9ffe95069b620eb5c23423315b453fd0",
       "live": false,
       "proven": "none"
@@ -866,7 +866,7 @@
       "operation": "aiAttributedPrs",
       "mode": "canary",
       "schema_digest": "sha256:d5ba09b1f460953482518ae4f5653ba6350b085bdc39621c5888756741118117",
-      "document_digest": "6ed54ebe5a535e28c16c1e903f64eda9fbbc32577465ccebe7fa30e2075f2f3e",
+      "document_digest": "186aa8ced0a7ab707911c61c829f561157913dc9c5176d665705394cc84f6bba",
       "candidate_build": "f03f57d51c957ad7601fd2154089e152f8cf30d2",
       "live": true,
       "proven": "none"

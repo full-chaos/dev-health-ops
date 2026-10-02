@@ -1664,6 +1664,7 @@ const registeredAiAttributedPrsDocument = `query AIAttributedPrs($orgId: String!
     dataAvailable
     rows {
       repoId
+      repoName
       number
       title
       kind

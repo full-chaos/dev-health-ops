@@ -139,9 +139,7 @@ func TestEveryHTTPClientSiteIsClassified(t *testing.T) {
 		patterns = append(patterns, module+"/...")
 	}
 	facts := map[fnKey]*fnFacts{}
-	found, problems, outside := scanPackages(t, root, patterns, replaced, func(path string) bool {
-		return path == modulePath+"/internal/testsupport" || strings.HasPrefix(path, modulePath+"/internal/testsupport/")
-	}, "", facts)
+	found, problems, outside := scanPackages(t, root, patterns, replaced, func(string) bool { return false }, "", facts)
 	rows := readRows(t, rowFile)
 	if *updateSites {
 		writeRows(t, rowFile, found, rows)
@@ -326,8 +324,9 @@ func scanPackages(t *testing.T, root string, patterns, replaced []string, skip f
 			for _, loadErr := range pkg.Errors {
 				problems = append(problems, fmt.Sprintf("LOAD error in %s (%s): %v", pkg.PkgPath, arch, loadErr))
 			}
+			importer := pkg.PkgPath == modulePath+"/internal/testsupport" || strings.HasPrefix(pkg.PkgPath, modulePath+"/internal/testsupport/")
 			for imported := range pkg.Imports {
-				if imported == modulePath+"/internal/testsupport" || strings.HasPrefix(imported, modulePath+"/internal/testsupport/") {
+				if !importer && (imported == modulePath+"/internal/testsupport" || strings.HasPrefix(imported, modulePath+"/internal/testsupport/")) {
 					problems = append(problems, fmt.Sprintf("PRODUCTION package %s imports %s (a test-support package: its clients are outside the walk)", pkg.PkgPath, imported))
 				}
 			}
@@ -398,8 +397,6 @@ func reportOutOfScope(t *testing.T, root, scopeDir string, loaded map[string]boo
 		if entry.IsDir() {
 			switch entry.Name() {
 			case ".git", "node_modules":
-				return filepath.SkipDir
-			case "testsupport":
 				return filepath.SkipDir
 			case "testdata":
 				if scopeDir == "" {

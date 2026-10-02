@@ -103,6 +103,7 @@ func NewNativeDispatchSyncRunService(
 	if len(observers) > 0 {
 		observer = observers[0]
 	}
+	logAdmissionCaps(logger)
 	return &NativeDispatchSyncRunService{
 		pool: pool, logger: logger, bridge: bridge,
 		producer: producer, registry: registry, observer: observer,

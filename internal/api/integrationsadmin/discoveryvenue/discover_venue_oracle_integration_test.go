@@ -68,7 +68,7 @@ func newIDs() ids {
 		&v.credGHBad, &v.credGHForbidden, &v.credGLBad, &v.credGLForbidden, &v.intGHBad, &v.intGHForbidden, &v.intGLBad, &v.intGLForbidden,
 		&v.credGoodB, &v.intJira, &v.intScoped, &v.intConfigScoped, &v.intBad, &v.intNoCred, &v.intLinear, &v.intB, &v.intEmpty,
 		&v.cfgJira, &v.cfgScoped, &v.cfgB, &v.intRename, &v.srcAcm, &v.srcOld, &v.srcDupLower, &v.srcDupUpper, &v.srcRename} {
-		*target = uuid.New()
+		*target = nextID()
 	}
 	return v
 }
@@ -166,6 +166,7 @@ func fakeJira(t *testing.T, root string) (*httptest.Server, string) {
 // discover anonymously; a credential Python loads by id and org although it is
 // inactive or another org's is refused by the Go resolver. Neither is seeded.
 func TestIntegrationDiscoverVenueOracle(t *testing.T) {
+	golden := venueoracle.OpenGolden(t, venueGolden("integration-discover-venue-oracle", t.Name(), "2d5708683eab6b01cc9105dfe853dc76e9ff096b0c0c48e950e5306980cda78f"))
 	ctx := context.Background()
 	root := repoRoot(t)
 	const jwtKey = "venue-oracle-test-secret-key-for-integration-discover!"
@@ -175,7 +176,7 @@ func TestIntegrationDiscoverVenueOracle(t *testing.T) {
 	t.Setenv("no_proxy", "127.0.0.1,localhost")
 
 	venue := venueoracle.Start(t, ctx, venueoracle.Options{
-		Root:   root,
+		Golden: golden, Root: golden.PythonRoot(t, root),
 		JWTKey: jwtKey,
 		PythonEnv: []string{
 			"SETTINGS_ENCRYPTION_KEY=" + venueKey,
@@ -229,12 +230,13 @@ func TestIntegrationDiscoverVenueOracle(t *testing.T) {
 
 	requests := discoverRequests(venue, v)
 	scrape := venueoracle.Request{Name: "metrics", Method: http.MethodGet, Path: "/metrics"}
-	python := venue.ServePython(t, append(append([]venueoracle.Request{}, requests...), scrape))
+	python := golden.Python(t, venue, append(append([]venueoracle.Request{}, requests...), scrape))
 	pythonMetrics := python[len(python)-1]
+	golden.Consumed(t, pythonMetrics)
 	if pythonMetrics.Status != http.StatusOK {
 		t.Fatalf("python /metrics answered %d", pythonMetrics.Status)
 	}
-	receipt := venueoracle.Diff(t, base, requests, python[:len(requests)], venueoracle.DiffOptions{Normalize: normalize})
+	receipt := venueoracle.Diff(t, base, requests, python[:len(requests)], venueoracle.DiffOptions{Golden: golden, Normalize: normalize})
 	t.Logf("receipt (%d requests):\n%s", len(requests), receipt)
 	goMetrics := scrapeOperator(t, operator.URL)
 	compareDiscoveryCounter(t, pythonMetrics.Body, goMetrics)
@@ -245,7 +247,8 @@ func TestIntegrationDiscoverVenueOracle(t *testing.T) {
 	// provider and its status; the Go answer is asserted here, not compared. Run
 	// after the comparisons above: it writes no source rows on either plane.
 	authRequests := authFailureRequests(venue, v)
-	pythonAuth := venue.ServePython(t, authRequests)
+	pythonAuth := golden.Python(t, venue, authRequests)
+	golden.Consumed(t, pythonAuth...)
 	for index, request := range authRequests {
 		goResponse := venueoracle.Do(t, base, request)
 		wantPython := `{"detail":{"code":"integration_discovery_failed","message":"Integration discovery failed"}}`
@@ -314,16 +317,16 @@ func TestIntegrationDiscoverVenueOracle(t *testing.T) {
 	query := `SELECT org_id, integration_id, provider, source_type, external_id, name, full_name, metadata::text, is_enabled,
 discovered_at, last_seen_at, last_sync_at, last_sync_success, last_sync_error
 FROM integration_sources ORDER BY org_id, integration_id, provider, external_id`
-	pythonRows := venueoracle.TableRows(t, ctx, venue.AdminURI(t, venue.SourceDB), query)
 	goRows := venueoracle.TableRows(t, ctx, venue.AdminURI(t, venue.GoDB), query)
-	if pythonRows != goRows {
-		t.Errorf("integration_sources differ\n python:\n%.4000s\n go:\n%.4000s", pythonRows, goRows)
-	}
+	pythonRows := golden.CompareRows(t, "integration_sources", func() string {
+		return venueoracle.TableRows(t, ctx, venue.AdminURI(t, venue.SourceDB), query)
+	}, goRows)
 	// Rows are joined by " | ": the seed and the discoveries must have
 	// produced hundreds of them, or SAME could be two empty tables agreeing.
 	if rows := strings.Count(pythonRows, " | ") + 1; rows < 300 {
 		t.Errorf("only %d source rows compared", rows)
 	}
+	golden.Finish(t)
 }
 
 // scrapeOperator reads the Go api's operator /metrics.

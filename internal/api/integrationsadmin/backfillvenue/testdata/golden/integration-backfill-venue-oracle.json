@@ -1,0 +1,910 @@
+{
+  "header": {
+    "test": "TestIntegrationBackfillVenueOracle",
+    "python_build": "a4847c5e93607451a0c987b314d37e02fc43ce85",
+    "producer_digest": "6e1dc97e68624398015f60caee160cceee6ae601bd434d01b8b7d5975267e137",
+    "recipe": "git worktree add --detach $DIR a4847c5e93607451a0c987b314d37e02fc43ce85 (with its .venv: uv sync --frozen --no-install-project); then from the repository root: go run ./internal/testsupport/venueoracle/goldenrecord -pkg ./internal/api/integrationsadmin/backfillvenue/ -test '^TestIntegrationBackfillVenueOracle$' -python-root $DIR (records on the pinned build, replays the candidate in a fresh process, and only then promotes it and pins its digest)",
+    "python_env": "f62770fbdf88c1792d236a91d7d6a32c9de7fd14419fb612a02a5ebcbb69eedf",
+    "python_env_version": 2,
+    "recorded_by": "goldenrecord",
+    "blanked": {
+      "body $.sync_run_id": 15,
+      "header content-length": 15,
+      "header date": 39,
+      "header x-dev-health-plane": 39,
+      "header x-request-id": 83
+    }
+  },
+  "requests": [
+    {
+      "name": "guard as ",
+      "method": "POST",
+      "path": "/api/v1/admin/integrations/70403f88-f92f-5dd3-b8ce-2e2730025b82/backfill",
+      "body_sha256": "1f4c86718d3baf4ac1ebf14d152bc4f91d4b7278be847ec1f67375a906869eef",
+      "request_headers_sha256": "b58ddd4bb261e78693972b6634accd44bf966020d79a21c501cd73d1a3dee206",
+      "status": 401,
+      "headers": {
+        "content-length": "42",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "www-authenticate": "Bearer",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "\u003cvolatile\u003e"
+      },
+      "body": "{\"detail\":{\"message\":\"Not authenticated\"}}"
+    },
+    {
+      "name": "guard as memberA",
+      "method": "POST",
+      "path": "/api/v1/admin/integrations/70403f88-f92f-5dd3-b8ce-2e2730025b82/backfill",
+      "body_sha256": "1f4c86718d3baf4ac1ebf14d152bc4f91d4b7278be847ec1f67375a906869eef",
+      "request_headers_sha256": "f569ecc978a539e6998b976bd4555fd134426fbe7b84764d7af47a02179c57b5",
+      "status": 403,
+      "headers": {
+        "content-length": "34",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "\u003cvolatile\u003e"
+      },
+      "body": "{\"detail\":\"Admin access required\"}"
+    },
+    {
+      "name": "guard as adminNoOrg",
+      "method": "POST",
+      "path": "/api/v1/admin/integrations/70403f88-f92f-5dd3-b8ce-2e2730025b82/backfill",
+      "body_sha256": "1f4c86718d3baf4ac1ebf14d152bc4f91d4b7278be847ec1f67375a906869eef",
+      "request_headers_sha256": "e809102d2c25932a75febbc00466a74d8c94b130552aff3bec764e909533f72f",
+      "status": 403,
+      "headers": {
+        "content-length": "42",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "\u003cvolatile\u003e"
+      },
+      "body": "{\"detail\":\"Organization context required\"}"
+    },
+    {
+      "name": "guard bad scheme",
+      "method": "POST",
+      "path": "/api/v1/admin/integrations/70403f88-f92f-5dd3-b8ce-2e2730025b82/backfill",
+      "body_sha256": "a135823e1f3518ee22848a79f5427d8cee0bfb85fbc6b4e6eda61f883c057c9e",
+      "request_headers_sha256": "557d07c5cf2713f8f587d8c2f495e20a24b890227ed0fb15782bfca1bb81e855",
+      "status": 401,
+      "headers": {
+        "content-length": "53",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "www-authenticate": "Bearer",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "\u003cvolatile\u003e"
+      },
+      "body": "{\"detail\":{\"message\":\"Invalid authorization header\"}}"
+    },
+    {
+      "name": "no body",
+      "method": "POST",
+      "path": "/api/v1/admin/integrations/70403f88-f92f-5dd3-b8ce-2e2730025b82/backfill",
+      "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "request_headers_sha256": "ea6726304f10f11dfd7fd837681989436d96357dfe0012b26db4a3ab19ed4be2",
+      "status": 422,
+      "headers": {
+        "content-length": "82",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "\u003cvolatile\u003e"
+      },
+      "body": "{\"detail\":[{\"type\":\"missing\",\"loc\":[\"body\"],\"msg\":\"Field required\",\"input\":null}]}"
+    },
+    {
+      "name": "body null",
+      "method": "POST",
+      "path": "/api/v1/admin/integrations/70403f88-f92f-5dd3-b8ce-2e2730025b82/backfill",
+      "body_sha256": "bb99e5bb3a756453730056b900774c14cb31358abd79a0903bf0e0349d0ade7a",
+      "request_headers_sha256": "e3fd5737c74f561923882778a76a6383d40ab4d3fcd3006dfeabb18c1ba6f973",
+      "status": 422,
+      "headers": {
+        "content-length": "82",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "\u003cvolatile\u003e"
+      },
+      "body": "{\"detail\":[{\"type\":\"missing\",\"loc\":[\"body\"],\"msg\":\"Field required\",\"input\":null}]}"
+    },
+    {
+      "name": "body is a list",
+      "method": "POST",
+      "path": "/api/v1/admin/integrations/70403f88-f92f-5dd3-b8ce-2e2730025b82/backfill",
+      "body_sha256": "0efe8c9a1a45511fe53ad47b02b82b32f480d1819874e6fb6d37c54cf9a2f5ea",
+      "request_headers_sha256": "e3fd5737c74f561923882778a76a6383d40ab4d3fcd3006dfeabb18c1ba6f973",
+      "status": 422,
+      "headers": {
+        "content-length": "147",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "\u003cvolatile\u003e"
+      },
+      "body": "{\"detail\":[{\"type\":\"model_attributes_type\",\"loc\":[\"body\"],\"msg\":\"Input should be a valid dictionary or object to extract fields from\",\"input\":[]}]}"
+    },
+    {
+      "name": "empty object",
+      "method": "POST",
+      "path": "/api/v1/admin/integrations/70403f88-f92f-5dd3-b8ce-2e2730025b82/backfill",
+      "body_sha256": "a135823e1f3518ee22848a79f5427d8cee0bfb85fbc6b4e6eda61f883c057c9e",
+      "request_headers_sha256": "e3fd5737c74f561923882778a76a6383d40ab4d3fcd3006dfeabb18c1ba6f973",
+      "status": 422,
+      "headers": {
+        "content-length": "169",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "\u003cvolatile\u003e"
+      },
+      "body": "{\"detail\":[{\"type\":\"value_error\",\"loc\":[\"body\"],\"msg\":\"Value error, backfill requires since and before, either top-level or in selector\",\"input\":{},\"ctx\":{\"error\":{}}}]}"
+    },
+    {
+      "name": "only since",
+      "method": "POST",
+      "path": "/api/v1/admin/integrations/70403f88-f92f-5dd3-b8ce-2e2730025b82/backfill",
+      "body_sha256": "038c59d1228c4d8e5146f5df3bd07ee8f38e53ebc5379465f5128397657fed3a",
+      "request_headers_sha256": "e3fd5737c74f561923882778a76a6383d40ab4d3fcd3006dfeabb18c1ba6f973",
+      "status": 422,
+      "headers": {
+        "content-length": "199",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "\u003cvolatile\u003e"
+      },
+      "body": "{\"detail\":[{\"type\":\"value_error\",\"loc\":[\"body\"],\"msg\":\"Value error, backfill requires since and before, either top-level or in selector\",\"input\":{\"since\":\"2026-09-01T00:00:00Z\"},\"ctx\":{\"error\":{}}}]}"
+    },
+    {
+      "name": "only before",
+      "method": "POST",
+      "path": "/api/v1/admin/integrations/70403f88-f92f-5dd3-b8ce-2e2730025b82/backfill",
+      "body_sha256": "7486702e22007a1de8c2ab32bc74fe6a69a943808ebb9539d9830a81dfa34f68",
+      "request_headers_sha256": "e3fd5737c74f561923882778a76a6383d40ab4d3fcd3006dfeabb18c1ba6f973",
+      "status": 422,
+      "headers": {
+        "content-length": "200",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "\u003cvolatile\u003e"
+      },
+      "body": "{\"detail\":[{\"type\":\"value_error\",\"loc\":[\"body\"],\"msg\":\"Value error, backfill requires since and before, either top-level or in selector\",\"input\":{\"before\":\"2026-09-01T00:00:00Z\"},\"ctx\":{\"error\":{}}}]}"
+    },
+    {
+      "name": "since null",
+      "method": "POST",
+      "path": "/api/v1/admin/integrations/70403f88-f92f-5dd3-b8ce-2e2730025b82/backfill",
+      "body_sha256": "86d1661201f5e9852524186f87bea4a6f79cfb9cd96d84ad56c2eda6f4adbf93",
+      "request_headers_sha256": "e3fd5737c74f561923882778a76a6383d40ab4d3fcd3006dfeabb18c1ba6f973",
+      "status": 422,
+      "headers": {
+        "content-length": "213",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "\u003cvolatile\u003e"
+      },
+      "body": "{\"detail\":[{\"type\":\"value_error\",\"loc\":[\"body\"],\"msg\":\"Value error, backfill requires since and before, either top-level or in selector\",\"input\":{\"since\":null,\"before\":\"2026-09-01T00:00:00Z\"},\"ctx\":{\"error\":{}}}]}"
+    },
+    {
+      "name": "since is not a datetime",
+      "method": "POST",
+      "path": "/api/v1/admin/integrations/70403f88-f92f-5dd3-b8ce-2e2730025b82/backfill",
+      "body_sha256": "2822a4e35de3ee90c23baa8c56095b41ba56ac16e7bdb86a161a58eb789b33bc",
+      "request_headers_sha256": "e3fd5737c74f561923882778a76a6383d40ab4d3fcd3006dfeabb18c1ba6f973",
+      "status": 422,
+      "headers": {
+        "content-length": "199",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "\u003cvolatile\u003e"
+      },
+      "body": "{\"detail\":[{\"type\":\"datetime_from_date_parsing\",\"loc\":[\"body\",\"since\"],\"msg\":\"Input should be a valid datetime or date, input is too short\",\"input\":\"yesterday\",\"ctx\":{\"error\":\"input is too short\"}}]}"
+    },
+    {
+      "name": "clock: since and before are unix numbers",
+      "method": "POST",
+      "path": "/api/v1/admin/integrations/7e1699a5-d7cb-547b-a689-74cfa9664c9f/backfill",
+      "body_sha256": "058cb304af3d26f604c01c443682e4e0a8da64dcdc966a8edefd59727f4fe4da",
+      "request_headers_sha256": "e3fd5737c74f561923882778a76a6383d40ab4d3fcd3006dfeabb18c1ba6f973",
+      "status": 202,
+      "headers": {
+        "content-length": "\u003clength of projected body\u003e",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "\u003cvolatile\u003e"
+      },
+      "body": "{\"status\":\"accepted\",\"integration_id\":\"7e1699a5-d7cb-547b-a689-74cfa9664c9f\",\"sync_run_id\":\"\u003cid\u003e\",\"total_units\":8}"
+    },
+    {
+      "name": "since is a list",
+      "method": "POST",
+      "path": "/api/v1/admin/integrations/70403f88-f92f-5dd3-b8ce-2e2730025b82/backfill",
+      "body_sha256": "d3f227b078fd6af7ea3a986027b695f2d40b8e75c3418d20878198b398143828",
+      "request_headers_sha256": "e3fd5737c74f561923882778a76a6383d40ab4d3fcd3006dfeabb18c1ba6f973",
+      "status": 422,
+      "headers": {
+        "content-length": "112",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "\u003cvolatile\u003e"
+      },
+      "body": "{\"detail\":[{\"type\":\"datetime_type\",\"loc\":[\"body\",\"since\"],\"msg\":\"Input should be a valid datetime\",\"input\":[]}]}"
+    },
+    {
+      "name": "source_ids is a string",
+      "method": "POST",
+      "path": "/api/v1/admin/integrations/70403f88-f92f-5dd3-b8ce-2e2730025b82/backfill",
+      "body_sha256": "7c9c765a9535d1906077113e423b66d9a61ff141e5b8673a2842530202d27d68",
+      "request_headers_sha256": "e3fd5737c74f561923882778a76a6383d40ab4d3fcd3006dfeabb18c1ba6f973",
+      "status": 422,
+      "headers": {
+        "content-length": "110",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "\u003cvolatile\u003e"
+      },
+      "body": "{\"detail\":[{\"type\":\"list_type\",\"loc\":[\"body\",\"source_ids\"],\"msg\":\"Input should be a valid list\",\"input\":\"x\"}]}"
+    },
+    {
+      "name": "dataset_keys holds a number",
+      "method": "POST",
+      "path": "/api/v1/admin/integrations/70403f88-f92f-5dd3-b8ce-2e2730025b82/backfill",
+      "body_sha256": "2c5497b2505c7a9f1680a27a791baacc16cde043c5accfc44753574974da620b",
+      "request_headers_sha256": "e3fd5737c74f561923882778a76a6383d40ab4d3fcd3006dfeabb18c1ba6f973",
+      "status": 422,
+      "headers": {
+        "content-length": "116",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "\u003cvolatile\u003e"
+      },
+      "body": "{\"detail\":[{\"type\":\"string_type\",\"loc\":[\"body\",\"dataset_keys\",1],\"msg\":\"Input should be a valid string\",\"input\":1}]}"
+    },
+    {
+      "name": "a source id that is not a uuid",
+      "method": "POST",
+      "path": "/api/v1/admin/integrations/70403f88-f92f-5dd3-b8ce-2e2730025b82/backfill",
+      "body_sha256": "399366c7f654a475c6607deef08a1dd3ad645bcb3725a6ba4d1b7f2699b9784b",
+      "request_headers_sha256": "e3fd5737c74f561923882778a76a6383d40ab4d3fcd3006dfeabb18c1ba6f973",
+      "status": 400,
+      "headers": {
+        "content-length": "42",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "\u003cvolatile\u003e"
+      },
+      "body": "{\"detail\":\"Invalid source_id: not-a-uuid\"}"
+    },
+    {
+      "name": "a selector source id that is not a uuid",
+      "method": "POST",
+      "path": "/api/v1/admin/integrations/70403f88-f92f-5dd3-b8ce-2e2730025b82/backfill",
+      "body_sha256": "ac41eb095b1dd731e36a5328276f3c9e867c20ff19ba36df911d9435ea94e5b4",
+      "request_headers_sha256": "e3fd5737c74f561923882778a76a6383d40ab4d3fcd3006dfeabb18c1ba6f973",
+      "status": 400,
+      "headers": {
+        "content-length": "36",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "\u003cvolatile\u003e"
+      },
+      "body": "{\"detail\":\"Invalid source_id: nope\"}"
+    },
+    {
+      "name": "selector is a string",
+      "method": "POST",
+      "path": "/api/v1/admin/integrations/70403f88-f92f-5dd3-b8ce-2e2730025b82/backfill",
+      "body_sha256": "57c6031e6d684ee3d994d9597826850a2ee243f8c52cfcceb851368451c28530",
+      "request_headers_sha256": "e3fd5737c74f561923882778a76a6383d40ab4d3fcd3006dfeabb18c1ba6f973",
+      "status": 422,
+      "headers": {
+        "content-length": "159",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "\u003cvolatile\u003e"
+      },
+      "body": "{\"detail\":[{\"type\":\"model_attributes_type\",\"loc\":[\"body\",\"selector\"],\"msg\":\"Input should be a valid dictionary or object to extract fields from\",\"input\":\"x\"}]}"
+    },
+    {
+      "name": "selector is empty",
+      "method": "POST",
+      "path": "/api/v1/admin/integrations/70403f88-f92f-5dd3-b8ce-2e2730025b82/backfill",
+      "body_sha256": "7a976e02543545892f2d96363e70969e9cc4d98d06473e2ac4cb5692d380f388",
+      "request_headers_sha256": "e3fd5737c74f561923882778a76a6383d40ab4d3fcd3006dfeabb18c1ba6f973",
+      "status": 422,
+      "headers": {
+        "content-length": "187",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "\u003cvolatile\u003e"
+      },
+      "body": "{\"detail\":[{\"type\":\"missing\",\"loc\":[\"body\",\"selector\",\"since\"],\"msg\":\"Field required\",\"input\":{}},{\"type\":\"missing\",\"loc\":[\"body\",\"selector\",\"before\"],\"msg\":\"Field required\",\"input\":{}}]}"
+    },
+    {
+      "name": "selector without before",
+      "method": "POST",
+      "path": "/api/v1/admin/integrations/70403f88-f92f-5dd3-b8ce-2e2730025b82/backfill",
+      "body_sha256": "ed5c4dfde5c88876b6f2542cf05c8db7c1d150916cb8513f35f8acf87421d12f",
+      "request_headers_sha256": "e3fd5737c74f561923882778a76a6383d40ab4d3fcd3006dfeabb18c1ba6f973",
+      "status": 422,
+      "headers": {
+        "content-length": "130",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "\u003cvolatile\u003e"
+      },
+      "body": "{\"detail\":[{\"type\":\"missing\",\"loc\":[\"body\",\"selector\",\"before\"],\"msg\":\"Field required\",\"input\":{\"since\":\"2026-09-01T00:00:00Z\"}}]}"
+    },
+    {
+      "name": "selector with a bad datetime and a bad list",
+      "method": "POST",
+      "path": "/api/v1/admin/integrations/70403f88-f92f-5dd3-b8ce-2e2730025b82/backfill",
+      "body_sha256": "1ef51471497e1f51051fb3dc60dff6d5e40b17f60f3faad3244e994ab85dbfd0",
+      "request_headers_sha256": "e3fd5737c74f561923882778a76a6383d40ab4d3fcd3006dfeabb18c1ba6f973",
+      "status": 422,
+      "headers": {
+        "content-length": "309",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "\u003cvolatile\u003e"
+      },
+      "body": "{\"detail\":[{\"type\":\"datetime_from_date_parsing\",\"loc\":[\"body\",\"selector\",\"since\"],\"msg\":\"Input should be a valid datetime or date, input is too short\",\"input\":\"x\",\"ctx\":{\"error\":\"input is too short\"}},{\"type\":\"list_type\",\"loc\":[\"body\",\"selector\",\"source_ids\"],\"msg\":\"Input should be a valid list\",\"input\":1}]}"
+    },
+    {
+      "name": "selector mixed with flat since",
+      "method": "POST",
+      "path": "/api/v1/admin/integrations/70403f88-f92f-5dd3-b8ce-2e2730025b82/backfill",
+      "body_sha256": "3d061acb0bbbbf6bfdc8c000fd4244a23ba3305cf397ae0818dc73a5dc89fb55",
+      "request_headers_sha256": "e3fd5737c74f561923882778a76a6383d40ab4d3fcd3006dfeabb18c1ba6f973",
+      "status": 422,
+      "headers": {
+        "content-length": "265",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "\u003cvolatile\u003e"
+      },
+      "body": "{\"detail\":[{\"type\":\"value_error\",\"loc\":[\"body\"],\"msg\":\"Value error, backfill selector cannot be mixed with legacy flat fields\",\"input\":{\"selector\":{\"since\":\"2026-09-01T00:00:00Z\",\"before\":\"2026-09-10T00:00:00Z\"},\"since\":\"2026-09-01T00:00:00Z\"},\"ctx\":{\"error\":{}}}]}"
+    },
+    {
+      "name": "selector mixed with flat source_ids",
+      "method": "POST",
+      "path": "/api/v1/admin/integrations/70403f88-f92f-5dd3-b8ce-2e2730025b82/backfill",
+      "body_sha256": "5e433aef968b42df0c5743dcdc068823a277a278adcf86d03fa65829be6e44e7",
+      "request_headers_sha256": "e3fd5737c74f561923882778a76a6383d40ab4d3fcd3006dfeabb18c1ba6f973",
+      "status": 422,
+      "headers": {
+        "content-length": "250",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "\u003cvolatile\u003e"
+      },
+      "body": "{\"detail\":[{\"type\":\"value_error\",\"loc\":[\"body\"],\"msg\":\"Value error, backfill selector cannot be mixed with legacy flat fields\",\"input\":{\"selector\":{\"since\":\"2026-09-01T00:00:00Z\",\"before\":\"2026-09-10T00:00:00Z\"},\"source_ids\":[]},\"ctx\":{\"error\":{}}}]}"
+    },
+    {
+      "name": "clock: selector null and a flat window",
+      "method": "POST",
+      "path": "/api/v1/admin/integrations/13ac7c2c-17fa-5e8d-bfe7-8eec3274af7d/backfill",
+      "body_sha256": "63cf90f7f6f1cb5890c71dab03543811d31995e0c793a3abd052d47d7dacc408",
+      "request_headers_sha256": "e3fd5737c74f561923882778a76a6383d40ab4d3fcd3006dfeabb18c1ba6f973",
+      "status": 202,
+      "headers": {
+        "content-length": "\u003clength of projected body\u003e",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "\u003cvolatile\u003e"
+      },
+      "body": "{\"status\":\"accepted\",\"integration_id\":\"13ac7c2c-17fa-5e8d-bfe7-8eec3274af7d\",\"sync_run_id\":\"\u003cid\u003e\",\"total_units\":4}"
+    },
+    {
+      "name": "the body is validated before the integration",
+      "method": "POST",
+      "path": "/api/v1/admin/integrations/881e8ac0-d848-591d-8c42-b9c7c3babb8c/backfill",
+      "body_sha256": "a135823e1f3518ee22848a79f5427d8cee0bfb85fbc6b4e6eda61f883c057c9e",
+      "request_headers_sha256": "e3fd5737c74f561923882778a76a6383d40ab4d3fcd3006dfeabb18c1ba6f973",
+      "status": 422,
+      "headers": {
+        "content-length": "169",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "\u003cvolatile\u003e"
+      },
+      "body": "{\"detail\":[{\"type\":\"value_error\",\"loc\":[\"body\"],\"msg\":\"Value error, backfill requires since and before, either top-level or in selector\",\"input\":{},\"ctx\":{\"error\":{}}}]}"
+    },
+    {
+      "name": "unknown integration",
+      "method": "POST",
+      "path": "/api/v1/admin/integrations/fd03a4d7-6e19-5d49-a234-fa84df1c9cdd/backfill",
+      "body_sha256": "1f4c86718d3baf4ac1ebf14d152bc4f91d4b7278be847ec1f67375a906869eef",
+      "request_headers_sha256": "e3fd5737c74f561923882778a76a6383d40ab4d3fcd3006dfeabb18c1ba6f973",
+      "status": 404,
+      "headers": {
+        "content-length": "34",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "\u003cvolatile\u003e"
+      },
+      "body": "{\"detail\":\"Integration not found\"}"
+    },
+    {
+      "name": "not a uuid",
+      "method": "POST",
+      "path": "/api/v1/admin/integrations/zzz/backfill",
+      "body_sha256": "1f4c86718d3baf4ac1ebf14d152bc4f91d4b7278be847ec1f67375a906869eef",
+      "request_headers_sha256": "e3fd5737c74f561923882778a76a6383d40ab4d3fcd3006dfeabb18c1ba6f973",
+      "status": 404,
+      "headers": {
+        "content-length": "34",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "\u003cvolatile\u003e"
+      },
+      "body": "{\"detail\":\"Integration not found\"}"
+    },
+    {
+      "name": "another org's integration",
+      "method": "POST",
+      "path": "/api/v1/admin/integrations/90850ed8-c1ce-54ad-841f-55866143ad3a/backfill",
+      "body_sha256": "1f4c86718d3baf4ac1ebf14d152bc4f91d4b7278be847ec1f67375a906869eef",
+      "request_headers_sha256": "e3fd5737c74f561923882778a76a6383d40ab4d3fcd3006dfeabb18c1ba6f973",
+      "status": 404,
+      "headers": {
+        "content-length": "34",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "\u003cvolatile\u003e"
+      },
+      "body": "{\"detail\":\"Integration not found\"}"
+    },
+    {
+      "name": "clock: flat window over three weeks, every enabled source",
+      "method": "POST",
+      "path": "/api/v1/admin/integrations/70403f88-f92f-5dd3-b8ce-2e2730025b82/backfill",
+      "body_sha256": "ed3ff5fea293dfabe17005b37a1c50197f0e9a4f5f612d6e4a179e7c2aae0a75",
+      "request_headers_sha256": "e3fd5737c74f561923882778a76a6383d40ab4d3fcd3006dfeabb18c1ba6f973",
+      "status": 202,
+      "headers": {
+        "content-length": "\u003clength of projected body\u003e",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "\u003cvolatile\u003e"
+      },
+      "body": "{\"status\":\"accepted\",\"integration_id\":\"70403f88-f92f-5dd3-b8ce-2e2730025b82\",\"sync_run_id\":\"\u003cid\u003e\",\"total_units\":12}"
+    },
+    {
+      "name": "clock: selector window",
+      "method": "POST",
+      "path": "/api/v1/admin/integrations/3d85a6ca-fa27-52fd-939d-10a3bd1dd9f9/backfill",
+      "body_sha256": "4720bc1fbf0d8d6a0c445b103e60ada4e97f883beec1d97df21cedf57b364d72",
+      "request_headers_sha256": "e3fd5737c74f561923882778a76a6383d40ab4d3fcd3006dfeabb18c1ba6f973",
+      "status": 202,
+      "headers": {
+        "content-length": "\u003clength of projected body\u003e",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "\u003cvolatile\u003e"
+      },
+      "body": "{\"status\":\"accepted\",\"integration_id\":\"3d85a6ca-fa27-52fd-939d-10a3bd1dd9f9\",\"sync_run_id\":\"\u003cid\u003e\",\"total_units\":12}"
+    },
+    {
+      "name": "clock: flat window, explicit source and dataset",
+      "method": "POST",
+      "path": "/api/v1/admin/integrations/a64cfffd-8697-5a7c-850d-5463ba6ddee4/backfill",
+      "body_sha256": "45fcb48fff159d2032a5fbde442e03717830a3cba30f267cf2e258b8aa9b69c0",
+      "request_headers_sha256": "e3fd5737c74f561923882778a76a6383d40ab4d3fcd3006dfeabb18c1ba6f973",
+      "status": 202,
+      "headers": {
+        "content-length": "\u003clength of projected body\u003e",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "\u003cvolatile\u003e"
+      },
+      "body": "{\"status\":\"accepted\",\"integration_id\":\"a64cfffd-8697-5a7c-850d-5463ba6ddee4\",\"sync_run_id\":\"\u003cid\u003e\",\"total_units\":2}"
+    },
+    {
+      "name": "clock: selector with empty lists",
+      "method": "POST",
+      "path": "/api/v1/admin/integrations/52933655-5c40-527a-b0ae-843678c28464/backfill",
+      "body_sha256": "3f52d94038f64ef1c6ce65bd0c8e2974565e2107f130b2eccf949f1c3abae314",
+      "request_headers_sha256": "e3fd5737c74f561923882778a76a6383d40ab4d3fcd3006dfeabb18c1ba6f973",
+      "status": 202,
+      "headers": {
+        "content-length": "\u003clength of projected body\u003e",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "\u003cvolatile\u003e"
+      },
+      "body": "{\"status\":\"accepted\",\"integration_id\":\"52933655-5c40-527a-b0ae-843678c28464\",\"sync_run_id\":\"\u003cid\u003e\",\"total_units\":0}"
+    },
+    {
+      "name": "clock: naive datetimes",
+      "method": "POST",
+      "path": "/api/v1/admin/integrations/18c8d128-4dfb-5eb9-a2e1-e2672689b5b4/backfill",
+      "body_sha256": "c23be983aa3cca3d8b03f923c22f975cd00a252db8b4004ae357b6eb4b48f2ee",
+      "request_headers_sha256": "e3fd5737c74f561923882778a76a6383d40ab4d3fcd3006dfeabb18c1ba6f973",
+      "status": 202,
+      "headers": {
+        "content-length": "\u003clength of projected body\u003e",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "\u003cvolatile\u003e"
+      },
+      "body": "{\"status\":\"accepted\",\"integration_id\":\"18c8d128-4dfb-5eb9-a2e1-e2672689b5b4\",\"sync_run_id\":\"\u003cid\u003e\",\"total_units\":4}"
+    },
+    {
+      "name": "clock: offset datetimes",
+      "method": "POST",
+      "path": "/api/v1/admin/integrations/b5636a6d-147c-5cd9-95eb-f65306f7fc27/backfill",
+      "body_sha256": "30e86b20d147f6fdddbfa8f45e05f8834c44e34e2a93688924727e58ab2116ad",
+      "request_headers_sha256": "e3fd5737c74f561923882778a76a6383d40ab4d3fcd3006dfeabb18c1ba6f973",
+      "status": 202,
+      "headers": {
+        "content-length": "\u003clength of projected body\u003e",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "\u003cvolatile\u003e"
+      },
+      "body": "{\"status\":\"accepted\",\"integration_id\":\"b5636a6d-147c-5cd9-95eb-f65306f7fc27\",\"sync_run_id\":\"\u003cid\u003e\",\"total_units\":4}"
+    },
+    {
+      "name": "clock: date-only strings",
+      "method": "POST",
+      "path": "/api/v1/admin/integrations/4b7fd41f-61db-57bb-a4b6-23cbbd0ff408/backfill",
+      "body_sha256": "c6e65352eb9adadaed0ed8534d55c5426b74c6cf39aa2576014a7fdaccedbd78",
+      "request_headers_sha256": "e3fd5737c74f561923882778a76a6383d40ab4d3fcd3006dfeabb18c1ba6f973",
+      "status": 202,
+      "headers": {
+        "content-length": "\u003clength of projected body\u003e",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "\u003cvolatile\u003e"
+      },
+      "body": "{\"status\":\"accepted\",\"integration_id\":\"4b7fd41f-61db-57bb-a4b6-23cbbd0ff408\",\"sync_run_id\":\"\u003cid\u003e\",\"total_units\":12}"
+    },
+    {
+      "name": "clock: chunk edges (exact weeks)",
+      "method": "POST",
+      "path": "/api/v1/admin/integrations/7024a8af-9c20-5e3a-9afd-65aea8947317/backfill",
+      "body_sha256": "26145d9ed707da63dd5b846dd5459db40b9c79008a1e6ccd212a0d92ea80f355",
+      "request_headers_sha256": "e3fd5737c74f561923882778a76a6383d40ab4d3fcd3006dfeabb18c1ba6f973",
+      "status": 202,
+      "headers": {
+        "content-length": "\u003clength of projected body\u003e",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "\u003cvolatile\u003e"
+      },
+      "body": "{\"status\":\"accepted\",\"integration_id\":\"7024a8af-9c20-5e3a-9afd-65aea8947317\",\"sync_run_id\":\"\u003cid\u003e\",\"total_units\":12}"
+    },
+    {
+      "name": "clock: an enabled source no configuration tagged",
+      "method": "POST",
+      "path": "/api/v1/admin/integrations/e2e4d543-fd2b-52c1-b4c1-1a594c259073/backfill",
+      "body_sha256": "d1d9c440e62cc1e87b5805cccab1b96d6621937b4f322f71e5d188dbe87682d0",
+      "request_headers_sha256": "e3fd5737c74f561923882778a76a6383d40ab4d3fcd3006dfeabb18c1ba6f973",
+      "status": 202,
+      "headers": {
+        "content-length": "\u003clength of projected body\u003e",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "\u003cvolatile\u003e"
+      },
+      "body": "{\"status\":\"accepted\",\"integration_id\":\"e2e4d543-fd2b-52c1-b4c1-1a594c259073\",\"sync_run_id\":\"\u003cid\u003e\",\"total_units\":6}"
+    },
+    {
+      "name": "clock: path spelling is echoed (upper-case uuid)",
+      "method": "POST",
+      "path": "/api/v1/admin/integrations/FD0DBB0B-AAAD-5F6A-AFB7-F316DB256E40/backfill",
+      "body_sha256": "d1d9c440e62cc1e87b5805cccab1b96d6621937b4f322f71e5d188dbe87682d0",
+      "request_headers_sha256": "e3fd5737c74f561923882778a76a6383d40ab4d3fcd3006dfeabb18c1ba6f973",
+      "status": 202,
+      "headers": {
+        "content-length": "\u003clength of projected body\u003e",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "\u003cvolatile\u003e"
+      },
+      "body": "{\"status\":\"accepted\",\"integration_id\":\"FD0DBB0B-AAAD-5F6A-AFB7-F316DB256E40\",\"sync_run_id\":\"\u003cid\u003e\",\"total_units\":4}"
+    },
+    {
+      "name": "inactive integration",
+      "method": "POST",
+      "path": "/api/v1/admin/integrations/e0ff96cf-633d-5c76-ba82-ad7a4dc79fd3/backfill",
+      "body_sha256": "1f4c86718d3baf4ac1ebf14d152bc4f91d4b7278be847ec1f67375a906869eef",
+      "request_headers_sha256": "e3fd5737c74f561923882778a76a6383d40ab4d3fcd3006dfeabb18c1ba6f973",
+      "status": 202,
+      "headers": {
+        "content-length": "\u003clength of projected body\u003e",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "\u003cvolatile\u003e"
+      },
+      "body": "{\"status\":\"accepted\",\"integration_id\":\"e0ff96cf-633d-5c76-ba82-ad7a4dc79fd3\",\"sync_run_id\":\"\u003cid\u003e\",\"total_units\":8}"
+    },
+    {
+      "name": "integration without a configuration",
+      "method": "POST",
+      "path": "/api/v1/admin/integrations/fcd55738-8b27-5395-985b-e43d84ec8c23/backfill",
+      "body_sha256": "1f4c86718d3baf4ac1ebf14d152bc4f91d4b7278be847ec1f67375a906869eef",
+      "request_headers_sha256": "e3fd5737c74f561923882778a76a6383d40ab4d3fcd3006dfeabb18c1ba6f973",
+      "status": 202,
+      "headers": {
+        "content-length": "\u003clength of projected body\u003e",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "\u003cvolatile\u003e"
+      },
+      "body": "{\"status\":\"accepted\",\"integration_id\":\"fcd55738-8b27-5395-985b-e43d84ec8c23\",\"sync_run_id\":\"\u003cid\u003e\",\"total_units\":8}"
+    },
+    {
+      "name": "configuration neither planner-managed nor pinned",
+      "method": "POST",
+      "path": "/api/v1/admin/integrations/16fb5806-03da-5853-aa37-a6384279b420/backfill",
+      "body_sha256": "1f4c86718d3baf4ac1ebf14d152bc4f91d4b7278be847ec1f67375a906869eef",
+      "request_headers_sha256": "e3fd5737c74f561923882778a76a6383d40ab4d3fcd3006dfeabb18c1ba6f973",
+      "status": 202,
+      "headers": {
+        "content-length": "\u003clength of projected body\u003e",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "\u003cvolatile\u003e"
+      },
+      "body": "{\"status\":\"accepted\",\"integration_id\":\"16fb5806-03da-5853-aa37-a6384279b420\",\"sync_run_id\":\"\u003cid\u003e\",\"total_units\":8}"
+    },
+    {
+      "name": "since after before",
+      "method": "POST",
+      "path": "/api/v1/admin/integrations/010f9712-2dc8-5e84-a8ba-8fa56e2e65d6/backfill",
+      "body_sha256": "284050800b59fc36bf36a5e8a3f4aa907c6209d0778c373ddd261215f9fccbb8",
+      "request_headers_sha256": "e3fd5737c74f561923882778a76a6383d40ab4d3fcd3006dfeabb18c1ba6f973",
+      "status": 400,
+      "headers": {
+        "content-length": "42",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "\u003cvolatile\u003e"
+      },
+      "body": "{\"detail\":\"Backfill since must be before\"}"
+    },
+    {
+      "name": "since equal to before",
+      "method": "POST",
+      "path": "/api/v1/admin/integrations/eb6f874f-9618-5380-a5fc-e065cb49d46b/backfill",
+      "body_sha256": "bf854b46e7eafcb845d5e76a25a81a08e1456a5b2665ac3b8d41361afa9f93aa",
+      "request_headers_sha256": "e3fd5737c74f561923882778a76a6383d40ab4d3fcd3006dfeabb18c1ba6f973",
+      "status": 400,
+      "headers": {
+        "content-length": "42",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "\u003cvolatile\u003e"
+      },
+      "body": "{\"detail\":\"Backfill since must be before\"}"
+    }
+  ],
+  "rows": {
+    "sync_run_units": {
+      "rows": "ead75594-195e-556b-9ba6-0a85baa6849013ac7c2c-17fa-5e8d-bfe7-8eec3274af7d5ed0ebdd-87b9-52d4-8be9-c398837fb7a7githubcommitsmediumbackfill2026-09-01 00:00:00 +0000 UTC 2026-09-02 00:00:00 +0000 UTCplanned0{\"sync_git\": true, \"sync_commits\": true} | ead75594-195e-556b-9ba6-0a85baa6849013ac7c2c-17fa-5e8d-bfe7-8eec3274af7d5ed0ebdd-87b9-52d4-8be9-c398837fb7a7githubprsmediumbackfill2026-09-01 00:00:00 +0000 UTC 2026-09-02 00:00:00 +0000 UTCplanned0{\"sync_prs\": true, \"family_dataset_prs\": true} | ead75594-195e-556b-9ba6-0a85baa6849013ac7c2c-17fa-5e8d-bfe7-8eec3274af7dd246d3f6-ff56-5840-940d-343536d1df46githubcommitsmediumbackfill2026-09-01 00:00:00 +0000 UTC 2026-09-02 00:00:00 +0000 UTCplanned0{\"sync_git\": true, \"sync_commits\": true} | ead75594-195e-556b-9ba6-0a85baa6849013ac7c2c-17fa-5e8d-bfe7-8eec3274af7dd246d3f6-ff56-5840-940d-343536d1df46githubprsmediumbackfill2026-09-01 00:00:00 +0000 UTC 2026-09-02 00:00:00 +0000 UTCplanned0{\"sync_prs\": true, \"family_dataset_prs\": true} | ead75594-195e-556b-9ba6-0a85baa6849018c8d128-4dfb-5eb9-a2e1-e2672689b5b403421774-94e7-54a3-8824-7b07d2a61690githubcommitsmediumbackfill2026-09-01 00:00:00 +0000 UTC 2026-09-05 12:00:00 +0000 UTCplanned0{\"sync_git\": true, \"sync_commits\": true} | ead75594-195e-556b-9ba6-0a85baa6849018c8d128-4dfb-5eb9-a2e1-e2672689b5b403421774-94e7-54a3-8824-7b07d2a61690githubprsmediumbackfill2026-09-01 00:00:00 +0000 UTC 2026-09-05 12:00:00 +0000 UTCplanned0{\"sync_prs\": true, \"family_dataset_prs\": true} | ead75594-195e-556b-9ba6-0a85baa6849018c8d128-4dfb-5eb9-a2e1-e2672689b5b42c7c32e3-9c68-5d2f-85ed-c1882ae39d07githubcommitsmediumbackfill2026-09-01 00:00:00 +0000 UTC 2026-09-05 12:00:00 +0000 UTCplanned0{\"sync_git\": true, \"sync_commits\": true} | ead75594-195e-556b-9ba6-0a85baa6849018c8d128-4dfb-5eb9-a2e1-e2672689b5b42c7c32e3-9c68-5d2f-85ed-c1882ae39d07githubprsmediumbackfill2026-09-01 00:00:00 +0000 UTC 2026-09-05 12:00:00 +0000 UTCplanned0{\"sync_prs\": true, \"family_dataset_prs\": true} | ead75594-195e-556b-9ba6-0a85baa684903d85a6ca-fa27-52fd-939d-10a3bd1dd9f90667f5e0-8933-51f8-bba5-2c16a3ff68b8githubcommitsmediumbackfill2026-08-01 06:30:00 +0000 UTC 2026-08-07 23:59:59.999999 +0000 UTCplanned0{\"sync_git\": true, \"sync_commits\": true} | ead75594-195e-556b-9ba6-0a85baa684903d85a6ca-fa27-52fd-939d-10a3bd1dd9f90667f5e0-8933-51f8-bba5-2c16a3ff68b8githubcommitsmediumbackfill2026-08-08 00:00:00 +0000 UTC 2026-08-14 23:59:59.999999 +0000 UTCplanned0{\"sync_git\": true, \"sync_commits\": true} | ead75594-195e-556b-9ba6-0a85baa684903d85a6ca-fa27-52fd-939d-10a3bd1dd9f90667f5e0-8933-51f8-bba5-2c16a3ff68b8githubcommitsmediumbackfill2026-08-15 00:00:00 +0000 UTC 2026-08-16 18:45:10.5 +0000 UTCplanned0{\"sync_git\": true, \"sync_commits\": true} | ead75594-195e-556b-9ba6-0a85baa684903d85a6ca-fa27-52fd-939d-10a3bd1dd9f90667f5e0-8933-51f8-bba5-2c16a3ff68b8githubprsmediumbackfill2026-08-01 06:30:00 +0000 UTC 2026-08-07 23:59:59.999999 +0000 UTCplanned0{\"sync_prs\": true, \"family_dataset_prs\": true} | ead75594-195e-556b-9ba6-0a85baa684903d85a6ca-fa27-52fd-939d-10a3bd1dd9f90667f5e0-8933-51f8-bba5-2c16a3ff68b8githubprsmediumbackfill2026-08-08 00:00:00 +0000 UTC 2026-08-14 23:59:59.999999 +0000 UTCplanned0{\"sync_prs\": true, \"family_dataset_prs\": true} | ead75594-195e-556b-9ba6-0a85baa684903d85a6ca-fa27-52fd-939d-10a3bd1dd9f90667f5e0-8933-51f8-bba5-2c16a3ff68b8githubprsmediumbackfill2026-08-15 00:00:00 +0000 UTC 2026-08-16 18:45:10.5 +0000 UTCplanned0{\"sync_prs\": true, \"family_dataset_prs\": true} | ead75594-195e-556b-9ba6-0a85baa684903d85a6ca-fa27-52fd-939d-10a3bd1dd9f92c215ec6-4b88-56d5-87f3-2e67f8c6ec53githubcommitsmediumbackfill2026-08-01 06:30:00 +0000 UTC 2026-08-07 23:59:59.999999 +0000 UTCplanned0{\"sync_git\": true, \"sync_commits\": true} | ead75594-195e-556b-9ba6-0a85baa684903d85a6ca-fa27-52fd-939d-10a3bd1dd9f92c215ec6-4b88-56d5-87f3-2e67f8c6ec53githubcommitsmediumbackfill2026-08-08 00:00:00 +0000 UTC 2026-08-14 23:59:59.999999 +0000 UTCplanned0{\"sync_git\": true, \"sync_commits\": true} | ead75594-195e-556b-9ba6-0a85baa684903d85a6ca-fa27-52fd-939d-10a3bd1dd9f92c215ec6-4b88-56d5-87f3-2e67f8c6ec53githubcommitsmediumbackfill2026-08-15 00:00:00 +0000 UTC 2026-08-16 18:45:10.5 +0000 UTCplanned0{\"sync_git\": true, \"sync_commits\": true} | ead75594-195e-556b-9ba6-0a85baa684903d85a6ca-fa27-52fd-939d-10a3bd1dd9f92c215ec6-4b88-56d5-87f3-2e67f8c6ec53githubprsmediumbackfill2026-08-01 06:30:00 +0000 UTC 2026-08-07 23:59:59.999999 +0000 UTCplanned0{\"sync_prs\": true, \"family_dataset_prs\": true} | ead75594-195e-556b-9ba6-0a85baa684903d85a6ca-fa27-52fd-939d-10a3bd1dd9f92c215ec6-4b88-56d5-87f3-2e67f8c6ec53githubprsmediumbackfill2026-08-08 00:00:00 +0000 UTC 2026-08-14 23:59:59.999999 +0000 UTCplanned0{\"sync_prs\": true, \"family_dataset_prs\": true} | ead75594-195e-556b-9ba6-0a85baa684903d85a6ca-fa27-52fd-939d-10a3bd1dd9f92c215ec6-4b88-56d5-87f3-2e67f8c6ec53githubprsmediumbackfill2026-08-15 00:00:00 +0000 UTC 2026-08-16 18:45:10.5 +0000 UTCplanned0{\"sync_prs\": true, \"family_dataset_prs\": true} | ead75594-195e-556b-9ba6-0a85baa684904b7fd41f-61db-57bb-a4b6-23cbbd0ff408445fbfe8-c6bc-5908-b8d6-c372fefd94ddgithubcommitsmediumbackfill2026-09-01 00:00:00 +0000 UTC 2026-09-07 23:59:59.999999 +0000 UTCplanned0{\"sync_git\": true, \"sync_commits\": true} | ead75594-195e-556b-9ba6-0a85baa684904b7fd41f-61db-57bb-a4b6-23cbbd0ff408445fbfe8-c6bc-5908-b8d6-c372fefd94ddgithubcommitsmediumbackfill2026-09-08 00:00:00 +0000 UTC 2026-09-14 23:59:59.999999 +0000 UTCplanned0{\"sync_git\": true, \"sync_commits\": true} | ead75594-195e-556b-9ba6-0a85baa684904b7fd41f-61db-57bb-a4b6-23cbbd0ff408445fbfe8-c6bc-5908-b8d6-c372fefd94ddgithubcommitsmediumbackfill2026-09-15 00:00:00 +0000 UTC 2026-09-15 00:00:00 +0000 UTCplanned0{\"sync_git\": true, \"sync_commits\": true} | ead75594-195e-556b-9ba6-0a85baa684904b7fd41f-61db-57bb-a4b6-23cbbd0ff408445fbfe8-c6bc-5908-b8d6-c372fefd94ddgithubprsmediumbackfill2026-09-01 00:00:00 +0000 UTC 2026-09-07 23:59:59.999999 +0000 UTCplanned0{\"sync_prs\": true, \"family_dataset_prs\": true} | ead75594-195e-556b-9ba6-0a85baa684904b7fd41f-61db-57bb-a4b6-23cbbd0ff408445fbfe8-c6bc-5908-b8d6-c372fefd94ddgithubprsmediumbackfill2026-09-08 00:00:00 +0000 UTC 2026-09-14 23:59:59.999999 +0000 UTCplanned0{\"sync_prs\": true, \"family_dataset_prs\": true} | ead75594-195e-556b-9ba6-0a85baa684904b7fd41f-61db-57bb-a4b6-23cbbd0ff408445fbfe8-c6bc-5908-b8d6-c372fefd94ddgithubprsmediumbackfill2026-09-15 00:00:00 +0000 UTC 2026-09-15 00:00:00 +0000 UTCplanned0{\"sync_prs\": true, \"family_dataset_prs\": true} | ead75594-195e-556b-9ba6-0a85baa684904b7fd41f-61db-57bb-a4b6-23cbbd0ff408b311516e-7544-51e2-988c-81e6468bd523githubcommitsmediumbackfill2026-09-01 00:00:00 +0000 UTC 2026-09-07 23:59:59.999999 +0000 UTCplanned0{\"sync_git\": true, \"sync_commits\": true} | ead75594-195e-556b-9ba6-0a85baa684904b7fd41f-61db-57bb-a4b6-23cbbd0ff408b311516e-7544-51e2-988c-81e6468bd523githubcommitsmediumbackfill2026-09-08 00:00:00 +0000 UTC 2026-09-14 23:59:59.999999 +0000 UTCplanned0{\"sync_git\": true, \"sync_commits\": true} | ead75594-195e-556b-9ba6-0a85baa684904b7fd41f-61db-57bb-a4b6-23cbbd0ff408b311516e-7544-51e2-988c-81e6468bd523githubcommitsmediumbackfill2026-09-15 00:00:00 +0000 UTC 2026-09-15 00:00:00 +0000 UTCplanned0{\"sync_git\": true, \"sync_commits\": true} | ead75594-195e-556b-9ba6-0a85baa684904b7fd41f-61db-57bb-a4b6-23cbbd0ff408b311516e-7544-51e2-988c-81e6468bd523githubprsmediumbackfill2026-09-01 00:00:00 +0000 UTC 2026-09-07 23:59:59.999999 +0000 UTCplanned0{\"sync_prs\": true, \"family_dataset_prs\": true} | ead75594-195e-556b-9ba6-0a85baa684904b7fd41f-61db-57bb-a4b6-23cbbd0ff408b311516e-7544-51e2-988c-81e6468bd523githubprsmediumbackfill2026-09-08 00:00:00 +0000 UTC 2026-09-14 23:59:59.999999 +0000 UTCplanned0{\"sync_prs\": true, \"family_dataset_prs\": true} | ead75594-195e-556b-9ba6-0a85baa684904b7fd41f-61db-57bb-a4b6-23cbbd0ff408b311516e-7544-51e2-988c-81e6468bd523githubprsmediumbackfill2026-09-15 00:00:00 +0000 UTC 2026-09-15 00:00:00 +0000 UTCplanned0{\"sync_prs\": true, \"family_dataset_prs\": true} | ead75594-195e-556b-9ba6-0a85baa684907024a8af-9c20-5e3a-9afd-65aea8947317b416da80-0385-582f-b50b-4714d944d6b0githubcommitsmediumbackfill2026-09-01 00:00:00 +0000 UTC 2026-09-07 23:59:59.999999 +0000 UTCplanned0{\"sync_git\": true, \"sync_commits\": true} | ead75594-195e-556b-9ba6-0a85baa684907024a8af-9c20-5e3a-9afd-65aea8947317b416da80-0385-582f-b50b-4714d944d6b0githubcommitsmediumbackfill2026-09-08 00:00:00 +0000 UTC 2026-09-14 23:59:59.999999 +0000 UTCplanned0{\"sync_git\": true, \"sync_commits\": true} | ead75594-195e-556b-9ba6-0a85baa684907024a8af-9c20-5e3a-9afd-65aea8947317b416da80-0385-582f-b50b-4714d944d6b0githubcommitsmediumbackfill2026-09-15 00:00:00 +0000 UTC 2026-09-15 00:00:00 +0000 UTCplanned0{\"sync_git\": true, \"sync_commits\": true} | ead75594-195e-556b-9ba6-0a85baa684907024a8af-9c20-5e3a-9afd-65aea8947317b416da80-0385-582f-b50b-4714d944d6b0githubprsmediumbackfill2026-09-01 00:00:00 +0000 UTC 2026-09-07 23:59:59.999999 +0000 UTCplanned0{\"sync_prs\": true, \"family_dataset_prs\": true} | ead75594-195e-556b-9ba6-0a85baa684907024a8af-9c20-5e3a-9afd-65aea8947317b416da80-0385-582f-b50b-4714d944d6b0githubprsmediumbackfill2026-09-08 00:00:00 +0000 UTC 2026-09-14 23:59:59.999999 +0000 UTCplanned0{\"sync_prs\": true, \"family_dataset_prs\": true} | ead75594-195e-556b-9ba6-0a85baa684907024a8af-9c20-5e3a-9afd-65aea8947317b416da80-0385-582f-b50b-4714d944d6b0githubprsmediumbackfill2026-09-15 00:00:00 +0000 UTC 2026-09-15 00:00:00 +0000 UTCplanned0{\"sync_prs\": true, \"family_dataset_prs\": true} | ead75594-195e-556b-9ba6-0a85baa684907024a8af-9c20-5e3a-9afd-65aea8947317c5ca2bbd-44ba-53d2-afdc-a29f650d2626githubcommitsmediumbackfill2026-09-01 00:00:00 +0000 UTC 2026-09-07 23:59:59.999999 +0000 UTCplanned0{\"sync_git\": true, \"sync_commits\": true} | ead75594-195e-556b-9ba6-0a85baa684907024a8af-9c20-5e3a-9afd-65aea8947317c5ca2bbd-44ba-53d2-afdc-a29f650d2626githubcommitsmediumbackfill2026-09-08 00:00:00 +0000 UTC 2026-09-14 23:59:59.999999 +0000 UTCplanned0{\"sync_git\": true, \"sync_commits\": true} | ead75594-195e-556b-9ba6-0a85baa684907024a8af-9c20-5e3a-9afd-65aea8947317c5ca2bbd-44ba-53d2-afdc-a29f650d2626githubcommitsmediumbackfill2026-09-15 00:00:00 +0000 UTC 2026-09-15 00:00:00 +0000 UTCplanned0{\"sync_git\": true, \"sync_commits\": true} | ead75594-195e-556b-9ba6-0a85baa684907024a8af-9c20-5e3a-9afd-65aea8947317c5ca2bbd-44ba-53d2-afdc-a29f650d2626githubprsmediumbackfill2026-09-01 00:00:00 +0000 UTC 2026-09-07 23:59:59.999999 +0000 UTCplanned0{\"sync_prs\": true, \"family_dataset_prs\": true} | ead75594-195e-556b-9ba6-0a85baa684907024a8af-9c20-5e3a-9afd-65aea8947317c5ca2bbd-44ba-53d2-afdc-a29f650d2626githubprsmediumbackfill2026-09-08 00:00:00 +0000 UTC 2026-09-14 23:59:59.999999 +0000 UTCplanned0{\"sync_prs\": true, \"family_dataset_prs\": true} | ead75594-195e-556b-9ba6-0a85baa684907024a8af-9c20-5e3a-9afd-65aea8947317c5ca2bbd-44ba-53d2-afdc-a29f650d2626githubprsmediumbackfill2026-09-15 00:00:00 +0000 UTC 2026-09-15 00:00:00 +0000 UTCplanned0{\"sync_prs\": true, \"family_dataset_prs\": true} | ead75594-195e-556b-9ba6-0a85baa6849070403f88-f92f-5dd3-b8ce-2e2730025b827a15ccba-4e4f-5f61-9e02-6799cc3188b7githubcommitsmediumbackfill2026-09-01 00:00:00 +0000 UTC 2026-09-07 23:59:59.999999 +0000 UTCplanned0{\"sync_git\": true, \"sync_commits\": true} | ead75594-195e-556b-9ba6-0a85baa6849070403f88-f92f-5dd3-b8ce-2e2730025b827a15ccba-4e4f-5f61-9e02-6799cc3188b7githubcommitsmediumbackfill2026-09-08 00:00:00 +0000 UTC 2026-09-14 23:59:59.999999 +0000 UTCplanned0{\"sync_git\": true, \"sync_commits\": true} | ead75594-195e-556b-9ba6-0a85baa6849070403f88-f92f-5dd3-b8ce-2e2730025b827a15ccba-4e4f-5f61-9e02-6799cc3188b7githubcommitsmediumbackfill2026-09-15 00:00:00 +0000 UTC 2026-09-20 00:00:00 +0000 UTCplanned0{\"sync_git\": true, \"sync_commits\": true} | ead75594-195e-556b-9ba6-0a85baa6849070403f88-f92f-5dd3-b8ce-2e2730025b827a15ccba-4e4f-5f61-9e02-6799cc3188b7githubprsmediumbackfill2026-09-01 00:00:00 +0000 UTC 2026-09-07 23:59:59.999999 +0000 UTCplanned0{\"sync_prs\": true, \"family_dataset_prs\": true} | ead75594-195e-556b-9ba6-0a85baa6849070403f88-f92f-5dd3-b8ce-2e2730025b827a15ccba-4e4f-5f61-9e02-6799cc3188b7githubprsmediumbackfill2026-09-08 00:00:00 +0000 UTC 2026-09-14 23:59:59.999999 +0000 UTCplanned0{\"sync_prs\": true, \"family_dataset_prs\": true} | ead75594-195e-556b-9ba6-0a85baa6849070403f88-f92f-5dd3-b8ce-2e2730025b827a15ccba-4e4f-5f61-9e02-6799cc3188b7githubprsmediumbackfill2026-09-15 00:00:00 +0000 UTC 2026-09-20 00:00:00 +0000 UTCplanned0{\"sync_prs\": true, \"family_dataset_prs\": true} | ead75594-195e-556b-9ba6-0a85baa6849070403f88-f92f-5dd3-b8ce-2e2730025b82d011f86d-62d1-5dce-ab2a-ce4457264f4cgithubcommitsmediumbackfill2026-09-01 00:00:00 +0000 UTC 2026-09-07 23:59:59.999999 +0000 UTCplanned0{\"sync_git\": true, \"sync_commits\": true} | ead75594-195e-556b-9ba6-0a85baa6849070403f88-f92f-5dd3-b8ce-2e2730025b82d011f86d-62d1-5dce-ab2a-ce4457264f4cgithubcommitsmediumbackfill2026-09-08 00:00:00 +0000 UTC 2026-09-14 23:59:59.999999 +0000 UTCplanned0{\"sync_git\": true, \"sync_commits\": true} | ead75594-195e-556b-9ba6-0a85baa6849070403f88-f92f-5dd3-b8ce-2e2730025b82d011f86d-62d1-5dce-ab2a-ce4457264f4cgithubcommitsmediumbackfill2026-09-15 00:00:00 +0000 UTC 2026-09-20 00:00:00 +0000 UTCplanned0{\"sync_git\": true, \"sync_commits\": true} | ead75594-195e-556b-9ba6-0a85baa6849070403f88-f92f-5dd3-b8ce-2e2730025b82d011f86d-62d1-5dce-ab2a-ce4457264f4cgithubprsmediumbackfill2026-09-01 00:00:00 +0000 UTC 2026-09-07 23:59:59.999999 +0000 UTCplanned0{\"sync_prs\": true, \"family_dataset_prs\": true} | ead75594-195e-556b-9ba6-0a85baa6849070403f88-f92f-5dd3-b8ce-2e2730025b82d011f86d-62d1-5dce-ab2a-ce4457264f4cgithubprsmediumbackfill2026-09-08 00:00:00 +0000 UTC 2026-09-14 23:59:59.999999 +0000 UTCplanned0{\"sync_prs\": true, \"family_dataset_prs\": true} | ead75594-195e-556b-9ba6-0a85baa6849070403f88-f92f-5dd3-b8ce-2e2730025b82d011f86d-62d1-5dce-ab2a-ce4457264f4cgithubprsmediumbackfill2026-09-15 00:00:00 +0000 UTC 2026-09-20 00:00:00 +0000 UTCplanned0{\"sync_prs\": true, \"family_dataset_prs\": true} | ead75594-195e-556b-9ba6-0a85baa684907e1699a5-d7cb-547b-a689-74cfa9664c9f1a5475b3-a632-5321-9a70-625c1b71b888githubcommitsmediumbackfill2026-09-21 14:13:20 +0000 UTC 2026-09-27 23:59:59.999999 +0000 UTCplanned0{\"sync_git\": true, \"sync_commits\": true} | ead75594-195e-556b-9ba6-0a85baa684907e1699a5-d7cb-547b-a689-74cfa9664c9f1a5475b3-a632-5321-9a70-625c1b71b888githubcommitsmediumbackfill2026-09-28 00:00:00 +0000 UTC 2026-09-28 12:53:20 +0000 UTCplanned0{\"sync_git\": true, \"sync_commits\": true} | ead75594-195e-556b-9ba6-0a85baa684907e1699a5-d7cb-547b-a689-74cfa9664c9f1a5475b3-a632-5321-9a70-625c1b71b888githubprsmediumbackfill2026-09-21 14:13:20 +0000 UTC 2026-09-27 23:59:59.999999 +0000 UTCplanned0{\"sync_prs\": true, \"family_dataset_prs\": true} | ead75594-195e-556b-9ba6-0a85baa684907e1699a5-d7cb-547b-a689-74cfa9664c9f1a5475b3-a632-5321-9a70-625c1b71b888githubprsmediumbackfill2026-09-28 00:00:00 +0000 UTC 2026-09-28 12:53:20 +0000 UTCplanned0{\"sync_prs\": true, \"family_dataset_prs\": true} | ead75594-195e-556b-9ba6-0a85baa684907e1699a5-d7cb-547b-a689-74cfa9664c9f715b2496-375d-5b94-80dd-01c0483e71bagithubcommitsmediumbackfill2026-09-21 14:13:20 +0000 UTC 2026-09-27 23:59:59.999999 +0000 UTCplanned0{\"sync_git\": true, \"sync_commits\": true} | ead75594-195e-556b-9ba6-0a85baa684907e1699a5-d7cb-547b-a689-74cfa9664c9f715b2496-375d-5b94-80dd-01c0483e71bagithubcommitsmediumbackfill2026-09-28 00:00:00 +0000 UTC 2026-09-28 12:53:20 +0000 UTCplanned0{\"sync_git\": true, \"sync_commits\": true} | ead75594-195e-556b-9ba6-0a85baa684907e1699a5-d7cb-547b-a689-74cfa9664c9f715b2496-375d-5b94-80dd-01c0483e71bagithubprsmediumbackfill2026-09-21 14:13:20 +0000 UTC 2026-09-27 23:59:59.999999 +0000 UTCplanned0{\"sync_prs\": true, \"family_dataset_prs\": true} | ead75594-195e-556b-9ba6-0a85baa684907e1699a5-d7cb-547b-a689-74cfa9664c9f715b2496-375d-5b94-80dd-01c0483e71bagithubprsmediumbackfill2026-09-28 00:00:00 +0000 UTC 2026-09-28 12:53:20 +0000 UTCplanned0{\"sync_prs\": true, \"family_dataset_prs\": true} | ead75594-195e-556b-9ba6-0a85baa68490a64cfffd-8697-5a7c-850d-5463ba6ddee45d87b01c-bfec-5773-90a0-990bc459a580githubcommitsmediumbackfill2026-09-01 00:00:00 +0000 UTC 2026-09-07 23:59:59.999999 +0000 UTCplanned0{\"sync_git\": true, \"sync_commits\": true} | ead75594-195e-556b-9ba6-0a85baa68490a64cfffd-8697-5a7c-850d-5463ba6ddee45d87b01c-bfec-5773-90a0-990bc459a580githubcommitsmediumbackfill2026-09-08 00:00:00 +0000 UTC 2026-09-10 00:00:00 +0000 UTCplanned0{\"sync_git\": true, \"sync_commits\": true} | ead75594-195e-556b-9ba6-0a85baa68490b5636a6d-147c-5cd9-95eb-f65306f7fc27375f09ab-231e-5216-a0cf-5ab9c0335f2agithubcommitsmediumbackfill2026-08-31 22:00:00 +0000 UTC 2026-09-06 04:30:00 +0000 UTCplanned0{\"sync_git\": true, \"sync_commits\": true} | ead75594-195e-556b-9ba6-0a85baa68490b5636a6d-147c-5cd9-95eb-f65306f7fc27375f09ab-231e-5216-a0cf-5ab9c0335f2agithubprsmediumbackfill2026-08-31 22:00:00 +0000 UTC 2026-09-06 04:30:00 +0000 UTCplanned0{\"sync_prs\": true, \"family_dataset_prs\": true} | ead75594-195e-556b-9ba6-0a85baa68490b5636a6d-147c-5cd9-95eb-f65306f7fc2761e85110-45b9-573f-845d-e717e503e7a3githubcommitsmediumbackfill2026-08-31 22:00:00 +0000 UTC 2026-09-06 04:30:00 +0000 UTCplanned0{\"sync_git\": true, \"sync_commits\": true} | ead75594-195e-556b-9ba6-0a85baa68490b5636a6d-147c-5cd9-95eb-f65306f7fc2761e85110-45b9-573f-845d-e717e503e7a3githubprsmediumbackfill2026-08-31 22:00:00 +0000 UTC 2026-09-06 04:30:00 +0000 UTCplanned0{\"sync_prs\": true, \"family_dataset_prs\": true} | ead75594-195e-556b-9ba6-0a85baa68490e2e4d543-fd2b-52c1-b4c1-1a594c259073479286ee-c7eb-5fa1-b8dc-1e774a695603githubcommitsmediumbackfill2026-09-01 00:00:00 +0000 UTC 2026-09-04 00:00:00 +0000 UTCplanned0{\"sync_git\": true, \"sync_commits\": true} | ead75594-195e-556b-9ba6-0a85baa68490e2e4d543-fd2b-52c1-b4c1-1a594c259073479286ee-c7eb-5fa1-b8dc-1e774a695603githubprsmediumbackfill2026-09-01 00:00:00 +0000 UTC 2026-09-04 00:00:00 +0000 UTCplanned0{\"sync_prs\": true, \"family_dataset_prs\": true} | ead75594-195e-556b-9ba6-0a85baa68490e2e4d543-fd2b-52c1-b4c1-1a594c259073742d908a-06a1-5009-92b8-69f8995f7265githubcommitsmediumbackfill2026-09-01 00:00:00 +0000 UTC 2026-09-04 00:00:00 +0000 UTCplanned0{\"sync_git\": true, \"sync_commits\": true} | ead75594-195e-556b-9ba6-0a85baa68490e2e4d543-fd2b-52c1-b4c1-1a594c259073742d908a-06a1-5009-92b8-69f8995f7265githubprsmediumbackfill2026-09-01 00:00:00 +0000 UTC 2026-09-04 00:00:00 +0000 UTCplanned0{\"sync_prs\": true, \"family_dataset_prs\": true} | ead75594-195e-556b-9ba6-0a85baa68490e2e4d543-fd2b-52c1-b4c1-1a594c259073ffe77939-a8c7-5430-9ac7-4fcca0a135b6githubcommitsmediumbackfill2026-09-01 00:00:00 +0000 UTC 2026-09-04 00:00:00 +0000 UTCplanned0{\"sync_git\": true, \"sync_commits\": true} | ead75594-195e-556b-9ba6-0a85baa68490e2e4d543-fd2b-52c1-b4c1-1a594c259073ffe77939-a8c7-5430-9ac7-4fcca0a135b6githubprsmediumbackfill2026-09-01 00:00:00 +0000 UTC 2026-09-04 00:00:00 +0000 UTCplanned0{\"sync_prs\": true, \"family_dataset_prs\": true} | ead75594-195e-556b-9ba6-0a85baa68490fd0dbb0b-aaad-5f6a-afb7-f316db256e40590194de-48d7-59da-8f46-c02c4b78a951githubcommitsmediumbackfill2026-09-01 00:00:00 +0000 UTC 2026-09-04 00:00:00 +0000 UTCplanned0{\"sync_git\": true, \"sync_commits\": true} | ead75594-195e-556b-9ba6-0a85baa68490fd0dbb0b-aaad-5f6a-afb7-f316db256e40590194de-48d7-59da-8f46-c02c4b78a951githubprsmediumbackfill2026-09-01 00:00:00 +0000 UTC 2026-09-04 00:00:00 +0000 UTCplanned0{\"sync_prs\": true, \"family_dataset_prs\": true} | ead75594-195e-556b-9ba6-0a85baa68490fd0dbb0b-aaad-5f6a-afb7-f316db256e40d216b899-198c-510b-9ba4-5fbeb506bf2egithubcommitsmediumbackfill2026-09-01 00:00:00 +0000 UTC 2026-09-04 00:00:00 +0000 UTCplanned0{\"sync_git\": true, \"sync_commits\": true} | ead75594-195e-556b-9ba6-0a85baa68490fd0dbb0b-aaad-5f6a-afb7-f316db256e40d216b899-198c-510b-9ba4-5fbeb506bf2egithubprsmediumbackfill2026-09-01 00:00:00 +0000 UTC 2026-09-04 00:00:00 +0000 UTCplanned0{\"sync_prs\": true, \"family_dataset_prs\": true}"
+    },
+    "sync_runs": {
+      "rows": "ead75594-195e-556b-9ba6-0a85baa6849013ac7c2c-17fa-5e8d-bfe7-8eec3274af7dbackfillplanned4 0 0094c4343-11e7-5196-8b16-55ca6ca5a626202f6c5af4d434ae943c638f61d57968fa377f08863df51f0e8a6966951bcc8fintegration_credential\u003cnil\u003e \u003cnil\u003e \u003cnil\u003e \u003cnil\u003e | ead75594-195e-556b-9ba6-0a85baa6849018c8d128-4dfb-5eb9-a2e1-e2672689b5b4backfillplanned4 0 0094c4343-11e7-5196-8b16-55ca6ca5a626202f6c5af4d434ae943c638f61d57968fa377f08863df51f0e8a6966951bcc8fintegration_credential\u003cnil\u003e \u003cnil\u003e \u003cnil\u003e \u003cnil\u003e | ead75594-195e-556b-9ba6-0a85baa684903d85a6ca-fa27-52fd-939d-10a3bd1dd9f9backfillplanned12 0 0094c4343-11e7-5196-8b16-55ca6ca5a626202f6c5af4d434ae943c638f61d57968fa377f08863df51f0e8a6966951bcc8fintegration_credential\u003cnil\u003e \u003cnil\u003e \u003cnil\u003e \u003cnil\u003e | ead75594-195e-556b-9ba6-0a85baa684904b7fd41f-61db-57bb-a4b6-23cbbd0ff408backfillplanned12 0 0094c4343-11e7-5196-8b16-55ca6ca5a626202f6c5af4d434ae943c638f61d57968fa377f08863df51f0e8a6966951bcc8fintegration_credential\u003cnil\u003e \u003cnil\u003e \u003cnil\u003e \u003cnil\u003e | ead75594-195e-556b-9ba6-0a85baa6849052933655-5c40-527a-b0ae-843678c28464backfillplanned0 0 0 \u003cnil\u003e \u003cnil\u003e \u003cnil\u003e \u003cnil\u003e \u003cnil\u003e \u003cnil\u003e \u003cnil\u003e | ead75594-195e-556b-9ba6-0a85baa684907024a8af-9c20-5e3a-9afd-65aea8947317backfillplanned12 0 0094c4343-11e7-5196-8b16-55ca6ca5a626202f6c5af4d434ae943c638f61d57968fa377f08863df51f0e8a6966951bcc8fintegration_credential\u003cnil\u003e \u003cnil\u003e \u003cnil\u003e \u003cnil\u003e | ead75594-195e-556b-9ba6-0a85baa6849070403f88-f92f-5dd3-b8ce-2e2730025b82backfillplanned12 0 0094c4343-11e7-5196-8b16-55ca6ca5a626202f6c5af4d434ae943c638f61d57968fa377f08863df51f0e8a6966951bcc8fintegration_credential\u003cnil\u003e \u003cnil\u003e \u003cnil\u003e \u003cnil\u003e | ead75594-195e-556b-9ba6-0a85baa684907e1699a5-d7cb-547b-a689-74cfa9664c9fbackfillplanned8 0 0094c4343-11e7-5196-8b16-55ca6ca5a626202f6c5af4d434ae943c638f61d57968fa377f08863df51f0e8a6966951bcc8fintegration_credential\u003cnil\u003e \u003cnil\u003e \u003cnil\u003e \u003cnil\u003e | ead75594-195e-556b-9ba6-0a85baa68490a64cfffd-8697-5a7c-850d-5463ba6ddee4backfillplanned2 0 0094c4343-11e7-5196-8b16-55ca6ca5a626202f6c5af4d434ae943c638f61d57968fa377f08863df51f0e8a6966951bcc8fintegration_credential\u003cnil\u003e \u003cnil\u003e \u003cnil\u003e \u003cnil\u003e | ead75594-195e-556b-9ba6-0a85baa68490b5636a6d-147c-5cd9-95eb-f65306f7fc27backfillplanned4 0 0094c4343-11e7-5196-8b16-55ca6ca5a626202f6c5af4d434ae943c638f61d57968fa377f08863df51f0e8a6966951bcc8fintegration_credential\u003cnil\u003e \u003cnil\u003e \u003cnil\u003e \u003cnil\u003e | ead75594-195e-556b-9ba6-0a85baa68490e2e4d543-fd2b-52c1-b4c1-1a594c259073backfillplanned6 0 0094c4343-11e7-5196-8b16-55ca6ca5a626202f6c5af4d434ae943c638f61d57968fa377f08863df51f0e8a6966951bcc8fintegration_credential\u003cnil\u003e \u003cnil\u003e \u003cnil\u003e \u003cnil\u003e | ead75594-195e-556b-9ba6-0a85baa68490fd0dbb0b-aaad-5f6a-afb7-f316db256e40backfillplanned4 0 0094c4343-11e7-5196-8b16-55ca6ca5a626202f6c5af4d434ae943c638f61d57968fa377f08863df51f0e8a6966951bcc8fintegration_credential\u003cnil\u003e \u003cnil\u003e \u003cnil\u003e \u003cnil\u003e"
+    }
+  }
+}

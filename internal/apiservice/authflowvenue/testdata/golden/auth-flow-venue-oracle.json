@@ -1,0 +1,2681 @@
+{
+  "header": {
+    "test": "TestAuthFlowVenueOracle",
+    "python_build": "a4847c5e93607451a0c987b314d37e02fc43ce85",
+    "producer_digest": "6e1dc97e68624398015f60caee160cceee6ae601bd434d01b8b7d5975267e137",
+    "recipe": "git worktree add --detach $DIR a4847c5e93607451a0c987b314d37e02fc43ce85 (with its .venv: uv sync --frozen --no-install-project); then from the repository root: go run ./internal/testsupport/venueoracle/goldenrecord -pkg ./internal/apiservice/authflowvenue/ -test '^TestAuthFlowVenueOracle$' -python-root $DIR (records on the pinned build, replays the candidate in a fresh process, and only then promotes it and pins its digest)",
+    "python_env": "2f596f3224a9f9fc4d634df16fd7871ac4fd1ac820854f61e904201f0177dd98",
+    "python_env_version": 2,
+    "recorded_by": "goldenrecord",
+    "blanked": {
+      "body $.access_token": 14,
+      "body $.org_id": 10,
+      "body $.refresh_token": 24,
+      "body $.user_id": 10,
+      "header content-length": 22,
+      "header date": 131,
+      "header x-dev-health-plane": 131,
+      "header x-request-id": 246,
+      "rows python mails: independent $[].Token": 4,
+      "rows python mails: register names $[].Token": 2,
+      "rows python mails: register without an org $[].Token": 1,
+      "rows python mails: register, unrecognized auto-org value $[].Token": 1
+    }
+  },
+  "requests": [
+    {
+      "name": "register: new user with an org name",
+      "method": "POST",
+      "path": "/api/v1/auth/register",
+      "body_sha256": "0e9cfa959fec6f6f30e5fbabc91ab6bca40c1a316079e5d67875a10fe2e31406",
+      "request_headers_sha256": "0a3a07a4f423bf8e076f445c7c96e8b0f5e643fc139d846231f8ec576d913d5a",
+      "status": 201,
+      "headers": {
+        "access-control-allow-credentials": "true",
+        "access-control-allow-origin": "http://localhost:3000",
+        "access-control-expose-headers": "X-Request-ID",
+        "content-length": "\u003clength of projected body\u003e",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "\u003cvolatile\u003e"
+      },
+      "body": "{\"message\":\"Registration successful\",\"user_id\":\"\u003cid\u003e\",\"org_id\":\"\u003cid\u003e\"}"
+    },
+    {
+      "name": "register: taken, other case",
+      "method": "POST",
+      "path": "/api/v1/auth/register",
+      "body_sha256": "0cdced7e49c82344fbebd5fd3f5248babb932ab04ff0b583895afa21631d391b",
+      "request_headers_sha256": "0a3a07a4f423bf8e076f445c7c96e8b0f5e643fc139d846231f8ec576d913d5a",
+      "status": 400,
+      "headers": {
+        "access-control-allow-credentials": "true",
+        "access-control-allow-origin": "http://localhost:3000",
+        "access-control-expose-headers": "X-Request-ID",
+        "content-length": "49",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "\u003cvolatile\u003e"
+      },
+      "body": "{\"detail\":{\"message\":\"Email already registered\"}}"
+    },
+    {
+      "name": "register: policy, too short",
+      "method": "POST",
+      "path": "/api/v1/auth/register",
+      "body_sha256": "2b553abdae6040b0781bf9b0e3dd9d59bea3bb823360b0cbf8b0ecc92a8069e9",
+      "request_headers_sha256": "0a3a07a4f423bf8e076f445c7c96e8b0f5e643fc139d846231f8ec576d913d5a",
+      "status": 422,
+      "headers": {
+        "access-control-allow-credentials": "true",
+        "access-control-allow-origin": "http://localhost:3000",
+        "access-control-expose-headers": "X-Request-ID",
+        "content-length": "109",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "\u003cvolatile\u003e"
+      },
+      "body": "{\"detail\":{\"message\":\"Password validation failed\",\"errors\":[\"Password must be at least 12 characters long\"]}}"
+    },
+    {
+      "name": "register: password 7 chars",
+      "method": "POST",
+      "path": "/api/v1/auth/register",
+      "body_sha256": "56f924c8bca80369febdd2558fce1b5c9797719173214f1be7199efdd7e77dba",
+      "request_headers_sha256": "0a3a07a4f423bf8e076f445c7c96e8b0f5e643fc139d846231f8ec576d913d5a",
+      "status": 422,
+      "headers": {
+        "access-control-allow-credentials": "true",
+        "access-control-allow-origin": "http://localhost:3000",
+        "access-control-expose-headers": "X-Request-ID",
+        "content-length": "156",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "\u003cvolatile\u003e"
+      },
+      "body": "{\"detail\":[{\"type\":\"string_too_short\",\"loc\":[\"body\",\"password\"],\"msg\":\"String should have at least 8 characters\",\"input\":\"abcdef1\",\"ctx\":{\"min_length\":8}}]}"
+    },
+    {
+      "name": "register: password 129 chars",
+      "method": "POST",
+      "path": "/api/v1/auth/register",
+      "body_sha256": "df6af83b86fbe516682a2ac195cdc64b3a82208ae55e7db13adf1b63a5f75620",
+      "request_headers_sha256": "0a3a07a4f423bf8e076f445c7c96e8b0f5e643fc139d846231f8ec576d913d5a",
+      "status": 422,
+      "headers": {
+        "access-control-allow-credentials": "true",
+        "access-control-allow-origin": "http://localhost:3000",
+        "access-control-expose-headers": "X-Request-ID",
+        "content-length": "280",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "\u003cvolatile\u003e"
+      },
+      "body": "{\"detail\":[{\"type\":\"string_too_long\",\"loc\":[\"body\",\"password\"],\"msg\":\"String should have at most 128 characters\",\"input\":\"a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a\",\"ctx\":{\"max_length\":128}}]}"
+    },
+    {
+      "name": "register: password lone surrogate",
+      "method": "POST",
+      "path": "/api/v1/auth/register",
+      "body_sha256": "6f693a1b8d124214240df3cd69a83d7b3184aab81b5637b7b34f9e4c31faf795",
+      "request_headers_sha256": "0a3a07a4f423bf8e076f445c7c96e8b0f5e643fc139d846231f8ec576d913d5a",
+      "status": 500,
+      "headers": {
+        "content-length": "34",
+        "content-type": "application/json"
+      },
+      "body": "{\"detail\":\"Internal Server Error\"}"
+    },
+    {
+      "name": "register: invalid email",
+      "method": "POST",
+      "path": "/api/v1/auth/register",
+      "body_sha256": "e75dcc300fdd624283265749fc869b4f6190c56927bebada55b50293889638a4",
+      "request_headers_sha256": "0a3a07a4f423bf8e076f445c7c96e8b0f5e643fc139d846231f8ec576d913d5a",
+      "status": 422,
+      "headers": {
+        "access-control-allow-credentials": "true",
+        "access-control-allow-origin": "http://localhost:3000",
+        "access-control-expose-headers": "X-Request-ID",
+        "content-length": "220",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "\u003cvolatile\u003e"
+      },
+      "body": "{\"detail\":[{\"type\":\"value_error\",\"loc\":[\"body\",\"email\"],\"msg\":\"value is not a valid email address: An email address must have an @-sign.\",\"input\":\"not-an-email\",\"ctx\":{\"reason\":\"An email address must have an @-sign.\"}}]}"
+    },
+    {
+      "name": "register: missing fields",
+      "method": "POST",
+      "path": "/api/v1/auth/register",
+      "body_sha256": "a135823e1f3518ee22848a79f5427d8cee0bfb85fbc6b4e6eda61f883c057c9e",
+      "request_headers_sha256": "0a3a07a4f423bf8e076f445c7c96e8b0f5e643fc139d846231f8ec576d913d5a",
+      "status": 422,
+      "headers": {
+        "access-control-allow-credentials": "true",
+        "access-control-allow-origin": "http://localhost:3000",
+        "access-control-expose-headers": "X-Request-ID",
+        "content-length": "167",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "\u003cvolatile\u003e"
+      },
+      "body": "{\"detail\":[{\"type\":\"missing\",\"loc\":[\"body\",\"email\"],\"msg\":\"Field required\",\"input\":{}},{\"type\":\"missing\",\"loc\":[\"body\",\"password\"],\"msg\":\"Field required\",\"input\":{}}]}"
+    },
+    {
+      "name": "register: full_name int",
+      "method": "POST",
+      "path": "/api/v1/auth/register",
+      "body_sha256": "91f9d715da265a084fc7e31f7648c339ee03a81bab2bb8895202e18cc1427358",
+      "request_headers_sha256": "0a3a07a4f423bf8e076f445c7c96e8b0f5e643fc139d846231f8ec576d913d5a",
+      "status": 422,
+      "headers": {
+        "access-control-allow-credentials": "true",
+        "access-control-allow-origin": "http://localhost:3000",
+        "access-control-expose-headers": "X-Request-ID",
+        "content-length": "111",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "\u003cvolatile\u003e"
+      },
+      "body": "{\"detail\":[{\"type\":\"string_type\",\"loc\":[\"body\",\"full_name\"],\"msg\":\"Input should be a valid string\",\"input\":5}]}"
+    },
+    {
+      "name": "register: body is a list",
+      "method": "POST",
+      "path": "/api/v1/auth/register",
+      "body_sha256": "0efe8c9a1a45511fe53ad47b02b82b32f480d1819874e6fb6d37c54cf9a2f5ea",
+      "request_headers_sha256": "0a3a07a4f423bf8e076f445c7c96e8b0f5e643fc139d846231f8ec576d913d5a",
+      "status": 422,
+      "headers": {
+        "access-control-allow-credentials": "true",
+        "access-control-allow-origin": "http://localhost:3000",
+        "access-control-expose-headers": "X-Request-ID",
+        "content-length": "147",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "\u003cvolatile\u003e"
+      },
+      "body": "{\"detail\":[{\"type\":\"model_attributes_type\",\"loc\":[\"body\"],\"msg\":\"Input should be a valid dictionary or object to extract fields from\",\"input\":[]}]}"
+    },
+    {
+      "name": "register: malformed json",
+      "method": "POST",
+      "path": "/api/v1/auth/register",
+      "body_sha256": "560dc1a3ee18333ddb640b87d55b922caf5c50a63f399f136a9e34a76296c271",
+      "request_headers_sha256": "0a3a07a4f423bf8e076f445c7c96e8b0f5e643fc139d846231f8ec576d913d5a",
+      "status": 422,
+      "headers": {
+        "access-control-allow-credentials": "true",
+        "access-control-allow-origin": "http://localhost:3000",
+        "access-control-expose-headers": "X-Request-ID",
+        "content-length": "124",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "\u003cvolatile\u003e"
+      },
+      "body": "{\"detail\":[{\"type\":\"json_invalid\",\"loc\":[\"body\",9],\"msg\":\"JSON decode error\",\"input\":{},\"ctx\":{\"error\":\"Expecting value\"}}]}"
+    },
+    {
+      "name": "register: no origin",
+      "method": "POST",
+      "path": "/api/v1/auth/register",
+      "body_sha256": "4ff50432d688ec5130462148f7621a8b3f327259dca66b750afc08ee4a03a5fc",
+      "request_headers_sha256": "43649115e3ac5307d77b7fa94ac1d07e8b9db882697ba5c42c9e2b710062b4cf",
+      "status": 403,
+      "headers": {
+        "content-length": "45",
+        "content-type": "application/json",
+        "x-request-id": "\u003cvolatile\u003e"
+      },
+      "body": "{\"detail\":\"Request origin validation failed\"}"
+    },
+    {
+      "name": "register: origin not allowed",
+      "method": "POST",
+      "path": "/api/v1/auth/register",
+      "body_sha256": "a135823e1f3518ee22848a79f5427d8cee0bfb85fbc6b4e6eda61f883c057c9e",
+      "request_headers_sha256": "f27bb63a941209a8b49f466c6d8b65944d96fbf649cc7c0cebd66073a82740de",
+      "status": 403,
+      "headers": {
+        "content-length": "45",
+        "content-type": "application/json",
+        "x-request-id": "\u003cvolatile\u003e"
+      },
+      "body": "{\"detail\":\"Request origin validation failed\"}"
+    },
+    {
+      "name": "register: origin null",
+      "method": "POST",
+      "path": "/api/v1/auth/register",
+      "body_sha256": "a135823e1f3518ee22848a79f5427d8cee0bfb85fbc6b4e6eda61f883c057c9e",
+      "request_headers_sha256": "e16a5bf674233b849c540510331beb6e655078395158d0a7753fd990835c6931",
+      "status": 403,
+      "headers": {
+        "content-length": "45",
+        "content-type": "application/json",
+        "x-request-id": "\u003cvolatile\u003e"
+      },
+      "body": "{\"detail\":\"Request origin validation failed\"}"
+    },
+    {
+      "name": "register: origin upper case, padded, with a path",
+      "method": "POST",
+      "path": "/api/v1/auth/register",
+      "body_sha256": "a135823e1f3518ee22848a79f5427d8cee0bfb85fbc6b4e6eda61f883c057c9e",
+      "request_headers_sha256": "3539e137509c6157ce96c178ed7534982c3ae8dce3ec3062e73a6b59b6e75b6f",
+      "status": 422,
+      "headers": {
+        "access-control-allow-credentials": "true",
+        "access-control-expose-headers": "X-Request-ID",
+        "content-length": "167",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "\u003cvolatile\u003e"
+      },
+      "body": "{\"detail\":[{\"type\":\"missing\",\"loc\":[\"body\",\"email\"],\"msg\":\"Field required\",\"input\":{}},{\"type\":\"missing\",\"loc\":[\"body\",\"password\"],\"msg\":\"Field required\",\"input\":{}}]}"
+    },
+    {
+      "name": "register: bad origin, allowed referer",
+      "method": "POST",
+      "path": "/api/v1/auth/register",
+      "body_sha256": "a135823e1f3518ee22848a79f5427d8cee0bfb85fbc6b4e6eda61f883c057c9e",
+      "request_headers_sha256": "acf1499a6ed384edc779a34f91311f6773f512c6c8bdd5112c77d7e5808e6970",
+      "status": 422,
+      "headers": {
+        "access-control-allow-credentials": "true",
+        "access-control-expose-headers": "X-Request-ID",
+        "content-length": "167",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "\u003cvolatile\u003e"
+      },
+      "body": "{\"detail\":[{\"type\":\"missing\",\"loc\":[\"body\",\"email\"],\"msg\":\"Field required\",\"input\":{}},{\"type\":\"missing\",\"loc\":[\"body\",\"password\"],\"msg\":\"Field required\",\"input\":{}}]}"
+    },
+    {
+      "name": "register: referer not allowed",
+      "method": "POST",
+      "path": "/api/v1/auth/register",
+      "body_sha256": "a135823e1f3518ee22848a79f5427d8cee0bfb85fbc6b4e6eda61f883c057c9e",
+      "request_headers_sha256": "2ecca988613375ff54e598e9f618f2ecd2801c6c5c333170b6c4c948e8e5772d",
+      "status": 403,
+      "headers": {
+        "content-length": "45",
+        "content-type": "application/json",
+        "x-request-id": "\u003cvolatile\u003e"
+      },
+      "body": "{\"detail\":\"Request origin validation failed\"}"
+    },
+    {
+      "name": "register: origin urlparse error",
+      "method": "POST",
+      "path": "/api/v1/auth/register",
+      "body_sha256": "a135823e1f3518ee22848a79f5427d8cee0bfb85fbc6b4e6eda61f883c057c9e",
+      "request_headers_sha256": "321f3a42b47fb351d15d65c35e206184864503d5dc97d6c8c72b27b2c18face1",
+      "status": 500,
+      "headers": {
+        "content-length": "34",
+        "content-type": "application/json"
+      },
+      "body": "{\"detail\":\"Internal Server Error\"}"
+    },
+    {
+      "name": "register: referer urlparse error",
+      "method": "POST",
+      "path": "/api/v1/auth/register",
+      "body_sha256": "a135823e1f3518ee22848a79f5427d8cee0bfb85fbc6b4e6eda61f883c057c9e",
+      "request_headers_sha256": "51e8480b460a07c98d1b227501c9fcd02baf320f49b498a7d72d1189a15eec62",
+      "status": 500,
+      "headers": {
+        "content-length": "34",
+        "content-type": "application/json"
+      },
+      "body": "{\"detail\":\"Internal Server Error\"}"
+    },
+    {
+      "name": "register: origin other port",
+      "method": "POST",
+      "path": "/api/v1/auth/register",
+      "body_sha256": "a135823e1f3518ee22848a79f5427d8cee0bfb85fbc6b4e6eda61f883c057c9e",
+      "request_headers_sha256": "805c4edf5da0521ad40158a57e10c3db9f3a06b368838f98a99ae73c6e036ea8",
+      "status": 403,
+      "headers": {
+        "content-length": "45",
+        "content-type": "application/json",
+        "x-request-id": "\u003cvolatile\u003e"
+      },
+      "body": "{\"detail\":\"Request origin validation failed\"}"
+    },
+    {
+      "name": "register: GET is not checked",
+      "method": "GET",
+      "path": "/api/v1/auth/register",
+      "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "request_headers_sha256": "42e9ed2c316d2ca328cb3aaff90af86db410c3a5a3223f6d7a619d490c3dde57",
+      "status": 405,
+      "headers": {
+        "allow": "POST",
+        "content-length": "31",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "\u003cvolatile\u003e"
+      },
+      "body": "{\"detail\":\"Method Not Allowed\"}"
+    },
+    {
+      "name": "login: alice (a refresh token the reset revokes)",
+      "method": "POST",
+      "path": "/api/v1/auth/login",
+      "body_sha256": "3c86e6147df6420e238fd744cb00315193739e8a6addda7b2ea3d1cbb08e2c25",
+      "request_headers_sha256": "43649115e3ac5307d77b7fa94ac1d07e8b9db882697ba5c42c9e2b710062b4cf",
+      "status": 200,
+      "headers": {
+        "content-length": "\u003clength of projected body\u003e",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "\u003cvolatile\u003e"
+      },
+      "body": "{\"access_token\":\"\u003cjwt|aud=string:dev-health-api|email=string:alice%40example.com|exp=number:|exp-iat=number:3600|full_name=string:Alice+%C3%84|hdr.alg=string:HS256|hdr.typ=string:JWT|iat=number:|is_superuser=boolean:false|iss=string:dev-health-ops|jti=string:|org_id=string:b0000000-0000-4000-8000-00000000000b|role=string:member|sub=string:10000000-0000-4000-8000-000000000001|tv=number:0|type=string:access|username=string:alice\u003e\",\"refresh_token\":\"\u003cjwt|aud=string:dev-health-api|exp=number:|exp-iat=number:604800|family_id=string:\u003cid\u003e|hdr.alg=string:HS256|hdr.typ=string:JWT|iat=number:|iss=string:dev-health-ops|jti=string:|org_id=string:b0000000-0000-4000-8000-00000000000b|sub=string:10000000-0000-4000-8000-000000000001|type=string:refresh\u003e\",\"token_type\":\"bearer\",\"expires_in\":3600,\"needs_onboarding\":false,\"user\":{\"id\":\"10000000-0000-4000-8000-000000000001\",\"email\":\"alice@example.com\",\"username\":\"alice\",\"full_name\":\"Alice Ä\",\"org_id\":\"b0000000-0000-4000-8000-00000000000b\",\"role\":\"member\",\"is_superuser\":false}}"
+    },
+    {
+      "name": "resend: unknown address",
+      "method": "POST",
+      "path": "/api/v1/auth/resend-verification",
+      "body_sha256": "298b92e31c90be0d21a0a8c3d8710d6e171237c9a20b5f790d0b7efde75eeff5",
+      "request_headers_sha256": "43649115e3ac5307d77b7fa94ac1d07e8b9db882697ba5c42c9e2b710062b4cf",
+      "status": 200,
+      "headers": {
+        "content-length": "101",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "\u003cvolatile\u003e"
+      },
+      "body": "{\"message\":\"If an account exists with that email, a verification link has been sent\",\"verified\":null}"
+    },
+    {
+      "name": "resend: already verified",
+      "method": "POST",
+      "path": "/api/v1/auth/resend-verification",
+      "body_sha256": "2ca4055d2d11fc26deb549305b78a872d2e59f8d02ed517bd843b729cf47e0f2",
+      "request_headers_sha256": "43649115e3ac5307d77b7fa94ac1d07e8b9db882697ba5c42c9e2b710062b4cf",
+      "status": 200,
+      "headers": {
+        "content-length": "101",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "\u003cvolatile\u003e"
+      },
+      "body": "{\"message\":\"If an account exists with that email, a verification link has been sent\",\"verified\":null}"
+    },
+    {
+      "name": "resend: unverified, upper case",
+      "method": "POST",
+      "path": "/api/v1/auth/resend-verification",
+      "body_sha256": "1aa21db2ca6e6f67eb6a55c054e758b82c89dcfbe055a58b8053f7a1d85372bb",
+      "request_headers_sha256": "43649115e3ac5307d77b7fa94ac1d07e8b9db882697ba5c42c9e2b710062b4cf",
+      "status": 200,
+      "headers": {
+        "content-length": "101",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "\u003cvolatile\u003e"
+      },
+      "body": "{\"message\":\"If an account exists with that email, a verification link has been sent\",\"verified\":null}"
+    },
+    {
+      "name": "resend: invalid email",
+      "method": "POST",
+      "path": "/api/v1/auth/resend-verification",
+      "body_sha256": "966e68a2c6edbda2ad4b72630fbba39311eccf19886f3a579a9f62d39e98c039",
+      "request_headers_sha256": "43649115e3ac5307d77b7fa94ac1d07e8b9db882697ba5c42c9e2b710062b4cf",
+      "status": 422,
+      "headers": {
+        "content-length": "212",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "\u003cvolatile\u003e"
+      },
+      "body": "{\"detail\":[{\"type\":\"value_error\",\"loc\":[\"body\",\"email\"],\"msg\":\"value is not a valid email address: An email address must have an @-sign.\",\"input\":\"nope\",\"ctx\":{\"reason\":\"An email address must have an @-sign.\"}}]}"
+    },
+    {
+      "name": "resend: missing",
+      "method": "POST",
+      "path": "/api/v1/auth/resend-verification",
+      "body_sha256": "a135823e1f3518ee22848a79f5427d8cee0bfb85fbc6b4e6eda61f883c057c9e",
+      "request_headers_sha256": "43649115e3ac5307d77b7fa94ac1d07e8b9db882697ba5c42c9e2b710062b4cf",
+      "status": 422,
+      "headers": {
+        "content-length": "88",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "\u003cvolatile\u003e"
+      },
+      "body": "{\"detail\":[{\"type\":\"missing\",\"loc\":[\"body\",\"email\"],\"msg\":\"Field required\",\"input\":{}}]}"
+    },
+    {
+      "name": "forgot: unknown address",
+      "method": "POST",
+      "path": "/api/v1/auth/forgot-password",
+      "body_sha256": "298b92e31c90be0d21a0a8c3d8710d6e171237c9a20b5f790d0b7efde75eeff5",
+      "request_headers_sha256": "43649115e3ac5307d77b7fa94ac1d07e8b9db882697ba5c42c9e2b710062b4cf",
+      "status": 200,
+      "headers": {
+        "content-length": "89",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "\u003cvolatile\u003e"
+      },
+      "body": "{\"message\":\"If the account exists, a password reset email has been sent\",\"verified\":null}"
+    },
+    {
+      "name": "forgot: alice (member: audited)",
+      "method": "POST",
+      "path": "/api/v1/auth/forgot-password",
+      "body_sha256": "2ca4055d2d11fc26deb549305b78a872d2e59f8d02ed517bd843b729cf47e0f2",
+      "request_headers_sha256": "43649115e3ac5307d77b7fa94ac1d07e8b9db882697ba5c42c9e2b710062b4cf",
+      "status": 200,
+      "headers": {
+        "content-length": "89",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "\u003cvolatile\u003e"
+      },
+      "body": "{\"message\":\"If the account exists, a password reset email has been sent\",\"verified\":null}"
+    },
+    {
+      "name": "forgot: pia (no membership: not audited)",
+      "method": "POST",
+      "path": "/api/v1/auth/forgot-password",
+      "body_sha256": "510fa7e0ddd4a260fdb28e89b00dce7b00edc7af0f20bf4342c2ffa103707568",
+      "request_headers_sha256": "43649115e3ac5307d77b7fa94ac1d07e8b9db882697ba5c42c9e2b710062b4cf",
+      "status": 200,
+      "headers": {
+        "content-length": "89",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "\u003cvolatile\u003e"
+      },
+      "body": "{\"message\":\"If the account exists, a password reset email has been sent\",\"verified\":null}"
+    },
+    {
+      "name": "forgot: invalid email",
+      "method": "POST",
+      "path": "/api/v1/auth/forgot-password",
+      "body_sha256": "88d4934d5c3b5d395fdbc7450def40b9eb805683cd2ff8c5e1b542c4e49d7b6a",
+      "request_headers_sha256": "43649115e3ac5307d77b7fa94ac1d07e8b9db882697ba5c42c9e2b710062b4cf",
+      "status": 422,
+      "headers": {
+        "content-length": "107",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "\u003cvolatile\u003e"
+      },
+      "body": "{\"detail\":[{\"type\":\"string_type\",\"loc\":[\"body\",\"email\"],\"msg\":\"Input should be a valid string\",\"input\":7}]}"
+    },
+    {
+      "name": "verify: missing token",
+      "method": "GET",
+      "path": "/api/v1/auth/verify",
+      "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "request_headers_sha256": "42e9ed2c316d2ca328cb3aaff90af86db410c3a5a3223f6d7a619d490c3dde57",
+      "status": 422,
+      "headers": {
+        "content-length": "91",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "\u003cvolatile\u003e"
+      },
+      "body": "{\"detail\":[{\"type\":\"missing\",\"loc\":[\"query\",\"token\"],\"msg\":\"Field required\",\"input\":null}]}"
+    },
+    {
+      "name": "verify: empty token",
+      "method": "GET",
+      "path": "/api/v1/auth/verify?token=",
+      "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "request_headers_sha256": "42e9ed2c316d2ca328cb3aaff90af86db410c3a5a3223f6d7a619d490c3dde57",
+      "status": 422,
+      "headers": {
+        "content-length": "146",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "\u003cvolatile\u003e"
+      },
+      "body": "{\"detail\":[{\"type\":\"string_too_short\",\"loc\":[\"query\",\"token\"],\"msg\":\"String should have at least 1 character\",\"input\":\"\",\"ctx\":{\"min_length\":1}}]}"
+    },
+    {
+      "name": "verify: garbage",
+      "method": "GET",
+      "path": "/api/v1/auth/verify?token=garbage",
+      "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "request_headers_sha256": "42e9ed2c316d2ca328cb3aaff90af86db410c3a5a3223f6d7a619d490c3dde57",
+      "status": 400,
+      "headers": {
+        "content-length": "62",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "\u003cvolatile\u003e"
+      },
+      "body": "{\"detail\":{\"message\":\"Invalid or expired verification token\"}}"
+    },
+    {
+      "name": "verify: expired",
+      "method": "GET",
+      "path": "/api/v1/auth/verify?token=\u003clink-token\u003e",
+      "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "request_headers_sha256": "42e9ed2c316d2ca328cb3aaff90af86db410c3a5a3223f6d7a619d490c3dde57",
+      "status": 400,
+      "headers": {
+        "content-length": "62",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "\u003cvolatile\u003e"
+      },
+      "body": "{\"detail\":{\"message\":\"Invalid or expired verification token\"}}"
+    },
+    {
+      "name": "verify: signed, no such token",
+      "method": "GET",
+      "path": "/api/v1/auth/verify?token=\u003clink-token\u003e",
+      "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "request_headers_sha256": "42e9ed2c316d2ca328cb3aaff90af86db410c3a5a3223f6d7a619d490c3dde57",
+      "status": 400,
+      "headers": {
+        "content-length": "62",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "\u003cvolatile\u003e"
+      },
+      "body": "{\"detail\":{\"message\":\"Invalid or expired verification token\"}}"
+    },
+    {
+      "name": "verify: non-ascii signature",
+      "method": "GET",
+      "path": "/api/v1/auth/verify?token=40000000000040008000000000000003.é",
+      "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "request_headers_sha256": "42e9ed2c316d2ca328cb3aaff90af86db410c3a5a3223f6d7a619d490c3dde57",
+      "status": 500,
+      "headers": {
+        "content-length": "34",
+        "content-type": "application/json"
+      },
+      "body": "{\"detail\":\"Internal Server Error\"}"
+    },
+    {
+      "name": "reset: missing fields",
+      "method": "POST",
+      "path": "/api/v1/auth/reset-password",
+      "body_sha256": "a135823e1f3518ee22848a79f5427d8cee0bfb85fbc6b4e6eda61f883c057c9e",
+      "request_headers_sha256": "43649115e3ac5307d77b7fa94ac1d07e8b9db882697ba5c42c9e2b710062b4cf",
+      "status": 422,
+      "headers": {
+        "content-length": "171",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "\u003cvolatile\u003e"
+      },
+      "body": "{\"detail\":[{\"type\":\"missing\",\"loc\":[\"body\",\"token\"],\"msg\":\"Field required\",\"input\":{}},{\"type\":\"missing\",\"loc\":[\"body\",\"new_password\"],\"msg\":\"Field required\",\"input\":{}}]}"
+    },
+    {
+      "name": "reset: password 7 chars",
+      "method": "POST",
+      "path": "/api/v1/auth/reset-password",
+      "body_sha256": "261515f39c66e0e2d53290783b8fd2909ad5740ccd0318b252efb716a456a68e",
+      "request_headers_sha256": "43649115e3ac5307d77b7fa94ac1d07e8b9db882697ba5c42c9e2b710062b4cf",
+      "status": 422,
+      "headers": {
+        "content-length": "160",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "\u003cvolatile\u003e"
+      },
+      "body": "{\"detail\":[{\"type\":\"string_too_short\",\"loc\":[\"body\",\"new_password\"],\"msg\":\"String should have at least 8 characters\",\"input\":\"abcdef1\",\"ctx\":{\"min_length\":8}}]}"
+    },
+    {
+      "name": "reset: garbage",
+      "method": "POST",
+      "path": "/api/v1/auth/reset-password",
+      "body_sha256": "f2a8b4e8adb7eda703901ac84905c12cef70bb6c121bccea5234e7a85e523097",
+      "request_headers_sha256": "43649115e3ac5307d77b7fa94ac1d07e8b9db882697ba5c42c9e2b710062b4cf",
+      "status": 400,
+      "headers": {
+        "content-length": "49",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "\u003cvolatile\u003e"
+      },
+      "body": "{\"detail\":{\"message\":\"Invalid or expired token\"}}"
+    },
+    {
+      "name": "reset: expired",
+      "method": "POST",
+      "path": "/api/v1/auth/reset-password",
+      "body_sha256": "d16586b885e83b684cea864b6498c379d330ecdcb6325023e2da2e536fbe289c",
+      "request_headers_sha256": "43649115e3ac5307d77b7fa94ac1d07e8b9db882697ba5c42c9e2b710062b4cf",
+      "status": 400,
+      "headers": {
+        "content-length": "49",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "\u003cvolatile\u003e"
+      },
+      "body": "{\"detail\":{\"message\":\"Invalid or expired token\"}}"
+    },
+    {
+      "name": "reset: non-ascii signature",
+      "method": "POST",
+      "path": "/api/v1/auth/reset-password",
+      "body_sha256": "f908804dc25e03e0d105889e9d61f80970ccd0a10a2c412bec4d3a46363c94be",
+      "request_headers_sha256": "43649115e3ac5307d77b7fa94ac1d07e8b9db882697ba5c42c9e2b710062b4cf",
+      "status": 500,
+      "headers": {
+        "content-length": "34",
+        "content-type": "application/json"
+      },
+      "body": "{\"detail\":\"Internal Server Error\"}"
+    },
+    {
+      "name": "state: alice",
+      "method": "GET",
+      "path": "/api/v1/auth/onboarding/state",
+      "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "request_headers_sha256": "2b98d8749cb2c9973322a4c1819040bba7944888b665990005396b04566918c6",
+      "status": 200,
+      "headers": {
+        "content-length": "248",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "\u003cvolatile\u003e"
+      },
+      "body": "{\"needs_onboarding\":true,\"org_created\":true,\"org_id\":\"a0000000-0000-4000-8000-00000000000a\",\"org_name\":\"Org A\",\"first_integration_connected\":false,\"integration_skipped\":false,\"recommended_provider\":\"github\",\"next_step\":\"integration\",\"blocker\":null}"
+    },
+    {
+      "name": "state: alice, no org claim",
+      "method": "GET",
+      "path": "/api/v1/auth/onboarding/state",
+      "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "request_headers_sha256": "e5af2656dc22bc65708f357710767f988ea57fda4ec4b792763ac8263bd58401",
+      "status": 200,
+      "headers": {
+        "content-length": "248",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "\u003cvolatile\u003e"
+      },
+      "body": "{\"needs_onboarding\":true,\"org_created\":true,\"org_id\":\"a0000000-0000-4000-8000-00000000000a\",\"org_name\":\"Org A\",\"first_integration_connected\":false,\"integration_skipped\":false,\"recommended_provider\":\"github\",\"next_step\":\"integration\",\"blocker\":null}"
+    },
+    {
+      "name": "state: alice, org she is not in",
+      "method": "GET",
+      "path": "/api/v1/auth/onboarding/state",
+      "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "request_headers_sha256": "8472eba4537d612433b1f31bc3f5ddf3dfb09b32520983695763f66a2bce0680",
+      "status": 200,
+      "headers": {
+        "content-length": "210",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "\u003cvolatile\u003e"
+      },
+      "body": "{\"needs_onboarding\":true,\"org_created\":false,\"org_id\":null,\"org_name\":null,\"first_integration_connected\":false,\"integration_skipped\":false,\"recommended_provider\":\"github\",\"next_step\":\"workspace\",\"blocker\":null}"
+    },
+    {
+      "name": "state: alice, admin role",
+      "method": "GET",
+      "path": "/api/v1/auth/onboarding/state",
+      "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "request_headers_sha256": "11bc3526eb1e236d69c263d91e20868df892e4cac5c57e10d66bb1e798c19d5a",
+      "status": 200,
+      "headers": {
+        "content-length": "247",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "\u003cvolatile\u003e"
+      },
+      "body": "{\"needs_onboarding\":false,\"org_created\":true,\"org_id\":\"a0000000-0000-4000-8000-00000000000a\",\"org_name\":\"Org A\",\"first_integration_connected\":false,\"integration_skipped\":false,\"recommended_provider\":\"github\",\"next_step\":\"dashboard\",\"blocker\":null}"
+    },
+    {
+      "name": "state: alice, org claim not a uuid",
+      "method": "GET",
+      "path": "/api/v1/auth/onboarding/state",
+      "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "request_headers_sha256": "d85aa4788ee69dc6b334d28162fa8fe91706dd6ebaea6e74d221bbed6914b6b7",
+      "status": 200,
+      "headers": {
+        "content-length": "210",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "\u003cvolatile\u003e"
+      },
+      "body": "{\"needs_onboarding\":true,\"org_created\":false,\"org_id\":null,\"org_name\":null,\"first_integration_connected\":false,\"integration_skipped\":false,\"recommended_provider\":\"github\",\"next_step\":\"workspace\",\"blocker\":null}"
+    },
+    {
+      "name": "state: bob superuser, no membership",
+      "method": "GET",
+      "path": "/api/v1/auth/onboarding/state",
+      "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "request_headers_sha256": "ca4a95101c9648498ff5e8c61e5c689651462b266831ef675c900d83c40ab623",
+      "status": 200,
+      "headers": {
+        "content-length": "211",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "\u003cvolatile\u003e"
+      },
+      "body": "{\"needs_onboarding\":false,\"org_created\":false,\"org_id\":null,\"org_name\":null,\"first_integration_connected\":false,\"integration_skipped\":false,\"recommended_provider\":\"github\",\"next_step\":\"dashboard\",\"blocker\":null}"
+    },
+    {
+      "name": "state: carol unverified",
+      "method": "GET",
+      "path": "/api/v1/auth/onboarding/state",
+      "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "request_headers_sha256": "835ed0cd87bed4e4f128976376768420da17ea5610c5215c57702e04c99fd6cf",
+      "status": 403,
+      "headers": {
+        "content-length": "29",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "\u003cvolatile\u003e"
+      },
+      "body": "{\"detail\":\"email_unverified\"}"
+    },
+    {
+      "name": "state: judy",
+      "method": "GET",
+      "path": "/api/v1/auth/onboarding/state",
+      "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "request_headers_sha256": "91aa3805bf1198926ae9e3ff65f87a8824b43fdb304f145622f4a66588ab4268",
+      "status": 200,
+      "headers": {
+        "content-length": "248",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "\u003cvolatile\u003e"
+      },
+      "body": "{\"needs_onboarding\":true,\"org_created\":true,\"org_id\":\"a0000000-0000-4000-8000-00000000000a\",\"org_name\":\"Org A\",\"first_integration_connected\":false,\"integration_skipped\":false,\"recommended_provider\":\"github\",\"next_step\":\"integration\",\"blocker\":null}"
+    },
+    {
+      "name": "state: pia orgless",
+      "method": "GET",
+      "path": "/api/v1/auth/onboarding/state",
+      "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "request_headers_sha256": "976a5e1aa1377198d98fcafc3d792e294c1316e6f530e6021cd63908bd670e6c",
+      "status": 200,
+      "headers": {
+        "content-length": "210",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "\u003cvolatile\u003e"
+      },
+      "body": "{\"needs_onboarding\":true,\"org_created\":false,\"org_id\":null,\"org_name\":null,\"first_integration_connected\":false,\"integration_skipped\":false,\"recommended_provider\":\"github\",\"next_step\":\"workspace\",\"blocker\":null}"
+    },
+    {
+      "name": "state: uma unverified orgless",
+      "method": "GET",
+      "path": "/api/v1/auth/onboarding/state",
+      "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "request_headers_sha256": "1d699c2f0254cd0ce5dcd0c3c94f89eaf4f1aeff28bf0333282ea192dd7bd716",
+      "status": 403,
+      "headers": {
+        "content-length": "29",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "\u003cvolatile\u003e"
+      },
+      "body": "{\"detail\":\"email_unverified\"}"
+    },
+    {
+      "name": "state: ghost",
+      "method": "GET",
+      "path": "/api/v1/auth/onboarding/state",
+      "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "request_headers_sha256": "402472524c2bd4b0c3cdd69b9edc8e3931c034e33f29b11085c6d22edef16b12",
+      "status": 401,
+      "headers": {
+        "content-length": "49",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "www-authenticate": "Bearer",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "\u003cvolatile\u003e"
+      },
+      "body": "{\"detail\":{\"message\":\"Invalid or expired token\"}}"
+    },
+    {
+      "name": "state: no credential",
+      "method": "GET",
+      "path": "/api/v1/auth/onboarding/state",
+      "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "request_headers_sha256": "42e9ed2c316d2ca328cb3aaff90af86db410c3a5a3223f6d7a619d490c3dde57",
+      "status": 401,
+      "headers": {
+        "content-length": "42",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "www-authenticate": "Bearer",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "\u003cvolatile\u003e"
+      },
+      "body": "{\"detail\":{\"message\":\"Not authenticated\"}}"
+    },
+    {
+      "name": "skip: no org claim",
+      "method": "POST",
+      "path": "/api/v1/auth/onboarding/skip-integration",
+      "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "request_headers_sha256": "e5af2656dc22bc65708f357710767f988ea57fda4ec4b792763ac8263bd58401",
+      "status": 400,
+      "headers": {
+        "content-length": "34",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "\u003cvolatile\u003e"
+      },
+      "body": "{\"detail\":\"organization_required\"}"
+    },
+    {
+      "name": "skip: org claim not a uuid",
+      "method": "POST",
+      "path": "/api/v1/auth/onboarding/skip-integration",
+      "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "request_headers_sha256": "d85aa4788ee69dc6b334d28162fa8fe91706dd6ebaea6e74d221bbed6914b6b7",
+      "status": 400,
+      "headers": {
+        "content-length": "34",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "\u003cvolatile\u003e"
+      },
+      "body": "{\"detail\":\"organization_required\"}"
+    },
+    {
+      "name": "skip: not a member",
+      "method": "POST",
+      "path": "/api/v1/auth/onboarding/skip-integration",
+      "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "request_headers_sha256": "8472eba4537d612433b1f31bc3f5ddf3dfb09b32520983695763f66a2bce0680",
+      "status": 403,
+      "headers": {
+        "content-length": "45",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "\u003cvolatile\u003e"
+      },
+      "body": "{\"detail\":\"organization_membership_required\"}"
+    },
+    {
+      "name": "skip: no credential",
+      "method": "POST",
+      "path": "/api/v1/auth/onboarding/skip-integration",
+      "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "request_headers_sha256": "42e9ed2c316d2ca328cb3aaff90af86db410c3a5a3223f6d7a619d490c3dde57",
+      "status": 401,
+      "headers": {
+        "content-length": "42",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "www-authenticate": "Bearer",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "\u003cvolatile\u003e"
+      },
+      "body": "{\"detail\":{\"message\":\"Not authenticated\"}}"
+    },
+    {
+      "name": "skip: judy",
+      "method": "POST",
+      "path": "/api/v1/auth/onboarding/skip-integration",
+      "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "request_headers_sha256": "91aa3805bf1198926ae9e3ff65f87a8824b43fdb304f145622f4a66588ab4268",
+      "status": 200,
+      "headers": {
+        "content-length": "245",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "\u003cvolatile\u003e"
+      },
+      "body": "{\"needs_onboarding\":false,\"org_created\":true,\"org_id\":\"a0000000-0000-4000-8000-00000000000a\",\"org_name\":\"Org A\",\"first_integration_connected\":false,\"integration_skipped\":true,\"recommended_provider\":\"github\",\"next_step\":\"complete\",\"blocker\":null}"
+    },
+    {
+      "name": "skip: judy again",
+      "method": "POST",
+      "path": "/api/v1/auth/onboarding/skip-integration",
+      "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "request_headers_sha256": "91aa3805bf1198926ae9e3ff65f87a8824b43fdb304f145622f4a66588ab4268",
+      "status": 200,
+      "headers": {
+        "content-length": "245",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "\u003cvolatile\u003e"
+      },
+      "body": "{\"needs_onboarding\":false,\"org_created\":true,\"org_id\":\"a0000000-0000-4000-8000-00000000000a\",\"org_name\":\"Org A\",\"first_integration_connected\":false,\"integration_skipped\":true,\"recommended_provider\":\"github\",\"next_step\":\"complete\",\"blocker\":null}"
+    },
+    {
+      "name": "state: alice after the skip",
+      "method": "GET",
+      "path": "/api/v1/auth/onboarding/state",
+      "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "request_headers_sha256": "2b98d8749cb2c9973322a4c1819040bba7944888b665990005396b04566918c6",
+      "status": 200,
+      "headers": {
+        "content-length": "245",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "\u003cvolatile\u003e"
+      },
+      "body": "{\"needs_onboarding\":false,\"org_created\":true,\"org_id\":\"a0000000-0000-4000-8000-00000000000a\",\"org_name\":\"Org A\",\"first_integration_connected\":false,\"integration_skipped\":true,\"recommended_provider\":\"github\",\"next_step\":\"complete\",\"blocker\":null}"
+    },
+    {
+      "name": "accept: no credential",
+      "method": "POST",
+      "path": "/api/v1/auth/accept-invite",
+      "body_sha256": "3cfb5d19652b80343d2a865756a39eb5113be1bd9270bc7dcc4851a8988508bd",
+      "request_headers_sha256": "43649115e3ac5307d77b7fa94ac1d07e8b9db882697ba5c42c9e2b710062b4cf",
+      "status": 401,
+      "headers": {
+        "content-length": "42",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "www-authenticate": "Bearer",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "\u003cvolatile\u003e"
+      },
+      "body": "{\"detail\":{\"message\":\"Not authenticated\"}}"
+    },
+    {
+      "name": "accept: no credential, bad body",
+      "method": "POST",
+      "path": "/api/v1/auth/accept-invite",
+      "body_sha256": "a135823e1f3518ee22848a79f5427d8cee0bfb85fbc6b4e6eda61f883c057c9e",
+      "request_headers_sha256": "43649115e3ac5307d77b7fa94ac1d07e8b9db882697ba5c42c9e2b710062b4cf",
+      "status": 401,
+      "headers": {
+        "content-length": "42",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "www-authenticate": "Bearer",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "\u003cvolatile\u003e"
+      },
+      "body": "{\"detail\":{\"message\":\"Not authenticated\"}}"
+    },
+    {
+      "name": "accept: missing token",
+      "method": "POST",
+      "path": "/api/v1/auth/accept-invite",
+      "body_sha256": "a135823e1f3518ee22848a79f5427d8cee0bfb85fbc6b4e6eda61f883c057c9e",
+      "request_headers_sha256": "44c1c8bbae6150fcf562999803dad29687438f59f62d2cb1a5ef0fc76ece5407",
+      "status": 422,
+      "headers": {
+        "content-length": "88",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "\u003cvolatile\u003e"
+      },
+      "body": "{\"detail\":[{\"type\":\"missing\",\"loc\":[\"body\",\"token\"],\"msg\":\"Field required\",\"input\":{}}]}"
+    },
+    {
+      "name": "accept: expired",
+      "method": "POST",
+      "path": "/api/v1/auth/accept-invite",
+      "body_sha256": "3cfb5d19652b80343d2a865756a39eb5113be1bd9270bc7dcc4851a8988508bd",
+      "request_headers_sha256": "44c1c8bbae6150fcf562999803dad29687438f59f62d2cb1a5ef0fc76ece5407",
+      "status": 400,
+      "headers": {
+        "content-length": "50",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "\u003cvolatile\u003e"
+      },
+      "body": "{\"detail\":{\"message\":\"Invalid or expired invite\"}}"
+    },
+    {
+      "name": "accept: already accepted",
+      "method": "POST",
+      "path": "/api/v1/auth/accept-invite",
+      "body_sha256": "3cfb5d19652b80343d2a865756a39eb5113be1bd9270bc7dcc4851a8988508bd",
+      "request_headers_sha256": "44c1c8bbae6150fcf562999803dad29687438f59f62d2cb1a5ef0fc76ece5407",
+      "status": 400,
+      "headers": {
+        "content-length": "50",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "\u003cvolatile\u003e"
+      },
+      "body": "{\"detail\":{\"message\":\"Invalid or expired invite\"}}"
+    },
+    {
+      "name": "accept: garbage",
+      "method": "POST",
+      "path": "/api/v1/auth/accept-invite",
+      "body_sha256": "961a0db50b60ff19fd2752585a77fa892fc3583bc4b4f03fa074921940bac3c3",
+      "request_headers_sha256": "44c1c8bbae6150fcf562999803dad29687438f59f62d2cb1a5ef0fc76ece5407",
+      "status": 400,
+      "headers": {
+        "content-length": "50",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "\u003cvolatile\u003e"
+      },
+      "body": "{\"detail\":{\"message\":\"Invalid or expired invite\"}}"
+    },
+    {
+      "name": "accept: non-ascii signature",
+      "method": "POST",
+      "path": "/api/v1/auth/accept-invite",
+      "body_sha256": "f681ef7f39042253cb0a3ad8038cf77e45ef4f1a32fdb72107cd0e6b85d4c63e",
+      "request_headers_sha256": "44c1c8bbae6150fcf562999803dad29687438f59f62d2cb1a5ef0fc76ece5407",
+      "status": 500,
+      "headers": {
+        "content-length": "34",
+        "content-type": "application/json"
+      },
+      "body": "{\"detail\":\"Internal Server Error\"}"
+    },
+    {
+      "name": "accept: ivan joins org A",
+      "method": "POST",
+      "path": "/api/v1/auth/accept-invite",
+      "body_sha256": "3cfb5d19652b80343d2a865756a39eb5113be1bd9270bc7dcc4851a8988508bd",
+      "request_headers_sha256": "44c1c8bbae6150fcf562999803dad29687438f59f62d2cb1a5ef0fc76ece5407",
+      "status": 200,
+      "headers": {
+        "content-length": "\u003clength of projected body\u003e",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "\u003cvolatile\u003e"
+      },
+      "body": "{\"access_token\":\"\u003cjwt|aud=string:dev-health-api|email=string:ivan%40example.com|exp=number:|exp-iat=number:3600|hdr.alg=string:HS256|hdr.typ=string:JWT|iat=number:|is_superuser=boolean:false|iss=string:dev-health-ops|jti=string:|org_id=string:a0000000-0000-4000-8000-00000000000a|role=string:admin|sub=string:20000000-0000-4000-8000-000000000001|tv=number:0|type=string:access\u003e\",\"refresh_token\":\"\u003cjwt|aud=string:dev-health-api|exp=number:|exp-iat=number:604800|family_id=string:\u003cid\u003e|hdr.alg=string:HS256|hdr.typ=string:JWT|iat=number:|iss=string:dev-health-ops|jti=string:|org_id=string:a0000000-0000-4000-8000-00000000000a|sub=string:20000000-0000-4000-8000-000000000001|type=string:refresh\u003e\",\"token_type\":\"bearer\",\"expires_in\":3600,\"org_id\":\"a0000000-0000-4000-8000-00000000000a\",\"org_name\":\"Org A\",\"role\":\"admin\"}"
+    },
+    {
+      "name": "accept: alice, already a member",
+      "method": "POST",
+      "path": "/api/v1/auth/accept-invite",
+      "body_sha256": "3cfb5d19652b80343d2a865756a39eb5113be1bd9270bc7dcc4851a8988508bd",
+      "request_headers_sha256": "9ae69fb84bdc388aeff8adc5312777fa5b9ab851f97485060f01fe40b472a4a7",
+      "status": 400,
+      "headers": {
+        "content-length": "70",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "\u003cvolatile\u003e"
+      },
+      "body": "{\"detail\":{\"message\":\"User is already a member of this organization\"}}"
+    },
+    {
+      "name": "onboard: alice already onboarded",
+      "method": "POST",
+      "path": "/api/v1/auth/onboard",
+      "body_sha256": "b6d2f5b2428f76bda53266a81987574d7f0d6985579a652534b39fb1867d2960",
+      "request_headers_sha256": "9ae69fb84bdc388aeff8adc5312777fa5b9ab851f97485060f01fe40b472a4a7",
+      "status": 400,
+      "headers": {
+        "content-length": "42",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "\u003cvolatile\u003e"
+      },
+      "body": "{\"detail\":{\"message\":\"Already onboarded\"}}"
+    },
+    {
+      "name": "onboard: invalid action",
+      "method": "POST",
+      "path": "/api/v1/auth/onboard",
+      "body_sha256": "ca1bc5edc2fa9a812c0a8b84a9e003b8aeca0516051b754f49bfc816850662dd",
+      "request_headers_sha256": "8d163f0fe67e1b07be08288d373afd956b337b765b7dd8fb880946d715eeeb38",
+      "status": 400,
+      "headers": {
+        "content-length": "71",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "\u003cvolatile\u003e"
+      },
+      "body": "{\"detail\":{\"message\":\"Invalid action. Use 'create_org' or 'join_org'\"}}"
+    },
+    {
+      "name": "onboard: blank name",
+      "method": "POST",
+      "path": "/api/v1/auth/onboard",
+      "body_sha256": "523958bcbc3954cf2fc18ccfe0b452e1ccf30b39487e10bc7ae5fc7a416bd079",
+      "request_headers_sha256": "8d163f0fe67e1b07be08288d373afd956b337b765b7dd8fb880946d715eeeb38",
+      "status": 422,
+      "headers": {
+        "content-length": "91",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "\u003cvolatile\u003e"
+      },
+      "body": "{\"detail\":{\"message\":\"Workspace name is required\",\"errors\":[\"Workspace name is required\"]}}"
+    },
+    {
+      "name": "onboard: no name",
+      "method": "POST",
+      "path": "/api/v1/auth/onboard",
+      "body_sha256": "1a07e55e16fb913a069938a4dd18ad8f91ad237cbb031610f07686e2645ae8cd",
+      "request_headers_sha256": "8d163f0fe67e1b07be08288d373afd956b337b765b7dd8fb880946d715eeeb38",
+      "status": 422,
+      "headers": {
+        "content-length": "91",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "\u003cvolatile\u003e"
+      },
+      "body": "{\"detail\":{\"message\":\"Workspace name is required\",\"errors\":[\"Workspace name is required\"]}}"
+    },
+    {
+      "name": "onboard: name 101 chars",
+      "method": "POST",
+      "path": "/api/v1/auth/onboard",
+      "body_sha256": "9b84ff83b0edc8919263a10cf9a5353f0409c4549b4eb5ab10561e9c0a54b8a7",
+      "request_headers_sha256": "8d163f0fe67e1b07be08288d373afd956b337b765b7dd8fb880946d715eeeb38",
+      "status": 422,
+      "headers": {
+        "content-length": "131",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "\u003cvolatile\u003e"
+      },
+      "body": "{\"detail\":{\"message\":\"Workspace name must be 100 characters or fewer\",\"errors\":[\"Workspace name must be 100 characters or fewer\"]}}"
+    },
+    {
+      "name": "onboard: join without a code",
+      "method": "POST",
+      "path": "/api/v1/auth/onboard",
+      "body_sha256": "6ab5d4f245904d612dc60e93c917e642f435d3d27ac550600ae524c7650e6608",
+      "request_headers_sha256": "8d163f0fe67e1b07be08288d373afd956b337b765b7dd8fb880946d715eeeb38",
+      "status": 400,
+      "headers": {
+        "content-length": "48",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "\u003cvolatile\u003e"
+      },
+      "body": "{\"detail\":{\"message\":\"invite_code is required\"}}"
+    },
+    {
+      "name": "onboard: join with an empty code",
+      "method": "POST",
+      "path": "/api/v1/auth/onboard",
+      "body_sha256": "dbddf2447ecbd557daa08fb90a215bdcd929af0bccb1e2edd280f6fb6d6146c0",
+      "request_headers_sha256": "8d163f0fe67e1b07be08288d373afd956b337b765b7dd8fb880946d715eeeb38",
+      "status": 400,
+      "headers": {
+        "content-length": "48",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "\u003cvolatile\u003e"
+      },
+      "body": "{\"detail\":{\"message\":\"invite_code is required\"}}"
+    },
+    {
+      "name": "onboard: join with garbage",
+      "method": "POST",
+      "path": "/api/v1/auth/onboard",
+      "body_sha256": "b5e417595172260635ef97d831c183fc532147a45128f33fcf2480b979e62215",
+      "request_headers_sha256": "8d163f0fe67e1b07be08288d373afd956b337b765b7dd8fb880946d715eeeb38",
+      "status": 400,
+      "headers": {
+        "content-length": "50",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "\u003cvolatile\u003e"
+      },
+      "body": "{\"detail\":{\"message\":\"Invalid or expired invite\"}}"
+    },
+    {
+      "name": "onboard: missing action",
+      "method": "POST",
+      "path": "/api/v1/auth/onboard",
+      "body_sha256": "a135823e1f3518ee22848a79f5427d8cee0bfb85fbc6b4e6eda61f883c057c9e",
+      "request_headers_sha256": "8d163f0fe67e1b07be08288d373afd956b337b765b7dd8fb880946d715eeeb38",
+      "status": 422,
+      "headers": {
+        "content-length": "89",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "\u003cvolatile\u003e"
+      },
+      "body": "{\"detail\":[{\"type\":\"missing\",\"loc\":[\"body\",\"action\"],\"msg\":\"Field required\",\"input\":{}}]}"
+    },
+    {
+      "name": "onboard: no credential",
+      "method": "POST",
+      "path": "/api/v1/auth/onboard",
+      "body_sha256": "b6d2f5b2428f76bda53266a81987574d7f0d6985579a652534b39fb1867d2960",
+      "request_headers_sha256": "43649115e3ac5307d77b7fa94ac1d07e8b9db882697ba5c42c9e2b710062b4cf",
+      "status": 401,
+      "headers": {
+        "content-length": "42",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "www-authenticate": "Bearer",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "\u003cvolatile\u003e"
+      },
+      "body": "{\"detail\":{\"message\":\"Not authenticated\"}}"
+    },
+    {
+      "name": "onboard: olive creates an org",
+      "method": "POST",
+      "path": "/api/v1/auth/onboard",
+      "body_sha256": "a9cd0e95c8cd5b72a188d7d2e6b52a6751b2bbbeb6a34cbfdb0af6aa48a5846b",
+      "request_headers_sha256": "ec87b1768c43b7abc0bdd37edf83a4f2c260f1e7e097e0584febbcdeafcd7dfa",
+      "status": 200,
+      "headers": {
+        "content-length": "\u003clength of projected body\u003e",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "\u003cvolatile\u003e"
+      },
+      "body": "{\"access_token\":\"\u003cjwt|aud=string:dev-health-api|email=string:olive%40example.com|exp=number:|exp-iat=number:3600|hdr.alg=string:HS256|hdr.typ=string:JWT|iat=number:|is_superuser=boolean:false|iss=string:dev-health-ops|jti=string:|org_id=string:\u003cid\u003e|role=string:owner|sub=string:20000000-0000-4000-8000-000000000002|tv=number:0|type=string:access\u003e\",\"refresh_token\":\"\u003cjwt|aud=string:dev-health-api|exp=number:|exp-iat=number:604800|family_id=string:\u003cid\u003e|hdr.alg=string:HS256|hdr.typ=string:JWT|iat=number:|iss=string:dev-health-ops|jti=string:|org_id=string:\u003cid\u003e|sub=string:20000000-0000-4000-8000-000000000002|type=string:refresh\u003e\",\"token_type\":\"bearer\",\"expires_in\":3600,\"org_id\":\"\u003cid\u003e\",\"org_name\":\"Olive's Ünicode Org!!\",\"role\":\"owner\"}"
+    },
+    {
+      "name": "onboard: olive again",
+      "method": "POST",
+      "path": "/api/v1/auth/onboard",
+      "body_sha256": "5ff95d7f22d28583c6e1881a3d199f3ca8bb7e0e09b7438b98704b397078f5a3",
+      "request_headers_sha256": "ec87b1768c43b7abc0bdd37edf83a4f2c260f1e7e097e0584febbcdeafcd7dfa",
+      "status": 400,
+      "headers": {
+        "content-length": "42",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "\u003cvolatile\u003e"
+      },
+      "body": "{\"detail\":{\"message\":\"Already onboarded\"}}"
+    },
+    {
+      "name": "onboard: oscar joins org D",
+      "method": "POST",
+      "path": "/api/v1/auth/onboard",
+      "body_sha256": "b613a69663021d06896dceedb07f077c71030b1971a638b5bf7d9e4b901773d1",
+      "request_headers_sha256": "ec2040181896be253ef0973d50b71b3baddbfa77fb8f29446f9bc8f715cc9318",
+      "status": 200,
+      "headers": {
+        "content-length": "\u003clength of projected body\u003e",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "\u003cvolatile\u003e"
+      },
+      "body": "{\"access_token\":\"\u003cjwt|aud=string:dev-health-api|email=string:oscar%40example.com|exp=number:|exp-iat=number:3600|hdr.alg=string:HS256|hdr.typ=string:JWT|iat=number:|is_superuser=boolean:false|iss=string:dev-health-ops|jti=string:|org_id=string:d0000000-0000-4000-8000-00000000000d|role=string:member|sub=string:20000000-0000-4000-8000-000000000003|tv=number:0|type=string:access\u003e\",\"refresh_token\":\"\u003cjwt|aud=string:dev-health-api|exp=number:|exp-iat=number:604800|family_id=string:\u003cid\u003e|hdr.alg=string:HS256|hdr.typ=string:JWT|iat=number:|iss=string:dev-health-ops|jti=string:|org_id=string:d0000000-0000-4000-8000-00000000000d|sub=string:20000000-0000-4000-8000-000000000003|type=string:refresh\u003e\",\"token_type\":\"bearer\",\"expires_in\":3600,\"org_id\":\"d0000000-0000-4000-8000-00000000000d\",\"org_name\":\"Org D\",\"role\":\"member\"}"
+    },
+    {
+      "name": "register: common password",
+      "method": "POST",
+      "path": "/api/v1/auth/register",
+      "body_sha256": "e423339dc80d05270a595b24c18ec2a72e19d0d8f5dcc8796484a9b38761a15f",
+      "request_headers_sha256": "0a3a07a4f423bf8e076f445c7c96e8b0f5e643fc139d846231f8ec576d913d5a",
+      "status": 422,
+      "headers": {
+        "access-control-allow-credentials": "true",
+        "access-control-allow-origin": "http://localhost:3000",
+        "access-control-expose-headers": "X-Request-ID",
+        "content-length": "87",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "\u003cvolatile\u003e"
+      },
+      "body": "{\"detail\":{\"message\":\"Password validation failed\",\"errors\":[\"Password is too common\"]}}"
+    },
+    {
+      "name": "register: no digit",
+      "method": "POST",
+      "path": "/api/v1/auth/register",
+      "body_sha256": "2f913b5571087a983d2749379219ea9ae759e529b7a4cf5d246366d9e8f844a7",
+      "request_headers_sha256": "0a3a07a4f423bf8e076f445c7c96e8b0f5e643fc139d846231f8ec576d913d5a",
+      "status": 422,
+      "headers": {
+        "access-control-allow-credentials": "true",
+        "access-control-allow-origin": "http://localhost:3000",
+        "access-control-expose-headers": "X-Request-ID",
+        "content-length": "106",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "\u003cvolatile\u003e"
+      },
+      "body": "{\"detail\":{\"message\":\"Password validation failed\",\"errors\":[\"Password must include at least one number\"]}}"
+    },
+    {
+      "name": "register: password over 72 bytes",
+      "method": "POST",
+      "path": "/api/v1/auth/register",
+      "body_sha256": "45652d75abc24689fb8e2cc20ba5fe7feb21df5734b1cb04e33561615b986431",
+      "request_headers_sha256": "0a3a07a4f423bf8e076f445c7c96e8b0f5e643fc139d846231f8ec576d913d5a",
+      "status": 500,
+      "headers": {
+        "content-length": "34",
+        "content-type": "application/json"
+      },
+      "body": "{\"detail\":\"Internal Server Error\"}"
+    },
+    {
+      "name": "register: full name with a lone surrogate",
+      "method": "POST",
+      "path": "/api/v1/auth/register",
+      "body_sha256": "aa4f01cfcdcdf61b638cb2724598cb29ab26d31d5e2bfddbc3c148282f856109",
+      "request_headers_sha256": "0a3a07a4f423bf8e076f445c7c96e8b0f5e643fc139d846231f8ec576d913d5a",
+      "status": 500,
+      "headers": {
+        "content-length": "34",
+        "content-type": "application/json"
+      },
+      "body": "{\"detail\":\"Internal Server Error\"}"
+    },
+    {
+      "name": "register: empty org name",
+      "method": "POST",
+      "path": "/api/v1/auth/register",
+      "body_sha256": "ae91a03964f06ccc903ef0d227a05ed4b0c4a78d5faaaceec7137854e585c6b0",
+      "request_headers_sha256": "0a3a07a4f423bf8e076f445c7c96e8b0f5e643fc139d846231f8ec576d913d5a",
+      "status": 201,
+      "headers": {
+        "access-control-allow-credentials": "true",
+        "access-control-allow-origin": "http://localhost:3000",
+        "access-control-expose-headers": "X-Request-ID",
+        "content-length": "\u003clength of projected body\u003e",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "\u003cvolatile\u003e"
+      },
+      "body": "{\"message\":\"Registration successful\",\"user_id\":\"\u003cid\u003e\",\"org_id\":\"\u003cid\u003e\"}"
+    },
+    {
+      "name": "register: no names",
+      "method": "POST",
+      "path": "/api/v1/auth/register",
+      "body_sha256": "590611771543812d66c599cc06eb269fc83e967b80534af0bc40f8dc79d420b6",
+      "request_headers_sha256": "0a3a07a4f423bf8e076f445c7c96e8b0f5e643fc139d846231f8ec576d913d5a",
+      "status": 201,
+      "headers": {
+        "access-control-allow-credentials": "true",
+        "access-control-allow-origin": "http://localhost:3000",
+        "access-control-expose-headers": "X-Request-ID",
+        "content-length": "\u003clength of projected body\u003e",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "\u003cvolatile\u003e"
+      },
+      "body": "{\"message\":\"Registration successful\",\"user_id\":\"\u003cid\u003e\",\"org_id\":\"\u003cid\u003e\"}"
+    },
+    {
+      "name": "register: solo, auto-org off",
+      "method": "POST",
+      "path": "/api/v1/auth/register",
+      "body_sha256": "d510274ce312afde6f974039bcbe92494ef82a686759076269901921dc1ae2d9",
+      "request_headers_sha256": "0a3a07a4f423bf8e076f445c7c96e8b0f5e643fc139d846231f8ec576d913d5a",
+      "call_env": "d4c45dc51f3e728bf0e7973dea2c960594426ff0342b1ddfbd7e01c23b3e6ccf",
+      "status": 201,
+      "headers": {
+        "access-control-allow-credentials": "true",
+        "access-control-allow-origin": "http://localhost:3000",
+        "access-control-expose-headers": "X-Request-ID",
+        "content-length": "\u003clength of projected body\u003e",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "\u003cvolatile\u003e"
+      },
+      "body": "{\"message\":\"Registration successful\",\"user_id\":\"\u003cid\u003e\",\"org_id\":null}"
+    },
+    {
+      "name": "register: auto-org value not recognized keeps the default",
+      "method": "POST",
+      "path": "/api/v1/auth/register",
+      "body_sha256": "e197355b631d10745bba28239471b91706625643c002d656fce3247bdda3c6d4",
+      "request_headers_sha256": "0a3a07a4f423bf8e076f445c7c96e8b0f5e643fc139d846231f8ec576d913d5a",
+      "call_env": "983ea00d17ca008243ed00e08e359b0ad520e6b35677f3dbfc440f0020cc1d4d",
+      "status": 201,
+      "headers": {
+        "access-control-allow-credentials": "true",
+        "access-control-allow-origin": "http://localhost:3000",
+        "access-control-expose-headers": "X-Request-ID",
+        "content-length": "\u003clength of projected body\u003e",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "\u003cvolatile\u003e"
+      },
+      "body": "{\"message\":\"Registration successful\",\"user_id\":\"\u003cid\u003e\",\"org_id\":\"\u003cid\u003e\"}"
+    },
+    {
+      "name": "verify: nina's link",
+      "method": "GET",
+      "path": "/api/v1/auth/verify?token=\u003clink-token\u003e",
+      "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "request_headers_sha256": "42e9ed2c316d2ca328cb3aaff90af86db410c3a5a3223f6d7a619d490c3dde57",
+      "status": 200,
+      "headers": {
+        "content-length": "57",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "\u003cvolatile\u003e"
+      },
+      "body": "{\"message\":\"Email verified successfully\",\"verified\":true}"
+    },
+    {
+      "name": "verify: nina's link again",
+      "method": "GET",
+      "path": "/api/v1/auth/verify?token=\u003clink-token\u003e",
+      "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "request_headers_sha256": "42e9ed2c316d2ca328cb3aaff90af86db410c3a5a3223f6d7a619d490c3dde57",
+      "status": 400,
+      "headers": {
+        "content-length": "62",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "\u003cvolatile\u003e"
+      },
+      "body": "{\"detail\":{\"message\":\"Invalid or expired verification token\"}}"
+    },
+    {
+      "name": "verify: uma's link",
+      "method": "GET",
+      "path": "/api/v1/auth/verify?token=\u003clink-token\u003e",
+      "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "request_headers_sha256": "42e9ed2c316d2ca328cb3aaff90af86db410c3a5a3223f6d7a619d490c3dde57",
+      "status": 200,
+      "headers": {
+        "content-length": "57",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "\u003cvolatile\u003e"
+      },
+      "body": "{\"message\":\"Email verified successfully\",\"verified\":true}"
+    },
+    {
+      "name": "state: uma now verified",
+      "method": "GET",
+      "path": "/api/v1/auth/onboarding/state",
+      "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "request_headers_sha256": "1d699c2f0254cd0ce5dcd0c3c94f89eaf4f1aeff28bf0333282ea192dd7bd716",
+      "status": 200,
+      "headers": {
+        "content-length": "210",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "\u003cvolatile\u003e"
+      },
+      "body": "{\"needs_onboarding\":true,\"org_created\":false,\"org_id\":null,\"org_name\":null,\"first_integration_connected\":false,\"integration_skipped\":false,\"recommended_provider\":\"github\",\"next_step\":\"workspace\",\"blocker\":null}"
+    },
+    {
+      "name": "reset: alice's link",
+      "method": "POST",
+      "path": "/api/v1/auth/reset-password",
+      "body_sha256": "d16586b885e83b684cea864b6498c379d330ecdcb6325023e2da2e536fbe289c",
+      "request_headers_sha256": "43649115e3ac5307d77b7fa94ac1d07e8b9db882697ba5c42c9e2b710062b4cf",
+      "status": 200,
+      "headers": {
+        "content-length": "55",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "\u003cvolatile\u003e"
+      },
+      "body": "{\"message\":\"Password reset successful\",\"verified\":null}"
+    },
+    {
+      "name": "reset: alice's link again",
+      "method": "POST",
+      "path": "/api/v1/auth/reset-password",
+      "body_sha256": "664120bfc41abdd4045cecfef9856ab947823ea5005dfa4d0994190e2e2fdefa",
+      "request_headers_sha256": "43649115e3ac5307d77b7fa94ac1d07e8b9db882697ba5c42c9e2b710062b4cf",
+      "status": 400,
+      "headers": {
+        "content-length": "49",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "\u003cvolatile\u003e"
+      },
+      "body": "{\"detail\":{\"message\":\"Invalid or expired token\"}}"
+    },
+    {
+      "name": "reset: pia's link, short password",
+      "method": "POST",
+      "path": "/api/v1/auth/reset-password",
+      "body_sha256": "3d4eab383861536f2ec1c15ad1c8034f572c6bcd0a0aa986d8b10ce4128040be",
+      "request_headers_sha256": "43649115e3ac5307d77b7fa94ac1d07e8b9db882697ba5c42c9e2b710062b4cf",
+      "status": 422,
+      "headers": {
+        "content-length": "158",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "\u003cvolatile\u003e"
+      },
+      "body": "{\"detail\":[{\"type\":\"string_too_short\",\"loc\":[\"body\",\"new_password\"],\"msg\":\"String should have at least 8 characters\",\"input\":\"short\",\"ctx\":{\"min_length\":8}}]}"
+    },
+    {
+      "name": "reset: pia's link",
+      "method": "POST",
+      "path": "/api/v1/auth/reset-password",
+      "body_sha256": "5c64c009ed99a2a9b6b0db1688331b90dfd40570deb6a7ae12fe1a6ce6871e2d",
+      "request_headers_sha256": "43649115e3ac5307d77b7fa94ac1d07e8b9db882697ba5c42c9e2b710062b4cf",
+      "status": 200,
+      "headers": {
+        "content-length": "55",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "\u003cvolatile\u003e"
+      },
+      "body": "{\"message\":\"Password reset successful\",\"verified\":null}"
+    },
+    {
+      "name": "login: alice, new password",
+      "method": "POST",
+      "path": "/api/v1/auth/login",
+      "body_sha256": "76a29d296dda925ba735de97a1985c828842ecee84060dc37b65fe2a1e6039f6",
+      "request_headers_sha256": "43649115e3ac5307d77b7fa94ac1d07e8b9db882697ba5c42c9e2b710062b4cf",
+      "status": 200,
+      "headers": {
+        "content-length": "\u003clength of projected body\u003e",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "\u003cvolatile\u003e"
+      },
+      "body": "{\"access_token\":\"\u003cjwt|aud=string:dev-health-api|email=string:alice%40example.com|exp=number:|exp-iat=number:3600|full_name=string:Alice+%C3%84|hdr.alg=string:HS256|hdr.typ=string:JWT|iat=number:|is_superuser=boolean:false|iss=string:dev-health-ops|jti=string:|org_id=string:b0000000-0000-4000-8000-00000000000b|role=string:member|sub=string:10000000-0000-4000-8000-000000000001|tv=number:1|type=string:access|username=string:alice\u003e\",\"refresh_token\":\"\u003cjwt|aud=string:dev-health-api|exp=number:|exp-iat=number:604800|family_id=string:\u003cid\u003e|hdr.alg=string:HS256|hdr.typ=string:JWT|iat=number:|iss=string:dev-health-ops|jti=string:|org_id=string:b0000000-0000-4000-8000-00000000000b|sub=string:10000000-0000-4000-8000-000000000001|type=string:refresh\u003e\",\"token_type\":\"bearer\",\"expires_in\":3600,\"needs_onboarding\":false,\"user\":{\"id\":\"10000000-0000-4000-8000-000000000001\",\"email\":\"alice@example.com\",\"username\":\"alice\",\"full_name\":\"Alice Ä\",\"org_id\":\"b0000000-0000-4000-8000-00000000000b\",\"role\":\"member\",\"is_superuser\":false}}"
+    },
+    {
+      "name": "login: alice, old password",
+      "method": "POST",
+      "path": "/api/v1/auth/login",
+      "body_sha256": "3c86e6147df6420e238fd744cb00315193739e8a6addda7b2ea3d1cbb08e2c25",
+      "request_headers_sha256": "43649115e3ac5307d77b7fa94ac1d07e8b9db882697ba5c42c9e2b710062b4cf",
+      "status": 401,
+      "headers": {
+        "content-length": "44",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "\u003cvolatile\u003e"
+      },
+      "body": "{\"detail\":{\"message\":\"Invalid credentials\"}}"
+    },
+    {
+      "name": "refresh: alice's token from before the reset",
+      "method": "POST",
+      "path": "/api/v1/auth/refresh",
+      "body_sha256": "0388eb037d86bf8303ac6cb96eb36773e66dfd54d5792eeeca0747d489f8fc31",
+      "request_headers_sha256": "43649115e3ac5307d77b7fa94ac1d07e8b9db882697ba5c42c9e2b710062b4cf",
+      "status": 401,
+      "headers": {
+        "content-length": "53",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "\u003cvolatile\u003e"
+      },
+      "body": "{\"detail\":{\"message\":\"Refresh token reuse detected\"}}"
+    },
+    {
+      "name": "login: pia, new password",
+      "method": "POST",
+      "path": "/api/v1/auth/login",
+      "body_sha256": "9e43cec28f212e01bfe041a4c074dd5dfec162884aee010f2ff3abbccfebd2a2",
+      "request_headers_sha256": "43649115e3ac5307d77b7fa94ac1d07e8b9db882697ba5c42c9e2b710062b4cf",
+      "status": 200,
+      "headers": {
+        "content-length": "\u003clength of projected body\u003e",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "\u003cvolatile\u003e"
+      },
+      "body": "{\"access_token\":\"\u003cjwt|aud=string:dev-health-api|email=string:pia%40example.com|exp=number:|exp-iat=number:3600|hdr.alg=string:HS256|hdr.typ=string:JWT|iat=number:|is_superuser=boolean:false|iss=string:dev-health-ops|jti=string:|org_id=string:|role=string:member|sub=string:20000000-0000-4000-8000-000000000005|tv=number:1|type=string:access\u003e\",\"refresh_token\":\"\u003cjwt|aud=string:dev-health-api|exp=number:|exp-iat=number:604800|family_id=string:\u003cid\u003e|hdr.alg=string:HS256|hdr.typ=string:JWT|iat=number:|iss=string:dev-health-ops|jti=string:|org_id=string:|sub=string:20000000-0000-4000-8000-000000000005|type=string:refresh\u003e\",\"token_type\":\"bearer\",\"expires_in\":3600,\"needs_onboarding\":true,\"user\":{\"id\":\"20000000-0000-4000-8000-000000000005\",\"email\":\"pia@example.com\",\"username\":null,\"full_name\":null,\"org_id\":null,\"role\":\"member\",\"is_superuser\":false}}"
+    },
+    {
+      "name": "limit: register 1/4",
+      "method": "POST",
+      "path": "/api/v1/auth/register",
+      "body_sha256": "134871cb6890005635c171c1aa8e8476c5640aef9eb14129c6ddfcd7d66c5db7",
+      "request_headers_sha256": "0a3a07a4f423bf8e076f445c7c96e8b0f5e643fc139d846231f8ec576d913d5a",
+      "status": 400,
+      "headers": {
+        "access-control-allow-credentials": "true",
+        "access-control-allow-origin": "http://localhost:3000",
+        "access-control-expose-headers": "X-Request-ID",
+        "content-length": "49",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "\u003cvolatile\u003e"
+      },
+      "body": "{\"detail\":{\"message\":\"Email already registered\"}}"
+    },
+    {
+      "name": "limit: register 2/4",
+      "method": "POST",
+      "path": "/api/v1/auth/register",
+      "body_sha256": "134871cb6890005635c171c1aa8e8476c5640aef9eb14129c6ddfcd7d66c5db7",
+      "request_headers_sha256": "0a3a07a4f423bf8e076f445c7c96e8b0f5e643fc139d846231f8ec576d913d5a",
+      "status": 400,
+      "headers": {
+        "access-control-allow-credentials": "true",
+        "access-control-allow-origin": "http://localhost:3000",
+        "access-control-expose-headers": "X-Request-ID",
+        "content-length": "49",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "\u003cvolatile\u003e"
+      },
+      "body": "{\"detail\":{\"message\":\"Email already registered\"}}"
+    },
+    {
+      "name": "limit: register 3/4",
+      "method": "POST",
+      "path": "/api/v1/auth/register",
+      "body_sha256": "134871cb6890005635c171c1aa8e8476c5640aef9eb14129c6ddfcd7d66c5db7",
+      "request_headers_sha256": "0a3a07a4f423bf8e076f445c7c96e8b0f5e643fc139d846231f8ec576d913d5a",
+      "status": 400,
+      "headers": {
+        "access-control-allow-credentials": "true",
+        "access-control-allow-origin": "http://localhost:3000",
+        "access-control-expose-headers": "X-Request-ID",
+        "content-length": "49",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "\u003cvolatile\u003e"
+      },
+      "body": "{\"detail\":{\"message\":\"Email already registered\"}}"
+    },
+    {
+      "name": "limit: register 4/4",
+      "method": "POST",
+      "path": "/api/v1/auth/register",
+      "body_sha256": "134871cb6890005635c171c1aa8e8476c5640aef9eb14129c6ddfcd7d66c5db7",
+      "request_headers_sha256": "0a3a07a4f423bf8e076f445c7c96e8b0f5e643fc139d846231f8ec576d913d5a",
+      "status": 429,
+      "headers": {
+        "access-control-allow-credentials": "true",
+        "access-control-allow-origin": "http://localhost:3000",
+        "access-control-expose-headers": "X-Request-ID",
+        "content-length": "69",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "\u003cvolatile\u003e"
+      },
+      "body": "{\"detail\":{\"message\":\"Rate limit exceeded. Please try again later.\"}}"
+    },
+    {
+      "name": "limit: resend 1/4",
+      "method": "POST",
+      "path": "/api/v1/auth/resend-verification",
+      "body_sha256": "2ca4055d2d11fc26deb549305b78a872d2e59f8d02ed517bd843b729cf47e0f2",
+      "request_headers_sha256": "43649115e3ac5307d77b7fa94ac1d07e8b9db882697ba5c42c9e2b710062b4cf",
+      "status": 200,
+      "headers": {
+        "content-length": "101",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "\u003cvolatile\u003e"
+      },
+      "body": "{\"message\":\"If an account exists with that email, a verification link has been sent\",\"verified\":null}"
+    },
+    {
+      "name": "limit: resend 2/4",
+      "method": "POST",
+      "path": "/api/v1/auth/resend-verification",
+      "body_sha256": "2ca4055d2d11fc26deb549305b78a872d2e59f8d02ed517bd843b729cf47e0f2",
+      "request_headers_sha256": "43649115e3ac5307d77b7fa94ac1d07e8b9db882697ba5c42c9e2b710062b4cf",
+      "status": 200,
+      "headers": {
+        "content-length": "101",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "\u003cvolatile\u003e"
+      },
+      "body": "{\"message\":\"If an account exists with that email, a verification link has been sent\",\"verified\":null}"
+    },
+    {
+      "name": "limit: resend 3/4",
+      "method": "POST",
+      "path": "/api/v1/auth/resend-verification",
+      "body_sha256": "2ca4055d2d11fc26deb549305b78a872d2e59f8d02ed517bd843b729cf47e0f2",
+      "request_headers_sha256": "43649115e3ac5307d77b7fa94ac1d07e8b9db882697ba5c42c9e2b710062b4cf",
+      "status": 200,
+      "headers": {
+        "content-length": "101",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "\u003cvolatile\u003e"
+      },
+      "body": "{\"message\":\"If an account exists with that email, a verification link has been sent\",\"verified\":null}"
+    },
+    {
+      "name": "limit: resend 4/4",
+      "method": "POST",
+      "path": "/api/v1/auth/resend-verification",
+      "body_sha256": "2ca4055d2d11fc26deb549305b78a872d2e59f8d02ed517bd843b729cf47e0f2",
+      "request_headers_sha256": "43649115e3ac5307d77b7fa94ac1d07e8b9db882697ba5c42c9e2b710062b4cf",
+      "status": 429,
+      "headers": {
+        "content-length": "69",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "\u003cvolatile\u003e"
+      },
+      "body": "{\"detail\":{\"message\":\"Rate limit exceeded. Please try again later.\"}}"
+    },
+    {
+      "name": "limit: resend, another address",
+      "method": "POST",
+      "path": "/api/v1/auth/resend-verification",
+      "body_sha256": "219587ab0f226ff6b263651dde6192ed5f45b14329760a4729fbfbf661fce0f6",
+      "request_headers_sha256": "43649115e3ac5307d77b7fa94ac1d07e8b9db882697ba5c42c9e2b710062b4cf",
+      "status": 200,
+      "headers": {
+        "content-length": "101",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "\u003cvolatile\u003e"
+      },
+      "body": "{\"message\":\"If an account exists with that email, a verification link has been sent\",\"verified\":null}"
+    },
+    {
+      "name": "limit: forgot 1/4",
+      "method": "POST",
+      "path": "/api/v1/auth/forgot-password",
+      "body_sha256": "298b92e31c90be0d21a0a8c3d8710d6e171237c9a20b5f790d0b7efde75eeff5",
+      "request_headers_sha256": "43649115e3ac5307d77b7fa94ac1d07e8b9db882697ba5c42c9e2b710062b4cf",
+      "status": 200,
+      "headers": {
+        "content-length": "89",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "\u003cvolatile\u003e"
+      },
+      "body": "{\"message\":\"If the account exists, a password reset email has been sent\",\"verified\":null}"
+    },
+    {
+      "name": "limit: forgot 2/4",
+      "method": "POST",
+      "path": "/api/v1/auth/forgot-password",
+      "body_sha256": "298b92e31c90be0d21a0a8c3d8710d6e171237c9a20b5f790d0b7efde75eeff5",
+      "request_headers_sha256": "43649115e3ac5307d77b7fa94ac1d07e8b9db882697ba5c42c9e2b710062b4cf",
+      "status": 200,
+      "headers": {
+        "content-length": "89",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "\u003cvolatile\u003e"
+      },
+      "body": "{\"message\":\"If the account exists, a password reset email has been sent\",\"verified\":null}"
+    },
+    {
+      "name": "limit: forgot 3/4",
+      "method": "POST",
+      "path": "/api/v1/auth/forgot-password",
+      "body_sha256": "298b92e31c90be0d21a0a8c3d8710d6e171237c9a20b5f790d0b7efde75eeff5",
+      "request_headers_sha256": "43649115e3ac5307d77b7fa94ac1d07e8b9db882697ba5c42c9e2b710062b4cf",
+      "status": 200,
+      "headers": {
+        "content-length": "89",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "\u003cvolatile\u003e"
+      },
+      "body": "{\"message\":\"If the account exists, a password reset email has been sent\",\"verified\":null}"
+    },
+    {
+      "name": "limit: forgot 4/4",
+      "method": "POST",
+      "path": "/api/v1/auth/forgot-password",
+      "body_sha256": "298b92e31c90be0d21a0a8c3d8710d6e171237c9a20b5f790d0b7efde75eeff5",
+      "request_headers_sha256": "43649115e3ac5307d77b7fa94ac1d07e8b9db882697ba5c42c9e2b710062b4cf",
+      "status": 429,
+      "headers": {
+        "content-length": "69",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "\u003cvolatile\u003e"
+      },
+      "body": "{\"detail\":{\"message\":\"Rate limit exceeded. Please try again later.\"}}"
+    },
+    {
+      "name": "limit: verify 1/11",
+      "method": "GET",
+      "path": "/api/v1/auth/verify?token=garbage",
+      "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "request_headers_sha256": "42e9ed2c316d2ca328cb3aaff90af86db410c3a5a3223f6d7a619d490c3dde57",
+      "status": 400,
+      "headers": {
+        "content-length": "62",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "\u003cvolatile\u003e"
+      },
+      "body": "{\"detail\":{\"message\":\"Invalid or expired verification token\"}}"
+    },
+    {
+      "name": "limit: verify 2/11",
+      "method": "GET",
+      "path": "/api/v1/auth/verify?token=garbage",
+      "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "request_headers_sha256": "42e9ed2c316d2ca328cb3aaff90af86db410c3a5a3223f6d7a619d490c3dde57",
+      "status": 400,
+      "headers": {
+        "content-length": "62",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "\u003cvolatile\u003e"
+      },
+      "body": "{\"detail\":{\"message\":\"Invalid or expired verification token\"}}"
+    },
+    {
+      "name": "limit: verify 3/11",
+      "method": "GET",
+      "path": "/api/v1/auth/verify?token=garbage",
+      "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "request_headers_sha256": "42e9ed2c316d2ca328cb3aaff90af86db410c3a5a3223f6d7a619d490c3dde57",
+      "status": 400,
+      "headers": {
+        "content-length": "62",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "\u003cvolatile\u003e"
+      },
+      "body": "{\"detail\":{\"message\":\"Invalid or expired verification token\"}}"
+    },
+    {
+      "name": "limit: verify 4/11",
+      "method": "GET",
+      "path": "/api/v1/auth/verify?token=garbage",
+      "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "request_headers_sha256": "42e9ed2c316d2ca328cb3aaff90af86db410c3a5a3223f6d7a619d490c3dde57",
+      "status": 400,
+      "headers": {
+        "content-length": "62",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "\u003cvolatile\u003e"
+      },
+      "body": "{\"detail\":{\"message\":\"Invalid or expired verification token\"}}"
+    },
+    {
+      "name": "limit: verify 5/11",
+      "method": "GET",
+      "path": "/api/v1/auth/verify?token=garbage",
+      "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "request_headers_sha256": "42e9ed2c316d2ca328cb3aaff90af86db410c3a5a3223f6d7a619d490c3dde57",
+      "status": 400,
+      "headers": {
+        "content-length": "62",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "\u003cvolatile\u003e"
+      },
+      "body": "{\"detail\":{\"message\":\"Invalid or expired verification token\"}}"
+    },
+    {
+      "name": "limit: verify 6/11",
+      "method": "GET",
+      "path": "/api/v1/auth/verify?token=garbage",
+      "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "request_headers_sha256": "42e9ed2c316d2ca328cb3aaff90af86db410c3a5a3223f6d7a619d490c3dde57",
+      "status": 400,
+      "headers": {
+        "content-length": "62",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "\u003cvolatile\u003e"
+      },
+      "body": "{\"detail\":{\"message\":\"Invalid or expired verification token\"}}"
+    },
+    {
+      "name": "limit: verify 7/11",
+      "method": "GET",
+      "path": "/api/v1/auth/verify?token=garbage",
+      "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "request_headers_sha256": "42e9ed2c316d2ca328cb3aaff90af86db410c3a5a3223f6d7a619d490c3dde57",
+      "status": 400,
+      "headers": {
+        "content-length": "62",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "\u003cvolatile\u003e"
+      },
+      "body": "{\"detail\":{\"message\":\"Invalid or expired verification token\"}}"
+    },
+    {
+      "name": "limit: verify 8/11",
+      "method": "GET",
+      "path": "/api/v1/auth/verify?token=garbage",
+      "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "request_headers_sha256": "42e9ed2c316d2ca328cb3aaff90af86db410c3a5a3223f6d7a619d490c3dde57",
+      "status": 400,
+      "headers": {
+        "content-length": "62",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "\u003cvolatile\u003e"
+      },
+      "body": "{\"detail\":{\"message\":\"Invalid or expired verification token\"}}"
+    },
+    {
+      "name": "limit: verify 9/11",
+      "method": "GET",
+      "path": "/api/v1/auth/verify?token=garbage",
+      "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "request_headers_sha256": "42e9ed2c316d2ca328cb3aaff90af86db410c3a5a3223f6d7a619d490c3dde57",
+      "status": 400,
+      "headers": {
+        "content-length": "62",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "\u003cvolatile\u003e"
+      },
+      "body": "{\"detail\":{\"message\":\"Invalid or expired verification token\"}}"
+    },
+    {
+      "name": "limit: verify 10/11",
+      "method": "GET",
+      "path": "/api/v1/auth/verify?token=garbage",
+      "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "request_headers_sha256": "42e9ed2c316d2ca328cb3aaff90af86db410c3a5a3223f6d7a619d490c3dde57",
+      "status": 400,
+      "headers": {
+        "content-length": "62",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "\u003cvolatile\u003e"
+      },
+      "body": "{\"detail\":{\"message\":\"Invalid or expired verification token\"}}"
+    },
+    {
+      "name": "limit: verify 11/11",
+      "method": "GET",
+      "path": "/api/v1/auth/verify?token=garbage",
+      "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "request_headers_sha256": "42e9ed2c316d2ca328cb3aaff90af86db410c3a5a3223f6d7a619d490c3dde57",
+      "status": 429,
+      "headers": {
+        "content-length": "69",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "\u003cvolatile\u003e"
+      },
+      "body": "{\"detail\":{\"message\":\"Rate limit exceeded. Please try again later.\"}}"
+    },
+    {
+      "name": "limit: verify, another e-mail key",
+      "method": "GET",
+      "path": "/api/v1/auth/verify?token=garbage\u0026email=Someone@Example.com",
+      "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "request_headers_sha256": "42e9ed2c316d2ca328cb3aaff90af86db410c3a5a3223f6d7a619d490c3dde57",
+      "status": 400,
+      "headers": {
+        "content-length": "62",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "\u003cvolatile\u003e"
+      },
+      "body": "{\"detail\":{\"message\":\"Invalid or expired verification token\"}}"
+    },
+    {
+      "name": "limit: reset has none 1/3",
+      "method": "POST",
+      "path": "/api/v1/auth/reset-password",
+      "body_sha256": "f2a8b4e8adb7eda703901ac84905c12cef70bb6c121bccea5234e7a85e523097",
+      "request_headers_sha256": "43649115e3ac5307d77b7fa94ac1d07e8b9db882697ba5c42c9e2b710062b4cf",
+      "status": 400,
+      "headers": {
+        "content-length": "49",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "\u003cvolatile\u003e"
+      },
+      "body": "{\"detail\":{\"message\":\"Invalid or expired token\"}}"
+    },
+    {
+      "name": "limit: reset has none 2/3",
+      "method": "POST",
+      "path": "/api/v1/auth/reset-password",
+      "body_sha256": "f2a8b4e8adb7eda703901ac84905c12cef70bb6c121bccea5234e7a85e523097",
+      "request_headers_sha256": "43649115e3ac5307d77b7fa94ac1d07e8b9db882697ba5c42c9e2b710062b4cf",
+      "status": 400,
+      "headers": {
+        "content-length": "49",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "\u003cvolatile\u003e"
+      },
+      "body": "{\"detail\":{\"message\":\"Invalid or expired token\"}}"
+    },
+    {
+      "name": "limit: reset has none 3/3",
+      "method": "POST",
+      "path": "/api/v1/auth/reset-password",
+      "body_sha256": "f2a8b4e8adb7eda703901ac84905c12cef70bb6c121bccea5234e7a85e523097",
+      "request_headers_sha256": "43649115e3ac5307d77b7fa94ac1d07e8b9db882697ba5c42c9e2b710062b4cf",
+      "status": 400,
+      "headers": {
+        "content-length": "49",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "\u003cvolatile\u003e"
+      },
+      "body": "{\"detail\":{\"message\":\"Invalid or expired token\"}}"
+    }
+  ],
+  "rows": {
+    "audit_logs": {
+      "rows": "Nina's Team  Ünïnina.new@example.comcreateuseruser:nina.new@example.comUser registered{\"email\": \"nina.new@example.com\", \"organization_id\": \"\u003cuuid\u003e\"}{\"ip_address\": \"203.0.113.7\", \"user_agent\": \"venue-oracle/1\"}success\u003cnull\u003e | Org Balice@example.comloginsessionuser:alice@example.comUser logged in{}{\"ip_address\": \"203.0.113.7\", \"user_agent\": \"venue-oracle/1\"}success\u003cnull\u003e | Org Aalice@example.compassword_reset_requesteduseruser:alice@example.comPassword reset requested{}{\"ip_address\": \"203.0.113.7\", \"user_agent\": \"venue-oracle/1\"}success\u003cnull\u003e | Org Aivan@example.commember_joinedmembershipmembership:ivan@example.com@Org AInvite accepted{\"invite_id\": \"\u003cuuid\u003e\", \"user_id\": \"\u003cuuid\u003e\", \"role\": \"admin\"}{\"ip_address\": \"203.0.113.7\", \"user_agent\": \"venue-oracle/1\"}success\u003cnull\u003e | Olive's Ünicode Org!!olive@example.comcreateorganizationorg:Olive's Ünicode Org!!Organization created during onboarding{\"organization_name\": \"Olive's \\u00dcnicode Org!!\"}{\"ip_address\": \"203.0.113.7\", \"user_agent\": \"venue-oracle/1\"}success\u003cnull\u003e | Org Doscar@example.commember_joinedmembershipmembership:oscar@example.com@Org DInvite accepted during onboarding{\"invite_id\": \"\u003cuuid\u003e\", \"user_id\": \"\u003cuuid\u003e\", \"role\": \"member\"}{\"ip_address\": \"203.0.113.7\", \"user_agent\": \"venue-oracle/1\"}success\u003cnull\u003e | My Organizationemma@example.comcreateuseruser:emma@example.comUser registered{\"email\": \"emma@example.com\", \"organization_id\": \"\u003cuuid\u003e\"}{\"ip_address\": \"203.0.113.7\", \"user_agent\": \"venue-oracle/1\"}success\u003cnull\u003e | My Organizationned@example.comcreateuseruser:ned@example.comUser registered{\"email\": \"ned@example.com\", \"organization_id\": \"\u003cuuid\u003e\"}{\"ip_address\": \"203.0.113.7\", \"user_agent\": \"venue-oracle/1\"}success\u003cnull\u003e | My Organizationmaya@example.comcreateuseruser:maya@example.comUser registered{\"email\": \"maya@example.com\", \"organization_id\": \"\u003cuuid\u003e\"}{\"ip_address\": \"203.0.113.7\", \"user_agent\": \"venue-oracle/1\"}success\u003cnull\u003e | Org Aalice@example.compassword_resetuseruser:alice@example.comUser reset password{}{\"ip_address\": \"203.0.113.7\", \"user_agent\": \"venue-oracle/1\"}success\u003cnull\u003e | Org Balice@example.comloginsessionuser:alice@example.comUser logged in{}{\"ip_address\": \"203.0.113.7\", \"user_agent\": \"venue-oracle/1\"}success\u003cnull\u003e | Org Aalice@example.comlogin_failedsessionuser:alice@example.comLogin failed: invalid credentials{\"email\": \"alice@example.com\"}{\"ip_address\": \"203.0.113.7\", \"user_agent\": \"venue-oracle/1\"}failureInvalid credentials"
+    },
+    "email_verification_tokens": {
+      "rows": "emma@example.comtrue true 64 1440 | maya@example.comtrue true 64 1440 | ned@example.comtrue true 64 1440 | solo@example.comtrue true 64 1440"
+    },
+    "memberships": {
+      "rows": "Grace@Example.COMOrg Dmember\u003cnull\u003etrue true | alice@example.comOrg Aowner\u003cnull\u003etrue true | alice@example.comOrg Bmember\u003cnull\u003etrue true | alice@example.comOrg Cadmin\u003cnull\u003etrue true | carol@example.comOrg Aviewer\u003cnull\u003etrue true | dave@example.comOrg Amember\u003cnull\u003etrue true | emma@example.comMy Organizationowner\u003cnull\u003etrue true | erin@example.comOrg Amember\u003cnull\u003etrue true | frank@example.comOrg Badmin\u003cnull\u003etrue true | ivan@example.comOrg Aadminalice@example.comtrue true | judy@example.comOrg Amember\u003cnull\u003etrue true | lena@example.comOrg Cmember\u003cnull\u003etrue true | maya@example.comMy Organizationowner\u003cnull\u003etrue true | ned@example.comMy Organizationowner\u003cnull\u003etrue true | nina.new@example.comNina's Team  Ünïowner\u003cnull\u003etrue true | olive@example.comOlive's Ünicode Org!!owner\u003cnull\u003etrue true | oscar@example.comOrg Dmemberalice@example.comtrue true"
+    },
+    "org_invites": {
+      "rows": "[48 0 0 0 0 0 64 0 128 0 0 0 0 0 0 1]acceptedtrue true | [48 0 0 0 0 0 64 0 128 0 0 0 0 0 0 2]pendingfalse false | [48 0 0 0 0 0 64 0 128 0 0 0 0 0 0 3]acceptedfalse false | [48 0 0 0 0 0 64 0 128 0 0 0 0 0 0 4]acceptedtrue true | [48 0 0 0 0 0 64 0 128 0 0 0 0 0 0 5]pendingfalse false"
+    },
+    "organizations": {
+      "rows": "My Organizationmy-organization-\u003cid8\u003etrue\u003cnull\u003e{}community\u003cnull\u003estripetrue false true | My Organizationmy-organization-\u003cid8\u003etrue\u003cnull\u003e{}community\u003cnull\u003estripetrue false true | My Organizationmy-organization-\u003cid8\u003etrue\u003cnull\u003e{}community\u003cnull\u003estripetrue false true | Nina's Team  Ünïnina's-team--ünï-\u003cid8\u003etrue\u003cnull\u003e{}community\u003cnull\u003estripetrue false true | Olive's Ünicode Org!!olive-s-nicode-org-\u003cid8\u003etrue\u003cnull\u003e{}community\u003cnull\u003estripetrue false true | Org Aorg-afalse\u003cnull\u003e{}community\u003cnull\u003eselftrue true true | Org Borg-bfalse\u003cnull\u003e{}enterprise\u003cnull\u003eselftrue false true | Org Corg-cfalse\u003cnull\u003e{}community\u003cnull\u003eselffalse false true | Org Dorg-dfalse\u003cnull\u003e{}community\u003cnull\u003eselftrue false true"
+    },
+    "password_reset_tokens": {
+      "rows": "judy@example.comtrue false 64 60"
+    },
+    "python mails: independent": {
+      "rows": "[{\"MailFrom\":\"\\u003cauth@example.test\\u003e\",\"RcptTo\":\"\\u003cnina.new@example.com\\u003e\",\"From\":\"Dev Health \\u003cauth@example.test\\u003e\",\"To\":\"nina.new@example.com\",\"Subject\":\"Verify your email address\",\"PartType\":\"text/html; charset=\\\"us-ascii\\\"; 7bit\",\"HTML\":\"\\u003c!doctype html\\u003e\\r\\n\\u003chtml lang=\\\"en\\\"\\u003e\\r\\n  \\u003cbody\\u003e\\r\\n    \\u003ch1\\u003eVerify your email\\u003c/h1\\u003e\\r\\n    \\u003cp\\u003eHi Nina New,\\u003c/p\\u003e\\r\\n    \\u003cp\\u003ePlease confirm your email address by opening the link below:\\u003c/p\\u003e\\r\\n    \\u003cp\\u003e\\u003ca href=\\\"https://app.example.test/auth/verify?token=TOKEN\\\"\\u003eVerify email address\\u003c/a\\u003e\\u003c/p\\u003e\\r\\n    \\u003cp\\u003eThis link expires in 24 hours.\\u003c/p\\u003e\\r\\n  \\u003c/body\\u003e\\r\\n\\u003c/html\\u003e\\r\\n\",\"Token\":\"\u003clink-token\u003e\"},{\"MailFrom\":\"\\u003cauth@example.test\\u003e\",\"RcptTo\":\"\\u003cuma@example.com\\u003e\",\"From\":\"Dev Health \\u003cauth@example.test\\u003e\",\"To\":\"uma@example.com\",\"Subject\":\"Verify your email address\",\"PartType\":\"text/html; charset=\\\"us-ascii\\\"; 7bit\",\"HTML\":\"\\u003c!doctype html\\u003e\\r\\n\\u003chtml lang=\\\"en\\\"\\u003e\\r\\n  \\u003cbody\\u003e\\r\\n    \\u003ch1\\u003eVerify your email\\u003c/h1\\u003e\\r\\n    \\u003cp\\u003eHi uma@example.com,\\u003c/p\\u003e\\r\\n    \\u003cp\\u003ePlease confirm your email address by opening the link below:\\u003c/p\\u003e\\r\\n    \\u003cp\\u003e\\u003ca href=\\\"https://app.example.test/auth/verify?token=TOKEN\\\"\\u003eVerify email address\\u003c/a\\u003e\\u003c/p\\u003e\\r\\n    \\u003cp\\u003eThis link expires in 24 hours.\\u003c/p\\u003e\\r\\n  \\u003c/body\\u003e\\r\\n\\u003c/html\\u003e\\r\\n\",\"Token\":\"\u003clink-token\u003e\"},{\"MailFrom\":\"\\u003cauth@example.test\\u003e\",\"RcptTo\":\"\\u003calice@example.com\\u003e\",\"From\":\"Dev Health \\u003cauth@example.test\\u003e\",\"To\":\"alice@example.com\",\"Subject\":\"Reset your password\",\"PartType\":\"text/html; charset=\\\"utf-8\\\"; base64\",\"HTML\":\"\\u003c!doctype html\\u003e\\n\\u003chtml lang=\\\"en\\\"\\u003e\\n  \\u003cbody\\u003e\\n    \\u003ch1\\u003eReset your password\\u003c/h1\\u003e\\n    \\u003cp\\u003eHi Alice Ä,\\u003c/p\\u003e\\n    \\u003cp\\u003eWe received a request to reset your password.\\u003c/p\\u003e\\n    \\u003cp\\u003e\\u003ca href=\\\"https://app.example.test/auth/reset-password?token=TOKEN\\\"\\u003eReset password\\u003c/a\\u003e\\u003c/p\\u003e\\n    \\u003cp\\u003eThis link expires in 1 hour.\\u003c/p\\u003e\\n  \\u003c/body\\u003e\\n\\u003c/html\\u003e\\n\",\"Token\":\"\u003clink-token\u003e\"},{\"MailFrom\":\"\\u003cauth@example.test\\u003e\",\"RcptTo\":\"\\u003cpia@example.com\\u003e\",\"From\":\"Dev Health \\u003cauth@example.test\\u003e\",\"To\":\"pia@example.com\",\"Subject\":\"Reset your password\",\"PartType\":\"text/html; charset=\\\"us-ascii\\\"; 7bit\",\"HTML\":\"\\u003c!doctype html\\u003e\\r\\n\\u003chtml lang=\\\"en\\\"\\u003e\\r\\n  \\u003cbody\\u003e\\r\\n    \\u003ch1\\u003eReset your password\\u003c/h1\\u003e\\r\\n    \\u003cp\\u003eHi pia@example.com,\\u003c/p\\u003e\\r\\n    \\u003cp\\u003eWe received a request to reset your password.\\u003c/p\\u003e\\r\\n    \\u003cp\\u003e\\u003ca href=\\\"https://app.example.test/auth/reset-password?token=TOKEN\\\"\\u003eReset password\\u003c/a\\u003e\\u003c/p\\u003e\\r\\n    \\u003cp\\u003eThis link expires in 1 hour.\\u003c/p\\u003e\\r\\n  \\u003c/body\\u003e\\r\\n\\u003c/html\\u003e\\r\\n\",\"Token\":\"\u003clink-token\u003e\"}]"
+    },
+    "python mails: limits": {
+      "rows": "null"
+    },
+    "python mails: links": {
+      "rows": "null"
+    },
+    "python mails: register names": {
+      "rows": "[{\"MailFrom\":\"\\u003cauth@example.test\\u003e\",\"RcptTo\":\"\\u003cemma@example.com\\u003e\",\"From\":\"Dev Health \\u003cauth@example.test\\u003e\",\"To\":\"emma@example.com\",\"Subject\":\"Verify your email address\",\"PartType\":\"text/html; charset=\\\"us-ascii\\\"; 7bit\",\"HTML\":\"\\u003c!doctype html\\u003e\\r\\n\\u003chtml lang=\\\"en\\\"\\u003e\\r\\n  \\u003cbody\\u003e\\r\\n    \\u003ch1\\u003eVerify your email\\u003c/h1\\u003e\\r\\n    \\u003cp\\u003eHi emma@example.com,\\u003c/p\\u003e\\r\\n    \\u003cp\\u003ePlease confirm your email address by opening the link below:\\u003c/p\\u003e\\r\\n    \\u003cp\\u003e\\u003ca href=\\\"https://app.example.test/auth/verify?token=TOKEN\\\"\\u003eVerify email address\\u003c/a\\u003e\\u003c/p\\u003e\\r\\n    \\u003cp\\u003eThis link expires in 24 hours.\\u003c/p\\u003e\\r\\n  \\u003c/body\\u003e\\r\\n\\u003c/html\\u003e\\r\\n\",\"Token\":\"\u003clink-token\u003e\"},{\"MailFrom\":\"\\u003cauth@example.test\\u003e\",\"RcptTo\":\"\\u003cned@example.com\\u003e\",\"From\":\"Dev Health \\u003cauth@example.test\\u003e\",\"To\":\"ned@example.com\",\"Subject\":\"Verify your email address\",\"PartType\":\"text/html; charset=\\\"us-ascii\\\"; 7bit\",\"HTML\":\"\\u003c!doctype html\\u003e\\r\\n\\u003chtml lang=\\\"en\\\"\\u003e\\r\\n  \\u003cbody\\u003e\\r\\n    \\u003ch1\\u003eVerify your email\\u003c/h1\\u003e\\r\\n    \\u003cp\\u003eHi ned@example.com,\\u003c/p\\u003e\\r\\n    \\u003cp\\u003ePlease confirm your email address by opening the link below:\\u003c/p\\u003e\\r\\n    \\u003cp\\u003e\\u003ca href=\\\"https://app.example.test/auth/verify?token=TOKEN\\\"\\u003eVerify email address\\u003c/a\\u003e\\u003c/p\\u003e\\r\\n    \\u003cp\\u003eThis link expires in 24 hours.\\u003c/p\\u003e\\r\\n  \\u003c/body\\u003e\\r\\n\\u003c/html\\u003e\\r\\n\",\"Token\":\"\u003clink-token\u003e\"}]"
+    },
+    "python mails: register policy": {
+      "rows": "null"
+    },
+    "python mails: register without an org": {
+      "rows": "[{\"MailFrom\":\"\\u003cauth@example.test\\u003e\",\"RcptTo\":\"\\u003csolo@example.com\\u003e\",\"From\":\"Dev Health \\u003cauth@example.test\\u003e\",\"To\":\"solo@example.com\",\"Subject\":\"Verify your email address\",\"PartType\":\"text/html; charset=\\\"us-ascii\\\"; 7bit\",\"HTML\":\"\\u003c!doctype html\\u003e\\r\\n\\u003chtml lang=\\\"en\\\"\\u003e\\r\\n  \\u003cbody\\u003e\\r\\n    \\u003ch1\\u003eVerify your email\\u003c/h1\\u003e\\r\\n    \\u003cp\\u003eHi solo@example.com,\\u003c/p\\u003e\\r\\n    \\u003cp\\u003ePlease confirm your email address by opening the link below:\\u003c/p\\u003e\\r\\n    \\u003cp\\u003e\\u003ca href=\\\"https://app.example.test/auth/verify?token=TOKEN\\\"\\u003eVerify email address\\u003c/a\\u003e\\u003c/p\\u003e\\r\\n    \\u003cp\\u003eThis link expires in 24 hours.\\u003c/p\\u003e\\r\\n  \\u003c/body\\u003e\\r\\n\\u003c/html\\u003e\\r\\n\",\"Token\":\"\u003clink-token\u003e\"}]"
+    },
+    "python mails: register, unrecognized auto-org value": {
+      "rows": "[{\"MailFrom\":\"\\u003cauth@example.test\\u003e\",\"RcptTo\":\"\\u003cmaya@example.com\\u003e\",\"From\":\"Dev Health \\u003cauth@example.test\\u003e\",\"To\":\"maya@example.com\",\"Subject\":\"Verify your email address\",\"PartType\":\"text/html; charset=\\\"us-ascii\\\"; 7bit\",\"HTML\":\"\\u003c!doctype html\\u003e\\r\\n\\u003chtml lang=\\\"en\\\"\\u003e\\r\\n  \\u003cbody\\u003e\\r\\n    \\u003ch1\\u003eVerify your email\\u003c/h1\\u003e\\r\\n    \\u003cp\\u003eHi maya@example.com,\\u003c/p\\u003e\\r\\n    \\u003cp\\u003ePlease confirm your email address by opening the link below:\\u003c/p\\u003e\\r\\n    \\u003cp\\u003e\\u003ca href=\\\"https://app.example.test/auth/verify?token=TOKEN\\\"\\u003eVerify email address\\u003c/a\\u003e\\u003c/p\\u003e\\r\\n    \\u003cp\\u003eThis link expires in 24 hours.\\u003c/p\\u003e\\r\\n  \\u003c/body\\u003e\\r\\n\\u003c/html\\u003e\\r\\n\",\"Token\":\"\u003clink-token\u003e\"}]"
+    },
+    "refresh_tokens": {
+      "rows": "alice@example.comorg-bfalse 1 | alice@example.comorg-btrue 1 | ivan@example.comorg-afalse 1 | olive@example.comolive-s-nicode-org-20000000false 1 | oscar@example.comorg-dfalse 1 | pia@example.com\u003cnull\u003efalse 1"
+    },
+    "users": {
+      "rows": "Grace@Example.COMgraceGracelocaltrue true false 0 false true$2b$12$ | alice@example.comaliceAlice Älocaltrue true false 1 true true$2b$12$ | bob@example.combob\u003cnull\u003elocaltrue true true 0 false true$2b$12$ | carol@example.comcarolCarollocaltrue false false 0 false true$2b$12$ | dave@example.comdaveDavelocalfalse true false 0 false true$2b$12$ | emma@example.com\u003cnull\u003elocaltrue false false 0 false true$2b$12$ | erin@example.comerinErinlocaltrue true false 0 false true\u003cnull\u003e | frank@example.comfrankFrankgithubtrue true false 0 false true\u003cnull\u003e | heidi@example.comheidiHeidi\u003cnull\u003etrue false false 0 false true$2b$12$ | ivan@example.com\u003cnull\u003e\u003cnull\u003elocaltrue true false 0 false true$2b$12$ | judy@example.comjudyJudylocaltrue true false 0 false true$2b$12$ | karl@example.comkarlKarllocaltrue false false 0 false true$2b$12$ | lena@example.comlenaLenalocaltrue true false 0 false true$2b$12$ | maya@example.com\u003cnull\u003e\u003cnull\u003elocaltrue false false 0 false true$2b$12$ | ned@example.com\u003cnull\u003e\u003cnull\u003elocaltrue false false 0 false true$2b$12$ | nina.new@example.com\u003cnull\u003eNina Newlocaltrue true false 0 false true$2b$12$ | olga@example.comolgaOlgagithubtrue true false 0 false true\u003cnull\u003e | olive@example.com\u003cnull\u003e\u003cnull\u003elocaltrue true false 0 false true$2b$12$ | oscar@example.com\u003cnull\u003e\u003cnull\u003elocaltrue true false 0 false true$2b$12$ | pia@example.com\u003cnull\u003e\u003cnull\u003elocaltrue true false 1 true true$2b$12$ | solo@example.com\u003cnull\u003e\u003cnull\u003elocaltrue false false 0 false true$2b$12$ | uma@example.com\u003cnull\u003e\u003cnull\u003elocaltrue true false 0 false true$2b$12$"
+    }
+  }
+}

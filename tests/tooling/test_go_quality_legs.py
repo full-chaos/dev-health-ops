@@ -46,6 +46,7 @@ STAND_IN_GO = """#!/usr/bin/env bash
 # FAKE_GO_FAIL is set); every other subcommand is the real go.
 if [ "$1" != "test" ]; then exec "{real_go}" "$@"; fi
 printf '%s\\n' "$*" >> "${{FAKE_GO_LOG}}"
+[ -z "${{FAKE_GO_OUT:-}}" ] || printf '%s\\n' "${{FAKE_GO_OUT}}"
 [ -z "${{FAKE_GO_FAIL:-}}" ] || exit 1
 exit 0
 """
@@ -111,7 +112,7 @@ def _key(mod: str, pkg: str) -> str:
 
 
 def _run_check_go(
-    tmp_path: Path, *args: str, fail: bool = False
+    tmp_path: Path, *args: str, fail: bool = False, go_out: str = ""
 ) -> tuple[subprocess.CompletedProcess[str], list[str]]:
     real_go = shutil.which("go")
     assert real_go
@@ -130,6 +131,9 @@ def _run_check_go(
         "TMPDIR": str(tmp_path / "tmp"),
     }
     env.pop("FAKE_GO_FAIL", None)
+    env.pop("FAKE_GO_OUT", None)
+    if go_out:
+        env["FAKE_GO_OUT"] = go_out
     if fail:
         env["FAKE_GO_FAIL"] = "1"
     proc = subprocess.run(
@@ -395,3 +399,79 @@ def test_only_the_static_leg_runs_the_static_only_steps() -> None:
     assert "matrix.name" not in str(deps[0].get("if", "")), (
         "the oracle dependencies must be installed on every leg, not only one"
     )
+
+
+# ---------------------------------------------------------------------------
+# 5. CHAOS-8135: a heavy race package with no weights row fails the leg.
+# ---------------------------------------------------------------------------
+
+
+def _race_line(pkg: str, seconds: str) -> str:
+    return f"ok  \tgithub.com/full-chaos/dev-health-ops/{pkg}\t{seconds}s"
+
+
+def test_a_heavy_race_package_with_no_weights_row_fails_the_leg(tmp_path: Path) -> None:
+    unweighted = "internal/chaos8135_no_such_row"
+    assert unweighted not in _weights()
+    proc, _ = _run_check_go(
+        tmp_path, "ci-leg", "race", "1", "2", go_out=_race_line(unweighted, "324.004")
+    )
+    assert proc.returncode != 0, proc.stdout[-800:]
+    assert "NO row in ci/go_race_weights.tsv" in proc.stderr
+    assert unweighted in proc.stderr
+    assert "ci-leg race: OK" not in proc.stdout
+
+
+def test_a_weighted_or_light_race_package_passes_the_unweighted_guard(
+    tmp_path: Path,
+) -> None:
+    weighted = next(iter(_weights()))
+    out = "\n".join(
+        [
+            _race_line(weighted, "324.004"),
+            _race_line("internal/chaos8135_no_such_row", "29.9"),
+            "?   \tgithub.com/full-chaos/dev-health-ops/cmd/x\t[no test files]",
+        ]
+    )
+    proc, _ = _run_check_go(tmp_path, "ci-leg", "race", "1", "2", go_out=out)
+    assert proc.returncode == 0, proc.stderr[-800:] + proc.stdout[-800:]
+
+
+def _unweighted_awk(
+    mod: str, weights_file: Path, text: str
+) -> subprocess.CompletedProcess[str]:
+    return subprocess.run(
+        [
+            "awk",
+            "-v",
+            f"mod={mod}",
+            "-v",
+            f"weights={weights_file}",
+            "-v",
+            "minsec=30",
+            "-f",
+            str(ROOT / "ci" / "go_race_unweighted.awk"),
+        ],  # fmt: skip
+        input=text,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+
+def test_the_unweighted_guard_turns_red_when_a_heavy_row_is_removed(
+    tmp_path: Path,
+) -> None:
+    weights = _weights()
+    heavy = max(weights, key=lambda k: weights[k])
+    mod, _ = _go_list()
+    text = f"ok  \t{mod}/{heavy}\t{weights[heavy]}.0s\n"
+    green = _unweighted_awk(mod, WEIGHTS, text)
+    assert green.returncode == 0 and green.stdout == "", green
+    trimmed = tmp_path / "trimmed.tsv"
+    trimmed.write_text("".join(f"{k}\t{v}\n" for k, v in weights.items() if k != heavy))
+    red = _unweighted_awk(mod, trimmed, text)
+    assert red.stdout.split("\t")[0] == heavy, red
+    empty = tmp_path / "empty.tsv"
+    empty.write_text("# no rows\n")
+    assert _unweighted_awk(mod, empty, text).returncode != 0, "an empty weights file must fail loudly"

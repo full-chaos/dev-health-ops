@@ -3,25 +3,41 @@
 # listed; every other package weighs the awk default. The weights only need to be
 # roughly right: a stale one costs balance, never coverage (the shards always partition
 # the full package list). Key = import path relative to the module root. Sorted (LC_ALL=C),
-# no duplicates; tests/tooling/test_go_race_shards.py checks each row names a real package.
-cmd/dho	27
-cmd/gqlgen-guard	39
-internal/fixturescli	70
-internal/goapicli/restprove	29
-internal/goapiproof	291
-internal/gqlgenguard	369
-internal/joboutbox	59
-internal/jobruntime	52
-internal/jobs	35
-internal/jobs/workgraph/units	172
-internal/providerfoundation	31
-internal/providersync	453
-internal/pythonparity/emailvalidator	99
-internal/pythonparity/pyidna	108
-internal/pythonparity/pyunicodedata	21
-internal/queryapi/investmentflow	33
-internal/storedversion	116
-internal/streamhandlers	136
+# no duplicates; tests/tooling/test_go_quality_legs.py checks each row names a real package.
+# CHAOS-8135: values are the largest CI race-leg time of each package over the four go-quality race legs of main
+# 45aa5b00ab and 2e2fec51e3 (runs 37048134175, 37048890975). A package that takes 30 s or more in a race leg and
+# has NO row here fails that leg (ci/go_race_unweighted.awk): add its measured row.
+cmd/dev-health-migration-matrix	21
+cmd/dho	31
+cmd/gqlgen-guard	43
+deploy/helm/dev-health	26
+internal/fixturescli	420
+internal/goapicli/restprove	31
+internal/goapiproof	486
+internal/gqlgenguard	414
+internal/httpguard	324
+internal/joboutbox	44
+internal/jobruntime	82
+internal/jobs	28
+internal/jobs/metrics/remaining	31
+internal/jobs/metrics/remaining/stepcause	68
+internal/jobs/workgraph/edges	35
+internal/jobs/workgraph/units	321
+internal/operationalordering	35
+internal/platform/logging	22
+internal/providerfoundation	92
+internal/providersync	589
+internal/pythonparity	89
+internal/pythonparity/emailvalidator	230
+internal/pythonparity/pyidna	241
+internal/pythonparity/pyunicodedata	57
+internal/queryapi/investmentflow	67
+internal/queryapi/server	21
+internal/storage/postgres	28
+internal/storedversion	132
+internal/streamhandlers	85
 internal/streamrunnerservice	21
-internal/testsupport/venueoracle	79
-internal/testsupport/venueoracle/goldenhygiene	52
+internal/syncbudget	28
+internal/synccli	79
+internal/testsupport/venueoracle	76
+internal/testsupport/venueoracle/goldenhygiene	60

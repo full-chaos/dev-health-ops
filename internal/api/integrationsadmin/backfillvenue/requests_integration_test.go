@@ -5,8 +5,6 @@ package backfillvenue
 import (
 	"strings"
 
-	"github.com/google/uuid"
-
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/venueoracle"
 )
 
@@ -66,8 +64,8 @@ func sameRequests(venue *venueoracle.Venue, v ids) []venueoracle.Request {
 		post(venue, "selector mixed with flat since", flat, a, json(`{"selector": {`+window("2026-09-01T00:00:00Z", "2026-09-10T00:00:00Z")+`}, "since": "2026-09-01T00:00:00Z"}`)),
 		post(venue, "selector mixed with flat source_ids", flat, a, json(`{"selector": {`+window("2026-09-01T00:00:00Z", "2026-09-10T00:00:00Z")+`}, "source_ids": []}`)),
 		post(venue, "clock: selector null and a flat window", id("selectornull"), a, json(`{"selector": null, `+window("2026-09-01T00:00:00Z", "2026-09-02T00:00:00Z")+`}`)),
-		post(venue, "the body is validated before the integration", uuid.NewString(), a, json(`{}`)),
-		post(venue, "unknown integration", uuid.NewString(), a, json(`{`+window("2026-09-01T00:00:00Z", "2026-09-10T00:00:00Z")+`}`)),
+		post(venue, "the body is validated before the integration", nextID().String(), a, json(`{}`)),
+		post(venue, "unknown integration", nextID().String(), a, json(`{`+window("2026-09-01T00:00:00Z", "2026-09-10T00:00:00Z")+`}`)),
 		post(venue, "not a uuid", "zzz", a, json(`{`+window("2026-09-01T00:00:00Z", "2026-09-10T00:00:00Z")+`}`)),
 		post(venue, "another org's integration", id("otherorg"), a, json(`{`+window("2026-09-01T00:00:00Z", "2026-09-10T00:00:00Z")+`}`)),
 		// clock: the run and its units carry ids each plane makes.

@@ -26,8 +26,6 @@ import (
 	"io"
 	"net/http"
 	"net/url"
-	"os"
-	"os/exec"
 	"path/filepath"
 	"runtime"
 	"slices"
@@ -41,7 +39,7 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/queryapi/hotspots"
 	"github.com/full-chaos/dev-health-ops/internal/queryapi/reviewedges"
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/containers"
-	"github.com/full-chaos/dev-health-ops/internal/testsupport/pyoracle"
+	"github.com/full-chaos/dev-health-ops/internal/testsupport/programoracle"
 )
 
 // dailyFamilyReaderKeys is the key each table's readers deduplicate on
@@ -94,7 +92,7 @@ func TestDailyFamilyTablesCollapseCopiesWithoutChangingReaderRows(t *testing.T) 
 	if err != nil {
 		t.Fatal(err)
 	}
-	pythonSources := dailyFamilyPythonDedupSources(ctx, t)
+	pythonSources := dailyFamilyPythonDedupSources(t)
 
 	type readerOutputs map[string]string
 	capture := func(t *testing.T, table string) readerOutputs {
@@ -345,40 +343,30 @@ func dailyFamilyPerColumnArgMax(ctx context.Context, t *testing.T, raw stdclickh
 	return fmt.Sprintf("SELECT %s, %s FROM %s GROUP BY %s ORDER BY ALL", key, strings.Join(projections, ", "), table, key)
 }
 
-// dailyFamilyPythonDedupSources asks the real clickhouse_dedup.dedup_from for
-// each table's FROM source, so the comparison runs Python's own reader SQL
-// rather than a copy of it.
-func dailyFamilyPythonDedupSources(ctx context.Context, t *testing.T) map[string]string {
+// pythonDedupSourcesProgram asks the real clickhouse_dedup.dedup_from for
+// each table's FROM source.
+const pythonDedupSourcesProgram = `
+import json, sys
+from dev_health_ops.clickhouse_dedup import dedup_from
+tables = json.loads(sys.stdin.read())
+print(json.dumps({t: dedup_from(t) for t in tables if dedup_from(t) != t}, sort_keys=True))
+`
+
+// dailyFamilyPythonDedupSources holds each table's FROM source as the real
+// clickhouse_dedup.dedup_from answers it (a frozen answer), so the
+// comparison runs Python's own reader SQL rather than a copy of it.
+func dailyFamilyPythonDedupSources(t *testing.T) map[string]string {
 	t.Helper()
 	_, file, _, _ := runtime.Caller(0)
 	root := filepath.Join(filepath.Dir(file), "..", "..", "..")
-	python, rule, err := pyoracle.Interpreter(root)
-	if err != nil {
-		t.Fatalf("resolve python: %v", err)
-	}
-	t.Logf("pyoracle: resolved interpreter %s (%s)", python, rule)
-	source := filepath.Join(root, "src")
 	tables, err := json.Marshal(dailyFamilyTableNames())
 	if err != nil {
 		t.Fatal(err)
 	}
-	script := `
-import json, sys
-from dev_health_ops.clickhouse_dedup import dedup_from
-tables = json.loads(sys.argv[1])
-print(json.dumps({t: dedup_from(t) for t in tables if dedup_from(t) != t}))
-`
-	// The interpreter path comes from pyoracle.Interpreter (test support, a
-	// developer-set override or the checked-out venv), never request data.
-	// nosemgrep: go.lang.security.audit.dangerous-exec-command.dangerous-exec-command
-	command := exec.CommandContext(ctx, python, "-c", script, string(tables))
-	command.Env = append(os.Environ(), "PYTHONPATH="+source)
-	output, err := command.Output()
-	if err != nil {
-		t.Fatalf("python dedup_from: %v", err)
-	}
+	output := serverGoldens.Outputs(t, root, "dedup-sources.golden.json",
+		programoracle.Program{Name: "dedup sources", Text: pythonDedupSourcesProgram, Stdin: tables})[0]
 	sources := map[string]string{}
-	if err := json.Unmarshal(output, &sources); err != nil {
+	if err := json.Unmarshal([]byte(output), &sources); err != nil {
 		t.Fatalf("decode dedup_from output %q: %v", output, err)
 	}
 	if len(sources) == 0 {

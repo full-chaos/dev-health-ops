@@ -29,23 +29,46 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/venueoracle"
 )
 
-// pythonDowngrade runs the real `dev-hops migrate postgres downgrade <target>` (Alembic's real
-// downgrade, `command.downgrade`) against uri.
-func pythonDowngrade(t *testing.T, uri, target string) (code int, output string) {
-	t.Helper()
-	root, err := filepath.Abs(filepath.Join("..", ".."))
-	if err != nil {
-		t.Fatal(err)
+// downgradePythonBuild is the build whose Python `dev-hops migrate postgres downgrade` (real Alembic) answered
+// the scenarios: a build that still carried the Python CLI.
+const downgradePythonBuild = "a4847c5e93607451a0c987b314d37e02fc43ce85"
+
+// downgradePythonProgram is the entry point the producer runs: the real dev-hops CLI.
+const downgradePythonProgram = "import sys\nfrom dev_health_ops import cli\nraise SystemExit(cli.main(sys.argv[1:]))\n"
+
+// downgradePythonSettings are the variables that shape the downgrade producer's answers, as constants: the
+// producer's environment AND part of the golden's request key (a changed value fails the frozen replay).
+// upgradePythonSettings are the same for the Python upgrade the conflicting-0142 cell runs (it carries the River
+// cutover switch). The database address is a per-run value, appended by name.
+var (
+	downgradePythonSettings = map[string]string{"PYTHONHASHSEED": "0", "OTEL_ENABLED": "false"}
+	upgradePythonSettings   = map[string]string{"PYTHONHASHSEED": "0", "OTEL_ENABLED": "false", "DEV_HEALTH_ALLOW_CELERY_RIVER_CUTOVER": "1"}
+)
+
+func downgradePythonEnv(root string, settings map[string]string) []string {
+	env := []string{"PATH=" + os.Getenv("PATH"), "HOME=" + os.Getenv("HOME"), "PYTHONPATH=" + filepath.Join(root, "src"), "PYTHONDONTWRITEBYTECODE=1"}
+	names := make([]string, 0, len(settings))
+	for name := range settings {
+		names = append(names, name)
 	}
+	sort.Strings(names)
+	for _, name := range names {
+		env = append(env, name+"="+settings[name])
+	}
+	return env
+}
+
+// pythonDowngrade runs the real `dev-hops migrate postgres downgrade <target>` (Alembic's real downgrade,
+// `command.downgrade`) against uri.
+func pythonDowngrade(t *testing.T, root, uri, target string) (code int, output string) {
+	t.Helper()
 	python := pyoracle.Resolve(t, root)
-	program := "import sys\nfrom dev_health_ops import cli\nraise SystemExit(cli.main(sys.argv[1:]))\n"
-	command := exec.Command(python, "-c", program, "migrate", "postgres", "downgrade", target)
+	command := exec.Command(python, "-c", downgradePythonProgram, "migrate", "postgres", "downgrade", target)
 	pyURI := strings.Replace(uri, "postgres://", "postgresql://", 1)
-	command.Env = append(os.Environ(), "PYTHONPATH="+filepath.Join(root, "src"), "POSTGRES_URI="+pyURI, "DATABASE_URI="+pyURI, "OTEL_ENABLED=false")
-	command.Env = removeEnv(command.Env, "MIGRATION_DATABASE_URI")
+	command.Env = append(downgradePythonEnv(root, downgradePythonSettings), "POSTGRES_URI="+pyURI, "DATABASE_URI="+pyURI)
 	var stdout, stderr bytes.Buffer
 	command.Stdout, command.Stderr = &stdout, &stderr
-	err = command.Run()
+	err := command.Run()
 	exitCode := 0
 	if exitErr, ok := err.(*exec.ExitError); ok {
 		exitCode = exitErr.ExitCode()
@@ -549,107 +572,205 @@ func insertSetupRevocation(t *testing.T, uri string) {
 	}
 }
 
-// TestDowngradeVenueOracleMatchesPythonDowngrade is the executed differential oracle:
-// the same databases (built by dho's upgrade, at the production shape) are downgraded
-// by the real Python verb (`command.downgrade`, real Alembic) and by dho, and the
-// resulting schema shape and alembic_version must be identical for every target dho
-// accepts; for the targets dho refuses, Python must succeed (the named divergence) and
-// dho must have changed nothing.
-func TestDowngradeVenueOracleMatchesPythonDowngrade(t *testing.T) {
-	if os.Getenv("DEV_HEALTH_LIVE_PYTHON_ORACLES") != "1" {
-		t.Skip("the live Python producer runs only with DEV_HEALTH_LIVE_PYTHON_ORACLES=1 and the full project Python environment")
-	}
+// downgradeRecorded is what the Python producer left in each cell of the downgrade oracle.
+type downgradeRecorded struct {
+	Targets    map[string]recordedTarget `json:"targets"`
+	Relative   map[string]int            `json:"relative"`
+	Failing    recordedFailing           `json:"failing"`
+	SingleHead recordedShape             `json:"singleHead"`
+	Upgrade    recordedUpgrade           `json:"upgrade"`
+}
+
+type recordedTarget struct {
+	Code     int      `json:"code"`
+	Shape    string   `json:"shape"`
+	Versions []string `json:"versions"`
+}
+
+type recordedFailing struct {
+	Code        int    `json:"code"`
+	ShapeBefore string `json:"shapeBefore"`
+	ShapeAfter  string `json:"shapeAfter"`
+}
+
+type recordedShape struct {
+	Code  int    `json:"code"`
+	Shape string `json:"shape"`
+}
+
+type recordedUpgrade struct {
+	Failed        bool     `json:"failed"`
+	StartVersions []string `json:"startVersions"`
+	Versions      []string `json:"versions"`
+	Shape         string   `json:"shape"`
+}
+
+// downgradeTargets are the targets dho accepts, in the order the oracle walks them.
+var downgradeTargets = []string{"0144", "0141", "0139", "0138", "0145"}
+
+// produceDowngrade runs every cell of the oracle against the REAL Python producer (databases built by dho's own
+// upgrade, at the production shape) and returns what it left.
+func produceDowngrade(t *testing.T, root string) downgradeRecorded {
+	t.Helper()
 	d := newDownInstance(t)
 	chain, _ := pgmigrate.LoadChain()
-	for _, target := range []string{"0144", "0141", "0139", "0138", "0145"} {
-		pythonURI, goURI := d.at(t, len(chain)), d.at(t, len(chain))
-		if code, output := pythonDowngrade(t, pythonURI, target); code != 0 {
+	recorded := downgradeRecorded{Targets: map[string]recordedTarget{}, Relative: map[string]int{}}
+	for _, target := range downgradeTargets {
+		uri := d.at(t, len(chain))
+		code, output := pythonDowngrade(t, root, uri, target)
+		if code != 0 {
 			t.Fatalf("the real Python downgrade %s failed (exit %d): %s", target, code, output)
 		}
+		recorded.Targets[target] = recordedTarget{Code: code, Shape: schemaShape(t, uri), Versions: alembicVersions(t, uri)}
+	}
+	for _, target := range []string{"-1", "-2"} {
+		code, _ := pythonDowngrade(t, root, d.at(t, len(chain)), target)
+		recorded.Relative[target] = code
+	}
+	failing := d.at(t, len(chain))
+	insertSetupRevocation(t, failing)
+	recorded.Failing.ShapeBefore = schemaShape(t, failing)
+	recorded.Failing.Code, _ = pythonDowngrade(t, root, failing, "0140")
+	recorded.Failing.ShapeAfter = schemaShape(t, failing)
+	single := d.at(t, len(chain))
+	if _, err := connect(t, single).Exec(context.Background(), "DELETE FROM alembic_version WHERE version_num = '0066'"); err != nil {
+		t.Fatal(err)
+	}
+	recorded.SingleHead.Code, _ = pythonDowngrade(t, root, single, "-1")
+	recorded.SingleHead.Shape = schemaShape(t, single)
+	up := d.at(t, 0)
+	if _, err := connect(t, up).Exec(context.Background(), "SELECT 1 AS conflict INTO webhook_sync_requests"); err != nil {
+		t.Fatal(err)
+	}
+	recorded.Upgrade.StartVersions = alembicVersions(t, up)
+	upgrade := exec.Command(pyoracle.Resolve(t, root), "-c", upgradeProgram, up, "head")
+	upgrade.Env = downgradePythonEnv(root, upgradePythonSettings)
+	_, upgradeErr := upgrade.CombinedOutput()
+	recorded.Upgrade.Failed = upgradeErr != nil
+	recorded.Upgrade.Versions = alembicVersions(t, up)
+	recorded.Upgrade.Shape = schemaShape(t, up)
+	return recorded
+}
+
+// TestDowngradeMatchesFrozenPythonDowngrade is the differential oracle against what the REAL Python verb
+// (`command.downgrade`, real Alembic) left: the same databases (built by dho's upgrade, at the production shape)
+// are downgraded by dho, and the resulting schema shape and alembic_version must be identical to the recorded
+// ones for every target dho accepts; for the targets dho refuses, Python succeeded (the named divergence) and
+// dho must have changed nothing. The answers were executed once on downgradePythonBuild and are frozen in
+// testdata/golden/downgrade.json (the recipe regenerates them by execution); the targets and the programs are
+// the golden's key.
+func TestDowngradeMatchesFrozenPythonDowngrade(t *testing.T) {
+	repoRoot, err := filepath.Abs(filepath.Join("..", ".."))
+	if err != nil {
+		t.Fatal(err)
+	}
+	golden := venueoracle.OpenGolden(t, venueoracle.GoldenSpec{
+		Path:        "testdata/golden/downgrade.json",
+		PythonBuild: downgradePythonBuild,
+		SHA256:      "8e4aeacab24c76612f3e429f05eeec5f9e354f7a0318ed2baffa2bfd3d01efee",
+		Recipe: "git worktree add --detach $DIR " + downgradePythonBuild + " (with its .venv: uv sync --frozen --no-install-project); then from the repository root: " +
+			"go run ./internal/testsupport/venueoracle/goldenrecord -pkg ./internal/pgmigrate/ -test '^TestDowngradeMatchesFrozenPythonDowngrade$' -python-root $DIR",
+	})
+	root := golden.PythonRoot(t, repoRoot)
+	input, err := json.Marshal(map[string]any{"targets": downgradeTargets, "relative": []string{"-1", "-2"}, "failing": "0140",
+		"upgradeProgram": upgradeProgram, "upgradeSettings": upgradePythonSettings})
+	if err != nil {
+		t.Fatal(err)
+	}
+	request := venueoracle.ProgramRequest("downgrade cells", downgradePythonProgram, input, downgradePythonSettings)
+	answers := golden.Produce(t, root, []venueoracle.Request{request}, func(producer *venueoracle.Producer, _ []venueoracle.Request) []venueoracle.Response {
+		root := producer.Root
+		body, err := json.Marshal(produceDowngrade(t, root))
+		if err != nil {
+			t.Fatal(err)
+		}
+		return []venueoracle.Response{{Status: 0, Body: venueoracle.PackBody(body)}}
+	})
+	golden.Consumed(t, answers...)
+	var frozen downgradeRecorded
+	if err := json.Unmarshal([]byte(venueoracle.UnpackBody(t, answers[0].Body)), &frozen); err != nil {
+		t.Fatal(err)
+	}
+
+	d := newDownInstance(t)
+	chain, _ := pgmigrate.LoadChain()
+	for _, target := range downgradeTargets {
+		want, ok := frozen.Targets[target]
+		if !ok || want.Code != 0 {
+			t.Fatalf("the golden holds no successful Python downgrade %s: %+v", target, want)
+		}
+		goURI := d.at(t, len(chain))
 		if code, _, stderr := goDowngrade(t, goURI, target); code != cli.ExitOK {
 			t.Fatalf("dho downgrade %s: exit %d %s", target, code, stderr)
 		}
-		if got, want := schemaShape(t, goURI), schemaShape(t, pythonURI); got != want {
-			t.Errorf("downgrade %s: dho and Python disagree:\n%s", target, shapeDiff(want, got))
+		if got := schemaShape(t, goURI); got != want.Shape {
+			t.Errorf("downgrade %s: dho and Python disagree:\n%s", target, shapeDiff(want.Shape, got))
 		}
-		if target != "0145" && equalSorted(alembicVersions(t, pythonURI), []string{"0066", "0145"}) {
+		if target != "0145" && equalSorted(want.Versions, []string{"0066", "0145"}) {
 			t.Errorf("downgrade %s: Python did not move alembic_version", target)
 		}
 	}
 	// The named divergences: Python reverts 0066 for a relative step and succeeds; dho
 	// refuses and changes nothing.
 	for _, target := range []string{"-1", "-2"} {
-		pythonURI, goURI := d.at(t, len(chain)), d.at(t, len(chain))
-		pyCode, pyOutput := pythonDowngrade(t, pythonURI, target)
+		goURI := d.at(t, len(chain))
 		before := schemaShape(t, goURI)
 		goCode, _, _ := goDowngrade(t, goURI, target)
-		if pyCode != 0 || goCode != cli.ExitFailure || schemaShape(t, goURI) != before {
-			t.Errorf("downgrade %s: python exit %d (%s), dho exit %d: want python 0 and dho a refusal that changed nothing", target, pyCode, pyOutput, goCode)
+		if frozen.Relative[target] != 0 || goCode != cli.ExitFailure || schemaShape(t, goURI) != before {
+			t.Errorf("downgrade %s: python exit %d, dho exit %d: want python 0 and dho a refusal that changed nothing", target, frozen.Relative[target], goCode)
 		}
 	}
 	// A failing walk: both roll the whole walk back and leave the same database.
-	pyFail, goFail := d.at(t, len(chain)), d.at(t, len(chain))
-	insertSetupRevocation(t, pyFail)
+	goFail := d.at(t, len(chain))
 	insertSetupRevocation(t, goFail)
-	pyBefore := schemaShape(t, pyFail)
-	pyCode, _ := pythonDowngrade(t, pyFail, "0140")
 	goCode, _, _ := goDowngrade(t, goFail, "0140")
-	if pyCode == 0 || goCode != cli.ExitFailure {
-		t.Errorf("failing walk: python exit %d, dho exit %d, want both to fail", pyCode, goCode)
+	if frozen.Failing.Code == 0 || goCode != cli.ExitFailure {
+		t.Errorf("failing walk: python exit %d, dho exit %d, want both to fail", frozen.Failing.Code, goCode)
 	}
-	if schemaShape(t, pyFail) != pyBefore || schemaShape(t, goFail) != pyBefore {
-		t.Errorf("failing walk: Python or dho left the database changed:\n%s", shapeDiff(pyBefore, schemaShape(t, goFail)))
+	if frozen.Failing.ShapeAfter != frozen.Failing.ShapeBefore || schemaShape(t, goFail) != frozen.Failing.ShapeBefore {
+		t.Errorf("failing walk: Python or dho left the database changed:\n%s", shapeDiff(frozen.Failing.ShapeBefore, schemaShape(t, goFail)))
 	}
 	// -1 on a single-head database (no 0066): the same result from both.
-	pythonURI, goURI := d.at(t, len(chain)), d.at(t, len(chain))
-	for _, uri := range []string{pythonURI, goURI} {
-		if _, err := connect(t, uri).Exec(context.Background(), "DELETE FROM alembic_version WHERE version_num = '0066'"); err != nil {
-			t.Fatal(err)
-		}
+	goURI := d.at(t, len(chain))
+	if _, err := connect(t, goURI).Exec(context.Background(), "DELETE FROM alembic_version WHERE version_num = '0066'"); err != nil {
+		t.Fatal(err)
 	}
-	if code, output := pythonDowngrade(t, pythonURI, "-1"); code != 0 {
-		t.Fatalf("python -1 on a single head: exit %d %s", code, output)
+	if frozen.SingleHead.Code != 0 {
+		t.Fatalf("python -1 on a single head: exit %d", frozen.SingleHead.Code)
 	}
 	if code, _, stderr := goDowngrade(t, goURI, "-1"); code != cli.ExitOK {
 		t.Fatalf("dho -1 on a single head: exit %d %s", code, stderr)
 	}
-	if got, want := schemaShape(t, goURI), schemaShape(t, pythonURI); got != want {
-		t.Errorf("-1 on a single head: dho and Python disagree:\n%s", shapeDiff(want, got))
+	if got := schemaShape(t, goURI); got != frozen.SingleHead.Shape {
+		t.Errorf("-1 on a single head: dho and Python disagree:\n%s", shapeDiff(frozen.SingleHead.Shape, got))
 	}
 	// The same transaction-boundary class on the UPGRADE side (CHAOS-7291, ruled atomic by
 	// Chris): 0142 fails on a pre-existing table. Python's upgrade walk is one transaction
 	// and rolls back to where it started, and so is dho's: the walk (the baseline of an
 	// empty database and every pending chain revision) is one transaction, so 0139-0141 are
-	// NOT left applied or recorded. This cell used to pin the opposite (alembic_version at
-	// [0066 0141], one transaction per chain revision) as a named divergence; it now
-	// compares dho with Python.
-	pyUp, goUp := d.at(t, 0), d.at(t, 0)
-	for _, uri := range []string{pyUp, goUp} {
-		if _, err := connect(t, uri).Exec(context.Background(), "SELECT 1 AS conflict INTO webhook_sync_requests"); err != nil {
-			t.Fatal(err)
-		}
+	// NOT left applied or recorded.
+	goUp := d.at(t, 0)
+	if _, err := connect(t, goUp).Exec(context.Background(), "SELECT 1 AS conflict INTO webhook_sync_requests"); err != nil {
+		t.Fatal(err)
 	}
-	startVersions := alembicVersions(t, pyUp)
-	root, _ := filepath.Abs(filepath.Join("..", ".."))
-	upgrade := exec.Command(pyoracle.Resolve(t, root), "-c", upgradeProgram, pyUp, "head")
-	upgrade.Env = append(os.Environ(), "PYTHONPATH="+filepath.Join(root, "src"), "DEV_HEALTH_ALLOW_CELERY_RIVER_CUTOVER=1")
-	if output, err := upgrade.CombinedOutput(); err == nil {
-		t.Fatalf("the Python upgrade over a conflicting 0142 table succeeded: %s", output)
+	if !frozen.Upgrade.Failed {
+		t.Fatal("the recorded Python upgrade over a conflicting 0142 table succeeded")
 	}
 	baseline, _ := pgmigrate.LoadBaseline()
 	if _, err := pgmigrate.Upgrade(context.Background(), connect(t, goUp), baseline, chain); err == nil {
 		t.Fatal("dho's upgrade over a conflicting 0142 table succeeded")
 	}
-	if got := alembicVersions(t, pyUp); !reflect.DeepEqual(got, startVersions) {
-		t.Errorf("Python's failed upgrade left alembic_version %v, want the start %v (one transaction for the walk)", got, startVersions)
+	if !reflect.DeepEqual(frozen.Upgrade.Versions, frozen.Upgrade.StartVersions) {
+		t.Errorf("Python's failed upgrade left alembic_version %v, want the start %v (one transaction for the walk)", frozen.Upgrade.Versions, frozen.Upgrade.StartVersions)
 	}
-	if got := alembicVersions(t, goUp); !reflect.DeepEqual(got, startVersions) {
-		t.Errorf("dho's failed upgrade left alembic_version %v, want the start %v like Python (one transaction for the walk)", got, startVersions)
+	if got := alembicVersions(t, goUp); !reflect.DeepEqual(got, frozen.Upgrade.StartVersions) {
+		t.Errorf("dho's failed upgrade left alembic_version %v, want the start %v like Python (one transaction for the walk)", got, frozen.Upgrade.StartVersions)
 	}
-	if got, want := schemaShape(t, goUp), schemaShape(t, pyUp); got != want {
-		t.Errorf("after the failed upgrade dho and Python disagree on the schema:\n%s", shapeDiff(want, got))
+	if got := schemaShape(t, goUp); got != frozen.Upgrade.Shape {
+		t.Errorf("after the failed upgrade dho and Python disagree on the schema:\n%s", shapeDiff(frozen.Upgrade.Shape, got))
 	}
-	venueoracle.WriteProof(t)
+	golden.SkipDiff(t)
+	golden.Finish(t)
 }
 
 func equalSorted(a, b []string) bool {

@@ -129,6 +129,7 @@ on:
       # change to the relevance decider alone was classified non-Go and the gate
       # that depends on it passed vacuously.
       - 'ci/go_relevance.py'
+      - 'ci/go_relevance.sh'
       - 'docker/go-worker.Dockerfile'
       - 'tests/compatibility/river/**'
       - 'ci/check_go.sh'
@@ -178,6 +179,8 @@ on:
       # pin's install or check step -- would green-skip the very enforcement it
       # was editing. Verified before and after this line was added.
       - '.github/workflows/go-quality.yml'
+      # read by internal/testsupport/venuechanged (CHAOS-7653): a Go test reads this workflow file
+      - '.github/workflows/venue-oracles-changed.yml'
       # lefthook.yml holds the LOCAL half of the same pin. codex round 2 (P2):
       # a lefthook-only change is relevant=false, so removing the pre-push hook
       # would land with the pin's own CI job never running. The hook's presence
@@ -310,6 +313,7 @@ on:
       # change to the relevance decider alone was classified non-Go and the gate
       # that depends on it passed vacuously.
       - 'ci/go_relevance.py'
+      - 'ci/go_relevance.sh'
       - 'docker/go-worker.Dockerfile'
       - 'tests/compatibility/river/**'
       - 'ci/check_go.sh'
@@ -359,6 +363,8 @@ on:
       # pin's install or check step -- would green-skip the very enforcement it
       # was editing. Verified before and after this line was added.
       - '.github/workflows/go-quality.yml'
+      # read by internal/testsupport/venuechanged (CHAOS-7653): a Go test reads this workflow file
+      - '.github/workflows/venue-oracles-changed.yml'
       # lefthook.yml holds the LOCAL half of the same pin. codex round 2 (P2):
       # a lefthook-only change is relevant=false, so removing the pre-push hook
       # would land with the pin's own CI job never running. The hook's presence

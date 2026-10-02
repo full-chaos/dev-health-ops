@@ -91,7 +91,7 @@ func TestChunkedAttributionReadsEqualTheUnchunkedReads(t *testing.T) {
 	}
 	seedWorkItemAttributionDependency(t, ctx, rawConn, orgID, ids[0], ids[5], "relates_to", now) // a 2nd edge from w01
 	for i := 0; i < n; i += 3 {
-		seedWorkItemAttributionExistingRow(t, ctx, rawConn, orgID, ids[i], uuid.Nil, "native", "team-a", now)
+		seedWorkItemAttributionExistingRow(t, ctx, rawConn, orgID, ids[i], uuid.Nil, "native_team", "team-a", now)
 	}
 
 	subjects := map[string]teamattribution.GithubWorkItemDerivationSubject{}

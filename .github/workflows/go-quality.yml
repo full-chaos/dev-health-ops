@@ -216,6 +216,16 @@ jobs:
         # A test asserts this command does not carry it.
         run: go run ./cmd/gqlgen-guard check-drift
 
+      - name: Set up Python 3.14 for the live provider oracles
+        # The relevance decision above needs no Python (ci/go_relevance.sh). The live-Python oracles and the unit tests that
+        # run real Python programs still do, and they resolve the deployed 3.14 from PATH: without this step they ran on the
+        # runner's 3.12 and failed (pyjson: a JSONDecodeError text that differs between 3.12 and 3.14). A change that is
+        # not Go-relevant no longer pays for the setup.
+        if: steps.relevance.outputs.relevant == 'true'
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: '3.14'
+
       - name: Install locked live provider oracle dependencies
         # EVERY leg: unit tests in the test and race legs run real Python
         # programs too (e.g. admin TestOrgDeletionTargetsMatchThePythonList);

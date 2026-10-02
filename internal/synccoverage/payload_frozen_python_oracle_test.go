@@ -5,24 +5,24 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"runtime"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
 
 	"github.com/google/uuid"
 
-	"github.com/full-chaos/dev-health-ops/internal/testsupport/pyoracle"
+	"github.com/full-chaos/dev-health-ops/internal/testsupport/programoracle"
 )
 
-const (
-	perturbOracleEnvironment  = "DEV_HEALTH_SYNC_COVERAGE_ORACLE_PERTURB"
-	livePythonOraclesEnv      = "DEV_HEALTH_LIVE_PYTHON_ORACLES"
-	livePythonOracleProofDir  = "DEV_HEALTH_LIVE_PYTHON_ORACLE_PROOF_DIR"
-	livePythonOracleProofFile = "synccoverage"
-)
+const perturbOracleEnvironment = "DEV_HEALTH_SYNC_COVERAGE_ORACLE_PERTURB"
+
+// payloadOracleScript is the place of the oracle script under the repository
+// root. It reads the case from the file argv[1] names; the program hands it
+// the case on its input (/dev/stdin), so the case is part of the request.
+const payloadOracleScript = "internal/synccoverage/testdata/python_payload_oracle.py"
 
 type payloadOracleFixture struct {
 	Config struct {
@@ -68,50 +68,81 @@ type payloadOracleFixture struct {
 	IsTruncated      bool   `json:"is_truncated"`
 }
 
-func TestPayloadMatchesLivePythonProduction(t *testing.T) {
-	requireLivePythonOracle(t)
-	fixturePath, helperPath, repositoryRoot := oraclePaths(t)
-	rawFixture, err := os.ReadFile(fixturePath)
+// payloadOracleCases are the case files the Python payload builder answered,
+// under testdata: the hourly schedule (the first case, with windows,
+// backfills and active pairs), the same data on a daily schedule (a dataset
+// that is between two and three intervals behind is stale; a third dataset,
+// between one and two intervals behind, is healthy), and the first data with
+// no schedule row (not scheduled).
+var payloadOracleCases = []string{"payload_oracle_case.json", "payload_oracle_case_daily.json", "payload_oracle_case_unscheduled.json"}
+
+func TestPayloadMatchesFrozenPythonProduction(t *testing.T) {
+	fixturePath, helperPath, _ := oraclePaths(t)
+	script, err := os.ReadFile(helperPath)
 	if err != nil {
 		t.Fatal(err)
 	}
-	var fixture payloadOracleFixture
-	if err := json.Unmarshal(rawFixture, &fixture); err != nil {
-		t.Fatal(err)
+	fixtures := make([]payloadOracleFixture, len(payloadOracleCases))
+	programs := make([]programoracle.Program, len(payloadOracleCases))
+	for index, name := range payloadOracleCases {
+		rawFixture, err := os.ReadFile(filepath.Join(filepath.Dir(fixturePath), name))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := json.Unmarshal(rawFixture, &fixtures[index]); err != nil {
+			t.Fatal(err)
+		}
+		fixture := fixtures[index]
+		if len(fixture.Windows) == 0 || len(fixture.Backfills) == 0 || len(fixture.ActivePairs) == 0 {
+			t.Fatalf("%s: the sync coverage oracle fixture must exercise non-empty windows, backfills, and active pairs", name)
+		}
+		if fixture.LookbackDays != HistoryLookbackDays {
+			t.Fatalf("%s: fixture lookback = %d, production Go lookback = %d", name, fixture.LookbackDays, HistoryLookbackDays)
+		}
+		// The first case keeps the name it was recorded under.
+		programName := "sync coverage payload"
+		if index > 0 {
+			programName += ": " + name
+		}
+		program := programoracle.Script(programName, payloadOracleScript, string(script), rawFixture)
+		program.Text = "import sys\nsys.argv = [" + strconv.Quote(payloadOracleScript) + ", '/dev/stdin']\n" + program.Text
+		programs[index] = program
 	}
-	if len(fixture.Windows) == 0 || len(fixture.Backfills) == 0 || len(fixture.ActivePairs) == 0 {
-		t.Fatal("sync coverage oracle fixture must exercise non-empty windows, backfills, and active pairs")
+	outputs := frozenPython(t, "payload.golden.json", programs...)
+	staleness := map[string]bool{}
+	for index, name := range payloadOracleCases {
+		pythonOutput := []byte(outputs[index])
+		if len(bytes.TrimSpace(pythonOutput)) == 0 {
+			t.Fatalf("%s: the frozen Python sync coverage payload is empty", name)
+		}
+		for _, status := range []string{"stale", "healthy", "not_scheduled"} {
+			if bytes.Contains(pythonOutput, []byte(`"`+status+`"`)) {
+				staleness[status] = true
+			}
+		}
+		goPayload := buildGoOraclePayload(t, fixtures[index])
+		if os.Getenv(perturbOracleEnvironment) == "1" {
+			// Test-only RED proof. The normal gate never sets this variable. Setting
+			// it changes one semantic leaf after the production Go builder runs and
+			// must make the exact whole-payload comparison fail.
+			goPayload["overall"].(map[string]any)["gap_count"] = 999
+		}
+		goOutput, err := json.Marshal(goPayload)
+		if err != nil {
+			t.Fatal(err)
+		}
+		pythonCanonical := canonicalJSON(t, pythonOutput)
+		goCanonical := canonicalJSON(t, goOutput)
+		if !bytes.Equal(goCanonical, pythonCanonical) {
+			t.Errorf("%s: Go sync coverage payload diverges from the frozen Python production payload\nGo:     %s\nPython: %s", name, goCanonical, pythonCanonical)
+		}
 	}
-	if fixture.LookbackDays != HistoryLookbackDays {
-		t.Fatalf("fixture lookback = %d, production Go lookback = %d", fixture.LookbackDays, HistoryLookbackDays)
-	}
-
-	pythonOutput := executePythonPayloadOracle(t, repositoryRoot, helperPath, fixturePath)
-	goPayload := buildGoOraclePayload(t, fixture)
-	if os.Getenv(perturbOracleEnvironment) == "1" {
-		// Test-only RED proof. The normal gate never sets this variable. Setting
-		// it changes one semantic leaf after the production Go builder runs and
-		// must make the exact whole-payload comparison fail.
-		goPayload["overall"].(map[string]any)["gap_count"] = 999
-	}
-	goOutput, err := json.Marshal(goPayload)
-	if err != nil {
-		t.Fatal(err)
-	}
-	pythonCanonical := canonicalJSON(t, pythonOutput)
-	goCanonical := canonicalJSON(t, goOutput)
-	if !bytes.Equal(goCanonical, pythonCanonical) {
-		t.Fatalf("Go sync coverage payload diverges from live Python production\nGo:     %s\nPython: %s", goCanonical, pythonCanonical)
-	}
-}
-
-func requireLivePythonOracle(t *testing.T) {
-	t.Helper()
-	if os.Getenv(livePythonOraclesEnv) != "1" {
-		t.Skip("live Python oracle runs only through the uncached live-oracle gate")
-	}
-	if os.Getenv(livePythonOracleProofDir) == "" {
-		t.Fatal("live Python oracle opt-in requires a proof directory")
+	// The cases must reach each staleness answer, or a changed grace or
+	// schedule rule would be compared with nothing.
+	for _, status := range []string{"stale", "healthy", "not_scheduled"} {
+		if !staleness[status] {
+			t.Errorf("no frozen Python payload holds the staleness %q", status)
+		}
 	}
 }
 
@@ -163,27 +194,6 @@ func buildGoOraclePayload(t *testing.T, fixture payloadOracleFixture) projection
 		t.Fatal(err)
 	}
 	return payload
-}
-
-func executePythonPayloadOracle(t *testing.T, repositoryRoot, helperPath, fixturePath string) []byte {
-	t.Helper()
-	python := pyoracle.Resolve(t, repositoryRoot)
-	command := exec.Command(python, helperPath, fixturePath)
-	command.Env = append(os.Environ(), "PYTHONPATH="+filepath.Join(repositoryRoot, "src"))
-	var stderr bytes.Buffer
-	command.Stderr = &stderr
-	output, err := command.Output()
-	if err != nil {
-		t.Fatalf("execute live Python sync coverage oracle: %v", pyoracle.RunError(python, err, stderr.Bytes()))
-	}
-	if len(bytes.TrimSpace(output)) == 0 {
-		t.Fatalf("live Python sync coverage oracle returned empty output: %s", stderr.String())
-	}
-	proof := filepath.Join(os.Getenv(livePythonOracleProofDir), livePythonOracleProofFile)
-	if err := os.WriteFile(proof, []byte("executed\n"), 0o600); err != nil {
-		t.Fatalf("write live Python sync coverage oracle proof: %v", err)
-	}
-	return output
 }
 
 func canonicalJSON(t *testing.T, raw []byte) []byte {

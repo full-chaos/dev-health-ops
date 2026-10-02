@@ -1,4 +1,6 @@
 # Every file under internal/api/recordvalidation/testdata: sha256, kind, path. Written by `go run ./internal/testsupport/recordedfiles/manifest`; never edit it by hand.
 # python-recorded set: e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855 (0 files)
-# header-before-stamp set: e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855 (0 files)
+# header-before-stamp set: a0509385e43278dcb06dc666d60dd284c74a0f68377f6d0c765aaa4812330d1a (2 files)
+860ffa47077c3ed435a8b86e0650eab8efc206d018fe56b9694310434e5bb3b5	header-before-stamp	golden/record-models.golden.json
+a6692903fa9e7378d1ebf555f38bad28d45915633412b63f6c478e90b22553f7	header-before-stamp	golden/record-validation.golden.json
 3894e8889cb2804c0da424275786b50c49bcc8294caefa3278fed5682c1b28f1	unclassified	record_models.json

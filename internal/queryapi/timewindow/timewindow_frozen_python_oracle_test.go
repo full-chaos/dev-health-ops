@@ -1,20 +1,19 @@
 package timewindow
 
 import (
-	"bytes"
 	"encoding/json"
 	"fmt"
 	"math"
 	"math/big"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"runtime"
 	"strings"
 	"testing"
 	"time"
 
-	"github.com/full-chaos/dev-health-ops/internal/testsupport/pyoracle"
+	"github.com/full-chaos/dev-health-ops/internal/testsupport/programoracle"
+	"github.com/full-chaos/dev-health-ops/internal/testsupport/venueoracle"
 )
 
 // pythonTimeWindowProgram runs the real filtering.time_window (through a
@@ -50,18 +49,35 @@ for case in cases:
 print("RESULT " + json.dumps(out))
 `
 
-// TestComputeMatchesLivePythonTimeWindow compares Compute with Python's
+func TestMain(m *testing.M) { os.Exit(venueoracle.RunTests(m)) }
+
+// timeWindowGoldens is the set of this package's frozen Python answers. The
+// producers are the filtering and people services of the pinned build and the
+// filter model under them, so Identity names pydantic. A golden recorded by
+// another producer is refused.
+var timeWindowGoldens = programoracle.Set{
+	Package:       "./internal/queryapi/timewindow/",
+	Build:         "a4847c5e93607451a0c987b314d37e02fc43ce85",
+	Identity:      "python 3.14.7\nunicodedata 16.0.0\npydantic 2.13.5\npydantic-core 2.46.5",
+	Distributions: []string{"pydantic", "pydantic-core"},
+	// The goldenrecord verb writes each digest when it promotes a recording; a
+	// new golden starts as "PIN:" + its file name without ".json".
+	Pins: map[string]string{
+		"time-window.golden.json": "201117697dc0885ec6c922c9b0fe6da60fe516f18f708ae6020b9f8de8dc67d8",
+	},
+}
+
+// TestComputeMatchesFrozenPythonTimeWindow compares Compute with Python's
 // time_window and people._time_window on day counts and dates at the
 // edges of Python's date and timedelta limits. A day count past the Go int
 // range is sent to Python exactly and to Compute saturated, as the
 // validators hand it on.
-func TestComputeMatchesLivePythonTimeWindow(t *testing.T) {
-	if os.Getenv("DEV_HEALTH_LIVE_PYTHON_ORACLES") != "1" {
-		t.Skip("live Python oracles run only through ci/check_go.sh live-python-oracles")
+func TestComputeMatchesFrozenPythonTimeWindow(t *testing.T) {
+	_, file, _, ok := runtime.Caller(0)
+	if !ok {
+		t.Fatal("cannot locate the test source")
 	}
-	_, file, _, _ := runtime.Caller(0)
 	root := filepath.Clean(filepath.Join(filepath.Dir(file), "..", "..", ".."))
-	python := pyoracle.Resolve(t, root)
 
 	counts := []string{
 		"-1000000000000000000000", "-5", "0", "1", "14", "365",
@@ -111,13 +127,7 @@ func TestComputeMatchesLivePythonTimeWindow(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	command := exec.Command(python, "-c", pythonTimeWindowProgram)
-	command.Stdin = bytes.NewReader(payload)
-	command.Env = append(os.Environ(), "PYTHONPATH="+filepath.Join(root, "src"))
-	output, err := command.CombinedOutput()
-	if err != nil {
-		t.Fatalf("live python: %v", pyoracle.RunError(python, err, output))
-	}
+	output := timeWindowGoldens.Outputs(t, root, "time-window.golden.json", programoracle.Program{Name: "time window", Text: pythonTimeWindowProgram, Stdin: payload})[0]
 	var results []any
 	for _, line := range strings.Split(string(output), "\n") {
 		if rest, ok := strings.CutPrefix(line, "RESULT "); ok {
@@ -160,12 +170,7 @@ func TestComputeMatchesLivePythonTimeWindow(t *testing.T) {
 	if overflows == 0 || windows == 0 {
 		t.Fatalf("one-sided comparison: %d overflows, %d windows", overflows, windows)
 	}
-	t.Logf("%d cases match Python: %d windows, %d OverflowErrors", len(cases), windows, overflows)
-	if proof := os.Getenv("DEV_HEALTH_LIVE_PYTHON_ORACLE_PROOF_DIR"); proof != "" && !t.Failed() {
-		if err := os.WriteFile(filepath.Join(proof, "query-api-time-window"), []byte("executed"), 0o600); err != nil {
-			t.Fatal(err)
-		}
-	}
+	t.Logf("%d cases match the frozen Python answers: %d windows, %d OverflowErrors", len(cases), windows, overflows)
 }
 
 func mustDate(t *testing.T, text string) time.Time {

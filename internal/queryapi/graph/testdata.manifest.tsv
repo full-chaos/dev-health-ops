@@ -1,4 +1,5 @@
 # Every file under internal/queryapi/graph/testdata: sha256, kind, path. Written by `go run ./internal/testsupport/recordedfiles/manifest`; never edit it by hand.
 # python-recorded set: 5be9fb6b1513008369a059e2022128d2403af9c027faef5464d299f4fcaf2411 (1 files)
-# header-before-stamp set: e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855 (0 files)
+# header-before-stamp set: b6a453428bb54415fe6f6cf7d93ddda00d5bd8a10c857e36cc56207fb87d6b0a (1 files)
+05e5eed50cd95bc2bcfe0da646507c57eeee9940ccfcdc7188ba474f8087c4a3	header-before-stamp	golden/org-guard.golden.json
 a1b73917e3269eb675874d83170b72a0474732711534b45ab17532dad9850d94	python-recorded	pr_golden.json

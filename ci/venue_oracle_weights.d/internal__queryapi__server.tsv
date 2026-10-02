@@ -4,5 +4,4 @@ internal/queryapi/server	TestSavedReportMutationsCronDialectVenueOracle	62
 internal/queryapi/server	TestSavedReportMutationsVenueOracle	109
 internal/queryapi/server	TestSavedReportWriteProofBaselinesVenueOracle	86
 internal/queryapi/server	TestVenueOracleQueryAPIDictOrder	54
-internal/queryapi/server	TestVenueOracleQueryAPIResponseModels	12
 internal/queryapi/server	TestVenueOracleWorkUnitExplainProviderResolution	48

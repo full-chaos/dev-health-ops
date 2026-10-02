@@ -4,16 +4,18 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"maps"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"runtime"
+	"slices"
 	"testing"
 
 	"github.com/99designs/gqlgen/graphql"
 
 	"github.com/full-chaos/dev-health-ops/internal/queryapi/authctx"
-	"github.com/full-chaos/dev-health-ops/internal/testsupport/pyoracle"
+	"github.com/full-chaos/dev-health-ops/internal/testsupport/programoracle"
+	"github.com/full-chaos/dev-health-ops/internal/testsupport/venueoracle"
 )
 
 // pythonOrgGuardProgram executes each case through a real Strawberry schema
@@ -21,6 +23,7 @@ import (
 // org "org-own", and prints the operation's errors and whether a resolver ran.
 const pythonOrgGuardProgram = `
 import asyncio, json, sys, types
+from typing import Annotated
 import strawberry
 from dev_health_ops.api.graphql.extensions import OrgIdAuthExtension
 
@@ -39,6 +42,11 @@ class Query:
     def do_it(self, info: strawberry.Info, org_id: str | None = None) -> Inner:
         ran.append(info.context.org_id)
         return Inner()
+
+    @strawberry.field
+    def raw(self, info: strawberry.Info, org: Annotated[str | None, strawberry.argument(name="org_id")] = None) -> int:
+        ran.append(info.context.org_id)
+        return 1
 
 @strawberry.type
 class Mutation:
@@ -83,15 +91,32 @@ async def main():
 asyncio.run(main())
 `
 
-// Go's guard answers every case exactly as the live Python extension does:
+func TestMain(m *testing.M) { os.Exit(venueoracle.RunTests(m)) }
+
+// orgGuardGoldens is the set of this package's frozen Python answers. The
+// producer is the OrgIdAuthExtension of the pinned build on a Strawberry
+// schema, so Identity names that distribution. A golden recorded by another
+// producer is refused.
+var orgGuardGoldens = programoracle.Set{
+	Package:       "./internal/queryapi/graph/",
+	Build:         "a4847c5e93607451a0c987b314d37e02fc43ce85",
+	Identity:      "python 3.14.7\nunicodedata 16.0.0\nstrawberry-graphql 0.327.7",
+	Distributions: []string{"strawberry-graphql"},
+	// The goldenrecord verb writes each digest when it promotes a recording; a
+	// new golden starts as "PIN:" + its file name without ".json".
+	Pins: map[string]string{
+		"org-guard.golden.json": "3689953d5f5ebc64d04becf73493af684d7cff1d3bb8d57179b8fdb1cc28d485",
+	},
+}
+
+// Go's guard answers every case exactly as the frozen Python extension did:
 // the same refusal message, and no resolver run when it refuses.
-func TestOperationOrgViolationMatchesLivePythonExtension(t *testing.T) {
-	if os.Getenv("DEV_HEALTH_LIVE_PYTHON_ORACLES") != "1" {
-		t.Skip("live Python oracles run only through ci/check_go.sh live-python-oracles")
+func TestOperationOrgViolationMatchesFrozenPythonExtension(t *testing.T) {
+	_, file, _, ok := runtime.Caller(0)
+	if !ok {
+		t.Fatal("cannot locate the test source")
 	}
-	_, file, _, _ := runtime.Caller(0)
 	root := filepath.Clean(filepath.Join(filepath.Dir(file), "..", "..", ".."))
-	python := pyoracle.Resolve(t, root)
 
 	const own = "org-own"
 	docs := map[string]string{
@@ -103,6 +128,12 @@ func TestOperationOrgViolationMatchesLivePythonExtension(t *testing.T) {
 		"query fragment":  `query Q($orgId: String) { ...F } fragment F on Query { doIt(orgId: $orgId) { __typename } }`,
 		"mutation":        `mutation M($orgId: String) { write(orgId: $orgId) }`,
 		"mutation nested": `mutation M { write(orgId: "org-other") }`,
+		// The org argument inside an inline fragment, as a block string, and
+		// under its snake-case name.
+		"query inline fragment":    `query Q($orgId: String) { ... on Query { doIt(orgId: $orgId) { __typename } } }`,
+		"query block string other": `query Q { doIt(orgId: """org-other""") { __typename } }`,
+		"query block string own":   `query Q { doIt(orgId: """org-own""") { __typename } }`,
+		"query snake argument":     `query Q($orgId: String) { raw(org_id: $orgId) }`,
 	}
 	values := map[string]any{
 		"own": own, "other": "org-other", "empty": "", "left pad": " " + own, "right pad": own + "\n",
@@ -126,17 +157,22 @@ func TestOperationOrgViolationMatchesLivePythonExtension(t *testing.T) {
 		"impersonating superuser":  {Superuser: true, Verified: true, Impersonating: true},
 		"impersonating unverified": {Superuser: true, Impersonating: true},
 	}
+	// The cases are the program's input: they are built in the sorted order of
+	// the three maps, so the input is the same in every run.
 	var cases []oracleCase
-	for callerName, who := range callers {
-		for docName, document := range docs {
+	for _, callerName := range slices.Sorted(maps.Keys(callers)) {
+		who := callers[callerName]
+		for _, docName := range slices.Sorted(maps.Keys(docs)) {
+			document := docs[docName]
 			if callerName != "ordinary" && docName != "query" && docName != "mutation" && docName != "query two" && docName != "query nested" {
 				continue
 			}
-			if docName == "query literal" || docName == "query no org" || docName == "mutation nested" {
+			if docName == "query literal" || docName == "query no org" || docName == "mutation nested" || docName == "query block string other" || docName == "query block string own" {
 				cases = append(cases, oracleCase{callerName + "/" + docName, document, map[string]any{}, who})
 				continue
 			}
-			for valueName, value := range values {
+			for _, valueName := range slices.Sorted(maps.Keys(values)) {
+				value := values[valueName]
 				if callerName != "ordinary" && valueName != "own" && valueName != "other" && valueName != "empty" {
 					continue
 				}
@@ -156,13 +192,7 @@ func TestOperationOrgViolationMatchesLivePythonExtension(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	command := exec.Command(python, "-c", pythonOrgGuardProgram)
-	command.Stdin = bytes.NewReader(payload)
-	command.Env = append(os.Environ(), "PYTHONPATH="+filepath.Join(root, "src"))
-	output, err := command.CombinedOutput()
-	if err != nil {
-		t.Fatalf("live python: %v", pyoracle.RunError(python, err, output))
-	}
+	output := []byte(orgGuardGoldens.Outputs(t, root, "org-guard.golden.json", programoracle.Program{Name: "org guard", Text: pythonOrgGuardProgram, Stdin: payload})[0])
 	var results []struct {
 		Errors      []string         `json:"errors"`
 		Formatted   []map[string]any `json:"formatted"`
@@ -234,10 +264,5 @@ func TestOperationOrgViolationMatchesLivePythonExtension(t *testing.T) {
 	if refused == 0 || allowed == 0 || rebound == 0 {
 		t.Fatalf("one-sided comparison: %d refused, %d allowed, %d rebound", refused, allowed, rebound)
 	}
-	t.Logf("%d cases match the live OrgIdAuthExtension: %d refused, %d allowed (%d of them as the named org)", len(cases), refused, allowed, rebound)
-	if proof := os.Getenv("DEV_HEALTH_LIVE_PYTHON_ORACLE_PROOF_DIR"); proof != "" && !t.Failed() {
-		if err := os.WriteFile(filepath.Join(proof, "query-api-org-guard"), []byte("executed"), 0o600); err != nil {
-			t.Fatal(err)
-		}
-	}
+	t.Logf("%d cases match the frozen OrgIdAuthExtension: %d refused, %d allowed (%d of them as the named org)", len(cases), refused, allowed, rebound)
 }

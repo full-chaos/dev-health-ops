@@ -1,0 +1,5 @@
+# Every file under internal/api/policy/testdata: sha256, kind, path. Written by `go run ./internal/testsupport/recordedfiles/manifest`; never edit it by hand.
+# python-recorded set: e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855 (0 files)
+# header-before-stamp set: f104d2ed79470f8ee9758fcd7c9eac8b57d9f51ac4b24b0194b824953a016df6 (2 files)
+60b7effac7992af4c403a6153fbf0a580af2926bf805352a54e94e30751196fd	header-before-stamp	golden/principal-decisions.golden.json
+7243b313ac36f0e8f58806702369adc0d5a8a5b3021bdd6f9fb3823709c67c31	header-before-stamp	golden/users-row-decisions.golden.json

@@ -6,6 +6,8 @@ import (
 
 	"go.opentelemetry.io/otel"
 	sdkmetric "go.opentelemetry.io/otel/sdk/metric"
+
+	"github.com/full-chaos/dev-health-ops/internal/testsupport/venueoracle"
 )
 
 // testMetricReader is the ONE real MeterProvider this test binary installs, so a test can
@@ -16,5 +18,5 @@ var testMetricReader = sdkmetric.NewManualReader()
 
 func TestMain(m *testing.M) {
 	otel.SetMeterProvider(sdkmetric.NewMeterProvider(sdkmetric.WithReader(testMetricReader)))
-	os.Exit(m.Run())
+	os.Exit(venueoracle.RunTests(m))
 }

@@ -261,6 +261,7 @@ func (loop *Loop) run(ctx context.Context, ticker loopTicker, done chan struct{}
 	if ctx.Err() == nil {
 		if err := loop.step(ctx, loop.clock.Now()); err != nil {
 			loop.setFailed()
+			loop.logWindowFailure(ctx, err)
 			nextEligible = loop.clock.Now().Add(loop.backoff())
 		}
 		if loop.stepObserved != nil {
@@ -281,6 +282,7 @@ func (loop *Loop) run(ctx context.Context, ticker loopTicker, done chan struct{}
 			}
 			if err := loop.step(ctx, now); err != nil {
 				loop.setFailed()
+				loop.logWindowFailure(ctx, err)
 				nextEligible = loop.clock.Now().Add(loop.backoff())
 				if loop.stepObserved != nil {
 					loop.stepObserved()
@@ -347,6 +349,18 @@ func (loop *Loop) step(parent context.Context, now time.Time) (stepErr error) {
 	loop.ready.Store(true)
 	loop.mu.Unlock()
 	return nil
+}
+
+// logWindowFailure is the one place a failed window's full error reaches the
+// log. step logs each failed SCHEDULE, but a window failure that is not a
+// schedule's (a step timeout, an overdue schedule, an engine error) was
+// returned to run and dropped; the span carries only an error class
+// (CHAOS-7879), so the text must be here.
+func (loop *Loop) logWindowFailure(ctx context.Context, err error) {
+	if errors.Is(err, context.Canceled) {
+		return
+	}
+	loop.logger().ErrorContext(ctx, "fixed schedule window failed", "error", err.Error())
 }
 
 func (loop *Loop) record(result WindowResult, now time.Time) {

@@ -1,10 +1,14 @@
 package fixed
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
+	"github.com/full-chaos/dev-health-ops/internal/platform/health"
+	"log/slog"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -110,8 +114,8 @@ func TestFixedLoopStepEmitsWindowAndDecisionSpans(t *testing.T) {
 			if child.Status.Code != codes.Error {
 				t.Errorf("failed schedule span status = %v, want Error", child.Status.Code)
 			}
-			if strings.Contains(fmt.Sprint(child), "payload-in-error") {
-				t.Errorf("error text reached the span")
+			if strings.Contains(fmt.Sprint(child), "payload-in-error") || child.Status.Description != "other" {
+				t.Errorf("error text reached the span or description %q is not the class", child.Status.Description)
 			}
 		case schedule.ID:
 			sawDecided = true
@@ -177,4 +181,61 @@ func TestScheduleDecidedEachSignalAlone(t *testing.T) {
 			t.Errorf("%s alone did not count as decided", name)
 		}
 	}
+}
+
+type erroringStepper struct{ schedules []Schedule }
+
+func (stepper erroringStepper) Step(context.Context, time.Time) (WindowResult, error) {
+	return WindowResult{}, errors.New("engine down {marker-in-error}")
+}
+func (stepper erroringStepper) Schedules() []Schedule { return stepper.schedules }
+
+// The span carries only an error class, so the full text of a window failure
+// that is not a schedule's (it was returned to run and dropped before
+// CHAOS-7879) must reach the log, and not the span.
+func TestFixedLoopLogsAWindowFailureThatSpansOnlyClassify(t *testing.T) {
+	exporter := installFixedSpanRecorder(t)
+	var logs syncBuffer
+	clock := &fixedTestClock{now: mustTime(t, "2026-07-24T00:00:00Z")}
+	loop, err := newLoop(erroringStepper{schedules: []Schedule{heartbeatSchedule(t)}}, LoopConfig{
+		PollInterval: minLoopPollInterval,
+		StepTimeout:  time.Second,
+		MaxBackoff:   2 * minLoopPollInterval,
+		Registry:     health.NewRegistry(time.Second),
+		Logger:       slog.New(slog.NewJSONHandler(&logs, nil)),
+	}, clock)
+	if err != nil {
+		t.Fatal(err)
+	}
+	observed := make(chan struct{}, 4)
+	loop.stepObserved = func() { observed <- struct{}{} }
+	if err := loop.Start(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	waitForStepObserved(t, observed, "the first window to finish")
+	_ = loop.Shutdown(context.Background())
+	if !strings.Contains(logs.String(), "fixed schedule window failed") || !strings.Contains(logs.String(), "marker-in-error") {
+		t.Errorf("window failure text not logged: %q", logs.String())
+	}
+	for _, span := range exporter.GetSpans() {
+		if strings.Contains(fmt.Sprint(span), "marker-in-error") {
+			t.Errorf("error text reached span %s", span.Name)
+		}
+	}
+}
+
+type syncBuffer struct {
+	mu  sync.Mutex
+	buf bytes.Buffer
+}
+
+func (b *syncBuffer) Write(p []byte) (int, error) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.buf.Write(p)
+}
+func (b *syncBuffer) String() string {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.buf.String()
 }

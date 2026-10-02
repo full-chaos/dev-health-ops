@@ -3,6 +3,8 @@ package sync
 import (
 	"context"
 	"errors"
+	"fmt"
+	"strings"
 	"testing"
 	"time"
 
@@ -106,7 +108,7 @@ func TestLoopStepFallbackWindowIsAnErrorSpanWithCronCounts(t *testing.T) {
 func TestLoopStepFailureIsAnErrorSpanAndShutdownCancelIsNot(t *testing.T) {
 	exporter := installLoopSpanRecorder(t)
 	failing := loopStepFunc(func(context.Context, time.Time, int, Coordinator) (HandoffResult, error) {
-		return HandoffResult{}, errors.New("planner down")
+		return HandoffResult{}, errors.New("planner down {payload-in-error}")
 	})
 	loop, _ := newTestLoop(t, failing, &testLoopClock{now: time.Unix(1_700_000_000, 0)})
 	if err := loop.step(context.Background(), time.Unix(1_700_000_000, 0)); err == nil {
@@ -115,6 +117,9 @@ func TestLoopStepFailureIsAnErrorSpanAndShutdownCancelIsNot(t *testing.T) {
 	spans := exporter.GetSpans()
 	if len(spans) != 1 || spans[0].Status.Code != codes.Error || len(spans[0].Events) != 1 {
 		t.Fatalf("a failed window must be an Error span with one exception event: %v", spans)
+	}
+	if spans[0].Status.Description != "other" || strings.Contains(fmt.Sprint(spans[0]), "payload-in-error") {
+		t.Errorf("status description %q / error text on the span; want the class only", spans[0].Status.Description)
 	}
 
 	exporter.Reset()

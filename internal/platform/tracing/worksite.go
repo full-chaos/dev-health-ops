@@ -2,8 +2,8 @@ package tracing
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
-	"fmt"
 
 	"go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/attribute"
@@ -23,15 +23,28 @@ func StartWorkSpan(ctx context.Context, scope, name string, attributes ...attrib
 	return otel.Tracer(scope).Start(ctx, name, oteltrace.WithAttributes(attributes...))
 }
 
-// EndWorkSpan ends span. A non-nil err adds an "exception" event carrying only
-// exception.type (the Go type of the innermost wrapped error, a bounded fixed
-// word) and sets the span status to Error with no description, so a failed unit
-// of work is separable from a quiet one. The error TEXT is deliberately never
-// recorded: stream handlers and sinks wrap driver errors that can echo payload
-// fragments (the process log already carries the full chain, server-side). A
-// nil err leaves the status unset. A context.Canceled err is a
-// shutdown, not a failure: it is marked dev_health.work.cancelled and left
-// without an Error status. Safe with a nil span.
+// Closed list of error classes a work span may carry (error.type). Anything
+// not recognised is ErrorClassOther; the list is the whole vocabulary, so a
+// span can never carry free text from an error.
+const (
+	ErrorClassTimeout = "timeout"
+	ErrorClassDecode  = "decode"
+	ErrorClassStore   = "store"
+	ErrorClassOther   = "other"
+)
+
+// ErrorClasses is the closed list, for tests and docs.
+var ErrorClasses = []string{ErrorClassTimeout, ErrorClassDecode, ErrorClassStore, ErrorClassOther}
+
+// EndWorkSpan ends span. A non-nil err sets the span status to Error with the
+// error CLASS as its description, adds an "exception" event carrying only
+// error.type = that class, and nothing else: the error TEXT is deliberately
+// never recorded, because stream handlers and sinks wrap driver errors that can
+// echo an org marker, a stream key, a URL or payload fragments. The full chain
+// stays in the process log line each loop already writes. A nil err leaves the
+// status unset. A context.Canceled err is a shutdown, not a failure: it is
+// marked dev_health.work.cancelled and left without an Error status. Safe with
+// a nil span.
 func EndWorkSpan(span oteltrace.Span, err error) {
 	if span == nil {
 		return
@@ -42,19 +55,30 @@ func EndWorkSpan(span oteltrace.Span, err error) {
 		return
 	}
 	if err != nil {
-		span.AddEvent("exception", oteltrace.WithAttributes(attribute.String("exception.type", errorClass(err))))
-		span.SetStatus(codes.Error, "")
+		class := ErrorClass(err)
+		span.AddEvent("exception", oteltrace.WithAttributes(attribute.String("error.type", class)))
+		span.SetStatus(codes.Error, class)
 	}
 	span.End()
 }
 
-// errorClass is the Go type name of the innermost error in err's Unwrap chain.
-func errorClass(err error) string {
-	for {
-		next := errors.Unwrap(err)
-		if next == nil {
-			return fmt.Sprintf("%T", err)
-		}
-		err = next
+// ErrorClass maps err to one of ErrorClasses by behaviour, never by text:
+// a deadline or a net timeout is timeout; a JSON syntax/type error is decode;
+// an error exposing a SQLSTATE (pgconn.PgError) is store; everything else is
+// other.
+func ErrorClass(err error) string {
+	var netTimeout interface{ Timeout() bool }
+	var syntaxErr *json.SyntaxError
+	var typeErr *json.UnmarshalTypeError
+	var sqlState interface{ SQLState() string }
+	switch {
+	case errors.Is(err, context.DeadlineExceeded), errors.As(err, &netTimeout) && netTimeout.Timeout():
+		return ErrorClassTimeout
+	case errors.As(err, &syntaxErr), errors.As(err, &typeErr):
+		return ErrorClassDecode
+	case errors.As(err, &sqlState):
+		return ErrorClassStore
+	default:
+		return ErrorClassOther
 	}
 }

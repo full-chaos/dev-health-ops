@@ -287,6 +287,7 @@ internal/synccli	79
 internal/synccoverage	2
 internal/syncdispatchcontract	1
 internal/syncdispatchruntime	47
+internal/syncdispatchruntime/synclog	6
 internal/synchandoff	1
 internal/synclimits	1
 internal/syncreconciler	2

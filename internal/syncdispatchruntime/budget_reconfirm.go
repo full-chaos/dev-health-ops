@@ -2,7 +2,7 @@ package syncdispatchruntime
 
 import (
 	"context"
-	"log/slog"
+	"github.com/full-chaos/dev-health-ops/internal/syncdispatchruntime/synclog"
 	"time"
 
 	"github.com/jackc/pgx/v5"
@@ -51,14 +51,11 @@ type cooldownReconfirmResult struct {
 // enforceRun pass shares exactly one `now`, so a single timestamp
 // (not a per-unit map) is enough.
 func reconfirmCooldowns(
-	ctx context.Context, tx pgx.Tx, logger *slog.Logger,
+	ctx context.Context, tx pgx.Tx, logger *synclog.Logger,
 	syncRunID string, units []budgetUnit, estimatesByUnit map[string][]budgetEstimate,
 	alreadyExcludedIDs map[string]bool, jitterSeconds int,
 	surplusPriorAvailableAt map[string]time.Time, surplusPromotedAt time.Time, now time.Time,
 ) (cooldownReconfirmResult, error) {
-	if logger == nil {
-		logger = slog.Default()
-	}
 
 	candidates := make([]budgetUnit, 0, len(units))
 	for _, unit := range units {
@@ -134,8 +131,7 @@ func reconfirmCooldowns(
 			continue
 		}
 		excluded[unit.id] = true
-		logger.InfoContext(ctx, "dispatch_sync_run.rate_limit_cooldown_reconfirmed",
-			slog.String("sync_run_id", syncRunID), slog.String("unit_id", unit.id), slog.Bool("terminalized", terminalized))
+		logger.Info(ctx, synclog.MsgDispatchSyncRunRateLimitCooldownReconfirmed, synclog.Run(synclog.ParseID(syncRunID)), synclog.Unit(synclog.ParseID(unit.id)), synclog.Flag(synclog.KeyTerminalized, terminalized))
 		if !terminalized {
 			nextDeferredAt = earlierOf(nextDeferredAt, at)
 		}

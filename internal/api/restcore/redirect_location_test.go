@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"strings"
 	"testing"
 	"time"
@@ -176,6 +177,40 @@ func TestATransportErrorStartingWithTheLocationPhraseIsNotARedirect(t *testing.T
 		var apiErr *Error
 		if !errors.As(err, &apiErr) || apiErr.Class != "TransportError" || strings.Contains(apiErr.Message, "unexpected redirect") {
 			t.Fatalf("%s: err = %v, want a TransportError that is not reworded as a redirect", name, err)
+		}
+	}
+}
+
+type erroringBody struct{ err error }
+
+func (b erroringBody) Read([]byte) (int, error) { return 0, b.err }
+func (b erroringBody) Close() error             { return nil }
+
+type redirectThenBrokenBody struct{ err error }
+
+func (r redirectThenBrokenBody) RoundTrip(request *http.Request) (*http.Response, error) {
+	return &http.Response{
+		StatusCode: http.StatusFound, Status: "302 Found", Proto: "HTTP/1.1", ProtoMajor: 1, ProtoMinor: 1,
+		Header:  http.Header{"Location": []string{"https://next.example.test/x"}},
+		Body:    erroringBody{err: r.err},
+		Request: request,
+	}, nil
+}
+
+// CHAOS-7927 vet: the witness is set (a 3xx with a VALID Location came back) and then reading its body fails with an error that
+// starts with net/http's phrase: that is still an ordinary transport error. Only the shape (a *url.Error holding the phrase)
+// together with the witness is a refused Location, so this state is where the shape half decides.
+func TestAWitnessedRedirectWhoseBodyReadFailsStaysATransportError(t *testing.T) {
+	for name, cause := range map[string]error{
+		"plain read failure":           errors.New("connection reset by peer"),
+		"phrase-shaped error":          errors.New("failed to parse Location header \"x\": planted detail"),
+		"url error without the phrase": &url.Error{Op: "Get", URL: "https://api.example.test/x", Err: errors.New("read: connection reset by peer")},
+	} {
+		core := Core{Provider: "github", RetryAfter: func(Response) time.Duration { return 0 }, HTTP: &http.Client{Transport: redirectThenBrokenBody{err: cause}}}
+		_, err := core.Get(context.Background(), "https://api.example.test/x", "GET /probe")
+		var apiErr *Error
+		if !errors.As(err, &apiErr) || strings.Contains(apiErr.Message, "unexpected redirect") {
+			t.Fatalf("%s: err = %v, want an error that is not reworded as a redirect", name, err)
 		}
 	}
 }

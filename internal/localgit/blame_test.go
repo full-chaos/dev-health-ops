@@ -248,3 +248,29 @@ func TestParseEpochTextKeepsWhatDoesNotFitAnInt64(t *testing.T) {
 		}
 	}
 }
+
+// resolve is pathlib.Path.resolve() (non-strict): an existing target is followed to its real path (EvalSymlinks),
+// and a BROKEN link resolves to its target as written (an absolute target is kept as it is, a relative one is
+// taken from the link's own directory). The absolute branch is reached only by a broken absolute link, which no
+// recorded scenario has (a link to an existing file never gets past EvalSymlinks): this pins it.
+func TestResolveKeepsABrokenLinksTarget(t *testing.T) {
+	base, err := filepath.EvalSymlinks(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	absolute := filepath.Join(base, "missing", "abs-target")
+	absLink := filepath.Join(base, "abs-link")
+	if err := os.Symlink(absolute, absLink); err != nil {
+		t.Fatal(err)
+	}
+	if got := resolve(absLink); got != absolute {
+		t.Errorf("a broken absolute link resolved to %q, want its target %q", got, absolute)
+	}
+	relLink := filepath.Join(base, "rel-link")
+	if err := os.Symlink(filepath.Join("missing", "rel-target"), relLink); err != nil {
+		t.Fatal(err)
+	}
+	if got, want := resolve(relLink), filepath.Join(base, "missing", "rel-target"); got != want {
+		t.Errorf("a broken relative link resolved to %q, want %q", got, want)
+	}
+}

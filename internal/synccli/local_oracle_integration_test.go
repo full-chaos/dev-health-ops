@@ -1026,7 +1026,7 @@ func TestLocalSyncMatchesFrozenPython(t *testing.T) {
 	golden := venueoracle.OpenGolden(t, venueoracle.GoldenSpec{
 		Path:        "testdata/golden/local_sync.json",
 		PythonBuild: localPythonBuild,
-		SHA256:      "PIN:local_sync",
+		SHA256:      "1b5c17054bd5255834944f1ebb2a46da474336ba9b1a5cba20dfa46099e1a9f7",
 		Recipe: "git worktree add --detach $DIR " + localPythonBuild + " (with its .venv: uv sync --frozen --no-install-project); then from the repository root: " +
 			"go run ./internal/testsupport/venueoracle/goldenrecord -pkg ./internal/synccli/ -test '^TestLocalSyncMatchesFrozenPython$' -python-root $DIR",
 	})
@@ -1237,7 +1237,7 @@ func TestLocalSyncRerunKeepsHeldColumnsUnlikePythonFrozen(t *testing.T) {
 	golden := venueoracle.OpenGolden(t, venueoracle.GoldenSpec{
 		Path:        "testdata/golden/local_rerun.json",
 		PythonBuild: localPythonBuild,
-		SHA256:      "PIN:local_rerun",
+		SHA256:      "bb0224d28b4ff52079d76762425c05d3fff2eb3a8e7ff7517ccf30f8915f25b0",
 		Recipe: "git worktree add --detach $DIR " + localPythonBuild + " (with its .venv: uv sync --frozen --no-install-project); then from the repository root: " +
 			"go run ./internal/testsupport/venueoracle/goldenrecord -pkg ./internal/synccli/ -test '^TestLocalSyncRerunKeepsHeldColumnsUnlikePythonFrozen$' -python-root $DIR",
 	})

@@ -251,9 +251,6 @@ internal/scheduler/sync/testdata/golden/jira-discovery-rows.golden.json
 internal/scheduler/sync/testdata/golden/operator-datasets.golden.json
 internal/scheduler/sync/testdata/golden/planner-backfill.golden.json
 internal/scheduler/sync/testdata/golden/planner-scheduled.golden.json
-internal/scheduler/sync/testdata/golden/venue-credential-fingerprint.golden.json
-internal/scheduler/sync/testdata/golden/venue-jira-rename.golden.json
-internal/scheduler/sync/testdata/golden/venue-zero-unit-stamp.golden.json
 internal/testsupport/programoracle/testdata/golden/blocks.golden.json
 internal/testsupport/programoracle/testdata/golden/run.golden.json
 internal/testsupport/programoracle/testdata/golden/script.golden.json

@@ -21,7 +21,11 @@ import (
 var ProbePaths = []string{"/health", "/ready", "/health/workers"}
 
 func isProbePath(path string) bool {
-	for _, probe := range ProbePaths {
+	return pathIn(ProbePaths, path)
+}
+
+func pathIn(paths []string, path string) bool {
+	for _, probe := range paths {
 		if path == probe {
 			return true
 		}
@@ -51,13 +55,23 @@ type spanObserver struct {
 	// sampling decision, so it can neither force recording nor write spans into
 	// a trace it names.
 	trustRemoteSampling bool
+	// probes are the exact paths this observer never traces. Nil means
+	// ProbePaths (the api listeners').
+	probes []string
+}
+
+func (s spanObserver) isProbe(path string) bool {
+	if s.probes != nil {
+		return pathIn(s.probes, path)
+	}
+	return isProbePath(path)
 }
 
 // start returns the request context to serve with and the span, or r's own
 // context and nil for a probe path.
 func (s spanObserver) start(r *http.Request) (context.Context, trace.Span) {
 	ctx := r.Context()
-	if isProbePath(r.URL.Path) {
+	if s.isProbe(r.URL.Path) {
 		return ctx, nil
 	}
 	options := []trace.SpanStartOption{
@@ -113,4 +127,20 @@ func boundedMethod(method string) string {
 		return "OTHER"
 	}
 	return method
+}
+
+// GraphQLErrorCountAttribute is the span attribute that says how many errors a
+// GraphQL response carried. gqlgen answers a resolver error with HTTP 200, so
+// the status code alone cannot show an error share; the count is a number only,
+// never an error message or a variable value.
+const GraphQLErrorCountAttribute = "dev_health.graphql.error_count"
+
+// RecordGraphQLErrorCount sets GraphQLErrorCountAttribute on the request's
+// server span (the span in ctx); a no-op without a recording span.
+func RecordGraphQLErrorCount(ctx context.Context, count int) {
+	span := trace.SpanFromContext(ctx)
+	if !span.IsRecording() {
+		return
+	}
+	span.SetAttributes(attribute.Int(GraphQLErrorCountAttribute, count))
 }

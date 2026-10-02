@@ -25,7 +25,6 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/cli"
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/containers"
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/pyoracle"
-	"github.com/full-chaos/dev-health-ops/internal/testsupport/venueoracle"
 )
 
 // The executed proof of `dho migrate clickhouse upgrade|status` (CHAOS-6899):
@@ -615,31 +614,6 @@ func (e *migrateEnv) schemaDigest2(t *testing.T, database string) string {
 	return hex.EncodeToString(sum[:])
 }
 
-// TestMigrateClickHouseVenueOracleMatchesThePythonRunner runs the scenarios
-// through the real Python verbs and through dho on a scratch ClickHouse. With
-// DHO_MIGRATE_GOLDEN_UPDATE=1 it rewrites the frozen file.
-func TestMigrateClickHouseVenueOracleMatchesThePythonRunner(t *testing.T) {
-	if os.Getenv("DEV_HEALTH_LIVE_PYTHON_ORACLES") != "1" {
-		t.Skip("the live Python producer runs only with DEV_HEALTH_LIVE_PYTHON_ORACLES=1 and the full project Python environment")
-	}
-	e := runMigrateScenarios(t, true)
-	if os.Getenv("DHO_MIGRATE_GOLDEN_UPDATE") == "1" && !t.Failed() {
-		raw, err := json.MarshalIndent(e.recorded, "", " ")
-		if err != nil {
-			t.Fatal(err)
-		}
-		if err := os.MkdirAll("testdata", 0o755); err != nil {
-			t.Fatal(err)
-		}
-		if err := os.WriteFile(migrateGolden, append(raw, '\n'), 0o644); err != nil {
-			t.Fatal(err)
-		}
-	}
-	if !t.Failed() {
-		venueoracle.WriteProof(t)
-	}
-}
-
 // TestMigrateClickHouseMatchesTheFrozenPythonOutput runs dho through the same
 // scenarios against the facts the real Python verbs produced (frozen; no
 // Python needed).
@@ -653,3 +627,13 @@ func TestMigrateClickHouseMatchesTheFrozenPythonOutput(t *testing.T) {
 		t.Fatal("the golden holds no upgrade digest or no applied versions: it measures nothing")
 	}
 }
+
+// The frozen facts in testdata/migrate_golden.json and testdata/repair_golden.json
+// were last proven equal to the live Python verbs on 2026-10-01 (CHAOS-7337 E),
+// by the live tests that stood here: Python at build
+// a4847c5e93607451a0c987b314d37e02fc43ce85's venv over the Python src of main,
+// both goldens rewritten and byte-equal to the checked-in files. The live tests
+// are deleted with the Python they ran, so the goldens cannot be recorded again
+// after the Python delete (CHAOS-7308); to re-prove them while Python still
+// exists, restore TestMigrateClickHouseVenueOracleMatchesThePythonRunner and
+// TestRepairVenueOracleMatchesThePythonProducer from this commit's parent.

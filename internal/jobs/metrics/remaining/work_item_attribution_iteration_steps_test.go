@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"reflect"
+	"strings"
 	"testing"
 	"time"
 
@@ -153,7 +154,14 @@ func TestHandlerKeepsTheExecutorsStepAndDoesNotReWrapIt(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			cause, ok := jobruntime.SafeCause(handler.Work(t.Context(), capacityExecution()))
+			workErr := handler.Work(t.Context(), capacityExecution())
+			// The retry class must survive the step tag: an error returned as
+			// Permanent, or without the Retryable wrapper, cancels the job after
+			// one attempt and the untagged retry test would not notice.
+			if workErr == nil || !strings.Contains(workErr.Error(), string(jobruntime.CategoryRetryable)) {
+				t.Fatalf("not Retryable: %v", workErr)
+			}
+			cause, ok := jobruntime.SafeCause(workErr)
 			if !ok || cause != test.want {
 				t.Fatalf("cause = %q ok=%v, want %q", cause, ok, test.want)
 			}

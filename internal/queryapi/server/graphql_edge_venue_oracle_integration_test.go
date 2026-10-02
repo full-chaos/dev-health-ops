@@ -171,6 +171,21 @@ type edgeAnswer struct {
 	header string
 }
 
+// throughputForecastCoverageDivergence is the declared divergence of
+// throughputForecast.estimateCoverage on a scope with no throughput history and
+// no estimate-coverage rows (the venue's seed): the recorded Python answer is
+// null (forecast.py skipped the coverage read when the backlog was 0), and
+// query-api answers the ZERO object, by chris's decision "Keep zero" (D4373,
+// read as D4376 by the lead: coverage is built from its own rows, a zero object
+// when there are none, never null). The recorded Python answer stays as
+// recorded; this case holds both sides' answers, so neither can drift unseen.
+func throughputForecastCoverageDivergence(c edgeCase) edgeCase {
+	c.declared = "estimateCoverage: Python answered null when the backlog was 0 (it skipped the read); query-api answers the zero object (D4373 Keep zero, D4376)"
+	c.pyWant = edgeAnswer{status: 200, body: `"estimateCoverage":null`}
+	c.goWant = edgeAnswer{status: 200, body: `"estimateCoverage":{"ratio":null,"estimatedCount":0,"unestimatedCount":0,"backlogSize":0,"__typename":"ThroughputEstimateCoverage"}`}
+	return c
+}
+
 // nosniffOnly is the declared divergence of the size middleware's own
 // refusals: they run outside the security headers, as in the Python app, and
 // the Python answer carries none; query-api's writer states nosniff itself.
@@ -407,13 +422,17 @@ func edgeOracleCases(t *testing.T, docs []registeredEdgeDocument, users []edgeUs
 		variables := spec.Variables(edgeOrgA, goapiproof.DefaultWindow())
 		name := documentOperationName(doc.Document)
 		post := edgeCase{request: edgePost("POST "+doc.Operation, member, urqlBody(t, name, doc.Document, variables), nil)}
+		get := edgeCase{request: edgeGet("GET "+doc.Operation, member, urqlGETPath(t, edgeOrgA, name, doc.Document, variables), nil)}
+		if doc.Operation == "throughputForecast" {
+			post, get = throughputForecastCoverageDivergence(post), throughputForecastCoverageDivergence(get)
+		}
 		if doc.Operation == "createSavedReport" {
 			writes = append(writes, post)
 			continue
 		}
 		cases = append(cases, post)
 		// A mutation as GET too: both planes must refuse it, never run it.
-		cases = append(cases, edgeCase{request: edgeGet("GET "+doc.Operation, member, urqlGETPath(t, edgeOrgA, name, doc.Document, variables), nil)})
+		cases = append(cases, get)
 	}
 
 	// The credential domain, on one query and one mutation.

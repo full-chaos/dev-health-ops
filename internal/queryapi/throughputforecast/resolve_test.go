@@ -295,9 +295,10 @@ func TestResolveCallerSuppliedBacklogSkipsTheBacklogRead(t *testing.T) {
 
 func TestResolveAnExplicitZeroBacklogIsSuppliedNotAbsent(t *testing.T) {
 	responses := fullResponseSet(t, 120, 7)
-	// No backlog read AND no estimate-coverage read: the backlog is zero, and
-	// coverage OF an empty backlog is not a meaningful ratio.
-	responses = append(responses[:1], responses[3:]...)
+	// No backlog read (a supplied backlog short-circuits it). The estimate
+	// coverage read STILL runs (D4373/D4376): coverage is built from its own
+	// rows, never from the backlog gate.
+	responses = append(responses[:1], responses[2:]...)
 	client := &fakeClient{responses: responses}
 
 	got, err := Resolve(context.Background(), client, "org-1",
@@ -312,15 +313,88 @@ func TestResolveAnExplicitZeroBacklogIsSuppliedNotAbsent(t *testing.T) {
 	// The nil check is on the POINTER: an explicit 0 must NOT fall through to
 	// the derived backlog, which is exactly what a `backlogSize != 0` check
 	// would do.
-	if client.calls != 5 {
-		t.Errorf("issued %d queries, want 5 (backlog and coverage both skipped)", client.calls)
+	if client.calls != 6 {
+		t.Errorf("issued %d queries, want 6 (backlog skipped, coverage read)", client.calls)
 	}
-	if got.EstimateCoverage != nil {
-		t.Error("estimateCoverage: got a value, want it absent for an empty backlog")
+	if got.EstimateCoverage == nil || got.EstimateCoverage.EstimatedCount != 40 || got.EstimateCoverage.BacklogSize != 100 {
+		t.Errorf("estimateCoverage: got %+v, want the coverage rows' own counts at a zero backlog", got.EstimateCoverage)
 	}
 	// A zero backlog finishes in zero weeks -- not "unknown".
 	if got.P50Weeks == nil || *got.P50Weeks != 0 {
 		t.Errorf("p50Weeks: got %v, want 0", got.P50Weeks)
+	}
+}
+
+// CHAOS-7867 (D4373 "Keep zero", D4376): a team whose DERIVED backlog is 0
+// (its work_item_metrics_daily newest day is stale / WIP 0) but that has
+// coverage rows answers those rows -- est 0, unest 1, backlog 1, ratio 0 --
+// never null. The gate no longer decides whether coverage is read.
+func TestResolveCoverageIsBuiltFromItsOwnRowsWhenTheDerivedBacklogIsZero(t *testing.T) {
+	responses := fullResponseSet(t, 120, 7)
+	responses[1] = oneRow(uint64(0))                       // derived backlog 0
+	responses[2] = oneRow(uint64(0), uint64(1), uint64(1)) // coverage rows: est 0 / unest 1 / backlog 1
+	client := &fakeClient{responses: responses}
+
+	got, err := Resolve(context.Background(), client, "org-1",
+		model.ThroughputForecastInput{HistoryWeeks: 12}, mustDay(t, "2026-09-01"))
+	if err != nil {
+		t.Fatalf("Resolve: %v", err)
+	}
+	if got.BacklogSize != 0 {
+		t.Fatalf("backlogSize: got %d, want the derived 0", got.BacklogSize)
+	}
+	coverage := got.EstimateCoverage
+	if coverage == nil {
+		t.Fatal("estimateCoverage: got null, want an object built from the coverage rows")
+	}
+	if coverage.EstimatedCount != 0 || coverage.UnestimatedCount != 1 || coverage.BacklogSize != 1 {
+		t.Errorf("estimateCoverage counts: got %+v, want est 0 / unest 1 / backlog 1", coverage)
+	}
+	if coverage.Ratio == nil || *coverage.Ratio != 0 {
+		t.Errorf("ratio: got %v, want 0 (0 of a backlog of 1)", coverage.Ratio)
+	}
+	if client.calls != 7 {
+		t.Errorf("issued %d queries, want all 7 (the coverage read must not be gated)", client.calls)
+	}
+}
+
+// With no coverage row at all the answer is the ZERO object -- never null --
+// on the history-bearing path and on the no-history payload alike.
+func TestResolveWithNoCoverageRowsAnswersTheZeroObjectNeverNull(t *testing.T) {
+	t.Run("history", func(t *testing.T) {
+		responses := fullResponseSet(t, 120, 7)
+		responses[1] = oneRow(uint64(0)) // derived backlog 0
+		responses[2] = &fakeRowScanner{} // coverage: the driver hands back no row
+		client := &fakeClient{responses: responses}
+		got, err := Resolve(context.Background(), client, "org-1",
+			model.ThroughputForecastInput{HistoryWeeks: 12}, mustDay(t, "2026-09-01"))
+		if err != nil {
+			t.Fatalf("Resolve: %v", err)
+		}
+		assertZeroCoverage(t, got.EstimateCoverage)
+	})
+	t.Run("no history", func(t *testing.T) {
+		client := &fakeClient{responses: []*fakeRowScanner{
+			{},                // no throughput rows
+			oneRow(uint64(0)), // derived backlog 0
+			{},                // coverage: no row
+		}}
+		got, err := Resolve(context.Background(), client, "org-1",
+			model.ThroughputForecastInput{HistoryWeeks: 12}, mustDay(t, "2026-09-01"))
+		if err != nil {
+			t.Fatalf("Resolve: %v", err)
+		}
+		assertZeroCoverage(t, got.EstimateCoverage)
+	})
+}
+
+func assertZeroCoverage(t *testing.T, coverage *model.ThroughputEstimateCoverage) {
+	t.Helper()
+	if coverage == nil {
+		t.Fatal("estimateCoverage: got null, want the zero object")
+	}
+	if coverage.EstimatedCount != 0 || coverage.UnestimatedCount != 0 || coverage.BacklogSize != 0 || coverage.Ratio != nil {
+		t.Errorf("estimateCoverage: got %+v, want zero counts and a null ratio (0 of 0 is undefined)", coverage)
 	}
 }
 

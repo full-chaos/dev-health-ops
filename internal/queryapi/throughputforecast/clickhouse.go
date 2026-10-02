@@ -344,12 +344,12 @@ func loadEstimateCoverage(
 	if err := rows.Err(); err != nil {
 		return nil, fmt.Errorf("throughputForecast: estimate coverage rows: %w", err)
 	}
-	// Python returns None when backlog_size is None, which is the no-rows case
-	// -- `rows[0] if rows else {}` then `.get("backlog_size")` is None. sum()
-	// over a non-Nullable column never yields NULL, so on a real ClickHouse
-	// this branch is reached only when the driver hands back no row at all.
+	// No row at all (a driver that hands back nothing, or a double that does):
+	// the zero object, never nil (D4373/D4376). On a real ClickHouse sum() over
+	// a non-Nullable column always yields one row, so this branch only keeps the
+	// "never null" rule independent of the engine's behaviour.
 	if !seen {
-		return nil, nil
+		return &estimateCoverage{}, nil
 	}
 
 	estimatedCount, err := countFromAggregate("estimated_count", estimated)

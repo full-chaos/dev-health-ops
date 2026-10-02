@@ -340,6 +340,7 @@ def test_the_workflow_keeps_each_shard_stream_apart_from_the_hits() -> None:
     for job, label in (
         ("shard", "${{ matrix.target }}-${{ matrix.shard }}"),
         ("unit", "unit"),
+        ("scope", "scope"),
     ):
         uploads = [
             step["with"]
@@ -502,9 +503,15 @@ def test_the_workflow_is_path_scoped_and_keeps_python_out_of_the_shard() -> None
     workflow = yaml.safe_load(WORKFLOW.read_text())
     triggers = workflow.get("on") or workflow.get(True)
     assert "schedule" in triggers and "workflow_dispatch" in triggers
-    # A pull request runs it only when it edits the workflow, the tripwire/ratchet scripts or the list.
-    assert triggers["pull_request"]["paths"] == triggers["push"]["paths"]
-    assert "ci/python_free_known.tsv" in triggers["pull_request"]["paths"]
+    # Every push to main runs the full job (CHAOS-7853): a stale or new row is seen at the merge that caused it.
+    assert "paths" not in triggers["push"] and triggers["push"]["branches"] == ["main"]
+    # A pull request that touches these trees runs the workflow; its plan job picks the full job (the tripwire,
+    # ratchet, list, harness or workflow changed) or the scope job (every listed test).
+    assert set(triggers["pull_request"]["paths"]) == {
+        ".github/workflows/**",
+        "ci/**",
+        "internal/**",
+    }
     shard_steps = workflow["jobs"]["shard"]["steps"]
     assert not any("setup-python" in str(step.get("uses", "")) for step in shard_steps)
     chmod_step = next(
@@ -518,7 +525,26 @@ def test_the_workflow_is_path_scoped_and_keeps_python_out_of_the_shard() -> None
     )
     assert run_step["env"]["GO_PYTHON_FREE"] == "1"
     assert workflow["jobs"]["ratchet"]["if"] == "always()"
-    assert set(workflow["jobs"]["ratchet"]["needs"]) == {"plan", "shard", "unit"}
+    assert set(workflow["jobs"]["ratchet"]["needs"]) == {
+        "plan",
+        "shard",
+        "unit",
+        "scope",
+    }
+    # The full legs run only in the full mode, the scope leg only in the scope mode.
+    for job, mode in (("shard", "full"), ("unit", "full"), ("scope", "scope")):
+        assert workflow["jobs"][job]["if"] == f"needs.plan.outputs.mode == '{mode}'", (
+            job
+        )
+    scope_steps = workflow["jobs"]["scope"]["steps"]
+    assert not any("setup-python" in str(step.get("uses", "")) for step in scope_steps)
+    scope_run = next(
+        step
+        for step in scope_steps
+        if str(step.get("name", "")).startswith("Run every listed")
+    )
+    assert scope_run["env"]["GO_PYTHON_FREE"] == "1"
+    assert scope_run["run"].strip() == "bash ci/check_go.sh python-free-listed"
     unit_steps = workflow["jobs"]["unit"]["steps"]
     assert not any("setup-python" in str(step.get("uses", "")) for step in unit_steps)
     compare = next(

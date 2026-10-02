@@ -1,10 +1,10 @@
 # Every file under internal/fixturescli/testdata: sha256, kind, path. Written by `go run ./internal/testsupport/recordedfiles/manifest`; never edit it by hand.
-# python-recorded set: c634e96cc0f70958461162bdcf0f8e2ee89639fd7a1019bc3fd82a32c85a43db (1 files)
+# python-recorded set: e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855 (0 files)
 # header-before-stamp set: 61bb38532ae45f39b71af72ccfdd52d116d748ec86b4a08e77fe2a87234464c8 (1 files)
-d5e5d19fc136376877f52adb3db5385f4444b5ddb1f4a0b9240ecefa532f9570	python-recorded	finalize_synthetic_golden.json
 317334daef77b2599258ee9701a04beef37b328e12492c768b4c0c8a6b12f8eb	unclassified	generate/github_acme__live-e2e_r1_14d_c6_p24_t10_s20260219_raw.json.gz
 4767e3ae066bfa89336bc37d19644f137ef1cf0ce60e568468c55783a3400833	unclassified	generate/synthetic_acme__live-e2e_r1_14d_c6_p24_t10_s20260219_mg.json.gz
 8470b539f55e1ecd22b8ba9b52dd0921a9b51222dfd6a7d5a8050139e9f2abd8	unclassified	generate/synthetic_ci-metrics-executed-proof__repo_r1_7d_c5_p20_t1_s4276_raw.json.gz
+-	header	golden/finalize_synthetic.json
 b8d31703b19efd7ae7a23770561ba1695bff77f4e6bd5da234fe9ee4d84c95ce	header-before-stamp	golden/ordering.json
 791791ad5e64f294f89cf6311c548a623f977ae2a9830009c2970192ee5ff2ce	unclassified	synthetic/11111111-2222-4333-8444-555555555555_acme__live-e2e_14d.json.gz
 aca986cc454b3a85cbf927bc6a0d24e2cff4c766f60d87e8bf2973185062aa9b	unclassified	synthetic/c0ffee00-dead-4bee-8bad-f00dfeedface_ci-metrics-executed-proof__repo_7d.json.gz

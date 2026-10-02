@@ -3,10 +3,10 @@ package venueoracle
 import (
 	"context"
 	"fmt"
-	"os"
 	"os/exec"
 	"path/filepath"
 	"sort"
+	"strings"
 	"testing"
 
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/pyoracle"
@@ -109,13 +109,9 @@ func (p *Producer) activate() error {
 	if p.python != "" {
 		return nil
 	}
-	bin, err := interpreterDir(pyoracle.Resolve(p.t, p.Root))
+	bin, err := ActivateInterpreter(p.t, p.Root)
 	if err != nil {
 		return fmt.Errorf("produce: %w", err)
-	}
-	p.t.Setenv("PATH", bin+string(os.PathListSeparator)+os.Getenv("PATH"))
-	if found, err := exec.LookPath("python3"); err != nil || filepath.Dir(found) != bin {
-		return fmt.Errorf("produce: python3 on PATH is %q (%v), want the one in %s", found, err, bin)
 	}
 	p.python = filepath.Join(bin, "python3")
 	return nil
@@ -130,6 +126,9 @@ func (p *Producer) activate() error {
 func (p *Producer) Command(ctx context.Context, declared map[string]string, extra []string, args ...string) (*exec.Cmd, error) {
 	if option := ignoresEnvironment(args); option != "" {
 		return nil, fmt.Errorf("produce: the interpreter option %s makes Python ignore its environment variables, the closed environment's and the recording guard's with them: start the producer without it", option)
+	}
+	if err := extraEntriesErr(declared, extra); err != nil {
+		return nil, err
 	}
 	if err := p.activate(); err != nil {
 		return nil, err
@@ -149,6 +148,51 @@ func (p *Producer) Command(ctx context.Context, declared map[string]string, extr
 	command.Args[0] = p.python
 	command.Env = p.Env(declared, extra...)
 	return command, nil
+}
+
+// producerExtraNames is the closed list of the names a call may pass as extra
+// entries: values made for one run, which no key can hold by value. They are
+// the address of the run's own database or cache and the address of a fake
+// server the test starts (the names of perRunPythonEnv that a test supplies).
+// Every other name, HOME, PATH, PYTHONPATH and TMPDIR among them, shapes the
+// answer, so it goes in declared, where the request's key holds it by name and
+// value.
+var producerExtraNames = map[string]bool{
+	"CLICKHOUSE_URI": true,
+	"POSTGRES_URI":   true,
+	"DATABASE_URI":   true,
+	"REDIS_URL":      true,
+}
+
+func producerExtraName(name string) bool {
+	if producerExtraNames[name] {
+		return true
+	}
+	listed, ok := perRunPythonEnv[name]
+	return ok && listed.byTest
+}
+
+// extraEntriesErr is an error for an extra entry that is not NAME=VALUE, whose
+// name is not on the closed list (producerExtraNames, perRunPythonEnv's test
+// names), that repeats, or that repeats a declared name.
+func extraEntriesErr(declared map[string]string, extra []string) error {
+	seen := map[string]bool{}
+	for _, entry := range extra {
+		name, _, found := strings.Cut(entry, "=")
+		switch {
+		case !found || name == "":
+			return fmt.Errorf("produce: the extra entry %q is not NAME=VALUE", name)
+		case !producerExtraName(name):
+			return fmt.Errorf("produce: the extra entry %s is not on the closed list of per-run names (the address of the run's own database or cache, the address of a fake server): a value that shapes the answer goes in declared, where the request's key holds it by name and value", name)
+		case seen[name]:
+			return fmt.Errorf("produce: the extra entry %s is passed twice", name)
+		}
+		if _, held := declared[name]; held {
+			return fmt.Errorf("produce: the extra entry %s is also declared: one name, one source", name)
+		}
+		seen[name] = true
+	}
+	return nil
 }
 
 // RequireDeployed fails the test when the producer's interpreter is older than

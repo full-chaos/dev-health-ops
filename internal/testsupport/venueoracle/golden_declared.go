@@ -9,6 +9,7 @@ import (
 	"regexp"
 	"sort"
 	"strings"
+	"unicode/utf8"
 )
 
 // A credential constant a test sends on purpose (a push token, a password the CLI puts in a header) is the same
@@ -218,47 +219,138 @@ const base64Alignments = 4
 func declaredDecodedLeaks(text string, constants []string) []string {
 	var found []string
 	note := func(index int, form string) { found = append(found, fmt.Sprintf("#%d (%s)", index, form)) }
-	for _, tokens := range []struct {
-		tokens   []string
-		encoding *base64.Encoding
-	}{
-		{base64StdToken.FindAllString(text, -1), base64.RawStdEncoding},
-		{base64URLToken.FindAllString(text, -1), base64.RawURLEncoding},
-	} {
-		for _, token := range tokens.tokens {
-			// Padding is dropped first: the raw decoders read a padded token too once its '=' are gone.
-			trimmed := strings.TrimRight(token, "=")
-			for drop := 0; drop < base64Alignments && drop < len(trimmed); drop++ {
-				part := trimmed[drop:]
-				if len(part)%4 == 1 {
-					part = part[:len(part)-1] // a lone last character carries no byte
+	// The text is compared as DECODED values, not searched for one spelling of the constant: the JSON escapes in it
+	// (\uXXXX, \/, \", and the rest) are resolved, once and twice (a JSON text inside a JSON string), and each
+	// resulting text goes through the URL decoder and the base64 alphabets.
+	variants := []string{text}
+	for level := 0; level < 2; level++ {
+		next := jsonUnescapedText(variants[len(variants)-1])
+		if next == variants[len(variants)-1] {
+			break
+		}
+		variants = append(variants, next)
+	}
+	for level, variant := range variants {
+		if level > 0 {
+			for index, value := range constants {
+				if strings.Contains(variant, value) {
+					note(index, "JSON-escaped")
 				}
-				decoded := decodeBase64(tokens.encoding, part)
-				if decoded == nil {
-					continue
-				}
-				for index, value := range constants {
-					if strings.Contains(string(decoded), value) {
-						note(index, "base64")
+			}
+		}
+		for _, tokens := range []struct {
+			tokens   []string
+			encoding *base64.Encoding
+		}{
+			{base64StdToken.FindAllString(variant, -1), base64.RawStdEncoding},
+			{base64URLToken.FindAllString(variant, -1), base64.RawURLEncoding},
+		} {
+			for _, token := range tokens.tokens {
+				// Padding is dropped first: the raw decoders read a padded token too once its '=' are gone.
+				trimmed := strings.TrimRight(token, "=")
+				for drop := 0; drop < base64Alignments && drop < len(trimmed); drop++ {
+					part := trimmed[drop:]
+					if len(part)%4 == 1 {
+						part = part[:len(part)-1] // a lone last character carries no byte
+					}
+					decoded := decodeBase64(tokens.encoding, part)
+					if decoded == nil {
+						continue
+					}
+					for index, value := range constants {
+						if strings.Contains(string(decoded), value) {
+							note(index, "base64")
+						}
 					}
 				}
 			}
 		}
-	}
-	unescaped := []string{percentDecoded(text, false), percentDecoded(text, true)}
-	for index, value := range constants {
-		for _, candidate := range unescaped {
-			if candidate != text && strings.Contains(candidate, value) {
-				note(index, "URL-escaped")
+		for _, candidate := range []string{percentDecoded(variant, false), percentDecoded(variant, true)} {
+			if candidate == variant {
+				continue
 			}
-		}
-		for _, escaped := range []string{jsonEscaped(value), jsonEscaped(jsonEscaped(value))} {
-			if escaped != value && strings.Contains(text, escaped) {
-				note(index, "JSON-escaped")
+			for index, value := range constants {
+				if strings.Contains(candidate, value) {
+					note(index, "URL-escaped")
+				}
 			}
 		}
 	}
 	return found
+}
+
+// jsonUnescapedText is text with every valid JSON escape resolved (\" \\ \/ \b \f \n \r \t and \uXXXX, a surrogate
+// pair as one rune), wherever it stands: the text is not parsed, so it may be a fragment of JSON. An invalid escape
+// stays as it is.
+func jsonUnescapedText(text string) string {
+	var out strings.Builder
+	for i := 0; i < len(text); i++ {
+		c := text[i]
+		if c != '\\' || i+1 >= len(text) {
+			out.WriteByte(c)
+			continue
+		}
+		switch next := text[i+1]; next {
+		case '"', '\\', '/':
+			out.WriteByte(next)
+			i++
+		case 'b':
+			out.WriteByte('\b')
+			i++
+		case 'f':
+			out.WriteByte('\f')
+			i++
+		case 'n':
+			out.WriteByte('\n')
+			i++
+		case 'r':
+			out.WriteByte('\r')
+			i++
+		case 't':
+			out.WriteByte('\t')
+			i++
+		case 'u':
+			r, width := jsonRuneEscape(text[i:])
+			if width == 0 {
+				out.WriteByte(c)
+				continue
+			}
+			out.WriteRune(r)
+			i += width - 1
+		default:
+			out.WriteByte(c)
+		}
+	}
+	return out.String()
+}
+
+// jsonRuneEscape reads \uXXXX (and a following \uXXXX low surrogate) at the start of text: the rune and the bytes used,
+// or width 0 when text does not start with a valid escape.
+func jsonRuneEscape(text string) (rune, int) {
+	hex4 := func(at int) (rune, bool) {
+		if len(text) < at+6 || text[at] != '\\' || text[at+1] != 'u' {
+			return 0, false
+		}
+		var r rune
+		for _, c := range []byte(text[at+2 : at+6]) {
+			if !isHex(c) {
+				return 0, false
+			}
+			r = r<<4 | rune(unhex(c))
+		}
+		return r, true
+	}
+	first, ok := hex4(0)
+	if !ok {
+		return 0, 0
+	}
+	if first >= 0xD800 && first < 0xDC00 {
+		if second, ok := hex4(6); ok && second >= 0xDC00 && second < 0xE000 {
+			return 0x10000 + (first-0xD800)<<10 + (second - 0xDC00), 12
+		}
+		return utf8.RuneError, 6
+	}
+	return first, 6
 }
 
 // percentDecoded is text with every valid %XX (either hex case) replaced by its byte, whatever encoder wrote it; an

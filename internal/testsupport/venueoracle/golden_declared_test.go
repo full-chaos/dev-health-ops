@@ -501,3 +501,59 @@ func TestADecodedFormAtTheEdgeOfATokenOrTheTextIsRefused(t *testing.T) {
 		t.Errorf("an escape that ends the text was not read: %q", got)
 	}
 }
+
+// ---- lead D4213: the check compares DECODED values. Every JSON escape form of a constant is refused, and a URL or
+// base64 form inside an escaped JSON text too.
+
+func uEscaped(s string) string {
+	var out strings.Builder
+	for _, r := range s {
+		if r >= 0x10000 {
+			r -= 0x10000
+			fmt.Fprintf(&out, `\u%04x\u%04x`, 0xD800+(r>>10), 0xDC00+(r&0x3ff))
+			continue
+		}
+		fmt.Fprintf(&out, `\u%04X`, r)
+	}
+	return out.String()
+}
+
+func TestAJSONEscapedConstantIsRefusedInEveryEscapeForm(t *testing.T) {
+	const constant = "synth/pass\"word+\U0001F511x"
+	slashEscaped := strings.ReplaceAll(jsonEscaped(constant), "/", `\/`)
+	for name, leaf := range map[string]string{
+		`\uXXXX (upper hex)`:  `{"password":"` + uEscaped(constant) + `"}`,
+		`\uXXXX (lower hex)`:  `{"password":"` + strings.ToLower(uEscaped(constant)) + `"}`,
+		`escaped slash form`:  `{"password":"` + slashEscaped + `"}`,
+		`mixed forms`:         `{"password":"synth\/pass"word` + `+` + `🔑x"}`,
+		`fragment, not JSON`:  `password=` + slashEscaped + `;`,
+		`two levels, \u form`: `{"body":"{\"password\":\"` + uEscaped(constant) + `\"}"}`,
+	} {
+		if got := leakFormsOf(t, leaf, constant); !strings.Contains(got, "#0 (JSON-escaped)") {
+			t.Errorf("%s: a JSON-escaped declared constant was not refused: %q", name, got)
+		}
+	}
+	// a non-hex digit is not read as a number: \u004G would be 'P' if G counted as hex
+	if got := leakFormsOf(t, `synth\u004G`, "synthP"); got != "" {
+		t.Errorf("an invalid escape was decoded as if it were valid: %q", got)
+	}
+	if got := leakFormsOf(t, `{"a":"\u00zz \q \ud83d tail"}`, constant); got != "" {
+		t.Errorf("invalid escapes with no constant were refused: %q", got)
+	}
+}
+
+func TestAnEncodedFormInsideAnEscapedJSONTextIsRefused(t *testing.T) {
+	std := base64.StdEncoding.EncodeToString([]byte("u:" + declaredQuoted))
+	inner := `{"auth":"Basic ` + std + `","url":"/x?k=` + url.QueryEscape(declaredQuoted) + `"}`
+	outer, _ := json.Marshal(map[string]string{"body": inner})
+	for name, leaf := range map[string]string{
+		"base64 inside JSON text": inner,
+		"inside two levels":       string(outer),
+		"u-escaped base64 plus":   strings.ReplaceAll(inner, "+", `+`),
+	} {
+		got := leakFormsOf(t, leaf, declaredQuoted)
+		if !strings.Contains(got, "#0 (base64)") && !strings.Contains(got, "#0 (URL-escaped)") {
+			t.Errorf("%s: not refused: %q", name, got)
+		}
+	}
+}

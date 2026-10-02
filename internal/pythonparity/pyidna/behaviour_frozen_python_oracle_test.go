@@ -6,6 +6,7 @@ import (
 	"math/rand"
 	"os"
 	"slices"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -84,8 +85,27 @@ var kindNames = map[pyidna.Kind]string{
 	pyidna.KindInvalidCodepoint: "InvalidCodepoint", pyidna.KindInvalidCodepointContext: "InvalidCodepointContext",
 }
 
+// behaviourSweepCalls is the number of calls of the code point sweeps in
+// behaviourCorpus, and behaviourSweepRunes the number of runes in their texts.
+// The corpus takes the texts of the sweeps from one array: one allocation for
+// each of 5.6 million calls was most of the time to build the corpus.
+const (
+	behaviourSweepCalls = 2*0x110000 + 3*0x30000 + 14*0x30000
+	behaviourSweepRunes = 0x110000*(3+2) + 0x30000*(1+2+3) + 0x30000*(1+3+3+2+2+2+3+7*3)
+)
+
 func behaviourCorpus() []behaviourCall {
-	var calls []behaviourCall
+	calls := make([]behaviourCall, 0, behaviourSweepCalls+31000)
+	slab := make([]rune, 0, behaviourSweepRunes)
+	// text is runes as a slice of the sweeps' one array. The array has its
+	// full size from the start, so append never copies it; each slice is cut
+	// to its own length, so an append to one call's text cannot reach the
+	// next.
+	text := func(runes ...rune) []rune {
+		start := len(slab)
+		slab = append(slab, runes...)
+		return slab[start:len(slab):len(slab)]
+	}
 	// Decode is only ever handed ASCII (email-validator passes
 	// ascii_domain.encode("ascii")), so it is only asked about ASCII.
 	add := func(fn string, text []rune) {
@@ -99,12 +119,12 @@ func behaviourCorpus() []behaviourCall {
 		calls = append(calls, behaviourCall{Fn: fn, Text: text})
 	}
 	for r := rune(0); r <= 0x10ffff; r++ {
-		add("remap", []rune{'x', r, 'y'})
-		add("alabel", []rune{'x', r})
+		add("remap", text('x', r, 'y'))
+		add("alabel", text('x', r))
 		if r < 0x30000 {
-			add("alabel", []rune{r})
-			add("alabel", []rune{0x05d0, r})
-			add("alabel", []rune{0x0915, 0x094d, r})
+			add("alabel", text(r))
+			add("alabel", text(0x05d0, r))
+			add("alabel", text(0x0915, 0x094d, r))
 		}
 	}
 	for _, text := range []string{
@@ -133,16 +153,16 @@ func behaviourCorpus() []behaviourCall {
 	contexto := []rune{0x00b7, 0x0375, 0x05f3, 0x05f4, 0x30fb, 0x0661, 0x06f1}
 	for r := rune(0); r < 0x30000; r++ {
 		calls = append(calls,
-			behaviourCall{Fn: "contexto", Text: []rune{r}},
-			behaviourCall{Fn: "contextj", Text: []rune{r, 0x200c, 0x0628}, Pos: 1},
-			behaviourCall{Fn: "contextj", Text: []rune{0x0628, 0x200c, r}, Pos: 1},
-			behaviourCall{Fn: "contextj", Text: []rune{r, 0x200d}, Pos: 1},
-			behaviourCall{Fn: "bidi", Text: []rune{0x05d0, r}},
-			behaviourCall{Fn: "bidi", Text: []rune{r, 0x05d0}},
-			behaviourCall{Fn: "bidi", Text: []rune{'a', r, 0x05d0}},
+			behaviourCall{Fn: "contexto", Text: text(r)},
+			behaviourCall{Fn: "contextj", Text: text(r, 0x200c, 0x0628), Pos: 1},
+			behaviourCall{Fn: "contextj", Text: text(0x0628, 0x200c, r), Pos: 1},
+			behaviourCall{Fn: "contextj", Text: text(r, 0x200d), Pos: 1},
+			behaviourCall{Fn: "bidi", Text: text(0x05d0, r)},
+			behaviourCall{Fn: "bidi", Text: text(r, 0x05d0)},
+			behaviourCall{Fn: "bidi", Text: text('a', r, 0x05d0)},
 		)
 		for _, c := range contexto {
-			calls = append(calls, behaviourCall{Fn: "contexto", Text: []rune{r, c, r}, Pos: 1})
+			calls = append(calls, behaviourCall{Fn: "contexto", Text: text(r, c, r), Pos: 1})
 		}
 	}
 	random := rand.New(rand.NewSource(3180))
@@ -155,6 +175,76 @@ func behaviourCorpus() []behaviourCall {
 		add([]string{"remap", "alabel", "ulabel", "encode", "decode"}[i%5], text)
 	}
 	return calls
+}
+
+// appendCallsJSON appends the JSON of calls, byte for byte what json.Marshal
+// writes for them: the input of the frozen program, and so part of its
+// request. It does not go through reflection: the corpus is 5.6 million calls
+// and 236 MB of JSON, and the generic encoder is the largest cost of this test
+// under the race detector. The request check of the golden holds the result to
+// the recorded input on every run, and requireCallEncoding to json.Marshal.
+func appendCallsJSON(dst []byte, calls []behaviourCall) []byte {
+	dst = append(dst, '[')
+	for index, call := range calls {
+		if index > 0 {
+			dst = append(dst, ',')
+		}
+		dst = append(dst, `{"fn":"`...)
+		dst = append(dst, call.Fn...)
+		dst = append(dst, `","text":`...)
+		if call.Text == nil {
+			dst = append(dst, "null"...)
+		} else {
+			dst = append(dst, '[')
+			for position, r := range call.Text {
+				if position > 0 {
+					dst = append(dst, ',')
+				}
+				dst = strconv.AppendInt(dst, int64(r), 10)
+			}
+			dst = append(dst, ']')
+		}
+		if call.Pos != 0 {
+			dst = append(dst, `,"pos":`...)
+			dst = strconv.AppendInt(dst, int64(call.Pos), 10)
+		}
+		dst = append(dst, '}')
+	}
+	return append(dst, ']')
+}
+
+// requireCallEncoding fails the test unless appendCallsJSON writes what
+// json.Marshal writes, on a part of the corpus that holds every shape: the
+// first call of each function, every 9973rd call, the last 2000 calls (the
+// random texts, with nil and empty ones), a nil text, an empty text, and code
+// points of one to seven digits with a position. The encoder writes a function
+// name with no escape, so a name that needs one is refused here.
+func requireCallEncoding(t *testing.T, calls []behaviourCall) {
+	t.Helper()
+	sample := []behaviourCall{{Fn: "remap"}, {Fn: "remap", Text: []rune{}}, {Fn: "contextj", Text: []rune{0, 9, 10, 99, 100, 0x10ffff}, Pos: 1}}
+	functions := map[string]bool{}
+	for index, call := range calls {
+		if !functions[call.Fn] || index%9973 == 0 || index >= len(calls)-2000 {
+			sample = append(sample, call)
+		}
+		functions[call.Fn] = true
+	}
+	for name := range functions {
+		if strings.ContainsFunc(name, func(r rune) bool { return r < 'a' || r > 'z' }) {
+			t.Fatalf("the function name %q needs a JSON escape the encoder does not write", name)
+		}
+	}
+	want, err := json.Marshal(sample)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := appendCallsJSON(nil, sample); string(got) != string(want) {
+		at := 0
+		for at < len(got) && at < len(want) && got[at] == want[at] {
+			at++
+		}
+		t.Fatalf("the encoder and json.Marshal differ at byte %d of %d calls:\n encoder      %q\n json.Marshal %q", at, len(sample), got[max(0, at-40):min(len(got), at+40)], want[max(0, at-40):min(len(want), at+40)])
+	}
 }
 
 // sweepProbe recognises behaviourCorpus's code point sweep shapes and
@@ -249,10 +339,8 @@ func boolRunes(value bool) []rune {
 func TestBehaviourMatchesFrozenPython(t *testing.T) {
 	regenerate := os.Getenv("DEV_HEALTH_REGENERATE_TABLES") == "1"
 	calls := behaviourCorpus()
-	payload, err := json.Marshal(calls)
-	if err != nil {
-		t.Fatal(err)
-	}
+	requireCallEncoding(t, calls)
+	payload := appendCallsJSON(make([]byte, 0, 240<<20), calls)
 	output := frozenPython(t, "behaviour.golden.json", programoracle.Program{Name: "behaviour", Text: behaviourProgram, Stdin: payload})[0]
 	// The answers here. The block digests prove each is the Python answer, so
 	// the slice cut for the golden below is a slice of the Python answers.

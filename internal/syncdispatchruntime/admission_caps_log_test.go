@@ -68,3 +68,38 @@ func TestDispatchServiceConstructionLogsTheAdmissionCaps(t *testing.T) {
 		}
 	}
 }
+
+// TestDispatchServiceConstructionLogsTheClampWhereItDiffersFromEveryCap pins
+// the unclamped case: with SYNC_UNIT_CONCURRENCY_PER_BUCKET=8 the caps are the
+// table's 4/2/1 and the clamp attribute is 8, so a line that prints the clamp
+// in place of a cap (or a cap in place of the clamp) cannot pass (CHAOS-7881).
+func TestDispatchServiceConstructionLogsTheClampWhereItDiffersFromEveryCap(t *testing.T) {
+	t.Setenv("SYNC_UNIT_CONCURRENCY_PER_BUCKET", "8")
+	var logs bytes.Buffer
+	if _, err := NewNativeDispatchSyncRunService(
+		&pgxpool.Pool{}, slog.New(slog.NewJSONHandler(&logs, nil)),
+		noopBudgetEstimator{}, &joboutbox.Producer{}, noopPolicyRegistry{},
+	); err != nil {
+		t.Fatal(err)
+	}
+	var found map[string]any
+	for _, line := range strings.Split(strings.TrimSpace(logs.String()), "\n") {
+		var record map[string]any
+		if json.Unmarshal([]byte(line), &record) == nil && record["msg"] == "sync_dispatch_admission_caps" {
+			found = record
+		}
+	}
+	if found == nil {
+		t.Fatalf("no sync_dispatch_admission_caps line in:\n%s", logs.String())
+	}
+	want := map[string]float64{
+		"admission_cap_light": 4, "admission_cap_medium": 2, "admission_cap_heavy": 1,
+		"budget_limit_light": 4, "budget_limit_medium": 2, "budget_limit_heavy": 1,
+		"admission_clamp": 8,
+	}
+	for key, value := range want {
+		if found[key] != value {
+			t.Fatalf("%s = %v; want %v in %v", key, found[key], value, found)
+		}
+	}
+}

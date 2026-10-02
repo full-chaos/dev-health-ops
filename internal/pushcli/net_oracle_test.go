@@ -309,10 +309,25 @@ var (
 	netPushToken  = regexp.MustCompile(`fcpush_[A-Za-z0-9_-]{16,}`)
 )
 
-// netScrub turns a credential the corpus sends (the fake's request log holds the Authorization header; the
-// cases carry test push tokens) into a typed placeholder that keeps what the oracle compares: whether two
-// requests carried the SAME credential (a short digest of the value). A golden stores no token value. It runs
-// on the recorded answers and on dho's answers alike, and is idempotent.
+// netCredentialConstants are the EXACT test credentials the corpus sends: made in the test (net_corpus_test.go), never real,
+// never from the environment. Only these are replaced; any other credential-shaped value that reaches an answer is an error
+// (netUnscrubbed), so a new credential cannot reach a golden without being named here.
+var netCredentialConstants = map[string]bool{
+	netToken: true, "other-secret": true, "fcpush_legacy": true, "fcpush_primary": true, "fcpush_flag": true, "fcpush_f": true,
+	// the Basic credentials of the userinfo cases: base64 of "ann:s@cret", "ann:" and ":s@cret" (test logins, made in the corpus)
+	"YW5uOnNAY3JldA==": true, "YW5uOg==": true, "OnNAY3JldA==": true,
+}
+
+// netScrub turns the test credentials the corpus sends (the fake's request log holds the Authorization header; the cases carry
+// test push tokens) into a typed placeholder that keeps what the oracle compares: whether two requests carried the SAME
+// credential (a short digest of the value). A golden stores no token value. It runs on the recorded answers and on dho's answers
+// alike (ONE helper for both planes), and is idempotent.
+//
+// NAMED EXCEPTION (CHAOS-7898): this scrub runs in the PRODUCER, before the answers are stored, because the record verb refused
+// a spec Scrub that replaces a deterministic leaf. It is therefore NOT checked by the record verb: the guards are the exact
+// constant list above, the leftover check netUnscrubbed (a credential-shaped value outside the list fails the producer and the
+// replay), and the plants of CHAOS-7790 (a different token = RED, the scrub removed = RED). CHAOS-7898 moves push_net to a
+// recorder-side digest scrub for a declared credential constant; no other golden uses a producer-side scrub.
 func netScrub(text string) string {
 	digest := func(value string) string {
 		sum := sha256.Sum256([]byte(value))
@@ -320,11 +335,32 @@ func netScrub(text string) string {
 	}
 	text = netAuthScheme.ReplaceAllStringFunc(text, func(match string) string {
 		parts := netAuthScheme.FindStringSubmatch(match)
+		if !netCredentialConstants[parts[2]] {
+			return match // not a listed credential: left as it is, netUnscrubbed names it
+		}
 		return parts[1] + " <credential sha256:" + digest(parts[2]) + ">"
 	})
 	return netPushToken.ReplaceAllStringFunc(text, func(match string) string {
+		if !netCredentialConstants[match] {
+			return match
+		}
 		return "<push token sha256:" + digest(match) + ">"
 	})
+}
+
+// netUnscrubbed is the credential-shaped text still in text after netScrub: a push token of the real shape, or the value of a
+// Bearer/Basic scheme that is not a placeholder. Empty means every credential in the answer was a listed constant.
+func netUnscrubbed(text string) []string {
+	var left []string
+	for _, match := range netPushToken.FindAllString(text, -1) {
+		left = append(left, match)
+	}
+	for _, parts := range netAuthScheme.FindAllStringSubmatch(text, -1) {
+		if !strings.HasPrefix(parts[2], "<") {
+			left = append(left, parts[2])
+		}
+	}
+	return left
 }
 
 func netScrubResult(result netResult) netResult {
@@ -471,6 +507,11 @@ func TestPushNetMatchesTheFrozenPythonOutput(t *testing.T) {
 		// has no run-value scrub of its own to check.
 		for index := range results {
 			results[index] = netScrubResult(results[index])
+			for _, text := range append([]string{results[index].Stdout, results[index].Stderr}, results[index].Requests...) {
+				if left := netUnscrubbed(text); len(left) != 0 {
+					t.Fatalf("case %d: %d credential-shaped value(s) outside netCredentialConstants reached an answer (CHAOS-7898: the producer-side scrub is exact): name the constant or fix the corpus", index, len(left))
+				}
+			}
 		}
 		body, err := json.Marshal(results)
 		if err != nil {

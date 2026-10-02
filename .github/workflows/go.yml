@@ -102,6 +102,10 @@ on:
       # one of them alone must run the guard (internal/testsupport/recordedfiles).
       - '**/*.manifest.tsv'
       - 'internal/testsupport/recordedfiles/unclassified_day_one.txt'
+      # The closed lists of the recording guards are .txt files of their packages
+      # (pyoracle/unconverted_own_launch.txt, recordedfiles/header_before_stamp_ceiling.txt):
+      # a change to one of them alone must run the guard that reads it.
+      - 'internal/testsupport/**/*.txt'
       # Go tests read these directly (contracts/*.json via os.ReadFile,
       # internal/**/families.json via filepath.Join). Not under testdata/
       # or fixtures/, so the shared glob above does not reach them.
@@ -279,6 +283,10 @@ on:
       # one of them alone must run the guard (internal/testsupport/recordedfiles).
       - '**/*.manifest.tsv'
       - 'internal/testsupport/recordedfiles/unclassified_day_one.txt'
+      # The closed lists of the recording guards are .txt files of their packages
+      # (pyoracle/unconverted_own_launch.txt, recordedfiles/header_before_stamp_ceiling.txt):
+      # a change to one of them alone must run the guard that reads it.
+      - 'internal/testsupport/**/*.txt'
       # Go tests read these directly (contracts/*.json via os.ReadFile,
       # internal/**/families.json via filepath.Join). Not under testdata/
       # or fixtures/, so the shared glob above does not reach them.

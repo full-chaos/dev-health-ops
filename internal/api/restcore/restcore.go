@@ -104,10 +104,12 @@ func DefaultRetryable(r Response) bool {
 // place on a timeout or refused connection and on a retryable status, a 3xx
 // an APIException, then classified by _raise_for_status.
 func (c Core) Get(ctx context.Context, target, operation string) (Response, error) {
-	httpClient := httpguard.NoRedirects(c.HTTP)
-	if httpClient == nil {
-		httpClient = &http.Client{Timeout: DefaultTimeout, CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}
+	supplied := c.HTTP
+	if supplied == nil {
+		supplied = &http.Client{Timeout: DefaultTimeout}
 	}
+	// The one guard layer: whatever client came in (a caller's, or this default), the credential never follows a redirect.
+	httpClient := httpguard.NoRedirects(supplied)
 	sleep := c.Sleep
 	if sleep == nil {
 		sleep = sleepContext

@@ -73,10 +73,10 @@ func Routes(deps Deps) []httpapi.Route {
 	}
 }
 
-// defaultProbeClient follows no redirects and dials only addresses the SSRF
-// guard's classification allows, whatever the URL check resolved earlier.
+// defaultProbeClient dials only addresses the SSRF guard's classification allows, whatever the URL check resolved
+// earlier. Redirects are refused where the credential is sent (probes.go send, NewGitHubAppAuth, restcore.Core.Get).
 func defaultProbeClient() *http.Client {
-	return &http.Client{Transport: externalurl.GuardedTransport(), CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}
+	return &http.Client{Transport: externalurl.GuardedTransport()}
 }
 
 type handlers struct {

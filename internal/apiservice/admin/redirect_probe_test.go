@@ -52,3 +52,17 @@ func TestAClientNeverFollowsARedirectToAnotherOrigin(t *testing.T) {
 		})
 	}
 }
+
+// The defaults' own policies (httpx follows no redirect: Python parity) are pinned on their own, besides the callee guard.
+func TestTheDefaultAdminClientsRefuseRedirectsOnTheirOwn(t *testing.T) {
+	for name, doer := range map[string]providerfoundation.HTTPDoer{
+		"PagerDuty services":   pagerDutyServicesClient(nil),
+		"LLM readiness prober": newOpenAICompatibleReadinessProber(nil).client,
+		"PagerDuty revoke":     revokeDoer(nil),
+	} {
+		built, ok := doer.(*http.Client)
+		if !ok || built.CheckRedirect == nil || built.CheckRedirect(nil, nil) != http.ErrUseLastResponse {
+			t.Fatalf("%s: the default follows redirects", name)
+		}
+	}
+}

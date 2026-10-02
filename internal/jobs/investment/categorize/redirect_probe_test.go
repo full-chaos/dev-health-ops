@@ -2,6 +2,7 @@ package categorize
 
 import (
 	"context"
+	"net/http"
 	"testing"
 
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/redirectprobe"
@@ -50,4 +51,12 @@ func TestTheDefaultProviderClientsNeverFollowARedirectToAnotherOrigin(t *testing
 		_, _, _ = provider.executeChatCompletionRequest(context.Background(), localChatRequest{})
 		probe.Assert(t)
 	})
+}
+
+// The hardened default's own policy (llm/providers/_http.py: follow_redirects=False) is pinned on its own.
+func TestTheHardenedClientRefusesRedirectsOnItsOwn(t *testing.T) {
+	client := newHardenedHTTPClient()
+	if client.CheckRedirect == nil || client.CheckRedirect(nil, nil) != http.ErrUseLastResponse {
+		t.Fatal("the hardened client follows redirects")
+	}
 }

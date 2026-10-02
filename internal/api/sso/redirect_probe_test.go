@@ -3,6 +3,7 @@ package sso
 import (
 	"context"
 	"golang.org/x/oauth2"
+	"net/http"
 	"testing"
 
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/redirectprobe"
@@ -42,4 +43,12 @@ func TestTheDefaultClientNeverFollowsARedirectToAnotherOrigin(t *testing.T) {
 	h.HTTPClient = redirectprobe.Reach(h.HTTPClient)
 	_, _ = h.exchangeOAuthCode(context.Background(), probe.Base.URL+"/token", "id", "SECRET", "code", "https://app.test/cb")
 	probe.Assert(t)
+}
+
+// The default IdP client's own policy (Python parity: no redirect on discovery and JWKS reads, which no callee guard
+// covers) is pinned on its own.
+func TestTheDefaultIdPClientRefusesRedirectsOnItsOwn(t *testing.T) {
+	if defaultOIDCClient().CheckRedirect == nil || defaultOIDCClient().CheckRedirect(nil, nil) != http.ErrUseLastResponse {
+		t.Fatal("the default IdP client follows redirects")
+	}
 }

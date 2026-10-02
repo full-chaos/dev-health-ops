@@ -272,6 +272,68 @@ func TestCollectSendsTheOrganizationSiteCredentialsAndOptIns(t *testing.T) {
 	}
 }
 
+// liveQueryContextRefusal is what the live gateway answered to a Teamwork Graph team-members read without the
+// X-Query-Context header (the message text of the executed run of CHAOS-7132, 2026-10-02): the gateway
+// refuses the read, it does not return an empty roster.
+const liveQueryContextRefusal = "Query context must not be null and should be a valid platform site or workspace ARI. Please send the required X-Query-Context header."
+
+// requireQueryContext serves the standard answers, except that a team-members read without the platform site
+// ARI of params()'s site is refused with the live gateway's message, as the live gateway refuses it.
+func requireQueryContext(req request) (int, any) {
+	if req.Operation == "TeamworkGraphTeamUsers" && req.Header.Get("X-Query-Context") != "ari:cloud:platform::site/site-uuid" {
+		return 200, map[string]any{"errors": []any{map[string]any{"message": liveQueryContextRefusal}}, "data": nil}
+	}
+	return standard(req)
+}
+
+func TestCollectSendsTheSiteQueryContextOnEveryTeamMembersRead(t *testing.T) {
+	g := newGateway(t, requireQueryContext)
+	rows, err := Collect(context.Background(), g.client(), params(everything))
+	if err != nil {
+		t.Fatalf("the members read was refused: %v", err)
+	}
+	if len(rows.Memberships) == 0 {
+		t.Fatal("no membership was read: the comparison measures nothing")
+	}
+	reads := 0
+	for _, req := range g.requests {
+		if req.Operation != "TeamworkGraphTeamUsers" {
+			continue
+		}
+		reads++
+		if got := req.Header.Get("X-Query-Context"); got != "ari:cloud:platform::site/site-uuid" {
+			t.Errorf("a team-members read (page after %v) carried X-Query-Context %q, want the platform site ARI", req.Variables["after"], got)
+		}
+	}
+	if reads < 3 {
+		t.Errorf("only %d team-members reads: the paginated read (team A has two pages) was not exercised", reads)
+	}
+}
+
+// The negative control of the live probe: the same read without the context is refused by the gateway with the
+// recorded message, so the test above cannot pass by a gateway that never asks for the header.
+func TestATeamMembersReadWithoutTheQueryContextIsRefusedByTheGateway(t *testing.T) {
+	g := newGateway(t, requireQueryContext)
+	_, err := g.client().IterTeamUsers(context.Background(), teamA, 2)
+	if err == nil || !strings.Contains(err.Error(), "X-Query-Context") {
+		t.Fatalf("a members read with no query context = %v, want the gateway's refusal naming the header", err)
+	}
+}
+
+func TestSiteQueryContext(t *testing.T) {
+	for _, tc := range []struct{ in, want string }{
+		{"", ""}, {"  ", ""},
+		{"3f78d8af-23e4-4efc-893c-67b48a6107d3", "ari:cloud:platform::site/3f78d8af-23e4-4efc-893c-67b48a6107d3"},
+		{" abc ", "ari:cloud:platform::site/abc"},
+		{"ari:cloud:jira::site/abc", "ari:cloud:jira::site/abc"},
+		{"ARI:cloud:platform::site/abc", "ARI:cloud:platform::site/abc"},
+	} {
+		if got := siteQueryContext(tc.in); got != tc.want {
+			t.Errorf("siteQueryContext(%q) = %q, want %q", tc.in, got, tc.want)
+		}
+	}
+}
+
 func basicAuth(header http.Header) (string, string, bool) {
 	r := &http.Request{Header: header}
 	return r.BasicAuth()

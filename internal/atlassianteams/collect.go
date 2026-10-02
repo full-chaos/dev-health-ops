@@ -24,6 +24,7 @@ import (
 	"github.com/google/uuid"
 
 	"atlassian/atlassian"
+	"atlassian/atlassian/graph"
 
 	"github.com/full-chaos/dev-health-ops/internal/identityalias"
 )
@@ -172,6 +173,19 @@ func memberID(account string) string {
 	return "jira:" + strings.ToLower(strings.TrimSpace(account))
 }
 
+// siteQueryContext is the X-Query-Context value of a site: its platform site ARI. A site id that is already an
+// ARI is passed through unchanged; an empty one sends no header.
+func siteQueryContext(siteID string) string {
+	siteID = strings.TrimSpace(siteID)
+	switch {
+	case siteID == "":
+		return ""
+	case strings.HasPrefix(strings.ToLower(siteID), "ari:"):
+		return siteID
+	}
+	return "ari:cloud:platform::site/" + siteID
+}
+
 // organizationARI is the organization id in the form teamSearchV2 accepts. tenantContexts answers a
 // bare UUID and the gateway refuses it ("Invalid Organization Ari", CHAOS-7132); an id that already is
 // an ARI is passed through unchanged.
@@ -231,7 +245,11 @@ func Collect(ctx context.Context, client Client, params Params) (Rows, error) {
 		// An archived team keeps its row (inactive) and has no members or
 		// project links to read.
 		if active && params.Selections.Members {
-			relations, err := client.IterTeamUsers(ctx, team.ID, page)
+			// The Teamwork Graph team-members read must name the site it queries (CHAOS-7132: the live gateway
+			// refuses it without X-Query-Context; a read-only probe on 2026-10-02 had the platform site ARI, the
+			// Jira site ARI and the organization ARI each accepted and no header refused). Only this read is
+			// marked: the other reads were not probed with it.
+			relations, err := client.IterTeamUsers(graph.WithQueryContext(ctx, siteQueryContext(params.SiteID)), team.ID, page)
 			if err != nil {
 				return Rows{}, fmt.Errorf("read members of team %s: %w", id, err)
 			}

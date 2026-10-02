@@ -14,6 +14,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	"sort"
 	"strings"
 	"testing"
@@ -875,6 +876,13 @@ type localRun struct {
 	repoIDs map[string]string
 }
 
+// outsideRepoChain matches the leading `../` chain of the path both planes store for a broken ABSOLUTE symlink whose target is
+// outside the repository (the scenario's "/dho-oracle-missing-dir/absolute-broken.txt"): the path is relative to the repository, so
+// the number of `../` is the depth of the run's temporary directory and differs per run and per machine (TMPDIR=/tmp in CI). The chain
+// is replaced by one placeholder on both planes; the part after it (the target's own name) is still compared. NOT compared: the
+// depth itself, which is a property of where the test runs.
+var outsideRepoChain = regexp.MustCompile(`(?:\.\./)+dho-oracle-missing-dir/`)
+
 // normalizeRepoIDs replaces, in every row of every table, a path-derived repository id with the name of the
 // path it came from, so a golden recorded in one temporary directory compares in another and still pins WHICH
 // path each plane hashed. Ids that are not path-derived (a remote URL, REPO_UUID) stay as they are.
@@ -886,6 +894,7 @@ func normalizeRepoIDs(rows map[string][]string, repoIDs map[string]string) map[s
 			for id, label := range repoIDs {
 				line = strings.ReplaceAll(line, id, "<repo-id:"+label+">")
 			}
+			line = outsideRepoChain.ReplaceAllString(line, "<outside-repo>/dho-oracle-missing-dir/")
 			replaced[i] = line
 		}
 		sort.Strings(replaced)

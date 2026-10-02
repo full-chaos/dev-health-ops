@@ -465,7 +465,7 @@ var lookPathPythonDayOne = map[string]bool{
 
 func TestNoNewFileLooksPythonUpByName(t *testing.T) {
 	root := repoRootOf(t)
-	pattern := regexp.MustCompile(`exec\.(LookPath|Command|CommandContext)\(\s*(ctx,\s*)?"python`)
+	pattern := regexp.MustCompile(`exec\.(LookPath|Command)\(\s*"python|exec\.CommandContext\([^,]+,\s*"python`)
 	err := filepath.WalkDir(root, func(path string, entry fs.DirEntry, walkErr error) error {
 		if walkErr != nil {
 			return walkErr

@@ -50,6 +50,14 @@ package goapiproof
 //     digest, and it never overwrites a row that already exists at the
 //     target digest.
 //
+// SHADOW ROWS (CHAOS-8144). A mode=shadow row is carried verbatim when it
+// is still valid at the target digest and SKIPPED, with a named reason,
+// when it is not -- never refused, so it can never block a roll. No
+// client is served from it (go_api_dispatcher.py:751-762,
+// routeswitch/postgres_switch.go:30), and carrying it makes no
+// enablement; it keeps the registration that `seed` recorded, which no
+// verb can restore once the digest has moved.
+//
 // WHAT AN AUDIT ROW SAYS. alembic 0130's CHECK admits exactly
 // enable|disable|repoint for `action`, so a carried row is audited as an
 // `enable` -- which is what it is: an enablement at a new key, with the
@@ -339,11 +347,24 @@ func DecideCarry(row CarryRow, inputs CarryInputs) CarryOutcome {
 	}
 
 	// Reachability is the mode vocabulary BOTH planes agree on
-	// (go_api_dispatcher's _REACHABLE_MODES, routeswitch's reachable
-	// set). python and disabled are the safe default a missing row
-	// already gives; shadow is not served to a client by either plane. So
-	// none of the three has a reachability to preserve, and writing a row
-	// for one would be this verb inventing an enablement nobody decided.
+	// (go_api_dispatcher.py:345 _REACHABLE_MODES = canary|primary,
+	// routeswitch/postgres_switch.go:30 reachableModes = canary|primary).
+	// python and disabled are the safe default a missing row already
+	// gives, so a row for either would add nothing and is skipped.
+	//
+	// shadow (CHAOS-8144) is the third case. No client is served from it
+	// (go_api_dispatcher.py:751-762 answers Python for mode=shadow), so a
+	// roll un-routes nothing -- but the row is still a RECORDED
+	// REGISTRATION (the only way a read operation can be proven on
+	// production before it has a served row; routeswitch/proof_switch.go:38
+	// widens the measurement-only route by "shadow"), and dropping it at
+	// every digest change throws that registration away with no verb able
+	// to restore it. A shadow row is therefore carried VERBATIM when it is
+	// still valid at the target, and SKIPPED -- never refused, so a stale
+	// shadow row can never block a roll -- when it is not.
+	if row.Mode == TargetModeShadow {
+		return decideShadowCarry(row, inputs, outcome, skip)
+	}
 	if row.Mode != TargetModeCanary && row.Mode != TargetModePrimary {
 		return skip("mode=%s is not served to a client by either plane, so the roll un-routes nothing here", row.Mode)
 	}
@@ -387,6 +408,60 @@ func DecideCarry(row CarryRow, inputs CarryInputs) CarryOutcome {
 	default:
 		return refuse(ErrCarryTargetRowExists,
 			"the target digest already holds a row for this operation (document %s, mode %s, rollout %d, build %s) that differs from the one being carried -- resolve it there first",
+			existing.DocumentDigest, existing.Mode, existing.RolloutPercentage, existing.Build)
+	}
+}
+
+// decideShadowCarry is DecideCarry for a mode=shadow row (CHAOS-8144).
+//
+// The same validity facts as a served row -- live registration, target
+// registration, catalog agreement, the class root still served, what is
+// already at the target digest -- but every failed fact is a SKIP with a
+// named reason where a served row would REFUSE. A shadow row serves no
+// client, so nothing it fails can justify stopping a roll; and a skip is
+// never silent, because the plan prints every skipped row with its
+// reason and the post-roll readback must find each dropped row named
+// there.
+//
+// The row is copied VERBATIM (mode shadow, rollout, owner, eligible
+// orgs): this is a preservation of a registration, never an enablement
+// -- the target row is never canary or primary unless the source was.
+func decideShadowCarry(row CarryRow, inputs CarryInputs, outcome CarryOutcome, skip func(string, ...any) CarryOutcome) CarryOutcome {
+	if mcpclass.IsClassRow(row.Operation, row.DocumentDigest) {
+		root, _ := mcpclass.Root(row.Operation)
+		if !inputs.MCPRoots[root] {
+			return skip("mode=shadow: the image this binary was built from does not serve MCP root field %q, so the shadow registration is dropped (nothing is served from it)", root)
+		}
+	} else {
+		live, registered := inputs.LiveDocumentDigest[row.Operation]
+		if !registered {
+			return skip("mode=shadow: the deployed process does not register this operation, so this row is already unreachable")
+		}
+		if live != row.DocumentDigest {
+			return skip("mode=shadow: this row's document digest is not the one the deployed process registers (%s), so the row is already unreachable", live)
+		}
+		target, serves := inputs.TargetDocumentDigest[row.Operation]
+		if !serves {
+			return skip("mode=shadow: the image this binary was built from does not register this operation, so the shadow registration is dropped (nothing is served from it)")
+		}
+		if target != row.DocumentDigest {
+			return skip("mode=shadow: the registered document changed (row %s, target image %s), so the shadow registration is dropped (nothing is served from it)", row.DocumentDigest, target)
+		}
+		catalog, inCatalog := inputs.CatalogDocumentDigest[row.Operation]
+		if !inCatalog || catalog != target {
+			return skip("mode=shadow: this image's edge catalog does not agree with its registered document for this operation, so the shadow registration is dropped (nothing is served from it)")
+		}
+	}
+	existing, present := inputs.TargetRows[row.Operation]
+	switch {
+	case !present:
+		outcome.Action = CarryActionCarry
+		return outcome
+	case sameCarriedState(row, existing):
+		outcome.Action = CarryActionUnchanged
+		return outcome
+	default:
+		return skip("mode=shadow: the target digest already holds a different row for this operation (document %s, mode %s, rollout %d, build %s); it is left untouched",
 			existing.DocumentDigest, existing.Mode, existing.RolloutPercentage, existing.Build)
 	}
 }
@@ -613,8 +688,20 @@ func Carry(ctx context.Context, pool *pgxpool.Pool, request CarryRequest) ([]Car
 			// actually being copied. Refusing a whole run over a SKIPPED
 			// row's stale build would block a legitimate carry for a row
 			// nothing will ever read.
+			//
+			// A SHADOW row never blocks a roll (CHAOS-8144): a stale
+			// build on one is a SKIP when it would be written, and no
+			// obstacle when it is already there.
 			if row.Build != request.RunningBuild {
-				staleBuilds = append(staleBuilds, fmt.Sprintf("%s names %s", row.Operation, row.Build))
+				if row.Mode == TargetModeShadow {
+					if outcome.Action == CarryActionCarry {
+						outcome.Action = CarryActionSkip
+						outcome.Reason = fmt.Sprintf("mode=shadow: this row names build %s, not the running build %s, so the shadow registration is dropped rather than copying a stale provenance claim (nothing is served from it)", row.Build, request.RunningBuild)
+						outcome.ReviewEvidence = ""
+					}
+				} else {
+					staleBuilds = append(staleBuilds, fmt.Sprintf("%s names %s", row.Operation, row.Build))
+				}
 			}
 		case CarryActionRefuse:
 			refusals = append(refusals, outcome)
@@ -633,8 +720,17 @@ func Carry(ctx context.Context, pool *pgxpool.Pool, request CarryRequest) ([]Car
 			ErrCarryBuildNotRunning, request.RunningBuild, strings.Join(staleBuilds, "; "))
 	}
 
-	summary := SummarizeCarry(outcomes)
-	if summary.Carried == 0 && summary.Unchanged == 0 {
+	// Reachability is what this check is about, so a shadow row (served
+	// to nobody) never satisfies it: a run that copied only shadow rows
+	// has preserved nothing a client reads.
+	servedKept := 0
+	for _, outcome := range outcomes {
+		if (outcome.Action == CarryActionCarry || outcome.Action == CarryActionUnchanged) &&
+			(outcome.Mode == TargetModeCanary || outcome.Mode == TargetModePrimary) {
+			servedKept++
+		}
+	}
+	if servedKept == 0 {
 		return outcomes, fmt.Errorf("%w: %d row(s) exist at %s and every one was skipped -- each outcome names why",
 			ErrCarryNothingReachable, len(liveRows), request.LiveSchemaDigest)
 	}

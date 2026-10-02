@@ -196,6 +196,30 @@ func TestDecideCarryOverItsWholeInputDomain(t *testing.T) {
 // at the target digest. Each rule names the fact that decided it, so a
 // cell reached by the wrong branch fails even when the action agrees.
 func expectedCarryOutcome(mode, liveState, targetState, rowState string) (action, reason string) {
+	if mode == TargetModeShadow {
+		// CHAOS-8144: a shadow row is preserved when valid, and EVERY
+		// failed fact is a SKIP naming it -- never a refusal.
+		switch liveState {
+		case liveAbsent:
+			return CarryActionSkip, "mode=shadow: the deployed process does not register this operation"
+		case liveDrifted:
+			return CarryActionSkip, "mode=shadow: this row's document digest is not the one the deployed process registers"
+		}
+		switch targetState {
+		case targetAbsent:
+			return CarryActionSkip, "mode=shadow: the image this binary was built from does not register this operation"
+		case targetChanged:
+			return CarryActionSkip, "mode=shadow: the registered document changed"
+		}
+		switch rowState {
+		case rowNone:
+			return CarryActionCarry, ""
+		case rowIdentical:
+			return CarryActionUnchanged, ""
+		default:
+			return CarryActionSkip, "mode=shadow: the target digest already holds a different row"
+		}
+	}
 	if mode != TargetModeCanary && mode != TargetModePrimary {
 		return CarryActionSkip, "is not served to a client by either plane"
 	}
@@ -243,8 +267,18 @@ func someTwoPlaneOperation(t *testing.T) string {
 			return candidate
 		}
 	}
-	t.Skip("every candidate operation is go-only, so there is no two-plane one to contrast against")
-	return ""
+	// Every named candidate has had its Python path deleted (true on main
+	// since the cutover moved on), and the old t.Skip here silently turned
+	// the WHOLE DecideCarry enumeration into a skipped test -- a measurement
+	// that did not happen reading as coverage (CHAOS-8144 found it by
+	// planting a mode-change defect that the "passing" enumeration missed).
+	// DecideCarry reads the operation only as a map key, so a synthetic name
+	// asserted ABSENT from the ledger is a faithful two-plane operation.
+	const synthetic = "carryEnumerationTwoPlaneProbe"
+	if _, goOnly := ledger.Entry(synthetic); goOnly {
+		t.Fatalf("%s is in the go-served ledger, so it cannot stand in for a two-plane operation", synthetic)
+	}
+	return synthetic
 }
 
 func someGoOnlyOperation(t *testing.T) string {

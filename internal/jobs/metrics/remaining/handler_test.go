@@ -1,15 +1,18 @@
 package remaining
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
+	"log/slog"
 	"strings"
 	"testing"
 	"time"
 
 	"github.com/full-chaos/dev-health-ops/internal/jobcontract"
 	"github.com/full-chaos/dev-health-ops/internal/jobruntime"
+	"github.com/full-chaos/dev-health-ops/internal/jobs/metrics/remaining/stepcause"
 )
 
 const (
@@ -307,9 +310,12 @@ type handlerStore struct {
 	releases    int
 	// terminalReleases counts ReleasePartitionTerminally calls separately
 	// from the ordinary releases above, so a test can pin WHICH release
-	// variant a given Work() failure path reaches (only the
-	// ErrInvalidState/Permanent branch may ever call the terminal one).
+	// variant a given Work() failure path reaches (the ErrInvalidState/
+	// Permanent branch, and a retryable failure on the job's last attempt,
+	// call the terminal one).
 	terminalReleases int
+	exhausted        int
+	exhaustErr       error
 	completions      int
 	evidence         string
 }
@@ -339,12 +345,17 @@ func (store *handlerStore) CompletePartition(_ context.Context, _ Claim, evidenc
 	}
 	store.completions++
 	store.evidence = evidence
-	return nil
+	return store.completeErr
 }
 func (store *handlerStore) ReleasePartition(context.Context, Claim) error {
 	store.releases++
 	return nil
 }
+func (store *handlerStore) ExhaustPartition(context.Context, string) error {
+	store.exhausted++
+	return store.exhaustErr
+}
+
 func (store *handlerStore) ReleasePartitionTerminally(context.Context, Claim) error {
 	store.terminalReleases++
 	return nil
@@ -385,5 +396,147 @@ func (executor *handlerExecutor) ComputePartition(
 	case <-ctx.Done():
 		executor.canceled = true
 		return CompatibilityOutcome{}, ctx.Err()
+	}
+}
+
+// attemptedCapacityExecution is capacityExecution with the River attempt counter and the descriptor's attempt
+// budget set, the two values the handler compares to know whether a failure is the job's LAST attempt.
+func attemptedCapacityExecution(attempt, maxAttempts int) *jobruntime.Execution[jobruntime.RemainingCapacityArgs] {
+	execution := capacityExecution()
+	execution.Attempt = attempt
+	execution.Definition.MaxAttempts = maxAttempts
+	return execution
+}
+
+// TestPartitionHandlerTerminalizesTheRunOnlyOnTheFinalAttemptOfARetryableFailure pins CHAOS-8024 at the handler layer:
+// River discards a job that fails its last attempt with a retryable error, and nothing comes back to move the run out
+// of 'running'. So the release of a failed attempt must be the terminal variant (which finalizes the run when no other
+// partition is outstanding) exactly when this is the last attempt, at every release site that holds a claim; earlier
+// attempts keep the ordinary release, because the retry reclaims the partition. A zero attempt budget (an execution
+// built without a descriptor) is never "final".
+func TestPartitionHandlerTerminalizesTheRunOnlyOnTheFinalAttemptOfARetryableFailure(t *testing.T) {
+	transient := errors.New("dial tcp: connection refused")
+	sites := []struct {
+		name  string
+		setup func(*handlerStore, *handlerExecutor)
+	}{
+		{"compute failure", func(_ *handlerStore, executor *handlerExecutor) { executor.computeErr = transient }},
+		// after the step-cause change every real executor failure carries a step tag; that is the path a real
+		// ClickHouse/Postgres failure takes, and it releases through the same release choice
+		{"step-tagged compute failure", func(_ *handlerStore, executor *handlerExecutor) {
+			executor.computeErr = stepcause.Failure(stepcause.QueryWorkItems, transient)
+		}},
+		{"load run failure", func(store *handlerStore, _ *handlerExecutor) { store.loadRunErr = transient }},
+		{"complete failure", func(store *handlerStore, _ *handlerExecutor) { store.completeErr = transient }},
+	}
+	attempts := []struct {
+		name         string
+		attempt, max int
+		wantTerminal bool
+	}{
+		{"first of three", 1, 3, false},
+		{"second of three", 2, 3, false},
+		{"last of three", 3, 3, true},
+		{"past the budget", 4, 3, true},
+		{"no budget declared", 0, 0, false},
+		{"attempt without a budget", 5, 0, false},
+	}
+	for _, site := range sites {
+		for _, attempt := range attempts {
+			t.Run(site.name+"/"+attempt.name, func(t *testing.T) {
+				store := &handlerStore{
+					run:   Run{ID: handlerRunID, OrganizationID: handlerOrgID, Family: "capacity", Status: "running"},
+					claim: handlerClaim(),
+				}
+				executor := &handlerExecutor{}
+				site.setup(store, executor)
+				handler, err := NewPartitionHandler[jobruntime.RemainingCapacityArgs](store, executor, "capacity")
+				if err != nil {
+					t.Fatal(err)
+				}
+				workErr := handler.Work(t.Context(), attemptedCapacityExecution(attempt.attempt, attempt.max))
+				if workErr == nil || !strings.Contains(workErr.Error(), string(jobruntime.CategoryRetryable)) {
+					t.Fatalf("the failure was not returned Retryable: %v", workErr)
+				}
+				wantTerminal, wantOrdinary := 0, 1
+				if attempt.wantTerminal {
+					wantTerminal, wantOrdinary = 1, 0
+				}
+				// the complete-failure site never released before the fix at any attempt: it keeps the claim
+				// (the lease expiring is the retry's reclaim), so earlier attempts still release nothing there
+				if site.name == "complete failure" {
+					wantOrdinary = 0
+				}
+				if store.terminalReleases != wantTerminal || store.releases != wantOrdinary {
+					t.Fatalf("terminalReleases=%d releases=%d, want %d and %d", store.terminalReleases, store.releases, wantTerminal, wantOrdinary)
+				}
+			})
+		}
+	}
+}
+
+type panickingExecutor struct{}
+
+func (panickingExecutor) ComputePartition(context.Context, Run, Partition) (CompatibilityOutcome, error) {
+	panic("executor panic")
+}
+
+// CHAOS-8024 rows 5 and 6: a claim error on the LAST attempt exhausts the partition (no claim exists to release);
+// earlier attempts and a lease-active snooze do not. A panic after the claim releases it (terminally on the last
+// attempt) and still propagates.
+func TestPartitionHandlerExhaustsAPartitionWhoseLastClaimErrored(t *testing.T) {
+	for _, tc := range []struct {
+		name         string
+		attempt, max int
+		want         int
+	}{{"last", 3, 3, 1}, {"earlier", 2, 3, 0}, {"no budget", 3, 0, 0}} {
+		store := &handlerStore{claimErr: errors.New("connection reset")}
+		handler, _ := NewPartitionHandler[jobruntime.RemainingCapacityArgs](store, &handlerExecutor{}, "capacity")
+		_ = handler.Work(context.Background(), attemptedCapacityExecution(tc.attempt, tc.max))
+		if store.exhausted != tc.want {
+			t.Fatalf("%s: exhausted=%d want %d", tc.name, store.exhausted, tc.want)
+		}
+	}
+}
+
+func TestPartitionHandlerReleasesTheClaimOnAPanicAndRepanics(t *testing.T) {
+	for _, tc := range []struct {
+		name                  string
+		attempt, max          int
+		wantTerminal, wantOrd int
+	}{{"last", 3, 3, 1, 0}, {"earlier", 1, 3, 0, 1}} {
+		store := &handlerStore{
+			run:   Run{ID: handlerRunID, OrganizationID: handlerOrgID, Family: "capacity", Status: "running"},
+			claim: handlerClaim(),
+		}
+		handler, _ := NewPartitionHandler[jobruntime.RemainingCapacityArgs](store, panickingExecutor{}, "capacity")
+		func() {
+			defer func() {
+				if recover() == nil {
+					t.Fatalf("%s: panic swallowed", tc.name)
+				}
+			}()
+			_ = handler.Work(context.Background(), attemptedCapacityExecution(tc.attempt, tc.max))
+		}()
+		if store.terminalReleases != tc.wantTerminal || store.releases != tc.wantOrd {
+			t.Fatalf("%s: terminal=%d ordinary=%d", tc.name, store.terminalReleases, store.releases)
+		}
+	}
+}
+
+func TestPartitionHandlerLogsAFailedExhaustWithoutTheErrorText(t *testing.T) {
+	var buffer bytes.Buffer
+	previous := slog.Default()
+	slog.SetDefault(slog.New(slog.NewTextHandler(&buffer, nil)))
+	t.Cleanup(func() { slog.SetDefault(previous) })
+	store := &handlerStore{claimErr: errors.New("connection reset"), exhaustErr: errors.New("SECRET-DRIVER-TEXT")}
+	handler, _ := NewPartitionHandler[jobruntime.RemainingCapacityArgs](store, &handlerExecutor{}, "capacity")
+	_ = handler.Work(context.Background(), attemptedCapacityExecution(3, 3))
+	logged := buffer.String()
+	if !strings.Contains(logged, "could not exhaust a last-attempt partition") || !strings.Contains(logged, "partition_id") {
+		t.Fatalf("exhaust failure not logged: %q", logged)
+	}
+	if strings.Contains(logged, "SECRET-DRIVER-TEXT") {
+		t.Fatalf("log leaks the error text: %q", logged)
 	}
 }

@@ -347,11 +347,11 @@ func repoRootOf(t *testing.T) string {
 	}
 }
 
-// The closed list only shrinks, and names directories that exist.
+// The closed list names directories that exist (it only shrinks: ci/ratchets.tsv holds its size to the merge base).
 func TestTheClosedListOfOwnLaunchPackagesOnlyShrinks(t *testing.T) {
 	list := UnconvertedOwnLaunch()
-	if len(list) != unconvertedOwnLaunchCeiling {
-		t.Fatalf("the list holds %d packages and unconvertedOwnLaunchCeiling says %d: the list only shrinks, and the number goes down with it", len(list), unconvertedOwnLaunchCeiling)
+	if len(list) == 0 {
+		t.Fatal("the closed list is empty: this test then checks nothing; when the last package is converted, delete the list and this test together")
 	}
 	root := repoRootOf(t)
 	for _, dir := range list {

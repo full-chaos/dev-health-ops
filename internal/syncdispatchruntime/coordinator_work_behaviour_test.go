@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"github.com/full-chaos/dev-health-ops/internal/providersync"
 	"strings"
 	"testing"
 
@@ -56,14 +57,14 @@ func (importer failingImporter) TeamAutoImport(context.Context, DomainReference)
 
 type failingDeriver struct{ panics, panicNil bool }
 
-func (deriver failingDeriver) Derive(context.Context, string) (int, int, bool, map[string]int, error) {
+func (deriver failingDeriver) DeriveWithStats(context.Context, string) (int, int, bool, map[string]int, providersync.TeamRepoOwnershipDerivationStats, error) {
 	if deriver.panicNil {
 		panic(nil)
 	}
 	if deriver.panics {
 		panic(behaviourMarker)
 	}
-	return 0, 0, false, nil, fmt.Errorf("query failed: %w", &markerFailure{behaviourMarker})
+	return 0, 0, false, nil, providersync.TeamRepoOwnershipDerivationStats{}, fmt.Errorf("query failed: %w", &markerFailure{behaviourMarker})
 }
 
 func transport() TransportArgs {

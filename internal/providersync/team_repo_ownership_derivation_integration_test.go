@@ -115,9 +115,13 @@ func TestTeamRepoOwnershipDerivationAgainstMigratedSchema(t *testing.T) {
 	// signature already matches its open activeRows row and drops it, so the
 	// three rows already on disk stay exactly as they are: same count, same
 	// valid_from.
-	written2, retracted2, _, _, err := service.Derive(ctx, orgID)
+	written2, retracted2, _, _, stats2, err := service.DeriveWithStats(ctx, orgID)
 	if err != nil {
 		t.Fatalf("second Derive: %v", err)
+	}
+	// CHAOS-8148: the quiet second run is "derived N facts, all unchanged", not "derived nothing".
+	if stats2.Derived != len(want) || stats2.Unchanged != stats2.Derived {
+		t.Fatalf("second Derive stats = %+v, want Derived=Unchanged=%d (every derived fact already carried by an open row)", stats2, len(want))
 	}
 	if written2 != 0 {
 		t.Fatalf("expected the second Derive to write 0 rows (every derived fact already matches its open row), got %d", written2)

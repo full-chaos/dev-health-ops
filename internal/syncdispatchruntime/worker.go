@@ -7,6 +7,7 @@ import (
 	"log/slog"
 
 	"github.com/full-chaos/dev-health-ops/internal/jobruntime"
+	"github.com/full-chaos/dev-health-ops/internal/providersync"
 	"github.com/full-chaos/dev-health-ops/internal/syncdispatchcontract"
 	"github.com/full-chaos/dev-health-ops/internal/syncroute"
 	"github.com/riverqueue/river"
@@ -243,7 +244,7 @@ func RegisterTeamAutoimportWorker(workers *river.Workers, bridge TeamAutoImporte
 // present at all yet (team-lead ruling, codex finding #4, 2026-08-28 -- see
 // providersync.TeamRepoOwnershipDerivationService.Derive's doc comment for
 // the full rationale). Satisfied directly by providersync.
-// TeamRepoOwnershipDerivationService (its Derive method already has this
+// TeamRepoOwnershipDerivationService (its DeriveWithStats method has this
 // exact signature) -- named here as an interface only so the worker stays
 // testable without a real ClickHouse connection.
 type TeamRepoOwnershipDerivationRunner interface {
@@ -253,7 +254,7 @@ type TeamRepoOwnershipDerivationRunner interface {
 	// written this run resolved via each identity. May be nil (no rows
 	// derived, or the run never reached row assignment) -- Work() treats a
 	// missing key as 0.
-	Derive(ctx context.Context, orgID string) (written int, retracted int, inputsReady bool, armCounts map[string]int, err error)
+	DeriveWithStats(ctx context.Context, orgID string) (written int, retracted int, inputsReady bool, armCounts map[string]int, stats providersync.TeamRepoOwnershipDerivationStats, err error)
 }
 
 // RegisterTeamRepoOwnershipDerivationWorker registers the CHAOS-4365 item 1b
@@ -447,7 +448,7 @@ func (worker *teamRepoOwnershipDerivationWorker) Work(ctx context.Context, job *
 	ctx, span := spanForCoordinatorJob(ctx, job.Args.Kind(), job.Args.Payload.SyncRunID, "")
 	completed := false
 	defer finishCoordinatorWork(span, &err, &completed)
-	written, retracted, inputsReady, armCounts, err := worker.service.Derive(ctx, job.Args.OrgID)
+	written, retracted, inputsReady, armCounts, stats, err := worker.service.DeriveWithStats(ctx, job.Args.OrgID)
 	outcome := jobruntime.TeamRepoOwnershipDerivationOutcomeRowsWritten
 	switch {
 	case err != nil:
@@ -458,6 +459,10 @@ func (worker *teamRepoOwnershipDerivationWorker) Work(ctx context.Context, job *
 		// Converges on the next qualifying sync -- not a failure, and
 		// distinct from a genuine no-signal evaluation.
 		outcome = jobruntime.TeamRepoOwnershipDerivationOutcomeInputsNotReady
+	case written == 0 && stats.Derived > 0 && stats.Unchanged == stats.Derived:
+		// CHAOS-8148: the run derived facts and an open row already carries every one unchanged: the steady state, not an empty
+		// derivation (no_signal below means it derived nothing).
+		outcome = jobruntime.TeamRepoOwnershipDerivationOutcomeUnchanged
 	case written == 0:
 		outcome = jobruntime.TeamRepoOwnershipDerivationOutcomeNoSignal
 	}
@@ -491,6 +496,8 @@ func (worker *teamRepoOwnershipDerivationWorker) Work(ctx context.Context, job *
 		"sync_run_id", job.Args.Payload.SyncRunID,
 		"rows_written", written,
 		"rows_retracted", retracted,
+		"facts_derived", stats.Derived,
+		"facts_unchanged", stats.Unchanged,
 	)
 	completed = true
 	return err

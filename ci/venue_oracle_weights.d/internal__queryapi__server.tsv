@@ -1,5 +1,4 @@
 internal/queryapi/server	TestGraphQLEdgeVenueOracle	600	unmeasured
-internal/queryapi/server	TestQueryParamValidationVenueOracle	6
 internal/queryapi/server	TestSavedReportMutationsCronDialectVenueOracle	62
 internal/queryapi/server	TestSavedReportMutationsVenueOracle	109
 internal/queryapi/server	TestSavedReportWriteProofBaselinesVenueOracle	86

@@ -5,13 +5,15 @@
     "producer_digest": "6e1dc97e68624398015f60caee160cceee6ae601bd434d01b8b7d5975267e137",
     "recipe": "git worktree add --detach $DIR a4847c5e93607451a0c987b314d37e02fc43ce85 (with its .venv: uv sync --frozen --no-install-project); then from the repository root: go run ./internal/testsupport/venueoracle/goldenrecord -pkg ./internal/scheduler/sync/ -test '^TestZeroUnitRunAuthStampVenueOracleMatchesFrozenPython$' -python-root $DIR",
     "python_env": "a0599454321ed35de1dac4f42b28458bafe3ff7513e968bda636a8cd33a98cda",
-    "python_env_version": 2
+    "python_env_version": 2,
+    "recorded_by": "goldenrecord",
+    "blanked": {}
   },
   "requests": [
     {
       "name": "zero-unit plan",
       "method": "PYTHON",
-      "path": "program sha256 6a42a874f2d6c3d5d5ef052520af2921fe72a6f6149dce4e28953d2247ab0fd8 env sha256 026291477fe6ad3d6bedc352781168ba7739a62dd52d81b0b90f0f6046e9ad5f",
+      "path": "program sha256 6a42a874f2d6c3d5d5ef052520af2921fe72a6f6149dce4e28953d2247ab0fd8 env sha256 0a7f314447c292ad84a19634a7d861b854d50b04fb5969494896774c8fba9e62",
       "body_sha256": "d0ef42214f49ca85d9daeaca0256898275abe60f2c1c6f28f18499f710669cd3",
       "request_headers_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
       "status": 0,

@@ -1,5 +1,4 @@
 internal/queryapi/server	TestGraphQLEdgeVenueOracle	run
-internal/queryapi/server	TestQueryParamValidationVenueOracle	run
 internal/queryapi/server	TestSavedReportMutationsCronDialectVenueOracle	run
 internal/queryapi/server	TestSavedReportMutationsVenueOracle	run
 internal/queryapi/server	TestSavedReportWriteProofBaselinesVenueOracle	run

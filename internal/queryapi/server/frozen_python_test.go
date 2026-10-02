@@ -8,12 +8,12 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/programoracle"
 )
 
-// serverGoldens is the set of this package's frozen Python answers: each
+// modelGoldens is the set of this package's frozen Python answers: each
 // oracle program was executed once on Build, and its answer is frozen under
 // testdata/golden. The producers are the query-api request and response
 // models of that build on a FastAPI app, so Identity names FastAPI and the
 // distributions under it. A golden recorded by another producer is refused.
-var serverGoldens = programoracle.Set{
+var modelGoldens = programoracle.Set{
 	Package:       "./internal/queryapi/server/",
 	Build:         "a4847c5e93607451a0c987b314d37e02fc43ce85",
 	Identity:      "python 3.14.7\nunicodedata 16.0.0\nfastapi 0.136.3\nhttpx 0.28.1\npydantic 2.13.5\npydantic-core 2.46.5\nstarlette 1.7.0",
@@ -36,5 +36,5 @@ func frozenPython(t *testing.T, golden string, programs ...programoracle.Program
 		t.Fatal("cannot locate the test source")
 	}
 	root := filepath.Clean(filepath.Join(filepath.Dir(file), "..", "..", ".."))
-	return serverGoldens.Outputs(t, root, golden, programs...)
+	return modelGoldens.Outputs(t, root, golden, programs...)
 }

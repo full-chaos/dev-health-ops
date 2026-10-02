@@ -56,12 +56,13 @@ const (
 // scheduler has not made within the wait answers 202 "pending" with the
 // occurrence id. These are asserted below, not compared.
 func TestIntegrationBackfillVenueOracle(t *testing.T) {
+	golden := venueoracle.OpenGolden(t, venueGolden("integration-backfill-venue-oracle", t.Name(), "c3f5776e50a3d7364b4c112df01cb3108f7d0c919a8fc64e4b48636036816495"))
 	ctx := context.Background()
 	root := repoRoot(t)
 	const jwtKey = "venue-oracle-test-secret-key-for-integration-backfill!"
 	v := newIDs()
 	venue := venueoracle.Start(t, ctx, venueoracle.Options{
-		Root:   root,
+		Golden: golden, Root: golden.PythonRoot(t, root),
 		JWTKey: jwtKey,
 		PythonEnv: []string{
 			"SETTINGS_ENCRYPTION_KEY=" + venueKey,
@@ -133,8 +134,8 @@ func TestIntegrationBackfillVenueOracle(t *testing.T) {
 	t.Cleanup(func() { stop(); <-done })
 
 	same := sameRequests(venue, v)
-	python := venue.ServePython(t, same)
-	receipt := venueoracle.Diff(t, base, same, python, venueoracle.DiffOptions{Normalize: normalize})
+	python := golden.Python(t, venue, same)
+	receipt := venueoracle.Diff(t, base, same, python, venueoracle.DiffOptions{Golden: golden, Normalize: normalize})
 	t.Logf("receipt (%d requests):\n%s", len(same), receipt)
 
 	// The rows each plane planned, columns that are ids or a ruled difference
@@ -158,11 +159,10 @@ u.status, u.attempts, u.processor_flags::text FROM sync_run_units u WHERE u.inte
 ORDER BY u.integration_id::text, u.source_id::text, u.dataset_key, u.since_at`, 40},
 	}
 	for _, table := range compare {
-		pythonRows := venueoracle.TableRows(t, ctx, venue.AdminURI(t, venue.SourceDB), table.query)
 		goRows := venueoracle.TableRows(t, ctx, venue.AdminURI(t, venue.GoDB), table.query)
-		if pythonRows != goRows {
-			t.Errorf("%s differ\n python:\n%.4000s\n go:\n%.4000s", table.name, pythonRows, goRows)
-		}
+		pythonRows := golden.CompareRows(t, table.name, func() string {
+			return venueoracle.TableRows(t, ctx, venue.AdminURI(t, venue.SourceDB), table.query)
+		}, goRows)
 		if strings.Count(pythonRows, " | ") < table.minSeparators {
 			t.Errorf("%s: too few rows compared:\n%.2000s", table.name, pythonRows)
 		}
@@ -170,7 +170,8 @@ ORDER BY u.integration_id::text, u.source_id::text, u.dataset_key, u.since_at`, 
 
 	// Ruled divergence: planned by Python, refused by the hand-off.
 	refused := refusedRequests(venue, v)
-	pythonRefused := venue.ServePython(t, refused)
+	pythonRefused := golden.Python(t, venue, refused)
+	golden.Consumed(t, pythonRefused...)
 	for index, request := range refused {
 		goResponse := venueoracle.Do(t, base, request)
 		if pythonRefused[index].Status != 202 || !strings.Contains(pythonRefused[index].Body, `"status":"accepted"`) {
@@ -191,7 +192,8 @@ WHERE c.integration_id = ANY($1::uuid[])`, refusedIDs).Scan(&refusedOccurrences)
 	// planes refuse it with 400, in their own words; the scheduler's planner
 	// quarantines the occurrence, which the route reports.
 	windows := windowRequests(venue, v)
-	pythonWindows := venue.ServePython(t, windows)
+	pythonWindows := golden.Python(t, venue, windows)
+	golden.Consumed(t, pythonWindows...)
 	for index, request := range windows {
 		goResponse := venueoracle.Do(t, base, request)
 		if pythonWindows[index].Status != 400 || pythonWindows[index].Body != `{"detail":"Backfill since must be before"}` {
@@ -221,16 +223,24 @@ JOIN sync_manual_triggers m USING (occurrence_id) JOIN sync_configurations c ON 
 		t.Errorf("pending occurrence: status %s mode %s triggered_by %s since %s before %s", status, mode, triggeredBy, since, before)
 	}
 	paused.Store(false)
+	golden.Finish(t)
 }
 
 var anyUUID = regexp.MustCompile(`[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}`)
 
 // normalize names each distinct uuid of a "clock: " request by its first
 // appearance, so a run named twice reads as one run and two runs never do.
+// syncRunID is the run id field of an accepted answer, as the golden holds it
+// (<id>) or as the Go api answers it (a uuid).
+var syncRunID = regexp.MustCompile(`"sync_run_id":"(?:<id>|[0-9a-fA-F-]{36})"`)
+
 func normalize(request venueoracle.Request, body string) string {
 	if !strings.HasPrefix(request.Name, "clock: ") {
 		return body
 	}
+	// The run id is a ruled difference: the Python plane draws a random one (the
+	// scrub blanked it in the golden) and the Go api derives its own.
+	body = syncRunID.ReplaceAllString(body, `"sync_run_id":"<id>"`)
 	seen := map[string]int{}
 	return anyUUID.ReplaceAllStringFunc(body, func(id string) string {
 		if _, ok := seen[id]; !ok {

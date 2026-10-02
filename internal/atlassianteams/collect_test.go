@@ -121,6 +121,14 @@ func userEdge(team, account string) map[string]any {
 	}}}
 }
 
+// userOnlyEdge is the shape the live gateway answers the team-users read with (a read-only probe of 2026-10-02, CHAOS-7902): one
+// column per edge, the user. The team is the request's own variable and is not in the row.
+func userOnlyEdge(account string) map[string]any {
+	return map[string]any{"node": map[string]any{"columns": []any{
+		map[string]any{"key": "user", "value": ariNode("ari:cloud:identity::user/"+account, "AtlassianAccountUser", map[string]any{"id": "x", "accountId": account, "name": "N"})},
+	}}}
+}
+
 func projectEdge(team, key string) map[string]any {
 	data := map[string]any{"id": "p-" + key, "name": "Project " + key}
 	if key != "" {
@@ -576,5 +584,52 @@ func TestIncompletePageFindsANestedPageInfo(t *testing.T) {
 	}
 	if at := incompletePage(doc, "$"); at != "" {
 		t.Errorf("a complete page was refused at %q", at)
+	}
+}
+
+// TestCollectReadsMembersFromEdgesThatCarryOnlyTheUser pins CHAOS-7902: the live gateway's team-users edges have a user column and no
+// team column; each member belongs to the team the read asked for. Before the fix the vendored mapper refused the edge with
+// "TEAM_MEMBER relation requires team node" and the whole collect failed.
+func TestCollectReadsMembersFromEdgesThatCarryOnlyTheUser(t *testing.T) {
+	g := newGateway(t, func(req request) (int, any) {
+		switch req.Operation {
+		case "TeamSearchV2":
+			return 200, searchPage("", teamNode(teamA, "Platform", "ACTIVE"))
+		case "TeamworkGraphTeamUsers":
+			return 200, connection("teamworkGraph_teamUsers", "", userOnlyEdge("Alice-1"), userOnlyEdge("bob-2"))
+		case "TeamworkGraphTeamActiveProjects":
+			return 200, connection("teamworkGraph_teamActiveProjects", "")
+		}
+		return 500, map[string]any{"errors": []any{map[string]any{"message": "unexpected " + req.Operation}}}
+	})
+	rows, err := Collect(context.Background(), g.client(), params(everything))
+	if err != nil {
+		t.Fatalf("an edge with only the user column must be read: %v", err)
+	}
+	var got []string
+	for _, m := range rows.Memberships {
+		if m.TeamID != "aaaaaaaa-0000-4000-8000-000000000001" {
+			t.Errorf("member %q attached to team %q, want the requested team A", m.MemberID, m.TeamID)
+		}
+		got = append(got, m.MemberID)
+	}
+	if strings.Join(got, ",") != "jira:alice-1,jira:bob-2" {
+		t.Errorf("members = %v, want jira:alice-1,jira:bob-2", got)
+	}
+}
+
+// TestAnEdgeWithoutAUserIsStillRefused keeps the strict half: a row with no user cannot be a member.
+func TestAnEdgeWithoutAUserIsStillRefused(t *testing.T) {
+	g := newGateway(t, func(req request) (int, any) {
+		switch req.Operation {
+		case "TeamSearchV2":
+			return 200, searchPage("", teamNode(teamA, "Platform", "ACTIVE"))
+		case "TeamworkGraphTeamUsers":
+			return 200, connection("teamworkGraph_teamUsers", "", map[string]any{"node": map[string]any{"columns": []any{}}})
+		}
+		return 200, connection("teamworkGraph_teamActiveProjects", "")
+	})
+	if _, err := Collect(context.Background(), g.client(), params(everything)); err == nil || !strings.Contains(err.Error(), "requires a subject user") {
+		t.Fatalf("err = %v, want the missing-user refusal", err)
 	}
 }

@@ -2,10 +2,12 @@ package pyoracle
 
 import (
 	"errors"
+	"io/fs"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"reflect"
+	"regexp"
 	"strings"
 	"testing"
 )
@@ -438,5 +440,56 @@ func TestInterpreterRefusesInARecordingOutsideTheClosedList(t *testing.T) {
 	t.Setenv(RecordingEnv, "")
 	if path, _, err := Interpreter(root); err != nil || path != real {
 		t.Fatalf("outside a recording: %s, %v", path, err)
+	}
+}
+
+// A LookPath of a python name cannot be refused in a recording (it is the
+// standard library), so the files that start a Python they looked up by name
+// are a frozen set: a new file that does is RED until it goes through the
+// producer's launcher. The exceptions below never record a golden (CHAOS-7820).
+var lookPathPythonDayOne = map[string]bool{
+	"internal/testsupport/pyoracle/pyoracle.go":             true, // the resolver itself
+	"internal/testsupport/venueoracle/venueoracle.go":       true, // the launcher's PATH check
+	"internal/apiservice/admin/orgdeletion_targets_test.go": true,
+	"internal/pgmigrate/preflight_test.go":                  true,
+}
+
+func TestNoNewFileLooksPythonUpByName(t *testing.T) {
+	root := repoRootOf(t)
+	pattern := regexp.MustCompile(`exec\.LookPath\(\s*"python`)
+	err := filepath.WalkDir(root, func(path string, entry fs.DirEntry, walkErr error) error {
+		if walkErr != nil {
+			return walkErr
+		}
+		if entry.IsDir() {
+			switch entry.Name() {
+			case ".git", ".venv", "node_modules", "vendor":
+				return filepath.SkipDir
+			}
+			return nil
+		}
+		if !strings.HasSuffix(path, ".go") {
+			return nil
+		}
+		raw, err := os.ReadFile(path)
+		if err != nil {
+			return err
+		}
+		rel, _ := filepath.Rel(root, path)
+		rel = filepath.ToSlash(rel)
+		if pattern.Match(raw) && !lookPathPythonDayOne[rel] {
+			t.Errorf("%s looks Python up by name (exec.LookPath): a recording must start Python only through the producer's launcher (venueoracle Producer.Command)", rel)
+		}
+		return nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	// A listed exception that no longer looks Python up leaves the set.
+	for rel := range lookPathPythonDayOne {
+		raw, err := os.ReadFile(filepath.Join(root, filepath.FromSlash(rel)))
+		if err == nil && !pattern.Match(raw) {
+			t.Errorf("%s no longer looks Python up by name: remove it from lookPathPythonDayOne", rel)
+		}
 	}
 }

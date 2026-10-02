@@ -1,3 +1,0 @@
-label=internal/synccoverage (live Python coverage builder is outside the Go embed/cache boundary)
-package=./internal/synccoverage/...
-proof=synccoverage|sync-coverage live Python oracle measurement did not occur

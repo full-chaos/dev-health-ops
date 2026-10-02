@@ -7,14 +7,14 @@ import (
 	"math/big"
 	"math/rand"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"runtime"
 	"strings"
 	"testing"
 
 	"github.com/full-chaos/dev-health-ops/internal/api/pyjson"
-	"github.com/full-chaos/dev-health-ops/internal/testsupport/pyoracle"
+	"github.com/full-chaos/dev-health-ops/internal/testsupport/programoracle"
+	"github.com/full-chaos/dev-health-ops/internal/testsupport/venueoracle"
 )
 
 // pythonRecordModelsProgram generates testdata/record_models.json from the
@@ -63,45 +63,44 @@ for kind, payload in json.loads(sys.stdin.read()):
 print(json.dumps(out))
 `
 
-func oracleRoot(t *testing.T) (string, string) {
+func TestMain(m *testing.M) { os.Exit(venueoracle.RunTests(m)) }
+
+// recordGoldens is the set of this package's frozen Python answers: each
+// oracle program was executed once on Build, and its answer is frozen under
+// testdata/golden. The producers are the record models and the validator of
+// that build and pydantic under them, so Identity names those distributions.
+// A golden recorded by another producer is refused.
+var recordGoldens = programoracle.Set{
+	Package:       "./internal/api/recordvalidation/",
+	Build:         "a4847c5e93607451a0c987b314d37e02fc43ce85",
+	Identity:      "python 3.14.7\nunicodedata 16.0.0\nemail-validator 2.3.0\npydantic 2.13.5\npydantic-core 2.46.5",
+	Distributions: []string{"email-validator", "pydantic", "pydantic-core"},
+	// The goldenrecord verb writes each digest when it promotes a recording; a
+	// new golden starts as "PIN:" + its file name without ".json".
+	Pins: map[string]string{
+		"record-models.golden.json":     "c485a4e261d3e4ef00f7fd2e854807e6acd3709d1508d5433435eaec8ebebaca",
+		"record-validation.golden.json": "d34a28ade209aa14e61e1bb1ba729064eacd37a48ef40d846672157ad569b613",
+	},
+}
+
+// frozenPython returns the stdout of each program, in order, from the golden
+// of the running test. No Python runs.
+func frozenPython(t *testing.T, golden string, programs ...programoracle.Program) []string {
 	t.Helper()
-	if os.Getenv("DEV_HEALTH_LIVE_PYTHON_ORACLES") != "1" {
-		t.Skip("live Python oracles run only through ci/check_go.sh live-python-oracles")
+	_, file, _, ok := runtime.Caller(0)
+	if !ok {
+		t.Fatal("cannot locate the test source")
 	}
-	_, file, _, _ := runtime.Caller(0)
 	root := filepath.Clean(filepath.Join(filepath.Dir(file), "..", "..", ".."))
-	return root, pyoracle.Resolve(t, root)
+	return recordGoldens.Outputs(t, root, golden, programs...)
 }
 
-func runPython(t *testing.T, root, python, program string, stdin []byte) []byte {
-	t.Helper()
-	command := exec.Command(python, "-c", program)
-	command.Env = append(os.Environ(), "PYTHONPATH="+filepath.Join(root, "src"))
-	command.Stdin = bytes.NewReader(stdin)
-	output, err := command.CombinedOutput()
-	if err != nil {
-		t.Fatalf("live python: %v", pyoracle.RunError(python, err, output))
-	}
-	return output
-}
-
-func writeOracleProof(t *testing.T, name string) {
-	t.Helper()
-	proof := os.Getenv("DEV_HEALTH_LIVE_PYTHON_ORACLE_PROOF_DIR")
-	if proof == "" {
-		t.Fatal("DEV_HEALTH_LIVE_PYTHON_ORACLE_PROOF_DIR is required")
-	}
-	if err := os.WriteFile(filepath.Join(proof, name), []byte("executed"), 0o600); err != nil {
-		t.Fatal(err)
-	}
-}
-
-// TestRecordModelsGoldenMatchesLivePython regenerates the model spec from
-// the live models and compares it, key order included, with the embedded
-// golden the validator runs on.
-func TestRecordModelsGoldenMatchesLivePython(t *testing.T) {
-	root, python := oracleRoot(t)
-	live, err := pyjson.Decode(runPython(t, root, python, pythonRecordModelsProgram, nil))
+// TestRecordModelsMatchFrozenPython compares the model spec the validator runs
+// on (testdata/record_models.json, embedded) with the frozen spec the real
+// models' pydantic core schemas give, key order included.
+func TestRecordModelsMatchFrozenPython(t *testing.T) {
+	output := frozenPython(t, "record-models.golden.json", programoracle.Program{Name: "record models", Text: pythonRecordModelsProgram})[0]
+	live, err := pyjson.Decode([]byte(output))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -112,9 +111,8 @@ func TestRecordModelsGoldenMatchesLivePython(t *testing.T) {
 	liveText, _ := pyjson.Marshal(live)
 	goldenText, _ := pyjson.Marshal(golden)
 	if !bytes.Equal(liveText, goldenText) {
-		t.Fatal("testdata/record_models.json is stale: regenerate it with pythonRecordModelsProgram")
+		t.Fatal("testdata/record_models.json is not the spec of the frozen Python models: it was changed by hand, or the models were recorded again; regenerate it with pythonRecordModelsProgram")
 	}
-	writeOracleProof(t, "externalingest-record-models")
 }
 
 // valuePool is JSON texts that exercise every lax-mode branch of the node
@@ -328,17 +326,18 @@ func recordCorpus() [][2]string {
 	return corpus
 }
 
-// TestRecordValidationMatchesLivePython compares ValidateRecords with
+// TestRecordValidationMatchesFrozenPython compares ValidateRecords with
 // validate_records on recordCorpus: every item's index, kind, code, message
 // and path, in order.
-func TestRecordValidationMatchesLivePython(t *testing.T) {
-	root, python := oracleRoot(t)
+func TestRecordValidationMatchesFrozenPython(t *testing.T) {
 	corpus := recordCorpus()
-	input, _ := json.Marshal(corpus)
-	output := runPython(t, root, python, pythonValidateRecordsProgram, input)
-	lines := bytes.Split(bytes.TrimSpace(output), []byte("\n"))
+	input, err := json.Marshal(corpus)
+	if err != nil {
+		t.Fatal(err)
+	}
+	output := frozenPython(t, "record-validation.golden.json", programoracle.Program{Name: "validate records", Text: pythonValidateRecordsProgram, Stdin: input})[0]
 	var want []json.RawMessage
-	if err := json.Unmarshal(lines[len(lines)-1], &want); err != nil {
+	if err := json.Unmarshal([]byte(output), &want); err != nil {
 		t.Fatalf("decode: %v", err)
 	}
 	if len(want) != len(corpus) {
@@ -366,7 +365,6 @@ func TestRecordValidationMatchesLivePython(t *testing.T) {
 	if mismatches > 0 {
 		t.Fatalf("%d of %d cases differ", mismatches, len(corpus))
 	}
-	writeOracleProof(t, "externalingest-record-validation")
 	t.Logf("%d records over %d kinds compared (%d Python items); 0 mismatches", len(corpus), len(recordKinds), items)
 }
 

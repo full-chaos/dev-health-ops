@@ -2,15 +2,10 @@ package synccoverage
 
 import (
 	"encoding/json"
-	"os"
-	"os/exec"
-	"path/filepath"
-	"runtime"
 	"strings"
 	"testing"
 
-	"github.com/full-chaos/dev-health-ops/internal/testsupport/pyoracle"
-	"github.com/full-chaos/dev-health-ops/internal/testsupport/venueoracle"
+	"github.com/full-chaos/dev-health-ops/internal/testsupport/programoracle"
 )
 
 // pythonEffectiveKeysProgram runs each (dataset, stored flags text) through
@@ -49,33 +44,22 @@ var effectiveKeyFlagShapes = []any{
 
 var effectiveKeyDatasets = []string{"work-items", "prs", "cicd", "commits", "work-item-labels", "tests", "unknown"}
 
-// TestEffectiveDatasetKeysVenueOracleMatchesLivePython requires
-// effectiveDatasetKeys to answer every (dataset, flags) pair as the api's
-// _effective_dataset_keys does: the same keys, or an error where Python
-// raises. It imports the api's service module, so it runs in the
-// venue-oracles job, which discovers it by name.
-func TestEffectiveDatasetKeysVenueOracleMatchesLivePython(t *testing.T) {
-	if os.Getenv("DEV_HEALTH_LIVE_PYTHON_ORACLES") != "1" {
-		t.Skip("the effective keys oracle needs the full project Python environment; ci/check_go.sh venue-oracles runs it")
-	}
-	_, file, _, _ := runtime.Caller(0)
-	root := filepath.Clean(filepath.Join(filepath.Dir(file), "..", ".."))
-	python := pyoracle.Resolve(t, root)
+// TestEffectiveDatasetKeysMatchFrozenPython requires effectiveDatasetKeys to
+// answer every (dataset, flags) pair as the frozen answers of the api's
+// _effective_dataset_keys: the same keys, or an error where Python raised.
+func TestEffectiveDatasetKeysMatchFrozenPython(t *testing.T) {
 	var cases [][2]any
 	for _, dataset := range effectiveKeyDatasets {
 		for _, flags := range effectiveKeyFlagShapes {
 			cases = append(cases, [2]any{dataset, flags})
 		}
 	}
-	input, _ := json.Marshal(cases)
-	command := exec.Command(python, "-c", pythonEffectiveKeysProgram)
-	command.Env = append(os.Environ(), "PYTHONPATH="+filepath.Join(root, "src"))
-	command.Stdin = strings.NewReader(string(input))
-	output, err := command.CombinedOutput()
+	input, err := json.Marshal(cases)
 	if err != nil {
-		t.Fatalf("live python: %v", pyoracle.RunError(python, err, output))
+		t.Fatal(err)
 	}
-	lines := strings.Split(strings.TrimSpace(string(output)), "\n")
+	output := frozenPython(t, "effective-datasets.golden.json", programoracle.Program{Name: "effective dataset keys", Text: pythonEffectiveKeysProgram, Stdin: input})[0]
+	lines := strings.Split(strings.TrimSpace(output), "\n")
 	var want []struct {
 		Keys  []string
 		Error string
@@ -109,5 +93,4 @@ func TestEffectiveDatasetKeysVenueOracleMatchesLivePython(t *testing.T) {
 		t.Fatal("no case raised in Python: the error path is not compared")
 	}
 	t.Logf("%d cases, %d raising in Python", len(cases), raised)
-	venueoracle.WriteProof(t)
 }

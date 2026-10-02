@@ -6,10 +6,6 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
-	"os"
-	"os/exec"
-	"path/filepath"
-	"runtime"
 	"sort"
 	"strings"
 	"testing"
@@ -17,7 +13,7 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/api/pyjson"
 	"github.com/full-chaos/dev-health-ops/internal/queryapi/authctx"
 	"github.com/full-chaos/dev-health-ops/internal/queryapi/investmentexplain"
-	"github.com/full-chaos/dev-health-ops/internal/testsupport/pyoracle"
+	"github.com/full-chaos/dev-health-ops/internal/testsupport/programoracle"
 )
 
 // pythonBodyModelsProgram serves each query-api POST route's request model
@@ -245,19 +241,13 @@ func goBodyAnswer(handler http.HandlerFunc, path, body string) (status int, text
 	return recorder.Code, recorder.Body.String()
 }
 
-// TestQueryAPIBodiesMatchLiveFastAPI compares every query-api POST route's
-// body validation with FastAPI's, per request model. A body FastAPI
+// TestQueryAPIBodiesMatchFrozenFastAPI compares every query-api POST route's
+// body validation with the frozen answers of FastAPI, per request model. A body FastAPI
 // accepts must pass Go's validation (any status but 422 and 500); a 422
 // must match in status and JSON document (key order, number spelling and
 // every error field); a 500 (a body FastAPI cannot render its error for)
 // must be a 500 on Go too.
-func TestQueryAPIBodiesMatchLiveFastAPI(t *testing.T) {
-	if os.Getenv("DEV_HEALTH_LIVE_PYTHON_ORACLES") != "1" {
-		t.Skip("live Python oracles run only through ci/check_go.sh live-python-oracles")
-	}
-	_, file, _, _ := runtime.Caller(0)
-	root := filepath.Clean(filepath.Join(filepath.Dir(file), "..", "..", ".."))
-	python := pyoracle.Resolve(t, root)
+func TestQueryAPIBodiesMatchFrozenFastAPI(t *testing.T) {
 	models := bodyOracleModels()
 	var inputs [][2]string
 	type item struct {
@@ -271,15 +261,12 @@ func TestQueryAPIBodiesMatchLiveFastAPI(t *testing.T) {
 			items = append(items, item{&models[index], body})
 		}
 	}
-	payload, _ := json.Marshal(inputs)
-	command := exec.Command(python, "-c", pythonBodyModelsProgram)
-	command.Stdin = bytes.NewReader(payload)
-	command.Env = append(os.Environ(), "PYTHONPATH="+filepath.Join(root, "src"))
-	output, err := command.CombinedOutput()
+	payload, err := json.Marshal(inputs)
 	if err != nil {
-		t.Fatalf("live python: %v", pyoracle.RunError(python, err, output))
+		t.Fatal(err)
 	}
-	lines := strings.Split(strings.TrimSpace(string(output)), "\n")
+	output := frozenPython(t, "query-bodies.golden.json", programoracle.Program{Name: "query-api bodies", Text: pythonBodyModelsProgram, Stdin: payload})[0]
+	lines := strings.Split(strings.TrimSpace(output), "\n")
 	var want [][2]any
 	if err := json.Unmarshal([]byte(lines[len(lines)-1]), &want); err != nil {
 		t.Fatalf("decode: %v", err)
@@ -341,13 +328,6 @@ func TestQueryAPIBodiesMatchLiveFastAPI(t *testing.T) {
 	}
 	if knownNullGap == 0 {
 		t.Fatal("the named null gap is closed (every null FastAPI refuses is refused by Go): remove nullGap and compare those bodies directly")
-	}
-	proof := os.Getenv("DEV_HEALTH_LIVE_PYTHON_ORACLE_PROOF_DIR")
-	if proof == "" {
-		t.Fatal("DEV_HEALTH_LIVE_PYTHON_ORACLE_PROOF_DIR is required")
-	}
-	if err := os.WriteFile(filepath.Join(proof, "query-api-bodies"), []byte("executed"), 0o600); err != nil {
-		t.Fatal(err)
 	}
 	t.Logf("%d bodies, %d route answers compared; 0 mismatches beyond the named null gap (%d answers); every matching 422 byte for byte",
 		len(items), compared, knownNullGap)

@@ -3,14 +3,13 @@ package streamhandlers
 import (
 	"bytes"
 	"encoding/json"
-	"os"
-	"os/exec"
 	"path/filepath"
 	"runtime"
 	"testing"
 
-	"github.com/full-chaos/dev-health-ops/internal/testsupport/pyoracle"
 	"github.com/google/uuid"
+
+	"github.com/full-chaos/dev-health-ops/internal/testsupport/programoracle"
 )
 
 // pythonNormalizeBatchProgram runs normalize_batch on each case and prints
@@ -47,38 +46,28 @@ for case in cases:
 print(json.dumps(out))
 `
 
-func normalizeOracleRoot(t *testing.T) (string, string) {
-	t.Helper()
-	if os.Getenv("DEV_HEALTH_LIVE_PYTHON_ORACLES") != "1" {
-		t.Skip("live Python oracles run only through ci/check_go.sh live-python-oracles")
-	}
-	_, file, _, _ := runtime.Caller(0)
-	root := filepath.Clean(filepath.Join(filepath.Dir(file), "..", ".."))
-	return root, pyoracle.Resolve(t, root)
+// normalizeGoldens is the set of this package's frozen Python answers. The
+// producers are the external-ingest schemas and normalize_batch of the pinned
+// build, over pydantic, so Identity names those distributions. A golden
+// recorded by another producer is refused.
+var normalizeGoldens = programoracle.Set{
+	Package:       "./internal/streamhandlers/",
+	Build:         "a4847c5e93607451a0c987b314d37e02fc43ce85",
+	Identity:      "python 3.14.7\nunicodedata 16.0.0\nemail-validator 2.3.0\npydantic 2.13.5\npydantic-core 2.46.5",
+	Distributions: []string{"email-validator", "pydantic", "pydantic-core"},
+	// The goldenrecord verb writes each digest when it promotes a recording; a
+	// new golden starts as "PIN:" + its file name without ".json".
+	Pins: map[string]string{
+		"normalize-batch.golden.json": "73469c844ea43fdddf06896ec2c5ea26180cfbdfa30473896122960b6720ed70",
+	},
 }
 
-func runNormalizeOraclePython(t *testing.T, root, python string, stdin []byte) []byte {
-	t.Helper()
-	command := exec.Command(python, "-c", pythonNormalizeBatchProgram)
-	command.Env = append(os.Environ(), "PYTHONPATH="+filepath.Join(root, "src"))
-	command.Stdin = bytes.NewReader(stdin)
-	output, err := command.CombinedOutput()
-	if err != nil {
-		t.Fatalf("live python: %v", pyoracle.RunError(python, err, output))
-	}
-	return output
-}
-
-func writeNormalizeOracleProof(t *testing.T) {
-	t.Helper()
-	proof := os.Getenv("DEV_HEALTH_LIVE_PYTHON_ORACLE_PROOF_DIR")
-	if proof == "" {
-		t.Fatal("DEV_HEALTH_LIVE_PYTHON_ORACLE_PROOF_DIR is required")
-	}
-	if err := os.WriteFile(filepath.Join(proof, "streamhandlers-normalize-batch"), []byte("executed"), 0o600); err != nil {
-		t.Fatal(err)
-	}
-}
+// The source and the ingestion of every case: fixed, because they are in the
+// program's input.
+var (
+	normalizeOracleSourceID    = uuid.MustParse("6f3c2a1e-5b4d-4c8e-9a7f-0d1e2f3a4b5c")
+	normalizeOracleIngestionID = uuid.MustParse("7a4d3b2f-6c5e-4d9f-8b0a-1e2f3a4b5c6d")
+)
 
 // externalMessageNotClaimedExact names rejection codes CHAOS-6345 does not
 // touch and never claimed message-exact -- normalize.py interpolates the
@@ -120,7 +109,7 @@ type normalizeOracleCase struct {
 // normalizeOracleCorpus targets ORCHESTRATION -- which check wins, how a
 // rejection row is built, the one added post-shape check -- not per-field
 // shape correctness: internal/api/externalingest's own
-// TestRecordValidationMatchesLivePython already exhaustively oracles
+// TestRecordValidationMatchesFrozenPython already exhaustively oracles
 // ValidateRecords/validate_records field-by-field, so re-fuzzing that here
 // would be a second, redundant proof of the same claim.
 func normalizeOracleCorpus() []normalizeOracleCase {
@@ -201,6 +190,33 @@ func normalizeOracleCorpus() []normalizeOracleCase {
 			}}},
 		},
 		{
+			// The instance comparison ignores letter case: this record is in
+			// its source instance.
+			Name: "git family instance differs only in letter case", SourceSystem: "github", SourceInstance: "acme/repo", EntityFamily: "legacy",
+			Records: []normalizeOracleRecord{{Kind: "repository.v1", ExternalID: "r1", Payload: map[string]any{
+				"externalId": "Acme/REPO", "sourceSystem": "github",
+			}}},
+		},
+		{
+			// The instance scope holds for gitlab and for custom sources too.
+			Name: "git family instance mismatch on gitlab", SourceSystem: "gitlab", SourceInstance: "acme/repo", EntityFamily: "legacy",
+			Records: []normalizeOracleRecord{{Kind: "repository.v1", ExternalID: "r1", Payload: map[string]any{
+				"externalId": "someone-else/other-repo", "sourceSystem": "gitlab",
+			}}},
+		},
+		{
+			Name: "git family instance mismatch on a custom source", SourceSystem: "custom", SourceInstance: "acme/repo", EntityFamily: "legacy",
+			Records: []normalizeOracleRecord{{Kind: "repository.v1", ExternalID: "r1", Payload: map[string]any{
+				"externalId": "someone-else/other-repo", "sourceSystem": "custom",
+			}}},
+		},
+		{
+			Name: "git family commit outside the instance", SourceSystem: "gitlab", SourceInstance: "acme/repo", EntityFamily: "legacy",
+			Records: []normalizeOracleRecord{{Kind: "commit.v1", ExternalID: "c1", Payload: map[string]any{
+				"repositoryExternalId": "someone-else/other-repo", "hash": "abc1234", "authorWhen": "2026-07-01T12:00:00Z",
+			}}},
+		},
+		{
 			// Index correctness across a mixed batch: valid, shape-invalid,
 			// unsupported-kind-for-system, valid again.
 			Name: "mixed batch preserves index and per-record verdicts", SourceSystem: "github", SourceInstance: "acme/repo", EntityFamily: "legacy",
@@ -222,15 +238,15 @@ func normalizeOracleCorpus() []normalizeOracleCase {
 	}
 }
 
-// TestNormalizeExternalRecordsMatchesLivePythonNormalizeBatch is
-// CHAOS-6345's proof: normalizeExternalRecords and normalize_batch agree,
+// TestNormalizeExternalRecordsMatchesFrozenPythonNormalizeBatch is
+// CHAOS-6345's proof: normalizeExternalRecords and the frozen answers of
+// normalize_batch agree,
 // case by case, on which records are rejected, in what order, and with
 // what code/message/path -- the orchestration this ticket changed
 // (shape-validation-first precedence, the repository_identity_required
 // port, rejection row construction from a ValidationErrorItem), not the
 // shape rules themselves (already oracled exhaustively elsewhere).
-func TestNormalizeExternalRecordsMatchesLivePythonNormalizeBatch(t *testing.T) {
-	root, python := normalizeOracleRoot(t)
+func TestNormalizeExternalRecordsMatchesFrozenPythonNormalizeBatch(t *testing.T) {
 	corpus := normalizeOracleCorpus()
 
 	type pythonCase struct {
@@ -248,8 +264,8 @@ func TestNormalizeExternalRecordsMatchesLivePythonNormalizeBatch(t *testing.T) {
 	}
 
 	orgID := "2b237281-6b27-4b46-8b23-14f14f2cf429"
-	sourceID := uuid.New()
-	ingestionID := uuid.New()
+	sourceID := normalizeOracleSourceID
+	ingestionID := normalizeOracleIngestionID
 
 	pythonCases := make([]pythonCase, len(corpus))
 	for i, c := range corpus {
@@ -266,7 +282,12 @@ func TestNormalizeExternalRecordsMatchesLivePythonNormalizeBatch(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	output := runNormalizeOraclePython(t, root, python, input)
+	_, file, _, ok := runtime.Caller(0)
+	if !ok {
+		t.Fatal("cannot locate the test source")
+	}
+	root := filepath.Clean(filepath.Join(filepath.Dir(file), "..", ".."))
+	output := []byte(normalizeGoldens.Outputs(t, root, "normalize-batch.golden.json", programoracle.Program{Name: "normalize batch", Text: pythonNormalizeBatchProgram, Stdin: input})[0])
 	lines := bytes.Split(bytes.TrimSpace(output), []byte("\n"))
 	var want [][]struct {
 		Index      int    `json:"index"`
@@ -338,5 +359,4 @@ func TestNormalizeExternalRecordsMatchesLivePythonNormalizeBatch(t *testing.T) {
 			}
 		})
 	}
-	writeNormalizeOracleProof(t)
 }

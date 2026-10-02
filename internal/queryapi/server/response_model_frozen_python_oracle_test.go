@@ -7,8 +7,6 @@ import (
 	"fmt"
 	"math"
 	"net/http/httptest"
-	"os"
-	"os/exec"
 	"path/filepath"
 	"reflect"
 	"runtime"
@@ -34,11 +32,11 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/queryapi/quadrant"
 	"github.com/full-chaos/dev-health-ops/internal/queryapi/sankey"
 	"github.com/full-chaos/dev-health-ops/internal/queryapi/workunitexplain"
-	"github.com/full-chaos/dev-health-ops/internal/testsupport/pyoracle"
-	"github.com/full-chaos/dev-health-ops/internal/testsupport/venueoracle"
+	"github.com/full-chaos/dev-health-ops/internal/testsupport/programoracle"
 )
 
-// pythonResponseModelProgram reads the live FastAPI app. "table" prints
+// pythonResponseModelProgram reads the FastAPI app. Its input is {"mode",
+// "input"}. "table" prints
 // every APIRoute's response_model flag (fastapi/routing.py use_dump_json)
 // and, for the keys on stdin, the response field's validation JSON schema.
 // "render" validates each [key, JSON data] pair with the route's response
@@ -46,19 +44,23 @@ import (
 // field.serialize_json with the route's response_model_* settings
 // (fastapi/routing.py serialize_response, dump_json=True).
 const pythonResponseModelProgram = `
-import base64, json, sys
+import base64, contextlib, json, sys
 from fastapi.routing import APIRoute
 from fastapi.datastructures import DefaultPlaceholder
 from pydantic import TypeAdapter
-from dev_health_ops.api.main import app
+# The app logs a line with the time of the run while it is imported: it goes
+# to stderr, so the answer is the RESULT line alone.
+with contextlib.redirect_stdout(sys.stderr):
+    from dev_health_ops.api.main import app
 routes = {}
 for route in app.routes:
     if isinstance(route, APIRoute):
         for method in route.methods:
             routes[(method, route.path)] = route
-request = json.loads(sys.stdin.read())
+spec = json.loads(sys.stdin.read())
+mode, request = spec["mode"], spec["input"]
 SENTINELS = {"\u0000NaN": float("nan"), "\u0000Infinity": float("inf"), "\u0000-Infinity": float("-inf")}
-if sys.argv[1] == "table":
+if mode == "table":
     table = [[m, p, r.response_field is not None and isinstance(r.response_class, DefaultPlaceholder)] for (m, p), r in routes.items()]
     schemas = {}
     for key in request:
@@ -166,43 +168,34 @@ func responseModelOracleRoutes() map[string]responseModelOracleRoute {
 	}
 }
 
-// TestVenueOracleQueryAPIResponseModels checks two things against the
-// live FastAPI app. The route table: responseModelRoutes names exactly the
+// TestQueryAPIResponseModelsMatchFrozenPython checks two things against the
+// frozen answers of the FastAPI app of the pinned build. The route table: responseModelRoutes names exactly the
 // response_model routes on the paths the query-api serves. The bytes: for
 // each such route, a value of its Go response type, filled from the
 // route's pydantic schema with floats at the format edges, is written by
 // the production writer and by FastAPI's own response_model path from the
 // same data, and the two bodies must be byte-identical. That also pins
 // field order, int-versus-float field types, and fields the model drops.
-func TestVenueOracleQueryAPIResponseModels(t *testing.T) {
-	if os.Getenv("DEV_HEALTH_LIVE_PYTHON_ORACLES") != "1" {
-		t.Skip("live Python oracles run only through ci/check_go.sh venue-oracles")
+func TestQueryAPIResponseModelsMatchFrozenPython(t *testing.T) {
+	_, file, _, ok := runtime.Caller(0)
+	if !ok {
+		t.Fatal("cannot locate the test source")
 	}
-	// It imports the whole FastAPI app (dev_health_ops.api.main), so it
-	// needs the full project environment: the venue-oracles job (uv sync),
-	// not the live-python-oracles pin set.
-	_, file, _, _ := runtime.Caller(0)
-	root := filepath.Clean(filepath.Join(filepath.Dir(file), "..", "..", ".."))
-	python := pyoracle.Resolve(t, root)
+	// Each mode is its own golden: the input of "render" is built from the
+	// answer of "table".
 	runPython := func(mode string, input any) json.RawMessage {
 		t.Helper()
-		payload, err := json.Marshal(input)
+		payload, err := json.Marshal(map[string]any{"mode": mode, "input": input})
 		if err != nil {
 			t.Fatal(err)
 		}
-		command := exec.Command(python, "-c", pythonResponseModelProgram, mode)
-		command.Stdin = bytes.NewReader(payload)
-		command.Env = append(os.Environ(), "PYTHONPATH="+filepath.Join(root, "src"))
-		output, err := command.CombinedOutput()
-		if err != nil {
-			t.Fatalf("live python %s: %v", mode, pyoracle.RunError(python, err, output))
-		}
-		for _, line := range strings.Split(string(output), "\n") {
+		output := frozenPython(t, "query-response-models-"+mode+".golden.json", programoracle.Program{Name: "response models " + mode, Text: pythonResponseModelProgram, Stdin: payload})[0]
+		for _, line := range strings.Split(output, "\n") {
 			if rest, ok := strings.CutPrefix(line, "RESULT "); ok {
 				return json.RawMessage(rest)
 			}
 		}
-		t.Fatalf("live python %s printed no RESULT line:\n%s", mode, output)
+		t.Fatalf("python %s printed no RESULT line when it was recorded:\n%s", mode, output)
 		return nil
 	}
 
@@ -243,7 +236,7 @@ func TestVenueOracleQueryAPIResponseModels(t *testing.T) {
 	}
 	for _, key := range keys {
 		if !pythonModel[key] {
-			t.Errorf("%s: responseModelRoutes names it, but the live FastAPI app has no response_model route for it", key)
+			t.Errorf("%s: responseModelRoutes names it, but the frozen FastAPI app has no response_model route for it", key)
 		}
 	}
 	if len(served) == 0 || len(table.Routes) == 0 {
@@ -275,7 +268,7 @@ func TestVenueOracleQueryAPIResponseModels(t *testing.T) {
 		route := oracleRoutes[key]
 		schema := table.Schemas[key]
 		if schema == nil {
-			t.Errorf("%s: the live app gave no response schema", key)
+			t.Errorf("%s: the frozen app gave no response schema", key)
 			continue
 		}
 		for variant := range len(responseModelEdgeFloats) + 2 {
@@ -367,11 +360,6 @@ func TestVenueOracleQueryAPIResponseModels(t *testing.T) {
 		t.Fatalf("no body compared equal")
 	}
 	t.Logf("%d routes, %d bodies byte-identical to FastAPI's response_model path", len(keys), same)
-	// The venue-oracles verb discovers this test by its call to the
-	// venueoracle proof writer and fails when no proof file is left.
-	if !t.Failed() {
-		venueoracle.WriteProof(t)
-	}
 }
 
 func truncateOracleBody(text string) string {

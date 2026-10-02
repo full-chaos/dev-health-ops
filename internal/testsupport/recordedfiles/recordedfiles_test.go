@@ -110,7 +110,7 @@ func set(t *testing.T, repo string, change Change, files ...string) {
 }
 
 // found is the guard's problems in repo, with the day-one count the list has.
-func found(t *testing.T, repo string, dayOneCount int) []string {
+func found(t *testing.T, repo string) []string {
 	t.Helper()
 	roots, err := Roots(repo)
 	if err != nil {
@@ -120,7 +120,7 @@ func found(t *testing.T, repo string, dayOneCount int) []string {
 	if err != nil {
 		t.Fatal(err)
 	}
-	out, err := problems(repo, roots, dayOne, dayOneCount)
+	out, err := problems(repo, roots, dayOne)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -199,24 +199,20 @@ func TestTheGuardRefusesEachWayAFileCanChangeUnseen(t *testing.T) {
 		{"the record verb's candidate beside a golden", func(t *testing.T, repo string) { write(t, repo, "a/testdata/golden/TestX.json.recording", "{}") }, nil},
 		{"an unclassified file that is not on the day-one list", func(t *testing.T, repo string) {
 			write(t, repo, DayOneList, "# none\n")
-		}, [][]string{{"a/testdata/old.sql is unclassified in a/testdata.manifest.tsv and is not on the day-one list", "-kind <"}, {"holds 0 files and unclassifiedDayOne says 1"}}},
+		}, [][]string{{"a/testdata/old.sql is unclassified in a/testdata.manifest.tsv and is not on the day-one list", "-kind <"}}},
 		{"a file on the day-one list that has a kind now, the list left as it was", func(t *testing.T, repo string) {
 			list := read(t, repo, DayOneList)
 			set(t, repo, Change{Kind: HandWritten}, "a/testdata/old.sql")
 			write(t, repo, DayOneList, list)
-		}, [][]string{{"a/testdata/old.sql is on the day-one list", "-kind <kind> a/testdata/old.sql", "lower unclassifiedDayOne by one"}}},
-		{"a line added to the day-one list for a new file", func(t *testing.T, repo string) {
-			write(t, repo, "a/testdata/later.bin", "x")
-			set(t, repo, Change{Kind: Unclassified, DayOne: true}, "a/testdata/later.bin")
-		}, [][]string{{"holds 2 files and unclassifiedDayOne says 1", "the list only shrinks"}}},
+		}, [][]string{{"a/testdata/old.sql is on the day-one list", "-kind <kind> a/testdata/old.sql"}}},
 	} {
 		t.Run(row.name, func(t *testing.T) {
 			repo := tree(t)
-			if before := found(t, repo, 1); len(before) != 0 {
+			if before := found(t, repo); len(before) != 0 {
 				t.Fatalf("the tree the verb wrote is refused: %q", before)
 			}
 			row.do(t, repo)
-			got := found(t, repo, 1)
+			got := found(t, repo)
 			if len(got) != len(row.want) {
 				t.Fatalf("problems = %q, want %d", got, len(row.want))
 			}
@@ -286,7 +282,7 @@ func TestTheVerbRefusesWhatOnlyARecordingMayChange(t *testing.T) {
 		if _, err := Set(repo, []string{"a/testdata/recorded.json"}, Change{Kind: PythonRecorded, RecordedAgain: true}); err != nil {
 			t.Errorf("with -recorded-again: %v", err)
 		}
-		if got := found(t, repo, 1); len(got) != 0 {
+		if got := found(t, repo); len(got) != 0 {
 			t.Errorf("after -recorded-again: %q", got)
 		}
 	})
@@ -303,7 +299,7 @@ func TestTheVerbRefusesWhatOnlyARecordingMayChange(t *testing.T) {
 		if _, err := Sync(repo, Change{RecordedAgain: true}); err != nil {
 			t.Fatal(err)
 		}
-		if got := found(t, repo, 1); len(got) != 0 {
+		if got := found(t, repo); len(got) != 0 {
 			t.Errorf("after -sync -recorded-again: %q", got)
 		}
 	})
@@ -315,7 +311,7 @@ func TestTheVerbRefusesWhatOnlyARecordingMayChange(t *testing.T) {
 		if _, err := Sync(repo, Change{RecordedAgain: true}); err != nil {
 			t.Fatal(err)
 		}
-		if got := found(t, repo, 1); len(got) != 0 {
+		if got := found(t, repo); len(got) != 0 {
 			t.Errorf("after -sync -recorded-again: %q", got)
 		}
 	})
@@ -368,7 +364,7 @@ func TestTheVerbRefusesWhatOnlyARecordingMayChange(t *testing.T) {
 		if _, err := Sync(repo, Change{RecordedAgain: true}); err != nil {
 			t.Fatal(err)
 		}
-		if got := found(t, repo, 1); len(got) != 0 {
+		if got := found(t, repo); len(got) != 0 {
 			t.Errorf("after -sync -recorded-again: %q", got)
 		}
 	})
@@ -393,7 +389,7 @@ func TestTheVerbWritesWhatTheGuardAccepts(t *testing.T) {
 	if _, err := Sync(repo, Change{}); err != nil {
 		t.Fatal(err)
 	}
-	if got := found(t, repo, 1); len(got) != 0 {
+	if got := found(t, repo); len(got) != 0 {
 		t.Fatalf("problems after the verb: %q", got)
 	}
 	rows := strings.Split(strings.TrimSpace(read(t, repo, "a/testdata.manifest.tsv")), "\n")[3:]
@@ -411,10 +407,13 @@ func TestTheVerbWritesWhatTheGuardAccepts(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(notes) != 1 || !strings.Contains(notes[0], "the day-one list now holds 0 files") {
-		t.Errorf("notes = %q, want the new length of the day-one list", notes)
+	if len(notes) != 0 {
+		t.Errorf("notes = %q, want none: the list's size is held to the merge base by ci/ratchets.tsv, with no number to edit", notes)
 	}
-	if got := found(t, repo, 0); len(got) != 0 {
+	if listed, err := DayOne(repo); err != nil || len(listed) != 0 {
+		t.Errorf("the day-one list after the last file got a kind: %q, %v", listed, err)
+	}
+	if got := found(t, repo); len(got) != 0 {
 		t.Errorf("after the last day-one file got a kind: %q", got)
 	}
 }
@@ -471,7 +470,7 @@ func TestTheBeforeStampSetOnlyShrinksWhenAGoldenIsRecordedAgain(t *testing.T) {
 	if !strings.Contains(read(t, repo, "a/testdata.manifest.tsv"), "-\theader\tgolden/TestOld.json\n") {
 		t.Error("the golden recorded again has no header row")
 	}
-	if got := found(t, repo, 1); len(got) != 0 {
+	if got := found(t, repo); len(got) != 0 {
 		t.Errorf("problems: %q", got)
 	}
 }
@@ -490,29 +489,26 @@ func TestDayOneAdmitsNoGoldenThatIsNotOnTheClosedList(t *testing.T) {
 	}
 }
 
-func TestTheGuardRefusesABeforeStampRowOffTheClosedListAndAListThatGrew(t *testing.T) {
+func TestTheGuardRefusesABeforeStampRowOffTheClosedList(t *testing.T) {
 	repo := tree(t)
 	roots, err := Roots(repo)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got, err := ceilingProblems(repo, roots, 1); err != nil || len(got) != 0 {
+	if got, err := ceilingProblems(repo, roots); err != nil || len(got) != 0 {
 		t.Fatalf("the tree is accepted: %q, %v", got, err)
 	}
-	if got, _ := ceilingProblems(repo, roots, 0); len(got) != 1 || !strings.Contains(got[0], "the list only shrinks") {
-		t.Fatalf("a list longer than the ceiling: %q", got)
-	}
 	write(t, repo, BeforeStampList, "# empty\n")
-	got, _ := ceilingProblems(repo, roots, 0)
+	got, _ := ceilingProblems(repo, roots)
 	if len(got) != 1 || !strings.Contains(got[0], "is not on the closed list") {
 		t.Fatalf("a row off the list: %q", got)
 	}
 }
 
 // Problems reports a before-stamp row that is off the closed list (the check
-// is wired into the guard, not only a function a test calls), and a list that is
-// SHORTER than the ceiling is refused too: the number goes down with the list.
-func TestProblemsReportsABeforeStampRowOffTheClosedListAndAStaleCeiling(t *testing.T) {
+// is wired into the guard, not only a function a test calls). The list's size is
+// not checked here: ci/ratchets.tsv holds it to the merge base.
+func TestProblemsReportsABeforeStampRowOffTheClosedList(t *testing.T) {
 	repo := tree(t)
 	write(t, repo, BeforeStampList, "# empty\n")
 	problems, err := Problems(repo)
@@ -527,15 +523,6 @@ func TestProblemsReportsABeforeStampRowOffTheClosedListAndAStaleCeiling(t *testi
 	}
 	if !found {
 		t.Fatalf("Problems did not report the row off the list: %q", problems)
-	}
-
-	repo = tree(t)
-	roots, err := Roots(repo)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if got, _ := ceilingProblems(repo, roots, 2); len(got) != 1 || !strings.Contains(got[0], "the list only shrinks") {
-		t.Fatalf("a list shorter than the ceiling: %q", got)
 	}
 }
 

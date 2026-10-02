@@ -360,3 +360,125 @@ func TestAListCannotLeaveTheCheckByEditingTheManifest(t *testing.T) {
 		})
 	}
 }
+
+// How a list is retired: delete its file and its row in one change. A row removed while the file stays is refused.
+func TestAListIsRetiredByDeletingItsFileAndItsRowTogether(t *testing.T) {
+	repo := newRepo(t)
+	write(t, repo, "lists/two.txt", list("p", "q"))
+	write(t, repo, ManifestPath, "# test\nclosed\t"+listPath+"\tt\ntwo\tlists/two.txt\tt\n")
+	run(t, repo, "add", "-A")
+	run(t, repo, "commit", "-q", "-m", "two lists")
+	base := run(t, repo, "rev-parse", "HEAD")
+	write(t, repo, ManifestPath, "# test\nclosed\t"+listPath+"\tt\n")
+	var out, errOut strings.Builder
+	if code := Run(repo, base, &out, &errOut); code == 0 {
+		t.Fatalf("a row removed while its file stays passed: %q", out.String())
+	}
+	if err := os.Remove(filepath.Join(repo, "lists", "two.txt")); err != nil {
+		t.Fatal(err)
+	}
+	out.Reset()
+	errOut.Reset()
+	if code := Run(repo, base, &out, &errOut); code != 0 || !strings.Contains(out.String(), "ratchets: OK (1 lists") {
+		t.Fatalf("a retired list (file and row deleted) was refused: code %d out %q err %q", code, out.String(), errOut.String())
+	}
+}
+
+// In CI the change is COMMITTED and the base is an ancestor: the tests above leave the change in the working tree with the
+// base at HEAD. These run the command the way CI does.
+func TestRunWithTheChangeCommittedAndTheBaseAnAncestor(t *testing.T) {
+	repo := newRepo(t)
+	write(t, repo, "lists/two.txt", list("p", "q"))
+	write(t, repo, ManifestPath, "# test\nclosed\t"+listPath+"\tt\ntwo\tlists/two.txt\tt\n")
+	run(t, repo, "add", "-A")
+	run(t, repo, "commit", "-q", "-m", "two lists")
+	base := run(t, repo, "rev-parse", "HEAD")
+	commit := func(message string) {
+		run(t, repo, "add", "-A")
+		run(t, repo, "commit", "-q", "-m", message)
+	}
+	t.Run("a committed growth", func(t *testing.T) {
+		write(t, repo, listPath, list("a", "b", "c", "d", "e", "f"))
+		commit("grow")
+		var out, errOut strings.Builder
+		if code := Run(repo, base, &out, &errOut); code == 0 || !strings.Contains(errOut.String(), listPath) {
+			t.Fatalf("a committed growth passed with the base before it: code %d out %q err %q", code, out.String(), errOut.String())
+		}
+		run(t, repo, "reset", "-q", "--hard", base)
+	})
+	t.Run("a committed manifest edit that drops a list", func(t *testing.T) {
+		write(t, repo, ManifestPath, "# test\nclosed\t"+listPath+"\tt\n")
+		commit("drop the row")
+		var out, errOut strings.Builder
+		if code := Run(repo, base, &out, &errOut); code == 0 {
+			t.Fatalf("a committed row removal passed: %q", out.String())
+		}
+		run(t, repo, "reset", "-q", "--hard", base)
+	})
+	t.Run("a committed shrink passes", func(t *testing.T) {
+		write(t, repo, listPath, list("a", "b"))
+		commit("shrink")
+		var out, errOut strings.Builder
+		if code := Run(repo, base, &out, &errOut); code != 0 {
+			t.Fatalf("a committed shrink failed: %q %q", out.String(), errOut.String())
+		}
+		run(t, repo, "reset", "-q", "--hard", base)
+	})
+}
+
+// A list that cannot be measured makes the command fail: absent at the base, missing in the tree, empty at the base; and a
+// repository without a manifest or with a malformed one.
+func TestRunFailsForAListThatCannotBeMeasuredAndForABadManifest(t *testing.T) {
+	repo := newRepo(t)
+	base := run(t, repo, "rev-parse", "HEAD")
+	fail := func(t *testing.T, repo, base string) {
+		t.Helper()
+		var out, errOut strings.Builder
+		if code := Run(repo, base, &out, &errOut); code == 0 || strings.Contains(out.String(), "ratchets: OK") {
+			t.Fatalf("code %d out %q err %q, want a failure", code, out.String(), errOut.String())
+		}
+	}
+	t.Run("a list absent at the base", func(t *testing.T) {
+		write(t, repo, "lists/new.txt", list("a"))
+		write(t, repo, ManifestPath, "# test\nclosed\t"+listPath+"\tt\nnew\tlists/new.txt\tt\n")
+		fail(t, repo, base)
+		run(t, repo, "checkout", "-q", "--", ManifestPath)
+		os.Remove(filepath.Join(repo, "lists", "new.txt"))
+	})
+	t.Run("a list missing in the working tree", func(t *testing.T) {
+		original := read(t, repo, listPath)
+		if err := os.Remove(filepath.Join(repo, filepath.FromSlash(listPath))); err != nil {
+			t.Fatal(err)
+		}
+		fail(t, repo, base)
+		write(t, repo, listPath, original)
+	})
+	t.Run("a list empty at the base", func(t *testing.T) {
+		empty := newRepo(t)
+		write(t, empty, listPath, "# nothing\n")
+		run(t, empty, "add", "-A")
+		run(t, empty, "commit", "-q", "-m", "empty")
+		fail(t, empty, run(t, empty, "rev-parse", "HEAD"))
+	})
+	t.Run("no manifest", func(t *testing.T) {
+		bare := newRepo(t)
+		if err := os.Remove(filepath.Join(bare, filepath.FromSlash(ManifestPath))); err != nil {
+			t.Fatal(err)
+		}
+		fail(t, bare, run(t, bare, "rev-parse", "HEAD"))
+	})
+	t.Run("a malformed manifest", func(t *testing.T) {
+		bad := newRepo(t)
+		write(t, bad, ManifestPath, "name-only\n")
+		fail(t, bad, run(t, bad, "rev-parse", "HEAD"))
+	})
+	t.Run("a malformed manifest at the base", func(t *testing.T) {
+		bad := newRepo(t)
+		write(t, bad, ManifestPath, "broken-row\n")
+		run(t, bad, "add", "-A")
+		run(t, bad, "commit", "-q", "-m", "broken")
+		baseBad := run(t, bad, "rev-parse", "HEAD")
+		write(t, bad, ManifestPath, "# test\nclosed\t"+listPath+"\tt\n")
+		fail(t, bad, baseBad)
+	})
+}

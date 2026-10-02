@@ -178,7 +178,10 @@ func KeptNames(repo, base string, now []Entry) error {
 		path, kept := paths[entry.Name]
 		switch {
 		case !kept:
-			return fmt.Errorf("%s names the list %q on the base and no longer does: a closed list leaves the check only when it is deleted, in a PR that says so", ManifestPath, entry.Name)
+			if _, statErr := os.Stat(filepath.Join(repo, filepath.FromSlash(entry.Path))); errors.Is(statErr, os.ErrNotExist) {
+				continue // retired: the list file is deleted in this change together with its row
+			}
+			return fmt.Errorf("%s names the list %q on the base and no longer does while %s still exists: a closed list leaves the check only when its file is deleted in the same change", ManifestPath, entry.Name, entry.Path)
 		case path != entry.Path:
 			return fmt.Errorf("%s points the list %q at %s and it pointed at %s on the base: a moved list has no base to be compared with", ManifestPath, entry.Name, path, entry.Path)
 		}

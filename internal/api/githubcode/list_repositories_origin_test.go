@@ -122,14 +122,25 @@ func TestNonASCIIBaseHostIsDialledInIDNAForm(t *testing.T) {
 	}
 }
 
-// A link host that IDNA cannot encode (a label of 64 characters or more) is another origin: refused, no request.
-func TestAnUnencodableLinkHostIsRefused(t *testing.T) {
+// An origin that cannot be computed is never trusted: a link host that IDNA cannot encode (a label of 64 characters
+// or more) is refused, and so is every next page of a base whose own host cannot be encoded (fail closed, no request
+// beyond the first).
+func TestAnOriginThatCannotBeComputedIsRefused(t *testing.T) {
 	long := strings.Repeat("a", 70)
-	transport := &scriptedTransport{responses: []scripted{ok(page(repoItem(1, "api")), next("https://"+long+".ghe.test/orgs/acme/repos?page=2")), ok(`[]`)}}
-	client := Client{Token: "tok", BaseURL: "https://ghe.test", HTTP: &http.Client{Transport: transport}}
-	_, err := client.ListRepositories(context.Background(), ListOptions{Org: "acme"})
-	var typed *Error
-	if !errors.As(err, &typed) || typed.Class != CrossOriginLinkClass || len(transport.seen) != 1 {
-		t.Fatalf("want %s after one request, got %v after %d", CrossOriginLinkClass, err, len(transport.seen))
+	for _, tc := range []struct{ name, base, link string }{
+		{"link host cannot be encoded", "https://ghe.test", "https://" + long + ".ghe.test/orgs/acme/repos?page=2"},
+		{"base host cannot be encoded, relative link", "https://" + long + ".ghe.test", "/orgs/acme/repos?page=2"},
+		{"base host cannot be encoded, link to the same host", "https://" + long + ".ghe.test", "https://" + long + ".ghe.test/orgs/acme/repos?page=2"},
+		{"base host cannot be encoded, link to another such host", "https://" + long + ".ghe.test", "https://" + long + "b.ghe.test/orgs/acme/repos?page=2"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			transport := &scriptedTransport{responses: []scripted{ok(page(repoItem(1, "api")), next(tc.link)), ok(`[]`)}}
+			client := Client{Token: "tok", BaseURL: tc.base, HTTP: &http.Client{Transport: transport}}
+			_, err := client.ListRepositories(context.Background(), ListOptions{Org: "acme"})
+			var typed *Error
+			if !errors.As(err, &typed) || typed.Class != CrossOriginLinkClass || len(transport.seen) != 1 {
+				t.Fatalf("want %s after one request, got %v after %d", CrossOriginLinkClass, err, len(transport.seen))
+			}
+		})
 	}
 }

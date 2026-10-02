@@ -84,6 +84,9 @@ func TestRateLimitLineCarriesTheReasonAndCounts(t *testing.T) {
 	if line["result"] != "rate_limited" || line["deferral_reason"] != "rate_limited" || line["deferrals"] != float64(1) {
 		t.Fatalf("rate limit line=%v; want result=rate_limited reason=rate_limited deferrals=1", line)
 	}
+	if delay, _ := line["delay_ms"].(float64); delay < 120000 || delay > 125000 {
+		t.Fatalf("rate limit delay_ms=%v; want the provider's 2 min window plus up to 5 s jitter", line["delay_ms"])
+	}
 	want := `dev_health_provider_unit_deferred_total{provider="launchdarkly",dataset="feature-flags",reason="rate_limited"} 1`
 	if !strings.Contains(rendered, want) {
 		t.Fatalf("missing %q in:\n%s", want, rendered)
@@ -95,12 +98,16 @@ func TestChunkContinuationLineCarriesTheReasonAndCounts(t *testing.T) {
 	unit := providerUnit()
 	repository := newMemoryUnitRepository(unit)
 	buildErr := providersync.ChunkContinuationError{
-		Next: time.Date(2026, 10, 2, 12, 0, 1, 0, time.UTC), Reason: providersync.ChunkStopChunkBound,
+		Next: time.Now().Add(time.Hour), Reason: providersync.ChunkStopChunkBound,
 		Chunks: 8, Elapsed: 5 * time.Second,
 	}
 	line, rendered := deferralLine(t, repository, unit, buildErr)
 	if line["result"] != "continued" || line["deferral_reason"] != "chunk_continuation" {
 		t.Fatalf("chunk continuation line=%v; want result=continued reason=chunk_continuation", line)
+	}
+	// The delay is Next minus the wall clock (an hour away here), never 0.
+	if delay, _ := line["delay_ms"].(float64); delay < 3500000 || delay > 3600000 {
+		t.Fatalf("chunk continuation delay_ms=%v; want about one hour", line["delay_ms"])
 	}
 	want := `dev_health_provider_unit_deferred_total{provider="launchdarkly",dataset="feature-flags",reason="chunk_continuation"} 1`
 	if !strings.Contains(rendered, want) {
@@ -130,5 +137,38 @@ func TestOrdinaryAttemptFailureIsNotCountedAsADeferral(t *testing.T) {
 	}
 	if strings.Contains(rendered.String(), "dev_health_provider_unit_deferred_total{") {
 		t.Fatalf("a budget-store outage was counted as a deferral:\n%s", rendered.String())
+	}
+}
+
+// failingDeferRepository fails to persist a budget-contention deferral.
+type failingDeferRepository struct{ *memoryUnitRepository }
+
+func (failingDeferRepository) DeferForBudgetContention(context.Context, providersync.Claim, time.Time, time.Time) (int, error) {
+	return 0, providersync.ErrLeaseLost
+}
+
+func TestADeferralThatFailedToPersistIsNotCounted(t *testing.T) {
+	t.Parallel()
+	unit := providerUnit()
+	now := time.Date(2026, 10, 2, 12, 0, 0, 0, time.UTC)
+	metrics := providerfoundation.NewMetrics()
+	handler := &Handler{
+		Repository: failingDeferRepository{newMemoryUnitRepository(unit)}, LeaseDuration: time.Minute,
+		Heartbeat: 10 * time.Second, Now: func() time.Time { return now }, ProviderMetrics: metrics,
+		BuildExecutor: func(*providersync.LeaseSession) (providersync.CompleteRouteExecutor, error) {
+			return providersync.CompleteRouteExecutor{}, providerfoundation.ErrBudgetContended
+		},
+	}
+	execution := providerExecution(unit, now, 5)
+	execution.Definition.MaxAttempts = 5
+	if err := handler.Work(context.Background(), execution); err == nil {
+		t.Fatal("Work() = nil; want a retryable error when the deferral cannot be persisted")
+	}
+	var rendered bytes.Buffer
+	if err := metrics.WritePrometheus(&rendered); err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(rendered.String(), "dev_health_provider_unit_deferred_total{") {
+		t.Fatalf("a deferral that was not persisted was counted:\n%s", rendered.String())
 	}
 }

@@ -18,12 +18,20 @@ import (
 	"net/http"
 	"sync"
 
+	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/vektah/gqlparser/v2"
 
 	"github.com/full-chaos/dev-health-ops/internal/mcpclass"
 	"github.com/full-chaos/dev-health-ops/internal/queryapi/graph"
 	"github.com/full-chaos/dev-health-ops/internal/queryapi/routeswitch"
 )
+
+// newClassRowSwitch is the ONE constructor of the class-row switch: the MCP listener (:8092) and the named-operation route (:8091) both serve through it,
+// so a root's class row is one decision. It reads canary and primary rows only: a SHADOW class row is dark. (routeswitch.NewProofSwitch admits shadow
+// rows and is for the measurement-only proof routes; using it here would SERVE a shadow root on both ports.)
+func newClassRowSwitch(pool *pgxpool.Pool, schemaDigest string) routeswitch.Switch {
+	return routeswitch.NewPostgresSwitch(pool, schemaDigest, mcpRoutingDigests())
+}
 
 // documentGate refuses a resolved operation before its document-row dispatch. It returns true when it wrote the refusal.
 type documentGate func(w http.ResponseWriter, r *http.Request, operation, query string) (refused bool)

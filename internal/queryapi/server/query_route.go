@@ -2727,7 +2727,7 @@ func buildQueryRoute(getenv getenvFunc, cfg queryRouteConfig) (queryRouteHandler
 	// on, and both the combined check and the per-class probes read its last answer.
 	posture := queryAPIPostureCheck(getenv, pgPool)
 	// CHAOS-7831: ONE class-row switch for the MCP listener and the named-operation route (:8091), so a root's class row is one decision.
-	classSwitch := routeswitch.NewPostgresSwitch(pgPool, schemaDigest, mcpRoutingDigests())
+	classSwitch := newClassRowSwitch(pgPool, schemaDigest)
 	handler, proofHandler, proofWriteHandler, registryHandler, err := newQueryHandler(analytics.PinInvestmentMembershipScope(chClient), pgPool, verifier, schemaDigest, getenv, classSwitch)
 	if err != nil {
 		pgPool.Close()
@@ -3214,7 +3214,7 @@ func newQueryHandler(chClient featureflags.QueryClient, pgPool *pgxpool.Pool, ve
 	// CHAOS-7831: the class-row switch is the one the MCP listener uses (same type, same keys, live read); only the serving handler is gated: the
 	// proof handlers measure a root BEFORE it is enabled and must keep running on a dark one.
 	// buildQueryRoute passes the ONE switch instance it also gives the MCP handler; a caller that passes none (the unit tests) gets one built the same way.
-	var classSwitch routeswitch.Switch = routeswitch.NewPostgresSwitch(pgPool, schemaDigest, mcpRoutingDigests())
+	classSwitch := newClassRowSwitch(pgPool, schemaDigest)
 	if len(classSwitches) > 0 {
 		classSwitch = classSwitches[0]
 	}

@@ -366,3 +366,39 @@ func TestClassGateDecidesPerDocumentWhenAnOperationHasTwoDocuments(t *testing.T)
 		}
 	}
 }
+
+// Source guard: ONE constructor builds the class-row switch (newClassRowSwitch: canary and primary rows only), and buildQueryRoute and
+// newQueryHandler both use it. NewProofSwitch admits SHADOW rows: it must stay on the measurement-only proof handler and nowhere near the switch the
+// MCP listener and this route serve through (a shadow root would be served on both ports).
+func TestTheClassRowSwitchIsBuiltByOneConstructorThatDoesNotAdmitShadowRows(t *testing.T) {
+	raw, err := os.ReadFile("query_route.go")
+	if err != nil {
+		t.Fatal(err)
+	}
+	text := string(raw)
+	if got := strings.Count(text, "classSwitch := newClassRowSwitch(pgPool, schemaDigest)"); got != 2 {
+		t.Fatalf("query_route.go builds the class-row switch through newClassRowSwitch %d times, want 2 (buildQueryRoute and newQueryHandler's default)", got)
+	}
+	if !strings.Contains(text, "newMCPHandler(mcpClient, pgPool, classSwitch, getenv)") {
+		t.Fatal("the MCP handler is not built over the shared class-row switch")
+	}
+	if strings.Contains(text, "NewPostgresSwitch(pgPool, schemaDigest, mcpRoutingDigests())") {
+		t.Fatal("query_route.go builds a class-row switch itself instead of through newClassRowSwitch")
+	}
+	if got := strings.Count(text, "NewProofSwitch(pgPool, schemaDigest, mcpRoutingDigests())"); got != 1 {
+		t.Fatalf("NewProofSwitch over the class rows appears %d times in query_route.go, want 1 (the MCP proof handler only)", got)
+	}
+	gate, err := os.ReadFile("class_row_gate.go")
+	if err != nil {
+		t.Fatal(err)
+	}
+	start := strings.Index(string(gate), "func newClassRowSwitch(")
+	if start < 0 {
+		t.Fatal("newClassRowSwitch is gone")
+	}
+	body := string(gate)[start:]
+	body = body[:strings.Index(body, "\n}\n")]
+	if !strings.Contains(body, "return routeswitch.NewPostgresSwitch(pool, schemaDigest, mcpRoutingDigests())") || strings.Contains(body, "NewProofSwitch") {
+		t.Fatal("newClassRowSwitch is not the canary/primary-only PostgresSwitch")
+	}
+}

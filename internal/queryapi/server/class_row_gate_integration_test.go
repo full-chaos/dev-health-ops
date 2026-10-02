@@ -72,6 +72,14 @@ func TestRunOperationRouteFollowsTheClassRowOfItsRoot(t *testing.T) {
 		assertClassRefusal(t, "dark class root", recorder)
 	})
 
+	t.Run("a SHADOW class row is dark: refused on this route and not enabled by the shared constructor", func(t *testing.T) {
+		classSeed(t, pool, hotspots) // seeds the class row in mode shadow
+		assertClassRefusal(t, "shadow class root", postAsRunOperation(t, handler, registeredHotspotsDocument, hotspotsVariables()))
+		if newClassRowSwitch(pool, itTestSchemaDigest).Enabled(hotspots) {
+			t.Fatal("the class-row switch enabled a shadow row")
+		}
+	})
+
 	t.Run("a dark class root does not gate the envelope caller (web)", func(t *testing.T) {
 		recorder := postGraphQLWithVariables(t, handler, registeredHotspotsDocument, token, hotspotsVariables())
 		if recorder.Code != http.StatusOK || !strings.Contains(recorder.Body.String(), "org/repo-a") {
@@ -80,10 +88,12 @@ func TestRunOperationRouteFollowsTheClassRowOfItsRoot(t *testing.T) {
 	})
 
 	t.Run("class row lit: served", func(t *testing.T) {
-		classSeed(t, pool, hotspots)
 		classReceipt(t, pool, hotspots, goapiproof.RouteProof, goapiproof.EdgeBuildPresent)
 		if _, err := classEnable(pool, hotspots); err != nil {
 			t.Fatal(err)
+		}
+		if !newClassRowSwitch(pool, itTestSchemaDigest).Enabled(hotspots) {
+			t.Fatal("the class-row switch did not enable a canary row")
 		}
 		recorder := postAsRunOperation(t, handler, registeredHotspotsDocument, hotspotsVariables())
 		if recorder.Code != http.StatusOK || !strings.Contains(recorder.Body.String(), "org/repo-a") {

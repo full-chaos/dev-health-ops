@@ -1,0 +1,452 @@
+{
+  "header": {
+    "test": "TestSMTPSenderMatchesFrozenPythonSMTPProvider",
+    "python_build": "a4847c5e93607451a0c987b314d37e02fc43ce85",
+    "producer_digest": "6e1dc97e68624398015f60caee160cceee6ae601bd434d01b8b7d5975267e137",
+    "recipe": "git worktree add --detach $DIR a4847c5e93607451a0c987b314d37e02fc43ce85 (with its .venv: uv sync --frozen --no-install-project); then from the repository root: go run ./internal/testsupport/venueoracle/goldenrecord -pkg ./internal/mail/ -test '^TestSMTPSenderMatchesFrozenPythonSMTPProvider$' -python-root $DIR",
+    "recorded_by": "goldenrecord",
+    "blanked": {}
+  },
+  "requests": [
+    {
+      "name": "producer identity",
+      "method": "PYTHON",
+      "path": "program sha256 fef5bb7ebe19f057e38a4a17a8e3eb689074e8bcd2d1cfc79a97a838556a0650 env sha256 969169a1702b285f3a9e4b602d19052b0d6a3c6b2a44dd7425bef0f696436295",
+      "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "request_headers_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "status": 0,
+      "headers": {},
+      "body": "python 3.14.7\nunicodedata 16.0.0\nrequests 2.34.2\nresend 2.47.0\n"
+    },
+    {
+      "name": "ascii html",
+      "method": "PYTHON",
+      "path": "program sha256 335c5092eb8d7ca289f4db3a8c8940517225d0dada56d00f32a600d6485cbcb4 env sha256 aa3e1f0afa0006ee9b2a34fd9a993c9152ff6e7a77ab139d2aa74365968f84af",
+      "body_sha256": "930cb6b78016d297b45785c433bd479135aab328730b8f1a3a966bf96c3a0f0c",
+      "request_headers_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "status": 0,
+      "headers": {},
+      "body": "{\"sent\":true,\"mail\":{\"mail_from\":\"\\u003cdev-health@example.com\\u003e\",\"rcpt_to\":[\"\\u003cowner@example.test\\u003e\"],\"data\":\"Content-Type: multipart/alternative; boundary=\\\"BOUNDARY\\\"\\r\\nMIME-Version: 1.0\\r\\nFrom: dev-health@example.com\\r\\nTo: owner@example.test\\r\\nSubject: Hello\\r\\n\\r\\n--BOUNDARY\\r\\nContent-Type: text/html; charset=\\\"us-ascii\\\"\\r\\nMIME-Version: 1.0\\r\\nContent-Transfer-Encoding: 7bit\\r\\n\\r\\n\\u003cp\\u003eHi there\\u003c/p\\u003e\\r\\n--BOUNDARY--\\r\\n\"}}"
+    },
+    {
+      "name": "empty body",
+      "method": "PYTHON",
+      "path": "program sha256 335c5092eb8d7ca289f4db3a8c8940517225d0dada56d00f32a600d6485cbcb4 env sha256 aa3e1f0afa0006ee9b2a34fd9a993c9152ff6e7a77ab139d2aa74365968f84af",
+      "body_sha256": "2ad50fcb37a5e643792742814ceaf57cca0a455ae0bb557047f933e2a678a51c",
+      "request_headers_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "status": 0,
+      "headers": {},
+      "body": "{\"sent\":true,\"mail\":{\"mail_from\":\"\\u003cdev-health@example.com\\u003e\",\"rcpt_to\":[\"\\u003cowner@example.test\\u003e\"],\"data\":\"Content-Type: multipart/alternative; boundary=\\\"BOUNDARY\\\"\\r\\nMIME-Version: 1.0\\r\\nFrom: dev-health@example.com\\r\\nTo: owner@example.test\\r\\nSubject: Hello\\r\\n\\r\\n--BOUNDARY\\r\\nContent-Type: text/html; charset=\\\"us-ascii\\\"\\r\\nMIME-Version: 1.0\\r\\nContent-Transfer-Encoding: 7bit\\r\\n\\r\\n\\r\\n--BOUNDARY--\\r\\n\"}}"
+    },
+    {
+      "name": "non-ascii body",
+      "method": "PYTHON",
+      "path": "program sha256 335c5092eb8d7ca289f4db3a8c8940517225d0dada56d00f32a600d6485cbcb4 env sha256 aa3e1f0afa0006ee9b2a34fd9a993c9152ff6e7a77ab139d2aa74365968f84af",
+      "body_sha256": "220aa661c2d48f41e0166424ca34b4390ea8ddf88883f726b09cb02d52b4a5b8",
+      "request_headers_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "status": 0,
+      "headers": {},
+      "body": "{\"sent\":true,\"mail\":{\"mail_from\":\"\\u003cdev-health@example.com\\u003e\",\"rcpt_to\":[\"\\u003cowner@example.test\\u003e\"],\"data\":\"Content-Type: multipart/alternative; boundary=\\\"BOUNDARY\\\"\\r\\nMIME-Version: 1.0\\r\\nFrom: dev-health@example.com\\r\\nTo: owner@example.test\\r\\nSubject: Hello\\r\\n\\r\\n--BOUNDARY\\r\\nContent-Type: text/html; charset=\\\"utf-8\\\"\\r\\nMIME-Version: 1.0\\r\\nContent-Transfer-Encoding: base64\\r\\n\\r\\nPHA+Q2Fmw6kg4piDIOaXpeacrOiqnjwvcD4=\\r\\n\\r\\n--BOUNDARY--\\r\\n\"}}"
+    },
+    {
+      "name": "non-ascii body, 57 bytes",
+      "method": "PYTHON",
+      "path": "program sha256 335c5092eb8d7ca289f4db3a8c8940517225d0dada56d00f32a600d6485cbcb4 env sha256 aa3e1f0afa0006ee9b2a34fd9a993c9152ff6e7a77ab139d2aa74365968f84af",
+      "body_sha256": "b236308e106b23019dd76384a904db36e64125f22a85019e0198cffe0fb27693",
+      "request_headers_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "status": 0,
+      "headers": {},
+      "body": "{\"sent\":true,\"mail\":{\"mail_from\":\"\\u003cdev-health@example.com\\u003e\",\"rcpt_to\":[\"\\u003cowner@example.test\\u003e\"],\"data\":\"Content-Type: multipart/alternative; boundary=\\\"BOUNDARY\\\"\\r\\nMIME-Version: 1.0\\r\\nFrom: dev-health@example.com\\r\\nTo: owner@example.test\\r\\nSubject: Hello\\r\\n\\r\\n--BOUNDARY\\r\\nContent-Type: text/html; charset=\\\"utf-8\\\"\\r\\nMIME-Version: 1.0\\r\\nContent-Transfer-Encoding: base64\\r\\n\\r\\nw6l4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4\\r\\n\\r\\n--BOUNDARY--\\r\\n\"}}"
+    },
+    {
+      "name": "non-ascii body, 58 bytes",
+      "method": "PYTHON",
+      "path": "program sha256 335c5092eb8d7ca289f4db3a8c8940517225d0dada56d00f32a600d6485cbcb4 env sha256 aa3e1f0afa0006ee9b2a34fd9a993c9152ff6e7a77ab139d2aa74365968f84af",
+      "body_sha256": "999c5c0b94fcc9f84cbde35b4149d1fe8ae2cd6b7e49df5c757187c776e1d9bb",
+      "request_headers_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "status": 0,
+      "headers": {},
+      "body": "{\"sent\":true,\"mail\":{\"mail_from\":\"\\u003cdev-health@example.com\\u003e\",\"rcpt_to\":[\"\\u003cowner@example.test\\u003e\"],\"data\":\"Content-Type: multipart/alternative; boundary=\\\"BOUNDARY\\\"\\r\\nMIME-Version: 1.0\\r\\nFrom: dev-health@example.com\\r\\nTo: owner@example.test\\r\\nSubject: Hello\\r\\n\\r\\n--BOUNDARY\\r\\nContent-Type: text/html; charset=\\\"utf-8\\\"\\r\\nMIME-Version: 1.0\\r\\nContent-Transfer-Encoding: base64\\r\\n\\r\\nw6l4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4\\r\\neA==\\r\\n\\r\\n--BOUNDARY--\\r\\n\"}}"
+    },
+    {
+      "name": "non-ascii body, many lines",
+      "method": "PYTHON",
+      "path": "program sha256 335c5092eb8d7ca289f4db3a8c8940517225d0dada56d00f32a600d6485cbcb4 env sha256 aa3e1f0afa0006ee9b2a34fd9a993c9152ff6e7a77ab139d2aa74365968f84af",
+      "body_sha256": "26bde6e5ab6a2b306dda6486c3f331ef6c468f309d286818bf4b3035f1905bd6",
+      "request_headers_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "status": 0,
+      "headers": {},
+      "body": "{\"sent\":true,\"mail\":{\"mail_from\":\"\\u003cdev-health@example.com\\u003e\",\"rcpt_to\":[\"\\u003cowner@example.test\\u003e\"],\"data\":\"Content-Type: multipart/alternative; boundary=\\\"BOUNDARY\\\"\\r\\nMIME-Version: 1.0\\r\\nFrom: dev-health@example.com\\r\\nTo: owner@example.test\\r\\nSubject: Hello\\r\\n\\r\\n--BOUNDARY\\r\\nContent-Type: text/html; charset=\\\"utf-8\\\"\\r\\nMIME-Version: 1.0\\r\\nContent-Transfer-Encoding: base64\\r\\n\\r\\nPHA+Y2Fmw6kgY2Fmw6kgY2Fmw6kgY2Fmw6kgY2Fmw6kgY2Fmw6kgY2Fmw6kgY2Fmw6kgY2Fmw6kg\\r\\nY2Fmw6kgY2Fmw6kgY2Fmw6kgY2Fmw6kgY2Fmw6kgY2Fmw6kgY2Fmw6kgY2Fmw6kgY2Fmw6kgY2Fm\\r\\nw6kgY2Fmw6kgY2Fmw6kgY2Fmw6kgY2Fmw6kgY2Fmw6kgY2Fmw6kgY2Fmw6kgY2Fmw6kgY2Fmw6kg\\r\\nY2Fmw6kgY2Fmw6kgY2Fmw6kgY2Fmw6kgY2Fmw6kgY2Fmw6kgY2Fmw6kgY2Fmw6kgY2Fmw6kgY2Fm\\r\\nw6kgY2Fmw6kgY2Fmw6kgY2Fmw6kgY2Fmw6kgY2Fmw6kgY2Fmw6kgY2Fmw6kgY2Fmw6kgY2Fmw6kg\\r\\nY2Fmw6kgY2Fmw6kgY2Fmw6kgY2Fmw6kgY2Fmw6kgY2Fmw6kgY2Fmw6kgY2Fmw6kgY2Fmw6kgY2Fm\\r\\nw6kgY2Fmw6kgY2Fmw6kgY2Fmw6kgY2Fmw6kgY2Fmw6kgY2Fmw6kgY2Fmw6kgY2Fmw6kgY2Fmw6kg\\r\\nY2Fmw6kgY2Fmw6kgY2Fmw6kgY2Fmw6kgY2Fmw6kgY2Fmw6kgY2Fmw6kgY2Fmw6kgY2Fmw6kgY2Fm\\r\\nw6kgY2Fmw6kgY2Fmw6kgY2Fmw6kgY2Fmw6kgY2Fmw6kgY2Fmw6kgY2Fmw6kgY2Fmw6kgY2Fmw6kg\\r\\nY2Fmw6kgY2Fmw6kgY2Fmw6kgY2Fmw6kgY2Fmw6kgY2Fmw6kgY2Fmw6kgY2Fmw6kgY2Fmw6kgY2Fm\\r\\nw6kgY2Fmw6kgY2Fmw6kgY2Fmw6kgY2Fmw6kgY2Fmw6kgY2Fmw6kgY2Fmw6kgY2Fmw6kgY2Fmw6kg\\r\\nY2Fmw6kgY2Fmw6kgY2Fmw6kgY2Fmw6kgY2Fmw6kgY2Fmw6kgY2Fmw6kgY2Fmw6kgY2Fmw6kgY2Fm\\r\\nw6kgY2Fmw6kgY2Fmw6kgY2Fmw6kgY2Fmw6kgY2Fmw6kgY2Fmw6kgY2Fmw6kgY2Fmw6kgY2Fmw6kg\\r\\nY2Fmw6kgY2Fmw6kgY2Fmw6kgY2Fmw6kgY2Fmw6kgY2Fmw6kgY2Fmw6kgY2Fmw6kgY2Fmw6kgY2Fm\\r\\nw6kgY2Fmw6kgY2Fmw6kgY2Fmw6kgY2Fmw6kgY2Fmw6kgY2Fmw6kgY2Fmw6kgY2Fmw6kgY2Fmw6kg\\r\\nY2Fmw6kgY2Fmw6kgY2Fmw6kgY2Fmw6kgY2Fmw6kgY2Fmw6kgY2Fmw6kgY2Fmw6kgY2Fmw6kgY2Fm\\r\\nw6kgY2Fmw6kgY2Fmw6kgY2Fmw6kgY2Fmw6kgY2Fmw6kgY2Fmw6kgY2Fmw6kgY2Fmw6kgY2Fmw6kg\\r\\nY2Fmw6kgY2Fmw6kgY2Fmw6kgY2Fmw6kgY2Fmw6kgY2Fmw6kgY2Fmw6kgY2Fmw6kgY2Fmw6kgY2Fm\\r\\nw6kgY2Fmw6kgY2Fmw6kgY2Fmw6kgY2Fmw6kgY2Fmw6kgY2Fmw6kgY2Fmw6kgY2Fmw6kgY2Fmw6kg\\r\\nY2Fmw6kgY2Fmw6kgY2Fmw6kgY2Fmw6kgY2Fmw6kgY2Fmw6kgY2Fmw6kgY2Fmw6kgY2Fmw6kgY2Fm\\r\\nw6kgY2Fmw6kgY2Fmw6kgY2Fmw6kgY2Fmw6kgY2Fmw6kgY2Fmw6kgY2Fmw6kgY2Fmw6kgY2Fmw6kg\\r\\nY2Fmw6kgPC9wPg==\\r\\n\\r\\n--BOUNDARY--\\r\\n\"}}"
+    },
+    {
+      "name": "non-ascii body with CRLF",
+      "method": "PYTHON",
+      "path": "program sha256 335c5092eb8d7ca289f4db3a8c8940517225d0dada56d00f32a600d6485cbcb4 env sha256 aa3e1f0afa0006ee9b2a34fd9a993c9152ff6e7a77ab139d2aa74365968f84af",
+      "body_sha256": "e095402b31ac5694daa6984f442c2be1003932f0e46933017dd6e417484f52f3",
+      "request_headers_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "status": 0,
+      "headers": {},
+      "body": "{\"sent\":true,\"mail\":{\"mail_from\":\"\\u003cdev-health@example.com\\u003e\",\"rcpt_to\":[\"\\u003cowner@example.test\\u003e\"],\"data\":\"Content-Type: multipart/alternative; boundary=\\\"BOUNDARY\\\"\\r\\nMIME-Version: 1.0\\r\\nFrom: dev-health@example.com\\r\\nTo: owner@example.test\\r\\nSubject: Hello\\r\\n\\r\\n--BOUNDARY\\r\\nContent-Type: text/html; charset=\\\"utf-8\\\"\\r\\nMIME-Version: 1.0\\r\\nContent-Transfer-Encoding: base64\\r\\n\\r\\nw6kNCmxpbmUNbGFzdAo=\\r\\n\\r\\n--BOUNDARY--\\r\\n\"}}"
+    },
+    {
+      "name": "4-byte emoji body",
+      "method": "PYTHON",
+      "path": "program sha256 335c5092eb8d7ca289f4db3a8c8940517225d0dada56d00f32a600d6485cbcb4 env sha256 aa3e1f0afa0006ee9b2a34fd9a993c9152ff6e7a77ab139d2aa74365968f84af",
+      "body_sha256": "5fb00a0b1fd50bc7073d96c53c54309960363e092753a94edc2bde0d1a0748c2",
+      "request_headers_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "status": 0,
+      "headers": {},
+      "body": "{\"sent\":true,\"mail\":{\"mail_from\":\"\\u003cdev-health@example.com\\u003e\",\"rcpt_to\":[\"\\u003cowner@example.test\\u003e\"],\"data\":\"Content-Type: multipart/alternative; boundary=\\\"BOUNDARY\\\"\\r\\nMIME-Version: 1.0\\r\\nFrom: dev-health@example.com\\r\\nTo: owner@example.test\\r\\nSubject: Hello\\r\\n\\r\\n--BOUNDARY\\r\\nContent-Type: text/html; charset=\\\"utf-8\\\"\\r\\nMIME-Version: 1.0\\r\\nContent-Transfer-Encoding: base64\\r\\n\\r\\nPHA+8J+YgDwvcD4=\\r\\n\\r\\n--BOUNDARY--\\r\\n\"}}"
+    },
+    {
+      "name": "long body lines",
+      "method": "PYTHON",
+      "path": "program sha256 335c5092eb8d7ca289f4db3a8c8940517225d0dada56d00f32a600d6485cbcb4 env sha256 aa3e1f0afa0006ee9b2a34fd9a993c9152ff6e7a77ab139d2aa74365968f84af",
+      "body_sha256": "8beb8d13890c934c4e135c767bc65c61fedb9dd2fa7f8a09a4001918d86e3b8f",
+      "request_headers_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "status": 0,
+      "headers": {},
+      "body": "{\"sent\":true,\"mail\":{\"mail_from\":\"\\u003cdev-health@example.com\\u003e\",\"rcpt_to\":[\"\\u003cowner@example.test\\u003e\"],\"data\":\"Content-Type: multipart/alternative; boundary=\\\"BOUNDARY\\\"\\r\\nMIME-Version: 1.0\\r\\nFrom: dev-health@example.com\\r\\nTo: owner@example.test\\r\\nSubject: Hello\\r\\n\\r\\n--BOUNDARY\\r\\nContent-Type: text/html; charset=\\\"us-ascii\\\"\\r\\nMIME-Version: 1.0\\r\\nContent-Transfer-Encoding: 7bit\\r\\n\\r\\n\\u003cp\\u003eword word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word \\u003c/p\\u003e\\r\\n\\u003cp\\u003etail\\u003c/p\\u003e\\r\\n--BOUNDARY--\\r\\n\"}}"
+    },
+    {
+      "name": "ascii body, CRLF and lone CR",
+      "method": "PYTHON",
+      "path": "program sha256 335c5092eb8d7ca289f4db3a8c8940517225d0dada56d00f32a600d6485cbcb4 env sha256 aa3e1f0afa0006ee9b2a34fd9a993c9152ff6e7a77ab139d2aa74365968f84af",
+      "body_sha256": "eb179b4f06e0866ef4f2af6e7a999f58dd305039adf1d087a98db1175900498b",
+      "request_headers_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "status": 0,
+      "headers": {},
+      "body": "{\"sent\":true,\"mail\":{\"mail_from\":\"\\u003cdev-health@example.com\\u003e\",\"rcpt_to\":[\"\\u003cowner@example.test\\u003e\"],\"data\":\"Content-Type: multipart/alternative; boundary=\\\"BOUNDARY\\\"\\r\\nMIME-Version: 1.0\\r\\nFrom: dev-health@example.com\\r\\nTo: owner@example.test\\r\\nSubject: Hello\\r\\n\\r\\n--BOUNDARY\\r\\nContent-Type: text/html; charset=\\\"us-ascii\\\"\\r\\nMIME-Version: 1.0\\r\\nContent-Transfer-Encoding: 7bit\\r\\n\\r\\n\\u003cp\\u003ex\\u003c/p\\u003e\\r\\nline\\r\\nlast\\r\\n\\r\\n--BOUNDARY--\\r\\n\"}}"
+    },
+    {
+      "name": "ascii body, trailing newlines",
+      "method": "PYTHON",
+      "path": "program sha256 335c5092eb8d7ca289f4db3a8c8940517225d0dada56d00f32a600d6485cbcb4 env sha256 aa3e1f0afa0006ee9b2a34fd9a993c9152ff6e7a77ab139d2aa74365968f84af",
+      "body_sha256": "c968ebb02665cb608a2b62f0e63744b3b192dfaf6b8aa62d5a85608cabf8fffa",
+      "request_headers_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "status": 0,
+      "headers": {},
+      "body": "{\"sent\":true,\"mail\":{\"mail_from\":\"\\u003cdev-health@example.com\\u003e\",\"rcpt_to\":[\"\\u003cowner@example.test\\u003e\"],\"data\":\"Content-Type: multipart/alternative; boundary=\\\"BOUNDARY\\\"\\r\\nMIME-Version: 1.0\\r\\nFrom: dev-health@example.com\\r\\nTo: owner@example.test\\r\\nSubject: Hello\\r\\n\\r\\n--BOUNDARY\\r\\nContent-Type: text/html; charset=\\\"us-ascii\\\"\\r\\nMIME-Version: 1.0\\r\\nContent-Transfer-Encoding: 7bit\\r\\n\\r\\n\\u003cp\\u003ex\\u003c/p\\u003e\\r\\n\\r\\n\\r\\n\\r\\n--BOUNDARY--\\r\\n\"}}"
+    },
+    {
+      "name": "ascii body, leading newline",
+      "method": "PYTHON",
+      "path": "program sha256 335c5092eb8d7ca289f4db3a8c8940517225d0dada56d00f32a600d6485cbcb4 env sha256 aa3e1f0afa0006ee9b2a34fd9a993c9152ff6e7a77ab139d2aa74365968f84af",
+      "body_sha256": "4116f6e92c2e616f416dd30e6c999c8151d70512321faff4b11cb829460600a8",
+      "request_headers_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "status": 0,
+      "headers": {},
+      "body": "{\"sent\":true,\"mail\":{\"mail_from\":\"\\u003cdev-health@example.com\\u003e\",\"rcpt_to\":[\"\\u003cowner@example.test\\u003e\"],\"data\":\"Content-Type: multipart/alternative; boundary=\\\"BOUNDARY\\\"\\r\\nMIME-Version: 1.0\\r\\nFrom: dev-health@example.com\\r\\nTo: owner@example.test\\r\\nSubject: Hello\\r\\n\\r\\n--BOUNDARY\\r\\nContent-Type: text/html; charset=\\\"us-ascii\\\"\\r\\nMIME-Version: 1.0\\r\\nContent-Transfer-Encoding: 7bit\\r\\n\\r\\n\\r\\n\\u003cp\\u003ex\\u003c/p\\u003e\\r\\n--BOUNDARY--\\r\\n\"}}"
+    },
+    {
+      "name": "leading-dot body lines",
+      "method": "PYTHON",
+      "path": "program sha256 335c5092eb8d7ca289f4db3a8c8940517225d0dada56d00f32a600d6485cbcb4 env sha256 aa3e1f0afa0006ee9b2a34fd9a993c9152ff6e7a77ab139d2aa74365968f84af",
+      "body_sha256": "f12662782905378364de759ef4a3dcad261ad731fcb556b2241f95776047a941",
+      "request_headers_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "status": 0,
+      "headers": {},
+      "body": "{\"sent\":true,\"mail\":{\"mail_from\":\"\\u003cdev-health@example.com\\u003e\",\"rcpt_to\":[\"\\u003cowner@example.test\\u003e\"],\"data\":\"Content-Type: multipart/alternative; boundary=\\\"BOUNDARY\\\"\\r\\nMIME-Version: 1.0\\r\\nFrom: dev-health@example.com\\r\\nTo: owner@example.test\\r\\nSubject: Hello\\r\\n\\r\\n--BOUNDARY\\r\\nContent-Type: text/html; charset=\\\"us-ascii\\\"\\r\\nMIME-Version: 1.0\\r\\nContent-Transfer-Encoding: 7bit\\r\\n\\r\\n.first\\r\\n\\u003cp\\u003ex\\u003c/p\\u003e\\r\\n.dotted line\\r\\n..double\\r\\n\\r\\n--BOUNDARY--\\r\\n\"}}"
+    },
+    {
+      "name": "body with NUL and control chars",
+      "method": "PYTHON",
+      "path": "program sha256 335c5092eb8d7ca289f4db3a8c8940517225d0dada56d00f32a600d6485cbcb4 env sha256 aa3e1f0afa0006ee9b2a34fd9a993c9152ff6e7a77ab139d2aa74365968f84af",
+      "body_sha256": "709dd74a151a7fc744261da6a67bcb2ff1452a0a984ba41c7d802a0b2fe3b11c",
+      "request_headers_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "status": 0,
+      "headers": {},
+      "body": "{\"sent\":true,\"mail\":{\"mail_from\":\"\\u003cdev-health@example.com\\u003e\",\"rcpt_to\":[\"\\u003cowner@example.test\\u003e\"],\"data\":\"Content-Type: multipart/alternative; boundary=\\\"BOUNDARY\\\"\\r\\nMIME-Version: 1.0\\r\\nFrom: dev-health@example.com\\r\\nTo: owner@example.test\\r\\nSubject: Hello\\r\\n\\r\\n--BOUNDARY\\r\\nContent-Type: text/html; charset=\\\"us-ascii\\\"\\r\\nMIME-Version: 1.0\\r\\nContent-Transfer-Encoding: 7bit\\r\\n\\r\\n\\u003cp\\u003ea\\u0000b\\u0007c\\td\\u003c/p\\u003e\\r\\n--BOUNDARY--\\r\\n\"}}"
+    },
+    {
+      "name": "body containing a MIME-boundary lookalike",
+      "method": "PYTHON",
+      "path": "program sha256 335c5092eb8d7ca289f4db3a8c8940517225d0dada56d00f32a600d6485cbcb4 env sha256 aa3e1f0afa0006ee9b2a34fd9a993c9152ff6e7a77ab139d2aa74365968f84af",
+      "body_sha256": "ac0bb0d2713677b460757f85f908389aeb1e12fb65a1e70c5b60d81fa355cddb",
+      "request_headers_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "status": 0,
+      "headers": {},
+      "body": "{\"sent\":true,\"mail\":{\"mail_from\":\"\\u003cdev-health@example.com\\u003e\",\"rcpt_to\":[\"\\u003cowner@example.test\\u003e\"],\"data\":\"Content-Type: multipart/alternative; boundary=\\\"BOUNDARY\\\"\\r\\nMIME-Version: 1.0\\r\\nFrom: dev-health@example.com\\r\\nTo: owner@example.test\\r\\nSubject: Hello\\r\\n\\r\\n--BOUNDARY\\r\\nContent-Type: text/html; charset=\\\"us-ascii\\\"\\r\\nMIME-Version: 1.0\\r\\nContent-Transfer-Encoding: 7bit\\r\\n\\r\\n\\u003cp\\u003e--===============1234567890123456789==\\u003c/p\\u003e\\r\\n--BOUNDARY--\\r\\n\"}}"
+    },
+    {
+      "name": "empty subject",
+      "method": "PYTHON",
+      "path": "program sha256 335c5092eb8d7ca289f4db3a8c8940517225d0dada56d00f32a600d6485cbcb4 env sha256 aa3e1f0afa0006ee9b2a34fd9a993c9152ff6e7a77ab139d2aa74365968f84af",
+      "body_sha256": "319a700530b8b568e6b8e8d0aa41e81357b332e5f4e32a8cbc5174b1c2ccdd21",
+      "request_headers_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "status": 0,
+      "headers": {},
+      "body": "{\"sent\":true,\"mail\":{\"mail_from\":\"\\u003cdev-health@example.com\\u003e\",\"rcpt_to\":[\"\\u003cowner@example.test\\u003e\"],\"data\":\"Content-Type: multipart/alternative; boundary=\\\"BOUNDARY\\\"\\r\\nMIME-Version: 1.0\\r\\nFrom: dev-health@example.com\\r\\nTo: owner@example.test\\r\\nSubject: \\r\\n\\r\\n--BOUNDARY\\r\\nContent-Type: text/html; charset=\\\"us-ascii\\\"\\r\\nMIME-Version: 1.0\\r\\nContent-Transfer-Encoding: 7bit\\r\\n\\r\\n\\u003cp\\u003ex\\u003c/p\\u003e\\r\\n--BOUNDARY--\\r\\n\"}}"
+    },
+    {
+      "name": "non-ascii subject (base64 shorter)",
+      "method": "PYTHON",
+      "path": "program sha256 335c5092eb8d7ca289f4db3a8c8940517225d0dada56d00f32a600d6485cbcb4 env sha256 aa3e1f0afa0006ee9b2a34fd9a993c9152ff6e7a77ab139d2aa74365968f84af",
+      "body_sha256": "774200f215f36517f3f4f4b23c40e3f095c9e3ced9706c5c1cf6e42d20103351",
+      "request_headers_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "status": 0,
+      "headers": {},
+      "body": "{\"sent\":true,\"mail\":{\"mail_from\":\"\\u003cdev-health@example.com\\u003e\",\"rcpt_to\":[\"\\u003cowner@example.test\\u003e\"],\"data\":\"Content-Type: multipart/alternative; boundary=\\\"BOUNDARY\\\"\\r\\nMIME-Version: 1.0\\r\\nFrom: dev-health@example.com\\r\\nTo: owner@example.test\\r\\nSubject: =?utf-8?b?Q2Fmw6kgaW52aXRlIOKYgw==?=\\r\\n\\r\\n--BOUNDARY\\r\\nContent-Type: text/html; charset=\\\"us-ascii\\\"\\r\\nMIME-Version: 1.0\\r\\nContent-Transfer-Encoding: 7bit\\r\\n\\r\\n\\u003cp\\u003ex\\u003c/p\\u003e\\r\\n--BOUNDARY--\\r\\n\"}}"
+    },
+    {
+      "name": "non-ascii subject (quoted-printable shorter)",
+      "method": "PYTHON",
+      "path": "program sha256 335c5092eb8d7ca289f4db3a8c8940517225d0dada56d00f32a600d6485cbcb4 env sha256 aa3e1f0afa0006ee9b2a34fd9a993c9152ff6e7a77ab139d2aa74365968f84af",
+      "body_sha256": "245f0b75e6e63db3afaac48da80d83f2ad3b7a9f3ddc3b0274fdc8574b721f73",
+      "request_headers_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "status": 0,
+      "headers": {},
+      "body": "{\"sent\":true,\"mail\":{\"mail_from\":\"\\u003cdev-health@example.com\\u003e\",\"rcpt_to\":[\"\\u003cowner@example.test\\u003e\"],\"data\":\"Content-Type: multipart/alternative; boundary=\\\"BOUNDARY\\\"\\r\\nMIME-Version: 1.0\\r\\nFrom: dev-health@example.com\\r\\nTo: owner@example.test\\r\\nSubject: =?utf-8?q?Caf=C3=A9_au_lait_invite?=\\r\\n\\r\\n--BOUNDARY\\r\\nContent-Type: text/html; charset=\\\"us-ascii\\\"\\r\\nMIME-Version: 1.0\\r\\nContent-Transfer-Encoding: 7bit\\r\\n\\r\\n\\u003cp\\u003ex\\u003c/p\\u003e\\r\\n--BOUNDARY--\\r\\n\"}}"
+    },
+    {
+      "name": "non-ascii subject (exact tie)",
+      "method": "PYTHON",
+      "path": "program sha256 335c5092eb8d7ca289f4db3a8c8940517225d0dada56d00f32a600d6485cbcb4 env sha256 aa3e1f0afa0006ee9b2a34fd9a993c9152ff6e7a77ab139d2aa74365968f84af",
+      "body_sha256": "eef0c133ba947b5b8c61b73c77cfcb14f7c92d64f954f1e8950c5ae596508789",
+      "request_headers_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "status": 0,
+      "headers": {},
+      "body": "{\"sent\":true,\"mail\":{\"mail_from\":\"\\u003cdev-health@example.com\\u003e\",\"rcpt_to\":[\"\\u003cowner@example.test\\u003e\"],\"data\":\"Content-Type: multipart/alternative; boundary=\\\"BOUNDARY\\\"\\r\\nMIME-Version: 1.0\\r\\nFrom: dev-health@example.com\\r\\nTo: owner@example.test\\r\\nSubject: =?utf-8?q?abcdef=C3=A9?=\\r\\n\\r\\n--BOUNDARY\\r\\nContent-Type: text/html; charset=\\\"us-ascii\\\"\\r\\nMIME-Version: 1.0\\r\\nContent-Transfer-Encoding: 7bit\\r\\n\\r\\n\\u003cp\\u003ex\\u003c/p\\u003e\\r\\n--BOUNDARY--\\r\\n\"}}"
+    },
+    {
+      "name": "long ascii subject",
+      "method": "PYTHON",
+      "path": "program sha256 335c5092eb8d7ca289f4db3a8c8940517225d0dada56d00f32a600d6485cbcb4 env sha256 aa3e1f0afa0006ee9b2a34fd9a993c9152ff6e7a77ab139d2aa74365968f84af",
+      "body_sha256": "b016fa6164513556498f0aa330b64202aa2dc36e635452d0a9e87309e1d8dd29",
+      "request_headers_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "status": 0,
+      "headers": {},
+      "body": "{\"sent\":true,\"mail\":{\"mail_from\":\"\\u003cdev-health@example.com\\u003e\",\"rcpt_to\":[\"\\u003cowner@example.test\\u003e\"],\"data\":\"Content-Type: multipart/alternative; boundary=\\\"BOUNDARY\\\"\\r\\nMIME-Version: 1.0\\r\\nFrom: dev-health@example.com\\r\\nTo: owner@example.test\\r\\nSubject: You're invited to join A Very Long Organization Name A Very Long Organization Name A Very Long Organization Name A Very Long Organization Name \\r\\n\\r\\n--BOUNDARY\\r\\nContent-Type: text/html; charset=\\\"us-ascii\\\"\\r\\nMIME-Version: 1.0\\r\\nContent-Transfer-Encoding: 7bit\\r\\n\\r\\n\\u003cp\\u003ex\\u003c/p\\u003e\\r\\n--BOUNDARY--\\r\\n\"}}"
+    },
+    {
+      "name": "long non-ascii subject",
+      "method": "PYTHON",
+      "path": "program sha256 335c5092eb8d7ca289f4db3a8c8940517225d0dada56d00f32a600d6485cbcb4 env sha256 aa3e1f0afa0006ee9b2a34fd9a993c9152ff6e7a77ab139d2aa74365968f84af",
+      "body_sha256": "34a6149d0ed18c9c6057c945834bd677ff76be60237947d5978b2aa61312a5c9",
+      "request_headers_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "status": 0,
+      "headers": {},
+      "body": "{\"sent\":true,\"mail\":{\"mail_from\":\"\\u003cdev-health@example.com\\u003e\",\"rcpt_to\":[\"\\u003cowner@example.test\\u003e\"],\"data\":\"Content-Type: multipart/alternative; boundary=\\\"BOUNDARY\\\"\\r\\nMIME-Version: 1.0\\r\\nFrom: dev-health@example.com\\r\\nTo: owner@example.test\\r\\nSubject: =?utf-8?b?WW91J3JlIGludml0ZWQgdG8gam9pbiDDiWNvbGUgU3Vww6lyaWV1cmUgw4ljb2xlIFN1cMOpcmlldXJlIMOJY29sZSBTdXDDqXJpZXVyZSDDiWNvbGUgU3Vww6lyaWV1cmUgw4ljb2xlIFN1cMOpcmlldXJlIMOJY29sZSBTdXDDqXJpZXVyZSDDiWNvbGUgU3Vww6lyaWV1cmUgw4ljb2xlIFN1cMOpcmlldXJlIMOJY29sZSBTdXDDqXJpZXVyZSDDiWNvbGUgU3Vww6lyaWV1cmUgw4ljb2xlIFN1cMOpcmlldXJlIMOJY29sZSBTdXDDqXJpZXVyZSA=?=\\r\\n\\r\\n--BOUNDARY\\r\\nContent-Type: text/html; charset=\\\"us-ascii\\\"\\r\\nMIME-Version: 1.0\\r\\nContent-Transfer-Encoding: 7bit\\r\\n\\r\\n\\u003cp\\u003ex\\u003c/p\\u003e\\r\\n--BOUNDARY--\\r\\n\"}}"
+    },
+    {
+      "name": "long mostly-ascii subject with one accent",
+      "method": "PYTHON",
+      "path": "program sha256 335c5092eb8d7ca289f4db3a8c8940517225d0dada56d00f32a600d6485cbcb4 env sha256 aa3e1f0afa0006ee9b2a34fd9a993c9152ff6e7a77ab139d2aa74365968f84af",
+      "body_sha256": "ce4cc0fda01bcf3d685c193240325a3e1e4827c1b5e05e77622ea33165fbcade",
+      "request_headers_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "status": 0,
+      "headers": {},
+      "body": "{\"sent\":true,\"mail\":{\"mail_from\":\"\\u003cdev-health@example.com\\u003e\",\"rcpt_to\":[\"\\u003cowner@example.test\\u003e\"],\"data\":\"Content-Type: multipart/alternative; boundary=\\\"BOUNDARY\\\"\\r\\nMIME-Version: 1.0\\r\\nFrom: dev-health@example.com\\r\\nTo: owner@example.test\\r\\nSubject: =?utf-8?q?aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa=C3=A9?=\\r\\n\\r\\n--BOUNDARY\\r\\nContent-Type: text/html; charset=\\\"us-ascii\\\"\\r\\nMIME-Version: 1.0\\r\\nContent-Transfer-Encoding: 7bit\\r\\n\\r\\n\\u003cp\\u003ex\\u003c/p\\u003e\\r\\n--BOUNDARY--\\r\\n\"}}"
+    },
+    {
+      "name": "emoji subject",
+      "method": "PYTHON",
+      "path": "program sha256 335c5092eb8d7ca289f4db3a8c8940517225d0dada56d00f32a600d6485cbcb4 env sha256 aa3e1f0afa0006ee9b2a34fd9a993c9152ff6e7a77ab139d2aa74365968f84af",
+      "body_sha256": "7670255db9bcd0552a63d75e572830b26088c9947b0152f87199a757f55b8d03",
+      "request_headers_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "status": 0,
+      "headers": {},
+      "body": "{\"sent\":true,\"mail\":{\"mail_from\":\"\\u003cdev-health@example.com\\u003e\",\"rcpt_to\":[\"\\u003cowner@example.test\\u003e\"],\"data\":\"Content-Type: multipart/alternative; boundary=\\\"BOUNDARY\\\"\\r\\nMIME-Version: 1.0\\r\\nFrom: dev-health@example.com\\r\\nTo: owner@example.test\\r\\nSubject: =?utf-8?b?8J+OiSBZb3UncmUgaW52aXRlZA==?=\\r\\n\\r\\n--BOUNDARY\\r\\nContent-Type: text/html; charset=\\\"us-ascii\\\"\\r\\nMIME-Version: 1.0\\r\\nContent-Transfer-Encoding: 7bit\\r\\n\\r\\n\\u003cp\\u003ex\\u003c/p\\u003e\\r\\n--BOUNDARY--\\r\\n\"}}"
+    },
+    {
+      "name": "ascii subject that looks like an encoded word",
+      "method": "PYTHON",
+      "path": "program sha256 335c5092eb8d7ca289f4db3a8c8940517225d0dada56d00f32a600d6485cbcb4 env sha256 aa3e1f0afa0006ee9b2a34fd9a993c9152ff6e7a77ab139d2aa74365968f84af",
+      "body_sha256": "5e02d7977941f67e977fe18d14ffdf205064307d144b2fcc4b4bda545c6ff72b",
+      "request_headers_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "status": 0,
+      "headers": {},
+      "body": "{\"sent\":true,\"mail\":{\"mail_from\":\"\\u003cdev-health@example.com\\u003e\",\"rcpt_to\":[\"\\u003cowner@example.test\\u003e\"],\"data\":\"Content-Type: multipart/alternative; boundary=\\\"BOUNDARY\\\"\\r\\nMIME-Version: 1.0\\r\\nFrom: dev-health@example.com\\r\\nTo: owner@example.test\\r\\nSubject: =?utf-8?q?already?=\\r\\n\\r\\n--BOUNDARY\\r\\nContent-Type: text/html; charset=\\\"us-ascii\\\"\\r\\nMIME-Version: 1.0\\r\\nContent-Transfer-Encoding: 7bit\\r\\n\\r\\n\\u003cp\\u003ex\\u003c/p\\u003e\\r\\n--BOUNDARY--\\r\\n\"}}"
+    },
+    {
+      "name": "subject with tab, quotes and control chars",
+      "method": "PYTHON",
+      "path": "program sha256 335c5092eb8d7ca289f4db3a8c8940517225d0dada56d00f32a600d6485cbcb4 env sha256 aa3e1f0afa0006ee9b2a34fd9a993c9152ff6e7a77ab139d2aa74365968f84af",
+      "body_sha256": "df4647b35073ebab7faa8c50e0d7f0b6b96120718fec8ff9337c148ea6ff327e",
+      "request_headers_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "status": 0,
+      "headers": {},
+      "body": "{\"sent\":true,\"mail\":{\"mail_from\":\"\\u003cdev-health@example.com\\u003e\",\"rcpt_to\":[\"\\u003cowner@example.test\\u003e\"],\"data\":\"Content-Type: multipart/alternative; boundary=\\\"BOUNDARY\\\"\\r\\nMIME-Version: 1.0\\r\\nFrom: dev-health@example.com\\r\\nTo: owner@example.test\\r\\nSubject: a\\tb \\\"c\\\" \\u0000 d\\r\\n\\r\\n--BOUNDARY\\r\\nContent-Type: text/html; charset=\\\"us-ascii\\\"\\r\\nMIME-Version: 1.0\\r\\nContent-Transfer-Encoding: 7bit\\r\\n\\r\\n\\u003cp\\u003ex\\u003c/p\\u003e\\r\\n--BOUNDARY--\\r\\n\"}}"
+    },
+    {
+      "name": "subject with trailing space",
+      "method": "PYTHON",
+      "path": "program sha256 335c5092eb8d7ca289f4db3a8c8940517225d0dada56d00f32a600d6485cbcb4 env sha256 aa3e1f0afa0006ee9b2a34fd9a993c9152ff6e7a77ab139d2aa74365968f84af",
+      "body_sha256": "79f01ac9a29069a177dc7a81a3ab7bdcaf4f2fb9c2802541fc611c438991ea0f",
+      "request_headers_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "status": 0,
+      "headers": {},
+      "body": "{\"sent\":true,\"mail\":{\"mail_from\":\"\\u003cdev-health@example.com\\u003e\",\"rcpt_to\":[\"\\u003cowner@example.test\\u003e\"],\"data\":\"Content-Type: multipart/alternative; boundary=\\\"BOUNDARY\\\"\\r\\nMIME-Version: 1.0\\r\\nFrom: dev-health@example.com\\r\\nTo: owner@example.test\\r\\nSubject: Hello \\r\\n\\r\\n--BOUNDARY\\r\\nContent-Type: text/html; charset=\\\"us-ascii\\\"\\r\\nMIME-Version: 1.0\\r\\nContent-Transfer-Encoding: 7bit\\r\\n\\r\\n\\u003cp\\u003ex\\u003c/p\\u003e\\r\\n--BOUNDARY--\\r\\n\"}}"
+    },
+    {
+      "name": "display-name from",
+      "method": "PYTHON",
+      "path": "program sha256 335c5092eb8d7ca289f4db3a8c8940517225d0dada56d00f32a600d6485cbcb4 env sha256 aa3e1f0afa0006ee9b2a34fd9a993c9152ff6e7a77ab139d2aa74365968f84af",
+      "body_sha256": "05da91dbba7725b174b94e00e4341afa06b04897967606116f34d6c1e4952ecb",
+      "request_headers_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "status": 0,
+      "headers": {},
+      "body": "{\"sent\":true,\"mail\":{\"mail_from\":\"\\u003cdev-health@example.com\\u003e\",\"rcpt_to\":[\"\\u003cowner@example.test\\u003e\"],\"data\":\"Content-Type: multipart/alternative; boundary=\\\"BOUNDARY\\\"\\r\\nMIME-Version: 1.0\\r\\nFrom: Dev Health \\u003cdev-health@example.com\\u003e\\r\\nTo: owner@example.test\\r\\nSubject: Hello\\r\\n\\r\\n--BOUNDARY\\r\\nContent-Type: text/html; charset=\\\"us-ascii\\\"\\r\\nMIME-Version: 1.0\\r\\nContent-Transfer-Encoding: 7bit\\r\\n\\r\\n\\u003cp\\u003ex\\u003c/p\\u003e\\r\\n--BOUNDARY--\\r\\n\"}}"
+    },
+    {
+      "name": "quoted display-name from with a comma",
+      "method": "PYTHON",
+      "path": "program sha256 335c5092eb8d7ca289f4db3a8c8940517225d0dada56d00f32a600d6485cbcb4 env sha256 aa3e1f0afa0006ee9b2a34fd9a993c9152ff6e7a77ab139d2aa74365968f84af",
+      "body_sha256": "ed3ac12d8d1862bd40f51bc396338fdd91bf80bb4df4cef954ac0c2388744ff1",
+      "request_headers_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "status": 0,
+      "headers": {},
+      "body": "{\"sent\":true,\"mail\":{\"mail_from\":\"\\u003cdev-health@example.com\\u003e\",\"rcpt_to\":[\"\\u003cowner@example.test\\u003e\"],\"data\":\"Content-Type: multipart/alternative; boundary=\\\"BOUNDARY\\\"\\r\\nMIME-Version: 1.0\\r\\nFrom: \\\"Health, Dev\\\" \\u003cdev-health@example.com\\u003e\\r\\nTo: owner@example.test\\r\\nSubject: Hello\\r\\n\\r\\n--BOUNDARY\\r\\nContent-Type: text/html; charset=\\\"us-ascii\\\"\\r\\nMIME-Version: 1.0\\r\\nContent-Transfer-Encoding: 7bit\\r\\n\\r\\n\\u003cp\\u003ex\\u003c/p\\u003e\\r\\n--BOUNDARY--\\r\\n\"}}"
+    },
+    {
+      "name": "non-ascii display-name from",
+      "method": "PYTHON",
+      "path": "program sha256 335c5092eb8d7ca289f4db3a8c8940517225d0dada56d00f32a600d6485cbcb4 env sha256 aa3e1f0afa0006ee9b2a34fd9a993c9152ff6e7a77ab139d2aa74365968f84af",
+      "body_sha256": "ed4dd3ba403bd812cf2701a8898432d3315dc3d269139faf69a7e1f04da4ac58",
+      "request_headers_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "status": 0,
+      "headers": {},
+      "body": "{\"sent\":true,\"mail\":{\"mail_from\":\"\\u003cdev-health@example.com\\u003e\",\"rcpt_to\":[\"\\u003cowner@example.test\\u003e\"],\"data\":\"Content-Type: multipart/alternative; boundary=\\\"BOUNDARY\\\"\\r\\nMIME-Version: 1.0\\r\\nFrom: =?utf-8?q?D=C3=A9v_Health_=3Cdev-health=40example=2Ecom=3E?=\\r\\nTo: owner@example.test\\r\\nSubject: Hello\\r\\n\\r\\n--BOUNDARY\\r\\nContent-Type: text/html; charset=\\\"us-ascii\\\"\\r\\nMIME-Version: 1.0\\r\\nContent-Transfer-Encoding: 7bit\\r\\n\\r\\n\\u003cp\\u003ex\\u003c/p\\u003e\\r\\n--BOUNDARY--\\r\\n\"}}"
+    },
+    {
+      "name": "angle-bracketed bare from",
+      "method": "PYTHON",
+      "path": "program sha256 335c5092eb8d7ca289f4db3a8c8940517225d0dada56d00f32a600d6485cbcb4 env sha256 aa3e1f0afa0006ee9b2a34fd9a993c9152ff6e7a77ab139d2aa74365968f84af",
+      "body_sha256": "2fc5a09720dbc10a76289f596bf543ffdf1997ca7118f98afcef57cd91de2a1d",
+      "request_headers_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "status": 0,
+      "headers": {},
+      "body": "{\"sent\":true,\"mail\":{\"mail_from\":\"\\u003cdev-health@example.com\\u003e\",\"rcpt_to\":[\"\\u003cowner@example.test\\u003e\"],\"data\":\"Content-Type: multipart/alternative; boundary=\\\"BOUNDARY\\\"\\r\\nMIME-Version: 1.0\\r\\nFrom: \\u003cdev-health@example.com\\u003e\\r\\nTo: owner@example.test\\r\\nSubject: Hello\\r\\n\\r\\n--BOUNDARY\\r\\nContent-Type: text/html; charset=\\\"us-ascii\\\"\\r\\nMIME-Version: 1.0\\r\\nContent-Transfer-Encoding: 7bit\\r\\n\\r\\n\\u003cp\\u003ex\\u003c/p\\u003e\\r\\n--BOUNDARY--\\r\\n\"}}"
+    },
+    {
+      "name": "mixed-case plus-address recipient",
+      "method": "PYTHON",
+      "path": "program sha256 335c5092eb8d7ca289f4db3a8c8940517225d0dada56d00f32a600d6485cbcb4 env sha256 aa3e1f0afa0006ee9b2a34fd9a993c9152ff6e7a77ab139d2aa74365968f84af",
+      "body_sha256": "06d5f0ce3a063c8fe2dad99b6e8479c26eed57e625f396a392c9c808407c63cc",
+      "request_headers_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "status": 0,
+      "headers": {},
+      "body": "{\"sent\":true,\"mail\":{\"mail_from\":\"\\u003cdev-health@example.com\\u003e\",\"rcpt_to\":[\"\\u003cOwner+Tag@Example.TEST\\u003e\"],\"data\":\"Content-Type: multipart/alternative; boundary=\\\"BOUNDARY\\\"\\r\\nMIME-Version: 1.0\\r\\nFrom: dev-health@example.com\\r\\nTo: Owner+Tag@Example.TEST\\r\\nSubject: Hello\\r\\n\\r\\n--BOUNDARY\\r\\nContent-Type: text/html; charset=\\\"us-ascii\\\"\\r\\nMIME-Version: 1.0\\r\\nContent-Transfer-Encoding: 7bit\\r\\n\\r\\n\\u003cp\\u003ex\\u003c/p\\u003e\\r\\n--BOUNDARY--\\r\\n\"}}"
+    },
+    {
+      "name": "display-name recipient",
+      "method": "PYTHON",
+      "path": "program sha256 335c5092eb8d7ca289f4db3a8c8940517225d0dada56d00f32a600d6485cbcb4 env sha256 aa3e1f0afa0006ee9b2a34fd9a993c9152ff6e7a77ab139d2aa74365968f84af",
+      "body_sha256": "b914ab32cc58836a77e95e5dc5b36528ffd3444aa1ba567cfe2878b37ceec536",
+      "request_headers_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "status": 0,
+      "headers": {},
+      "body": "{\"sent\":true,\"mail\":{\"mail_from\":\"\\u003cdev-health@example.com\\u003e\",\"rcpt_to\":[\"\\u003cowner@example.test\\u003e\"],\"data\":\"Content-Type: multipart/alternative; boundary=\\\"BOUNDARY\\\"\\r\\nMIME-Version: 1.0\\r\\nFrom: dev-health@example.com\\r\\nTo: Owner Name \\u003cowner@example.test\\u003e\\r\\nSubject: Hello\\r\\n\\r\\n--BOUNDARY\\r\\nContent-Type: text/html; charset=\\\"us-ascii\\\"\\r\\nMIME-Version: 1.0\\r\\nContent-Transfer-Encoding: 7bit\\r\\n\\r\\n\\u003cp\\u003ex\\u003c/p\\u003e\\r\\n--BOUNDARY--\\r\\n\"}}"
+    },
+    {
+      "name": "invite template",
+      "method": "PYTHON",
+      "path": "program sha256 335c5092eb8d7ca289f4db3a8c8940517225d0dada56d00f32a600d6485cbcb4 env sha256 aa3e1f0afa0006ee9b2a34fd9a993c9152ff6e7a77ab139d2aa74365968f84af",
+      "body_sha256": "65ed95937520563c614c4f3c529a1bb5683a2dc8127d40cc871ba0da7690aa51",
+      "request_headers_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "status": 0,
+      "headers": {},
+      "body": "{\"sent\":true,\"mail\":{\"mail_from\":\"\\u003cdev-health@example.com\\u003e\",\"rcpt_to\":[\"\\u003cinvitee@example.test\\u003e\"],\"data\":\"Content-Type: multipart/alternative; boundary=\\\"BOUNDARY\\\"\\r\\nMIME-Version: 1.0\\r\\nFrom: dev-health@example.com\\r\\nTo: invitee@example.test\\r\\nSubject: You're invited to join Acme\\r\\n\\r\\n--BOUNDARY\\r\\nContent-Type: text/html; charset=\\\"us-ascii\\\"\\r\\nMIME-Version: 1.0\\r\\nContent-Transfer-Encoding: 7bit\\r\\n\\r\\n\\u003c!doctype html\\u003e\\r\\n\\u003chtml lang=\\\"en\\\"\\u003e\\r\\n  \\u003cbody\\u003e\\r\\n    \\u003ch1\\u003eYou're invited to join Acme\\u003c/h1\\u003e\\r\\n    \\u003cp\\u003eHi,\\u003c/p\\u003e\\r\\n    \\u003cp\\u003eAda Lovelace invited you to join Acme on Dev Health.\\u003c/p\\u003e\\r\\n    \\u003cp\\u003e\\u003ca href=\\\"http://localhost:3000/accept-invite?token=abc.def\\\"\\u003eAccept invitation\\u003c/a\\u003e\\u003c/p\\u003e\\r\\n    \\u003cp\\u003eThis link expires in 72 hours.\\u003c/p\\u003e\\r\\n  \\u003c/body\\u003e\\r\\n\\u003c/html\\u003e\\r\\n\\r\\n--BOUNDARY--\\r\\n\"}}"
+    },
+    {
+      "name": "invite template, non-ascii and markup values",
+      "method": "PYTHON",
+      "path": "program sha256 335c5092eb8d7ca289f4db3a8c8940517225d0dada56d00f32a600d6485cbcb4 env sha256 aa3e1f0afa0006ee9b2a34fd9a993c9152ff6e7a77ab139d2aa74365968f84af",
+      "body_sha256": "37599e53c6162d192091f3caace9cbf7cafc30e8e3d1301ce5bacb53e0f0dbdc",
+      "request_headers_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "status": 0,
+      "headers": {},
+      "body": "{\"sent\":true,\"mail\":{\"mail_from\":\"\\u003cdev-health@example.com\\u003e\",\"rcpt_to\":[\"\\u003cinvitee@example.test\\u003e\"],\"data\":\"Content-Type: multipart/alternative; boundary=\\\"BOUNDARY\\\"\\r\\nMIME-Version: 1.0\\r\\nFrom: dev-health@example.com\\r\\nTo: invitee@example.test\\r\\nSubject: =?utf-8?q?You=27re_invited_to_join_=C3=89cole?=\\r\\n\\r\\n--BOUNDARY\\r\\nContent-Type: text/html; charset=\\\"utf-8\\\"\\r\\nMIME-Version: 1.0\\r\\nContent-Transfer-Encoding: base64\\r\\n\\r\\nPCFkb2N0eXBlIGh0bWw+CjxodG1sIGxhbmc9ImVuIj4KICA8Ym9keT4KICAgIDxoMT5Zb3UncmUg\\r\\naW52aXRlZCB0byBqb2luIMOJY29sZSA8Yj4mYW1wOzwvYj48L2gxPgogICAgPHA+SGksPC9wPgog\\r\\nICAgPHA+UmVuw6kgIlJlbmUiIE8nQnJpZW4gaW52aXRlZCB5b3UgdG8gam9pbiDDiWNvbGUgPGI+\\r\\nJmFtcDs8L2I+IG9uIERldiBIZWFsdGguPC9wPgogICAgPHA+PGEgaHJlZj0iaHR0cDovL2xvY2Fs\\r\\naG9zdDozMDAwL2FjY2VwdC1pbnZpdGU/dG9rZW49YSUyRmIuYyI+QWNjZXB0IGludml0YXRpb248\\r\\nL2E+PC9wPgogICAgPHA+VGhpcyBsaW5rIGV4cGlyZXMgaW4gNzIgaG91cnMuPC9wPgogIDwvYm9k\\r\\neT4KPC9odG1sPgo=\\r\\n\\r\\n--BOUNDARY--\\r\\n\"}}"
+    },
+    {
+      "name": "invite template, brace-laden values",
+      "method": "PYTHON",
+      "path": "program sha256 335c5092eb8d7ca289f4db3a8c8940517225d0dada56d00f32a600d6485cbcb4 env sha256 aa3e1f0afa0006ee9b2a34fd9a993c9152ff6e7a77ab139d2aa74365968f84af",
+      "body_sha256": "0825ed45036ba14e7f688bf358dc422ba7d97be11cc52707977ac35125640ede",
+      "request_headers_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "status": 0,
+      "headers": {},
+      "body": "{\"sent\":true,\"mail\":{\"mail_from\":\"\\u003cdev-health@example.com\\u003e\",\"rcpt_to\":[\"\\u003cinvitee@example.test\\u003e\"],\"data\":\"Content-Type: multipart/alternative; boundary=\\\"BOUNDARY\\\"\\r\\nMIME-Version: 1.0\\r\\nFrom: dev-health@example.com\\r\\nTo: invitee@example.test\\r\\nSubject: You're invited to join {x}\\r\\n\\r\\n--BOUNDARY\\r\\nContent-Type: text/html; charset=\\\"us-ascii\\\"\\r\\nMIME-Version: 1.0\\r\\nContent-Transfer-Encoding: 7bit\\r\\n\\r\\n\\u003c!doctype html\\u003e\\r\\n\\u003chtml lang=\\\"en\\\"\\u003e\\r\\n  \\u003cbody\\u003e\\r\\n    \\u003ch1\\u003eYou're invited to join {org_name}\\u003c/h1\\u003e\\r\\n    \\u003cp\\u003eHi,\\u003c/p\\u003e\\r\\n    \\u003cp\\u003e}{ invited you to join {org_name} on Dev Health.\\u003c/p\\u003e\\r\\n    \\u003cp\\u003e\\u003ca href=\\\"{{}}\\\"\\u003eAccept invitation\\u003c/a\\u003e\\u003c/p\\u003e\\r\\n    \\u003cp\\u003eThis link expires in 72 hours.\\u003c/p\\u003e\\r\\n  \\u003c/body\\u003e\\r\\n\\u003c/html\\u003e\\r\\n\\r\\n--BOUNDARY--\\r\\n\"}}"
+    },
+    {
+      "name": "refused: newline in ascii subject",
+      "method": "PYTHON",
+      "path": "program sha256 335c5092eb8d7ca289f4db3a8c8940517225d0dada56d00f32a600d6485cbcb4 env sha256 aa3e1f0afa0006ee9b2a34fd9a993c9152ff6e7a77ab139d2aa74365968f84af",
+      "body_sha256": "e0829e2c167e38183e38fe163758e2146cc6f089a19052a480f091e47e10c3be",
+      "request_headers_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "status": 0,
+      "headers": {},
+      "body": "{\"sent\":false,\"error\":\"HeaderParseError\",\"mail\":null}"
+    },
+    {
+      "name": "refused: bare newline in ascii subject",
+      "method": "PYTHON",
+      "path": "program sha256 335c5092eb8d7ca289f4db3a8c8940517225d0dada56d00f32a600d6485cbcb4 env sha256 aa3e1f0afa0006ee9b2a34fd9a993c9152ff6e7a77ab139d2aa74365968f84af",
+      "body_sha256": "b9460c36983f447d930f3a0faaa6480444ed14f4c0f145d6981afca294ee04ea",
+      "request_headers_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "status": 0,
+      "headers": {},
+      "body": "{\"sent\":false,\"error\":\"HeaderWriteError\",\"mail\":null}"
+    },
+    {
+      "name": "refused: CRLF in ascii subject",
+      "method": "PYTHON",
+      "path": "program sha256 335c5092eb8d7ca289f4db3a8c8940517225d0dada56d00f32a600d6485cbcb4 env sha256 aa3e1f0afa0006ee9b2a34fd9a993c9152ff6e7a77ab139d2aa74365968f84af",
+      "body_sha256": "7fc788ec92c1c216cfe2e94380ddc5a6b7f46a7b872c33bb660eb76759cc597d",
+      "request_headers_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "status": 0,
+      "headers": {},
+      "body": "{\"sent\":false,\"error\":\"HeaderWriteError\",\"mail\":null}"
+    },
+    {
+      "name": "refused: newline in from",
+      "method": "PYTHON",
+      "path": "program sha256 335c5092eb8d7ca289f4db3a8c8940517225d0dada56d00f32a600d6485cbcb4 env sha256 aa3e1f0afa0006ee9b2a34fd9a993c9152ff6e7a77ab139d2aa74365968f84af",
+      "body_sha256": "aa447905a7e152f14801e4579334c079f6f61c151eb5fc40e77a4e80665e7f5a",
+      "request_headers_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "status": 0,
+      "headers": {},
+      "body": "{\"sent\":false,\"error\":\"HeaderParseError\",\"mail\":null}"
+    },
+    {
+      "name": "refused: non-ascii recipient address",
+      "method": "PYTHON",
+      "path": "program sha256 335c5092eb8d7ca289f4db3a8c8940517225d0dada56d00f32a600d6485cbcb4 env sha256 aa3e1f0afa0006ee9b2a34fd9a993c9152ff6e7a77ab139d2aa74365968f84af",
+      "body_sha256": "4894127c27dda2f1f0c75afda35d844aa195ca6a7fb7d89011f99ec03c08df1c",
+      "request_headers_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "status": 0,
+      "headers": {},
+      "body": "{\"sent\":false,\"error\":\"UnicodeEncodeError\",\"mail\":null}"
+    },
+    {
+      "name": "refused: non-ascii recipient in a display-name form",
+      "method": "PYTHON",
+      "path": "program sha256 335c5092eb8d7ca289f4db3a8c8940517225d0dada56d00f32a600d6485cbcb4 env sha256 aa3e1f0afa0006ee9b2a34fd9a993c9152ff6e7a77ab139d2aa74365968f84af",
+      "body_sha256": "9e684e57723cabe71446304ca036136f3da2b990a77ec5aee1c5df922cfcbad2",
+      "request_headers_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "status": 0,
+      "headers": {},
+      "body": "{\"sent\":false,\"error\":\"UnicodeEncodeError\",\"mail\":null}"
+    },
+    {
+      "name": "refused: non-ascii sender address",
+      "method": "PYTHON",
+      "path": "program sha256 335c5092eb8d7ca289f4db3a8c8940517225d0dada56d00f32a600d6485cbcb4 env sha256 aa3e1f0afa0006ee9b2a34fd9a993c9152ff6e7a77ab139d2aa74365968f84af",
+      "body_sha256": "f52b7dd50972bef20b61f423686ba04be2547b4d2dd85ddb565efec522007ba6",
+      "request_headers_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "status": 0,
+      "headers": {},
+      "body": "{\"sent\":false,\"error\":\"UnicodeEncodeError\",\"mail\":null}"
+    },
+    {
+      "name": "refused: newline in to",
+      "method": "PYTHON",
+      "path": "program sha256 335c5092eb8d7ca289f4db3a8c8940517225d0dada56d00f32a600d6485cbcb4 env sha256 aa3e1f0afa0006ee9b2a34fd9a993c9152ff6e7a77ab139d2aa74365968f84af",
+      "body_sha256": "efe1edc6715f2928b0b962a96ccbb34de6a582f4dbc1d680242e431acb91df7a",
+      "request_headers_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "status": 0,
+      "headers": {},
+      "body": "{\"sent\":false,\"error\":\"HeaderParseError\",\"mail\":null}"
+    }
+  ]
+}

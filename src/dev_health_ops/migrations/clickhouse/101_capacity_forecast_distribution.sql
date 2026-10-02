@@ -1,5 +1,5 @@
 -- capacity_forecasts keeps p50 / p85 / p95 of each Monte Carlo run and nothing
--- else; the run itself (10 000 completion-day or item samples) was discarded.
+-- else, and the run itself (10 000 completion-day or item samples) was discarded.
 -- A chart of the forecast needs the distribution, so it is persisted too, as a
 -- histogram: the distinct sample values and how many runs produced each one.
 -- It is exact (nothing is binned), so any percentile can be recomputed from it,

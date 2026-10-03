@@ -185,7 +185,7 @@ func TestRE2ReadingIsTheFormerChain(t *testing.T) {
 	}
 	texts := gateTexts()
 	parts := []string{"Authorization", "authorization", "authorızatıon", "Bearer", "bearer", "Basic", "basic", "token", "api_key", "APİ_KEY", "apikey",
-		"Secret", "secret", "client_secret", "access_token", "private_token", "ghp_", "glpat-", "github_pat_", "xoxb-", "xoxa-", "://", "@", ":", "=", "-", "_", "+", "/",
+		"Secret", "secret", "client_secret", "access_token", "private_token", "ghp_aaaaaaaaaaaaaaaaaaaa", "glpat-aaaaaaaaaaaaaaaaaaaa", "github_pat_aaaaaaaaaaaaaaaaaaaa", "xoxb-1111111111-aaaaaaaa", "xoxa-1111111111-aaaaaaaa", "://", "@", ":", "=", "-", "_", "+", "/",
 		"Zq9vT4mW2xLp8Rn7Hk3s", "ABCDEFGHIJKLMNOPQRSTUVWXYZ012345", "abcdefgh", "é", "İ", "ı", "ſ", "K", "K", "s", "i", "x", "X",
 		" ", "\t", "\n", "\f", "\r", "\v", " ", " ", " ", "　", "\u0085", "\u001c", " ", "|", ",", ".", "<", ">", "(", ")", "\""}
 	state := uint64(20261003)

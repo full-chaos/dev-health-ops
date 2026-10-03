@@ -266,6 +266,10 @@ per-file-ignores = { "__init__.py" = [
 [tool.ruff.format]
 quote-style = "double"
 indent-style = "space"
+# The bytes of this recorded-oracle script are pinned by a frozen golden
+# (it holds the program digest), so a reformat breaks the pin. Format check
+# only: `ruff check` still lints the file. One path, not a glob (CHAOS-8395).
+exclude = ["internal/syncdispatchruntime/testdata/dispatch_admission_oracle.py"]
 
 [tool.mypy]
 python_version = "3.14"

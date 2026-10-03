@@ -60,7 +60,7 @@ func (c *Client) Execute(ctx context.Context, query string, variables map[string
 
 	httpClient := c.HTTPClient
 	if httpClient == nil {
-		httpClient = &http.Client{Timeout: defaultTimeout}
+		httpClient = atlassian.NewDefaultHTTPClient(defaultTimeout)
 	}
 
 	nowFn := c.Now
@@ -302,7 +302,7 @@ func (c *Client) ExecuteWithExtraHeaders(ctx context.Context, query string, vari
 
 	httpClient := c.HTTPClient
 	if httpClient == nil {
-		httpClient = &http.Client{Timeout: defaultTimeout}
+		httpClient = atlassian.NewDefaultHTTPClient(defaultTimeout)
 	}
 
 	nowFn := c.Now

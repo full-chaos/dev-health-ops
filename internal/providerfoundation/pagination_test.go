@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"github.com/full-chaos/dev-health-ops/internal/testsupport/fakehttp"
 	"io"
 	"net/http"
 	"net/url"
@@ -24,7 +25,7 @@ func TestGitHubLinkPaginationFollowsOpaqueNextAndAppliesQueryOnce(t *testing.T) 
 		},
 		{body: `[{"id":2}]`},
 	}}
-	client := paginationClient(t, "github", "https://api.github.com", doer)
+	client := paginationClient(t, "github", "https://api.github.com", fakehttp.Client(doer))
 	result, err := CollectGitHubLinkPages(context.Background(), client, GitHubPageOptions{
 		Path: "/repos/acme/api/issues",
 		Query: url.Values{
@@ -53,7 +54,7 @@ func TestGitHubLinkPaginationReportsHardCapWithoutExtraCall(t *testing.T) {
 		body:    `[{"id":1}]`,
 		headers: http.Header{"Link": {`<https://api.github.com/items?page=2>; rel="next"`}},
 	}}}
-	client := paginationClient(t, "github", "https://api.github.com", doer)
+	client := paginationClient(t, "github", "https://api.github.com", fakehttp.Client(doer))
 	result, err := CollectGitHubLinkPages(context.Background(), client, GitHubPageOptions{
 		Path: "/items", MaxPages: 1,
 	})
@@ -74,7 +75,7 @@ func TestGitHubLinkPaginationStopsAtExplicitItemLimitWithoutExtraPage(t *testing
 		},
 		{body: `[{"id":3}]`},
 	}}
-	client := paginationClient(t, "github", "https://api.github.com", doer)
+	client := paginationClient(t, "github", "https://api.github.com", fakehttp.Client(doer))
 	result, err := CollectGitHubLinkPages(context.Background(), client, GitHubPageOptions{
 		Path: "/items", MaxPages: 2, MaxItems: 2,
 	})
@@ -95,7 +96,7 @@ func TestGitHubLinkPaginationReturnsSuccessfulPagesBeforeLaterFailure(t *testing
 		},
 		{status: http.StatusBadGateway, body: `{"message":"down"}`},
 	}}
-	client := paginationClient(t, "github", "https://api.github.com", doer)
+	client := paginationClient(t, "github", "https://api.github.com", fakehttp.Client(doer))
 	result, err := CollectGitHubLinkPages(context.Background(), client, GitHubPageOptions{
 		Path: "/items", MaxPages: 2,
 	})
@@ -114,7 +115,7 @@ func TestGitHubLinkPaginationRejectsSameHostSchemeDowngradeBeforeRequest(t *test
 		body:    `[{"id":1}]`,
 		headers: http.Header{"Link": {`<http://api.github.com/items?page=2>; rel="next"`}},
 	}}}
-	client := paginationClient(t, "github", "https://api.github.com", doer)
+	client := paginationClient(t, "github", "https://api.github.com", fakehttp.Client(doer))
 	_, err := CollectGitHubLinkPages(context.Background(), client, GitHubPageOptions{
 		Path: "/items", MaxPages: 2,
 	})
@@ -129,7 +130,7 @@ func TestGitHubLinkPaginationRejectsSameHostSchemeDowngradeBeforeRequest(t *test
 func TestPaginationRejectsExcessiveBoundsWithoutRequests(t *testing.T) {
 	t.Parallel()
 	doer := &paginationDoer{}
-	client := paginationClient(t, "github", "https://api.github.com", doer)
+	client := paginationClient(t, "github", "https://api.github.com", fakehttp.Client(doer))
 	if _, err := CollectGitHubLinkPages(context.Background(), client, GitHubPageOptions{
 		Path: "/items", MaxPages: maximumProviderPages + 1,
 	}); !errors.Is(err, ErrPaginationInvalid) {
@@ -157,7 +158,7 @@ func TestGitLabPaginationUsesHeaderThenItemCountFallback(t *testing.T) {
 		{body: `[{"id":3},{"id":4}]`},
 		{body: `[{"id":5}]`},
 	}}
-	client := paginationClient(t, "gitlab", "https://gitlab.example", doer)
+	client := paginationClient(t, "gitlab", "https://gitlab.example", fakehttp.Client(doer))
 	result, err := CollectGitLabPageParamPages(context.Background(), client, GitLabPageOptions{
 		Path: "/api/v4/projects/1/merge_requests",
 		Query: url.Values{
@@ -189,7 +190,7 @@ func TestPagerDutyOffsetPaginationUsesReturnedLengthAndMore(t *testing.T) {
 		{body: `{"escalation_policies":[{"id":"one"},{"id":"two"}],"more":true}`},
 		{body: `{"escalation_policies":[{"id":"three"}],"more":false}`},
 	}}
-	client := paginationClient(t, "pagerduty", "https://api.pagerduty.com", doer)
+	client := paginationClient(t, "pagerduty", "https://api.pagerduty.com", fakehttp.Client(doer))
 	result, err := CollectPagerDutyOffsetPages(context.Background(), client, PagerDutyOffsetOptions{
 		Path: "/escalation_policies", DataKey: "escalation_policies", PerPage: 100, MaxPages: 10,
 	})
@@ -219,7 +220,7 @@ func TestPagerDutyOffsetPaginationRejectsMalformedOrNonProgressingPages(t *testi
 	} {
 		t.Run(name, func(t *testing.T) {
 			doer := &paginationDoer{responses: []paginationResponse{{body: body}}}
-			client := paginationClient(t, "pagerduty", "https://api.pagerduty.com", doer)
+			client := paginationClient(t, "pagerduty", "https://api.pagerduty.com", fakehttp.Client(doer))
 			_, err := CollectPagerDutyOffsetPages(context.Background(), client, PagerDutyOffsetOptions{
 				Path: "/escalation_policies", DataKey: "escalation_policies", PerPage: 100, MaxPages: 10,
 			})
@@ -236,7 +237,7 @@ func TestGitLabMalformedNextPageStopsWithoutSpeculation(t *testing.T) {
 		body:    `[{"id":1}]`,
 		headers: http.Header{"X-Next-Page": {"not-a-page"}},
 	}}}
-	client := paginationClient(t, "gitlab", "https://gitlab.example", doer)
+	client := paginationClient(t, "gitlab", "https://gitlab.example", fakehttp.Client(doer))
 	result, err := CollectGitLabPageParamPages(context.Background(), client, GitLabPageOptions{
 		Path: "/api/v4/projects", PerPage: 1, MaxPages: 100,
 	})
@@ -254,7 +255,7 @@ func TestLinearGraphQLPaginationPostsFirstAfterAndRejectsErrors(t *testing.T) {
 		{body: `{"data":{"issues":{"nodes":[{"id":"one"}],"pageInfo":{"hasNextPage":true,"endCursor":"cursor-2"}}}}`},
 		{body: `{"data":{"issues":{"nodes":[{"id":"two"}],"pageInfo":{"hasNextPage":false,"endCursor":null}}}}`},
 	}}
-	client := paginationClient(t, "linear", "https://api.linear.app", doer)
+	client := paginationClient(t, "linear", "https://api.linear.app", fakehttp.Client(doer))
 	result, err := CollectLinearGraphQLPages(context.Background(), client, LinearPageOptions{
 		Query: "query Issues($first: Int!, $after: String) { issues { nodes { id } } }",
 		Variables: map[string]any{
@@ -287,7 +288,7 @@ func TestLinearGraphQLPaginationPostsFirstAfterAndRejectsErrors(t *testing.T) {
 	errorDoer := &paginationDoer{responses: []paginationResponse{{
 		body: `{"errors":[{"message":"Query is too complex","extensions":{"code":"COMPLEXITY_LIMIT"}}]}`,
 	}}}
-	errorClient := paginationClient(t, "linear", "https://api.linear.app", errorDoer)
+	errorClient := paginationClient(t, "linear", "https://api.linear.app", fakehttp.Client(errorDoer))
 	_, err = CollectLinearGraphQLPages(context.Background(), errorClient, LinearPageOptions{
 		Query:          "query Issues { issues { nodes { id } } }",
 		ConnectionPath: []string{"issues"},
@@ -305,7 +306,7 @@ func TestJiraPaginationPreservesTokenThenOffsetAndIsLast(t *testing.T) {
 		{body: `{"issues":[{"id":"2"},{"id":"3"}]}`},
 		{body: `{"issues":[{"id":"4"}],"isLast":true}`},
 	}}
-	client := paginationClient(t, "jira", "https://acme.atlassian.net", doer)
+	client := paginationClient(t, "jira", "https://acme.atlassian.net", fakehttp.Client(doer))
 	result, err := CollectJiraTokenOffsetPages(context.Background(), client, JiraPageOptions{
 		Path: "/rest/api/3/search/jql",
 		Query: url.Values{
@@ -347,7 +348,7 @@ func TestLaunchDarklyFlagAndAuditPagination(t *testing.T) {
 		{body: string(firstBody)},
 		{body: `{"items":[{"key":"last"}],"totalCount":51}`},
 	}}
-	flagClient := paginationClient(t, "launchdarkly", "https://app.launchdarkly.com", flagDoer)
+	flagClient := paginationClient(t, "launchdarkly", "https://app.launchdarkly.com", fakehttp.Client(flagDoer))
 	flags, err := CollectLaunchDarklyOffsetPages(context.Background(), flagClient, LaunchDarklyOffsetOptions{
 		Path: "/api/v2/flags/project", MaxPages: 10,
 	})
@@ -364,7 +365,7 @@ func TestLaunchDarklyFlagAndAuditPagination(t *testing.T) {
 		{body: `{"items":[{"_id":"1"},{"_id":"2"}],"_links":{"next":{"href":"/api/v2/auditlog?limit=20&after=opaque"}}}`},
 		{body: `{"items":[{"_id":"3"}]}`},
 	}}
-	auditClient := paginationClient(t, "launchdarkly", "https://app.launchdarkly.com", auditDoer)
+	auditClient := paginationClient(t, "launchdarkly", "https://app.launchdarkly.com", fakehttp.Client(auditDoer))
 	audit, err := CollectLaunchDarklyAuditPages(context.Background(), auditClient, LaunchDarklyAuditOptions{
 		Since: &since, MaxItems: 25,
 	})
@@ -387,7 +388,7 @@ func paginationClient(t *testing.T, provider, base string, doer HTTPDoer) *HTTPC
 	client, err := NewHTTPClient(
 		provider,
 		base,
-		doer,
+		fakehttp.Client(doer),
 		func(*http.Request) error { return nil },
 		RetryPolicy{MaxAttempts: 1, InitialWait: time.Millisecond, MaxWait: time.Millisecond},
 		LeaseGuardFunc(func(context.Context) error { return nil }),

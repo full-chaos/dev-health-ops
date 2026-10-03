@@ -8,10 +8,9 @@
 // restendpoints_test.go's own pre-existing "/api/v1/work-units/
 // {work_unit_id}/explain" fixture, which already proves
 // LoadFastAPIRoutes/LoadQueryAPIMuxRoutes/LoadRESTEndpoints treat a
-// "{...}" segment as an ordinary literal-string match (mux.HandleFunc's
-// own registration string, read verbatim by muxHandleFuncRe) -- no
-// matcher change was needed for this route to render "ported" on the
-// migration matrix.
+// "{...}" segment as an ordinary literal-string match (the route table
+// row's Pattern, the registration string itself) -- no matcher change
+// was needed for this route to render "ported" on the migration matrix.
 //
 // Auth: the same bearer-envelope verifier every other REST route in this
 // binary uses. Python's route additionally rate-limits ("60/minute",
@@ -44,8 +43,8 @@ import (
 )
 
 // peopleSummaryPath is the literal path pattern this route mounts --
-// used for BOTH mux.HandleFunc (main.go) and the routeswitch operation
-// name, so the two can never drift apart.
+// used for BOTH the route table row (rest_routes.go) and the routeswitch
+// operation name, so the two can never drift apart.
 const peopleSummaryPath = "/api/v1/people/{person_id}/summary"
 
 // peopleSummaryOperation is this route's routeswitch operation name -- a

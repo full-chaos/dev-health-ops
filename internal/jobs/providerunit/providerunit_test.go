@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"github.com/full-chaos/dev-health-ops/internal/testsupport/fakehttp"
 	"io"
 	"log/slog"
 	"net/http"
@@ -628,7 +629,7 @@ func successfulExecutor(
 				Repository: testCredentialRepository{unit: session.Claim.Unit},
 				Decryptor:  testCredentialDecryptor{},
 			},
-			Doer: testDoer{},
+			Doer: fakehttp.Client(testDoer{}),
 			Retry: providerfoundation.RetryPolicy{
 				MaxAttempts: 1, InitialWait: time.Nanosecond,
 				MaxWait: time.Nanosecond,
@@ -662,7 +663,7 @@ func githubFilesTraversalExecutor(now time.Time) ExecutorFactory {
 				Repository: githubCredentialRepository{unit: session.Claim.Unit},
 				Decryptor:  githubCredentialDecryptor{},
 			},
-			Doer: githubFilesTraversalDoer{},
+			Doer: fakehttp.Client(githubFilesTraversalDoer{}),
 			Retry: providerfoundation.RetryPolicy{
 				MaxAttempts: 1, InitialWait: time.Nanosecond,
 				MaxWait: time.Nanosecond,

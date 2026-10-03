@@ -2,9 +2,9 @@ package licensing
 
 import (
 	"path/filepath"
-	"runtime"
 	"testing"
 
+	"github.com/full-chaos/dev-health-ops/internal/testsupport/moduleroot"
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/programoracle"
 )
 
@@ -37,7 +37,7 @@ var licensingGoldens = programoracle.Set{
 // fails the test; so does a program that exited non-zero when it was recorded.
 func frozenPython(t *testing.T, golden string, programs ...programoracle.Program) []string {
 	t.Helper()
-	_, file, _, ok := runtime.Caller(0)
+	_, file, _, ok := moduleroot.Caller(0)
 	if !ok {
 		t.Fatal("cannot locate the test source")
 	}

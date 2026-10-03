@@ -292,6 +292,17 @@ type Outcome struct {
 // Wait polls the occurrence until the scheduler has planned it, quarantined it,
 // or the wait is over. A pending outcome is not an error.
 func Wait(ctx context.Context, pool *pgxpool.Pool, occurrenceID string, wait, poll time.Duration) (Outcome, error) {
+	started := time.Now()
+	outcome, err := waitForOccurrence(ctx, pool, occurrenceID, wait, poll)
+	if err == nil {
+		// CHAOS-8222: execution_trigger.py's _record, on every terminal outcome
+		// and none of the error returns (Python records none either).
+		processAwaitMetrics.observe(outcome.State, time.Since(started))
+	}
+	return outcome, err
+}
+
+func waitForOccurrence(ctx context.Context, pool *pgxpool.Pool, occurrenceID string, wait, poll time.Duration) (Outcome, error) {
 	deadline := time.Now().Add(wait)
 	for {
 		var status string

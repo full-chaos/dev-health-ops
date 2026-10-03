@@ -1,2 +1,0 @@
-internal/pgmigrate	TestBaselineVenueOracleIsTheExecutedPythonUpgrade	run
-internal/pgmigrate	TestPreflightVenueOracleOverRealAlembicStates	run

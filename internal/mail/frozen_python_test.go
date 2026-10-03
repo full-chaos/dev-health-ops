@@ -5,9 +5,9 @@ import (
 	"encoding/hex"
 	"os"
 	"path/filepath"
-	"runtime"
 	"testing"
 
+	"github.com/full-chaos/dev-health-ops/internal/testsupport/moduleroot"
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/programoracle"
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/venueoracle"
 )
@@ -29,7 +29,7 @@ var mailGoldens = programoracle.Set{
 	// new golden starts as "PIN:" + its file name without ".json".
 	Pins: map[string]string{
 		"resend.golden.json": "a19e74d61139bad5ac1b33659f09489d3de6056189aea1df33c73dfab136797b",
-		"smtp.golden.json":   "fbf5f809ce50b4d09b65903ca4654e9907cb559a6349cb0d1ff54964b35e42a0",
+		"smtp.golden.json":   "496ea9ec800636426edddbc13f6659e5622fa62585cb1984a3a06e14fef8191e",
 	},
 }
 
@@ -39,7 +39,7 @@ var mailGoldens = programoracle.Set{
 // fails the test; so does a program that exited non-zero when it was recorded.
 func frozenPython(t *testing.T, golden string, programs ...programoracle.Program) []string {
 	t.Helper()
-	_, file, _, ok := runtime.Caller(0)
+	_, file, _, ok := moduleroot.Caller(0)
 	if !ok {
 		t.Fatal("cannot locate the test source")
 	}

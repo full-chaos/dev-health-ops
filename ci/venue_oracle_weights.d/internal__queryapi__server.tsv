@@ -1,3 +1,4 @@
+internal/queryapi/server	TestGraphQLEdgeFrozenVenueOracle	600	unmeasured
 internal/queryapi/server	TestGraphQLEdgeVenueOracle	600	unmeasured
 internal/queryapi/server	TestSavedReportMutationsCronDialectVenueOracle	62
 internal/queryapi/server	TestSavedReportMutationsVenueOracle	109

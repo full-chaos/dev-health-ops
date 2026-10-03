@@ -1,5 +1,5 @@
 # Every file under internal/pushcli/testdata: sha256, kind, path. Written by `go run ./internal/testsupport/recordedfiles/manifest`; never edit it by hand.
 # python-recorded set: e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855 (0 files)
-# header-before-stamp set: 7cd0884a2b4e10b34718f5185408c7d64c6fb751104ab9c30587f4e9f7eaa110 (2 files)
-ae2f1c0fa3b03d26f69b7368c0f1047aa3365a04aa589a8a046045231d3c6839	header-before-stamp	golden/push.json
-4f320314de5108821f1fb8570ac4d4581ef3efaa1a3e8b801fd090d04c1ea723	header-before-stamp	golden/push_net.json
+# header-before-stamp set: e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855 (0 files)
+-	header	golden/push.json
+-	header	golden/push_net.json

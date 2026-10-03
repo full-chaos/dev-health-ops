@@ -8,6 +8,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"github.com/full-chaos/dev-health-ops/internal/testsupport/goldenscan"
 	"io"
 	"os"
 	"os/exec"
@@ -16,6 +17,7 @@ import (
 	"regexp"
 	"sort"
 	"strings"
+	"sync"
 	"testing"
 	"unicode/utf8"
 )
@@ -86,6 +88,11 @@ type GoldenSpec struct {
 	// and must be deterministic and idempotent. A golden stores no token value:
 	// the recorder refuses a candidate that still holds a token shape.
 	Scrub func(text string) string
+	// CredentialConstants are the credential values the test sends on purpose, by exact text (CHAOS-7898). The
+	// harness replaces each by a digest placeholder wherever it stands, on both planes, and the record verb
+	// refuses a candidate that holds one raw or a declaration nothing needs: see golden_declared.go. No pattern:
+	// only the values the test declares are touched.
+	CredentialConstants []string
 	// KeyScrub turns a value in a REQUEST that the Python plane issued earlier
 	// and the test sends back (a mailed link token) into a placeholder, for the
 	// request's key only: the request sent to Python is untouched. A JWT in a
@@ -104,6 +111,9 @@ type GoldenSpec struct {
 type Golden struct {
 	spec      GoldenSpec
 	recording bool
+	// declaredSeen counts, per GoldenSpec.CredentialConstants entry, the replacements made (golden_declared.go).
+	declaredSeen []int
+	declaredMu   sync.Mutex
 	// byVerb is whether the record verb started this recording. The test
 	// never writes the stamp itself: the verb writes it into the candidate
 	// after both runs agree (StampCandidate), and the replay refuses a
@@ -222,6 +232,9 @@ type goldenHeader struct {
 	// directory holds it by digest (recordedfiles). It does not stop a hand
 	// edit that also writes the stamp.
 	RecordedBy string `json:"recorded_by,omitempty"`
+	// DeclaredConstants is the sorted full sha256 of each GoldenSpec.CredentialConstants value, under a name no
+	// secret scanner reads as a key: a frozen run refuses a test that declares other constants.
+	DeclaredConstants []string `json:"declared_constants_sha256,omitempty"`
 	// Blanked lists, by pattern, the leaves the recording replaced by a
 	// placeholder, with how many: the paths the golden does not hold by value
 	// (a token projected to its claims, a Volatile header, a generated id or a
@@ -455,12 +468,16 @@ func openGolden(spec GoldenSpec, test string, recording bool) (*Golden, error) {
 	if spec.Path == "" || spec.Recipe == "" || !buildPattern.MatchString(spec.PythonBuild) {
 		return nil, fmt.Errorf("venueoracle: a GoldenSpec needs a path, a recipe and the 40-hex Python build the answers were executed on: %+v", spec)
 	}
+	if err := declaredConstantsErr(spec.CredentialConstants); err != nil {
+		return nil, fmt.Errorf("golden %s: %w", spec.Path, err)
+	}
 	g := &Golden{spec: spec, recording: recording, rowsUsed: map[string]bool{}, rowsFetched: map[string]bool{}}
 	if recording {
 		if err := passedEnvErr(spec, os.Getenv(goldenPassedEnv)); err != nil {
 			return nil, err
 		}
 		g.recorded = goldenFile{Header: goldenHeader{Test: test, PythonBuild: spec.PythonBuild, Recipe: spec.Recipe, PassedEnv: envNames(spec.PassEnv)}, Rows: map[string]goldenRows{}}
+		g.recorded.Header.DeclaredConstants = declaredDigests(spec.CredentialConstants)
 		// The record verb always sets goldenPassedEnv for its runs, with no
 		// names when it passed none: its presence is the verb.
 		if _, byVerb := os.LookupEnv(goldenPassedEnv); byVerb {
@@ -490,6 +507,9 @@ func openGolden(spec GoldenSpec, test string, recording bool) (*Golden, error) {
 	}
 	if want := envNames(spec.PassEnv); !reflect.DeepEqual(envNames(g.loaded.Header.PassedEnv), want) {
 		return nil, fmt.Errorf("golden %s was recorded with the ambient variables %q passed, the test declares %q (GoldenSpec.PassEnv); regenerate: %s", spec.Path, g.loaded.Header.PassedEnv, want, spec.Recipe)
+	}
+	if err := declaredHeaderErr(spec.Path, g.loaded.Header.DeclaredConstants, spec.CredentialConstants, spec.Recipe); err != nil {
+		return nil, err
 	}
 	if len(g.loaded.Header.ProducerDigest) != 64 {
 		return nil, fmt.Errorf("golden %s names no producer digest: it was not recorded by this harness; regenerate: %s", spec.Path, spec.Recipe)
@@ -679,6 +699,7 @@ func (g *Golden) sameKeySameAnswerErr(entry goldenRequest) error {
 // a request on purpose is part of the request, and stays in its key). It is idempotent, so the request of a
 // recording (real token) and of its replay (projected token) key alike.
 func (g *Golden) projectKeyText(text string) string {
+	text = g.DigestDeclared(text)
 	text = ProjectTokens(text)
 	if g.spec.KeyScrub != nil {
 		text = g.spec.KeyScrub(text)
@@ -1315,13 +1336,22 @@ func (g *Golden) writeCandidate(failed bool) (string, error) {
 	if !g.byVerb {
 		return "", fmt.Errorf("recording %s: this run was not started by the record verb, so no candidate was written: a golden is recorded under the verb's fixed environment, twice, and replayed before it is promoted (%s)", g.spec.Path, g.spec.Recipe)
 	}
+	if err := g.declaredStaleErr(); err != nil {
+		return "", err
+	}
 	g.recorded.Header.Blanked = g.blankedHeader()
 	raw, err := json.MarshalIndent(g.recorded, "", "  ")
 	if err != nil {
 		return "", err
 	}
 	raw = append(raw, '\n')
+	if err := declaredLeakErr(g.spec.Path, raw, g.spec.CredentialConstants); err != nil {
+		return "", err
+	}
 	if err := tokenShapeErr(g.spec.Path, raw); err != nil {
+		return "", err
+	}
+	if err := goldenscan.CheckGolden(g.spec.Path, raw); err != nil {
 		return "", err
 	}
 	candidate := g.spec.Path + GoldenCandidateSuffix

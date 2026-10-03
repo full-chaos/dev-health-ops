@@ -1,0 +1,84 @@
+{
+  "header": {
+    "test": "TestImpersonationTTLConfigMatchesThePythonAPI/TTL_beyond_Go_Duration_range",
+    "python_build": "a4847c5e93607451a0c987b314d37e02fc43ce85",
+    "producer_digest": "6e1dc97e68624398015f60caee160cceee6ae601bd434d01b8b7d5975267e137",
+    "recipe": "git worktree add --detach $DIR a4847c5e93607451a0c987b314d37e02fc43ce85 (with its .venv: uv sync --frozen --no-install-project); then from the repository root: go run ./internal/testsupport/venueoracle/goldenrecord -pkg ./internal/apiservice/admin/ -test '^TestImpersonationTTLConfigMatchesThePythonAPI/TTL_beyond_Go_Duration_range$' -python-root $DIR (records on the pinned build, replays the candidate in a fresh process, and only then promotes it and pins its digest)",
+    "python_env": "97f4bf61fe9794dca7946c379cd8fdf2ff7023b2a658978878919a83de063cd7",
+    "python_env_version": 2,
+    "recorded_by": "goldenrecord",
+    "blanked": {
+      "body $.expires_at": 4,
+      "header content-length": 4,
+      "header date": 3,
+      "header x-dev-health-plane": 3,
+      "header x-request-id": 6
+    }
+  },
+  "requests": [
+    {
+      "name": "start",
+      "method": "POST",
+      "path": "/api/v1/admin/impersonate",
+      "body_sha256": "475e9e4aa6b45f0d7852ad59e2ef4ade2947f1c1b06cb482593b4c144bb58351",
+      "request_headers_sha256": "95d6f1d44f812e8d5ed4245a736499c22f22cace3be04d6bbc75db9ef40f566b",
+      "status": 200,
+      "headers": {
+        "content-length": "\u003clength of projected body\u003e",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "\u003cvolatile\u003e"
+      },
+      "body": "{\"status\":\"active\",\"target_user\":{\"id\":\"dcc751d9-e150-5190-b4b0-9b68e5952910\",\"email\":\"venue-ttl-target@example.com\",\"org_id\":\"d36e1cdf-c47c-5803-aad9-6e911a1b6fa5\",\"role\":\"member\"},\"expires_at\":\"\u003cnow\u003e\"}"
+    },
+    {
+      "name": "status during",
+      "method": "GET",
+      "path": "/api/v1/admin/impersonate/status",
+      "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "request_headers_sha256": "d19405c0725ee5bab4dedbf4737f4e33dba67aaaad81e00409e9e1b03ab4d800",
+      "status": 200,
+      "headers": {
+        "content-length": "\u003clength of projected body\u003e",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-impersonated-user-id": "dcc751d9-e150-5190-b4b0-9b68e5952910",
+        "x-impersonating": "true",
+        "x-request-id": "\u003cvolatile\u003e"
+      },
+      "body": "{\"is_impersonating\":true,\"target_user_id\":\"dcc751d9-e150-5190-b4b0-9b68e5952910\",\"target_email\":\"venue-ttl-target@example.com\",\"target_org_id\":\"d36e1cdf-c47c-5803-aad9-6e911a1b6fa5\",\"expires_at\":\"\u003cnow\u003e\"}"
+    },
+    {
+      "name": "stop",
+      "method": "POST",
+      "path": "/api/v1/admin/impersonate/stop",
+      "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "request_headers_sha256": "95d6f1d44f812e8d5ed4245a736499c22f22cace3be04d6bbc75db9ef40f566b",
+      "status": 200,
+      "headers": {
+        "content-length": "20",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-impersonated-user-id": "dcc751d9-e150-5190-b4b0-9b68e5952910",
+        "x-impersonating": "true",
+        "x-request-id": "\u003cvolatile\u003e"
+      },
+      "body": "{\"status\":\"stopped\"}"
+    }
+  ]
+}

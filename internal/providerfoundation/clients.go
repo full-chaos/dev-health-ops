@@ -10,6 +10,7 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"encoding/pem"
+	"github.com/full-chaos/dev-health-ops/internal/httpguard"
 	"io"
 	"net/http"
 	"net/url"
@@ -286,6 +287,9 @@ func NewPagerDutyClientCredentialsAuth(credential Credential, doer HTTPDoer) (*P
 	if doer == nil {
 		return nil, credentialInvalid("http_client_missing")
 	}
+	if err := admitDoer(doer); err != nil {
+		return nil, err
+	}
 	if missing := unconfiguredNames(map[string]secrets.Value{"client_id": clientID, "client_secret": clientSecret, "subdomain": subdomain}); len(missing) > 0 {
 		return nil, &credentialShapeError{missing: missing}
 	}
@@ -334,7 +338,7 @@ func (a *PagerDutyClientCredentialsAuth) accessToken(ctx context.Context) (secre
 		return secrets.Value{}, ErrCredentialInvalid
 	}
 	request.Header.Set("Content-Type", "application/x-www-form-urlencoded")
-	response, err := a.doer.Do(request)
+	response, err := httpguard.NoRedirectsDoer(a.doer).Do(request) // the client secret rides the form body
 	if err != nil {
 		return secrets.Value{}, &ProviderError{Class: ErrorTransient}
 	}
@@ -411,6 +415,9 @@ func NewGitHubAppAuth(credential Credential, baseURL string, doer HTTPDoer) (*Gi
 	if doer == nil {
 		return nil, credentialInvalid("http_client_missing")
 	}
+	if err := admitDoer(doer); err != nil {
+		return nil, err
+	}
 	if missing := unconfiguredNames(map[string]secrets.Value{"app_id": appID, "private_key": privateKey, "installation_id": installationID}); len(missing) > 0 {
 		return nil, &credentialShapeError{missing: missing}
 	}
@@ -465,7 +472,7 @@ func (a *GitHubAppAuth) installationToken(ctx context.Context) (secrets.Value, e
 	}
 	request.Header.Set("Authorization", "Bearer "+jwt)
 	request.Header.Set("Accept", "application/vnd.github+json")
-	response, err := a.doer.Do(request)
+	response, err := httpguard.NoRedirectsDoer(a.doer).Do(request) // the app JWT rides this request
 	if err != nil {
 		return secrets.Value{}, &ProviderError{Class: ErrorTransient}
 	}

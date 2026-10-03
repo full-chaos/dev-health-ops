@@ -19,6 +19,7 @@ package opportunities
 import (
 	"context"
 	"fmt"
+	"math"
 	"sort"
 	"time"
 
@@ -103,6 +104,32 @@ func suggestedExperimentsFor(metric string) []string {
 	return defaultSuggestedExperiments
 }
 
+// isWorsened reports whether the metric moved the wrong way for its polarity.
+func isWorsened(d home.MetricDelta) bool {
+	if home.LowerIsBetter(d.Metric) {
+		return d.DeltaPct > 0
+	}
+	return d.DeltaPct < 0
+}
+
+// titleFor: "Reduce X" for a lower-is-better metric, "Recover X" for a
+// higher-is-better one (the verbs the Improve hero uses).
+func titleFor(d home.MetricDelta) string {
+	if home.LowerIsBetter(d.Metric) {
+		return fmt.Sprintf("Reduce %s", d.Label)
+	}
+	return fmt.Sprintf("Recover %s", d.Label)
+}
+
+// rationaleFor says "climbed" or "fell" with the size of the move.
+func rationaleFor(d home.MetricDelta, rangeDays int) string {
+	verb := "climbed"
+	if d.DeltaPct < 0 {
+		verb = "fell"
+	}
+	return fmt.Sprintf("%s %s %.0f%% in the last %d days.", d.Label, verb, math.Abs(d.DeltaPct), rangeDays)
+}
+
 // primaryScopeID ports _primary_scope_id (services/opportunities.py:112-115).
 func primaryScopeID(f home.Filters) string {
 	if len(f.Scope.IDs) > 0 {
@@ -117,36 +144,37 @@ func primaryScopeID(f home.Filters) string {
 // composes at (it imports and calls build_home_response, never a
 // ClickHouse/Postgres reader directly).
 func FromHomeResponse(h *home.Response, f home.Filters) *Response {
-	// "negative" is build_opportunities_response's own variable name
-	// (services/opportunities.py:71) for deltas with delta_pct > 0 --
-	// kept as a doc note here, not a Go identifier, since the Python name
-	// does not describe what it holds.
-	var positive []home.MetricDelta
+	// An opportunity is a metric that moved the WRONG way, by polarity: a
+	// lower-is-better metric that climbed (delta_pct > 0), or a
+	// higher-is-better metric that fell (delta_pct < 0). An improvement is not
+	// an opportunity. (The Python build_opportunities_response kept every
+	// delta_pct > 0 whatever the metric, so a climbing throughput became a
+	// "Reduce Throughput" card: CHAOS-7776. This is an intentional divergence.)
+	var worsened []home.MetricDelta
 	for _, d := range h.Deltas {
-		if d.DeltaPct > 0 {
-			positive = append(positive, d)
+		if isWorsened(d) {
+			worsened = append(worsened, d)
 		}
 	}
-	// sorted(..., reverse=True) is stable: equal delta_pct values keep
-	// their original _METRICS order (services/home.py) -- sort.SliceStable
-	// preserves the same guarantee.
-	sort.SliceStable(positive, func(i, j int) bool {
-		return positive[i].DeltaPct > positive[j].DeltaPct
+	// Ranked by the size of the move; sort.SliceStable keeps the original
+	// _METRICS order for equal sizes, as Python's stable sort did.
+	sort.SliceStable(worsened, func(i, j int) bool {
+		return math.Abs(worsened[i].DeltaPct) > math.Abs(worsened[j].DeltaPct)
 	})
 
-	n := len(positive)
+	n := len(worsened)
 	if n > 4 {
 		n = 4
 	}
-	ranked := positive[:n]
+	ranked := worsened[:n]
 
 	scopeID := primaryScopeID(f)
 	cards := make([]Card, 0, len(ranked))
 	for idx, delta := range ranked {
 		cards = append(cards, Card{
 			ID:        fmt.Sprintf("opp-%d", idx+1),
-			Title:     fmt.Sprintf("Reduce %s", delta.Label),
-			Rationale: fmt.Sprintf("%s climbed %.0f%% in the last %d days.", delta.Label, delta.DeltaPct, f.Time.RangeDays),
+			Title:     titleFor(delta),
+			Rationale: rationaleFor(delta, f.Time.RangeDays),
 			EvidenceLinks: []string{fmt.Sprintf(
 				"/api/v1/explain?metric=%s&scope_type=%s&scope_id=%s&range_days=%d&compare_days=%d",
 				delta.Metric, f.Scope.Level, scopeID, f.Time.RangeDays, f.Time.CompareDays,

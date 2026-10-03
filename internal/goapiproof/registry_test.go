@@ -747,3 +747,40 @@ func TestRejectUnpairedSurrogateEscapes(t *testing.T) {
 		})
 	}
 }
+
+// CHAOS-8000 dual accept: registrydump lists an operation's legacy text AFTER its current one. LoadDocuments keeps
+// the current text (the one the running process registers); last-wins would hand VerifyDocuments the old text and
+// refuse a healthy deployment as document drift.
+func TestLoadDocumentsKeepsTheCurrentTextWhenALegacyEntryFollowsIt(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "documents.json")
+	body := `[
+  {"operation": "foo", "document": "query Foo { new }", "digest": "d-new"},
+  {"operation": "foo", "document": "query Foo { old }", "digest": "d-old", "legacy": true},
+  {"operation": "bar", "document": "query Bar { bar }", "digest": "d-bar"}
+]`
+	if err := os.WriteFile(path, []byte(body), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	documents, err := LoadDocuments(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if documents["foo"] != "query Foo { new }" || documents["bar"] != "query Bar { bar }" || len(documents) != 2 {
+		t.Fatalf("documents = %v, want the current text of foo and bar only", documents)
+	}
+	// The verifier then agrees with a process that registers the current text.
+	registry := RegistryView{DocumentDigest: map[string]string{"foo": "dig(query Foo { new })"}}
+	if err := VerifyDocuments(documents, registry, func(s string) string { return "dig(" + s + ")" }); err != nil {
+		t.Fatalf("VerifyDocuments refused a healthy deployment: %v", err)
+	}
+}
+
+func TestLoadDocumentsRefusesALegacyKeyThatIsNotTrue(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "documents.json")
+	if err := os.WriteFile(path, []byte(`[{"operation":"foo","document":"query Foo { a }","legacy":false}]`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := LoadDocuments(path); err == nil || !strings.Contains(err.Error(), "legacy") {
+		t.Fatalf("err = %v, want a refusal naming legacy", err)
+	}
+}

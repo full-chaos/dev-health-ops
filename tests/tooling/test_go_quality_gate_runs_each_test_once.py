@@ -235,15 +235,11 @@ EXPECTED_ORACLE_INVOCATIONS: dict[str, tuple[str, str | None]] = {
     "010-providersync-all.run": ("./internal/providersync/...", None),
     "030-edgetokenmint.run": ("./internal/edgetokenmint", "32743eba7079"),
     "050-api-policy.run": ("./internal/api/policy", "5089e8ae2457"),
-    "060-api-pyjson.run": ("./internal/api/pyjson", "c6eb4be541e3"),
-    "080-api-pytime.run": ("./internal/api/pytime", "a8c21ea784d5"),
-    "100-api-pybody.run": ("./internal/api/pybody", "2b2eb061c4d5"),
     "110-api-syncadmin.run": ("./internal/api/syncadmin", "36e071e2a481"),
-    "190-apiservice-admin.run": ("./internal/apiservice/admin", "37f81dd27a85"),
-    "270-jobs-investment.run": ("./internal/jobs/investment", "b982bc034857"),
     "280-pythonparity.run": ("./internal/pythonparity", "24b62b885bc4"),
     "390-queryapi-principal.run": ("./internal/queryapi/principal", "fcb55540375a"),
     "400-pythonparity-all.run": ("./internal/pythonparity/...", "1ad5a1bc1165"),
+    "420-synchandoff-await.run": ("./internal/synchandoff", "b638fbcd4794"),
 }
 
 

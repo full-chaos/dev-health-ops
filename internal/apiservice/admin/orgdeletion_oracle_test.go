@@ -4,12 +4,14 @@ package admin_test
 
 import (
 	"context"
+	"fmt"
 	"testing"
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/full-chaos/dev-health-ops/internal/apiservice"
+	chstorage "github.com/full-chaos/dev-health-ops/internal/storage/clickhouse"
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/venueoracle"
 )
 
@@ -34,19 +36,22 @@ import (
 // past the target org.
 func TestOrgDeletionMatchesThePythonAPI(t *testing.T) {
 	ctx := context.Background()
-	root := repoRoot(t)
+	golden := venueoracle.OpenGolden(t, adminRunValuesGolden("orgdeletion", t.Name(), "14b005709fee0b58eb76f201020e004e69da4c88b4dda0933776b7caf52bb562"))
+	root := golden.PythonRoot(t, repoRoot(t))
+	nextID := goldenIDs("od")
 	const jwtKey = "venue-oracle-test-secret-key-for-org-deletion-flow-32-bytes!!"
 
-	targetOrgID := uuid.New()
-	controlOrgID := uuid.New()
-	superID := uuid.New()
-	memberID := uuid.New()
-	scheduledJobID := uuid.New()
-	controlJobID := uuid.New()
-	invoiceID := uuid.New()
-	controlInvoiceID := uuid.New()
+	targetOrgID := nextID()
+	controlOrgID := nextID()
+	superID := nextID()
+	memberID := nextID()
+	scheduledJobID := nextID()
+	controlJobID := nextID()
+	invoiceID := nextID()
+	controlInvoiceID := nextID()
 
 	venue := venueoracle.Start(t, ctx, venueoracle.Options{
+		Golden: golden,
 		Root:   root,
 		JWTKey: jwtKey,
 		Seed: func(t *testing.T, ctx context.Context, admin *pgxpool.Pool, v *venueoracle.Venue) map[string]map[string]any {
@@ -66,37 +71,37 @@ VALUES ($1, 'venue-orgdel-super@example.com', true, true, true, 0, now(), now())
 			exec(`INSERT INTO users (id, email, is_active, is_verified, is_superuser, token_version, created_at, updated_at)
 VALUES ($1, 'venue-orgdel-member@example.com', true, true, false, 0, now(), now())`, memberID)
 			exec(`INSERT INTO memberships (id, org_id, user_id, role, joined_at, created_at, updated_at)
-VALUES ($1, $2, $3, 'owner', now(), now(), now())`, uuid.New(), targetOrgID, memberID)
+VALUES ($1, $2, $3, 'owner', now(), now(), now())`, nextID(), targetOrgID, memberID)
 
 			// settings: direct, string org_id.
 			exec(`INSERT INTO settings (id, org_id, category, key, value, is_encrypted, created_at, updated_at)
-VALUES ($1, $2, 'general', 'theme', 'dark', false, now(), now())`, uuid.New(), targetOrgID.String())
+VALUES ($1, $2, 'general', 'theme', 'dark', false, now(), now())`, nextID(), targetOrgID.String())
 			exec(`INSERT INTO settings (id, org_id, category, key, value, is_encrypted, created_at, updated_at)
-VALUES ($1, $2, 'general', 'theme', 'light', false, now(), now())`, uuid.New(), controlOrgID.String())
+VALUES ($1, $2, 'general', 'theme', 'light', false, now(), now())`, nextID(), controlOrgID.String())
 
 			// scheduled_jobs (direct, string org_id) + job_runs (indirect,
 			// via scheduled_jobs.org_id, string).
 			exec(`INSERT INTO scheduled_jobs (id, org_id, name, job_type, provider, schedule_cron, timezone, job_config, status, is_running, run_count, failure_count, created_at, updated_at)
 VALUES ($1, $2, 'venue job', 'sync', '', '0 * * * *', 'UTC', '{}', 1, true, 0, 0, now(), now())`, scheduledJobID, targetOrgID.String())
-			exec(`INSERT INTO job_runs (id, job_id, status, started_at, created_at) VALUES ($1, $2, 0, now(), now())`, uuid.New(), scheduledJobID)
+			exec(`INSERT INTO job_runs (id, job_id, status, started_at, created_at) VALUES ($1, $2, 0, now(), now())`, nextID(), scheduledJobID)
 			exec(`INSERT INTO scheduled_jobs (id, org_id, name, job_type, provider, schedule_cron, timezone, job_config, status, is_running, run_count, failure_count, created_at, updated_at)
 VALUES ($1, $2, 'control job', 'sync', '', '0 * * * *', 'UTC', '{}', 1, false, 0, 0, now(), now())`, controlJobID, controlOrgID.String())
-			exec(`INSERT INTO job_runs (id, job_id, status, started_at, created_at) VALUES ($1, $2, 0, now(), now())`, uuid.New(), controlJobID)
+			exec(`INSERT INTO job_runs (id, job_id, status, started_at, created_at) VALUES ($1, $2, 0, now(), now())`, nextID(), controlJobID)
 
 			// invoices (direct, uuid org_id) + invoice_line_items (indirect,
 			// via invoices.org_id, uuid).
 			exec(`INSERT INTO invoices (id, org_id, stripe_invoice_id, stripe_customer_id, status, amount_due, created_at)
 VALUES ($1, $2, $3, 'cus_venue', 'paid', 1000, now())`, invoiceID, targetOrgID, "in_venue_target_"+invoiceID.String()[:8])
-			exec(`INSERT INTO invoice_line_items (id, invoice_id, description, amount, quantity) VALUES ($1, $2, 'venue line', 1000, 1)`, uuid.New(), invoiceID)
+			exec(`INSERT INTO invoice_line_items (id, invoice_id, description, amount, quantity) VALUES ($1, $2, 'venue line', 1000, 1)`, nextID(), invoiceID)
 			exec(`INSERT INTO invoices (id, org_id, stripe_invoice_id, stripe_customer_id, status, amount_due, created_at)
 VALUES ($1, $2, $3, 'cus_venue', 'paid', 500, now())`, controlInvoiceID, controlOrgID, "in_venue_control_"+controlInvoiceID.String()[:8])
-			exec(`INSERT INTO invoice_line_items (id, invoice_id, description, amount, quantity) VALUES ($1, $2, 'control line', 500, 1)`, uuid.New(), controlInvoiceID)
+			exec(`INSERT INTO invoice_line_items (id, invoice_id, description, amount, quantity) VALUES ($1, $2, 'control line', 500, 1)`, nextID(), controlInvoiceID)
 
 			// org_ip_allowlist: direct, uuid org_id, no indirect children.
 			exec(`INSERT INTO org_ip_allowlist (id, org_id, ip_range, is_active, created_at, updated_at)
-VALUES ($1, $2, '10.0.0.0/8', true, now(), now())`, uuid.New(), targetOrgID)
+VALUES ($1, $2, '10.0.0.0/8', true, now(), now())`, nextID(), targetOrgID)
 			exec(`INSERT INTO org_ip_allowlist (id, org_id, ip_range, is_active, created_at, updated_at)
-VALUES ($1, $2, '10.0.0.0/8', true, now(), now())`, uuid.New(), controlOrgID)
+VALUES ($1, $2, '10.0.0.0/8', true, now(), now())`, nextID(), controlOrgID)
 
 			return map[string]map[string]any{
 				"super":  {"user_id": superID.String(), "email": "venue-orgdel-super@example.com", "is_superuser": true},
@@ -104,6 +109,38 @@ VALUES ($1, $2, '10.0.0.0/8', true, now(), now())`, uuid.New(), controlOrgID)
 			}
 		},
 	})
+
+	// One ClickHouse row for the target org and one for the control org, in
+	// each plane's own database: a dry run must leave them (org_deletion.py
+	// counts and does not delete), the real delete purges only the target's.
+	for _, database := range []string{venue.PythonClickHouseDB, venue.GoClickHouseDB} {
+		conn, err := chstorage.Open(ctx, chstorage.DefaultConfig(venue.AdminClickHouseURI(t, database)))
+		if err != nil {
+			t.Fatalf("open clickhouse %s: %v", database, err)
+		}
+		for index, org := range []uuid.UUID{targetOrgID, controlOrgID} {
+			if err := conn.Exec(ctx,
+				`INSERT INTO backfill_log (job_id, org_id, chunk_index, chunk_since, chunk_before, provider, items_synced, duration_ms, status) VALUES (?, ?, 0, today(), today(), 'github', 1, 1, 'complete')`,
+				fmt.Sprintf("00000000-0000-4000-8000-00000000000%d", index+1), org.String()); err != nil {
+				t.Fatalf("seed backfill_log in %s: %v", database, err)
+			}
+		}
+		conn.Close()
+	}
+	clickHouseCount := func(database string, org uuid.UUID) string {
+		return venueoracle.CHRows(t, ctx, venue.AdminClickHouseURI(t, database),
+			"SELECT count() FROM backfill_log WHERE org_id = '"+org.String()+"'")
+	}
+	compareClickHouse := func(label string, org uuid.UUID, want string) {
+		t.Helper()
+		goCount := clickHouseCount(venue.GoClickHouseDB, org)
+		source := golden.CompareRows(t, "clickhouse backfill_log rows: "+label, func() string {
+			return clickHouseCount(venue.PythonClickHouseDB, org)
+		}, goCount)
+		if source != want {
+			t.Errorf("clickhouse backfill_log rows (%s) = %s, want %s", label, source, want)
+		}
+	}
 
 	bearer := func(name string) string { return "Bearer " + venue.Tokens[name] }
 	authHeaders := func(name string) map[string]string { return map[string]string{"Authorization": bearer(name)} }
@@ -122,6 +159,7 @@ VALUES ($1, $2, '10.0.0.0/8', true, now(), now())`, uuid.New(), controlOrgID)
 		deps.ClickHouseDSN = venue.AdminClickHouseURI(t, venue.GoClickHouseDB)
 	})
 	normalize := venueoracle.DiffOptions{
+		Golden: golden,
 		Normalize: func(request venueoracle.Request, body string) string {
 			return dropKnownStaleClickHouseWarnings(t, redactField(t, body, "timestamp"))
 		},
@@ -138,11 +176,11 @@ VALUES ($1, $2, '10.0.0.0/8', true, now(), now())`, uuid.New(), controlOrgID)
 		{Name: "delete org malformed id", Method: "DELETE",
 			Path: "/api/v1/admin/orgs/not-a-uuid?dry_run=true", Headers: authHeaders("super")},
 		{Name: "delete org dry run nonexistent org", Method: "DELETE",
-			Path: "/api/v1/admin/orgs/" + uuid.New().String() + "?dry_run=true", Headers: authHeaders("super")},
+			Path: "/api/v1/admin/orgs/" + nextID().String() + "?dry_run=true", Headers: authHeaders("super")},
 		{Name: "delete org dry run", Method: "DELETE",
 			Path: "/api/v1/admin/orgs/" + targetOrgID.String() + "?dry_run=true", Headers: authHeaders("super")},
 	}
-	dryRunPython := venue.ServePython(t, dryRunRequests)
+	dryRunPython := golden.Python(t, venue, dryRunRequests)
 	t.Log(venueoracle.Diff(t, goBase, dryRunRequests, dryRunPython, normalize))
 
 	// Finding-shaped proof: dry_run=true must be a true no-op. Row counts
@@ -154,15 +192,18 @@ VALUES ($1, $2, '10.0.0.0/8', true, now(), now())`, uuid.New(), controlOrgID)
 		"SELECT count(*) FROM invoices WHERE org_id = '" + targetOrgID.String() + "'",
 		"SELECT count(*) FROM org_ip_allowlist WHERE org_id = '" + targetOrgID.String() + "'",
 	} {
-		source := venueoracle.TableRows(t, ctx, venue.AdminURI(t, venue.SourceDB), query)
 		got := venueoracle.TableRows(t, ctx, venue.AdminURI(t, venue.GoDB), query)
-		if source != got {
-			t.Errorf("post-dry-run row count differs (query %q):\n python: %s\n go:     %s", query, source, got)
-		}
+		source := golden.CompareRows(t, "post-dry-run row count: "+query, func() string {
+			return venueoracle.TableRows(t, ctx, venue.AdminURI(t, venue.SourceDB), query)
+		}, got)
 		if source != "1" {
 			t.Errorf("post-dry-run row count for target org (query %q) = %s, want 1 (dry_run must not delete)", query, source)
 		}
 	}
+
+	// A dry run deletes no ClickHouse row either.
+	compareClickHouse("target after the dry run", targetOrgID, "1")
+	compareClickHouse("control after the dry run", controlOrgID, "1")
 
 	// Second batch: the real delete, sent only now that dry_run's no-op
 	// proof above is already checked.
@@ -170,7 +211,7 @@ VALUES ($1, $2, '10.0.0.0/8', true, now(), now())`, uuid.New(), controlOrgID)
 		{Name: "delete org real", Method: "DELETE",
 			Path: "/api/v1/admin/orgs/" + targetOrgID.String(), Headers: authHeaders("super")},
 	}
-	realPython := venue.ServePython(t, realRequests)
+	realPython := golden.Python(t, venue, realRequests)
 	t.Log(venueoracle.Diff(t, goBase, realRequests, realPython, normalize))
 
 	// Finding-shaped proof: the REAL delete above purges every seeded
@@ -198,13 +239,15 @@ VALUES ($1, $2, '10.0.0.0/8', true, now(), now())`, uuid.New(), controlOrgID)
 		{"organizations control", "SELECT count(*) FROM organizations WHERE id = '" + controlOrgID.String() + "'", "1"},
 	}
 	for _, c := range checks {
-		source := venueoracle.TableRows(t, ctx, venue.AdminURI(t, venue.SourceDB), c.query)
 		got := venueoracle.TableRows(t, ctx, venue.AdminURI(t, venue.GoDB), c.query)
-		if source != got {
-			t.Errorf("post-delete row count differs (%s):\n python: %s\n go:     %s", c.label, source, got)
-		}
+		golden.CompareRows(t, "post-delete row count: "+c.label, func() string {
+			return venueoracle.TableRows(t, ctx, venue.AdminURI(t, venue.SourceDB), c.query)
+		}, got)
 		if got != c.wantTarget {
 			t.Errorf("post-delete row count (%s) = %s, want %s", c.label, got, c.wantTarget)
 		}
 	}
+	compareClickHouse("target after the real delete", targetOrgID, "0")
+	compareClickHouse("control after the real delete", controlOrgID, "1")
+	golden.Finish(t)
 }

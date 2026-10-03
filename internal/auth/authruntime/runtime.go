@@ -99,7 +99,7 @@ func Execute(parent context.Context, args []string, lookup secrets.LookupEnv, st
 		// A configuration error can quote an operator-supplied value, so it
 		// goes through the same redactor the logger uses before reaching a
 		// stream that may be captured into a transcript.
-		fmt.Fprintf(streams.Stderr, "configuration error: %s\n", logging.RedactText(err.Error()))
+		writeConfigurationError(streams.Stderr, err)
 		return 1
 	}
 
@@ -390,7 +390,7 @@ func parseArguments(args []string, streams IO) (
 		if errors.Is(err, flag.ErrHelp) {
 			return nil, false, 0, true
 		}
-		fmt.Fprintf(streams.Stderr, "argument error: %s\n", logging.RedactText(err.Error()))
+		writeArgumentError(streams.Stderr, err)
 		fmt.Fprintf(streams.Stderr, "run %s --help for the full option list\n", authconfig.Service)
 		return nil, false, 2, true
 	}
@@ -406,4 +406,14 @@ func parseArguments(args []string, streams IO) (
 		}
 	}
 	return overrides, *showVersionFlag, 0, false
+}
+
+// writeConfigurationError and writeArgumentError print an error that can quote an operator-supplied value back: through the log
+// redactor first, before the stream a deployment captures into logs (CHAOS-7937).
+func writeConfigurationError(w io.Writer, err error) {
+	fmt.Fprintf(w, "configuration error: %s\n", logging.RedactText(err.Error()))
+}
+
+func writeArgumentError(w io.Writer, err error) {
+	fmt.Fprintf(w, "argument error: %s\n", logging.RedactText(err.Error()))
 }

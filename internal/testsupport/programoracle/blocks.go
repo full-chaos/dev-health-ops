@@ -264,7 +264,18 @@ func findsDefectErr(name, output string, index int, line func(dst []byte, index 
 		return fmt.Errorf("%s: answer %d is not one of the %d answers", name, index, blocks.Lines)
 	}
 	block := index / BlockLines
-	found, _, err := blocks.digest(nil, block, func(dst []byte, at int) []byte {
+	// The control: with no defect planted, every block of the Go answers must
+	// digest to its frozen digest. If one does not, the Go lines are not the
+	// frozen answers, and a planted defect would "differ" for that reason
+	// alone: the gate would pass on a plant that did nothing.
+	if control, err := blocks.Differing(blocks.Lines, line); err != nil {
+		return fmt.Errorf("%s: %w", name, err)
+	} else if len(control) > 0 {
+		return fmt.Errorf("%s: block %d of the Go answers does not digest to the frozen digest before any defect is planted (%d blocks differ): the gate cannot tell a planted defect from the answers that already differ", name, control[0], len(control))
+	}
+	// The attribution: the planted answer is reported, and only it: the one
+	// block that differs is the block of index.
+	planted, err := blocks.Differing(blocks.Lines, func(dst []byte, at int) []byte {
 		if at == index {
 			return defect(dst)
 		}
@@ -273,8 +284,11 @@ func findsDefectErr(name, output string, index int, line func(dst []byte, index 
 	if err != nil {
 		return fmt.Errorf("%s: %w", name, err)
 	}
-	if found == blocks.Blocks[block].SHA256 {
+	switch {
+	case len(planted) == 0:
 		return fmt.Errorf("%s: the frozen digest of block %d accepts the defect as answer %d: the block digests no longer find it", name, block, index)
+	case len(planted) != 1 || planted[0] != block:
+		return fmt.Errorf("%s: the defect planted as answer %d (block %d) is reported as blocks %v: the report does not name the planted answer's block alone", name, index, block, planted)
 	}
 	return nil
 }

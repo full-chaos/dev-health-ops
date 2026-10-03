@@ -131,6 +131,7 @@ import (
 
 	chdriver "github.com/ClickHouse/clickhouse-go/v2"
 	dhclickhouse "github.com/full-chaos/dev-health-go/clickhouse"
+	"github.com/full-chaos/dev-health-ops/internal/testsupport/moduleroot"
 )
 
 // requireLiveEnv is the single opt-in that turns a missing CLICKHOUSE_URI
@@ -1192,9 +1193,9 @@ var nanClassClickHouseURINonTerminalMethods = map[string]bool{
 // EXECUTED that exact evasion, and it is an ACCEPTED, RULED RESIDUAL (see
 // nanClassClickHouseURINonTerminalMethods's doc comment), not a silent gap.
 func TestNanClassClickHouseURI_FailureExitInventoryIsComplete(t *testing.T) {
-	_, thisFile, _, ok := runtime.Caller(0)
+	_, thisFile, _, ok := moduleroot.Caller(0)
 	if !ok {
-		t.Fatalf("runtime.Caller(0) could not resolve this test file's own path")
+		t.Fatalf("moduleroot.Caller(0) could not resolve this test file's own path")
 	}
 
 	fset := token.NewFileSet()

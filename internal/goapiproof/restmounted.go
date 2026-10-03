@@ -6,8 +6,7 @@ import "sort"
 // IN rather than parsed from source at runtime.
 //
 // WHY NOT READ cmd/query-api's SOURCE AT RUNTIME (as this binary's own
-// coverage check originally did, via migrationmatrix.LoadQueryAPIMuxRoutes
-// pointed at a live source directory): the operator tools image
+// coverage check originally did, via a parse of a live source directory): the operator tools image
 // (docker/go-api-tools.Dockerfile) ships ONLY the compiled binaries, never
 // the Go source tree -- it exists to be `kubectl exec`ed into for one-off
 // verb runs, not to carry a checkout. Requiring cmd/query-api's full
@@ -18,11 +17,13 @@ import "sort"
 // tree it would need). A stale checked-in list that a test catches at
 // build/CI time is a smaller, more honest failure mode than an operator
 // tool that cannot start without a source tree it never otherwise needs.
+// (Since CHAOS-8307 the live side of that comparison is the production route
+// table, internal/queryapi/server.RESTRoutes, executed -- no source is read.)
 //
 // PINNED, NOT HAND-TRUSTED: TestMountedRESTPathsMatchesTheRealQueryAPIMux
-// (cmd/go-api-rest-prove/main_test.go) runs
-// migrationmatrix.LoadQueryAPIMuxRoutes against the REAL cmd/query-api
-// source tree and fails, printing the exact diff, the moment a route is
+// (internal/goapicli/restprove/main_test.go) walks
+// migrationmatrix.LoadQueryAPIMuxRoutes (the REAL query-api route table)
+// and fails, printing the exact diff, the moment a route is
 // added, removed or renamed here without this list being updated to
 // match. Regenerate by hand: run that test, read the diff, copy the new
 // list in below. Never regenerated at runtime, never read from disk --

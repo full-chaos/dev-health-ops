@@ -7,12 +7,12 @@ import (
 	"math/rand"
 	"os"
 	"path/filepath"
-	"runtime"
 	"strings"
 	"testing"
 
 	"github.com/google/uuid"
 
+	"github.com/full-chaos/dev-health-ops/internal/testsupport/moduleroot"
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/programoracle"
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/venueoracle"
 )
@@ -135,7 +135,7 @@ func TestSignedTokenMatchesFrozenPython(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	_, file, _, ok := runtime.Caller(0)
+	_, file, _, ok := moduleroot.Caller(0)
 	if !ok {
 		t.Fatal("cannot locate the test source")
 	}

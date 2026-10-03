@@ -3,6 +3,7 @@ package providerfoundation
 import (
 	"context"
 	"fmt"
+	"github.com/full-chaos/dev-health-ops/internal/testsupport/fakehttp"
 	"io"
 	"net/http"
 	"strings"
@@ -40,7 +41,7 @@ func stopReasonClient(t *testing.T, provider string, doer HTTPDoer) *HTTPClient 
 	if provider == "gitlab" {
 		base = "https://gitlab.example"
 	}
-	client, err := NewHTTPClient(provider, base, doer,
+	client, err := NewHTTPClient(provider, base, fakehttp.Client(doer),
 		func(r *http.Request) error { return nil },
 		RetryPolicy{MaxAttempts: 1, InitialWait: 1, MaxWait: 1},
 		LeaseGuardFunc(func(context.Context) error { return nil }))
@@ -60,7 +61,7 @@ func TestGitHubLinkPagesReportsWhichBoundStoppedTheWalk(t *testing.T) {
 	// Item cap: 3 items/page against MaxItems=7 stops mid-page, well inside a
 	// generous page budget.
 	itemCapped, err := CollectGitHubLinkPages(context.Background(),
-		stopReasonClient(t, "github", &stopReasonDoer{perPage: 3}),
+		stopReasonClient(t, "github", fakehttp.Client(&stopReasonDoer{perPage: 3})),
 		GitHubPageOptions{Path: "/x", DataKey: "jobs", MaxPages: 100, MaxItems: 7})
 	if err != nil {
 		t.Fatal(err)
@@ -78,7 +79,7 @@ func TestGitHubLinkPagesReportsWhichBoundStoppedTheWalk(t *testing.T) {
 	// Page budget: the SAME 3 items/page, but only 2 pages of allowance and a
 	// far higher item cap, so the walk runs out of pages first.
 	pageCapped, err := CollectGitHubLinkPages(context.Background(),
-		stopReasonClient(t, "github", &stopReasonDoer{perPage: 3}),
+		stopReasonClient(t, "github", fakehttp.Client(&stopReasonDoer{perPage: 3})),
 		GitHubPageOptions{Path: "/x", DataKey: "jobs", MaxPages: 2, MaxItems: 500})
 	if err != nil {
 		t.Fatal(err)
@@ -103,7 +104,7 @@ func TestGitHubLinkPagesReportsWhichBoundStoppedTheWalk(t *testing.T) {
 func TestGitLabPageParamPagesOnlyEverReportsPageBudget(t *testing.T) {
 	t.Parallel()
 	got, err := CollectGitLabPageParamPages(context.Background(),
-		stopReasonClient(t, "gitlab", &stopReasonDoer{perPage: 3, gitlab: true}),
+		stopReasonClient(t, "gitlab", fakehttp.Client(&stopReasonDoer{perPage: 3, gitlab: true})),
 		GitLabPageOptions{Path: "/x/jobs", PerPage: 100, MaxPages: 2})
 	if err != nil {
 		t.Fatal(err)
@@ -149,7 +150,7 @@ func TestGitHubLinkPagesNeverReportsBothStopReasons(t *testing.T) {
 		t.Run(probe.name, func(t *testing.T) {
 			t.Parallel()
 			result, err := CollectGitHubLinkPages(context.Background(),
-				stopReasonClient(t, "github", &stopReasonDoer{perPage: perPage}),
+				stopReasonClient(t, "github", fakehttp.Client(&stopReasonDoer{perPage: perPage})),
 				GitHubPageOptions{Path: "/x", DataKey: "jobs",
 					MaxPages: probe.maxPages, MaxItems: probe.maxItems})
 			if err != nil {
@@ -192,7 +193,7 @@ func TestCollectedPrefixIsIndependentOfThePageBudget(t *testing.T) {
 	collect := func(maxPages int) (PageCollection, int) {
 		doer := &stopReasonDoer{perPage: perPage}
 		result, err := CollectGitHubLinkPages(context.Background(),
-			stopReasonClient(t, "github", doer),
+			stopReasonClient(t, "github", fakehttp.Client(doer)),
 			// No MaxItems: this is the len-based shape the routes use.
 			GitHubPageOptions{Path: "/x", DataKey: "jobs", MaxPages: maxPages})
 		if err != nil {

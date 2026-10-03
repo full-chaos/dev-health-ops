@@ -3,6 +3,7 @@ package providersync
 import (
 	"context"
 	"errors"
+	"github.com/full-chaos/dev-health-ops/internal/testsupport/fakehttp"
 	"io"
 	"log/slog"
 	"net/http"
@@ -60,7 +61,7 @@ func (doer *githubTestsAllUnreadableDoer) Do(request *http.Request) (*http.Respo
 // a unit that ingested nothing.
 func TestGitHubTestsAllArtifactsUnreadableFailsTheUnit(t *testing.T) {
 	doer := &githubTestsAllUnreadableDoer{t: t, runs: 2}
-	client := githubTestsClient(t, doer)
+	client := githubTestsClient(t, fakehttp.Client(doer))
 
 	walk, err := walkGitHubTestsChunksResult(t, client, 8)
 	if !errors.Is(err, ErrGitHubTestsAllArtifactsUnreadable) {
@@ -95,7 +96,7 @@ func TestGitHubTestsAllArtifactsUnreadableFailsTheUnit(t *testing.T) {
 func TestGitHubTestsAllArtifactsUnreadableLogsAStructuredLine(t *testing.T) {
 	records := captureMembershipLogs(t)
 	doer := &githubTestsAllUnreadableDoer{t: t, runs: 2}
-	client := githubTestsClient(t, doer)
+	client := githubTestsClient(t, fakehttp.Client(doer))
 
 	if _, err := walkGitHubTestsChunksResult(t, client, 8); !errors.Is(err, ErrGitHubTestsAllArtifactsUnreadable) {
 		t.Fatalf("err=%v, want ErrGitHubTestsAllArtifactsUnreadable", err)
@@ -155,7 +156,7 @@ func TestGitHubTestsAllArtifactsUnreadableLogsAStructuredLine(t *testing.T) {
 func TestGitHubTestsAllArtifactsUnreadableLogsCauseOverflow(t *testing.T) {
 	records := captureMembershipLogs(t)
 	doer := &githubTestsAllUnreadableDoer{t: t, runs: 10}
-	client := githubTestsClient(t, doer)
+	client := githubTestsClient(t, fakehttp.Client(doer))
 
 	if _, err := walkGitHubTestsChunksResult(t, client, 12); !errors.Is(err, ErrGitHubTestsAllArtifactsUnreadable) {
 		t.Fatalf("err=%v, want ErrGitHubTestsAllArtifactsUnreadable", err)
@@ -190,7 +191,7 @@ func TestGitHubTestsAllArtifactsUnreadableLogsCauseOverflow(t *testing.T) {
 // regression the reverted CHAOS-4177 attempt shipped.
 func TestGitHubTestsSingleUnreadableArtifactStaysUnderTheFloor(t *testing.T) {
 	doer := &githubTestsAllUnreadableDoer{t: t, runs: 1}
-	client := githubTestsClient(t, doer)
+	client := githubTestsClient(t, fakehttp.Client(doer))
 
 	walk, err := walkGitHubTestsChunksResult(t, client, 8)
 	if err != nil {
@@ -218,7 +219,7 @@ func intPtrString(value *int) string {
 // the gate -- partial degradation stays partial.
 func TestGitHubTestsPartialUnreadabilityDoesNotFireTotality(t *testing.T) {
 	doer := &githubTestsCorruptArtifactDoer{t: t, artifacts: 3, corrupt: map[int]bool{1: true, 2: true}}
-	client := githubTestsClient(t, doer)
+	client := githubTestsClient(t, fakehttp.Client(doer))
 
 	walk, err := walkGitHubTestsChunksResult(t, client, 8)
 	if err != nil {
@@ -302,7 +303,7 @@ func TestGitHubTestsLegacyCursorWithoutCountersNeverFiresTheGate(t *testing.T) {
 	}
 
 	doer := &githubTestsAllUnreadableDoer{t: t, runs: 3}
-	client := githubTestsClient(t, doer)
+	client := githubTestsClient(t, fakehttp.Client(doer))
 
 	var finalCursor githubTestsChunkCursor
 	var sawFinal bool
@@ -350,7 +351,7 @@ func TestGitHubTestsLegacyCursorWithoutCountersNeverFiresTheGate(t *testing.T) {
 // only test) cannot detect a reset.
 func TestGitHubTestsAllArtifactsUnreadableAccumulatesAcrossContinuation(t *testing.T) {
 	doer := &githubTestsAllUnreadableDoer{t: t, runs: 3}
-	client := githubTestsClient(t, doer)
+	client := githubTestsClient(t, fakehttp.Client(doer))
 
 	walk, err := walkGitHubTestsChunksResult(t, client, 1)
 	if walk.passes < 2 {
@@ -370,7 +371,7 @@ func TestGitHubTestsAllArtifactsUnreadableAccumulatesAcrossContinuation(t *testi
 // metadata (CHAOS-3820's resume path).
 func TestGitHubTestsDoneResumeDoesNotReevaluateOrDoubleCount(t *testing.T) {
 	doer := &githubTestsCorruptArtifactDoer{t: t, artifacts: 2, corrupt: map[int]bool{1: true}}
-	client := githubTestsClient(t, doer)
+	client := githubTestsClient(t, fakehttp.Client(doer))
 
 	claim := nativeTestClaim("github", "cicd")
 	now := time.Date(2026, 8, 14, 12, 0, 0, 0, time.UTC)
@@ -464,7 +465,7 @@ func TestGitHubTestsAllArtifactsUnreadableReanchorReplayNeverFalselyCrossesTheFl
 	discover := &githubTestsReanchorAllUnreadableDoer{t: t, items: 5}
 	if err := (GitHubTestsRouteHandler{}).CollectChunks(
 		context.Background(), nativeTestClaim("github", "cicd"), providerfoundation.Credential{},
-		githubTestsClient(t, discover), time.Date(2026, 8, 14, 12, 0, 0, 0, time.UTC), "",
+		githubTestsClient(t, fakehttp.Client(discover)), time.Date(2026, 8, 14, 12, 0, 0, 0, time.UTC), "",
 		func(ChunkRouteEmission) error { return nil },
 	); err != nil {
 		t.Fatalf("discovery pass: %v", err)
@@ -482,7 +483,7 @@ func TestGitHubTestsAllArtifactsUnreadableReanchorReplayNeverFalselyCrossesTheFl
 		`"archives_seen":1,"archives_unreadable":1}`
 
 	doer := &githubTestsReanchorAllUnreadableDoer{t: t, items: 2, corrupt: true}
-	client := githubTestsClient(t, doer)
+	client := githubTestsClient(t, fakehttp.Client(doer))
 
 	var finalCursor githubTestsChunkCursor
 	sawFinal := false
@@ -525,7 +526,7 @@ func TestGitHubTestsAllArtifactsUnreadableReanchorReplayNeverFalselyCrossesTheFl
 // poisons ONLY on a genuine re-anchor, not on every resume.
 func TestGitHubTestsAllArtifactsUnreadableOrdinaryResumeKeepsCountersKnown(t *testing.T) {
 	doer := &githubTestsAllUnreadableDoer{t: t, runs: 2}
-	client := githubTestsClient(t, doer)
+	client := githubTestsClient(t, fakehttp.Client(doer))
 
 	// maxChunks=1 forces a resume between the two runs' artifacts, but the
 	// page never shrinks (githubTestsAllUnreadableDoer always serves the
@@ -586,7 +587,7 @@ func (doer *githubTestsEmptyArtifactDoer) Do(request *http.Request) (*http.Respo
 // fixtures never exercised.
 func TestGitHubTestsEmptyArtifactBodiesCountAsUnreadable(t *testing.T) {
 	doer := &githubTestsEmptyArtifactDoer{t: t, runs: 2}
-	client := githubTestsClient(t, doer)
+	client := githubTestsClient(t, fakehttp.Client(doer))
 
 	walk, err := walkGitHubTestsChunksResult(t, client, 8)
 	if !errors.Is(err, ErrGitHubTestsAllArtifactsUnreadable) {
@@ -655,7 +656,7 @@ func TestGitHubTestsRoutineNotFoundArtifactsDoNotFireTotality(t *testing.T) {
 	for _, status := range []int{http.StatusNotFound, http.StatusGone} {
 		t.Run(strconv.Itoa(status), func(t *testing.T) {
 			doer := &githubTestsNotFoundArtifactDoer{t: t, runs: 2, status: status}
-			client := githubTestsClient(t, doer)
+			client := githubTestsClient(t, fakehttp.Client(doer))
 
 			walk, err := walkGitHubTestsChunksResult(t, client, 8)
 			if err != nil {
@@ -695,7 +696,7 @@ func TestGitHubTestsRoutineNotFoundArtifactsDoNotFireTotality(t *testing.T) {
 func TestGitHubTestsNotFoundOnlyUnitStillLogsTheSkipSummary(t *testing.T) {
 	records := captureMembershipLogs(t)
 	doer := &githubTestsNotFoundArtifactDoer{t: t, runs: 2, status: http.StatusNotFound}
-	client := githubTestsClient(t, doer)
+	client := githubTestsClient(t, fakehttp.Client(doer))
 
 	walk, err := walkGitHubTestsChunksResult(t, client, 8)
 	if err != nil {
@@ -769,7 +770,7 @@ func (doer *githubTestsMixedNotFoundDoer) Do(request *http.Request) (*http.Respo
 // nor inflate it (crossing the floor on its own).
 func TestGitHubTestsMixedNotFoundAndUnreadableCountsOnlyTheObserved(t *testing.T) {
 	doer := &githubTestsMixedNotFoundDoer{t: t, notFoundRun: 1}
-	client := githubTestsClient(t, doer)
+	client := githubTestsClient(t, fakehttp.Client(doer))
 
 	walk, err := walkGitHubTestsChunksResult(t, client, 8)
 	if !errors.Is(err, ErrGitHubTestsAllArtifactsUnreadable) {
@@ -808,7 +809,7 @@ func TestGitHubTestsAllOversizedArtifactsDoNotFireTotality(t *testing.T) {
 	oversized := map[int]bool{1: true, 2: true, 3: true, 4: true, 5: true}
 	doer := &githubTestsDownloadFailureDoer{t: t, artifacts: 5, oversized: oversized}
 
-	walk, err := walkGitHubTestsChunksResult(t, githubTestsClient(t, doer), 8)
+	walk, err := walkGitHubTestsChunksResult(t, githubTestsClient(t, fakehttp.Client(doer)), 8)
 	if err != nil {
 		t.Fatalf(
 			"5 oversized artifacts and 0 readable sank the unit: err=%v; want it skipped "+

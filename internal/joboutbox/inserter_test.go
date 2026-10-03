@@ -264,6 +264,96 @@ func TestProviderUnitUniquenessExcludesTerminalFailureStatesOnly(t *testing.T) {
 	}
 }
 
+// TestPrepareRowCarriesTheEnvelopeDomainLinkIntoTheRiverArgs pins the copy the
+// strand surveys rest on (CHAOS-8421). They bind a River job to its domain row
+// through `job.args @> {"domain": {"id": ...}}`, which is only equivalent to
+// the outbox's own binding while the relay writes the outbox envelope's domain
+// link into the job's args unchanged. If it stopped, every strand would be
+// refused, silently.
+func TestPrepareRowCarriesTheEnvelopeDomainLinkIntoTheRiverArgs(t *testing.T) {
+	row := testRow(t)
+	registry := staticRegistry{descriptors: map[string]jobruntime.Descriptor{row.JobKind: testDescriptor()}}
+	_, args, err := prepareRow(registry, row)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Asserted on the ENCODED args, which is what River stores and what the
+	// survey's containment test reads -- not on the Go struct.
+	encoded, err := json.Marshal(args)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var stored struct {
+		Domain struct {
+			Type string `json:"type"`
+			ID   string `json:"id"`
+		} `json:"domain"`
+	}
+	if err := json.Unmarshal(encoded, &stored); err != nil {
+		t.Fatal(err)
+	}
+	envelope, err := jobcontract.Decode(row.JobKind, row.Args)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if envelope.Domain.ID == "" {
+		t.Fatal("the fixture envelope carries no domain id; the comparison below would pass on two empty strings")
+	}
+	if stored.Domain.ID != envelope.Domain.ID || stored.Domain.Type != envelope.Domain.Type {
+		t.Fatalf("River args domain = %+v, want the outbox envelope's %+v", stored.Domain, envelope.Domain)
+	}
+}
+
+// TestVerifyInsertResultRejectsAJobThatNamesAnotherDomainRow is the other half:
+// the job the outbox row is about to point at -- the one just inserted, or an
+// existing one River returned as a unique duplicate -- must carry this row's
+// envelope. A job naming another domain row is refused before river_job_id is
+// ever written, so a delivered row never points at a job the strand surveys'
+// River binding would not match.
+func TestVerifyInsertResultRejectsAJobThatNamesAnotherDomainRow(t *testing.T) {
+	row := testRow(t)
+	metadata, err := json.Marshal(relayMetadata{
+		WorkerOutboxID:  row.ID,
+		PayloadHash:     row.PayloadHash,
+		ContractVersion: row.ContractVersion,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	job := func(args []byte) *rivertype.JobInsertResult {
+		return &rivertype.JobInsertResult{
+			UniqueSkippedAsDuplicate: true,
+			Job: &rivertype.JobRow{
+				ID:          42,
+				Kind:        row.JobKind,
+				Queue:       row.Queue,
+				Priority:    row.Priority,
+				MaxAttempts: row.MaxAttempts,
+				EncodedArgs: args,
+				Metadata:    metadata,
+			},
+		}
+	}
+	// The control: the row's own envelope is accepted, so the rejection below
+	// is caused by the domain link and by nothing else in this fixture.
+	if err := verifyInsertResult(job(row.Args), row, testDescriptor()); err != nil {
+		t.Fatalf("verifyInsertResult() rejected the row's own envelope: %v", err)
+	}
+	envelope, err := jobcontract.Decode(row.JobKind, row.Args)
+	if err != nil {
+		t.Fatal(err)
+	}
+	envelope.Domain.ID = "00000000-0000-4000-8000-000000000002"
+	other, err := jobcontract.MarshalCanonical(envelope)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := verifyInsertResult(job(other), row, testDescriptor()); !errors.Is(err, ErrContractRejected) {
+		t.Fatalf("verifyInsertResult() error = %v, want ErrContractRejected for a job that names "+
+			"another domain row", err)
+	}
+}
+
 func TestVerifyInsertResultRejectsDuplicateIdentityMismatch(t *testing.T) {
 	row := testRow(t)
 	metadata, err := json.Marshal(relayMetadata{

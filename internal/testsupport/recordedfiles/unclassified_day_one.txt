@@ -848,7 +848,6 @@ internal/queryapi/server/testdata/wire_capture/featureflagevents_captured.graphq
 internal/queryapi/server/testdata/wire_capture/featureflags_captured.graphql
 internal/queryapi/server/testdata/wire_capture/featureflagtimeseries_captured.graphql
 internal/queryapi/server/testdata/wire_capture/home_captured.graphql
-internal/queryapi/server/testdata/wire_capture/improveopportunities_captured.graphql
 internal/queryapi/server/testdata/wire_capture/pr_captured.graphql
 internal/queryapi/server/testdata/wire_capture/product_telemetry_dashboard_captured.graphql
 internal/queryapi/server/testdata/wire_capture/product_telemetry_platform_dashboard_captured.graphql

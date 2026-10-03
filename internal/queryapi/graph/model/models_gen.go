@@ -413,17 +413,24 @@ type CapacityDistribution struct {
 	// Fixed-date mode: items completed by the target date, one bin per distinct total.
 	Items []CapacityDistributionBin `json:"items,omitempty"`
 	// The number of simulation runs behind each mode (CHAOS-8477): the counts of one
-	// mode's bins sum to it, so the share of the runs that ended at or below a bin is
-	// the running sum of the counts divided by this value. The modes of one forecast
-	// come from one simulation and hold the same number of runs.
+	// mode's bins sum to it. The modes of one forecast come from one simulation and
+	// hold the same number of runs. The running share of the runs is served on each
+	// bin (cumulativeShare).
 	Runs int `json:"runs"`
 }
 
 type CapacityDistributionBin struct {
-	// The outcome: a day count (days) or an item count (items).
+	// The outcome: a day count (days) or an item count (items). A day count is the
+	// number of days after the day the forecast was computed: the same axis as
+	// p50Days, p85Days and p95Days (p50Date is that day plus p50Days).
 	Value int `json:"value"`
 	// How many simulation runs ended on this value.
 	Count int `json:"count"`
+	// The share of the mode's runs that ended on this value or a lower one
+	// (CHAOS-8477): 0 to 1, never lower than on the bin before, and 1 on the last
+	// bin. In the days mode it is the chance that the target items are done on or
+	// before that day.
+	CumulativeShare float64 `json:"cumulativeShare"`
 }
 
 type CapacityForecast struct {

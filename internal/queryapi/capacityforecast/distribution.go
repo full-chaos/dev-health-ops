@@ -55,14 +55,40 @@ func binsToModel(histogram *numerical.Histogram) []model.CapacityDistributionBin
 		return nil
 	}
 	length := min(len(histogram.Values), len(histogram.Counts))
-	bins := make([]model.CapacityDistributionBin, 0, length)
+	// The run total of THIS mode's served bins. The cumulative share is taken
+	// against it, so the last bin is exactly 1 whatever was stored.
+	total := 0
 	for index := 0; index < length; index++ {
+		total += histogram.Counts[index]
+	}
+	bins := make([]model.CapacityDistributionBin, 0, length)
+	running := 0
+	for index := 0; index < length; index++ {
+		running += histogram.Counts[index]
 		bins = append(bins, model.CapacityDistributionBin{
-			Value: histogram.Values[index],
-			Count: histogram.Counts[index],
+			Value:           histogram.Values[index],
+			Count:           histogram.Counts[index],
+			CumulativeShare: cumulativeShare(running, total),
 		})
 	}
 	return bins
+}
+
+// cumulativeShare is the share of a mode's runs that ended on a bin's value or
+// a lower one (CHAOS-8477): the running sum of the counts over the run total.
+// The bins are ascending by value (numerical.NewHistogram), so the share never
+// falls, and the last bin's is total/total = 1 exactly. It is computed here so
+// that a caller draws the cumulative curve from served values and adds no
+// counts up itself.
+//
+// A total of 0 can only come from stored bins that all hold a count of 0; no
+// producer writes that. The share is then 0, not NaN: a GraphQL Float cannot
+// carry NaN, and one bad row must not fail a whole list query.
+func cumulativeShare(running, total int) float64 {
+	if total <= 0 {
+		return 0
+	}
+	return float64(running) / float64(total)
 }
 
 // histogramFromUint16 and histogramFromUint32 rebuild a Histogram from the

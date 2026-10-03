@@ -415,8 +415,9 @@ type ComplexityRoot struct {
 	}
 
 	CapacityDistributionBin struct {
-		Count func(childComplexity int) int
-		Value func(childComplexity int) int
+		Count           func(childComplexity int) int
+		CumulativeShare func(childComplexity int) int
+		Value           func(childComplexity int) int
 	}
 
 	CapacityForecast struct {
@@ -3334,6 +3335,13 @@ func (e *executableSchema) Complexity(typeName, field string, childComplexity in
 		}
 
 		return e.complexity.CapacityDistributionBin.Count(childComplexity), true
+
+	case "CapacityDistributionBin.cumulativeShare":
+		if e.complexity.CapacityDistributionBin.CumulativeShare == nil {
+			break
+		}
+
+		return e.complexity.CapacityDistributionBin.CumulativeShare(childComplexity), true
 
 	case "CapacityDistributionBin.value":
 		if e.complexity.CapacityDistributionBin.Value == nil {
@@ -9053,18 +9061,29 @@ type CapacityDistribution {
   items: [CapacityDistributionBin!]
   """
   The number of simulation runs behind each mode (CHAOS-8477): the counts of one
-  mode's bins sum to it, so the share of the runs that ended at or below a bin is
-  the running sum of the counts divided by this value. The modes of one forecast
-  come from one simulation and hold the same number of runs.
+  mode's bins sum to it. The modes of one forecast come from one simulation and
+  hold the same number of runs. The running share of the runs is served on each
+  bin (cumulativeShare).
   """
   runs: Int!
 }
 
 type CapacityDistributionBin {
-  "The outcome: a day count (days) or an item count (items)."
+  """
+  The outcome: a day count (days) or an item count (items). A day count is the
+  number of days after the day the forecast was computed: the same axis as
+  p50Days, p85Days and p95Days (p50Date is that day plus p50Days).
+  """
   value: Int!
   "How many simulation runs ended on this value."
   count: Int!
+  """
+  The share of the mode's runs that ended on this value or a lower one
+  (CHAOS-8477): 0 to 1, never lower than on the bin before, and 1 on the last
+  bin. In the days mode it is the chance that the target items are done on or
+  before that day.
+  """
+  cumulativeShare: Float!
 }
 
 type CapacityForecastConnection {
@@ -25217,6 +25236,8 @@ func (ec *executionContext) fieldContext_CapacityDistribution_days(_ context.Con
 				return ec.fieldContext_CapacityDistributionBin_value(ctx, field)
 			case "count":
 				return ec.fieldContext_CapacityDistributionBin_count(ctx, field)
+			case "cumulativeShare":
+				return ec.fieldContext_CapacityDistributionBin_cumulativeShare(ctx, field)
 			}
 			return nil, fmt.Errorf("no field named %q was found under type CapacityDistributionBin", field.Name)
 		},
@@ -25264,6 +25285,8 @@ func (ec *executionContext) fieldContext_CapacityDistribution_items(_ context.Co
 				return ec.fieldContext_CapacityDistributionBin_value(ctx, field)
 			case "count":
 				return ec.fieldContext_CapacityDistributionBin_count(ctx, field)
+			case "cumulativeShare":
+				return ec.fieldContext_CapacityDistributionBin_cumulativeShare(ctx, field)
 			}
 			return nil, fmt.Errorf("no field named %q was found under type CapacityDistributionBin", field.Name)
 		},
@@ -25398,6 +25421,50 @@ func (ec *executionContext) fieldContext_CapacityDistributionBin_count(_ context
 		IsResolver: false,
 		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
 			return nil, errors.New("field of type Int does not have child fields")
+		},
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _CapacityDistributionBin_cumulativeShare(ctx context.Context, field graphql.CollectedField, obj *model.CapacityDistributionBin) (ret graphql.Marshaler) {
+	fc, err := ec.fieldContext_CapacityDistributionBin_cumulativeShare(ctx, field)
+	if err != nil {
+		return graphql.Null
+	}
+	ctx = graphql.WithFieldContext(ctx, fc)
+	defer func() {
+		if r := recover(); r != nil {
+			ec.Error(ctx, ec.Recover(ctx, r))
+			ret = graphql.Null
+		}
+	}()
+	resTmp, err := ec.ResolverMiddleware(ctx, func(rctx context.Context) (any, error) {
+		ctx = rctx // use context from middleware stack in children
+		return obj.CumulativeShare, nil
+	})
+	if err != nil {
+		ec.Error(ctx, err)
+		return graphql.Null
+	}
+	if resTmp == nil {
+		if !graphql.HasFieldError(ctx, fc) {
+			ec.Errorf(ctx, "must not be null")
+		}
+		return graphql.Null
+	}
+	res := resTmp.(float64)
+	fc.Result = res
+	return ec.marshalNFloat2float64(ctx, field.Selections, res)
+}
+
+func (ec *executionContext) fieldContext_CapacityDistributionBin_cumulativeShare(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "CapacityDistributionBin",
+		Field:      field,
+		IsMethod:   false,
+		IsResolver: false,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return nil, errors.New("field of type Float does not have child fields")
 		},
 	}
 	return fc, nil
@@ -64227,6 +64294,11 @@ func (ec *executionContext) _CapacityDistributionBin(ctx context.Context, sel as
 			}
 		case "count":
 			out.Values[i] = ec._CapacityDistributionBin_count(ctx, field, obj)
+			if out.Values[i] == graphql.Null {
+				out.Invalids++
+			}
+		case "cumulativeShare":
+			out.Values[i] = ec._CapacityDistributionBin_cumulativeShare(ctx, field, obj)
 			if out.Values[i] == graphql.Null {
 				out.Invalids++
 			}

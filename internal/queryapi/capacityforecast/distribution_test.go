@@ -201,3 +201,127 @@ func TestDistributionRunsIsTheSumOfTheServedCounts(t *testing.T) {
 		}
 	})
 }
+
+// CHAOS-8477: each bin serves the share of its mode's runs that ended on its
+// value or a lower one. The "Completion range" curve is these points as
+// served; a caller sums nothing.
+func TestBinsServeTheCumulativeShareOfTheRuns(t *testing.T) {
+	days := &numerical.Histogram{Values: []int{3, 5, 9, 12}, Counts: []int{10, 60, 25, 5}}
+	got := distributionToModel(days, nil)
+	if got == nil || len(got.Days) != 4 {
+		t.Fatalf("distribution = %+v, want 4 day bins", got)
+	}
+	want := []float64{0.10, 0.70, 0.95, 1}
+	for index, bin := range got.Days {
+		if bin.CumulativeShare != want[index] {
+			t.Errorf("days[%d] (day %d): cumulativeShare = %v, want %v", index, bin.Value, bin.CumulativeShare, want[index])
+		}
+	}
+}
+
+// The properties a curve needs, on a real simulation of both modes: the share
+// never falls, it is above 0 on the first bin, it is exactly 1 on the last, and
+// each step is the bin's own count over the run total.
+func TestCumulativeShareOfARealSimulationIsACurve(t *testing.T) {
+	items := 60
+	target := day(t, "2026-10-15")
+	result, err := numerical.ForecastCapacity(numerical.ForecastRequest{
+		History: numerical.Throughput{
+			DailyThroughputs: []int{3, 8, 1, 5, 13, 2, 9, 4, 6, 7, 0, 11},
+			DaysOfHistory:    12,
+		},
+		TargetItems: &items,
+		TargetDate:  &target,
+		Simulations: 500,
+		Seed:        20260702,
+	}, day(t, "2026-09-01"))
+	if err != nil {
+		t.Fatalf("kernel: %v", err)
+	}
+	got := distributionToModel(result.DaysHistogram, result.ItemsHistogram)
+	if got == nil || got.Days == nil || got.Items == nil {
+		t.Fatalf("distribution = %+v, want both modes", got)
+	}
+	if got.Runs != 500 {
+		t.Fatalf("runs = %d, want 500", got.Runs)
+	}
+	for name, bins := range map[string][]model.CapacityDistributionBin{"days": got.Days, "items": got.Items} {
+		running := 0
+		previous := 0.0
+		for index, bin := range bins {
+			running += bin.Count
+			if bin.CumulativeShare != float64(running)/float64(got.Runs) {
+				t.Errorf("%s[%d]: cumulativeShare = %v, want %d/%d", name, index, bin.CumulativeShare, running, got.Runs)
+			}
+			if bin.CumulativeShare < previous {
+				t.Errorf("%s[%d]: cumulativeShare %v is below the bin before (%v)", name, index, bin.CumulativeShare, previous)
+			}
+			if index > 0 && bins[index-1].Value >= bin.Value {
+				t.Errorf("%s[%d]: value %d is not above the bin before (%d): the curve has no x order", name, index, bin.Value, bins[index-1].Value)
+			}
+			previous = bin.CumulativeShare
+		}
+		if bins[0].CumulativeShare <= 0 {
+			t.Errorf("%s: the first bin's cumulativeShare is %v, want above 0 (the bin holds runs)", name, bins[0].CumulativeShare)
+		}
+		if last := bins[len(bins)-1].CumulativeShare; last != 1 {
+			t.Errorf("%s: the last bin's cumulativeShare is %v, want exactly 1", name, last)
+		}
+	}
+
+	// The served percentile days and the curve are ONE simulation, so a marker
+	// drawn at p50Days sits on the curve where it has reached its percentile.
+	// The percentile is an interpolated rank (numerical.IntegerPercentiles), so
+	// "reached" is exact to one run: at the marker's day the share of the runs
+	// that are done is at least the percentile less one run's share. (The day
+	// itself can be a day with no bin: the curve is flat there.)
+	shareDoneBy := func(dayOffset int) float64 {
+		share := 0.0
+		for _, bin := range got.Days {
+			if bin.Value > dayOffset {
+				break
+			}
+			share = bin.CumulativeShare
+		}
+		return share
+	}
+	oneRun := 1 / float64(got.Runs)
+	for _, marker := range []struct {
+		name       string
+		percentile float64
+		dayOffset  int
+	}{
+		{"p50Days", 0.50, *result.P50Days},
+		{"p85Days", 0.85, *result.P85Days},
+		{"p95Days", 0.95, *result.P95Days},
+	} {
+		if share := shareDoneBy(marker.dayOffset); share < marker.percentile-oneRun {
+			t.Errorf("%s = day %d, where the curve is at %v: below the percentile %v by more than one run", marker.name, marker.dayOffset, share, marker.percentile)
+		}
+	}
+}
+
+// A stored histogram with one count too many: each mode's share is taken
+// against the SERVED bins of that mode, so its last bin is still 1.
+func TestCumulativeShareFollowsTheServedBins(t *testing.T) {
+	malformed := &numerical.Histogram{Values: []int{3, 5}, Counts: []int{10, 60, 30}}
+	got := distributionToModel(malformed, nil)
+	if got == nil || len(got.Days) != 2 {
+		t.Fatalf("distribution = %+v, want the 2 served bins", got)
+	}
+	if got.Days[0].CumulativeShare != 10.0/70.0 || got.Days[1].CumulativeShare != 1 {
+		t.Errorf("cumulativeShare = %v, %v, want 10/70 and 1", got.Days[0].CumulativeShare, got.Days[1].CumulativeShare)
+	}
+}
+
+func TestCumulativeShareOfBinsWithNoRunsIsZeroNotNaN(t *testing.T) {
+	got := distributionToModel(&numerical.Histogram{Values: []int{3, 5}, Counts: []int{0, 0}}, nil)
+	if got == nil || len(got.Days) != 2 {
+		t.Fatalf("distribution = %+v, want 2 bins", got)
+	}
+	for index, bin := range got.Days {
+		if bin.CumulativeShare != 0 {
+			t.Errorf("days[%d]: cumulativeShare = %v, want 0", index, bin.CumulativeShare)
+		}
+	}
+}

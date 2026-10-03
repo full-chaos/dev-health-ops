@@ -34,6 +34,7 @@ package migrationmatrix
 // tests), so a method-aware match is possible; this page keeps the path-level
 // match until it is changed on purpose.
 import (
+	"encoding/json"
 	"fmt"
 	"os"
 	"regexp"
@@ -278,19 +279,60 @@ func LoadQueryAPIMuxRoutes() []QueryAPIMuxRoute {
 	return out
 }
 
+// FrozenRESTRoutesRelative is the checked-in, frozen copy of the Python api's
+// `/api/v1/*` route list, relative to the repository root. The Python api
+// source tree is being deleted, so this section no longer reads it: the list
+// below is what `LoadFastAPIRoutes` parsed out of `src/dev_health_ops/api/main.py`
+// at the commit recorded in the file. While main.py still exists, a test holds
+// this file to a fresh parse of it; once main.py is gone the file is the source.
+const FrozenRESTRoutesRelative = "contracts/migration-status/v1/python-rest-routes.json"
+
+// FrozenRESTRoute is one (method, path) pair of the frozen list.
+type FrozenRESTRoute struct {
+	Method string `json:"method"`
+	Path   string `json:"path"`
+}
+
+// FrozenRESTRoutes is the on-disk shape of FrozenRESTRoutesRelative.
+type FrozenRESTRoutes struct {
+	Source string            `json:"source"`
+	Commit string            `json:"frozen_from_commit"`
+	Routes []FrozenRESTRoute `json:"routes"`
+}
+
+// LoadFrozenRESTRoutes reads the frozen Python route list. An unreadable,
+// malformed or empty file is an error, never an empty section.
+func LoadFrozenRESTRoutes(path string) ([]RESTRoute, error) {
+	raw, err := os.ReadFile(path) //nolint:gosec // repo-relative path
+	if err != nil {
+		return nil, fmt.Errorf("read %s: %w", path, err)
+	}
+	var frozen FrozenRESTRoutes
+	if err := json.Unmarshal(raw, &frozen); err != nil {
+		return nil, fmt.Errorf("%s: %w", path, err)
+	}
+	routes := make([]RESTRoute, 0, len(frozen.Routes))
+	for _, r := range frozen.Routes {
+		if r.Method == "" || !strings.HasPrefix(r.Path, "/api/v1/") {
+			return nil, fmt.Errorf("%s: route %+v is not a method plus an /api/v1/* path", path, r)
+		}
+		routes = append(routes, RESTRoute{Method: r.Method, Path: r.Path})
+	}
+	return routes, nil
+}
+
 // LoadRESTEndpoints builds the "Per REST endpoint" rows: every /api/v1/*
-// route main.py declares, cross-referenced against query-api's mux. Both
-// sources are read fresh here -- there is no ledger of routes to drift out
-// of sync with either side, only RESTDeadByDesign's citations.
-func LoadRESTEndpoints(mainPyPath string, muxRoutes []QueryAPIMuxRoute) ([]RESTEndpointRow, error) {
-	pyRoutes, err := LoadFastAPIRoutes(mainPyPath)
+// route in the frozen Python route list (frozenRoutesPath), cross-referenced
+// against query-api's mux. The mux side is read fresh here; the Python side is
+// a frozen list, so only RESTDeadByDesign's citations are curated beside it.
+func LoadRESTEndpoints(frozenRoutesPath string, muxRoutes []QueryAPIMuxRoute) ([]RESTEndpointRow, error) {
+	pyRoutes, err := LoadFrozenRESTRoutes(frozenRoutesPath)
 	if err != nil {
 		return nil, err
 	}
 	apiRoutes := apiV1Routes(pyRoutes)
 	if len(apiRoutes) == 0 {
-		return nil, fmt.Errorf("%s: found no /api/v1/* routes -- main.py's route decorators changed shape, "+
-			"or the file moved; LoadFastAPIRoutes needs updating before this section can be trusted", mainPyPath)
+		return nil, fmt.Errorf("%s: found no /api/v1/* routes -- the frozen route list is empty or the file moved", frozenRoutesPath)
 	}
 
 	byPath := map[string]QueryAPIMuxRoute{}
@@ -307,7 +349,7 @@ func LoadRESTEndpoints(mainPyPath string, muxRoutes []QueryAPIMuxRoute) ([]RESTE
 	}
 	for _, key := range restDeadByDesignKeys() {
 		if !live[key] {
-			return nil, fmt.Errorf("RESTDeadByDesign names %q, which main.py no longer declares as a route -- "+
+			return nil, fmt.Errorf("RESTDeadByDesign names %q, which the frozen Python route list no longer declares as a route -- "+
 				"the route was renamed or removed; update or drop the entry", key)
 		}
 	}
@@ -362,7 +404,7 @@ func RESTEndpointCounts(rows []RESTEndpointRow) (ported, pythonOnly, deadByDesig
 func RenderRESTEndpointsBlock(rows []RESTEndpointRow) string {
 	ported, pythonOnly, deadByDesign := RESTEndpointCounts(rows)
 	var b strings.Builder
-	fmt.Fprintf(&b, "_%d `/api/v1/*` routes in `src/dev_health_ops/api/main.py`: **%d** ported, **%d** python-only, **%d** dead-by-design._\n\n",
+	fmt.Fprintf(&b, "_%d `/api/v1/*` routes in the frozen Python api route list (`contracts/migration-status/v1/python-rest-routes.json`): **%d** ported, **%d** python-only, **%d** dead-by-design._\n\n",
 		len(rows), ported, pythonOnly, deadByDesign)
 
 	b.WriteString("| Method | Path | Status | Go handler |\n")

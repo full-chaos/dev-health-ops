@@ -94,7 +94,7 @@ func TestMountedRouteLogMessage_EmptyMapNamesNoOperations(t *testing.T) {
 // Postgres pool -- pgxpool.New does not dial eagerly, see CHAOS-4512's
 // query_route_readyz_integration_test.go for the same premise proven
 // against buildQueryRoute), cross-checked against
-// src/dev_health_ops/api/graphql/go_api_operations.json -- the CHECKED-IN
+// contracts/graphql/v1/go_api_operations.json -- the CHECKED-IN
 // catalog test_go_api_operation_catalog.py's
 // test_checked_in_catalog_has_not_drifted_from_registrydump already keeps
 // byte-for-byte in sync with cmd/registrydump's independent
@@ -185,7 +185,7 @@ func TestNewQueryHandler_LoggedOperationSetMatchesCheckedInCatalog(t *testing.T)
 	if err != nil {
 		t.Fatalf("resolve repo root: %v", err)
 	}
-	catalogPath := filepath.Join(repoRoot, "src", "dev_health_ops", "api", "graphql", "go_api_operations.json")
+	catalogPath := filepath.Join(repoRoot, "contracts", "graphql", "v1", "go_api_operations.json")
 	catalogBytes, err := os.ReadFile(catalogPath)
 	if err != nil {
 		t.Fatalf("read checked-in catalog %s: %v", catalogPath, err)

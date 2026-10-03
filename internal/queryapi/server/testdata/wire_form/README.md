@@ -42,7 +42,7 @@ document text is readable in the tree, so a reviewer can see the
 
 These are cross-checked twice, by two paths that do not share code:
 `registered_forecast_documents_test.go` digests the Go consts against
-these files, and `src/dev_health_ops/api/graphql/go_api_operations.json`
+these files, and `contracts/graphql/v1/go_api_operations.json`
 carries the same three values, produced independently by
 `cmd/registrydump` parsing `query_route.go`'s AST.
 

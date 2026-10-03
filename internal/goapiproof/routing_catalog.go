@@ -11,7 +11,7 @@ package goapiproof
 //     under which document digest -- read from GET /registry;
 //   - the PYTHON EDGE decides which incoming request maps to which
 //     `selected_operation` at all, and it does that through
-//     `api/graphql/go_api_operations.json` (go_api_operation_catalog.py).
+//     `contracts/graphql/v1/go_api_operations.json` (go_api_operation_catalog.py).
 //     An operation the catalog does not name can never be dispatched to
 //     Go no matter what the routing row says.
 //
@@ -40,7 +40,7 @@ import (
 // directly, because an operator running this binary from somewhere other
 // than the checkout must be able to say where the file is -- and because
 // a wrong path has to be a refusal, never a silently empty catalog.
-const DefaultCatalogPath = "src/dev_health_ops/api/graphql/go_api_operations.json"
+const DefaultCatalogPath = "contracts/graphql/v1/go_api_operations.json"
 
 // ErrCatalogUnusable reports that the catalog could not be read or made
 // sense of.

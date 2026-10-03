@@ -179,7 +179,7 @@ ROUTING_ORG=${ROUTING_ORG:-67f1add8-9fcb-4272-addb-044b70c442c8}  # the disposab
 # (still the tools image's own catalog/documents -- "the image THIS binary was built from", per
 # carry.go's flag help -- never a separately fetched copy). repoint has no -catalog/-documents
 # flags at all, so it keeps its own, shorter arg list.
-CARRY_ARGS="-registry-url http://query-api:8090/registry -buildinfo-url http://query-api:8090/buildinfo -json -catalog /app/go-api/src/dev_health_ops/api/graphql/go_api_operations.json -documents /app/go-api/documents.json"
+CARRY_ARGS="-registry-url http://query-api:8090/registry -buildinfo-url http://query-api:8090/buildinfo -json -catalog /app/go-api/contracts/graphql/v1/go_api_operations.json -documents /app/go-api/documents.json"
 REPOINT_ARGS="-registry-url http://query-api:8090/registry -buildinfo-url http://query-api:8090/buildinfo -json"
 carry_reason() {
   # $1: the captured carry/repoint stdout+stderr blob. Prints the GOAPI_ROUTING_JSON line's
@@ -266,7 +266,7 @@ if [ -n "$VALUES" ]; then python3 "$HERE/check-route-coverage.py" "$VALUES"; st 
 # enable proof gate needs a bigboy go-api-prove run) make this STEP rc=3 -- a named gap, never rc=0.
 # The catalog is fetched at THIS cut's sha so status/enable classify against the deployed build.
 ROUTING_ORG=${ROUTING_ORG:-67f1add8-9fcb-4272-addb-044b70c442c8}  # the disposable fixture org, never the local org
-gh api "repos/full-chaos/dev-health-ops/contents/src/dev_health_ops/api/graphql/go_api_operations.json?ref=$NEW" -H 'Accept: application/vnd.github.raw' > "$REC.catalog.json" 2>/dev/null && chmod 644 "$REC.catalog.json"
+gh api "repos/full-chaos/dev-health-ops/contents/contracts/graphql/v1/go_api_operations.json?ref=$NEW" -H 'Accept: application/vnd.github.raw' > "$REC.catalog.json" 2>/dev/null && chmod 644 "$REC.catalog.json"
 vt() { docker compose --env-file ops/.env --profile venue run --rm --no-deps -T -v "$REC.catalog.json:/catalog.json:ro" venue-tools "$1"; }
 ROUTING_ARGS='-catalog /catalog.json -registry-url http://query-api:8090/registry'
 vt "dho goapi routing status -json $ROUTING_ARGS" > "$REC.routing-status-pre.json" 2>/dev/null

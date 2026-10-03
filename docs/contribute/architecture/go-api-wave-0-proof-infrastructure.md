@@ -846,7 +846,7 @@ carries the `dho` operator binary on `PATH` (spec S1, CHAOS-6280 folded
 documents dump generated from the SAME commit at build time
 (`/app/go-api/documents.json`), and the checked-in operation catalog at its
 `DefaultCatalogPath` relative to the image's working directory
-(`/app/go-api/src/dev_health_ops/api/graphql/go_api_operations.json`) --
+(`/app/go-api/contracts/graphql/v1/go_api_operations.json`) --
 `dho goapi routing`'s `-catalog` flag needs no override, and neither does
 `carry`'s `-documents` flag, whose default is that same baked-in dump,
 **when run from the image's own WORKDIR (`/app/go-api`)**. `bigboy-cut.sh`

@@ -75,28 +75,69 @@ func goTestFuncDeclared(t *testing.T, path, name string) bool {
 // rather than left raising, so the ledger-vs-schema.py check skips it.
 var pythonFieldDeletedOutright = map[string]bool{"home": true}
 
+// pythonSchemaFacts is what the ledger is held to: the root fields whose
+// Strawberry body raises the deletion error, and that error's message template.
+type pythonSchemaFacts struct {
+	RaisingFields []string `json:"raising_fields"`
+	Message       string   `json:"message"`
+}
+
+// frozenSchemaFacts reads testdata/python_schema_deleted_fields.json: those
+// facts as they were in src/dev_health_ops/api/graphql/schema.py when the
+// Python api source was scheduled for deletion.
+func frozenSchemaFacts(t *testing.T) pythonSchemaFacts {
+	t.Helper()
+	raw, err := os.ReadFile(filepath.Join("testdata", "python_schema_deleted_fields.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var facts pythonSchemaFacts
+	if err := json.Unmarshal(raw, &facts); err != nil {
+		t.Fatal(err)
+	}
+	if len(facts.RaisingFields) == 0 || facts.Message == "" {
+		t.Fatal("the frozen schema facts are empty")
+	}
+	sort.Strings(facts.RaisingFields)
+	return facts
+}
+
+// While schema.py still exists, the frozen facts must equal a fresh read of it:
+// a field body changed in schema.py without refreezing turns this red. Once the
+// Python source is deleted the frozen file is the source and this skips.
+func TestFrozenSchemaFactsMatchSchemaPyWhileItExists(t *testing.T) {
+	root := repoRootFromTest(t)
+	raw, err := os.ReadFile(filepath.Join(root, filepath.FromSlash("src/dev_health_ops/api/graphql/schema.py")))
+	if err != nil {
+		t.Skip("the Python schema.py is gone: the frozen schema facts are the source")
+	}
+	source := string(raw)
+	callers := map[string]bool{}
+	for _, match := range regexp.MustCompile(`_raise_served_by_query_api\(\s*"([A-Za-z0-9_]+)"`).FindAllStringSubmatch(source, -1) {
+		callers[match[1]] = true
+	}
+	var fresh []string
+	for operation := range callers {
+		fresh = append(fresh, operation)
+	}
+	sort.Strings(fresh)
+	frozen := frozenSchemaFacts(t)
+	if strings.Join(fresh, ",") != strings.Join(frozen.RaisingFields, ",") {
+		t.Fatalf("schema.py raises the deletion error for %v; the frozen facts say %v", fresh, frozen.RaisingFields)
+	}
+	if got := pythonRaisedMessage(t, source); got != frozen.Message {
+		t.Fatalf("schema.py raises\n%q\nthe frozen facts say\n%q", got, frozen.Message)
+	}
+}
+
 // The ledger names exactly the operations whose Strawberry field body raises
 // the deletion error, and its message template is the text that field body
 // raises. A ledger entry with a live Python path, or a deleted path with no
 // ledger entry, turns this red.
 func TestLedgerMatchesTheDeletedFieldBodiesInSchemaPy(t *testing.T) {
-	root := repoRootFromTest(t)
-	raw, err := os.ReadFile(filepath.Join(root, filepath.FromSlash("src/dev_health_ops/api/graphql/schema.py")))
-	if err != nil {
-		t.Fatal(err)
-	}
-	source := string(raw)
-
-	callers := map[string]bool{}
-	for _, match := range regexp.MustCompile(`_raise_served_by_query_api\(\s*"([A-Za-z0-9_]+)"`).FindAllStringSubmatch(source, -1) {
-		callers[match[1]] = true
-	}
+	frozen := frozenSchemaFacts(t)
+	fromSchema := frozen.RaisingFields
 	ledger := defaultLedgerForTest(t)
-	var fromSchema []string
-	for operation := range callers {
-		fromSchema = append(fromSchema, operation)
-	}
-	sort.Strings(fromSchema)
 	// A ledger operation is either a root field whose body raises, or a named
 	// document over one (its response root is the root field that raises).
 	roots := map[string]bool{}
@@ -122,8 +163,8 @@ func TestLedgerMatchesTheDeletedFieldBodiesInSchemaPy(t *testing.T) {
 		t.Fatalf("schema.py raises the deletion error for %v; the ledger's response roots are %v", fromSchema, fromLedger)
 	}
 
-	if got := pythonRaisedMessage(t, source); got != ledger.MessageTemplate {
-		t.Fatalf("schema.py raises\n%q\nthe ledger expects\n%q", got, ledger.MessageTemplate)
+	if frozen.Message != ledger.MessageTemplate {
+		t.Fatalf("schema.py raises\n%q\nthe ledger expects\n%q", frozen.Message, ledger.MessageTemplate)
 	}
 }
 

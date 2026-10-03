@@ -1193,6 +1193,10 @@ type OperatingReviewDelta {
 
 input OperatingReviewInput {
   teamId: String = null
+  """
+  Teams to review together (CHAOS-8516). The answer is the review of the UNION of these teams' stored rows, by the same rules as the one-team and the all-teams review: a count is a sum, a ratio is made from summed numerators and denominators, and a mean is a mean over the stored rows, never a mean of team values. One id gives the one-team review. Null or empty = ``teamId`` applies (or all teams). ``teamId`` and ``teamIds`` together are an error. Rows with no team are in the all-teams review only.
+  """
+  teamIds: [String!] = null
   weekStart: Date!
 }
 
@@ -1206,6 +1210,21 @@ type OperatingReviewMetric {
   True = the week holds a stored value for the metric (CHAOS-8115). False = no row of the metric's daily table in the week, only NULL values, or a read that failed: ``value`` is then a 0 placeholder, not a measured zero, and a client draws "No data". True with ``value`` 0 is a stored zero.
   """
   hasData: Boolean!
+  """
+  Whether the request's team selection narrows this metric (CHAOS-8516).
+  """
+  scope: OperatingReviewMetricScope!
+}
+
+enum OperatingReviewMetricScope {
+  """
+  The value follows the request's team selection: one team, several teams together, or all teams when none is selected.
+  """
+  TEAM
+  """
+  The value is the whole organisation's, whatever team is selected: the metric's daily tables hold no team. A client labels it "organisation", not as the selection's value.
+  """
+  ORGANIZATION
 }
 
 type OperatingReviewSection {

@@ -753,6 +753,14 @@ func TestStrandRepairAgainstLivePostgres(t *testing.T) {
 		// would pass on anything.
 		t.Run("no survey scans the outbox once it is large", func(t *testing.T) {
 			resetStrandTables(t, ctx, admin)
+			// Live River jobs get ids far above the ids of the jobs the cleaner
+			// has already removed, as in production. With the two ranges the
+			// other way round a merge join over the outbox's river_job_id index
+			// ends at once and looks cheap, which it never is on a real outbox.
+			if _, err := admin.Exec(ctx,
+				"SELECT setval(pg_get_serial_sequence('river.river_job', 'id'), 1000000)"); err != nil {
+				t.Fatal(err)
+			}
 			now := time.Now().UTC().Truncate(time.Microsecond)
 			var templateOutbox string
 			var templateJob int64
@@ -765,14 +773,15 @@ func TestStrandRepairAgainstLivePostgres(t *testing.T) {
 			}
 			// The fixture has the shape production has: far more delivered outbox
 			// rows than River jobs, because River's cleaner removes a finished job
-			// long before retention removes the outbox row that points at it.
-			// Fillers are copies of one real delivery and one real job, each with
-			// its own domain id and key, so every constraint the two tables carry
-			// still holds. Copying through the row type keeps this independent of
-			// either table's column list.
+			// long before retention removes the outbox row that pointed at it, and
+			// rows wide enough that reading either table end to end costs far more
+			// than a few index probes. Fillers are copies of one real delivery and
+			// one real job, each with its own domain id and key, so every
+			// constraint the two tables carry still holds. Copying through the row
+			// type keeps this independent of either table's column list.
 			const (
-				fillerOutboxRows = 20000
-				fillerRiverJobs  = 2000
+				cleanedOutboxRows = 16000
+				liveRiverJobs     = 5000
 			)
 			if _, err := admin.Exec(ctx, `
 				INSERT INTO river.river_job
@@ -780,16 +789,22 @@ func TestStrandRepairAgainstLivePostgres(t *testing.T) {
 					to_jsonb(template) || jsonb_build_object(
 						'id', nextval(pg_get_serial_sequence('river.river_job', 'id')),
 						'unique_key', NULL, 'unique_states', NULL,
+						'metadata', template.metadata || jsonb_build_object('pad', pad.text),
 						'args', template.args || jsonb_build_object(
 							'idempotency_key', 'filler-job:' || filler,
 							'domain', jsonb_build_object(
 								'type', template.args #>> '{domain,type}',
 								'id', gen_random_uuid()::text))))).*
-				FROM river.river_job AS template, generate_series(1, $2::int) AS filler
-				WHERE template.id = $1`, templateJob, fillerRiverJobs); err != nil {
+				FROM river.river_job AS template,
+					generate_series(1, $2::int) AS filler,
+					LATERAL (
+						SELECT string_agg(md5(filler::text || ':' || part::text), '') AS text
+						FROM generate_series(1, 32) AS part
+					) AS pad
+				WHERE template.id = $1`, templateJob, liveRiverJobs); err != nil {
 				t.Fatal(err)
 			}
-			// river_job_id values far past the sequence: deliveries whose River
+			// river_job_id values below every live job: deliveries whose River
 			// job the cleaner has already removed.
 			if _, err := admin.Exec(ctx, `
 				INSERT INTO public.worker_job_outbox
@@ -797,11 +812,16 @@ func TestStrandRepairAgainstLivePostgres(t *testing.T) {
 					to_jsonb(template) || jsonb_build_object(
 						'id', gen_random_uuid(),
 						'dedupe_key', 'filler-row:' || filler,
-						'river_job_id', 10000000 + filler,
-						'args', jsonb_set(template.args::jsonb, '{domain,id}',
-							to_jsonb(gen_random_uuid()::text))))).*
-				FROM public.worker_job_outbox AS template, generate_series(1, $2::int) AS filler
-				WHERE template.id = $1`, templateOutbox, fillerOutboxRows); err != nil {
+						'river_job_id', filler,
+						'args', jsonb_set(jsonb_set(template.args::jsonb, '{domain,id}',
+							to_jsonb(gen_random_uuid()::text)), '{pad}', to_jsonb(pad.text))))).*
+				FROM public.worker_job_outbox AS template,
+					generate_series(1, $2::int) AS filler,
+					LATERAL (
+						SELECT string_agg(md5(filler::text || ':' || part::text), '') AS text
+						FROM generate_series(1, 28) AS part
+					) AS pad
+				WHERE template.id = $1`, templateOutbox, cleanedOutboxRows); err != nil {
 				t.Fatal(err)
 			}
 			var outboxRows int
@@ -809,16 +829,16 @@ func TestStrandRepairAgainstLivePostgres(t *testing.T) {
 				"SELECT count(*) FROM public.worker_job_outbox WHERE status = 'delivered'").Scan(&outboxRows); err != nil {
 				t.Fatal(err)
 			}
-			if outboxRows != fillerOutboxRows+len(shapes) {
+			if outboxRows != cleanedOutboxRows+len(shapes) {
 				t.Fatalf("the outbox holds %d delivered rows, want %d: the plan below would be "+
-					"taken on a table too small to mean anything", outboxRows, fillerOutboxRows+len(shapes))
+					"taken on a table too small to mean anything", outboxRows, cleanedOutboxRows+len(shapes))
 			}
 			var riverJobs int
 			if err := admin.QueryRow(ctx, "SELECT count(*) FROM river.river_job").Scan(&riverJobs); err != nil {
 				t.Fatal(err)
 			}
-			if riverJobs != fillerRiverJobs+len(shapes) {
-				t.Fatalf("river_job holds %d rows, want %d", riverJobs, fillerRiverJobs+len(shapes))
+			if riverJobs != liveRiverJobs+len(shapes) {
+				t.Fatalf("river_job holds %d rows, want %d", riverJobs, liveRiverJobs+len(shapes))
 			}
 			if _, err := admin.Exec(ctx, `ANALYZE public.worker_job_outbox, river.river_job,
 				public.daily_metrics_runs, public.daily_metrics_partitions,
@@ -876,10 +896,19 @@ func TestStrandRepairAgainstLivePostgres(t *testing.T) {
 						}
 						return
 					}
-					if !strings.Contains(plan, "river_job_args_index") ||
-						!strings.Contains(plan, "uq_worker_job_outbox_river_job_id") {
-						t.Fatalf("the %s survey does not walk River's args index and then the outbox's "+
-							"river_job_id index:\n%s", shape.name, plan)
+					// "No Seq Scan" alone is not the claim: a full walk of the
+					// outbox through an index is the same defect under another
+					// node name. The outbox must be PROBED, once per River job,
+					// on the join key.
+					if !strings.Contains(plan, "(river_job_id = job.id)") {
+						t.Fatalf("the %s survey does not reach the outbox by a river_job_id probe for "+
+							"each River job:\n%s", shape.name, plan)
+					}
+					// And the River job must come from River's args index, not from
+					// a scan of river_job, which is the same cost moved one table over.
+					if !strings.Contains(plan, "river_job_args_index") || strings.Contains(plan, "Seq Scan on river_job") {
+						t.Fatalf("the %s survey does not find the River job through River's args "+
+							"index:\n%s", shape.name, plan)
 					}
 					unbound := bindingPattern.ReplaceAllString(shape.survey, "")
 					if unbound == shape.survey {

@@ -170,11 +170,16 @@
   },
   {
     "operation": "operatingReview",
-    "digest": "d26e965931987ac4bdf607f43f542e2bd3f49f91561400287014a161371726e9"
+    "digest": "fef895a373f536846afdb3bb93ef12dd03d8af8d23f3663b290c350e622ed8c3"
   },
   {
     "operation": "operatingReview",
     "digest": "c376a5dc191fd8d8759578ccd9dffaffadcd621bdc0625fe62c4c08619f3363e",
+    "legacy": true
+  },
+  {
+    "operation": "operatingReview",
+    "digest": "d26e965931987ac4bdf607f43f542e2bd3f49f91561400287014a161371726e9",
     "legacy": true
   },
   {

@@ -205,7 +205,7 @@ var extraNegatives = []struct {
 const wantPatternCount = 13
 
 func applyOnly(pattern int, text string) string {
-	return string(substitute([]rune(text), matchers[pattern]))
+	return string(substitute(pythonDialect, []rune(text), matchers[pattern]))
 }
 
 func TestTheClauseListIsDerivedFromTheSanitizer(t *testing.T) {

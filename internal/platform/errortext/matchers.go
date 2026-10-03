@@ -11,10 +11,27 @@ import "unicode"
 // (pythonparity TestSanitizeErrorTextMatchesFrozenPython).
 
 // substitute is pattern.sub(marker, text): non-overlapping leftmost matches.
-func substitute(text []rune, match func([]rune, int) (int, bool)) []rune {
+// dialect is what `\s` and `\b` mean: pythonDialect is `re` over `str` (Unicode whitespace and word characters), asciiDialect is
+// what RE2 gave the former sync-writer port (ASCII only). The recorded Python answer is the first; the second is the extra
+// hardening pass of SanitizeHardened, so text the former port redacted is still redacted (CHAOS-7947).
+type dialect struct{ space, word func(rune) bool }
+
+var (
+	pythonDialect = dialect{space: pySpace, word: pyWord}
+	asciiDialect  = dialect{space: asciiSpace, word: asciiWord}
+)
+
+type matcher func(d dialect, text []rune, i int) (int, bool)
+
+func asciiSpace(r rune) bool { return r == ' ' || r >= '\t' && r <= '\r' && r != '\v' }
+func asciiWord(r rune) bool {
+	return r == '_' || r >= '0' && r <= '9' || r >= 'a' && r <= 'z' || r >= 'A' && r <= 'Z'
+}
+
+func substitute(d dialect, text []rune, match matcher) []rune {
 	var out []rune
 	for i := 0; i < len(text); {
-		if end, ok := match(text, i); ok && end > i {
+		if end, ok := match(d, text, i); ok && end > i {
 			out = append(out, []rune(redactionMarker)...)
 			i = end
 			continue
@@ -42,9 +59,9 @@ func pySpace(r rune) bool {
 func pyWord(r rune) bool { return r == '_' || unicode.IsLetter(r) || unicode.IsNumber(r) }
 
 // boundaryAt is `\b` at index i: exactly one side of i is a word character.
-func boundaryAt(text []rune, i int) bool {
-	before := i > 0 && pyWord(text[i-1])
-	after := i < len(text) && pyWord(text[i])
+func boundaryAt(d dialect, text []rune, i int) bool {
+	before := i > 0 && d.word(text[i-1])
+	after := i < len(text) && d.word(text[i])
 	return before != after
 }
 
@@ -120,24 +137,24 @@ func classWith(extra string) func(rune) bool {
 	}
 }
 
-func skipSpace(text []rune, i int) int {
-	for i < len(text) && pySpace(text[i]) {
+func skipSpace(d dialect, text []rune, i int) int {
+	for i < len(text) && d.space(text[i]) {
 		i++
 	}
 	return i
 }
 
-func skipNonSpace(text []rune, i int) int {
-	for i < len(text) && !pySpace(text[i]) {
+func skipNonSpace(d dialect, text []rune, i int) int {
+	for i < len(text) && !d.space(text[i]) {
 		i++
 	}
 	return i
 }
 
 // tokenPattern matches `\b<literal>` then `\s*[:=]\s*\S+`.
-func headerValueMatcher(literals []string, trailingToken bool) func([]rune, int) (int, bool) {
-	return func(text []rune, i int) (int, bool) {
-		if !boundaryAt(text, i) {
+func headerValueMatcher(literals []string, trailingToken bool) matcher {
+	return func(d dialect, text []rune, i int) (int, bool) {
+		if !boundaryAt(d, text, i) {
 			return 0, false
 		}
 		for _, literal := range literals {
@@ -145,20 +162,20 @@ func headerValueMatcher(literals []string, trailingToken bool) func([]rune, int)
 			if !ok {
 				continue
 			}
-			j = skipSpace(text, j)
+			j = skipSpace(d, text, j)
 			if j >= len(text) || (text[j] != ':' && text[j] != '=') {
 				continue
 			}
-			j = skipSpace(text, j+1)
-			end := skipNonSpace(text, j)
+			j = skipSpace(d, text, j+1)
+			end := skipNonSpace(d, text, j)
 			if end == j {
 				continue
 			}
 			if trailingToken {
 				// (?:\s+\S+)?
-				k := skipSpace(text, end)
+				k := skipSpace(d, text, end)
 				if k > end {
-					if k2 := skipNonSpace(text, k); k2 > k {
+					if k2 := skipNonSpace(d, text, k); k2 > k {
 						end = k2
 					}
 				}
@@ -170,40 +187,40 @@ func headerValueMatcher(literals []string, trailingToken bool) func([]rune, int)
 }
 
 // bearerMatcher is `\bbearer\s+\S+`.
-func bearerMatcher(text []rune, i int) (int, bool) {
-	if !boundaryAt(text, i) {
+func bearerMatcher(d dialect, text []rune, i int) (int, bool) {
+	if !boundaryAt(d, text, i) {
 		return 0, false
 	}
 	j, ok := literalAt(text, i, "bearer")
 	if !ok {
 		return 0, false
 	}
-	k := skipSpace(text, j)
+	k := skipSpace(d, text, j)
 	if k == j {
 		return 0, false
 	}
-	end := skipNonSpace(text, k)
+	end := skipNonSpace(d, text, k)
 	return end, end > k
 }
 
 // basicMatcher is `\bbasic\s+[a-z0-9+/=]{8,}\b`, with the backtracking a
 // class holding non-word characters allows: the longest run that ends on a
 // word boundary wins.
-func basicMatcher(text []rune, i int) (int, bool) {
-	if !boundaryAt(text, i) {
+func basicMatcher(d dialect, text []rune, i int) (int, bool) {
+	if !boundaryAt(d, text, i) {
 		return 0, false
 	}
 	j, ok := literalAt(text, i, "basic")
 	if !ok {
 		return 0, false
 	}
-	k := skipSpace(text, j)
+	k := skipSpace(d, text, j)
 	if k == j {
 		return 0, false
 	}
 	runEnd, _ := classRun(text, k, 0, classWith("+/="))
 	for end := runEnd; end-k >= 8; end-- {
-		if boundaryAt(text, end) {
+		if boundaryAt(d, text, end) {
 			return end, true
 		}
 	}
@@ -211,10 +228,10 @@ func basicMatcher(text []rune, i int) (int, bool) {
 }
 
 // prefixedTokenMatcher is `\b<prefix>[class]{min,}\b`.
-func prefixedTokenMatcher(prefix string, extra string, min int) func([]rune, int) (int, bool) {
+func prefixedTokenMatcher(prefix string, extra string, min int) matcher {
 	in := classWith(extra)
-	return func(text []rune, i int) (int, bool) {
-		if !boundaryAt(text, i) {
+	return func(d dialect, text []rune, i int) (int, bool) {
+		if !boundaryAt(d, text, i) {
 			return 0, false
 		}
 		j, ok := literalAt(text, i, prefix)
@@ -223,7 +240,7 @@ func prefixedTokenMatcher(prefix string, extra string, min int) func([]rune, int
 		}
 		runEnd, _ := classRun(text, j, 0, in)
 		for end := runEnd; end-j >= min; end-- {
-			if boundaryAt(text, end) {
+			if boundaryAt(d, text, end) {
 				return end, true
 			}
 		}
@@ -232,8 +249,8 @@ func prefixedTokenMatcher(prefix string, extra string, min int) func([]rune, int
 }
 
 // xoxMatcher is `\bxox[baprs]-[a-z0-9-]{10,}\b`.
-func xoxMatcher(text []rune, i int) (int, bool) {
-	if !boundaryAt(text, i) {
+func xoxMatcher(d dialect, text []rune, i int) (int, bool) {
+	if !boundaryAt(d, text, i) {
 		return 0, false
 	}
 	j, ok := literalAt(text, i, "xox")
@@ -255,7 +272,7 @@ func xoxMatcher(text []rune, i int) (int, bool) {
 	j++
 	runEnd, _ := classRun(text, j, 0, classWith("-"))
 	for end := runEnd; end-j >= 10; end-- {
-		if boundaryAt(text, end) {
+		if boundaryAt(d, text, end) {
 			return end, true
 		}
 	}
@@ -264,8 +281,8 @@ func xoxMatcher(text []rune, i int) (int, bool) {
 
 // urlUserinfoMatcher is `\b[a-z][a-z0-9+.-]*://[^\s/@]+@`: a scheme, "://",
 // a userinfo with no space, slash or at-sign, then the at-sign.
-func urlUserinfoMatcher(text []rune, i int) (int, bool) {
-	if !boundaryAt(text, i) || i >= len(text) {
+func urlUserinfoMatcher(d dialect, text []rune, i int) (int, bool) {
+	if !boundaryAt(d, text, i) || i >= len(text) {
 		return 0, false
 	}
 	if r := text[i]; !(r >= 'a' && r <= 'z' || r >= 'A' && r <= 'Z' || r == 0x130 || r == 0x131 || r == 0x17f || r == 0x212a) {
@@ -280,7 +297,7 @@ func urlUserinfoMatcher(text []rune, i int) (int, bool) {
 		}
 		j := end + 3
 		k := j
-		for k < len(text) && !pySpace(text[k]) && text[k] != '/' && text[k] != '@' {
+		for k < len(text) && !d.space(text[k]) && text[k] != '/' && text[k] != '@' {
 			k++
 		}
 		if k > j && k < len(text) && text[k] == '@' {
@@ -299,7 +316,7 @@ var (
 
 const slackKinds = "baprs"
 
-var matchers = []func([]rune, int) (int, bool){
+var matchers = []matcher{
 	headerValueMatcher(headerNames, true),
 	bearerMatcher,
 	basicMatcher,

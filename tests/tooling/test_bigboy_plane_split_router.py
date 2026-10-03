@@ -1315,7 +1315,6 @@ def _sample_paths(shared: list[dict], own: list[dict]) -> list[str]:
     return sorted(out)
 
 
-_Q = {"path": "/graphql", "pathType": "Exact", "service": "query-api"}
 _QA = {
     "path": "/graphql$",
     "pathType": "ImplementationSpecific",
@@ -1323,8 +1322,6 @@ _QA = {
 }
 _PY_PREFIX = {"path": "/ops-status", "pathType": "Prefix"}
 _PY_EXACT = {"path": "/status", "pathType": "Exact"}
-_PY_ANCHORED = {"path": "/about$", "pathType": "ImplementationSpecific"}
-_PY_DOTTED = {"path": "/feed\\.xml$", "pathType": "ImplementationSpecific"}
 
 # (id, shared allow-list, own allow-list of a second host or None, outcome)
 _MATRIX = [

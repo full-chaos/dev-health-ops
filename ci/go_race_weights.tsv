@@ -116,6 +116,8 @@ internal/goapiproof/writeproof	1
 internal/gqlgenguard	414
 internal/httpguard	10
 internal/identityalias	1
+internal/ingressplanes	2
+internal/ingressplanes/cmd/routerconf	1
 internal/jobcontract	2
 internal/joboperator	2
 internal/joboutbox	44
@@ -179,6 +181,7 @@ internal/migrationmatrix	4
 internal/mintcli	1
 internal/mintcli/edgetoken	1
 internal/mintcli/envelope	1
+internal/mintcli/envelopekeys	2
 internal/operationalbackfill	2
 internal/operationalordering	35
 internal/pgmigrate	6

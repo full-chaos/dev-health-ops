@@ -66,12 +66,17 @@ const recommendationsSQL = `
 
 // fetchRecommendationSignals ports _fetch_recommendation_signals
 // (services/home.py:771-800): only runs at team scope with at least one
-// team id, matching Python's own early-return guard. A read failure
-// degrades to an empty slice, matching Python's `except Exception:
-// logger.exception(...); return []`.
-func fetchRecommendationSignals(ctx context.Context, client QueryClient, f Filters, startDay, endDay time.Time, orgID string) []RecommendationRow {
+// team id, matching Python's own early-return guard.
+//
+// A read failure is RETURNED (CHAOS-8186). Python answered it with an empty
+// list (`except Exception: logger.exception(...); return []`) and this port
+// copied that: the caller then got a Home answer with no recommendation
+// signals and HTTP 200, the same answer as a team that has none. A failed
+// read and an empty panel are different states, so the error goes up and
+// BuildResponse fails the request, as it does for every other Home read.
+func fetchRecommendationSignals(ctx context.Context, client QueryClient, f Filters, startDay, endDay time.Time, orgID string) ([]RecommendationRow, error) {
 	if f.Scope.Level != "team" || len(f.Scope.IDs) == 0 {
-		return nil
+		return nil, nil
 	}
 	query := fmt.Sprintf(recommendationsSQL, "AND team_id IN {team_ids:Array(String)}")
 	bindings := []dhclickhouse.Binding{
@@ -82,7 +87,7 @@ func fetchRecommendationSignals(ctx context.Context, client QueryClient, f Filte
 	}
 	rows, err := client.Query(ctx, query, bindings)
 	if err != nil {
-		return nil
+		return nil, fmt.Errorf("home: fetch_recommendation_signals query: %w", err)
 	}
 	defer rows.Close()
 
@@ -96,7 +101,7 @@ func fetchRecommendationSignals(ctx context.Context, client QueryClient, f Filte
 		if err := rows.Scan(&teamID, &orgIDCol, &ruleID, &latestFired, &latestSeverity, &latestTitle,
 			&latestRationale, &latestSuccess, &latestEvidence, &latestWindowStart, &latestWindowEnd,
 			&latestComputedAt); err != nil {
-			return nil
+			return nil, fmt.Errorf("home: fetch_recommendation_signals scan: %w", err)
 		}
 		out = append(out, RecommendationRow{
 			TeamID: teamID, RuleID: ruleID, LatestSeverity: latestSeverity, LatestTitle: latestTitle,
@@ -104,9 +109,9 @@ func fetchRecommendationSignals(ctx context.Context, client QueryClient, f Filte
 		})
 	}
 	if err := rows.Err(); err != nil {
-		return nil
+		return nil, fmt.Errorf("home: fetch_recommendation_signals rows: %w", err)
 	}
-	return out
+	return out, nil
 }
 
 const compoundingRiskSQLBase = `
@@ -151,7 +156,13 @@ const compoundingRiskSQLBase = `
 
 // fetchRiskSignals ports _fetch_risk_signals (services/home.py:803-860),
 // including its subsequent scope-label resolution.
-func fetchRiskSignals(ctx context.Context, client QueryClient, f Filters, startDay, endDay time.Time, orgID string) []RiskRow {
+//
+// A read failure is RETURNED (CHAOS-8186), for the reason given on
+// fetchRecommendationSignals: no risk signal because the read failed is not
+// the state "no risk row in this window". The scope-label lookup stays
+// best-effort (resolveScopeLabels): a label is a name, not a value, and a
+// row with no label falls back to its id.
+func fetchRiskSignals(ctx context.Context, client QueryClient, f Filters, startDay, endDay time.Time, orgID string) ([]RiskRow, error) {
 	latestScopeFilter := ""
 	scoped := f.Scope.Level == "team" || f.Scope.Level == "repo"
 	if scoped && len(f.Scope.IDs) > 0 {
@@ -184,7 +195,7 @@ func fetchRiskSignals(ctx context.Context, client QueryClient, f Filters, startD
 
 	rows, err := client.Query(ctx, query, bindings)
 	if err != nil {
-		return nil
+		return nil, fmt.Errorf("home: fetch_risk_signals query: %w", err)
 	}
 	defer rows.Close()
 
@@ -195,22 +206,22 @@ func fetchRiskSignals(ctx context.Context, client QueryClient, f Filters, startD
 		var severity string
 		var latestComputedAt time.Time
 		if err := rows.Scan(&scope, &scopeID, &score, &severity, &latestComputedAt); err != nil {
-			return nil
+			return nil, fmt.Errorf("home: fetch_risk_signals scan: %w", err)
 		}
 		out = append(out, RiskRow{Scope: scope, ScopeID: scopeID, Score: score, Severity: severity})
 	}
 	if err := rows.Err(); err != nil {
-		return nil
+		return nil, fmt.Errorf("home: fetch_risk_signals rows: %w", err)
 	}
 	if len(out) == 0 {
-		return nil
+		return nil, nil
 	}
 
 	labels := resolveScopeLabels(ctx, client, orgID, out)
 	for i := range out {
 		out[i].ScopeDisplayName = labels[out[i].ScopeID]
 	}
-	return out
+	return out, nil
 }
 
 // resolveScopeLabels ports _resolve_scope_labels (services/home.py:

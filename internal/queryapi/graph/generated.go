@@ -413,9 +413,11 @@ type ComplexityRoot struct {
 	}
 
 	CapacityDistribution struct {
-		Days  func(childComplexity int) int
-		Items func(childComplexity int) int
-		Runs  func(childComplexity int) int
+		Days           func(childComplexity int) int
+		HorizonDays    func(childComplexity int) int
+		Items          func(childComplexity int) int
+		Runs           func(childComplexity int) int
+		UnfinishedRuns func(childComplexity int) int
 	}
 
 	CapacityDistributionBin struct {
@@ -3370,6 +3372,13 @@ func (e *executableSchema) Complexity(typeName, field string, childComplexity in
 
 		return e.complexity.CapacityDistribution.Days(childComplexity), true
 
+	case "CapacityDistribution.horizonDays":
+		if e.complexity.CapacityDistribution.HorizonDays == nil {
+			break
+		}
+
+		return e.complexity.CapacityDistribution.HorizonDays(childComplexity), true
+
 	case "CapacityDistribution.items":
 		if e.complexity.CapacityDistribution.Items == nil {
 			break
@@ -3383,6 +3392,13 @@ func (e *executableSchema) Complexity(typeName, field string, childComplexity in
 		}
 
 		return e.complexity.CapacityDistribution.Runs(childComplexity), true
+
+	case "CapacityDistribution.unfinishedRuns":
+		if e.complexity.CapacityDistribution.UnfinishedRuns == nil {
+			break
+		}
+
+		return e.complexity.CapacityDistribution.UnfinishedRuns(childComplexity), true
 
 	case "CapacityDistributionBin.count":
 		if e.complexity.CapacityDistributionBin.Count == nil {
@@ -9250,32 +9266,53 @@ type CapacityDistribution {
   items: [CapacityDistributionBin!]
   """
   The number of simulation runs behind each mode (CHAOS-8477): the counts of one
-  mode's bins sum to it. The modes of one forecast come from one simulation and
-  hold the same number of runs. The running share of the runs is served on each
-  bin (cumulativeShare).
+  mode's bins sum to it, the runs that did not finish included. The modes of one
+  forecast come from one simulation and hold the same number of runs. The share
+  of the runs that finished is served on each bin (cumulativeShare).
   """
   runs: Int!
+  """
+  The number of days-mode runs that did NOT finish inside the simulated horizon
+  (CHAOS-8477): the simulation stops a run after ` + "`" + `` + "`" + `horizonDays` + "`" + `` + "`" + ` days, with
+  items still open, and records it in the ` + "`" + `` + "`" + `days` + "`" + `` + "`" + ` bin at ` + "`" + `` + "`" + `horizonDays` + "`" + `` + "`" + `. Such
+  a run is not done. A run that needs exactly ` + "`" + `` + "`" + `horizonDays` + "`" + `` + "`" + ` days is recorded
+  in the same bin and cannot be told apart, so it is counted here too. Null =
+  the days mode did not simulate (` + "`" + `` + "`" + `days` + "`" + `` + "`" + ` is null).
+  """
+  unfinishedRuns: Int
+  """
+  The horizon of the days simulation, in days (CHAOS-8477): 365. A ` + "`" + `` + "`" + `days` + "`" + `` + "`" + ` bin
+  with this value means "this many days or more".
+  """
+  horizonDays: Int!
 }
 
 type CapacityDistributionBin {
   """
   The outcome: a day count (days) or an item count (items). A day count is the
   number of days after the day the forecast was computed: the same axis as
-  p50Days, p85Days and p95Days (p50Date is that day plus p50Days).
+  p50Days, p85Days and p95Days (p50Date is that day plus p50Days). A day count
+  equal to the distribution's horizonDays means "that many days or more": the
+  simulation stops a run there, done or not.
   """
   value: Int!
-  "How many simulation runs ended on this value."
+  "How many simulation runs ended on this value. In the days bin at horizonDays: how many runs were stopped there."
   count: Int!
   """
-  The share of the mode's simulation runs that completed on this value or a
-  lower one (CHAOS-8477), from the same Monte Carlo distribution as p50Days /
-  p85Days / p95Days: 0 to 1, never lower than on the bin before, and 1 on the
-  last bin. In the days mode it is the share of the runs in which the target
-  items were done on or before that day. The percentile days are an
-  interpolated rank of the same runs: the day on which this share first reaches
-  0.50 and p50Days both lie between the outcomes of the same two consecutive
-  ranked runs, so they are the same day unless those two runs ended on
-  different days (and so for 0.85 and p85Days, 0.95 and p95Days).
+  The share of ALL the mode's simulation runs (CHAOS-8477), from the same Monte
+  Carlo distribution as p50Days / p85Days / p95Days: 0 to 1, never lower than
+  on the bin before. In the days mode it is the share of the runs that FINISHED
+  (the target items were done) on or before that day. A run that reached the
+  horizon is not done: the bin at horizonDays adds nothing to the share, so the
+  last share is below 1 when any run reached the horizon (unfinishedRuns), and
+  it is 1 only when every run finished. In the items mode it is the share of
+  the runs with this many items or fewer, and 1 on the last bin. The percentile
+  days are an interpolated rank of the same runs: the day on which this share
+  first reaches 0.50 and p50Days both lie between the outcomes of the same two
+  consecutive ranked runs, so they are the same day unless those two runs ended
+  on different days (and so for 0.85 and p85Days, 0.95 and p95Days). When so
+  many runs reached the horizon that the share never reaches a percentile, that
+  percentile day is horizonDays and means "horizonDays or more".
   """
   cumulativeShare: Float!
 }
@@ -25846,6 +25883,91 @@ func (ec *executionContext) fieldContext_CapacityDistribution_runs(_ context.Con
 	return fc, nil
 }
 
+func (ec *executionContext) _CapacityDistribution_unfinishedRuns(ctx context.Context, field graphql.CollectedField, obj *model.CapacityDistribution) (ret graphql.Marshaler) {
+	fc, err := ec.fieldContext_CapacityDistribution_unfinishedRuns(ctx, field)
+	if err != nil {
+		return graphql.Null
+	}
+	ctx = graphql.WithFieldContext(ctx, fc)
+	defer func() {
+		if r := recover(); r != nil {
+			ec.Error(ctx, ec.Recover(ctx, r))
+			ret = graphql.Null
+		}
+	}()
+	resTmp, err := ec.ResolverMiddleware(ctx, func(rctx context.Context) (any, error) {
+		ctx = rctx // use context from middleware stack in children
+		return obj.UnfinishedRuns, nil
+	})
+	if err != nil {
+		ec.Error(ctx, err)
+		return graphql.Null
+	}
+	if resTmp == nil {
+		return graphql.Null
+	}
+	res := resTmp.(*int)
+	fc.Result = res
+	return ec.marshalOInt2ᚖint(ctx, field.Selections, res)
+}
+
+func (ec *executionContext) fieldContext_CapacityDistribution_unfinishedRuns(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "CapacityDistribution",
+		Field:      field,
+		IsMethod:   false,
+		IsResolver: false,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return nil, errors.New("field of type Int does not have child fields")
+		},
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _CapacityDistribution_horizonDays(ctx context.Context, field graphql.CollectedField, obj *model.CapacityDistribution) (ret graphql.Marshaler) {
+	fc, err := ec.fieldContext_CapacityDistribution_horizonDays(ctx, field)
+	if err != nil {
+		return graphql.Null
+	}
+	ctx = graphql.WithFieldContext(ctx, fc)
+	defer func() {
+		if r := recover(); r != nil {
+			ec.Error(ctx, ec.Recover(ctx, r))
+			ret = graphql.Null
+		}
+	}()
+	resTmp, err := ec.ResolverMiddleware(ctx, func(rctx context.Context) (any, error) {
+		ctx = rctx // use context from middleware stack in children
+		return obj.HorizonDays, nil
+	})
+	if err != nil {
+		ec.Error(ctx, err)
+		return graphql.Null
+	}
+	if resTmp == nil {
+		if !graphql.HasFieldError(ctx, fc) {
+			ec.Errorf(ctx, "must not be null")
+		}
+		return graphql.Null
+	}
+	res := resTmp.(int)
+	fc.Result = res
+	return ec.marshalNInt2int(ctx, field.Selections, res)
+}
+
+func (ec *executionContext) fieldContext_CapacityDistribution_horizonDays(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "CapacityDistribution",
+		Field:      field,
+		IsMethod:   false,
+		IsResolver: false,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return nil, errors.New("field of type Int does not have child fields")
+		},
+	}
+	return fc, nil
+}
+
 func (ec *executionContext) _CapacityDistributionBin_value(ctx context.Context, field graphql.CollectedField, obj *model.CapacityDistributionBin) (ret graphql.Marshaler) {
 	fc, err := ec.fieldContext_CapacityDistributionBin_value(ctx, field)
 	if err != nil {
@@ -26905,6 +27027,10 @@ func (ec *executionContext) fieldContext_CapacityForecast_completionDistribution
 				return ec.fieldContext_CapacityDistribution_items(ctx, field)
 			case "runs":
 				return ec.fieldContext_CapacityDistribution_runs(ctx, field)
+			case "unfinishedRuns":
+				return ec.fieldContext_CapacityDistribution_unfinishedRuns(ctx, field)
+			case "horizonDays":
+				return ec.fieldContext_CapacityDistribution_horizonDays(ctx, field)
 			}
 			return nil, fmt.Errorf("no field named %q was found under type CapacityDistribution", field.Name)
 		},
@@ -65562,6 +65688,13 @@ func (ec *executionContext) _CapacityDistribution(ctx context.Context, sel ast.S
 			out.Values[i] = ec._CapacityDistribution_items(ctx, field, obj)
 		case "runs":
 			out.Values[i] = ec._CapacityDistribution_runs(ctx, field, obj)
+			if out.Values[i] == graphql.Null {
+				out.Invalids++
+			}
+		case "unfinishedRuns":
+			out.Values[i] = ec._CapacityDistribution_unfinishedRuns(ctx, field, obj)
+		case "horizonDays":
+			out.Values[i] = ec._CapacityDistribution_horizonDays(ctx, field, obj)
 			if out.Values[i] == graphql.Null {
 				out.Invalids++
 			}

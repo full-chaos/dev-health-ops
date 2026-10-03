@@ -133,35 +133,44 @@ func reversePatch(tree map[string][]string, patch string) error {
 	return nil
 }
 
-func readVendoredTree(t *testing.T, root string) map[string][]string {
+// readVendoredTree reads EVERY file of the vendored directory except the records themselves (patches/, PROVENANCE.md,
+// UPSTREAM.sha256), so a file added anywhere in it is part of the tree the patches must explain. A file with no final
+// newline is reported (the digests are over newline-terminated files).
+func readVendoredTree(t *testing.T, root string) (map[string][]string, []string) {
 	t.Helper()
 	tree := map[string][]string{}
+	var problems []string
 	base := filepath.Join(root, vendoredAtlassianDir)
-	add := func(path string) {
-		raw, err := os.ReadFile(filepath.Join(base, path))
+	err := filepath.WalkDir(base, func(path string, d fs.DirEntry, err error) error {
 		if err != nil {
-			t.Fatal(err)
-		}
-		text := string(raw)
-		if !strings.HasSuffix(text, "\n") {
-			t.Fatalf("%s does not end with a newline", path)
-		}
-		tree[vendoredAtlassianDir+"/"+path] = strings.Split(strings.TrimSuffix(text, "\n"), "\n")
-	}
-	err := filepath.WalkDir(filepath.Join(base, "atlassian"), func(path string, d fs.DirEntry, err error) error {
-		if err != nil || d.IsDir() {
 			return err
 		}
 		rel, _ := filepath.Rel(base, path)
-		add(filepath.ToSlash(rel))
+		rel = filepath.ToSlash(rel)
+		if d.IsDir() {
+			if rel == "patches" {
+				return filepath.SkipDir
+			}
+			return nil
+		}
+		if rel == "PROVENANCE.md" || rel == "UPSTREAM.sha256" {
+			return nil
+		}
+		raw, err := os.ReadFile(path)
+		if err != nil {
+			return err
+		}
+		text := string(raw)
+		if !strings.HasSuffix(text, "\n") {
+			problems = append(problems, fmt.Sprintf("%s does not end with a newline", rel))
+		}
+		tree[vendoredAtlassianDir+"/"+rel] = strings.Split(strings.TrimSuffix(text, "\n"), "\n")
 		return nil
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
-	add("go.mod")
-	add("LICENSE")
-	return tree
+	return tree, problems
 }
 
 func provenancePatchNames(t *testing.T, root string) []string {
@@ -201,7 +210,8 @@ func checkPatchChain(t *testing.T, root string) []string {
 		problems = append(problems, fmt.Sprintf("PROVENANCE rows %v and patch files %v differ: every patch needs exactly one row and every row a patch", rows, onDisk))
 	}
 
-	tree := readVendoredTree(t, root)
+	tree, treeProblems := readVendoredTree(t, root)
+	problems = append(problems, treeProblems...)
 	for i := len(patchPaths) - 1; i >= 0; i-- {
 		raw, err := os.ReadFile(patchPaths[i])
 		if err != nil {
@@ -283,6 +293,22 @@ func copyRepoSlice(t *testing.T) string {
 	return filepath.Dir(filepath.Dir(filepath.Dir(dst)))
 }
 
+// addPatchRecord adds a patch file and its PROVENANCE row to a scratch copy.
+func addPatchRecord(t *testing.T, base, name, body string) {
+	t.Helper()
+	if err := os.WriteFile(filepath.Join(base, "patches", name), []byte(body), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	f, err := os.OpenFile(filepath.Join(base, "PROVENANCE.md"), os.O_APPEND|os.O_WRONLY, 0o644)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer f.Close()
+	if _, err := f.WriteString("\n| `patches/" + name + "` | planted |\n"); err != nil {
+		t.Fatal(err)
+	}
+}
+
 // TestPatchChainCheckSeesEveryKindOfDrift plants each defect in a scratch copy: the check must report it.
 func TestPatchChainCheckSeesEveryKindOfDrift(t *testing.T) {
 	if got := checkPatchChain(t, copyRepoSlice(t)); len(got) != 0 {
@@ -331,13 +357,57 @@ func TestPatchChainCheckSeesEveryKindOfDrift(t *testing.T) {
 				t.Fatal(err)
 			}
 		},
+		"unrecorded new file at the module root": func(t *testing.T, base string) {
+			if err := os.WriteFile(filepath.Join(base, "extra.go"), []byte("package atlassian\n"), 0o644); err != nil {
+				t.Fatal(err)
+			}
+		},
+		"unrecorded new package directory": func(t *testing.T, base string) {
+			if err := os.MkdirAll(filepath.Join(base, "newpkg"), 0o755); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.WriteFile(filepath.Join(base, "newpkg", "x.go"), []byte("package newpkg\n"), 0o644); err != nil {
+				t.Fatal(err)
+			}
+		},
+		"deleted upstream file": func(t *testing.T, base string) {
+			if err := os.Remove(filepath.Join(base, "LICENSE")); err != nil {
+				t.Fatal(err)
+			}
+		},
+		"extra line in a patch-created file": func(t *testing.T, base string) {
+			path := filepath.Join(base, "atlassian", "default_http_client.go")
+			raw, _ := os.ReadFile(path)
+			if err := os.WriteFile(path, append(raw, []byte("// more than the patch added\n")...), 0o644); err != nil {
+				t.Fatal(err)
+			}
+		},
+		"final newline removed": func(t *testing.T, base string) {
+			path := filepath.Join(base, "LICENSE")
+			raw, _ := os.ReadFile(path)
+			if err := os.WriteFile(path, []byte(strings.TrimSuffix(string(raw), "\n")), 0o644); err != nil {
+				t.Fatal(err)
+			}
+		},
+		"empty patch record with its row": func(t *testing.T, base string) {
+			addPatchRecord(t, base, "0006-empty.patch", "")
+		},
+		"header-only patch record with its row": func(t *testing.T, base string) {
+			addPatchRecord(t, base, "0006-header-only.patch", "diff --git a/third_party/vendor/atlassian/go.mod b/third_party/vendor/atlassian/go.mod\n")
+		},
 	}
+	plantedReason := map[string]string{"deleted upstream file": "is missing once the patches are reversed"}
 	for name, mutate := range plant {
 		t.Run(name, func(t *testing.T) {
 			root := copyRepoSlice(t)
 			mutate(t, filepath.Join(root, vendoredAtlassianDir))
-			if got := checkPatchChain(t, root); len(got) == 0 {
+			got := checkPatchChain(t, root)
+			if len(got) == 0 {
 				t.Fatalf("%s: the check passed", name)
+			}
+			// a defect must be reported for its own reason, not only through a later digest mismatch
+			if want, ok := plantedReason[name]; ok && !strings.Contains(strings.Join(got, "\n"), want) {
+				t.Fatalf("%s: reported %v, want a report containing %q", name, got, want)
 			}
 		})
 	}

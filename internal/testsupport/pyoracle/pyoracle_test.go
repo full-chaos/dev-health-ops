@@ -288,7 +288,7 @@ func TestInARecordingATestOutsideTheClosedListIsGivenAnInterpreterThatRefuses(t 
 		t.Fatalf("the launcher was given %s, want the real interpreter", got)
 	}
 
-	t.Chdir(filepath.Join(repoRootOf(t), "internal", "pgmigrate"))
+	t.Chdir(filepath.Join(repoRootOf(t), "internal", "providersync"))
 	if got := Resolve(t, root); got != real {
 		t.Fatalf("a package on the closed list was given %s in a recording, want the real interpreter", got)
 	}
@@ -354,7 +354,6 @@ var unconvertedDayOne = map[string]bool{
 	"internal/maintenancecli":          true,
 	"internal/metricscli":              true,
 	"internal/operationalbackfill":     true,
-	"internal/pgmigrate":               true,
 	"internal/providersync":            true,
 	"internal/pushcli":                 true,
 }
@@ -405,7 +404,7 @@ func TestInterpreterRefusesInARecordingOutsideTheClosedList(t *testing.T) {
 	if _, _, err := Interpreter(root); err == nil {
 		t.Fatal("Interpreter gave the interpreter to a package under a listed one")
 	}
-	t.Chdir(filepath.Join(repoRootOf(t), "internal", "pgmigrate"))
+	t.Chdir(filepath.Join(repoRootOf(t), "internal", "providersync"))
 	if path, _, err := Interpreter(root); err != nil || path != real {
 		t.Fatalf("a package on the closed list: %s, %v", path, err)
 	}

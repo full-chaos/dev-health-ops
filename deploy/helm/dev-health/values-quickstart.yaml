@@ -88,6 +88,11 @@ api:
 
 web:
   replicas: 1
+  env:
+    # CHAOS-8310: web.env.BACKEND_URL is required (no chart default). This is the value the chart rendered for the release
+    # named in the usage line above (`helm install dev-health`: http://<release>-api:8000); another release name needs its own.
+    # CHAOS-8314 (E4) replaces this with the environment's fan-out host.
+    BACKEND_URL: "http://dev-health-api:8000"
   resources:
     requests:
       memory: "64Mi"

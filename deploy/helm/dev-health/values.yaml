@@ -762,7 +762,10 @@ web:
     initialDelaySeconds: 5
     periodSeconds: 5
   env:
-    BACKEND_URL: ""  # defaults to http://<release>-api:8000
+    # -- REQUIRED when web.enabled (CHAOS-8310): no default. The base URL of web's server-side requests (REST on
+    #    go-api and /graphql on query-api: two services, so no single in-chart default is correct). The render
+    #    fails with a message naming this key while it is empty.
+    BACKEND_URL: ""
     AUTH_SECRET: ""
     NODE_ENV: "production"
   nodeSelector: {}

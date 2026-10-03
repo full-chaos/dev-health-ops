@@ -13,18 +13,11 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/venueoracle"
 )
 
-// TestSchemaBundleMatchesLivePython is the live-Python oracle team-lead's
-// review required in place of a hardcoded ETag string: it EXECUTES the real
-// production functions (schema_registry.get_bundle, schema_registry.
-// compute_etag over schemas.py's actual Pydantic models), not a digest of a
-// value computed once and typed into the test. It runs only under
-// `ci/check_go.sh live-python-oracles` (DEV_HEALTH_LIVE_PYTHON_ORACLES=1,
-// -count=1 -- see that verb's own doc comment on why a cached `go test` run
-// would silently skip re-executing Python), never under the plain `test`
-// verb, and never folds into it: that verb's cache defeats exactly what
-// this test exists to catch (a schemas.py/schema_registry.py change the
-// checked-in golden asset, testdata/schema_bundle.v1.json, was not
-// regenerated to match).
+// TestSchemaBundleMatchesFrozenPython compares the Go bundle with the frozen
+// answer of the real production functions (schema_registry.get_bundle,
+// schema_registry.compute_etag over schemas.py's actual Pydantic models),
+// recorded once by execution and replayed here (no Python runs). The live
+// run was deleted: Go is the implementation of record.
 //
 // The golden asset itself STAYS the Go runtime's source of truth (bundle.go
 // embeds it; no request path calls Python) -- this test only proves the

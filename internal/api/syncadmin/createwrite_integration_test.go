@@ -192,7 +192,7 @@ func TestCreateWriteVenueOracleSequenceUnderTheAPIRole(t *testing.T) {
 		t.Errorf("credential id: %v", err)
 	}
 	expect("refusals wrote nothing", query(`SELECT count(*)::text FROM integrations WHERE org_id = $1`, org), before)
-	if os.Getenv("DEV_HEALTH_LIVE_PYTHON_ORACLES") == "1" {
+	if os.Getenv("DEV_HEALTH_VENUE_ORACLES") == "1" {
 		venueoracle.WriteGoOnlyProof(t, "the create write sequence under the api role; the Python differential is the create route's venue")
 	}
 }

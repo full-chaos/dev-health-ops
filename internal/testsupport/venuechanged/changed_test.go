@@ -166,9 +166,9 @@ func TestTheWorkflowRunsTheHeavyStepsOnlyWhenSomethingIsSelected(t *testing.T) {
 		t.Fatal("the workflow does not select and then run through the verb")
 	}
 	const condition = "if: steps.select.outputs.run == 'true'"
-	// Go, uv, project install, registry login, image pre-pull, the run, and the upload.
-	if got := strings.Count(text, condition); got != 7 {
-		t.Fatalf("%d heavy steps carry the selection condition, want 7 (setup-go, setup-uv, uv sync, login, pre-pull, run, upload)", got)
+	// Go, registry login, image pre-pull, the run, and the upload (no Python is installed).
+	if got := strings.Count(text, condition); got != 5 {
+		t.Fatalf("%d heavy steps carry the selection condition, want 5 (setup-go, login, pre-pull, run, upload)", got)
 	}
 	if !strings.Contains(text, "if: steps.select.outputs.run == 'true' && always()") {
 		t.Fatal("the receipt upload is not gated on the selection")

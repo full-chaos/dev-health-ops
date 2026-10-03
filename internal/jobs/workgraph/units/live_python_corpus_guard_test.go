@@ -160,15 +160,15 @@ const maxUnguardableGenerators = 8
 // So discovery is not strictly better than enumeration. It converts a silent gap
 // into a loud failure, which is an improvement only if the genuine exclusions
 // are recorded -- and an exclusion that outlives its reason is the same rot as a
-// stale divergence entry. Hence TestExcludedGeneratorsAreStillUnrunnable below,
-// which fails when an exclusion becomes unnecessary.
+// stale divergence entry. (The self-check of this map read the live-oracle
+// requirements closure, which was deleted with the live oracles, CHAOS-7308.)
 var excludedGenerators = map[string]struct {
 	reason        string
 	missingModule string
 	removeWhen    string
 }{
 	// EMPTIED, CHAOS-4441: every entry here was excluded for the SAME recorded
-	// reason -- "httpx2 is added to ci/requirements-live-python-oracles.txt" --
+	// reason -- "httpx2 is added to the live-oracle closure" --
 	// and this PR adds it (with its own --no-deps transitives httpcore2 and
 	// truststore). TestExcludedGeneratorsAreStillUnrunnable fired on all four
 	// the moment the pin landed, which is precisely the rot check working: the
@@ -192,10 +192,10 @@ var excludedGenerators = map[string]struct {
 // need a LIVE ClickHouse connection (CLICKHOUSE_URI) to real org-shaped data
 // rather than exercising pure interpreter behaviour -- a different axis of
 // "cannot run here" from both other maps. excludedGenerators is for a missing
-// Python package (self-checked against ci/requirements-live-python-oracles.txt);
+// Python package ;
 // explicitCorpusPaths is for an inferable-but-unnamed output path with a
 // frozen corpus this guard CAN diff against. Neither fits: naming one of
-// these in explicitCorpusPaths would make the live-python-oracles CI job
+// these in explicitCorpusPaths would make a live-Python CI job
 // actually try to run it, and that job has no network path to a ClickHouse
 // replica, so it would fail differently rather than being guarded; and their
 // gap is not a missing import, so excludedGenerators' missingModule
@@ -466,75 +466,6 @@ func itoa(value int) string {
 		value /= 10
 	}
 	return string(digits)
-}
-
-// TestExcludedGeneratorsAreStillUnrunnable fails when an exclusion stops being
-// necessary.
-//
-// An exclusion is a claim about the environment, and claims about the
-// environment go stale silently. The entry for generate_effort_golden.py exists
-// because the CI oracle closure lacks httpx2; the day someone adds it, that
-// corpus becomes guardable and the exclusion becomes a hole nobody is watching.
-//
-// # WHY THIS READS THE REQUIREMENTS FILE AND NOT THE INTERPRETER
-//
-// The first version of this test imported the module and failed if the import
-// succeeded. That has INVERTED polarity: httpx2 is present in a developer's
-// local venv, so the test would have been red on every machine and green in the
-// only environment the exclusion is about. A check whose result depends on where
-// it runs, in the opposite direction to the thing it guards, is worse than no
-// check.
-//
-// The exclusion is a statement about ci/requirements-live-python-oracles.txt, so
-// that file is what gets read. Environment-independent, and it tests the exact
-// condition recorded in removeWhen.
-func TestExcludedGeneratorsAreStillUnrunnable(t *testing.T) {
-	// An empty list is a checked fact, not a skip: the test passes only while it is empty or every entry still
-	// earns its place below, so a planted entry that does not is red.
-	if len(excludedGenerators) == 0 {
-		t.Logf("excludedGenerators is empty: nothing to verify")
-	}
-
-	repoRoot := repositoryRootPath(t)
-	closurePath := filepath.Join(repoRoot, "ci", "requirements-live-python-oracles.txt")
-	closure, err := os.ReadFile(closurePath)
-	if err != nil {
-		t.Fatalf("read the live-oracle closure: %v", err)
-	}
-
-	for name, excluded := range excludedGenerators {
-		if excluded.missingModule == "" {
-			t.Errorf(
-				"%s is excluded with no missingModule, so the exclusion cannot be "+
-					"checked and will outlive its reason silently", name,
-			)
-			continue
-		}
-		t.Run(name, func(t *testing.T) {
-			for _, line := range strings.Split(string(closure), "\n") {
-				requirement := strings.TrimSpace(line)
-				if requirement == "" || strings.HasPrefix(requirement, "#") {
-					continue
-				}
-				// Match the distribution name only: "httpx2==1.0" must match
-				// while "httpx==0.28.1" must not, which a substring test gets
-				// wrong in exactly the direction that matters here.
-				distribution := requirement
-				if index := strings.IndexAny(distribution, "=<>!~[; "); index >= 0 {
-					distribution = distribution[:index]
-				}
-				if strings.EqualFold(strings.TrimSpace(distribution), excluded.missingModule) {
-					t.Errorf(
-						"%s is excluded because %q, but %q is NOW in %s. The "+
-							"exclusion is stale: remove the entry and let discovery "+
-							"guard this corpus. (Recorded removal condition: %s)",
-						name, excluded.reason, excluded.missingModule,
-						"ci/requirements-live-python-oracles.txt", excluded.removeWhen,
-					)
-				}
-			}
-		})
-	}
 }
 
 // TestExplicitCorpusPathsAreStillNeeded deletes an excuse the moment it stops

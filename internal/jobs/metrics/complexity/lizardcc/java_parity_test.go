@@ -133,14 +133,6 @@ func TestGoMatchesLizardGoldenJava(t *testing.T) {
 	}
 }
 
-// TestLizardGoldenIsNotStaleJava closes codex round r1 finding #6 (the P2
-// raised specifically against this PR: no live-lizard staleness guard on
-// the java golden) by calling the shared mechanism cfamily's
-// clike_parity_test.go defines -- ONE mechanism, this PR's own invocation.
-func TestLizardGoldenIsNotStaleJava(t *testing.T) {
-	assertGoldenBytesMatchLiveOracle(t, javaCorpusDir(t), javaGoldenPath(t))
-}
-
 // TestEveryConditionIsExercisedByTheJavaCorpus is this PR's own invocation
 // of the shared coverage-manifest mechanism (finding #6's narrower half).
 // Java has no conditions map of its own -- AnalyzeJava reuses clike.go's

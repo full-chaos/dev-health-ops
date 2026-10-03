@@ -227,7 +227,7 @@ Re-verify, then commit:
 
 check_contract() {
   command -v go >/dev/null 2>&1 || die "check_migration_matrix: contract mode needs the Go toolchain on PATH"
-  ( cd "${ROOT}" && go run ./cmd/dev-health-migration-matrix -check -root . )
+  ( cd "${ROOT}" && go run -trimpath ./cmd/dev-health-migration-matrix -check -root . )
 }
 
 main() {

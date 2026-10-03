@@ -15,7 +15,6 @@ import (
 	"slices"
 	"strings"
 	"sync"
-	"sync/atomic"
 	"testing"
 	"time"
 
@@ -180,6 +179,43 @@ func awaitBoundAddress(t *testing.T, logs *safeBuffer, component string) string 
 
 // awaitResponse polls url until it answers, so the test never races the
 // listener's bind.
+// awaitBoundAddressOrExit is awaitBoundAddress that also reads the Execute
+// exit channel: if Execute returns before the component's "listener bound"
+// line appears, it fails at once with the exit code and the logs instead of
+// waiting out the limit. heldAddress names the address the test holds open.
+func awaitBoundAddressOrExit(t *testing.T, logs *safeBuffer, exit <-chan int, component, heldAddress string) string {
+	t.Helper()
+	deadline := time.Now().Add(20 * time.Second)
+	for time.Now().Before(deadline) {
+		select {
+		case code := <-exit:
+			t.Fatalf(
+				"Execute exited %d before the %s listener bound; the environment's address %s is held, so the flag did not win; logs:\n%s",
+				code, component, heldAddress, logs.String(),
+			)
+		default:
+		}
+		for _, line := range strings.Split(logs.String(), "\n") {
+			if !strings.Contains(line, `"msg":"listener bound"`) {
+				continue
+			}
+			var entry struct {
+				Component string `json:"component"`
+				Address   string `json:"address"`
+			}
+			if err := json.Unmarshal([]byte(line), &entry); err != nil {
+				t.Fatalf("decode log line %q: %v", line, err)
+			}
+			if entry.Component == component && entry.Address != "" {
+				return entry.Address
+			}
+		}
+		time.Sleep(25 * time.Millisecond)
+	}
+	t.Fatalf("no \"listener bound\" line for %s within 20s; logs:\n%s", component, logs.String())
+	return ""
+}
+
 func awaitResponse(t *testing.T, client *http.Client, url string) *http.Response {
 	t.Helper()
 	deadline := time.Now().Add(20 * time.Second)
@@ -601,26 +637,17 @@ func TestFlagsOverrideTheEnvironment(t *testing.T) {
 	// ephemeral loopback port.
 	// The environment's operator address is HELD OPEN by the test for its whole
 	// duration (never reserved and released), so no neighbouring process can be
-	// handed the port while the test runs. If the flag were ignored, the
-	// service would try to bind this held address and fail to start; the
-	// assertions below also prove nothing ever connected to it.
+	// handed the port while the test runs. The proof that the flag won: the
+	// service started and served on the flag's address while the environment's
+	// address was in use. If the flag were ignored, the service would try to
+	// bind the held address and exit; the wait below reads that exit and
+	// fails at once.
 	held, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
 		t.Fatalf("hold the environment's operator address: %v", err)
 	}
 	defer func() { _ = held.Close() }()
 	operatorAddress := held.Addr().String()
-	var heldConnections atomic.Int64
-	go func() {
-		for {
-			conn, acceptErr := held.Accept()
-			if acceptErr != nil {
-				return
-			}
-			heldConnections.Add(1)
-			_ = conn.Close()
-		}
-	}()
 	env := brokenEnvironment(t, "localhost:0", operatorAddress)
 	env[authconfig.EnvLogLevel] = "info"
 
@@ -635,21 +662,12 @@ func TestFlagsOverrideTheEnvironment(t *testing.T) {
 		)
 	}()
 
-	flagOperator := awaitBoundAddress(t, logs, "operator-http")
-	if flagOperator == operatorAddress {
-		t.Fatalf("the operator listener bound the environment's address %s, so the flag did not win", operatorAddress)
-	}
+	flagOperator := awaitBoundAddressOrExit(t, logs, exit, "operator-http", operatorAddress)
 	client := &http.Client{Timeout: 5 * time.Second}
 	defer client.CloseIdleConnections()
 	response := awaitResponse(t, client, "http://"+flagOperator+"/healthz")
 	_, _ = io.Copy(io.Discard, response.Body)
 	_ = response.Body.Close()
-
-	// The held environment address must have seen no traffic: the service
-	// served on the flag's address, not on the environment's.
-	if got := heldConnections.Load(); got != 0 {
-		t.Fatalf("the environment's operator address received %d connection(s), so the flag did not win", got)
-	}
 
 	cancel()
 	select {

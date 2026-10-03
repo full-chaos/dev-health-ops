@@ -7,6 +7,8 @@ import (
 	"errors"
 	"fmt"
 	"path/filepath"
+	"reflect"
+	"regexp"
 	"strings"
 	"testing"
 	"time"
@@ -531,6 +533,340 @@ func TestStrandRepairAgainstLivePostgres(t *testing.T) {
 		if result.Rearmed != 0 {
 			t.Fatalf("Step() = %+v, want no match across kinds", result)
 		}
+	})
+
+	// CHAOS-8421. The three daily/work-graph shapes bind the River job to the
+	// domain row as well as the outbox row, so the planner can reach the outbox
+	// through River's GIN index on river_job.args and the outbox's unique
+	// river_job_id index instead of scanning the outbox once per candidate.
+	// These cases pin what that binding must NOT change -- which rows are
+	// candidates -- and the one thing it does change.
+	t.Run("the survey reaches the outbox through the River job", func(t *testing.T) {
+		type strandShapeCase struct {
+			name string
+			// seed writes an UNFINISHED domain row of this shape and returns
+			// its id: the row every case below hangs a delivery on.
+			seed       func(t *testing.T, now time.Time) string
+			kind       string
+			domainType string
+			payload    func(id string) any
+			// canonicalKey is the key the ordinary publisher writes; otherKey
+			// is a key a real producer also writes for the SAME domain row.
+			canonicalKey func(id string) string
+			otherKey     func(id string) string
+			otherKeyName string
+		}
+		shapes := []strandShapeCase{
+			{
+				name: "partition",
+				seed: func(t *testing.T, now time.Time) string {
+					runID, partitionID := integrationUUID(8101), integrationUUID(8102)
+					seedDailyRun(t, ctx, admin, fixture.orgID, runID, "running", "pending", nil)
+					seedDailyPartition(t, ctx, admin, partitionID, runID, "running", ptr(now.Add(-time.Hour)))
+					return partitionID
+				},
+				kind:       jobcontract.KindDailyMetricsPartition,
+				domainType: "daily_metrics_partition",
+				payload: func(id string) any {
+					return jobcontract.DailyMetricsPartitionPayload{PartitionID: id}
+				},
+				canonicalKey: func(id string) string { return "metrics.daily_partition:" + id },
+				// PublishRedrivePartitionTx (internal/jobs/metrics/daily/publisher.go).
+				otherKey:     func(id string) string { return "metrics.daily_partition:redrive:" + id + ":" + integrationUUID(8190) },
+				otherKeyName: "a redrive key",
+			},
+			{
+				name: "finalize",
+				seed: func(t *testing.T, now time.Time) string {
+					runID := integrationUUID(8111)
+					seedDailyRun(t, ctx, admin, fixture.orgID, runID, "running", "pending", nil)
+					seedDailyPartition(t, ctx, admin, integrationUUID(8112), runID, "succeeded", nil)
+					return runID
+				},
+				kind:       jobcontract.KindDailyMetricsFinalize,
+				domainType: "daily_metrics_run",
+				payload: func(id string) any {
+					return jobcontract.DailyMetricsFinalizePayload{RunID: id}
+				},
+				canonicalKey: func(id string) string { return "metrics.daily_finalize:" + id },
+				// PublishRedriveFinalizeTx.
+				otherKey:     func(id string) string { return "metrics.daily_finalize:redrive:" + id + ":" + integrationUUID(8191) },
+				otherKeyName: "a redrive key",
+			},
+			{
+				name: "workgraph",
+				seed: func(t *testing.T, now time.Time) string {
+					requestID := integrationUUID(8121)
+					seedWorkGraphRequest(t, ctx, admin, fixture.orgID, requestID,
+						jobcontract.KindWorkGraphBuild, "pending", nil)
+					return requestID
+				},
+				kind:       jobcontract.KindWorkGraphBuild,
+				domainType: "work_graph_request",
+				payload: func(id string) any {
+					return jobcontract.WorkGraphBuildPayload{RequestID: id}
+				},
+				canonicalKey: func(id string) string { return "workgraph.build:" + id },
+				// The work-graph key is caller-supplied (publisher.go passes
+				// request.IdempotencyKey through) and in production is not
+				// derived from the request id at all.
+				otherKey:     func(id string) string { return "post-sync:" + integrationUUID(8192) + ":workgraph.build" },
+				otherKeyName: "a caller-supplied key",
+			},
+		}
+		deliver := func(t *testing.T, shape strandShapeCase, key, id string, now time.Time) (string, int64) {
+			t.Helper()
+			outboxID := deliverStrandSeed(t, ctx, fixture, now, shape.kind, key, shape.domainType, id, shape.payload(id))
+			jobID := riverJobFor(t, ctx, admin, outboxID)
+			makeJobTerminal(t, ctx, admin, jobID, "completed", now.Add(-2*time.Hour))
+			return outboxID, jobID
+		}
+		for _, shape := range shapes {
+			t.Run(shape.name, func(t *testing.T) {
+				// The domain row alone is not a strand: there is no delivery to
+				// rearm. A pass over it reports NOTHING, which is also what lets
+				// the idle backoff engage on a stack whose runs are stuck for a
+				// reason this repair cannot fix.
+				t.Run("a domain row with no outbox row is not a candidate", func(t *testing.T) {
+					resetStrandTables(t, ctx, admin)
+					now := time.Now().UTC().Truncate(time.Microsecond)
+					shape.seed(t, now)
+					result, err := repair.Step(ctx, now, 10)
+					if err != nil {
+						t.Fatal(err)
+					}
+					if !reflect.DeepEqual(result, StrandRepairResult{}) {
+						t.Fatalf("Step() = %+v, want a zero result for a domain row with no delivery", result)
+					}
+				})
+
+				for _, keyed := range []struct {
+					name string
+					key  func(string) string
+				}{
+					{"a delivered row under the canonical key is rearmed", shape.canonicalKey},
+					// The case a dedupe-key lookup would lose. Both keys name
+					// the same domain row; only the args binding sees both.
+					{"a delivered row under " + shape.otherKeyName + " is rearmed", shape.otherKey},
+				} {
+					t.Run(keyed.name, func(t *testing.T) {
+						resetStrandTables(t, ctx, admin)
+						now := time.Now().UTC().Truncate(time.Microsecond)
+						id := shape.seed(t, now)
+						outboxID, jobID := deliver(t, shape, keyed.key(id), id, now)
+						result, err := repair.Step(ctx, now, 10)
+						if err != nil {
+							t.Fatal(err)
+						}
+						if result.Rearmed != 1 || result.SkippedJobLive != 0 {
+							t.Fatalf("Step() = %+v, want exactly 1 rearmed", result)
+						}
+						assertOutboxRearmed(t, ctx, admin, outboxID)
+						if riverJobExists(t, ctx, admin, jobID) {
+							t.Fatal("the dead River delivery was not deleted")
+						}
+					})
+				}
+
+				// A row of another kind that names the SAME domain id. For the
+				// finalize shape this is a real production neighbour:
+				// metrics.daily_dispatch links the same daily_metrics_run, so
+				// only the job_kind predicate keeps a dispatch delivery out of
+				// the finalize repair.
+				t.Run("a delivered row of another job kind is not a candidate", func(t *testing.T) {
+					resetStrandTables(t, ctx, admin)
+					now := time.Now().UTC().Truncate(time.Microsecond)
+					id := shape.seed(t, now)
+					outboxID := deliverStrandSeed(t, ctx, fixture, now, jobcontract.KindDailyMetricsDispatch,
+						"metrics.daily_dispatch:"+id, "daily_metrics_run", id,
+						jobcontract.DailyMetricsDispatchPayload{RunID: id})
+					jobID := riverJobFor(t, ctx, admin, outboxID)
+					makeJobTerminal(t, ctx, admin, jobID, "completed", now.Add(-2*time.Hour))
+					result, err := repair.Step(ctx, now, 10)
+					if err != nil {
+						t.Fatal(err)
+					}
+					if result.Rearmed != 0 || result.SkippedJobLive != 0 {
+						t.Fatalf("Step() = %+v, want a %s delivery left alone by the %s repair",
+							result, jobcontract.KindDailyMetricsDispatch, shape.name)
+					}
+					assertOutboxStillDelivered(t, ctx, admin, outboxID, jobID)
+				})
+
+				// The control for the River binding itself. The relay cannot
+				// produce this state -- it builds a job's args from the outbox
+				// envelope and refuses the insert unless they agree -- so the
+				// row is rewritten by hand, and that is the point: with the
+				// binding deleted this delivery is rearmed, and with it the
+				// delivery is refused. It is the only case here that tells the
+				// two queries apart by what they return.
+				t.Run("a River job that names another domain row is refused", func(t *testing.T) {
+					resetStrandTables(t, ctx, admin)
+					now := time.Now().UTC().Truncate(time.Microsecond)
+					id := shape.seed(t, now)
+					outboxID, jobID := deliver(t, shape, shape.canonicalKey(id), id, now)
+					command, err := admin.Exec(ctx, `
+						UPDATE river.river_job
+						SET args = jsonb_set(args, '{domain,id}', to_jsonb($2::text))
+						WHERE id = $1`, jobID, integrationUUID(8199))
+					if err != nil || command.RowsAffected() != 1 {
+						t.Fatalf("could not rewrite the River job's domain link: %v", err)
+					}
+					result, err := repair.Step(ctx, now, 10)
+					if err != nil {
+						t.Fatal(err)
+					}
+					if result.Rearmed != 0 || result.SkippedJobLive != 0 {
+						t.Fatalf("Step() = %+v, want the delivery refused: its River job does not name "+
+							"this domain row, so the %s survey is not binding job.args", result, shape.name)
+					}
+					assertOutboxStillDelivered(t, ctx, admin, outboxID, jobID)
+				})
+			})
+		}
+
+		// The two indexes the path depends on. The GIN index is created by
+		// River's own migrations, not ours, so a River upgrade that drops it
+		// would silently put every survey back on a scan of river_job. This
+		// fails on that upgrade instead.
+		t.Run("the two indexes the path walks exist after the pinned migrations", func(t *testing.T) {
+			for name, pattern := range map[string]string{
+				"a GIN index on river.river_job (args)":                     `^CREATE INDEX \S+ ON river\.river_job USING gin \(args\)$`,
+				"a unique index on public.worker_job_outbox (river_job_id)": `^CREATE UNIQUE INDEX \S+ ON public\.worker_job_outbox USING btree \(river_job_id\)$`,
+			} {
+				var count int
+				if err := admin.QueryRow(ctx,
+					"SELECT count(*) FROM pg_indexes WHERE indexdef ~ $1", pattern).Scan(&count); err != nil {
+					t.Fatal(err)
+				}
+				if count != 1 {
+					t.Fatalf("found %d of %s, want exactly 1: the strand surveys reach the outbox through it",
+						count, name)
+				}
+			}
+		})
+
+		// The plan itself, on an outbox large enough for the choice to matter.
+		// Each survey is planned twice: as shipped, and with the River binding
+		// removed. The second plan is the control -- it MUST scan the outbox,
+		// or this fixture could not tell the two apart and the first assertion
+		// would pass on anything.
+		t.Run("no survey scans the outbox once it is large", func(t *testing.T) {
+			resetStrandTables(t, ctx, admin)
+			now := time.Now().UTC().Truncate(time.Microsecond)
+			var templateOutbox string
+			var templateJob int64
+			for index, shape := range shapes {
+				id := shape.seed(t, now)
+				outboxID, jobID := deliver(t, shape, shape.canonicalKey(id), id, now)
+				if index == 0 {
+					templateOutbox, templateJob = outboxID, jobID
+				}
+			}
+			const fillerRows = 20000
+			// Fillers are copies of one real delivery, each with its own River
+			// job, its own domain id and its own key, so every constraint the
+			// outbox and River carry still holds for them. Copying through the
+			// row type keeps this independent of either table's column list.
+			if _, err := admin.Exec(ctx, `
+				INSERT INTO river.river_job
+				SELECT (jsonb_populate_record(NULL::river.river_job,
+					to_jsonb(template) || jsonb_build_object(
+						'id', nextval(pg_get_serial_sequence('river.river_job', 'id')),
+						'unique_key', NULL, 'unique_states', NULL,
+						'args', template.args || jsonb_build_object(
+							'idempotency_key', 'filler:' || filler,
+							'domain', jsonb_build_object(
+								'type', template.args #>> '{domain,type}',
+								'id', gen_random_uuid()::text))))).*
+				FROM river.river_job AS template, generate_series(1, $2::int) AS filler
+				WHERE template.id = $1`, templateJob, fillerRows); err != nil {
+				t.Fatal(err)
+			}
+			if _, err := admin.Exec(ctx, `
+				INSERT INTO public.worker_job_outbox
+				SELECT (jsonb_populate_record(NULL::public.worker_job_outbox,
+					to_jsonb(template) || jsonb_build_object(
+						'id', gen_random_uuid(),
+						'dedupe_key', job.args ->> 'idempotency_key',
+						'river_job_id', job.id,
+						'args', job.args))).*
+				FROM public.worker_job_outbox AS template, river.river_job AS job
+				WHERE template.id = $1 AND job.args ->> 'idempotency_key' LIKE 'filler:%'`,
+				templateOutbox); err != nil {
+				t.Fatal(err)
+			}
+			var outboxRows int
+			if err := admin.QueryRow(ctx,
+				"SELECT count(*) FROM public.worker_job_outbox WHERE status = 'delivered'").Scan(&outboxRows); err != nil {
+				t.Fatal(err)
+			}
+			if outboxRows != fillerRows+len(shapes) {
+				t.Fatalf("the outbox holds %d delivered rows, want %d: the plan below would be "+
+					"taken on a table too small to mean anything", outboxRows, fillerRows+len(shapes))
+			}
+			if _, err := admin.Exec(ctx, `ANALYZE public.worker_job_outbox, river.river_job,
+				public.daily_metrics_runs, public.daily_metrics_partitions,
+				public.work_graph_execution_requests, public.sync_run_units, public.sync_runs`); err != nil {
+				t.Fatal(err)
+			}
+			explain := func(t *testing.T, query string) string {
+				t.Helper()
+				// GENERIC_PLAN plans the statement with its $n placeholders left
+				// unbound, which is the plan a prepared statement settles on.
+				// The simple protocol sends the text as written; the extended
+				// one would demand values for placeholders EXPLAIN cannot take.
+				rows, err := admin.Query(ctx, "EXPLAIN (GENERIC_PLAN) "+query, pgx.QueryExecModeSimpleProtocol)
+				if err != nil {
+					t.Fatal(err)
+				}
+				defer rows.Close()
+				var plan strings.Builder
+				for rows.Next() {
+					var line string
+					if err := rows.Scan(&line); err != nil {
+						t.Fatal(err)
+					}
+					plan.WriteString(line + "\n")
+				}
+				if err := rows.Err(); err != nil {
+					t.Fatal(err)
+				}
+				if plan.Len() == 0 {
+					t.Fatal("EXPLAIN returned no plan; the assertions below would pass on an empty string")
+				}
+				return plan.String()
+			}
+			const outboxScan = "Seq Scan on worker_job_outbox"
+			bindingPattern := regexp.MustCompile(`\n\t\tAND job\.args @> jsonb_build_object\('domain', jsonb_build_object\('id', \w+\.id::text\)\)`)
+			for _, shape := range repair.shapes {
+				plan := explain(t, shape.survey)
+				if strings.Contains(plan, outboxScan) {
+					t.Fatalf("the %s survey scans the whole outbox:\n%s", shape.name, plan)
+				}
+				if shape.name == providerUnitShapeName {
+					if !strings.Contains(plan, "uq_worker_job_outbox_dedupe_key") {
+						t.Fatalf("the %s survey does not reach the outbox through its dedupe-key index:\n%s",
+							shape.name, plan)
+					}
+					continue
+				}
+				if !strings.Contains(plan, "river_job_args_index") ||
+					!strings.Contains(plan, "uq_worker_job_outbox_river_job_id") {
+					t.Fatalf("the %s survey does not walk River's args index and then the outbox's "+
+						"river_job_id index:\n%s", shape.name, plan)
+				}
+				unbound := bindingPattern.ReplaceAllString(shape.survey, "")
+				if unbound == shape.survey {
+					t.Fatalf("the %s survey carries no River binding to remove; the control below "+
+						"would plan the shipped query twice", shape.name)
+				}
+				if control := explain(t, unbound); !strings.Contains(control, outboxScan) {
+					t.Fatalf("CONTROL: the %s survey WITHOUT the River binding does not scan the outbox, "+
+						"so this fixture cannot tell the two queries apart:\n%s", shape.name, control)
+				}
+			}
+		})
 	})
 
 	t.Run("a pass is bounded and takes the oldest deliveries first", func(t *testing.T) {

@@ -98,10 +98,11 @@ func TestDefaultChunkPolicyLetsTheWallBoundEndANormalAttempt(t *testing.T) {
 	if err := policy.Validate(); err != nil {
 		t.Fatalf("default policy invalid: %v", err)
 	}
-	// At the ~0.66 s a chunk measured on prod, 45 s is ~68 chunks: the count bound
-	// must sit at or above ~64 so the wall bound, not 8 chunks, ends an attempt.
-	if policy.MaxChunksPerAttempt < 64 || policy.MaxWallTime != 45*time.Second {
-		t.Fatalf("default policy chunks=%d wall=%s, want >= 64 chunks and a 45 s wall",
+	// At the ~0.66 s a chunk measured on prod, 64 chunks are ~42 s: the count bound
+	// is chosen to sit just under the 45 s wall (the value is pinned: a larger one
+	// would let the count bound drift above the wall for a normal attempt).
+	if policy.MaxChunksPerAttempt != 64 || policy.MaxWallTime != 45*time.Second {
+		t.Fatalf("default policy chunks=%d wall=%s, want exactly 64 chunks and a 45 s wall",
 			policy.MaxChunksPerAttempt, policy.MaxWallTime)
 	}
 }
@@ -267,5 +268,132 @@ func TestChunkedDrainOfPreparedChunksStopsOnTheWallBound(t *testing.T) {
 	}
 	if stopped.Chunks < 1 || stopped.Chunks >= policy.MaxChunksPerAttempt {
 		t.Fatalf("drained %d chunks, want fewer than the %d-chunk count bound", stopped.Chunks, policy.MaxChunksPerAttempt)
+	}
+}
+
+// Production builds the executor WITHOUT an injected clock (workerservice/provider_sync.go): the attempt is then measured on the
+// process clock, and the wall bound must still end an attempt there. A wall bound of a few nanoseconds makes the real clock end
+// it after the first committed chunk; a dead process-clock branch (always zero) never ends it.
+func TestChunkedAttemptWallBoundUsesTheProcessClockWhenNoClockIsInjected(t *testing.T) {
+	t.Parallel()
+	store := newChunkMemoryStore()
+	executor, session, descriptor, _ := pagedChunkExecutor(t, 200, &recoveryRowSink{}, store)
+	executor.Now = nil
+	descriptor.ChunkPolicy.MaxWallTime = time.Nanosecond
+
+	_, err := executor.Execute(context.Background(), session, descriptor)
+	var stopped ChunkContinuationError
+	if !errors.As(err, &stopped) || stopped.Reason != ChunkStopWallTime {
+		t.Fatalf("error=%v stop=%+v, want a continuation on %q from the process clock", err, stopped, ChunkStopWallTime)
+	}
+	if stopped.Chunks < 1 || stopped.Chunks >= DefaultChunkPolicy().MaxChunksPerAttempt {
+		t.Fatalf("committed %d chunks, want the wall bound to end the attempt well before the %d-chunk bound",
+			stopped.Chunks, DefaultChunkPolicy().MaxChunksPerAttempt)
+	}
+	if stopped.Elapsed < time.Nanosecond {
+		t.Fatalf("elapsed=%s, want a measured process-clock duration", stopped.Elapsed)
+	}
+}
+
+// batchOnlyChunkHandler serves one collected batch through Collect and implements no CollectChunks, so the NON-streaming chunked
+// executor runs it (no route registered today needs that executor, but its bounds are changed by this work and must hold).
+type batchOnlyChunkHandler struct{ rows int }
+
+func (handler *batchOnlyChunkHandler) Collect(
+	_ context.Context, claim Claim, _ providerfoundation.Credential, _ *providerfoundation.HTTPClient, _ time.Time,
+) (CompleteRouteBatch, error) {
+	rows := make([]json.RawMessage, 0, handler.rows)
+	for index := 0; index < handler.rows; index++ {
+		rows = append(rows, json.RawMessage(`{"org_id":"`+claim.OrgID+`","row":`+strconv.Itoa(index)+`}`))
+	}
+	effects := make([]EffectBatch, 0, 6)
+	for _, destination := range []string{"ci_pipeline_runs", "ci_job_runs", "ci_acceptance_checks",
+		"test_suite_results", "test_case_results", "coverage_snapshots"} {
+		destinationRows := []json.RawMessage(nil)
+		if destination == "ci_pipeline_runs" {
+			destinationRows = rows
+		}
+		effect, err := BuildEffectBatch(destination, EffectReplaySafe, destinationRows)
+		if err != nil {
+			return CompleteRouteBatch{}, err
+		}
+		effects = append(effects, effect)
+	}
+	return CompleteRouteBatch{Effects: effects, Result: map[string]any{"complete": true}, Watermark: claim.BeforeAt}, nil
+}
+
+func batchOnlyExecutor(t *testing.T, rows int, policy ChunkPolicy) (CompleteRouteExecutor, *LeaseSession, CompleteRouteDescriptor) {
+	t.Helper()
+	now := time.Date(2026, 10, 1, 12, 0, 0, 0, time.UTC)
+	_, session := completeRouteSessionFor(t, now, false, "github", "cicd")
+	descriptor, ok := Descriptor("github", "cicd")
+	if !ok || !descriptor.Chunked {
+		t.Fatalf("descriptor=%+v ok=%t", descriptor, ok)
+	}
+	descriptor.ChunkPolicy = policy
+	executor := completeRouteExecutor(now, &batchOnlyChunkHandler{rows: rows}, newChunkMemoryStore(), &recoveryRowSink{})
+	executor.Credentials.Repository = &trackingCompleteRouteCredentialRepository{provider: "github"}
+	executor.Credentials.Decryptor = chunkedCredentialDecryptor{}
+	return executor, session, descriptor
+}
+
+// The non-streaming executor ends an attempt on the wall bound too, and reports the elapsed time it measured.
+func TestNonStreamingChunkedExecutorStopsOnTheWallBoundAndReportsElapsed(t *testing.T) {
+	t.Parallel()
+	policy := DefaultChunkPolicy()
+	policy.MaxEffectRows = 1
+	executor, session, descriptor := batchOnlyExecutor(t, 100, policy)
+	clock := time.Date(2026, 10, 1, 12, 0, 0, 0, time.UTC)
+	executor.Now = func() time.Time {
+		clock = clock.Add(250 * time.Millisecond)
+		return clock
+	}
+	_, err := executor.Execute(context.Background(), session, descriptor)
+	var stopped ChunkContinuationError
+	if !errors.As(err, &stopped) || stopped.Reason != ChunkStopWallTime {
+		t.Fatalf("error=%v stop=%+v, want a continuation on %q", err, stopped, ChunkStopWallTime)
+	}
+	if stopped.Chunks <= 8 || stopped.Chunks >= policy.MaxChunksPerAttempt {
+		t.Fatalf("committed %d chunks, want more than 8 and fewer than %d", stopped.Chunks, policy.MaxChunksPerAttempt)
+	}
+	if stopped.Elapsed < policy.MaxWallTime {
+		t.Fatalf("elapsed=%s, want at least the %s wall bound (the continuation reports the attempt's measured time)", stopped.Elapsed, policy.MaxWallTime)
+	}
+}
+
+// The count bound of the prepared-chunk drain: with a clock that never advances only the count can end the attempt.
+func TestChunkedDrainOfPreparedChunksStopsOnTheCountBound(t *testing.T) {
+	t.Parallel()
+	now := time.Date(2026, 10, 1, 12, 0, 0, 0, time.UTC)
+	claim, session := completeRouteSessionFor(t, now, false, "github", "cicd")
+	descriptor, ok := Descriptor("github", "cicd")
+	if !ok || !descriptor.Chunked {
+		t.Fatalf("descriptor=%+v ok=%t", descriptor, ok)
+	}
+	policy := DefaultChunkPolicy()
+	policy.MaxEffectRows = 1
+	policy.MaxChunksPerAttempt = 3
+	descriptor.ChunkPolicy = policy
+	store := newChunkMemoryStore()
+	sink := &recoveryRowSink{failFrom: 3}
+	build := func(sink EffectSink) CompleteRouteExecutor {
+		executor := completeRouteExecutor(now, &bigPageChunkHandler{rows: 100}, store, sink)
+		executor.Credentials.Repository = &trackingCompleteRouteCredentialRepository{provider: "github"}
+		executor.Credentials.Decryptor = chunkedCredentialDecryptor{}
+		return executor
+	}
+	if _, err := build(sink).Execute(context.Background(), session, descriptor); err == nil || errors.Is(err, ErrChunkContinuation) {
+		t.Fatalf("attempt 1 error=%v, want a sink failure that leaves chunks prepared", err)
+	}
+	crash, err := store.LoadChunkCheckpoint(context.Background(), claim, now)
+	if err != nil || crash.PreparedChunks-crash.NextOrdinal < 90 {
+		t.Fatalf("premise: prepared=%d next=%d err=%v, want ~97 chunks left to drain", crash.PreparedChunks, crash.NextOrdinal, err)
+	}
+	sink.failFrom = 0
+	_, err = build(sink).Execute(context.Background(), session, descriptor)
+	var stopped ChunkContinuationError
+	if !errors.As(err, &stopped) || stopped.Reason != ChunkStopChunkBound || stopped.Chunks != policy.MaxChunksPerAttempt {
+		t.Fatalf("drain error=%v stop=%+v, want a continuation on %q after exactly %d chunks",
+			err, stopped, ChunkStopChunkBound, policy.MaxChunksPerAttempt)
 	}
 }

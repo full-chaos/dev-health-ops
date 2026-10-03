@@ -180,7 +180,7 @@ case "$1" in
       if [ -n "${FAKE_FAIL_HOOK_CALL:-}" ]; then [ "$h" = "$FAKE_FAIL_HOOK_CALL" ] && exit 3; exit 0; fi
       exit "${FAKE_RC:-0}"
     fi
-    if printf '%s\n' "$@" | grep -qx 'venue-river'; then echo 'applying postgresql://devhealth:plainword-river-marker@postgres:5432/db'; exit "${FAKE_RC:-0}"; fi
+    if printf '%s\n' "$@" | grep -qx 'venue-river'; then echo 'applying postgresql://devhealth:plainword-river-marker@postgres:5432/db then postgresql://other:plainword-second-marker@h:5432/x'; exit "${FAKE_RC:-0}"; fi
     if printf '%s\n' "$@" | grep -qx 'postgres'; then echo 'r|t|SELECT|t|t'; exit "${FAKE_RC:-0}"; fi
     echo 'SELECT	t'; exit "${FAKE_RC:-0}" ;;
   *) echo "unexpected docker verb $1" >&2; exit 99 ;;
@@ -373,7 +373,9 @@ def test_hook_check_obeys_every_class_rule(tmp_path: Path) -> None:
         assert c["env"]["HOOK_OPERATOR_IMAGE"].endswith(
             "@" + _c_DIGEST
         )  # positive control: derived, passed as an image ref
-        assert str(tmp_path / "host") not in " ".join(c["argv"]) or True
+        assert str(tmp_path / "host") not in " ".join(
+            c["argv"]
+        )  # no host path in the one-off's argv
     # no script-written env file is left or used
     assert not list(tmp_path.glob("tmp.*"))
     assert "hook_upgrade_rc=0" in p.stdout and "ch_status_check_rc=0" in p.stdout
@@ -432,6 +434,9 @@ def test_river_apply_redacts_the_dsn_it_prints(tmp_path: Path) -> None:
     script = _c_stage(tmp_path, "bigboy-river-apply.sh")
     p, _ = _c_run(tmp_path, script)
     assert "plainword-river-marker" not in p.stdout + p.stderr
+    assert (
+        "plainword-second-marker" not in p.stdout + p.stderr
+    )  # BOTH DSNs of one line (the sed needs its g)
     assert "devhealth:<redacted>@" in p.stdout
 
 
@@ -574,3 +579,71 @@ def test_no_bare_docker_exec_run_or_printenv_in_ci_bigboy_run_files() -> None:
         if hits:
             bad[f.name] = hits
     assert bad == {}, bad
+
+
+# ---- CHAOS-8371 second-vet delta: pin the one-off's shape and the credential rule on every line of the five scripts ----
+
+_C_SCRIPTS = (
+    "bigboy-hook-check.sh",
+    "bigboy-river-apply.sh",
+    "pg-grants-check.sh",
+    "bigboy-grants-check.sh",
+    "bigboy-graphql-prove.sh",
+)
+
+
+def _c_code(name: str) -> list[str]:
+    return [
+        ln
+        for ln in (_c_BB / name).read_text().splitlines()
+        if not ln.lstrip().startswith("#")
+    ]
+
+
+def test_no_env_passing_flag_on_any_docker_line_and_no_password_expansion() -> None:
+    for name in _C_SCRIPTS:
+        for ln in _c_code(name):
+            if "docker " in ln or "HC=(" in ln:
+                # the one allowed name-only -e: PROVE_ORG is the local org's uuid (read-only data), not a credential
+                ln = ln.replace(" -e PROVE_ORG ", " ")
+                assert not re.search(r"(?<=\s)-e[A-Za-z_=]*(?=\s|$)", ln), (name, ln)
+                assert not re.search(r"--env(?!-file)", ln), (name, ln)
+            # no *PASSWORD* expansion into anything in a code line (a script variable, an argument, a file)
+            assert not re.search(r"\$\{?[A-Za-z_]*PASSWORD", ln), (name, ln)
+            assert not re.search(r"(?i)\bpw\w*=", ln), (name, ln)
+
+
+def test_graphql_prove_psql_line_is_a_compose_exec_on_the_stack_files() -> None:
+    line = next(ln for ln in _c_code("bigboy-graphql-prove.sh") if "PROVE_ORG=$(" in ln)
+    assert 'docker compose "${BASE[@]}" exec -T postgres psql -U devhealth' in line, (
+        line
+    )
+
+
+def test_the_one_offs_keep_their_compose_shape(tmp_path: Path) -> None:
+    """--env-file ops/.env first, --profile venue, run --rm --no-deps -T on the one-off service: pinned for BOTH."""
+    for name, service, args in (
+        ("bigboy-hook-check.sh", "venue-hook", True),
+        ("bigboy-river-apply.sh", "venue-river", False),
+    ):
+        case = tmp_path / name
+        case.mkdir()
+        script = _c_stage(case, name)
+        p, fake = _c_run(case, script, *([str(case / "host" / "rec")] if args else []))
+        assert p.returncode == 0, (name, p.stdout, p.stderr)
+        runs = [c for c in _c_calls(fake) if c["argv"][0] == "compose"]
+        assert runs, name
+        for c in runs:
+            a = c["argv"]
+            assert a[:3] == ["compose", "--env-file", "ops/.env"], (name, a)
+            for needed in (
+                "--profile",
+                "venue",
+                "run",
+                "--rm",
+                "--no-deps",
+                "-T",
+                service,
+            ):
+                assert needed in a, (name, needed, a)
+            assert a.index("--profile") + 1 == a.index("venue")

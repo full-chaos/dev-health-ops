@@ -3,6 +3,7 @@
 #
 #   ci/python_free_ratchet.sh classify GO_TEST_JSON HITS_OUT [TRIPWIRE_LOG]
 #   ci/python_free_ratchet.sh compare  KNOWN_TSV HITS_DIR
+#   ci/python_free_ratchet.sh state    KNOWN_TSV
 #
 # The go-python-free job runs the integration shards AND the untagged unit tests with Python unreachable
 # (ci/python_tripwire.sh).
@@ -20,6 +21,12 @@
 #              test that did not hit is STALE (it was frozen: remove the entry in that PR). The summary
 #              line prints listed, hit, new and stale. PYTHON_FREE_REPORT_ONLY=1 (the provisional first
 #              run, before the list is filled in from a measured run) prints every HIT and exits 0.
+#   state      the closed list's own state (CHAOS-8324): `rows=N` for a list with rows, `closed-empty` for a list that
+#              has its header and no row (every listed test is frozen: the ratchet is CLOSED), and exit 2 for a file
+#              without its header line (a truncated file is not an empty list). An empty list is a defined state, not
+#              an absence: compare of an empty list needs the header too (else exit 2), and a scope run of it writes an
+#              empty hits marker so compare sees "reported, no hit"; the full measurement (every shard and the unit leg)
+#              is the check on main and still fails on any new hit.
 set -euo pipefail
 
 # STRONG marker: the shim's own line, or the nonexistent interpreter path. WEAK marker ("exit status 97", all
@@ -34,6 +41,38 @@ SKIP_GATE='DEV_HEALTH_LIVE_PYTHON_ORACLE'
 
 die() { printf 'python_free_ratchet: %s\n' "$1" >&2; exit 2; }
 command -v jq >/dev/null 2>&1 || die "jq is required"
+
+# LIST_HEADER is the first line every closed list starts with; a file without it is truncated or not the list.
+LIST_HEADER='# Closed list of Go tests that still start Python'
+
+# list_rows prints the number of rows (non-blank, non-comment lines) of the closed list.
+list_rows() {
+  grep -cv -e '^#' -e '^[[:space:]]*$' "${1}" || true
+}
+
+# require_list_header dies unless the list's first line is the header: an empty list is DECLARED by a file that has its
+# header and no row, so a truncated file (header gone) must never read as "empty".
+require_list_header() {
+  local known="${1:?require_list_header needs KNOWN_TSV}" first
+  [ -f "${known}" ] || die "the closed list ${known} does not exist"
+  IFS= read -r first <"${known}" || true
+  case "${first}" in
+    "${LIST_HEADER}"*) ;;
+    *) die "the closed list ${known} does not start with its header line ('${LIST_HEADER}'): a truncated file is not an empty list" ;;
+  esac
+}
+
+# state prints the closed list's state: rows=N, or closed-empty (header, no row). It dies on a list without its header.
+state() {
+  local known="${1:?state needs KNOWN_TSV}" rows
+  require_list_header "${known}"
+  rows="$(list_rows "${known}")"
+  if [ "${rows}" = "0" ]; then
+    printf 'closed-empty\n'
+  else
+    printf 'rows=%s\n' "${rows}"
+  fi
+}
 
 # print_failure_output prints stdin under a NON-TRIPWIRE FAILURE line. A cause can be the first line (what a
 # TestMain or a build says before a long cleanup) or the last (the assertion), so a long output keeps both
@@ -193,6 +232,9 @@ compare() {
     cat "${file}" >>"${tmp}/hit"
   done
   [ "${found}" = 1 ] || die "no hit files under ${dir}: the shards did not report, which is not a pass"
+  # CHAOS-8324: a list with no row is a DEFINED state (the ratchet is closed) only with its header; a truncated file must
+  # never read as empty. A list with rows is unchanged, and so is the provisional report-only run.
+  [ -s "${tmp}/listed" ] || [ "${PYTHON_FREE_REPORT_ONLY:-}" = "1" ] || require_list_header "${known}"
   sort -u -o "${tmp}/hit" "${tmp}/hit"
   comm -13 "${tmp}/listed" "${tmp}/hit" >"${tmp}/new"
   comm -23 "${tmp}/listed" "${tmp}/hit" >"${tmp}/stale"
@@ -223,5 +265,6 @@ compare() {
 case "${1:-}" in
   classify) shift; classify "$@" ;;
   compare) shift; compare "$@" ;;
-  *) die "usage: python_free_ratchet.sh classify GO_TEST_JSON HITS_OUT [TRIPWIRE_LOG] | compare KNOWN_TSV HITS_DIR" ;;
+  state) shift; state "$@" ;;
+  *) die "usage: python_free_ratchet.sh classify GO_TEST_JSON HITS_OUT [TRIPWIRE_LOG] | compare KNOWN_TSV HITS_DIR | state KNOWN_TSV" ;;
 esac

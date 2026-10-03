@@ -418,7 +418,7 @@ def test_the_ratchet_is_green_only_when_the_hit_set_equals_the_list(
 
 def test_report_only_mode_prints_every_hit_and_exits_zero(tmp_path: Path) -> None:
     listed = tmp_path / "known.tsv"
-    listed.write_text("# provisional\n")
+    listed.write_text(HEADER + "# provisional\n")
     directory = tmp_path / "hits"
     directory.mkdir()
     (directory / "a.hits").write_text(f"{PKG}\tTestA\ttripwire\n")
@@ -632,3 +632,86 @@ def test_the_three_state_watch_never_reads_a_missing_run_as_green(
     assert (failed.returncode, "FAILED" in failed.stdout) == (1, True)
     assert (none.returncode, "NOT RUN" in none.stdout) == (3, True)
     assert (old.returncode, "NOT RUN" in old.stdout) == (3, True)
+
+
+# CHAOS-8324: an empty closed list is a DEFINED state (every listed test is frozen: the ratchet is closed), never an absence.
+HEADER = "# Closed list of Go tests that still start Python (CHAOS-7384). Columns, tab separated:\n"
+
+
+def _state(tmp_path: Path, text: str):
+    listed = tmp_path / "known.tsv"
+    listed.write_text(text)
+    return _run(["bash", str(RATCHET), "state", str(listed)])
+
+
+def test_an_empty_list_with_its_header_is_closed_and_a_truncated_one_is_not_empty(
+    tmp_path: Path,
+) -> None:
+    closed = _state(tmp_path, HEADER + "# more comments\n")
+    assert closed.returncode == 0 and closed.stdout.strip() == "closed-empty"
+    rows = _state(tmp_path, HEADER + f"{PKG}\tTestA\tCHAOS-7001\ttripwire\n")
+    assert rows.returncode == 0 and rows.stdout.strip() == "rows=1"
+    truncated = _state(tmp_path, "")
+    assert truncated.returncode == 2 and "header" in truncated.stderr
+    comments_only = _state(tmp_path, "# some other comment\n")
+    assert comments_only.returncode == 2 and "truncated" in comments_only.stderr
+
+
+def test_compare_of_a_closed_list_passes_only_on_no_hit_and_a_truncated_list_is_red(
+    tmp_path: Path,
+) -> None:
+    closed = _compare(tmp_path, HEADER, {"listed-declared-empty.hits": ""})
+    assert closed.returncode == 0 and "listed=0 hit=0 new=0 stale=0" in closed.stdout
+    # a planted Python start in an unlisted package is a NEW start: red on the full measurement
+    planted = _compare(
+        tmp_path, HEADER, {"shard-1.hits": f"{PKG}\tTestNew\ttripwire\n"}
+    )
+    assert (
+        planted.returncode == 1
+        and "listed=0 hit=1 new=1 stale=0" in planted.stdout
+        and "TestNew" in planted.stderr
+    )
+    # the same empty hit file with the header gone is a truncated list, not an empty one
+    truncated = _compare(tmp_path, "", {"listed-declared-empty.hits": ""})
+    assert truncated.returncode == 2 and "header" in truncated.stderr
+
+
+def _listed_verb(tmp_path: Path, known_text: str):
+    listed = tmp_path / "known.tsv"
+    listed.write_text(known_text)
+    out = tmp_path / "out"
+    result = _run(
+        ["bash", str(REPO_ROOT / "ci" / "check_go.sh"), "python-free-listed"],
+        {
+            "GO_PYTHON_FREE": "1",
+            "PYTHON_FREE_OUT": str(out),
+            "PYTHON_FREE_KNOWN": str(listed),
+        },
+    )
+    return result, out
+
+
+def test_the_scope_verb_of_a_closed_list_passes_loudly_and_writes_its_markers(
+    tmp_path: Path,
+) -> None:
+    result, out = _listed_verb(tmp_path, HEADER)
+    assert result.returncode == 0, result.stderr
+    assert "closed list is EMPTY" in result.stdout
+    assert (out / "listed-declared-empty.json").is_file()
+    assert (out / "listed-declared-empty.hits").read_text() == ""
+    # the hits marker feeds the unchanged compare step (the workflow downloads only the hits artifacts): reported, no hit, green
+    hits = tmp_path / "hits-only"
+    hits.mkdir()
+    (hits / "listed-declared-empty.hits").write_text("")
+    compared = _run(
+        ["bash", str(RATCHET), "compare", str(tmp_path / "known.tsv"), str(hits)]
+    )
+    assert compared.returncode == 0 and "listed=0 hit=0" in compared.stdout
+
+
+def test_the_scope_verb_refuses_a_truncated_list_instead_of_reading_it_as_empty(
+    tmp_path: Path,
+) -> None:
+    result, out = _listed_verb(tmp_path, "")
+    assert result.returncode == 2
+    assert not (out / "listed-declared-empty.hits").exists()

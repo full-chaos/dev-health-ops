@@ -1965,11 +1965,22 @@ check_python_free_unit() {
 # under a build tag other than integration reads as STALE (the run fails closed).
 check_python_free_listed() {
   python_free_enabled || die "python-free-listed needs GO_PYTHON_FREE=1 (it is the go-python-free workflow's pull-request leg)"
-  local known="${ROOT}/ci/python_free_known.tsv" package tests index=0 relative
+  local known="${PYTHON_FREE_KNOWN:-${ROOT}/ci/python_free_known.tsv}" package tests index=0 relative
   [ -f "${known}" ] || die "ci/python_free_known.tsv is missing"
   local -a packages=()
   while IFS= read -r package; do packages+=("${package}"); done < <(grep -v '^#' "${known}" | cut -f1 | sort -u)
-  [ "${#packages[@]}" -gt 0 ] || die "ci/python_free_known.tsv lists no package: nothing would be measured"
+  if [ "${#packages[@]}" -eq 0 ]; then
+    # CHAOS-8324: an empty list is a DEFINED state: the ratchet is closed (every listed test is frozen). `state` dies on a
+    # file without its header, so a truncated list is never read as empty. The scope job then lists no test and runs none;
+    # the stream and the empty hits file below are its markers (the artifact steps and the compare step need a file), and the full run on main measures every package.
+    bash "${ROOT}/ci/python_free_ratchet.sh" state "${known}" >/dev/null \
+      || die "ci/python_free_known.tsv is not a valid closed list (see python_free_ratchet.sh state)"
+    printf 'python-free-listed: the closed list is EMPTY (every listed test is frozen): no test is run by name; the full go-python-free run on main is the measure\n'
+    mkdir -p "${PYTHON_FREE_OUT:?GO_PYTHON_FREE=1 needs PYTHON_FREE_OUT (a directory for the shard hits)}"
+    printf '{"declared_empty":true,"list":"ci/python_free_known.tsv"}\n' >"${PYTHON_FREE_OUT}/listed-declared-empty.json"
+    : >"${PYTHON_FREE_OUT}/listed-declared-empty.hits"
+    return 0
+  fi
   for package in "${packages[@]}"; do
     index=$((index + 1))
     relative="${package#github.com/full-chaos/dev-health-ops/}"

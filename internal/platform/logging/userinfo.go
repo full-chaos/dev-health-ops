@@ -62,7 +62,8 @@ const truncationSuffix = "...[truncated]"
 // and after its length cap (the persisted error sanitizers). The pass can add the marker, so
 // the caller's own cut runs again after it (cut). A text cut by a cap may end inside a
 // userinfo (its `@` lost): when the final text ends with the truncation suffix, the last
-// whitespace- or delimiter-free runs before it are dropped while the last one holds a colon.
+// whitespace- or delimiter-free run before it is dropped if it holds a colon (after a drop the
+// body ends with a delimiter, so the loop below stops at the next turn).
 // The text is final after that, so a second call over the result changes nothing; it is
 // fail-closed and only at the cut. (A part of a password that itself holds a comma, a
 // semicolon, a parenthesis, a bracket or an at sign can stay readable when the cut falls

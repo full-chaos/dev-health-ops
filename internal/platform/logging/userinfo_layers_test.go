@@ -516,3 +516,45 @@ func TestTheSmallestIdempotenceCasesFromTheVet(t *testing.T) {
 		t.Errorf("SanitizeErrorText: a second call changes the text:\n%.200q\n%.200q", once, twice)
 	}
 }
+
+// Each delimiter of the cut-tail rule: the text before the delimiter stays, the colon-bearing
+// run after it (cut in the middle of a userinfo) goes, and the suffix stays. The cut falls
+// after the colon (pad 3965), so a part of the secret would otherwise remain.
+func TestTheCutTailRuleStopsAtEachDelimiter(t *testing.T) {
+	for _, delimiter := range []string{" ", "\t", "\r", "\n", "\"", "'", "<", ">", "(", ")", ",", ";", "[", "]", "{", "}"} {
+		for _, layer := range userinfoLayers[3:] {
+			text := strings.Repeat("a", 3965) + " keep" + delimiter + "svc_user:Kk3Pp4Qq5Zz@cache.internal"
+			got := layer.redact(text)
+			if want := "keep" + delimiter + "...[truncated]"; !strings.HasSuffix(got, want) {
+				t.Errorf("%s, delimiter %q: want the text to end with %q, got %q", layer.name, delimiter, want, got[len(got)-40:])
+			}
+			if strings.Contains(got, "Kk3") {
+				t.Errorf("%s, delimiter %q: a part of the secret survived the cut", layer.name, delimiter)
+			}
+		}
+	}
+}
+
+// A lower-case encoded colon at the cut is read as a colon too.
+func TestALowerCaseEncodedColonAtTheCutLeavesNoPartOfTheSecret(t *testing.T) {
+	for pad := 3960; pad < 3990; pad++ {
+		text := strings.Repeat("a", pad) + " svc_user%3aKk3Pp4Qq5Zz@cache.internal"
+		for _, layer := range userinfoLayers[3:] {
+			got := layer.redact(text)
+			if strings.Contains(got, "Kk3") || strings.Contains(got, "Pp4Qq5Zz") {
+				t.Fatalf("%s, pad %d: a part of the secret survived the cut: %.80s", layer.name, pad, got[len(got)-80:])
+			}
+		}
+	}
+}
+
+// A backslash is not part of the user part: with no colon in front of it in the run, the
+// text up to the backslash stays and only the userinfo goes.
+func TestABackslashInFrontOfTheUserPartStaysReadable(t *testing.T) {
+	for _, layer := range userinfoLayers {
+		got := layer.redact(`open dir\svc_user:Pw1Yy4@h.internal now`)
+		if strings.Contains(got, "Pw1Yy4") || !strings.Contains(got, `dir\`) || !strings.Contains(got, "h.internal") {
+			t.Errorf("%s: %q", layer.name, got)
+		}
+	}
+}

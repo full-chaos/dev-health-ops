@@ -580,7 +580,11 @@ func (memberStore) ActiveImpersonation(context.Context, uuid.UUID) (*policy.Impe
 // memberExceptions are the admin-declared rows where Go (matching Python) serves a signed-in
 // plain member: the profile row over-claims, the handler's own dependency is
 // get_current_user only (CHAOS-4780, true class written at the file merge CHAOS-8306).
-// Closed: each must still answer exactly its recorded status.
+// Closed: each must still answer exactly its recorded status. Evidence for the one entry:
+// Python src/dev_health_ops/api/admin/impersonation.py:33 (its own APIRouter, no
+// require_admin) and :233-242 (Depends(get_current_user) only; a non-superuser gets
+// is_impersonating=False); Go internal/apiservice/admin/impersonation.go:32-33
+// (guard.Wrap(policy.Authenticated)).
 var memberExceptions = map[string]int{
 	"GET /api/v1/admin/impersonate/status": http.StatusOK,
 }
@@ -658,4 +662,37 @@ func TestEveryAdminRowRefusesAPlainMember(t *testing.T) {
 		t.Fatalf("only %d admin rows were probed: the walk or the rows shrank", probed)
 	}
 	t.Logf("probed %d admin-declared routes with a plain member credential", probed)
+}
+
+// The one member exception serves a plain member only the all-null shape: no field of
+// another user (the route reports whether the CALLER's own session is an impersonation).
+func TestTheMemberExceptionBodyCarriesNothingOfAnotherUser(t *testing.T) {
+	const secret = "route-profile-gate-secret-key-32-bytes-long!!"
+	deps, logger := mountingDepsWith(t, memberStore{})
+	handler := goAPIHandlerFor(t, deps, logger)
+	signer, err := edgetoken.NewSigner(secret, "dev-health-ops", "dev-health-api")
+	if err != nil {
+		t.Fatal(err)
+	}
+	token, err := signer.Access(edgetoken.AccessClaims{UserID: uuid.New().String(), Email: "member@example.test", OrgID: uuid.New().String(), Role: "member"}, time.Now(), "gate-jti-2")
+	if err != nil {
+		t.Fatal(err)
+	}
+	request := httptest.NewRequest(http.MethodGet, "/api/v1/admin/impersonate/status", nil)
+	request.Header.Set("Authorization", "Bearer "+token)
+	recorder := httptest.NewRecorder()
+	handler.ServeHTTP(recorder, request)
+	var body map[string]any
+	if err := json.Unmarshal(recorder.Body.Bytes(), &body); err != nil {
+		t.Fatalf("body %q: %v", recorder.Body.String(), err)
+	}
+	want := map[string]any{"is_impersonating": false, "target_user_id": nil, "target_email": nil, "target_org_id": nil, "expires_at": nil}
+	if len(body) != len(want) {
+		t.Fatalf("body %v, want exactly the all-null shape %v", body, want)
+	}
+	for key, value := range want {
+		if got, ok := body[key]; !ok || got != value {
+			t.Errorf("body[%q] = %v (present %v), want %v", key, got, ok, value)
+		}
+	}
 }

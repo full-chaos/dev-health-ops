@@ -61,3 +61,38 @@ zero semantics, supported scopes and dimensions, range limits, comparison
 rule, definition version, query version, source version, and freshness policy.
 The query response preserves source evidence references and reports the prior
 immediately preceding window of equal duration when comparison is requested.
+
+## Blocked hours in `work_item_state_durations_daily`
+
+`work_item_state_durations_daily` holds, for each day, the hours that work
+items spent in each normalized status. Blocked Work reads the rows whose
+status is `blocked`. An item's hours are `blocked` in two cases:
+
+1. **Status name or label.** The provider status maps to `blocked` (for
+   example a status named "Blocked" or "On Hold", or a label `blocked`).
+2. **An open blocker.** Another work item blocks it. This comes from the
+   blocking relations the providers report (`work_item_dependencies`): Jira
+   issue links, GitLab issue links, Linear relations, and for GitHub the
+   words "blocked by", "depends on" or "blocks" before an issue reference in
+   the issue text. GitHub has no native blocking relation in this data.
+
+For case 2 the item is `blocked` only while all of these hold:
+
+- its own status is not `done` or `canceled`;
+- the blocker is a synced work item of the same organization;
+- the blocker is open, from the later creation time of the two items until
+  the blocker's completion time.
+
+In that interval `blocked` replaces the item's own status. The item's total
+hours in the day do not change.
+
+Limits of the relation data:
+
+- A relation has no start time. An item counts as blocked from the time both
+  items exist, also when the link was added later.
+- A relation that the provider no longer reports stops counting when the
+  items it belongs to are synced again. Until then it still counts.
+- A blocker that is not a synced work item, or a finished blocker that has no
+  completion time, gives no blocked hours. Missing data is not estimated.
+- The current status of an item (for example in `work_item_cycle_times`) is
+  not changed by a relation. Only the daily hours are.

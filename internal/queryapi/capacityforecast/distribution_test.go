@@ -52,6 +52,11 @@ func TestResolveForecastCarriesTheDistributionOfItsOwnSimulation(t *testing.T) {
 	if len(days) != 200 || len(items) != 200 {
 		t.Errorf("runs in the bins = %d days / %d items, want 200 / 200", len(days), len(items))
 	}
+	// CHAOS-8477: the run total is served, and it is the simulation count the
+	// request asked for and the sum of each mode's counts.
+	if distribution.Runs != 200 {
+		t.Errorf("runs = %d, want the 200 simulations of the request", distribution.Runs)
+	}
 	d := numerical.IntegerPercentiles(days, []float64{50, 85, 95})
 	if d[0] != *got.P50Days || d[1] != *got.P85Days || d[2] != *got.P95Days {
 		t.Errorf("percentiles from the day bins = %v, response carries %d/%d/%d", d, *got.P50Days, *got.P85Days, *got.P95Days)
@@ -134,4 +139,65 @@ func TestSingularAndPersistedPathsGiveTheSameDistributionForOneSeed(t *testing.T
 		t.Errorf("only %d day bins: the comparison would pass on a degenerate distribution",
 			len(singular.CompletionDistribution.Days))
 	}
+}
+
+// CHAOS-8477: `runs` is the sum of the counts of the served bins, for the mode
+// that simulated. A caller draws the cumulative share of the runs from it and
+// must never add the counts up itself.
+func TestDistributionRunsIsTheSumOfTheServedCounts(t *testing.T) {
+	sum := func(bins []model.CapacityDistributionBin) int {
+		total := 0
+		for _, bin := range bins {
+			total += bin.Count
+		}
+		return total
+	}
+	days := &numerical.Histogram{Values: []int{3, 5, 9}, Counts: []int{10, 60, 30}}
+	items := &numerical.Histogram{Values: []int{40, 55}, Counts: []int{25, 75}}
+
+	t.Run("both modes", func(t *testing.T) {
+		got := distributionToModel(days, items)
+		if got == nil {
+			t.Fatal("no distribution for two simulated modes")
+		}
+		if got.Runs != 100 {
+			t.Errorf("runs = %d, want 100", got.Runs)
+		}
+		if got.Runs != sum(got.Days) || got.Runs != sum(got.Items) {
+			t.Errorf("runs = %d, the served counts sum to %d (days) and %d (items)", got.Runs, sum(got.Days), sum(got.Items))
+		}
+	})
+	t.Run("the days mode only", func(t *testing.T) {
+		got := distributionToModel(days, nil)
+		if got == nil || got.Items != nil {
+			t.Fatalf("distribution = %+v, want the days mode only", got)
+		}
+		if got.Runs != 100 || got.Runs != sum(got.Days) {
+			t.Errorf("runs = %d, want the 100 of the day counts", got.Runs)
+		}
+	})
+	t.Run("the items mode only", func(t *testing.T) {
+		got := distributionToModel(nil, items)
+		if got == nil || got.Days != nil {
+			t.Fatalf("distribution = %+v, want the items mode only", got)
+		}
+		if got.Runs != 100 || got.Runs != sum(got.Items) {
+			t.Errorf("runs = %d, want the 100 of the item counts", got.Runs)
+		}
+	})
+	t.Run("no mode simulated: no distribution, so no run total", func(t *testing.T) {
+		if got := distributionToModel(nil, nil); got != nil {
+			t.Fatalf("distribution = %+v, want nil: a run total of 0 would read as a simulation of zero runs", got)
+		}
+	})
+	t.Run("a stored histogram with one count too many: runs follows the served bins", func(t *testing.T) {
+		malformed := &numerical.Histogram{Values: []int{3, 5}, Counts: []int{10, 60, 30}}
+		got := distributionToModel(malformed, nil)
+		if got == nil || len(got.Days) != 2 {
+			t.Fatalf("distribution = %+v, want the 2 served bins", got)
+		}
+		if got.Runs != 70 {
+			t.Errorf("runs = %d, want 70: the sum of the 2 served counts, not of the 3 stored ones", got.Runs)
+		}
+	})
 }

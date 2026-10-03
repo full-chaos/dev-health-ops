@@ -411,6 +411,7 @@ type ComplexityRoot struct {
 	CapacityDistribution struct {
 		Days  func(childComplexity int) int
 		Items func(childComplexity int) int
+		Runs  func(childComplexity int) int
 	}
 
 	CapacityDistributionBin struct {
@@ -3319,6 +3320,13 @@ func (e *executableSchema) Complexity(typeName, field string, childComplexity in
 		}
 
 		return e.complexity.CapacityDistribution.Items(childComplexity), true
+
+	case "CapacityDistribution.runs":
+		if e.complexity.CapacityDistribution.Runs == nil {
+			break
+		}
+
+		return e.complexity.CapacityDistribution.Runs(childComplexity), true
 
 	case "CapacityDistributionBin.count":
 		if e.complexity.CapacityDistributionBin.Count == nil {
@@ -9043,6 +9051,13 @@ type CapacityDistribution {
   days: [CapacityDistributionBin!]
   "Fixed-date mode: items completed by the target date, one bin per distinct total."
   items: [CapacityDistributionBin!]
+  """
+  The number of simulation runs behind each mode (CHAOS-8477): the counts of one
+  mode's bins sum to it, so the share of the runs that ended at or below a bin is
+  the running sum of the counts divided by this value. The modes of one forecast
+  come from one simulation and hold the same number of runs.
+  """
+  runs: Int!
 }
 
 type CapacityDistributionBin {
@@ -25256,6 +25271,50 @@ func (ec *executionContext) fieldContext_CapacityDistribution_items(_ context.Co
 	return fc, nil
 }
 
+func (ec *executionContext) _CapacityDistribution_runs(ctx context.Context, field graphql.CollectedField, obj *model.CapacityDistribution) (ret graphql.Marshaler) {
+	fc, err := ec.fieldContext_CapacityDistribution_runs(ctx, field)
+	if err != nil {
+		return graphql.Null
+	}
+	ctx = graphql.WithFieldContext(ctx, fc)
+	defer func() {
+		if r := recover(); r != nil {
+			ec.Error(ctx, ec.Recover(ctx, r))
+			ret = graphql.Null
+		}
+	}()
+	resTmp, err := ec.ResolverMiddleware(ctx, func(rctx context.Context) (any, error) {
+		ctx = rctx // use context from middleware stack in children
+		return obj.Runs, nil
+	})
+	if err != nil {
+		ec.Error(ctx, err)
+		return graphql.Null
+	}
+	if resTmp == nil {
+		if !graphql.HasFieldError(ctx, fc) {
+			ec.Errorf(ctx, "must not be null")
+		}
+		return graphql.Null
+	}
+	res := resTmp.(int)
+	fc.Result = res
+	return ec.marshalNInt2int(ctx, field.Selections, res)
+}
+
+func (ec *executionContext) fieldContext_CapacityDistribution_runs(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "CapacityDistribution",
+		Field:      field,
+		IsMethod:   false,
+		IsResolver: false,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return nil, errors.New("field of type Int does not have child fields")
+		},
+	}
+	return fc, nil
+}
+
 func (ec *executionContext) _CapacityDistributionBin_value(ctx context.Context, field graphql.CollectedField, obj *model.CapacityDistributionBin) (ret graphql.Marshaler) {
 	fc, err := ec.fieldContext_CapacityDistributionBin_value(ctx, field)
 	if err != nil {
@@ -26269,6 +26328,8 @@ func (ec *executionContext) fieldContext_CapacityForecast_completionDistribution
 				return ec.fieldContext_CapacityDistribution_days(ctx, field)
 			case "items":
 				return ec.fieldContext_CapacityDistribution_items(ctx, field)
+			case "runs":
+				return ec.fieldContext_CapacityDistribution_runs(ctx, field)
 			}
 			return nil, fmt.Errorf("no field named %q was found under type CapacityDistribution", field.Name)
 		},
@@ -64120,6 +64181,11 @@ func (ec *executionContext) _CapacityDistribution(ctx context.Context, sel ast.S
 			out.Values[i] = ec._CapacityDistribution_days(ctx, field, obj)
 		case "items":
 			out.Values[i] = ec._CapacityDistribution_items(ctx, field, obj)
+		case "runs":
+			out.Values[i] = ec._CapacityDistribution_runs(ctx, field, obj)
+			if out.Values[i] == graphql.Null {
+				out.Invalids++
+			}
 		default:
 			panic("unknown field " + strconv.Quote(field.Name))
 		}

@@ -23,7 +23,27 @@ func distributionToModel(days, items *numerical.Histogram) *model.CapacityDistri
 	if daysBins == nil && itemsBins == nil {
 		return nil
 	}
-	return &model.CapacityDistribution{Days: daysBins, Items: itemsBins}
+	return &model.CapacityDistribution{Days: daysBins, Items: itemsBins, Runs: runsOf(daysBins, itemsBins)}
+}
+
+// runsOf is the number of simulation runs of a distribution (CHAOS-8477): the
+// sum of the counts of the SERVED bins of a mode, so `runs` always agrees with
+// the bins beside it and a caller never has to add them up itself.
+//
+// Both modes of one forecast come from one simulation and hold the same number
+// of runs (numerical.ForecastCapacity draws request.Simulations samples for
+// each). The days mode is read when it simulated, else the items mode; the
+// caller guarantees one of them did.
+func runsOf(days, items []model.CapacityDistributionBin) int {
+	bins := days
+	if bins == nil {
+		bins = items
+	}
+	runs := 0
+	for _, bin := range bins {
+		runs += bin.Count
+	}
+	return runs
 }
 
 // binsToModel is nil for a nil or empty histogram. A malformed one (values and

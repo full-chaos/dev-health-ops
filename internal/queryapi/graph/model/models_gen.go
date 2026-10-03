@@ -412,6 +412,11 @@ type CapacityDistribution struct {
 	Days []CapacityDistributionBin `json:"days,omitempty"`
 	// Fixed-date mode: items completed by the target date, one bin per distinct total.
 	Items []CapacityDistributionBin `json:"items,omitempty"`
+	// The number of simulation runs behind each mode (CHAOS-8477): the counts of one
+	// mode's bins sum to it, so the share of the runs that ended at or below a bin is
+	// the running sum of the counts divided by this value. The modes of one forecast
+	// come from one simulation and hold the same number of runs.
+	Runs int `json:"runs"`
 }
 
 type CapacityDistributionBin struct {

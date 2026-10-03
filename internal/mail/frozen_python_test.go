@@ -29,7 +29,7 @@ var mailGoldens = programoracle.Set{
 	// new golden starts as "PIN:" + its file name without ".json".
 	Pins: map[string]string{
 		"resend.golden.json": "a19e74d61139bad5ac1b33659f09489d3de6056189aea1df33c73dfab136797b",
-		"smtp.golden.json":   "fbf5f809ce50b4d09b65903ca4654e9907cb559a6349cb0d1ff54964b35e42a0",
+		"smtp.golden.json":   "496ea9ec800636426edddbc13f6659e5622fa62585cb1984a3a06e14fef8191e",
 	},
 }
 

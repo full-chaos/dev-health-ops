@@ -1,5 +1,5 @@
 # Every file under internal/syncbudget/testdata: sha256, kind, path. Written by `go run ./internal/testsupport/recordedfiles/manifest`; never edit it by hand.
 # python-recorded set: e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855 (0 files)
 # header-before-stamp set: e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855 (0 files)
-1aa3e47cb68b0dab06b63dda2eb88fd02584566af04fb338f287676158732650	hand-written	budget_estimate_oracle.py
+55ba8dc2e60e528b46c51c6da0d88f3199911bb40fafb190899c462b495a817b	hand-written	budget_estimate_oracle.py
 -	header	golden/budget-estimate.golden.json

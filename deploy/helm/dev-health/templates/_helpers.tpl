@@ -438,11 +438,12 @@ routing-carry hooks already compare against queryApi.image inline for the same
 reason (routing-carry-hooks.yaml). A component that is not enabled has no image
 being rolled, so it is not a comparison target.
 
-Fallback (lead D4538 on CHAOS-8309: the guard stays): when NEITHER Go serving
-component is enabled and `.Values.image` exists, the check falls back to the
-old target, the Python image (dev-health.image), so every render the check
-refused before is still refused. CHAOS-8311 removes the fallback together
-with `.Values.image`.
+The Python image stays a target (lead D4535/D4545: the guard stays, monotone
+against main): while `.Values.image` exists the hook tag is ALSO compared with
+the Python image (dev-health.image), so every render the check refused before
+is still refused, whether or not a Go component is enabled and whatever its
+image looks like. The Go clauses only ADD refusals. CHAOS-8311 removes the
+Python clause together with `.Values.image`.
 
 Only comparable when BOTH sides carry this repo's `sha-<12 hex>`
 immutable-tag convention: a sha256 digest does not encode which commit it
@@ -475,7 +476,7 @@ pin on its own, just not one this specific comparison can use).
 {{- fail (printf "%s and goApi.image (%s) are pinned to different commits (%s vs %s) -- %s" $label $goApiImage $hookImageTag $goApiTag $reason) -}}
 {{- end -}}
 {{- end -}}
-{{- if and (not .context.Values.queryApi.enabled) (not .context.Values.goApi.enabled) .context.Values.image -}}
+{{- if .context.Values.image -}}
 {{- $pythonImage := include "dev-health.image" .context -}}
 {{- $pythonTag := regexFind ":sha-[0-9a-f]{12}$" $pythonImage -}}
 {{- if and $pythonTag (ne $pythonTag $hookImageTag) -}}

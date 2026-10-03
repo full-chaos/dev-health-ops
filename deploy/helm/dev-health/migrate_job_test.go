@@ -148,8 +148,14 @@ func TestMigrateJobRefusesImagesThatCannotRunTheVerb(t *testing.T) {
 		"an unpinned operator image": {[]string{"migrations.hook.routeActivate.image=ghcr.io/full-chaos/dev-health-go-operator:latest"}, "is not a pinned dho image"},
 		// CHAOS-8309: the lockstep targets are the Go serving images, each enabled one on its own clause;
 		// with both enabled the hook tag must equal BOTH (the last two cases flip one clause at a time).
-		// Fallback (lead D4538): with NO Go serving component enabled the Python image is still the target.
+		// The Python image stays a target while .Values.image exists (lead D4545: monotone against main, every
+		// render main refused is still refused): each row below is refused on main too.
 		"a different commit than the Python image, no Go component enabled": {[]string{lockstepHook, "image.tag=sha-bbbbbbbbbbbb"}, "and image.repository/image.tag (ghcr.io/full-chaos/dev-hops-api:sha-bbbbbbbbbbbb) are pinned to different commits"},
+		"the Python tag differs, both Go images match":                      {[]string{lockstepHook, "image.tag=sha-bbbbbbbbbbbb", "queryApi.enabled=true", "queryApi.image.tag=sha-aaaaaaaaaaaa", "goApi.enabled=true", "goApi.image.tag=sha-aaaaaaaaaaaa"}, "and image.repository/image.tag (ghcr.io/full-chaos/dev-hops-api:sha-bbbbbbbbbbbb) are pinned to different commits"},
+		"the Python tag differs, queryApi alone matches":                    {[]string{lockstepHook, "image.tag=sha-bbbbbbbbbbbb", "queryApi.enabled=true", "queryApi.image.tag=sha-aaaaaaaaaaaa"}, "and image.repository/image.tag (ghcr.io/full-chaos/dev-hops-api:sha-bbbbbbbbbbbb) are pinned to different commits"},
+		"the Python tag differs, goApi alone matches":                       {[]string{lockstepHook, "image.tag=sha-bbbbbbbbbbbb", "goApi.enabled=true", "goApi.image.tag=sha-aaaaaaaaaaaa"}, "and image.repository/image.tag (ghcr.io/full-chaos/dev-hops-api:sha-bbbbbbbbbbbb) are pinned to different commits"},
+		"the Python tag differs, the enabled Go image is a digest":          {[]string{lockstepHook, "image.tag=sha-bbbbbbbbbbbb", "queryApi.enabled=true", "queryApi.image.repository=ghcr.io/full-chaos/dev-health-go-dho@sha256:" + strings.Repeat("c", 64)}, "and image.repository/image.tag (ghcr.io/full-chaos/dev-hops-api:sha-bbbbbbbbbbbb) are pinned to different commits"},
+		"the Python tag differs, the enabled Go image has no sha tag":       {[]string{lockstepHook, "image.tag=sha-bbbbbbbbbbbb", "goApi.enabled=true"}, "and image.repository/image.tag (ghcr.io/full-chaos/dev-hops-api:sha-bbbbbbbbbbbb) are pinned to different commits"},
 		"a different commit than queryApi.image":                            {[]string{lockstepHook, "queryApi.enabled=true", "queryApi.image.tag=sha-bbbbbbbbbbbb"}, "and queryApi.image (ghcr.io/full-chaos/dev-health-go-dho:sha-bbbbbbbbbbbb) are pinned to different commits"},
 		"a different commit than goApi.image":                               {[]string{lockstepHook, "goApi.enabled=true", "goApi.image.tag=sha-bbbbbbbbbbbb"}, "and goApi.image (ghcr.io/full-chaos/dev-health-go-dho:sha-bbbbbbbbbbbb) are pinned to different commits"},
 		"queryApi matches, goApi differs (both enabled)":                    {[]string{lockstepHook, "queryApi.enabled=true", "queryApi.image.tag=sha-aaaaaaaaaaaa", "goApi.enabled=true", "goApi.image.tag=sha-bbbbbbbbbbbb"}, "and goApi.image (ghcr.io/full-chaos/dev-health-go-dho:sha-bbbbbbbbbbbb) are pinned to different commits"},
@@ -304,22 +310,18 @@ func TestRouteActivateRunsOnlyTheOperatorImage(t *testing.T) {
 	}
 }
 
-// CHAOS-8309: the Python api image (image.tag) is only the fallback target (no Go serving component
-// enabled): a hook tag that differs from it renders when a Go component is enabled and matches. Each row
-// below states one semantic that no refusal case can see fail (a digest or a disabled component is not
-// compared; a serving image without a sha tag is not compared).
-func TestMigrateJobLockstepIgnoresThePythonImageAndAcceptsMatchingGoImages(t *testing.T) {
+// CHAOS-8309: each row states one semantic no refusal case can see fail: a digest or a disabled component is not
+// compared; a serving image without a sha tag is not compared. (A Python tag that differs is refused while
+// .Values.image exists: see the refusal table above.)
+func TestMigrateJobLockstepAcceptsMatchingGoImagesAndSkipsWhatItCannotCompare(t *testing.T) {
 	const digest = "ghcr.io/full-chaos/dev-health-go-dho@sha256:" + "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"
 	for name, sets := range map[string][]string{
-		"the Python image tag differs, Go images match":                               {lockstepHook, "image.tag=sha-bbbbbbbbbbbb", "queryApi.enabled=true", "queryApi.image.tag=sha-aaaaaaaaaaaa", "goApi.enabled=true", "goApi.image.tag=sha-aaaaaaaaaaaa"},
-		"queryApi by digest (never compared), hook tag set":                           {lockstepHook, "queryApi.enabled=true", "queryApi.image.repository=" + digest},
-		"hook by digest, queryApi has a sha tag (never compared)":                     {"migrations.hook.image=" + digest, "queryApi.enabled=true", "queryApi.image.tag=sha-bbbbbbbbbbbb"},
-		"a disabled component with another tag is not a target":                       {lockstepHook, "goApi.enabled=true", "goApi.image.tag=sha-aaaaaaaaaaaa", "queryApi.image.tag=sha-bbbbbbbbbbbb"},
-		"queryApi alone matches, the Python tag differs (the fallback must not fire)": {lockstepHook, "image.tag=sha-bbbbbbbbbbbb", "queryApi.enabled=true", "queryApi.image.tag=sha-aaaaaaaaaaaa"},
-		"goApi alone matches, the Python tag differs (the fallback must not fire)":    {lockstepHook, "image.tag=sha-bbbbbbbbbbbb", "goApi.enabled=true", "goApi.image.tag=sha-aaaaaaaaaaaa"},
-		"queryApi matches, a disabled goApi has another tag":                          {lockstepHook, "queryApi.enabled=true", "queryApi.image.tag=sha-aaaaaaaaaaaa", "goApi.image.tag=sha-bbbbbbbbbbbb"},
-		"a goApi image without a sha tag (chart default tag) is not compared":         {lockstepHook, "goApi.enabled=true"},
-		"a serving image without a sha tag (chart default tag) is not compared":       {lockstepHook, "queryApi.enabled=true"},
+		"queryApi by digest (never compared), hook tag set":                     {lockstepHook, "queryApi.enabled=true", "queryApi.image.repository=" + digest},
+		"hook by digest, queryApi has a sha tag (never compared)":               {"migrations.hook.image=" + digest, "queryApi.enabled=true", "queryApi.image.tag=sha-bbbbbbbbbbbb"},
+		"a disabled component with another tag is not a target":                 {lockstepHook, "goApi.enabled=true", "goApi.image.tag=sha-aaaaaaaaaaaa", "queryApi.image.tag=sha-bbbbbbbbbbbb"},
+		"queryApi matches, a disabled goApi has another tag":                    {lockstepHook, "queryApi.enabled=true", "queryApi.image.tag=sha-aaaaaaaaaaaa", "goApi.image.tag=sha-bbbbbbbbbbbb"},
+		"a goApi image without a sha tag (chart default tag) is not compared":   {lockstepHook, "goApi.enabled=true"},
+		"a serving image without a sha tag (chart default tag) is not compared": {lockstepHook, "queryApi.enabled=true"},
 	} {
 		t.Run(name, func(t *testing.T) {
 			if _, _, refusal := renderJobs(t, sets...); refusal != "" {

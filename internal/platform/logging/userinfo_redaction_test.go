@@ -115,13 +115,17 @@ func TestShortSecretWarningCarriesNoCredentialShape(t *testing.T) {
 	logger := NewJSON(&output, slog.LevelInfo)
 	restore := InstallDefault(logger)
 	defer restore()
-	secrets.Register("REVIEW_SHORT_SETTING_8260", "abc")
+	secrets.Register("REVIEW_SHORT_SETTING", "abc")
 	line := output.String()
-	if !strings.Contains(line, "secret_shorter_than_minimum_not_redactable_by_value") || !strings.Contains(line, "REVIEW_SHORT_SETTING_8260") {
+	if !strings.Contains(line, "secret_shorter_than_minimum_not_redactable_by_value") || !strings.Contains(line, "REVIEW_SHORT_SETTING") {
 		t.Fatalf("the warning or the setting name is missing: %s", line)
 	}
 	if userinfoPattern.MatchString(line) {
 		t.Fatalf("the warning carries a userinfo shape: %s", line)
+	}
+	// The exported text stays readable: the redactor has nothing to rewrite in it.
+	if strings.Contains(line, "[REDACTED]") {
+		t.Fatalf("the warning text is rewritten by the redactor: %s", line)
 	}
 }
 

@@ -620,8 +620,8 @@ func TestResolve_HappyPath_ComputesRealPayload(t *testing.T) {
 		{rows: [][]any{{uint64(20), 4.0, 0.6, 0.3, uint32(3), 0.1, 2.0, uint64(20)}}},                                // repo_metrics (+ CHAOS-4563 known_count)
 		{rows: [][]any{{0.4, uint64(5)}}},                                                                            // hotspots
 		{rows: [][]any{{12.5, uint64(3)}}},                                                                           // complexity (+ CHAOS-4563 known_count)
-		{rows: [][]any{{uint64(9), uint64(1)}}},                                                                      // deployments
-		{rows: [][]any{{uint64(2), 3.0}}},                                                                            // incidents
+		{rows: [][]any{{uint64(9), uint64(1), uint64(4)}}},                                                           // deployments (+ CHAOS-8115 known_count)
+		{rows: [][]any{{uint64(2), 3.0, uint64(2)}}},                                                                 // incidents (+ CHAOS-8115 known_count)
 		{rows: [][]any{{"feature_delivery", uint64(7)}}},                                                             // investment
 		{rows: [][]any{{"human", uint64(10), uint64(2), uint64(1), uint64(6), uint64(1), 1.0, 1.2, 0.1, 0.05, 0.0}}}, // ai_impact
 		{rows: [][]any{{day("2026-08-24"), nil, nil, uint64(4), uint64(3), uint64(2), uint64(4), uint64(4)}}},        // ai_governance

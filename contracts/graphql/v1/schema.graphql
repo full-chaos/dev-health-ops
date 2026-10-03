@@ -1181,6 +1181,10 @@ type OperatingReviewDelta {
   absolute: Float!
   percent: Float
   status: String!
+  """
+  False = the prior week holds no stored value for the metric (CHAOS-8115); see ``OperatingReviewMetric.hasData``. ``priorValue`` is then a 0 placeholder, and ``absolute``, ``percent`` and ``status`` compare with that placeholder: a client draws "No data" for the prior week and no change.
+  """
+  hasPriorData: Boolean!
 }
 
 input OperatingReviewInput {
@@ -1194,6 +1198,10 @@ type OperatingReviewMetric {
   value: Float!
   unit: String!
   delta: OperatingReviewDelta!
+  """
+  True = the week holds a stored value for the metric (CHAOS-8115). False = no row of the metric's daily table in the week, only NULL values, or a read that failed: ``value`` is then a 0 placeholder, not a measured zero, and a client draws "No data". True with ``value`` 0 is a stored zero.
+  """
+  hasData: Boolean!
 }
 
 type OperatingReviewSection {

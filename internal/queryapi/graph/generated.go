@@ -883,19 +883,21 @@ type ComplexityRoot struct {
 	}
 
 	OperatingReviewDelta struct {
-		Absolute   func(childComplexity int) int
-		Percent    func(childComplexity int) int
-		PriorValue func(childComplexity int) int
-		Status     func(childComplexity int) int
-		Value      func(childComplexity int) int
+		Absolute     func(childComplexity int) int
+		HasPriorData func(childComplexity int) int
+		Percent      func(childComplexity int) int
+		PriorValue   func(childComplexity int) int
+		Status       func(childComplexity int) int
+		Value        func(childComplexity int) int
 	}
 
 	OperatingReviewMetric struct {
-		Delta func(childComplexity int) int
-		Key   func(childComplexity int) int
-		Label func(childComplexity int) int
-		Unit  func(childComplexity int) int
-		Value func(childComplexity int) int
+		Delta   func(childComplexity int) int
+		HasData func(childComplexity int) int
+		Key     func(childComplexity int) int
+		Label   func(childComplexity int) int
+		Unit    func(childComplexity int) int
+		Value   func(childComplexity int) int
 	}
 
 	OperatingReviewSection struct {
@@ -5431,6 +5433,13 @@ func (e *executableSchema) Complexity(typeName, field string, childComplexity in
 
 		return e.complexity.OperatingReviewDelta.Absolute(childComplexity), true
 
+	case "OperatingReviewDelta.hasPriorData":
+		if e.complexity.OperatingReviewDelta.HasPriorData == nil {
+			break
+		}
+
+		return e.complexity.OperatingReviewDelta.HasPriorData(childComplexity), true
+
 	case "OperatingReviewDelta.percent":
 		if e.complexity.OperatingReviewDelta.Percent == nil {
 			break
@@ -5465,6 +5474,13 @@ func (e *executableSchema) Complexity(typeName, field string, childComplexity in
 		}
 
 		return e.complexity.OperatingReviewMetric.Delta(childComplexity), true
+
+	case "OperatingReviewMetric.hasData":
+		if e.complexity.OperatingReviewMetric.HasData == nil {
+			break
+		}
+
+		return e.complexity.OperatingReviewMetric.HasData(childComplexity), true
 
 	case "OperatingReviewMetric.key":
 		if e.complexity.OperatingReviewMetric.Key == nil {
@@ -9827,6 +9843,10 @@ type OperatingReviewDelta {
   absolute: Float!
   percent: Float
   status: String!
+  """
+  False = the prior week holds no stored value for the metric (CHAOS-8115); see ` + "`" + `` + "`" + `OperatingReviewMetric.hasData` + "`" + `` + "`" + `. ` + "`" + `` + "`" + `priorValue` + "`" + `` + "`" + ` is then a 0 placeholder, and ` + "`" + `` + "`" + `absolute` + "`" + `` + "`" + `, ` + "`" + `` + "`" + `percent` + "`" + `` + "`" + ` and ` + "`" + `` + "`" + `status` + "`" + `` + "`" + ` compare with that placeholder: a client draws "No data" for the prior week and no change.
+  """
+  hasPriorData: Boolean!
 }
 
 input OperatingReviewInput {
@@ -9840,6 +9860,10 @@ type OperatingReviewMetric {
   value: Float!
   unit: String!
   delta: OperatingReviewDelta!
+  """
+  True = the week holds a stored value for the metric (CHAOS-8115). False = no row of the metric's daily table in the week, only NULL values, or a read that failed: ` + "`" + `` + "`" + `value` + "`" + `` + "`" + ` is then a 0 placeholder, not a measured zero, and a client draws "No data". True with ` + "`" + `` + "`" + `value` + "`" + `` + "`" + ` 0 is a stored zero.
+  """
+  hasData: Boolean!
 }
 
 type OperatingReviewSection {
@@ -39199,6 +39223,50 @@ func (ec *executionContext) fieldContext_OperatingReviewDelta_status(_ context.C
 	return fc, nil
 }
 
+func (ec *executionContext) _OperatingReviewDelta_hasPriorData(ctx context.Context, field graphql.CollectedField, obj *model.OperatingReviewDelta) (ret graphql.Marshaler) {
+	fc, err := ec.fieldContext_OperatingReviewDelta_hasPriorData(ctx, field)
+	if err != nil {
+		return graphql.Null
+	}
+	ctx = graphql.WithFieldContext(ctx, fc)
+	defer func() {
+		if r := recover(); r != nil {
+			ec.Error(ctx, ec.Recover(ctx, r))
+			ret = graphql.Null
+		}
+	}()
+	resTmp, err := ec.ResolverMiddleware(ctx, func(rctx context.Context) (any, error) {
+		ctx = rctx // use context from middleware stack in children
+		return obj.HasPriorData, nil
+	})
+	if err != nil {
+		ec.Error(ctx, err)
+		return graphql.Null
+	}
+	if resTmp == nil {
+		if !graphql.HasFieldError(ctx, fc) {
+			ec.Errorf(ctx, "must not be null")
+		}
+		return graphql.Null
+	}
+	res := resTmp.(bool)
+	fc.Result = res
+	return ec.marshalNBoolean2bool(ctx, field.Selections, res)
+}
+
+func (ec *executionContext) fieldContext_OperatingReviewDelta_hasPriorData(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "OperatingReviewDelta",
+		Field:      field,
+		IsMethod:   false,
+		IsResolver: false,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return nil, errors.New("field of type Boolean does not have child fields")
+		},
+	}
+	return fc, nil
+}
+
 func (ec *executionContext) _OperatingReviewMetric_key(ctx context.Context, field graphql.CollectedField, obj *model.OperatingReviewMetric) (ret graphql.Marshaler) {
 	fc, err := ec.fieldContext_OperatingReviewMetric_key(ctx, field)
 	if err != nil {
@@ -39424,8 +39492,54 @@ func (ec *executionContext) fieldContext_OperatingReviewMetric_delta(_ context.C
 				return ec.fieldContext_OperatingReviewDelta_percent(ctx, field)
 			case "status":
 				return ec.fieldContext_OperatingReviewDelta_status(ctx, field)
+			case "hasPriorData":
+				return ec.fieldContext_OperatingReviewDelta_hasPriorData(ctx, field)
 			}
 			return nil, fmt.Errorf("no field named %q was found under type OperatingReviewDelta", field.Name)
+		},
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _OperatingReviewMetric_hasData(ctx context.Context, field graphql.CollectedField, obj *model.OperatingReviewMetric) (ret graphql.Marshaler) {
+	fc, err := ec.fieldContext_OperatingReviewMetric_hasData(ctx, field)
+	if err != nil {
+		return graphql.Null
+	}
+	ctx = graphql.WithFieldContext(ctx, fc)
+	defer func() {
+		if r := recover(); r != nil {
+			ec.Error(ctx, ec.Recover(ctx, r))
+			ret = graphql.Null
+		}
+	}()
+	resTmp, err := ec.ResolverMiddleware(ctx, func(rctx context.Context) (any, error) {
+		ctx = rctx // use context from middleware stack in children
+		return obj.HasData, nil
+	})
+	if err != nil {
+		ec.Error(ctx, err)
+		return graphql.Null
+	}
+	if resTmp == nil {
+		if !graphql.HasFieldError(ctx, fc) {
+			ec.Errorf(ctx, "must not be null")
+		}
+		return graphql.Null
+	}
+	res := resTmp.(bool)
+	fc.Result = res
+	return ec.marshalNBoolean2bool(ctx, field.Selections, res)
+}
+
+func (ec *executionContext) fieldContext_OperatingReviewMetric_hasData(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "OperatingReviewMetric",
+		Field:      field,
+		IsMethod:   false,
+		IsResolver: false,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return nil, errors.New("field of type Boolean does not have child fields")
 		},
 	}
 	return fc, nil
@@ -39568,6 +39682,8 @@ func (ec *executionContext) fieldContext_OperatingReviewSection_metrics(_ contex
 				return ec.fieldContext_OperatingReviewMetric_unit(ctx, field)
 			case "delta":
 				return ec.fieldContext_OperatingReviewMetric_delta(ctx, field)
+			case "hasData":
+				return ec.fieldContext_OperatingReviewMetric_hasData(ctx, field)
 			}
 			return nil, fmt.Errorf("no field named %q was found under type OperatingReviewMetric", field.Name)
 		},
@@ -67995,6 +68111,11 @@ func (ec *executionContext) _OperatingReviewDelta(ctx context.Context, sel ast.S
 			if out.Values[i] == graphql.Null {
 				out.Invalids++
 			}
+		case "hasPriorData":
+			out.Values[i] = ec._OperatingReviewDelta_hasPriorData(ctx, field, obj)
+			if out.Values[i] == graphql.Null {
+				out.Invalids++
+			}
 		default:
 			panic("unknown field " + strconv.Quote(field.Name))
 		}
@@ -68051,6 +68172,11 @@ func (ec *executionContext) _OperatingReviewMetric(ctx context.Context, sel ast.
 			}
 		case "delta":
 			out.Values[i] = ec._OperatingReviewMetric_delta(ctx, field, obj)
+			if out.Values[i] == graphql.Null {
+				out.Invalids++
+			}
+		case "hasData":
+			out.Values[i] = ec._OperatingReviewMetric_hasData(ctx, field, obj)
 			if out.Values[i] == graphql.Null {
 				out.Invalids++
 			}

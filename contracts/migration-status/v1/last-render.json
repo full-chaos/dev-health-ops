@@ -3,7 +3,7 @@
   "rendered_at": "2026-09-28T10:08:59Z",
   "ops_sha": "f03f57d51c957ad7601fd2154089e152f8cf30d2",
   "render_commit": "f03f57d51c957ad7601fd2154089e152f8cf30d2",
-  "schema_digest": "sha256:dc8f0b2e374fb0e6a96a8a2255e5deaaada041706072f688716ddb9958bdc87f",
+  "schema_digest": "sha256:3e39cc9d7feb5880d675e086b8f4415e77444385c4873564a46134f717e5a9df",
   "fleet_read_at": "2026-09-28T10:08:59.404831719Z",
   "fleet_source": "fleet file fleet-prod-2026-09-28.json",
   "operations": [

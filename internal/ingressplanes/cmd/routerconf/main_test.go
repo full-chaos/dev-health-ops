@@ -14,7 +14,7 @@ import (
 const smallContract = `{"schema_version": 1, "regex_mode": true, "rules": [
   {"path": "/", "path_type": "Prefix", "plane": "go-api"},
   {"path": "/graphql$", "path_type": "ImplementationSpecific", "plane": "query-api"}
-]}`
+], "public_host_rules": []}`
 
 func write(t *testing.T, path, text string) {
 	t.Helper()

@@ -15,6 +15,7 @@ import (
 	"slices"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -598,13 +599,29 @@ func TestFlagsOverrideTheEnvironment(t *testing.T) {
 	// The API listener spells its ":0" as "localhost:0" only because the
 	// configuration rejects two identically-spelled addresses; both bind an
 	// ephemeral loopback port.
-	operatorAddress := reservePort(t)
+	// The environment's operator address is HELD OPEN by the test for its whole
+	// duration (never reserved and released), so no neighbouring process can be
+	// handed the port while the test runs. If the flag were ignored, the
+	// service would try to bind this held address and fail to start; the
+	// assertions below also prove nothing ever connected to it.
+	held, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("hold the environment's operator address: %v", err)
+	}
+	defer func() { _ = held.Close() }()
+	operatorAddress := held.Addr().String()
+	var heldConnections atomic.Int64
+	go func() {
+		for {
+			conn, acceptErr := held.Accept()
+			if acceptErr != nil {
+				return
+			}
+			heldConnections.Add(1)
+			_ = conn.Close()
+		}
+	}()
 	env := brokenEnvironment(t, "localhost:0", operatorAddress)
-	// Point the environment at an address the flag will override. If the flag
-	// were ignored, the operator listener would bind the environment's
-	// address and the bind check below would fail. The environment's address
-	// is never bound by the service in the passing case, so reserving it is
-	// race-free.
 	env[authconfig.EnvLogLevel] = "info"
 
 	logs := &safeBuffer{}
@@ -619,18 +636,20 @@ func TestFlagsOverrideTheEnvironment(t *testing.T) {
 	}()
 
 	flagOperator := awaitBoundAddress(t, logs, "operator-http")
+	if flagOperator == operatorAddress {
+		t.Fatalf("the operator listener bound the environment's address %s, so the flag did not win", operatorAddress)
+	}
 	client := &http.Client{Timeout: 5 * time.Second}
 	defer client.CloseIdleConnections()
 	response := awaitResponse(t, client, "http://"+flagOperator+"/healthz")
 	_, _ = io.Copy(io.Discard, response.Body)
 	_ = response.Body.Close()
 
-	// The environment's address must be free: nothing bound it.
-	listener, err := net.Listen("tcp", operatorAddress)
-	if err != nil {
-		t.Fatalf("the environment's operator address is bound, so the flag did not win: %v", err)
+	// The held environment address must have seen no traffic: the service
+	// served on the flag's address, not on the environment's.
+	if got := heldConnections.Load(); got != 0 {
+		t.Fatalf("the environment's operator address received %d connection(s), so the flag did not win", got)
 	}
-	_ = listener.Close()
 
 	cancel()
 	select {

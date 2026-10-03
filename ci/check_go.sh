@@ -397,6 +397,7 @@ GO_RACE_WEIGHTS="${GO_RACE_WEIGHTS:-${ROOT}/ci/go_race_weights.tsv}"
 check_providersync_race_shard() {
   local shard="$1" count="$2" all names selected_names s total=0 regex
   local weights="${GO_PROVIDERSYNC_RACE_WEIGHTS:-${ROOT}/ci/go_providersync_race_weights.tsv}"
+  local shard_awk="${GO_PROVIDERSYNC_RACE_SHARD_AWK:-${ROOT}/ci/go_providersync_race_shard.awk}"
   [ -f "${weights}" ] || die "providersync race shards need ${weights}"
   all="$(cd "${ROOT}" && "${GO_ENV_OFF[@]}" GOWORK=off go test -mod=readonly -list '^Test' ./internal/providersync | grep '^Test')" \
     || die "go test -list failed for internal/providersync (or reported no test)"
@@ -405,7 +406,7 @@ check_providersync_race_shard() {
     || die "providersync race shards: ${count} legs for fewer listed tests: a shard would select zero tests"
   names=""
   for ((s = 1; s <= count; s++)); do
-    selected_names="$(printf '%s\n' "${all}" | awk -v shard="${s}" -v count="${count}" -v weights="${weights}" -f "${ROOT}/ci/go_providersync_race_shard.awk")" \
+    selected_names="$(printf '%s\n' "${all}" | awk -v shard="${s}" -v count="${count}" -v weights="${weights}" -f "${shard_awk}")" \
       || die "ci/go_providersync_race_shard.awk failed"
     [ -n "${selected_names}" ] || die "providersync race shard ${s}/${count} selected zero tests"
     total=$((total + $(printf '%s\n' "${selected_names}" | wc -l)))

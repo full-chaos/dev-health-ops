@@ -684,3 +684,51 @@ def test_a_providersync_race_leg_whose_shards_do_not_partition_fails_before_any_
     assert proc.returncode != 0, proc.stdout[-800:]
     assert "go_providersync_race_shard.awk failed" in proc.stderr
     assert not [c for c in calls if c.endswith("./internal/providersync")]
+
+
+def _provider_run_names(call: str) -> list[str]:
+    """The test names of the -run regex of a recorded `go test ... ./internal/providersync` call."""
+    words = call.split()
+    regex = words[words.index("-run") + 1]
+    assert regex.startswith("^(") and regex.endswith(")$"), regex
+    return regex[2:-2].split("|")
+
+
+def test_each_race_leg_runs_exactly_its_own_providersync_slice(tmp_path: Path) -> None:
+    names = _provider_tests()
+    count = 3
+    union: list[str] = []
+    for shard in range(1, count + 1):
+        proc, calls = _run_check_go(
+            tmp_path / f"leg{shard}", "ci-leg", "race", str(shard), str(count)
+        )
+        assert proc.returncode == 0, proc.stderr[-1500:] + proc.stdout[-1500:]
+        provider = [c for c in calls if c.endswith("./internal/providersync")]
+        assert len(provider) == 1, provider
+        ran = _provider_run_names(provider[0])
+        want = _provider_shard(names, shard, count, PROVIDER_WEIGHTS).stdout.split()
+        assert sorted(ran) == sorted(want), f"leg {shard} does not run its own slice"
+        union += ran
+    assert sorted(union) == sorted(names), "the legs' slices are not the listed set"
+    assert len(union) == len(set(union)), "a providersync test runs in two legs"
+
+
+def test_a_shard_awk_that_loses_a_test_fails_the_leg_at_the_partition_check(
+    tmp_path: Path,
+) -> None:
+    # Every shard stays non-empty, so only the exact-partition comparison can catch the lost test.
+    broken = tmp_path / "broken.awk"
+    text = PROVIDER_AWK.read_text(encoding="utf-8")
+    assert "$0 ~ /^Test/ {" in text
+    broken.write_text(text.replace("$0 ~ /^Test/ {", "$0 ~ /^Test/ && NR > 1 {"))
+    proc, calls = _run_check_go(
+        tmp_path / "run",
+        "ci-leg",
+        "race",
+        "1",
+        "3",
+        extra_env={"GO_PROVIDERSYNC_RACE_SHARD_AWK": str(broken)},
+    )
+    assert proc.returncode != 0, proc.stdout[-800:]
+    assert "not an exact partition" in proc.stderr
+    assert not [c for c in calls if c.endswith("./internal/providersync")]

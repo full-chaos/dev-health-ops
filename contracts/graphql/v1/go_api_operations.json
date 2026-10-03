@@ -52,7 +52,12 @@
   },
   {
     "operation": "aiWorkflowDrilldown",
-    "digest": "42bfc78e3f533b51578eb3575c027a61f9c81bfc9a7bf843c4c2f9979972fea4"
+    "digest": "5f489ef8f1ba43d3fa2c84ec607d46882fcace1ff8a9913ece369b85e1e60afa"
+  },
+  {
+    "operation": "aiWorkflowDrilldown",
+    "digest": "42bfc78e3f533b51578eb3575c027a61f9c81bfc9a7bf843c4c2f9979972fea4",
+    "legacy": true
   },
   {
     "operation": "busFactor",

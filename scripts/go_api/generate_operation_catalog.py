@@ -14,7 +14,7 @@ class the runbook and ``registrydump`` itself warn about), this script
 regenerates it from the ONE canonical producer -- ``registrydump -file
 internal/queryapi/server/query_route.go``, a ``go/ast`` parse of the real route
 source -- and writes ONLY ``operation`` and ``digest`` to the checked-in
-catalog (``api/graphql/go_api_operations.json``). The raw document text is
+catalog (``contracts/graphql/v1/go_api_operations.json``). The raw document text is
 deliberately NOT persisted here: the edge never needs it at runtime (only
 the digest, to match against a request's own computed digest), and
 carrying a second copy of the query text would be exactly the kind of
@@ -39,9 +39,7 @@ from pathlib import Path
 REPO_ROOT = Path(__file__).resolve().parents[2]
 QUERY_ROUTE_GO = REPO_ROOT / "internal" / "queryapi" / "server" / "query_route.go"
 REGISTRYDUMP_DIR = REPO_ROOT / "cmd" / "registrydump"
-CATALOG_PATH = (
-    REPO_ROOT / "src" / "dev_health_ops" / "api" / "graphql" / "go_api_operations.json"
-)
+CATALOG_PATH = REPO_ROOT / "contracts" / "graphql" / "v1" / "go_api_operations.json"
 
 
 def _entry(doc: dict[str, object]) -> dict[str, object]:

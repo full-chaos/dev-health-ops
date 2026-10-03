@@ -12,6 +12,9 @@ echo "repin start root=$R old8=$OLD8 new=$NEW"
 for need in compose/compose.bigboy.images.yml _records; do
   [ -e "$R/$need" ] || { echo "FAIL: BIGBOY_ROOT=$R is missing $need -- refusing to run against a root that is not a real bigboy tree" >&2; exit 4; }
 done
+# CHAOS-7674: the Python api image is no longer built, so the overlay's `api`/`migrate` digest is FROZEN (WP6 removes
+# those services) and is neither the OLD8 ground truth nor re-pinned here; the Go query-api digest (dev-health-go-dho)
+# is both.
 # CHAOS-7014 (D2801): a mistyped OLD8 (9 chars, "bd25cd0a9" instead of "bd25cd0a") once made the
 # repin's own cp of _records/bigboy-$OLD8/*.sh fail under set -euo pipefail BEFORE the sed rewrite
 # below ever ran -- $OV was backed up but never actually repointed, and every downstream STEP in
@@ -26,17 +29,17 @@ case "$OLD8" in
 esac
 # Images are tagged sha-<first 7 hex chars of the commit> (S7 below), never with all 8 that name the
 # _records dir, so the registry lookup uses the 7-character form.
-OLD_DIGEST_RESOLVED=$(docker buildx imagetools inspect "ghcr.io/full-chaos/dev-hops-api:sha-${OLD8:0:7}" --format '{{json .Manifest}}' 2>/dev/null | jq -r .digest || true)
-[[ ${OLD_DIGEST_RESOLVED:-} == sha256:* ]] || { echo "FAIL: OLD8=$OLD8 does not resolve to a real dev-hops-api image in the registry"; exit 4; }
-OLD_DIGEST_PINNED=$(grep -ohE "dev-hops-api@sha256:[0-9a-f]{64}" "$OV" | head -1 | cut -d@ -f2)
-[[ -n "$OLD_DIGEST_PINNED" ]] || { echo "FAIL: $OV has no dev-hops-api digest pinned to cross-check OLD8 against"; exit 4; }
+OLD_DIGEST_RESOLVED=$(docker buildx imagetools inspect "ghcr.io/full-chaos/dev-health-go-dho:sha-${OLD8:0:7}" --format '{{json .Manifest}}' 2>/dev/null | jq -r .digest || true)
+[[ ${OLD_DIGEST_RESOLVED:-} == sha256:* ]] || { echo "FAIL: OLD8=$OLD8 does not resolve to a real dev-health-go-dho image in the registry"; exit 4; }
+OLD_DIGEST_PINNED=$(grep -ohE "dev-health-go-dho@sha256:[0-9a-f]{64}" "$OV" | head -1 | cut -d@ -f2)
+[[ -n "$OLD_DIGEST_PINNED" ]] || { echo "FAIL: $OV has no dev-health-go-dho digest pinned to cross-check OLD8 against"; exit 4; }
 if [[ "$OLD_DIGEST_RESOLVED" != "$OLD_DIGEST_PINNED" ]]; then
-  echo "FAIL: OLD8=$OLD8 resolves to $OLD_DIGEST_RESOLVED, but $OV currently pins $OLD_DIGEST_PINNED for dev-hops-api -- OLD8 does not name the ACTUALLY-running build. Refusing rather than silently no-op'ing the repin (CHAOS-7014/D2801)."
+  echo "FAIL: OLD8=$OLD8 resolves to $OLD_DIGEST_RESOLVED, but $OV currently pins $OLD_DIGEST_PINNED for dev-health-go-dho -- OLD8 does not name the ACTUALLY-running build. Refusing rather than silently no-op'ing the repin (CHAOS-7014/D2801)."
   exit 4
 fi
 dig() { docker buildx imagetools inspect "ghcr.io/full-chaos/$1:sha-$S7" --format '{{json .Manifest}}' | jq -r .digest; }
 declare -A O N
-for i in dev-hops-api dev-health-go-dho dev-health-go-api-tools dev-health-go-operator; do
+for i in dev-health-go-dho dev-health-go-api-tools dev-health-go-operator; do
   N[$i]=$(dig "$i"); [[ ${N[$i]} == sha256:* ]] || { echo "no image $i"; exit 3; }
   O[$i]=$(grep -ohE "$i@sha256:[0-9a-f]{64}" "$OV" "$R"/_records/bigboy-"$OLD8"/*.sh 2>/dev/null | head -1 | cut -d@ -f2 || true)
   echo "$i ${O[$i]:-none} -> ${N[$i]}"
@@ -52,7 +55,7 @@ done
 # the exact-old-value sed above, since "old" here only ever means the IMMEDIATELY previous cut's digest) --
 # found live 2026-09-26: run-rest-bigboy.sh's TOOLS= line stuck at rev190's tools digest through rev191 and
 # rev192, so the REST prover ran a stale build and every request refused (prover_build_skew=true), while
-# bigboy-cut.sh's own "STEP rest rc=0" still looked green. Force EVERY image@sha256 reference for these four
+# bigboy-cut.sh's own "STEP rest rc=0" still looked green. Force EVERY image@sha256 reference for these three
 # images to the NEW digest, by IMAGE NAME, not by matching a specific old value, so a multi-cut-stale literal
 # cannot survive a repin.
 for i in "${!N[@]}"; do
@@ -63,4 +66,4 @@ printf "%s\n" "$NEW" > "$R"/_records/bigboy-"$N8"/sha.txt
 # a re-pin from a dir whose rest-commands still carry literals gets them templated:
 sed -i -E "s/^STEP=.*/STEP=\${STEP:?STEP not exported}/; s/^B=[0-9a-f]{40}\$/B=\${B:?B not exported}/; s/^B_DHO=[0-9a-f]{40}\$/B_DHO=\${B:?B not exported}/" "$R"/_records/bigboy-"$N8"/bigboy-rest-commands.sh
 echo "pin: $NEW" > "$R"/_records/bigboy-"$N8"/pin.md
-grep -c "${N[dev-hops-api]#sha256:}" "$OV"
+grep -c "${N[dev-health-go-dho]#sha256:}" "$OV"

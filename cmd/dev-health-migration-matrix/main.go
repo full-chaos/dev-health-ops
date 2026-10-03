@@ -60,18 +60,19 @@ const (
 	remainingFamiliesRel   = "internal/jobs/metrics/remaining/families.json"
 	jobDailyPyRelative     = "src/dev_health_ops/metrics/job_daily.py"
 
-	// The "Per REST endpoint" section's two sources: main.py (covered by
-	// go.yml's `src/dev_health_ops/api/**` path filter) and query-api's route
-	// table, executed (internal/queryapi/server.RESTRoutes, CHAOS-8307).
-	mainPyRelative = "src/dev_health_ops/api/main.py"
+	// The "Per REST endpoint" section's two sources: the frozen copy of the
+	// Python api's route list (the Python tree is being deleted, so the page no
+	// longer reads main.py) and query-api's route table, executed
+	// (internal/queryapi/server.RESTRoutes, CHAOS-8307).
+	frozenRoutesRelative = migrationmatrix.FrozenRESTRoutesRelative
 
 	// catalogRelative is the registered-operation catalog the edge
 	// dispatches by -- the file `dev-hops go-api routing status` reports
 	// DOCUMENT_DRIFT against. Read by -check as well as -render, so a row
 	// the edge cannot dispatch fails the committed page (R14) rather than
 	// rendering as served. Trap #98: it is a non-Go input;
-	// go.yml's `src/dev_health_ops/api/**` path filter already covers it.
-	catalogRelative = "src/dev_health_ops/api/graphql/go_api_operations.json"
+	// go.yml's `contracts/**` path filter covers it.
+	catalogRelative = "contracts/graphql/v1/go_api_operations.json"
 )
 
 // defaultFleetContainers is the compose fleet whose image labels answer
@@ -292,7 +293,7 @@ func legacyBlocks(root string, families *migrationmatrix.NativeFamilies, restPro
 	if err != nil {
 		return nil, fmt.Errorf("workgraph investment block: %w", err)
 	}
-	restRows, err := migrationmatrix.LoadRESTEndpoints(filepath.Join(root, mainPyRelative), migrationmatrix.LoadQueryAPIMuxRoutes())
+	restRows, err := migrationmatrix.LoadRESTEndpoints(filepath.Join(root, frozenRoutesRelative), migrationmatrix.LoadQueryAPIMuxRoutes())
 	if err != nil {
 		return nil, fmt.Errorf("REST endpoints: %w", err)
 	}

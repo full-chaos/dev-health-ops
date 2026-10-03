@@ -332,6 +332,8 @@ type AiAttributedPr struct {
 	WorkType *string    `json:"workType,omitempty"`
 	TeamID   *string    `json:"teamId,omitempty"`
 	MergedAt *time.Time `json:"mergedAt,omitempty"`
+	RepoName *string    `json:"repoName,omitempty"`
+	TeamName *string    `json:"teamName,omitempty"`
 }
 
 type AiAttributedPrsResult struct {
@@ -467,6 +469,7 @@ type CapacityForecastFilterInput struct {
 
 type CapacityForecastInput struct {
 	TeamID      *string           `json:"teamId,omitempty"`
+	TeamIds     []string          `json:"teamIds,omitempty"`
 	WorkScopeID *string           `json:"workScopeId,omitempty"`
 	TargetItems *int              `json:"targetItems,omitempty"`
 	TargetDate  *graphqldate.Date `json:"targetDate,omitempty"`

@@ -349,7 +349,9 @@ type ComplexityRoot struct {
 		MergedAt func(childComplexity int) int
 		Number   func(childComplexity int) int
 		RepoID   func(childComplexity int) int
+		RepoName func(childComplexity int) int
 		TeamID   func(childComplexity int) int
+		TeamName func(childComplexity int) int
 		Title    func(childComplexity int) int
 		WorkType func(childComplexity int) int
 	}
@@ -3046,12 +3048,26 @@ func (e *executableSchema) Complexity(typeName, field string, childComplexity in
 
 		return e.complexity.AiAttributedPr.RepoID(childComplexity), true
 
+	case "AiAttributedPr.repoName":
+		if e.complexity.AiAttributedPr.RepoName == nil {
+			break
+		}
+
+		return e.complexity.AiAttributedPr.RepoName(childComplexity), true
+
 	case "AiAttributedPr.teamId":
 		if e.complexity.AiAttributedPr.TeamID == nil {
 			break
 		}
 
 		return e.complexity.AiAttributedPr.TeamID(childComplexity), true
+
+	case "AiAttributedPr.teamName":
+		if e.complexity.AiAttributedPr.TeamName == nil {
+			break
+		}
+
+		return e.complexity.AiAttributedPr.TeamName(childComplexity), true
 
 	case "AiAttributedPr.title":
 		if e.complexity.AiAttributedPr.Title == nil {
@@ -8855,6 +8871,8 @@ type AiAttributedPr {
   workType: String
   teamId: String
   mergedAt: DateTime
+  repoName: String
+  teamName: String
 }
 
 type AiAttributedPrsResult {
@@ -9006,6 +9024,7 @@ input CapacityForecastFilterInput {
 
 input CapacityForecastInput {
   teamId: String = null
+  teamIds: [String!] = null
   workScopeId: String = null
   targetItems: Int = null
   targetDate: Date = null
@@ -23527,6 +23546,88 @@ func (ec *executionContext) fieldContext_AiAttributedPr_mergedAt(_ context.Conte
 	return fc, nil
 }
 
+func (ec *executionContext) _AiAttributedPr_repoName(ctx context.Context, field graphql.CollectedField, obj *model.AiAttributedPr) (ret graphql.Marshaler) {
+	fc, err := ec.fieldContext_AiAttributedPr_repoName(ctx, field)
+	if err != nil {
+		return graphql.Null
+	}
+	ctx = graphql.WithFieldContext(ctx, fc)
+	defer func() {
+		if r := recover(); r != nil {
+			ec.Error(ctx, ec.Recover(ctx, r))
+			ret = graphql.Null
+		}
+	}()
+	resTmp, err := ec.ResolverMiddleware(ctx, func(rctx context.Context) (any, error) {
+		ctx = rctx // use context from middleware stack in children
+		return obj.RepoName, nil
+	})
+	if err != nil {
+		ec.Error(ctx, err)
+		return graphql.Null
+	}
+	if resTmp == nil {
+		return graphql.Null
+	}
+	res := resTmp.(*string)
+	fc.Result = res
+	return ec.marshalOString2ᚖstring(ctx, field.Selections, res)
+}
+
+func (ec *executionContext) fieldContext_AiAttributedPr_repoName(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "AiAttributedPr",
+		Field:      field,
+		IsMethod:   false,
+		IsResolver: false,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return nil, errors.New("field of type String does not have child fields")
+		},
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _AiAttributedPr_teamName(ctx context.Context, field graphql.CollectedField, obj *model.AiAttributedPr) (ret graphql.Marshaler) {
+	fc, err := ec.fieldContext_AiAttributedPr_teamName(ctx, field)
+	if err != nil {
+		return graphql.Null
+	}
+	ctx = graphql.WithFieldContext(ctx, fc)
+	defer func() {
+		if r := recover(); r != nil {
+			ec.Error(ctx, ec.Recover(ctx, r))
+			ret = graphql.Null
+		}
+	}()
+	resTmp, err := ec.ResolverMiddleware(ctx, func(rctx context.Context) (any, error) {
+		ctx = rctx // use context from middleware stack in children
+		return obj.TeamName, nil
+	})
+	if err != nil {
+		ec.Error(ctx, err)
+		return graphql.Null
+	}
+	if resTmp == nil {
+		return graphql.Null
+	}
+	res := resTmp.(*string)
+	fc.Result = res
+	return ec.marshalOString2ᚖstring(ctx, field.Selections, res)
+}
+
+func (ec *executionContext) fieldContext_AiAttributedPr_teamName(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "AiAttributedPr",
+		Field:      field,
+		IsMethod:   false,
+		IsResolver: false,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return nil, errors.New("field of type String does not have child fields")
+		},
+	}
+	return fc, nil
+}
+
 func (ec *executionContext) _AiAttributedPrsResult_orgId(ctx context.Context, field graphql.CollectedField, obj *model.AiAttributedPrsResult) (ret graphql.Marshaler) {
 	fc, err := ec.fieldContext_AiAttributedPrsResult_orgId(ctx, field)
 	if err != nil {
@@ -23712,6 +23813,10 @@ func (ec *executionContext) fieldContext_AiAttributedPrsResult_rows(_ context.Co
 				return ec.fieldContext_AiAttributedPr_teamId(ctx, field)
 			case "mergedAt":
 				return ec.fieldContext_AiAttributedPr_mergedAt(ctx, field)
+			case "repoName":
+				return ec.fieldContext_AiAttributedPr_repoName(ctx, field)
+			case "teamName":
+				return ec.fieldContext_AiAttributedPr_teamName(ctx, field)
 			}
 			return nil, fmt.Errorf("no field named %q was found under type AiAttributedPr", field.Name)
 		},
@@ -59907,7 +60012,7 @@ func (ec *executionContext) unmarshalInputCapacityForecastInput(ctx context.Cont
 		asMap["simulations"] = 10000
 	}
 
-	fieldsInOrder := [...]string{"teamId", "workScopeId", "targetItems", "targetDate", "historyDays", "simulations"}
+	fieldsInOrder := [...]string{"teamId", "teamIds", "workScopeId", "targetItems", "targetDate", "historyDays", "simulations"}
 	for _, k := range fieldsInOrder {
 		v, ok := asMap[k]
 		if !ok {
@@ -59921,6 +60026,13 @@ func (ec *executionContext) unmarshalInputCapacityForecastInput(ctx context.Cont
 				return it, err
 			}
 			it.TeamID = data
+		case "teamIds":
+			ctx := graphql.WithPathContext(ctx, graphql.NewPathWithField("teamIds"))
+			data, err := ec.unmarshalOString2ᚕstringᚄ(ctx, v)
+			if err != nil {
+				return it, err
+			}
+			it.TeamIds = data
 		case "workScopeId":
 			ctx := graphql.WithPathContext(ctx, graphql.NewPathWithField("workScopeId"))
 			data, err := ec.unmarshalOString2ᚖstring(ctx, v)
@@ -63230,6 +63342,10 @@ func (ec *executionContext) _AiAttributedPr(ctx context.Context, sel ast.Selecti
 			out.Values[i] = ec._AiAttributedPr_teamId(ctx, field, obj)
 		case "mergedAt":
 			out.Values[i] = ec._AiAttributedPr_mergedAt(ctx, field, obj)
+		case "repoName":
+			out.Values[i] = ec._AiAttributedPr_repoName(ctx, field, obj)
+		case "teamName":
+			out.Values[i] = ec._AiAttributedPr_teamName(ctx, field, obj)
 		default:
 			panic("unknown field " + strconv.Quote(field.Name))
 		}

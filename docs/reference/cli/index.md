@@ -23,7 +23,7 @@ The operator CLI is `dho` (Go). The Python `dev-hops` CLI (module `dev_health_op
 
 ### Verbs that still run as `dev-hops` (until CHAOS-6469)
 
-These verbs have no `dho` port at this commit, so their examples below keep the Python form; the page is not rewritten for them until the port lands or the verb is removed: `audit completeness|schema|perf|coverage` (frozen, CHAOS-6894), `fixtures validate` and `fixtures world|world-snapshot|world-restore` (CHAOS-6885, CHAOS-6886), `metrics daily|compounding-risk|complexity` (the work runs as Go jobs; no operator verb), `api` (the Go service is `dho api`, with different flags), `workers inspect` and `workers start-*` (the Go equivalent is `dho worker` / `dho workers`), and `sync teams --path` (the team-mapping file mode), `fixtures generate` (the Go verb loads three frozen worlds only), and `migrate postgres|clickhouse` (the Go verbs refuse unless the environment matches the baseline: `DEV_HEALTH_ALLOW_CELERY_RIVER_CUTOVER`, native ClickHouse protocol on 9000, not the HTTP port 8123; their examples need a run-checked rewrite). Every other `dev-hops <verb>` of this page now reads `dho <verb>`, with the verb path and flags checked against `dho <verb> --help`; the examples were not executed.
+These verbs have no `dho` port at this commit, so their examples below keep the Python form; the page is not rewritten for them until the port lands or the verb is removed: `audit completeness|schema|perf|coverage` (frozen, CHAOS-6894), `fixtures validate` and `fixtures world|world-snapshot|world-restore` (CHAOS-6885, CHAOS-6886), `metrics daily|compounding-risk|complexity` (the work runs as Go jobs; no operator verb), `api` (the Go service is `dho api`, with different flags), `workers inspect` and `workers start-*` (the Go equivalent is `dho worker` / `dho workers`), and `sync teams --path` (the team-mapping file mode), `sync <provider>` without `--org` and every `sync teams` form (the Go verb refuses a sync with no organization, CHAOS-6710, and takes only jira, github, gitlab or linear for teams), `fixtures generate` (the Go verb loads three frozen worlds only), and `migrate postgres|clickhouse` (the Go verbs refuse unless the environment matches the baseline: `DEV_HEALTH_ALLOW_CELERY_RIVER_CUTOVER`, native ClickHouse protocol on 9000, not the HTTP port 8123; their examples need a run-checked rewrite). Every other `dev-hops <verb>` of this page now reads `dho <verb>`, with the verb path and flags checked against `dho <verb> --help`; the examples were not executed.
 
 ### Inline execution and its enforcement gaps
 
@@ -116,17 +116,17 @@ Sync git repository data. Uses `CLICKHOUSE_URI` (analytics layer).
 
 ```bash
 # Local repository
-dho sync git --provider local \
+dev-hops sync git --provider local \
   --repo-path /path/to/repo
 
 # GitHub
-dho sync git --provider github \
+dev-hops sync git --provider github \
   --auth "$GITHUB_TOKEN" \
   --owner torvalds \
   --repo linux
 
 # GitHub App
-dho sync git --provider github \
+dev-hops sync git --provider github \
   --github-app-id "$GITHUB_APP_ID" \
   --github-app-key-path "$GITHUB_APP_PRIVATE_KEY_PATH" \
   --github-app-installation-id "$GITHUB_APP_INSTALLATION_ID" \
@@ -134,7 +134,7 @@ dho sync git --provider github \
   --repo my-repo
 
 # GitLab
-dho sync git --provider gitlab \
+dev-hops sync git --provider gitlab \
   --auth "$GITLAB_TOKEN" \
   --project-id 278964
 ```
@@ -162,7 +162,7 @@ GitHub authentication precedence is CLI flags > environment variables > stored d
 Sync pull request data. Uses `CLICKHOUSE_URI`.
 
 ```bash
-dho sync prs --provider github \
+dev-hops sync prs --provider github \
   --auth "$GITHUB_TOKEN" \
   --owner org \
   --repo repo
@@ -194,13 +194,13 @@ pipeline is green.
 
 ```bash
 # GitHub
-dho sync cicd --provider github \
+dev-hops sync cicd --provider github \
   --auth "$GITHUB_TOKEN" \
   --owner org \
   --repo repo
 
 # GitLab
-dho sync cicd --provider gitlab \
+dev-hops sync cicd --provider gitlab \
   --auth "$GITLAB_TOKEN" \
   --gitlab-url "https://gitlab.com" \
   --project-id 123
@@ -218,7 +218,7 @@ rows degrade status instead of silently proving completion.
 Sync deployment events. Uses `CLICKHOUSE_URI`.
 
 ```bash
-dho sync deployments --provider github \
+dev-hops sync deployments --provider github \
   --auth "$GITHUB_TOKEN" \
   --owner org \
   --repo repo
@@ -229,7 +229,7 @@ dho sync deployments --provider github \
 Sync incident data. Uses `CLICKHOUSE_URI`.
 
 ```bash
-dho sync incidents --provider gitlab \
+dev-hops sync incidents --provider gitlab \
   --auth "$GITLAB_TOKEN" \
   --gitlab-url "https://gitlab.com" \
   --project-id 123
@@ -243,7 +243,7 @@ ordinary GitHub issues, including label-bearing issues, remain work items.
 Sync git blame data only (line-level authorship). Uses `CLICKHOUSE_URI`.
 
 ```bash
-dho sync blame --provider local --repo-path /path/to/repo
+dev-hops sync blame --provider local --repo-path /path/to/repo
 ```
 
 Accepts the same provider, auth, single-repo, batch-mode, and date-range options as [`sync git`](#sync-git). Providers: `local`, `github`, `gitlab`, `synthetic`.
@@ -263,7 +263,7 @@ dataset endpoint can toggle it like any other dataset.
 Sync security and dependency alerts (Dependabot, code-scanning, advisories, GitLab vulnerability/dependency findings). Uses `CLICKHOUSE_URI`.
 
 ```bash
-dho sync security --provider github \
+dev-hops sync security --provider github \
   --auth "$GITHUB_TOKEN" --owner org --repo repo
 ```
 
@@ -274,7 +274,7 @@ Accepts the same provider/auth/batch options as [`sync git`](#sync-git). Provide
 Sync CI test results and coverage (TestOps). Uses `CLICKHOUSE_URI`.
 
 ```bash
-dho sync tests --provider github \
+dev-hops sync tests --provider github \
   --auth "$GITHUB_TOKEN" --owner org --repo repo
 ```
 
@@ -294,18 +294,18 @@ Sync team definitions. ClickHouse is the system of record for teams (CHAOS-2600 
 dev-hops sync teams --path src/dev_health_ops/config/team_mapping.yaml --allow-empty
 
 # From Jira projects
-dho sync teams --provider jira
+dev-hops sync teams --provider jira
 
 # Synthetic teams
-dho sync teams --provider synthetic
+dev-hops sync teams --provider synthetic
 
 # From GitHub org (requires --owner and token)
-dho sync teams --provider github \
+dev-hops sync teams --provider github \
   --owner my-org \
   --auth "$GITHUB_TOKEN"
 
 # From GitLab group (fetches group + subgroups)
-dho sync teams --provider gitlab \
+dev-hops sync teams --provider gitlab \
   --owner my-group/path \
   --auth "$GITLAB_TOKEN"
 ```
@@ -2021,7 +2021,7 @@ dev-hops migrate postgres
 dev-hops migrate clickhouse
 
 # 2. Sync git data
-dho sync git --provider github \
+dev-hops sync git --provider github \
   --auth "$GITHUB_TOKEN" \
   --owner myorg \
   --repo myrepo
@@ -2059,7 +2059,7 @@ dev-hops fixtures generate --days 30 --with-metrics
 
 ```bash
 # Sync all repos in org
-dho sync git --provider github \
+dev-hops sync git --provider github \
   --auth "$GITHUB_TOKEN" \
   -s "myorg/*" \
   --group myorg \

@@ -13,6 +13,8 @@ module reaches it only through the replace directive in go.mod.
 
 ## Local modifications
 
+`UPSTREAM.sha256` holds one sha256 per upstream file (from a clone of the commit above). `TestVendoredTreeIsUpstreamPlusExactlyTheRecordedPatches` reverses every patch, newest first, from this tree and requires the pinned upstream tree back, and requires one table row below per patch file. A change with no patch, a patch with no change, or a missing row fails it.
+
 A re-vendor must re-apply these, or drop one only when upstream carries the same change. Each patch is a
 unified diff against the upstream text at the commit above, in `patches/`; the tests that keep the changes from
 silently regressing is `internal/atlassianteams/vendored_documents_test.go` (it reads every document of

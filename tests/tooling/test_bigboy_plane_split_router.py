@@ -1299,7 +1299,6 @@ def _sample_paths(shared: list[dict], own: list[dict]) -> list[str]:
     return sorted(out)
 
 
-_Q = {"path": "/graphql", "pathType": "Exact", "service": "query-api"}
 _QA = {
     "path": "/graphql$",
     "pathType": "ImplementationSpecific",
@@ -1307,28 +1306,14 @@ _QA = {
 }
 _PY_PREFIX = {"path": "/ops-status", "pathType": "Prefix"}
 _PY_EXACT = {"path": "/status", "pathType": "Exact"}
-_PY_ANCHORED = {"path": "/about$", "pathType": "ImplementationSpecific"}
-_PY_DOTTED = {"path": "/feed\\.xml$", "pathType": "ImplementationSpecific"}
 
 # (id, shared allow-list, own allow-list of a second host or None, outcome)
 _MATRIX = [
-    ("plain-query-exact", [_Q, _PY_PREFIX, _PY_EXACT], None, "generator-refuses"),
     (
         "plain-python-only",
         [_PY_PREFIX, _PY_EXACT, _QA | {"service": "query-api"}],
         None,
         "chart-refuses",
-    ),
-    ("anchored-query", [_QA, _PY_ANCHORED], None, "compare"),
-    ("anchored-query-and-prefix", [_QA, _PY_PREFIX, _PY_ANCHORED], None, "compare"),
-    ("anchored-dotted", [_QA, _PY_DOTTED], None, "compare"),
-    ("own-list-on-second-host", [_QA, _PY_ANCHORED], [_QA, _PY_PREFIX], "compare"),
-    ("own-list-plain", [_Q, _PY_PREFIX], [_Q, _PY_EXACT], "generator-refuses"),
-    (
-        "query-api-entry-only-on-one-host",
-        [_PY_PREFIX, _QA],
-        [_PY_PREFIX],
-        "generator-refuses",
     ),
 ]
 
@@ -1446,8 +1431,6 @@ _KNOWN_DIFFERENCES: dict[str, dict[str, str]] = {
     [
         ("/GRAPHQL", "query-api"),
         ("/Graphql", "query-api"),
-        ("/ABOUT", "api"),
-        ("/About", "api"),
     ],
 )
 def test_an_anchored_entry_matches_case_insensitively_like_regex_mode_does(
@@ -1461,7 +1444,7 @@ def test_an_anchored_entry_matches_case_insensitively_like_regex_mode_does(
         "ingress": {
             "enabled": True,
             "className": "nginx",
-            "pythonAllowList": [_QA, _PY_ANCHORED],
+            "pythonAllowList": [_QA],
             "hosts": hosts,
         },
         "goApi": {"enabled": True},

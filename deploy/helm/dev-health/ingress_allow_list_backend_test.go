@@ -3,20 +3,18 @@ package devhealth_test
 import (
 	"fmt"
 	"reflect"
-	"sort"
 	"strings"
 	"testing"
 
 	"gopkg.in/yaml.v3"
 )
 
-// An allow-list entry may name its backend: `service: query-api` sends the path to the query-api Service, no key (or
-// `service: api`) is the Python api. The key exists so that a path can change its backend INSIDE the Ingress object
-// that holds it. ingress-nginx's admission webhook denies an Ingress that claims a host and path another live Ingress
-// holds, and helm patches the objects of a release one by one: a path that changes its backend by moving to another
-// object is denied in one direction and is without a rule for a moment in the other. So these tests pin that the key
-// changes the backend of its own rule and NOTHING else: not the object a rule is in, not an annotation, not another
-// rule, not another document.
+// An allow-list entry names its backend: `service: query-api` sends the path to the query-api Service (CHAOS-7520: the
+// Python api, the old default backend, is gone, so an entry with no key, or any other value, is refused). The key
+// exists so that a path can change its backend INSIDE the Ingress object that holds it. ingress-nginx's admission
+// webhook denies an Ingress that claims a host and path another live Ingress holds, and helm patches the objects of a
+// release one by one: a path that changes its backend by moving to another object is denied in one direction and is
+// without a rule for a moment in the other. So these tests pin where each entry's rule lands, and what is refused.
 
 type backendRule struct {
 	Host, Path, PathType, Service string
@@ -84,11 +82,11 @@ func backendIngresses(t *testing.T, rendered string) (map[string]backendIngress,
 }
 
 // The shape prod uses: an api host on the shared list, a web host, and a host with its own list.
-func backendHosts(ownGraphql string) string {
+func backendHosts(ownList string) string {
 	const goDefault = `"paths":[{"path":"/","pathType":"Prefix","service":"go-api"}]`
 	return `[{"host":"api.test","pythonAllowList":true,` + goDefault + `},` +
 		`{"host":"web.test","paths":[{"path":"/","pathType":"Prefix","service":"web"}]},` +
-		`{"host":"in-cluster.test","pythonAllowList":[` + ownGraphql + `,{"path":"/metrics$","pathType":"ImplementationSpecific"}],` + goDefault + `}]`
+		`{"host":"in-cluster.test","pythonAllowList":[` + ownList + `],` + goDefault + `}]`
 }
 
 func backendRender(t *testing.T, shared, own string, extra ...string) string {
@@ -104,155 +102,115 @@ func backendRender(t *testing.T, shared, own string, extra ...string) string {
 }
 
 const (
-	graphqlPython = `{"path":"/graphql$","pathType":"ImplementationSpecific"}`
-	graphqlQuery  = `{"path":"/graphql$","pathType":"ImplementationSpecific","service":"query-api"}`
+	graphqlQuery = `{"path":"/graphql$","pathType":"ImplementationSpecific","service":"query-api"}`
+	otherQuery   = `{"path":"/other$","pathType":"ImplementationSpecific","service":"query-api"}`
 )
 
-// TestAllowListEntryBackendChangesOnlyItsOwnRule: with `service: query-api` on the /graphql$ entry of both lists, the
-// render differs from the render without the key in the backend of exactly those two rules.
-func TestAllowListEntryBackendChangesOnlyItsOwnRule(t *testing.T) {
-	before, restBefore := backendIngresses(t, backendRender(t, graphqlPython, graphqlPython))
-	after, restAfter := backendIngresses(t, backendRender(t, graphqlQuery, graphqlQuery))
-
-	if restBefore != restAfter {
-		t.Errorf("the key must change no document other than the Ingress objects")
+// TestAllowListEntryBackendIsQueryAPI: an entry with `service: query-api` lands in the anchored Ingress object on the
+// query-api Service, the host's own default rule stays on go-api, the web host stays in the plain object, and no rule
+// of the render names a `-api` (Python) Service.
+func TestAllowListEntryBackendIsQueryAPI(t *testing.T) {
+	rendered := backendRender(t, graphqlQuery, graphqlQuery)
+	objects, _ := backendIngresses(t, rendered)
+	if len(objects) != 2 || objects["b-dev-health"].Rules == nil || objects["b-dev-health-anchored"].Rules == nil {
+		t.Fatalf("want exactly the plain and the anchored Ingress objects, got %v", objects)
 	}
-	names := func(objects map[string]backendIngress) []string {
-		var out []string
-		for name := range objects {
-			out = append(out, name)
-		}
-		sort.Strings(out)
-		return out
-	}
-	if want := []string{"b-dev-health", "b-dev-health-anchored"}; !reflect.DeepEqual(names(before), want) || !reflect.DeepEqual(names(after), want) {
-		t.Fatalf("the Ingress objects must be the same two before and after: before %v, after %v", names(before), names(after))
-	}
-	type key struct{ object, host, path string }
-	changed := map[key][2]backendRule{}
-	for name, object := range before {
-		other := after[name]
-		if !reflect.DeepEqual(object.Annotations, other.Annotations) {
-			t.Errorf("%s: the annotations changed: %v -> %v", name, object.Annotations, other.Annotations)
-		}
-		if len(object.Rules) != len(other.Rules) {
-			t.Fatalf("%s: %d rules before, %d after", name, len(object.Rules), len(other.Rules))
-		}
-		for index, rule := range object.Rules {
-			now := other.Rules[index]
-			if rule.Host != now.Host || rule.Path != now.Path || rule.PathType != now.PathType {
-				t.Errorf("%s rule %d: host, path or path type changed: %v -> %v", name, index, rule, now)
-			}
-			if rule != now {
-				changed[key{name, rule.Host, rule.Path}] = [2]backendRule{rule, now}
-			}
-		}
-	}
-	python := func(host string) backendRule {
-		return backendRule{host, "/graphql$", "ImplementationSpecific", "b-dev-health-api", 8000}
-	}
-	query := func(host string) backendRule {
-		return backendRule{host, "/graphql$", "ImplementationSpecific", "b-dev-health-query-api", 8090}
-	}
-	want := map[key][2]backendRule{
-		{"b-dev-health-anchored", "api.test", "/graphql$"}:        {python("api.test"), query("api.test")},
-		{"b-dev-health-anchored", "in-cluster.test", "/graphql$"}: {python("in-cluster.test"), query("in-cluster.test")},
-	}
-	if !reflect.DeepEqual(changed, want) {
-		t.Errorf("exactly the two /graphql$ rules of the anchored object must change their backend, from the Python api to query-api; changed:\n%v", changed)
-	}
-	// The rule beside it on the host's own list keeps the Python api, and the default rules keep the Go api.
-	kept := map[backendRule]bool{}
-	for _, rule := range after["b-dev-health-anchored"].Rules {
-		kept[rule] = true
+	got := map[backendRule]bool{}
+	for _, rule := range objects["b-dev-health-anchored"].Rules {
+		got[rule] = true
 	}
 	for _, rule := range []backendRule{
-		{"in-cluster.test", "/metrics$", "ImplementationSpecific", "b-dev-health-api", 8000},
+		{"api.test", "/graphql$", "ImplementationSpecific", "b-dev-health-query-api", 8090},
+		{"in-cluster.test", "/graphql$", "ImplementationSpecific", "b-dev-health-query-api", 8090},
 		{"api.test", "/", "Prefix", "b-dev-health-go-api", 8000},
 		{"in-cluster.test", "/", "Prefix", "b-dev-health-go-api", 8000},
 	} {
-		if !kept[rule] {
-			t.Errorf("the anchored object must still carry %v, got %v", rule, after["b-dev-health-anchored"].Rules)
+		if !got[rule] {
+			t.Errorf("the anchored object must carry %v, got %v", rule, objects["b-dev-health-anchored"].Rules)
+		}
+	}
+	if plain := objects["b-dev-health"].Rules; !reflect.DeepEqual(plain, []backendRule{{"web.test", "/", "Prefix", "b-dev-health-web", 3000}}) {
+		t.Errorf("the plain object must carry only the web host, got %v", plain)
+	}
+	for _, line := range strings.Split(rendered, "\n") {
+		if strings.TrimSpace(line) == "name: b-dev-health-api" {
+			t.Fatalf("a rule names the removed Python api Service")
 		}
 	}
 }
 
-// TestAllowListEntryBackendPerList: each list decides for its own hosts; one list with the key and the other without
-// renders the two backends side by side (the chart checks one host at a time).
+// TestAllowListEntryBackendPerList: each list decides for its own hosts: the shared list serves api.test, the host's
+// own list serves in-cluster.test, and neither leaks into the other.
 func TestAllowListEntryBackendPerList(t *testing.T) {
-	for _, c := range []struct{ name, shared, own, apiHost, inCluster string }{
-		{"shared list only", graphqlQuery, graphqlPython, "b-dev-health-query-api", "b-dev-health-api"},
-		{"the host's own list only", graphqlPython, graphqlQuery, "b-dev-health-api", "b-dev-health-query-api"},
-	} {
-		t.Run(c.name, func(t *testing.T) {
-			objects, _ := backendIngresses(t, backendRender(t, c.shared, c.own))
-			got := map[string]string{}
-			for _, rule := range objects["b-dev-health-anchored"].Rules {
-				if rule.Path == "/graphql$" {
-					got[rule.Host] = rule.Service
-				}
-			}
-			if want := map[string]string{"api.test": c.apiHost, "in-cluster.test": c.inCluster}; !reflect.DeepEqual(got, want) {
-				t.Errorf("want %v, got %v", want, got)
-			}
-		})
-	}
-}
-
-// TestAllowListEntryServiceApiIsTheDefault: `service: api` renders exactly as an entry with no key.
-func TestAllowListEntryServiceApiIsTheDefault(t *testing.T) {
-	const explicit = `{"path":"/graphql$","pathType":"ImplementationSpecific","service":"api"}`
-	if backendRender(t, explicit, explicit) != backendRender(t, graphqlPython, graphqlPython) {
-		t.Errorf("service: api must render exactly as an entry with no service key")
-	}
-}
-
-// TestAllowListEntryBackendNeedsItsService: an entry that names query-api needs query-api, and only an entry that
-// routes to the Python api needs the Python api.
-func TestAllowListEntryBackendNeedsItsService(t *testing.T) {
-	render := func(key string, args ...string) (string, error) {
-		host := `[{"host":"h",` + key + `"pythonAllowList":true,"paths":[{"path":"/","pathType":"Prefix","service":"go-api"}]}]`
-		return renderIngress(append([]string{"--set", "goApi.enabled=true", "--set-json", "ingress.hosts=" + host}, args...)...)
-	}
-	{
-		const key, label = "", "emitted host"
-		out, err := render(key, "--set", "queryApi.enabled=false", "--set-json", "ingress.pythonAllowList=["+graphqlQuery+"]")
-		if err == nil || !strings.Contains(out, "routes to query-api but queryApi.enabled is false") {
-			t.Errorf("%s: an entry that names query-api must fail the render when queryApi is off: err=%v\n%s", label, err, out)
-		}
-		out, err = render(key, "--set", "queryApi.enabled=true", "--set", "api.enabled=false", "--set-json", "ingress.pythonAllowList=["+graphqlQuery+","+`{"path":"/metrics$","pathType":"ImplementationSpecific"}`+"]")
-		if err == nil || !strings.Contains(out, "routes to the Python api but api.enabled is false") {
-			t.Errorf("%s: an entry that routes to the Python api must still fail the render when the Python api is off: err=%v\n%s", label, err, out)
-		}
-	}
-	out, err := render("", "--set", "queryApi.enabled=true", "--set", "api.enabled=false", "--set-json", "ingress.pythonAllowList=["+graphqlQuery+"]")
-	if err != nil {
-		t.Fatalf("a list whose entries all name query-api needs no Python api: %v\n%s", err, out)
-	}
-	objects, _ := backendIngresses(t, out)
-	var got []backendRule
+	objects, _ := backendIngresses(t, backendRender(t, graphqlQuery, otherQuery))
+	got := map[string][]string{}
 	for _, rule := range objects["b-dev-health-anchored"].Rules {
-		if rule.Path == "/graphql$" {
-			got = append(got, rule)
+		if rule.Path != "/" {
+			got[rule.Host] = append(got[rule.Host], rule.Path+" -> "+rule.Service)
 		}
 	}
-	if want := []backendRule{{"h", "/graphql$", "ImplementationSpecific", "b-dev-health-query-api", 8090}}; !reflect.DeepEqual(got, want) {
+	want := map[string][]string{
+		"api.test":        {"/graphql$ -> b-dev-health-query-api"},
+		"in-cluster.test": {"/other$ -> b-dev-health-query-api"},
+	}
+	if !reflect.DeepEqual(got, want) {
 		t.Errorf("want %v, got %v", want, got)
 	}
 }
 
-// TestAllowListEntryServiceIsOneOfTwo: the key is validated whenever it is present. Any other backend (the Go api
-// has its own rules and refusals; the internal listeners are never public), and a value that is not a string, fail.
-func TestAllowListEntryServiceIsOneOfTwo(t *testing.T) {
-	for _, value := range []string{`"go-api"`, `"web"`, `"query-api-mcp"`, `"go-api-internal"`, `"Query-Api"`, `""`, `null`, `0`, `true`, `["query-api"]`} {
-		{
-			const key, label = "", "emitted host"
-			entry := `{"path":"/graphql$","pathType":"ImplementationSpecific","service":` + value + `}`
-			host := `[{"host":"h",` + key + `"pythonAllowList":true,"paths":[{"path":"/","pathType":"Prefix","service":"go-api"}]}]`
-			out, err := renderIngress("--set", "goApi.enabled=true", "--set", "queryApi.enabled=true", "--set-json", "ingress.pythonAllowList=["+entry+"]", "--set-json", "ingress.hosts="+host)
-			if err == nil || !strings.Contains(out, "service must be api (the Python api, the default) or query-api") {
-				t.Errorf("%s, service %s: want a render failure that names the two allowed values, got err=%v\n%s", label, value, err, fmt.Sprint(out))
-			}
+// TestAllowListEntryBackendNeedsItsService: an entry that names query-api needs query-api enabled.
+func TestAllowListEntryBackendNeedsItsService(t *testing.T) {
+	host := `[{"host":"h","pythonAllowList":true,"paths":[{"path":"/","pathType":"Prefix","service":"go-api"}]}]`
+	out, err := renderIngress("--set", "goApi.enabled=true", "--set", "queryApi.enabled=false", "--set-json", "ingress.hosts="+host, "--set-json", "ingress.pythonAllowList=["+graphqlQuery+"]")
+	if err == nil || !strings.Contains(out, "routes to query-api but queryApi.enabled is false") {
+		t.Errorf("an entry that names query-api must fail the render when queryApi is off: err=%v\n%s", err, out)
+	}
+	out, err = renderIngress("--set", "goApi.enabled=true", "--set", "queryApi.enabled=true", "--set-json", "ingress.hosts="+host, "--set-json", "ingress.pythonAllowList=["+graphqlQuery+"]")
+	if err != nil {
+		t.Fatalf("a list whose entries all name query-api must render: %v\n%s", err, out)
+	}
+}
+
+// TestAllowListEntryServiceMustBeQueryAPI: the key is validated whenever it is present, and it is required. The Python
+// api (`api`, and the old no-key default) is refused, so is every other backend (the Go api has its own rules and
+// refusals; the internal listeners are never public), and a value that is not a string.
+func TestAllowListEntryServiceMustBeQueryAPI(t *testing.T) {
+	host := `[{"host":"h","pythonAllowList":true,"paths":[{"path":"/","pathType":"Prefix","service":"go-api"}]}]`
+	for _, value := range []string{`"api"`, `"go-api"`, `"web"`, `"query-api-mcp"`, `"go-api-internal"`, `"Query-Api"`, `""`, `null`, `0`, `true`, `["query-api"]`} {
+		entry := `{"path":"/graphql$","pathType":"ImplementationSpecific","service":` + value + `}`
+		out, err := renderIngress("--set", "goApi.enabled=true", "--set", "queryApi.enabled=true", "--set-json", "ingress.pythonAllowList=["+entry+"]", "--set-json", "ingress.hosts="+host)
+		if err == nil || !strings.Contains(out, "service must be query-api (the Python api is gone, CHAOS-7520)") {
+			t.Errorf("service %s: want a render failure that names query-api, got err=%v\n%s", value, err, fmt.Sprint(out))
+		}
+	}
+	entry := `{"path":"/graphql$","pathType":"ImplementationSpecific"}`
+	out, err := renderIngress("--set", "goApi.enabled=true", "--set", "queryApi.enabled=true", "--set-json", "ingress.pythonAllowList=["+entry+"]", "--set-json", "ingress.hosts="+host)
+	if err == nil || !strings.Contains(out, "has no service: the Python api (the old default backend) is gone (CHAOS-7520)") {
+		t.Errorf("an entry with no service key must be refused, got err=%v\n%s", err, out)
+	}
+}
+
+// TestHostPathToPythonAPIIsRefused: a host path that still says `service: api` has no backend any more.
+func TestHostPathToPythonAPIIsRefused(t *testing.T) {
+	host := `[{"host":"h","paths":[{"path":"/api","pathType":"Prefix","service":"api"}]}]`
+	out, err := renderIngress("--set-json", "ingress.hosts="+host)
+	if err == nil || !strings.Contains(out, `routes to service "api": the Python api is gone (CHAOS-7520)`) {
+		t.Errorf("service: api on a host path must be refused, got err=%v\n%s", err, out)
+	}
+}
+
+// TestRemovedPythonAPIValuesAreIgnored: values files written before CHAOS-7520 still set api.*, metricsApi.*, image.*
+// and web.backendFromRelease. The chart ignores those keys (no schema or guard refuses them): the render succeeds and
+// holds no Python api object.
+func TestRemovedPythonAPIValuesAreIgnored(t *testing.T) {
+	out, err := renderIngress("--set", "api.enabled=true", "--set", "metricsApi.enabled=true", "--set", "api.autoscaling.enabled=true",
+		"--set", "image.repository=ghcr.io/full-chaos/dev-hops-api", "--set", "web.backendFromRelease=true")
+	if err != nil {
+		t.Fatalf("stale api.*/metricsApi.*/image.* values must be ignored: %v\n%s", err, out)
+	}
+	for _, name := range []string{"b-dev-health-api", "b-dev-health-metrics-api"} {
+		if strings.Contains(out, "name: "+name+"\n") {
+			t.Errorf("the render holds %s although the Python api templates are deleted", name)
 		}
 	}
 }

@@ -146,6 +146,8 @@ on:
       # alone must run go-quality.
       - 'ci/go_race_shard.awk'
       - 'ci/go_race_missing_rows.awk'
+      - 'ci/go_providersync_race_shard.awk'
+      - 'ci/go_providersync_race_weights.tsv'
       - 'ci/race_excluded_tests.tsv'
       - 'ci/go_race_weights.tsv'
       - 'ci/ratchets.tsv'
@@ -336,6 +338,8 @@ on:
       # alone must run go-quality.
       - 'ci/go_race_shard.awk'
       - 'ci/go_race_missing_rows.awk'
+      - 'ci/go_providersync_race_shard.awk'
+      - 'ci/go_providersync_race_weights.tsv'
       - 'ci/race_excluded_tests.tsv'
       - 'ci/go_race_weights.tsv'
       - 'ci/ratchets.tsv'

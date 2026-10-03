@@ -389,6 +389,40 @@ check_race() {
 # and NOT by count. The slices always partition `go list ./...`: a wrong weight
 # costs balance, never coverage. A slice that selects no package at all fails.
 GO_RACE_WEIGHTS="${GO_RACE_WEIGHTS:-${ROOT}/ci/go_race_weights.tsv}"
+# check_providersync_race_shard SHARD COUNT (CHAOS-8166): internal/providersync is one test binary of ~1,460 sequential tests that took
+# 509 s under -race on an idle host (565 s in CI, 94% of the 600 s go test timeout), so its race run is split BY TEST NAME across the
+# race legs: every leg runs the SHARD-th of COUNT weight-balanced test slices, weights ci/go_providersync_race_weights.tsv, ci/go_providersync_race_shard.awk.
+# The test set comes from `go test -list` (never hand-listed). The slices must partition it exactly (each test in exactly one shard,
+# no shard empty); anything else fails before a test runs. The race signal stays: nothing here is `!race`.
+check_providersync_race_shard() {
+  local shard="$1" count="$2" all names selected_names s total=0 regex
+  local weights="${GO_PROVIDERSYNC_RACE_WEIGHTS:-${ROOT}/ci/go_providersync_race_weights.tsv}"
+  local shard_awk="${GO_PROVIDERSYNC_RACE_SHARD_AWK:-${ROOT}/ci/go_providersync_race_shard.awk}"
+  [ -f "${weights}" ] || die "providersync race shards need ${weights}"
+  all="$(cd "${ROOT}" && "${GO_ENV_OFF[@]}" GOWORK=off go test -mod=readonly -list '^Test' ./internal/providersync | grep '^Test')" \
+    || die "go test -list failed for internal/providersync (or reported no test)"
+  [ -n "${all}" ] || die "go test -list reported no providersync test"
+  [ "${count}" -le "$(printf '%s\n' "${all}" | wc -l)" ] \
+    || die "providersync race shards: ${count} legs for fewer listed tests: a shard would select zero tests"
+  names=""
+  for ((s = 1; s <= count; s++)); do
+    selected_names="$(printf '%s\n' "${all}" | awk -v shard="${s}" -v count="${count}" -v weights="${weights}" -f "${shard_awk}")" \
+      || die "ci/go_providersync_race_shard.awk failed"
+    [ -n "${selected_names}" ] || die "providersync race shard ${s}/${count} selected zero tests"
+    total=$((total + $(printf '%s\n' "${selected_names}" | wc -l)))
+    names+="${selected_names}"$'\n'
+    if [ "${s}" -eq "${shard}" ]; then regex="^($(printf '%s\n' "${selected_names}" | paste -sd'|' -))\$"; fi
+  done
+  [ "${total}" -eq "$(printf '%s\n' "${all}" | wc -l)" ] \
+    && [ "$(printf '%s' "${names}" | LC_ALL=C sort)" = "$(printf '%s\n' "${all}" | LC_ALL=C sort)" ] \
+    || die "providersync race shards are not an exact partition of the ${total} listed tests"
+  printf 'go test -race providersync shard %s/%s: %s of %s tests\n' "${shard}" "${count}" "$(printf '%s\n' "${regex}" | tr -cd '|' | wc -c | awk '{print $1 + 1}')" "${total}"
+  (
+    cd "${ROOT}"
+    "${GO_ENV_OFF[@]}" GOWORK=off go test -mod=readonly -race -run "${regex}" ./internal/providersync
+  )
+}
+
 check_race_shard() {
   local shard="${1:-}" count="${2:-}" module_dir modpath pkg selected=0 missing
   case "${shard}" in ""|*[!0-9]*) die "race SHARD must be a positive integer, got '${shard}'" ;; esac
@@ -412,8 +446,14 @@ check_race_shard() {
     while IFS= read -r pkg; do
       [ -n "${pkg}" ] && pkgs+=("${pkg}")
     done < <(cd "${ROOT}/${module_dir}" && "${GO_ENV_OFF[@]}" GOWORK=off go list -mod=readonly ./... \
+      | { if [ "${module_dir}" = "." ]; then grep -vx "${modpath}/internal/providersync"; else cat; fi; } \
       | awk -v mod="${modpath}" -v shard="${shard}" -v count="${count}" -v weights="${GO_RACE_WEIGHTS}" -f "${ROOT}/ci/go_race_shard.awk")
     printf 'go test -race (shard %s/%s): %s: %d package(s)\n' "${shard}" "${count}" "${module_dir}" "${#pkgs[@]}"
+    if [ "${module_dir}" = "." ]; then
+      # CHAOS-8166: internal/providersync runs in EVERY race leg, one test-name shard each (it is not in pkgs above).
+      selected=$((selected + 1))
+      check_providersync_race_shard "${shard}" "${count}"
+    fi
     [ "${#pkgs[@]}" -gt 0 ] || continue
     selected=$((selected + ${#pkgs[@]}))
     (

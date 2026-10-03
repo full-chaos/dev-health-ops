@@ -2,12 +2,14 @@
 # POST-ROLL STEP LINE (named): Postgres role privilege READ-BACK via has_table_privilege (CHAOS-6666 deploy-order note: the migrate hook
 # must grant BEFORE the api serves the route, else the route answers a generic 500 "permission denied").
 # usage: pg-grants-check.sh <bigboy|prod> <expect-file>   expect-file lines: `<role> <table> <PRIV>[,<PRIV>...]`  (# comments ok)
+# CHAOS-8371 (D4566 class rules): bigboy reaches Postgres with `docker compose exec -T postgres` (compose verbs only, never a container
+# name); psql runs with `-w` and NO PGPASSWORD (the approved read-only psql form): no password is set, read or expanded anywhere, host or container.
 # Read-only. PG_OK when every expected privilege is held; PG_FAIL lists the missing ones. Role/table names only, no secrets.
 set -u
 MODE=${1:?bigboy|prod}; EXP=${2:?expect file}
 run_psql() {
-  if [ "$MODE" = bigboy ]; then docker exec -i dev-health-postgres-1 sh -c 'PGPASSWORD=$POSTGRES_PASSWORD psql -U $POSTGRES_USER -d ${POSTGRES_DB:-devhealth} -X -A -t'
-  else KUBECONFIG=/etc/rancher/k3s/k3s.yaml kubectl -n dev-health exec -i dev-health-ops-postgresql-0 -- sh -c 'PGPASSWORD=$POSTGRES_PASSWORD psql -U "$POSTGRES_USER" -d "$POSTGRES_DB" -X -q -A -t'; fi
+  if [ "$MODE" = bigboy ]; then (cd /home/ubuntu/devhealth && docker compose --env-file ops/.env exec -T postgres sh -c 'psql -w -U $POSTGRES_USER -d ${POSTGRES_DB:-devhealth} -X -A -t')
+  else KUBECONFIG=/etc/rancher/k3s/k3s.yaml kubectl -n dev-health exec -i dev-health-ops-postgresql-0 -- sh -c 'psql -w -U "$POSTGRES_USER" -d "$POSTGRES_DB" -X -q -A -t'; fi
 }
 SQL=""; N=0
 while read -r role table privs; do

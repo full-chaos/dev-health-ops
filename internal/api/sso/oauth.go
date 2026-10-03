@@ -56,6 +56,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"github.com/full-chaos/dev-health-ops/internal/httpguard"
 	"io"
 	"net/http"
 	"net/url"
@@ -238,11 +239,8 @@ func (h handlers) exchangeOAuthCode(ctx context.Context, tokenURL, clientID, cli
 	}
 	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
 	req.Header.Set("Accept", "application/json")
-	client := h.HTTPClient
-	if client == nil {
-		client = defaultOIDCClient()
-	}
-	resp, err := client.Do(req)
+	// The client secret and the code ride this request: it follows no redirect, whatever client was supplied.
+	resp, err := httpguard.NoRedirects(h.HTTPClient).Do(req)
 	if err != nil {
 		return "", errors.New("token exchange request failed")
 	}

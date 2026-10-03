@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
-	"runtime"
 	"strconv"
 	"strings"
 	"testing"
@@ -14,6 +13,7 @@ import (
 
 	"github.com/google/uuid"
 
+	"github.com/full-chaos/dev-health-ops/internal/testsupport/moduleroot"
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/programoracle"
 )
 
@@ -216,7 +216,7 @@ func canonicalJSON(t *testing.T, raw []byte) []byte {
 
 func oraclePaths(t *testing.T) (string, string, string) {
 	t.Helper()
-	_, currentFile, _, ok := runtime.Caller(0)
+	_, currentFile, _, ok := moduleroot.Caller(0)
 	if !ok {
 		t.Fatal("locate sync coverage oracle test")
 	}

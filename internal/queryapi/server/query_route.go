@@ -17,6 +17,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"github.com/full-chaos/dev-health-ops/internal/auth/httpapi"
 	"io"
 	"log"
 	"log/slog"
@@ -2626,6 +2627,10 @@ type queryRouteHandlers struct {
 	RegistryPool *pgxpool.Pool
 	// Query is /query: production reachability, canary|primary only.
 	Query http.HandlerFunc
+	// RunOperation is POST /query/run-operation (CHAOS-7831): the SAME serving pipeline as Query, wrapped so the MCP class rows gate it
+	// (markClassGated). Mounted by mountQueryRouteSets on Plane.InternalHandler ONLY; acr's run_operation posts here. /query itself stays
+	// ungated: the Python /graphql edge reaches it over the same internal identity carrier.
+	RunOperation http.HandlerFunc
 	// Proof is the same pipeline over a measurement-only Switch that also
 	// admits shadow. Mounted only by mountProofRoute, which refuses in a
 	// production posture and without an explicit opt-in.
@@ -2726,7 +2731,9 @@ func buildQueryRoute(getenv getenvFunc, cfg queryRouteConfig) (queryRouteHandler
 	// One posture check per process: it proves the role in the background from here
 	// on, and both the combined check and the per-class probes read its last answer.
 	posture := queryAPIPostureCheck(getenv, pgPool)
-	handler, proofHandler, proofWriteHandler, registryHandler, err := newQueryHandler(analytics.PinInvestmentMembershipScope(chClient), pgPool, verifier, schemaDigest, getenv)
+	// CHAOS-7831: ONE class-row switch for the MCP listener and the named-operation route (:8091), so a root's class row is one decision.
+	classSwitch := newClassRowSwitch(pgPool, schemaDigest)
+	handler, proofHandler, proofWriteHandler, registryHandler, err := newQueryHandler(analytics.PinInvestmentMembershipScope(chClient), pgPool, verifier, schemaDigest, getenv, classSwitch)
 	if err != nil {
 		pgPool.Close()
 		return queryRouteHandlers{}, nil, nil, err
@@ -2739,7 +2746,7 @@ func buildQueryRoute(getenv getenvFunc, cfg queryRouteConfig) (queryRouteHandler
 		pgPool.Close()
 		return queryRouteHandlers{}, nil, nil, fmt.Errorf("query-api: build the MCP caller-class ClickHouse client: %w", err)
 	}
-	mcpHandler := newMCPHandler(mcpClient, pgPool, routeswitch.NewPostgresSwitch(pgPool, schemaDigest, mcpRoutingDigests()), getenv)
+	mcpHandler := newMCPHandler(mcpClient, pgPool, classSwitch, getenv)
 	// CHAOS-7214: the proof variant over a switch that also admits shadow rows.
 	mcpProofHandler := newMCPProofHandler(mcpHandler, routeswitch.NewProofSwitch(pgPool, schemaDigest, mcpRoutingDigests()), verifier, newProofOrgAllowed(pgPool))
 	handlers := queryRouteHandlers{
@@ -2755,6 +2762,8 @@ func buildQueryRoute(getenv getenvFunc, cfg queryRouteConfig) (queryRouteHandler
 	// The one registry pool, for Build's edge users check (CHAOS-6290). Set outside the
 	// literal above so that literal keeps the shape posture_readiness_test pins.
 	handlers.RegistryPool = pgPool
+	// Set outside the literal for the same reason (the literal's shape is pinned): the class-gated alias of the serving handler.
+	handlers.RunOperation = markClassGated(handler)
 	cleanup := func() { pgPool.Close() }
 	// CHAOS-6803/CHAOS-6804: a deployment that names query-api's role
 	// (QUERY_API_DATABASE_ROLE) is not ready until the pool logs in AS that role
@@ -3050,7 +3059,7 @@ func mountedRouteLogMessage(digestByOperation map[string]string) string {
 	)
 }
 
-func newQueryHandler(chClient featureflags.QueryClient, pgPool *pgxpool.Pool, verifier *principal.Verifier, schemaDigest string, getenv getenvFunc) (http.HandlerFunc, http.HandlerFunc, http.HandlerFunc, http.HandlerFunc, error) {
+func newQueryHandler(chClient featureflags.QueryClient, pgPool *pgxpool.Pool, verifier *principal.Verifier, schemaDigest string, getenv getenvFunc, classSwitches ...routeswitch.Switch) (http.HandlerFunc, http.HandlerFunc, http.HandlerFunc, http.HandlerFunc, error) {
 	// CHAOS-6263 PR (a): /query's edge-access-token carrier, built once
 	// here (not per-request) and threaded into every authenticateInternalRequest
 	// call this handler makes. (nil, nil, nil) when GO_API_EDGE_JWT_SECRET is
@@ -3158,15 +3167,15 @@ func newQueryHandler(chClient featureflags.QueryClient, pgPool *pgxpool.Pool, ve
 	// uses to answer "is anything actually enabled?".
 	logRoutingStateDrift(pgPool, schemaDigest)
 	registryHandler := newRegistryHandler(schemaDigest, digestByOperation)
-	sw := routeswitch.NewPostgresSwitch(pgPool, schemaDigest, digestByOperation)
+	sw := routeswitch.NewPostgresSwitchWithLegacy(pgPool, schemaDigest, digestByOperation, legacyDigestsByOperation)
 	routeMux := routeswitch.NewMux(sw)
 
 	// operationByDigest is digestByOperation's reverse index, built once
 	// here rather than on every request -- operationForDocument does a
 	// single map lookup per request, not a linear scan.
-	operationByDigest := make(map[string]string, len(digestByOperation))
-	for operation, digest := range digestByOperation {
-		operationByDigest[digest] = operation
+	operationByDigest, err := buildOperationByDigest(digestByOperation, legacyDigestsByOperation)
+	if err != nil {
+		return nil, nil, nil, nil, fmt.Errorf("query-api: %w", err)
 	}
 
 	gqlHandler := newGraphQLServer(&graph.Resolver{ClickHouse: chClient, Postgres: pgPool, ReportWriter: newReportWriter(pgPool, jobContractRoot)})
@@ -3182,7 +3191,7 @@ func newQueryHandler(chClient featureflags.QueryClient, pgPool *pgxpool.Pool, ve
 	// verification and org context. ONLY the Switch differs, which is the
 	// entire point: a proof must exercise the real path, and a second
 	// hand-written copy of this closure would be a second path.
-	proofMux := routeswitch.NewMux(routeswitch.NewProofSwitch(pgPool, schemaDigest, digestByOperation))
+	proofMux := routeswitch.NewMux(routeswitch.NewProofSwitchWithLegacy(pgPool, schemaDigest, digestByOperation, legacyDigestsByOperation))
 	for operation := range digestByOperation {
 		proofMux.Register(operation, gqlHandler)
 	}
@@ -3209,7 +3218,15 @@ func newQueryHandler(chClient featureflags.QueryClient, pgPool *pgxpool.Pool, ve
 	}
 	orgAllowed := newProofOrgAllowed(pgPool)
 
-	return newDocumentDispatchHandler(getenv, routeMux, operationByDigest, verifier, edgeAuth, edgeStore, "", nil),
+	// CHAOS-7831: the class-row switch is the one the MCP listener uses (same type, same keys, live read); only the serving handler is gated: the
+	// proof handlers measure a root BEFORE it is enabled and must keep running on a dark one.
+	// buildQueryRoute passes the ONE switch instance it also gives the MCP handler; a caller that passes none (the unit tests) gets one built the same way.
+	classSwitch := newClassRowSwitch(pgPool, schemaDigest)
+	if len(classSwitches) > 0 {
+		classSwitch = classSwitches[0]
+	}
+	classGate := newClassRowGate(classSwitch)
+	return newDocumentDispatchHandler(getenv, routeMux, operationByDigest, verifier, edgeAuth, edgeStore, "", nil, classGate),
 		newDocumentDispatchHandler(getenv, proofMux, operationByDigest, verifier, edgeAuth, edgeStore, digest.KindQuery, nil),
 		newDocumentDispatchHandler(getenv, proofWriteMux, operationByDigest, verifier, edgeAuth, edgeStore, digest.KindMutation, orgAllowed),
 		registryHandler, nil
@@ -3356,7 +3373,7 @@ func withMutationLocation(ctx context.Context, presented *gqlerror.Error) *gqler
 // OrgID or a "cannot decide" answer from the caller is a refusal, never a
 // fall-through, because a write door is the one place "the check could not
 // run" must never read as "the check passed."
-func newDocumentDispatchHandler(getenv getenvFunc, routeMux *routeswitch.Mux, operationByDigest map[string]string, verifier *principal.Verifier, edgeAuth *policy.Authenticator, edgeStore policy.Store, requireKind string, orgAllowed func(context.Context, string) bool) http.HandlerFunc {
+func newDocumentDispatchHandler(getenv getenvFunc, routeMux *routeswitch.Mux, operationByDigest map[string]string, verifier *principal.Verifier, edgeAuth *policy.Authenticator, edgeStore policy.Store, requireKind string, orgAllowed func(context.Context, string) bool, gates ...documentGate) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		// /graphql (graphql_edge_route.go) runs this same pipeline. Its
 		// differences are keyed on a context value only that route sets:
@@ -3488,6 +3505,7 @@ func newDocumentDispatchHandler(getenv getenvFunc, routeMux *routeswitch.Mux, op
 				"query-api: unregistered document digest-miss: digest=%s query=%s",
 				digestHex(query), truncateForLog(query, maxUnwrapChainLogBytes),
 			)
+			httpapi.RecordNotFoundCause(r.Context(), httpapi.NotFoundUnregisteredDocument)
 			if edge {
 				refuseGraphQLEdgeUnregistered(w)
 				return
@@ -3544,12 +3562,61 @@ func newDocumentDispatchHandler(getenv getenvFunc, routeMux *routeswitch.Mux, op
 			r.Header.Set("Content-Type", "application/json")
 		}
 
+		// CHAOS-7831: the class-row gate runs in front of the document rows (class_row_gate.go). The /graphql edge is not gated (its callers are the
+		// Python edge's, never acr's identity headers).
+		if !edge {
+			for _, gate := range gates {
+				if gate(w, r, operation, query) {
+					return
+				}
+			}
+		}
+
 		if edge {
 			routeMux.DispatchOr(operation, w, r, graphQLEdgeNotEnabled(operation))
 			return
 		}
 		routeMux.Dispatch(operation, w, r)
 	}
+}
+
+// legacyDigestsByOperation lists, per operation, the digests of the registered texts it accepted BEFORE its
+// current one (CHAOS-8000 dual accept). A request carrying a legacy text resolves to the same operation as one
+// carrying the current text, so a web build still on the old text keeps working while the new text rolls out;
+// the operation keeps ONE current document in digestByOperation. Each legacy text is a
+// `registered<Operation>V1Document` const (a literal, so cmd/registrydump can read it) named once here and never in
+// digestByOperation. The literal below is cmd/registrydump's second parse target: keep its exact shape
+// (`"<operation>": {digestHex(<constIdent>), ...}`). Empty = every operation accepts one text.
+var legacyDigestsByOperation = map[string][]string{}
+
+// buildOperationByDigest is the reverse index digest -> operation over every accepted text: each operation's
+// current digest plus its legacy ones. A digest that maps to two operations is refused (the lookup would be
+// ambiguous), and so is a legacy entry for an operation digestByOperation does not register.
+func buildOperationByDigest(digestByOperation map[string]string, legacy map[string][]string) (map[string]string, error) {
+	out := make(map[string]string, len(digestByOperation))
+	for operation, digest := range digestByOperation {
+		if other, dup := out[digest]; dup {
+			return nil, fmt.Errorf("digest %s is registered for both %q and %q", digest, other, operation)
+		}
+		out[digest] = operation
+	}
+	operations := make([]string, 0, len(legacy))
+	for operation := range legacy {
+		operations = append(operations, operation)
+	}
+	sort.Strings(operations)
+	for _, operation := range operations {
+		if _, registered := digestByOperation[operation]; !registered {
+			return nil, fmt.Errorf("legacy digests for %q, which is not a registered operation", operation)
+		}
+		for _, digest := range legacy[operation] {
+			if other, dup := out[digest]; dup {
+				return nil, fmt.Errorf("legacy digest %s of %q is already registered for %q", digest, operation, other)
+			}
+			out[digest] = operation
+		}
+	}
+	return out, nil
 }
 
 // operationForDocument resolves a request's raw query text to a

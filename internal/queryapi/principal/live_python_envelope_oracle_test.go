@@ -6,9 +6,9 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
-	"runtime"
 	"testing"
 
+	"github.com/full-chaos/dev-health-ops/internal/testsupport/moduleroot"
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/pyoracle"
 )
 
@@ -69,7 +69,7 @@ func TestVerifierMatchesLivePythonIssuedEnvelope(t *testing.T) {
 	if os.Getenv("DEV_HEALTH_LIVE_PYTHON_ORACLES") != "1" {
 		t.Skip("live Python oracles run only through ci/check_go.sh live-python-oracles")
 	}
-	_, currentFile, _, ok := runtime.Caller(0)
+	_, currentFile, _, ok := moduleroot.Caller(0)
 	if !ok {
 		t.Fatal("resolve principal package path")
 	}

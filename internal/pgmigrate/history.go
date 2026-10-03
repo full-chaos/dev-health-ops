@@ -20,8 +20,8 @@ import (
 // the Alembic scripts (the Go migrator is a baseline plus the revisions after
 // it), so the walk is the embedded baseline/history.json: what Alembic printed for
 // the script directory, one entry per revision in walk order.
-// TestHistoryGraphIsTheAlembicChain regenerates it from the Python scripts while
-// they exist and fails when the embedded copy drifts.
+// TestHistoryGraphIsTheAlembicChain compares it with the walk of the Python scripts,
+// executed once and frozen in testdata/golden/history_walk.json, and fails when the embedded copy drifts.
 
 //go:embed baseline/history.json
 var historyFile []byte

@@ -417,6 +417,9 @@ func LoadCatalog(path string) (Catalog, error) {
 		// refuses anything else, including an explicit null; a raw message
 		// tells an absent key from a null one.
 		Kind json.RawMessage `json:"kind"`
+		// Legacy is present (and true) only for a text the operation accepted before its current one
+		// (CHAOS-8000 dual accept). It is still a document the catalog names, so it is a pair like any other.
+		Legacy json.RawMessage `json:"legacy"`
 	}
 	dec := json.NewDecoder(bytes.NewReader(raw))
 	dec.DisallowUnknownFields()
@@ -427,6 +430,9 @@ func LoadCatalog(path string) (Catalog, error) {
 	for _, entry := range entries {
 		if entry.Kind != nil && string(entry.Kind) != `"query"` && string(entry.Kind) != `"mutation"` {
 			return Catalog{}, fmt.Errorf("%s: operation %q has kind %s, want \"query\" or \"mutation\"", path, entry.Operation, entry.Kind)
+		}
+		if entry.Legacy != nil && string(entry.Legacy) != "true" {
+			return Catalog{}, fmt.Errorf("%s: operation %q has legacy %s, want the key absent or true", path, entry.Operation, entry.Legacy)
 		}
 		pairs = append(pairs, [2]string{entry.Operation, entry.Digest})
 	}

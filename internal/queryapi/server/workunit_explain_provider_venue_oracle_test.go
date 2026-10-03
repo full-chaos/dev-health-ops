@@ -9,7 +9,6 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"path/filepath"
-	"runtime"
 	"strings"
 	"testing"
 
@@ -18,6 +17,7 @@ import (
 
 	"github.com/full-chaos/dev-health-ops/internal/llmorgsettings"
 	"github.com/full-chaos/dev-health-ops/internal/queryapi/authctx"
+	"github.com/full-chaos/dev-health-ops/internal/testsupport/moduleroot"
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/venueoracle"
 )
 
@@ -80,10 +80,12 @@ var llmEnvironment = []string{
 // rows (the venue copies the seeded database for Go).
 func TestVenueOracleWorkUnitExplainProviderResolution(t *testing.T) {
 	ctx := context.Background()
-	_, file, _, _ := runtime.Caller(0)
+	_, file, _, _ := moduleroot.Caller(0)
 	root := filepath.Clean(filepath.Join(filepath.Dir(file), "..", "..", ".."))
 	// The ids are named, not random: the recording and every frozen run seed the same ones.
 	unparsable, refused, unsupported := stableVenueID("provider/unparsable"), stableVenueID("provider/refused"), stableVenueID("provider/unsupported")
+	storedAuto, storedMock, storedUnknown := stableVenueID("provider/stored-auto"), stableVenueID("provider/stored-mock"), stableVenueID("provider/stored-unknown")
+	keyless, bare, usableLocal := stableVenueID("provider/keyless-openai"), stableVenueID("provider/bare-openai"), stableVenueID("provider/usable-local")
 	golden := venueoracle.OpenGolden(t, venueGolden("workunit-explain-provider", t.Name(), providerGoldenPin))
 	venue := venueoracle.Start(t, ctx, venueoracle.Options{
 		Golden: golden, Root: golden.PythonRoot(t, root),
@@ -106,12 +108,24 @@ func TestVenueOracleWorkUnitExplainProviderResolution(t *testing.T) {
 				// with the same unparsable base_url: Python raises the
 				// ValueError before it builds any provider.
 				{unsupported, "venue-llm-unsupported", "anthropic", "sk-ant-venue", "https://[::1"},
+				// Stored providers the resolution treats as not usable or as another provider (resolve.go), with a public IP-literal base_url
+				// (no name lookup) so only the stored provider and the key decide.
+				{storedAuto, "venue-llm-stored-auto", "auto", "dummy-venue-key-a", "https://8.8.8.8/v1"},
+				{storedMock, "venue-llm-stored-mock", "mock", "dummy-venue-key-b", "https://8.8.8.8/v1"},
+				{storedUnknown, "venue-llm-stored-unknown", "frobnicate", "dummy-venue-key-c", "https://8.8.8.8/v1"},
+				// A key-required provider with a base_url and no key; one with neither; a complete local provider.
+				{keyless, "venue-llm-keyless-openai", "openai", "", "https://8.8.8.8/v1"},
+				{bare, "venue-llm-bare-openai", "openai", "", ""},
+				{usableLocal, "venue-llm-usable-local", "local", "", "https://8.8.8.8/v1"},
 			} {
 				if _, err := admin.Exec(ctx, `INSERT INTO organizations (id, slug, name, tier, managed_by, is_active, created_at, updated_at)
 VALUES ($1, $2, $2, 'team', 'stripe', true, now(), now())`, org.id, org.slug); err != nil {
 					t.Fatalf("seed organization: %v", err)
 				}
-				settings := map[string]string{"provider": org.provider, "base_url": org.baseURL}
+				settings := map[string]string{"provider": org.provider}
+				if org.baseURL != "" {
+					settings["base_url"] = org.baseURL
+				}
 				if org.apiKey != "" {
 					settings["api_key"] = org.apiKey
 				}
@@ -149,6 +163,16 @@ VALUES ($1, $2, 'llm', $3, $4, false, now(), now())`, uuid.New(), org.id.String(
 		{Name: "auto, stored base_url SSRF refuses", OrgID: refused.String(), LLMProvider: "auto"},
 		{Name: "explicit local, stored base_url SSRF refuses", OrgID: refused.String(), LLMProvider: "local"},
 		{Name: "explicit anthropic, stored base_url urlsplit cannot parse", OrgID: unsupported.String(), LLMProvider: "anthropic"},
+		{Name: "auto, stored provider auto with key and base_url", OrgID: storedAuto.String(), LLMProvider: "auto"},
+		{Name: "auto, stored provider mock with key and base_url", OrgID: storedMock.String(), LLMProvider: "auto"},
+		{Name: "auto, stored provider unknown", OrgID: storedUnknown.String(), LLMProvider: "auto"},
+		{Name: "auto, stored openai with base_url and no key", OrgID: keyless.String(), LLMProvider: "auto"},
+		{Name: "explicit openai, stored openai with base_url and no key", OrgID: keyless.String(), LLMProvider: "openai"},
+		{Name: "auto, stored openai with neither key nor base_url", OrgID: bare.String(), LLMProvider: "auto"},
+		{Name: "auto, stored local complete", OrgID: usableLocal.String(), LLMProvider: "auto"},
+		{Name: "explicit local, stored local complete", OrgID: usableLocal.String(), LLMProvider: "local"},
+		{Name: "explicit openai, stored local complete", OrgID: usableLocal.String(), LLMProvider: "openai"},
+		{Name: "explicit mock, stored local complete", OrgID: usableLocal.String(), LLMProvider: "mock"},
 	}
 	for index := range cases {
 		cases[index].WorkUnitID = "wu-provider-" + cases[index].LLMProvider
@@ -215,7 +239,7 @@ VALUES ($1, $2, 'llm', $3, $4, false, now(), now())`, uuid.New(), org.id.String(
 }
 
 // The golden's pin is the digest the record verb writes; PIN: names the golden until it does.
-const providerGoldenPin = "19df28e5d0712cb8adb3eec405e54736babe74f81fb4a9955ceca972d3af1706"
+const providerGoldenPin = "5aa77c57c36482f7d61d28f012d3e9f486139f3b0ddefa743b355880aa63c21c"
 
 // providerDeclared holds the environment entries that shape the Python program's answers. The address of the run's own database is not one of
 // them: it is made for the run and passed as a per-run entry (POSTGRES_URI).

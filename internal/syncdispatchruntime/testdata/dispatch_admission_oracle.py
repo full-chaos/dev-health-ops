@@ -234,6 +234,36 @@ def main() -> int:
         default_limit=1_000_000,
     )
 
+
+    # Every candidate key shape of _limit_for_bucket alone, then each shape against the next one (the order is the contract).
+    shapes = [
+        f"github:{org_a}:api.github.com:fp-1:rest_core:core",
+        "github:api.github.com:rest_core:core",
+        "github:rest_core:core",
+        "rest_core:core",
+        f"github:{org_a}:api.github.com:fp-1:rest_core",
+        "github:api.github.com:rest_core",
+        "github:rest_core",
+        "rest_core",
+        "*",
+    ]
+    for index, shape in enumerate(shapes):
+        add_observe_case(
+            f"only candidate key shape {index + 1} is configured",
+            estimate(10),
+            consumed_by_bucket={},
+            limits={shape: 5},
+            default_limit=1_000_000,
+        )
+    for index in range(len(shapes) - 1):
+        add_observe_case(
+            f"candidate key shape {index + 1} outranks shape {index + 2}",
+            estimate(10),
+            consumed_by_bucket={},
+            limits={shapes[index]: 5, shapes[index + 1]: 1_000},
+            default_limit=1_000_000,
+        )
+
     # ------------------------------------------------------------------
     # baseline_unfitness
     # ------------------------------------------------------------------
@@ -350,6 +380,31 @@ def main() -> int:
         default_limit=1_000_000,
     )
 
+    search_key = _budget_key(
+        bucket(dimension=BudgetDimension.SEARCH).to_dict(), route_family="core"
+    )
+    blob_key = _budget_key(
+        bucket(dimension=BudgetDimension.CONTENTS_BLOB).to_dict(), route_family="core"
+    )
+    for first, second, label in (
+        (BudgetDimension.SEARCH, BudgetDimension.CONTENTS_BLOB, "search first"),
+        (BudgetDimension.CONTENTS_BLOB, BudgetDimension.SEARCH, "contents_blob first"),
+    ):
+        add_unfitness_case(
+            f"two contention misfits with EQUAL estimates ({label})",
+            [estimate(50, dimension=first), estimate(50, dimension=second)],
+            baseline_consumption={search_key: 90, blob_key: 90},
+            limits={search_key: 100, blob_key: 100},
+            default_limit=1_000_000,
+        )
+        add_unfitness_case(
+            f"two permanent misfits with EQUAL estimates ({label})",
+            [estimate(500, dimension=first), estimate(500, dimension=second)],
+            baseline_consumption={search_key: 0, blob_key: 0},
+            limits={search_key: 100, blob_key: 100},
+            default_limit=1_000_000,
+        )
+
     # ------------------------------------------------------------------
     # cooldown_expiry
     # ------------------------------------------------------------------
@@ -395,6 +450,14 @@ def main() -> int:
     add_expiry_case(
         "negative retry_after_seconds is clamped to zero",
         observation(retry_after_seconds=-30),
+    )
+    add_expiry_case(
+        "fractional retry_after_seconds keeps its fraction",
+        observation(retry_after_seconds=1.5),
+    )
+    add_expiry_case(
+        "sub-second retry_after_seconds",
+        observation(retry_after_seconds=0.25),
     )
     add_expiry_case(
         "neither set -> the fixed default countdown",

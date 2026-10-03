@@ -136,20 +136,21 @@ type AIHotspotOverlapRow struct {
 }
 
 type AIImpactBucketRow struct {
-	Bucket                string   `json:"bucket"`
-	PrsTotal              int      `json:"prsTotal"`
-	PrsMerged             int      `json:"prsMerged"`
-	CycleTimeAvgHours     *float64 `json:"cycleTimeAvgHours,omitempty"`
-	ReviewsPerPr          *float64 `json:"reviewsPerPr,omitempty"`
-	ChangesRequestedPerPr *float64 `json:"changesRequestedPerPr,omitempty"`
-	ReworkPrs             int      `json:"reworkPrs"`
-	ReworkRate            *float64 `json:"reworkRate,omitempty"`
-	RevertPrs             int      `json:"revertPrs"`
-	RevertRate            *float64 `json:"revertRate,omitempty"`
-	IncidentsCount        int      `json:"incidentsCount"`
-	IncidentRate          *float64 `json:"incidentRate,omitempty"`
-	TestGapPrs            int      `json:"testGapPrs"`
-	TestGapRate           *float64 `json:"testGapRate,omitempty"`
+	Bucket                string           `json:"bucket"`
+	PrsTotal              int              `json:"prsTotal"`
+	PrsMerged             int              `json:"prsMerged"`
+	CycleTimeAvgHours     *float64         `json:"cycleTimeAvgHours,omitempty"`
+	ReviewsPerPr          *float64         `json:"reviewsPerPr,omitempty"`
+	ChangesRequestedPerPr *float64         `json:"changesRequestedPerPr,omitempty"`
+	ReworkPrs             int              `json:"reworkPrs"`
+	ReworkRate            *float64         `json:"reworkRate,omitempty"`
+	RevertPrs             int              `json:"revertPrs"`
+	RevertRate            *float64         `json:"revertRate,omitempty"`
+	IncidentsCount        int              `json:"incidentsCount"`
+	IncidentRate          *float64         `json:"incidentRate,omitempty"`
+	TestGapPrs            int              `json:"testGapPrs"`
+	TestGapRate           *float64         `json:"testGapRate,omitempty"`
+	Day                   graphqldate.Date `json:"day"`
 }
 
 type AIImpactBucketTotals struct {
@@ -332,6 +333,8 @@ type AiAttributedPr struct {
 	WorkType *string    `json:"workType,omitempty"`
 	TeamID   *string    `json:"teamId,omitempty"`
 	MergedAt *time.Time `json:"mergedAt,omitempty"`
+	RepoName *string    `json:"repoName,omitempty"`
+	TeamName *string    `json:"teamName,omitempty"`
 }
 
 type AiAttributedPrsResult struct {
@@ -400,6 +403,24 @@ type BusFactorScopeInput struct {
 	TeamID *string `json:"teamId,omitempty"`
 }
 
+// One forecast's simulation results as histograms: for each mode, the distinct
+// outcomes of the runs and how many runs produced each, ascending by value. A
+// mode that did not simulate is null. The counts of one mode sum to the
+// forecast's simulation count, so any percentile can be recomputed from the bins.
+type CapacityDistribution struct {
+	// Fixed-scope mode: days to complete the target items, one bin per distinct day count.
+	Days []CapacityDistributionBin `json:"days,omitempty"`
+	// Fixed-date mode: items completed by the target date, one bin per distinct total.
+	Items []CapacityDistributionBin `json:"items,omitempty"`
+}
+
+type CapacityDistributionBin struct {
+	// The outcome: a day count (days) or an item count (items).
+	Value int `json:"value"`
+	// How many simulation runs ended on this value.
+	Count int `json:"count"`
+}
+
 type CapacityForecast struct {
 	ForecastID          string            `json:"forecastId"`
 	ComputedAt          string            `json:"computedAt"`
@@ -422,6 +443,10 @@ type CapacityForecast struct {
 	HistoryDays         int               `json:"historyDays"`
 	InsufficientHistory bool              `json:"insufficientHistory"`
 	HighVariance        bool              `json:"highVariance"`
+	// The Monte Carlo distribution the p50 / p85 / p95 above were taken from, as
+	// histograms (CHAOS-7624). Null = no distribution: a forecast stored before it
+	// existed, or one where neither mode simulated. Never an object of zero bins.
+	CompletionDistribution *CapacityDistribution `json:"completionDistribution,omitempty"`
 }
 
 type CapacityForecastConnection struct {
@@ -445,6 +470,7 @@ type CapacityForecastFilterInput struct {
 
 type CapacityForecastInput struct {
 	TeamID      *string           `json:"teamId,omitempty"`
+	TeamIds     []string          `json:"teamIds,omitempty"`
 	WorkScopeID *string           `json:"workScopeId,omitempty"`
 	TargetItems *int              `json:"targetItems,omitempty"`
 	TargetDate  *graphqldate.Date `json:"targetDate,omitempty"`

@@ -25,22 +25,27 @@ func TestUserCRUDAndPasswordChangeMatchesThePythonAPI(t *testing.T) {
 	// the header's first hop. Trust this test's loopback peer so both planes agree.
 	t.Setenv("TRUSTED_PROXIES", "127.0.0.1,::1,testclient")
 	ctx := context.Background()
-	root := repoRoot(t)
+	golden := venueoracle.OpenGolden(t, adminRunValuesGolden("users", t.Name(), "de576d358c41c012c6bc4d8eecaed870d6cb3306c3032242650fb6b335c72cf4"))
+	root := golden.PythonRoot(t, repoRoot(t))
+	nextID := goldenIDs("usr")
 	const jwtKey = "venue-oracle-test-secret-key-for-user-crud-flow-32-bytes!!"
 	const adminPlaintextPassword = "correct horse battery staple 9"
 
-	orgID := uuid.New()
-	adminID := uuid.New()
-	memberID := uuid.New()
-	dottedID := uuid.New()
+	orgID := nextID()
+	adminID := nextID()
+	memberID := nextID()
+	dottedID := nextID()
 
 	venue := venueoracle.Start(t, ctx, venueoracle.Options{
+		Golden: golden,
 		Root:   root,
 		JWTKey: jwtKey,
 		Seed: func(t *testing.T, ctx context.Context, admin *pgxpool.Pool, v *venueoracle.Venue) map[string]map[string]any {
 			t.Helper()
+			clock := seedClock()
 			exec := func(sql string, args ...any) {
 				t.Helper()
+				sql = strings.ReplaceAll(sql, "now()", clock())
 				if _, err := admin.Exec(ctx, sql, args...); err != nil {
 					t.Fatalf("seed: %v\n%s", err, sql)
 				}
@@ -60,11 +65,11 @@ VALUES ($1, 'venue-umember@example.com', true, true, false, 0, now(), now())`, m
 			exec(`INSERT INTO users (id, email, is_active, is_verified, is_superuser, token_version, created_at, updated_at)
 VALUES ($1, 'venue-İstanbul@example.com', true, true, false, 0, now(), now())`, dottedID)
 			exec(`INSERT INTO memberships (id, org_id, user_id, role, joined_at, created_at, updated_at)
-VALUES ($1, $2, $3, 'member', now(), now(), now())`, uuid.New(), orgID, dottedID)
+VALUES ($1, $2, $3, 'member', now(), now(), now())`, nextID(), orgID, dottedID)
 			exec(`INSERT INTO memberships (id, org_id, user_id, role, joined_at, created_at, updated_at)
-VALUES ($1, $2, $3, 'admin', now(), now(), now())`, uuid.New(), orgID, adminID)
+VALUES ($1, $2, $3, 'admin', now(), now(), now())`, nextID(), orgID, adminID)
 			exec(`INSERT INTO memberships (id, org_id, user_id, role, joined_at, created_at, updated_at)
-VALUES ($1, $2, $3, 'member', now(), now(), now())`, uuid.New(), orgID, memberID)
+VALUES ($1, $2, $3, 'member', now(), now(), now())`, nextID(), orgID, memberID)
 			return map[string]map[string]any{
 				"admin": {"user_id": adminID.String(), "email": "venue-uadmin@example.com", "org_id": orgID.String(), "role": "admin"},
 			}
@@ -103,7 +108,7 @@ VALUES ($1, $2, $3, 'member', now(), now(), now())`, uuid.New(), orgID, memberID
 		{Name: "list users padded limit", Method: "GET", Path: "/api/v1/admin/users?limit=%201%20",
 			Headers: map[string]string{"Authorization": "Bearer " + venue.Tokens["admin"], "X-Org-Id": orgID.String()}},
 		{Name: "get user", Method: "GET", Path: "/api/v1/admin/users/" + memberID.String(), Headers: authHeaders},
-		{Name: "get user not found", Method: "GET", Path: "/api/v1/admin/users/" + uuid.New().String(), Headers: authHeaders},
+		{Name: "get user not found", Method: "GET", Path: "/api/v1/admin/users/" + nextID().String(), Headers: authHeaders},
 		{Name: "create user", Method: "POST", Path: "/api/v1/admin/users", Headers: jsonHeaders,
 			Body: venueoracle.B64(`{"email":"venue-newuser@example.com","password":"a brand new password 7"}`)},
 		// create_user carries no route-level auth dependency of its own --
@@ -175,6 +180,9 @@ VALUES ($1, $2, $3, 'member', now(), now(), now())`, uuid.New(), orgID, memberID
 				"User-Agent": "venue-oracle-test/1.0", "X-Forwarded-For": "203.0.113.42", "X-Request-ID": "venue-set-password-req",
 			},
 			Body: venueoracle.B64(fmt.Sprintf(`{"admin_password":%q,"password":"a new strong password 42"}`, adminPlaintextPassword))},
+		// Exactly ONE policy violation (no digit): the 422 lists that one.
+		{Name: "set password one violation", Method: "POST", Path: "/api/v1/admin/users/" + memberID.String() + "/password", Headers: jsonHeaders,
+			Body: venueoracle.B64(fmt.Sprintf(`{"admin_password":%q,"password":"abcdefghijklm"}`, adminPlaintextPassword))},
 		{Name: "set password wrong admin password", Method: "POST", Path: "/api/v1/admin/users/" + memberID.String() + "/password", Headers: jsonHeaders,
 			Body: venueoracle.B64(`{"admin_password":"totally the wrong password","password":"a new strong password 42"}`)},
 		// A new password whose only digit is a Unicode "Digit but not
@@ -209,10 +217,11 @@ VALUES ($1, $2, $3, 'member', now(), now(), now())`, uuid.New(), orgID, memberID
 		{Name: "unauthenticated malformed body", Method: "PATCH", Path: "/api/v1/admin/users/" + memberID.String(),
 			Headers: map[string]string{"Content-Type": "application/json"}, Body: venueoracle.B64(`{`)},
 	}
-	python := venue.ServePython(t, requests)
+	python := golden.Python(t, venue, requests)
 	goBase, _ := startGoServer(t, ctx, venue, jwtKey)
 
 	receipt := venueoracle.Diff(t, goBase, requests, python, venueoracle.DiffOptions{
+		Golden: golden,
 		Normalize: func(request venueoracle.Request, body string) string {
 			for _, field := range []string{"id", "created_at", "updated_at"} {
 				body = redactField(t, body, field)
@@ -222,12 +231,12 @@ VALUES ($1, $2, $3, 'member', now(), now(), now())`, uuid.New(), orgID, memberID
 	})
 	t.Log(receipt)
 
-	sourceRows := venueoracle.TableRows(t, ctx, venue.AdminURI(t, venue.SourceDB), userPasswordAuditQuery(orgID, adminID))
 	goRows := venueoracle.TableRows(t, ctx, venue.AdminURI(t, venue.GoDB), userPasswordAuditQuery(orgID, adminID))
-	if sourceRows != goRows {
-		t.Errorf("audit_logs rows differ:\n python: %s\n go:     %s", sourceRows, goRows)
-	}
-	compareAuditJSONWithSpacingGap(t, ctx, venue, fmt.Sprintf("org_id = '%s' AND user_id = '%s'", orgID, adminID), "request_metadata")
+	golden.CompareRows(t, "audit_logs rows", func() string {
+		return venueoracle.TableRows(t, ctx, venue.AdminURI(t, venue.SourceDB), userPasswordAuditQuery(orgID, adminID))
+	}, goRows)
+	compareAuditJSONWithSpacingGap(t, ctx, golden, venue, fmt.Sprintf("org_id = '%s' AND user_id = '%s'", orgID, adminID), "request_metadata")
+	golden.Finish(t)
 }
 
 func userPasswordAuditQuery(orgID, adminID uuid.UUID) string {

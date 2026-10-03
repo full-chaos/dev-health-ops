@@ -7,12 +7,12 @@ import (
 	"os/exec"
 	"path/filepath"
 	"reflect"
-	"runtime"
 	"sort"
 	"strings"
 	"testing"
 	"time"
 
+	"github.com/full-chaos/dev-health-ops/internal/testsupport/moduleroot"
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/pyoracle"
 )
 
@@ -139,26 +139,17 @@ func oraclePython(t *testing.T, repositoryRoot string) string {
 	return pyoracle.Resolve(t, repositoryRoot)
 }
 
-// TestGoMintedEdgeTokenIsJudgedByTheLiveEdgeExactlyLikeAPythonMintedOne is
-// the cross-runtime proof: for every case, the live Python validator gives
-// the Go token and the Python token the SAME verdict and, when it accepts,
-// the SAME authenticated user. Each case also pins the expected verdict, so
-// the two cannot agree by both refusing everything.
-func TestGoMintedEdgeTokenIsJudgedByTheLiveEdgeExactlyLikeAPythonMintedOne(t *testing.T) {
-	if os.Getenv("DEV_HEALTH_LIVE_PYTHON_ORACLES") != "1" {
-		t.Skip("live Python oracles run only through ci/check_go.sh live-python-oracles")
-	}
-	proofDir := os.Getenv("DEV_HEALTH_LIVE_PYTHON_ORACLE_PROOF_DIR")
-	if proofDir == "" {
-		t.Fatal("DEV_HEALTH_LIVE_PYTHON_ORACLE_PROOF_DIR is required")
-	}
-	_, currentFile, _, ok := runtime.Caller(0)
-	if !ok {
-		t.Fatal("resolve edgetokenmint package path")
-	}
-	repositoryRoot := filepath.Clean(filepath.Join(filepath.Dir(currentFile), "..", ".."))
-	clearIssuerAudienceEnv(t)
+// edgeOracleSuite is the cases of the edge oracle with the keys and the principal they were built with.
+type edgeOracleSuite struct {
+	key, otherKey string
+	principal     Principal
+	cases         []oracleCase
+}
 
+// edgeOracleCases builds the cases of the edge oracle: a Go-minted token for each, the Python mint of the same
+// inputs, and the users row the validator answers with.
+func edgeOracleCases(t *testing.T) edgeOracleSuite {
+	t.Helper()
 	const (
 		key      = "live-edge-oracle-signing-key-0123456789abcdef"
 		otherKey = "live-edge-oracle-a-different-key-0123456789ab"
@@ -208,6 +199,31 @@ func TestGoMintedEdgeTokenIsJudgedByTheLiveEdgeExactlyLikeAPythonMintedOne(t *te
 		},
 		{Name: "principal row missing", GoToken: mint(key, Options{}), PythonMint: oracleMint{Key: "key", ExpiresMinutes: 10}, DBRow: nil},
 	}
+	return edgeOracleSuite{key: key, otherKey: otherKey, principal: principal, cases: cases}
+}
+
+// TestGoMintedEdgeTokenIsJudgedByTheLiveEdgeExactlyLikeAPythonMintedOne is
+// the cross-runtime proof: for every case, the live Python validator gives
+// the Go token and the Python token the SAME verdict and, when it accepts,
+// the SAME authenticated user. Each case also pins the expected verdict, so
+// the two cannot agree by both refusing everything.
+func TestGoMintedEdgeTokenIsJudgedByTheLiveEdgeExactlyLikeAPythonMintedOne(t *testing.T) {
+	if os.Getenv("DEV_HEALTH_LIVE_PYTHON_ORACLES") != "1" {
+		t.Skip("live Python oracles run only through ci/check_go.sh live-python-oracles")
+	}
+	proofDir := os.Getenv("DEV_HEALTH_LIVE_PYTHON_ORACLE_PROOF_DIR")
+	if proofDir == "" {
+		t.Fatal("DEV_HEALTH_LIVE_PYTHON_ORACLE_PROOF_DIR is required")
+	}
+	_, currentFile, _, ok := moduleroot.Caller(0)
+	if !ok {
+		t.Fatal("resolve edgetokenmint package path")
+	}
+	repositoryRoot := filepath.Clean(filepath.Join(filepath.Dir(currentFile), "..", ".."))
+	clearIssuerAudienceEnv(t)
+
+	suite := edgeOracleCases(t)
+	key, otherKey, principal, cases := suite.key, suite.otherKey, suite.principal, suite.cases
 
 	input, err := json.Marshal(map[string]any{
 		"key":       key,

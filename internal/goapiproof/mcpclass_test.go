@@ -24,13 +24,21 @@ func TestDecideCarryForAClassRow(t *testing.T) {
 		want    string
 		refusal error
 	}{
-		"reachable, root served":  {classRow("hotspots", TargetModeCanary), CarryInputs{MCPRoots: served}, CarryActionCarry, nil},
-		"primary, root served":    {classRow("hotspots", TargetModePrimary), CarryInputs{MCPRoots: served}, CarryActionCarry, nil},
-		"shadow is not reachable": {classRow("hotspots", "shadow"), CarryInputs{MCPRoots: served}, CarryActionSkip, nil},
-		"root gone from image":    {classRow("hotspots", TargetModeCanary), CarryInputs{MCPRoots: map[string]bool{"analytics": true}}, CarryActionRefuse, ErrCarryClassRootGone},
-		"root set not computed":   {classRow("hotspots", TargetModeCanary), CarryInputs{}, CarryActionRefuse, ErrCarryClassRootGone},
-		"identical row at target": {classRow("hotspots", TargetModeCanary), CarryInputs{MCPRoots: served, TargetRows: map[string]CarryRow{mcpclass.Operation("hotspots"): classRow("hotspots", TargetModeCanary)}}, CarryActionUnchanged, nil},
-		"different row at target": {classRow("hotspots", TargetModeCanary), CarryInputs{MCPRoots: served, TargetRows: map[string]CarryRow{mcpclass.Operation("hotspots"): classRow("hotspots", TargetModePrimary)}}, CarryActionRefuse, ErrCarryTargetRowExists},
+		"reachable, root served": {classRow("hotspots", TargetModeCanary), CarryInputs{MCPRoots: served}, CarryActionCarry, nil},
+		"primary, root served":   {classRow("hotspots", TargetModePrimary), CarryInputs{MCPRoots: served}, CarryActionCarry, nil},
+		// CHAOS-8144: a shadow class row is preserved verbatim while its
+		// root is served, and every failed fact SKIPs (never REFUSEs).
+		"shadow, root served":             {classRow("hotspots", TargetModeShadow), CarryInputs{MCPRoots: served}, CarryActionCarry, nil},
+		"shadow, root gone from image":    {classRow("hotspots", TargetModeShadow), CarryInputs{MCPRoots: map[string]bool{"analytics": true}}, CarryActionSkip, nil},
+		"shadow, root set not computed":   {classRow("hotspots", TargetModeShadow), CarryInputs{}, CarryActionSkip, nil},
+		"shadow, identical row at target": {classRow("hotspots", TargetModeShadow), CarryInputs{MCPRoots: served, TargetRows: map[string]CarryRow{mcpclass.Operation("hotspots"): classRow("hotspots", TargetModeShadow)}}, CarryActionUnchanged, nil},
+		"shadow, different row at target": {classRow("hotspots", TargetModeShadow), CarryInputs{MCPRoots: served, TargetRows: map[string]CarryRow{mcpclass.Operation("hotspots"): classRow("hotspots", TargetModePrimary)}}, CarryActionSkip, nil},
+		"python is still not reachable":   {classRow("hotspots", "python"), CarryInputs{MCPRoots: served}, CarryActionSkip, nil},
+		"disabled is still not reachable": {classRow("hotspots", "disabled"), CarryInputs{MCPRoots: served}, CarryActionSkip, nil},
+		"root gone from image":            {classRow("hotspots", TargetModeCanary), CarryInputs{MCPRoots: map[string]bool{"analytics": true}}, CarryActionRefuse, ErrCarryClassRootGone},
+		"root set not computed":           {classRow("hotspots", TargetModeCanary), CarryInputs{}, CarryActionRefuse, ErrCarryClassRootGone},
+		"identical row at target":         {classRow("hotspots", TargetModeCanary), CarryInputs{MCPRoots: served, TargetRows: map[string]CarryRow{mcpclass.Operation("hotspots"): classRow("hotspots", TargetModeCanary)}}, CarryActionUnchanged, nil},
+		"different row at target":         {classRow("hotspots", TargetModeCanary), CarryInputs{MCPRoots: served, TargetRows: map[string]CarryRow{mcpclass.Operation("hotspots"): classRow("hotspots", TargetModePrimary)}}, CarryActionRefuse, ErrCarryTargetRowExists},
 	} {
 		t.Run(name, func(t *testing.T) {
 			got := DecideCarry(tc.row, tc.inputs)

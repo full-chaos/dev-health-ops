@@ -424,16 +424,32 @@ image> "labelWithValue" <pre-formatted "<flag description> (<image>)" text>
 Shared by route-activate-hooks.yaml (its own operator image) and
 river-hooks.yaml (the River hook image): both run a Go operator binary
 against the database the migrate Job just migrated, so that operator's
-image must be pinned to the SAME commit as image.repository/image.tag
-(dev-health.image) -- production revision 14 went down on exactly this
-mismatch (a floating/stale operator image against a freshly migrated
+image must be pinned to the SAME commit as the Go serving images the roll
+puts in front of that database -- production revision 14 went down on exactly
+this mismatch (a floating/stale operator image against a freshly migrated
 database, failing runtime_role_unauthorized with no diagnostics).
+
+CHAOS-8309: the comparison targets are the Go serving images -- queryApi.image
+(when queryApi.enabled) and goApi.image (when goApi.enabled). When both are
+enabled the hook tag must equal BOTH. Before this change the one target was
+dev-health.image (.Values.image, the PYTHON api image, which goes away with the
+Python api): that is the wrong reference for a Go-only concern, and the
+routing-carry hooks already compare against queryApi.image inline for the same
+reason (routing-carry-hooks.yaml). A component that is not enabled has no image
+being rolled, so it is not a comparison target.
+
+The Python image stays a target (lead D4535/D4545: the guard stays, monotone
+against main): while `.Values.image` exists the hook tag is ALSO compared with
+the Python image (dev-health.image), so every render the check refused before
+is still refused, whether or not a Go component is enabled and whatever its
+image looks like. The Go clauses only ADD refusals. CHAOS-8311 removes the
+Python clause together with `.Values.image`.
 
 Only comparable when BOTH sides carry this repo's `sha-<12 hex>`
 immutable-tag convention: a sha256 digest does not encode which commit it
 was built from, so a digest-only pin on either side is never compared here
 -- that would be fabricating a mapping this chart cannot verify. Keeping a
-digest pin in lockstep with the api image is the operator's own
+digest pin in lockstep with the Go serving images is the operator's own
 responsibility. This is a NAMED, KNOWN limit shared by both callers (see
 each caller's own comment and the CHAOS-6324 follow-up ticket for the
 digest -> commit resolution this cannot currently do); it is not
@@ -442,10 +458,31 @@ above each caller's own call site already accepts (a digest is a valid
 pin on its own, just not one this specific comparison can use).
 */}}
 {{- define "dev-health.lockstepImageCheck" -}}
-{{- $apiImageTag := regexFind ":sha-[0-9a-f]{12}$" (include "dev-health.image" .context) -}}
 {{- $hookImageTag := regexFind ":sha-[0-9a-f]{12}$" .image -}}
-{{- if and $apiImageTag $hookImageTag (ne $apiImageTag $hookImageTag) -}}
-{{- fail (printf "%s and image.repository/image.tag (%s) are pinned to different commits (%s vs %s) -- %s" .labelWithValue (include "dev-health.image" .context) $hookImageTag $apiImageTag .reason) -}}
+{{- if $hookImageTag -}}
+{{- $label := .labelWithValue -}}
+{{- $reason := .reason -}}
+{{- if .context.Values.queryApi.enabled -}}
+{{- $queryApiImage := include "dev-health.queryApiImage" .context -}}
+{{- $queryApiTag := regexFind ":sha-[0-9a-f]{12}$" $queryApiImage -}}
+{{- if and $queryApiTag (ne $queryApiTag $hookImageTag) -}}
+{{- fail (printf "%s and queryApi.image (%s) are pinned to different commits (%s vs %s) -- %s" $label $queryApiImage $hookImageTag $queryApiTag $reason) -}}
+{{- end -}}
+{{- end -}}
+{{- if .context.Values.goApi.enabled -}}
+{{- $goApiImage := include "dev-health.goApiImage" .context -}}
+{{- $goApiTag := regexFind ":sha-[0-9a-f]{12}$" $goApiImage -}}
+{{- if and $goApiTag (ne $goApiTag $hookImageTag) -}}
+{{- fail (printf "%s and goApi.image (%s) are pinned to different commits (%s vs %s) -- %s" $label $goApiImage $hookImageTag $goApiTag $reason) -}}
+{{- end -}}
+{{- end -}}
+{{- if .context.Values.image -}}
+{{- $pythonImage := include "dev-health.image" .context -}}
+{{- $pythonTag := regexFind ":sha-[0-9a-f]{12}$" $pythonImage -}}
+{{- if and $pythonTag (ne $pythonTag $hookImageTag) -}}
+{{- fail (printf "%s and image.repository/image.tag (%s) are pinned to different commits (%s vs %s) -- %s" $label $pythonImage $hookImageTag $pythonTag $reason) -}}
+{{- end -}}
+{{- end -}}
 {{- end -}}
 {{- end }}
 

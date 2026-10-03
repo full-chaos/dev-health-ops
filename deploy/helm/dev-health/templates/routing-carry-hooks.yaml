@@ -41,11 +41,13 @@ enable/disable knob, this is a gate), and an operator disabling migrations for a
 reason must not silently disable the routing safety gate as a side effect.
 
 D2829 P2-b: the tools image's commit is cross-checked against `queryApi.image` (the image
-actually being rolled), inline rather than via `dev-health.lockstepImageCheck` -- that shared
-helper hardcodes its comparison target to `dev-health.image` (`.Values.image`, the PYTHON api
-image), which is the WRONG reference for a Go-only concern: the tools image's embedded SDL
-must agree with the GO query-api image's, never the Python api's, or `carry` could compute a
-target digest for a commit the actual roll never runs.
+actually being rolled), inline rather than via `dev-health.lockstepImageCheck` -- when this was
+written that shared helper compared against `dev-health.image` (`.Values.image`, the PYTHON api
+image), the WRONG reference for a Go-only concern: the tools image's embedded SDL must agree
+with the GO query-api image's, never the Python api's, or `carry` could compute a target digest
+for a commit the actual roll never runs. (CHAOS-8309: the helper now targets queryApi.image and
+goApi.image, and ALSO compares the Python image while `.Values.image` exists, whatever the Go
+components are; this block keeps its own inline check because it already requires queryApi.enabled.)
 
 Neither hook renders on pre-install: carry's whole premise is a live, already-running process
 to copy FROM, which does not exist on a fresh install.
@@ -88,8 +90,8 @@ every other hook image otherwise: required, no floating default.
 {{- end }}
 {{- /*
 D2829 P2-b: cross-check against queryApi.image (the image actually being rolled), NOT
-dev-health.lockstepImageCheck's hardcoded dev-health.image (the Python api image) -- see the
-file-level comment above.
+the Python api image (dev-health.image, which dev-health.lockstepImageCheck compared against
+until CHAOS-8309) -- see the file-level comment above.
 */}}
 {{- $queryApiImageRef := include "dev-health.queryApiImage" . }}
 {{- $toolsImageTag := regexFind ":sha-[0-9a-f]{12}$" $toolsImage }}

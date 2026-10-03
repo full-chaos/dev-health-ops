@@ -151,6 +151,11 @@ type RESTRequest struct {
 	// (restbaselinetimeout.go) for every condition and what is written.
 	// A baseline that answers leaves the request on the ordinary comparison.
 	BaselineTimeoutDeclared *BaselineTimeoutDeclaration
+
+	// Counters declares the per-route counters this request fires on BOTH
+	// planes; the runner scrapes each plane's /metrics around its own leg and
+	// fails the request when the deltas disagree (restcounters.go).
+	Counters []RESTCounterPair
 }
 
 // RESTEndpointSpec is one REST route's committed corpus.
@@ -6490,6 +6495,9 @@ func ValidateRESTCorpus() error {
 			}
 			if req.Timeout < 0 {
 				return fmt.Errorf("goapiproof: REST corpus entry %q request %q declares a negative Timeout", operation, req.Name)
+			}
+			if err := ValidateRESTCounterPairs(req.Counters); err != nil {
+				return fmt.Errorf("goapiproof: REST corpus entry %q request %q: %w", operation, req.Name, err)
 			}
 			if req.BaselineTimeoutDeclared != nil {
 				if err := req.BaselineTimeoutDeclared.Validate(req); err != nil {

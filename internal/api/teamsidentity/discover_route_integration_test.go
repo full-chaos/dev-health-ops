@@ -5,6 +5,7 @@ package teamsidentity
 import (
 	"context"
 	"encoding/json"
+	"github.com/full-chaos/dev-health-ops/internal/testsupport/fakehttp"
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
@@ -112,7 +113,7 @@ func githubOrgStub(orgs map[string][]string) *githubStubDoer {
 func TestDiscoverRouteOrgResolutionAndErrors(t *testing.T) {
 	f := newDiscoverRouteFixture(t)
 	doer := githubOrgStub(map[string][]string{"acme": {"platform", "shared"}, "beta": {"shared", "mobile"}, "param-org": {"only"}})
-	withDiscoveryClient(t, doer)
+	withDiscoveryClient(t, fakehttp.Client(doer))
 
 	// Nothing configured for github: 404 with Python's exact detail.
 	rec := f.get("provider=github")

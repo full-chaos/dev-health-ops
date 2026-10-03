@@ -21,7 +21,7 @@ export BIGBOY_OPERATOR_IMAGE=ghcr.io/full-chaos/dev-health-go-operator@<digest>
 docker compose --env-file ops/.env \
   -f compose.yml -f compose/compose.go.workers.yml -f compose/compose.metrics-api.local.yml \
   -f .remember/lanes/team-lead/reconciler-sweep-override.yml \
-  -f compose/compose.bigboy.images.yml -f compose/compose.bigboy.workers.yml \
+  -f compose/compose.bigboy.images.yml -f ci/bigboy/compose.bigboy.workers.yml \
   -f compose/compose.bigboy.router.yml \
   up -d --no-deps --no-build <service...>
 ```

@@ -33,7 +33,7 @@ func (executor CompleteRouteExecutor) executeChunked(
 		guard providerfoundation.LeaseGuard,
 	) error {
 		now := executor.now()
-		attemptStarted := time.Now()
+		attemptElapsed := executor.attemptTimer()
 		checkpoint, checkpointErr := store.LoadChunkCheckpoint(
 			workContext, session.Claim, now,
 		)
@@ -172,8 +172,8 @@ func (executor CompleteRouteExecutor) executeChunked(
 				return err
 			}
 			committedThisAttempt++
-			if (committedThisAttempt >= policy.MaxChunksPerAttempt || time.Since(attemptStarted) >= policy.MaxWallTime) && ordinal+1 < totalChunks {
-				return newChunkContinuation(policy, executor.now().Add(time.Second), committedThisAttempt, time.Since(attemptStarted))
+			if (committedThisAttempt >= policy.MaxChunksPerAttempt || attemptElapsed() >= policy.MaxWallTime) && ordinal+1 < totalChunks {
+				return newChunkContinuation(policy, executor.now().Add(time.Second), committedThisAttempt, attemptElapsed())
 			}
 		}
 		if err := store.MarkInventoryComplete(workContext, session.Claim, executor.now()); err != nil {

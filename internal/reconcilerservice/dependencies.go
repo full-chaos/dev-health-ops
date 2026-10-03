@@ -593,8 +593,19 @@ func buildReconcilerRelay(
 	if err != nil {
 		return nil, err
 	}
+	// The relay ticks once a second because a handoff must reach River
+	// promptly. The strand sweep rides that tick with no such need, so it is
+	// spaced out while it finds nothing and returns to every tick the moment
+	// it finds anything (CHAOS-8421). The relay's own claim is not behind this
+	// wrapper and keeps its cadence.
+	idleStrandRepair, err := joboutbox.NewIdleBackoffStrandRepair(
+		strandRepair, joboutbox.DefaultStrandRepairIdleCeiling,
+	)
+	if err != nil {
+		return nil, err
+	}
 	return joboutbox.NewRelayWithRoutesRecoveryAndStrandRepair(
-		repository, inserter, routes, repair, strandRepair, joboutbox.DefaultRelayConfig(),
+		repository, inserter, routes, repair, idleStrandRepair, joboutbox.DefaultRelayConfig(),
 	)
 }
 

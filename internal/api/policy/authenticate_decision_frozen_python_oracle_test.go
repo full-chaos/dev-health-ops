@@ -6,7 +6,6 @@ import (
 	"io"
 	"log/slog"
 	"path/filepath"
-	"runtime"
 	"testing"
 	"time"
 
@@ -15,6 +14,7 @@ import (
 
 	"github.com/full-chaos/dev-health-ops/internal/api/policy"
 	"github.com/full-chaos/dev-health-ops/internal/auth/edgetoken"
+	"github.com/full-chaos/dev-health-ops/internal/testsupport/moduleroot"
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/programoracle"
 )
 
@@ -169,7 +169,7 @@ func (authenticateStore) ActiveImpersonation(context.Context, uuid.UUID) (*polic
 // user the superuser flag (the row's, never the token's) and the token
 // version. The golden holds no token.
 func TestAuthenticateDecisionsMatchFrozenPython(t *testing.T) {
-	_, file, _, ok := runtime.Caller(0)
+	_, file, _, ok := moduleroot.Caller(0)
 	if !ok {
 		t.Fatal("cannot locate the test source")
 	}

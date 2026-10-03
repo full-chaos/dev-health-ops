@@ -30,6 +30,7 @@ import (
 	"fmt"
 	envsecrets "github.com/full-chaos/dev-health-ops/internal/platform/secrets"
 	"io"
+	"log/slog"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -38,6 +39,7 @@ import (
 	"time"
 
 	"github.com/full-chaos/dev-health-ops/internal/migrationmatrix"
+	"github.com/full-chaos/dev-health-ops/internal/platform/logging"
 	"github.com/full-chaos/dev-health-ops/internal/platform/secrets"
 )
 
@@ -58,12 +60,10 @@ const (
 	remainingFamiliesRel   = "internal/jobs/metrics/remaining/families.json"
 	jobDailyPyRelative     = "src/dev_health_ops/metrics/job_daily.py"
 
-	// The "Per REST endpoint" section's two sources. Both are already
-	// covered by go.yml's path filters -- main.py by the existing
-	// `src/dev_health_ops/api/**` entry, query-api's *.go files as
-	// ordinary Go source.
-	mainPyRelative      = "src/dev_health_ops/api/main.py"
-	queryAPIDirRelative = "internal/queryapi/server"
+	// The "Per REST endpoint" section's two sources: main.py (covered by
+	// go.yml's `src/dev_health_ops/api/**` path filter) and query-api's route
+	// table, executed (internal/queryapi/server.RESTRoutes, CHAOS-8307).
+	mainPyRelative = "src/dev_health_ops/api/main.py"
 
 	// catalogRelative is the registered-operation catalog the edge
 	// dispatches by -- the file `dev-hops go-api routing status` reports
@@ -130,6 +130,9 @@ func registerFlags(set *flag.FlagSet) *matrixFlags {
 }
 
 func main() {
+	// The binary links the query-api server package (its route table, CHAOS-8307), whose
+	// dependencies log through slog.Default(); this makes that the redacting handler.
+	logging.InstallDefault(logging.NewJSON(os.Stderr, slog.LevelInfo))
 	f := registerFlags(flag.CommandLine)
 	flag.Parse()
 	secrets.ResolveFlag(flag.CommandLine, f.dsn, "dsn", postgresURIEnvVar)
@@ -289,7 +292,7 @@ func legacyBlocks(root string, families *migrationmatrix.NativeFamilies, restPro
 	if err != nil {
 		return nil, fmt.Errorf("workgraph investment block: %w", err)
 	}
-	restRows, err := migrationmatrix.LoadRESTEndpoints(filepath.Join(root, mainPyRelative), filepath.Join(root, queryAPIDirRelative))
+	restRows, err := migrationmatrix.LoadRESTEndpoints(filepath.Join(root, mainPyRelative), migrationmatrix.LoadQueryAPIMuxRoutes())
 	if err != nil {
 		return nil, fmt.Errorf("REST endpoints: %w", err)
 	}

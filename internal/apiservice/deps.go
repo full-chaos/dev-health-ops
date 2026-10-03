@@ -146,7 +146,7 @@ type Deps struct {
 	// (CHAOS-6306): the OAuth client config used to revoke a stored token.
 	PagerDuty providerfoundation.PagerDutyRevokeConfig
 	// HTTPDoer is the client the org-deletion route's PagerDuty revoke call
-	// uses; nil means admin.Routes defaults it to http.DefaultClient. A
+	// uses; nil means admin.Routes defaults it to a no-redirect client (revokeDoer). A
 	// venue test overrides it to reach a fake revoke endpoint from the Go
 	// plane too.
 	HTTPDoer providerfoundation.HTTPDoer

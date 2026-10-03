@@ -62,6 +62,10 @@ type StepResult struct {
 	UndeliveredResolutions []UndeliveredResolution
 	UndeliveredBlocked     int
 	UndeliveredRaceLost    int
+	// StrandPassSkippedIdle: see StrandRepairResult.PassSkippedIdle. True when
+	// the strand repair ran no survey in this step because its idle backoff
+	// held the pass back.
+	StrandPassSkippedIdle bool
 	// DeadDeliveries names every row this step moved to 'dead', with its
 	// bounded reason code, so a dropped delivery is never only a number in
 	// Dead.
@@ -268,6 +272,7 @@ func (relay *Relay) stepRecovery(ctx context.Context, now time.Time, limit int) 
 		result.UndeliveredResolutions = rearmed.UndeliveredResolutions
 		result.UndeliveredBlocked = rearmed.UndeliveredBlocked
 		result.UndeliveredRaceLost = rearmed.UndeliveredRaceLost
+		result.StrandPassSkippedIdle = rearmed.PassSkippedIdle
 		if err != nil {
 			// Same naming as the terminal-delivery seam above; strandRepair's
 			// own error already names its shape (see stepShape), this adds

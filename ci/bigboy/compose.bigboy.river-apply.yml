@@ -1,0 +1,17 @@
+# bigboy-river-apply.sh's one-off dho shell (CHAOS-8371, D4566 class rules). Never started by `up` (profile venue); the script
+# appends this file to COMPOSE_FILE for its own calls only. The image is the overlay's pinned dho digest (RIVER_DHO_IMAGE: an image
+# reference, not a credential). The DSN password is interpolated by COMPOSE from ops/.env (`--env-file`) with the stack's own
+# default: no script variable, argv or `-e` carries it, and nothing is read out of the api container with printenv.
+services:
+  venue-river:
+    image: ${RIVER_DHO_IMAGE:?bigboy-river-apply.sh sets the dho image}
+    profiles: ["venue"]
+    networks: [dev-health]
+    entrypoint: ["/usr/local/bin/dho"]
+    environment:
+      MIGRATION_DATABASE_URI: postgresql://devhealth:${POSTGRES_PASSWORD:-devhealth}@postgres:5432/devhealth?sslmode=disable
+      RIVER_DATABASE_SCHEMA: river
+      RIVER_DOMAIN_DATABASE_ROLE: devhealth_domain
+      RIVER_QUEUE_DATABASE_ROLE: devhealth_queue
+      RIVER_COORDINATOR_DATABASE_ROLE: devhealth_coordinator
+      API_DATABASE_ROLE: devhealth_api

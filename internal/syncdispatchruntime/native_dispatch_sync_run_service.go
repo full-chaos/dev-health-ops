@@ -4,7 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
-	"log/slog"
+	"github.com/full-chaos/dev-health-ops/internal/syncdispatchruntime/synclog"
 	"time"
 
 	"github.com/jackc/pgx/v5"
@@ -57,7 +57,7 @@ var ErrDispatchSyncRunUnavailable = errors.New("native dispatch_sync_run is unav
 // to end.
 type NativeDispatchSyncRunService struct {
 	pool     *pgxpool.Pool
-	logger   *slog.Logger
+	logger   *synclog.Logger
 	bridge   budgetEstimator
 	producer *joboutbox.Producer
 	registry joboutbox.PolicyRegistry
@@ -87,7 +87,7 @@ type NativeDispatchSyncRunService struct {
 // say) can omit it entirely rather than threading a stub through.
 func NewNativeDispatchSyncRunService(
 	pool *pgxpool.Pool,
-	logger *slog.Logger,
+	logger *synclog.Logger,
 	bridge budgetEstimator,
 	producer *joboutbox.Producer,
 	registry joboutbox.PolicyRegistry,
@@ -95,9 +95,6 @@ func NewNativeDispatchSyncRunService(
 ) (*NativeDispatchSyncRunService, error) {
 	if pool == nil || bridge == nil || producer == nil || registry == nil {
 		return nil, ErrDispatchSyncRunUnavailable
-	}
-	if logger == nil {
-		logger = slog.Default()
 	}
 	var observer jobruntime.BudgetEstimateFailureObserver
 	if len(observers) > 0 {
@@ -213,10 +210,7 @@ func (service *NativeDispatchSyncRunService) Dispatch(ctx context.Context, args 
 	// error stream.
 	defer func() {
 		if isDispatchLockBusy(dispatchErr) {
-			service.logger.WarnContext(ctx, "dispatch_sync_run.lock_busy_requeued",
-				slog.String("sync_run_id", args.SyncRunID()),
-				slog.Duration("lock_wait_budget", dispatchLockWaitBudget),
-				slog.String("error", dispatchErr.Error()))
+			service.logger.Warn(ctx, synclog.MsgDispatchSyncRunLockBusyRequeued, synclog.Run(synclog.ParseID(args.SyncRunID())), synclog.Elapsed(synclog.KeyLockWaitBudget, dispatchLockWaitBudget), synclog.Failure(dispatchErr))
 		}
 	}()
 	tx, err := service.pool.Begin(ctx)
@@ -250,7 +244,7 @@ func (service *NativeDispatchSyncRunService) Dispatch(ctx context.Context, args 
 	}
 	if run == nil {
 		// Python: `if run is None: ... return {"status": "missing", ...}`.
-		service.logger.WarnContext(ctx, "dispatch_sync_run.missing", slog.String("sync_run_id", args.SyncRunID()))
+		service.logger.Warn(ctx, synclog.MsgDispatchSyncRunMissing, synclog.Run(synclog.ParseID(args.SyncRunID())))
 		return tx.Commit(ctx)
 	}
 
@@ -298,7 +292,7 @@ func (service *NativeDispatchSyncRunService) Dispatch(ctx context.Context, args 
 		if err := ensureReferenceDiscoveryWakeup(ctx, tx, run.orgID, run.id, now); err != nil {
 			return err
 		}
-		service.logger.InfoContext(ctx, "dispatch_sync_run.blocked_on_reference_discovery", slog.String("sync_run_id", run.id))
+		service.logger.Info(ctx, synclog.MsgDispatchSyncRunBlockedOnReferenceDiscovery, synclog.Run(synclog.ParseID(run.id)))
 		return tx.Commit(ctx)
 	}
 
@@ -322,10 +316,7 @@ func (service *NativeDispatchSyncRunService) Dispatch(ctx context.Context, args 
 		if err != nil {
 			return err
 		}
-		service.logger.WarnContext(ctx, "dispatch_sync_run.invalid_claim_units_terminalized",
-			slog.String("sync_run_id", run.id), slog.Int("invalid_claim_units", terminalizedBeforeCap),
-			slog.String("error_category", invalidProviderFamilyClaimErrorCategory),
-			slog.String("phase", "pre_capacity"))
+		service.logger.Warn(ctx, synclog.MsgDispatchSyncRunInvalidClaimUnitsTerminalized, synclog.Run(synclog.ParseID(run.id)), synclog.Count(synclog.KeyInvalidClaimUnits, terminalizedBeforeCap), synclog.Text(synclog.KeyErrorCategory, synclog.ParseLabel(invalidProviderFamilyClaimErrorCategory)), synclog.Text(synclog.KeyPhase, synclog.LabelPreCapacity))
 	}
 
 	// --- DispatchGuard: authorize this pass ---
@@ -350,8 +341,7 @@ func (service *NativeDispatchSyncRunService) Dispatch(ctx context.Context, args 
 		for _, id := range decision.cappedUnitIDs {
 			cappedIDs[id] = true
 		}
-		service.logger.InfoContext(ctx, "dispatch_sync_run.concurrency_capped",
-			slog.String("sync_run_id", run.id), slog.Int("capped_count", len(cappedIDs)), slog.String("reason", decision.reason))
+		service.logger.Info(ctx, synclog.MsgDispatchSyncRunConcurrencyCapped, synclog.Run(synclog.ParseID(run.id)), synclog.Count(synclog.KeyCappedCount, len(cappedIDs)), synclog.Text(synclog.KeyReason, synclog.ParseLabel(decision.reason)))
 	}
 
 	// --- BudgetGuard dry-run telemetry (side effect only; return discarded,
@@ -514,14 +504,7 @@ func (service *NativeDispatchSyncRunService) Dispatch(ctx context.Context, args 
 				// lasts; this pass logs and moves on rather than republishing
 				// into the same dead end again.
 				if errors.Is(err, joboutbox.ErrDeliveryAlreadyTerminal) {
-					service.logger.WarnContext(ctx,
-						"dispatch_sync_run.publish_hit_terminal_delivery",
-						slog.String("sync_run_id", run.id),
-						slog.String("unit_id", unit.id),
-						slog.String("provider", unit.provider),
-						slog.String("dataset_key", unit.datasetKey),
-						slog.String("error", err.Error()),
-					)
+					service.logger.Warn(ctx, synclog.MsgDispatchSyncRunPublishHitTerminalDelivery, synclog.Run(synclog.ParseID(run.id)), synclog.Unit(synclog.ParseID(unit.id)), synclog.Provider(synclog.ParseLabel(unit.provider)), synclog.Text(synclog.KeyDatasetKey, synclog.ParseLabel(unit.datasetKey)), synclog.Failure(err))
 					terminalDeliveryPublishes++
 					continue
 				}
@@ -542,10 +525,7 @@ func (service *NativeDispatchSyncRunService) Dispatch(ctx context.Context, args 
 		if err != nil {
 			return err
 		}
-		service.logger.WarnContext(ctx, "dispatch_sync_run.invalid_claim_units_terminalized",
-			slog.String("sync_run_id", run.id), slog.Int("invalid_claim_units", terminalizedInvalid),
-			slog.String("error_category", invalidProviderFamilyClaimErrorCategory),
-			slog.String("phase", "post_claim"))
+		service.logger.Warn(ctx, synclog.MsgDispatchSyncRunInvalidClaimUnitsTerminalized, synclog.Run(synclog.ParseID(run.id)), synclog.Count(synclog.KeyInvalidClaimUnits, terminalizedInvalid), synclog.Text(synclog.KeyErrorCategory, synclog.ParseLabel(invalidProviderFamilyClaimErrorCategory)), synclog.Text(synclog.KeyPhase, synclog.LabelPostClaim))
 	}
 
 	if len(unroutableUnits) > 0 {
@@ -554,9 +534,7 @@ func (service *NativeDispatchSyncRunService) Dispatch(ctx context.Context, args 
 		if err != nil {
 			return err
 		}
-		service.logger.WarnContext(ctx, "dispatch_sync_run.unroutable_units_terminalized",
-			slog.String("sync_run_id", run.id), slog.Int("unroutable_units", terminalized),
-			slog.String("error_category", featureDisabledErrorCategory))
+		service.logger.Warn(ctx, synclog.MsgDispatchSyncRunUnroutableUnitsTerminalized, synclog.Run(synclog.ParseID(run.id)), synclog.Count(synclog.KeyUnroutableUnits, terminalized), synclog.Text(synclog.KeyErrorCategory, synclog.ParseLabel(featureDisabledErrorCategory)))
 	}
 
 	// Emitted before the commit branches so it is reported whether or not this
@@ -564,11 +542,7 @@ func (service *NativeDispatchSyncRunService) Dispatch(ctx context.Context, args 
 	// normally while others sit behind dead deliveries, and folding the two
 	// into one summary is what hid the second group.
 	if terminalDeliveryPublishes > 0 {
-		service.logger.WarnContext(ctx, "dispatch_sync_run.terminal_delivery_publishes",
-			slog.String("sync_run_id", run.id),
-			slog.Int("terminal_delivery_publishes", terminalDeliveryPublishes),
-			slog.Int("queued_units", riverQueued),
-		)
+		service.logger.Warn(ctx, synclog.MsgDispatchSyncRunTerminalDeliveryPublishes, synclog.Run(synclog.ParseID(run.id)), synclog.Count(synclog.KeyTerminalDeliveryPublishes, terminalDeliveryPublishes), synclog.Count(synclog.KeyQueuedUnits, riverQueued))
 		if riverQueued == 0 {
 			// CHAOS-6890: a pass that reclaimed a unit and put NO delivery in front of any
 			// unit made no progress, and it would otherwise end as a quiet nil return that
@@ -577,11 +551,7 @@ func (service *NativeDispatchSyncRunService) Dispatch(ctx context.Context, args 
 			// OrphanedUnitRepair (a replacement delivery, then, once its bounded budget is
 			// spent, a failed unit with a reason); this line is what makes a run that is
 			// waiting on it visible.
-			service.logger.ErrorContext(ctx, "dispatch_sync_run.no_progress",
-				slog.String("sync_run_id", run.id),
-				slog.Int("terminal_delivery_publishes", terminalDeliveryPublishes),
-				slog.String("reason", "reclaimed units whose deliveries are already terminal; nothing was delivered"),
-			)
+			service.logger.Error(ctx, synclog.MsgDispatchSyncRunNoProgress, synclog.Run(synclog.ParseID(run.id)), synclog.Count(synclog.KeyTerminalDeliveryPublishes, terminalDeliveryPublishes), synclog.Text(synclog.KeyReason, synclog.LabelReclaimedUnitsWhoseDeliveriesAreAlreadyTerminalNothingWasDel))
 		}
 	}
 
@@ -622,8 +592,7 @@ WHERE id = $1::uuid`,
 		case len(cappedIDs) > 0:
 			scheduleRedispatch(ctx, service.pool, service.logger, run.id, nil, service.nowUTC())
 		}
-		service.logger.InfoContext(ctx, "dispatch_sync_run.dispatched",
-			slog.String("sync_run_id", run.id), slog.Int("queued_units", riverQueued))
+		service.logger.Info(ctx, synclog.MsgDispatchSyncRunDispatched, synclog.Run(synclog.ParseID(run.id)), synclog.Count(synclog.KeyQueuedUnits, riverQueued))
 		return nil
 	}
 
@@ -663,16 +632,14 @@ WHERE id = $1::uuid`,
 		// than claiming it. Same rule, same helper, as the riverQueued > 0 arm.
 		armAt := service.nowUTC()
 		scheduleRedispatch(ctx, service.pool, service.logger, run.id, dueNowRearmAt(counts.nextDeferredAt, armAt), armAt)
-		service.logger.InfoContext(ctx, "dispatch_sync_run.noop",
-			slog.String("sync_run_id", run.id), slog.Int("queued_units", 0), slog.Int("pending_units", counts.dispatchable))
+		service.logger.Info(ctx, synclog.MsgDispatchSyncRunNoop, synclog.Run(synclog.ParseID(run.id)), synclog.Count(synclog.KeyQueuedUnits, 0), synclog.Count(synclog.KeyPendingUnits, counts.dispatchable))
 		return nil
 	}
 	// b) Nothing dispatchable, but something is genuinely in flight
 	// (DISPATCHING not yet stale, or RUNNING) -- wait for it; no wakeup to
 	// arm, this pass's job here is done.
 	if counts.inFlight > 0 {
-		service.logger.InfoContext(ctx, "dispatch_sync_run.waiting_inflight",
-			slog.String("sync_run_id", run.id), slog.Int("queued_units", 0), slog.Int("in_flight_units", counts.inFlight))
+		service.logger.Info(ctx, synclog.MsgDispatchSyncRunWaitingInflight, synclog.Run(synclog.ParseID(run.id)), synclog.Count(synclog.KeyQueuedUnits, 0), synclog.Count(synclog.KeyInFlightUnits, counts.inFlight))
 		return nil
 	}
 	// c) Nothing dispatchable or in flight, but a RETRYING unit has a
@@ -681,8 +648,7 @@ WHERE id = $1::uuid`,
 	// being polled early for nothing.
 	if counts.nextDeferredAt != nil {
 		scheduleRedispatch(ctx, service.pool, service.logger, run.id, counts.nextDeferredAt, service.nowUTC())
-		service.logger.InfoContext(ctx, "dispatch_sync_run.deferred",
-			slog.String("sync_run_id", run.id), slog.Int("queued_units", 0), slog.Time("next_deferred_at", *counts.nextDeferredAt))
+		service.logger.Info(ctx, synclog.MsgDispatchSyncRunDeferred, synclog.Run(synclog.ParseID(run.id)), synclog.Count(synclog.KeyQueuedUnits, 0), synclog.Instant(synclog.KeyNextDeferredAt, *counts.nextDeferredAt))
 		return nil
 	}
 	// d) No pending work of any kind (a zero-unit run, or every unit
@@ -690,7 +656,7 @@ WHERE id = $1::uuid`,
 	// zero-unit and already-finalized cases the same way
 	// finalize_sync_run's own entry logic already does). A redispatch here
 	// would loop forever with nothing left to ever claim.
-	service.logger.InfoContext(ctx, "dispatch_sync_run.noop_finalize", slog.String("sync_run_id", run.id), slog.Int("queued_units", 0))
+	service.logger.Info(ctx, synclog.MsgDispatchSyncRunNoopFinalize, synclog.Run(synclog.ParseID(run.id)), synclog.Count(synclog.KeyQueuedUnits, 0))
 	finalizeTx, err := service.pool.Begin(ctx)
 	if err != nil {
 		return ErrDispatchSyncRunUnavailable
@@ -731,10 +697,7 @@ func (service *NativeDispatchSyncRunService) terminalizeFeatureDisabled(
 			return err
 		}
 	}
-	service.logger.WarnContext(ctx, "dispatch_sync_run.feature_disabled",
-		slog.String("sync_run_id", run.id), slog.String("org_id", run.orgID),
-		slog.String("error_category", featureDisabledErrorCategory),
-		slog.Int("running_units", transition.RunningUnits))
+	service.logger.Warn(ctx, synclog.MsgDispatchSyncRunFeatureDisabled, synclog.Run(synclog.ParseID(run.id)), synclog.Org(synclog.ParseID(run.orgID)), synclog.Text(synclog.KeyErrorCategory, synclog.ParseLabel(featureDisabledErrorCategory)), synclog.Count(synclog.KeyRunningUnits, transition.RunningUnits))
 	if err := tx.Commit(ctx); err != nil {
 		return err
 	}
@@ -796,9 +759,7 @@ func (service *NativeDispatchSyncRunService) denyRun(
 			}
 			recordRollupBump(ctx, rollupPathDenied)
 		}
-		service.logger.WarnContext(ctx, "dispatch_sync_run.denied_with_active_units",
-			slog.String("sync_run_id", run.id), slog.String("reason", errorText),
-			slog.Int("failed_planned_units", failedPlanned), slog.Int("failed_stale_dispatching_units", failedStale))
+		service.logger.Warn(ctx, synclog.MsgDispatchSyncRunDeniedWithActiveUnits, synclog.Run(synclog.ParseID(run.id)), synclog.Text(synclog.KeyReason, synclog.ParseLabel(decision.reason)), synclog.Count(synclog.KeyFailedPlannedUnits, failedPlanned), synclog.Count(synclog.KeyFailedStaleDispatchingUnits, failedStale))
 		if err := tx.Commit(ctx); err != nil {
 			return err
 		}
@@ -827,8 +788,7 @@ WHERE id = $1::uuid`,
 		map[string]any{}, &errorText); err != nil {
 		return err
 	}
-	service.logger.WarnContext(ctx, "dispatch_sync_run.denied",
-		slog.String("sync_run_id", run.id), slog.String("reason", errorText), slog.Int("failed_planned_units", failedPlanned))
+	service.logger.Warn(ctx, synclog.MsgDispatchSyncRunDenied, synclog.Run(synclog.ParseID(run.id)), synclog.Text(synclog.KeyReason, synclog.ParseLabel(decision.reason)), synclog.Count(synclog.KeyFailedPlannedUnits, failedPlanned))
 	if err := tx.Commit(ctx); err != nil {
 		return err
 	}

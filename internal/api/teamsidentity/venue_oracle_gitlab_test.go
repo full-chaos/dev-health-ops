@@ -4,13 +4,13 @@ package teamsidentity
 
 import (
 	"errors"
+	"github.com/full-chaos/dev-health-ops/internal/testsupport/fakehttp"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
 	"os"
 	"os/exec"
 	"path/filepath"
-	"runtime"
 	"sort"
 	"strings"
 	"testing"
@@ -18,6 +18,7 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/api/pyjson"
 	"github.com/full-chaos/dev-health-ops/internal/platform/secrets"
 	"github.com/full-chaos/dev-health-ops/internal/providerfoundation"
+	"github.com/full-chaos/dev-health-ops/internal/testsupport/moduleroot"
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/pyoracle"
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/venueoracle"
 )
@@ -149,7 +150,7 @@ func TestVenueOracleDiscoverGitLabMatchesPython(t *testing.T) {
 	if os.Getenv("DEV_HEALTH_LIVE_PYTHON_ORACLE_PROOF_DIR") == "" {
 		t.Fatal("live Python oracle opt-in requires a proof directory from ci/check_go.sh")
 	}
-	_, currentFile, _, _ := runtime.Caller(0)
+	_, currentFile, _, _ := moduleroot.Caller(0)
 	packageDir := filepath.Dir(currentFile)
 	repoRoot := filepath.Dir(filepath.Dir(filepath.Dir(packageDir)))
 	python := pyoracle.Resolve(t, repoRoot)
@@ -167,9 +168,9 @@ func TestVenueOracleDiscoverGitLabMatchesPython(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	previousClient := discoveryHTTPClient
+	previousClient := fakehttp.Client(discoveryHTTPClient)
 	discoveryHTTPClient = &http.Client{Transport: rewriteHostTransport{target: stubURL}}
-	t.Cleanup(func() { discoveryHTTPClient = previousClient })
+	t.Cleanup(func() { discoveryHTTPClient = fakehttp.Client(previousClient) })
 
 	goTeams, goTruncated, goWarnings, err := discoverGitLab(t.Context(), credential, groupPath)
 	if err != nil {

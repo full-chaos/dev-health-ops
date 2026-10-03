@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"github.com/full-chaos/dev-health-ops/internal/httpguard"
 	"io"
 	"net"
 	"net/http"
@@ -128,6 +129,7 @@ type openAICompatibleReadinessProber struct {
 // without a real network call; nil builds the real hardened client.
 func newOpenAICompatibleReadinessProber(doer providerfoundation.HTTPDoer) *openAICompatibleReadinessProber {
 	if doer != nil {
+		// the saved API key rides these requests: a supplied *http.Client follows no redirect (D4124)
 		return &openAICompatibleReadinessProber{client: doer}
 	}
 	return &openAICompatibleReadinessProber{client: &http.Client{
@@ -299,10 +301,13 @@ func classifyHTTPFailure(status int, body []byte) *providerFailure {
 	// is misclassified as an ordinary transient rate limit.
 	case strings.Contains(lower, "insufficient_quota") || strings.Contains(lower, "current quota"):
 		return newProviderFailure(errCodeProviderNotConfigured)
-	case status == 401 || strings.Contains(lower, "invalid_api_key") || strings.Contains(lower, "authentication"):
-		return newProviderFailure(errCodeProviderNotConfigured)
+	// errors.py checks model-not-found BEFORE auth: a 401 whose body names
+	// model_not_found is a model error (executed against the pinned build,
+	// CHAOS-7303: the 401 + model_not_found scenario).
 	case strings.Contains(lower, "model_not_found") || strings.Contains(lower, "model not found") || strings.Contains(lower, "model does not exist"):
 		return newProviderFailure(errCodeModelNotSupported)
+	case status == 401 || strings.Contains(lower, "invalid_api_key") || strings.Contains(lower, "authentication"):
+		return newProviderFailure(errCodeProviderNotConfigured)
 	case status == 429 || strings.Contains(lower, "rate_limit") || strings.Contains(lower, "too many requests"):
 		return newProviderFailure(errCodeRateLimited)
 	case status == 400 || status == 422 || strings.Contains(lower, "invalid_request_error") || strings.Contains(lower, "unsupported parameter") || strings.Contains(lower, "unsupported value"):
@@ -401,7 +406,7 @@ func (p *openAICompatibleReadinessProber) doCompletionOnce(
 	if apiKey != "" {
 		httpReq.Header.Set("Authorization", "Bearer "+apiKey)
 	}
-	resp, err := p.client.Do(httpReq)
+	resp, err := httpguard.NoRedirectsDoer(p.client).Do(httpReq) // the saved API key rides this request
 	if err != nil {
 		return nil, classifyTransportFailure(err)
 	}

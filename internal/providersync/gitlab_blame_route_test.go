@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"github.com/full-chaos/dev-health-ops/internal/testsupport/fakehttp"
 	"io"
 	"net/http"
 	"net/url"
@@ -104,7 +105,7 @@ func (coverage staticGitLabBlameCoverage) BlamedPaths(context.Context, Claim, st
 
 func TestGitLabBlameFoundationExpandsLiveRangesAndNormalizesDefaults(t *testing.T) {
 	claim := nativeTestClaim("gitlab", "blame")
-	client := gitLabRepositoryClient(t, &gitLabBlameDoer{t: t, fileCount: 1}, "https://gitlab.example")
+	client := gitLabRepositoryClient(t, fakehttp.Client(&gitLabBlameDoer{t: t, fileCount: 1}), "https://gitlab.example")
 	normalizedAt := time.Date(2026, 7, 23, 12, 30, 0, 987654321, time.UTC)
 	batch, err := collectGitLabBlameFoundation(context.Background(), claim, client, normalizedAt)
 	if err != nil {
@@ -137,9 +138,9 @@ func TestGitLabBlameFoundationExpandsLiveRangesAndNormalizesDefaults(t *testing.
 func TestGitLabBlameRouteSelectsTenantCoverageAndAccountsPhysicalRequests(t *testing.T) {
 	claim := nativeTestClaim("gitlab", "blame")
 	var paths, requests []string
-	client := gitLabRepositoryClient(t, &gitLabBlameDoer{
+	client := gitLabRepositoryClient(t, fakehttp.Client(&gitLabBlameDoer{
 		t: t, fileCount: 4, paths: &paths, requests: &requests,
-	}, "https://gitlab.example")
+	}), "https://gitlab.example")
 	batch, err := (GitLabBlameRouteHandler{
 		Coverage: staticGitLabBlameCoverage{paths: []string{"src/file-000.go"}},
 		MaxFiles: 2,
@@ -161,9 +162,9 @@ func TestGitLabBlameRouteSelectsTenantCoverageAndAccountsPhysicalRequests(t *tes
 func TestGitLabBlameRouteContinuesOrdinaryFileFailuresWithoutWatermark(t *testing.T) {
 	claim := nativeTestClaim("gitlab", "blame")
 	var paths []string
-	client := gitLabRepositoryClient(t, &gitLabBlameDoer{
+	client := gitLabRepositoryClient(t, fakehttp.Client(&gitLabBlameDoer{
 		t: t, fileCount: 3, paths: &paths, failedPaths: map[string]bool{"src/file-000.go": true},
-	}, "https://gitlab.example")
+	}), "https://gitlab.example")
 	batch, err := (GitLabBlameRouteHandler{Coverage: staticGitLabBlameCoverage{}}).Collect(
 		context.Background(), claim, providerfoundation.Credential{}, client,
 		time.Date(2026, 7, 23, 12, 30, 0, 0, time.UTC),
@@ -181,9 +182,9 @@ func TestGitLabBlameRouteContinuesOrdinaryFileFailuresWithoutWatermark(t *testin
 
 func TestGitLabBlameRouteAbortsOnRateLimit(t *testing.T) {
 	claim := nativeTestClaim("gitlab", "blame")
-	client := gitLabRepositoryClient(t, &gitLabBlameDoer{
+	client := gitLabRepositoryClient(t, fakehttp.Client(&gitLabBlameDoer{
 		t: t, fileCount: 1, rateLimitPaths: map[string]bool{"src/file-000.go": true},
-	}, "https://gitlab.example")
+	}), "https://gitlab.example")
 	_, err := (GitLabBlameRouteHandler{Coverage: staticGitLabBlameCoverage{}}).Collect(
 		context.Background(), claim, providerfoundation.Credential{}, client,
 		time.Date(2026, 7, 23, 12, 30, 0, 0, time.UTC),
@@ -197,7 +198,7 @@ func TestGitLabBlameRouteAbortsOnRateLimit(t *testing.T) {
 func TestGitLabBlameRouteNoCommitAtBoundDoesNotInventRows(t *testing.T) {
 	claim := nativeTestClaim("gitlab", "blame")
 	claim.BeforeAt = ptrTime(time.Date(2026, 7, 31, 0, 0, 0, 0, time.UTC))
-	client := gitLabRepositoryClient(t, &gitLabBlameDoer{t: t, emptyBound: true}, "https://gitlab.example")
+	client := gitLabRepositoryClient(t, fakehttp.Client(&gitLabBlameDoer{t: t, emptyBound: true}), "https://gitlab.example")
 	batch, err := (GitLabBlameRouteHandler{Coverage: staticGitLabBlameCoverage{}}).Collect(
 		context.Background(), claim, providerfoundation.Credential{}, client,
 		time.Date(2026, 7, 23, 12, 30, 0, 0, time.UTC),
@@ -213,9 +214,9 @@ func TestGitLabBlameRouteNoCommitAtBoundDoesNotInventRows(t *testing.T) {
 
 func TestGitLabBlameRouteFailsClosedOnTreePaginationCap(t *testing.T) {
 	claim := nativeTestClaim("gitlab", "blame")
-	client := gitLabRepositoryClient(t, &gitLabBlameDoer{
+	client := gitLabRepositoryClient(t, fakehttp.Client(&gitLabBlameDoer{
 		t: t, fullTreeOnFirst: true,
-	}, "https://gitlab.example")
+	}), "https://gitlab.example")
 	_, err := (GitLabBlameRouteHandler{
 		Coverage: staticGitLabBlameCoverage{}, MaxPages: 1,
 	}).Collect(context.Background(), claim, providerfoundation.Credential{}, client,
@@ -228,7 +229,7 @@ func TestGitLabBlameRouteFailsClosedOnTreePaginationCap(t *testing.T) {
 func TestGitLabBlameRouteCoverageFailureMakesNoBlameRequest(t *testing.T) {
 	claim := nativeTestClaim("gitlab", "blame")
 	var paths []string
-	client := gitLabRepositoryClient(t, &gitLabBlameDoer{t: t, fileCount: 1, paths: &paths}, "https://gitlab.example")
+	client := gitLabRepositoryClient(t, fakehttp.Client(&gitLabBlameDoer{t: t, fileCount: 1, paths: &paths}), "https://gitlab.example")
 	batch, err := (GitLabBlameRouteHandler{
 		Coverage: staticGitLabBlameCoverage{err: errors.New("readback unavailable")},
 	}).Collect(context.Background(), claim, providerfoundation.Credential{}, client,
@@ -264,7 +265,7 @@ func (doer *gitLabBlameAlwaysFailingDoer) Do(*http.Request) (*http.Response, err
 // reported alongside an error is always 0 -- this asserts that literal
 // rather than a read of the pre-call variable.
 func TestGitLabBlameTreeRefReturnsZeroPagesOnError(t *testing.T) {
-	client := gitLabRepositoryClient(t, &gitLabBlameAlwaysFailingDoer{t: t}, "https://gitlab.example")
+	client := gitLabRepositoryClient(t, fakehttp.Client(&gitLabBlameAlwaysFailingDoer{t: t}), "https://gitlab.example")
 	beforeAt := time.Date(2026, 7, 31, 0, 0, 0, 0, time.UTC)
 	ref, pages, err := gitLabBlameTreeRef(context.Background(), client, "/api/v4/projects/123", "main", &beforeAt)
 	if err == nil {
@@ -280,7 +281,7 @@ func TestGitLabBlameTreeRefReturnsZeroPagesOnError(t *testing.T) {
 
 func TestGitLabBlameRouteRejectsWrongDataset(t *testing.T) {
 	claim := nativeTestClaim("gitlab", "files")
-	client := gitLabRepositoryClient(t, &gitLabBlameDoer{t: t}, "https://gitlab.example")
+	client := gitLabRepositoryClient(t, fakehttp.Client(&gitLabBlameDoer{t: t}), "https://gitlab.example")
 	_, err := (GitLabBlameRouteHandler{Coverage: staticGitLabBlameCoverage{}}).Collect(
 		context.Background(), claim, providerfoundation.Credential{}, client,
 		time.Date(2026, 7, 23, 12, 30, 0, 0, time.UTC),

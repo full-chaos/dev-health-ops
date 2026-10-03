@@ -10,11 +10,11 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/url"
-	"os"
 	"os/exec"
 	"path/filepath"
 	"regexp"
 	"sort"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -24,6 +24,7 @@ import (
 
 	"github.com/full-chaos/dev-health-ops/internal/cli"
 	"github.com/full-chaos/dev-health-ops/internal/pgmigrate"
+	"github.com/full-chaos/dev-health-ops/internal/synchandoff"
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/containers"
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/pyoracle"
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/venueoracle"
@@ -332,28 +333,18 @@ const backfillPythonBuild = "a4847c5e93607451a0c987b314d37e02fc43ce85"
 // pinned separately (fixedNow, in the program's input).
 var backfillPythonSettings = map[string]string{"PYTHONHASHSEED": "0", "OTEL_ENABLED": "false", "TZ": "UTC"}
 
-// backfillPythonEnv is the producer's CLOSED environment: PATH and HOME, the checkout's source, and
-// backfillPythonSettings; nothing is inherited from the test process. The database address is appended by
-// the caller (a per-run value).
-func backfillPythonEnv(root string) []string {
-	env := []string{"PATH=" + os.Getenv("PATH"), "HOME=" + os.Getenv("HOME"), "PYTHONPATH=" + filepath.Join(root, "src"), "PYTHONDONTWRITEBYTECODE=1"}
-	for _, name := range []string{"OTEL_ENABLED", "PYTHONHASHSEED", "TZ"} {
-		env = append(env, name+"="+backfillPythonSettings[name])
-	}
-	return env
-}
-
-func pythonRun(t *testing.T, root, uri string, s scenario) (int, string) {
+func pythonRun(t *testing.T, producer *venueoracle.Producer, uri string, s scenario) (int, string) {
 	t.Helper()
-	python := pyoracle.Resolve(t, root)
 	input, err := json.Marshal(map[string]any{"args": append([]string{"--config-id", s.configID()}, s.args...), "config_id": s.configID(), "now": fixedNow})
 	if err != nil {
 		t.Fatal(err)
 	}
 	pyURI := strings.Replace(uri, "postgres://", "postgresql://", 1)
-	command := exec.Command(python, "-c", livePythonProgram)
+	command, err := producer.Command(context.Background(), backfillPythonSettings, []string{"POSTGRES_URI=" + pyURI, "DATABASE_URI=" + pyURI}, "-c", livePythonProgram)
+	if err != nil {
+		t.Fatal(err)
+	}
 	command.Stdin = bytes.NewReader(input)
-	command.Env = append(backfillPythonEnv(root), "POSTGRES_URI="+pyURI, "DATABASE_URI="+pyURI)
 	var stderr bytes.Buffer
 	command.Stderr = &stderr
 	command.Stdout = &bytes.Buffer{}
@@ -362,7 +353,7 @@ func pythonRun(t *testing.T, root, uri string, s scenario) (int, string) {
 	if exit, ok := err.(*exec.ExitError); ok {
 		code = exit.ExitCode()
 	} else if err != nil {
-		t.Fatalf("run python: %v", pyoracle.RunError(python, err, []byte(stderr.String())))
+		t.Fatalf("run python: %v", pyoracle.RunError(command.Path, err, []byte(stderr.String())))
 	}
 	return code, stderr.String()
 }
@@ -522,7 +513,7 @@ func TestBackfillRunWritesTheFrozenPythonRows(t *testing.T) {
 	golden := venueoracle.OpenGolden(t, venueoracle.GoldenSpec{
 		Path:        "testdata/golden/backfill_run.json",
 		PythonBuild: backfillPythonBuild,
-		SHA256:      "445d484dc588e2a0dbe4682c1c7edceef2d4ed5e35f2f03df513ce44280cf4a9",
+		SHA256:      "db44d32a8cba728fd51d5a47088b39edbf9715e2ed21a39035b2e7650029944a",
 		Recipe: "git worktree add --detach $DIR " + backfillPythonBuild + " (with its .venv: uv sync --frozen --no-install-project); then from the repository root: " +
 			"go run ./internal/testsupport/venueoracle/goldenrecord -pkg ./internal/backfillrun/ -test '^TestBackfillRunWritesTheFrozenPythonRows$' -python-root $DIR",
 	})
@@ -541,12 +532,13 @@ func TestBackfillRunWritesTheFrozenPythonRows(t *testing.T) {
 		t.Fatal(err)
 	}
 	request := venueoracle.ProgramRequest("backfill run scenarios", livePythonProgram, input, backfillPythonSettings)
-	answers := golden.Produce(t, root, []venueoracle.Request{request}, func(_ *venueoracle.Producer, _ []venueoracle.Request) []venueoracle.Response {
+	answers := golden.Produce(t, root, []venueoracle.Request{request}, func(producer *venueoracle.Producer, _ []venueoracle.Request) []venueoracle.Response {
+		producer.RequireDeployed()
 		uri := setup(t)
 		var produced []result
 		for _, s := range comparable() {
 			reset(t, uri, s)
-			code, stderr := pythonRun(t, root, uri, s)
+			code, stderr := pythonRun(t, producer, uri, s)
 			checkRefusal(t, "python", s, code, stderr)
 			produced = append(produced, result{Name: s.name, Exit: code, Rows: rows(t, uri)})
 		}
@@ -686,6 +678,8 @@ VALUES ($1::uuid, $2, $3::uuid, 'backfill', 'backfill', 'planned', $4, 0, 0, now
 func TestWaitFollowsTheSchedulerToTheOutcome(t *testing.T) {
 	pool, occurrenceID, plan, quarantine := plannedOccurrence(t)
 	ctx := context.Background()
+	// CHAOS-8222: Wait counts each terminal outcome it returns, once.
+	before := awaitScrape(t)
 
 	pending, err := Wait(ctx, pool, occurrenceID, 400*time.Millisecond, 50*time.Millisecond)
 	if err != nil || pending.State != StatePending {
@@ -706,6 +700,77 @@ func TestWaitFollowsTheSchedulerToTheOutcome(t *testing.T) {
 	if err != nil || planned.State != StateMaterialized || planned.TotalUnits != 42 || planned.SyncRunID != uuidN(0x2a, 1) {
 		t.Fatalf("a planned run: %+v, %v", planned, err)
 	}
+	after := awaitScrape(t)
+	for _, outcome := range []string{"pending", "quarantined", "materialized"} {
+		series := `sync_manual_trigger_await_outcome_total{outcome="` + outcome + `"}`
+		if got := after[series] - before[series]; got != 1 {
+			t.Errorf("%s moved by %v, want 1", series, got)
+		}
+		count := `sync_manual_trigger_await_latency_seconds_count{outcome="` + outcome + `"}`
+		if got := after[count] - before[count]; got != 1 {
+			t.Errorf("%s moved by %v, want 1", count, got)
+		}
+	}
+	// The latency is the time Wait polled, not zero: the pending wait lasted its
+	// whole 400ms deadline, so its sum moved by at least 0.3s and its 0.25s bucket
+	// did not move; the +Inf bucket moved by one.
+	sum := `sync_manual_trigger_await_latency_seconds_sum{outcome="pending"}`
+	if got := after[sum] - before[sum]; got < 0.3 {
+		t.Errorf("%s moved by %v, want at least 0.3 (the 400ms wait)", sum, got)
+	}
+	small := `sync_manual_trigger_await_latency_seconds_bucket{outcome="pending",le="0.25"}`
+	if got := after[small] - before[small]; got != 0 {
+		t.Errorf("%s moved by %v, want 0 (a 400ms wait is over 0.25s)", small, got)
+	}
+	inf := `sync_manual_trigger_await_latency_seconds_bucket{outcome="pending",le="+Inf"}`
+	if got := after[inf] - before[inf]; got != 1 {
+		t.Errorf("%s moved by %v, want 1", inf, got)
+	}
+}
+
+// An error return of Wait (a cancelled context on a planned occurrence) is not an
+// outcome: no outcome series and no count moves.
+func TestWaitErrorReturnCountsNothing(t *testing.T) {
+	pool, occurrenceID, _, _ := plannedOccurrence(t)
+	before := awaitScrape(t)
+	cancelled, cancel := context.WithCancel(context.Background())
+	cancel()
+	if _, err := Wait(cancelled, pool, occurrenceID, 400*time.Millisecond, 50*time.Millisecond); err == nil {
+		t.Fatal("a cancelled context must make Wait return an error")
+	}
+	after := awaitScrape(t)
+	for _, outcome := range []string{"pending", "quarantined", "materialized"} {
+		for _, series := range []string{
+			`sync_manual_trigger_await_outcome_total{outcome="` + outcome + `"}`,
+			`sync_manual_trigger_await_latency_seconds_count{outcome="` + outcome + `"}`,
+		} {
+			if got := after[series] - before[series]; got != 0 {
+				t.Errorf("%s moved by %v on an error return, want 0", series, got)
+			}
+		}
+	}
+}
+
+// awaitScrape reads the process-wide await metrics as series -> value.
+func awaitScrape(t *testing.T) map[string]float64 {
+	t.Helper()
+	var b strings.Builder
+	if err := synchandoff.AwaitMetricsSource().WritePrometheus(&b); err != nil {
+		t.Fatal(err)
+	}
+	out := map[string]float64{}
+	for _, line := range strings.Split(b.String(), "\n") {
+		if line == "" || strings.HasPrefix(line, "#") {
+			continue
+		}
+		cut := strings.LastIndex(line, " ")
+		value, err := strconv.ParseFloat(line[cut+1:], 64)
+		if err != nil {
+			t.Fatal(err)
+		}
+		out[line[:cut]] = value
+	}
+	return out
 }
 
 // TestVerbReportsWhatTheSchedulerDid runs the verb end to end: it prints the

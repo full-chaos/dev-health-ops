@@ -7,7 +7,6 @@ import (
 	"context"
 	"encoding/json"
 	"io"
-	"os/exec"
 	"path/filepath"
 	"sort"
 	"strings"
@@ -65,17 +64,18 @@ func goRevisions(t *testing.T, uri, verb string) string {
 	return stdout.String()
 }
 
-func pythonRevisions(t *testing.T, root, uri, verb string) string {
+func pythonRevisions(t *testing.T, producer *venueoracle.Producer, uri, verb string) string {
 	t.Helper()
-	python := pyoracle.Resolve(t, root)
 	program := "import sys\nfrom dev_health_ops import cli\nraise SystemExit(cli.main(sys.argv[1:]))\n"
-	command := exec.Command(python, "-c", program, "migrate", "postgres", verb)
 	pyURI := strings.Replace(uri, "postgres://", "postgresql://", 1)
-	command.Env = append(pgmigratePythonEnv(root, pgmigratePythonSettings), "POSTGRES_URI="+pyURI, "DATABASE_URI="+pyURI)
+	command, err := producer.Command(context.Background(), pgmigratePythonSettings, []string{"POSTGRES_URI=" + pyURI, "DATABASE_URI=" + pyURI}, "-c", program, "migrate", "postgres", verb)
+	if err != nil {
+		t.Fatal(err)
+	}
 	var stdout, stderr bytes.Buffer
 	command.Stdout, command.Stderr = &stdout, &stderr
 	if err := command.Run(); err != nil {
-		t.Fatalf("the Python producer failed: %v", pyoracle.RunError(python, err, []byte(stderr.String())))
+		t.Fatalf("the Python producer failed: %v", pyoracle.RunError(command.Path, err, []byte(stderr.String())))
 	}
 	return stdout.String()
 }
@@ -156,7 +156,7 @@ func TestRevisionsMatchTheFrozenAlembicOutput(t *testing.T) {
 		t.Fatal(err)
 	}
 	request := venueoracle.ProgramRequest("revisions scenarios", revisionsPythonProgram, input, pgmigratePythonSettings)
-	answers := golden.Produce(t, root, []venueoracle.Request{request}, func(_ *venueoracle.Producer, _ []venueoracle.Request) []venueoracle.Response {
+	answers := golden.Produce(t, root, []venueoracle.Request{request}, func(producer *venueoracle.Producer, _ []venueoracle.Request) []venueoracle.Response {
 		uri, exec := revisionsDatabase(t)
 		exec("CREATE TABLE alembic_version_saved AS SELECT * FROM alembic_version")
 		var results []revisionResult
@@ -164,7 +164,7 @@ func TestRevisionsMatchTheFrozenAlembicOutput(t *testing.T) {
 			if scenario.setup != "" {
 				exec(scenario.setup)
 			}
-			results = append(results, revisionResult{Name: scenario.name, Stdout: pythonRevisions(t, root, uri, scenario.verb)})
+			results = append(results, revisionResult{Name: scenario.name, Stdout: pythonRevisions(t, producer, uri, scenario.verb)})
 			exec("DROP TABLE IF EXISTS alembic_version")
 			exec("CREATE TABLE alembic_version AS SELECT * FROM alembic_version_saved")
 		}

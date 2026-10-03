@@ -3,6 +3,7 @@ package providersync
 import (
 	"context"
 	"encoding/json"
+	"github.com/full-chaos/dev-health-ops/internal/testsupport/fakehttp"
 	"strings"
 	"testing"
 	"time"
@@ -220,7 +221,7 @@ func TestJiraWorkItemsRouteIncludesFrozenPythonMetricEffect(t *testing.T) {
 	normalizedAt := time.Date(2026, 8, 10, 12, 0, 0, 123456000, time.UTC)
 	client := jiraWorkItemsTestClient(
 		t,
-		&jiraAtlassianDoer{t: t},
+		fakehttp.Client(&jiraAtlassianDoer{t: t}),
 		providerfoundation.LeaseGuardFunc(func(context.Context) error { return nil }),
 	)
 	classifier, err := NewInvestmentClassifier(investmentConfigPath(t, "real"))

@@ -1054,15 +1054,12 @@ def test_every_go_call_of_check_go_names_mod_readonly_and_trimpath() -> None:
         )
     for number, raw in enumerate(CHECK_GO.read_text(encoding="utf-8").splitlines(), 1):
         line = raw.strip()
-        if (
-            line.startswith("#")
-            or not GO_CALL.search(line)
-            or "-mod=readonly" not in line
-        ):
+        call = GO_CALL.search(line)
+        if line.startswith("#") or call is None or "-mod=readonly" not in line:
             continue
         if "printf" in line or "die " in line:
             continue
-        head = line[GO_CALL.search(line).start() :].strip()[:25]
+        head = line[call.start() :].strip()[:25]
         assert any(head in command for command in derived), (
             f"check_go.sh line {number} holds a go call the derivation missed: {line[:90]}"
         )

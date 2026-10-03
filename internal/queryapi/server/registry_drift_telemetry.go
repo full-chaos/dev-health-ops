@@ -92,7 +92,7 @@ func defaultRecordRoutingRowsForDigest(ctx context.Context, counts map[string]in
 
 	if total > 0 && live == 0 {
 		slog.Default().LogAttrs(ctx, slog.LevelError,
-			"query-api: routing rows stale -- every go_api_routing_state row is keyed to a schema digest this binary does not compute, so no Go operation is reachable and every request silently falls back to Python",
+			"query-api: routing rows stale -- every go_api_routing_state row is keyed to a schema digest this binary does not compute, so no operation that has a routing row is reachable",
 			slog.String("schema_digest", schemaDigest),
 			slog.Int64("routing_rows_for_digest", live),
 			slog.Int64("routing_rows_total", total),

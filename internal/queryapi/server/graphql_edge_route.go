@@ -437,7 +437,8 @@ func refuseGraphQLEdgeUnregistered(w http.ResponseWriter) {
 // off, or unreadable (the switch fails closed): a GraphQL error with status
 // 200, as the Python edge's Strawberry fallback answered a query in that
 // state -- a store failure is an error in the response, never a bare 404.
-// Nothing runs.
+// Nothing runs. An operation with no routing row at all never gets here: the
+// catalog rule serves it (CHAOS-8517, routeswitch/catalog_switch.go).
 func graphQLEdgeNotEnabled(operation string) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		log.Printf("query-api: /graphql refused an operation that is not enabled: operation=%s", operation)

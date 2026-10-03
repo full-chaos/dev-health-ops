@@ -28,6 +28,10 @@ package goapiproof
 //   - it never INSERTS. A ModeChange for an operation with no row is
 //     reported as "nothing to disable", never written: manufacturing a
 //     `python` row for something that was never enabled invents history.
+//     Since CHAOS-8517 a CATALOG operation with no row at any schema
+//     digest is SERVED, so for it "nothing to disable" does not mean
+//     "not served": the verb says so by name (goapicli/routing/disable.go)
+//     and points at `seed`, which writes the first row, in shadow.
 //
 // The guard lives in the UPDATE's WHERE, not in a separate earlier read:
 // a row repointed between the plan and the write simply does not match,
@@ -47,8 +51,10 @@ import (
 // DisableModes are the only modes `disable` may set. All three make an
 // operation UNREACHABLE to a real client:
 //
-//   - python   -- the documented safe default; identical in effect to
-//     having no row at all.
+//   - python   -- the documented safe default. (It was once identical in
+//     effect to having no row at all; a catalog operation with no row at
+//     any schema digest is now served, CHAOS-8517, so a python row is what
+//     keeps one dark.)
 //   - disabled -- same reachability, but records a deliberate decision
 //     rather than a default, so a reader can tell "turned off" from
 //     "never on".

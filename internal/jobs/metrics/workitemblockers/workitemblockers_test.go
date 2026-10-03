@@ -43,4 +43,10 @@ func TestReadsRefuseAMissingConnectionOrOrganization(t *testing.T) {
 	if _, err := LoadBlockedIntervals(ctx, nil, "org"); !errors.Is(err, ErrInvalidRequest) {
 		t.Fatalf("LoadBlockedIntervals with no connection: %v", err)
 	}
+	if _, err := LoadRelationsNaming(ctx, nil, "org", []string{"jira:OPS-1"}, 10); !errors.Is(err, ErrInvalidRequest) {
+		t.Fatalf("LoadRelationsNaming with no connection: %v", err)
+	}
+	if _, err := LoadEndsLimited(ctx, nil, "org", nil, 10); !errors.Is(err, ErrInvalidRequest) {
+		t.Fatalf("LoadEndsLimited with no connection: %v", err)
+	}
 }

@@ -56,18 +56,54 @@ var ErrLimitExceeded = errors.New("workitemblockers: the read found more rows th
 func LoadRelations(
 	ctx context.Context, conn Querier, organizationID string,
 ) ([]workitemmetrics.BlockingRelation, error) {
+	return loadRelations(ctx, conn, organizationID, nil, 0)
+}
+
+// LoadRelationsNaming reads the blocking relations that name one of itemIDs
+// at EITHER end, and no more than limit of them: the keyed, bounded form the
+// sync-time deriver uses for the items of one sync unit. Both ends are
+// matched because the two relation forms put the blocked item on different
+// sides ("blocks": the target; "blocked_by": the source). More rows than
+// limit is ErrLimitExceeded, never a truncated answer. No item id reads
+// nothing.
+func LoadRelationsNaming(
+	ctx context.Context, conn Querier, organizationID string, itemIDs []string, limit int,
+) ([]workitemmetrics.BlockingRelation, error) {
+	if conn == nil || strings.TrimSpace(organizationID) == "" || limit < 1 {
+		return nil, ErrInvalidRequest
+	}
+	if len(itemIDs) == 0 {
+		return nil, nil
+	}
+	return loadRelations(ctx, conn, organizationID, itemIDs, limit)
+}
+
+func loadRelations(
+	ctx context.Context, conn Querier, organizationID string, naming []string, limit int,
+) ([]workitemmetrics.BlockingRelation, error) {
 	if conn == nil || strings.TrimSpace(organizationID) == "" {
 		return nil, ErrInvalidRequest
 	}
-	rows, err := conn.Query(ctx, `
+	query := `
 SELECT source_work_item_id, target_work_item_id, relationship_type, relationship_semantics_version, last_synced
 FROM work_item_dependencies FINAL
 WHERE org_id = ?
   AND relationship_type IN ('blocks', 'blocked_by')
-  AND relationship_semantics_version = ?
-ORDER BY source_work_item_id, target_work_item_id, relationship_type`,
-		organizationID, workitemmetrics.CanonicalBlocksSemantics,
-	)
+  AND relationship_semantics_version = ?`
+	args := []any{organizationID, workitemmetrics.CanonicalBlocksSemantics}
+	if len(naming) > 0 {
+		query += `
+  AND (has(?, source_work_item_id) OR has(?, target_work_item_id))`
+		args = append(args, naming, naming)
+	}
+	query += `
+ORDER BY source_work_item_id, target_work_item_id, relationship_type`
+	if limit > 0 {
+		query += `
+LIMIT ?`
+		args = append(args, limit+1)
+	}
+	rows, err := conn.Query(ctx, query, args...)
 	if err != nil {
 		return nil, fmt.Errorf("load blocking relations: %w", err)
 	}
@@ -75,6 +111,9 @@ ORDER BY source_work_item_id, target_work_item_id, relationship_type`,
 
 	var relations []workitemmetrics.BlockingRelation
 	for rows.Next() {
+		if limit > 0 && len(relations) >= limit {
+			return nil, fmt.Errorf("%w: more than %d blocking relations", ErrLimitExceeded, limit)
+		}
 		var relation workitemmetrics.BlockingRelation
 		if err := rows.Scan(
 			&relation.SourceID, &relation.TargetID, &relation.RelationshipType,
@@ -130,6 +169,23 @@ func endLookup(relations []workitemmetrics.BlockingRelation) (ids, keys []string
 func LoadEnds(
 	ctx context.Context, conn Querier, organizationID string, relations []workitemmetrics.BlockingRelation,
 ) ([]workitemmetrics.RelationEnd, error) {
+	return loadEnds(ctx, conn, organizationID, relations, 0)
+}
+
+// LoadEndsLimited is LoadEnds bounded to limit rows, for the sync-time
+// deriver. More rows than limit is ErrLimitExceeded.
+func LoadEndsLimited(
+	ctx context.Context, conn Querier, organizationID string, relations []workitemmetrics.BlockingRelation, limit int,
+) ([]workitemmetrics.RelationEnd, error) {
+	if limit < 1 {
+		return nil, ErrInvalidRequest
+	}
+	return loadEnds(ctx, conn, organizationID, relations, limit)
+}
+
+func loadEnds(
+	ctx context.Context, conn Querier, organizationID string, relations []workitemmetrics.BlockingRelation, limit int,
+) ([]workitemmetrics.RelationEnd, error) {
 	if conn == nil || strings.TrimSpace(organizationID) == "" {
 		return nil, ErrInvalidRequest
 	}
@@ -149,11 +205,17 @@ func LoadEnds(
 		predicates = append(predicates, "(provider IN ('jira', 'linear') AND upper(trimBoth(substring(work_item_id, position(work_item_id, ':') + 1))) IN ?)")
 		args = append(args, keys)
 	}
-	rows, err := conn.Query(ctx, `
+	query := `
 SELECT work_item_id, provider, status, created_at, completed_at, last_synced
 FROM work_items FINAL
-WHERE org_id = ? AND (`+strings.Join(predicates, " OR ")+`)
-ORDER BY work_item_id, last_synced`, args...)
+WHERE org_id = ? AND (` + strings.Join(predicates, " OR ") + `)
+ORDER BY work_item_id, last_synced`
+	if limit > 0 {
+		query += `
+LIMIT ?`
+		args = append(args, limit+1)
+	}
+	rows, err := conn.Query(ctx, query, args...)
 	if err != nil {
 		return nil, fmt.Errorf("load relation ends: %w", err)
 	}
@@ -161,6 +223,9 @@ ORDER BY work_item_id, last_synced`, args...)
 
 	var ends []workitemmetrics.RelationEnd
 	for rows.Next() {
+		if limit > 0 && len(ends) >= limit {
+			return nil, fmt.Errorf("%w: more than %d relation ends", ErrLimitExceeded, limit)
+		}
 		var (
 			end         workitemmetrics.RelationEnd
 			completedAt *time.Time

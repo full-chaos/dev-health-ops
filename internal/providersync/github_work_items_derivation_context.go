@@ -3,11 +3,14 @@ package providersync
 import (
 	"context"
 	"errors"
+	"fmt"
 	"sort"
 	"strings"
 	"time"
 
 	"github.com/ClickHouse/clickhouse-go/v2/lib/driver"
+	"github.com/full-chaos/dev-health-ops/internal/jobs/metrics/workitemblockers"
+	"github.com/full-chaos/dev-health-ops/internal/jobs/metrics/workitemmetrics"
 	"github.com/full-chaos/dev-health-ops/internal/providerfoundation"
 	"github.com/full-chaos/dev-health-ops/internal/teamattribution"
 )
@@ -46,6 +49,27 @@ type githubWorkItemDerivationContextSource interface {
 		Claim,
 		[]string,
 	) ([]githubWorkItemDependencyRow, error)
+
+	// LoadStoredBlockingFacts returns the STORED inputs of the "blocked from
+	// open blockers" rule (CHAOS-8493) for this unit's items: the stored
+	// blocking relations that name one of the given work items at either
+	// end, and the stored work items that those relations AND the given
+	// fresh relations name. A blocker is rarely in the unit being synced --
+	// it is another item, often of another repository or another provider --
+	// so without this read the unit could not tell which of its items are
+	// blocked, and the state durations it writes would disagree with the
+	// daily family's, which reads the same facts
+	// (internal/jobs/metrics/workitemblockers).
+	//
+	// REQUIRED, like LoadStoredInheritableEdges and for its reason: a double
+	// that quietly had no blocking facts would keep every test green while
+	// the two writers of work_item_state_durations_daily disagreed.
+	LoadStoredBlockingFacts(
+		context.Context,
+		Claim,
+		[]string,
+		[]workitemmetrics.BlockingRelation,
+	) ([]workitemmetrics.BlockingRelation, []workitemmetrics.RelationEnd, error)
 }
 
 type githubWorkItemClickHouseDerivationContextSource struct {
@@ -427,6 +451,65 @@ func (source githubWorkItemClickHouseDerivationContextSource) LoadStoredInherita
 		lastErr = err
 	}
 	return nil, lastErr
+}
+
+// LoadStoredBlockingFacts reads the stored blocking relations that name one
+// of this unit's items and the stored items those relations name (CHAOS-8493).
+//
+// Bounded like every other read here: tenant-scoped, keyed on the unit's item
+// ids, capped by the same context limit. ONE retry, then FAIL CLOSED, for the
+// reason LoadStoredInheritableEdges gives: a unit that computed without these
+// facts would write full-length rows for the statuses the blocked hours
+// belong to, and nothing in those rows would say the read had failed. An
+// over-limit read is not retried.
+func (source githubWorkItemClickHouseDerivationContextSource) LoadStoredBlockingFacts(
+	ctx context.Context,
+	claim Claim,
+	itemIDs []string,
+	fresh []workitemmetrics.BlockingRelation,
+) ([]workitemmetrics.BlockingRelation, []workitemmetrics.RelationEnd, error) {
+	if ctx == nil || source.Conn == nil || source.Lease == nil || claim.Validate() != nil ||
+		!isDerivedWorkItemProvider(claim.Provider) || claim.Dataset != "work-items" {
+		return nil, nil, ErrInvalidConfiguration
+	}
+	if len(itemIDs) == 0 {
+		return nil, nil, nil
+	}
+	if err := source.Lease.Assert(ctx); err != nil {
+		return nil, nil, err
+	}
+	var lastErr error
+	for attempt := 0; attempt < 2; attempt++ {
+		relations, ends, err := source.queryStoredBlockingFacts(ctx, claim.OrgID, itemIDs, fresh)
+		if err == nil {
+			return relations, ends, nil
+		}
+		if errors.Is(err, workitemblockers.ErrLimitExceeded) {
+			return nil, nil, fmt.Errorf("%w: %w", ErrEffectRecoveryUnsafe, err)
+		}
+		lastErr = err
+	}
+	return nil, nil, lastErr
+}
+
+func (source githubWorkItemClickHouseDerivationContextSource) queryStoredBlockingFacts(
+	ctx context.Context,
+	orgID string,
+	itemIDs []string,
+	fresh []workitemmetrics.BlockingRelation,
+) ([]workitemmetrics.BlockingRelation, []workitemmetrics.RelationEnd, error) {
+	limit := teamattribution.GithubWorkItemDerivationContextLimit
+	stored, err := workitemblockers.LoadRelationsNaming(ctx, source.Conn, orgID, itemIDs, limit)
+	if err != nil {
+		return nil, nil, err
+	}
+	named := make([]workitemmetrics.BlockingRelation, 0, len(stored)+len(fresh))
+	named = append(append(named, stored...), fresh...)
+	ends, err := workitemblockers.LoadEndsLimited(ctx, source.Conn, orgID, named, limit)
+	if err != nil {
+		return nil, nil, err
+	}
+	return stored, ends, nil
 }
 
 func (source githubWorkItemClickHouseDerivationContextSource) queryStoredInheritableEdges(

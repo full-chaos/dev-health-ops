@@ -283,6 +283,10 @@ func (deriver LinearWorkItemDeriver) Derive(
 		return nil, nil, err
 	}
 	deriver.observations.recordStoredEdgeMerge(derivationContext.StoredEdgeMerge)
+	blocked, err := loadWorkItemBlockedIntervalsForProvider(ctx, "linear", claim, githubRows, deriver.Source)
+	if err != nil {
+		return nil, nil, err
+	}
 	aiAttributions, err := normalizeLinearWorkItemAIAttributions(claim, rows, normalizedAt)
 	if err != nil {
 		return nil, nil, err
@@ -313,7 +317,7 @@ func (deriver LinearWorkItemDeriver) Derive(
 			return nil, nil, err
 		}
 		surfaces, err := buildWorkItemDerivedSurfacesForProvider(
-			"linear", claim, githubRows, day, normalizedAt, derivationContext,
+			"linear", claim, githubRows, day, normalizedAt, derivationContext, blocked,
 		)
 		if err != nil {
 			return nil, nil, err

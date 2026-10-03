@@ -252,6 +252,50 @@ ENVIRONMENTS: tuple[dict[str, str], ...] = (
 
 CREDENTIAL_IDS = (None, "", ROW_UUID)
 
+# Windows the main sweep lacks: end without start, and negative spans.
+EXTRA_WINDOWS = (
+    (None, BASE),
+    (None, BASE + timedelta(days=3)),
+    (BASE, BASE - timedelta(hours=1)),
+    (BASE, BASE - timedelta(days=1)),
+    (BASE, BASE - timedelta(days=2)),
+    (BASE, BASE - timedelta(days=2, seconds=1)),
+    (BASE, BASE - timedelta(days=3, hours=23)),
+)
+
+JIRA_SECRET_KEYS = (
+    "api_token",
+    "apiToken",
+    "access_token",
+    "accessToken",
+    "refresh_token",
+    "refreshToken",
+)
+
+HOSTLESS_JIRA_CREDENTIALS = (
+    '{"base_url": "https:///x"}',
+    '{"base_url": "https://:80/"}',
+    '{"base_url": "http://"}',
+    '{"base_url": "///"}',
+    '{"base_url": "//"}',
+    '{"jira_base_url": "https://@/"}',
+)
+
+HOSTLESS_JIRA_ENVIRONMENTS: tuple[dict[str, str], ...] = (
+    {"ATLASSIAN_JIRA_BASE_URL": "https://"},
+    {"JIRA_BASE_URL": "http://:8080"},
+    {"ATLASSIAN_JIRA_BASE_URL": "///", "JIRA_BASE_URL": "https://jira.example"},
+)
+
+BIG_CAP_OPTIONS = (
+    '{"enrichment_cap": -100000000000000000000}',
+    '{"enrichment_cap": -4611686018427387904}',
+    '{"enrichment_cap": -9223372036854775809}',
+    '{"enrichment_cap": 9223372036854775807}',
+    '{"enrichment_cap": 9223372036854775808}',
+    '{"enrichment_cap": 1000000000000000000000000000000}',
+)
+
 
 def _set_env(env: dict[str, str]) -> None:
     for name in ENV_NAMES:
@@ -328,6 +372,33 @@ def _estimate_cases() -> list[dict[str, Any]]:
             (BASE, BASE + timedelta(days=3)),
             env=env,
         )
+    # CHAOS-8386 rows: a window with only an end, and negative windows on
+    # and off a whole-day boundary, for every provider and dataset.
+    for provider, dataset, window in itertools.product(
+        PROVIDERS, DATASETS, EXTRA_WINDOWS
+    ):
+        add(provider, dataset, BASE_CREDENTIALS[provider], "{}", window)
+    # A lone surrogate in each secret the Jira estimator hashes, and in the
+    # PagerDuty subdomain: Python's strict UTF-8 encode raises.
+    for key in JIRA_SECRET_KEYS:
+        add("jira", "work-items", '{"%s": "\\ud800"}' % key)
+        add("jira", "work-items", '{"email": "e", "%s": "ok", "api_token": "\\ud800"}' % key)
+    add("pagerduty", "incidents", '{"subdomain": "\\ud800", "region": "eu"}')
+    add("pagerduty", "incidents", '{"subdomain": "\\ud83d\\ude00"}')
+    # A base URL with no hostname, in a credential and in the environment.
+    for provider in ("jira",):
+        for credentials in HOSTLESS_JIRA_CREDENTIALS:
+            add(provider, "work-items", credentials)
+    for env in HOSTLESS_JIRA_ENVIRONMENTS:
+        add("jira", "work-items", "{}", env=env)
+        add("jira", "work-items", "[]", env=env)
+    # An enrichment_cap beyond int64 on the negative side falls back to the
+    # default, the positive side is computed.
+    for dataset, options in itertools.product(
+        ("incident-alerts", "incident-log-entries", "incident-notes"),
+        BIG_CAP_OPTIONS,
+    ):
+        add("pagerduty", dataset, BASE_CREDENTIALS["pagerduty"], options=options)
     return cases
 
 
@@ -394,6 +465,11 @@ def _env_credential_cases() -> list[dict[str, Any]]:
     ]
 
 
+EMPTY_CIPHERTEXT = object()
+GARBAGE_CIPHERTEXT = object()
+# A config column that is SQL NULL (None), not the JSON text "null".
+SQL_NULL = object()
+
 MAPPING_CASES = (
     (
         '{"token": "t", "base_url": "https://secret.example"}',
@@ -407,6 +483,17 @@ MAPPING_CASES = (
     ('"text"', '{"k": 1}'),
     (None, '{"base_url": "https://config-only.example"}'),
     (None, "null"),
+    # An empty ciphertext is falsy: decrypted is {}.
+    (EMPTY_CIPHERTEXT, '{"base_url": "https://empty.example"}'),
+    (EMPTY_CIPHERTEXT, "null"),
+    # Ciphertext that does not decrypt, and plaintext that is not JSON.
+    (GARBAGE_CIPHERTEXT, "{}"),
+    (GARBAGE_CIPHERTEXT, '{"base_url": "https://x.example"}'),
+    ("not json", "{}"),
+    ("", "{}"),
+    ('{"token": "t"}', SQL_NULL),
+    (None, SQL_NULL),
+    ('["not", "a", "mapping"]', '{"k": 1}'),
     ('{"n": 1.0, "big": 123456789012345678901234567890, "é": "ü"}', '{"z": 1, "n": 2}'),
 )
 
@@ -521,9 +608,17 @@ def main() -> int:
     os.environ.pop("SETTINGS_ENCRYPTION_SALT", None)
     credential_mapping = []
     for plaintext, config in MAPPING_CASES:
-        ciphertext = encrypt_value(plaintext) if plaintext is not None else None
+        if plaintext is EMPTY_CIPHERTEXT:
+            ciphertext = ""
+        elif plaintext is GARBAGE_CIPHERTEXT:
+            ciphertext = "not-a-fernet-token"
+        elif plaintext is not None:
+            ciphertext = encrypt_value(plaintext)
+        else:
+            ciphertext = None
+        config_value = None if config is SQL_NULL else json.loads(config)
         row = SimpleNamespace(
-            credentials_encrypted=ciphertext, config=json.loads(config)
+            credentials_encrypted=ciphertext, config=config_value
         )
         try:
             mapping = _credential_mapping(row)
@@ -534,7 +629,10 @@ def main() -> int:
             result = {"error": type(exc).__name__}
         credential_mapping.append(
             {
-                "input": {"ciphertext": ciphertext, "config": config},
+                "input": {
+                    "ciphertext": ciphertext,
+                    "config": None if config is SQL_NULL else config,
+                },
                 "python": result,
             }
         )

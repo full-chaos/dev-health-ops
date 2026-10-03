@@ -131,3 +131,26 @@ func TestAwaitMetricsObserveAndScrapeAreRaceFree(t *testing.T) {
 		t.Errorf("lost observations:\n%s", got)
 	}
 }
+
+// The histogram sum adds every observation: it is not the last one. The durations
+// are exact in float64 (0.25 + 0.5, 1 + 2), so the printed sums are exact.
+func TestAwaitSumAddsEveryObservation(t *testing.T) {
+	m := newAwaitMetrics()
+	m.observe(StateMaterialized, 250*time.Millisecond)
+	m.observe(StateMaterialized, 500*time.Millisecond)
+	m.observe(StatePending, time.Second)
+	m.observe(StatePending, 2*time.Second)
+	m.observe(StateQuarantined, 4*time.Second)
+	got := scrapeAwait(t, m)
+	for _, want := range []string{
+		`sync_manual_trigger_await_latency_seconds_sum{outcome="materialized"} 0.75` + "\n",
+		`sync_manual_trigger_await_latency_seconds_sum{outcome="pending"} 3` + "\n",
+		`sync_manual_trigger_await_latency_seconds_sum{outcome="quarantined"} 4` + "\n",
+		`sync_manual_trigger_await_latency_seconds_count{outcome="materialized"} 2` + "\n",
+		`sync_manual_trigger_await_latency_seconds_count{outcome="pending"} 2` + "\n",
+	} {
+		if !strings.Contains(got, want) {
+			t.Errorf("missing %q in:\n%s", want, got)
+		}
+	}
+}

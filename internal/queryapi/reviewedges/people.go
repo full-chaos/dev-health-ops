@@ -56,17 +56,22 @@ WHERE org_id = {org_id:String} AND is_active = 1`
 // of the most recent pull request that carries one. argMax over the tuple
 // (created_at, name) is deterministic when two pull requests share a
 // created_at.
+//
+// The inner name column is pr_author_name, NOT name: ClickHouse reads a name in
+// WHERE as the SELECT alias of the same name, so "argMax(name, ...) AS name"
+// with "WHERE name != ”" is "an aggregate function in WHERE" (code 184) on a
+// real engine. A fake client cannot see that; the integration test does.
 const pullRequestAuthorNamesSQL = `
-SELECT email, argMax(name, tuple(created_at, name)) AS name
+SELECT email, argMax(pr_author_name, tuple(created_at, pr_author_name)) AS name
 FROM (
     SELECT lowerUTF8(trimBoth(ifNull(author_email, ''))) AS email,
-           trimBoth(ifNull(author_name, '')) AS name,
+           trimBoth(ifNull(author_name, '')) AS pr_author_name,
            created_at
     FROM git_pull_requests FINAL
     WHERE org_id = {org_id:String}
       AND lowerUTF8(trimBoth(ifNull(author_email, ''))) IN {emails:Array(String)}
 )
-WHERE name != ''
+WHERE pr_author_name != ''
 GROUP BY email`
 
 // unknownIdentity is the string the writer stores when a pull request has

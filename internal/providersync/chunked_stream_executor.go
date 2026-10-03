@@ -230,7 +230,7 @@ func (executor CompleteRouteExecutor) executeChunkedStreaming(
 				if prepareErr != nil {
 					return prepareErr
 				}
-				for _, prepared := range preparedGroup {
+				for position, prepared := range preparedGroup {
 					commitResult, commitErr := commitPreparedChunk(
 						workContext, session.Claim, prepared, executor.Committer.Sink,
 						executor.Committer.Readback, executor.Committer.Now, store,
@@ -248,9 +248,14 @@ func (executor CompleteRouteExecutor) executeChunkedStreaming(
 					}
 					nextOrdinal++
 					committedThisAttempt++
-				}
-				if !emission.Final && (committedThisAttempt >= policy.MaxChunksPerAttempt || attemptElapsed() >= policy.MaxWallTime) {
-					return newChunkContinuation(policy, executor.now().Add(time.Second), committedThisAttempt, attemptElapsed())
+					// The bounds are checked after EVERY sub-chunk, also inside this emission (CHAOS-8328): one emission can hold
+					// hundreds of sub-chunks. The rest of the group is already durable (prepared as one group above), so the
+					// continuation costs nothing: the next attempt drains the prepared chunks before it asks the provider for anything.
+					// After the LAST sub-chunk of the FINAL emission there is nothing left to hand over.
+					more := position+1 < len(preparedGroup) || !emission.Final
+					if more && (committedThisAttempt >= policy.MaxChunksPerAttempt || attemptElapsed() >= policy.MaxWallTime) {
+						return newChunkContinuation(policy, executor.now().Add(time.Second), committedThisAttempt, attemptElapsed())
+					}
 				}
 				return nil
 			},

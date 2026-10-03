@@ -26,6 +26,14 @@ import (
 // runs it on the checked-in file. TestComposeStackCheckSeesEachDefect plants
 // one defect at a time in the text of the checked-in file and requires the
 // finding that names it, so a check that stops seeing a defect fails here.
+//
+// What the check does NOT hold (a defect of these kinds leaves both tests
+// green; the measurement for "every service becomes ready" is a real fresh
+// start of the stack, not this file): the environment names of a service
+// other than the two database role names of go-river-migrate and the names of
+// go-api's ClickHouse login; the dependency edges of the services that are
+// not a plane (migrate, go-river-provision, the workers); and the router's
+// healthcheck and its read_only flag.
 
 const composeFilePath = "compose.yml"
 
@@ -403,6 +411,28 @@ func composeStackFindings(text []byte) ([]string, error) {
 		}
 	}
 
+	// Each plane waits for the stores its readiness reads. go-api's wait for
+	// clickhouse is held with its ClickHouse login below. A wait for valkey of
+	// any kind passes: the check is that the edge is there.
+	for _, wait := range []struct{ plane, store, condition string }{
+		{goAPIHost, "postgres", "service_healthy"},
+		{goAPIHost, "valkey", ""},
+		{queryAPIHost, "postgres", "service_healthy"},
+		{queryAPIHost, clickHouseService, "service_healthy"},
+	} {
+		switch got := stack.Services[wait.plane].DependsOn[wait.store].Condition; {
+		case got == "":
+			found("plane stores: %s does not wait for %s", wait.plane, wait.store)
+		case wait.condition != "" && got != wait.condition:
+			found("plane stores: %s waits for %s with %q, want %s", wait.plane, wait.store, got, wait.condition)
+		}
+	}
+	// The migration that grants runs after the step that makes the logins: it
+	// grants only to a login that exists.
+	if got := stack.Services["go-river-migrate"].DependsOn["go-river-provision"].Condition; got != "service_completed_successfully" {
+		found("plane grants: go-river-migrate waits for go-river-provision with %q, want service_completed_successfully", got)
+	}
+
 	// The envelope key: written by the init service, private half to go-api
 	// only, both halves read-only.
 	if init, ok := stack.Services[keysInitService]; !ok {
@@ -548,6 +578,9 @@ func TestComposeStackCheckSeesEachDefect(t *testing.T) {
 	routerMount := "      - ./" + RouterConfigPath + ":" + routerConfigTarget + ":ro\n"
 	for _, plant := range []struct {
 		name, old, new, want string
+		// old2 and new2 are a second change of the same plant, for a defect
+		// that is in two services at once.
+		old2, new2 string
 	}{
 		{
 			name: "a plane published on a host port",
@@ -694,6 +727,58 @@ func TestComposeStackCheckSeesEachDefect(t *testing.T) {
 			want: "api login: go-api waits for clickhouse with \"\"",
 		},
 		{
+			name: "go-api does not wait for postgres",
+			old:  "      go-river-migrate:\n        condition: service_completed_successfully\n      postgres:\n        condition: service_healthy\n      clickhouse:\n        condition: service_healthy\n      valkey:\n",
+			new:  "      go-river-migrate:\n        condition: service_completed_successfully\n      clickhouse:\n        condition: service_healthy\n      valkey:\n",
+			want: "plane stores: go-api does not wait for postgres",
+		},
+		{
+			name: "go-api does not wait for valkey",
+			old:  "      valkey:\n        condition: service_started\n",
+			new:  "",
+			want: "plane stores: go-api does not wait for valkey",
+		},
+		{
+			name: "query-api does not wait for clickhouse",
+			old:  "      postgres:\n        condition: service_healthy\n      clickhouse:\n        condition: service_healthy\n\n  # The router of the stack",
+			new:  "      postgres:\n        condition: service_healthy\n\n  # The router of the stack",
+			want: "plane stores: query-api does not wait for clickhouse",
+		},
+		{
+			name: "query-api does not wait for postgres",
+			old:  "      go-river-migrate:\n        condition: service_completed_successfully\n      postgres:\n        condition: service_healthy\n      clickhouse:\n        condition: service_healthy\n\n  # The router of the stack",
+			new:  "      go-river-migrate:\n        condition: service_completed_successfully\n      clickhouse:\n        condition: service_healthy\n\n  # The router of the stack",
+			want: "plane stores: query-api does not wait for postgres",
+		},
+		{
+			name: "query-api waits for a started postgres only",
+			old:  "      postgres:\n        condition: service_healthy\n      clickhouse:\n        condition: service_healthy\n\n  # The router of the stack",
+			new:  "      postgres:\n        condition: service_started\n      clickhouse:\n        condition: service_healthy\n\n  # The router of the stack",
+			want: "plane stores: query-api waits for postgres with \"service_started\"",
+		},
+		{
+			name: "the migration that grants does not wait for the provision step",
+			old:  "      QUERY_API_DATABASE_ROLE: ${QUERY_API_DATABASE_ROLE:-devhealth_query_api}\n    depends_on:\n      go-river-provision:\n        condition: service_completed_successfully\n",
+			new:  "      QUERY_API_DATABASE_ROLE: ${QUERY_API_DATABASE_ROLE:-devhealth_query_api}\n",
+			want: "plane grants: go-river-migrate waits for go-river-provision with \"\"",
+		},
+		{
+			name: "the query-api role named by neither service",
+			old:  "      QUERY_API_DATABASE_ROLE: ${QUERY_API_DATABASE_ROLE:-devhealth_query_api}\n      GO_API_ENVELOPE_JWKS_PATH:",
+			new:  "      GO_API_ENVELOPE_JWKS_PATH:",
+			old2: "      QUERY_API_DATABASE_ROLE: ${QUERY_API_DATABASE_ROLE:-devhealth_query_api}\n    depends_on:\n      go-river-provision:\n",
+			new2: "    depends_on:\n      go-river-provision:\n",
+			want: "plane grants: go-river-migrate has QUERY_API_DATABASE_ROLE \"\" and query-api logs in as \"\"",
+		},
+		{
+			name: "the ClickHouse password of the login given to neither service",
+			old:  "      DHO_API_CH_PASSWORD: ${API_CLICKHOUSE_PASSWORD:-dho_api_ch}\n",
+			new:  "",
+			old2: "      DEV_HEALTH_CH_API_PASSWORD: ${API_CLICKHOUSE_PASSWORD:-dho_api_ch}\n",
+			new2: "",
+			want: "api login: clickhouse reads the password from DHO_API_CH_PASSWORD = \"\" and go-api logs in with \"\"",
+		},
+		{
 			name: "a plane that does not wait for the key",
 			old:  "    depends_on:\n      envelope-keys-init:\n        condition: service_completed_successfully\n      go-river-provision:\n        condition: service_completed_successfully\n      go-river-migrate:\n        condition: service_completed_successfully\n      postgres:\n        condition: service_healthy\n      clickhouse:\n",
 			new:  "    depends_on:\n      go-river-provision:\n        condition: service_completed_successfully\n      go-river-migrate:\n        condition: service_completed_successfully\n      postgres:\n        condition: service_healthy\n      clickhouse:\n",
@@ -702,9 +787,22 @@ func TestComposeStackCheckSeesEachDefect(t *testing.T) {
 	} {
 		t.Run(plant.name, func(t *testing.T) {
 			if strings.Count(clean, plant.old) != 1 {
-				t.Fatalf("the text to change is in %s %d times, want once: the plant is not valid", composeFilePath, strings.Count(clean, plant.old))
+				// This is NOT a finding about the compose file. The self-test
+				// could not plant its defect, because the text it changes is
+				// no longer in the file once: the file was edited. What the
+				// check says about the file is the other test,
+				// TestComposeStackRunsTheRouterAndNoPythonAPI. Update old and
+				// new of this plant to the file's text.
+				t.Fatalf("the plant is not valid, and this says NOTHING about a defect in %s: the text this plant changes is in the file %d times, want once (the file's text changed). The verdict on the file is TestComposeStackRunsTheRouterAndNoPythonAPI; bring this plant's old and new text up to the file", composeFilePath, strings.Count(clean, plant.old))
 			}
-			findings, err := composeStackFindings([]byte(strings.Replace(clean, plant.old, plant.new, 1)))
+			planted := strings.Replace(clean, plant.old, plant.new, 1)
+			if plant.old2 != "" {
+				if strings.Count(planted, plant.old2) != 1 {
+					t.Fatalf("the plant is not valid, and this says NOTHING about a defect in %s: the second text this plant changes is in the file %d times, want once", composeFilePath, strings.Count(planted, plant.old2))
+				}
+				planted = strings.Replace(planted, plant.old2, plant.new2, 1)
+			}
+			findings, err := composeStackFindings([]byte(planted))
 			if err != nil {
 				t.Fatalf("the planted file does not read: %v", err)
 			}

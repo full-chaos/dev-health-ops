@@ -123,6 +123,19 @@ The GraphQL endpoint is available at `/graphql` when the stack is running. Use t
 docker compose logs -f router go-api query-api migrate
 ```
 
+### Create the first admin
+
+A stack on empty volumes has no user. Create the first user and its organization with the admin verbs of the `dho` binary. Run them in the `migrate` service: its image is `dho` and it has the database login these verbs use. The password is read from standard input (the first line of a file here), never from an argument:
+
+```bash
+docker compose run --rm --no-deps -T migrate admin users create --email admin@example.com --full-name "Admin User" --password-stdin < password.txt
+docker compose run --rm --no-deps -T migrate admin orgs create --name "My Organization" --owner-email admin@example.com
+```
+
+The first command prints `Created user: ...`, the second `Created organization: ...` and its owner. After the two commands `POST /api/v1/auth/login` on port 8000 answers 200 for that email and password. Remove the password file afterwards.
+
+The [CLI reference](../../reference/cli/index.md) describes these two verbs and their options under the old Python CLI name (`dev-hops admin users create`, `dev-hops admin orgs create`). The Go binary has the same verbs: `dho admin users create` and `dho admin orgs create`.
+
 Stop the stack without deleting data volumes:
 
 ```bash

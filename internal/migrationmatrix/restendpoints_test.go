@@ -1,8 +1,10 @@
 package migrationmatrix
 
 import (
+	"encoding/json"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 
@@ -157,11 +159,7 @@ func TestLoadQueryAPIMuxRoutesCitesTheBuilderSymbolAndNeverALine(t *testing.T) {
 // fixture left open: pairing against an ACTUAL mux.HandleFunc
 // registration, not just the Python side.
 func TestLoadRESTEndpointsMatchesAPathParameterRoute(t *testing.T) {
-	dir := t.TempDir()
-	mainPy := writeTempFile(t, dir, "main.py", `@app.get("/api/v1/people/{person_id}/summary", response_model=PersonSummaryResponse)
-async def people_summary(person_id: str, request: Request):
-    ...
-`)
+	mainPy := writeFrozenRoutes(t, "GET /api/v1/people/{person_id}/summary")
 	muxRoutes := []QueryAPIMuxRoute{{
 		Path:       "/api/v1/people/{person_id}/summary",
 		HandlerLoc: queryAPILoc("people_summary_route.go", "buildPeopleSummaryRoute"),
@@ -192,11 +190,7 @@ async def people_summary(person_id: str, request: Request):
 // Seeding a fixture main.py with a route absent from query-api's mux must
 // enumerate it and mark it python-only, not silently drop it.
 func TestLoadRESTEndpointsCatchesANewlyAddedPythonOnlyRoute(t *testing.T) {
-	dir := t.TempDir()
-	mainPy := writeTempFile(t, dir, "main.py", `@app.get("/api/v1/brand-new-endpoint")
-async def brand_new():
-    ...
-`)
+	mainPy := writeFrozenRoutes(t, "GET /api/v1/brand-new-endpoint")
 	rows, err := LoadRESTEndpoints(mainPy, nil)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
@@ -213,11 +207,7 @@ async def brand_new():
 // test: a route previously ported loses its Go registration and the row
 // must flip, not keep reporting ported from a stale memory.
 func TestLoadRESTEndpointsFlipsToPythonOnlyWhenTheGoRouteDisappears(t *testing.T) {
-	dir := t.TempDir()
-	mainPy := writeTempFile(t, dir, "main.py", `@app.get("/api/v1/quadrant")
-async def quadrant():
-    ...
-`)
+	mainPy := writeFrozenRoutes(t, "GET /api/v1/quadrant")
 	rows, err := LoadRESTEndpoints(mainPy, []QueryAPIMuxRoute{{Path: "/api/v1/quadrant", HandlerLoc: queryAPILoc("quadrant_route.go", "buildQuadrantRoute")}})
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
@@ -237,11 +227,7 @@ async def quadrant():
 }
 
 func TestLoadRESTEndpointsRejectsAStaleRESTDeadByDesignEntry(t *testing.T) {
-	dir := t.TempDir()
-	mainPy := writeTempFile(t, dir, "main.py", `@app.get("/api/v1/meta")
-async def meta():
-    ...
-`)
+	mainPy := writeFrozenRoutes(t, "GET /api/v1/meta")
 
 	previous := RESTDeadByDesign
 	RESTDeadByDesign = map[string]string{"GET /api/v1/a-route-that-does-not-exist": "CHAOS-0000: fake citation for this test"}
@@ -253,11 +239,7 @@ async def meta():
 }
 
 func TestLoadRESTEndpointsAppliesRESTDeadByDesign(t *testing.T) {
-	dir := t.TempDir()
-	mainPy := writeTempFile(t, dir, "main.py", `@app.get("/api/v1/meta")
-async def meta():
-    ...
-`)
+	mainPy := writeFrozenRoutes(t, "GET /api/v1/meta")
 
 	previous := RESTDeadByDesign
 	RESTDeadByDesign = map[string]string{"GET /api/v1/meta": "CHAOS-0000: chris ruled this stays Python (test fixture)"}
@@ -282,7 +264,7 @@ func TestRenderRESTEndpointsBlockRendersCountsAndRowsGolden(t *testing.T) {
 		{Method: "GET", Path: "/api/v1/opportunities", Status: RESTDeadByDesignStatus, Note: "CHAOS-0000"},
 	}
 	got := RenderRESTEndpointsBlock(rows)
-	want := "_3 `/api/v1/*` routes in `src/dev_health_ops/api/main.py`: **1** ported, **1** python-only, **1** dead-by-design._\n\n" +
+	want := "_3 `/api/v1/*` routes in the frozen Python api route list (`contracts/migration-status/v1/python-rest-routes.json`): **1** ported, **1** python-only, **1** dead-by-design._\n\n" +
 		"| Method | Path | Status | Go handler |\n" +
 		"| --- | --- | --- | --- |\n" +
 		"| POST | `/api/v1/investment/explain` | ported | `internal/queryapi/server/investment_explain_route.go:119` |\n" +
@@ -302,7 +284,7 @@ func TestRenderRESTEndpointsBlockRendersCountsAndRowsGolden(t *testing.T) {
 func TestLoadRESTEndpointsOnTheRealRepo(t *testing.T) {
 	root := repoRootForTest(t)
 	rows, err := LoadRESTEndpoints(
-		filepath.Join(root, "src/dev_health_ops/api/main.py"),
+		filepath.Join(root, FrozenRESTRoutesRelative),
 		LoadQueryAPIMuxRoutes(),
 	)
 	if err != nil {
@@ -591,5 +573,50 @@ func TestLoadRESTEndpointsOnTheRealRepo(t *testing.T) {
 	// moving in step with the python-only one.
 	if pythonOnly != 0 {
 		t.Fatalf("got %d python-only routes, want 0: every /api/v1/* route main.py declares is registered by a Go handler", pythonOnly)
+	}
+}
+
+// writeFrozenRoutes writes a frozen route list holding the given
+// "METHOD /path" entries and returns its path.
+func writeFrozenRoutes(t *testing.T, entries ...string) string {
+	t.Helper()
+	var frozen FrozenRESTRoutes
+	for _, entry := range entries {
+		method, path, _ := strings.Cut(entry, " ")
+		frozen.Routes = append(frozen.Routes, FrozenRESTRoute{Method: method, Path: path})
+	}
+	raw, err := json.Marshal(frozen)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return writeTempFile(t, t.TempDir(), "python-rest-routes.json", string(raw))
+}
+
+// While the Python api source still exists, the frozen list must equal a fresh
+// parse of it: a route added to main.py without refreezing fails here. Once
+// main.py is deleted the frozen file is the source and this test skips.
+func TestFrozenRESTRoutesMatchMainPyWhileItExists(t *testing.T) {
+	root := repoRootForTest(t)
+	mainPy := filepath.Join(root, "src/dev_health_ops/api/main.py")
+	if _, err := os.Stat(mainPy); err != nil {
+		t.Skip("the Python api main.py is gone: the frozen route list is the source")
+	}
+	parsed, err := LoadFastAPIRoutes(mainPy)
+	if err != nil {
+		t.Fatal(err)
+	}
+	frozen, err := LoadFrozenRESTRoutes(filepath.Join(root, FrozenRESTRoutesRelative))
+	if err != nil {
+		t.Fatal(err)
+	}
+	key := func(routes []RESTRoute) []string {
+		var out []string
+		for _, r := range apiV1Routes(routes) {
+			out = append(out, r.Method+" "+r.Path)
+		}
+		return out
+	}
+	if got, want := key(frozen), key(parsed); !reflect.DeepEqual(got, want) {
+		t.Fatalf("frozen route list %v != main.py parse %v", got, want)
 	}
 }

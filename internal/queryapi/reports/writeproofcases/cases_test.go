@@ -45,7 +45,7 @@ func TestEveryMutationHasARegisteredCase(t *testing.T) {
 func TestTheCasesCoverExactlyTheCatalogMutations(t *testing.T) {
 	_, file, _, _ := moduleroot.Caller(0)
 	root := filepath.Join(filepath.Dir(file), "..", "..", "..", "..")
-	raw, err := os.ReadFile(filepath.Join(root, "src", "dev_health_ops", "api", "graphql", "go_api_operations.json"))
+	raw, err := os.ReadFile(filepath.Join(root, "contracts", "graphql", "v1", "go_api_operations.json"))
 	if err != nil {
 		t.Fatal(err)
 	}

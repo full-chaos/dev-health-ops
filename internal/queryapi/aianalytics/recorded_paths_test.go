@@ -378,7 +378,7 @@ var oracleCasesClaims = []string{
 }
 
 var oracleCasesNotClaims = map[string]string{
-	".cases[].teamRows[].name":                           "Python reads the team name into the resolver tuple (providers/teams.py:255) but the AI resolvers use only the matched repository ids; TestRecordedFixtureFieldsNoResolverReadsDoNotMoveTheAnswer perturbs it",
+	".cases[].teamRows[].name":                           "Python reads the team name into the resolver tuple (providers/teams.py:255) but the AI resolvers use only the matched repository ids; TestRecordedFixtureFieldsNoResolverReadsDoNotMoveTheAnswer perturbs it. Go also reads it for the Go-only aiAttributedPrs teamName (CHAOS-7773); the oracle strips that field and attributed_names_test.go pins it",
 	".datasets.human.engagement[].prs_with_first_review": "consumed input, the weight of the engagement average (ai.py:653 at 6121e851f4^): TestRecordedEngagementWeightIsRead zeroes it and requires the answer to change",
 	".datasets.ai.daily[].org_id":                        "no resolver reads the row's org_id: the organisation comes from the request context and the work type filters in SQL (ai.py:197-218 at 6121e851f4^); the probe test perturbs it",
 	".datasets.ai.daily[].work_type":                     "no resolver reads the row's work_type: the organisation comes from the request context and the work type filters in SQL (ai.py:197-218 at 6121e851f4^); the probe test perturbs it",
@@ -671,7 +671,12 @@ func answerB(t *testing.T, c oracleBCase) (map[string]any, *fixtureClientB) {
 	if err != nil {
 		t.Fatalf("%s: %v", c.Name, err)
 	}
-	return jsonMap(t, got), client
+	answer := jsonMap(t, got)
+	if c.Fn == "resolve_ai_attributed_prs" {
+		// The two Go-only row fields (CHAOS-7773) are not part of the recorded Python answer.
+		stripGoOnlyAttributedPrRowFields(answer)
+	}
+	return answer, client
 }
 
 func loadOracleB(t *testing.T) []oracleBCase {

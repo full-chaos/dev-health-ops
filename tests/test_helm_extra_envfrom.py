@@ -64,38 +64,6 @@ def _envfrom_names(container: dict) -> list[tuple[str, str]]:
     return out
 
 
-def test_api_extra_envfrom_renders_before_chart_config_and_secret() -> None:
-    deployment = _render(
-        "templates/api-deployment.yaml",
-        ["api.extraEnvFrom[0].secretRef.name=local-dotenv"],
-    )
-    container = deployment["spec"]["template"]["spec"]["containers"][0]
-    refs = _envfrom_names(container)
-
-    assert refs[0] == ("secretRef", "local-dotenv"), (
-        "api.extraEnvFrom must render first so its keys lose to the chart's "
-        f"own config/secret, not the other way around; got {refs}"
-    )
-    # Chart's own sources still present, still last, still in their existing
-    # relative order (configMapRef before secretRef).
-    assert ("configMapRef", "extra-envfrom-test-dev-health-config") in refs
-    assert ("secretRef", "extra-envfrom-test-dev-health-secrets") in refs
-    assert refs.index(
-        ("configMapRef", "extra-envfrom-test-dev-health-config")
-    ) < refs.index(("secretRef", "extra-envfrom-test-dev-health-secrets"))
-
-
-def test_api_envfrom_is_unchanged_when_extra_envfrom_is_unset() -> None:
-    deployment = _render("templates/api-deployment.yaml", [])
-    container = deployment["spec"]["template"]["spec"]["containers"][0]
-    refs = _envfrom_names(container)
-
-    assert refs == [
-        ("configMapRef", "extra-envfrom-test-dev-health-config"),
-        ("secretRef", "extra-envfrom-test-dev-health-secrets"),
-    ], "default envFrom must be exactly the chart's own config + secret, in that order"
-
-
 def test_go_worker_extra_envfrom_renders_before_chart_config_and_secret() -> None:
     deployment = _render(
         "templates/go-workers.yaml",
@@ -196,59 +164,6 @@ def test_go_worker_envfrom_is_unchanged_when_extra_envfrom_is_unset_for_every_gr
             f"unset) must be exactly the chart's own config + secret, in "
             f"that order, as objects -- got {container.get('envFrom')!r}"
         )
-
-
-def test_api_extra_envfrom_rejects_unknown_field_on_a_ref() -> None:
-    """values.schema.json pins each entry's shape to what the templates build.
-
-    An extraEnvFrom entry the chart's own dict-builder wouldn't recognize
-    (a typo'd field, e.g.) must fail schema validation at `helm template`
-    time -- not render silently with the typo'd field dropped by toYaml, or
-    worse, passed through into a Kubernetes envFrom source where the API
-    server rejects or ignores it far from where the operator set it.
-    """
-    result = run(
-        [
-            "helm",
-            "template",
-            "extra-envfrom-test",
-            str(_CHART),
-            "--set",
-            "api.extraEnvFrom[0].secretRef.name=local-dotenv",
-            "--set",
-            "api.extraEnvFrom[0].secretRef.badfield=oops",
-            "--show-only",
-            "templates/api-deployment.yaml",
-        ],
-        capture_output=True,
-        text=True,
-    )
-    assert result.returncode != 0, (
-        "an extraEnvFrom entry with an unknown field must fail schema "
-        f"validation, not render; stdout={result.stdout!r}"
-    )
-    assert "badfield" in result.stderr
-
-
-def test_api_extra_envfrom_rejects_a_non_map_entry() -> None:
-    result = run(
-        [
-            "helm",
-            "template",
-            "extra-envfrom-test",
-            str(_CHART),
-            "--set",
-            "api.extraEnvFrom[0]=notamap",
-            "--show-only",
-            "templates/api-deployment.yaml",
-        ],
-        capture_output=True,
-        text=True,
-    )
-    assert result.returncode != 0, (
-        "a non-map extraEnvFrom entry must fail schema validation, not "
-        f"render; stdout={result.stdout!r}"
-    )
 
 
 def test_go_worker_extra_envfrom_rejects_unknown_field_on_a_ref() -> None:

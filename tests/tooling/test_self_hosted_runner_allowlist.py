@@ -267,7 +267,6 @@ _REMAINING_RUNS_ON_SITES = {
 }
 # (file, job, matrix-include index for platform == linux/arm64) -> field name
 _REMAINING_MATRIX_SITES = {
-    ("docker-images.yml", "build"): "runner",
     ("docker-images.yml", "go-build"): "runner",
 }
 

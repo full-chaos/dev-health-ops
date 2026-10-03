@@ -4,19 +4,6 @@
 
 Your release "{{ .Release.Name }}" has been deployed!
 
-{{- if .Values.api.enabled }}
-
-📊 API:
-{{- if .Values.ingress.enabled }}
-{{- range .Values.ingress.hosts }}
-  https://{{ .host }}
-{{- end }}
-{{- else }}
-  kubectl port-forward svc/{{ include "dev-health.fullname" . }}-api {{ .Values.api.port }}:{{ .Values.api.port }} -n {{ include "dev-health.namespace" . }}
-  Then visit: http://localhost:{{ .Values.api.port }}
-{{- end }}
-{{- end }}
-
 {{- if .Values.web.enabled }}
 
 🌐 Web UI:
@@ -37,7 +24,6 @@ Your release "{{ .Release.Name }}" has been deployed!
 {{- end }}
 
 Components deployed:
-  {{- if .Values.api.enabled }}  ✅ API{{ end }}
   {{- if .Values.web.enabled }}  ✅ Web{{ end }}
   {{- if .Values.goWorkers.enabled }}  ✅ Go workers{{ end }}
   {{- if .Values.valkey.enabled }}  ✅ Valkey (in-cluster){{ end }}

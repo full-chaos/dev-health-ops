@@ -610,3 +610,45 @@ func TestExhaustClaimedPartitionLeavesAnotherClaimantsLiveLeaseAlone(t *testing.
 		t.Fatalf("partition = %q after the owner's exhaust, want failed", status)
 	}
 }
+
+// CHAOS-8177 (r2 P1). Invariant: the claimed fallback may only end a partition that is still the caller's own claim
+// (running under its token) or a running partition whose lease has expired; a partition a replacement attempt already
+// released for retry (failed, completed_at NULL) is no longer the caller's, so the fallback must leave it reclaimable.
+func TestAnOldAttemptsClaimedFallbackLeavesAReplacementsRetryReleaseReclaimable(t *testing.T) {
+	ctx := context.Background()
+	pool, store, _ := newRemainingRedriveTestStack(t)
+	clock := time.Date(2026, 10, 2, 12, 0, 0, 0, time.UTC)
+	store.now = func() time.Time { return clock }
+	org := "00000000-0000-4000-8000-000000009823"
+	run, err := store.StartRun(ctx, StartRunRequest{OrganizationID: org, Family: "capacity", Generation: "replacement-released", ScopeKey: "all-teams",
+		GenerationSeed: int64Pointer(823), Scopes: []json.RawMessage{capacityScopeJSON(90)}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	partition := deterministicPartitionID(run.ID, 1)
+	old, err := store.ClaimPartition(ctx, partition)
+	if err != nil || old == nil {
+		t.Fatalf("old claim = %v, %v", old, err)
+	}
+	clock = clock.Add(old.LeaseDuration + time.Minute) // the old attempt's lease expires
+	replacement, err := store.ClaimPartition(ctx, partition)
+	if err != nil || replacement == nil {
+		t.Fatalf("replacement claim = %v, %v", replacement, err)
+	}
+	if err := store.ReleasePartition(ctx, *replacement); err != nil { // ordinary retryable release
+		t.Fatal(err)
+	}
+	if err := store.ExhaustClaimedPartition(ctx, *old); err != nil { // the old final attempt's late fallback
+		t.Fatal(err)
+	}
+	var runStatus, partitionStatus string
+	var exhausted bool
+	_ = pool.QueryRow(ctx, "SELECT status FROM remaining_metric_runs WHERE id=$1::uuid", run.ID).Scan(&runStatus)
+	_ = pool.QueryRow(ctx, "SELECT status, completed_at IS NOT NULL FROM remaining_metric_partitions WHERE id=$1::uuid", partition).Scan(&partitionStatus, &exhausted)
+	if runStatus != "running" || partitionStatus != "failed" || exhausted {
+		t.Fatalf("run=%s partition=%s exhausted=%t, want running/failed/false (replacement's retry must stay reclaimable)", runStatus, partitionStatus, exhausted)
+	}
+	if again, err := store.ClaimPartition(ctx, partition); err != nil || again == nil {
+		t.Fatalf("the replacement's retry cannot reclaim: %v, %v", again, err)
+	}
+}

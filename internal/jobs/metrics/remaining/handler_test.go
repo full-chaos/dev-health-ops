@@ -590,6 +590,50 @@ func TestPartitionHandlerFallsBackToExhaustWhenTheTerminalReleaseFails(t *testin
 	}
 }
 
+// CHAOS-8177 (vet HOLD): when the claimed fallback itself fails, the line says so with fixed text, the partition id and
+// the bounded error class -- never the error text; a typed-nil driver error must still write the line.
+func TestPartitionHandlerLogsAFailedClaimedExhaustWithItsClassOnly(t *testing.T) {
+	var typedNil *pgconn.PgError
+	rows := []struct {
+		name      string
+		err       error
+		wantParts []string
+	}{
+		{"wrapped postgres error", fmt.Errorf("wrap: %w", &pgconn.PgError{Code: "57014", Message: "SECRET-DRIVER-TEXT"}),
+			[]string{"error_class=postgres", "error_code=57014"}},
+		{"typed nil postgres error", typedNil, nil},
+	}
+	for _, row := range rows {
+		t.Run(row.name, func(t *testing.T) {
+			var buffer bytes.Buffer
+			previous := slog.Default()
+			slog.SetDefault(slog.New(slog.NewTextHandler(&buffer, nil)))
+			t.Cleanup(func() { slog.SetDefault(previous) })
+			store := &handlerStore{
+				run:                Run{ID: handlerRunID, OrganizationID: handlerOrgID, Family: "capacity", Status: "running"},
+				claim:              handlerClaim(),
+				terminalReleaseErr: errors.New("fenced"),
+				exhaustErr:         row.err,
+			}
+			executor := &handlerExecutor{computeErr: errors.New("clickhouse: connection reset")}
+			handler, _ := NewPartitionHandler[jobruntime.RemainingCapacityArgs](store, executor, "capacity")
+			_ = handler.Work(context.Background(), attemptedCapacityExecution(3, 3))
+			if store.exhaustedClaims != 1 {
+				t.Fatalf("exhaustedClaims=%d, want 1", store.exhaustedClaims)
+			}
+			logged := buffer.String()
+			for _, want := range append([]string{"could not exhaust a claimed partition", "partition_id"}, row.wantParts...) {
+				if !strings.Contains(logged, want) {
+					t.Fatalf("log lacks %q: %q", want, logged)
+				}
+			}
+			if strings.Contains(logged, "SECRET-DRIVER-TEXT") {
+				t.Fatalf("log leaks the error text: %q", logged)
+			}
+		})
+	}
+}
+
 // CHAOS-8176: River discards a Permanent job outright, so both Permanent exits that hold a claim (a LoadRun
 // ErrInvalidState and a run that does not match the execution) must use the TERMINAL release; the ordinary release
 // left the partition failed without the exhausted marker and its run running for ever.

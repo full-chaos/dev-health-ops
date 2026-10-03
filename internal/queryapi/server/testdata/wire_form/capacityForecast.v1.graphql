@@ -21,19 +21,6 @@ query CapacityForecast($orgId: String!, $input: CapacityForecastInput) {
     historyDays
     insufficientHistory
     highVariance
-    completionDistribution {
-      days {
-        value
-        count
-        __typename
-      }
-      items {
-        value
-        count
-        __typename
-      }
-      __typename
-    }
     __typename
   }
 }

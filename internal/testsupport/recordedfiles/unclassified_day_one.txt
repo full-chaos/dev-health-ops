@@ -826,11 +826,9 @@ internal/queryapi/server/testdata/rest_errors/not_found.json
 internal/queryapi/server/testdata/rest_errors/quadrant_comparative_params.json
 internal/queryapi/server/testdata/wire_capture/README.md
 internal/queryapi/server/testdata/wire_capture/acr_repository_scopes_captured.graphql
-internal/queryapi/server/testdata/wire_capture/aiattributedprs_captured.graphql
 internal/queryapi/server/testdata/wire_capture/aiattributionoverview_captured.graphql
 internal/queryapi/server/testdata/wire_capture/aicomparison_captured.graphql
 internal/queryapi/server/testdata/wire_capture/aigovernancesummary_captured.graphql
-internal/queryapi/server/testdata/wire_capture/aiimpactsummary_captured.graphql
 internal/queryapi/server/testdata/wire_capture/aiopportunities_captured.graphql
 internal/queryapi/server/testdata/wire_capture/aireviewload_captured.graphql
 internal/queryapi/server/testdata/wire_capture/airiskbreakdown_captured.graphql
@@ -867,8 +865,6 @@ internal/queryapi/server/testdata/wire_capture/testopstest_captured.graphql
 internal/queryapi/server/testdata/wire_capture/trigger_report_captured.graphql
 internal/queryapi/server/testdata/wire_capture/update_saved_report_captured.graphql
 internal/queryapi/server/testdata/wire_capture/workunitteamattributions_captured.graphql
-internal/queryapi/server/testdata/wire_form/README.md
-internal/queryapi/server/testdata/wire_form/capacityForecast.graphql
 internal/queryapi/server/testdata/wire_form/capacityForecasts.graphql
 internal/queryapi/server/testdata/wire_form/throughputForecast.graphql
 internal/queryapi/server/testdata/work_unit_explain/malformed_end_date.json

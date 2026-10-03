@@ -915,3 +915,77 @@ def test_the_providersync_shard_awk_balances_by_weight_and_weighs_an_unlisted_te
         if shard == 1:
             assert part == ["TestHeavy"], part
     assert sizes == [1, 3, 3], sizes
+
+
+# ---------------------------------------------------------------------------
+# 5. -trimpath (CHAOS-8296).
+# ---------------------------------------------------------------------------
+
+GO_INVOCATION = re.compile(r"\bgo (build|test|vet|run)\b")
+
+
+def _code_lines(path: Path) -> list[tuple[int, str]]:
+    return [
+        (n, line)
+        for n, line in enumerate(path.read_text(encoding="utf-8").splitlines(), 1)
+        if not line.lstrip().startswith("#")
+    ]
+
+
+def test_every_go_build_test_vet_run_call_of_check_go_carries_trimpath() -> None:
+    # The invocation lines are derived from the script itself: a `go build|test|vet|run` that names -mod=readonly (every one does) must
+    # also name -trimpath, on the same line. `go list` is not a build and is left alone.
+    seen = [
+        (n, line)
+        for n, line in _code_lines(CHECK_GO)
+        if GO_INVOCATION.search(line) and "-mod=readonly" in line
+    ]
+    assert len(seen) >= 15, f"the derivation found only {len(seen)} go invocations"
+    missing = [n for n, line in seen if "-trimpath" not in line]
+    assert not missing, (
+        f"check_go.sh go invocation(s) without -trimpath at line(s) {missing}"
+    )
+
+
+def test_the_stand_in_sees_trimpath_on_every_recorded_race_call(tmp_path: Path) -> None:
+    proc, calls = _run_check_go(tmp_path, "ci-leg", "race", "1", "3")
+    assert proc.returncode == 0, proc.stderr[-1500:]
+    assert calls, "no go test call was recorded"
+    assert all(" -trimpath " in f" {c} " for c in calls), calls
+
+
+def test_the_goflags_scrub_stays_so_trimpath_is_explicit() -> None:
+    text = CHECK_GO.read_text(encoding="utf-8")
+    line = next(row for row in text.splitlines() if row.startswith("GO_ENV_OFF=("))
+    assert "-u GOFLAGS" in line, (
+        "the GOFLAGS scrub must stay: -trimpath is an explicit flag, not an inherited one"
+    )
+
+
+def test_every_ops_go_build_outside_check_go_and_every_image_build_carries_trimpath() -> (
+    None
+):
+    # `go build` calls of the image Dockerfiles and the CI/host helper scripts. A Dockerfile build spans continuation lines, so join them.
+    files = sorted((ROOT / "docker").glob("*Dockerfile*")) + sorted(
+        (ROOT / "docker").glob("*/Dockerfile*")
+    )
+    files += [
+        ROOT / "ci" / "lib" / "go_api_prove_e2e.sh",
+        ROOT / "ci" / "lib" / "go_worker_fixture.sh",
+        ROOT / "ci" / "local_validate.sh",
+    ]
+    builds = 0
+    for path in files:
+        text = re.sub(r"\\\n\s*", " ", path.read_text(encoding="utf-8"))
+        for line in text.splitlines():
+            if line.lstrip().startswith("#") or not re.search(r"\bgo build\b", line):
+                continue
+            if re.search(r"CH_PROBE_DETAIL|printf|echo|\bdie\b", line):
+                continue  # a message that names the command, not a call
+            # one line can hold several calls (a joined RUN): each call runs up to the next `&&`
+            for call in re.split(r"\bgo build\b", line)[1:]:
+                builds += 1
+                assert "-trimpath" in call.split("&&")[0], (
+                    f"{path.relative_to(ROOT)}: go build without -trimpath: {line.strip()[:140]}"
+                )
+    assert builds >= 8, f"the derivation found only {builds} go build calls"

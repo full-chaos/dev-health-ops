@@ -44,6 +44,8 @@ var userinfoForms = []struct {
 	{"encoded slash", "dial svc_user:Gg7Tt%2FHh8Ss@db.internal failed", []string{"Gg7Tt", "Hh8Ss"}, "db.internal"},
 	{"at sign in the password", "dial svc_user:Cc3Xx@Dd4Ww@db.internal:5432 failed", []string{"Cc3Xx", "Dd4Ww"}, "db.internal"},
 	{"encoded at sign", "dial svc_user:Ee5Vv%40Ff6Uu@db.internal failed", []string{"Ee5Vv", "Ff6Uu"}, "db.internal"},
+	{"credential before an image digest (sha256)", "pull svc_user:Zq9Lm4Nv77@registry.internal:5000/repo@sha256:0123456789abcdef now", []string{"Zq9Lm4Nv77"}, "@sha256:0123456789abcdef"},
+	{"credential before an image digest (sha512)", "pull svc_user:Zq9Lm4Nv78@registry.internal:5000/repo@sha512:0123456789abcdef now", []string{"Zq9Lm4Nv78"}, "@sha512:0123456789abcdef"},
 	{"encoded double quote", "dial svc_user:Aa1%22Bb2@db.internal now", []string{"Aa1", "Bb2"}, "db.internal"},
 	{"encoded single quote", "dial svc_user:Aa1%27Bb2@db.internal now", []string{"Aa1", "Bb2"}, "db.internal"},
 	{"encoded less-than", "dial svc_user:Aa1%3CBb2@db.internal now", []string{"Aa1", "Bb2"}, "db.internal"},
@@ -113,6 +115,8 @@ func TestBenignTextWithAnAtSignOrAColonIsUnchangedInEveryLayer(t *testing.T) {
 		"image registry.example.test:5000/repo@sha256:0123456789abcdef pulled",
 		"clone git@github.com:org/repo.git now",
 		"module example.test/x/y@v1.2.3 loaded",
+		"retry at 12:30:45, mail ops@example.test",
+		"GET /api/v1/users/@me?since=12:30 failed",
 	} {
 		for _, layer := range userinfoLayers {
 			got := layer.redact(text)
@@ -124,6 +128,56 @@ func TestBenignTextWithAnAtSignOrAColonIsUnchangedInEveryLayer(t *testing.T) {
 			}
 			if got != text {
 				t.Errorf("%s changed %q to %q", layer.name, text, got)
+			}
+		}
+	}
+}
+
+// NAMED OVER-REDACTION (fail-closed, D4479): these benign-looking texts hold a
+// `word:word@` run, so the match cannot tell them from a credential and hides the
+// part before the `@`. Each row pins the measured rewrite in every layer, so a
+// change in either direction is seen.
+func TestFailClosedRewritesArePinnedInEveryLayer(t *testing.T) {
+	for _, row := range []struct{ text, want string }{
+		{"write mailto:ops@example.test now", "write [REDACTED]@example.test now"},
+		{"see docs.example.test:8443/a/b@v2 now", "see [REDACTED]@v2 now"},
+		{"GET /x?at=12:30&to=a@b failed", "GET /x?at=[REDACTED]@b failed"},
+	} {
+		for _, layer := range userinfoLayers {
+			got := layer.redact(row.text)
+			if layer.name == "log line" {
+				if !strings.Contains(got, row.want) {
+					t.Errorf("%s: %q no longer rewrites to %q: %.300s", layer.name, row.text, row.want, got)
+				}
+				continue
+			}
+			if got != row.want {
+				t.Errorf("%s: %q = %q, want the pinned %q", layer.name, row.text, got, row.want)
+			}
+		}
+	}
+}
+
+// NAMED LIMIT (D4479 C): the by-value layer (a registered secret of the minimum
+// length or more) is a pass of the log path only. The persisted-column layers have
+// no by-value pass, so a registered password that holds a raw quote, which the
+// shape match cannot reach (limit above), stays whole there. The rows pin that
+// measured state per layer; one shared entry for every layer is its own change.
+func TestByValueCoverIsTheLogPathOnly(t *testing.T) {
+	const value = `Qq9"Rr8Ss7Tt`
+	secrets.Register("REVIEW_COVER_BY_VALUE_TWO", value)
+	text := `dial svc_user:` + value + `@db.internal now`
+	for _, layer := range userinfoLayers {
+		got := layer.redact(text)
+		covered := !strings.Contains(got, "Rr8Ss7Tt")
+		switch layer.name {
+		case "RedactText", "log line":
+			if !covered {
+				t.Errorf("%s: the registered value survived: %.300s", layer.name, got)
+			}
+		default:
+			if covered {
+				t.Errorf("%s now covers a registered value by value: the named limit changed (update the pin and the follow-up ticket): %.300s", layer.name, got)
 			}
 		}
 	}

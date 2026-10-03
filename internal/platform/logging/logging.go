@@ -166,13 +166,21 @@ func redactUserinfo(value string) string {
 	var out strings.Builder
 	written := 0
 	for _, match := range matches {
-		// `name:tag@sha256:<digest>` is an image reference, not a credential.
-		if isDigestReference(value[match[1]:]) {
-			continue
+		end := match[1]
+		// `name:tag@sha256:<digest>` is an image reference, not a credential: the last
+		// `@` of the run is the digest's. A credential before it (`user:secret@host/repo@sha256:...`)
+		// is still redacted, up to the `@` before the digest; with no other `@` in the run
+		// there is nothing to redact.
+		if isDigestReference(value[end:]) {
+			previous := strings.LastIndexByte(value[match[0]:end-1], '@')
+			if previous < 0 {
+				continue
+			}
+			end = match[0] + previous + 1
 		}
 		out.WriteString(value[written:match[0]])
 		out.WriteString(redacted + "@")
-		written = match[1]
+		written = end
 	}
 	if written == 0 {
 		return value

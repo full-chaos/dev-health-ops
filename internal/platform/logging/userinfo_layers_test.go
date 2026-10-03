@@ -257,3 +257,54 @@ func TestDoublyEncodedAtSignStaysWholeInThePersistedLayers(t *testing.T) {
 		}
 	}
 }
+
+// WHAT MAIN HIDES, THE TIP MUST HIDE (found by gwc-vetter-2's differential over
+// 1060 texts): a secret value that itself holds `x:y@z` is hidden whole by the
+// key/value scan, and the userinfo pass must not run in front of that scan and leave
+// the tail readable; an encoded credential URL loses its host and path with its
+// password, as the raw one does.
+func TestAKeyedSecretThatHoldsAnAtSignIsStillHiddenWhole(t *testing.T) {
+	for _, text := range []string{
+		"dial password=Qm7Aa1:Qm7Bb2@Qm7Cc3 now",
+		"GET /cb?access_token=Qm7Aa1:Qm7Bb2@Qm7Cc3&state=1",
+		"X-Api-Key: Qm7Aa1:Qm7Bb2@Qm7Cc3",
+		"{Token:Qm7Aa1:Qm7Bb2@Qm7Cc3 Org:1}",
+		"next=token=Qm7Aa1:Qm7Bb2@Qm7Cc3 end",
+	} {
+		for _, layer := range userinfoLayers[:2] {
+			got := layer.redact(text)
+			for _, tail := range []string{"Qm7Aa1", "Qm7Bb2", "Qm7Cc3"} {
+				if strings.Contains(got, tail) {
+					t.Errorf("%s: %q left %q readable: %.300s", layer.name, text, tail, got)
+				}
+			}
+		}
+	}
+	// The error sanitizers hide the Go-struct form of the same value as well.
+	for _, layer := range userinfoLayers[3:] {
+		got := layer.redact("{Token:Qm7Aa1:Qm7Bb2@Qm7Cc3 Org:1}")
+		for _, tail := range []string{"Qm7Aa1", "Qm7Bb2", "Qm7Cc3"} {
+			if strings.Contains(got, tail) {
+				t.Errorf("%s left %q readable: %.300s", layer.name, tail, got)
+			}
+		}
+	}
+}
+
+func TestAnEncodedCredentialUrlLosesItsHostAndPathOnTheLogPath(t *testing.T) {
+	for _, text := range []string{
+		"dial https%3A%2F%2Fsvc_user%3AQm7Ui1Zz%40db.internal%3A5432%2Fapp%2FQm7Pa2Zz%3Fpassword%3DQm7Pq3Zz now",
+		"dial postgres%3A%2F%2Fsvc_user%3AQm7Ui1Zz%40db.internal%3A5432%2Fapp%2FQm7Pa2Zz%3Fpassword%3DQm7Pq3Zz now",
+		"dial redis%3A%2F%2F%3AQm7Ui1Zz%40db.internal%3A5432%2Fapp%2FQm7Pa2Zz now",
+		"dial https%3A%2F%2Fsvc_user%3AQm7Ui1Zz@db.internal%3A5432%2Fapp%2FQm7Pa2Zz now",
+	} {
+		for _, layer := range userinfoLayers[:2] {
+			got := layer.redact(text)
+			for _, shown := range []string{"Qm7Ui1Zz", "Qm7Pa2Zz", "Qm7Pq3Zz", "db.internal"} {
+				if strings.Contains(got, shown) {
+					t.Errorf("%s: %q left %q readable: %.300s", layer.name, text, shown, got)
+				}
+			}
+		}
+	}
+}

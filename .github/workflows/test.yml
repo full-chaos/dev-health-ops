@@ -271,8 +271,7 @@ jobs:
             exit 1
           fi
           printf 'kept files: %s\n' "${#kept[@]}"
-          pytest --collect-only -q -p no:randomly "${kept[@]}" 2>&1 | tail -15
-          pytest "${kept[@]}" -v -rs -n 4
+          pytest "${kept[@]}" -q -rs -n 4
 
   # Required-status-check gate. Branch protection requires a check named
   # exactly "test". It judges docs-tests and tooling-tests through

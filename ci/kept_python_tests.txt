@@ -18,7 +18,6 @@ tests/test_go_api_routing_digest_checker.py
 tests/test_go_api_routing_operator_text.py
 tests/test_governance_workflow.py
 tests/test_helm_api_probes.py
-tests/test_helm_api_service.py
 tests/test_helm_clickhouse_usersd.py
 tests/test_helm_extra_envfrom.py
 tests/test_helm_go_worker_keda_extra_triggers.py

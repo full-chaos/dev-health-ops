@@ -192,6 +192,35 @@ func TestNodeDisplayNames_AFailedReadLeavesOnlyThatTypeUnnamed(t *testing.T) {
 	}
 }
 
+// One table says which types carry a name. A type carries a name exactly when
+// NodeDisplayNames can give a node of that type one, so the flag and the name
+// cannot disagree; and the set is the four types the SDL states.
+func TestNodeTypeCarriesName_FollowsTheTableTheNamesComeFrom(t *testing.T) {
+	sample := map[string]string{
+		"pr": nnRepoA + ":7", "deployment": "dep-9001", "incident": "INC-42", "issue": "ABC-1",
+		"review_outcome": "rev-1", "ai_workflow_run": "run-readable", "diff": "d1", "commit": "abc", "file": "a.go", "": "x",
+	}
+	carries := map[string]bool{}
+	for typ, id := range sample {
+		name := NodeDisplayNames(context.Background(), catalogueClient(), "org-1", []NodeRef{{typ, id}})[0]
+		if got := NodeTypeCarriesName(typ); got != (name != nil) {
+			t.Errorf("%q: NodeTypeCarriesName = %v, but a full catalogue gives the name %v", typ, got, named([]*string{name}))
+		}
+		if NodeTypeCarriesName(typ) {
+			carries[typ] = true
+		}
+	}
+	if want := map[string]bool{"pr": true, "deployment": true, "incident": true, "issue": true}; !reflect.DeepEqual(carries, want) {
+		t.Errorf("types that carry a name = %v, want %v", carries, want)
+	}
+	if len(namedNodeTypes) != 4 {
+		t.Errorf("the table holds %d types, want the four the SDL states", len(namedNodeTypes))
+	}
+	if !NodeTypeCarriesName("  PR ") {
+		t.Error("the type is trimmed and its case ignored, as NodeDisplayNames does")
+	}
+}
+
 // resolvePRDisplayNames reads only the id forms it is given: the edge ends of
 // workGraphEdges pass the "#pr" form alone, as the reference does, so the typed
 // tables' colon form stays unresolved there.

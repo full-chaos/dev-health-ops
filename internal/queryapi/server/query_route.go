@@ -310,6 +310,49 @@ const registeredOperatingReviewDocument = `query OperatingReview($orgId: String!
         value
         unit
         hasData
+        scope
+        delta {
+          value
+          priorValue
+          absolute
+          percent
+          status
+          hasPriorData
+          __typename
+        }
+        __typename
+      }
+      __typename
+    }
+    recommendations
+    recommendationsEmptyState
+    __typename
+  }
+}`
+
+// registeredOperatingReviewV2Document is the text of `operatingReview` BEFORE the Operating Review asked for the
+// scope of a metric (CHAOS-8516): the text of CHAOS-8115, with hasData and hasPriorData. It stays a legacy text
+// (see legacyDigestsByOperation) beside V1, so a web build still sending it keeps working while the new one rolls
+// out. Remove it with the cleanup ticket once no client sends it
+// (testdata/wire_capture/operatingreview_v2_captured.graphql).
+const registeredOperatingReviewV2Document = `query OperatingReview($orgId: String!, $input: OperatingReviewInput!) {
+  operatingReview(orgId: $orgId, input: $input) {
+    orgId
+    teamId
+    weekStart
+    priorWeekStart
+    sections {
+      key
+      title
+      changed
+      improved
+      worsened
+      metrics {
+        key
+        label
+        value
+        unit
+        hasData
         delta {
           value
           priorValue
@@ -3940,7 +3983,7 @@ var legacyDigestsByOperation = map[string][]string{
 	"aiOpportunities":     {digestHex(registeredAiOpportunitiesV1Document)},
 	"aiWorkflowDrilldown": {digestHex(registeredAiWorkflowDrilldownV1Document)},
 	"capacityForecast":    {digestHex(registeredCapacityForecastV1Document), digestHex(registeredCapacityForecastV2Document)},
-	"operatingReview":     {digestHex(registeredOperatingReviewV1Document)},
+	"operatingReview":     {digestHex(registeredOperatingReviewV1Document), digestHex(registeredOperatingReviewV2Document)},
 	"reviewEdges":         {digestHex(registeredReviewEdgesV1Document)},
 }
 

@@ -409,8 +409,8 @@ type workItemsRow struct {
 // wip_age_p90_hours are Nullable(Float64) on work_item_metrics_daily;
 // each is tuple-wrapped so argMax cannot skip a newest row that carries
 // NULL in one of them.
-func fetchWorkItems(ctx context.Context, client QueryClient, orgID string, teamID *string, start, end time.Time) ([]workItemsRow, error) {
-	teamFilter, teamGroup, teamBinding := teamClauses(teamID)
+func fetchWorkItems(ctx context.Context, client QueryClient, orgID string, teams teamSelection, start, end time.Time) ([]workItemsRow, error) {
+	teamFilter, teamGroup, teamBinding := teamClauses(teams)
 	query := `
         SELECT
           day,
@@ -479,8 +479,8 @@ type stateDurationRow struct {
 
 // fetchStateDurations ports the "state_durations" query verbatim
 // (metrics/operating_review.py:157-182).
-func fetchStateDurations(ctx context.Context, client QueryClient, orgID string, teamID *string, start, end time.Time) ([]stateDurationRow, error) {
-	teamFilter, teamGroup, teamBinding := teamClauses(teamID)
+func fetchStateDurations(ctx context.Context, client QueryClient, orgID string, teams teamSelection, start, end time.Time) ([]stateDurationRow, error) {
+	teamFilter, teamGroup, teamBinding := teamClauses(teams)
 	query := `
         SELECT
           status,
@@ -842,8 +842,8 @@ type investmentRow struct {
 
 // fetchInvestment ports the "investment" query verbatim
 // (metrics/operating_review.py:282-301).
-func fetchInvestment(ctx context.Context, client QueryClient, orgID string, teamID *string, start, end time.Time) ([]investmentRow, error) {
-	teamFilter, teamGroup, teamBinding := teamClauses(teamID)
+func fetchInvestment(ctx context.Context, client QueryClient, orgID string, teams teamSelection, start, end time.Time) ([]investmentRow, error) {
+	teamFilter, teamGroup, teamBinding := teamClauses(teams)
 	query := `
         SELECT investment_area, sum(delivery_units) AS delivery_units
         FROM (
@@ -902,8 +902,8 @@ type aiImpactRow struct {
 // test_gap_rate and incident_drag_rate are Nullable(Float64) on
 // ai_impact_metrics_daily; each is tuple-wrapped so argMax cannot skip a
 // newest row that carries NULL in one of them.
-func fetchAIImpact(ctx context.Context, client QueryClient, orgID string, teamID *string, start, end time.Time) ([]aiImpactRow, error) {
-	teamFilter, _, teamBinding := teamClauses(teamID)
+func fetchAIImpact(ctx context.Context, client QueryClient, orgID string, teams teamSelection, start, end time.Time) ([]aiImpactRow, error) {
+	teamFilter, _, teamBinding := teamClauses(teams)
 	query := `
         SELECT
           attribution_bucket,
@@ -1051,8 +1051,8 @@ type aiGovernanceRawRow struct {
 // (the query never executes). Go returns the real ratio. A dual-run MATCH
 // on this query would mean the fix did not take effect -- see this
 // package's proof for the declared expected-divergence list.
-func fetchAIGovernance(ctx context.Context, client QueryClient, orgID string, teamID *string, start, end time.Time) ([]aiGovernanceRawRow, error) {
-	teamFilter, _, teamBinding := teamClauses(teamID)
+func fetchAIGovernance(ctx context.Context, client QueryClient, orgID string, teams teamSelection, start, end time.Time) ([]aiGovernanceRawRow, error) {
+	teamFilter, _, teamBinding := teamClauses(teams)
 	query := `
         SELECT
           day,
@@ -1179,11 +1179,37 @@ type periodRows struct {
 // collapsing together in cross-team "All Teams" mode, CHAOS-1755) is
 // non-empty only when teamID is UNSET -- the two conditions are inverses
 // of each other, matching Python exactly.
-func teamClauses(teamID *string) (teamFilter, teamGroup string, binding *clickhouse.Binding) {
-	if teamID == nil {
+func teamClauses(teams teamSelection) (teamFilter, teamGroup string, binding *clickhouse.Binding) {
+	switch len(teams) {
+	case 0:
 		return "", ", team_id", nil
+	case 1:
+		return "AND team_id = {team_id:String}", "", &clickhouse.Binding{Name: "team_id", Value: teams[0]}
 	}
-	return "AND team_id = {team_id:String}", "", &clickhouse.Binding{Name: "team_id", Value: *teamID}
+	// Several teams (CHAOS-8516): the rows of the selected teams, kept apart per
+	// team exactly as the all-teams mode keeps them, so the reducers see the
+	// UNION of the teams' stored rows and never a pre-mixed row.
+	return "AND team_id IN {team_ids:Array(String)}", ", team_id", &clickhouse.Binding{Name: "team_ids", Value: []string(teams)}
+}
+
+// teamSelection is the teams a review is for: none (all teams), one, or several
+// (CHAOS-8516). One team gives the statements the one-team review always had,
+// none gives the all-teams statements; several is the one new shape.
+type teamSelection []string
+
+// selectTeams is the selection of a teamIds argument: blank ids dropped, a
+// repeated id kept once, in the order given.
+func selectTeams(teamIDs []string) teamSelection {
+	seen := make(map[string]bool, len(teamIDs))
+	var out teamSelection
+	for _, id := range teamIDs {
+		if lowerTrim(id) == "" || seen[id] {
+			continue
+		}
+		seen[id] = true
+		out = append(out, id)
+	}
+	return out
 }
 
 func periodBindings(orgID string, start, end time.Time, teamBinding *clickhouse.Binding) []clickhouse.Binding {
@@ -1210,14 +1236,14 @@ func periodBindings(orgID string, start, end time.Time, teamBinding *clickhouse.
 // this port has ten call sites instead of one loop body, since each query
 // has a distinct Go return type -- same swallow-and-log behavior at every
 // one).
-func fetchPeriodRows(ctx context.Context, client QueryClient, orgID string, teamID *string, start time.Time) periodRows {
+func fetchPeriodRows(ctx context.Context, client QueryClient, orgID string, teams teamSelection, start time.Time) periodRows {
 	_, end := weekBounds(start)
 
-	workItems, err := fetchWorkItems(ctx, client, orgID, teamID, start, end)
+	workItems, err := fetchWorkItems(ctx, client, orgID, teams, start, end)
 	errSwallow(ctx, "work_items", err)
 	workItems = discardOnError(workItems, err)
 
-	stateDurations, err := fetchStateDurations(ctx, client, orgID, teamID, start, end)
+	stateDurations, err := fetchStateDurations(ctx, client, orgID, teams, start, end)
 	errSwallow(ctx, "state_durations", err)
 	stateDurations = discardOnError(stateDurations, err)
 
@@ -1241,15 +1267,15 @@ func fetchPeriodRows(ctx context.Context, client QueryClient, orgID string, team
 	errSwallow(ctx, "incidents", err)
 	incidents = discardOnError(incidents, err)
 
-	investment, err := fetchInvestment(ctx, client, orgID, teamID, start, end)
+	investment, err := fetchInvestment(ctx, client, orgID, teams, start, end)
 	errSwallow(ctx, "investment", err)
 	investment = discardOnError(investment, err)
 
-	aiImpact, err := fetchAIImpact(ctx, client, orgID, teamID, start, end)
+	aiImpact, err := fetchAIImpact(ctx, client, orgID, teams, start, end)
 	errSwallow(ctx, "ai_impact", err)
 	aiImpact = discardOnError(aiImpact, err)
 
-	aiGovernance, err := fetchAIGovernance(ctx, client, orgID, teamID, start, end)
+	aiGovernance, err := fetchAIGovernance(ctx, client, orgID, teams, start, end)
 	errSwallow(ctx, "ai_governance", err)
 	aiGovernance = discardOnError(aiGovernance, err)
 
@@ -1417,6 +1443,24 @@ type reviewMetric struct {
 	// hasData: the week holds a stored value for the metric (CHAOS-8115).
 	// False = value is a 0 placeholder, not a measured zero.
 	hasData bool
+	// organisationWide: the metric's daily tables hold no team, so its value is
+	// the whole organisation's whatever team is selected (CHAOS-8516).
+	organisationWide bool
+}
+
+// organisation marks a metric whose reads carry no team filter: the request's
+// team selection does not narrow it. TestOrganisationMetricsAreTheOnesWhoseReadsHaveNoTeam
+// pins the marked set to the reads.
+func (m reviewMetric) organisation() reviewMetric {
+	m.organisationWide = true
+	return m
+}
+
+func metricScope(m reviewMetric) model.OperatingReviewMetricScope {
+	if m.organisationWide {
+		return model.OperatingReviewMetricScopeOrganization
+	}
+	return model.OperatingReviewMetricScopeTeam
 }
 
 // dataIn records whether each of the two weeks holds a stored value for the
@@ -1881,6 +1925,7 @@ func toGraphQLSection(s reviewSection) model.OperatingReviewSection {
 			Value:   m.value,
 			Unit:    m.unit,
 			HasData: m.hasData,
+			Scope:   metricScope(m),
 			Delta: &model.OperatingReviewDelta{
 				Value:        m.delta.value,
 				PriorValue:   m.delta.priorValue,
@@ -1947,7 +1992,7 @@ func bottleneckSection(current, prior periodRows) reviewSection {
 		buildMetric("review_latency_hours", "Review latency",
 			avgF(pluck(current.repoMetrics, func(r repoMetricsRow) *float64 { return r.prFirstReviewP50Hours })),
 			avgF(pluck(prior.repoMetrics, func(r repoMetricsRow) *float64 { return r.prFirstReviewP50Hours })),
-			"hours", lowerIsBetter).dataIn(current, prior, hasReviewLatency),
+			"hours", lowerIsBetter).dataIn(current, prior, hasReviewLatency).organisation(),
 		buildMetric("wip_age_p90_hours", "WIP age p90",
 			avgF(pluck(current.workItems, func(r workItemsRow) *float64 { return r.wipAgeP90Hours })),
 			avgF(pluck(prior.workItems, func(r workItemsRow) *float64 { return r.wipAgeP90Hours })),
@@ -1962,19 +2007,19 @@ func riskSection(current, prior periodRows) reviewSection {
 		buildMetric("hotspot_risk_score", "Hotspot risk",
 			avgF(pluck(current.hotspots, func(r hotspotsAggRow) *float64 { return r.riskScore })),
 			avgF(pluck(prior.hotspots, func(r hotspotsAggRow) *float64 { return r.riskScore })),
-			"score", lowerIsBetter).dataIn(current, prior, hasHotspotRisk),
+			"score", lowerIsBetter).dataIn(current, prior, hasHotspotRisk).organisation(),
 		buildMetric("ownership_concentration", "Ownership concentration",
 			avgF(pluck(current.repoMetrics, func(r repoMetricsRow) *float64 { return r.singleOwnerFileRatio30d })),
 			avgF(pluck(prior.repoMetrics, func(r repoMetricsRow) *float64 { return r.singleOwnerFileRatio30d })),
-			"ratio", lowerIsBetter).dataIn(current, prior, hasOwnershipConcentration),
+			"ratio", lowerIsBetter).dataIn(current, prior, hasOwnershipConcentration).organisation(),
 		buildMetric("complexity_per_kloc", "Complexity",
 			avgF(pluck(current.complexity, func(r complexityAggRow) *float64 { return r.cyclomaticPerKloc })),
 			avgF(pluck(prior.complexity, func(r complexityAggRow) *float64 { return r.cyclomaticPerKloc })),
-			"cyclomatic/KLOC", lowerIsBetter).dataIn(current, prior, hasComplexity),
+			"cyclomatic/KLOC", lowerIsBetter).dataIn(current, prior, hasComplexity).organisation(),
 		buildMetric("bus_factor", "Bus factor",
 			minF(pluck(current.repoMetrics, func(r repoMetricsRow) *float64 { return f(r.busFactor) })),
 			minF(pluck(prior.repoMetrics, func(r repoMetricsRow) *float64 { return f(r.busFactor) })),
-			"people", higherIsBetter).dataIn(current, prior, hasRepoMetricRows),
+			"people", higherIsBetter).dataIn(current, prior, hasRepoMetricRows).organisation(),
 	})
 }
 
@@ -1985,13 +2030,13 @@ func reliabilitySection(current, prior periodRows) reviewSection {
 		buildMetric("deployments_count", "Deployments",
 			sumF(pluck(current.deployments, func(r deploymentsAggRow) *float64 { return f(r.deploymentsCount) })),
 			sumF(pluck(prior.deployments, func(r deploymentsAggRow) *float64 { return f(r.deploymentsCount) })),
-			"deployments", higherIsBetter).dataIn(current, prior, hasDeploymentRows),
+			"deployments", higherIsBetter).dataIn(current, prior, hasDeploymentRows).organisation(),
 		buildMetric("change_failure_rate", "Change failure rate",
-			changeFailureRate(current), changeFailureRate(prior), "ratio", lowerIsBetter).dataIn(current, prior, hasChangeFailureRate),
+			changeFailureRate(current), changeFailureRate(prior), "ratio", lowerIsBetter).dataIn(current, prior, hasChangeFailureRate).organisation(),
 		buildMetric("incidents_count", "Incidents",
 			sumF(pluck(current.incidents, func(r incidentsAggRow) *float64 { return f(r.incidentsCount) })),
 			sumF(pluck(prior.incidents, func(r incidentsAggRow) *float64 { return f(r.incidentsCount) })),
-			"incidents", lowerIsBetter).dataIn(current, prior, hasIncidentRows),
+			"incidents", lowerIsBetter).dataIn(current, prior, hasIncidentRows).organisation(),
 		buildMetric("mttr_hours", "MTTR",
 			firstNonZero(
 				avgF(pluck(current.incidents, func(r incidentsAggRow) *float64 { return r.mttrP50Hours })),
@@ -2001,7 +2046,7 @@ func reliabilitySection(current, prior periodRows) reviewSection {
 				avgF(pluck(prior.incidents, func(r incidentsAggRow) *float64 { return r.mttrP50Hours })),
 				avgF(pluck(prior.repoMetrics, func(r repoMetricsRow) *float64 { return r.mttrHours })),
 			),
-			"hours", lowerIsBetter).dataIn(current, prior, hasMTTR),
+			"hours", lowerIsBetter).dataIn(current, prior, hasMTTR).organisation(),
 	})
 }
 
@@ -2058,13 +2103,52 @@ func aiWorkflowSection(current, prior periodRows) reviewSection {
 // here: Python parses and discards it, using require_org_id(context)
 // alone, and this port reproduces that by construction.
 func Resolve(ctx context.Context, client QueryClient, orgID string, teamID *string, weekStart graphqldate.Date) (*model.OperatingReview, error) {
+	var teams teamSelection
+	if teamID != nil {
+		teams = teamSelection{*teamID}
+	}
+	return resolveSelection(ctx, client, orgID, teamID, teams, weekStart)
+}
+
+// ErrBothTeamArguments is the answer to a request that gives teamId AND
+// teamIds: the two say who the review is for in two ways, and neither wins.
+var ErrBothTeamArguments = errors.New("give teamId or teamIds, not both")
+
+// ResolveInput answers operatingReview for the request's team arguments
+// (CHAOS-8516): teamId (one team), teamIds (the teams reviewed together), or
+// neither (all teams).
+//
+// The review of several teams is the review of the UNION of the teams' stored
+// rows, by the same reducers as the one-team and the all-teams review. So one
+// id in teamIds is the one-team review, and a count of several teams is a sum, a
+// ratio is made from summed numerators and denominators, and a mean is a mean
+// over the stored rows, never a mean of team values. The metrics marked
+// organisation() are not narrowed: their tables hold no team.
+//
+// Rows with no team are in the all-teams review only: no id selects them.
+func ResolveInput(ctx context.Context, client QueryClient, orgID string, teamID *string, teamIDs []string, weekStart graphqldate.Date) (*model.OperatingReview, error) {
+	teams := selectTeams(teamIDs)
+	switch {
+	case teamID != nil && len(teams) > 0:
+		return nil, ErrBothTeamArguments
+	case len(teams) == 0:
+		return Resolve(ctx, client, orgID, teamID, weekStart)
+	case len(teams) == 1:
+		one := teams[0]
+		return resolveSelection(ctx, client, orgID, &one, teams, weekStart)
+	}
+	// Several teams: the answer's teamId is null, as for all teams.
+	return resolveSelection(ctx, client, orgID, nil, teams, weekStart)
+}
+
+func resolveSelection(ctx context.Context, client QueryClient, orgID string, teamID *string, teams teamSelection, weekStart graphqldate.Date) (*model.OperatingReview, error) {
 	if client == nil {
 		return nil, errors.New("operatingreview: clickhouse client is required")
 	}
 
 	weekStartT := weekStart.Time()
-	current := fetchPeriodRows(ctx, client, orgID, teamID, weekStartT)
-	prior := fetchPeriodRows(ctx, client, orgID, teamID, priorWeekStart(weekStartT))
+	current := fetchPeriodRows(ctx, client, orgID, teams, weekStartT)
+	prior := fetchPeriodRows(ctx, client, orgID, teams, priorWeekStart(weekStartT))
 
 	return computeReview(orgID, teamID, weekStartT, current, prior), nil
 }

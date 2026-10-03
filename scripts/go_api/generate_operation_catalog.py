@@ -44,8 +44,13 @@ CATALOG_PATH = (
 )
 
 
-def _entry(doc: dict[str, str]) -> dict[str, str]:
-    entry = {"operation": doc["operation"], "digest": doc["digest"]}
+def _entry(doc: dict[str, object]) -> dict[str, object]:
+    entry: dict[str, object] = {"operation": doc["operation"], "digest": doc["digest"]}
+    # CHAOS-8000 dual accept: registrydump marks a text the operation accepted BEFORE its current one
+    # `legacy`. It keeps the operation name and its own digest; the edge keys by digest, so both texts
+    # dispatch to the one operation. The key is present only for a legacy text (true).
+    if doc.get("legacy"):
+        entry["legacy"] = True
     # registrydump reads the kind from the registered document's parsed
     # operation type, never from a hand-typed list, so it cannot disagree with
     # what query-api executes. A query entry carries no kind.
@@ -58,7 +63,7 @@ def _entry(doc: dict[str, str]) -> dict[str, str]:
     return entry
 
 
-def generate() -> list[dict[str, str]]:
+def generate() -> list[dict[str, object]]:
     go = shutil.which("go")
     if go is None:
         raise RuntimeError(
@@ -83,7 +88,12 @@ def generate() -> list[dict[str, str]]:
         raise RuntimeError(
             f"registrydump enumerated ZERO documents from {QUERY_ROUTE_GO}"
         )
-    catalog = sorted((_entry(d) for d in docs), key=lambda d: d["operation"])
+    # Operation order; within an operation the current text first, then its legacy texts in the order
+    # registrydump listed them (the sort is stable and `legacy` is absent on the current one).
+    catalog = sorted(
+        (_entry(d) for d in docs),
+        key=lambda d: (d["operation"], bool(d.get("legacy"))),
+    )
     seen_digests = {d["digest"] for d in catalog}
     if len(seen_digests) != len(catalog):
         raise RuntimeError(

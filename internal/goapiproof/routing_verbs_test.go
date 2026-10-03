@@ -724,3 +724,77 @@ func TestNoVerbLocksARoutingRowBeforeRegisteringTheCandidateBuild(t *testing.T) 
 		t.Fatal("disable must never touch the candidate-build table -- that is what makes its single-table locking safe by construction")
 	}
 }
+
+// ---- CHAOS-8000: legacy catalog entries -------------------------------------------------------
+
+func writeCatalogFile(t *testing.T, body string) string {
+	t.Helper()
+	path := filepath.Join(t.TempDir(), "catalog.json")
+	if err := os.WriteFile(path, []byte(body), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	return path
+}
+
+func TestLoadOperationCatalog_LegacyEntryIsAcceptedAndStaysOutOfTheCurrentMap(t *testing.T) {
+	path := writeCatalogFile(t, `[
+  {"operation": "foo", "digest": "d-new"},
+  {"operation": "foo", "digest": "d-old", "legacy": true},
+  {"operation": "bar", "digest": "d-bar"}
+]`)
+	byOperation, kinds, err := LoadOperationCatalogWithKinds(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if byOperation["foo"] != "d-new" || byOperation["bar"] != "d-bar" || len(byOperation) != 2 {
+		t.Fatalf("current map = %v, want foo->d-new and bar->d-bar only", byOperation)
+	}
+	if kinds["foo"] != OperationKindQuery {
+		t.Fatalf("kinds = %v", kinds)
+	}
+}
+
+func TestLoadOperationCatalog_LegacyEntryMayPrecedeItsCurrentEntry(t *testing.T) {
+	path := writeCatalogFile(t, `[
+  {"operation": "foo", "digest": "d-old", "legacy": true},
+  {"operation": "foo", "digest": "d-new"}
+]`)
+	byOperation, _, err := LoadOperationCatalogWithKinds(path)
+	if err != nil || byOperation["foo"] != "d-new" {
+		t.Fatalf("map = %v, err = %v", byOperation, err)
+	}
+}
+
+func TestLoadOperationCatalog_LegacyRefusals(t *testing.T) {
+	cases := map[string]struct{ body, want string }{
+		"legacy digest equal to another entry's digest": {
+			`[{"operation":"foo","digest":"d1"},{"operation":"bar","digest":"d2"},{"operation":"foo","digest":"d2","legacy":true}]`, "ambiguous",
+		},
+		"legacy digest equal to its own current digest": {
+			`[{"operation":"foo","digest":"d1"},{"operation":"foo","digest":"d1","legacy":true}]`, "ambiguous",
+		},
+		"legacy with no current entry": {
+			`[{"operation":"bar","digest":"d2"},{"operation":"foo","digest":"d1","legacy":true}]`, "no current entry",
+		},
+		"legacy false": {
+			`[{"operation":"foo","digest":"d1"},{"operation":"foo","digest":"d0","legacy":false}]`, "legacy false",
+		},
+		"legacy a string": {
+			`[{"operation":"foo","digest":"d1"},{"operation":"foo","digest":"d0","legacy":"true"}]`, "has legacy",
+		},
+		"legacy of another kind": {
+			`[{"operation":"foo","digest":"d1"},{"operation":"foo","digest":"d0","legacy":true,"kind":"mutation"}]`, "different kind",
+		},
+		"two current entries for one operation": {
+			`[{"operation":"foo","digest":"d1"},{"operation":"foo","digest":"d2"}]`, "twice",
+		},
+	}
+	for name, c := range cases {
+		_, _, err := LoadOperationCatalogWithKinds(writeCatalogFile(t, c.body))
+		if err == nil {
+			t.Errorf("%s: no error, want one containing %q", name, c.want)
+		} else if !strings.Contains(err.Error(), c.want) {
+			t.Errorf("%s: error %q does not contain %q", name, err, c.want)
+		}
+	}
+}

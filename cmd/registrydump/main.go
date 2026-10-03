@@ -69,6 +69,10 @@ type registeredDocument struct {
 	// Kind is the document's operation type, read by digest.DocumentKind
 	// from the registered text itself: "query" or "mutation".
 	Kind string `json:"kind"`
+	// Legacy is true for a text the operation accepted BEFORE its current one (CHAOS-8000 dual
+	// accept): it is listed in legacyDigestsByOperation, not in digestByOperation, and the operation
+	// keeps ONE current document. Absent (false) for the current text.
+	Legacy bool `json:"legacy,omitempty"`
 }
 
 var documentConstPattern = regexp.MustCompile(`^registered.*Document$`)
@@ -298,6 +302,11 @@ func enumerate(filePath string) ([]registeredDocument, error) {
 		return nil, fmt.Errorf("found no digestByOperation assignment in %s -- the map may have been renamed or restructured; this tool needs updating, not the caller silently getting zero documents", filePath)
 	}
 
+	legacyOperationToConsts, err := legacyConsts(file)
+	if err != nil {
+		return nil, err
+	}
+
 	// Cross-check: every registered*Document const must be referenced by
 	// digestByOperation, and vice versa. A mismatch here is exactly the
 	// class of gap CHAOS-4466/CHAOS-4495 produced with a hand-maintained
@@ -315,6 +324,39 @@ func enumerate(filePath string) ([]registeredDocument, error) {
 		docs = append(docs, registeredDocument{Operation: operation, Document: text, ConstName: constName, Digest: digest.Document(text), Kind: kind})
 		delete(documentByConstName, constName)
 	}
+	// CHAOS-8000: the legacy texts. Each belongs to an operation digestByOperation registers, must
+	// resolve to a registered*Document const, and may not share a digest with any other document.
+	seenDigest := map[string]string{}
+	for _, d := range docs {
+		seenDigest[d.Digest] = d.Operation
+	}
+	var legacyOperations []string
+	for operation := range legacyOperationToConsts {
+		legacyOperations = append(legacyOperations, operation)
+	}
+	sort.Strings(legacyOperations)
+	for _, operation := range legacyOperations {
+		if _, registered := operationToConst[operation]; !registered {
+			return nil, fmt.Errorf("legacyDigestsByOperation[%q]: the operation is not in digestByOperation -- a legacy text needs a current one", operation)
+		}
+		for _, constName := range legacyOperationToConsts[operation] {
+			text, ok := documentByConstName[constName]
+			if !ok {
+				return nil, fmt.Errorf("legacyDigestsByOperation[%q] names const %s, which was not found among the unreferenced registered*Document consts (a const may be named once, and never also in digestByOperation)", operation, constName)
+			}
+			kind, err := digest.DocumentKind(text)
+			if err != nil {
+				return nil, fmt.Errorf("legacyDigestsByOperation[%q] (const %s): %w", operation, constName, err)
+			}
+			d := digest.Document(text)
+			if other, dup := seenDigest[d]; dup {
+				return nil, fmt.Errorf("legacyDigestsByOperation[%q] (const %s) has digest %s, already registered for %q: a digest may map to one operation only", operation, constName, d, other)
+			}
+			seenDigest[d] = operation
+			docs = append(docs, registeredDocument{Operation: operation, Document: text, ConstName: constName, Digest: d, Kind: kind, Legacy: true})
+			delete(documentByConstName, constName)
+		}
+	}
 	if len(documentByConstName) != 0 {
 		var orphaned []string
 		for name := range documentByConstName {
@@ -324,6 +366,86 @@ func enumerate(filePath string) ([]registeredDocument, error) {
 		return nil, fmt.Errorf("registered*Document consts with no digestByOperation entry (unreachable by any request, or the map extraction above missed them): %v", orphaned)
 	}
 
-	sort.Slice(docs, func(i, j int) bool { return docs[i].Operation < docs[j].Operation })
+	// Operation order; within an operation the current text first, then the legacy ones in file order.
+	sort.SliceStable(docs, func(i, j int) bool {
+		if docs[i].Operation != docs[j].Operation {
+			return docs[i].Operation < docs[j].Operation
+		}
+		return !docs[i].Legacy && docs[j].Legacy
+	})
 	return docs, nil
+}
+
+// legacyConsts reads the package-level `var legacyDigestsByOperation = map[string][]string{ "op": {digestHex(<const>), ...} }`
+// literal (CHAOS-8000) and returns, per operation, the const identifiers of its legacy texts in file
+// order. An absent var, or an empty literal, is no legacy text. Any other shape is an error: this tool
+// must never silently under-enumerate the texts query-api accepts.
+func legacyConsts(file *ast.File) (map[string][]string, error) {
+	out := map[string][]string{}
+	found := 0
+	for _, decl := range file.Decls {
+		genDecl, ok := decl.(*ast.GenDecl)
+		if !ok || genDecl.Tok != token.VAR {
+			continue
+		}
+		for _, spec := range genDecl.Specs {
+			valueSpec, ok := spec.(*ast.ValueSpec)
+			if !ok {
+				continue
+			}
+			for i, name := range valueSpec.Names {
+				if name.Name != "legacyDigestsByOperation" {
+					continue
+				}
+				found++
+				if found > 1 || i >= len(valueSpec.Values) {
+					return nil, fmt.Errorf("legacyDigestsByOperation must be declared once, with a map literal")
+				}
+				composite, ok := valueSpec.Values[i].(*ast.CompositeLit)
+				if !ok {
+					return nil, fmt.Errorf("legacyDigestsByOperation is assigned from a %T, not a composite literal", valueSpec.Values[i])
+				}
+				for _, elt := range composite.Elts {
+					kv, ok := elt.(*ast.KeyValueExpr)
+					if !ok {
+						return nil, fmt.Errorf("legacyDigestsByOperation has a non key:value element %T", elt)
+					}
+					keyLit, ok := kv.Key.(*ast.BasicLit)
+					if !ok || keyLit.Kind != token.STRING {
+						return nil, fmt.Errorf("legacyDigestsByOperation key %v is not a string literal", kv.Key)
+					}
+					operation, err := strconv.Unquote(keyLit.Value)
+					if err != nil {
+						return nil, fmt.Errorf("legacyDigestsByOperation key: unquote: %w", err)
+					}
+					list, ok := kv.Value.(*ast.CompositeLit)
+					if !ok {
+						return nil, fmt.Errorf("legacyDigestsByOperation[%q] value is not a slice literal (got %T)", operation, kv.Value)
+					}
+					if _, dup := out[operation]; dup {
+						return nil, fmt.Errorf("legacyDigestsByOperation lists %q twice", operation)
+					}
+					for _, item := range list.Elts {
+						call, ok := item.(*ast.CallExpr)
+						if !ok {
+							return nil, fmt.Errorf("legacyDigestsByOperation[%q] element is not a digestHex(<constIdent>) call (got %T)", operation, item)
+						}
+						funIdent, ok := call.Fun.(*ast.Ident)
+						if !ok || funIdent.Name != "digestHex" || len(call.Args) != 1 {
+							return nil, fmt.Errorf("legacyDigestsByOperation[%q] element is not a digestHex(<constIdent>) call", operation)
+						}
+						argIdent, ok := call.Args[0].(*ast.Ident)
+						if !ok {
+							return nil, fmt.Errorf("legacyDigestsByOperation[%q]: digestHex argument is not a bare identifier (got %T)", operation, call.Args[0])
+						}
+						out[operation] = append(out[operation], argIdent.Name)
+					}
+					if len(list.Elts) == 0 {
+						return nil, fmt.Errorf("legacyDigestsByOperation[%q] has no text: remove the entry", operation)
+					}
+				}
+			}
+		}
+	}
+	return out, nil
 }

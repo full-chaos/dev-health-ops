@@ -311,11 +311,15 @@ func TestRouteActivateRunsOnlyTheOperatorImage(t *testing.T) {
 func TestMigrateJobLockstepIgnoresThePythonImageAndAcceptsMatchingGoImages(t *testing.T) {
 	const digest = "ghcr.io/full-chaos/dev-health-go-dho@sha256:" + "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"
 	for name, sets := range map[string][]string{
-		"the Python image tag differs, Go images match":                         {lockstepHook, "image.tag=sha-bbbbbbbbbbbb", "queryApi.enabled=true", "queryApi.image.tag=sha-aaaaaaaaaaaa", "goApi.enabled=true", "goApi.image.tag=sha-aaaaaaaaaaaa"},
-		"queryApi by digest (never compared), hook tag set":                     {lockstepHook, "queryApi.enabled=true", "queryApi.image.repository=" + digest},
-		"hook by digest, queryApi has a sha tag (never compared)":               {"migrations.hook.image=" + digest, "queryApi.enabled=true", "queryApi.image.tag=sha-bbbbbbbbbbbb"},
-		"a disabled component with another tag is not a target":                 {lockstepHook, "goApi.enabled=true", "goApi.image.tag=sha-aaaaaaaaaaaa", "queryApi.image.tag=sha-bbbbbbbbbbbb"},
-		"a serving image without a sha tag (chart default tag) is not compared": {lockstepHook, "queryApi.enabled=true"},
+		"the Python image tag differs, Go images match":                               {lockstepHook, "image.tag=sha-bbbbbbbbbbbb", "queryApi.enabled=true", "queryApi.image.tag=sha-aaaaaaaaaaaa", "goApi.enabled=true", "goApi.image.tag=sha-aaaaaaaaaaaa"},
+		"queryApi by digest (never compared), hook tag set":                           {lockstepHook, "queryApi.enabled=true", "queryApi.image.repository=" + digest},
+		"hook by digest, queryApi has a sha tag (never compared)":                     {"migrations.hook.image=" + digest, "queryApi.enabled=true", "queryApi.image.tag=sha-bbbbbbbbbbbb"},
+		"a disabled component with another tag is not a target":                       {lockstepHook, "goApi.enabled=true", "goApi.image.tag=sha-aaaaaaaaaaaa", "queryApi.image.tag=sha-bbbbbbbbbbbb"},
+		"queryApi alone matches, the Python tag differs (the fallback must not fire)": {lockstepHook, "image.tag=sha-bbbbbbbbbbbb", "queryApi.enabled=true", "queryApi.image.tag=sha-aaaaaaaaaaaa"},
+		"goApi alone matches, the Python tag differs (the fallback must not fire)":    {lockstepHook, "image.tag=sha-bbbbbbbbbbbb", "goApi.enabled=true", "goApi.image.tag=sha-aaaaaaaaaaaa"},
+		"queryApi matches, a disabled goApi has another tag":                          {lockstepHook, "queryApi.enabled=true", "queryApi.image.tag=sha-aaaaaaaaaaaa", "goApi.image.tag=sha-bbbbbbbbbbbb"},
+		"a goApi image without a sha tag (chart default tag) is not compared":         {lockstepHook, "goApi.enabled=true"},
+		"a serving image without a sha tag (chart default tag) is not compared":       {lockstepHook, "queryApi.enabled=true"},
 	} {
 		t.Run(name, func(t *testing.T) {
 			if _, _, refusal := renderJobs(t, sets...); refusal != "" {

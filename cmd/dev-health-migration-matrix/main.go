@@ -58,12 +58,10 @@ const (
 	remainingFamiliesRel   = "internal/jobs/metrics/remaining/families.json"
 	jobDailyPyRelative     = "src/dev_health_ops/metrics/job_daily.py"
 
-	// The "Per REST endpoint" section's two sources. Both are already
-	// covered by go.yml's path filters -- main.py by the existing
-	// `src/dev_health_ops/api/**` entry, query-api's *.go files as
-	// ordinary Go source.
-	mainPyRelative      = "src/dev_health_ops/api/main.py"
-	queryAPIDirRelative = "internal/queryapi/server"
+	// The "Per REST endpoint" section's two sources: main.py (covered by
+	// go.yml's `src/dev_health_ops/api/**` path filter) and query-api's route
+	// table, executed (internal/queryapi/server.RESTRoutes, CHAOS-8307).
+	mainPyRelative = "src/dev_health_ops/api/main.py"
 
 	// catalogRelative is the registered-operation catalog the edge
 	// dispatches by -- the file `dev-hops go-api routing status` reports
@@ -289,7 +287,7 @@ func legacyBlocks(root string, families *migrationmatrix.NativeFamilies, restPro
 	if err != nil {
 		return nil, fmt.Errorf("workgraph investment block: %w", err)
 	}
-	restRows, err := migrationmatrix.LoadRESTEndpoints(filepath.Join(root, mainPyRelative), filepath.Join(root, queryAPIDirRelative))
+	restRows, err := migrationmatrix.LoadRESTEndpoints(filepath.Join(root, mainPyRelative), migrationmatrix.LoadQueryAPIMuxRoutes())
 	if err != nil {
 		return nil, fmt.Errorf("REST endpoints: %w", err)
 	}

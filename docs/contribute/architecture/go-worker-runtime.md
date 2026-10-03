@@ -801,6 +801,58 @@ so the partition shape binds the envelope's organization against `run.org_id`
 on the run join. The first cut invented that column in its test DDL and shipped
 a query production could not parse (CHAOS-4041).
 
+**How the surveys reach the outbox (CHAOS-8421).** The outbox is bound to its
+domain row through `args #>> '{domain,id}'`, and `worker_job_outbox` has no
+index on that expression. On that binding alone every candidate domain row cost
+one sequential scan of the whole outbox: a stack with 34 runs awaiting
+finalization read a 37,000-row outbox 34 times per pass, once a second, for a
+survey that returned nothing. The partition, finalize and work-graph shapes
+therefore **also** bind the River job to the domain row —
+`job.args @> {"domain": {"id": <domain id>}}` — so the planner walks
+domain row → River job → outbox row through two indexes: River's GIN index on
+`river_job.args` (`river_job_args_index`), then the outbox's unique index on
+`river_job_id`. The added predicate is redundant by construction — the relay
+builds a job's args from the outbox envelope and refuses the insert unless they
+agree — so every earlier predicate stays and the result can only be equal or
+smaller. Two rules follow:
+
+- **Do not replace it with a `dedupe_key` lookup.** The canonical key is derived
+  from the domain id, but the redrive publishers write
+  `<kind>:redrive:<domain id>:<nonce>` for the same domain row and a work-graph
+  key is caller-supplied, so an equality on the canonical key drops deliveries
+  from the repair without a trace. The provider-unit shape is the exception: it
+  has always bound the exact key and reaches the outbox through
+  `uq_worker_job_outbox_dedupe_key`.
+- **The GIN index is River's, not ours.** Its presence after the pinned River
+  migrations is asserted in the integration suite, with the plan itself: on an
+  outbox several times the size of `river_job`, each survey must find the River
+  job through `river_job_args_index` and then probe the outbox on
+  `river_job_id` — not scan either table — and the same survey without the
+  River binding must scan the outbox, which is the control that keeps the
+  first assertion honest. The fixture is vacuumed first: a GIN index keeps new
+  entries in a pending list that every search reads in full, so a freshly
+  bulk-loaded index is priced above a table scan until `VACUUM` (autovacuum, on
+  a running stack) folds the list in. The same pending list bounds the real
+  cost of one probe: at most `gin_pending_list_limit` (4 MB by default) is read
+  per search.
+
+**The strand repair backs off while it finds nothing.** The reconciler loop
+ticks once a second because the relay needs to. The strand repair rides that
+tick with no such need — a row becomes a candidate only after a lease has
+expired and River has made its delivery terminal — so
+`joboutbox.IdleBackoffStrandRepair` wraps it: after a pass that saw nothing the
+next pass waits 2, 4, 8, 16, then 30 seconds (the ceiling,
+`DefaultStrandRepairIdleCeiling`). Any finding resets it to every tick: a
+rearm, a refusal of any kind, a retired-kind observation, an undelivered
+resolution, or an error. Refusals reset it on purpose, because the refusal
+counters are read as rates. A standing `undelivered_blocked` level is not a
+finding. A held-back pass runs no statement, reports itself in
+`worker_outbox_reconciler_strand_passes_skipped_idle_total`, and repeats the
+last blocked level so the gauge does not fall to zero between surveys. The
+relay's own claim is not behind the wrapper and keeps its cadence; the
+same-pass guarantee (a row rearmed in a pass is claimed in that pass) is
+unchanged, because a pass that runs still runs before the claim.
+
 The horizon and the liveness taxonomy live in
 [Job recovery lifecycle](../../operate/run/job-recovery-lifecycle.md#recovery-is-gated-twice-not-once).
 Three seam-level nuances belong here instead.

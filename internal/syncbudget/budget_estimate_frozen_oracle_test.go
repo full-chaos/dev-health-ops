@@ -69,7 +69,7 @@ type oracleOutput struct {
 	CredentialMapping []struct {
 		Input struct {
 			Ciphertext *string `json:"ciphertext"`
-			Config     string  `json:"config"`
+			Config     *string `json:"config"`
 		} `json:"input"`
 		Python struct {
 			Repr  *string `json:"repr"`
@@ -131,9 +131,20 @@ func TestBudgetEstimatorMatchesFrozenPython(t *testing.T) {
 		for index, oracleCase := range output.Estimate {
 			want := canonicalPython(t, oracleCase.Python)
 			got := goEstimateResult(t, oracleCase.Input)
+			if len(oracleCase.Input.Env) == 0 {
+				// An empty environment is a nil Getenv: Python reads an
+				// os.environ the script cleared.
+				if nilEnv := goEstimateResultWithGetenv(t, oracleCase.Input, true); nilEnv != got {
+					t.Errorf("case %d: nil Getenv answers %s, empty environment %s", index, nilEnv, got)
+				}
+			}
 			if name := declaredDivergence(oracleCase.Input, oracleCase.Python); name != "" {
 				if got == want {
 					t.Errorf("case %d: declared divergence %q no longer diverges: %s", index, name, got)
+				}
+				// The decided behaviour is a refusal, not a wrong number.
+				if got != `{"error":true}` {
+					t.Errorf("case %d: declared divergence %q must be Go's refusal, got %s", index, name, got)
 				}
 				divergences[name]++
 				continue
@@ -191,6 +202,12 @@ func TestBudgetEstimatorMatchesFrozenPython(t *testing.T) {
 			if got, want := pyRepr(loader.environmentCredentials(oracleCase.Input.Provider)), pyRepr(wantValue); got != want {
 				t.Errorf("case %d %s: python %s, go %s", index, oracleCase.Input.Provider, want, got)
 			}
+			if len(env) == 0 {
+				// An empty environment is a Loader with no Getenv.
+				if got, want := pyRepr(Loader{}.environmentCredentials(oracleCase.Input.Provider)), pyRepr(wantValue); got != want {
+					t.Errorf("case %d %s: python %s, go without Getenv %s", index, oracleCase.Input.Provider, want, got)
+				}
+			}
 		}
 	})
 
@@ -201,8 +218,7 @@ func TestBudgetEstimatorMatchesFrozenPython(t *testing.T) {
 		}
 		loader := Loader{Decryptor: decryptor}
 		for index, oracleCase := range output.CredentialMapping {
-			config := oracleCase.Input.Config
-			mapping, err := loader.credentialMapping(oracleCase.Input.Ciphertext, &config)
+			mapping, err := loader.credentialMapping(oracleCase.Input.Ciphertext, oracleCase.Input.Config)
 			switch {
 			case oracleCase.Python.Error != "" && err == nil:
 				t.Errorf("case %d: python raised %s, go returned %s", index, oracleCase.Python.Error, pyRepr(mapping))
@@ -265,7 +281,17 @@ func canonicalPython(t *testing.T, raw json.RawMessage) string {
 // canonicalPython renders the Python result (BudgetEstimate.to_dict()).
 func goEstimateResult(t *testing.T, input oracleEstimateInput) string {
 	t.Helper()
+	return goEstimateResultWithGetenv(t, input, false)
+}
+
+// goEstimateResultWithGetenv is goEstimateResult; noGetenv leaves the
+// Getenv hook unset.
+func goEstimateResultWithGetenv(t *testing.T, input oracleEstimateInput, noGetenv bool) string {
+	t.Helper()
 	context, err := oracleContext(input)
+	if noGetenv {
+		context.Getenv = nil
+	}
 	var estimates []Estimate
 	if err == nil {
 		estimates, err = EstimateProviderBudget(context)

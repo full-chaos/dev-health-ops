@@ -14,9 +14,9 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"regexp"
+	"sort"
 	"strconv"
 	"strings"
 	"sync"
@@ -310,22 +310,57 @@ var (
 	netPushToken  = regexp.MustCompile(`fcpush_[A-Za-z0-9_-]{16,}`)
 )
 
-// netScrub turns a credential the corpus sends (the fake's request log holds the Authorization header; the
-// cases carry test push tokens) into a typed placeholder that keeps what the oracle compares: whether two
-// requests carried the SAME credential (a short digest of the value). A golden stores no token value. It runs
-// on the recorded answers and on dho's answers alike, and is idempotent.
+// netCredentialConstants are the EXACT test credentials the corpus sends: made in the test (net_corpus_test.go), never real,
+// never from the environment. Only these are replaced; any other credential-shaped value that reaches an answer is an error
+// (netUnscrubbed), so a new credential cannot reach a golden without being named here.
+var netCredentialConstants = map[string]bool{
+	netToken: true, "other-secret": true, "fcpush_legacy": true, "fcpush_primary": true, "fcpush_flag": true, "fcpush_f": true,
+	// the Basic credentials of the userinfo cases: base64 of "ann:s@cret", "ann:" and ":s@cret" (test logins, made in the corpus)
+	"YW5uOnNAY3JldA==": true, "YW5uOg==": true, "OnNAY3JldA==": true,
+}
+
+// netScrub turns the test credentials the corpus sends (the fake's request log holds the Authorization header; the cases carry
+// test push tokens) into a typed placeholder that keeps what the oracle compares: whether two requests carried the SAME
+// credential (a short digest of the value). A golden stores no token value. It runs on the recorded answers and on dho's answers
+// alike (ONE helper for both planes), and is idempotent.
+//
+// NAMED EXCEPTION (CHAOS-7898): this scrub runs in the PRODUCER, before the answers are stored, because the record verb refused
+// a spec Scrub that replaces a deterministic leaf. It is therefore NOT checked by the record verb: the guards are the exact
+// constant list above, the leftover check netUnscrubbed (a credential-shaped value outside the list fails the producer and the
+// replay), and the plants of CHAOS-7790 (a different token = RED, the scrub removed = RED). CHAOS-7898 moves push_net to a
+// recorder-side digest scrub for a declared credential constant; no other golden uses a producer-side scrub.
 func netScrub(text string) string {
-	digest := func(value string) string {
-		sum := sha256.Sum256([]byte(value))
-		return hex.EncodeToString(sum[:6])
+	// Exact constants only, longest first (fcpush_f is a prefix of fcpush_flag): no pattern decides what is replaced.
+	constants := make([]string, 0, len(netCredentialConstants))
+	for value := range netCredentialConstants {
+		constants = append(constants, value)
 	}
-	text = netAuthScheme.ReplaceAllStringFunc(text, func(match string) string {
-		parts := netAuthScheme.FindStringSubmatch(match)
-		return parts[1] + " <credential sha256:" + digest(parts[2]) + ">"
+	sort.Slice(constants, func(i, j int) bool {
+		if len(constants[i]) != len(constants[j]) {
+			return len(constants[i]) > len(constants[j])
+		}
+		return constants[i] < constants[j]
 	})
-	return netPushToken.ReplaceAllStringFunc(text, func(match string) string {
-		return "<push token sha256:" + digest(match) + ">"
-	})
+	for _, value := range constants {
+		sum := sha256.Sum256([]byte(value))
+		text = strings.ReplaceAll(text, value, "<credential sha256:"+hex.EncodeToString(sum[:6])+">")
+	}
+	return text
+}
+
+// netUnscrubbed is the credential-shaped text still in text after netScrub: a push token of the real shape, or the value of a
+// Bearer/Basic scheme that is not a placeholder. Empty means every credential in the answer was a listed constant.
+func netUnscrubbed(text string) []string {
+	var left []string
+	for _, match := range netPushToken.FindAllString(text, -1) {
+		left = append(left, match)
+	}
+	for _, parts := range netAuthScheme.FindAllStringSubmatch(text, -1) {
+		if !strings.HasPrefix(parts[2], "<") {
+			left = append(left, parts[2])
+		}
+	}
+	return left
 }
 
 func netScrubResult(result netResult) netResult {
@@ -349,7 +384,7 @@ const (
 
 // netPythonRun runs every case through the real dev-hops entry point against the Python plane's fake. The
 // jobs (input) name netOracleBase and netOracleDir; they are replaced by the live fake and a fresh directory.
-func netPythonRun(t *testing.T, python, root string, cases []netCase, input []byte) []netResult {
+func netPythonRun(t *testing.T, producer *venueoracle.Producer, cases []netCase, input []byte) []netResult {
 	t.Helper()
 	fake := newNetFake(cases)
 	server := httptest.NewServer(fake)
@@ -357,12 +392,14 @@ func netPythonRun(t *testing.T, python, root string, cases []netCase, input []by
 	dir := t.TempDir()
 	// The host alone is swapped: userinfo cases put "login:password@" between the scheme and the host.
 	live := bytes.ReplaceAll(bytes.ReplaceAll(input, []byte(netOracleHost), []byte(strings.TrimPrefix(server.URL, "http://"))), []byte(netOracleDir), []byte(dir))
-	command := exec.Command(python, "-c", pythonNetProgram)
-	command.Env = pushPythonEnv(root)
+	command, err := producer.Command(context.Background(), pushPythonSettings, nil, "-c", pythonNetProgram)
+	if err != nil {
+		t.Fatal(err)
+	}
 	command.Stdin = bytes.NewReader(live)
 	output, err := command.CombinedOutput()
 	if err != nil {
-		t.Fatalf("live python: %v", pyoracle.RunError(python, err, output))
+		t.Fatalf("live python: %v", pyoracle.RunError(command.Path, err, output))
 	}
 	marker := strings.LastIndex(string(output), "RESULT")
 	if marker < 0 {
@@ -434,8 +471,7 @@ func TestPushNetMatchesTheFrozenPythonOutput(t *testing.T) {
 	golden := venueoracle.OpenGolden(t, venueoracle.GoldenSpec{
 		Path:        "testdata/golden/push_net.json",
 		PythonBuild: netPythonBuild,
-		SHA256:      "4f320314de5108821f1fb8570ac4d4581ef3efaa1a3e8b801fd090d04c1ea723",
-		Scrub:       netScrub,
+		SHA256:      "589f2ab0c8c17f047cefbc89ffb9d9b2abca86a98fba5bbca8b58115fdeb5c91",
 		Recipe: "git worktree add --detach $DIR " + netPythonBuild + " (with its .venv: uv sync --frozen --no-install-project); then from the repository root: " +
 			"go run ./internal/testsupport/venueoracle/goldenrecord -pkg ./internal/pushcli/ -test '^TestPushNetMatchesTheFrozenPythonOutput$' -python-root $DIR",
 	})
@@ -463,9 +499,20 @@ func TestPushNetMatchesTheFrozenPythonOutput(t *testing.T) {
 		t.Fatal(err)
 	}
 	request := venueoracle.ProgramRequest("push net corpus", pythonNetProgram, append(append([]byte{}, input...), script...), pushPythonSettings)
-	answers := golden.Produce(t, root, []venueoracle.Request{request}, func(_ *venueoracle.Producer, _ []venueoracle.Request) []venueoracle.Response {
-		python := pyoracle.Resolve(t, root)
-		results := netPythonRun(t, python, root, cases, input)
+	answers := golden.Produce(t, root, []venueoracle.Request{request}, func(producer *venueoracle.Producer, _ []venueoracle.Request) []venueoracle.Response {
+		producer.RequireDeployed()
+		results := netPythonRun(t, producer, cases, input)
+		// The credentials the corpus sends are test constants shaped like credentials: the golden stores their
+		// digest (netScrub), never the value. Scrubbed here, before the answers are stored, so the record verb
+		// has no run-value scrub of its own to check.
+		for index := range results {
+			results[index] = netScrubResult(results[index])
+			for _, text := range append([]string{results[index].Stdout, results[index].Stderr}, results[index].Requests...) {
+				if left := netUnscrubbed(text); len(left) != 0 {
+					t.Fatalf("case %d: %d credential-shaped value(s) outside netCredentialConstants reached an answer (CHAOS-7898: the producer-side scrub is exact): name the constant or fix the corpus", index, len(left))
+				}
+			}
+		}
 		body, err := json.Marshal(results)
 		if err != nil {
 			t.Fatal(err)

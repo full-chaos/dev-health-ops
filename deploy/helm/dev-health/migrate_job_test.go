@@ -148,18 +148,11 @@ func TestMigrateJobRefusesImagesThatCannotRunTheVerb(t *testing.T) {
 		"an unpinned operator image": {[]string{"migrations.hook.routeActivate.image=ghcr.io/full-chaos/dev-health-go-operator:latest"}, "is not a pinned dho image"},
 		// CHAOS-8309: the lockstep targets are the Go serving images, each enabled one on its own clause;
 		// with both enabled the hook tag must equal BOTH (the last two cases flip one clause at a time).
-		// The Python image stays a target while .Values.image exists (lead D4545: monotone against main, every
-		// render main refused is still refused): each row below is refused on main too.
-		"a different commit than the Python image, no Go component enabled": {[]string{lockstepHook, "image.tag=sha-bbbbbbbbbbbb"}, "and image.repository/image.tag (ghcr.io/full-chaos/dev-hops-api:sha-bbbbbbbbbbbb) are pinned to different commits"},
-		"the Python tag differs, both Go images match":                      {[]string{lockstepHook, "image.tag=sha-bbbbbbbbbbbb", "queryApi.enabled=true", "queryApi.image.tag=sha-aaaaaaaaaaaa", "goApi.enabled=true", "goApi.image.tag=sha-aaaaaaaaaaaa"}, "and image.repository/image.tag (ghcr.io/full-chaos/dev-hops-api:sha-bbbbbbbbbbbb) are pinned to different commits"},
-		"the Python tag differs, queryApi alone matches":                    {[]string{lockstepHook, "image.tag=sha-bbbbbbbbbbbb", "queryApi.enabled=true", "queryApi.image.tag=sha-aaaaaaaaaaaa"}, "and image.repository/image.tag (ghcr.io/full-chaos/dev-hops-api:sha-bbbbbbbbbbbb) are pinned to different commits"},
-		"the Python tag differs, goApi alone matches":                       {[]string{lockstepHook, "image.tag=sha-bbbbbbbbbbbb", "goApi.enabled=true", "goApi.image.tag=sha-aaaaaaaaaaaa"}, "and image.repository/image.tag (ghcr.io/full-chaos/dev-hops-api:sha-bbbbbbbbbbbb) are pinned to different commits"},
-		"the Python tag differs, the enabled Go image is a digest":          {[]string{lockstepHook, "image.tag=sha-bbbbbbbbbbbb", "queryApi.enabled=true", "queryApi.image.repository=ghcr.io/full-chaos/dev-health-go-dho@sha256:" + strings.Repeat("c", 64)}, "and image.repository/image.tag (ghcr.io/full-chaos/dev-hops-api:sha-bbbbbbbbbbbb) are pinned to different commits"},
-		"the Python tag differs, the enabled Go image has no sha tag":       {[]string{lockstepHook, "image.tag=sha-bbbbbbbbbbbb", "goApi.enabled=true"}, "and image.repository/image.tag (ghcr.io/full-chaos/dev-hops-api:sha-bbbbbbbbbbbb) are pinned to different commits"},
-		"a different commit than queryApi.image":                            {[]string{lockstepHook, "queryApi.enabled=true", "queryApi.image.tag=sha-bbbbbbbbbbbb"}, "and queryApi.image (ghcr.io/full-chaos/dev-health-go-dho:sha-bbbbbbbbbbbb) are pinned to different commits"},
-		"a different commit than goApi.image":                               {[]string{lockstepHook, "goApi.enabled=true", "goApi.image.tag=sha-bbbbbbbbbbbb"}, "and goApi.image (ghcr.io/full-chaos/dev-health-go-dho:sha-bbbbbbbbbbbb) are pinned to different commits"},
-		"queryApi matches, goApi differs (both enabled)":                    {[]string{lockstepHook, "queryApi.enabled=true", "queryApi.image.tag=sha-aaaaaaaaaaaa", "goApi.enabled=true", "goApi.image.tag=sha-bbbbbbbbbbbb"}, "and goApi.image (ghcr.io/full-chaos/dev-health-go-dho:sha-bbbbbbbbbbbb) are pinned to different commits"},
-		"goApi matches, queryApi differs (both enabled)":                    {[]string{lockstepHook, "queryApi.enabled=true", "queryApi.image.tag=sha-bbbbbbbbbbbb", "goApi.enabled=true", "goApi.image.tag=sha-aaaaaaaaaaaa"}, "and queryApi.image (ghcr.io/full-chaos/dev-health-go-dho:sha-bbbbbbbbbbbb) are pinned to different commits"},
+		// CHAOS-7520: the Python image clause is gone with .Values.image (TestMigrateJobIgnoresAStalePythonImageTag).
+		"a different commit than queryApi.image":         {[]string{lockstepHook, "queryApi.enabled=true", "queryApi.image.tag=sha-bbbbbbbbbbbb"}, "and queryApi.image (ghcr.io/full-chaos/dev-health-go-dho:sha-bbbbbbbbbbbb) are pinned to different commits"},
+		"a different commit than goApi.image":            {[]string{lockstepHook, "goApi.enabled=true", "goApi.image.tag=sha-bbbbbbbbbbbb"}, "and goApi.image (ghcr.io/full-chaos/dev-health-go-dho:sha-bbbbbbbbbbbb) are pinned to different commits"},
+		"queryApi matches, goApi differs (both enabled)": {[]string{lockstepHook, "queryApi.enabled=true", "queryApi.image.tag=sha-aaaaaaaaaaaa", "goApi.enabled=true", "goApi.image.tag=sha-bbbbbbbbbbbb"}, "and goApi.image (ghcr.io/full-chaos/dev-health-go-dho:sha-bbbbbbbbbbbb) are pinned to different commits"},
+		"goApi matches, queryApi differs (both enabled)": {[]string{lockstepHook, "queryApi.enabled=true", "queryApi.image.tag=sha-bbbbbbbbbbbb", "goApi.enabled=true", "goApi.image.tag=sha-aaaaaaaaaaaa"}, "and queryApi.image (ghcr.io/full-chaos/dev-health-go-dho:sha-bbbbbbbbbbbb) are pinned to different commits"},
 	} {
 		t.Run(name, func(t *testing.T) {
 			_, _, refusal := renderJobs(t, testCase.sets...)
@@ -167,6 +160,15 @@ func TestMigrateJobRefusesImagesThatCannotRunTheVerb(t *testing.T) {
 				t.Fatalf("render = %q, want a refusal containing %q", refusal, testCase.want)
 			}
 		})
+	}
+}
+
+// CHAOS-7520: a values file written before the Python api image values were deleted still sets image.tag; the lockstep
+// check no longer reads it, so a hook tag that differs from it renders.
+func TestMigrateJobIgnoresAStalePythonImageTag(t *testing.T) {
+	_, _, refusal := renderJobs(t, lockstepHook, "image.tag=sha-bbbbbbbbbbbb")
+	if refusal != "" {
+		t.Fatalf("a stale image.tag must not refuse the render: %s", refusal)
 	}
 }
 
@@ -311,8 +313,8 @@ func TestRouteActivateRunsOnlyTheOperatorImage(t *testing.T) {
 }
 
 // CHAOS-8309: each row states one semantic no refusal case can see fail: a digest or a disabled component is not
-// compared; a serving image without a sha tag is not compared. (A Python tag that differs is refused while
-// .Values.image exists: see the refusal table above.)
+// compared; a serving image without a sha tag is not compared. (CHAOS-7520: a Python image tag is no
+// longer read; see TestMigrateJobIgnoresAStalePythonImageTag.)
 func TestMigrateJobLockstepAcceptsMatchingGoImagesAndSkipsWhatItCannotCompare(t *testing.T) {
 	const digest = "ghcr.io/full-chaos/dev-health-go-dho@sha256:" + "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"
 	for name, sets := range map[string][]string{

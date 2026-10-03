@@ -34,7 +34,6 @@ _WEB_OLD_DIGEST = "sha256:" + "3" * 64
 _WEB_NEW_DIGEST = "sha256:" + "4" * 64
 
 _IMAGES = (
-    "dev-hops-api",
     "dev-health-go-dho",
     "dev-health-go-api-tools",
     "dev-health-go-operator",
@@ -86,8 +85,8 @@ def _docker_stub(stub_bin: Path, *, routing_response: str, routing_rc: int) -> N
     """
     digest_map = {name: _NEW_DIGEST for name in _IMAGES}
     digest_map["dev-health-web"] = _WEB_NEW_DIGEST
-    # repin.sh's own OLD8 cross-check resolves dev-hops-api at sha-<first 7 chars of $OLD8> (the real image tag) and must see _OLD_DIGEST.
-    old_probe = f"dev-hops-api:sha-{_OLD8[:7]}"
+    # repin.sh's own OLD8 cross-check resolves dev-health-go-dho at sha-<first 7 chars of $OLD8> (the real image tag) and must see _OLD_DIGEST.
+    old_probe = f"dev-health-go-dho:sha-{_OLD8[:7]}"
     script = ["#!/usr/bin/env bash", "set -u", 'args="$*"']
     script.append(
         '[ -z "${DOCKER_STUB_COMPOSE_LOG:-}" ] || printf "%s\\n" "${COMPOSE_FILE:-}" >> "$DOCKER_STUB_COMPOSE_LOG"'

@@ -136,7 +136,7 @@ spec:
       annotations:
         {{- /*
         Every group here envFrom's the shared ConfigMap and Secret (below),
-        same as api-deployment.yaml -- without
+        same as the (deleted, CHAOS-7520) Python api Deployment was -- without
         this, a config-only revision (a ConfigMap/Secret key edit, no image
         or arg change) never rolls these pods, since envFrom doesn't trigger
         a rollout on its own. Same include/sha256sum pattern as that
@@ -217,9 +217,8 @@ spec:
               CHAOS-4984 trace cited), and nothing constructs a bridge
               client from cfg.OperationalBridgeURL any more (confirmed by
               grep across internal/ and cmd/). With this block gone, no
-              worker group's command line points at metricsApi any more
-              either -- see metrics-api-deployment.yaml's own comment for
-              the resulting open question (retire that Deployment or not).
+              worker group's command line points at the Python metrics-api
+              any more either (that Deployment is deleted, CHAOS-7520).
             */}}
             {{- if $.Values.goWorkers.pgbouncer.enabled }}
             - "--domain-transaction-pooler=true"
@@ -289,7 +288,7 @@ spec:
             {{- end }}
           {{- /*
           CHAOS-4984: same extraEnvFrom-first, chart-config/secret-last
-          ordering as api-deployment.yaml, and for the same reason --
+          ordering as the deleted Python api Deployment had, and for the same reason --
           Kubernetes resolves a duplicate envFrom key in favour of the LAST
           source, so an operator-supplied source (e.g. a local dotenv
           Secret) belongs before these two chart-owned sources, not after.

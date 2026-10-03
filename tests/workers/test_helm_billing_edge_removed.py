@@ -44,7 +44,7 @@ def test_no_workload_or_service_is_named_billing_edge() -> None:
             "--set",
             "ingress.enabled=true",
             "--set-json",
-            'ingress.hosts=[{"host":"h","paths":[{"path":"/","pathType":"Prefix","service":"api"}]}]',
+            'ingress.hosts=[{"host":"h","paths":[{"path":"/","pathType":"Prefix","service":"web"}]}]',
         )
     )
     named = [

@@ -5,13 +5,6 @@ global:
   # -- Override the namespace
   namespaceOverride: ""
 
-# -- Image configuration for the backend (API, Go workers)
-image:
-  # -- Non-local profiles (prod/kiac) pin `repository@sha256:<digest>` explicitly; this bare-tag default is for local/dev use only.
-  repository: ghcr.io/full-chaos/dev-hops-api
-  tag: ""  # defaults to Chart.appVersion
-  pullPolicy: IfNotPresent
-
 # -- Image configuration for the frontend (web)
 webImage:
   # -- Non-local profiles (prod/kiac) pin `repository@sha256:<digest>` explicitly; this bare-tag default is for local/dev use only.
@@ -24,148 +17,6 @@ serviceAccount:
   create: true
   name: ""
   annotations: {}
-
-# =============================================================================
-# API (FastAPI backend)
-# =============================================================================
-api:
-  enabled: true
-  replicas: 2
-  port: 8000
-  # -- The api Service's own type/nodePort, expressible in values instead of
-  #    a hand kubectl-patch. CHAOS-4984: a local kind/kiac profile that needs
-  #    NodePort access (no ingress controller, no LoadBalancer support) had
-  #    no values-driven way to set it -- the Service's `type: ClusterIP` was
-  #    hardcoded in api-service.yaml, so the profile hand-patched the
-  #    rendered Service to NodePort 30530 out of band. That patch is
-  #    invisible to Helm's own state, so the NEXT `helm upgrade` re-asserts
-  #    ClusterIP via Server-Side Apply and the two field managers conflict
-  #    on `spec.type`/`spec.ports[].nodePort`, either overwriting the patch
-  #    silently or failing outright depending on how the patch was applied.
-  #    `nodePort` is only meaningful when `type: NodePort` (or
-  #    `LoadBalancer`) and is otherwise ignored by the API server; leave it
-  #    unset (empty string, below) to let Kubernetes allocate one.
-  service:
-    type: ClusterIP
-    nodePort: ""
-  args:
-    - "--host"
-    - "0.0.0.0"
-    - "--port"
-    - "8000"
-  resources:
-    requests:
-      # Measured steady state is 260-286Mi, i.e. ABOVE the 256Mi this requested
-      # before. Memory utilization is computed against the REQUEST, so the old
-      # value put a healthy pod structurally over 100% and gave the memory HPA
-      # metric below a permanently-saturated reading with no headroom to report.
-      memory: "512Mi"
-      cpu: "100m"
-    limits:
-      memory: "1Gi"
-      cpu: "500m"
-  autoscaling:
-    enabled: true
-    minReplicas: 2
-    maxReplicas: 10
-    targetCPUUtilizationPercentage: 70
-    # -- Memory is not a scaling signal for this workload: a Python process's
-    #    RSS is dominated by the interpreter and long-lived caches, so it
-    #    neither falls when load drops nor rises proportionally with it, and a
-    #    memory target only ever ratchets replicas up and holds them there.
-    #    Explicitly `null`, not removed: this is the CHART's own default, and a
-    #    deleted key would leave the previous default of 80 applying to every
-    #    installation that does not set it. api-hpa.yaml's `if` guard then omits
-    #    the memory metric entirely and a default install gets a CPU-only HPA.
-    targetMemoryUtilizationPercentage: null
-  livenessProbe:
-    httpGet:
-      path: /ready
-      port: http
-    initialDelaySeconds: 30
-    periodSeconds: 10
-    failureThreshold: 3
-  readinessProbe:
-    httpGet:
-      path: /health
-      port: http
-    initialDelaySeconds: 5
-    periodSeconds: 5
-    failureThreshold: 3
-  nodeSelector: {}
-  tolerations: []
-  affinity: {}
-  podAnnotations: {}
-  # -- Extra environment variables (list of name/value pairs)
-  extraEnv: []
-  # -- Extra envFrom sources (list of {configMapRef: {name: ...}} or
-  #    {secretRef: {name: ...}}), rendered BEFORE the chart's own configMap
-  #    and Secret in api-deployment.yaml's envFrom list. Kubernetes resolves
-  #    a key present in more than one envFrom source in favour of the LAST
-  #    source that sets it, so an entry here loses any key the chart's own
-  #    config/secret also sets -- put values that must win here, and only
-  #    values this chart is meant to override in config/secrets.
-  extraEnvFrom: []
-
-# =============================================================================
-# Metrics API (CHAOS-4351, historical -- its routing rationale is retired, CHAOS-6279)
-# =============================================================================
-# A second copy of `api` -- same image, same args, same env (configMap/
-# secret) -- created to serve ONLY as the Go daily-runtime's metrics
-# compatibility bridge target. CHAOS-6279 deletes the --operational-
-# bridge-url flag that used to point the `heavy` goWorkers group at this
-# Service's DNS name -- that flag no longer exists on any Go binary
-# (CHAOS-5320 already deleted the Python HTTP bridge it pointed at, and
-# CHAOS-6240 deleted the routes/subprocess mechanism the original incident
-# history above (CHAOS-4264/CHAOS-4317/CHAOS-4350) was bounding). No
-# worker group's command line points at this Service any more, on any
-# renderer -- enabling it today stands up a Deployment nothing calls.
-# `enabled: false` by default; whether to retire this Deployment entirely
-# is a separate, not-yet-decided follow-up, not this comment's call.
-metricsApi:
-  enabled: false
-  replicas: 1
-  port: 8000
-  args:
-    - "--host"
-    - "0.0.0.0"
-    - "--port"
-    - "8000"
-  # Same workload, same bound as `api.resources` above, EXCEPT the memory
-  # request: api's was raised to 512Mi because its HPA reads memory
-  # utilization against the request and a 256Mi request made a healthy pod
-  # read as permanently over 100%. This workload has no HorizontalPodAutoscaler
-  # at all, so the request is a scheduling floor and nothing else, and 256Mi
-  # remains the honest one for a bridge-only pod.
-  # Kubernetes has no per-container pids limit (same CHAOS-4317 gap noted
-  # on api-deployment.yaml -- the only lever is cluster-wide kubelet
-  # `--pod-max-pids`), so there is no `pids` field to mirror here.
-  resources:
-    requests:
-      memory: "256Mi"
-      cpu: "100m"
-    limits:
-      memory: "1Gi"
-      cpu: "500m"
-  livenessProbe:
-    httpGet:
-      path: /ready
-      port: http
-    initialDelaySeconds: 30
-    periodSeconds: 10
-    failureThreshold: 3
-  readinessProbe:
-    httpGet:
-      path: /health
-      port: http
-    initialDelaySeconds: 5
-    periodSeconds: 5
-    failureThreshold: 3
-  nodeSelector: {}
-  tolerations: []
-  affinity: {}
-  # -- Extra environment variables (list of name/value pairs)
-  extraEnv: []
 
 # =============================================================================
 # Go HTTP api (`dho api`, the dho operator binary)
@@ -245,7 +96,7 @@ goApi:
 # =============================================================================
 # The Go half of the split query plane. The Python edge's dispatcher forwards
 # an operation here when the routing registry says the Go plane serves it; off
-# by default, matching metricsApi, because an edge with no endpoint
+# by default, because an edge with no endpoint
 # simply keeps every operation on the Python plane.
 #
 # Enabling it requires three things this chart references but does not create:
@@ -278,12 +129,12 @@ queryApi:
   #    because the umbrella deploy chart renders its own internal Service and NetworkPolicy
   #    (queryApiInternal) with the same purpose: enable exactly one of the two. When on, this
   #    chart adds the env var, a named `internal` containerPort, a ClusterIP Service
-  #    `<fullname>-query-api-internal`, and a NetworkPolicy admitting this release's api pods (plus `internal.allowedFrom`) only.
+  #    `<fullname>-query-api-internal`, and a NetworkPolicy admitting `internal.allowedFrom` only (nobody while it is empty).
   internal:
     enabled: false
     port: 8091
-    # -- Extra pod selectors (each `{matchLabels: {...}}`) allowed to reach the internal port,
-    #    beside this release's api pods. The internal listener trusts X-DH-Internal-* identity
+    # -- Pod selectors (each `{matchLabels: {...}}`) allowed to reach the internal port (empty
+    #    admits nobody; CHAOS-7520: there is no release-local peer). The internal listener trusts X-DH-Internal-* identity
     #    headers from any peer that can connect, so add only the pods that must call it, and
     #    only while they must. The tools pod that runs `dho goapi prove-write` is NOT admitted
     #    by default; to admit it for a proof run:
@@ -375,9 +226,8 @@ queryApi:
   #    with the binary.
   extraEnv: []
   # -- Optional envFrom sources (list of {configMapRef: {name: ...}} /
-  #    {secretRef: {name: ...}} entries), same shape as api.extraEnvFrom /
-  #    goWorkers.extraEnvFrom. Empty by default: unlike api/metricsApi,
-  #    this container inherits NOTHING from the platform Secret/
+  #    {secretRef: {name: ...}} entries), same shape as goWorkers.extraEnvFrom.
+  #    Empty by default: this container inherits NOTHING from the platform Secret/
   #    ConfigMap unless listed here -- set this to the platform Secret (e.g.
   #    [{secretRef: {name: dev-health-ops}}]) to pull in LLM_PROVIDER/
   #    OPENAI_API_KEY/LLM_MODEL/SETTINGS_ENCRYPTION_KEY instead of listing
@@ -491,7 +341,7 @@ goWorkers:
   # -- Extra envFrom sources (list of {configMapRef: {name: ...}} or
   #    {secretRef: {name: ...}}), rendered BEFORE the chart's own configMap
   #    and Secret in go-workers.yaml's envFrom list, same rule and same
-  #    order as api.extraEnvFrom above -- Kubernetes resolves a duplicate
+  #    order as queryApi.extraEnvFrom -- Kubernetes resolves a duplicate
   #    key in favour of the LAST envFrom source, so this loses to the
   #    chart's own config/secret on any key both set. Shared by every
   #    worker group; there is no per-group override.
@@ -626,10 +476,7 @@ goWorkers:
       autoscaling: {enabled: true, minReplicas: 1, maxReplicas: 2, queueDepthPerReplica: 10, cooldownPeriod: 600, pollingInterval: 30}
       # CHAOS-6279: bridgeUrl (formerly here, CHAOS-4351) is deleted -- the
       # --operational-bridge-url flag it overrode no longer exists on the Go
-      # binaries (go-workers.yaml's own comment has the full history). This
-      # group's own command line no longer points at metricsApi at all as a
-      # result -- see metrics-api-deployment.yaml's comment for the
-      # resulting open question (retire that Deployment or not).
+      # binaries (go-workers.yaml's own comment has the full history).
     - name: ops
       subcommand: worker
       queues: [coverage, heartbeat, retention, webhooks]
@@ -761,14 +608,10 @@ web:
       port: http
     initialDelaySeconds: 5
     periodSeconds: 5
-  # -- Explicit opt-in (CHAOS-8310): web's BACKEND_URL is this release's own Python api Service,
-  #    `http://<fullname>-api:<api.port>`, the pre-CHAOS-8310 default for every release name. Set exactly one of
-  #    this and `web.env.BACKEND_URL`. CHAOS-8314 (E4) retargets or removes it when the Python api Service goes.
-  backendFromRelease: false
   env:
-    # -- REQUIRED when web.enabled, exactly one of this and `web.backendFromRelease` (CHAOS-8310): the base URL of
+    # -- REQUIRED when web.enabled (CHAOS-8310): the base URL of
     #    web's server-side requests (REST on go-api and /graphql on query-api: two services, so no single in-chart
-    #    default is correct). The render fails with a message naming both keys while neither is set.
+    #    default is correct). The render fails while it is not set.
     BACKEND_URL: ""
     AUTH_SECRET: ""
     NODE_ENV: "production"
@@ -1022,37 +865,32 @@ ingress:
   hosts:
     - host: dev-health.example.com
       paths:
-        - path: /api
-          pathType: Prefix
-          service: api
         - path: /
           pathType: Prefix
           service: web
-  # -- CHAOS-7047: paths the Python api still answers when a host routes "/" to
-  #    `service: go-api` (set `pythonAllowList: true` on that host). Everything
-  #    else on such a host reaches the Go api, whose own 404 answers unknown
-  #    paths. CHAOS-7255: no longer has to carry /api/v1/internal (the Go public listener serves no /api/v1/internal/* route).
+  # -- CHAOS-7047: paths that leave the go-api default when a host routes "/" to
+  #    `service: go-api` (set `pythonAllowList: true` on that host; the key keeps
+  #    its name). Everything else on such a host reaches the Go api, whose own 404
+  #    answers unknown paths. CHAOS-7520: the Python api is gone, so every entry
+  #    NAMES its backend, `service: query-api` (the only one); an entry with no
+  #    `service`, or any other value, fails the render, and so does a host path
+  #    with `service: api`. CHAOS-7255: no longer has to carry /api/v1/internal
+  #    (the Go public listener serves no /api/v1/internal/* route).
   #    Nothing renders unless a host opts in, so the default changes no route.
   #    CHAOS-7243: an entry may be ANCHORED, {path: "/docs$", pathType:
-  #    ImplementationSpecific} (literal segments, `\.` for a dot): ingress-nginx
-  #    renders Prefix/Exact as unanchored regexes on a regex-mode host, so only an
-  #    anchored entry keeps /docsx off Python. The chart adds `use-regex: "true"`
-  #    to an Ingress that carries only the hosts with an anchored entry. A Prefix
-  #    entry (e.g. /api/v1/internal, when a values file keeps it) stays an
-  #    unanchored regex in regex mode.
-  #    CHAOS-6263: EMPTY by default. query-api answers /graphql itself, so no
-  #    path is the Python api's unless a values file lists one. A host that
-  #    opts in with an empty effective list renders only its own paths and needs
-  #    no Python api Service. A values file that still wants Python to answer
-  #    /graphql lists `{path: "/graphql$", pathType: ImplementationSpecific}`
-  #    here (the rollback); it must not also route /graphql to query-api.
-  #    An entry may name its backend: `service: query-api` sends the path to
-  #    the query-api Service; no key (or `service: api`) is the Python api. A
-  #    path changes its backend this way INSIDE the Ingress object that holds
-  #    it, in one update. Moving the path to another Ingress object instead is
-  #    denied by ingress-nginx's admission webhook in one direction (two live
-  #    objects may not claim one host and path) and leaves the path without a
-  #    rule for a moment in the other.
+  #    ImplementationSpecific, service: query-api} (literal segments, `\.` for a
+  #    dot): ingress-nginx renders Prefix/Exact as unanchored regexes on a
+  #    regex-mode host, so only an anchored entry keeps /docsx off the backend.
+  #    The chart adds `use-regex: "true"` to an Ingress that carries only the
+  #    hosts with an anchored entry. A Prefix entry stays an unanchored regex in
+  #    regex mode.
+  #    CHAOS-6263: EMPTY by default (query-api answers /graphql itself). A host
+  #    that opts in with an empty effective list renders only its own paths.
+  #    A path changes its backend INSIDE the Ingress object that holds it, in
+  #    one update. Moving the path to another Ingress object instead is denied by
+  #    ingress-nginx's admission webhook in one direction (two live objects may
+  #    not claim one host and path) and leaves the path without a rule for a
+  #    moment in the other.
   pythonAllowList: []
   tls: []
   #  - secretName: dev-health-tls

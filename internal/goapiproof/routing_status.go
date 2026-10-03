@@ -41,6 +41,8 @@ const (
 	// Both are the silent-death shape: present in psql, never consulted.
 	DigestStale = "STALE"
 	// DigestMissing: no row at any digest. Never enabled, or cleaned up.
+	// query-api serves a catalog operation in this state (CHAOS-8517): see
+	// OperationStatus.ServedWithoutRow.
 	DigestMissing = "MISSING"
 	// DigestPending: no row at the LIVE digest, but a row exists at the
 	// digest the caller's own binary computes.
@@ -178,15 +180,32 @@ func eligibleOrgsIsEmpty(text string) bool {
 	return false
 }
 
-// Reachable reports whether a real request would be served by Go right
-// now.
+// Reachable reports whether a real request is served by this operation's
+// routing ROW right now.
 //
 // Mirrors go_api_dispatcher's _REACHABLE_MODES and routeswitch's
 // PostgresSwitch.reachableModes exactly: canary and primary only. shadow
 // is NOT reachable (the client still gets Python's response), and
-// python/disabled are the safe default a missing row already gives.
+// python/disabled are not served.
+//
+// It is a statement about the row, and stays one: an operation with no
+// row at all is not Reachable in this sense, and query-api serves it all
+// the same (CHAOS-8517). ServedWithoutRow says that.
 func (s OperationStatus) Reachable() bool {
 	return s.DigestState == DigestMatch && (s.Mode == "canary" || s.Mode == "primary")
+}
+
+// ServedWithoutRow reports the one state in which query-api serves a
+// catalog operation that has no routing row (CHAOS-8517,
+// queryapi/routeswitch/catalog_switch.go): the operation has NO row at
+// any schema digest, under any document digest -- DigestMissing, which
+// RoutingStatusRowsWithKinds assigns to exactly that state.
+//
+// Every other rowless-at-the-live-digest state (STALE, PENDING) is an
+// operation that HAS a row somewhere, and query-api does not serve it:
+// a row left at another digest still holds its operation dark.
+func (s OperationStatus) ServedWithoutRow() bool {
+	return s.DigestState == DigestMissing
 }
 
 // CountRowsBySchemaDigest returns {schema_digest: row_count} over the

@@ -11,6 +11,7 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/full-chaos/dev-health-ops/internal/jobruntime"
+	"github.com/full-chaos/dev-health-ops/internal/jobs/metrics/workitemblockers"
 	"github.com/full-chaos/dev-health-ops/internal/jobs/metrics/workitemmetrics"
 )
 
@@ -143,7 +144,7 @@ func (executor *WorkItemStateExecutor) ComputeFamily(
 			// A failed read fails the partition. Computing without it would
 			// write full-length rows for the statuses the blocked hours
 			// belong to, and those rows would read as a complete answer.
-			blocked, err = LoadWorkItemBlockedIntervals(ctx, executor.conn, run.OrganizationID)
+			blocked, err = workitemblockers.LoadBlockedIntervals(ctx, executor.conn, run.OrganizationID)
 			if err != nil {
 				return wrapWorkItemStatePartialWrite(total, repoID, err)
 			}

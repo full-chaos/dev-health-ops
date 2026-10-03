@@ -108,24 +108,3 @@ func TestComputeWorkItemStateDurationsNeverBlocksATerminalSegment(t *testing.T) 
 		t.Fatalf("hours by status = %v, want %v (in_progress 00:00-06:00 is blocked, done 06:00-12:00 is not)", got, want)
 	}
 }
-
-// The end lookup is a function of the relations alone: plain ids and
-// external keys apart, sorted, no repeat, no empty key.
-func TestWorkItemRelationEndLookupSplitsIdsFromExternalKeys(t *testing.T) {
-	relations := []workitemmetrics.BlockingRelation{
-		{SourceID: "jira:OPS-1", TargetID: "jira:OPS-2"},
-		{SourceID: "gh:acme/api#7", TargetID: "extkey: ops-9 "},
-		{SourceID: "gh:acme/api#7", TargetID: "extkey:OPS-9"},
-		{SourceID: "gh:acme/api#8", TargetID: "extkey:"},
-		{SourceID: "jira:OPS-2", TargetID: "jira:OPS-1"},
-	}
-	ids, keys := workItemRelationEndLookup(relations)
-	wantIDs := []string{"gh:acme/api#7", "gh:acme/api#8", "jira:OPS-1", "jira:OPS-2"}
-	wantKeys := []string{"OPS-9"}
-	if !reflect.DeepEqual(ids, wantIDs) || !reflect.DeepEqual(keys, wantKeys) {
-		t.Fatalf("lookup = %v, %v; want %v, %v", ids, keys, wantIDs, wantKeys)
-	}
-	if ids, keys := workItemRelationEndLookup(nil); ids != nil || keys != nil {
-		t.Fatalf("no relation: lookup = %v, %v, want nothing", ids, keys)
-	}
-}

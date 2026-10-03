@@ -23,7 +23,7 @@ The operator CLI is `dho` (Go). The Python `dev-hops` CLI (module `dev_health_op
 
 ### Verbs that still run as `dev-hops` (until CHAOS-6469)
 
-These verbs have no `dho` port at this commit, so their examples below keep the Python form; the page is not rewritten for them until the port lands or the verb is removed: `audit completeness|schema|perf|coverage` (frozen, CHAOS-6894), `fixtures validate` and `fixtures world|world-snapshot|world-restore` (CHAOS-6885, CHAOS-6886), `metrics daily|compounding-risk|complexity` (the work runs as Go jobs; no operator verb), `api` (the Go service is `dho api`, with different flags), `workers inspect` and `workers start-*` (the Go equivalent is `dho worker` / `dho workers`), and `sync teams --path` (the team-mapping file mode). Every other `dev-hops <verb>` of this page now reads `dho <verb>`, with the verb path and flags checked against `dho <verb> --help`; the examples were not executed.
+These verbs have no `dho` port at this commit, so their examples below keep the Python form; the page is not rewritten for them until the port lands or the verb is removed: `audit completeness|schema|perf|coverage` (frozen, CHAOS-6894), `fixtures validate` and `fixtures world|world-snapshot|world-restore` (CHAOS-6885, CHAOS-6886), `metrics daily|compounding-risk|complexity` (the work runs as Go jobs; no operator verb), `api` (the Go service is `dho api`, with different flags), `workers inspect` and `workers start-*` (the Go equivalent is `dho worker` / `dho workers`), and `sync teams --path` (the team-mapping file mode), `fixtures generate` (the Go verb loads three frozen worlds only), and `migrate postgres|clickhouse` (the Go verbs refuse unless the environment matches the baseline: `DEV_HEALTH_ALLOW_CELERY_RIVER_CUTOVER`, native ClickHouse protocol on 9000, not the HTTP port 8123; their examples need a run-checked rewrite). Every other `dev-hops <verb>` of this page now reads `dho <verb>`, with the verb path and flags checked against `dho <verb> --help`; the examples were not executed.
 
 ### Inline execution and its enforcement gaps
 
@@ -497,10 +497,10 @@ Generate synthetic test data. Uses `CLICKHOUSE_URI`.
 
 ```bash
 # Basic generation
-dho fixtures generate --days 30
+dev-hops fixtures generate --days 30
 
 # Full generation with metrics and work graph
-dho fixtures generate \
+dev-hops fixtures generate \
   --sink "$CLICKHOUSE_URI" \
   --repo-name "meridian/web-app" \
   --repo-count 3 \
@@ -531,7 +531,7 @@ dho fixtures generate \
 
 Database type is auto-detected from the sink URI unless `--db-type` overrides it.
 
-> **`dho fixtures generate` (Go):** a frozen world, not a generator. The Python verb is not repeatable even against itself (its ids are `uuid4` and its timestamps follow the run's clock, so no two runs are byte-identical, although the same seed always writes the same tables with the same number of rows in each). So the parameter sets the callers run were written once by the real `dho fixtures generate` into a real ClickHouse at the migration head, dumped table by table and committed (digest-pinned, embedded in `dho`), and `dho fixtures generate` loads the one that matches the flags, moved by whole days so its last generated day is today and written for the given organization (`--org`, else `ORG_ID`, else the default demo organization; it must be a UUID). A set that was not frozen is refused (exit 3), naming the ones that were; `--seed` is required. Frozen today: `--provider synthetic --repo-name acme/live-e2e --repo-count 1 --days 14 --commits-per-day 6 --pr-count 24 --team-count 10 --seed 20260219 --with-metrics --with-work-graph` (the acr end-to-end run). Also frozen (CHAOS-7301, the ops CI scripts): `--provider github --repo-name acme/live-e2e --repo-count 1 --days 14 --commits-per-day 6 --pr-count 24 --team-count 10 --seed 20260219` (live backend e2e) and `--provider synthetic --repo-name ci-metrics-executed-proof/repo --repo-count 1 --days 7 --commits-per-day 5 --pr-count 20 --team-count 1 --seed 4276` (metrics executed proof; one team keeps the repository single-owner). The ClickHouse schema must be at the head first (`dho migrate clickhouse upgrade`). Differences to know: analytics rows only: the users, organization and license the Python verb also wrote to PostgreSQL are not written yet, and a `DATABASE_URI`, `POSTGRES_URI` or `DATABASE_URL` in the environment is refused (exit 3) so a missing account is never silent; a `--sink` on the HTTP port (8123, or 8443 with TLS) is spoken to over HTTP, as the Python client did; `--overwrite-real-users` is not accepted; the mixed-organization guard is kept (an organization holding synced `github`/`gitlab`/`jira`/`linear`/`bitbucket` rows is refused unless `--allow-mixed-org`); running the verb twice for the same organization inserts the rows twice (as the Python verb does; neither checks for a prior synthetic run) -- use a fresh organization or database per run; the embedded world's content digest and the destination server's timezone (must be UTC, as the world was captured) are checked before any row is written, refusing cleanly rather than loading a corrupted world or reinterpreting its timestamps at the wrong offset; a table missing partway through the frozen order is also caught before any row is written; a JSON summary (`org_id`, `params`, `rows` per table) goes to stdout. A differential test loads each world and compares every table with the capture (the rows a materialized view fills as a set without their timestamps), moved and rewritten it compares them moved back, and while the Python verb exists a fresh run of it must still write the same tables, columns and row counts as the world holds.
+> **`dev-hops fixtures generate` (Go):** a frozen world, not a generator. The Python verb is not repeatable even against itself (its ids are `uuid4` and its timestamps follow the run's clock, so no two runs are byte-identical, although the same seed always writes the same tables with the same number of rows in each). So the parameter sets the callers run were written once by the real `dev-hops fixtures generate` into a real ClickHouse at the migration head, dumped table by table and committed (digest-pinned, embedded in `dho`), and `dev-hops fixtures generate` loads the one that matches the flags, moved by whole days so its last generated day is today and written for the given organization (`--org`, else `ORG_ID`, else the default demo organization; it must be a UUID). A set that was not frozen is refused (exit 3), naming the ones that were; `--seed` is required. Frozen today: `--provider synthetic --repo-name acme/live-e2e --repo-count 1 --days 14 --commits-per-day 6 --pr-count 24 --team-count 10 --seed 20260219 --with-metrics --with-work-graph` (the acr end-to-end run). Also frozen (CHAOS-7301, the ops CI scripts): `--provider github --repo-name acme/live-e2e --repo-count 1 --days 14 --commits-per-day 6 --pr-count 24 --team-count 10 --seed 20260219` (live backend e2e) and `--provider synthetic --repo-name ci-metrics-executed-proof/repo --repo-count 1 --days 7 --commits-per-day 5 --pr-count 20 --team-count 1 --seed 4276` (metrics executed proof; one team keeps the repository single-owner). The ClickHouse schema must be at the head first (`dev-hops migrate clickhouse upgrade`). Differences to know: analytics rows only: the users, organization and license the Python verb also wrote to PostgreSQL are not written yet, and a `DATABASE_URI`, `POSTGRES_URI` or `DATABASE_URL` in the environment is refused (exit 3) so a missing account is never silent; a `--sink` on the HTTP port (8123, or 8443 with TLS) is spoken to over HTTP, as the Python client did; `--overwrite-real-users` is not accepted; the mixed-organization guard is kept (an organization holding synced `github`/`gitlab`/`jira`/`linear`/`bitbucket` rows is refused unless `--allow-mixed-org`); running the verb twice for the same organization inserts the rows twice (as the Python verb does; neither checks for a prior synthetic run) -- use a fresh organization or database per run; the embedded world's content digest and the destination server's timezone (must be UTC, as the world was captured) are checked before any row is written, refusing cleanly rather than loading a corrupted world or reinterpreting its timestamps at the wrong offset; a table missing partway through the frozen order is also caught before any row is written; a JSON summary (`org_id`, `params`, `rows` per table) goes to stdout. A differential test loads each world and compares every table with the capture (the rows a materialized view fills as a set without their timestamps), moved and rewritten it compares them moved back, and while the Python verb exists a fresh run of it must still write the same tables, columns and row counts as the world holds.
 
 Every fixture run also seeds synthetic security alert rows into
 `security_alerts` for each generated repo. These rows include Dependabot,
@@ -1940,32 +1940,32 @@ Run PostgreSQL (Alembic) schema migrations. Uses `POSTGRES_URI`.
 
 ```bash
 # Apply all ordinary pending migrations
-dho migrate postgres
-dho migrate postgres upgrade
+dev-hops migrate postgres
+dev-hops migrate postgres upgrade
 
 # Upgrade to a specific revision
-dho migrate postgres upgrade abc123
+dev-hops migrate postgres upgrade abc123
 
 # Revert one migration
-dho migrate postgres downgrade -1
+dev-hops migrate postgres downgrade -1
 
 # Show current applied revision
-dho migrate postgres current
+dev-hops migrate postgres current
 
-# Read-only application-schema check (exit 0 at_head, 10 applies_cleanly = revisions pending, 1 needs_manual, 3 not measured)
-dho migrate postgres preflight
+# Read-only application-schema check (exit 1 while required revisions are pending)
+dev-hops migrate postgres status --check
 
 # Show migration history
-dho migrate postgres history
+dev-hops migrate postgres history
 
 # Show available heads
-dho migrate postgres heads
+dev-hops migrate postgres heads
 ```
 
 The migration graph has two branches after revision `0065`:
 
 - `application_schema` contains ordinary application migrations and is always
-  advanced by `dho migrate postgres`;
+  advanced by `dev-hops migrate postgres`;
 - `river_cutover` contains revision `0066`, the Celery-to-River ownership
   activation, and remains pending by default.
 
@@ -1989,21 +1989,21 @@ ClickHouse migrations are numbered `.sql` and `.py` files in `migrations/clickho
 
 ```bash
 # Apply all pending migrations
-dho migrate clickhouse
-dho migrate clickhouse upgrade
+dev-hops migrate clickhouse
+dev-hops migrate clickhouse upgrade
 
 # Show applied and pending migrations
-dho migrate clickhouse status
+dev-hops migrate clickhouse status
 
 # Exit non-zero if any migration is pending (read-only wait primitive for deploy tooling)
-dho migrate clickhouse status --check
+dev-hops migrate clickhouse status --check
 
 # Remediate stale duplicate repo rows (dry-run unless --apply)
-dho migrate clickhouse repair
-dho migrate clickhouse repair --apply
+dev-hops migrate clickhouse repair
+dev-hops migrate clickhouse repair --apply
 ```
 
-> **Important:** Run `dho migrate clickhouse` after setting up a fresh environment, before running any sync or metrics commands. ClickHouse tables are **not** auto-created — they require migrations to be applied first.
+> **Important:** Run `dev-hops migrate clickhouse` after setting up a fresh environment, before running any sync or metrics commands. ClickHouse tables are **not** auto-created — they require migrations to be applied first.
 
 ---
 
@@ -2017,8 +2017,8 @@ export CLICKHOUSE_URI="clickhouse://ch:ch@localhost:8123/default"
 export POSTGRES_URI="postgresql+asyncpg://postgres:postgres@localhost:5555/postgres"
 
 # 1. Run migrations
-dho migrate postgres
-dho migrate clickhouse
+dev-hops migrate postgres
+dev-hops migrate clickhouse
 
 # 2. Sync git data
 dho sync git --provider github \
@@ -2045,14 +2045,14 @@ dho workers metrics daily-start \
 docker compose up -d clickhouse postgres
 
 # Run migrations
-dho migrate postgres
-dho migrate clickhouse
+dev-hops migrate postgres
+dev-hops migrate clickhouse
 
 # Generate synthetic data and compute metrics for it in one pass (fixtures
 # generation computes metrics in-process against the sink you pass it --
 # unaffected by CHAOS-5055, which is about the standalone `metrics daily`/
 # `rebuild` verbs against already-synced real data, not fixtures)
-dho fixtures generate --days 30 --with-metrics
+dev-hops fixtures generate --days 30 --with-metrics
 ```
 
 ### Batch Organization Sync

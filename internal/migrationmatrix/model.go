@@ -337,7 +337,7 @@ func LoadNativeFamilies(path string) (*NativeFamilies, error) {
 }
 
 // Catalog is the registered-operation catalog,
-// src/dev_health_ops/api/graphql/go_api_operations.json: the
+// contracts/graphql/v1/go_api_operations.json: the
 // (operation, document digest) pairs the edge dispatches by. It is the SAME
 // file `dev-hops go-api routing status` reports against.
 //

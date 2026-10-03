@@ -67,3 +67,21 @@ func TestLegacyIngestRefusalsAreScrapedFromTheOperatorRegistry(t *testing.T) {
 		t.Fatalf("one refusal did not move exactly its own series:\n%s", got)
 	}
 }
+
+// TestOperatorMetricsExposeTheSyncDriftRepairedFamily pins CHAOS-8221's
+// registration: drop the RegisterMetrics call and the family disappears from
+// the api's /metrics with no other test noticing.
+func TestOperatorMetricsExposeTheSyncDriftRepairedFamily(t *testing.T) {
+	registry := health.NewRegistry(time.Second)
+	var deps Deps
+	if err := RegisterOperatorMetrics(registry, &deps); err != nil {
+		t.Fatal(err)
+	}
+	var out bytes.Buffer
+	if err := registry.WriteMetrics(&out); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(out.String(), "# TYPE sync_target_dataset_drift_repaired_total counter") {
+		t.Fatalf("family not exposed:\n%s", out.String())
+	}
+}

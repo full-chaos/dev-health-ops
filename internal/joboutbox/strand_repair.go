@@ -909,6 +909,7 @@ const repairStrandedPartitionSQL = `
 		ON job.id = outbox.river_job_id
 		AND job.args @> jsonb_build_object('domain', jsonb_build_object('id', partition.id::text))
 	WHERE outbox.job_kind = 'metrics.daily_partition'
+		AND outbox.dedupe_key = 'metrics.daily_partition:' || partition.id::text
 		AND outbox.status = 'delivered'
 		AND outbox.river_job_id IS NOT NULL
 		AND outbox.args #>> '{domain,type}' = 'daily_metrics_partition'

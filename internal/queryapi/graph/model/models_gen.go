@@ -1239,8 +1239,11 @@ type ReviewEdgesInput struct {
 }
 
 type ReviewEdgesResult struct {
-	Edges      []ReviewEdgeRow `json:"edges"`
-	TotalCount int             `json:"totalCount"`
+	Edges []ReviewEdgeRow `json:"edges"`
+	// Number of deduplicated (pair, day) rows the filters match, before the ``limit`` cut (CHAOS-7786). One row is one reviewer-to-author pair on one day, so this counts rows, not distinct pairs. Never less than ``edges``.
+	TotalCount int `json:"totalCount"`
+	// True when ``totalCount`` is greater than the number of ``edges`` returned: the list was cut by ``limit`` (CHAOS-7786).
+	Truncated bool `json:"truncated"`
 }
 
 type ReworkThemeAllocation struct {

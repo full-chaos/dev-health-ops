@@ -140,15 +140,10 @@ func ResolveScoped(ctx context.Context, client QueryClient, orgID string, sinceD
 		bindings = append(bindings, teamBindings...)
 	}
 
-	query := `
-        SELECT
-            reviewer,
-            author,
-            reviews_count,
-            day,
-            toString(repo_id) AS repo_id
-        FROM (
-            SELECT
+	// The deduplicated (pair, day) rows under the org, window, repo and team filters. BOTH the row
+	// query and the count query are built from this one text, so the count can never drift from
+	// the rows it counts (a test compares them).
+	inner := `SELECT
                 repo_id,
                 reviewer,
                 author,
@@ -158,7 +153,17 @@ func ResolveScoped(ctx context.Context, client QueryClient, orgID string, sinceD
             WHERE org_id = {org_id:String}
               AND day >= {since_date:Date}
               AND day <= {until_date:Date}` + repoFilter + `
-            GROUP BY repo_id, reviewer, author, day
+            GROUP BY repo_id, reviewer, author, day`
+
+	query := `
+        SELECT
+            reviewer,
+            author,
+            reviews_count,
+            day,
+            toString(repo_id) AS repo_id
+        FROM (
+            ` + inner + `
         )
         ORDER BY reviews_count DESC, repo_id, reviewer, author, day
         LIMIT {limit:UInt64}`
@@ -206,9 +211,53 @@ func ResolveScoped(ctx context.Context, client QueryClient, orgID string, sinceD
 	if err := rows.Err(); err != nil {
 		return nil, fmt.Errorf("reviewedges: rows: %w", err)
 	}
+	if err := rows.Close(); err != nil {
+		return nil, fmt.Errorf("reviewedges: close rows: %w", err)
+	}
+
+	total, err := countRows(ctx, client, inner, bindings)
+	if err != nil {
+		return nil, err
+	}
+	// The count and the rows are two reads; never report fewer rows available than were returned.
+	if total < len(edges) {
+		total = len(edges)
+	}
 
 	return &model.ReviewEdgesResult{
 		Edges:      edges,
-		TotalCount: len(edges),
+		TotalCount: total,
+		Truncated:  total > len(edges),
 	}, nil
+}
+
+// countStatement is the count of the same deduplicated rows the row query cuts from. The
+// LIMIT binding is not used here and is not sent.
+func countStatement(inner string) string {
+	return "SELECT count() FROM (\n            " + inner + "\n        )"
+}
+
+func countRows(ctx context.Context, client QueryClient, inner string, bindings []clickhouse.Binding) (int, error) {
+	countBindings := make([]clickhouse.Binding, 0, len(bindings))
+	for _, b := range bindings {
+		if b.Name != "limit" {
+			countBindings = append(countBindings, b)
+		}
+	}
+	rows, err := client.Query(ctx, countStatement(inner), countBindings)
+	if err != nil {
+		return 0, fmt.Errorf("reviewedges: count query: %w", err)
+	}
+	defer rows.Close()
+	var total uint64
+	if !rows.Next() {
+		if err := rows.Err(); err != nil {
+			return 0, fmt.Errorf("reviewedges: count rows: %w", err)
+		}
+		return 0, errors.New("reviewedges: count query returned no row")
+	}
+	if err := rows.Scan(&total); err != nil {
+		return 0, fmt.Errorf("reviewedges: count scan: %w", err)
+	}
+	return int(total), nil
 }

@@ -381,8 +381,12 @@ def _estimate_cases() -> list[dict[str, Any]]:
     # A lone surrogate in each secret the Jira estimator hashes, and in the
     # PagerDuty subdomain: Python's strict UTF-8 encode raises.
     for key in JIRA_SECRET_KEYS:
-        add("jira", "work-items", '{"%s": "\\ud800"}' % key)
-        add("jira", "work-items", '{"email": "e", "%s": "ok", "api_token": "\\ud800"}' % key)
+        add("jira", "work-items", f'{{"{key}": "\\ud800"}}')
+        add(
+            "jira",
+            "work-items",
+            f'{{"email": "e", "{key}": "ok", "api_token": "\\ud800"}}',
+        )
     add("pagerduty", "incidents", '{"subdomain": "\\ud800", "region": "eu"}')
     add("pagerduty", "incidents", '{"subdomain": "\\ud83d\\ude00"}')
     # A base URL with no hostname, in a credential and in the environment.
@@ -567,7 +571,10 @@ def _extra_fingerprint_cases() -> list[dict[str, Any]]:
     for secret in SURROGATE_LOOKALIKE_SECRETS:
         for key in ("token", "api_token", "client_secret"):
             cases.append(
-                {"credentials": '{"%s": "%s"}' % (key, secret), "credential_id": ROW_UUID}
+                {
+                    "credentials": f'{{"{key}": "{secret}"}}',
+                    "credential_id": ROW_UUID,
+                }
             )
     return cases
 
@@ -629,8 +636,8 @@ JSON_CURATED = (
     '""',
     '"',
     '"abc',
-    "\"a'b\"",
-    "\"a'b\\\"c\"",
+    '"a\'b"',
+    '"a\'b\\"c"',
     '"\\u0041"',
     '"\\u00e9"',
     '"\\u00"',
@@ -664,8 +671,8 @@ JSON_CURATED = (
     '{"a"}',
     '{"a":}',
     '{"a":1,}',
-    '{,}',
-    '{1: 2}',
+    "{,}",
+    "{1: 2}",
     "{'a': 1}",
     '{"a": 1, "a": 2}',
     '{"b": 1, "a": 2, "b": 3}',
@@ -676,16 +683,16 @@ JSON_CURATED = (
     "﻿[1]",
     " [1]",
     '["a\\u0000b"]',
-    '[NaN, Infinity, -Infinity]',
+    "[NaN, Infinity, -Infinity]",
     '{"a": NaN, "b": [Infinity]}',
-    '[[1, 2], [1.0, 3], [true, 4], [0, 5], [false, 6], [0.0, 7], [-0.0, 8]]',
-    '[[1, 2], [true, 3]]',
-    '[[true, 2], [1, 3]]',
-    '[[1.5, 2], [1.5, 3], [2.5, 4]]',
-    '[[1e400, 1], [1e400, 2], [-1e400, 3]]',
+    "[[1, 2], [1.0, 3], [true, 4], [0, 5], [false, 6], [0.0, 7], [-0.0, 8]]",
+    "[[1, 2], [true, 3]]",
+    "[[true, 2], [1, 3]]",
+    "[[1.5, 2], [1.5, 3], [2.5, 4]]",
+    "[[1e400, 1], [1e400, 2], [-1e400, 3]]",
     # Declared divergence (Go keeps two NaN keys, see the Go test).
-    '[[NaN, 1], [NaN, 2]]',
-    '[[null, 1], [null, 2]]',
+    "[[NaN, 1], [NaN, 2]]",
+    "[[null, 1], [null, 2]]",
     '[["a", 1], ["a", 2], ["b", 3]]',
     '[["a", 1], ["b"]]',
     '[["a", 1, 2]]',
@@ -696,7 +703,7 @@ JSON_CURATED = (
     '["\\ud83d\\ude00"]',
     '[{"k": 1, "j": 2}]',
     '[{"k": 1}]',
-    '[{}]',
+    "[{}]",
     '[{"a": 1, "b": 2, "c": 3}]',
     '[{"a": 1, "b": 2, "c": 3, "d": 4}]',
     '[{"a": 1}, {"b": 2, "c": 3}]',
@@ -704,24 +711,24 @@ JSON_CURATED = (
     '["abc"]',
     '["a", "bcd"]',
     '[["a", 1], {"b": 2, "c": 3, "d": 4}]',
-    '[[[1], 2]]',
+    "[[[1], 2]]",
     '[[{"a": 1}, 2]]',
-    '[[[], 2]]',
-    '[1, 2]',
-    '[null]',
-    '[true]',
-    '[[]]',
-    '[[]]',
+    "[[[], 2]]",
+    "[1, 2]",
+    "[null]",
+    "[true]",
+    "[[]]",
+    "[[]]",
     '"ab"',
     '"a"',
-    '5',
-    '0.0',
-    'true',
+    "5",
+    "0.0",
+    "true",
     '{"x": [1, {"y": null}]}',
     '[["1", 1], [1, 2], [1.0, 3], [true, 4], ["True", 5]]',
-    '[[10000000000000000000000, 1], [1e22, 2]]',
-    '[[9007199254740993, 1], [9007199254740992.0, 2]]',
-    '[[-0.0, 1], [0, 2], [false, 3]]',
+    "[[10000000000000000000000, 1], [1e22, 2]]",
+    "[[9007199254740993, 1], [9007199254740992.0, 2]]",
+    "[[-0.0, 1], [0, 2], [false, 3]]",
     '[["\\u00e9", 1], ["e\\u0301", 2]]',
     '[["a", 1], ["A", 2]]',
     '{"sync_prs": 1, "SYNC_PRS": 0, "k": "", "l": [], "m": {}, "n": 0.0, "o": null, "p": "0"}',
@@ -740,7 +747,7 @@ JSON_CURATED = (
 
 JSON_RICH_DOCS = (
     '{"a": [1, -2.5e3, true, null, "x\\n\\u00e9\\ud83d\\ude00"], "b": {"c": false}}',
-    '[0, -0, 0.5, 1E5, 1e-5, -1.5E+2, 12345678901234567890, NaN, -Infinity, 7]',
+    "[0, -0, 0.5, 1E5, 1e-5, -1.5E+2, 12345678901234567890, NaN, -Infinity, 7]",
     '"\\"\\\\\\/\\b\\f\\n\\r\\t\\u0041\\u00e9\\ud83d\\ude00\\ud800\\udc00 x\\udbff"',
     '[["a", 1], ["bc", 2], [1, true], [2.5, null], {"x": 1, "y": 2}]',
     '{"k": 1, "k": 2, "j": [], "i": {}}',
@@ -779,9 +786,7 @@ def _json_value_result(text: str) -> dict[str, Any]:
         return {"error": type(exc).__name__}
     result: dict[str, Any] = {
         "repr": repr(value),
-        "dumps": json.dumps(
-            value, sort_keys=True, default=str, separators=(",", ":")
-        ),
+        "dumps": json.dumps(value, sort_keys=True, default=str, separators=(",", ":")),
     }
     try:
         result["dict"] = repr(dict(value or {}))
@@ -856,8 +861,7 @@ def main() -> int:
         )
 
     json_values = [
-        {"input": text, "python": _json_value_result(text)}
-        for text in _json_texts()
+        {"input": text, "python": _json_value_result(text)} for text in _json_texts()
     ]
 
     _set_env({})
@@ -870,13 +874,16 @@ def main() -> int:
         elif plaintext is GARBAGE_CIPHERTEXT:
             ciphertext = "not-a-fernet-token"
         elif plaintext is not None:
+            assert isinstance(plaintext, str)
             ciphertext = encrypt_value(plaintext)
         else:
             ciphertext = None
-        config_value = None if config is SQL_NULL else json.loads(config)
-        row = SimpleNamespace(
-            credentials_encrypted=ciphertext, config=config_value
-        )
+        if config is SQL_NULL:
+            config_value = None
+        else:
+            assert isinstance(config, str)
+            config_value = json.loads(config)
+        row = SimpleNamespace(credentials_encrypted=ciphertext, config=config_value)
         try:
             mapping = _credential_mapping(row)
             # repr() keeps key order and value types; the Go side renders

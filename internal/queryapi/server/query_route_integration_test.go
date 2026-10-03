@@ -151,6 +151,13 @@ func (c *fakeReviewEdgesCHClient) Query(_ context.Context, statement string, _ [
 	if strings.HasPrefix(strings.TrimSpace(statement), "SELECT count()") {
 		return &fakeRows{rows: [][]any{{uint64(1)}}}, nil
 	}
+	// CHAOS-8485: the people reads (the org's identities, then the pull request
+	// author names). No row: the scripted reviewer and author are e-mail
+	// addresses that no identity and no pull request names, so each gets a key and
+	// a null name.
+	if strings.Contains(statement, "FROM identities FINAL") || strings.Contains(statement, "FROM git_pull_requests FINAL") {
+		return &fakeRows{rows: nil}, nil
+	}
 	return &fakeRows{rows: [][]any{
 		{"reviewer@example.com", "author@example.com", uint32(3), time.Date(2026, 8, 20, 0, 0, 0, 0, time.UTC), "repo-a"},
 	}}, nil
@@ -505,8 +512,14 @@ func TestReviewEdgesRoute_ReachableOnlyWhenSwitchEnabled(t *testing.T) {
 		if rec.Code != http.StatusOK {
 			t.Fatalf("mode=canary: got %d, body=%s", rec.Code, rec.Body.String())
 		}
-		if strings.Contains(rec.Body.String(), `"errors"`) || !strings.Contains(rec.Body.String(), "reviewer@example.com") {
-			t.Fatalf("expected response to contain the fake row's reviewer with no errors, got %s", rec.Body.String())
+		// CHAOS-8485: the registered document asks for the keys and names, not for the stored strings:
+		// the fake row is served (its count and its opaque keys) and its e-mail addresses are not.
+		body := rec.Body.String()
+		if strings.Contains(body, `"errors"`) || !strings.Contains(body, `"reviewsCount":3`) || !strings.Contains(body, `"reviewerKey":"p_`) || !strings.Contains(body, `"authorKey":"p_`) {
+			t.Fatalf("expected the fake row with its keys and no errors, got %s", body)
+		}
+		if strings.Contains(body, "@example.com") {
+			t.Fatalf("the answer of the current document holds an e-mail address: %s", body)
 		}
 		// CHAOS-7786: totalCount is the count query's answer (1 row available, 1 returned).
 		if !strings.Contains(rec.Body.String(), `"totalCount":1`) {
@@ -554,7 +567,7 @@ func TestReviewEdgesRoute_ReachableOnlyWhenSwitchEnabled(t *testing.T) {
 		if rec.Code != http.StatusOK {
 			t.Fatalf("expected 200 before rollback, got %d", rec.Code)
 		}
-		if strings.Contains(rec.Body.String(), `"errors"`) || !strings.Contains(rec.Body.String(), "reviewer@example.com") {
+		if strings.Contains(rec.Body.String(), `"errors"`) || !strings.Contains(rec.Body.String(), `"reviewsCount":3`) {
 			t.Fatalf("expected a real reviewEdges result before rollback, got %s", rec.Body.String())
 		}
 		setRoutingMode(t, pool, documentDigest, "reviewEdges", "disabled")

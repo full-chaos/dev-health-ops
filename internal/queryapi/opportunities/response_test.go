@@ -1,15 +1,53 @@
-// Golden parity tests for FromHomeResponse -- each fixture is captured
-// by monkeypatching dev_health_ops.api.services.opportunities.
-// build_home_response (the exact name build_opportunities_response
-// calls) to return a HomeResponse built from the given input, then
-// calling the real build_opportunities_response and dumping its JSON.
-// This is the correct boundary for THIS route's own added logic:
-// internal/home's own golden/integration tests already pin every
-// ClickHouse/Postgres read and dedup fix this route inherits; re-deriving
-// that fidelity here would just duplicate it.
+// Tests for FromHomeResponse against five files under testdata/. The files are
+// of TWO kinds (testdata.manifest.tsv holds the kind go-generated for the
+// three snapshots; the two captures are still in its unclassified rows).
 //
-// CAPTURE COMMAND (verbatim, from the ops repo root, this worktree's
-// venv), org_default.json:
+// GO SNAPSHOTS (kind go-generated): org_default.json, team_scoped.json and
+// repo_scoped.json. They hold what THIS package's Go code returns for the home
+// goldens internal/queryapi/home/testdata/{org_default,team_scoped,repo_scoped}.json
+// with the filters of the three tests below. The three tests that read them
+// are regression snapshots, Go against Go: they are NOT parity with Python
+// and they prove nothing about the Python port.
+//
+// Until CHAOS-7776 these three files were Python captures. That ticket
+// decided a divergence from the Python port: Python titled every card
+// "Reduce <metric>" and picked cards by the sign of the move alone; Go names
+// and picks a card by the polarity of its metric. So the Python answer for
+// these inputs is no longer the expected answer. The difference, the same in
+// each of the three files (old Python capture -> Go snapshot):
+//
+//   - the card "Reduce Throughput" is gone: throughput is higher-is-better
+//     and it rose in the input, which is an improvement, not an opportunity;
+//   - "Reduce Code Churn" takes the free place in the top four;
+//   - the cards are, in order: Reduce Rework Ratio, Reduce Change Failure
+//     Rate, Reduce Review Latency, Reduce Code Churn (they were: Reduce
+//     Rework Ratio, Reduce Throughput, Reduce Change Failure Rate, Reduce
+//     Review Latency).
+//
+// The behaviour itself (polarity, "Recover", improvements are not
+// opportunities, ranking by the size of the move) is pinned by the tests at
+// the end of this file, which build their input by hand. The snapshots only
+// keep the whole response of three real inputs from changing unseen.
+//
+// PYTHON CAPTURES, unchanged: pr_rework_ratio_default_experiments.json and
+// no_cards_fallback.json. Their inputs give the same answer in Python and in
+// Go (a lower-is-better metric that rose; no opportunity at all), so they are
+// still parity with Python. Each was captured by monkeypatching
+// dev_health_ops.api.services.opportunities.build_home_response (the exact
+// name build_opportunities_response calls) to return a HomeResponse, then
+// calling the real build_opportunities_response and dumping its JSON. The
+// HomeResponse was a minimal hand-constructed one (freshness/
+// rework_theme_allocation/summary/tiles/constraint/events all empty-shaped)
+// whose deltas exercise, respectively: the ONE _METRICS entry
+// (pr_rework_ratio) absent from _METRIC_SUGGESTED_EXPERIMENTS, falling
+// through to _DEFAULT_SUGGESTED_EXPERIMENTS; and every delta_pct <= 0,
+// producing the "Maintain steady flow" fallback card. This is the correct
+// boundary for THIS route's own added logic: internal/home's own tests pin
+// every ClickHouse/Postgres read and dedup fix this route inherits.
+//
+// THE CAPTURE METHOD (the monkeypatch; it is also how the three snapshots
+// were first made, before CHAOS-7776), from the ops repo root with a venv,
+// shown for org_default.json:
 //
 //	.venv/bin/python <<'PYEOF'
 //	import asyncio, json
@@ -34,19 +72,7 @@
 //	asyncio.run(main())
 //	PYEOF
 //
-// team_scoped.json/repo_scoped.json: the same script, reading
-// internal/queryapi/home/testdata/{team,repo}_scoped.json and
-// scope=ScopeFilter(level="team", ids=["team-1"]) /
-// ScopeFilter(level="repo", ids=["checkout-service"]) respectively.
-//
-// pr_rework_ratio_default_experiments.json/no_cards_fallback.json: the
-// same monkeypatch, but home_response is built directly from a minimal
-// hand-constructed HomeResponse (freshness/rework_theme_allocation/
-// summary/tiles/constraint/events all empty-shaped) whose deltas are
-// chosen to exercise, respectively: the ONE _METRICS entry
-// (pr_rework_ratio) absent from _METRIC_SUGGESTED_EXPERIMENTS, falling
-// through to _DEFAULT_SUGGESTED_EXPERIMENTS; and every delta_pct <= 0,
-// producing the "Maintain steady flow" fallback card.
+// The recordings are stopped: nothing here is captured from Python again.
 package opportunities
 
 import (
@@ -178,14 +204,15 @@ func TestFromHomeResponseNoCardsFallback(t *testing.T) {
 // fixtures do not exercise on their own (they all resolve to exactly
 // four).
 func TestFromHomeResponseMoreThanFourPositiveDeltasKeepsTopFour(t *testing.T) {
+	// Five lower-is-better metrics that climbed (worsened) and one that fell.
 	h := &home.Response{
 		Deltas: []home.MetricDelta{
-			{Metric: "a", Label: "A", DeltaPct: 10},
-			{Metric: "b", Label: "B", DeltaPct: 50},
-			{Metric: "c", Label: "C", DeltaPct: 40},
-			{Metric: "d", Label: "D", DeltaPct: 30},
-			{Metric: "e", Label: "E", DeltaPct: 20},
-			{Metric: "f", Label: "F", DeltaPct: -1},
+			{Metric: "cycle_time", Label: "A", DeltaPct: 10},
+			{Metric: "review_latency", Label: "B", DeltaPct: 50},
+			{Metric: "churn", Label: "C", DeltaPct: 40},
+			{Metric: "wip_saturation", Label: "D", DeltaPct: 30},
+			{Metric: "blocked_work", Label: "E", DeltaPct: 20},
+			{Metric: "change_failure_rate", Label: "F", DeltaPct: -1},
 		},
 	}
 	f := home.Filters{Time: home.TimeFilter{RangeDays: 14, CompareDays: 14}, Scope: home.ScopeFilter{Level: "org"}}
@@ -193,7 +220,7 @@ func TestFromHomeResponseMoreThanFourPositiveDeltasKeepsTopFour(t *testing.T) {
 	if len(got.Items) != 4 {
 		t.Fatalf("want 4 items, got %d: %+v", len(got.Items), got.Items)
 	}
-	wantOrder := []string{"b", "c", "d", "e"}
+	wantOrder := []string{"review_latency", "churn", "wip_saturation", "blocked_work"}
 	for i, metric := range wantOrder {
 		gotLink := got.Items[i].EvidenceLinks[0]
 		if !bytes.Contains([]byte(gotLink), []byte("metric="+metric+"&")) {
@@ -203,5 +230,81 @@ func TestFromHomeResponseMoreThanFourPositiveDeltasKeepsTopFour(t *testing.T) {
 		if got.Items[i].ID != wantID {
 			t.Fatalf("item %d: want id %s, got %s", i, wantID, got.Items[i].ID)
 		}
+	}
+}
+
+// CHAOS-7776: an opportunity is a metric that moved the WRONG way for its
+// polarity. The title verb and the rationale follow it, and an improvement is
+// never an opportunity.
+func polarityFilters() home.Filters {
+	return home.Filters{
+		Time:  home.TimeFilter{RangeDays: 14, CompareDays: 14},
+		Scope: home.ScopeFilter{Level: "org"},
+	}
+}
+
+func TestLowerIsBetterMetricThatClimbedIsReduce(t *testing.T) {
+	h := &home.Response{Deltas: []home.MetricDelta{
+		{Metric: "cycle_time", Label: "Cycle Time", DeltaPct: 19.4},
+	}}
+	got := FromHomeResponse(h, polarityFilters())
+	if len(got.Items) != 1 {
+		t.Fatalf("want 1 item, got %+v", got.Items)
+	}
+	if got.Items[0].Title != "Reduce Cycle Time" {
+		t.Fatalf("title = %q", got.Items[0].Title)
+	}
+	if got.Items[0].Rationale != "Cycle Time climbed 19% in the last 14 days." {
+		t.Fatalf("rationale = %q", got.Items[0].Rationale)
+	}
+}
+
+func TestHigherIsBetterMetricThatFellIsRecover(t *testing.T) {
+	for _, metric := range []string{"throughput", "deploy_freq", "ci_success"} {
+		h := &home.Response{Deltas: []home.MetricDelta{
+			{Metric: metric, Label: "Label " + metric, DeltaPct: -18.6},
+		}}
+		got := FromHomeResponse(h, polarityFilters())
+		if len(got.Items) != 1 {
+			t.Fatalf("%s: want 1 item, got %+v", metric, got.Items)
+		}
+		if got.Items[0].Title != "Recover Label "+metric {
+			t.Fatalf("%s: title = %q", metric, got.Items[0].Title)
+		}
+		// The size of the move is positive in words: "fell 19%", not "fell -19%".
+		want := "Label " + metric + " fell 19% in the last 14 days."
+		if got.Items[0].Rationale != want {
+			t.Fatalf("%s: rationale = %q, want %q", metric, got.Items[0].Rationale, want)
+		}
+	}
+}
+
+func TestImprovementsAreNotOpportunities(t *testing.T) {
+	// Throughput up and cycle time down are good news: no card, the fallback.
+	h := &home.Response{Deltas: []home.MetricDelta{
+		{Metric: "throughput", Label: "Throughput", DeltaPct: 33},
+		{Metric: "cycle_time", Label: "Cycle Time", DeltaPct: -20},
+		{Metric: "ci_success", Label: "CI Success Rate", DeltaPct: 5},
+	}}
+	got := FromHomeResponse(h, polarityFilters())
+	if len(got.Items) != 1 || got.Items[0].ID != "opp-0" || got.Items[0].Title != "Maintain steady flow" {
+		t.Fatalf("want only the steady-flow fallback, got %+v", got.Items)
+	}
+}
+
+func TestOpportunitiesRankByTheSizeOfTheMoveAcrossPolarities(t *testing.T) {
+	h := &home.Response{Deltas: []home.MetricDelta{
+		{Metric: "cycle_time", Label: "Cycle Time", DeltaPct: 10},
+		{Metric: "throughput", Label: "Throughput", DeltaPct: -40},
+		{Metric: "churn", Label: "Code Churn", DeltaPct: 25},
+	}}
+	got := FromHomeResponse(h, polarityFilters())
+	titles := make([]string, 0, len(got.Items))
+	for _, item := range got.Items {
+		titles = append(titles, item.Title)
+	}
+	want := []string{"Recover Throughput", "Reduce Code Churn", "Reduce Cycle Time"}
+	if !reflect.DeepEqual(titles, want) {
+		t.Fatalf("titles = %v, want %v", titles, want)
 	}
 }

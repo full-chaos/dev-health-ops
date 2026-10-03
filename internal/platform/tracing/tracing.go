@@ -138,7 +138,7 @@ func InitWithServiceName(logger *slog.Logger, defaultName string) Component {
 		return Component{}
 	}
 
-	provider, err := newProvider(serviceName, environment, endpoint, sampleRate)
+	provider, err := buildProvider(serviceName, environment, endpoint, sampleRate)
 	if err != nil {
 		initFailures.record()
 		logger.Warn("OpenTelemetry initialisation failed", "error", err)
@@ -154,6 +154,10 @@ func InitWithServiceName(logger *slog.Logger, defaultName string) Component {
 	)
 	return Component{provider: provider, logger: logger, endpoint: endpoint}
 }
+
+// buildProvider is newProvider behind a func value: the one seam a test uses to make
+// the provider construction fail (no environment value can: the exporter dials lazily).
+var buildProvider = newProvider
 
 func newProvider(serviceName, environment, endpoint string, sampleRate float64) (*sdktrace.TracerProvider, error) {
 	exporter, err := otlptracegrpc.New(context.Background(), dialOptions(endpoint)...)

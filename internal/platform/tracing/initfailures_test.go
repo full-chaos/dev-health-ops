@@ -2,8 +2,12 @@ package tracing
 
 import (
 	"bytes"
+	"errors"
+	"strconv"
 	"strings"
 	"testing"
+
+	sdktrace "go.opentelemetry.io/otel/sdk/trace"
 )
 
 func scrapeInitFailures(t *testing.T) string {
@@ -43,6 +47,45 @@ func TestInitFailureCounterStaysFlatWhenTracingIsDisabled(t *testing.T) {
 	}
 }
 
-// NOT pinned: the newProvider failure path's record() (tracing.go). The exporter
-// accepts every endpoint shape the environment can supply, so no input drives
-// it without a seam; the sample-rate path above shares the same one-line call.
+func TestInitFailureCounterMovesWhenTheProviderCannotBeBuilt(t *testing.T) {
+	before := scrapeInitFailures(t)
+	t.Setenv("OTEL_ENABLED", "true")
+	t.Setenv("OTEL_SAMPLE_RATE", "0.1")
+	original := buildProvider
+	buildProvider = func(string, string, string, float64) (*sdktrace.TracerProvider, error) {
+		return nil, errors.New("provider construction failed")
+	}
+	t.Cleanup(func() { buildProvider = original })
+	if c := InitWithServiceName(nil, "x"); c.provider != nil {
+		t.Fatal("init must fail when the provider cannot be built")
+	}
+	after := scrapeInitFailures(t)
+	if after == before {
+		t.Fatalf("the provider construction failure path did not count:\n%s", after)
+	}
+}
+
+func TestInitFailureCounterCountsExactlyOnePerFailureAndIsATypedCounter(t *testing.T) {
+	t.Setenv("OTEL_ENABLED", "true")
+	t.Setenv("OTEL_SAMPLE_RATE", "not-a-number")
+	read := func() string {
+		for _, line := range strings.Split(scrapeInitFailures(t), "\n") {
+			if strings.HasPrefix(line, `dev_health_otel_init_failures_total{attempt="final"} `) {
+				return line
+			}
+		}
+		t.Fatal("final series missing")
+		return ""
+	}
+	first := read()
+	InitWithServiceName(nil, "x")
+	second := read()
+	n1, _ := strconv.Atoi(strings.TrimPrefix(first, `dev_health_otel_init_failures_total{attempt="final"} `))
+	n2, _ := strconv.Atoi(strings.TrimPrefix(second, `dev_health_otel_init_failures_total{attempt="final"} `))
+	if n2-n1 != 1 {
+		t.Fatalf("one failed init must count exactly 1, moved by %d", n2-n1)
+	}
+	if !strings.Contains(scrapeInitFailures(t), "# TYPE dev_health_otel_init_failures_total counter\n") {
+		t.Fatal("the family must be a counter, as Python's is")
+	}
+}

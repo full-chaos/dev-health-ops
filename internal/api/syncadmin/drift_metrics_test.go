@@ -3,12 +3,16 @@ package syncadmin
 import (
 	"bytes"
 	"context"
+	"io"
 	"log/slog"
 	"reflect"
+	"strconv"
 	"strings"
 	"testing"
 
 	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgconn"
 )
 
 func TestDriftedDatasetKeysExcludesWhatTheDeltaNames(t *testing.T) {
@@ -67,5 +71,68 @@ func TestRecordDatasetDriftCountsByProviderAndLogsOnlyWhenDrifted(t *testing.T) 
 	}
 	if !strings.Contains(logs.String(), "sync_target_dataset_drift_repaired") || !strings.Contains(logs.String(), "drifted_count=2") {
 		t.Fatalf("the WARN log must still fire: %q", logs.String())
+	}
+}
+
+// driftTx is the smallest pgx.Tx the reconcile function drives: an advisory lock
+// Exec, a sibling read that returns no rows, dataset INSERT/UPDATE Execs. Every
+// disabling UPDATE reports disabledAffected rows, and is counted.
+type driftTx struct {
+	pgx.Tx
+	disabledAffected int64
+	disableUpdates   int
+}
+
+func (f *driftTx) Exec(_ context.Context, sql string, _ ...any) (pgconn.CommandTag, error) {
+	if strings.Contains(sql, "SET is_enabled = false") {
+		f.disableUpdates++
+		return pgconn.NewCommandTag("UPDATE " + strconv.FormatInt(f.disabledAffected, 10)), nil
+	}
+	return pgconn.NewCommandTag("OK"), nil
+}
+
+func (f *driftTx) Query(context.Context, string, ...any) (pgx.Rows, error) { return emptyRows{}, nil }
+
+type emptyRows struct{ pgx.Rows }
+
+func (emptyRows) Next() bool { return false }
+func (emptyRows) Close()     {}
+func (emptyRows) Err() error { return nil }
+
+func driftCount(t *testing.T, provider string) uint64 {
+	t.Helper()
+	m := DriftRepairedMetricsSource()
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return m.repaired[provider]
+}
+
+// TestReconcileCountsRealDriftThroughTheCallPath drives reconcileDatasetRowsForSyncTargets
+// itself (CHAOS-8221): a call that disables rows the previous-vs-new delta never
+// named moves the counter by exactly the number of drifted rows, a call that
+// disables nothing leaves it alone.
+func TestReconcileCountsRealDriftThroughTheCallPath(t *testing.T) {
+	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
+	before := driftCount(t, "github")
+	// previous targets empty: nothing was desired before, so every row the call
+	// disables is drift.
+	tx := &driftTx{disabledAffected: 1}
+	if err := reconcileDatasetRowsForSyncTargets(context.Background(), tx, logger, "org", uuid.New(), "github", []string{"git"}, nil, uuid.New()); err != nil {
+		t.Fatal(err)
+	}
+	if tx.disableUpdates == 0 {
+		t.Fatal("harness: the call disabled nothing, the case proves nothing")
+	}
+	if got := driftCount(t, "github") - before; got != uint64(tx.disableUpdates) {
+		t.Fatalf("counter moved by %d, want exactly the %d drifted rows", got, tx.disableUpdates)
+	}
+
+	none := &driftTx{disabledAffected: 0}
+	baseline := driftCount(t, "github")
+	if err := reconcileDatasetRowsForSyncTargets(context.Background(), none, logger, "org", uuid.New(), "github", []string{"git"}, nil, uuid.New()); err != nil {
+		t.Fatal(err)
+	}
+	if none.disableUpdates == 0 || driftCount(t, "github") != baseline {
+		t.Fatalf("rows affected 0 must not count (updates=%d)", none.disableUpdates)
 	}
 }

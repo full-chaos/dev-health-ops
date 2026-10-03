@@ -426,7 +426,6 @@ func TestInterpreterRefusesInARecordingOutsideTheClosedList(t *testing.T) {
 var lookPathPythonDayOne = map[string]bool{
 	"internal/testsupport/pyoracle/pyoracle.go":       true, // the resolver itself
 	"internal/testsupport/venueoracle/venueoracle.go": true, // the launcher's PATH check
-	"internal/pgmigrate/preflight_test.go":            true,
 	// Launches by the name "python3" (the venue puts the interpreter's
 	// directory first on PATH): started with the process environment, a
 	// recording's poison (PYTHONHOME) stops these, so none records today.

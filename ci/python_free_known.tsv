@@ -4,7 +4,3 @@
 # Measured by the go-python-free PR runs (36821812014 integration shards, 36824019506 unit leg). A FROZEN test that hits the tripwire is a defect in its freeze, never a row here.
 # Ticket per row = the open freeze/delete ticket of the owning family (CHAOS-7058 inventory). Remove a row in the PR that freezes its test.
 github.com/full-chaos/dev-health-ops/internal/jobs/metrics/remaining	TestRecommendationsLoaderMatchesPythonAgainstClickHouse	CHAOS-7308	tripwire
-github.com/full-chaos/dev-health-ops/internal/pgmigrate	TestBaselineVenueOracleIsTheExecutedPythonUpgrade	CHAOS-7049	tripwire
-github.com/full-chaos/dev-health-ops/internal/pgmigrate	TestBuildHeadsAreTheOldScriptsHeads	CHAOS-7049	tripwire
-github.com/full-chaos/dev-health-ops/internal/pgmigrate	TestHistoryGraphIsTheAlembicChain	CHAOS-6469	tripwire
-github.com/full-chaos/dev-health-ops/internal/pgmigrate	TestHookVerbUpgradesAnOldProductionDatabaseToTheAlembicHead	CHAOS-7049	tripwire

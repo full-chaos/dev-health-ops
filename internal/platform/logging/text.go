@@ -324,10 +324,10 @@ func redactAfterWord(text string, pattern *regexp.Regexp, shaped func(string) bo
 	return out.String()
 }
 
-// RedactCredentialShapes is the credential part of RedactText for text that must keep its other bytes: provider tokens by
+// RedactCredentialShapesNoUserinfo is RedactCredentialShapes without its last pass (see userinfo.go). It is the credential part of RedactText for text that must keep its other bytes: provider tokens by
 // documented prefix and a long value behind a credential word. The persisted error columns use it after their own
 // patterns (CHAOS-7937).
-func RedactCredentialShapes(value string) (result string) {
+func RedactCredentialShapesNoUserinfo(value string) (result string) {
 	defer func() {
 		if recover() != nil {
 			result = redactionFailed

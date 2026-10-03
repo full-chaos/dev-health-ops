@@ -35,7 +35,7 @@ func (executor CompleteRouteExecutor) executeChunkedStreaming(
 		guard providerfoundation.LeaseGuard,
 	) error {
 		now := executor.now()
-		attemptStarted := time.Now()
+		attemptElapsed := executor.attemptTimer()
 		checkpoint, checkpointErr := store.LoadChunkCheckpoint(workContext, session.Claim, now)
 		if checkpointErr != nil && !errors.Is(checkpointErr, ErrChunkCheckpointNotFound) {
 			return checkpointErr
@@ -70,8 +70,8 @@ func (executor CompleteRouteExecutor) executeChunkedStreaming(
 				return err
 			}
 			committedThisAttempt++
-			if committedThisAttempt >= policy.MaxChunksPerAttempt && ordinal+1 < checkpoint.PreparedChunks {
-				return newChunkContinuation(policy, executor.now().Add(time.Second), committedThisAttempt, time.Since(attemptStarted))
+			if (committedThisAttempt >= policy.MaxChunksPerAttempt || attemptElapsed() >= policy.MaxWallTime) && ordinal+1 < checkpoint.PreparedChunks {
+				return newChunkContinuation(policy, executor.now().Add(time.Second), committedThisAttempt, attemptElapsed())
 			}
 		}
 		checkpoint, checkpointErr = store.LoadChunkCheckpoint(workContext, session.Claim, executor.now())
@@ -249,8 +249,8 @@ func (executor CompleteRouteExecutor) executeChunkedStreaming(
 					nextOrdinal++
 					committedThisAttempt++
 				}
-				if !emission.Final && (committedThisAttempt >= policy.MaxChunksPerAttempt || time.Since(attemptStarted) >= policy.MaxWallTime) {
-					return newChunkContinuation(policy, executor.now().Add(time.Second), committedThisAttempt, time.Since(attemptStarted))
+				if !emission.Final && (committedThisAttempt >= policy.MaxChunksPerAttempt || attemptElapsed() >= policy.MaxWallTime) {
+					return newChunkContinuation(policy, executor.now().Add(time.Second), committedThisAttempt, attemptElapsed())
 				}
 				return nil
 			},

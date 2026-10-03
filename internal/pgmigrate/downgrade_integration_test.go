@@ -138,7 +138,7 @@ func newDownInstance(t *testing.T) downInstance {
 
 // at is a scratch database at chain revision k of the Go chain (k = 0 is the baseline,
 // len(chain) the head): the baseline plus the first k chain files, built by dho's own
-// upgrade (which TestBaselineVenueOracleIsTheExecutedPythonUpgrade holds equal to the
+// upgrade (which TestBaselineIsTheFrozenPythonUpgrade holds equal to the
 // Python upgrade at every chain revision).
 func (d downInstance) at(t *testing.T, k int) string {
 	t.Helper()

@@ -203,3 +203,107 @@ func TestDryRunWithMCPRootsExecutesTheClassProofAndWritesNoReceipt(t *testing.T)
 		t.Fatalf("an MCP class dry run's summary = %+v, want something executed and no receipt", report.Summary)
 	}
 }
+
+// dryRunCounters counts what a dry run sends to each fake server.
+type dryRunCounters struct{ registry, buildinfo, principal, posts, otherGets atomic.Int32 }
+
+// dryRunFixture is a registry, a /buildinfo and an edge that count every request, plus the documents file.
+func dryRunFixture(t *testing.T) (args []string, counters *dryRunCounters) {
+	t.Helper()
+	withProverCommit(t, e2eBuildSHA)
+	counters = new(dryRunCounters)
+	digest := goapidigest.Document(hotspotsDocument)
+	type registryOp struct {
+		Operation      string `json:"operation"`
+		DocumentDigest string `json:"document_digest"`
+	}
+	var ops []registryOp
+	for _, name := range goapiproof.KnownOperations() {
+		entry := registryOp{Operation: name, DocumentDigest: "sha256:unused-" + name}
+		if name == "hotspots" {
+			entry.DocumentDigest = digest
+		}
+		ops = append(ops, entry)
+	}
+	registryBody, _ := json.Marshal(struct {
+		SchemaDigest string       `json:"schema_digest"`
+		Operations   []registryOp `json:"operations"`
+	}{SchemaDigest: "sha256:e2e29d509cd", Operations: ops})
+	registry := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		counters.registry.Add(1)
+		writeStaticJSONHandler(string(registryBody))(w, r)
+	}))
+	t.Cleanup(registry.Close)
+	buildinfo := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		counters.buildinfo.Add(1)
+		writeStaticJSONHandler(`{"commit":"`+e2eBuildSHA+`","modified":false}`)(w, r)
+	}))
+	t.Cleanup(buildinfo.Close)
+	edge := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case r.URL.Path == goapiproof.ReferencePrincipalPath:
+			counters.principal.Add(1)
+			w.Header().Set("Server", goapiproof.ReferencePlaneServer)
+			_, _ = w.Write([]byte(`{"org_id":"70d529e0"}`))
+		case r.Method == http.MethodPost:
+			counters.posts.Add(1)
+			_, _ = io.Copy(io.Discard, r.Body)
+			w.WriteHeader(http.StatusNotFound)
+		default:
+			counters.otherGets.Add(1)
+			w.WriteHeader(http.StatusNotFound)
+		}
+	}))
+	t.Cleanup(edge.Close)
+	docsJSON, _ := json.Marshal([]map[string]string{{"operation": "hotspots", "document": hotspotsDocument}})
+	docsPath := filepath.Join(t.TempDir(), "documents.json")
+	if err := os.WriteFile(docsPath, docsJSON, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	withOrgMinter(t, "70d529e0", "70d529e0")
+	original := openPostgresPool
+	t.Cleanup(func() { openPostgresPool = original })
+	openPostgresPool = func(context.Context, string) (dbPool, error) {
+		t.Error("a dry run must open no database")
+		return nil, errors.New("a dry run must open no database")
+	}
+	return []string{
+		"-registry-url=" + registry.URL + "/registry",
+		"-buildinfo-url=" + buildinfo.URL + "/buildinfo",
+		"-edge-url=" + edge.URL + "/graphql",
+		"-documents=" + docsPath,
+		"-org=70d529e0",
+		"-artifact-dir=" + t.TempDir(),
+		"-recorded-by=harness", "-review-evidence=dry run flag modes",
+		"-timeout=5s",
+		"-dry-run",
+	}, counters
+}
+
+// TestDryRunWithDocRouteIsRefusedBeforeAnyRequest pins "(-mcp-reference doc-route refuses a dry run)".
+func TestDryRunWithDocRouteIsRefusedBeforeAnyRequest(t *testing.T) {
+	args, counters := dryRunFixture(t)
+	err := runCLI(t, append(args, "-mcp-roots=mcp:hotspots", "-mcp-reference=doc-route", "-proof-url=http://127.0.0.1:1/query/proof-mcp"))
+	if err == nil || !strings.Contains(err.Error(), "cannot run with -dry-run") {
+		t.Fatalf("a doc-route dry run ended with %v, want the dry-run refusal", err)
+	}
+	if got := counters.registry.Load() + counters.buildinfo.Load() + counters.principal.Load() + counters.posts.Load() + counters.otherGets.Load(); got != 0 {
+		t.Fatalf("a doc-route dry run sent %d request(s) before refusing", got)
+	}
+}
+
+// TestDryRunWithGoEdgeReadsNoReferencePrincipalAndPostsTheControlDocument pins "the reference-principal check too unless
+// -go-edge": in Go-edge mode there is no Python plane to ask, and the edge still gets the control document.
+func TestDryRunWithGoEdgeReadsNoReferencePrincipalAndPostsTheControlDocument(t *testing.T) {
+	args, counters := dryRunFixture(t)
+	_ = runCLI(t, append(args, "-go-edge"))
+	if counters.principal.Load() != 0 {
+		t.Fatalf("a -go-edge dry run read the reference principal %d time(s): the help text says it does not", counters.principal.Load())
+	}
+	if counters.posts.Load() != 1 {
+		t.Fatalf("a -go-edge dry run POSTed %d request(s) to the edge, want exactly the control document", counters.posts.Load())
+	}
+	if counters.registry.Load() == 0 || counters.buildinfo.Load() == 0 {
+		t.Fatalf("a dry run read the registry %d and /buildinfo %d time(s): the help text says it reads both", counters.registry.Load(), counters.buildinfo.Load())
+	}
+}

@@ -1,79 +1,69 @@
 // Package errortext is the one sanitizer for error text that is persisted or
 // logged: credential-shaped substrings are replaced and the text is bounded. It
 // is a leaf package (stdlib only) so that every layer, including the job runtime,
-// can import it without a cycle (CHAOS-7943). The code is moved verbatim from
-// internal/syncdispatchruntime/error_sanitize.go; behaviour is unchanged.
+// can import it without a cycle (CHAOS-7943). It is the ONE implementation: the Python-parity
+// matchers (matchers.go) answer every caller (CHAOS-7947). It imports the logging package for the credential-shape pass (stdlib
+// plus the secrets leaf below it; no import cycle with the job runtime).
 package errortext
 
-import "regexp"
+import "github.com/full-chaos/dev-health-ops/internal/platform/logging"
 
-// redactionMarker replaces any credential-shaped substring sanitizeErrorText
-// recognizes. Mirrors src/dev_health_ops/sync/error_sanitize.py
-// (REDACTION_MARKER) exactly -- tests assert this marker is present (and the
-// original secret is not) rather than hardcoding the redaction text inline
-// everywhere.
 const redactionMarker = "[REDACTED]"
 
-// defaultMaxErrorTextLength mirrors error_sanitize.py's
-// DEFAULT_MAX_ERROR_TEXT_LENGTH. finalize_sync_run always calls
-// sanitize_error_text with its default max_length, so this is the only cap
-// this native port needs.
+// defaultMaxErrorTextLength mirrors error_sanitize.py's DEFAULT_MAX_ERROR_TEXT_LENGTH.
 const defaultMaxErrorTextLength = 4000
 
 const truncationSuffix = "...[truncated]"
 
-// secretPatterns is a literal, order-preserving port of
-// error_sanitize.py's _SECRET_PATTERNS tuple. Order matters: header-shaped
-// matches must consume their whole "<Scheme> <credential>" pair before the
-// narrower bare-token patterns get a chance to leave a dangling fragment --
-// see the Python module's comment for the full rationale. Go's regexp
-// (RE2) has no (?i) inline-flag scoping ambiguity here since each pattern
-// opens with it, matching Python's per-pattern re.IGNORECASE-via-(?i) usage.
-var secretPatterns = []*regexp.Regexp{
-	regexp.MustCompile(`(?i)\b(authorization|proxy-authorization)\s*[:=]\s*\S+(?:\s+\S+)?`),
-	regexp.MustCompile(`(?i)\bbearer\s+\S+`),
-	regexp.MustCompile(`(?i)\bbasic\s+[a-z0-9+/=]{8,}\b`),
-	regexp.MustCompile(`(?i)\bghp_[a-z0-9]{20,}\b`),
-	regexp.MustCompile(`(?i)\bgho_[a-z0-9]{20,}\b`),
-	regexp.MustCompile(`(?i)\bghu_[a-z0-9]{20,}\b`),
-	regexp.MustCompile(`(?i)\bghs_[a-z0-9]{20,}\b`),
-	regexp.MustCompile(`(?i)\bghr_[a-z0-9]{20,}\b`),
-	regexp.MustCompile(`(?i)\bgithub_pat_[a-z0-9_]{20,}\b`),
-	regexp.MustCompile(`(?i)\bglpat-[a-z0-9_-]{20,}\b`),
-	regexp.MustCompile(`(?i)\bxox[baprs]-[a-z0-9-]{10,}\b`),
-	regexp.MustCompile(`(?i)\b(private_token|access_token|api_key|apikey|client_secret|secret|token)\s*[:=]\s*\S+`),
-	regexp.MustCompile(`(?i)\b[a-z][a-z0-9+.-]*://[^\s/@]+@`),
-}
-
-// Sanitize is the native port of error_sanitize.py's
-// sanitize_error_text for the STRING-input path only. finalize_sync_run
-// never calls it with an exception object (Go has no exception type to
-// pass) -- it only ever sanitizes an already-stringified sync_runs.error /
-// planner-recorded value, so the "exception with a class-name prefix"
-// branch of the Python function has no native caller and is intentionally
-// not ported. A nil/empty input maps 1:1 to Python's None/"" short-circuit:
-// callers pass "" for a nil *string and get "" back, matching
-// `sanitize_error_text(None) is None` / `sanitize_error_text("") == ""`
-// closely enough that callers branch on emptiness the same way Python
-// branches on `is None`.
-func Sanitize(text string) string {
+// Redact is error_sanitize.py's pattern pass: every credential-shaped substring is replaced by "[REDACTED]", in the Python
+// file's own order, with no cap. Empty input is returned as is.
+func Redact(text string) string {
 	if text == "" {
 		return text
 	}
-	sanitized := text
-	for _, pattern := range secretPatterns {
-		sanitized = pattern.ReplaceAllString(sanitized, redactionMarker)
+	runes := []rune(text)
+	for _, match := range matchers {
+		runes = substitute(runes, match)
 	}
-	// Python's len()/slicing on str is by Unicode code point, not byte --
-	// truncate by rune here too, both so the cap lines up with Python's for
-	// non-ASCII text and so a multi-byte UTF-8 rune can never be split.
-	runes := []rune(sanitized)
-	if len(runes) > defaultMaxErrorTextLength {
-		if defaultMaxErrorTextLength > len(truncationSuffix) {
-			sanitized = string(runes[:defaultMaxErrorTextLength-len(truncationSuffix)]) + truncationSuffix
-		} else {
-			sanitized = string(runes[:defaultMaxErrorTextLength])
-		}
+	return string(runes)
+}
+
+// Truncate caps text at maxLength code points with "...[truncated]" (a maxLength of 0 or less means no cap, as Python's
+// max_length=None); by rune, so a multi-byte rune is never split.
+func Truncate(text string, maxLength int) string {
+	if maxLength <= 0 {
+		return text
 	}
-	return sanitized
+	runes := []rune(text)
+	if len(runes) <= maxLength {
+		return text
+	}
+	suffix := []rune(truncationSuffix)
+	if maxLength > len(suffix) {
+		return string(runes[:maxLength-len(suffix)]) + truncationSuffix
+	}
+	return string(runes[:maxLength])
+}
+
+// Sanitize is sanitize_error_text for the STRING-input path with Python's default cap of 4000 (the exception-object branch
+// has no Go counterpart). Empty input is returned as is.
+func Sanitize(text string) string {
+	return Truncate(Redact(text), defaultMaxErrorTextLength)
+}
+
+// SanitizeHardened is the ONE composition every caller that stores, logs or returns error text uses (CHAOS-7947): the
+// Python-parity pattern pass first (so the recorded Python answer is always applied), then the credential shapes the Python
+// list never had (LLM-provider, Stripe, Google, Slack and JWT keys by prefix, and a long value behind a credential word,
+// CHAOS-7937), then the cap, so a cap can never cut a key to a fragment below a shape's minimum length. maxLength <= 0 = no cap.
+// It differs from Sanitize only on text holding such a shape (a hardening, not a parity break).
+func SanitizeHardened(text string, maxLength int) string {
+	if text == "" {
+		return text
+	}
+	return Truncate(logging.RedactCredentialShapes(Redact(text)), maxLength)
+}
+
+// SanitizeHardenedDefault is SanitizeHardened with Python's default cap of 4000.
+func SanitizeHardenedDefault(text string) string {
+	return SanitizeHardened(text, defaultMaxErrorTextLength)
 }

@@ -1,12 +1,11 @@
 package errortext
 
 import (
-	"regexp"
 	"strings"
 	"testing"
 )
 
-// The clause corpus (CHAOS-8036): for EACH redaction clause of secretPatterns a positive input (the secret form IS redacted,
+// The clause corpus (CHAOS-8036): for EACH redaction clause of matchers a positive input (the secret form IS redacted,
 // to the exact text given) and a near-miss negative (left unchanged), each applied to ONE pattern alone, so removing or
 // weakening that clause is RED even when a later pattern would have redacted the same text. Every token-shaped value is a plain
 // literal written out in full, low-entropy, never assembled at run time. The clause list is DERIVED from the sanitizer: the
@@ -14,7 +13,7 @@ import (
 // from the pattern sources, and a member without a row (or a row naming a member the pattern no longer has) fails.
 
 type clauseRow struct {
-	pattern  int    // index into secretPatterns
+	pattern  int    // index into matchers
 	member   string // the alternation member or class letter this row pins ("" when the clause is not a member)
 	clause   string // what is pinned
 	positive string // input
@@ -206,41 +205,40 @@ var extraNegatives = []struct {
 const wantPatternCount = 13
 
 func applyOnly(pattern int, text string) string {
-	return secretPatterns[pattern].ReplaceAllString(text, redactionMarker)
+	return string(substitute([]rune(text), matchers[pattern]))
 }
 
 func TestTheClauseListIsDerivedFromTheSanitizer(t *testing.T) {
-	if len(secretPatterns) == 0 {
-		t.Fatal("secretPatterns is empty: the corpus would pin nothing")
+	if len(matchers) == 0 {
+		t.Fatal("matchers is empty: the corpus would pin nothing")
 	}
-	if len(secretPatterns) != wantPatternCount {
-		t.Fatalf("secretPatterns has %d patterns, the corpus was written for %d: add rows for the new pattern, then update wantPatternCount", len(secretPatterns), wantPatternCount)
+	if len(matchers) != wantPatternCount {
+		t.Fatalf("matchers has %d patterns, the corpus was written for %d: add rows for the new pattern, then update wantPatternCount", len(matchers), wantPatternCount)
 	}
-	rowsOf := make([]int, len(secretPatterns))
+	rowsOf := make([]int, len(matchers))
 	for _, row := range clauseRows {
-		if row.pattern < 0 || row.pattern >= len(secretPatterns) {
+		if row.pattern < 0 || row.pattern >= len(matchers) {
 			t.Fatalf("row %q names pattern %d, out of range", row.clause, row.pattern)
 		}
 		rowsOf[row.pattern]++
 	}
 	for index, count := range rowsOf {
 		if count == 0 {
-			t.Errorf("pattern %d (%s) has no corpus row", index, secretPatterns[index])
+			t.Errorf("pattern %d has no corpus row", index)
 		}
 	}
-	// alternation members and class letters, read from the pattern sources
-	group := regexp.MustCompile(`\\b\(([^()]*)\)`)
-	class := regexp.MustCompile(`xox\[([a-z]+)\]`)
-	for index, pattern := range secretPatterns {
-		var derived []string
-		source := pattern.String()
-		if match := class.FindStringSubmatch(source); match != nil {
-			derived = strings.Split(match[1], "")
-		} else if match := group.FindStringSubmatch(source); match != nil {
-			derived = strings.Split(match[1], "|")
-		} else {
+	// alternation members and class letters, read from the variables the matchers are built from
+	derivedMembers := map[int][]string{
+		0:  headerNames,
+		10: strings.Split(slackKinds, ""),
+		11: keyNames,
+	}
+	for index := range matchers {
+		derived, ok := derivedMembers[index]
+		if !ok {
 			continue
 		}
+		source := "matcher " + strings.Join(derived, "|")
 		have := map[string]bool{}
 		for _, row := range clauseRows {
 			if row.pattern == index && row.member != "" {

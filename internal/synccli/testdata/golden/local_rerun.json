@@ -1,0 +1,22 @@
+{
+  "header": {
+    "test": "TestLocalSyncRerunKeepsHeldColumnsUnlikePythonFrozen",
+    "python_build": "a4847c5e93607451a0c987b314d37e02fc43ce85",
+    "producer_digest": "6e1dc97e68624398015f60caee160cceee6ae601bd434d01b8b7d5975267e137",
+    "recipe": "git worktree add --detach $DIR a4847c5e93607451a0c987b314d37e02fc43ce85 (with its .venv: uv sync --frozen --no-install-project); then from the repository root: go run ./internal/testsupport/venueoracle/goldenrecord -pkg ./internal/synccli/ -test '^TestLocalSyncRerunKeepsHeldColumnsUnlikePythonFrozen$' -python-root $DIR",
+    "recorded_by": "goldenrecord",
+    "blanked": {}
+  },
+  "requests": [
+    {
+      "name": "local sync rerun over a held row",
+      "method": "PYTHON",
+      "path": "program sha256 cea59ea490b8b8f183f134cfdf08ebe7c9230b3610c0acb5a4de5b7c307e6163 env sha256 1c88f3865e354134787e5de06e8297706069ac0e90bd18af3b36118bb396c501",
+      "body_sha256": "86eb68c2ecf181c8392c36ced521e249c0f8b95558e4c0328da2e4dfe3c9a9f3",
+      "request_headers_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "status": 0,
+      "headers": {},
+      "body": "gzip+base64:H4sIAAAAAAAC/6pWSspPqVSyyivNydFRSkxJySzJzM8rhgkUpZZlppYXK1kZ6CiVZJbkpMIkiksSS1KVrJTyC1LzlGoBAwBk/PwxRgAAAA=="
+    }
+  ]
+}

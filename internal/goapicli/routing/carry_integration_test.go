@@ -412,6 +412,37 @@ func TestCarryJSONReasonIsCarriedOnSuccess(t *testing.T) {
 	}
 }
 
+// CHAOS-8144 (r1 P1): a digest whose only live row is a valid SHADOW row is
+// carried, not refused. The refusal used to fire after the plan and the
+// per-row event had printed CARRY, leaving the target row absent behind a
+// report that said it was written; the hook's -json answer must say carried
+// and the registration must exist at this binary's digest, still shadow.
+func TestCarryShadowOnlyDigestWritesTheRegistrationAndReportsCarried(t *testing.T) {
+	_, dsn := startVerbPostgres(t)
+	digest := carryTestDocumentDigest()
+	catalogPath := writeCatalog(t, map[string]string{verbTestOperation: digest})
+	documentsPath := writeDocumentsDump(t, map[string]string{verbTestOperation: carryTestDocument})
+	t.Setenv(bearerEnvVar, verbTestBearer)
+	server := startQueryAPI(t, carryDeployedSchemaDigest, map[string]string{verbTestOperation: digest})
+	seedLiveRow(t, dsn, digest, "shadow")
+
+	out, _, err := captureVerb(t, carryArgs(server, dsn, catalogPath, documentsPath, "-json")...)
+	if err != nil {
+		t.Fatalf("carry: %v (a valid shadow-only digest must not be refused)\n%s", err, out)
+	}
+	if result := extractCarryJSON(t, out); result.Reason != "carried" || result.Carried != 1 {
+		t.Fatalf("json = %+v, want reason carried and carried=1 (out:\n%s)", result, out)
+	}
+	var mode string
+	if err := queryRow(t, dsn,
+		`SELECT mode FROM go_api_routing_state WHERE schema_digest = '`+localSchemaDigest()+`'`, &mode); err != nil {
+		t.Fatalf("the shadow registration is absent at this binary's digest although the report said carried: %v", err)
+	}
+	if mode != "shadow" {
+		t.Fatalf("carried mode = %q, want shadow verbatim", mode)
+	}
+}
+
 func TestCarryJSONReasonIsStaleBuildWhenARowNamesABuildNotRunning(t *testing.T) {
 	_, dsn := startVerbPostgres(t)
 	digest := carryTestDocumentDigest()

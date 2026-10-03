@@ -10,7 +10,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/url"
-	"os"
 	"os/exec"
 	"path/filepath"
 	"regexp"
@@ -332,28 +331,18 @@ const backfillPythonBuild = "a4847c5e93607451a0c987b314d37e02fc43ce85"
 // pinned separately (fixedNow, in the program's input).
 var backfillPythonSettings = map[string]string{"PYTHONHASHSEED": "0", "OTEL_ENABLED": "false", "TZ": "UTC"}
 
-// backfillPythonEnv is the producer's CLOSED environment: PATH and HOME, the checkout's source, and
-// backfillPythonSettings; nothing is inherited from the test process. The database address is appended by
-// the caller (a per-run value).
-func backfillPythonEnv(root string) []string {
-	env := []string{"PATH=" + os.Getenv("PATH"), "HOME=" + os.Getenv("HOME"), "PYTHONPATH=" + filepath.Join(root, "src"), "PYTHONDONTWRITEBYTECODE=1"}
-	for _, name := range []string{"OTEL_ENABLED", "PYTHONHASHSEED", "TZ"} {
-		env = append(env, name+"="+backfillPythonSettings[name])
-	}
-	return env
-}
-
-func pythonRun(t *testing.T, root, uri string, s scenario) (int, string) {
+func pythonRun(t *testing.T, producer *venueoracle.Producer, uri string, s scenario) (int, string) {
 	t.Helper()
-	python := pyoracle.Resolve(t, root)
 	input, err := json.Marshal(map[string]any{"args": append([]string{"--config-id", s.configID()}, s.args...), "config_id": s.configID(), "now": fixedNow})
 	if err != nil {
 		t.Fatal(err)
 	}
 	pyURI := strings.Replace(uri, "postgres://", "postgresql://", 1)
-	command := exec.Command(python, "-c", livePythonProgram)
+	command, err := producer.Command(context.Background(), backfillPythonSettings, []string{"POSTGRES_URI=" + pyURI, "DATABASE_URI=" + pyURI}, "-c", livePythonProgram)
+	if err != nil {
+		t.Fatal(err)
+	}
 	command.Stdin = bytes.NewReader(input)
-	command.Env = append(backfillPythonEnv(root), "POSTGRES_URI="+pyURI, "DATABASE_URI="+pyURI)
 	var stderr bytes.Buffer
 	command.Stderr = &stderr
 	command.Stdout = &bytes.Buffer{}
@@ -362,7 +351,7 @@ func pythonRun(t *testing.T, root, uri string, s scenario) (int, string) {
 	if exit, ok := err.(*exec.ExitError); ok {
 		code = exit.ExitCode()
 	} else if err != nil {
-		t.Fatalf("run python: %v", pyoracle.RunError(python, err, []byte(stderr.String())))
+		t.Fatalf("run python: %v", pyoracle.RunError(command.Path, err, []byte(stderr.String())))
 	}
 	return code, stderr.String()
 }
@@ -522,7 +511,7 @@ func TestBackfillRunWritesTheFrozenPythonRows(t *testing.T) {
 	golden := venueoracle.OpenGolden(t, venueoracle.GoldenSpec{
 		Path:        "testdata/golden/backfill_run.json",
 		PythonBuild: backfillPythonBuild,
-		SHA256:      "445d484dc588e2a0dbe4682c1c7edceef2d4ed5e35f2f03df513ce44280cf4a9",
+		SHA256:      "db44d32a8cba728fd51d5a47088b39edbf9715e2ed21a39035b2e7650029944a",
 		Recipe: "git worktree add --detach $DIR " + backfillPythonBuild + " (with its .venv: uv sync --frozen --no-install-project); then from the repository root: " +
 			"go run ./internal/testsupport/venueoracle/goldenrecord -pkg ./internal/backfillrun/ -test '^TestBackfillRunWritesTheFrozenPythonRows$' -python-root $DIR",
 	})
@@ -541,12 +530,13 @@ func TestBackfillRunWritesTheFrozenPythonRows(t *testing.T) {
 		t.Fatal(err)
 	}
 	request := venueoracle.ProgramRequest("backfill run scenarios", livePythonProgram, input, backfillPythonSettings)
-	answers := golden.Produce(t, root, []venueoracle.Request{request}, func(_ *venueoracle.Producer, _ []venueoracle.Request) []venueoracle.Response {
+	answers := golden.Produce(t, root, []venueoracle.Request{request}, func(producer *venueoracle.Producer, _ []venueoracle.Request) []venueoracle.Response {
+		producer.RequireDeployed()
 		uri := setup(t)
 		var produced []result
 		for _, s := range comparable() {
 			reset(t, uri, s)
-			code, stderr := pythonRun(t, root, uri, s)
+			code, stderr := pythonRun(t, producer, uri, s)
 			checkRefusal(t, "python", s, code, stderr)
 			produced = append(produced, result{Name: s.name, Exit: code, Rows: rows(t, uri)})
 		}

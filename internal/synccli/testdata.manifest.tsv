@@ -5,6 +5,8 @@ bdbfe76e9ec9080b7012e3e806c0a042fce449301e22a41a0fa04ed4e4a16641	unclassified	ba
 18e780bc9f622ad1317b47c7268e1fa786878140dcf9bfecfdf1dd0582378f99	hand-written	db_lookup_oracle.py
 -	header	golden/batch_loop.json
 -	header	golden/db_lookup.json
+-	header	golden/local_rerun.json
+-	header	golden/local_sync.json
 -	header	golden/sync_target.json
 -	header	golden/teams_github.json
 -	header	golden/teams_gitlab.json

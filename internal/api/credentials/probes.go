@@ -231,7 +231,7 @@ func pyTypeName(value pyjson.Value) string {
 
 // failedStatus is the shared non-200 shape of the four HTTP probes.
 func failedStatus(r response) (bool, *pyjson.Object, error) {
-	return failure("status", pyjson.IntOf(int64(r.status)), "error", pythonparity.SanitizeErrorText(r.text(), 200))
+	return failure("status", pyjson.IntOf(int64(r.status)), "error", pythonparity.SanitizeErrorTextHardened(r.text(), 200))
 }
 
 // ---- GitHub ----------------------------------------------------------

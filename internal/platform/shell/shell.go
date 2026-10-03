@@ -266,7 +266,7 @@ func Execute(
 		// misspelled variable name is indistinguishable from an unset one and
 		// stays silently inert, which is how OTEL_SERVICE_NAMEi survived in
 		// production.
-		fmt.Fprintf(streams.Stderr, "argument error: %s\n", logging.RedactText(err.Error()))
+		writeArgumentError(streams.Stderr, err)
 		invocation := spec.Invocation
 		if invocation == "" {
 			invocation = spec.Service
@@ -466,3 +466,9 @@ func (m metricsFlush) Shutdown(ctx context.Context) error {
 // trace flush has its own bound, and a stopping container is given five
 // seconds in total by the container smoke (docker stop --time 5).
 const metricsFlushTimeout = time.Second
+
+// writeArgumentError prints a command-line parse error. The error quotes the offending flag text back, which is operator input,
+// so it goes through the log redactor first (CHAOS-7937).
+func writeArgumentError(w io.Writer, err error) {
+	fmt.Fprintf(w, "argument error: %s\n", logging.RedactText(err.Error()))
+}

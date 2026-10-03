@@ -66,7 +66,7 @@ type key struct{ table, column string }
 // classify says whether a change was a redaction or only the length cap:
 // _classify_change.
 func classify(old string) string {
-	if pythonparity.SanitizeErrorText(old, 0) != old {
+	if pythonparity.SanitizeErrorTextHardened(old, 0) != old {
 		return "redact"
 	}
 	return "truncate_only"
@@ -207,7 +207,7 @@ func processTextColumn(ctx context.Context, tx pgx.Tx, table tableSpec, column c
 		return nil
 	}
 	counter.Scanned++
-	updated := pythonparity.SanitizeErrorText(*old, column.max)
+	updated := pythonparity.SanitizeErrorTextHardened(*old, column.max)
 	if updated == *old {
 		return nil
 	}
@@ -251,7 +251,7 @@ func processJSONColumn(ctx context.Context, tx pgx.Tx, table tableSpec, column c
 	if !present || !isString {
 		return nil
 	}
-	sanitized := pythonparity.SanitizeErrorText(text, column.max)
+	sanitized := pythonparity.SanitizeErrorTextHardened(text, column.max)
 	if sanitized == text {
 		return nil
 	}

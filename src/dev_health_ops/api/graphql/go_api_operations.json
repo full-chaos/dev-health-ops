@@ -188,7 +188,12 @@
   },
   {
     "operation": "reviewEdges",
-    "digest": "4a759f9e3d3e903b03a3aae8039b3bdca2ed69b3af25a0b20f01c1da55d97123"
+    "digest": "6b45584e433c1f7d281f29fd17044858457f5334aa282531463060d676a07bc9"
+  },
+  {
+    "operation": "reviewEdges",
+    "digest": "4a759f9e3d3e903b03a3aae8039b3bdca2ed69b3af25a0b20f01c1da55d97123",
+    "legacy": true
   },
   {
     "operation": "savedReport",

@@ -1,0 +1,14 @@
+query ReviewEdges($input: ReviewEdgesInput!) {
+  reviewEdges(input: $input) {
+    edges {
+      reviewer
+      author
+      reviewsCount
+      day
+      repoId
+      __typename
+    }
+    totalCount
+    __typename
+  }
+}

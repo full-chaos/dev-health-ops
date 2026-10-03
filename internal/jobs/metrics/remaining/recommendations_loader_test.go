@@ -360,3 +360,5 @@ func TestLoaderCorpusCoversTheDivergentBehaviours(t *testing.T) {
 		}
 	}
 }
+
+// measuring change: a one-line edit of an internal test file outside internal/testsupport so the go-python-free run is SCOPE mode (draft, never merged).

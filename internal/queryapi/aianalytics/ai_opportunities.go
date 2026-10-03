@@ -195,8 +195,12 @@ func metricRules(a *repoAgg) []opportunity {
 	return out
 }
 
-// project renders an opportunity as its response object.
-func (o opportunity) project() model.AIOpportunity {
+// project renders an opportunity as its response object, with the catalogue
+// names of its repository and team (CHAOS-8114; nil = no name). The names are
+// set in the literal: the registered-document gate
+// (TestRegisteredDocumentFieldsArePopulatable) reads a field as served only when
+// a literal sets it.
+func (o opportunity) project(repoName, teamName *string) model.AIOpportunity {
 	drill := []model.AIWorkGraphDrilldownRef{}
 	for _, ref := range o.refs {
 		parts := strings.Split(ref, ":")
@@ -220,6 +224,8 @@ func (o opportunity) project() model.AIOpportunity {
 		Score:               o.score,
 		EvidenceRefs:        o.refs,
 		WorkGraphDrilldowns: drill,
+		RepoName:            repoName,
+		TeamName:            teamName,
 	}
 }
 
@@ -495,10 +501,7 @@ func AiOpportunities(ctx context.Context, client QueryClient, orgID string, in *
 	catalogue := loadRepoCatalogue(ctx, client, orgID, opportunityRepoIDs(opps), "aiOpportunities")
 	recs := make([]model.AIOpportunity, 0, len(opps))
 	for _, o := range opps {
-		rec := o.project()
-		rec.RepoName = catalogue.repoName(o.repoID)
-		rec.TeamName = catalogue.teamName(o.teamID)
-		recs = append(recs, rec)
+		recs = append(recs, o.project(catalogue.repoName(o.repoID), catalogue.teamName(o.teamID)))
 	}
 	return &model.AIOpportunitiesResult{OrgID: orgID, Recommendations: recs, DetectorReady: true}, nil
 }

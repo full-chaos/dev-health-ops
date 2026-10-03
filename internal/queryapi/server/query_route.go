@@ -1642,6 +1642,37 @@ const registeredAiOpportunitiesDocument = `query AIOpportunities($orgId: String!
       opportunityId
       kind
       repoId
+      repoName
+      teamId
+      teamName
+      title
+      rationale
+      score
+      evidenceRefs
+      workGraphDrilldowns {
+        rootType
+        rootId
+        label
+        __typename
+      }
+      __typename
+    }
+    __typename
+  }
+}`
+
+// registeredAiOpportunitiesV1Document is the text of `aiOpportunities` BEFORE the AI opportunity list asked for the served repository and team names (CHAOS-8114).
+// It stays a legacy text (see legacyDigestsByOperation), so a web build still sending it keeps working while the
+// new one rolls out; the operation's ONE current document is registeredAiOpportunitiesDocument above. Remove it
+// with the cleanup ticket once no client sends it (testdata/wire_capture/aiopportunities_v1_captured.graphql).
+const registeredAiOpportunitiesV1Document = `query AIOpportunities($orgId: String!, $scope: AIScopeInput, $limit: Int! = 5) {
+  aiOpportunities(orgId: $orgId, scope: $scope, limit: $limit) {
+    orgId
+    detectorReady
+    recommendations {
+      opportunityId
+      kind
+      repoId
       teamId
       title
       rationale
@@ -3816,6 +3847,7 @@ func newDocumentDispatchHandler(getenv getenvFunc, routeMux *routeswitch.Mux, op
 var legacyDigestsByOperation = map[string][]string{
 	"aiAttributedPrs":  {digestHex(registeredAiAttributedPrsV1Document)},
 	"aiImpactSummary":  {digestHex(registeredAiImpactSummaryV1Document)},
+	"aiOpportunities":  {digestHex(registeredAiOpportunitiesV1Document)},
 	"capacityForecast": {digestHex(registeredCapacityForecastV1Document), digestHex(registeredCapacityForecastV2Document)},
 	"reviewEdges":      {digestHex(registeredReviewEdgesV1Document)},
 }

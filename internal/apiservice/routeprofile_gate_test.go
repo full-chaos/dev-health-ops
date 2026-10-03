@@ -345,6 +345,27 @@ func TestEveryProtectedRowRefusesAnUnauthenticatedRequest(t *testing.T) {
 			t.Errorf("class exception %s says the row is %q, the row is %q", pair, entry.Profile, class[pair])
 		}
 	}
+	// The literals a wildcard handler dispatches BEFORE its guard are not registered pairs, so
+	// the walk above never reaches them: probe each "unit" wildcard row by its literal path.
+	wildcards, err := routeprofile.LoadWildcards(contractPath(t, "ci/go_wildcard_dispatch.tsv"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	literals := 0
+	for _, entry := range wildcards {
+		pair := routeprofile.Pair{Method: strings.ToUpper(entry.Method), Path: routeprofile.Normalize(entry.Route)}
+		if entry.Proof != "unit" || class[pair] != "protected" {
+			continue
+		}
+		code := classProbe(handler, pair.Method, entry.Route, wrongCredential[routeprofile.Parameter.ReplaceAllString(entry.Route, "x")]...)
+		literals++
+		if !refused(code) {
+			t.Errorf("%s (wildcard literal %q, %s): its row says protected, an unauthenticated request answers %d: the literal is served before its guard", pair, entry.Literal, entry.Site, code)
+		}
+	}
+	if literals < 3 {
+		t.Fatalf("only %d protected wildcard literals were probed", literals)
+	}
 	for pair := range pending {
 		if !pendingSeen[pair] {
 			t.Errorf("pending route %s was not reached by the probe: stale", pair)
@@ -576,7 +597,7 @@ func (memberStore) ActiveImpersonation(context.Context, uuid.UUID) (*policy.Impe
 }
 
 // adminDeclared says whether the row's primary validator is an admin or platform-role
-// check (require_admin / require_platform_role): the rows a plain member must be refused.
+// check (require_admin / require_platform_role / require_superuser): the rows a plain member must be refused.
 // memberExceptions are the admin-declared rows where Go (matching Python) serves a signed-in
 // plain member: the profile row over-claims, the handler's own dependency is
 // get_current_user only (CHAOS-4780, true class written at the file merge CHAOS-8306).
@@ -599,7 +620,7 @@ func adminDeclared(row routeprofile.Row) bool {
 		return false
 	}
 	description := parsed.PrimaryValidator.Description
-	return strings.Contains(description, "require_admin") || strings.Contains(description, "require_platform_role")
+	return strings.Contains(description, "require_admin") || strings.Contains(description, "require_platform_role") || strings.Contains(description, "require_superuser")
 }
 
 // (class, member) every go-api route whose row declares an admin or platform-role check
@@ -652,6 +673,30 @@ func TestEveryAdminRowRefusesAPlainMember(t *testing.T) {
 		if recorder.Code != http.StatusForbidden {
 			t.Errorf("%s: declared admin (%s), a plain member answers %d %s", route.Pair, row.ID, recorder.Code, strings.TrimSpace(recorder.Body.String()))
 		}
+	}
+	wildcards, err := routeprofile.LoadWildcards(contractPath(t, "ci/go_wildcard_dispatch.tsv"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	literals := 0
+	for _, entry := range wildcards {
+		pair := routeprofile.Pair{Method: strings.ToUpper(entry.Method), Path: routeprofile.Normalize(entry.Route)}
+		row, ok := rowOf[pair]
+		if entry.Proof != "unit" || !ok || row.Classification != "protected" || !adminDeclared(row) {
+			continue
+		}
+		request := httptest.NewRequest(pair.Method, routeprofile.Parameter.ReplaceAllString(entry.Route, "x"), strings.NewReader("{}"))
+		request.Header.Set("Content-Type", "application/json")
+		request.Header.Set("Authorization", "Bearer "+token)
+		recorder := httptest.NewRecorder()
+		handler.ServeHTTP(recorder, request)
+		literals++
+		if recorder.Code != http.StatusForbidden {
+			t.Errorf("%s (wildcard literal %q, %s): declared admin, a plain member answers %d %s", pair, entry.Literal, entry.Site, recorder.Code, strings.TrimSpace(recorder.Body.String()))
+		}
+	}
+	if literals < 2 {
+		t.Fatalf("only %d admin wildcard literals were probed", literals)
 	}
 	for entry := range memberExceptions {
 		if !excepted[entry] {

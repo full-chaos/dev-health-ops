@@ -1,6 +1,8 @@
 package routeprofile
 
 import (
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 )
@@ -143,5 +145,63 @@ func TestARefusalStubNeedsNoRowAndGoesStaleWhenItHasOneOrIsGone(t *testing.T) {
 	report := Compare(served, []Row{rowOf("HEAD", "/api/v1/billing/plans/pull-stripe")}, nil, nil, stubs)
 	if report.OK() {
 		t.Fatal("a stub entry for a route that has a row passed")
+	}
+}
+
+// A wildcard entry covers exactly its method AND its registered wildcard pattern: a served
+// pair on the same wildcard with another method, or on another wildcard with the same
+// method, still needs its own row.
+func TestAWildcardEntryCoversOnlyItsMethodAndItsPattern(t *testing.T) {
+	rows := []Row{rowOf("POST", "/api/v1/admin/ip-allowlist/check")}
+	wild := []Wildcard{{Method: "POST", Route: "/api/v1/admin/ip-allowlist/check", Wildcard: "/api/v1/admin/ip-allowlist/{entry_id}", Site: "x:1"}}
+	base := servedOf("go-api", Pair{"POST", "/api/v1/admin/ip-allowlist/{}"})
+	for name, extra := range map[string]Pair{
+		"same wildcard, another method":  {"GET", "/api/v1/admin/ip-allowlist/{}"},
+		"another wildcard, same method":  {"POST", "/api/v1/unrelated/{}"},
+		"another wildcard, other method": {"DELETE", "/api/v1/unrelated/{}"},
+	} {
+		report := Compare(append(base, servedOf("go-api", extra)...), rows, wild, nil, nil)
+		if report.OK() || !strings.Contains(problems(report), "served by Go with NO profile row: "+extra.String()) {
+			t.Errorf("%s: a served pair no entry covers passed: %q", name, problems(report))
+		}
+	}
+}
+
+// A wildcard entry whose registered wildcard is gone is stale AND leaves its row unserved
+// (direction 2 does not take the entry without the registration).
+func TestAWildcardEntryWithoutItsRegistrationLeavesItsRowUnserved(t *testing.T) {
+	rows := []Row{rowOf("POST", "/api/v1/admin/ip-allowlist/check"), rowOf("GET", "/other")}
+	wild := []Wildcard{{Method: "POST", Route: "/api/v1/admin/ip-allowlist/check", Wildcard: "/api/v1/admin/ip-allowlist/{entry_id}", Site: "x:1"}}
+	report := Compare(servedOf("go-api", Pair{"GET", "/other"}), rows, wild, nil, nil)
+	if len(report.StaleWildcard) != 1 || !strings.Contains(report.StaleWildcard[0], "which no Go service registers") {
+		t.Errorf("stale wildcard report = %v", report.StaleWildcard)
+	}
+	if len(report.ProfileOnly) != 1 || report.ProfileOnly[0].String() != "POST /api/v1/admin/ip-allowlist/check" {
+		t.Errorf("the row of an entry without its registration was taken as served: %v", report.ProfileOnly)
+	}
+}
+
+// A closed-list line with the wrong number of columns, or an empty column, is refused.
+func TestAListLineWithTheWrongColumnCountIsRefused(t *testing.T) {
+	dir := t.TempDir()
+	for name, line := range map[string]string{
+		"five columns":  "POST\t/a\t/b/{x}\tl\tsite.go:1",
+		"seven columns": "POST\t/a\t/b/{x}\tl\tsite.go:1\tunit\textra",
+		"empty column":  "POST\t/a\t/b/{x}\t\tsite.go:1\tunit",
+	} {
+		path := filepath.Join(dir, strings.ReplaceAll(name, " ", "_")+".tsv")
+		if err := os.WriteFile(path, []byte("# header\n"+line+"\n"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := LoadWildcards(path); err == nil {
+			t.Errorf("%s: a malformed list line was read", name)
+		}
+	}
+	good := filepath.Join(dir, "good.tsv")
+	if err := os.WriteFile(good, []byte("POST\t/a\t/b/{x}\tl\tsite.go:1\tunit\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if rows, err := LoadWildcards(good); err != nil || len(rows) != 1 {
+		t.Errorf("a well-formed line: %v %v", rows, err)
 	}
 }

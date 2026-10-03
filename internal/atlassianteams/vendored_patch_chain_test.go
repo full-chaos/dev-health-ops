@@ -198,6 +198,20 @@ func checkPatchChain(t *testing.T, root string) []string {
 		return []string{fmt.Sprintf("no patch record found (%v)", err)}
 	}
 	sort.Strings(patchPaths)
+	// patches/ holds patch records and nothing else: any other entry (Go code, a directory) is vendored content no digest and no
+	// patch explains.
+	entries, err := os.ReadDir(filepath.Join(root, vendoredAtlassianDir, "patches"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, entry := range entries {
+		if !strings.HasSuffix(entry.Name(), ".patch") || !entry.Type().IsRegular() {
+			problems = append(problems, fmt.Sprintf("patches/%s is not a *.patch record file", entry.Name()))
+		}
+	}
+	if len(problems) > 0 {
+		return problems // the records cannot be read as patches
+	}
 	var onDisk []string
 	for _, p := range patchPaths {
 		onDisk = append(onDisk, filepath.Base(p))
@@ -389,6 +403,29 @@ func TestPatchChainCheckSeesEveryKindOfDrift(t *testing.T) {
 				t.Fatal(err)
 			}
 		},
+		"non-patch file in patches/": func(t *testing.T, base string) {
+			if err := os.WriteFile(filepath.Join(base, "patches", "extra.go"), []byte("package patches\n"), 0o644); err != nil {
+				t.Fatal(err)
+			}
+		},
+		"directory in patches/": func(t *testing.T, base string) {
+			if err := os.MkdirAll(filepath.Join(base, "patches", "sub"), 0o755); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.WriteFile(filepath.Join(base, "patches", "sub", "x.go"), []byte("package sub\n"), 0o644); err != nil {
+				t.Fatal(err)
+			}
+		},
+		"directory named like a patch in patches/": func(t *testing.T, base string) {
+			if err := os.MkdirAll(filepath.Join(base, "patches", "9999-dir.patch"), 0o755); err != nil {
+				t.Fatal(err)
+			}
+		},
+		"symlink named like a patch in patches/": func(t *testing.T, base string) {
+			if err := os.Symlink("0001-alias-typed-cypher-values.patch", filepath.Join(base, "patches", "9999-link.patch")); err != nil {
+				t.Fatal(err)
+			}
+		},
 		"empty patch record with its row": func(t *testing.T, base string) {
 			addPatchRecord(t, base, "0006-empty.patch", "")
 		},
@@ -396,7 +433,7 @@ func TestPatchChainCheckSeesEveryKindOfDrift(t *testing.T) {
 			addPatchRecord(t, base, "0006-header-only.patch", "diff --git a/third_party/vendor/atlassian/go.mod b/third_party/vendor/atlassian/go.mod\n")
 		},
 	}
-	plantedReason := map[string]string{"deleted upstream file": "is missing once the patches are reversed"}
+	plantedReason := map[string]string{"deleted upstream file": "is missing once the patches are reversed", "non-patch file in patches/": "is not a *.patch record file", "directory in patches/": "is not a *.patch record file", "directory named like a patch in patches/": "9999-dir.patch is not a *.patch record file", "symlink named like a patch in patches/": "9999-link.patch is not a *.patch record file"}
 	for name, mutate := range plant {
 		t.Run(name, func(t *testing.T) {
 			root := copyRepoSlice(t)

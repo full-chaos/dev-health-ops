@@ -244,7 +244,7 @@ dho metrics --help
 dho migrate --help
 ```
 
-Some provider or job paths are safer and better validated through the API and the Go worker fleet, which supplies the credentials the CLI does not enforce at startup; check the `Environment:` section of the command's `--help` output and the [CLI reference](../../reference/cli/index.md).
+Some provider or job paths are safer and better validated through the API and the Go worker fleet, which supplies the credentials the CLI does not enforce at startup; check the command's `--help` output (its `Environment:` section where it has one) and the [CLI reference](../../reference/cli/index.md).
 
 ## Before committing
 

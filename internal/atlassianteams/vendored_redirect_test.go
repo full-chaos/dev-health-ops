@@ -281,13 +281,10 @@ func scanPackages(t *testing.T, dir, pattern string) vendoredRedirectScan {
 							}
 						}
 					}
-					// Reflection builds a value of a type chosen at run time: the scan cannot say which, so reflection that creates values is
-					// NOT covered and is refused outright (any use fails the scan; a vendored need for it must be reviewed and named here).
-					if function, isFunc := object.(*types.Func); isFunc && function.Pkg() != nil && function.Pkg().Path() == "reflect" && function.Type().(*types.Signature).Recv() == nil {
-						switch function.Name() {
-						case "New", "NewAt", "Zero", "MakeSlice", "MakeMap", "MakeMapWithSize", "MakeChan":
-							report("reflect." + function.Name() + " (builds a value of a run-time type: not covered by this scan)")
-						}
+					// Reflection builds or rewrites values of a type chosen at run time (reflect.New, Value.SetZero, ...): the scan cannot say
+					// which, so ANY use of an object of package reflect (function, method, type) fails the scan. The vendored source imports none.
+					if object != nil && object.Pkg() != nil && object.Pkg().Path() == "reflect" {
+						report("reflect." + object.Name() + " (reflection is not covered by this scan)")
 					}
 					for _, member := range []string{"DefaultClient", "Get", "Post", "Head", "PostForm"} {
 						if isNetHTTP(object, member) {
@@ -446,6 +443,9 @@ func TestRedirectScanSeesTheUnusualWaysToBuildAClient(t *testing.T) {
 		"genericzero/g.go":   "package genericzero\n\nimport \"net/http\"\n\nfunc zero[T any]() T { var v T; return v }\n\nfunc Build() *http.Client { client := zero[http.Client](); return &client }\n",
 		"valueparam/v.go":    "package valueparam\n\nimport \"net/http\"\n\ntype sink func(http.Client)\n",
 		"unnamedresult/u.go": "package unnamedresult\n\nimport \"net/http\"\n\ntype maker func() http.Client\n",
+		"receiver/r.go":      "package receiver\n\nimport \"net/http\"\n\ntype mine http.Client\n\nfunc (m mine) Do() {}\n",
+		"secondarg/s.go":     "package secondarg\n\nimport \"net/http\"\n\nfunc second[A, B any]() *B { return new(B) }\n\nfunc Build() *http.Client { c := second[int, http.Client](); return c }\n",
+		"reflectmethod/m.go": "package reflectmethod\n\nimport \"reflect\"\n\nfunc Reset(v reflect.Value) { v.SetZero() }\n",
 		"reflectnew/r.go":    "package reflectnew\n\nimport \"reflect\"\n\nfunc Build(t reflect.Type) reflect.Value { return reflect.New(t) }\n",
 	}
 	for name, text := range files {
@@ -462,7 +462,7 @@ func TestRedirectScanSeesTheUnusualWaysToBuildAClient(t *testing.T) {
 	for _, creation := range scan.creations {
 		found[strings.SplitN(creation, ".", 2)[0]] = true
 	}
-	for _, defect := range []string{"planted/genericzero", "planted/valueparam", "planted/unnamedresult", "planted/reflectnew"} {
+	for _, defect := range []string{"planted/genericzero", "planted/valueparam", "planted/unnamedresult", "planted/reflectnew", "planted/receiver", "planted/secondarg", "planted/reflectmethod"} {
 		if !found[defect] {
 			t.Errorf("the scan did not report %s (reported: %v)", defect, scan.creations)
 		}

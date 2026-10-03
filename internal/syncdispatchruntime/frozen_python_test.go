@@ -2,9 +2,9 @@ package syncdispatchruntime
 
 import (
 	"path/filepath"
-	"runtime"
 	"testing"
 
+	"github.com/full-chaos/dev-health-ops/internal/testsupport/moduleroot"
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/programoracle"
 )
 
@@ -22,7 +22,7 @@ const producerIdentity = "python 3.14.7\nunicodedata 16.0.0"
 // goldenrecord verb writes each digest when it promotes a recording; a new
 // golden starts as "PIN:" + its file name without ".json".
 var goldenPins = map[string]string{
-	"dispatch-admission.golden.json": "dce5de355bb9cae09753a0d4858c2c0a788b52d4425365107010c5ef9b97fff2",
+	"dispatch-admission.golden.json": "aaccaf3c1ed49a128d7780c58101c2b3195c460a9d70285b56bb0f101d332d3e",
 	"finalize-zero-unit.golden.json": "fd0ca0804e83a15bee3c7ef2a455399ddc58429804be8e13ccbf4ed537064448",
 }
 
@@ -48,7 +48,7 @@ func frozenPython(t *testing.T, golden string, programs ...programoracle.Program
 // repositoryRoot is the repository root, from this file's own location.
 func repositoryRoot(t *testing.T) string {
 	t.Helper()
-	_, file, _, ok := runtime.Caller(0)
+	_, file, _, ok := moduleroot.Caller(0)
 	if !ok {
 		t.Fatal("cannot locate the test source")
 	}

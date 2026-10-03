@@ -4,7 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"log/slog"
+	"github.com/full-chaos/dev-health-ops/internal/syncdispatchruntime/synclog"
 
 	"github.com/jackc/pgx/v5/pgxpool"
 
@@ -20,7 +20,7 @@ import (
 // estimators, ported in internal/syncbudget.
 type InProcessBudgetEstimator struct {
 	loader syncbudget.Loader
-	logger *slog.Logger
+	logger *synclog.Logger
 }
 
 // BudgetEstimatorDependencies are what the in-process estimator reads.
@@ -35,7 +35,8 @@ type BudgetEstimatorDependencies struct {
 	// flags, which Python read from the api process with the same shared
 	// ConfigMap and Secret.
 	Getenv func(string) string
-	Logger *slog.Logger
+	// Logger is the estimator's log and the budget loader's (the narrow logger).
+	Logger *synclog.Logger
 	// PagerDutyOAuth and PagerDutyDoer hydrate PagerDuty OAuth and
 	// client-credentials descriptors, as resolve_run_auth did, so a unit
 	// whose hydration fails still gets no estimate.
@@ -56,16 +57,12 @@ func newInProcessBudgetEstimator(db syncbudget.Querier, dependencies BudgetEstim
 	if db == nil || dependencies.Decryptor == nil || dependencies.Getenv == nil {
 		return nil, ErrInvalidBridge
 	}
-	logger := dependencies.Logger
-	if logger == nil {
-		logger = slog.Default()
-	}
 	return &InProcessBudgetEstimator{
 		loader: syncbudget.Loader{
-			DB: db, Decryptor: dependencies.Decryptor, Getenv: dependencies.Getenv, Logger: logger,
+			DB: db, Decryptor: dependencies.Decryptor, Getenv: dependencies.Getenv, Logger: dependencies.Logger,
 			PagerDutyOAuth: dependencies.PagerDutyOAuth, PagerDutyDoer: dependencies.PagerDutyDoer,
 		},
-		logger: logger,
+		logger: dependencies.Logger,
 	}, nil
 }
 
@@ -109,10 +106,7 @@ func (estimator *InProcessBudgetEstimator) DispatchBudgetEstimateOn(
 	estimates := make(map[string][]budgetEstimate, len(results))
 	for unitID, result := range results {
 		if result.Err != nil {
-			estimator.logger.WarnContext(ctx, "dispatch_sync_run.budget_estimate_unit_failed",
-				slog.String("sync_run_id", runID),
-				slog.String("unit_id", unitID),
-				slog.String("error", result.Err.Error()))
+			estimator.logger.Warn(ctx, synclog.MsgDispatchSyncRunBudgetEstimateUnitFailed, synclog.Run(synclog.ParseID(runID)), synclog.Unit(synclog.ParseID(unitID)), synclog.Failure(result.Err))
 		}
 		converted := make([]budgetEstimate, len(result.Estimates))
 		for index, estimate := range result.Estimates {

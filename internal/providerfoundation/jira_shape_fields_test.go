@@ -2,6 +2,7 @@ package providerfoundation
 
 import (
 	"errors"
+	"github.com/full-chaos/dev-health-ops/internal/testsupport/fakehttp"
 	"strings"
 	"testing"
 )
@@ -34,7 +35,7 @@ func TestNewJiraClientRefusalNamesTheMissingFields(t *testing.T) {
 			for _, key := range test.drop {
 				delete(values, key)
 			}
-			_, err := NewJiraClient(testCredential("jira", values), &headerCaptureDoer{}, jiraTestRetry(), jiraTestLease())
+			_, err := NewJiraClient(testCredential("jira", values), fakehttp.Client(&headerCaptureDoer{}), jiraTestRetry(), jiraTestLease())
 			if !errors.Is(err, ErrCredentialInvalid) {
 				t.Fatalf("err = %v, want it to wrap ErrCredentialInvalid", err)
 			}

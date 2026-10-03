@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"github.com/full-chaos/dev-health-ops/internal/testsupport/fakehttp"
 	"io"
 	"net/http"
 	"strings"
@@ -84,7 +85,7 @@ func TestJiraIncidentsRouteCollectsOnlyNativelyAdmittedJSMIncidents(t *testing.T
 	claim.SourceExternalID = "JSM"
 	doer := &jiraIncidentDoer{t: t}
 	client, err := providerfoundation.NewHTTPClient(
-		"jira", "https://acme.atlassian.net", doer,
+		"jira", "https://acme.atlassian.net", fakehttp.Client(doer),
 		func(request *http.Request) error {
 			request.Header.Set("Accept", "application/json")
 			request.Header.Set("Content-Type", "application/json")
@@ -164,7 +165,7 @@ func TestJiraIncidentsRouteCountsFailedAndRetriedAttempts(t *testing.T) {
 		failURL:          "https://acme.atlassian.net/_edge/tenant_info",
 	}
 	client, err := providerfoundation.NewHTTPClient(
-		"jira", "https://acme.atlassian.net", doer,
+		"jira", "https://acme.atlassian.net", fakehttp.Client(doer),
 		func(request *http.Request) error {
 			request.Header.Set("Accept", "application/json")
 			request.Header.Set("Content-Type", "application/json")
@@ -202,7 +203,7 @@ func TestJiraIncidentsRouteFailsClosedBeforeWatermarkOnIncompleteTraversal(t *te
 		return &http.Response{StatusCode: http.StatusOK, Header: http.Header{}, Body: io.NopCloser(strings.NewReader(body)), Request: request}, nil
 	})
 	client, err := providerfoundation.NewHTTPClient(
-		"jira", "https://acme.atlassian.net", doer, func(*http.Request) error { return nil },
+		"jira", "https://acme.atlassian.net", fakehttp.Client(doer), func(*http.Request) error { return nil },
 		providerfoundation.RetryPolicy{MaxAttempts: 1, InitialWait: time.Millisecond, MaxWait: time.Millisecond},
 		providerfoundation.LeaseGuardFunc(func(context.Context) error { return nil }),
 	)
@@ -238,7 +239,7 @@ func TestJiraIncidentsRouteRejectsNullIssueInventory(t *testing.T) {
 		}, nil
 	})
 	client, err := providerfoundation.NewHTTPClient(
-		"jira", "https://acme.atlassian.net", doer, func(*http.Request) error { return nil },
+		"jira", "https://acme.atlassian.net", fakehttp.Client(doer), func(*http.Request) error { return nil },
 		providerfoundation.RetryPolicy{MaxAttempts: 1, InitialWait: time.Millisecond, MaxWait: time.Millisecond},
 		providerfoundation.LeaseGuardFunc(func(context.Context) error { return nil }),
 	)
@@ -264,7 +265,7 @@ func TestJiraIncidentsRouteRejectsDisabledEntitlementBeforeProviderFetch(t *test
 		return nil, errors.New("provider fetch must not run")
 	})
 	client, err := providerfoundation.NewHTTPClient(
-		"jira", "https://acme.atlassian.net", doer, func(*http.Request) error { return nil },
+		"jira", "https://acme.atlassian.net", fakehttp.Client(doer), func(*http.Request) error { return nil },
 		providerfoundation.RetryPolicy{MaxAttempts: 1, InitialWait: time.Millisecond, MaxWait: time.Millisecond},
 		providerfoundation.LeaseGuardFunc(func(context.Context) error { return nil }),
 	)
@@ -302,7 +303,7 @@ func TestJiraIncidentsRouteRechecksRevokedEntitlementAtClickHouseWrite(t *testin
 	claim.SourceExternalID = "JSM"
 	doer := &jiraIncidentDoer{t: t}
 	client, err := providerfoundation.NewHTTPClient(
-		"jira", "https://acme.atlassian.net", doer,
+		"jira", "https://acme.atlassian.net", fakehttp.Client(doer),
 		func(request *http.Request) error {
 			request.Header.Set("Accept", "application/json")
 			request.Header.Set("Content-Type", "application/json")

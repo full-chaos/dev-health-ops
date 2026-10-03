@@ -32,9 +32,7 @@ import urllib.error
 import pytest
 
 from dev_health_ops.api.graphql import go_api_cli
-from dev_health_ops.api.graphql.go_api_operation_catalog import (
-    current_catalog_entries,
-)
+from dev_health_ops.api.graphql.go_api_operation_catalog import catalog_entries
 from dev_health_ops.api.graphql.go_api_schema_digest import current_schema_digest
 
 
@@ -57,7 +55,7 @@ def test_operations_are_resolved_from_the_catalog_not_a_hand_list() -> None:
     operations nobody generated -- the hand-maintained-inventory drift
     class the catalog exists to prevent.
     """
-    catalog = dict(current_catalog_entries())
+    catalog = dict(catalog_entries())
     resolved, error = go_api_cli._resolve_requested_operations(
         "all-registered", catalog
     )

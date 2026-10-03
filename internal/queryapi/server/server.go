@@ -26,6 +26,7 @@ package server
 import (
 	"context"
 	"errors"
+	"fmt"
 	"log"
 	"log/slog"
 	"net/http"
@@ -306,6 +307,9 @@ func mountQueryRouteSets(getenv getenvFunc, mux, internalMux, mcpMux *http.Serve
 	mountProofWriteRoute(getenv, internalMux, handlers.ProofWrite)
 	// CHAOS-7214: the proof variant of the MCP class route, internalMux ONLY.
 	mountProofMCPRoute(getenv, internalMux, handlers.MCPProof)
+	// CHAOS-7831: acr's run_operation route, internalMux ONLY (never on mux, which the public listener is built from): the serving pipeline of /query
+	// behind the MCP class rows. /query keeps serving the web edge un-gated. A nil handler (a test that builds no run-operation route) registers nothing.
+	mountRunOperationRoute(internalMux, handlers.RunOperation)
 	// CHAOS-7085: on mcpMux ONLY. A test proves neither the public nor
 	// the internal route set reaches the MCP class.
 	mcpMux.Handle("/query", handlers.MCP)
@@ -434,431 +438,32 @@ func BuildWithLookup(lookup func(string) (string, bool)) (*Plane, error) {
 		return fail(err)
 	}
 
-	// CHAOS-4977 step 5a: POST /api/v1/investment/explain, gated by its
-	// own routeswitch entry (default OFF via GO_API_INVESTMENT_EXPLAIN_ENABLED)
-	// -- see investment_explain_route.go's package doc comment for the
-	// reachability story (5b: a separate Python-side REST forwarder,
-	// not this file's job) and this route's documented scope gaps.
-	if explainHandler, explainCleanup, explainOK, explainErr := buildInvestmentExplainRoute(getenv, edgeUsers); explainErr != nil {
-		log.Printf("query-api: build /api/v1/investment/explain route: %v", explainErr)
-		return fail(explainErr)
-	} else if explainOK {
-		cleanups = append(cleanups, explainCleanup)
-		// Wrapped in withProofProvenance so go-api-rest-prove can bind a
-		// receipt to the process that actually served this request, the
-		// same reason /query and /query/proof carry it. Reassigned, not
-		// inlined into the mux.HandleFunc call below:
-		// restendpoints.go's LoadQueryAPIMuxRoutes mechanically parses
-		// this file for `mux.HandleFunc("/api/v1/...", <bareIdentifier>)`
-		// and cannot resolve a call expression in the handler position --
-		// inlining the wrapper here would silently render this route
-		// "python-only" on the migration matrix page.
-		explainHandler = withProofProvenance(explainHandler, runningBuild())
-		mux.HandleFunc("/api/v1/investment/explain", explainHandler)
-	} else {
-		log.Print("query-api: /api/v1/investment/explain route not configured (CLICKHOUSE_URI/GO_API_ENVELOPE_* unset) -- staying unmounted")
-	}
-
-	// CHAOS-5550: GET /api/v1/quadrant, gated by its own routeswitch entry
-	// (default OFF via GO_API_QUADRANT_ENABLED) -- see quadrant_route.go's
-	// package doc comment for the reachability story and internal/quadrant
-	// for the ported resolver and its documented developer/person scope gap.
-	if quadrantHandler, quadrantCleanup, quadrantOK, quadrantErr := buildQuadrantRoute(getenv, edgeUsers); quadrantErr != nil {
-		log.Printf("query-api: build /api/v1/quadrant route: %v", quadrantErr)
-		return fail(quadrantErr)
-	} else if quadrantOK {
-		cleanups = append(cleanups, quadrantCleanup)
-		// See the investment/explain mount above for why this is a
-		// reassignment, not an inlined wrapper.
-		quadrantHandler = withProofProvenance(quadrantHandler, runningBuild())
-		mux.HandleFunc("/api/v1/quadrant", quadrantHandler)
-	} else {
-		log.Print("query-api: /api/v1/quadrant route not configured (CLICKHOUSE_URI/GO_API_ENVELOPE_* unset) -- staying unmounted")
-	}
-
-	// GET /api/v1/heatmap, gated by its own routeswitch entry
-	// (default OFF via GO_API_HEATMAP_ENABLED) -- see heatmap_route.go's
-	// package doc comment for the reachability story and internal/heatmap
-	// for the ported resolver.
-	if heatmapHandler, heatmapCleanup, heatmapOK, heatmapErr := buildHeatmapRoute(getenv, edgeUsers); heatmapErr != nil {
-		log.Printf("query-api: build /api/v1/heatmap route: %v", heatmapErr)
-		return fail(heatmapErr)
-	} else if heatmapOK {
-		cleanups = append(cleanups, heatmapCleanup)
-		// See the investment/explain mount above for why this is a
-		// reassignment, not an inlined wrapper.
-		heatmapHandler = withProofProvenance(heatmapHandler, runningBuild())
-		mux.HandleFunc("/api/v1/heatmap", heatmapHandler)
-	} else {
-		log.Print("query-api: /api/v1/heatmap route not configured (CLICKHOUSE_URI/GO_API_ENVELOPE_* unset) -- staying unmounted")
-	}
-
-	// GET+POST /api/v1/sankey, gated by its own routeswitch entries
-	// (default OFF via GO_API_SANKEY_ENABLED) -- see sankey_route.go's
-	// package doc comment for the reachability story and internal/sankey
-	// for the ported resolver and its declared ReplacingMergeTree-dedup
-	// notes.
-	if sankeyHandler, sankeyCleanup, sankeyOK, sankeyErr := buildSankeyRoute(getenv, edgeUsers); sankeyErr != nil {
-		log.Printf("query-api: build /api/v1/sankey route: %v", sankeyErr)
-		return fail(sankeyErr)
-	} else if sankeyOK {
-		cleanups = append(cleanups, sankeyCleanup)
-		// See the investment/explain mount above for why this is a
-		// reassignment, not an inlined wrapper.
-		sankeyHandler = withProofProvenance(sankeyHandler, runningBuild())
-		mux.HandleFunc("/api/v1/sankey", sankeyHandler)
-	} else {
-		log.Print("query-api: /api/v1/sankey route not configured (CLICKHOUSE_URI/GO_API_ENVELOPE_* unset) -- staying unmounted")
-	}
-
-	// GET+POST /api/v1/home, gated by its own routeswitch entries
-	// (default OFF via GO_API_HOME_ENABLED) -- see home_route.go's
-	// package doc comment for the reachability story and internal/home
-	// for the ported resolver and its declared ReplacingMergeTree-dedup
-	// notes.
-	if homeHandler, homeCleanup, homeOK, homeErr := buildHomeRoute(getenv, edgeUsers); homeErr != nil {
-		log.Printf("query-api: build /api/v1/home route: %v", homeErr)
-		return fail(homeErr)
-	} else if homeOK {
-		cleanups = append(cleanups, homeCleanup)
-		// See the investment/explain mount above for why this is a
-		// reassignment, not an inlined wrapper.
-		homeHandler = withProofProvenance(homeHandler, runningBuild())
-		mux.HandleFunc("/api/v1/home", homeHandler)
-	} else {
-		log.Print("query-api: /api/v1/home route not configured (CLICKHOUSE_URI/GO_API_ENVELOPE_*/GO_API_REGISTRY_POSTGRES_URI unset) -- staying unmounted")
-	}
-
-	// GET+POST /api/v1/opportunities, gated by its own routeswitch entries
-	// (default OFF via GO_API_OPPORTUNITIES_ENABLED) -- see
-	// opportunities_route.go's package doc comment for the reachability
-	// story and internal/opportunities for the ported card-building
-	// logic, which composes internal/home's own exported builder rather
-	// than reading any table of its own.
-	if opportunitiesHandler, opportunitiesCleanup, opportunitiesOK, opportunitiesErr := buildOpportunitiesRoute(getenv, edgeUsers); opportunitiesErr != nil {
-		log.Printf("query-api: build /api/v1/opportunities route: %v", opportunitiesErr)
-		return fail(opportunitiesErr)
-	} else if opportunitiesOK {
-		cleanups = append(cleanups, opportunitiesCleanup)
-		// See the investment/explain mount above for why this is a
-		// reassignment, not an inlined wrapper.
-		opportunitiesHandler = withProofProvenance(opportunitiesHandler, runningBuild())
-		mux.HandleFunc("/api/v1/opportunities", opportunitiesHandler)
-	} else {
-		log.Print("query-api: /api/v1/opportunities route not configured (CLICKHOUSE_URI/GO_API_ENVELOPE_* unset) -- staying unmounted")
-	}
-
-	// POST /api/v1/investment/flow and POST /api/v1/investment/flow/
-	// repo-team, gated by one shared routeswitch toggle (default OFF via
-	// GO_API_INVESTMENT_FLOW_ENABLED) -- see investment_flow_route.go's
-	// package doc comment for the reachability story and
-	// internal/investmentflow for the ported builders, their dynamic
-	// coverage-driven mode decision, and the declared ReplacingMergeTree
-	// dedup notes.
-	if flowHandler, flowRepoTeamHandler, flowCleanup, flowOK, flowErr := buildInvestmentFlowRoute(getenv, edgeUsers); flowErr != nil {
-		log.Printf("query-api: build /api/v1/investment/flow routes: %v", flowErr)
-		return fail(flowErr)
-	} else if flowOK {
-		cleanups = append(cleanups, flowCleanup)
-		// See the investment/explain mount above for why this is a
-		// reassignment, not an inlined wrapper.
-		flowHandler = withProofProvenance(flowHandler, runningBuild())
-		flowRepoTeamHandler = withProofProvenance(flowRepoTeamHandler, runningBuild())
-		mux.HandleFunc("/api/v1/investment/flow", flowHandler)
-		mux.HandleFunc("/api/v1/investment/flow/repo-team", flowRepoTeamHandler)
-	} else {
-		log.Print("query-api: /api/v1/investment/flow routes not configured (CLICKHOUSE_URI/GO_API_ENVELOPE_* unset) -- staying unmounted")
-	}
-
-	// GET /api/v1/filters/options, gated by its own routeswitch
-	// entry (default OFF via GO_API_FILTER_OPTIONS_ENABLED) -- see
-	// filter_options_route.go's package doc comment for the reachability
-	// story and internal/filteroptions for the ported reader and its
-	// declared ReplacingMergeTree dedup fixes.
-	if filterOptionsHandler, filterOptionsCleanup, filterOptionsOK, filterOptionsErr := buildFilterOptionsRoute(getenv, edgeUsers); filterOptionsErr != nil {
-		log.Printf("query-api: build /api/v1/filters/options route: %v", filterOptionsErr)
-		return fail(filterOptionsErr)
-	} else if filterOptionsOK {
-		cleanups = append(cleanups, filterOptionsCleanup)
-		// See the investment/explain mount above for why this is a
-		// reassignment, not an inlined wrapper.
-		filterOptionsHandler = withProofProvenance(filterOptionsHandler, runningBuild())
-		mux.HandleFunc("/api/v1/filters/options", filterOptionsHandler)
-	} else {
-		log.Print("query-api: /api/v1/filters/options route not configured (CLICKHOUSE_URI/GO_API_ENVELOPE_* unset) -- staying unmounted")
-	}
-
-	// GET+POST /api/v1/investment, gated by its own routeswitch entries
-	// (default OFF via GO_API_INVESTMENT_ENABLED) -- see
-	// investment_route.go's package doc comment for the reachability
-	// story and internal/investment for the ported builders and their
-	// declared ReplacingMergeTree-dedup/membership-scope notes.
-	if investmentHandler, investmentCleanup, investmentOK, investmentErr := buildInvestmentRoute(getenv, edgeUsers); investmentErr != nil {
-		log.Printf("query-api: build /api/v1/investment route: %v", investmentErr)
-		return fail(investmentErr)
-	} else if investmentOK {
-		cleanups = append(cleanups, investmentCleanup)
-		// See the investment/explain mount above for why this is a
-		// reassignment, not an inlined wrapper.
-		investmentHandler = withProofProvenance(investmentHandler, runningBuild())
-		mux.HandleFunc("/api/v1/investment", investmentHandler)
-	} else {
-		log.Print("query-api: /api/v1/investment route not configured (CLICKHOUSE_URI/GO_API_ENVELOPE_* unset) -- staying unmounted")
-	}
-
-	// GET /api/v1/investment/sunburst, gated by its own routeswitch entry
-	// (default OFF via GO_API_INVESTMENT_SUNBURST_ENABLED) -- see
-	// investment_route.go's package doc comment and internal/investment
-	// for the ported resolver.
-	if investmentSunburstHandler, investmentSunburstCleanup, investmentSunburstOK, investmentSunburstErr := buildInvestmentSunburstRoute(getenv, edgeUsers); investmentSunburstErr != nil {
-		log.Printf("query-api: build /api/v1/investment/sunburst route: %v", investmentSunburstErr)
-		return fail(investmentSunburstErr)
-	} else if investmentSunburstOK {
-		cleanups = append(cleanups, investmentSunburstCleanup)
-		// See the investment/explain mount above for why this is a
-		// reassignment, not an inlined wrapper.
-		investmentSunburstHandler = withProofProvenance(investmentSunburstHandler, runningBuild())
-		mux.HandleFunc("/api/v1/investment/sunburst", investmentSunburstHandler)
-	} else {
-		log.Print("query-api: /api/v1/investment/sunburst route not configured (CLICKHOUSE_URI/GO_API_ENVELOPE_* unset) -- staying unmounted")
-	}
-
-	// GET+POST /api/v1/drilldown/prs, gated by its own routeswitch
-	// entries (default OFF via GO_API_DRILLDOWN_PRS_ENABLED)
-	// -- see drilldown_prs_route.go's package doc comment for the
-	// reachability story and internal/drilldown for the ported resolver
-	// and its documented ReplacingMergeTree-dedup/org-scope notes.
-	if drilldownPRsHandler, drilldownPRsCleanup, drilldownPRsOK, drilldownPRsErr := buildDrilldownPRsRoute(getenv, edgeUsers); drilldownPRsErr != nil {
-		log.Printf("query-api: build /api/v1/drilldown/prs route: %v", drilldownPRsErr)
-		return fail(drilldownPRsErr)
-	} else if drilldownPRsOK {
-		cleanups = append(cleanups, drilldownPRsCleanup)
-		// See the investment/explain mount above for why this is a
-		// reassignment, not an inlined wrapper.
-		drilldownPRsHandler = withProofProvenance(drilldownPRsHandler, runningBuild())
-		mux.HandleFunc("/api/v1/drilldown/prs", drilldownPRsHandler)
-	} else {
-		log.Print("query-api: /api/v1/drilldown/prs route not configured (CLICKHOUSE_URI/GO_API_ENVELOPE_* unset) -- staying unmounted")
-	}
-
-	// GET+POST /api/v1/work-units, gated by its own routeswitch entries
-	// (default OFF via GO_API_WORK_UNITS_ENABLED) -- see
-	// workunits_route.go's package doc comment for the reachability story;
-	// business logic is internal/investmentexplain's own
-	// BuildWorkUnitInvestments, shared with POST /api/v1/investment/explain.
-	if workUnitsHandler, workUnitsCleanup, workUnitsOK, workUnitsErr := buildWorkUnitsRoute(getenv, edgeUsers); workUnitsErr != nil {
-		log.Printf("query-api: build /api/v1/work-units route: %v", workUnitsErr)
-		return fail(workUnitsErr)
-	} else if workUnitsOK {
-		cleanups = append(cleanups, workUnitsCleanup)
-		// See the investment/explain mount above for why this is a
-		// reassignment, not an inlined wrapper.
-		workUnitsHandler = withProofProvenance(workUnitsHandler, runningBuild())
-		mux.HandleFunc("/api/v1/work-units", workUnitsHandler)
-	} else {
-		log.Print("query-api: /api/v1/work-units route not configured (CLICKHOUSE_URI/GO_API_ENVELOPE_* unset) -- staying unmounted")
-	}
-
-	// POST /api/v1/work-units/{work_unit_id}/explain, gated by its own
-	// routeswitch entry (default OFF via
-	// GO_API_WORK_UNIT_EXPLAIN_ENABLED) -- see
-	// workunit_explain_route.go's package doc comment for the
-	// reachability story, why this LLM route answers one JSON body rather
-	// than a keep-alive stream, and the rate-limiting gap it shares with
-	// every other ported route. The path pattern carries its
-	// {work_unit_id} wildcard, the same mechanism the people routes use.
-	if workUnitExplainHandler, workUnitExplainCleanup, workUnitExplainOK, workUnitExplainErr := buildWorkUnitExplainRoute(getenv, edgeUsers); workUnitExplainErr != nil {
-		log.Printf("query-api: build /api/v1/work-units/{work_unit_id}/explain route: %v", workUnitExplainErr)
-		return fail(workUnitExplainErr)
-	} else if workUnitExplainOK {
-		cleanups = append(cleanups, workUnitExplainCleanup)
-		// See the investment/explain mount above for why this is a
-		// reassignment, not an inlined wrapper.
-		workUnitExplainHandler = withProofProvenance(workUnitExplainHandler, runningBuild())
-		mux.HandleFunc("/api/v1/work-units/{work_unit_id}/explain", workUnitExplainHandler)
-	} else {
-		log.Print("query-api: /api/v1/work-units/{work_unit_id}/explain route not configured (CLICKHOUSE_URI/GO_API_ENVELOPE_*/GO_API_REGISTRY_POSTGRES_URI unset) -- staying unmounted")
-	}
-
-	// GET+POST /api/v1/drilldown/issues, gated by its own routeswitch
-	// entries (default OFF via GO_API_DRILLDOWN_ISSUES_ENABLED)
-	// -- see drilldown_issues_route.go's package doc comment for the
-	// reachability story and internal/drilldown/issues.go for the ported
-	// resolver and its documented ReplacingMergeTree-dedup/org-scope notes.
-	if drilldownIssuesHandler, drilldownIssuesCleanup, drilldownIssuesOK, drilldownIssuesErr := buildDrilldownIssuesRoute(getenv, edgeUsers); drilldownIssuesErr != nil {
-		log.Printf("query-api: build /api/v1/drilldown/issues route: %v", drilldownIssuesErr)
-		return fail(drilldownIssuesErr)
-	} else if drilldownIssuesOK {
-		cleanups = append(cleanups, drilldownIssuesCleanup)
-		// See the investment/explain mount above for why this is a
-		// reassignment, not an inlined wrapper.
-		drilldownIssuesHandler = withProofProvenance(drilldownIssuesHandler, runningBuild())
-		mux.HandleFunc("/api/v1/drilldown/issues", drilldownIssuesHandler)
-	} else {
-		log.Print("query-api: /api/v1/drilldown/issues route not configured (CLICKHOUSE_URI/GO_API_ENVELOPE_* unset) -- staying unmounted")
-	}
-
-	// GET /api/v1/people, gated by its own routeswitch entry (default OFF
-	// via GO_API_PEOPLE_SEARCH_ENABLED) -- see people_route.go's package
-	// doc comment for the reachability story and internal/people for the
-	// ported resolver and its documented ReplacingMergeTree-dedup notes.
-	if peopleSearchHandler, peopleSearchCleanup, peopleSearchOK, peopleSearchErr := buildPeopleSearchRoute(getenv, edgeUsers); peopleSearchErr != nil {
-		log.Printf("query-api: build /api/v1/people route: %v", peopleSearchErr)
-		return fail(peopleSearchErr)
-	} else if peopleSearchOK {
-		cleanups = append(cleanups, peopleSearchCleanup)
-		// See the investment/explain mount above for why this is a
-		// reassignment, not an inlined wrapper.
-		peopleSearchHandler = withProofProvenance(peopleSearchHandler, runningBuild())
-		mux.HandleFunc("/api/v1/people", peopleSearchHandler)
-	} else {
-		log.Print("query-api: /api/v1/people route not configured (CLICKHOUSE_URI/GO_API_ENVELOPE_* unset) -- staying unmounted")
-	}
-
-	// GET /api/v1/people/{person_id}/summary, gated by its own routeswitch
-	// entry (default OFF via GO_API_PEOPLE_SUMMARY_ENABLED) -- see
-	// people_summary_route.go's package doc comment for the reachability
-	// story, the path-parameter mechanism and internal/people for the
-	// ported resolver.
-	if peopleSummaryHandler, peopleSummaryCleanup, peopleSummaryOK, peopleSummaryErr := buildPeopleSummaryRoute(getenv, edgeUsers); peopleSummaryErr != nil {
-		log.Printf("query-api: build %s route: %v", peopleSummaryPath, peopleSummaryErr)
-		return fail(peopleSummaryErr)
-	} else if peopleSummaryOK {
-		cleanups = append(cleanups, peopleSummaryCleanup)
-		// See the investment/explain mount above for why this is a
-		// reassignment, not an inlined wrapper.
-		peopleSummaryHandler = withProofProvenance(peopleSummaryHandler, runningBuild())
-		mux.HandleFunc("/api/v1/people/{person_id}/summary", peopleSummaryHandler)
-	} else {
-		log.Printf("query-api: %s route not configured (CLICKHOUSE_URI/GO_API_ENVELOPE_* unset) -- staying unmounted", peopleSummaryPath)
-	}
-
-	// GET /api/v1/people/{person_id}/metric, gated by its own routeswitch
-	// entry (default OFF via GO_API_PEOPLE_METRIC_ENABLED) -- see
-	// people_metric_route.go's package doc comment for the reachability
-	// story and internal/people for the ported resolver.
-	if peopleMetricHandler, peopleMetricCleanup, peopleMetricOK, peopleMetricErr := buildPeopleMetricRoute(getenv, edgeUsers); peopleMetricErr != nil {
-		log.Printf("query-api: build %s route: %v", peopleMetricPath, peopleMetricErr)
-		return fail(peopleMetricErr)
-	} else if peopleMetricOK {
-		cleanups = append(cleanups, peopleMetricCleanup)
-		// See the investment/explain mount above for why this is a
-		// reassignment, not an inlined wrapper.
-		peopleMetricHandler = withProofProvenance(peopleMetricHandler, runningBuild())
-		mux.HandleFunc("/api/v1/people/{person_id}/metric", peopleMetricHandler)
-	} else {
-		log.Printf("query-api: %s route not configured (CLICKHOUSE_URI/GO_API_ENVELOPE_* unset) -- staying unmounted", peopleMetricPath)
-	}
-
-	// GET /api/v1/people/{person_id}/drilldown/prs, gated by its own
-	// routeswitch entry (default OFF via GO_API_PEOPLE_DRILLDOWN_PRS_ENABLED)
-	// -- see people_drilldown_prs_route.go's package doc comment for the
-	// reachability story and internal/people/drilldownprs.go for the ported
-	// resolver.
-	if peopleDrilldownPRsHandler, peopleDrilldownPRsCleanup, peopleDrilldownPRsOK, peopleDrilldownPRsErr := buildPeopleDrilldownPRsRoute(getenv, edgeUsers); peopleDrilldownPRsErr != nil {
-		log.Printf("query-api: build %s route: %v", peopleDrilldownPRsPath, peopleDrilldownPRsErr)
-		return fail(peopleDrilldownPRsErr)
-	} else if peopleDrilldownPRsOK {
-		cleanups = append(cleanups, peopleDrilldownPRsCleanup)
-		// See the investment/explain mount above for why this is a
-		// reassignment, not an inlined wrapper.
-		peopleDrilldownPRsHandler = withProofProvenance(peopleDrilldownPRsHandler, runningBuild())
-		mux.HandleFunc("/api/v1/people/{person_id}/drilldown/prs", peopleDrilldownPRsHandler)
-	} else {
-		log.Printf("query-api: %s route not configured (CLICKHOUSE_URI/GO_API_ENVELOPE_* unset) -- staying unmounted", peopleDrilldownPRsPath)
-	}
-
-	// GET /api/v1/people/{person_id}/drilldown/issues, gated by its own
-	// routeswitch entry (default OFF via
-	// GO_API_PEOPLE_DRILLDOWN_ISSUES_ENABLED) -- see
-	// people_drilldown_issues_route.go's package doc comment for the
-	// reachability story and internal/people/drilldownissues.go for the
-	// ported resolver.
-	if peopleDrilldownIssuesHandler, peopleDrilldownIssuesCleanup, peopleDrilldownIssuesOK, peopleDrilldownIssuesErr := buildPeopleDrilldownIssuesRoute(getenv, edgeUsers); peopleDrilldownIssuesErr != nil {
-		log.Printf("query-api: build %s route: %v", peopleDrilldownIssuesPath, peopleDrilldownIssuesErr)
-		return fail(peopleDrilldownIssuesErr)
-	} else if peopleDrilldownIssuesOK {
-		cleanups = append(cleanups, peopleDrilldownIssuesCleanup)
-		// See the investment/explain mount above for why this is a
-		// reassignment, not an inlined wrapper.
-		peopleDrilldownIssuesHandler = withProofProvenance(peopleDrilldownIssuesHandler, runningBuild())
-		mux.HandleFunc("/api/v1/people/{person_id}/drilldown/issues", peopleDrilldownIssuesHandler)
-	} else {
-		log.Printf("query-api: %s route not configured (CLICKHOUSE_URI/GO_API_ENVELOPE_* unset) -- staying unmounted", peopleDrilldownIssuesPath)
-	}
-
-	// GET /api/v1/meta, gated by its own routeswitch entry (default OFF via
-	// GO_API_META_ENABLED) -- see meta_route.go's package doc comment for
-	// the reachability story and internal/meta for the ported handler.
-	// Unlike every sibling route above, this one carries no envelope
-	// verifier dependency: main.py's meta() route is public (see
-	// meta_route.go's doc comment for the citation trail), so only
-	// CLICKHOUSE_URI gates whether it mounts.
-	if metaHandler, metaCleanup, metaOK, metaErr := buildMetaRoute(getenv); metaErr != nil {
-		log.Printf("query-api: build /api/v1/meta route: %v", metaErr)
-		return fail(metaErr)
-	} else if metaOK {
-		cleanups = append(cleanups, metaCleanup)
-		// See the investment/explain mount above for why this is a
-		// reassignment, not an inlined wrapper.
-		metaHandler = withProofProvenance(metaHandler, runningBuild())
-		mux.HandleFunc("/api/v1/meta", metaHandler)
-	} else {
-		log.Print("query-api: /api/v1/meta route not configured (CLICKHOUSE_URI unset) -- staying unmounted")
-	}
-
-	// GET+POST /api/v1/explain, gated by its own routeswitch entries
-	// (default OFF via GO_API_EXPLAIN_ENABLED) -- see explain_route.go's
-	// package doc comment for the reachability story and
-	// internal/explain for the ported resolver and its documented
-	// ReplacingMergeTree-dedup/org-scope notes.
-	if explainRESTHandler, explainRESTCleanup, explainRESTOK, explainRESTErr := buildExplainRoute(getenv, edgeUsers); explainRESTErr != nil {
-		log.Printf("query-api: build /api/v1/explain route: %v", explainRESTErr)
-		return fail(explainRESTErr)
-	} else if explainRESTOK {
-		cleanups = append(cleanups, explainRESTCleanup)
-		// See the investment/explain mount above for why this is a
-		// reassignment, not an inlined wrapper.
-		explainRESTHandler = withProofProvenance(explainRESTHandler, runningBuild())
-		mux.HandleFunc("/api/v1/explain", explainRESTHandler)
-	} else {
-		log.Print("query-api: /api/v1/explain route not configured (CLICKHOUSE_URI/GO_API_ENVELOPE_* unset) -- staying unmounted")
-	}
-
-	// GET /api/v1/flame, gated by its own routeswitch entry
-	// (default OFF via GO_API_FLAME_ENABLED) -- see flame_route.go's
-	// package doc comment for the reachability story and internal/flame
-	// for the ported resolver and its documented ReplacingMergeTree-dedup
-	// notes.
-	if flameHandler, flameCleanup, flameOK, flameErr := buildFlameRoute(getenv, edgeUsers); flameErr != nil {
-		log.Printf("query-api: build /api/v1/flame route: %v", flameErr)
-		return fail(flameErr)
-	} else if flameOK {
-		cleanups = append(cleanups, flameCleanup)
-		// See the investment/explain mount above for why this is a
-		// reassignment, not an inlined wrapper.
-		flameHandler = withProofProvenance(flameHandler, runningBuild())
-		mux.HandleFunc("/api/v1/flame", flameHandler)
-	} else {
-		log.Print("query-api: /api/v1/flame route not configured (CLICKHOUSE_URI/GO_API_ENVELOPE_* unset) -- staying unmounted")
-	}
-
-	// GET /api/v1/flame/aggregated, gated by its own routeswitch entry
-	// (default OFF via GO_API_FLAME_AGGREGATED_ENABLED) -- see
-	// flame_aggregated_route.go's package doc comment for the
-	// reachability story and internal/aggflame for the ported resolver
-	// and its documented ReplacingMergeTree-dedup notes.
-	if flameAggHandler, flameAggCleanup, flameAggOK, flameAggErr := buildFlameAggregatedRoute(getenv, edgeUsers); flameAggErr != nil {
-		log.Printf("query-api: build /api/v1/flame/aggregated route: %v", flameAggErr)
-		return fail(flameAggErr)
-	} else if flameAggOK {
-		cleanups = append(cleanups, flameAggCleanup)
-		// See the investment/explain mount above for why this is a
-		// reassignment, not an inlined wrapper.
-		flameAggHandler = withProofProvenance(flameAggHandler, runningBuild())
-		mux.HandleFunc("/api/v1/flame/aggregated", flameAggHandler)
-	} else {
-		log.Print("query-api: /api/v1/flame/aggregated route not configured (CLICKHOUSE_URI/GO_API_ENVELOPE_* unset) -- staying unmounted")
+	// The REST routes are the rows of restGroups (rest_routes.go): the table IS
+	// the production route set, so a test (and internal/migrationmatrix) walks
+	// it instead of parsing this file. Order, switches, cleanup order, log lines
+	// and handler bodies are exactly what the per-route blocks here were.
+	for _, group := range restGroups {
+		handlers, cleanup, ok, buildErr := group.Build(getenv, edgeUsers)
+		if buildErr != nil {
+			group.LogBuildError(buildErr)
+			return fail(buildErr)
+		}
+		if !ok {
+			group.LogNotConfigured()
+			continue
+		}
+		// Collected BEFORE the count check so a builder that built its resources
+		// and then disagrees with its row still has them closed by fail().
+		cleanups = append(cleanups, cleanup)
+		if len(handlers) != len(group.Mounts) {
+			return fail(fmt.Errorf("query-api: %s returned %d handler(s) for %d mount(s)", group.Builder, len(handlers), len(group.Mounts)))
+		}
+		for i, mount := range group.Mounts {
+			// Wrapped in withProofProvenance so go-api-rest-prove can bind a
+			// receipt to the process that actually served this request, the same
+			// reason /query and /query/proof carry it.
+			mux.HandleFunc(mount.Pattern, withProofProvenance(handlers[i], runningBuild()))
+		}
 	}
 
 	// A /api/v1/* path no route above claims answers Starlette's own
@@ -870,9 +475,7 @@ func BuildWithLookup(lookup func(string) (string, bool)) (*Plane, error) {
 	// individually-unmounted route (its own CLICKHOUSE_URI/envelope vars
 	// unset) -- indistinguishable from "does not exist" to an outside
 	// caller either way.
-	mux.HandleFunc("/api/v1/", func(w http.ResponseWriter, r *http.Request) {
-		writeRESTError(w, r, "api_v1", "", http.StatusNotFound, "Not Found")
-	})
+	mux.HandleFunc("/api/v1/", apiV1CatchAllNotFound)
 
 	handler := markResponseModelRoutes(mux)
 	// CHAOS-7096: internalMux already carries /query/proof-write (mounted
@@ -922,4 +525,11 @@ func recordOperationErrorCount(ctx context.Context, next graphql.OperationHandle
 		}
 		return response
 	}
+}
+
+// apiV1CatchAllNotFound answers every /api/v1/ path no registered route took:
+// 404, and the span says why (a route that does not exist).
+func apiV1CatchAllNotFound(w http.ResponseWriter, r *http.Request) {
+	httpapi.RecordNotFoundCause(r.Context(), httpapi.NotFoundNoRoute)
+	writeRESTError(w, r, "api_v1", "", http.StatusNotFound, "Not Found")
 }

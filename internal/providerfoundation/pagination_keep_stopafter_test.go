@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"github.com/full-chaos/dev-health-ops/internal/testsupport/fakehttp"
 	"io"
 	"net/http"
 	"strings"
@@ -62,7 +63,7 @@ func sameInts(a, b []int) bool {
 func TestGitHubLinkPagesKeepDropsItemsAndPaginationContinues(t *testing.T) {
 	t.Parallel()
 	doer := &numberedDoer{perPage: 3}
-	page, err := CollectGitHubLinkPages(context.Background(), stopReasonClient(t, "github", doer),
+	page, err := CollectGitHubLinkPages(context.Background(), stopReasonClient(t, "github", fakehttp.Client(doer)),
 		GitHubPageOptions{Path: "/x", MaxPages: 3, Keep: func(raw json.RawMessage) bool { return itemNumber(t, raw)%2 == 1 }})
 	if err != nil {
 		t.Fatal(err)
@@ -78,7 +79,7 @@ func TestGitHubLinkPagesStopAfterKeepsTheItemAndRequestsNoNextPage(t *testing.T)
 	// with one request, though the response advertises a next page.
 	doer := &numberedDoer{perPage: 3}
 	kept := 0
-	page, err := CollectGitHubLinkPages(context.Background(), stopReasonClient(t, "github", doer),
+	page, err := CollectGitHubLinkPages(context.Background(), stopReasonClient(t, "github", fakehttp.Client(doer)),
 		GitHubPageOptions{Path: "/x", MaxPages: 10, StopAfter: func(json.RawMessage) bool { kept++; return kept >= 3 }})
 	if err != nil {
 		t.Fatal(err)
@@ -90,7 +91,7 @@ func TestGitHubLinkPagesStopAfterKeepsTheItemAndRequestsNoNextPage(t *testing.T)
 	// Mid-page: the second kept item ends the walk; the rest of the page is not read.
 	doer = &numberedDoer{perPage: 3}
 	kept = 0
-	page, err = CollectGitHubLinkPages(context.Background(), stopReasonClient(t, "github", doer),
+	page, err = CollectGitHubLinkPages(context.Background(), stopReasonClient(t, "github", fakehttp.Client(doer)),
 		GitHubPageOptions{Path: "/x", MaxPages: 10, StopAfter: func(json.RawMessage) bool { kept++; return kept >= 2 }})
 	if err != nil {
 		t.Fatal(err)
@@ -104,7 +105,7 @@ func TestGitHubLinkPagesKeepAndStopAfterCountOnlyKeptItems(t *testing.T) {
 	t.Parallel()
 	doer := &numberedDoer{perPage: 3}
 	kept := 0
-	page, err := CollectGitHubLinkPages(context.Background(), stopReasonClient(t, "github", doer),
+	page, err := CollectGitHubLinkPages(context.Background(), stopReasonClient(t, "github", fakehttp.Client(doer)),
 		GitHubPageOptions{
 			Path: "/x", MaxPages: 10,
 			Keep:      func(raw json.RawMessage) bool { return itemNumber(t, raw)%3 == 0 },
@@ -120,7 +121,7 @@ func TestGitHubLinkPagesKeepAndStopAfterCountOnlyKeptItems(t *testing.T) {
 
 	// MaxItems counts kept items only.
 	doer = &numberedDoer{perPage: 3}
-	page, err = CollectGitHubLinkPages(context.Background(), stopReasonClient(t, "github", doer),
+	page, err = CollectGitHubLinkPages(context.Background(), stopReasonClient(t, "github", fakehttp.Client(doer)),
 		GitHubPageOptions{Path: "/x", MaxPages: 10, MaxItems: 2, Keep: func(raw json.RawMessage) bool { return itemNumber(t, raw)%3 == 0 }})
 	if err != nil {
 		t.Fatal(err)

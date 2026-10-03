@@ -57,10 +57,6 @@ _digest_to_operation: dict[str, str] = {}
 #: no ``kind`` is a query; the generator writes ``"kind": "mutation"`` only for
 #: a document whose text starts with the ``mutation`` keyword.
 _mutation_operations: set[str] = set()
-#: Digests of entries marked ``"legacy": true`` (CHAOS-8000 dual accept): a text the
-#: operation accepted BEFORE its current one. They dispatch like any other digest (the
-#: edge keys by digest) but are not the operation's current document.
-_legacy_digests: set[str] = set()
 
 _ENTRY_KINDS = frozenset({"query", "mutation"})
 
@@ -77,20 +73,12 @@ def _load() -> None:
             raise ValueError("catalog must be a non-empty JSON array")
         mapping: dict[str, str] = {}
         mutations: set[str] = set()
-        legacy_digests: set[str] = set()
         for entry in entries:
             operation = entry["operation"]
             digest = entry["digest"]
             kind = entry.get("kind", "query")
             if kind not in _ENTRY_KINDS:
                 raise ValueError(f"operation {operation!r} has unknown kind {kind!r}")
-            legacy = entry.get("legacy", False)
-            if not isinstance(legacy, bool):
-                raise ValueError(
-                    f"operation {operation!r} has a non-boolean legacy {legacy!r}"
-                )
-            if legacy:
-                legacy_digests.add(digest)
             if kind == "mutation":
                 mutations.add(operation)
             if digest in mapping:
@@ -101,7 +89,6 @@ def _load() -> None:
             mapping[digest] = operation
         _digest_to_operation.update(mapping)
         _mutation_operations.update(mutations)
-        _legacy_digests.update(legacy_digests)
         global _catalog_load_ok
         _catalog_load_ok = True
         logger.info(
@@ -180,26 +167,6 @@ def catalog_entries() -> tuple[tuple[str, str], ...]:
     return tuple(
         sorted(
             (operation, digest) for digest, operation in _digest_to_operation.items()
-        )
-    )
-
-
-def current_catalog_entries() -> tuple[tuple[str, str], ...]:
-    """:func:`catalog_entries` WITHOUT the ``legacy`` entries: one
-    ``(operation, document_digest)`` pair per operation, its CURRENT document.
-
-    ``enable`` and ``disable`` key every preflight and every write on operation
-    name alone (``go_api_cli._catalog_by_operation``), so they are fed this: a legacy
-    text (CHAOS-8000 dual accept) is only an accepted alias of the operation, never
-    the document an operator means. Any OTHER operation registered under two
-    digests is still two entries here, and those verbs still refuse it.
-    """
-    _load()
-    return tuple(
-        sorted(
-            (operation, digest)
-            for digest, operation in _digest_to_operation.items()
-            if digest not in _legacy_digests
         )
     )
 

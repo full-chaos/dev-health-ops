@@ -13,9 +13,9 @@ import (
 
 	"github.com/full-chaos/dev-health-ops/internal/apiservice/admin"
 	"github.com/full-chaos/dev-health-ops/internal/storage/clickhouse"
-	"github.com/full-chaos/dev-health-ops/internal/testsupport/chschema"
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/containers"
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/pyoracle"
+	"github.com/full-chaos/dev-health-ops/internal/testsupport/venueoracle"
 )
 
 // clickHouseOrgTableKnownPythonOnlyStale is org_deletion.py's own
@@ -46,11 +46,11 @@ var clickHouseOrgTableKnownPythonOnlyStale = map[string]string{
 // above -- never a bare "they differ" warning, and never silently widening
 // if the real set drifts from what is named here.
 //
-// This test needs a real, migrated ClickHouse (chschema.Apply runs the
-// actual migration chain) and a python3 interpreter; it does not need the
-// live-Python FastAPI app, so it is not gated on
-// DEV_HEALTH_LIVE_PYTHON_ORACLES -- only -tags=integration, like every other
-// container-backed test in this tree.
+// This test needs a real, migrated ClickHouse (chmigrate, the migration
+// chain `dho migrate clickhouse upgrade` applies) and, only while recording,
+// a python3 interpreter; it does not need the live-Python FastAPI app, so it
+// is not gated on DEV_HEALTH_VENUE_ORACLES -- only -tags=integration,
+// like every other container-backed test in this tree.
 func TestClickHouseOrgTableDiscoveryMatchesThePythonMigrationRegex(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Minute)
 	t.Cleanup(cancel)
@@ -60,7 +60,7 @@ func TestClickHouseOrgTableDiscoveryMatchesThePythonMigrationRegex(t *testing.T)
 		t.Fatalf("start clickhouse: %v", err)
 	}
 	t.Cleanup(func() { _ = instance.Close(context.Background()) })
-	chschema.Apply(ctx, t, instance)
+	venueoracle.MigrateClickHouseGo(t, ctx, instance.URI)
 
 	conn, err := clickhouse.Open(ctx, clickhouse.DefaultConfig(instance.URI))
 	if err != nil {
@@ -77,8 +77,8 @@ func TestClickHouseOrgTableDiscoveryMatchesThePythonMigrationRegex(t *testing.T)
 		goSet[table.Name] = true
 	}
 
-	root := repoRoot(t)
-	python := pyoracle.Resolve(t, root)
+	golden := venueoracle.OpenGolden(t, adminGolden("clickhouse_org_tables", t.Name(), "ddb6c013976cedeebecc72e77848a833a212f0ca614d716793d2fbfc20524935"))
+	root := golden.PythonRoot(t, repoRoot(t))
 	script := `
 import json
 import sys
@@ -87,12 +87,29 @@ from dev_health_ops.api.services import org_deletion
 
 print(json.dumps(sorted(org_deletion._clickhouse_tables_from_migrations())))
 `
-	cmd := exec.Command(python, "-c", script)
-	cmd.Dir = root
-	output, err := cmd.CombinedOutput()
-	if err != nil {
-		t.Fatalf("python: %v\n%s", pyoracle.RunError(python, err, output), output)
-	}
+	// org_deletion.py's table list, parsed from the pinned build's migration
+	// files while recording, frozen otherwise.
+	answers := golden.Produce(t, root, []venueoracle.Request{venueoracle.ProgramRequest("clickhouse org tables", script, nil, nil)},
+		func(producer *venueoracle.Producer, _ []venueoracle.Request) []venueoracle.Response {
+			// The harness starts the child in the closed environment: nothing
+			// ambient shapes its answer.
+			cmd, err := producer.Command(ctx, nil, nil, "-c", script)
+			if err != nil {
+				t.Fatal(err)
+			}
+			cmd.Dir = producer.Root
+			output, err := cmd.Output()
+			if err != nil {
+				var stderr []byte
+				if exitErr, ok := err.(*exec.ExitError); ok {
+					stderr = exitErr.Stderr
+				}
+				t.Fatalf("python: %v", pyoracle.RunError(cmd.Path, err, stderr))
+			}
+			return []venueoracle.Response{{Status: 0, Body: string(output)}}
+		})
+	golden.Consumed(t, answers...)
+	output := []byte(answers[0].Body)
 	var pythonNames []string
 	if err := json.Unmarshal(output, &pythonNames); err != nil {
 		t.Fatalf("decode python output: %v\n%s", err, output)
@@ -129,10 +146,21 @@ print(json.dumps(sorted(org_deletion._clickhouse_tables_from_migrations())))
 	// Every table Go has and Python does not is a hard FAIL: Go's scope
 	// must never silently widen beyond what this test has named and a
 	// human has reviewed.
+	// Python's list is frozen at the pinned build: a table a later migration
+	// added is Go-only by construction and must be named, with its migration,
+	// in clickHouseOrgTablesAfterThePythonFreeze; an entry nothing reproduces
+	// has rotted.
 	var goOnly []string
 	for name := range goSet {
 		if !pythonSet[name] {
-			goOnly = append(goOnly, name)
+			if _, named := clickHouseOrgTablesAfterThePythonFreeze[name]; !named {
+				goOnly = append(goOnly, name)
+			}
+		}
+	}
+	for name := range clickHouseOrgTablesAfterThePythonFreeze {
+		if !goSet[name] || pythonSet[name] {
+			unexplained = append(unexplained, fmt.Sprintf("clickHouseOrgTablesAfterThePythonFreeze names %q, but it is not a Go-only table (go has it: %v, the frozen python list has it: %v) -- remove the entry", name, goSet[name], pythonSet[name]))
 		}
 	}
 	sort.Strings(goOnly)
@@ -141,4 +169,11 @@ print(json.dumps(sorted(org_deletion._clickhouse_tables_from_migrations())))
 		sort.Strings(unexplained)
 		t.Fatalf("ClickHouse org-table discovery diverged from the accepted set:\nunexplained: %v\ngo-only (never accepted): %v", unexplained, goOnly)
 	}
+	golden.SkipDiff(t)
+	golden.Finish(t)
 }
+
+// clickHouseOrgTablesAfterThePythonFreeze names each org-scoped ClickHouse
+// table a migration added after adminPythonBuild, where org_deletion.py's
+// list was frozen: table -> the migration that added it.
+var clickHouseOrgTablesAfterThePythonFreeze = map[string]string{}

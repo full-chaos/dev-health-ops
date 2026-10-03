@@ -10,11 +10,11 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
-	"runtime"
 	"sort"
 	"strings"
 	"testing"
 
+	"github.com/full-chaos/dev-health-ops/internal/testsupport/moduleroot"
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/oraclecompare"
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/pyoracle"
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/venueoracle"
@@ -79,7 +79,7 @@ var embeddedScriptOracleSources embed.FS
 // with UseNumber and compare the literal text.
 func frozenScriptAnswer(t *testing.T, oracle scriptOracle) []byte {
 	t.Helper()
-	_, currentFile, _, _ := runtime.Caller(0)
+	_, currentFile, _, _ := moduleroot.Caller(0)
 	packageDir := filepath.Dir(currentFile)
 	repoRoot := filepath.Dir(filepath.Dir(packageDir))
 	oraclecompare.AssertSourcesUnchangedSinceBuild(t, embeddedScriptOracleSources, packageDir)
@@ -264,7 +264,7 @@ var scriptGoldenTestFunction = regexp.MustCompile(`(?m)^func (Test\w+)\(`)
 // known oracle, is named for that oracle and its test, and that test exists;
 // every pinned golden is on disk.
 func TestEveryScriptOracleHasAFrozenGolden(t *testing.T) {
-	_, currentFile, _, _ := runtime.Caller(0)
+	_, currentFile, _, _ := moduleroot.Caller(0)
 	packageDir := filepath.Dir(currentFile)
 
 	tests := map[string]bool{}

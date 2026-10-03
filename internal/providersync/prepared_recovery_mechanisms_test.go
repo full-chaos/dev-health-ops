@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"github.com/full-chaos/dev-health-ops/internal/testsupport/fakehttp"
 	"go/ast"
 	"go/parser"
 	"go/token"
@@ -68,7 +69,7 @@ func runFactoryRoute(
 	executor.EffectsFactory = factory.build
 	executor.Credentials.Repository = credentials
 	doer := &trackingCompleteRouteDoer{}
-	executor.Doer = doer
+	executor.Doer = fakehttp.Client(doer)
 	descriptor := preparedDeploymentsDescriptor(t)
 	_, err := executor.Execute(context.Background(), session, descriptor)
 	return err, handler, doer

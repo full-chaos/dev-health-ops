@@ -3,7 +3,7 @@ package syncdispatchruntime
 import (
 	"context"
 	"errors"
-	"log/slog"
+	"github.com/full-chaos/dev-health-ops/internal/syncdispatchruntime/synclog"
 	"sort"
 	"time"
 
@@ -88,13 +88,10 @@ func unitIDSet(units map[string]time.Time) map[string]bool {
 // estimate-bridge call, and every candidate/surplus unit in one run shares
 // one org by construction, so there is no ambiguity to resolve from data.
 func enforceRun(
-	ctx context.Context, tx pgx.Tx, bridge budgetEstimator, logger *slog.Logger,
+	ctx context.Context, tx pgx.Tx, bridge budgetEstimator, logger *synclog.Logger,
 	orgID, syncRunID string, cappedUnitIDs map[string]bool, slotHeadroom map[dispatchBucket]int, now time.Time,
 	observer jobruntime.BudgetEstimateFailureObserver,
 ) (enforceRunResult, error) {
-	if logger == nil {
-		logger = slog.Default()
-	}
 
 	units, err := dispatchCandidateUnits(ctx, tx, syncRunID, cappedUnitIDs, now)
 	if err != nil {
@@ -164,8 +161,7 @@ func enforceRun(
 			}
 			for _, unitID := range chunk {
 				unit := allCandidatesByID[unitID]
-				logger.WarnContext(ctx, "dispatch_sync_run.budget_guard_enforce_failed",
-					attrsToAny(append(unitLogAttrs(syncRunID, unit), slog.String("error", bridgeErr.Error())))...)
+				logger.Warn(ctx, synclog.MsgDispatchSyncRunBudgetGuardEnforceFailed, append(unitLogAttrs(syncRunID, unit), synclog.Failure(bridgeErr))...)
 			}
 			continue
 		}
@@ -359,7 +355,7 @@ func enforceRun(
 			deferredUnitIDs[unit.id] = true
 			nextDeferredAt = earlierOf(nextDeferredAt, availableAt)
 			for _, observation := range unitObservations {
-				logger.InfoContext(ctx, "dispatch_sync_run.budget_guard_deferred", observationToAnyArgs(observation)...)
+				logger.Info(ctx, synclog.MsgDispatchSyncRunBudgetGuardDeferred, observationAttrs(readObservation(observation))...)
 			}
 		} else {
 			for _, estimate := range estimates {
@@ -368,7 +364,7 @@ func enforceRun(
 			}
 			for _, observation := range unitObservations {
 				observation["decision"] = "allowed"
-				logger.InfoContext(ctx, "dispatch_sync_run.budget_guard_allowed", observationToAnyArgs(observation)...)
+				logger.Info(ctx, synclog.MsgDispatchSyncRunBudgetGuardAllowed, observationAttrs(readObservation(observation))...)
 			}
 		}
 		observations = append(observations, unitObservations...)

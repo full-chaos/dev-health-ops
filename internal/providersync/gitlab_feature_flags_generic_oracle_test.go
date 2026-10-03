@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"github.com/full-chaos/dev-health-ops/internal/testsupport/fakehttp"
 	"net/http"
 	"sort"
 	"strconv"
@@ -188,7 +189,7 @@ func buildGitLabFeatureFlagsOracleTrace(t *testing.T, input map[string]any) gitL
 		t.Fatal(err)
 	}
 	doer := &gitLabFeatureFlagsOracleDoer{t: t, caseInput: input}
-	client := gitLabFeatureFlagsClient(t, doer, providerfoundation.RetryPolicy{
+	client := gitLabFeatureFlagsClient(t, fakehttp.Client(doer), providerfoundation.RetryPolicy{
 		MaxAttempts: oracleInt(input["max_retries"], 1),
 		InitialWait: time.Nanosecond, MaxWait: time.Nanosecond,
 	})

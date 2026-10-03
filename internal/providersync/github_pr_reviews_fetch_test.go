@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"github.com/full-chaos/dev-health-ops/internal/testsupport/fakehttp"
 	"io"
 	"net/http"
 	"strings"
@@ -68,7 +69,7 @@ func TestGitHubPullRequestReviewFetcherPaginatesAndReportsBoundedUsage(t *testin
 		`{"data":{"repository":{"pr0":{"number":42,"reviews":{"nodes":[{"databaseId":9007199254740993,"state":"APPROVED","submittedAt":"2026-07-11T10:30:00Z","author":{"login":"octocat"}}],"pageInfo":{"hasNextPage":true,"endCursor":"cursor-1"}}}}}}`,
 		`{"data":{"repository":{"pr0":{"number":42,"reviews":{"nodes":[{"id":"R_kwDO","state":"CHANGES_REQUESTED","submittedAt":null,"author":null}],"pageInfo":{"hasNextPage":false,"endCursor":""}}}}}}`,
 	}}
-	client := gitHubPullRequestClient(t, doer, "https://api.github.com")
+	client := gitHubPullRequestClient(t, fakehttp.Client(doer), "https://api.github.com")
 	budget := &gitHubPullRequestReviewBudget{}
 	gate := &gitHubPullRequestReviewGate{}
 	client.Budget = budget
@@ -117,7 +118,7 @@ func TestGitHubPullRequestReviewFetcherPaginatesAndReportsBoundedUsage(t *testin
 
 func TestGitHubPullRequestReviewFetcherRateLimitPropagates(t *testing.T) {
 	doer := &gitHubPullRequestReviewFetchDoer{t: t, graphQLStatus: []int{http.StatusForbidden}, graphQLReply: []string{`{"message":"API rate limit exceeded"}`}}
-	client := gitHubPullRequestClient(t, doer, "https://api.github.com")
+	client := gitHubPullRequestClient(t, fakehttp.Client(doer), "https://api.github.com")
 	result, err := (GitHubPullRequestReviewFetcher{}).Fetch(
 		context.Background(), nativeTestClaim("github", "pr-reviews"), client,
 		gitHubPullRequestReviewFetchRepoID, gitHubPullRequestReviewFetchTarget(), time.Now(),
@@ -136,7 +137,7 @@ func TestGitHubPullRequestReviewFetcherCountsRetriesButReservesOnce(t *testing.T
 		`{"message":"unavailable"}`,
 		`{"data":{"repository":{"pr0":{"number":42,"reviews":{"nodes":[],"pageInfo":{"hasNextPage":false,"endCursor":""}}}}}}`,
 	}}
-	client := gitHubPullRequestClient(t, doer, "https://api.github.com")
+	client := gitHubPullRequestClient(t, fakehttp.Client(doer), "https://api.github.com")
 	client.Retry.MaxAttempts = 2
 	budget := &gitHubPullRequestReviewBudget{}
 	client.Budget = budget
@@ -172,7 +173,7 @@ func TestGitHubPullRequestReviewFetcherMarksNonRateFailuresIncomplete(t *testing
 			doer := &gitHubPullRequestReviewFetchDoer{t: t, graphQLStatus: []int{test.status}, graphQLReply: []string{test.body}}
 			result, err := (GitHubPullRequestReviewFetcher{}).Fetch(
 				context.Background(), nativeTestClaim("github", "pr-reviews"),
-				gitHubPullRequestClient(t, doer, "https://api.github.com"),
+				gitHubPullRequestClient(t, fakehttp.Client(doer), "https://api.github.com"),
 				gitHubPullRequestReviewFetchRepoID, gitHubPullRequestReviewFetchTarget(), time.Now(),
 			)
 			if err != nil || result.Complete() || result.Incomplete == nil || result.Incomplete.Cause != test.cause ||
@@ -189,7 +190,7 @@ func TestGitHubPullRequestReviewFetcherReturnsTypedPaginationIncomplete(t *testi
 	}}
 	result, err := (GitHubPullRequestReviewFetcher{MaxPages: 1}).Fetch(
 		context.Background(), nativeTestClaim("github", "pr-reviews"),
-		gitHubPullRequestClient(t, doer, "https://api.github.com"),
+		gitHubPullRequestClient(t, fakehttp.Client(doer), "https://api.github.com"),
 		gitHubPullRequestReviewFetchRepoID, gitHubPullRequestReviewFetchTarget(), time.Now(),
 	)
 	if err != nil || result.Incomplete == nil || result.Incomplete.Cause != "pagination_cap" || result.Complete() {
@@ -199,7 +200,7 @@ func TestGitHubPullRequestReviewFetcherReturnsTypedPaginationIncomplete(t *testi
 
 func TestGitHubPullRequestReviewFetcherChecksLeaseBeforeRequest(t *testing.T) {
 	doer := &gitHubPullRequestReviewFetchDoer{t: t}
-	client, err := providerfoundation.NewHTTPClient("github", "https://api.github.com", doer,
+	client, err := providerfoundation.NewHTTPClient("github", "https://api.github.com", fakehttp.Client(doer),
 		func(*http.Request) error { return nil }, providerfoundation.RetryPolicy{MaxAttempts: 1, InitialWait: time.Nanosecond, MaxWait: time.Nanosecond},
 		providerfoundation.LeaseGuardFunc(func(context.Context) error { return providerfoundation.ErrLeaseLost }),
 	)

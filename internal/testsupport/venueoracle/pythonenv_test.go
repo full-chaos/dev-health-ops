@@ -671,7 +671,7 @@ func TestBothPythonLaunchesRefuseAnotherInterpreterOnPath(t *testing.T) {
 func startWithSettingsInChild(t *testing.T, env string, recorded Options, declared func(name string) (Options, []string), name string) (string, error, bool) {
 	t.Helper()
 	if which := os.Getenv(env); which != "" {
-		t.Setenv("DEV_HEALTH_LIVE_PYTHON_ORACLES", "1")
+		t.Setenv("DEV_HEALTH_VENUE_ORACLES", "1")
 		t.Setenv(goldenUpdateEnv, "")
 		t.Setenv(goldenCandidateEnv, "")
 		golden, _ := frozenWithEnv(t, currentKey(t, recorded), pythonEnvKeyVersion)
@@ -739,7 +739,7 @@ func TestStartRefusesAGoldenRecordedUnderAnotherPythonEnvironment(t *testing.T) 
 
 // legacyKeyGoldenCount is how many goldens the closed list holds. It only goes
 // down, with every row that is deleted: there is no room above it.
-const legacyKeyGoldenCount = 52
+const legacyKeyGoldenCount = 51
 
 // legacyRow is one row of the closed list: a golden of the first key version
 // by its repository path, and the sha256 of its bytes.

@@ -4,13 +4,13 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
-	"runtime"
 	"testing"
 	"time"
 
 	"github.com/google/uuid"
 
 	"github.com/full-chaos/dev-health-ops/internal/jobs/workgraph/issuecommitedges"
+	"github.com/full-chaos/dev-health-ops/internal/testsupport/moduleroot"
 )
 
 // TestDeriveMatchesFrozenPythonGolden is CHAOS-5304's identity test: it
@@ -151,9 +151,9 @@ func loadGolden(t *testing.T) goldenDocument {
 
 func repositoryRoot(t *testing.T) string {
 	t.Helper()
-	_, thisFile, _, ok := runtime.Caller(0)
+	_, thisFile, _, ok := moduleroot.Caller(0)
 	if !ok {
-		t.Fatal("runtime.Caller failed")
+		t.Fatal("moduleroot.Caller failed")
 	}
 	// this file lives at internal/jobs/workgraph/issuecommitedges/golden_test.go
 	return filepath.Join(filepath.Dir(thisFile), "..", "..", "..", "..")

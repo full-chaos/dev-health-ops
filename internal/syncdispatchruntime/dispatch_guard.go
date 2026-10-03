@@ -5,7 +5,7 @@ import (
 	"crypto/sha256"
 	"encoding/binary"
 	"fmt"
-	"log/slog"
+	"github.com/full-chaos/dev-health-ops/internal/syncdispatchruntime/synclog"
 	"sort"
 	"time"
 
@@ -117,11 +117,44 @@ func syncUnitConcurrencyPerBucket() int {
 // the numbers it actually enforces at start (CHAOS-7881). Class names are the
 // closed set of the budget table; no tenant data.
 func EffectiveAdmissionCaps() (clamp int, caps map[string]int) {
-	caps = make(map[string]int, 3)
-	for _, class := range []string{"light", "medium", "heavy"} {
-		caps[class] = concurrencyCapForCostClass(class)
+	snapshot := readAdmissionCaps()
+	return snapshot.clamp, snapshot.caps
+}
+
+// admissionCaps is ONE read of SYNC_UNIT_CONCURRENCY_PER_BUCKET and everything derived from it: the clamp, its source, and each class's
+// cap and cap source. The start line is built from one snapshot, so a variable that changes while the line is built cannot give a
+// cap derived with one clamp next to a reported clamp of another.
+type admissionCaps struct {
+	clamp       int
+	clampSource string
+	caps        map[string]int
+	capSources  map[string]string
+}
+
+func readAdmissionCaps() admissionCaps {
+	clamp, fromEnv := envPositiveIntFrom("SYNC_UNIT_CONCURRENCY_PER_BUCKET", 8)
+	snapshot := admissionCaps{clamp: clamp, clampSource: clampSourceDefault,
+		caps: make(map[string]int, 3), capSources: make(map[string]string, 3)}
+	if fromEnv {
+		snapshot.clampSource = clampSourceEnv
 	}
-	return syncUnitConcurrencyPerBucket(), caps
+	for _, class := range []string{"light", "medium", "heavy"} {
+		snapshot.caps[class], snapshot.capSources[class] = capAndSourceForClamp(class, clamp)
+	}
+	return snapshot
+}
+
+// Clamp sources: "env" = SYNC_UNIT_CONCURRENCY_PER_BUCKET is set to a positive integer and that is the clamp; "default"
+// = it is unset, not an integer or below 1, and the built-in default applies (CHAOS-8201).
+const (
+	clampSourceEnv     = "env"
+	clampSourceDefault = "default"
+)
+
+// EffectiveAdmissionCapSources reports where the clamp and each class's cap come from, for the start line.
+func EffectiveAdmissionCapSources() (clampSource string, capSources map[string]string) {
+	snapshot := readAdmissionCaps()
+	return snapshot.clampSource, snapshot.capSources
 }
 
 // logAdmissionCaps writes ONE Info line, when the service that runs the guard
@@ -130,23 +163,25 @@ func EffectiveAdmissionCaps() (clamp int, caps map[string]int) {
 // class from the one table, so a cap/budget mismatch or a lowered clamp is
 // visible at Info where the cap is enforced (CHAOS-7881). No org id or tenant
 // data.
-func logAdmissionCaps(logger *slog.Logger) {
-	if logger == nil {
-		logger = slog.Default()
-	}
-	clamp, caps := EffectiveAdmissionCaps()
+func logAdmissionCaps(logger *synclog.Logger) {
+	snapshot := readAdmissionCaps()
+	clamp, caps, clampSource, capSources := snapshot.clamp, snapshot.caps, snapshot.clampSource, snapshot.capSources
 	budget := func(class string) int {
 		limit, _ := providerfoundation.CostClassBudgetLimit(class)
 		return limit
 	}
-	logger.Info("sync_dispatch_admission_caps",
-		"admission_cap_light", caps["light"],
-		"admission_cap_medium", caps["medium"],
-		"admission_cap_heavy", caps["heavy"],
-		"budget_limit_light", budget("light"),
-		"budget_limit_medium", budget("medium"),
-		"budget_limit_heavy", budget("heavy"),
-		"admission_clamp", clamp,
+	logger.Info(context.Background(), synclog.MsgSyncDispatchAdmissionCaps,
+		synclog.Count(synclog.KeyAdmissionCapLight, caps["light"]),
+		synclog.Count(synclog.KeyAdmissionCapMedium, caps["medium"]),
+		synclog.Count(synclog.KeyAdmissionCapHeavy, caps["heavy"]),
+		synclog.Count(synclog.KeyBudgetLimitLight, budget("light")),
+		synclog.Count(synclog.KeyBudgetLimitMedium, budget("medium")),
+		synclog.Count(synclog.KeyBudgetLimitHeavy, budget("heavy")),
+		synclog.Count(synclog.KeyAdmissionClamp, clamp),
+		synclog.Text(synclog.KeyAdmissionCapLightSource, synclog.ParseLabel(capSources["light"])),
+		synclog.Text(synclog.KeyAdmissionCapMediumSource, synclog.ParseLabel(capSources["medium"])),
+		synclog.Text(synclog.KeyAdmissionCapHeavySource, synclog.ParseLabel(capSources["heavy"])),
+		synclog.Text(synclog.KeyAdmissionClampSource, synclog.ParseLabel(clampSource)),
 	)
 }
 
@@ -160,11 +195,31 @@ func logAdmissionCaps(logger *slog.Logger) {
 // all its requests), so a class outside the table (not one a provider unit
 // uses) keeps the clamp as before.
 func concurrencyCapForCostClass(costClass string) int {
-	clamp := syncUnitConcurrencyPerBucket()
-	if limit, ok := providerfoundation.CostClassBudgetLimit(costClass); ok && limit < clamp {
-		return limit
+	capValue, _ := concurrencyCapAndSourceForCostClass(costClass)
+	return capValue
+}
+
+// Admission cap sources (CHAOS-8201): where a class's cap comes from. "table" = the class's budget limit (the clamp does
+// not lower it, including the case where the two are equal); "clamp" = SYNC_UNIT_CONCURRENCY_PER_BUCKET is what sets it
+// (it is below the class's limit, or the class is outside the table).
+const (
+	capSourceTable = "table"
+	capSourceClamp = "clamp"
+)
+
+// concurrencyCapAndSourceForCostClass is the ONE place the cap is derived, so the number the guard enforces and the
+// source the start line reports cannot drift apart.
+func concurrencyCapAndSourceForCostClass(costClass string) (int, string) {
+	return capAndSourceForClamp(costClass, syncUnitConcurrencyPerBucket())
+}
+
+// capAndSourceForClamp is the derivation for a clamp that was already read: the start line reads the variable once and derives
+// every class from that one value.
+func capAndSourceForClamp(costClass string, clamp int) (int, string) {
+	if limit, ok := providerfoundation.CostClassBudgetLimit(costClass); ok && limit <= clamp {
+		return limit, capSourceTable
 	}
-	return clamp
+	return clamp, capSourceClamp
 }
 
 // staleDispatchSeconds mirrors sync_units._stale_dispatch_seconds() /
@@ -183,10 +238,7 @@ func staleDispatchSeconds() time.Duration {
 // authorize->claim -- Python's own re-query cannot observe anything this
 // transaction hasn't, so skipping it changes no observable behavior, only
 // which frame issues the (redundant, in Python) lookup.
-func authorizeRun(ctx context.Context, tx pgx.Tx, logger *slog.Logger, orgID, runID string, now time.Time) (guardDecision, error) {
-	if logger == nil {
-		logger = slog.Default()
-	}
+func authorizeRun(ctx context.Context, tx pgx.Tx, logger *synclog.Logger, orgID, runID string, now time.Time) (guardDecision, error) {
 	units, err := loadDispatchGuardUnits(ctx, tx, runID)
 	if err != nil {
 		return guardDecision{}, err
@@ -544,16 +596,9 @@ func acquireBucketAdvisoryLocks(ctx context.Context, tx pgx.Tx, buckets []dispat
 // failure here is likewise swallowed, not propagated: attribute.String/Int
 // on a Go span cannot fail the way Python's dynamic OTel calls could, so
 // there is nothing to catch, but the log call is likewise best-effort).
-func emitBucketDecision(ctx context.Context, logger *slog.Logger, bucket dispatchBucket, activeCount, reclaimedStale, cappedNew, cappedStale, slotHeadroom int) {
+func emitBucketDecision(ctx context.Context, logger *synclog.Logger, bucket dispatchBucket, activeCount, reclaimedStale, cappedNew, cappedStale, slotHeadroom int) {
 	bucketLabel := bucket.orgID + "/" + bucket.provider + "/" + bucket.costClass
-	logger.InfoContext(ctx, "dispatch_guard.bucket_decision",
-		slog.String("bucket", bucketLabel),
-		slog.Int("guard.active_count", activeCount),
-		slog.Int("guard.reclaimed_stale", reclaimedStale),
-		slog.Int("guard.capped_new", cappedNew),
-		slog.Int("guard.capped_stale", cappedStale),
-		slog.Int("guard.slot_headroom", slotHeadroom),
-	)
+	logger.Info(ctx, synclog.MsgDispatchGuardBucketDecision, synclog.Text(synclog.KeyBucket, synclog.ParseLabel(bucketLabel)), synclog.Count(synclog.KeyGuardActiveCount, activeCount), synclog.Count(synclog.KeyGuardReclaimedStale, reclaimedStale), synclog.Count(synclog.KeyGuardCappedNew, cappedNew), synclog.Count(synclog.KeyGuardCappedStale, cappedStale), synclog.Count(synclog.KeyGuardSlotHeadroom, slotHeadroom))
 	span := oteltrace.SpanFromContext(ctx)
 	if span == nil || !span.IsRecording() {
 		return

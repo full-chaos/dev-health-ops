@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"github.com/full-chaos/dev-health-ops/internal/testsupport/fakehttp"
 	"io"
 	"net/http"
 	"strings"
@@ -86,7 +87,7 @@ func TestGitLabPullRequestRouteMirrorsPythonFamilyAndEarlyStop(t *testing.T) {
 			doer := &gitLabPullRequestDoer{t: t, responses: gitLabPullRequestFixtureResponses()}
 			batch, err := (GitLabPullRequestRouteHandler{PerPage: 2}).Collect(
 				context.Background(), nativeTestClaim("gitlab", dataset),
-				providerfoundation.Credential{}, gitLabRepositoryClient(t, doer, "https://gitlab.example"), normalizedAt,
+				providerfoundation.Credential{}, gitLabRepositoryClient(t, fakehttp.Client(doer), "https://gitlab.example"), normalizedAt,
 			)
 			if err != nil {
 				t.Fatal(err)
@@ -157,7 +158,7 @@ func TestGitLabPullRequestRouteFailsClosedWhenNotesAreIncomplete(t *testing.T) {
 	}}
 	batch, err := (GitLabPullRequestRouteHandler{}).Collect(
 		context.Background(), nativeTestClaim("gitlab", "prs"), providerfoundation.Credential{},
-		gitLabRepositoryClient(t, doer, "https://gitlab.example"), time.Date(2026, 8, 9, 12, 0, 0, 0, time.UTC),
+		gitLabRepositoryClient(t, fakehttp.Client(doer), "https://gitlab.example"), time.Date(2026, 8, 9, 12, 0, 0, 0, time.UTC),
 	)
 	if !errors.Is(err, ErrGitLabPullRequestReviewsIncomplete) {
 		t.Fatalf("error=%v want incomplete review error", err)
@@ -177,7 +178,7 @@ func TestGitLabPullRequestRouteFailsClosedOnPaginationCap(t *testing.T) {
 	}}
 	batch, err := (GitLabPullRequestRouteHandler{MaxPages: 1}).Collect(
 		context.Background(), nativeTestClaim("gitlab", "pr-comments"), providerfoundation.Credential{},
-		gitLabRepositoryClient(t, doer, "https://gitlab.example"), time.Date(2026, 8, 9, 12, 0, 0, 0, time.UTC),
+		gitLabRepositoryClient(t, fakehttp.Client(doer), "https://gitlab.example"), time.Date(2026, 8, 9, 12, 0, 0, 0, time.UTC),
 	)
 	if !errors.Is(err, ErrPaginationCapExceeded) || batch.Watermark != nil {
 		t.Fatalf("error=%v batch=%+v", err, batch)
@@ -217,7 +218,7 @@ func TestGitLabPullRequestRouteRejectsInvalidConfigurationBeforeRequest(t *testi
 			case "nil_base_url":
 				client = &providerfoundation.HTTPClient{Provider: "gitlab"}
 			default:
-				client = gitLabRepositoryClient(t, doer, "https://gitlab.example")
+				client = gitLabRepositoryClient(t, fakehttp.Client(doer), "https://gitlab.example")
 				if test.clientKind == "wrong_provider" {
 					client.Provider = "github"
 				}
@@ -239,7 +240,7 @@ func TestGitLabPullRequestRouteRejectsProjectIDMismatchBeforeListRequests(t *tes
 	doer := &gitLabPullRequestDoer{t: t, responses: []gitLabPullRequestResponse{{body: project}}}
 	_, err := (GitLabPullRequestRouteHandler{}).Collect(
 		context.Background(), nativeTestClaim("gitlab", "prs"), providerfoundation.Credential{},
-		gitLabRepositoryClient(t, doer, "https://gitlab.example"), time.Now(),
+		gitLabRepositoryClient(t, fakehttp.Client(doer), "https://gitlab.example"), time.Now(),
 	)
 	if !errors.Is(err, providerfoundation.ErrNormalizationInvalid) {
 		t.Fatalf("error=%v want project identity normalization failure", err)

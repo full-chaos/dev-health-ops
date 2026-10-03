@@ -717,12 +717,44 @@ func finishJobSpan(span oteltrace.Span, choice decision, err error) {
 		// unset and mark the span so it is still separable from a success.
 		span.SetAttributes(attribute.Bool("dev_health.job.snoozed", true))
 	case err != nil:
-		span.RecordError(err)
-		span.SetStatus(codes.Error, err.Error())
+		// No error text goes on the span (CHAOS-7896): a handler error can carry a URL, an id or a response body, and
+		// RecordError / SetStatus(err.Error()) would put it in an exception event and the status description. The span
+		// carries the fixed category (above and as the status description) and the Go type name of the error, which is
+		// a name from the program text and never a message.
+		span.AddEvent("exception", oteltrace.WithAttributes(attribute.String("exception.type", errorTypeName(err))))
+		span.SetStatus(codes.Error, spanErrorDescription(choice.category))
 	default:
 		span.SetStatus(codes.Ok, "")
 	}
 	span.End()
+}
+
+// errorTypeName is the Go type of the innermost error of the chain: a name from the program text, never a message.
+func errorTypeName(err error) (name string) {
+	// an Unwrap method that panics (a typed nil receiver) must not stop the finalizer before span.End
+	defer func() {
+		if recover() != nil {
+			name = "unknown"
+		}
+	}()
+	// bounded: an error whose Unwrap returns itself (or a cycle) must not stall the finalizer before span.End
+	for depth := 0; depth < 64; depth++ {
+		next := errors.Unwrap(err)
+		if next == nil {
+			break
+		}
+		err = next
+	}
+	return fmt.Sprintf("%T", err)
+}
+
+// spanErrorDescription is the status description of a failed job span: the fixed error category, or "error" when the
+// decision carries none.
+func spanErrorDescription(category ErrorCategory) string {
+	if category == "" || category == CategoryNone {
+		return "error"
+	}
+	return string(category)
 }
 
 func waitResultForContext(ctx context.Context) string {

@@ -882,16 +882,13 @@ func staticCredentialForTest() *goapiproof.Credential {
 }
 
 // TestCorpusCoversExactlyWhatQueryAPIMounts drives AssertRESTPathCoverage
-// against the REAL cmd/query-api source tree (not a fixture) -- the same
+// against the REAL query-api route table (server.RESTRoutes, executed; not a fixture) -- the same
 // discipline restendpoints_test.go's own tests apply to
 // LoadQueryAPIMuxRoutes. A corpus entry for a route this binary no longer
 // mounts, or a mounted route with no corpus entry, fails here before it
 // can fail silently in a live run.
 func TestCorpusCoversExactlyWhatQueryAPIMounts(t *testing.T) {
-	mounted, err := migrationmatrix.LoadQueryAPIMuxRoutes("../../../internal/queryapi/server")
-	if err != nil {
-		t.Fatalf("LoadQueryAPIMuxRoutes: %v", err)
-	}
+	mounted := migrationmatrix.LoadQueryAPIMuxRoutes()
 	paths := make([]string, 0, len(mounted))
 	for _, route := range mounted {
 		paths = append(paths, route.Path)
@@ -902,18 +899,14 @@ func TestCorpusCoversExactlyWhatQueryAPIMounts(t *testing.T) {
 }
 
 // TestMountedRESTPathsMatchesTheRealQueryAPIMux is what pins
-// goapiproof.MountedRESTPaths -- the checked-in snapshot run() uses by
-// default (no -query-api-src) -- against reality: it runs the SAME live
-// parse TestCorpusCoversExactlyWhatQueryAPIMounts uses, against the REAL
-// cmd/query-api source tree, and fails with the exact diff the moment a
+// goapiproof.MountedRESTPaths -- the checked-in snapshot run() uses -- against reality: it runs the SAME table walk
+// TestCorpusCoversExactlyWhatQueryAPIMounts uses, against the REAL
+// query-api route table, and fails with the exact diff the moment a
 // route is added, removed or renamed without that checked-in list being
 // updated to match. This is the test MountedRESTPaths' own doc comment
 // tells a developer to run and read before hand-editing the list.
 func TestMountedRESTPathsMatchesTheRealQueryAPIMux(t *testing.T) {
-	mounted, err := migrationmatrix.LoadQueryAPIMuxRoutes("../../../internal/queryapi/server")
-	if err != nil {
-		t.Fatalf("LoadQueryAPIMuxRoutes: %v", err)
-	}
+	mounted := migrationmatrix.LoadQueryAPIMuxRoutes()
 	live := make([]string, 0, len(mounted))
 	for _, route := range mounted {
 		live = append(live, route.Path)

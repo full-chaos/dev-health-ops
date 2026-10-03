@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"net/url"
+	"strconv"
 	"sync"
 	"testing"
 
@@ -62,23 +63,31 @@ func (f *fakePagerDutyRevokeServer) count() int {
 // Python encrypt_value does (via venue.CallPython, never a hand-rolled
 // ciphertext), is seeded for a target org and a control org; a real
 // (non-dry-run) delete is sent to BOTH planes, and this test asserts the
-// fake server saw exactly one revoke call per plane and that the
+// fake server saw exactly one revoke call per plane (the Python plane's
+// count is recorded with its answers) and that the
 // credential row is gone for the target org, present for the control org,
 // on both planes.
 func TestOrgDeletionRevokesPagerDutyOnBothPlanes(t *testing.T) {
 	ctx := context.Background()
-	root := repoRoot(t)
+	golden := venueoracle.OpenGolden(t, adminRunValuesGolden("orgdeletion_pagerduty", t.Name(), "daa6e6fec2494fa8dbafcf75620ecefa7d96401886843ce57f091be60a19f828"))
+	root := golden.PythonRoot(t, repoRoot(t))
+	nextID := goldenIDs("odpd")
 	const jwtKey = "venue-oracle-test-secret-key-for-org-deletion-pd-flow-32-byt"
 
 	fake := &fakePagerDutyRevokeServer{}
 	fakeServer := httptest.NewServer(http.HandlerFunc(fake.handler))
 	t.Cleanup(fakeServer.Close)
 
-	targetOrgID := uuid.New()
-	controlOrgID := uuid.New()
-	superID := uuid.New()
+	targetOrgID := nextID()
+	controlOrgID := nextID()
+	// An org with a pending revocation record and no credential: the revoke
+	// still happens (org_deletion.py walks both).
+	revocationOnlyOrgID := nextID()
+	revocationID := nextID()
+	superID := nextID()
 
 	venue := venueoracle.Start(t, ctx, venueoracle.Options{
+		Golden: golden,
 		Root:   root,
 		JWTKey: jwtKey,
 		PythonEnv: []string{
@@ -94,7 +103,7 @@ func TestOrgDeletionRevokesPagerDutyOnBothPlanes(t *testing.T) {
 					t.Fatalf("seed: %v\n%s", err, sql)
 				}
 			}
-			for _, org := range []uuid.UUID{targetOrgID, controlOrgID} {
+			for _, org := range []uuid.UUID{targetOrgID, controlOrgID, revocationOnlyOrgID} {
 				exec(`INSERT INTO organizations (id, slug, name, tier, managed_by, is_active, created_at, updated_at)
 VALUES ($1, $2, $2, 'community', 'stripe', true, now(), now())`, org, "venue-pd-"+org.String()[:8])
 			}
@@ -116,6 +125,18 @@ VALUES ($1, 'venue-pd-super@example.com', true, true, true, 0, now(), now())`, s
 				t.Fatalf("decode encrypt_value result: %v\n%s", err, results[0])
 			}
 
+			// A pending revocation's decrypted payload IS the raw token.
+			pending := v.CallPython(t, venueoracle.PythonCall{
+				Target: "dev_health_ops.core.encryption:encrypt_value",
+				Args:   []any{"venue-pd-pending-token"},
+			})
+			var pendingCiphertext string
+			if err := json.Unmarshal(pending[0], &pendingCiphertext); err != nil {
+				t.Fatalf("decode encrypt_value result: %v\n%s", err, pending[0])
+			}
+			exec(`INSERT INTO provider_oauth_revocations (id, org_id, provider, credential_name, purpose, token_encrypted, token_key_version, status, attempts, created_at, updated_at)
+VALUES ($1, $2, 'pagerduty', 'default', 'replacement', $3, 'v1', 'pending', 0, now(), now())`, revocationID, revocationOnlyOrgID.String(), pendingCiphertext)
+
 			for _, org := range []uuid.UUID{targetOrgID, controlOrgID} {
 				exec(`INSERT INTO provider_oauth_credentials (org_id, provider, credential_name, token_encrypted, version, created_at, updated_at, has_refresh_token)
 VALUES ($1, 'pagerduty', 'default', $2, 1, now(), now(), true)`, org.String(), ciphertext)
@@ -134,10 +155,21 @@ VALUES ($1, 'pagerduty', 'default', $2, 1, now(), now(), true)`, org.String(), c
 
 	bearer := "Bearer " + venue.Tokens["super"]
 	requests := []venueoracle.Request{
+		// A dry run revokes nothing (the revoke count below stays at the real
+		// deletes' own).
+		{Name: "delete org dry run (no revoke)", Method: "DELETE",
+			Path: "/api/v1/admin/orgs/" + targetOrgID.String() + "?dry_run=true", Headers: map[string]string{"Authorization": bearer}},
 		{Name: "delete org real (pagerduty revoke)", Method: "DELETE",
 			Path: "/api/v1/admin/orgs/" + targetOrgID.String(), Headers: map[string]string{"Authorization": bearer}},
+		{Name: "delete org with only a pending revocation", Method: "DELETE",
+			Path: "/api/v1/admin/orgs/" + revocationOnlyOrgID.String(), Headers: map[string]string{"Authorization": bearer}},
 	}
-	python := venue.ServePython(t, requests)
+	python := golden.Python(t, venue, requests)
+	// The Python plane's revoke calls, counted while it answered (recorded
+	// with its answers; a frozen run reads them back). The Go plane's are
+	// counted from here on.
+	pythonCalls := golden.InspectRows(t, "pagerduty revoke calls by the python plane", func() string { return strconv.Itoa(fake.count()) })
+	beforeGo := fake.count()
 	goBase, _ := startGoServer(t, ctx, venue, jwtKey, func(deps *apiservice.Deps) {
 		deps.Decryptor = decryptor
 		deps.PagerDuty = providerfoundation.PagerDutyRevokeConfig{ClientID: orgDeletionVenuePagerDutyID, RevokeURL: fakeServer.URL}
@@ -149,14 +181,20 @@ VALUES ($1, 'pagerduty', 'default', $2, 1, now(), now(), true)`, org.String(), c
 	})
 
 	receipt := venueoracle.Diff(t, goBase, requests, python, venueoracle.DiffOptions{
+		Golden: golden,
 		Normalize: func(request venueoracle.Request, body string) string {
 			return dropKnownStaleClickHouseWarnings(t, redactField(t, body, "timestamp"))
 		},
 	})
 	t.Log(receipt)
 
-	if got := fake.count(); got != 2 {
-		t.Errorf("fake pagerduty revoke server saw %d calls, want 2 (one per plane)", got)
+	// One for the real delete of the target org (its credential), one for the
+	// org whose only record is a pending revocation; the dry run made none.
+	if pythonCalls != "2" {
+		t.Errorf("the python plane made %s pagerduty revoke call(s), want 2", pythonCalls)
+	}
+	if got := fake.count() - beforeGo; got != 2 {
+		t.Errorf("the go plane made %d pagerduty revoke call(s), want 2", got)
 	}
 
 	credentialQuery := func(orgID uuid.UUID) string {
@@ -170,13 +208,13 @@ VALUES ($1, 'pagerduty', 'default', $2, 1, now(), now(), true)`, org.String(), c
 		{"target", targetOrgID, "0"},
 		{"control", controlOrgID, "1"},
 	} {
-		source := venueoracle.TableRows(t, ctx, venue.AdminURI(t, venue.SourceDB), credentialQuery(check.org))
 		got := venueoracle.TableRows(t, ctx, venue.AdminURI(t, venue.GoDB), credentialQuery(check.org))
-		if source != got {
-			t.Errorf("pagerduty credential row count differs for %s org:\n python: %s\n go:     %s", check.label, source, got)
-		}
+		golden.CompareRows(t, "pagerduty credential row count: "+check.label, func() string {
+			return venueoracle.TableRows(t, ctx, venue.AdminURI(t, venue.SourceDB), credentialQuery(check.org))
+		}, got)
 		if got != check.want {
 			t.Errorf("pagerduty credential row count for %s org = %s, want %s", check.label, got, check.want)
 		}
 	}
+	golden.Finish(t)
 }

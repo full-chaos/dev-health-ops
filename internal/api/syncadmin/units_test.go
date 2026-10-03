@@ -7,6 +7,7 @@ import (
 	"log/slog"
 	"math/big"
 	"net/http"
+	"os"
 	"strings"
 	"testing"
 	"time"
@@ -187,5 +188,14 @@ func TestRunUnitsCountsAndFreshnessRules(t *testing.T) {
 	}
 	if got := strings.Count(body, `"source_name":"b","dataset_key"`); got != 1 {
 		t.Errorf("source b has %d freshness entries, want 1 (first unit wins)", got)
+	}
+}
+
+// unsetForTest removes key for the rest of the test and restores it after.
+func unsetForTest(t *testing.T, key string) {
+	t.Helper()
+	t.Setenv(key, "")
+	if err := os.Unsetenv(key); err != nil {
+		t.Fatal(err)
 	}
 }

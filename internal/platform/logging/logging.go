@@ -82,14 +82,14 @@ func InstallDefault(logger *slog.Logger) func() {
 	}
 }
 
-// RedactText removes supported DSNs, URLs containing userinfo, header and
+// redactTextNoUserinfo is RedactText without its last pass (see RedactText in userinfo.go). It removes supported DSNs, URLs containing userinfo, header and
 // bearer credentials, provider tokens recognised by their prefix, and the
 // value of every protected key in JSON, escaped-JSON, query-string (plain or
 // percent-encoded), header, key=value and Go %v forms, a credential-shaped
 // value after a credential word in prose, and protected path segments from
 // free-form text before it can reach operator logs. A failure inside the
 // redactor returns a fixed marker.
-func RedactText(value string) (result string) {
+func redactTextNoUserinfo(value string) (result string) {
 	defer func() {
 		if recover() != nil {
 			result = redactionFailed
@@ -119,6 +119,9 @@ func RedactText(value string) (result string) {
 	}
 	if mayHoldProviderToken(value) {
 		value = providerTokenPattern.ReplaceAllString(value, redacted)
+	}
+	if mayHoldVendorKey(value) {
+		value = vendorKeyPattern.ReplaceAllString(value, redacted)
 	}
 	value = redactProseCredentials(value)
 	return redactPathSegments(value)

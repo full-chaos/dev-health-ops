@@ -145,6 +145,7 @@ input CapacityForecastInput.simulations other
 input CapacityForecastInput.targetDate other
 input CapacityForecastInput.targetItems other
 input CapacityForecastInput.teamId other
+input CapacityForecastInput.teamIds other
 input CapacityForecastInput.workScopeId other
 input CognitiveLoadInput.orgId other
 input CognitiveLoadInput.repoId other

@@ -30,14 +30,9 @@ INTEGRATION_CONTAINER_HARNESS="${ROOT}/internal/testsupport/containers/harness.g
 #   - internal/platform/config (config.go:58-59) reads both directly via
 #     os.LookupEnv to enable the "local all-routes" preset for the Go worker's own
 #     typed config, exercised anywhere `go test ./...` builds that package.
-#   - live-python-oracles below shells out to `python3` (exec.Command inherits the
-#     ambient environment by default -- Go does not scrub subprocess env unless the
-#     caller sets cmd.Env explicitly), and the Python side's
-#     _provider_route_environment() (src/dev_health_ops/workers/provider_unit_route.py:
-#     107-135) treats the SAME pair as its own "local all-routes" preset, expanding
-#     the full work-item family. The Go scheduler's non-GitHub branch emits
-#     contributing aliases instead, so the two planners disagree and a live
-#     planner oracle goes false-red -- not a real defect, an ambient-env
+#   - a live-Python oracle (since deleted) used to shell out to `python3`, whose
+#     side treated the SAME pair as its own "local all-routes" preset, so the two
+#     planners disagreed and the oracle went false-red -- an ambient-env
 #     artifact (CHAOS-3988). See
 #     ci/local_validate.sh's PROXY_OFF for the matching pytest-side scrub and the
 #     fuller incident history (CHAOS-3986, CHAOS-3987, two lanes in one morning on
@@ -79,42 +74,25 @@ fi
 usage() {
   # Backticks in the literal help text document commands; they are not substitutions.
   # shellcheck disable=SC2016
-  printf '%s\n' 'Usage: ci/check_go.sh [fmt|vet|test|race|live-python-oracles|venue-oracles [SHARD COUNT]|venue-oracle-plan COUNT|ci-leg LEG [SHARD COUNT]|build|contract|ratchets|multi-replica-workers|integration-vet|integration-coverage|python-free-unit|python-free-listed|integration-shard-plan|integration-prepull|integration-shard|integration|fast|ci|all]
+  printf '%s\n' 'Usage: ci/check_go.sh [fmt|vet|test|race|venue-oracles [SHARD COUNT]|venue-oracle-plan COUNT|ci-leg LEG [SHARD COUNT]|build|contract|ratchets|multi-replica-workers|integration-vet|integration-coverage|race-excluded-ran|integration-shard-plan|integration-prepull|integration-shard|integration|fast|ci|all]
 
   fmt    Check gofmt without modifying files.
   vet    Run go vet ./... in every Go module.
   test   Run go test ./... in every Go module.
   race   Run go test -race ./... in every Go module.
-  live-python-oracles
-         Run the provider-sync, providerfoundation encryption,
-         api access-token, scheduled-planner, daily-metrics discovery, and sync-coverage live-Python oracle packages
-         with `go test -count=1` unconditionally
-         (cache lookup disabled by -count=1 itself, not by any assumption
-         about cache state). Separate from `test` because that package
-         executes real production Python files (src/dev_health_ops/**.py)
-         at test time, which `//go:embed` cannot make part of the Go test
-         cache key -- `test`'\''s bare `go test ./...` can return a stale
-         cached PASS for a real change to one of those files. NOT an
-         optimization opt-out: a run that skips this verb has not tested
-         the oracles at all, so it MUST stay in `all`, `ci`, and `fast`
-         (since it is cheap) rather than being treated as an extra,
-         skippable step.
   venue-oracles
-         Run every venue differential oracle test (internal/testsupport/
-         venueoracle) against the live Python api: real Postgres/Valkey
-         containers AND the whole real FastAPI app, a heavier requirement
-         than any live-python-oracles block above -- needs the FULL project
-         Python environment (`uv sync`), never the narrow
-         ci/requirements-live-python-oracles.txt closure. Discovery is
+         Run every venue oracle test (internal/testsupport/venueoracle):
+         real Postgres/Valkey containers and the Go api, replayed against
+         the recorded Python answers (the frozen goldens). No Python runs.
+         Discovery is
          every test reaching a venueoracle harness entry point (a
          test marked //venueoracle:local-only is named and left out),
          never a hardcoded list. Fails if
          any discovered test has no proof file afterward (a skip, never a
-         silent pass) or if discovery finds nothing. Requires
-         DEV_HEALTH_LIVE_PYTHON_ORACLES=1 already set by the caller -- this
-         verb does not set it itself. NOT in `fast`/`ci`/`all`: it runs only
-         from the dedicated venue-oracles CI job, which is the one place
-         with the full Python environment this verb needs.
+         silent pass) or if discovery finds nothing. The verb sets
+         DEV_HEALTH_VENUE_ORACLES=1 for each go test it runs (a skipped
+         test fails the verb). NOT in `fast`/`ci`/`all`: it runs only
+         from the dedicated venue-oracles CI job.
          WHAT RUNS is ci/venue_oracle_registry.d/ (CHAOS-6584, one file per
          package since CHAOS-6724): the verb
          validates it against discovery and against every Test*VenueOracle*
@@ -145,7 +123,7 @@ usage() {
          static (format, vet, build, contract, integration-vet, shard plans),
          test (go test ./... + the multi-replica worker gate), race SHARD
          COUNT (go test -race, the SHARD-th of COUNT weight-balanced package
-         slices, ci/go_race_weights.tsv), oracles (live-Python oracles). The
+         slices, ci/go_race_weights.tsv). The
          legs run exactly the steps of `ci` (pinned by a tooling test); each
          stage prints UTC start/done stamps.
   build  Run go build ./... in every Go module.
@@ -178,16 +156,6 @@ usage() {
          The base is RATCHET_BASE_SHA when set (CI sets it to the base commit of the pull request), else the merge
          base with origin/main (the parent when HEAD is origin/main). A base that cannot be read is a
          failure, never a pass.
-  python-free-unit
-         The unit leg of the go-python-free workflow (GO_PYTHON_FREE=1, PYTHON_FREE_OUT=DIR):
-         the plain untagged go test of every module with Python unreachable
-         (ci/python_tripwire.sh); tripwire hits and skips-without-Python are reported to
-         ci/python_free_ratchet.sh (CHAOS-7384).
-  python-free-listed
-         The pull-request leg of the go-python-free workflow (GO_PYTHON_FREE=1, PYTHON_FREE_OUT=DIR): every test
-         listed in ci/python_free_known.tsv, run by name (-run) in its package, untagged and with -tags integration,
-         with Python unreachable. Finds a STALE row (a listed test that no longer starts Python) on the pull
-         request; a NEW start by an unlisted test is found by the full run on main (CHAOS-7853).
   integration-images
          Print "<key>\t<image>" for every image declared by the Go test
          container harness. The single source of truth for the dependency set:
@@ -211,19 +179,19 @@ usage() {
          Discover and run EVERY integration-tagged package'\''s suite against
          real containers, except the (small, justified) INTEGRATION_DENYLIST.
          Inclusion is the default; exclusion is the explicit, loud exception.
-  fast   Run fmt, vet, test, live-python-oracles, build, contract,
+  fast   Run fmt, vet, test, build, contract,
          integration-vet, and the integration shard-plan checks (PLAN only --
          does not execute the integration suite; see `ci`, `all`, and
          `integration`). No race detector -- the quick local-iteration mode.
   ci     Exactly `fast` plus the race detector (CHAOS-3948): fmt, vet, test,
-         race, live-python-oracles, build, contract, integration-vet, and the
+         race, build, contract, integration-vet, and the
          integration shard-plan checks (PLAN only, same as `fast`), plus
          multi-replica-workers. This is byte-for-byte what `all` ran before
          CHAOS-3948 -- go.yml'\''s go-quality step uses this so its coverage
          stays unchanged. CI gets its real (sharded, parallel) integration
          signal from the separate go-storage-integration-plan/-shard jobs,
          not from this step.
-  all    Run fmt, vet, test, race, live-python-oracles, build, contract,
+  all    Run fmt, vet, test, race, build, contract,
          integration-vet, the FULL integration suite (every non-denylisted
          package, unsharded -- Docker required), and multi-replica-workers
          (default). This is slower than `ci`: expect several more minutes on
@@ -346,8 +314,35 @@ check_vet() {
   run_in_modules "go vet" go vet -mod=readonly ./...
 }
 
+# check_race_excluded_ran (CHAOS-8135, CHAOS-8118): a test compiled out of the -race leg by a `!race` build tag must
+# still run in the non-race leg, or its measurement is lost silently. ci/race_excluded_tests.tsv is the closed list; each
+# test runs by name, uncached and without -race, and the run fails unless its own "--- PASS: <name>" line is printed
+# (the leg log then names every moved test). An empty list, a missing file, a missing PASS line or a non-zero go test
+# exit all fail (a measurement that did not happen is a failure). check_test calls it, so every leg that runs the
+# unit tests runs it.
+check_race_excluded_ran() {
+  local list="${ROOT}/ci/race_excluded_tests.tsv" row package name out count=0
+  local -a rows=()
+  [ -f "${list}" ] || die "ci/race_excluded_tests.tsv is missing"
+  while IFS= read -r row; do rows+=("${row}"); done < <(grep -v '^#' "${list}" | grep -v '^$')
+  [ "${#rows[@]}" -gt 0 ] || die "ci/race_excluded_tests.tsv lists no test: nothing would be measured"
+  for row in "${rows[@]}"; do
+    name="${row#*$'\t'}"
+    package="${row%%$'\t'*}"
+    [ -n "${name}" ] && [ -n "${package}" ] && [ "${name}" != "${package}" ] || die "race_excluded_tests.tsv row is not <package><TAB><test>"
+    [ -d "${ROOT}/${package}" ] || die "race-excluded package ${package} does not exist"
+    out="$(cd "${ROOT}" && "${GO_ENV_OFF[@]}" GOWORK=off go test -mod=readonly -count=1 -v -run "^${name}\$" "./${package}" 2>&1)" \
+      || { printf '%s\n' "${out}" | tail -n 40 >&2; die "race-excluded test ${package} ${name} failed in the non-race leg"; }
+    printf '%s\n' "${out}" | grep -q -- "^--- PASS: ${name} (" || die "race-excluded test ${package} ${name} did not run in the non-race leg (no PASS line)"
+    printf 'race-excluded-ran: %s %s PASS\n' "${package}" "${name}"
+    count=$((count + 1))
+  done
+  printf 'race-excluded-ran: %d test(s) ran and passed without -race\n' "${count}"
+}
+
 check_test() {
   run_in_modules "go test" go test -mod=readonly ./...
+  check_race_excluded_ran
 }
 
 check_race() {
@@ -361,9 +356,50 @@ check_race() {
 # balanced by measured package time (ci/go_race_weights.tsv, ci/go_race_shard.awk)
 # and NOT by count. The slices always partition `go list ./...`: a wrong weight
 # costs balance, never coverage. A slice that selects no package at all fails.
-GO_RACE_WEIGHTS="${ROOT}/ci/go_race_weights.tsv"
+GO_RACE_WEIGHTS="${GO_RACE_WEIGHTS:-${ROOT}/ci/go_race_weights.tsv}"
+# check_providersync_race_shard SHARD COUNT (CHAOS-8166): internal/providersync is one test binary of ~1,460 sequential tests that took
+# 509 s under -race on an idle host (565 s in CI, 94% of the 600 s go test timeout), so its race run is split BY TEST NAME across the
+# race legs: every leg runs the SHARD-th of COUNT weight-balanced test slices, weights ci/go_providersync_race_weights.tsv, ci/go_providersync_race_shard.awk.
+# The test set comes from `go test -list` (never hand-listed). The slices must partition it exactly (each test in exactly one shard,
+# no shard empty); anything else fails before a test runs. The race signal stays: nothing here is `!race`.
+check_providersync_race_shard() {
+  local shard="$1" count="$2" listing other all names selected_names s total=0 regex
+  local weights="${GO_PROVIDERSYNC_RACE_WEIGHTS:-${ROOT}/ci/go_providersync_race_weights.tsv}"
+  local shard_awk="${GO_PROVIDERSYNC_RACE_SHARD_AWK:-${ROOT}/ci/go_providersync_race_shard.awk}"
+  [ -f "${weights}" ] || die "providersync race shards need ${weights}"
+  # CHAOS-8275: list EVERY name of the RACE test binary (so a //go:build race file is seen too), not just ^Test of the plain build. A Fuzz*,
+  # Example* or Benchmark* name would be selected by no `-run ^(Test...)$` shard and run in no race leg, so it fails here instead.
+  listing="$(cd "${ROOT}" && "${GO_ENV_OFF[@]}" GOWORK=off go test -mod=readonly -race -list '.*' ./internal/providersync)" \
+    || die "go test -race -list failed for internal/providersync"
+  listing="$(printf '%s\n' "${listing}" | grep -Ev '^(ok|FAIL|\?|---)[[:space:]]' | grep -v '^$' || true)"
+  other="$(printf '%s\n' "${listing}" | grep -v '^Test' || true)"
+  [ -z "${other}" ] \
+    || die "providersync lists a name that is not Test* and that no race shard would run: $(printf '%s' "${other}" | tr '\n' ' ')"
+  all="$(printf '%s\n' "${listing}" | grep '^Test' || true)"
+  [ -n "${all}" ] || die "go test -list reported no providersync test"
+  [ "${count}" -le "$(printf '%s\n' "${all}" | wc -l)" ] \
+    || die "providersync race shards: ${count} legs for fewer listed tests: a shard would select zero tests"
+  names=""
+  for ((s = 1; s <= count; s++)); do
+    selected_names="$(printf '%s\n' "${all}" | awk -v shard="${s}" -v count="${count}" -v weights="${weights}" -f "${shard_awk}")" \
+      || die "ci/go_providersync_race_shard.awk failed"
+    [ -n "${selected_names}" ] || die "providersync race shard ${s}/${count} selected zero tests"
+    total=$((total + $(printf '%s\n' "${selected_names}" | wc -l)))
+    names+="${selected_names}"$'\n'
+    if [ "${s}" -eq "${shard}" ]; then regex="^($(printf '%s\n' "${selected_names}" | paste -sd'|' -))\$"; fi
+  done
+  [ "${total}" -eq "$(printf '%s\n' "${all}" | wc -l)" ] \
+    && [ "$(printf '%s' "${names}" | LC_ALL=C sort)" = "$(printf '%s\n' "${all}" | LC_ALL=C sort)" ] \
+    || die "providersync race shards are not an exact partition of the ${total} listed tests"
+  printf 'go test -race providersync shard %s/%s: %s of %s tests\n' "${shard}" "${count}" "$(printf '%s\n' "${regex}" | tr -cd '|' | wc -c | awk '{print $1 + 1}')" "${total}"
+  (
+    cd "${ROOT}"
+    "${GO_ENV_OFF[@]}" GOWORK=off go test -mod=readonly -race -run "${regex}" ./internal/providersync
+  )
+}
+
 check_race_shard() {
-  local shard="${1:-}" count="${2:-}" module_dir modpath pkg selected=0
+  local shard="${1:-}" count="${2:-}" module_dir modpath pkg selected=0 missing
   case "${shard}" in ""|*[!0-9]*) die "race SHARD must be a positive integer, got '${shard}'" ;; esac
   case "${count}" in ""|*[!0-9]*) die "race COUNT must be a positive integer, got '${count}'" ;; esac
   { [ "${shard}" -ge 1 ] && [ "${count}" -ge 1 ] && [ "${shard}" -le "${count}" ]; } \
@@ -372,12 +408,27 @@ check_race_shard() {
   local -a pkgs
   for module_dir in "${MODULE_DIRS[@]}"; do
     modpath="$(cd "${ROOT}/${module_dir}" && "${GO_ENV_OFF[@]}" GOWORK=off go list -m)"
+    if [ "${module_dir}" = "." ]; then
+      # CHAOS-8135: static and deterministic, before any test runs: every package of the root module has a weights row.
+      # A package with no row weighs the shard awk's default and hides its cost from the shard plan.
+      missing="$(cd "${ROOT}/${module_dir}" && "${GO_ENV_OFF[@]}" GOWORK=off go list -mod=readonly ./... \
+        | awk -v mod="${modpath}" -v weights="${GO_RACE_WEIGHTS}" -f "${ROOT}/ci/go_race_missing_rows.awk")" \
+        || die "ci/go_race_missing_rows.awk failed"
+      [ -z "${missing}" ] \
+        || die "race package(s) with NO row in ci/go_race_weights.tsv (add each one: its measured go test -race seconds, 1 if it has no test): $(printf '%s' "${missing}" | tr '\n' ' ')"
+    fi
     pkgs=()
     while IFS= read -r pkg; do
       [ -n "${pkg}" ] && pkgs+=("${pkg}")
     done < <(cd "${ROOT}/${module_dir}" && "${GO_ENV_OFF[@]}" GOWORK=off go list -mod=readonly ./... \
+      | { if [ "${module_dir}" = "." ]; then grep -vx "${modpath}/internal/providersync"; else cat; fi; } \
       | awk -v mod="${modpath}" -v shard="${shard}" -v count="${count}" -v weights="${GO_RACE_WEIGHTS}" -f "${ROOT}/ci/go_race_shard.awk")
     printf 'go test -race (shard %s/%s): %s: %d package(s)\n' "${shard}" "${count}" "${module_dir}" "${#pkgs[@]}"
+    if [ "${module_dir}" = "." ]; then
+      # CHAOS-8166: internal/providersync runs in EVERY race leg, one test-name shard each (it is not in pkgs above).
+      selected=$((selected + 1))
+      check_providersync_race_shard "${shard}" "${count}"
+    fi
     [ "${#pkgs[@]}" -gt 0 ] || continue
     selected=$((selected + ${#pkgs[@]}))
     (
@@ -418,7 +469,6 @@ ci_leg_stage() {
 #   static   format, vet, build, contract, ratchets, integration-vet, the shard plans
 #   test     go test ./... and the multi-replica worker gate
 #   race     go test -race, slice SHARD of COUNT (weight-balanced)
-#   oracles  the live-Python oracle blocks
 check_ci_leg() {
   local leg="${1:-}"
   case "${leg}" in
@@ -439,212 +489,20 @@ check_ci_leg() {
     race)
       ci_leg_stage "race ${2:-}/${3:-}" check_race_shard "${2:-}" "${3:-}"
       ;;
-    oracles)
-      ci_leg_stage live-python-oracles check_live_python_oracles
-      ;;
     *)
-      die "ci-leg LEG must be one of static, test, race SHARD COUNT, oracles (got '${leg}')"
+      die "ci-leg LEG must be one of static, test, race SHARD COUNT (got '${leg}')"
       ;;
   esac
   printf 'ci-leg %s: OK\n' "${leg}"
 }
 
-check_live_python_oracles() {
-  # internal/providersync and internal/providerfoundation execute REAL production Python files
-  # (src/dev_health_ops/**.py, via testdata/python_oracle_loader.py)
-  # directly at test time -- not test fixtures, the actual functions this
-  # repo ships. `//go:embed` cannot reach outside its own package
-  # directory (verified directly: `go vet` rejects a `../` pattern with
-  # "invalid pattern syntax"), so those Python files are structurally
-  # invisible to Go's test-result cache key. A warm local `go test` cache
-  # can then return a stale PASS for a real, uncommitted change to one of
-  # them -- reproduced empirically (CHAOS-3162, codex adversarial review):
-  # edit a live-oracle Python source with no Go file touched, run a bare
-  # `go test` a second time, get `(cached)` back with no re-execution at
-  # all. check_test's plain `go test ./...` above does not force a fresh
-  # run and is NOT a sufficient gate for this one package on its own --
-  # this step is deliberately separate and always uses -count=1, which
-  # disables cache lookup entirely by design, regardless of what caused
-  # the staleness.
-  #
-  # -count=1 lives HERE, at the verb, and not as something a caller
-  # remembers to pass to `test` -- the whole defect this verb exists to
-  # close is that the cache staleness is invisible from the call site (no
-  # error, no warning, just a silently-stale PASS), so a solution that
-  # depends on the caller already knowing to opt in reproduces the same
-  # failure mode one level up. Do NOT fold this back into check_test "for
-  # tidiness": that would put -count=1 (and its resulting slower, no-cache
-  # `test` run) on every package in the tree instead of only the one that
-  # structurally needs it, and it would make skipping this specific
-  # coverage possible again by construction.
-  # The entries are one small file each under ci/live_python_oracles.d (CHAOS-7656),
-  # read in sorted order: a freeze PR DELETES the file of the oracle it freezes -- its
-  # command AND its proof checks live in that one file -- and never edits a line another
-  # freeze PR also edits, so two freeze PRs no longer conflict here. See
-  # live_oracle_read_entry below for the format.
-  local proof_dir proof_file entry index
-  local -a entries proof_names proof_messages proof_matches
-  live_oracle_files || return 1
-  entries=("${LO_FILES[@]}")
-  proof_dir="$(mktemp -d "${TMPDIR:-/tmp}/dev-health-live-python-oracles.XXXXXX")"
-
-  for entry in "${entries[@]}"; do
-    live_oracle_read_entry "${entry}" || { rm -rf -- "${proof_dir}"; return 1; }
-    proof_names+=("${LO_PROOF_NAMES[@]}")
-    proof_messages+=("${LO_PROOF_MESSAGES[@]}")
-    proof_matches+=("${LO_PROOF_MATCHES[@]}")
-    if [ -n "${LO_LABEL}" ]; then
-      printf 'go test -count=1: %s\n' "${LO_LABEL}"
-    fi
-    if ! (
-      cd "${ROOT}"
-      local -a env_args=(GOWORK=off DEV_HEALTH_LIVE_PYTHON_ORACLES=1 "DEV_HEALTH_LIVE_PYTHON_ORACLE_PROOF_DIR=${proof_dir}")
-      if [ "${LO_PYTHON}" = 1 ]; then
-        env_args+=("PYTHON=${PYTHON:-python3}")
-      fi
-      if [ "${LO_PYTHONPATH}" != 0 ]; then
-        env_args+=("PYTHONPATH=${ROOT}/src${PYTHONPATH:+:${PYTHONPATH}}")
-      fi
-      if [ -n "${LO_RUN}" ]; then
-        "${GO_ENV_OFF[@]}" "${env_args[@]}" go test -mod=readonly -count=1 -run "${LO_RUN}" "${LO_PACKAGE}"
-      else
-        "${GO_ENV_OFF[@]}" "${env_args[@]}" go test -mod=readonly -count=1 "${LO_PACKAGE}"
-      fi
-    ); then
-      rm -rf -- "${proof_dir}"
-      return 1
-    fi
-  done
-
-  for index in "${!proof_names[@]}"; do
-    proof_file="${proof_dir}/${proof_names[index]}"
-    if [ -n "${proof_matches[index]}" ]; then
-      if [ ! -f "${proof_file}" ] || ! grep -q "${proof_matches[index]}" "${proof_file}"; then
-        printf 'ERROR: %s\n' "${proof_messages[index]}" >&2
-        rm -rf -- "${proof_dir}"
-        return 1
-      fi
-    elif [ ! -f "${proof_file}" ] || [ "$(cat "${proof_file}")" != "executed" ]; then
-      printf 'ERROR: %s\n' "${proof_messages[index]}" >&2
-      rm -rf -- "${proof_dir}"
-      return 1
-    fi
-  done
-  rm -rf -- "${proof_dir}"
-}
-
-# live_oracle_files: fills the array LO_FILES with the entry files under
-# ${LIVE_PYTHON_ORACLES_DIR:-ci/live_python_oracles.d}, in sorted order. A missing or
-# unreadable directory, or one with no entry, FAILS: an empty list is a gate that checks
-# nothing and passes.
-live_oracle_files() {
-  local dir="${LIVE_PYTHON_ORACLES_DIR:-${ROOT}/ci/live_python_oracles.d}" file
-  local -a oracle_entries=()
-  if [ ! -d "${dir}" ] || [ ! -r "${dir}" ]; then
-    printf 'ERROR: the live Python oracle entry directory %s is missing or unreadable\n' "${dir}" >&2
-    return 1
-  fi
-  while IFS= read -r file; do
-    oracle_entries+=("${file}")
-  done < <(LC_ALL=C find "${dir}" -maxdepth 1 -type f -name '*.run' | LC_ALL=C sort)
-  if [ "${#oracle_entries[@]}" -eq 0 ]; then
-    printf 'ERROR: %s holds no .run entry: a live Python oracle gate with nothing to run measures nothing\n' "${dir}" >&2
-    return 1
-  fi
-  LO_FILES=("${oracle_entries[@]}")
-}
-
-# live_oracle_read_entry FILE sets LO_LABEL LO_PACKAGE LO_RUN LO_PYTHON LO_PYTHONPATH and
-# the index-aligned arrays LO_PROOF_NAMES LO_PROOF_MESSAGES LO_PROOF_MATCHES from a .run
-# entry, one key=value per line:
-#   label=      heading printed before the command (optional)
-#   package=    the go package argument (required)
-#   run=        the -run selector (optional)
-#   python=1    also export PYTHON (default python3)
-#   pythonpath=0  do not export PYTHONPATH
-#   proof=NAME|MESSAGE        the marker NAME must be "executed" in the proof directory
-#   proof_match=NAME|REGEX    the marker NAME must match REGEX instead
-# At least one proof is required: an oracle that proves nothing about having run is a
-# measurement that need not happen, and a freeze PR deletes the whole file. An unknown key,
-# a missing package, a proof_match for a name that is not a proof, or a duplicate proof
-# name FAILS.
-live_oracle_read_entry() {
-  local file="$1" line key value name index found
-  LO_LABEL="" LO_PACKAGE="" LO_RUN="" LO_PYTHON=0 LO_PYTHONPATH=1
-  LO_PROOF_NAMES=() LO_PROOF_MESSAGES=() LO_PROOF_MATCHES=()
-  while IFS= read -r line || [ -n "${line}" ]; do
-    [ -n "${line}" ] || continue
-    key="${line%%=*}"
-    value="${line#*=}"
-    case "${key}" in
-      label) LO_LABEL="${value}" ;;
-      package) LO_PACKAGE="${value}" ;;
-      run) LO_RUN="${value}" ;;
-      python) LO_PYTHON="${value}" ;;
-      pythonpath) LO_PYTHONPATH="${value}" ;;
-      proof)
-        name="${value%%|*}"
-        for found in "${LO_PROOF_NAMES[@]}"; do
-          if [ "${found}" = "${name}" ]; then
-            printf 'ERROR: %s: proof %s is listed twice\n' "${file}" "${name}" >&2
-            return 1
-          fi
-        done
-        LO_PROOF_NAMES+=("${name}")
-        LO_PROOF_MESSAGES+=("${value#*|}")
-        LO_PROOF_MATCHES+=("")
-        ;;
-      proof_match)
-        name="${value%%|*}"
-        found=""
-        for index in "${!LO_PROOF_NAMES[@]}"; do
-          if [ "${LO_PROOF_NAMES[index]}" = "${name}" ]; then
-            LO_PROOF_MATCHES[index]="${value#*|}"
-            found=1
-          fi
-        done
-        if [ -z "${found}" ]; then
-          printf 'ERROR: %s: proof_match names %s, which no earlier proof line declares\n' "${file}" "${name}" >&2
-          return 1
-        fi
-        ;;
-      *) printf 'ERROR: %s: unknown key %q\n' "${file}" "${key}" >&2; return 1 ;;
-    esac
-  done <"${file}"
-  if [ -z "${LO_PACKAGE}" ]; then
-    printf 'ERROR: %s needs a package\n' "${file}" >&2
-    return 1
-  fi
-  if [ "${#LO_PROOF_NAMES[@]}" -eq 0 ]; then
-    printf 'ERROR: %s declares no proof: a live oracle run that nothing proves executed measures nothing\n' "${file}" >&2
-    return 1
-  fi
-}
-
-# live_python_oracles_list prints the resolved commands and proofs, one per line, exactly
-# as check_live_python_oracles would run and check them (no command is run).
-live_python_oracles_list() {
-  local entry index
-  live_oracle_files || return 1
-  for entry in "${LO_FILES[@]}"; do
-    live_oracle_read_entry "${entry}" || return 1
-    printf 'RUN label=%s python=%s pythonpath=%s run=%s package=%s\n' "${LO_LABEL}" "${LO_PYTHON}" "${LO_PYTHONPATH}" "${LO_RUN}" "${LO_PACKAGE}"
-    for index in "${!LO_PROOF_NAMES[@]}"; do
-      printf 'PROOF name=%s match=%s message=%s\n' "${LO_PROOF_NAMES[index]}" "${LO_PROOF_MATCHES[index]}" "${LO_PROOF_MESSAGES[index]}"
-    done
-  done
-}
-
-# check_venue_oracles (CHAOS-6314) runs every venue differential oracle test
-# in the repo against the live Python api, from the shared
-# internal/testsupport/venueoracle harness -- a heavier, DIFFERENT class of
-# live-Python proof than check_live_python_oracles above: these tests start
-# real Postgres/Valkey containers AND import the whole real FastAPI app
-# (dev_health_ops.api.main:app, alembic migrations, ~40 more packages than
-# any block above needs), so this verb requires the FULL project Python
-# environment (uv sync --frozen --all-extras --dev) rather than the narrow
-# ci/requirements-live-python-oracles.txt closure. It is invoked ONLY from
-# the dedicated venue-oracles CI job, never from `ci`/`fast`/`all`.
+# check_venue_oracles (CHAOS-6314) runs every venue oracle test in the repo,
+# from the shared internal/testsupport/venueoracle harness: real
+# Postgres/Valkey containers and the Go api, replayed against the recorded
+# Python answers (frozen goldens). The live Python api is not started: the
+# live oracles were deleted (CHAOS-7308) and no Python is installed for this
+# verb. It is invoked ONLY from the dedicated venue-oracles CI jobs, never
+# from `ci`/`fast`/`all`.
 #
 # WHAT RUNS is ci/venue_oracle_registry.d/ (CHAOS-6584, Trap #392; one file per
 # package, ci/venue_oracle_registry.d/<package with / as __>.tsv, CHAOS-6724), one row
@@ -698,8 +556,8 @@ live_python_oracles_list() {
 # (`<name>/Sub`, no top-level line at all) and can be fooled by ordinary
 # captured output that happens to look like a status line. The JSON event
 # stream's Action/Test fields distinguish a real skip (at any subtest
-# depth) from captured output, structurally. DEV_HEALTH_LIVE_PYTHON_
-# ORACLES=1 is always set by this verb, so no discovered test or subtest
+# depth) from captured output, structurally. DEV_HEALTH_VENUE_ORACLES=1
+# is always set by this verb, so no discovered test or subtest
 # has a legitimate reason to skip under it. Each package also gets its own
 # proof subdirectory, not one shared namespace, so two DIFFERENT packages
 # with a same-named test can't let one satisfy the other's check.
@@ -815,8 +673,6 @@ check_venue_oracles() {
     done < <(venue_oracle_registry_rows | LC_ALL=C sort -k1,1 -k2,2)
     return 0
   fi
-  [ "${DEV_HEALTH_LIVE_PYTHON_ORACLES:-}" = "1" ] \
-    || die "venue-oracles requires DEV_HEALTH_LIVE_PYTHON_ORACLES=1 (this verb never sets it itself -- a skip must be visible to the caller, not swallowed here)"
   command -v jq >/dev/null 2>&1 \
     || die "venue-oracles requires jq to read go test -json status events (a text-line grep cannot see a subtest skip or tell captured output from a real status line)"
 
@@ -921,9 +777,8 @@ check_venue_oracles() {
       cd "${ROOT}"
       "${GO_ENV_OFF[@]}" \
         GOWORK=off \
-        DEV_HEALTH_LIVE_PYTHON_ORACLES=1 \
+        DEV_HEALTH_VENUE_ORACLES=1 \
         DEV_HEALTH_LIVE_PYTHON_ORACLE_PROOF_DIR="${pkg_proof_dir}" \
-        PYTHONPATH="${ROOT}/src${PYTHONPATH:+:${PYTHONPATH}}" \
         go test -mod=readonly -tags=integration -count=1 -timeout=40m \
           -run "${pattern}" -json "${rel}"
     ) >"${json_log}" 2>"${stderr_log}" || go_test_status=$?
@@ -1834,74 +1689,6 @@ check_integration_prepull() {
   done
 }
 
-# python_free_enabled / python_free_go_test (CHAOS-7384): GO_PYTHON_FREE=1 runs the integration shards
-# with Python unreachable (ci/python_tripwire.sh) and holds the failures to the closed list
-# (ci/python_free_known.tsv, ci/python_free_ratchet.sh). Only .github/workflows/go-python-free.yml sets
-# it. The go test arguments after the shard label are the ordinary run's; the stream is `go test -json`
-# so each failure carries its own output, and the exit status is the classifier's.
-python_free_enabled() {
-  [ "${GO_PYTHON_FREE:-}" = "1" ]
-}
-
-python_free_go_test() {
-  local label="$1"
-  shift
-  local out="${PYTHON_FREE_OUT:?GO_PYTHON_FREE=1 needs PYTHON_FREE_OUT (a directory for the shard hits)}"
-  mkdir -p "${out}"
-  # shellcheck source=ci/python_tripwire.sh
-  source "${ROOT}/ci/python_tripwire.sh" || die "python_tripwire refused: the Python-free run cannot be proven"
-  local json="${out}/${label}.json"
-  # PYTHON_FREE_TAGS is "integration" for the shards and empty for the untagged unit leg.
-  local -a tag_args=()
-  [ -z "${PYTHON_FREE_TAGS-integration}" ] || tag_args=(-tags="${PYTHON_FREE_TAGS-integration}")
-  "${GO_ENV_OFF[@]}" GOWORK=off ${INTEGRATION_TEST_ENV[@]+"${INTEGRATION_TEST_ENV[@]}"} \
-    go test -mod=readonly ${tag_args[@]+"${tag_args[@]}"} -count=1 -timeout=30m -json "$@" >"${json}" || true
-  bash "${ROOT}/ci/python_free_ratchet.sh" classify "${json}" "${out}/${label}.hits" "${PYTHON_TRIPWIRE_LOG}"
-}
-
-# check_python_free_unit (CHAOS-7384): the plain untagged `go test ./...` of every module under the
-# tripwire, so a unit test that starts Python (or skips because Python is missing) is counted too.
-check_python_free_unit() {
-  python_free_enabled || die "python-free-unit needs GO_PYTHON_FREE=1 (it is the go-python-free workflow's unit leg)"
-  local module_dir index=0
-  for module_dir in "${MODULE_DIRS[@]}"; do
-    index=$((index + 1))
-    (
-      cd "${ROOT}/${module_dir}"
-      PYTHON_FREE_TAGS="" python_free_go_test "unit-${index}" ./...
-    )
-  done
-}
-
-# check_python_free_listed (CHAOS-7853): the listed tests only, so a pull request that freezes a test and keeps its
-# row is red before it merges. Each package's listed tests run by name, once untagged and once with -tags
-# integration (a listed test may sit in either build; today all of them are in the integration build, and the untagged
-# run is what catches one that moves to an untagged file), both under the tripwire. PYTHON_FREE_OUT receives each run's
-# `*.hits` file and its `go test -json` stream: `ci/python_free_ratchet.sh compare KNOWN DIR` reads every file of DIR, so
-# the workflow compares only the downloaded hit files; by hand, copy the `*.hits` files to a directory first. A listed test
-# under a build tag other than integration reads as STALE (the run fails closed).
-check_python_free_listed() {
-  python_free_enabled || die "python-free-listed needs GO_PYTHON_FREE=1 (it is the go-python-free workflow's pull-request leg)"
-  local known="${ROOT}/ci/python_free_known.tsv" package tests index=0 relative
-  [ -f "${known}" ] || die "ci/python_free_known.tsv is missing"
-  local -a packages=()
-  while IFS= read -r package; do packages+=("${package}"); done < <(grep -v '^#' "${known}" | cut -f1 | sort -u)
-  [ "${#packages[@]}" -gt 0 ] || die "ci/python_free_known.tsv lists no package: nothing would be measured"
-  for package in "${packages[@]}"; do
-    index=$((index + 1))
-    relative="${package#github.com/full-chaos/dev-health-ops/}"
-    [ "${relative}" != "${package}" ] || die "listed package ${package} is not under the module path"
-    tests="$(grep -v '^#' "${known}" | awk -F'\t' -v p="${package}" '$1 == p { print $2 }' | paste -sd'|' -)"
-    [ -n "${tests}" ] || die "no test listed for ${package}"
-    printf 'python-free-listed: %s -> %s\n' "${relative}" "${tests}"
-    (
-      cd "${ROOT}"
-      PYTHON_FREE_TAGS="" python_free_go_test "listed-${index}-unit" -run "^(${tests})\$" "./${relative}"
-      PYTHON_FREE_TAGS="integration" python_free_go_test "listed-${index}-integration" -run "^(${tests})\$" "./${relative}"
-    )
-  done
-}
-
 check_integration_package_shard() {
   local shard="$1" mode="$2"
   local index module_dir pkg key
@@ -1939,11 +1726,7 @@ check_integration_package_shard() {
     fi
     (
       cd "${ROOT}/${module_dir}"
-      if python_free_enabled; then
-        python_free_go_test "${shard}" "${run_pkgs[@]}"
-      else
-        "${GO_ENV_OFF[@]}" GOWORK=off ${INTEGRATION_TEST_ENV[@]+"${INTEGRATION_TEST_ENV[@]}"} go test -mod=readonly -tags=integration -count=1 -timeout=30m "${run_pkgs[@]}"
-      fi
+      "${GO_ENV_OFF[@]}" GOWORK=off ${INTEGRATION_TEST_ENV[@]+"${INTEGRATION_TEST_ENV[@]}"} go test -mod=readonly -tags=integration -count=1 -timeout=30m "${run_pkgs[@]}"
     )
   done
 
@@ -1991,11 +1774,7 @@ check_providersync_test_shard() {
     "${shard}" "${selected_count}"
   (
     cd "${ROOT}"
-    if python_free_enabled; then
-      python_free_go_test "providersync-${shard}" -run "${test_regex}" ./internal/providersync
-    else
-      "${GO_ENV_OFF[@]}" GOWORK=off go test -mod=readonly -tags=integration -count=1 -timeout=30m -run "${test_regex}" ./internal/providersync
-    fi
+    "${GO_ENV_OFF[@]}" GOWORK=off go test -mod=readonly -tags=integration -count=1 -timeout=30m -run "${test_regex}" ./internal/providersync
   )
 }
 
@@ -2118,15 +1897,6 @@ case "${1:-all}" in
   race)
     check_race
     ;;
-  live-python-oracles)
-    # `live-python-oracles --list` prints the resolved commands and proofs of the
-    # entries in ci/live_python_oracles.d and runs nothing (CHAOS-7656).
-    if [ "${2:-}" = "--list" ]; then
-      live_python_oracles_list
-    else
-      check_live_python_oracles
-    fi
-    ;;
   venue-oracles)
     if [ "${2:-}" = "--changed" ]; then
       { [ "$#" -eq 3 ] || { [ "$#" -eq 4 ] && [ "$4" = "--list" ]; }; } || die "venue-oracles --changed accepts FILE [--list]"
@@ -2179,12 +1949,9 @@ case "${1:-all}" in
     [ "$#" -eq 1 ] || die "ratchets accepts no arguments"
     check_ratchets
     ;;
-  python-free-unit)
-    check_python_free_unit
-    ;;
-  python-free-listed)
-    [ "$#" -eq 1 ] || die "python-free-listed accepts no arguments"
-    check_python_free_listed
+  race-excluded-ran)
+    [ "$#" -eq 1 ] || die "race-excluded-ran accepts no arguments"
+    check_race_excluded_ran
     ;;
   integration-shard)
     if [ "$#" -lt 3 ] || [ "$#" -gt 4 ]; then
@@ -2199,7 +1966,6 @@ case "${1:-all}" in
     check_format
     check_vet
     check_test
-    check_live_python_oracles
     check_build
     check_contract
     check_ratchets
@@ -2222,7 +1988,6 @@ case "${1:-all}" in
     check_vet
     check_test
     check_race
-    check_live_python_oracles
     check_build
     check_contract
     check_ratchets
@@ -2236,7 +2001,6 @@ case "${1:-all}" in
     check_vet
     check_test
     check_race
-    check_live_python_oracles
     check_build
     check_contract
     check_ratchets

@@ -6,10 +6,11 @@ import (
 	"encoding/json"
 	"fmt"
 	"path/filepath"
-	"runtime"
 	"strings"
+	"sync/atomic"
 	"testing"
 
+	"github.com/full-chaos/dev-health-ops/internal/testsupport/moduleroot"
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/venueoracle"
 )
 
@@ -40,7 +41,7 @@ func fixedLines(lines []string) func(dst []byte, index int) []byte {
 // the Go half here over the same answers: no block differs. One changed
 // answer makes exactly its block differ.
 func TestTheGoHalfOfTheBlockDigestsIsThePythonHalf(t *testing.T) {
-	_, file, _, _ := runtime.Caller(0)
+	_, file, _, _ := moduleroot.Caller(0)
 	root := filepath.Clean(filepath.Join(filepath.Dir(file), "..", "..", ".."))
 	spec := venueoracle.GoldenSpec{
 		Path:        "testdata/golden/blocks.golden.json",
@@ -264,10 +265,85 @@ func TestAKnownDefectMustBeFoundInItsBlock(t *testing.T) {
 		}
 	}
 	right := func(dst []byte) []byte { return append(dst, lines[BlockLines+500]...) }
-	if err := findsDefectErr("sweep", output, BlockLines+500, fixedLines(lines), right); err == nil || !strings.Contains(err.Error(), "block 1") {
+	if err := findsDefectErr("sweep", output, BlockLines+500, fixedLines(lines), right); err == nil || !strings.Contains(err.Error(), "block 1") || !strings.Contains(err.Error(), "accepts the defect") {
 		t.Errorf("the right answer passed as a defect: %v", err)
 	}
 	if err := findsDefectErr("sweep", output, len(lines), fixedLines(lines), wrong); err == nil || !strings.Contains(err.Error(), "is not one of the") {
 		t.Errorf("a defect outside the sweep: %v", err)
+	}
+}
+
+// The gate carries its own control: when the Go lines of the block are not the
+// frozen answers, no plant is judged, because every plant would "differ" for
+// that reason alone (CHAOS-7945: with every Go line wrong, even the RIGHT answer
+// planted was reported as a found defect).
+func TestTheDefectGateRefusesABlockWhoseGoLinesAreNotTheFrozenAnswers(t *testing.T) {
+	lines := numberedLines(2*BlockLines + 2)
+	encoded, err := json.Marshal(frozenBlocks(lines))
+	if err != nil {
+		t.Fatal(err)
+	}
+	output := string(encoded)
+	skewed := func(dst []byte, at int) []byte { return append(dst, "skewed"...) }
+	wrong := func(dst []byte) []byte { return append(dst, "wrong"...) }
+	right := func(dst []byte) []byte { return append(dst, lines[0]...) }
+	for name, defect := range map[string]func([]byte) []byte{"a wrong answer planted": wrong, "the right answer planted": right} {
+		err := findsDefectErr("sweep", output, 0, skewed, defect)
+		if err == nil || !strings.Contains(err.Error(), "does not digest to the frozen digest before any defect is planted") {
+			t.Errorf("%s with every Go line wrong: err = %v, want the control to refuse the block", name, err)
+		}
+	}
+	// One Go line wrong in the defect's own block: refused too; in ANOTHER block: judged.
+	oneWrong := func(dst []byte, at int) []byte {
+		if at == 3 {
+			return append(dst, "skewed"...)
+		}
+		return fixedLines(lines)(dst, at)
+	}
+	if err := findsDefectErr("sweep", output, 0, oneWrong, wrong); err == nil {
+		t.Error("a block with one Go line wrong was judged")
+	}
+	// The control reads the WHOLE answers: a wrong line in another block refuses too.
+	if err := findsDefectErr("sweep", output, BlockLines+500, oneWrong, wrong); err == nil || !strings.Contains(err.Error(), "before any defect is planted") {
+		t.Errorf("a block elsewhere with a wrong Go line: err = %v, want the CONTROL to refuse it (it reads the whole answers, not the plant's block)", err)
+	}
+}
+
+// The attribution: the one block that differs with the defect planted is the
+// block of the planted answer. A Go line that changes between the control and
+// the planted run (so another block differs too) is reported as such.
+func TestTheDefectGateNamesThePlantedAnswersBlockAlone(t *testing.T) {
+	lines := numberedLines(2*BlockLines + 2)
+	encoded, err := json.Marshal(frozenBlocks(lines))
+	if err != nil {
+		t.Fatal(err)
+	}
+	output := string(encoded)
+	wrong := func(dst []byte) []byte { return append(dst, "wrong"...) }
+	if err := findsDefectErr("sweep", output, 0, fixedLines(lines), wrong); err != nil {
+		t.Fatalf("a plant in block 0 with every other line right: %v", err)
+	}
+	var passes atomic.Int32
+	drifting := func(dst []byte, at int) []byte {
+		if at == 2*BlockLines && passes.Load() >= 1 { // after the control pass, block 2 drifts
+			return append(dst, "drifted"...)
+		}
+		if at == 2*BlockLines+1 {
+			passes.Store(1)
+		}
+		return fixedLines(lines)(dst, at)
+	}
+	err = findsDefectErr("sweep", output, 0, drifting, wrong)
+	if err == nil || !strings.Contains(err.Error(), "does not name the planted answer's block alone") {
+		t.Fatalf("a second differing block: err = %v, want the attribution refusal", err)
+	}
+	// Exactly ONE block differs and it is not the plant's: the RIGHT answer is
+	// planted (its own block digests as frozen) while a Go line of another
+	// block drifts after the control pass.
+	passes.Store(0)
+	right := func(dst []byte) []byte { return append(dst, lines[0]...) }
+	err = findsDefectErr("sweep", output, 0, drifting, right)
+	if err == nil || !strings.Contains(err.Error(), "does not name the planted answer's block alone") {
+		t.Fatalf("one differing block that is not the plant's: err = %v, want the attribution refusal", err)
 	}
 }

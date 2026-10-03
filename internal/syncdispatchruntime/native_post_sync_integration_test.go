@@ -6,6 +6,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"github.com/full-chaos/dev-health-ops/internal/syncdispatchruntime/synclog"
 	"log/slog"
 	"slices"
 	"strings"
@@ -698,7 +699,7 @@ func TestNativePostSyncFanoutTeamAutoimportFailurePolicy(t *testing.T) {
 			var logged strings.Builder
 			logger := slog.New(slog.NewJSONHandler(&logged, &slog.HandlerOptions{Level: slog.LevelError}))
 			service, err := NewNativePostSyncService(
-				pool, markerDaily{}, markerRemaining{}, markerWorkGraph{}, testCase.team, markerTeamRepoOwnership{}, logger,
+				pool, markerDaily{}, markerRemaining{}, markerWorkGraph{}, testCase.team, markerTeamRepoOwnership{}, synclog.New(logger),
 			)
 			if err != nil {
 				t.Fatal(err)
@@ -864,7 +865,7 @@ func TestNativePostSyncFanoutTeamRepoOwnershipDerivationFailurePolicy(t *testing
 			var logged strings.Builder
 			logger := slog.New(slog.NewJSONHandler(&logged, &slog.HandlerOptions{Level: slog.LevelError}))
 			service, err := NewNativePostSyncService(
-				pool, markerDaily{}, markerRemaining{}, markerWorkGraph{}, markerTeam{}, testCase.writer, logger,
+				pool, markerDaily{}, markerRemaining{}, markerWorkGraph{}, markerTeam{}, testCase.writer, synclog.New(logger),
 			)
 			if err != nil {
 				t.Fatal(err)

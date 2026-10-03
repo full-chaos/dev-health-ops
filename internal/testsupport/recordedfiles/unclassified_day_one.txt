@@ -417,7 +417,6 @@ internal/jobs/metrics/remaining/testdata/generate_recommendations_engine_golden.
 internal/jobs/metrics/remaining/testdata/generate_recommendations_loader_golden.py
 internal/jobs/metrics/remaining/testdata/generate_recommendations_rules_golden.py
 internal/jobs/metrics/remaining/testdata/generate_recommendations_signals_golden.py
-internal/jobs/metrics/remaining/testdata/run_recommendations_loader_against_clickhouse.py
 internal/jobs/operational/testdata/billing_email/invoice_receipt__ascii.json
 internal/jobs/operational/testdata/billing_email/invoice_receipt__unicode.json
 internal/jobs/operational/testdata/billing_email/payment_failed__ascii.json
@@ -604,7 +603,6 @@ internal/providersync/testdata/python_generic_row_oracle.py
 internal/providersync/testdata/python_github_prs_normalization_oracle.py
 internal/providersync/testdata/python_launchdarkly_normalization_oracle.py
 internal/providersync/testdata/python_oracle_loader.py
-internal/providersync/testdata/python_oracle_loader_probe.py
 internal/providersync/testdata/python_provider_budget_oracle.py
 internal/providersync/testdata/python_registry_oracle.py
 internal/providersync/testdata/python_work_item_sink_oracle.py
@@ -766,11 +764,7 @@ internal/queryapi/investmentflow/testdata/team_category_subcategory_repo.json
 internal/queryapi/investmentflow/testdata/team_subcategory_repo.json
 internal/queryapi/meta/testdata/meta.json
 internal/queryapi/opportunities/testdata/no_cards_fallback.json
-internal/queryapi/opportunities/testdata/org_default.json
 internal/queryapi/opportunities/testdata/pr_rework_ratio_default_experiments.json
-internal/queryapi/opportunities/testdata/repo_scoped.json
-internal/queryapi/opportunities/testdata/team_scoped.json
-internal/queryapi/people/summaryvenue/testdata/summary_producer.py
 internal/queryapi/people/testdata/alias_mapping.json
 internal/queryapi/people/testdata/no_alias_mapping.json
 internal/queryapi/quadrant/testdata/churn_throughput_team_forces_repo.json
@@ -872,8 +866,6 @@ internal/queryapi/server/testdata/wire_capture/testopstest_captured.graphql
 internal/queryapi/server/testdata/wire_capture/trigger_report_captured.graphql
 internal/queryapi/server/testdata/wire_capture/update_saved_report_captured.graphql
 internal/queryapi/server/testdata/wire_capture/workunitteamattributions_captured.graphql
-internal/queryapi/server/testdata/wire_form/README.md
-internal/queryapi/server/testdata/wire_form/capacityForecast.graphql
 internal/queryapi/server/testdata/wire_form/capacityForecasts.graphql
 internal/queryapi/server/testdata/wire_form/throughputForecast.graphql
 internal/queryapi/server/testdata/work_unit_explain/malformed_end_date.json
@@ -899,7 +891,6 @@ internal/synccli/testdata/teams_sync_oracle.py
 internal/synccli/testdata/teams_sync_oracle_gitlab.py
 internal/synccli/testdata/teams_sync_oracle_linear.py
 internal/synccoverage/testdata/python_payload_oracle.py
-internal/syncdispatchruntime/testdata/dispatch_admission_oracle.py
 internal/syncdispatchruntime/testdata/finalize_zero_unit_oracle.py
 internal/testsupport/chschema/testdata/contract1_head.json
 tests/fixtures/ask_dev/status_change/manifest.json

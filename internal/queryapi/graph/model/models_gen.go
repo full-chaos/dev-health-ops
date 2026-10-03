@@ -136,20 +136,21 @@ type AIHotspotOverlapRow struct {
 }
 
 type AIImpactBucketRow struct {
-	Bucket                string   `json:"bucket"`
-	PrsTotal              int      `json:"prsTotal"`
-	PrsMerged             int      `json:"prsMerged"`
-	CycleTimeAvgHours     *float64 `json:"cycleTimeAvgHours,omitempty"`
-	ReviewsPerPr          *float64 `json:"reviewsPerPr,omitempty"`
-	ChangesRequestedPerPr *float64 `json:"changesRequestedPerPr,omitempty"`
-	ReworkPrs             int      `json:"reworkPrs"`
-	ReworkRate            *float64 `json:"reworkRate,omitempty"`
-	RevertPrs             int      `json:"revertPrs"`
-	RevertRate            *float64 `json:"revertRate,omitempty"`
-	IncidentsCount        int      `json:"incidentsCount"`
-	IncidentRate          *float64 `json:"incidentRate,omitempty"`
-	TestGapPrs            int      `json:"testGapPrs"`
-	TestGapRate           *float64 `json:"testGapRate,omitempty"`
+	Bucket                string           `json:"bucket"`
+	PrsTotal              int              `json:"prsTotal"`
+	PrsMerged             int              `json:"prsMerged"`
+	CycleTimeAvgHours     *float64         `json:"cycleTimeAvgHours,omitempty"`
+	ReviewsPerPr          *float64         `json:"reviewsPerPr,omitempty"`
+	ChangesRequestedPerPr *float64         `json:"changesRequestedPerPr,omitempty"`
+	ReworkPrs             int              `json:"reworkPrs"`
+	ReworkRate            *float64         `json:"reworkRate,omitempty"`
+	RevertPrs             int              `json:"revertPrs"`
+	RevertRate            *float64         `json:"revertRate,omitempty"`
+	IncidentsCount        int              `json:"incidentsCount"`
+	IncidentRate          *float64         `json:"incidentRate,omitempty"`
+	TestGapPrs            int              `json:"testGapPrs"`
+	TestGapRate           *float64         `json:"testGapRate,omitempty"`
+	Day                   graphqldate.Date `json:"day"`
 }
 
 type AIImpactBucketTotals struct {
@@ -402,6 +403,24 @@ type BusFactorScopeInput struct {
 	TeamID *string `json:"teamId,omitempty"`
 }
 
+// One forecast's simulation results as histograms: for each mode, the distinct
+// outcomes of the runs and how many runs produced each, ascending by value. A
+// mode that did not simulate is null. The counts of one mode sum to the
+// forecast's simulation count, so any percentile can be recomputed from the bins.
+type CapacityDistribution struct {
+	// Fixed-scope mode: days to complete the target items, one bin per distinct day count.
+	Days []CapacityDistributionBin `json:"days,omitempty"`
+	// Fixed-date mode: items completed by the target date, one bin per distinct total.
+	Items []CapacityDistributionBin `json:"items,omitempty"`
+}
+
+type CapacityDistributionBin struct {
+	// The outcome: a day count (days) or an item count (items).
+	Value int `json:"value"`
+	// How many simulation runs ended on this value.
+	Count int `json:"count"`
+}
+
 type CapacityForecast struct {
 	ForecastID          string            `json:"forecastId"`
 	ComputedAt          string            `json:"computedAt"`
@@ -424,6 +443,10 @@ type CapacityForecast struct {
 	HistoryDays         int               `json:"historyDays"`
 	InsufficientHistory bool              `json:"insufficientHistory"`
 	HighVariance        bool              `json:"highVariance"`
+	// The Monte Carlo distribution the p50 / p85 / p95 above were taken from, as
+	// histograms (CHAOS-7624). Null = no distribution: a forecast stored before it
+	// existed, or one where neither mode simulated. Never an object of zero bins.
+	CompletionDistribution *CapacityDistribution `json:"completionDistribution,omitempty"`
 }
 
 type CapacityForecastConnection struct {
@@ -447,6 +470,7 @@ type CapacityForecastFilterInput struct {
 
 type CapacityForecastInput struct {
 	TeamID      *string           `json:"teamId,omitempty"`
+	TeamIds     []string          `json:"teamIds,omitempty"`
 	WorkScopeID *string           `json:"workScopeId,omitempty"`
 	TargetItems *int              `json:"targetItems,omitempty"`
 	TargetDate  *graphqldate.Date `json:"targetDate,omitempty"`
@@ -911,6 +935,13 @@ type ImproveOpportunity struct {
 	Severity          string                 `json:"severity"`
 	EvidenceRefs      []string               `json:"evidenceRefs"`
 	RecommendedAction string                 `json:"recommendedAction"`
+	// The measured metric the rule compared, in `unit`. The same number the rationale states.
+	Value float64 `json:"value"`
+	// The rule's limit, in `unit`. A fixed constant of the detector, not a per-organization setting.
+	Threshold float64                `json:"threshold"`
+	Unit      ImproveOpportunityUnit `json:"unit"`
+	// Which side of the threshold fires the rule: ABOVE (value > threshold) or BELOW (value < threshold).
+	ThresholdDirection ThresholdDirection `json:"thresholdDirection"`
 }
 
 type MaintainerShare struct {
@@ -1209,12 +1240,17 @@ type ReviewEdgesInput struct {
 	SinceDate graphqldate.Date `json:"sinceDate"`
 	UntilDate graphqldate.Date `json:"untilDate"`
 	RepoIds   []string         `json:"repoIds,omitempty"`
-	Limit     int              `json:"limit"`
+	// Team ids (CHAOS-7785). Narrows the edges to the repositories these teams OWN (team_repo_ownership, as of now); person membership is never read. Combined with ``repoIds`` the two both apply (a pair must be on a listed repository and on a team-owned one).
+	TeamIds []string `json:"teamIds,omitempty"`
+	Limit   int      `json:"limit"`
 }
 
 type ReviewEdgesResult struct {
-	Edges      []ReviewEdgeRow `json:"edges"`
-	TotalCount int             `json:"totalCount"`
+	Edges []ReviewEdgeRow `json:"edges"`
+	// Number of deduplicated (pair, day) rows the filters match, before the ``limit`` cut (CHAOS-7786). One row is one reviewer-to-author pair on one day, so this counts rows, not distinct pairs. Never less than ``edges``.
+	TotalCount int `json:"totalCount"`
+	// True when ``totalCount`` is greater than the number of ``edges`` returned: the list was cut by ``limit`` (CHAOS-7786).
+	Truncated bool `json:"truncated"`
 }
 
 type ReworkThemeAllocation struct {
@@ -2066,6 +2102,49 @@ func (e ImproveOpportunityKind) MarshalGQL(w io.Writer) {
 	fmt.Fprint(w, strconv.Quote(e.String()))
 }
 
+type ImproveOpportunityUnit string
+
+const (
+	ImproveOpportunityUnitHours ImproveOpportunityUnit = "HOURS"
+	ImproveOpportunityUnitRatio ImproveOpportunityUnit = "RATIO"
+	ImproveOpportunityUnitItems ImproveOpportunityUnit = "ITEMS"
+)
+
+var AllImproveOpportunityUnit = []ImproveOpportunityUnit{
+	ImproveOpportunityUnitHours,
+	ImproveOpportunityUnitRatio,
+	ImproveOpportunityUnitItems,
+}
+
+func (e ImproveOpportunityUnit) IsValid() bool {
+	switch e {
+	case ImproveOpportunityUnitHours, ImproveOpportunityUnitRatio, ImproveOpportunityUnitItems:
+		return true
+	}
+	return false
+}
+
+func (e ImproveOpportunityUnit) String() string {
+	return string(e)
+}
+
+func (e *ImproveOpportunityUnit) UnmarshalGQL(v any) error {
+	str, ok := v.(string)
+	if !ok {
+		return fmt.Errorf("enums must be strings")
+	}
+
+	*e = ImproveOpportunityUnit(str)
+	if !e.IsValid() {
+		return fmt.Errorf("%s is not a valid ImproveOpportunityUnit", str)
+	}
+	return nil
+}
+
+func (e ImproveOpportunityUnit) MarshalGQL(w io.Writer) {
+	fmt.Fprint(w, strconv.Quote(e.String()))
+}
+
 type MeasureInput string
 
 const (
@@ -2516,6 +2595,47 @@ func (e *TeamAttributionSource) UnmarshalGQL(v any) error {
 }
 
 func (e TeamAttributionSource) MarshalGQL(w io.Writer) {
+	fmt.Fprint(w, strconv.Quote(e.String()))
+}
+
+type ThresholdDirection string
+
+const (
+	ThresholdDirectionAbove ThresholdDirection = "ABOVE"
+	ThresholdDirectionBelow ThresholdDirection = "BELOW"
+)
+
+var AllThresholdDirection = []ThresholdDirection{
+	ThresholdDirectionAbove,
+	ThresholdDirectionBelow,
+}
+
+func (e ThresholdDirection) IsValid() bool {
+	switch e {
+	case ThresholdDirectionAbove, ThresholdDirectionBelow:
+		return true
+	}
+	return false
+}
+
+func (e ThresholdDirection) String() string {
+	return string(e)
+}
+
+func (e *ThresholdDirection) UnmarshalGQL(v any) error {
+	str, ok := v.(string)
+	if !ok {
+		return fmt.Errorf("enums must be strings")
+	}
+
+	*e = ThresholdDirection(str)
+	if !e.IsValid() {
+		return fmt.Errorf("%s is not a valid ThresholdDirection", str)
+	}
+	return nil
+}
+
+func (e ThresholdDirection) MarshalGQL(w io.Writer) {
 	fmt.Fprint(w, strconv.Quote(e.String()))
 }
 

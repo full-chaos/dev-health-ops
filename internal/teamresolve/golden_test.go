@@ -4,9 +4,9 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
-	"runtime"
 	"testing"
 
+	"github.com/full-chaos/dev-health-ops/internal/testsupport/moduleroot"
 	"github.com/google/uuid"
 )
 
@@ -170,7 +170,7 @@ func loadGolden(t *testing.T) []goldenCase {
 
 func teamresolveRepositoryRoot(t *testing.T) string {
 	t.Helper()
-	_, thisFile, _, ok := runtime.Caller(0)
+	_, thisFile, _, ok := moduleroot.Caller(0)
 	if !ok {
 		t.Fatal("could not determine this test file's own path")
 	}

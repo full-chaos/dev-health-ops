@@ -7,11 +7,11 @@ import (
 	"math/big"
 	"os"
 	"path/filepath"
-	"runtime"
 	"strings"
 	"testing"
 	"time"
 
+	"github.com/full-chaos/dev-health-ops/internal/testsupport/moduleroot"
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/programoracle"
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/venueoracle"
 )
@@ -73,7 +73,7 @@ var timeWindowGoldens = programoracle.Set{
 // range is sent to Python exactly and to Compute saturated, as the
 // validators hand it on.
 func TestComputeMatchesFrozenPythonTimeWindow(t *testing.T) {
-	_, file, _, ok := runtime.Caller(0)
+	_, file, _, ok := moduleroot.Caller(0)
 	if !ok {
 		t.Fatal("cannot locate the test source")
 	}

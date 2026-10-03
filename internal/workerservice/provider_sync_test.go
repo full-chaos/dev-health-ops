@@ -1103,6 +1103,10 @@ func TestBuildProviderSyncHandlerLogsTheBudgetLimits(t *testing.T) {
 			t.Fatalf("%s = %v; want %v in %v", key, found[key], value, found)
 		}
 	}
+	// CHAOS-8201: the source of the limits is stated on the line (the table, no env input).
+	if found["budget_limit_source"] != "table" {
+		t.Fatalf("budget_limit_source = %v; want table in %v", found["budget_limit_source"], found)
+	}
 	for key := range found {
 		if strings.Contains(key, "org") || strings.Contains(key, "tenant") || strings.HasPrefix(key, "admission") {
 			t.Fatalf("unexpected attribute %q on the worker-side line: %v", key, found)

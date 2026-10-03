@@ -88,6 +88,10 @@ api:
 
 web:
   replicas: 1
+  # CHAOS-8310: web needs BACKEND_URL (no chart default); this is the explicit opt-in to this release's own Python api Service
+  # (http://<fullname>-api:<api.port>, what the chart rendered before, for any release name).
+  # CHAOS-8314 (E4) replaces this with the environment's fan-out host.
+  backendFromRelease: true
   resources:
     requests:
       memory: "64Mi"

@@ -144,6 +144,7 @@ type AIImpactBucketRow {
   incidentRate: Float
   testGapPrs: Int!
   testGapRate: Float
+  day: Date!
 }
 
 type AIImpactBucketTotals {
@@ -449,6 +450,32 @@ type CapacityForecast {
   historyDays: Int!
   insufficientHistory: Boolean!
   highVariance: Boolean!
+  """
+  The Monte Carlo distribution the p50 / p85 / p95 above were taken from, as
+  histograms (CHAOS-7624). Null = no distribution: a forecast stored before it
+  existed, or one where neither mode simulated. Never an object of zero bins.
+  """
+  completionDistribution: CapacityDistribution
+}
+
+"""
+One forecast's simulation results as histograms: for each mode, the distinct
+outcomes of the runs and how many runs produced each, ascending by value. A
+mode that did not simulate is null. The counts of one mode sum to the
+forecast's simulation count, so any percentile can be recomputed from the bins.
+"""
+type CapacityDistribution {
+  "Fixed-scope mode: days to complete the target items, one bin per distinct day count."
+  days: [CapacityDistributionBin!]
+  "Fixed-date mode: items completed by the target date, one bin per distinct total."
+  items: [CapacityDistributionBin!]
+}
+
+type CapacityDistributionBin {
+  "The outcome: a day count (days) or an item count (items)."
+  value: Int!
+  "How many simulation runs ended on this value."
+  count: Int!
 }
 
 type CapacityForecastConnection {
@@ -472,6 +499,7 @@ input CapacityForecastFilterInput {
 
 input CapacityForecastInput {
   teamId: String = null
+  teamIds: [String!] = null
   workScopeId: String = null
   targetItems: Int = null
   targetDate: Date = null
@@ -993,6 +1021,19 @@ type ImproveOpportunity {
   severity: String!
   evidenceRefs: [String!]!
   recommendedAction: String!
+  """
+  The measured metric the rule compared, in `unit`. The same number the rationale states.
+  """
+  value: Float!
+  """
+  The rule's limit, in `unit`. A fixed constant of the detector, not a per-organization setting.
+  """
+  threshold: Float!
+  unit: ImproveOpportunityUnit!
+  """
+  Which side of the threshold fires the rule: ABOVE (value > threshold) or BELOW (value < threshold).
+  """
+  thresholdDirection: ThresholdDirection!
 }
 
 enum ImproveOpportunityKind {
@@ -1003,6 +1044,12 @@ enum ImproveOpportunityKind {
   LOW_THROUGHPUT
   HIGH_CHURN
   HIGH_CHANGE_FAILURE
+}
+
+enum ImproveOpportunityUnit {
+  HOURS
+  RATIO
+  ITEMS
 }
 
 """
@@ -1501,12 +1548,23 @@ input ReviewEdgesInput {
   sinceDate: Date!
   untilDate: Date!
   repoIds: [String!] = null
+  """
+  Team ids (CHAOS-7785). Narrows the edges to the repositories these teams OWN (team_repo_ownership, as of now); person membership is never read. Combined with ``repoIds`` the two both apply (a pair must be on a listed repository and on a team-owned one).
+  """
+  teamIds: [String!] = null
   limit: Int! = 500
 }
 
 type ReviewEdgesResult {
   edges: [ReviewEdgeRow!]!
+  """
+  Number of deduplicated (pair, day) rows the filters match, before the ``limit`` cut (CHAOS-7786). One row is one reviewer-to-author pair on one day, so this counts rows, not distinct pairs. Never less than ``edges``.
+  """
   totalCount: Int!
+  """
+  True when ``totalCount`` is greater than the number of ``edges`` returned: the list was cut by ``limit`` (CHAOS-7786).
+  """
+  truncated: Boolean!
 }
 
 type ReworkThemeAllocation {
@@ -1756,6 +1814,11 @@ type TestOpsRiskSparkPoint {
 type TestOpsRiskTrendPoint {
   date: Date!
   riskScore: Float!
+}
+
+enum ThresholdDirection {
+  ABOVE
+  BELOW
 }
 
 type ThroughputEstimateCoverage {

@@ -47,7 +47,7 @@ What remains observable at every log level:
 
 Supported diagnostic workflow: correlate a failing Ask Dev request by its
 run ID and `safe_error_code` in `dev_runs` and exported telemetry, not by
-raising `LOG_LEVEL` and inspecting `docker compose logs api`. If a live
+raising `LOG_LEVEL` and inspecting `docker compose logs`. If a live
 provider integration needs deeper inspection, use the operator-owned
 external model server's own logs (for example, LM Studio) — this contract
 does not extend to those processes, only to FullChaos-operated ones.

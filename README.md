@@ -218,7 +218,7 @@ Notes:
 
 ## Container images
 
-CI no longer builds or publishes the Python API image (`dev-hops-api`, from `docker/Dockerfile`; CHAOS-7674). The last published image stays in the registry for the root compose stack and the bigboy test host until they move to Go. The root compose file still builds that image locally; the Python API source is removed by CHAOS-6264. The Go images (`dev-health-go-*`) are the published images; run CLI jobs with `dho`.
+CI no longer builds or publishes the Python API image (`dev-hops-api`, from `docker/Dockerfile`; CHAOS-7674). The root compose stack does not run it (CHAOS-8361): a router on host port 8000 sends each request to the Go api or the Go query-api. The last published image stays in the registry for the bigboy test host until that stack moves to Go; the Python API source is removed by CHAOS-6264. The Go images (`dev-health-go-*`) are the published images; run CLI jobs with `dho`.
 
 ## Key docs
 

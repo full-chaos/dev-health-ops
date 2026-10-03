@@ -711,6 +711,21 @@ func TestWaitFollowsTheSchedulerToTheOutcome(t *testing.T) {
 			t.Errorf("%s moved by %v, want 1", count, got)
 		}
 	}
+	// The latency is the time Wait polled, not zero: the pending wait lasted its
+	// whole 400ms deadline, so its sum moved by at least 0.3s and its 0.25s bucket
+	// did not move; the +Inf bucket moved by one.
+	sum := `sync_manual_trigger_await_latency_seconds_sum{outcome="pending"}`
+	if got := after[sum] - before[sum]; got < 0.3 {
+		t.Errorf("%s moved by %v, want at least 0.3 (the 400ms wait)", sum, got)
+	}
+	small := `sync_manual_trigger_await_latency_seconds_bucket{outcome="pending",le="0.25"}`
+	if got := after[small] - before[small]; got != 0 {
+		t.Errorf("%s moved by %v, want 0 (a 400ms wait is over 0.25s)", small, got)
+	}
+	inf := `sync_manual_trigger_await_latency_seconds_bucket{outcome="pending",le="+Inf"}`
+	if got := after[inf] - before[inf]; got != 1 {
+		t.Errorf("%s moved by %v, want 1", inf, got)
+	}
 }
 
 // awaitScrape reads the process-wide await metrics as series -> value.

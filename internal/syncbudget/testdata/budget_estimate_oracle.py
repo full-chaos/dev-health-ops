@@ -1030,6 +1030,17 @@ EXCHANGE_CASES: tuple[tuple[Any, ...], ...] = (
         _exchange_body(access_token="tok", scope=ALL_READ_SCOPES),
         "credential-empty",
     ),
+    (
+        '{"auth_mode": "client_credentials", "client_id": "", "client_secret": "sec-%d", "subdomain": "acme", "region": "us"}',
+        200,
+        _exchange_body(access_token="tok", scope=ALL_READ_SCOPES),
+        "credential-empty",
+    ),
+    (
+        '{"auth_mode": "client_credentials", "client_id": "cid-%d", "client_secret": "sec-%d", "subdomain": "AcMe", "region": "EU"}',
+        200,
+        _exchange_body(access_token="tok", scope=ALL_READ_SCOPES),
+    ),
 )
 
 

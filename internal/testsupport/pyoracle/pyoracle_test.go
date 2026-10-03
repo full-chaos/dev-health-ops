@@ -476,3 +476,5 @@ func TestNoNewFileLooksPythonUpByName(t *testing.T) {
 // NOT seen by the sweep above (named in the PR body): a name built at run time
 // (a variable, a concatenation), a launch through a shell, a helper that takes
 // the name as a parameter, and a launch of the interpreter by a path.
+
+// measuring change: a one-line edit of an internal test file so the go-python-free run is SCOPE mode (draft, never merged).

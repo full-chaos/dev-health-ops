@@ -578,7 +578,7 @@ def test_no_renderer_still_emits_the_deleted_operational_bridge(
     assert "operationalBridgeURL" not in helpers, (
         "_helpers.tpl still defines the deleted operationalBridgeURL helper"
     )
-    for extra_set in ([],):
+    for extra_set in (list[str](),):
         argv = ["helm", "template", "phase1", str(_HELM_CHART)]
         for value in extra_set:
             argv += ["--set", value]

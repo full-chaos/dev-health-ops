@@ -64,6 +64,14 @@ func Sanitize(text string) string {
 	for _, pattern := range secretPatterns {
 		sanitized = pattern.ReplaceAllString(sanitized, redactionMarker)
 	}
+	return Cap(sanitized)
+}
+
+// Cap is the length cap of Sanitize alone: text longer than the cap is cut and ends with the
+// truncation suffix. A caller that edits Sanitize's output (the userinfo pass) cuts again with it,
+// so its result never exceeds the cap and a second call over it changes nothing.
+func Cap(text string) string {
+	sanitized := text
 	// Python's len()/slicing on str is by Unicode code point, not byte --
 	// truncate by rune here too, both so the cap lines up with Python's for
 	// non-ASCII text and so a multi-byte UTF-8 rune can never be split.

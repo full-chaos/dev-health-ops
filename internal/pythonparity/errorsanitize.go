@@ -41,8 +41,19 @@ func sanitizeErrorText(text string, maxLength int, harden bool) string {
 		runes = substitute(runes, matcher)
 	}
 	if harden {
-		runes = []rune(logging.RedactCredentialShapes(string(runes)))
+		runes = []rune(logging.RedactCredentialShapesNoUserinfo(string(runes)))
 	}
+	runes = cutRunes(runes, maxLength)
+	if harden {
+		// The userinfo pass runs last, after the cut (see logging.RedactUserinfoLast); it can add the
+		// marker, so the text is cut again with the same cap.
+		return logging.RedactUserinfoLast(string(runes), func(text string) string { return string(cutRunes([]rune(text), maxLength)) })
+	}
+	return string(runes)
+}
+
+// cutRunes is the length cap: text longer than maxLength ends with the truncation suffix.
+func cutRunes(runes []rune, maxLength int) []rune {
 	if maxLength > 0 && len(runes) > maxLength {
 		const suffix = "...[truncated]"
 		if maxLength > len([]rune(suffix)) {
@@ -51,7 +62,7 @@ func sanitizeErrorText(text string, maxLength int, harden bool) string {
 			runes = runes[:maxLength]
 		}
 	}
-	return string(runes)
+	return runes
 }
 
 const redactionMarker = "[REDACTED]"

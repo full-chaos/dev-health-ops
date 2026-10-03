@@ -327,9 +327,13 @@ constructors, executed in the test: no route is listed by hand.
   refuse, each probed), `endpoint_profile_class_exceptions.tsv` (rows whose class the Go code does not
   enforce as the row says). An entry that no longer applies fails.
 - **Classes are read and tested.** A new row's class is read from the guard the route is wrapped in
-  (`policy.Guard.Wrap` / `BodyFirst`, file:line in the row) and the gate sends every `protected` route
-  an unauthenticated request: a route whose credential is the api's access token must answer exactly
-  401.
+  (`policy.Guard.Wrap` / `BodyFirst`, file:line in the row) and the gate sends every `protected` **go-api**
+  route (and each protected wildcard-dispatched literal) an unauthenticated request: the refusal is
+  exactly 401/403, and a 500 is never a pass. Webhook routes get a wrong signature; the routes whose
+  credential is a Postgres row (external-ingest, PagerDuty) are a closed pending list (CHAOS-8323). A
+  signed-in plain member is sent to every route that declares an admin, platform-role or superuser
+  check and must get 403 (one named exception). Not probed by this gate: the query-api and `/graphql`
+  edge planes and the internal listener (their own tests cover them).
 - **The walk is recorded** in `ci/go_served_routes.tsv`; `tests/test_endpoint_profiles_contract.py`
   compares it with `ci/discover_ops_routes.py` and names every difference. All of this goes with
   the Python app (CHAOS-8306).

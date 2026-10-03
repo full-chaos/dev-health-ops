@@ -560,7 +560,7 @@ func TestNetUnscrubbedFindsAnUndeclaredCredentialAndNotAPlaceholder(t *testing.T
 	if len(netUnscrubbed("echo "+undeclared)) != 1 {
 		t.Fatal("a push token of the real shape that is not declared was not found")
 	}
-	if len(netUnscrubbed("Authorization: Bearer "+strings.Repeat("q", 12))) != 1 {
+	if len(netUnscrubbed("Authorization: Bearer qqqqqqqqqqqq")) != 1 {
 		t.Fatal("a Bearer value that is not a placeholder was not found")
 	}
 	if left := netUnscrubbed("Authorization: Bearer <credential sha256:0123456789ab> and plain text"); len(left) != 0 {

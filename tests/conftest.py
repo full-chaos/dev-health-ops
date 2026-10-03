@@ -66,7 +66,7 @@ _SCRUB_RAN = False
 #: ``helm template`` that sets nothing about web fails. Most helm tests render other things (hooks,
 #: workers, listeners): this is the ONE shared place that gives every ``helm template`` a placeholder
 #: value -- a ``helm`` wrapper first on PATH that puts ``--set web.env.BACKEND_URL=<this>`` right after
-#: ``template`` (a test's own later ``--set``/``-f`` still wins). ``HELM_SHIM_OFF=1`` in a command's
+#: ``template`` (helm gives ``--set`` precedence over every ``-f`` values file, in either order: a test that renders a profile's own value must set ``HELM_SHIM_OFF=1``; only a later ``--set`` of the same key wins). ``HELM_SHIM_OFF=1`` in a command's
 #: environment bypasses it: ``tests/test_helm_web_extra_volumes.py::test_web_backend_url_is_required`` is the
 #: test that must see the refusal.
 HELM_TEST_WEB_BACKEND_URL = "http://backend.test:8000"

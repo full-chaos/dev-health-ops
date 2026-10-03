@@ -11,8 +11,9 @@ import (
 // CHAOS-8310: web.env.BACKEND_URL is required, and web.enabled defaults to true, so a render that
 // sets nothing about web fails. These tests render other things (images, hooks, listeners), so ONE
 // shared place gives every `helm template` a placeholder BACKEND_URL: a `helm` wrapper first on PATH
-// that puts `--set web.env.BACKEND_URL=<placeholder>` right after `template` (so any later --set or -f
-// of a test still wins). HELM_SHIM_OFF=1 in a command's environment bypasses it: the one test that
+// that puts `--set web.env.BACKEND_URL=<placeholder>` right after `template`. helm gives `--set` precedence over
+// every `-f` values file, in either order, so a test that renders a PROFILE's own value (a `-f` file) must run
+// with HELM_SHIM_OFF=1 (TestQuickstartProfileCarriesItsOwnBackendURL); only a later `--set` of the same key wins. HELM_SHIM_OFF=1 in a command's environment bypasses it: the one test that
 // must see the refusal sets it (TestWebBackendURLIsRequired).
 const helmShimBackendURL = "http://backend.test:8000"
 
@@ -70,5 +71,22 @@ func TestWebBackendURLIsRequired(t *testing.T) {
 	}
 	if !strings.Contains(string(out), `value: "http://explicit.example:9000"`) {
 		t.Fatalf("the explicit BACKEND_URL did not reach the web Deployment")
+	}
+}
+
+// CHAOS-8310: the shim's --set would hide a values FILE from every other test, so the quickstart profile is
+// rendered here with the shim off, exactly as its usage line says: its own BACKEND_URL reaches the Deployment.
+func TestQuickstartProfileCarriesItsOwnBackendURL(t *testing.T) {
+	if _, err := exec.LookPath("helm"); err != nil {
+		t.Skip("helm is not installed")
+	}
+	cmd := exec.Command("helm", "template", "dev-health", ".", "-f", "values-quickstart.yaml")
+	cmd.Env = append(os.Environ(), "HELM_SHIM_OFF=1")
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("the quickstart profile must render by itself: %v\n%.400s", err, out)
+	}
+	if !strings.Contains(string(out), `value: "http://dev-health-api:8000"`) {
+		t.Fatalf("the quickstart profile's own BACKEND_URL did not reach the web Deployment")
 	}
 }

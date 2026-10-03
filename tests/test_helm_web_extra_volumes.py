@@ -149,3 +149,16 @@ def test_web_backend_url_is_required() -> None:
     )
     assert explicit.returncode == 0, explicit.stderr
     assert 'value: "http://explicit.example:9000"' in explicit.stdout
+
+
+def test_quickstart_profile_carries_its_own_backend_url() -> None:
+    """CHAOS-8310: the suite's helm wrapper (--set) would hide a values FILE's own value, so the
+    quickstart profile is rendered with the wrapper off, as its usage line says."""
+    done = run(
+        ["helm", "template", "dev-health", str(_CHART), "-f", str(_CHART / "values-quickstart.yaml")],
+        capture_output=True,
+        text=True,
+        env={**os.environ, "HELM_SHIM_OFF": "1"},
+    )
+    assert done.returncode == 0, done.stderr
+    assert 'value: "http://dev-health-api:8000"' in done.stdout

@@ -51,7 +51,17 @@ var fixedRoutingRows = []routingRow{
 	{"health", "/health", PlaneGoAPI},
 	{"root", "/", PlaneGoAPI},
 	{"unknown path", "/no/such/path", PlaneGoAPI},
-	{"a path no plane serves", "/docs", PlaneGoAPI},
+	// The four paths that only the public host lists (Exact, to the Go api):
+	// the default plane, as on both prod hosts, where the Go api answers its
+	// own 404 for them. On the public host the Exact path is a regex with no
+	// end anchor, so a longer path and another case go the same way.
+	{"public host path /metrics", "/metrics", PlaneGoAPI},
+	{"public host path /docs", "/docs", PlaneGoAPI},
+	{"public host path /redoc", "/redoc", PlaneGoAPI},
+	{"public host path /openapi.json", "/openapi.json", PlaneGoAPI},
+	{"public host path, upper case", "/DOCS", PlaneGoAPI},
+	{"public host path, a longer word", "/docsx", PlaneGoAPI},
+	{"public host path, a path below it", "/docs/oauth2-redirect", PlaneGoAPI},
 	{"an internal path", "/api/v1/internal/acr/health", PlaneGoAPI},
 }
 
@@ -63,8 +73,8 @@ func samplePath(r Rule) string {
 	return strings.ReplaceAll(path, `\.`, ".")
 }
 
-// routingRows is the fixed rows plus four rows for every rule of the contract
-// that is not the default: the rule's own path, the same path in upper case
+// routingRows is the fixed rows, four rows for every public host rule, and
+// four rows for every rule of the contract that is not the default: the rule's own path, the same path in upper case
 // (regex mode ignores case), the path with a trailing slash (the default
 // plane: no rule ends in a slash and a token is never empty) and the path
 // with one more character.
@@ -97,6 +107,16 @@ func routingRows(t *testing.T, contract Contract) []routingRow {
 	}
 	if derived == 0 || derived != len(contract.Rules)-1 {
 		t.Fatalf("rows were made for %d of %d rules: the contract was not covered", derived, len(contract.Rules)-1)
+	}
+	// A public host rule gives its plane (the contract holds it to the default
+	// plane) to its own path, in any case, and to every longer path.
+	for _, r := range contract.PublicHostRules {
+		rows = append(rows,
+			routingRow{"public host rule " + r.Path, r.Path, r.Plane},
+			routingRow{"public host rule " + r.Path + ", upper case", strings.ToUpper(r.Path), r.Plane},
+			routingRow{"public host rule " + r.Path + ", one more character", r.Path + "~", r.Plane},
+			routingRow{"public host rule " + r.Path + ", a path below it", r.Path + "/x0", r.Plane},
+		)
 	}
 	return rows
 }

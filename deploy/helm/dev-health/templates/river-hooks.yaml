@@ -102,7 +102,7 @@ build must find. There is no chart-default fallback.
 {{- $rolesImage := .Values.migrations.hook.provisionRoles.image | default .Values.migrations.hook.riverMigrate.image | default .Values.migrations.hook.routeActivate.image }}
 {{- /*
 CHAOS-6958: IfNotPresent is this hook's OWN default -- never
-.Values.image.pullPolicy (the application image's policy), which used to leak a
+the application image's pull policy, which used to leak a
 local dev Never onto this PINNED REGISTRY image and make it unpullable.
 */}}
 {{- $rolesPullPolicy := .Values.migrations.hook.provisionRoles.pullPolicy | default .Values.migrations.hook.riverMigrate.pullPolicy | default .Values.migrations.hook.routeActivate.pullPolicy | default "IfNotPresent" }}
@@ -291,7 +291,7 @@ pullPolicy Never or IfNotPresent.
 {{- $riverImage := .Values.migrations.hook.riverMigrate.image | default .Values.migrations.hook.routeActivate.image }}
 {{- /*
 CHAOS-6958: IfNotPresent is this hook's OWN default -- never
-.Values.image.pullPolicy (the application image's policy), which used to leak a
+the application image's pull policy, which used to leak a
 local dev Never onto this PINNED REGISTRY image and make it unpullable. The
 identity check, the real-digest check and the lockstep check all live in
 dev-health.pinnedOperatorImageCheck now (_helpers.tpl); see that definition's

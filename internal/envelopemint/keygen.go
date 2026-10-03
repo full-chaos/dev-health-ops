@@ -14,6 +14,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"time"
 )
 
 // File layout GenerateKeyFiles writes under its target directory. The private
@@ -67,6 +68,18 @@ const tempMarker = ".tmp-"
 
 // crashHook is a test seam: it is called at each write point, and an error from
 // it aborts the write WITHOUT cleanup, which is what a SIGKILL there leaves.
+// syncDir fsyncs a directory so a just-linked entry is durable. A seam so a
+// test can force its failure; production uses the real one.
+var syncDir = func(dir string) error {
+	d, err := os.Open(dir)
+	if err != nil {
+		return err
+	}
+	serr := d.Sync()
+	cerr := d.Close()
+	return errors.Join(serr, cerr)
+}
+
 var crashHook = func(point string) error { return nil }
 
 // GenerateKeyFiles writes a new Ed25519 private key (PKCS#8 "PRIVATE KEY" PEM,
@@ -128,14 +141,41 @@ func GenerateKeyFiles(dir, keyID string) (KeyPaths, error) {
 //
 // It never loosens or repairs permissions and never replaces a key.
 func EnsureKeyFiles(dir, keyID string) (changed bool, err error) {
+	// Another run on the same directory can commit between this run's checks
+	// and its own commit. A commit never overwrites, so the loser sees
+	// ErrKeyFilesExist; it then evaluates the state again (a complete pair is
+	// accepted, a private key alone gets its JWKS derived from that same key,
+	// so both runs end on the winner's pair). A bounded number of rounds, then
+	// the error is returned loudly.
+	var wrote bool
+	for attempt := 0; attempt < ensureAttempts; attempt++ {
+		changed, err = ensureOnce(dir, keyID)
+		wrote = wrote || changed
+		if !errors.Is(err, ErrKeyFilesExist) {
+			return wrote, err
+		}
+	}
+	return wrote, err
+}
+
+const ensureAttempts = 5
+
+func ensureOnce(dir, keyID string) (changed bool, err error) {
 	paths := PathsIn(dir)
 	removeStaleTemps(filepath.Dir(paths.Private))
 	removeStaleTemps(filepath.Dir(paths.JWKS))
-	privMissing, err := missing(paths.Private)
+	// Read order matters. Commits go private key first, JWKS second, and
+	// nothing is ever removed, so a JWKS that is present at the first read
+	// implies a private key that is present at the later read. Reading the
+	// private key first would let a concurrent run commit both files between
+	// the two reads and show "JWKS without private key", a state no crash can
+	// leave and which is refused. This order cannot show it.
+	jwksMissing, err := missing(paths.JWKS)
 	if err != nil {
 		return false, err
 	}
-	jwksMissing, err := missing(paths.JWKS)
+	_ = crashHook("ensure:between-state-reads") // test seam: cut point of the two reads
+	privMissing, err := missing(paths.Private)
 	if err != nil {
 		return false, err
 	}
@@ -272,13 +312,23 @@ func checkKeySet(paths KeyPaths, keyID string) error {
 	return nil
 }
 
+// staleTempAge is how old a temp file must be before another run removes it:
+// a younger one may belong to a run that is still writing.
+const staleTempAge = time.Minute
+
 func removeStaleTemps(dir string) {
+	if info, err := os.Lstat(dir); err != nil || !info.IsDir() {
+		return // absent, or a symlink: never read or delete through it
+	}
 	entries, err := os.ReadDir(dir)
 	if err != nil {
 		return
 	}
 	for _, e := range entries {
-		if strings.Contains(e.Name(), tempMarker) {
+		if !strings.Contains(e.Name(), tempMarker) {
+			continue
+		}
+		if info, err := e.Info(); err == nil && time.Since(info.ModTime()) >= staleTempAge {
 			_ = os.Remove(filepath.Join(dir, e.Name()))
 		}
 	}
@@ -303,8 +353,16 @@ func jwksDocument(pub ed25519.PublicKey, keyID string) ([]byte, error) {
 }
 
 func mkdirMode(path string, mode fs.FileMode) error {
+	// An existing path must be a real directory: a symlink is never followed,
+	// also on first use, so key files cannot land outside the key directory.
+	if info, err := os.Lstat(path); err == nil && !info.IsDir() {
+		return inconsistent("%s is a symlink or not a directory", path)
+	}
 	if err := os.MkdirAll(path, mode); err != nil {
 		return fmt.Errorf("envelopemint: create %s: %w", path, err)
+	}
+	if info, err := os.Lstat(path); err != nil || !info.IsDir() {
+		return inconsistent("%s is a symlink or not a directory", path)
 	}
 	if err := os.Chmod(path, mode); err != nil {
 		return fmt.Errorf("envelopemint: chmod %s: %w", path, err)
@@ -363,9 +421,8 @@ func writeNew(path string, data []byte, mode fs.FileMode, point string) (err err
 		return err
 	}
 	_ = os.Remove(tmp)
-	if d, derr := os.Open(dir); derr == nil {
-		_ = d.Sync()
-		_ = d.Close()
+	if serr := syncDir(dir); serr != nil {
+		return fmt.Errorf("envelopemint: %s is written but its directory entry is not confirmed durable: %w", path, serr)
 	}
 	return nil
 }

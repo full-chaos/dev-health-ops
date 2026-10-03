@@ -19,7 +19,7 @@ The full invocation (from `/home/ubuntu/devhealth`):
 ```
 export BIGBOY_OPERATOR_IMAGE=ghcr.io/full-chaos/dev-health-go-operator@<digest>
 docker compose --env-file ops/.env \
-  -f compose.yml -f compose/compose.go.workers.yml -f compose/compose.metrics-api.local.yml \
+  -f compose.yml -f compose/compose.go.workers.yml \
   -f .remember/lanes/team-lead/reconciler-sweep-override.yml \
   -f compose/compose.bigboy.images.yml -f ci/bigboy/compose.bigboy.workers.yml \
   -f compose/compose.bigboy.router.yml \
@@ -28,8 +28,41 @@ docker compose --env-file ops/.env \
 
 `compose/compose.bigboy.router.yml` (this repo's tracked copy also lives here as
 `ci/bigboy/compose.bigboy.router.yml`) is REQUIRED in that `-f` list from now on -- omitting it
-silently drops the plane-split router (see below) and every request falls back to the pre-CHAOS-6987
-"everything through the Python api" behavior.
+silently drops the plane-split router (see below): web then gets the base file's `BACKEND_URL`, which
+names the retired Python api.
+
+## Go-only stack (CHAOS-8361)
+
+The bigboy stack runs no Python api, as prod does. The base `compose.yml` of the stack is a host file
+(not in this repository), so the tracked files do the work:
+
+- `compose.bigboy.images.yml` moves the base file's `api` service to the profile `retired-python-api`,
+  which nothing enables; states web's `depends_on` again without `api`; runs `migrate` from the dho
+  image (`dho migrate upgrade --river`); and puts `venue-prove` on the stack's networks (it shared the
+  api container's network namespace). No service names the Python api image.
+- The cut's chain no longer holds the host side file `compose/compose.metrics-api.local.yml` (the Python
+  `metrics-api` service), and the cut's `up` list is `query-api go-api web`.
+- `compose.bigboy.smoke.yml` runs the web-path smoke on a plain Python base image
+  (`ghcr.io/full-chaos/python:3.14-slim`, by digest); the script uses the standard library only.
+- `bigboy-graphql-prove.sh` proves through the routed `/graphql` in Go-edge mode only.
+- The router file names no Python backend: `/docs`, `/redoc`, `/openapi.json` and `/metrics` reach the
+  default backend (the Go api's 404), as in prod. Regenerate `.traefik-dynamic/planes.yml` with the cut.
+- The cut no longer runs the two-plane legs of the record directory (the proof-token bootstrap, the
+  `pass-bigboy*.sh` scripts, `run-rest-bigboy.sh`): each ran inside the Python api container and
+  compared the Go plane with the Python plane. The tracked `pass-bigboy-admin2` and `pass-bigboy-auth`
+  scripts were such passes and are deleted. The cut's pass is: route coverage, the routing ledger
+  steps, the log and worker checks, river apply, the hook check, the grants checks and the web-path
+  smoke (R460).
+- The envelope key files are unchanged: query-api and the venue one-offs read `.go-api-dev/`
+  (`envelope-jwks.json`, `envelope-private-key.pem`). The base file declares no key init service, so
+  `--no-deps` on the cut's `up` skips none.
+
+ORDER for the first cut with these files (the same order the billing-edge retirement used): (1) put
+the tracked `compose.bigboy.images.yml` in place of the host copy `compose/compose.bigboy.images.yml`,
+keeping the digests the host copy has; (2) with the OLD chain still exported, name and remove the two
+Python containers with compose verbs (`docker compose ... ps api metrics-api`, then
+`docker compose ... rm -sf api metrics-api`; one approved line, run on the lead's GO); (3) regenerate
+`.traefik-dynamic/planes.yml`; (4) run the cut.
 
 ## Plane-split router (CHAOS-6987, D2724)
 
@@ -65,7 +98,8 @@ route prod may not have. The check is on the paths the rules match, not on the t
 
 - It reads every Python source: `ops.ingress.pythonAllowList`, each host's own `pythonAllowList`
   list (prod's in-cluster host carries one; only prod routes it, and a flip that forgets it is
-  half a flip), and the local-only paths this router adds (`BIGBOY_LOCAL_PYTHON_PATHS`).
+  half a flip), and the local-only paths this router adds (`BIGBOY_LOCAL_PYTHON_PATHS`, empty since
+  CHAOS-8361: bigboy has no Python api).
 - A `Prefix` is read at its widest: every path that starts with its text. That is what
   ingress-nginx renders for a Prefix on a host in regex mode, and it contains this router's own
   reading (the path, or anything under it).
@@ -98,8 +132,9 @@ A Go plane path with a character that needs a regex escape (a dot, for one) is r
 keep the old router with no failing step.
 
 The refusal names the list, the entry and the Go plane path. A values change that moves a path
-to a Go plane takes it off every Python list in the same commit. A local-only path that a Go
-plane starts to serve is removed from `BIGBOY_LOCAL_PYTHON_PATHS` in this repo first.
+to a Go plane takes it off every Python list in the same commit. The router file names a Python
+backend only when an allow-list entry of the values names the Python api; the prod values have no
+such entry.
 
 ### D2733 regression + fix: `go-api-paths`/`query-api-paths` must match `Host(traefik)` ONLY
 
@@ -271,13 +306,11 @@ Every check below fails loud with a named finding; none can pass on an empty or 
 ## GraphQL prove harness (CHAOS-6993, partial)
 
 `bigboy-graphql-prove.sh <full ops sha> [--go-edge]` + `compose.bigboy.prove.yml` run the prove leg of
-prod's STEP 216 (`pod-r216.sh`) on the compose stack, from `venue-prove`. The edge is the caller's
-explicit choice: by default the Python edge (`localhost:8000`, api's network namespace: the prover's
-Python-reference mode); with `--go-edge` the ROUTED `/graphql` (`http://traefik:3000/graphql`, which
-the plane-split router sends to query-api once the pinned deploy values list `/graphql` in
-`ingress.queryApiPaths`, CHAOS-6263: the prover's Go-edge mode, `dho goapi prove -go-edge`). In
-Go-edge mode every proof is the candidate alone, and the prover refuses by name if a Python plane
-still answers the routed `/graphql`. The steps:
+prod's STEP 216 (`pod-r216.sh`) on the compose stack, from `venue-prove`. The edge is the ROUTED
+`/graphql` (`http://traefik:3000/graphql`, which the plane-split router sends to query-api:
+CHAOS-6263, the prover's Go-edge mode, `dho goapi prove -go-edge`). There is no Python edge
+(CHAOS-8361); `--go-edge` is still accepted and means the same. Every proof is the candidate alone,
+and the prover refuses by name if a Python plane answers the routed `/graphql`. The steps:
 
 1. refuse unless `venue-prove`'s image is `go-api-tools:sha-<sha>` (prover build skew);
 2. derive the local org read-only (the single org of the local admin account; never printed);

@@ -101,7 +101,7 @@ restarts and identical anywhere encrypted credentials are read.
 Apply the PostgreSQL migrations before connecting PagerDuty:
 
 ```bash
-dho migrate postgres upgrade
+dev-hops migrate postgres upgrade
 ```
 
 Then restart or roll out the ops API and workers so they receive the new secrets.

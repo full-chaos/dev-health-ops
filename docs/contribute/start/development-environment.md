@@ -97,8 +97,8 @@ Do not reuse production credentials or export a broad provider token into a shel
 Apply both storage migration families before running synchronization or analytics work:
 
 ```bash
-dho migrate postgres upgrade
-dho migrate clickhouse upgrade
+dev-hops migrate postgres
+dev-hops migrate clickhouse
 ```
 
 The Compose stack also defines a one-shot `migrate` service. Use the CLI commands above when you need to see and control each migration explicitly.
@@ -136,14 +136,13 @@ Add `--volumes` only when you intentionally want to destroy the local PostgreSQL
 The fixture generator can create teams, git facts, work items, and derived metrics for a bounded local dataset:
 
 ```bash
-dho fixtures generate \
-  --sink "$CLICKHOUSE_URI" \
-  --seed 1 \
+dev-hops fixtures generate \
+  --db "$CLICKHOUSE_URI" \
   --days 30 \
   --with-metrics
 ```
 
-Use synthetic data for UI and analytical development when customer or production data is unnecessary. Review `dho fixtures generate --help` before increasing volume or changing the target store.
+Use synthetic data for UI and analytical development when customer or production data is unnecessary. Review `dev-hops fixtures generate --help` before increasing volume or changing the target store.
 
 ## Build the documentation locally
 

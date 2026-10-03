@@ -166,11 +166,11 @@ Fresh local PostgreSQL volumes provision the development domain and River queue 
 
 ## Run migrations
 
-Application and analytics migrations (the Go operator CLI `dho`):
+Python application and analytics migrations:
 
 ```bash
-dho migrate postgres upgrade
-dho migrate clickhouse upgrade
+dev-hops migrate postgres
+dev-hops migrate clickhouse
 ```
 
 The Go coexistence foundation requires a distinct direct migration DSN and runtime roles. Use the current migration command and provisioning script documented in [Databases and storage](../../operate/configure/databases-and-storage.md). Do not run a production migration from a development shell.
@@ -180,15 +180,14 @@ The Go coexistence foundation requires a distinct direct migration DSN and runti
 Review current options:
 
 ```bash
-dho fixtures generate --help
+dev-hops fixtures generate --help
 ```
 
 Generate a 30-day synthetic dataset with derived metrics:
 
 ```bash
-dho fixtures generate \
-  --sink "$CLICKHOUSE_URI" \
-  --seed 1 \
+dev-hops fixtures generate \
+  --db "$CLICKHOUSE_URI" \
   --days 30 \
   --with-metrics
 ```
@@ -245,7 +244,7 @@ dho metrics --help
 dho migrate --help
 ```
 
-Bare Python CLI commands run inline. Some provider or job paths are safer and better validated through the API and the Go worker fleet, which supplies the credentials the CLI does not enforce at startup; check the current command `Requires:` output and [CLI reference](../../reference/cli/index.md).
+Some provider or job paths are safer and better validated through the API and the Go worker fleet, which supplies the credentials the CLI does not enforce at startup; check the `Environment:` section of the command's `--help` output and the [CLI reference](../../reference/cli/index.md).
 
 ## Before committing
 

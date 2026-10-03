@@ -106,3 +106,10 @@ nl-end-then-docker-mount	note	token=+r:alnum:32:90+<nl>+RUN --mount=type=secret,
 nl-end-then-import	note	token=+r:alnum:32:91+<nl>+import { a } from 'b'	hit
 nl-end-then-hash-docker-mount	note	secret: +r:alnum:32:92+<nl>+# --mount=type=secret,id=x	hit
 nl-end-blank-line-then-docker-mount	note	token=+r:alnum:32:93+<nl>+<nl>+RUN --mount=type=secret,id=x	hit
+key-access-lower	access	r:alnum:32:101	hit
+key-access-upper	ACCESS	r:alnum:32:102	hit
+key-false-positive-token	false_positive_token	r:alnum:32:103	hit
+key-true-token	true_token	r:alnum:32:104	hit
+key-alphabet-run-token	abcdefghijklmnopqrstuvwxyz_token	r:alnum:32:105	hit
+long-s-in-secret-segments	token	r:alnum:8:106+ſ+r:alnum:8:107+ſ+r:alnum:8:108+ſ+r:alnum:8:109	hit
+kelvin-in-secret-segments	token	r:alnum:8:110+K+r:alnum:8:111+K+r:alnum:8:112+K+r:alnum:8:113	hit

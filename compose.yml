@@ -1304,18 +1304,8 @@ services:
         read_only: true
         volume:
           subpath: private
-    # The runtime image has no shell, curl or wget, so this uses the
-    # exec-form probe of `dho reconciler healthcheck`
-    # (internal/reconcilerservice/service.go). That probe is not specific to the
-    # reconciler: it GETs 127.0.0.1:<port of DEV_HEALTH_HTTP_ADDR, default
-    # 8080>/readyz in its own container and mirrors the status as its exit
-    # code, and go-api serves /readyz on --http-addr=:8080.
-    healthcheck:
-      test: ["CMD", "/usr/local/bin/dho", "reconciler", "healthcheck"]
-      interval: 15s
-      timeout: 5s
-      retries: 3
-      start_period: 20s
+    # No healthcheck here on purpose: a Python compose test pins go-reconciler
+    # as the only go-* service with one. query-api (below) has its own.
     depends_on:
       # No direct dependency on the Python `migrate` service (a Go service must
       # not gate on it); go-river-provision waits for it, so the api login's

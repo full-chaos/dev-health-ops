@@ -1301,6 +1301,28 @@ const registeredFeatureFlagTimeseriesDocument = `query FeatureFlagTimeseries($or
   }
 }`
 
+// registeredCoverageBaselinesDocument is the registered document for the
+// `coverageBaselines` operation (CHAOS-8111, Go-only: no Python resolver
+// exists), the exact wire-form text the web client sends
+// (testdata/wire_capture/coveragebaselines_captured.graphql; the wire form of
+// TESTOPS_COVERAGE_BASELINES_QUERY, computed with the web's pinned urql).
+const registeredCoverageBaselinesDocument = `query CoverageBaselines($orgId: String!, $endDate: Date!, $repoIds: [String!], $teamIds: [String!]) {
+  coverageBaselines(
+    orgId: $orgId
+    endDate: $endDate
+    repoIds: $repoIds
+    teamIds: $teamIds
+  ) {
+    repoId
+    repoName
+    lineBaselinePct
+    lineDays
+    branchBaselinePct
+    branchDays
+    __typename
+  }
+}`
+
 // registeredTestopsJobFailuresDocument is the registered document for the
 // `testopsJobFailures` operation (CHAOS-8513, Go-only: no Python resolver
 // exists), the exact wire-form text the web client sends
@@ -3515,6 +3537,7 @@ func newQueryHandler(chClient featureflags.QueryClient, pgPool *pgxpool.Pool, ve
 		"aiAttributionOverview":             digestHex(registeredAiAttributionOverviewDocument),
 		"testopsRisk":                       digestHex(registeredTestopsRiskDocument),
 		"testopsJobFailures":                digestHex(registeredTestopsJobFailuresDocument),
+		"coverageBaselines":                 digestHex(registeredCoverageBaselinesDocument),
 		"workItemTeamAttributions":          digestHex(registeredWorkItemTeamAttributionsDocument),
 		"recommendations":                   digestHex(registeredRecommendationsDocument),
 	}

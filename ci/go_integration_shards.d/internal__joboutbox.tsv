@@ -1,1 +1,3 @@
-internal/joboutbox	50
+# 91 = ceil(90.518 s), hosted Go run on the head of the CHAOS-8421 change (shard packages-5): the
+# plan-pin case builds and vacuums a 16,000-row outbox and 5,000 River jobs. Was 50.
+internal/joboutbox	91

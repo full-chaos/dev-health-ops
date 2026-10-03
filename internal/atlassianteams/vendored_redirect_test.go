@@ -445,6 +445,7 @@ func TestRedirectScanSeesTheUnusualWaysToBuildAClient(t *testing.T) {
 		"unnamedresult/u.go": "package unnamedresult\n\nimport \"net/http\"\n\ntype maker func() http.Client\n",
 		"receiver/r.go":      "package receiver\n\nimport \"net/http\"\n\ntype mine http.Client\n\nfunc (m mine) Do() {}\n",
 		"secondarg/s.go":     "package secondarg\n\nimport \"net/http\"\n\nfunc second[A, B any]() *B { return new(B) }\n\nfunc Build() *http.Client { c := second[int, http.Client](); return c }\n",
+		"reflecttype/t.go":   "package reflecttype\n\nimport \"reflect\"\n\ntype holder struct{ v reflect.Value }\n",
 		"reflectmethod/m.go": "package reflectmethod\n\nimport \"reflect\"\n\nfunc Reset(v reflect.Value) { v.SetZero() }\n",
 		"reflectnew/r.go":    "package reflectnew\n\nimport \"reflect\"\n\nfunc Build(t reflect.Type) reflect.Value { return reflect.New(t) }\n",
 	}
@@ -462,7 +463,7 @@ func TestRedirectScanSeesTheUnusualWaysToBuildAClient(t *testing.T) {
 	for _, creation := range scan.creations {
 		found[strings.SplitN(creation, ".", 2)[0]] = true
 	}
-	for _, defect := range []string{"planted/genericzero", "planted/valueparam", "planted/unnamedresult", "planted/reflectnew", "planted/receiver", "planted/secondarg", "planted/reflectmethod"} {
+	for _, defect := range []string{"planted/genericzero", "planted/valueparam", "planted/unnamedresult", "planted/reflectnew", "planted/receiver", "planted/secondarg", "planted/reflectmethod", "planted/reflecttype"} {
 		if !found[defect] {
 			t.Errorf("the scan did not report %s (reported: %v)", defect, scan.creations)
 		}

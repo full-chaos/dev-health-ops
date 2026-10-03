@@ -395,12 +395,19 @@ GO_RACE_WEIGHTS="${GO_RACE_WEIGHTS:-${ROOT}/ci/go_race_weights.tsv}"
 # The test set comes from `go test -list` (never hand-listed). The slices must partition it exactly (each test in exactly one shard,
 # no shard empty); anything else fails before a test runs. The race signal stays: nothing here is `!race`.
 check_providersync_race_shard() {
-  local shard="$1" count="$2" all names selected_names s total=0 regex
+  local shard="$1" count="$2" listing other all names selected_names s total=0 regex
   local weights="${GO_PROVIDERSYNC_RACE_WEIGHTS:-${ROOT}/ci/go_providersync_race_weights.tsv}"
   local shard_awk="${GO_PROVIDERSYNC_RACE_SHARD_AWK:-${ROOT}/ci/go_providersync_race_shard.awk}"
   [ -f "${weights}" ] || die "providersync race shards need ${weights}"
-  all="$(cd "${ROOT}" && "${GO_ENV_OFF[@]}" GOWORK=off go test -mod=readonly -list '^Test' ./internal/providersync | grep '^Test')" \
-    || die "go test -list failed for internal/providersync (or reported no test)"
+  # CHAOS-8275: list EVERY name of the RACE test binary (so a //go:build race file is seen too), not just ^Test of the plain build. A Fuzz*,
+  # Example* or Benchmark* name would be selected by no `-run ^(Test...)$` shard and run in no race leg, so it fails here instead.
+  listing="$(cd "${ROOT}" && "${GO_ENV_OFF[@]}" GOWORK=off go test -mod=readonly -race -list '.*' ./internal/providersync)" \
+    || die "go test -race -list failed for internal/providersync"
+  listing="$(printf '%s\n' "${listing}" | grep -Ev '^(ok|FAIL|\?|---)[[:space:]]' | grep -v '^$' || true)"
+  other="$(printf '%s\n' "${listing}" | grep -v '^Test' || true)"
+  [ -z "${other}" ] \
+    || die "providersync lists a name that is not Test* and that no race shard would run: $(printf '%s' "${other}" | tr '\n' ' ')"
+  all="$(printf '%s\n' "${listing}" | grep '^Test' || true)"
   [ -n "${all}" ] || die "go test -list reported no providersync test"
   [ "${count}" -le "$(printf '%s\n' "${all}" | wc -l)" ] \
     || die "providersync race shards: ${count} legs for fewer listed tests: a shard would select zero tests"

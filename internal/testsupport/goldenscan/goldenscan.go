@@ -2,9 +2,9 @@
 // packed ("gzip+base64:") body or a JSON text held in a string leaf, so the same walk the unpacked-secret-scan tool of record makes is
 // done here, in Go, and wired into the record verb and `manifest -check`.
 //
-// What it finds is what the generic-api-key rule of gitleaks v8.21.2 finds and the token-shape scan of the venueoracle package does not
+// What it finds is what the generic-api-key rule of gitleaks v8.24.3 finds and the token-shape scan of the venueoracle package does not
 // (a credential word, a separator, then ten to 150 characters of a key, a token or a base64 text). The rule is a PORT of that scanner's
-// own (rule expression, filters, stopwords: see goldenscan.go and stopwords.txt), and the parity claim is exactly this: on every vector of
+// own (rule expression and allowlists in rule_gen.go, copied from the release config; stopwords in stopwords.txt; the filters in goldenscan.go), and the parity claim is exactly this: on every vector of
 // testdata/scanner_vectors.tsv, whose verdicts were recorded from the REAL binary, the port reports a hit wherever the scanner does
 // (Go-hit is a superset of gitleaks-hit; the port may be stricter on a vector, never looser). Beyond the vectors parity is not proved. What
 // the port does not do: the scanner's own base64 and percent decoding of the text it reads (the walk unpacks packed bodies and JSON
@@ -127,30 +127,6 @@ func unpack(body string) (string, error) {
 	return string(text), nil
 }
 
-// generic is the generic-api-key expression of gitleaks v8.21.2, exactly as config/gitleaks.toml has it.
-var generic = regexp.MustCompile(`(?i)[\w.-]{0,10}?(?:access|auth|(?-i:[Aa]pi|API)|credential|creds|key|passwd|password|secret|token)(?:[ \t\w.-]{0,20})(?:[\s|']|[\s|"]){0,3}(?:=|>|:{1,3}=|\|\|:|<=|=>|:|\?=)(?:'|\"|\s|=|\x60){0,5}([\w.=-]{10,150})(?:['|\"|\n|\r|\s|\x60|;]|$)`)
-
-// globalAllowRegexes are the regexes of the scanner's global allowlist (applied to the secret).
-var globalAllowRegexes = []*regexp.Regexp{
-	regexp.MustCompile(`(?i)^true|false|null$`),
-	regexp.MustCompile(`^(?i:a+|b+|c+|d+|e+|f+|g+|h+|i+|j+|k+|l+|m+|n+|o+|p+|q+|r+|s+|t+|u+|v+|w+|x+|y+|z+|\*+|\.+)$`),
-	regexp.MustCompile(`^\$(\d+|{\d+})$`),
-	regexp.MustCompile(`^\$([A-Z_]+|[a-z_]+)$`),
-	regexp.MustCompile(`^\${([A-Z_]+|[a-z_]+)}$`),
-	regexp.MustCompile(`^\{\{[ \t]*[\w ().|]+[ \t]*}}$`),
-	regexp.MustCompile(`^\$\{\{[ \t]*((env|github|secrets|vars)(\.[A-Za-z]\w+)+[\w "'&./=|]*)[ \t]*}}$`),
-	regexp.MustCompile(`^%([A-Z_]+|[a-z_]+)%$`),
-	regexp.MustCompile(`^%[+\-# 0]?[bcdeEfFgGoOpqstTUvxX]$`),
-	regexp.MustCompile(`^\{\d{0,2}}$`),
-	regexp.MustCompile(`^@([A-Z_]+|[a-z_]+)@$`),
-}
-
-// globalStopword is the one stopword of the scanner's global allowlist.
-const globalStopword = "014df517-39d1-4453-b7b3-9930c563627c"
-
-// ruleAllowRegex is the rule allowlist regex of generic-api-key, applied to the whole match.
-var ruleAllowRegex = regexp.MustCompile(`(?i)(accessor|api[_.-]?(version|id)|rapid|capital|author|(?-i:(?:c|jobC)redentials?Id|withCredentials)|key[_.-]?(alias|board|code|ring|stone|storetype|word|up|down|left|right)|issuerkeyhash|(bucket|primary|foreign|natural|hot)[_.-]?key|(?-i:[DdMm]onkey|[DM]ONKEY)|keying|(secret)[_.-]?name|public[_.-]?(key|token)|(key|token)[_.-]?file)`)
-
 //go:embed stopwords.txt
 var stopwordsText string
 
@@ -211,9 +187,9 @@ func entropy(data string) float64 {
 	return bits
 }
 
-func hasStopword(rules []string, secret string) bool {
+func hasStopword(words []string, secret string) bool {
 	lower := strings.ToLower(secret)
-	for _, word := range rules {
+	for _, word := range words {
 		if strings.Contains(lower, word) {
 			return true
 		}
@@ -221,34 +197,49 @@ func hasStopword(rules []string, secret string) bool {
 	return false
 }
 
-func containsDigit(secret string) bool { return strings.ContainsAny(secret, "123456789") }
+func anyMatch(res []*regexp.Regexp, target string) bool {
+	for _, re := range res {
+		if re.MatchString(target) {
+			return true
+		}
+	}
+	return false
+}
 
 // secretOf is the secret of one match of generic, as the scanner finds it: the match without its newlines, the expression run again on
-// it, and the first group.
+// it, and the first non-empty group.
 func secretOf(match string) (full, secret string) {
 	full = strings.Trim(match, "\n")
 	secret = full
 	if groups := generic.FindStringSubmatch(full); len(groups) >= 2 {
-		secret = groups[1]
+		for _, group := range groups[1:] {
+			if len(group) > 0 {
+				secret = group
+				break
+			}
+		}
 	}
 	return full, secret
 }
 
-// accepted is every filter the scanner runs on a match, in its order: the global allowlist, the rule allowlist (regex on the match,
-// stopwords on the secret), entropy above the bound, and a digit from 1 to 9.
-func accepted(full, secret string) bool {
-	for _, re := range globalAllowRegexes {
-		if re.MatchString(secret) {
-			return false
-		}
-	}
-	if strings.Contains(strings.ToLower(secret), globalStopword) {
+// accepted is every filter the scanner runs on a match, in its order: entropy above the bound, the global allowlist (regexes and
+// stopwords on the secret), then the rule's allowlists: a regex on the secret; a regex on the whole match or a stopword in the secret;
+// a regex on the line of the match. (The fourth rule allowlist needs a Yocto recipe path and never applies to a golden.) line is the
+// line of text that holds the match.
+func accepted(full, secret, line string) bool {
+	if entropy(secret) <= entropyMax {
 		return false
 	}
-	if ruleAllowRegex.MatchString(full) || hasStopword(ruleStopwords, secret) {
+	if anyMatch(globalAllowRegexes, secret) || hasStopword(globalStopwords, secret) {
 		return false
 	}
-	return entropy(secret) > entropyMax && containsDigit(secret)
+	if anyMatch(ruleAllowSecret, secret) {
+		return false
+	}
+	if anyMatch(ruleAllowMatch, full) || hasStopword(ruleStopwords, secret) {
+		return false
+	}
+	return !anyMatch(ruleAllowLine, line)
 }
 
 // Hits is the secrets the rule finds in the leaves, in leaf order. A hit carries the key of its leaf.
@@ -272,28 +263,41 @@ func Hits(leaves []Leaf) []Hit {
 // SecretsIn is the secrets the scanner would report in text (one unit, as the tool of record's per-leaf wrapper writes it).
 func SecretsIn(text string) []string {
 	var secrets []string
-	for _, match := range matchesIn(text) {
-		if full, secret := secretOf(match); accepted(full, secret) {
+	for _, span := range matchSpans(text) {
+		full, secret := secretOf(text[span[0]:span[1]])
+		if accepted(full, secret, lineOf(text, span[0], span[0]+len(full))) {
 			secrets = append(secrets, secret)
 		}
 	}
 	return secrets
 }
 
-// keywords are the credential words of the rule, lower case: a match holds one of them, whatever its case (the case-sensitive api
-// form is a subset of the case-insensitive one).
-var keywords = []string{"access", "auth", "api", "credential", "creds", "key", "passwd", "password", "secret", "token"}
+// lineOf is the lines of text the match [start, end) touches, as the scanner takes them (from the start of the first line to the end of
+// the last). The match is the TRIMMED match (secretOf strips its newlines): the scanner takes the line of start + len(trimmed match), so a
+// match that ends on a newline does not reach into the next line.
+func lineOf(text string, start, end int) string {
+	from := strings.LastIndexByte(text[:start], '\n') + 1
+	to := len(text)
+	if at := strings.IndexByte(text[end:], '\n'); at >= 0 {
+		to = end + at
+	}
+	return text[from:to]
+}
+
+// keywords are the credential words of the rule, lower case: a match holds one of them, whatever its case.
+var keywords = []string{"access", "api", "auth", "key", "credential", "creds", "passwd", "password", "secret", "token"}
 
 const (
-	windowBefore = 10 + 5                        // the lazy prefix of the rule, and room
-	windowAfter  = 20 + 3 + 3 + 5 + 150 + 1 + 60 // gap, quotes, separator, secret prefix, the longest secret, its terminator, and room
+	windowBefore = 50 + 10                       // the lazy prefix of the rule, and room
+	windowAfter  = 20 + 3 + 3 + 5 + 150 + 1 + 60 // gap, quotes, separator, secret prefix, the longest bounded secret, its terminator, and room
 )
 
-// matchesIn is every match of generic over text. The expression is slow over a long text, and most of a golden holds no credential
-// word, so for an ASCII text it is run only over a window around each keyword (every match holds one); a text with a non-ASCII byte is
+// matchSpans is every match of generic over text (start and end offsets). The expression is slow over a long text, and most of a golden
+// holds no credential word, so for an ASCII text it is run only over a window around each keyword (every match holds one; a window runs
+// on to the end of the run of secret characters, because the second secret form has no upper length); a text with a non-ASCII byte is
 // run whole, because the expression's case folding reaches beyond ASCII. A differential test holds this equal to the expression over
 // the whole text.
-func matchesIn(text string) []string {
+func matchSpans(text string) [][2]int {
 	if !hasSegmentRun(text) {
 		return nil
 	}
@@ -317,7 +321,11 @@ func matchesIn(text string) []string {
 		}
 	}
 	if !ascii {
-		return generic.FindAllString(text, -1)
+		var spans [][2]int
+		for _, loc := range generic.FindAllStringIndex(text, -1) {
+			spans = append(spans, [2]int{loc[0], loc[1]})
+		}
+		return spans
 	}
 	var windows [][2]int
 	for _, word := range keywords {
@@ -335,6 +343,13 @@ func matchesIn(text string) []string {
 			if end > len(text) {
 				end = len(text)
 			}
+			for end < len(text) && isSecretByte(text[end]) {
+				end++
+			}
+			// its terminator: one byte, or the two bytes of a backslash and n or r (the rule's escaped-newline terminator)
+			if end += 2; end > len(text) {
+				end = len(text)
+			}
 			windows = append(windows, [2]int{start, end})
 		}
 	}
@@ -349,21 +364,27 @@ func matchesIn(text string) []string {
 		}
 		merged = append(merged, window)
 	}
-	var matches []string
+	var spans [][2]int
 	for _, window := range merged {
-		matches = append(matches, generic.FindAllString(text[window[0]:window[1]], -1)...)
+		for _, loc := range generic.FindAllStringIndex(text[window[0]:window[1]], -1) {
+			spans = append(spans, [2]int{window[0] + loc[0], window[0] + loc[1]})
+		}
 	}
-	return matches
+	return spans
 }
 
-// hasSegmentRun reports whether text holds twelve characters of [A-Za-z0-9_.=-] in a row. It is necessary for a hit (a secret above
-// the entropy bound has at least twelve different characters, so at least twelve), so a text without it is not run through the
-// expression at all; a differential test holds the result equal to the whole-text expression for every text.
+// isSecretByte is a character of either secret form: [\w.=-] or the base64 alphabet.
+func isSecretByte(c byte) bool {
+	return c >= 'a' && c <= 'z' || c >= 'A' && c <= 'Z' || c >= '0' && c <= '9' || c == '_' || c == '.' || c == '=' || c == '-' || c == '+' || c == '/'
+}
+
+// hasSegmentRun reports whether text holds twelve secret characters in a row. It is necessary for a hit (a secret above the entropy
+// bound has at least twelve different characters, so at least twelve), so a text without it is not run through the expression at all.
 func hasSegmentRun(text string) bool {
 	run := 0
 	for i := 0; i < len(text); i++ {
 		c := text[i]
-		if c >= 'a' && c <= 'z' || c >= 'A' && c <= 'Z' || c >= '0' && c <= '9' || c == '_' || c == '.' || c == '=' || c == '-' || c >= 0x80 {
+		if isSecretByte(c) || c >= 0x80 {
 			if run++; run >= 12 {
 				return true
 			}

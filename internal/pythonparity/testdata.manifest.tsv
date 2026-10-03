@@ -1,7 +1,7 @@
 # Every file under internal/pythonparity/testdata: sha256, kind, path. Written by `go run ./internal/testsupport/recordedfiles/manifest`; never edit it by hand.
 # python-recorded set: c9772c22900bac1d3a82ced8b8fc56c40a0766bbee8df1aef7ca0b838561836b (24 files)
 # header-before-stamp set: 600ae05118d85ef0f5c56214371a33324ba0a392b8435276d5fbe660bfb9e765 (10 files)
-021b9e271f24df909259cb7bcfd2eb4a3c5c1e33894935a13754c908ca6635bc	go-generated	errorsanitize_hardened_main.golden.json
+1725a70260264bd5caee808c8d9f8932b7a60b9366c7a95c80d2faf86b6db831	go-generated	errorsanitize_hardened_main.golden.json
 ab525f0193314e087252f94db9893deb3b817b3a3e5dff87fe57f2002439308f	python-recorded	float_text_golden.json
 d2f76eb64bac0c3b86f2e87f5334106699fcf7c72e5ff8c1e333e32323cd13ba	unclassified	generate_float_text_golden.py
 8eec881abea957f546fd0317ef7dd23a28e6e5ee817eaab0f374dbd4f22b5807	unclassified	generate_json_indent_sorted_golden.py

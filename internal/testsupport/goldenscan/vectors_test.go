@@ -13,7 +13,7 @@ import (
 	"testing"
 )
 
-// scanner_vectors.tsv holds the verdict of the REAL scanner (gitleaks v8.21.2, default config) on a set of vectors, recorded by the
+// scanner_vectors.tsv holds the verdict of the REAL scanner (gitleaks v8.24.3, default config) on a set of vectors, recorded by the
 // verb below; the port must report a hit on every vector the scanner does (Go-hit is a superset of gitleaks-hit, so it may be stricter, never looser), so its parity is executed, not argued. A vector is a key and a value spec; the
 // value is made at run time, so no secret-shaped text is in the file.
 
@@ -51,6 +51,8 @@ var alphabets = map[string]string{
 	"lower":   "abcdefghijklmnopqrstuvwxyz",
 	"digits":  "0123456789",
 	"url":     "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789_.=-",
+	// fourteen letters and a third of the draws + or /: the second secret form with its separators (no run of twelve without one)
+	"plusslash": "abcdefghijklmn++++////",
 }
 
 // valueOf makes the value of a spec: parts joined by +; r:<alphabet>:<n>:<seed>, u:uuid:<seed>, or a literal.
@@ -76,7 +78,7 @@ func valueOf(t *testing.T, spec string) string {
 		case len(fields) == 3 && fields[0] == "u" && fields[1] == "uuid":
 			b.WriteString(derivedUUID("vector-" + fields[2]))
 		default:
-			b.WriteString(part)
+			b.WriteString(strings.ReplaceAll(strings.ReplaceAll(part, "<plus>", "+"), "<nl>", "\n")) // a literal part cannot hold the separator, so "+" is written <plus>; a newline is written <nl>
 		}
 	}
 	return b.String()
@@ -147,6 +149,13 @@ func TestRecordVectors(t *testing.T) {
 		t.Fatal(err)
 	}
 	sum := sha256.Sum256(raw)
+	versionOut, err := exec.Command(binary, "version").Output()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := strings.TrimSpace(string(versionOut)); got != scannerVersion {
+		t.Fatalf("the binary is version %q, the port follows %q: regenerate the port from that release first", got, scannerVersion)
+	}
 	dir := t.TempDir()
 	for i, v := range vectors {
 		if err := os.WriteFile(filepath.Join(dir, fmt.Sprintf("v%03d.txt", i)), []byte(unitOf(v, valueOf(t, v.spec))), 0o644); err != nil {
@@ -184,7 +193,7 @@ func TestRecordVectors(t *testing.T) {
 			b.WriteString(line + "\n")
 		}
 	}
-	b.WriteString("# binary sha256: " + hex.EncodeToString(sum[:]) + " (gitleaks v8.21.2, default config, empty ignore file, `dir` over one unit file per vector)\n")
+	b.WriteString("# binary sha256: " + hex.EncodeToString(sum[:]) + " (gitleaks " + strings.TrimSpace(string(versionOut)) + ", default config, empty ignore file, `dir` over one unit file per vector)\n")
 	for i, v := range vectors {
 		verdict := "none"
 		if hit[fmt.Sprintf("v%03d.txt", i)] {

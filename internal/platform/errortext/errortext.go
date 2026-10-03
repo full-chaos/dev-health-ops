@@ -2,11 +2,8 @@
 // logged: credential-shaped substrings are replaced and the text is bounded. It
 // is a leaf package (stdlib only) so that every layer, including the job runtime,
 // can import it without a cycle (CHAOS-7943). It is the ONE implementation: the Python-parity
-// matchers (matchers.go) answer every caller (CHAOS-7947). It imports the logging package for the credential-shape pass (stdlib
-// plus the secrets leaf below it; no import cycle with the job runtime).
+// matchers (matchers.go) answer every caller (CHAOS-7947).
 package errortext
-
-import "github.com/full-chaos/dev-health-ops/internal/platform/logging"
 
 const redactionMarker = "[REDACTED]"
 
@@ -59,33 +56,16 @@ func Truncate(text string, maxLength int) string {
 	return string(runes[:maxLength])
 }
 
-// SanitizeHardened is error_sanitize.py's pattern pass (Python-parity matchers) followed by the credential shapes the Python
-// list never had (LLM-provider, Stripe, Google, Slack and JWT keys by prefix, and a long value behind a credential word,
-// CHAOS-7937), then the cap, so a cap can never cut a key to a fragment below a shape's minimum length. maxLength <= 0 = no
-// cap. It is what pythonparity.SanitizeErrorTextHardened always was; it differs from Sanitize only on text holding such a shape.
-func SanitizeHardened(text string, maxLength int) string {
+// Cap is Truncate at Python's default of 4000. A caller that edits Sanitize's output (the userinfo pass) cuts again with it, so its
+// result never exceeds the cap and a second call over it changes nothing.
+func Cap(text string) string { return Truncate(text, defaultMaxErrorTextLength) }
+
+// Sanitize is the former RE2 function of the same name, reproduced by the one engine: the patterns read as the former RE2 port read
+// them (RedactRE2Reading, pinned byte-identical to the former pattern list), then the cap of 4000. It is the INNER chain of the
+// sync writers' path; the Python-parity pass is appended after it (hardened.SyncWriters).
+func Sanitize(text string) string {
 	if text == "" {
 		return text
 	}
-	return Truncate(logging.RedactCredentialShapes(Redact(text)), maxLength)
-}
-
-// SanitizeHardenedShapesFirst is the composition of the sync writers' path (CHAOS-7947): the credential shapes FIRST (as that
-// path always did), then the patterns with the former RE2 port's ASCII `\s`/`\b`, then the Python-parity patterns, then the
-// cap. One engine, two readings: the ASCII pass keeps everything the former RE2 port hid (Python's
-// Unicode `\s` ends a token at a no-break space, RE2's did not; Python sees no boundary between a non-ASCII letter and a key
-// name, RE2 did), the Python pass adds what RE2 missed (a secret behind a no-break space). Every pass only hides more, and the
-// order is the former one: a pass is only ever ADDED after the passes main ran (D4495: a redaction change is monotone). The
-// frozen former port is the reference of TestSyncEntryPointNeverHidesLessThanTheFormerPort.
-func SanitizeHardenedShapesFirst(text string, maxLength int) string {
-	if text == "" {
-		return text
-	}
-	shapes := logging.RedactCredentialShapes
-	return Truncate(Redact(RedactRE2Reading(shapes(text))), maxLength)
-}
-
-// SanitizeHardenedShapesFirstDefault is SanitizeHardenedShapesFirst with Python's default cap of 4000.
-func SanitizeHardenedShapesFirstDefault(text string) string {
-	return SanitizeHardenedShapesFirst(text, defaultMaxErrorTextLength)
+	return Cap(RedactRE2Reading(text))
 }

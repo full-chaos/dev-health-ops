@@ -33,6 +33,7 @@ import stat
 import subprocess
 from pathlib import Path
 
+import pytest
 import yaml
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -46,11 +47,66 @@ STAND_IN_GO = """#!/usr/bin/env bash
 # Stand-in `go`: `go test` records "<pkg args>" and succeeds (or fails when
 # FAKE_GO_FAIL is set); every other subcommand is the real go.
 if [ "$1" != "test" ]; then exec "{real_go}" "$@"; fi
-case " $* " in *" -list "*) exec "{real_go}" "$@" ;; esac
+case " $* " in *" -list "*)
+  printf '%s\\n' "$*" >> "${{FAKE_GO_LIST_LOG}}"
+  # FAKE_GO_LIST_REPLAY: the real `go test -race -list .*` output, produced ONCE per session. It is replayed only for a call that
+  # carries BOTH -race and `-list .*`; any other spelling of the listing runs the real go (so the listing arguments stay under test).
+  if [ -n "${{FAKE_GO_LIST_REPLAY:-}}" ] && [[ " $* " == *" -race "* ]] && [[ " $* " == *" -list .* "* ]]; then
+    cat "${{FAKE_GO_LIST_REPLAY}}"
+  else
+    "{real_go}" "$@" || exit $?
+  fi
+  # FAKE_GO_LIST_EXTRA appends one name to the listing, as a Fuzz/Example/race-tagged test would be.
+  [ -z "${{FAKE_GO_LIST_EXTRA:-}}" ] || printf '%s\\n' "${{FAKE_GO_LIST_EXTRA}}"
+  exit 0 ;;
+esac
 printf '%s\\n' "$*" >> "${{FAKE_GO_LOG}}"
 [ -z "${{FAKE_GO_FAIL:-}}" ] || exit 1
+# FAKE_GO_FAIL_ONLY fails exactly one of the two race calls of a leg: "providersync" (the test-name slice) or "packages" (the package run).
+case "${{FAKE_GO_FAIL_ONLY:-}}" in
+  providersync) case " $* " in *" ./internal/providersync "*) exit 1 ;; esac ;;
+  packages) case " $* " in *" ./internal/providersync "*) ;; *) exit 1 ;; esac ;;
+esac
 exit 0
 """
+
+
+_LIST_REPLAY: Path | None = None
+
+
+@pytest.fixture(scope="session", autouse=True)
+def _providersync_race_listing(tmp_path_factory: pytest.TempPathFactory) -> None:
+    """Run the REAL `go test -race -list .*` of internal/providersync once; the stand-in replays it (the real lister stays the producer)."""
+    global _LIST_REPLAY
+    real_go = shutil.which("go")
+    assert real_go, "go is required"
+    out = tmp_path_factory.mktemp("listing") / "providersync_race_list.txt"
+    env = {**os.environ, "GOWORK": "off"}
+    done = subprocess.run(
+        [
+            real_go,
+            "test",
+            "-mod=readonly",
+            "-race",
+            "-list",
+            ".*",
+            "./internal/providersync",
+        ],
+        cwd=ROOT,
+        env=env,
+        capture_output=True,
+        text=True,
+        timeout=900,
+        check=False,
+    )
+    assert done.returncode == 0, done.stderr[-1500:]
+    out.write_text(done.stdout)
+    _LIST_REPLAY = out
+
+
+def _list_calls(run_dir: Path) -> list[str]:
+    """The `go test ... -list ...` calls the stand-in saw in a run (arguments after `test`)."""
+    return [line for line in (run_dir / "go_list.log").read_text().splitlines() if line]
 
 
 def _weights() -> dict[str, int]:
@@ -127,11 +183,15 @@ def _run_check_go(
     fake.chmod(fake.stat().st_mode | stat.S_IXUSR)
     log = tmp_path / "go_test.log"
     log.write_text("")
+    list_log = tmp_path / "go_list.log"
+    list_log.write_text("")
     (tmp_path / "tmp").mkdir(parents=True, exist_ok=True)
     env = {
         **os.environ,
         "PATH": f"{bin_dir}{os.pathsep}{os.environ['PATH']}",
         "FAKE_GO_LOG": str(log),
+        "FAKE_GO_LIST_LOG": str(list_log),
+        **({"FAKE_GO_LIST_REPLAY": str(_LIST_REPLAY)} if _LIST_REPLAY else {}),
         "TMPDIR": str(tmp_path / "tmp"),
     }
     env.pop("FAKE_GO_FAIL", None)
@@ -709,6 +769,7 @@ def test_each_race_leg_runs_exactly_its_own_providersync_slice(tmp_path: Path) -
         want = _provider_shard(names, shard, count, PROVIDER_WEIGHTS).stdout.split()
         assert sorted(ran) == sorted(want), f"leg {shard} does not run its own slice"
         union += ran
+        _assert_race_listing_call(tmp_path / f"leg{shard}")
     assert sorted(union) == sorted(names), "the legs' slices are not the listed set"
     assert len(union) == len(set(union)), "a providersync test runs in two legs"
 
@@ -732,3 +793,125 @@ def test_a_shard_awk_that_loses_a_test_fails_the_leg_at_the_partition_check(
     assert proc.returncode != 0, proc.stdout[-800:]
     assert "not an exact partition" in proc.stderr
     assert not [c for c in calls if c.endswith("./internal/providersync")]
+
+
+def _provider_calls(calls: list[str]) -> list[str]:
+    return [c for c in calls if c.endswith("./internal/providersync")]
+
+
+def test_a_failing_providersync_slice_fails_the_leg_and_stops_it(
+    tmp_path: Path,
+) -> None:
+    # CHAOS-8275: the stand-in fails ONLY the providersync slice, so `|| true` on that call is visible (a stand-in that fails every call is not).
+    proc, calls = _run_check_go(
+        tmp_path,
+        "ci-leg",
+        "race",
+        "1",
+        "3",
+        extra_env={"FAKE_GO_FAIL_ONLY": "providersync"},
+    )
+    assert _provider_calls(calls), "the providersync slice was never run"
+    assert proc.returncode != 0, proc.stdout[-800:]
+    assert "ci-leg race: OK" not in proc.stdout
+    assert "<== stage race 1/3 done" not in proc.stdout
+    assert calls == _provider_calls(calls), (
+        "the leg went on to the package run after a failed slice"
+    )
+
+
+def test_a_failing_package_race_run_fails_the_leg_after_a_green_slice(
+    tmp_path: Path,
+) -> None:
+    # CHAOS-8275: the slice passes and ONLY the package run fails, so `|| true` on the package call is visible.
+    proc, calls = _run_check_go(
+        tmp_path,
+        "ci-leg",
+        "race",
+        "1",
+        "3",
+        extra_env={"FAKE_GO_FAIL_ONLY": "packages"},
+    )
+    assert _provider_calls(calls), "the providersync slice was never run"
+    assert [c for c in calls if c not in _provider_calls(calls)], (
+        "the package run was never reached"
+    )
+    assert proc.returncode != 0, proc.stdout[-800:]
+    assert "<== stage race 1/3 done" not in proc.stdout
+    assert "ci-leg race: OK" not in proc.stdout
+
+
+def _assert_race_listing_call(run_dir: Path) -> None:
+    # CHAOS-8275: the listing must be the RACE test binary's list of EVERY name; the stand-in cannot tell, so pin the call's arguments.
+    calls = [c for c in _list_calls(run_dir) if c.endswith("./internal/providersync")]
+    assert calls, "the providersync listing was never requested"
+    for call in calls:
+        assert " -race " in f" {call} ", (
+            f"the providersync listing is not the race build's: {call}"
+        )
+        assert " -list .* " in f" {call} ", (
+            f"the providersync listing is not of every name: {call}"
+        )
+
+
+def test_a_non_test_name_in_the_providersync_race_listing_fails_before_any_test_runs(
+    tmp_path: Path,
+) -> None:
+    # CHAOS-8275: a Fuzz*/Example*/Benchmark* name (or a test in a race-tagged file listed only by the race build) belongs to no `^Test` shard.
+    proc, calls = _run_check_go(
+        tmp_path,
+        "ci-leg",
+        "race",
+        "1",
+        "3",
+        extra_env={"FAKE_GO_LIST_EXTRA": "FuzzSomething"},
+    )
+    assert proc.returncode != 0, proc.stdout[-800:]
+    assert "FuzzSomething" in proc.stderr
+    assert "no race shard would run" in proc.stderr
+    _assert_race_listing_call(tmp_path)
+    assert not _provider_calls(calls)
+
+
+def test_a_shard_awk_that_swaps_a_test_keeps_the_count_and_fails_at_the_set_compare(
+    tmp_path: Path,
+) -> None:
+    # CHAOS-8275: shard 2 runs the first test instead of its own first one. Every shard stays non-empty and the total count is unchanged,
+    # so only the sorted-set comparison of the partition check can catch "one test twice, one test lost".
+    swap = tmp_path / "swap.awk"
+    swap.write_text(
+        "NR == 1 { first = $0 }\n"
+        "$0 ~ /^Test/ { n++; if ((n - 1) % count + 1 == shard) {"
+        " if (shard == 2 && !done) { done = 1; print first } else print } }\n"
+    )
+    proc, calls = _run_check_go(
+        tmp_path / "run",
+        "ci-leg",
+        "race",
+        "1",
+        "3",
+        extra_env={"GO_PROVIDERSYNC_RACE_SHARD_AWK": str(swap)},
+    )
+    assert proc.returncode != 0, proc.stdout[-800:]
+    assert "not an exact partition" in proc.stderr
+    assert not _provider_calls(calls)
+
+
+def test_the_providersync_shard_awk_balances_by_weight_and_weighs_an_unlisted_test(
+    tmp_path: Path,
+) -> None:
+    # CHAOS-8275: one heavy listed test and six unlisted ones over three shards. By weight the heavy test sits ALONE and the six
+    # unlisted tests (default weight > 0) split 3/3. An awk that ignores the weights file splits 3/2/2 (heavy test not alone); an awk
+    # whose default weight is 0 never moves an unlisted test off the lightest shard (1/6/0).
+    weights = tmp_path / "w.tsv"
+    weights.write_text("TestHeavy\t1000\n")
+    names = ["TestHeavy"] + [f"Test{c}" for c in "ABCDEF"]
+    sizes = []
+    for shard in (1, 2, 3):
+        proc = _provider_shard(names, shard, 3, weights)
+        assert proc.returncode == 0, proc.stderr
+        part = proc.stdout.split()
+        sizes.append(len(part))
+        if shard == 1:
+            assert part == ["TestHeavy"], part
+    assert sizes == [1, 3, 3], sizes

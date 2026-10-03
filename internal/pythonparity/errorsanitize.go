@@ -2,6 +2,7 @@ package pythonparity
 
 import (
 	"github.com/full-chaos/dev-health-ops/internal/platform/errortext"
+	"github.com/full-chaos/dev-health-ops/internal/platform/errortext/hardened"
 )
 
 // SanitizeErrorText is src/dev_health_ops/sync/error_sanitize.py's
@@ -27,7 +28,7 @@ func SanitizeErrorTextHardened(text string, maxLength int) string {
 
 func sanitizeErrorText(text string, maxLength int, harden bool) string {
 	if harden {
-		return errortext.SanitizeHardened(text, maxLength)
+		return hardened.Parity(text, maxLength)
 	}
 	return errortext.Truncate(errortext.Redact(text), maxLength)
 }

@@ -90,7 +90,6 @@ EXPECTED_LIVE_ORACLES: frozenset[str] = frozenset(
         "TestListFieldVenueOracle",
         "TestManualTriggerVenueOracleFrozen",
         "TestOperatorControlledDatasetKeysVenueOracleMatchesLivePython",
-        "TestPreflightVenueOracleOverRealAlembicStates",
         "TestPrincipalMatchesLivePythonAuthService",
         "TestPythonJSONGoldenMatchesLivePython",
         "TestPythonJSONInsertionOrderGoldenMatchesLivePython",

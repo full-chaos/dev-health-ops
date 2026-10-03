@@ -34,20 +34,17 @@ var formerSecretPatterns = []*regexp.Regexp{
 	regexp.MustCompile(`(?i)\b[a-z][a-z0-9+.-]*://[^\s/@]+@`),
 }
 
-// formerSyncSanitize is what syncdispatchruntime.SanitizeErrorText was on main: the shape pass, then the RE2 patterns, then the cap.
+// formerSyncSanitize is what syncdispatchruntime.SanitizeErrorText was on main (0a590c71db): the shape pass without the userinfo form,
+// then the RE2 patterns, then the cap, then the userinfo pass last with a second cut.
 func formerSyncSanitize(text string) string {
 	if text == "" {
 		return text
 	}
-	sanitized := logging.RedactCredentialShapes(text)
+	sanitized := logging.RedactCredentialShapesNoUserinfo(text)
 	for _, pattern := range formerSecretPatterns {
 		sanitized = pattern.ReplaceAllString(sanitized, "[REDACTED]")
 	}
-	runes := []rune(sanitized)
-	if len(runes) > 4000 {
-		sanitized = string(runes[:4000-len("...[truncated]")]) + "...[truncated]"
-	}
-	return sanitized
+	return logging.RedactUserinfoLast(errortext.Cap(sanitized), errortext.Cap)
 }
 
 var visibleTokenPattern = regexp.MustCompile(`[A-Za-z0-9_\x{80}-\x{10FFFF}]{4,}`)
@@ -213,4 +210,21 @@ func TestRE2ReadingIsTheFormerChain(t *testing.T) {
 		}
 	}
 	t.Logf("%d texts compared, %d differ", len(texts), different)
+}
+
+// CHAOS-7947: the sync writers' path is NEVER weaker than the former RE2 port on a string it redacted. Python's Unicode `\b` does
+// not see a boundary between a non-ASCII letter and a key name; the RE2 reading of the engine does (as RE2 did), so these still
+// redact. Each wanted value is the former port's own answer, taken from main at beec298d34.
+func TestSyncEntryPointKeepsWhatTheFormerPortRedacted(t *testing.T) {
+	rows := []struct{ in, want string }{
+		{"İtoken=1", "İ[REDACTED]"},
+		{"ıtoken=1", "ı[REDACTED]"},
+		{"ıapi_key=ı", "ı[REDACTED]"},
+		{"_secretapikeyghr_Kclient_secret://secretİ", "_secretapikeyghr_K[REDACTED]"},
+	}
+	for _, row := range rows {
+		if got := syncdispatchruntime.SanitizeErrorText(row.in); got != row.want {
+			t.Errorf("SanitizeErrorText(%q) = %q, want %q", row.in, got, row.want)
+		}
+	}
 }

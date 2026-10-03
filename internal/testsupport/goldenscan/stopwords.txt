@@ -1,4 +1,4 @@
-# The generic-api-key rule stopwords of gitleaks v8.21.2 (config/gitleaks.toml, sha256 2ce9d818ed5aac0d9a36638a317284bd733c26d5069c980829335183397430bb), one per line, in the source order. A secret that holds one (any case) is dropped by the scanner.
+# The generic-api-key rule stopwords of gitleaks v8.24.3 (config/gitleaks.toml, sha256 8f393899dbdc67e4eae580909e496acab9cf3a75aacfb6fac56b6eb16bb9e051), one per line, in the source order (the second rule allowlist). A secret that holds one (any case) is dropped by the scanner.
 000000
 aaaaaa
 about
@@ -1475,3 +1475,4 @@ zip_
 zsh-
 zsh.
 zsh_
+6fe4476ee5a1832882e326b506d14126

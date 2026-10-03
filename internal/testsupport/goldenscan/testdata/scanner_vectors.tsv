@@ -1,6 +1,6 @@
 # vectors for the port of the generic-api-key rule: name, key, value spec, verdict of the real binary (hit or none). A value spec is parts joined by +: a literal, r:<alphabet>:<length>:<seed> (a deterministic run of characters; alphabets alnum, hex, letters, lower, digits, url, or s<chars>), or u:uuid:<seed>. Values are made at run time; no secret-shaped text is in this file.
 # recorded by: GOLDENSCAN_RECORD_VECTORS=<gitleaks binary> go test ./internal/testsupport/goldenscan -run TestRecordVectors
-# binary sha256: cd55c324ef854ec883dc910626366a6701d74585e28f863187e9f79f99d0463f (gitleaks v8.21.2, default config, empty ignore file, `dir` over one unit file per vector)
+# binary sha256: 4b3b8184b6059abdfb50cb83a9ddc7d96affb32c7b14610ad9930965162de3b2 (gitleaks 8.24.3, default config, empty ignore file, `dir` over one unit file per vector)
 alnum-9	api_key	r:alnum:9:1	none
 alnum-10	api_key	r:alnum:10:1	none
 alnum-11	api_key	r:alnum:11:1	none
@@ -8,7 +8,7 @@ alnum-12	api_key	r:alnum:12:1	hit
 alnum-20	api_key	r:alnum:20:1	hit
 alnum-40	api_key	r:alnum:40:1	hit
 alnum-150	api_key	r:alnum:150:1	hit
-alnum-151	api_key	r:alnum:151:1	none
+alnum-151	api_key	r:alnum:151:1	hit
 hex-32	api_key	r:hex:32:2	hit
 hex-64	credential_fingerprint	r:hex:64:3	hit
 letters-20	api_key	r:letters:20:4	none
@@ -26,7 +26,7 @@ key-token	token	r:alnum:30:10	hit
 key-client_secret	client_secret	r:alnum:30:10	hit
 key-password	password	r:alnum:30:10	hit
 key-passwd	passwd	r:alnum:30:10	hit
-key-credential_id	credential_id	r:alnum:30:10	hit
+key-credential_id	credential_id	r:alnum:30:10	none
 key-KEY	KEY	r:alnum:30:10	hit
 key-keys	keys	r:alnum:30:10	hit
 key-name	name	r:alnum:30:10	none
@@ -44,7 +44,7 @@ key-secret_name	secret_name	r:alnum:30:10	none
 key-token_file	token_file	r:alnum:30:10	none
 key-access_token	access_token	r:alnum:30:10	hit
 key-auth	auth	r:alnum:30:10	hit
-uuid-lower	credential_id	u:uuid:11	hit
+uuid-lower	credential_id	u:uuid:11	none
 true-word	api_key	true	none
 template-var	api_key	{{ SOME_VALUE1 }}	none
 stopword-test	api_key	r:alnum:10:21+test+r:alnum:18:22	hit
@@ -70,12 +70,51 @@ stopword-control	api_key	r:alnum:10:21+r:alnum:18:22	hit
 distinct-12	api_key	a1b2c3d4e5f6	hit
 distinct-11	api_key	a1b2c3d4e5f	none
 entropy-12-chars-below-the-bound	api_key	a1b2c3d4e5ff	none
-only-the-digit-zero	api_key	abcdefghijklmn0	none
+only-the-digit-zero	api_key	abcdefghijklmn0	hit
 false-inside	api_key	r:alnum:10:51+false+r:alnum:12:52	none
 global-stopword-uuid	api_key	014df517-39d1-4453-b7b3-9930c563627c	none
 long-s-in-the-keyword	ſecret	r:alnum:30:41	none
-rule-allow-credentialsid-upper	CREDENTIALSID	r:alnum:24:61	hit
-rule-allow-public-token-far	public_token_bcdfghjlmnqrsvwxz_secret	r:alnum:24:62	hit
+rule-allow-credentialsid-upper	CREDENTIALSID	r:alnum:24:61	none
+rule-allow-public-token-far	public_token_bcdfghjlmnqrsvwxz_secret	r:alnum:24:62	none
 operator-greater-than	note	auth>+r:alnum:24:63	hit
-terminator-pipe	note	key=+r:alnum:24:64+|tail	hit
+terminator-pipe	note	key=+r:alnum:24:64+|tail	none
 three-runs-of-eleven	token	r:alnum:11:65+_+r:alnum:11:66+_+r:alnum:11:67	hit
+op-comma	note	key,+r:alnum:24:71	hit
+op-fat-arrow	note	token=>+r:alnum:24:72	hit
+op-question-equals	note	auth?=+r:alnum:24:73	hit
+op-three-colons-equals	note	secret:::=+r:alnum:24:74	hit
+terminator-escaped-newline	note	key=+r:alnum:24:75+\n	hit
+secret-max-150-url-form	api_key	r:url:150:76	hit
+secret-151-url-form	api_key	r:url:151:77	none
+key-creds	creds	r:alnum:30:78	hit
+key-case-sensitive-api-lower-mixed	aPI_val	r:alnum:30:79	none
+key-gap-20	token_aaaaaaaaaaaaaaaaaaa	r:alnum:30:81	hit
+key-gap-21	token_aaaaaaaaaaaaaaaaaaaaa	r:alnum:30:81	none
+quotes-three-before-the-operator	note	token'' :+r:alnum:24:82	hit
+quotes-four-before-the-operator	note	token''' :+r:alnum:24:82	none
+second-form-with-plus-and-slash	api_key	r:plusslash:40:57	hit
+long-gap-long-secret	token_aaaaaaaaaaaaaaaaaaa	r:url:150:84	hit
+second-form-400	api_key	r:alnum:400:85	hit
+line-docker-secret-mount	note	--mount=type=secret,id=+r:alnum:24:86	none
+line-js-import	note	import { token, +r:alnum:24:87+ } from 'x'	none
+second-form-400-no-keyword-inside	api_key	r:alnum:400:86	hit
+global-allow-true-inside	api_key	r:alnum:10:91+true+r:alnum:10:92	hit
+rule-allow-public-api-key	public_api_key	r:alnum:24:93	hit
+allow-word-fifty-one-before-the-keyword	public_token_bcdfghjlmnpqrstvwxzbcdfghjlmnpqrstvwxzb_secret	r:alnum:24:94	hit
+second-form-12-characters	api_key	ab1c<plus>de2f/g3	hit
+nl-end-then-docker-mount	note	token=+r:alnum:32:90+<nl>+RUN --mount=type=secret,id=x	hit
+nl-end-then-import	note	token=+r:alnum:32:91+<nl>+import { a } from 'b'	hit
+nl-end-then-hash-docker-mount	note	secret: +r:alnum:32:92+<nl>+# --mount=type=secret,id=x	hit
+nl-end-blank-line-then-docker-mount	note	token=+r:alnum:32:93+<nl>+<nl>+RUN --mount=type=secret,id=x	hit
+key-access-lower	access	r:alnum:32:101	hit
+key-access-upper	ACCESS	r:alnum:32:102	hit
+key-false-positive-token	false_positive_token	r:alnum:32:103	hit
+key-true-token	true_token	r:alnum:32:104	hit
+key-alphabet-run-token	abcdefghijklmnopqrstuvwxyz_token	r:alnum:32:105	hit
+long-s-in-secret-segments	token	r:alnum:8:106+ſ+r:alnum:8:107+ſ+r:alnum:8:108+ſ+r:alnum:8:109	hit
+kelvin-in-secret-segments	token	r:alnum:8:110+K+r:alnum:8:111+K+r:alnum:8:112+K+r:alnum:8:113	hit
+long-second-form-escaped-newline-400	api_key	r:alnum:400:201+\n	hit
+long-second-form-escaped-cr-400	api_key	r:alnum:400:202+\r	hit
+long-second-form-escaped-newline-200	api_key	r:alnum:200:203+\n	hit
+long-second-form-escaped-newline-60	api_key	r:alnum:60:204+\n	hit
+long-second-form-escaped-tab-400	api_key	r:alnum:400:205+\t	none

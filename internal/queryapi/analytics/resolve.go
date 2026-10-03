@@ -22,10 +22,12 @@
 //	  raises the first Exception it meets. FATAL.
 //	Phase 2 (sankey, analytics.py:622-931, if requested): sequential AFTER
 //	  phase 1. compile_sankey (incl. validate_sankey_path/measure) is
-//	  FATAL; only the ClickHouse execution step is caught and degrades to
-//	  an empty SankeyResult.
+//	  FATAL. Python caught the ClickHouse execution step and answered an
+//	  empty SankeyResult; this port returns that failure as an error
+//	  (CHAOS-8186, a declared divergence: see resolveSankey).
 //	Phase 3 (flowMatrix, analytics.py:935-963, if requested): sequential
-//	  AFTER phase 2, same fatal-compile/swallow-execute split.
+//	  AFTER phase 2. Compile is fatal; a failed execute degrades to an empty
+//	  result that carries degradedReason (CHAOS-7092).
 //	Phase 4 (evidence quality stats, analytics.py:965-981): entirely
 //	  investment-path (CHAOS-4538/CHAOS-4723). PORTED as of CHAOS-4723 --
 //	  gated on useInvestment via resolveEvidenceQualityStats
@@ -190,8 +192,8 @@ func Resolve(ctx context.Context, client QueryClient, orgID string, batch model.
 		breakdownResults = append(breakdownResults, o.result)
 	}
 
-	// Phase 2: sankey, sequential after phase 1. Compile is FATAL;
-	// execute is swallowed to an empty result.
+	// Phase 2: sankey, sequential after phase 1. Compile is FATAL, and so
+	// is a failed execute (CHAOS-8186).
 	var sankeyResult *model.SankeyResult
 	if batch.Sankey != nil {
 		result, err := resolveSankey(ctx, client, orgID, *batch.Sankey, batch.UseInvestment, resolvedFilters)
@@ -202,7 +204,8 @@ func Resolve(ctx context.Context, client QueryClient, orgID string, batch model.
 	}
 
 	// Phase 3: flowMatrix, sequential after phase 2 (NOT concurrent with
-	// it). Same fatal-compile/swallow-execute split.
+	// it). Compile is FATAL; a failed execute degrades to an empty result
+	// with degradedReason set.
 	var flowMatrixResult *model.FlowMatrixResult
 	if batch.FlowMatrix != nil {
 		result, err := resolveFlowMatrix(ctx, client, orgID, *batch.FlowMatrix, batch.UseInvestment, resolvedFilters)
@@ -292,9 +295,11 @@ func resolveOneBreakdown(ctx context.Context, client QueryClient, orgID string, 
 
 // resolveSankey ports the batch.sankey branch of resolve_analytics
 // (analytics.py:622-931), MINUS coverage (see Resolve's doc comment).
-// compile_sankey's own validation is FATAL (returned as an error);
-// ExecuteSankeyQueries's failure is caught here and degrades to an
-// empty result, matching analytics.py:646-656 exactly.
+// compile_sankey's own validation is FATAL (returned as an error).
+// ExecuteSankeyQueries's failure is returned as an error too (CHAOS-8186).
+// DECLARED DIVERGENCE from analytics.py:646-656, which caught it and answered
+// an empty sankey: an empty result with HTTP 200 for a failed read cannot be
+// told from an empty window.
 // pathAutoRoutesToInvestment mirrors _get_context_params' auto-route
 // (compiler.py:152-155): with force_investment None, any of THEME,
 // SUBCATEGORY or WORK_TYPE in the dimension list selects the investment
@@ -447,11 +452,21 @@ func resolveSankey(ctx context.Context, client QueryClient, orgID string, input 
 	sankeyElapsed = time.Since(started)
 	coverageConcurrent.Wait()
 	if execErr != nil {
-		// Swallow: analytics.py:654-656 logs and degrades to empty.
+		// CHAOS-8186: a failed sankey read is an error. Python logged it and
+		// answered an empty sankey (analytics.py:654-656) and this port copied
+		// that, so the caller got `nodes: [], edges: []` with HTTP 200: the
+		// same answer as a window with no flow at all. SankeyResult has no
+		// field that could say "degraded" (FlowMatrixResult has one,
+		// CHAOS-7092), so the two states were one on the wire. A failed
+		// timeseries or breakdown read of the same batch already fails the
+		// request (Resolve, above); the sankey now does the same.
+		//
+		// The telemetry report stays, under its old phase name, so the
+		// counter and the span event keep counting failed sankey reads.
 		recordDegradation(ctx, "sankey", execErr)
-		slog.WarnContext(ctx, "analytics: sankey query failed; returning an empty sankey",
+		slog.WarnContext(ctx, "analytics: sankey query failed",
 			"org_id", orgID, "path", pathLabel(req.Path), "use_investment", useInvestment, "error", execErr)
-		nodes, edges = nil, nil
+		return nil, fmt.Errorf("execute: %w", execErr)
 	}
 	slog.DebugContext(ctx, "analytics: sankey resolved",
 		"org_id", orgID,
@@ -463,7 +478,6 @@ func resolveSankey(ctx context.Context, client QueryClient, orgID string, input 
 		"total_ms", time.Since(started).Milliseconds(),
 		"nodes", len(nodes),
 		"edges", len(edges),
-		"sankey_failed", execErr != nil,
 		"coverage_nil", coverage == nil,
 	)
 
@@ -481,8 +495,9 @@ func resolveSankey(ctx context.Context, client QueryClient, orgID string, input 
 }
 
 // resolveFlowMatrix ports the batch.flow_matrix branch of
-// resolve_analytics (analytics.py:935-963). Same fatal-compile/
-// swallow-execute split as resolveSankey.
+// resolve_analytics (analytics.py:935-963). Compile is fatal; a failed
+// execute degrades to an empty result with degradedReason set (resolveSankey
+// no longer degrades: CHAOS-8186).
 func resolveFlowMatrix(ctx context.Context, client QueryClient, orgID string, input model.FlowMatrixRequestInput, batchUseInvestment *bool, filters *model.FilterInput) (*model.FlowMatrixResult, error) {
 	req, err := FlowMatrixRequestFromInput(input)
 	if err != nil {

@@ -3,7 +3,7 @@
 The smoke's GraphQL documents are derived from web source through urql's
 formatDocument transform; the oracle here is the REAL registered documents the Go
 plane serves (internal/queryapi/server/query_route.go) and the real edge catalog
-(src/dev_health_ops/api/graphql/go_api_operations.json): stripping __typename from a
+(contracts/graphql/v1/go_api_operations.json): stripping __typename from a
 registered document and re-deriving it must give back the same bytes and digest.
 """
 
@@ -24,7 +24,7 @@ import pytest
 ROOT = Path(__file__).resolve().parents[2]
 SCRIPT = ROOT / "ci" / "bigboy" / "web-path-smoke.py"
 QUERY_ROUTE = ROOT / "internal" / "queryapi" / "server" / "query_route.go"
-CATALOG = ROOT / "src" / "dev_health_ops" / "api" / "graphql" / "go_api_operations.json"
+CATALOG = ROOT / "contracts" / "graphql" / "v1" / "go_api_operations.json"
 ROUTING_OPS = ROOT / "ci" / "bigboy" / "routing-ops.txt"
 
 REGISTERED = {

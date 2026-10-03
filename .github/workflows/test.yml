@@ -155,428 +155,6 @@ jobs:
               # derives the directories that need an entry from the tracked fixtures.
               - 'tools/**'
 
-  # Fast, pytest-xdist-parallelized unit suite on the supported Python
-  # version. This is the per-PR signal that the required `test` gate (below)
-  # aggregates. Coverage is intentionally NOT gated here so the iterative PR
-  # loop stays fast — the coverage-gated full suite runs in the `coverage` job
-  # at merge time and on main (CHAOS-2586). Single-version matrix (CHAOS-3419):
-  # containers ship 3.14 only (docker/Dockerfile), so that is the only
-  # interpreter tested.
-  test-matrix:
-    needs: [changes]
-    # On merge_group, dorny/paths-filter has no PR base/head diff to compute and
-    # can report code=false, which would skip every test job; the `test`
-    # aggregator then treats the skip as a pass and an untested change reaches
-    # main. Always run in the merge queue regardless of the path filter, and
-    # likewise on workflow_dispatch, where the filter is deliberately not run
-    # (see the `changes` job) so a manual run cannot test nothing.
-    if: >-
-      github.event_name == 'merge_group' ||
-      github.event_name == 'workflow_dispatch' ||
-      needs.changes.outputs.code == 'true'
-    # Same ARC routing as `changes` above. Fallback changed from this job's
-    # former ubuntu-26.04-arm to ubuntu-latest (x64): chris 2026-09-04 16:59 --
-    # the enterprise's hosted-runner label list is exactly ubuntu-latest/
-    # ubuntu-22.04/ubuntu-24.04 (+ windows/macos); ubuntu-26.04-arm is not a
-    # real hosted label there, so it was never a valid fallback. There is no
-    # hosted ARM label to fall back to -- the disabled/fork-PR leg now runs
-    # x64 (this suite has no arm64-specific assertions, unlike
-    # go-arm64-numeric-parity in go.yml).
-    runs-on: ${{ (vars.SELF_HOSTED_RUNNERS == 'enabled' && ((github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository) || (github.event_name == 'push' && github.ref == 'refs/heads/main') || (github.event_name == 'workflow_dispatch' && github.event.inputs.ref == '') || github.event_name == 'release' || github.event_name == 'schedule')) && fromJSON('["self-hosted","oci-arc-runners"]') || 'ubuntu-latest' }}
-    # Test matrix needs package read access for dependency installs.
-    permissions:
-      contents: read
-      packages: read
-    strategy:
-      # SHARDED (CHAOS-6692). The unit suite was 15 of the 17 minutes of this
-      # job and the longest required job of a PR. The matrix runs 2 legs; leg K
-      # runs the pytest FILES whose stable hash falls in slice K
-      # (PYTEST_SHARD=K/2, tests/conftest.py). Keep the shard list and the N in
-      # PYTEST_SHARD below in step: tests/tooling/test_pytest_shards.py pins
-      # both. The `test` aggregate judges the MATRIX result, so a failed,
-      # cancelled or missing leg fails the required check.
-      fail-fast: false
-      matrix:
-        python-version: ["3.14"]
-        shard: [1, 2]
-
-    services:
-      postgres:
-        image: ghcr.io/full-chaos/postgres:18-alpine@sha256:9a8afca54e7861fd90fab5fdf4c42477a6b1cb7d293595148e674e0a3181de15
-        # The runner pulls a service image BEFORE the first step, so no
-        # `docker/login-action` step can authenticate it -- GitHub requires
-        # credentials on the declaration itself. GITHUB_TOKEN reads the mirror.
-        credentials:
-          username: ${{ github.actor }}
-          password: ${{ secrets.GITHUB_TOKEN }}
-        env:
-          POSTGRES_USER: postgres
-          POSTGRES_PASSWORD: postgres
-          POSTGRES_DB: test_db
-        ports:
-          - 5432:5432
-        options: >-
-          --health-cmd pg_isready --health-interval 10s --health-timeout 5s --health-retries 5
-
-      clickhouse:
-        image: ghcr.io/full-chaos/clickhouse/clickhouse-server:26.7
-        # The runner pulls a service image BEFORE the first step, so no
-        # `docker/login-action` step can authenticate it -- GitHub requires
-        # credentials on the declaration itself. GITHUB_TOKEN reads the mirror.
-        credentials:
-          username: ${{ github.actor }}
-          password: ${{ secrets.GITHUB_TOKEN }}
-        env:
-          CLICKHOUSE_DB: default
-          CLICKHOUSE_USER: ch
-          CLICKHOUSE_PASSWORD: ch
-        ports:
-          - 8123:8123
-        options: >-
-          --health-cmd "clickhouse-client --user ch --password ch --query 'SELECT 1'" --health-interval 10s --health-timeout 5s --health-retries 5
-
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-
-      # CHAOS-5130-class gap: this job moved to the oci-arc-runners pool
-      # (chris 2026-09-04 16:59), whose custom image (docker/arc-runner/
-      # Dockerfile) is a minimal addition over the upstream actions-runner
-      # image, not a GitHub-hosted-runner drop-in -- ubuntu-latest ships go,
-      # helm, uuidgen and docker-compose by default; this image ships none
-      # of them. #2242's first live test-matrix run on the pool failed 37
-      # tests: 18 helm (`helm: command not found`), 11 go (tests/api/graphql's
-      # dual-run suite shells out to `go build`/`go run` against the live Go
-      # API server), 6 docker-compose (`docker compose: command not found` --
-      # this one clears once #2245 (CHAOS-5134, docker-compose-plugin) merges
-      # into the shared image), 1 uuidgen (see below), and 1 pre-existing
-      # hygiene finding unrelated to this pool move
-      # (test_image_pulling_action_steps_are_allowlisted_or_ticketed).
-      # go/helm are fixed here at the JOB level rather than the shared image:
-      # both are already provided per-job by a pinned setup action on every
-      # other Go/Python job in this repo, so adding them to the base image
-      # would just be a second, driftable source of the same version.
-      - name: Configure self-hosted Go cache paths
-        # CHAOS-4906: the oci-arc-runners pool exports GOMODCACHE/GOCACHE to a
-        # SHARED hostPath (unlike a GitHub-hosted runner's ephemeral per-job
-        # filesystem). tests/api/graphql's dual-run suite does real `go
-        # build`/`go run` work against this job's own go.mod, not a trivial
-        # version check, so it needs the same shared-cache pointing as
-        # go-quality.yml's self-hosted leg -- setup-go's default cache would
-        # otherwise restore/save a GitHub Actions cache tarball into this
-        # concurrently-shared path. Only set on the self-hosted leg.
-        if: vars.SELF_HOSTED_RUNNERS == 'enabled' && ((github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository) || (github.event_name == 'push' && github.ref == 'refs/heads/main') || (github.event_name == 'workflow_dispatch' && github.event.inputs.ref == '') || github.event_name == 'release' || github.event_name == 'schedule')
-        run: |
-          echo "GOMODCACHE=/mnt/go-cache/mod" >> "${GITHUB_ENV}"
-          echo "GOCACHE=/mnt/go-cache/build" >> "${GITHUB_ENV}"
-
-      - name: Set up Go
-        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
-        with:
-          go-version-file: go.mod
-          cache-dependency-path: '**/go.sum'
-          # `false` on the self-hosted leg -- same reasoning as
-          # go-quality.yml's "Set up Go" step: setup-go's own cache defaults
-          # to `true`, which would corrupt the pool's shared, concurrently-
-          # written hostPath cache.
-          cache: ${{ !(vars.SELF_HOSTED_RUNNERS == 'enabled' && ((github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository) || (github.event_name == 'push' && github.ref == 'refs/heads/main') || (github.event_name == 'workflow_dispatch' && github.event.inputs.ref == '') || github.event_name == 'release' || github.event_name == 'schedule')) }}
-
-      - name: Set up Helm
-        uses: azure/setup-helm@9bc31f4ebc9c6b171d7bfbaa5d006ae7abdb4310 # v5.0.1
-        with:
-          # No Helm version was ever pinned in this repo before this job had
-          # its own runner (ubuntu-latest's bundled helm satisfied it
-          # silently). deploy/helm/dev-health/Chart.yaml is `apiVersion: v2`
-          # (Helm 3+) with no version-specific feature in tests/test_helm_*.py
-          # (checked: no `lookup`, no `--dry-run=server`, nothing gated past
-          # Helm 3's baseline `helm template`/`helm lint`), so this pins the
-          # latest stable Helm 3 release rather than following Helm 4 (GA'd
-          # 2026-08) with an untested major-version jump on a routing PR.
-          version: 'v3.21.4'
-
-      - name: Set up Python ${{ matrix.python-version }}
-        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
-        with:
-          python-version: ${{ matrix.python-version }}
-
-      # CHAOS-4346: this job used to `pip install -r requirements.txt`
-      # (requirements.txt is just `-e .[dev]`), which re-resolves every
-      # unpinned specifier in pyproject.toml against PyPI on every run --
-      # uv.lock's pin is never consulted. openai>=3.0.0 floated onto
-      # openai 3.4.0 mid-flight on 2026-08-26 (uv.lock has 3.0.0) and broke
-      # tests/test_logging_config.py's leak harness for every PR in flight,
-      # none of which had touched that test or its dependency. `uv sync
-      # --frozen` installs exactly uv.lock's resolution and FAILS the step
-      # if the lock is stale relative to pyproject.toml, so a real
-      # dependency bump has to touch (and review) uv.lock instead of
-      # silently drifting under CI.
-      - name: Install uv
-        uses: astral-sh/setup-uv@bec219d24cd3e171d82865faccec33120bb574f4 # v10.1.0
-        with:
-          python-version: ${{ matrix.python-version }}
-
-      - name: Install dependencies
-        run: |
-          uv sync --frozen --all-extras --dev
-          uv pip install --python .venv/bin/python -r requirements-docs.txt
-          echo "$PWD/.venv/bin" >> "$GITHUB_PATH"
-
-      - name: Run parallel unit test contract
-        env:
-          DATABASE_URI: clickhouse://ch:ch@localhost:8123/default
-          CLICKHOUSE_URI: clickhouse://ch:ch@localhost:8123/default
-          POSTGRES_URI: postgresql+asyncpg://postgres:postgres@localhost:5432/test_db
-          DEV_HEALTH_POSTGRES_TEST_URI: postgresql+asyncpg://postgres:postgres@localhost:5432/test_db
-          SECONDARY_DATABASE_URI: mongodb://localhost:27017
-          # No OTLP collector runs in CI; with OTEL on, the exporter retries to
-          # localhost:4317 with backoff on every span/metric, flooding logs and
-          # slowing the suite into timeouts. We don't assert OTEL stats in CI.
-          OTEL_ENABLED: "false"
-          # Cap xdist workers so parallelism does not contend on the single
-          # postgres/clickhouse service container. The standard arm runner has
-          # 4 vCPUs, so this matches `-n auto` there while staying predictable on
-          # larger runners. Override PYTEST_XDIST_WORKERS to tune.
-          PYTEST_XDIST_WORKERS: "4"
-          # This leg's slice of the suite (K/N); see the matrix above.
-          PYTEST_SHARD: ${{ matrix.shard }}/2
-          PYTEST_ADDOPTS: --ignore=tests/test_0066_celery_river_cutover_postgres.py --ignore=tests/test_saved_report_schedule_unique_postgres_migration.py --ignore=tests/test_0097_backfill_report_schedule_next_run_postgres.py --ignore=tests/test_report_run_execution_lease_postgres_migration.py --ignore=tests/test_chaos_3337_source_class_postgres_migration.py --ignore=tests/api/admin/test_add_member_visibility.py --ignore=tests/api/dev/test_persistence_postgres.py
-        run: |
-          chmod +x ci/run_tests.sh
-          mkdir -p test-results/logs
-          set -o pipefail
-          ./ci/run_tests.sh unit 2>&1 | tee test-results/logs/unit-${{ matrix.python-version }}-shard-${{ matrix.shard }}.log
-
-      # These files carry their own `isolated_postgres`/`require_postgres_test_uri`
-      # fixtures that pytest.fail() (not skip) when CI/GITHUB_ACTIONS is set but
-      # the needed URI is missing, so they cannot run in "Run parallel unit test
-      # contract" above (no admin-privileged Postgres URI there) and are ignored
-      # from it instead. DEV_HEALTH_TEST_POSTGRES_ADMIN_URI's database component
-      # must be literally `postgres`: the fixture connects to it to CREATE/DROP a
-      # throwaway per-test database on the same server.
-      #
-      # test_add_member_visibility.py (CHAOS-3411) has the same CI-must-fail
-      # gate but only needs DEV_HEALTH_POSTGRES_TEST_URI (it isolates itself
-      # with a CREATE SCHEMA on that same database, not a whole separate
-      # database), so it doesn't need the admin URI -- it's listed here
-      # rather than alongside it so a stripped commit can't silently pass by
-      # having this step simply not exercise it (CHAOS-3411 Codex round 1:
-      # the module was collected by neither PR-gated step with its URI set,
-      # so it always skipped on pull_request).
-      - name: Run PostgreSQL migration tests
-        # Shard 1 only: these named files are --ignore'd from the unit run above
-        # (in every shard) and run exactly once here, not once per leg.
-        if: matrix.shard == 1
-        env:
-          DEV_HEALTH_POSTGRES_TEST_URI: postgresql+asyncpg://postgres:postgres@localhost:5432/test_db
-          DEV_HEALTH_TEST_POSTGRES_ADMIN_URI: postgresql+asyncpg://postgres:postgres@localhost:5432/postgres
-        run: |
-          pytest -q \
-            tests/test_0066_celery_river_cutover_postgres.py \
-            tests/test_saved_report_schedule_unique_postgres_migration.py \
-            tests/test_0097_backfill_report_schedule_next_run_postgres.py \
-            tests/test_report_run_execution_lease_postgres_migration.py \
-            tests/test_chaos_3337_source_class_postgres_migration.py \
-            tests/test_canonical_incident_feature_flag_postgres_migration.py \
-            tests/api/admin/test_add_member_visibility.py \
-            tests/api/dev/test_persistence_postgres.py
-
-      - name: Upload junit test reports
-        if: always()
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
-        with:
-          name: junit-${{ matrix.python-version }}-shard-${{ matrix.shard }}
-          path: test-results/junit/*.xml
-          if-no-files-found: ignore
-          retention-days: 90
-
-      - name: Upload pytest logs on failure
-        if: failure()
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
-        with:
-          name: pytest-logs-${{ matrix.python-version }}-shard-${{ matrix.shard }}
-          path: |
-            test-results/logs/*.log
-            **/pytest.log
-          if-no-files-found: ignore
-          retention-days: 14
-
-  # Full coverage-gated suite (ruff/mypy gates + unit tests with coverage
-  # threshold + integration/e2e). Kept OFF the per-PR iterative path: it runs in
-  # the merge queue (before code reaches main) and on push to main (post-merge
-  # verification + Codecov upload), never on pull_request. Reassigned from the
-  # retired 3.11 leg to 3.12 and parallelized with xdist (CHAOS-2586); moved to
-  # 3.14 to match the shipped interpreter (CHAOS-3419).
-  #
-  # It also does not run on workflow_dispatch, because the path filter that
-  # `code` comes from is not run there (see `changes`) and this condition is
-  # unchanged: a manual run is the fast-suite path, proved by test-matrix,
-  # which workflow_dispatch now always selects. The aggregator accepts this
-  # skip for the same reason it accepts the pull_request one -- the job's own
-  # condition did not select it -- and ci/aggregate_gate_results.sh derives
-  # that from this exact expression.
-  coverage:
-    needs: [changes]
-    if: >-
-      github.event_name != 'pull_request' &&
-      (github.event_name == 'merge_group' || needs.changes.outputs.code == 'true')
-    # Same ARC routing as `changes` above, same ubuntu-26.04-arm -> ubuntu-latest
-    # fallback fix as test-matrix (chris 2026-09-04 16:59: ubuntu-26.04-arm is
-    # not a real enterprise hosted label). This job never runs on
-    # pull_request at all (see `if:` above), so the fork-PR clause is inert
-    # here; kept for the same textual shape as every other routed job.
-    runs-on: ${{ (vars.SELF_HOSTED_RUNNERS == 'enabled' && ((github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository) || (github.event_name == 'push' && github.ref == 'refs/heads/main') || (github.event_name == 'workflow_dispatch' && github.event.inputs.ref == '') || github.event_name == 'release' || github.event_name == 'schedule')) && fromJSON('["self-hosted","oci-arc-runners"]') || 'ubuntu-latest' }}
-    # CHAOS-3413: this job has hung indefinitely (1h45m-6h, then auto-cancelled
-    # by the next push's `cancel-in-progress` group) instead of failing, for
-    # days -- `cancelled` isn't a red check, so it merged silently as routine
-    # supersession while the COVERAGE_THRESHOLD=70 gate went unenforced. The
-    # hang starts precisely at #1335 (2026-07-30T19:40:46Z), which first gave
-    # this job DEV_HEALTH_POSTGRES_TEST_URI and so first let its live-Postgres
-    # tests actually execute -- concurrently, under xdist -n4, against the one
-    # shared Postgres service container, unlike `test-matrix` which serializes
-    # them. Before that regression, this job completed successfully in a
-    # consistent ~9m20s-11m30s (e.g. runs 30230488894, 30203314534,
-    # 30098888467) every time back through at least 07-09; it has not
-    # completed even once since. 25m is a deliberately generous multiple of
-    # that real historical baseline, not a guess -- comfortable room for
-    # coverage-instrumentation overhead plus whatever normal variance, while
-    # still bounding an indefinite hang into a `failure` well inside a
-    # workday. Tighten once the root fix (serializing the live-Postgres tests
-    # the way test-matrix already does) restores a real completion to compare
-    # against.
-    # 25m -> 45m (chris/team-lead, PR #2242 ARC-routing finding: bigboy
-    # load1 160+ during shared codex-round/battery contention makes a
-    # hosted-VM-sized cap the wrong budget on this venue -- same fix as
-    # go-quality/metrics-executed-proof).
-    timeout-minutes: 45
-    permissions:
-      contents: read
-      packages: read
-
-    services:
-      postgres:
-        image: ghcr.io/full-chaos/postgres:18-alpine@sha256:9a8afca54e7861fd90fab5fdf4c42477a6b1cb7d293595148e674e0a3181de15
-        # The runner pulls a service image BEFORE the first step, so no
-        # `docker/login-action` step can authenticate it -- GitHub requires
-        # credentials on the declaration itself. GITHUB_TOKEN reads the mirror.
-        credentials:
-          username: ${{ github.actor }}
-          password: ${{ secrets.GITHUB_TOKEN }}
-        env:
-          POSTGRES_USER: postgres
-          POSTGRES_PASSWORD: postgres
-          POSTGRES_DB: test_db
-        ports:
-          - 5432:5432
-        options: >-
-          --health-cmd pg_isready --health-interval 10s --health-timeout 5s --health-retries 5
-
-      clickhouse:
-        image: ghcr.io/full-chaos/clickhouse/clickhouse-server:26.7
-        # The runner pulls a service image BEFORE the first step, so no
-        # `docker/login-action` step can authenticate it -- GitHub requires
-        # credentials on the declaration itself. GITHUB_TOKEN reads the mirror.
-        credentials:
-          username: ${{ github.actor }}
-          password: ${{ secrets.GITHUB_TOKEN }}
-        env:
-          CLICKHOUSE_DB: default
-          CLICKHOUSE_USER: ch
-          CLICKHOUSE_PASSWORD: ch
-        ports:
-          - 8123:8123
-        options: >-
-          --health-cmd "clickhouse-client --user ch --password ch --query 'SELECT 1'" --health-interval 10s --health-timeout 5s --health-retries 5
-
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-
-      # CHAOS-6646: install EXACTLY uv.lock's resolution (same class as
-      # CHAOS-6588/6589): `pip install -r requirements.txt` (`-e .[dev]`)
-      # re-resolves pyproject.toml against PyPI on every run and never reads
-      # uv.lock, so an upstream release can change the tested set with no
-      # diff. `uv sync --frozen` also FAILS if the lock is stale relative to
-      # pyproject.toml.
-      - name: Install uv
-        uses: astral-sh/setup-uv@bec219d24cd3e171d82865faccec33120bb574f4 # v10.1.0
-        with:
-          python-version: "3.14"
-
-      - name: Install dependencies
-        run: |
-          uv sync --frozen --all-extras --dev
-          uv pip install --python .venv/bin/python -r requirements-docs.txt
-          echo "$PWD/.venv/bin" >> "$GITHUB_PATH"
-
-      - name: Run coverage-gated test contract
-        env:
-          DATABASE_URI: clickhouse://ch:ch@localhost:8123/default
-          CLICKHOUSE_URI: clickhouse://ch:ch@localhost:8123/default
-          POSTGRES_URI: postgresql+asyncpg://postgres:postgres@localhost:5432/test_db
-          DEV_HEALTH_POSTGRES_TEST_URI: postgresql+asyncpg://postgres:postgres@localhost:5432/test_db
-          SECONDARY_DATABASE_URI: mongodb://localhost:27017
-          COVERAGE_THRESHOLD: "70"
-          # ci_tests() (ci/run_tests.sh) does not --ignore the postgres-gated
-          # migration test files, so they run inline here; without the admin
-          # URI they would pytest.fail() under CI (see the dedicated
-          # "Run PostgreSQL migration tests" step above for why `postgres` is
-          # required as the database component).
-          DEV_HEALTH_TEST_POSTGRES_ADMIN_URI: postgresql+asyncpg://postgres:postgres@localhost:5432/postgres
-          OTEL_ENABLED: "false"
-          PYTEST_XDIST_WORKERS: "4"
-        run: |
-          chmod +x ci/run_tests.sh
-          mkdir -p test-results/logs
-          set -o pipefail
-          ./ci/run_tests.sh ci 2>&1 | tee test-results/logs/ci-3.14.log
-
-      - name: Upload junit test reports
-        if: always()
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
-        with:
-          # Named for what it actually is: JUnit output from the
-          # coverage-gated `ci` tier, not a coverage report. (See
-          # coverage-py314 below for the actual coverage artifact.)
-          name: junit-ci-gated
-          path: test-results/junit/*.xml
-          if-no-files-found: ignore
-          retention-days: 90
-
-      - name: Upload pytest logs on failure
-        if: failure()
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
-        with:
-          name: pytest-logs-coverage
-          path: |
-            test-results/logs/*.log
-            **/pytest.log
-          if-no-files-found: ignore
-          retention-days: 14
-
-      - name: Upload coverage.xml artifact
-        if: always()
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
-        with:
-          name: coverage-py314
-          path: coverage.xml
-          if-no-files-found: ignore
-          retention-days: 90
-
-      - name: Upload coverage reports
-        uses: codecov/codecov-action@0b35c9ecc4f0529d0eb674914510c22f85b196b4 # v5
-        with:
-          token: ${{ secrets.CODECOV_TOKEN }}
-        continue-on-error: true
-
-  # Required-status-check gate. Branch protection requires a check named
-  # exactly "test"; the matrix above produces "test-matrix (3.14)"
-  # and the coverage job produces "coverage", neither of which match. It is the
-  # single required check for both PRs and the merge queue. Do not remove.
-  #
-  # The verdict lives in ci/aggregate_gate_results.sh rather than inline here,
-  # so it can be driven through the whole result matrix by
-  # tests/tooling/test_aggregate_gate_results.py. See that script's header for
-  # why `needs.changes.result` -- not the downstream results alone -- is what
-  # separates a legitimate skip from an upstream failure that skipped
-  # everything (CHAOS-3482).
   docs-tests:
     name: docs-tests
     # CHAOS-3514. Runs `pytest tests/docs` alone (16s measured in a clean
@@ -615,7 +193,7 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       # CHAOS-6646: installs uv.lock's resolution, not an unlocked re-resolve
-      # (see the coverage job above).
+      # (the same pin as live-e2e.yml).
       - uses: astral-sh/setup-uv@bec219d24cd3e171d82865faccec33120bb574f4 # v10.1.0
         with:
           python-version: '3.14'
@@ -627,6 +205,80 @@ jobs:
       - name: Run the docs guards
         run: pytest tests/docs -q
 
+  # tests/tooling guards the Go CI wiring (workflow shape, path filters, shard
+  # inventories, bigboy cut scripts, gate aggregation). Until the Python unit
+  # matrix was removed (CHAOS-8352) it ran inside that matrix, which no longer
+  # exists, so it has its own job. UNCONDITIONAL for the same reason as
+  # docs-tests above: a job that never skips cannot pass the required gate by
+  # skipping, and the aggregate reads a skip of it as a failure.
+  tooling-tests:
+    name: tooling-tests
+    needs: [changes]
+    # Same ARC routing as `changes` above.
+    runs-on: ${{ (vars.SELF_HOSTED_RUNNERS == 'enabled' && ((github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository) || (github.event_name == 'push' && github.ref == 'refs/heads/main') || (github.event_name == 'workflow_dispatch' && github.event.inputs.ref == '') || github.event_name == 'release' || github.event_name == 'schedule')) && fromJSON('["self-hosted","oci-arc-runners"]') || 'ubuntu-latest' }}
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      # tests/tooling shells out to go (ci/check_go.sh, go-built probes) and
+      # helm (the bigboy router and chart tests). The oci-arc-runners image
+      # ships neither, so both are set up per job, as the removed unit matrix
+      # did. Cache handling mirrors go-quality.yml's self-hosted leg: setup-go's
+      # own cache must stay off against the pool's shared hostPath.
+      - name: Configure self-hosted Go cache paths
+        if: vars.SELF_HOSTED_RUNNERS == 'enabled' && ((github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository) || (github.event_name == 'push' && github.ref == 'refs/heads/main') || (github.event_name == 'workflow_dispatch' && github.event.inputs.ref == '') || github.event_name == 'release' || github.event_name == 'schedule')
+        run: |
+          echo "GOMODCACHE=/mnt/go-cache/mod" >> "${GITHUB_ENV}"
+          echo "GOCACHE=/mnt/go-cache/build" >> "${GITHUB_ENV}"
+
+      - name: Set up Go
+        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.mod
+          cache-dependency-path: '**/go.sum'
+          cache: ${{ !(vars.SELF_HOSTED_RUNNERS == 'enabled' && ((github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository) || (github.event_name == 'push' && github.ref == 'refs/heads/main') || (github.event_name == 'workflow_dispatch' && github.event.inputs.ref == '') || github.event_name == 'release' || github.event_name == 'schedule')) }}
+
+      - name: Set up Helm
+        uses: azure/setup-helm@9bc31f4ebc9c6b171d7bfbaa5d006ae7abdb4310 # v5.0.1
+        with:
+          version: 'v3.21.4'
+
+      - uses: astral-sh/setup-uv@bec219d24cd3e171d82865faccec33120bb574f4 # v10.1.0
+        with:
+          python-version: '3.14'
+      # tests/tooling imports the package (test_contract_artifact_packaging)
+      # and the metrics executed-proof helpers, so it needs the locked env.
+      - name: Install tooling test dependencies
+        run: |
+          uv sync --frozen --all-extras --dev
+          uv pip install --python .venv/bin/python -r requirements-docs.txt
+          echo "$PWD/.venv/bin" >> "$GITHUB_PATH"
+      - name: Run the tooling tests
+        env:
+          OTEL_ENABLED: "false"
+        run: pytest tests/tooling -q -n 4
+      # The Python tests that pin things which stay after the Python source is
+      # deleted (Helm chart, compose, alerts, ci scripts, Go contracts). An
+      # explicit list, not a negative filter: a new file is not picked up unseen.
+      - name: Run the kept Python tests
+        env:
+          OTEL_ENABLED: "false"
+        run: |
+          set -euo pipefail
+          mapfile -t kept < <(grep -v '^[[:space:]]*#' ci/kept_python_tests.txt | grep -v '^[[:space:]]*$')
+          if [ "${#kept[@]}" -lt 40 ]; then
+            echo "ci/kept_python_tests.txt lists only ${#kept[@]} files: a short or empty list would run nothing (or everything)" >&2
+            exit 1
+          fi
+          printf 'kept files: %s\n' "${#kept[@]}"
+          pytest "${kept[@]}" -q -rs -n 4
+
+  # Required-status-check gate. Branch protection requires a check named
+  # exactly "test". It judges docs-tests and tooling-tests through
+  # ci/aggregate_gate_results.sh; both are `unconditional`, so a skipped,
+  # cancelled or failed job fails the gate (a measurement that did not happen
+  # must fail). The verdict is driven through its result matrix by
+  # tests/tooling/test_aggregate_gate_results.py.
   test:
     name: test
     # Must remain `always()`. Under `!cancelled()` (or any condition that lets
@@ -636,7 +288,7 @@ jobs:
     # Cancellation has to be reported by a job that actually ran, so this job
     # runs unconditionally and the script fails the gate on `cancelled`.
     if: always()
-    needs: [changes, test-matrix, coverage, docs-tests]
+    needs: [changes, docs-tests, tooling-tests]
     # Same ARC routing as `changes` above.
     runs-on: ${{ (vars.SELF_HOSTED_RUNNERS == 'enabled' && ((github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository) || (github.event_name == 'push' && github.ref == 'refs/heads/main') || (github.event_name == 'workflow_dispatch' && github.event.inputs.ref == '') || github.event_name == 'release' || github.event_name == 'schedule')) && fromJSON('["self-hosted","oci-arc-runners"]') || 'ubuntu-latest' }}
     steps:
@@ -648,9 +300,8 @@ jobs:
           EVENT_NAME: ${{ github.event_name }}
           CHANGES_RESULT: ${{ needs.changes.result }}
           CHANGES_CODE: ${{ needs.changes.outputs.code }}
-          GATED_JOB_1: test-matrix|path-filtered|${{ needs.test-matrix.result }}
-          GATED_JOB_2: coverage|merge-time-only|${{ needs.coverage.result }}
-          GATED_JOB_3: docs-tests|unconditional|${{ needs.docs-tests.result }}
+          GATED_JOB_1: docs-tests|unconditional|${{ needs.docs-tests.result }}
+          GATED_JOB_2: tooling-tests|unconditional|${{ needs.tooling-tests.result }}
         run: |
           chmod +x ci/aggregate_gate_results.sh
           ./ci/aggregate_gate_results.sh

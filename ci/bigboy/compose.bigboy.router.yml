@@ -3,8 +3,9 @@
 # ingress.goApiPaths/queryApiPaths -- never hand-maintained) and points web's server-side
 # BACKEND_URL at the router instead of straight at the Python api, so both browser-origin
 # (commanderkeen.dev) and server-side traffic get the same plane split prod's own Ingress gives.
-# Touches ONLY traefik and web -- go-api/query-api/api are referenced by address in the dynamic
-# file (.traefik-dynamic/planes.yml) and are never recreated.
+# Touches ONLY traefik and web -- go-api and query-api are referenced by address in the dynamic
+# file (.traefik-dynamic/planes.yml) and are never recreated. CHAOS-8361: no rule of that file
+# names the Python api; a path with no plane rule reaches go-api (its native 404), as in prod.
 services:
   traefik:
     command: !override

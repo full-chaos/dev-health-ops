@@ -10,6 +10,11 @@ package routing
 // in process) -- not the internal listener and not the proof allowlist. A
 // shadow row alone routes no client anywhere; shadow->canary is still
 // `enable`, behind its receipt or reviewed named limit.
+//
+// CHAOS-8517: for a CATALOG operation the first row is no longer neutral. An
+// operation with no row at any schema digest is served by query-api; its
+// shadow row holds it dark until `enable`. The verb names every such
+// operation on stderr, in a dry run too.
 
 import (
 	"context"
@@ -190,6 +195,9 @@ func runSeed(argv []string) error {
 		return classifyWriteError(err)
 	}
 	fmt.Fprintf(stdout, "go-api-routing: seed schema_digest=%s candidate_build=%s dry_run=%t\n", registry.SchemaDigest, running, dryRun)
+	if note := seedHoldsDarkNote(outcomes, isClass); note != "" {
+		fmt.Fprintln(stderr, note)
+	}
 	for _, o := range outcomes {
 		fmt.Fprintf(stdout, "go-api-routing:   %-28s %-16s digest=%s %s\n", o.Operation, o.Action, o.DocumentDigest, o.Reason)
 		if o.Action == goapiproof.SeedActionCreated {
@@ -201,4 +209,35 @@ func runSeed(argv []string) error {
 		return refuse("%v", err)
 	}
 	return nil
+}
+
+// seedHoldsDarkNote is what `seed` says when it writes (or, in a dry run or after a refusal, would
+// write) the first row of a catalog operation: a query-api of this build serves that operation with no
+// row, and its shadow row holds it dark until `enable` admits it (CHAOS-8517). It states the rule of the
+// verb's own build: the verb reads the deployed commit, and a commit does not say whether it has the rule. Empty for MCP class rows, whose roots are
+// dark with no row, and when no first row is involved.
+func seedHoldsDarkNote(outcomes []goapiproof.SeedOutcome, isClass bool) string {
+	if isClass {
+		return ""
+	}
+	// `seed` creates a row only for an operation with no row at ANY schema digest (it refuses one that
+	// has a row only at an older digest), which is exactly the state the catalog rule serves.
+	var written, planned []string
+	for _, outcome := range outcomes {
+		switch outcome.Action {
+		case goapiproof.SeedActionCreated:
+			written = append(written, outcome.Operation)
+		case goapiproof.SeedActionWouldCreate:
+			planned = append(planned, outcome.Operation)
+		}
+	}
+	switch {
+	case len(written) > 0:
+		return fmt.Sprintf("go-api-routing: NOTE: %d catalog operation(s) had no routing row, and a query-api of this build SERVES such an operation by the catalog rule; each now has a shadow row and is NOT served until `dho goapi routing enable` admits it: %s",
+			len(written), strings.Join(written, ","))
+	case len(planned) > 0:
+		return fmt.Sprintf("go-api-routing: NOTE: %d catalog operation(s) have no routing row, and a query-api of this build SERVES such an operation by the catalog rule; a shadow row would hold each dark until `dho goapi routing enable` admits it: %s",
+			len(planned), strings.Join(planned, ","))
+	}
+	return ""
 }

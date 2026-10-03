@@ -39,14 +39,14 @@ def test_carry_runs_after_repin_and_before_migrate_up() -> None:
     repin_at = _first(lines, "bigboy-repin.sh")
     carry_at = _first(lines, "dho goapi routing carry", start=repin_at)
     migrate_at = _first(lines, "--no-deps migrate", start=carry_at)
-    up_at = _first(lines, "--no-build api query-api go-api", start=carry_at)
+    up_at = _first(lines, "--no-build query-api go-api", start=carry_at)
     assert repin_at < carry_at < migrate_at, (
         f"routing carry (line {carry_at + 1}) must run after repin (line {repin_at + 1}) "
         f"and before migrate (line {migrate_at + 1}) -- query-api must still be the "
         f"pre-roll process when carry reads it"
     )
     assert carry_at < up_at, (
-        f"routing carry (line {carry_at + 1}) must run before the api/query-api/go-api "
+        f"routing carry (line {carry_at + 1}) must run before the query-api/go-api "
         f"recreate (line {up_at + 1})"
     )
 

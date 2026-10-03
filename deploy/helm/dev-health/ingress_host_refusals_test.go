@@ -25,7 +25,7 @@ func renderIngress(args ...string) (string, error) {
 // expects.
 func TestEveryHostRefusalFires(t *testing.T) {
 	const goDefault = `"paths":[{"path":"/","pathType":"Prefix","service":"go-api"}]`
-	goOn := []string{"--set", "goApi.enabled=true"}
+	goOn := []string{"--set", "goApi.enabled=true", "--set", "queryApi.enabled=true"}
 	cases := []struct {
 		name string
 		host string
@@ -42,13 +42,14 @@ func TestEveryHostRefusalFires(t *testing.T) {
 		{"service query-api-mcp", `"pythonAllowList":true,"paths":[{"path":"/","pathType":"Prefix","service":"go-api"},{"path":"/m","pathType":"Prefix","service":"query-api-mcp"}]`, goOn, "routes to query-api-mcp"},
 		{"service go-api-internal", `"pythonAllowList":true,"paths":[{"path":"/","pathType":"Prefix","service":"go-api"},{"path":"/i","pathType":"Prefix","service":"go-api-internal"}]`, goOn, "routes to go-api-internal"},
 		{"service billing-edge", `"paths":[{"path":"/","pathType":"Prefix","service":"billing-edge"}]`, goOn, `service "billing-edge" is gone`},
-		{"allow-list to a disabled Python api", `"pythonAllowList":[{"path":"/metrics$","pathType":"ImplementationSpecific"}],` + goDefault,
-			append([]string{"--set", "api.enabled=false"}, goOn...), "api.enabled is false"},
-		{"allow-list entry shape", `"pythonAllowList":[{"path":"graphql","pathType":"Prefix"}],` + goDefault, goOn, "must be {path: literal /path"},
+		{"allow-list entry without a backend (the Python api default is gone)", `"pythonAllowList":[{"path":"/metrics$","pathType":"ImplementationSpecific"}],` + goDefault,
+			goOn, "has no service: the Python api (the old default backend) is gone (CHAOS-7520)"},
+		{"service api", `"paths":[{"path":"/","pathType":"Prefix","service":"api"}]`, goOn, "the Python api is gone (CHAOS-7520)"},
+		{"allow-list entry shape", `"pythonAllowList":[{"path":"graphql","pathType":"Prefix","service":"query-api"}],` + goDefault, goOn, "must be {path: literal /path"},
 		{"allow-list dot segment", `"pythonAllowList":[{"path":"/\\.\\.$","pathType":"ImplementationSpecific"}],` + goDefault, goOn, "has a . or .. path segment"},
-		{"allow-list entry for the whole host", `"pythonAllowList":[{"path":"/","pathType":"Prefix"}],` + goDefault, goOn, "would route the whole host"},
-		{"allow-list duplicate", `"pythonAllowList":[{"path":"/graphql","pathType":"Prefix"},{"path":"/graphql","pathType":"Prefix"}],` + goDefault, goOn, "duplicates another rule"},
-		{"Exact entry on an anchored host", `"pythonAllowList":[{"path":"/docs$","pathType":"ImplementationSpecific"},{"path":"/graphql","pathType":"Exact"}],` + goDefault, goOn, "is Exact on a host that has an anchored entry"},
+		{"allow-list entry for the whole host", `"pythonAllowList":[{"path":"/","pathType":"Prefix","service":"query-api"}],` + goDefault, goOn, "would route the whole host"},
+		{"allow-list duplicate", `"pythonAllowList":[{"path":"/graphql","pathType":"Prefix","service":"query-api"},{"path":"/graphql","pathType":"Prefix","service":"query-api"}],` + goDefault, goOn, "duplicates another rule"},
+		{"Exact entry on an anchored host", `"pythonAllowList":[{"path":"/docs$","pathType":"ImplementationSpecific","service":"query-api"},{"path":"/graphql","pathType":"Exact","service":"query-api"}],` + goDefault, goOn, "is Exact on a host that has an anchored entry"},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {

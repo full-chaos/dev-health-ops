@@ -229,18 +229,32 @@ func TestIdleBackoffResetsOnError(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	partial := StrandRepairResult{Rearmed: 2}
-	inner.next = func(int) (StrandRepairResult, error) { return partial, ErrUnavailable }
+	// A survey that fails returns a ZERO result with its error -- which looks
+	// exactly like an idle pass to anything that reads the result alone. That
+	// is the case that must not be mistaken for idleness: the error has to
+	// come back, and the next tick has to survey.
+	inner.next = func(int) (StrandRepairResult, error) { return StrandRepairResult{}, ErrUnavailable }
 	result, err := backoff.Step(context.Background(), at(30), 100)
-	if !errors.Is(err, ErrUnavailable) || !reflect.DeepEqual(result, partial) {
+	if !errors.Is(err, ErrUnavailable) || !reflect.DeepEqual(result, StrandRepairResult{}) {
+		t.Fatalf("Step() = %+v, %v; want the wrapped error passed through, not swallowed as an idle pass",
+			result, err)
+	}
+	// A pass that committed work before it failed keeps its partial result.
+	partial := StrandRepairResult{Rearmed: 2}
+	inner.next = func(int) (StrandRepairResult, error) { return partial, ErrNotAuthorized }
+	before := len(inner.calls)
+	result, err = backoff.Step(context.Background(), at(31), 100)
+	if !errors.Is(err, ErrNotAuthorized) || !reflect.DeepEqual(result, partial) {
 		t.Fatalf("Step() = %+v, %v; want the wrapped error and its partial result passed through", result, err)
 	}
+	if len(inner.calls) != before+1 {
+		t.Fatal("the tick after a failed pass with a zero result did not survey")
+	}
 	inner.next = nil
-	before := len(inner.calls)
-	if result, err := backoff.Step(context.Background(), at(31), 100); err != nil || result.PassSkippedIdle {
+	if result, err := backoff.Step(context.Background(), at(32), 100); err != nil || result.PassSkippedIdle {
 		t.Fatalf("the tick after a failed pass was held back: %+v, %v", result, err)
 	}
-	if len(inner.calls) != before+1 {
+	if len(inner.calls) != before+2 {
 		t.Fatal("the tick after a failed pass did not survey")
 	}
 }
@@ -312,6 +326,41 @@ func TestIdleBackoffIsBoundedAgainstAClockThatStepsBack(t *testing.T) {
 	}
 	if len(inner.calls) != before+1 {
 		t.Fatal("the pass after a backwards clock step did not survey")
+	}
+}
+
+// TestIdleBackoffForgetsItsWaitWhenAPassFindsSomething: a finding must clear
+// the resume instant, not merely let it lapse. After a backwards clock step
+// the old instant is still in the future, and once the clock comes back within
+// one ceiling of it a stale instant would hold back passes that directly
+// follow a finding.
+func TestIdleBackoffForgetsItsWaitWhenAPassFindsSomething(t *testing.T) {
+	inner := &scriptedStrandRepair{}
+	backoff := newTestIdleBackoff(t, inner)
+	start := time.Date(2026, time.October, 3, 12, 0, 0, 0, time.UTC)
+	at := func(second int) time.Time { return start.Add(time.Duration(second) * time.Second) }
+	for second := 0; second <= 60; second++ {
+		if _, err := backoff.Step(context.Background(), at(second), 100); err != nil {
+			t.Fatal(err)
+		}
+	}
+	// The next survey is due at +90s. The clock steps back to +50s -- 40s
+	// short of it, past the ceiling, so the pass runs -- and from here every
+	// pass finds a strand.
+	inner.next = func(int) (StrandRepairResult, error) { return StrandRepairResult{Rearmed: 1}, nil }
+	before := len(inner.calls)
+	for second := 50; second < 90; second++ {
+		result, err := backoff.Step(context.Background(), at(second), 100)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if result.PassSkippedIdle {
+			t.Fatalf("the pass at +%ds was held back although every pass since the clock step "+
+				"found a strand: a stale resume instant outlived the finding", second)
+		}
+	}
+	if len(inner.calls) != before+40 {
+		t.Fatalf("the repair surveyed %d times in 40 ticks, want 40", len(inner.calls)-before)
 	}
 }
 

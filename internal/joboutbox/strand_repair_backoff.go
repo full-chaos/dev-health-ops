@@ -112,13 +112,17 @@ func (backoff *IdleBackoffStrandRepair) Step(
 		// An error resets too: a failed pass proves nothing about whether
 		// there was work, and the loop's own failure accounting expects the
 		// next tick to try again.
+		//
+		// resume is cleared, not left to lapse. After a backwards clock step
+		// it can still lie in the future, and a stale one would hold back a
+		// pass that directly follows a finding as soon as the clock came
+		// within one ceiling of it.
 		backoff.wait = 0
 		backoff.resume = time.Time{}
-		if err == nil {
-			backoff.blocked = result.UndeliveredBlocked
-		}
 		return result, err
 	}
+	// The level is recorded here only: a held-back pass always follows an
+	// idle one, so this is the value it repeats.
 	backoff.blocked = result.UndeliveredBlocked
 	backoff.wait = nextStrandRepairIdleWait(backoff.wait, backoff.ceiling)
 	backoff.resume = now.Add(backoff.wait)

@@ -760,8 +760,15 @@ func TestResolve_Sankey_UnsetUseInvestment_AutoRoutesToInvestment(t *testing.T) 
 // TEAM/REPO sankeys that Python serves normally.
 func TestResolve_Sankey_UnsetUseInvestment_NonInvestmentDimsStillRun(t *testing.T) {
 	client := &routingFakeClient{}
-	client.on("'TEAM' AS dimension", &fakeRowScanner{rows: [][]any{{"TEAM", "team-a", float64(3)}}})
-	client.on("'TEAM' AS source_dimension", &fakeRowScanner{rows: [][]any{{"TEAM", "REPO", "team-a", "repo-x", float64(1)}}})
+	// One grouped query: grouping set 1 = the TEAM node set, 0 = the
+	// TEAM>REPO edge set. (The two rules this test had before named the
+	// statements of the older two-query shape and matched nothing: the test
+	// passed only because a failed sankey read was answered as an empty
+	// sankey. CHAOS-8186 made that failure an error.)
+	client.on("AS grouping_set,", &fakeRowScanner{rows: [][]any{
+		{uint64(0), "team-a", "repo-x", 1.0},
+		{uint64(1), "team-a", nil, 3.0},
+	}})
 
 	batch := model.AnalyticsRequestInput{
 		Sankey: &model.SankeyRequestInput{
@@ -779,6 +786,9 @@ func TestResolve_Sankey_UnsetUseInvestment_NonInvestmentDimsStillRun(t *testing.
 	if result.Sankey == nil {
 		t.Fatal("expected a sankey result")
 	}
+	if len(result.Sankey.Nodes) == 0 || len(result.Sankey.Edges) == 0 {
+		t.Fatalf("sankey = %+v, want the scripted TEAM node and TEAM>REPO edge: the query did not run", result.Sankey)
+	}
 }
 
 // TestResolveSankey_ArgMaxGuardFiresOnAutoRoutedNodesEdges is CHAOS-4759
@@ -794,11 +804,12 @@ func TestResolveSankey_ArgMaxGuardFiresOnAutoRoutedNodesEdges(t *testing.T) {
 	resetArgMaxNullTransitionGate(t)
 
 	client := &routingFakeClient{}
-	client.on("AS source_dimension,", &fakeRowScanner{rows: [][]any{
-		{"TEAM", "THEME", "team-a", "value-a", 2.0},
-	}})
-	client.on("AS dimension,", &fakeRowScanner{rows: [][]any{
-		{"TEAM", "team-a", 5.0},
+	// One grouped query: grouping set 1 = the TEAM node set, 0 = the
+	// TEAM>THEME edge set. (This test's two older rules named the statements
+	// of the two-query shape and matched nothing; see CHAOS-8186.)
+	client.on("AS grouping_set,", &fakeRowScanner{rows: [][]any{
+		{uint64(0), "team-a", "value-a", 2.0},
+		{uint64(1), "team-a", nil, 5.0},
 	}})
 	// Coverage query: useInvestment=false here (the raw flag), so this is
 	// the NON-investment coverage shape (investment_metrics_daily).

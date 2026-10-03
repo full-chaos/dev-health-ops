@@ -763,11 +763,17 @@ func TestStrandRepairAgainstLivePostgres(t *testing.T) {
 					templateOutbox, templateJob = outboxID, jobID
 				}
 			}
-			const fillerRows = 20000
-			// Fillers are copies of one real delivery, each with its own River
-			// job, its own domain id and its own key, so every constraint the
-			// outbox and River carry still holds for them. Copying through the
-			// row type keeps this independent of either table's column list.
+			// The fixture has the shape production has: far more delivered outbox
+			// rows than River jobs, because River's cleaner removes a finished job
+			// long before retention removes the outbox row that points at it.
+			// Fillers are copies of one real delivery and one real job, each with
+			// its own domain id and key, so every constraint the two tables carry
+			// still holds. Copying through the row type keeps this independent of
+			// either table's column list.
+			const (
+				fillerOutboxRows = 20000
+				fillerRiverJobs  = 2000
+			)
 			if _, err := admin.Exec(ctx, `
 				INSERT INTO river.river_job
 				SELECT (jsonb_populate_record(NULL::river.river_job,
@@ -775,25 +781,27 @@ func TestStrandRepairAgainstLivePostgres(t *testing.T) {
 						'id', nextval(pg_get_serial_sequence('river.river_job', 'id')),
 						'unique_key', NULL, 'unique_states', NULL,
 						'args', template.args || jsonb_build_object(
-							'idempotency_key', 'filler:' || filler,
+							'idempotency_key', 'filler-job:' || filler,
 							'domain', jsonb_build_object(
 								'type', template.args #>> '{domain,type}',
 								'id', gen_random_uuid()::text))))).*
 				FROM river.river_job AS template, generate_series(1, $2::int) AS filler
-				WHERE template.id = $1`, templateJob, fillerRows); err != nil {
+				WHERE template.id = $1`, templateJob, fillerRiverJobs); err != nil {
 				t.Fatal(err)
 			}
+			// river_job_id values far past the sequence: deliveries whose River
+			// job the cleaner has already removed.
 			if _, err := admin.Exec(ctx, `
 				INSERT INTO public.worker_job_outbox
 				SELECT (jsonb_populate_record(NULL::public.worker_job_outbox,
 					to_jsonb(template) || jsonb_build_object(
 						'id', gen_random_uuid(),
-						'dedupe_key', job.args ->> 'idempotency_key',
-						'river_job_id', job.id,
-						'args', job.args))).*
-				FROM public.worker_job_outbox AS template, river.river_job AS job
-				WHERE template.id = $1 AND job.args ->> 'idempotency_key' LIKE 'filler:%'`,
-				templateOutbox); err != nil {
+						'dedupe_key', 'filler-row:' || filler,
+						'river_job_id', 10000000 + filler,
+						'args', jsonb_set(template.args::jsonb, '{domain,id}',
+							to_jsonb(gen_random_uuid()::text))))).*
+				FROM public.worker_job_outbox AS template, generate_series(1, $2::int) AS filler
+				WHERE template.id = $1`, templateOutbox, fillerOutboxRows); err != nil {
 				t.Fatal(err)
 			}
 			var outboxRows int
@@ -801,9 +809,16 @@ func TestStrandRepairAgainstLivePostgres(t *testing.T) {
 				"SELECT count(*) FROM public.worker_job_outbox WHERE status = 'delivered'").Scan(&outboxRows); err != nil {
 				t.Fatal(err)
 			}
-			if outboxRows != fillerRows+len(shapes) {
+			if outboxRows != fillerOutboxRows+len(shapes) {
 				t.Fatalf("the outbox holds %d delivered rows, want %d: the plan below would be "+
-					"taken on a table too small to mean anything", outboxRows, fillerRows+len(shapes))
+					"taken on a table too small to mean anything", outboxRows, fillerOutboxRows+len(shapes))
+			}
+			var riverJobs int
+			if err := admin.QueryRow(ctx, "SELECT count(*) FROM river.river_job").Scan(&riverJobs); err != nil {
+				t.Fatal(err)
+			}
+			if riverJobs != fillerRiverJobs+len(shapes) {
+				t.Fatalf("river_job holds %d rows, want %d", riverJobs, fillerRiverJobs+len(shapes))
 			}
 			if _, err := admin.Exec(ctx, `ANALYZE public.worker_job_outbox, river.river_job,
 				public.daily_metrics_runs, public.daily_metrics_partitions,

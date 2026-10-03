@@ -21,23 +21,23 @@ var (
 	awaitOutcomeNames = []string{"materialized", "pending", "quarantined"}
 )
 
-// AwaitMetrics is sync_manual_trigger_await_outcome_total and
+// awaitMetrics is sync_manual_trigger_await_outcome_total and
 // sync_manual_trigger_await_latency_seconds (CHAOS-8222): the terminal outcome
 // of Wait and the time it polled, both by outcome. Every caller of Wait (the
 // manual Sync Now and Backfill routes, the integrations hand-off, the backfill
 // verb) is counted, because the count is taken inside Wait.
-type AwaitMetrics struct {
+type awaitMetrics struct {
 	mu      sync.Mutex
 	count   map[string]uint64
 	sum     map[string]float64
 	buckets map[string][]uint64 // per outcome, cumulative, one slot per awaitBuckets entry then +Inf
 }
 
-var awaitMetrics = &AwaitMetrics{count: map[string]uint64{}, sum: map[string]float64{}, buckets: map[string][]uint64{}}
+var processAwaitMetrics = &awaitMetrics{count: map[string]uint64{}, sum: map[string]float64{}, buckets: map[string][]uint64{}}
 
 // AwaitMetricsSource returns the process-wide metrics; register it on the api
 // registry with RegisterMetrics.
-func AwaitMetricsSource() *AwaitMetrics { return awaitMetrics }
+func AwaitMetricsSource() *awaitMetrics { return processAwaitMetrics }
 
 // awaitOutcomeLabel maps a Wait state to the Python outcome label. A disabled
 // PagerDuty sync (StateTerminal) is a completed occurrence there, so it is
@@ -53,7 +53,7 @@ func awaitOutcomeLabel(state State) string {
 	}
 }
 
-func (m *AwaitMetrics) observe(state State, elapsed time.Duration) {
+func (m *awaitMetrics) observe(state State, elapsed time.Duration) {
 	if m == nil {
 		return
 	}
@@ -79,7 +79,7 @@ func (m *AwaitMetrics) observe(state State, elapsed time.Duration) {
 // WritePrometheus writes both families (health.MetricsSource). A series exists
 // only after its first observation, as in prometheus_client for a labelled
 // family.
-func (m *AwaitMetrics) WritePrometheus(w io.Writer) error {
+func (m *awaitMetrics) WritePrometheus(w io.Writer) error {
 	type snap struct {
 		count   uint64
 		sum     float64

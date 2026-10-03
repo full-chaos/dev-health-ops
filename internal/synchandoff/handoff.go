@@ -297,7 +297,7 @@ func Wait(ctx context.Context, pool *pgxpool.Pool, occurrenceID string, wait, po
 	if err == nil {
 		// CHAOS-8222: execution_trigger.py's _record, on every terminal outcome
 		// and none of the error returns (Python records none either).
-		awaitMetrics.observe(outcome.State, time.Since(started))
+		processAwaitMetrics.observe(outcome.State, time.Since(started))
 	}
 	return outcome, err
 }

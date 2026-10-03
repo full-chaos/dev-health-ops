@@ -289,6 +289,7 @@ func TestHistoryGraphIsTheAlembicChain(t *testing.T) {
 	root := golden.PythonRoot(t, repoRoot)
 	request := venueoracle.ProgramRequest("alembic walk", historyWalkProgram, nil, historyWalkSettings)
 	answers := golden.Produce(t, root, []venueoracle.Request{request}, func(producer *venueoracle.Producer, _ []venueoracle.Request) []venueoracle.Response {
+		requireAlembicStamp(t, producer.Root)
 		command, err := producer.Command(context.Background(), historyWalkSettings, nil, "-c", historyWalkProgram)
 		if err != nil {
 			t.Fatal(err)

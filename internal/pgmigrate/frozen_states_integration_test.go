@@ -230,6 +230,7 @@ func openStatesGolden(t *testing.T, path, sha256, test string, specs []stateSpec
 	}
 	request := venueoracle.ProgramRequest("pgmigrate states", statesUpgradeProgram+"\n#era\n"+statesEraProgram, input, statesPythonSettings)
 	answers := golden.Produce(t, root, []venueoracle.Request{request}, func(producer *venueoracle.Producer, _ []venueoracle.Request) []venueoracle.Response {
+		requireAlembicStamp(t, producer.Root)
 		body, err := json.Marshal(produceStates(t, producer, specs))
 		if err != nil {
 			t.Fatal(err)

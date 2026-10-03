@@ -54,6 +54,7 @@ func TestBuildHeadsAreTheOldScriptsHeads(t *testing.T) {
 	root := golden.PythonRoot(t, repoRoot)
 	request := venueoracle.ProgramRequest("old script derivation", oldScriptDerivation, nil, nil)
 	answers := golden.Produce(t, root, []venueoracle.Request{request}, func(producer *venueoracle.Producer, _ []venueoracle.Request) []venueoracle.Response {
+		requireAlembicStamp(t, producer.Root)
 		versions := filepath.Join(producer.Root, "src", "dev_health_ops", "alembic", "versions")
 		command, err := producer.Command(context.Background(), nil, nil, "-c", oldScriptDerivation, versions)
 		if err != nil {

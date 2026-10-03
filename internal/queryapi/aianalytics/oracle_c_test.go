@@ -85,9 +85,9 @@ func (f *fixtureClientC) nameQuery(which, st string, b []clickhouse.Binding) (cl
 
 // workflowGoOnlyNodeKeys are the only keys of an aiWorkflowDrilldown node the Go plane returns that the
 // Python resolver does not (CHAOS-8113). The oracle strips exactly these before it compares a node, and
-// nothing else; TestWorkflowGoOnlyNodeKeysAreExactlyDisplayName fails if the list grows.
-// workflow_names_test.go pins the field itself.
-var workflowGoOnlyNodeKeys = []string{"displayName"}
+// nothing else; TestWorkflowGoOnlyNodeKeysAreExactlyTheDeclaredTwo fails if the list grows.
+// workflow_names_test.go pins the fields themselves.
+var workflowGoOnlyNodeKeys = []string{"displayName", "nameExpected"}
 
 func stripWorkflowGoOnlyNodeKeys(response map[string]any) {
 	nodes, _ := response["nodes"].([]any)
@@ -102,8 +102,8 @@ func stripWorkflowGoOnlyNodeKeys(response map[string]any) {
 	}
 }
 
-func TestWorkflowGoOnlyNodeKeysAreExactlyDisplayName(t *testing.T) {
-	if want := []string{"displayName"}; !reflect.DeepEqual(workflowGoOnlyNodeKeys, want) {
+func TestWorkflowGoOnlyNodeKeysAreExactlyTheDeclaredTwo(t *testing.T) {
+	if want := []string{"displayName", "nameExpected"}; !reflect.DeepEqual(workflowGoOnlyNodeKeys, want) {
 		t.Fatalf("workflowGoOnlyNodeKeys = %v, want exactly %v", workflowGoOnlyNodeKeys, want)
 	}
 }

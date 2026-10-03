@@ -90,7 +90,7 @@ def test_extra_allowed_pods_are_added_to_the_internal_port_sources() -> None:
     policy = _named(docs, "NetworkPolicy", f"{_FULLNAME}-query-api-internal")
     internal_rule = policy["spec"]["ingress"][1]
     selectors = [source["podSelector"] for source in internal_rule["from"]]
-    assert len(selectors) == 2, selectors
+    assert len(selectors) == 1, selectors
     assert {"matchLabels": {"app": "tools"}} in selectors, selectors
     assert all(s != {} for s in selectors)
 
@@ -130,7 +130,7 @@ def test_the_documented_tools_pod_selector_renders_as_an_extra_source() -> None:
         f"{_FULLNAME}-query-api-internal",
     )
     tools = {"podSelector": {"matchLabels": {"run": "dev-health-go-api-tools-oneoff"}}}
-    assert tools not in default["spec"]["ingress"][1]["from"]
+    assert all(tools not in rule.get("from", []) for rule in default["spec"]["ingress"])
 
     completed = subprocess.run(
         [

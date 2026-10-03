@@ -307,21 +307,23 @@ spec:
     - ports:
         - protocol: TCP
           port: {{ .Values.queryApi.port }}
-    # The internal listener trusts X-DH-Internal-* identity headers from whoever can reach it, so
-    # the network is the boundary: only this release's api pods (the edge dispatcher), plus any
-    # pod selector the operator adds under queryApi.internal.allowedFrom (for example the tools
-    # pod that runs `dho goapi prove-write`). Never every pod in the namespace.
+    {{- /*
+    The internal listener trusts X-DH-Internal-* identity headers from whoever can reach it, so the network is the
+    boundary: only the pod selectors the operator names under queryApi.internal.allowedFrom (for example the tools pod
+    that runs `dho goapi prove-write`). CHAOS-7520: no workload of this release calls the internal port any more (its
+    only caller was the Python api's edge dispatcher), so there is no release-local peer. With allowedFrom empty the
+    rule is OMITTED: a rule with an empty `from` admits every source, so the port is denied to everybody instead.
+    */}}
+    {{- with .Values.queryApi.internal.allowedFrom }}
     - from:
-        - podSelector:
-            matchLabels:
-              {{- include "dev-health.componentSelectorLabels" (dict "component" "api" "context" $) | nindent 14 }}
-        {{- range .Values.queryApi.internal.allowedFrom }}
+        {{- range . }}
         - podSelector:
             {{- toYaml . | nindent 12 }}
         {{- end }}
       ports:
         - protocol: TCP
-          port: {{ .Values.queryApi.internal.port }}
+          port: {{ $.Values.queryApi.internal.port }}
+    {{- end }}
 {{- end }}
 {{- if .Values.queryApi.mcp.enabled }}
 ---

@@ -307,7 +307,6 @@ internal/testsupport/fakehttp	1
 internal/testsupport/fakepg	1
 internal/testsupport/goldenscan	19
 internal/testsupport/goldenscan/treegate	179
-internal/testsupport/liveoracleentries	2
 internal/testsupport/moduleroot	14
 internal/testsupport/operatorauditschema	1
 internal/testsupport/opfixture	1

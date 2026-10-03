@@ -871,7 +871,7 @@ func (derived GithubWorkItemDerivationContext) resolve(
 		// least specific (nobody involved has any mapping in either layer)
 		// and loses to all of the above. This exact precedence and string
 		// set must stay byte-identical to Python's membership_reason
-		// composition or the live-python-oracle gate (ci/check_go.sh)
+		// composition or the frozen Python golden
 		// fails -- see AGENTS.md "Anything cross-implementation needs a
 		// differential oracle."
 		//

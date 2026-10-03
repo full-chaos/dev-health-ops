@@ -49,7 +49,7 @@ var clickHouseOrgTableKnownPythonOnlyStale = map[string]string{
 // This test needs a real, migrated ClickHouse (chmigrate, the migration
 // chain `dho migrate clickhouse upgrade` applies) and, only while recording,
 // a python3 interpreter; it does not need the live-Python FastAPI app, so it
-// is not gated on DEV_HEALTH_LIVE_PYTHON_ORACLES -- only -tags=integration,
+// is not gated on DEV_HEALTH_VENUE_ORACLES -- only -tags=integration,
 // like every other container-backed test in this tree.
 func TestClickHouseOrgTableDiscoveryMatchesThePythonMigrationRegex(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Minute)

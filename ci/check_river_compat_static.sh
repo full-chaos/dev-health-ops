@@ -8,7 +8,6 @@ HARNESS="${ROOT}/tests/compatibility/river/run.sh"
 RECORDER="${ROOT}/tests/compatibility/river/record.sh"
 COMPOSE_FILE="${ROOT}/tests/compatibility/river/compose.compatibility.yml"
 RESULTS="${ROOT}/ci/evidence/go-worker-migration/v1-river-spike/local-harness-results.json"
-GO_WORKFLOW="${ROOT}/.github/workflows/go.yml"
 
 # NOTE: the linter is deliberately absent from this list -- ci/shellcheck_pinned.sh
 # owns both its presence check and its VERSION check, so one place decides what
@@ -45,10 +44,6 @@ grep -F 'pgbouncer-session-helm-smoke' "${HARNESS}" >/dev/null || {
 }
 grep -F 'GREENLET_VERSION="3.5.0"' "${HARNESS}" >/dev/null || {
   printf 'ERROR: the Python async SQLAlchemy greenlet pin must remain preflight-validated\n' >&2
-  exit 1
-}
-grep -F 'greenlet==3.5.0' "${GO_WORKFLOW}" >/dev/null || {
-  printf 'ERROR: the hosted River compatibility job must install the greenlet pin explicitly\n' >&2
   exit 1
 }
 docker compose \

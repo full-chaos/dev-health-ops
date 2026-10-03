@@ -31,8 +31,6 @@ spec:
               name: ingress-nginx
       ports:
         - protocol: TCP
-          port: {{ .Values.api.port }}
-        - protocol: TCP
           port: {{ .Values.web.port }}
     # Allow pod-to-pod within namespace
     - from:

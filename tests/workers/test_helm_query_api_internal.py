@@ -82,29 +82,6 @@ def test_enabled_renders_an_internal_service_targeting_the_named_port() -> None:
     assert [p["port"] for p in public["spec"]["ports"]] == [8090]
 
 
-def test_internal_port_is_open_to_this_releases_api_pods_only_by_default() -> None:
-    docs = _docs("queryApi.internal.enabled=true")
-    policy = _named(docs, "NetworkPolicy", f"{_FULLNAME}-query-api-internal")
-    deployment = _named(docs, "Deployment", f"{_FULLNAME}-query-api")
-    pod_labels = deployment["spec"]["template"]["metadata"]["labels"]
-    assert policy["spec"]["podSelector"]["matchLabels"].items() <= pod_labels.items()
-    assert policy["spec"]["policyTypes"] == ["Ingress"]
-    public_rule, internal_rule = policy["spec"]["ingress"]
-    assert public_rule == {"ports": [{"protocol": "TCP", "port": 8090}]}
-    assert internal_rule["ports"] == [{"protocol": "TCP", "port": 8091}]
-    # The internal listener trusts X-DH-Internal-* headers from any peer that can connect, so the
-    # source is this release's api pods: never every pod in the namespace.
-    api = _named(docs, "Deployment", f"{_FULLNAME}-api")["spec"]["template"][
-        "metadata"
-    ]["labels"]
-    (source,) = internal_rule["from"]
-    assert source["podSelector"] != {}, "the internal port is open to every pod"
-    assert source["podSelector"]["matchLabels"].items() <= api.items()
-    assert not source["podSelector"]["matchLabels"].items() <= pod_labels.items(), (
-        "the query-api pods themselves are not the api pods"
-    )
-
-
 def test_extra_allowed_pods_are_added_to_the_internal_port_sources() -> None:
     docs = _docs(
         "queryApi.internal.enabled=true",

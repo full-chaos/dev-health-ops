@@ -218,16 +218,7 @@ Notes:
 
 ## Container images
 
-CI builds one Python image from `docker/Dockerfile`, `dev-hops-api`, which runs `dev-hops api` on port 8000 (no local build script; removed with the Python API by CHAOS-6264). (The `dev-hops-runner` image, a generic `dev-hops` entrypoint, is no longer built: run CLI jobs with `dho`, the Go image, or `dev-hops` from a checkout.)
-
-Run the API image:
-
-```bash
-docker run --rm -p 8000:8000 \
-  -e POSTGRES_URI="postgresql+asyncpg://postgres:postgres@postgres:5432/postgres" \
-  -e CLICKHOUSE_URI="clickhouse://ch:ch@clickhouse:8123/default" \
-  dev-hops-api:latest
-```
+CI no longer builds or publishes the Python API image (`dev-hops-api`, from `docker/Dockerfile`; CHAOS-7674). The last published image stays in the registry for the root compose stack and the bigboy test host until they move to Go. The root compose file still builds that image locally; the Python API source is removed by CHAOS-6264. The Go images (`dev-health-go-*`) are the published images; run CLI jobs with `dho`.
 
 ## Key docs
 

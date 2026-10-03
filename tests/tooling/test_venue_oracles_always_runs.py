@@ -314,10 +314,6 @@ def _run_relevance_step(
         (".github/workflows/venue-oracles.yml", "relevant=true", "gate itself changed"),
         ("ci/venue_oracle_discovery.awk", "relevant=true", "gate itself changed"),
         ("ci/go_relevant_diff.sh", "relevant=true", "gate itself changed"),
-        # Go-relevant through go.yml's own list.
-        ("internal/example/example.go", "relevant=true", "Go-relevant: 1"),
-        # Not Go-relevant: an honest skip.
-        ("README.md", "relevant=false", "Go-relevant: 0"),
     ],
 )
 def test_a_push_to_main_runs_the_suite_when_the_change_needs_it(

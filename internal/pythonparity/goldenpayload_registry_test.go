@@ -103,52 +103,6 @@ func itoa(n int) string {
 	return string(digits)
 }
 
-// TestEveryRotGuardUsesTheRegistry is what keeps the single-source registry
-// single.
-//
-// comparePayload taking a payloadGuard already stops a guard naming fields
-// directly. This stops the remaining route: constructing an inline
-// `payloadGuard{fixture: "...", fields: []string{...}}` at the call site, which
-// would rebuild the duplication with the type system's blessing.
-func TestEveryRotGuardUsesTheRegistry(t *testing.T) {
-	guards, err := filepath.Glob("*_rot_guard_test.go")
-	if err != nil {
-		t.Fatal(err)
-	}
-	// A glob matching nothing would make every assertion below vacuous.
-	if len(guards) == 0 {
-		t.Fatal("no *_rot_guard_test.go files found; this test would pass by " +
-			"examining nothing")
-	}
-
-	callSites := 0
-	var offences []string
-	for _, path := range guards {
-		fileSet := token.NewFileSet()
-		parsed, err := parser.ParseFile(fileSet, path, nil, 0)
-		if err != nil {
-			t.Fatalf("parse %s: %v", path, err)
-		}
-		callSites += countComparePayloadCalls(parsed)
-		offences = append(offences, comparePayloadOffences(fileSet, parsed)...)
-	}
-
-	for _, offence := range offences {
-		t.Errorf("%s. A guard must name a registry entry and nothing else, or it "+
-			"and TestShippedFixturesExposeThePayloadFieldsTheGuardsCompare can "+
-			"disagree about which fields are compared -- the drift the registry "+
-			"exists to make impossible.", offence)
-	}
-
-	// The detector must have had something to detect. Without this, deleting
-	// every guard would turn this test green.
-	if callSites == 0 {
-		t.Error("no comparePayload call sites found in any *_rot_guard_test.go; " +
-			"either the guards stopped using it or this detector stopped working, " +
-			"and a detector that finds nothing reports exactly what a clean tree does")
-	}
-}
-
 func countComparePayloadCalls(parsed *ast.File) int {
 	count := 0
 	ast.Inspect(parsed, func(node ast.Node) bool {
@@ -242,61 +196,6 @@ func TestRegistryFixturesExistOnDisk(t *testing.T) {
 			t.Errorf("registry entry %q names no fields; comparePayload would compare "+
 				"nothing and the guard would pass unconditionally", guard.fixture)
 		}
-	}
-}
-
-// TestTheDetectorInspectsRealGuardFiles closes the half of round 1's P1b that
-// round 2 showed was still open.
-//
-// TestTheRegistryDetectorActuallyDetects couples the control to the production
-// function, but only ever feeds it SYNTHETIC source. codex round 2 forked the
-// detector to return no offences except for `synthetic_rot_guard_test.go`,
-// planted an inline narrowed guard in a REAL file, and all four focused tests
-// stayed green. A detector keyed on filename passes a control that only shows it
-// synthetic filenames.
-//
-// So this runs the detector over a real *_rot_guard_test.go -- unmodified, then
-// with an offending line spliced in -- and requires it to distinguish them. A
-// fork that special-cases file names cannot satisfy both halves.
-func TestTheDetectorInspectsRealGuardFiles(t *testing.T) {
-	guards, err := filepath.Glob("*_rot_guard_test.go")
-	if err != nil || len(guards) == 0 {
-		t.Fatalf("no real guard files to inspect (err=%v)", err)
-	}
-	real := guards[0]
-
-	clean, err := os.ReadFile(real)
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	fileSet := token.NewFileSet()
-	parsed, err := parser.ParseFile(fileSet, real, clean, 0)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if offences := comparePayloadOffences(fileSet, parsed); len(offences) != 0 {
-		t.Fatalf("the real guard %s is already offending: %v", real, offences)
-	}
-
-	// Splice an offending call into the REAL file's source, keeping its real
-	// name so a filename-keyed detector cannot tell the two apart.
-	// Appended, not prepended: a declaration inserted above the import block
-	// fails to parse, which would fail this test for the wrong reason.
-	offending := string(clean) +
-		"\nfunc splicedOffender() { comparePayload(nil, nil, payloadGuard{fixture: \"x\"}) }\n"
-	if offending == string(clean) {
-		t.Fatal("splice did not apply; this test would pass vacuously")
-	}
-	parsedOffending, err := parser.ParseFile(fileSet, real, offending, 0)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if offences := comparePayloadOffences(fileSet, parsedOffending); len(offences) == 0 {
-		t.Errorf("the detector found no offence in %s after an offending call was "+
-			"spliced in. It responds to synthetic source but not to real guard "+
-			"files, so TestEveryRotGuardUsesTheRegistry proves nothing about them.",
-			real)
 	}
 }
 

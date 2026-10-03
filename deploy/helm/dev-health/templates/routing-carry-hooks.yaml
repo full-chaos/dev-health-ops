@@ -46,8 +46,8 @@ written that shared helper compared against `dev-health.image` (`.Values.image`,
 image), the WRONG reference for a Go-only concern: the tools image's embedded SDL must agree
 with the GO query-api image's, never the Python api's, or `carry` could compute a target digest
 for a commit the actual roll never runs. (CHAOS-8309: the helper now targets queryApi.image and
-goApi.image, and falls back to the Python image only when neither is enabled; this block keeps
-its own inline check because it already requires queryApi.enabled.)
+goApi.image, and ALSO compares the Python image while `.Values.image` exists, whatever the Go
+components are; this block keeps its own inline check because it already requires queryApi.enabled.)
 
 Neither hook renders on pre-install: carry's whole premise is a live, already-running process
 to copy FROM, which does not exist on a fresh install.

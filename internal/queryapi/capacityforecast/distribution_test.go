@@ -392,3 +392,27 @@ func TestTheCurveAndTheServedPercentilesAreOneDistribution(t *testing.T) {
 	}
 	t.Logf("the curve and the served percentile day agree on the day in %d of %d readings; they are apart, inside the gap of two ranked runs, in %d", sameDay, sameDay+apart, apart)
 }
+
+// Both modes of one forecast come from one simulation and hold the same number
+// of runs, so every other test here cannot tell which mode `runs` reads. A
+// stored row can still disagree (a days histogram with one count too many is
+// cut to its served bins). The rule is then: the days mode, when it simulated.
+// Each mode's cumulativeShare is taken against its OWN served total, so both
+// curves still end at 1.
+func TestRunsIsTheDaysModeTotalWhenTheTwoModesDisagree(t *testing.T) {
+	days := &numerical.Histogram{Values: []int{3, 5}, Counts: []int{10, 60, 30}} // served: 70 runs
+	items := &numerical.Histogram{Values: []int{40, 55}, Counts: []int{25, 75}}  // served: 100 runs
+	got := distributionToModel(days, items)
+	if got == nil || len(got.Days) != 2 || len(got.Items) != 2 {
+		t.Fatalf("distribution = %+v, want 2 day bins and 2 item bins", got)
+	}
+	if got.Runs != 70 {
+		t.Errorf("runs = %d, want 70: the total of the served day bins, not the 100 of the item bins", got.Runs)
+	}
+	if last := got.Days[1].CumulativeShare; last != 1 {
+		t.Errorf("days: the last bin's cumulativeShare is %v, want 1", last)
+	}
+	if last := got.Items[1].CumulativeShare; last != 1 {
+		t.Errorf("items: the last bin's cumulativeShare is %v, want 1", last)
+	}
+}

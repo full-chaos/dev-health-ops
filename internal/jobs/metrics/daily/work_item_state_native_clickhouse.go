@@ -3,11 +3,14 @@ package daily
 import (
 	"context"
 	"fmt"
+	"sort"
 	"strings"
 	"time"
 
 	"github.com/ClickHouse/clickhouse-go/v2/lib/driver"
 	"github.com/google/uuid"
+
+	"github.com/full-chaos/dev-health-ops/internal/jobs/metrics/workitemmetrics"
 )
 
 // workItemStateWorkItem is the narrow subset of the `work_items` ClickHouse
@@ -354,4 +357,167 @@ func WriteWorkItemStateDurationsDaily(
 		return len(rows), fmt.Errorf("send work_item_state_durations_daily batch: %w", err)
 	}
 	return len(rows), nil
+}
+
+// LoadWorkItemBlockingRelations reads the organization's blocking relations:
+// the work_item_dependencies rows the "blocked from open blockers" rule reads
+// (workitemmetrics.BlockedIntervalsByItem). Only the two blocking types under
+// the canonical semantics version are read; every other row has no
+// dependable direction and the rule would discard it anyway.
+//
+// Organization-wide on purpose, where every other read of this family is per
+// repository: a blocker lives in ANY repository of the organization (or in
+// none: a jira or linear issue), so a per-repository read would miss the
+// relations this rule exists for. The table's key is
+// (org_id, source, target, type), so FINAL is a complete dedup of re-synced
+// copies, as it is for work_items.
+func LoadWorkItemBlockingRelations(
+	ctx context.Context, conn repositoryRows, organizationID string,
+) ([]workitemmetrics.BlockingRelation, error) {
+	if conn == nil || strings.TrimSpace(organizationID) == "" {
+		return nil, ErrInvalidState
+	}
+	rows, err := conn.Query(ctx, `
+SELECT source_work_item_id, target_work_item_id, relationship_type, relationship_semantics_version, last_synced
+FROM work_item_dependencies FINAL
+WHERE org_id = ?
+  AND relationship_type IN ('blocks', 'blocked_by')
+  AND relationship_semantics_version = ?
+ORDER BY source_work_item_id, target_work_item_id, relationship_type`,
+		organizationID, workitemmetrics.CanonicalBlocksSemantics,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("load work_item_state blocking relations: %w", err)
+	}
+	defer rows.Close()
+
+	var relations []workitemmetrics.BlockingRelation
+	for rows.Next() {
+		var relation workitemmetrics.BlockingRelation
+		if err := rows.Scan(
+			&relation.SourceID, &relation.TargetID, &relation.RelationshipType,
+			&relation.SemanticsVersion, &relation.LastSynced,
+		); err != nil {
+			return nil, fmt.Errorf("scan work_item_state blocking relation: %w", err)
+		}
+		// last_synced is DateTime64(3) with no time zone; converting is the
+		// rule every reader of this table applies (edges.ReadDependencies).
+		relation.LastSynced = relation.LastSynced.UTC()
+		relations = append(relations, relation)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterate work_item_state blocking relations: %w", err)
+	}
+	return relations, nil
+}
+
+// workItemRelationEndLookup splits the ends that relations name into plain
+// work item ids and external issue keys, each sorted and without repeats, so
+// the read that follows is a function of the relations alone.
+func workItemRelationEndLookup(relations []workitemmetrics.BlockingRelation) (ids, keys []string) {
+	idSet, keySet := map[string]struct{}{}, map[string]struct{}{}
+	for _, relation := range relations {
+		for _, end := range []string{relation.SourceID, relation.TargetID} {
+			if key, external := workitemmetrics.ExternalKey(end); external {
+				keySet[key] = struct{}{}
+				continue
+			}
+			if end != "" && !strings.HasPrefix(end, workitemmetrics.ExternalKeyPrefix) {
+				idSet[end] = struct{}{}
+			}
+		}
+	}
+	for id := range idSet {
+		ids = append(ids, id)
+	}
+	for key := range keySet {
+		keys = append(keys, key)
+	}
+	sort.Strings(ids)
+	sort.Strings(keys)
+	return ids, keys
+}
+
+// LoadWorkItemRelationEnds reads the stored work items that the given
+// blocking relations name, in any repository of the organization: by work
+// item id, and -- for an external-key end -- every jira or linear item whose
+// bare issue key (the id after its provider prefix, trimmed and upper-cased,
+// the form workitemmetrics.ExternalKey produces) is one of the keys. Which of
+// those candidates a key resolves to, if any, is the rule's decision, not
+// this read's.
+func LoadWorkItemRelationEnds(
+	ctx context.Context, conn repositoryRows, organizationID string, relations []workitemmetrics.BlockingRelation,
+) ([]workitemmetrics.RelationEnd, error) {
+	if conn == nil || strings.TrimSpace(organizationID) == "" {
+		return nil, ErrInvalidState
+	}
+	ids, keys := workItemRelationEndLookup(relations)
+	if len(ids) == 0 && len(keys) == 0 {
+		return nil, nil
+	}
+	// An empty list is not sent as `IN ()`: the predicate it belongs to is
+	// left out instead.
+	var predicates []string
+	args := []any{organizationID}
+	if len(ids) > 0 {
+		predicates = append(predicates, "work_item_id IN ?")
+		args = append(args, ids)
+	}
+	if len(keys) > 0 {
+		predicates = append(predicates, "(provider IN ('jira', 'linear') AND upper(trimBoth(substring(work_item_id, position(work_item_id, ':') + 1))) IN ?)")
+		args = append(args, keys)
+	}
+	rows, err := conn.Query(ctx, `
+SELECT work_item_id, provider, status, created_at, completed_at, last_synced
+FROM work_items FINAL
+WHERE org_id = ? AND (`+strings.Join(predicates, " OR ")+`)
+ORDER BY work_item_id, last_synced`, args...)
+	if err != nil {
+		return nil, fmt.Errorf("load work_item_state relation ends: %w", err)
+	}
+	defer rows.Close()
+
+	var ends []workitemmetrics.RelationEnd
+	for rows.Next() {
+		var (
+			end         workitemmetrics.RelationEnd
+			completedAt *time.Time
+		)
+		if err := rows.Scan(
+			&end.WorkItemID, &end.Provider, &end.Status, &end.CreatedAt, &completedAt, &end.LastSynced,
+		); err != nil {
+			return nil, fmt.Errorf("scan work_item_state relation end: %w", err)
+		}
+		end.CreatedAt, end.LastSynced = end.CreatedAt.UTC(), end.LastSynced.UTC()
+		if completedAt != nil {
+			completed := completedAt.UTC()
+			end.CompletedAt = &completed
+		}
+		ends = append(ends, end)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterate work_item_state relation ends: %w", err)
+	}
+	return ends, nil
+}
+
+// LoadWorkItemBlockedIntervals returns, per blocked work item id, the spans in
+// which the item has an open blocker: the organization's blocking relations,
+// resolved against the stored items they name by the ONE rule both writers of
+// work_item_state_durations_daily share.
+func LoadWorkItemBlockedIntervals(
+	ctx context.Context, conn repositoryRows, organizationID string,
+) (map[string][]workitemmetrics.BlockedInterval, error) {
+	relations, err := LoadWorkItemBlockingRelations(ctx, conn, organizationID)
+	if err != nil {
+		return nil, err
+	}
+	if len(relations) == 0 {
+		return nil, nil
+	}
+	ends, err := LoadWorkItemRelationEnds(ctx, conn, organizationID, relations)
+	if err != nil {
+		return nil, err
+	}
+	return workitemmetrics.BlockedIntervalsByItem(relations, ends), nil
 }

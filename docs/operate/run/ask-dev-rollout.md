@@ -48,7 +48,7 @@ Run the command below only when you need the repair to happen sooner than the ne
 ### Run the repair manually
 
 ```bash
-dev-hops maintenance backfill-ask-dev-ephemeral-expiry
+dho maintenance backfill-ask-dev-ephemeral-expiry
 ```
 
 The command takes no arguments of its own. It drains the full backlog in one invocation, committing each batch of up to 500 rows and stopping when a batch comes back short. It is idempotent and resumable: re-running it after a partial drain continues where it stopped, and re-running it once the backlog is empty stamps nothing.

@@ -20,6 +20,7 @@ import (
 	"fmt"
 	"os"
 	"regexp"
+	"sort"
 	"strings"
 )
 
@@ -54,14 +55,20 @@ const (
 // Planes is every plane a rule can name, sorted.
 var Planes = []string{PlaneGoAPI, PlaneQueryAPI}
 
-// Contract is the rule table of one api host.
+// Contract is the rule table of the api hosts.
 type Contract struct {
 	SchemaVersion int `json:"schema_version"`
 	// RegexMode is true when an Ingress of the host carries
 	// nginx.ingress.kubernetes.io/use-regex: "true". ingress-nginx then writes
 	// EVERY path of the host as a case-insensitive regex location.
-	RegexMode bool   `json:"regex_mode"`
-	Rules     []Rule `json:"rules"`
+	RegexMode bool `json:"regex_mode"`
+	// Rules are the Ingress paths that EVERY api host carries.
+	Rules []Rule `json:"rules"`
+	// PublicHostRules are the Ingress paths that only the PUBLIC api host
+	// carries beside Rules (prod: the four Exact paths of the block object).
+	// Each must give its paths the default plane, so the one router answers
+	// every path as both hosts do; the router writes no location for them.
+	PublicHostRules []Rule `json:"public_host_rules"`
 }
 
 // Rule is one Ingress path of the host: the path as the Ingress object holds
@@ -79,6 +86,17 @@ type Rule struct {
 // regex mode, and its match result is the same in PCRE (nginx) and in RE2.
 var anchoredPath = regexp.MustCompile(`^(/(\[\^/\]\+|([A-Za-z0-9_-]|\\\.)+))+\$$`)
 
+// exactPath is the shape of a public-host rule: literal segments of letters,
+// digits, "_", "-" and ".". In regex mode ingress-nginx writes it as a regex
+// with no end anchor in which "." is any character; see exactCanMatch.
+var exactPath = regexp.MustCompile(`^(/[A-Za-z0-9_.-]+)+$`)
+
+// The keys of the document and of a rule, spelled as the schema spells them.
+var (
+	contractKeys = []string{"public_host_rules", "regex_mode", "rules", "schema_version"}
+	ruleKeys     = []string{"path", "path_type", "plane"}
+)
+
 // Load reads and validates the contract at path.
 func Load(path string) (Contract, error) {
 	data, err := os.ReadFile(path)
@@ -88,10 +106,14 @@ func Load(path string) (Contract, error) {
 	return Parse(data)
 }
 
-// Parse decodes and validates a contract. An unknown key and trailing data are
-// errors: the deploy repository compares its rendered rules with these rows,
-// so a row this package does not fully read must not load.
+// Parse decodes and validates a contract. A missing key, an unknown key, a
+// key in another case and trailing data are errors: the deploy repository
+// compares its rendered rules with these rows, so a document this package
+// does not read exactly as the schema describes it must not load.
 func Parse(data []byte) (Contract, error) {
+	if err := exactKeys(data); err != nil {
+		return Contract{}, fmt.Errorf("decode the route-plane contract: %w", err)
+	}
 	decoder := json.NewDecoder(bytes.NewReader(data))
 	decoder.DisallowUnknownFields()
 	var contract Contract
@@ -107,6 +129,43 @@ func Parse(data []byte) (Contract, error) {
 	return contract, nil
 }
 
+// exactKeys refuses a document whose keys are not exactly the schema's.
+// encoding/json matches a key to a struct field without case ("Path" fills
+// path), and the schema does not; this check makes the two agree.
+func exactKeys(data []byte) error {
+	var document map[string]json.RawMessage
+	if err := json.Unmarshal(data, &document); err != nil {
+		return err
+	}
+	if err := sameKeys("the document", document, contractKeys); err != nil {
+		return err
+	}
+	for _, list := range []string{"rules", "public_host_rules"} {
+		var rules []map[string]json.RawMessage
+		if err := json.Unmarshal(document[list], &rules); err != nil {
+			return fmt.Errorf("%s: %w", list, err)
+		}
+		for index, rule := range rules {
+			if err := sameKeys(fmt.Sprintf("%s[%d]", list, index), rule, ruleKeys); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
+}
+
+func sameKeys(where string, object map[string]json.RawMessage, want []string) error {
+	got := make([]string, 0, len(object))
+	for key := range object {
+		got = append(got, key)
+	}
+	sort.Strings(got)
+	if strings.Join(got, ",") != strings.Join(want, ",") {
+		return fmt.Errorf("%s has the keys %v, want exactly %v", where, got, want)
+	}
+	return nil
+}
+
 // Validate refuses every table whose nginx form this package cannot write with
 // the match result ingress-nginx gives it. A refusal is by design: a shape that
 // would have to be guessed is not read.
@@ -118,7 +177,7 @@ func (c Contract) Validate() error {
 		return errors.New("route-plane contract: regex_mode is false: only a host in ingress-nginx regex mode is modelled (prod's api hosts are in it); a table without it matches paths by other rules")
 	}
 	defaults := 0
-	seen := map[string]int{}
+	seen := map[string]string{}
 	type template struct {
 		index    int
 		segments []string
@@ -131,9 +190,9 @@ func (c Contract) Validate() error {
 		}
 		key := strings.ToLower(rule.Path)
 		if first, repeated := seen[key]; repeated {
-			return fmt.Errorf("%s: the path repeats rule %d (paths are compared without case, as regex mode matches them)", where, first)
+			return fmt.Errorf("%s: the path repeats %s (paths are compared without case, as regex mode matches them)", where, first)
 		}
-		seen[key] = index
+		seen[key] = fmt.Sprintf("rule %d", index)
 		if rule.Path == defaultPath {
 			if rule.PathType != PathTypePrefix {
 				return fmt.Errorf("%s: the default rule is path %q with path_type %s", where, defaultPath, PathTypePrefix)
@@ -168,6 +227,44 @@ func (c Contract) Validate() error {
 		for _, b := range templates[i+1:] {
 			if segmentsOverlap(a.segments, b.segments) {
 				return fmt.Errorf("route-plane contract: rule %d (%s) and rule %d (%s) can match the same path; a path has exactly one rule", a.index, c.Rules[a.index].Path, b.index, c.Rules[b.index].Path)
+			}
+		}
+	}
+	return c.validatePublicHostRules(seen)
+}
+
+// validatePublicHostRules holds the one property that lets one router stand
+// for two hosts: a path that only the public host lists gets, on that host,
+// the plane the other host gives it. So each such rule must be an Exact path
+// to the default plane, and must not take a path from a rule of another plane.
+func (c Contract) validatePublicHostRules(seen map[string]string) error {
+	for index, rule := range c.PublicHostRules {
+		where := fmt.Sprintf("route-plane contract: public host rule %d (%s %s)", index, rule.PathType, rule.Path)
+		if rule.PathType != PathTypeExact {
+			return fmt.Errorf("%s: a public host rule is an %s path (the paths the public host's block object holds)", where, PathTypeExact)
+		}
+		if !exactPath.MatchString(rule.Path) {
+			return fmt.Errorf("%s: the path is not a literal path: segments of letters, digits, \"_\", \"-\" and \".\"", where)
+		}
+		for _, segment := range strings.Split(rule.Path, "/")[1:] {
+			if segment == "." || segment == ".." {
+				return fmt.Errorf("%s: the path has a . or .. segment", where)
+			}
+		}
+		if rule.Plane != c.DefaultPlane() {
+			return fmt.Errorf("%s: plane %q is not the default plane %q: the router is one host, so a path that only the public host lists must get the plane the other api host gives it", where, rule.Plane, c.DefaultPlane())
+		}
+		key := strings.ToLower(rule.Path)
+		if first, repeated := seen[key]; repeated {
+			return fmt.Errorf("%s: the path repeats %s (paths are compared without case, as regex mode matches them)", where, first)
+		}
+		seen[key] = fmt.Sprintf("public host rule %d", index)
+		for other, anchored := range c.Rules {
+			if anchored.Path == defaultPath || anchored.Plane == rule.Plane {
+				continue
+			}
+			if exactCanMatch(rule.Path, anchored.Path) {
+				return fmt.Errorf("%s: on the public host this path can take a request from rule %d (%s, plane %s): the two api hosts would give that request different planes", where, other, anchored.Path, anchored.Plane)
 			}
 		}
 	}
@@ -212,6 +309,46 @@ func segmentsOverlap(a, b []string) bool {
 		if a[i] != b[i] && a[i] != wildcardSegment && b[i] != wildcardSegment {
 			return false
 		}
+	}
+	return true
+}
+
+// exactCanMatch reports whether some request path matches both an Exact path
+// as regex mode reads it and an anchored path. Regex mode reads the Exact
+// path "/a.b" as the regex `^/a.b`: no end anchor, any case, and "." is any
+// character (a "/" too). That is the widest reading, and it holds the exact
+// one. The anchored path is walked one character of the Exact path at a time:
+// a literal takes an equal character, a token takes any character but "/".
+func exactCanMatch(exact, anchored string) bool {
+	// The anchored path as items: one byte per literal character, and
+	// wildcardSegment[0] for a token.
+	text := strings.TrimSuffix(anchored, "$")
+	text = strings.ReplaceAll(text, wildcard, wildcardSegment)
+	// `\.` of the anchored path is a literal dot; only the Exact path's "." is
+	// a regex dot.
+	items := strings.ToLower(strings.ReplaceAll(text, `\.`, "."))
+	states := map[int]bool{0: true}
+	for _, c := range []byte(strings.ToLower(exact)) {
+		next := map[int]bool{}
+		for at := range states {
+			if at == len(items) {
+				continue // the anchored path is at its end: it takes no more characters
+			}
+			if items[at] == wildcardSegment[0] {
+				if c != '/' { // a "." of the Exact path can stand for a character the token takes
+					next[at] = true   // the token takes this character and more
+					next[at+1] = true // the token takes this character as its last
+				}
+				continue
+			}
+			if c == '.' || c == items[at] {
+				next[at+1] = true
+			}
+		}
+		if len(next) == 0 {
+			return false
+		}
+		states = next
 	}
 	return true
 }

@@ -199,5 +199,11 @@
     {"path": "/api/v1/ingest/deployments$", "path_type": "ImplementationSpecific", "plane": "go-api"},
     {"path": "/api/v1/ingest/incidents$", "path_type": "ImplementationSpecific", "plane": "go-api"},
     {"path": "/api/v1/ingest/telemetry$", "path_type": "ImplementationSpecific", "plane": "go-api"}
+  ],
+  "public_host_rules": [
+    {"path": "/metrics", "path_type": "Exact", "plane": "go-api"},
+    {"path": "/docs", "path_type": "Exact", "plane": "go-api"},
+    {"path": "/redoc", "path_type": "Exact", "plane": "go-api"},
+    {"path": "/openapi.json", "path_type": "Exact", "plane": "go-api"}
   ]
 }

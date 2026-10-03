@@ -285,7 +285,7 @@ def test_chart_defaults_budget_their_own_autoscaled_groups(tmp_path: Path) -> No
 # --- 3. rollout capacity for the serving Deployments ------------------------
 
 
-@pytest.mark.parametrize("component", ["api", "metrics-api", "web"])
+@pytest.mark.parametrize("component", ["web"])
 def test_serving_deployments_never_dip_below_capacity(
     component: str, tmp_path: Path
 ) -> None:

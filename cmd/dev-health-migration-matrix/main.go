@@ -99,7 +99,6 @@ var defaultFleetContainers = []string{
 	"dev-health-go-scheduler-1",
 	"dev-health-go-reconciler-1",
 	queryAPIContainerName,
-	"dev-health-api-1",
 }
 
 // matrixFlags holds the pointers registerFlags binds. A struct rather than

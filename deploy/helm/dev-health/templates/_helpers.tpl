@@ -68,17 +68,6 @@ Namespace
 {{- end }}
 
 {{/*
-Backend image
-*/}}
-{{- define "dev-health.image" -}}
-{{- if contains "@" .Values.image.repository -}}
-{{- .Values.image.repository }}
-{{- else -}}
-{{- printf "%s:%s" .Values.image.repository (default .Chart.AppVersion .Values.image.tag) }}
-{{- end -}}
-{{- end }}
-
-{{/*
 Web image
 */}}
 {{- define "dev-health.webImage" -}}
@@ -432,18 +421,13 @@ database, failing runtime_role_unauthorized with no diagnostics).
 CHAOS-8309: the comparison targets are the Go serving images -- queryApi.image
 (when queryApi.enabled) and goApi.image (when goApi.enabled). When both are
 enabled the hook tag must equal BOTH. Before this change the one target was
-dev-health.image (.Values.image, the PYTHON api image, which goes away with the
-Python api): that is the wrong reference for a Go-only concern, and the
+the Python api image: that is the wrong reference for a Go-only concern, and the
 routing-carry hooks already compare against queryApi.image inline for the same
 reason (routing-carry-hooks.yaml). A component that is not enabled has no image
 being rolled, so it is not a comparison target.
 
-The Python image stays a target (lead D4535/D4545: the guard stays, monotone
-against main): while `.Values.image` exists the hook tag is ALSO compared with
-the Python image (dev-health.image), so every render the check refused before
-is still refused, whether or not a Go component is enabled and whatever its
-image looks like. The Go clauses only ADD refusals. CHAOS-8311 removes the
-Python clause together with `.Values.image`.
+CHAOS-7520: the Python image clause is gone (the Python api image has no
+chart object left).
 
 Only comparable when BOTH sides carry this repo's `sha-<12 hex>`
 immutable-tag convention: a sha256 digest does not encode which commit it
@@ -476,20 +460,13 @@ pin on its own, just not one this specific comparison can use).
 {{- fail (printf "%s and goApi.image (%s) are pinned to different commits (%s vs %s) -- %s" $label $goApiImage $hookImageTag $goApiTag $reason) -}}
 {{- end -}}
 {{- end -}}
-{{- if .context.Values.image -}}
-{{- $pythonImage := include "dev-health.image" .context -}}
-{{- $pythonTag := regexFind ":sha-[0-9a-f]{12}$" $pythonImage -}}
-{{- if and $pythonTag (ne $pythonTag $hookImageTag) -}}
-{{- fail (printf "%s and image.repository/image.tag (%s) are pinned to different commits (%s vs %s) -- %s" $label $pythonImage $hookImageTag $pythonTag $reason) -}}
-{{- end -}}
-{{- end -}}
 {{- end -}}
 {{- end }}
 
 {{/*
 Pinned operator (dho) image check — call with (dict "context" $ "image" <resolved
 image> "pullPolicy" <resolved pull policy, already defaulted to "IfNotPresent" by
-the CALLER, never to .Values.image.pullPolicy -- see below> "flagLabel" <the
+the CALLER, never the application image's pull policy -- see below> "flagLabel" <the
 precedence description, e.g. "migrations.hook.provisionRoles.image, else
 migrations.hook.riverMigrate.image, else migrations.hook.routeActivate.image">
 "verb" <the dho verb this image must run, e.g. "`dho migrate roles`">).
@@ -559,14 +536,14 @@ here instead of at each call site:
      sha256.
   3. Pull policy. This helper does not choose a pull policy -- it only checks the
      one the caller already resolved. The caller must default it to
-     "IfNotPresent", NEVER to .Values.image.pullPolicy (the APPLICATION image's
+     "IfNotPresent", NEVER to the application image's pull policy (the APPLICATION image's
      policy): a local dev value of image.pullPolicy=Never used to leak onto a
      PINNED REGISTRY operator image, which then could not be pulled at all.
      route-activate-hooks.yaml already got this right (its own r2 P2 codex-review
      fix); provision-roles, river-migrate and migrate did not.
 
 The lockstep check (this image pinned to the SAME commit as
-image.repository/image.tag) still runs at the end, unchanged.
+the Go serving images) still runs at the end, unchanged.
 */}}
 {{/*
 CHAOS-6958 r1 round (executed finding): the denylist above was incomplete. A

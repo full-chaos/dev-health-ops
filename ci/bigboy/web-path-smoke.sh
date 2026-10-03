@@ -18,7 +18,6 @@ R=/home/ubuntu/devhealth
 cd "$R"
 
 BASE_COMPOSE_ARGS=(--env-file ops/.env -f compose.yml -f compose/compose.go.workers.yml \
-  -f compose/compose.metrics-api.local.yml \
   -f .remember/lanes/team-lead/reconciler-sweep-override.yml \
   -f compose/compose.bigboy.images.yml \
   -f "$HERE/compose.bigboy.router.yml" -f "$HERE/compose.bigboy.smoke.yml")

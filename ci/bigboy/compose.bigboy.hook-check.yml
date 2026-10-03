@@ -1,0 +1,16 @@
+# bigboy-hook-check.sh's one-off operator shell (CHAOS-8371, D4566 class rules). Never started by `up` (profile venue); the
+# script appends this file to COMPOSE_FILE for its own calls only. The image is the operator image the script derives from the
+# pinned sha (an image reference, passed as HOOK_OPERATOR_IMAGE: not a credential). The two DSNs are interpolated by COMPOSE from
+# ops/.env (`--env-file`) with the same defaults compose.yml gives the stack, so no script variable, argv, `-e` or script-written env
+# file ever carries a credential, and nothing is read out of the api container with printenv. The image's own entrypoint
+# is the dho operator, as in the prod migrate hook Job.
+services:
+  venue-hook:
+    image: ${HOOK_OPERATOR_IMAGE:?bigboy-hook-check.sh sets the operator image}
+    profiles: ["venue"]
+    networks: [dev-health]
+    environment:
+      MIGRATION_DATABASE_URI: postgresql://devhealth:${POSTGRES_PASSWORD:-devhealth}@postgres:5432/devhealth?sslmode=disable
+      CLICKHOUSE_URI: clickhouse://${CLICKHOUSE_USER:-ch}:${CLICKHOUSE_PASSWORD:-ch}@clickhouse:9000/default
+      OPERATIONAL_ORDERING_CONTRACT: "2"
+      DEV_HEALTH_ALLOW_CELERY_RIVER_CUTOVER: "1"

@@ -1,0 +1,9 @@
+# CHAOS-8305: registrations that ONLY REFUSE. net/http would answer a different status or Allow header without them
+# (Python/Starlette's first-partial-match 405), so they exist but serve nothing and have no profile row. Columns (tab
+# separated): method, registered pattern, a concrete probe path, the refusal status, file:line of the registration. The gate
+# EXECUTES each probe against the built server and requires the status; an entry whose route is gone, or that has a profile
+# row, or whose probe answers anything else, fails.
+HEAD	/api/v1/billing/plans/pull-stripe	/api/v1/billing/plans/pull-stripe	405	internal/api/billing/routes.go:95
+POST	/api/v1/billing/plans/{plan_id}	/api/v1/billing/plans/x	405	internal/api/billing/routes.go:97
+PUT	/api/v1/auth/oauth/{first}/{second}	/api/v1/auth/oauth/providers/x	405	internal/api/sso/sso.go:161
+DELETE	/api/v1/auth/oauth/{first}/{second}	/api/v1/auth/oauth/providers/x	405	internal/api/sso/sso.go:161

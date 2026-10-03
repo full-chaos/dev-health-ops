@@ -6,25 +6,23 @@ import (
 	"regexp"
 	"strings"
 	"testing"
-
-	"github.com/full-chaos/dev-health-ops/internal/migrationmatrix"
 )
 
-// declaredRoutePaths is every path the package mounts on the query mux, read from the
-// source the way the migration matrix reads it (LoadQueryAPIMuxRoutes), so a route that
-// is added or removed is added or removed here too.
+// declaredRoutePaths is every path the package mounts on the query mux: the patterns
+// of the production route table (RESTRoutes) so a route
+// that is added or removed is added or removed here too.
 func declaredRoutePaths(t *testing.T) []string {
 	t.Helper()
-	routes, err := migrationmatrix.LoadQueryAPIMuxRoutes(".")
-	if err != nil {
-		t.Fatal(err)
+	seen := map[string]bool{}
+	var paths []string
+	for _, route := range RESTRoutes() {
+		if !seen[route.Pattern] {
+			seen[route.Pattern] = true
+			paths = append(paths, route.Pattern)
+		}
 	}
-	if len(routes) < 20 {
-		t.Fatalf("found only %d mounted routes in the source: the extraction no longer covers server.Build", len(routes))
-	}
-	paths := make([]string, 0, len(routes))
-	for _, route := range routes {
-		paths = append(paths, route.Path)
+	if len(paths) < 20 {
+		t.Fatalf("found only %d mounted routes in the table: the table no longer covers server.Build", len(paths))
 	}
 	return paths
 }

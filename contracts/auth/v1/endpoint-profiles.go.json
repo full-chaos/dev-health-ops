@@ -1,0 +1,1161 @@
+{
+  "schema_version": "endpoint-profile.v1",
+  "generated_at": "2026-10-03T08:21:34Z",
+  "source_commit": "99c481c7c08a93bdb7f96d92e6c393c94fbc0e80",
+  "credential_class_source": "contracts/auth/v1/credential-classes.json",
+  "rows": [
+    {
+      "id": "GET /api/v1/billing/plans [dev-health-ops-api]",
+      "surface_kind": "rest",
+      "method": "GET",
+      "route": "/api/v1/billing/plans",
+      "graphql_field_name": null,
+      "service": "dev-health-ops-api",
+      "source": {
+        "file": "internal/api/billing/routes.go",
+        "line": 87,
+        "router_local_path": "/plans"
+      },
+      "gaps": [
+        "Go-served route with no Python twin in the endpoint-profile inventory: this row records the credential class the route's guard enforces, read from the Go source (CHAOS-8305). tenant_requirement and impersonation_policy are not profiled for Go rows ('unknown'); role checks inside the handler body are not profiled."
+      ],
+      "classification": "public",
+      "public_rationale": "Anonymous callers are served; a usable bearer token only identifies the caller (policy.Optional, get_current_user_optional: a missing or refused token never refuses the request). The plan catalogue is public; include_inactive=true needs a superuser (checked in the handler, internal/api/billing/plans.go:44).",
+      "accepted_credential_classes": [
+        "ops_access_token_hs256"
+      ],
+      "primary_validator": null,
+      "token_shape": null,
+      "reachable_validators": [],
+      "action": null,
+      "resource_resolver": null,
+      "tenant_requirement": "unknown",
+      "current_state_cache_behavior": null,
+      "impersonation_policy": "unknown",
+      "entitlement_requirement": null,
+      "disclosure_behavior": null
+    },
+    {
+      "id": "POST /api/v1/billing/plans [dev-health-ops-api]",
+      "surface_kind": "rest",
+      "method": "POST",
+      "route": "/api/v1/billing/plans",
+      "graphql_field_name": null,
+      "service": "dev-health-ops-api",
+      "source": {
+        "file": "internal/api/billing/routes.go",
+        "line": 88,
+        "router_local_path": "/plans"
+      },
+      "gaps": [
+        "Go-served route with no Python twin in the endpoint-profile inventory: this row records the credential class the route's guard enforces, read from the Go source (CHAOS-8305). tenant_requirement and impersonation_policy are not profiled for Go rows ('unknown'); role checks inside the handler body are not profiled."
+      ],
+      "classification": "protected",
+      "public_rationale": null,
+      "accepted_credential_classes": [
+        "ops_access_token_hs256"
+      ],
+      "primary_validator": {
+        "description": "policy.Guard.BodyFirst(policy.Authenticated) (get_current_user) at internal/api/billing/routes.go:88: a missing, malformed or refused bearer token is a 401 before the handler runs. The body is decoded first (422/400 before the credential is read), as FastAPI validates a body parameter before Depends.",
+        "anchor": {
+          "path": "internal/api/policy/guard.go",
+          "line": 93,
+          "note": "Guard.Wrap: currentUser then the level check",
+          "line_end": 121
+        }
+      },
+      "token_shape": null,
+      "reachable_validators": [],
+      "action": null,
+      "resource_resolver": null,
+      "tenant_requirement": "unknown",
+      "current_state_cache_behavior": null,
+      "impersonation_policy": "unknown",
+      "entitlement_requirement": null,
+      "disclosure_behavior": null
+    },
+    {
+      "id": "POST /api/v1/billing/plans/pull-stripe [dev-health-ops-api]",
+      "surface_kind": "rest",
+      "method": "POST",
+      "route": "/api/v1/billing/plans/pull-stripe",
+      "graphql_field_name": null,
+      "service": "dev-health-ops-api",
+      "source": {
+        "file": "internal/api/billing/routes.go",
+        "line": 92,
+        "router_local_path": "/plans/pull-stripe"
+      },
+      "gaps": [
+        "Go-served route with no Python twin in the endpoint-profile inventory: this row records the credential class the route's guard enforces, read from the Go source (CHAOS-8305). tenant_requirement and impersonation_policy are not profiled for Go rows ('unknown'); role checks inside the handler body are not profiled."
+      ],
+      "classification": "protected",
+      "public_rationale": null,
+      "accepted_credential_classes": [
+        "ops_access_token_hs256"
+      ],
+      "primary_validator": {
+        "description": "policy.Guard.Wrap(policy.Superuser) (require_superuser) at internal/api/billing/routes.go:92: the caller must be authenticated (401) and a superuser (403 \"Superuser access required\").",
+        "anchor": {
+          "path": "internal/api/policy/guard.go",
+          "line": 93,
+          "note": "Guard.Wrap: currentUser then the level check",
+          "line_end": 121
+        }
+      },
+      "token_shape": null,
+      "reachable_validators": [],
+      "action": null,
+      "resource_resolver": null,
+      "tenant_requirement": "unknown",
+      "current_state_cache_behavior": null,
+      "impersonation_policy": "unknown",
+      "entitlement_requirement": null,
+      "disclosure_behavior": null
+    },
+    {
+      "id": "GET /api/v1/billing/plans/{plan_id} [dev-health-ops-api]",
+      "surface_kind": "rest",
+      "method": "GET",
+      "route": "/api/v1/billing/plans/{plan_id}",
+      "graphql_field_name": null,
+      "service": "dev-health-ops-api",
+      "source": {
+        "file": "internal/api/billing/routes.go",
+        "line": 96,
+        "router_local_path": "/plans/{plan_id}"
+      },
+      "gaps": [
+        "Go-served route with no Python twin in the endpoint-profile inventory: this row records the credential class the route's guard enforces, read from the Go source (CHAOS-8305). tenant_requirement and impersonation_policy are not profiled for Go rows ('unknown'); role checks inside the handler body are not profiled."
+      ],
+      "classification": "public",
+      "public_rationale": "Anonymous callers are served; a usable bearer token only identifies the caller (policy.Optional, get_current_user_optional: a missing or refused token never refuses the request). A single plan is served to anonymous callers.",
+      "accepted_credential_classes": [
+        "ops_access_token_hs256"
+      ],
+      "primary_validator": null,
+      "token_shape": null,
+      "reachable_validators": [],
+      "action": null,
+      "resource_resolver": null,
+      "tenant_requirement": "unknown",
+      "current_state_cache_behavior": null,
+      "impersonation_policy": "unknown",
+      "entitlement_requirement": null,
+      "disclosure_behavior": null
+    },
+    {
+      "id": "PUT /api/v1/billing/plans/{plan_id} [dev-health-ops-api]",
+      "surface_kind": "rest",
+      "method": "PUT",
+      "route": "/api/v1/billing/plans/{plan_id}",
+      "graphql_field_name": null,
+      "service": "dev-health-ops-api",
+      "source": {
+        "file": "internal/api/billing/routes.go",
+        "line": 98,
+        "router_local_path": "/plans/{plan_id}"
+      },
+      "gaps": [
+        "Go-served route with no Python twin in the endpoint-profile inventory: this row records the credential class the route's guard enforces, read from the Go source (CHAOS-8305). tenant_requirement and impersonation_policy are not profiled for Go rows ('unknown'); role checks inside the handler body are not profiled."
+      ],
+      "classification": "protected",
+      "public_rationale": null,
+      "accepted_credential_classes": [
+        "ops_access_token_hs256"
+      ],
+      "primary_validator": {
+        "description": "policy.Guard.BodyFirst(policy.Authenticated) (get_current_user) at internal/api/billing/routes.go:98: a missing, malformed or refused bearer token is a 401 before the handler runs. The body is decoded first (422/400 before the credential is read), as FastAPI validates a body parameter before Depends.",
+        "anchor": {
+          "path": "internal/api/policy/guard.go",
+          "line": 93,
+          "note": "Guard.Wrap: currentUser then the level check",
+          "line_end": 121
+        }
+      },
+      "token_shape": null,
+      "reachable_validators": [],
+      "action": null,
+      "resource_resolver": null,
+      "tenant_requirement": "unknown",
+      "current_state_cache_behavior": null,
+      "impersonation_policy": "unknown",
+      "entitlement_requirement": null,
+      "disclosure_behavior": null
+    },
+    {
+      "id": "DELETE /api/v1/billing/plans/{plan_id} [dev-health-ops-api]",
+      "surface_kind": "rest",
+      "method": "DELETE",
+      "route": "/api/v1/billing/plans/{plan_id}",
+      "graphql_field_name": null,
+      "service": "dev-health-ops-api",
+      "source": {
+        "file": "internal/api/billing/routes.go",
+        "line": 99,
+        "router_local_path": "/plans/{plan_id}"
+      },
+      "gaps": [
+        "Go-served route with no Python twin in the endpoint-profile inventory: this row records the credential class the route's guard enforces, read from the Go source (CHAOS-8305). tenant_requirement and impersonation_policy are not profiled for Go rows ('unknown'); role checks inside the handler body are not profiled."
+      ],
+      "classification": "protected",
+      "public_rationale": null,
+      "accepted_credential_classes": [
+        "ops_access_token_hs256"
+      ],
+      "primary_validator": {
+        "description": "policy.Guard.Wrap(policy.Authenticated) (get_current_user) at internal/api/billing/routes.go:99: a missing, malformed or refused bearer token is a 401 before the handler runs.",
+        "anchor": {
+          "path": "internal/api/policy/guard.go",
+          "line": 93,
+          "note": "Guard.Wrap: currentUser then the level check",
+          "line_end": 121
+        }
+      },
+      "token_shape": null,
+      "reachable_validators": [],
+      "action": null,
+      "resource_resolver": null,
+      "tenant_requirement": "unknown",
+      "current_state_cache_behavior": null,
+      "impersonation_policy": "unknown",
+      "entitlement_requirement": null,
+      "disclosure_behavior": null
+    },
+    {
+      "id": "POST /api/v1/billing/plans/{plan_id}/sync-stripe [dev-health-ops-api]",
+      "surface_kind": "rest",
+      "method": "POST",
+      "route": "/api/v1/billing/plans/{plan_id}/sync-stripe",
+      "graphql_field_name": null,
+      "service": "dev-health-ops-api",
+      "source": {
+        "file": "internal/api/billing/routes.go",
+        "line": 100,
+        "router_local_path": "/plans/{plan_id}/sync-stripe"
+      },
+      "gaps": [
+        "Go-served route with no Python twin in the endpoint-profile inventory: this row records the credential class the route's guard enforces, read from the Go source (CHAOS-8305). tenant_requirement and impersonation_policy are not profiled for Go rows ('unknown'); role checks inside the handler body are not profiled."
+      ],
+      "classification": "protected",
+      "public_rationale": null,
+      "accepted_credential_classes": [
+        "ops_access_token_hs256"
+      ],
+      "primary_validator": {
+        "description": "policy.Guard.Wrap(policy.Authenticated) (get_current_user) at internal/api/billing/routes.go:100: a missing, malformed or refused bearer token is a 401 before the handler runs.",
+        "anchor": {
+          "path": "internal/api/policy/guard.go",
+          "line": 93,
+          "note": "Guard.Wrap: currentUser then the level check",
+          "line_end": 121
+        }
+      },
+      "token_shape": null,
+      "reachable_validators": [],
+      "action": null,
+      "resource_resolver": null,
+      "tenant_requirement": "unknown",
+      "current_state_cache_behavior": null,
+      "impersonation_policy": "unknown",
+      "entitlement_requirement": null,
+      "disclosure_behavior": null
+    },
+    {
+      "id": "GET /api/v1/billing/invoices [dev-health-ops-api]",
+      "surface_kind": "rest",
+      "method": "GET",
+      "route": "/api/v1/billing/invoices",
+      "graphql_field_name": null,
+      "service": "dev-health-ops-api",
+      "source": {
+        "file": "internal/api/billing/routes.go",
+        "line": 101,
+        "router_local_path": "/invoices"
+      },
+      "gaps": [
+        "Go-served route with no Python twin in the endpoint-profile inventory: this row records the credential class the route's guard enforces, read from the Go source (CHAOS-8305). tenant_requirement and impersonation_policy are not profiled for Go rows ('unknown'); role checks inside the handler body are not profiled."
+      ],
+      "classification": "protected",
+      "public_rationale": null,
+      "accepted_credential_classes": [
+        "ops_access_token_hs256"
+      ],
+      "primary_validator": {
+        "description": "policy.Guard.Wrap(policy.Authenticated) (get_current_user) at internal/api/billing/routes.go:101: a missing, malformed or refused bearer token is a 401 before the handler runs.",
+        "anchor": {
+          "path": "internal/api/policy/guard.go",
+          "line": 93,
+          "note": "Guard.Wrap: currentUser then the level check",
+          "line_end": 121
+        }
+      },
+      "token_shape": null,
+      "reachable_validators": [],
+      "action": null,
+      "resource_resolver": null,
+      "tenant_requirement": "unknown",
+      "current_state_cache_behavior": null,
+      "impersonation_policy": "unknown",
+      "entitlement_requirement": null,
+      "disclosure_behavior": null
+    },
+    {
+      "id": "GET /api/v1/billing/invoices/{invoice_id} [dev-health-ops-api]",
+      "surface_kind": "rest",
+      "method": "GET",
+      "route": "/api/v1/billing/invoices/{invoice_id}",
+      "graphql_field_name": null,
+      "service": "dev-health-ops-api",
+      "source": {
+        "file": "internal/api/billing/routes.go",
+        "line": 102,
+        "router_local_path": "/invoices/{invoice_id}"
+      },
+      "gaps": [
+        "Go-served route with no Python twin in the endpoint-profile inventory: this row records the credential class the route's guard enforces, read from the Go source (CHAOS-8305). tenant_requirement and impersonation_policy are not profiled for Go rows ('unknown'); role checks inside the handler body are not profiled."
+      ],
+      "classification": "protected",
+      "public_rationale": null,
+      "accepted_credential_classes": [
+        "ops_access_token_hs256"
+      ],
+      "primary_validator": {
+        "description": "policy.Guard.Wrap(policy.Authenticated) (get_current_user) at internal/api/billing/routes.go:102: a missing, malformed or refused bearer token is a 401 before the handler runs.",
+        "anchor": {
+          "path": "internal/api/policy/guard.go",
+          "line": 93,
+          "note": "Guard.Wrap: currentUser then the level check",
+          "line_end": 121
+        }
+      },
+      "token_shape": null,
+      "reachable_validators": [],
+      "action": null,
+      "resource_resolver": null,
+      "tenant_requirement": "unknown",
+      "current_state_cache_behavior": null,
+      "impersonation_policy": "unknown",
+      "entitlement_requirement": null,
+      "disclosure_behavior": null
+    },
+    {
+      "id": "POST /api/v1/billing/invoices/{invoice_id}/void [dev-health-ops-api]",
+      "surface_kind": "rest",
+      "method": "POST",
+      "route": "/api/v1/billing/invoices/{invoice_id}/void",
+      "graphql_field_name": null,
+      "service": "dev-health-ops-api",
+      "source": {
+        "file": "internal/api/billing/routes.go",
+        "line": 103,
+        "router_local_path": "/invoices/{invoice_id}/void"
+      },
+      "gaps": [
+        "Go-served route with no Python twin in the endpoint-profile inventory: this row records the credential class the route's guard enforces, read from the Go source (CHAOS-8305). tenant_requirement and impersonation_policy are not profiled for Go rows ('unknown'); role checks inside the handler body are not profiled."
+      ],
+      "classification": "protected",
+      "public_rationale": null,
+      "accepted_credential_classes": [
+        "ops_access_token_hs256"
+      ],
+      "primary_validator": {
+        "description": "policy.Guard.Wrap(policy.Admin) (require_admin) at internal/api/billing/routes.go:103: the caller must be authenticated (401) and an admin (403 \"Admin access required\").",
+        "anchor": {
+          "path": "internal/api/policy/guard.go",
+          "line": 93,
+          "note": "Guard.Wrap: currentUser then the level check",
+          "line_end": 121
+        }
+      },
+      "token_shape": null,
+      "reachable_validators": [],
+      "action": null,
+      "resource_resolver": null,
+      "tenant_requirement": "unknown",
+      "current_state_cache_behavior": null,
+      "impersonation_policy": "unknown",
+      "entitlement_requirement": null,
+      "disclosure_behavior": null
+    },
+    {
+      "id": "POST /api/v1/billing/refunds [dev-health-ops-api]",
+      "surface_kind": "rest",
+      "method": "POST",
+      "route": "/api/v1/billing/refunds",
+      "graphql_field_name": null,
+      "service": "dev-health-ops-api",
+      "source": {
+        "file": "internal/api/billing/routes.go",
+        "line": 104,
+        "router_local_path": "/refunds"
+      },
+      "gaps": [
+        "Go-served route with no Python twin in the endpoint-profile inventory: this row records the credential class the route's guard enforces, read from the Go source (CHAOS-8305). tenant_requirement and impersonation_policy are not profiled for Go rows ('unknown'); role checks inside the handler body are not profiled."
+      ],
+      "classification": "protected",
+      "public_rationale": null,
+      "accepted_credential_classes": [
+        "ops_access_token_hs256"
+      ],
+      "primary_validator": {
+        "description": "policy.Guard.BodyFirst(policy.Authenticated) (get_current_user) at internal/api/billing/routes.go:104: a missing, malformed or refused bearer token is a 401 before the handler runs. The body is decoded first (422/400 before the credential is read), as FastAPI validates a body parameter before Depends.",
+        "anchor": {
+          "path": "internal/api/policy/guard.go",
+          "line": 93,
+          "note": "Guard.Wrap: currentUser then the level check",
+          "line_end": 121
+        }
+      },
+      "token_shape": null,
+      "reachable_validators": [],
+      "action": null,
+      "resource_resolver": null,
+      "tenant_requirement": "unknown",
+      "current_state_cache_behavior": null,
+      "impersonation_policy": "unknown",
+      "entitlement_requirement": null,
+      "disclosure_behavior": null
+    },
+    {
+      "id": "GET /api/v1/billing/refunds [dev-health-ops-api]",
+      "surface_kind": "rest",
+      "method": "GET",
+      "route": "/api/v1/billing/refunds",
+      "graphql_field_name": null,
+      "service": "dev-health-ops-api",
+      "source": {
+        "file": "internal/api/billing/routes.go",
+        "line": 105,
+        "router_local_path": "/refunds"
+      },
+      "gaps": [
+        "Go-served route with no Python twin in the endpoint-profile inventory: this row records the credential class the route's guard enforces, read from the Go source (CHAOS-8305). tenant_requirement and impersonation_policy are not profiled for Go rows ('unknown'); role checks inside the handler body are not profiled."
+      ],
+      "classification": "protected",
+      "public_rationale": null,
+      "accepted_credential_classes": [
+        "ops_access_token_hs256"
+      ],
+      "primary_validator": {
+        "description": "policy.Guard.Wrap(policy.Authenticated) (get_current_user) at internal/api/billing/routes.go:105: a missing, malformed or refused bearer token is a 401 before the handler runs.",
+        "anchor": {
+          "path": "internal/api/policy/guard.go",
+          "line": 93,
+          "note": "Guard.Wrap: currentUser then the level check",
+          "line_end": 121
+        }
+      },
+      "token_shape": null,
+      "reachable_validators": [],
+      "action": null,
+      "resource_resolver": null,
+      "tenant_requirement": "unknown",
+      "current_state_cache_behavior": null,
+      "impersonation_policy": "unknown",
+      "entitlement_requirement": null,
+      "disclosure_behavior": null
+    },
+    {
+      "id": "GET /api/v1/billing/refunds/{refund_id} [dev-health-ops-api]",
+      "surface_kind": "rest",
+      "method": "GET",
+      "route": "/api/v1/billing/refunds/{refund_id}",
+      "graphql_field_name": null,
+      "service": "dev-health-ops-api",
+      "source": {
+        "file": "internal/api/billing/routes.go",
+        "line": 106,
+        "router_local_path": "/refunds/{refund_id}"
+      },
+      "gaps": [
+        "Go-served route with no Python twin in the endpoint-profile inventory: this row records the credential class the route's guard enforces, read from the Go source (CHAOS-8305). tenant_requirement and impersonation_policy are not profiled for Go rows ('unknown'); role checks inside the handler body are not profiled."
+      ],
+      "classification": "protected",
+      "public_rationale": null,
+      "accepted_credential_classes": [
+        "ops_access_token_hs256"
+      ],
+      "primary_validator": {
+        "description": "policy.Guard.Wrap(policy.Authenticated) (get_current_user) at internal/api/billing/routes.go:106: a missing, malformed or refused bearer token is a 401 before the handler runs.",
+        "anchor": {
+          "path": "internal/api/policy/guard.go",
+          "line": 93,
+          "note": "Guard.Wrap: currentUser then the level check",
+          "line_end": 121
+        }
+      },
+      "token_shape": null,
+      "reachable_validators": [],
+      "action": null,
+      "resource_resolver": null,
+      "tenant_requirement": "unknown",
+      "current_state_cache_behavior": null,
+      "impersonation_policy": "unknown",
+      "entitlement_requirement": null,
+      "disclosure_behavior": null
+    },
+    {
+      "id": "POST /api/v1/billing/webhooks/stripe [dev-health-ops-api]",
+      "surface_kind": "rest",
+      "method": "POST",
+      "route": "/api/v1/billing/webhooks/stripe",
+      "graphql_field_name": null,
+      "service": "dev-health-ops-api",
+      "source": {
+        "file": "internal/api/billing/routes.go",
+        "line": 108,
+        "router_local_path": "/webhooks/stripe"
+      },
+      "gaps": [
+        "Go-served route with no Python twin in the endpoint-profile inventory: this row records the credential class the route's guard enforces, read from the Go source (CHAOS-8305). tenant_requirement and impersonation_policy are not profiled for Go rows ('unknown'); role checks inside the handler body are not profiled."
+      ],
+      "token_shape": null,
+      "reachable_validators": [],
+      "action": null,
+      "resource_resolver": null,
+      "tenant_requirement": "unknown",
+      "current_state_cache_behavior": null,
+      "impersonation_policy": "unknown",
+      "entitlement_requirement": null,
+      "disclosure_behavior": null,
+      "classification": "public",
+      "public_rationale": "Stripe's signature is the only credential: stripeWebhook verifies the Stripe-Signature header against the webhook secret (internal/api/billing/webhook.go:75) and answers 400 \"Invalid Stripe signature\" otherwise.",
+      "accepted_credential_classes": [
+        "stripe_webhook_signature"
+      ],
+      "primary_validator": {
+        "description": "verifyStripeSignature(payload, Stripe-Signature, webhook secret, now) in the handler body.",
+        "anchor": {
+          "path": "internal/api/billing/webhook.go",
+          "line": 75,
+          "note": "verifyStripeSignature in stripeWebhook"
+        }
+      }
+    },
+    {
+      "id": "POST /api/v1/billing/webhooks/stripe [dev-health-ops-billing-edge]",
+      "surface_kind": "rest",
+      "method": "POST",
+      "route": "/api/v1/billing/webhooks/stripe",
+      "graphql_field_name": null,
+      "service": "dev-health-ops-billing-edge",
+      "source": {
+        "file": "internal/api/billing/edge.go",
+        "line": 110,
+        "router_local_path": "/webhooks/stripe"
+      },
+      "gaps": [
+        "Go-served route with no Python twin in the endpoint-profile inventory: this row records the credential class the route's guard enforces, read from the Go source (CHAOS-8305). tenant_requirement and impersonation_policy are not profiled for Go rows ('unknown'); role checks inside the handler body are not profiled."
+      ],
+      "token_shape": null,
+      "reachable_validators": [],
+      "action": null,
+      "resource_resolver": null,
+      "tenant_requirement": "unknown",
+      "current_state_cache_behavior": null,
+      "impersonation_policy": "unknown",
+      "entitlement_requirement": null,
+      "disclosure_behavior": null,
+      "classification": "public",
+      "public_rationale": "Stripe's signature is the only credential: stripeWebhook verifies the Stripe-Signature header against the webhook secret (internal/api/billing/webhook.go:75) and answers 400 \"Invalid Stripe signature\" otherwise.",
+      "accepted_credential_classes": [
+        "stripe_webhook_signature"
+      ],
+      "primary_validator": {
+        "description": "verifyStripeSignature(payload, Stripe-Signature, webhook secret, now) in the handler body.",
+        "anchor": {
+          "path": "internal/api/billing/webhook.go",
+          "line": 75,
+          "note": "verifyStripeSignature in stripeWebhook"
+        }
+      }
+    },
+    {
+      "id": "POST /api/v1/billing/checkout [dev-health-ops-api]",
+      "surface_kind": "rest",
+      "method": "POST",
+      "route": "/api/v1/billing/checkout",
+      "graphql_field_name": null,
+      "service": "dev-health-ops-api",
+      "source": {
+        "file": "internal/api/billing/routes.go",
+        "line": 109,
+        "router_local_path": "/checkout"
+      },
+      "gaps": [
+        "Go-served route with no Python twin in the endpoint-profile inventory: this row records the credential class the route's guard enforces, read from the Go source (CHAOS-8305). tenant_requirement and impersonation_policy are not profiled for Go rows ('unknown'); role checks inside the handler body are not profiled."
+      ],
+      "classification": "protected",
+      "public_rationale": null,
+      "accepted_credential_classes": [
+        "ops_access_token_hs256"
+      ],
+      "primary_validator": {
+        "description": "policy.Guard.BodyFirst(policy.Authenticated) (get_current_user) at internal/api/billing/routes.go:109: a missing, malformed or refused bearer token is a 401 before the handler runs. The body is decoded first (422/400 before the credential is read), as FastAPI validates a body parameter before Depends.",
+        "anchor": {
+          "path": "internal/api/policy/guard.go",
+          "line": 93,
+          "note": "Guard.Wrap: currentUser then the level check",
+          "line_end": 121
+        }
+      },
+      "token_shape": null,
+      "reachable_validators": [],
+      "action": null,
+      "resource_resolver": null,
+      "tenant_requirement": "unknown",
+      "current_state_cache_behavior": null,
+      "impersonation_policy": "unknown",
+      "entitlement_requirement": null,
+      "disclosure_behavior": null
+    },
+    {
+      "id": "POST /api/v1/billing/portal [dev-health-ops-api]",
+      "surface_kind": "rest",
+      "method": "POST",
+      "route": "/api/v1/billing/portal",
+      "graphql_field_name": null,
+      "service": "dev-health-ops-api",
+      "source": {
+        "file": "internal/api/billing/routes.go",
+        "line": 110,
+        "router_local_path": "/portal"
+      },
+      "gaps": [
+        "Go-served route with no Python twin in the endpoint-profile inventory: this row records the credential class the route's guard enforces, read from the Go source (CHAOS-8305). tenant_requirement and impersonation_policy are not profiled for Go rows ('unknown'); role checks inside the handler body are not profiled."
+      ],
+      "classification": "protected",
+      "public_rationale": null,
+      "accepted_credential_classes": [
+        "ops_access_token_hs256"
+      ],
+      "primary_validator": {
+        "description": "policy.Guard.Wrap(policy.Authenticated) (get_current_user) at internal/api/billing/routes.go:110: a missing, malformed or refused bearer token is a 401 before the handler runs.",
+        "anchor": {
+          "path": "internal/api/policy/guard.go",
+          "line": 93,
+          "note": "Guard.Wrap: currentUser then the level check",
+          "line_end": 121
+        }
+      },
+      "token_shape": null,
+      "reachable_validators": [],
+      "action": null,
+      "resource_resolver": null,
+      "tenant_requirement": "unknown",
+      "current_state_cache_behavior": null,
+      "impersonation_policy": "unknown",
+      "entitlement_requirement": null,
+      "disclosure_behavior": null
+    },
+    {
+      "id": "GET /api/v1/billing/entitlements/{org_id} [dev-health-ops-api]",
+      "surface_kind": "rest",
+      "method": "GET",
+      "route": "/api/v1/billing/entitlements/{org_id}",
+      "graphql_field_name": null,
+      "service": "dev-health-ops-api",
+      "source": {
+        "file": "internal/api/billing/routes.go",
+        "line": 111,
+        "router_local_path": "/entitlements/{org_id}"
+      },
+      "gaps": [
+        "Go-served route with no Python twin in the endpoint-profile inventory: this row records the credential class the route's guard enforces, read from the Go source (CHAOS-8305). tenant_requirement and impersonation_policy are not profiled for Go rows ('unknown'); role checks inside the handler body are not profiled."
+      ],
+      "classification": "protected",
+      "public_rationale": null,
+      "accepted_credential_classes": [
+        "ops_access_token_hs256"
+      ],
+      "primary_validator": {
+        "description": "policy.Guard.Wrap(policy.Authenticated) (get_current_user) at internal/api/billing/routes.go:111: a missing, malformed or refused bearer token is a 401 before the handler runs.",
+        "anchor": {
+          "path": "internal/api/policy/guard.go",
+          "line": 93,
+          "note": "Guard.Wrap: currentUser then the level check",
+          "line_end": 121
+        }
+      },
+      "token_shape": null,
+      "reachable_validators": [],
+      "action": null,
+      "resource_resolver": null,
+      "tenant_requirement": "unknown",
+      "current_state_cache_behavior": null,
+      "impersonation_policy": "unknown",
+      "entitlement_requirement": null,
+      "disclosure_behavior": null
+    },
+    {
+      "id": "GET /api/v1/billing/subscriptions/list [dev-health-ops-api]",
+      "surface_kind": "rest",
+      "method": "GET",
+      "route": "/api/v1/billing/subscriptions/list",
+      "graphql_field_name": null,
+      "service": "dev-health-ops-api",
+      "source": {
+        "file": "internal/api/billing/routes.go",
+        "line": 112,
+        "router_local_path": "/subscriptions/list"
+      },
+      "gaps": [
+        "Go-served route with no Python twin in the endpoint-profile inventory: this row records the credential class the route's guard enforces, read from the Go source (CHAOS-8305). tenant_requirement and impersonation_policy are not profiled for Go rows ('unknown'); role checks inside the handler body are not profiled."
+      ],
+      "classification": "protected",
+      "public_rationale": null,
+      "accepted_credential_classes": [
+        "ops_access_token_hs256"
+      ],
+      "primary_validator": {
+        "description": "policy.Guard.Wrap(policy.Authenticated) (get_current_user) at internal/api/billing/routes.go:112: a missing, malformed or refused bearer token is a 401 before the handler runs.",
+        "anchor": {
+          "path": "internal/api/policy/guard.go",
+          "line": 93,
+          "note": "Guard.Wrap: currentUser then the level check",
+          "line_end": 121
+        }
+      },
+      "token_shape": null,
+      "reachable_validators": [],
+      "action": null,
+      "resource_resolver": null,
+      "tenant_requirement": "unknown",
+      "current_state_cache_behavior": null,
+      "impersonation_policy": "unknown",
+      "entitlement_requirement": null,
+      "disclosure_behavior": null
+    },
+    {
+      "id": "GET /api/v1/billing/subscriptions [dev-health-ops-api]",
+      "surface_kind": "rest",
+      "method": "GET",
+      "route": "/api/v1/billing/subscriptions",
+      "graphql_field_name": null,
+      "service": "dev-health-ops-api",
+      "source": {
+        "file": "internal/api/billing/routes.go",
+        "line": 113,
+        "router_local_path": "/subscriptions"
+      },
+      "gaps": [
+        "Go-served route with no Python twin in the endpoint-profile inventory: this row records the credential class the route's guard enforces, read from the Go source (CHAOS-8305). tenant_requirement and impersonation_policy are not profiled for Go rows ('unknown'); role checks inside the handler body are not profiled."
+      ],
+      "classification": "protected",
+      "public_rationale": null,
+      "accepted_credential_classes": [
+        "ops_access_token_hs256"
+      ],
+      "primary_validator": {
+        "description": "policy.Guard.Wrap(policy.Authenticated) (get_current_user) at internal/api/billing/routes.go:113: a missing, malformed or refused bearer token is a 401 before the handler runs.",
+        "anchor": {
+          "path": "internal/api/policy/guard.go",
+          "line": 93,
+          "note": "Guard.Wrap: currentUser then the level check",
+          "line_end": 121
+        }
+      },
+      "token_shape": null,
+      "reachable_validators": [],
+      "action": null,
+      "resource_resolver": null,
+      "tenant_requirement": "unknown",
+      "current_state_cache_behavior": null,
+      "impersonation_policy": "unknown",
+      "entitlement_requirement": null,
+      "disclosure_behavior": null
+    },
+    {
+      "id": "GET /api/v1/billing/subscriptions/history [dev-health-ops-api]",
+      "surface_kind": "rest",
+      "method": "GET",
+      "route": "/api/v1/billing/subscriptions/history",
+      "graphql_field_name": null,
+      "service": "dev-health-ops-api",
+      "source": {
+        "file": "internal/api/billing/routes.go",
+        "line": 114,
+        "router_local_path": "/subscriptions/history"
+      },
+      "gaps": [
+        "Go-served route with no Python twin in the endpoint-profile inventory: this row records the credential class the route's guard enforces, read from the Go source (CHAOS-8305). tenant_requirement and impersonation_policy are not profiled for Go rows ('unknown'); role checks inside the handler body are not profiled."
+      ],
+      "classification": "protected",
+      "public_rationale": null,
+      "accepted_credential_classes": [
+        "ops_access_token_hs256"
+      ],
+      "primary_validator": {
+        "description": "policy.Guard.Wrap(policy.Authenticated) (get_current_user) at internal/api/billing/routes.go:114: a missing, malformed or refused bearer token is a 401 before the handler runs.",
+        "anchor": {
+          "path": "internal/api/policy/guard.go",
+          "line": 93,
+          "note": "Guard.Wrap: currentUser then the level check",
+          "line_end": 121
+        }
+      },
+      "token_shape": null,
+      "reachable_validators": [],
+      "action": null,
+      "resource_resolver": null,
+      "tenant_requirement": "unknown",
+      "current_state_cache_behavior": null,
+      "impersonation_policy": "unknown",
+      "entitlement_requirement": null,
+      "disclosure_behavior": null
+    },
+    {
+      "id": "POST /api/v1/billing/subscriptions/change-plan [dev-health-ops-api]",
+      "surface_kind": "rest",
+      "method": "POST",
+      "route": "/api/v1/billing/subscriptions/change-plan",
+      "graphql_field_name": null,
+      "service": "dev-health-ops-api",
+      "source": {
+        "file": "internal/api/billing/routes.go",
+        "line": 115,
+        "router_local_path": "/subscriptions/change-plan"
+      },
+      "gaps": [
+        "Go-served route with no Python twin in the endpoint-profile inventory: this row records the credential class the route's guard enforces, read from the Go source (CHAOS-8305). tenant_requirement and impersonation_policy are not profiled for Go rows ('unknown'); role checks inside the handler body are not profiled."
+      ],
+      "classification": "protected",
+      "public_rationale": null,
+      "accepted_credential_classes": [
+        "ops_access_token_hs256"
+      ],
+      "primary_validator": {
+        "description": "policy.Guard.BodyFirst(policy.Admin) (require_admin) at internal/api/billing/routes.go:115: the caller must be authenticated (401) and an admin (403 \"Admin access required\"). The body is decoded first (422/400 before the credential is read), as FastAPI validates a body parameter before Depends.",
+        "anchor": {
+          "path": "internal/api/policy/guard.go",
+          "line": 93,
+          "note": "Guard.Wrap: currentUser then the level check",
+          "line_end": 121
+        }
+      },
+      "token_shape": null,
+      "reachable_validators": [],
+      "action": null,
+      "resource_resolver": null,
+      "tenant_requirement": "unknown",
+      "current_state_cache_behavior": null,
+      "impersonation_policy": "unknown",
+      "entitlement_requirement": null,
+      "disclosure_behavior": null
+    },
+    {
+      "id": "POST /api/v1/billing/subscriptions/cancel [dev-health-ops-api]",
+      "surface_kind": "rest",
+      "method": "POST",
+      "route": "/api/v1/billing/subscriptions/cancel",
+      "graphql_field_name": null,
+      "service": "dev-health-ops-api",
+      "source": {
+        "file": "internal/api/billing/routes.go",
+        "line": 116,
+        "router_local_path": "/subscriptions/cancel"
+      },
+      "gaps": [
+        "Go-served route with no Python twin in the endpoint-profile inventory: this row records the credential class the route's guard enforces, read from the Go source (CHAOS-8305). tenant_requirement and impersonation_policy are not profiled for Go rows ('unknown'); role checks inside the handler body are not profiled."
+      ],
+      "classification": "protected",
+      "public_rationale": null,
+      "accepted_credential_classes": [
+        "ops_access_token_hs256"
+      ],
+      "primary_validator": {
+        "description": "policy.Guard.BodyFirst(policy.Admin) (require_admin) at internal/api/billing/routes.go:116: the caller must be authenticated (401) and an admin (403 \"Admin access required\"). The body is decoded first (422/400 before the credential is read), as FastAPI validates a body parameter before Depends.",
+        "anchor": {
+          "path": "internal/api/policy/guard.go",
+          "line": 93,
+          "note": "Guard.Wrap: currentUser then the level check",
+          "line_end": 121
+        }
+      },
+      "token_shape": null,
+      "reachable_validators": [],
+      "action": null,
+      "resource_resolver": null,
+      "tenant_requirement": "unknown",
+      "current_state_cache_behavior": null,
+      "impersonation_policy": "unknown",
+      "entitlement_requirement": null,
+      "disclosure_behavior": null
+    },
+    {
+      "id": "POST /api/v1/billing/subscriptions/reactivate [dev-health-ops-api]",
+      "surface_kind": "rest",
+      "method": "POST",
+      "route": "/api/v1/billing/subscriptions/reactivate",
+      "graphql_field_name": null,
+      "service": "dev-health-ops-api",
+      "source": {
+        "file": "internal/api/billing/routes.go",
+        "line": 117,
+        "router_local_path": "/subscriptions/reactivate"
+      },
+      "gaps": [
+        "Go-served route with no Python twin in the endpoint-profile inventory: this row records the credential class the route's guard enforces, read from the Go source (CHAOS-8305). tenant_requirement and impersonation_policy are not profiled for Go rows ('unknown'); role checks inside the handler body are not profiled."
+      ],
+      "classification": "protected",
+      "public_rationale": null,
+      "accepted_credential_classes": [
+        "ops_access_token_hs256"
+      ],
+      "primary_validator": {
+        "description": "policy.Guard.Wrap(policy.Admin) (require_admin) at internal/api/billing/routes.go:117: the caller must be authenticated (401) and an admin (403 \"Admin access required\").",
+        "anchor": {
+          "path": "internal/api/policy/guard.go",
+          "line": 93,
+          "note": "Guard.Wrap: currentUser then the level check",
+          "line_end": 121
+        }
+      },
+      "token_shape": null,
+      "reachable_validators": [],
+      "action": null,
+      "resource_resolver": null,
+      "tenant_requirement": "unknown",
+      "current_state_cache_behavior": null,
+      "impersonation_policy": "unknown",
+      "entitlement_requirement": null,
+      "disclosure_behavior": null
+    },
+    {
+      "id": "GET /api/v1/billing/audit [dev-health-ops-api]",
+      "surface_kind": "rest",
+      "method": "GET",
+      "route": "/api/v1/billing/audit",
+      "graphql_field_name": null,
+      "service": "dev-health-ops-api",
+      "source": {
+        "file": "internal/api/billing/routes.go",
+        "line": 118,
+        "router_local_path": "/audit"
+      },
+      "gaps": [
+        "Go-served route with no Python twin in the endpoint-profile inventory: this row records the credential class the route's guard enforces, read from the Go source (CHAOS-8305). tenant_requirement and impersonation_policy are not profiled for Go rows ('unknown'); role checks inside the handler body are not profiled."
+      ],
+      "classification": "protected",
+      "public_rationale": null,
+      "accepted_credential_classes": [
+        "ops_access_token_hs256"
+      ],
+      "primary_validator": {
+        "description": "policy.Guard.Wrap(policy.Authenticated) (get_current_user) at internal/api/billing/routes.go:118: a missing, malformed or refused bearer token is a 401 before the handler runs.",
+        "anchor": {
+          "path": "internal/api/policy/guard.go",
+          "line": 93,
+          "note": "Guard.Wrap: currentUser then the level check",
+          "line_end": 121
+        }
+      },
+      "token_shape": null,
+      "reachable_validators": [],
+      "action": null,
+      "resource_resolver": null,
+      "tenant_requirement": "unknown",
+      "current_state_cache_behavior": null,
+      "impersonation_policy": "unknown",
+      "entitlement_requirement": null,
+      "disclosure_behavior": null
+    },
+    {
+      "id": "GET /api/v1/billing/audit/{audit_id} [dev-health-ops-api]",
+      "surface_kind": "rest",
+      "method": "GET",
+      "route": "/api/v1/billing/audit/{audit_id}",
+      "graphql_field_name": null,
+      "service": "dev-health-ops-api",
+      "source": {
+        "file": "internal/api/billing/routes.go",
+        "line": 119,
+        "router_local_path": "/audit/{audit_id}"
+      },
+      "gaps": [
+        "Go-served route with no Python twin in the endpoint-profile inventory: this row records the credential class the route's guard enforces, read from the Go source (CHAOS-8305). tenant_requirement and impersonation_policy are not profiled for Go rows ('unknown'); role checks inside the handler body are not profiled."
+      ],
+      "classification": "protected",
+      "public_rationale": null,
+      "accepted_credential_classes": [
+        "ops_access_token_hs256"
+      ],
+      "primary_validator": {
+        "description": "policy.Guard.Wrap(policy.Authenticated) (get_current_user) at internal/api/billing/routes.go:119: a missing, malformed or refused bearer token is a 401 before the handler runs.",
+        "anchor": {
+          "path": "internal/api/policy/guard.go",
+          "line": 93,
+          "note": "Guard.Wrap: currentUser then the level check",
+          "line_end": 121
+        }
+      },
+      "token_shape": null,
+      "reachable_validators": [],
+      "action": null,
+      "resource_resolver": null,
+      "tenant_requirement": "unknown",
+      "current_state_cache_behavior": null,
+      "impersonation_policy": "unknown",
+      "entitlement_requirement": null,
+      "disclosure_behavior": null
+    },
+    {
+      "id": "POST /api/v1/billing/audit/{audit_id}/resolve [dev-health-ops-api]",
+      "surface_kind": "rest",
+      "method": "POST",
+      "route": "/api/v1/billing/audit/{audit_id}/resolve",
+      "graphql_field_name": null,
+      "service": "dev-health-ops-api",
+      "source": {
+        "file": "internal/api/billing/routes.go",
+        "line": 120,
+        "router_local_path": "/audit/{audit_id}/resolve"
+      },
+      "gaps": [
+        "Go-served route with no Python twin in the endpoint-profile inventory: this row records the credential class the route's guard enforces, read from the Go source (CHAOS-8305). tenant_requirement and impersonation_policy are not profiled for Go rows ('unknown'); role checks inside the handler body are not profiled."
+      ],
+      "classification": "protected",
+      "public_rationale": null,
+      "accepted_credential_classes": [
+        "ops_access_token_hs256"
+      ],
+      "primary_validator": {
+        "description": "policy.Guard.BodyFirst(policy.Authenticated) (get_current_user) at internal/api/billing/routes.go:120: a missing, malformed or refused bearer token is a 401 before the handler runs. The body is decoded first (422/400 before the credential is read), as FastAPI validates a body parameter before Depends.",
+        "anchor": {
+          "path": "internal/api/policy/guard.go",
+          "line": 93,
+          "note": "Guard.Wrap: currentUser then the level check",
+          "line_end": 121
+        }
+      },
+      "token_shape": null,
+      "reachable_validators": [],
+      "action": null,
+      "resource_resolver": null,
+      "tenant_requirement": "unknown",
+      "current_state_cache_behavior": null,
+      "impersonation_policy": "unknown",
+      "entitlement_requirement": null,
+      "disclosure_behavior": null
+    },
+    {
+      "id": "POST /api/v1/billing/reconcile [dev-health-ops-api]",
+      "surface_kind": "rest",
+      "method": "POST",
+      "route": "/api/v1/billing/reconcile",
+      "graphql_field_name": null,
+      "service": "dev-health-ops-api",
+      "source": {
+        "file": "internal/api/billing/routes.go",
+        "line": 121,
+        "router_local_path": "/reconcile"
+      },
+      "gaps": [
+        "Go-served route with no Python twin in the endpoint-profile inventory: this row records the credential class the route's guard enforces, read from the Go source (CHAOS-8305). tenant_requirement and impersonation_policy are not profiled for Go rows ('unknown'); role checks inside the handler body are not profiled."
+      ],
+      "classification": "protected",
+      "public_rationale": null,
+      "accepted_credential_classes": [
+        "ops_access_token_hs256"
+      ],
+      "primary_validator": {
+        "description": "policy.Guard.Wrap(policy.Authenticated) (get_current_user) at internal/api/billing/routes.go:121: a missing, malformed or refused bearer token is a 401 before the handler runs.",
+        "anchor": {
+          "path": "internal/api/policy/guard.go",
+          "line": 93,
+          "note": "Guard.Wrap: currentUser then the level check",
+          "line_end": 121
+        }
+      },
+      "token_shape": null,
+      "reachable_validators": [],
+      "action": null,
+      "resource_resolver": null,
+      "tenant_requirement": "unknown",
+      "current_state_cache_behavior": null,
+      "impersonation_policy": "unknown",
+      "entitlement_requirement": null,
+      "disclosure_behavior": null
+    },
+    {
+      "id": "GET /buildinfo [dev-health-ops-api]",
+      "surface_kind": "rest",
+      "method": "GET",
+      "route": "/buildinfo",
+      "graphql_field_name": null,
+      "service": "dev-health-ops-api",
+      "source": {
+        "file": "internal/api/buildinfo/buildinfo.go",
+        "line": 39,
+        "router_local_path": "/buildinfo"
+      },
+      "gaps": [
+        "Go-served route with no Python twin in the endpoint-profile inventory: this row records the credential class the route's guard enforces, read from the Go source (CHAOS-8305). tenant_requirement and impersonation_policy are not profiled for Go rows ('unknown'); role checks inside the handler body are not profiled."
+      ],
+      "classification": "protected",
+      "public_rationale": null,
+      "accepted_credential_classes": [
+        "ops_access_token_hs256"
+      ],
+      "primary_validator": {
+        "description": "policy.Guard.Wrap(policy.Authenticated) (get_current_user) at internal/api/buildinfo/buildinfo.go:39: a missing, malformed or refused bearer token is a 401 before the handler runs.",
+        "anchor": {
+          "path": "internal/api/policy/guard.go",
+          "line": 93,
+          "note": "Guard.Wrap: currentUser then the level check",
+          "line_end": 121
+        }
+      },
+      "token_shape": null,
+      "reachable_validators": [],
+      "action": null,
+      "resource_resolver": null,
+      "tenant_requirement": "unknown",
+      "current_state_cache_behavior": null,
+      "impersonation_policy": "unknown",
+      "entitlement_requirement": null,
+      "disclosure_behavior": null
+    },
+    {
+      "id": "POST /api/v1/admin/orgs/{org_id}/transfer-ownership [dev-health-ops-api]",
+      "surface_kind": "rest",
+      "method": "POST",
+      "route": "/api/v1/admin/orgs/{org_id}/transfer-ownership",
+      "graphql_field_name": null,
+      "service": "dev-health-ops-api",
+      "source": {
+        "file": "internal/apiservice/admin/orgs.go",
+        "line": 37,
+        "router_local_path": "/orgs/{org_id}/transfer-ownership"
+      },
+      "gaps": [
+        "Go-served route with no Python twin in the endpoint-profile inventory: this row records the credential class the route's guard enforces, read from the Go source (CHAOS-8305). tenant_requirement and impersonation_policy are not profiled for Go rows ('unknown'); role checks inside the handler body are not profiled.",
+        "Go-only route: fromUserID is resolved server-side (the org's current owner) instead of the Python {from_user_id} URL segment (internal/apiservice/admin/orgstore.go:371)."
+      ],
+      "classification": "protected",
+      "public_rationale": null,
+      "accepted_credential_classes": [
+        "ops_access_token_hs256"
+      ],
+      "primary_validator": {
+        "description": "policy.Guard.BodyFirst(policy.Admin) (require_admin) at internal/apiservice/admin/orgs.go:37: the caller must be authenticated (401) and an admin (403 \"Admin access required\"). The body is decoded first (422/400 before the credential is read), as FastAPI validates a body parameter before Depends.",
+        "anchor": {
+          "path": "internal/api/policy/guard.go",
+          "line": 93,
+          "note": "Guard.Wrap: currentUser then the level check",
+          "line_end": 121
+        }
+      },
+      "token_shape": null,
+      "reachable_validators": [],
+      "action": null,
+      "resource_resolver": null,
+      "tenant_requirement": "unknown",
+      "current_state_cache_behavior": null,
+      "impersonation_policy": "unknown",
+      "entitlement_requirement": null,
+      "disclosure_behavior": null
+    }
+  ]
+}

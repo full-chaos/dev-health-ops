@@ -7,7 +7,6 @@ import (
 	"fmt"
 	"math"
 	"net/http/httptest"
-	"path/filepath"
 	"reflect"
 	"sort"
 	"strings"
@@ -15,7 +14,6 @@ import (
 	"time"
 
 	"github.com/full-chaos/dev-health-ops/internal/api/pyjson"
-	"github.com/full-chaos/dev-health-ops/internal/migrationmatrix"
 	"github.com/full-chaos/dev-health-ops/internal/queryapi/aggflame"
 	"github.com/full-chaos/dev-health-ops/internal/queryapi/drilldown"
 	"github.com/full-chaos/dev-health-ops/internal/queryapi/explain"
@@ -31,7 +29,6 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/queryapi/quadrant"
 	"github.com/full-chaos/dev-health-ops/internal/queryapi/sankey"
 	"github.com/full-chaos/dev-health-ops/internal/queryapi/workunitexplain"
-	"github.com/full-chaos/dev-health-ops/internal/testsupport/moduleroot"
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/programoracle"
 )
 
@@ -177,10 +174,6 @@ func responseModelOracleRoutes() map[string]responseModelOracleRoute {
 // same data, and the two bodies must be byte-identical. That also pins
 // field order, int-versus-float field types, and fields the model drops.
 func TestQueryAPIResponseModelsMatchFrozenPython(t *testing.T) {
-	_, file, _, ok := moduleroot.Caller(0)
-	if !ok {
-		t.Fatal("cannot locate the test source")
-	}
 	// Each mode is its own golden: the input of "render" is built from the
 	// answer of "table".
 	runPython := func(mode string, input any) json.RawMessage {
@@ -218,12 +211,8 @@ func TestQueryAPIResponseModelsMatchFrozenPython(t *testing.T) {
 
 	// The route table, both directions, on the paths the query-api serves.
 	served := map[string]bool{}
-	muxRoutes, err := migrationmatrix.LoadQueryAPIMuxRoutes(filepath.Dir(file))
-	if err != nil {
-		t.Fatal(err)
-	}
-	for _, route := range muxRoutes {
-		served[route.Path] = true
+	for _, route := range RESTRoutes() {
+		served[route.Pattern] = true
 	}
 	pythonModel := map[string]bool{}
 	for _, row := range table.Routes {
@@ -305,6 +294,7 @@ func TestQueryAPIResponseModelsMatchFrozenPython(t *testing.T) {
 				data = string(encoded)
 			}
 			var goBody []byte
+			var err error
 			if route.write != nil {
 				goBody, err = route.write(value)
 				if err != nil {

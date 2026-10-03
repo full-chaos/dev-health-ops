@@ -34,7 +34,7 @@ func goldenSpec(name string) venueoracle.GoldenSpec {
 		PythonBuild: pythonBuild,
 		SHA256:      goldenDigests[name],
 		Recipe: "git worktree add --detach <dir> " + pythonBuild + "; from internal/api/syncadmin: DHO_VENUE_GOLDEN_UPDATE=1 " +
-			"DHO_VENUE_GOLDEN_PYTHON_ROOT=<dir> DEV_HEALTH_LIVE_PYTHON_ORACLES=1 go test -tags=integration -count=1 -run '^" + name + "$' .",
+			"DHO_VENUE_GOLDEN_PYTHON_ROOT=<dir> DEV_HEALTH_VENUE_ORACLES=1 go test -tags=integration -count=1 -run '^" + name + "$' .",
 	}
 }
 

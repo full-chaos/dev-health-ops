@@ -209,7 +209,7 @@ func requireDivergencesAre(t *testing.T, divergences []string, expected ...diver
 // divergenceReadProblems found: each problem fails the gate's test. It is a
 // variable so the test that pins "a gate calls the helper" can observe the
 // problems of a probe without failing, which would put a failed test into the
-// package's -json events (the python-free classifier reads those).
+// package's -json events.
 var reportDivergenceReadProblems = func(t testing.TB, problems []string) {
 	t.Helper()
 	for _, problem := range problems {

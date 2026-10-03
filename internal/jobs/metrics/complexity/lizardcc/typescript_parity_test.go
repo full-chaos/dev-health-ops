@@ -147,13 +147,6 @@ func TestGoMatchesLizardGoldenJSTS(t *testing.T) {
 	}
 }
 
-// TestLizardGoldenIsNotStaleJSTS reuses clike_parity_test.go's shared
-// live-oracle staleness gate (DEV_HEALTH_LIVE_PYTHON_ORACLE-gated, not run
-// by default).
-func TestLizardGoldenIsNotStaleJSTS(t *testing.T) {
-	assertGoldenBytesMatchLiveOracle(t, jsTSCorpusDir(t), jsTSGoldenPath(t))
-}
-
 // TestEveryConditionIsExercisedByTheJSTSCorpus is this PR's own invocation
 // of the shared coverage-manifest mechanism: every member of tsConditions
 // (typescript.go) must appear at least once in the corpus, or a

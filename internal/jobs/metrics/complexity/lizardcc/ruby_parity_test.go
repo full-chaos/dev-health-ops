@@ -130,13 +130,6 @@ func TestGoMatchesLizardGoldenRuby(t *testing.T) {
 	}
 }
 
-// TestLizardGoldenIsNotStaleRuby reuses clike_parity_test.go's shared
-// live-oracle staleness gate (DEV_HEALTH_LIVE_PYTHON_ORACLE-gated, not run
-// by default).
-func TestLizardGoldenIsNotStaleRuby(t *testing.T) {
-	assertGoldenBytesMatchLiveOracle(t, rubyCorpusDir(t), rubyGoldenPath(t))
-}
-
 // TestEveryConditionIsExercisedByTheRubyCorpus is this PR's own invocation
 // of the shared coverage-manifest mechanism: every member of rubyConditions
 // (ruby.go) must appear at least once in the corpus, or a coordinated

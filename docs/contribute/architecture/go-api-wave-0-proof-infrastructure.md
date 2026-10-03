@@ -358,6 +358,24 @@ disagree, when a row still names a build the deployed process is not running
 (run `repoint` first), or when the target digest already holds a different
 row for that operation.
 
+A registered document that was **swapped with dual accept** is not a changed
+document for `carry`. When an operation gets a new text, the old text stays
+accepted as a legacy one (`legacyDigestsByOperation`, the `"legacy": true`
+entries of the document dump and of the catalog), and query-api reads a
+routing row under any accepted digest. So a row keyed to a digest the image
+being rolled to lists as a legacy text of the same operation is carried
+verbatim, under its own digest, and both texts are served from it; the plan
+names it `carried (legacy digest)`. The row is not re-keyed to the new
+digest. `carry` still refuses a row whose digest is neither the image's
+current digest nor one of its legacy digests for that operation, and it
+refuses when the document dump accepts a legacy digest that the catalog does
+not list. Two limits follow from `/registry` reporting each operation's
+current digest only: `carry` treats a row keyed to a target-legacy digest as
+reachable now without asking the deployed process, and it cannot see that a
+legacy text was **retired** — a row still keyed to a retired digest reads as
+already unreachable and is skipped, not refused. Re-key such rows (`enable`
+at the current digest) before the image that retires the legacy text rolls.
+
 A carried row claims NO proof: receipts are keyed by `schema_digest`, so
 `status` reports every carried row UNPROVEN at the new digest until
 `go-api-prove` runs against the new build, and its `review_evidence` says so

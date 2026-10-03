@@ -114,8 +114,9 @@ func registeredEdgeDocuments(t *testing.T, root string) []registeredEdgeDocument
 	// CHAOS-8000: registrydump lists an operation's legacy texts after its current one. The frozen Python
 	// answers this oracle compares with were recorded for the text each operation had BEFORE its current one;
 	// the current text has no frozen answer. So an operation with a legacy text is measured on its OLDEST legacy
-	// text (the one the golden saw), one document per operation as before. Re-record the golden with the
-	// goldenrecord verb to measure the current text, then take this selection out.
+	// text (the one the golden saw), one document per operation as before. The recordings are stopped, so the
+	// golden is not recorded again: the current text of such an operation is pinned by the Go tests of its
+	// registered document, and this selection goes away when the legacy text is removed (CHAOS-8001).
 	measured := map[string]registeredEdgeDocument{}
 	for _, doc := range docs {
 		held, seen := measured[doc.Operation]

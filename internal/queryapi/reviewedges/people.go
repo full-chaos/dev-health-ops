@@ -237,16 +237,25 @@ func attachPeople(ctx context.Context, client QueryClient, orgID string, edges [
 		return err
 	}
 
-	for i := range edges {
-		edge := &edges[i]
+	for i, edge := range edges {
 		reviewer := index.resolve(edge.Reviewer)
 		author := index.resolve(edge.Author)
 		// The reviewer string is a login or a display name, never the e-mail
 		// of a pull request author: no pull request name is asked for it.
-		edge.ReviewerName = personName(edge.Reviewer, reviewer, "")
-		edge.AuthorName = personName(edge.Author, author, authorNames[emailKey(edge.Author)])
-		edge.ReviewerKey = personKey(orgID, edge.Reviewer, reviewer)
-		edge.AuthorKey = personKey(orgID, edge.Author, author)
+		// The row is written again whole, as one literal: the registered-document gate
+		// (TestRegisteredDocumentFieldsArePopulatable) reads a field as served only when a
+		// literal sets it. Every field the row already had is carried over.
+		edges[i] = model.ReviewEdgeRow{
+			Reviewer:     edge.Reviewer,
+			Author:       edge.Author,
+			ReviewsCount: edge.ReviewsCount,
+			Day:          edge.Day,
+			RepoID:       edge.RepoID,
+			ReviewerName: personName(edge.Reviewer, reviewer, ""),
+			AuthorName:   personName(edge.Author, author, authorNames[emailKey(edge.Author)]),
+			ReviewerKey:  personKey(orgID, edge.Reviewer, reviewer),
+			AuthorKey:    personKey(orgID, edge.Author, author),
+		}
 	}
 	return nil
 }

@@ -228,8 +228,8 @@ def test_inventory_row_count_matches_the_baseline():
     rows = inventory["rows"]
     rest = [r for r in rows if r["surface_kind"] == "rest"]
     graphql = [r for r in rows if r["surface_kind"] in _GRAPHQL_KINDS]
-    assert len(rest) == 232, len(
-        rest
+    assert len(rest) == 232, (
+        len(rest)
     )  # recounted from the file: CHAOS-8345 deleted the 13 Python IP-allowlist and retention rows (245 before)
     assert len(graphql) == 47, len(graphql)
     assert len(rows) == 279, len(rows)  # 292 before CHAOS-8345

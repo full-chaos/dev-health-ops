@@ -125,6 +125,10 @@ type catalogFileEntry struct {
 	// Mutation is true when the entry carries kind "mutation" (CHAOS-6803); an
 	// entry with no kind is a query, as go_api_operation_catalog.py reads it.
 	Mutation bool
+	// Legacy is true for an entry that names a text the operation accepted BEFORE its current one
+	// (CHAOS-8000 dual accept). It carries the same operation name as the current entry and its own
+	// digest; the Python edge loader keys by digest and reads it like any other entry.
+	Legacy bool
 }
 
 // catalogEntryKey pulls one EXACTLY-spelled key out of a raw entry and
@@ -213,6 +217,13 @@ func LoadOperationCatalogWithKinds(path string) (map[string]string, map[string]s
 		if err != nil {
 			return nil, nil, err
 		}
+		legacy := false
+		if rawLegacy, present := rawEntry["legacy"]; present {
+			if string(rawLegacy) != "true" {
+				return nil, nil, fmt.Errorf("%w: %s entry %d (%q) has legacy %s; the key is absent or true", ErrCatalogUnusable, path, index, operation, rawLegacy)
+			}
+			legacy = true
+		}
 		mutation := false
 		if _, present := rawEntry["kind"]; present {
 			kind, err := catalogEntryKey(rawEntry, "kind", path, index)
@@ -227,7 +238,7 @@ func LoadOperationCatalogWithKinds(path string) (map[string]string, map[string]s
 				return nil, nil, fmt.Errorf("%w: %s entry %d (%q) has unknown kind %q -- the Python edge loader refuses the whole file for it", ErrCatalogUnusable, path, index, operation, kind)
 			}
 		}
-		entries = append(entries, catalogFileEntry{Operation: operation, Digest: digest, Mutation: mutation})
+		entries = append(entries, catalogFileEntry{Operation: operation, Digest: digest, Mutation: mutation, Legacy: legacy})
 	}
 	if rawEntries != nil && entries == nil {
 		// An array that decoded but produced no entries can only be `[]`,
@@ -258,9 +269,21 @@ func LoadOperationCatalogWithKinds(path string) (map[string]string, map[string]s
 	// and whichever entry happened to win would decide which routing row
 	// a request consults.
 	byDigest := make(map[string]string, len(entries))
+	var legacyEntries []catalogFileEntry
 	for _, entry := range entries {
 		if entry.Operation == "" || entry.Digest == "" {
 			return nil, nil, fmt.Errorf("%w: %s carries an entry with an empty operation or digest", ErrCatalogUnusable, path)
+		}
+		if entry.Legacy {
+			// A legacy text shares its operation's name, so the duplicate-operation check does not
+			// apply; its digest is still unique across the whole file. It is checked against the
+			// current entry once every entry has been read (a legacy entry may precede its operation).
+			if previous, seen := byDigest[entry.Digest]; seen {
+				return nil, nil, fmt.Errorf("%w: %s gives digest %s to both %q and %q -- the edge keys its dispatch map by digest, so this mapping is ambiguous", ErrCatalogUnusable, path, entry.Digest, previous, entry.Operation)
+			}
+			byDigest[entry.Digest] = entry.Operation
+			legacyEntries = append(legacyEntries, entry)
+			continue
 		}
 		if previous, seen := byOperation[entry.Operation]; seen {
 			return nil, nil, fmt.Errorf("%w: %s lists operation %q twice (digests %s and %s)", ErrCatalogUnusable, path, entry.Operation, previous, entry.Digest)
@@ -273,6 +296,18 @@ func LoadOperationCatalogWithKinds(path string) (map[string]string, map[string]s
 		kinds[entry.Operation] = OperationKindQuery
 		if entry.Mutation {
 			kinds[entry.Operation] = OperationKindMutation
+		}
+	}
+	for _, entry := range legacyEntries {
+		current, ok := byOperation[entry.Operation]
+		if !ok {
+			return nil, nil, fmt.Errorf("%w: %s lists a legacy digest %s for operation %q, which has no current entry", ErrCatalogUnusable, path, entry.Digest, entry.Operation)
+		}
+		if current == entry.Digest {
+			return nil, nil, fmt.Errorf("%w: %s lists digest %s as both the current and a legacy document of %q", ErrCatalogUnusable, path, entry.Digest, entry.Operation)
+		}
+		if entry.Mutation != (kinds[entry.Operation] == OperationKindMutation) {
+			return nil, nil, fmt.Errorf("%w: %s gives the legacy digest %s of %q a different kind than its current document", ErrCatalogUnusable, path, entry.Digest, entry.Operation)
 		}
 	}
 	return byOperation, kinds, nil

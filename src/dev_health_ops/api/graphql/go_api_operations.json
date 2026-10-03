@@ -55,11 +55,16 @@
   },
   {
     "operation": "capacityForecast",
-    "digest": "7ec8e919d784ed0dea1b87e85d64ffe18d05557379a397d07da0ab958694ffd1"
+    "digest": "7b9840de913ad609fc6fd70bcf4fa74b7d8e8ba5f6d699c48bd3be2ea9c0933f"
   },
   {
     "operation": "capacityForecast",
     "digest": "b4fb8f075aba9954714f10f7f4451242d969548d6392d778dae1177759f80780",
+    "legacy": true
+  },
+  {
+    "operation": "capacityForecast",
+    "digest": "7ec8e919d784ed0dea1b87e85d64ffe18d05557379a397d07da0ab958694ffd1",
     "legacy": true
   },
   {

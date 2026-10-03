@@ -578,7 +578,7 @@ def test_no_renderer_still_emits_the_deleted_operational_bridge(
     assert "operationalBridgeURL" not in helpers, (
         "_helpers.tpl still defines the deleted operationalBridgeURL helper"
     )
-    for extra_set in ([], ["metricsApi.enabled=true"]):
+    for extra_set in ([],):
         argv = ["helm", "template", "phase1", str(_HELM_CHART)]
         for value in extra_set:
             argv += ["--set", value]
@@ -638,93 +638,6 @@ def test_helm_pagerduty_profile_binding_is_pinned() -> None:
     assert (
         'dict "secretRef" (dict "name" (include "dev-health.secretName" $))' in template
     )
-
-
-def test_helm_api_envfrom_wiring() -> None:
-    """CHAOS-6279: the bridge-token completeness check this test used to run
-    is gone along with that mechanism -- see this file's CHAOS-6279 header
-    note. What remains real: the api Deployment template actually wires its
-    envFrom to the shared ConfigMap/Secret by name (CHAOS-6950: the raw
-    Kubernetes manifest this also checked is deleted).
-    """
-    template = (_HELM_CHART / "templates" / "api-deployment.yaml").read_text(
-        encoding="utf-8"
-    )
-    # CHAOS-4984: same dict-builder pattern as go-workers.yaml above.
-    assert (
-        'dict "configMapRef" (dict "name" (include "dev-health.configMapName" .))'
-        in template
-    )
-    assert (
-        'dict "secretRef" (dict "name" (include "dev-health.secretName" .))' in template
-    )
-
-
-@pytest.mark.skipif(shutil.which("helm") is None, reason="helm is not installed")
-def test_helm_api_deployment_carries_expected_worker_groups_only_when_go_workers_enabled() -> (
-    None
-):
-    """CHAOS-3942: render both states through the real templating engine --
-    a string match on the template source cannot prove the conditional
-    actually gates the rendered manifest. CHAOS-4195 flipped goWorkers.enabled
-    to default true (there is no Celery baseline left to default to), so the
-    "disabled" state is no longer the bare-defaults render -- prove the gate
-    still holds by asserting it explicitly with --set goWorkers.enabled=false.
-    """
-    disabled = subprocess.run(
-        [
-            "helm",
-            "template",
-            "phase1",
-            str(_HELM_CHART),
-            "--set",
-            "goWorkers.enabled=false",
-            "--show-only",
-            "templates/api-deployment.yaml",
-        ],
-        check=True,
-        capture_output=True,
-        text=True,
-    )
-    assert "EXPECTED_WORKER_GROUPS" not in disabled.stdout
-
-    enabled = subprocess.run(
-        [
-            "helm",
-            "template",
-            "phase1",
-            str(_HELM_CHART),
-            "--set",
-            "goWorkers.enabled=true",
-            "--set",
-            "goWorkers.pgbouncer.enabled=true",
-            "--set-string",
-            "goWorkers.pgbouncer.postgres.host=pg",
-            "--set-string",
-            "goWorkers.pgbouncer.postgres.database=db",
-            "--set-string",
-            "goWorkers.pgbouncer.secret.data.RIVER_DOMAIN_DATABASE_PASSWORD=x",
-            "--set-string",
-            "goWorkers.pgbouncer.secret.data.RIVER_QUEUE_DATABASE_PASSWORD=x",
-            "--set-string",
-            "goWorkers.pgbouncer.secret.data.RIVER_COORDINATOR_DATABASE_PASSWORD=x",
-            "--show-only",
-            "templates/api-deployment.yaml",
-        ],
-        check=True,
-        capture_output=True,
-        text=True,
-    )
-    rendered = next(
-        document
-        for document in yaml.safe_load_all(enabled.stdout)
-        if document and document.get("kind") == "Deployment"
-    )
-    container = rendered["spec"]["template"]["spec"]["containers"][0]
-    entry = next(
-        item for item in container["env"] if item["name"] == "EXPECTED_WORKER_GROUPS"
-    )
-    assert entry["value"] == _EXPECTED_WORKER_GROUPS_VALUE
 
 
 _HELM_GO_WORKER_SETS = [
@@ -837,45 +750,6 @@ def test_compose_go_worker_heavy_alone_owns_the_metrics_queue() -> None:
 
 
 @pytest.mark.skipif(shutil.which("helm") is None, reason="helm is not installed")
-def test_helm_metrics_api_deployment_only_renders_when_enabled() -> None:
-    """CHAOS-4351: `metricsApi.enabled` (default false) must actually gate
-    the Deployment/Service, and the enabled render must carry the same
-    resources as `api`'s own -- same workload, same bound, per team-lead's
-    ruling that a bridge OOM here must not be able to take `api` down.
-    """
-    disabled = subprocess.run(
-        ["helm", "template", "phase1", str(_HELM_CHART)],
-        check=True,
-        capture_output=True,
-        text=True,
-    )
-    assert "name: phase1-dev-health-metrics-api" not in disabled.stdout
-
-    enabled = subprocess.run(
-        [
-            "helm",
-            "template",
-            "phase1",
-            str(_HELM_CHART),
-            "--set",
-            "metricsApi.enabled=true",
-            "--show-only",
-            "templates/metrics-api-deployment.yaml",
-        ],
-        check=True,
-        capture_output=True,
-        text=True,
-    )
-    docs = list(yaml.safe_load_all(enabled.stdout))
-    deployment = next(d for d in docs if d and d.get("kind") == "Deployment")
-    service = next(d for d in docs if d and d.get("kind") == "Service")
-    assert service["spec"]["type"] == "ClusterIP"
-    container = deployment["spec"]["template"]["spec"]["containers"][0]
-    assert container["image"]
-    assert container["resources"]["limits"]["memory"] == "1Gi"
-
-
-@pytest.mark.skipif(shutil.which("helm") is None, reason="helm is not installed")
 def test_helm_go_worker_groups_roll_on_shared_config_or_secret_change() -> None:
     """All nine go-worker groups envFrom the shared ConfigMap and
     Secret (go-workers.yaml), same as api-deployment.yaml -- but envFrom never
@@ -970,27 +844,6 @@ def test_helm_go_worker_groups_roll_on_shared_config_or_secret_change() -> None:
         assert fingerprint(secret_changed[group]) == fingerprint(base[group]), (
             f"{group}: a secret value change must not touch image or probes"
         )
-
-
-def test_helm_go_worker_health_check_authority_is_the_fleet() -> None:
-    """CHAOS-3942: /health/workers is Go-fleet-authoritative by default.
-
-    The chart renders EXPECTED_WORKER_GROUPS into the api Deployment straight
-    from the goWorkers.enabled value flag (CHAOS-6950 deleted the Compose,
-    Swarm and raw Kubernetes renderers this also pinned).
-    """
-    values = _load_yaml(_HELM_CHART / "values.yaml")
-    assert values["goWorkers"]["expectedWorkerGroups"] == [
-        "heavy",
-        "ops",
-        "sync",
-        "sync-provider",
-    ]
-    template = (_HELM_CHART / "templates" / "api-deployment.yaml").read_text(
-        encoding="utf-8"
-    )
-    assert "EXPECTED_WORKER_GROUPS" in template
-    assert ".Values.goWorkers.enabled" in template
 
 
 def test_helm_gives_go_workers_a_native_protocol_clickhouse_uri() -> None:

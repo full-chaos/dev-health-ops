@@ -3,7 +3,7 @@ The Go query plane. The Python edge's dispatcher forwards a GraphQL operation
 here (GO_API_QUERY_API_URL, see dev-health.configData) when the routing
 registry says the Go plane serves it; with queryApi disabled the edge never
 learns an endpoint and every operation stays on the Python plane, which is why
-this defaults off like metricsApi.
+this defaults off.
 */ -}}
 {{- if .Values.queryApi.enabled }}
 {{- /*
@@ -76,7 +76,7 @@ metadata:
 spec:
   replicas: {{ .Values.queryApi.replicas }}
   {{- /*
-  Same guarantee api-deployment.yaml states: never dip below current serving
+  Same guarantee the deleted Python api Deployment stated: never dip below current serving
   capacity during a rollout. Kubernetes' 25%/25% default only behaves at
   replicas: 1 by rounding.
   */}}

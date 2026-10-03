@@ -13,7 +13,7 @@
     },
     "envFromEntry": {
       "type": "object",
-      "description": "One Kubernetes envFrom source: exactly one of configMapRef or secretRef, each carrying only a Secret/ConfigMap name -- matches the shape api-deployment.yaml/go-workers.yaml build for their own two hardcoded entries, so an extraEnvFrom entry can't carry a key (e.g. a typo'd field) the chart would silently drop when it toYaml's the combined list.",
+      "description": "One Kubernetes envFrom source: exactly one of configMapRef or secretRef, each carrying only a Secret/ConfigMap name -- matches the shape go-workers.yaml builds for their own two hardcoded entries, so an extraEnvFrom entry can't carry a key (e.g. a typo'd field) the chart would silently drop when it toYaml's the combined list.",
       "oneOf": [
         {
           "type": "object",
@@ -49,12 +49,6 @@
     }
   },
   "properties": {
-    "api": {
-      "type": "object",
-      "properties": {
-        "extraEnvFrom": { "$ref": "#/definitions/extraEnvFrom" }
-      }
-    },
     "migrations": {
       "type": "object",
       "properties": {

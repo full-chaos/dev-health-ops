@@ -66,7 +66,7 @@
       "request_headers_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
       "status": 0,
       "headers": {},
-      "body": "{\"team_id\": \"team-alpha\", \"org_id\": \"org-loader-versions\", \"window_start\": \"2026-08-01\", \"window_end\": \"2026-09-01\", \"wip_by_day\": [\"3ff0000000000000\", \"3ff0000000000000\"], \"throughput_by_cycle\": [\"3ff0000000000000\", \"3ff0000000000000\"], \"review_latency_p75_hours\": \"403e000000000000\", \"reviewer_gini\": \"3fd5555555555554\", \"rework_churn_ratio\": \"3fd0000000000000\", \"after_hours_ratio\": \"3fe0000000000000\", \"cycle_time_by_day\": [\"4028000000000000\", \"4020000000000000\"], \"hotspot_complexity_delta\": \"3fe0000000000000\", \"hotspot_churn_overlap\": null, \"compounding_risk_score\": \"3fe999999999999a\", \"compounding_risk_severity\": \"high\"}"
+      "body": "{\"team_id\": \"team-alpha\", \"org_id\": \"org-loader-versions\", \"window_start\": \"2026-08-01\", \"window_end\": \"2026-09-01\", \"wip_by_day\": [\"3ff0000000000000\", \"3ff0000000000000\", \"3ff0000000000000\"], \"throughput_by_cycle\": [\"3ff0000000000000\", \"3ff0000000000000\", \"3ff0000000000000\"], \"review_latency_p75_hours\": \"403e000000000000\", \"reviewer_gini\": \"3fd5555555555554\", \"rework_churn_ratio\": \"3fd0000000000000\", \"after_hours_ratio\": \"3fe0000000000000\", \"cycle_time_by_day\": [\"4028000000000000\", \"4020000000000000\", \"402e000000000000\"], \"hotspot_complexity_delta\": \"3fe0000000000000\", \"hotspot_churn_overlap\": null, \"compounding_risk_score\": \"3fe999999999999a\", \"compounding_risk_severity\": \"high\"}"
     }
   ]
 }

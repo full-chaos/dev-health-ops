@@ -11,6 +11,7 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -492,7 +493,7 @@ func compareSnapshotAgainstPython(t *testing.T, teamID string, got MetricsSnapsh
 const loaderPythonBuild = "a4847c5e93607451a0c987b314d37e02fc43ce85"
 
 // loaderGoldenDigest is the SHA-256 of the golden file, pinned by the record verb ("PIN:..." until its first recording).
-const loaderGoldenDigest = "694953e00ef4f93462d38b38138d59605d6a5fc49964c1cd27ff28730e0c226b"
+const loaderGoldenDigest = "02985f130dbeb78b985c0e49156833b90b336e18ec932f97274447f77223c4c8"
 
 // loaderGolden is the GoldenSpec of the loader oracle: test is the oracle's function name, digest the SHA-256 the test pins.
 func loaderGolden(test, digest string) venueoracle.GoldenSpec {
@@ -1298,15 +1299,19 @@ func seedVersionedOrg(t *testing.T, ctx context.Context, conn driver.Conn) {
 			mustTimestamp(t, seed.computedAt), loaderVersionsOrgID)
 	}
 
-	// cycle times: two days with one version each. The case where the NEWEST row of a (day, provider, work_scope) carries a NULL
-	// cycle time is NOT seeded: the Go loader (tuple-wrapped argMax: the NULL row wins and the day is dropped) and the Python
-	// reference (plain argMax, which skips NULL) differ there, a finding for the owner of the semantics, not a golden to record.
+	// cycle times: 08-05 and 08-06 have one version each. 08-07 holds an older value and a NEWER NULL: the Go loader tuple-wraps its
+	// argMax (the NULL newest row wins and the day is DROPPED), the Python reference's plain argMax skips the NULL (the day keeps
+	// the older value). A recorded Go-plane decision (CHAOS-4547, PR 2568), a NAMED divergence declared in the comparison below.
 	for _, seed := range []struct {
 		day, computedAt string
-		cycle           float64
+		cycle           *float64
 	}{
-		{"2026-08-05", "2026-08-06 00:00:00", 12.0},
-		{"2026-08-06", "2026-08-07 00:00:00", 8.0},
+		{"2026-08-05", "2026-08-06 00:00:00", ptr(12.0)},
+		{"2026-08-06", "2026-08-07 00:00:00", ptr(8.0)},
+		// 08-07 is re-run with a NULL cycle time (the work-item writer leaves it NULL for a day with nothing completed): the
+		// DECLARED divergence of CHAOS-4547 / PR 2568 (see assertVersionedRowsAreReadAsNewest).
+		{"2026-08-07", "2026-08-08 00:00:00", ptr(15.0)},
+		{"2026-08-07", "2026-08-09 00:00:00", nil},
 	} {
 		exec(`INSERT INTO work_item_metrics_daily
 			(day, provider, work_scope_id, team_id, team_name, items_started, items_completed,
@@ -1333,6 +1338,30 @@ func seedVersionedOrg(t *testing.T, ctx context.Context, conn driver.Conn) {
 			loaderVersionsOrgID, mustDate(t, seed.day), loaderTeamA, seed.score, seed.severity,
 			mustTimestamp(t, seed.computedAt))
 	}
+}
+
+func ptr(value float64) *float64 { return &value }
+
+// bitsHex is the exact-bit encoding the Python producer prints for a float.
+func bitsHex(values []float64) []string {
+	encoded := make([]string, 0, len(values))
+	for _, value := range values {
+		encoded = append(encoded, strconv.FormatUint(math.Float64bits(value), 16))
+	}
+	return encoded
+}
+
+func decodeBits(t *testing.T, encoded []string) []float64 {
+	t.Helper()
+	values := make([]float64, 0, len(encoded))
+	for _, text := range encoded {
+		raw, err := strconv.ParseUint(text, 16, 64)
+		if err != nil {
+			t.Fatalf("parse %q: %v", text, err)
+		}
+		values = append(values, math.Float64frombits(raw))
+	}
+	return values
 }
 
 func mustTimestamp(t *testing.T, text string) time.Time {
@@ -1446,15 +1475,23 @@ func assertVersionedRowsAreReadAsNewest(t *testing.T, ctx context.Context, conn 
 		t.Errorf("versions org: hotspot_churn_overlap is PRESENT (%v); the only hotspot file has risk_score 0, which is not a hotspot",
 			got.HotspotChurnOverlap)
 	}
-	if len(got.CycleTimeByDay) != 2 || got.CycleTimeByDay[0] != 12.0 || got.CycleTimeByDay[1] != 8.0 {
-		t.Errorf("versions org: cycle times = %v, want [12 8]", got.CycleTimeByDay)
-	}
 	if !got.CompoundingRiskScoreKnown || got.CompoundingRiskScore != 0.80 || got.CompoundingRiskSeverity != "high" {
 		t.Errorf("versions org: compounding risk = %v/%q (known %v), want 0.8/high (the NEWEST row)",
 			got.CompoundingRiskScore, got.CompoundingRiskSeverity, got.CompoundingRiskScoreKnown)
 	}
-	compareSnapshotAgainstPython(t, "versions-org", got,
-		python.of(t, loaderTeamA, loaderVersionsOrgID), false)
+	// DECLARED DIVERGENCE (CHAOS-4547, PR 2568): day 08-07 holds an older cycle time 15 and a NEWER NULL. The Python reference's plain
+	// argMax SKIPS the NULL and keeps the older value; the Go loader's tuple-wrapped argMax lets the NULL win and DROPS the day. The
+	// frozen Python answer and Go's behaviour are both pinned, and the rest of the snapshot is compared strictly: a loader that
+	// starts to agree with Python here (the tuple wrap removed) fails this assertion too, so the divergence cannot change unseen.
+	want := python.of(t, loaderTeamA, loaderVersionsOrgID)
+	if frozen := decodeBits(t, want.CycleTimeByDay); !sameFloats(frozen, []float64{12.0, 8.0, 15.0}) {
+		t.Errorf("versions org: the frozen Python cycle times are %v, want [12 8 15] (plain argMax skips the NULL newest row of 08-07)", frozen)
+	}
+	if !sameFloats(got.CycleTimeByDay, []float64{12.0, 8.0}) {
+		t.Errorf("versions org: Go cycle times = %v, want [12 8]: the tuple-wrapped argMax lets the NULL newest row of 08-07 win and drops the day (CHAOS-4547, PR 2568)", got.CycleTimeByDay)
+	}
+	want.CycleTimeByDay = bitsHex(got.CycleTimeByDay)
+	compareSnapshotAgainstPython(t, "versions-org", got, want, false)
 }
 
 func loadForOrg(t *testing.T, ctx context.Context, conn driver.Conn, orgID string) MetricsSnapshot {

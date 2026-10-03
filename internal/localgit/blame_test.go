@@ -248,3 +248,64 @@ func TestParseEpochTextKeepsWhatDoesNotFitAnInt64(t *testing.T) {
 		}
 	}
 }
+
+// resolve is pathlib.Path.resolve() (non-strict): an existing target is followed to its real path (EvalSymlinks),
+// and a BROKEN link resolves to its target as written (an absolute target is kept as it is, a relative one is
+// taken from the link's own directory). The absolute branch is reached only by a broken absolute link, which no
+// recorded scenario has (a link to an existing file never gets past EvalSymlinks): this pins it.
+func TestResolveKeepsABrokenLinksTarget(t *testing.T) {
+	base, err := filepath.EvalSymlinks(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	absolute := filepath.Join(base, "missing", "abs-target")
+	absLink := filepath.Join(base, "abs-link")
+	if err := os.Symlink(absolute, absLink); err != nil {
+		t.Fatal(err)
+	}
+	if got := resolve(absLink); got != absolute {
+		t.Errorf("a broken absolute link resolved to %q, want its target %q", got, absolute)
+	}
+	relLink := filepath.Join(base, "rel-link")
+	if err := os.Symlink(filepath.Join("missing", "rel-target"), relLink); err != nil {
+		t.Fatal(err)
+	}
+	if got, want := resolve(relLink), filepath.Join(base, "missing", "rel-target"); got != want {
+		t.Errorf("a broken relative link resolved to %q, want %q", got, want)
+	}
+}
+
+// TestReadFilePinsTheRelativePathOfATargetOutsideTheRepository pins the DEPTH of the `../` chain ReadFile stores for a path outside the
+// repository (a broken absolute link's target): the number of `../` is the number of directories from the repository root up to the
+// common parent. The layout is built here, so the expected chain does not depend on the depth of TMPDIR. TestLocalSyncMatchesFrozenPython
+// compares that path with its leading `../` chain replaced by one placeholder on both planes (the depth is where the test runs), so
+// this test is the pin of the depth (CHAOS-7542).
+func TestReadFilePinsTheRelativePathOfATargetOutsideTheRepository(t *testing.T) {
+	base, err := filepath.EvalSymlinks(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	cases := []struct {
+		root []string // directories below base that hold the repository root
+		want string
+	}{
+		{[]string{"repo"}, "../outside/dir/missing.txt"},
+		{[]string{"a", "repo"}, "../../outside/dir/missing.txt"},
+		{[]string{"a", "b", "repo"}, "../../../outside/dir/missing.txt"},
+	}
+	for _, c := range cases {
+		root := filepath.Join(append([]string{base}, c.root...)...)
+		if err := os.MkdirAll(root, 0o755); err != nil {
+			t.Fatal(err)
+		}
+		got := Repo{Root: root}.ReadFile(filepath.Join(base, "outside", "dir", "missing.txt")).Path
+		if got != c.want {
+			t.Errorf("root %v: path = %q, want %q", c.root, got, c.want)
+		}
+	}
+	// A file inside the repository keeps a plain relative path.
+	root := filepath.Join(base, "repo")
+	if got := (Repo{Root: root}).ReadFile(filepath.Join(root, "src", "x.txt")).Path; got != "src/x.txt" {
+		t.Errorf("inside path = %q, want src/x.txt", got)
+	}
+}

@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"strings"
 	"testing"
 	"time"
 
@@ -444,5 +445,59 @@ func TestExhaustPartitionLeavesALiveLeaseAlone(t *testing.T) {
 	_ = pool.QueryRow(ctx, "SELECT status FROM remaining_metric_partitions WHERE id=$1::uuid", id).Scan(&status)
 	if status != "running" {
 		t.Fatalf("partition = %q, want running (live lease untouched)", status)
+	}
+}
+
+type loadRunInvalidStore struct{ *PostgresStore }
+
+func (s *loadRunInvalidStore) LoadRun(context.Context, string) (Run, error) {
+	return Run{}, ErrInvalidState
+}
+
+// CHAOS-8176 (gwc-review r2 P1-1): a Permanent exit that holds a claim must leave the partition exhausted and the
+// run failed when nothing else can progress. Both exits, real Postgres, first attempt (no retry follows a Permanent).
+func TestPermanentExitsTerminalizeTheRunAgainstRealPostgres(t *testing.T) {
+	ctx := context.Background()
+	pool, store, _ := newRemainingRedriveTestStack(t)
+	store.now = func() time.Time { return time.Date(2026, 10, 2, 12, 0, 0, 0, time.UTC) }
+	for _, tc := range []struct {
+		name    string
+		org     string
+		execOrg string // the organization the EXECUTION carries (differs from the run's: a mismatching run)
+		seed    int64
+		handler func() *PartitionHandler[jobruntime.RemainingCapacityArgs]
+	}{
+		{"run organization does not match the execution", "00000000-0000-4000-8000-000000009801", "00000000-0000-4000-8000-000000009899", 981, func() *PartitionHandler[jobruntime.RemainingCapacityArgs] {
+			h, _ := NewPartitionHandler[jobruntime.RemainingCapacityArgs](store, &handlerExecutor{}, "capacity")
+			return h
+		}},
+		{"load run invalid state", "00000000-0000-4000-8000-000000009802", "00000000-0000-4000-8000-000000009802", 982, func() *PartitionHandler[jobruntime.RemainingCapacityArgs] {
+			h, _ := NewPartitionHandler[jobruntime.RemainingCapacityArgs](&loadRunInvalidStore{store}, &handlerExecutor{}, "capacity")
+			return h
+		}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			run, err := store.StartRun(ctx, StartRunRequest{OrganizationID: tc.org, Family: "capacity", Generation: "permanent-exit", ScopeKey: "all-teams",
+				GenerationSeed: int64Pointer(tc.seed), Scopes: []json.RawMessage{capacityScopeJSON(90)}})
+			if err != nil {
+				t.Fatal(err)
+			}
+			partition := deterministicPartitionID(run.ID, 1)
+			workErr := tc.handler().Work(ctx, capacityExecutionFor(tc.execOrg, partition, run.ID, 1, 3))
+			if workErr == nil || !strings.Contains(workErr.Error(), string(jobruntime.CategoryPermanent)) {
+				t.Fatalf("work error = %v, want Permanent", workErr)
+			}
+			var runStatus, partitionStatus string
+			var exhausted bool
+			if err := pool.QueryRow(ctx, "SELECT status FROM remaining_metric_runs WHERE id=$1::uuid", run.ID).Scan(&runStatus); err != nil {
+				t.Fatal(err)
+			}
+			if err := pool.QueryRow(ctx, "SELECT status, completed_at IS NOT NULL FROM remaining_metric_partitions WHERE id=$1::uuid", partition).Scan(&partitionStatus, &exhausted); err != nil {
+				t.Fatal(err)
+			}
+			if runStatus != "failed" || partitionStatus != "failed" || !exhausted {
+				t.Fatalf("run=%s partition=%s exhausted=%t, want failed/failed/true", runStatus, partitionStatus, exhausted)
+			}
+		})
 	}
 }

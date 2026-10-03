@@ -407,13 +407,14 @@ func edgeOracleCases(t *testing.T, docs []registeredEdgeDocument, users []edgeUs
 		variables := spec.Variables(edgeOrgA, goapiproof.DefaultWindow())
 		name := documentOperationName(doc.Document)
 		post := edgeCase{request: edgePost("POST "+doc.Operation, member, urqlBody(t, name, doc.Document, variables), nil)}
+		get := edgeCase{request: edgeGet("GET "+doc.Operation, member, urqlGETPath(t, edgeOrgA, name, doc.Document, variables), nil)}
 		if doc.Operation == "createSavedReport" {
 			writes = append(writes, post)
 			continue
 		}
 		cases = append(cases, post)
 		// A mutation as GET too: both planes must refuse it, never run it.
-		cases = append(cases, edgeCase{request: edgeGet("GET "+doc.Operation, member, urqlGETPath(t, edgeOrgA, name, doc.Document, variables), nil)})
+		cases = append(cases, get)
 	}
 
 	// The credential domain, on one query and one mutation.
@@ -645,9 +646,22 @@ func edgeCompare(t *testing.T, goBase string, cs []edgeCase, python []venueoracl
 				python[i].Status, truncateOracleBody(python[i].Body), goResponse.Status, truncateOracleBody(goResponse.Body))
 		}
 	}
+	base := normalize
 	receipt.WriteString(venueoracle.Diff(t, goBase, parity, parityPython, venueoracle.DiffOptions{
-		Normalize: normalize,
-		Golden:    golden,
+		Normalize: func(request venueoracle.Request, body string) string {
+			body = coverageDivergenceNormalize(request, body)
+			if base != nil {
+				body = base(request, body)
+			}
+			return body
+		},
+		Inspect: func(request venueoracle.Request, goResponse venueoracle.Response) {
+			if isThroughputForecastRequest(request) && !strings.Contains(goResponse.Body, goZeroCoverage) {
+				t.Errorf("%s: query-api must answer the all-zero estimateCoverage object (D4373/D4376), got: %s",
+					request.Name, truncateOracleBody(goResponse.Body))
+			}
+		},
+		Golden: golden,
 	}))
 	t.Log("\n" + receipt.String())
 }

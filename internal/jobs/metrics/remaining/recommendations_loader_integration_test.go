@@ -3,12 +3,13 @@
 package remaining
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
 	"math"
 	"net/url"
-	"os/exec"
+	"os"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -19,8 +20,7 @@ import (
 
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/chschema"
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/containers"
-	"github.com/full-chaos/dev-health-ops/internal/testsupport/moduleroot"
-	"github.com/full-chaos/dev-health-ops/internal/testsupport/pyoracle"
+	"github.com/full-chaos/dev-health-ops/internal/testsupport/venueoracle"
 )
 
 // End-to-end loader parity against a real ClickHouse.
@@ -31,6 +31,11 @@ import (
 // a `<=` where the reference has `<` -- would pass it while diverging in
 // production. This test closes that gap the only way it can be closed: run the
 // SHIPPED PYTHON LOADER and the Go loader against the SAME DATABASE and compare.
+//
+// CHAOS-8303: the Python loader's answers are FROZEN. They were produced once by the record verb on the pinned build
+// (loaderPythonBuild) against this fixture, one per (team, org) of loaderCases, and are replayed from
+// testdata/golden/recommendations_loader_clickhouse.json with no Python started; the Go loader still runs against a real ClickHouse
+// seeded with the same fixture and is compared field by field (floats as exact bit patterns) with those answers.
 //
 // It also carries the CHAOS-4897 two-team fixture. Teams A and B are given
 // DIFFERENT underlying data AND disjoint team_repo_ownership rows, and the
@@ -152,8 +157,9 @@ type pythonSnapshot struct {
 	CompoundingRiskSever   string   `json:"compounding_risk_severity"`
 }
 
-func TestRecommendationsLoaderMatchesPythonAgainstClickHouse(t *testing.T) {
+func TestRecommendationsLoaderMatchesFrozenPythonAgainstClickHouse(t *testing.T) {
 	ctx := context.Background()
+	frozen := venueoracle.OpenGolden(t, loaderGolden(t.Name(), loaderGoldenDigest))
 
 	instance, err := containers.StartClickHouse(ctx)
 	if err != nil {
@@ -168,6 +174,10 @@ func TestRecommendationsLoaderMatchesPythonAgainstClickHouse(t *testing.T) {
 	}
 	conn := openLoaderClickHouse(t, ctx, dsn)
 	defer seedLoaderFixture(t, ctx, conn)()
+
+	// The Python loader's answers for every (team, org) this test compares: recorded once on the pinned build against this fixture
+	// by the record verb, frozen, and replayed here with no Python started.
+	python := frozenPythonSnapshots(t, frozen, dsn)
 
 	loader, err := NewRecommendationsLoader(conn, loaderOrgID)
 	if err != nil {
@@ -184,7 +194,7 @@ func TestRecommendationsLoaderMatchesPythonAgainstClickHouse(t *testing.T) {
 		}
 		snapshots[teamID] = got
 
-		want := runPythonLoader(t, dsn, teamID, loaderOrgID)
+		want := python.of(t, teamID, loaderOrgID)
 		// true: alpha and beta own disjoint repo sets in this fixture (seeded
 		// below), so the four CHAOS-4897 fields are SUPPOSED to diverge from
 		// Python here -- see assertCHAOS4897FixIsPresent.
@@ -194,8 +204,11 @@ func TestRecommendationsLoaderMatchesPythonAgainstClickHouse(t *testing.T) {
 	assertCHAOS4897FixIsPresent(t, snapshots[loaderTeamA], snapshots[loaderTeamB])
 	assertOwnershipIsResolvedAsOfWindowEnd(t, snapshots[loaderTeamA])
 	assertZeroOwnedReposIsAbsentNotOrgWide(t, ctx, conn, loader, windowStart, windowEnd)
-	assertHotspotBoundaryIsMeasured(t, ctx, conn, dsn)
+	assertHotspotBoundaryIsMeasured(t, ctx, conn, python)
 	assertArgMaxKeysAreUnique(t, ctx, conn)
+
+	frozen.SkipDiff(t)
+	frozen.Finish(t)
 }
 
 // assertOwnershipIsResolvedAsOfWindowEnd closes TWO related codex-review
@@ -470,32 +483,114 @@ func compareSnapshotAgainstPython(t *testing.T, teamID string, got MetricsSnapsh
 	}
 }
 
-func runPythonLoader(t *testing.T, dsn, teamID, orgID string) pythonSnapshot {
+// loaderPythonBuild is the build whose Python recommendations loader the golden holds the answers of: main before the Python loader
+// was deleted.
+const loaderPythonBuild = "a4847c5e93607451a0c987b314d37e02fc43ce85"
+
+// loaderGoldenDigest is the SHA-256 of the golden file, pinned by the record verb ("PIN:..." until its first recording).
+const loaderGoldenDigest = "73a3210b09e8ea19036935f3997268e34f82cfa457241529b1685b348d5ffe2c"
+
+// loaderGolden is the GoldenSpec of the loader oracle: test is the oracle's function name, digest the SHA-256 the test pins.
+func loaderGolden(test, digest string) venueoracle.GoldenSpec {
+	return venueoracle.GoldenSpec{
+		Path:        "testdata/golden/recommendations_loader_clickhouse.json",
+		PythonBuild: loaderPythonBuild,
+		SHA256:      digest,
+		Recipe: fmt.Sprintf("git worktree add --detach $DIR %s (with its .venv: uv sync --frozen --no-install-project); then from the repository root: "+
+			"go run ./internal/testsupport/venueoracle/goldenrecord -pkg ./internal/jobs/metrics/remaining/ -test '^%s$' -python-root $DIR "+
+			"(records on the pinned build, replays the candidate in a fresh process, and only then promotes it and pins its digest)",
+			loaderPythonBuild, test),
+	}
+}
+
+// loaderProducerEnv is the environment entries that shape the producer's answer; with PATH, HOME and the pinned sources on PYTHONPATH
+// they are the whole environment the producer gets.
+var loaderProducerEnv = map[string]string{"PYTHONHASHSEED": "0", "PYTHONUTF8": "1"}
+
+// loaderCases is every (team, org) pair the test compares with the Python loader, in the order they are asked and recorded.
+var loaderCases = [][2]string{
+	{loaderTeamA, loaderOrgID},
+	{loaderTeamB, loaderOrgID},
+	{loaderTeamA, loaderInfOrgID},
+	{loaderTeamA, loaderEmptyOrgID},
+	{loaderTeamA, loaderOneHotspotOrgID},
+}
+
+// frozenSnapshots is the Python loader's answer per (team, org).
+type frozenSnapshots map[string]pythonSnapshot
+
+func (f frozenSnapshots) of(t *testing.T, team, org string) pythonSnapshot {
+	t.Helper()
+	snapshot, ok := f[team+"|"+org]
+	if !ok {
+		t.Fatalf("no Python loader answer for team %q org %q: loaderCases does not list it", team, org)
+	}
+	return snapshot
+}
+
+// frozenPythonSnapshots asks the golden for the Python loader's answers for loaderCases: replayed from the file (no Python started), or,
+// while the record verb records, produced by the shipped Python loader reading the SAME rows from the SAME database the Go loader reads.
+func frozenPythonSnapshots(t *testing.T, golden *venueoracle.Golden, dsn string) frozenSnapshots {
 	t.Helper()
 	root, err := filepath.Abs("../../../..")
 	if err != nil {
 		t.Fatalf("resolve repo root: %v", err)
 	}
-	script := filepath.Join(root,
-		"internal/jobs/metrics/remaining/testdata/run_recommendations_loader_against_clickhouse.py")
-	python := loaderPythonBinary(t)
-
-	command := exec.Command(python, script,
-		"--dsn", dsn, "--team", teamID, "--org", orgID,
-		"--window-start", loaderWindowStart, "--window-end", loaderWindowEnd)
-	output, err := command.CombinedOutput()
+	root = golden.PythonRoot(t, root)
+	program, err := os.ReadFile("testdata/run_recommendations_loader_against_clickhouse.py")
 	if err != nil {
-		t.Fatalf("python loader (%s) failed: %v\n%s", teamID, err, output)
+		t.Fatal(err)
 	}
-	// The script prints exactly one JSON object on the last non-empty line;
-	// anything the client library logs before it is tolerated rather than
-	// assumed absent.
-	lines := strings.Split(strings.TrimSpace(string(output)), "\n")
-	var snapshot pythonSnapshot
-	if err := json.Unmarshal([]byte(lines[len(lines)-1]), &snapshot); err != nil {
-		t.Fatalf("decode python snapshot (%s): %v\nfull output:\n%s", teamID, err, output)
+	var requests []venueoracle.Request
+	var stdins [][]byte
+	for _, c := range loaderCases {
+		stdin, marshalErr := json.Marshal(map[string]string{
+			"team": c[0], "org": c[1], "window_start": loaderWindowStart, "window_end": loaderWindowEnd})
+		if marshalErr != nil {
+			t.Fatal(marshalErr)
+		}
+		stdins = append(stdins, stdin)
+		requests = append(requests, venueoracle.ProgramRequest(
+			fmt.Sprintf("recommendations loader team=%s org=%s", c[0], c[1]), string(program), stdin, loaderProducerEnv))
 	}
-	return snapshot
+	answers := golden.Produce(t, root, requests, func(producer *venueoracle.Producer, _ []venueoracle.Request) []venueoracle.Response {
+		producer.RequireDeployed()
+		live := make([]venueoracle.Response, 0, len(requests))
+		for index, c := range loaderCases {
+			command, commandErr := producer.Command(context.Background(), loaderProducerEnv, []string{"CLICKHOUSE_URI=" + dsn}, "-c", string(program))
+			if commandErr != nil {
+				t.Fatal(commandErr)
+			}
+			command.Dir = root
+			command.Stdin = bytes.NewReader(stdins[index])
+			var stdout, stderr bytes.Buffer
+			command.Stdout = &stdout
+			command.Stderr = &stderr
+			if runErr := command.Run(); runErr != nil {
+				t.Fatalf("python loader (%s, %s) failed: %v\nstdout:\n%s\nstderr:\n%s", c[0], c[1], runErr, stdout.Bytes(), stderr.Bytes())
+			}
+			live = append(live, venueoracle.Response{Status: 0, Body: lastJSONLine(t, stdout.String())})
+		}
+		return live
+	})
+	golden.Consumed(t, answers...)
+	snapshots := frozenSnapshots{}
+	for index, c := range loaderCases {
+		var snapshot pythonSnapshot
+		if decodeErr := json.Unmarshal([]byte(answers[index].Body), &snapshot); decodeErr != nil {
+			t.Fatalf("decode the Python snapshot (%s, %s): %v\nbody:\n%s", c[0], c[1], decodeErr, answers[index].Body)
+		}
+		snapshots[c[0]+"|"+c[1]] = snapshot
+	}
+	return snapshots
+}
+
+// lastJSONLine is the producer's answer: the script prints exactly one JSON object on its last non-empty line; anything the client library
+// logs before it is tolerated rather than assumed absent.
+func lastJSONLine(t *testing.T, output string) string {
+	t.Helper()
+	lines := strings.Split(strings.TrimSpace(output), "\n")
+	return lines[len(lines)-1]
 }
 
 func openLoaderClickHouse(t *testing.T, ctx context.Context, dsn string) driver.Conn {
@@ -1116,7 +1211,7 @@ func mustTimestamp(t *testing.T, text string) time.Time {
 //
 // Compared against the Python reference on the same empty org rather than
 // against a hard-coded expectation, so it stays a parity assertion.
-func assertHotspotBoundaryIsMeasured(t *testing.T, ctx context.Context, conn driver.Conn, dsn string) {
+func assertHotspotBoundaryIsMeasured(t *testing.T, ctx context.Context, conn driver.Conn, python frozenSnapshots) {
 	t.Helper()
 
 	// PRECONDITION: the instrument must be live before a null reading is
@@ -1163,7 +1258,7 @@ func assertHotspotBoundaryIsMeasured(t *testing.T, ctx context.Context, conn dri
 			infinite.ReviewLatencyP75Hours)
 	}
 	compareSnapshotAgainstPython(t, "inf-org", infinite,
-		runPythonLoader(t, dsn, loaderTeamA, loaderInfOrgID), false)
+		python.of(t, loaderTeamA, loaderInfOrgID), false)
 
 	one := loadForOrg(t, ctx, conn, loaderOneHotspotOrgID)
 	if !one.HotspotChurnOverlapKnown {
@@ -1176,9 +1271,9 @@ func assertHotspotBoundaryIsMeasured(t *testing.T, ctx context.Context, conn dri
 	// Both halves against the Python reference on the same orgs, so this stays
 	// parity rather than a hard-coded expectation.
 	compareSnapshotAgainstPython(t, "empty-org", empty,
-		runPythonLoader(t, dsn, loaderTeamA, loaderEmptyOrgID), false)
+		python.of(t, loaderTeamA, loaderEmptyOrgID), false)
 	compareSnapshotAgainstPython(t, "one-hotspot-org", one,
-		runPythonLoader(t, dsn, loaderTeamA, loaderOneHotspotOrgID), false)
+		python.of(t, loaderTeamA, loaderOneHotspotOrgID), false)
 }
 
 func loadForOrg(t *testing.T, ctx context.Context, conn driver.Conn, orgID string) MetricsSnapshot {
@@ -1244,35 +1339,4 @@ func assertArgMaxKeysAreUnique(t *testing.T, ctx context.Context, conn driver.Co
 				group.table, duplicates, group.keyCols)
 		}
 	}
-}
-
-// loaderPythonBinary returns the interpreter chschema itself resolved, and
-// LOGS it so the CI record proves which Python actually ran.
-//
-// This test previously hard-coded <root>/.venv/bin/python. That works on a dev
-// host and on bigboy and FAILS IN CI, which has no .venv -- the comparison died
-// with "fork/exec .../.venv/bin/python: no such file or directory" while
-// chschema had already resolved python3 from PATH and run the migration chain.
-//
-// It went unnoticed because the `Go` workflow never COMPLETED on any earlier
-// tip; every run was superseded by the next push, so the first time the merge
-// oracle ran was the first time this surfaced.
-//
-// Calling chschema's own exported resolver rather than reimplementing its order
-// is the point: a duplicate would be the same defect one refactor later.
-//
-// Deliberately NO skip path. A skip would make this test silently vacuous
-// exactly where it matters, which is the defect class this file exists to
-// close, so a missing interpreter is a hard failure.
-func loaderPythonBinary(t *testing.T) string {
-	t.Helper()
-	_, file, _, _ := moduleroot.Caller(0)
-	python, rule, err := pyoracle.Interpreter(filepath.Join(filepath.Dir(file), "..", "..", "..", ".."))
-	if err != nil {
-		t.Fatalf("no Python to run the reference loader: %v. This test compares the "+
-			"SHIPPED Python loader against the Go one, so without an interpreter it "+
-			"proves nothing -- failing rather than skipping is deliberate.", err)
-	}
-	t.Logf("reference interpreter resolved to: %s (%s)", python, rule)
-	return python
 }

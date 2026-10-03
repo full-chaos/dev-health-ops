@@ -79,7 +79,7 @@ func TestDryRunHelpTextAgreesWithWhatTheRunDoes(t *testing.T) {
 			t.Errorf("the -dry-run help text claims %q, the run executes nothing", claim)
 		}
 	}
-	for _, fact := range []string{"no database", "no receipts", "refused", "nothing is executed"} {
+	for _, fact := range []string{"no database", "no receipts", "refused", "nothing is executed or compared", "measured-nothing error"} {
 		if !strings.Contains(usage, fact) {
 			t.Errorf("the -dry-run help text does not say %q, which is what the run does: %q", fact, flag.Usage)
 		}

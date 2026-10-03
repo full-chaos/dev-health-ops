@@ -449,3 +449,88 @@ func assertSurvivingRowIntact(
 		t.Errorf("%s: last_synced = %q, want prefix %q", workItem, gotSynced, lastSynced[:19])
 	}
 }
+
+// TestIssuePRVersionPrecedenceEndState pins the END STATE of migration 084 on the table the Go migrator builds (chschema.Apply, the
+// baseline head), with no Python and no rewind: the version expression ranks provenance above recency, keeps the milliseconds, does
+// not wrap on a pre-epoch stamp, and holds at DateTime64(3)'s largest and smallest stamps. These keys were the end-state half of the
+// deleted TestMigration084CarriesExistingRows (CHAOS-8302); only the copy procedure went with the Python migration.
+//
+// Key E: an unsupported provenance with a PRE-EPOCH stamp must not wrap the rank arithmetic and win over native. Key F: the same
+// provenance differing only in milliseconds, the LATER one inserted FIRST: under whole seconds the two tie and the last-inserted part
+// wins, so the .000 row would survive. Keys G and H sit at DateTime64(3)'s representable extremes (9999-12-31 23:59:59.999 and
+// 1900-01-01), not at an imagined one: rank must beat the whole range of the stamp. (Key G is only meaningful on a ClickHouse that
+// stores 9999 as written, 26.7 and later: on 26.6 DateTime64(3) saturates at 2299 and a too-small multiplier is unreachable.)
+func TestIssuePRVersionPrecedenceEndState(t *testing.T) {
+	ctx := context.Background()
+	instance := startClickHouse(ctx, t)
+	chschema.Apply(ctx, t, instance)
+	conn := openConn(ctx, t, instance)
+
+	const (
+		org  = "00000000-4769-0000-0000-000000000011"
+		repo = "00000000-4769-0000-0000-000000000012"
+		keyE = "00000000-4769-0000-0000-000000000017"
+		keyF = "00000000-4769-0000-0000-000000000018"
+		keyG = "00000000-4769-0000-0000-000000000019"
+		keyH = "00000000-4769-0000-0000-00000000001a"
+	)
+	// Merges are stopped only while the fixture is built, so every seeded row is present when the merge below is forced.
+	mustExec(ctx, t, conn, "SYSTEM STOP MERGES work_graph_issue_pr")
+	seed(ctx, t, conn, org, repo, keyE, 4773, "native", 1.00, "2026-01-01 00:00:00.000")
+	seed(ctx, t, conn, org, repo, keyE, 4773, "unknown", 0.10, "1900-01-01 00:00:00.000")
+
+	seed(ctx, t, conn, org, repo, keyF, 4774, "heuristic", 0.50, "2026-01-04 00:00:00.500")
+	seed(ctx, t, conn, org, repo, keyF, 4774, "heuristic", 0.50, "2026-01-04 00:00:00.000")
+
+	seed(ctx, t, conn, org, repo, keyG, 4775, "native", 1.00, "2026-01-01 00:00:00.000")
+	seed(ctx, t, conn, org, repo, keyG, 4775, "heuristic", 0.50, "9999-12-31 23:59:59.999")
+	seed(ctx, t, conn, org, repo, keyH, 4776, "native", 1.00, "1900-01-01 00:00:00.000")
+	seed(ctx, t, conn, org, repo, keyH, 4776, "heuristic", 0.50, "2026-01-01 00:00:00.000")
+
+	if got := countRows(ctx, t, conn); got != 8 {
+		t.Fatalf("seeded %d rows, want 8: the fixture is broken before the merge", got)
+	}
+	mustExec(ctx, t, conn, "SYSTEM START MERGES work_graph_issue_pr")
+	mustExec(ctx, t, conn, "OPTIMIZE TABLE work_graph_issue_pr FINAL")
+
+	for _, c := range []struct{ key, want, why string }{
+		{keyE, "native", "an unknown provenance with a pre-epoch stamp must not wrap and win"},
+		{keyF, "heuristic", "the later MILLISECOND must win among equal provenance"},
+		{keyG, "native", "rank must beat DateTime64(3)'s MAXIMUM representable stamp"},
+		{keyH, "native", "rank must hold at DateTime64(3)'s MINIMUM representable stamp"},
+	} {
+		t.Run(c.why, func(t *testing.T) { assertOnlyProvenance(ctx, t, conn, c.key, c.want) })
+	}
+	// Full precision, not truncated to seconds: what fails under a toUnixTimestamp version.
+	assertLastSynced(ctx, t, conn, keyF, "2026-01-04 00:00:00.500")
+
+	var keys uint64
+	if err := conn.QueryRow(ctx, "SELECT uniqExact(work_item_id) FROM work_graph_issue_pr").Scan(&keys); err != nil {
+		t.Fatalf("count distinct keys: %v", err)
+	}
+	if keys != 4 {
+		t.Errorf("%d distinct keys survived the merge, want 4", keys)
+	}
+}
+
+func countRows(ctx context.Context, t *testing.T, conn driver.Conn) uint64 {
+	t.Helper()
+	var n uint64
+	if err := conn.QueryRow(ctx, "SELECT count() FROM work_graph_issue_pr").Scan(&n); err != nil {
+		t.Fatalf("count rows: %v", err)
+	}
+	return n
+}
+
+func assertLastSynced(ctx context.Context, t *testing.T, conn driver.Conn, workItem, want string) {
+	t.Helper()
+	var got string
+	if err := conn.QueryRow(ctx,
+		"SELECT toString(last_synced) FROM work_graph_issue_pr WHERE work_item_id = ? LIMIT 1",
+		workItem).Scan(&got); err != nil {
+		t.Fatalf("read last_synced for %s: %v", workItem, err)
+	}
+	if got != want {
+		t.Errorf("%s: last_synced = %q, want %q (full millisecond precision)", workItem, got, want)
+	}
+}

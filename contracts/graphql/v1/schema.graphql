@@ -1021,6 +1021,19 @@ type ImproveOpportunity {
   severity: String!
   evidenceRefs: [String!]!
   recommendedAction: String!
+  """
+  The measured metric the rule compared, in `unit`. The same number the rationale states.
+  """
+  value: Float!
+  """
+  The rule's limit, in `unit`. A fixed constant of the detector, not a per-organization setting.
+  """
+  threshold: Float!
+  unit: ImproveOpportunityUnit!
+  """
+  Which side of the threshold fires the rule: ABOVE (value > threshold) or BELOW (value < threshold).
+  """
+  thresholdDirection: ThresholdDirection!
 }
 
 enum ImproveOpportunityKind {
@@ -1031,6 +1044,12 @@ enum ImproveOpportunityKind {
   LOW_THROUGHPUT
   HIGH_CHURN
   HIGH_CHANGE_FAILURE
+}
+
+enum ImproveOpportunityUnit {
+  HOURS
+  RATIO
+  ITEMS
 }
 
 """
@@ -1795,6 +1814,11 @@ type TestOpsRiskSparkPoint {
 type TestOpsRiskTrendPoint {
   date: Date!
   riskScore: Float!
+}
+
+enum ThresholdDirection {
+  ABOVE
+  BELOW
 }
 
 type ThroughputEstimateCoverage {

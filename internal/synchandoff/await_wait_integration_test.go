@@ -4,6 +4,8 @@ package synchandoff
 
 import (
 	"context"
+	"reflect"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -99,12 +101,15 @@ VALUES ($1, 1, 'org-1', $2::uuid, $3::uuid, now(), now(), $4::text, NULLIF($5::t
 		}
 		afterOutcome, afterLatency := awaitCounts(t)
 		for _, label := range awaitOutcomeNames {
-			wantMoved := label == c.wantLabel
-			if moved := afterOutcome[label] != beforeOutcome[label]; moved != wantMoved {
-				t.Errorf("%s: outcome counter %q moved=%v (%q -> %q), want moved=%v", c.occurrence, label, moved, beforeOutcome[label], afterOutcome[label], wantMoved)
+			want := 0
+			if label == c.wantLabel {
+				want = 1
 			}
-			if moved := afterLatency[label] != beforeLatency[label]; moved != wantMoved {
-				t.Errorf("%s: latency count %q moved=%v (%q -> %q), want moved=%v", c.occurrence, label, moved, beforeLatency[label], afterLatency[label], wantMoved)
+			if got := awaitDelta(t, beforeOutcome[label], afterOutcome[label]); got != want {
+				t.Errorf("%s: outcome counter %q moved by %d (%q -> %q), want %d", c.occurrence, label, got, beforeOutcome[label], afterOutcome[label], want)
+			}
+			if got := awaitDelta(t, beforeLatency[label], afterLatency[label]); got != want {
+				t.Errorf("%s: latency count %q moved by %d (%q -> %q), want %d", c.occurrence, label, got, beforeLatency[label], afterLatency[label], want)
 			}
 		}
 		if afterOutcome[c.wantLabel] != afterLatency[c.wantLabel] {
@@ -113,13 +118,30 @@ VALUES ($1, 1, 'org-1', $2::uuid, $3::uuid, now(), now(), $4::text, NULLIF($5::t
 	}
 
 	// An error return records nothing (Python records none on its error paths either).
-	beforeOutcome, _ := awaitCounts(t)
+	beforeOutcome, beforeLatency := awaitCounts(t)
 	cancelled, stop := context.WithCancel(ctx)
 	stop()
 	if _, err := Wait(cancelled, pool, "occ-pending", time.Minute, time.Minute); err == nil {
 		t.Fatal("a cancelled Wait returned no error")
 	}
-	if afterOutcome, _ := awaitCounts(t); afterOutcome["pending"] != beforeOutcome["pending"] {
-		t.Errorf("an error return moved the pending counter: %q -> %q", beforeOutcome["pending"], afterOutcome["pending"])
+	afterOutcome, afterLatency := awaitCounts(t)
+	if !reflect.DeepEqual(afterOutcome, beforeOutcome) || !reflect.DeepEqual(afterLatency, beforeLatency) {
+		t.Errorf("an error return moved a counter: outcome %v -> %v, latency %v -> %v", beforeOutcome, afterOutcome, beforeLatency, afterLatency)
 	}
+}
+
+// awaitDelta is after - before of one exposition value ("" = the series does not exist yet = 0).
+func awaitDelta(t *testing.T, before, after string) int {
+	t.Helper()
+	parse := func(text string) int {
+		if text == "" {
+			return 0
+		}
+		n, err := strconv.Atoi(text)
+		if err != nil {
+			t.Fatalf("exposition value %q: %v", text, err)
+		}
+		return n
+	}
+	return parse(after) - parse(before)
 }

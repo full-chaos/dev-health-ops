@@ -43,4 +43,9 @@ for node in ast.walk(tree):
     if isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute) and node.func.attr == "labels":
         for keyword in node.keywords:
             used.add(keyword.arg)
+            if keyword.arg == "outcome":
+                if isinstance(keyword.value, ast.Constant):
+                    outcomes.add(keyword.value.value)  # a value written with no _record call
+                else:
+                    assert isinstance(keyword.value, ast.Name) and keyword.value.id == "outcome", ast.dump(keyword.value)
 print(json.dumps({"families": families, "record_outcomes": sorted(outcomes), "label_keywords_used": sorted(used)}, sort_keys=True))

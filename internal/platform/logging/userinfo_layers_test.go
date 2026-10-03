@@ -121,22 +121,29 @@ func TestBenignTextWithAnAtSignOrAColonIsUnchangedInEveryLayer(t *testing.T) {
 		"the query user=ops@example.test page=2 ended",
 		"started at 12:30:45 on db.internal:5432 ok",
 		"image registry.example.test:5000/repo@sha256:0123456789abcdef pulled",
-		"clone git@github.com:org/repo.git now",
 		"image registry.example.test:5000/repo@sha384:0123456789abcdef pulled",
 		"image registry.example.test:5000/repo@sha512:0123456789abcdef pulled",
+		"clone git@github.com:org/repo.git now",
+		"GET /files/a%40b.txt failed",
+		"query mail=ops%40example.test page=2 ended",
 		"module example.test/x/y@v1.2.3 loaded",
 		"retry at 12:30:45, mail ops@example.test",
 		"GET /api/v1/users/@me?since=12:30 failed",
 	} {
 		for _, layer := range userinfoLayers {
+			want := text
+			if layer.name == "RedactText" || layer.name == "log line" {
+				// RedactText has always read a percent-encoded text decoded; that is not a redaction.
+				want = strings.ReplaceAll(text, "%40", "@")
+			}
 			got := layer.redact(text)
 			if layer.name == "log line" {
-				if !strings.Contains(got, text) {
+				if !strings.Contains(got, want) {
 					t.Errorf("%s changed %q: %.300s", layer.name, text, got)
 				}
 				continue
 			}
-			if got != text {
+			if got != want {
 				t.Errorf("%s changed %q to %q", layer.name, text, got)
 			}
 		}
@@ -234,6 +241,19 @@ func TestDoublyEncodedAtSignInTheUserinfoIsHiddenInTheLogPath(t *testing.T) {
 			if strings.Contains(got, "Hx7Tk2Pw6") || !strings.Contains(got, "cache.internal") {
 				t.Errorf("%s: %q -> %.300s", layer.name, text, got)
 			}
+		}
+	}
+}
+
+// NAMED LIMIT: a doubly encoded `@` (`%2540`) is seen only by the pass after
+// RedactText's percent decode. The persisted-column layers do not decode, so the
+// userinfo stays whole there; the rows pin that measured state per layer (the
+// shared-entry ticket carries it).
+func TestDoublyEncodedAtSignStaysWholeInThePersistedLayers(t *testing.T) {
+	const text = "dial svc_user:Hx7Tk2Pw62%2540cache.internal now"
+	for _, layer := range userinfoLayers[2:] {
+		if got := layer.redact(text); !strings.Contains(got, "Hx7Tk2Pw62") {
+			t.Errorf("%s now hides a doubly encoded userinfo: the named limit changed (update the pin and the shared-entry ticket): %.300s", layer.name, got)
 		}
 	}
 }

@@ -113,3 +113,8 @@ key-true-token	true_token	r:alnum:32:104	hit
 key-alphabet-run-token	abcdefghijklmnopqrstuvwxyz_token	r:alnum:32:105	hit
 long-s-in-secret-segments	token	r:alnum:8:106+ſ+r:alnum:8:107+ſ+r:alnum:8:108+ſ+r:alnum:8:109	hit
 kelvin-in-secret-segments	token	r:alnum:8:110+K+r:alnum:8:111+K+r:alnum:8:112+K+r:alnum:8:113	hit
+long-second-form-escaped-newline-400	api_key	r:alnum:400:201+\n	hit
+long-second-form-escaped-cr-400	api_key	r:alnum:400:202+\r	hit
+long-second-form-escaped-newline-200	api_key	r:alnum:200:203+\n	hit
+long-second-form-escaped-newline-60	api_key	r:alnum:60:204+\n	hit
+long-second-form-escaped-tab-400	api_key	r:alnum:400:205+\t	none

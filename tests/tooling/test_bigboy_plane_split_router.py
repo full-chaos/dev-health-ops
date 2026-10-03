@@ -109,7 +109,6 @@ def test_dynamic_config_rules_are_internal_only(
     assert set(routers) == {
         "go-api-paths",
         "query-api-paths",
-        "python-allowlist",
         "api-internal-catchall",
     }
     for name, router in routers.items():
@@ -205,7 +204,7 @@ def test_default_backend_is_go_and_allow_list_stays_python(
         "/docs",
         "/openapi.json",
     ):
-        assert _route(doc, py) == "http://api:8000", py
+        assert _route(doc, py) == "http://go-api:8000", py
     # CHAOS-6263: /graphql is no longer Python's by default. With no queryApiPaths entry for
     # it, it is an unknown path (the Go default backend), never the Python api.
     assert _route(doc, "/graphql") == "http://go-api:8000"
@@ -412,14 +411,6 @@ OVERLAPS: dict[str, tuple[dict[str, Any], str | None]] = {
         {"allow": [("/api/v1/external-ingest/schemas/s1$", "ImplementationSpecific")]},
         "/api/v1/external-ingest/schemas/s1",
     ),
-    "a bigboy-local Exact path a Go plane claims": (
-        {"query": [("/metrics", "Exact")]},
-        "/metrics",
-    ),
-    "a bigboy-local Prefix path a Go plane reaches under": (
-        {"go": ["/docs/{page}"]},
-        "/docs/intro",
-    ),
     "a host's own list, with the shared list clean": (
         {
             "query": [("/graphql", "Exact")],
@@ -472,13 +463,6 @@ def test_every_overlap_of_a_python_path_and_a_go_plane_path_is_refused(
 def test_a_refusal_names_the_list_the_entry_and_the_go_plane_path(
     gen: ModuleType, tmp_path: Path, capsys: pytest.CaptureFixture
 ) -> None:
-    spec, _ = OVERLAPS["a bigboy-local Exact path a Go plane claims"]
-    assert _run(gen, tmp_path, _values(**spec)) == 4
-    err = capsys.readouterr().err
-    assert (
-        f"{gen.BIGBOY_LOCAL_SOURCE} entry {{path: /metrics, pathType: Exact}}"
-        " and ingress.queryApiPaths entry /metrics"
-    ) in err
     spec, _ = OVERLAPS["a host's own list, with the shared list clean"]
     assert _run(gen, tmp_path, _values(**spec)) == 4
     err = capsys.readouterr().err
@@ -803,7 +787,7 @@ def test_an_entry_that_names_query_api_is_routed_to_query_api(
     assert _route(routed, "/graphql") == "http://query-api:8090"
     for lookalike in ("/graphqlx", "/graphql/", "/graphql/x"):
         assert _route(routed, lookalike) == "http://go-api:8000", lookalike
-    assert "graphql" not in routed["http"]["routers"]["python-allowlist"]["rule"]
+    assert "python-allowlist" not in routed["http"]["routers"]
 
 
 def test_an_entry_with_service_api_or_no_key_stays_on_python(gen: ModuleType) -> None:

@@ -7,7 +7,6 @@ import (
 	"math"
 	"os"
 	"path/filepath"
-	"runtime"
 	"strings"
 	"testing"
 	"time"
@@ -20,6 +19,7 @@ import (
 	clickhousestore "github.com/full-chaos/dev-health-ops/internal/storage/clickhouse"
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/chschema"
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/containers"
+	"github.com/full-chaos/dev-health-ops/internal/testsupport/moduleroot"
 )
 
 // fullScanBlameMapQuery is the blame reader as it was before
@@ -197,7 +197,7 @@ func countRows(ctx context.Context, t *testing.T, conn driver.Conn, query string
 // splits a .sql file: line comments removed, then split on ';'.
 func ownershipMigrationStatements(t *testing.T) []string {
 	t.Helper()
-	_, file, _, ok := runtime.Caller(0)
+	_, file, _, ok := moduleroot.Caller(0)
 	if !ok {
 		t.Fatal("cannot locate this test file")
 	}

@@ -268,16 +268,31 @@ type got struct {
 	typ     string
 	numbers map[string]float64 // labels -> value
 	hists   map[string]*metricpb.HistogramDataPoint
+	// numberPoints and histPoints are the most points ONE export delivered for a
+	// label set (counted per export and scope: a push is flushed and then shut
+	// down, so the same series legitimately arrives once per export). The maps
+	// above keep one value per label set, so two identical points for one series
+	// in one export (a duplicate delivery) would otherwise collapse and pass compare.
+	numberPoints map[string]int
+	histPoints   map[string]int
 }
 
 func collect(resources []*metricpb.ResourceMetrics) map[string]*got {
 	out := map[string]*got{}
 	for _, resource := range resources {
 		for _, scope := range resource.GetScopeMetrics() {
+			inScope := map[string]int{}
+			note := func(points map[string]int, name, labels string) {
+				key := name + "\x00" + labels
+				inScope[key]++
+				if inScope[key] > points[labels] {
+					points[labels] = inScope[key]
+				}
+			}
 			for _, metric := range scope.GetMetrics() {
 				g := out[metric.GetName()]
 				if g == nil {
-					g = &got{numbers: map[string]float64{}, hists: map[string]*metricpb.HistogramDataPoint{}}
+					g = &got{numbers: map[string]float64{}, hists: map[string]*metricpb.HistogramDataPoint{}, numberPoints: map[string]int{}, histPoints: map[string]int{}}
 					out[metric.GetName()] = g
 				}
 				switch data := metric.GetData().(type) {
@@ -288,16 +303,19 @@ func collect(resources []*metricpb.ResourceMetrics) map[string]*got {
 					}
 					for _, p := range data.Sum.GetDataPoints() {
 						g.numbers[attrsCanonical(p.GetAttributes())] = numberValue(p)
+						note(g.numberPoints, metric.GetName(), attrsCanonical(p.GetAttributes()))
 					}
 				case *metricpb.Metric_Gauge:
 					g.typ = "gauge"
 					for _, p := range data.Gauge.GetDataPoints() {
 						g.numbers[attrsCanonical(p.GetAttributes())] = numberValue(p)
+						note(g.numberPoints, metric.GetName(), attrsCanonical(p.GetAttributes()))
 					}
 				case *metricpb.Metric_Histogram:
 					g.typ = "histogram"
 					for _, p := range data.Histogram.GetDataPoints() {
 						g.hists[attrsCanonical(p.GetAttributes())] = p
+						note(g.histPoints, metric.GetName(), attrsCanonical(p.GetAttributes()))
 					}
 				}
 			}
@@ -314,13 +332,26 @@ func floatsEqual(a, b float64) bool {
 	if math.IsNaN(a) && math.IsNaN(b) {
 		return true
 	}
+	if math.IsInf(a, 0) || math.IsInf(b, 0) {
+		// For an infinity both |a-b| and the tolerance are +Inf, so the relative
+		// test below would call +Inf equal to ANY finite value: infinities are
+		// equal only to the same infinity.
+		return a == b
+	}
 	return a == b || math.Abs(a-b) <= 1e-9*math.Max(math.Abs(a), math.Abs(b))
+}
+
+// errorReporter is what compare needs of a test: a *testing.T in the suite, a
+// recorder in the oracle's own tests (which must see compare FAIL).
+type errorReporter interface {
+	Helper()
+	Errorf(format string, args ...any)
 }
 
 // compare fails the test for every family the OTLP side lost, renamed, retyped,
 // or changed, and returns how many families and series it compared. Zero is a
 // failure in the callers: a comparison of nothing proves nothing.
-func compare(t *testing.T, label string, want map[string]*family, resources []*metricpb.ResourceMetrics) (families, seriesCount int) {
+func compare(t errorReporter, label string, want map[string]*family, resources []*metricpb.ResourceMetrics) (families, seriesCount int) {
 	t.Helper()
 	received := collect(resources)
 	names := make([]string, 0, len(want))
@@ -343,6 +374,11 @@ func compare(t *testing.T, label string, want map[string]*family, resources []*m
 		case "counter", "gauge":
 			if g.typ != f.typ {
 				t.Errorf("%s: family %s is %s in the scrape and %s over OTLP", label, name, f.typ, g.typ)
+			}
+			for labels, points := range g.numberPoints {
+				if points > 1 {
+					t.Errorf("%s: family %s{%s} was delivered %d times over OTLP in one push (a duplicate delivery)", label, name, labels, points)
+				}
 			}
 			samples := f.series[name]
 			if len(samples) != len(g.numbers) {
@@ -373,6 +409,11 @@ func compare(t *testing.T, label string, want map[string]*family, resources []*m
 			buckets := map[string][]series{}
 			for _, s := range f.series[name+"_bucket"] {
 				buckets[s.labels] = append(buckets[s.labels], s)
+			}
+			for labels, points := range g.histPoints {
+				if points > 1 {
+					t.Errorf("%s: histogram %s{%s} was delivered %d times over OTLP in one push (a duplicate delivery)", label, name, labels, points)
+				}
 			}
 			if len(buckets) != len(g.hists) {
 				t.Errorf("%s: histogram %s has %d series in the scrape and %d over OTLP", label, name, len(buckets), len(g.hists))

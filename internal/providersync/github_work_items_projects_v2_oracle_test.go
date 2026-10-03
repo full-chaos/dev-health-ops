@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"github.com/full-chaos/dev-health-ops/internal/testsupport/fakehttp"
 	"strconv"
 	"testing"
 	"time"
@@ -237,7 +238,7 @@ func TestGitHubProjectV2PaginationMatchesFrozenPythonProducer(t *testing.T) {
 				`{"data":{"organization":{"projectV2":{"items":{"nodes":[{"id":"PVTI_2","content":{"__typename":"DraftIssue","title":"two"},"fieldValues":{"nodes":[]},"changes":{"nodes":[],"pageInfo":{"hasNextPage":false,"endCursor":null}}}],"pageInfo":{"hasNextPage":false,"endCursor":null}}}}}}`,
 			}}
 			evidence := FetchEvidence{}
-			items, err := fetchGitHubProjectV2Target(context.Background(), githubProjectV2TestClient(t, doer), GitHubProjectV2Target{OrgLogin: "acme", ProjectNumber: 3}, &evidence)
+			items, err := fetchGitHubProjectV2Target(context.Background(), githubProjectV2TestClient(t, fakehttp.Client(doer)), GitHubProjectV2Target{OrgLogin: "acme", ProjectNumber: 3}, &evidence)
 			if err != nil {
 				t.Fatal(err)
 			}

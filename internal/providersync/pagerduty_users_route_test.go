@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"github.com/full-chaos/dev-health-ops/internal/testsupport/fakehttp"
 	"io"
 	"net/http"
 	"strings"
@@ -51,7 +52,7 @@ func TestPagerDutyUsersRouteUsesOffsetPaginationAndCanonicalRow(t *testing.T) {
 			{"id":"PU2","type":"user","summary":"Bob","created_at":"2026-07-31T09:00:00Z","self":"/users/PU2"}],"more":true}`},
 		{body: `{"users":[{"id":"PU3","type":"user"}],"more":false}`},
 	}}
-	client := pagerDutyUsersTestClient(t, doer, providerfoundation.RetryPolicy{
+	client := pagerDutyUsersTestClient(t, fakehttp.Client(doer), providerfoundation.RetryPolicy{
 		MaxAttempts: 1, InitialWait: time.Nanosecond, MaxWait: time.Nanosecond,
 	})
 	claim := nativeTestClaim("pagerduty", "users")
@@ -109,7 +110,7 @@ func TestPagerDutyUsersRoutePreservesRetryAndPermanentErrorSemantics(t *testing.
 		{status: http.StatusTooManyRequests, headers: http.Header{"Retry-After": {"0"}}, body: `{"message":"slow down"}`},
 		{body: `{"users":[],"more":false}`},
 	}}
-	retryClient := pagerDutyUsersTestClient(t, clientRetryDoer, providerfoundation.RetryPolicy{
+	retryClient := pagerDutyUsersTestClient(t, fakehttp.Client(clientRetryDoer), providerfoundation.RetryPolicy{
 		MaxAttempts: 2, InitialWait: time.Nanosecond, MaxWait: time.Nanosecond,
 	})
 	batch, err := (PagerDutyUsersRouteHandler{Entitlement: allowIncidentEntitlement}).Collect(
@@ -122,7 +123,7 @@ func TestPagerDutyUsersRoutePreservesRetryAndPermanentErrorSemantics(t *testing.
 	authDoer := &pagerDutyUsersDoer{t: t, responses: []pagerDutyUsersResponse{
 		{status: http.StatusUnauthorized, body: `{"message":"bad token"}`},
 	}}
-	authClient := pagerDutyUsersTestClient(t, authDoer, providerfoundation.RetryPolicy{
+	authClient := pagerDutyUsersTestClient(t, fakehttp.Client(authDoer), providerfoundation.RetryPolicy{
 		MaxAttempts: 3, InitialWait: time.Nanosecond, MaxWait: time.Nanosecond,
 	})
 	_, err = (PagerDutyUsersRouteHandler{Entitlement: allowIncidentEntitlement}).Collect(
@@ -138,10 +139,10 @@ func TestPagerDutyUsersRoutePreservesRetryAndPermanentErrorSemantics(t *testing.
 func TestPagerDutyUsersRouteFailsClosedOnPaginationCapAndMissingInstance(t *testing.T) {
 	t.Parallel()
 	claim := nativeTestClaim("pagerduty", "users")
-	client := pagerDutyUsersTestClient(t, &pagerDutyUsersDoer{
+	client := pagerDutyUsersTestClient(t, fakehttp.Client(&pagerDutyUsersDoer{
 		t: t, responses: []pagerDutyUsersResponse{{
 			body: `{"users":[{"id":"one"}],"more":true}`,
-		}}}, providerfoundation.RetryPolicy{MaxAttempts: 1, InitialWait: time.Nanosecond, MaxWait: time.Nanosecond})
+		}}}), providerfoundation.RetryPolicy{MaxAttempts: 1, InitialWait: time.Nanosecond, MaxWait: time.Nanosecond})
 	credential := providerfoundation.Credential{Provider: "pagerduty", Config: map[string]string{"subdomain": "acme"}}
 	_, err := (PagerDutyUsersRouteHandler{Entitlement: allowIncidentEntitlement, MaxPages: 1}).Collect(
 		context.Background(), claim, credential, client, time.Date(2026, 8, 9, 12, 0, 0, 0, time.UTC),
@@ -161,9 +162,9 @@ func TestPagerDutyUsersRouteFailsClosedOnPaginationCapAndMissingInstance(t *test
 func TestPagerDutyUsersRouteRejectsAnotherPagerDutyDataset(t *testing.T) {
 	t.Parallel()
 	claim := nativeTestClaim("pagerduty", "teams")
-	client := pagerDutyUsersTestClient(t, &pagerDutyUsersDoer{
+	client := pagerDutyUsersTestClient(t, fakehttp.Client(&pagerDutyUsersDoer{
 		t: t, responses: []pagerDutyUsersResponse{{body: `{"users":[],"more":false}`}},
-	}, providerfoundation.RetryPolicy{MaxAttempts: 1, InitialWait: time.Nanosecond, MaxWait: time.Nanosecond})
+	}), providerfoundation.RetryPolicy{MaxAttempts: 1, InitialWait: time.Nanosecond, MaxWait: time.Nanosecond})
 	_, err := (PagerDutyUsersRouteHandler{Entitlement: allowIncidentEntitlement}).Collect(
 		context.Background(), claim,
 		providerfoundation.Credential{Provider: "pagerduty", Config: map[string]string{"subdomain": "acme"}},
@@ -183,7 +184,7 @@ func TestPagerDutyUsersRouteStopsWhenLeaseExpiresBetweenPages(t *testing.T) {
 	}}
 	asserts := 0
 	client, err := providerfoundation.NewHTTPClient(
-		"pagerduty", "https://api.pagerduty.com", doer,
+		"pagerduty", "https://api.pagerduty.com", fakehttp.Client(doer),
 		func(*http.Request) error { return nil },
 		providerfoundation.RetryPolicy{MaxAttempts: 1, InitialWait: time.Nanosecond, MaxWait: time.Nanosecond},
 		providerfoundation.LeaseGuardFunc(func(context.Context) error {
@@ -212,7 +213,7 @@ func pagerDutyUsersTestClient(
 ) *providerfoundation.HTTPClient {
 	t.Helper()
 	client, err := providerfoundation.NewHTTPClient(
-		"pagerduty", "https://api.pagerduty.com", doer,
+		"pagerduty", "https://api.pagerduty.com", fakehttp.Client(doer),
 		func(*http.Request) error { return nil }, retry,
 		providerfoundation.LeaseGuardFunc(func(context.Context) error { return nil }),
 	)

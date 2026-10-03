@@ -6,6 +6,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"github.com/full-chaos/dev-health-ops/internal/testsupport/fakehttp"
 	"testing"
 	"time"
 
@@ -315,7 +316,7 @@ func TestGitHubWorkItemPreparedSnapshotRecoversAcrossPostgresAndClickHouse(t *te
 	doer := &trackingCompleteRouteDoer{}
 	executor.Credentials.Repository = credentials
 	executor.Credentials.Decryptor = decryptor
-	executor.Doer = doer
+	executor.Doer = fakehttp.Client(doer)
 	executor.Committer.Readback = recoveredSink
 	result, err := executor.Execute(ctx, session, descriptor)
 	if err != nil {

@@ -196,27 +196,6 @@ func TestClosedEnvInheritsNothingAndCarriesTheExtras(t *testing.T) {
 	}
 }
 
-// The recorders of the goldens that were hand-recorded with the whole shell environment run Python
-// through ClosedEnv and never inherit it: a closed list of the test files, each of which must call
-// ClosedEnv and must not call os.Environ().
-func TestTheClosedEnvironmentRecordersDoNotInheritTheEnvironment(t *testing.T) {
-	for _, file := range []string{
-		"../../operationalbackfill/backfill_integration_test.go",
-	} {
-		raw, err := os.ReadFile(file)
-		if err != nil {
-			t.Fatal(err)
-		}
-		text := string(raw)
-		if strings.Contains(text, "os.Environ()") {
-			t.Errorf("%s inherits the environment (os.Environ()): a recording must run in pyoracle.ClosedEnv", file)
-		}
-		if !strings.Contains(text, "pyoracle.ClosedEnv(") {
-			t.Errorf("%s does not run Python through pyoracle.ClosedEnv", file)
-		}
-	}
-}
-
 // refusingInterpreter is a stand-in interpreter that behaves like the real one
 // under a recording test's guard: with PYTHONHOME set it cannot start (it says
 // why on standard error and exits 1); otherwise it writes the environment it
@@ -309,7 +288,7 @@ func TestInARecordingATestOutsideTheClosedListIsGivenAnInterpreterThatRefuses(t 
 		t.Fatalf("the launcher was given %s, want the real interpreter", got)
 	}
 
-	t.Chdir(filepath.Join(repoRootOf(t), "internal", "pgmigrate"))
+	t.Chdir(filepath.Join(repoRootOf(t), "internal", "providersync"))
 	if got := Resolve(t, root); got != real {
 		t.Fatalf("a package on the closed list was given %s in a recording, want the real interpreter", got)
 	}
@@ -375,7 +354,6 @@ var unconvertedDayOne = map[string]bool{
 	"internal/maintenancecli":          true,
 	"internal/metricscli":              true,
 	"internal/operationalbackfill":     true,
-	"internal/pgmigrate":               true,
 	"internal/providersync":            true,
 	"internal/pushcli":                 true,
 }
@@ -426,7 +404,7 @@ func TestInterpreterRefusesInARecordingOutsideTheClosedList(t *testing.T) {
 	if _, _, err := Interpreter(root); err == nil {
 		t.Fatal("Interpreter gave the interpreter to a package under a listed one")
 	}
-	t.Chdir(filepath.Join(repoRootOf(t), "internal", "pgmigrate"))
+	t.Chdir(filepath.Join(repoRootOf(t), "internal", "providersync"))
 	if path, _, err := Interpreter(root); err != nil || path != real {
 		t.Fatalf("a package on the closed list: %s, %v", path, err)
 	}
@@ -445,17 +423,13 @@ func TestInterpreterRefusesInARecordingOutsideTheClosedList(t *testing.T) {
 // (or start it by that name) are a frozen set: a new file that does is RED until it goes through the
 // producer's launcher. The exceptions below never record a golden (CHAOS-7820).
 var lookPathPythonDayOne = map[string]bool{
-	"internal/testsupport/pyoracle/pyoracle.go":             true, // the resolver itself
-	"internal/testsupport/venueoracle/venueoracle.go":       true, // the launcher's PATH check
-	"internal/apiservice/admin/orgdeletion_targets_test.go": true,
-	"internal/pgmigrate/preflight_test.go":                  true,
+	"internal/testsupport/pyoracle/pyoracle.go":       true, // the resolver itself
+	"internal/testsupport/venueoracle/venueoracle.go": true, // the launcher's PATH check
 	// Launches by the name "python3" (the venue puts the interpreter's
 	// directory first on PATH): started with the process environment, a
 	// recording's poison (PYTHONHOME) stops these, so none records today.
-	"internal/testsupport/programoracle/programoracle.go":                              true,
-	"internal/queryapi/people/summaryvenue/summary_venue_oracle_integration_test.go":   true,
-	"internal/apiservice/metricsvenue/counter_parity_venue_oracle_integration_test.go": true,
-	"internal/testsupport/venueoracle/producer.go":                                     true,
+	"internal/testsupport/programoracle/programoracle.go": true,
+	"internal/testsupport/venueoracle/producer.go":        true,
 }
 
 func TestNoNewFileLooksPythonUpByName(t *testing.T) {

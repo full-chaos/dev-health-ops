@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"github.com/full-chaos/dev-health-ops/internal/testsupport/fakehttp"
 	"io"
 	"net/http"
 	"strings"
@@ -51,7 +52,7 @@ func TestPagerDutyTeamsRouteUsesOffsetPaginationAndCanonicalRow(t *testing.T) {
 			{"id":"PT2","type":"team","summary":"Support","created_at":"2026-07-31T09:00:00Z","self":"/teams/PT2"}],"more":true}`},
 		{body: `{"teams":[{"id":"PT3","type":"team"}],"more":false}`},
 	}}
-	client := pagerDutyTeamsTestClient(t, doer, providerfoundation.RetryPolicy{
+	client := pagerDutyTeamsTestClient(t, fakehttp.Client(doer), providerfoundation.RetryPolicy{
 		MaxAttempts: 1, InitialWait: time.Nanosecond, MaxWait: time.Nanosecond,
 	})
 	claim := nativeTestClaim("pagerduty", "teams")
@@ -109,7 +110,7 @@ func TestPagerDutyTeamsRoutePreservesRetryAndPermanentErrorSemantics(t *testing.
 		{status: http.StatusTooManyRequests, body: `{"message":"slow down"}`},
 		{body: `{"teams":[],"more":false}`},
 	}}
-	retryClient := pagerDutyTeamsTestClient(t, clientRetryDoer, providerfoundation.RetryPolicy{
+	retryClient := pagerDutyTeamsTestClient(t, fakehttp.Client(clientRetryDoer), providerfoundation.RetryPolicy{
 		MaxAttempts: 2, InitialWait: time.Nanosecond, MaxWait: time.Nanosecond,
 	})
 	batch, err := (PagerDutyTeamsRouteHandler{Entitlement: allowIncidentEntitlement}).Collect(
@@ -122,7 +123,7 @@ func TestPagerDutyTeamsRoutePreservesRetryAndPermanentErrorSemantics(t *testing.
 	authDoer := &pagerDutyTeamsDoer{t: t, responses: []pagerDutyTeamsResponse{
 		{status: http.StatusUnauthorized, body: `{"message":"bad token"}`},
 	}}
-	authClient := pagerDutyTeamsTestClient(t, authDoer, providerfoundation.RetryPolicy{
+	authClient := pagerDutyTeamsTestClient(t, fakehttp.Client(authDoer), providerfoundation.RetryPolicy{
 		MaxAttempts: 3, InitialWait: time.Nanosecond, MaxWait: time.Nanosecond,
 	})
 	_, err = (PagerDutyTeamsRouteHandler{Entitlement: allowIncidentEntitlement}).Collect(
@@ -145,7 +146,7 @@ func TestPagerDutyTeamsRouteClassifiesUnavailableAccountAbility(t *testing.T) {
 		status: http.StatusPaymentRequired,
 		body:   `{"error":{"code":2014,"message":"Required abilities are unavailable"}}`,
 	}}}
-	client := pagerDutyTeamsTestClient(t, doer, providerfoundation.RetryPolicy{
+	client := pagerDutyTeamsTestClient(t, fakehttp.Client(doer), providerfoundation.RetryPolicy{
 		MaxAttempts: 3, InitialWait: time.Nanosecond, MaxWait: time.Nanosecond,
 	})
 
@@ -161,9 +162,9 @@ func TestPagerDutyTeamsRouteClassifiesUnavailableAccountAbility(t *testing.T) {
 func TestPagerDutyTeamsRouteFailsClosedOnPaginationCapAndWrongDataset(t *testing.T) {
 	t.Parallel()
 	claim := nativeTestClaim("pagerduty", "teams")
-	client := pagerDutyTeamsTestClient(t, &pagerDutyTeamsDoer{
+	client := pagerDutyTeamsTestClient(t, fakehttp.Client(&pagerDutyTeamsDoer{
 		t: t, responses: []pagerDutyTeamsResponse{{body: `{"teams":[{"id":"one"}],"more":true}`}},
-	}, providerfoundation.RetryPolicy{MaxAttempts: 1, InitialWait: time.Nanosecond, MaxWait: time.Nanosecond})
+	}), providerfoundation.RetryPolicy{MaxAttempts: 1, InitialWait: time.Nanosecond, MaxWait: time.Nanosecond})
 	credential := providerfoundation.Credential{Provider: "pagerduty", Config: map[string]string{"subdomain": "acme"}}
 	_, err := (PagerDutyTeamsRouteHandler{Entitlement: allowIncidentEntitlement, MaxPages: 1}).Collect(
 		context.Background(), claim, credential, client, time.Date(2026, 8, 9, 12, 0, 0, 0, time.UTC),
@@ -189,7 +190,7 @@ func TestPagerDutyTeamsRouteStopsWhenLeaseExpiresBetweenPages(t *testing.T) {
 	}}
 	asserts := 0
 	client, err := providerfoundation.NewHTTPClient(
-		"pagerduty", "https://api.pagerduty.com", doer,
+		"pagerduty", "https://api.pagerduty.com", fakehttp.Client(doer),
 		func(*http.Request) error { return nil },
 		providerfoundation.RetryPolicy{MaxAttempts: 1, InitialWait: time.Nanosecond, MaxWait: time.Nanosecond},
 		providerfoundation.LeaseGuardFunc(func(context.Context) error {
@@ -218,7 +219,7 @@ func pagerDutyTeamsTestClient(
 ) *providerfoundation.HTTPClient {
 	t.Helper()
 	client, err := providerfoundation.NewHTTPClient(
-		"pagerduty", "https://api.pagerduty.com", doer,
+		"pagerduty", "https://api.pagerduty.com", fakehttp.Client(doer),
 		func(*http.Request) error { return nil }, retry,
 		providerfoundation.LeaseGuardFunc(func(context.Context) error { return nil }),
 	)

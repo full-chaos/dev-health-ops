@@ -38,3 +38,24 @@ func TestReasonOf(t *testing.T) {
 		t.Fatalf("garbage token reason %q", ReasonOf(err))
 	}
 }
+
+// A token whose header and payload decode but whose signature is not base64
+// is rejected as malformed, and the claims returned with the rejection stay
+// empty: a caller logs the refused principal only from a token whose
+// signature was read. No recorded Python answer exists for the returned claims
+// (pyjwt raises without them); this is Go's own contract, pinned here.
+func TestVerifyTypeReturnsNoClaimsForAnUnreadableSignature(t *testing.T) {
+	verifier, err := New(strings.Repeat("k", 40), "iss", "aud")
+	if err != nil {
+		t.Fatal(err)
+	}
+	token := "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiIxIn0.!!"
+	claims, err := verifier.VerifyType(token, AccessType)
+	rejection, ok := err.(*Rejection)
+	if !ok || rejection.Reason != ReasonMalformed {
+		t.Fatalf("VerifyType error = %v, want a malformed rejection", err)
+	}
+	if len(claims) != 0 {
+		t.Fatalf("VerifyType returned claims %v with a malformed rejection, want none", claims)
+	}
+}

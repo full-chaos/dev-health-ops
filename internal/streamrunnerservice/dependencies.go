@@ -3,8 +3,8 @@ package streamrunnerservice
 import (
 	"context"
 	"errors"
+	"github.com/full-chaos/dev-health-ops/internal/httpguard"
 	"log/slog"
-	"net/http"
 	"time"
 
 	"github.com/ClickHouse/clickhouse-go/v2/lib/driver"
@@ -679,12 +679,7 @@ func (storage *productionStreamStorage) pagerDutyWebhookSinks(
 func (storage *productionStreamStorage) pagerDutyIncidentHydrator(
 	graph pagerduty.LockedGraph, lease providerfoundation.LeaseGuard,
 ) providersync.PagerDutyIncidentHydrator {
-	doer := &http.Client{
-		Timeout: 45 * time.Second,
-		CheckRedirect: func(*http.Request, []*http.Request) error {
-			return http.ErrUseLastResponse
-		},
-	}
+	doer := httpguard.NewClient(45 * time.Second)
 	return pagerduty.CredentialIncidentHydrator{
 		Resolver: providerfoundation.CredentialResolver{
 			Repository: providerfoundation.PostgresCredentialRepository{Pool: storage.domainPool},

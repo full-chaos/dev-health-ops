@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"github.com/full-chaos/dev-health-ops/internal/testsupport/fakehttp"
 	"io"
 	"net/http"
 	"strconv"
@@ -166,7 +167,7 @@ func isGitHubTestsWalkContinuation(err error) bool {
 func TestGitHubTestsHealthyArtifactsCompleteTheUnit(t *testing.T) {
 	doer := &githubTestsCorruptArtifactDoer{t: t, artifacts: 2, corrupt: map[int]bool{}}
 
-	walk, err := walkGitHubTestsChunksResult(t, githubTestsClient(t, doer), 4)
+	walk, err := walkGitHubTestsChunksResult(t, githubTestsClient(t, fakehttp.Client(doer)), 4)
 	if err != nil {
 		t.Fatalf("healthy artifacts returned err=%v, want the unit to complete", err)
 	}
@@ -211,7 +212,7 @@ func TestGitHubTestsHealthyArtifactsCompleteTheUnit(t *testing.T) {
 func TestGitHubTestsCorruptArtifactDoesNotSinkTheUnit(t *testing.T) {
 	doer := &githubTestsCorruptArtifactDoer{t: t, artifacts: 2, corrupt: map[int]bool{1: true}}
 
-	client := githubTestsClient(t, doer)
+	client := githubTestsClient(t, fakehttp.Client(doer))
 	walk, err := walkGitHubTestsChunksResult(t, client, 4)
 	if err != nil {
 		t.Fatalf(
@@ -291,7 +292,7 @@ func TestGitHubTestsRouteCorruptArtifactDoesNotSinkTheUnit(t *testing.T) {
 
 	batch, err := (GitHubTestsRouteHandler{}).Collect(
 		context.Background(), claim, providerfoundation.Credential{},
-		githubTestsClient(t, doer), time.Date(2026, 8, 14, 12, 0, 0, 0, time.UTC),
+		githubTestsClient(t, fakehttp.Client(doer)), time.Date(2026, 8, 14, 12, 0, 0, 0, time.UTC),
 	)
 	if err != nil {
 		t.Fatalf(
@@ -331,7 +332,7 @@ func TestGitHubTestsRouteCorruptArtifactDoesNotSinkTheUnit(t *testing.T) {
 // directly -- that is what proves the route is actually wired to it.
 func TestGitHubTestsUnreadableArchiveIsCounted(t *testing.T) {
 	doer := &githubTestsCorruptArtifactDoer{t: t, artifacts: 2, corrupt: map[int]bool{1: true}}
-	client := githubTestsClient(t, doer)
+	client := githubTestsClient(t, fakehttp.Client(doer))
 	// The executors attach Metrics to the client before handing it to a route
 	// (chunked_stream_executor.go:147, chunked_executor.go:92). githubTestsClient
 	// leaves it nil, so attach one here or the assertion below would pass
@@ -382,7 +383,7 @@ func TestGitHubTestsChunkedUnsafeArchiveBoundsStillFailsClosed(t *testing.T) {
 		t: t, artifacts: 1, corrupt: map[int]bool{}, oversizedReports: true,
 	}
 
-	_, err := walkGitHubTestsChunksResult(t, githubTestsClient(t, doer), 4)
+	_, err := walkGitHubTestsChunksResult(t, githubTestsClient(t, fakehttp.Client(doer)), 4)
 	if !errors.Is(err, ErrGitHubTestsIncomplete) {
 		t.Fatalf("chunked route err=%v, want the batch to fail closed on a blocking issue", err)
 	}

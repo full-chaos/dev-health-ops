@@ -2,7 +2,7 @@ package syncdispatchruntime
 
 import (
 	"context"
-	"log/slog"
+	"github.com/full-chaos/dev-health-ops/internal/syncdispatchruntime/synclog"
 	"time"
 
 	"github.com/jackc/pgx/v5"
@@ -10,14 +10,14 @@ import (
 
 // unitLogAttrs ports _unit_log_context verbatim: the identifying fields
 // every BudgetGuard log line in this family carries.
-func unitLogAttrs(syncRunID string, unit budgetUnit) []slog.Attr {
-	return []slog.Attr{
-		slog.String("sync_run_id", syncRunID),
-		slog.String("unit_id", unit.id),
-		slog.String("source_id", unit.sourceID),
-		slog.String("dataset_key", unit.datasetKey),
-		slog.String("provider", unit.provider),
-		slog.String("cost_class", unit.costClass),
+func unitLogAttrs(syncRunID string, unit budgetUnit) []synclog.Attr {
+	return []synclog.Attr{
+		synclog.Run(synclog.ParseID(syncRunID)),
+		synclog.Unit(synclog.ParseID(unit.id)),
+		synclog.Source(synclog.ParseID(unit.sourceID)),
+		synclog.Text(synclog.KeyDatasetKey, synclog.ParseLabel(unit.datasetKey)),
+		synclog.Provider(synclog.ParseLabel(unit.provider)),
+		synclog.Text(synclog.KeyCostClass, synclog.ParseLabel(unit.costClass)),
 	}
 }
 
@@ -46,7 +46,7 @@ func bucketObservationFields(bucket budgetEstimateBucket) map[string]any {
 // here exactly); observations is returned, not mutated in place, since a Go
 // append can reallocate.
 func admitSurplusRetries(
-	ctx context.Context, tx pgx.Tx, logger *slog.Logger, syncRunID string,
+	ctx context.Context, tx pgx.Tx, logger *synclog.Logger, syncRunID string,
 	candidates []budgetUnit,
 	estimatesByUnit map[string][]budgetEstimate,
 	consumedByBucket map[string]int,
@@ -57,9 +57,6 @@ func admitSurplusRetries(
 	observations []map[string]any,
 	now time.Time,
 ) (admitted map[string]time.Time, updatedObservations []map[string]any, err error) {
-	if logger == nil {
-		logger = slog.Default()
-	}
 	admitted = map[string]time.Time{}
 
 	for _, unit := range candidates {
@@ -70,15 +67,13 @@ func admitSurplusRetries(
 		}
 
 		if _, found := matchingCooldownExpiry(estimates, unit.orgID, unit.provider, unit.integrationID, familyCooldowns, dimensionCooldowns); found {
-			logger.InfoContext(ctx, "dispatch_sync_run.budget_surplus_skipped",
-				attrsToAny(append(logAttrs, slog.String("reason", "cooldown_active")))...)
+			logger.Info(ctx, synclog.MsgDispatchSyncRunBudgetSurplusSkipped, append(logAttrs, synclog.Text(synclog.KeyReason, synclog.LabelCooldownActive))...)
 			continue
 		}
 
 		slotKey := dispatchBucket{orgID: unit.orgID, provider: unit.provider, costClass: unit.costClass}
 		if slotHeadroom[slotKey] <= 0 {
-			logger.InfoContext(ctx, "dispatch_sync_run.budget_surplus_skipped",
-				attrsToAny(append(logAttrs, slog.String("reason", "no_concurrency_slot")))...)
+			logger.Info(ctx, synclog.MsgDispatchSyncRunBudgetSurplusSkipped, append(logAttrs, synclog.Text(synclog.KeyReason, synclog.LabelNoConcurrencySlot))...)
 			continue
 		}
 
@@ -115,8 +110,7 @@ func admitSurplusRetries(
 			surplusObservations = append(surplusObservations, observation)
 		}
 		if !fits {
-			logger.InfoContext(ctx, "dispatch_sync_run.budget_surplus_skipped",
-				attrsToAny(append(logAttrs, slog.String("reason", "insufficient_surplus")))...)
+			logger.Info(ctx, synclog.MsgDispatchSyncRunBudgetSurplusSkipped, append(logAttrs, synclog.Text(synclog.KeyReason, synclog.LabelInsufficientSurplus))...)
 			continue
 		}
 
@@ -125,8 +119,7 @@ func admitSurplusRetries(
 		// now, so a candidate always has one; if that ever stops holding,
 		// skip rather than promote a unit we could not put back.
 		if unit.availableAt == nil {
-			logger.WarnContext(ctx, "dispatch_sync_run.budget_surplus_skipped",
-				attrsToAny(append(logAttrs, slog.String("reason", "no_prior_available_at")))...)
+			logger.Warn(ctx, synclog.MsgDispatchSyncRunBudgetSurplusSkipped, append(logAttrs, synclog.Text(synclog.KeyReason, synclog.LabelNoPriorAvailableAt))...)
 			continue
 		}
 		priorAvailableAt := *unit.availableAt
@@ -149,7 +142,7 @@ func admitSurplusRetries(
 		admitted[unit.id] = priorAvailableAt
 		observations = append(observations, surplusObservations...)
 		for _, observation := range surplusObservations {
-			logger.InfoContext(ctx, "dispatch_sync_run.budget_surplus_admitted", observationToAnyArgs(observation)...)
+			logger.Info(ctx, synclog.MsgDispatchSyncRunBudgetSurplusAdmitted, observationAttrs(readObservation(observation))...)
 		}
 	}
 	return admitted, observations, nil
@@ -162,10 +155,7 @@ func admitSurplusRetries(
 // why. The CAS re-asserts the exact predicate that made the unit a surplus
 // candidate (retrying, and still not due), so a concurrent pass that
 // already promoted or terminalized it wins and this returns false.
-func admitUnitFromSurplus(ctx context.Context, tx pgx.Tx, logger *slog.Logger, syncRunID string, unit budgetUnit, now time.Time) (bool, error) {
-	if logger == nil {
-		logger = slog.Default()
-	}
+func admitUnitFromSurplus(ctx context.Context, tx pgx.Tx, logger *synclog.Logger, syncRunID string, unit budgetUnit, now time.Time) (bool, error) {
 	tag, err := tx.Exec(ctx, `
 UPDATE public.sync_run_units
 SET available_at = $2, updated_at = $2
@@ -177,8 +167,7 @@ WHERE id = $1::uuid AND status = $3 AND available_at IS NOT NULL AND available_a
 	if tag.RowsAffected() == 0 {
 		return false, nil
 	}
-	logger.InfoContext(ctx, "dispatch_sync_run.budget_surplus_pulled_forward",
-		attrsToAny(append(unitLogAttrs(syncRunID, unit), slog.Int("budget_deferrals", unit.budgetDeferrals), slog.Time("available_at", now)))...)
+	logger.Info(ctx, synclog.MsgDispatchSyncRunBudgetSurplusPulledForward, append(unitLogAttrs(syncRunID, unit), synclog.Count(synclog.KeyBudgetDeferrals, unit.budgetDeferrals), synclog.Instant(synclog.KeyAvailableAt, now))...)
 	return true, nil
 }
 
@@ -193,10 +182,7 @@ WHERE id = $1::uuid AND status = $3 AND available_at IS NOT NULL AND available_a
 // The CAS pins available_at to the promoted value, so if anything else
 // moved the unit between the promotion and here, this leaves it alone and
 // returns false.
-func withdrawSurplusAdmission(ctx context.Context, tx pgx.Tx, logger *slog.Logger, syncRunID string, unit budgetUnit, promotedAvailableAt, priorAvailableAt, now time.Time) (bool, error) {
-	if logger == nil {
-		logger = slog.Default()
-	}
+func withdrawSurplusAdmission(ctx context.Context, tx pgx.Tx, logger *synclog.Logger, syncRunID string, unit budgetUnit, promotedAvailableAt, priorAvailableAt, now time.Time) (bool, error) {
 	tag, err := tx.Exec(ctx, `
 UPDATE public.sync_run_units
 SET available_at = $2, updated_at = $3
@@ -206,38 +192,94 @@ WHERE id = $1::uuid AND status = $4 AND available_at = $5`,
 		return false, err
 	}
 	if tag.RowsAffected() == 0 {
-		logger.WarnContext(ctx, "dispatch_sync_run.budget_surplus_withdrawal_lost_race",
-			attrsToAny(append(unitLogAttrs(syncRunID, unit), slog.Time("prior_available_at", priorAvailableAt)))...)
+		logger.Warn(ctx, synclog.MsgDispatchSyncRunBudgetSurplusWithdrawalLostRace, append(unitLogAttrs(syncRunID, unit), synclog.Instant(synclog.KeyPriorAvailableAt, priorAvailableAt))...)
 		return false, nil
 	}
-	logger.InfoContext(ctx, "dispatch_sync_run.budget_surplus_withdrawn",
-		attrsToAny(append(unitLogAttrs(syncRunID, unit),
-			slog.String("reason", "cooldown_landed_after_admission"),
-			slog.Time("restored_available_at", priorAvailableAt),
-			// Proof, in the log line itself, that the episode survived the
-			// round trip -- this is the value the CRITICAL finding zeroed.
-			slog.Int("budget_deferrals", unit.budgetDeferrals),
-		))...)
+	logger.Info(ctx, synclog.MsgDispatchSyncRunBudgetSurplusWithdrawn, append(unitLogAttrs(syncRunID, unit),
+		synclog.Text(synclog.KeyReason, synclog.LabelCooldownLandedAfterAdmission),
+		synclog.Instant(synclog.KeyRestoredAvailableAt, priorAvailableAt),
+		// Proof, in the log line itself, that the episode survived the
+		// round trip -- this is the value the CRITICAL finding zeroed.
+		synclog.Count(synclog.KeyBudgetDeferrals, unit.budgetDeferrals),
+	)...)
 	return true, nil
 }
 
-// attrsToAny flattens []slog.Attr into the ...any form InfoContext/WarnContext
-// accept, so every log call site above can build its attribute list once
-// with slog.Attr's type safety instead of hand-interleaving key/value pairs.
-func attrsToAny(attrs []slog.Attr) []any {
-	args := make([]any, len(attrs))
-	for i, attr := range attrs {
-		args[i] = attr
-	}
-	return args
+// observationFields is what a budget observation line logs, as typed values (no any reaches the logger).
+type observationFields struct {
+	runID, unitID, sourceID, provider                                                             string
+	datasetKey, costClass, decision, budgetKey, confidence, routeFamily, availableAt, suggestedAt string
+	estimatedUnits, projectedUnits, budgetLimit, budgetDeferrals                                  *int
+	bucket                                                                                        *bucketFields
 }
 
-// observationToAnyArgs turns one accumulated observation map (built for
-// admitted-batch reporting) into slog attributes for its own log line.
-func observationToAnyArgs(observation map[string]any) []any {
-	args := make([]any, 0, len(observation)*2)
-	for key, value := range observation {
-		args = append(args, key, value)
+type bucketFields struct{ provider, orgID, host, credentialFingerprint, dimension string }
+
+// readObservation reads one observation map (built by this package) by key name and type: an unknown key or a value of another
+// type is dropped.
+func readObservation(observation map[string]any) observationFields {
+	text := func(key string) string { value, _ := observation[key].(string); return value }
+	number := func(key string) *int {
+		if value, ok := observation[key].(int); ok {
+			return &value
+		}
+		return nil
 	}
-	return args
+	fields := observationFields{
+		runID: text("sync_run_id"), unitID: text("unit_id"), sourceID: text("source_id"), provider: text("provider"),
+		datasetKey: text("dataset_key"), costClass: text("cost_class"), decision: text("decision"), budgetKey: text("budget_key"),
+		confidence: text("confidence"), routeFamily: text("route_family"), availableAt: text("available_at"), suggestedAt: text("suggested_available_at"),
+		estimatedUnits: number("estimated_units"), projectedUnits: number("projected_units"), budgetLimit: number("budget_limit"), budgetDeferrals: number("budget_deferrals"),
+	}
+	if bucket, ok := observation["bucket"].(map[string]any); ok {
+		get := func(key string) string { value, _ := bucket[key].(string); return value }
+		fields.bucket = &bucketFields{provider: get("provider"), orgID: get("org_id"), host: get("host"), credentialFingerprint: get("credential_fingerprint"), dimension: get("dimension")}
+	}
+	return fields
+}
+
+// observationAttrs turns typed observation fields into attributes: an empty text or an absent number is not logged.
+func observationAttrs(fields observationFields) []synclog.Attr {
+	var attrs []synclog.Attr
+	for _, field := range []struct {
+		value string
+		build func(synclog.ID) synclog.Attr
+	}{{fields.runID, synclog.Run}, {fields.unitID, synclog.Unit}, {fields.sourceID, synclog.Source}} {
+		if field.value != "" {
+			attrs = append(attrs, field.build(synclog.ParseID(field.value)))
+		}
+	}
+	if fields.provider != "" {
+		attrs = append(attrs, synclog.Provider(synclog.ParseLabel(fields.provider)))
+	}
+	for _, field := range []struct {
+		key   synclog.Key
+		value string
+	}{{synclog.KeyDatasetKey, fields.datasetKey}, {synclog.KeyCostClass, fields.costClass}, {synclog.KeyDecision, fields.decision}, {synclog.KeyBudgetKey, fields.budgetKey},
+		{synclog.KeyConfidence, fields.confidence}, {synclog.KeyRouteFamily, fields.routeFamily}, {synclog.KeyAvailableAt, fields.availableAt}, {synclog.KeySuggestedAvailableAt, fields.suggestedAt}} {
+		if field.value != "" {
+			attrs = append(attrs, synclog.Text(field.key, synclog.ParseLabel(field.value)))
+		}
+	}
+	for _, field := range []struct {
+		key   synclog.Key
+		value *int
+	}{{synclog.KeyEstimatedUnits, fields.estimatedUnits}, {synclog.KeyProjectedUnits, fields.projectedUnits}, {synclog.KeyBudgetLimit, fields.budgetLimit}, {synclog.KeyBudgetDeferrals, fields.budgetDeferrals}} {
+		if field.value != nil {
+			attrs = append(attrs, synclog.Count(field.key, *field.value))
+		}
+	}
+	if fields.bucket != nil {
+		var group []synclog.Attr
+		for _, field := range []struct {
+			key   synclog.Key
+			value string
+		}{{synclog.KeyProvider, fields.bucket.provider}, {synclog.KeyOrgId, fields.bucket.orgID}, {synclog.KeyHost, fields.bucket.host}, {synclog.KeyCredentialFingerprint, fields.bucket.credentialFingerprint}, {synclog.KeyDimension, fields.bucket.dimension}} {
+			if field.value != "" {
+				group = append(group, synclog.Text(field.key, synclog.ParseLabel(field.value)))
+			}
+		}
+		attrs = append(attrs, synclog.Group(synclog.KeyBucket, group...))
+	}
+	return attrs
 }

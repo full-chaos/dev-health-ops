@@ -11,10 +11,10 @@ package operatorauditschema
 import (
 	"os"
 	"path/filepath"
-	"runtime"
 	"strings"
 	"testing"
 
+	"github.com/full-chaos/dev-health-ops/internal/testsupport/moduleroot"
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/pyoracle"
 )
 
@@ -48,7 +48,7 @@ print("AUDIT_MIGRATIONS_APPLIED")
 // Root is the repository root: the directory pyoracle.Resolve searches for
 // the project's interpreter.
 func Root() string {
-	_, currentFile, _, _ := runtime.Caller(0)
+	_, currentFile, _, _ := moduleroot.Caller(0)
 	return filepath.Dir(filepath.Dir(filepath.Dir(filepath.Dir(currentFile))))
 }
 

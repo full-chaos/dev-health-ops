@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"github.com/full-chaos/dev-health-ops/internal/testsupport/fakehttp"
 	"io"
 	"net/http"
 	"strings"
@@ -49,7 +50,7 @@ func (doer *gitLabSecurityRouteDoer) Do(request *http.Request) (*http.Response, 
 func gitLabSecurityRouteClient(t *testing.T, doer providerfoundation.HTTPDoer) *providerfoundation.HTTPClient {
 	t.Helper()
 	client, err := providerfoundation.NewHTTPClient(
-		"gitlab", "https://gitlab.example", doer,
+		"gitlab", "https://gitlab.example", fakehttp.Client(doer),
 		func(*http.Request) error { return nil },
 		providerfoundation.RetryPolicy{
 			MaxAttempts: 1, InitialWait: time.Nanosecond, MaxWait: time.Nanosecond,
@@ -87,7 +88,7 @@ func TestGitLabSecurityRouteMirrorsPythonSinglePageWindowAndEvidence(t *testing.
 
 	batch, err := (GitLabSecurityRouteHandler{}).Collect(
 		context.Background(), claim, providerfoundation.Credential{},
-		gitLabSecurityRouteClient(t, doer), normalizedAt,
+		gitLabSecurityRouteClient(t, fakehttp.Client(doer)), normalizedAt,
 	)
 	if err != nil {
 		t.Fatal(err)
@@ -129,7 +130,7 @@ func TestGitLabSecurityRouteSlicesCombinedAlertsBeforeWindowFiltering(t *testing
 	claim.SinceAt = &since
 	batch, err := (GitLabSecurityRouteHandler{MaxAlerts: 1}).Collect(
 		context.Background(), claim, providerfoundation.Credential{},
-		gitLabSecurityRouteClient(t, doer), time.Date(2026, 7, 23, 12, 30, 0, 0, time.UTC),
+		gitLabSecurityRouteClient(t, fakehttp.Client(doer)), time.Date(2026, 7, 23, 12, 30, 0, 0, time.UTC),
 	)
 	if err != nil {
 		t.Fatal(err)
@@ -151,7 +152,7 @@ func TestGitLabSecurityRouteDegradesPlainOptionalErrors(t *testing.T) {
 		doer.responses[path] = gitLabSecurityHTTPResponse{status: status, body: `{"message":"unavailable"}`}
 		batch, err := (GitLabSecurityRouteHandler{}).Collect(
 			context.Background(), nativeTestClaim("gitlab", "security"), providerfoundation.Credential{},
-			gitLabSecurityRouteClient(t, doer), time.Date(2026, 7, 23, 12, 30, 0, 0, time.UTC),
+			gitLabSecurityRouteClient(t, fakehttp.Client(doer)), time.Date(2026, 7, 23, 12, 30, 0, 0, time.UTC),
 		)
 		if err != nil {
 			t.Fatalf("path=%s error=%v", path, err)
@@ -177,7 +178,7 @@ func TestGitLabSecurityRoutePropagatesRateLimitWithoutWatermark(t *testing.T) {
 	}
 	batch, err := (GitLabSecurityRouteHandler{}).Collect(
 		context.Background(), nativeTestClaim("gitlab", "security"), providerfoundation.Credential{},
-		gitLabSecurityRouteClient(t, doer), time.Date(2026, 7, 23, 12, 30, 0, 0, time.UTC),
+		gitLabSecurityRouteClient(t, fakehttp.Client(doer)), time.Date(2026, 7, 23, 12, 30, 0, 0, time.UTC),
 	)
 	var providerErr *providerfoundation.ProviderError
 	if !errors.As(err, &providerErr) || providerErr.Class != providerfoundation.ErrorRateLimited {
@@ -198,7 +199,7 @@ func TestGitLabSecurityRoutePropagatesHeaderQualifiedForbiddenRateLimit(t *testi
 	}
 	batch, err := (GitLabSecurityRouteHandler{}).Collect(
 		context.Background(), nativeTestClaim("gitlab", "security"), providerfoundation.Credential{},
-		gitLabSecurityRouteClient(t, doer), time.Date(2026, 7, 23, 12, 30, 0, 0, time.UTC),
+		gitLabSecurityRouteClient(t, fakehttp.Client(doer)), time.Date(2026, 7, 23, 12, 30, 0, 0, time.UTC),
 	)
 	var providerErr *providerfoundation.ProviderError
 	if !errors.As(err, &providerErr) || providerErr.Class != providerfoundation.ErrorRateLimited {
@@ -217,7 +218,7 @@ func TestGitLabSecurityRouteMirrorsCoreFailureAsEmptySuccess(t *testing.T) {
 	}
 	batch, err := (GitLabSecurityRouteHandler{}).Collect(
 		context.Background(), nativeTestClaim("gitlab", "security"), providerfoundation.Credential{},
-		gitLabSecurityRouteClient(t, doer), time.Date(2026, 7, 23, 12, 30, 0, 0, time.UTC),
+		gitLabSecurityRouteClient(t, fakehttp.Client(doer)), time.Date(2026, 7, 23, 12, 30, 0, 0, time.UTC),
 	)
 	if err != nil || len(batch.Effects) != 1 || len(batch.Effects[0].Rows) != 0 ||
 		batch.Evidence.Requests != 2 || batch.Watermark == nil {
@@ -239,7 +240,7 @@ func TestGitLabSecurityRouteRejectsProjectMismatchAndLeaseBeforeRequests(t *test
 		t.Run(test.name, func(t *testing.T) {
 			doer := &gitLabSecurityRouteDoer{responses: gitLabSecurityRouteFixtures()}
 			doer.responses["/api/v4/projects/123"] = gitLabSecurityHTTPResponse{body: test.project}
-			client := gitLabSecurityRouteClient(t, doer)
+			client := gitLabSecurityRouteClient(t, fakehttp.Client(doer))
 			if test.leaseError != nil {
 				client.Lease = providerfoundation.LeaseGuardFunc(func(context.Context) error { return test.leaseError })
 			}
@@ -277,12 +278,12 @@ func TestGitLabSecurityRouteRejectsInvalidConfigurationBeforeRequests(t *testing
 				claim.Provider = "github"
 				return claim
 			}(),
-			client: gitLabSecurityRouteClient(t, &gitLabSecurityRouteDoer{responses: gitLabSecurityRouteFixtures()}),
+			client: gitLabSecurityRouteClient(t, fakehttp.Client(&gitLabSecurityRouteDoer{responses: gitLabSecurityRouteFixtures()})),
 		},
 		{
 			name:   "wrong_claim_dataset",
 			claim:  nativeTestClaim("gitlab", "commits"),
-			client: gitLabSecurityRouteClient(t, &gitLabSecurityRouteDoer{responses: gitLabSecurityRouteFixtures()}),
+			client: gitLabSecurityRouteClient(t, fakehttp.Client(&gitLabSecurityRouteDoer{responses: gitLabSecurityRouteFixtures()})),
 		},
 		{
 			name:   "nil_client",
@@ -293,7 +294,7 @@ func TestGitLabSecurityRouteRejectsInvalidConfigurationBeforeRequests(t *testing
 			name:  "wrong_client_provider",
 			claim: nativeTestClaim("gitlab", "security"),
 			client: func() *providerfoundation.HTTPClient {
-				client := gitLabSecurityRouteClient(t, &gitLabSecurityRouteDoer{responses: gitLabSecurityRouteFixtures()})
+				client := gitLabSecurityRouteClient(t, fakehttp.Client(&gitLabSecurityRouteDoer{responses: gitLabSecurityRouteFixtures()}))
 				client.Provider = "github"
 				return client
 			}(),
@@ -302,7 +303,7 @@ func TestGitLabSecurityRouteRejectsInvalidConfigurationBeforeRequests(t *testing
 			name:  "nil_client_base_URL",
 			claim: nativeTestClaim("gitlab", "security"),
 			client: func() *providerfoundation.HTTPClient {
-				client := gitLabSecurityRouteClient(t, &gitLabSecurityRouteDoer{responses: gitLabSecurityRouteFixtures()})
+				client := gitLabSecurityRouteClient(t, fakehttp.Client(&gitLabSecurityRouteDoer{responses: gitLabSecurityRouteFixtures()}))
 				client.BaseURL = nil
 				return client
 			}(),
@@ -310,13 +311,13 @@ func TestGitLabSecurityRouteRejectsInvalidConfigurationBeforeRequests(t *testing
 		{
 			name:       "zero_normalized_at",
 			claim:      nativeTestClaim("gitlab", "security"),
-			client:     gitLabSecurityRouteClient(t, &gitLabSecurityRouteDoer{responses: gitLabSecurityRouteFixtures()}),
+			client:     gitLabSecurityRouteClient(t, fakehttp.Client(&gitLabSecurityRouteDoer{responses: gitLabSecurityRouteFixtures()})),
 			normalized: time.Time{},
 		},
 		{
 			name:      "negative_max_alerts",
 			claim:     nativeTestClaim("gitlab", "security"),
-			client:    gitLabSecurityRouteClient(t, &gitLabSecurityRouteDoer{responses: gitLabSecurityRouteFixtures()}),
+			client:    gitLabSecurityRouteClient(t, fakehttp.Client(&gitLabSecurityRouteDoer{responses: gitLabSecurityRouteFixtures()})),
 			maxAlerts: -1,
 		},
 	} {
@@ -350,7 +351,7 @@ func TestGitLabSecurityRouteNormalizesDependencyCreatedAtAndPackage(t *testing.T
 	normalizedAt := time.Date(2026, 7, 23, 12, 30, 0, 987654321, time.UTC)
 	batch, err := (GitLabSecurityRouteHandler{}).Collect(
 		context.Background(), claim, providerfoundation.Credential{},
-		gitLabSecurityRouteClient(t, doer), normalizedAt,
+		gitLabSecurityRouteClient(t, fakehttp.Client(doer)), normalizedAt,
 	)
 	if err != nil {
 		t.Fatal(err)

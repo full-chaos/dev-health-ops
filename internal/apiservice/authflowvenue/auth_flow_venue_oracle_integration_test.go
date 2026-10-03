@@ -18,7 +18,6 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
-	"runtime"
 	"sort"
 	"strconv"
 	"strings"
@@ -39,6 +38,7 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/platform/config"
 	chclickhouse "github.com/full-chaos/dev-health-ops/internal/storage/clickhouse"
 	"github.com/full-chaos/dev-health-ops/internal/storage/valkey"
+	"github.com/full-chaos/dev-health-ops/internal/testsupport/moduleroot"
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/sessionscenario"
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/smtpcapture"
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/venueoracle"
@@ -810,7 +810,7 @@ func startGoAPI(t *testing.T, ctx context.Context, venue *venueoracle.Venue, mai
 
 // venueRoot is the repository root, where the venue finds the Python api.
 func venueRoot() string {
-	_, file, _, _ := runtime.Caller(0)
+	_, file, _, _ := moduleroot.Caller(0)
 	return filepath.Clean(filepath.Join(filepath.Dir(file), "..", "..", ".."))
 }
 

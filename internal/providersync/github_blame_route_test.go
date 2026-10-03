@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"github.com/full-chaos/dev-health-ops/internal/testsupport/fakehttp"
 	"io"
 	"net/http"
 	"slices"
@@ -161,9 +162,9 @@ func TestGitHubBlameSafeReplanRequiresAbsentGenerationProgress(t *testing.T) {
 func TestGitHubBlameRouteFailsBeforeProviderWorkWithoutPersistedProgress(t *testing.T) {
 	claim := nativeTestClaim("github", "blame")
 	requests := 0
-	client := gitHubRepositoryClient(t, gitHubBlameDoer{
+	client := gitHubRepositoryClient(t, fakehttp.Client(gitHubBlameDoer{
 		t: t, requests: &requests, fileCount: 1,
-	}, "https://api.github.com")
+	}), "https://api.github.com")
 	batch, err := (GitHubBlameRouteHandler{}).Collect(
 		context.Background(), claim, providerfoundation.Credential{}, client,
 		time.Date(2026, 7, 23, 12, 30, 0, 0, time.UTC),
@@ -184,9 +185,9 @@ func TestGitHubBlameRouteSelectsTheNextPersistedCoverageBatch(t *testing.T) {
 	normalizedAt := time.Date(2026, 7, 23, 12, 30, 0, 0, time.UTC)
 
 	firstPaths := []string{}
-	firstClient := gitHubRepositoryClient(t, gitHubBlameDoer{
+	firstClient := gitHubRepositoryClient(t, fakehttp.Client(gitHubBlameDoer{
 		t: t, blamePaths: &firstPaths, fileCount: 7,
-	}, "https://api.github.com")
+	}), "https://api.github.com")
 	first, err := (GitHubBlameRouteHandler{
 		Coverage: staticGitHubBlameCoverage{state: GitHubBlameProgressState{BlamedPaths: []string{"src/file-000.go"}}},
 		MaxFiles: 3,
@@ -204,9 +205,9 @@ func TestGitHubBlameRouteSelectsTheNextPersistedCoverageBatch(t *testing.T) {
 	}
 
 	secondPaths := []string{}
-	secondClient := gitHubRepositoryClient(t, gitHubBlameDoer{
+	secondClient := gitHubRepositoryClient(t, fakehttp.Client(gitHubBlameDoer{
 		t: t, blamePaths: &secondPaths, fileCount: 7,
-	}, "https://api.github.com")
+	}), "https://api.github.com")
 	second, err := (GitHubBlameRouteHandler{
 		Coverage: staticGitHubBlameCoverage{state: GitHubBlameProgressState{BlamedPaths: append([]string{"src/file-000.go"}, wantFirst...)}},
 		MaxFiles: 3,
@@ -227,9 +228,9 @@ func TestGitHubBlameRouteSelectsTheNextPersistedCoverageBatch(t *testing.T) {
 func TestGitHubBlameRouteCoverageFailureHasNoBlameEffectsOrWatermark(t *testing.T) {
 	claim := nativeTestClaim("github", "blame")
 	blamePaths := []string{}
-	client := gitHubRepositoryClient(t, gitHubBlameDoer{
+	client := gitHubRepositoryClient(t, fakehttp.Client(gitHubBlameDoer{
 		t: t, blamePaths: &blamePaths, fileCount: 2,
-	}, "https://api.github.com")
+	}), "https://api.github.com")
 	batch, err := (GitHubBlameRouteHandler{
 		Coverage: staticGitHubBlameCoverage{err: errors.New("coverage unavailable")},
 	}).Collect(
@@ -246,7 +247,7 @@ func TestGitHubBlameRouteCoverageFailureHasNoBlameEffectsOrWatermark(t *testing.
 
 func TestGitHubBlameFoundationExpandsLiveBlameRangesIntoRows(t *testing.T) {
 	claim := nativeTestClaim("github", "blame")
-	client := gitHubRepositoryClient(t, gitHubBlameDoer{t: t, fileCount: 1}, "https://api.github.com")
+	client := gitHubRepositoryClient(t, fakehttp.Client(gitHubBlameDoer{t: t, fileCount: 1}), "https://api.github.com")
 	normalizedAt := time.Date(2026, 7, 23, 12, 30, 0, 987654321, time.UTC)
 	batch, err := collectGitHubBlameFoundation(
 		context.Background(), claim, client, normalizedAt,
@@ -279,7 +280,7 @@ func TestGitHubBlameFoundationExpandsLiveBlameRangesIntoRows(t *testing.T) {
 
 func TestGitHubBlameFoundationFailsClosedBeforeFetchingPartialInventory(t *testing.T) {
 	claim := nativeTestClaim("github", "blame")
-	client := gitHubRepositoryClient(t, gitHubBlameDoer{t: t, fileCount: gitHubBlameMaxFiles + 1}, "https://api.github.com")
+	client := gitHubRepositoryClient(t, fakehttp.Client(gitHubBlameDoer{t: t, fileCount: gitHubBlameMaxFiles + 1}), "https://api.github.com")
 	_, err := collectGitHubBlameFoundation(
 		context.Background(), claim, client,
 		time.Date(2026, 7, 23, 12, 30, 0, 0, time.UTC),
@@ -339,7 +340,7 @@ func TestGitHubBlameRouteCountsFailedAndRetriedAttempts(t *testing.T) {
 		}
 	})
 	client, err := providerfoundation.NewHTTPClient(
-		"github", "https://api.github.com", doer,
+		"github", "https://api.github.com", fakehttp.Client(doer),
 		func(*http.Request) error { return nil },
 		providerfoundation.RetryPolicy{
 			MaxAttempts: 2, InitialWait: time.Nanosecond, MaxWait: time.Nanosecond,
@@ -376,10 +377,10 @@ func TestGitHubBlameRouteCountsFailedAndRetriedAttempts(t *testing.T) {
 func TestGitHubBlameRouteContinuesAfterPerFileGraphQLError(t *testing.T) {
 	claim := nativeTestClaim("github", "blame")
 	blamePaths := []string{}
-	client := gitHubRepositoryClient(t, gitHubBlameDoer{
+	client := gitHubRepositoryClient(t, fakehttp.Client(gitHubBlameDoer{
 		t: t, fileCount: 3, blamePaths: &blamePaths,
 		graphQLErrPaths: map[string]bool{"src/file-000.go": true},
-	}, "https://api.github.com")
+	}), "https://api.github.com")
 	batch, err := (GitHubBlameRouteHandler{
 		Coverage: staticGitHubBlameCoverage{}, MaxFiles: 3,
 	}).Collect(
@@ -407,9 +408,9 @@ func TestGitHubBlameRouteContinuesAfterPerFileGraphQLError(t *testing.T) {
 
 func TestGitHubBlameRoutePersistsEmptyPathProgressWithoutBlameRow(t *testing.T) {
 	claim := nativeTestClaim("github", "blame")
-	client := gitHubRepositoryClient(t, gitHubBlameDoer{
+	client := gitHubRepositoryClient(t, fakehttp.Client(gitHubBlameDoer{
 		t: t, fileCount: 1, emptyPaths: map[string]bool{"src/file-000.go": true},
-	}, "https://api.github.com")
+	}), "https://api.github.com")
 	batch, err := (GitHubBlameRouteHandler{Coverage: staticGitHubBlameCoverage{}}).Collect(
 		context.Background(), claim, providerfoundation.Credential{}, client,
 		time.Date(2026, 7, 23, 12, 30, 0, 0, time.UTC),
@@ -431,9 +432,9 @@ func TestGitHubBlameRoutePersistsEmptyPathProgressWithoutBlameRow(t *testing.T) 
 
 func TestGitHubBlameRouteAbortsBatchOnRateLimit(t *testing.T) {
 	claim := nativeTestClaim("github", "blame")
-	client := gitHubRepositoryClient(t, gitHubBlameDoer{
+	client := gitHubRepositoryClient(t, fakehttp.Client(gitHubBlameDoer{
 		t: t, fileCount: 2, rateLimitPaths: map[string]bool{"src/file-000.go": true},
-	}, "https://api.github.com")
+	}), "https://api.github.com")
 	_, err := (GitHubBlameRouteHandler{Coverage: staticGitHubBlameCoverage{}}).Collect(
 		context.Background(), claim, providerfoundation.Credential{}, client,
 		time.Date(2026, 7, 23, 12, 30, 0, 0, time.UTC),
@@ -492,7 +493,7 @@ func TestGitHubBlameProgressEffectCommitsBeforeBlame(t *testing.T) {
 
 func TestGitHubBlameFoundationRecordsOversizedGraphQLPayloadAsRetryablePathFailure(t *testing.T) {
 	claim := nativeTestClaim("github", "blame")
-	client := gitHubRepositoryClient(t, gitHubBlameDoer{t: t, fileCount: 1, oversized: true}, "https://api.github.com")
+	client := gitHubRepositoryClient(t, fakehttp.Client(gitHubBlameDoer{t: t, fileCount: 1, oversized: true}), "https://api.github.com")
 	batch, err := collectGitHubBlameFoundation(
 		context.Background(), claim, client,
 		time.Date(2026, 7, 23, 12, 30, 0, 0, time.UTC),
@@ -508,7 +509,7 @@ func TestGitHubBlameFoundationRecordsOversizedGraphQLPayloadAsRetryablePathFailu
 
 func TestGitHubBlameFoundationDistinguishesNoCommitAtBound(t *testing.T) {
 	claim := nativeTestClaim("github", "blame")
-	client := gitHubRepositoryClient(t, gitHubBlameDoer{t: t, emptyBound: true}, "https://api.github.com")
+	client := gitHubRepositoryClient(t, fakehttp.Client(gitHubBlameDoer{t: t, emptyBound: true}), "https://api.github.com")
 	batch, err := collectGitHubBlameFoundation(
 		context.Background(), claim, client,
 		time.Date(2026, 7, 23, 12, 30, 0, 0, time.UTC),
@@ -523,7 +524,7 @@ func TestGitHubBlameFoundationDistinguishesNoCommitAtBound(t *testing.T) {
 
 func TestGitHubBlameFoundationReportsLegitimateEmptyTree(t *testing.T) {
 	claim := nativeTestClaim("github", "blame")
-	client := gitHubRepositoryClient(t, gitHubBlameDoer{t: t}, "https://api.github.com")
+	client := gitHubRepositoryClient(t, fakehttp.Client(gitHubBlameDoer{t: t}), "https://api.github.com")
 	batch, err := collectGitHubBlameFoundation(
 		context.Background(), claim, client,
 		time.Date(2026, 7, 23, 12, 30, 0, 0, time.UTC),
@@ -538,7 +539,7 @@ func TestGitHubBlameFoundationReportsLegitimateEmptyTree(t *testing.T) {
 
 func TestGitHubBlameRouteRejectsWrongDataset(t *testing.T) {
 	claim := nativeTestClaim("github", "files")
-	client := gitHubRepositoryClient(t, gitHubBlameDoer{t: t}, "https://api.github.com")
+	client := gitHubRepositoryClient(t, fakehttp.Client(gitHubBlameDoer{t: t}), "https://api.github.com")
 	_, err := (GitHubBlameRouteHandler{}).Collect(
 		context.Background(), claim, providerfoundation.Credential{}, client,
 		time.Date(2026, 7, 23, 12, 30, 0, 0, time.UTC),

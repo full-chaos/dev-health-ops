@@ -11,13 +11,13 @@ import (
 	"net/http/httptest"
 	"path/filepath"
 	"regexp"
-	"runtime"
 	"strings"
 	"testing"
 	"time"
 
 	"github.com/ClickHouse/clickhouse-go/v2/lib/driver"
 
+	"github.com/full-chaos/dev-health-ops/internal/testsupport/moduleroot"
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/pyoracle"
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/venueoracle"
 )
@@ -168,7 +168,7 @@ func TestLegacyIngestMatchesFrozenFastAPI(t *testing.T) {
 	spec := programGolden("legacy-ingest", t.Name(), "de1b0f2c31e8ce7cc37635e0cde898fc3217afb3d27650d6097d99f59c810d99")
 	spec.Scrub = scrubGeneratedIDs
 	frozen := venueoracle.OpenGolden(t, spec)
-	_, file, _, _ := runtime.Caller(0)
+	_, file, _, _ := moduleroot.Caller(0)
 	root := frozen.PythonRoot(t, filepath.Clean(filepath.Join(filepath.Dir(file), "..", "..", "..")))
 	corpus := append(authCorpus(), bodyCorpus()...)
 	wire := make([]oracleWire, len(corpus))

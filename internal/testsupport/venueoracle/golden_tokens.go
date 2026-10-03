@@ -400,6 +400,7 @@ func (g *Golden) project(request, kind, text string) (string, error) {
 		}
 		return PackBody([]byte(projected)), nil
 	}
+	text = g.DigestDeclared(text) // the declared credential constants first: the value stays compared as its digest
 	stageA := ProjectTokens(text)
 	stageB := stageA
 	if g.spec.Scrub != nil {

@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"github.com/full-chaos/dev-health-ops/internal/syncdispatchruntime/synclog"
 	"log/slog"
 	"testing"
 )
@@ -33,11 +34,13 @@ func decodeClaimDeferralLine(t *testing.T, logged *bytes.Buffer) map[string]any 
 // no-news-is-no-log half of CHAOS-4605's telemetry: the common case (the
 // guard's snapshot and the claim agreed) must not add a WARN line to every
 // dispatch pass.
+const claimRunID = "30000000-0000-4000-8000-000000000003"
+
 func TestEmitClaimSnapshotDeferralIsSilentWhenNothingWasDeferred(t *testing.T) {
 	var logged bytes.Buffer
 	logger := slog.New(slog.NewJSONHandler(&logged, &slog.HandlerOptions{Level: slog.LevelWarn}))
-	emitClaimSnapshotDeferral(context.Background(), logger, "run-1", nil)
-	emitClaimSnapshotDeferral(context.Background(), logger, "run-1", []string{})
+	emitClaimSnapshotDeferral(context.Background(), synclog.New(logger), claimRunID, nil)
+	emitClaimSnapshotDeferral(context.Background(), synclog.New(logger), claimRunID, []string{})
 	if logged.Len() != 0 {
 		t.Fatalf("emitted %q for an empty deferral set; want nothing", logged.String())
 	}
@@ -54,9 +57,9 @@ func TestEmitClaimSnapshotDeferralReportsTheFullCountAndABoundedSample(t *testin
 
 	deferred := make([]string, 0, claimDeferralSampleSize+5)
 	for index := 0; index < claimDeferralSampleSize+5; index++ {
-		deferred = append(deferred, fmt.Sprintf("unit-%02d", index))
+		deferred = append(deferred, fmt.Sprintf("00000000-0000-4000-8000-%012d", index))
 	}
-	emitClaimSnapshotDeferral(context.Background(), logger, "run-1", deferred)
+	emitClaimSnapshotDeferral(context.Background(), synclog.New(logger), claimRunID, deferred)
 
 	record := decodeClaimDeferralLine(t, &logged)
 	if record["msg"] != "dispatch_sync_run.claim_deferred_outside_guard_snapshot" {
@@ -65,8 +68,8 @@ func TestEmitClaimSnapshotDeferralReportsTheFullCountAndABoundedSample(t *testin
 	if record["level"] != "WARN" {
 		t.Fatalf("level=%v want WARN", record["level"])
 	}
-	if record["sync_run_id"] != "run-1" {
-		t.Fatalf("sync_run_id=%v want run-1", record["sync_run_id"])
+	if record["sync_run_id"] != claimRunID {
+		t.Fatalf("sync_run_id=%v want %s", record["sync_run_id"], claimRunID)
 	}
 	count, ok := record["claim.deferred_outside_snapshot"].(float64)
 	if !ok || int(count) != len(deferred) {
@@ -89,7 +92,7 @@ func TestEmitClaimSnapshotDeferralReportsTheFullCountAndABoundedSample(t *testin
 func TestEmitClaimSnapshotDeferralUnderTheSampleSizeLogsEveryID(t *testing.T) {
 	var logged bytes.Buffer
 	logger := slog.New(slog.NewJSONHandler(&logged, &slog.HandlerOptions{Level: slog.LevelWarn}))
-	emitClaimSnapshotDeferral(context.Background(), logger, "run-1", []string{"unit-a", "unit-b"})
+	emitClaimSnapshotDeferral(context.Background(), synclog.New(logger), claimRunID, []string{"00000000-0000-4000-8000-00000000000a", "00000000-0000-4000-8000-00000000000b"})
 
 	record := decodeClaimDeferralLine(t, &logged)
 	sample, ok := record["claim.deferred_unit_id_sample"].([]any)

@@ -1,0 +1,37 @@
+# CHAOS-8166: per-test `go test -race` wall milliseconds of internal/providersync, the weight ci/go_providersync_race_shard.awk
+# balances the race shards by (the package ran as ONE test binary in one race leg: 565 s in CI, 94% of the 600 s timeout).
+# Measured on bigboy, one run: `go test -race -count=1 -json ./internal/providersync/` (package 509 s, tests run in sequence),
+# worktree at 9917c10c0f. Only tests of 1 s or more are listed; every other test weighs the awk default (20 ms: the
+# 1,4xx tests under 1 s add up to about 50 s). Test name, TAB, milliseconds. Sorted (LC_ALL=C), no duplicates;
+# tests/tooling/test_go_quality_legs.py checks each row names a test `go test -list` reports.
+TestDiscardDecisionTableEnumeratesEveryDeclaredState	1970
+TestDriftGuardCoversConstructorDocsAndDeepFields	2090
+TestDriftGuardSeesTheSymbolsItMustCover	1050
+TestEveryDecoratorWrapsTheGuardedDoerOfAConstructedClient	2940
+TestEveryLogSiteLogsOnlyScalars	17890
+TestEveryOraclePairHasAFrozenGolden	2730
+TestEveryPagerDutySinkSendsOnlyTheTableShape	1740
+TestEveryScriptOracleHasAFrozenGolden	2270
+TestEveryWatermarkWriteRoutesThroughTheNormalizer	1190
+TestGenericOracleMatchesFrozenPythonForGitLabFilesContentCap	1380
+TestGitHubTestsAllOversizedArtifactsDoNotFireTotality	15940
+TestGitHubTestsArtifactDoesNotTraversePastPythonEntryCap	1330
+TestGitHubTestsArtifactDownloadOversizedCarriesCause	3040
+TestGitHubTestsChunkedArtifactDownloadOversizedCarriesCause	44060
+TestGitHubTestsOversizedArtifactLogsExactlyOneLine	3130
+TestGitHubWorkItemsIncompletePolicyFailsClosedOnMalformedOrBlockingEvidence	2160
+TestLinearWorkItemEngineDestinationsMatchFrozenPythonProduction	1710
+TestLogLinesOfPreparedRecoveryCarryOnlyOwnValues	2880
+TestNoLiveSymbolIsDocumentedAsUnregistered	2110
+TestNoPackageFieldOrKeyIsProtectedUnlessListed	1130
+TestNoWriterOfTheIngestedAtTablesSendsIngestedAt	14880
+TestPreparedRouteCommitsAnOversizeBatchWithoutASnapshot	101220
+TestPreparedRouteSnapshotEnforcesTotalEncodedCapAndLegacyV1StillDecodes	8860
+TestPreparedSnapshotSizeCapBoundary	198840
+TestProjectionStatementsAreTheSinksOwnInserts	3170
+TestRepoListingMatchesFrozenPython	4270
+TestSensitiveKeyErrorIsBuiltOnlyFromTheClassifier	2830
+TestTheDecoratorProbesAreGeneratedFromTheDerivedDecorators	2830
+TestWorkItemsStillRefusesAnOversizeSnapshot	37550
+TestWriterCloseNamesWhatItCouldNotStore	1000
+TestWriterSurvivesAPanickingStoreAndAHungWrite	2910

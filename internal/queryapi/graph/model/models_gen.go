@@ -332,6 +332,8 @@ type AiAttributedPr struct {
 	WorkType *string    `json:"workType,omitempty"`
 	TeamID   *string    `json:"teamId,omitempty"`
 	MergedAt *time.Time `json:"mergedAt,omitempty"`
+	RepoName *string    `json:"repoName,omitempty"`
+	TeamName *string    `json:"teamName,omitempty"`
 }
 
 type AiAttributedPrsResult struct {

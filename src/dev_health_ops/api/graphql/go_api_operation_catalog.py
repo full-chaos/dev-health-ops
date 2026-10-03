@@ -31,7 +31,8 @@ from __future__ import annotations
 
 import json
 import logging
-from pathlib import Path
+
+from dev_health_ops.contract_artifacts import contract_directory
 
 logger = logging.getLogger(__name__)
 
@@ -43,7 +44,7 @@ __all__ = [
     "is_mutation_operation",
 ]
 
-_CATALOG_PATH = Path(__file__).parent / "go_api_operations.json"
+_CATALOG_PATH = contract_directory("graphql", "v1") / "go_api_operations.json"
 
 _catalog_loaded = False
 #: Whether the ONE load attempt actually succeeded. Without this, a catalog

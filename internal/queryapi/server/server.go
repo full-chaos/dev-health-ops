@@ -452,10 +452,12 @@ func BuildWithLookup(lookup func(string) (string, bool)) (*Plane, error) {
 			group.LogNotConfigured()
 			continue
 		}
+		// Collected BEFORE the count check so a builder that built its resources
+		// and then disagrees with its row still has them closed by fail().
+		cleanups = append(cleanups, cleanup)
 		if len(handlers) != len(group.Mounts) {
 			return fail(fmt.Errorf("query-api: %s returned %d handler(s) for %d mount(s)", group.Builder, len(handlers), len(group.Mounts)))
 		}
-		cleanups = append(cleanups, cleanup)
 		for i, mount := range group.Mounts {
 			// Wrapped in withProofProvenance so go-api-rest-prove can bind a
 			// receipt to the process that actually served this request, the same

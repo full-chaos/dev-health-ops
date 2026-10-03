@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"github.com/full-chaos/dev-health-ops/internal/testsupport/fakehttp"
 	"io"
 	"net/http"
 	"net/url"
@@ -105,7 +106,7 @@ func jiraAtlassianCompleteHandler(t *testing.T) JiraAtlassianRouteHandler {
 func TestJiraAtlassianRouteCollectsWorklogsBoardsAndCanonicalEdges(t *testing.T) {
 	claim := jiraAtlassianClaim()
 	doer := &jiraAtlassianDoer{t: t}
-	client := jiraWorkItemsTestClient(t, doer, providerfoundation.LeaseGuardFunc(func(context.Context) error { return nil }))
+	client := jiraWorkItemsTestClient(t, fakehttp.Client(doer), providerfoundation.LeaseGuardFunc(func(context.Context) error { return nil }))
 	batch, err := jiraAtlassianCompleteHandler(t).Collect(
 		context.Background(), claim, providerfoundation.Credential{}, client,
 		time.Date(2026, 8, 10, 12, 0, 0, 123456000, time.UTC),
@@ -203,7 +204,7 @@ func TestJiraAtlassianRouteCountsFailedAndRetriedAttemptsAcrossPaths(t *testing.
 		}
 	})
 	claim := jiraAtlassianClaim()
-	client := jiraDevStatusTestClientWithRetries(t, doer, 2)
+	client := jiraDevStatusTestClientWithRetries(t, fakehttp.Client(doer), 2)
 	batch, err := jiraAtlassianCompleteHandler(t).Collect(
 		context.Background(), claim, providerfoundation.Credential{}, client,
 		time.Date(2026, 8, 10, 12, 0, 0, 123456000, time.UTC),
@@ -267,7 +268,7 @@ func TestJiraAtlassianRouteCountsFailedAndRetriedWorklogAndSprintAttempts(t *tes
 		}
 	})
 	claim := jiraAtlassianClaim()
-	client := jiraDevStatusTestClientWithRetries(t, doer, 2)
+	client := jiraDevStatusTestClientWithRetries(t, fakehttp.Client(doer), 2)
 	batch, err := jiraAtlassianCompleteHandler(t).Collect(
 		context.Background(), claim, providerfoundation.Credential{}, client,
 		time.Date(2026, 8, 10, 12, 0, 0, 123456000, time.UTC),
@@ -303,7 +304,7 @@ func TestJiraAtlassianRouteDevStatusSyncsPrimaryDependencyRow(t *testing.T) {
 		t: t, devStatusStatuses: []int{http.StatusOK},
 		devStatusBody: `{"detail":[{"pullRequests":[{"url":"https://github.com/acme/api/pull/968"}]}]}`,
 	}
-	client := jiraWorkItemsTestClient(t, doer, providerfoundation.LeaseGuardFunc(func(context.Context) error { return nil }))
+	client := jiraWorkItemsTestClient(t, fakehttp.Client(doer), providerfoundation.LeaseGuardFunc(func(context.Context) error { return nil }))
 	batch, err := jiraAtlassianCompleteHandler(t).Collect(
 		context.Background(), claim, providerfoundation.Credential{}, client,
 		time.Date(2026, 8, 10, 12, 0, 0, 123456000, time.UTC),
@@ -362,7 +363,7 @@ func TestJiraAtlassianRouteDevStatusUnavailableIsCleanNoOp(t *testing.T) {
 			doer := &jiraAtlassianDoer{
 				t: t, devStatusStatuses: []int{status}, devStatusBody: `{"errorMessages":["no dev-status data"]}`,
 			}
-			client := jiraWorkItemsTestClient(t, doer, providerfoundation.LeaseGuardFunc(func(context.Context) error { return nil }))
+			client := jiraWorkItemsTestClient(t, fakehttp.Client(doer), providerfoundation.LeaseGuardFunc(func(context.Context) error { return nil }))
 			batch, err := jiraAtlassianCompleteHandler(t).Collect(
 				context.Background(), claim, providerfoundation.Credential{}, client,
 				time.Date(2026, 8, 10, 12, 0, 0, 123456000, time.UTC),
@@ -409,7 +410,7 @@ func TestJiraAtlassianRouteDevStatusCapLimitsRealWireAttempts(t *testing.T) {
 		devStatusStatuses: []int{http.StatusServiceUnavailable, http.StatusServiceUnavailable, http.StatusServiceUnavailable},
 		devStatusBody:     `{"errorMessages":["temporarily unavailable"]}`,
 	}
-	client := jiraDevStatusTestClientWithRetries(t, doer, 3)
+	client := jiraDevStatusTestClientWithRetries(t, fakehttp.Client(doer), 3)
 	batch, err := jiraAtlassianCompleteHandler(t).Collect(
 		context.Background(), claim, providerfoundation.Credential{}, client,
 		time.Date(2026, 8, 10, 12, 0, 0, 123456000, time.UTC),
@@ -471,7 +472,7 @@ func TestJiraAtlassianRouteDevStatusBudgetIsSharedAcrossIssues(t *testing.T) {
 	claim.DatasetOptions = map[string]any{
 		"fetch_dev_status": true, "dev_status_max_requests": 2,
 	}
-	client := jiraDevStatusTestClientWithRetries(t, doer, 3)
+	client := jiraDevStatusTestClientWithRetries(t, fakehttp.Client(doer), 3)
 	batch, err := jiraAtlassianCompleteHandler(t).Collect(
 		context.Background(), claim, providerfoundation.Credential{}, client,
 		time.Date(2026, 8, 10, 12, 0, 0, 0, time.UTC),
@@ -534,7 +535,7 @@ func TestJiraAtlassianRouteDevStatusCleanNoOpStillDebitsSharedBudget(t *testing.
 	claim.DatasetOptions = map[string]any{
 		"fetch_dev_status": true, "dev_status_max_requests": 2,
 	}
-	client := jiraDevStatusTestClientWithRetries(t, doer, 3)
+	client := jiraDevStatusTestClientWithRetries(t, fakehttp.Client(doer), 3)
 	batch, err := jiraAtlassianCompleteHandler(t).Collect(
 		context.Background(), claim, providerfoundation.Credential{}, client,
 		time.Date(2026, 8, 10, 12, 0, 0, 0, time.UTC),
@@ -563,7 +564,7 @@ func TestJiraAtlassianRouteReferenceCacheSkipsBoardEnumeration(t *testing.T) {
 	normalizedAt := time.Date(2026, 8, 10, 12, 0, 0, 123456000, time.UTC)
 	refName, refState := "August", "active"
 	refs := []jiraSprintRow{{Provider: "jira", SprintID: "9001", Name: &refName, State: &refState, LastSynced: normalizedAt, OrgID: claim.OrgID}}
-	client := jiraWorkItemsTestClient(t, doer, providerfoundation.LeaseGuardFunc(func(context.Context) error { return nil }))
+	client := jiraWorkItemsTestClient(t, fakehttp.Client(doer), providerfoundation.LeaseGuardFunc(func(context.Context) error { return nil }))
 	handler := jiraAtlassianCompleteHandler(t)
 	handler.ReferenceSprints = refs
 	batch, err := handler.Collect(
@@ -588,7 +589,7 @@ func TestJiraAtlassianRouteWorklogFailureIsTypedAndWithholdsWatermark(t *testing
 		}
 		return (&jiraAtlassianDoer{t: t}).Do(request)
 	})
-	client := jiraWorkItemsTestClient(t, doer, providerfoundation.LeaseGuardFunc(func(context.Context) error { return nil }))
+	client := jiraWorkItemsTestClient(t, fakehttp.Client(doer), providerfoundation.LeaseGuardFunc(func(context.Context) error { return nil }))
 	batch, err := jiraAtlassianCompleteHandler(t).Collect(
 		context.Background(), claim, providerfoundation.Credential{}, client, time.Date(2026, 8, 10, 12, 0, 0, 123456000, time.UTC),
 	)
@@ -611,7 +612,7 @@ func TestJiraAtlassianReferenceSinkFailureLandsEffectsAndWithholdsWatermark(t *t
 	claim := jiraAtlassianClaim()
 	client := jiraWorkItemsTestClient(
 		t,
-		&jiraAtlassianDoer{t: t},
+		fakehttp.Client(&jiraAtlassianDoer{t: t}),
 		providerfoundation.LeaseGuardFunc(func(context.Context) error { return nil }),
 	)
 	handler := jiraAtlassianCompleteHandler(t)
@@ -650,8 +651,8 @@ func TestJiraAtlassianGraphQLWorklogPreservesNameIdentity(t *testing.T) {
 			Body:       io.NopCloser(strings.NewReader(body)), Request: request,
 		}, nil
 	})
-	client := jiraWorkItemsTestClient(t, rest, providerfoundation.LeaseGuardFunc(func(context.Context) error { return nil }))
-	graphqlClient := jiraWorkItemsTestClient(t, graphql, providerfoundation.LeaseGuardFunc(func(context.Context) error { return nil }))
+	client := jiraWorkItemsTestClient(t, fakehttp.Client(rest), providerfoundation.LeaseGuardFunc(func(context.Context) error { return nil }))
+	graphqlClient := jiraWorkItemsTestClient(t, fakehttp.Client(graphql), providerfoundation.LeaseGuardFunc(func(context.Context) error { return nil }))
 	handler := jiraAtlassianCompleteHandler(t)
 	handler.CloudID, handler.GraphQLClient = "cloud-301", graphqlClient
 	batch, err := handler.Collect(
@@ -699,8 +700,8 @@ func TestJiraAtlassianGraphQLFailureRecordsRESTFallbackObservation(t *testing.T)
 			Body:       io.NopCloser(strings.NewReader(`{"errors":[{"message":"temporary"}]}`)), Request: request,
 		}, nil
 	})
-	client := jiraWorkItemsTestClient(t, rest, providerfoundation.LeaseGuardFunc(func(context.Context) error { return nil }))
-	graphqlClient := jiraWorkItemsTestClient(t, graphql, providerfoundation.LeaseGuardFunc(func(context.Context) error { return nil }))
+	client := jiraWorkItemsTestClient(t, fakehttp.Client(rest), providerfoundation.LeaseGuardFunc(func(context.Context) error { return nil }))
+	graphqlClient := jiraWorkItemsTestClient(t, fakehttp.Client(graphql), providerfoundation.LeaseGuardFunc(func(context.Context) error { return nil }))
 	handler := jiraAtlassianCompleteHandler(t)
 	handler.CloudID, handler.GraphQLClient = "cloud-301", graphqlClient
 	batch, err := handler.Collect(

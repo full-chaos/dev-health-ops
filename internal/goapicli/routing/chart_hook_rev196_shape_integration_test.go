@@ -132,6 +132,7 @@ func renderPreUpgradeCarryScript(t *testing.T, chartRoot string) string {
 	cmd := exec.Command("helm", "template", "rev196", chartRoot,
 		"--is-upgrade",
 		"--set", "queryApi.enabled=true",
+		"--set", "web.env.BACKEND_URL=http://backend.test:8000", // CHAOS-8310: required, and irrelevant to this render
 		"--set", "migrations.hook.goApiRoutingTools.image="+pinnedToolsImage,
 		"--set", "migrations.hook.goApiRoutingTools.mintOrg=00000000-0000-0000-0000-000000000000",
 	)

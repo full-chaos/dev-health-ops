@@ -177,6 +177,12 @@ func postSyncFanoutOutcomes() []PostSyncFanoutOutcome {
 // "no_signal" names an org whose team_project_ownership/linkage rows exist
 // but genuinely produced nothing (every candidate conflicted, or matched no
 // repo-bearing item) -- the designed-empty case, not a failure.
+// "unchanged" (CHAOS-8148) is the OTHER written==0 case with inputs ready:
+// the run DERIVED facts and every one of them is already carried, unchanged,
+// by an open row, so nothing was written (the steady state: the derivation
+// does not re-write an unchanged fact). It is NOT "no_signal": that label
+// means the run derived nothing at all. Before this label both read as
+// no_signal and a quiet table could not be told from a broken derivation.
 // "inputs_not_ready" (team-lead ruling, codex finding #4, 2026-08-28) is a
 // DIFFERENT zero-row case: this org has zero team_project_ownership rows,
 // or zero linkage rows of any kind (work_items, work_item_dependencies,
@@ -215,6 +221,7 @@ type TeamRepoOwnershipDerivationOutcome string
 const (
 	TeamRepoOwnershipDerivationOutcomeRowsWritten    TeamRepoOwnershipDerivationOutcome = "rows_written"
 	TeamRepoOwnershipDerivationOutcomeNoSignal       TeamRepoOwnershipDerivationOutcome = "no_signal"
+	TeamRepoOwnershipDerivationOutcomeUnchanged      TeamRepoOwnershipDerivationOutcome = "unchanged"
 	TeamRepoOwnershipDerivationOutcomeInputsNotReady TeamRepoOwnershipDerivationOutcome = "inputs_not_ready"
 	TeamRepoOwnershipDerivationOutcomeError          TeamRepoOwnershipDerivationOutcome = "error"
 	TeamRepoOwnershipDerivationOutcomeRouteMissing   TeamRepoOwnershipDerivationOutcome = "route_missing"
@@ -225,6 +232,7 @@ func teamRepoOwnershipDerivationOutcomes() []TeamRepoOwnershipDerivationOutcome 
 	return []TeamRepoOwnershipDerivationOutcome{
 		TeamRepoOwnershipDerivationOutcomeRowsWritten,
 		TeamRepoOwnershipDerivationOutcomeNoSignal,
+		TeamRepoOwnershipDerivationOutcomeUnchanged,
 		TeamRepoOwnershipDerivationOutcomeInputsNotReady,
 		TeamRepoOwnershipDerivationOutcomeError,
 		TeamRepoOwnershipDerivationOutcomeRouteMissing,
@@ -3838,7 +3846,7 @@ func (collector *MetricsCollector) writePostSyncFanout(output *strings.Builder) 
 // 2026-08-28, found during the per-file fork audit rather than by codex
 // itself).
 func (collector *MetricsCollector) writeTeamRepoOwnershipDerivation(output *strings.Builder) {
-	writeMetadata(output, "dev_health_team_repo_ownership_derivation_total", "sync.team_repo_ownership_derivation worker outcomes: rows_written, no_signal (designed-empty, not a failure), or error (CHAOS-4365 item 1b).", "counter")
+	writeMetadata(output, "dev_health_team_repo_ownership_derivation_total", "sync.team_repo_ownership_derivation worker outcomes: rows_written, unchanged (every derived fact already carried by an open row), no_signal (derived nothing, not a failure), or error (CHAOS-4365 item 1b).", "counter")
 	for _, outcome := range teamRepoOwnershipDerivationOutcomes() {
 		writeUintSample(output, "dev_health_team_repo_ownership_derivation_total",
 			[]metricLabel{{"outcome", string(outcome)}}, collector.teamRepoOwnershipDerivation[outcome])

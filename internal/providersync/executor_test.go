@@ -3,6 +3,7 @@ package providersync
 import (
 	"context"
 	"errors"
+	"github.com/full-chaos/dev-health-ops/internal/testsupport/fakehttp"
 	"sync"
 	"testing"
 	"time"
@@ -22,7 +23,7 @@ func TestExecutorConstructsPagerDutyClientBeforeProviderIO(t *testing.T) {
 		t.Fatal(err)
 	}
 	client, err := (Executor{
-		Doer:  noRequestDoer{},
+		Doer:  fakehttp.Client(noRequestDoer{}),
 		Retry: providerfoundation.DefaultRetryPolicy(),
 	}).newClient(
 		credential,
@@ -60,7 +61,7 @@ func TestExecutorUsesCredentialLeaseShadowBudgetJournalAndGenerationSink(t *test
 			Repository: executorCredentialRepository{},
 			Decryptor:  executorCredentialDecryptor{},
 		},
-		Doer: doer,
+		Doer: fakehttp.Client(doer),
 		Retry: providerfoundation.RetryPolicy{
 			MaxAttempts: 1, InitialWait: time.Nanosecond, MaxWait: time.Nanosecond,
 		},
@@ -118,7 +119,7 @@ func TestExecutorDormantRouteRunsShadowWithoutSinkSideEffects(t *testing.T) {
 			Repository: executorCredentialRepository{},
 			Decryptor:  executorCredentialDecryptor{},
 		},
-		Doer: &fixtureDoer{t: t, provider: "github"},
+		Doer: fakehttp.Client(&fixtureDoer{t: t, provider: "github"}),
 		Retry: providerfoundation.RetryPolicy{
 			MaxAttempts: 1, InitialWait: time.Nanosecond, MaxWait: time.Nanosecond,
 		},
@@ -155,7 +156,7 @@ func TestExecutorRefusesAmbiguousWritingBlockOutsideFiniteDedupeWindow(t *testin
 			Repository: executorCredentialRepository{},
 			Decryptor:  executorCredentialDecryptor{},
 		},
-		Doer: &fixtureDoer{t: t, provider: "github"},
+		Doer: fakehttp.Client(&fixtureDoer{t: t, provider: "github"}),
 		Retry: providerfoundation.RetryPolicy{
 			MaxAttempts: 1, InitialWait: time.Nanosecond, MaxWait: time.Nanosecond,
 		},

@@ -2,9 +2,9 @@ package externalrecompute
 
 import (
 	"path/filepath"
-	"runtime"
 	"testing"
 
+	"github.com/full-chaos/dev-health-ops/internal/testsupport/moduleroot"
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/programoracle"
 )
 
@@ -22,7 +22,7 @@ const producerIdentity = "python 3.14.7\nunicodedata 16.0.0"
 // goldenrecord verb writes each digest when it promotes a recording; a new
 // golden starts as "PIN:" + its file name without ".json".
 var goldenPins = map[string]string{
-	"python-int.golden.json": "7b1007ddb26891dcc8b419f4109157787dfbe90030f139741b9e3c5f5f21726a",
+	"python-int.golden.json": "43d438832e1819f3ec035852739e148e22ddf98edafcd63757a3535d9d27df08",
 }
 
 // goldens is the set of this package's frozen Python answers.
@@ -47,7 +47,7 @@ func frozenPython(t *testing.T, golden string, programs ...programoracle.Program
 // repositoryRoot is the repository root, from this file's own location.
 func repositoryRoot(t *testing.T) string {
 	t.Helper()
-	_, file, _, ok := runtime.Caller(0)
+	_, file, _, ok := moduleroot.Caller(0)
 	if !ok {
 		t.Fatal("cannot locate the test source")
 	}

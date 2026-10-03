@@ -2,9 +2,9 @@ package syncbudget
 
 import (
 	"path/filepath"
-	"runtime"
 	"testing"
 
+	"github.com/full-chaos/dev-health-ops/internal/testsupport/moduleroot"
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/programoracle"
 )
 
@@ -22,7 +22,7 @@ const producerIdentity = "python 3.14.7\nunicodedata 16.0.0"
 // goldenrecord verb writes each digest when it promotes a recording; a new
 // golden starts as "PIN:" + its file name without ".json".
 var goldenPins = map[string]string{
-	"budget-estimate.golden.json": "d07572e2d40dde72816819b3dd8619b4a0d9e03ab353bb3703ce01d854d191c0",
+	"budget-estimate.golden.json": "d1e92695417f1b83c1b7d19c605c0de7b3715b514b7251e9cd036472663e42a2",
 }
 
 // goldens is the set of this package's frozen Python answers.
@@ -47,7 +47,7 @@ func frozenPython(t *testing.T, golden string, programs ...programoracle.Program
 // repositoryRoot is the repository root, from this file's own location.
 func repositoryRoot(t *testing.T) string {
 	t.Helper()
-	_, file, _, ok := runtime.Caller(0)
+	_, file, _, ok := moduleroot.Caller(0)
 	if !ok {
 		t.Fatal("cannot locate the test source")
 	}

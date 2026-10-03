@@ -210,7 +210,7 @@ func (h handlers) recordSSOFailure(ctx context.Context, w http.ResponseWriter, r
 		return
 	}
 	defer func() { _ = tx.Rollback(context.Background()) }()
-	sanitized := pythonparity.SanitizeErrorText(errMsg, 4000)
+	sanitized := pythonparity.SanitizeErrorTextHardened(errMsg, 4000)
 	now := h.Now()
 	if _, err := tx.Exec(ctx, `UPDATE sso_providers SET last_error = $2, last_error_at = $3, status = 'error', updated_at = $3
 WHERE id = $1::uuid`, providerID, sanitized, now.UTC()); err != nil {
@@ -300,7 +300,7 @@ func (h handlers) recordSSOAuthenticatedDenial(ctx context.Context, w http.Respo
 // structured log.
 func (h handlers) recordSSOAuditOnly(ctx context.Context, w http.ResponseWriter, r *http.Request,
 	orgID string, providerID uuid.UUID, errMsg string, status int, detail pyjson.Value, protocol, stage, logMsg string) {
-	sanitized := pythonparity.SanitizeErrorText(errMsg, 4000)
+	sanitized := pythonparity.SanitizeErrorTextHardened(errMsg, 4000)
 	h.Logger.WarnContext(ctx, logMsg, "provider_id", providerID.String(), "protocol", protocol, "reason", sanitized)
 	meta := pyjson.NewObject()
 	meta.Set("protocol", protocol)

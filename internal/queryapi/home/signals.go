@@ -40,6 +40,14 @@ var lowerIsBetter = map[string]bool{
 	"compounding_risk":    true,
 }
 
+// LowerIsBetter reports whether a smaller value of the home metric is the good
+// direction. A metric that is not listed (throughput, deploy_freq, ci_success)
+// is higher-is-better. The set is kept equal to the web metric catalog's
+// `lowerIsBetter` polarity (see polarity_test.go).
+func LowerIsBetter(metric string) bool {
+	return lowerIsBetter[metric]
+}
+
 var metricCategories = map[string]string{
 	"cycle_time":          CategoryDelivery,
 	"review_latency":      CategoryDynamics,

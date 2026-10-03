@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"github.com/full-chaos/dev-health-ops/internal/testsupport/fakehttp"
 	"io"
 	"net/http"
 	"strings"
@@ -282,7 +283,7 @@ func TestGenericOracleMatchesFrozenPythonGitLabTestsSelection(t *testing.T) {
 		fullClaim.SinceAt, fullClaim.BeforeAt = &since, &fullBefore
 		batch, err := (GitLabTestsRouteHandler{}).Collect(
 			context.Background(), fullClaim, providerfoundation.Credential{},
-			gitLabRepositoryClient(t, doer, "https://gitlab.test"), time.Now(),
+			gitLabRepositoryClient(t, fakehttp.Client(doer), "https://gitlab.test"), time.Now(),
 		)
 		if err != nil {
 			t.Fatal(err)

@@ -12,7 +12,6 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
-	"runtime"
 	"strings"
 	"sync"
 	"testing"
@@ -24,6 +23,7 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/platform/health"
 	"github.com/full-chaos/dev-health-ops/internal/platform/secrets"
 	chclickhouse "github.com/full-chaos/dev-health-ops/internal/storage/clickhouse"
+	"github.com/full-chaos/dev-health-ops/internal/testsupport/moduleroot"
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/venueoracle"
 )
 
@@ -50,7 +50,7 @@ var importedDiscoveredAtPattern = regexp.MustCompile(`"discovered_at":"(?:2026-0
 const venueEncryptionKey = "venue-protected-routes-settings-encryption-key"
 
 func venueRoot() string {
-	_, file, _, _ := runtime.Caller(0)
+	_, file, _, _ := moduleroot.Caller(0)
 	return filepath.Clean(filepath.Join(filepath.Dir(file), "..", ".."))
 }
 

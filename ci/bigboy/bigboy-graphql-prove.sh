@@ -60,7 +60,7 @@ if [ -n "$want" ] && [ "$want" = "$pinned" ]; then st prover-image 0; else
   st prover-image 1; echo "REFUSED: venue-prove image ${pinned:-<none>} is not go-api-tools:sha-$S7 (${want:-unresolved}) -- re-pin before proving" >&2; exit 1; fi
 
 # 2. local org (read-only), exactly one
-PROVE_ORG=$(docker exec -i dev-health-postgres-1 psql -U devhealth -d devhealth -X -q -tA -v ON_ERROR_STOP=1 \
+PROVE_ORG=$(docker compose "${BASE[@]}" exec -T postgres psql -U devhealth -d devhealth -X -q -tA -v ON_ERROR_STOP=1 \
   -v email="$LOCAL_ADMIN_EMAIL" <<'SQL' 2>/dev/null
 SELECT DISTINCT m.org_id FROM memberships m JOIN users u ON u.id = m.user_id WHERE u.email = :'email';
 SQL

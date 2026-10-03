@@ -4,7 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
-	"log/slog"
+	"github.com/full-chaos/dev-health-ops/internal/syncdispatchruntime/synclog"
 	"sort"
 	"strings"
 	"time"
@@ -48,7 +48,7 @@ var ErrFinalizeSyncRunUnavailable = errors.New("native finalize_sync_run is unav
 //     is no return-value channel for it to occupy.
 type NativeFinalizeSyncRunService struct {
 	pool     *pgxpool.Pool
-	logger   *slog.Logger
+	logger   *synclog.Logger
 	observer jobruntime.ZeroUnitFinalizationObserver
 	now      func() time.Time
 	// coverageCache bumps the org's cache epoch in Valkey AFTER the
@@ -94,14 +94,11 @@ func (service *NativeFinalizeSyncRunService) CoverageCacheInvalidatorConfigured(
 // rather than inventing a second, unregistered collector alongside it.
 func NewNativeFinalizeSyncRunService(
 	pool *pgxpool.Pool,
-	logger *slog.Logger,
+	logger *synclog.Logger,
 	observers ...jobruntime.ZeroUnitFinalizationObserver,
 ) (*NativeFinalizeSyncRunService, error) {
 	if pool == nil {
 		return nil, ErrFinalizeSyncRunUnavailable
-	}
-	if logger == nil {
-		logger = slog.Default()
 	}
 	var observer jobruntime.ZeroUnitFinalizationObserver
 	if len(observers) > 0 {
@@ -389,11 +386,7 @@ VALUES ($1::uuid, $2, $3::uuid, $4, $5)`,
 			// finalization can be reported successful.
 			_ = service.observer.ObserveZeroUnitFinalization(provider, reason)
 		}
-		service.logger.InfoContext(ctx, "finalize_sync_run.zero_unit_finalized",
-			slog.String("sync_run_id", run.id),
-			slog.String("provider", provider),
-			slog.String("reason", reason),
-		)
+		service.logger.Info(ctx, synclog.MsgFinalizeSyncRunZeroUnitFinalized, synclog.Run(synclog.ParseID(run.id)), synclog.Provider(synclog.ParseLabel(provider)), synclog.Text(synclog.KeyReason, synclog.ParseLabel(reason)))
 	}
 	return nil
 }
@@ -429,20 +422,10 @@ func (service *NativeFinalizeSyncRunService) invalidateCoverageCache(ctx context
 		_ = observer.ObserveCoverageCacheInvalidation(provider, err == nil)
 	}
 	if err != nil {
-		service.logger.WarnContext(ctx, "finalize_sync_run.coverage_cache_invalidation_failed",
-			slog.String("sync_run_id", run.id),
-			slog.String("org_id", run.orgID),
-			slog.String("integration_id", run.integrationID),
-			slog.String("provider", provider),
-			slog.String("error", err.Error()),
-		)
+		service.logger.Warn(ctx, synclog.MsgFinalizeSyncRunCoverageCacheInvalidationFailed, synclog.Run(synclog.ParseID(run.id)), synclog.Org(synclog.ParseID(run.orgID)), synclog.Integration(synclog.ParseID(run.integrationID)), synclog.Provider(synclog.ParseLabel(provider)), synclog.Failure(err))
 		return
 	}
-	service.logger.InfoContext(ctx, "finalize_sync_run.coverage_cache_invalidated",
-		slog.String("sync_run_id", run.id),
-		slog.String("org_id", run.orgID),
-		slog.String("provider", provider),
-	)
+	service.logger.Info(ctx, synclog.MsgFinalizeSyncRunCoverageCacheInvalidated, synclog.Run(synclog.ParseID(run.id)), synclog.Org(synclog.ParseID(run.orgID)), synclog.Provider(synclog.ParseLabel(provider)))
 }
 
 func (service *NativeFinalizeSyncRunService) nowUTC() time.Time {
@@ -861,8 +844,7 @@ func (service *NativeFinalizeSyncRunService) checkpointSuccessfulComputeInputs(
 		}
 		encodedMetadata, err := json.Marshal(metadata)
 		if err != nil {
-			service.logger.WarnContext(ctx, "finalize_sync_run.compute_checkpoint_unit_failed",
-				slog.String("sync_run_id", run.id), slog.String("unit_id", unit.id), slog.String("error", err.Error()))
+			service.logger.Warn(ctx, synclog.MsgFinalizeSyncRunComputeCheckpointUnitFailed, synclog.Run(synclog.ParseID(run.id)), synclog.Unit(synclog.ParseID(unit.id)), synclog.Failure(err))
 			continue
 		}
 		recoverableErr, fatalErr := service.insertComputeCheckpoint(ctx, tx, run, unit, checkpointedAt, encodedMetadata)
@@ -870,8 +852,7 @@ func (service *NativeFinalizeSyncRunService) checkpointSuccessfulComputeInputs(
 			return fatalErr
 		}
 		if recoverableErr != nil {
-			service.logger.WarnContext(ctx, "finalize_sync_run.compute_checkpoint_unit_failed",
-				slog.String("sync_run_id", run.id), slog.String("unit_id", unit.id), slog.String("error", recoverableErr.Error()))
+			service.logger.Warn(ctx, synclog.MsgFinalizeSyncRunComputeCheckpointUnitFailed, synclog.Run(synclog.ParseID(run.id)), synclog.Unit(synclog.ParseID(unit.id)), synclog.Failure(recoverableErr))
 		}
 	}
 	return nil

@@ -407,6 +407,16 @@ class Ctx:
     team_id: str | None = None
 
 
+def accepted_digests(entries: list[dict[str, Any]]) -> dict[str, set[str]]:
+    """operation -> every digest the catalog accepts for it: its current document and, during a dual-accept
+    release (CHAOS-8000), its `legacy` ones. A dict keyed by operation alone would keep whichever entry came
+    last (the legacy one) and call the web's CURRENT text a mismatch."""
+    accepted: dict[str, set[str]] = {}
+    for entry in entries:
+        accepted.setdefault(entry["operation"], set()).add(entry["digest"])
+    return accepted
+
+
 def check_web_source(ctx: Ctx) -> dict[str, Any]:
     missing = []
     for path, rel in REST_SOURCES.items():
@@ -415,17 +425,14 @@ def check_web_source(ctx: Ctx) -> dict[str, Any]:
             missing.append(path)
     if missing:
         raise SmokeFailure(f"web_source_path_missing={','.join(missing)}")
-    catalog = {
-        o["operation"]: o["digest"]
-        for o in json.loads(CATALOG.read_text(encoding="utf-8"))
-    }
+    catalog = accepted_digests(json.loads(CATALOG.read_text(encoding="utf-8")))
     mismatched = []
     for op, (rel, const) in GRAPHQL_SOURCES.items():
         exports = ts_exports((WEB_SRC / rel).read_text(encoding="utf-8"))
         if const not in exports:
             raise SmokeFailure(f"web_source_document_missing={const}")
         doc = urql_format(exports[const])
-        if catalog.get(op) != document_digest(doc):
+        if document_digest(doc) not in catalog.get(op, set()):
             mismatched.append(op)
         ctx.documents[op] = doc
     if mismatched:

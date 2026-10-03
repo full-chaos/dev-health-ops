@@ -99,6 +99,21 @@ func CountRequests(doer providerfoundation.HTTPDoer) providerfoundation.HTTPDoer
 	return RequestCountingDoer{Delegate: doer}
 }
 
+// Unwrap and Rewrap let httpguard reach the client a counting decorator wraps.
+func (doer RequestCountingDoer) Unwrap() interface {
+	Do(*http.Request) (*http.Response, error)
+} {
+	return doer.Delegate
+}
+
+func (doer RequestCountingDoer) Rewrap(inner interface {
+	Do(*http.Request) (*http.Response, error)
+}) interface {
+	Do(*http.Request) (*http.Response, error)
+} {
+	return RequestCountingDoer{Delegate: inner}
+}
+
 func (doer RequestCountingDoer) Do(request *http.Request) (*http.Response, error) {
 	if request == nil {
 		return doer.Delegate.Do(request)

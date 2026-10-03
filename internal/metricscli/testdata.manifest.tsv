@@ -1,4 +1,4 @@
 # Every file under internal/metricscli/testdata: sha256, kind, path. Written by `go run ./internal/testsupport/recordedfiles/manifest`; never edit it by hand.
 # python-recorded set: e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855 (0 files)
-# header-before-stamp set: a4fc20a59fc40a9e5904437fcb90792921e9ec261938694bd67d75471e55e596 (1 files)
-fb74c43385909d9d276f3326bfb8ac0adb59c94f56ddd7b865995654a2598752	header-before-stamp	golden/validate_flags.json
+# header-before-stamp set: e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855 (0 files)
+-	header	golden/validate_flags.json

@@ -349,6 +349,10 @@ func nullIfEmpty(value string) any {
 const (
 	TargetModeCanary  = "canary"
 	TargetModePrimary = "primary"
+	// TargetModeShadow is not a mode an enablement may target (it is
+	// registered by `seed`); it is named here for `carry`, which preserves
+	// a shadow row verbatim across a schema-digest change (CHAOS-8144).
+	TargetModeShadow = "shadow"
 )
 
 // EnablementCitedMismatchState is the one terminal state other than

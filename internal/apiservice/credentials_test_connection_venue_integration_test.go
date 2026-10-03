@@ -17,7 +17,6 @@ import (
 	"net/netip"
 	"net/url"
 	"path/filepath"
-	"runtime"
 	"sort"
 	"strings"
 	"sync"
@@ -29,6 +28,7 @@ import (
 
 	"github.com/full-chaos/dev-health-ops/internal/platform/config"
 	"github.com/full-chaos/dev-health-ops/internal/platform/secrets"
+	"github.com/full-chaos/dev-health-ops/internal/testsupport/moduleroot"
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/venueoracle"
 )
 
@@ -523,7 +523,7 @@ func TestVenueOracleCredentialConnectionTest(t *testing.T) {
 		t.Fatal(err)
 	}
 	pemKey := generatePEM(t)
-	_, thisFile, _, _ := runtime.Caller(0)
+	_, thisFile, _, _ := moduleroot.Caller(0)
 	siteDir := filepath.Join(filepath.Dir(thisFile), "testdata", "provider_stub")
 
 	previousClient, previousLookup := credentialProbeClient, credentialHostLookup

@@ -32,3 +32,18 @@ func TestBuildMatchesPython(t *testing.T) {
 		}
 	}
 }
+
+// A signature byte of exactly 0x80 can only reach Valid as invalid UTF-8 (a
+// Python str cannot hold one), so no recorded Python answer exists for it; the
+// refusal is Go's own and is pinned here: it is the signature byte check at
+// `>= 0x80`, not `> 0x80`.
+func TestValidRefusesALoneHighByteInTheSignature(t *testing.T) {
+	id := uuid.MustParse("0f1e2d3c-4b5a-6978-8796-a5b4c3d2e1f0")
+	good, _ := Build(id, "k")
+	idText, signature, _ := strings.Cut(good, ".")
+	for _, token := range []string{idText + "." + signature + "\x80", idText + ".\x80" + signature[1:]} {
+		if ok, err := Valid(token, "k"); ok || err != ErrNonASCIISignature {
+			t.Errorf("Valid(%q) = (%v, %v), want (false, ErrNonASCIISignature)", token, ok, err)
+		}
+	}
+}

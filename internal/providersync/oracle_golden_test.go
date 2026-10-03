@@ -12,12 +12,12 @@ import (
 	"os/exec"
 	"path/filepath"
 	"regexp"
-	"runtime"
 	"sort"
 	"strings"
 	"sync"
 	"testing"
 
+	"github.com/full-chaos/dev-health-ops/internal/testsupport/moduleroot"
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/pyoracle"
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/venueoracle"
 )
@@ -62,7 +62,7 @@ var oraclePairGoldensOpened sync.Map
 // written as a candidate.
 func frozenPairAnswer(t *testing.T, pairID string, encodedCases []byte) []byte {
 	t.Helper()
-	_, currentFile, _, _ := runtime.Caller(0)
+	_, currentFile, _, _ := moduleroot.Caller(0)
 	packageDir := filepath.Dir(currentFile)
 	repoRoot := filepath.Dir(filepath.Dir(packageDir))
 

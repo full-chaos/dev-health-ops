@@ -3,6 +3,7 @@ package providersync
 import (
 	"context"
 	"errors"
+	"github.com/full-chaos/dev-health-ops/internal/testsupport/fakehttp"
 	"strconv"
 	"strings"
 	"testing"
@@ -47,7 +48,7 @@ import (
 func TestGitHubTestsCrossArtifactSameNameSuiteGetsDistinctNaturalKeys(t *testing.T) {
 	doer := &githubTestsOversizedRunDoer{t: t, jobs: 1, artifacts: 2, reportSuitesPerArtifact: 1}
 	claim := nativeTestClaim("github", "cicd")
-	final, effects := walkGitHubTestsChunksCapturingEffects(t, GitHubTestsRouteHandler{}, claim, githubTestsClient(t, doer), 4)
+	final, effects := walkGitHubTestsChunksCapturingEffects(t, GitHubTestsRouteHandler{}, claim, githubTestsClient(t, fakehttp.Client(doer)), 4)
 
 	// Anti-vacuity: the route must genuinely report this unit as a normal,
 	// complete success -- otherwise a duplicate key inside a withheld/failed
@@ -83,7 +84,7 @@ func TestGitHubTestsCrossArtifactSameNameSuiteGetsDistinctNaturalKeys(t *testing
 func TestGitHubTestsCrossArtifactBatchCommitsBothArtifactsWithoutError(t *testing.T) {
 	doer := &githubTestsOversizedRunDoer{t: t, jobs: 1, artifacts: 2, reportSuitesPerArtifact: 1}
 	claim := nativeTestClaim("github", "cicd")
-	_, effects := walkGitHubTestsChunksCapturingEffects(t, GitHubTestsRouteHandler{}, claim, githubTestsClient(t, doer), 4)
+	_, effects := walkGitHubTestsChunksCapturingEffects(t, GitHubTestsRouteHandler{}, claim, githubTestsClient(t, fakehttp.Client(doer)), 4)
 
 	suiteEffect, ok := findGitHubTestsEffect(effects, "test_suite_results")
 	if !ok {

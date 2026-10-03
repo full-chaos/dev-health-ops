@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"github.com/full-chaos/dev-health-ops/internal/testsupport/fakehttp"
 	"slices"
 	"testing"
 	"time"
@@ -172,7 +173,7 @@ func TestLinearWorkItemFamilyCollectsAndCommitsAllSixteenDestinations(t *testing
 	batch, err := handler.Collect(
 		context.Background(), claim,
 		providerfoundation.Credential{Provider: "linear", ID: claim.CredentialID},
-		linearWorkItemsClient(t, doer), normalizedAt,
+		linearWorkItemsClient(t, fakehttp.Client(doer)), normalizedAt,
 	)
 	if err != nil {
 		t.Fatal(err)
@@ -237,7 +238,7 @@ func TestLinearWorkItemFamilyKeepsEveryEmptyDestinationExplicit(t *testing.T) {
 	}).Collect(
 		context.Background(), claim,
 		providerfoundation.Credential{Provider: "linear", ID: claim.CredentialID},
-		linearWorkItemsClient(t, doer), time.Date(2026, 8, 3, 12, 0, 0, 0, time.UTC),
+		linearWorkItemsClient(t, fakehttp.Client(doer)), time.Date(2026, 8, 3, 12, 0, 0, 0, time.UTC),
 	)
 	if err != nil {
 		t.Fatal(err)
@@ -264,7 +265,7 @@ func TestLinearWorkItemFamilyFailsBeforeIOAndWithholdsDerivationGap(t *testing.T
 			Direct: linearFamilyDirectHandler(),
 		}).Collect(
 			context.Background(), claim, credential,
-			linearWorkItemsClient(t, doer), normalizedAt,
+			linearWorkItemsClient(t, fakehttp.Client(doer)), normalizedAt,
 		)
 		if !errors.Is(err, ErrInvalidConfiguration) || len(doer.requests) != 0 ||
 			len(batch.Effects) != 0 || batch.Watermark != nil {
@@ -283,7 +284,7 @@ func TestLinearWorkItemFamilyFailsBeforeIOAndWithholdsDerivationGap(t *testing.T
 			Derived: linearFamilyDeriver(linearFamilyDerivationSource{err: gap}),
 		}).Collect(
 			context.Background(), claim, credential,
-			linearWorkItemsClient(t, doer), normalizedAt,
+			linearWorkItemsClient(t, fakehttp.Client(doer)), normalizedAt,
 		)
 		if !errors.Is(err, gap) || len(doer.requests) != 2 ||
 			len(batch.Effects) != 0 || batch.Watermark != nil || batch.Result != nil ||
@@ -306,7 +307,7 @@ func TestLinearWorkItemFamilyFailsBeforeIOAndWithholdsDerivationGap(t *testing.T
 				Derived: linearFamilyDeriver(linearFamilyDerivationSource{}),
 			}).Collect(
 				context.Background(), claim, credential,
-				linearWorkItemsClient(t, doer), normalizedAt,
+				linearWorkItemsClient(t, fakehttp.Client(doer)), normalizedAt,
 			)
 			if !errors.Is(err, ErrInvalidConfiguration) || len(doer.requests) != 0 ||
 				len(batch.Effects) != 0 || batch.Watermark != nil {
@@ -328,7 +329,7 @@ func TestLinearWorkItemFamilyFailsBeforeIOAndWithholdsDerivationGap(t *testing.T
 				Derived: linearFamilyDeriver(linearFamilyDerivationSource{}),
 			}).Collect(
 				context.Background(), alias, credential,
-				linearWorkItemsClient(t, doer), normalizedAt,
+				linearWorkItemsClient(t, fakehttp.Client(doer)), normalizedAt,
 			)
 			if !errors.Is(err, ErrInvalidConfiguration) || len(doer.requests) != 0 ||
 				len(batch.Effects) != 0 || batch.Watermark != nil {

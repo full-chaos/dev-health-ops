@@ -1,6 +1,7 @@
 package httpapi
 
 import (
+	"context"
 	"net/http"
 	"strings"
 )
@@ -36,10 +37,10 @@ func TraceHandler(next http.Handler, options TraceOptions) http.Handler {
 			return
 		}
 		recorder := &accessRecorder{ResponseWriter: w}
-		traced := r.WithContext(ctx)
+		traced := r.WithContext(context.WithValue(ctx, notFoundCauseKey{}, recorder))
 		returned := false
 		defer func() {
-			observer.finish(span, boundedMethod(r.Method), registeredPattern(traced), recorder.status, !returned)
+			observer.finish(span, boundedMethod(r.Method), registeredPattern(traced), recorder.status, !returned, recorder.notFoundCause.Load())
 		}()
 		next.ServeHTTP(recorder, traced)
 		returned = true

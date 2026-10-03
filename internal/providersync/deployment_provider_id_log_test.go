@@ -3,6 +3,7 @@ package providersync
 import (
 	"bytes"
 	"context"
+	"github.com/full-chaos/dev-health-ops/internal/testsupport/fakehttp"
 	"io"
 	"log/slog"
 	"net/http"
@@ -28,7 +29,7 @@ func TestGitLabDeploymentLogsDropAMalformedProviderID(t *testing.T) {
 		{body: `[{"id":"CANARY provider content","iid":7,"status":"success","created_at":"2026-07-22T10:00:00Z","sha":"main","ref":"main","deployable":"wrong-shape"}]`},
 		{status: 400, body: `{"message":"nope"}`},
 	}}
-	_, err := (GitLabDeploymentsRouteHandler{}).Collect(context.Background(), nativeTestClaim("gitlab", "deployments"), providerfoundation.Credential{}, gitLabRepositoryClient(t, doer, "https://gitlab.example"), time.Date(2026, 8, 9, 12, 0, 0, 0, time.UTC))
+	_, err := (GitLabDeploymentsRouteHandler{}).Collect(context.Background(), nativeTestClaim("gitlab", "deployments"), providerfoundation.Credential{}, gitLabRepositoryClient(t, fakehttp.Client(doer), "https://gitlab.example"), time.Date(2026, 8, 9, 12, 0, 0, 0, time.UTC))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -62,7 +63,7 @@ func TestGitHubDeploymentLogsDropAnOverlongProviderID(t *testing.T) {
 	defer slog.SetDefault(previous)
 	id := strings.Repeat("7", 65)
 	doer := &overlongDeploymentIDDoer{id: id}
-	_, err := (GitHubDeploymentsRouteHandler{}).Collect(context.Background(), nativeTestClaim("github", "deployments"), providerfoundation.Credential{}, gitHubRepositoryClient(t, doer, "https://api.github.com"), time.Date(2026, 7, 23, 12, 30, 0, 0, time.UTC))
+	_, err := (GitHubDeploymentsRouteHandler{}).Collect(context.Background(), nativeTestClaim("github", "deployments"), providerfoundation.Credential{}, gitHubRepositoryClient(t, fakehttp.Client(doer), "https://api.github.com"), time.Date(2026, 7, 23, 12, 30, 0, 0, time.UTC))
 	if err != nil {
 		t.Fatal(err)
 	}

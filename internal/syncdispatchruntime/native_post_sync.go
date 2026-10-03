@@ -3,7 +3,7 @@ package syncdispatchruntime
 import (
 	"context"
 	"errors"
-	"log/slog"
+	"github.com/full-chaos/dev-health-ops/internal/syncdispatchruntime/synclog"
 	"time"
 
 	"github.com/full-chaos/dev-health-ops/internal/joboutbox"
@@ -71,7 +71,7 @@ type NativePostSyncService struct {
 	workGraph                           WorkGraphInvestmentPostSyncWriter
 	teamImport                          TeamAutoimportPostSyncWriter
 	teamRepoOwnership                   TeamRepoOwnershipPostSyncWriter
-	logger                              *slog.Logger
+	logger                              *synclog.Logger
 	fanoutObserver                      jobruntime.PostSyncFanoutObserver
 	teamRepoOwnershipDerivationObserver jobruntime.TeamRepoOwnershipDerivationObserver
 	now                                 func() time.Time
@@ -110,13 +110,10 @@ func NewNativePostSyncService(
 	workGraph WorkGraphInvestmentPostSyncWriter,
 	teamImport TeamAutoimportPostSyncWriter,
 	teamRepoOwnership TeamRepoOwnershipPostSyncWriter,
-	logger *slog.Logger,
+	logger *synclog.Logger,
 ) (*NativePostSyncService, error) {
 	if pool == nil || daily == nil || remaining == nil || workGraph == nil || teamImport == nil || teamRepoOwnership == nil {
 		return nil, ErrPostSyncUnavailable
-	}
-	if logger == nil {
-		logger = slog.Default()
 	}
 	return &NativePostSyncService{
 		pool: pool, daily: daily, remaining: remaining, workGraph: workGraph,
@@ -275,15 +272,12 @@ func (service *NativePostSyncService) observeFanout(
 		return
 	}
 	logger := service.logger
-	if logger == nil {
-		logger = slog.Default()
-	}
-	logger.Info("post_sync_fanout",
-		"outcome", string(outcome),
-		"org_id", args.OrganizationID(),
-		"sync_run_id", args.SyncRunID(),
-		"dispatch_id", dispatchID,
-		"repo_count", 0,
+	logger.Info(context.Background(), synclog.MsgPostSyncFanout,
+		synclog.Text(synclog.KeyOutcome, synclog.ParseLabel(string(outcome))),
+		synclog.Org(synclog.ParseID(args.OrganizationID())),
+		synclog.Run(synclog.ParseID(args.SyncRunID())),
+		synclog.Dispatch(synclog.ParseID(dispatchID)),
+		synclog.Count(synclog.KeyRepoCount, 0),
 	)
 	if service.fanoutObserver != nil {
 		_ = service.fanoutObserver.ObservePostSyncFanout(outcome)
@@ -397,7 +391,7 @@ func (service *NativePostSyncService) publishTeamRepoOwnershipDerivation(
 
 // PostSyncTeamRepoOwnershipDerivationFailedMessage is the log message emitted
 // when the best-effort team-repo-ownership-derivation handoff is dropped.
-// Stable identifier, same pattern as PostSyncTeamAutoimportFailedMessage, so
+// Stable identifier, same pattern as synclog.MsgPostSyncTeamAutoimportHandoffDropped, so
 // operators (and tests) can find the drops the fanout deliberately survives.
 const PostSyncTeamRepoOwnershipDerivationFailedMessage = "post_sync_team_repo_ownership_derivation_handoff_dropped"
 
@@ -407,14 +401,7 @@ func (service *NativePostSyncService) observeTeamRepoOwnershipDerivationFailure(
 	err error,
 ) {
 	logger := service.logger
-	if logger == nil {
-		logger = slog.Default()
-	}
-	logger.ErrorContext(ctx, PostSyncTeamRepoOwnershipDerivationFailedMessage,
-		slog.String("org_id", plan.OrganizationID),
-		slog.String("sync_run_id", plan.SyncRunID),
-		slog.String("error", err.Error()),
-	)
+	logger.Error(ctx, synclog.MsgPostSyncTeamRepoOwnershipDerivationHandoffDropped, synclog.Org(synclog.ParseID(plan.OrganizationID)), synclog.Run(synclog.ParseID(plan.SyncRunID)), synclog.Failure(err))
 	// team-lead ruling, 2026-08-28: "non-fatal != silent" -- a swallowed
 	// deterministic rejection (worker_job_routes has no row for this kind, or
 	// the row is paused) must be COUNTABLE, not only logged, so a
@@ -447,14 +434,7 @@ func (service *NativePostSyncService) observeTeamAutoimportFailure(
 	err error,
 ) {
 	logger := service.logger
-	if logger == nil {
-		logger = slog.Default()
-	}
-	logger.ErrorContext(ctx, PostSyncTeamAutoimportFailedMessage,
-		slog.String("org_id", plan.OrganizationID),
-		slog.String("sync_run_id", plan.SyncRunID),
-		slog.String("error", err.Error()),
-	)
+	logger.Error(ctx, synclog.MsgPostSyncTeamAutoimportHandoffDropped, synclog.Org(synclog.ParseID(plan.OrganizationID)), synclog.Run(synclog.ParseID(plan.SyncRunID)), synclog.Failure(err))
 }
 
 func currentPostSyncReference(ctx context.Context, tx pgx.Tx, args PostSyncArgs) (bool, error) {

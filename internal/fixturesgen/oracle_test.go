@@ -10,12 +10,12 @@ import (
 	"math/rand"
 	"os/exec"
 	"path/filepath"
-	"runtime"
 	"strconv"
 	"strings"
 	"testing"
 	"time"
 
+	"github.com/full-chaos/dev-health-ops/internal/testsupport/moduleroot"
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/pyoracle"
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/venueoracle"
 )
@@ -37,7 +37,7 @@ const generatorsPythonBuild = "a4847c5e93607451a0c987b314d37e02fc43ce85"
 // recording.
 func openOracle(t *testing.T, file, digest string) (*venueoracle.Golden, string) {
 	t.Helper()
-	_, currentFile, _, _ := runtime.Caller(0)
+	_, currentFile, _, _ := moduleroot.Caller(0)
 	repoRoot := filepath.Dir(filepath.Dir(filepath.Dir(currentFile)))
 	golden := venueoracle.OpenGolden(t, venueoracle.GoldenSpec{
 		Path:        "testdata/golden/" + file + ".json",

@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"github.com/full-chaos/dev-health-ops/internal/testsupport/fakehttp"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -246,7 +247,7 @@ func TestGitLabTeamCatalogCollectCountsFailedAndRetriedAttempts(t *testing.T) {
 		}
 	})
 	client, err := providerfoundation.NewHTTPClient(
-		"gitlab", "https://gitlab.example.com", doer,
+		"gitlab", "https://gitlab.example.com", fakehttp.Client(doer),
 		func(*http.Request) error { return nil },
 		providerfoundation.RetryPolicy{
 			MaxAttempts: 2, InitialWait: time.Nanosecond, MaxWait: time.Nanosecond,
@@ -296,7 +297,7 @@ func TestGitLabTeamCatalogCollectNonStrictWalkFailureStampsRequestsOnTheSkipBatc
 		return nil, errors.New("simulated transient transport failure")
 	})
 	client, err := providerfoundation.NewHTTPClient(
-		"gitlab", "https://gitlab.example.com", doer,
+		"gitlab", "https://gitlab.example.com", fakehttp.Client(doer),
 		func(*http.Request) error { return nil },
 		providerfoundation.RetryPolicy{
 			MaxAttempts: 2, InitialWait: time.Nanosecond, MaxWait: time.Nanosecond,

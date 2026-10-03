@@ -373,6 +373,35 @@ func TestGuardDecisionTable(t *testing.T) {
 	}
 }
 
+// TestOrgScopeFirstOfTwoXOrgIDValuesDecides pins which of two X-Org-Id values OrgIdMiddleware reads: the first
+// (Starlette's headers.get answers the first value of a repeated header). A foreign org first and the caller's own
+// second is refused; the caller's own first and a foreign org second is accepted as the caller's own. The Python
+// answer for the two-value form is NOT measured by an oracle: the venue request type holds one value per header.
+func TestOrgScopeFirstOfTwoXOrgIDValuesDecides(t *testing.T) {
+	for _, test := range []struct {
+		name   string
+		values []string
+		status int
+		body   string
+	}{
+		{name: "foreign first, own second", values: []string{strangerOrg, ownOrg}, status: 403, body: `{"detail": "X-Org-Id not permitted for this user"}`},
+		{name: "own first, foreign second", values: []string{ownOrg, strangerOrg}, status: 200, body: "org=" + ownOrg + " "},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			request := httptest.NewRequest(http.MethodGet, "/x", nil)
+			request.Header.Set("Authorization", "Bearer "+sign(t, claims(nil)))
+			for _, value := range test.values {
+				request.Header.Add("X-Org-Id", value)
+			}
+			recorder := httptest.NewRecorder()
+			NewScope(authenticator(t, newStore()), quiet()).OrgScope(echo).ServeHTTP(recorder, request)
+			if recorder.Code != test.status || !strings.HasPrefix(recorder.Body.String(), test.body) {
+				t.Fatalf("%d %s, want %d %s", recorder.Code, recorder.Body.String(), test.status, test.body)
+			}
+		})
+	}
+}
+
 func TestOrgScopeDecisionTable(t *testing.T) {
 	superStore := func(s *fakeStore) { s.users[userID] = UserState{IsActive: true, IsSuperuser: true} }
 	cases := []struct {

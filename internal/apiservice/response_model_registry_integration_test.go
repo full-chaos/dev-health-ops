@@ -14,7 +14,6 @@ import (
 	"net/http/httptest"
 	"path/filepath"
 	"regexp"
-	"runtime"
 	"strings"
 	"testing"
 
@@ -23,6 +22,7 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/api/teamsidentity"
 	"github.com/full-chaos/dev-health-ops/internal/apiservice/admin"
 	"github.com/full-chaos/dev-health-ops/internal/auth/httpapi"
+	"github.com/full-chaos/dev-health-ops/internal/testsupport/moduleroot"
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/pyoracle"
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/venueoracle"
 )
@@ -98,7 +98,7 @@ func routeShape(method, path string) string {
 // and each named exception must still be what it says.
 func TestRouteResponseModelsMatchTheFrozenFastAPITable(t *testing.T) {
 	golden := venueoracle.OpenGolden(t, programGolden("route-response-models", t.Name(), "53ccf0751052b5ecd6adf2c0ee773956b0b8737bdf227bec1cc23c209d3255fe"))
-	_, file, _, _ := runtime.Caller(0)
+	_, file, _, _ := moduleroot.Caller(0)
 	root := golden.PythonRoot(t, filepath.Clean(filepath.Join(filepath.Dir(file), "..", "..")))
 	request := venueoracle.ProgramRequest("fastapi route table", pythonRouteTableProgram, nil, producerEnv)
 	answers := golden.Produce(t, root, []venueoracle.Request{request}, func(producer *venueoracle.Producer, _ []venueoracle.Request) []venueoracle.Response {

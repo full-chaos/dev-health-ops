@@ -852,10 +852,11 @@ func (store *PostgresStore) ExhaustClaimedPartition(ctx context.Context, claim C
 	return store.exhaustPartition(ctx, claim.Partition.ID, claim.Token)
 }
 
-// exhaustPartition is the shared body. Invariant: a claimed caller may end only a partition that is still its own claim
-// (running under its token, live or expired) -- never another claimant's expired lease, never a pending/failed one, because a failed
-// partition without completed_at was just released for retry by a replacement attempt and must stay reclaimable
-// (CHAOS-8177 r2 P1). claimToken "" = no claim of the caller: pending, failed or expired-lease partitions are taken.
+// exhaustPartition is the shared body. Invariant (CHAOS-8177): a claimed caller may exhaust ONLY a partition that runs under
+// its OWN token; a partition under another token, expired or not, belongs to the reclaim path (ClaimPartition, or the
+// claim-less exhaust of that partition's own job). A pending/failed partition is never a claimed caller's: a failed one
+// without completed_at was just released for retry and must stay reclaimable. claimToken "" = claim-less caller:
+// pending, failed or expired-lease partitions are taken.
 func (store *PostgresStore) exhaustPartition(ctx context.Context, partitionID, claimToken string) error {
 	if !store.valid() || !validUUID(partitionID) || (claimToken != "" && !validUUID(claimToken)) {
 		return ErrUnavailable

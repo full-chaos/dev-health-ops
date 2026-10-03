@@ -688,7 +688,40 @@ func TestAnOldAttemptsClaimedFallbackLeavesACrashedReplacementsExpiredLeaseAlone
 		t.Fatalf("run=%s partition=%s token=%s, want running/running under the replacement's token %s", runStatus, partitionStatus, token, replacement.Token)
 	}
 	clock = clock.Add(time.Second)
+	// The paths that own a dead claimant's partition, both on real Postgres: (1) the replacement job's next River attempt
+	// reclaims it (ClaimPartition takes a running partition whose lease expired) ...
 	if again, err := store.ClaimPartition(ctx, partition); err != nil || again == nil {
 		t.Fatalf("the crashed replacement's partition cannot be reclaimed: %v, %v", again, err)
+	}
+}
+
+// CHAOS-8177 (D4464 condition 2): the other path that owns a dead claimant's partition. When the replacement's job reaches
+// its LAST attempt and cannot claim, the claim-less exhaust takes the expired lease and finalizes the run.
+func TestACrashedClaimantsExpiredPartitionIsExhaustedByTheClaimlessPathOfItsOwnJob(t *testing.T) {
+	ctx := context.Background()
+	pool, store, _ := newRemainingRedriveTestStack(t)
+	clock := time.Date(2026, 10, 2, 12, 0, 0, 0, time.UTC)
+	store.now = func() time.Time { return clock }
+	org := "00000000-0000-4000-8000-000000009825"
+	run, err := store.StartRun(ctx, StartRunRequest{OrganizationID: org, Family: "capacity", Generation: "claimant-died", ScopeKey: "all-teams",
+		GenerationSeed: int64Pointer(825), Scopes: []json.RawMessage{capacityScopeJSON(90)}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	partition := deterministicPartitionID(run.ID, 1)
+	dead, err := store.ClaimPartition(ctx, partition)
+	if err != nil || dead == nil {
+		t.Fatalf("claim = %v, %v", dead, err)
+	}
+	clock = clock.Add(dead.LeaseDuration + time.Minute) // the claimant died; never released
+	if err := store.ExhaustPartition(ctx, partition); err != nil {
+		t.Fatal(err)
+	}
+	var runStatus, partitionStatus string
+	var exhausted bool
+	_ = pool.QueryRow(ctx, "SELECT status FROM remaining_metric_runs WHERE id=$1::uuid", run.ID).Scan(&runStatus)
+	_ = pool.QueryRow(ctx, "SELECT status, completed_at IS NOT NULL FROM remaining_metric_partitions WHERE id=$1::uuid", partition).Scan(&partitionStatus, &exhausted)
+	if runStatus != "failed" || partitionStatus != "failed" || !exhausted {
+		t.Fatalf("run=%s partition=%s exhausted=%t, want failed/failed/true", runStatus, partitionStatus, exhausted)
 	}
 }

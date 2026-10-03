@@ -1,0 +1,2 @@
+# Estimate (two containers of one nginx image, about 820 requests): replace it with the hosted shard time.
+internal/ingressplanes	30

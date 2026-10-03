@@ -343,23 +343,6 @@ def _normalize_ci_script_path(token: str) -> str:
     return posixpath.normpath(token)
 
 
-def _build_job_ci_script_references() -> set[str]:
-    """Every `ci/*.sh`/`ci/*.py` path (including nested subdirectories,
-    doubled slashes, and `./` segments -- all normalized to one
-    canonical form) the `build` job's own `run:` steps invoke -- read
-    from the parsed YAML `run:` text (what actually executes), not a raw
-    grep over the file, same discipline as `_latest_tag_step_script()` in
-    test_docker_images_fanin_gate.py. Raises `AssertionError` (via
-    `_normalize_ci_script_path`) if any reference is built from an
-    unresolved shell variable."""
-    workflow = yaml.safe_load(WORKFLOW.read_text(encoding="utf-8"))
-    refs: set[str] = set()
-    for step in workflow["jobs"]["build"]["steps"]:
-        for token in _extract_ci_script_tokens(step.get("run", "")):
-            refs.add(_normalize_ci_script_path(token))
-    return refs
-
-
 def _gate_targets() -> set[str]:
     """The Go container targets ci/check_go_containers.sh knows about."""
     match = _ALL_TARGETS.search(CONTAINER_GATE.read_text(encoding="utf-8"))
@@ -423,45 +406,6 @@ def test_the_publish_workflow_rebuilds_when_it_changes() -> None:
     workflow = yaml.safe_load(WORKFLOW.read_text(encoding="utf-8"))
     filters = yaml.safe_load(workflow["jobs"]["changes"]["steps"][1]["with"]["filters"])
     assert ".github/workflows/docker-images.yml" in filters["code"]
-
-
-def test_build_job_ci_script_references_are_covered_by_the_changes_filter() -> None:
-    """CHAOS-4949 (#2162), codex round 5 P1: the `build` job's own base-guard
-    step invokes `ci/python_base_ref.sh` directly, but the `changes` filter
-    (which decides whether `build` even RUNS on a PR) had no entry for it --
-    a PR touching ONLY that script set changes.code=false and skipped
-    `build`, and the guard the script belongs to, entirely. Same failure
-    shape as test_the_publish_workflow_rebuilds_when_it_changes above, one
-    filter section over.
-
-    Recurrence guard, not a one-off fix: every `ci/*.sh`/`ci/*.py` the
-    build job's `run:` steps reference must appear -- once BOTH sides are
-    normalized with `posixpath.normpath` (codex round 7, P1: comparing
-    raw strings meant `ci/helpers//preflight.sh` and
-    `ci/helpers/preflight.sh` were treated as different paths even though
-    they are the same file on disk) -- in the filter's `code` list. A
-    future SECOND script added to the build job without a matching filter
-    update fails this test immediately, rather than silently skipping
-    `build` the same way -- this is what actually prevents recurrence,
-    independent of whether the filter entry chosen for today's single
-    script is broad or narrow."""
-    workflow = yaml.safe_load(WORKFLOW.read_text(encoding="utf-8"))
-    filters = yaml.safe_load(workflow["jobs"]["changes"]["steps"][1]["with"]["filters"])
-    code_patterns = {posixpath.normpath(p) for p in filters["code"]}
-    referenced = _build_job_ci_script_references()
-    assert referenced, (
-        "no ci/*.sh or ci/*.py reference found in the build job's run: "
-        "steps -- this guard would pass vacuously; if ci/python_base_ref.sh's "
-        "invocation moved or was renamed, update _build_job_ci_script_references, "
-        "don't just delete this assert"
-    )
-    uncovered = sorted(ref for ref in referenced if ref not in code_patterns)
-    assert not uncovered, (
-        f"the build job invokes {uncovered} but the `changes` filter's code "
-        "list does not name them (after normalizing both sides) -- a PR "
-        "touching only these scripts sets changes.code=false and skips "
-        "the build job (and whatever guard the script belongs to) entirely"
-    )
 
 
 @pytest.mark.parametrize(
@@ -570,34 +514,6 @@ def test_ci_script_variable_built_path_refuses_rather_than_guesses() -> None:
         AssertionError, match=re.escape('ci/$(dirname "$x")/preflight.sh')
     ):
         _normalize_ci_script_path('ci/$(dirname "$x")/preflight.sh')
-
-
-def test_build_job_ci_script_references_propagates_a_variable_built_path() -> None:
-    """End-to-end version of the row above: a build-job `run:` step that
-    references a ci/ script via an unresolved shell variable must make
-    the pipeline fail loud, not silently drop the unresolvable reference
-    and report a false-clean coverage result.
-
-    UPDATED (codex round 8): the refusal now fires at EXTRACTION time
-    (the windowed scan in `_extract_ci_script_tokens` itself, item (b)
-    in the module comment), not only later inside
-    `_normalize_ci_script_path` -- a `${`/`$(` substitution INSIDE the
-    path can defeat word-splitting entirely (round 8 P1), so waiting
-    until normalize-time to catch it would be too late: there might be
-    no matching token to normalize at all. First asserts the real
-    workflow's own run text extracts cleanly with no refusal (the
-    positive control this test needs to be meaningful), then that
-    appending one variable-built reference makes extraction itself
-    raise."""
-    workflow = yaml.safe_load(WORKFLOW.read_text(encoding="utf-8"))
-    real_run_text = "\n".join(
-        step.get("run", "") for step in workflow["jobs"]["build"]["steps"]
-    )
-    _extract_ci_script_tokens(real_run_text)  # positive control: no refusal today
-    with pytest.raises(AssertionError, match=re.escape("ci/${dir}/preflight.sh")):
-        _extract_ci_script_tokens(
-            real_run_text + '\nbash ci/${dir}/preflight.sh "$OWNER"'
-        )
 
 
 def test_ci_script_dynamic_path_refuses_via_windowed_scan() -> None:

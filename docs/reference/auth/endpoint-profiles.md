@@ -308,3 +308,28 @@ rather than guessed.
    inventory: independent re-discovery, unowned-surface detection, and
    staleness/content-drift checks on every anchor. `ci/discover_ops_routes.py`
    is that gate's discovery half.
+
+## Routes the Go services serve (CHAOS-8305)
+
+The inventory above is derived from the Python app. The Go services (`go-api`, its internal and
+billing-edge listeners, and `query-api`) now serve the routes, so a second gate guards them
+(guardrail G-1 for Go: a served route without an auth profile fails CI). It lives in
+`internal/apiservice/routeprofile_gate_test.go` and walks the route set from the production router
+constructors, executed in the test: no route is listed by hand.
+
+- **Both directions.** Every `(method, path)` the Go services serve has a profile row, and every
+  profile row is served or explained. Rows for routes only Go serves are in
+  `contracts/auth/v1/endpoint-profiles.go.json` (the same schema; `endpoint-profiles.ops.json` is not
+  edited, and `endpoint-profiles.ops.pins.tsv` pins every one of its rows byte for byte).
+- **The closed lists** (`ci/`): `go_wildcard_dispatch.tsv` (rows a Go wildcard handler serves by
+  comparing a literal path value in code), `endpoint_profiles_python_only.tsv` (rows for routes no Go
+  service serves, each with its ticket or decision), `go_refusal_stubs.tsv` (registrations that only
+  refuse, each probed), `endpoint_profile_class_exceptions.tsv` (rows whose class the Go code does not
+  enforce as the row says). An entry that no longer applies fails.
+- **Classes are read and tested.** A new row's class is read from the guard the route is wrapped in
+  (`policy.Guard.Wrap` / `BodyFirst`, file:line in the row) and the gate sends every `protected` route
+  an unauthenticated request: a route whose credential is the api's access token must answer exactly
+  401.
+- **The walk is recorded** in `ci/go_served_routes.tsv`; `tests/test_endpoint_profiles_contract.py`
+  compares it with `ci/discover_ops_routes.py` and names every difference. All of this goes with
+  the Python app (CHAOS-8306).

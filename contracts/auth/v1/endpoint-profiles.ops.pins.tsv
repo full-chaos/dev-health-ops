@@ -1,0 +1,294 @@
+# CHAOS-8305: sha256 of each endpoint-profiles.ops.json row's canonical JSON (keys sorted). A changed, removed or added row fails
+# TestTheOpsProfileRowsAreWhatTheyWere until this file is re-recorded on purpose (UPDATE_PROFILE_PINS=1). Deleted with the file (CHAOS-8306).
+DELETE /api/v1/admin/credentials/{provider}/{name} [dev-health-ops-api]	0666f9fbde907e125738b6c9931bf68b05a4d00f81468da4911822e770f0a3f4
+DELETE /api/v1/admin/ip-allowlist/{entry_id} [dev-health-ops-api]	42291582fdbedc47f12c1566627bc665914c01a416b2c7417195f52a565a33a7
+DELETE /api/v1/admin/llm-settings [dev-health-ops-api]	1a570ef78d684d10459d85d0b5ba698b8d952252cf95b96a9101b31aad8e7348
+DELETE /api/v1/admin/orgs/{org_id} [dev-health-ops-api]	bd27c4a5767e426a31d49d8c3603e97afee3f9d998889c1157579eeba8259068
+DELETE /api/v1/admin/orgs/{org_id}/feature-overrides/{override_id} [dev-health-ops-api]	406b0bfd5ad817092cb446ce618ab451508f0913b9e4e2ad6f349a3f65b39019
+DELETE /api/v1/admin/orgs/{org_id}/members/{user_id} [dev-health-ops-api]	6720bc1f01137e3fe0be75b15dff9130e988b018c9859e34d7714967bfbaa1c7
+DELETE /api/v1/admin/retention-policies/{policy_id} [dev-health-ops-api]	ba37570024e8d82931b9e7f0b6d33d1b6c7498f467d65a51f6ef693ec239e6a7
+DELETE /api/v1/admin/settings/{category}/{key} [dev-health-ops-api]	3f1abe6140728ea7d6990e78cc016733d3125686f29a43a7248ca5acf52b4606
+DELETE /api/v1/admin/sync-configs/{config_id} [dev-health-ops-api]	10d71c6d2c537c2cc994d2a05f9f9e406630a68805e2f2c491c1e1acb5f81d9f
+DELETE /api/v1/admin/teams/{team_id} [dev-health-ops-api]	5c52d1c4e7fd301344f012f8c13cf29dafd07f2281cceb27e139577ba8801653
+DELETE /api/v1/admin/users/{user_id} [dev-health-ops-api]	854043680cf6f8749381bf139efc257933b30d206ae3b925445b572164cc4fb9
+DELETE /api/v1/auth/sso/providers/{provider_id} [dev-health-ops-api]	90eb65a55c97558711debe185024593cc4102e1ff88b9bbb6bdbc5caa724c9e6
+GET /api/v1/admin/audit-logs [dev-health-ops-api]	cccd4161e0573cc5a15ec027e7fa5d9fcf2fee713b8f72e767ed1e3fa75579a8
+GET /api/v1/admin/audit-logs/resource/{resource_type}/{resource_id} [dev-health-ops-api]	07825b31fb9cd016c1ace7eda4f3d5ee7b3ee53990c90a72da231c11472aff60
+GET /api/v1/admin/audit-logs/user/{user_id} [dev-health-ops-api]	c1f019d2f738916addfe82008c18b84e5c3565749995e1830bd47323ff697ccd
+GET /api/v1/admin/audit-logs/{log_id} [dev-health-ops-api]	7affea9dd3722683cdee5ff7372c9cab39ffd574ff9d98f6e8a4a17005013b0c
+GET /api/v1/admin/backfill-jobs [dev-health-ops-api]	af9e0b255e06e00c776a4fe05dfb619cd54f384c0ed15ddff65db1ebeab62778
+GET /api/v1/admin/backfill-jobs/{job_id} [dev-health-ops-api]	8e1337583fffe0a0fcdd86a861480043e0d8b2718ef7f828a62049298faefd4e
+GET /api/v1/admin/credentials [dev-health-ops-api]	32ce136ba2cf535ec1b8c1e68a434fd41494bc1be6ed48e84cc9067488bfac2b
+GET /api/v1/admin/credentials/{credential_id}/repos [dev-health-ops-api]	15dc7be8de93bf9a2339f44273e631a14ef43bdfc35f217baf985888a9071e6a
+GET /api/v1/admin/credentials/{provider}/{name} [dev-health-ops-api]	7da68732be3dc79b9b3be5e2cfb90484a6888a289505bd0348c2f2515826a751
+GET /api/v1/admin/customer-push/batches/{ingestion_id} [dev-health-ops-api]	6e27af678497f982676f4b18f18be33a0f967d572bc0b9f0481de5dd97259e4e
+GET /api/v1/admin/customer-push/schemas [dev-health-ops-api]	c17f71a5f00603016ce124416023695226deb1b64e867ca54374771dfcc4da83
+GET /api/v1/admin/customer-push/schemas/{schema_version} [dev-health-ops-api]	d1603635d09ca43fafc02cc47e6499feeaad89a41e55ef34fbeecb46b2a6d488
+GET /api/v1/admin/customer-push/sources [dev-health-ops-api]	4df3a8518b42a20ab9a7dddac1a44d30402cb2af149e45087f78a73b9ae2a47d
+GET /api/v1/admin/customer-push/sources/{source_id} [dev-health-ops-api]	aef1dc93c5168d76dda2ae3017ed353be268c31229cde48ce4adfef6eedbe1ec
+GET /api/v1/admin/customer-push/sources/{source_id}/batches [dev-health-ops-api]	5b297db8ae1e0fe5fb09f76d9f236d384950e55988fcdb0adb713676f5e05d56
+GET /api/v1/admin/customer-push/sources/{source_id}/tokens [dev-health-ops-api]	7dc64f58cb79955997ad9f7e83d9ae55af500eb5072ff375b78ddb04f4934360
+GET /api/v1/admin/customer-push/tokens [dev-health-ops-api]	dcdc17b4b05f42990d932dc8c4109ff79b865a8a02d51302a70a8b531bea46d0
+GET /api/v1/admin/feature-flags [dev-health-ops-api]	1fb98acc742eb720737ec17d4e02025afa84c81e296c328abaff2b39a9f87a84
+GET /api/v1/admin/identities [dev-health-ops-api]	17a88fac867d5536bb9e59659d2c6919170a423f747918196adf38151333e255
+GET /api/v1/admin/impersonate/status [dev-health-ops-api]	1f1f0dcc4ad77ac73e28a9f21b7d2148423e33c59daf9b8516700ab1e0c95275
+GET /api/v1/admin/integrations [dev-health-ops-api]	4d05160255efc3bde175abf05dbc197daf7e590e92d4a10a3c06f2f61e9e6baf
+GET /api/v1/admin/integrations/pagerduty/services [dev-health-ops-api]	b9916cbe9b85fe464c5e848fa3291edebb23172bda168069f5eca0c4268cc40a
+GET /api/v1/admin/integrations/pagerduty/status [dev-health-ops-api]	04784aa891ed98b4dfced73454388b518d6d8bec0be95908c361dc0183f66f32
+GET /api/v1/admin/integrations/pagerduty/webhook-bindings/{binding_id} [dev-health-ops-api]	7eb99d48b76e0518dff8af9b99bce0ae2e427322c36f6155132d5e8ce63618d6
+GET /api/v1/admin/integrations/{integration_id} [dev-health-ops-api]	06bdf6096a3511a7658400d7eebb269885b7e12e2efd167349be4a65161a3c9a
+GET /api/v1/admin/integrations/{integration_id}/datasets [dev-health-ops-api]	613b524ec7d09973588e7485220ca9b0a5c2ee76283a174a7fca05c44f35a598
+GET /api/v1/admin/integrations/{integration_id}/sources [dev-health-ops-api]	d926cc86a97ffe30eb6c93026b26f868cd4a3401c1894ccfd30e64e4e0c720fc
+GET /api/v1/admin/ip-allowlist [dev-health-ops-api]	ca3d5e898a6f8fc779032467c3593dde7169331b92e6d309f396a7f826903976
+GET /api/v1/admin/ip-allowlist/{entry_id} [dev-health-ops-api]	14cd5a664865cc27ebc515db12b144185e0597a2ec293a7e6f86b9c07e8af8e8
+GET /api/v1/admin/llm-settings [dev-health-ops-api]	994f9ec5002e21d46c0e5dfa8c7d2a1fc08dd74c5a9166dfdb26543760b889a2
+GET /api/v1/admin/llm-settings/budget [dev-health-ops-api]	8d86d4c5aa0ed215c855e2f944d4408066fd1b078689525e299eab2ccf7dadaa
+GET /api/v1/admin/llm-settings/spend [dev-health-ops-api]	b9063615f15d62e6e04401d0912ceca5d92ada745a95730f70c985feb4d6c7db
+GET /api/v1/admin/llm-settings/status [dev-health-ops-api]	e2756f40d631e8a29615d2e86023b21737f1647aa4f698be075c1870d591f160
+GET /api/v1/admin/orgs [dev-health-ops-api]	15051c2151e3b2634bf3ca9fbfba8df2765bf9d93cd799c8c60d139b1f65b8ba
+GET /api/v1/admin/orgs/{org_id} [dev-health-ops-api]	d6e6b3310fda91a9bee257240f7e8c29b17b9b999030049af231af3de6e7b5d0
+GET /api/v1/admin/orgs/{org_id}/feature-overrides [dev-health-ops-api]	50287a669032daec5907c4021f0d4d2f6d3183fcbcb0f17972397ee9fe4f060e
+GET /api/v1/admin/orgs/{org_id}/members [dev-health-ops-api]	4e06eb10ef043d694ac1513ed94354e90142e588b858c90e2b7d405b839e6b02
+GET /api/v1/admin/platform/audit-logs [dev-health-ops-api]	0ad3cbdeac23986443e058460fcd69395a8079357cf2e9a69b4cc3f5c5c9307d
+GET /api/v1/admin/platform/stats [dev-health-ops-api]	8f80ebd199368064841ed2c3db6fca2197f37099e6794dd813e0f82effcc13d4
+GET /api/v1/admin/retention-policies [dev-health-ops-api]	9cdea19df25fb08030664487574d04184d7084e51e6512fff5851e19f787eb14
+GET /api/v1/admin/retention-policies/resource-types [dev-health-ops-api]	194bfc4cfd065ed26fdba9b2b8a9beccc69e21798973c0b1456488b6ebcda1d1
+GET /api/v1/admin/retention-policies/{policy_id} [dev-health-ops-api]	09de3f479a404b7d4aaa923d0a612684b4b0dbe3386768f64c3161747fb47b71
+GET /api/v1/admin/settings/categories [dev-health-ops-api]	62f390942d42218819e000923f6d82544aa92750d14753d0d492d92402379a70
+GET /api/v1/admin/settings/{category} [dev-health-ops-api]	0c08c3aebf7c24e6533b04c2ee19b8ec823cf1e2348ef766ee929a6698b54f5c
+GET /api/v1/admin/settings/{category}/{key} [dev-health-ops-api]	f1299ee69493b7ee665903701089cb222f47766c8679bba210c38f0c0fcc7bf5
+GET /api/v1/admin/setup/status [dev-health-ops-api]	3d6c8697b6e8792e12b944a16eea0caf57038ea736848a6ce7bd9d80e169e37b
+GET /api/v1/admin/sync-configs [dev-health-ops-api]	c761e01226cbdb53ce22244774c4926a76ac6d6a95ef725163bba2fe77dcb46d
+GET /api/v1/admin/sync-configs/auto-import-capabilities [dev-health-ops-api]	2e6ed301a73b142816e3daf208a2c0cea50830a97858babd4455c56001b3c26f
+GET /api/v1/admin/sync-configs/{config_id} [dev-health-ops-api]	1a9c1676d7872e7df73cbc63daddfff90144956728ac26907dfeafa6186dabc5
+GET /api/v1/admin/sync-configs/{config_id}/coverage [dev-health-ops-api]	4c94c666a3ea5acd0b81358c7e81c2748d473ec61639f40e0ddd560398124dbb
+GET /api/v1/admin/sync-configs/{config_id}/jobs [dev-health-ops-api]	b43cb0d8abd91dca93dc0a988b60a04f635e3b4c654a9e7bcc7dc3dcae8ecb3c
+GET /api/v1/admin/sync-configs/{config_id}/repositories [dev-health-ops-api]	eb26ff1b111207f926552f7e7cacd93d5a33c23ea2a46ead1db878991a40a856
+GET /api/v1/admin/sync-runs/{run_id} [dev-health-ops-api]	f552d1123499171c70c56f11aec8c7c8f3a13ab05098a0d0d34d596932aa45dc
+GET /api/v1/admin/sync-runs/{run_id}/units [dev-health-ops-api]	047d3e46671549dd1a9230082ba7e2b4c9b40a48bef26060c5b34ace5f7871fc
+GET /api/v1/admin/sync-targets [dev-health-ops-api]	7c4a35f6b97966febba6e2bc441f5df24c1f31049cd193d5058383f11d661cf3
+GET /api/v1/admin/teams [dev-health-ops-api]	1a63e044b8f6f16357bb96ceb918b0db6972796ddd85d14d171a8673ea882a52
+GET /api/v1/admin/teams/discover [dev-health-ops-api]	16022a495fd270518901c87eba855966fde62b5b06272486e4e8283c18622eeb
+GET /api/v1/admin/teams/pending-changes [dev-health-ops-api]	3f8bd9541de8a8a4588f7b65272d59ce1553b22aeab801d863bd3529e710f02f
+GET /api/v1/admin/teams/{team_id} [dev-health-ops-api]	5e5b85c4e781895c8dbe68d13aee1aadb997dc92b263aae0ab022681133cf528
+GET /api/v1/admin/teams/{team_id}/discover-members [dev-health-ops-api]	accc3b6bda95e5dccf782637264b8b6ab08f3783409dbc9a3c194bf783a7ed01
+GET /api/v1/admin/teams/{team_id}/infer-members [dev-health-ops-api]	d1be173314bb3279d3c1b03899f7bd5e2077c585cb4f525271525b2927f17955
+GET /api/v1/admin/users [dev-health-ops-api]	bbb1654642087a16078d92d4126ab9f71ecab15f7ef573d94fb2345d757df49c
+GET /api/v1/admin/users/{user_id} [dev-health-ops-api]	d0fa69c184e3c3c0d6bf82e3ec12082557cf951ff1d2aeb96b025c7a45eb67bb
+GET /api/v1/auth/me [dev-health-ops-api]	332de54562383834cdfb200ce2173fa7d9b019296f0c27131dbdc9c6350cc41e
+GET /api/v1/auth/me/organizations [dev-health-ops-api]	ea00076232e1c664174a05cb5c7a09be25f21b2e166b15322dad4f0f65ee8a0d
+GET /api/v1/auth/oauth/{provider_type}/authorize [dev-health-ops-api]	38f63a69e04c04b4dbcf3a57e0a532b9df4324c3de7a64dd002503f76970fd24
+GET /api/v1/auth/onboarding/state [dev-health-ops-api]	6bb9b167dea4457b00c3539d7c8ec123c427674c25b26a4ab4bd981b45139979
+GET /api/v1/auth/saml/{provider_id}/metadata [dev-health-ops-api]	5b327c4e1dc6a1720b9a969baf9a5a0d43c7f23a64b1697f9ac81c3d1c67208b
+GET /api/v1/auth/sso/providers [dev-health-ops-api]	87b0698cae25b2ae7ea1becabd239001486d1cb4ae2e26549c029372f5c511a7
+GET /api/v1/auth/sso/providers/{provider_id} [dev-health-ops-api]	709b9ac8bb595fccfe7e28557a6278c22152f190406855231fcbf4cafd7582d3
+GET /api/v1/auth/verify [dev-health-ops-api]	6ee56b49af3c37cde7abcabcb06318505180713eb50a00c28aa964cc1ba74861
+GET /api/v1/drilldown/issues [dev-health-ops-api]	3c7c7b6e8f78420dd863d2dd97a8442ba7fea26a7bd87282205d286e499dc2e0
+GET /api/v1/drilldown/prs [dev-health-ops-api]	043552cb80d47fb23f4b55200abdc7071f8160bfaa59b99d41b44166e07aa8d8
+GET /api/v1/explain [dev-health-ops-api]	c640ed3245f17d57183ab2b35a326f00cfada688cf7ac1947d73228a212ca929
+GET /api/v1/external-ingest/availability [dev-health-ops-api]	6627eb56c9c6cc45c56bd598ffb3c5d0da78f5a5034b7f4e30190559a7da1adb
+GET /api/v1/external-ingest/batches [dev-health-ops-api]	60e49e06ddeab23b880d82d30e2d7271dd86769c4d05072f0dee4d0a5e47cfec
+GET /api/v1/external-ingest/batches/{ingestion_id} [dev-health-ops-api]	96020a5279f2bfb1596d875b65cd8258d09aee86cfde52ff0b4a63bf120ccf4c
+GET /api/v1/external-ingest/schemas [dev-health-ops-api]	86d62e41121f40b8e8d17e797d53d785142f4be0d58659cee83154de8a3c07c8
+GET /api/v1/external-ingest/schemas/{schema_version} [dev-health-ops-api]	f736aa26049cac421a5b9f5b74505bf9388061b09c18dceb54e534b3247f3d1d
+GET /api/v1/filters/options [dev-health-ops-api]	94cbb6dfda55d29b47d64e920d7531745781768326340f6597968f2a02077693
+GET /api/v1/flame [dev-health-ops-api]	6d05269e1c17cac3cd773d3734d0a279bc7f346ea4d8e3d129c111faa3f06bca
+GET /api/v1/flame/aggregated [dev-health-ops-api]	c5ba0814f88e111297cfd38cb51be696aa15974eae2f447fe1ad37e78132b80b
+GET /api/v1/heatmap [dev-health-ops-api]	f6a637b49b799b04c90824549a816c6ef9cec7fdcafde5b7c07d8d4490140722
+GET /api/v1/home [dev-health-ops-api]	3b3929e8b9d0dc79fcd895614a23b6eb9c3834164684cfa90a503c812997dc47
+GET /api/v1/internal/acr/entitlements/{org_id} [dev-health-ops-api]	5e4624fadf33b2d056560a5fab53eb02dec6787945f91788e74c9f4d0c27bd22
+GET /api/v1/internal/acr/health [dev-health-ops-api]	06394cf25590c2094023664f114b165ea21401773f0ee789756917bacf17d0de
+GET /api/v1/investment [dev-health-ops-api]	548403da0a383f9814b8bdc091bdf618eb5e067f843f0b2c621e5b6ecc406be8
+GET /api/v1/investment/sunburst [dev-health-ops-api]	9e8120b4f62d026786d442f8e693e377af49ebb1452f4a2a0bc7acad350c0b5d
+GET /api/v1/licensing/entitlements/{org_id} [dev-health-ops-api]	700a840a4fe8ee12ed2e9de185a1bb4053bfd86604c8243c14632f373e720bd0
+GET /api/v1/meta [dev-health-ops-api]	428626fc8544bd0f1b3a5f764d925254e2d29dba65ca0bdf8633d8d810e9a355
+GET /api/v1/opportunities [dev-health-ops-api]	6838fabaa62e089fa8dd0344dd95db069bd74b929a48b13864657afebca753b2
+GET /api/v1/orgs/me [dev-health-ops-api]	f1413dc1ab24f87173ea500bdd6d512edaa279526ca5637891f8500f45e970bd
+GET /api/v1/people [dev-health-ops-api]	79699b890e2b4e316336211553833662dbd84998e1b683838f1621de5c06ca28
+GET /api/v1/people/{person_id}/drilldown/issues [dev-health-ops-api]	d32eadec0c314c540af5eea3633f735933ccff07ae4e4ea2746db236461cff0c
+GET /api/v1/people/{person_id}/drilldown/prs [dev-health-ops-api]	7c4d9276d6ec9364cf220c965a37f61317af644ab660b6d5d4554b497d9b91ce
+GET /api/v1/people/{person_id}/metric [dev-health-ops-api]	1095f7a247c7f3b65d337468476e057a1e9b7aee6d463276b5cbcf650a7ff2a9
+GET /api/v1/people/{person_id}/summary [dev-health-ops-api]	8e26063e5ccfcbf5d357ddeb954d95f4601d7a3a62783a8d92efc518fbcf11ca
+GET /api/v1/quadrant [dev-health-ops-api]	70796758d2a943a0e0c8dbc77f1026a5ffd7742a0ed264be377cd431f21ffa57
+GET /api/v1/sankey [dev-health-ops-api]	331a05d3db42120c4ad537c404ce22d510af565cdbf7aac779a37269c24e3ad3
+GET /api/v1/telemetry/status [dev-health-ops-api]	99f314d581cb2ae98b36469879eade3fdb9a5804cee1d120464341af3b86944b
+GET /api/v1/webhooks/health [dev-health-ops-api]	eacbc52fd0abb6103957a42215975abf228621c3b759fb5231a6c7ebd14901bf
+GET /api/v1/work-units [dev-health-ops-api]	e012c1fe31924d08600b0e224d4d8fa75cd690a751651ea17f58e274a5632fd0
+GET /graphql [dev-health-ops-api]	e919321b00fb627c55b0f80fbf63304fa3be40b9be273be44a7536f2a41615a5
+GET /metrics [dev-health-ops-api]	c1b90c822eb71c7918b13b2daa340b1b3946d90242bef26c3a40e61d7c7c53f7
+GET,HEAD /docs [dev-health-ops-api]	554dd389c0e193099c4920059294e6ed4485f466a960853b2819fe20979eeec4
+GET,HEAD /docs/oauth2-redirect [dev-health-ops-api]	7c225ffa7a65d1019f84055e9045a454466a60844437229aa8a6de43c3021339
+GET,HEAD /health [dev-health-ops-api]	964030ef75d87448ba949ef36d29b4fd30c843b17e8600847e17ea0240e1c9ed
+GET,HEAD /health/workers [dev-health-ops-api]	b6906b82c25b10734bfa59897b841832b529a1404062b2f9e898f0a09713ec9f
+GET,HEAD /openapi.json [dev-health-ops-api]	9349164eea4e5d71b3f270bcc97d862d09ca0d667d672d2b17c35f0a86121376
+GET,HEAD /ready [dev-health-ops-api]	2d34e9dcdecd40dced31e1f54904a900a5ee4ca38e8357fdf276d2da8bdd7095
+GET,HEAD /redoc [dev-health-ops-api]	489ee026e519e3b0c7019684dd60495733505d0f9898f0bc81fd0a7e6685e9ac
+PATCH /api/v1/admin/credentials/{provider}/{name} [dev-health-ops-api]	1e1befd6d5807787805b05785edc235dcfee10b8abf1e7e02bc0f157297d5928
+PATCH /api/v1/admin/customer-push/sources/{source_id} [dev-health-ops-api]	31f95d1657a07c5385202c25eb6e86a1cc2423592b9093c836daa95d3ae83bf8
+PATCH /api/v1/admin/feature-flags/{flag_id} [dev-health-ops-api]	0277b172a9b4f886847807873099e9d124ebd9742fdc40fc85fb7377830856df
+PATCH /api/v1/admin/integrations/{integration_id} [dev-health-ops-api]	e73b552e5ccb1a89e476ef5a2d16f017630282c68ea1e9078e4beea37c6ed283
+PATCH /api/v1/admin/integrations/{integration_id}/datasets [dev-health-ops-api]	d950529d7f895ea2da8d9e76117c4bee5df8965109e30fca524c85cdb6a14080
+PATCH /api/v1/admin/integrations/{integration_id}/sources/{source_id} [dev-health-ops-api]	6caaee01714ee8f0058fb140adbf9e6234917b64604a983574780fad4a5783d8
+PATCH /api/v1/admin/ip-allowlist/{entry_id} [dev-health-ops-api]	8bd68a4ca0145d643125d90b982dd14e26f53493e5f62933bc3d83d9d8ed77b6
+PATCH /api/v1/admin/orgs/{org_id} [dev-health-ops-api]	8302032148dcceae3b50187de0729114d008f763fa982b6e95bf1cd66108a359
+PATCH /api/v1/admin/orgs/{org_id}/feature-overrides/{override_id} [dev-health-ops-api]	3539b29beb3ab176823632eeb9d47da76b7d306cf036e11303b929b1bc763055
+PATCH /api/v1/admin/orgs/{org_id}/members/{user_id} [dev-health-ops-api]	d9b0d5969c19fa7483ab2528d753a16f6bac1afd946658e4a848877bd8c7b410
+PATCH /api/v1/admin/retention-policies/{policy_id} [dev-health-ops-api]	46abd02e54b073512556e9054aadd3bdd8f4a7dc68c7a9ff764a8a4b81be7ef7
+PATCH /api/v1/admin/sync-configs/{config_id} [dev-health-ops-api]	3cd297a5b8d2845a2d86bdd7e4846e4e58ad7d54e1adfe0ec64d7879d63c9c07
+PATCH /api/v1/admin/teams/{team_id} [dev-health-ops-api]	c9a5037a8cef1850e9888d261afc31edeb7e919a26f3fb52e000ad86793e3a4c
+PATCH /api/v1/admin/users/{user_id} [dev-health-ops-api]	03bf31f81cd97db7c984a1312b90d2c078228875d72a4179b7cbb1cd10a55a29
+PATCH /api/v1/auth/oauth/providers/{provider_id} [dev-health-ops-api]	e1516d61eaf9581cd335ef0a4149d05d32932005b787514b197a4455813a5d50
+PATCH /api/v1/auth/sso/providers/{provider_id} [dev-health-ops-api]	5d66003fb7946790608ff51463352be109b554b028efdaeb9cb97517a5eda1dc
+PATCH /api/v1/orgs/me [dev-health-ops-api]	620883e9b7fd8bc390fccd92b2363c75aa1eda407a44ad8b0a1a662afe5efe9a
+POST /api/v1/admin/credentials [dev-health-ops-api]	f31287c34518bfdf19f75e6b16a95cb5a02e0e0e625fda05aef9abb62735f841
+POST /api/v1/admin/credentials/test [dev-health-ops-api]	6819b31f290bd856649f6dcd22e4b28fe5010bceeb9de1817abb268deb9829f2
+POST /api/v1/admin/customer-push/sources [dev-health-ops-api]	fbc8253869969c94afd96b736e0935ca292a1c5814ea341230ad476f0792aa9b
+POST /api/v1/admin/customer-push/sources/{source_id}/tokens [dev-health-ops-api]	7e3939aa00cd6407f28eefde10709e84ecba28039fd3b3216faff016a6dfe058
+POST /api/v1/admin/customer-push/sources/{source_id}/validate [dev-health-ops-api]	44104f444c7abf214b139b9b73e85a7dc122fe1c17dc9642263e2061dfe04a28
+POST /api/v1/admin/customer-push/tokens [dev-health-ops-api]	ad79cdeb9977344d3c47be28ee713378584ad77cf846802baf04ae06aeb05e0a
+POST /api/v1/admin/customer-push/tokens/{token_id}/revoke [dev-health-ops-api]	1aaf3c4976a59530fdb6f5a30dc3dd7172984b3a6db4dff1a25b5dd50b89e3a8
+POST /api/v1/admin/customer-push/tokens/{token_id}/rotate [dev-health-ops-api]	36f4c4db1cf412dd0912a8ec4b13f5bd512d1ad93830d46f1f7e6118532c4738
+POST /api/v1/admin/identities [dev-health-ops-api]	398c7503c585ed2499e634d04888f7c86b83f1bb1437139156b4ed2e6634cf22
+POST /api/v1/admin/impersonate [dev-health-ops-api]	ce8a803a5a8ea69f4248a4d3a2ae09631fcd7a34101bb30e245e8175e066a70b
+POST /api/v1/admin/impersonate/stop [dev-health-ops-api]	72f11699eb67125fa46e651c73224c3ab4c55bc55fd466f4f70224a407326ad0
+POST /api/v1/admin/integrations [dev-health-ops-api]	92e8d00ad97a827bae4915377ef550d5fb3edbef44f562c25f196e4ef397de95
+POST /api/v1/admin/integrations/github/install-callback [dev-health-ops-api]	72d652937266e93ed1174fcb242400dcaeda9970fd089e051dba65781d38546d
+POST /api/v1/admin/integrations/github/install-url [dev-health-ops-api]	e1cbabdeaee06279256b582a5eb27661c9590468991fd20655791211dbf2ff61
+POST /api/v1/admin/integrations/pagerduty/api-token [dev-health-ops-api]	79cd6a730af5d1bd63bc1155c5219f25a14714f403906431322bda9f012c0986
+POST /api/v1/admin/integrations/pagerduty/authorize [dev-health-ops-api]	42e65402a78cc6adc4fa87bfa3279c5bbc851636226729bb80125af3b2a5e5a1
+POST /api/v1/admin/integrations/pagerduty/callback [dev-health-ops-api]	f1ea19343a77ddb7b5bc3e269ecf58787e77b5240dbd1be17544ece039abe545
+POST /api/v1/admin/integrations/pagerduty/client-credentials [dev-health-ops-api]	f8992f38cb61734dab59753db9522afe7ed21ee30e2e7b191cd3b95f9ecd327e
+POST /api/v1/admin/integrations/pagerduty/disconnect [dev-health-ops-api]	dfcbd97e2404532584c41b7af3d9ffa9262b3191e89fe30b69931c9625b4e82a
+POST /api/v1/admin/integrations/pagerduty/preflight [dev-health-ops-api]	7f120392a1d052ebe29a8f3ece5d4c61a7fcc503a0f44c348567efe340fce225
+POST /api/v1/admin/integrations/pagerduty/webhook-bindings [dev-health-ops-api]	03811cdf62f1b123872e9d85f9353f95827ee0b7c27dc1fc010c76cd4be12148
+POST /api/v1/admin/integrations/pagerduty/webhook-bindings/{binding_id}/activate [dev-health-ops-api]	54f16c822af1c704e03f7f811154d83720a1f10123c5e7bf559369ee7bf79ea5
+POST /api/v1/admin/integrations/pagerduty/webhook-bindings/{binding_id}/revoke [dev-health-ops-api]	a03bf746b37716248b5f502e2cccd8a6b2c5615df03731e7c8bd45ffcdf5d818
+POST /api/v1/admin/integrations/pagerduty/webhook-bindings/{binding_id}/rotate [dev-health-ops-api]	31a9eec60c4a00c7adcf12ec2ca69666dbbe5f8072e232a59c341b7d84af5b92
+POST /api/v1/admin/integrations/{integration_id}/backfill [dev-health-ops-api]	57f361720f622f7a8b090532cecf9452e70b75e464b4b2dbef18ed3eea4c3100
+POST /api/v1/admin/integrations/{integration_id}/discover [dev-health-ops-api]	8a1e834c838f26bb37569f7cd48d07ccc794abe6c3ca710bbe42a41b0bb809ea
+POST /api/v1/admin/integrations/{integration_id}/sync [dev-health-ops-api]	c16c18653d318781731dd1cd7120ec98b9d9831d58768912e370c0e9e5d5e401
+POST /api/v1/admin/ip-allowlist [dev-health-ops-api]	c066bf3047cc2749879387efea6f5cf04e8249fb6c403bbaedc4c34776914ca6
+POST /api/v1/admin/ip-allowlist/check [dev-health-ops-api]	59fc422f94daba2806b66138234cae455518bec3ce9b696ebfd6278f1a9c4b43
+POST /api/v1/admin/llm-settings/readiness [dev-health-ops-api]	26e89bbd3ec7c3309889d70303e90acf2dce53ea19418c628d4b7d9dfc46f3f4
+POST /api/v1/admin/orgs [dev-health-ops-api]	4ac3f3b53c97493824443335b764465e960b6a12ae42fb42bd39bfec872001ff
+POST /api/v1/admin/orgs/{org_id}/feature-overrides [dev-health-ops-api]	4e84bc6f73d93a7aa157ed230c82172d2f89f8d963059a24f3fbcfacb47ff0bf
+POST /api/v1/admin/orgs/{org_id}/invites [dev-health-ops-api]	a86e2686fe0e9edefaaaffc493656abe175d28a1c21f10d39de34a40400607c9
+POST /api/v1/admin/orgs/{org_id}/members [dev-health-ops-api]	ad5c328e5b71024c4607bd054c04f5192f345a594522e168cb398d083ac2c3c5
+POST /api/v1/admin/retention-policies [dev-health-ops-api]	d5195879e267664699fae2706f6a031aeffc91d65aebf3061cf52e9005983342
+POST /api/v1/admin/retention-policies/{policy_id}/execute [dev-health-ops-api]	fd918d686c4ee97d95ff7626150f7dbd61b7b2367ecc54c74a200507c5264168
+POST /api/v1/admin/settings [dev-health-ops-api]	da00fca172621fb39513641fca672735a0880fb38929efbf03d67924971ca4ca
+POST /api/v1/admin/sync-configs [dev-health-ops-api]	48180266b3021ed7d07ac5fcd39ff647ef3b9d347eea9dc86ffc2704ebae6c93
+POST /api/v1/admin/sync-configs/batch [dev-health-ops-api]	81fb19b1beee9d9adcbd32d219415444eed3b6fb6aa7d6b57b6c5a779cc8fa34
+POST /api/v1/admin/sync-configs/{config_id}/backfill [dev-health-ops-api]	3f0a974e842d0e2e2fac609cfd2232fd61b7dfaadac3796aea3af8205e49e2e9
+POST /api/v1/admin/sync-configs/{config_id}/trigger [dev-health-ops-api]	616c1929a626aef70021a9053f6a3999c62a9dae0c7112fde391235c2fa2cc83
+POST /api/v1/admin/teams [dev-health-ops-api]	5e53c5e3ddb8b37f308bab6e3162701cd1da916661aa128b632e9d9c8c70a600
+POST /api/v1/admin/teams/import [dev-health-ops-api]	4049276152f58f5c7841cac66e3a5682beb84c8bd8382a64320766f4be3ac6fa
+POST /api/v1/admin/teams/{team_id}/approve-changes [dev-health-ops-api]	bdec31580ddbec466cc1986edb1bf26cc3f80462f704b8eb13e8a6daef72a5c4
+POST /api/v1/admin/teams/{team_id}/confirm-inferred-members [dev-health-ops-api]	661dc0b52863e24b1778e7780603d62c91a2e56a3c10127966cb2024c2cf88cf
+POST /api/v1/admin/teams/{team_id}/confirm-members [dev-health-ops-api]	41cd9ab0b9fc71062de3302644a86e913bebdef0b3ae60fdb82c00ff6691a37f
+POST /api/v1/admin/teams/{team_id}/dismiss-changes [dev-health-ops-api]	391a58f151bb9a3e1bf1c9e23b1b2663038337da84f84315db26f93c85a17a55
+POST /api/v1/admin/users [dev-health-ops-api]	4ef70878250335278a2d1dc3fd3bca97961636227bff86d6254ed17083d9898d
+POST /api/v1/admin/users/{user_id}/password [dev-health-ops-api]	27d1140c5b00c5b37d0219a31e393862f872a3fa48c94ace8857dafd2fbd929c
+POST /api/v1/auth/accept-invite [dev-health-ops-api]	72f0b32f0a11f1807878e687c538fdbc8428e4ea1b01df35f7df9e16f349571b
+POST /api/v1/auth/forgot-password [dev-health-ops-api]	3ee451b3325af8bf8366dca54e9097b49121bab0b5e584ecc4368407087108f6
+POST /api/v1/auth/login [dev-health-ops-api]	3349f3b623c2e171f32d5983e10d176c0727767aea52d3e754f0d3ed8a71cfe3
+POST /api/v1/auth/logout [dev-health-ops-api]	e229c3c1c98a2be1b4643cb587448b7c69261f29a8e88aa7e33325180070db6f
+POST /api/v1/auth/oauth/providers [dev-health-ops-api]	0a42de0ff5466166667164b8f4fda4bc3516fbc808dd052619cafb9726a04fc0
+POST /api/v1/auth/oauth/{provider_id}/authorize [dev-health-ops-api]	88eb4333300c14647352c68fc7ba2eaa93372c5a6a629022baaa1c7c170c6939
+POST /api/v1/auth/oauth/{provider_id}/callback [dev-health-ops-api]	497400159b8305a32e2a61b6492e9adc8b5b18690826379a864e3db8a9b8ba3d
+POST /api/v1/auth/oidc/{provider_id}/authorize [dev-health-ops-api]	fca771b6072e50a13c93969968dc44adbdbaa2ad2002001ea38eacaf8020e98c
+POST /api/v1/auth/oidc/{provider_id}/callback [dev-health-ops-api]	93062c2f027d27e38a4e81fceac7fc020834ec96e80be4a5db0ce58bccea2294
+POST /api/v1/auth/onboard [dev-health-ops-api]	08add5a11a6bc9468717f11f7f112c1e81585218ce644792c5466584ddb8704f
+POST /api/v1/auth/onboarding/skip-integration [dev-health-ops-api]	78fa7da3d8733b7e1480ebcedbd7ea84e03e02dba3e6b8c447b17027345bcb5c
+POST /api/v1/auth/refresh [dev-health-ops-api]	5da8941db9e32c6b788c431c328dec738ac8a238b780533089d762e7a79619a7
+POST /api/v1/auth/register [dev-health-ops-api]	96dd8ca9ed3e3ce0475a0d9d9515e83bae0852dfe544003831a6e33de2e5e673
+POST /api/v1/auth/resend-verification [dev-health-ops-api]	2004839abec73518f292a3f7140e87706238dbbfda8ba19ce035d7b8a7eea1c6
+POST /api/v1/auth/reset-password [dev-health-ops-api]	7608469206da92e938df4be9f8499283124ba14a99fa7a02772332b31bac62af
+POST /api/v1/auth/saml/{provider_id}/acs [dev-health-ops-api]	3e5571d99cf697b45ba89253696f81ebded347935c5f1774f1336b96eb6f6f46
+POST /api/v1/auth/saml/{provider_id}/initiate [dev-health-ops-api]	dbe9b991921c0d4529700802c2d6e1f2f5c7238fdd11ec06a45cfc420594de61
+POST /api/v1/auth/social-login [dev-health-ops-api]	f2c45bef46f56dc1b8a86e779a4b270a5a340db576e24015cea08eebdfdccaa0
+POST /api/v1/auth/sso/providers [dev-health-ops-api]	4183ce98255b119e78fd4df07e2a9b135437a080c3b7b53fe12da0765bcfbb30
+POST /api/v1/auth/sso/providers/{provider_id}/activate [dev-health-ops-api]	72203b1ca4305793cf34ea6e9fadaccc9c9573cc0f8f00060df2e6343671fdbb
+POST /api/v1/auth/sso/providers/{provider_id}/deactivate [dev-health-ops-api]	e1474336a50bbb7a71ba4def65dc308cf7e420ca03a86be6c256e4fe8e6e0e55
+POST /api/v1/auth/switch-org [dev-health-ops-api]	c8f816bbf84492d4e9c8b996a568d627b744b93dfe992f34f5168de20b7170d8
+POST /api/v1/auth/validate [dev-health-ops-api]	0cdf418556c01f21627b58324e0431e1afd50f17ed45c99e7448df48b5924d30
+POST /api/v1/drilldown/issues [dev-health-ops-api]	4b3a93e1356e960d0fa18c453d67b496115bfbdafd4d9f0fff7bc58e772e14b8
+POST /api/v1/drilldown/prs [dev-health-ops-api]	4ddd821e413d9eade749eec504626168e1270a8eef9ff9b872bdc5e217f0d784
+POST /api/v1/explain [dev-health-ops-api]	515e66c1cf5ab5356cf256dc029b4021875b04677ff7bd956a967dc2b7e95ac5
+POST /api/v1/external-ingest/batches [dev-health-ops-api]	894d559eed4abacba1d5d9cc23919441333656deac20c73b555a51f3164eeda6
+POST /api/v1/external-ingest/validate [dev-health-ops-api]	b45e047607c0d2ed0c70cedfb06d728a8a2cc912b1e0a3688bb62506c7994f85
+POST /api/v1/home [dev-health-ops-api]	2e5a359fe4d6c4b7dac67072b1c86f9cb3a9dd0d8dca458ba2e82d2d46cd372d
+POST /api/v1/ingest/commits [dev-health-ops-api]	19b4003188fab1ccf4d3f6b76e4f5f9409616f0c5645263a162f2ce5a9a6c6e7
+POST /api/v1/ingest/deployments [dev-health-ops-api]	ab82def915b767c50304ec1c4d562de577d517dedbee1d48d8eb85094312be45
+POST /api/v1/ingest/incidents [dev-health-ops-api]	5630465083ee50ce56dcdae5c031acdcfc6784e52105db4bb2d7235e4f2e875d
+POST /api/v1/ingest/pull-requests [dev-health-ops-api]	ecf0ee330e3b297ac96f96ac7bbc3759a4357a0c21ae8e3912685e66ef73cf77
+POST /api/v1/ingest/telemetry [dev-health-ops-api]	5a6fcff1f5369ff9d09a2bc919b57326422ae6c90f6639ef0c15c67e4ddeac64
+POST /api/v1/ingest/work-items [dev-health-ops-api]	cbdbdcbd4e14f355ca4425b6b16a8f175d3895b01b5521a27f3a912d57efe823
+POST /api/v1/investment [dev-health-ops-api]	57aad43c8ad0c3ed5030d01f5511b0ddd51f7283883b6d526d5d15a21e4655ec
+POST /api/v1/investment/explain [dev-health-ops-api]	6ae36241901112887649afe5770c38845d09e249847c169f96cc9c3243d5558d
+POST /api/v1/investment/flow [dev-health-ops-api]	7733e7d573fe089581566b76b7bab8ef469abda2245744f9fc5bc4675ca4b07b
+POST /api/v1/investment/flow/repo-team [dev-health-ops-api]	e683b00954bda4df0a2b3c4f1c28b79fd2d39322d9762bd71a6a30c187a37fe0
+POST /api/v1/opportunities [dev-health-ops-api]	dc7bb258c18627c2fac8a84f474292601d54c0bb17d3519f789bdcce06021ff9
+POST /api/v1/product-telemetry/events [dev-health-ops-api]	cd19815113bdb9245df4b4463ecc1ba2b1eab3e98f05523cc0b06e36cb381983
+POST /api/v1/sankey [dev-health-ops-api]	5076e65b43de4ae2d5e7c0a6e46108f593a0422db58c0551a13bef10e203b6a7
+POST /api/v1/telemetry/opt-in [dev-health-ops-api]	80863265c9c5b8685c0c7e8de1edf7ab55f16fc4999df591cfface374c89c4a7
+POST /api/v1/telemetry/opt-out [dev-health-ops-api]	d61deea339c56912ceca46a92837465c6d35084e86eb5940853ded670ec27dfd
+POST /api/v1/telemetry/report [dev-health-ops-api]	170e267217a8f50d814f8d42e1a275f4f65cdca6c435b1d22ee140e8428831c8
+POST /api/v1/webhooks/github [dev-health-ops-api]	a0eb836ed479c5069f53260dfad89261bd400218b4aab91284e1bb8bab256efc
+POST /api/v1/webhooks/gitlab [dev-health-ops-api]	aaeb3b9b20757b47a8c7e4138f05a840622fdcd0afe50125f1da3849c673056c
+POST /api/v1/webhooks/jira [dev-health-ops-api]	fa4115be414a27eebd966c235b8e00a0e65f0f82ceaa2552786d8f446e0d0ba3
+POST /api/v1/webhooks/pagerduty/{binding_id} [dev-health-ops-api]	fe25ecaa7bd8fc239663cf0479a0c0d54d4e3cd9eccb10a45bd3318bd9803938
+POST /api/v1/work-units [dev-health-ops-api]	93d4611d46ad997c0072223f9167d140476fe6eef4b924243641309a07e50272
+POST /api/v1/work-units/{work_unit_id}/explain [dev-health-ops-api]	3fb009408fe18d1eb9d09bc4449bdfc311b29f852ee9c38ba787855e6bd2d4c6
+POST /graphql [dev-health-ops-api]	df2dde894cd654e357d3ad9a10ab383f6c25a5cc679a4d00d70b8856155f67b2
+PUT /api/v1/admin/llm-settings [dev-health-ops-api]	ec31b3c5194d1ac14ae1c6e80941927cb2075cf1edf5e82878a956aecd00e774
+PUT /api/v1/admin/settings/{category}/{key} [dev-health-ops-api]	0d350c25c231526eadf05aaf996d801bcb5052724d1d8f2d8348a3c2898af9c1
+PUT /api/v1/admin/sync-configs/{config_id}/repositories [dev-health-ops-api]	c61daf2eaa0bb897969d3f933d73e4b27620a9cca00b3f7d5627a05710a1b5a6
+WEBSOCKET /graphql [dev-health-ops-api]	08b6e22b0764fb7f8910ba2329eaa5e72ccdbb8079ad15c992702be3696cd79a
+graphql:field:ai_attributed_prs	890b4d8989c9b72a2139b308852c9637a475054d32d9e044283406e813ca6785
+graphql:field:ai_attribution_overview	c2453a1789be8efd428ca9f423776f0646649b00fd2360871c020c091b39cf66
+graphql:field:ai_comparison	5dc58786ac5a2077eaf8d6f0cabe086092dd887db26905ac98a5a44761f0d88c
+graphql:field:ai_governance_summary	b87aaa6ccbd906e502a7f9da62622d0d34748b3b38a6f16af4cee09eba8b42c9
+graphql:field:ai_impact_summary	31502bc61a5ca10801b43fda46288f756ad734f09c98126fed428f8ff9c99568
+graphql:field:ai_opportunities	fb653a9dc4fb6141103d0cbadb6b6a735fe299f3ad317353951aaece038ed30f
+graphql:field:ai_review_load	db95a49f7e3ff78e33fed8223d058d8320cddac9f0451c7bf32805f94897b027
+graphql:field:ai_risk_breakdown	ea40b529d6f8a24a3f1dce8ad4c659ea72cc88577735bc8c9bf7122f5009f1d3
+graphql:field:ai_workflow_drilldown	b54b5a7823b33534d9d7bd166369bcbc1e1d98dcdfc44bf4ec24c5943333f478
+graphql:field:analytics	27387298495b59d4ec761f48d141bf95d0f298e7d93c2c309a6aee46c340b9a3
+graphql:field:bus_factor	e1b8355cad865bafa9d632ac5461a55f28f02a088ba46e2aa94ddd2e61f4469c
+graphql:field:capacity_forecast	30be90f9c79ae02a19f6ff900941f5854f643ee0b95e144094777e9d5cd543d5
+graphql:field:capacity_forecasts	fdd2a1a0456ee9421fa15af44b15ed00a651a5980963096ca3981e1459e9a655
+graphql:field:catalog	d574e18c34e43a674540be28571cb8c8e7ec88f21aaafb4aa87344306d301cb8
+graphql:field:cognitive_load	b1b09708cbb4deb915e22d80e3d68172dc0c68ef4d5afaa1c7687c2de163e74d
+graphql:field:complexity_timeseries	a62229768d98910f8fa1bca721993dc342d77a3b96d9804caa7f197e34cedaf0
+graphql:field:compounding_risk	8a679bfc89138836cd53453d7a4d3f91bc45a4b0ee9c1ce577bf7aedb1f77d83
+graphql:field:data_health	4f039566468ec862aab611b3582ef157dc22a61d427e46c06dd1cb714da81582
+graphql:field:experiments	4c5a5b16502cb245b48c8780d55552b8180205614876d36ba149df4115c765e6
+graphql:field:feature_flag_events	14917756f3710394214796bb18953336a6e1910694b77e98421d880d95ab6c23
+graphql:field:feature_flags	73b5ae067c8960ce4f783c49b869af00c6d18daf40bfeec69f5bb425c800b2e9
+graphql:field:hotspots	f013eeb593d5a634057f96a3101f663ee82eb76d0b5581d1f1be670d125cb929
+graphql:field:improve_opportunities	8204c1343bc8f3c9d14b44e46898a940bee30a803ad34a49e2857a7d25ebd9fc
+graphql:field:metric_lineage	79806763118879ad1c79682602e4d0a93e27889ca28ce7bcccd951edc8c6c1fe
+graphql:field:operating_review	a43f4f49c4355b7287b51c60fc8eed162ff911ed9de5c15a81195ecb74ce8dd6
+graphql:field:pr	403c280164bb1b57ed0ec41e84e80d4674bea3d65ac3e05c52b09bda869a5802
+graphql:field:product_telemetry_dashboard	e89877bdb806dbdf33b2048febccc6edc5430e899d30f7cea814f7ba5a604526
+graphql:field:product_telemetry_platform_dashboard	8752204bccdad580473c4c9cf600d06fa9430e724c9d305e9f417799ef8310f0
+graphql:field:recommendations	a0e053755edf4e690d95453e829029efdac4036b02b225e62c1db32a024efdc8
+graphql:field:report_runs	0b5a6f06fc79ca4837a79484038633e0c3d10e893a46c74f97ccad2a6253220f
+graphql:field:review_edges	3d2c10e35fe043b19e725d391a6c1061ec2e98fc72a76df761cf34d4c2356171
+graphql:field:saved_report	36dc85ece119028dd189d83e18749d78a4da94984b78a24cb01ce8edf7ff1802
+graphql:field:saved_reports	059a4c994b71b53dd9573d85944f6ef04e81301f9b8b66bffd98182cd1e447e1
+graphql:field:security_alerts	17ac157cb2cd3e33833c41b79b52498be7c8d02f373920381d44f8e1c07811ab
+graphql:field:security_overview	95145ae89028fec7a716adc8b53b0861a7bdc0933e364e4cef15042bfb169837
+graphql:field:testops_risk	387c1b3e50178271c9124735deb86366bce8e5433c8db822a90f2cd81b9333d2
+graphql:field:throughput_forecast	469b4b86ab822f834539a9443436fd0268dd885af8b904cad10a98d557b1a6a5
+graphql:field:work_graph_artifacts	1ae22a709efd288b53812dfd9438eeaa883f5b326ca91e62aac111f7f2774631
+graphql:field:work_graph_edges	f576639b2e6472d6054008a775a37a17f983c9bf9a0fb45c8300073caf9a02bb
+graphql:field:work_graph_flow	cc7f351273d22a6345b2db2c5cced4fe2f443e34d7c674048c57c0288c1cf63d
+graphql:field:work_item_team_attributions	3acdb71ee359682f91ff70e1e13efe24b85782a532a5faec0e9cbb8e6a5970dd
+graphql:field:work_unit_team_attributions	799ea6646e90c70b2238220500109504a758589c205e04e314da06f24028cf89
+graphql:mutation:clone_saved_report	baad6601ce272a56736abc648b473550b131d4bfdba0132e8da284d5c65b4ea4
+graphql:mutation:create_saved_report	095743e5ecbd3312b65bdc240f51df713c3e01ac66ce9cbe89c4ce0c83b9afa2
+graphql:mutation:delete_saved_report	beaba01b931e14637f42205e7d64daa749369b6e2d134f25def6671b00b78f59
+graphql:mutation:trigger_report	3b33a6ae2b26a045568b56f45dde2cdb5049869a153ca7098202160467692022
+graphql:mutation:update_saved_report	f9f5711f7ffebba9dcdfe22e8fa67c4cc465a3b9cc5bff14475ae9ac62dc5eb7

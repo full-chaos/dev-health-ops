@@ -1,0 +1,11 @@
+# CHAOS-8305: profile rows whose class the Go code does not enforce as the row says, found by the executed class probe
+# (an unauthenticated request with a well-formed {} body). Columns (tab separated): method, the row's route, the row's
+# class, the probe status today, ticket, evidence. A listed row must still answer exactly that status; a row that
+# now answers like its class (401) must leave this list. The six rows over-claim: neither Go nor the Python handler
+# has an authentication dependency on them (CHAOS-4780: the gates never reconcile a row's claim with its handler).
+POST	/api/v1/auth/forgot-password	protected	422	CHAOS-4780	Go: guard.BodyFirst(policy.Public) internal/api/session/session.go:138; Python: src/dev_health_ops/api/auth/routers/password_reset.py:34-39 has no Depends(get_current_user)
+POST	/api/v1/auth/reset-password	protected	422	CHAOS-4780	Go: policy.Public internal/api/session/session.go:140; Python: password_reset.py:99-104 has no auth dependency
+POST	/api/v1/auth/resend-verification	protected	422	CHAOS-4780	Go: policy.Public internal/api/session/session.go:136; Python: src/dev_health_ops/api/auth/routers/verify.py:55-60 has no auth dependency
+POST	/api/v1/auth/social-login	protected	422	CHAOS-4780	Go: policy.Public internal/api/session/session.go:123; Python: src/dev_health_ops/api/auth/routers/oauth.py:38-42 has no auth dependency
+POST	/api/v1/auth/validate	protected	422	CHAOS-4780	Go: policy.Public internal/api/session/session.go:129; Python: src/dev_health_ops/api/auth/routers/session.py:207-212 has no auth dependency
+POST	/api/v1/auth/logout	protected	422	CHAOS-4780	Go: policy.Public internal/api/session/session.go:131; Python: src/dev_health_ops/api/auth/routers/session.py:231-236 uses get_current_user_optional (the token is optional)

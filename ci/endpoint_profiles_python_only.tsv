@@ -1,0 +1,13 @@
+# CHAOS-8305: profile rows for routes NO Go service serves, each with the ticket or decision that explains it. Columns (tab
+# separated): method, the profile row's route, ticket or decision id, reason. An entry whose route Go serves, or that has no
+# profile row, or no id, fails the gate (routeprofile.Compare). Shrinks to nothing with the Python app (CHAOS-8306, S3).
+GET	/docs	CHAOS-7048	FastAPI docs dropped, D3546 (chris 2026-09-30): no Go port; prod 404 proven in the rev 203 readback
+HEAD	/docs	CHAOS-7048	FastAPI docs dropped, D3546: HEAD of the same route
+GET	/docs/oauth2-redirect	CHAOS-7048	FastAPI docs dropped, D3546
+HEAD	/docs/oauth2-redirect	CHAOS-7048	FastAPI docs dropped, D3546: HEAD of the same route
+GET	/openapi.json	CHAOS-7048	FastAPI docs dropped, D3546
+HEAD	/openapi.json	CHAOS-7048	FastAPI docs dropped, D3546: HEAD of the same route
+GET	/redoc	CHAOS-7048	FastAPI docs dropped, D3546
+HEAD	/redoc	CHAOS-7048	FastAPI docs dropped, D3546: HEAD of the same route
+GET	/metrics	CHAOS-8316	the Python /metrics scrape path: Go processes push their metrics over OTLP (CHAOS-6645); the row leaves with CHAOS-8316
+WEBSOCKET	/graphql	CHAOS-8305	Strawberry's default GraphQLRouter websocket transport: the Python schema has no Subscription type (0 subscription rows in the profile, no strawberry.subscription in src/dev_health_ops/api/graphql) and web has no subscription client; nothing to port

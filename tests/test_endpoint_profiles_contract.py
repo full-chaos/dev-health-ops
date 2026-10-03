@@ -349,6 +349,111 @@ def test_served_surface_set_and_row_set_are_identical_in_both_directions():
     assert phantom == set(), f"inventoried but not served: {sorted(phantom)}"
 
 
+def _normalize_route(path: str) -> str:
+    import re
+
+    return re.sub(r"\{[^}/]*\}", "{}", path)
+
+
+def _tsv(relative: str) -> list[list[str]]:
+    rows = []
+    for line in (_REPO_ROOT / relative).read_text().splitlines():
+        if line.strip() and not line.lstrip().startswith("#"):
+            rows.append([column.strip() for column in line.split("\t")])
+    return rows
+
+
+def test_python_discovery_and_the_go_walk_differ_only_by_named_rows():
+    """CHAOS-8305 (d): the differential while both gates exist.
+
+    The Go walk (ci/go_served_routes.tsv, recorded by the Go gate from the production
+    router constructors) against the (method, path) pairs ci/discover_ops_routes.py finds in
+    the served FastAPI app. Every difference must be named: a Python route Go serves through
+    a wildcard handler (ci/go_wildcard_dispatch.tsv), a Python route no Go service serves
+    (ci/endpoint_profiles_python_only.tsv, with its ticket or decision), a Go route with no
+    Python twin (a row of endpoint-profiles.go.json, a refusal stub, a wildcard
+    registration, an automatic HEAD/OPTIONS). The table is printed (pytest -s).
+    """
+    discoverer = checker._load_module(
+        _DISCOVERER_PATH, "discover_ops_routes_differential"
+    )
+    discovered = discoverer.discover(_REPO_ROOT)
+    python = {
+        (method.strip(), _normalize_route(route["path"]))
+        for route in discovered["routes"]
+        for method in route["methods"]
+    }
+    go_rows = _tsv("ci/go_served_routes.tsv")
+    go = {(method, path) for _plane, method, path in go_rows}
+
+    wildcard_rows = {
+        (m, _normalize_route(r)): (w, lit)
+        for m, r, w, lit, *_ in _tsv("ci/go_wildcard_dispatch.tsv")
+    }
+    wildcard_patterns = {
+        (m, _normalize_route(w)) for (m, _r), (w, _l) in wildcard_rows.items()
+    }
+    python_only = {
+        (m, _normalize_route(r)): ref
+        for m, r, ref, _why in _tsv("ci/endpoint_profiles_python_only.tsv")
+    }
+    stubs = {(m, _normalize_route(p)) for m, p, *_ in _tsv("ci/go_refusal_stubs.tsv")}
+    go_profile = checker.load_json(
+        _REPO_ROOT / "contracts" / "auth" / "v1" / "endpoint-profiles.go.json"
+    )
+    go_row_pairs = {
+        (method.strip(), _normalize_route(row["route"]))
+        for row in go_profile["rows"]
+        for method in row["method"].split(",")
+    }
+
+    def automatic(pair: tuple[str, str], pairs: set[tuple[str, str]]) -> bool:
+        method, path = pair
+        if method == "HEAD":
+            return ("GET", path) in pairs
+        if method == "OPTIONS":
+            return any(p == path and m != "OPTIONS" for m, p in pairs)
+        return False
+
+    table: list[str] = []
+    unexplained: list[str] = []
+    for pair in sorted(python - go):
+        if pair in wildcard_rows:
+            table.append(
+                f"python-only-here {pair[0]} {pair[1]}: Go wildcard {wildcard_rows[pair][0]} literal {wildcard_rows[pair][1]!r}"
+            )
+        elif pair in python_only:
+            table.append(
+                f"python-only-here {pair[0]} {pair[1]}: not served by Go, {python_only[pair]}"
+            )
+        else:
+            unexplained.append(
+                f"in Python, not in the Go walk, in no closed list: {pair[0]} {pair[1]}"
+            )
+    for pair in sorted(go - python):
+        if pair in go_row_pairs:
+            table.append(
+                f"go-only {pair[0]} {pair[1]}: a row of endpoint-profiles.go.json"
+            )
+        elif pair in stubs:
+            table.append(f"go-only {pair[0]} {pair[1]}: refusal stub")
+        elif pair in wildcard_patterns:
+            table.append(
+                f"go-only {pair[0]} {pair[1]}: a wildcard registration (ci/go_wildcard_dispatch.tsv)"
+            )
+        elif automatic(pair, go):
+            table.append(f"go-only {pair[0]} {pair[1]}: automatic HEAD/OPTIONS")
+        else:
+            unexplained.append(
+                f"in the Go walk, not in Python, in no row, stub or wildcard: {pair[0]} {pair[1]}"
+            )
+    print("\n" + "\n".join(table))
+    assert unexplained == [], "\n".join(unexplained)
+    assert len(python & go) > 150, (
+        "the two route sets barely overlap: one side is empty or mis-read"
+    )
+
+
 def test_every_row_key_is_well_formed():
     """_row_surface_key returning None means the row could not name a surface
     at all; such a row is skipped by the parity check above, so a tree full of

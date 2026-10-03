@@ -1,0 +1,18 @@
+# CHAOS-8305: profile rows whose route a Go WILDCARD handler serves by comparing a literal path value in code, so the
+# registered pattern (the wildcard) does not show the literal. Columns (tab separated): method, the profile row's route,
+# the registered wildcard pattern, the literal the handler compares, file:line of that comparison, the proof that runs: "unit"
+# (the gate executes it: the literal reaches its handler, a planted sibling literal on the same wildcard answers 405/404) or
+# "integration" (needs an authenticated request on real stores: the integration shard, CHAOS-pending until it exists).
+# A row whose proof does not run fails.
+# Shrinks to nothing when the handlers register explicit routes (CHAOS-8320).
+POST	/api/v1/auth/oauth/{provider_id}/authorize	/api/v1/auth/oauth/{first}/{second}	authorize	internal/api/sso/sso.go:233	unit
+GET	/api/v1/auth/oauth/{provider_type}/authorize	/api/v1/auth/oauth/{first}/{second}	authorize	internal/api/sso/sso.go:237	unit
+POST	/api/v1/auth/oauth/{provider_id}/callback	/api/v1/auth/oauth/{first}/{second}	callback	internal/api/sso/sso.go:235	unit
+PATCH	/api/v1/auth/oauth/providers/{provider_id}	/api/v1/auth/oauth/{first}/{second}	providers	internal/api/sso/sso.go:231	unit
+POST	/api/v1/admin/ip-allowlist/check	/api/v1/admin/ip-allowlist/{entry_id}	check	internal/apiservice/admin/ipallowlist.go:433	unit
+POST	/api/v1/admin/teams/import	/api/v1/admin/teams/{team_id}	import	internal/api/teamsidentity/teamsidentity.go:516	unit
+GET	/api/v1/admin/teams/discover	/api/v1/admin/teams/{team_id}	discover	internal/api/teamsidentity/teamsidentity.go:485	integration
+GET	/api/v1/admin/teams/pending-changes	/api/v1/admin/teams/{team_id}	pending-changes	internal/api/teamsidentity/teamsidentity.go:489	integration
+GET	/api/v1/admin/settings/categories	/api/v1/admin/settings/{category}	categories	internal/apiservice/admin/settings.go:47	integration
+GET	/api/v1/admin/retention-policies/resource-types	/api/v1/admin/retention-policies/{policy_id}	resource-types	internal/apiservice/admin/retention.go:50	integration
+GET	/api/v1/admin/credentials/{credential_id}/repos	/api/v1/admin/credentials/{provider}/{name}	repos	internal/api/credentials/credentials.go:229	integration

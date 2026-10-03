@@ -338,3 +338,27 @@ func TestARowThatReturnsTheWrongNumberOfHandlersFailsTheBuild(t *testing.T) {
 }
 
 var errPlanted = errors.New("planted build failure")
+
+// The /graphql edge serves exactly the declared methods: run through the real edge chain
+// with a member credential, GET and POST are answered and every other method is the 405.
+func TestGraphQLEdgeServesExactlyTheDeclaredMethods(t *testing.T) {
+	handler, _, member, _, _ := edgeHarness(t)
+	declared := map[string]bool{}
+	for _, route := range GraphQLEdgeRoutes() {
+		if route.Pattern != graphQLEdgePath {
+			t.Errorf("unexpected pattern %q", route.Pattern)
+		}
+		declared[route.Method] = true
+	}
+	for _, method := range allMethods {
+		cell := edgeCell{method: method, carrier: "member", document: "query"}
+		recorder := serveEdge(handler, cell, edgeRequest(t, cell, member, "", ""))
+		refused := recorder.Code == http.StatusMethodNotAllowed
+		switch {
+		case declared[method] && refused:
+			t.Errorf("%s /graphql: declared but answers 405", method)
+		case !declared[method] && !refused:
+			t.Errorf("%s /graphql: not declared but answers %d (not 405)", method, recorder.Code)
+		}
+	}
+}

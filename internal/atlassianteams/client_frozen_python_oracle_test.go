@@ -1,9 +1,11 @@
 package atlassianteams
 
 import (
+	"bytes"
 	"context"
 	"crypto/sha256"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -11,11 +13,13 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"regexp"
 	"sort"
 	"strconv"
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/google/uuid"
 
@@ -49,7 +53,7 @@ func str(value string) *string { return &value }
 // the generated gen.TeamSearchV2Data envelope, plus
 // top-level GraphQL errors when errs is set.
 func teamPage(nodes []gen.TeamNode, hasNext bool, cursor *string, errs bool) []byte {
-	connection := &gen.TeamSearchConnection{PageInfo: gen.TeamPageInfo{HasNextPage: hasNext, EndCursor: cursor}}
+	connection := &gen.TeamSearchConnection{Nodes: []gen.TeamSearchResultNode{}, PageInfo: gen.TeamPageInfo{HasNextPage: hasNext, EndCursor: cursor}}
 	for index := range nodes {
 		connection.Nodes = append(connection.Nodes, gen.TeamSearchResultNode{Team: &nodes[index]})
 	}
@@ -170,6 +174,41 @@ type scenario struct {
 	teams   [][]byte // teamSearchV2 pages, in order; the cursor names the next index
 	graph   map[string][][]byte
 	teamIDs []string
+
+	// The call arguments and the client configuration; the zero value is the
+	// configuration the sync runs ("org-"+name, "site-"+name, pages of 2).
+	orgArg, siteArg *string
+	first           *int
+	teamArgs        []string // read these teams instead of teamIDs
+	config          clientConfig
+	// faults answers the Nth request (per client) for a key -- "teams" or
+	// "<field> <team>" -- with the fault instead of the page.
+	faults map[string][]fault
+}
+
+// clientConfig is the part of the two clients' configuration both expose.
+type clientConfig struct {
+	retries        int  // Python max_retries_429; Go -1 when 0 (Go reads 0 as "default 2")
+	defaultRetries bool // Go MaxRetries429 0 (default 2) against Python 2
+	maxWait        int  // seconds, > 0; 0 leaves the default (60)
+	throttling     bool
+	baseSuffix     string // appended to the gateway address
+	userAgent      string
+	noAuth         bool // an empty email and token
+}
+
+func (f fault) isZero() bool {
+	return f.status == 0 && len(f.header) == 0 && f.body == "" && !f.closeConn && !f.truncate && f.padTo == 0
+}
+
+// fault is one scripted gateway answer.
+type fault struct {
+	status    int
+	header    map[string]string
+	body      string
+	closeConn bool // hang up without an answer
+	truncate  bool // promise more bytes than are sent
+	padTo     int  // pad the page with spaces to this many bytes
 }
 
 const (
@@ -301,7 +340,7 @@ func corpus() []scenario {
 					{column("team", cypherNode(r1, "TeamV2", nil)), column("project", nil)}}, false, nil, false)},
 			}})
 	}
-	return out
+	return append(out, extraCorpusA()...)
 }
 
 // oracleGateway serves every scenario: teamSearchV2 by organization id and page
@@ -312,10 +351,11 @@ type oracleGateway struct {
 	byTeam  map[string]scenario
 	mu      sync.Mutex
 	strange []string
+	seen    map[string]int // requests so far per client kind and key
 }
 
 func newOracleGateway(scenarios []scenario) *oracleGateway {
-	g := &oracleGateway{byOrg: map[string]scenario{}, byTeam: map[string]scenario{}}
+	g := &oracleGateway{byOrg: map[string]scenario{}, byTeam: map[string]scenario{}, seen: map[string]int{}}
 	for _, s := range scenarios {
 		g.byOrg["org-"+s.name] = s
 		for key := range s.graph {
@@ -330,6 +370,10 @@ func pageIndex(after any) int {
 	cursor, _ := after.(string)
 	if cursor == "" {
 		return 0
+	}
+	// A cursor of only whitespace (cursor-blank) names the second page.
+	if cursor = strings.TrimSpace(cursor); cursor == "" {
+		return 1
 	}
 	index, err := strconv.Atoi(cursor[1:])
 	if err != nil {
@@ -352,6 +396,8 @@ func (g *oracleGateway) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, reason, http.StatusBadRequest)
 	}
 	var pages [][]byte
+	var scen scenario
+	var key string
 	switch {
 	case strings.Contains(request.Query, "teamSearchV2"):
 		org, _ := request.Variables["organizationId"].(string)
@@ -360,7 +406,7 @@ func (g *oracleGateway) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			fail("unknown organization " + org)
 			return
 		}
-		pages = s.teams
+		pages, scen, key = s.teams, s, "teams"
 	case strings.Contains(request.Query, usersField), strings.Contains(request.Query, projectsField):
 		field := usersField
 		if strings.Contains(request.Query, projectsField) {
@@ -372,9 +418,23 @@ func (g *oracleGateway) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			fail("unknown team " + team)
 			return
 		}
-		pages = s.graph[field+" "+team]
+		pages, scen, key = s.graph[field+" "+team], s, field+" "+team
 	default:
 		fail("unexpected query")
+		return
+	}
+	// Every fault is per client: the Python reads ran at record time, the Go
+	// reads run now, and neither may consume the other's answers.
+	kind := "python"
+	if strings.HasPrefix(r.Header.Get("User-Agent"), "atlassian-go") || r.Header.Get("User-Agent") == goOracleUserAgent {
+		kind = "go"
+	}
+	g.mu.Lock()
+	ordinal := g.seen[kind+"|"+scen.name+"|"+key]
+	g.seen[kind+"|"+scen.name+"|"+key] = ordinal + 1
+	g.mu.Unlock()
+	if faults := scen.faults[key]; ordinal < len(faults) && !faults[ordinal].isZero() {
+		serveFault(w, faults[ordinal], pageFor(pages, request.Variables["after"]))
 		return
 	}
 	index := pageIndex(request.Variables["after"])
@@ -384,6 +444,52 @@ func (g *oracleGateway) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 	w.Header().Set("Content-Type", "application/json")
 	_, _ = w.Write(pages[index])
+}
+
+// goOracleUserAgent is the user agent the Go reads send, so the gateway can
+// tell the two clients apart without a header only one of them sets.
+const goOracleUserAgent = "atlassian-go/0.1.0"
+
+func pageFor(pages [][]byte, after any) []byte {
+	index := pageIndex(after)
+	if index < 0 || index >= len(pages) {
+		return []byte("{}")
+	}
+	return pages[index]
+}
+
+func serveFault(w http.ResponseWriter, f fault, page []byte) {
+	for name, value := range f.header {
+		w.Header().Set(name, value)
+	}
+	if f.closeConn {
+		if hijacker, ok := w.(http.Hijacker); ok {
+			if conn, _, err := hijacker.Hijack(); err == nil {
+				_ = conn.Close()
+				return
+			}
+		}
+		return
+	}
+	body := []byte(f.body)
+	if f.body == "" && f.padTo > 0 {
+		body = append(append([]byte(nil), page...), make([]byte, 0)...)
+		for len(body) < f.padTo {
+			body = append(body, ' ')
+		}
+	}
+	if f.truncate {
+		w.Header().Set("Content-Length", strconv.Itoa(len(body)+64))
+	}
+	status := f.status
+	if status == 0 {
+		status = http.StatusOK
+	}
+	if w.Header().Get("Content-Type") == "" {
+		w.Header().Set("Content-Type", "application/json")
+	}
+	w.WriteHeader(status)
+	_, _ = w.Write(body)
 }
 
 // leaf is a typed value: {"t": type, "v": text}, so no bare JSON number or
@@ -413,12 +519,34 @@ func typedInt(value *int) leaf {
 type record [][2]any
 
 // outcome is one read: "ok" and the records, or "error" (the error text is
-// language-specific and is not compared).
+// language-specific and is not compared, its class is).
 type outcome struct {
 	Status  string   `json:"status"`
 	Records []record `json:"records"`
+	// Class is the family of the error: graphql, transport, ratelimit or
+	// other ("" when the read succeeded).
+	Class string `json:"class"`
+	// Requests are the requests the client sent, in order; Sleeps the waits
+	// it asked for.
+	Requests []requestMeta `json:"requests"`
+	Sleeps   []string      `json:"sleeps"`
 	// Detail is the error text, shown in a failure and never compared.
 	Detail string `json:"-"`
+}
+
+// requestMeta is what one request carried that both clients must agree on:
+// the operation, its variables, the normalised query, the opt-in headers and
+// the fixed headers; the user agent only as "default" or the custom value.
+type requestMeta struct {
+	Operation    string   `json:"operation"`
+	Variables    string   `json:"variables"`
+	Query        string   `json:"query"`
+	Experimental []string `json:"experimental"`
+	ContentType  string   `json:"content_type"`
+	Accept       string   `json:"accept"`
+	Auth         string   `json:"auth"`
+	UserAgent    string   `json:"user_agent"`
+	Path         string   `json:"path"`
 }
 
 func teamRecords(teams []atlassian.AtlassianTeam) []record {
@@ -451,7 +579,7 @@ func projectRecords(projects []atlassian.TeamworkProject) []record {
 
 func toOutcome(records []record, err error) outcome {
 	if err != nil {
-		return outcome{Status: "error", Detail: err.Error()}
+		return outcome{Status: "error", Class: errorClass(err), Detail: err.Error()}
 	}
 	if records == nil {
 		records = []record{}
@@ -459,28 +587,154 @@ func toOutcome(records []record, err error) outcome {
 	return outcome{Status: "ok", Records: records}
 }
 
+// errorClass is the family of a Go error, named as the Python exception
+// families are: GraphQLOperationError, TransportError (an HTTP status),
+// RateLimitError; everything else is "other".
+func errorClass(err error) string {
+	var operation *atlassian.GraphQLOperationError
+	var transport *atlassian.TransportError
+	var limited *atlassian.RateLimitError
+	switch {
+	case errors.As(err, &operation):
+		return "graphql"
+	case errors.As(err, &transport):
+		return "transport"
+	case errors.As(err, &limited):
+		return "ratelimit"
+	}
+	return "other"
+}
+
+// requestRecorder is the transport under the guard: it keeps what each
+// request carried, as the Python request hook does.
+type requestRecorder struct {
+	next     http.RoundTripper
+	mu       sync.Mutex
+	requests []requestMeta
+}
+
+func (r *requestRecorder) RoundTrip(req *http.Request) (*http.Response, error) {
+	raw, _ := io.ReadAll(req.Body)
+	req.Body = io.NopCloser(bytes.NewReader(raw))
+	r.mu.Lock()
+	r.requests = append(r.requests, metaOf(req.Header.Get, req.Header.Values("X-ExperimentalApi"), req.URL.Path, raw, goOracleUserAgent))
+	r.mu.Unlock()
+	return r.next.RoundTrip(req)
+}
+
+func (r *requestRecorder) take() []requestMeta {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	out := r.requests
+	r.requests = nil
+	if out == nil {
+		out = []requestMeta{}
+	}
+	return out
+}
+
+// metaOf renders one request the way the Python program renders it.
+func metaOf(header func(string) string, experimental []string, path string, body []byte, defaultAgent string) requestMeta {
+	var payload struct {
+		Query         string         `json:"query"`
+		OperationName string         `json:"operationName"`
+		Variables     map[string]any `json:"variables"`
+	}
+	_ = json.Unmarshal(body, &payload)
+	variables, _ := json.Marshal(payload.Variables)
+	if payload.Variables == nil {
+		variables = []byte("null")
+	}
+	sorted := append([]string{}, experimental...)
+	sort.Strings(sorted)
+	auth, _, _ := strings.Cut(header("Authorization"), " ")
+	agent := header("User-Agent")
+	if agent == defaultAgent {
+		agent = "default"
+	}
+	return requestMeta{
+		Operation: payload.OperationName, Variables: string(variables),
+		Query:        fmt.Sprintf("%x", sha256.Sum256([]byte(strings.Join(strings.Fields(payload.Query), " ")))),
+		Experimental: sorted, ContentType: header("Content-Type"), Accept: header("Accept"), Auth: auth, UserAgent: agent, Path: path,
+	}
+}
+
+// oracleNow is the instant both clients read as "now": Retry-After values in
+// the corpus are written against it.
+var oracleNow = time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
+
 // goReads runs the vendored Go client over every scenario: "<scenario> teams",
 // "<scenario> users <team>", "<scenario> projects <team>".
 func goReads(ctx context.Context, base string, scenarios []scenario) map[string]outcome {
 	out := map[string]outcome{}
 	for _, s := range scenarios {
+		recorder := &requestRecorder{next: http.DefaultTransport}
+		var sleeps []string
+		auth := atlassian.BasicAPITokenAuth{Email: "oracle@example.test", Token: "t"}
+		if s.config.noAuth {
+			auth = atlassian.BasicAPITokenAuth{}
+		}
 		// As synccli builds it: Strict, and CompletePagesOnly on the transport.
-		client := &graph.Client{BaseURL: base, Auth: atlassian.BasicAPITokenAuth{Email: "oracle@example.test", Token: "t"}, Strict: s.strict,
-			HTTPClient: &http.Client{Transport: CompletePagesOnly(nil)}}
-		teams, err := client.SearchTeams(ctx, "org-"+s.name, "site-"+s.name, "", 2)
-		out[s.name+" teams"] = toOutcome(teamRecords(teams), err)
-		for _, team := range s.teamIDs {
-			users, err := client.IterTeamUsers(ctx, team, 2)
-			out[s.name+" users "+team] = toOutcome(userRecords(users), err)
-			projects, err := client.IterTeamActiveProjects(ctx, team, 2)
-			out[s.name+" projects "+team] = toOutcome(projectRecords(projects), err)
+		client := &graph.Client{BaseURL: base + s.config.baseSuffix, Auth: auth, Strict: s.strict,
+			HTTPClient: &http.Client{Transport: CompletePagesOnly(recorder)},
+			Now:        func() time.Time { return oracleNow },
+			Sleep:      func(d time.Duration) { sleeps = append(sleeps, fmt.Sprintf("%.3f", d.Seconds())) },
+		}
+		switch {
+		case s.config.defaultRetries:
+			client.MaxRetries429 = 0
+		case s.config.retries == 0:
+			client.MaxRetries429 = -1
+		default:
+			client.MaxRetries429 = s.config.retries
+		}
+		if s.config.maxWait > 0 {
+			client.MaxWait = time.Duration(s.config.maxWait) * time.Second
+		}
+		client.EnableLocalThrottling = s.config.throttling
+		if s.config.userAgent != "" {
+			client.UserAgent = s.config.userAgent
+		}
+		finish := func(o outcome) outcome {
+			o.Requests = recorder.take()
+			o.Sleeps = append([]string{}, sleeps...)
+			sleeps = nil
+			return o
+		}
+		org, site, first := "org-"+s.name, "site-"+s.name, 2
+		if s.orgArg != nil {
+			org = *s.orgArg
+		}
+		if s.siteArg != nil {
+			site = *s.siteArg
+		}
+		if s.first != nil {
+			first = *s.first
+		}
+		teams, err := client.SearchTeams(ctx, org, site, "", first)
+		out[s.name+" teams"] = finish(toOutcome(teamRecords(teams), err))
+		for _, team := range s.readTeams() {
+			users, err := client.IterTeamUsers(ctx, team, first)
+			out[s.name+" users "+team] = finish(toOutcome(userRecords(users), err))
+			projects, err := client.IterTeamActiveProjects(ctx, team, first)
+			out[s.name+" projects "+team] = finish(toOutcome(projectRecords(projects), err))
 		}
 	}
 	return out
 }
 
+// readTeams is the teams whose users and projects are read.
+func (s scenario) readTeams() []string {
+	if s.teamArgs != nil {
+		return s.teamArgs
+	}
+	return s.teamIDs
+}
+
 const pythonClientProgram = `
-import json, os, sys
+import hashlib, json, os, sys
+from datetime import datetime, timezone
+import httpx
 # The pinned client first, so "atlassian" is the reference, not the venv's older
 # package. The zip is part of the pinned checkout the program runs in.
 sys.path.insert(0, os.path.join(os.getcwd(), "internal", "atlassianteams", "testdata", "atlassian_python_cb7c3665.zip"))
@@ -489,16 +743,49 @@ from atlassian.graph.client import GraphQLClient
 from atlassian.graph.api.teams import iter_teams
 from atlassian.graph.api.teamwork_graph import iter_team_users, iter_team_active_projects
 
+NOW = datetime(2026, 1, 1, 0, 0, 0, tzinfo=timezone.utc)
+DEFAULT_AGENT = "atlassian-graphql-python/0.1.0"
+
 def s(v): return {"t": "str", "v": v}
 def o(v): return {"t": "null", "v": ""} if v is None else s(v)
 def i(v): return {"t": "null", "v": ""} if v is None else {"t": "int", "v": str(v)}
 
+CLASSES = {"GraphQLOperationError": "graphql", "TransportError": "transport", "RateLimitError": "ratelimit"}
+
+requests = []
+sleeps = []
+
+def record_request(request):
+    body = json.loads(request.content.decode())
+    variables = body.get("variables")
+    agent = request.headers.get("user-agent", "")
+    requests.append({
+        "operation": body.get("operationName", ""),
+        "variables": "null" if variables is None else json.dumps(variables, sort_keys=True, separators=(",", ":")),
+        "query": hashlib.sha256(" ".join(body.get("query", "").split()).encode()).hexdigest(),
+        "experimental": sorted(request.headers.get_list("x-experimentalapi")),
+        "content_type": request.headers.get("content-type", ""),
+        "accept": request.headers.get("accept", ""),
+        "auth": request.headers.get("authorization", "").split(" ")[0],
+        "user_agent": "default" if agent == DEFAULT_AGENT else agent,
+        "path": request.url.path,
+    })
+
 def read(fn, to_record):
+    del requests[:]
+    del sleeps[:]
     try:
-        return {"status": "ok", "records": [to_record(x) for x in fn()]}
+        out = {"status": "ok", "records": [to_record(x) for x in fn()], "class": ""}
     except Exception as exc:
         # The text is language-specific: kept for the failure message only.
-        return {"status": "error", "records": None, "detail": (type(exc).__name__ + ": " + str(exc)).replace(BASE, "<gateway>")[:300]}
+        cls = CLASSES.get(type(exc).__name__, "other")
+        if cls == "transport" and getattr(exc, "status_code", None) == 0:
+            cls = "other"  # the connection failed before any HTTP status
+        out = {"status": "error", "records": None, "class": cls,
+               "detail": (type(exc).__name__ + ": " + str(exc)).replace(BASE, "<gateway>")[:300]}
+    out["requests"] = list(requests)
+    out["sleeps"] = list(sleeps)
+    return out
 
 # The gateway address is of one run: it reaches the program by name, and nothing
 # the program prints holds it.
@@ -506,16 +793,38 @@ BASE = os.environ["ATLASSIAN_ORACLE_GATEWAY"]
 req = json.loads(sys.stdin.read())
 out = {}
 for sc in req["scenarios"]:
-    client = GraphQLClient(BASE, BasicApiTokenAuth("oracle@example.test", "t"), strict=sc["strict"], max_retries_429=0)
     name = sc["name"]
-    out[name + " teams"] = read(lambda: iter_teams(client, "org-" + name, "site-" + name, first=2),
+    cfg = sc["config"]
+    http_client = httpx.Client(timeout=15.0, event_hooks={"request": [record_request]})
+    try:
+        auth = BasicApiTokenAuth("", "") if cfg["no_auth"] else BasicApiTokenAuth("oracle@example.test", "t")
+        kwargs = {"strict": sc["strict"], "max_retries_429": 2 if cfg["default_retries"] else cfg["retries"],
+                  "sleeper": lambda seconds: sleeps.append("%.3f" % seconds), "time_provider": lambda: NOW,
+                  "enable_local_throttling": cfg["throttling"], "http_client": http_client}
+        if cfg["max_wait"] > 0:
+            kwargs["max_wait_seconds"] = cfg["max_wait"]
+        if cfg["user_agent"]:
+            kwargs["user_agent"] = cfg["user_agent"]
+        client = GraphQLClient(BASE + cfg["base_suffix"], auth, **kwargs)
+        failure = None
+    except Exception as exc:
+        client, failure = None, exc
+    def go(fn, to_record):
+        if failure is not None:
+            return {"status": "error", "records": None, "class": CLASSES.get(type(failure).__name__, "other"),
+                    "detail": (type(failure).__name__ + ": " + str(failure))[:300], "requests": [], "sleeps": []}
+        return read(fn, to_record)
+    org = sc["org"] if sc["org"] is not None else "org-" + name
+    site = sc["site"] if sc["site"] is not None else "site-" + name
+    first = sc["first"] if sc["first"] is not None else 2
+    out[name + " teams"] = go(lambda: iter_teams(client, org, site, first=first),
         lambda t: [["id", s(t.id)], ["display_name", s(t.display_name)], ["state", s(t.state)],
                    ["description", o(t.description)], ["avatar_url", o(t.avatar_url)], ["member_count", i(t.member_count)]])
     for team in sc["teams"] or []:
-        out[name + " users " + team] = read(lambda: iter_team_users(client, team, first=2),
+        out[name + " users " + team] = go(lambda: iter_team_users(client, team, first=first),
             lambda u: [["subject_user_id", s(u.subject_user_id)], ["relation_type", s(u.relation_type)],
                        ["team_id", o(u.team_id)], ["related_user_id", o(u.related_user_id)]])
-        out[name + " projects " + team] = read(lambda: iter_team_active_projects(client, team, first=2),
+        out[name + " projects " + team] = go(lambda: iter_team_active_projects(client, team, first=first),
             lambda p: [["team_id", s(p.team_id)], ["project_id", s(p.project_id)],
                        ["project_key", o(p.project_key)], ["project_name", o(p.project_name)]])
 print(json.dumps(out))
@@ -531,16 +840,31 @@ func pythonReads(t *testing.T, root, base string, scenarios []scenario) map[stri
 	if got := fmt.Sprintf("%x", sha256.Sum256(content)); got != pythonClientSHA256 {
 		t.Fatalf("%s has sha256 %s, want %s: the pinned reference changed", pythonClientZip, got, pythonClientSHA256)
 	}
+	type cfg struct {
+		Retries        int    `json:"retries"`
+		DefaultRetries bool   `json:"default_retries"`
+		MaxWait        int    `json:"max_wait"`
+		Throttling     bool   `json:"throttling"`
+		BaseSuffix     string `json:"base_suffix"`
+		UserAgent      string `json:"user_agent"`
+		NoAuth         bool   `json:"no_auth"`
+	}
 	type sc struct {
 		Name   string   `json:"name"`
 		Strict bool     `json:"strict"`
 		Teams  []string `json:"teams"`
+		Org    *string  `json:"org"`
+		Site   *string  `json:"site"`
+		First  *int     `json:"first"`
+		Config cfg      `json:"config"`
 	}
 	var request struct {
 		Scenarios []sc `json:"scenarios"`
 	}
 	for _, s := range scenarios {
-		request.Scenarios = append(request.Scenarios, sc{Name: s.name, Strict: s.strict, Teams: s.teamIDs})
+		request.Scenarios = append(request.Scenarios, sc{Name: s.name, Strict: s.strict, Teams: s.readTeams(), Org: s.orgArg, Site: s.siteArg, First: s.first,
+			Config: cfg{Retries: s.config.retries, DefaultRetries: s.config.defaultRetries, MaxWait: s.config.maxWait, Throttling: s.config.throttling,
+				BaseSuffix: s.config.baseSuffix, UserAgent: s.config.userAgent, NoAuth: s.config.noAuth}})
 	}
 	input, _ := json.Marshal(request)
 	output := frozenPython(t, "teams-client.golden.json", programoracle.Program{
@@ -596,7 +920,15 @@ var excludedFields = map[string]string{
 }
 
 func withoutExcluded(o outcome) outcome {
-	out := outcome{Status: o.Status, Detail: o.Detail}
+	out := outcome{Status: o.Status, Class: o.Class, Sleeps: o.Sleeps, Detail: o.Detail}
+	// The two clients name the operation and word the query differently (the
+	// Go generator names TeamworkGraphTeamUsers where the Python one names
+	// TeamworkGraph_teamUsers); neither is a behaviour the sync reads, so they
+	// are recorded and not compared. Everything else a request carries is.
+	for _, request := range o.Requests {
+		request.Operation, request.Query = "", ""
+		out.Requests = append(out.Requests, request)
+	}
 	if o.Records == nil {
 		return out
 	}
@@ -679,6 +1011,59 @@ func checkKnownDivergence(prefix string, py, gv outcome) string {
 	return ""
 }
 
+// brief renders an outcome to the fields a declared divergence pins: the
+// status and error family, the compared record fields, the number of requests,
+// the page size and cursor of the first one, and the waits.
+func brief(o outcome) string {
+	var records []string
+	for _, r := range withoutExcluded(o).Records {
+		var fields []string
+		for _, f := range r {
+			name, _ := f[0].(string)
+			var value leaf
+			raw, _ := json.Marshal(f[1])
+			_ = json.Unmarshal(raw, &value)
+			fields = append(fields, name+"="+value.T+":"+value.V)
+		}
+		records = append(records, strings.Join(fields, ","))
+	}
+	first := "-"
+	if len(o.Requests) > 0 {
+		var vars map[string]any
+		_ = json.Unmarshal([]byte(o.Requests[0].Variables), &vars)
+		first = fmt.Sprintf("first=%v,after=%v", vars["first"], vars["after"])
+	}
+	text := fmt.Sprintf("%s/%s records=[%s] requests=%d %s sleeps=%s", o.Status, o.Class, strings.Join(records, ";"), len(o.Requests), first, strings.Join(o.Sleeps, ","))
+	return teamARIPattern.ReplaceAllString(text, "<team>")
+}
+
+var teamARIPattern = regexp.MustCompile(`ari:cloud:identity::team/[0-9a-f-]{36}`)
+
+// declared pins one read where the vendored Go client and the pinned Python
+// client differ and the difference is decided (see declaredDivergences): the
+// recorded Python answer and Go's own answer, both as brief renders them.
+type declared struct{ python, goSide string }
+
+func declaredDivergenceFor(key string) (string, bool) {
+	for prefix := range declaredDivergences {
+		if strings.HasPrefix(key, prefix) {
+			return prefix, true
+		}
+	}
+	return "", false
+}
+
+func checkDeclaredDivergence(prefix string, py, gv outcome) string {
+	want := declaredDivergences[prefix]
+	if normalize(withoutExcluded(py)) == normalize(withoutExcluded(gv)) {
+		return "the two clients now agree"
+	}
+	if gotPy, gotGo := brief(py), brief(gv); gotPy != want.python || gotGo != want.goSide {
+		return fmt.Sprintf("pins python %q / go %q, got python %q / go %q", want.python, want.goSide, gotPy, gotGo)
+	}
+	return ""
+}
+
 func compare(python, goSide map[string]outcome) []string {
 	keys := map[string]bool{}
 	for key := range python {
@@ -698,6 +1083,12 @@ func compare(python, goSide map[string]outcome) []string {
 		gv, goOK := goSide[key]
 		if !pyOK || !goOK {
 			mismatches = append(mismatches, key+": read on one side only")
+			continue
+		}
+		if prefix, declared := declaredDivergenceFor(key); declared {
+			if why := checkDeclaredDivergence(prefix, py, gv); why != "" {
+				mismatches = append(mismatches, key+": the declared divergence does not hold: "+why)
+			}
 			continue
 		}
 		if prefix, known := knownDivergenceFor(key); known {
@@ -776,7 +1167,7 @@ func TestAtlassianTeamsClientMatchesFrozenPython(t *testing.T) {
 				records[index] = append(record(nil), r...)
 			}
 		}
-		return outcome{Status: o.Status, Records: records, Detail: o.Detail}
+		return outcome{Status: o.Status, Records: records, Class: o.Class, Requests: append([]requestMeta{}, o.Requests...), Sleeps: append([]string{}, o.Sleeps...), Detail: o.Detail}
 	}
 	withRead := func(key string, o outcome) map[string]outcome {
 		copied := map[string]outcome{}
@@ -851,4 +1242,15 @@ func TestAtlassianTeamsClientMatchesFrozenPython(t *testing.T) {
 		return o, false
 	})
 	t.Logf("%d scenarios, %d reads compared (%v), %d records; 0 mismatches; 8 planted divergence kinds found on every eligible read (the pinned read included)", len(scenarios), len(goSide), statuses, records)
+}
+
+// declaredDivergences are the reads where the two clients differ and the
+// difference is decided: key prefix -> the recorded Python answer and Go's
+// answer, each pinned. Anything else on such a read is a mismatch, and a read
+// where the clients agree again is one too.
+var declaredDivergences = map[string]declared{
+	"cursor-blank teams":     {python: "ok/ records=[id=str:<team>,display_name=str:A,state=str:ACTIVE,description=null:;id=str:<team>,display_name=str:B,state=str:ACTIVE,description=null:] requests=2 first=2,after=<nil> sleeps=", goSide: "error/other records=[] requests=1 first=2,after=<nil> sleeps="},
+	"cursor-blank users ":    {python: "ok/ records=[] requests=2 first=2,after=<nil> sleeps=", goSide: "error/other records=[] requests=1 first=2,after=<nil> sleeps="},
+	"cursor-blank projects ": {python: "ok/ records=[] requests=2 first=2,after=<nil> sleeps=", goSide: "error/other records=[] requests=1 first=2,after=<nil> sleeps="},
+	"oversized-answer teams": {python: "ok/ records=[id=str:<team>,display_name=str:Mini,state=str:ACTIVE,description=null:] requests=1 first=2,after=<nil> sleeps=", goSide: "error/other records=[] requests=1 first=2,after=<nil> sleeps="},
 }

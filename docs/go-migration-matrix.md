@@ -242,7 +242,7 @@ A row that is live, reachable to real clients (`canary`/`primary`) and carries n
 is required before stage 4/5, and "a bare 200 does not qualify".
 
 <!-- BEGIN GENERATED GO API OPERATIONS -->
-_Rendered 2026-09-28T10:08:59Z against main merge-base `f03f57d51c957ad7601fd2154089e152f8cf30d2`; SDL digest pin `sha256:cc6a9606da83a9b7eb5acce396c6822118d5655b6aae12966747b4ad45df9cec`; fleet read 2026-09-28T10:08:59Z via fleet file fleet-prod-2026-09-28.json._
+_Rendered 2026-09-28T10:08:59Z against main merge-base `f03f57d51c957ad7601fd2154089e152f8cf30d2`; SDL digest pin `sha256:fdff794c3fa3de956e07061645b7494cca33ed760f9405d405c912ae01d3e34b`; fleet read 2026-09-28T10:08:59Z via fleet file fleet-prod-2026-09-28.json._
 
 _Rows in `go_api_proof_run` at read time: **16991**. Operations reachable to real clients with no deployed-executed proof: **50**. Rows whose mode says Go but whose schema digest no longer matches the pin, so every request silently falls back to Python: **88**._
 
@@ -398,8 +398,9 @@ _Live rows the edge cannot dispatch -- serving a document the operation catalog 
 
 ### Per REST endpoint
 
-Every `/api/v1/*` route `src/dev_health_ops/api/main.py` declares, enumerated mechanically from its FastAPI
-decorators (`internal/migrationmatrix.LoadFastAPIRoutes`) and cross-referenced against every `/api/v1/*`
+Every `/api/v1/*` route the Python api declared, read from the frozen route list
+`contracts/migration-status/v1/python-rest-routes.json` (parsed from `src/dev_health_ops/api/main.py`'s FastAPI
+decorators by `internal/migrationmatrix.LoadFastAPIRoutes` at the commit recorded in that file; the Python source is being deleted) and cross-referenced against every `/api/v1/*`
 path query-api's own mux registers (`internal/migrationmatrix.LoadQueryAPIMuxRoutes`, read straight from
 `internal/queryapi/server`'s Go source -- query-api has no separate REST route registry the way it has an operation
 catalog for GraphQL). `ported` means the path is registered on query-api's mux; `python-only` is the
@@ -413,7 +414,7 @@ sync with either side, so a route added, removed or newly wired on either plane 
 time the tool runs, and the doc-drift check below fails until it is re-rendered.
 
 <!-- BEGIN GENERATED REST ENDPOINTS -->
-_32 `/api/v1/*` routes in `src/dev_health_ops/api/main.py`: **32** ported, **0** python-only, **0** dead-by-design._
+_32 `/api/v1/*` routes in the frozen Python api route list (`contracts/migration-status/v1/python-rest-routes.json`): **32** ported, **0** python-only, **0** dead-by-design._
 
 | Method | Path | Status | Go handler |
 | --- | --- | --- | --- |

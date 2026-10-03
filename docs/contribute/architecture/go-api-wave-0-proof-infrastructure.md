@@ -257,8 +257,15 @@ reachable: `shadow` deliberately does NOT count (the client still gets
 Python's response in shadow mode, plan §5 stage 4), and a missing row, a
 query error, or an operation with no registered document digest all
 resolve to the same safe default as an unregistered operation —
-unreachable. Proven against a real Postgres testcontainer
-(`postgres_switch_integration_test.go`, `go test -tags integration`),
+unreachable. One switch has an exception to the missing-row rule: the one
+`/query` and `/graphql` serve registered documents through
+(`NewCatalogSwitchWithLegacy`, `catalog_switch.go`) serves an operation that
+has no routing row at any schema digest. An operation that has a row
+anywhere keeps the rule above (a row in a non-served mode, or left at
+another digest, holds it dark), and the class-row and proof switches have no
+exception. Proven against a real Postgres testcontainer
+(`postgres_switch_integration_test.go`, `catalog_switch_integration_test.go`,
+`go test -tags integration`),
 including the rollback direction: flipping `mode` away from
 `canary`/`primary` revokes reachability on the very next read, with no
 separate deploy (plan §5: "rollback is a registry change, not an image
@@ -729,11 +736,14 @@ audit table must outlive the row it describes.
 | `devhealth_query_api_routing_rows_for_digest` (gauge, `schema_digest` attr) | `query-api` route construction | Rows keyed to the digest THIS process computed; 0 with the total gauge below `>0` is the DEAD-fleet condition, on every startup, not only at read time |
 | `devhealth_query_api_routing_rows_total` (gauge, `schema_digest` attr) | `query-api` route construction | Disambiguates the gauge above from the legitimate `total == 0` "nothing enabled yet" posture |
 | `devhealth_go_api_dispatch_fallback_total{reason="no_routing_row"}` | Python edge, per request | A dispatch-eligible request found no row |
+| `devhealth_query_api_routeswitch_digest_miss_total{operation}` (and its WARN record) | `query-api`, per request | An operation has no row at the live key and is refused: on the serving route, an operation whose rows are all elsewhere |
+| `devhealth_query_api_routeswitch_served_without_row_total{operation, reason="catalog_no_row"}` (and one INFO record per operation per process) | `query-api`, per request | A registered operation with no routing row at any schema digest was served (the catalog rule). Zero on a stack where every operation has a row |
 | `ci/check_go_api_routing_digest.py` | CI | The SDL moved without updating the pin and this table |
 
-`empty` (nothing enabled) is deliberately reported as a *different* result
-from `stale` (everything enabled is dead). The two look identical from
-outside — no traffic reaches Go either way — and mean opposite things.
+`empty` (no row decides anything) is deliberately reported as a *different*
+result from `stale` (everything enabled is dead), and the two mean opposite
+things: on an empty table query-api serves every registered operation by the
+catalog rule, and on a stale one it serves no operation that has a row.
 
 None of the above shortcuts the recovery procedure. In particular, a schema digest that happens to match a
 previously-proven build is NOT grounds to re-point a DEAD row's `candidate_build` onto a new image without a
@@ -763,11 +773,11 @@ appear here.
 | `sha256:f12739c7f2b04df329e29404e80aae93308553b82fe3f35010e97ed8aa147ddc` | 2026-10-03 | CHAOS-7785, adding the optional `teamIds` argument to `ReviewEdgesInput` (team scope by repository ownership) in the Go-owned SDL | superseded |
 | `sha256:09db2fee13f48e36a1d95bb5d77fb74d327aad851319843b473077891e4c71f4` | 2026-10-03 | CHAOS-7786, adding `truncated` and a real `totalCount` (the deduplicated row count before the cut) to `ReviewEdgesResult` in the Go-owned SDL | superseded |
 | `sha256:af68e95261c6b9750aa3f9c15734c363797ea005eb2da1784806456aa2518ca5` | 2026-10-03 | CHAOS-7626, adding `value`, `threshold`, `unit` and `thresholdDirection` to `ImproveOpportunity` and the `ImproveOpportunityUnit` and `ThresholdDirection` enums in the Go-owned SDL (additive; Python does not declare them) | superseded |
-| `sha256:589a8f76ae2f305b1c69155d3773b2261e85c34fc1011f1f469f0baedb249cdb` | 2026-10-03 | CHAOS-8477, adding `runs: Int!` to `CapacityDistribution` and `cumulativeShare: Float!` to `CapacityDistributionBin` (the run total and the share of the simulation runs that completed on or before each value, from the same Monte Carlo distribution as the percentile days) in the Go-owned SDL (additive; Python never had the types) | superseded |
-| `sha256:5c84b1791199bafec369b82d9fbbae8e5c18ab2cbbe4dab5efe38d1a287d40ea` | 2026-10-03 | CHAOS-8485, adding nullable `reviewerName` and `authorName` and the opaque `reviewerKey` and `authorKey` to `ReviewEdgeRow`, and deprecation notes on `reviewer` and `author`, in the Go-owned SDL (additive; Python never had them) | superseded |
-| `sha256:58c2641db9487d7c16a08ac86df7f12d2555e5767af334cb594fedf7a799dbf3` | 2026-10-03 | CHAOS-8114, adding nullable `repoName` and `teamName` to `AIOpportunity` (the catalogue names of the repository and the team an opportunity carries, never the id) in the Go-owned SDL (additive; Python never had them) | superseded |
-| `sha256:38ed878c4cd568ce4ee2d6d4ed649214526a36a58163f4471c02f27987c0630e` | 2026-10-03 | CHAOS-8113, adding nullable `displayName` and `nameExpected: Boolean!` to `AIWorkflowGraphNodeOut` (a pull request title, a deployment environment, an incident title and status, or a readable issue key, never an id that holds a UUID or an opaque hash; and whether the node type carries a name at all) in the Go-owned SDL (additive; Python never had them) | superseded |
-| `sha256:cc6a9606da83a9b7eb5acce396c6822118d5655b6aae12966747b4ad45df9cec` | this revision | CHAOS-8115, adding `hasData: Boolean!` to `OperatingReviewMetric` and `hasPriorData: Boolean!` to `OperatingReviewDelta` (whether each week holds a stored value for the metric, so a stored zero and a missing week differ) in the Go-owned SDL (additive; Python never had them) | Current. Every routing row written at the digest above stops matching the moment this lands: rebuild and deploy query-api from this SDL FIRST, then re-enable, per the recovery procedure above. |
+| `sha256:c71f3c428b0de016a80cc8a40003a04d1b452d85f616ff31e1ff73dbec294cd6` | 2026-10-03 | CHAOS-8477, adding `runs: Int!`, `unfinishedRuns: Int` and `horizonDays: Int!` to `CapacityDistribution` and `cumulativeShare: Float!` to `CapacityDistributionBin` (the run total, the runs that did not finish inside the simulated horizon, the horizon in days, and the share of the simulation runs that finished on or before each value, from the same Monte Carlo distribution as the percentile days) in the Go-owned SDL (additive; Python never had the types) | superseded |
+| `sha256:6e53d73cc690622e183d24c4024ca38ee508803c4fd250616e88a7d7ae3a21f4` | 2026-10-03 | CHAOS-8485, adding nullable `reviewerName` and `authorName` and the opaque `reviewerKey` and `authorKey` to `ReviewEdgeRow`, and deprecation notes on `reviewer` and `author`, in the Go-owned SDL (additive; Python never had them) | superseded |
+| `sha256:2d5839ecc2f1352f4b64f812fc4a503976b36deafc5b89058080345a13437dd0` | 2026-10-03 | CHAOS-8114, adding nullable `repoName` and `teamName` to `AIOpportunity` (the catalogue names of the repository and the team an opportunity carries, never the id) in the Go-owned SDL (additive; Python never had them) | superseded |
+| `sha256:b91a544c7a7bb1ca09f11ca568cb255dba7f1a2ea36d4d58322cfceb10ef0892` | 2026-10-03 | CHAOS-8113, adding nullable `displayName` and `nameExpected: Boolean!` to `AIWorkflowGraphNodeOut` (a pull request title, a deployment environment, an incident title and status, or a readable issue key, never an id that holds a UUID or an opaque hash; and whether the node type carries a name at all) in the Go-owned SDL (additive; Python never had them) | superseded |
+| `sha256:fdff794c3fa3de956e07061645b7494cca33ed760f9405d405c912ae01d3e34b` | this revision | CHAOS-8115, adding `hasData: Boolean!` to `OperatingReviewMetric` and `hasPriorData: Boolean!` to `OperatingReviewDelta` (whether each week holds a stored value for the metric, so a stored zero and a missing week differ) in the Go-owned SDL (additive; Python never had them) | Current. Every routing row written at the digest above stops matching the moment this lands: rebuild and deploy query-api from this SDL FIRST, then re-enable, per the recovery procedure above. |
 
 ### Where `bigboy-cut.sh` finds its tools and its tree (CHAOS-7135)
 
@@ -857,7 +867,7 @@ carries the `dho` operator binary on `PATH` (spec S1, CHAOS-6280 folded
 documents dump generated from the SAME commit at build time
 (`/app/go-api/documents.json`), and the checked-in operation catalog at its
 `DefaultCatalogPath` relative to the image's working directory
-(`/app/go-api/src/dev_health_ops/api/graphql/go_api_operations.json`) --
+(`/app/go-api/contracts/graphql/v1/go_api_operations.json`) --
 `dho goapi routing`'s `-catalog` flag needs no override, and neither does
 `carry`'s `-documents` flag, whose default is that same baked-in dump,
 **when run from the image's own WORKDIR (`/app/go-api`)**. `bigboy-cut.sh`

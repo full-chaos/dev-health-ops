@@ -75,7 +75,7 @@ concurrency:
   # completion would overwrite the later commit's tags with OLDER content.
   # NOT fixed here in the scheduler (that would mean re-serializing builds
   # and reintroducing (a)/(b)'s own precondition) -- fixed at the actual
-  # publish step instead, in both "Merge Digests" jobs: the moving tags
+  # publish step instead, in the Go merge jobs: the moving tags
   # (`latest`, and the `main` branch tag) are only applied if the commit
   # being published is STILL the current head of `main` at publish time,
   # checked immediately before tagging. An older build finishing late
@@ -127,24 +127,6 @@ jobs:
               - '.dockerignore'
               - 'deploy/**'
               - 'Makefile'
-              # codex round 5 (#2162), P1: the `build` job's own base-guard
-              # step invokes this script directly (`bash
-              # ci/python_base_ref.sh ...`) -- a PR touching ONLY this file
-              # set changes.code=false and skipped `build` (and the guard)
-              # entirely. A single exact path, not a broader `ci/**`: the
-              # build job invokes exactly this one ci/ script today (grep-
-              # verified), and `ci/**` would make every OTHER, unrelated
-              # ci/ script change (there are many, none touching this
-              # workflow) trigger a real image rebuild+republish for no
-              # reason. tests/tooling/test_go_image_publishing.py's
-              # test_build_job_ci_script_references_are_covered_by_the_changes_filter
-              # is the actual recurrence guard -- it fails the moment the
-              # build job invokes a ci/ script this filter doesn't name,
-              # regardless of how broad or narrow the filter is, so a
-              # second script added here later is caught structurally
-              # rather than depending on this filter having been made
-              # broad enough by guess.
-              - 'ci/python_base_ref.sh'
               # A change to this workflow IS a change to how images are built.
               # Without this line the publish pipeline cannot republish itself:
               # the CHAOS-3923 Go publish jobs merged to main and every build
@@ -152,491 +134,6 @@ jobs:
               # `changes` went green while publishing zero images, so the run
               # reported success and the registry stayed empty.
               - '.github/workflows/docker-images.yml'
-
-  build:
-    name: Build Image
-    needs: [changes]
-    # CHAOS-4921 M2: a push to MAIN always builds, whatever the paths filter says.
-    #
-    # The filter decides whether a change is RELEVANT. On a PR that is the right
-    # question. On main it is the wrong one, because the artefact -- an image for
-    # this commit -- must exist regardless of which files moved, and a skipped
-    # build leaves a commit with no image at all.
-    #
-    # Measured (CHAOS-4921): run 33706407469 for 2d4abbbbb -- the commit carrying
-    # ClickHouse migration 084 -- was cancelled by the fe5f540a9 push, and
-    # fe5f540a9's own run then SKIPPED the image build on this filter. So no image
-    # containing 084 was ever built, and nothing reported an error: one run was
-    # cancelled, the other succeeded having built nothing. The cancellation half is
-    # fixed by the per-SHA concurrency groups (#2149); this is the skip half.
-    #
-    # PRs keep the filter. Nothing here changes what a PR builds.
-    if: >-
-      github.event_name == 'workflow_dispatch' ||
-      github.event_name == 'release' ||
-      (github.event_name == 'push' && github.ref == 'refs/heads/main') ||
-      needs.changes.outputs.code == 'true'
-    runs-on: ${{ matrix.runner }}
-    # Every matrix leg checks out the SAME ref (it doesn't vary by
-    # target/platform), so they all resolve the same commit SHA -- reading
-    # this output from a matrix job is safe here even though GitHub only
-    # guarantees the LAST matrix leg to finish "wins" for job outputs in
-    # general, because every leg computes an identical value.
-    outputs:
-      sha: ${{ steps.versioning.outputs.sha }}
-    strategy:
-      fail-fast: false
-      matrix:
-        target: [api]
-        platform: [linux/amd64, linux/arm64]
-        include:
-          - platform: linux/amd64
-            runner: ubuntu-latest
-          - platform: linux/arm64
-            # ubuntu-26.04-arm is not a real enterprise hosted label (chris
-            # 2026-09-04 16:59) -- routed to the ARC pool instead, same
-            # fork-PR-safe variable-gated shape used elsewhere in this repo.
-            # Falls back to ubuntu-latest (x64): docker/build-push-action's
-            # `platforms:` cross-builds via buildx/QEMU on x64 same as any
-            # other foreign-platform target in this workflow.
-            runner: ${{ (vars.SELF_HOSTED_RUNNERS == 'enabled' && ((github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository) || (github.event_name == 'push' && github.ref == 'refs/heads/main') || (github.event_name == 'workflow_dispatch' && github.event.inputs.ref == '') || github.event_name == 'release' || github.event_name == 'schedule')) && fromJSON('["self-hosted","oci-arc-runners"]') || 'ubuntu-latest' }}
-
-    steps:
-      - name: Checkout code
-        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          fetch-depth: 0
-          # CHAOS-4921 (round 3 fix): github.sha, not github.ref -- the
-          # matrix job's outputs (read by the mainhead check below) are only
-          # trustworthy as "the commit this job built" if every leg checks
-          # out the exact same immutable commit. github.ref is a mutable
-          # branch ref: if main advances while a slow matrix leg is still
-          # running, that leg would check out the NEWER tip, so the last
-          # matrix-output writer could report a SHA that doesn't match what
-          # earlier legs actually built (a mixed-commit manifest tagged as
-          # if it were one commit). github.sha is pinned to the exact commit
-          # that triggered this run and never moves.
-          ref: ${{ github.event.inputs.ref || github.event.pull_request.head.sha || github.sha }}
-
-      - name: Set up QEMU
-        # Required for the arm64 matrix leg's x64 (fork-PR / disabled-
-        # variable) fallback to cross-build `platforms: ${{ matrix.platform
-        # }}` below; harmless extra setup on the amd64 leg and on the
-        # native-arm64 self-hosted leg.
-        uses: docker/setup-qemu-action@99012661954931238ded8c8b007157a8430204e1 # v4.4.0
-
-      - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@594f3bf4285d9ea8dc53c9a0c9c4092420091003 # v4.4.0
-
-      - name: Determine version
-        id: versioning
-        run: |
-          SHA=$(git rev-parse HEAD)
-          SHORT_SHA=$(echo "${SHA}" | cut -c1-7)
-          PYTHON_VERSION="0.0.0.dev0+${SHORT_SHA}"
-          if [[ "${GITHUB_EVENT_NAME}" == "release" ]]; then
-            PYTHON_VERSION="${{ github.event.release.tag_name }}"
-          fi
-          # The commit timestamp, not "now" -- matches go-build's identical
-          # comment/derivation below; CHAOS-4947 needs this to actually set
-          # org.opencontainers.image.created via the Dockerfile LABEL, which
-          # go-worker.Dockerfile's runtime stage already does and this one
-          # now mirrors.
-          EPOCH=$(git log -1 --pretty=%ct)
-          {
-            echo "python_version=${PYTHON_VERSION}"
-            echo "sha=${SHA}"
-            echo "build_time=$(date -u -d "@${EPOCH}" +%Y-%m-%dT%H:%M:%SZ)"
-          } >> "$GITHUB_OUTPUT"
-
-      # CHAOS-4921: dead configuration, flagged by ci-flakes' review of this
-      # PR -- `steps.meta.outputs.*` is not referenced anywhere else in this
-      # job. The actual push below (`Build and push by digest`) uses a
-      # hardcoded `tags:` with `push-by-digest=true` and applies no tags
-      # from this step. Left in place rather than deleted because deleting
-      # it invites someone to re-add an equivalent step without noticing
-      # this comment; if `meta.outputs.tags` is ever wired into the push
-      # below, its `latest` line must gain the same main-head gate the
-      # `merge`/`go-merge` jobs' `Docker meta` steps use (round 3, this PR)
-      # -- copying this ungated line instead reintroduces this PR's bug.
-      - name: Docker meta
-        id: meta
-        uses: docker/metadata-action@dc802804100637a589fabce1cb79ff13a1411302 # v6.2.0
-        with:
-          images: ghcr.io/${{ github.repository_owner }}/dev-hops-${{ matrix.target }}
-          tags: |
-            type=ref,event=branch
-            type=ref,event=pr
-            type=semver,pattern={{version}}
-            type=sha,format=short
-            type=raw,value=latest,enable=${{ github.ref == 'refs/heads/main' || (github.event_name == 'release' && !github.event.release.prerelease) }}
-
-      - name: Log in to GitHub Container Registry
-        uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4.6.0
-        with:
-          registry: ghcr.io
-          username: ${{ github.actor }}
-          password: ${{ secrets.GITHUB_TOKEN }}
-
-      # CHAOS-4922: the base must exist BEFORE this job reads the Dockerfile.
-      #
-      # mirror-test-images.yml is a SIBLING workflow on the same event -- neither
-      # waits for the other, so on a first landing (or any base bump) this build
-      # can reach a ghcr ref nothing has created yet. Measured while writing
-      # this: the package 404'd, and a manual dispatch of the mirror was
-      # CANCELLED by the single-pending-run-per-group rule before it could copy
-      # anything. Depending on a sibling workflow's timing is not a guarantee.
-      #
-      # So the build ensures its own input. Idempotent: an inspect that succeeds
-      # is a no-op, and at worst this reads ONE anonymous Hub manifest -- no Hub
-      # credentials, which is the whole point of the mirror. The mirror workflow
-      # remains the scheduled/bulk path; this is the ordering floor.
-      #
-      # Runs after the ghcr login above, because creating the tag writes to ghcr.
-      - name: Ensure the Python base image is mirrored
-        run: |
-          set -euo pipefail
-          # CHAOS-4949: this step comes from the MERGE REF, the tree comes from
-          # the PR HEAD, and on a pull_request those are different commits.
-          #
-          #   on: pull_request  -> GitHub evaluates the workflow from the merge
-          #                        ref (branch + main), so this step exists as
-          #                        soon as it is on main;
-          #   checkout ref:     -> github.event.pull_request.head.sha, i.e. the
-          #                        PR branch tree, which may predate it.
-          #
-          # So a branch opened before #2152 gets this step against a tree with no
-          # ci/python_base_ref.sh, and the step dies on a missing file. Measured
-          # (identical tree state, the only variable being run creation time
-          # relative to #2152 merging at 07:53:11Z):
-          #
-          #   run 33726620458  created 07:08  step ABSENT from the job  PASSED
-          #   run 33732034142  created 08:11  step PRESENT              FAILED
-          #
-          # The absence is MEANINGFUL, not an error to swallow: a tree without
-          # the derivation script also has a Dockerfile that pulls its base
-          # directly from Docker Hub, so there is no mirrored image for this step
-          # to ensure. Verified on b854c646 and 1c448f2e5 -- both `FROM
-          # python:3.14-slim`.
-          #
-          # A bare `[ -f ... ] || exit 0` is deliberately NOT used. That would
-          # also pass silently on a tree that DOES consume the mirrored base
-          # while missing its derivation -- a genuinely broken state, and exactly
-          # the shape (a step that succeeds having done nothing) this workflow
-          # has been bitten by repeatedly. So the absent branch ASSERTS the
-          # condition that makes skipping correct, and fails loudly otherwise.
-          # STRUCTURAL, NOT TEXTUAL (team-lead, after three codex rounds).
-          #
-          # This guard used to read docker/Dockerfile and decide from its text
-          # whether the tree consumes a mirrored base. Three rounds found nine
-          # defects, every one a Dockerfile grammar feature the regexes did not
-          # model: assembled references (${REGISTRY}/${OWNER}/python), a direct
-          # FROM with no ARG, lowercase `from`, escaped-newline continuations,
-          # RUN heredoc bodies read as instructions, missing token boundaries
-          # (ARG PYTHON_BASE_IMAGE_OLD, ghcr.io/acme/python-builder), and the
-          # fact that `#` outside line start is NOT a comment but argument text
-          # -- which made the "comment stripping" a literal-corrupting rewrite.
-          #
-          # Each fix was correct and the next round found the next feature. That
-          # is not a converging series: it is an under-specified reimplementation
-          # of a parser, and a fourth round would find --platform flags and ARG
-          # stage scoping. So the guard stops parsing.
-          #
-          # The question was never "what does this Dockerfile say". It is "does
-          # this tree predate the mirror", and git answers that exactly. #2152
-          # added ci/python_base_ref.sh and the mirrored Dockerfile in ONE
-          # commit, so the script's presence IS the mirror -- no text needed.
-          MIRROR_LANDED=6fbd7dc8d4651b82f78b823a2b6f55cd53f0ff1f   # the #2152 merge
-
-          # "SCRIPT PRESENT" IS CHECKED FIRST, AND THAT ORDER IS A CORRECTNESS
-          # REQUIREMENT, NOT A CONVENIENCE (084-prod). The authoring branch of
-          # #2152 (0c1d9ff66) HAS the script while NOT containing 6fbd7dc8d --
-          # it *is* the change, so it precedes its own merge commit. Reversing
-          # these two checks would fail every #2152-descended feature branch
-          # that has not merged main.
-          #
-          # THE CHERRY-PICK RESIDUAL IS CLOSED, not documented (round 4 P1).
-          # A branch that cherry-picks #2152's Dockerfile WITHOUT
-          # ci/python_base_ref.sh has 6fbd7dc8d as a non-ancestor, so ancestry
-          # alone says "pre-mirror" and skips -- while the tree consumes a
-          # mirrored base. Round 4 reproduced that topology and got
-          # `Nothing to ensure, skipping.`, which is a confident FALSE
-          # statement in the log. (Comma, not semicolon -- see the
-          # no-semicolon note beside the echo itself; 084-prod caught this
-          # comment still quoting the old form after the message changed,
-          # which would have sent the next reader grepping for a string the
-          # code no longer emits.)
-          #
-          # Severity checked rather than assumed: docker/Dockerfile:17 holds
-          # `ARG PYTHON_BASE_IMAGE="ghcr.io/<owner>/python:...@sha256:..."` and
-          # ci/python_base_ref.sh only READS it. So a scriptless tree can name
-          # a digest that was never mirrored, and the build then fails right
-          # after this step announced there was nothing to ensure.
-          #
-          # THE CHECK BELOW IS A FIXED-STRING CONTAINMENT TEST, NOT THE TEXTUAL
-          # GUARD THAT WAS REMOVED. That guard lost nine defects to Dockerfile
-          # GRAMMAR -- assembled refs, bare FROM, lowercase `from`, escaped
-          # newlines, RUN heredocs, token boundaries, `#` outside line start.
-          # This has no grammar: one literal substring, no anchors, no
-          # instruction model. Its only false positive is the string appearing
-          # in a comment, and that direction FAILS CLOSED (a loud error on a
-          # tree that needed no ensuring) rather than silently skipping a tree
-          # that did.
-          #
-          # IT CAN ONLY TURN A SKIP INTO AN ERROR, NEVER AN ERROR INTO A SKIP
-          # (084-prod). It runs only inside the branch where ancestry already
-          # answered "not an ancestor", so every path it can reach was
-          # previously a skip. That asymmetry is what makes it a safety net
-          # rather than a relapse into the guard rounds 1-3 deleted -- a future
-          # reader who remembers those rounds should read this paragraph before
-          # concluding the textual guard came back.
-          #
-          # THE STRING IS `.../python`, NOT THE BARE OWNER PREFIX (084-prod).
-          # The property is "consumes the mirrored PYTHON base", not
-          # "references ghcr at all". A genuinely pre-mirror branch whose
-          # Dockerfile pulls some other ghcr.io/<owner>/... image -- a tool
-          # stage, a builder -- is doing nothing wrong, and the bare prefix
-          # would hard-fail it while telling it its tree is inconsistent.
-          if [ ! -f ci/python_base_ref.sh ]; then
-            # A SHALLOW CLONE CANNOT ANSWER THE ANCESTRY QUESTION. Refuse before
-            # asking it, so the failure names the cause rather than surfacing as
-            # a mysterious 128 below.
-            if [ "$(git rev-parse --is-shallow-repository 2>/dev/null)" = true ]; then
-              echo "::error::this is a shallow repository, so ancestry against" \
-                   "${MIRROR_LANDED} cannot be determined. The build checkouts set" \
-                   "fetch-depth: 0; if this fires, that changed. Refusing to guess." >&2
-              exit 1
-            fi
-            # `--is-ancestor` is three-valued and the third value matters.
-            # Measured by 084-prod against this repository:
-            #
-            #   6fbd7dc8d ancestor of 32831d63e   -> 0
-            #   32831d63e ancestor of 6fbd7dc8d   -> 1
-            #   a sha that exists nowhere         -> 128
-            #
-            # Collapsing >=2 into "not an ancestor" is exactly the
-            # grep-status-1-vs-2 mistake this guard already made once, so it is
-            # handled separately and fails closed.
-            #
-            # WHY THE SHALLOW REFUSAL AND fetch-depth: 0 ARE LOAD-BEARING RATHER
-            # THAN BELT-AND-BRACES: a depth-1 clone yields 128 because the OBJECT
-            # IS ABSENT, not because git detects truncation. So anything that
-            # made the object present-but-unreachable would return 1, which is
-            # indistinguishable from a legitimate "not an ancestor" -- a wrong
-            # answer rather than an error. 084-prod tried to construct that case
-            # and could not (`fetch --depth 1 origin <sha>` is refused
-            # server-side), but no counterexample found is not proof there is
-            # none, so both defences stay.
-            if git merge-base --is-ancestor "$MIRROR_LANDED" HEAD 2>/dev/null; then
-              ancestry=yes
-            else
-              ancestry_status=$?
-              if [ "$ancestry_status" -eq 1 ]; then
-                ancestry=no
-              else
-                echo "::error::cannot determine whether ${MIRROR_LANDED} is an" \
-                     "ancestor of HEAD (git merge-base --is-ancestor exited" \
-                     "${ancestry_status}; a shallow clone cannot answer this)." \
-                     "Refusing to guess: an unanswerable history is not a" \
-                     "pre-mirror tree. The build checkout sets fetch-depth: 0," \
-                     "so this should not happen -- if it does, that changed." >&2
-                exit 1
-              fi
-            fi
-
-            if [ "$ancestry" = yes ]; then
-              echo "::error::this tree contains #2152 (${MIRROR_LANDED}), which added" \
-                   "ci/python_base_ref.sh and the mirrored base together, yet the" \
-                   "script is absent. The ref cannot be derived and the tree is" \
-                   "inconsistent; it is NOT the pre-mirror case." >&2
-              exit 1
-            fi
-
-            # grep is three-valued in the same way --is-ancestor is: 1 means
-            # "read the file, no match", >=2 means "could not read it". This
-            # guard already made the collapse-them mistake once, so they are
-            # separated here too. A MISSING Dockerfile is handled before the
-            # grep, because "no Dockerfile" genuinely means "no mirrored base
-            # referenced" -- that is an answer, not a failure to answer.
-            if [ ! -f docker/Dockerfile ]; then
-              mirrored=no
-            elif grep -qF "ghcr.io/${{ github.repository_owner }}/python" docker/Dockerfile; then
-              mirrored=yes
-            else
-              grep_status=$?
-              if [ "$grep_status" -eq 1 ]; then
-                mirrored=no
-              else
-                echo "::error::docker/Dockerfile exists but could not be read" \
-                     "(grep exited ${grep_status}). Refusing to guess whether this" \
-                     "tree consumes the mirrored base." >&2
-                exit 1
-              fi
-            fi
-
-            if [ "$mirrored" = yes ]; then
-              echo "::error::cherry-picked mirror Dockerfile without" \
-                   "ci/python_base_ref.sh: the script is absent, #2152" \
-                   "(${MIRROR_LANDED}) is not an ancestor of HEAD, yet" \
-                   "docker/Dockerfile names" \
-                   "ghcr.io/${{ github.repository_owner }}/python." \
-                   "This tree consumes the mirrored base with no derivation" \
-                   "available, so the ref cannot be ensured and the build will" \
-                   "fail pulling it. Merge #2152 or drop the cherry-picked" \
-                   "Dockerfile change." >&2
-              exit 1
-            fi
-
-            # NO SEMICOLON IN THIS MESSAGE. tests/tooling's registry guard
-            # (test_run_steps_do_not_pull_from_unapproved_registries) splits a
-            # run block on `[\n;]|&&|\|\|` BEFORE tokenising and does not
-            # respect quotes, so a `;` inside a quoted string cuts the line in
-            # half and the tail loses its opening quote -- `shlex.split` then
-            # raises "No closing quotation" and the step is reported as
-            # unparseable. It scans this step at all only because the word
-            # `docker` appears in the text. Verified: this was the single
-            # unparseable step in the whole file, and it turned the Tests
-            # workflow red. Use a comma.
-            echo "ci/python_base_ref.sh is absent, #2152 (${MIRROR_LANDED}) is not" \
-                 "an ancestor of HEAD, and docker/Dockerfile does not name" \
-                 "ghcr.io/${{ github.repository_owner }}/python: this tree predates" \
-                 "the" \
-                 "mirror and pulls its Python base directly. Nothing to ensure," \
-                 "skipping."
-            exit 0
-          fi
-          # ONE derivation, shared with mirror-test-images.yml (CHAOS-4922).
-          # Two validators for one property diverged; the gap was the silent
-          # failure set. ci/python_base_ref.sh is now the only definition.
-          eval "$(bash ci/python_base_ref.sh "${{ github.repository_owner }}" \
-                  | awk '$1 == "ghcr" { print "ref=" $2 } $1 == "upstream" { print "upstream=" $2 }')"
-          tag="${ref%@*}"
-          digest="${ref##*@}"
-          repo="${upstream%%:*}"
-          if docker buildx imagetools inspect "${ref}" >/dev/null 2>&1; then
-            echo "base already mirrored, no action: ${ref}"
-          else
-            echo "base absent from ghcr, copying from Docker Hub: ${ref}"
-            # Digest-addressed on BOTH sides, so this copies exactly the image
-            # the Dockerfile names -- never whatever the tag points at today.
-            docker buildx imagetools create --tag "${tag}" "docker.io/library/${repo}@${digest}"
-            # Verify by DIGEST rather than trusting the create's exit code: the
-            # thing the build depends on is the image being resolvable at this
-            # ref, not the command having returned zero.
-            docker buildx imagetools inspect "${ref}" >/dev/null
-            echo "base created and verified: ${ref}"
-          fi
-
-      - name: Build and push by digest
-        id: build
-        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
-        with:
-          context: .
-          file: docker/Dockerfile
-          target: ${{ matrix.target }}
-          platforms: ${{ matrix.platform }}
-          # CHAOS-4947: VERSION/COMMIT/BUILD_TIME feed docker/Dockerfile's
-          # runtime-stage LABEL block (added for this ticket, mirroring
-          # go-worker.Dockerfile's identical mechanism) -- NOT this action's
-          # own `labels:` input, which would be a second, parallel path
-          # setting the same org.opencontainers.image.revision key. The
-          # fan-in job's ancestry check reads that label off whatever is
-          # CURRENTLY tagged `latest`; it has to be baked in at build time,
-          # on every build regardless of event type, since a later fan-in
-          # run has no other way to know which commit an earlier build came
-          # from without parsing the sha-<7> tag string (explicitly
-          # rejected: a 7-char prefix isn't guaranteed unique).
-          build-args: |
-            SETUPTOOLS_SCM_PRETEND_VERSION=${{ steps.versioning.outputs.python_version }}
-            VERSION=${{ steps.versioning.outputs.python_version }}
-            COMMIT=${{ steps.versioning.outputs.sha }}
-            BUILD_TIME=${{ steps.versioning.outputs.build_time }}
-          tags: ghcr.io/${{ github.repository_owner }}/dev-hops-${{ matrix.target }}
-          outputs: type=image,push-by-digest=true,name-canonical=true,push=${{ github.event_name != 'pull_request' && (github.event_name != 'workflow_dispatch' || github.event.inputs.push_images == 'true') }}
-          cache-from: type=gha
-          cache-to: type=gha,mode=max
-
-      - name: Export digest
-        if: github.event_name != 'pull_request' && (github.event_name != 'workflow_dispatch' || github.event.inputs.push_images == 'true')
-        run: |
-          mkdir -p /tmp/digests
-          digest="${{ steps.build.outputs.digest }}"
-          touch "/tmp/digests/${digest#sha256:}"
-
-      - name: Upload digest
-        if: github.event_name != 'pull_request' && (github.event_name != 'workflow_dispatch' || github.event.inputs.push_images == 'true')
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
-        with:
-          name: digests-${{ matrix.target }}-${{ strategy.job-index }}
-          path: /tmp/digests/*
-          if-no-files-found: error
-          retention-days: 1
-
-  merge:
-    name: Merge Digests
-    runs-on: ubuntu-latest
-    needs: build
-    if: github.event_name != 'pull_request' && (github.event_name != 'workflow_dispatch' || github.event.inputs.push_images == 'true')
-    # CHAOS-4947: passthrough so the fan-in job (needs: [merge, go-merge])
-    # can read the built commit without re-deriving it. Every leg checks
-    # out the same commit as `build` (see that job's own comment on this),
-    # so which leg's output "wins" doesn't matter.
-    outputs:
-      sha: ${{ needs.build.outputs.sha }}
-    strategy:
-      matrix:
-        target: [api]
-    steps:
-      - name: Download digests
-        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
-        with:
-          path: /tmp/digests
-          pattern: digests-${{ matrix.target }}-*
-          merge-multiple: true
-
-      - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@594f3bf4285d9ea8dc53c9a0c9c4092420091003 # v4.4.0
-
-      # CHAOS-4947: this leg publishes ONLY immutable tags (sha-/semver/PR
-      # ref) -- no `latest`, no branch-name tag. Those two are MOVING tags,
-      # and CHAOS-4921's per-leg mainhead check (kept here through several
-      # rounds) turned out to still be wrong in a way per-leg evaluation
-      # can't fix: eight legs (this matrix plus go-merge's) each check
-      # "is my commit still main's head" independently, at whatever moment
-      # they individually reach this step -- measured up to 34 minutes
-      # apart in one run. A commit landing mid-window lets EARLY legs tag
-      # `latest` and LATE legs decline, splitting `latest` across a fresh
-      # combination of families that never existed as a real commit. The
-      # `fan-in-latest` job below makes that one decision, once, for every
-      # family at the same moment -- see its own comment for why the check
-      # there is "descendant of what's currently `latest`", not
-      # "equals main's live head".
-      - name: Docker meta
-        id: meta
-        uses: docker/metadata-action@dc802804100637a589fabce1cb79ff13a1411302 # v6.2.0
-        with:
-          images: ghcr.io/${{ github.repository_owner }}/dev-hops-${{ matrix.target }}
-          tags: |
-            type=ref,event=pr
-            type=semver,pattern={{version}}
-            type=sha,format=short
-
-      - name: Log in to GitHub Container Registry
-        uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4.6.0
-        with:
-          registry: ghcr.io
-          username: ${{ github.actor }}
-          password: ${{ secrets.GITHUB_TOKEN }}
-
-      - name: Create manifest list and push
-        working-directory: /tmp/digests
-        run: |
-          docker buildx imagetools create $(jq -cr '.tags | map("-t " + .) | join(" ")' <<< "$DOCKER_METADATA_OUTPUT_JSON") \
-            $(printf 'ghcr.io/${{ github.repository_owner }}/dev-hops-${{ matrix.target }}@sha256:%s ' *)
-
-      - name: Inspect image
-        run: |
-          docker buildx imagetools inspect ghcr.io/${{ github.repository_owner }}/dev-hops-${{ matrix.target }}:${{ steps.meta.outputs.version }}
 
   # ---------------------------------------------------------------------------
   # Go runtime images (CHAOS-3923)
@@ -1021,7 +518,7 @@ jobs:
       needs.go-build-dho-arm64.result != 'failure' &&
       needs.go-build-dho-arm64.result != 'cancelled' &&
       github.event_name != 'pull_request' && (github.event_name != 'workflow_dispatch' || github.event.inputs.push_images == 'true')
-    # CHAOS-4947: see the identical output on `merge` above.
+    # CHAOS-4947: passes the built commit through to the fan-in job.
     outputs:
       sha: ${{ needs.go-build.outputs.sha }}
     strategy:
@@ -1042,7 +539,7 @@ jobs:
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@594f3bf4285d9ea8dc53c9a0c9c4092420091003 # v4.4.0
 
-      # CHAOS-4947: see the identical step in the `merge` job above for the
+      # CHAOS-4947: see the `fan-in-latest` job below for the
       # full rationale -- this leg publishes only immutable tags; the
       # `fan-in-latest` job applies `latest`/branch-name tags once, for
       # every family, at the same moment.
@@ -1228,7 +725,7 @@ jobs:
   # ---------------------------------------------------------------------------
   # CHAOS-4947: one moving-tag decision, made ONCE, for every family.
   #
-  # `merge`/`go-merge` above publish only immutable tags now (sha-/semver/PR
+  # `go-merge`/`go-api-tools-merge` above publish only immutable tags now (sha-/semver/PR
   # ref). This job is the only place `latest` (and the branch-name tag, e.g.
   # `main`) ever get applied, and it makes that call after ALL eleven families'
   # immutable tags have landed -- not once per matrix leg, spread over
@@ -1253,7 +750,7 @@ jobs:
   fan-in-latest:
     name: Apply moving tags (fan-in)
     runs-on: ubuntu-latest
-    needs: [merge, go-merge, go-api-tools-merge]
+    needs: [go-merge, go-api-tools-merge]
     # go-merge and go-build-dho-arm64 already tolerate dind-smoke-test
     # being skipped (self-hosted runners unavailable, or a fork PR) via
     # their own always() + explicit needs.*.result gate. That is not
@@ -1273,10 +770,10 @@ jobs:
     # the whole-chain implicit gate, then explicit checks stand in for it
     # -- but scoped to ONLY this job's direct needs, not the full chain.
     # Unlike go-build-dho-arm64 (a leg that can legitimately not run),
-    # none of these three merge jobs has a by-design "did not need to run"
+    # none of these two merge jobs has a by-design "did not need to run"
     # case once the event/push guard below is true: each of them carries
     # that exact same guard, so a push to main, a workflow_dispatch with
-    # push_images, or a release always runs all three. A skip on any of
+    # push_images, or a release always runs both. A skip on either of
     # them here is therefore never by design -- it means that family's
     # digests never got merged and pushed -- so each is checked for
     # == 'success', not merely "did not fail", and a skip blocks the
@@ -1284,7 +781,6 @@ jobs:
     # latest/main over an incomplete image set.
     if: >-
       always() &&
-      needs.merge.result == 'success' &&
       needs.go-merge.result == 'success' &&
       needs.go-api-tools-merge.result == 'success' &&
       github.event_name != 'pull_request' && (github.event_name != 'workflow_dispatch' || github.event.inputs.push_images == 'true')
@@ -1328,7 +824,7 @@ jobs:
       cancel-in-progress: false
     steps:
       # fetch-depth: 0 for `git merge-base --is-ancestor` below; checked out
-      # at the exact commit this run built (needs.merge.outputs.sha), not
+      # at the exact commit this run built (needs.go-merge.outputs.sha), not
       # whatever main happens to be *now* -- the ancestry check reasons
       # about the BUILT commit's relationship to `latest`'s label, and that
       # relationship doesn't depend on where main has moved to since.
@@ -1336,7 +832,7 @@ jobs:
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           fetch-depth: 0
-          ref: ${{ needs.merge.outputs.sha }}
+          ref: ${{ needs.go-merge.outputs.sha }}
 
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@594f3bf4285d9ea8dc53c9a0c9c4092420091003 # v4.4.0
@@ -1368,7 +864,7 @@ jobs:
       - name: Apply latest/branch tags to every family whose ancestry allows it
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          BUILT_SHA: ${{ needs.merge.outputs.sha }}
+          BUILT_SHA: ${{ needs.go-merge.outputs.sha }}
           OWNER: ${{ github.repository_owner }}
           IS_RELEASE: ${{ github.event_name == 'release' && !github.event.release.prerelease }}
           # codex round 1 (P1, docker-images.yml:714 at bc1e9c30): github.ref
@@ -1542,7 +1038,7 @@ jobs:
           # The full family list, both naming schemes -- keep this whole,
           # like ci/check_go_containers.sh's ALL_TARGETS: a shorter,
           # second copy is how the next target goes untagged.
-          families="dev-hops-api dev-health-go-operator dev-health-go-contractcheck dev-health-go-migrate dev-health-go-dho dev-health-go-api-tools"
+          families="dev-health-go-operator dev-health-go-contractcheck dev-health-go-migrate dev-health-go-dho dev-health-go-api-tools"
           short_sha="$(echo "${BUILT_SHA}" | cut -c1-7)"
           # codex round 3, P2: every family shares this ONE short_sha, so an
           # UNKNOWN source-tag registry error (rc==2) on it is not a
@@ -1767,8 +1263,8 @@ jobs:
 
             if [ -z "${base_sha}" ]; then
               # Reached with zero OR exactly one platform label present.
-              # dev-hops-api predates this PR's label and
-              # carry NO Labels map at all today (measured, 084-prod) --
+              # a family published before this PR's label
+              # carries NO Labels map at all today (measured, 084-prod) --
               # that's the zero case. A labelless :latest is NOT the same
               # as a MISSING :latest
               # (that's BOOTSTRAP, above), and it isn't the two-platforms-

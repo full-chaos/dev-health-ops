@@ -190,7 +190,7 @@ def test_the_cut_checks_dho_api_ch_before_it_recreates_go_api() -> None:
     up = next(
         i
         for i, line in enumerate(lines)
-        if "up -d --no-deps --no-build api query-api go-api web" in line
+        if "up -d --no-deps --no-build query-api go-api web" in line
     )
     assert check < up, "the dho_api_ch check must run before go-api is recreated"
     gate = "\n".join(lines[check : check + 3])

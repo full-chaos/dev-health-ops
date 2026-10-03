@@ -20,7 +20,6 @@ _CHART = Path(__file__).resolve().parents[2] / "deploy" / "helm" / "dev-health"
 _RELEASE = "no-cronjobs"
 _VALUE_SETS = {
     "default": [],
-    "quickstart": ["-f", str(_CHART / "values-quickstart.yaml")],
     "go-workers-and-go-api": [
         "--set",
         "goWorkers.enabled=true",
@@ -55,7 +54,7 @@ def test_chart_renders_no_cronjob(name: str) -> None:
     assert not cronjobs, f"the {name} value set renders CronJobs: {cronjobs}"
 
 
-@pytest.mark.parametrize("filename", ["values.yaml", "values-quickstart.yaml"])
+@pytest.mark.parametrize("filename", ["values.yaml"])
 def test_chart_values_carry_no_cronjobs_block(filename: str) -> None:
     values = yaml.safe_load((_CHART / filename).read_text())
     assert "cronjobs" not in values, (

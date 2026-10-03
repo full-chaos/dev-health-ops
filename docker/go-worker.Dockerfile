@@ -72,7 +72,8 @@ RUN --mount=type=cache,target=/go/pkg/mod \
       /runtime/dho/app/contracts/jobs \
       /runtime/dho/app/contracts/sync-dispatch \
       /runtime/dho/app/deploy/go-workers \
-      /runtime/dho/app/config; \
+      /runtime/dho/app/config \
+      /runtime/dho/var/lib/dev-health/envelope-keys; \
     cp /out/dho /runtime/operator/usr/local/bin/dho; \
     cp /out/dho /runtime/contractcheck/usr/local/bin/dho; \
     cp -R /src/contracts/jobs/v1 /runtime/operator/app/contracts/jobs/v1; \

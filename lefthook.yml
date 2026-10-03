@@ -39,6 +39,11 @@ pre-commit:
   commands:
     ruff-format:
       glob: "*.py"
+      # The recorded-oracle script is pinned by a frozen sha256; `exclude` in
+      # pyproject.toml is ignored for files passed by name, so skip it here.
+      # `ruff check` below still lints it (CHAOS-8478).
+      exclude:
+        - "internal/syncdispatchruntime/testdata/dispatch_admission_oracle.py"
       run: scripts/run_py_tool.sh ruff format {staged_files}
       stage_fixed: true
     ruff-fix:
@@ -46,18 +51,10 @@ pre-commit:
       run: scripts/run_py_tool.sh ruff check --fix {staged_files}
       stage_fixed: true
     mypy:
-      # CHAOS-4843, 4752-go's peer read of #2169, round 1, P3: a bare
-      # `glob: "*.py"` meant a change touching ONLY a config file this gate
-      # actually cares about (mypy.ini, pyproject.toml, ...) never triggered
-      # this command at all -- CI's ci/typecheck_relevance.py explicitly
-      # treats those files as relevant and runs mypy; local silently did not.
-      # This list is the SAME list as ci/typecheck_relevance.py's
-      # RELEVANT_PATTERNS, copied on purpose (not derived at YAML-parse
-      # time -- lefthook.yml cannot import Python) -- kept in sync by
-      # test_lefthook_glob_matches_typecheck_relevance_patterns in
-      # tests/tooling/test_aggregate_gate_results.py, which fails loud the
-      # moment the two lists diverge, the same shape as the CI/local
-      # convergence this whole ticket already established for `mypy .` below.
+      # CHAOS-4843: a bare `glob: "*.py"` meant a change touching ONLY a config
+      # file this gate cares about (mypy.ini, pyproject.toml, ...) never
+      # triggered this command. CI's mypy job and its relevance script were
+      # removed (CHAOS-8352); this hook is now local-only.
       glob:
         - ".github/workflows/**"
         - "src/**"
@@ -97,6 +94,8 @@ pre-push:
   commands:
     ruff-format-check:
       glob: "*.py"
+      exclude:
+        - "internal/syncdispatchruntime/testdata/dispatch_admission_oracle.py"
       run: scripts/run_py_tool.sh ruff format --check {push_files}
       fail_text: "Run `ruff format .` locally, commit the result, push again. Or `git push --no-verify` to bypass."
     ruff-check:
@@ -104,18 +103,10 @@ pre-push:
       run: scripts/run_py_tool.sh ruff check {push_files}
       fail_text: "Run `ruff check --fix .` locally, commit the result, push again. Or `git push --no-verify` to bypass."
     mypy:
-      # CHAOS-4843, 4752-go's peer read of #2169, round 1, P3: a bare
-      # `glob: "*.py"` meant a change touching ONLY a config file this gate
-      # actually cares about (mypy.ini, pyproject.toml, ...) never triggered
-      # this command at all -- CI's ci/typecheck_relevance.py explicitly
-      # treats those files as relevant and runs mypy; local silently did not.
-      # This list is the SAME list as ci/typecheck_relevance.py's
-      # RELEVANT_PATTERNS, copied on purpose (not derived at YAML-parse
-      # time -- lefthook.yml cannot import Python) -- kept in sync by
-      # test_lefthook_glob_matches_typecheck_relevance_patterns in
-      # tests/tooling/test_aggregate_gate_results.py, which fails loud the
-      # moment the two lists diverge, the same shape as the CI/local
-      # convergence this whole ticket already established for `mypy .` below.
+      # CHAOS-4843: a bare `glob: "*.py"` meant a change touching ONLY a config
+      # file this gate cares about (mypy.ini, pyproject.toml, ...) never
+      # triggered this command. CI's mypy job and its relevance script were
+      # removed (CHAOS-8352); this hook is now local-only.
       glob:
         - ".github/workflows/**"
         - "src/**"

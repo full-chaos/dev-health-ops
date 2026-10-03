@@ -87,22 +87,26 @@ func TestCapacityForecastV2Document_MatchesItsWireFormFixture(t *testing.T) {
 	}
 }
 
-// The current text and V2 differ in exactly the three selections CHAOS-8477 adds: take them out of the current
-// text and the V2 text is left, byte for byte.
+// The current text and V2 differ in exactly the selections CHAOS-8477 adds (the run total, the unfinished runs and
+// the horizon on the distribution; the cumulative share on both bin lists): take them out of the current text and
+// the V2 text is left, byte for byte.
 func TestCapacityForecastCurrentAndV2_DifferByTheRunTotalAndTheCumulativeShare(t *testing.T) {
 	current := registeredCapacityForecastDocument
-	if strings.Count(current, "      runs\n") != 1 {
-		t.Fatalf("the current capacityForecast document does not ask for runs exactly once")
+	without := current
+	for line, times := range map[string]int{
+		"      runs\n": 1, "      unfinishedRuns\n": 1, "      horizonDays\n": 1, "        cumulativeShare\n": 2,
+	} {
+		field := strings.TrimSpace(line)
+		if strings.Count(current, line) != times {
+			t.Fatalf("the current capacityForecast document does not ask for %s exactly %d time(s)", field, times)
+		}
+		if strings.Contains(registeredCapacityForecastV2Document, field) {
+			t.Fatalf("the legacy V2 capacityForecast document asks for %s: it is not the old text", field)
+		}
+		without = strings.ReplaceAll(without, line, "")
 	}
-	if strings.Count(current, "        cumulativeShare\n") != 2 {
-		t.Fatalf("the current capacityForecast document does not ask for cumulativeShare on both bin lists")
-	}
-	if strings.Contains(registeredCapacityForecastV2Document, "runs") || strings.Contains(registeredCapacityForecastV2Document, "cumulativeShare") {
-		t.Fatal("the legacy V2 capacityForecast document asks for runs or cumulativeShare: it is not the old text")
-	}
-	without := strings.ReplaceAll(strings.ReplaceAll(current, "      runs\n", ""), "        cumulativeShare\n", "")
 	if without != registeredCapacityForecastV2Document {
-		t.Fatalf("the current document less the three new selections is not the V2 text:\n%s", without)
+		t.Fatalf("the current document less the new selections is not the V2 text:\n%s", without)
 	}
 	// No field of a dropped ticket came in with it (CHAOS-8467).
 	for _, dropped := range []string{"throughputHistory", "throughputDistribution"} {

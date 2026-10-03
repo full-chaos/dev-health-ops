@@ -339,6 +339,9 @@ func ApplyPinnedMigrations(
 		return MigrationResult{}, migrationStageError("begin privilege transaction")
 	}
 	defer func() { _ = tx.Rollback(ctx) }()
+	if _, err := tx.Exec(ctx, "DROP INDEX IF EXISTS "+schema+".river_job_args_index"); err != nil {
+		return MigrationResult{}, migrationStageError("plant")
+	}
 	// CHAOS-5437: created before applyRuntimeGrants, in the SAME transaction,
 	// so the grant statement below (guarded by to_regclass, like every other
 	// grant in this file) sees the table as already existing on the very

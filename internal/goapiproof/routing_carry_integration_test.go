@@ -476,12 +476,52 @@ func TestCarryRefusesWhenNothingAtTheLiveDigestIsReachable(t *testing.T) {
 	}
 }
 
-// An empty table and a table whose rows all died must not read alike.
-func TestCarryRefusesWhenTheLiveDigestHasNoRowAtAll(t *testing.T) {
+// An empty table and a table whose rows all died must not read alike
+// (CHAOS-8543). Until this change both answered ErrCarryNoLiveRows, and this
+// test -- then TestCarryRefusesWhenTheLiveDigestHasNoRowAtAll -- pinned that
+// for the empty table.
+//
+// The empty table is a valid state since the catalog rule: nothing to carry,
+// nothing wrong, and its own value that is not a refusal. Rows that exist only
+// at another schema digest hold their operations dark by the same rule, so
+// that state keeps the refusal, whatever the modes of those rows.
+func TestCarryTellsAnEmptyTableFromATableWhoseRowsAreAllElsewhere(t *testing.T) {
 	ctx := t.Context()
 	pool := startAuditedRegistryPostgres(t)
-	if _, err := Carry(ctx, pool, carryIntegrationRequest()); !errors.Is(err, ErrCarryNoLiveRows) {
-		t.Fatalf("err = %v, want the refusal that names the empty live digest", err)
+
+	outcomes, err := Carry(ctx, pool, carryIntegrationRequest())
+	if !errors.Is(err, ErrRoutingTableEmpty) {
+		t.Fatalf("empty table: err = %v, want ErrRoutingTableEmpty", err)
+	}
+	if errors.Is(err, ErrCarryNoLiveRows) || errors.Is(err, ErrCarryRequestRefused) || len(outcomes) != 0 {
+		t.Fatalf("empty table: err = %v outcomes = %+v, want a value that is neither refusal and no outcome", err, outcomes)
+	}
+	// A named operation changes nothing: there is no row for it to be missing from.
+	named := carryIntegrationRequest()
+	named.Operations = []string{"featureFlags"}
+	if _, err := Carry(ctx, pool, named); !errors.Is(err, ErrRoutingTableEmpty) {
+		t.Fatalf("empty table, one named operation: err = %v, want ErrRoutingTableEmpty", err)
+	}
+
+	const elsewhere = "sha256:0000000000000000000000000000000000000000000000000000000000000e15"
+	for _, mode := range []string{"disabled", "canary"} {
+		seedCarryRow(t, ctx, pool, elsewhere, CarryRow{
+			Operation: "op_" + mode, DocumentDigest: testDocumentDigest, Mode: mode,
+			Build: verbsRunningBuild, Owner: "go", RolloutPercentage: 100, ReviewEvidence: "left at another digest",
+		})
+		_, err := Carry(ctx, pool, carryIntegrationRequest())
+		if !errors.Is(err, ErrCarryNoLiveRows) || errors.Is(err, ErrRoutingTableEmpty) {
+			t.Fatalf("a %s row only at another schema digest: err = %v, want the refusal ErrCarryNoLiveRows", mode, err)
+		}
+	}
+	for _, digest := range []string{carryIntegrationLiveDigest, carryIntegrationTargetDigest} {
+		if rows := rowsAtDigest(t, ctx, pool, digest); len(rows) != 0 {
+			t.Fatalf("%d row(s) written at %s by runs that carried nothing", len(rows), digest)
+		}
+	}
+	var audits int
+	if err := pool.QueryRow(ctx, `SELECT count(*) FROM go_api_routing_audits`).Scan(&audits); err != nil || audits != 0 {
+		t.Fatalf("audit rows = %d (err %v), want none: nothing was written", audits, err)
 	}
 }
 

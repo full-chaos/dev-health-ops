@@ -358,6 +358,16 @@ disagree, when a row still names a build the deployed process is not running
 (run `repoint` first), or when the target digest already holds a different
 row for that operation.
 
+A routing table with no row at any schema digest is a valid state (query-api
+serves every catalog operation that has no routing row). On it `carry` and
+`repoint` are a no-op: exit 0, one `NO-OP` line, nothing written, and
+`"empty_table":true` on the `-json` line beside the usual success `reason`,
+so the chart's pre-upgrade and post-upgrade hooks pass. Every other preflight
+still runs (the `-expect-build` cross-check included). When rows exist and
+none of them is at the live schema digest, both verbs refuse as before: a row
+left at another digest holds its operation dark, and an upgrade must not hide
+that.
+
 A registered document that was **swapped with dual accept** is not a changed
 document for `carry`. When an operation gets a new text, the old text stays
 accepted as a legacy one (`legacyDigestsByOperation`, the `"legacy": true`
@@ -847,7 +857,7 @@ make it structural:
   the field with `jq`, host-side, after `docker compose run` returns. Any reason other than
   `digest_unchanged` or a successfully-retried `stale_build` aborts the cut before `migrate`/`up`
   ever runs: **refuse-not-skip**, never a silent no-op.
-- **`routing-repoint`**, right after `routing-parity` (post-roll, against the newly-running
+- **`routing-repoint`**, after the roll (against the newly-running
   build), unconditionally on every cut, schema-change or not. Provenance-only -- it never touches
   mode/reachability -- so it is safe to run every time, and it closes the OTHER gap this ticket
   found: routing rows can lag the actually-running build after an ORDINARY roll too, with no

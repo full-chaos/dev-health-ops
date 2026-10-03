@@ -374,7 +374,10 @@ func TestHomeReaders_SeededRealClickHouse(t *testing.T) {
 
 	t.Run("fetchRecommendationSignals_twoStageArgMaxPicksLatest", func(t *testing.T) {
 		f := Filters{Scope: ScopeFilter{Level: "team", IDs: []string{"team-1"}}}
-		got := fetchRecommendationSignals(ctx, client, f, startDay, endDay, seededOrgID)
+		got, err := fetchRecommendationSignals(ctx, client, f, startDay, endDay, seededOrgID)
+		if err != nil {
+			t.Fatalf("fetchRecommendationSignals: %v", err)
+		}
 		if len(got) != 1 {
 			t.Fatalf("fetchRecommendationSignals = %+v, want exactly one row", got)
 		}
@@ -385,7 +388,10 @@ func TestHomeReaders_SeededRealClickHouse(t *testing.T) {
 
 	t.Run("fetchRiskSignals_and_resolveScopeLabels_argMaxAndFinalChangeTheAnswer", func(t *testing.T) {
 		f := Filters{}
-		got := fetchRiskSignals(ctx, client, f, startDay, endDay, seededOrgID)
+		got, err := fetchRiskSignals(ctx, client, f, startDay, endDay, seededOrgID)
+		if err != nil {
+			t.Fatalf("fetchRiskSignals: %v", err)
+		}
 		if len(got) != 1 {
 			t.Fatalf("fetchRiskSignals = %+v, want exactly one row", got)
 		}

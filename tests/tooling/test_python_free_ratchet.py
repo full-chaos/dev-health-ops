@@ -558,14 +558,15 @@ def test_the_workflow_is_path_scoped_and_keeps_python_out_of_the_shard() -> None
 
 
 def test_every_closed_list_row_cites_a_ticket_and_the_list_has_no_duplicates() -> None:
+    text = (REPO_ROOT / "ci" / "python_free_known.tsv").read_text()
+    # CHAOS-8324: no row is a valid state (the ratchet is closed) only with the header; a truncated file is not an empty list
+    assert text.startswith(HEADER_PREFIX)
     rows = [
         line.split("\t")
-        for line in (REPO_ROOT / "ci" / "python_free_known.tsv")
-        .read_text()
-        .splitlines()
+        for line in text.splitlines()
         if line and not line.startswith("#")
     ]
-    assert rows and all(
+    assert all(
         len(row) == 4
         and row[2].startswith("CHAOS-")
         and row[3] in ("tripwire", "skips-without-python")
@@ -635,6 +636,7 @@ def test_the_three_state_watch_never_reads_a_missing_run_as_green(
 
 
 # CHAOS-8324: an empty closed list is a DEFINED state (every listed test is frozen: the ratchet is closed), never an absence.
+HEADER_PREFIX = "# Closed list of Go tests that still start Python"
 HEADER = "# Closed list of Go tests that still start Python (CHAOS-7384). Columns, tab separated:\n"
 
 

@@ -22,7 +22,7 @@ const producerIdentity = "python 3.14.7\nunicodedata 16.0.0\nlimits 5.8.0\nuvico
 // goldenrecord verb writes each digest when it promotes a recording; a new
 // golden starts as "PIN:" + its file name without ".json".
 var goldenPins = map[string]string{
-	"forwarded-scheme.golden.json": "3d7ac6e0a4f4caf6271ca0abdf1c1eedacb5bcc84eede2a60c0623625560c194",
+	"forwarded-scheme.golden.json": "d3ecbab64211143fc98bd5481f8f0d720b639ef19781e760abcac12d77ac1b6a",
 	"parse-limit.golden.json":      "f5729134007ebf3cd6ad81ab90d942568a7e47f01f37dc024128880185ade2fb",
 }
 

@@ -221,16 +221,25 @@ func BuildResponse(ctx context.Context, chClient QueryClient, pgClient PGQueryCl
 
 	var recommendationRows []RecommendationRow
 	var riskRows []RiskRow
+	var errRecommendations, errRisk error
 	wg.Add(2)
 	go func() {
 		defer wg.Done()
-		recommendationRows = fetchRecommendationSignals(ctx, chClient, f, startDay, endDay, orgID)
+		recommendationRows, errRecommendations = fetchRecommendationSignals(ctx, chClient, f, startDay, endDay, orgID)
 	}()
 	go func() {
 		defer wg.Done()
-		riskRows = fetchRiskSignals(ctx, chClient, f, startDay, endDay, orgID)
+		riskRows, errRisk = fetchRiskSignals(ctx, chClient, f, startDay, endDay, orgID)
 	}()
 	wg.Wait()
+	// CHAOS-8186: a failed signal read fails the request. It was answered as
+	// "no signals of that kind" with HTTP 200, which a caller cannot tell from
+	// a window that has none.
+	for _, err := range []error{errRecommendations, errRisk} {
+		if err != nil {
+			return nil, err
+		}
+	}
 
 	var recommendationSignals []Signal
 	for _, row := range recommendationRows {

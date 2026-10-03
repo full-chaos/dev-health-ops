@@ -136,20 +136,21 @@ type AIHotspotOverlapRow struct {
 }
 
 type AIImpactBucketRow struct {
-	Bucket                string   `json:"bucket"`
-	PrsTotal              int      `json:"prsTotal"`
-	PrsMerged             int      `json:"prsMerged"`
-	CycleTimeAvgHours     *float64 `json:"cycleTimeAvgHours,omitempty"`
-	ReviewsPerPr          *float64 `json:"reviewsPerPr,omitempty"`
-	ChangesRequestedPerPr *float64 `json:"changesRequestedPerPr,omitempty"`
-	ReworkPrs             int      `json:"reworkPrs"`
-	ReworkRate            *float64 `json:"reworkRate,omitempty"`
-	RevertPrs             int      `json:"revertPrs"`
-	RevertRate            *float64 `json:"revertRate,omitempty"`
-	IncidentsCount        int      `json:"incidentsCount"`
-	IncidentRate          *float64 `json:"incidentRate,omitempty"`
-	TestGapPrs            int      `json:"testGapPrs"`
-	TestGapRate           *float64 `json:"testGapRate,omitempty"`
+	Bucket                string           `json:"bucket"`
+	PrsTotal              int              `json:"prsTotal"`
+	PrsMerged             int              `json:"prsMerged"`
+	CycleTimeAvgHours     *float64         `json:"cycleTimeAvgHours,omitempty"`
+	ReviewsPerPr          *float64         `json:"reviewsPerPr,omitempty"`
+	ChangesRequestedPerPr *float64         `json:"changesRequestedPerPr,omitempty"`
+	ReworkPrs             int              `json:"reworkPrs"`
+	ReworkRate            *float64         `json:"reworkRate,omitempty"`
+	RevertPrs             int              `json:"revertPrs"`
+	RevertRate            *float64         `json:"revertRate,omitempty"`
+	IncidentsCount        int              `json:"incidentsCount"`
+	IncidentRate          *float64         `json:"incidentRate,omitempty"`
+	TestGapPrs            int              `json:"testGapPrs"`
+	TestGapRate           *float64         `json:"testGapRate,omitempty"`
+	Day                   graphqldate.Date `json:"day"`
 }
 
 type AIImpactBucketTotals struct {

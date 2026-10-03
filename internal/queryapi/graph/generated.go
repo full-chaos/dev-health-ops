@@ -166,6 +166,7 @@ type ComplexityRoot struct {
 		Bucket                func(childComplexity int) int
 		ChangesRequestedPerPr func(childComplexity int) int
 		CycleTimeAvgHours     func(childComplexity int) int
+		Day                   func(childComplexity int) int
 		IncidentRate          func(childComplexity int) int
 		IncidentsCount        func(childComplexity int) int
 		PrsMerged             func(childComplexity int) int
@@ -2123,6 +2124,13 @@ func (e *executableSchema) Complexity(typeName, field string, childComplexity in
 		}
 
 		return e.complexity.AIImpactBucketRow.CycleTimeAvgHours(childComplexity), true
+
+	case "AIImpactBucketRow.day":
+		if e.complexity.AIImpactBucketRow.Day == nil {
+			break
+		}
+
+		return e.complexity.AIImpactBucketRow.Day(childComplexity), true
 
 	case "AIImpactBucketRow.incidentRate":
 		if e.complexity.AIImpactBucketRow.IncidentRate == nil {
@@ -8670,6 +8678,7 @@ type AIImpactBucketRow {
   incidentRate: Float
   testGapPrs: Int!
   testGapRate: Float
+  day: Date!
 }
 
 type AIImpactBucketTotals {
@@ -17927,6 +17936,50 @@ func (ec *executionContext) fieldContext_AIImpactBucketRow_testGapRate(_ context
 	return fc, nil
 }
 
+func (ec *executionContext) _AIImpactBucketRow_day(ctx context.Context, field graphql.CollectedField, obj *model.AIImpactBucketRow) (ret graphql.Marshaler) {
+	fc, err := ec.fieldContext_AIImpactBucketRow_day(ctx, field)
+	if err != nil {
+		return graphql.Null
+	}
+	ctx = graphql.WithFieldContext(ctx, fc)
+	defer func() {
+		if r := recover(); r != nil {
+			ec.Error(ctx, ec.Recover(ctx, r))
+			ret = graphql.Null
+		}
+	}()
+	resTmp, err := ec.ResolverMiddleware(ctx, func(rctx context.Context) (any, error) {
+		ctx = rctx // use context from middleware stack in children
+		return obj.Day, nil
+	})
+	if err != nil {
+		ec.Error(ctx, err)
+		return graphql.Null
+	}
+	if resTmp == nil {
+		if !graphql.HasFieldError(ctx, fc) {
+			ec.Errorf(ctx, "must not be null")
+		}
+		return graphql.Null
+	}
+	res := resTmp.(graphqldate.Date)
+	fc.Result = res
+	return ec.marshalNDate2githubᚗcomᚋfullᚑchaosᚋdevᚑhealthᚑopsᚋinternalᚋqueryapiᚋgraphqldateᚐDate(ctx, field.Selections, res)
+}
+
+func (ec *executionContext) fieldContext_AIImpactBucketRow_day(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "AIImpactBucketRow",
+		Field:      field,
+		IsMethod:   false,
+		IsResolver: false,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return nil, errors.New("field of type Date does not have child fields")
+		},
+	}
+	return fc, nil
+}
+
 func (ec *executionContext) _AIImpactBucketTotals_bucket(ctx context.Context, field graphql.CollectedField, obj *model.AIImpactBucketTotals) (ret graphql.Marshaler) {
 	fc, err := ec.fieldContext_AIImpactBucketTotals_bucket(ctx, field)
 	if err != nil {
@@ -19235,6 +19288,8 @@ func (ec *executionContext) fieldContext_AIImpactSummary_daily(_ context.Context
 				return ec.fieldContext_AIImpactBucketRow_testGapPrs(ctx, field)
 			case "testGapRate":
 				return ec.fieldContext_AIImpactBucketRow_testGapRate(ctx, field)
+			case "day":
+				return ec.fieldContext_AIImpactBucketRow_day(ctx, field)
 			}
 			return nil, fmt.Errorf("no field named %q was found under type AIImpactBucketRow", field.Name)
 		},
@@ -62255,6 +62310,11 @@ func (ec *executionContext) _AIImpactBucketRow(ctx context.Context, sel ast.Sele
 			}
 		case "testGapRate":
 			out.Values[i] = ec._AIImpactBucketRow_testGapRate(ctx, field, obj)
+		case "day":
+			out.Values[i] = ec._AIImpactBucketRow_day(ctx, field, obj)
+			if out.Values[i] == graphql.Null {
+				out.Invalids++
+			}
 		default:
 			panic("unknown field " + strconv.Quote(field.Name))
 		}

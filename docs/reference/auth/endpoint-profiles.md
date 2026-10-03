@@ -315,9 +315,13 @@ The inventory above is derived from the Python app. The Go services (`go-api`, i
 billing-edge listeners, and `query-api`) now serve the routes, so a second gate guards them
 (guardrail G-1 for Go: a served route without an auth profile fails CI). It lives in
 `internal/apiservice/routeprofile_gate_test.go` and walks the route set from the production router
-constructors, executed in the test: no route is listed by hand.
+constructors, executed in the test: no route of the walked sets is listed by hand. The walked sets are go-api, its
+internal listener, the billing edge, the query-api REST route table and the `/graphql` edge. **Not walked:** the
+query-api transport routes (`/query`, `/registry`, `/buildinfo`, the proof, run-operation and MCP routes) have no
+row and no class check; their set is pinned by name (`TestTheQueryAPIMuxRegistrationsAreThePinnedSet`), so a new
+handler fails that pin but nothing reads its credential class until the follow-up gate covers them.
 
-- **Both directions.** Every `(method, path)` the Go services serve has a profile row, and every
+- **Both directions.** Every `(method, path)` of the walked sets has a profile row, and every
   profile row is served or explained. Rows for routes only Go serves are in
   `contracts/auth/v1/endpoint-profiles.go.json` (the same schema; `endpoint-profiles.ops.json` is not
   edited, and `endpoint-profiles.ops.pins.tsv` pins every one of its rows byte for byte).

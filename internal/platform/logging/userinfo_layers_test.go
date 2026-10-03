@@ -477,6 +477,9 @@ func TestThePersistedSanitizersAreIdempotentWithColonRunsAtTheCut(t *testing.T) 
 						if n := len([]rune(once)); n > capacity {
 							t.Fatalf("%s cap %d: %d runes for %.40q", sanitizer.name, capacity, n, unit)
 						}
+						if !strings.HasSuffix(once, "...[truncated]") {
+							t.Fatalf("%s cap %d, unit %q: a cut text lost its truncation suffix: %.160q", sanitizer.name, capacity, unit, once)
+						}
 						if twice := sanitizer.call(once, capacity); twice != once {
 							t.Fatalf("%s cap %d, unit %q: a second call changes the text:\n%.160q\n%.160q", sanitizer.name, capacity, unit, once, twice)
 						}

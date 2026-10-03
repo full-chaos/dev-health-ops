@@ -228,11 +228,11 @@ def test_inventory_row_count_matches_the_baseline():
     rows = inventory["rows"]
     rest = [r for r in rows if r["surface_kind"] == "rest"]
     graphql = [r for r in rows if r["surface_kind"] in _GRAPHQL_KINDS]
-    assert len(rest) == 245, len(
+    assert len(rest) == 232, len(
         rest
-    )  # recounted from the file: CHAOS-7294 deleted the 26 Python billing rows
+    )  # recounted from the file: CHAOS-8345 deleted the 13 Python IP-allowlist and retention rows (245 before)
     assert len(graphql) == 47, len(graphql)
-    assert len(rows) == 292, len(rows)
+    assert len(rows) == 279, len(rows)  # 292 before CHAOS-8345
 
 
 def test_no_graphql_subscription_is_profiled():
@@ -315,9 +315,9 @@ def test_classification_summary_matches_the_baseline():
     # the file.
     # - 1 more under CHAOS-7070: the deleted `home` GraphQL field row was
     # protected (the same GraphQL-wide auth). Recounted from the file.
-    assert len(protected) == 267, len(
+    assert len(protected) == 254, len(
         protected
-    )  # recounted: the 26 deleted billing rows were protected
+    )  # recounted: the 13 rows CHAOS-8345 deleted were all protected (267 before)
     # 20 + the four fastapi doc routes + /metrics.
     assert len(public) == 25, len(public)
     assert len(protected) + len(public) == len(rows)

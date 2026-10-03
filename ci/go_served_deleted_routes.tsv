@@ -31,3 +31,16 @@ POST	/api/v1/billing/subscriptions/change-plan	CHAOS-7294
 GET	/api/v1/billing/subscriptions/history	CHAOS-7294
 GET	/api/v1/billing/subscriptions/list	CHAOS-7294
 POST	/api/v1/billing/subscriptions/reactivate	CHAOS-7294
+GET	/api/v1/admin/ip-allowlist	CHAOS-8345
+POST	/api/v1/admin/ip-allowlist	CHAOS-8345
+GET	/api/v1/admin/ip-allowlist/{}	CHAOS-8345
+PATCH	/api/v1/admin/ip-allowlist/{}	CHAOS-8345
+DELETE	/api/v1/admin/ip-allowlist/{}	CHAOS-8345
+POST	/api/v1/admin/ip-allowlist/check	CHAOS-8345
+GET	/api/v1/admin/retention-policies	CHAOS-8345
+GET	/api/v1/admin/retention-policies/resource-types	CHAOS-8345
+POST	/api/v1/admin/retention-policies	CHAOS-8345
+GET	/api/v1/admin/retention-policies/{}	CHAOS-8345
+PATCH	/api/v1/admin/retention-policies/{}	CHAOS-8345
+DELETE	/api/v1/admin/retention-policies/{}	CHAOS-8345
+POST	/api/v1/admin/retention-policies/{}/execute	CHAOS-8345

@@ -1,9 +1,15 @@
 #!/usr/bin/env bash
 # bigboy-cut.sh <old8> <full new ops sha>  -- the whole bigboy phase of a group cut, sequential, logs to _records/bigboy-<new8>/cut.log.
 # waits for the CI-built images -> re-pin (ops images + web, CHAOS-7019) -> pre-roll routing carry
-# (CHAOS-7022, refuse-not-skip) -> migrate -> recreate api/query-api/go-api/web -> hook check ->
-# CH grants check -> PG grants read-back -> post-cut routing repoint (CHAOS-7022, every cut) ->
-# receipt/admin/superadmin/REST(leg1+2)/admin corpus batches. Every step prints one `STEP <name> rc=<n>` line; nothing secret is printed.
+# (CHAOS-7022, refuse-not-skip) -> migrate -> recreate query-api/go-api/web -> the worker plane ->
+# route coverage -> routing enable/parity/repoint (CHAOS-7022, every cut) -> log and worker checks ->
+# river apply -> hook check -> CH grants check -> PG grants read-back -> the web-path smoke (R460).
+# Every step prints one `STEP <name> rc=<n>` line; nothing secret is printed.
+# CHAOS-8361: the stack is Go-only. The Python `api` and `metrics-api` services are not in this cut:
+# `api` is in a profile nothing enables (compose.bigboy.images.yml) and the metrics-api side file is out
+# of the chain. The two-plane legs (the proof-token bootstrap, the pass-bigboy*.sh scripts and the REST
+# two-leg proof of the record directory) ran INSIDE the Python api container and compared the Go plane
+# with the Python plane; with no Python plane they have no subject and the cut does not run them.
 set -u
 OLD8=${1:?old8}; NEW=${2:?full sha}; N8=${NEW:0:8}; S7=${NEW:0:7}
 # CHAOS-7022 D2895/D2886(2): BIGBOY_ROOT is a root PARAMETER, not a test hook -- default is
@@ -36,12 +42,12 @@ done
 # CHAOS-7162: dho_api_ch is declared by a host file mounted into ClickHouse's users.d (compose.bigboy.clickhouse-users.yml), so a
 # ClickHouse recreate no longer loses it. The overlay requires the path; the default is the credentials directory's file.
 export DHO_API_CH_USERS_XML="${DHO_API_CH_USERS_XML:-$R/.go-api-dev/dho_api_ch.xml}"
-export COMPOSE_FILE=compose.yml:compose/compose.go.workers.yml:compose/compose.metrics-api.local.yml:.remember/lanes/team-lead/reconciler-sweep-override.yml:compose/compose.bigboy.images.yml:$HERE/compose.bigboy.workers.yml:$HERE/compose.bigboy.clickhouse-users.yml:$HERE/compose.bigboy.billing-edge.yml:$HERE/compose.bigboy.router.yml
+export COMPOSE_FILE=compose.yml:compose/compose.go.workers.yml:.remember/lanes/team-lead/reconciler-sweep-override.yml:compose/compose.bigboy.images.yml:$HERE/compose.bigboy.workers.yml:$HERE/compose.bigboy.clickhouse-users.yml:$HERE/compose.bigboy.billing-edge.yml:$HERE/compose.bigboy.router.yml
 cd "$R"
 st() { echo "STEP $1 rc=$2 $(date -u +%T)"; }
 echo "cut start $(date -u +%T) new=$NEW root=$R tools=$HERE"
 for i in $(seq 1 240); do
-  ok=1; for img in dev-hops-api dev-health-go-operator dev-health-go-dho dev-health-go-api-tools; do docker buildx imagetools inspect ghcr.io/full-chaos/$img:sha-$S7 >/dev/null 2>&1 || ok=0; done
+  ok=1; for img in dev-health-go-operator dev-health-go-dho dev-health-go-api-tools; do docker buildx imagetools inspect ghcr.io/full-chaos/$img:sha-$S7 >/dev/null 2>&1 || ok=0; done
   [ $ok = 1 ] && break; sleep 30
 done
 [ "${ok:-0}" = 1 ] || { st images-wait 1; exit 1; }; st images-ready 0
@@ -96,7 +102,7 @@ if [ -n "$VALUES" ]; then
   # CHAOS-6987 (team-lead, hard rule): `docker compose config` output never reaches a pipe, a
   # file, or a screen except through ONE redacting filter (compose-config-redacted.sh) -- it
   # emits NAME=<length> only, never a resolved value, even for a length-only check like this one.
-  REDACTED=$($HERE/compose-config-redacted.sh --env-file ops/.env -f compose.yml -f compose/compose.go.workers.yml -f compose/compose.metrics-api.local.yml -f .remember/lanes/team-lead/reconciler-sweep-override.yml -f compose/compose.bigboy.images.yml -f $HERE/compose.bigboy.workers.yml); RED_RC=$?
+  REDACTED=$($HERE/compose-config-redacted.sh --env-file ops/.env -f compose.yml -f compose/compose.go.workers.yml -f .remember/lanes/team-lead/reconciler-sweep-override.yml -f compose/compose.bigboy.images.yml -f $HERE/compose.bigboy.workers.yml); RED_RC=$?
   BLANK=""
   for entry in $(awk -F': \\$\\{' '/\$\{[A-Z_]+\}$/{print $1}' "$REC.query-api-enabled-flags.generated" | tr -d ' '); do
     LEN=$(echo "$REDACTED" | awk -F= -v n="$entry" '$1==n{print $2}')
@@ -130,7 +136,7 @@ fi
 docker pull -q $BIGBOY_OPERATOR_IMAGE > /dev/null 2>&1; st operator-pull $?   # --no-build never pulls: the digest must be local before the recreate (rev 190 first run: "No such image")
 $HERE/bigboy-repin.sh $OLD8 $NEW > $REC.repin.out 2>&1; st repin $?
 [ -d $REC ] || { echo "no record dir"; exit 1; }
-# CHAOS-7019: `web` is a LOCAL BUILD service in the root compose.yml, unlike api/query-api/
+# CHAOS-7019: `web` is a LOCAL BUILD service in the root compose.yml, unlike query-api/
 # go-api which the bigboy overlay pins to CI-built ghcr.io digests -- so a web-only merge (or a
 # web+ops merge landing together, like CHAOS-6262) left a stale host build silently serving
 # pages the backend underneath had already changed shape for. compose.bigboy.images.yml now
@@ -145,11 +151,10 @@ $HERE/bigboy-repin-web.sh > $REC.repin-web.out 2>&1; rc_web=$?; st repin-web $rc
 # explicit way to keep the current web pin.
 [ $rc_web = 0 ] || { echo "cut stops: web re-pin failed rc=$rc_web (see $REC.repin-web.out); WEB_REPIN=skip keeps the current web pin"; exit 1; }
 
-for f in $R/_records/bigboy-$OLD8/pass-bigboy-corpus-admin7.sh; do [ -f $f ] && cp -n $f $REC/; done
 # CHAOS-7022 (D2804/D2811): pre-roll routing carry, refuse-not-skip. Runs HERE -- after repin
 # (compose/compose.bigboy.images.yml already names the round's NEW tools image, so venue-tools
 # computes the NEW schema digest from its own embedded SDL) but BEFORE migrate/up/up-workers
-# recreate api/query-api/go-api, while query-api is still the OLD, pre-roll, live process: the
+# recreate query-api/go-api, while query-api is still the OLD, pre-roll, live process: the
 # exact source `carry` is designed to read from (docs/contribute/architecture/go-api-wave-0-
 # proof-infrastructure.md, "When the schema digest moves"). `carry` itself refuses (exit 2) when
 # the live and target schema digests already agree -- the EXPECTED shape for an ordinary,
@@ -179,7 +184,7 @@ ROUTING_ORG=${ROUTING_ORG:-67f1add8-9fcb-4272-addb-044b70c442c8}  # the disposab
 # (still the tools image's own catalog/documents -- "the image THIS binary was built from", per
 # carry.go's flag help -- never a separately fetched copy). repoint has no -catalog/-documents
 # flags at all, so it keeps its own, shorter arg list.
-CARRY_ARGS="-registry-url http://query-api:8090/registry -buildinfo-url http://query-api:8090/buildinfo -json -catalog /app/go-api/src/dev_health_ops/api/graphql/go_api_operations.json -documents /app/go-api/documents.json"
+CARRY_ARGS="-registry-url http://query-api:8090/registry -buildinfo-url http://query-api:8090/buildinfo -json -catalog /app/go-api/contracts/graphql/v1/go_api_operations.json -documents /app/go-api/documents.json"
 REPOINT_ARGS="-registry-url http://query-api:8090/registry -buildinfo-url http://query-api:8090/buildinfo -json"
 carry_reason() {
   # $1: the captured carry/repoint stdout+stderr blob. Prints the GOAPI_ROUTING_JSON line's
@@ -250,7 +255,10 @@ docker compose --env-file ops/.env run --rm --no-deps migrate > $REC/migrate.out
 # check sees; the check proves dho_api_ch authenticates with it. Nothing prints it.
 ( set -a; . "${DHO_API_CH_CREDS:-$R/.go-api-dev/go-api.creds}" 2>/dev/null; set +a; exec "$HERE/check-dho-api-ch-user.sh" "$DHO_API_CH_USERS_XML" ) > $REC/ch-api-user.out 2>&1; rc_chu=$?; st ch-api-user $rc_chu
 [ "$rc_chu" = 0 ] || { echo "FAIL: dho_api_ch is not usable (see $REC/ch-api-user.out); ABORTING before go-api is recreated" >&2; cat $REC/ch-api-user.out >&2; exit 1; }
-docker compose --env-file ops/.env up -d --no-deps --no-build api query-api go-api web > $REC/up.out 2>&1; st up $?   # CHAOS-7019: web recreated from its repinned digest here too, never a host build
+# CHAOS-8361: no `api` in this list (the Python api is retired). `--no-deps` skips nothing these three need:
+# the one dependency the cut owns, `migrate`, ran on the line above, and the bigboy chain declares no
+# envelope-keys-init service (query-api and the venue one-offs read the key files of .go-api-dev).
+docker compose --env-file ops/.env up -d --no-deps --no-build query-api go-api web > $REC/up.out 2>&1; st up $?   # CHAOS-7019: web recreated from its repinned digest here too, never a host build
 # CHAOS-7131: the recreated web must still carry the names the router overlay sets (names only, never values).
 "$HERE/container-env-names.sh" dev-health-web-1 > "$REC.web-env-names-after-up" 2>/dev/null
 "$HERE/check-web-env-required.sh" "$REC.web-env-names-after-up" BACKEND_URL AUTH_URL; st web-env-after-up $?
@@ -266,7 +274,7 @@ if [ -n "$VALUES" ]; then python3 "$HERE/check-route-coverage.py" "$VALUES"; st 
 # enable proof gate needs a bigboy go-api-prove run) make this STEP rc=3 -- a named gap, never rc=0.
 # The catalog is fetched at THIS cut's sha so status/enable classify against the deployed build.
 ROUTING_ORG=${ROUTING_ORG:-67f1add8-9fcb-4272-addb-044b70c442c8}  # the disposable fixture org, never the local org
-gh api "repos/full-chaos/dev-health-ops/contents/src/dev_health_ops/api/graphql/go_api_operations.json?ref=$NEW" -H 'Accept: application/vnd.github.raw' > "$REC.catalog.json" 2>/dev/null && chmod 644 "$REC.catalog.json"
+gh api "repos/full-chaos/dev-health-ops/contents/contracts/graphql/v1/go_api_operations.json?ref=$NEW" -H 'Accept: application/vnd.github.raw' > "$REC.catalog.json" 2>/dev/null && chmod 644 "$REC.catalog.json"
 vt() { docker compose --env-file ops/.env --profile venue run --rm --no-deps -T -v "$REC.catalog.json:/catalog.json:ro" venue-tools "$1"; }
 ROUTING_ARGS='-catalog /catalog.json -registry-url http://query-api:8090/registry'
 vt "dho goapi routing status -json $ROUTING_ARGS" > "$REC.routing-status-pre.json" 2>/dev/null
@@ -294,15 +302,13 @@ python3 "$HERE/check-routing-parity.py" "$HERE/routing-ops.txt" "$REC.routing-st
 #
 # D2823 (r1 P1 #2): pin with -expect-build $NEW, the SAME guard bigboy-graphql-prove.sh already
 # uses on its own repoint call. Unpinned, this call accepts whatever build query-api's /buildinfo
-# happens to report right now -- if the api/query-api/go-api recreate above (STEP up) left an
+# happens to report right now -- if the query-api/go-api recreate above (STEP up) left an
 # OLDER query-api still serving (a partial or failed recreate), this call would silently write
 # routing-repoint rows for that STALE build while the cut still reports success.
 vt "GO_API_ROUTING_BEARER=\$(dho mint envelope -org $ROUTING_ORG -key-file /keys/envelope.pem) dho goapi routing repoint -registry-url http://query-api:8090/registry -buildinfo-url http://query-api:8090/buildinfo -expect-build $NEW -operations all-registered -recorded-by bigboy-cut -review-evidence 'CHAOS-7022: post-cut repoint, cut $OLD8 -> $N8'" > "$REC.routing-repoint.out" 2>&1
 rc_repoint=$?
 st routing-repoint "$rc_repoint"
 [ "$rc_repoint" = 0 ] || { echo "ABORT: post-cut routing repoint failed or refused (-expect-build $NEW) -- see $REC.routing-repoint.out; routing rows may be stale (CHAOS-7022)" >&2; exit 1; }
-# proof tokens are 12 h: RE-MINT at every cut (rev 188: an expired token silently refused 65 REST entries, runbook step 9)
-for b in bootstrap-admin-proof.sh bootstrap-superadmin-proof.sh; do bash "$R"/_records/bigboy-1152962/"$b" > "$REC"/"$b".out 2>&1; st "$b" $?; done
 $HERE/bigboy-log-checks.sh $REC > $REC/log-checks.out 2>&1; st log-checks $?; tail -6 $REC/log-checks.out
 $HERE/bigboy-6889-checks.sh $REC > $REC/6889-checks.out 2>&1; st worker-checks $?; tail -4 $REC/6889-checks.out | cut -c1-200
 $HERE/bigboy-river-apply.sh > $REC/river-apply.out 2>&1; st river-apply $?
@@ -310,11 +316,6 @@ $HERE/bigboy-hook-check.sh $REC > $REC/hook-check.out 2>&1; st hook-check $?
 $HERE/bigboy-grants-check.sh $REC > $REC/grants-check.out 2>&1; st ch-grants-check $?; tail -1 $REC/grants-check.out
 $HERE/cut-contents.sh $OLD8 $NEW $REC/pg-expect.txt > $REC/contents.txt 2>&1; st cut-contents $?; cat $REC/contents.txt
 [ "$(grep -vc "^#" $REC/pg-expect.txt)" -gt 0 ] && { $HERE/pg-grants-check.sh bigboy $REC/pg-expect.txt > $REC/pg-grants.out 2>&1; st pg-grants-readback $?; tail -4 $REC/pg-grants.out; } || echo "STEP pg-grants-readback SKIPPED (no PG grant deltas in the cut)"
-cd $REC
-for s in pass-bigboy.sh pass-bigboy-admin.sh pass-bigboy-superadmin.sh pass-bigboy-corpus-admin7.sh pass-bigboy-admin2.sh pass-bigboy-superadmin2.sh pass-bigboy-corpus-admin8.sh pass-bigboy-corpus-admin9.sh; do [ -f $s ] || continue; timeout 300 bash $s > out-${s%.sh}.txt 2>&1; st ${s%.sh} $?; done
-timeout 900 bash run-rest-bigboy.sh > out-rest.txt 2>&1; st rest $?; grep -E "attempted=|exit_cause" out-rest.txt | head -4
-for f in out-pass-bigboy.txt out-pass-bigboy-admin.txt out-pass-bigboy-superadmin.txt out-pass-bigboy-corpus-admin7.txt; do [ -f $f ] && echo "$f rows=$(awk -F' [|] ' 'NR>1' $f | wc -l) notidentical=$(awk -F' [|] ' 'NR>1 && ($4!~/True/||$5!~/True/)' $f | wc -l)"; done
-cd "$R"
 # CHAOS-6987/R460: the web-path smoke -- the only proof this cut serves the real org
 # through a real browser session, not a hand-minted token. Fails loud (rc=1) while
 # DHO_SMOKE_ADMIN_EMAIL/DHO_SMOKE_ADMIN_PASSWORD_FILE are absent from ops/.env; that

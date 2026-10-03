@@ -1,0 +1,70 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://contracts.fullchaos.dev/ingress/v1/planes.schema.json",
+  "title": "Dev Health route planes of an api host",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema_version", "regex_mode", "rules", "public_host_rules"],
+  "properties": {
+    "schema_version": {"type": "integer", "const": 1},
+    "regex_mode": {"type": "boolean", "const": true},
+    "rules": {
+      "type": "array",
+      "items": {
+        "oneOf": [
+          {"$ref": "#/$defs/default_rule"},
+          {"$ref": "#/$defs/anchored_rule"}
+        ]
+      },
+      "contains": {"$ref": "#/$defs/default_rule"},
+      "minContains": 1,
+      "maxContains": 1
+    },
+    "public_host_rules": {
+      "type": "array",
+      "items": {"$ref": "#/$defs/exact_rule"}
+    }
+  },
+  "$defs": {
+    "plane": {
+      "type": "string",
+      "enum": ["go-api", "query-api"]
+    },
+    "default_rule": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["path", "path_type", "plane"],
+      "properties": {
+        "path": {"type": "string", "const": "/"},
+        "path_type": {"type": "string", "const": "Prefix"},
+        "plane": {"$ref": "#/$defs/plane"}
+      }
+    },
+    "anchored_rule": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["path", "path_type", "plane"],
+      "properties": {
+        "path": {
+          "type": "string",
+          "pattern": "^(/(\\[\\^/\\]\\+|([A-Za-z0-9_-]|\\\\\\.)+))+\\$$"
+        },
+        "path_type": {"type": "string", "const": "ImplementationSpecific"},
+        "plane": {"$ref": "#/$defs/plane"}
+      }
+    },
+    "exact_rule": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["path", "path_type", "plane"],
+      "properties": {
+        "path": {
+          "type": "string",
+          "pattern": "^(/[A-Za-z0-9_.-]+)+$"
+        },
+        "path_type": {"type": "string", "const": "Exact"},
+        "plane": {"$ref": "#/$defs/plane"}
+      }
+    }
+  }
+}

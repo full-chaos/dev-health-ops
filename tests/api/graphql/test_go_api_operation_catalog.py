@@ -1,6 +1,6 @@
 """Tests for the checked-in Go-API operation catalog (CHAOS-4697).
 
-The catalog (``api/graphql/go_api_operations.json``) is a generated
+The catalog (``contracts/graphql/v1/go_api_operations.json``) is a generated
 artifact -- see ``scripts/go_api/generate_operation_catalog.py``'s module
 docstring for why it is checked in rather than produced at runtime (the
 production Python edge image has no Go toolchain). This file's drift
@@ -25,9 +25,7 @@ from dev_health_ops.api.graphql.go_api_operation_catalog import (
 )
 
 REPO_ROOT = Path(__file__).resolve().parents[3]
-CATALOG_PATH = (
-    REPO_ROOT / "src" / "dev_health_ops" / "api" / "graphql" / "go_api_operations.json"
-)
+CATALOG_PATH = REPO_ROOT / "contracts" / "graphql" / "v1" / "go_api_operations.json"
 GENERATE_SCRIPT = REPO_ROOT / "scripts" / "go_api" / "generate_operation_catalog.py"
 
 

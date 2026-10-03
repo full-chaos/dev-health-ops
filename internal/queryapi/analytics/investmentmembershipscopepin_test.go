@@ -431,56 +431,96 @@ func TestPinInvestmentMembershipScope_UnreadableStateFailsTheQuery(t *testing.T)
 	}
 }
 
-// TestResolve_ScopeResolutionFailure_DegradesChartsWithoutUnscopedRows: on
-// the GraphQL chart sections (sankey, flowMatrix) a failed scope resolution
-// takes the sections' degradation path -- empty section, degradation
-// telemetry, the resolution warn line -- and no investment statement runs,
-// so no unscoped row can reach the response.
-func TestResolve_ScopeResolutionFailure_DegradesChartsWithoutUnscopedRows(t *testing.T) {
-	records := captureSlog(t)
-	var degraded []string
-	origDegradation := recordDegradation
-	recordDegradation = func(_ context.Context, phase string, err error) {
-		if strings.Contains(err.Error(), "resolve investment membership scope") {
-			degraded = append(degraded, phase)
-		}
-	}
-	t.Cleanup(func() { recordDegradation = origDegradation })
-
-	inner := (&routingFakeClient{}).
-		onErr("SELECT scope_mode, lag_seconds, latest_run_id", errors.New("state query failed")).
-		on(investmentScopeRunIDPlaceholder(), &fakeRowScanner{rows: [][]any{{"feature_delivery", "feature_delivery.roadmap", float64(99)}}}).
-		on(investmentScopeRunIDSQL(), &fakeRowScanner{rows: [][]any{{"feature_delivery", "feature_delivery.roadmap", float64(99)}}})
+// TestResolve_ScopeResolutionFailure_ReturnsNoUnscopedChartRows: on the
+// GraphQL chart sections (sankey, flowMatrix) a failed scope resolution fails
+// the scope-filtered statement before it runs, so no unscoped row can reach
+// the response. The two sections then report it in two ways: flowMatrix
+// degrades to an empty section (with its degradedReason), and the sankey
+// returns the failure as an error (CHAOS-8186: SankeyResult has no field that
+// could say "degraded", so an empty sankey would read as an empty window).
+// Both report the failure to telemetry and write the resolution warn line.
+func TestResolve_ScopeResolutionFailure_ReturnsNoUnscopedChartRows(t *testing.T) {
+	const resolutionFailure = "resolve investment membership scope"
 	dateRange := &model.DateRangeInput{StartDate: mustGraphQLDate("2026-01-01"), EndDate: mustGraphQLDate("2026-01-07")}
-	result, err := Resolve(WithInvestmentMembershipScopeRequest(context.Background()), PinInvestmentMembershipScope(inner), "org-a", model.AnalyticsRequestInput{
-		UseInvestment: boolPtr(true),
-		Sankey:        &model.SankeyRequestInput{Path: []model.DimensionInput{model.DimensionInputTheme, model.DimensionInputSubcategory}, Measure: model.MeasureInputCount, DateRange: dateRange, MaxNodes: 20, MaxEdges: 20, UseInvestment: boolPtr(true)},
-		FlowMatrix:    &model.FlowMatrixRequestInput{Dimension: model.DimensionInputTheme, Measure: model.MeasureInputCount, DateRange: dateRange, MaxNodes: 20, MaxEdges: 20, UseInvestment: boolPtr(true)},
+
+	type run struct {
+		result   *model.AnalyticsResult
+		err      error
+		degraded []string
+		warned   int
+	}
+	resolve := func(t *testing.T, batch model.AnalyticsRequestInput) run {
+		t.Helper()
+		records := captureSlog(t)
+		var degraded []string
+		origDegradation := recordDegradation
+		recordDegradation = func(_ context.Context, phase string, err error) {
+			if strings.Contains(err.Error(), resolutionFailure) {
+				degraded = append(degraded, phase)
+			}
+		}
+		t.Cleanup(func() { recordDegradation = origDegradation })
+
+		inner := (&routingFakeClient{}).
+			onErr("SELECT scope_mode, lag_seconds, latest_run_id", errors.New("state query failed")).
+			on(investmentScopeRunIDPlaceholder(), &fakeRowScanner{rows: [][]any{{"feature_delivery", "feature_delivery.roadmap", float64(99)}}}).
+			on(investmentScopeRunIDSQL(), &fakeRowScanner{rows: [][]any{{"feature_delivery", "feature_delivery.roadmap", float64(99)}}})
+		result, err := Resolve(WithInvestmentMembershipScopeRequest(context.Background()), PinInvestmentMembershipScope(inner), "org-a", batch)
+		for _, call := range inner.calls {
+			if call == investmentScopeRunIDPlaceholder() || call == investmentScopeRunIDSQL() {
+				t.Fatal("a scope-filtered investment statement ran without a resolved scope")
+			}
+		}
+		warned := 0
+		for _, record := range *records {
+			if record.msg == "investment membership scope unresolved; failing the scope-filtered query" {
+				warned++
+			}
+		}
+		return run{result: result, err: err, degraded: degraded, warned: warned}
+	}
+
+	t.Run("flowMatrix degrades to an empty section", func(t *testing.T) {
+		got := resolve(t, model.AnalyticsRequestInput{
+			UseInvestment: boolPtr(true),
+			FlowMatrix:    &model.FlowMatrixRequestInput{Dimension: model.DimensionInputTheme, Measure: model.MeasureInputCount, DateRange: dateRange, MaxNodes: 20, MaxEdges: 20, UseInvestment: boolPtr(true)},
+		})
+		if got.err != nil {
+			t.Fatalf("Resolve: %v", got.err)
+		}
+		if got.result.FlowMatrix == nil || len(got.result.FlowMatrix.Nodes) != 0 || len(got.result.FlowMatrix.Edges) != 0 {
+			t.Fatalf("flowMatrix = %+v, want an empty section", got.result.FlowMatrix)
+		}
+		if got.result.FlowMatrix.DegradedReason == nil {
+			t.Fatal("flowMatrix has no degradedReason: the empty section reads as an empty window")
+		}
+		if !slices.Contains(got.degraded, "flowMatrix") {
+			t.Fatalf("degradation phases carrying the resolution error = %v, want flowMatrix", got.degraded)
+		}
+		if got.warned == 0 {
+			t.Fatal("no resolution warn line")
+		}
 	})
-	if err != nil {
-		t.Fatalf("Resolve: %v", err)
-	}
-	for _, call := range inner.calls {
-		if call == investmentScopeRunIDPlaceholder() || call == investmentScopeRunIDSQL() {
-			t.Fatal("a scope-filtered investment statement ran without a resolved scope")
+
+	t.Run("sankey returns the failure as an error", func(t *testing.T) {
+		got := resolve(t, model.AnalyticsRequestInput{
+			UseInvestment: boolPtr(true),
+			Sankey:        &model.SankeyRequestInput{Path: []model.DimensionInput{model.DimensionInputTheme, model.DimensionInputSubcategory}, Measure: model.MeasureInputCount, DateRange: dateRange, MaxNodes: 20, MaxEdges: 20, UseInvestment: boolPtr(true)},
+		})
+		if got.err == nil {
+			t.Fatalf("Resolve answered sankey = %+v and no error: an unresolved scope was served as an empty sankey", got.result.Sankey)
 		}
-	}
-	if result.Sankey == nil || len(result.Sankey.Nodes) != 0 || len(result.Sankey.Edges) != 0 {
-		t.Fatalf("sankey = %+v, want an empty section", result.Sankey)
-	}
-	if result.FlowMatrix == nil || len(result.FlowMatrix.Nodes) != 0 || len(result.FlowMatrix.Edges) != 0 {
-		t.Fatalf("flowMatrix = %+v, want an empty section", result.FlowMatrix)
-	}
-	if !slices.Contains(degraded, "sankey") || !slices.Contains(degraded, "flowMatrix") {
-		t.Fatalf("degradation phases carrying the resolution error = %v, want sankey and flowMatrix", degraded)
-	}
-	warned := 0
-	for _, record := range *records {
-		if record.msg == "investment membership scope unresolved; failing the scope-filtered query" {
-			warned++
+		if !strings.Contains(got.err.Error(), resolutionFailure) {
+			t.Fatalf("Resolve error = %v, want it to carry the scope resolution failure", got.err)
 		}
-	}
-	if warned == 0 {
-		t.Fatal("no resolution warn line")
-	}
+		if got.result != nil {
+			t.Fatalf("Resolve returned a result beside the error: %+v", got.result)
+		}
+		if !slices.Contains(got.degraded, "sankey") {
+			t.Fatalf("telemetry phases carrying the resolution error = %v, want sankey", got.degraded)
+		}
+		if got.warned == 0 {
+			t.Fatal("no resolution warn line")
+		}
+	})
 }

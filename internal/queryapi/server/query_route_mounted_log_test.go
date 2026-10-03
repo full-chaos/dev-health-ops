@@ -192,6 +192,9 @@ func TestNewQueryHandler_LoggedOperationSetMatchesCheckedInCatalog(t *testing.T)
 	}
 	var catalog []struct {
 		Operation string `json:"operation"`
+		// Legacy marks a text the operation accepted before its current one (CHAOS-8000 dual accept): the
+		// catalog holds one entry per accepted text, the mount log names each OPERATION once.
+		Legacy bool `json:"legacy"`
 	}
 	if err := json.Unmarshal(catalogBytes, &catalog); err != nil {
 		t.Fatalf("parse checked-in catalog: %v", err)
@@ -200,9 +203,15 @@ func TestNewQueryHandler_LoggedOperationSetMatchesCheckedInCatalog(t *testing.T)
 		t.Fatalf("checked-in catalog %s is empty -- cannot cross-check against it", catalogPath)
 	}
 
-	if len(loggedOperations) != len(catalog) {
-		t.Fatalf("logged %d operations, checked-in catalog has %d -- logged=%v",
-			len(loggedOperations), len(catalog), loggedOperations)
+	current := 0
+	for _, entry := range catalog {
+		if !entry.Legacy {
+			current++
+		}
+	}
+	if len(loggedOperations) != current {
+		t.Fatalf("logged %d operations, checked-in catalog has %d current ones (%d entries in all) -- logged=%v",
+			len(loggedOperations), current, len(catalog), loggedOperations)
 	}
 	for _, entry := range catalog {
 		if !loggedOperations[entry.Operation] {

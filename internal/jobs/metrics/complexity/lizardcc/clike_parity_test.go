@@ -3,15 +3,12 @@ package lizardcc
 import (
 	"encoding/json"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"regexp"
 	"sort"
 	"strings"
 	"testing"
 	"unicode"
-
-	"github.com/full-chaos/dev-health-ops/internal/testsupport/pyoracle"
 )
 
 // The parity contract for this package is numeric equality with lizard
@@ -21,12 +18,8 @@ import (
 //
 //   - TestGoMatchesLizardGolden runs offline on every CI leg and compares
 //     the Go implementation to a checked-in golden.
-//   - TestLizardGoldenIsNotStale re-derives the golden from real lizard and
-//     fails if the checked-in bytes have drifted, mirroring pycc's
-//     TestRadonGoldenIsNotStale. As of this PR that test is gated behind
-//     DEV_HEALTH_LIVE_PYTHON_ORACLE exactly as pycc's is, and -- like
-//     pycc's -- is not yet wired into any check_go.sh verb; see that
-//     package's own test for the identical, pre-existing gap.
+//   - The live re-derivation of the golden from real lizard was deleted: Go is
+//     the implementation of record and the golden stays as a plain regression test.
 
 type oracleFunction struct {
 	Name       string `json:"name"`
@@ -246,75 +239,6 @@ func itoa(n int) string {
 		return "-" + string(digits)
 	}
 	return string(digits)
-}
-
-// TestLizardGoldenIsNotStale re-runs the real lizard and compares its
-// output to the checked-in golden, mirroring pycc's TestRadonGoldenIsNotStale.
-//
-// STRENGTHENED (CHAOS-5156, codex round r1 on #2253, finding #6): this used
-// to compare only CyclomaticTotal/FunctionsCount per file, which a
-// COORDINATED corpus+golden mutation can satisfy while every per-function
-// name/lineno/complexity value silently drifts (codex's construction:
-// mutate a fixture and its golden together, in a way that preserves the
-// per-file totals but not the per-function detail). assertGoldenBytesMatch
-// now byte-diffs the regenerated JSON against the checked-in file directly
-// -- the oracle script's own docstring promises stable, sorted, indent=2
-// output specifically so this comparison is meaningful -- which catches
-// every per-function field, not just the two that used to be checked.
-//
-// This does NOT by itself close the narrower attack codex's finding #6
-// also named (remove every `case` arm from the corpus AND from
-// `conditions` AND regenerate the golden -- real lizard's output on the
-// mutated corpus is then genuinely, correctly unaffected by `case`'s
-// absence, so no comparison against regenerated output can ever catch it).
-// That gap needs an INDEPENDENT fixture manifest (a static assertion that
-// the corpus exercises every condition keyword), tracked separately.
-func TestLizardGoldenIsNotStale(t *testing.T) {
-	assertGoldenBytesMatchLiveOracle(t, corpusDir(t), goldenPath(t))
-}
-
-// assertGoldenBytesMatchLiveOracle is the shared golden-staleness guard
-// every corpus in this package uses (cfamily's own corpus, and go-rust's/
-// jvm-swift's/java's own parity test files) -- ONE mechanism, not a
-// per-corpus copy, per CHAOS-5156's codex round r1 ruling. It re-runs the
-// checked-in Python oracle against corpusDir and fails unless its output is
-// BYTE-IDENTICAL to the checked-in golden at goldenPath.
-func assertGoldenBytesMatchLiveOracle(t *testing.T, corpusDir, goldenPath string) {
-	t.Helper()
-	if os.Getenv("DEV_HEALTH_LIVE_PYTHON_ORACLE") == "" {
-		t.Skip("live Python oracle runs only through the uncached live-oracle gate")
-	}
-
-	python := pyoracle.Resolve(t, lizardccRepositoryRoot(t))
-	script := filepath.Join("testdata", "python_lizard_cc_oracle.py")
-	command := exec.Command(python, script, corpusDir)
-	live, err := command.Output()
-	if err != nil {
-		t.Fatalf("lizard oracle failed: %v", pyoracle.RunError(python, err, nil))
-	}
-
-	want, err := os.ReadFile(goldenPath)
-	if err != nil {
-		t.Fatalf("read golden: %v", err)
-	}
-
-	if string(live) != string(want) {
-		var liveDoc, wantDoc oracleDoc
-		_ = json.Unmarshal(live, &liveDoc)
-		_ = json.Unmarshal(want, &wantDoc)
-		if liveDoc.LizardVersion != "" && wantDoc.LizardVersion != "" &&
-			liveDoc.LizardVersion != wantDoc.LizardVersion {
-			t.Fatalf("lizard version moved: golden %q, installed %q. Regenerate the "+
-				"golden and re-review the numbers -- a version bump can legitimately "+
-				"change complexity, and that change must be seen, not absorbed.",
-				wantDoc.LizardVersion, liveDoc.LizardVersion)
-		}
-		t.Fatalf("golden at %s is stale: regenerate it from the real lizard "+
-			"oracle and re-review every changed number before committing "+
-			"(byte diff, not just totals -- see this test's own doc)."+
-			"\n--- live oracle ---\n%s\n--- checked-in golden ---\n%s",
-			goldenPath, live, want)
-	}
 }
 
 // TestEveryConditionIsExercisedByTheCorpus closes the narrower half of
@@ -835,25 +759,5 @@ func assertConditionKeySetIsPinned(t *testing.T, conditions map[string]bool, pin
 		t.Errorf("condition keyword(s) present in the map but not in the pinned set: %v -- "+
 			"add a fixture exercising it AND add it to the pinned set in the SAME "+
 			"reviewed change", unexpected)
-	}
-}
-
-// lizardccRepositoryRoot walks up to the module root, so the resolved
-// interpreter can find the checked-out virtualenv.
-func lizardccRepositoryRoot(t *testing.T) string {
-	t.Helper()
-	working, err := os.Getwd()
-	if err != nil {
-		t.Fatal(err)
-	}
-	for directory := working; ; {
-		if _, err := os.Stat(filepath.Join(directory, "go.mod")); err == nil {
-			return directory
-		}
-		parent := filepath.Dir(directory)
-		if parent == directory {
-			t.Fatal("could not find repository root (no go.mod found)")
-		}
-		directory = parent
 	}
 }

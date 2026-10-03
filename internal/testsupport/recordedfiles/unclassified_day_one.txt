@@ -603,7 +603,6 @@ internal/providersync/testdata/python_generic_row_oracle.py
 internal/providersync/testdata/python_github_prs_normalization_oracle.py
 internal/providersync/testdata/python_launchdarkly_normalization_oracle.py
 internal/providersync/testdata/python_oracle_loader.py
-internal/providersync/testdata/python_oracle_loader_probe.py
 internal/providersync/testdata/python_provider_budget_oracle.py
 internal/providersync/testdata/python_registry_oracle.py
 internal/providersync/testdata/python_work_item_sink_oracle.py

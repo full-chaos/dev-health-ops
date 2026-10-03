@@ -602,7 +602,7 @@ func TestSyncTeamsGitLabMatchesFrozenPython(t *testing.T) {
 // python or venue oracle needed: this is Go-only CLI behavior (python's `sync
 // teams` argparse has no --structure/--members/--projects flags at all), so
 // it runs on every `-tags=integration` pass, not gated behind
-// DEV_HEALTH_LIVE_PYTHON_ORACLES.
+// DEV_HEALTH_VENUE_ORACLES.
 func TestMembersOnlyGitLabRunIsNotReportedEmpty(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
 	defer cancel()

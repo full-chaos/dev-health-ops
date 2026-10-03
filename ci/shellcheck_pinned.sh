@@ -117,10 +117,6 @@ FILES=(
   "${ROOT}/ci/check_venue_oracle_registry.sh"
   # executed-vs-skipped verdict of the main venue runs.
   "${ROOT}/ci/last-venue-run.sh"
-  "${ROOT}/ci/last-python-free-run.sh"
-  "${ROOT}/ci/python_free_ratchet.sh"
-  "${ROOT}/ci/python_tripwire.sh"
-  "${ROOT}/ci/python_tripwire_shim.sh"
   "${ROOT}/ci/lib/venue_oracle_registry.sh"
   # this script itself, AND the self-test that enforces it -- lane-4441's read:
   # the script enforcing the lint was the one script the lint did not check,

@@ -3,6 +3,7 @@ package teamsidentity
 import (
 	"bytes"
 	"context"
+	"github.com/full-chaos/dev-health-ops/internal/testsupport/fakehttp"
 	"io"
 	"net/http"
 	"testing"
@@ -53,9 +54,9 @@ func TestDiscoverJiraParsesRealShapedResponse(t *testing.T) {
 		]
 	}`}
 	credential := jiraTestCredential()
-	oldClient := discoveryHTTPClient
-	discoveryHTTPClient = doer
-	defer func() { discoveryHTTPClient = oldClient }()
+	oldClient := fakehttp.Client(discoveryHTTPClient)
+	discoveryHTTPClient = fakehttp.Client(doer)
+	defer func() { discoveryHTTPClient = fakehttp.Client(oldClient) }()
 
 	teams, err := discoverJira(context.Background(), credential)
 	if err != nil {

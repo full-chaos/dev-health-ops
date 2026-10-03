@@ -13,7 +13,6 @@ import (
 	"net/http/httptest"
 	"net/url"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"regexp"
 	"sort"
@@ -30,7 +29,6 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/apiservice"
 	"github.com/full-chaos/dev-health-ops/internal/auth/edgetoken"
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/containers"
-	"github.com/full-chaos/dev-health-ops/internal/testsupport/pyoracle"
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/venueoracle"
 )
 
@@ -142,11 +140,62 @@ const noRequest = "<no request>"
 // reach is not proven: a family fired only on an untested path reads as
 // not firing under that route.
 func TestPythonMetricsTableSweepVenueOracle(t *testing.T) {
-	if os.Getenv("DEV_HEALTH_LIVE_PYTHON_ORACLES") != "1" {
-		t.Skip("the sweep runs the live Python api's tests; run with DEV_HEALTH_LIVE_PYTHON_ORACLES=1")
+	golden := venueoracle.OpenGolden(t, sweepGoldenSpec(t.Name(), "0136d988806c3ac67a419b4822044730e368d05cd8ae49b84f8d3df1dfdbf2f0"))
+	root := golden.PythonRoot(t, venueRoot())
+	// The sweep is one Python run (the migrations, then the api's route tests
+	// under sweepPlugin); its answer is the map of metric families to the routes
+	// they fired under, executed once on the pinned build and frozen.
+	declared := map[string]string{"DEV_HEALTH_ALLOW_CELERY_RIVER_CUTOVER": "1", "OTEL_SDK_DISABLED": "true"}
+	request := venueoracle.ProgramRequest("python api route sweep", sweepPlugin+"\n"+sweepMigrateProgram+"\n# pytest tests/api -m 'not benchmark and not clickhouse'", nil, declared)
+	answers := golden.Produce(t, root, []venueoracle.Request{request}, func(producer *venueoracle.Producer, _ []venueoracle.Request) []venueoracle.Response {
+		body, err := json.Marshal(sortedFired(runSweep(t, producer, declared)))
+		if err != nil {
+			t.Fatal(err)
+		}
+		return []venueoracle.Response{{Status: 0, Body: string(body)}}
+	})
+	golden.Consumed(t, answers...)
+	var recorded map[string][]string
+	if err := json.Unmarshal([]byte(answers[0].Body), &recorded); err != nil {
+		t.Fatalf("decode the frozen sweep: %v", err)
 	}
-	checkSweptTable(t, runSweep(t), dhoAPIServes(t), parsePythonMetricsTable(t))
-	venueoracle.WriteProof(t)
+	fired := map[string]map[string]bool{}
+	for family, routes := range recorded {
+		fired[family] = map[string]bool{}
+		for _, route := range routes {
+			fired[family][route] = true
+		}
+	}
+	checkSweptTable(t, fired, dhoAPIServes(t), parsePythonMetricsTable(t))
+	golden.SkipDiff(t)
+	venueoracle.WriteGoOnlyProof(t, "the Go api's counter table against the frozen sweep of the Python api's route tests")
+	golden.Finish(t)
+}
+
+// sweepPythonBuild is the build whose Python api tests the sweep ran: the one
+// the table python_metrics.tsv describes.
+const sweepPythonBuild = "a4847c5e93607451a0c987b314d37e02fc43ce85"
+
+// sweepGoldenSpec is the GoldenSpec of the sweep's golden; digest is the
+// SHA-256 the test pins ("0136d988806c3ac67a419b4822044730e368d05cd8ae49b84f8d3df1dfdbf2f0" until its first recording).
+func sweepGoldenSpec(test, digest string) venueoracle.GoldenSpec {
+	return venueoracle.GoldenSpec{
+		Path:        "testdata/table-sweep.golden.json",
+		PythonBuild: sweepPythonBuild,
+		SHA256:      digest,
+		Recipe: fmt.Sprintf("git worktree add --detach $DIR %s (with its .venv: uv sync --frozen --no-install-project); then from the repository root: "+
+			"go run ./internal/testsupport/venueoracle/goldenrecord -pkg ./internal/apiservice/metricsvenue/ -test '^%s$' -python-root $DIR",
+			sweepPythonBuild, test),
+	}
+}
+
+// sortedFired is the sweep's result as sorted lists, the form that is frozen.
+func sortedFired(fired map[string]map[string]bool) map[string][]string {
+	out := make(map[string][]string, len(fired))
+	for family, routes := range fired {
+		out[family] = sortedKeys(routes)
+	}
+	return out
 }
 
 // checkSweptTable applies the rules above to a sweep's result (family ->
@@ -225,10 +274,9 @@ func checkSweptTable(t *testing.T, fired map[string]map[string]bool, served func
 // migrates that database to the Alembic heads first, as the venue does:
 // some of these tests expect the app schema, which the Python test job
 // only has because its migration tests (outside tests/api) ran first.
-func runSweep(t *testing.T) map[string]map[string]bool {
+func runSweep(t *testing.T, producer *venueoracle.Producer, declared map[string]string) map[string]map[string]bool {
 	t.Helper()
-	root := venueRoot()
-	python := pyoracle.Resolve(t, root)
+	root := producer.Root
 	postgres, err := containers.StartPostgres(context.Background())
 	if err != nil {
 		t.Fatalf("start the sweep's PostgreSQL: %v", err)
@@ -239,10 +287,12 @@ func runSweep(t *testing.T) map[string]map[string]bool {
 		t.Fatal(err)
 	}
 	postgresURI.Scheme, postgresURI.RawQuery = "postgresql+asyncpg", ""
-	migrate := exec.Command(python, "-c", sweepMigrateProgram)
+	// The run's database address is per-run: it is not in the request, only in the child's environment.
+	migrate, err := producer.Command(context.Background(), declared, []string{"POSTGRES_URI=" + postgresURI.String()}, "-c", sweepMigrateProgram)
+	if err != nil {
+		t.Fatal(err)
+	}
 	migrate.Dir = root
-	migrate.Env = append(os.Environ(), "PYTHONPATH="+filepath.Join(root, "src"),
-		"POSTGRES_URI="+postgresURI.String(), "DEV_HEALTH_ALLOW_CELERY_RIVER_CUTOVER=1", "OTEL_SDK_DISABLED=true")
 	if migrated, err := migrate.CombinedOutput(); err != nil {
 		t.Fatalf("migrate the sweep's PostgreSQL: %v\n%s", err, lastLines(string(migrated), 20))
 	}
@@ -250,14 +300,17 @@ func runSweep(t *testing.T) map[string]map[string]bool {
 	if err := os.WriteFile(filepath.Join(dir, "counter_sweep_plugin.py"), []byte(sweepPlugin), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	command := exec.Command(python, "-m", "pytest", "tests/api", "-p", "counter_sweep_plugin",
+	command, err := producer.Command(context.Background(), declared, []string{
+		"PYTHONPATH=" + filepath.Join(root, "src") + string(os.PathListSeparator) + dir,
+		"COUNTER_SWEEP_OUT=" + filepath.Join(dir, "out"),
+		"DEV_HEALTH_POSTGRES_TEST_URI=" + postgresURI.String()},
+		"-m", "pytest", "tests/api", "-p", "counter_sweep_plugin",
 		"-m", "not benchmark and not clickhouse", "-n", strconv.Itoa(sweepWorkers), "-q", "--no-header",
 		"-p", "no:warnings", "-p", "no:cacheprovider")
+	if err != nil {
+		t.Fatal(err)
+	}
 	command.Dir = root
-	command.Env = append(os.Environ(),
-		"PYTHONPATH="+filepath.Join(root, "src")+string(os.PathListSeparator)+dir,
-		"COUNTER_SWEEP_OUT="+filepath.Join(dir, "out"),
-		"DEV_HEALTH_POSTGRES_TEST_URI="+postgresURI.String())
 	var output bytes.Buffer
 	command.Stdout, command.Stderr = &output, &output
 	started := time.Now()

@@ -8,11 +8,11 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
-	"runtime"
 	"strings"
 	"testing"
 
 	"github.com/full-chaos/dev-health-ops/internal/streamrunner"
+	"github.com/full-chaos/dev-health-ops/internal/testsupport/moduleroot"
 	"github.com/google/uuid"
 )
 
@@ -233,7 +233,7 @@ func TestEveryDeclaredExternalFieldReachesAColumnOrIsNamedUnstored(t *testing.T)
 // Every field the ingest API declares for an entity reaches a column through
 // the entity's contract table, or is named as unstored with its reason.
 func TestEveryDeclaredIngestFieldReachesAColumnOrIsNamedUnstored(t *testing.T) {
-	_, filename, _, ok := runtime.Caller(0)
+	_, filename, _, ok := moduleroot.Caller(0)
 	if !ok {
 		t.Fatal("locate test")
 	}

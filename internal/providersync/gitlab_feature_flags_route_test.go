@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"github.com/full-chaos/dev-health-ops/internal/testsupport/fakehttp"
 	"io"
 	"net/http"
 	"strings"
@@ -52,7 +53,7 @@ func gitLabFeatureFlagsClient(
 ) *providerfoundation.HTTPClient {
 	t.Helper()
 	client, err := providerfoundation.NewHTTPClient(
-		"gitlab", "https://gitlab.example", doer,
+		"gitlab", "https://gitlab.example", fakehttp.Client(doer),
 		func(*http.Request) error { return nil }, retry,
 		providerfoundation.LeaseGuardFunc(func(context.Context) error { return nil }),
 	)
@@ -92,17 +93,17 @@ func TestGitLabFeatureFlagsRouteRejectsInvalidConfigurationBeforeRequests(t *tes
 			return nil
 		}},
 		{name: "wrong client provider", client: func(t *testing.T, doer *gitLabFeatureFlagsDoer) *providerfoundation.HTTPClient {
-			client := gitLabFeatureFlagsClient(t, doer, validRetry)
+			client := gitLabFeatureFlagsClient(t, fakehttp.Client(doer), validRetry)
 			client.Provider = "github"
 			return client
 		}},
 		{name: "nil client base URL", client: func(t *testing.T, doer *gitLabFeatureFlagsDoer) *providerfoundation.HTTPClient {
-			client := gitLabFeatureFlagsClient(t, doer, validRetry)
+			client := gitLabFeatureFlagsClient(t, fakehttp.Client(doer), validRetry)
 			client.BaseURL = nil
 			return client
 		}},
 		{name: "nil client doer", client: func(t *testing.T, doer *gitLabFeatureFlagsDoer) *providerfoundation.HTTPClient {
-			client := gitLabFeatureFlagsClient(t, doer, validRetry)
+			client := gitLabFeatureFlagsClient(t, fakehttp.Client(doer), validRetry)
 			client.Doer = nil
 			return client
 		}},
@@ -129,7 +130,7 @@ func TestGitLabFeatureFlagsRouteRejectsInvalidConfigurationBeforeRequests(t *tes
 			if test.claim != nil {
 				claim = test.claim()
 			}
-			client := gitLabFeatureFlagsClient(t, doer, validRetry)
+			client := gitLabFeatureFlagsClient(t, fakehttp.Client(doer), validRetry)
 			if test.client != nil {
 				client = test.client(t, doer)
 			}
@@ -167,7 +168,7 @@ func TestGitLabFeatureFlagsRouteMirrorsPythonOrderScopesAndEffects(t *testing.T)
 	claim.SourceName = "group/project"
 	batch, err := (GitLabFeatureFlagsRouteHandler{}).Collect(
 		context.Background(), claim, providerfoundation.Credential{},
-		gitLabFeatureFlagsClient(t, doer, providerfoundation.RetryPolicy{
+		gitLabFeatureFlagsClient(t, fakehttp.Client(doer), providerfoundation.RetryPolicy{
 			MaxAttempts: 1, InitialWait: time.Nanosecond, MaxWait: time.Nanosecond,
 		}), normalizedAt,
 	)
@@ -252,7 +253,7 @@ func TestGitLabFeatureFlagsRouteFallsBackForNonObjectProject(t *testing.T) {
 	claim := nativeTestClaim("gitlab", "feature-flags")
 	batch, err := (GitLabFeatureFlagsRouteHandler{}).Collect(
 		context.Background(), claim, providerfoundation.Credential{},
-		gitLabFeatureFlagsClient(t, doer, providerfoundation.RetryPolicy{
+		gitLabFeatureFlagsClient(t, fakehttp.Client(doer), providerfoundation.RetryPolicy{
 			MaxAttempts: 1, InitialWait: time.Nanosecond, MaxWait: time.Nanosecond,
 		}), time.Date(2026, 8, 10, 12, 0, 0, 0, time.UTC),
 	)
@@ -271,7 +272,7 @@ func TestGitLabFeatureFlagsRouteFailsClosedOnNonListFlags(t *testing.T) {
 	claim := nativeTestClaim("gitlab", "feature-flags")
 	batch, err := (GitLabFeatureFlagsRouteHandler{}).Collect(
 		context.Background(), claim, providerfoundation.Credential{},
-		gitLabFeatureFlagsClient(t, doer, providerfoundation.RetryPolicy{
+		gitLabFeatureFlagsClient(t, fakehttp.Client(doer), providerfoundation.RetryPolicy{
 			MaxAttempts: 1, InitialWait: time.Nanosecond, MaxWait: time.Nanosecond,
 		}), time.Date(2026, 8, 10, 12, 0, 0, 0, time.UTC),
 	)
@@ -291,7 +292,7 @@ func TestGitLabFeatureFlagsRouteFailsClosedOnPaginationCap(t *testing.T) {
 	claim := nativeTestClaim("gitlab", "feature-flags")
 	batch, err := (GitLabFeatureFlagsRouteHandler{MaxPages: 1}).Collect(
 		context.Background(), claim, providerfoundation.Credential{},
-		gitLabFeatureFlagsClient(t, doer, providerfoundation.RetryPolicy{
+		gitLabFeatureFlagsClient(t, fakehttp.Client(doer), providerfoundation.RetryPolicy{
 			MaxAttempts: 1, InitialWait: time.Nanosecond, MaxWait: time.Nanosecond,
 		}), time.Date(2026, 8, 10, 12, 0, 0, 0, time.UTC),
 	)
@@ -310,7 +311,7 @@ func TestGitLabFeatureFlagsRouteClassifiesCaseInsensitiveQualified403(t *testing
 	claim := nativeTestClaim("gitlab", "feature-flags")
 	_, err := (GitLabFeatureFlagsRouteHandler{}).Collect(
 		context.Background(), claim, providerfoundation.Credential{},
-		gitLabFeatureFlagsClient(t, doer, providerfoundation.RetryPolicy{
+		gitLabFeatureFlagsClient(t, fakehttp.Client(doer), providerfoundation.RetryPolicy{
 			MaxAttempts: 1, InitialWait: time.Nanosecond, MaxWait: time.Nanosecond,
 		}), time.Date(2026, 8, 10, 12, 0, 0, 0, time.UTC),
 	)
@@ -327,7 +328,7 @@ func TestGitLabFeatureFlagsRouteClassifiesPlain403AsUnavailableDataset(t *testin
 	claim := nativeTestClaim("gitlab", "feature-flags")
 	_, err := (GitLabFeatureFlagsRouteHandler{}).Collect(
 		context.Background(), claim, providerfoundation.Credential{},
-		gitLabFeatureFlagsClient(t, doer, providerfoundation.RetryPolicy{
+		gitLabFeatureFlagsClient(t, fakehttp.Client(doer), providerfoundation.RetryPolicy{
 			MaxAttempts: 5, InitialWait: time.Nanosecond, MaxWait: time.Nanosecond,
 		}), time.Date(2026, 8, 10, 12, 0, 0, 0, time.UTC),
 	)
@@ -352,7 +353,7 @@ func TestGitLabFeatureFlagsRouteKeepsProjectLookup403AsAuthentication(t *testing
 	claim.SourceExternalID = "group/project"
 	_, err := (GitLabFeatureFlagsRouteHandler{}).Collect(
 		context.Background(), claim, providerfoundation.Credential{},
-		gitLabFeatureFlagsClient(t, doer, providerfoundation.RetryPolicy{
+		gitLabFeatureFlagsClient(t, fakehttp.Client(doer), providerfoundation.RetryPolicy{
 			MaxAttempts: 1, InitialWait: time.Nanosecond, MaxWait: time.Nanosecond,
 		}), time.Date(2026, 8, 10, 12, 0, 0, 0, time.UTC),
 	)
@@ -377,7 +378,7 @@ func TestGitLabFeatureFlagsRouteAcceptsEmptyInventory(t *testing.T) {
 	claim.SourceExternalID = "group/project"
 	batch, err := (GitLabFeatureFlagsRouteHandler{}).Collect(
 		context.Background(), claim, providerfoundation.Credential{},
-		gitLabFeatureFlagsClient(t, doer, providerfoundation.RetryPolicy{
+		gitLabFeatureFlagsClient(t, fakehttp.Client(doer), providerfoundation.RetryPolicy{
 			MaxAttempts: 1, InitialWait: time.Nanosecond, MaxWait: time.Nanosecond,
 		}), time.Date(2026, 8, 10, 12, 0, 0, 0, time.UTC),
 	)

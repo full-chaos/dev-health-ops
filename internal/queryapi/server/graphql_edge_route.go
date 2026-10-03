@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"github.com/full-chaos/dev-health-ops/internal/auth/httpapi"
 	"io"
 	"log"
 	"log/slog"
@@ -204,6 +205,7 @@ func correlationID(next http.Handler) http.Handler {
 func graphQLEdgeLimits(limit int, next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.Method == http.MethodGet && acceptsHTML(r) {
+			httpapi.RecordNotFoundCause(r.Context(), httpapi.NotFoundIDEOff)
 			refuseGraphQLEdgeBrowse(w)
 			return
 		}
@@ -572,6 +574,7 @@ func graphQLEdgeGETDocument(r *http.Request) (query string, body []byte, refusal
 	if !hasParam(params, "query") {
 		accept := firstHeader(r, "Accept")
 		if strings.Contains(accept, "text/html") || strings.Contains(accept, "*/*") {
+			httpapi.RecordNotFoundCause(r.Context(), httpapi.NotFoundIDEOff)
 			return "", nil, refuseIDE
 		}
 	}

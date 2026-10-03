@@ -6,7 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"log/slog"
+	"github.com/full-chaos/dev-health-ops/internal/syncdispatchruntime/synclog"
 	"math/big"
 	"net"
 	"os"
@@ -96,7 +96,7 @@ type retryAfterProvider interface {
 
 type NativeReferenceDiscoveryService struct {
 	pool     *pgxpool.Pool
-	logger   *slog.Logger
+	logger   *synclog.Logger
 	executor DiscoveryExecutor
 	now      func() time.Time
 	// metrics is optional (nil-safe) -- CHAOS-4586 reuses
@@ -107,14 +107,11 @@ type NativeReferenceDiscoveryService struct {
 
 func NewNativeReferenceDiscoveryService(
 	pool *pgxpool.Pool,
-	logger *slog.Logger,
+	logger *synclog.Logger,
 	executor DiscoveryExecutor,
 ) (*NativeReferenceDiscoveryService, error) {
 	if pool == nil || executor == nil {
 		return nil, ErrReferenceDiscoveryUnavailable
-	}
-	if logger == nil {
-		logger = slog.Default()
 	}
 	return &NativeReferenceDiscoveryService{pool: pool, logger: logger, executor: executor, now: time.Now}, nil
 }
@@ -917,15 +914,23 @@ func discoveryHeartbeatInterval() time.Duration {
 	return quarter
 }
 
-func envPositiveInt(name string, fallback int) int {
+// envPositiveIntFrom is the ONE parser of a positive-integer environment setting: the value and whether it came from
+// the environment. A setting that is unset, not an integer (an out-of-range one included) or below 1 gives the
+// fallback and false (CHAOS-8201: the logged clamp and its logged source come from this one call).
+func envPositiveIntFrom(name string, fallback int) (value int, fromEnv bool) {
 	raw := os.Getenv(name)
 	if raw == "" {
-		return fallback
+		return fallback, false
 	}
-	value, err := strconv.Atoi(raw)
-	if err != nil || value < 1 {
-		return fallback
+	parsed, err := strconv.Atoi(raw)
+	if err != nil || parsed < 1 {
+		return fallback, false
 	}
+	return parsed, true
+}
+
+func envPositiveInt(name string, fallback int) int {
+	value, _ := envPositiveIntFrom(name, fallback)
 	return value
 }
 
@@ -970,10 +975,7 @@ WHERE sync_run_id = $1::uuid AND status = $5 AND lease_owner = $2 AND lease_expi
 					runID, leaseOwner, now, newExpiry, discoveryStatusRunning)
 				cancel()
 				if err != nil {
-					service.logger.ErrorContext(context.Background(), "run_sync_reference_discovery.heartbeat_failed",
-						slog.String("error_code", referenceDiscoveryErrorCategory),
-						slog.String("sync_run_id", runID),
-						slog.String("error", err.Error()))
+					service.logger.Error(context.Background(), synclog.MsgRunSyncReferenceDiscoveryHeartbeatFailed, synclog.Text(synclog.KeyErrorCode, synclog.ParseLabel(referenceDiscoveryErrorCategory)), synclog.Run(synclog.ParseID(runID)), synclog.Failure(err))
 					continue
 				}
 				if tag.RowsAffected() == 0 {

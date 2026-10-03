@@ -101,19 +101,8 @@ func Routes(deps Deps) []httpapi.Route {
 	if deps.Pool == nil || deps.Guard == nil {
 		return nil
 	}
-	if deps.Logger == nil {
-		deps.Logger = slog.Default()
-	}
-	if deps.Now == nil {
-		deps.Now = time.Now
-	}
-	if deps.Write == nil {
-		deps.Write = httpapi.WriteError
-	}
-	if deps.HTTPClient == nil {
-		deps.HTTPClient = defaultOIDCClient()
-	}
-	h := handlers{deps}
+	h := newHandlers(deps)
+	deps = h.Deps
 	g := deps.Guard
 	const prefix = "/api/v1/auth"
 	route := func(method, path string, handler http.Handler) httpapi.Route {
@@ -271,4 +260,21 @@ func (h handlers) oauthPair() http.Handler {
 		}
 		h.Write(w, r, httpapi.CodeNotFound)
 	})
+}
+
+// newHandlers is what Routes builds its handlers from: the defaults of Deps, and the client every IdP call uses.
+func newHandlers(deps Deps) handlers {
+	if deps.Logger == nil {
+		deps.Logger = slog.Default()
+	}
+	if deps.Now == nil {
+		deps.Now = time.Now
+	}
+	if deps.Write == nil {
+		deps.Write = httpapi.WriteError
+	}
+	if deps.HTTPClient == nil {
+		deps.HTTPClient = defaultOIDCClient()
+	}
+	return handlers{deps}
 }

@@ -3,7 +3,19 @@
     "test": "TestPushNetMatchesTheFrozenPythonOutput",
     "python_build": "a4847c5e93607451a0c987b314d37e02fc43ce85",
     "producer_digest": "6e1dc97e68624398015f60caee160cceee6ae601bd434d01b8b7d5975267e137",
-    "recipe": "git worktree add --detach $DIR a4847c5e93607451a0c987b314d37e02fc43ce85 (with its .venv: uv sync --frozen --no-install-project); then from the repository root: go run ./internal/testsupport/venueoracle/goldenrecord -pkg ./internal/pushcli/ -test '^TestPushNetMatchesTheFrozenPythonOutput$' -python-root $DIR"
+    "recipe": "git worktree add --detach $DIR a4847c5e93607451a0c987b314d37e02fc43ce85 (with its .venv: uv sync --frozen --no-install-project); then from the repository root: go run ./internal/testsupport/venueoracle/goldenrecord -pkg ./internal/pushcli/ -test '^TestPushNetMatchesTheFrozenPythonOutput$' -python-root $DIR",
+    "declared_constants_sha256": [
+      "48ce29fce3949cd190a6800d2ad747a042dd0266d95026258083e5abf95d4259",
+      "48dcd345eb57a22f44748550059244c01dfe3c6327908d12b83d0a8d67744075",
+      "4ee891b92d0bea7b7192c2a4c2e7a5e479d0cf35d3efc64a4e835d1eb7ff44d5",
+      "7e6031d432d0485d6d49f8464d9c9fc9e19b8c0cc8d410e89a18dfc0e42ed2e8",
+      "ae5d3d247a5c12b2e8f26a75facac430c5d7644fe352847db98b43fed2d1e560",
+      "ba4a278602c80cdf200f041e3e9579873636837ecb4a2e33328ed0e2578503e0",
+      "d1291e5afd2e9e531b86bf0a0b92ab57dce863b39f7aaaa70cc96786969abf2a",
+      "d864248bf35b1b3a4252a764088735017710207a3b7e0492dbffddd6cbe17775"
+    ],
+    "recorded_by": "goldenrecord",
+    "blanked": {}
   },
   "requests": [
     {

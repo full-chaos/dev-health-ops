@@ -5,7 +5,7 @@ import (
 	"crypto/rand"
 	"encoding/json"
 	"fmt"
-	"log/slog"
+	"github.com/full-chaos/dev-health-ops/internal/syncdispatchruntime/synclog"
 	"math/big"
 	"time"
 
@@ -48,11 +48,8 @@ func cooldownJitter(maxSeconds int) time.Duration {
 // jitter added on top of an already-clamped not_before could otherwise push
 // past the shared deferral budget's wall-clock deadline a second time.
 func applyCooldownDeferral(
-	ctx context.Context, tx pgx.Tx, logger *slog.Logger, unit budgetUnit, deferral rateLimitDeferralPlan, jitterSeconds int, now time.Time,
+	ctx context.Context, tx pgx.Tx, logger *synclog.Logger, unit budgetUnit, deferral rateLimitDeferralPlan, jitterSeconds int, now time.Time,
 ) (time.Time, bool, error) {
-	if logger == nil {
-		logger = slog.Default()
-	}
 	wallClockDeadline := deferral.firstSeenAt.Add(rateLimitMaxTotalWaitSecondsBudget * time.Second)
 	availableAt := deferral.notBefore.Add(cooldownJitter(jitterSeconds))
 	if availableAt.After(wallClockDeadline) {
@@ -91,8 +88,7 @@ WHERE id = $1::uuid
 	if tag.RowsAffected() == 0 {
 		return time.Time{}, false, nil
 	}
-	logger.InfoContext(ctx, "dispatch_sync_run.rate_limit_cooldown_deferred",
-		slog.String("unit_id", unit.id), slog.Time("available_at", availableAt), slog.Int("rate_limit_deferrals", deferral.attempts))
+	logger.Info(ctx, synclog.MsgDispatchSyncRunRateLimitCooldownDeferred, synclog.Unit(synclog.ParseID(unit.id)), synclog.Instant(synclog.KeyAvailableAt, availableAt), synclog.Count(synclog.KeyRateLimitDeferrals, deferral.attempts))
 	return availableAt, true, nil
 }
 
@@ -165,7 +161,7 @@ func planCooldownDeferral(unit budgetUnit, cooldownExpiry, now time.Time) (rateL
 // ok=false means a genuine lost CAS race (the unit moved on concurrently);
 // the caller leaves it for the next pass.
 func resolveCooldownBlockedUnit(
-	ctx context.Context, tx pgx.Tx, logger *slog.Logger, unit budgetUnit, cooldownExpiry time.Time, jitterSeconds int, now time.Time,
+	ctx context.Context, tx pgx.Tx, logger *synclog.Logger, unit budgetUnit, cooldownExpiry time.Time, jitterSeconds int, now time.Time,
 ) (time.Time, bool, bool, error) {
 	refused := false
 

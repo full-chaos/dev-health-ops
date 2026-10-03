@@ -178,14 +178,15 @@ func TestFromHomeResponseNoCardsFallback(t *testing.T) {
 // fixtures do not exercise on their own (they all resolve to exactly
 // four).
 func TestFromHomeResponseMoreThanFourPositiveDeltasKeepsTopFour(t *testing.T) {
+	// Five lower-is-better metrics that climbed (worsened) and one that fell.
 	h := &home.Response{
 		Deltas: []home.MetricDelta{
-			{Metric: "a", Label: "A", DeltaPct: 10},
-			{Metric: "b", Label: "B", DeltaPct: 50},
-			{Metric: "c", Label: "C", DeltaPct: 40},
-			{Metric: "d", Label: "D", DeltaPct: 30},
-			{Metric: "e", Label: "E", DeltaPct: 20},
-			{Metric: "f", Label: "F", DeltaPct: -1},
+			{Metric: "cycle_time", Label: "A", DeltaPct: 10},
+			{Metric: "review_latency", Label: "B", DeltaPct: 50},
+			{Metric: "churn", Label: "C", DeltaPct: 40},
+			{Metric: "wip_saturation", Label: "D", DeltaPct: 30},
+			{Metric: "blocked_work", Label: "E", DeltaPct: 20},
+			{Metric: "change_failure_rate", Label: "F", DeltaPct: -1},
 		},
 	}
 	f := home.Filters{Time: home.TimeFilter{RangeDays: 14, CompareDays: 14}, Scope: home.ScopeFilter{Level: "org"}}
@@ -193,7 +194,7 @@ func TestFromHomeResponseMoreThanFourPositiveDeltasKeepsTopFour(t *testing.T) {
 	if len(got.Items) != 4 {
 		t.Fatalf("want 4 items, got %d: %+v", len(got.Items), got.Items)
 	}
-	wantOrder := []string{"b", "c", "d", "e"}
+	wantOrder := []string{"review_latency", "churn", "wip_saturation", "blocked_work"}
 	for i, metric := range wantOrder {
 		gotLink := got.Items[i].EvidenceLinks[0]
 		if !bytes.Contains([]byte(gotLink), []byte("metric="+metric+"&")) {
@@ -203,5 +204,81 @@ func TestFromHomeResponseMoreThanFourPositiveDeltasKeepsTopFour(t *testing.T) {
 		if got.Items[i].ID != wantID {
 			t.Fatalf("item %d: want id %s, got %s", i, wantID, got.Items[i].ID)
 		}
+	}
+}
+
+// CHAOS-7776: an opportunity is a metric that moved the WRONG way for its
+// polarity. The title verb and the rationale follow it, and an improvement is
+// never an opportunity.
+func polarityFilters() home.Filters {
+	return home.Filters{
+		Time:  home.TimeFilter{RangeDays: 14, CompareDays: 14},
+		Scope: home.ScopeFilter{Level: "org"},
+	}
+}
+
+func TestLowerIsBetterMetricThatClimbedIsReduce(t *testing.T) {
+	h := &home.Response{Deltas: []home.MetricDelta{
+		{Metric: "cycle_time", Label: "Cycle Time", DeltaPct: 19.4},
+	}}
+	got := FromHomeResponse(h, polarityFilters())
+	if len(got.Items) != 1 {
+		t.Fatalf("want 1 item, got %+v", got.Items)
+	}
+	if got.Items[0].Title != "Reduce Cycle Time" {
+		t.Fatalf("title = %q", got.Items[0].Title)
+	}
+	if got.Items[0].Rationale != "Cycle Time climbed 19% in the last 14 days." {
+		t.Fatalf("rationale = %q", got.Items[0].Rationale)
+	}
+}
+
+func TestHigherIsBetterMetricThatFellIsRecover(t *testing.T) {
+	for _, metric := range []string{"throughput", "deploy_freq", "ci_success"} {
+		h := &home.Response{Deltas: []home.MetricDelta{
+			{Metric: metric, Label: "Label " + metric, DeltaPct: -18.6},
+		}}
+		got := FromHomeResponse(h, polarityFilters())
+		if len(got.Items) != 1 {
+			t.Fatalf("%s: want 1 item, got %+v", metric, got.Items)
+		}
+		if got.Items[0].Title != "Recover Label "+metric {
+			t.Fatalf("%s: title = %q", metric, got.Items[0].Title)
+		}
+		// The size of the move is positive in words: "fell 19%", not "fell -19%".
+		want := "Label " + metric + " fell 19% in the last 14 days."
+		if got.Items[0].Rationale != want {
+			t.Fatalf("%s: rationale = %q, want %q", metric, got.Items[0].Rationale, want)
+		}
+	}
+}
+
+func TestImprovementsAreNotOpportunities(t *testing.T) {
+	// Throughput up and cycle time down are good news: no card, the fallback.
+	h := &home.Response{Deltas: []home.MetricDelta{
+		{Metric: "throughput", Label: "Throughput", DeltaPct: 33},
+		{Metric: "cycle_time", Label: "Cycle Time", DeltaPct: -20},
+		{Metric: "ci_success", Label: "CI Success Rate", DeltaPct: 5},
+	}}
+	got := FromHomeResponse(h, polarityFilters())
+	if len(got.Items) != 1 || got.Items[0].ID != "opp-0" || got.Items[0].Title != "Maintain steady flow" {
+		t.Fatalf("want only the steady-flow fallback, got %+v", got.Items)
+	}
+}
+
+func TestOpportunitiesRankByTheSizeOfTheMoveAcrossPolarities(t *testing.T) {
+	h := &home.Response{Deltas: []home.MetricDelta{
+		{Metric: "cycle_time", Label: "Cycle Time", DeltaPct: 10},
+		{Metric: "throughput", Label: "Throughput", DeltaPct: -40},
+		{Metric: "churn", Label: "Code Churn", DeltaPct: 25},
+	}}
+	got := FromHomeResponse(h, polarityFilters())
+	titles := make([]string, 0, len(got.Items))
+	for _, item := range got.Items {
+		titles = append(titles, item.Title)
+	}
+	want := []string{"Recover Throughput", "Reduce Code Churn", "Reduce Cycle Time"}
+	if !reflect.DeepEqual(titles, want) {
+		t.Fatalf("titles = %v, want %v", titles, want)
 	}
 }

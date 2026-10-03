@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"github.com/full-chaos/dev-health-ops/internal/testsupport/fakehttp"
 	"io"
 	"net/http"
 	"strings"
@@ -39,7 +40,7 @@ func (doer *githubDeploymentPullLookupDoer) Do(request *http.Request) (*http.Res
 
 func collectGitHubDeploymentPullLookupRow(t *testing.T, doer *githubDeploymentPullLookupDoer) deploymentRow {
 	t.Helper()
-	client := gitHubRepositoryClient(t, doer, "https://api.github.com")
+	client := gitHubRepositoryClient(t, fakehttp.Client(doer), "https://api.github.com")
 	claim := nativeTestClaim("github", "deployments")
 	batch, err := (GitHubDeploymentsRouteHandler{}).Collect(context.Background(), claim, providerfoundation.Credential{}, client, time.Date(2026, 7, 23, 12, 30, 0, 0, time.UTC))
 	if err != nil {

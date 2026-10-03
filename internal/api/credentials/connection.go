@@ -223,7 +223,7 @@ func (h handlers) testConnection(w http.ResponseWriter, r *http.Request) {
 	// The error reaches two sinks -- the persisted last_test_error and the
 	// response -- so it is redacted before either (CHAOS-2780).
 	if errorText != nil {
-		redacted := pythonparity.SanitizeErrorText(*errorText, 4000)
+		redacted := pythonparity.SanitizeErrorTextHardened(*errorText, 4000)
 		errorText = &redacted
 	}
 	if stored == nil {
@@ -275,7 +275,7 @@ func (h handlers) rowIdentity(ctx context.Context, orgID, provider, name string)
 func (h handlers) recordTestResult(ctx context.Context, orgID, provider, name string, success bool, errorText *string) error {
 	var stored any
 	if errorText != nil {
-		redacted := pythonparity.SanitizeErrorText(*errorText, 4000)
+		redacted := pythonparity.SanitizeErrorTextHardened(*errorText, 4000)
 		stored = redacted
 	}
 	// last_test_at and the onupdate updated_at are separate now() calls.

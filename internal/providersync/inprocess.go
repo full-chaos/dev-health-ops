@@ -6,7 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"net/http"
+	"github.com/full-chaos/dev-health-ops/internal/httpguard"
 	"sync"
 	"time"
 
@@ -486,10 +486,5 @@ func inProcessHTTPDoer(doer providerfoundation.HTTPDoer) providerfoundation.HTTP
 	if doer != nil {
 		return doer
 	}
-	return &http.Client{
-		Timeout: 45 * time.Second,
-		CheckRedirect: func(*http.Request, []*http.Request) error {
-			return http.ErrUseLastResponse
-		},
-	}
+	return httpguard.NewClient(45 * time.Second)
 }

@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"github.com/full-chaos/dev-health-ops/internal/testsupport/fakehttp"
 	"io"
 	"net/http"
 	"strings"
@@ -101,7 +102,7 @@ func buildJiraProducerBatchOracleRow(
 			sprintCache = append(sprintCache, sprint)
 		}
 	}
-	client := jiraWorkItemsTestClient(t, &jiraBatchOracleDoer{t: t, issues: issues, comments: comments, sprints: sprintPayloads}, providerfoundation.LeaseGuardFunc(func(context.Context) error { return nil }))
+	client := jiraWorkItemsTestClient(t, fakehttp.Client(&jiraBatchOracleDoer{t: t, issues: issues, comments: comments, sprints: sprintPayloads}), providerfoundation.LeaseGuardFunc(func(context.Context) error { return nil }))
 	batch, err := (JiraWorkItemsRouteHandler{StatusMapping: loadRealStatusMapping(t), Identity: jiraOracleIdentity, ReferenceSprints: sprintCache}).Collect(context.Background(), claim, providerfoundation.Credential{}, client, normalizedAt)
 	if err != nil {
 		t.Fatalf("Jira route oracle collect: %v", err)

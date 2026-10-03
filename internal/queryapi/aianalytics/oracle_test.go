@@ -288,6 +288,9 @@ func TestResolvers_MatchPythonResolvers(t *testing.T) {
 			}
 			delete(gotMap, "startDate")
 			delete(gotMap, "endDate")
+			if c.Fn == "resolve_ai_impact_summary" {
+				stripGoOnlyImpactDailyRowFields(gotMap)
+			}
 			want := map[string]any{}
 			for k, v := range c.Expected {
 				if k != "startDate" && k != "endDate" {
@@ -338,5 +341,24 @@ func TestTeamRepoIDs_MatchPython(t *testing.T) {
 	}
 	if _, ok := teamRepoIDs(context.Background(), &fixtureClient{}, "", "team-a", "test"); ok {
 		t.Error("a blank org must not resolve")
+	}
+}
+
+// goOnlyImpactDailyRowFields is the one aiImpactSummary daily-row field the Go plane
+// added (CHAOS-7774) that the Python reference never had. The oracle strips exactly
+// this before it compares a row, and nothing else; TestOracleStripsOnlyDayFromImpactDaily
+// fails if this list grows. impact_day_test.go pins the field itself.
+var goOnlyImpactDailyRowFields = []string{"day"}
+
+func stripGoOnlyImpactDailyRowFields(response map[string]any) {
+	rows, _ := response["daily"].([]any)
+	for _, r := range rows {
+		row, ok := r.(map[string]any)
+		if !ok {
+			continue
+		}
+		for _, f := range goOnlyImpactDailyRowFields {
+			delete(row, f)
+		}
 	}
 }

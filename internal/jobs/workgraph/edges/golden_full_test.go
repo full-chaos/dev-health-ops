@@ -3,10 +3,10 @@ package edges
 import (
 	"encoding/json"
 	"fmt"
+	"github.com/full-chaos/dev-health-ops/internal/testsupport/moduleroot"
 	"math"
 	"os"
 	"path/filepath"
-	"runtime"
 	"sort"
 	"strings"
 	"testing"
@@ -76,7 +76,7 @@ const goldenFixture = "workgraph_issue_edges_python_golden.json"
 
 func repositoryRootPath(t *testing.T) string {
 	t.Helper()
-	_, thisFile, _, ok := runtime.Caller(0)
+	_, thisFile, _, ok := moduleroot.Caller(0)
 	if !ok {
 		t.Fatal("cannot locate this test file")
 	}

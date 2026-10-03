@@ -51,3 +51,11 @@ func NewProofSwitch(pool *pgxpool.Pool, schemaDigest string, documentDigests map
 	sw.reachable = proofReachableModes
 	return sw
 }
+
+// NewProofSwitchWithLegacy is NewProofSwitch for operations that accept more than one registered text
+// (CHAOS-8000): the same legacy digests the production switch is given.
+func NewProofSwitchWithLegacy(pool *pgxpool.Pool, schemaDigest string, documentDigests map[string]string, legacyDigests map[string][]string) *PostgresSwitch {
+	sw := NewPostgresSwitchWithLegacy(pool, schemaDigest, documentDigests, legacyDigests)
+	sw.reachable = proofReachableModes
+	return sw
+}

@@ -8,14 +8,13 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
-	"os/exec"
 	"path/filepath"
-	"runtime"
 	"sort"
 	"strings"
 	"testing"
 
 	"github.com/full-chaos/dev-health-ops/internal/cli"
+	"github.com/full-chaos/dev-health-ops/internal/testsupport/moduleroot"
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/pyoracle"
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/venueoracle"
 )
@@ -456,17 +455,6 @@ func substituteDir(c pushCase, dir string) pushCase {
 // producer's environment AND part of each golden's request key (a changed value fails the frozen replay).
 var pushPythonSettings = map[string]string{"PYTHONHASHSEED": "0", "OTEL_ENABLED": "false"}
 
-// pushPythonEnv is the producer's CLOSED environment: PATH and HOME, the checkout's source, and
-// pushPythonSettings; nothing is inherited from the test process (a proxy variable, a host identity, a
-// leftover switch of the shell cannot change a recorded answer).
-func pushPythonEnv(root string) []string {
-	env := []string{"PATH=" + os.Getenv("PATH"), "HOME=" + os.Getenv("HOME"), "PYTHONPATH=" + filepath.Join(root, "src"), "PYTHONDONTWRITEBYTECODE=1"}
-	for _, name := range []string{"OTEL_ENABLED", "PYTHONHASHSEED"} {
-		env = append(env, name+"="+pushPythonSettings[name])
-	}
-	return env
-}
-
 // pushPythonBuild is the build whose Python `dev-hops push` verbs answered the corpus: a build that
 // still carried the Python CLI.
 const pushPythonBuild = "a4847c5e93607451a0c987b314d37e02fc43ce85"
@@ -480,12 +468,12 @@ const pushOracleDir = "/tmp/dho-push-oracle-dir"
 // are frozen in testdata/golden/push.json (the recipe regenerates them by execution); the corpus and the
 // program are part of the golden's key.
 func TestPushMatchesTheFrozenPythonOutput(t *testing.T) {
-	_, file, _, _ := runtime.Caller(0)
+	_, file, _, _ := moduleroot.Caller(0)
 	repoRoot := filepath.Clean(filepath.Join(filepath.Dir(file), "..", ".."))
 	golden := venueoracle.OpenGolden(t, venueoracle.GoldenSpec{
 		Path:        "testdata/golden/push.json",
 		PythonBuild: pushPythonBuild,
-		SHA256:      "ae2f1c0fa3b03d26f69b7368c0f1047aa3365a04aa589a8a046045231d3c6839",
+		SHA256:      "fdc1146fc39042d4551f8c91c746b9bfaa7b5b4cd3157dac65881f48ccc01cdc",
 		Recipe: "git worktree add --detach $DIR " + pushPythonBuild + " (with its .venv: uv sync --frozen --no-install-project); then from the repository root: " +
 			"go run ./internal/testsupport/venueoracle/goldenrecord -pkg ./internal/pushcli/ -test '^TestPushMatchesTheFrozenPythonOutput$' -python-root $DIR",
 	})
@@ -501,15 +489,17 @@ func TestPushMatchesTheFrozenPythonOutput(t *testing.T) {
 		t.Fatal(err)
 	}
 	request := venueoracle.ProgramRequest("push corpus", pythonPushProgram, input, pushPythonSettings)
-	answers := golden.Produce(t, root, []venueoracle.Request{request}, func(_ *venueoracle.Producer, _ []venueoracle.Request) []venueoracle.Response {
-		python := pyoracle.Resolve(t, root)
+	answers := golden.Produce(t, root, []venueoracle.Request{request}, func(producer *venueoracle.Producer, _ []venueoracle.Request) []venueoracle.Response {
+		producer.RequireDeployed()
 		dir := t.TempDir()
-		command := exec.Command(python, "-c", pythonPushProgram)
-		command.Env = pushPythonEnv(root)
+		command, err := producer.Command(context.Background(), pushPythonSettings, nil, "-c", pythonPushProgram)
+		if err != nil {
+			t.Fatal(err)
+		}
 		command.Stdin = bytes.NewReader(bytes.ReplaceAll(input, []byte(pushOracleDir), []byte(dir)))
 		output, err := command.CombinedOutput()
 		if err != nil {
-			t.Fatalf("live python: %v", pyoracle.RunError(python, err, output))
+			t.Fatalf("live python: %v", pyoracle.RunError(command.Path, err, output))
 		}
 		marker := strings.LastIndex(string(output), "RESULT")
 		if marker < 0 {
@@ -573,16 +563,25 @@ func maskProducerVersion(text string) string {
 	return strings.Join(lines, "\n")
 }
 
-// CHAOS-7469: the producer environment is closed; a variable of the test process never reaches Python.
+// CHAOS-7469: the producer environment is closed; a variable of the test process never reaches Python. The
+// environment is the launcher's (Producer.Env): the fixed set of the harness and pushPythonSettings.
 func TestPushPythonEnvIsClosed(t *testing.T) {
 	for _, name := range []string{"HTTPS_PROXY", "HTTP_PROXY", "NO_PROXY", "ORG_ID", "PYTHONHASHSEED", "TZ", "LANG"} {
 		t.Setenv(name, "from-the-test-process")
 	}
-	allowed := map[string]bool{"PATH": true, "HOME": true, "PYTHONPATH": true, "PYTHONDONTWRITEBYTECODE": true, "OTEL_ENABLED": true, "PYTHONHASHSEED": true}
-	for _, entry := range pushPythonEnv("/checkout") {
+	producer := &venueoracle.Producer{Root: "/checkout"}
+	env := producer.Env(pushPythonSettings)
+	seen := map[string]string{}
+	for _, entry := range env {
 		name, value, _ := strings.Cut(entry, "=")
-		if !allowed[name] || value == "from-the-test-process" {
-			t.Errorf("the producer environment carries %s", name)
+		seen[name] = value
+		if value == "from-the-test-process" {
+			t.Errorf("the producer environment carries the test process's %s", name)
+		}
+	}
+	for name, value := range pushPythonSettings {
+		if seen[name] != value {
+			t.Errorf("the producer environment holds %s=%q, want the declared %q", name, seen[name], value)
 		}
 	}
 }

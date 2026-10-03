@@ -11,7 +11,6 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
-	"runtime"
 	"strings"
 	"testing"
 
@@ -21,6 +20,7 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/apiservice"
 	"github.com/full-chaos/dev-health-ops/internal/auth/edgetoken"
 	"github.com/full-chaos/dev-health-ops/internal/platform/config"
+	"github.com/full-chaos/dev-health-ops/internal/testsupport/moduleroot"
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/venueoracle"
 )
 
@@ -298,6 +298,6 @@ func startGoAPI(t *testing.T, ctx context.Context, venue *venueoracle.Venue) str
 
 // venueRoot is the repository root, where the venue finds the Python api.
 func venueRoot() string {
-	_, file, _, _ := runtime.Caller(0)
+	_, file, _, _ := moduleroot.Caller(0)
 	return filepath.Clean(filepath.Join(filepath.Dir(file), "..", "..", ".."))
 }

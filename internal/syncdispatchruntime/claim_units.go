@@ -3,7 +3,7 @@ package syncdispatchruntime
 import (
 	"context"
 	"fmt"
-	"log/slog"
+	"github.com/full-chaos/dev-health-ops/internal/syncdispatchruntime/synclog"
 	"time"
 
 	"github.com/jackc/pgx/v5"
@@ -292,12 +292,9 @@ const claimDeferralSampleSize = 20
 // observed. A count that stays non-empty across consecutive passes for the
 // same run IS a symptom: it means something keeps making units claimable
 // between the guard's snapshot and the claim.
-func emitClaimSnapshotDeferral(ctx context.Context, logger *slog.Logger, syncRunID string, deferredUnitIDs []string) {
+func emitClaimSnapshotDeferral(ctx context.Context, logger *synclog.Logger, syncRunID string, deferredUnitIDs []string) {
 	if len(deferredUnitIDs) == 0 {
 		return
-	}
-	if logger == nil {
-		logger = slog.Default()
 	}
 	// The COUNT is the metric; the ids are a sample. A run may hold up to
 	// SYNC_RUN_MAX_UNITS (default 1000) units, and neither a log line nor a
@@ -306,11 +303,7 @@ func emitClaimSnapshotDeferral(ctx context.Context, logger *slog.Logger, syncRun
 	if len(sample) > claimDeferralSampleSize {
 		sample = sample[:claimDeferralSampleSize]
 	}
-	logger.WarnContext(ctx, "dispatch_sync_run.claim_deferred_outside_guard_snapshot",
-		slog.String("sync_run_id", syncRunID),
-		slog.Int("claim.deferred_outside_snapshot", len(deferredUnitIDs)),
-		slog.Any("claim.deferred_unit_id_sample", sample),
-	)
+	logger.Warn(ctx, synclog.MsgDispatchSyncRunClaimDeferredOutsideGuardSnapshot, synclog.Run(synclog.ParseID(syncRunID)), synclog.Count(synclog.KeyClaimDeferredOutsideSnapshot, len(deferredUnitIDs)), synclog.IDs(synclog.KeyClaimDeferredUnitIdSample, synclog.ParseIDs(sample)))
 	span := oteltrace.SpanFromContext(ctx)
 	if span == nil || !span.IsRecording() {
 		return

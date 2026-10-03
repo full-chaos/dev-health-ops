@@ -1,5 +1,0 @@
-label=internal/jobs/investment (materialize orchestration golden vs live Python)
-package=./internal/jobs/investment
-run=^TestFrozenPythonGoldenStillMatchesLivePython$
-python=1
-proof=investment-materialize-orchestration|investment materialize orchestration golden did not compare against live Python

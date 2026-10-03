@@ -201,17 +201,18 @@ def test_provisioning_refuses_an_unpinned_image(image: str) -> None:
     ), stderr
 
 
-def test_provisioning_refuses_a_lockstep_mismatch_with_the_api_image() -> None:
+def test_provisioning_refuses_a_lockstep_mismatch_with_the_query_api_image() -> None:
     code, stderr = _render_stderr(
         "migrations.hook.provisionRoles.enabled=true",
         "migrations.hook.riverMigrate.enabled=false",
         "migrations.hook.routeActivate.enabled=false",
         "migrations.hook.provisionRoles.image=ghcr.io/full-chaos/dev-health-go-dho:sha-aaaaaaaaaaaa",
-        "image.repository=ghcr.io/full-chaos/dev-hops-api",
-        "image.tag=sha-bbbbbbbbbbbb",
+        "queryApi.enabled=true",
+        "queryApi.image.tag=sha-bbbbbbbbbbbb",
     )
     assert code != 0, "a provision-roles image pinned to another commit rendered"
     assert "pinned to different commits" in stderr, stderr
+    assert "queryApi.image" in stderr, stderr
     assert "the provision-roles hook image" in stderr, stderr
 
 
@@ -220,8 +221,8 @@ def test_provisioning_accepts_a_lockstep_match_and_a_sideloaded_local_image() ->
         "migrations.hook.provisionRoles.enabled=true",
         "migrations.hook.routeActivate.enabled=false",
         "migrations.hook.provisionRoles.image=ghcr.io/full-chaos/dev-health-go-dho:sha-cccccccccccc",
-        "image.repository=ghcr.io/full-chaos/dev-hops-api",
-        "image.tag=sha-cccccccccccc",
+        "queryApi.enabled=true",
+        "queryApi.image.tag=sha-cccccccccccc",
     )
     container = jobs[_PROVISION]["spec"]["template"]["spec"]["containers"][0]
     assert container["image"].endswith(":sha-cccccccccccc")
@@ -286,7 +287,7 @@ def test_river_migrate_takes_its_own_pinned_image() -> None:
     assert container["image"] == own, container["image"]
 
 
-def test_river_migrate_refuses_lockstep_mismatch_with_the_api_image() -> None:
+def test_river_migrate_refuses_lockstep_mismatch_with_the_query_api_image() -> None:
     """The River hook must run the same build as the application it is
     migrating for -- route-activate-hooks.yaml already refuses this same
     class of mismatch for its own operator image; this is the identical
@@ -298,8 +299,8 @@ def test_river_migrate_refuses_lockstep_mismatch_with_the_api_image() -> None:
         "migrations.hook.riverMigrate.enabled=true",
         "migrations.hook.routeActivate.enabled=false",
         "migrations.hook.riverMigrate.image=ghcr.io/full-chaos/dev-health-go-dho:sha-aaaaaaaaaaaa",
-        "image.repository=ghcr.io/full-chaos/dev-hops-api",
-        "image.tag=sha-bbbbbbbbbbbb",
+        "queryApi.enabled=true",
+        "queryApi.image.tag=sha-bbbbbbbbbbbb",
     )
     assert code != 0, (
         "a River hook image pinned to a different commit than image.tag rendered"
@@ -308,15 +309,15 @@ def test_river_migrate_refuses_lockstep_mismatch_with_the_api_image() -> None:
     assert "sha-aaaaaaaaaaaa" in stderr and "sha-bbbbbbbbbbbb" in stderr, stderr
 
 
-def test_river_migrate_accepts_lockstep_match_with_the_api_image() -> None:
+def test_river_migrate_accepts_lockstep_match_with_the_query_api_image() -> None:
     """The control: the SAME sha-<12 hex> commit on both sides renders."""
     jobs = _jobs(
         "migrations.hook.provisionRoles.enabled=true",
         "migrations.hook.riverMigrate.enabled=true",
         "migrations.hook.routeActivate.enabled=false",
         "migrations.hook.riverMigrate.image=ghcr.io/full-chaos/dev-health-go-dho:sha-cccccccccccc",
-        "image.repository=ghcr.io/full-chaos/dev-hops-api",
-        "image.tag=sha-cccccccccccc",
+        "queryApi.enabled=true",
+        "queryApi.image.tag=sha-cccccccccccc",
     )
     container = jobs[_RIVER]["spec"]["template"]["spec"]["containers"][0]
     assert (

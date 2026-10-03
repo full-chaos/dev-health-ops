@@ -64,11 +64,29 @@ def test_urql_format_reproduces_registered_document(smoke: ModuleType, op: str) 
     assert "__typename" not in web_like
     derived = smoke.urql_format(web_like)
     assert derived == registered
-    catalog = {
-        o["operation"]: o["digest"]
+    accepted: set[str] = {
+        o["digest"]
         for o in json.loads(CATALOG.read_text(encoding="utf-8"))
+        if o["operation"] == op
     }
-    assert smoke.document_digest(derived) == catalog[op]
+    assert accepted, f"{op} is not in the catalog"
+    assert smoke.document_digest(derived) in accepted
+
+
+def test_accepted_digests_keeps_the_current_and_the_legacy_digest_of_an_operation(
+    smoke: ModuleType,
+) -> None:
+    """CHAOS-8000: the web may send the current OR the legacy text during a dual-accept release; a
+    last-wins dict would accept only the legacy one and fail the current text as a mismatch."""
+    entries = [
+        {"operation": "foo", "digest": "d-new"},
+        {"operation": "foo", "digest": "d-old", "legacy": True},
+        {"operation": "bar", "digest": "d-bar"},
+    ]
+    assert smoke.accepted_digests(entries) == {
+        "foo": {"d-new", "d-old"},
+        "bar": {"d-bar"},
+    }
 
 
 def test_ts_exports_skips_interpolated_templates(smoke: ModuleType) -> None:

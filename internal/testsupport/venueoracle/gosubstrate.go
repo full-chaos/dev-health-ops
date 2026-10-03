@@ -38,7 +38,7 @@ import (
 //
 // The schemas come from the Go migrators while recording too. pgmigrate
 // builds the same schema as the Alembic chain (pgmigrate's
-// TestBaselineVenueOracleIsTheExecutedPythonUpgrade compares them), but not
+// TestBaselineIsTheFrozenPythonUpgrade compares them), but not
 // the same physical tables: the chain's history leaves dropped columns in a
 // table's tuples (sync_configurations keeps one), which moves where an
 // updated row lands, so an unordered read after writes returns another

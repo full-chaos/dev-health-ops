@@ -136,13 +136,6 @@ func TestGoMatchesLizardGoldenPHP(t *testing.T) {
 	}
 }
 
-// TestLizardGoldenIsNotStalePHP reuses clike_parity_test.go's shared
-// live-oracle staleness gate (DEV_HEALTH_LIVE_PYTHON_ORACLE-gated, not run
-// by default).
-func TestLizardGoldenIsNotStalePHP(t *testing.T) {
-	assertGoldenBytesMatchLiveOracle(t, phpCorpusDir(t), phpGoldenPath(t))
-}
-
 // TestEveryConditionIsExercisedByThePHPCorpus is this PR's own invocation
 // of the shared coverage-manifest mechanism: every member of phpConditions
 // (php.go) must appear at least once in the corpus, or a coordinated

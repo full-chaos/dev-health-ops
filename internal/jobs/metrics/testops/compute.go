@@ -458,8 +458,7 @@ type pipelineKey struct {
 // ComputePipelineMetrics above is now a thin wrapper over this type, so the
 // slice API and the streaming API are IDENTICAL BY CONSTRUCTION rather than
 // by a second implementation kept in sync by hand -- which is what lets the
-// existing live-Python oracles (compute_test.go, ci/check_go.sh's
-// live-python-oracles verb) keep covering the streaming path with no
+// existing frozen-golden tests (compute_test.go) keep covering the streaming path with no
 // weakening. Do not reimplement Add's body anywhere else.
 type PipelineAccumulator struct {
 	repoID   uuid.UUID

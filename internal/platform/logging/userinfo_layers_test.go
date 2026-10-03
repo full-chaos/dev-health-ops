@@ -79,12 +79,16 @@ func TestEveryUserinfoFormIsHiddenInEveryLayer(t *testing.T) {
 // later change is seen: the whole text is left as it is. The percent-encoded forms
 // of the same four are hidden (rows above).
 func TestRawQuoteAndAngleBracketInAPasswordAreTheNamedLimit(t *testing.T) {
-	for _, raw := range []string{`"`, `'`, `<`, `>`} {
-		text := "dial svc_user:Aa1" + raw + "Bb2@db.internal now"
+	for _, text := range []string{
+		`dial svc_user:Aa1"Bb2@db.internal now`,
+		`dial svc_user:Aa1'Bb2@db.internal now`,
+		`dial svc_user:Aa1<Bb2@db.internal now`,
+		`dial svc_user:Aa1>Bb2@db.internal now`,
+	} {
 		for _, layer := range userinfoLayers {
 			got := layer.redact(text)
 			if !strings.Contains(got, "Aa1") || !strings.Contains(got, "Bb2") || !strings.Contains(got, "db.internal") {
-				t.Errorf("the limit changed for %s in %s (a part is now hidden or lost): %.300s", raw, layer.name, got)
+				t.Errorf("the limit changed for %s in %s (a part is now hidden or lost): %.300s", text, layer.name, got)
 			}
 		}
 	}
@@ -93,14 +97,13 @@ func TestRawQuoteAndAngleBracketInAPasswordAreTheNamedLimit(t *testing.T) {
 // What still covers such a password: a registered secret at or above the minimum
 // length is redacted by value, whatever characters it holds.
 func TestARegisteredPasswordWithAQuoteIsCoveredByValue(t *testing.T) {
-	const value = `Zz9"Yy8Xx7Ww`
-	secrets.Register("REVIEW_COVER_BY_VALUE", value)
+	secrets.Register("REVIEW_COVER_BY_VALUE", `Zz9"Yy8Xx7Ww`)
 	for _, layer := range []string{"RedactText", "log line"} {
 		for _, candidate := range userinfoLayers {
 			if candidate.name != layer {
 				continue
 			}
-			got := candidate.redact(`dial svc_user:` + value + `@db.internal now`)
+			got := candidate.redact(`dial svc_user:Zz9"Yy8Xx7Ww@db.internal now`)
 			if strings.Contains(got, "Yy8Xx7Ww") || strings.Contains(got, "Zz9") {
 				t.Errorf("%s: the registered value survived: %.300s", layer, got)
 			}
@@ -171,9 +174,8 @@ func TestFailClosedRewritesArePinnedInEveryLayer(t *testing.T) {
 // shape match cannot reach (limit above), stays whole there. The rows pin that
 // measured state per layer; one shared entry for every layer is its own change.
 func TestByValueCoverIsTheLogPathOnly(t *testing.T) {
-	const value = `Qq9"Rr8Ss7Tt`
-	secrets.Register("REVIEW_COVER_BY_VALUE_TWO", value)
-	text := `dial svc_user:` + value + `@db.internal now`
+	secrets.Register("REVIEW_COVER_BY_VALUE_TWO", `Qq9"Rr8Ss7Tt`)
+	text := `dial svc_user:Qq9"Rr8Ss7Tt@db.internal now`
 	for _, layer := range userinfoLayers {
 		got := layer.redact(text)
 		covered := !strings.Contains(got, "Rr8Ss7Tt")

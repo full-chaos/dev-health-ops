@@ -136,7 +136,6 @@ FILES=(
   # tracked scripts CI never linted, added because they are already clean
   # under the pin -- verified, not assumed
   "${ROOT}/ci/aggregate_gate_results.sh"
-  "${ROOT}/ci/check_lint_scope.sh"
   "${ROOT}/ci/run_tests.sh"
   "${ROOT}/docker/init-extra-dbs.sh"
   "${ROOT}/scripts/acceptance/container_source_guard.sh"

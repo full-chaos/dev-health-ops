@@ -1,7 +1,7 @@
 {{- /*
 CHAOS-7047: a host can route its "/" catch-all to the Go api (service: go-api), so an unknown path is answered by Go's native 404 (x-dev-health-plane: go) and
-never by the Python api. The paths Python must still answer are ingress.pythonAllowList (each -> the Python api Service); a host opts in with
-`pythonAllowList: true`. Render guard: a "/" path to go-api requires the opt-in (no allow-list = Python-only paths silently 404). CHAOS-7255: the allow-list is no
+never by the Python api. CHAOS-7520: the Python api is gone; ingress.pythonAllowList (the key keeps its name) lists the paths that leave the go-api default, each
+naming `service: query-api`; a host opts in with `pythonAllowList: true`. Render guard: a "/" path to go-api requires the opt-in. CHAOS-7255: the allow-list is no
 longer required to cover /api/v1/internal: the Go api's PUBLIC listener serves no /api/v1/internal/* route (ops #3429 removed the acr public-compat bridge; the routes
 live on the internal listener, port 8091, never behind this Ingress), which internal/apiservice TestPublicListenerNeverServesInternalRoutes pins; a request for them
 through the Go default backend is Go's native 404. Routing to the go-api-internal Service stays refused below.
@@ -96,9 +96,7 @@ spec:
             backend:
               service:
                 {{- if eq .service "api" }}
-                name: {{ include "dev-health.fullname" $ }}-api
-                port:
-                  number: {{ $.Values.api.port }}
+                {{- fail (printf "ingress.hosts %q path %q routes to service \"api\": the Python api is gone (CHAOS-7520); route to go-api, query-api (an allow-list entry) or web" $host.host .path) }}
                 {{- else if eq .service "go-api" }}
                 name: {{ include "dev-health.fullname" $ }}-go-api
                 port:
@@ -121,12 +119,11 @@ spec:
           {{- if kindIs "slice" $host.pythonAllowList }}{{- $allow = $host.pythonAllowList }}
           {{- else if not (kindIs "bool" $host.pythonAllowList) }}{{- fail (printf "ingress.hosts %q pythonAllowList must be true or a list of {path, pathType}, got %s" $host.host (kindOf $host.pythonAllowList)) }}
           {{- end }}
-          {{- /* An entry may NAME ITS BACKEND: `service: query-api` sends the path to the query-api Service; no key (or `service: api`) is the Python api.
+          {{- /* An entry NAMES ITS BACKEND: `service: query-api` sends the path to the query-api Service (CHAOS-7520: the Python api default is gone, no key is refused).
           Why here and not in another Ingress object: ingress-nginx's admission webhook denies an Ingress that claims a host and path another live Ingress
           holds, and helm patches the objects of a release one by one. A path that changes its backend by MOVING to another object is denied in one
           direction and has a window with no rule in the other. A path that changes its backend INSIDE the object that holds it is one object, one
           update: no other object ever claims it, and no config can be written with the path missing. */}}
-          {{- /* CHAOS-6263: only an entry that routes to the Python api needs its Service; an empty list, or one whose entries all name query-api, needs none. */}}
           {{- $seen := dict }}
           {{- $hostAnchored := false }}
           {{- range $allow }}{{- if and (kindIs "map" .) (eq (toString .pathType) "ImplementationSpecific") }}{{- $hostAnchored = true }}{{- end }}{{- end }}
@@ -148,29 +145,19 @@ spec:
           {{- if eq (trimSuffix "/" $base) "" }}{{- fail (printf "ingress.hosts %q pythonAllowList entry %q would route the whole host to the Python api, which is what the Go default backend replaces" $host.host .path) }}{{- end }}
           {{- if or (hasKey $seen $base) (has $base $hostPaths) }}{{- fail (printf "ingress.hosts %q pythonAllowList entry %q duplicates another rule on the same path (an allow-list path must be unique and not one of the host's own paths)" $host.host .path) }}{{- end }}
           {{- $_ := set $seen $base true }}
-          {{- /* The key is validated whenever it is present, so null, 0 or "" cannot pass by being falsy. */}}
-          {{- $service := "api" }}
-          {{- if hasKey . "service" }}
-          {{- if not (has .service (list "api" "query-api")) }}{{- fail (printf "ingress.hosts %q pythonAllowList entry %q service must be api (the Python api, the default) or query-api, got %v" $host.host .path .service) }}{{- end }}
-          {{- $service = .service }}
-          {{- end }}
-          {{- if and (eq $service "api") (not $.Values.api.enabled) }}{{- fail (printf "ingress.hosts %q pythonAllowList routes to the Python api but api.enabled is false (the Service would not exist)" $host.host) }}{{- end }}
-          {{- if and (eq $service "query-api") (not $.Values.queryApi.enabled) }}{{- fail (printf "ingress.hosts %q pythonAllowList entry %q routes to query-api but queryApi.enabled is false (the Service would not exist)" $host.host .path) }}{{- end }}
+          {{- /* CHAOS-7520: the Python api is gone, so every entry names its backend and the only one is query-api. The key is validated whenever it is present, so null, 0 or "" cannot pass by being falsy. */}}
+          {{- if not (hasKey . "service") }}{{- fail (printf "ingress.hosts %q pythonAllowList entry %q has no service: the Python api (the old default backend) is gone (CHAOS-7520); set service: query-api" $host.host .path) }}{{- end }}
+          {{- if not (eq (toString .service) "query-api") }}{{- fail (printf "ingress.hosts %q pythonAllowList entry %q service must be query-api (the Python api is gone, CHAOS-7520), got %v" $host.host .path .service) }}{{- end }}
+          {{- if not $.Values.queryApi.enabled }}{{- fail (printf "ingress.hosts %q pythonAllowList entry %q routes to query-api but queryApi.enabled is false (the Service would not exist)" $host.host .path) }}{{- end }}
           {{- /* CHAOS-7243 (r2 P1): on an anchored host regex mode is on for the WHOLE host, where a literal Exact rule renders as an UNANCHORED regex (`= /graphql` becomes `~* "^/graphql"`, so /graphqlish would reach Python). An Exact entry must therefore be written anchored on such a host. */}}
           {{- if and $hostAnchored (eq .pathType "Exact") }}{{- fail (printf "ingress.hosts %q pythonAllowList entry %q is Exact on a host that has an anchored entry: regex mode makes an Exact rule an unanchored regex there (lookalikes such as %sx would reach Python); write it anchored as {path: %q, pathType: ImplementationSpecific}" $host.host .path .path (printf "%s$" .path)) }}{{- end }}
           - path: {{ .path }}
             pathType: {{ .pathType }}
             backend:
               service:
-                {{- if eq $service "query-api" }}
                 name: {{ include "dev-health.fullname" $ }}-query-api
                 port:
                   number: {{ $.Values.queryApi.port }}
-                {{- else }}
-                name: {{ include "dev-health.fullname" $ }}-api
-                port:
-                  number: {{ $.Values.api.port }}
-                {{- end }}
           {{- end }}
           {{- end }}
     {{- end }}

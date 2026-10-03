@@ -12,9 +12,9 @@ echo "repin start root=$R old8=$OLD8 new=$NEW"
 for need in compose/compose.bigboy.images.yml _records; do
   [ -e "$R/$need" ] || { echo "FAIL: BIGBOY_ROOT=$R is missing $need -- refusing to run against a root that is not a real bigboy tree" >&2; exit 4; }
 done
-# CHAOS-7674: the Python api image is no longer built, so the overlay's `api`/`migrate` digest is FROZEN (WP6 removes
-# those services) and is neither the OLD8 ground truth nor re-pinned here; the Go query-api digest (dev-health-go-dho)
-# is both.
+# CHAOS-7674, CHAOS-8361: the Python api image is no longer built and the overlay names it nowhere (`api` is retired,
+# `migrate` runs the dho image). The Go query-api digest (dev-health-go-dho) is the OLD8 ground truth and is re-pinned
+# here, with the tools and the operator images.
 # CHAOS-7014 (D2801): a mistyped OLD8 (9 chars, "bd25cd0a9" instead of "bd25cd0a") once made the
 # repin's own cp of _records/bigboy-$OLD8/*.sh fail under set -euo pipefail BEFORE the sed rewrite
 # below ever ran -- $OV was backed up but never actually repointed, and every downstream STEP in

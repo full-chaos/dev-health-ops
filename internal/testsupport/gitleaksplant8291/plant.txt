@@ -1,0 +1,2 @@
+# CHAOS-8291 measurement plant: never merged. One whole generic literal, no provider prefix, made for this plant.
+api_key = "6SgOOSbrhhQogOkZzl1IQnRtf9NU9NvK"

@@ -1,0 +1,58 @@
+name: Scheduled Dependency Scan
+
+on:
+  schedule:
+    # Every Monday at 08:00 UTC
+    - cron: "0 8 * * 1"
+  workflow_dispatch:
+
+jobs:
+  pip-audit-weekly:
+    name: Weekly Dependency Vulnerability Scan
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Set up Python
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: "3.14"
+
+      - name: Install pip-audit
+        # CHAOS-3948: pinned to the uv.lock version, same shape/fix as
+        # lint.yml's ruff pin (CHAOS-3946) -- a bare floor specifier resolves
+        # to whatever is newest on PyPI at CI run time, not the version
+        # contributors actually run locally via `uv sync`.
+        run: pip install "pip-audit==2.10.0"
+
+      - name: Run pip-audit
+        run: |
+          # Build ignore flags from repo-controlled allowlist (not user input)
+          IGNORE_ARGS=""
+          if [ -f .pip-audit-ignore ]; then
+            while IFS= read -r line; do
+              [[ "$line" =~ ^[[:space:]]*# ]] && continue
+              [[ -z "${line// }" ]] && continue
+              CVE=$(echo "$line" | awk '{print $1}')
+              IGNORE_ARGS="$IGNORE_ARGS --ignore-vuln $CVE"
+            done < .pip-audit-ignore
+          fi
+          # shellcheck disable=SC2086
+          pip-audit \
+            --requirement requirements.txt \
+            --vulnerability-service pypi \
+            --format markdown \
+            --output pip-audit-report.md \
+            $IGNORE_ARGS
+
+      - name: Upload pip-audit report
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: pip-audit-weekly-report
+          path: pip-audit-report.md
+          if-no-files-found: ignore
+          retention-days: 90

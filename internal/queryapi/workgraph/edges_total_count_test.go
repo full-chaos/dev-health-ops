@@ -284,6 +284,34 @@ func TestResolveEdges_ACompleteSpliceIsCountedWithoutARead(t *testing.T) {
 	}
 }
 
+// Each read is below the limit, but their splice is not: the limit cuts the
+// page, so the count is read. (Two reads below the limit do not make a
+// complete page by themselves.)
+func TestResolveEdges_ASpliceCutByTheLimitIsCounted(t *testing.T) {
+	client := &countingClient{
+		primary:    [][]any{issueEdge("e1", "A", "B"), issueEdge("e2", "C", "D")},
+		dependency: [][]any{issueEdge("wid:1", "E", "F"), issueEdge("wid:2", "G", "H")},
+		count:      4,
+	}
+	blocks := model.WorkGraphEdgeTypeInputBlocks
+	result, err := ResolveEdges(context.Background(), client, "org1", &model.WorkGraphEdgeFilterInput{EdgeType: &blocks, Limit: 3})
+	if err != nil {
+		t.Fatalf("ResolveEdges: %v", err)
+	}
+	if len(result.Edges) != 3 {
+		t.Fatalf("edges = %d, want the 3 of the page", len(result.Edges))
+	}
+	if statements, _ := client.countStatements(); len(statements) != 1 {
+		t.Fatalf("count statements = %d, want 1: the limit cut a splice of 4 edges", len(statements))
+	}
+	if result.TotalCount != 4 {
+		t.Fatalf("totalCount = %d, want 4", result.TotalCount)
+	}
+	if !result.PageInfo.HasNextPage {
+		t.Fatal("hasNextPage = false with 4 matching edges and a page of 3")
+	}
+}
+
 func TestSplicedEdgeCount_CountsAnEdgeOfBothReadsOnce(t *testing.T) {
 	primary := []edgeRow{{edgeID: "p", sourceType: "issue", sourceID: "A", edgeType: "blocks", targetType: "issue", targetID: "B"}}
 	dependency := []edgeRow{

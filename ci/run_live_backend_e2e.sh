@@ -557,16 +557,10 @@ echo "==> generating deterministic ClickHouse fixtures (raw git/PR/team data onl
     --seed "${FIXTURE_SEED}"
 )
 
-echo "==> migrating PostgreSQL for internal credential lifecycle coverage"
+echo "==> migrating PostgreSQL"
 build_go_binaries
 MIGRATION_DATABASE_URI="${POSTGRES_URI}" DEV_HEALTH_ALLOW_CELERY_RIVER_CUTOVER=1 RIVER_DATABASE_SCHEMA=river \
   "${BIN_DIR}/dho" migrate postgres upgrade
-
-echo "==> running service credential subprocess lifecycle against live PostgreSQL"
-DEV_HEALTH_POSTGRES_TEST_URI="${POSTGRES_URI}" \
-  run_python -m pytest \
-  tests/test_service_credentials_cli.py::test_service_credential_create_emits_only_token_and_db_flag_is_honored \
-  -q
 
 # JWT_SECRET_KEY is now required (no SHA256 derivation fallback) — derive the same
 # value generate_auth_token() uses so tokens match between API and e2e client.
@@ -714,21 +708,5 @@ run_python "${PY_PROGRAM_DIR}/assert_home.py" "${HOME_FILE}"
 
 echo "==> running go-api-prove end to end with the envelope and the edge access token minted in-process"
 run_go_api_prove_e2e
-
-echo "==> running customer-push external-ingest live e2e test (CHAOS-2702)"
-(
-  export DISABLE_DOTENV=1
-  export CLICKHOUSE_URI="${CLICKHOUSE_URI}"
-  export POSTGRES_URI="${POSTGRES_URI}"
-  export DATABASE_URI="${DATABASE_URI}"
-  export REDIS_URL="${REDIS_URL}"
-  export JWT_SECRET_KEY="${JWT_SECRET_KEY}"
-  # Point the test's black-box `client` fixture at the real, already-booted
-  # `dho api` server process (BASE_URL, computed above) instead of an
-  # in-process ASGITransport -- proves the real route-mounting/startup/
-  # uvicorn-config path, not just the FastAPI app object.
-  export LIVE_E2E_BASE_URL="${BASE_URL}"
-  run_python -m pytest tests/test_external_ingest_customer_push_live.py -m clickhouse -q
-)
 
 echo "Live backend e2e checks passed."

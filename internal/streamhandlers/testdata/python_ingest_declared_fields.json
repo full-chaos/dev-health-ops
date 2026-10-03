@@ -1,0 +1,71 @@
+{
+  "source": "src/dev_health_ops/api/ingest/schemas.py",
+  "frozen_from_commit": "2778ec2ad9a3f1dffbfb743d8a97e54aa7a6c040",
+  "classes": {
+    "IngestCommit": [
+      "hash",
+      "message",
+      "author_name",
+      "author_email",
+      "author_when",
+      "committer_name",
+      "committer_email",
+      "committer_when",
+      "parents"
+    ],
+    "IngestPullRequestReview": [
+      "review_id",
+      "reviewer",
+      "state",
+      "submitted_at"
+    ],
+    "IngestPullRequest": [
+      "number",
+      "title",
+      "body",
+      "state",
+      "author_name",
+      "author_email",
+      "created_at",
+      "merged_at",
+      "closed_at",
+      "head_branch",
+      "base_branch",
+      "additions",
+      "deletions",
+      "changed_files",
+      "reviews"
+    ],
+    "IngestDeployment": [
+      "deployment_id",
+      "status",
+      "environment",
+      "started_at",
+      "finished_at",
+      "deployed_at",
+      "pull_request_number",
+      "release_ref",
+      "release_ref_confidence"
+    ],
+    "IngestWorkItem": [
+      "work_item_id",
+      "provider",
+      "title",
+      "type",
+      "status",
+      "status_raw",
+      "description",
+      "project_key",
+      "assignees",
+      "reporter",
+      "created_at",
+      "updated_at",
+      "started_at",
+      "completed_at",
+      "labels",
+      "story_points",
+      "priority_raw",
+      "url"
+    ]
+  }
+}

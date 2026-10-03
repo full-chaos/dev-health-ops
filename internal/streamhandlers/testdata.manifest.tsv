@@ -4,3 +4,4 @@
 -	header	golden/external-overflow-python-outcomes.golden.json
 -	header	golden/normalize-batch.golden.json
 f7b08e902830a5b458851cf3c15df2d85b6d08873766c7cff50e9abe93fe9f9e	python-recorded	product_telemetry_python_stored.json
+23f45f7d588351c9e14ef8657ba4907437a91b59dba53ba31fb98b100d2e5318	hand-written	python_ingest_declared_fields.json

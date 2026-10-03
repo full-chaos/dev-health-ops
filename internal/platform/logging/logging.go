@@ -112,14 +112,14 @@ func RedactText(value string) (result string) {
 	// separator or quote is seen as what it stands for; the key/value scan
 	// runs first, while it still knows which bytes were encoded.
 	value = secrets.RedactRegistered(value)
-	// A userinfo whose password holds a percent-encoded quote, bracket or space
+	// A userinfo whose password holds a percent-encoded quote, bracket, space or tab
 	// (%22 %27 %3C %3E %20 %09) is one run of valid URL characters here; decoded, the
-	// raw quote would end the match. So THOSE runs are matched before the decode. Every
-	// other userinfo is matched after the key/value scan below, where main matches its
-	// URL patterns: a pass before that scan would write its marker in front of a
-	// protected key's value and leave the rest of the value readable.
+	// raw character would end the userinfo match at the end of this function. So inside
+	// such a run (and only there) the encoded character is swapped for an encoded letter
+	// of the same length, which the decode turns into a plain byte. The run is hidden
+	// whole by the last pass below; every earlier pass sees main's text except those bytes.
 	if mayHoldUserinfo(value) {
-		value = redactUserinfoWhere(value, hasEncodedSpecial)
+		value = neutralizeEncodedSpecials(value)
 	}
 	value, escaped := percentDecoded(value)
 	// The decoded text can hold a registered secret its encoded form hid.
@@ -128,7 +128,7 @@ func RedactText(value string) (result string) {
 	// Each pattern runs only when the literal it cannot match without is in
 	// the text: the skip never changes the result, it keeps the common
 	// attribute (an id, a provider name) off the regexp engine.
-	value = redactURLCredentials(value)
+	value = redactURLPatterns(value)
 	lower := strings.ToLower(value)
 	for index, pattern := range bareCredentialPatterns {
 		if strings.Contains(lower, bareCredentialLiterals[index]) {
@@ -143,22 +143,54 @@ func RedactText(value string) (result string) {
 		value = vendorKeyPattern.ReplaceAllString(value, redacted)
 	}
 	value = redactProseCredentials(value)
-	return redactPathSegments(value)
-}
-
-// redactURLCredentials hides a credential carried in a URL or in a bare userinfo:
-// the whole DSN and credential URLs first (so their host goes with them), then
-// whatever `user:secret@` is left. The order matters: the bare-userinfo match would
-// otherwise take `postgres:` as the user and leave the host of the DSN readable.
-func redactURLCredentials(value string) string {
-	if strings.Contains(value, "://") {
-		value = dsnPattern.ReplaceAllString(value, redacted)
-		value = credentialURLPattern.ReplaceAllString(value, redacted)
-	}
+	value = redactPathSegments(value)
+	// The userinfo pass runs LAST, on the output of every other pass: it can only hide
+	// more than main does, never less. A pass in front of the others would write its
+	// marker inside a value they hide whole and leave the rest of that value readable.
 	if mayHoldUserinfo(value) {
 		value = redactUserinfo(value)
 	}
 	return value
+}
+
+// redactURLPatterns hides a DSN or a credential URL whole, host included.
+func redactURLPatterns(value string) string {
+	if strings.Contains(value, "://") {
+		value = dsnPattern.ReplaceAllString(value, redacted)
+		value = credentialURLPattern.ReplaceAllString(value, redacted)
+	}
+	return value
+}
+
+// neutralizeEncodedSpecials swaps each percent-encoded quote, bracket, space or tab
+// inside a userinfo-shaped run for an encoded letter of the same length.
+func neutralizeEncodedSpecials(value string) string {
+	return userinfoPattern.ReplaceAllStringFunc(value, func(run string) string {
+		if !hasEncodedSpecial(run) {
+			return run
+		}
+		var out strings.Builder
+		for index := 0; index < len(run); index++ {
+			if run[index] == '%' && index+2 < len(run) {
+				if isEncodedSpecial(run[index : index+3]) {
+					out.WriteString("%78")
+					index += 2
+					continue
+				}
+			}
+			out.WriteByte(run[index])
+		}
+		return out.String()
+	})
+}
+
+func isEncodedSpecial(code string) bool {
+	for _, special := range encodedSpecials {
+		if strings.EqualFold(code, special) {
+			return true
+		}
+	}
+	return false
 }
 
 // mayHoldUserinfo is the cheap gate in front of the userinfo match: it needs an `@`

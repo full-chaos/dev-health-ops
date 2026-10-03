@@ -41,7 +41,7 @@ func sanitizeErrorText(text string, maxLength int, harden bool) string {
 		runes = substitute(runes, matcher)
 	}
 	if harden {
-		runes = []rune(logging.RedactCredentialShapes(string(runes)))
+		runes = []rune(logging.RedactCredentialShapesNoUserinfo(string(runes)))
 	}
 	if maxLength > 0 && len(runes) > maxLength {
 		const suffix = "...[truncated]"
@@ -50,6 +50,10 @@ func sanitizeErrorText(text string, maxLength int, harden bool) string {
 		} else {
 			runes = runes[:maxLength]
 		}
+	}
+	if harden {
+		// The userinfo pass runs last, after the cut (see logging.RedactUserinfoLast).
+		return logging.RedactUserinfoLast(string(runes))
 	}
 	return string(runes)
 }

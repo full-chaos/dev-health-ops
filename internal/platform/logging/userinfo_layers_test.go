@@ -308,3 +308,57 @@ func TestAnEncodedCredentialUrlLosesItsHostAndPathOnTheLogPath(t *testing.T) {
 		}
 	}
 }
+
+// A value behind a credential word in prose (`--password VALUE`) is hidden whole by
+// the passes main already has; the userinfo pass runs after them and must not leave
+// a tail (gwc-vetter-3's differential: 215 marker cells were worse than main).
+func TestAProseKeyedValueThatHoldsAUserinfoIsStillHiddenWholeInEveryLayer(t *testing.T) {
+	// layers is the set of layers that hide the whole value on main (measured by the
+	// differential); the userinfo pass must keep every one of them.
+	for _, row := range []struct {
+		text   string
+		layers []string
+	}{
+		{"op failed: --password Zq9vT4mW:2xLp8Rn7@Hk3sD6fJ (attempt 2)", nil},
+		{"login failed for password Zq9vT4mW:2xLp8Rn7@Hk3sD6fJ today", nil},
+		{"op failed: --api_key postgres://svc_user:Zq9vT4mW@db.internal:5432/2xLp8Rn7?sslmode=require (attempt 2)", []string{"RedactText", "log line", "RedactCredentialShapes", "syncdispatchruntime.SanitizeErrorText"}},
+		{"op failed: --secret :Zq9vT4mW@2xLp8Rn7 (attempt 2)", nil},
+		{"op failed: --authorization :Zq9vT4mW@2xLp8Rn7 (attempt 2)", []string{"syncdispatchruntime.SanitizeErrorText"}},
+	} {
+		for _, layer := range userinfoLayers {
+			if row.layers != nil && !contains(row.layers, layer.name) {
+				continue
+			}
+			got := layer.redact(row.text)
+			for _, shown := range []string{"Zq9vT4mW", "2xLp8Rn7", "Hk3sD6fJ"} {
+				if strings.Contains(got, shown) {
+					t.Errorf("%s: %q left %q readable: %.300s", layer.name, row.text, shown, got)
+				}
+			}
+		}
+	}
+}
+
+func contains(list []string, item string) bool {
+	for _, entry := range list {
+		if entry == item {
+			return true
+		}
+	}
+	return false
+}
+
+// The persisted sanitizers cut a text at a cap; the userinfo pass runs after the cut,
+// so a userinfo cut in the middle (its `@` lost) must not leave the start of its
+// secret: the last run before the cut is hidden when it holds a colon.
+func TestAUserinfoCutByTheSanitizerCapLeavesNoPartOfItsSecret(t *testing.T) {
+	for pad := 3960; pad < 3990; pad++ {
+		text := strings.Repeat("a", pad) + " svc_user:Kk3Pp4Qq5Zz@cache.internal"
+		for _, layer := range userinfoLayers[3:] {
+			got := layer.redact(text)
+			if strings.Contains(got, "Kk3") || strings.Contains(got, "Pp4Qq5Zz") {
+				t.Fatalf("%s, pad %d: a part of the secret survived the cut: %.80s", layer.name, pad, got[len(got)-80:])
+			}
+		}
+	}
+}

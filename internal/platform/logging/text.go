@@ -326,8 +326,48 @@ func redactAfterWord(text string, pattern *regexp.Regexp, shaped func(string) bo
 
 // RedactCredentialShapes is the credential part of RedactText for text that must keep its other bytes: provider tokens by
 // documented prefix and a long value behind a credential word. The persisted error columns use it after their own
-// patterns (CHAOS-7937).
+// patterns (CHAOS-7937). A userinfo (`user:secret@host`) is hidden LAST, on the output of those passes.
 func RedactCredentialShapes(value string) (result string) {
+	defer func() {
+		if recover() != nil {
+			result = redactionFailed
+		}
+	}()
+	value = RedactCredentialShapesNoUserinfo(value)
+	// Last, on the output of the passes above (see RedactText): it can only hide more.
+	if mayHoldUserinfo(value) {
+		value = redactUserinfo(value)
+	}
+	return value
+}
+
+// RedactCredentialShapesNoUserinfo is RedactCredentialShapes without the userinfo pass,
+// for a caller that has passes of its own after this one and runs RedactUserinfoLast
+// after them (the persisted error sanitizers): a userinfo marker written in front of
+// those passes would change what they hide.
+func RedactCredentialShapesNoUserinfo(value string) (result string) {
+	defer func() {
+		if recover() != nil {
+			result = redactionFailed
+		}
+	}()
+	if mayHoldProviderToken(value) {
+		value = providerTokenPattern.ReplaceAllString(value, redacted)
+	}
+	if mayHoldVendorKey(value) {
+		value = vendorKeyPattern.ReplaceAllString(value, redacted)
+	}
+	return redactProseCredentials(value)
+}
+
+// truncationSuffix is what the persisted error sanitizers append where they cut a text.
+const truncationSuffix = "...[truncated]"
+
+// RedactUserinfoLast is the userinfo pass for a caller that runs it after its own
+// passes and after its length cap. A text cut by the cap may end inside a userinfo (its
+// `@` lost), so when the text ends with the truncation suffix the last whitespace-free
+// run before it is hidden if it holds a colon: fail-closed, only at the cut.
+func RedactUserinfoLast(value string) (result string) {
 	defer func() {
 		if recover() != nil {
 			result = redactionFailed
@@ -336,13 +376,14 @@ func RedactCredentialShapes(value string) (result string) {
 	if mayHoldUserinfo(value) {
 		value = redactUserinfo(value)
 	}
-	if mayHoldProviderToken(value) {
-		value = providerTokenPattern.ReplaceAllString(value, redacted)
+	if strings.HasSuffix(value, truncationSuffix) {
+		body := strings.TrimSuffix(value, truncationSuffix)
+		start := strings.LastIndexAny(body, " \t\r\n\"'<>(),;[]{}") + 1
+		if run := body[start:]; strings.Contains(run, ":") || strings.Contains(strings.ToLower(run), "%3a") {
+			value = body[:start] + redacted + truncationSuffix
+		}
 	}
-	if mayHoldVendorKey(value) {
-		value = vendorKeyPattern.ReplaceAllString(value, redacted)
-	}
-	return redactProseCredentials(value)
+	return value
 }
 
 func credentialShaped(value string) bool {

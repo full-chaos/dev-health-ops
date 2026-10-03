@@ -824,10 +824,17 @@ smaller. Two rules follow:
   has always bound the exact key and reaches the outbox through
   `uq_worker_job_outbox_dedupe_key`.
 - **The GIN index is River's, not ours.** Its presence after the pinned River
-  migrations is asserted in the integration suite, with the plan itself: each
-  survey is planned on a 20,000-row outbox and must not scan it, and the same
-  survey without the River binding must — the control that keeps the first
-  assertion honest.
+  migrations is asserted in the integration suite, with the plan itself: on an
+  outbox several times the size of `river_job`, each survey must find the River
+  job through `river_job_args_index` and then probe the outbox on
+  `river_job_id` — not scan either table — and the same survey without the
+  River binding must scan the outbox, which is the control that keeps the
+  first assertion honest. The fixture is vacuumed first: a GIN index keeps new
+  entries in a pending list that every search reads in full, so a freshly
+  bulk-loaded index is priced above a table scan until `VACUUM` (autovacuum, on
+  a running stack) folds the list in. The same pending list bounds the real
+  cost of one probe: at most `gin_pending_list_limit` (4 MB by default) is read
+  per search.
 
 **The strand repair backs off while it finds nothing.** The reconciler loop
 ticks once a second because the relay needs to. The strand repair rides that

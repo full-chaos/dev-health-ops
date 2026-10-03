@@ -9,6 +9,7 @@ import (
 	"github.com/full-chaos/dev-health-go/clickhouse"
 
 	"github.com/full-chaos/dev-health-ops/internal/queryapi/graph/model"
+	"github.com/full-chaos/dev-health-ops/internal/queryapi/workgraph"
 )
 
 // The AI workflow edge union: one branch per edge table, each read with FINAL
@@ -226,6 +227,16 @@ func WorkflowDrilldown(ctx context.Context, client QueryClient, orgID string, ro
 
 	if nodes == nil {
 		nodes = []model.AIWorkflowGraphNodeOut{}
+	}
+	// CHAOS-8113: the display names of the nodes, from the one resolver the Work
+	// Graph edge ends are named with. Best-effort: a failed name read leaves the
+	// name null and keeps the node.
+	refs := make([]workgraph.NodeRef, len(nodes))
+	for i, n := range nodes {
+		refs[i] = workgraph.NodeRef{Type: n.NodeType, ID: n.NodeID}
+	}
+	for i, name := range workgraph.NodeDisplayNames(ctx, client, orgID, refs) {
+		nodes[i].DisplayName = name
 	}
 	return &model.AIWorkflowDrilldownResult{
 		OrgID: orgID, RootType: root, RootID: rootID,

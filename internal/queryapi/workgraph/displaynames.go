@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"log/slog"
 	"os"
+	"regexp"
 	"sort"
 	"strconv"
 	"strings"
@@ -32,9 +33,9 @@ type edgeEndpoint struct {
 // `except Exception: logger.warning(...)`, so a failed lookup degrades that
 // entity type to unresolved (-> displayNameFor returns nil -> client renders
 // "Unresolved") rather than failing the whole request. This port reproduces
-// that swallow-and-continue contract; it does not additionally reproduce the
-// log line (no logger is threaded into this package, matching every other
-// Wave 1-3 operation package, none of which take one either).
+// that swallow-and-continue contract, and logs the failed lookup as a warning
+// (warnDisplayNames) so that an "Unresolved" label can be told from a failed
+// read.
 func batchResolveDisplayNames(ctx context.Context, client QueryClient, orgID string, rows []edgeEndpoint) map[string]string {
 	resolved := map[string]string{}
 
@@ -75,7 +76,7 @@ func batchResolveDisplayNames(ctx context.Context, client QueryClient, orgID str
 	}
 
 	if len(prIDs) > 0 {
-		resolvePRDisplayNames(ctx, client, orgID, prIDs, resolved)
+		resolvePRDisplayNames(ctx, client, orgID, prIDs, resolved, prEdgeIDRe)
 	}
 	if len(deploymentIDs) > 0 {
 		resolveDeploymentDisplayNames(ctx, client, orgID, deploymentIDs, resolved)
@@ -86,10 +87,23 @@ func batchResolveDisplayNames(ctx context.Context, client QueryClient, orgID str
 	return resolved
 }
 
+// warnDisplayNames logs a display name lookup that failed. The lookup stays
+// best-effort (no name, never a failed request); the log line is what tells a
+// failed read from an entity that has no name.
+func warnDisplayNames(ctx context.Context, entity string, err error) {
+	slog.WarnContext(ctx, "query_api.work_graph.display_names_unavailable",
+		slog.String("entity", entity), slog.String("error", err.Error()))
+}
+
 // resolvePRDisplayNames mirrors work_graph.py:314-361's PR branch: only
 // "{repo_uuid}#pr{N}" ids are resolvable (bare-UUID pr ids never are), via
 // ONE query against git_pull_requests FINAL keyed by (repo_id, number).
-func resolvePRDisplayNames(ctx context.Context, client QueryClient, orgID string, prIDs map[string]struct{}, resolved map[string]string) {
+//
+// idForms are the id forms the caller accepts, each a pattern whose two groups
+// are the repository UUID and the number. workGraphEdges passes prEdgeIDRe
+// alone, as the reference does; NodeDisplayNames also passes the
+// "{repo_uuid}:{N}" form of the typed edge tables.
+func resolvePRDisplayNames(ctx context.Context, client QueryClient, orgID string, prIDs map[string]struct{}, resolved map[string]string, idForms ...*regexp.Regexp) {
 	type lookup struct {
 		repoUUID string
 		number   int
@@ -98,7 +112,12 @@ func resolvePRDisplayNames(ctx context.Context, client QueryClient, orgID string
 	repoUUIDSeen := map[string]struct{}{}
 	var repoUUIDs []string
 	for prID := range prIDs {
-		m := prEdgeIDRe.FindStringSubmatch(prID)
+		var m []string
+		for _, form := range idForms {
+			if m = form.FindStringSubmatch(prID); m != nil {
+				break
+			}
+		}
 		if m == nil {
 			continue
 		}
@@ -147,6 +166,7 @@ func resolvePRDisplayNames(ctx context.Context, client QueryClient, orgID string
 
 	rows, err := client.Query(ctx, query, bindings)
 	if err != nil {
+		warnDisplayNames(ctx, "pr", err)
 		return
 	}
 	defer rows.Close()
@@ -160,6 +180,7 @@ func resolvePRDisplayNames(ctx context.Context, client QueryClient, orgID string
 		var repoID, title string
 		var number uint32
 		if scanErr := rows.Scan(&repoID, &number, &title); scanErr != nil {
+			warnDisplayNames(ctx, "pr", scanErr)
 			return
 		}
 		title = strings.TrimSpace(title)
@@ -168,7 +189,8 @@ func resolvePRDisplayNames(ctx context.Context, client QueryClient, orgID string
 			titles[key{repoID, int(number)}] = title
 		}
 	}
-	if rows.Err() != nil {
+	if rowsErr := rows.Err(); rowsErr != nil {
+		warnDisplayNames(ctx, "pr", rowsErr)
 		return
 	}
 
@@ -200,6 +222,7 @@ func resolveDeploymentDisplayNames(ctx context.Context, client QueryClient, orgI
 	}
 	rows, err := client.Query(ctx, query, bindings)
 	if err != nil {
+		warnDisplayNames(ctx, "deployment", err)
 		return
 	}
 	defer rows.Close()
@@ -207,6 +230,7 @@ func resolveDeploymentDisplayNames(ctx context.Context, client QueryClient, orgI
 	for rows.Next() {
 		var depID, env string
 		if scanErr := rows.Scan(&depID, &env); scanErr != nil {
+			warnDisplayNames(ctx, "deployment", scanErr)
 			return
 		}
 		env = strings.TrimSpace(env)
@@ -217,7 +241,9 @@ func resolveDeploymentDisplayNames(ctx context.Context, client QueryClient, orgI
 			resolved[depID] = env + " deploy"
 		}
 	}
-	_ = rows.Err()
+	if rowsErr := rows.Err(); rowsErr != nil {
+		warnDisplayNames(ctx, "deployment", rowsErr)
+	}
 }
 
 // operationalOrderingContractEnv is the process variable naming the ordering
@@ -257,6 +283,7 @@ func resolveIncidentDisplayNames(ctx context.Context, client QueryClient, orgID 
 	}
 	rows, err := client.Query(ctx, query, bindings)
 	if err != nil {
+		warnDisplayNames(ctx, "incident", err)
 		return
 	}
 	defer rows.Close()
@@ -264,6 +291,7 @@ func resolveIncidentDisplayNames(ctx context.Context, client QueryClient, orgID 
 	for rows.Next() {
 		var incID, status, title string
 		if scanErr := rows.Scan(&incID, &status, &title); scanErr != nil {
+			warnDisplayNames(ctx, "incident", scanErr)
 			return
 		}
 		status = strings.TrimSpace(status)
@@ -278,5 +306,7 @@ func resolveIncidentDisplayNames(ctx context.Context, client QueryClient, orgID 
 			resolved[incID] = fmt.Sprintf("incident (%s)", label)
 		}
 	}
-	_ = rows.Err()
+	if rowsErr := rows.Err(); rowsErr != nil {
+		warnDisplayNames(ctx, "incident", rowsErr)
+	}
 }

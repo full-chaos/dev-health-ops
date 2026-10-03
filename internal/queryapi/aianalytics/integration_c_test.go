@@ -4,11 +4,15 @@ package aianalytics
 
 import (
 	"context"
+	"reflect"
 	"testing"
+	"time"
 
 	chdriver "github.com/ClickHouse/clickhouse-go/v2/lib/driver"
 
+	"github.com/full-chaos/dev-health-ops/internal/operationalordering"
 	"github.com/full-chaos/dev-health-ops/internal/queryapi/graph/model"
+	"github.com/full-chaos/dev-health-ops/internal/testsupport/opfixture"
 )
 
 // seedGroupC adds governance and workflow rows. Every org-1 row has an org-2
@@ -171,6 +175,55 @@ func TestRealClickHouse_AIGroupC(t *testing.T) {
 		}
 		if len(pr.Edges) < 3 {
 			t.Fatalf("pr root %+v", pr.Edges)
+		}
+	})
+
+	// CHAOS-8113: the node names come from the org's own catalogues, on a real
+	// store, for ids in the forms the writers store them (a pull request is
+	// "{repo_uuid}:{number}"). Its rows are seeded here, under their own root.
+	t.Run("workflow nodes carry the catalogue names of their own org", func(t *testing.T) {
+		t.Setenv(operationalordering.Env, "2")
+		prID := rA + ":41"
+		exec(t, ctx, conn, `INSERT INTO ai_workflow_issue_edges (edge_id, org_id, issue_id, run_id, provider, repo_id, confidence, source, evidence, observed_at, computed_at)
+            SELECT 'n-iss', '%s', 'NAMES-1', 'run-n', 'linear', '%s', 0.9, 's', '', now64(3), now64(3)`, org1, rA)
+		exec(t, ctx, conn, `INSERT INTO ai_workflow_artifact_edges (edge_id, org_id, run_id, artifact_type, artifact_id, provider, repo_id, confidence, source, evidence, observed_at, computed_at)
+            SELECT 'n-art', '%s', 'run-n', 'pull_request', '%s', 'github', NULL, 0.5, 's', '', now64(3), now64(3)`, org1, prID)
+		exec(t, ctx, conn, `INSERT INTO work_graph_pr_deployment_edges (edge_id, org_id, pr_id, deployment_id, provider, repo_id, confidence, source, evidence, observed_at, computed_at)
+            SELECT 'n-dep', '%s', '%s', 'dep-n', 'github', NULL, 0.7, 's', '', now64(3), now64(3)`, org1, prID)
+		exec(t, ctx, conn, `INSERT INTO work_graph_deployment_incident_edges (edge_id, org_id, deployment_id, incident_id, provider, repo_id, confidence, source, evidence, observed_at, computed_at)
+            SELECT 'n-inc', '%s', 'dep-n', 'inc-n', 'github', NULL, 0.7, 's', '', now64(3), now64(3)`, org1)
+		// The catalogues: org-2 holds the same keys under other names.
+		for _, o := range []struct{ org, title, environment, incident string }{
+			{org1, "Name me", "production", "Names incident"},
+			{org2, "Another org", "staging", "Another org incident"},
+		} {
+			exec(t, ctx, conn, `INSERT INTO git_pull_requests (repo_id, number, title, author_name, created_at, org_id, last_synced)
+                SELECT '%s', 41, '%s', 'alice', now64(3) - INTERVAL 40 DAY, '%s', now64(3)`, rA, o.title, o.org)
+			exec(t, ctx, conn, `INSERT INTO deployments (repo_id, deployment_id, environment, org_id, last_synced)
+                SELECT '%s', 'dep-n', '%s', '%s', now64(3)`, rA, o.environment, o.org)
+			opfixture.InsertIncident(ctx, t, conn, opfixture.Incident{
+				Org: o.org, ID: "inc-n", ServiceID: "s", Status: "open", Title: o.incident, Revision: 1,
+				StartedAt: time.Date(2026, 8, 1, 9, 0, 0, 0, time.UTC),
+			})
+		}
+
+		got, err := WorkflowDrilldown(ctx, client, org1, model.AIWorkflowRootTypeInputIssue, "NAMES-1", 5, 100)
+		if err != nil {
+			t.Fatal(err)
+		}
+		names := map[string]string{}
+		for _, n := range got.Nodes {
+			names[n.NodeType+" "+n.NodeID] = nameOrNil(n.DisplayName)
+		}
+		want := map[string]string{
+			"issue NAMES-1":         "NAMES-1",
+			"ai_workflow_run run-n": "<nil>",
+			"pr " + prID:            "Name me",
+			"deployment dep-n":      "production deploy",
+			"incident inc-n":        "Names incident (Open)",
+		}
+		if !reflect.DeepEqual(names, want) {
+			t.Fatalf("node names\n got  %v\n want %v", names, want)
 		}
 	})
 }

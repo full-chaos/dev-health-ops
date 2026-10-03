@@ -343,8 +343,9 @@ type ComplexityRoot struct {
 	}
 
 	AIWorkflowGraphNodeOut struct {
-		NodeID   func(childComplexity int) int
-		NodeType func(childComplexity int) int
+		DisplayName func(childComplexity int) int
+		NodeID      func(childComplexity int) int
+		NodeType    func(childComplexity int) int
 	}
 
 	AiAttributedPr struct {
@@ -3040,6 +3041,13 @@ func (e *executableSchema) Complexity(typeName, field string, childComplexity in
 		}
 
 		return e.complexity.AIWorkflowGraphEdgeOut.TargetType(childComplexity), true
+
+	case "AIWorkflowGraphNodeOut.displayName":
+		if e.complexity.AIWorkflowGraphNodeOut.DisplayName == nil {
+			break
+		}
+
+		return e.complexity.AIWorkflowGraphNodeOut.DisplayName(childComplexity), true
 
 	case "AIWorkflowGraphNodeOut.nodeId":
 		if e.complexity.AIWorkflowGraphNodeOut.NodeID == nil {
@@ -8976,6 +8984,10 @@ type AIWorkflowGraphEdgeOut {
 type AIWorkflowGraphNodeOut {
   nodeType: String!
   nodeId: String!
+  """
+  The node's display name (CHAOS-8113). By ` + "`" + `` + "`" + `nodeType` + "`" + `` + "`" + `: ` + "`" + `` + "`" + `pr` + "`" + `` + "`" + ` = the pull request's title; ` + "`" + `` + "`" + `deployment` + "`" + `` + "`" + ` = "<environment> deploy"; ` + "`" + `` + "`" + `incident` + "`" + `` + "`" + ` = "<title> (<status>)"; ` + "`" + `` + "`" + `issue` + "`" + `` + "`" + ` = the issue's own id when it is a readable key. Null = no name is known: the catalogue does not name the node, the type has no name (a review outcome, an AI workflow run), or the name read failed. It is never an id that is, or holds, a UUID or an opaque hash. Every end of an edge in ` + "`" + `` + "`" + `edges` + "`" + `` + "`" + ` that has an id has a node in ` + "`" + `` + "`" + `nodes` + "`" + `` + "`" + ` with the same type and id, so a client names an edge end by that node.
+  """
+  displayName: String
 }
 
 enum AIWorkflowRootTypeInput {
@@ -22857,6 +22869,8 @@ func (ec *executionContext) fieldContext_AIWorkflowDrilldownResult_nodes(_ conte
 				return ec.fieldContext_AIWorkflowGraphNodeOut_nodeType(ctx, field)
 			case "nodeId":
 				return ec.fieldContext_AIWorkflowGraphNodeOut_nodeId(ctx, field)
+			case "displayName":
+				return ec.fieldContext_AIWorkflowGraphNodeOut_displayName(ctx, field)
 			}
 			return nil, fmt.Errorf("no field named %q was found under type AIWorkflowGraphNodeOut", field.Name)
 		},
@@ -23574,6 +23588,47 @@ func (ec *executionContext) _AIWorkflowGraphNodeOut_nodeId(ctx context.Context, 
 }
 
 func (ec *executionContext) fieldContext_AIWorkflowGraphNodeOut_nodeId(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "AIWorkflowGraphNodeOut",
+		Field:      field,
+		IsMethod:   false,
+		IsResolver: false,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return nil, errors.New("field of type String does not have child fields")
+		},
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _AIWorkflowGraphNodeOut_displayName(ctx context.Context, field graphql.CollectedField, obj *model.AIWorkflowGraphNodeOut) (ret graphql.Marshaler) {
+	fc, err := ec.fieldContext_AIWorkflowGraphNodeOut_displayName(ctx, field)
+	if err != nil {
+		return graphql.Null
+	}
+	ctx = graphql.WithFieldContext(ctx, fc)
+	defer func() {
+		if r := recover(); r != nil {
+			ec.Error(ctx, ec.Recover(ctx, r))
+			ret = graphql.Null
+		}
+	}()
+	resTmp, err := ec.ResolverMiddleware(ctx, func(rctx context.Context) (any, error) {
+		ctx = rctx // use context from middleware stack in children
+		return obj.DisplayName, nil
+	})
+	if err != nil {
+		ec.Error(ctx, err)
+		return graphql.Null
+	}
+	if resTmp == nil {
+		return graphql.Null
+	}
+	res := resTmp.(*string)
+	fc.Result = res
+	return ec.marshalOString2ᚖstring(ctx, field.Selections, res)
+}
+
+func (ec *executionContext) fieldContext_AIWorkflowGraphNodeOut_displayName(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
 	fc = &graphql.FieldContext{
 		Object:     "AIWorkflowGraphNodeOut",
 		Field:      field,
@@ -64139,6 +64194,8 @@ func (ec *executionContext) _AIWorkflowGraphNodeOut(ctx context.Context, sel ast
 			if out.Values[i] == graphql.Null {
 				out.Invalids++
 			}
+		case "displayName":
+			out.Values[i] = ec._AIWorkflowGraphNodeOut_displayName(ctx, field, obj)
 		default:
 			panic("unknown field " + strconv.Quote(field.Name))
 		}

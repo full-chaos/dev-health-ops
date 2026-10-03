@@ -41,6 +41,71 @@ type fixtureClientC struct {
 	statements []string
 	bindings   [][]clickhouse.Binding
 	hop        int
+
+	// The node name reads of aiWorkflowDrilldown (CHAOS-8113) are Go-only: the Python resolver never made
+	// them. They are answered and recorded APART from the reads the Python calls are compared with
+	// (checkCallsC) and the statement pins. With no rows set no catalogue names a node.
+	// workflow_names_test.go sets them.
+	namePRs         [][]any // repo_id, number (uint32), title
+	nameDeployments [][]any // deployment_id, environment
+	nameIncidents   [][]any // id, status, title
+	nameErr         map[string]error
+	nameStatements  []string
+	nameBindings    [][]clickhouse.Binding
+}
+
+// workflowNameRead reports which catalogue a statement reads for node names: "pr", "deployment",
+// "incident" or "".
+func workflowNameRead(st string) string {
+	switch {
+	case strings.Contains(st, "FROM git_pull_requests FINAL") && strings.Contains(st, "{pr_numbers:Array(String)}"):
+		return "pr"
+	case strings.Contains(st, "FROM deployments FINAL") && strings.Contains(st, "{dep_ids:Array(String)}"):
+		return "deployment"
+	case strings.Contains(st, "operational_incidents") && strings.Contains(st, "{inc_ids:Array(String)}"):
+		return "incident"
+	}
+	return ""
+}
+
+func (f *fixtureClientC) nameQuery(which, st string, b []clickhouse.Binding) (clickhouse.RowScanner, error) {
+	f.nameStatements = append(f.nameStatements, st)
+	f.nameBindings = append(f.nameBindings, b)
+	if err := f.nameErr[which]; err != nil {
+		return nil, err
+	}
+	switch which {
+	case "pr":
+		return &scriptedRows{rows: f.namePRs}, nil
+	case "deployment":
+		return &scriptedRows{rows: f.nameDeployments}, nil
+	}
+	return &scriptedRows{rows: f.nameIncidents}, nil
+}
+
+// workflowGoOnlyNodeKeys are the only keys of an aiWorkflowDrilldown node the Go plane returns that the
+// Python resolver does not (CHAOS-8113). The oracle strips exactly these before it compares a node, and
+// nothing else; TestWorkflowGoOnlyNodeKeysAreExactlyDisplayName fails if the list grows.
+// workflow_names_test.go pins the field itself.
+var workflowGoOnlyNodeKeys = []string{"displayName"}
+
+func stripWorkflowGoOnlyNodeKeys(response map[string]any) {
+	nodes, _ := response["nodes"].([]any)
+	for _, n := range nodes {
+		node, ok := n.(map[string]any)
+		if !ok {
+			continue
+		}
+		for _, key := range workflowGoOnlyNodeKeys {
+			delete(node, key)
+		}
+	}
+}
+
+func TestWorkflowGoOnlyNodeKeysAreExactlyDisplayName(t *testing.T) {
+	if want := []string{"displayName"}; !reflect.DeepEqual(workflowGoOnlyNodeKeys, want) {
+		t.Fatalf("workflowGoOnlyNodeKeys = %v, want exactly %v", workflowGoOnlyNodeKeys, want)
+	}
 }
 
 func str(m map[string]any, k string) any {
@@ -51,6 +116,9 @@ func str(m map[string]any, k string) any {
 }
 
 func (f *fixtureClientC) Query(_ context.Context, st string, b []clickhouse.Binding) (clickhouse.RowScanner, error) {
+	if which := workflowNameRead(st); which != "" {
+		return f.nameQuery(which, st, b)
+	}
 	f.statements = append(f.statements, st)
 	f.bindings = append(f.bindings, b)
 	switch {
@@ -169,6 +237,9 @@ func TestGroupC_MatchPythonResolvers(t *testing.T) {
 			}
 			delete(gotMap, "startDate")
 			delete(gotMap, "endDate")
+			if c.Kind == "workflow" {
+				stripWorkflowGoOnlyNodeKeys(gotMap)
+			}
 			want := map[string]any{}
 			for k, v := range c.Expected {
 				if k != "startDate" && k != "endDate" {

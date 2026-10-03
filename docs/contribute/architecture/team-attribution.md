@@ -1130,8 +1130,12 @@ flowchart TD
 (`dev_health_team_repo_ownership_derivation_total{outcome=...}` and the `team_repo_ownership_derivation` log line, which also
 carries `facts_derived`, `facts_unchanged`, `rows_written`, `rows_retracted`): `rows_written` (at least one fact was new or
 changed), `unchanged` (the run derived facts and an open row already carries every one of them, so nothing was written: the
-steady state, and the reason `team_repo_ownership.updated_at` stays put while the inputs keep syncing), `no_signal` (the run
-derived nothing), `inputs_not_ready`, `error`. A quiet table with `unchanged` runs is healthy; with `no_signal` runs it is not.
+steady state, and the reason `team_repo_ownership.updated_at` stays put while the inputs keep syncing; rows it retracted are
+counted in `rows_retracted`), `no_signal` (the run wrote nothing and is not `unchanged`: it derived nothing at all, the
+designed-empty case, which is not a failure by itself, or it derived facts it could not write or that were not all already
+carried, so read `facts_derived` and `facts_unchanged` to tell them apart), `inputs_not_ready`, `error`. A quiet table with
+`unchanged` runs is healthy; a quiet table with `no_signal` runs needs the two counts: `facts_derived=0` is the designed-empty
+case, `facts_derived>0` with `facts_unchanged<facts_derived` is a derivation that did not write what it derived.
 
 `work_items.repo_id` (and, for the PR-inheritance branch, `work_graph_issue_pr.repo_id`) is the
 derivation's output column, not resolved by a join through `repos` — though the WRITE side does

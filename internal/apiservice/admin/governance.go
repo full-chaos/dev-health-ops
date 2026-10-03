@@ -16,7 +16,8 @@ import (
 
 // governancePrefix is the mount prefix of the governance routes: audit logs,
 // feature flags and overrides, the IP allowlist, and platform stats
-// (api/admin/routers/{audit_logs,features,ip_allowlist,platform}.py).
+// (api/admin/routers/{audit_logs,features,platform}.py; the Python ip_allowlist and
+// retention routers are deleted).
 const governancePrefix = "/api/v1/admin"
 
 func (h *handlers) governanceRoutes() []httpapi.Route {

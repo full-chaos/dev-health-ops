@@ -1334,4 +1334,3 @@ def test_an_empty_tracked_list_for_the_repo_root_fails_loudly(
     finally:
         monkeypatch.undo()
         _tracked_paths.cache_clear()
-

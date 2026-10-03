@@ -265,7 +265,7 @@ func SecretsIn(text string) []string {
 	var secrets []string
 	for _, span := range matchSpans(text) {
 		full, secret := secretOf(text[span[0]:span[1]])
-		if accepted(full, secret, lineOf(text, span[0], span[1])) {
+		if accepted(full, secret, lineOf(text, span[0], span[0]+len(full))) {
 			secrets = append(secrets, secret)
 		}
 	}
@@ -273,7 +273,8 @@ func SecretsIn(text string) []string {
 }
 
 // lineOf is the lines of text the match [start, end) touches, as the scanner takes them (from the start of the first line to the end of
-// the last).
+// the last). The match is the TRIMMED match (secretOf strips its newlines): the scanner takes the line of start + len(trimmed match), so a
+// match that ends on a newline does not reach into the next line.
 func lineOf(text string, start, end int) string {
 	from := strings.LastIndexByte(text[:start], '\n') + 1
 	to := len(text)

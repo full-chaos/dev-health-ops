@@ -78,7 +78,7 @@ func valueOf(t *testing.T, spec string) string {
 		case len(fields) == 3 && fields[0] == "u" && fields[1] == "uuid":
 			b.WriteString(derivedUUID("vector-" + fields[2]))
 		default:
-			b.WriteString(strings.ReplaceAll(part, "<plus>", "+")) // a literal part cannot hold the separator, so "+" is written <plus>
+			b.WriteString(strings.ReplaceAll(strings.ReplaceAll(part, "<plus>", "+"), "<nl>", "\n")) // a literal part cannot hold the separator, so "+" is written <plus>; a newline is written <nl>
 		}
 	}
 	return b.String()

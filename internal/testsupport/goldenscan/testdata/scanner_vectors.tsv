@@ -102,3 +102,7 @@ global-allow-true-inside	api_key	r:alnum:10:91+true+r:alnum:10:92	hit
 rule-allow-public-api-key	public_api_key	r:alnum:24:93	hit
 allow-word-fifty-one-before-the-keyword	public_token_bcdfghjlmnpqrstvwxzbcdfghjlmnpqrstvwxzb_secret	r:alnum:24:94	hit
 second-form-12-characters	api_key	ab1c<plus>de2f/g3	hit
+nl-end-then-docker-mount	note	token=+r:alnum:32:90+<nl>+RUN --mount=type=secret,id=x	hit
+nl-end-then-import	note	token=+r:alnum:32:91+<nl>+import { a } from 'b'	hit
+nl-end-then-hash-docker-mount	note	secret: +r:alnum:32:92+<nl>+# --mount=type=secret,id=x	hit
+nl-end-blank-line-then-docker-mount	note	token=+r:alnum:32:93+<nl>+<nl>+RUN --mount=type=secret,id=x	hit

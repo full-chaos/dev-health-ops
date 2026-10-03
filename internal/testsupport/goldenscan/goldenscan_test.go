@@ -250,7 +250,7 @@ func TestTheWindowedScanEqualsTheExpressionOverTheWholeText(t *testing.T) {
 		text := b.String()
 		var want []string
 		for _, loc := range generic.FindAllStringIndex(text, -1) {
-			if full, secret := secretOf(text[loc[0]:loc[1]]); accepted(full, secret, lineOf(text, loc[0], loc[1])) {
+			if full, secret := secretOf(text[loc[0]:loc[1]]); accepted(full, secret, lineOf(text, loc[0], loc[0]+len(full))) {
 				want = append(want, secret)
 			}
 		}

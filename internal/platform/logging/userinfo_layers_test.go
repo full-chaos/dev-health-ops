@@ -37,6 +37,20 @@ var userinfoForms = []struct {
 	kept       string
 }{
 	{"user and password", "cache at svc_user:Zq9Lm4Nv77@cache.internal:6379 refused", []string{"Zq9Lm4Nv77"}, "cache.internal"},
+	{"at sign in the password before an image digest", "pull svc_user:Aa1Qq@Bb2Ww@registry.internal/repo@sha256:0123456789abcdef now", []string{"Aa1Qq", "Bb2Ww"}, "@sha256:0123456789abcdef"},
+	{"after an open parenthesis", "note (svc_user:Pw1Xx2@db.internal)", []string{"Pw1Xx2"}, "note ("},
+	{"after a bracket and a quote", `["svc_user:Pw1Xx3@db.internal"]`, []string{"Pw1Xx3"}, "["},
+	{"after an open bracket", "x[svc_user:Pw1Yy5@h.internal", []string{"Pw1Yy5"}, "x["},
+	{"after a comma", "a,svc_user:Pw1Xx4@h.internal", []string{"Pw1Xx4"}, "a,"},
+	{"after a semicolon", "k;svc_user:Pw1Xx5@h.internal", []string{"Pw1Xx5"}, "k;"},
+	{"after an open brace", "{svc_user:Pw1Xx6@h.internal}", []string{"Pw1Xx6"}, "{"},
+	{"after a closing parenthesis", "x)svc_user:Pw1Xx7@h.internal", []string{"Pw1Xx7"}, "x)"},
+	{"after a closing bracket", "x]svc_user:Pw1Xx8@h.internal", []string{"Pw1Xx8"}, "x]"},
+	{"after a closing brace", "x}svc_user:Pw1Xx9@h.internal", []string{"Pw1Xx9"}, "x}"},
+	{"after a less-than sign", "x<svc_user:Pw1Yy1@h.internal", []string{"Pw1Yy1"}, "x<"},
+	{"after a greater-than sign", "x>svc_user:Pw1Yy2@h.internal", []string{"Pw1Yy2"}, "x>"},
+	{"after an at sign", "a@svc_user:Pw1Yy3@h.internal", []string{"Pw1Yy3"}, "a@"},
+	{"after a backslash", `C:\dir\svc_user:Pw1Yy4@h.internal`, []string{"Pw1Yy4"}, "h.internal"},
 	{"empty user", "cache at :Hx7Tk2Pw55@cache.internal:6379 refused", []string{"Hx7Tk2Pw55"}, "cache.internal"},
 	{"empty user, text start", ":Hx7Tk2Pw56@cache.internal refused", []string{"Hx7Tk2Pw56"}, "cache.internal"},
 	{"empty user, amqp url", "dial amqp://:Bn3Vc8Rd22@mq.internal now", []string{"Bn3Vc8Rd22"}, "mq.internal"},
@@ -417,6 +431,20 @@ func TestThePersistedSanitizersNeverExceedTheirCapAndAreIdempotent(t *testing.T)
 			}
 			if second := sanitizer.call(first); second != first {
 				t.Errorf("%s: a second call changes the text: %.120q -> %.120q", sanitizer.name, first, second)
+			}
+		}
+	}
+}
+
+// A text cut by the cap inside an encoded-colon userinfo (`svc_user%3A<secret>`, its `@`
+// lost) must not leave the start of the secret: the cut-tail rule reads `%3a` as a colon.
+func TestAUserinfoWithAnEncodedColonCutByTheCapLeavesNoPartOfItsSecret(t *testing.T) {
+	for pad := 3960; pad < 3990; pad++ {
+		text := strings.Repeat("a", pad) + " svc_user%3AKk3Pp4Qq5Zz@cache.internal"
+		for _, layer := range userinfoLayers[3:] {
+			got := layer.redact(text)
+			if strings.Contains(got, "Kk3") || strings.Contains(got, "Pp4Qq5Zz") {
+				t.Fatalf("%s, pad %d: a part of the secret survived the cut: %.80s", layer.name, pad, got[len(got)-80:])
 			}
 		}
 	}

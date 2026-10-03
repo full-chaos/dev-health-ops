@@ -89,6 +89,10 @@ var (
 	KeyBudgetLimitMedium            = Key{"budget_limit_medium"}
 	KeyBudgetLimitHeavy             = Key{"budget_limit_heavy"}
 	KeyAdmissionClamp               = Key{"admission_clamp"}
+	KeyAdmissionCapLightSource      = Key{"admission_cap_light_source"}
+	KeyAdmissionCapMediumSource     = Key{"admission_cap_medium_source"}
+	KeyAdmissionCapHeavySource      = Key{"admission_cap_heavy_source"}
+	KeyAdmissionClampSource         = Key{"admission_clamp_source"}
 	KeyGuardActiveCount             = Key{"guard.active_count"}
 	KeyGuardReclaimedStale          = Key{"guard.reclaimed_stale"}
 	KeyGuardCappedNew               = Key{"guard.capped_new"}

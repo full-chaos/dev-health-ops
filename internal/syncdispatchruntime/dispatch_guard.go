@@ -111,6 +111,14 @@ func syncUnitConcurrencyPerBucket() int {
 	return envPositiveInt("SYNC_UNIT_CONCURRENCY_PER_BUCKET", 8)
 }
 
+// syncUnitConcurrencyPerBucketSource names where syncUnitConcurrencyPerBucket's value comes from (CHAOS-8201).
+func syncUnitConcurrencyPerBucketSource() string {
+	if _, fromEnv := envPositiveIntFrom("SYNC_UNIT_CONCURRENCY_PER_BUCKET", 8); fromEnv {
+		return clampSourceEnv
+	}
+	return clampSourceDefault
+}
+
 // EffectiveAdmissionCaps reports the admission cap the dispatch guard applies
 // per cost class right now (the class's budget limit, lowered by
 // SYNC_UNIT_CONCURRENCY_PER_BUCKET) and that clamp itself, so a process can log
@@ -124,6 +132,22 @@ func EffectiveAdmissionCaps() (clamp int, caps map[string]int) {
 	return syncUnitConcurrencyPerBucket(), caps
 }
 
+// Clamp sources: "env" = SYNC_UNIT_CONCURRENCY_PER_BUCKET is set to a positive integer and that is the clamp; "default"
+// = it is unset, not an integer or below 1, and the built-in default applies (CHAOS-8201).
+const (
+	clampSourceEnv     = "env"
+	clampSourceDefault = "default"
+)
+
+// EffectiveAdmissionCapSources reports where the clamp and each class's cap come from, for the start line.
+func EffectiveAdmissionCapSources() (clampSource string, capSources map[string]string) {
+	capSources = make(map[string]string, 3)
+	for _, class := range []string{"light", "medium", "heavy"} {
+		_, capSources[class] = concurrencyCapAndSourceForCostClass(class)
+	}
+	return syncUnitConcurrencyPerBucketSource(), capSources
+}
+
 // logAdmissionCaps writes ONE Info line, when the service that runs the guard
 // is constructed, with the cap the guard applies per cost class, the clamp it
 // read from THIS process's environment and the worker budget limit of the same
@@ -132,6 +156,7 @@ func EffectiveAdmissionCaps() (clamp int, caps map[string]int) {
 // data.
 func logAdmissionCaps(logger *synclog.Logger) {
 	clamp, caps := EffectiveAdmissionCaps()
+	clampSource, capSources := EffectiveAdmissionCapSources()
 	budget := func(class string) int {
 		limit, _ := providerfoundation.CostClassBudgetLimit(class)
 		return limit
@@ -144,6 +169,10 @@ func logAdmissionCaps(logger *synclog.Logger) {
 		synclog.Count(synclog.KeyBudgetLimitMedium, budget("medium")),
 		synclog.Count(synclog.KeyBudgetLimitHeavy, budget("heavy")),
 		synclog.Count(synclog.KeyAdmissionClamp, clamp),
+		synclog.Text(synclog.KeyAdmissionCapLightSource, synclog.ParseLabel(capSources["light"])),
+		synclog.Text(synclog.KeyAdmissionCapMediumSource, synclog.ParseLabel(capSources["medium"])),
+		synclog.Text(synclog.KeyAdmissionCapHeavySource, synclog.ParseLabel(capSources["heavy"])),
+		synclog.Text(synclog.KeyAdmissionClampSource, synclog.ParseLabel(clampSource)),
 	)
 }
 
@@ -157,11 +186,26 @@ func logAdmissionCaps(logger *synclog.Logger) {
 // all its requests), so a class outside the table (not one a provider unit
 // uses) keeps the clamp as before.
 func concurrencyCapForCostClass(costClass string) int {
+	capValue, _ := concurrencyCapAndSourceForCostClass(costClass)
+	return capValue
+}
+
+// Admission cap sources (CHAOS-8201): where a class's cap comes from. "table" = the class's budget limit (the clamp does
+// not lower it, including the case where the two are equal); "clamp" = SYNC_UNIT_CONCURRENCY_PER_BUCKET is what sets it
+// (it is below the class's limit, or the class is outside the table).
+const (
+	capSourceTable = "table"
+	capSourceClamp = "clamp"
+)
+
+// concurrencyCapAndSourceForCostClass is the ONE place the cap is derived, so the number the guard enforces and the
+// source the start line reports cannot drift apart.
+func concurrencyCapAndSourceForCostClass(costClass string) (int, string) {
 	clamp := syncUnitConcurrencyPerBucket()
-	if limit, ok := providerfoundation.CostClassBudgetLimit(costClass); ok && limit < clamp {
-		return limit
+	if limit, ok := providerfoundation.CostClassBudgetLimit(costClass); ok && limit <= clamp {
+		return limit, capSourceTable
 	}
-	return clamp
+	return clamp, capSourceClamp
 }
 
 // staleDispatchSeconds mirrors sync_units._stale_dispatch_seconds() /

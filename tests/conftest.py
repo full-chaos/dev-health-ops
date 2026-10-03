@@ -84,7 +84,7 @@ def _helm_web_backend_url_shim(tmp_path_factory):
         "#!/usr/bin/env bash\n"
         'if [ "${HELM_SHIM_OFF:-}" = 1 ] || [ "${1:-}" != template ]; then '
         f'exec "{real}" "$@"; fi\n'
-        f'shift\nexec "{real}" template --set "web.env.BACKEND_URL={HELM_TEST_WEB_BACKEND_URL}" --set web.backendFromRelease=false "$@"\n',
+        f'shift\nexec "{real}" template --set "web.env.BACKEND_URL={HELM_TEST_WEB_BACKEND_URL}" "$@"\n',
         encoding="utf-8",
     )
     shim.chmod(0o755)

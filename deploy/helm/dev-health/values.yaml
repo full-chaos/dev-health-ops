@@ -129,12 +129,12 @@ queryApi:
   #    because the umbrella deploy chart renders its own internal Service and NetworkPolicy
   #    (queryApiInternal) with the same purpose: enable exactly one of the two. When on, this
   #    chart adds the env var, a named `internal` containerPort, a ClusterIP Service
-  #    `<fullname>-query-api-internal`, and a NetworkPolicy admitting this release's api pods (plus `internal.allowedFrom`) only.
+  #    `<fullname>-query-api-internal`, and a NetworkPolicy admitting `internal.allowedFrom` only (nobody while it is empty).
   internal:
     enabled: false
     port: 8091
-    # -- Extra pod selectors (each `{matchLabels: {...}}`) allowed to reach the internal port,
-    #    beside this release's api pods. The internal listener trusts X-DH-Internal-* identity
+    # -- Pod selectors (each `{matchLabels: {...}}`) allowed to reach the internal port (empty
+    #    admits nobody; CHAOS-7520: there is no release-local peer). The internal listener trusts X-DH-Internal-* identity
     #    headers from any peer that can connect, so add only the pods that must call it, and
     #    only while they must. The tools pod that runs `dho goapi prove-write` is NOT admitted
     #    by default; to admit it for a proof run:

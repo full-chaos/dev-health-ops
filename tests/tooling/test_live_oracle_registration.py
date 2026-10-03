@@ -78,6 +78,7 @@ def unregistered(root: Path, script: str) -> list[str]:
 EXPECTED_LIVE_ORACLES: frozenset[str] = frozenset(
     {
         "TestBackfillDiagnosticsVenueOracleMatchesLivePython",
+        "TestAwaitFamiliesMatchThePythonProductionSource",
         "TestBackfillRequestMatchesTheLiveFastAPIRoute",
         "TestClickHouseStringDecodeGoldenMatchesLivePython",
         "TestCoverageModelVenueOracleMatchesLivePydantic",

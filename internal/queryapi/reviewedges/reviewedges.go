@@ -75,6 +75,25 @@ func clampLimit(limit int) int {
 	return limit
 }
 
+// ExcludedIdentitiesFragment is the read-time exclusion of provider bots and self pairs
+// (CHAOS-7787, RN-5, ruling 63), ANDed into the inner query's WHERE right after the window
+// (before the repo and team filters, the GROUP BY, the LIMIT and the count), so the cut and
+// totalCount only ever see the kept rows. Reviewer and author are GROUP BY keys, so filtering the
+// rows is the same as filtering the deduplicated pairs.
+//
+//   - A bot is a login ending in "[bot]" (GitHub reserves the bracketed login for App actors; the
+//     same test teamattribution uses). GitHub's `type: Bot` is NOT used: it is not stored.
+//   - A self pair is reviewer = author, compared lower-cased and trimmed. Reviewer is the login or
+//     display name and author is the email when there is one, so only the same-string case is
+//     caught.
+//
+// The golden test (which pins this statement to the python-recorded text) strips exactly this
+// fragment and nothing else.
+const ExcludedIdentitiesFragment = `
+              AND NOT endsWith(lowerUTF8(trimBoth(reviewer)), '[bot]')
+              AND NOT endsWith(lowerUTF8(trimBoth(author)), '[bot]')
+              AND lowerUTF8(trimBoth(reviewer)) != lowerUTF8(trimBoth(author))`
+
 // Resolve ports resolve_review_edges/_fetch_review_edges. orgID must
 // already be the AUTHORIZED org (the caller's verified envelope claim,
 // not necessarily the client-supplied `input.orgId` GraphQL argument --
@@ -152,7 +171,7 @@ func ResolveScoped(ctx context.Context, client QueryClient, orgID string, sinceD
             FROM review_edges_daily
             WHERE org_id = {org_id:String}
               AND day >= {since_date:Date}
-              AND day <= {until_date:Date}` + repoFilter + `
+              AND day <= {until_date:Date}` + ExcludedIdentitiesFragment + repoFilter + `
             GROUP BY repo_id, reviewer, author, day`
 
 	query := `

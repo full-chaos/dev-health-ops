@@ -175,6 +175,7 @@ jobs:
           test "$("${RUNNER_TEMP}/gitleaks/gitleaks" version)" = "${GITLEAKS_VERSION}"
 
       - name: Run Gitleaks
+        id: scan
         env:
           EVENT_NAME: ${{ github.event_name }}
           PR_BASE_SHA: ${{ github.event.pull_request.base.sha }}
@@ -219,12 +220,26 @@ jobs:
             fi
           fi
           echo "gitleaks ${args[*]}"
+          # The binary's own exit code is the step's result and is kept as an output for the upload below: 0 = nothing found,
+          # 2 = a finding (--exit-code=2), anything else = the scan itself failed (the SARIF it leaves then holds no result).
+          # The guards above exit before the binary runs and write no output.
+          set +e
           "${RUNNER_TEMP}/gitleaks/gitleaks" "${args[@]}"
+          rc=$?
+          set -e
+          echo "rc=${rc}" >> "${GITHUB_OUTPUT}"
+          exit "${rc}"
 
-      # CHAOS-8291: a finding becomes a Code Scanning alert. `if: always()` so a failed scan step still uploads what it found.
+      # CHAOS-8291: a finding becomes a Code Scanning alert. CHAOS-8299: an upload replaces the result set of its ref and category, so
+      # an alert that is not in the next upload of the same category is marked fixed (measured on a throwaway ref: a clean upload, and an
+      # upload holding a different result, both closed the earlier alert; an upload under another category left it open). A secret
+      # that stays in history is not fixed by a later push, so: a push (it reads only its own commits) and a merge_group run upload
+      # only a finding (exit 2), each under its own category (one per commit), and are never replaced by the next one; a
+      # pull_request run (one cumulative range per PR ref) uploads on a finding or on a clean scan (exit 0, so a fixed finding closes its
+      # alert), always under `gitleaks`. A scan that failed for another reason (exit 1: the SARIF holds no result) uploads nothing.
       - name: Upload Gitleaks SARIF to code scanning
-        if: always() && hashFiles('results.sarif') != ''
+        if: always() && hashFiles('results.sarif') != '' && (steps.scan.outputs.rc == '2' || (steps.scan.outputs.rc == '0' && github.event_name == 'pull_request'))
         uses: github/codeql-action/upload-sarif@b96794f015dfd88f77b49b1c93e0fa7110f94c63 # v4.38.0
         with:
           sarif_file: results.sarif
-          category: gitleaks
+          category: ${{ github.event_name == 'pull_request' && 'gitleaks' || format('gitleaks-{0}-{1}', github.event_name, github.sha) }}

@@ -21,7 +21,7 @@
     {
       "name": "budget estimate oracle",
       "method": "PYTHON",
-      "path": "program sha256 9b5e2dc178d7f35d6d3f320f8784ca8c039667c1d941189a51e9ed220e1bc29f env sha256 969169a1702b285f3a9e4b602d19052b0d6a3c6b2a44dd7425bef0f696436295",
+      "path": "program sha256 39273914eefd59ed286d8b8d9ccee98bf3ec24ed3df725dd2a9f98fe58239fc7 env sha256 969169a1702b285f3a9e4b602d19052b0d6a3c6b2a44dd7425bef0f696436295",
       "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
       "request_headers_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
       "status": 0,

@@ -1,7 +1,9 @@
 package mail
 
 import (
+	"crypto/rand"
 	"errors"
+	"fmt"
 	"regexp"
 	"strings"
 	"testing"
@@ -105,5 +107,46 @@ func TestEnvelopeAddress(t *testing.T) {
 		if got := envelopeAddress(test.in); got != test.want {
 			t.Errorf("envelopeAddress(%q) = %q, want %q", test.in, got, test.want)
 		}
+	}
+}
+
+// scriptedReader answers rand.Int's draws from a fixed list of 8-byte values
+// and fails after them, so a loop that never ends fails the test instead of
+// hanging it.
+type scriptedReader struct {
+	draws [][8]byte
+	next  int
+}
+
+func (r *scriptedReader) Read(p []byte) (int, error) {
+	if r.next >= len(r.draws) {
+		return 0, errors.New("scripted reader exhausted")
+	}
+	n := copy(p, r.draws[r.next][:])
+	r.next++
+	return n, nil
+}
+
+// TestPythonBoundaryDrawsAgainWhenTheTextHoldsTheBoundary pins the collision
+// loop of email.generator._make_boundary: a boundary the message text already
+// holds is never returned; another draw is made. It is bounded: the scripted
+// source holds three draws and then fails.
+func TestPythonBoundaryDrawsAgainWhenTheTextHoldsTheBoundary(t *testing.T) {
+	original := rand.Reader
+	defer func() { rand.Reader = original }()
+	draw := func(value byte) [8]byte { return [8]byte{7: value} }
+	first := fmt.Sprintf("===============%019d==", 1)
+	second := fmt.Sprintf("===============%019d==", 2)
+	rand.Reader = &scriptedReader{draws: [][8]byte{draw(1), draw(2), draw(3)}}
+	got, err := pythonBoundary("body " + first + " body")
+	if err != nil {
+		t.Fatalf("pythonBoundary: %v", err)
+	}
+	if got != second {
+		t.Fatalf("pythonBoundary = %q, want the second draw %q (the first is in the text)", got, second)
+	}
+	rand.Reader = &scriptedReader{draws: [][8]byte{draw(1)}}
+	if got, err := pythonBoundary(""); err != nil || got != first {
+		t.Fatalf("pythonBoundary with no collision = (%q, %v), want the first draw %q", got, err, first)
 	}
 }

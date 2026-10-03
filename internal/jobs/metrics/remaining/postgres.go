@@ -838,7 +838,24 @@ WHERE id = $2::uuid AND run_id = $3::uuid AND status = 'running'
 // ClaimPartition errored) 'failed' + exhausted and terminalizes the run when nothing else can progress. Only a
 // non-terminal partition of a running run is touched; a live lease is left alone (its holder owns the outcome).
 func (store *PostgresStore) ExhaustPartition(ctx context.Context, partitionID string) error {
-	if !store.valid() || !validUUID(partitionID) {
+	return store.exhaustPartition(ctx, partitionID, "")
+}
+
+// ExhaustClaimedPartition is ExhaustPartition for the job that holds the claim: its terminal release failed (a
+// transient database error, or the lease ran out), so it exhausts the partition under its OWN claim token whether or
+// not that lease is still live. A partition another claimant holds (a different token under a live lease) is left
+// alone (CHAOS-8177).
+func (store *PostgresStore) ExhaustClaimedPartition(ctx context.Context, claim Claim) error {
+	if !store.validClaim(claim) {
+		return ErrUnavailable
+	}
+	return store.exhaustPartition(ctx, claim.Partition.ID, claim.Token)
+}
+
+// exhaustPartition is the shared body: claimToken "" = no claim of the caller (only pending, failed or expired-lease
+// partitions are taken); a token also takes a running partition whose claim_token is that token.
+func (store *PostgresStore) exhaustPartition(ctx context.Context, partitionID, claimToken string) error {
+	if !store.valid() || !validUUID(partitionID) || (claimToken != "" && !validUUID(claimToken)) {
 		return ErrUnavailable
 	}
 	now := store.now().UTC()
@@ -857,12 +874,14 @@ UPDATE public.remaining_metric_partitions AS partition
 SET status = 'failed', claim_token = NULL, lease_expires_at = NULL, completed_at = $1, updated_at = $1
 WHERE partition.id = $2::uuid
   AND (partition.status IN ('pending', 'failed')
-       OR (partition.status = 'running' AND partition.lease_expires_at <= $1))
+       OR (partition.status = 'running'
+           AND (partition.lease_expires_at <= $1
+                OR ($3::text <> '' AND partition.claim_token = NULLIF($3::text, '')::uuid))))
   AND EXISTS (
       SELECT 1 FROM public.remaining_metric_runs AS run
       WHERE run.id = partition.run_id AND run.status = 'running'
   )
-RETURNING partition.run_id::text`, now, partitionID).Scan(&runID)
+RETURNING partition.run_id::text`, now, partitionID, claimToken).Scan(&runID)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return nil
 	}

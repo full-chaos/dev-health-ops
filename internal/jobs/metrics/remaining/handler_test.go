@@ -318,6 +318,7 @@ type handlerStore struct {
 	// call the terminal one).
 	terminalReleases   int
 	exhausted          int
+	exhaustedClaims    int
 	exhaustErr         error
 	terminalReleaseErr error
 	completions        int
@@ -355,6 +356,11 @@ func (store *handlerStore) ReleasePartition(context.Context, Claim) error {
 	store.releases++
 	return nil
 }
+func (store *handlerStore) ExhaustClaimedPartition(context.Context, Claim) error {
+	store.exhaustedClaims++
+	return store.exhaustErr
+}
+
 func (store *handlerStore) ExhaustPartition(context.Context, string) error {
 	store.exhausted++
 	return store.exhaustErr
@@ -560,8 +566,8 @@ func TestPartitionHandlerFallsBackToExhaustWhenTheTerminalReleaseFails(t *testin
 	executor := &handlerExecutor{computeErr: errors.New("clickhouse: connection reset")}
 	handler, _ := NewPartitionHandler[jobruntime.RemainingCapacityArgs](store, executor, "capacity")
 	_ = handler.Work(context.Background(), attemptedCapacityExecution(3, 3))
-	if store.terminalReleases != 1 || store.exhausted != 1 {
-		t.Fatalf("terminalReleases=%d exhausted=%d, want 1 and 1 (fallback after a failed terminal release)", store.terminalReleases, store.exhausted)
+	if store.terminalReleases != 1 || store.exhaustedClaims != 1 {
+		t.Fatalf("terminalReleases=%d exhaustedClaims=%d, want 1 and 1 (fallback after a failed terminal release)", store.terminalReleases, store.exhaustedClaims)
 	}
 	logged := buffer.String()
 	for _, want := range []string{"terminal release failed; exhausting the partition", "partition_id", "error_class=postgres", "error_code=57014"} {
@@ -579,8 +585,8 @@ func TestPartitionHandlerFallsBackToExhaustWhenTheTerminalReleaseFails(t *testin
 	}
 	handlerOK, _ := NewPartitionHandler[jobruntime.RemainingCapacityArgs](ok, executor, "capacity")
 	_ = handlerOK.Work(context.Background(), attemptedCapacityExecution(3, 3))
-	if ok.terminalReleases != 1 || ok.exhausted != 0 {
-		t.Fatalf("terminalReleases=%d exhausted=%d, want 1 and 0 when the release succeeds", ok.terminalReleases, ok.exhausted)
+	if ok.terminalReleases != 1 || ok.exhaustedClaims != 0 {
+		t.Fatalf("terminalReleases=%d exhaustedClaims=%d, want 1 and 0 when the release succeeds", ok.terminalReleases, ok.exhaustedClaims)
 	}
 }
 

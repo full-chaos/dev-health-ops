@@ -86,7 +86,7 @@ func TestHelpIsNotARefusal(t *testing.T) {
 // did not attempt, the partial cause and the exit cause on stdout.
 func TestStdoutCarriesTheAccountingWithoutReport(t *testing.T) {
 	dir := t.TempDir()
-	f := flags{queryAPIURL: "http://127.0.0.1:1", pythonAPIURL: "http://127.0.0.1:1", queryAPISrc: dir + "/no-such-query-api-source",
+	f := flags{queryAPIURL: "http://127.0.0.1:1", pythonAPIURL: "http://127.0.0.1:1",
 		org: "org-1", recordedBy: "r", reviewEvidence: "e", artifactDir: dir + "/artifacts", dryRun: true,
 		timeout: time.Second, runDeadline: time.Minute}
 	var err error

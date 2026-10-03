@@ -6,6 +6,7 @@ import (
 	"context"
 	"crypto/ed25519"
 	"net/http"
+	"net/http/httptest"
 	"os"
 	"regexp"
 	"sort"
@@ -42,7 +43,7 @@ func TestBuildWithEverythingConfiguredMountsEveryDeclaredRoute(t *testing.T) {
 		defer closeCancel()
 		_ = pg.Close(closeCtx)
 	})
-	pub, _, err := ed25519.GenerateKey(nil)
+	pub, priv, err := ed25519.GenerateKey(nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -101,6 +102,33 @@ func TestBuildWithEverythingConfiguredMountsEveryDeclaredRoute(t *testing.T) {
 	sort.Strings(unmounted)
 	if len(unmounted) > 0 {
 		t.Fatalf("with every dependency and every switch present these declared routes answer 404 (unmounted): %v", unmounted)
+	}
+	// CHAOS-8307: the REAL plane mounts exactly the table's (method, pattern) pairs. An
+	// authenticated request is refused with the method refusal (405) for every method a
+	// pattern does not declare and is not for every method it declares. This is the row
+	// set the unit test cannot build (the two explain builders open a write ClickHouse
+	// connection at construction), so it covers all 24 patterns on the real plane.
+	bearer := signTestEnvelope(t, priv, "org-1")
+	declared := map[string]map[string]bool{}
+	for _, route := range RESTRoutes() {
+		if declared[route.Pattern] == nil {
+			declared[route.Pattern] = map[string]bool{}
+		}
+		declared[route.Pattern][route.Method] = true
+	}
+	for pattern, methods := range declared {
+		for _, method := range allMethods {
+			request := httptest.NewRequest(method, pathParameter.ReplaceAllString(pattern, "x"), nil)
+			request.Header.Set("Authorization", "Bearer "+bearer)
+			recorder := httptest.NewRecorder()
+			plane.Handler.ServeHTTP(recorder, request)
+			switch refused := recorder.Code == http.StatusMethodNotAllowed; {
+			case methods[method] && (refused || recorder.Code == http.StatusNotFound):
+				t.Errorf("%s %s: declared in the table, the real plane answers %d", method, pattern, recorder.Code)
+			case !methods[method] && !refused:
+				t.Errorf("%s %s: not declared in the table, the real plane answers %d (not 405)", method, pattern, recorder.Code)
+			}
+		}
 	}
 	// The write-proof route is on the internal route set only: absent (404) from the public
 	// handler, answered (any status but 404 for an empty request) by the internal one.

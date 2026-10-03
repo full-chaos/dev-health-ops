@@ -273,10 +273,14 @@ any of them unset `/health` answers 503 and names which one is
 delivery uses the Stripe CLI's own forwarder beside the stack: `stripe listen
 --forward-to http://localhost:8010/api/v1/billing/webhooks/stripe` (run from a
 host shell, not part of this repo). The api listener itself is not published
-(the Python `api` service owns host port 8000). `go-api` connects as its own
-least-privilege login, `devhealth_api`, which `go-river-provision` creates and
-`go-river-migrate` grants; `API_DATABASE_ROLE` / `API_DATABASE_PASSWORD` change
-it.
+(the `router` service owns host port 8000 and sends requests to it). `go-api`
+connects to PostgreSQL as its own least-privilege login, `devhealth_api`, which
+`go-river-provision` creates and `go-river-migrate` grants; `API_DATABASE_ROLE`
+/ `API_DATABASE_PASSWORD` change it. It connects to ClickHouse as its own
+login, `dho_api_ch`, which the `clickhouse` service declares from the mounted
+file `docker/clickhouse-users.d/dho_api_ch.xml` (generated from the api's
+privilege manifest; do not edit it); `API_CLICKHOUSE_PASSWORD` sets its
+password for both services.
 
 ## Known divergences: local vs prod worker topology
 

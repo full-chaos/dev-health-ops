@@ -466,6 +466,13 @@ services:
       CLICKHOUSE_USER: ${CLICKHOUSE_USER:-ch}
       CLICKHOUSE_PASSWORD: ${CLICKHOUSE_PASSWORD:-ch}
       CLICKHOUSE_DB: ${CLICKHOUSE_DB:-default}
+      # The password of the Go api's own login `dho_api_ch` (the users.d file
+      # mounted below). ClickHouse reads it from THIS variable (`from_env` in
+      # the file) and go-api logs in with the same value
+      # (DEV_HEALTH_CH_API_PASSWORD there): one operator variable,
+      # API_CLICKHOUSE_PASSWORD, with the local-only default this file uses for
+      # every store login (the name of the login).
+      DHO_API_CH_PASSWORD: ${API_CLICKHOUSE_PASSWORD:-dho_api_ch}
     ports:
       - "8123:8123"
       - "9000:9000"
@@ -475,6 +482,16 @@ services:
         hard: 262144
     volumes:
       - clickhouse_data:/var/lib/clickhouse
+      # The Go api's own login (CHAOS-8361), declared the way prod and bigboy
+      # declare it: a users.d file with exactly the grants of the api's
+      # privilege manifest and no other. go-api's /readyz refuses a login
+      # whose grants are not exactly that manifest, so the general user above
+      # cannot serve it. The file is GENERATED from the manifest and a Go test
+      # holds it equal (internal/storage/clickhouse); it holds no password and
+      # no hash. Its grants name the database `default`: a stack that sets
+      # CLICKHOUSE_DB to another name must mount its own file, or go-api is
+      # never ready.
+      - ./docker/clickhouse-users.d/dho_api_ch.xml:/etc/clickhouse-server/users.d/dho_api_ch.xml:ro
     healthcheck:
       test: [ "CMD", "wget", "--spider", "-q", "http://localhost:8123/ping" ]
       interval: 10s
@@ -1078,6 +1095,15 @@ services:
       DEV_HEALTH_PG_API_PASSWORD: ${API_DATABASE_PASSWORD:-devhealth_api}
       DEV_HEALTH_PG_DB: ${POSTGRES_DB:-postgres}
       API_DATABASE_ROLE: ${API_DATABASE_ROLE:-devhealth_api}
+      # The api's own ClickHouse login (the users.d file of the `clickhouse`
+      # service), component form, native port. With it the team and identity
+      # admin routes are mounted and /health reads ClickHouse; /readyz then
+      # also requires that the login holds exactly the api's manifest.
+      DEV_HEALTH_CH_API_HOST: clickhouse
+      DEV_HEALTH_CH_API_PORT: "9000"
+      DEV_HEALTH_CH_API_USER: dho_api_ch
+      DEV_HEALTH_CH_API_PASSWORD: ${API_CLICKHOUSE_PASSWORD:-dho_api_ch}
+      DEV_HEALTH_CH_API_DB: ${CLICKHOUSE_DB:-default}
       VALKEY_URI: redis://valkey:6379/1
       # The access-token key, and the key that decrypts the stored provider
       # credentials (the same value the workers read: without it the
@@ -1129,9 +1155,10 @@ services:
       - default
       - planes
     # The same exec-form probe as go-reconciler and query-api: /readyz on
-    # --http-addr=:8080 (the listener, the api login's privilege manifest and
-    # Valkey). The router starts only when this probe passes. The image has no
-    # shell and no curl.
+    # --http-addr=:8080 (the listeners, the Postgres login's privilege
+    # manifest, the ClickHouse login's privilege manifest and Valkey). The
+    # router starts only when this probe passes. The image has no shell and no
+    # curl.
     healthcheck:
       test: ["CMD", "/usr/local/bin/dho", "reconciler", "healthcheck"]
       interval: 15s
@@ -1149,6 +1176,8 @@ services:
       go-river-migrate:
         condition: service_completed_successfully
       postgres:
+        condition: service_healthy
+      clickhouse:
         condition: service_healthy
       valkey:
         condition: service_started

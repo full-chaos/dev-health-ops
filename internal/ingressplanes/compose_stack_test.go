@@ -19,7 +19,8 @@ import (
 // request to go-api or query-api. These tests read compose.yml and hold the
 // parts of that shape a routing test of the file alone cannot see: which
 // service has the port, what the router mounts, what a plane publishes, who
-// mounts the envelope key, and what each plane waits for.
+// mounts the envelope key, what each plane waits for, and how go-api gets its
+// own ClickHouse login.
 //
 // composeStackFindings is the check. TestComposeStackRunsTheRouterAndNoPythonAPI
 // runs it on the checked-in file. TestComposeStackCheckSeesEachDefect plants
@@ -36,6 +37,18 @@ const (
 	keysInitService    = "envelope-keys-init"
 	keysVolume         = "envelope_keys"
 	routerConfigTarget = "/etc/nginx/nginx.conf"
+)
+
+// The api's own ClickHouse login: a users.d file that ClickHouse reads, with
+// the password in a variable of the `clickhouse` service. They are written
+// here, not taken from the file's generator (internal/storage/clickhouse).
+const (
+	clickHouseService    = "clickhouse"
+	apiUsersFileSource   = "./docker/clickhouse-users.d/dho_api_ch.xml"
+	apiUsersFileTarget   = "/etc/clickhouse-server/users.d/dho_api_ch.xml"
+	apiUsersPasswordEnv  = "DHO_API_CH_PASSWORD"
+	apiClickHouseUser    = "dho_api_ch"
+	apiClickHouseUserKey = "DEV_HEALTH_CH_API_USER"
 )
 
 // planeHealthcheck is the one probe the planes have: the distroless images
@@ -426,6 +439,45 @@ func composeStackFindings(text []byte) ([]string, error) {
 		found("trusted proxy: go-api has TRUSTED_PROXIES %q, want the router's one address %q and nothing wider", trusted, routerAddress)
 	}
 
+	// go-api logs in to ClickHouse as its own user, which ClickHouse declares
+	// from the mounted users.d file, with the password both read from one
+	// operator variable.
+	clickHouse := stack.Services[clickHouseService]
+	clickHouseMounts, err := clickHouse.mounts()
+	if err != nil {
+		return nil, fmt.Errorf("%s: %w", clickHouseService, err)
+	}
+	usersFileMounted := false
+	for _, mount := range clickHouseMounts {
+		if mount.target != apiUsersFileTarget {
+			continue
+		}
+		usersFileMounted = true
+		if mount.source != apiUsersFileSource {
+			found("api login: clickhouse mounts %s at %s, want the checked-in generated file %s", mount.source, apiUsersFileTarget, apiUsersFileSource)
+		}
+		if !mount.readOnly {
+			found("api login: the users file is mounted read-write")
+		}
+	}
+	if !usersFileMounted {
+		found("api login: clickhouse does not mount the users file at %s, so the login %s does not exist", apiUsersFileTarget, apiClickHouseUser)
+	}
+	goAPIEnvironment := stack.Services[goAPIHost].Environment
+	if goAPIEnvironment["DEV_HEALTH_CH_API_HOST"] != clickHouseService || goAPIEnvironment[apiClickHouseUserKey] != apiClickHouseUser || goAPIEnvironment["DEV_HEALTH_CH_API_DB"] == "" {
+		found("api login: go-api has DEV_HEALTH_CH_API_HOST %q, %s %q, DEV_HEALTH_CH_API_DB %q, want host %s, user %s and a database: without them the team and identity admin routes are not mounted",
+			goAPIEnvironment["DEV_HEALTH_CH_API_HOST"], apiClickHouseUserKey, goAPIEnvironment[apiClickHouseUserKey], goAPIEnvironment["DEV_HEALTH_CH_API_DB"], clickHouseService, apiClickHouseUser)
+	}
+	if _, both := goAPIEnvironment["API_CLICKHOUSE_URI"]; both {
+		found("api login: go-api has API_CLICKHOUSE_URI beside the component names; one form only")
+	}
+	if password := clickHouse.Environment[apiUsersPasswordEnv]; password == "" || goAPIEnvironment["DEV_HEALTH_CH_API_PASSWORD"] != password {
+		found("api login: clickhouse reads the password from %s = %q and go-api logs in with %q; both must be the same operator variable", apiUsersPasswordEnv, password, goAPIEnvironment["DEV_HEALTH_CH_API_PASSWORD"])
+	}
+	if stack.Services[goAPIHost].DependsOn[clickHouseService].Condition != "service_healthy" {
+		found("api login: go-api waits for clickhouse with %q, want service_healthy: its readiness reads the login", stack.Services[goAPIHost].DependsOn[clickHouseService].Condition)
+	}
+
 	// The migration that grants is told the names the planes log in as.
 	migrate := stack.Services["go-river-migrate"].Environment
 	for plane, key := range map[string]string{goAPIHost: "API_DATABASE_ROLE", queryAPIHost: "QUERY_API_DATABASE_ROLE"} {
@@ -474,6 +526,17 @@ func TestComposeStackRunsTheRouterAndNoPythonAPI(t *testing.T) {
 	}
 	for _, finding := range findings {
 		t.Errorf("%s: %s", composeFilePath, finding)
+	}
+	// The mounted users file is the one that declares the user go-api logs in
+	// as, and it reads the password from the variable compose gives ClickHouse.
+	usersFile, err := os.ReadFile(repoFile(t, strings.TrimPrefix(apiUsersFileSource, "./")))
+	if err != nil {
+		t.Fatalf("read the users file compose mounts: %v", err)
+	}
+	for _, want := range []string{"<" + apiClickHouseUser + ">", `<password from_env="` + apiUsersPasswordEnv + `"/>`} {
+		if !strings.Contains(string(usersFile), want) {
+			t.Errorf("%s does not hold %s", apiUsersFileSource, want)
+		}
 	}
 }
 
@@ -581,6 +644,54 @@ func TestComposeStackCheckSeesEachDefect(t *testing.T) {
 			old:  "      GO_API_HOME_ENABLED: \"true\"\n",
 			new:  "",
 			want: "route switch: query-api has GO_API_HOME_ENABLED \"\"",
+		},
+		{
+			name: "the api's ClickHouse users file not mounted",
+			old:  "      - " + apiUsersFileSource + ":" + apiUsersFileTarget + ":ro\n",
+			new:  "",
+			want: "api login: clickhouse does not mount the users file",
+		},
+		{
+			name: "the users file mounted read-write",
+			old:  "      - " + apiUsersFileSource + ":" + apiUsersFileTarget + ":ro\n",
+			new:  "      - " + apiUsersFileSource + ":" + apiUsersFileTarget + "\n",
+			want: "api login: the users file is mounted read-write",
+		},
+		{
+			name: "another users file mounted",
+			old:  "      - " + apiUsersFileSource + ":" + apiUsersFileTarget + ":ro\n",
+			new:  "      - ./docker/users.xml:" + apiUsersFileTarget + ":ro\n",
+			want: "api login: clickhouse mounts ./docker/users.xml",
+		},
+		{
+			name: "go-api without its ClickHouse login",
+			old:  "      DEV_HEALTH_CH_API_HOST: clickhouse\n",
+			new:  "",
+			want: "api login: go-api has DEV_HEALTH_CH_API_HOST \"\"",
+		},
+		{
+			name: "go-api logs in as the general user",
+			old:  "      DEV_HEALTH_CH_API_USER: dho_api_ch\n",
+			new:  "      DEV_HEALTH_CH_API_USER: ${CLICKHOUSE_USER:-ch}\n",
+			want: "DEV_HEALTH_CH_API_USER \"${CLICKHOUSE_USER:-ch}\"",
+		},
+		{
+			name: "ClickHouse is not given the password of the login",
+			old:  "      DHO_API_CH_PASSWORD: ${API_CLICKHOUSE_PASSWORD:-dho_api_ch}\n",
+			new:  "",
+			want: "api login: clickhouse reads the password from DHO_API_CH_PASSWORD = \"\"",
+		},
+		{
+			name: "go-api and ClickHouse read two password variables",
+			old:  "      DEV_HEALTH_CH_API_PASSWORD: ${API_CLICKHOUSE_PASSWORD:-dho_api_ch}\n",
+			new:  "      DEV_HEALTH_CH_API_PASSWORD: ${CLICKHOUSE_PASSWORD:-ch}\n",
+			want: "both must be the same operator variable",
+		},
+		{
+			name: "go-api does not wait for clickhouse",
+			old:  "      postgres:\n        condition: service_healthy\n      clickhouse:\n        condition: service_healthy\n      valkey:\n",
+			new:  "      postgres:\n        condition: service_healthy\n      valkey:\n",
+			want: "api login: go-api waits for clickhouse with \"\"",
 		},
 		{
 			name: "a plane that does not wait for the key",

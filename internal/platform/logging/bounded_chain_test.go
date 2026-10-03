@@ -147,3 +147,27 @@ func TestAPanickingAsDoesNotHideTheRestOfTheChain(t *testing.T) {
 		t.Fatalf("a panicking Timeout was trusted: %q", got)
 	}
 }
+
+func TestErrorAsIsBoundedAndSurvivesHostileErrors(t *testing.T) {
+	type target struct{ *selfUnwrap }
+	for name, err := range hostileErrors() {
+		withinASecond(t, name, func() {
+			var pointer *selfUnwrap
+			_ = ErrorAs(err, &pointer)
+			var timeout interface{ Timeout() bool }
+			_ = ErrorAs(err, &timeout)
+		})
+	}
+	var found *selfUnwrap
+	if !ErrorAs(fmt.Errorf("x: %w", &selfUnwrap{}), &found) || found == nil {
+		t.Fatal("ErrorAs did not find a *selfUnwrap behind a wrapper")
+	}
+	var absent *nilReceiver
+	if ErrorAs(errors.New("plain"), &absent) {
+		t.Fatal("ErrorAs found a type that is not in the chain")
+	}
+	if ErrorAs(nil, &found) || ErrorAs(errors.New("x"), nil) {
+		t.Fatal("ErrorAs accepted nil")
+	}
+	_ = target{}
+}

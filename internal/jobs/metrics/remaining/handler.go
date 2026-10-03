@@ -116,7 +116,7 @@ func (handler *PartitionHandler[T]) Work(
 	run, err := handler.store.LoadRun(ctx, claim.Partition.RunID)
 	if err != nil {
 		if errors.Is(err, ErrInvalidState) {
-			releaseClaim(handler.store, ctx, *claim)
+			releaseClaimTerminally(handler.store, ctx, *claim)
 			return jobruntime.Permanent(err)
 		}
 		releaseFailedAttempt(handler.store, ctx, *claim, execution)
@@ -126,7 +126,7 @@ func (handler *PartitionHandler[T]) Work(
 		run.ID != claim.Partition.RunID || run.Status != "running" ||
 		run.Family != handler.expectedFamily ||
 		execution.OrganizationID == nil || run.OrganizationID != *execution.OrganizationID {
-		releaseClaim(handler.store, ctx, *claim)
+		releaseClaimTerminally(handler.store, ctx, *claim)
 		return jobruntime.Permanent(ErrInvalidState)
 	}
 	var outcome CompatibilityOutcome

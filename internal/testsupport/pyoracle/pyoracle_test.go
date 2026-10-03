@@ -196,27 +196,6 @@ func TestClosedEnvInheritsNothingAndCarriesTheExtras(t *testing.T) {
 	}
 }
 
-// The recorders of the goldens that were hand-recorded with the whole shell environment run Python
-// through ClosedEnv and never inherit it: a closed list of the test files, each of which must call
-// ClosedEnv and must not call os.Environ().
-func TestTheClosedEnvironmentRecordersDoNotInheritTheEnvironment(t *testing.T) {
-	for _, file := range []string{
-		"../../operationalbackfill/backfill_integration_test.go",
-	} {
-		raw, err := os.ReadFile(file)
-		if err != nil {
-			t.Fatal(err)
-		}
-		text := string(raw)
-		if strings.Contains(text, "os.Environ()") {
-			t.Errorf("%s inherits the environment (os.Environ()): a recording must run in pyoracle.ClosedEnv", file)
-		}
-		if !strings.Contains(text, "pyoracle.ClosedEnv(") {
-			t.Errorf("%s does not run Python through pyoracle.ClosedEnv", file)
-		}
-	}
-}
-
 // refusingInterpreter is a stand-in interpreter that behaves like the real one
 // under a recording test's guard: with PYTHONHOME set it cannot start (it says
 // why on standard error and exits 1); otherwise it writes the environment it

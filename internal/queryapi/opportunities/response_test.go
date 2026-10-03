@@ -1,15 +1,53 @@
-// Golden parity tests for FromHomeResponse -- each fixture is captured
-// by monkeypatching dev_health_ops.api.services.opportunities.
-// build_home_response (the exact name build_opportunities_response
-// calls) to return a HomeResponse built from the given input, then
-// calling the real build_opportunities_response and dumping its JSON.
-// This is the correct boundary for THIS route's own added logic:
-// internal/home's own golden/integration tests already pin every
-// ClickHouse/Postgres read and dedup fix this route inherits; re-deriving
-// that fidelity here would just duplicate it.
+// Tests for FromHomeResponse against five files under testdata/. The files are
+// of TWO kinds (testdata.manifest.tsv holds the kind go-generated for the
+// three snapshots; the two captures are still in its unclassified rows).
 //
-// CAPTURE COMMAND (verbatim, from the ops repo root, this worktree's
-// venv), org_default.json:
+// GO SNAPSHOTS (kind go-generated): org_default.json, team_scoped.json and
+// repo_scoped.json. They hold what THIS package's Go code returns for the home
+// goldens internal/queryapi/home/testdata/{org_default,team_scoped,repo_scoped}.json
+// with the filters of the three tests below. The three tests that read them
+// are regression snapshots, Go against Go: they are NOT parity with Python
+// and they prove nothing about the Python port.
+//
+// Until CHAOS-7776 these three files were Python captures. That ticket
+// decided a divergence from the Python port: Python titled every card
+// "Reduce <metric>" and picked cards by the sign of the move alone; Go names
+// and picks a card by the polarity of its metric. So the Python answer for
+// these inputs is no longer the expected answer. The difference, the same in
+// each of the three files (old Python capture -> Go snapshot):
+//
+//   - the card "Reduce Throughput" is gone: throughput is higher-is-better
+//     and it rose in the input, which is an improvement, not an opportunity;
+//   - "Reduce Code Churn" takes the free place in the top four;
+//   - the cards are, in order: Reduce Rework Ratio, Reduce Change Failure
+//     Rate, Reduce Review Latency, Reduce Code Churn (they were: Reduce
+//     Rework Ratio, Reduce Throughput, Reduce Change Failure Rate, Reduce
+//     Review Latency).
+//
+// The behaviour itself (polarity, "Recover", improvements are not
+// opportunities, ranking by the size of the move) is pinned by the tests at
+// the end of this file, which build their input by hand. The snapshots only
+// keep the whole response of three real inputs from changing unseen.
+//
+// PYTHON CAPTURES, unchanged: pr_rework_ratio_default_experiments.json and
+// no_cards_fallback.json. Their inputs give the same answer in Python and in
+// Go (a lower-is-better metric that rose; no opportunity at all), so they are
+// still parity with Python. Each was captured by monkeypatching
+// dev_health_ops.api.services.opportunities.build_home_response (the exact
+// name build_opportunities_response calls) to return a HomeResponse, then
+// calling the real build_opportunities_response and dumping its JSON. The
+// HomeResponse was a minimal hand-constructed one (freshness/
+// rework_theme_allocation/summary/tiles/constraint/events all empty-shaped)
+// whose deltas exercise, respectively: the ONE _METRICS entry
+// (pr_rework_ratio) absent from _METRIC_SUGGESTED_EXPERIMENTS, falling
+// through to _DEFAULT_SUGGESTED_EXPERIMENTS; and every delta_pct <= 0,
+// producing the "Maintain steady flow" fallback card. This is the correct
+// boundary for THIS route's own added logic: internal/home's own tests pin
+// every ClickHouse/Postgres read and dedup fix this route inherits.
+//
+// THE CAPTURE METHOD (the monkeypatch; it is also how the three snapshots
+// were first made, before CHAOS-7776), from the ops repo root with a venv,
+// shown for org_default.json:
 //
 //	.venv/bin/python <<'PYEOF'
 //	import asyncio, json
@@ -34,19 +72,7 @@
 //	asyncio.run(main())
 //	PYEOF
 //
-// team_scoped.json/repo_scoped.json: the same script, reading
-// internal/queryapi/home/testdata/{team,repo}_scoped.json and
-// scope=ScopeFilter(level="team", ids=["team-1"]) /
-// ScopeFilter(level="repo", ids=["checkout-service"]) respectively.
-//
-// pr_rework_ratio_default_experiments.json/no_cards_fallback.json: the
-// same monkeypatch, but home_response is built directly from a minimal
-// hand-constructed HomeResponse (freshness/rework_theme_allocation/
-// summary/tiles/constraint/events all empty-shaped) whose deltas are
-// chosen to exercise, respectively: the ONE _METRICS entry
-// (pr_rework_ratio) absent from _METRIC_SUGGESTED_EXPERIMENTS, falling
-// through to _DEFAULT_SUGGESTED_EXPERIMENTS; and every delta_pct <= 0,
-// producing the "Maintain steady flow" fallback card.
+// The recordings are stopped: nothing here is captured from Python again.
 package opportunities
 
 import (

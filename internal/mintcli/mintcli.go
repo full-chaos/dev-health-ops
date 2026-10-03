@@ -11,6 +11,7 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/cli"
 	"github.com/full-chaos/dev-health-ops/internal/mintcli/edgetoken"
 	"github.com/full-chaos/dev-health-ops/internal/mintcli/envelope"
+	"github.com/full-chaos/dev-health-ops/internal/mintcli/envelopekeys"
 )
 
 // Command is the `mint` vertical of the dho binary.
@@ -18,9 +19,10 @@ func Command() cli.Command {
 	return cli.Command{
 		Name:    "mint",
 		Kind:    cli.Group,
-		Summary: "mint a credential and print it on stdout: envelope, edge-token",
+		Summary: "mint a credential and print it on stdout: envelope, envelope-keys, edge-token",
 		Children: []cli.Command{
 			envelope.Command(),
+			envelopekeys.Command(),
 			edgetoken.Command(),
 		},
 	}

@@ -15,6 +15,16 @@ package goapiproof
 // mode other than shadow, and never moves a row between schema digests
 // (that is `carry`). A shadow row does not make an operation reachable: the
 // gates on shadow->canary (`enable`'s receipt / named limit) are untouched.
+//
+// WHAT IT NOW DOES TO A CATALOG OPERATION (CHAOS-8517). query-api serves a
+// catalog operation that has no routing row at any schema digest. The first
+// row therefore takes such an operation OUT of that default: from the moment
+// its shadow row exists it is not served, until `enable` admits it. That is
+// the stored, visible way to hold a catalog operation dark, and it is also
+// why this verb must not be run on a stack that should keep serving the
+// catalog as it is -- the verb says so before and after it writes
+// (goapicli/routing/seed.go). MCP class rows are not concerned: a class root
+// with no row is dark, and its first row is still this verb's to write.
 
 import (
 	"context"

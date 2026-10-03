@@ -177,8 +177,6 @@ func awaitBoundAddress(t *testing.T, logs *safeBuffer, component string) string 
 	return ""
 }
 
-// awaitResponse polls url until it answers, so the test never races the
-// listener's bind.
 // awaitBoundAddressOrExit is awaitBoundAddress that also reads the Execute
 // exit channel: if Execute returns before the component's "listener bound"
 // line appears, it fails at once with the exit code and the logs instead of
@@ -187,14 +185,6 @@ func awaitBoundAddressOrExit(t *testing.T, logs *safeBuffer, exit <-chan int, co
 	t.Helper()
 	deadline := time.Now().Add(20 * time.Second)
 	for time.Now().Before(deadline) {
-		select {
-		case code := <-exit:
-			t.Fatalf(
-				"Execute exited %d before the %s listener bound; the environment's address %s is held, so the flag did not win; logs:\n%s",
-				code, component, heldAddress, logs.String(),
-			)
-		default:
-		}
 		for _, line := range strings.Split(logs.String(), "\n") {
 			if !strings.Contains(line, `"msg":"listener bound"`) {
 				continue
@@ -210,12 +200,22 @@ func awaitBoundAddressOrExit(t *testing.T, logs *safeBuffer, exit <-chan int, co
 				return entry.Address
 			}
 		}
+		select {
+		case code := <-exit:
+			t.Fatalf(
+				"Execute exited %d before the %s listener bound; the environment's address %s is held, so the flag did not win; logs:\n%s",
+				code, component, heldAddress, logs.String(),
+			)
+		default:
+		}
 		time.Sleep(25 * time.Millisecond)
 	}
 	t.Fatalf("no \"listener bound\" line for %s within 20s; logs:\n%s", component, logs.String())
 	return ""
 }
 
+// awaitResponse polls url until it answers, so the test never races the
+// listener's bind.
 func awaitResponse(t *testing.T, client *http.Client, url string) *http.Response {
 	t.Helper()
 	deadline := time.Now().Add(20 * time.Second)
@@ -663,6 +663,11 @@ func TestFlagsOverrideTheEnvironment(t *testing.T) {
 	}()
 
 	flagOperator := awaitBoundAddressOrExit(t, logs, exit, "operator-http", operatorAddress)
+	// Guard, not proof of the flag: if the hold were ineffective the service
+	// could have bound the environment's address and this would be equal.
+	if flagOperator == operatorAddress {
+		t.Fatalf("the operator listener bound the held environment address %s: the hold is not effective", operatorAddress)
+	}
 	client := &http.Client{Timeout: 5 * time.Second}
 	defer client.CloseIdleConnections()
 	response := awaitResponse(t, client, "http://"+flagOperator+"/healthz")

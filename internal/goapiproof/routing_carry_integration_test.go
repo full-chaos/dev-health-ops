@@ -267,6 +267,96 @@ func TestCarryRefusesAChangedDocumentAndWritesNothingAtAll(t *testing.T) {
 	}
 }
 
+// CHAOS-8000 dual accept, executed: the image being rolled to registers
+// hotspots under a NEW document and still accepts the old one as a legacy
+// text. That is the same row shape as the refusal just above plus the two
+// legacy lists -- and the row is carried under its OWN digest, verbatim,
+// so the new image (which reads a row under any accepted digest) serves
+// both texts from it. Nothing is re-keyed to the new digest, and the live
+// digest is untouched.
+func TestCarryCopiesARowKeyedToALegacyDigestUnderItsOwnDigest(t *testing.T) {
+	ctx := t.Context()
+	newDigest := strings.Repeat("c", 64)
+	for _, mode := range []string{"canary", "primary", "shadow"} {
+		t.Run(mode, func(t *testing.T) {
+			pool := startAuditedRegistryPostgres(t)
+			seedCarryRow(t, ctx, pool, carryIntegrationLiveDigest, CarryRow{
+				Operation: "featureFlags", DocumentDigest: testDocumentDigest, Mode: "canary",
+				Build: verbsRunningBuild, Owner: "go", RolloutPercentage: 100, ReviewEvidence: "served anchor",
+			})
+			orgs := `{"orgs": ["org-1"]}`
+			seedCarryRow(t, ctx, pool, carryIntegrationLiveDigest, CarryRow{
+				Operation: "hotspots", DocumentDigest: testDocumentDigest2, Mode: mode,
+				Build: verbsRunningBuild, Owner: "go", RolloutPercentage: 50, EligibleOrgs: &orgs,
+				ReviewEvidence: "the original decision",
+			})
+			before := rowsAtDigest(t, ctx, pool, carryIntegrationLiveDigest)
+
+			request := carryIntegrationRequest()
+			request.Inputs.TargetDocumentDigest["hotspots"] = newDigest
+			request.Inputs.CatalogDocumentDigest["hotspots"] = newDigest
+			request.Inputs.TargetLegacyDocumentDigests = map[string][]string{"hotspots": {testDocumentDigest2}}
+			request.Inputs.CatalogLegacyDocumentDigests = map[string][]string{"hotspots": {testDocumentDigest2}}
+
+			outcomes, err := Carry(ctx, pool, request)
+			if err != nil {
+				t.Fatalf("Carry: %v -- a swapped document whose old text is still accepted must not stop the roll", err)
+			}
+			if summary := SummarizeCarry(outcomes); summary.Carried != 2 || summary.Total != 2 {
+				t.Fatalf("summary = %+v, want both rows carried", summary)
+			}
+			for _, outcome := range outcomes {
+				if wantLegacy := outcome.Operation == "hotspots"; outcome.LegacyDigest != wantLegacy {
+					t.Fatalf("%s: legacy digest = %t, want %t", outcome.Operation, outcome.LegacyDigest, wantLegacy)
+				}
+			}
+
+			// THE STATE THE VERB EXISTS TO REACH: one row for hotspots at the
+			// target schema digest, keyed to the digest the row always had.
+			carried := rowsAtDigest(t, ctx, pool, carryIntegrationTargetDigest)
+			if len(carried) != 2 {
+				t.Fatalf("got %d row(s) at the target digest, want 2: %+v", len(carried), carried)
+			}
+			source, _ := carryRowByOperation(before, "hotspots")
+			target, ok := carryRowByOperation(carried, "hotspots")
+			if !ok {
+				t.Fatal("hotspots has no row at the target digest: the roll would un-route it")
+			}
+			if target.DocumentDigest != testDocumentDigest2 {
+				t.Fatalf("hotspots carried under %s, want its own digest %s -- not the image's current one", target.DocumentDigest, testDocumentDigest2)
+			}
+			if !sameCarriedState(source, target) {
+				t.Fatalf("hotspots carried as %+v, want every copied column identical to %+v", target, source)
+			}
+			if !strings.HasPrefix(target.ReviewEvidence, CarriedEvidencePrefix) || !strings.Contains(target.ReviewEvidence, source.ReviewEvidence) {
+				t.Fatalf("hotspots carried with evidence %q, want the carry prefix in front of the source reason", target.ReviewEvidence)
+			}
+
+			after := rowsAtDigest(t, ctx, pool, carryIntegrationLiveDigest)
+			if len(after) != len(before) {
+				t.Fatalf("the live digest now holds %d row(s), want the %d it had", len(after), len(before))
+			}
+			for index := range before {
+				if !sameCarriedState(before[index], after[index]) || before[index].ReviewEvidence != after[index].ReviewEvidence {
+					t.Fatalf("live row %+v was modified to %+v -- a carry writes only at the target digest", before[index], after[index])
+				}
+			}
+
+			// A rerun writes nothing and still names the row as a legacy-digest one.
+			again, err := Carry(ctx, pool, request)
+			if err != nil {
+				t.Fatalf("second Carry: %v", err)
+			}
+			if summary := SummarizeCarry(again); summary.Carried != 0 || summary.Unchanged != 2 {
+				t.Fatalf("rerun summary = %+v, want both rows unchanged", summary)
+			}
+			if rows := rowsAtDigest(t, ctx, pool, carryIntegrationTargetDigest); len(rows) != 2 {
+				t.Fatalf("the rerun left %d row(s) at the target digest, want 2", len(rows))
+			}
+		})
+	}
+}
+
 // `carry` copies provenance rather than re-reading it, so a row still
 // naming a build the process is not running would have that stale claim
 // copied to the new digest and outlive the roll that made it wrong.

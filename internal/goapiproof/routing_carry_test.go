@@ -58,11 +58,24 @@ const (
 
 // The target-image axis: what the image this binary was built from
 // registers.
+//
+// targetLegacy is the dual-accept swap (CHAOS-8000): the image registers
+// ANOTHER current text and still accepts the row's text as a legacy one,
+// and its catalog lists both. targetLegacyNotInCatalog is the same image
+// with a catalog that lists the current text only.
 const (
-	targetSame    = "target:same-document"
-	targetChanged = "target:changed-document"
-	targetAbsent  = "target:not-registered"
+	targetSame               = "target:same-document"
+	targetChanged            = "target:changed-document"
+	targetAbsent             = "target:not-registered"
+	targetLegacy             = "target:legacy-document"
+	targetLegacyNotInCatalog = "target:legacy-document-not-in-catalog"
 )
+
+// targetAcceptsRowAsLegacy reports whether, in this target state, the image
+// lists the row's digest as a legacy text of the operation.
+func targetAcceptsRowAsLegacy(targetState string) bool {
+	return targetState == targetLegacy || targetState == targetLegacyNotInCatalog
+}
 
 // The target-digest-row axis: what is already at the digest being
 // carried TO.
@@ -85,7 +98,7 @@ const (
 func TestDecideCarryOverItsWholeInputDomain(t *testing.T) {
 	modes := routingModeVocabulary(t)
 	liveStates := []string{liveSame, liveDrifted, liveAbsent}
-	targetStates := []string{targetSame, targetChanged, targetAbsent}
+	targetStates := []string{targetSame, targetChanged, targetAbsent, targetLegacy, targetLegacyNotInCatalog}
 	rowStates := []string{rowNone, rowIdentical, rowDifferent}
 	goOnlyStates := []bool{false, true}
 
@@ -113,10 +126,12 @@ func TestDecideCarryOverItsWholeInputDomain(t *testing.T) {
 							ReviewEvidence:    "the original decision",
 						}
 						inputs := CarryInputs{
-							LiveDocumentDigest:    map[string]string{},
-							TargetDocumentDigest:  map[string]string{},
-							CatalogDocumentDigest: map[string]string{},
-							TargetRows:            map[string]CarryRow{},
+							LiveDocumentDigest:           map[string]string{},
+							TargetDocumentDigest:         map[string]string{},
+							TargetLegacyDocumentDigests:  map[string][]string{},
+							CatalogDocumentDigest:        map[string]string{},
+							CatalogLegacyDocumentDigests: map[string][]string{},
+							TargetRows:                   map[string]CarryRow{},
 						}
 						switch liveState {
 						case liveSame:
@@ -130,6 +145,15 @@ func TestDecideCarryOverItsWholeInputDomain(t *testing.T) {
 							inputs.CatalogDocumentDigest[operation] = carryDocument
 						case targetChanged:
 							inputs.TargetDocumentDigest[operation] = carryOtherDoc
+							inputs.CatalogDocumentDigest[operation] = carryOtherDoc
+						case targetLegacy:
+							inputs.TargetDocumentDigest[operation] = carryOtherDoc
+							inputs.TargetLegacyDocumentDigests[operation] = []string{carryDocument}
+							inputs.CatalogDocumentDigest[operation] = carryOtherDoc
+							inputs.CatalogLegacyDocumentDigests[operation] = []string{carryDocument}
+						case targetLegacyNotInCatalog:
+							inputs.TargetDocumentDigest[operation] = carryOtherDoc
+							inputs.TargetLegacyDocumentDigests[operation] = []string{carryDocument}
 							inputs.CatalogDocumentDigest[operation] = carryOtherDoc
 						}
 						switch rowState {
@@ -174,6 +198,22 @@ func TestDecideCarryOverItsWholeInputDomain(t *testing.T) {
 							got.Build != row.Build || got.Owner != row.Owner || got.DocumentDigest != row.DocumentDigest {
 							t.Fatalf("outcome %+v does not echo the row it describes (%+v)", got, row)
 						}
+						// A row that ends up at the target digest says
+						// whether its key is a legacy digest there, and
+						// names the current one: the report must tell the
+						// two row classes apart, and must never mark a row
+						// keyed to the current text as a legacy one.
+						if got.Action == CarryActionCarry || got.Action == CarryActionUnchanged {
+							wantLegacy := targetState == targetLegacy
+							wantCurrent := ""
+							if wantLegacy {
+								wantCurrent = carryOtherDoc
+							}
+							if got.LegacyDigest != wantLegacy || got.TargetCurrentDigest != wantCurrent {
+								t.Fatalf("mode=%s %s %s %s: legacy digest = %t (current %q), want %t (current %q)",
+									mode, liveState, targetState, rowState, got.LegacyDigest, got.TargetCurrentDigest, wantLegacy, wantCurrent)
+							}
+						}
 						seen[got.Action] = true
 					}
 				}
@@ -203,13 +243,21 @@ func expectedCarryOutcome(mode, liveState, targetState, rowState string) (action
 		case liveAbsent:
 			return CarryActionSkip, "mode=shadow: the deployed process does not register this operation"
 		case liveDrifted:
-			return CarryActionSkip, "mode=shadow: this row's document digest is not the one the deployed process registers"
+			// A row keyed to a target-legacy digest is NOT dead when the
+			// deployed process registers another text: /registry reports
+			// the current digest only, and this is the standing state
+			// after a roll that carried a legacy-keyed row.
+			if !targetAcceptsRowAsLegacy(targetState) {
+				return CarryActionSkip, "mode=shadow: this row's document digest is not the one the deployed process registers"
+			}
 		}
 		switch targetState {
 		case targetAbsent:
 			return CarryActionSkip, "mode=shadow: the image this binary was built from does not register this operation"
 		case targetChanged:
 			return CarryActionSkip, "mode=shadow: the registered document changed"
+		case targetLegacyNotInCatalog:
+			return CarryActionSkip, "mode=shadow: this image's edge catalog does not agree with its registered document"
 		}
 		switch rowState {
 		case rowNone:
@@ -227,13 +275,17 @@ func expectedCarryOutcome(mode, liveState, targetState, rowState string) (action
 	case liveAbsent:
 		return CarryActionSkip, "the deployed process does not register this operation"
 	case liveDrifted:
-		return CarryActionSkip, "is not the one the deployed process registers"
+		if !targetAcceptsRowAsLegacy(targetState) {
+			return CarryActionSkip, "is not the one the deployed process registers"
+		}
 	}
 	switch targetState {
 	case targetAbsent:
 		return CarryActionRefuse, "does not register this operation at all"
 	case targetChanged:
 		return CarryActionRefuse, "the registered document changed"
+	case targetLegacyNotInCatalog:
+		return CarryActionRefuse, "its edge catalog does not list it as one"
 	}
 	switch rowState {
 	case rowNone:

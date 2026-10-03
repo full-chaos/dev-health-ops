@@ -270,7 +270,9 @@ jobs:
             echo "ci/kept_python_tests.txt lists only ${#kept[@]} files: a short or empty list would run nothing (or everything)" >&2
             exit 1
           fi
-          pytest "${kept[@]}" -q -n 4
+          printf 'kept files: %s\n' "${#kept[@]}"
+          pytest --collect-only -q -p no:randomly "${kept[@]}" 2>&1 | tail -15
+          pytest "${kept[@]}" -v -rs -n 4
 
   # Required-status-check gate. Branch protection requires a check named
   # exactly "test". It judges docs-tests and tooling-tests through

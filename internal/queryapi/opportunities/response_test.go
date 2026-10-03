@@ -1,6 +1,30 @@
-// Tests for FromHomeResponse against five files under testdata/. The files are
-// of TWO kinds (testdata.manifest.tsv holds the kind go-generated for the
-// three snapshots; the two captures are still in its unclassified rows).
+// Tests for FromHomeResponse against five files under testdata/. ALL FIVE are
+// Go snapshots (kind go-generated in testdata.manifest.tsv): regression
+// snapshots, Go against Go. They are NOT parity with Python and they prove
+// nothing about the Python port.
+//
+// Since CHAOS-8109 every card carries four more keys that the Python
+// reference never had: change_percent, direction, range_days and
+// compare_days. So no Python answer is the expected answer of this route any
+// more, for any input. The difference in each of the five files (old file ->
+// Go snapshot): each card gets the four keys, and nothing else changes
+// (titles, rationales, links, experiments and their order are the same):
+//
+//   - org_default.json, team_scoped.json, repo_scoped.json: four cards each,
+//     with the metric's delta_pct of the home golden as change_percent,
+//     "up" as direction (all four metrics climbed), and 7 / 7 as the window.
+//   - pr_rework_ratio_default_experiments.json: one card, change_percent 15,
+//     direction "up", window 14 / 14.
+//   - no_cards_fallback.json: the fallback card, change_percent null and
+//     direction null (no metric moved the wrong way: that is not a move of
+//     0), window 14 / 14.
+//
+// The meaning of the four keys is pinned by the tests at the end of this
+// file, which build their input by hand. The text below is the older history
+// of the five files and is kept for that.
+//
+// BEFORE CHAOS-8109 the files were of TWO kinds (three Go snapshots since
+// CHAOS-7776, two Python captures):
 //
 // GO SNAPSHOTS (kind go-generated): org_default.json, team_scoped.json and
 // repo_scoped.json. They hold what THIS package's Go code returns for the home
@@ -29,10 +53,10 @@
 // the end of this file, which build their input by hand. The snapshots only
 // keep the whole response of three real inputs from changing unseen.
 //
-// PYTHON CAPTURES, unchanged: pr_rework_ratio_default_experiments.json and
-// no_cards_fallback.json. Their inputs give the same answer in Python and in
-// Go (a lower-is-better metric that rose; no opportunity at all), so they are
-// still parity with Python. Each was captured by monkeypatching
+// PYTHON CAPTURES UNTIL CHAOS-8109: pr_rework_ratio_default_experiments.json
+// and no_cards_fallback.json. Their inputs gave the same answer in Python and
+// in Go (a lower-is-better metric that rose; no opportunity at all) until the
+// four keys above were added. Each was captured by monkeypatching
 // dev_health_ops.api.services.opportunities.build_home_response (the exact
 // name build_opportunities_response calls) to return a HomeResponse, then
 // calling the real build_opportunities_response and dumping its JSON. The
@@ -306,5 +330,132 @@ func TestOpportunitiesRankByTheSizeOfTheMoveAcrossPolarities(t *testing.T) {
 	want := []string{"Recover Throughput", "Reduce Code Churn", "Reduce Cycle Time"}
 	if !reflect.DeepEqual(titles, want) {
 		t.Fatalf("titles = %v, want %v", titles, want)
+	}
+}
+
+// CHAOS-8109: a card serves the move it is about as values. Before, the size
+// and the direction of the move were only inside the rationale sentence.
+
+func cardByTitle(t *testing.T, resp *Response, title string) Card {
+	t.Helper()
+	for _, card := range resp.Items {
+		if card.Title == title {
+			return card
+		}
+	}
+	t.Fatalf("no card %q in %+v", title, resp.Items)
+	return Card{}
+}
+
+func TestCardServesTheChangeOfItsMetric(t *testing.T) {
+	h := &home.Response{
+		Deltas: []home.MetricDelta{
+			// lower is better, climbed: a card, direction up.
+			{Metric: "cycle_time", Label: "Cycle Time", DeltaPct: 33.33333333333333},
+			// higher is better, fell: a card, direction down.
+			{Metric: "throughput", Label: "Throughput", DeltaPct: -20.5},
+			// an improvement: no card.
+			{Metric: "review_latency", Label: "Review Latency", DeltaPct: -40},
+		},
+	}
+	// Two different numbers, so each key is shown to hold its own window.
+	f := home.Filters{
+		Time:  home.TimeFilter{RangeDays: 30, CompareDays: 14},
+		Scope: home.ScopeFilter{Level: "org"},
+	}
+	got := FromHomeResponse(h, f)
+	if len(got.Items) != 2 {
+		t.Fatalf("cards = %d, want 2", len(got.Items))
+	}
+
+	reduce := cardByTitle(t, got, "Reduce Cycle Time")
+	// Unrounded: the number Home serves for the metric, not the "33%" of the
+	// rationale.
+	if reduce.ChangePercent == nil || *reduce.ChangePercent != 33.33333333333333 {
+		t.Errorf("change_percent = %v, want the metric's delta_pct 33.33333333333333", reduce.ChangePercent)
+	}
+	if reduce.Direction == nil || *reduce.Direction != "up" {
+		t.Errorf("direction = %v, want up", reduce.Direction)
+	}
+
+	recover := cardByTitle(t, got, "Recover Throughput")
+	if recover.ChangePercent == nil || *recover.ChangePercent != -20.5 {
+		t.Errorf("change_percent = %v, want the signed delta_pct -20.5", recover.ChangePercent)
+	}
+	if recover.Direction == nil || *recover.Direction != "down" {
+		t.Errorf("direction = %v, want down", recover.Direction)
+	}
+
+	for _, card := range got.Items {
+		if card.RangeDays != 30 || card.CompareDays != 14 {
+			t.Errorf("%s: window = %d / %d, want the request's 30 / 14", card.Title, card.RangeDays, card.CompareDays)
+		}
+	}
+}
+
+// The fallback card is about no metric. It has no change and no direction:
+// null, never 0 and never "up".
+func TestFallbackCardHasNoChangeAndNoDirection(t *testing.T) {
+	h := &home.Response{Deltas: []home.MetricDelta{{Metric: "cycle_time", Label: "Cycle Time", DeltaPct: -5}}}
+	f := home.Filters{Time: home.TimeFilter{RangeDays: 30, CompareDays: 14}, Scope: home.ScopeFilter{Level: "org"}}
+	got := FromHomeResponse(h, f)
+	if len(got.Items) != 1 || got.Items[0].ID != "opp-0" {
+		t.Fatalf("items = %+v, want the fallback card only", got.Items)
+	}
+	card := got.Items[0]
+	if card.ChangePercent != nil || card.Direction != nil {
+		t.Errorf("change_percent = %v, direction = %v, want null and null", card.ChangePercent, card.Direction)
+	}
+	if card.RangeDays != 30 || card.CompareDays != 14 {
+		t.Errorf("window = %d / %d, want the request's 30 / 14", card.RangeDays, card.CompareDays)
+	}
+
+	// On the wire the two keys are present and null, not left out: a caller
+	// can tell "no move" from "an older server".
+	encoded, err := json.Marshal(card)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var keys map[string]json.RawMessage
+	if err := json.Unmarshal(encoded, &keys); err != nil {
+		t.Fatal(err)
+	}
+	for _, key := range []string{"change_percent", "direction"} {
+		if raw, ok := keys[key]; !ok || string(raw) != "null" {
+			t.Errorf("%s on the wire = %s (present %v), want null", key, raw, ok)
+		}
+	}
+	for _, key := range []string{"range_days", "compare_days"} {
+		if _, ok := keys[key]; !ok {
+			t.Errorf("%s is not on the wire", key)
+		}
+	}
+}
+
+// The direction is the sign of the move, for every card of a mixed answer.
+func TestDirectionIsTheSignOfTheChange(t *testing.T) {
+	h := &home.Response{
+		Deltas: []home.MetricDelta{
+			{Metric: "cycle_time", Label: "Cycle Time", DeltaPct: 10},
+			{Metric: "throughput", Label: "Throughput", DeltaPct: -30},
+			{Metric: "churn", Label: "Code Churn", DeltaPct: 5},
+			{Metric: "deploy_freq", Label: "Deploy Frequency", DeltaPct: -2},
+		},
+	}
+	got := FromHomeResponse(h, home.Filters{Time: home.TimeFilter{RangeDays: 7, CompareDays: 7}, Scope: home.ScopeFilter{Level: "org"}})
+	if len(got.Items) == 0 {
+		t.Fatal("no cards")
+	}
+	for _, card := range got.Items {
+		if card.ChangePercent == nil || card.Direction == nil {
+			t.Fatalf("%s: change_percent or direction is null on a metric card", card.Title)
+		}
+		want := "up"
+		if *card.ChangePercent < 0 {
+			want = "down"
+		}
+		if *card.Direction != want {
+			t.Errorf("%s: direction = %q for a change of %v, want %q", card.Title, *card.Direction, *card.ChangePercent, want)
+		}
 	}
 }

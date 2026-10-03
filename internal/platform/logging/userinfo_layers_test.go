@@ -490,3 +490,26 @@ func TestThePersistedSanitizersAreIdempotentWithColonRunsAtTheCut(t *testing.T) 
 		t.Fatalf("checked %d", checked)
 	}
 }
+
+// gwc-vetter-3's smallest cases for the same property: a second call over a result is
+// the same text (the maintenance scrub reads a stored result and must not rewrite it).
+func TestTheSmallestIdempotenceCasesFromTheVet(t *testing.T) {
+	for _, row := range []struct {
+		text     string
+		capacity int
+	}{
+		{strings.Repeat("u:p@h k:v ", 40), 200},
+		{strings.Repeat("svc:pw@db.internal dial tcp 10.0.0.1:5432: ", 24), 200},
+		{strings.Repeat("svc:pw@db.internal dial tcp 10.0.0.1:5432: ", 120), 2000},
+	} {
+		once := pythonparity.SanitizeErrorTextHardened(row.text, row.capacity)
+		if twice := pythonparity.SanitizeErrorTextHardened(once, row.capacity); twice != once {
+			t.Errorf("cap %d: a second call changes the text:\n%.200q\n%.200q", row.capacity, once, twice)
+		}
+	}
+	text := strings.Repeat("svc:pw@db.internal dial tcp 10.0.0.1:5432: ", 120)
+	once := syncdispatchruntime.SanitizeErrorText(text)
+	if twice := syncdispatchruntime.SanitizeErrorText(once); twice != once {
+		t.Errorf("SanitizeErrorText: a second call changes the text:\n%.200q\n%.200q", once, twice)
+	}
+}

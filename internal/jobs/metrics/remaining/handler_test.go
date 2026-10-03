@@ -37,8 +37,9 @@ func TestPartitionHandlerRejectsCrossFamilyExecution(t *testing.T) {
 	}
 	err = handler.Work(t.Context(), capacityExecution())
 	if err == nil || !strings.Contains(err.Error(), string(jobruntime.CategoryPermanent)) ||
-		store.releases != 1 || store.completions != 0 {
-		t.Fatalf("cross-family error=%v releases=%d completions=%d", err, store.releases, store.completions)
+		store.terminalReleases != 1 || store.releases != 0 || store.completions != 0 {
+		t.Fatalf("cross-family error=%v terminalReleases=%d releases=%d completions=%d",
+			err, store.terminalReleases, store.releases, store.completions)
 	}
 }
 
@@ -538,5 +539,19 @@ func TestPartitionHandlerLogsAFailedExhaustWithoutTheErrorText(t *testing.T) {
 	}
 	if strings.Contains(logged, "SECRET-DRIVER-TEXT") {
 		t.Fatalf("log leaks the error text: %q", logged)
+	}
+}
+
+// CHAOS-8176: River discards a Permanent job outright, so both Permanent exits that hold a claim (a LoadRun
+// ErrInvalidState and a run that does not match the execution) must use the TERMINAL release; the ordinary release
+// left the partition failed without the exhausted marker and its run running for ever.
+func TestPartitionHandlerLoadRunInvalidStateReleasesTerminally(t *testing.T) {
+	store := &handlerStore{claim: handlerClaim(), loadRunErr: ErrInvalidState}
+	handler, _ := NewPartitionHandler[jobruntime.RemainingCapacityArgs](store, &handlerExecutor{}, "capacity")
+	err := handler.Work(t.Context(), capacityExecution())
+	if err == nil || !strings.Contains(err.Error(), string(jobruntime.CategoryPermanent)) ||
+		store.terminalReleases != 1 || store.releases != 0 || store.completions != 0 {
+		t.Fatalf("load run invalid state error=%v terminalReleases=%d releases=%d completions=%d",
+			err, store.terminalReleases, store.releases, store.completions)
 	}
 }

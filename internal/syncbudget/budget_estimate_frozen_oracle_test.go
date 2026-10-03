@@ -259,6 +259,7 @@ func TestBudgetEstimatorMatchesFrozenPython(t *testing.T) {
 				continue
 			}
 			accepted++
+			declaredDict := false
 			if oracleCase.Input == nanKeyDivergenceInput {
 				// Declared divergence (CHAOS-8387): json.loads hands Python one
 				// shared NaN object, so dict() keeps one NaN key; Go keeps
@@ -278,7 +279,7 @@ func TestBudgetEstimatorMatchesFrozenPython(t *testing.T) {
 						oracleCase.Input, nanKeyDivergencePython, nanKeyDivergenceGo, oracleCase.Python.Dict, got)
 				}
 				nanSeen = true
-				continue
+				declaredDict = true
 			}
 			if got := pyRepr(value); got != oracleCase.Python.Repr {
 				t.Errorf("case %d %q: repr python %s, go %s", index, oracleCase.Input, oracleCase.Python.Repr, got)
@@ -287,7 +288,9 @@ func TestBudgetEstimatorMatchesFrozenPython(t *testing.T) {
 				t.Errorf("case %d %q: dumps python %s, go %s", index, oracleCase.Input, oracleCase.Python.Dumps, got)
 			}
 			entries, dictErr := dictEntries(value)
-			if (oracleCase.Python.DictError != "") != (dictErr != nil) {
+			if declaredDict {
+				// pinned above
+			} else if (oracleCase.Python.DictError != "") != (dictErr != nil) {
 				t.Errorf("case %d %q: dict() python error %q, go %v", index, oracleCase.Input, oracleCase.Python.DictError, dictErr)
 			} else if dictErr == nil {
 				parts := make([]string, len(entries))

@@ -326,6 +326,10 @@ func Execute(
 	}
 	registry := health.NewRegistry(cfg.HealthCheckTimeout)
 	registry.SetRefusalLogger(logger)
+	if err := registry.RegisterMetrics("otel_init_failures", tracing.InitFailuresSource()); err != nil {
+		logger.Error("register otel init failure counter", "error", err)
+		return 1
+	}
 	// Every binary exports the OTel instruments its code declares (the
 	// counters ported from the Python api, the coverage and ingest families
 	// declared through otel.Meter) on its own /metrics, as the api and the

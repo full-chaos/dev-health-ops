@@ -111,25 +111,37 @@ func syncUnitConcurrencyPerBucket() int {
 	return envPositiveInt("SYNC_UNIT_CONCURRENCY_PER_BUCKET", 8)
 }
 
-// syncUnitConcurrencyPerBucketSource names where syncUnitConcurrencyPerBucket's value comes from (CHAOS-8201).
-func syncUnitConcurrencyPerBucketSource() string {
-	if _, fromEnv := envPositiveIntFrom("SYNC_UNIT_CONCURRENCY_PER_BUCKET", 8); fromEnv {
-		return clampSourceEnv
-	}
-	return clampSourceDefault
-}
-
 // EffectiveAdmissionCaps reports the admission cap the dispatch guard applies
 // per cost class right now (the class's budget limit, lowered by
 // SYNC_UNIT_CONCURRENCY_PER_BUCKET) and that clamp itself, so a process can log
 // the numbers it actually enforces at start (CHAOS-7881). Class names are the
 // closed set of the budget table; no tenant data.
 func EffectiveAdmissionCaps() (clamp int, caps map[string]int) {
-	caps = make(map[string]int, 3)
-	for _, class := range []string{"light", "medium", "heavy"} {
-		caps[class] = concurrencyCapForCostClass(class)
+	snapshot := readAdmissionCaps()
+	return snapshot.clamp, snapshot.caps
+}
+
+// admissionCaps is ONE read of SYNC_UNIT_CONCURRENCY_PER_BUCKET and everything derived from it: the clamp, its source, and each class's
+// cap and cap source. The start line is built from one snapshot, so a variable that changes while the line is built cannot give a
+// cap derived with one clamp next to a reported clamp of another.
+type admissionCaps struct {
+	clamp       int
+	clampSource string
+	caps        map[string]int
+	capSources  map[string]string
+}
+
+func readAdmissionCaps() admissionCaps {
+	clamp, fromEnv := envPositiveIntFrom("SYNC_UNIT_CONCURRENCY_PER_BUCKET", 8)
+	snapshot := admissionCaps{clamp: clamp, clampSource: clampSourceDefault,
+		caps: make(map[string]int, 3), capSources: make(map[string]string, 3)}
+	if fromEnv {
+		snapshot.clampSource = clampSourceEnv
 	}
-	return syncUnitConcurrencyPerBucket(), caps
+	for _, class := range []string{"light", "medium", "heavy"} {
+		snapshot.caps[class], snapshot.capSources[class] = capAndSourceForClamp(class, clamp)
+	}
+	return snapshot
 }
 
 // Clamp sources: "env" = SYNC_UNIT_CONCURRENCY_PER_BUCKET is set to a positive integer and that is the clamp; "default"
@@ -141,11 +153,8 @@ const (
 
 // EffectiveAdmissionCapSources reports where the clamp and each class's cap come from, for the start line.
 func EffectiveAdmissionCapSources() (clampSource string, capSources map[string]string) {
-	capSources = make(map[string]string, 3)
-	for _, class := range []string{"light", "medium", "heavy"} {
-		_, capSources[class] = concurrencyCapAndSourceForCostClass(class)
-	}
-	return syncUnitConcurrencyPerBucketSource(), capSources
+	snapshot := readAdmissionCaps()
+	return snapshot.clampSource, snapshot.capSources
 }
 
 // logAdmissionCaps writes ONE Info line, when the service that runs the guard
@@ -155,8 +164,8 @@ func EffectiveAdmissionCapSources() (clampSource string, capSources map[string]s
 // visible at Info where the cap is enforced (CHAOS-7881). No org id or tenant
 // data.
 func logAdmissionCaps(logger *synclog.Logger) {
-	clamp, caps := EffectiveAdmissionCaps()
-	clampSource, capSources := EffectiveAdmissionCapSources()
+	snapshot := readAdmissionCaps()
+	clamp, caps, clampSource, capSources := snapshot.clamp, snapshot.caps, snapshot.clampSource, snapshot.capSources
 	budget := func(class string) int {
 		limit, _ := providerfoundation.CostClassBudgetLimit(class)
 		return limit
@@ -201,7 +210,12 @@ const (
 // concurrencyCapAndSourceForCostClass is the ONE place the cap is derived, so the number the guard enforces and the
 // source the start line reports cannot drift apart.
 func concurrencyCapAndSourceForCostClass(costClass string) (int, string) {
-	clamp := syncUnitConcurrencyPerBucket()
+	return capAndSourceForClamp(costClass, syncUnitConcurrencyPerBucket())
+}
+
+// capAndSourceForClamp is the derivation for a clamp that was already read: the start line reads the variable once and derives
+// every class from that one value.
+func capAndSourceForClamp(costClass string, clamp int) (int, string) {
 	if limit, ok := providerfoundation.CostClassBudgetLimit(costClass); ok && limit <= clamp {
 		return limit, capSourceTable
 	}

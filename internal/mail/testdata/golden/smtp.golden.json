@@ -339,6 +339,76 @@
       "body": "{\"sent\":true,\"mail\":{\"mail_from\":\"\\u003cdev-health@example.com\\u003e\",\"rcpt_to\":[\"\\u003cowner@example.test\\u003e\"],\"data\":\"Content-Type: multipart/alternative; boundary=\\\"BOUNDARY\\\"\\r\\nMIME-Version: 1.0\\r\\nFrom: dev-health@example.com\\r\\nTo: Owner Name \\u003cowner@example.test\\u003e\\r\\nSubject: Hello\\r\\n\\r\\n--BOUNDARY\\r\\nContent-Type: text/html; charset=\\\"us-ascii\\\"\\r\\nMIME-Version: 1.0\\r\\nContent-Transfer-Encoding: 7bit\\r\\n\\r\\n\\u003cp\\u003ex\\u003c/p\\u003e\\r\\n--BOUNDARY--\\r\\n\"}}"
     },
     {
+      "name": "subject with DEL",
+      "method": "PYTHON",
+      "path": "program sha256 335c5092eb8d7ca289f4db3a8c8940517225d0dada56d00f32a600d6485cbcb4 env sha256 aa3e1f0afa0006ee9b2a34fd9a993c9152ff6e7a77ab139d2aa74365968f84af",
+      "body_sha256": "958bfc8800b77a9477b0b982685f62ac3225c60fb0b159210d8c698e9535a8cb",
+      "request_headers_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "status": 0,
+      "headers": {},
+      "body": "{\"sent\":true,\"mail\":{\"mail_from\":\"\\u003cdev-health@example.com\\u003e\",\"rcpt_to\":[\"\\u003cowner@example.test\\u003e\"],\"data\":\"Content-Type: multipart/alternative; boundary=\\\"BOUNDARY\\\"\\r\\nMIME-Version: 1.0\\r\\nFrom: dev-health@example.com\\r\\nTo: owner@example.test\\r\\nSubject: ab\\r\\n\\r\\n--BOUNDARY\\r\\nContent-Type: text/html; charset=\\\"us-ascii\\\"\\r\\nMIME-Version: 1.0\\r\\nContent-Transfer-Encoding: 7bit\\r\\n\\r\\n\\u003cp\\u003ex\\u003c/p\\u003e\\r\\n--BOUNDARY--\\r\\n\"}}"
+    },
+    {
+      "name": "body with DEL",
+      "method": "PYTHON",
+      "path": "program sha256 335c5092eb8d7ca289f4db3a8c8940517225d0dada56d00f32a600d6485cbcb4 env sha256 aa3e1f0afa0006ee9b2a34fd9a993c9152ff6e7a77ab139d2aa74365968f84af",
+      "body_sha256": "2db28106fb9908e522d8fc603802cda8fd1cfbe1f88ba70f98f6c3875ac54ff2",
+      "request_headers_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "status": 0,
+      "headers": {},
+      "body": "{\"sent\":true,\"mail\":{\"mail_from\":\"\\u003cdev-health@example.com\\u003e\",\"rcpt_to\":[\"\\u003cowner@example.test\\u003e\"],\"data\":\"Content-Type: multipart/alternative; boundary=\\\"BOUNDARY\\\"\\r\\nMIME-Version: 1.0\\r\\nFrom: dev-health@example.com\\r\\nTo: owner@example.test\\r\\nSubject: Hello\\r\\n\\r\\n--BOUNDARY\\r\\nContent-Type: text/html; charset=\\\"us-ascii\\\"\\r\\nMIME-Version: 1.0\\r\\nContent-Transfer-Encoding: 7bit\\r\\n\\r\\n\\u003cp\\u003e\\u003c/p\\u003e\\r\\n--BOUNDARY--\\r\\n\"}}"
+    },
+    {
+      "name": "angle-bracketed bare recipient",
+      "method": "PYTHON",
+      "path": "program sha256 335c5092eb8d7ca289f4db3a8c8940517225d0dada56d00f32a600d6485cbcb4 env sha256 aa3e1f0afa0006ee9b2a34fd9a993c9152ff6e7a77ab139d2aa74365968f84af",
+      "body_sha256": "7c6ae37e6e6dfddbb5134743f408cd2b5388fbd95d3134e556e857b86033e6f5",
+      "request_headers_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "status": 0,
+      "headers": {},
+      "body": "{\"sent\":true,\"mail\":{\"mail_from\":\"\\u003cdev-health@example.com\\u003e\",\"rcpt_to\":[\"\\u003cowner@example.test\\u003e\"],\"data\":\"Content-Type: multipart/alternative; boundary=\\\"BOUNDARY\\\"\\r\\nMIME-Version: 1.0\\r\\nFrom: dev-health@example.com\\r\\nTo: \\u003cowner@example.test\\u003e\\r\\nSubject: Hello\\r\\n\\r\\n--BOUNDARY\\r\\nContent-Type: text/html; charset=\\\"us-ascii\\\"\\r\\nMIME-Version: 1.0\\r\\nContent-Transfer-Encoding: 7bit\\r\\n\\r\\n\\u003cp\\u003ex\\u003c/p\\u003e\\r\\n--BOUNDARY--\\r\\n\"}}"
+    },
+    {
+      "name": "recipient with outer white space",
+      "method": "PYTHON",
+      "path": "program sha256 335c5092eb8d7ca289f4db3a8c8940517225d0dada56d00f32a600d6485cbcb4 env sha256 aa3e1f0afa0006ee9b2a34fd9a993c9152ff6e7a77ab139d2aa74365968f84af",
+      "body_sha256": "8f8b9baae9a160815ff25c1a45598ac4a79ffc09904acbf19db816467fc64755",
+      "request_headers_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "status": 0,
+      "headers": {},
+      "body": "{\"sent\":true,\"mail\":{\"mail_from\":\"\\u003cdev-health@example.com\\u003e\",\"rcpt_to\":[\"\\u003cowner@example.test\\u003e\"],\"data\":\"Content-Type: multipart/alternative; boundary=\\\"BOUNDARY\\\"\\r\\nMIME-Version: 1.0\\r\\nFrom: dev-health@example.com\\r\\nTo:  owner@example.test \\r\\nSubject: Hello\\r\\n\\r\\n--BOUNDARY\\r\\nContent-Type: text/html; charset=\\\"us-ascii\\\"\\r\\nMIME-Version: 1.0\\r\\nContent-Transfer-Encoding: 7bit\\r\\n\\r\\n\\u003cp\\u003ex\\u003c/p\\u003e\\r\\n--BOUNDARY--\\r\\n\"}}"
+    },
+    {
+      "name": "recipient with a closing bracket only",
+      "method": "PYTHON",
+      "path": "program sha256 335c5092eb8d7ca289f4db3a8c8940517225d0dada56d00f32a600d6485cbcb4 env sha256 aa3e1f0afa0006ee9b2a34fd9a993c9152ff6e7a77ab139d2aa74365968f84af",
+      "body_sha256": "c3cae4f5fb58fe9b02eb8a532150f14da5c6374125d326b05a04cc0e62a86ac3",
+      "request_headers_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "status": 0,
+      "headers": {},
+      "body": "{\"sent\":true,\"mail\":{\"mail_from\":\"\\u003cdev-health@example.com\\u003e\",\"rcpt_to\":[\"\\u003cowner@example.test\\u003e\\u003e\"],\"data\":\"Content-Type: multipart/alternative; boundary=\\\"BOUNDARY\\\"\\r\\nMIME-Version: 1.0\\r\\nFrom: dev-health@example.com\\r\\nTo: owner@example.test\\u003e\\r\\nSubject: Hello\\r\\n\\r\\n--BOUNDARY\\r\\nContent-Type: text/html; charset=\\\"us-ascii\\\"\\r\\nMIME-Version: 1.0\\r\\nContent-Transfer-Encoding: 7bit\\r\\n\\r\\n\\u003cp\\u003ex\\u003c/p\\u003e\\r\\n--BOUNDARY--\\r\\n\"}}"
+    },
+    {
+      "name": "recipient without an at sign",
+      "method": "PYTHON",
+      "path": "program sha256 335c5092eb8d7ca289f4db3a8c8940517225d0dada56d00f32a600d6485cbcb4 env sha256 aa3e1f0afa0006ee9b2a34fd9a993c9152ff6e7a77ab139d2aa74365968f84af",
+      "body_sha256": "309bd8a6ed32a74eb7ff92edbecb611c13ba54306e10bc9f748c6aad5c1832ec",
+      "request_headers_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "status": 0,
+      "headers": {},
+      "body": "{\"sent\":true,\"mail\":{\"mail_from\":\"\\u003cdev-health@example.com\\u003e\",\"rcpt_to\":[\"\\u003cowner\\u003e\"],\"data\":\"Content-Type: multipart/alternative; boundary=\\\"BOUNDARY\\\"\\r\\nMIME-Version: 1.0\\r\\nFrom: dev-health@example.com\\r\\nTo: owner\\r\\nSubject: Hello\\r\\n\\r\\n--BOUNDARY\\r\\nContent-Type: text/html; charset=\\\"us-ascii\\\"\\r\\nMIME-Version: 1.0\\r\\nContent-Transfer-Encoding: 7bit\\r\\n\\r\\n\\u003cp\\u003ex\\u003c/p\\u003e\\r\\n--BOUNDARY--\\r\\n\"}}"
+    },
+    {
+      "name": "angle-bracketed sender with a space inside",
+      "method": "PYTHON",
+      "path": "program sha256 335c5092eb8d7ca289f4db3a8c8940517225d0dada56d00f32a600d6485cbcb4 env sha256 aa3e1f0afa0006ee9b2a34fd9a993c9152ff6e7a77ab139d2aa74365968f84af",
+      "body_sha256": "c45b184b6095e32ba7b2ab7d2de042d359c8288a7a9386610c47f69341954e1c",
+      "request_headers_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "status": 0,
+      "headers": {},
+      "body": "{\"sent\":true,\"mail\":{\"mail_from\":\"\\u003cdev health@example.com\\u003e\",\"rcpt_to\":[\"\\u003cowner@example.test\\u003e\"],\"data\":\"Content-Type: multipart/alternative; boundary=\\\"BOUNDARY\\\"\\r\\nMIME-Version: 1.0\\r\\nFrom: \\u003cdev health@example.com\\u003e\\r\\nTo: owner@example.test\\r\\nSubject: Hello\\r\\n\\r\\n--BOUNDARY\\r\\nContent-Type: text/html; charset=\\\"us-ascii\\\"\\r\\nMIME-Version: 1.0\\r\\nContent-Transfer-Encoding: 7bit\\r\\n\\r\\n\\u003cp\\u003ex\\u003c/p\\u003e\\r\\n--BOUNDARY--\\r\\n\"}}"
+    },
+    {
       "name": "invite template",
       "method": "PYTHON",
       "path": "program sha256 335c5092eb8d7ca289f4db3a8c8940517225d0dada56d00f32a600d6485cbcb4 env sha256 aa3e1f0afa0006ee9b2a34fd9a993c9152ff6e7a77ab139d2aa74365968f84af",

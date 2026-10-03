@@ -183,6 +183,15 @@ func TestSMTPSenderMatchesFrozenPythonSMTPProvider(t *testing.T) {
 		{Name: "angle-bracketed bare from", From: "<dev-health@example.com>", To: recipient, Subject: "Hello", HTML: "<p>x</p>"},
 		{Name: "mixed-case plus-address recipient", From: sender, To: "Owner+Tag@Example.TEST", Subject: "Hello", HTML: "<p>x</p>"},
 		{Name: "display-name recipient", From: sender, To: "Owner Name <owner@example.test>", Subject: "Hello", HTML: "<p>x</p>"},
+		// ---- DEL (0x7F) is ASCII; envelope forms parseaddr and the Go parser may read differently ----
+		// NOT recorded (a live difference, CHAOS-8399): To "<owner @example.test>" and "<owner@example.test" give a different RCPT TO in Go.
+		{Name: "subject with DEL", From: sender, To: recipient, Subject: "a\x7fb", HTML: "<p>x</p>"},
+		{Name: "body with DEL", From: sender, To: recipient, Subject: "Hello", HTML: "<p>\x7f</p>"},
+		{Name: "angle-bracketed bare recipient", From: sender, To: "<owner@example.test>", Subject: "Hello", HTML: "<p>x</p>"},
+		{Name: "recipient with outer white space", From: sender, To: " owner@example.test ", Subject: "Hello", HTML: "<p>x</p>"},
+		{Name: "recipient with a closing bracket only", From: sender, To: "owner@example.test>", Subject: "Hello", HTML: "<p>x</p>"},
+		{Name: "recipient without an at sign", From: sender, To: "owner", Subject: "Hello", HTML: "<p>x</p>"},
+		{Name: "angle-bracketed sender with a space inside", From: "<dev health@example.com>", To: recipient, Subject: "Hello", HTML: "<p>x</p>"},
 		// ---- templates ----
 		{Name: "invite template", From: sender, To: "invitee@example.test", Subject: "You're invited to join Acme", Template: "invite",
 			Context: map[string]string{"org_name": "Acme", "inviter_name": "Ada Lovelace", "accept_url": "http://localhost:3000/accept-invite?token=abc.def"}},

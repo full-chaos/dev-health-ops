@@ -1037,6 +1037,8 @@ type OperatingReviewDelta struct {
 	Absolute   float64  `json:"absolute"`
 	Percent    *float64 `json:"percent,omitempty"`
 	Status     string   `json:"status"`
+	// False = the prior week holds no stored value for the metric (CHAOS-8115); see ``OperatingReviewMetric.hasData``. ``priorValue`` is then a 0 placeholder, and ``absolute``, ``percent`` and ``status`` compare with that placeholder: a client draws "No data" for the prior week and no change.
+	HasPriorData bool `json:"hasPriorData"`
 }
 
 type OperatingReviewInput struct {
@@ -1050,6 +1052,8 @@ type OperatingReviewMetric struct {
 	Value float64               `json:"value"`
 	Unit  string                `json:"unit"`
 	Delta *OperatingReviewDelta `json:"delta"`
+	// True = the week holds a stored value for the metric (CHAOS-8115). False = no row of the metric's daily table in the week, only NULL values, or a read that failed: ``value`` is then a 0 placeholder, not a measured zero, and a client draws "No data". True with ``value`` 0 is a stored zero.
+	HasData bool `json:"hasData"`
 }
 
 type OperatingReviewSection struct {

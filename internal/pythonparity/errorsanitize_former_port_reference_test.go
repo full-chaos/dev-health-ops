@@ -158,3 +158,15 @@ func TestParityEntryPointIsByteIdenticalToMain(t *testing.T) {
 	}
 	t.Logf("%d texts compared, %d differ from main", len(texts), mismatches)
 }
+
+// The sync entry point has the cap of 4000 runes (error_sanitize.py's default): a longer text comes back at exactly 4000 runes and
+// ends with the truncation suffix. A composition called with no cap is RED.
+func TestSyncEntryPointCapsAtFourThousandRunes(t *testing.T) {
+	got := syncdispatchruntime.SanitizeErrorText(strings.Repeat("éx ", 3000))
+	if runes := []rune(got); len(runes) != 4000 || !strings.HasSuffix(got, "...[truncated]") {
+		t.Fatalf("got %d runes, suffix %q", len(runes), got[len(got)-20:])
+	}
+	if exact := strings.Repeat("y", 4000); syncdispatchruntime.SanitizeErrorText(exact) != exact {
+		t.Fatal("a text of exactly 4000 runes must come back whole")
+	}
+}

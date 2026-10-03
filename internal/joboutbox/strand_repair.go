@@ -1004,7 +1004,7 @@ const repairStrandedWorkGraphSQL = `
 		AND request.org_id::text = outbox.args ->> 'organization_id'
 	JOIN %s AS job
 		ON job.id = outbox.river_job_id
-		AND job.args @> jsonb_build_object('domain', jsonb_build_object('id', request.id::text))
+		AND job.args @> jsonb_build_object('domain', jsonb_build_object('id', request.org_id::text))
 	WHERE outbox.job_kind IN (
 			'workgraph.build', 'investment.materialize'
 		)

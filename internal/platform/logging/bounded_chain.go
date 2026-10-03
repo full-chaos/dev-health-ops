@@ -160,6 +160,28 @@ func unwrappedOne(err error) (next error) {
 	return nil
 }
 
+// isLeaf reports whether err unwraps to nothing in either form: its Unwrap() error answers nil (or it has none) and its
+// Unwrap() []error holds no non-nil element (or it has none). errors.Unwrap alone answers nil for every multi-error
+// (errors.Join, fmt.Errorf with two %w), so it cannot decide this. A panicking Unwrap is not a leaf (CHAOS-8127 r2).
+func isLeaf(err error) (leaf bool) {
+	defer func() {
+		if recover() != nil {
+			leaf = false
+		}
+	}()
+	if single, ok := err.(interface{ Unwrap() error }); ok && single.Unwrap() != nil {
+		return false
+	}
+	if multi, ok := err.(interface{ Unwrap() []error }); ok {
+		for _, inner := range multi.Unwrap() {
+			if inner != nil {
+				return false
+			}
+		}
+	}
+	return true
+}
+
 // ErrorAs is errors.As over a BOUNDED chain with the As methods under recover: a self-returning or panicking Unwrap, a cycle or a
 // panicking As cannot stall or crash the caller (CHAOS-7933). target is a non-nil pointer to an interface or to a type that
 // implements error. It takes an error, never text.

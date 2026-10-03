@@ -18,8 +18,10 @@ rule (`routing_call_succeeded`, D2886 condition 1) together, against the real sc
 from __future__ import annotations
 
 import json
+import shutil
 import stat
 import subprocess
+import sys
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -349,3 +351,324 @@ def test_every_compose_file_the_cut_exports_resolves_without_ci_under_the_root(
             assert resolved.is_file(), (
                 f"COMPOSE_FILE entry {entry!r} does not resolve from the root: {resolved}"
             )
+
+
+# ============================================================================
+# CHAOS-8369: pass-bigboy-admin2.sh D4566 class-rule cases, added to this existing file (D3942: no new test file).
+# EXPECTED-GONE at E7 with CHAOS-8364: the script drives the Python plane, so these cases end with it.
+#
+# pass-bigboy-admin2.sh obeys the D4566 class rules (CHAOS-8369), proven by RUNNING it.
+#
+# Rules: no credential in argv or the child env (the token reaches the in-container python on stdin
+# only); no result directory under /tmp in a container (results leave as one framed stdout stream);
+# compose verbs only (no bare `docker exec`/`docker run`); no test hook in the run file.
+#
+# Method: the REAL script runs under bash on a closed PATH whose `docker` is a recording stand-in. The
+# stand-in records argv, its own env and its stdin, then executes the REAL producer
+# (pass-bigboy-admin2-run.py, taken from the script's own `docker compose exec ... python3 -c SRC` argument)
+# with http.client replaced by a stub, so the framed stream the host unpacks is the producer's real
+# output, never hand-written. The script's two absolute host paths are substituted in a tmp copy (the
+# run file carries no test hook).
+#
+# Guard observed failing: `violations()` is also run on the OLD form of the script (the four pre-8369
+# lines, embedded below) and must report every rule break there; it must report none on the new one.
+# ============================================================================
+
+_a2_ROOT = Path(__file__).resolve().parents[2]
+_a2_BB = _a2_ROOT / "ci" / "bigboy"
+_a2_SCRIPT = _a2_BB / "pass-bigboy-admin2.sh"
+_a2_RUN_PY = _a2_BB / "pass-bigboy-admin2-run.py"
+_a2_UNPACK = _a2_BB / "pass-bigboy-admin2-unpack.py"
+_a2_MARKER = "plainword-marker-a2"
+_a2_HOST_ROOT = "/home/ubuntu/devhealth"
+
+_a2_FAKE_DOCKER = r"""#!/bin/bash
+# stand-in for docker: record argv/env/stdin, then run the real producer under a stubbed http.client
+d="$FAKE_DIR"
+printf '%s\0' "$@" > "$d/argv"
+env > "$d/env"
+src=""; prev=""
+for a in "$@"; do [ "$prev" = "-c" ] && src=$a; prev=$a; done
+if [ -z "$src" ]; then cat > "$d/stdin"; exit "${FAKE_RC:-0}"; fi
+tee "$d/stdin" | python3 -c '
+import http.client, os, sys
+seen = open(os.environ["FAKE_DIR"] + "/seen-auth", "a")
+methods = open(os.environ["FAKE_DIR"] + "/seen-methods", "a")
+class R:
+    reason = "stub"
+    def __init__(self, status): self.status = status
+    def read(self): return b"{}"
+    def getheaders(self): return [("content-type", "application/json")]
+class C:
+    def __init__(self, *a, **k): pass
+    def request(self, method, path, body=None, headers=None):
+        seen.write((headers or {}).get("Authorization", "-") + "\n"); seen.flush()
+        methods.write(method + " " + path + "\n"); methods.flush()
+        dirty = os.environ.get("FAKE_STATE") == "dirty" and method == "GET" and path.endswith("/settings/general/zz-venue-probe")
+        self._status = 200 if dirty else 404
+    def getresponse(self): return R(self._status)
+    def close(self): pass
+http.client.HTTPConnection = C
+exec(sys.argv[1])
+' "$src"
+rc=$?
+[ -n "${FAKE_RC:-}" ] && exit "$FAKE_RC"
+exit $rc
+"""
+
+_a2_OLD_FORM = f"""set -euo pipefail; umask 077
+HERE=$(cd "$(dirname "$0")" && pwd); OUT=${{1:-$HERE/pass-admin2}}
+rm -rf "$OUT"; mkdir -p "$OUT"
+export ADMIN="$(cat {_a2_HOST_ROOT}/.go-api-dev/bigboy-admin-proof.token)"
+docker exec -i -e ADMIN dev-health-api-1 python3 - < "$HERE/pass-bigboy-admin2-run.py"
+docker exec dev-health-api-1 tar cf - -C /tmp bbpass | tar xf - -C "$OUT" --strip-components=1
+docker exec dev-health-api-1 rm -rf /tmp/bbpass
+"""
+# The OLD run file read the token from the environment and wrote to /tmp/bbpass; the old form is
+# exercised only through its docker calls (the stand-in records them), so any python3 stdin script works.
+_a2_OLD_RUN_STUB = "import sys; sys.stdin.read()\n"
+
+
+def _a2_closed_bin(tmp: Path) -> Path:
+    b = tmp / "bin"
+    b.mkdir()
+    for tool in ("bash", "cat", "dirname", "tee", "rm", "mkdir", "env", "tar"):
+        p = shutil.which(tool)
+        assert p, tool
+        (b / tool).symlink_to(p)
+    (b / "python3").symlink_to(Path(sys.executable).resolve())
+    docker = b / "docker"
+    docker.write_text(_a2_FAKE_DOCKER)
+    docker.chmod(0o755)
+    return b
+
+
+def _a2_stage(tmp: Path, script_text: str, run_py_text: str):
+    host = tmp / "host"
+    (host / ".go-api-dev").mkdir(parents=True)
+    (host / "ops").mkdir()
+    (host / "ops" / ".env").write_text("X=1\n")
+    tokfile = host / ".go-api-dev" / "bigboy-admin-proof.token"
+    tokfile.write_text(_a2_MARKER + "\n")
+    tokfile.chmod(0o600)
+    ci = tmp / "ci"
+    ci.mkdir()
+    n = script_text.count(_a2_HOST_ROOT)
+    (ci / "pass-bigboy-admin2.sh").write_text(
+        script_text.replace(_a2_HOST_ROOT, str(host))
+    )
+    (ci / "pass-bigboy-admin2-run.py").write_text(run_py_text)
+    shutil.copy(_a2_BB / "pass-bigboy-admin2-table.py", ci)
+    shutil.copy(_a2_UNPACK, ci)
+    return ci / "pass-bigboy-admin2.sh", n
+
+
+def _a2_run(
+    tmp: Path,
+    script: Path,
+    out: Path,
+    fake_rc: str | None = None,
+    fake_state: str | None = None,
+):
+    fake = tmp / "fake"
+    fake.mkdir(exist_ok=True)
+    env = {"PATH": str(_a2_closed_bin(tmp)), "FAKE_DIR": str(fake), "HOME": str(tmp)}
+    if fake_rc is not None:
+        env["FAKE_RC"] = fake_rc
+    if fake_state is not None:
+        env["FAKE_STATE"] = fake_state
+    proc = subprocess.run(
+        ["bash", str(script), str(out)],
+        capture_output=True,
+        text=True,
+        timeout=120,
+        env=env,
+        cwd=tmp,
+        check=False,
+    )
+    return proc, fake
+
+
+def _a2_violations(fake: Path, proc: subprocess.CompletedProcess[str]) -> list[str]:
+    """The D4566 class rules, read off what the stand-in actually received."""
+    v = []
+    argvs = (
+        (fake / "argv").read_bytes().split(b"\0") if (fake / "argv").exists() else []
+    )
+    argv = [a.decode() for a in argvs]
+    envtxt = (fake / "env").read_text() if (fake / "env").exists() else ""
+    if any(_a2_MARKER in a for a in argv):
+        v.append("credential in argv")
+    if _a2_MARKER in envtxt or any(
+        ln.startswith("ADMIN=") for ln in envtxt.splitlines()
+    ):
+        v.append("credential in child env")
+    if "/tmp" in " ".join(argv):
+        v.append("/tmp path in a container argument")
+    if argv and argv[0] != "compose":
+        v.append(f"bare docker verb {argv[0]!r}")
+    return v
+
+
+def _a2_new_run(
+    tmp_path: Path, fake_rc: str | None = None, fake_state: str | None = None
+):
+    script, n = _a2_stage(tmp_path, _a2_SCRIPT.read_text(), _a2_RUN_PY.read_text())
+    assert n == 2, (
+        "expected exactly the two host-path literals (token file, compose root)"
+    )
+    out = tmp_path / "out"
+    proc, fake = _a2_run(tmp_path, script, out, fake_rc, fake_state)
+    return proc, fake, out
+
+
+def test_new_script_obeys_every_class_rule(tmp_path: Path) -> None:
+    proc, fake, out = _a2_new_run(tmp_path)
+    assert proc.returncode == 0, (proc.stdout, proc.stderr)
+    assert _a2_violations(fake, proc) == []
+    argv = (fake / "argv").read_bytes().split(b"\0")
+    assert argv[:2] == [b"compose", b"--env-file"] and b"exec" in argv and b"-T" in argv
+    # positive control: the producer really received the token, and only via stdin
+    assert (fake / "stdin").read_text() == _a2_MARKER + "\n"
+    seen = (fake / "seen-auth").read_text().split("\n")
+    assert f"Bearer {_a2_MARKER}" in seen
+    # the real producer's frames reached $OUT and the table rendered from them
+    files = sorted(p.name for p in out.iterdir())
+    assert "table.txt" in files and any(f.endswith(".headers.raw") for f in files)
+    assert not any("/tmp/bbpass" in str(p) for p in out.rglob("*"))
+    # the credential is printed nowhere and is in no result file
+    assert _a2_MARKER not in proc.stdout and _a2_MARKER not in proc.stderr
+    for p in out.rglob("*"):
+        if p.is_file():
+            assert _a2_MARKER.encode() not in p.read_bytes(), p.name
+
+
+def test_old_form_is_seen_failing_every_rule(tmp_path: Path) -> None:
+    script, n = _a2_stage(
+        tmp_path, "#!/usr/bin/env bash\n" + _a2_OLD_FORM, _a2_OLD_RUN_STUB
+    )
+    assert n == 1
+    out = tmp_path / "out"
+    proc, fake = _a2_run(tmp_path, script, out)
+    got = _a2_violations(fake, proc)
+    # the stand-in records the LAST docker call (rm -rf /tmp/bbpass); the first call's env/argv matter too,
+    # so also read the shell source: the old form exports the token and uses bare exec.
+    assert "bare docker verb 'exec'" in got
+    assert "/tmp path in a container argument" in got
+    assert "export ADMIN=" in _a2_OLD_FORM and "-e ADMIN" in _a2_OLD_FORM
+
+
+def test_a_state_that_is_not_clean_aborts_before_any_write(tmp_path: Path) -> None:
+    proc, fake, out = _a2_new_run(tmp_path, fake_state="dirty")
+    assert proc.returncode != 0, (proc.stdout, proc.stderr)
+    assert "ABORT part B" in proc.stderr
+    sent = (fake / "seen-methods").read_text().splitlines()
+    assert any(line.startswith("GET ") for line in sent)
+    writes = [
+        line
+        for line in sent
+        if line.split(" ", 1)[0] in {"PUT", "PATCH", "DELETE"}
+        or (line.startswith("POST ") and "install-url" not in line)
+    ]
+    assert writes == [], writes
+    assert not (out / "table.txt").exists() or (out / "table.txt").stat().st_size == 0
+
+
+def test_remote_failure_fails_the_script(tmp_path: Path) -> None:
+    proc, _, out = _a2_new_run(tmp_path, fake_rc="7")
+    assert proc.returncode != 0
+    assert not (out / "table.txt").exists() or (out / "table.txt").stat().st_size == 0
+
+
+def test_run_py_without_token_on_stdin_exits_4() -> None:
+    p = subprocess.run(
+        [sys.executable, str(_a2_RUN_PY)],
+        input="",
+        capture_output=True,
+        text=True,
+        timeout=30,
+    )
+    assert p.returncode == 4 and p.stdout == ""
+
+
+def test_run_py_has_no_env_token_and_no_tmp() -> None:
+    src = "\n".join(
+        ln
+        for ln in _a2_RUN_PY.read_text().splitlines()
+        if not ln.lstrip().startswith("#")
+    )
+    assert "environ" not in src and "/tmp" not in src and "import os" not in src
+
+
+def test_script_has_no_forbidden_forms() -> None:
+    src = "\n".join(
+        ln
+        for ln in _a2_SCRIPT.read_text().splitlines()
+        if not ln.lstrip().startswith("#")
+    )
+    for bad in (
+        "export ADMIN",
+        "-e ADMIN",
+        "docker exec",
+        "docker run",
+        "/tmp",
+        "tar ",
+        "$(cat /home",
+    ):
+        assert bad not in src, bad
+    assert "docker compose" in src
+
+
+def _a2_unpack(stream: bytes, tmp_path: Path):
+    out = tmp_path / "u"
+    out.mkdir(exist_ok=True)
+    p = subprocess.run(
+        [sys.executable, str(_a2_UNPACK), str(out)],
+        input=stream,
+        capture_output=True,
+        timeout=30,
+    )
+    return p, out
+
+
+def test_unpack_accepts_a_well_formed_stream(tmp_path: Path) -> None:
+    p, out = _a2_unpack(b"@@FILE\ta.x\t3\nabc\n@@END\t1\tok\n", tmp_path)
+    assert p.returncode == 0 and (out / "a.x").read_bytes() == b"abc"
+
+
+def test_unpack_refuses_every_malformed_stream(tmp_path: Path) -> None:
+    bad = {
+        "no END": b"@@FILE\ta.x\t3\nabc\n",
+        "empty": b"",
+        "short body": b"@@FILE\ta.x\t9\nabc\n@@END\t1\tok\n",
+        "path name": b"@@FILE\t../evil\t1\nx\n@@END\t1\tok\n",
+        "slash name": b"@@FILE\ta/b\t1\nx\n@@END\t1\tok\n",
+        "count mismatch": b"@@FILE\ta.x\t1\nx\n@@END\t2\tok\n",
+        "status not ok": b"@@FILE\ta.x\t1\nx\n@@END\t1\tabort-state-not-clean\n",
+        "trailing bytes": b"@@END\t0\tok\nJUNK",
+    }
+    for label, stream in bad.items():
+        p, _ = _a2_unpack(stream, tmp_path)
+        assert p.returncode != 0, label
+    assert not (tmp_path / "evil").exists()
+
+
+def test_a2_a_non_empty_out_dir_is_refused_not_wiped(tmp_path: Path) -> None:
+    """Approver fix: the script never rm -rf's a path taken from argv."""
+    script, _ = _a2_stage(tmp_path, _a2_SCRIPT.read_text(), _a2_RUN_PY.read_text())
+    out = tmp_path / "out"
+    out.mkdir()
+    keep = out / "keep.txt"
+    keep.write_text("precious")
+    proc, fake = _a2_run(tmp_path, script, out)
+    assert proc.returncode == 3 and "REFUSED" in proc.stderr
+    assert keep.read_text() == "precious"
+    assert not (fake / "argv").exists(), (
+        "docker must not run when the out dir is refused"
+    )
+    code = "\n".join(
+        ln
+        for ln in _a2_SCRIPT.read_text().splitlines()
+        if not ln.lstrip().startswith("#")
+    )
+    assert "rm -rf" not in code

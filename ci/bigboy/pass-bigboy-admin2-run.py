@@ -1,16 +1,33 @@
 import http.client
 import json
-import os
-import pathlib
 import re
-import shutil
 import sys
 
-out = pathlib.Path("/tmp/bbpass")
-shutil.rmtree(out, ignore_errors=True)
-out.mkdir()
+# CHAOS-8369 (D4566 class rules): the admin proof token arrives on STDIN (first line), never in argv or
+# the environment of this process; results are held in memory and leave as ONE framed stream on stdout
+# (no file is written in the container); progress goes to stderr. Frame grammar, read by
+# pass-bigboy-admin2-unpack.py: "@@FILE\t<name>\t<nbytes>\n<bytes>\n" per file, then "@@END\t<nfiles>\t<status>\n".
+# A stream with no END frame is a failed measurement on the host side.
 ORIGIN = "http://localhost:3000"
-ADMIN = os.environ["ADMIN"]
+ADMIN = sys.stdin.readline().strip()
+if not ADMIN:
+    print("ABORT: no admin proof token on stdin", file=sys.stderr, flush=True)
+    sys.exit(4)
+FILES = {}
+
+
+def log(msg):
+    print(msg, file=sys.stderr, flush=True)
+
+
+def emit(status):
+    w = sys.stdout.buffer
+    for name in sorted(FILES):
+        w.write(f"@@FILE\t{name}\t{len(FILES[name])}\n".encode() + FILES[name] + b"\n")
+    w.write(f"@@END\t{len(FILES)}\t{status}\n".encode())
+    w.flush()
+
+
 Z = "00000000-0000-4000-8000-000000000000"
 PLANES = {"go": ("go-api", 8000), "python": ("localhost", 8000)}
 
@@ -38,9 +55,9 @@ def call(plane, method, path, body=None, origin=False):
 
 
 def save(label, plane, mode, hd, data):
-    f = out / f"{label}.{plane}.{mode}"
-    (f.with_suffix(f.suffix + ".headers.raw")).write_bytes(hd.encode())
-    (f.with_suffix(f.suffix + ".body.raw")).write_bytes(data)
+    base = f"{label}.{plane}.{mode}"
+    FILES[base + ".headers.raw"] = hd.encode()
+    FILES[base + ".body.raw"] = data
 
 
 def get(p, plane="go"):
@@ -102,10 +119,9 @@ ORGID = (
     or (me or {}).get("org_id")
     or "67f1add8-9fcb-4272-addb-044b70c442c8"
 )
-print(
+log(
     f"DISCOVER cats={cn} key={KEY} users={len(ul)} creds={len(cl)} audit={len(ai)} "
-    f"sync_configs={len(scl)} cp_sources={len(csl)} backfill={len(bl)} org={bool(ORGID)}",
-    flush=True,
+    f"sync_configs={len(scl)} cp_sources={len(csl)} backfill={len(bl)} org={bool(ORGID)}"
 )
 # ---- Part A: reads ----
 reads = [
@@ -222,10 +238,10 @@ def state_clean():
 
 
 if not state_clean():
-    print(
-        f"ABORT part B: the probe setting {CATW}/{PK} already exists on a plane; not writing",
-        flush=True,
+    log(
+        f"ABORT part B: the probe setting {CATW}/{PK} already exists on a plane; not writing"
     )
+    emit("abort-state-not-clean")
     sys.exit(3)
 
 
@@ -310,5 +326,8 @@ for plane in ("go", "python"):
     for pl in PLANES:
         if not clean_on(pl):
             call(pl, "DELETE", A + f"settings/{CATW}/{PK}")
-            print("RESTORE forced on", pl, flush=True)
-print(f"PART B done; clean={state_clean()}", flush=True)
+            log(f"RESTORE forced on {pl}")
+clean = state_clean()
+log(f"PART B done; clean={clean}")
+emit("ok" if clean else "not-restored")
+sys.exit(0 if clean else 5)

@@ -7,6 +7,11 @@
 # no key material), sync-configs DELETE / PUT repositories on a missing id. Writes run noorigin only, one plane at a time
 # (go sequence, then python sequence, each ends restored). Requests are sent from inside the api container
 # (network-direct to each service). Credential: bigboy-admin-proof.token (0600), never printed.
+# CHAOS-8369 (D4566 class rules): the token reaches the in-container python on STDIN only (file redirect: no shell
+# variable, no export, no `-e`, not in argv); results leave the container as ONE framed stdout stream that
+# pass-bigboy-admin2-unpack.py writes under <out> on the host (nothing under /tmp in the container, no tar-out, no
+# rm -rf); compose verbs only (`docker compose exec -T api`). The api container is the PYTHON plane: this whole script is
+# EXPECTED-GONE at E7 (CHAOS-8364); its Go-only successor is a follow-up under 8364.
 # NOT covered here, by design: a valid llm-settings PUT (stores an API key), writes to a real sync config (the Fixture Org
 # has none), install-callback (needs an OAuth state), PagerDuty preflight (may call PagerDuty), llm-settings status/budget/spend
 # (Go answers 404, a route gap: they are listed as EXPECTED-GAP rows so the pass shows the gap instead of hiding it).
@@ -20,10 +25,12 @@
 # only) to its own sibling file, read from disk instead of piped: pass-bigboy-admin2-run.py,
 # pass-bigboy-admin2-table.py.
 set -euo pipefail; umask 077
-HERE=$(cd "$(dirname "$0")" && pwd); OUT=${1:-$HERE/pass-admin2}
-rm -rf "$OUT"; mkdir -p "$OUT"
-export ADMIN="$(cat /home/ubuntu/devhealth/.go-api-dev/bigboy-admin-proof.token)"
-docker exec -i -e ADMIN dev-health-api-1 python3 - < "$HERE/pass-bigboy-admin2-run.py"
-docker exec dev-health-api-1 tar cf - -C /tmp bbpass | tar xf - -C "$OUT" --strip-components=1
-docker exec dev-health-api-1 rm -rf /tmp/bbpass
+HERE=$(cd "$(dirname "$0")" && pwd)
+OUT=${1:-$HERE/pass-admin2}; case $OUT in /*) ;; *) OUT=$PWD/$OUT ;; esac
+TOKEN_FILE=/home/ubuntu/devhealth/.go-api-dev/bigboy-admin-proof.token
+# no rm -rf of a path taken from argv: an existing non-empty out dir is refused, never wiped
+mkdir -p "$OUT"; shopt -s nullglob dotglob; set -- "$OUT"/*; [ "$#" -eq 0 ] || { echo "REFUSED: $OUT is not empty (pass a fresh directory)" >&2; exit 3; }; shopt -u nullglob dotglob; set --
+cd /home/ubuntu/devhealth   # compose project root, as bigboy-cut.sh
+docker compose --env-file ops/.env exec -T api python3 -c "$(cat "$HERE/pass-bigboy-admin2-run.py")" < "$TOKEN_FILE" \
+  | python3 "$HERE/pass-bigboy-admin2-unpack.py" "$OUT"
 python3 "$HERE/pass-bigboy-admin2-table.py" "$OUT" | tee "$OUT/table.txt"

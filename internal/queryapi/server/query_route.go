@@ -1299,6 +1299,28 @@ const registeredFeatureFlagTimeseriesDocument = `query FeatureFlagTimeseries($or
   }
 }`
 
+// registeredTestopsJobFailuresDocument is the registered document for the
+// `testopsJobFailures` operation (CHAOS-8513, Go-only: no Python resolver
+// exists), the exact wire-form text the web client sends
+// (testdata/wire_capture/testopsjobfailures_captured.graphql; the wire form of
+// TESTOPS_JOB_FAILURES_QUERY, computed with the web's pinned urql).
+const registeredTestopsJobFailuresDocument = `query TestOpsJobFailures($orgId: String!, $input: TestOpsJobFailuresInput!) {
+  testopsJobFailures(orgId: $orgId, input: $input) {
+    groups {
+      workflowName
+      jobName
+      provider
+      runs
+      failedRuns
+      failureRate
+      __typename
+    }
+    totalCount
+    truncated
+    __typename
+  }
+}`
+
 // registeredTestopsRiskDocument is the registered document for the
 // `testopsRisk` operation, the exact wire-form text a real web client
 // sends (testdata/wire_capture/testopsrisk_captured.graphql).
@@ -3448,6 +3470,7 @@ func newQueryHandler(chClient featureflags.QueryClient, pgPool *pgxpool.Pool, ve
 		"aiAttributedPrs":                   digestHex(registeredAiAttributedPrsDocument),
 		"aiAttributionOverview":             digestHex(registeredAiAttributionOverviewDocument),
 		"testopsRisk":                       digestHex(registeredTestopsRiskDocument),
+		"testopsJobFailures":                digestHex(registeredTestopsJobFailuresDocument),
 		"workItemTeamAttributions":          digestHex(registeredWorkItemTeamAttributionsDocument),
 		"recommendations":                   digestHex(registeredRecommendationsDocument),
 	}

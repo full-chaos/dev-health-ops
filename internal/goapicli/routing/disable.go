@@ -33,7 +33,7 @@ func runDisable(argv []string) error {
 	common.bindPostgresURI(set, "domain Postgres DSN holding go_api_routing_state")
 	set.StringVar(&common.operations, "operations", "all-registered", "comma-separated operation names, or 'all-registered' (default)")
 	set.StringVar(&common.catalogPath, "catalog", goapiproof.DefaultCatalogPath, "the edge's registered-document catalog")
-	set.StringVar(&mode, "mode", "", "python = the documented safe default (same as no row); disabled = same reachability but records a deliberate decision; shadow = the client still gets Python's response (required)")
+	set.StringVar(&mode, "mode", "", "python = not served, the documented safe default; disabled = same reachability but records a deliberate decision; shadow = the client still gets Python's response (required). Each holds a catalog operation dark: an operation with NO row at any schema digest is served, and this verb never inserts one")
 	set.StringVar(&candidateBuild, "candidate-build", "", "optional GUARD: refuse if a row points at a different build than this, i.e. somebody repointed it since you looked. NEVER written -- disable changes mode only")
 	set.StringVar(&documentDigest, "document", "", "target the live row by its OWN document digest instead of the catalog's -- the only way to select a DOCUMENT_DRIFT row (as `status` names it), e.g. to guard-check -candidate-build against it. Exact-match; requires exactly one -operations name")
 	set.StringVar(&common.recordedBy, "recorded-by", "", "WHO is running this. Required with -apply")
@@ -223,6 +223,9 @@ func runDisable(argv []string) error {
 		// operation was SKIPPED rather than aborting every other named
 		// operation. Every OTHER row in this plan, including this same
 		// operation's own live row if it has one elsewhere, is unaffected.
+		if note := disableStillServedNote(change, isClass); note != "" {
+			fmt.Fprintln(stdout, note)
+		}
 		if change.DeadRowsOnly {
 			fmt.Fprintf(stdout, "    !! -candidate-build could not be checked: every row this operation has at the live schema digest is DEAD (no catalog document digest) -- SKIPPED, not disabled; re-run without the guard, or on an operation with a live row, to act on it\n")
 			skippedOperations = append(skippedOperations, change.Operation)
@@ -262,4 +265,24 @@ func runDisable(argv []string) error {
 		return refuse("-candidate-build could not be checked for: %v -- SKIPPED, not disabled; the rest of this plan was still applied above", skippedOperations)
 	}
 	return nil
+}
+
+// disableStillServedNote is the plan line for a named operation `disable` cannot turn off (CHAOS-8517).
+//
+// "(no row)" used to mean "already not served". For a CATALOG operation with no row at ANY schema digest
+// it now means the opposite: query-api's catalog rule serves it, and this verb -- which never inserts --
+// leaves it serving. The verb contacts nothing, so it states the rule of its own build ("a query-api of
+// this build"), never an observation of the deployed process. An off-ramp that prints "[no change]" over an operation that keeps serving has to
+// say so. The exit status is unchanged: a named operation with no row has always been a no-op here,
+// never a refusal.
+//
+// Empty for every other state: an MCP class row (a class root with no row is dark), an operation that
+// has a row at this digest (it is written, or already in the mode), one whose only rows at this digest
+// serve another document (DeadRowsOnly), and one that has a row at another schema digest (that row
+// still holds it dark, and its own line names those digests).
+func disableStillServedNote(change goapiproof.DisableChange, isClass bool) string {
+	if isClass || change.CurrentMode != "" || change.DeadRowsOnly || len(change.StaleSchemaDigests) > 0 {
+		return ""
+	}
+	return fmt.Sprintf("    !! no routing row at any schema digest: a query-api of this build SERVES this operation by the catalog rule, and `disable` never inserts a row, so it is NOT held dark. To hold it dark run `dho goapi routing seed -operations %s` (a shadow row is not served)", change.Operation)
 }

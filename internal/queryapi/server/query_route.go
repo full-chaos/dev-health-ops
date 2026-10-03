@@ -1710,6 +1710,39 @@ const registeredAiAttributedPrsDocument = `query AIAttributedPrs($orgId: String!
     dataAvailable
     rows {
       repoId
+      repoName
+      number
+      title
+      kind
+      workType
+      teamId
+      mergedAt
+      __typename
+    }
+    __typename
+  }
+}`
+
+// registeredAiAttributedPrsV1Document is the text of `aiAttributedPrs` BEFORE the PR Evidence list asked for
+// `repoName` (CHAOS-7991, CHAOS-8000 dual accept): a web build still on the old text keeps working while the new
+// one rolls out. Listed in legacyDigestsByOperation; remove it with the cleanup ticket once no client sends it
+// (testdata/wire_capture/aiattributedprs_v1_captured.graphql).
+const registeredAiAttributedPrsV1Document = `query AIAttributedPrs($orgId: String!, $dateRange: AIDateRangeInput!, $scope: AIScopeInput, $limit: Int! = 50, $offset: Int! = 0) {
+  aiAttributedPrs(
+    orgId: $orgId
+    dateRange: $dateRange
+    scope: $scope
+    limit: $limit
+    offset: $offset
+  ) {
+    orgId
+    startDate
+    endDate
+    total
+    hasMore
+    dataAvailable
+    rows {
+      repoId
       number
       title
       kind
@@ -3212,7 +3245,12 @@ func newQueryHandler(chClient featureflags.QueryClient, pgPool *pgxpool.Pool, ve
 	// uses to answer "is anything actually enabled?".
 	logRoutingStateDrift(pgPool, schemaDigest)
 	registryHandler := newRegistryHandler(schemaDigest, digestByOperation)
-	sw := routeswitch.NewPostgresSwitchWithLegacy(pgPool, schemaDigest, digestByOperation, legacyDigestsByOperation)
+	// CHAOS-8517: the serving switch carries the catalog rule -- a registered operation with no routing
+	// row at any schema digest is served; an operation that has a row keeps its row's answer
+	// (routeswitch/catalog_switch.go holds the rule and its row-state table). Only THIS switch has it:
+	// the proof switch below and the class-row switch (newClassRowSwitch) are built by the other
+	// constructors, so a measurement route still needs a row and an MCP class root with no row is dark.
+	sw := routeswitch.NewCatalogSwitchWithLegacy(pgPool, schemaDigest, digestByOperation, legacyDigestsByOperation)
 	routeMux := routeswitch.NewMux(sw)
 
 	// operationByDigest is digestByOperation's reverse index, built once
@@ -3633,6 +3671,7 @@ func newDocumentDispatchHandler(getenv getenvFunc, routeMux *routeswitch.Mux, op
 // digestByOperation. The literal below is cmd/registrydump's second parse target: keep its exact shape
 // (`"<operation>": {digestHex(<constIdent>), ...}`). Empty = every operation accepts one text.
 var legacyDigestsByOperation = map[string][]string{
+	"aiAttributedPrs":  {digestHex(registeredAiAttributedPrsV1Document)},
 	"capacityForecast": {digestHex(registeredCapacityForecastV1Document)},
 }
 

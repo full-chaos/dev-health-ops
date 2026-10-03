@@ -84,7 +84,7 @@ func TestDryRunHelpTextAgreesWithWhatTheRunDoes(t *testing.T) {
 		t.Fatal("no -dry-run flag")
 	}
 	usage := strings.ToLower(flag.Usage)
-	for _, fact := range []string{"no database", "no receipts", "refused", "nothing is executed or compared", "measured-nothing error", "with -mcp-roots the class proof still runs"} {
+	for _, fact := range []string{"no database", "no receipts", "refused", "nothing is executed or compared", "measured-nothing error", "with -mcp-roots the class proof still runs", "only the receipt write is skipped", "-mcp-reference doc-route refuses a dry run", "unless -go-edge"} {
 		if !strings.Contains(usage, fact) {
 			t.Errorf("the -dry-run help text does not say %q, which is what the run does: %q", fact, flag.Usage)
 		}

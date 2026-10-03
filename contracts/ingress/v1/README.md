@@ -184,10 +184,10 @@ a direct client with its default configuration (`use-forwarded-headers` and
 
 | Header | ingress-nginx (defaults) | Router |
 | --- | --- | --- |
-| `Host` | `$best_http_host` = `$http_host` | `$http_host` |
+| `Host` | `$best_http_host` = `$http_host` (else `$host`) | `$http_host` |
 | `X-Real-IP` | `$remote_addr` | `$remote_addr` |
 | `X-Forwarded-For` | `$remote_addr` (replaced) | `$remote_addr` |
-| `X-Forwarded-Host` | `$best_http_host` = `$http_host` | `$http_host` |
+| `X-Forwarded-Host` | `$best_http_host` = `$http_host` (else `$host`) | `$http_host` |
 | `X-Forwarded-Port` | `$pass_port` = `$server_port` | `$server_port` |
 | `X-Forwarded-Proto` | `$pass_access_scheme` = `$scheme` | `$scheme` |
 | `X-Forwarded-Scheme` | `$pass_access_scheme` = `$scheme` | `$scheme` |
@@ -203,9 +203,14 @@ never reaches a plane: the plane gets the router's value. The client's
 `X-Forwarded-For` and `X-Forwarded-Host` are kept only under the
 `X-Original-Forwarded-*` names, as ingress-nginx keeps them.
 
-Prod's ingress is not at the defaults (it runs `use-forwarded-headers`, behind
-its own trusted proxy). The router is the first hop of a compose stack, so it
-takes the values of a direct client.
+Two differences stay. For a request with no `Host` header ingress-nginx sends
+its server name (`$best_http_host` falls back to `$host`); the router sends no
+`Host` then. And prod's ingress is not at the defaults: per
+`internal/api/clientip` it runs `use-forwarded-headers` behind its own trusted
+proxy, so there the scheme, the port and the host come from that proxy's
+`X-Forwarded-*` headers and `$remote_addr` is the client address the realip
+module set. The router is the first hop of a compose stack, so it takes the
+values of a direct client.
 
 Notes for the package that wires the router into compose:
 
@@ -333,7 +338,8 @@ not measured against a running ingress-nginx.
   path, descending, then stable by path length, descending). The contract
   refuses two rules that match one path, so the only fact a request depends on
   is that the default rule is last.
-- The forwarded headers and their default values (`nginx.tmpl` and
+- The forwarded headers and their default values (`nginx.tmpl`,
+  `rootfs/etc/nginx/lua/lua_ingress.lua` and
   `internal/ingress/controller/config/config.go`).
 - The path nginx chooses on (percent-escapes decoded, dot segments resolved,
   slashes merged): measured on stock nginx (1.30.5 in the router image), taken

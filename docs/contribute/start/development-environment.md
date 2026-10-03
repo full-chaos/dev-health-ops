@@ -111,16 +111,16 @@ For a full Compose-managed development stack, build and start the services from 
 docker compose up -d --build
 ```
 
-The API is exposed on `http://127.0.0.1:8000`. Verify readiness:
+The API is exposed on `http://127.0.0.1:8000`. That port is the `router` service (nginx): it sends `/graphql` and the query REST paths to `query-api` and every other path to `go-api`, as the production Ingress does. Verify readiness:
 
 ```bash
 curl --fail http://127.0.0.1:8000/ready
 ```
 
-The GraphQL endpoint is available at `/graphql` when the API is running. Use the service logs to diagnose startup:
+The GraphQL endpoint is available at `/graphql` when the stack is running. Use the service logs to diagnose startup:
 
 ```bash
-docker compose logs -f api migrate
+docker compose logs -f router go-api query-api migrate
 ```
 
 Stop the stack without deleting data volumes:

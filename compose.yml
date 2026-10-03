@@ -29,29 +29,32 @@ name: dev-health-ops
 # every Go worker family that constructs a provider-credential decryptor
 # (sync/ops/heavy) on a bare bring-up -- reproduced: "worker family builder
 # failed", three stream runners 503. Single-anchor convention (formerly
-# shared with the bridge token above) so api/metrics-api and the Go fleet
-# stay byte-identical on the same local-only placeholder rather than two
+# shared with the bridge token above) so go-api, query-api and the Go worker
+# fleet stay byte-identical on the same local-only placeholder rather than
 # independent empty defaults that happen to agree only when an operator
 # sets the real value.
 x-settings-encryption-key:
   token: &settings-encryption-key
     SETTINGS_ENCRYPTION_KEY: ${SETTINGS_ENCRYPTION_KEY:-local-dev-settings-encryption-key}
 
-# Api's org-id-extraction middleware
-# (get_authenticated_user_from_headers, src/dev_health_ops/api/middleware/__init__.py)
-# runs for every request carrying an Authorization header -- including the
-# Go-worker bridge's bearer calls -- and unconditionally constructs
-# AuthService(), which raises RuntimeError("JWT_SECRET_KEY is required") with
-# no default anywhere in this file. Reproduced: heartbeat 500s with both the
-# correct and a wrong bridge token, so the claimed 200/401 behavior never
-# actually ran. Pre-existing gap (not introduced by this PR), but this PR is
-# what makes it block a default bring-up for the first time. One local-only
-# placeholder default, same convention as above.
+# The access-token key. go-api signs and verifies the user's access token
+# with it (JWT_SECRET_KEY), and query-api verifies the same token with the
+# same value (GO_API_EDGE_JWT_SECRET, set from this variable on that
+# service). One local-only placeholder default, same convention as above.
 x-jwt-secret-key:
   token: &jwt-secret-key
     # At least 32 characters: the Go api refuses a shorter access-token key at
     # startup (edgetoken), and both planes read this one value.
     JWT_SECRET_KEY: ${JWT_SECRET_KEY:-local-dev-jwt-secret-key-0123456789abcdef}
+
+# The one address of the router on the `planes` network (see `networks:`
+# below). The router has this address, and go-api names this address, and
+# only this address, in TRUSTED_PROXIES: go-api then reads X-Forwarded-For and
+# X-Real-IP from the router and from no other peer. To move the stack to
+# another subnet, change the subnet and the ip_range of `planes` and this
+# address together (the address must be inside the subnet and outside the
+# ip_range).
+x-router-address: &router-address "10.199.81.2"
 
 # Go/River worker topology (CHAOS-3142, folded in at CHAOS-3088 from
 # deploy/docker-compose/compose.go-workers.yml (deleted, CHAOS-6950) -- that file keeps its own
@@ -122,8 +125,8 @@ x-go-worker-env-base: &go-worker-env-base
   VALKEY_URI: redis://valkey:6379/1
   # deploy/go-workers/deployment.json requires this for the sync group, and
   # provider-sync handler construction fails closed without it. Shared with
-  # the Python services via the `x-settings-encryption-key` anchor above, so
-  # the value stays byte-identical between the two runtimes.
+  # go-api and query-api via the `x-settings-encryption-key` anchor above, so
+  # the value stays byte-identical between the workers and the two planes.
   # Found by executing the required readyz proof rather than
   # by inspection): go-worker/go-worker-heavy/go-worker-ops claim
   # work_graph_execution_requests rows via a coordinator-role connection
@@ -214,6 +217,21 @@ volumes:
   # keeps it; `down -v` deletes it and the next `up` generates a new pair.
   envelope_keys:
     driver: local
+
+networks:
+  # The hop from the router to the two planes. Its members are the router,
+  # go-api and query-api, and no other service. The router is on this network
+  # only; the planes are on it and on the default network (the stores). The
+  # subnet is fixed so that the router has a known address
+  # (`x-router-address` above). The ip_range keeps the addresses Docker gives
+  # to the planes away from that address: without it the first plane that
+  # starts takes the first free address of the subnet, which is the router's.
+  planes:
+    driver: bridge
+    ipam:
+      config:
+        - subnet: 10.199.81.0/28
+          ip_range: 10.199.81.8/29
 
 services:
   postgres:
@@ -546,242 +564,6 @@ services:
       clickhouse:
         condition: service_healthy
 
-  api:
-    # Declared alongside `build:` so an operator pin is honoured: this is a
-    # staging file, `pull_policy` is left at Compose's own default, and a
-    # one-shot job that keeps building locally while the long-running
-    # services honour a release pin is how a setup step ends up running a
-    # different build of the same binary. The default is the `:local` tag
-    # of the same family, which no registry publishes: unpinned, Compose
-    # builds it from THIS tree, so a start is one coherent revision. A
-    # published moving tag as the default was worse than no pin at all --
-    # present on the host from any earlier pull, Compose ran THAT image
-    # instead of building, putting a months-old migration beside a fleet
-    # built today. Two consequences, both deliberate: with no pin and no
-    # prior build there is nothing for `--no-build` to run, and `:local`
-    # is shared across compose projects on one host.
-    image: ${DEV_HEALTH_API_IMAGE:-ghcr.io/full-chaos/dev-hops-api:local}
-    build:
-      context: .
-      dockerfile: ./docker/Dockerfile
-      target: api
-      args:
-        SETUPTOOLS_SCM_PRETEND_VERSION: 0.0.0
-        COMMIT: ${COMMIT:-unknown}
-        BUILD_TIME: ${BUILD_TIME:-1970-01-01T00:00:00Z}
-    container_name: dev-health-api
-    command: |
-      --host 0.0.0.0 --port 8000 --reload
-    environment: &env
-      # JWT_SECRET_KEY had no default anywhere in this
-      # file -- the global org-id-extraction middleware's AuthService()
-      # construction raised on every request carrying an Authorization
-      # header, including Go-worker bridge calls, so the claimed heartbeat
-      # 200/401 proof never actually exercised the real default path. See
-      # `x-jwt-secret-key` above. Same gap
-      # for SETTINGS_ENCRYPTION_KEY's empty default -- see
-      # `x-settings-encryption-key` above.
-      <<:
-        - *jwt-secret-key
-        - *settings-encryption-key
-      SETUPTOOLS_SCM_PRETEND_VERSION_FOR_DEV_HEALTH_OPS: "0.0.0"
-      PYTHONPATH: /app/src
-      # CHAOS-7421: the Python api and metrics-api read the ordering contract
-      # through the same variable (unset is contract 1 THERE); contract 2 is the
-      # only supported one, so they carry it like every Go service.
-      OPERATIONAL_ORDERING_CONTRACT: ${OPERATIONAL_ORDERING_CONTRACT:-2}
-      # GraphQL analytics endpoint available at /graphql
-      GRAPHQL_QUERY_TIMEOUT: "30"
-      # CHAOS-2065: runtime DB traffic flows through PgBouncer (transaction mode).
-      # Run schema migrations against postgres:5432 directly -- see
-      # docs/ops/database-connection-pooling.md.
-      # Class sweep over the whole file, not only the knob found: api/metrics-api
-      # (this shared `&env` anchor) hardcoded past the same
-      # POSTGRES_USER/_PASSWORD/_DB and CLICKHOUSE_USER/_PASSWORD/_DB
-      # overrides every other consumer in this file already honours.
-      DATABASE_URI: "postgresql+asyncpg://${POSTGRES_USER:-postgres}:${POSTGRES_PASSWORD:-postgres}@pgbouncer:6432/${POSTGRES_DB:-postgres}"
-      PGBOUNCER_TRANSACTION_MODE: "true"
-      CLICKHOUSE_URI: "clickhouse://${CLICKHOUSE_USER:-ch}:${CLICKHOUSE_PASSWORD:-ch}@clickhouse:8123/${CLICKHOUSE_DB:-default}"
-      REDIS_URL: "redis://valkey:6379/1"
-      # Pre-existing gap fixed alongside CHAOS-3142: declared in
-      # .env.example but was never actually referenced by this file, so no
-      # override ever reached any container -- provider credential
-      # decryption (src/dev_health_ops/core/encryption.py, read by
-      # workers/task_utils.py for every provider) silently had no key in
-      # local dev. An empty default crash-looped the
-      # Go fleet on a bare bring-up -- now merged via `x-settings-encryption-key`
-      # in the single list-form `<<:` above, byte-identical between runtimes.
-      # CHAOS-2299: route sync dispatch to per-provider queues. Safe to enable
-      # here because the worker -Q lists below consume sync.<provider> in the
-      # SAME change. Bare-image deployments must follow the two-phase rollout
-      # in jobs/queues.py: expand consumer -Q lists first, then flip this.
-      PROVIDER_SYNC_QUEUES_ENABLED: "true"
-      # CHAOS-3942/CHAOS-3088: /health/workers checks worker_instances presence.
-      # The Go fleet below is this file's unconditional default, so it is the
-      # declared fleet the
-      # endpoint checks -- reconciler/scheduler/stream-* are excluded: they
-      # run a separate role with their own /healthz and never register
-      # worker_instances presence.
-      EXPECTED_WORKER_GROUPS: ${EXPECTED_WORKER_GROUPS:-heavy,ops,sync,sync-provider}
-      # There are no provider/dataset route switches. CHAOS-4054: capability is
-      # always on in the binary, the user's sync config decides what should run,
-      # and each worker's -Q/--queues topology decides what it serves.
-      # GitHub work-items is a five-alias matrix family, but only its canonical
-      # work-items claim may execute. Its Go route requires these two config
-      # artifacts. Leave them unset: every worker image ships them at
-      # /app/config, which is what the binary defaults to. Point them elsewhere
-      # only to override the packaged artifacts — an unreadable path fails Go
-      # readiness before a provider request or write.
-      WORKER_GITHUB_WORK_ITEMS_STATUS_MAPPING_PATH: ${WORKER_GITHUB_WORK_ITEMS_STATUS_MAPPING_PATH:-}
-      WORKER_GITHUB_WORK_ITEMS_INVESTMENT_CONFIG_PATH: ${WORKER_GITHUB_WORK_ITEMS_INVESTMENT_CONFIG_PATH:-}
-      AUTO_RUN_MIGRATIONS: "false"
-      STRIPE_SECRET_KEY: ${STRIPE_SECRET_KEY:-}
-      STRIPE_WEBHOOK_SECRET: ${STRIPE_WEBHOOK_SECRET:-}
-      STRIPE_PRICE_ID_TEAM: ${STRIPE_PRICE_ID_TEAM:-}
-      STRIPE_PRICE_ID_ENTERPRISE: ${STRIPE_PRICE_ID_ENTERPRISE:-}
-      LICENSE_PRIVATE_KEY: ${LICENSE_PRIVATE_KEY:-}
-      # Email (Resend)
-      EMAIL_PROVIDER: ${EMAIL_PROVIDER:-console}
-      EMAIL_API_KEY: ${EMAIL_API_KEY:-}
-      EMAIL_FROM_ADDRESS: ${EMAIL_FROM_ADDRESS:-noreply@example.com}
-      # Observability — OpenTelemetry (traces and metrics → SigNoz)
-      OTEL_ENABLED: ${OTEL_ENABLED:-false}
-      OTEL_EXPORTER_OTLP_ENDPOINT: ${OTEL_EXPORTER_OTLP_ENDPOINT:-http://signoz-otel-collector:4317}
-      OTEL_SERVICE_NAME: ${OTEL_SERVICE_NAME:-dev-health-ops}
-      OTEL_METRIC_EXPORT_INTERVAL: ${OTEL_METRIC_EXPORT_INTERVAL:-60000}
-      # Observability — Error reporting (Sentry SDK → BugSink)
-      SENTRY_DSN: ${SENTRY_DSN:-}
-      SENTRY_ENVIRONMENT: ${SENTRY_ENVIRONMENT:-development}
-      SENTRY_TRACES_RATE: ${SENTRY_TRACES_RATE:-0}
-      SENTRY_SEND_PII: ${SENTRY_SEND_PII:-true}
-      # CHAOS-6240: worker_metrics.py and its subprocess entrypoint
-      # worker_metrics_runner.py are DELETED (zero remaining callers) --
-      # the daily/remaining metrics compatibility bridge these three env
-      # vars used to configure no longer exists in Python. Nothing reads
-      # DEV_HEALTH_METRICS_RUNNER_MEMORY_LIMIT_BYTES,
-      # DEV_HEALTH_METRICS_RUNNER_MAX_CONCURRENCY, or
-      # DEV_HEALTH_TESTOPS_LOADER_MAX_ROWS any more (confirmed by grep across
-      # src/). Left set, not removed, in this PR -- deciding whether to drop
-      # them (and the metrics-api service/pids_limit sizing below that
-      # existed only to host the same bridge) is a separate follow-up, not
-      # decided or executed here; see this PR's RISK-NOTES.
-      DEV_HEALTH_METRICS_RUNNER_MEMORY_LIMIT_BYTES: ${DEV_HEALTH_METRICS_RUNNER_MEMORY_LIMIT_BYTES:-671088640}
-      DEV_HEALTH_METRICS_RUNNER_MAX_CONCURRENCY: ${DEV_HEALTH_METRICS_RUNNER_MAX_CONCURRENCY:-1}
-      DEV_HEALTH_TESTOPS_LOADER_MAX_ROWS: ${DEV_HEALTH_TESTOPS_LOADER_MAX_ROWS:-200000}
-    # CHAOS-4317 (historical rationale for this pids_limit -- unchanged by
-    # this edit): no compose file has ever set an explicit pids_limit, so
-    # the container's cgroup pids.max previously fell through to a
-    # host-wide ceiling. This finite, container-scoped limit is still a
-    # reasonable backstop on its own terms even though the specific reader
-    # it was originally sized for (worker_metrics.py's
-    # _effective_pids_ceiling) is deleted (CHAOS-6240) -- see the env block
-    # above for the same fact. Not retuned in this PR.
-    pids_limit: ${DEV_HEALTH_API_PIDS_LIMIT:-256}
-    depends_on:
-      postgres:
-        condition: service_healthy
-      clickhouse:
-        condition: service_healthy
-      valkey:
-        condition: service_healthy
-      migrate:
-        condition: service_completed_successfully
-      pgbouncer:
-        condition: service_started
-    ports:
-      - "8000:8000"
-    volumes:
-      - ./:/app
-    working_dir: /app
-    healthcheck:
-      test: [ "CMD", "wget", "--spider", "-q", "http://localhost:8000/ready" ]
-      interval: 15s
-      timeout: 5s
-      retries: 3
-      start_period: 30s
-
-  # CHAOS-4351 (historical): a second copy of `api` -- same image, same
-  # command, same environment (`<<: *env`) -- created to serve ONLY as the
-  # Go daily-runtime's metrics compatibility bridge target.
-  # CHAOS-6240: `worker_metrics.py` (the bridge's route handlers) and
-  # `worker_metrics_runner.py` (its subprocess entrypoint) are DELETED --
-  # zero remaining callers, confirmed by grep. This container no longer
-  # serves any route the rest of `api` does not; whether `go-worker-heavy`
-  # still points its `metrics` queue at this service, and whether this
-  # service should be retired outright, is a follow-up decision, not made
-  # or executed in this PR -- see RISK-NOTES.
-  #
-  # codex review (PR #1938, P2, re-scoped for the Go-default cutover,
-  # CHAOS-3088): this service is unconditional (no profile) like the rest of
-  # the Go fleet below. Go-default now means go-worker-heavy actually runs
-  # (`deploy.replicas: 1`) on a bare `docker compose up`, so this keeps its
-  # own pre-existing implicit default (no `deploy:` key -- one replica) to
-  # match. Left as-is pending the retirement decision above.
-  metrics-api:
-    # Declared alongside `build:` so an operator pin is honoured: this is a
-    # staging file, `pull_policy` is left at Compose's own default, and a
-    # one-shot job that keeps building locally while the long-running
-    # services honour a release pin is how a setup step ends up running a
-    # different build of the same binary. The default is the `:local` tag
-    # of the same family, which no registry publishes: unpinned, Compose
-    # builds it from THIS tree, so a start is one coherent revision. A
-    # published moving tag as the default was worse than no pin at all --
-    # present on the host from any earlier pull, Compose ran THAT image
-    # instead of building, putting a months-old migration beside a fleet
-    # built today. Two consequences, both deliberate: with no pin and no
-    # prior build there is nothing for `--no-build` to run, and `:local`
-    # is shared across compose projects on one host.
-    image: ${DEV_HEALTH_API_IMAGE:-ghcr.io/full-chaos/dev-hops-api:local}
-    build:
-      context: .
-      dockerfile: ./docker/Dockerfile
-      target: api
-      args:
-        SETUPTOOLS_SCM_PRETEND_VERSION: 0.0.0
-        COMMIT: ${COMMIT:-unknown}
-        BUILD_TIME: ${BUILD_TIME:-1970-01-01T00:00:00Z}
-    container_name: dev-health-metrics-api
-    command: |
-      --host 0.0.0.0 --port 8000 --reload
-    environment:
-      <<: *env
-    # CHAOS-4351 (historical): same pids formula as `api` above (see that
-    # block's comment) -- this container was sized for the same
-    # worker_metrics_runner spawn path, now deleted (CHAOS-6240). Left
-    # unretuned; see the service comment above.
-    pids_limit: ${DEV_HEALTH_API_PIDS_LIMIT:-256}
-    # CHAOS-4351 (team-lead ruling, historical): `api` has no explicit
-    # mem_limit in this dev-stack file today -- 2g is a stated, not
-    # measured, ceiling. The bridge OOM (CHAOS-4264/4350) this split
-    # guarded against no longer applies (worker_metrics.py deleted,
-    # CHAOS-6240); left unretuned, see the service comment above.
-    mem_limit: 2g
-    depends_on:
-      postgres:
-        condition: service_healthy
-      clickhouse:
-        condition: service_healthy
-      valkey:
-        condition: service_healthy
-      migrate:
-        condition: service_completed_successfully
-      pgbouncer:
-        condition: service_started
-    # CHAOS-4351 (team-lead ruling): local-only exposure for direct
-    # debugging -- prod's compose.production.yml (deleted, CHAOS-6950) deliberately has NO
-    # `ports:` here (internal DNS only is the "no public route").
-    ports:
-      - "8020:8000"
-    volumes:
-      - ./:/app
-    working_dir: /app
-    healthcheck:
-      test: [ "CMD", "wget", "--spider", "-q", "http://localhost:8000/ready" ]
-      interval: 15s
-      timeout: 5s
-      retries: 3
-      start_period: 30s
-
   # ---------------------------------------------------------------------------
   # Go/River workers (CHAOS-3142) -- the unconditional default as of
   # CHAOS-3088. The Celery/Beat fleet this replaced (CHAOS-4164) is deleted
@@ -801,8 +583,8 @@ services:
   # `deploy:` block, runs to completion once per `up` regardless.
   # ---------------------------------------------------------------------------
 
-  # The canonical Python migrate service (above) owns Alembic and
-  # ClickHouse. Re-run role provisioning only after it completes so guarded
+  # The migrate service (above, `dho migrate upgrade`) owns the PostgreSQL and
+  # ClickHouse schema. Re-run role provisioning only after it completes so guarded
   # grants see every current semantic table, including an already
   # initialized local volume.
   go-river-provision:
@@ -930,6 +712,17 @@ services:
       # deploy/go-workers/compose-go-workers.yml overlay forwarded this.
       RIVER_COORDINATOR_DATABASE_ROLE: ${RIVER_COORDINATOR_DATABASE_ROLE:-devhealth_coordinator}
       RIVER_COORDINATOR_DATABASE_PASSWORD: ${RIVER_COORDINATOR_DATABASE_PASSWORD:-devhealth_coordinator}
+      # The two plane logins that go-river-provision creates get their table
+      # privileges HERE: `dho migrate river` applies the api manifest to
+      # API_DATABASE_ROLE (unset: devhealth_api) and applies the query-api
+      # manifest ONLY when QUERY_API_DATABASE_ROLE names a role (unset:
+      # nothing is granted). Each plane's /readyz refuses a login that does
+      # not hold exactly its manifest, and the router waits for both planes
+      # to be healthy, so the two names here must be the names the planes
+      # log in as (go-api's API_DATABASE_ROLE, query-api's
+      # QUERY_API_DATABASE_ROLE).
+      API_DATABASE_ROLE: ${API_DATABASE_ROLE:-devhealth_api}
+      QUERY_API_DATABASE_ROLE: ${QUERY_API_DATABASE_ROLE:-devhealth_query_api}
     depends_on:
       go-river-provision:
         condition: service_completed_successfully
@@ -1141,10 +934,8 @@ services:
         condition: service_healthy
       # CHAOS-6279: the metrics-api dependency edge that used to live here
       # is deleted along with the flag that justified it
-      # (--operational-bridge-url) -- this group no longer calls out to
-      # metrics-api at all, so nothing here needs it healthy before
-      # starting. Whether the metrics-api service itself should be retired
-      # is a separate, not-yet-decided follow-up.
+      # (--operational-bridge-url). The metrics-api service itself is
+      # deleted too (CHAOS-8361): nothing called it.
     deploy: &go-worker-resources
       replicas: 1
       resources:
@@ -1259,8 +1050,13 @@ services:
   # http://localhost:8010/api/v1/billing/webhooks/stripe`). The three secrets
   # are the operator's own (`ops/.env`), unset by default: /health then answers
   # 503 and names which one is missing, the same designed behaviour the Python
-  # edge had. The api listener itself (:8000 inside the container) is not
-  # published: the Python `api` service owns host port 8000 locally.
+  # edge had.
+  #
+  # The api listener (:8000 inside the container) is the REST plane of the
+  # stack (CHAOS-8361): it is not published; the `router` service owns host
+  # port 8000 and sends every path that is not a query-api path here. The
+  # internal listener (:8091, /api/v1/internal/*) has no route in the router
+  # and no host port: the compose network is its boundary.
   go-api:
     <<: *go-worker-route-activate
     restart: unless-stopped
@@ -1283,10 +1079,35 @@ services:
       DEV_HEALTH_PG_DB: ${POSTGRES_DB:-postgres}
       API_DATABASE_ROLE: ${API_DATABASE_ROLE:-devhealth_api}
       VALKEY_URI: redis://valkey:6379/1
-      <<: *jwt-secret-key
+      # The access-token key, and the key that decrypts the stored provider
+      # credentials (the same value the workers read: without it the
+      # credential, SSO and PagerDuty routes cannot read a stored secret).
+      <<:
+        - *jwt-secret-key
+        - *settings-encryption-key
       STRIPE_SECRET_KEY: ${STRIPE_SECRET_KEY:-}
       STRIPE_WEBHOOK_SECRET: ${STRIPE_WEBHOOK_SECRET:-}
+      STRIPE_PRICE_ID_TEAM: ${STRIPE_PRICE_ID_TEAM:-}
+      STRIPE_PRICE_ID_ENTERPRISE: ${STRIPE_PRICE_ID_ENTERPRISE:-}
       LICENSE_PRIVATE_KEY: ${LICENSE_PRIVATE_KEY:-}
+      # Email (Resend). The default provider writes the mail to the log.
+      EMAIL_PROVIDER: ${EMAIL_PROVIDER:-console}
+      EMAIL_API_KEY: ${EMAIL_API_KEY:-}
+      EMAIL_FROM_ADDRESS: ${EMAIL_FROM_ADDRESS:-noreply@example.com}
+      # The same allow-list query-api reads for /graphql.
+      CORS_ALLOWED_ORIGINS: ${CORS_ALLOWED_ORIGINS:-http://localhost:3000}
+      # /health/workers checks worker_instances presence of these groups: the
+      # Go fleet below. reconciler/scheduler/stream-* are not in the list:
+      # they never register worker_instances presence.
+      EXPECTED_WORKER_GROUPS: ${EXPECTED_WORKER_GROUPS:-heavy,ops,sync,sync-provider}
+      # The router is the ONE peer whose X-Forwarded-For and X-Real-IP go-api
+      # reads (rate-limit keys, audit rows): its fixed address on the planes
+      # network, never a subnet. Every other peer is its own client.
+      TRUSTED_PROXIES: *router-address
+      # Observability: OpenTelemetry (traces and metrics to SigNoz). Off by
+      # default.
+      OTEL_ENABLED: ${OTEL_ENABLED:-false}
+      OTEL_EXPORTER_OTLP_ENDPOINT: ${OTEL_EXPORTER_OTLP_ENDPOINT:-http://signoz-otel-collector:4317}
       # The envelope signing key, as a read-only file from the envelope_keys
       # volume (written by envelope-keys-init). A path, never the key value: it
       # stays off `docker compose config` and `inspect`. The key id, issuer and
@@ -1304,12 +1125,23 @@ services:
         read_only: true
         volume:
           subpath: private
-    # No healthcheck here on purpose: a Python compose test pins go-reconciler
-    # as the only go-* service with one. query-api (below) has its own.
+    networks:
+      - default
+      - planes
+    # The same exec-form probe as go-reconciler and query-api: /readyz on
+    # --http-addr=:8080 (the listener, the api login's privilege manifest and
+    # Valkey). The router starts only when this probe passes. The image has no
+    # shell and no curl.
+    healthcheck:
+      test: ["CMD", "/usr/local/bin/dho", "reconciler", "healthcheck"]
+      interval: 15s
+      timeout: 5s
+      retries: 3
+      start_period: 20s
     depends_on:
-      # No direct dependency on the Python `migrate` service (a Go service must
-      # not gate on it); go-river-provision waits for it, so the api login's
-      # grants see every semantic table.
+      # No direct dependency on the `migrate` service (a long-running Go
+      # service must not gate on it); go-river-provision waits for it, so the
+      # api login's grants see every semantic table.
       envelope-keys-init:
         condition: service_completed_successfully
       go-river-provision:
@@ -1362,12 +1194,13 @@ services:
     volumes:
       - envelope_keys:/var/lib/dev-health/envelope-keys
 
-  # The Go query plane (`dho query-api`): /query (GraphQL) and the /api/v1
-  # read routes. It verifies go-api's signed envelope against the JWKS only; it
-  # never mounts the private key. No host port is published: reaching it from
-  # outside the compose network is the router's job. The per-route
-  # GO_API_*_ENABLED switches are not set here: every route stays off until the
-  # router change turns on the ones it serves.
+  # The Go query plane (`dho query-api`): /graphql and the /api/v1 read
+  # routes the router sends to it (contracts/ingress/v1/planes.json). A client
+  # reaches it with its own access token (GO_API_EDGE_JWT_SECRET); the signed
+  # envelope (verified against the JWKS only, the private key is never mounted
+  # here) is the credential of the operator verbs (`dho mint envelope`), not
+  # of a client. No host port is published: reaching it from outside the
+  # compose network is the router's job.
   query-api:
     image: ${DEV_HEALTH_GO_DHO_IMAGE:-ghcr.io/full-chaos/dev-health-go-dho:local}
     build:
@@ -1404,6 +1237,48 @@ services:
       # same placeholder and variable the api and go-api services read.
       GO_API_EDGE_JWT_SECRET: ${JWT_SECRET_KEY:-local-dev-jwt-secret-key-0123456789abcdef}
       CORS_ALLOWED_ORIGINS: ${CORS_ALLOWED_ORIGINS:-http://localhost:3000}
+      # One switch per REST route (an in-memory flag read once at start; unset,
+      # the route is not mounted and its path answers 404). The router sends
+      # each of these paths here and nothing else serves them, so every route
+      # the router names is on, as in production. A Go test
+      # (internal/ingressplanes) fails when a route switch of query-api is not
+      # in this list.
+      GO_API_DRILLDOWN_ISSUES_ENABLED: "true"
+      GO_API_DRILLDOWN_PRS_ENABLED: "true"
+      GO_API_EXPLAIN_ENABLED: "true"
+      GO_API_FILTER_OPTIONS_ENABLED: "true"
+      GO_API_FLAME_AGGREGATED_ENABLED: "true"
+      GO_API_FLAME_ENABLED: "true"
+      GO_API_HEATMAP_ENABLED: "true"
+      GO_API_HOME_ENABLED: "true"
+      GO_API_INVESTMENT_ENABLED: "true"
+      GO_API_INVESTMENT_EXPLAIN_ENABLED: "true"
+      GO_API_INVESTMENT_FLOW_ENABLED: "true"
+      GO_API_INVESTMENT_SUNBURST_ENABLED: "true"
+      GO_API_META_ENABLED: "true"
+      GO_API_OPPORTUNITIES_ENABLED: "true"
+      GO_API_PEOPLE_DRILLDOWN_ISSUES_ENABLED: "true"
+      GO_API_PEOPLE_DRILLDOWN_PRS_ENABLED: "true"
+      GO_API_PEOPLE_METRIC_ENABLED: "true"
+      GO_API_PEOPLE_SEARCH_ENABLED: "true"
+      GO_API_PEOPLE_SUMMARY_ENABLED: "true"
+      GO_API_QUADRANT_ENABLED: "true"
+      GO_API_SANKEY_ENABLED: "true"
+      GO_API_WORK_UNITS_ENABLED: "true"
+      GO_API_WORK_UNIT_EXPLAIN_ENABLED: "true"
+      # The two explain routes read an organization's stored LLM settings with
+      # the stack's settings key, and the platform LLM provider from these
+      # three (the operator's own; unset, the route has no platform provider).
+      <<: *settings-encryption-key
+      LLM_PROVIDER: ${LLM_PROVIDER:-}
+      LLM_MODEL: ${LLM_MODEL:-}
+      OPENAI_API_KEY: ${OPENAI_API_KEY:-}
+      # Observability: OpenTelemetry, as on go-api. Off by default.
+      OTEL_ENABLED: ${OTEL_ENABLED:-false}
+      OTEL_EXPORTER_OTLP_ENDPOINT: ${OTEL_EXPORTER_OTLP_ENDPOINT:-http://signoz-otel-collector:4317}
+    networks:
+      - default
+      - planes
     volumes:
       # Only the public/ subpath: the JWKS and nothing else.
       - type: volume
@@ -1413,7 +1288,9 @@ services:
         volume:
           subpath: public
     # Same exec-form probe as go-api (see there): /readyz on --http-addr=:8080.
-    # query-api's /readyz also checks that the JWKS file is readable and valid.
+    # query-api's /readyz checks ClickHouse, the registry Postgres pool, that
+    # the JWKS file is readable and valid, and that the registry login holds
+    # exactly the query-api privilege manifest (granted by go-river-migrate).
     healthcheck:
       test: ["CMD", "/usr/local/bin/dho", "reconciler", "healthcheck"]
       interval: 15s
@@ -1430,6 +1307,53 @@ services:
       postgres:
         condition: service_healthy
       clickhouse:
+        condition: service_healthy
+
+  # The router of the stack (CHAOS-8361): nginx on host port 8000, the one port
+  # a client or the web app calls. It sends each request to the plane that
+  # answers that path in production: /graphql and the query REST paths to
+  # query-api, every other path to go-api. The table is
+  # contracts/ingress/v1/planes.json; the mounted file is GENERATED from it
+  # (`go run ./internal/ingressplanes/cmd/routerconf`) and is the checked-in
+  # file itself, read-only, never a copy. The router adds no credential: it
+  # sets no Authorization and reads no cookie (contracts/ingress/v1/README.md).
+  #
+  # The image is the one the real-nginx routing test runs the same file in
+  # (ingressplanes.RouterImage, NGINX's unprivileged image, user 101): a
+  # routing result is proven only for that nginx build. It is not built here
+  # and has no pin variable. The file writes its pid and temporary files below
+  # /tmp only, so the root file system is read-only.
+  #
+  # It starts only when both planes are healthy, so host port 8000 answers
+  # only when a request can be served. The healthcheck is a GET of go-api's
+  # /ready THROUGH the router (the path the Python api's probe had on this
+  # port): it passes when nginx took the file, found go-api by name and go-api
+  # answered 200. The address is 127.0.0.1, not localhost: nginx listens on
+  # IPv4 only.
+  router:
+    image: ghcr.io/nginx/nginx-unprivileged:1.30-alpine@sha256:ed04ec1ff34502c339ee5c3ae3f855442398edc1d05591e2b98981dcbbd20b1e
+    restart: unless-stopped
+    read_only: true
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+    tmpfs: [/tmp]
+    volumes:
+      - ./contracts/ingress/v1/compose-router.nginx.conf:/etc/nginx/nginx.conf:ro
+    networks:
+      planes:
+        ipv4_address: *router-address
+    ports:
+      - "8000:8000"
+    healthcheck:
+      test: ["CMD", "wget", "-q", "-O", "/dev/null", "http://127.0.0.1:8000/ready"]
+      interval: 15s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+    depends_on:
+      go-api:
+        condition: service_healthy
+      query-api:
         condition: service_healthy
 
   go-reconciler:
@@ -1669,8 +1593,10 @@ services:
   #   git clone https://github.com/SigNoz/signoz.git && cd signoz/deploy
   #   docker compose -f docker/clickhouse-setup/docker-compose.yaml up -d
   #
-  # Then connect this stack to SigNoz's network:
-  #   docker network connect clickhouse-setup_default dev-health-api
+  # Then connect each plane of this stack to SigNoz's network (the names
+  # `docker compose ps` shows for go-api and query-api):
+  #   docker network connect clickhouse-setup_default dev-health-ops-go-api-1
+  #   docker network connect clickhouse-setup_default dev-health-ops-query-api-1
   #
   # UI:         http://localhost:8080  (from SigNoz stack)
   # OTLP gRPC:  signoz-otel-collector:4317

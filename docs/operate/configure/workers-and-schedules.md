@@ -164,7 +164,10 @@ same binary.
 | `DEV_HEALTH_GO_DHO_IMAGE` | `dev-health-go-dho` | the four `go-worker-*` processes (`dho worker`), `go-reconciler` (`dho reconciler`), `go-scheduler` (`dho scheduler`), the three `go-stream-*` processes (`dho stream-runner`), `query-api` (`dho query-api`, the `go-api` compose profile, `deploy/go-api/compose-query-api.yml`) and the one-shot `migrate` (`dho migrate upgrade --river`) |
 | `DEV_HEALTH_GO_OPERATOR_IMAGE` | `dev-health-go-operator` | the four `go-sync-*-route-activate` one-shots |
 | `DEV_HEALTH_GO_CONTRACTCHECK_IMAGE` | `dev-health-go-contractcheck` | `go-contractcheck` |
-| `DEV_HEALTH_API_IMAGE` | `dev-hops-api` | `api`, `metrics-api` |
+
+The `router` service (nginx on host port 8000) builds nothing and has no pin
+variable: its image is fixed by digest in `compose.yml`, the same image the
+routing test of `internal/ingressplanes` runs.
 
 Every default is the `:local` tag of its family, a tag no registry
 publishes. Unpinned, Compose has nothing to fetch under that name and

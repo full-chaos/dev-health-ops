@@ -408,6 +408,11 @@ func TestPatchChainCheckSeesEveryKindOfDrift(t *testing.T) {
 				t.Fatal(err)
 			}
 		},
+		"patch-like name that does not end in .patch": func(t *testing.T, base string) {
+			if err := os.WriteFile(filepath.Join(base, "patches", "0006-x.patch.go"), []byte("package patches\n"), 0o644); err != nil {
+				t.Fatal(err)
+			}
+		},
 		"directory in patches/": func(t *testing.T, base string) {
 			if err := os.MkdirAll(filepath.Join(base, "patches", "sub"), 0o755); err != nil {
 				t.Fatal(err)
@@ -433,7 +438,7 @@ func TestPatchChainCheckSeesEveryKindOfDrift(t *testing.T) {
 			addPatchRecord(t, base, "0006-header-only.patch", "diff --git a/third_party/vendor/atlassian/go.mod b/third_party/vendor/atlassian/go.mod\n")
 		},
 	}
-	plantedReason := map[string]string{"deleted upstream file": "is missing once the patches are reversed", "non-patch file in patches/": "is not a *.patch record file", "directory in patches/": "is not a *.patch record file", "directory named like a patch in patches/": "9999-dir.patch is not a *.patch record file", "symlink named like a patch in patches/": "9999-link.patch is not a *.patch record file"}
+	plantedReason := map[string]string{"deleted upstream file": "is missing once the patches are reversed", "non-patch file in patches/": "is not a *.patch record file", "directory in patches/": "is not a *.patch record file", "patch-like name that does not end in .patch": "0006-x.patch.go is not a *.patch record file", "directory named like a patch in patches/": "9999-dir.patch is not a *.patch record file", "symlink named like a patch in patches/": "9999-link.patch is not a *.patch record file"}
 	for name, mutate := range plant {
 		t.Run(name, func(t *testing.T) {
 			root := copyRepoSlice(t)

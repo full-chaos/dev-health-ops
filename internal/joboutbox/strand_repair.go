@@ -942,6 +942,7 @@ const repairStrandedFinalizeSQL = `
 		AND run.org_id::text = outbox.args ->> 'organization_id'
 	JOIN %s AS job
 		ON job.id = outbox.river_job_id
+		AND job.args @> jsonb_build_object('domain', jsonb_build_object('id', run.id::text))
 	WHERE outbox.job_kind = 'metrics.daily_finalize'
 		AND outbox.status = 'delivered'
 		AND outbox.river_job_id IS NOT NULL

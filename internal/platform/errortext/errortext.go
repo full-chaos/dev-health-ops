@@ -28,9 +28,10 @@ func Redact(text string) string {
 	return string(runes)
 }
 
-// redactASCII is Redact with the former RE2 port's reading of `\s` and `\b` (ASCII only): a key name glued to a non-ASCII letter
-// is a boundary there and not in Python.
-func redactASCII(text string) string {
+// RedactRE2Reading is Redact with the former RE2 port's reading of every Unicode-sensitive token: `\s` and `\b` are ASCII only (a key
+// name glued to a non-ASCII letter is a boundary there and not in Python) and the case fold is RE2's (only the Kelvin sign and the long s
+// fold, not U+0130/U+0131). It is the former port's chain reproduced by the one engine; TestRE2ReadingIsTheFormerChain pins it.
+func RedactRE2Reading(text string) string {
 	if text == "" {
 		return text
 	}
@@ -58,12 +59,6 @@ func Truncate(text string, maxLength int) string {
 	return string(runes[:maxLength])
 }
 
-// Sanitize is sanitize_error_text for the STRING-input path with Python's default cap of 4000 (the exception-object branch
-// has no Go counterpart). Empty input is returned as is.
-func Sanitize(text string) string {
-	return Truncate(Redact(text), defaultMaxErrorTextLength)
-}
-
 // SanitizeHardened is error_sanitize.py's pattern pass (Python-parity matchers) followed by the credential shapes the Python
 // list never had (LLM-provider, Stripe, Google, Slack and JWT keys by prefix, and a long value behind a credential word,
 // CHAOS-7937), then the cap, so a cap can never cut a key to a fragment below a shape's minimum length. maxLength <= 0 = no
@@ -87,7 +82,7 @@ func SanitizeHardenedShapesFirst(text string, maxLength int) string {
 		return text
 	}
 	shapes := logging.RedactCredentialShapes
-	return Truncate(Redact(redactASCII(shapes(text))), maxLength)
+	return Truncate(Redact(RedactRE2Reading(shapes(text))), maxLength)
 }
 
 // SanitizeHardenedShapesFirstDefault is SanitizeHardenedShapesFirst with Python's default cap of 4000.

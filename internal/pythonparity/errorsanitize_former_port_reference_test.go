@@ -9,6 +9,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/full-chaos/dev-health-ops/internal/platform/errortext"
 	"github.com/full-chaos/dev-health-ops/internal/platform/logging"
 	"github.com/full-chaos/dev-health-ops/internal/pythonparity"
 	"github.com/full-chaos/dev-health-ops/internal/syncdispatchruntime"
@@ -78,7 +79,10 @@ func gateTexts() []string {
 
 func TestSyncEntryPointNeverHidesLessThanTheFormerPort(t *testing.T) {
 	compared, shown := 0, 0
-	texts := gateTexts()
+	texts := append(gateTexts(),
+		// a key of dotless/dotted-i letters (which RE2 does not fold) that a second credential follows across a space
+		"author\u0131zat\u0131on=basic\u2028Zq9vT4mW2xLp8Rn7Hk3s\fBasic\tZq9vT4mW2xLp8Rn7Hk3sD6fJ== \u00e9",
+		"AP\u0130_KEY=\u2003Zq9vT4m\u205fabc\u00a0tail\v-Secret\n:\u3000value-y)")
 	for _, text := range texts {
 		compared++
 		former, tip := formerSyncSanitize(text), syncdispatchruntime.SanitizeErrorText(text)
@@ -169,4 +173,44 @@ func TestSyncEntryPointCapsAtFourThousandRunes(t *testing.T) {
 	if exact := strings.Repeat("y", 4000); syncdispatchruntime.SanitizeErrorText(exact) != exact {
 		t.Fatal("a text of exactly 4000 runes must come back whole")
 	}
+}
+
+// TestRE2ReadingIsTheFormerChain pins the claim the sync composition rests on: the engine's RE2 reading is byte-identical to the former RE2
+// pattern list over the whole gate corpus and a large generated one (keys, scheme words and values glued together, with every
+// Unicode-sensitive character inside and around them, the class vetter-3 found: a key made of dotless i letters that a second
+// credential follows). RED when the reading drifts (a fold, a space or a boundary rule).
+func TestRE2ReadingIsTheFormerChain(t *testing.T) {
+	former := func(text string) string {
+		for _, pattern := range formerSecretPatterns {
+			text = pattern.ReplaceAllString(text, "[REDACTED]")
+		}
+		return text
+	}
+	texts := gateTexts()
+	parts := []string{"Authorization", "authorization", "authorızatıon", "Bearer", "bearer", "Basic", "basic", "token", "api_key", "APİ_KEY", "apikey",
+		"Secret", "secret", "client_secret", "access_token", "private_token", "ghp_", "glpat-", "github_pat_", "xoxb-", "xoxa-", "://", "@", ":", "=", "-", "_", "+", "/",
+		"Zq9vT4mW2xLp8Rn7Hk3s", "ABCDEFGHIJKLMNOPQRSTUVWXYZ012345", "abcdefgh", "é", "İ", "ı", "ſ", "K", "K", "s", "i", "x", "X",
+		" ", "\t", "\n", "\f", "\r", "\v", " ", " ", " ", "　", "\u0085", "\u001c", " ", "|", ",", ".", "<", ">", "(", ")", "\""}
+	state := uint64(20261003)
+	next := func(n int) int {
+		state = state*6364136223846793005 + 1442695040888963407
+		return int((state >> 33) % uint64(n))
+	}
+	for i := 0; i < 60000; i++ {
+		var b strings.Builder
+		for n := 2 + next(9); n > 0; n-- {
+			b.WriteString(parts[next(len(parts))])
+		}
+		texts = append(texts, b.String())
+	}
+	different := 0
+	for _, text := range texts {
+		if got, want := errortext.RedactRE2Reading(text), former(text); got != want {
+			different++
+			if different <= 8 {
+				t.Errorf("RE2 reading of %q\n got  %q\n want %q", text, got, want)
+			}
+		}
+	}
+	t.Logf("%d texts compared, %d differ", len(texts), different)
 }

@@ -102,7 +102,9 @@ func TestSanitizeErrorTextMatchesFrozenPython(t *testing.T) {
 		sanit func(text string, cap int) (string, bool)
 	}{
 		{"pythonparity.SanitizeErrorText", func(text string, cap int) (string, bool) { return pythonparity.SanitizeErrorText(text, cap), true }},
-		{"errortext.Sanitize", func(text string, cap int) (string, bool) { return errortext.Sanitize(text), cap == 0 }},
+		{"errortext.Truncate(errortext.Redact)", func(text string, cap int) (string, bool) {
+			return errortext.Truncate(errortext.Redact(text), 4000), cap == 0
+		}},
 	}
 	for _, port := range ports {
 		compared, mismatches := 0, 0

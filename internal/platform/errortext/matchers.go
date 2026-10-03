@@ -14,10 +14,14 @@ import "unicode"
 // dialect is what `\s` and `\b` mean: pythonDialect is `re` over `str` (Unicode whitespace and word characters), asciiDialect is
 // what RE2 gave the former sync-writer port (ASCII only). The recorded Python answer is the first; the second is the extra
 // hardening pass of SanitizeHardened, so text the former port redacted is still redacted (CHAOS-7947).
-type dialect struct{ space, word func(rune) bool }
+type dialect struct {
+	space, word func(rune) bool
+	// dotted: the dotted capital I (U+0130) and the dotless i (U+0131) fold onto `i` (Python's `re` does, RE2 does not)
+	dotted bool
+}
 
 var (
-	pythonDialect = dialect{space: pySpace, word: pyWord}
+	pythonDialect = dialect{space: pySpace, word: pyWord, dotted: true}
 	asciiDialect  = dialect{space: asciiSpace, word: asciiWord}
 )
 
@@ -67,7 +71,7 @@ func boundaryAt(d dialect, text []rune, i int) bool {
 
 // foldEq is an ASCII pattern character under IGNORECASE: the letter in either
 // case, plus the four non-ASCII characters `re` folds onto it.
-func foldEq(r rune, c byte) bool {
+func foldEq(d dialect, r rune, c byte) bool {
 	if r == rune(c) {
 		return true
 	}
@@ -77,25 +81,25 @@ func foldEq(r rune, c byte) bool {
 		}
 		switch c {
 		case 'i':
-			return r == 0x130 || r == 0x131
+			return d.dotted && (r == 0x130 || r == 0x131)
 		case 's':
 			return r == 0x17f
 		case 'k':
 			return r == 0x212a
 		}
 	} else if c >= 'A' && c <= 'Z' {
-		return foldEq(r, c+32)
+		return foldEq(d, r, c+32)
 	}
 	return false
 }
 
 // literalAt matches an ASCII literal, case-insensitively, at i.
-func literalAt(text []rune, i int, literal string) (int, bool) {
+func literalAt(d dialect, text []rune, i int, literal string) (int, bool) {
 	if i+len(literal) > len(text) {
 		return 0, false
 	}
 	for k := 0; k < len(literal); k++ {
-		if !foldEq(text[i+k], literal[k]) {
+		if !foldEq(d, text[i+k], literal[k]) {
 			return 0, false
 		}
 	}
@@ -113,19 +117,19 @@ func classRun(text []rune, i, min int, in func(rune) bool) (end int, ok bool) {
 	return j, j-i >= min
 }
 
-func alnumFold(r rune) bool {
+func alnumFold(d dialect, r rune) bool {
 	if r >= '0' && r <= '9' {
 		return true
 	}
 	if r >= 'a' && r <= 'z' || r >= 'A' && r <= 'Z' {
 		return true
 	}
-	return r == 0x130 || r == 0x131 || r == 0x17f || r == 0x212a
+	return d.dotted && (r == 0x130 || r == 0x131) || r == 0x17f || r == 0x212a
 }
 
-func classWith(extra string) func(rune) bool {
+func classWith(d dialect, extra string) func(rune) bool {
 	return func(r rune) bool {
-		if alnumFold(r) {
+		if alnumFold(d, r) {
 			return true
 		}
 		for _, c := range extra {
@@ -158,7 +162,7 @@ func headerValueMatcher(literals []string, trailingToken bool) matcher {
 			return 0, false
 		}
 		for _, literal := range literals {
-			j, ok := literalAt(text, i, literal)
+			j, ok := literalAt(d, text, i, literal)
 			if !ok {
 				continue
 			}
@@ -191,7 +195,7 @@ func bearerMatcher(d dialect, text []rune, i int) (int, bool) {
 	if !boundaryAt(d, text, i) {
 		return 0, false
 	}
-	j, ok := literalAt(text, i, "bearer")
+	j, ok := literalAt(d, text, i, "bearer")
 	if !ok {
 		return 0, false
 	}
@@ -210,7 +214,7 @@ func basicMatcher(d dialect, text []rune, i int) (int, bool) {
 	if !boundaryAt(d, text, i) {
 		return 0, false
 	}
-	j, ok := literalAt(text, i, "basic")
+	j, ok := literalAt(d, text, i, "basic")
 	if !ok {
 		return 0, false
 	}
@@ -218,7 +222,7 @@ func basicMatcher(d dialect, text []rune, i int) (int, bool) {
 	if k == j {
 		return 0, false
 	}
-	runEnd, _ := classRun(text, k, 0, classWith("+/="))
+	runEnd, _ := classRun(text, k, 0, classWith(d, "+/="))
 	for end := runEnd; end-k >= 8; end-- {
 		if boundaryAt(d, text, end) {
 			return end, true
@@ -229,12 +233,12 @@ func basicMatcher(d dialect, text []rune, i int) (int, bool) {
 
 // prefixedTokenMatcher is `\b<prefix>[class]{min,}\b`.
 func prefixedTokenMatcher(prefix string, extra string, min int) matcher {
-	in := classWith(extra)
 	return func(d dialect, text []rune, i int) (int, bool) {
+		in := classWith(d, extra)
 		if !boundaryAt(d, text, i) {
 			return 0, false
 		}
-		j, ok := literalAt(text, i, prefix)
+		j, ok := literalAt(d, text, i, prefix)
 		if !ok {
 			return 0, false
 		}
@@ -253,14 +257,14 @@ func xoxMatcher(d dialect, text []rune, i int) (int, bool) {
 	if !boundaryAt(d, text, i) {
 		return 0, false
 	}
-	j, ok := literalAt(text, i, "xox")
+	j, ok := literalAt(d, text, i, "xox")
 	if !ok || j >= len(text) {
 		return 0, false
 	}
 	kind := text[j]
 	matchedKind := false
 	for k := 0; k < len(slackKinds); k++ {
-		matchedKind = matchedKind || foldEq(kind, slackKinds[k])
+		matchedKind = matchedKind || foldEq(d, kind, slackKinds[k])
 	}
 	if !matchedKind {
 		return 0, false
@@ -270,7 +274,7 @@ func xoxMatcher(d dialect, text []rune, i int) (int, bool) {
 		return 0, false
 	}
 	j++
-	runEnd, _ := classRun(text, j, 0, classWith("-"))
+	runEnd, _ := classRun(text, j, 0, classWith(d, "-"))
 	for end := runEnd; end-j >= 10; end-- {
 		if boundaryAt(d, text, end) {
 			return end, true
@@ -285,10 +289,10 @@ func urlUserinfoMatcher(d dialect, text []rune, i int) (int, bool) {
 	if !boundaryAt(d, text, i) || i >= len(text) {
 		return 0, false
 	}
-	if r := text[i]; !(r >= 'a' && r <= 'z' || r >= 'A' && r <= 'Z' || r == 0x130 || r == 0x131 || r == 0x17f || r == 0x212a) {
+	if r := text[i]; !(r >= 'a' && r <= 'z' || r >= 'A' && r <= 'Z' || d.dotted && (r == 0x130 || r == 0x131) || r == 0x17f || r == 0x212a) {
 		return 0, false
 	}
-	schemeIn := classWith("+.-")
+	schemeIn := classWith(d, "+.-")
 	runEnd, _ := classRun(text, i+1, 0, schemeIn)
 	// [a-z0-9+.-]* is greedy and backtracks: try each end from the longest.
 	for end := runEnd; end >= i+1; end-- {

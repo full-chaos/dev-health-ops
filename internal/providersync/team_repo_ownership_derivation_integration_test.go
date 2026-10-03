@@ -115,9 +115,13 @@ func TestTeamRepoOwnershipDerivationAgainstMigratedSchema(t *testing.T) {
 	// signature already matches its open activeRows row and drops it, so the
 	// three rows already on disk stay exactly as they are: same count, same
 	// valid_from.
-	written2, retracted2, _, _, err := service.Derive(ctx, orgID)
+	written2, retracted2, _, _, stats2, err := service.DeriveWithStats(ctx, orgID)
 	if err != nil {
 		t.Fatalf("second Derive: %v", err)
+	}
+	// CHAOS-8148: the quiet second run is "derived N facts, all unchanged", not "derived nothing".
+	if stats2.Derived != len(want) || stats2.Unchanged != stats2.Derived {
+		t.Fatalf("second Derive stats = %+v, want Derived=Unchanged=%d (every derived fact already carried by an open row)", stats2, len(want))
 	}
 	if written2 != 0 {
 		t.Fatalf("expected the second Derive to write 0 rows (every derived fact already matches its open row), got %d", written2)
@@ -184,12 +188,17 @@ func TestTeamRepoOwnershipDerivationUnchangedFactWritesNothing(t *testing.T) {
 
 	service := TeamRepoOwnershipDerivationService{Conn: conn}
 
-	written1, retracted1, ready1, _, err := service.Derive(ctx, orgID)
+	written1, retracted1, ready1, _, stats1, err := service.DeriveWithStats(ctx, orgID)
 	if err != nil {
 		t.Fatalf("first Derive: %v", err)
 	}
 	if written1 != 1 || retracted1 != 0 || !ready1 {
 		t.Fatalf("expected written=1 retracted=0 ready=true, got written=%d retracted=%d ready=%v", written1, retracted1, ready1)
+	}
+	// CHAOS-8148: the FIRST run derives one fact and none of it is already carried: Unchanged is 0 (a counter that said Derived here would
+	// label a run that wrote everything as unchanged).
+	if stats1.Derived != 1 || stats1.Unchanged != 0 {
+		t.Fatalf("first Derive stats = %+v, want Derived=1 Unchanged=0", stats1)
 	}
 	assertTeamRepoOwnershipRowCount(t, ctx, conn, orgID, 1)
 	time.Sleep(clickHouseTimeParamGranularity)
@@ -201,12 +210,15 @@ func TestTeamRepoOwnershipDerivationUnchangedFactWritesNothing(t *testing.T) {
 	// Unchanged re-run: same inputs, same derived fact, same attributes --
 	// filterUnchangedTeamRepoOwnershipRows must find the fact's signature
 	// already matches its open row and write nothing.
-	written2, retracted2, _, _, err := service.Derive(ctx, orgID)
+	written2, retracted2, _, _, stats2, err := service.DeriveWithStats(ctx, orgID)
 	if err != nil {
 		t.Fatalf("second Derive: %v", err)
 	}
 	if written2 != 0 || retracted2 != 0 {
 		t.Fatalf("expected the unchanged re-run to write 0 and retract 0, got written=%d retracted=%d", written2, retracted2)
+	}
+	if stats2.Derived != 1 || stats2.Unchanged != 1 {
+		t.Fatalf("second Derive stats = %+v, want Derived=1 Unchanged=1 (the one fact already carried by its open row)", stats2)
 	}
 	assertTeamRepoOwnershipRowCount(t, ctx, conn, orgID, 1)
 	time.Sleep(clickHouseTimeParamGranularity)
@@ -308,6 +320,33 @@ func TestTeamRepoOwnershipDerivationUnchangedFactWritesNothing(t *testing.T) {
 // (the work item stops carrying a project_id) -> instant3 (nobody owns it).
 // Every instant is queried at the END, after all three runs, proving the
 // PAST answers do not move just because MORE has since happened.
+// TestTeamRepoOwnershipDerivationCountsAnUnwritableFactAsDerivedNotUnchanged pins CHAOS-8148's second label: a run that DERIVES a fact it cannot
+// write (its repo has no full name, so writeTeamRepoOwnershipRows skips it) writes nothing, and it is NOT "all unchanged": Unchanged stays below
+// Derived, so the worker keeps the no_signal label instead of reporting a derivation that cannot write as a healthy steady state.
+func TestTeamRepoOwnershipDerivationCountsAnUnwritableFactAsDerivedNotUnchanged(t *testing.T) {
+	ctx, conn := newWorkItemEffectsConn(t)
+	orgID := "chaos-8148-unwritable-fact-org"
+	seedAt := time.Now().UTC().Add(-24 * time.Hour)
+
+	repoNoName := uuid.New()
+	seedTeamRepoOwnershipRepos(t, ctx, conn, orgID, map[uuid.UUID]string{repoNoName: ""})
+	seedTeamProjectOwnership(t, ctx, conn, orgID, "github", "proj-1", "team-platform", true, seedAt)
+	seedWorkItem(t, ctx, conn, orgID, "gh:acme/no-name#1", "github", repoNoName, "proj-1", seedAt)
+
+	service := TeamRepoOwnershipDerivationService{Conn: conn}
+	written, retracted, ready, _, stats, err := service.DeriveWithStats(ctx, orgID)
+	if err != nil {
+		t.Fatalf("Derive: %v", err)
+	}
+	if written != 0 || retracted != 0 || !ready {
+		t.Fatalf("expected written=0 retracted=0 ready=true, got written=%d retracted=%d ready=%v", written, retracted, ready)
+	}
+	if stats.Derived != 1 || stats.Unchanged != 0 {
+		t.Fatalf("stats = %+v, want Derived=1 Unchanged=0: a fact the run could not write is derived, not unchanged", stats)
+	}
+	assertTeamRepoOwnershipRowCount(t, ctx, conn, orgID, 0)
+}
+
 func TestTeamRepoOwnershipDerivationAsOfHistoryAcrossChangeAndRetraction(t *testing.T) {
 	ctx, conn := newWorkItemEffectsConn(t)
 	orgID := "chaos-5919-asof-history-org"

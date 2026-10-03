@@ -152,6 +152,7 @@ type ReconcilerLoop struct {
 	undeliveredRequestsCanceled  uint64
 	undeliveredRaceLost          uint64
 	undeliveredBlocked           uint64
+	strandPassesSkippedIdle      uint64
 	claimed                      uint64
 	delivered                    uint64
 	retried                      uint64
@@ -361,6 +362,9 @@ func (loop *ReconcilerLoop) step(ctx context.Context, now time.Time) error {
 		}
 	}
 	loop.undeliveredRaceLost += nonNegativeUint(result.UndeliveredRaceLost)
+	if result.StrandPassSkippedIdle {
+		loop.strandPassesSkippedIdle++
+	}
 	loop.claimed += nonNegativeUint(result.Claimed)
 	loop.delivered += nonNegativeUint(result.Delivered)
 	loop.retried += nonNegativeUint(result.Retried)
@@ -594,6 +598,7 @@ func (loop *ReconcilerLoop) WritePrometheus(output io.Writer) error {
 	undeliveredRequestsCanceled := loop.undeliveredRequestsCanceled
 	undeliveredRaceLost := loop.undeliveredRaceLost
 	undeliveredBlocked := loop.undeliveredBlocked
+	strandPassesSkippedIdle := loop.strandPassesSkippedIdle
 	claimed := loop.claimed
 	delivered := loop.delivered
 	retried := loop.retried
@@ -641,6 +646,11 @@ func (loop *ReconcilerLoop) WritePrometheus(output io.Writer) error {
 	writeReconcilerCounter(&text, "worker_outbox_reconciler_undelivered_requests_canceled_total", "Work-graph requests canceled because their delivery could never reach River.", undeliveredRequestsCanceled)
 	writeReconcilerCounter(&text, "worker_outbox_reconciler_undelivered_race_lost_total", "Undelivered candidates whose writes refused under their re-proved predicate.", undeliveredRaceLost)
 	fmt.Fprintf(&text, "# HELP worker_outbox_reconciler_undelivered_blocked Fenced outbox rows still waiting on a prerequisite inside the undelivered ceiling, as of the last successful pass.\n# TYPE worker_outbox_reconciler_undelivered_blocked gauge\nworker_outbox_reconciler_undelivered_blocked %d\n", undeliveredBlocked)
+	// A pass that did not run must not read as a pass that ran and found
+	// nothing (CHAOS-8421). Every strand counter above stands still during a
+	// held-back pass; this is the series that says why, and its rate against
+	// the tick rate is how much of the cadence the idle backoff is taking.
+	writeReconcilerCounter(&text, "worker_outbox_reconciler_strand_passes_skipped_idle_total", "Strand-repair passes held back by the idle backoff because the passes before them found nothing.", strandPassesSkippedIdle)
 	writeReconcilerCounter(&text, "worker_outbox_reconciler_claimed_total", "Outbox rows claimed by the reconciler.", claimed)
 	writeReconcilerCounter(&text, "worker_outbox_reconciler_delivered_total", "Outbox rows delivered to River by the reconciler.", delivered)
 	writeReconcilerCounter(&text, "worker_outbox_reconciler_retried_total", "Outbox rows scheduled for relay retry by the reconciler.", retried)

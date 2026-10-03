@@ -21,4 +21,4 @@ lifecycle: active
 6. Poll `GET /api/v1/external-ingest/batches/{ingestionId}` until `completed`, `partial`, or `failed`.
 7. Inspect per-record errors and bounded recompute state before declaring the data available.
 
-The CLI equivalent is `dev-hops push batch <file> --poll`. Do not log the bearer token or full customer payload.
+The CLI equivalent is `dho push batch <file> --poll`. Do not log the bearer token or full customer payload.

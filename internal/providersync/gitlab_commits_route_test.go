@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"github.com/full-chaos/dev-health-ops/internal/testsupport/fakehttp"
 	"io"
 	"net/http"
 	"strings"
@@ -61,7 +62,7 @@ func TestGitLabCommitsRouteEmitsCompleteNullableEffectAcrossPages(t *testing.T) 
 		]`},
 		{body: `[]`},
 	}}
-	client := gitLabRepositoryClient(t, doer, "https://gitlab.example")
+	client := gitLabRepositoryClient(t, fakehttp.Client(doer), "https://gitlab.example")
 	claim := nativeTestClaim("gitlab", "commits")
 	batch, err := (GitLabCommitsRouteHandler{
 		PerPage:  2,
@@ -127,7 +128,7 @@ func TestGitLabCommitsRouteRetryReusesNormalizedAtForMissingTimestamps(t *testin
 		batch, err := (GitLabCommitsRouteHandler{}).Collect(
 			context.Background(), nativeTestClaim("gitlab", "commits"),
 			providerfoundation.Credential{},
-			gitLabRepositoryClient(t, doer, "https://gitlab.example"), normalizedAt,
+			gitLabRepositoryClient(t, fakehttp.Client(doer), "https://gitlab.example"), normalizedAt,
 		)
 		if err != nil {
 			t.Fatal(err)
@@ -174,7 +175,7 @@ func TestGitLabCommitsRouteUsesProjectPathBeforeAmbiguousName(t *testing.T) {
 		batch, err := (GitLabCommitsRouteHandler{}).Collect(
 			context.Background(), nativeTestClaim("gitlab", "commits"),
 			providerfoundation.Credential{},
-			gitLabRepositoryClient(t, doer, "https://gitlab.example"), normalizedAt,
+			gitLabRepositoryClient(t, fakehttp.Client(doer), "https://gitlab.example"), normalizedAt,
 		)
 		if err != nil {
 			t.Fatal(err)
@@ -226,7 +227,7 @@ func TestGitLabCommitsRouteFailsClosedOnCapMalformedAndPartialFetch(t *testing.T
 			doer := &gitLabCommitsDoer{t: t, responses: test.responses}
 			batch, err := test.handler.Collect(
 				context.Background(), claim, providerfoundation.Credential{},
-				gitLabRepositoryClient(t, doer, "https://gitlab.example"), now,
+				gitLabRepositoryClient(t, fakehttp.Client(doer), "https://gitlab.example"), now,
 			)
 			matches := errors.Is(err, test.want)
 			var gotProvider, wantProvider *providerfoundation.ProviderError
@@ -294,7 +295,7 @@ func TestGitLabCommitsRouteCountsFailedAndRetriedAttempts(t *testing.T) {
 		},
 	}
 	client, err := providerfoundation.NewHTTPClient(
-		"gitlab", "https://gitlab.example", doer,
+		"gitlab", "https://gitlab.example", fakehttp.Client(doer),
 		func(*http.Request) error { return nil },
 		providerfoundation.RetryPolicy{
 			MaxAttempts: 2, InitialWait: time.Nanosecond, MaxWait: time.Nanosecond,
@@ -352,7 +353,7 @@ func TestGitLabCommitsRouteRejectsCrossScopeAndProjectMismatch(t *testing.T) {
 			doer := &gitLabCommitsDoer{t: t, responses: []gitLabCommitsResponse{
 				{body: test.project}, {body: `[]`},
 			}}
-			client := gitLabRepositoryClient(t, doer, "https://gitlab.example")
+			client := gitLabRepositoryClient(t, fakehttp.Client(doer), "https://gitlab.example")
 			client.Provider = test.clientProvider
 			batch, err := (GitLabCommitsRouteHandler{}).Collect(
 				context.Background(), test.claim, providerfoundation.Credential{}, client, now,
@@ -403,7 +404,7 @@ func TestGitLabCommitsRoutePreservesHTTPClassification(t *testing.T) {
 			batch, err := (GitLabCommitsRouteHandler{}).Collect(
 				context.Background(), nativeTestClaim("gitlab", "commits"),
 				providerfoundation.Credential{},
-				gitLabRepositoryClient(t, doer, "https://gitlab.example"), now,
+				gitLabRepositoryClient(t, fakehttp.Client(doer), "https://gitlab.example"), now,
 			)
 			var providerErr *providerfoundation.ProviderError
 			if !errors.As(err, &providerErr) || providerErr.Class != test.class {

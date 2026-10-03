@@ -68,6 +68,7 @@ var writeSkewRefusalPlaces = map[string]string{
 	// Refused before any leg is read, or a search-level outcome.
 	"RESTRefusalIDBindingUnresolved":         "not an axis: refused before any leg is read",
 	"RESTRefusalBoundIDNotAPathLiteral":      "not an axis: refused before any leg is read",
+	"RESTRefusalCounterParity":               "not an axis: decided from /metrics scrapes after both legs were admitted; no body comparison is affected",
 	"RESTRefusalCandidateIterationExhausted": "not an axis: a search-level outcome with no comparison of its own",
 	// The baseline-timeout arm: the baseline produced no response, so there
 	// is no first comparison and no baseline to re-read.

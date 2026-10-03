@@ -7,6 +7,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"github.com/full-chaos/dev-health-ops/internal/syncdispatchruntime/synclog"
 	"log/slog"
 	"strings"
 	"testing"
@@ -217,7 +218,7 @@ UPDATE worker_job_outbox SET status='delivered', river_job_id=127714, delivered_
 
 		var captured bytes.Buffer
 		logger := slog.New(slog.NewJSONHandler(&captured, &slog.HandlerOptions{Level: slog.LevelDebug}))
-		service, err := NewNativeDispatchSyncRunService(pool, logger, &fakeBudgetEstimator{},
+		service, err := NewNativeDispatchSyncRunService(pool, synclog.New(logger), &fakeBudgetEstimator{},
 			mustDispatchProducer(t, pool), &fakeJobRegistry{
 				descriptors: map[string]jobruntime.Descriptor{
 					jobcontract.KindSyncProviderUnit: providerUnitDescriptor("river"),

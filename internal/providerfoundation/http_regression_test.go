@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"github.com/full-chaos/dev-health-ops/internal/testsupport/fakehttp"
 	"io"
 	"net/http"
 	"strings"
@@ -16,9 +17,9 @@ import (
 func TestHTTPClientPreservesSuccessfulResponseBody(t *testing.T) {
 	t.Parallel()
 	const payload = `{"items":[{"id":"provider-1"}]}`
-	client := newTestHTTPClient(t, HTTPDoerFunc(func(request *http.Request) (*http.Response, error) {
+	client := newTestHTTPClient(t, fakehttp.Client(HTTPDoerFunc(func(request *http.Request) (*http.Response, error) {
 		return testHTTPResponse(request, http.StatusOK, nil, payload), nil
-	}), RetryPolicy{MaxAttempts: 1, InitialWait: time.Millisecond, MaxWait: time.Millisecond})
+	})), RetryPolicy{MaxAttempts: 1, InitialWait: time.Millisecond, MaxWait: time.Millisecond})
 
 	response, err := client.Do(context.Background(), http.MethodGet, "/items", nil)
 	if err != nil {
@@ -37,10 +38,10 @@ func TestHTTPClientPreservesSuccessfulResponseBody(t *testing.T) {
 func TestHTTPClientClampsIntegerAndDateRetryAfter(t *testing.T) {
 	t.Parallel()
 	policy := RetryPolicy{MaxAttempts: 2, InitialWait: time.Millisecond, MaxWait: 25 * time.Millisecond}
-	client := newTestHTTPClient(t, HTTPDoerFunc(func(*http.Request) (*http.Response, error) {
+	client := newTestHTTPClient(t, fakehttp.Client(HTTPDoerFunc(func(*http.Request) (*http.Response, error) {
 		t.Fatal("unexpected request")
 		return nil, nil
-	}), policy)
+	})), policy)
 	now := time.Now()
 	for name, raw := range map[string]string{
 		"integer": "3600",
@@ -80,10 +81,10 @@ func TestHTTPClientRetryJitterStaysWithinBounds(t *testing.T) {
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
-			client := newTestHTTPClient(t, HTTPDoerFunc(func(*http.Request) (*http.Response, error) {
+			client := newTestHTTPClient(t, fakehttp.Client(HTTPDoerFunc(func(*http.Request) (*http.Response, error) {
 				t.Fatal("unexpected request")
 				return nil, nil
-			}), test.policy)
+			})), test.policy)
 			if got := client.retryDelay(test.attempt, 0, ErrorTransient); got < test.minimum || got > test.maximum {
 				t.Fatalf("retry delay=%s, want [%s,%s]", got, test.minimum, test.maximum)
 			}
@@ -94,13 +95,13 @@ func TestHTTPClientRetryJitterStaysWithinBounds(t *testing.T) {
 func TestHTTPClientRetryJitterFallsBackWhenEntropyFails(t *testing.T) {
 	policy := RetryPolicy{MaxAttempts: 2, InitialWait: 5 * time.Millisecond, MaxWait: 100 * time.Millisecond}
 	attempts := 0
-	client := newTestHTTPClient(t, HTTPDoerFunc(func(request *http.Request) (*http.Response, error) {
+	client := newTestHTTPClient(t, fakehttp.Client(HTTPDoerFunc(func(request *http.Request) (*http.Response, error) {
 		attempts++
 		if attempts == 1 {
 			return testHTTPResponse(request, http.StatusServiceUnavailable, nil, `{}`), nil
 		}
 		return testHTTPResponse(request, http.StatusOK, nil, `{}`), nil
-	}), policy)
+	})), policy)
 	client.entropy = failingEntropyReader{}
 
 	if got := client.retryDelay(1, 0, ErrorTransient); got != policy.InitialWait {
@@ -126,9 +127,9 @@ func TestHTTPClientPenalizesSharedGateWithLocalBackoff(t *testing.T) {
 	t.Parallel()
 	policy := RetryPolicy{MaxAttempts: 1, InitialWait: 20 * time.Millisecond, MaxWait: 25 * time.Millisecond}
 	gate := &recordingBackoffGate{}
-	client := newTestHTTPClient(t, HTTPDoerFunc(func(request *http.Request) (*http.Response, error) {
+	client := newTestHTTPClient(t, fakehttp.Client(HTTPDoerFunc(func(request *http.Request) (*http.Response, error) {
 		return testHTTPResponse(request, http.StatusTooManyRequests, nil, `{"error":"limited"}`), nil
-	}), policy)
+	})), policy)
 	client.Gate = gate
 
 	_, err := client.Do(context.Background(), http.MethodGet, "/items", nil)
@@ -148,9 +149,9 @@ func TestHTTPClientBoundsAndObservesReservationRelease(t *testing.T) {
 	t.Parallel()
 	metrics := NewMetrics()
 	reservation := &blockingReservation{}
-	client := newTestHTTPClient(t, HTTPDoerFunc(func(request *http.Request) (*http.Response, error) {
+	client := newTestHTTPClient(t, fakehttp.Client(HTTPDoerFunc(func(request *http.Request) (*http.Response, error) {
 		return testHTTPResponse(request, http.StatusOK, nil, `{}`), nil
-	}), RetryPolicy{MaxAttempts: 1, InitialWait: time.Millisecond, MaxWait: time.Millisecond})
+	})), RetryPolicy{MaxAttempts: 1, InitialWait: time.Millisecond, MaxWait: time.Millisecond})
 	client.Budget = staticBudgetStore{reservation: reservation}
 	client.BudgetKey = BudgetKey{Provider: "github", OrgID: "org", CostClass: "rest", Limit: 1, TTL: time.Minute}
 	client.Metrics = metrics
@@ -180,10 +181,10 @@ func TestHTTPClientReleaseSurvivesRequestCancellation(t *testing.T) {
 	t.Parallel()
 	ctx, cancel := context.WithCancel(context.Background())
 	reservation := &contextCheckingReservation{}
-	client := newTestHTTPClient(t, HTTPDoerFunc(func(request *http.Request) (*http.Response, error) {
+	client := newTestHTTPClient(t, fakehttp.Client(HTTPDoerFunc(func(request *http.Request) (*http.Response, error) {
 		cancel()
 		return testHTTPResponse(request, http.StatusOK, nil, `{}`), nil
-	}), RetryPolicy{MaxAttempts: 1, InitialWait: time.Millisecond, MaxWait: time.Millisecond})
+	})), RetryPolicy{MaxAttempts: 1, InitialWait: time.Millisecond, MaxWait: time.Millisecond})
 	client.Budget = staticBudgetStore{reservation: reservation}
 	client.BudgetKey = BudgetKey{Provider: "github", OrgID: "org", CostClass: "rest", Limit: 1, TTL: time.Minute}
 	client.ReservationReleaseTimeout = time.Second
@@ -200,9 +201,9 @@ func TestHTTPClientReleaseSurvivesRequestCancellation(t *testing.T) {
 
 func TestHTTPClientPreservesRequestAndReleaseFailures(t *testing.T) {
 	t.Parallel()
-	client := newTestHTTPClient(t, HTTPDoerFunc(func(request *http.Request) (*http.Response, error) {
+	client := newTestHTTPClient(t, fakehttp.Client(HTTPDoerFunc(func(request *http.Request) (*http.Response, error) {
 		return testHTTPResponse(request, http.StatusUnauthorized, nil, `{}`), nil
-	}), RetryPolicy{MaxAttempts: 1, InitialWait: time.Millisecond, MaxWait: time.Millisecond})
+	})), RetryPolicy{MaxAttempts: 1, InitialWait: time.Millisecond, MaxWait: time.Millisecond})
 	client.Budget = staticBudgetStore{reservation: failingReservation{}}
 	client.BudgetKey = BudgetKey{Provider: "github", OrgID: "org", CostClass: "rest", Limit: 1, TTL: time.Minute}
 
@@ -218,10 +219,10 @@ func TestHTTPClientPreservesRequestAndReleaseFailures(t *testing.T) {
 
 func TestHTTPClientUnauthenticatedPreservesBudgetContention(t *testing.T) {
 	t.Parallel()
-	client := newTestHTTPClient(t, HTTPDoerFunc(func(*http.Request) (*http.Response, error) {
+	client := newTestHTTPClient(t, fakehttp.Client(HTTPDoerFunc(func(*http.Request) (*http.Response, error) {
 		t.Fatal("contended request reached transport")
 		return nil, nil
-	}), RetryPolicy{MaxAttempts: 1, InitialWait: time.Millisecond, MaxWait: time.Millisecond})
+	})), RetryPolicy{MaxAttempts: 1, InitialWait: time.Millisecond, MaxWait: time.Millisecond})
 	client.Budget = staticBudgetStore{err: ErrBudgetContended}
 	client.BudgetKey = BudgetKey{
 		Provider: "github", OrgID: "org", CostClass: "rest", Limit: 1, TTL: time.Minute,
@@ -243,7 +244,7 @@ func newTestHTTPClient(t *testing.T, doer HTTPDoer, retry RetryPolicy) *HTTPClie
 	client, err := NewHTTPClient(
 		"github",
 		"https://api.github.test",
-		doer,
+		fakehttp.Client(doer),
 		TokenAuth("Authorization", "Bearer ", secrets.NewValue("token")),
 		retry,
 		LeaseGuardFunc(func(context.Context) error { return nil }),

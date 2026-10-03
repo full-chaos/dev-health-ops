@@ -2,8 +2,8 @@ package workerservice
 
 import (
 	"context"
+	"github.com/full-chaos/dev-health-ops/internal/httpguard"
 	"log/slog"
-	"net/http"
 	"os"
 	"time"
 
@@ -180,6 +180,7 @@ func logProviderBudgetConfig(logger *slog.Logger) {
 		"budget_limit_light", limits[providersync.CostLight],
 		"budget_limit_medium", limits[providersync.CostMedium],
 		"budget_limit_heavy", limits[providersync.CostHeavy],
+		"budget_limit_source", providerfoundation.CostClassBudgetLimitSource,
 	)
 }
 
@@ -547,12 +548,7 @@ func buildProviderSyncHandlerWithRuntimeDependencies(
 					Decryptor: decryptor,
 					Hydrator:  credentialHydrator,
 				},
-				Doer: &http.Client{
-					Timeout: 45 * time.Second,
-					CheckRedirect: func(*http.Request, []*http.Request) error {
-						return http.ErrUseLastResponse
-					},
-				},
+				Doer:  httpguard.NewClient(45 * time.Second),
 				Retry: providerfoundation.DefaultRetryPolicy(),
 				Budget: providerfoundation.ValkeyBudgetStore{
 					Client:   valkeyClient,
@@ -832,12 +828,7 @@ func (providerUnitTenantScope) Resolve(
 // unit execution's credential resolution, so it counts as that execution's
 // provider spend.
 func pagerDutyOAuthDoer() providerfoundation.HTTPDoer {
-	return providersync.CountRequests(&http.Client{
-		Timeout: 45 * time.Second,
-		CheckRedirect: func(*http.Request, []*http.Request) error {
-			return http.ErrUseLastResponse
-		},
-	})
+	return providersync.CountRequests(httpguard.NewClient(45 * time.Second))
 }
 
 // requestUsageDrainTimeout bounds how long worker shutdown waits for the

@@ -2,6 +2,7 @@ package providersync
 
 import (
 	"context"
+	"github.com/full-chaos/dev-health-ops/internal/testsupport/fakehttp"
 	"testing"
 	"time"
 
@@ -17,7 +18,7 @@ func TestGitHubTestsChunkRouteEmitsBoundedPagesAndFinalMetadata(t *testing.T) {
 	var emissions int
 	var finals int
 	if err := (GitHubTestsRouteHandler{}).CollectChunks(
-		context.Background(), claim, providerfoundation.Credential{}, githubTestsClient(t, doer), now, "",
+		context.Background(), claim, providerfoundation.Credential{}, githubTestsClient(t, fakehttp.Client(doer)), now, "",
 		func(emission ChunkRouteEmission) error {
 			emissions++
 			if emission.Final {
@@ -45,7 +46,7 @@ func TestGitLabTestsChunkRouteEmitsBoundedPagesAndFinalMetadata(t *testing.T) {
 	var emissions int
 	var finals int
 	if err := (GitLabTestsRouteHandler{}).CollectChunks(
-		context.Background(), claim, providerfoundation.Credential{}, gitLabRepositoryClient(t, doer, "https://gitlab.example"), now, "",
+		context.Background(), claim, providerfoundation.Credential{}, gitLabRepositoryClient(t, fakehttp.Client(doer), "https://gitlab.example"), now, "",
 		func(emission ChunkRouteEmission) error {
 			emissions++
 			if emission.Final {

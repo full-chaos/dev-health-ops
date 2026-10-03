@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"github.com/full-chaos/dev-health-ops/internal/testsupport/fakehttp"
 	"io"
 	"net/http"
 	"strings"
@@ -93,7 +94,7 @@ func TestGitHubCommitStatsRouteCountsFailedAndRetriedAttempts(t *testing.T) {
 	now := time.Date(2026, 7, 23, 12, 30, 0, 0, time.UTC)
 	doer := &githubCommitStatsRetryOnceDoer{t: t, failPath: "/repos/acme/api/commits/first"}
 	client, err := providerfoundation.NewHTTPClient(
-		"github", "https://api.github.com", doer,
+		"github", "https://api.github.com", fakehttp.Client(doer),
 		func(*http.Request) error { return nil },
 		providerfoundation.RetryPolicy{
 			MaxAttempts: 2, InitialWait: time.Nanosecond, MaxWait: time.Nanosecond,
@@ -122,7 +123,7 @@ func TestGitHubCommitStatsRouteListsThenFetchesEachCommitDetail(t *testing.T) {
 	t.Parallel()
 	now := time.Date(2026, 7, 23, 12, 30, 0, 0, time.UTC)
 	doer := &gitHubCommitStatsDoer{t: t}
-	client := gitHubRepositoryClient(t, doer, "https://api.github.com")
+	client := gitHubRepositoryClient(t, fakehttp.Client(doer), "https://api.github.com")
 	claim := nativeTestClaim("github", "commit-stats")
 
 	batch, err := (GitHubCommitStatsRouteHandler{MaxCommits: 3}).Collect(
@@ -167,7 +168,7 @@ func TestGitHubCommitStatsRouteSkipsIncrementalWindowThatExceedsCap(t *testing.T
 	t.Parallel()
 	now := time.Date(2026, 7, 23, 12, 30, 0, 0, time.UTC)
 	doer := &gitHubCommitStatsDoer{t: t}
-	client := gitHubRepositoryClient(t, doer, "https://api.github.com")
+	client := gitHubRepositoryClient(t, fakehttp.Client(doer), "https://api.github.com")
 	claim := nativeTestClaim("github", "commit-stats")
 	since := now.Add(-24 * time.Hour)
 	claim.SinceAt = &since

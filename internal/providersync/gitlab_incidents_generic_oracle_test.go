@@ -3,6 +3,7 @@ package providersync
 import (
 	"context"
 	"encoding/json"
+	"github.com/full-chaos/dev-health-ops/internal/testsupport/fakehttp"
 	"net/url"
 	"sort"
 	"strconv"
@@ -109,7 +110,7 @@ func buildGitLabIncidentOracleBatch(t *testing.T, input map[string]any) Complete
 	claim := nativeTestClaim("gitlab", "incidents")
 	batch, err := (GitLabIncidentsRouteHandler{}).Collect(
 		context.Background(), claim, providerfoundation.Credential{},
-		gitLabRepositoryClient(t, doer, input["provider_instance_id"].(string)), normalizedAt,
+		gitLabRepositoryClient(t, fakehttp.Client(doer), input["provider_instance_id"].(string)), normalizedAt,
 	)
 	if err != nil {
 		t.Fatal(err)
@@ -194,7 +195,7 @@ func buildGitLabIncidentTraversalTrace(
 	batch, err := (GitLabIncidentsRouteHandler{MaxIssues: maxIssues}).Collect(
 		context.Background(), nativeTestClaim("gitlab", "incidents"),
 		providerfoundation.Credential{},
-		gitLabRepositoryClient(t, doer, input["provider_instance_id"].(string)),
+		gitLabRepositoryClient(t, fakehttp.Client(doer), input["provider_instance_id"].(string)),
 		normalizedAt,
 	)
 	if err != nil {

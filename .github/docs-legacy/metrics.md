@@ -175,6 +175,7 @@ Estimate coverage is the Backlog Risk metric for how much open backlog has an ex
 - Numerator `estimated_count`: denominator items where normalized `WorkItem.story_points IS NOT NULL`.
 - `unestimated_count`: `backlog_size - estimated_count`.
 - `ratio`: `estimated_count / backlog_size` when `backlog_size > 0`; otherwise `NULL`. If a previously known grain has no open backlog at the end of the day, persist `backlog_size = 0`, `estimated_count = 0`, `unestimated_count = 0`, and `ratio = NULL` rather than surfacing older coverage.
+- GraphQL `throughputForecast.estimateCoverage` (query-api) is built from these rows whenever they exist, independent of the forecast's backlog (D4373 "Keep zero", D4376): a team whose derived backlog is 0 but has coverage rows answers those rows (ratio `0` when `backlog_size > 0` and `estimated_count = 0`); with no rows it answers the zero object (counts 0, ratio `0`), never `null`; a scope with rows whose `backlog_size` is 0 keeps a `null` ratio.
 - Null-vs-zero semantics: `story_points = NULL` means unestimated. `story_points = 0` is still an explicit estimate and counts in `estimated_count`.
 
 Provider normalization maps native fields into `WorkItem.story_points` before this metric is computed:
@@ -184,7 +185,7 @@ Provider normalization maps native fields into `WorkItem.story_points` before th
 - GitHub: Projects v2 numeric fields named `estimate`, `points`, `story points`, or `size`.
 - Linear: issue `estimate`, including `0` as an explicit estimate.
 
-GraphQL exposes the latest persisted estimate coverage on `ThroughputForecast.estimateCoverage` using the frozen `ThroughputEstimateCoverage` type: `ratio`, `estimatedCount`, `unestimatedCount`, and `backlogSize`. Forecasts with `backlogSize = 0` return no `estimateCoverage` object because the coverage ratio is undefined for an empty backlog.
+GraphQL exposes the latest persisted estimate coverage on `ThroughputForecast.estimateCoverage` using the frozen `ThroughputEstimateCoverage` type: `ratio`, `estimatedCount`, `unestimatedCount`, and `backlogSize`. The object is built from the scope's coverage rows at the scope's newest coverage day whatever the forecast's backlog is (including 0); with no rows it is the zero object (counts 0, ratio `0`), never `null`; a coverage grain whose own `backlog_size` is 0 keeps a `null` ratio because the ratio is undefined for an empty backlog (D4373, D4376).
 
 ### Work item facts (`work_item_cycle_times`)
 

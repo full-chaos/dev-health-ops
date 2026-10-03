@@ -394,6 +394,10 @@ func forecastToModel(
 		HistoryDays:         result.HistoryDays,
 		InsufficientHistory: result.InsufficientHistory,
 		HighVariance:        result.HighVariance,
+		// CHAOS-7624: the distribution of the SAME in-request simulation the
+		// percentiles above come from. Ruling (c): this is API compute of a
+		// seeded Monte Carlo run, not UX-time compute; user inputs stay live.
+		CompletionDistribution: distributionToModel(result.DaysHistogram, result.ItemsHistogram),
 	}
 }
 
@@ -488,7 +492,11 @@ func ResolveForecasts(
             throughput_stddev,
             history_days,
             insufficient_history,
-            high_variance
+            high_variance,
+            completion_days_values,
+            completion_days_counts,
+            completion_items_values,
+            completion_items_counts
         FROM capacity_forecasts
         WHERE %s
         ORDER BY computed_at DESC

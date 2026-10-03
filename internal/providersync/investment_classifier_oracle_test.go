@@ -3,10 +3,10 @@ package providersync
 import (
 	"errors"
 	"fmt"
+	"github.com/full-chaos/dev-health-ops/internal/testsupport/moduleroot"
 	"os"
 	"path/filepath"
 	"regexp"
-	"runtime"
 	"testing"
 )
 
@@ -31,7 +31,7 @@ func investmentConfigPath(t *testing.T, name string) string {
 // working directory, so the path does not depend on how the test was invoked.
 func investmentRepoRoot(t *testing.T) string {
 	t.Helper()
-	_, file, _, ok := runtime.Caller(0)
+	_, file, _, ok := moduleroot.Caller(0)
 	if !ok {
 		t.Fatal("cannot locate the oracle test source file")
 	}

@@ -2,6 +2,7 @@ package providersync
 
 import (
 	"context"
+	"github.com/full-chaos/dev-health-ops/internal/testsupport/fakehttp"
 	"io"
 	"net/http"
 	"net/url"
@@ -92,7 +93,7 @@ func collectGitHubTestsReportRows(
 	t.Helper()
 	err := GitHubTestsRouteHandler{}.CollectChunks(
 		context.Background(), claim, providerfoundation.Credential{},
-		githubTestsClient(t, doer), normalizedAt, "",
+		githubTestsClient(t, fakehttp.Client(doer)), normalizedAt, "",
 		func(emission ChunkRouteEmission) error {
 			for _, effect := range emission.Batch.Effects {
 				switch effect.Destination {
@@ -237,7 +238,7 @@ func TestGitLabTestsReportPhaseBoundsBothEndsOnUpdatedAt(t *testing.T) {
 
 	if err := (GitLabTestsRouteHandler{}).CollectChunks(
 		context.Background(), claim, providerfoundation.Credential{},
-		gitLabRepositoryClient(t, doer, "https://gitlab.example"),
+		gitLabRepositoryClient(t, fakehttp.Client(doer), "https://gitlab.example"),
 		time.Date(2026, 7, 22, 13, 5, 0, 0, time.UTC), "",
 		func(ChunkRouteEmission) error { return nil },
 	); err != nil {

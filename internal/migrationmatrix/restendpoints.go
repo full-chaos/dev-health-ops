@@ -11,31 +11,36 @@ package migrationmatrix
 // nothing, not a python-only row saying so. Chris, on this exact class:
 // "WTF is the migration status board that keeps getting forgotten?"
 //
-// BOTH sides are read from committed Go/Python source on every render AND
-// every check -- there is no curated per-row ledger to go stale, unlike
-// status.json's family rows. The only hand-curated input is
+// BOTH sides are read from the code on every render AND every check -- the
+// Python side from committed source, query-api's side by EXECUTING its
+// production route table (internal/queryapi/server.RESTRoutes, CHAOS-8307) --
+// there is no curated per-row ledger to go stale, unlike status.json's family
+// rows. The only hand-curated input is
 // RESTDeadByDesign, and it stays empty until a route carries chris's word in
 // an existing record; see its own doc comment for why "python-only" is the
 // default a route earns by simply existing.
 //
 // MATCHING IS BY PATH, NOT (METHOD, PATH). query-api's `http.ServeMux`
-// patterns here are plain paths (`mux.HandleFunc("/api/v1/quadrant", ...)`),
-// not Go 1.22 method-prefixed patterns -- the mux itself does not
+// patterns here are plain paths (a route table row's Pattern, mounted with
+// mux.HandleFunc), not Go 1.22 method-prefixed patterns -- the mux itself does not
 // discriminate by method, each handler checks `r.Method` internally and
 // answers 405 otherwise. Today every `/api/v1/*` path query-api registers
 // has exactly one Python method, so path matching and method matching agree.
 // If a future path carries two Python methods (a GET and a POST at the same
 // URL) while only one is actually wired in the Go handler, this renders BOTH
 // method rows "ported" -- a known simplification, flagged here rather than
-// discovered later, because resolving it needs parsing each handler's own
-// `r.Method` guard, which is a materially bigger change than this section.
+// discovered later. The route table now DECLARES each pattern's methods
+// (server.RESTRoutes, pinned against the handlers by the server package's own
+// tests), so a method-aware match is possible; this page keeps the path-level
+// match until it is changed on purpose.
 import (
 	"fmt"
 	"os"
-	"path/filepath"
 	"regexp"
 	"sort"
 	"strings"
+
+	"github.com/full-chaos/dev-health-ops/internal/queryapi/server"
 )
 
 // Marker pair bounding the new block. Same convention as every other
@@ -237,109 +242,47 @@ func apiV1Routes(routes []RESTRoute) []RESTRoute {
 	return out
 }
 
-var muxHandleFuncRe = regexp.MustCompile(`mux\.HandleFunc\(\s*"(/api/v1/[^"]+)"\s*,\s*([A-Za-z0-9_]+)\s*\)`)
-
-// builderAssignRe finds `<handlerVar>, ... := <builderFunc>(<args>)` -- the
-// shape every /api/v1/* route in query-api's server.go uses today
-// (`explainHandler, explainCleanup, explainOK, explainErr :=
-// buildInvestmentExplainRoute(getenv)`) to build its handler before mounting
-// it. The argument list is matched loosely (no nested parentheses): a builder
-// that gains a parameter must still resolve to its definition, not fall back
-// to the mount site.
-func builderAssignRe(handlerVar string) *regexp.Regexp {
-	return regexp.MustCompile(regexp.QuoteMeta(handlerVar) + `\s*,[^\n=]*:=\s*([A-Za-z0-9_]+)\([^()\n]*\)`)
-}
-
-func funcDefRe(name string) *regexp.Regexp {
-	return regexp.MustCompile(`(?m)^func ` + regexp.QuoteMeta(name) + `\(`)
-}
-
-// LoadQueryAPIMuxRoutes mechanically parses every `/api/v1/*`
-// `mux.HandleFunc` registration across the source files of query-api's
-// server package, internal/queryapi/server (not its subpackages, not
-// `_test.go` -- the mux itself is built there). Read it from the Go source,
-// not from a registry: query-api has none for its REST surface, only for
-// GraphQL operations.
-//
-// For each registration this also tries to resolve the handler's builder
-// function (query-api's own `build<X>Route()` convention) to its definition
-// site, so a "ported" row can point at the code that actually serves it
-// rather than only the mount call. Falling back to the mount site itself is
-// not a bug: it is a real, if less useful, "Go handler location".
 // queryAPILoc renders a "Go handler location" citation for a file inside
 // query-api's own directory. It names the file relative to
-// internal/queryapi/server/ -- a fixed, repo-relative label, deliberately NOT
-// derived from the caller-supplied queryAPIDir argument, which can be
-// absolute (a test's t.TempDir(), or -root resolved to an absolute path) and
-// would otherwise leak a build-machine path onto the rendered page. The
-// symbol after '#' is the citation's anchor: a function name, or the mux
-// registration named by its route. Never a line number (CHAOS-6633): the page
-// is regenerated from the committed sources and compared, so a citation that
-// moves with unrelated edits fails every PR that touches the file. A renamed
-// or removed builder still changes the citation, so the drift check still
-// fails for a real mapping change.
-func queryAPILoc(name, symbol string) string {
-	return fmt.Sprintf("internal/queryapi/server/%s#%s", filepath.Base(name), symbol)
+// internal/queryapi/server/ -- a fixed, repo-relative label. The symbol after
+// '#' is the citation's anchor: the builder function's name. Never a line
+// number (CHAOS-6633): the page is regenerated from the committed sources and
+// compared, so a citation that moves with unrelated edits fails every PR that
+// touches the file. A renamed or removed builder still changes the citation,
+// so the drift check still fails for a real mapping change.
+func queryAPILoc(file, symbol string) string {
+	return fmt.Sprintf("internal/queryapi/server/%s#%s", file, symbol)
 }
 
-func LoadQueryAPIMuxRoutes(queryAPIDir string) ([]QueryAPIMuxRoute, error) {
-	matches, err := filepath.Glob(filepath.Join(queryAPIDir, "*.go"))
-	if err != nil {
-		return nil, fmt.Errorf("glob %s: %w", queryAPIDir, err)
-	}
-	sort.Strings(matches)
-
-	type file struct {
-		name string
-		text string
-	}
-	var files []file
-	for _, m := range matches {
-		if strings.HasSuffix(m, "_test.go") {
+// LoadQueryAPIMuxRoutes returns every `/api/v1/*` pattern query-api's mux mounts,
+// read by EXECUTING the production route table (server.RESTRoutes, CHAOS-8307):
+// the table is the data BuildWithLookup iterates to mount the routes, so this is
+// a walk of the production route set, not a parse of the source text. It
+// replaces the earlier regex parse of server.go, whose `mux.HandleFunc(path,
+// ident)` call form every route had to keep.
+//
+// The routes are path-level (one entry per pattern); the declared methods
+// are in server.RESTRoutes. HandlerLoc cites the builder function that
+// serves the pattern.
+func LoadQueryAPIMuxRoutes() []QueryAPIMuxRoute {
+	seen := map[string]bool{}
+	var out []QueryAPIMuxRoute
+	for _, route := range server.RESTRoutes() {
+		if seen[route.Pattern] {
 			continue
 		}
-		raw, err := os.ReadFile(m) //nolint:gosec // repo-relative path
-		if err != nil {
-			return nil, fmt.Errorf("read %s: %w", m, err)
-		}
-		files = append(files, file{name: m, text: string(raw)})
-	}
-	if len(files) == 0 {
-		return nil, fmt.Errorf("%s: no non-test .go files found", queryAPIDir)
-	}
-
-	var out []QueryAPIMuxRoute
-	for _, f := range files {
-		for _, m := range muxHandleFuncRe.FindAllStringSubmatchIndex(f.text, -1) {
-			route := f.text[m[2]:m[3]]
-			handlerVar := f.text[m[4]:m[5]]
-			loc := queryAPILoc(f.name, "HandleFunc("+route+")")
-
-			// Best-effort: if the builder cannot be resolved (a shape this
-			// codebase does not use today), loc stays the mount site set
-			// above -- a real, if less useful, "Go handler location".
-			if assign := builderAssignRe(handlerVar).FindStringSubmatch(f.text); assign != nil {
-				builder := assign[1]
-				for _, f2 := range files {
-					if funcDefRe(builder).MatchString(f2.text) {
-						loc = queryAPILoc(f2.name, builder)
-						break
-					}
-				}
-			}
-
-			out = append(out, QueryAPIMuxRoute{Path: route, HandlerLoc: loc})
-		}
+		seen[route.Pattern] = true
+		out = append(out, QueryAPIMuxRoute{Path: route.Pattern, HandlerLoc: queryAPILoc(route.File, route.Builder)})
 	}
 	sort.Slice(out, func(i, j int) bool { return out[i].Path < out[j].Path })
-	return out, nil
+	return out
 }
 
 // LoadRESTEndpoints builds the "Per REST endpoint" rows: every /api/v1/*
 // route main.py declares, cross-referenced against query-api's mux. Both
 // sources are read fresh here -- there is no ledger of routes to drift out
 // of sync with either side, only RESTDeadByDesign's citations.
-func LoadRESTEndpoints(mainPyPath, queryAPIDir string) ([]RESTEndpointRow, error) {
+func LoadRESTEndpoints(mainPyPath string, muxRoutes []QueryAPIMuxRoute) ([]RESTEndpointRow, error) {
 	pyRoutes, err := LoadFastAPIRoutes(mainPyPath)
 	if err != nil {
 		return nil, err
@@ -350,10 +293,6 @@ func LoadRESTEndpoints(mainPyPath, queryAPIDir string) ([]RESTEndpointRow, error
 			"or the file moved; LoadFastAPIRoutes needs updating before this section can be trusted", mainPyPath)
 	}
 
-	muxRoutes, err := LoadQueryAPIMuxRoutes(queryAPIDir)
-	if err != nil {
-		return nil, err
-	}
 	byPath := map[string]QueryAPIMuxRoute{}
 	for _, m := range muxRoutes {
 		byPath[m.Path] = m

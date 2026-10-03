@@ -71,4 +71,6 @@ func TestGenericOracleRediscoversGitHubBlameAuthorDefaultDefect(t *testing.T) {
 	if len(divergences) == 0 {
 		t.Fatal("oracle failed to rediscover the pre-fix empty-author defect")
 	}
+	// The defect's own read, by name: the empty author of the defaults case.
+	requireDivergencesAre(t, divergences, divergenceRead{"provider_defaults", "author_name"})
 }

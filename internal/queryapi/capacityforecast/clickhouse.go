@@ -208,6 +208,9 @@ func scanForecastRow(rows clickhouse.RowScanner) (*model.CapacityForecast, error
 		throughputMean, throughputStddev  float64
 		historyDays                       uint16
 		insufficientHistory, highVariance uint8
+		daysValues                        []uint16
+		daysCounts, itemsValues           []uint32
+		itemsCounts                       []uint32
 	)
 
 	if err := rows.Scan(
@@ -216,6 +219,7 @@ func scanForecastRow(rows clickhouse.RowScanner) (*model.CapacityForecast, error
 		&p50Days, &p85Days, &p95Days, &p50Items, &p85Items, &p95Items,
 		&throughputMean, &throughputStddev, &historyDays,
 		&insufficientHistory, &highVariance,
+		&daysValues, &daysCounts, &itemsValues, &itemsCounts,
 	); err != nil {
 		return nil, fmt.Errorf("capacityForecasts: scan: %w", err)
 	}
@@ -254,6 +258,12 @@ func scanForecastRow(rows clickhouse.RowScanner) (*model.CapacityForecast, error
 		// read as true on both sides.
 		InsufficientHistory: insufficientHistory != 0,
 		HighVariance:        highVariance != 0,
+		// CHAOS-7624, migration 101. Empty arrays (every row written before it)
+		// are a null distribution, not zeros.
+		CompletionDistribution: distributionToModel(
+			histogramFromUint16(daysValues, daysCounts),
+			histogramFromUint32(itemsValues, itemsCounts),
+		),
 	}, nil
 }
 

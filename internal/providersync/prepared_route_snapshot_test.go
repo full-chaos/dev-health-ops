@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"github.com/full-chaos/dev-health-ops/internal/testsupport/fakehttp"
 	"reflect"
 	"sort"
 	"strings"
@@ -241,7 +242,7 @@ func TestCompleteRouteExecutorRecoversPreparedManifestWithoutRecollection(t *tes
 	doer := &trackingCompleteRouteDoer{}
 	executor.Credentials.Repository = credentials
 	executor.Credentials.Decryptor = decryptor
-	executor.Doer = doer
+	executor.Doer = fakehttp.Client(doer)
 	executor.Committer.Readback = staticEffectReadback{inspections: map[string]EffectInspection{
 		prepared.Effects[1].Destination: EffectExact,
 	}}
@@ -311,7 +312,7 @@ func TestCompleteRouteExecutorRecoversDurableIncompleteManifestWithoutRefetch(t 
 	doer := &trackingCompleteRouteDoer{}
 	executor.Credentials.Repository = credentials
 	executor.Credentials.Decryptor = decryptor
-	executor.Doer = doer
+	executor.Doer = fakehttp.Client(doer)
 
 	result, err := executor.Execute(context.Background(), session, descriptor)
 	if err != nil {

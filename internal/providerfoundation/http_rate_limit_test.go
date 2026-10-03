@@ -2,6 +2,7 @@ package providerfoundation
 
 import (
 	"context"
+	"github.com/full-chaos/dev-health-ops/internal/testsupport/fakehttp"
 	"net/http"
 	"strconv"
 	"testing"
@@ -95,11 +96,11 @@ func (gate *recordingGate) Penalize(_ context.Context, delay time.Duration) erro
 func TestRateLimitPenalizesSharedGateWithUntruncatedDelay(t *testing.T) {
 	t.Parallel()
 	policy := RetryPolicy{MaxAttempts: 1, InitialWait: time.Millisecond, MaxWait: 25 * time.Millisecond}
-	client := newTestHTTPClient(t, HTTPDoerFunc(func(request *http.Request) (*http.Response, error) {
+	client := newTestHTTPClient(t, fakehttp.Client(HTTPDoerFunc(func(request *http.Request) (*http.Response, error) {
 		return testHTTPResponse(request, http.StatusTooManyRequests, http.Header{
 			"Retry-After": {"240"},
 		}, `{"message":"rate limit"}`), nil
-	}), policy)
+	})), policy)
 	gate := &recordingGate{}
 	client.Gate = gate
 
@@ -116,11 +117,11 @@ func TestRateLimitPenalizesSharedGateWithUntruncatedDelay(t *testing.T) {
 func TestRateLimitGatePenaltyIsCappedAtTheHonouredCeiling(t *testing.T) {
 	t.Parallel()
 	policy := RetryPolicy{MaxAttempts: 1, InitialWait: time.Millisecond, MaxWait: 25 * time.Millisecond}
-	client := newTestHTTPClient(t, HTTPDoerFunc(func(request *http.Request) (*http.Response, error) {
+	client := newTestHTTPClient(t, fakehttp.Client(HTTPDoerFunc(func(request *http.Request) (*http.Response, error) {
 		return testHTTPResponse(request, http.StatusTooManyRequests, http.Header{
 			"Retry-After": {"3600"},
 		}, `{"message":"rate limit"}`), nil
-	}), policy)
+	})), policy)
 	gate := &recordingGate{}
 	client.Gate = gate
 

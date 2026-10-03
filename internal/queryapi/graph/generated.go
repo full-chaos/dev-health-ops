@@ -405,28 +405,39 @@ type ComplexityRoot struct {
 		TeamID func(childComplexity int) int
 	}
 
+	CapacityDistribution struct {
+		Days  func(childComplexity int) int
+		Items func(childComplexity int) int
+	}
+
+	CapacityDistributionBin struct {
+		Count func(childComplexity int) int
+		Value func(childComplexity int) int
+	}
+
 	CapacityForecast struct {
-		BacklogSize         func(childComplexity int) int
-		ComputedAt          func(childComplexity int) int
-		ForecastID          func(childComplexity int) int
-		HighVariance        func(childComplexity int) int
-		HistoryDays         func(childComplexity int) int
-		InsufficientHistory func(childComplexity int) int
-		P50Date             func(childComplexity int) int
-		P50Days             func(childComplexity int) int
-		P50Items            func(childComplexity int) int
-		P85Date             func(childComplexity int) int
-		P85Days             func(childComplexity int) int
-		P85Items            func(childComplexity int) int
-		P95Date             func(childComplexity int) int
-		P95Days             func(childComplexity int) int
-		P95Items            func(childComplexity int) int
-		TargetDate          func(childComplexity int) int
-		TargetItems         func(childComplexity int) int
-		TeamID              func(childComplexity int) int
-		ThroughputMean      func(childComplexity int) int
-		ThroughputStddev    func(childComplexity int) int
-		WorkScopeID         func(childComplexity int) int
+		BacklogSize            func(childComplexity int) int
+		CompletionDistribution func(childComplexity int) int
+		ComputedAt             func(childComplexity int) int
+		ForecastID             func(childComplexity int) int
+		HighVariance           func(childComplexity int) int
+		HistoryDays            func(childComplexity int) int
+		InsufficientHistory    func(childComplexity int) int
+		P50Date                func(childComplexity int) int
+		P50Days                func(childComplexity int) int
+		P50Items               func(childComplexity int) int
+		P85Date                func(childComplexity int) int
+		P85Days                func(childComplexity int) int
+		P85Items               func(childComplexity int) int
+		P95Date                func(childComplexity int) int
+		P95Days                func(childComplexity int) int
+		P95Items               func(childComplexity int) int
+		TargetDate             func(childComplexity int) int
+		TargetItems            func(childComplexity int) int
+		TeamID                 func(childComplexity int) int
+		ThroughputMean         func(childComplexity int) int
+		ThroughputStddev       func(childComplexity int) int
+		WorkScopeID            func(childComplexity int) int
 	}
 
 	CapacityForecastConnection struct {
@@ -3266,12 +3277,47 @@ func (e *executableSchema) Complexity(typeName, field string, childComplexity in
 
 		return e.complexity.BusFactorScope.TeamID(childComplexity), true
 
+	case "CapacityDistribution.days":
+		if e.complexity.CapacityDistribution.Days == nil {
+			break
+		}
+
+		return e.complexity.CapacityDistribution.Days(childComplexity), true
+
+	case "CapacityDistribution.items":
+		if e.complexity.CapacityDistribution.Items == nil {
+			break
+		}
+
+		return e.complexity.CapacityDistribution.Items(childComplexity), true
+
+	case "CapacityDistributionBin.count":
+		if e.complexity.CapacityDistributionBin.Count == nil {
+			break
+		}
+
+		return e.complexity.CapacityDistributionBin.Count(childComplexity), true
+
+	case "CapacityDistributionBin.value":
+		if e.complexity.CapacityDistributionBin.Value == nil {
+			break
+		}
+
+		return e.complexity.CapacityDistributionBin.Value(childComplexity), true
+
 	case "CapacityForecast.backlogSize":
 		if e.complexity.CapacityForecast.BacklogSize == nil {
 			break
 		}
 
 		return e.complexity.CapacityForecast.BacklogSize(childComplexity), true
+
+	case "CapacityForecast.completionDistribution":
+		if e.complexity.CapacityForecast.CompletionDistribution == nil {
+			break
+		}
+
+		return e.complexity.CapacityForecast.CompletionDistribution(childComplexity), true
 
 	case "CapacityForecast.computedAt":
 		if e.complexity.CapacityForecast.ComputedAt == nil {
@@ -8911,6 +8957,32 @@ type CapacityForecast {
   historyDays: Int!
   insufficientHistory: Boolean!
   highVariance: Boolean!
+  """
+  The Monte Carlo distribution the p50 / p85 / p95 above were taken from, as
+  histograms (CHAOS-7624). Null = no distribution: a forecast stored before it
+  existed, or one where neither mode simulated. Never an object of zero bins.
+  """
+  completionDistribution: CapacityDistribution
+}
+
+"""
+One forecast's simulation results as histograms: for each mode, the distinct
+outcomes of the runs and how many runs produced each, ascending by value. A
+mode that did not simulate is null. The counts of one mode sum to the
+forecast's simulation count, so any percentile can be recomputed from the bins.
+"""
+type CapacityDistribution {
+  "Fixed-scope mode: days to complete the target items, one bin per distinct day count."
+  days: [CapacityDistributionBin!]
+  "Fixed-date mode: items completed by the target date, one bin per distinct total."
+  items: [CapacityDistributionBin!]
+}
+
+type CapacityDistributionBin {
+  "The outcome: a day count (days) or an item count (items)."
+  value: Int!
+  "How many simulation runs ended on this value."
+  count: Int!
 }
 
 type CapacityForecastConnection {
@@ -24856,6 +24928,188 @@ func (ec *executionContext) fieldContext_BusFactorScope_teamId(_ context.Context
 	return fc, nil
 }
 
+func (ec *executionContext) _CapacityDistribution_days(ctx context.Context, field graphql.CollectedField, obj *model.CapacityDistribution) (ret graphql.Marshaler) {
+	fc, err := ec.fieldContext_CapacityDistribution_days(ctx, field)
+	if err != nil {
+		return graphql.Null
+	}
+	ctx = graphql.WithFieldContext(ctx, fc)
+	defer func() {
+		if r := recover(); r != nil {
+			ec.Error(ctx, ec.Recover(ctx, r))
+			ret = graphql.Null
+		}
+	}()
+	resTmp, err := ec.ResolverMiddleware(ctx, func(rctx context.Context) (any, error) {
+		ctx = rctx // use context from middleware stack in children
+		return obj.Days, nil
+	})
+	if err != nil {
+		ec.Error(ctx, err)
+		return graphql.Null
+	}
+	if resTmp == nil {
+		return graphql.Null
+	}
+	res := resTmp.([]model.CapacityDistributionBin)
+	fc.Result = res
+	return ec.marshalOCapacityDistributionBin2ᚕgithubᚗcomᚋfullᚑchaosᚋdevᚑhealthᚑopsᚋinternalᚋqueryapiᚋgraphᚋmodelᚐCapacityDistributionBinᚄ(ctx, field.Selections, res)
+}
+
+func (ec *executionContext) fieldContext_CapacityDistribution_days(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "CapacityDistribution",
+		Field:      field,
+		IsMethod:   false,
+		IsResolver: false,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			switch field.Name {
+			case "value":
+				return ec.fieldContext_CapacityDistributionBin_value(ctx, field)
+			case "count":
+				return ec.fieldContext_CapacityDistributionBin_count(ctx, field)
+			}
+			return nil, fmt.Errorf("no field named %q was found under type CapacityDistributionBin", field.Name)
+		},
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _CapacityDistribution_items(ctx context.Context, field graphql.CollectedField, obj *model.CapacityDistribution) (ret graphql.Marshaler) {
+	fc, err := ec.fieldContext_CapacityDistribution_items(ctx, field)
+	if err != nil {
+		return graphql.Null
+	}
+	ctx = graphql.WithFieldContext(ctx, fc)
+	defer func() {
+		if r := recover(); r != nil {
+			ec.Error(ctx, ec.Recover(ctx, r))
+			ret = graphql.Null
+		}
+	}()
+	resTmp, err := ec.ResolverMiddleware(ctx, func(rctx context.Context) (any, error) {
+		ctx = rctx // use context from middleware stack in children
+		return obj.Items, nil
+	})
+	if err != nil {
+		ec.Error(ctx, err)
+		return graphql.Null
+	}
+	if resTmp == nil {
+		return graphql.Null
+	}
+	res := resTmp.([]model.CapacityDistributionBin)
+	fc.Result = res
+	return ec.marshalOCapacityDistributionBin2ᚕgithubᚗcomᚋfullᚑchaosᚋdevᚑhealthᚑopsᚋinternalᚋqueryapiᚋgraphᚋmodelᚐCapacityDistributionBinᚄ(ctx, field.Selections, res)
+}
+
+func (ec *executionContext) fieldContext_CapacityDistribution_items(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "CapacityDistribution",
+		Field:      field,
+		IsMethod:   false,
+		IsResolver: false,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			switch field.Name {
+			case "value":
+				return ec.fieldContext_CapacityDistributionBin_value(ctx, field)
+			case "count":
+				return ec.fieldContext_CapacityDistributionBin_count(ctx, field)
+			}
+			return nil, fmt.Errorf("no field named %q was found under type CapacityDistributionBin", field.Name)
+		},
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _CapacityDistributionBin_value(ctx context.Context, field graphql.CollectedField, obj *model.CapacityDistributionBin) (ret graphql.Marshaler) {
+	fc, err := ec.fieldContext_CapacityDistributionBin_value(ctx, field)
+	if err != nil {
+		return graphql.Null
+	}
+	ctx = graphql.WithFieldContext(ctx, fc)
+	defer func() {
+		if r := recover(); r != nil {
+			ec.Error(ctx, ec.Recover(ctx, r))
+			ret = graphql.Null
+		}
+	}()
+	resTmp, err := ec.ResolverMiddleware(ctx, func(rctx context.Context) (any, error) {
+		ctx = rctx // use context from middleware stack in children
+		return obj.Value, nil
+	})
+	if err != nil {
+		ec.Error(ctx, err)
+		return graphql.Null
+	}
+	if resTmp == nil {
+		if !graphql.HasFieldError(ctx, fc) {
+			ec.Errorf(ctx, "must not be null")
+		}
+		return graphql.Null
+	}
+	res := resTmp.(int)
+	fc.Result = res
+	return ec.marshalNInt2int(ctx, field.Selections, res)
+}
+
+func (ec *executionContext) fieldContext_CapacityDistributionBin_value(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "CapacityDistributionBin",
+		Field:      field,
+		IsMethod:   false,
+		IsResolver: false,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return nil, errors.New("field of type Int does not have child fields")
+		},
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _CapacityDistributionBin_count(ctx context.Context, field graphql.CollectedField, obj *model.CapacityDistributionBin) (ret graphql.Marshaler) {
+	fc, err := ec.fieldContext_CapacityDistributionBin_count(ctx, field)
+	if err != nil {
+		return graphql.Null
+	}
+	ctx = graphql.WithFieldContext(ctx, fc)
+	defer func() {
+		if r := recover(); r != nil {
+			ec.Error(ctx, ec.Recover(ctx, r))
+			ret = graphql.Null
+		}
+	}()
+	resTmp, err := ec.ResolverMiddleware(ctx, func(rctx context.Context) (any, error) {
+		ctx = rctx // use context from middleware stack in children
+		return obj.Count, nil
+	})
+	if err != nil {
+		ec.Error(ctx, err)
+		return graphql.Null
+	}
+	if resTmp == nil {
+		if !graphql.HasFieldError(ctx, fc) {
+			ec.Errorf(ctx, "must not be null")
+		}
+		return graphql.Null
+	}
+	res := resTmp.(int)
+	fc.Result = res
+	return ec.marshalNInt2int(ctx, field.Selections, res)
+}
+
+func (ec *executionContext) fieldContext_CapacityDistributionBin_count(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "CapacityDistributionBin",
+		Field:      field,
+		IsMethod:   false,
+		IsResolver: false,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return nil, errors.New("field of type Int does not have child fields")
+		},
+	}
+	return fc, nil
+}
+
 func (ec *executionContext) _CapacityForecast_forecastId(ctx context.Context, field graphql.CollectedField, obj *model.CapacityForecast) (ret graphql.Marshaler) {
 	fc, err := ec.fieldContext_CapacityForecast_forecastId(ctx, field)
 	if err != nil {
@@ -25741,6 +25995,53 @@ func (ec *executionContext) fieldContext_CapacityForecast_highVariance(_ context
 	return fc, nil
 }
 
+func (ec *executionContext) _CapacityForecast_completionDistribution(ctx context.Context, field graphql.CollectedField, obj *model.CapacityForecast) (ret graphql.Marshaler) {
+	fc, err := ec.fieldContext_CapacityForecast_completionDistribution(ctx, field)
+	if err != nil {
+		return graphql.Null
+	}
+	ctx = graphql.WithFieldContext(ctx, fc)
+	defer func() {
+		if r := recover(); r != nil {
+			ec.Error(ctx, ec.Recover(ctx, r))
+			ret = graphql.Null
+		}
+	}()
+	resTmp, err := ec.ResolverMiddleware(ctx, func(rctx context.Context) (any, error) {
+		ctx = rctx // use context from middleware stack in children
+		return obj.CompletionDistribution, nil
+	})
+	if err != nil {
+		ec.Error(ctx, err)
+		return graphql.Null
+	}
+	if resTmp == nil {
+		return graphql.Null
+	}
+	res := resTmp.(*model.CapacityDistribution)
+	fc.Result = res
+	return ec.marshalOCapacityDistribution2ᚖgithubᚗcomᚋfullᚑchaosᚋdevᚑhealthᚑopsᚋinternalᚋqueryapiᚋgraphᚋmodelᚐCapacityDistribution(ctx, field.Selections, res)
+}
+
+func (ec *executionContext) fieldContext_CapacityForecast_completionDistribution(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "CapacityForecast",
+		Field:      field,
+		IsMethod:   false,
+		IsResolver: false,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			switch field.Name {
+			case "days":
+				return ec.fieldContext_CapacityDistribution_days(ctx, field)
+			case "items":
+				return ec.fieldContext_CapacityDistribution_items(ctx, field)
+			}
+			return nil, fmt.Errorf("no field named %q was found under type CapacityDistribution", field.Name)
+		},
+	}
+	return fc, nil
+}
+
 func (ec *executionContext) _CapacityForecastConnection_edges(ctx context.Context, field graphql.CollectedField, obj *model.CapacityForecastConnection) (ret graphql.Marshaler) {
 	fc, err := ec.fieldContext_CapacityForecastConnection_edges(ctx, field)
 	if err != nil {
@@ -25970,6 +26271,8 @@ func (ec *executionContext) fieldContext_CapacityForecastEdge_node(_ context.Con
 				return ec.fieldContext_CapacityForecast_insufficientHistory(ctx, field)
 			case "highVariance":
 				return ec.fieldContext_CapacityForecast_highVariance(ctx, field)
+			case "completionDistribution":
+				return ec.fieldContext_CapacityForecast_completionDistribution(ctx, field)
 			}
 			return nil, fmt.Errorf("no field named %q was found under type CapacityForecast", field.Name)
 		},
@@ -44630,6 +44933,8 @@ func (ec *executionContext) fieldContext_Query_capacityForecast(ctx context.Cont
 				return ec.fieldContext_CapacityForecast_insufficientHistory(ctx, field)
 			case "highVariance":
 				return ec.fieldContext_CapacityForecast_highVariance(ctx, field)
+			case "completionDistribution":
+				return ec.fieldContext_CapacityForecast_completionDistribution(ctx, field)
 			}
 			return nil, fmt.Errorf("no field named %q was found under type CapacityForecast", field.Name)
 		},
@@ -63320,6 +63625,88 @@ func (ec *executionContext) _BusFactorScope(ctx context.Context, sel ast.Selecti
 	return out
 }
 
+var capacityDistributionImplementors = []string{"CapacityDistribution"}
+
+func (ec *executionContext) _CapacityDistribution(ctx context.Context, sel ast.SelectionSet, obj *model.CapacityDistribution) graphql.Marshaler {
+	fields := graphql.CollectFields(ec.OperationContext, sel, capacityDistributionImplementors)
+
+	out := graphql.NewFieldSet(fields)
+	deferred := make(map[string]*graphql.FieldSet)
+	for i, field := range fields {
+		switch field.Name {
+		case "__typename":
+			out.Values[i] = graphql.MarshalString("CapacityDistribution")
+		case "days":
+			out.Values[i] = ec._CapacityDistribution_days(ctx, field, obj)
+		case "items":
+			out.Values[i] = ec._CapacityDistribution_items(ctx, field, obj)
+		default:
+			panic("unknown field " + strconv.Quote(field.Name))
+		}
+	}
+	out.Dispatch(ctx)
+	if out.Invalids > 0 {
+		return graphql.Null
+	}
+
+	atomic.AddInt32(&ec.deferred, int32(len(deferred)))
+
+	for label, dfs := range deferred {
+		ec.processDeferredGroup(graphql.DeferredGroup{
+			Label:    label,
+			Path:     graphql.GetPath(ctx),
+			FieldSet: dfs,
+			Context:  ctx,
+		})
+	}
+
+	return out
+}
+
+var capacityDistributionBinImplementors = []string{"CapacityDistributionBin"}
+
+func (ec *executionContext) _CapacityDistributionBin(ctx context.Context, sel ast.SelectionSet, obj *model.CapacityDistributionBin) graphql.Marshaler {
+	fields := graphql.CollectFields(ec.OperationContext, sel, capacityDistributionBinImplementors)
+
+	out := graphql.NewFieldSet(fields)
+	deferred := make(map[string]*graphql.FieldSet)
+	for i, field := range fields {
+		switch field.Name {
+		case "__typename":
+			out.Values[i] = graphql.MarshalString("CapacityDistributionBin")
+		case "value":
+			out.Values[i] = ec._CapacityDistributionBin_value(ctx, field, obj)
+			if out.Values[i] == graphql.Null {
+				out.Invalids++
+			}
+		case "count":
+			out.Values[i] = ec._CapacityDistributionBin_count(ctx, field, obj)
+			if out.Values[i] == graphql.Null {
+				out.Invalids++
+			}
+		default:
+			panic("unknown field " + strconv.Quote(field.Name))
+		}
+	}
+	out.Dispatch(ctx)
+	if out.Invalids > 0 {
+		return graphql.Null
+	}
+
+	atomic.AddInt32(&ec.deferred, int32(len(deferred)))
+
+	for label, dfs := range deferred {
+		ec.processDeferredGroup(graphql.DeferredGroup{
+			Label:    label,
+			Path:     graphql.GetPath(ctx),
+			FieldSet: dfs,
+			Context:  ctx,
+		})
+	}
+
+	return out
+}
+
 var capacityForecastImplementors = []string{"CapacityForecast"}
 
 func (ec *executionContext) _CapacityForecast(ctx context.Context, sel ast.SelectionSet, obj *model.CapacityForecast) graphql.Marshaler {
@@ -63397,6 +63784,8 @@ func (ec *executionContext) _CapacityForecast(ctx context.Context, sel ast.Selec
 			if out.Values[i] == graphql.Null {
 				out.Invalids++
 			}
+		case "completionDistribution":
+			out.Values[i] = ec._CapacityForecast_completionDistribution(ctx, field, obj)
 		default:
 			panic("unknown field " + strconv.Quote(field.Name))
 		}
@@ -72779,6 +73168,10 @@ func (ec *executionContext) marshalNBusFactorScope2ᚖgithubᚗcomᚋfullᚑchao
 	return ec._BusFactorScope(ctx, sel, v)
 }
 
+func (ec *executionContext) marshalNCapacityDistributionBin2githubᚗcomᚋfullᚑchaosᚋdevᚑhealthᚑopsᚋinternalᚋqueryapiᚋgraphᚋmodelᚐCapacityDistributionBin(ctx context.Context, sel ast.SelectionSet, v model.CapacityDistributionBin) graphql.Marshaler {
+	return ec._CapacityDistributionBin(ctx, sel, &v)
+}
+
 func (ec *executionContext) marshalNCapacityForecast2ᚖgithubᚗcomᚋfullᚑchaosᚋdevᚑhealthᚑopsᚋinternalᚋqueryapiᚋgraphᚋmodelᚐCapacityForecast(ctx context.Context, sel ast.SelectionSet, v *model.CapacityForecast) graphql.Marshaler {
 	if v == nil {
 		if !graphql.HasFieldError(ctx, graphql.GetFieldContext(ctx)) {
@@ -77156,6 +77549,60 @@ func (ec *executionContext) unmarshalOBusFactorScopeInput2ᚖgithubᚗcomᚋfull
 	}
 	res, err := ec.unmarshalInputBusFactorScopeInput(ctx, v)
 	return &res, graphql.ErrorOnPath(ctx, err)
+}
+
+func (ec *executionContext) marshalOCapacityDistribution2ᚖgithubᚗcomᚋfullᚑchaosᚋdevᚑhealthᚑopsᚋinternalᚋqueryapiᚋgraphᚋmodelᚐCapacityDistribution(ctx context.Context, sel ast.SelectionSet, v *model.CapacityDistribution) graphql.Marshaler {
+	if v == nil {
+		return graphql.Null
+	}
+	return ec._CapacityDistribution(ctx, sel, v)
+}
+
+func (ec *executionContext) marshalOCapacityDistributionBin2ᚕgithubᚗcomᚋfullᚑchaosᚋdevᚑhealthᚑopsᚋinternalᚋqueryapiᚋgraphᚋmodelᚐCapacityDistributionBinᚄ(ctx context.Context, sel ast.SelectionSet, v []model.CapacityDistributionBin) graphql.Marshaler {
+	if v == nil {
+		return graphql.Null
+	}
+	ret := make(graphql.Array, len(v))
+	var wg sync.WaitGroup
+	isLen1 := len(v) == 1
+	if !isLen1 {
+		wg.Add(len(v))
+	}
+	for i := range v {
+		i := i
+		fc := &graphql.FieldContext{
+			Index:  &i,
+			Result: &v[i],
+		}
+		ctx := graphql.WithFieldContext(ctx, fc)
+		f := func(i int) {
+			defer func() {
+				if r := recover(); r != nil {
+					ec.Error(ctx, ec.Recover(ctx, r))
+					ret = nil
+				}
+			}()
+			if !isLen1 {
+				defer wg.Done()
+			}
+			ret[i] = ec.marshalNCapacityDistributionBin2githubᚗcomᚋfullᚑchaosᚋdevᚑhealthᚑopsᚋinternalᚋqueryapiᚋgraphᚋmodelᚐCapacityDistributionBin(ctx, sel, v[i])
+		}
+		if isLen1 {
+			f(i)
+		} else {
+			go f(i)
+		}
+
+	}
+	wg.Wait()
+
+	for _, e := range ret {
+		if e == graphql.Null {
+			return graphql.Null
+		}
+	}
+
+	return ret
 }
 
 func (ec *executionContext) marshalOCapacityForecast2ᚖgithubᚗcomᚋfullᚑchaosᚋdevᚑhealthᚑopsᚋinternalᚋqueryapiᚋgraphᚋmodelᚐCapacityForecast(ctx context.Context, sel ast.SelectionSet, v *model.CapacityForecast) graphql.Marshaler {

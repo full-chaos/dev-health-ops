@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"github.com/full-chaos/dev-health-ops/internal/testsupport/fakehttp"
 	"io"
 	"log/slog"
 	"net/http"
@@ -57,7 +58,7 @@ func (doer gitHubFilesDoer) Do(request *http.Request) (*http.Response, error) {
 
 func TestGitHubFilesRouteTraversesTreeAndWritesNonEmptyInventory(t *testing.T) {
 	claim := nativeTestClaim("github", "files")
-	client := gitHubRepositoryClient(t, gitHubFilesDoer{t: t}, "https://api.github.com")
+	client := gitHubRepositoryClient(t, fakehttp.Client(gitHubFilesDoer{t: t}), "https://api.github.com")
 	batch, err := (GitHubFilesRouteHandler{}).Collect(context.Background(), claim, providerfoundation.Credential{}, client, time.Date(2026, 7, 23, 12, 30, 0, 0, time.UTC))
 	if err != nil {
 		t.Fatal(err)
@@ -103,7 +104,7 @@ func TestGitHubFilesRouteCountsFailedAndRetriedAttempts(t *testing.T) {
 		}
 	})
 	client, err := providerfoundation.NewHTTPClient(
-		"github", "https://api.github.com", doer,
+		"github", "https://api.github.com", fakehttp.Client(doer),
 		func(*http.Request) error { return nil },
 		providerfoundation.RetryPolicy{
 			MaxAttempts: 2, InitialWait: time.Nanosecond, MaxWait: time.Nanosecond,
@@ -158,7 +159,7 @@ func TestGitHubFilesRouteContentFetchExhaustsTheRetryPolicyOnPermanentFailure(t 
 		}
 	})
 	client, err := providerfoundation.NewHTTPClient(
-		"github", "https://api.github.com", doer,
+		"github", "https://api.github.com", fakehttp.Client(doer),
 		func(*http.Request) error { return nil },
 		providerfoundation.RetryPolicy{
 			MaxAttempts: 2, InitialWait: time.Nanosecond, MaxWait: time.Nanosecond,
@@ -182,9 +183,9 @@ func TestGitHubFilesRouteContentFetchExhaustsTheRetryPolicyOnPermanentFailure(t 
 
 func TestGitHubFilesRouteReturnsTraversalFailureWhenContentFetchFails(t *testing.T) {
 	claim := nativeTestClaim("github", "files")
-	client := gitHubRepositoryClient(t, gitHubFilesDoer{
+	client := gitHubRepositoryClient(t, fakehttp.Client(gitHubFilesDoer{
 		t: t, contentStatus: http.StatusInternalServerError,
-	}, "https://api.github.com")
+	}), "https://api.github.com")
 
 	_, err := (GitHubFilesRouteHandler{}).Collect(
 		context.Background(), claim, providerfoundation.Credential{}, client,
@@ -197,9 +198,9 @@ func TestGitHubFilesRouteReturnsTraversalFailureWhenContentFetchFails(t *testing
 
 func TestGitHubFilesRouteReraisesContentRateLimits(t *testing.T) {
 	claim := nativeTestClaim("github", "files")
-	client := gitHubRepositoryClient(t, gitHubFilesDoer{
+	client := gitHubRepositoryClient(t, fakehttp.Client(gitHubFilesDoer{
 		t: t, contentStatus: http.StatusTooManyRequests,
-	}, "https://api.github.com")
+	}), "https://api.github.com")
 
 	_, err := (GitHubFilesRouteHandler{}).Collect(
 		context.Background(), claim, providerfoundation.Credential{}, client,
@@ -330,7 +331,7 @@ func (doer gitHubFilesTreeWalkDoer) Do(request *http.Request) (*http.Response, e
 
 func TestGitHubFilesRouteWalksTruncatedTreeToACompleteInventory(t *testing.T) {
 	claim := nativeTestClaim("github", "files")
-	client := gitHubRepositoryClient(t, gitHubFilesTreeWalkDoer{t: t}, "https://api.github.com")
+	client := gitHubRepositoryClient(t, fakehttp.Client(gitHubFilesTreeWalkDoer{t: t}), "https://api.github.com")
 	batch, err := (GitHubFilesRouteHandler{}).Collect(context.Background(), claim, providerfoundation.Credential{}, client, time.Date(2026, 7, 23, 12, 30, 0, 0, time.UTC))
 	if err != nil {
 		t.Fatal(err)
@@ -366,7 +367,7 @@ func TestGitHubFilesRouteFallsBackToNonRecursiveWalkWhenTheRecursiveTreeExceedsT
 	t.Cleanup(func() { slog.SetDefault(previous) })
 
 	claim := nativeTestClaim("github", "files")
-	client := gitHubRepositoryClient(t, gitHubFilesTreeWalkDoer{t: t, rootOversized: true}, "https://api.github.com")
+	client := gitHubRepositoryClient(t, fakehttp.Client(gitHubFilesTreeWalkDoer{t: t, rootOversized: true}), "https://api.github.com")
 	batch, err := (GitHubFilesRouteHandler{}).Collect(context.Background(), claim, providerfoundation.Credential{}, client, time.Date(2026, 7, 23, 12, 30, 0, 0, time.UTC))
 	if err != nil {
 		t.Fatal(err)
@@ -403,7 +404,7 @@ func TestGitHubFilesRouteFallsBackToNonRecursiveWalkWhenTheRecursiveTreeExceedsT
 
 func TestGitHubFilesRouteFailsClosedWhenATruncatedSubtreeCannotBeEnumerated(t *testing.T) {
 	claim := nativeTestClaim("github", "files")
-	client := gitHubRepositoryClient(t, gitHubFilesTreeWalkDoer{t: t, subtreeTruncated: true}, "https://api.github.com")
+	client := gitHubRepositoryClient(t, fakehttp.Client(gitHubFilesTreeWalkDoer{t: t, subtreeTruncated: true}), "https://api.github.com")
 	batch, err := (GitHubFilesRouteHandler{}).Collect(context.Background(), claim, providerfoundation.Credential{}, client, time.Date(2026, 7, 23, 12, 30, 0, 0, time.UTC))
 	if !errors.Is(err, ErrGitHubFilesTraversalFailed) {
 		t.Fatalf("error=%v, want ErrGitHubFilesTraversalFailed", err)
@@ -418,7 +419,7 @@ func TestGitHubFilesRouteFailsClosedWhenATruncatedSubtreeCannotBeEnumerated(t *t
 
 func TestGitHubFilesRouteFailsClosedWhenASubtreeFetchIs404(t *testing.T) {
 	claim := nativeTestClaim("github", "files")
-	client := gitHubRepositoryClient(t, gitHubFilesTreeWalkDoer{t: t, subtreeMissing: true}, "https://api.github.com")
+	client := gitHubRepositoryClient(t, fakehttp.Client(gitHubFilesTreeWalkDoer{t: t, subtreeMissing: true}), "https://api.github.com")
 	batch, err := (GitHubFilesRouteHandler{}).Collect(context.Background(), claim, providerfoundation.Credential{}, client, time.Date(2026, 7, 23, 12, 30, 0, 0, time.UTC))
 	if !errors.Is(err, ErrGitHubFilesTraversalFailed) {
 		t.Fatalf("error=%v, want ErrGitHubFilesTraversalFailed", err)
@@ -430,7 +431,7 @@ func TestGitHubFilesRouteFailsClosedWhenASubtreeFetchIs404(t *testing.T) {
 
 func TestGitHubFilesRouteFailsClosedOnA404RecursiveTree(t *testing.T) {
 	claim := nativeTestClaim("github", "files")
-	client := gitHubRepositoryClient(t, gitHubFilesTreeWalkDoer{t: t, rootMissing: true}, "https://api.github.com")
+	client := gitHubRepositoryClient(t, fakehttp.Client(gitHubFilesTreeWalkDoer{t: t, rootMissing: true}), "https://api.github.com")
 	batch, err := (GitHubFilesRouteHandler{}).Collect(context.Background(), claim, providerfoundation.Credential{}, client, time.Date(2026, 7, 23, 12, 30, 0, 0, time.UTC))
 	if !errors.Is(err, ErrGitHubFilesTraversalFailed) {
 		t.Fatalf("error=%v, want ErrGitHubFilesTraversalFailed", err)
@@ -442,7 +443,7 @@ func TestGitHubFilesRouteFailsClosedOnA404RecursiveTree(t *testing.T) {
 
 func TestGitHubFilesRouteAcceptsAGenuinelyEmptyNonTruncatedTree(t *testing.T) {
 	claim := nativeTestClaim("github", "files")
-	client := gitHubRepositoryClient(t, gitHubFilesDoerReturningEmptyTree{t: t}, "https://api.github.com")
+	client := gitHubRepositoryClient(t, fakehttp.Client(gitHubFilesDoerReturningEmptyTree{t: t}), "https://api.github.com")
 	batch, err := (GitHubFilesRouteHandler{}).Collect(context.Background(), claim, providerfoundation.Credential{}, client, time.Date(2026, 7, 23, 12, 30, 0, 0, time.UTC))
 	if err != nil {
 		t.Fatal(err)

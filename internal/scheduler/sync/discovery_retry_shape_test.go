@@ -2,6 +2,7 @@ package sync
 
 import (
 	"context"
+	"github.com/full-chaos/dev-health-ops/internal/testsupport/fakehttp"
 	"io"
 	"net/http"
 	"strings"
@@ -105,7 +106,7 @@ func TestDiscoveryRetryShapeIsTheGoPolicyNotThePythonLibraryDefaults(t *testing.
 		}
 		for _, test := range provider.shapes {
 			doer := &countingDoer{status: test.status, headers: test.headers}
-			service := &NativeSourceDiscoveryService{doer: doer, retry: fast, telemetry: newSourceDiscoveryTelemetry(), now: time.Now}
+			service := &NativeSourceDiscoveryService{doer: fakehttp.Client(doer), retry: fast, telemetry: newSourceDiscoveryTelemetry(), now: time.Now}
 			if err := provider.run(service, credential); err == nil {
 				t.Errorf("%s %s: a failing provider must surface an error", provider.name, test.name)
 			}

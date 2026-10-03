@@ -2,10 +2,10 @@ package venueoracle
 
 import (
 	"encoding/json"
+	"github.com/full-chaos/dev-health-ops/internal/testsupport/moduleroot"
 	"io/fs"
 	"os"
 	"path/filepath"
-	"runtime"
 	"sort"
 	"strings"
 	"testing"
@@ -152,7 +152,7 @@ func TestFrozenGoldensRediscoverKnownDefects(t *testing.T) {
 // header names a 40-hex Python build and a producer digest.
 func committedGoldens(t *testing.T) []string {
 	t.Helper()
-	_, file, _, _ := runtime.Caller(0)
+	_, file, _, _ := moduleroot.Caller(0)
 	internal := filepath.Clean(filepath.Join(filepath.Dir(file), "..", ".."))
 	var found []string
 	err := filepath.WalkDir(internal, func(path string, entry fs.DirEntry, err error) error {

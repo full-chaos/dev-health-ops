@@ -2,6 +2,7 @@ package venueoracle
 
 import (
 	"encoding/json"
+	"math/rand"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -280,4 +281,34 @@ func TestACredentialShapedCorpusReachesNoGoldenThroughItsProgramKey(t *testing.T
 	if entry.BodySHA256 == "" || len(entry.BodySHA256) != 64 {
 		t.Fatalf("the key holds %q of the body, want its sha256", entry.BodySHA256)
 	}
+}
+
+// CHAOS-7890: the record verb runs the unpacked secret scan on the candidate. A keyed high-entropy value (a leaf the token-shape scan
+// does not know) refuses the candidate, and nothing is written.
+func TestTheCandidateWriteRefusesAKeyedHighEntropyValue(t *testing.T) {
+	g := keyGolden(t, nil)
+	entry := g.keyOf(Request{Name: "r", Method: "GET", Path: "/x"})
+	entry.Status = 200
+	value := generatedValue(7890)
+	entry.Body = `{"client_secret":"` + value + `"}`
+	g.recorded.Requests = []goldenRequest{entry}
+	_, err := g.writeCandidate(false)
+	if err == nil || !strings.Contains(err.Error(), `"client_secret"`) || strings.Contains(err.Error(), value) {
+		t.Fatalf("a keyed high-entropy value was not refused, or the refusal shows it: %v", err)
+	}
+	if _, statErr := os.Stat(g.spec.Path + GoldenCandidateSuffix); statErr == nil {
+		t.Fatal("a candidate was written although the scan refused it")
+	}
+}
+
+// generatedValue is a high-entropy value made at run time from a fixed-seed generator (36 characters of letters and digits): no
+// literal fragment of it is in the source, and it is the same on every run.
+func generatedValue(seed int64) string {
+	r := rand.New(rand.NewSource(seed))
+	const alphabet = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789"
+	out := make([]byte, 36)
+	for i := range out {
+		out[i] = alphabet[r.Intn(len(alphabet))]
+	}
+	return string(out)
 }

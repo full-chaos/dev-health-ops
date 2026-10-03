@@ -5,9 +5,9 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
-	"runtime"
 	"testing"
 
+	"github.com/full-chaos/dev-health-ops/internal/testsupport/moduleroot"
 	"github.com/full-chaos/dev-health-ops/internal/workitemcontract"
 )
 
@@ -21,7 +21,7 @@ import (
 // only production path now. See testdata/oracle_frozen/README.md for the
 // freezing convention this reuses.
 func TestLinearExpiredLeaseRecoveryContractMatchesPythonAST(t *testing.T) {
-	_, currentFile, _, _ := runtime.Caller(0)
+	_, currentFile, _, _ := moduleroot.Caller(0)
 	packageDir := filepath.Dir(currentFile)
 	frozen, err := os.ReadFile(filepath.Join(
 		packageDir, "testdata", "oracle_frozen", "linear_expired_lease_recovery.json",

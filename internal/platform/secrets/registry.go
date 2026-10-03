@@ -259,7 +259,7 @@ func warnShort(name string) {
 	if !seen {
 		warn("secret_shorter_than_minimum_not_redactable_by_value",
 			"setting", name, "minimum_length", MinRegisteredLength,
-			"detail", "password for "+name+" is shorter than the minimum: redacted only in credential shapes (password=X, ://user:X@), not as a bare word")
+			"detail", "password for "+name+" is shorter than the minimum: redacted only in credential shapes (a password key with its value, or a user and password in front of the @ of a URL), not as a bare word")
 	}
 }
 

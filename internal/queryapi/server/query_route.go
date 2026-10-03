@@ -169,6 +169,27 @@ const registeredFeatureFlagsDocument = `query FeatureFlagRegistry($orgId: String
 const registeredReviewEdgesDocument = `query ReviewEdges($input: ReviewEdgesInput!) {
   reviewEdges(input: $input) {
     edges {
+      reviewerKey
+      authorKey
+      reviewerName
+      authorName
+      reviewsCount
+      day
+      repoId
+      __typename
+    }
+    totalCount
+    __typename
+  }
+}`
+
+// registeredReviewEdgesV1Document is the text of `reviewEdges` BEFORE the Review Network table asked for the served names and keys instead of the stored reviewer and author strings (CHAOS-8485).
+// It stays a legacy text (see legacyDigestsByOperation), so a web build still sending it keeps working while the
+// new one rolls out; the operation's ONE current document is registeredReviewEdgesDocument above. Remove it
+// with the cleanup ticket once no client sends it (testdata/wire_capture/reviewedges_v1_captured.graphql).
+const registeredReviewEdgesV1Document = `query ReviewEdges($input: ReviewEdgesInput!) {
+  reviewEdges(input: $input) {
+    edges {
       reviewer
       author
       reviewsCount
@@ -272,6 +293,47 @@ const registeredHotspotsDocument = `query Hotspots($input: HotspotsInput!) {
 // $orgId variable is parsed by this route but never trusted for scoping;
 // see operatingreview package's doc comment's Authorization section).
 const registeredOperatingReviewDocument = `query OperatingReview($orgId: String!, $input: OperatingReviewInput!) {
+  operatingReview(orgId: $orgId, input: $input) {
+    orgId
+    teamId
+    weekStart
+    priorWeekStart
+    sections {
+      key
+      title
+      changed
+      improved
+      worsened
+      metrics {
+        key
+        label
+        value
+        unit
+        hasData
+        delta {
+          value
+          priorValue
+          absolute
+          percent
+          status
+          hasPriorData
+          __typename
+        }
+        __typename
+      }
+      __typename
+    }
+    recommendations
+    recommendationsEmptyState
+    __typename
+  }
+}`
+
+// registeredOperatingReviewV1Document is the text of `operatingReview` BEFORE the Operating Review asked whether each week of a metric holds data (CHAOS-8115).
+// It stays a legacy text (see legacyDigestsByOperation), so a web build still sending it keeps working while the
+// new one rolls out; the operation's ONE current document is registeredOperatingReviewDocument above. Remove it
+// with the cleanup ticket once no client sends it (testdata/wire_capture/operatingreview_v1_captured.graphql).
+const registeredOperatingReviewV1Document = `query OperatingReview($orgId: String!, $input: OperatingReviewInput!) {
   operatingReview(orgId: $orgId, input: $input) {
     orgId
     teamId
@@ -1237,6 +1299,28 @@ const registeredFeatureFlagTimeseriesDocument = `query FeatureFlagTimeseries($or
   }
 }`
 
+// registeredTestopsJobFailuresDocument is the registered document for the
+// `testopsJobFailures` operation (CHAOS-8513, Go-only: no Python resolver
+// exists), the exact wire-form text the web client sends
+// (testdata/wire_capture/testopsjobfailures_captured.graphql; the wire form of
+// TESTOPS_JOB_FAILURES_QUERY, computed with the web's pinned urql).
+const registeredTestopsJobFailuresDocument = `query TestOpsJobFailures($orgId: String!, $input: TestOpsJobFailuresInput!) {
+  testopsJobFailures(orgId: $orgId, input: $input) {
+    groups {
+      workflowName
+      jobName
+      provider
+      runs
+      failedRuns
+      failureRate
+      __typename
+    }
+    totalCount
+    truncated
+    __typename
+  }
+}`
+
 // registeredTestopsRiskDocument is the registered document for the
 // `testopsRisk` operation, the exact wire-form text a real web client
 // sends (testdata/wire_capture/testopsrisk_captured.graphql).
@@ -1614,6 +1698,37 @@ const registeredAiReviewLoadDocument = `query AIReviewLoad($orgId: String!, $dat
 // `aiOpportunities` operation, the exact wire-form text a real web client sends
 // (testdata/wire_capture/aiopportunities_captured.graphql).
 const registeredAiOpportunitiesDocument = `query AIOpportunities($orgId: String!, $scope: AIScopeInput, $limit: Int! = 5) {
+  aiOpportunities(orgId: $orgId, scope: $scope, limit: $limit) {
+    orgId
+    detectorReady
+    recommendations {
+      opportunityId
+      kind
+      repoId
+      repoName
+      teamId
+      teamName
+      title
+      rationale
+      score
+      evidenceRefs
+      workGraphDrilldowns {
+        rootType
+        rootId
+        label
+        __typename
+      }
+      __typename
+    }
+    __typename
+  }
+}`
+
+// registeredAiOpportunitiesV1Document is the text of `aiOpportunities` BEFORE the AI opportunity list asked for the served repository and team names (CHAOS-8114).
+// It stays a legacy text (see legacyDigestsByOperation), so a web build still sending it keeps working while the
+// new one rolls out; the operation's ONE current document is registeredAiOpportunitiesDocument above. Remove it
+// with the cleanup ticket once no client sends it (testdata/wire_capture/aiopportunities_v1_captured.graphql).
+const registeredAiOpportunitiesV1Document = `query AIOpportunities($orgId: String!, $scope: AIScopeInput, $limit: Int! = 5) {
   aiOpportunities(orgId: $orgId, scope: $scope, limit: $limit) {
     orgId
     detectorReady
@@ -3355,6 +3470,7 @@ func newQueryHandler(chClient featureflags.QueryClient, pgPool *pgxpool.Pool, ve
 		"aiAttributedPrs":                   digestHex(registeredAiAttributedPrsDocument),
 		"aiAttributionOverview":             digestHex(registeredAiAttributionOverviewDocument),
 		"testopsRisk":                       digestHex(registeredTestopsRiskDocument),
+		"testopsJobFailures":                digestHex(registeredTestopsJobFailuresDocument),
 		"workItemTeamAttributions":          digestHex(registeredWorkItemTeamAttributionsDocument),
 		"recommendations":                   digestHex(registeredRecommendationsDocument),
 	}
@@ -3795,7 +3911,10 @@ func newDocumentDispatchHandler(getenv getenvFunc, routeMux *routeswitch.Mux, op
 var legacyDigestsByOperation = map[string][]string{
 	"aiAttributedPrs":  {digestHex(registeredAiAttributedPrsV1Document)},
 	"aiImpactSummary":  {digestHex(registeredAiImpactSummaryV1Document)},
+	"aiOpportunities":  {digestHex(registeredAiOpportunitiesV1Document)},
 	"capacityForecast": {digestHex(registeredCapacityForecastV1Document), digestHex(registeredCapacityForecastV2Document)},
+	"operatingReview":  {digestHex(registeredOperatingReviewV1Document)},
+	"reviewEdges":      {digestHex(registeredReviewEdgesV1Document)},
 }
 
 // buildOperationByDigest is the reverse index digest -> operation over every accepted text: each operation's

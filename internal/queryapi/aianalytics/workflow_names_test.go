@@ -89,6 +89,33 @@ func TestWorkflowDrilldown_NodesCarryDisplayNames(t *testing.T) {
 	}
 }
 
+// The flag says whether the node's TYPE carries a name, so a client can tell a
+// gap (a null name of a type that carries one) from a type with no name.
+func TestWorkflowDrilldown_NodesSayWhetherTheirTypeCarriesAName(t *testing.T) {
+	want := map[string]bool{
+		"issue ABC-1":                true,
+		"ai_workflow_run " + wfRun:   false,
+		"pr " + wfPR:                 true,
+		"pr " + wfUnnamedPR:          true, // no name in the catalogue: a gap, and the flag says so
+		"review_outcome rev-1":       false,
+		"deployment " + wfDeployment: true,
+		"incident " + wfIncident:     true,
+	}
+	for _, catalogue := range []string{"full", "empty"} {
+		client := namedWorkflowClient()
+		if catalogue == "empty" {
+			client.namePRs, client.nameDeployments, client.nameIncidents = nil, nil, nil
+		}
+		got := map[string]bool{}
+		for _, n := range runWorkflow(t, client).Nodes {
+			got[n.NodeType+" "+n.NodeID] = n.NameExpected
+		}
+		if !reflect.DeepEqual(got, want) {
+			t.Errorf("%s catalogue: nameExpected\n got  %v\n want %v", catalogue, got, want)
+		}
+	}
+}
+
 // A name is never an id that holds a repository UUID: a pull request the
 // catalogue does not name stays without a name.
 func TestWorkflowDrilldown_ANameIsNeverARawID(t *testing.T) {

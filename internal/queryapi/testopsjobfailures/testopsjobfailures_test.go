@@ -225,10 +225,11 @@ func TestResolve_WindowRules(t *testing.T) {
 		since, until string
 		ok           bool
 	}{
-		"one day":            {"2026-08-01", "2026-08-01", true},
-		"ninety days":        {"2026-05-04", "2026-08-01", true},
-		"ninety-one days":    {"2026-05-03", "2026-08-01", false},
-		"ends before starts": {"2026-08-02", "2026-08-01", false},
+		"one day": {"2026-08-01", "2026-08-01", true},
+		// The web's "90d" window: today minus 90 days to today, 91 calendar days.
+		"ninety days after":     {"2026-05-03", "2026-08-01", true},
+		"ninety-one days after": {"2026-05-02", "2026-08-01", false},
+		"ends before starts":    {"2026-08-02", "2026-08-01", false},
 	} {
 		client := &fakeClient{}
 		_, err := Resolve(context.Background(), client, "org-1", date(t, tc.since), date(t, tc.until), Scope{}, 20)

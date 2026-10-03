@@ -23,6 +23,33 @@ var prColonIDRe = regexp.MustCompile(`(?i)^([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-
 // uuidAnywhereRe finds a UUID inside a longer id.
 var uuidAnywhereRe = regexp.MustCompile(`(?i)[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}`)
 
+// namedNodeTypes are the node types that carry a name, and how the name of each
+// is found: a catalogue read, or the node's own id (an issue key). It is the ONE
+// table NodeDisplayNames and NodeTypeCarriesName read, so a type cannot carry a
+// name by one and not by the other.
+var namedNodeTypes = map[string]nameSource{
+	"pr":         nameFromCatalogue,
+	"deployment": nameFromCatalogue,
+	"incident":   nameFromCatalogue,
+	"issue":      nameFromReadableID,
+}
+
+type nameSource int
+
+const (
+	nameFromCatalogue nameSource = iota + 1
+	nameFromReadableID
+)
+
+// NodeTypeCarriesName reports whether nodes of a type carry a name (CHAOS-8113):
+// a pull request, a deployment, an incident, an issue. For such a type a nil
+// name from NodeDisplayNames is a gap; for any other type (a review outcome, an
+// AI workflow run) there is no name to miss.
+func NodeTypeCarriesName(nodeType string) bool {
+	_, ok := namedNodeTypes[nodeTypeKey(nodeType)]
+	return ok
+}
+
 // NodeDisplayNames returns the display name of each node, in the order given;
 // nil means no name is known (CHAOS-8113: the nodes of aiWorkflowDrilldown).
 //
@@ -53,14 +80,19 @@ func NodeDisplayNames(ctx context.Context, client QueryClient, orgID string, nod
 	if client == nil || orgID == "" || len(nodes) == 0 {
 		return out
 	}
-	ids := map[string]map[string]struct{}{"pr": {}, "deployment": {}, "incident": {}}
+	ids := map[string]map[string]struct{}{}
+	names := map[string]map[string]string{}
+	for typ, source := range namedNodeTypes {
+		if source == nameFromCatalogue {
+			ids[typ], names[typ] = map[string]struct{}{}, map[string]string{}
+		}
+	}
 	for _, node := range nodes {
 		id := strings.TrimSpace(node.ID)
 		if set, ok := ids[nodeTypeKey(node.Type)]; ok && id != "" {
 			set[id] = struct{}{}
 		}
 	}
-	names := map[string]map[string]string{"pr": {}, "deployment": {}, "incident": {}}
 	if len(ids["pr"]) > 0 {
 		resolvePRDisplayNames(ctx, client, orgID, ids["pr"], names["pr"], prEdgeIDRe, prColonIDRe)
 	}
@@ -76,14 +108,15 @@ func NodeDisplayNames(ctx context.Context, client QueryClient, orgID string, nod
 			continue
 		}
 		typ := nodeTypeKey(node.Type)
-		if resolved, ok := names[typ]; ok {
-			if name, found := resolved[id]; found && name != "" {
+		switch namedNodeTypes[typ] {
+		case nameFromCatalogue:
+			if name, found := names[typ][id]; found && name != "" {
 				out[i] = &name
 			}
-			continue
-		}
-		if typ == "issue" && !uuidAnywhereRe.MatchString(id) {
-			out[i] = displayNameFor(id, nil)
+		case nameFromReadableID:
+			if !uuidAnywhereRe.MatchString(id) {
+				out[i] = displayNameFor(id, nil)
+			}
 		}
 	}
 	return out

@@ -327,8 +327,10 @@ type AIWorkflowGraphEdgeOut struct {
 type AIWorkflowGraphNodeOut struct {
 	NodeType string `json:"nodeType"`
 	NodeID   string `json:"nodeId"`
-	// The node's display name (CHAOS-8113). By ``nodeType``: ``pr`` = the pull request's title; ``deployment`` = "<environment> deploy"; ``incident`` = "<title> (<status>)"; ``issue`` = the issue's own id when it is a readable key. Null = no name is known: the catalogue does not name the node, the type has no name (a review outcome, an AI workflow run), or the name read failed. It is never an id that is, or holds, a UUID or an opaque hash. Every end of an edge in ``edges`` that has an id has a node in ``nodes`` with the same type and id, so a client names an edge end by that node.
+	// The node's display name (CHAOS-8113). By ``nodeType``: ``pr`` = the pull request's title; ``deployment`` = "<environment> deploy"; ``incident`` = "<title> (<status>)"; ``issue`` = the issue's own id when it is a readable key. Null = no name is known: the catalogue does not name the node, the name read failed, or the type carries no name (see ``nameExpected``). It is never an id that is, or holds, a UUID or an opaque hash. Every end of an edge in ``edges`` that has an id has a node in ``nodes`` with the same type and id, so a client names an edge end by that node.
 	DisplayName *string `json:"displayName,omitempty"`
+	// True = nodes of this type carry a name (``pr``, ``deployment``, ``incident``, ``issue``): a null ``displayName`` is then a gap, and a client draws "Not reported". False = the type has no name by design (a review outcome, an AI workflow run, a diff): a client draws the type words alone.
+	NameExpected bool `json:"nameExpected"`
 }
 
 type AiAttributedPr struct {
@@ -1455,7 +1457,7 @@ type TestOpsJobFailureGroup struct {
 type TestOpsJobFailuresInput struct {
 	// First day of the window (UTC), included. The day a job run started places it.
 	SinceDate graphqldate.Date `json:"sinceDate"`
-	// Last day of the window (UTC), included. A window longer than 90 days, or one that ends before it starts, is an error.
+	// Last day of the window (UTC), included. At most 90 days after ``sinceDate`` (a "90 days" window of today minus 90 days to today is served); a later day, or a day before ``sinceDate``, is an error, not a cut answer.
 	UntilDate graphqldate.Date `json:"untilDate"`
 	RepoIds   []string         `json:"repoIds,omitempty"`
 	// Team ids. Narrows the runs to the repositories these teams OWN (team_repo_ownership, as of now); person membership is never read. With ``repoIds`` both apply.

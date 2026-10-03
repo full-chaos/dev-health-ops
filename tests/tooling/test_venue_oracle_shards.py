@@ -107,7 +107,6 @@ def _run_verb(
         **os.environ,
         "PATH": f"{bin_dir}{os.pathsep}{os.environ['PATH']}",
         "FAKE_GO_LOG": str(log),
-        "DEV_HEALTH_LIVE_PYTHON_ORACLES": "1",
         "TMPDIR": str(tree / "tmp"),
         "DEV_HEALTH_GO_CACHE": str(tree / "tmp" / "gocache"),
         **(env_extra or {}),

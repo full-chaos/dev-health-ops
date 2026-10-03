@@ -419,7 +419,6 @@ def _run_verb(
             "FAKE_GO_LOG": str(log),
             "FAKE_GOROOT": str(goroot),
             "FAKE_GO_SKIP_PROOF": skip_proof,
-            "DEV_HEALTH_LIVE_PYTHON_ORACLES": "1",
         },
     )
     return proc, sorted(log.read_text().splitlines())

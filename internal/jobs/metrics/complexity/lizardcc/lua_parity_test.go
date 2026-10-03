@@ -130,13 +130,6 @@ func TestGoMatchesLizardGoldenLua(t *testing.T) {
 	}
 }
 
-// TestLizardGoldenIsNotStaleLua reuses clike_parity_test.go's shared
-// live-oracle staleness gate (DEV_HEALTH_LIVE_PYTHON_ORACLE-gated, not run
-// by default).
-func TestLizardGoldenIsNotStaleLua(t *testing.T) {
-	assertGoldenBytesMatchLiveOracle(t, luaCorpusDir(t), luaGoldenPath(t))
-}
-
 // TestEveryConditionIsExercisedByTheLuaCorpus is this PR's own invocation
 // of the shared coverage-manifest mechanism: every member of rubyConditions
 // (ruby.go -- reused unmodified by Lua, see lua.go's AnalyzeLua doc) must

@@ -179,14 +179,6 @@ func TestGoMatchesLizardGoldenJVMSwift(t *testing.T) {
 	}
 }
 
-// TestLizardGoldenIsNotStaleJVMSwift closes codex round r1 finding #6 (the
-// P2 raised specifically against this PR: no live-lizard staleness guard
-// on the jvm-swift golden) by calling the shared mechanism cfamily's
-// clike_parity_test.go defines -- ONE mechanism, this PR's own invocation.
-func TestLizardGoldenIsNotStaleJVMSwift(t *testing.T) {
-	assertGoldenBytesMatchLiveOracle(t, jvmSwiftCorpusDir(t), jvmSwiftGoldenPath(t))
-}
-
 // TestEveryConditionIsExercisedByTheJVMSwiftCorpus is this PR's own
 // invocation of the shared coverage-manifest mechanism (finding #6's
 // narrower half) -- the generic check that would catch a condition

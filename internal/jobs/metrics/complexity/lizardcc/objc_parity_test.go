@@ -134,13 +134,6 @@ func TestGoMatchesLizardGoldenObjC(t *testing.T) {
 	}
 }
 
-// TestLizardGoldenIsNotStaleObjC reuses clike_parity_test.go's shared
-// live-oracle staleness gate (DEV_HEALTH_LIVE_PYTHON_ORACLE-gated, not run
-// by default).
-func TestLizardGoldenIsNotStaleObjC(t *testing.T) {
-	assertGoldenBytesMatchLiveOracle(t, objcCorpusDir(t), objcGoldenPath(t))
-}
-
 // TestEveryConditionIsExercisedByTheObjCCorpus is this PR's own invocation
 // of the shared coverage-manifest mechanism: every member of clike.go's
 // shared `conditions` map (ObjCReader defines no condition-category

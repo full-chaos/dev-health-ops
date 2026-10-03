@@ -220,7 +220,7 @@ func goldenSpec(name, sha string) venueoracle.GoldenSpec {
 		PythonBuild: pythonBuild,
 		SHA256:      sha,
 		Recipe: "git worktree add --detach <dir> " + pythonBuild + "; from internal/apiservice/billingvenue: DHO_VENUE_GOLDEN_UPDATE=1 " +
-			"DHO_VENUE_GOLDEN_PYTHON_ROOT=<dir> DEV_HEALTH_LIVE_PYTHON_ORACLES=1 go test -tags=integration -count=1 -run '^" + name + "$' .",
+			"DHO_VENUE_GOLDEN_PYTHON_ROOT=<dir> DEV_HEALTH_VENUE_ORACLES=1 go test -tags=integration -count=1 -run '^" + name + "$' .",
 	}
 }
 
@@ -233,7 +233,7 @@ func webhookGoldenSpec(name, sha string) venueoracle.GoldenSpec {
 		PythonBuild: webhookPythonBuild,
 		SHA256:      sha,
 		Recipe: "git worktree add --detach <dir> " + webhookPythonBuild + "; from internal/apiservice/billingvenue: DHO_VENUE_GOLDEN_UPDATE=1 " +
-			"DHO_VENUE_GOLDEN_PYTHON_ROOT=<dir> DEV_HEALTH_LIVE_PYTHON_ORACLES=1 go test -tags=integration -count=1 -run '^" + name + "$' .",
+			"DHO_VENUE_GOLDEN_PYTHON_ROOT=<dir> DEV_HEALTH_VENUE_ORACLES=1 go test -tags=integration -count=1 -run '^" + name + "$' .",
 	}
 }
 

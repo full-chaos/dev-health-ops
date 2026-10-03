@@ -829,23 +829,30 @@ func TestStrandRepairAgainstLivePostgres(t *testing.T) {
 				t.Helper()
 				// GENERIC_PLAN plans the statement with its $n placeholders left
 				// unbound, which is the plan a prepared statement settles on.
-				// The simple protocol sends the text as written; the extended
-				// one would demand values for placeholders EXPLAIN cannot take.
-				rows, err := admin.Query(ctx, "EXPLAIN (GENERIC_PLAN) "+query, pgx.QueryExecModeSimpleProtocol)
+				// It has to go out through the connection's own simple-query
+				// call: every pgx query mode binds or substitutes placeholders
+				// first, and refuses a statement that names $1 with no value.
+				connection, err := admin.Acquire(ctx)
 				if err != nil {
 					t.Fatal(err)
 				}
-				defer rows.Close()
-				var plan strings.Builder
-				for rows.Next() {
-					var line string
-					if err := rows.Scan(&line); err != nil {
-						t.Fatal(err)
-					}
-					plan.WriteString(line + "\n")
-				}
-				if err := rows.Err(); err != nil {
+				defer connection.Release()
+				results, err := connection.Conn().PgConn().Exec(ctx, "EXPLAIN (GENERIC_PLAN) "+query).ReadAll()
+				if err != nil {
 					t.Fatal(err)
+				}
+				var plan strings.Builder
+				for _, result := range results {
+					if result.Err != nil {
+						t.Fatal(result.Err)
+					}
+					for _, row := range result.Rows {
+						if len(row) != 1 {
+							t.Fatalf("EXPLAIN returned a row of %d columns, want 1", len(row))
+						}
+						plan.Write(row[0])
+						plan.WriteString("\n")
+					}
 				}
 				if plan.Len() == 0 {
 					t.Fatal("EXPLAIN returned no plan; the assertions below would pass on an empty string")

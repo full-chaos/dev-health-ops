@@ -1979,7 +1979,7 @@ as Ask Dev persistence continues to migrate normally.
 `application_schema` head and, only when the cutover opt-in is present, the
 `river_cutover` head.
 
-**Backward-compatible aliases:** `dho migrate upgrade`, `dho migrate downgrade`, etc. still work and target PostgreSQL.
+**Backward-compatible aliases:** `dev-hops migrate upgrade`, `dev-hops migrate downgrade`, etc. still work and target PostgreSQL.
 
 ### `migrate clickhouse`
 

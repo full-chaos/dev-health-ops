@@ -35,7 +35,7 @@ func TestEveryLayerHidesAtLeastWhatItsInnerChainHides(t *testing.T) {
 		{"RedactText", RedactText, redactTextNoUserinfo},
 		{"RedactCredentialShapes", RedactCredentialShapes, RedactCredentialShapesNoUserinfo},
 		{"sanitizer chain (cap after the shape pass)", func(text string) string {
-			return RedactUserinfoLast(errortext.Sanitize(RedactCredentialShapesNoUserinfo(text)))
+			return RedactUserinfoLast(errortext.Sanitize(RedactCredentialShapesNoUserinfo(text)), errortext.Cap)
 		}, func(text string) string {
 			return errortext.Sanitize(RedactCredentialShapesNoUserinfo(text))
 		}},

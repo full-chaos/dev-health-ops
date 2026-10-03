@@ -47,7 +47,7 @@ func sanitizeErrorText(text string, maxLength int, harden bool) string {
 	if harden {
 		// The userinfo pass runs last, after the cut (see logging.RedactUserinfoLast); it can add the
 		// marker, so the text is cut again with the same cap.
-		return string(cutRunes([]rune(logging.RedactUserinfoLast(string(runes))), maxLength))
+		return logging.RedactUserinfoLast(string(runes), func(text string) string { return string(cutRunes([]rune(text), maxLength)) })
 	}
 	return string(runes)
 }

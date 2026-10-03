@@ -361,7 +361,7 @@ func contains(list []string, item string) bool {
 // The persisted sanitizers cut a text at a cap; the userinfo pass runs after the cut,
 // so a userinfo cut in the middle (its `@` lost) must not leave the start of its
 // secret: the last run before the cut is hidden when it holds a colon.
-func TestAUserinfoCutByTheSanitizerCapLeavesNoPartOfItsSecret(t *testing.T) {
+func TestAUserinfoCutByTheSanitizerCapLeavesNoPartOfAnAlphanumericSecret(t *testing.T) {
 	for pad := 3960; pad < 3990; pad++ {
 		text := strings.Repeat("a", pad) + " svc_user:Kk3Pp4Qq5Zz@cache.internal"
 		for _, layer := range userinfoLayers[3:] {
@@ -438,7 +438,7 @@ func TestThePersistedSanitizersNeverExceedTheirCapAndAreIdempotent(t *testing.T)
 
 // A text cut by the cap inside an encoded-colon userinfo (`svc_user%3A<secret>`, its `@`
 // lost) must not leave the start of the secret: the cut-tail rule reads `%3a` as a colon.
-func TestAUserinfoWithAnEncodedColonCutByTheCapLeavesNoPartOfItsSecret(t *testing.T) {
+func TestAUserinfoWithAnEncodedColonCutByTheCapLeavesNoPartOfAnAlphanumericSecret(t *testing.T) {
 	for pad := 3960; pad < 3990; pad++ {
 		text := strings.Repeat("a", pad) + " svc_user%3AKk3Pp4Qq5Zz@cache.internal"
 		for _, layer := range userinfoLayers[3:] {
@@ -447,5 +447,46 @@ func TestAUserinfoWithAnEncodedColonCutByTheCapLeavesNoPartOfItsSecret(t *testin
 				t.Fatalf("%s, pad %d: a part of the secret survived the cut: %.80s", layer.name, pad, got[len(got)-80:])
 			}
 		}
+	}
+}
+
+// A text cut at a cap and then ended by the tail rule is FINAL: a second call over it
+// changes nothing, whatever colon runs sit at the cut (gwc-vetter-3's 820-text probe: the
+// first tail rule ran before the second cut, so the next call moved the cut and the
+// maintenance scrub counted the stored text as redacted). Mixed fragments with colon runs,
+// at three caps, through both sanitizers.
+func TestThePersistedSanitizersAreIdempotentWithColonRunsAtTheCut(t *testing.T) {
+	fragments := []string{"u:p@h ", "k:v ", "connect: ", "10.0.0.1:5432: ", "svc:pw@db.internal ", "dial tcp ", "plain words ", "x:y ", "a@b "}
+	sanitizers := []struct {
+		name string
+		call func(string, int) string
+		caps []int
+	}{
+		{"syncdispatchruntime.SanitizeErrorText", func(text string, _ int) string { return syncdispatchruntime.SanitizeErrorText(text) }, []int{4000}},
+		{"pythonparity.SanitizeErrorTextHardened", pythonparity.SanitizeErrorTextHardened, []int{200, 2000, 4000}},
+	}
+	checked := 0
+	for _, sanitizer := range sanitizers {
+		for _, capacity := range sanitizer.caps {
+			for _, first := range fragments {
+				for _, second := range fragments {
+					unit := first + second
+					for extra := 0; extra < 4; extra++ {
+						text := strings.Repeat(unit, capacity/len(unit)+1+extra)
+						once := sanitizer.call(text, capacity)
+						if n := len([]rune(once)); n > capacity {
+							t.Fatalf("%s cap %d: %d runes for %.40q", sanitizer.name, capacity, n, unit)
+						}
+						if twice := sanitizer.call(once, capacity); twice != once {
+							t.Fatalf("%s cap %d, unit %q: a second call changes the text:\n%.160q\n%.160q", sanitizer.name, capacity, unit, once, twice)
+						}
+						checked++
+					}
+				}
+			}
+		}
+	}
+	if checked != 4*81*4 {
+		t.Fatalf("checked %d", checked)
 	}
 }

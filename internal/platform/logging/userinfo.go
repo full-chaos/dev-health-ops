@@ -59,10 +59,15 @@ func RedactCredentialShapes(value string) (result string) {
 const truncationSuffix = "...[truncated]"
 
 // RedactUserinfoLast is the userinfo pass for a caller that runs it after its own passes
-// and after its length cap (the persisted error sanitizers). A text cut by the cap may end
-// inside a userinfo (its `@` lost), so when the text ends with the truncation suffix the last
-// whitespace-free run before it is hidden if it holds a colon: fail-closed, only at the cut.
-func RedactUserinfoLast(value string) (result string) {
+// and after its length cap (the persisted error sanitizers). The pass can add the marker, so
+// the caller's own cut runs again after it (cut). A text cut by a cap may end inside a
+// userinfo (its `@` lost): when the final text ends with the truncation suffix, the last
+// whitespace- or delimiter-free runs before it are dropped while the last one holds a colon.
+// The text is final after that, so a second call over the result changes nothing; it is
+// fail-closed and only at the cut. (A part of a password that itself holds a comma, a
+// semicolon, a parenthesis, a bracket or an at sign can stay readable when the cut falls
+// inside it: a named limit, the same class as main's own cap split.)
+func RedactUserinfoLast(value string, cut func(string) string) (result string) {
 	defer func() {
 		if recover() != nil {
 			result = redactionFailed
@@ -71,12 +76,18 @@ func RedactUserinfoLast(value string) (result string) {
 	if mayHoldUserinfo(value) {
 		value = redactUserinfo(value)
 	}
+	value = cut(value)
 	if strings.HasSuffix(value, truncationSuffix) {
 		body := strings.TrimSuffix(value, truncationSuffix)
-		start := strings.LastIndexAny(body, " \t\r\n\"'<>(),;[]{}") + 1
-		if run := body[start:]; strings.Contains(run, ":") || strings.Contains(strings.ToLower(run), "%3a") {
-			value = body[:start] + redacted + truncationSuffix
+		for body != "" {
+			start := strings.LastIndexAny(body, " \t\r\n\"'<>(),;[]{}") + 1
+			run := body[start:]
+			if !strings.Contains(run, ":") && !strings.Contains(strings.ToLower(run), "%3a") {
+				break
+			}
+			body = body[:start]
 		}
+		value = body + truncationSuffix
 	}
 	return value
 }

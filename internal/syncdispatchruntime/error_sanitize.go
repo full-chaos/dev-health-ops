@@ -15,7 +15,7 @@ func sanitizeErrorText(text string) string {
 	// minimum length, which no later pass can recognise
 	// the userinfo pass runs LAST (after the cap): a pass in front of the exact sanitizer would change what it hides
 	// the pass can add the marker, so the text is cut again with the same cap
-	return errortext.Cap(logging.RedactUserinfoLast(errortext.Sanitize(logging.RedactCredentialShapesNoUserinfo(text))))
+	return logging.RedactUserinfoLast(errortext.Sanitize(logging.RedactCredentialShapesNoUserinfo(text)), errortext.Cap)
 }
 
 // SanitizeErrorText is sanitizeErrorText for callers outside the package that log or store error text

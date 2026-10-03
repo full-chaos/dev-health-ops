@@ -222,8 +222,12 @@ jobs:
           "${RUNNER_TEMP}/gitleaks/gitleaks" "${args[@]}"
 
       # CHAOS-8291: a finding becomes a Code Scanning alert. `if: always()` so a failed scan step still uploads what it found.
+      # CHAOS-8299: on a push to main the scan reads only that push's commits, and a Code Scanning upload with an empty result set
+      # under the same category marks an earlier alert as fixed. A secret that stays in history is not fixed by a later clean push, so
+      # a push uploads only when its own scan found something (the scan step failed); a pull_request run uploads every time (its
+      # alerts belong to the PR's own ref, and a clean result there is true for that ref).
       - name: Upload Gitleaks SARIF to code scanning
-        if: always() && hashFiles('results.sarif') != ''
+        if: always() && hashFiles('results.sarif') != '' && (github.event_name != 'push' || failure())
         uses: github/codeql-action/upload-sarif@b96794f015dfd88f77b49b1c93e0fa7110f94c63 # v4.38.0
         with:
           sarif_file: results.sarif

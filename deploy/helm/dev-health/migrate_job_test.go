@@ -137,6 +137,8 @@ func TestMigrateJobRunsDhoMigrateUpgrade(t *testing.T) {
 
 // The Job refuses the Python image by name and any image an operator sets
 // without a pin; a commit-tagged image must match the api image's commit.
+const lockstepHook = "migrations.hook.image=ghcr.io/full-chaos/dev-health-go-operator:sha-aaaaaaaaaaaa"
+
 func TestMigrateJobRefusesImagesThatCannotRunTheVerb(t *testing.T) {
 	for name, testCase := range map[string]struct {
 		sets []string
@@ -144,7 +146,12 @@ func TestMigrateJobRefusesImagesThatCannotRunTheVerb(t *testing.T) {
 	}{
 		"the Python image":           {[]string{"migrations.hook.image=ghcr.io/full-chaos/dev-hops-api@sha256:" + strings.Repeat("b", 64)}, "is the Python image"},
 		"an unpinned operator image": {[]string{"migrations.hook.routeActivate.image=ghcr.io/full-chaos/dev-health-go-operator:latest"}, "is not a pinned dho image"},
-		"a different commit":         {[]string{"migrations.hook.image=ghcr.io/full-chaos/dev-health-go-operator:sha-aaaaaaaaaaaa", "image.tag=sha-bbbbbbbbbbbb"}, "pinned to different commits"},
+		// CHAOS-8309: the lockstep targets are the Go serving images, each enabled one on its own clause;
+		// with both enabled the hook tag must equal BOTH (the last two cases flip one clause at a time).
+		"a different commit than queryApi.image":         {[]string{lockstepHook, "queryApi.enabled=true", "queryApi.image.tag=sha-bbbbbbbbbbbb"}, "and queryApi.image (ghcr.io/full-chaos/dev-health-go-dho:sha-bbbbbbbbbbbb) are pinned to different commits"},
+		"a different commit than goApi.image":            {[]string{lockstepHook, "goApi.enabled=true", "goApi.image.tag=sha-bbbbbbbbbbbb"}, "and goApi.image (ghcr.io/full-chaos/dev-health-go-dho:sha-bbbbbbbbbbbb) are pinned to different commits"},
+		"queryApi matches, goApi differs (both enabled)": {[]string{lockstepHook, "queryApi.enabled=true", "queryApi.image.tag=sha-aaaaaaaaaaaa", "goApi.enabled=true", "goApi.image.tag=sha-bbbbbbbbbbbb"}, "and goApi.image (ghcr.io/full-chaos/dev-health-go-dho:sha-bbbbbbbbbbbb) are pinned to different commits"},
+		"goApi matches, queryApi differs (both enabled)": {[]string{lockstepHook, "queryApi.enabled=true", "queryApi.image.tag=sha-bbbbbbbbbbbb", "goApi.enabled=true", "goApi.image.tag=sha-aaaaaaaaaaaa"}, "and queryApi.image (ghcr.io/full-chaos/dev-health-go-dho:sha-bbbbbbbbbbbb) are pinned to different commits"},
 	} {
 		t.Run(name, func(t *testing.T) {
 			_, _, refusal := renderJobs(t, testCase.sets...)
@@ -292,5 +299,20 @@ func TestRouteActivateRunsOnlyTheOperatorImage(t *testing.T) {
 				t.Errorf("%s sets %s: the component form and the URI form are mutually exclusive", name, forbidden)
 			}
 		}
+	}
+}
+
+// CHAOS-8309: the Python api image (image.tag) is no longer a lockstep target: a hook tag that differs from it
+// renders, and a hook tag equal to every enabled Go serving image renders.
+func TestMigrateJobLockstepIgnoresThePythonImageAndAcceptsMatchingGoImages(t *testing.T) {
+	for name, sets := range map[string][]string{
+		"the Python image tag differs, no Go image enabled": {lockstepHook, "image.tag=sha-bbbbbbbbbbbb"},
+		"the Python image tag differs, Go images match":     {lockstepHook, "image.tag=sha-bbbbbbbbbbbb", "queryApi.enabled=true", "queryApi.image.tag=sha-aaaaaaaaaaaa", "goApi.enabled=true", "goApi.image.tag=sha-aaaaaaaaaaaa"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			if _, _, refusal := renderJobs(t, sets...); refusal != "" {
+				t.Fatalf("render refused: %q", refusal)
+			}
+		})
 	}
 }

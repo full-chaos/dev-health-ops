@@ -19,6 +19,7 @@ import (
 	"strconv"
 	"strings"
 	"testing"
+	"unicode"
 
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/programoracle"
 )
@@ -40,6 +41,9 @@ var pythonIntDifferentialCases = []string{
 	// numeral systems and magnitudes this port deliberately does not handle
 	"٣", "١٢٣", "+٣",
 	"99999999999999999999999999999999",
+	// non-ASCII white space around a value, and a second sign
+	"\u00a03", "\u00853", "3\u00a0", "3\u0085", "\u00a0\u00a03\u0085",
+	"++5", "+-5", "-+5", "-++5",
 }
 
 // pythonIntProgram answers, per case (base64 of the value's UTF-8 bytes, so no
@@ -95,7 +99,9 @@ func TestPythonIntMatchesFrozenCPython(t *testing.T) {
 			// refuses at startup rather than defaulting: a Go rejection is a
 			// named error the operator sees, never a silently widened bound.
 			// Everything else disagreeing here is a defect.
-			if isPlainASCII(raw) {
+			// The exemption is for a numeral system only: white space around the
+			// value (NBSP, NEL) is not one, and Go must accept it as CPython does.
+			if isPlainASCII(strings.TrimFunc(raw, unicode.IsSpace)) {
 				t.Fatalf("pythonInt(%q) rejected an ASCII value CPython accepts as %d",
 					raw, pythonValue)
 			}

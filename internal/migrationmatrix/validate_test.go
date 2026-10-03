@@ -478,7 +478,7 @@ func TestTheCatalogLoaderRefusesWhatThePythonLoaderRefuses(t *testing.T) {
 }
 
 func TestTheCommittedCatalogLoads(t *testing.T) {
-	catalog, err := LoadCatalog(filepath.Join("..", "..", "src", "dev_health_ops", "api", "graphql", "go_api_operations.json"))
+	catalog, err := LoadCatalog(filepath.Join("..", "..", "contracts", "graphql", "v1", "go_api_operations.json"))
 	if err != nil {
 		t.Fatalf("the committed operation catalog does not load: %v", err)
 	}

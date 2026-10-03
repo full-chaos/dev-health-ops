@@ -129,7 +129,7 @@ COPY --from=build /out/dho /usr/local/bin/dho
 # `-catalog` flag needs no override from this image's default working
 # directory.
 COPY --from=build /out/documents.json /app/go-api/documents.json
-COPY src/dev_health_ops/api/graphql/go_api_operations.json /app/go-api/src/dev_health_ops/api/graphql/go_api_operations.json
+COPY contracts/graphql/v1/go_api_operations.json /app/go-api/contracts/graphql/v1/go_api_operations.json
 
 RUN chown -R toolsuser:toolsuser /app/go-api
 

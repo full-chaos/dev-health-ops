@@ -5,12 +5,12 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
-	"runtime"
 	"sort"
 	"strings"
 	"testing"
 
 	"github.com/full-chaos/dev-health-ops/internal/goapiproof/writeproof"
+	"github.com/full-chaos/dev-health-ops/internal/testsupport/moduleroot"
 )
 
 // A build that links this package registers all five cases: a case without a
@@ -43,7 +43,7 @@ func TestEveryMutationHasARegisteredCase(t *testing.T) {
 // case belongs to one: a mutation added to the catalog without a proof form
 // case cannot be enabled, and this names it before an operator finds out.
 func TestTheCasesCoverExactlyTheCatalogMutations(t *testing.T) {
-	_, file, _, _ := runtime.Caller(0)
+	_, file, _, _ := moduleroot.Caller(0)
 	root := filepath.Join(filepath.Dir(file), "..", "..", "..", "..")
 	raw, err := os.ReadFile(filepath.Join(root, "src", "dev_health_ops", "api", "graphql", "go_api_operations.json"))
 	if err != nil {
@@ -52,13 +52,15 @@ func TestTheCasesCoverExactlyTheCatalogMutations(t *testing.T) {
 	var catalog []struct {
 		Operation string `json:"operation"`
 		Kind      string `json:"kind"`
+		Legacy    bool   `json:"legacy"`
 	}
 	if err := json.Unmarshal(raw, &catalog); err != nil {
 		t.Fatal(err)
 	}
 	var mutations []string
 	for _, entry := range catalog {
-		if entry.Kind == "mutation" {
+		// A legacy text (CHAOS-8000 dual accept) is another entry of the same operation, not another mutation.
+		if entry.Kind == "mutation" && !entry.Legacy {
 			mutations = append(mutations, entry.Operation)
 		}
 	}

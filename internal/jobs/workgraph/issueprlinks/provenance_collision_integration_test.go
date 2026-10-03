@@ -6,7 +6,6 @@ import (
 	"context"
 	"fmt"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -16,7 +15,6 @@ import (
 
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/chschema"
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/containers"
-	"github.com/full-chaos/dev-health-ops/internal/testsupport/pyoracle"
 )
 
 // TestIssuePRProvenanceCollisionSurvivesMerge is the acceptance test for
@@ -81,6 +79,13 @@ import (
 // Red-before-green is recorded in the PR: run against a tree WITHOUT 084 and
 // every flipped assertion fails. A green flipped test on its own is equally
 // consistent with a migration that did nothing.
+//
+// CHAOS-8302: four tests that ran the PYTHON procedure of migration 084 against a populated pre-084 table (its copy, its
+// key-count conservation, its merge guard, its refusal of a default version column) are gone with that procedure. The Go
+// ClickHouse migrator (internal/chmigrate) has no upgrade path: a database below the head is refused and the head is a baseline
+// captured from the executed chain, so nothing in the Go system runs 084's procedure on populated data, and a frozen answer would
+// have no Go side to compare with. What is kept is the END STATE this file pins: the chain-applied head has the version
+// precedence (native survives a merge), asserted below on the table chschema.Apply builds.
 //
 // The row COUNTS are deliberately unchanged (Key A 3 -> 1, Key B 2 -> 1). The
 // merge must still collapse to one row; the fix is that it is now the right
@@ -445,273 +450,67 @@ func assertSurvivingRowIntact(
 	}
 }
 
-// TestMigration084CarriesExistingRows is the ONLY test that exercises the
-// migration's copy. Everything else in this file runs against a table the
-// chain already migrated while it was EMPTY.
+// TestIssuePRVersionPrecedenceEndState pins the END STATE of migration 084 on the table the Go migrator builds (chschema.Apply, the
+// baseline head), with no Python and no rewind: the version expression ranks provenance above recency, keeps the milliseconds, does
+// not wrap on a pre-epoch stamp, and holds at DateTime64(3)'s largest and smallest stamps. These keys were the end-state half of the
+// deleted TestMigration084CarriesExistingRows (CHAOS-8302); only the copy procedure went with the Python migration.
 //
-// That gap was invisible and total: made `_copy` return without copying, the
-// whole rest of the suite still passed (codex round 2, P1). A `_copy`
-// regression would EXCHANGE in an empty shadow and lose every pre-existing
-// key in production, silently, with a green suite.
-//
-// So this test does what production does: it puts rows in a PRE-084 table and
-// then migrates them.
-func TestMigration084CarriesExistingRows(t *testing.T) {
+// Key E: an unsupported provenance with a PRE-EPOCH stamp must not wrap the rank arithmetic and win over native. Key F: the same
+// provenance differing only in milliseconds, the LATER one inserted FIRST: under whole seconds the two tie and the last-inserted part
+// wins, so the .000 row would survive. Keys G and H sit at DateTime64(3)'s representable extremes (9999-12-31 23:59:59.999 and
+// 1900-01-01), not at an imagined one: rank must beat the whole range of the stamp. (Key G is only meaningful on a ClickHouse that
+// stores 9999 as written, 26.7 and later: on 26.6 DateTime64(3) saturates at 2299 and a too-small multiplier is unreachable.)
+func TestIssuePRVersionPrecedenceEndState(t *testing.T) {
 	ctx := context.Background()
 	instance := startClickHouse(ctx, t)
 	chschema.Apply(ctx, t, instance)
 	conn := openConn(ctx, t, instance)
 
-	// Rewind to the pre-084 shape by DERIVING it from the live chain, not by
-	// hand-writing it.
-	//
-	// A hand-written rewind is the trial-table defect one level up: if the real
-	// 014+024 leave a setting, codec or default this test does not reproduce,
-	// the migration is exercised against something EASIER than production and
-	// stays green on a shape it was never tested against.
-	//
-	// So the shape comes from `SHOW CREATE TABLE` on the chain-migrated table,
-	// with only what 084 itself changed inverted: drop the version column,
-	// restore ReplacingMergeTree(last_synced). Everything else -- columns,
-	// types, ORDER BY, settings -- comes from the chain.
-	rewindToPre084(ctx, t, conn)
-
-	// Merges are stopped only while the FIXTURE is built, so the seeded rows are
-	// all present when the migration starts. They are restarted immediately
-	// before the migration call below -- see the note there.
-	mustExec(ctx, t, conn, "SYSTEM STOP MERGES work_graph_issue_pr")
-
-	// NOTE: merges are deliberately RUNNING across the migration call.
-	// An earlier version did, which manufactured the protection the migration
-	// lacked and hid a P1: a background merge inside the migration's own copy
-	// window removes the older (native) row while the key-count conservation
-	// check still passes. The migration now stops merges itself; this test must
-	// exercise that guard rather than substitute for it.
-
 	const (
-		org  = "00000000-4769-0000-0000-000000000001"
-		repo = "00000000-4769-0000-0000-000000000002"
-		keyA = "00000000-4769-0000-0000-000000000003"
-		keyB = "00000000-4769-0000-0000-000000000004"
-		keyC = "00000000-4769-0000-0000-000000000006"
-		keyE = "00000000-4769-0000-0000-000000000007"
-		keyF = "00000000-4769-0000-0000-000000000008"
-		keyG = "00000000-4769-0000-0000-000000000009"
-		keyH = "00000000-4769-0000-0000-00000000000a"
+		org  = "00000000-4769-0000-0000-000000000011"
+		repo = "00000000-4769-0000-0000-000000000012"
+		keyE = "00000000-4769-0000-0000-000000000017"
+		keyF = "00000000-4769-0000-0000-000000000018"
+		keyG = "00000000-4769-0000-0000-000000000019"
+		keyH = "00000000-4769-0000-0000-00000000001a"
 	)
-	seed(ctx, t, conn, org, repo, keyA, 4769, "native", 1.00, "2026-01-01 00:00:00.000")
-	seed(ctx, t, conn, org, repo, keyA, 4769, "heuristic", 0.50, "2026-01-03 00:00:00.000")
-	seed(ctx, t, conn, org, repo, keyB, 4770, "explicit_text", 0.90, "2026-01-01 00:00:00.000")
-	seed(ctx, t, conn, org, repo, keyB, 4770, "heuristic", 0.99, "2026-01-02 00:00:00.000")
-	seed(ctx, t, conn, org, repo, keyC, 4772, "native", 1.00, "2026-01-01 00:00:00.000")
-	seed(ctx, t, conn, org, repo, keyC, 4772, "heuristic", 0.50, "2100-01-01 00:00:00.000")
-
-	// Key E: an unsupported provenance with a PRE-EPOCH stamp. Under a bare
-	// `rank * M` this wraps UInt64 to ~1.8e19 and DELETES the native row during
-	// the copy -- the migration destroying the data it exists to protect.
+	// Merges are stopped only while the fixture is built, so every seeded row is present when the merge below is forced.
+	mustExec(ctx, t, conn, "SYSTEM STOP MERGES work_graph_issue_pr")
 	seed(ctx, t, conn, org, repo, keyE, 4773, "native", 1.00, "2026-01-01 00:00:00.000")
 	seed(ctx, t, conn, org, repo, keyE, 4773, "unknown", 0.10, "1900-01-01 00:00:00.000")
 
-	// Key F: same provenance, differing ONLY in milliseconds, and the LATER one
-	// is inserted FIRST. Under `toUnixTimestamp` (seconds) the two tie and the
-	// last-inserted part wins, so the .000 row survives and this fails. Under
-	// milliseconds the .500 row survives. That makes the precision load-bearing
-	// rather than merely documented.
 	seed(ctx, t, conn, org, repo, keyF, 4774, "heuristic", 0.50, "2026-01-04 00:00:00.500")
 	seed(ctx, t, conn, org, repo, keyF, 4774, "heuristic", 0.50, "2026-01-04 00:00:00.000")
 
-	// Key G is only meaningful because the harness image is 26.7. It was blind
-	// on the previous pin, and that is worth keeping rather than deleting:
-	//
-	//     26.6.1.1193 (the old pin)  '9999-12-31' SATURATES to 2299-12-31,
-	//                                millis 10,413,791,999,999 -> 2**45 margin x3.38
-	//     26.7.x      (current)      stored as written,
-	//                                millis 253,402,300,799,999 -> 2**45 margin x0.14
-	//
-	// DateTime64(3) saturates at 2299 on the older engine, so the 2**45 defect
-	// was UNREACHABLE in CI while live in production: with the multiplier
-	// reverted, this key PASSED on the pin and FAILED on 26.7. CHAOS-4854 /
-	// #2138 moved the harness to :26.7, so the mutant is now genuinely red on
-	// the default path -- verified after that merge, no DSN override:
-	//     2**45 mutant -> "surviving provenance heuristic, want native"
-	// If the harness image is ever moved BACK below 26.7, this key stops
-	// certifying the multiplier and silently passes.
-	//
-	// Keys G and H sit at DateTime64(3)'s REPRESENTABLE extremes, not at a
-	// plausible-looking one. Key C used year 2100 -- an imagined extreme -- and
-	// that is exactly why the corpus could not see that 2**45 was too small:
-	// year 9999's milliseconds (253,402,300,799,000) exceed two rank steps at
-	// 2**45, so a heuristic row there outranked native and the copy discarded
-	// it. The constant is now certified against what the TYPE can hold.
 	seed(ctx, t, conn, org, repo, keyG, 4775, "native", 1.00, "2026-01-01 00:00:00.000")
 	seed(ctx, t, conn, org, repo, keyG, 4775, "heuristic", 0.50, "9999-12-31 23:59:59.999")
 	seed(ctx, t, conn, org, repo, keyH, 4776, "native", 1.00, "1900-01-01 00:00:00.000")
 	seed(ctx, t, conn, org, repo, keyH, 4776, "heuristic", 0.50, "2026-01-01 00:00:00.000")
 
-	before := countRows(ctx, t, conn)
-	if before != 14 {
-		t.Fatalf("seeded %d rows, want 14 -- fixture broken before the migration runs", before)
+	if got := countRows(ctx, t, conn); got != 8 {
+		t.Fatalf("seeded %d rows, want 8: the fixture is broken before the merge", got)
 	}
-
-	// Merges stay STOPPED across this call, deliberately, and that is not the
-	// masking this test was criticised for.
-	//
-	// Re-enabling them here was tried and is worse than useless: between the
-	// START and the migration's own STOP there is a window nothing controls,
-	// and a background merge collapses the contested keys by `last_synced`
-	// BEFORE the migration begins. Measured: 10 rows present immediately
-	// before the call, and native already gone by the time the copy ran. That
-	// is the ledger's accepted pre-migration limitation, not the P1, and it
-	// makes the test flaky about the wrong thing.
-	//
-	// The hook below reaches the real window deterministically instead.
-	t.Logf("rows immediately before the migration: %d", countRows(ctx, t, conn))
-
-	// Force a merge INSIDE the migration's snapshot->copy window.
-	//
-	// WHAT THIS PROVES: the migration's own SYSTEM STOP MERGES is load-bearing.
-	// Guarded, ClickHouse ABORTS this OPTIMIZE (Code 236 "Cancelled merging
-	// parts" -- measured on 26.6.1.1193 and 26.7.6.57) and every native row
-	// survives. With the guard removed the same statement collapses the
-	// contested keys by `last_synced` and the fallback wins, which is the
-	// migration destroying the rows it exists to promote.
-	//
-	// WHAT THIS DOES NOT PROVE: that the unguarded window is reachable by a
-	// BACKGROUND merge in a live race. That state cannot be held open from
-	// outside -- a pre-084 table with merges enabled may collapse a contested
-	// key at any instant -- so this FORCES the window rather than waiting for
-	// it. The guard is shown necessary and sufficient against a merge landing
-	// there; how likely one is to land there is not measured.
-	applyMigration084(ctx, t, instance, "OPTIMIZE TABLE work_graph_issue_pr FINAL")
-
-	// The copy carried every key. A no-op copy leaves zero.
-	if got := countRows(ctx, t, conn); got == 0 {
-		t.Fatal("the migrated table is EMPTY: the copy carried nothing and EXCHANGE " +
-			"swapped in an empty shadow -- this is the total-data-loss case")
-	}
+	mustExec(ctx, t, conn, "SYSTEM START MERGES work_graph_issue_pr")
 	mustExec(ctx, t, conn, "OPTIMIZE TABLE work_graph_issue_pr FINAL")
 
 	for _, c := range []struct{ key, want, why string }{
-		{keyA, "native", "native must outrank a later heuristic"},
-		{keyB, "explicit_text", "explicit_text must outrank a later, higher-confidence heuristic"},
-		{keyC, "native", "rank must beat a 74-year recency gap"},
 		{keyE, "native", "an unknown provenance with a pre-epoch stamp must not wrap and win"},
 		{keyF, "heuristic", "the later MILLISECOND must win among equal provenance"},
 		{keyG, "native", "rank must beat DateTime64(3)'s MAXIMUM representable stamp"},
 		{keyH, "native", "rank must hold at DateTime64(3)'s MINIMUM representable stamp"},
 	} {
-		assertOnlyProvenance(ctx, t, conn, c.key, c.want)
+		t.Run(c.why, func(t *testing.T) { assertOnlyProvenance(ctx, t, conn, c.key, c.want) })
 	}
-	// Full precision, not truncated to seconds: this is what fails under a
-	// toUnixTimestamp mutant.
+	// Full precision, not truncated to seconds: what fails under a toUnixTimestamp version.
 	assertLastSynced(ctx, t, conn, keyF, "2026-01-04 00:00:00.500")
-	assertLastSynced(ctx, t, conn, keyA, "2026-01-01 00:00:00.000")
 
-	// EVERY key survived, not merely "some rows are present". A copy that
-	// carried one key and dropped four would satisfy a non-zero count.
 	var keys uint64
-	if err := conn.QueryRow(ctx,
-		"SELECT uniqExact(work_item_id) FROM work_graph_issue_pr").Scan(&keys); err != nil {
+	if err := conn.QueryRow(ctx, "SELECT uniqExact(work_item_id) FROM work_graph_issue_pr").Scan(&keys); err != nil {
 		t.Fatalf("count distinct keys: %v", err)
 	}
-	if keys != 7 {
-		t.Errorf("%d distinct keys survived the migration, want 7 -- the copy lost keys", keys)
+	if keys != 4 {
+		t.Errorf("%d distinct keys survived the merge, want 4", keys)
 	}
-
-	// EVERY CARRIED COLUMN, with values distinct per row, on a row that was
-	// written BEFORE the migration and carried through it. The other test
-	// checks this on rows written after; only here does it prove the copy
-	// preserves column values rather than merely row identity.
-	assertSurvivingRowIntact(ctx, t, conn, keyA, org, repo, 4769,
-		1.00, "native", "seed-native", "2026-01-01 00:00:00.000")
-}
-
-// applyMigration084 runs ONE migration against the live container, the way the
-// production runner does, so the copy is exercised on rows that already exist.
-func applyMigration084(
-	ctx context.Context, t *testing.T, instance *containers.Instance, afterSnapshotSQL string,
-) {
-	t.Helper()
-	if err := runMigration084(ctx, t, instance, afterSnapshotSQL); err != nil {
-		t.Fatalf("apply migration 084: %v", err)
-	}
-}
-
-func runMigration084(
-	ctx context.Context, t *testing.T, instance *containers.Instance, afterSnapshotSQL string,
-) error {
-	t.Helper()
-	dsn, err := containers.ClickHouseHTTPDSN(ctx, instance)
-	if err != nil {
-		t.Fatalf("http dsn: %v", err)
-	}
-	root := repoRootForMigration(t)
-	script := `
-import sys, importlib.util
-from dev_health_ops.metrics.sinks.clickhouse import ClickHouseMetricsSink
-sink = ClickHouseMetricsSink(dsn=sys.argv[1])
-try:
-    # importlib, NOT runpy.run_path: run_path returns a COPY of the namespace,
-    # so assigning the hook on it would never reach the module's functions and
-    # the seam would be silently inert -- a control that cannot fail. Verified.
-    spec = importlib.util.spec_from_file_location("m084", sys.argv[2])
-    module = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(module)
-    if len(sys.argv) > 3 and sys.argv[3]:
-        def _hook(sql=sys.argv[3], client=sink.client):
-            # Split on ";": the driver's command() takes ONE statement, so a
-            # multi-statement hook (START MERGES then OPTIMIZE) must be issued
-            # as separate calls. Sending both in one string is rejected, which
-            # reads as HOOK_REFUSED and silently turns the red into a green.
-            print("HOOK_RAN")
-            outcome = "HOOK_SUCCEEDED"
-            for statement in [part.strip() for part in sql.split(";") if part.strip()]:
-                try:
-                    client.command(statement)
-                except Exception as error:
-                    outcome = "HOOK_REFUSED"
-                    print("HOOK_STATEMENT_REFUSED", statement[:60],
-                          type(error).__name__, error)
-            print(outcome)
-        module.after_snapshot_hook = _hook
-    module.upgrade(sink.client)
-finally:
-    sink.close()
-print("MIGRATION_084_APPLIED")
-`
-	python := pyoracle.Resolve(t, root)
-	migration := filepath.Join(root, "src", "dev_health_ops", "migrations",
-		"clickhouse", "084_issue_pr_provenance_version_precedence.py")
-	command := exec.CommandContext(ctx, python, "-c", script, dsn, migration, afterSnapshotSQL)
-	command.Env = append(os.Environ(), "PYTHONPATH="+filepath.Join(root, "src"))
-	out, err := command.CombinedOutput()
-	if afterSnapshotSQL != "" && !strings.Contains(string(out), "HOOK_RAN") {
-		t.Fatalf("the after-snapshot hook never fired, so nothing was forced into "+
-			"the copy window and this run proves nothing:\n%s", out)
-	}
-	if afterSnapshotSQL != "" {
-		t.Logf("after-snapshot hook outcome: %s", hookOutcome(string(out)))
-	}
-	if err != nil || !strings.Contains(string(out), "MIGRATION_084_APPLIED") {
-		return pyoracle.RunError(python, fmt.Errorf("%w\n%s", err, out), nil)
-	}
-	return nil
-}
-
-func repoRootForMigration(t *testing.T) string {
-	t.Helper()
-	dir, err := os.Getwd()
-	if err != nil {
-		t.Fatal(err)
-	}
-	for range 8 {
-		if _, statErr := os.Stat(filepath.Join(dir, "go.mod")); statErr == nil {
-			return dir
-		}
-		dir = filepath.Dir(dir)
-	}
-	t.Fatal("could not locate the repository root")
-	return ""
 }
 
 func countRows(ctx context.Context, t *testing.T, conn driver.Conn) uint64 {
@@ -733,256 +532,5 @@ func assertLastSynced(ctx context.Context, t *testing.T, conn driver.Conn, workI
 	}
 	if got != want {
 		t.Errorf("%s: last_synced = %q, want %q (full millisecond precision)", workItem, got, want)
-	}
-}
-
-// rewindToPre084 recreates work_graph_issue_pr as the chain left it BEFORE
-// migration 084, deriving the shape rather than restating it.
-//
-// It also asserts the derived shape matches the DDL this test used to
-// hand-write. That assertion is the red-first for the change: if the chain
-// ever leaves a shape the hand-written version did not reproduce, this fails
-// and names the difference instead of silently testing an easier table.
-func rewindToPre084(ctx context.Context, t *testing.T, conn driver.Conn) {
-	t.Helper()
-	var live string
-	if err := conn.QueryRow(ctx, "SHOW CREATE TABLE work_graph_issue_pr").Scan(&live); err != nil {
-		t.Fatalf("SHOW CREATE TABLE: %v", err)
-	}
-
-	// Invert exactly what 084 did, and nothing else.
-	var kept []string
-	for _, line := range strings.Split(live, "\n") {
-		if strings.Contains(line, "version_rank") && strings.Contains(line, "MATERIALIZED") {
-			continue // the column 084 added
-		}
-		kept = append(kept, line)
-	}
-	derived := strings.Join(kept, "\n")
-	derived = strings.Replace(derived, "ReplacingMergeTree(version_rank)",
-		"ReplacingMergeTree(last_synced)", 1)
-	// A trailing comma is left behind when the dropped column was last.
-	derived = strings.Replace(derived, ",\n)", "\n)", 1)
-	if strings.Contains(derived, "version_rank") {
-		t.Fatalf("derived pre-084 DDL still mentions version_rank:\n%s", derived)
-	}
-
-	mustExec(ctx, t, conn, "DROP TABLE IF EXISTS work_graph_issue_pr")
-	mustExec(ctx, t, conn, derived)
-
-	// The former hand-written shape, built in a scratch table, must match.
-	mustExec(ctx, t, conn, "DROP TABLE IF EXISTS pre084_handwritten_probe")
-	mustExec(ctx, t, conn, `CREATE TABLE pre084_handwritten_probe (
-		repo_id UUID, work_item_id String, pr_number UInt32, confidence Float32,
-		provenance String, evidence String, last_synced DateTime64(3,'UTC'),
-		org_id String DEFAULT 'default'
-	) ENGINE = ReplacingMergeTree(last_synced)
-	ORDER BY (org_id, repo_id, work_item_id, pr_number)`)
-	derivedShape := columnShape(ctx, t, conn, "work_graph_issue_pr")
-	handShape := columnShape(ctx, t, conn, "pre084_handwritten_probe")
-	if derivedShape != handShape {
-		t.Errorf("the pre-084 shape DERIVED from the chain differs from the "+
-			"hand-written one this test used to rely on:\n derived: %s\n hand:    %s",
-			derivedShape, handShape)
-	}
-	if a, b := sortingKey(ctx, t, conn, "work_graph_issue_pr"),
-		sortingKey(ctx, t, conn, "pre084_handwritten_probe"); a != b {
-		t.Errorf("derived sorting key %q != hand-written %q", a, b)
-	}
-	mustExec(ctx, t, conn, "DROP TABLE pre084_handwritten_probe")
-}
-
-func columnShape(ctx context.Context, t *testing.T, conn driver.Conn, table string) string {
-	t.Helper()
-	rows, err := conn.Query(ctx,
-		"SELECT name, type, default_kind FROM system.columns "+
-			"WHERE database = currentDatabase() AND table = ? ORDER BY position", table)
-	if err != nil {
-		t.Fatalf("column shape for %s: %v", table, err)
-	}
-	defer func() { _ = rows.Close() }()
-	var parts []string
-	for rows.Next() {
-		var name, typ, kind string
-		if err := rows.Scan(&name, &typ, &kind); err != nil {
-			t.Fatal(err)
-		}
-		parts = append(parts, name+" "+typ+" "+kind)
-	}
-	return strings.Join(parts, " | ")
-}
-
-func sortingKey(ctx context.Context, t *testing.T, conn driver.Conn, table string) string {
-	t.Helper()
-	var key string
-	if err := conn.QueryRow(ctx,
-		"SELECT sorting_key FROM system.tables "+
-			"WHERE database = currentDatabase() AND name = ?", table).Scan(&key); err != nil {
-		t.Fatalf("sorting key for %s: %v", table, err)
-	}
-	return key
-}
-
-// hookOutcome reports WHAT happened to the forced statement, never WHY.
-//
-// It used to say "REFUSED — the migration's SYSTEM STOP MERGES held", which
-// asserts a cause it cannot observe. A refusal for ANY reason took that label:
-// lane-4752-go demonstrated it with `OPTIMIZE TABLE no_such_table_at_all FINAL`,
-// which is refused because the table does not exist and was reported as the
-// guard holding. That is the same misreading the per-statement split was added
-// to remove -- fixed in the behaviour, left standing in the label.
-//
-// It cannot fake a green (a test failing for the wrong reason still fails), so
-// it is a false EXPLANATION on a red rather than a false pass. The accompanying
-// HOOK_STATEMENT_REFUSED line names the statement and the exception, which is
-// where the actual reason lives.
-func hookOutcome(out string) string {
-	switch {
-	case strings.Contains(out, "HOOK_REFUSED"):
-		return "REFUSED — a hook statement was rejected; this does NOT establish " +
-			"that the guard held (see HOOK_STATEMENT_REFUSED for which and why)"
-	case strings.Contains(out, "HOOK_SUCCEEDED"):
-		return "SUCCEEDED — every hook statement ran"
-	default:
-		return "unknown"
-	}
-}
-
-// TestMigration084RefusesWhenAMergeLandsMidCopy is the deterministic red for
-// the merge-landed detection.
-//
-// WHY DETECTION EXISTS ALONGSIDE THE GUARD: `SYSTEM STOP MERGES` is not a
-// counter. Measured on 26.7.6.57 -- two STOPs followed by ONE START re-enable
-// merges. So any concurrent START (an operator, or another migration's own
-// `finally`) silently re-arms merges underneath the copy, and the guard alone
-// cannot be trusted to have held for the whole window.
-//
-// The hook here does exactly that: START MERGES, then OPTIMIZE FINAL. With
-// detection the migration compares the source's part set and row count against
-// the snapshot and REFUSES before EXCHANGE, leaving the original untouched.
-// Without detection it swaps in a copy that is missing the native rows.
-func TestMigration084RefusesWhenAMergeLandsMidCopy(t *testing.T) {
-	ctx := context.Background()
-	instance := startClickHouse(ctx, t)
-	chschema.Apply(ctx, t, instance)
-	conn := openConn(ctx, t, instance)
-
-	rewindToPre084(ctx, t, conn)
-	mustExec(ctx, t, conn, "SYSTEM STOP MERGES work_graph_issue_pr")
-
-	const (
-		org  = "00000000-4769-0000-0000-000000000001"
-		repo = "00000000-4769-0000-0000-000000000002"
-		keyA = "00000000-4769-0000-0000-000000000003"
-	)
-	seed(ctx, t, conn, org, repo, keyA, 4769, "native", 1.00, "2026-01-01 00:00:00.000")
-	seed(ctx, t, conn, org, repo, keyA, 4769, "heuristic", 0.50, "2026-01-03 00:00:00.000")
-	before := countRows(ctx, t, conn)
-	if before != 2 {
-		t.Fatalf("seeded %d rows, want 2", before)
-	}
-
-	err := runMigration084(ctx, t, instance,
-		"SYSTEM START MERGES work_graph_issue_pr; OPTIMIZE TABLE work_graph_issue_pr FINAL")
-	if err == nil {
-		t.Fatal("the migration COMPLETED while a merge ran under its copy: it would " +
-			"have swapped in a table missing the native rows it exists to promote")
-	}
-	if !strings.Contains(err.Error(), "changed between the snapshot and the copy") {
-		t.Errorf("migration failed for the wrong reason: %v", err)
-	}
-
-	// Refusal must leave the ORIGINAL table usable, not half-migrated.
-	if got := engineOf(ctx, t, conn, "work_graph_issue_pr"); !strings.Contains(got, "last_synced") {
-		t.Errorf("after refusing, the source engine is %q -- expected the "+
-			"pre-084 ReplacingMergeTree(last_synced), untouched", got)
-	}
-}
-
-func engineOf(ctx context.Context, t *testing.T, conn driver.Conn, table string) string {
-	t.Helper()
-	var engine string
-	if err := conn.QueryRow(ctx,
-		"SELECT engine_full FROM system.tables "+
-			"WHERE database = currentDatabase() AND name = ?", table).Scan(&engine); err != nil {
-		t.Fatalf("engine for %s: %v", table, err)
-	}
-	return engine
-}
-
-// TestMigration084ConvergesFromAPartialRun covers the state codex round 4 found
-// unrecoverable: the version COLUMN already exists but the ENGINE was never
-// swapped, which a run interrupted between the two leaves behind.
-//
-// `_assert_shadow_matches` used to build its expected shape as "source columns
-// + version_rank". With the column already present that named it TWICE, the
-// check aborted, and the rerun dropped the shadow and failed identically
-// forever -- the precedence defect left in place permanently by the very check
-// meant to protect it.
-func TestMigration084ConvergesFromAPartialRun(t *testing.T) {
-	ctx := context.Background()
-	instance := startClickHouse(ctx, t)
-	chschema.Apply(ctx, t, instance)
-	conn := openConn(ctx, t, instance)
-
-	rewindToPre084(ctx, t, conn)
-	// The partial state: column added, engine still the old one.
-	mustExec(ctx, t, conn, "ALTER TABLE work_graph_issue_pr ADD COLUMN `version_rank` UInt64 "+
-		"MATERIALIZED (multiIf(provenance = 'native', 3, provenance = 'explicit_text', 2, "+
-		"provenance = 'heuristic', 1, 0) + 1) * 1125899906842624 + toUnixTimestamp64Milli(last_synced)")
-	if got := engineOf(ctx, t, conn, "work_graph_issue_pr"); !strings.Contains(got, "last_synced") {
-		t.Fatalf("fixture wrong: engine is %q, expected the pre-084 one", got)
-	}
-
-	const (
-		org  = "00000000-4769-0000-0000-000000000001"
-		repo = "00000000-4769-0000-0000-000000000002"
-		keyA = "00000000-4769-0000-0000-000000000003"
-	)
-	mustExec(ctx, t, conn, "SYSTEM STOP MERGES work_graph_issue_pr")
-	seed(ctx, t, conn, org, repo, keyA, 4769, "native", 1.00, "2026-01-01 00:00:00.000")
-	seed(ctx, t, conn, org, repo, keyA, 4769, "heuristic", 0.50, "2026-01-03 00:00:00.000")
-
-	applyMigration084(ctx, t, instance, "")
-
-	if got := engineOf(ctx, t, conn, "work_graph_issue_pr"); !strings.Contains(got, "version_rank") {
-		t.Errorf("after a partial-run rerun the engine is %q, want ReplacingMergeTree(version_rank)", got)
-	}
-	mustExec(ctx, t, conn, "OPTIMIZE TABLE work_graph_issue_pr FINAL")
-	assertOnlyProvenance(ctx, t, conn, keyA, "native")
-}
-
-// TestMigration084RefusesADefaultVersionColumn covers round 4's second P2.
-//
-// A DEFAULT column canonicalises to the same expression as a MATERIALIZED one,
-// so an expression-only check accepted it and recorded 084 as applied. DEFAULT
-// stays explicitly WRITABLE, so a client can supply its own version -- the
-// reviewer showed UInt64 max letting heuristic beat native after a merge. The
-// skip path must therefore check the column KIND, not only its expression.
-func TestMigration084RefusesADefaultVersionColumn(t *testing.T) {
-	ctx := context.Background()
-	instance := startClickHouse(ctx, t)
-	chschema.Apply(ctx, t, instance)
-	conn := openConn(ctx, t, instance)
-
-	mustExec(ctx, t, conn, "DROP TABLE IF EXISTS work_graph_issue_pr")
-	mustExec(ctx, t, conn, "CREATE TABLE work_graph_issue_pr ("+
-		"repo_id UUID, work_item_id String, pr_number UInt32, confidence Float32, "+
-		"provenance String, evidence String, last_synced DateTime64(3,'UTC'), "+
-		"org_id String DEFAULT 'default', "+
-		"`version_rank` UInt64 DEFAULT (multiIf(provenance = 'native', 3, "+
-		"provenance = 'explicit_text', 2, provenance = 'heuristic', 1, 0) + 1) "+
-		"* 1125899906842624 + toUnixTimestamp64Milli(last_synced)) "+
-		"ENGINE = ReplacingMergeTree(version_rank) "+
-		"ORDER BY (org_id, repo_id, work_item_id, pr_number)")
-
-	err := runMigration084(ctx, t, instance, "")
-	if err == nil {
-		t.Fatal("the migration ACCEPTED a DEFAULT version column and recorded itself " +
-			"as applied: the column stays writable, so a caller can supply its own " +
-			"version and outrank native")
-	}
-	if !strings.Contains(err.Error(), "not MATERIALIZED") {
-		t.Errorf("refused for the wrong reason: %v", err)
 	}
 }

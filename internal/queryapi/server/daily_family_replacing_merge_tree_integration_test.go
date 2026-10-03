@@ -27,7 +27,6 @@ import (
 	"net/http"
 	"net/url"
 	"path/filepath"
-	"runtime"
 	"slices"
 	"strings"
 	"testing"
@@ -39,6 +38,7 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/queryapi/hotspots"
 	"github.com/full-chaos/dev-health-ops/internal/queryapi/reviewedges"
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/containers"
+	"github.com/full-chaos/dev-health-ops/internal/testsupport/moduleroot"
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/programoracle"
 )
 
@@ -357,7 +357,7 @@ print(json.dumps({t: dedup_from(t) for t in tables if dedup_from(t) != t}, sort_
 // comparison runs Python's own reader SQL rather than a copy of it.
 func dailyFamilyPythonDedupSources(t *testing.T) map[string]string {
 	t.Helper()
-	_, file, _, _ := runtime.Caller(0)
+	_, file, _, _ := moduleroot.Caller(0)
 	root := filepath.Join(filepath.Dir(file), "..", "..", "..")
 	tables, err := json.Marshal(dailyFamilyTableNames())
 	if err != nil {

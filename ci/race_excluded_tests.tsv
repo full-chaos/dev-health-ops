@@ -1,0 +1,10 @@
+# Tests compiled out of the -race leg by a `//go:build !race` file (CHAOS-8135). ci/check_go.sh check_race_excluded_ran runs
+# each one by name WITHOUT -race, uncached, and fails unless the run prints its own "--- PASS:" line.
+# Key = package path relative to the module root, TAB, test name. Sorted, no duplicates.
+internal/auth/httpapi	TestARequestThatRecordsACauseAllocatesNoMoreThanOneThatDoesNot
+internal/goapiproof	TestCandidateAccounting_EnumeratedAdmissionImpliesTheInvariant
+internal/goapiproof	TestPersonDrilldownPRs_EnumeratedCursorAdmissionImpliesTheInvariant
+internal/goapiproof	TestWriteSkewInvariant_RealSunburstDeclarations
+internal/httpguard	TestEveryConcreteTypeThatBecomesAnHTTPDoerIsGuardedOrWrapsTheGuardedDoer
+internal/httpguard	TestEveryHTTPClientSiteIsClassified
+internal/httpguard	TestTheScopePinIsAppliedToTheRealWalk

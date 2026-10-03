@@ -40,6 +40,8 @@ func (f *fakeRowScanner) Scan(dest ...any) error {
 			*ptr = row[i].(string)
 		case *uint32:
 			*ptr = row[i].(uint32)
+		case *uint64:
+			*ptr = row[i].(uint64)
 		case *time.Time:
 			*ptr = row[i].(time.Time)
 		default:
@@ -52,16 +54,37 @@ func (f *fakeRowScanner) Scan(dest ...any) error {
 func (f *fakeRowScanner) Err() error   { return f.err }
 func (f *fakeRowScanner) Close() error { return nil }
 
-// fakeClient scripts one response for the single query Resolve issues
-// (unlike featureflags, reviewedges has no separate count query).
+// fakeClient scripts the two queries Resolve issues: the row query (first) and the count query
+// (second, "SELECT count() ..."). statement/bindings are the ROW query's (so the older tests and
+// the frozen golden read what they always read); the count query's are countStatement and
+// countBindings. The count answers total when set, else the number of scripted rows.
 type fakeClient struct {
 	response  *fakeRowScanner
 	err       error
 	statement string
 	bindings  []clickhouse.Binding
+
+	total          *uint64
+	countErr       error
+	countStatement string
+	countBindings  []clickhouse.Binding
+	countCalls     int
 }
 
 func (f *fakeClient) Query(_ context.Context, statement string, bindings []clickhouse.Binding) (clickhouse.RowScanner, error) {
+	if strings.HasPrefix(strings.TrimSpace(statement), "SELECT count()") {
+		f.countCalls++
+		f.countStatement = statement
+		f.countBindings = bindings
+		if f.countErr != nil {
+			return nil, f.countErr
+		}
+		total := uint64(len(f.response.rows))
+		if f.total != nil {
+			total = *f.total
+		}
+		return &fakeRowScanner{rows: [][]any{{total}}}, nil
+	}
 	f.statement = statement
 	f.bindings = bindings
 	if f.err != nil {

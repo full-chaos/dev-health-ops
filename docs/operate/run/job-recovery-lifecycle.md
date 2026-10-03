@@ -364,6 +364,15 @@ Every row the relay itself moves to `dead` also logs one line
 | `worker_outbox_reconciler_undelivered_requests_canceled_total` | Work-graph requests the sweep canceled. |
 | `worker_outbox_reconciler_undelivered_race_lost_total` | Candidates whose writes both refused because the fence or request changed after the survey. |
 | `worker_outbox_reconciler_undelivered_blocked` | Gauge: gated rows still inside the ceiling at the last successful pass. |
+| `worker_outbox_reconciler_strand_passes_skipped_idle_total` | Strand-repair passes (the undelivered sweep included) that did not run because the passes before them found nothing. |
+
+The strand repair and this sweep do not run on every reconciler tick. After a
+pass that finds nothing the next one waits 2, 4, 8, 16, then at most 30
+seconds; any finding, refusal or error puts it back on every tick. A standing
+`blocked` level does not count as a finding. While a pass is held back the
+gauge above keeps its last value and the counter in the last row rises, so a
+flat set of strand counters with that counter moving is an idle repair, not a
+stopped one.
 
 ### Counting the class
 
@@ -374,10 +383,10 @@ dho workers workgraph list-undelivered [--ceiling-hours 72]
 The command is read-only and uses the sweep's own classification SQL on the
 domain pool. It prints one row per `(job_kind, reason)` with its count and the
 age of its oldest row, plus `actionable` (everything except `blocked`) and
-`blocked` totals. A non-zero `actionable` that does not fall to zero after one
-reconciler pass means the sweep is not running or its writes are refused —
-read `worker_outbox_reconciler_undelivered_race_lost_total` and the reconciler
-log.
+`blocked` totals. A non-zero `actionable` that does not fall to zero after the
+next sweep pass — at most 30 seconds later when the repair is idle — means the
+sweep is not running or its writes are refused — read
+`worker_outbox_reconciler_undelivered_race_lost_total` and the reconciler log.
 
 ## What recovery does not cover
 

@@ -1,13 +1,13 @@
 package storedversion
 
 import (
+	"github.com/full-chaos/dev-health-ops/internal/testsupport/moduleroot"
 	"go/ast"
 	"go/parser"
 	"go/token"
 	"io/fs"
 	"os"
 	"path/filepath"
-	"runtime"
 	"sort"
 	"strconv"
 	"strings"
@@ -103,7 +103,7 @@ var unresolvedWriters = map[string]string{
 // table name is not in the literal).
 func scanInserts(t *testing.T) map[string]bool {
 	t.Helper()
-	_, filename, _, ok := runtime.Caller(0)
+	_, filename, _, ok := moduleroot.Caller(0)
 	if !ok {
 		t.Fatal("locate test")
 	}

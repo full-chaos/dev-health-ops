@@ -7,7 +7,6 @@ import (
 	"math/rand"
 	"net/http/httptest"
 	"path/filepath"
-	"runtime"
 	"slices"
 	"strings"
 	"testing"
@@ -15,6 +14,7 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/api/pybody"
 	"github.com/full-chaos/dev-health-ops/internal/api/pyjson"
 	"github.com/full-chaos/dev-health-ops/internal/api/pytime"
+	"github.com/full-chaos/dev-health-ops/internal/testsupport/moduleroot"
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/pyoracle"
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/venueoracle"
 )
@@ -211,7 +211,7 @@ func goBodyAnswer(model, body string) (int, string) {
 // validation with FastAPI's on the real request models.
 func TestCustomerPushBodiesMatchFrozenFastAPI(t *testing.T) {
 	frozen := venueoracle.OpenGolden(t, programGolden("bodies", t.Name(), "8621a3713da2931fd05bb40ab28b8c1a3ec3213c2fd73c3a3e6d6724cc79ac50"))
-	_, file, _, _ := runtime.Caller(0)
+	_, file, _, _ := moduleroot.Caller(0)
 	root := frozen.PythonRoot(t, filepath.Clean(filepath.Join(filepath.Dir(file), "..", "..", "..")))
 	corpus := bodiesCorpus()
 	input, _ := json.Marshal(corpus)

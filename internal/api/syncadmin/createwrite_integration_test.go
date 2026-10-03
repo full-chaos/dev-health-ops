@@ -8,7 +8,6 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
-	"runtime"
 	"testing"
 	"time"
 
@@ -18,6 +17,7 @@ import (
 
 	"github.com/full-chaos/dev-health-ops/internal/api/pyjson"
 	"github.com/full-chaos/dev-health-ops/internal/providersync"
+	"github.com/full-chaos/dev-health-ops/internal/testsupport/moduleroot"
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/venueoracle"
 )
 
@@ -28,7 +28,7 @@ import (
 // the Python create route is the route's venue oracle.
 func TestCreateWriteVenueOracleSequenceUnderTheAPIRole(t *testing.T) {
 	ctx := context.Background()
-	_, file, _, _ := runtime.Caller(0)
+	_, file, _, _ := moduleroot.Caller(0)
 	root := filepath.Clean(filepath.Join(filepath.Dir(file), "..", "..", ".."))
 	org := uuid.New().String()
 	goodCredential, badCredential, otherOrgCredential := uuid.New(), uuid.New(), uuid.New()

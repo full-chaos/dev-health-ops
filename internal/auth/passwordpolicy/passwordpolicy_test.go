@@ -1,17 +1,17 @@
 package passwordpolicy
 
 import (
+	"github.com/full-chaos/dev-health-ops/internal/testsupport/moduleroot"
 	"os"
 	"path/filepath"
 	"reflect"
-	"runtime"
 	"testing"
 )
 
 // TestEmbeddedListMatchesThePythonOne pins the embedded denylist to the file
 // password_policy.py reads, byte for byte.
 func TestEmbeddedListMatchesThePythonOne(t *testing.T) {
-	_, file, _, ok := runtime.Caller(0)
+	_, file, _, ok := moduleroot.Caller(0)
 	if !ok {
 		t.Fatal("cannot locate this test file")
 	}

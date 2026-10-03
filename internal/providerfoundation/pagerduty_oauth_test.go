@@ -3,6 +3,7 @@ package providerfoundation
 import (
 	"context"
 	"encoding/json"
+	"github.com/full-chaos/dev-health-ops/internal/testsupport/fakehttp"
 	"io"
 	"net/http"
 	"net/url"
@@ -110,7 +111,7 @@ func TestPagerDutyOAuthHydratorRefreshesAndRotatesEncryptedToken(t *testing.T) {
 	}}
 	doer := &pagerDutyRefreshDoer{}
 	hydrated, err := (PagerDutyOAuthHydrator{
-		Repository: repository, Cipher: cipher, Doer: doer,
+		Repository: repository, Cipher: cipher, Doer: fakehttp.Client(doer),
 		AppClientID:     secrets.NewValue("client-id"),
 		AppClientSecret: secrets.NewValue("client-secret"),
 		Now:             func() time.Time { return time.Date(2026, 8, 12, 0, 0, 0, 0, time.UTC) },
@@ -209,7 +210,7 @@ func TestPagerDutyOAuthHydratorSerializesConcurrentRefresh(t *testing.T) {
 	})
 	doer := &singleUsePagerDutyRefreshDoer{}
 	hydrator := PagerDutyOAuthHydrator{
-		Repository: repository, Cipher: cipher, Doer: doer,
+		Repository: repository, Cipher: cipher, Doer: fakehttp.Client(doer),
 		AppClientID:     secrets.NewValue("client-id"),
 		AppClientSecret: secrets.NewValue("client-secret"),
 		Now:             func() time.Time { return time.Date(2026, 8, 12, 0, 0, 0, 0, time.UTC) },

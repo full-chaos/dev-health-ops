@@ -2,7 +2,7 @@ package syncdispatchruntime
 
 import (
 	"context"
-	"log/slog"
+	"github.com/full-chaos/dev-health-ops/internal/syncdispatchruntime/synclog"
 	"time"
 
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -59,10 +59,7 @@ func dueNowRearmAt(nextDeferredAt *time.Time, now time.Time) *time.Time {
 	return earlierOf(nextDeferredAt, now.Add(redispatchCountdown()))
 }
 
-func scheduleRedispatch(ctx context.Context, pool *pgxpool.Pool, logger *slog.Logger, syncRunID string, availableAt *time.Time, now time.Time) {
-	if logger == nil {
-		logger = slog.Default()
-	}
+func scheduleRedispatch(ctx context.Context, pool *pgxpool.Pool, logger *synclog.Logger, syncRunID string, availableAt *time.Time, now time.Time) {
 	countdown := redispatchCountdown()
 	redispatchAt := now.Add(countdown)
 	if availableAt != nil {
@@ -70,8 +67,7 @@ func scheduleRedispatch(ctx context.Context, pool *pgxpool.Pool, logger *slog.Lo
 	}
 
 	fail := func(err error) {
-		logger.WarnContext(ctx, "dispatch_sync_run.redispatch_rearm_failed",
-			slog.String("sync_run_id", syncRunID), slog.String("error", err.Error()))
+		logger.Warn(ctx, synclog.MsgDispatchSyncRunRedispatchRearmFailed, synclog.Run(synclog.ParseID(syncRunID)), synclog.Failure(err))
 	}
 
 	tx, err := pool.Begin(ctx)
@@ -104,6 +100,5 @@ WHERE sync_run_id = $1::uuid AND kind = $4 AND status = 'pending' AND claim_toke
 		fail(err)
 		return
 	}
-	logger.InfoContext(ctx, "dispatch_sync_run.redispatch_rearmed",
-		slog.String("sync_run_id", syncRunID), slog.Int("countdown", int(countdown.Seconds())), slog.Time("available_at", redispatchAt))
+	logger.Info(ctx, synclog.MsgDispatchSyncRunRedispatchRearmed, synclog.Run(synclog.ParseID(syncRunID)), synclog.Count(synclog.KeyCountdown, int(countdown.Seconds())), synclog.Instant(synclog.KeyAvailableAt, redispatchAt))
 }

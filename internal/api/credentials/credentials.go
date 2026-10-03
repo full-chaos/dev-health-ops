@@ -58,30 +58,7 @@ type Deps struct {
 // (GET) before create (POST) on /credentials and get before patch on
 // /credentials/{provider}/{name}, so a 405 names the first route's method.
 func Routes(deps Deps) []httpapi.Route {
-	logger := deps.Logger
-	if logger == nil {
-		logger = slog.Default()
-	}
-	now := deps.Now
-	if now == nil {
-		now = time.Now
-	}
-	client := deps.HTTPClient
-	if client == nil {
-		client = defaultProbeClient()
-	}
-	lookup := deps.HostLookup
-	if lookup == nil {
-		lookup = externalurl.ResolveHostAddrs
-	}
-	// The repository listing's clients each apply their provider's own
-	// timeout to this one (a test's client answers for both).
-	repoClient := deps.HTTPClient
-	if repoClient == nil {
-		repoClient = &http.Client{Transport: externalurl.GuardedTransport(),
-			CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}
-	}
-	h := handlers{pool: deps.Pool, cipher: deps.Cipher, logger: logger, now: now, client: client, repoClient: repoClient, lookup: lookup}
+	h := newHandlers(deps)
 	return []httpapi.Route{
 		{Method: http.MethodGet, Pattern: "/api/v1/admin/credentials", Allow: http.MethodGet,
 			Handler: deps.Guard.Wrap(policy.AdminOrg, http.HandlerFunc(h.list))},
@@ -96,10 +73,10 @@ func Routes(deps Deps) []httpapi.Route {
 	}
 }
 
-// defaultProbeClient follows no redirects and dials only addresses the SSRF
-// guard's classification allows, whatever the URL check resolved earlier.
+// defaultProbeClient dials only addresses the SSRF guard's classification allows, whatever the URL check resolved
+// earlier. Redirects are refused where the credential is sent (probes.go send, NewGitHubAppAuth, restcore.Core.Get).
 func defaultProbeClient() *http.Client {
-	return &http.Client{Transport: externalurl.GuardedTransport(), CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}
+	return &http.Client{Transport: externalurl.GuardedTransport()}
 }
 
 type handlers struct {
@@ -600,4 +577,28 @@ func (h handlers) patchFlags(ctx context.Context, orgID string, existing credent
 	}
 	response.UpdatedAt = now
 	return response, nil
+}
+
+// newHandlers is what Routes builds its handlers from: the clients of every probe and listing call among them.
+func newHandlers(deps Deps) handlers {
+	logger := deps.Logger
+	if logger == nil {
+		logger = slog.Default()
+	}
+	now := deps.Now
+	if now == nil {
+		now = time.Now
+	}
+	client := deps.HTTPClient
+	if client == nil {
+		client = defaultProbeClient()
+	}
+	lookup := deps.HostLookup
+	if lookup == nil {
+		lookup = externalurl.ResolveHostAddrs
+	}
+	// The repository listing's clients each apply their provider's own
+	// timeout to this one (a test's client answers for both).
+	repoClient := client
+	return handlers{pool: deps.Pool, cipher: deps.Cipher, logger: logger, now: now, client: client, repoClient: repoClient, lookup: lookup}
 }

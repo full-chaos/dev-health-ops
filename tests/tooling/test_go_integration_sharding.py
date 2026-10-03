@@ -1453,8 +1453,6 @@ _UNMIRRORED_IMAGE_DEBT: set[tuple[str, str, str, str]] = set()
 # session's own memory already flags -- it goes stale the moment an entry is
 # added without anyone noticing the comment nearby.
 _IMAGE_PULLING_ACTION_DEBT = {
-    ("docker-images.yml", "build", "docker/setup-buildx-action"),
-    ("docker-images.yml", "merge", "docker/setup-buildx-action"),
     ("docker-images.yml", "go-build", "docker/setup-buildx-action"),
     ("docker-images.yml", "go-merge", "docker/setup-buildx-action"),
     # CHAOS-5666: go-api-tools-build/go-api-tools-merge mirror

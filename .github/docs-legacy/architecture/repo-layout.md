@@ -73,9 +73,11 @@ internal/
 ├── scheduler/sync/           # Dormant read-only sync-schedule evaluator
 ├── syncdispatchcontract/     # Cross-language sync-outbox route policy
 ├── syncreconciler/           # Read-only bounded sync-outbox observer
+├── ingressplanes/            # Route-plane contract reader; generator of the compose router's nginx file
 └── testsupport/containers/   # Isolated pinned dependency harness
 contracts/jobs/v1/            # Schemas, registry, examples, and migration state
 contracts/sync-dispatch/v1/   # Sync-outbox delivery and transport routes
+contracts/ingress/v1/         # Route planes of an api host (README there) and the generated compose router file
 ```
 
 These roots are migration foundations. The command shells and route-contract

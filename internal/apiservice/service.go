@@ -299,7 +299,12 @@ func RegisterOperatorMetrics(registry *health.Registry, deps *Deps) error {
 		return err
 	}
 	deps.LegacyIngestMetrics = legacyingest.NewMetrics()
-	return registry.RegisterMetrics("legacy_ingest", deps.LegacyIngestMetrics)
+	if err := registry.RegisterMetrics("legacy_ingest", deps.LegacyIngestMetrics); err != nil {
+		return err
+	}
+	// CHAOS-8221: the dataset-drift repair counter (Python's
+	// sync_target_dataset_drift_repaired_total) the PUT /sync-configs path counts.
+	return registry.RegisterMetrics("sync_target_dataset_drift_repaired", syncadmin.DriftRepairedMetricsSource())
 }
 
 // configureWith is configure with adjust applied to the built Deps before

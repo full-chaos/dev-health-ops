@@ -172,18 +172,7 @@ WHERE org_id = $1 AND integration_id = $2 AND dataset_key = $3 AND is_enabled IS
 			disabled = append(disabled, key)
 		}
 	}
-	var drifted []string
-	for _, key := range disabled {
-		if !(previouslyDesired[key] && !desired[key]) {
-			drifted = append(drifted, key)
-		}
-	}
-	if len(drifted) > 0 {
-		logger.WarnContext(ctx, "sync_target_dataset_drift_repaired", "org_id", orgID, "integration_id", integrationID.String(),
-			"provider", provider, "drifted_dataset_keys", strings.Join(drifted, ","), "drifted_count", len(drifted),
-			"reason", "integration_datasets rows were enabled that this config's sync_targets cannot account for; "+
-				"the planner was syncing datasets the operator had deselected")
-	}
+	recordDatasetDrift(ctx, logger, orgID, integrationID, provider, disabled, previouslyDesired, desired)
 	return nil
 }
 

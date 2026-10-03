@@ -172,6 +172,19 @@ type CompleteRouteExecutionResult struct {
 	RequestUsage RequestUsageTotals
 }
 
+// attemptTimer starts measuring one chunked attempt and returns the elapsed
+// time. It reads the executor's own clock when one is injected, so the wall
+// bound of a chunk policy can be exercised without sleeping; with no injected
+// clock it uses the monotonic process clock, as before.
+func (executor CompleteRouteExecutor) attemptTimer() func() time.Duration {
+	if executor.Now != nil {
+		started := executor.Now()
+		return func() time.Duration { return executor.Now().Sub(started) }
+	}
+	started := time.Now()
+	return func() time.Duration { return time.Since(started) }
+}
+
 func (executor CompleteRouteExecutor) now() time.Time {
 	if executor.Now != nil {
 		return executor.Now().UTC()

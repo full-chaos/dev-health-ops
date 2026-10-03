@@ -7,7 +7,3 @@ github.com/full-chaos/dev-health-ops/internal/jobs/workgraph/issueprlinks	TestMi
 github.com/full-chaos/dev-health-ops/internal/jobs/workgraph/issueprlinks	TestMigration084ConvergesFromAPartialRun	CHAOS-7353	tripwire
 github.com/full-chaos/dev-health-ops/internal/jobs/workgraph/issueprlinks	TestMigration084RefusesADefaultVersionColumn	CHAOS-7353	tripwire
 github.com/full-chaos/dev-health-ops/internal/jobs/workgraph/issueprlinks	TestMigration084RefusesWhenAMergeLandsMidCopy	CHAOS-7353	tripwire
-github.com/full-chaos/dev-health-ops/internal/pgmigrate	TestBaselineVenueOracleIsTheExecutedPythonUpgrade	CHAOS-7049	tripwire
-github.com/full-chaos/dev-health-ops/internal/pgmigrate	TestBuildHeadsAreTheOldScriptsHeads	CHAOS-7049	tripwire
-github.com/full-chaos/dev-health-ops/internal/pgmigrate	TestHistoryGraphIsTheAlembicChain	CHAOS-6469	tripwire
-github.com/full-chaos/dev-health-ops/internal/pgmigrate	TestHookVerbUpgradesAnOldProductionDatabaseToTheAlembicHead	CHAOS-7049	tripwire

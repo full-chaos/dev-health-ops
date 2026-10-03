@@ -39,11 +39,12 @@ var (
 	// userinfo, or one whose scheme was cut off before it, reached the log
 	// (CHAOS-8277). The user part may be empty and cannot hold a quote, a slash, a
 	// bracket or `=`, so a JSON `"key":"value@x"` pair and a `key=value` pair never
-	// match; the separator may be a colon or its percent-encoded form; the secret
+	// match; the separator may be a colon or its percent-encoded form, and the `@` that
+	// ends the userinfo may be `%40`, so the layers that do not decode see it too; the secret
 	// runs to the LAST `@` of the run, so a `/`, a `%2F` or an `@` inside the
 	// password is covered. A quote or `<`/`>` inside a password ends the run (named
 	// limit: a JSON string or a tag around the text must stay intact).
-	userinfoPattern = regexp.MustCompile(`[^\s/@:"'<>()\[\]{},;=\\]*(?::|%3[aA])[^\s"'<>]*@`)
+	userinfoPattern = regexp.MustCompile(`[^\s/@:"'<>()\[\]{},;=\\]*(?::|%3[aA])[^\s"'<>]*(?:@|%40)`)
 	// bareCredentialPatterns catch credential-shaped substrings OUTSIDE a
 	// URL -- an HTTP Authorization header or a bearer/basic credential --
 	// that dsnPattern/credentialURLPattern's URL-anchored matching cannot
@@ -150,10 +151,16 @@ func redactURLCredentials(value string) string {
 		value = dsnPattern.ReplaceAllString(value, redacted)
 		value = credentialURLPattern.ReplaceAllString(value, redacted)
 	}
-	if strings.Contains(value, "@") {
+	if mayHoldUserinfo(value) {
 		value = redactUserinfo(value)
 	}
 	return value
+}
+
+// mayHoldUserinfo is the cheap gate in front of the userinfo match: it needs an `@`
+// (or its percent-encoded form) to end on.
+func mayHoldUserinfo(value string) bool {
+	return strings.Contains(value, "@") || strings.Contains(value, "%40")
 }
 
 // redactUserinfo replaces the `user:secret` part of every `user:secret@` in value

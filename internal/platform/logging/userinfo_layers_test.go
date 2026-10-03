@@ -191,3 +191,49 @@ func TestByValueCoverIsTheLogPathOnly(t *testing.T) {
 		}
 	}
 }
+
+// A userinfo whose own `@` is percent-encoded is hidden in EVERY layer: RedactText
+// sees it again after its percent decode, and the layers that do not decode read
+// `%40` as the end of the userinfo.
+var encodedAtSignTexts = []struct {
+	text   string
+	hidden string
+	kept   string
+}{
+	{"dial svc_user:Hx7Tk2Pw57%40cache.internal now", "Hx7Tk2Pw57", "cache.internal"},
+	{"next=https%3A%2F%2Fsvc_user%3AHx7Tk2Pw58%40db.internal%2Fapp end", "Hx7Tk2Pw58", "end"},
+	{"dial svc_user%3AHx7Tk2Pw59%40cache.internal now", "Hx7Tk2Pw59", "cache.internal"},
+}
+
+func TestEncodedAtSignInTheUserinfoIsHiddenInEveryLayer(t *testing.T) {
+	for _, row := range encodedAtSignTexts {
+		for _, layer := range userinfoLayers {
+			got := layer.redact(row.text)
+			if strings.Contains(got, row.hidden) {
+				t.Errorf("%s leaked %q: %.300s", layer.name, row.hidden, got)
+			}
+			if !strings.Contains(got, row.kept) {
+				t.Errorf("%s lost %q: %.300s", layer.name, row.kept, got)
+			}
+		}
+	}
+}
+
+// The pass AFTER the percent decode is the only one that sees a userinfo whose `@`
+// is encoded twice (`%2540`): RedactText decodes in passes, the pre-decode match
+// sees no `@` or `%40`. Log path only: the persisted-column layers do not decode
+// (a doubly encoded userinfo stays whole there: part of the same named limit as
+// the by-value cover, one shared entry is its own change).
+func TestDoublyEncodedAtSignInTheUserinfoIsHiddenInTheLogPath(t *testing.T) {
+	for _, text := range []string{
+		"dial svc_user:Hx7Tk2Pw60%2540cache.internal now",
+		"dial svc_user%253AHx7Tk2Pw61%2540cache.internal now",
+	} {
+		for _, layer := range userinfoLayers[:2] {
+			got := layer.redact(text)
+			if strings.Contains(got, "Hx7Tk2Pw6") || !strings.Contains(got, "cache.internal") {
+				t.Errorf("%s: %q -> %.300s", layer.name, text, got)
+			}
+		}
+	}
+}

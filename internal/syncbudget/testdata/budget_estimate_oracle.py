@@ -381,8 +381,12 @@ def _estimate_cases() -> list[dict[str, Any]]:
     # A lone surrogate in each secret the Jira estimator hashes, and in the
     # PagerDuty subdomain: Python's strict UTF-8 encode raises.
     for key in JIRA_SECRET_KEYS:
-        add("jira", "work-items", '{"%s": "\\ud800"}' % key)
-        add("jira", "work-items", '{"email": "e", "%s": "ok", "api_token": "\\ud800"}' % key)
+        add("jira", "work-items", f'{{"{key}": "\\ud800"}}')
+        add(
+            "jira",
+            "work-items",
+            f'{{"email": "e", "{key}": "ok", "api_token": "\\ud800"}}',
+        )
     add("pagerduty", "incidents", '{"subdomain": "\\ud800", "region": "eu"}')
     add("pagerduty", "incidents", '{"subdomain": "\\ud83d\\ude00"}')
     # A base URL with no hostname, in a credential and in the environment.
@@ -613,13 +617,16 @@ def main() -> int:
         elif plaintext is GARBAGE_CIPHERTEXT:
             ciphertext = "not-a-fernet-token"
         elif plaintext is not None:
+            assert isinstance(plaintext, str)
             ciphertext = encrypt_value(plaintext)
         else:
             ciphertext = None
-        config_value = None if config is SQL_NULL else json.loads(config)
-        row = SimpleNamespace(
-            credentials_encrypted=ciphertext, config=config_value
-        )
+        if config is SQL_NULL:
+            config_value = None
+        else:
+            assert isinstance(config, str)
+            config_value = json.loads(config)
+        row = SimpleNamespace(credentials_encrypted=ciphertext, config=config_value)
         try:
             mapping = _credential_mapping(row)
             # repr() keeps key order and value types; the Go side renders

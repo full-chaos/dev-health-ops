@@ -17,6 +17,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/full-chaos/dev-health-ops/internal/platform/version"
 	"github.com/full-chaos/dev-health-ops/internal/queryapi/principal"
 )
 
@@ -360,5 +361,135 @@ func TestGraphQLEdgeServesExactlyTheDeclaredMethods(t *testing.T) {
 		case !declared[method] && !refused:
 			t.Errorf("%s /graphql: not declared but answers %d (not 405)", method, recorder.Code)
 		}
+	}
+}
+
+// (g) each row's Builder field is the builder its Build closure calls, and the closure
+// returns the handlers in the order the builder produced them. The citation
+// internal/migrationmatrix prints is the declared string, so a row that names one
+// builder and calls another (serving, say, the heatmap handler under the quadrant
+// switch) would otherwise pass every test.
+func TestEveryRowCallsItsOwnBuilderAndReturnsItsHandlersInOrder(t *testing.T) {
+	fset := token.NewFileSet()
+	file, err := parser.ParseFile(fset, "rest_routes.go", nil, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	rows := 0
+	ast.Inspect(file, func(n ast.Node) bool {
+		lit, ok := n.(*ast.CompositeLit)
+		if !ok {
+			return true
+		}
+		var builder string
+		var build *ast.FuncLit
+		for _, elt := range lit.Elts {
+			kv, ok := elt.(*ast.KeyValueExpr)
+			if !ok {
+				return true
+			}
+			switch key, _ := kv.Key.(*ast.Ident); {
+			case key != nil && key.Name == "Builder":
+				if basic, ok := kv.Value.(*ast.BasicLit); ok {
+					builder = strings.Trim(basic.Value, `"`)
+				}
+			case key != nil && key.Name == "Build":
+				build, _ = kv.Value.(*ast.FuncLit)
+			}
+		}
+		if builder == "" || build == nil {
+			return true
+		}
+		rows++
+		var calls []string
+		var lhs []string
+		var returned []string
+		ast.Inspect(build.Body, func(m ast.Node) bool {
+			switch node := m.(type) {
+			case *ast.AssignStmt:
+				if call, ok := node.Rhs[0].(*ast.CallExpr); ok {
+					if id, ok := call.Fun.(*ast.Ident); ok {
+						calls = append(calls, id.Name)
+						lhs = nil
+						for _, l := range node.Lhs {
+							lhs = append(lhs, l.(*ast.Ident).Name)
+						}
+					}
+				}
+			case *ast.ReturnStmt:
+				if comp, ok := node.Results[0].(*ast.CompositeLit); ok {
+					for _, e := range comp.Elts {
+						returned = append(returned, e.(*ast.Ident).Name)
+					}
+				}
+			}
+			return true
+		})
+		if len(calls) != 1 || calls[0] != builder {
+			t.Errorf("row %s: Build calls %v, want exactly [%s]", builder, calls, builder)
+		}
+		var want []string
+		for i := 0; i < len(lhs)-3; i++ {
+			want = append(want, lhs[i])
+		}
+		if len(lhs) < 4 || !slices.Equal(returned, want) {
+			t.Errorf("row %s: Build returns handlers %v from %v, want them in the order the builder produced them", builder, returned, lhs)
+		}
+		return true
+	})
+	if rows != len(restGroups) {
+		t.Errorf("walked %d rows, the table has %d", rows, len(restGroups))
+	}
+}
+
+// (h) the loop pairs Mounts[i] with handlers[i], wraps every mount with the running
+// build's provenance, and closes the cleanup of a builder whose handler count
+// disagrees with its row.
+func TestBuildPairsEachMountWithItsOwnHandlerAndStampsTheBuild(t *testing.T) {
+	const commit = "b18e56fa79cfe20ce0f75df148144b832d92be36"
+	saved := version.Commit
+	version.Commit = commit
+	t.Cleanup(func() { version.Commit = saved })
+
+	var order []string
+	row := okRow("buildPlantedPair", "/api/v1/planted-first", &order, "")
+	row.Mounts = append(row.Mounts, restMount{Pattern: "/api/v1/planted-second", Methods: []string{http.MethodGet}})
+	row.Build = func(getenvFunc, edgeUserStore) ([]http.HandlerFunc, func(), bool, error) {
+		return []http.HandlerFunc{
+			func(w http.ResponseWriter, _ *http.Request) { _, _ = w.Write([]byte("first")) },
+			func(w http.ResponseWriter, _ *http.Request) { _, _ = w.Write([]byte("second")) },
+		}, func() {}, true, nil
+	}
+	plantRows(t, row)
+	plane, err := Build(func(string) string { return "" })
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer plane.Close()
+	for path, body := range map[string]string{"/api/v1/planted-first": "first", "/api/v1/planted-second": "second"} {
+		recorder := httptest.NewRecorder()
+		plane.Handler.ServeHTTP(recorder, httptest.NewRequest(http.MethodGet, path, nil))
+		if recorder.Body.String() != body {
+			t.Errorf("%s served %q, want its own handler's %q", path, recorder.Body.String(), body)
+		}
+		if got := recorder.Result().Header.Get(buildHeaderName); got != commit {
+			t.Errorf("%s: %s = %q, want the running build %q", path, buildHeaderName, got, commit)
+		}
+		if got := recorder.Result().Header.Get(planeHeaderName); got != "go" {
+			t.Errorf("%s: %s = %q, want go", path, planeHeaderName, got)
+		}
+	}
+}
+
+func TestACountMismatchStillClosesTheBuildersCleanup(t *testing.T) {
+	var order []string
+	row := okRow("buildPlantedMismatch", "/api/v1/planted-mismatch", &order, "x")
+	row.Mounts = append(row.Mounts, restMount{Pattern: "/api/v1/planted-mismatch-2", Methods: []string{http.MethodGet}})
+	plantRows(t, row)
+	if _, err := Build(func(string) string { return "" }); err == nil {
+		t.Fatal("a count mismatch did not fail the build")
+	}
+	if !slices.Contains(order, "cleanup:buildPlantedMismatch") {
+		t.Errorf("the builder's cleanup was not closed on a count mismatch: %v", order)
 	}
 }

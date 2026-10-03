@@ -1193,8 +1193,8 @@ func run(f flags) (err error) {
 	}
 
 	// Checked FIRST, ahead of every credential/network step below: both
-	// need no network and (in the default, -query-api-src-unset case) no
-	// filesystem either, so a corpus/coverage problem is refused
+	// need no network and no filesystem either (the query-api route table is
+	// compiled in), so a corpus/coverage problem is refused
 	// immediately rather than after a wasted round-trip -- and, not
 	// incidentally, this ordering is what lets a smoke run from a
 	// directory with no source tree at all prove the coverage check on

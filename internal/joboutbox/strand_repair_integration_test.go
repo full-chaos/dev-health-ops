@@ -854,32 +854,36 @@ func TestStrandRepairAgainstLivePostgres(t *testing.T) {
 			}
 			const outboxScan = "Seq Scan on worker_job_outbox"
 			bindingPattern := regexp.MustCompile(`\n\t\tAND job\.args @> jsonb_build_object\('domain', jsonb_build_object\('id', \w+\.id::text\)\)`)
+			// One subtest per shape, so a failure names the survey it belongs to
+			// and the other shapes are still checked.
 			for _, shape := range repair.shapes {
-				plan := explain(t, shape.survey)
-				if strings.Contains(plan, outboxScan) {
-					t.Fatalf("the %s survey scans the whole outbox:\n%s", shape.name, plan)
-				}
-				if shape.name == providerUnitShapeName {
-					if !strings.Contains(plan, "uq_worker_job_outbox_dedupe_key") {
-						t.Fatalf("the %s survey does not reach the outbox through its dedupe-key index:\n%s",
-							shape.name, plan)
+				t.Run(shape.name, func(t *testing.T) {
+					plan := explain(t, shape.survey)
+					if strings.Contains(plan, outboxScan) {
+						t.Fatalf("the %s survey scans the whole outbox:\n%s", shape.name, plan)
 					}
-					continue
-				}
-				if !strings.Contains(plan, "river_job_args_index") ||
-					!strings.Contains(plan, "uq_worker_job_outbox_river_job_id") {
-					t.Fatalf("the %s survey does not walk River's args index and then the outbox's "+
-						"river_job_id index:\n%s", shape.name, plan)
-				}
-				unbound := bindingPattern.ReplaceAllString(shape.survey, "")
-				if unbound == shape.survey {
-					t.Fatalf("the %s survey carries no River binding to remove; the control below "+
-						"would plan the shipped query twice", shape.name)
-				}
-				if control := explain(t, unbound); !strings.Contains(control, outboxScan) {
-					t.Fatalf("CONTROL: the %s survey WITHOUT the River binding does not scan the outbox, "+
-						"so this fixture cannot tell the two queries apart:\n%s", shape.name, control)
-				}
+					if shape.name == providerUnitShapeName {
+						if !strings.Contains(plan, "uq_worker_job_outbox_dedupe_key") {
+							t.Fatalf("the %s survey does not reach the outbox through its dedupe-key index:\n%s",
+								shape.name, plan)
+						}
+						return
+					}
+					if !strings.Contains(plan, "river_job_args_index") ||
+						!strings.Contains(plan, "uq_worker_job_outbox_river_job_id") {
+						t.Fatalf("the %s survey does not walk River's args index and then the outbox's "+
+							"river_job_id index:\n%s", shape.name, plan)
+					}
+					unbound := bindingPattern.ReplaceAllString(shape.survey, "")
+					if unbound == shape.survey {
+						t.Fatalf("the %s survey carries no River binding to remove; the control below "+
+							"would plan the shipped query twice", shape.name)
+					}
+					if control := explain(t, unbound); !strings.Contains(control, outboxScan) {
+						t.Fatalf("CONTROL: the %s survey WITHOUT the River binding does not scan the outbox, "+
+							"so this fixture cannot tell the two queries apart:\n%s", shape.name, control)
+					}
+				})
 			}
 		})
 	})

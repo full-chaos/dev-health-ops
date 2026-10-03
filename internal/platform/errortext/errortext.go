@@ -77,7 +77,7 @@ func SanitizeHardened(text string, maxLength int) string {
 
 // SanitizeHardenedShapesFirst is the composition of the sync writers' path (CHAOS-7947): the credential shapes FIRST (as that
 // path always did), then the patterns with the former RE2 port's ASCII `\s`/`\b`, then the Python-parity patterns, then the
-// shapes again, then the cap. One engine, two readings: the ASCII pass keeps everything the former RE2 port hid (Python's
+// cap. One engine, two readings: the ASCII pass keeps everything the former RE2 port hid (Python's
 // Unicode `\s` ends a token at a no-break space, RE2's did not; Python sees no boundary between a non-ASCII letter and a key
 // name, RE2 did), the Python pass adds what RE2 missed (a secret behind a no-break space). Every pass only hides more, and the
 // order is the former one: a pass is only ever ADDED after the passes main ran (D4495: a redaction change is monotone). The
@@ -87,7 +87,7 @@ func SanitizeHardenedShapesFirst(text string, maxLength int) string {
 		return text
 	}
 	shapes := logging.RedactCredentialShapes
-	return Truncate(shapes(Redact(redactASCII(shapes(text)))), maxLength)
+	return Truncate(Redact(redactASCII(shapes(text))), maxLength)
 }
 
 // SanitizeHardenedShapesFirstDefault is SanitizeHardenedShapesFirst with Python's default cap of 4000.

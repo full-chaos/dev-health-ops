@@ -1,12 +1,18 @@
 package pythonparity_test
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
+	"encoding/json"
+	"os"
 	"regexp"
 	"strings"
 	"testing"
 
 	"github.com/full-chaos/dev-health-ops/internal/platform/logging"
+	"github.com/full-chaos/dev-health-ops/internal/pythonparity"
 	"github.com/full-chaos/dev-health-ops/internal/syncdispatchruntime"
+	"github.com/full-chaos/dev-health-ops/internal/testsupport/credentialshapes"
 )
 
 // formerSecretPatterns is the sync writers' former RE2 sanitizer (internal/platform/errortext at beec298d34), kept here as a
@@ -48,13 +54,32 @@ var visibleTokenPattern = regexp.MustCompile(`[A-Za-z0-9_\x{80}-\x{10FFFF}]{4,}`
 // TestSyncEntryPointNeverHidesLessThanTheFormerPort is the monotone gate (D4495) for the sync writers' path: for every corpus
 // text, no token of 4 or more characters that the former port hid (absent from its output) is visible in the tip's output.
 // RED on a composition that runs the Python-parity pass before the shapes, or without the ASCII pass.
+// gateTexts is the uncapped corpus plus every code point where RE2's `\s` (ASCII: tab, newline, form feed, carriage return,
+// space) and Python's isspace differ, inside a value after each key form, with and without a non-ASCII letter before the key.
+func gateTexts() []string {
+	var texts []string
+	for _, pair := range sanitizeCorpus() {
+		if pair[1].(int) == 0 {
+			texts = append(texts, pair[0].(string))
+		}
+	}
+	separators := []string{"\u00a0", "\v", "\f", "\u001c", "\u001d", "\u001e", "\u001f", "\u0085", "\u1680", "\u2003", "\u2028", "\u2029", "\u202f", "\u205f", "\u3000", "\t", "\n", "\r", " "}
+	keys := []string{"token=", "api_key:", "Authorization: ", "Bearer ", "secret = ", "Basic "}
+	prefixes := []string{"", "\u0130", "\u0131", "\u00e9", "\u212a", "x "}
+	for _, separator := range separators {
+		for _, key := range keys {
+			for _, prefix := range prefixes {
+				texts = append(texts, prefix+key+"aaaamark"+separator+"bbbbmark", prefix+key+separator+"aaaamark")
+			}
+		}
+	}
+	return texts
+}
+
 func TestSyncEntryPointNeverHidesLessThanTheFormerPort(t *testing.T) {
 	compared, shown := 0, 0
-	for _, pair := range sanitizeCorpus() {
-		text, cap := pair[0].(string), pair[1].(int)
-		if cap != 0 {
-			continue
-		}
+	texts := gateTexts()
+	for _, text := range texts {
 		compared++
 		former, tip := formerSyncSanitize(text), syncdispatchruntime.SanitizeErrorText(text)
 		for _, token := range visibleTokenPattern.FindAllString(text, -1) {
@@ -71,4 +96,65 @@ func TestSyncEntryPointNeverHidesLessThanTheFormerPort(t *testing.T) {
 		t.Fatal("no text compared")
 	}
 	t.Logf("%d texts compared, %d where the tip shows what the former port hid", compared, shown)
+}
+
+// A key that straddles the cap is redacted whole at the parity entry point too: the shapes run before the cap, so the cap cannot
+// cut a key to a fragment below a shape's minimum length.
+func TestParityEntryPointRedactsAKeyAtTheCapWhole(t *testing.T) {
+	key := credentialshapes.Shapes()[5].Values[0]
+	for _, fill := range []int{3900, 3950, 3963, 3980, 3990, 3995} {
+		text := strings.Repeat("x ", fill/2) + key + " and more text after the key"
+		if got := pythonparity.SanitizeErrorTextHardened(text, 4000); strings.Contains(got, key[:12]) {
+			t.Fatalf("filler %d: part of the key survives the cap: ...%q", fill, got[len(got)-60:])
+		}
+	}
+}
+
+// The reason of the ticket, at the sync entry point itself: a secret behind a character that Python's `\s` reads as a space and
+// RE2's does not is hidden (the former port left it).
+func TestSyncEntryPointHidesWhatTheFormerPortMissed(t *testing.T) {
+	for _, in := range []string{"bearer Kghp_1", "Bearer x", "Bearer x", "ſecret=1", "Authorization: Bearer tok", "Bearer abc"} {
+		if got := syncdispatchruntime.SanitizeErrorText(in); got != "[REDACTED]" {
+			t.Errorf("SanitizeErrorText(%q) = %q, want [REDACTED]", in, got)
+		}
+	}
+}
+
+// TestParityEntryPointIsByteIdenticalToMain is the monotone gate (D4495) for pythonparity.SanitizeErrorTextHardened: its
+// composition (Python-parity patterns, credential shapes, cap) did not change, so every output equals what main answered. The
+// golden holds the first 8 bytes of the SHA-256 of main's answer (beec298d34, before the engine moved into errortext) for every
+// gate text, the corpus included: no golden holds a value with the shape of a token, and a changed order, dialect or cap is a
+// different digest. To regenerate, run the function on a worktree of that commit.
+func TestParityEntryPointIsByteIdenticalToMain(t *testing.T) {
+	texts := gateTexts()
+	for _, pair := range sanitizeCorpus() {
+		if pair[1].(int) != 0 {
+			texts = append(texts, pair[0].(string))
+		}
+	}
+	raw, err := os.ReadFile("testdata/errorsanitize_hardened_main.golden.json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var golden struct {
+		Count   int      `json:"count"`
+		Digests []string `json:"digests"`
+	}
+	if err := json.Unmarshal(raw, &golden); err != nil {
+		t.Fatal(err)
+	}
+	if golden.Count != len(texts) || len(golden.Digests) != len(texts) {
+		t.Fatalf("golden holds %d digests for %d texts: the corpus changed, regenerate on main", len(golden.Digests), len(texts))
+	}
+	mismatches := 0
+	for index, text := range texts {
+		sum := sha256.Sum256([]byte(pythonparity.SanitizeErrorTextHardened(text, 4000)))
+		if hex.EncodeToString(sum[:8]) != golden.Digests[index] {
+			mismatches++
+			if mismatches <= 8 {
+				t.Errorf("SanitizeErrorTextHardened(%q, 4000) differs from main's answer", text)
+			}
+		}
+	}
+	t.Logf("%d texts compared, %d differ from main", len(texts), mismatches)
 }

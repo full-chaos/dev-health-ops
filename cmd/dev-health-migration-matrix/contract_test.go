@@ -231,6 +231,72 @@ func TestARoutingSnapshotWithoutTheDocumentDigestIsRefused(t *testing.T) {
 	}
 }
 
+// scratchGitConfig is the front of every git call that a test of this package
+// makes in a scratch repository. Without it, `git commit` (and `git fetch`)
+// start `git maintenance run --auto --quiet` as a child process. On a host
+// whose git runs that step detached it can still write under `.git` when the
+// test returns; Go then cannot remove the temp dir and FAILS the test with
+// "TempDir RemoveAll cleanup: unlinkat .../.git: directory not empty", after
+// the test's own assertion passed (CHAOS-8529: three such red runs in one
+// hour). gc.auto=0 and maintenance.auto=false stop git from starting it.
+var scratchGitConfig = []string{"-c", "gc.auto=0", "-c", "maintenance.auto=false"}
+
+// scratchGit is the ONLY way a test of this package may start git:
+// TestEveryTestGitCallGoesThroughScratchGit fails on a direct exec.Command.
+func scratchGit(args ...string) *exec.Cmd {
+	return exec.Command("git", append(append([]string{}, scratchGitConfig...), args...)...)
+}
+
+// The settings are part of the argument list of every command scratchGit
+// builds, before the caller's own arguments (git reads -c only before the
+// subcommand).
+func TestScratchGitCarriesTheNoMaintenanceSettings(t *testing.T) {
+	got := scratchGit("-C", "somewhere", "commit", "-qm", "x").Args
+	want := []string{"git", "-c", "gc.auto=0", "-c", "maintenance.auto=false", "-C", "somewhere", "commit", "-qm", "x"}
+	if strings.Join(got, "\x00") != strings.Join(want, "\x00") {
+		t.Fatalf("scratchGit args = %q, want %q", got, want)
+	}
+}
+
+// A test file of this package that starts git directly would bring the
+// maintenance child process back. The guard reads the test sources; it fails
+// when it reads none, and when the one allowed call (inside scratchGit) is
+// not found, so it cannot pass by reading nothing.
+func TestEveryTestGitCallGoesThroughScratchGit(t *testing.T) {
+	entries, err := os.ReadDir(".")
+	if err != nil {
+		t.Fatalf("read the package directory: %v", err)
+	}
+	direct := "exec.Command(" + `"git"`
+	read, allowed := 0, 0
+	for _, entry := range entries {
+		if entry.IsDir() || !strings.HasSuffix(entry.Name(), "_test.go") {
+			continue
+		}
+		source, err := os.ReadFile(entry.Name())
+		if err != nil {
+			t.Fatalf("read %s: %v", entry.Name(), err)
+		}
+		read++
+		for number, line := range strings.Split(string(source), "\n") {
+			if !strings.Contains(line, direct) {
+				continue
+			}
+			if strings.Contains(line, "scratchGitConfig") {
+				allowed++
+				continue
+			}
+			t.Errorf("%s:%d starts git directly; use scratchGit so that no maintenance process outlives the test", entry.Name(), number+1)
+		}
+	}
+	if read == 0 {
+		t.Fatal("no _test.go file was read: the guard measured nothing")
+	}
+	if allowed != 1 {
+		t.Fatalf("found %d git calls inside scratchGit, want exactly 1: the guard no longer recognises the helper", allowed)
+	}
+}
+
 // copyContractTree copies every committed file -check reads into a fresh
 // root, so a test can alter one of them and run the real -check on it.
 func copyContractTree(t *testing.T) string {
@@ -312,7 +378,7 @@ func TestCheckFailsWhenOpsShaIsNotAnAncestorOfHEAD(t *testing.T) {
 		t.Helper()
 		full := append([]string{"-C", root, "-c", "user.email=t@example.com",
 			"-c", "user.name=t", "-c", "commit.gpgsign=false"}, args...)
-		out, err := exec.Command("git", full...).CombinedOutput()
+		out, err := scratchGit(full...).CombinedOutput()
 		if err != nil {
 			t.Fatalf("git %v: %v %s", args, err, out)
 		}
@@ -366,7 +432,7 @@ func gitRunFor(t *testing.T, dir string, args ...string) string {
 	t.Helper()
 	full := append([]string{"-C", dir, "-c", "user.email=t@example.com",
 		"-c", "user.name=t", "-c", "commit.gpgsign=false"}, args...)
-	out, err := exec.Command("git", full...).CombinedOutput()
+	out, err := scratchGit(full...).CombinedOutput()
 	if err != nil {
 		t.Fatalf("git %v: %v %s", args, err, out)
 	}
@@ -428,7 +494,7 @@ func TestOpsShaCheckDoesNotTrustAFalseNegativeFromAShallowClone(t *testing.T) {
 	writeCommit("3", "c3")
 
 	clone := t.TempDir()
-	if out, err := exec.Command("git", "clone", "-q", origin, clone).CombinedOutput(); err != nil {
+	if out, err := scratchGit("clone", "-q", origin, clone).CombinedOutput(); err != nil {
 		t.Fatalf("git clone: %v %s", err, out)
 	}
 	// Sanity: on an ordinary full clone, ancestry is real and true.
@@ -439,7 +505,7 @@ func TestOpsShaCheckDoesNotTrustAFalseNegativeFromAShallowClone(t *testing.T) {
 	// The re-shallow: a fetch of a commit the clone ALREADY has in full,
 	// exactly as the observed CI step did against its own already-fetched
 	// base sha.
-	if out, err := exec.Command("git", "-C", clone, "fetch", "-q", "--depth=1", "origin", laterSha).CombinedOutput(); err != nil {
+	if out, err := scratchGit("-C", clone, "fetch", "-q", "--depth=1", "origin", laterSha).CombinedOutput(); err != nil {
 		t.Fatalf("git fetch --depth=1: %v %s", err, out)
 	}
 	if shallow, err := gitOutput(clone, "rev-parse", "--is-shallow-repository"); err != nil || shallow != "true" {
@@ -663,7 +729,7 @@ func TestRenderFailsOnALiveRowTheCatalogCannotDispatch(t *testing.T) {
 		{"-c", "user.email=t@example.com", "-c", "user.name=t", "-c", "commit.gpgsign=false", "add", "-A"},
 		{"-c", "user.email=t@example.com", "-c", "user.name=t", "-c", "commit.gpgsign=false", "commit", "-qm", "scratch"},
 	} {
-		if out, err := exec.Command("git", append([]string{"-C", root}, args...)...).CombinedOutput(); err != nil {
+		if out, err := scratchGit(append([]string{"-C", root}, args...)...).CombinedOutput(); err != nil {
 			t.Fatalf("git %v: %v %s", args, err, out)
 		}
 	}

@@ -1233,7 +1233,9 @@ type ReviewEdgesInput struct {
 	SinceDate graphqldate.Date `json:"sinceDate"`
 	UntilDate graphqldate.Date `json:"untilDate"`
 	RepoIds   []string         `json:"repoIds,omitempty"`
-	Limit     int              `json:"limit"`
+	// Team ids (CHAOS-7785). Narrows the edges to the repositories these teams OWN (team_repo_ownership, as of now); person membership is never read. Combined with ``repoIds`` the two both apply (a pair must be on a listed repository and on a team-owned one).
+	TeamIds []string `json:"teamIds,omitempty"`
+	Limit   int      `json:"limit"`
 }
 
 type ReviewEdgesResult struct {

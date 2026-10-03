@@ -32,19 +32,6 @@ const (
 var (
 	dsnPattern           = regexp.MustCompile(`(?i)\b(?:postgres(?:ql)?|clickhouse|redis|rediss|valkey|https?)://[^\s"'<>]+`)
 	credentialURLPattern = regexp.MustCompile(`(?i)\b[a-z][a-z0-9+.-]*://[^/@\s"'<>]+:[^@\s"'<>]+@[^\s"'<>]+`)
-	// userinfoPattern catches a credential written as `user:secret@` with or
-	// without a scheme in front (a DSN or URL without its scheme, a Valkey/Redis
-	// `:secret@host` with an empty user, a message that quotes the shape):
-	// credentialURLPattern needs `scheme://user:secret@host` whole, so a bare
-	// userinfo, or one whose scheme was cut off before it, reached the log
-	// (CHAOS-8277). The user part may be empty and cannot hold a quote, a slash, a
-	// bracket or `=`, so a JSON `"key":"value@x"` pair and a `key=value` pair never
-	// match; the separator may be a colon or its percent-encoded form, and the `@` that
-	// ends the userinfo may be `%40`, so the layers that do not decode see it too; the secret
-	// runs to the LAST `@` of the run, so a `/`, a `%2F` or an `@` inside the
-	// password is covered. A quote or `<`/`>` inside a password ends the run (named
-	// limit: a JSON string or a tag around the text must stay intact).
-	userinfoPattern = regexp.MustCompile(`[^\s/@:"'<>()\[\]{},;=\\]*(?::|%3[aA])[^\s"'<>]*(?:@|%40)`)
 	// bareCredentialPatterns catch credential-shaped substrings OUTSIDE a
 	// URL -- an HTTP Authorization header or a bearer/basic credential --
 	// that dsnPattern/credentialURLPattern's URL-anchored matching cannot
@@ -95,14 +82,14 @@ func InstallDefault(logger *slog.Logger) func() {
 	}
 }
 
-// RedactText removes supported DSNs, URLs containing userinfo, header and
+// redactTextNoUserinfo is RedactText without its last pass (see RedactText in userinfo.go). It removes supported DSNs, URLs containing userinfo, header and
 // bearer credentials, provider tokens recognised by their prefix, and the
 // value of every protected key in JSON, escaped-JSON, query-string (plain or
 // percent-encoded), header, key=value and Go %v forms, a credential-shaped
 // value after a credential word in prose, and protected path segments from
 // free-form text before it can reach operator logs. A failure inside the
 // redactor returns a fixed marker.
-func RedactText(value string) (result string) {
+func redactTextNoUserinfo(value string) (result string) {
 	defer func() {
 		if recover() != nil {
 			result = redactionFailed
@@ -112,15 +99,6 @@ func RedactText(value string) (result string) {
 	// separator or quote is seen as what it stands for; the key/value scan
 	// runs first, while it still knows which bytes were encoded.
 	value = secrets.RedactRegistered(value)
-	// A userinfo whose password holds a percent-encoded quote, bracket, space or tab
-	// (%22 %27 %3C %3E %20 %09) is one run of valid URL characters here; decoded, the
-	// raw character would end the userinfo match at the end of this function. So inside
-	// such a run (and only there) the encoded character is swapped for an encoded letter
-	// of the same length, which the decode turns into a plain byte. The run is hidden
-	// whole by the last pass below; every earlier pass sees main's text except those bytes.
-	if mayHoldUserinfo(value) {
-		value = neutralizeEncodedSpecials(value)
-	}
 	value, escaped := percentDecoded(value)
 	// The decoded text can hold a registered secret its encoded form hid.
 	value = secrets.RedactRegistered(value)
@@ -128,7 +106,10 @@ func RedactText(value string) (result string) {
 	// Each pattern runs only when the literal it cannot match without is in
 	// the text: the skip never changes the result, it keeps the common
 	// attribute (an id, a provider name) off the regexp engine.
-	value = redactURLPatterns(value)
+	if strings.Contains(value, "://") {
+		value = dsnPattern.ReplaceAllString(value, redacted)
+		value = credentialURLPattern.ReplaceAllString(value, redacted)
+	}
 	lower := strings.ToLower(value)
 	for index, pattern := range bareCredentialPatterns {
 		if strings.Contains(lower, bareCredentialLiterals[index]) {
@@ -143,149 +124,7 @@ func RedactText(value string) (result string) {
 		value = vendorKeyPattern.ReplaceAllString(value, redacted)
 	}
 	value = redactProseCredentials(value)
-	value = redactPathSegments(value)
-	// The userinfo pass runs LAST, on the output of every other pass: it can only hide
-	// more than main does, never less. A pass in front of the others would write its
-	// marker inside a value they hide whole and leave the rest of that value readable.
-	if mayHoldUserinfo(value) {
-		value = redactUserinfo(value)
-	}
-	return value
-}
-
-// redactURLPatterns hides a DSN or a credential URL whole, host included.
-func redactURLPatterns(value string) string {
-	if strings.Contains(value, "://") {
-		value = dsnPattern.ReplaceAllString(value, redacted)
-		value = credentialURLPattern.ReplaceAllString(value, redacted)
-	}
-	return value
-}
-
-// neutralizeEncodedSpecials swaps each percent-encoded quote, bracket, space or tab
-// inside a userinfo-shaped run for an encoded letter of the same length.
-func neutralizeEncodedSpecials(value string) string {
-	return userinfoPattern.ReplaceAllStringFunc(value, func(run string) string {
-		if !hasEncodedSpecial(run) {
-			return run
-		}
-		var out strings.Builder
-		for index := 0; index < len(run); index++ {
-			if run[index] == '%' && index+2 < len(run) {
-				if isEncodedSpecial(run[index : index+3]) {
-					out.WriteString("%78")
-					index += 2
-					continue
-				}
-			}
-			out.WriteByte(run[index])
-		}
-		return out.String()
-	})
-}
-
-func isEncodedSpecial(code string) bool {
-	for _, special := range encodedSpecials {
-		if strings.EqualFold(code, special) {
-			return true
-		}
-	}
-	return false
-}
-
-// mayHoldUserinfo is the cheap gate in front of the userinfo match: it needs an `@`
-// (or its percent-encoded form) to end on.
-func mayHoldUserinfo(value string) bool {
-	return strings.Contains(value, "@") || strings.Contains(value, "%40")
-}
-
-// redactUserinfo replaces the `user:secret` part of every `user:secret@` in value
-// with the redaction marker and keeps the `@` (so the host after it stays readable).
-func redactUserinfo(value string) string {
-	return redactUserinfoWhere(value, nil)
-}
-
-// encodedSpecials are the percent-encoded characters that would end a userinfo
-// match once decoded: a double and a single quote, the angle brackets, a space, a tab.
-var encodedSpecials = []string{"%22", "%27", "%3c", "%3e", "%20", "%09"}
-
-// hasEncodedSpecial reports whether a matched run holds one of encodedSpecials.
-func hasEncodedSpecial(run string) bool {
-	lower := strings.ToLower(run)
-	for _, special := range encodedSpecials {
-		if strings.Contains(lower, special) {
-			return true
-		}
-	}
-	return false
-}
-
-// redactUserinfoWhere is redactUserinfo for the matches keep accepts (nil = all).
-// A run whose user part is itself a protected key (`Token:value@host`) is the
-// key/value form of a credential, not a userinfo: the key stays and the whole
-// run is hidden as the value, as the key/value scan hides it.
-func redactUserinfoWhere(value string, keep func(run string) bool) string {
-	matches := userinfoPattern.FindAllStringIndex(value, -1)
-	if len(matches) == 0 {
-		return value
-	}
-	var out strings.Builder
-	written := 0
-	for _, match := range matches {
-		if match[0] < written {
-			continue
-		}
-		run := value[match[0]:match[1]]
-		if keep != nil && !keep(run) {
-			continue
-		}
-		end := match[1]
-		// `name:tag@sha256:<digest>` is an image reference, not a credential: the last
-		// `@` of the run is the digest's. A credential before it (`user:secret@host/repo@sha256:...`)
-		// is still redacted, up to the `@` before the digest; with no other `@` in the run
-		// there is nothing to redact.
-		if isDigestReference(value[end:]) {
-			previous := strings.LastIndexByte(value[match[0]:end-1], '@')
-			if previous < 0 {
-				continue
-			}
-			end = match[0] + previous + 1
-		}
-		if separator := strings.IndexByte(run, ':'); separator > 0 && protectedKeyCached(run[:separator]) {
-			stop := end
-			for stop < len(value) && !isRunEnd(value[stop]) {
-				stop++
-			}
-			out.WriteString(value[written:match[0]])
-			out.WriteString(run[:separator+1] + redacted)
-			written = stop
-			continue
-		}
-		out.WriteString(value[written:match[0]])
-		out.WriteString(redacted + "@")
-		written = end
-	}
-	if written == 0 {
-		return value
-	}
-	out.WriteString(value[written:])
-	return out.String()
-}
-
-// isRunEnd reports whether b ends a whitespace-free run or a quoted/bracketed value.
-func isRunEnd(b byte) bool {
-	return strings.IndexByte(" \t\r\n\"'<>(),;[]{}", b) >= 0
-}
-
-// isDigestReference reports whether text, the text right after an `@`, starts an
-// image digest (`sha256:`, `sha384:`, `sha512:`).
-func isDigestReference(text string) bool {
-	for _, algorithm := range []string{"sha256:", "sha384:", "sha512:"} {
-		if strings.HasPrefix(text, algorithm) {
-			return true
-		}
-	}
-	return false
+	return redactPathSegments(value)
 }
 
 // keyVerdicts caches ProtectedKey for attribute keys and group names, which

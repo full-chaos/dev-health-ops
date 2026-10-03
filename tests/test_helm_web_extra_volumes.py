@@ -15,6 +15,7 @@ invalid Kubernetes YAML (a mapping can't repeat a key) and, depending on
 YAML-merge behavior, silently drop one source's entries.
 """
 
+import os
 from pathlib import Path
 from subprocess import run
 
@@ -114,3 +115,121 @@ def _json(obj: dict) -> str:
     import json
 
     return json.dumps(obj)
+
+
+def test_web_backend_url_is_required() -> None:
+    """CHAOS-8310: web.env.BACKEND_URL has no chart default. With nothing set the render fails and the
+    message names the key (the suite's helm wrapper is bypassed with HELM_SHIM_OFF=1); web.enabled=false
+    needs none; an explicit value reaches the Deployment verbatim."""
+    env = {**os.environ, "HELM_SHIM_OFF": "1"}
+    refused = run(
+        ["helm", "template", "t", str(_CHART)], capture_output=True, text=True, env=env
+    )
+    assert refused.returncode != 0, "a render without web.env.BACKEND_URL succeeded"
+    assert "web.env.BACKEND_URL is required whenever web.enabled=true" in refused.stderr
+    assert "web.backendFromRelease=true" in refused.stderr
+    off = run(
+        ["helm", "template", "t", str(_CHART), "--set", "web.enabled=false"],
+        capture_output=True,
+        text=True,
+        env=env,
+    )
+    assert off.returncode == 0, off.stderr
+    explicit = run(
+        [
+            "helm",
+            "template",
+            "t",
+            str(_CHART),
+            "--set",
+            "web.env.BACKEND_URL=http://explicit.example:9000",
+        ],
+        capture_output=True,
+        text=True,
+        env=env,
+    )
+    assert explicit.returncode == 0, explicit.stderr
+    assert 'value: "http://explicit.example:9000"' in explicit.stdout
+
+
+def test_quickstart_profile_carries_its_own_backend_url() -> None:
+    """CHAOS-8310: the suite's helm wrapper (--set) would hide a values FILE's own value, so the
+    quickstart profile is rendered with the wrapper off, as its usage line says. The release form is
+    release-relative: the value the chart rendered before CHAOS-8310 for each release name."""
+    env = {**os.environ, "HELM_SHIM_OFF": "1"}
+    for release, want in (
+        ("dev-health", "http://dev-health-api:8000"),
+        ("lane-a", "http://lane-a-dev-health-api:8000"),
+    ):
+        done = run(
+            [
+                "helm",
+                "template",
+                release,
+                str(_CHART),
+                "-f",
+                str(_CHART / "values-quickstart.yaml"),
+            ],
+            capture_output=True,
+            text=True,
+            env=env,
+        )
+        assert done.returncode == 0, done.stderr
+        assert f'value: "{want}"' in done.stdout, release
+
+
+def test_quickstart_release_form_follows_api_port() -> None:
+    """CHAOS-8310: the release form follows api.port, as the pre-8310 default did (a fixed 8000 would pass
+    the test above)."""
+    env = {**os.environ, "HELM_SHIM_OFF": "1"}
+    done = run(
+        [
+            "helm",
+            "template",
+            "lane-a",
+            str(_CHART),
+            "-f",
+            str(_CHART / "values-quickstart.yaml"),
+            "--set",
+            "api.port=9000",
+        ],
+        capture_output=True,
+        text=True,
+        env=env,
+    )
+    assert done.returncode == 0, done.stderr
+    assert 'value: "http://lane-a-dev-health-api:9000"' in done.stdout
+
+
+def test_web_backend_url_and_backend_from_release_are_exclusive() -> None:
+    """CHAOS-8310: exactly one of web.env.BACKEND_URL and web.backendFromRelease; both is refused,
+    naming both; a misspelt opt-in key leaves the render refused as unset."""
+    env = {**os.environ, "HELM_SHIM_OFF": "1"}
+    both = run(
+        [
+            "helm",
+            "template",
+            "t",
+            str(_CHART),
+            "--set",
+            "web.env.BACKEND_URL=http://x:1",
+            "--set",
+            "web.backendFromRelease=true",
+        ],
+        capture_output=True,
+        text=True,
+        env=env,
+    )
+    assert both.returncode != 0
+    assert (
+        "web.env.BACKEND_URL and web.backendFromRelease=true are both set"
+        in both.stderr
+    )
+    typo = run(
+        ["helm", "template", "t", str(_CHART), "--set", "web.backendFromRelese=true"],
+        capture_output=True,
+        text=True,
+        env=env,
+    )
+    assert typo.returncode != 0
+    assert "web.env.BACKEND_URL is required" in typo.stderr

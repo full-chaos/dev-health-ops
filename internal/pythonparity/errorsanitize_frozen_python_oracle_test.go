@@ -8,6 +8,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/full-chaos/dev-health-ops/internal/platform/errortext"
 	"github.com/full-chaos/dev-health-ops/internal/pythonparity"
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/programoracle"
 )
@@ -67,6 +68,14 @@ func sanitizeCorpus() [][2]any {
 		}
 		out = append(out, [2]any{b.String(), cap})
 	}
+	// Appended AFTER the generated texts so no earlier entry moves: the cases where the case fold of the dotted and dotless i, the long s and the
+	// upper-case x decides a match (the second vetter of CHAOS-7947 showed the frozen corpus did not pin them): a key made with those letters, and the
+	// first character of a URL scheme.
+	for _, text := range []string{
+		"ap\u0131key=v1", "ap\u0130_key=v1", "\u0131rc://user:pass@host", "\u0130maps://user:pass@host", "\u017fsh://:pass@host", "XOXB-1111111111-AAAAAAAA",
+	} {
+		out = append(out, [2]any{text, 0})
+	}
 	return out
 }
 
@@ -93,18 +102,39 @@ func TestSanitizeErrorTextMatchesFrozenPython(t *testing.T) {
 	if len(want) != len(corpus) {
 		t.Fatalf("python answered %d for %d inputs", len(want), len(corpus))
 	}
-	mismatches := 0
-	for index, pair := range corpus {
-		text, cap := pair[0].(string), pair[1].(int)
-		got := pythonparity.SanitizeErrorText(text, cap)
-		sum := sha256.Sum256([]byte(got))
-		if digest := hex.EncodeToString(sum[:]); digest != want[index].SHA256 || len(got) != want[index].Bytes {
-			mismatches++
-			if mismatches <= 12 {
-				t.Errorf("pythonparity.SanitizeErrorText(%q, %d)\n go     %q (%d bytes, sha256 %s)\n python %d bytes, sha256 %s",
-					text, cap, got, len(got), digest, want[index].Bytes, want[index].SHA256)
+	// Every Go port of the sanitizer answers the SAME corpus against the SAME frozen Python answers (CHAOS-7947): a port that
+	// can disagree is found here by name, not by a hand-picked case. errortext.Sanitize has one fixed cap (4000, which no
+	// corpus text reaches), so it is compared on the entries without a cap.
+	ports := []struct {
+		name  string
+		sanit func(text string, cap int) (string, bool)
+	}{
+		{"pythonparity.SanitizeErrorText", func(text string, cap int) (string, bool) { return pythonparity.SanitizeErrorText(text, cap), true }},
+		{"errortext.Truncate(errortext.Redact)", func(text string, cap int) (string, bool) {
+			return errortext.Truncate(errortext.Redact(text), 4000), cap == 0
+		}},
+	}
+	for _, port := range ports {
+		compared, mismatches := 0, 0
+		for index, pair := range corpus {
+			text, cap := pair[0].(string), pair[1].(int)
+			got, comparable := port.sanit(text, cap)
+			if !comparable {
+				continue
+			}
+			compared++
+			sum := sha256.Sum256([]byte(got))
+			if digest := hex.EncodeToString(sum[:]); digest != want[index].SHA256 || len(got) != want[index].Bytes {
+				mismatches++
+				if mismatches <= 12 {
+					t.Errorf("%s(%q, %d)\n go     %q (%d bytes, sha256 %s)\n python %d bytes, sha256 %s",
+						port.name, text, cap, got, len(got), digest, want[index].Bytes, want[index].SHA256)
+				}
 			}
 		}
+		if compared == 0 {
+			t.Fatalf("%s: no entry compared", port.name)
+		}
+		t.Logf("%s: %d strings compared, %d mismatches", port.name, compared, mismatches)
 	}
-	t.Logf("%d strings compared, %d mismatches", len(corpus), mismatches)
 }

@@ -23,7 +23,7 @@ const producerIdentity = "python 3.14.7\nunicodedata 16.0.0\nlimits 5.8.0\nuvico
 // golden starts as "PIN:" + its file name without ".json".
 var goldenPins = map[string]string{
 	"forwarded-scheme.golden.json": "d3ecbab64211143fc98bd5481f8f0d720b639ef19781e760abcac12d77ac1b6a",
-	"parse-limit.golden.json":      "9825660294a4cb0c2ecb1523c244d9187bde892df8e4bdccdcf2ea15cfd138c6",
+	"parse-limit.golden.json":      "f5729134007ebf3cd6ad81ab90d942568a7e47f01f37dc024128880185ade2fb",
 }
 
 // goldens is the set of this package's frozen Python answers.

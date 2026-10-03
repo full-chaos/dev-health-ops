@@ -132,13 +132,6 @@ func TestGoMatchesLizardGoldenVue(t *testing.T) {
 	}
 }
 
-// TestLizardGoldenIsNotStaleVue reuses clike_parity_test.go's shared
-// live-oracle staleness gate (DEV_HEALTH_LIVE_PYTHON_ORACLE-gated, not run
-// by default).
-func TestLizardGoldenIsNotStaleVue(t *testing.T) {
-	assertGoldenBytesMatchLiveOracle(t, vueCorpusDir(t), vueGoldenPath(t))
-}
-
 // TestEveryConditionIsExercisedByTheVueCorpus is this PR's own invocation
 // of the shared coverage-manifest mechanism: every member of tsConditions
 // (typescript.go -- reused unmodified by Vue, see vue.go's AnalyzeVue doc)

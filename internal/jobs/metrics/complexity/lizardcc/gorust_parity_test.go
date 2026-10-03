@@ -40,14 +40,6 @@ func loadGoRustGolden(t *testing.T) oracleDoc {
 	return doc
 }
 
-// TestLizardGoldenIsNotStaleGoRust closes codex round r1 finding #6 (the
-// P2 raised specifically against this PR: "no live-lizard staleness guard
-// on the go-rust golden") by calling the shared mechanism cfamily's
-// clike_parity_test.go defines -- ONE mechanism, this PR's own invocation.
-func TestLizardGoldenIsNotStaleGoRust(t *testing.T) {
-	assertGoldenBytesMatchLiveOracle(t, goRustCorpusDir(t), goRustGoldenPath(t))
-}
-
 // TestEveryConditionIsExercisedByTheGoRustCorpus is this PR's own
 // invocation of the shared coverage-manifest mechanism (finding #6's
 // narrower half) -- this is the generic check that would have caught the

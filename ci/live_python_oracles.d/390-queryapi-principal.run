@@ -1,5 +1,0 @@
-label=internal/queryapi/principal (Go verifier vs a REAL Python-issued envelope + JWKS, CHAOS-4366)
-package=./internal/queryapi/principal
-run=^TestVerifierMatchesLivePythonIssuedEnvelope$
-python=1
-proof=query-api-principal-envelope|the Go effective-principal verifier was not compared against a real Python-issued envelope

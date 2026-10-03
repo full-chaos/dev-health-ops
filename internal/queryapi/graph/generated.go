@@ -10704,7 +10704,7 @@ type TestOpsJobFailureGroup {
   workflowName: String
   jobName: String!
   """
-  The CI provider of the runs (` + "`" + `` + "`" + `github` + "`" + `` + "`" + `, ` + "`" + `` + "`" + `gitlab` + "`" + `` + "`" + `). Null = the job runs have no stored pipeline row.
+  The CI provider of the runs, as the pipeline row stores it (for example ` + "`" + `` + "`" + `github_actions` + "`" + `` + "`" + `). Null = the job runs have no stored pipeline row.
   """
   provider: String
   """

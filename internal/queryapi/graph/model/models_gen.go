@@ -1444,7 +1444,7 @@ type TestOpsJobFailureGroup struct {
 	// The workflow (GitHub Actions) or pipeline (GitLab CI) name of the runs. Null = the job runs have no stored pipeline row, or the row has no name.
 	WorkflowName *string `json:"workflowName,omitempty"`
 	JobName      string  `json:"jobName"`
-	// The CI provider of the runs (``github``, ``gitlab``). Null = the job runs have no stored pipeline row.
+	// The CI provider of the runs, as the pipeline row stores it (for example ``github_actions``). Null = the job runs have no stored pipeline row.
 	Provider *string `json:"provider,omitempty"`
 	// Job runs of this group that started in the window and reached a result (success, failure or cancelled). A skipped, queued or running job is not a run.
 	Runs int `json:"runs"`

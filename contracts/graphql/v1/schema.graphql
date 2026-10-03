@@ -345,6 +345,8 @@ type AiAttributedPr {
   workType: String
   teamId: String
   mergedAt: DateTime
+  repoName: String
+  teamName: String
 }
 
 type AiAttributedPrsResult {
@@ -496,6 +498,7 @@ input CapacityForecastFilterInput {
 
 input CapacityForecastInput {
   teamId: String = null
+  teamIds: [String!] = null
   workScopeId: String = null
   targetItems: Int = null
   targetDate: Date = null

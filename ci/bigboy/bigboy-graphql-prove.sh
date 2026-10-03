@@ -69,7 +69,7 @@ if [ "$(printf '%s\n' "$PROVE_ORG" | grep -c .)" != 1 ]; then st local-org 1; ec
 st local-org 0; export PROVE_ORG PROVE_ARTIFACT_DIR="$OUT/proof"
 
 catalog=$OUT/catalog.json
-gh api "repos/full-chaos/dev-health-ops/contents/src/dev_health_ops/api/graphql/go_api_operations.json?ref=$NEW" -H 'Accept: application/vnd.github.raw' > "$catalog" 2>/dev/null && chmod 644 "$catalog"
+gh api "repos/full-chaos/dev-health-ops/contents/contracts/graphql/v1/go_api_operations.json?ref=$NEW" -H 'Accept: application/vnd.github.raw' > "$catalog" 2>/dev/null && chmod 644 "$catalog"
 U="-registry-url http://query-api:8090/registry -buildinfo-url http://query-api:8090/buildinfo"
 
 vt() { docker compose "${BASE[@]}" run --rm --no-deps -T -e PROVE_ORG -v "$catalog:/catalog.json:ro" venue-tools "$1"; }

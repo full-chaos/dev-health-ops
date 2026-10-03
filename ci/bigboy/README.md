@@ -261,7 +261,7 @@ Every check below fails loud with a named finding; none can pass on an empty or 
 - **Inside a cut:** `bigboy-cut.sh` fetches the edge catalog at the cut's sha into
   `_records/bigboy-<sha8>.catalog.json` and exports it as `DHO_SMOKE_CATALOG_FILE`. Nothing else to set.
 - **Standalone (no cut):** set `DHO_SMOKE_OPS_SHA` to the ops sha bigboy is running (the last cut's
-  full sha). The script fetches `src/dev_health_ops/api/graphql/go_api_operations.json` at that sha
+  full sha). The script fetches `contracts/graphql/v1/go_api_operations.json` at that sha
   with `gh api`. Without `DHO_SMOKE_CATALOG_FILE` or `DHO_SMOKE_OPS_SHA` it fails with exit 1 and names
   both variables. Example: `DHO_SMOKE_OPS_SHA=<full sha> bash ci/bigboy/web-path-smoke.sh`.
 - Both need `DHO_SMOKE_ADMIN_EMAIL` and `DHO_SMOKE_ADMIN_PASSWORD_FILE` in `ops/.env`.

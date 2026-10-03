@@ -160,12 +160,14 @@ func ResolveForecast(
 ) (*model.CapacityForecast, error) {
 	started := time.Now()
 
+	var teamIDs []string
 	var teamID, workScopeID *string
 	var targetItems *int
 	var targetDate *graphqldate.Date
 	historyDays, simulations := defaultHistoryDays, defaultSimulations
 	if input != nil {
-		teamID, workScopeID = input.TeamID, input.WorkScopeID
+		teamIDs, teamID = selectedTeams(input)
+		workScopeID = input.WorkScopeID
 		targetItems, targetDate = input.TargetItems, input.TargetDate
 		historyDays, simulations = input.HistoryDays, input.Simulations
 	}
@@ -222,7 +224,7 @@ func ResolveForecast(
 		}
 	}
 
-	history, err := loadThroughput(ctx, client, orgID, teamID, workScopeID, historyDays, now)
+	history, err := loadThroughput(ctx, client, orgID, teamIDs, workScopeID, historyDays, now)
 	if err != nil {
 		return nil, err
 	}
@@ -231,7 +233,7 @@ func ResolveForecast(
 		// or a null response is indistinguishable from a broken predicate.
 		slog.WarnContext(ctx, "query_api.capacity_forecast.empty",
 			"org_id", orgID,
-			"team_id", stringOrOrgWide(teamID),
+			"team_ids", teamsForLog(teamIDs),
 			"work_scope_id", stringOrOrgWide(workScopeID),
 			"history_days", historyDays,
 			"reason", "no throughput history in the requested window",
@@ -240,7 +242,7 @@ func ResolveForecast(
 		return nil, nil
 	}
 
-	backlog, err := loadBacklog(ctx, client, orgID, teamID, workScopeID)
+	backlog, err := loadBacklog(ctx, client, orgID, teamIDs, workScopeID)
 	if err != nil {
 		return nil, err
 	}
@@ -249,7 +251,7 @@ func ResolveForecast(
 	if items <= 0 {
 		slog.WarnContext(ctx, "query_api.capacity_forecast.empty",
 			"org_id", orgID,
-			"team_id", stringOrOrgWide(teamID),
+			"team_ids", teamsForLog(teamIDs),
 			"work_scope_id", stringOrOrgWide(workScopeID),
 			"history_days", historyDays,
 			"backlog_size", backlog,
@@ -292,7 +294,7 @@ func ResolveForecast(
 		// request. A silent revert of the formatter is otherwise invisible
 		// here -- the resolver keeps serving and keeps logging.
 		"computed_at_format", graphqldate.WireFormatLabel,
-		"team_id", stringOrOrgWide(teamID),
+		"team_ids", teamsForLog(teamIDs),
 		"work_scope_id", stringOrOrgWide(workScopeID),
 		"history_days", historyDays,
 		"history_samples", len(history),
@@ -305,6 +307,37 @@ func ResolveForecast(
 	)
 
 	return forecastToModel(now, teamID, workScopeID, backlog, items, targetDate, result), nil
+}
+
+// selectedTeams returns the teams the forecast reads and the single team the
+// response is labelled with.
+//
+// CHAOS-7964: teamIds wins; the deprecated teamId is the one-item list it
+// always meant. Empty ids are dropped and repeats collapse (order kept), so
+// ["a", "", "a"] is one team. The label is the team only when exactly one is
+// selected; several teams carry no teamId -- no invented "first team". The
+// deprecated path echoes teamId exactly as sent, as before.
+func selectedTeams(input *model.CapacityForecastInput) ([]string, *string) {
+	if len(input.TeamIds) == 0 {
+		if input.TeamID != nil && *input.TeamID != "" {
+			return []string{*input.TeamID}, input.TeamID
+		}
+		return nil, input.TeamID
+	}
+	seen := make(map[string]struct{}, len(input.TeamIds))
+	ids := make([]string, 0, len(input.TeamIds))
+	for _, id := range input.TeamIds {
+		if _, dup := seen[id]; id == "" || dup {
+			continue
+		}
+		seen[id] = struct{}{}
+		ids = append(ids, id)
+	}
+	if len(ids) == 1 {
+		only := ids[0]
+		return ids, &only
+	}
+	return ids, nil
 }
 
 // resolveTargetItems ports `items = target_items if target_items else backlog`.
@@ -374,6 +407,14 @@ func dateOrNil(moment *time.Time) *graphqldate.Date {
 	}
 	date := graphqldate.New(*moment)
 	return &date
+}
+
+// teamsForLog renders the selected teams for a log line; none is org-wide.
+func teamsForLog(teamIDs []string) string {
+	if len(teamIDs) == 0 {
+		return "org-wide"
+	}
+	return strings.Join(teamIDs, ",")
 }
 
 // stringOrOrgWide renders an optional scope for a log line, so an absent scope

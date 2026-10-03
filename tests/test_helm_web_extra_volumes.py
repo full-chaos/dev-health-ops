@@ -178,6 +178,29 @@ def test_quickstart_profile_carries_its_own_backend_url() -> None:
         assert f'value: "{want}"' in done.stdout, release
 
 
+def test_quickstart_release_form_follows_api_port() -> None:
+    """CHAOS-8310: the release form follows api.port, as the pre-8310 default did (a fixed 8000 would pass
+    the test above)."""
+    env = {**os.environ, "HELM_SHIM_OFF": "1"}
+    done = run(
+        [
+            "helm",
+            "template",
+            "lane-a",
+            str(_CHART),
+            "-f",
+            str(_CHART / "values-quickstart.yaml"),
+            "--set",
+            "api.port=9000",
+        ],
+        capture_output=True,
+        text=True,
+        env=env,
+    )
+    assert done.returncode == 0, done.stderr
+    assert 'value: "http://lane-a-dev-health-api:9000"' in done.stdout
+
+
 def test_web_backend_url_and_backend_from_release_are_exclusive() -> None:
     """CHAOS-8310: exactly one of web.env.BACKEND_URL and web.backendFromRelease; both is refused,
     naming both; a misspelt opt-in key leaves the render refused as unset."""

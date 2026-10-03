@@ -49,7 +49,7 @@ spec:
               {{- if .Values.web.backendFromRelease }}
               value: {{ printf "http://%s-api:%d" (include "dev-health.fullname" .) (.Values.api.port | int) | quote }}
               {{- else }}
-              value: {{ required "web.env.BACKEND_URL is required whenever web.enabled=true (CHAOS-8310): it is the base URL of the backend web's server-side requests go to -- REST (go-api) and /graphql (query-api) are different Go services, so no single in-chart default is correct. Set web.env.BACKEND_URL explicitly for this environment (for example the ingress host that fans out both), or set web.backendFromRelease=true to use this release's own Python api Service (http://<release>-api:<api.port>, the pre-CHAOS-8310 default; CHAOS-8314 retargets it), or web.enabled=false." $backendURL | quote }}
+              value: {{ required "web.env.BACKEND_URL is required whenever web.enabled=true (CHAOS-8310): it is the base URL of the backend web's server-side requests go to -- REST (go-api) and /graphql (query-api) are different Go services, so no single in-chart default is correct. Set web.env.BACKEND_URL explicitly for this environment (for example the ingress host that fans out both), or set web.backendFromRelease=true to use this release's own Python api Service (http://<fullname>-api:<api.port>, the pre-CHAOS-8310 default; CHAOS-8314 retargets it), or web.enabled=false." $backendURL | quote }}
               {{- end }}
             - name: AUTH_SECRET
               {{- if .Values.web.env.AUTH_SECRET }}

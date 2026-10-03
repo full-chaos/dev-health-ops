@@ -100,6 +100,22 @@ func TestQuickstartProfileCarriesItsOwnBackendURL(t *testing.T) {
 	}
 }
 
+// CHAOS-8310: the release form follows api.port, as the pre-8310 default did (a fixed 8000 would be green above).
+func TestQuickstartReleaseFormFollowsAPIPort(t *testing.T) {
+	if _, err := exec.LookPath("helm"); err != nil {
+		t.Skip("helm is not installed")
+	}
+	cmd := exec.Command("helm", "template", "lane-a", ".", "-f", "values-quickstart.yaml", "--set", "api.port=9000")
+	cmd.Env = append(os.Environ(), "HELM_SHIM_OFF=1")
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("the quickstart profile with api.port=9000 must render: %v\n%.400s", err, out)
+	}
+	if !strings.Contains(string(out), `value: "http://lane-a-dev-health-api:9000"`) {
+		t.Fatalf("the release form does not follow api.port")
+	}
+}
+
 // CHAOS-8310: exactly one of web.env.BACKEND_URL and web.backendFromRelease; both set is refused, naming both.
 func TestWebBackendURLAndBackendFromReleaseAreExclusive(t *testing.T) {
 	if _, err := exec.LookPath("helm"); err != nil {

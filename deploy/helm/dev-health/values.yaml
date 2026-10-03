@@ -762,7 +762,7 @@ web:
     initialDelaySeconds: 5
     periodSeconds: 5
   # -- Explicit opt-in (CHAOS-8310): web's BACKEND_URL is this release's own Python api Service,
-  #    `http://<release>-api:<api.port>`, the pre-CHAOS-8310 default for every release name. Set exactly one of
+  #    `http://<fullname>-api:<api.port>`, the pre-CHAOS-8310 default for every release name. Set exactly one of
   #    this and `web.env.BACKEND_URL`. CHAOS-8314 (E4) retargets or removes it when the Python api Service goes.
   backendFromRelease: false
   env:

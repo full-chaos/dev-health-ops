@@ -14,7 +14,8 @@ func sanitizeErrorText(text string) string {
 	// the shape pass runs BEFORE the exact sanitizer: its 4000-rune cap would otherwise cut a key to a fragment below the shape's
 	// minimum length, which no later pass can recognise
 	// the userinfo pass runs LAST (after the cap): a pass in front of the exact sanitizer would change what it hides
-	return logging.RedactUserinfoLast(errortext.Sanitize(logging.RedactCredentialShapesNoUserinfo(text)))
+	// the pass can add the marker, so the text is cut again with the same cap
+	return errortext.Cap(logging.RedactUserinfoLast(errortext.Sanitize(logging.RedactCredentialShapesNoUserinfo(text))))
 }
 
 // SanitizeErrorText is sanitizeErrorText for callers outside the package that log or store error text

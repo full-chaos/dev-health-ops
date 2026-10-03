@@ -387,3 +387,37 @@ func TestAnEncodedQuoteOrBracketInAPasswordIsHiddenOnlyInThePersistedLayers(t *t
 		}
 	}
 }
+
+// The userinfo pass runs after the persisted sanitizers' cap and can add the marker, so
+// each sanitizer cuts again with its own cap: the result never exceeds the cap, and a
+// second call over a result changes nothing (gwc-vetter-2's measure: 4008 runes for a
+// cap of 4000, 417 for a cap of 200).
+func TestThePersistedSanitizersNeverExceedTheirCapAndAreIdempotent(t *testing.T) {
+	sanitizers := []struct {
+		name string
+		call func(string) string
+		cap  int
+	}{
+		{"syncdispatchruntime.SanitizeErrorText", syncdispatchruntime.SanitizeErrorText, 4000},
+		{"pythonparity.SanitizeErrorTextHardened (4000)", func(text string) string { return pythonparity.SanitizeErrorTextHardened(text, 4000) }, 4000},
+		{"pythonparity.SanitizeErrorTextHardened (200)", func(text string) string { return pythonparity.SanitizeErrorTextHardened(text, 200) }, 200},
+	}
+	texts := []string{
+		"dial svc:pw@db.internal failed; retry svc:pw@db2.internal " + strings.Repeat("x", 3990),
+		strings.Repeat("a:b@h ", 700),
+		strings.Repeat("a:b@h ", 60),
+		strings.Repeat("a", 3985) + " svc_user:Kk3Pp4Qq5Zz@cache.internal",
+		"short svc_user:Kk3Pp4Qq5Zz@cache.internal text",
+	}
+	for _, sanitizer := range sanitizers {
+		for _, text := range texts {
+			first := sanitizer.call(text)
+			if got := len([]rune(first)); got > sanitizer.cap {
+				t.Errorf("%s: %d runes for a cap of %d", sanitizer.name, got, sanitizer.cap)
+			}
+			if second := sanitizer.call(first); second != first {
+				t.Errorf("%s: a second call changes the text: %.120q -> %.120q", sanitizer.name, first, second)
+			}
+		}
+	}
+}

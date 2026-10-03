@@ -69,6 +69,18 @@ type fakeClient struct {
 	countStatement string
 	countBindings  []clickhouse.Binding
 	countCalls     int
+
+	// The two reads of the people of the rows (CHAOS-8485, people.go): the
+	// org's identities and the pull request author names. Each answers its own
+	// scripted rows (none by default) and records its own bindings, so the
+	// row statement and its bindings above stay the ones of the row read.
+	identities          [][]any
+	identitiesErr       error
+	identitiesCalls     int
+	authorNames         [][]any
+	authorNamesErr      error
+	authorNamesCalls    int
+	authorNamesBindings []clickhouse.Binding
 }
 
 func (f *fakeClient) Query(_ context.Context, statement string, bindings []clickhouse.Binding) (clickhouse.RowScanner, error) {
@@ -84,6 +96,21 @@ func (f *fakeClient) Query(_ context.Context, statement string, bindings []click
 			total = *f.total
 		}
 		return &fakeRowScanner{rows: [][]any{{total}}}, nil
+	}
+	if strings.Contains(statement, "FROM identities FINAL") {
+		f.identitiesCalls++
+		if f.identitiesErr != nil {
+			return nil, f.identitiesErr
+		}
+		return &fakeRowScanner{rows: f.identities}, nil
+	}
+	if strings.Contains(statement, "FROM git_pull_requests FINAL") {
+		f.authorNamesCalls++
+		f.authorNamesBindings = bindings
+		if f.authorNamesErr != nil {
+			return nil, f.authorNamesErr
+		}
+		return &fakeRowScanner{rows: f.authorNames}, nil
 	}
 	f.statement = statement
 	f.bindings = bindings

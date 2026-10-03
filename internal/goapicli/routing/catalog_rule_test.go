@@ -100,10 +100,10 @@ func TestStatusTextSaysServedOnlyForAnOperationWithNoRow(t *testing.T) {
 	missing := goapiproof.OperationStatus{Operation: "hotspots", DocumentDigest: "catalog-digest", DigestState: goapiproof.DigestMissing}
 
 	out := text(map[string]int{}, missing, agree, false)
-	if !strings.Contains(out, "no routing row at any schema digest: SERVED by the catalog rule") {
+	if !strings.Contains(out, "no routing row at any schema digest: SERVED by the catalog rule of this build; a query-api older than this build refuses it") {
 		t.Errorf("an operation with no row is not reported served:\n%s", out)
 	}
-	if !strings.Contains(out, "table is empty") || !strings.Contains(out, "serves every registered operation") || strings.Contains(out, "nothing is enabled") {
+	if !strings.Contains(out, "table is empty") || !strings.Contains(out, "a query-api of this build serves every registered operation") || strings.Contains(out, "nothing is enabled") {
 		t.Errorf("the empty-table line still reads as if nothing were served:\n%s", out)
 	}
 
@@ -139,7 +139,7 @@ func TestStatusTextSaysServedOnlyForAnOperationWithNoRow(t *testing.T) {
 func TestDisableSaysWhenItLeavesAnOperationServing(t *testing.T) {
 	noRow := goapiproof.DisableChange{Operation: "hotspots", NewMode: "disabled"}
 	note := disableStillServedNote(noRow, false)
-	for _, want := range []string{"SERVES this operation", "NOT held dark", "dho goapi routing seed -operations hotspots"} {
+	for _, want := range []string{"a query-api of this build SERVES this operation", "NOT held dark", "dho goapi routing seed -operations hotspots"} {
 		if !strings.Contains(note, want) {
 			t.Errorf("the note for an operation with no row lacks %q: %q", want, note)
 		}
@@ -176,11 +176,11 @@ func TestSeedSaysWhenItHoldsACatalogOperationDark(t *testing.T) {
 		return out
 	}
 	written := seedHoldsDarkNote(outcomes(goapiproof.SeedActionCreated, goapiproof.SeedActionAlreadyPresent, goapiproof.SeedActionCreated), false)
-	if !strings.Contains(written, "2 catalog operation(s) had no routing row and were SERVED") || !strings.Contains(written, "NOT served until") || !strings.HasSuffix(written, ": home,pr") {
+	if !strings.Contains(written, "2 catalog operation(s) had no routing row, and a query-api of this build SERVES such an operation") || !strings.Contains(written, "NOT served until") || !strings.HasSuffix(written, ": home,pr") {
 		t.Errorf("note after a write = %q", written)
 	}
 	planned := seedHoldsDarkNote(outcomes(goapiproof.SeedActionWouldCreate, goapiproof.SeedActionRefused), false)
-	if !strings.Contains(planned, "1 catalog operation(s) have no routing row and are SERVED") || !strings.Contains(planned, "would hold each dark") || !strings.HasSuffix(planned, ": home") {
+	if !strings.Contains(planned, "1 catalog operation(s) have no routing row, and a query-api of this build SERVES such an operation") || !strings.Contains(planned, "would hold each dark") || !strings.HasSuffix(planned, ": home") {
 		t.Errorf("note for a planned write = %q", planned)
 	}
 	for name, got := range map[string]string{

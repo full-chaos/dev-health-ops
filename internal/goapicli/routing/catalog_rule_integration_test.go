@@ -53,7 +53,7 @@ func TestTheVerbsSayWhatTheCatalogRuleMeansForThem(t *testing.T) {
 	want("empty table, "+seedOpA, status[seedOpA], "MISSING", true, false)
 	want("empty table, "+seedOpB, status[seedOpB], "MISSING", true, false)
 	text, _, err := captureVerb(t, "status", "-postgres-uri", dsn, "-catalog", catalog, "-registry-url", registry)
-	if err != nil || strings.Count(text, "SERVED by the catalog rule") != 2 || !strings.Contains(text, "serves every registered operation") {
+	if err != nil || strings.Count(text, "SERVED by the catalog rule of this build") != 2 || !strings.Contains(text, "serves every registered operation") {
 		t.Errorf("status text on an empty table (err %v):\n%s", err, text)
 	}
 

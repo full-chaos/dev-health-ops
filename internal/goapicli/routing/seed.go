@@ -212,8 +212,9 @@ func runSeed(argv []string) error {
 }
 
 // seedHoldsDarkNote is what `seed` says when it writes (or, in a dry run or after a refusal, would
-// write) the first row of a catalog operation: that operation was served with no row, and its shadow
-// row holds it dark until `enable` admits it (CHAOS-8517). Empty for MCP class rows, whose roots are
+// write) the first row of a catalog operation: a query-api of this build serves that operation with no
+// row, and its shadow row holds it dark until `enable` admits it (CHAOS-8517). It states the rule of the
+// verb's own build: the verb reads the deployed commit, and a commit does not say whether it has the rule. Empty for MCP class rows, whose roots are
 // dark with no row, and when no first row is involved.
 func seedHoldsDarkNote(outcomes []goapiproof.SeedOutcome, isClass bool) string {
 	if isClass {
@@ -232,10 +233,10 @@ func seedHoldsDarkNote(outcomes []goapiproof.SeedOutcome, isClass bool) string {
 	}
 	switch {
 	case len(written) > 0:
-		return fmt.Sprintf("go-api-routing: NOTE: %d catalog operation(s) had no routing row and were SERVED by query-api's catalog rule; each now has a shadow row and is NOT served until `dho goapi routing enable` admits it: %s",
+		return fmt.Sprintf("go-api-routing: NOTE: %d catalog operation(s) had no routing row, and a query-api of this build SERVES such an operation by the catalog rule; each now has a shadow row and is NOT served until `dho goapi routing enable` admits it: %s",
 			len(written), strings.Join(written, ","))
 	case len(planned) > 0:
-		return fmt.Sprintf("go-api-routing: NOTE: %d catalog operation(s) have no routing row and are SERVED by query-api's catalog rule; a shadow row would hold each dark until `dho goapi routing enable` admits it: %s",
+		return fmt.Sprintf("go-api-routing: NOTE: %d catalog operation(s) have no routing row, and a query-api of this build SERVES such an operation by the catalog rule; a shadow row would hold each dark until `dho goapi routing enable` admits it: %s",
 			len(planned), strings.Join(planned, ","))
 	}
 	return ""

@@ -271,7 +271,8 @@ func runDisable(argv []string) error {
 //
 // "(no row)" used to mean "already not served". For a CATALOG operation with no row at ANY schema digest
 // it now means the opposite: query-api's catalog rule serves it, and this verb -- which never inserts --
-// leaves it serving. An off-ramp that prints "[no change]" over an operation that keeps serving has to
+// leaves it serving. The verb contacts nothing, so it states the rule of its own build ("a query-api of
+// this build"), never an observation of the deployed process. An off-ramp that prints "[no change]" over an operation that keeps serving has to
 // say so. The exit status is unchanged: a named operation with no row has always been a no-op here,
 // never a refusal.
 //
@@ -283,5 +284,5 @@ func disableStillServedNote(change goapiproof.DisableChange, isClass bool) strin
 	if isClass || change.CurrentMode != "" || change.DeadRowsOnly || len(change.StaleSchemaDigests) > 0 {
 		return ""
 	}
-	return fmt.Sprintf("    !! no routing row at any schema digest: query-api SERVES this operation by the catalog rule, and `disable` never inserts a row, so it is NOT held dark. To hold it dark run `dho goapi routing seed -operations %s` (a shadow row is not served)", change.Operation)
+	return fmt.Sprintf("    !! no routing row at any schema digest: a query-api of this build SERVES this operation by the catalog rule, and `disable` never inserts a row, so it is NOT held dark. To hold it dark run `dho goapi routing seed -operations %s` (a shadow row is not served)", change.Operation)
 }

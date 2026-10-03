@@ -185,7 +185,7 @@ Provider normalization maps native fields into `WorkItem.story_points` before th
 - GitHub: Projects v2 numeric fields named `estimate`, `points`, `story points`, or `size`.
 - Linear: issue `estimate`, including `0` as an explicit estimate.
 
-GraphQL exposes the latest persisted estimate coverage on `ThroughputForecast.estimateCoverage` using the frozen `ThroughputEstimateCoverage` type: `ratio`, `estimatedCount`, `unestimatedCount`, and `backlogSize`. Forecasts with `backlogSize = 0` return no `estimateCoverage` object because the coverage ratio is undefined for an empty backlog.
+GraphQL exposes the latest persisted estimate coverage on `ThroughputForecast.estimateCoverage` using the frozen `ThroughputEstimateCoverage` type: `ratio`, `estimatedCount`, `unestimatedCount`, and `backlogSize`. The object is built from the scope's coverage rows at the scope's newest coverage day whatever the forecast's backlog is (including 0); with no rows it is the zero object (counts 0, ratio `0`), never `null`; a coverage grain whose own `backlog_size` is 0 keeps a `null` ratio because the ratio is undefined for an empty backlog (D4373, D4376).
 
 ### Work item facts (`work_item_cycle_times`)
 

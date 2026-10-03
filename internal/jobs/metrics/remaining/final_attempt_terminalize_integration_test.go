@@ -448,6 +448,44 @@ func TestExhaustPartitionLeavesALiveLeaseAlone(t *testing.T) {
 	}
 }
 
+type expiringCompleteStore struct {
+	*PostgresStore
+	clock *time.Time
+}
+
+// CompletePartition lets the lease run out and then fails: the shape of a slow complete on the last attempt.
+func (s *expiringCompleteStore) CompletePartition(context.Context, Claim, string) error {
+	*s.clock = s.clock.Add(2 * defaultLease)
+	return errors.New("complete partition: connection reset")
+}
+
+// CHAOS-8177 (gwc-review r2 P1-2): on the LAST attempt a complete that fails after the lease expired is fenced out of
+// the terminal release (live-lease predicate), and no later attempt exists. The run must still end failed.
+func TestALastAttemptCompleteFailureAfterLeaseExpiryEndsTheRunFailed(t *testing.T) {
+	ctx := context.Background()
+	pool, store, _ := newRemainingRedriveTestStack(t)
+	clock := time.Date(2026, 10, 2, 12, 0, 0, 0, time.UTC)
+	store.now = func() time.Time { return clock }
+	org := "00000000-0000-4000-8000-000000009811"
+	run, err := store.StartRun(ctx, StartRunRequest{OrganizationID: org, Family: "capacity", Generation: "expired-lease", ScopeKey: "all-teams",
+		GenerationSeed: int64Pointer(811), Scopes: []json.RawMessage{capacityScopeJSON(90)}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	partition := deterministicPartitionID(run.ID, 1)
+	handler, _ := NewPartitionHandler[jobruntime.RemainingCapacityArgs](&expiringCompleteStore{PostgresStore: store, clock: &clock}, &handlerExecutor{}, "capacity")
+	if workErr := handler.Work(ctx, capacityExecutionFor(org, partition, run.ID, 3, 3)); workErr == nil {
+		t.Fatal("work error = nil, want the retryable complete failure")
+	}
+	var runStatus, partitionStatus string
+	var exhausted bool
+	_ = pool.QueryRow(ctx, "SELECT status FROM remaining_metric_runs WHERE id=$1::uuid", run.ID).Scan(&runStatus)
+	_ = pool.QueryRow(ctx, "SELECT status, completed_at IS NOT NULL FROM remaining_metric_partitions WHERE id=$1::uuid", partition).Scan(&partitionStatus, &exhausted)
+	if runStatus != "failed" || partitionStatus != "failed" || !exhausted {
+		t.Fatalf("run=%s partition=%s exhausted=%t, want failed/failed/true", runStatus, partitionStatus, exhausted)
+	}
+}
+
 type loadRunInvalidStore struct{ *PostgresStore }
 
 func (s *loadRunInvalidStore) LoadRun(context.Context, string) (Run, error) {
@@ -499,5 +537,191 @@ func TestPermanentExitsTerminalizeTheRunAgainstRealPostgres(t *testing.T) {
 				t.Fatalf("run=%s partition=%s exhausted=%t, want failed/failed/true", runStatus, partitionStatus, exhausted)
 			}
 		})
+	}
+}
+
+type transientTerminalReleaseStore struct{ *PostgresStore }
+
+// ReleasePartitionTerminally fails like a transient database error: it touches nothing, so the claim's lease stays live.
+func (s *transientTerminalReleaseStore) ReleasePartitionTerminally(context.Context, Claim) error {
+	return errors.New("terminal release: connection reset")
+}
+
+// CHAOS-8177 (r1 P1): the terminal release of the LAST attempt fails with a transient error while the attempt's own
+// lease is still LIVE. The fallback must take the partition under the attempt's own claim; leaving it to the lease
+// expiry strands the run, because no later attempt exists.
+func TestALastAttemptTransientTerminalReleaseFailureWithItsOwnLeaseLiveEndsTheRunFailed(t *testing.T) {
+	ctx := context.Background()
+	pool, store, _ := newRemainingRedriveTestStack(t)
+	store.now = func() time.Time { return time.Date(2026, 10, 2, 12, 0, 0, 0, time.UTC) }
+	org := "00000000-0000-4000-8000-000000009821"
+	run, err := store.StartRun(ctx, StartRunRequest{OrganizationID: org, Family: "capacity", Generation: "own-lease", ScopeKey: "all-teams",
+		GenerationSeed: int64Pointer(821), Scopes: []json.RawMessage{capacityScopeJSON(90)}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	partition := deterministicPartitionID(run.ID, 1)
+	failing := &handlerExecutor{computeErr: errors.New("clickhouse: connection reset")}
+	handler, _ := NewPartitionHandler[jobruntime.RemainingCapacityArgs](&transientTerminalReleaseStore{store}, failing, "capacity")
+	if workErr := handler.Work(ctx, capacityExecutionFor(org, partition, run.ID, 3, 3)); workErr == nil {
+		t.Fatal("work error = nil, want the retryable compute failure")
+	}
+	var runStatus, partitionStatus string
+	var exhausted bool
+	_ = pool.QueryRow(ctx, "SELECT status FROM remaining_metric_runs WHERE id=$1::uuid", run.ID).Scan(&runStatus)
+	_ = pool.QueryRow(ctx, "SELECT status, completed_at IS NOT NULL FROM remaining_metric_partitions WHERE id=$1::uuid", partition).Scan(&partitionStatus, &exhausted)
+	if runStatus != "failed" || partitionStatus != "failed" || !exhausted {
+		t.Fatalf("run=%s partition=%s exhausted=%t, want failed/failed/true", runStatus, partitionStatus, exhausted)
+	}
+}
+
+// A claim whose token is not the partition's current one (another job took the partition and holds a live lease) must
+// not be exhausted by the claimed variant: the holder owns the outcome.
+func TestExhaustClaimedPartitionLeavesAnotherClaimantsLiveLeaseAlone(t *testing.T) {
+	ctx := context.Background()
+	pool, store, _ := newRemainingRedriveTestStack(t)
+	store.now = func() time.Time { return time.Date(2026, 10, 2, 12, 0, 0, 0, time.UTC) }
+	org := "00000000-0000-4000-8000-000000009822"
+	run, err := store.StartRun(ctx, StartRunRequest{OrganizationID: org, Family: "capacity", Generation: "other-claimant", ScopeKey: "all-teams",
+		GenerationSeed: int64Pointer(822), Scopes: []json.RawMessage{capacityScopeJSON(90)}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	partition := deterministicPartitionID(run.ID, 1)
+	claim, err := store.ClaimPartition(ctx, partition)
+	if err != nil || claim == nil {
+		t.Fatalf("claim = %v, %v", claim, err)
+	}
+	stale := *claim
+	stale.Token = "00000000-0000-4000-8000-0000000000aa"
+	if err := store.ExhaustClaimedPartition(ctx, stale); err != nil {
+		t.Fatal(err)
+	}
+	var status string
+	_ = pool.QueryRow(ctx, "SELECT status FROM remaining_metric_partitions WHERE id=$1::uuid", partition).Scan(&status)
+	if status != "running" {
+		t.Fatalf("partition = %q after a stale-token exhaust, want running (another claimant's live lease untouched)", status)
+	}
+	if err := store.ExhaustClaimedPartition(ctx, *claim); err != nil {
+		t.Fatal(err)
+	}
+	_ = pool.QueryRow(ctx, "SELECT status FROM remaining_metric_partitions WHERE id=$1::uuid", partition).Scan(&status)
+	if status != "failed" {
+		t.Fatalf("partition = %q after the owner's exhaust, want failed", status)
+	}
+}
+
+// CHAOS-8177 (r2 P1). Invariant: the claimed fallback may only end a partition that is still the caller's own claim
+// (running under its token) or a running partition whose lease has expired; a partition a replacement attempt already
+// released for retry (failed, completed_at NULL) is no longer the caller's, so the fallback must leave it reclaimable.
+func TestAnOldAttemptsClaimedFallbackLeavesAReplacementsRetryReleaseReclaimable(t *testing.T) {
+	ctx := context.Background()
+	pool, store, _ := newRemainingRedriveTestStack(t)
+	clock := time.Date(2026, 10, 2, 12, 0, 0, 0, time.UTC)
+	store.now = func() time.Time { return clock }
+	org := "00000000-0000-4000-8000-000000009823"
+	run, err := store.StartRun(ctx, StartRunRequest{OrganizationID: org, Family: "capacity", Generation: "replacement-released", ScopeKey: "all-teams",
+		GenerationSeed: int64Pointer(823), Scopes: []json.RawMessage{capacityScopeJSON(90)}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	partition := deterministicPartitionID(run.ID, 1)
+	old, err := store.ClaimPartition(ctx, partition)
+	if err != nil || old == nil {
+		t.Fatalf("old claim = %v, %v", old, err)
+	}
+	clock = clock.Add(old.LeaseDuration + time.Minute) // the old attempt's lease expires
+	replacement, err := store.ClaimPartition(ctx, partition)
+	if err != nil || replacement == nil {
+		t.Fatalf("replacement claim = %v, %v", replacement, err)
+	}
+	if err := store.ReleasePartition(ctx, *replacement); err != nil { // ordinary retryable release
+		t.Fatal(err)
+	}
+	if err := store.ExhaustClaimedPartition(ctx, *old); err != nil { // the old final attempt's late fallback
+		t.Fatal(err)
+	}
+	var runStatus, partitionStatus string
+	var exhausted bool
+	_ = pool.QueryRow(ctx, "SELECT status FROM remaining_metric_runs WHERE id=$1::uuid", run.ID).Scan(&runStatus)
+	_ = pool.QueryRow(ctx, "SELECT status, completed_at IS NOT NULL FROM remaining_metric_partitions WHERE id=$1::uuid", partition).Scan(&partitionStatus, &exhausted)
+	if runStatus != "running" || partitionStatus != "failed" || exhausted {
+		t.Fatalf("run=%s partition=%s exhausted=%t, want running/failed/false (replacement's retry must stay reclaimable)", runStatus, partitionStatus, exhausted)
+	}
+	if again, err := store.ClaimPartition(ctx, partition); err != nil || again == nil {
+		t.Fatalf("the replacement's retry cannot reclaim: %v, %v", again, err)
+	}
+}
+
+// CHAOS-8177 (vetter-2 HOLD): the replacement crashed without a release and its lease expired. The OLD attempt's claimed
+// fallback must still leave it alone (the partition is the replacement's, not the old claim's); only the claim-less
+// path or the replacement's own outcome may end it.
+func TestAnOldAttemptsClaimedFallbackLeavesACrashedReplacementsExpiredLeaseAlone(t *testing.T) {
+	ctx := context.Background()
+	pool, store, _ := newRemainingRedriveTestStack(t)
+	clock := time.Date(2026, 10, 2, 12, 0, 0, 0, time.UTC)
+	store.now = func() time.Time { return clock }
+	org := "00000000-0000-4000-8000-000000009824"
+	run, err := store.StartRun(ctx, StartRunRequest{OrganizationID: org, Family: "capacity", Generation: "replacement-crashed", ScopeKey: "all-teams",
+		GenerationSeed: int64Pointer(824), Scopes: []json.RawMessage{capacityScopeJSON(90)}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	partition := deterministicPartitionID(run.ID, 1)
+	old, err := store.ClaimPartition(ctx, partition)
+	if err != nil || old == nil {
+		t.Fatalf("old claim = %v, %v", old, err)
+	}
+	clock = clock.Add(old.LeaseDuration + time.Minute)
+	replacement, err := store.ClaimPartition(ctx, partition)
+	if err != nil || replacement == nil {
+		t.Fatalf("replacement claim = %v, %v", replacement, err)
+	}
+	clock = clock.Add(replacement.LeaseDuration + time.Minute) // the replacement dies; its lease expires
+	if err := store.ExhaustClaimedPartition(ctx, *old); err != nil {
+		t.Fatal(err)
+	}
+	var runStatus, partitionStatus, token string
+	_ = pool.QueryRow(ctx, "SELECT status FROM remaining_metric_runs WHERE id=$1::uuid", run.ID).Scan(&runStatus)
+	_ = pool.QueryRow(ctx, "SELECT status, COALESCE(claim_token::text,'') FROM remaining_metric_partitions WHERE id=$1::uuid", partition).Scan(&partitionStatus, &token)
+	if runStatus != "running" || partitionStatus != "running" || token != replacement.Token {
+		t.Fatalf("run=%s partition=%s token=%s, want running/running under the replacement's token %s", runStatus, partitionStatus, token, replacement.Token)
+	}
+	clock = clock.Add(time.Second)
+	// The paths that own a dead claimant's partition, both on real Postgres: (1) the replacement job's next River attempt
+	// reclaims it (ClaimPartition takes a running partition whose lease expired) ...
+	if again, err := store.ClaimPartition(ctx, partition); err != nil || again == nil {
+		t.Fatalf("the crashed replacement's partition cannot be reclaimed: %v, %v", again, err)
+	}
+}
+
+// CHAOS-8177 (D4464 condition 2): the other path that owns a dead claimant's partition. When the replacement's job reaches
+// its LAST attempt and cannot claim, the claim-less exhaust takes the expired lease and finalizes the run.
+func TestACrashedClaimantsExpiredPartitionIsExhaustedByTheClaimlessPathOfItsOwnJob(t *testing.T) {
+	ctx := context.Background()
+	pool, store, _ := newRemainingRedriveTestStack(t)
+	clock := time.Date(2026, 10, 2, 12, 0, 0, 0, time.UTC)
+	store.now = func() time.Time { return clock }
+	org := "00000000-0000-4000-8000-000000009825"
+	run, err := store.StartRun(ctx, StartRunRequest{OrganizationID: org, Family: "capacity", Generation: "claimant-died", ScopeKey: "all-teams",
+		GenerationSeed: int64Pointer(825), Scopes: []json.RawMessage{capacityScopeJSON(90)}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	partition := deterministicPartitionID(run.ID, 1)
+	dead, err := store.ClaimPartition(ctx, partition)
+	if err != nil || dead == nil {
+		t.Fatalf("claim = %v, %v", dead, err)
+	}
+	clock = clock.Add(dead.LeaseDuration + time.Minute) // the claimant died; never released
+	if err := store.ExhaustPartition(ctx, partition); err != nil {
+		t.Fatal(err)
+	}
+	var runStatus, partitionStatus string
+	var exhausted bool
+	_ = pool.QueryRow(ctx, "SELECT status FROM remaining_metric_runs WHERE id=$1::uuid", run.ID).Scan(&runStatus)
+	_ = pool.QueryRow(ctx, "SELECT status, completed_at IS NOT NULL FROM remaining_metric_partitions WHERE id=$1::uuid", partition).Scan(&partitionStatus, &exhausted)
+	if runStatus != "failed" || partitionStatus != "failed" || !exhausted {
+		t.Fatalf("run=%s partition=%s exhausted=%t, want failed/failed/true", runStatus, partitionStatus, exhausted)
 	}
 }

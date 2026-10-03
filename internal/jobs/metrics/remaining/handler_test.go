@@ -316,11 +316,13 @@ type handlerStore struct {
 	// variant a given Work() failure path reaches (the ErrInvalidState/
 	// Permanent branch, and a retryable failure on the job's last attempt,
 	// call the terminal one).
-	terminalReleases int
-	exhausted        int
-	exhaustErr       error
-	completions      int
-	evidence         string
+	terminalReleases   int
+	exhausted          int
+	exhaustedClaims    int
+	exhaustErr         error
+	terminalReleaseErr error
+	completions        int
+	evidence           string
 }
 
 func (store *handlerStore) LoadRun(context.Context, string) (Run, error) {
@@ -354,6 +356,11 @@ func (store *handlerStore) ReleasePartition(context.Context, Claim) error {
 	store.releases++
 	return nil
 }
+func (store *handlerStore) ExhaustClaimedPartition(context.Context, Claim) error {
+	store.exhaustedClaims++
+	return store.exhaustErr
+}
+
 func (store *handlerStore) ExhaustPartition(context.Context, string) error {
 	store.exhausted++
 	return store.exhaustErr
@@ -361,7 +368,7 @@ func (store *handlerStore) ExhaustPartition(context.Context, string) error {
 
 func (store *handlerStore) ReleasePartitionTerminally(context.Context, Claim) error {
 	store.terminalReleases++
-	return nil
+	return store.terminalReleaseErr
 }
 
 type handlerExecutor struct {
@@ -543,6 +550,95 @@ func TestPartitionHandlerLogsAFailedExhaustWithoutTheErrorText(t *testing.T) {
 	}
 	if strings.Contains(logged, "SECRET-DRIVER-TEXT") {
 		t.Fatalf("log leaks the error text: %q", logged)
+	}
+}
+
+// CHAOS-8177: a terminal release that fails (it is fenced on a live lease) falls back to marking the partition
+// exhausted by id, and says so in the log with fixed text plus the bounded error class, never the error text.
+func TestPartitionHandlerFallsBackToExhaustWhenTheTerminalReleaseFails(t *testing.T) {
+	var buffer bytes.Buffer
+	previous := slog.Default()
+	slog.SetDefault(slog.New(slog.NewTextHandler(&buffer, nil)))
+	t.Cleanup(func() { slog.SetDefault(previous) })
+	store := &handlerStore{
+		run:                Run{ID: handlerRunID, OrganizationID: handlerOrgID, Family: "capacity", Status: "running"},
+		claim:              handlerClaim(),
+		terminalReleaseErr: fmt.Errorf("fenced: %w", &pgconn.PgError{Code: "57014", Message: "SECRET-DRIVER-TEXT"}),
+	}
+	executor := &handlerExecutor{computeErr: errors.New("clickhouse: connection reset")}
+	handler, _ := NewPartitionHandler[jobruntime.RemainingCapacityArgs](store, executor, "capacity")
+	_ = handler.Work(context.Background(), attemptedCapacityExecution(3, 3))
+	if store.terminalReleases != 1 || store.exhaustedClaims != 1 {
+		t.Fatalf("terminalReleases=%d exhaustedClaims=%d, want 1 and 1 (fallback after a failed terminal release)", store.terminalReleases, store.exhaustedClaims)
+	}
+	logged := buffer.String()
+	for _, want := range []string{"terminal release failed; exhausting the partition", "partition_id", "error_class=postgres", "error_code=57014"} {
+		if !strings.Contains(logged, want) {
+			t.Fatalf("log lacks %q: %q", want, logged)
+		}
+	}
+	if strings.Contains(logged, "SECRET-DRIVER-TEXT") {
+		t.Fatalf("log leaks the error text: %q", logged)
+	}
+	// A successful terminal release does not exhaust.
+	ok := &handlerStore{
+		run:   Run{ID: handlerRunID, OrganizationID: handlerOrgID, Family: "capacity", Status: "running"},
+		claim: handlerClaim(),
+	}
+	handlerOK, _ := NewPartitionHandler[jobruntime.RemainingCapacityArgs](ok, executor, "capacity")
+	_ = handlerOK.Work(context.Background(), attemptedCapacityExecution(3, 3))
+	if ok.terminalReleases != 1 || ok.exhaustedClaims != 0 {
+		t.Fatalf("terminalReleases=%d exhaustedClaims=%d, want 1 and 0 when the release succeeds", ok.terminalReleases, ok.exhaustedClaims)
+	}
+}
+
+// CHAOS-8177 (vet HOLD): when the claimed fallback itself fails, the line says so with fixed text, the partition id and
+// the bounded error class -- never the error text; a typed-nil driver error must still write the line.
+func TestPartitionHandlerLogsAFailedClaimedExhaustWithItsClassOnly(t *testing.T) {
+	var typedNil *pgconn.PgError
+	rows := []struct {
+		name      string
+		err       error
+		wantParts []string
+	}{
+		{"wrapped postgres error", fmt.Errorf("wrap: %w", &pgconn.PgError{Code: "57014", Message: "SECRET-DRIVER-TEXT"}),
+			[]string{"error_class=postgres", "error_code=57014"}},
+		{"typed nil postgres error", typedNil, nil},
+	}
+	for _, row := range rows {
+		t.Run(row.name, func(t *testing.T) {
+			var buffer bytes.Buffer
+			previous := slog.Default()
+			slog.SetDefault(slog.New(slog.NewTextHandler(&buffer, nil)))
+			t.Cleanup(func() { slog.SetDefault(previous) })
+			store := &handlerStore{
+				run:                Run{ID: handlerRunID, OrganizationID: handlerOrgID, Family: "capacity", Status: "running"},
+				claim:              handlerClaim(),
+				terminalReleaseErr: errors.New("fenced"),
+				exhaustErr:         row.err,
+			}
+			executor := &handlerExecutor{computeErr: errors.New("clickhouse: connection reset")}
+			handler, _ := NewPartitionHandler[jobruntime.RemainingCapacityArgs](store, executor, "capacity")
+			_ = handler.Work(context.Background(), attemptedCapacityExecution(3, 3))
+			if store.exhaustedClaims != 1 {
+				t.Fatalf("exhaustedClaims=%d, want 1", store.exhaustedClaims)
+			}
+			logged := buffer.String()
+			var line string
+			for _, candidate := range strings.Split(logged, "\n") {
+				if strings.Contains(candidate, "could not exhaust a claimed partition") {
+					line = candidate
+				}
+			}
+			for _, want := range append([]string{"could not exhaust a claimed partition", "partition_id=" + handlerClaim().Partition.ID}, row.wantParts...) {
+				if !strings.Contains(line, want) {
+					t.Fatalf("the exhaust-failure line lacks %q: %q", want, line)
+				}
+			}
+			if strings.Contains(logged, "SECRET-DRIVER-TEXT") {
+				t.Fatalf("log leaks the error text: %q", logged)
+			}
+		})
 	}
 }
 

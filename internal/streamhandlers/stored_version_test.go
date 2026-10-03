@@ -5,9 +5,11 @@ import (
 	"encoding/json"
 	"errors"
 	"github.com/full-chaos/dev-health-ops/internal/storedversion"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"regexp"
+	"sort"
 	"strings"
 	"testing"
 
@@ -279,10 +281,23 @@ func TestFrozenIngestFieldsMatchSchemasPyWhileItExists(t *testing.T) {
 		t.Fatal("locate test")
 	}
 	raw, err := os.ReadFile(filepath.Join(filepath.Dir(filename), "..", "..", "src", "dev_health_ops", "api", "ingest", "schemas.py"))
-	if err != nil {
+	if errors.Is(err, fs.ErrNotExist) {
 		t.Skip("the Python schemas.py is gone: the frozen ingest fields are the source")
 	}
-	for class, want := range frozenIngestFields(t) {
+	if err != nil {
+		t.Fatal(err)
+	}
+	frozen := frozenIngestFields(t)
+	wantClasses := []string{"IngestCommit", "IngestDeployment", "IngestPullRequest", "IngestPullRequestReview", "IngestWorkItem"}
+	var haveClasses []string
+	for class := range frozen {
+		haveClasses = append(haveClasses, class)
+	}
+	sort.Strings(haveClasses)
+	if strings.Join(haveClasses, ",") != strings.Join(wantClasses, ",") {
+		t.Fatalf("the frozen ingest file holds classes %v; the contracts under test need %v", haveClasses, wantClasses)
+	}
+	for class, want := range frozen {
 		if got := pythonIngestClassFields(t, string(raw), class); strings.Join(got, ",") != strings.Join(want, ",") {
 			t.Errorf("%s: schemas.py declares %v; the frozen list says %v", class, got, want)
 		}

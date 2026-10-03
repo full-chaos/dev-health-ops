@@ -37,6 +37,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"path/filepath"
 	"regexp"
 	"sort"
 	"strings"
@@ -303,7 +304,12 @@ type FrozenRESTRoutes struct {
 // LoadFrozenRESTRoutes reads the frozen Python route list. An unreadable,
 // malformed or empty file is an error, never an empty section.
 func LoadFrozenRESTRoutes(path string) ([]RESTRoute, error) {
-	raw, err := os.ReadFile(path) //nolint:gosec // repo-relative path
+	root, err := os.OpenRoot(filepath.Dir(path))
+	if err != nil {
+		return nil, fmt.Errorf("read %s: %w", path, err)
+	}
+	defer root.Close()
+	raw, err := root.ReadFile(filepath.Base(path))
 	if err != nil {
 		return nil, fmt.Errorf("read %s: %w", path, err)
 	}

@@ -2,9 +2,11 @@ package goapiproof
 
 import (
 	"encoding/json"
+	"errors"
 	"go/ast"
 	"go/parser"
 	"go/token"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -108,8 +110,11 @@ func frozenSchemaFacts(t *testing.T) pythonSchemaFacts {
 func TestFrozenSchemaFactsMatchSchemaPyWhileItExists(t *testing.T) {
 	root := repoRootFromTest(t)
 	raw, err := os.ReadFile(filepath.Join(root, filepath.FromSlash("src/dev_health_ops/api/graphql/schema.py")))
-	if err != nil {
+	if errors.Is(err, fs.ErrNotExist) {
 		t.Skip("the Python schema.py is gone: the frozen schema facts are the source")
+	}
+	if err != nil {
+		t.Fatal(err)
 	}
 	source := string(raw)
 	callers := map[string]bool{}

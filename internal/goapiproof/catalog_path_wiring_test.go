@@ -1,6 +1,7 @@
 package goapiproof
 
 import (
+	"io/fs"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -41,8 +42,14 @@ func TestToolsImageCopiesTheCatalogToItsDefaultPathUnderWorkdir(t *testing.T) {
 	root := repoRootFromTest(t)
 	dockerfile := readFileAtRoot(t, root, "docker/go-api-tools.Dockerfile")
 	wantCopy := "COPY " + DefaultCatalogPath + " " + toolsImageWorkdir + "/" + DefaultCatalogPath
-	if !strings.Contains(dockerfile, wantCopy+"\n") {
-		t.Errorf("docker/go-api-tools.Dockerfile has no line %q: the hooks' relative default would not resolve in the image", wantCopy)
+	copyFound := false
+	for _, line := range strings.Split(dockerfile, "\n") {
+		if strings.TrimSpace(line) == wantCopy {
+			copyFound = true
+		}
+	}
+	if !copyFound {
+		t.Errorf("docker/go-api-tools.Dockerfile has no (uncommented) line %q: the hooks' relative default would not resolve in the image", wantCopy)
 	}
 	if !regexp.MustCompile(`(?m)^WORKDIR ` + regexp.QuoteMeta(toolsImageWorkdir) + `$`).MatchString(dockerfile) {
 		t.Errorf("docker/go-api-tools.Dockerfile has no WORKDIR %s: DefaultCatalogPath is relative to it", toolsImageWorkdir)
@@ -56,13 +63,24 @@ func TestEveryCatalogPathNamedByScriptsAndChartAgreesWithTheDefault(t *testing.T
 	fetched := regexp.MustCompile(`contents/([^?"\s]*go_api_operations\.json)\?ref=`)
 
 	var files []string
-	for _, glob := range []string{"ci/bigboy/*.sh", "ci/bigboy/*.py", "ci/*.sh", "scripts/**/*.sh", "deploy/helm/dev-health/templates/*.yaml", "docker/*.Dockerfile", "compose.yml"} {
-		matches, err := filepath.Glob(filepath.Join(root, filepath.FromSlash(glob)))
+	for _, dir := range []string{"ci", "scripts", "deploy/helm/dev-health/templates", "docker"} {
+		err := filepath.WalkDir(filepath.Join(root, filepath.FromSlash(dir)), func(path string, entry fs.DirEntry, err error) error {
+			if err != nil {
+				return err
+			}
+			if !entry.IsDir() {
+				switch filepath.Ext(path) {
+				case ".sh", ".py", ".yaml", ".yml", ".Dockerfile":
+					files = append(files, path)
+				}
+			}
+			return nil
+		})
 		if err != nil {
 			t.Fatal(err)
 		}
-		files = append(files, matches...)
 	}
+	files = append(files, filepath.Join(root, "compose.yml"))
 	seen := 0
 	for _, file := range files {
 		raw, err := os.ReadFile(file)

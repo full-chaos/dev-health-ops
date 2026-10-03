@@ -24,9 +24,10 @@
 // recipe runs, so the two can never drift. Venue.GoAPIClickHouseURI is
 // that login's DSN, for a route area's Deps.ClickHouse.
 //
-// The oracle needs the live Python api: Start skips unless
-// DEV_HEALTH_LIVE_PYTHON_ORACLES=1, and ci/check_go.sh live-python-oracles
-// sets it. A venue built for a frozen golden or a Go-only test
+// Start skips unless DEV_HEALTH_VENUE_ORACLES=1, and ci/check_go.sh
+// venue-oracles sets it. No test of the tree starts the live Python api any
+// more (the live oracles were deleted: Go is the implementation of record);
+// the live path stays only for a golden's recording. A venue built for a frozen golden or a Go-only test
 // (Options.Golden, Options.GoOnly) runs no Python at all: its schemas come
 // from pgmigrate and chmigrate, its tokens from the Go minter and CallPython
 // from the Go ports (gosubstrate.go); a golden's recording builds its schemas
@@ -474,7 +475,7 @@ type Venue struct {
 }
 
 // Start builds the venue; see the package comment. It skips unless
-// DEV_HEALTH_LIVE_PYTHON_ORACLES=1. Everything it creates is removed by
+// DEV_HEALTH_VENUE_ORACLES=1. Everything it creates is removed by
 // t.Cleanup.
 //
 // Start itself writes no proof file: it only proves the venue built, not
@@ -485,8 +486,8 @@ type Venue struct {
 // both planes and compared them -- see its doc comment.
 func Start(t *testing.T, ctx context.Context, options Options) *Venue {
 	t.Helper()
-	if os.Getenv("DEV_HEALTH_LIVE_PYTHON_ORACLES") != "1" {
-		t.Skip("the venue oracle needs the live Python api; run with DEV_HEALTH_LIVE_PYTHON_ORACLES=1")
+	if os.Getenv("DEV_HEALTH_VENUE_ORACLES") != "1" {
+		t.Skip("the venue oracle runs only through ci/check_go.sh venue-oracles; run with DEV_HEALTH_VENUE_ORACLES=1")
 	}
 	logger := options.Logger
 	if logger == nil {

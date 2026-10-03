@@ -327,7 +327,7 @@ func TestALiveVenueIsRefusedAfterAPythonFreeClaimInItsTree(t *testing.T) {
 func laterLiveStart(t *testing.T, env string, first func(child *testing.T)) (string, error, bool) {
 	t.Helper()
 	if os.Getenv(env) == "1" {
-		t.Setenv("DEV_HEALTH_LIVE_PYTHON_ORACLES", "1")
+		t.Setenv("DEV_HEALTH_VENUE_ORACLES", "1")
 		t.Setenv("DEV_HEALTH_LIVE_PYTHON_ORACLE_PROOF_DIR", t.TempDir())
 		t.Run("first", first)
 		t.Run("later", func(later *testing.T) {

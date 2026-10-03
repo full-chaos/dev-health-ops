@@ -115,9 +115,7 @@ func RedactText(value string) (result string) {
 	// percent-encoded quote or bracket (%22 %27 %3C %3E) is one run of valid URL
 	// characters here, and decoding first would turn it into a raw quote that ends the
 	// match. The match after the decode (below) covers a raw `/`, `@` or `:`.
-	if strings.Contains(value, "@") {
-		value = redactUserinfo(value)
-	}
+	value = redactURLCredentials(value)
 	value, escaped := percentDecoded(value)
 	// The decoded text can hold a registered secret its encoded form hid.
 	value = secrets.RedactRegistered(value)
@@ -125,13 +123,7 @@ func RedactText(value string) (result string) {
 	// Each pattern runs only when the literal it cannot match without is in
 	// the text: the skip never changes the result, it keeps the common
 	// attribute (an id, a provider name) off the regexp engine.
-	if strings.Contains(value, "://") {
-		value = dsnPattern.ReplaceAllString(value, redacted)
-		value = credentialURLPattern.ReplaceAllString(value, redacted)
-	}
-	if strings.Contains(value, "@") {
-		value = redactUserinfo(value)
-	}
+	value = redactURLCredentials(value)
 	lower := strings.ToLower(value)
 	for index, pattern := range bareCredentialPatterns {
 		if strings.Contains(lower, bareCredentialLiterals[index]) {
@@ -147,6 +139,21 @@ func RedactText(value string) (result string) {
 	}
 	value = redactProseCredentials(value)
 	return redactPathSegments(value)
+}
+
+// redactURLCredentials hides a credential carried in a URL or in a bare userinfo:
+// the whole DSN and credential URLs first (so their host goes with them), then
+// whatever `user:secret@` is left. The order matters: the bare-userinfo match would
+// otherwise take `postgres:` as the user and leave the host of the DSN readable.
+func redactURLCredentials(value string) string {
+	if strings.Contains(value, "://") {
+		value = dsnPattern.ReplaceAllString(value, redacted)
+		value = credentialURLPattern.ReplaceAllString(value, redacted)
+	}
+	if strings.Contains(value, "@") {
+		value = redactUserinfo(value)
+	}
+	return value
 }
 
 // redactUserinfo replaces the `user:secret` part of every `user:secret@` in value

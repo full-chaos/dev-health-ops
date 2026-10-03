@@ -166,3 +166,16 @@ func TestUserinfoRedactionKeepsTheQuotesAroundTheShape(t *testing.T) {
 		t.Fatalf("got %q, want %q", got, want)
 	}
 }
+
+// A DSN keeps losing its host together with its password: the bare-userinfo match
+// must not run first and take `postgres:` for the user (CHAOS-8277 found this in
+// the shell package's runtime-failure test).
+func TestADsnStillLosesItsHostWithItsPassword(t *testing.T) {
+	t.Parallel()
+	got := RedactText("dial postgres://svc_user:Zq9Lm4Nv77@ch.internal/db now")
+	for _, forbidden := range []string{"postgres://", "Zq9Lm4Nv77", "ch.internal"} {
+		if strings.Contains(got, forbidden) {
+			t.Fatalf("the DSN leaked %q: %q", forbidden, got)
+		}
+	}
+}

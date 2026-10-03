@@ -840,10 +840,23 @@ func TestStrandRepairAgainstLivePostgres(t *testing.T) {
 			if riverJobs != liveRiverJobs+len(shapes) {
 				t.Fatalf("river_job holds %d rows, want %d", riverJobs, liveRiverJobs+len(shapes))
 			}
-			if _, err := admin.Exec(ctx, `ANALYZE public.worker_job_outbox, river.river_job,
-				public.daily_metrics_runs, public.daily_metrics_partitions,
-				public.work_graph_execution_requests, public.sync_run_units, public.sync_runs`); err != nil {
-				t.Fatal(err)
+			// VACUUM, not only ANALYZE, on the two bulk-loaded tables. A GIN index
+			// keeps new entries in a pending list that every search must read in
+			// full, and only VACUUM (autovacuum, in production) folds it into the
+			// index and refreshes the index's own statistics. Straight after a
+			// bulk load the planner prices one probe of river_job_args_index
+			// above a scan of the whole table -- the state of a fixture, not of
+			// a running stack. Each statement goes alone: VACUUM refuses to run
+			// inside a transaction block.
+			for _, statement := range []string{
+				"VACUUM (ANALYZE) river.river_job",
+				"VACUUM (ANALYZE) public.worker_job_outbox",
+				`ANALYZE public.daily_metrics_runs, public.daily_metrics_partitions,
+					public.work_graph_execution_requests, public.sync_run_units, public.sync_runs`,
+			} {
+				if _, err := admin.Exec(ctx, statement); err != nil {
+					t.Fatal(err)
+				}
 			}
 			explain := func(t *testing.T, query string) string {
 				t.Helper()

@@ -9,7 +9,8 @@
 // the job name and status, ci_pipeline_runs for the workflow name and provider.
 // No rollup table exists for job names. ci_job_runs is sorted by (repo_id,
 // run_id, job_id) with no day in its key, so a window read scans the org's job
-// rows: the window is capped at MaxWindowDays and the list at MaxLimit. A daily
+// rows: the window is capped (untilDate at most MaxWindowDays days after
+// sinceDate) and the list at MaxLimit. A daily
 // rollup in the TestOps metric family is the follow-up if the read is too slow.
 //
 // Team scope is repository OWNERSHIP (teamscope.RepoCondition, from
@@ -30,7 +31,9 @@ import (
 )
 
 const (
-	// MaxWindowDays is the longest window served, first and last day included.
+	// MaxWindowDays is the most days untilDate may be after sinceDate. A "90
+	// days" window of the web is today minus 90 days to today: 91 calendar days
+	// with both ends included, and it is served.
 	MaxWindowDays = 90
 	// MaxLimit is the most groups served in one answer.
 	MaxLimit = 100
@@ -81,16 +84,16 @@ func clampLimit(limit int) int {
 	return limit
 }
 
-// checkWindow refuses a window that ends before it starts or is longer than
-// MaxWindowDays. A window is never cut silently: a cut window is the answer to
-// another question.
+// checkWindow refuses a window that ends before it starts or whose last day
+// is more than MaxWindowDays days after its first. A window is never cut
+// silently: a cut window is the answer to another question.
 func checkWindow(since, until graphqldate.Date) error {
 	start, end := since.Time(), until.Time()
 	if end.Before(start) {
 		return errors.New("untilDate is before sinceDate")
 	}
-	if days := int(end.Sub(start).Hours()/24) + 1; days > MaxWindowDays {
-		return fmt.Errorf("the window is %d days; at most %d days are served", days, MaxWindowDays)
+	if days := int(end.Sub(start).Hours() / 24); days > MaxWindowDays {
+		return fmt.Errorf("untilDate is %d days after sinceDate; at most %d days are served", days, MaxWindowDays)
 	}
 	return nil
 }

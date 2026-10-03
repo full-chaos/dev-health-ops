@@ -35,7 +35,12 @@
   },
   {
     "operation": "aiOpportunities",
-    "digest": "fad9b02c4e8a4a7023bf9a7ba988a04346473cdd9d840ec76d611f92e1b5af2e"
+    "digest": "7cd9dfba84aa25a1c3b931819f29729e60f6fa395a1c1f2389ddabd329d3d6e0"
+  },
+  {
+    "operation": "aiOpportunities",
+    "digest": "fad9b02c4e8a4a7023bf9a7ba988a04346473cdd9d840ec76d611f92e1b5af2e",
+    "legacy": true
   },
   {
     "operation": "aiReviewLoad",
@@ -160,7 +165,12 @@
   },
   {
     "operation": "operatingReview",
-    "digest": "c376a5dc191fd8d8759578ccd9dffaffadcd621bdc0625fe62c4c08619f3363e"
+    "digest": "d26e965931987ac4bdf607f43f542e2bd3f49f91561400287014a161371726e9"
+  },
+  {
+    "operation": "operatingReview",
+    "digest": "c376a5dc191fd8d8759578ccd9dffaffadcd621bdc0625fe62c4c08619f3363e",
+    "legacy": true
   },
   {
     "operation": "pr",
@@ -188,7 +198,12 @@
   },
   {
     "operation": "reviewEdges",
-    "digest": "4a759f9e3d3e903b03a3aae8039b3bdca2ed69b3af25a0b20f01c1da55d97123"
+    "digest": "6b45584e433c1f7d281f29fd17044858457f5334aa282531463060d676a07bc9"
+  },
+  {
+    "operation": "reviewEdges",
+    "digest": "4a759f9e3d3e903b03a3aae8039b3bdca2ed69b3af25a0b20f01c1da55d97123",
+    "legacy": true
   },
   {
     "operation": "savedReport",

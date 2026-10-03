@@ -258,6 +258,7 @@ internal/queryapi/scopelabel	1
 internal/queryapi/security	1
 internal/queryapi/server	26
 internal/queryapi/teamscope	1
+internal/queryapi/testopsjobfailures	1
 internal/queryapi/testopsrisk	1
 internal/queryapi/throughputforecast	1
 internal/queryapi/timewindow	3

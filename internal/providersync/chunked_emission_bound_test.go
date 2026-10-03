@@ -202,3 +202,191 @@ func TestTheBoundsAlsoFallInsideTheFinalEmissionAndTheUnitStillFinishes(t *testi
 		t.Fatalf("rows written: distinct=%d duplicated=%d, want 100 and 0", len(sink.rows), sink.duplicates())
 	}
 }
+
+// multiPageChunkHandler is a paginating route: `pages` non-final emissions of `perPage` rows each in one destination (one prepared sub-chunk per row
+// under MaxEffectRows = 1), then the empty final emission. It resumes from the cursor like a real route and counts its provider calls.
+type multiPageChunkHandler struct {
+	pages, perPage int
+	calls          *int
+}
+
+func (handler *multiPageChunkHandler) Collect(
+	context.Context, Claim, providerfoundation.Credential, *providerfoundation.HTTPClient, time.Time,
+) (CompleteRouteBatch, error) {
+	return CompleteRouteBatch{}, ErrInvalidConfiguration
+}
+
+func (handler *multiPageChunkHandler) CollectChunks(
+	_ context.Context, claim Claim, _ providerfoundation.Credential,
+	_ *providerfoundation.HTTPClient, _ time.Time, resumeCursor string,
+	emit func(ChunkRouteEmission) error,
+) error {
+	if handler.calls != nil {
+		*handler.calls++
+	}
+	start := 0
+	if resumeCursor != "" {
+		var cursor struct {
+			Page int `json:"page"`
+		}
+		if err := json.Unmarshal([]byte(resumeCursor), &cursor); err != nil {
+			return err
+		}
+		start = cursor.Page
+	}
+	for page := start; page < handler.pages; page++ {
+		rows := make([]json.RawMessage, 0, handler.perPage)
+		for index := 0; index < handler.perPage; index++ {
+			rows = append(rows, json.RawMessage(`{"org_id":"`+claim.OrgID+`","page":`+strconv.Itoa(page)+`,"row":`+strconv.Itoa(index)+`}`))
+		}
+		effects := make([]EffectBatch, 0, 6)
+		for _, destination := range []string{"ci_pipeline_runs", "ci_job_runs", "ci_acceptance_checks",
+			"test_suite_results", "test_case_results", "coverage_snapshots"} {
+			destinationRows := []json.RawMessage(nil)
+			if destination == "ci_pipeline_runs" {
+				destinationRows = rows
+			}
+			effect, err := BuildEffectBatch(destination, EffectReplaySafe, destinationRows)
+			if err != nil {
+				return err
+			}
+			effects = append(effects, effect)
+		}
+		if err := emit(ChunkRouteEmission{
+			Batch: CompleteRouteBatch{Effects: effects}, CursorBefore: pagedChunkCursor(page), CursorAfter: pagedChunkCursor(page + 1),
+		}); err != nil {
+			return err
+		}
+	}
+	empty, err := testOpsEffects(nil, nil, nil, nil, nil, nil)
+	if err != nil {
+		return err
+	}
+	return emit(ChunkRouteEmission{
+		Batch:        CompleteRouteBatch{Effects: empty, Result: map[string]any{"complete": true}, Watermark: claim.BeforeAt},
+		CursorBefore: pagedChunkCursor(handler.pages), CursorAfter: pagedChunkCursor(handler.pages), Final: true,
+	})
+}
+
+// An attempt that drained prepared chunks up to the bound hands over BEFORE it asks the provider: with 6 sub-chunks per provider page and a bound of 3,
+// attempt 2 drains the 3 left of page 1 (the bound) and must not fetch page 2 and commit one more (a bound of 3 plus 1: the drain loop does not hand
+// over at its last prepared chunk). Every attempt commits at most 3 and at least 1 (progress), and the route is called once per page.
+func TestAnAttemptThatDrainedUpToTheBoundHandsOverBeforeAskingTheProvider(t *testing.T) {
+	t.Parallel()
+	policy := DefaultChunkPolicy()
+	policy.MaxChunksPerAttempt = 3
+	policy.MaxEffectRows = 1
+	now := time.Date(2026, 10, 1, 12, 0, 0, 0, time.UTC)
+	claim, session := completeRouteSessionFor(t, now, false, "github", "cicd")
+	descriptor, _ := Descriptor("github", "cicd")
+	descriptor.ChunkPolicy = policy
+	store := newChunkMemoryStore()
+	sink := &recoveryRowSink{}
+	calls := 0
+	executor := completeRouteExecutor(now, &multiPageChunkHandler{pages: 3, perPage: 6, calls: &calls}, store, sink)
+	executor.Credentials.Repository = &trackingCompleteRouteCredentialRepository{provider: "github"}
+	executor.Credentials.Decryptor = chunkedCredentialDecryptor{}
+	committed := func() int {
+		checkpoint, err := store.LoadChunkCheckpoint(context.Background(), claim, now)
+		if err != nil {
+			return 0
+		}
+		return checkpoint.NextOrdinal
+	}
+	for attempt := 1; ; attempt++ {
+		if attempt > 100 {
+			t.Fatal("the unit does not finish after 100 attempts")
+		}
+		before := committed()
+		_, err := executor.Execute(context.Background(), session, descriptor)
+		delta := committed() - before
+		if err == nil {
+			break
+		}
+		stopped := continuationOf(t, err)
+		if delta > policy.MaxChunksPerAttempt || stopped.Chunks > policy.MaxChunksPerAttempt {
+			t.Fatalf("attempt %d committed %d (reports %d), over the bound of %d", attempt, delta, stopped.Chunks, policy.MaxChunksPerAttempt)
+		}
+		if delta < 1 || stopped.Chunks != delta {
+			t.Fatalf("attempt %d committed %d and reports %d: every attempt must progress and report what it committed", attempt, delta, stopped.Chunks)
+		}
+	}
+	if sink.duplicates() != 0 || len(sink.rows) != 3*6 {
+		t.Fatalf("rows written: distinct=%d duplicated=%d, want 18 and 0", len(sink.rows), sink.duplicates())
+	}
+}
+
+// Progress under a wall bound that is already past at the start of every attempt (1 ns, the process clock): every attempt still commits at least one sub-chunk.
+func TestEveryAttemptProgressesEvenWhenTheWallBoundIsAlreadyPast(t *testing.T) {
+	t.Parallel()
+	policy := DefaultChunkPolicy()
+	policy.MaxWallTime = time.Nanosecond
+	policy.MaxEffectRows = 1
+	now := time.Date(2026, 10, 1, 12, 0, 0, 0, time.UTC)
+	claim, session := completeRouteSessionFor(t, now, false, "github", "cicd")
+	descriptor, _ := Descriptor("github", "cicd")
+	descriptor.ChunkPolicy = policy
+	store := newChunkMemoryStore()
+	sink := &recoveryRowSink{}
+	executor := completeRouteExecutor(now, &pagedChunkHandler{pages: 3}, store, sink)
+	executor.Credentials.Repository = &trackingCompleteRouteCredentialRepository{provider: "github"}
+	executor.Credentials.Decryptor = chunkedCredentialDecryptor{}
+	executor.Now = nil
+	last := -1
+	for attempt := 1; ; attempt++ {
+		if attempt > 200 {
+			t.Fatal("the unit does not finish after 200 attempts")
+		}
+		_, err := executor.Execute(context.Background(), session, descriptor)
+		checkpoint, _ := store.LoadChunkCheckpoint(context.Background(), claim, now)
+		if err == nil {
+			break
+		}
+		continuationOf(t, err)
+		if checkpoint.NextOrdinal <= last {
+			t.Fatalf("attempt %d committed nothing (next ordinal stays %d)", attempt, checkpoint.NextOrdinal)
+		}
+		last = checkpoint.NextOrdinal
+	}
+	if sink.duplicates() != 0 || len(sink.rows) != 3*6 {
+		t.Fatalf("rows: distinct=%d duplicated=%d, want 18 and 0", len(sink.rows), sink.duplicates())
+	}
+}
+
+// The same under the WALL bound: with a clock that is past a 1 s bound after every sub-chunk, each attempt commits exactly one sub-chunk, also the one that drains the
+// last prepared chunk of a page (it must not go on to fetch the next page and commit another).
+func TestAnAttemptThatDrainedUpToTheWallBoundHandsOverBeforeAskingTheProvider(t *testing.T) {
+	t.Parallel()
+	policy := DefaultChunkPolicy()
+	policy.MaxWallTime = time.Second
+	policy.MaxEffectRows = 1
+	now := time.Date(2026, 10, 1, 12, 0, 0, 0, time.UTC)
+	claim, session := completeRouteSessionFor(t, now, false, "github", "cicd")
+	descriptor, _ := Descriptor("github", "cicd")
+	descriptor.ChunkPolicy = policy
+	store := newChunkMemoryStore()
+	sink := &recoveryRowSink{}
+	executor := completeRouteExecutor(now, &multiPageChunkHandler{pages: 3, perPage: 2}, store, sink)
+	executor.Credentials.Repository = &trackingCompleteRouteCredentialRepository{provider: "github"}
+	executor.Credentials.Decryptor = chunkedCredentialDecryptor{}
+	clock := now
+	executor.Now = func() time.Time { clock = clock.Add(2 * time.Second); return clock }
+	for attempt := 1; ; attempt++ {
+		if attempt > 100 {
+			t.Fatal("the unit does not finish after 100 attempts")
+		}
+		before, _ := store.LoadChunkCheckpoint(context.Background(), claim, now)
+		_, err := executor.Execute(context.Background(), session, descriptor)
+		after, _ := store.LoadChunkCheckpoint(context.Background(), claim, now)
+		if err == nil {
+			break
+		}
+		continuationOf(t, err)
+		if delta := after.NextOrdinal - before.NextOrdinal; delta != 1 {
+			t.Fatalf("attempt %d committed %d sub-chunks, want exactly 1 (the wall bound is past after every sub-chunk)", attempt, delta)
+		}
+	}
+	if sink.duplicates() != 0 || len(sink.rows) != 3*2 {
+		t.Fatalf("rows written: distinct=%d duplicated=%d, want 6 and 0", len(sink.rows), sink.duplicates())
+	}
+}

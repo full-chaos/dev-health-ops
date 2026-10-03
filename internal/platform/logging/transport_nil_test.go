@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"net"
 	"net/url"
+	"syscall"
 	"testing"
 )
 
@@ -50,20 +51,43 @@ func TestIsLocationParseRefusal(t *testing.T) {
 		err  error
 		want bool
 	}{
-		"the refusal":                    {&url.Error{Op: "Get", URL: "https://x.example.test", Err: phrase}, true},
-		"the refusal, wrapped":           {fmt.Errorf("w: %w", &url.Error{Op: "Get", URL: "https://x.example.test", Err: phrase}), true},
-		"an ordinary url error":          {&url.Error{Op: "Get", URL: "https://x.example.test", Err: errors.New("dial tcp: refused")}, false},
-		"the phrase with a cause":        {&url.Error{Op: "Get", URL: "https://x.example.test", Err: fmt.Errorf("failed to parse Location header \"x\": %w", errors.New("inner"))}, false},
-		"the phrase, no url error":       {phrase, false},
-		"typed-nil url error":            {error(nilURL), false},
-		"typed-nil url cause":            {&url.Error{Err: error(nilURL)}, false},
-		"typed-nil op cause":             {&url.Error{Err: error(nilOp)}, false},
-		"typed-nil url cause, depth two": {fmt.Errorf("a: %w", fmt.Errorf("b: %w", &url.Error{Err: error(nilURL)})), false},
-		"no error":                       {nil, false},
+		"the refusal":                                {&url.Error{Op: "Get", URL: "https://x.example.test", Err: phrase}, true},
+		"the refusal, wrapped":                       {fmt.Errorf("w: %w", &url.Error{Op: "Get", URL: "https://x.example.test", Err: phrase}), true},
+		"an ordinary url error":                      {&url.Error{Op: "Get", URL: "https://x.example.test", Err: errors.New("dial tcp: refused")}, false},
+		"the phrase with a cause":                    {&url.Error{Op: "Get", URL: "https://x.example.test", Err: fmt.Errorf("failed to parse Location header \"x\": %w", errors.New("inner"))}, false},
+		"the phrase, no url error":                   {phrase, false},
+		"a leaf cause that only mentions the phrase": {&url.Error{Op: "Get", URL: "https://x.example.test", Err: errors.New("x: failed to parse Location header y")}, false},
+		"typed-nil url error":                        {error(nilURL), false},
+		"typed-nil url cause":                        {&url.Error{Err: error(nilURL)}, false},
+		"typed-nil op cause":                         {&url.Error{Err: error(nilOp)}, false},
+		"typed-nil url cause, depth two":             {fmt.Errorf("a: %w", fmt.Errorf("b: %w", &url.Error{Err: error(nilURL)})), false},
+		"no error":                                   {nil, false},
 	}
 	for name, row := range rows {
 		if got := IsLocationParseRefusal(row.err); got != row.want {
 			t.Errorf("%s: IsLocationParseRefusal = %v, want %v", name, got, row.want)
+		}
+	}
+}
+
+// CHAOS-8127 vet: a *net.OpError that is neither a dial nor a timeout (a read reset) is NOT retried (httpx: only TimeoutException
+// and ConnectError are); a dial is.
+func TestRetryableTransportRetriesOnlyDialAndTimeout(t *testing.T) {
+	rows := map[string]struct {
+		err  error
+		want bool
+	}{
+		"dial":                  {&net.OpError{Op: "dial", Net: "tcp", Err: errors.New("connection refused")}, true},
+		"dial, wrapped":         {fmt.Errorf("w: %w", &net.OpError{Op: "dial", Err: errors.New("x")}), true},
+		"read reset":            {&net.OpError{Op: "read", Net: "tcp", Err: syscall.ECONNRESET}, false},
+		"write broken pipe":     {&net.OpError{Op: "write", Net: "tcp", Err: syscall.EPIPE}, false},
+		"read reset in url err": {&url.Error{Op: "Get", URL: "https://x.example.test", Err: &net.OpError{Op: "read", Err: syscall.ECONNRESET}}, false},
+		"plain error":           {errors.New("boom"), false},
+		"no error":              {nil, false},
+	}
+	for name, row := range rows {
+		if got := RetryableTransport(row.err); got != row.want {
+			t.Errorf("%s: RetryableTransport = %v, want %v", name, got, row.want)
 		}
 	}
 }

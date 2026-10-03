@@ -325,3 +325,70 @@ func TestCumulativeShareOfBinsWithNoRunsIsZeroNotNaN(t *testing.T) {
 		}
 	}
 }
+
+// The curve (cumulativeShare) and the served percentile days are two readings
+// of ONE Monte Carlo distribution, and they agree to the kernel's own
+// interpolation rule. numerical.IntegerPercentiles ranks the runs, takes the
+// two consecutive runs around rank (n-1)*p and interpolates between their
+// outcomes. The day on which the curve first reaches p is the outcome of one
+// of those same two runs. So both lie between the two outcomes: they are the
+// same day unless the two runs ended on different days, and then they differ by
+// at most that gap. This is the "off by one" a reader of the chart can see,
+// and it is stated in the SDL description of cumulativeShare.
+func TestTheCurveAndTheServedPercentilesAreOneDistribution(t *testing.T) {
+	history := []int{3, 8, 1, 5, 13, 2, 9, 4, 6, 7, 0, 11}
+	percentiles := []float64{0.50, 0.85, 0.95}
+	sameDay, apart := 0, 0
+	// Few runs give wide gaps between consecutive ranked runs (the case where
+	// the two readings can differ); many runs give the ordinary case.
+	for _, simulations := range []int{7, 20, 200, 500, 10000} {
+		for seed := int64(1); seed <= 12; seed++ {
+			items := 60
+			result, err := numerical.ForecastCapacity(numerical.ForecastRequest{
+				History:     numerical.Throughput{DailyThroughputs: history, DaysOfHistory: len(history)},
+				TargetItems: &items,
+				Simulations: simulations,
+				Seed:        seed,
+			}, day(t, "2026-09-01"))
+			if err != nil {
+				t.Fatalf("kernel (%d runs, seed %d): %v", simulations, seed, err)
+			}
+			got := distributionToModel(result.DaysHistogram, nil)
+			if got == nil || got.Runs != simulations {
+				t.Fatalf("%d runs, seed %d: distribution = %+v", simulations, seed, got)
+			}
+			ranked := expandBins(got.Days) // ascending: the bins are ascending by value
+			served := []int{*result.P50Days, *result.P85Days, *result.P95Days}
+			for index, percentile := range percentiles {
+				low := int(float64(len(ranked)-1) * percentile)
+				high := min(low+1, len(ranked)-1)
+				firstReached := -1
+				for _, bin := range got.Days {
+					if bin.CumulativeShare >= percentile {
+						firstReached = bin.Value
+						break
+					}
+				}
+				if firstReached < ranked[low] || firstReached > ranked[high] {
+					t.Errorf("%d runs, seed %d, p%v: the curve first reaches it on day %d, outside the two ranked runs' days %d..%d",
+						simulations, seed, percentile*100, firstReached, ranked[low], ranked[high])
+				}
+				if served[index] < ranked[low] || served[index] > ranked[high] {
+					t.Errorf("%d runs, seed %d, p%v: the served percentile day %d is outside the two ranked runs' days %d..%d",
+						simulations, seed, percentile*100, served[index], ranked[low], ranked[high])
+				}
+				if firstReached == served[index] {
+					sameDay++
+				} else {
+					apart++
+				}
+			}
+		}
+	}
+	// Both cases must have been measured, or the bound above was never tried
+	// where it matters.
+	if sameDay == 0 || apart == 0 {
+		t.Fatalf("same day %d times, apart %d times: the test did not reach both cases", sameDay, apart)
+	}
+	t.Logf("the curve and the served percentile day agree on the day in %d of %d readings; they are apart, inside the gap of two ranked runs, in %d", sameDay, sameDay+apart, apart)
+}

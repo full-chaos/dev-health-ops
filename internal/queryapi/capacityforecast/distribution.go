@@ -74,8 +74,11 @@ func binsToModel(histogram *numerical.Histogram) []model.CapacityDistributionBin
 	return bins
 }
 
-// cumulativeShare is the share of a mode's runs that ended on a bin's value or
-// a lower one (CHAOS-8477): the running sum of the counts over the run total.
+// cumulativeShare is the share of a mode's simulation runs that completed on a
+// bin's value or a lower one (CHAOS-8477): the running sum of the counts over
+// the run total, from the same Monte Carlo distribution the percentile days
+// come from (TestTheCurveAndTheServedPercentilesAreOneDistribution pins how
+// the two agree).
 // The bins are ascending by value (numerical.NewHistogram), so the share never
 // falls, and the last bin's is total/total = 1 exactly. It is computed here so
 // that a caller draws the cumulative curve from served values and adds no

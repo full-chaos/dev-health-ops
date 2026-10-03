@@ -488,10 +488,15 @@ type CapacityDistributionBin {
   "How many simulation runs ended on this value."
   count: Int!
   """
-  The share of the mode's runs that ended on this value or a lower one
-  (CHAOS-8477): 0 to 1, never lower than on the bin before, and 1 on the last
-  bin. In the days mode it is the chance that the target items are done on or
-  before that day.
+  The share of the mode's simulation runs that completed on this value or a
+  lower one (CHAOS-8477), from the same Monte Carlo distribution as p50Days /
+  p85Days / p95Days: 0 to 1, never lower than on the bin before, and 1 on the
+  last bin. In the days mode it is the share of the runs in which the target
+  items were done on or before that day. The percentile days are an
+  interpolated rank of the same runs: the day on which this share first reaches
+  0.50 and p50Days both lie between the outcomes of the same two consecutive
+  ranked runs, so they are the same day unless those two runs ended on
+  different days (and so for 0.85 and p85Days, 0.95 and p95Days).
   """
   cumulativeShare: Float!
 }

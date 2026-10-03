@@ -1328,7 +1328,12 @@ services:
   # envelope-keys` refuses to replace an existing key; with --skip-existing a
   # later `up` finds the complete set, changes nothing and exits 0 (a partial
   # or mismatching set exits non-zero and is left as it is). It prints no key
-  # material. Rotation is not automatic. The volume's mount point exists in the
+  # material. A refusal (exit 3: partial-by-hand, mismatching, symlinked or
+  # too-open files) or failure (exit 1) is not retried (`restart: "no"`): the
+  # container stays exited, dependents do not start, `up` reports "service
+  # envelope-keys-init didn't complete successfully", and `docker compose logs
+  # envelope-keys-init` shows the one-line reason naming the file. A crash
+  # during the first write is repaired by the next `up`. Rotation is not automatic. The volume's mount point exists in the
   # operator image owned by 65532 (docker/go-worker.Dockerfile), which is what
   # makes a fresh named volume writable by that uid; an older pinned image
   # without the directory leaves the volume root-owned and this service fails

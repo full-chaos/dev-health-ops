@@ -108,20 +108,3 @@ func TestEnsureKeyFilesIsIdempotentAndNeverReplaces(t *testing.T) {
 		t.Fatal("mismatching Ensure changed a file")
 	}
 }
-
-func TestEnsureKeyFilesFailsOnAPartialSet(t *testing.T) {
-	dir := t.TempDir()
-	paths, err := GenerateKeyFiles(dir, "kid-a")
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := os.Remove(paths.JWKS); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := EnsureKeyFiles(dir, "kid-a"); !errors.Is(err, ErrKeyFilesExist) {
-		t.Fatalf("Ensure on a partial set = %v, want ErrKeyFilesExist", err)
-	}
-	if _, err := os.Stat(paths.JWKS); !errors.Is(err, os.ErrNotExist) {
-		t.Fatal("Ensure recreated the missing JWKS beside an existing key")
-	}
-}

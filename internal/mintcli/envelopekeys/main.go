@@ -63,8 +63,8 @@ func run(args []string, stdout, flagErrOutput io.Writer, lookup func(string) (st
 		_, err = envelopemint.GenerateKeyFiles(*dir, *keyID)
 	}
 	if err != nil {
-		if errors.Is(err, envelopemint.ErrKeyFilesExist) {
-			return cli.ExitRefused, fmt.Errorf("%w (existing files are unchanged)", err)
+		if errors.Is(err, envelopemint.ErrKeyFilesExist) || errors.Is(err, envelopemint.ErrKeyFilesInconsistent) {
+			return cli.ExitRefused, fmt.Errorf("%w (existing files are not changed)", err)
 		}
 		return cli.ExitFailure, err
 	}

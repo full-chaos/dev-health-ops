@@ -13,6 +13,7 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
+	"strings"
 )
 
 // File layout GenerateKeyFiles writes under its target directory. The private
@@ -49,6 +50,25 @@ func PathsIn(dir string) KeyPaths {
 	}
 }
 
+// ErrKeyFilesInconsistent is returned when the files on disk are not a state
+// this program can produce or safely accept (a public key without its private
+// key, a pair that does not match, a symlink, or permissions wider than
+// allowed). Nothing is changed, repaired or loosened in that case.
+var ErrKeyFilesInconsistent = errors.New("envelopemint: envelope key files are in a state that is not accepted")
+
+// Crash safety. Every file is written to a temp file in its own directory,
+// fsynced, and then linked to its final name (link fails if the name exists, so
+// a final file is never overwritten) and the directory is fsynced. The private
+// key is committed first and the JWKS second. A kill therefore leaves one of:
+// nothing (plus a temp file, removed on the next run), the private key alone
+// (the JWKS is derived again from it by EnsureKeyFiles), or the complete pair.
+// The JWKS is never present without the private key.
+const tempMarker = ".tmp-"
+
+// crashHook is a test seam: it is called at each write point, and an error from
+// it aborts the write WITHOUT cleanup, which is what a SIGKILL there leaves.
+var crashHook = func(point string) error { return nil }
+
 // GenerateKeyFiles writes a new Ed25519 private key (PKCS#8 "PRIVATE KEY" PEM,
 // the shape LoadPrivateKey reads, mode 0400) and the matching JWKS (the shape
 // the query-api verifier reads: OKP/Ed25519/EdDSA, use=sig, mode 0444) under
@@ -81,54 +101,162 @@ func GenerateKeyFiles(dir, keyID string) (KeyPaths, error) {
 		return paths, err
 	}
 
-	if err := mkdirMode(filepath.Join(dir, PrivateSubdir), privateDirMode); err != nil {
+	if err := mkdirMode(filepath.Dir(paths.Private), privateDirMode); err != nil {
 		return paths, err
 	}
-	if err := mkdirMode(filepath.Join(dir, PublicSubdir), publicDirMode); err != nil {
+	if err := mkdirMode(filepath.Dir(paths.JWKS), publicDirMode); err != nil {
 		return paths, err
 	}
-	if err := createExclusive(paths.Private, keyPEM, privateKeyMode); err != nil {
+	if err := writeNew(paths.Private, keyPEM, privateKeyMode, "private"); err != nil {
 		return paths, err
 	}
-	if err := createExclusive(paths.JWKS, jwks, jwksMode); err != nil {
-		_ = os.Remove(paths.Private)
+	if err := writeNew(paths.JWKS, jwks, jwksMode, "jwks"); err != nil {
 		return paths, err
 	}
 	return paths, nil
 }
 
 // EnsureKeyFiles is the idempotent form for a start-up step that runs on every
-// `up`: it generates a key set when none exists (created=true), and does
-// nothing when a complete, consistent set exists (the private key parses, and
-// the JWKS holds its public key under keyID). A partial set, an unreadable
-// set, or a set under another key id is an error: it is never replaced.
-func EnsureKeyFiles(dir, keyID string) (created bool, err error) {
+// `up`. It returns changed=true when it wrote anything.
+//   - Nothing on disk: generate a pair.
+//   - Private key alone (the only half state a crash of this program leaves):
+//     derive the JWKS again from it, after the private key passes the same
+//     checks as below.
+//   - A complete pair: accept it, changing nothing, ONLY IF every clause of
+//     checkKeySet holds. Otherwise return ErrKeyFilesInconsistent (or
+//     ErrKeyFilesExist for the generate-refusal cases) naming file and reason.
+//
+// It never loosens or repairs permissions and never replaces a key.
+func EnsureKeyFiles(dir, keyID string) (changed bool, err error) {
 	paths := PathsIn(dir)
-	_, privErr := os.Lstat(paths.Private)
-	_, jwksErr := os.Lstat(paths.JWKS)
-	privMissing := errors.Is(privErr, fs.ErrNotExist)
-	jwksMissing := errors.Is(jwksErr, fs.ErrNotExist)
+	removeStaleTemps(filepath.Dir(paths.Private))
+	removeStaleTemps(filepath.Dir(paths.JWKS))
+	privMissing, err := missing(paths.Private)
+	if err != nil {
+		return false, err
+	}
+	jwksMissing, err := missing(paths.JWKS)
+	if err != nil {
+		return false, err
+	}
 	switch {
 	case privMissing && jwksMissing:
 		_, err := GenerateKeyFiles(dir, keyID)
 		return err == nil, err
-	case privMissing != jwksMissing:
-		return false, fmt.Errorf("%w: only one of %s and %s exists; remove both or restore the missing one", ErrKeyFilesExist, paths.Private, paths.JWKS)
+	case privMissing:
+		return false, fmt.Errorf("%w: %s exists but %s does not; a crash of this program cannot leave that, so it is not repaired", ErrKeyFilesInconsistent, paths.JWKS, paths.Private)
+	case jwksMissing:
+		priv, err := checkPrivate(paths)
+		if err != nil {
+			return false, err
+		}
+		jwks, err := jwksDocument(priv.Public().(ed25519.PublicKey), keyID)
+		if err != nil {
+			return false, err
+		}
+		if err := mkdirMode(filepath.Dir(paths.JWKS), publicDirMode); err != nil {
+			return false, err
+		}
+		if err := writeNew(paths.JWKS, jwks, jwksMode, "jwks"); err != nil {
+			return false, err
+		}
+		return true, nil
 	}
-	if err := checkKeySet(paths, keyID); err != nil {
-		return false, err
-	}
-	return false, nil
+	return false, checkKeySet(paths, keyID)
 }
 
-func checkKeySet(paths KeyPaths, keyID string) error {
+func missing(path string) (bool, error) {
+	_, err := os.Lstat(path)
+	switch {
+	case err == nil:
+		return false, nil
+	case errors.Is(err, fs.ErrNotExist):
+		return true, nil
+	}
+	return false, fmt.Errorf("envelopemint: check %s: %w", path, err)
+}
+
+func inconsistent(format string, args ...any) error {
+	return fmt.Errorf("%w: %s", ErrKeyFilesInconsistent, fmt.Sprintf(format, args...))
+}
+
+// checkLeaf requires path to be a regular file (Lstat: a symlink is refused)
+// and its directory to be a real directory (not a symlink).
+func checkLeaf(path, what string) (fs.FileInfo, error) {
+	dirInfo, err := os.Lstat(filepath.Dir(path))
+	if err != nil {
+		return nil, inconsistent("%s directory %s: %v", what, filepath.Dir(path), err)
+	}
+	// Lstat does not follow, so a symlinked directory is not IsDir.
+	if !dirInfo.IsDir() {
+		return nil, inconsistent("%s directory %s is a symlink or not a directory", what, filepath.Dir(path))
+	}
+	info, err := os.Lstat(path)
+	if err != nil {
+		return nil, inconsistent("%s %s: %v", what, path, err)
+	}
+	if info.Mode()&fs.ModeSymlink != 0 {
+		return nil, inconsistent("%s %s is a symlink", what, path)
+	}
+	if !info.Mode().IsRegular() {
+		return nil, inconsistent("%s %s is not a regular file", what, path)
+	}
+	return info, nil
+}
+
+// checkPrivate applies the private-side clauses: regular file in a real
+// directory, no group or other bits on the file or its directory, parses as the
+// key LoadPrivateKey reads.
+func checkPrivate(paths KeyPaths) (ed25519.PrivateKey, error) {
+	info, err := checkLeaf(paths.Private, "private key")
+	if err != nil {
+		return nil, err
+	}
+	if info.Mode().Perm()&0o077 != 0 {
+		return nil, inconsistent("private key %s has mode %o; group and other bits must be clear (it is not changed)", paths.Private, info.Mode().Perm())
+	}
+	dirInfo, err := os.Lstat(filepath.Dir(paths.Private))
+	if err != nil {
+		return nil, inconsistent("private directory %s: %v", filepath.Dir(paths.Private), err)
+	}
+	if dirInfo.Mode().Perm()&0o077 != 0 {
+		return nil, inconsistent("private directory %s has mode %o; group and other bits must be clear (it is not changed)", filepath.Dir(paths.Private), dirInfo.Mode().Perm())
+	}
 	pemBytes, err := os.ReadFile(paths.Private)
 	if err != nil {
-		return fmt.Errorf("envelopemint: read existing private key: %w", err)
+		return nil, fmt.Errorf("envelopemint: read existing private key: %w", err)
 	}
 	priv, err := LoadPrivateKey(pemBytes)
 	if err != nil {
+		return nil, inconsistent("private key %s: %v", paths.Private, err)
+	}
+	return priv, nil
+}
+
+// checkKeySet is the accept predicate for an existing pair. Clauses: both are
+// regular files in real directories (no symlink); the private key and its
+// directory have no group or other bits; the JWKS file is world-readable
+// (0004) and its directory world-searchable (0005), the mode the reader
+// service needs when it runs under another uid; and the JWKS holds exactly the
+// public key of the private key under keyID.
+func checkKeySet(paths KeyPaths, keyID string) error {
+	priv, err := checkPrivate(paths)
+	if err != nil {
 		return err
+	}
+	info, err := checkLeaf(paths.JWKS, "JWKS")
+	if err != nil {
+		return err
+	}
+	if info.Mode().Perm()&0o004 == 0 {
+		return inconsistent("JWKS %s has mode %o; it must be world-readable for the reader (it is not changed)", paths.JWKS, info.Mode().Perm())
+	}
+	pubDir, err := os.Lstat(filepath.Dir(paths.JWKS))
+	if err != nil {
+		return inconsistent("public directory %s: %v", filepath.Dir(paths.JWKS), err)
+	}
+	if pubDir.Mode().Perm()&0o005 != 0o005 {
+		return inconsistent("public directory %s has mode %o; it must be world-readable and searchable (it is not changed)", filepath.Dir(paths.JWKS), pubDir.Mode().Perm())
 	}
 	raw, err := os.ReadFile(paths.JWKS)
 	if err != nil {
@@ -139,9 +267,21 @@ func checkKeySet(paths KeyPaths, keyID string) error {
 		return err
 	}
 	if !bytes.Equal(bytes.TrimSpace(raw), bytes.TrimSpace(want)) {
-		return fmt.Errorf("envelopemint: existing JWKS %s does not match the existing private key under key id %q; it is left unchanged", paths.JWKS, keyID)
+		return inconsistent("JWKS %s does not match the private key %s under key id %q (both are left unchanged)", paths.JWKS, paths.Private, keyID)
 	}
 	return nil
+}
+
+func removeStaleTemps(dir string) {
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		return
+	}
+	for _, e := range entries {
+		if strings.Contains(e.Name(), tempMarker) {
+			_ = os.Remove(filepath.Join(dir, e.Name()))
+		}
+	}
 }
 
 func jwksDocument(pub ed25519.PublicKey, keyID string) ([]byte, error) {
@@ -172,25 +312,60 @@ func mkdirMode(path string, mode fs.FileMode) error {
 	return nil
 }
 
-// createExclusive creates path (failing if it exists), writes data and sets
-// mode explicitly so the process umask cannot widen or narrow it.
-func createExclusive(path string, data []byte, mode fs.FileMode) error {
-	f, err := os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_EXCL, mode)
+// writeNew writes data to path atomically and never over an existing file:
+// temp file in the same directory, fsync, link to the final name, remove the
+// temp name, fsync the directory. point names the file for crashHook.
+func writeNew(path string, data []byte, mode fs.FileMode, point string) (err error) {
+	dir := filepath.Dir(path)
+	f, err := os.CreateTemp(dir, "."+filepath.Base(path)+tempMarker+"*")
 	if err != nil {
-		if errors.Is(err, fs.ErrExist) {
+		return fmt.Errorf("envelopemint: create temp file in %s: %w", dir, err)
+	}
+	tmp := f.Name()
+	crashed := false
+	defer func() {
+		if err != nil && !crashed {
+			_ = os.Remove(tmp)
+		}
+	}()
+	step := func(name string) error {
+		if herr := crashHook(point + ":" + name); herr != nil {
+			crashed = true
+			return herr
+		}
+		return nil
+	}
+	if _, werr := f.Write(data); werr != nil {
+		_ = f.Close()
+		return fmt.Errorf("envelopemint: write %s: %w", tmp, werr)
+	}
+	if cerr := f.Chmod(mode); cerr != nil {
+		_ = f.Close()
+		return fmt.Errorf("envelopemint: chmod %s: %w", tmp, cerr)
+	}
+	if serr := f.Sync(); serr != nil {
+		_ = f.Close()
+		return fmt.Errorf("envelopemint: fsync %s: %w", tmp, serr)
+	}
+	if cerr := f.Close(); cerr != nil {
+		return fmt.Errorf("envelopemint: close %s: %w", tmp, cerr)
+	}
+	if err := step("temp-written"); err != nil {
+		return err
+	}
+	if lerr := os.Link(tmp, path); lerr != nil {
+		if errors.Is(lerr, fs.ErrExist) {
 			return fmt.Errorf("%w: %s", ErrKeyFilesExist, path)
 		}
-		return fmt.Errorf("envelopemint: create %s: %w", path, err)
+		return fmt.Errorf("envelopemint: link %s: %w", path, lerr)
 	}
-	_, werr := f.Write(data)
-	cerr := f.Close()
-	if werr != nil || cerr != nil {
-		_ = os.Remove(path)
-		return fmt.Errorf("envelopemint: write %s: %w", path, errors.Join(werr, cerr))
+	if err := step("committed"); err != nil {
+		return err
 	}
-	if err := os.Chmod(path, mode); err != nil {
-		_ = os.Remove(path)
-		return fmt.Errorf("envelopemint: chmod %s: %w", path, err)
+	_ = os.Remove(tmp)
+	if d, derr := os.Open(dir); derr == nil {
+		_ = d.Sync()
+		_ = d.Close()
 	}
 	return nil
 }

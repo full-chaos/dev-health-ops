@@ -652,3 +652,43 @@ func TestAnOldAttemptsClaimedFallbackLeavesAReplacementsRetryReleaseReclaimable(
 		t.Fatalf("the replacement's retry cannot reclaim: %v, %v", again, err)
 	}
 }
+
+// CHAOS-8177 (vetter-2 HOLD): the replacement crashed without a release and its lease expired. The OLD attempt's claimed
+// fallback must still leave it alone (the partition is the replacement's, not the old claim's); only the claim-less
+// path or the replacement's own outcome may end it.
+func TestAnOldAttemptsClaimedFallbackLeavesACrashedReplacementsExpiredLeaseAlone(t *testing.T) {
+	ctx := context.Background()
+	pool, store, _ := newRemainingRedriveTestStack(t)
+	clock := time.Date(2026, 10, 2, 12, 0, 0, 0, time.UTC)
+	store.now = func() time.Time { return clock }
+	org := "00000000-0000-4000-8000-000000009824"
+	run, err := store.StartRun(ctx, StartRunRequest{OrganizationID: org, Family: "capacity", Generation: "replacement-crashed", ScopeKey: "all-teams",
+		GenerationSeed: int64Pointer(824), Scopes: []json.RawMessage{capacityScopeJSON(90)}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	partition := deterministicPartitionID(run.ID, 1)
+	old, err := store.ClaimPartition(ctx, partition)
+	if err != nil || old == nil {
+		t.Fatalf("old claim = %v, %v", old, err)
+	}
+	clock = clock.Add(old.LeaseDuration + time.Minute)
+	replacement, err := store.ClaimPartition(ctx, partition)
+	if err != nil || replacement == nil {
+		t.Fatalf("replacement claim = %v, %v", replacement, err)
+	}
+	clock = clock.Add(replacement.LeaseDuration + time.Minute) // the replacement dies; its lease expires
+	if err := store.ExhaustClaimedPartition(ctx, *old); err != nil {
+		t.Fatal(err)
+	}
+	var runStatus, partitionStatus, token string
+	_ = pool.QueryRow(ctx, "SELECT status FROM remaining_metric_runs WHERE id=$1::uuid", run.ID).Scan(&runStatus)
+	_ = pool.QueryRow(ctx, "SELECT status, COALESCE(claim_token::text,'') FROM remaining_metric_partitions WHERE id=$1::uuid", partition).Scan(&partitionStatus, &token)
+	if runStatus != "running" || partitionStatus != "running" || token != replacement.Token {
+		t.Fatalf("run=%s partition=%s token=%s, want running/running under the replacement's token %s", runStatus, partitionStatus, token, replacement.Token)
+	}
+	clock = clock.Add(time.Second)
+	if again, err := store.ClaimPartition(ctx, partition); err != nil || again == nil {
+		t.Fatalf("the crashed replacement's partition cannot be reclaimed: %v, %v", again, err)
+	}
+}

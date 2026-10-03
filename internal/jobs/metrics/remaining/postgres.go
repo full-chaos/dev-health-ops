@@ -853,7 +853,7 @@ func (store *PostgresStore) ExhaustClaimedPartition(ctx context.Context, claim C
 }
 
 // exhaustPartition is the shared body. Invariant: a claimed caller may end only a partition that is still its own claim
-// (running under its token) or a running one whose lease expired -- never a pending/failed one, because a failed
+// (running under its token, live or expired) -- never another claimant's expired lease, never a pending/failed one, because a failed
 // partition without completed_at was just released for retry by a replacement attempt and must stay reclaimable
 // (CHAOS-8177 r2 P1). claimToken "" = no claim of the caller: pending, failed or expired-lease partitions are taken.
 func (store *PostgresStore) exhaustPartition(ctx context.Context, partitionID, claimToken string) error {
@@ -877,7 +877,7 @@ SET status = 'failed', claim_token = NULL, lease_expires_at = NULL, completed_at
 WHERE partition.id = $2::uuid
   AND (($3::text = '' AND partition.status IN ('pending', 'failed'))
        OR (partition.status = 'running'
-           AND (partition.lease_expires_at <= $1
+           AND (($3::text = '' AND partition.lease_expires_at <= $1)
                 OR ($3::text <> '' AND partition.claim_token = NULLIF($3::text, '')::uuid))))
   AND EXISTS (
       SELECT 1 FROM public.remaining_metric_runs AS run

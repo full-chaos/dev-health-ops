@@ -624,9 +624,15 @@ func TestPartitionHandlerLogsAFailedClaimedExhaustWithItsClassOnly(t *testing.T)
 				t.Fatalf("exhaustedClaims=%d, want 1", store.exhaustedClaims)
 			}
 			logged := buffer.String()
-			for _, want := range append([]string{"could not exhaust a claimed partition", "partition_id"}, row.wantParts...) {
-				if !strings.Contains(logged, want) {
-					t.Fatalf("log lacks %q: %q", want, logged)
+			var line string
+			for _, candidate := range strings.Split(logged, "\n") {
+				if strings.Contains(candidate, "could not exhaust a claimed partition") {
+					line = candidate
+				}
+			}
+			for _, want := range append([]string{"could not exhaust a claimed partition", "partition_id=" + handlerClaim().Partition.ID}, row.wantParts...) {
+				if !strings.Contains(line, want) {
+					t.Fatalf("the exhaust-failure line lacks %q: %q", want, line)
 				}
 			}
 			if strings.Contains(logged, "SECRET-DRIVER-TEXT") {

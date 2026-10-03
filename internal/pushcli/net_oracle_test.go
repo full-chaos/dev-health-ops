@@ -556,7 +556,7 @@ func netMeasured(results []netResult) netMeasure {
 // netUnscrubbed finds a credential-shaped value that is not a placeholder (the producer refuses it before anything is stored); a
 // placeholder and plain text are not found.
 func TestNetUnscrubbedFindsAnUndeclaredCredentialAndNotAPlaceholder(t *testing.T) {
-	undeclared := "fcpush_" + strings.Repeat("z", 20)
+	undeclared := "fcpush_zzzzzzzzzzzzzzzzzzzz"
 	if len(netUnscrubbed("echo "+undeclared)) != 1 {
 		t.Fatal("a push token of the real shape that is not declared was not found")
 	}

@@ -496,6 +496,7 @@ input CapacityForecastFilterInput {
 
 input CapacityForecastInput {
   teamId: String = null
+  teamIds: [String!] = null
   workScopeId: String = null
   targetItems: Int = null
   targetDate: Date = null

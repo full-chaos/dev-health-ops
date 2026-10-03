@@ -147,6 +147,9 @@ jobs:
     # CHAOS-8291: no `continue-on-error`. A finding fails this job (measured on a throwaway PR: step and job failure, the check red,
     # the workflow run kept green by the old setting, no comment, no Code Scanning alert). The job is NOT a required check of the
     # ruleset, so a red job blocks no merge; making it required is a separate ruleset decision.
+    # Two cases where the scan step cannot run and now shows red (before, `continue-on-error` hid them): a Dependabot PR (the action
+    # needs GITLEAKS_LICENSE for an organization and Dependabot runs get no secrets: "License key is required", exit 1) and a
+    # merge_group run (the action does not support that event: exit 1). A scan that did not run is a red job, not a pass.
     # Gitleaks needs:
     #   - security-events: write — upload SARIF findings to code-scanning
     #   - pull-requests: write — post the scan summary comment on the PR

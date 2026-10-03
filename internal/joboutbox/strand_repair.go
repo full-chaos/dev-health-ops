@@ -378,7 +378,7 @@ func (repair *StrandRepair) observeRetiredKinds(
 	// to a bare zero-value literal -- an allocated empty slice here would
 	// silently break that for every caller, not just the ones that inspect
 	// this specific field.
-	var observations []RetiredKindObservation
+	observations := []RetiredKindObservation{}
 	for rows.Next() {
 		var found RetiredKindObservation
 		if err := rows.Scan(&found.OutboxID, &found.JobKind, &found.OrganizationID); err != nil {

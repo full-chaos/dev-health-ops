@@ -445,7 +445,7 @@ def _fingerprint_cases() -> list[dict[str, Any]]:
         for credentials, credential_id in itertools.product(
             SHARED_CREDENTIALS, CREDENTIAL_IDS
         )
-    ]
+    ] + _extra_fingerprint_cases()
 
 
 def _env_credential_cases() -> list[dict[str, Any]]:
@@ -543,6 +543,251 @@ HYDRATION_CASES: tuple[tuple[str, dict[str, str]], ...] = (
 )
 
 
+# Secrets whose UTF-8 holds a byte pair that looks like (but is not) the
+# encoding of a lone surrogate (ED A0..BF): the strict encode accepts them.
+SURROGATE_LOOKALIKE_SECRETS = (
+    "\\u00e0",
+    "\\u00e9",
+    "\\ud7ff",
+    "\\ud55c",
+    "\\ue000",
+    "\\ud83d\\ude00",
+    "a\\u00e0",
+    "\\u00e0a",
+    "\\ud800",
+    "a\\ud800",
+    "\\udbff",
+    "\\udfff",
+    "\\ud800\\ud800",
+)
+
+
+def _extra_fingerprint_cases() -> list[dict[str, Any]]:
+    cases = []
+    for secret in SURROGATE_LOOKALIKE_SECRETS:
+        for key in ("token", "api_token", "client_secret"):
+            cases.append(
+                {"credentials": '{"%s": "%s"}' % (key, secret), "credential_id": ROW_UUID}
+            )
+    return cases
+
+
+# JSON documents the Go decoder, repr and dumps are compared on: json.loads,
+# repr(), json.dumps(sort_keys=True, default=str, separators=(",", ":")),
+# dict(value or {}) and the processor_flags comprehension, each on the same
+# text. Raw lone surrogates stay out of the texts (the document is JSON, and
+# only their \u escapes are listed): a text travels through JSON itself.
+JSON_CURATED = (
+    "",
+    " ",
+    "null",
+    " null ",
+    "nul",
+    "nullx",
+    "true",
+    "false",
+    "True",
+    "NaN",
+    "Infinity",
+    "-Infinity",
+    "+Infinity",
+    "-NaN",
+    "Inf",
+    "0",
+    "-0",
+    "-",
+    "--1",
+    "01",
+    "-01",
+    "0.",
+    "0.5",
+    ".5",
+    "1.",
+    "1e",
+    "1e+",
+    "1E5",
+    "1e-5",
+    "1e400",
+    "-1e400",
+    "1.5e+3",
+    "0e0",
+    "1.0",
+    "-0.0",
+    "100000000000000000000",
+    "-100000000000000000000",
+    "9223372036854775807",
+    "9223372036854775808",
+    "-9223372036854775808",
+    "-9223372036854775809",
+    "0.1",
+    "1e22",
+    "1e21",
+    "1e16",
+    "123456789.123456789",
+    "5e-324",
+    "2.5e-5",
+    '""',
+    '"',
+    '"abc',
+    "\"a'b\"",
+    "\"a'b\\\"c\"",
+    '"\\u0041"',
+    '"\\u00e9"',
+    '"\\u00"',
+    '"\\uZZZZ"',
+    '"\\ud800"',
+    '"\\ud800\\u0041"',
+    '"\\udc00"',
+    '"\\ud83d\\ude00"',
+    '"\\ud83d\\ud83d\\ude00"',
+    '"\\ude00\\ud83d"',
+    '"\\ud800\\udbff"',
+    '"\\x41"',
+    '"\\\'"',
+    '"tab\there"',
+    '"nl\\nx"',
+    '"\\u0000\\u001f\\u007f\\u0080\\u00a0\\u00ad\\u2028\\u2029\\ufeff\\ufffe"',
+    '"\\u0301\\u200b\\u3000\\ue000\\uf8ff"',
+    '"\\ufffe\\uffff\\ud7ff\\ue000\\ud83d\\ude00"',
+    '"\\u00e9\\u00ff\\u0100\\u0378\\u1c80\\u2e5d"',
+    '"\\ud83d\\udcc4\\ud83c\\udfff\\udb40\\udc01\\udbff\\udfff"',
+    "[]",
+    "[ ]",
+    "[1]",
+    "[1,]",
+    "[,1]",
+    "[1 2]",
+    "[[]]",
+    "[[[[[[[[[[1]]]]]]]]]]",
+    "{}",
+    "{ }",
+    '{"a"}',
+    '{"a":}',
+    '{"a":1,}',
+    '{,}',
+    '{1: 2}',
+    "{'a': 1}",
+    '{"a": 1, "a": 2}',
+    '{"b": 1, "a": 2, "b": 3}',
+    '{"a": 1} {"b": 2}',
+    "[1] x",
+    "\t[1]\n",
+    "\x0b[1]",
+    "﻿[1]",
+    " [1]",
+    '["a\\u0000b"]',
+    '[NaN, Infinity, -Infinity]',
+    '{"a": NaN, "b": [Infinity]}',
+    '[[1, 2], [1.0, 3], [true, 4], [0, 5], [false, 6], [0.0, 7], [-0.0, 8]]',
+    '[[1, 2], [true, 3]]',
+    '[[true, 2], [1, 3]]',
+    '[[1.5, 2], [1.5, 3], [2.5, 4]]',
+    '[[1e400, 1], [1e400, 2], [-1e400, 3]]',
+    # Declared divergence (Go keeps two NaN keys, see the Go test).
+    '[[NaN, 1], [NaN, 2]]',
+    '[[null, 1], [null, 2]]',
+    '[["a", 1], ["a", 2], ["b", 3]]',
+    '[["a", 1], ["b"]]',
+    '[["a", 1, 2]]',
+    '[["a", 1], "bc", {"x": 1, "y": 2}]',
+    '["ab", "cd", "a"]',
+    '["", "x"]',
+    '["é1", "ü2"]',
+    '["\\ud83d\\ude00"]',
+    '[{"k": 1, "j": 2}]',
+    '[{"k": 1}]',
+    '[{}]',
+    '[[[1], 2]]',
+    '[[{"a": 1}, 2]]',
+    '[[[], 2]]',
+    '[1, 2]',
+    '[null]',
+    '[true]',
+    '[[]]',
+    '[[]]',
+    '"ab"',
+    '"a"',
+    '5',
+    '0.0',
+    'true',
+    '{"x": [1, {"y": null}]}',
+    '[["1", 1], [1, 2], [1.0, 3], [true, 4], ["True", 5]]',
+    '[[10000000000000000000000, 1], [1e22, 2]]',
+    '[[9007199254740993, 1], [9007199254740992.0, 2]]',
+    '[[-0.0, 1], [0, 2], [false, 3]]',
+    '[["\\u00e9", 1], ["e\\u0301", 2]]',
+    '[["a", 1], ["A", 2]]',
+    '{"sync_prs": 1, "SYNC_PRS": 0, "k": "", "l": [], "m": {}, "n": 0.0, "o": null, "p": "0"}',
+    '{"1": true, "1.0": false}',
+    '[[1, true], ["1", false]]',
+    '[[1.5, true], ["1.5", false]]',
+    '[[1e22, true], ["1e+22", false]]',
+    '[[true, 1], ["True", 0]]',
+    '[[null, 1], ["None", 0]]',
+    '[[10000000000000000000000, 1], ["10000000000000000000000", 0]]',
+    '[[0.1, 1], ["0.1", 0], [1e-07, 1], ["1e-07", 0]]',
+    '[[1e16, 1], ["1e+16", 0], [123456789012345680000.0, 1], ["1.2345678901234568e+20", 0]]',
+    '[[NaN, 1], ["nan", 0], [Infinity, 1], ["inf", 0], [-Infinity, 1], ["-inf", 0]]',
+    '[["\\u00e9", 1], ["\\u00e9", 0]]',
+)
+
+JSON_RICH_DOCS = (
+    '{"a": [1, -2.5e3, true, null, "x\\n\\u00e9\\ud83d\\ude00"], "b": {"c": false}}',
+    '[0, -0, 0.5, 1E5, 1e-5, -1.5E+2, 12345678901234567890, NaN, -Infinity, 7]',
+    '"\\"\\\\\\/\\b\\f\\n\\r\\t\\u0041\\u00e9\\ud83d\\ude00\\ud800\\udc00 x\\udbff"',
+    '[["a", 1], ["bc", 2], [1, true], [2.5, null], {"x": 1, "y": 2}]',
+    '{"k": 1, "k": 2, "j": [], "i": {}}',
+)
+
+JSON_MUTATION_CHARS = '{}[],:"\\ \t\n\x00\x1f0-+.eEnNtfIau/é\x7f'
+
+
+def _json_texts() -> list[str]:
+    texts: list[str] = []
+    seen: set[str] = set()
+
+    def add(text: str) -> None:
+        if text not in seen:
+            seen.add(text)
+            texts.append(text)
+
+    for text in JSON_CURATED:
+        add(text)
+    for doc in JSON_RICH_DOCS:
+        add(doc)
+        for index in range(len(doc) + 1):
+            add(doc[:index])
+        for index in range(len(doc)):
+            add(doc[:index] + doc[index + 1 :])
+        for index in range(len(doc)):
+            for char in JSON_MUTATION_CHARS:
+                add(doc[:index] + char + doc[index + 1 :])
+    return texts
+
+
+def _json_value_result(text: str) -> dict[str, Any]:
+    try:
+        value = json.loads(text)
+    except Exception as exc:  # noqa: BLE001
+        return {"error": type(exc).__name__}
+    result: dict[str, Any] = {
+        "repr": repr(value),
+        "dumps": json.dumps(
+            value, sort_keys=True, default=str, separators=(",", ":")
+        ),
+    }
+    try:
+        result["dict"] = repr(dict(value or {}))
+    except Exception as exc:  # noqa: BLE001
+        result["dict_error"] = type(exc).__name__
+    try:
+        flags = {str(k): bool(v) for k, v in dict(value or {}).items()}
+        result["flags"] = repr(sorted(flags.items()))
+    except Exception as exc:  # noqa: BLE001
+        result["flags_error"] = type(exc).__name__
+    return result
+
+
 def main() -> int:
     with open(os.devnull, "w") as devnull, contextlib.redirect_stdout(devnull):
         from dev_health_ops.core.encryption import encrypt_value
@@ -603,6 +848,11 @@ def main() -> int:
             {"input": {"descriptor": descriptor, "env": env}, "python": outcome}
         )
 
+    json_values = [
+        {"input": text, "python": _json_value_result(text)}
+        for text in _json_texts()
+    ]
+
     _set_env({})
     os.environ["SETTINGS_ENCRYPTION_KEY"] = "oracle-only-settings-key"
     os.environ.pop("SETTINGS_ENCRYPTION_SALT", None)
@@ -645,6 +895,7 @@ def main() -> int:
             "env_credentials": env_credentials,
             "credential_mapping": credential_mapping,
             "pagerduty_hydration": pagerduty_hydration,
+            "json_values": json_values,
         },
         sys.stdout,
         ensure_ascii=True,

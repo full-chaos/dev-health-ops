@@ -9,6 +9,7 @@ import (
 	"os"
 	"path"
 	"path/filepath"
+	"sort"
 	"strconv"
 	"strings"
 	"testing"
@@ -83,6 +84,18 @@ type oracleOutput struct {
 		} `json:"input"`
 		Python string `json:"python"`
 	} `json:"pagerduty_hydration"`
+	JSONValues []struct {
+		Input  string `json:"input"`
+		Python struct {
+			Error      string `json:"error"`
+			Repr       string `json:"repr"`
+			Dumps      string `json:"dumps"`
+			Dict       string `json:"dict"`
+			DictError  string `json:"dict_error"`
+			Flags      string `json:"flags"`
+			FlagsError string `json:"flags_error"`
+		} `json:"python"`
+	} `json:"json_values"`
 }
 
 // declaredDivergence names the inputs where the Go port is known and
@@ -230,6 +243,88 @@ func TestBudgetEstimatorMatchesFrozenPython(t *testing.T) {
 		}
 	})
 
+	t.Run("json_values", func(t *testing.T) {
+		if len(output.JSONValues) < 5000 {
+			t.Fatalf("oracle produced too few JSON cases: %d", len(output.JSONValues))
+		}
+		accepted := 0
+		nanSeen := false
+		for index, oracleCase := range output.JSONValues {
+			value, err := decodeJSON([]byte(oracleCase.Input))
+			if (oracleCase.Python.Error != "") != (err != nil) {
+				t.Errorf("case %d %q: python error %q, go %v", index, oracleCase.Input, oracleCase.Python.Error, err)
+				continue
+			}
+			if err != nil {
+				continue
+			}
+			accepted++
+			if oracleCase.Input == nanKeyDivergenceInput {
+				// Declared divergence (CHAOS-8387): json.loads hands Python one
+				// shared NaN object, so dict() keeps one NaN key; Go keeps
+				// each. The recorded Python answer is in the golden, Go's own
+				// answer is pinned here.
+				entries, _ := dictEntries(value)
+				parts := make([]string, len(entries))
+				for position, entry := range entries {
+					parts[position] = pyRepr(entry.key) + ": " + pyRepr(entry.value)
+				}
+				got := "{" + strings.Join(parts, ", ") + "}"
+				if got == oracleCase.Python.Dict {
+					t.Errorf("declared divergence %q no longer diverges: %s", oracleCase.Input, got)
+				}
+				if got != nanKeyDivergenceGo || oracleCase.Python.Dict != nanKeyDivergencePython {
+					t.Errorf("declared divergence %q pins python %s / go %s, got python %s / go %s",
+						oracleCase.Input, nanKeyDivergencePython, nanKeyDivergenceGo, oracleCase.Python.Dict, got)
+				}
+				nanSeen = true
+				continue
+			}
+			if got := pyRepr(value); got != oracleCase.Python.Repr {
+				t.Errorf("case %d %q: repr python %s, go %s", index, oracleCase.Input, oracleCase.Python.Repr, got)
+			}
+			if got := string(dumpsSortedCompact(value)); got != oracleCase.Python.Dumps {
+				t.Errorf("case %d %q: dumps python %s, go %s", index, oracleCase.Input, oracleCase.Python.Dumps, got)
+			}
+			entries, dictErr := dictEntries(value)
+			if (oracleCase.Python.DictError != "") != (dictErr != nil) {
+				t.Errorf("case %d %q: dict() python error %q, go %v", index, oracleCase.Input, oracleCase.Python.DictError, dictErr)
+			} else if dictErr == nil {
+				parts := make([]string, len(entries))
+				for position, entry := range entries {
+					parts[position] = pyRepr(entry.key) + ": " + pyRepr(entry.value)
+				}
+				if got := "{" + strings.Join(parts, ", ") + "}"; got != oracleCase.Python.Dict {
+					t.Errorf("case %d %q: dict python %s, go %s", index, oracleCase.Input, oracleCase.Python.Dict, got)
+				}
+			}
+			flags, flagsErr := processorFlags(value)
+			if (oracleCase.Python.FlagsError != "") != (flagsErr != nil) {
+				t.Errorf("case %d %q: flags python error %q, go %v", index, oracleCase.Input, oracleCase.Python.FlagsError, flagsErr)
+			} else if flagsErr == nil {
+				names := make([]string, 0, len(flags))
+				for name := range flags {
+					names = append(names, name)
+				}
+				sort.Strings(names)
+				parts := make([]string, len(names))
+				for position, name := range names {
+					parts[position] = "(" + reprString(name) + ", " + pyRepr(flags[name]) + ")"
+				}
+				if got := "[" + strings.Join(parts, ", ") + "]"; got != oracleCase.Python.Flags {
+					t.Errorf("case %d %q: flags python %s, go %s", index, oracleCase.Input, oracleCase.Python.Flags, got)
+				}
+			}
+		}
+		if !nanSeen {
+			t.Error("declared divergence of the repeated NaN dict key has no case")
+		}
+		if accepted == 0 {
+			t.Error("no JSON text was accepted: the comparison would pass on errors alone")
+		}
+		t.Logf("json cases: %d, accepted: %d", len(output.JSONValues), accepted)
+	})
+
 	t.Run("pagerduty_hydration", func(t *testing.T) {
 		if len(output.PagerDutyHydration) == 0 {
 			t.Fatal("no PagerDuty hydration cases")
@@ -370,3 +465,9 @@ func oracleContext(input oracleEstimateInput) (Context, error) {
 		Getenv: func(name string) string { return env[name] },
 	}, nil
 }
+
+const (
+	nanKeyDivergenceInput  = "[[NaN, 1], [NaN, 2]]"
+	nanKeyDivergencePython = "{nan: 2}"
+	nanKeyDivergenceGo     = "{nan: 1, nan: 2}"
+)

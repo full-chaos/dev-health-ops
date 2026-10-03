@@ -144,37 +144,84 @@ jobs:
   gitleaks:
     name: Gitleaks Secret Scan
     runs-on: ubuntu-latest
-    # CHAOS-8291: no `continue-on-error`. A finding fails this job (measured on a throwaway PR: step and job failure, the check red,
-    # the workflow run kept green by the old setting, no comment, no Code Scanning alert). The job is NOT a required check of the
-    # ruleset, so a red job blocks no merge; making it required is a separate ruleset decision.
-    # Two cases where the scan step cannot run and now shows red (before, `continue-on-error` hid them): a Dependabot PR (the action
-    # needs GITLEAKS_LICENSE for an organization and Dependabot runs get no secrets: "License key is required", exit 1) and a
-    # merge_group run (the action does not support that event: exit 1). A scan that did not run is a red job, not a pass.
-    # Gitleaks needs:
-    #   - security-events: write — upload SARIF findings to code-scanning
-    #   - pull-requests: write — post the scan summary comment on the PR
+    # CHAOS-8294: the pinned scanner binary runs directly (the release tarball, sha256-verified), not through gitleaks/gitleaks-action.
+    # The action needs a license secret for an organization (a Dependabot run gets no secrets: "License key is required") and does not
+    # support merge_group; the binary needs neither, so Dependabot PRs and merge_group runs are scanned too. A finding fails the job
+    # (CHAOS-8291: no `continue-on-error`). The job is NOT a required check of the ruleset, so a red job blocks no merge; making it
+    # required is a separate ruleset decision.
     permissions:
       contents: read
-      security-events: write
-      pull-requests: write
+      security-events: write # upload the SARIF findings to code scanning
+    env:
+      # CHAOS-8181: the scanner version the golden scan in internal/testsupport/goldenscan follows; the sha256 is the release's own
+      # checksums-file line for the linux x64 tarball (gitleaks_8.24.3_checksums.txt), verified before the binary runs.
+      GITLEAKS_VERSION: 8.24.3
+      GITLEAKS_SHA256: 9991e0b2903da4c8f6122b5c3186448b927a5da4deef1fe45271c3793f4ee29c
     steps:
       - name: Checkout repository
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           fetch-depth: 0
 
-      - name: Run Gitleaks
-        uses: gitleaks/gitleaks-action@e0c47f4f8be36e29cdc102c57e68cb5cbf0e8d1e # v3.0.0
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          GITLEAKS_LICENSE: ${{ secrets.GITLEAKS_LICENSE }}
-          # CHAOS-8181: pin the scanner version. The action's own default (src/index.js: `process.env.GITLEAKS_VERSION || "8.24.3"`) is
-          # 8.24.3 today; naming it freezes that behaviour so a bump of the action cannot change the scanner (and the generic-api-key rule
-          # the golden scan in internal/testsupport/goldenscan follows) without a change here.
-          GITLEAKS_VERSION: 8.24.3
+      - name: Install the pinned Gitleaks binary
+        run: |
+          set -euo pipefail
+          tarball="gitleaks_${GITLEAKS_VERSION}_linux_x64.tar.gz"
+          curl -sSfL --retry 3 -o "${RUNNER_TEMP}/${tarball}" \
+            "https://github.com/gitleaks/gitleaks/releases/download/v${GITLEAKS_VERSION}/${tarball}"
+          echo "${GITLEAKS_SHA256}  ${RUNNER_TEMP}/${tarball}" | sha256sum --check --strict
+          mkdir -p "${RUNNER_TEMP}/gitleaks"
+          tar -xzf "${RUNNER_TEMP}/${tarball}" -C "${RUNNER_TEMP}/gitleaks" gitleaks
+          test "$("${RUNNER_TEMP}/gitleaks/gitleaks" version)" = "${GITLEAKS_VERSION}"
 
-      # CHAOS-8291: the action writes results.sarif to the workspace and uploads it as a workflow artifact only; this step makes a
-      # finding a Code Scanning alert. `if: always()` so a failed scan step still uploads what it found.
+      - name: Run Gitleaks
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          PR_BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          PR_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          MQ_BASE_SHA: ${{ github.event.merge_group.base_sha }}
+          MQ_HEAD_SHA: ${{ github.event.merge_group.head_sha }}
+          PUSH_BEFORE: ${{ github.event.before }}
+          PUSH_AFTER: ${{ github.sha }}
+        run: |
+          set -euo pipefail
+          # The commits this event adds, as the pull_request / push / merge_group scan forms: the new commits only (merges excluded, the
+          # first-parent line only), never the history already on main. Any other event (schedule, workflow_dispatch) scans everything.
+          case "${EVENT_NAME}" in
+            pull_request)
+              if [ -z "${PR_BASE_SHA}" ] || [ -z "${PR_HEAD_SHA}" ]; then echo "::error::the pull_request base or head sha is empty"; exit 1; fi
+              range="${PR_BASE_SHA}..${PR_HEAD_SHA}" ;;
+            merge_group)
+              if [ -z "${MQ_BASE_SHA}" ] || [ -z "${MQ_HEAD_SHA}" ]; then echo "::error::the merge_group base or head sha is empty"; exit 1; fi
+              range="${MQ_BASE_SHA}..${MQ_HEAD_SHA}" ;;
+            push)
+              if [ -n "${PUSH_BEFORE}" ] && [ "${PUSH_BEFORE//0/}" != "" ]; then range="${PUSH_BEFORE}..${PUSH_AFTER}"; else range="-1"; fi ;;
+            *) range="" ;;
+          esac
+          args=(detect --redact -v --exit-code=2 --report-format=sarif --report-path=results.sarif --log-level=debug)
+          if [ -n "${range}" ]; then
+            if [ "${range}" = "-1" ]; then
+              # the last commit alone: a merge commit adds nothing to scan, so that is a scan that reads no commit too
+              if [ "$(git rev-list --parents -n 1 HEAD | wc -w)" -gt 2 ]; then
+                echo "::error::the last commit is a merge commit: nothing to scan"
+                exit 1
+              fi
+              args+=("--log-opts=-1")
+            else
+              # A scan that reads no commit must not pass (an empty or unknown sha, or a range that holds only merge commits): fail
+              # before the scan, like the action's unsupported-event failure did. A bad sha fails in rev-list itself.
+              count="$(git rev-list --count --no-merges --first-parent "${range}")"
+              if [ "${count}" -lt 1 ]; then
+                echo "::error::the scan range ${range} holds no commit to scan"
+                exit 1
+              fi
+              args+=("--log-opts=--no-merges --first-parent ${range}")
+            fi
+          fi
+          echo "gitleaks ${args[*]}"
+          "${RUNNER_TEMP}/gitleaks/gitleaks" "${args[@]}"
+
+      # CHAOS-8291: a finding becomes a Code Scanning alert. `if: always()` so a failed scan step still uploads what it found.
       - name: Upload Gitleaks SARIF to code scanning
         if: always() && hashFiles('results.sarif') != ''
         uses: github/codeql-action/upload-sarif@b96794f015dfd88f77b49b1c93e0fa7110f94c63 # v4.38.0

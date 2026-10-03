@@ -60,19 +60,41 @@ func severity(score float64) string {
 	return "low"
 }
 
-func makeFlow(kind flowKind, entityType, entityID, title, why string, score float64, refs []string) model.ImproveOpportunity {
+// flowMeasure is what a rule compared: the measured value, the rule's constant limit, their unit and
+// the side of the limit that fires the rule. The rationale states the same two numbers; here they are
+// fields, so no client has to read them out of the sentence.
+type flowMeasure struct {
+	Value     float64
+	Threshold float64
+	Unit      model.ImproveOpportunityUnit
+	Direction model.ThresholdDirection
+}
+
+func above(value, threshold float64, unit model.ImproveOpportunityUnit) flowMeasure {
+	return flowMeasure{Value: value, Threshold: threshold, Unit: unit, Direction: model.ThresholdDirectionAbove}
+}
+
+func below(value, threshold float64, unit model.ImproveOpportunityUnit) flowMeasure {
+	return flowMeasure{Value: value, Threshold: threshold, Unit: unit, Direction: model.ThresholdDirectionBelow}
+}
+
+func makeFlow(kind flowKind, entityType, entityID, title, why string, score float64, refs []string, measure flowMeasure) model.ImproveOpportunity {
 	clamped := clamp01(score)
 	return model.ImproveOpportunity{
-		OpportunityID:     stableOpportunityID(kind.stored, entityID, ""),
-		Kind:              kind.enum,
-		EntityType:        entityType,
-		EntityID:          entityID,
-		Title:             title,
-		Rationale:         why,
-		Score:             clamped,
-		Severity:          severity(clamped),
-		EvidenceRefs:      refs,
-		RecommendedAction: kind.action,
+		OpportunityID:      stableOpportunityID(kind.stored, entityID, ""),
+		Kind:               kind.enum,
+		EntityType:         entityType,
+		EntityID:           entityID,
+		Title:              title,
+		Rationale:          why,
+		Score:              clamped,
+		Severity:           severity(clamped),
+		EvidenceRefs:       refs,
+		RecommendedAction:  kind.action,
+		Value:              measure.Value,
+		Threshold:          measure.Threshold,
+		Unit:               measure.Unit,
+		ThresholdDirection: measure.Direction,
 	}
 }
 
@@ -88,7 +110,8 @@ var repoRules = []flowRule{
 		o := makeFlow(kindReviewLatency, "repo", r.EntityID, "High review latency in "+r.EntityID,
 			"Median first-review time was "+fixed(*r.ReviewP50, 1)+" h over the last "+days(w)+" days (threshold: "+fixed(reviewLatencyThresholdHours, 0)+" h).",
 			scoreRatio(*r.ReviewP50, reviewLatencyThresholdHours),
-			[]string{"repo_metrics_daily:pr_first_review_p50_hours:" + r.EntityID})
+			[]string{"repo_metrics_daily:pr_first_review_p50_hours:" + r.EntityID},
+			above(*r.ReviewP50, reviewLatencyThresholdHours, model.ImproveOpportunityUnitHours))
 		return &o
 	},
 	func(r flowRow, w int) *model.ImproveOpportunity {
@@ -98,7 +121,8 @@ var repoRules = []flowRule{
 		o := makeFlow(kindRework, "repo", r.EntityID, "High rework ratio in "+r.EntityID,
 			"PR rework ratio was "+pct(*r.ReworkRatio, 0)+" over the last "+days(w)+" days (threshold: "+pct(reworkRatioThreshold, 0)+").",
 			scoreRatio(*r.ReworkRatio, reworkRatioThreshold),
-			[]string{"repo_metrics_daily:pr_rework_ratio:" + r.EntityID})
+			[]string{"repo_metrics_daily:pr_rework_ratio:" + r.EntityID},
+			above(*r.ReworkRatio, reworkRatioThreshold, model.ImproveOpportunityUnitRatio))
 		return &o
 	},
 	func(r flowRow, _ int) *model.ImproveOpportunity {
@@ -108,7 +132,8 @@ var repoRules = []flowRule{
 		o := makeFlow(kindChurn, "repo", r.EntityID, "High rework churn in "+r.EntityID,
 			"Rework churn ratio was "+pct(*r.ChurnRatio, 0)+" over the last 30 days (threshold: "+pct(highChurnThreshold, 0)+").",
 			scoreRatio(*r.ChurnRatio, highChurnThreshold),
-			[]string{"repo_metrics_daily:rework_churn_ratio_30d:" + r.EntityID})
+			[]string{"repo_metrics_daily:rework_churn_ratio_30d:" + r.EntityID},
+			above(*r.ChurnRatio, highChurnThreshold, model.ImproveOpportunityUnitRatio))
 		return &o
 	},
 	func(r flowRow, w int) *model.ImproveOpportunity {
@@ -118,7 +143,8 @@ var repoRules = []flowRule{
 		o := makeFlow(kindChangeFailure, "repo", r.EntityID, "High change failure rate in "+r.EntityID,
 			"Change failure rate was "+pct(*r.ChangeFailure, 0)+" over the last "+days(w)+" days (threshold: "+pct(changeFailureThreshold, 0)+").",
 			scoreRatio(*r.ChangeFailure, changeFailureThreshold),
-			[]string{"repo_metrics_daily:change_failure_rate:" + r.EntityID})
+			[]string{"repo_metrics_daily:change_failure_rate:" + r.EntityID},
+			above(*r.ChangeFailure, changeFailureThreshold, model.ImproveOpportunityUnitRatio))
 		return &o
 	},
 }
@@ -131,7 +157,8 @@ var teamRules = []flowRule{
 		o := makeFlow(kindSlowCycle, "team", r.EntityID, "Slow cycle time for "+r.EntityID,
 			"Median cycle time was "+fixed(*r.CycleP50, 1)+" h over the last "+days(w)+" days (threshold: "+fixed(cycleTimeThresholdHours, 0)+" h).",
 			scoreRatio(*r.CycleP50, cycleTimeThresholdHours),
-			[]string{"work_item_metrics_daily:cycle_time_p50_hours:" + r.EntityID})
+			[]string{"work_item_metrics_daily:cycle_time_p50_hours:" + r.EntityID},
+			above(*r.CycleP50, cycleTimeThresholdHours, model.ImproveOpportunityUnitHours))
 		return &o
 	},
 	func(r flowRow, w int) *model.ImproveOpportunity {
@@ -141,7 +168,8 @@ var teamRules = []flowRule{
 		o := makeFlow(kindWIP, "team", r.EntityID, "High WIP congestion for "+r.EntityID,
 			"WIP congestion ratio was "+pct(*r.WipCongestion, 0)+" over the last "+days(w)+" days (threshold: "+pct(wipCongestionThreshold, 0)+").",
 			scoreRatio(*r.WipCongestion, wipCongestionThreshold),
-			[]string{"work_item_metrics_daily:wip_congestion_ratio:" + r.EntityID})
+			[]string{"work_item_metrics_daily:wip_congestion_ratio:" + r.EntityID},
+			above(*r.WipCongestion, wipCongestionThreshold, model.ImproveOpportunityUnitRatio))
 		return &o
 	},
 	func(r flowRow, w int) *model.ImproveOpportunity {
@@ -152,7 +180,8 @@ var teamRules = []flowRule{
 		o := makeFlow(kindThroughput, "team", r.EntityID, "Low throughput for "+r.EntityID,
 			"Only "+fixed(*r.ItemsCompleted, 0)+" items were completed over the last "+days(w)+" days (threshold: "+fixed(lowThroughputThreshold, 0)+").",
 			scoreDelta(gap, lowThroughputThreshold),
-			[]string{"work_item_metrics_daily:items_completed:" + r.EntityID})
+			[]string{"work_item_metrics_daily:items_completed:" + r.EntityID},
+			below(*r.ItemsCompleted, lowThroughputThreshold, model.ImproveOpportunityUnitItems))
 		return &o
 	},
 }

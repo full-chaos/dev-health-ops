@@ -135,17 +135,22 @@ func (c *fakeCHClient) Query(_ context.Context, _ string, _ []clickhouse.Binding
 }
 
 // fakeReviewEdgesCHClient is a minimal reviewedges.QueryClient double for
-// the CHAOS-4368 Wave 2 reachability test below. Unlike fakeCHClient,
-// reviewedges.Resolve issues exactly ONE query per invocation (no
-// separate count query), so this fake needs no call-parity bookkeeping --
-// every call gets the same single scripted row, which is enough to prove
-// the HTTP-level reachability contract this test exists for. It is NOT a
+// the CHAOS-4368 Wave 2 reachability test below. reviewedges.Resolve
+// issues the row query and then (CHAOS-7786) a count query that starts
+// with "SELECT count()"; the fake tells them apart by that prefix, not by
+// call parity, so it stays correct however often the resolver is invoked.
+// The row query gets the single scripted row; the count query gets its
+// total (1: nothing is cut). That is enough to prove the HTTP-level
+// reachability contract this test exists for. It is NOT a
 // substitute for the real-ClickHouse dual-run proof (that lives in the
 // Python-side stage-2 test,
 // ops/tests/api/graphql/test_go_api_dual_run_review_edges.py).
 type fakeReviewEdgesCHClient struct{}
 
-func (c *fakeReviewEdgesCHClient) Query(_ context.Context, _ string, _ []clickhouse.Binding) (clickhouse.RowScanner, error) {
+func (c *fakeReviewEdgesCHClient) Query(_ context.Context, statement string, _ []clickhouse.Binding) (clickhouse.RowScanner, error) {
+	if strings.HasPrefix(strings.TrimSpace(statement), "SELECT count()") {
+		return &fakeRows{rows: [][]any{{uint64(1)}}}, nil
+	}
 	return &fakeRows{rows: [][]any{
 		{"reviewer@example.com", "author@example.com", uint32(3), time.Date(2026, 8, 20, 0, 0, 0, 0, time.UTC), "repo-a"},
 	}}, nil
@@ -493,6 +498,10 @@ func TestReviewEdgesRoute_ReachableOnlyWhenSwitchEnabled(t *testing.T) {
 		}
 		if strings.Contains(rec.Body.String(), `"errors"`) || !strings.Contains(rec.Body.String(), "reviewer@example.com") {
 			t.Fatalf("expected response to contain the fake row's reviewer with no errors, got %s", rec.Body.String())
+		}
+		// CHAOS-7786: totalCount is the count query's answer (1 row available, 1 returned).
+		if !strings.Contains(rec.Body.String(), `"totalCount":1`) {
+			t.Fatalf("expected totalCount 1 from the count query, got %s", rec.Body.String())
 		}
 	})
 

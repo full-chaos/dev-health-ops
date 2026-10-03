@@ -117,6 +117,7 @@ func rowToDaily(r dailyRow) model.AIImpactBucketRow {
 		IncidentRate:          r.IncidentDragRate,
 		TestGapPrs:            int(r.TestGapPrs),
 		TestGapRate:           r.TestGapRate,
+		Day:                   graphqldate.New(r.DayTime),
 	}
 }
 

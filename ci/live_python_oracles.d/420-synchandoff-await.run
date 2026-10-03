@@ -1,5 +1,0 @@
-label=internal/synchandoff (sync_manual_trigger_await_* families vs the Python production source, CHAOS-8268)
-package=./internal/synchandoff
-run=^TestAwaitFamiliesMatchThePythonProductionSource$
-python=1
-proof=synchandoff-await-python-source|the synchandoff await families were not compared against the Python production source

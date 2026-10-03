@@ -76,18 +76,6 @@ jobs:
           go-version-file: go.mod
           cache-dependency-path: '**/go.sum'
 
-      - name: Install uv
-        if: steps.select.outputs.run == 'true'
-        uses: astral-sh/setup-uv@bec219d24cd3e171d82865faccec33120bb574f4 # v10.1.0
-        with:
-          python-version: '3.14'
-
-      # The full project environment, as in venue-oracles.yml: a package selected here may
-      # still hold a venue test that runs the real Python api (not yet frozen).
-      - name: Install the full Python project
-        if: steps.select.outputs.run == 'true'
-        run: uv sync --frozen --all-extras --dev
-
       - name: Log in to GitHub Container Registry
         if: steps.select.outputs.run == 'true'
         uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4.6.0
@@ -102,8 +90,6 @@ jobs:
 
       - name: Run the venue oracles of the changed packages
         if: steps.select.outputs.run == 'true'
-        env:
-          DEV_HEALTH_LIVE_PYTHON_ORACLES: '1'
         run: |
           set -euo pipefail
           mkdir -p "${RUNNER_TEMP}/venue-oracle-receipt"

@@ -603,7 +603,6 @@ internal/providersync/testdata/python_generic_row_oracle.py
 internal/providersync/testdata/python_github_prs_normalization_oracle.py
 internal/providersync/testdata/python_launchdarkly_normalization_oracle.py
 internal/providersync/testdata/python_oracle_loader.py
-internal/providersync/testdata/python_oracle_loader_probe.py
 internal/providersync/testdata/python_provider_budget_oracle.py
 internal/providersync/testdata/python_registry_oracle.py
 internal/providersync/testdata/python_work_item_sink_oracle.py
@@ -765,10 +764,7 @@ internal/queryapi/investmentflow/testdata/team_category_subcategory_repo.json
 internal/queryapi/investmentflow/testdata/team_subcategory_repo.json
 internal/queryapi/meta/testdata/meta.json
 internal/queryapi/opportunities/testdata/no_cards_fallback.json
-internal/queryapi/opportunities/testdata/org_default.json
 internal/queryapi/opportunities/testdata/pr_rework_ratio_default_experiments.json
-internal/queryapi/opportunities/testdata/repo_scoped.json
-internal/queryapi/opportunities/testdata/team_scoped.json
 internal/queryapi/people/testdata/alias_mapping.json
 internal/queryapi/people/testdata/no_alias_mapping.json
 internal/queryapi/quadrant/testdata/churn_throughput_team_forces_repo.json

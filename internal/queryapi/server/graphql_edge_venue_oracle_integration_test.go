@@ -23,9 +23,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgxpool"
 
-	schemav1 "github.com/full-chaos/dev-health-ops/contracts/graphql/v1"
 	"github.com/full-chaos/dev-health-ops/internal/goapiproof"
-	"github.com/full-chaos/dev-health-ops/internal/queryapi/digest"
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/venueoracle"
 )
 
@@ -686,101 +684,6 @@ func edgeCompare(t *testing.T, goBase string, cs []edgeCase, python []venueoracl
 		Golden: golden,
 	}))
 	t.Log("\n" + receipt.String())
-}
-
-func TestGraphQLEdgeVenueOracle(t *testing.T) {
-	ctx := context.Background()
-	root := repoRootFromHere(t)
-	docs := registeredEdgeDocuments(t, root)
-	users := edgeUsers()
-	schemaDigest := digest.Schema(schemav1.SDL)
-
-	venue := venueoracle.Start(t, ctx, venueoracle.Options{
-		Root: root, JWTKey: edgeOracleJWTKey,
-		Seed: edgeSeed(users, docs, schemaDigest),
-	})
-
-	settings, goBase, pythonEnv, _ := startEdgePlane(t, ctx, venue, root)
-
-	mint := func(key string, user edgeUser, expired bool) string {
-		expires := time.Now().Add(time.Hour)
-		if expired {
-			expires = time.Now().Add(-time.Hour)
-		}
-		return edgeOracleToken(t, key, user, expires)
-	}
-	suite := edgeOracleCases(t, docs, users, venue, mint, "")
-	cases, writes, query, mutation, queryBody, member := suite.cases, suite.writes, suite.query, suite.mutation, suite.queryBody, suite.member
-
-	run := func(cs []edgeCase, normalize func(venueoracle.Request, string) string) {
-		python := venue.ServePythonWithEnv(t, pythonEnv, edgeRequests(cs))
-		edgeCompare(t, goBase, cs, python, normalize, nil)
-	}
-	// Both legs reach the same resolvers, so a timestamp that differs between
-	// them is a clock reading taken per call (generatedAt, computedAt), never
-	// an edge difference: blanked in a 200 body, and only there.
-	clock := regexp.MustCompile(`\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(\.\d+)?(Z|[+-]\d{2}:\d{2})`)
-	run(cases, func(_ venueoracle.Request, body string) string {
-		if !strings.HasPrefix(body, `{"data":{`) {
-			return body
-		}
-		return clock.ReplaceAllString(body, "<clock>")
-	})
-
-	// A registered operation whose routing row is off: the Python edge fell
-	// back to Strawberry (a query's resolver raises "served by query-api"; a
-	// mutation ran its Python body); query-api answers a GraphQL error and
-	// runs nothing. Both planes' rows are turned off, as an operator would.
-	for _, database := range []string{venue.SourceDB, venue.GoDB} {
-		pool, err := pgxpool.New(ctx, venue.AdminURI(t, database))
-		if err != nil {
-			t.Fatal(err)
-		}
-		if _, err := pool.Exec(ctx, `UPDATE go_api_routing_state SET mode = 'disabled' WHERE selected_operation = ANY($1)`,
-			[]string{query.Operation, mutation.Operation}); err != nil {
-			t.Fatal(err)
-		}
-		pool.Close()
-	}
-	mutationSpec, _ := goapiproof.SpecFor(mutation.Operation)
-	run([]edgeCase{
-		{request: edgePost("row off: "+query.Operation, member, queryBody, nil),
-			declared: "routing row off: Python's Strawberry fallback raised for the query; query-api answers a GraphQL error",
-			pyWant:   edgeAnswer{status: 200, body: `"errors"`}, goWant: edgeAnswer{status: 200, body: "OPERATION_NOT_ENABLED"}},
-		{request: edgePost("row off: "+mutation.Operation, member, urqlBody(t, documentOperationName(mutation.Document), mutation.Document, mutationSpec.Variables(edgeOrgA, goapiproof.DefaultWindow())), nil),
-			declared: "routing row off: Python ran its own mutation body; query-api answers a GraphQL error and runs nothing",
-			pyWant:   edgeAnswer{status: 200, body: `"deleteSavedReport"`}, goWant: edgeAnswer{status: 200, body: "OPERATION_NOT_ENABLED"}},
-	}, nil)
-
-	// A write last, on each plane in turn: createSavedReport mints an id and
-	// a timestamp per call, so those are blanked; nothing else is.
-	uuidPattern := regexp.MustCompile(`[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}`)
-	timePattern := regexp.MustCompile(`\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(\.\d+)?(Z|[+-]\d{2}:\d{2})?`)
-	run(writes, func(_ venueoracle.Request, body string) string {
-		return timePattern.ReplaceAllString(uuidPattern.ReplaceAllString(body, "<uuid>"), "<time>")
-	})
-
-	// Postgres unreachable on both planes: the caller cannot be read, and
-	// both answer the unhandled 500. A second query-api over a dead DSN.
-	deadSettings := map[string]string{}
-	for key, value := range settings {
-		deadSettings[key] = value
-	}
-	deadSettings["GO_API_REGISTRY_POSTGRES_URI"] = "postgres://nobody:nothing@127.0.0.1:1/none?connect_timeout=2"
-	deadPlane, err := Build(func(key string) string { return deadSettings[key] })
-	if err != nil {
-		t.Fatalf("build query-api over a dead Postgres: %v", err)
-	}
-	t.Cleanup(deadPlane.Close)
-	deadPublic, _ := Listeners("127.0.0.1:0", "", deadPlane, nil, nil)
-	if err := deadPublic.Start(ctx); err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { _ = deadPublic.Shutdown(context.Background()) })
-	deadRequests := []venueoracle.Request{edgePost("Postgres unreachable", member, queryBody, nil)}
-	deadPython := venue.ServePythonWithEnv(t, append(append([]string(nil), pythonEnv...),
-		"POSTGRES_URI=postgresql+asyncpg://nobody:nothing@127.0.0.1:1/none"), deadRequests)
-	t.Log("\n" + venueoracle.Diff(t, "http://"+deadPublic.Address(), deadRequests, deadPython, venueoracle.DiffOptions{}))
 }
 
 // withoutHeader is response with one header removed.

@@ -150,7 +150,7 @@ func Record(ctx context.Context, cfg Config) (Result, error) {
 	}
 	passed := append([]string{}, cfg.PassEnv...)
 	sort.Strings(passed)
-	base := []string{"DEV_HEALTH_LIVE_PYTHON_ORACLES=1", "DEV_HEALTH_LIVE_PYTHON_ORACLE_PROOF_DIR=" + proofDir, passedEnvName + "=" + strings.Join(passed, ",")}
+	base := []string{"DEV_HEALTH_VENUE_ORACLES=1", "DEV_HEALTH_LIVE_PYTHON_ORACLE_PROOF_DIR=" + proofDir, passedEnvName + "=" + strings.Join(passed, ",")}
 	discard := func() { removeAll(packageDir) }
 	// Both recording runs get this one list: they may differ in time and in their scratch directory (TMPDIR) only.
 	recordEnv := append(append([]string{}, base...), "DHO_VENUE_GOLDEN_UPDATE=1", "DHO_VENUE_GOLDEN_PYTHON_ROOT="+cfg.PythonRoot, "PYTHONDONTWRITEBYTECODE=1")

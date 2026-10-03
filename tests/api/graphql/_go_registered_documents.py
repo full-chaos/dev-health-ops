@@ -77,14 +77,7 @@ def _enumerate() -> dict[str, str]:
         raise RuntimeError(
             f"registrydump enumerated ZERO registered documents from {QUERY_ROUTE_GO}"
         )
-    return documents_by_operation(docs)
-
-
-def documents_by_operation(docs: list[dict]) -> dict[str, str]:
-    """operation -> the text the running process REGISTERS for it. registrydump also lists an operation's
-    LEGACY texts (``"legacy": true``, CHAOS-8000 dual accept) after the current one; a legacy text is only an
-    accepted alias, so it must never replace the current text here (last-wins would hand back the old one)."""
-    return {d["operation"]: d["document"] for d in docs if not d.get("legacy")}
+    return {d["operation"]: d["document"] for d in docs}
 
 
 def registered_document(operation: str) -> str:

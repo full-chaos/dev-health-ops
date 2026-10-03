@@ -34,10 +34,7 @@ from sqlalchemy.engine import make_url
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
 from dev_health_ops.api.graphql import go_api_cli
-from dev_health_ops.api.graphql.go_api_operation_catalog import (
-    catalog_entries,
-    current_catalog_entries,
-)
+from dev_health_ops.api.graphql.go_api_operation_catalog import catalog_entries
 from dev_health_ops.api.graphql.go_api_registry import (
     record_proof_run,
     register_candidate_build,
@@ -144,7 +141,7 @@ async def _rows(factory: Any) -> list[RoutingState]:
 async def test_status_reports_both_planes_and_never_fails(
     session_factory: Any, capsys: pytest.CaptureFixture[str]
 ) -> None:
-    catalog = dict(current_catalog_entries())
+    catalog = dict(catalog_entries())
     await _seed_receipt(
         session_factory,
         document_digest=catalog["featureFlags"],
@@ -267,7 +264,7 @@ async def test_status_renders_a_drifted_row_with_its_proof_and_its_document(
     and a line must name the document actually serving. Both regressions
     passed every test: printing ``-`` (p18) and dropping the line (p17).
     """
-    catalog = dict(current_catalog_entries())
+    catalog = dict(catalog_entries())
     drifted = "0" * 64
     await _seed_receipt(
         session_factory,
@@ -524,7 +521,7 @@ async def test_the_model_refuses_a_binding_outside_its_vocabulary(
     nothing -- the migration test covers alembic, but tables created from this
     metadata (SQLAlchemyStore.ensure_tables; this fixture) carry the model's
     own copy. The same vocabulary as 0129: per_request, absent, NULL."""
-    catalog = dict(current_catalog_entries())
+    catalog = dict(catalog_entries())
     for binding in ("per_request", "absent", None):
         await _reset(session_factory)
         await _seed_receipt(

@@ -915,3 +915,166 @@ def test_the_providersync_shard_awk_balances_by_weight_and_weighs_an_unlisted_te
         if shard == 1:
             assert part == ["TestHeavy"], part
     assert sizes == [1, 3, 3], sizes
+
+
+# ---------------------------------------------------------------------------
+# 5. -trimpath (CHAOS-8296).
+# ---------------------------------------------------------------------------
+
+GO_CALL = re.compile(r"(?:^|[\s;&(|`])go (build|test|vet|run|install)(?=\s|$)")
+
+# Places a `go <verb>` appears that are not a call this repo makes with the module's
+# flags, each with the reason. A new entry is a decision, not a convenience.
+GO_CALL_EXCEPTIONS = {
+    (
+        ".github/workflows/arc-runner-image.yml",
+        "go run /tmp/cgo_probe.go",
+    ): "one probe file outside the module, run to check cgo on the runner image",
+    (
+        "ci/check_migration_matrix.sh",
+        'go run ./cmd/dev-health-migration-matrix -render -root ."',
+    ): "the text of the re-verify hint a human reads (a multi-line message), not a call",
+    (
+        "ci/python_free_ratchet.sh",
+        "go test stream artifact",
+    ): "words in a message, not a call",
+}
+
+
+def _go_call_files() -> list[Path]:
+    patterns = (
+        "ci/**/*.sh",
+        ".github/workflows/*.yml",
+        "docker/**/Dockerfile*",
+        "docker/*Dockerfile*",
+        "scripts/**/*.sh",
+    )
+    files = {ROOT / "ci" / "check_go.sh"}
+    for pattern in patterns:
+        files.update(ROOT.glob(pattern))
+    return sorted(files)
+
+
+def _unquote_command_substitutions(line: str) -> str:
+    """Drop the double quotes around each `"$( ... )"` of a line (matching the closing paren by depth)."""
+    out: list[str] = []
+    i = 0
+    while i < len(line):
+        if line.startswith('"$(', i):
+            depth = 0
+            j = i + 1
+            while j < len(line):
+                if line.startswith("$(", j):
+                    depth += 1
+                    j += 2
+                    continue
+                if line[j] == "(":
+                    depth += 1
+                elif line[j] == ")":
+                    depth -= 1
+                    if depth == 0:
+                        break
+                j += 1
+            if depth == 0 and j + 1 < len(line) and line[j + 1] == '"':
+                out.append(line[i + 1 : j + 1])
+                i = j + 2
+                continue
+        out.append(line[i])
+        i += 1
+    return "".join(out)
+
+
+def _go_calls() -> list[tuple[str, str]]:
+    """Every `go build|test|vet|run|install` call of the CI scripts, workflows and Dockerfiles,
+    as (repo-relative file, the command text from `go` to the next `&&`, `||`, `;`, `|` or `)`).
+
+    Derived by the go verb, not by any flag: comments, YAML names/descriptions, the usage text
+    of check_go.sh and quoted strings (the words of a message) are removed first, and a
+    backslash continuation joins a command's lines.
+
+    LIMITS (named, not covered): a workflow `run:` value written as a quoted scalar; a call
+    inside a `bash -c "..."` string; go called by a path or through a variable; files outside
+    the globs of _go_call_files (tools/codex-review/*.sh, .github/actions, Python callers).
+    A call in any of those is not seen by these tests."""
+    calls: list[tuple[str, str]] = []
+    for path in _go_call_files():
+        text = path.read_text(encoding="utf-8")
+        text = re.sub(r"(?ms)^usage\(\) \{.*?^\}\n", "", text)
+        text = re.sub(r"(?m)^\s*#.*$", "", text)
+        text = re.sub(r"(?m)^\s*-?\s*(name|description|summary):.*$", "", text)
+        text = re.sub(r"\\\n\s*", " ", text)
+        for line in text.split("\n"):
+            # A command substitution inside double quotes ("$(cd x && go test ...)") is
+            # code, not a message: drop the quotes around it so its calls are derived and
+            # only the string literals INSIDE it are blanked.
+            line = _unquote_command_substitutions(line)
+            unquoted = re.sub(r"\"(?:[^\"\\]|\\.)*\"|'[^']*'", '""', line)
+            for match in GO_CALL.finditer(unquoted):
+                command = re.split(r"&&|\|\||;|\||\)", unquoted[match.start() :])[0]
+                calls.append((str(path.relative_to(ROOT)), command.strip()))
+    return calls
+
+
+def _is_excepted(file: str, command: str) -> bool:
+    return any(
+        file == f and command.startswith(prefix) for (f, prefix) in GO_CALL_EXCEPTIONS
+    )
+
+
+def test_every_go_build_test_vet_run_call_carries_trimpath() -> None:
+    calls = _go_calls()
+    assert len(calls) >= 35, f"the derivation found only {len(calls)} go calls"
+    missing = [
+        f"{file}: {command[:90]}"
+        for file, command in calls
+        if "-trimpath" not in command and not _is_excepted(file, command)
+    ]
+    assert not missing, "go call(s) without -trimpath:\n" + "\n".join(missing)
+    stale = [
+        key
+        for key in GO_CALL_EXCEPTIONS
+        if not any(
+            file == key[0] and command.startswith(key[1]) for file, command in calls
+        )
+    ]
+    assert not stale, f"GO_CALL_EXCEPTIONS entries no call matches any more: {stale}"
+
+
+def test_every_go_call_of_check_go_names_mod_readonly_and_trimpath() -> None:
+    # The derivation is by verb, so a call that lost -mod=readonly is still found; and a
+    # line that names both a go verb and -mod=readonly must be one the derivation found.
+    derived = [command for file, command in _go_calls() if file == "ci/check_go.sh"]
+    assert len(derived) >= 20, f"only {len(derived)} calls derived from check_go.sh"
+    for command in derived:
+        assert "-mod=readonly" in command, (
+            f"check_go.sh call without -mod=readonly: {command[:90]}"
+        )
+        assert "-trimpath" in command, (
+            f"check_go.sh call without -trimpath: {command[:90]}"
+        )
+    for number, raw in enumerate(CHECK_GO.read_text(encoding="utf-8").splitlines(), 1):
+        line = raw.strip()
+        call = GO_CALL.search(line)
+        if line.startswith("#") or call is None or "-mod=readonly" not in line:
+            continue
+        if "printf" in line or "die " in line:
+            continue
+        head = line[call.start() :].strip()[:25]
+        assert any(head in command for command in derived), (
+            f"check_go.sh line {number} holds a go call the derivation missed: {line[:90]}"
+        )
+
+
+def test_the_stand_in_sees_trimpath_on_every_recorded_race_call(tmp_path: Path) -> None:
+    proc, calls = _run_check_go(tmp_path, "ci-leg", "race", "1", "3")
+    assert proc.returncode == 0, proc.stderr[-1500:]
+    assert calls, "no go test call was recorded"
+    assert all(" -trimpath " in f" {c} " for c in calls), calls
+
+
+def test_the_goflags_scrub_stays_so_trimpath_is_explicit() -> None:
+    text = CHECK_GO.read_text(encoding="utf-8")
+    line = next(row for row in text.splitlines() if row.startswith("GO_ENV_OFF=("))
+    assert "-u GOFLAGS" in line, (
+        "the GOFLAGS scrub must stay: -trimpath is an explicit flag, not an inherited one"
+    )

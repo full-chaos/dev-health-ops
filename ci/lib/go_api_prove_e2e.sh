@@ -208,9 +208,9 @@ query_api_e2e_start() {
   # prover are the same build and run_go_api_prove_e2e (below) builds
   # nothing of its own.
   commit="${GITHUB_SHA:-$(git -C "${ROOT_DIR}" rev-parse HEAD)}"
-  go build -buildvcs=false -ldflags "-X github.com/full-chaos/dev-health-ops/internal/platform/version.Commit=${commit}" \
+  go build -buildvcs=false -trimpath -ldflags "-X github.com/full-chaos/dev-health-ops/internal/platform/version.Commit=${commit}" \
     -o "${BIN_DIR}/dho" ./cmd/dho
-  go run ./cmd/registrydump -file internal/queryapi/server/query_route.go > "${dir}/documents.json"
+  go run -trimpath ./cmd/registrydump -file internal/queryapi/server/query_route.go > "${dir}/documents.json"
 
   echo "==> [query-api] generating a throwaway envelope key pair"
   (umask 077 && openssl genpkey -algorithm ed25519 -out "${GO_API_PROVE_E2E_ENVELOPE_PEM}")
@@ -307,7 +307,7 @@ run_go_api_prove_e2e() {
   # dho (goapi prove, mint edge-token) is already built, by
   # query_api_e2e_start -- nothing to build here.
   commit="${GITHUB_SHA:-$(git -C "${ROOT_DIR}" rev-parse HEAD)}"
-  go run ./cmd/registrydump -file internal/queryapi/server/query_route.go > "${dir}/documents.json"
+  go run -trimpath ./cmd/registrydump -file internal/queryapi/server/query_route.go > "${dir}/documents.json"
 
   echo "==> [go-api-prove e2e] routing ${GO_API_PROVE_E2E_OPERATION} to shadow at the running build"
   local query_api="http://127.0.0.1:${QUERY_API_PORT}"

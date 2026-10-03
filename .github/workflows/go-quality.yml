@@ -222,7 +222,7 @@ jobs:
         # -update is deliberately absent: it REWRITES the record instead of
         # comparing against it, which would make this step incapable of failing.
         # A test asserts this command does not carry it.
-        run: go run ./cmd/gqlgen-guard check-drift
+        run: go run -trimpath ./cmd/gqlgen-guard check-drift
 
       - name: Set up Python 3.14 for the live provider oracles
         # The relevance decision above needs no Python (ci/go_relevance.sh). The live-Python oracles and the unit tests that

@@ -7,13 +7,13 @@ import (
 	"maps"
 	"os"
 	"path/filepath"
-	"runtime"
 	"slices"
 	"testing"
 
 	"github.com/99designs/gqlgen/graphql"
 
 	"github.com/full-chaos/dev-health-ops/internal/queryapi/authctx"
+	"github.com/full-chaos/dev-health-ops/internal/testsupport/moduleroot"
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/programoracle"
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/venueoracle"
 )
@@ -112,7 +112,7 @@ var orgGuardGoldens = programoracle.Set{
 // Go's guard answers every case exactly as the frozen Python extension did:
 // the same refusal message, and no resolver run when it refuses.
 func TestOperationOrgViolationMatchesFrozenPythonExtension(t *testing.T) {
-	_, file, _, ok := runtime.Caller(0)
+	_, file, _, ok := moduleroot.Caller(0)
 	if !ok {
 		t.Fatal("cannot locate the test source")
 	}

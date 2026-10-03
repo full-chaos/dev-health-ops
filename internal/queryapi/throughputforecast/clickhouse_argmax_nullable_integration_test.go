@@ -115,3 +115,47 @@ func TestLoadReviewOverlayReturnsZeroNotStaleValueWhenNewestIsNull(t *testing.T)
 			latency, staleHours)
 	}
 }
+
+// CHAOS-7867 (D4373 "Keep zero", D4376): the coverage loader against a real
+// ClickHouse. A scope WITH a coverage grain answers that grain's own counts;
+// a scope with NONE is an aggregate over zero grains -- one row of zeros from
+// the engine -- and must come back as the all-zero object (ratio 0 included),
+// never nil and never the null ratio of a real zero-backlog grain.
+func TestLoadEstimateCoverageRowsAndNoRowsOnARealEngine(t *testing.T) {
+	ctx, admin, client := startThroughputForecastSchema(t)
+	day := time.Date(2026, 8, 1, 0, 0, 0, 0, time.UTC)
+	insert := `INSERT INTO estimate_coverage_metrics_daily
+		(day, provider, work_scope_id, team_id, estimated_count, unestimated_count, backlog_size, org_id, computed_at)
+		VALUES (?, 'github', 'scope-1', ?, ?, ?, ?, 'org-7867', ?)`
+	at := time.Date(2026, 8, 1, 1, 0, 0, 0, time.UTC)
+	if err := admin.Exec(ctx, insert, day, "team-with-rows", uint32(0), uint32(1), uint32(1), at); err != nil {
+		t.Fatalf("insert grain: %v", err)
+	}
+	if err := admin.Exec(ctx, insert, day, "team-zero-backlog", uint32(0), uint32(0), uint32(0), at); err != nil {
+		t.Fatalf("insert zero-backlog grain: %v", err)
+	}
+
+	got, err := loadEstimateCoverage(ctx, client, "org-7867", []string{"team-with-rows"}, nil)
+	if err != nil {
+		t.Fatalf("loadEstimateCoverage (rows): %v", err)
+	}
+	if got == nil || got.estimatedCount != 0 || got.unestimatedCount != 1 || got.backlogSize != 1 || got.ratio == nil || *got.ratio != 0 {
+		t.Fatalf("team with a grain: got %+v, want est 0 / unest 1 / backlog 1 / ratio 0", got)
+	}
+
+	got, err = loadEstimateCoverage(ctx, client, "org-7867", []string{"team-zero-backlog"}, nil)
+	if err != nil {
+		t.Fatalf("loadEstimateCoverage (zero-backlog grain): %v", err)
+	}
+	if got == nil || got.ratio != nil || got.backlogSize != 0 {
+		t.Fatalf("team with a zero-backlog grain: got %+v, want counts 0 and a NULL ratio (a real grain, parity kept)", got)
+	}
+
+	got, err = loadEstimateCoverage(ctx, client, "org-7867", []string{"team-without-rows"}, nil)
+	if err != nil {
+		t.Fatalf("loadEstimateCoverage (no rows): %v", err)
+	}
+	if got == nil || got.estimatedCount != 0 || got.unestimatedCount != 0 || got.backlogSize != 0 || got.ratio == nil || *got.ratio != 0 {
+		t.Fatalf("team without rows: got %+v, want the all-zero object with ratio 0", got)
+	}
+}

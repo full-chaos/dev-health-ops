@@ -4,7 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"log/slog"
+	"github.com/full-chaos/dev-health-ops/internal/syncdispatchruntime/synclog"
 	"strings"
 	"time"
 
@@ -122,19 +122,14 @@ func assertVerdictWellformed(verdict terminalVerdict) {
 // once that lands: every write in this family is an idempotent CAS, so a
 // whole-pass retry is always safe).
 func terminalizeUnit(
-	ctx context.Context, tx pgx.Tx, logger *slog.Logger, unit budgetUnit, verdict terminalVerdict, now time.Time,
+	ctx context.Context, tx pgx.Tx, logger *synclog.Logger, unit budgetUnit, verdict terminalVerdict, now time.Time,
 ) (terminalDecision, error) {
-	if logger == nil {
-		logger = slog.Default()
-	}
 	assertVerdictWellformed(verdict)
 	if verdict.episode != "" {
 		licensed := episodeEvidence[verdict.episode]
 		lastCategory := unit.lastErrorCategory()
 		if !licensed[lastCategory] {
-			logger.WarnContext(ctx, "dispatch_sync_run.terminal_verdict_refused",
-				slog.String("unit_id", unit.id), slog.String("error_category", verdict.errorCategory),
-				slog.String("asserted_episode", verdict.episode), slog.String("unit_last_error_category", lastCategory))
+			logger.Warn(ctx, synclog.MsgDispatchSyncRunTerminalVerdictRefused, synclog.Unit(synclog.ParseID(unit.id)), synclog.Text(synclog.KeyErrorCategory, synclog.ParseLabel(verdict.errorCategory)), synclog.Text(synclog.KeyAssertedEpisode, synclog.ParseLabel(verdict.episode)), synclog.Text(synclog.KeyUnitLastErrorCategory, synclog.ParseLabel(lastCategory)))
 			return terminalDecision{outcome: terminalOutcomeRefused}, nil
 		}
 	}
@@ -176,8 +171,7 @@ WHERE id = $1::uuid
 		return terminalDecision{}, err
 	}
 	recordRollupBump(ctx, rollupPathBudgetExhausted)
-	logger.WarnContext(ctx, "dispatch_sync_run.unit_terminalized",
-		slog.String("unit_id", unit.id), slog.String("error_category", verdict.errorCategory), slog.String("error", verdict.errorText))
+	logger.Warn(ctx, synclog.MsgDispatchSyncRunUnitTerminalized, synclog.Unit(synclog.ParseID(unit.id)), synclog.Text(synclog.KeyErrorCategory, synclog.ParseLabel(verdict.errorCategory)))
 	return terminalDecision{outcome: terminalOutcomeTerminalized, at: now}, nil
 }
 
@@ -224,7 +218,7 @@ func settleTerminalDecision(decision terminalDecision) (time.Time, bool, settleR
 // terminalizeRateLimitExhausted ports _terminalize_rate_limit_exhausted
 // verbatim: propose terminal failure for a spent RATE-LIMIT episode
 // (CHAOS-2742).
-func terminalizeRateLimitExhausted(ctx context.Context, tx pgx.Tx, logger *slog.Logger, unit budgetUnit, now time.Time) (terminalDecision, error) {
+func terminalizeRateLimitExhausted(ctx context.Context, tx pgx.Tx, logger *synclog.Logger, unit budgetUnit, now time.Time) (terminalDecision, error) {
 	return terminalizeUnit(ctx, tx, logger, unit, terminalVerdict{
 		errorCategory: rateLimitCooldownExhaustedCategory,
 		errorText:     "rate limit cooldown deferral budget exhausted",
@@ -237,7 +231,7 @@ func terminalizeRateLimitExhausted(ctx context.Context, tx pgx.Tx, logger *slog.
 // verbatim: the aggregate backstop for a unit that stayed blocked without
 // any single-cause cap being reached. Names NO episode -- this decision
 // deliberately asserts that no single cause explains the block.
-func terminalizeDeferralTotalExhausted(ctx context.Context, tx pgx.Tx, logger *slog.Logger, unit budgetUnit, now time.Time) (terminalDecision, error) {
+func terminalizeDeferralTotalExhausted(ctx context.Context, tx pgx.Tx, logger *synclog.Logger, unit budgetUnit, now time.Time) (terminalDecision, error) {
 	budgetDeferrals := unit.budgetDeferrals
 	rateLimitDeferrals := unit.rateLimitDeferrals
 	var blockedSeconds int
@@ -335,7 +329,7 @@ func budgetExhaustionErrorText(unit budgetUnit, deferrals int, unfitness budgetU
 // propose terminal failure for a spent BUDGET episode whose misfit holds
 // against the durable baseline (CHAOS-3412).
 func terminalizeBudgetExhausted(
-	ctx context.Context, tx pgx.Tx, logger *slog.Logger, unit budgetUnit, now time.Time,
+	ctx context.Context, tx pgx.Tx, logger *synclog.Logger, unit budgetUnit, now time.Time,
 	observations []map[string]any, unfitness budgetUnfitness,
 ) (terminalDecision, error) {
 	deferrals := unit.budgetDeferrals

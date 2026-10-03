@@ -416,3 +416,11 @@ func TestRunnerRefusesALegTheEdgeServedUnderImpersonation(t *testing.T) {
 		t.Fatalf("control: wire attempts not recorded on both observations: %+v", outcomes[0])
 	}
 }
+
+// The leg client's own policy (CHAOS-7910): CheckRedirect refuses every redirect with errRedirectRefused.
+func TestLegClientCheckRedirectRefuses(t *testing.T) {
+	client := NewLegClient(0)
+	if client.http.CheckRedirect == nil || !errors.Is(client.http.CheckRedirect(nil, nil), errRedirectRefused) {
+		t.Fatal("the leg client follows redirects")
+	}
+}

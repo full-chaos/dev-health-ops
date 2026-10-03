@@ -79,7 +79,7 @@ fi
 usage() {
   # Backticks in the literal help text document commands; they are not substitutions.
   # shellcheck disable=SC2016
-  printf '%s\n' 'Usage: ci/check_go.sh [fmt|vet|test|race|live-python-oracles|venue-oracles [SHARD COUNT]|venue-oracle-plan COUNT|ci-leg LEG [SHARD COUNT]|build|contract|ratchets|multi-replica-workers|integration-vet|integration-coverage|python-free-unit|python-free-listed|integration-shard-plan|integration-prepull|integration-shard|integration|fast|ci|all]
+  printf '%s\n' 'Usage: ci/check_go.sh [fmt|vet|test|race|live-python-oracles|venue-oracles [SHARD COUNT]|venue-oracle-plan COUNT|ci-leg LEG [SHARD COUNT]|build|contract|ratchets|multi-replica-workers|integration-vet|integration-coverage|python-free-unit|python-free-listed|race-excluded-ran|integration-shard-plan|integration-prepull|integration-shard|integration|fast|ci|all]
 
   fmt    Check gofmt without modifying files.
   vet    Run go vet ./... in every Go module.
@@ -346,8 +346,35 @@ check_vet() {
   run_in_modules "go vet" go vet -mod=readonly ./...
 }
 
+# check_race_excluded_ran (CHAOS-8135, CHAOS-8118): a test compiled out of the -race leg by a `!race` build tag must
+# still run in the non-race leg, or its measurement is lost silently. ci/race_excluded_tests.tsv is the closed list; each
+# test runs by name, uncached and without -race, and the run fails unless its own "--- PASS: <name>" line is printed
+# (the leg log then names every moved test). An empty list, a missing file, a missing PASS line or a non-zero go test
+# exit all fail (a measurement that did not happen is a failure). check_test calls it, so every leg that runs the
+# unit tests runs it.
+check_race_excluded_ran() {
+  local list="${ROOT}/ci/race_excluded_tests.tsv" row package name out count=0
+  local -a rows=()
+  [ -f "${list}" ] || die "ci/race_excluded_tests.tsv is missing"
+  while IFS= read -r row; do rows+=("${row}"); done < <(grep -v '^#' "${list}" | grep -v '^$')
+  [ "${#rows[@]}" -gt 0 ] || die "ci/race_excluded_tests.tsv lists no test: nothing would be measured"
+  for row in "${rows[@]}"; do
+    name="${row#*$'\t'}"
+    package="${row%%$'\t'*}"
+    [ -n "${name}" ] && [ -n "${package}" ] && [ "${name}" != "${package}" ] || die "race_excluded_tests.tsv row is not <package><TAB><test>"
+    [ -d "${ROOT}/${package}" ] || die "race-excluded package ${package} does not exist"
+    out="$(cd "${ROOT}" && "${GO_ENV_OFF[@]}" GOWORK=off go test -mod=readonly -count=1 -v -run "^${name}\$" "./${package}" 2>&1)" \
+      || { printf '%s\n' "${out}" | tail -n 40 >&2; die "race-excluded test ${package} ${name} failed in the non-race leg"; }
+    printf '%s\n' "${out}" | grep -q -- "^--- PASS: ${name} (" || die "race-excluded test ${package} ${name} did not run in the non-race leg (no PASS line)"
+    printf 'race-excluded-ran: %s %s PASS\n' "${package}" "${name}"
+    count=$((count + 1))
+  done
+  printf 'race-excluded-ran: %d test(s) ran and passed without -race\n' "${count}"
+}
+
 check_test() {
   run_in_modules "go test" go test -mod=readonly ./...
+  check_race_excluded_ran
 }
 
 check_race() {
@@ -361,9 +388,50 @@ check_race() {
 # balanced by measured package time (ci/go_race_weights.tsv, ci/go_race_shard.awk)
 # and NOT by count. The slices always partition `go list ./...`: a wrong weight
 # costs balance, never coverage. A slice that selects no package at all fails.
-GO_RACE_WEIGHTS="${ROOT}/ci/go_race_weights.tsv"
+GO_RACE_WEIGHTS="${GO_RACE_WEIGHTS:-${ROOT}/ci/go_race_weights.tsv}"
+# check_providersync_race_shard SHARD COUNT (CHAOS-8166): internal/providersync is one test binary of ~1,460 sequential tests that took
+# 509 s under -race on an idle host (565 s in CI, 94% of the 600 s go test timeout), so its race run is split BY TEST NAME across the
+# race legs: every leg runs the SHARD-th of COUNT weight-balanced test slices, weights ci/go_providersync_race_weights.tsv, ci/go_providersync_race_shard.awk.
+# The test set comes from `go test -list` (never hand-listed). The slices must partition it exactly (each test in exactly one shard,
+# no shard empty); anything else fails before a test runs. The race signal stays: nothing here is `!race`.
+check_providersync_race_shard() {
+  local shard="$1" count="$2" listing other all names selected_names s total=0 regex
+  local weights="${GO_PROVIDERSYNC_RACE_WEIGHTS:-${ROOT}/ci/go_providersync_race_weights.tsv}"
+  local shard_awk="${GO_PROVIDERSYNC_RACE_SHARD_AWK:-${ROOT}/ci/go_providersync_race_shard.awk}"
+  [ -f "${weights}" ] || die "providersync race shards need ${weights}"
+  # CHAOS-8275: list EVERY name of the RACE test binary (so a //go:build race file is seen too), not just ^Test of the plain build. A Fuzz*,
+  # Example* or Benchmark* name would be selected by no `-run ^(Test...)$` shard and run in no race leg, so it fails here instead.
+  listing="$(cd "${ROOT}" && "${GO_ENV_OFF[@]}" GOWORK=off go test -mod=readonly -race -list '.*' ./internal/providersync)" \
+    || die "go test -race -list failed for internal/providersync"
+  listing="$(printf '%s\n' "${listing}" | grep -Ev '^(ok|FAIL|\?|---)[[:space:]]' | grep -v '^$' || true)"
+  other="$(printf '%s\n' "${listing}" | grep -v '^Test' || true)"
+  [ -z "${other}" ] \
+    || die "providersync lists a name that is not Test* and that no race shard would run: $(printf '%s' "${other}" | tr '\n' ' ')"
+  all="$(printf '%s\n' "${listing}" | grep '^Test' || true)"
+  [ -n "${all}" ] || die "go test -list reported no providersync test"
+  [ "${count}" -le "$(printf '%s\n' "${all}" | wc -l)" ] \
+    || die "providersync race shards: ${count} legs for fewer listed tests: a shard would select zero tests"
+  names=""
+  for ((s = 1; s <= count; s++)); do
+    selected_names="$(printf '%s\n' "${all}" | awk -v shard="${s}" -v count="${count}" -v weights="${weights}" -f "${shard_awk}")" \
+      || die "ci/go_providersync_race_shard.awk failed"
+    [ -n "${selected_names}" ] || die "providersync race shard ${s}/${count} selected zero tests"
+    total=$((total + $(printf '%s\n' "${selected_names}" | wc -l)))
+    names+="${selected_names}"$'\n'
+    if [ "${s}" -eq "${shard}" ]; then regex="^($(printf '%s\n' "${selected_names}" | paste -sd'|' -))\$"; fi
+  done
+  [ "${total}" -eq "$(printf '%s\n' "${all}" | wc -l)" ] \
+    && [ "$(printf '%s' "${names}" | LC_ALL=C sort)" = "$(printf '%s\n' "${all}" | LC_ALL=C sort)" ] \
+    || die "providersync race shards are not an exact partition of the ${total} listed tests"
+  printf 'go test -race providersync shard %s/%s: %s of %s tests\n' "${shard}" "${count}" "$(printf '%s\n' "${regex}" | tr -cd '|' | wc -c | awk '{print $1 + 1}')" "${total}"
+  (
+    cd "${ROOT}"
+    "${GO_ENV_OFF[@]}" GOWORK=off go test -mod=readonly -race -run "${regex}" ./internal/providersync
+  )
+}
+
 check_race_shard() {
-  local shard="${1:-}" count="${2:-}" module_dir modpath pkg selected=0
+  local shard="${1:-}" count="${2:-}" module_dir modpath pkg selected=0 missing
   case "${shard}" in ""|*[!0-9]*) die "race SHARD must be a positive integer, got '${shard}'" ;; esac
   case "${count}" in ""|*[!0-9]*) die "race COUNT must be a positive integer, got '${count}'" ;; esac
   { [ "${shard}" -ge 1 ] && [ "${count}" -ge 1 ] && [ "${shard}" -le "${count}" ]; } \
@@ -372,12 +440,27 @@ check_race_shard() {
   local -a pkgs
   for module_dir in "${MODULE_DIRS[@]}"; do
     modpath="$(cd "${ROOT}/${module_dir}" && "${GO_ENV_OFF[@]}" GOWORK=off go list -m)"
+    if [ "${module_dir}" = "." ]; then
+      # CHAOS-8135: static and deterministic, before any test runs: every package of the root module has a weights row.
+      # A package with no row weighs the shard awk's default and hides its cost from the shard plan.
+      missing="$(cd "${ROOT}/${module_dir}" && "${GO_ENV_OFF[@]}" GOWORK=off go list -mod=readonly ./... \
+        | awk -v mod="${modpath}" -v weights="${GO_RACE_WEIGHTS}" -f "${ROOT}/ci/go_race_missing_rows.awk")" \
+        || die "ci/go_race_missing_rows.awk failed"
+      [ -z "${missing}" ] \
+        || die "race package(s) with NO row in ci/go_race_weights.tsv (add each one: its measured go test -race seconds, 1 if it has no test): $(printf '%s' "${missing}" | tr '\n' ' ')"
+    fi
     pkgs=()
     while IFS= read -r pkg; do
       [ -n "${pkg}" ] && pkgs+=("${pkg}")
     done < <(cd "${ROOT}/${module_dir}" && "${GO_ENV_OFF[@]}" GOWORK=off go list -mod=readonly ./... \
+      | { if [ "${module_dir}" = "." ]; then grep -vx "${modpath}/internal/providersync"; else cat; fi; } \
       | awk -v mod="${modpath}" -v shard="${shard}" -v count="${count}" -v weights="${GO_RACE_WEIGHTS}" -f "${ROOT}/ci/go_race_shard.awk")
     printf 'go test -race (shard %s/%s): %s: %d package(s)\n' "${shard}" "${count}" "${module_dir}" "${#pkgs[@]}"
+    if [ "${module_dir}" = "." ]; then
+      # CHAOS-8166: internal/providersync runs in EVERY race leg, one test-name shard each (it is not in pkgs above).
+      selected=$((selected + 1))
+      check_providersync_race_shard "${shard}" "${count}"
+    fi
     [ "${#pkgs[@]}" -gt 0 ] || continue
     selected=$((selected + ${#pkgs[@]}))
     (
@@ -1882,11 +1965,23 @@ check_python_free_unit() {
 # under a build tag other than integration reads as STALE (the run fails closed).
 check_python_free_listed() {
   python_free_enabled || die "python-free-listed needs GO_PYTHON_FREE=1 (it is the go-python-free workflow's pull-request leg)"
-  local known="${ROOT}/ci/python_free_known.tsv" package tests index=0 relative
+  local known="${PYTHON_FREE_KNOWN:-${ROOT}/ci/python_free_known.tsv}" package tests index=0 relative
   [ -f "${known}" ] || die "ci/python_free_known.tsv is missing"
   local -a packages=()
-  while IFS= read -r package; do packages+=("${package}"); done < <(grep -v '^#' "${known}" | cut -f1 | sort -u)
-  [ "${#packages[@]}" -gt 0 ] || die "ci/python_free_known.tsv lists no package: nothing would be measured"
+  # a row is a line that is not a comment and not blank (empty or only whitespace): the same definition as python_free_ratchet.sh's list_rows
+  while IFS= read -r package; do packages+=("${package}"); done < <(grep -v -e '^#' -e '^[[:space:]]*$' "${known}" | cut -f1 | sort -u)
+  if [ "${#packages[@]}" -eq 0 ]; then
+    # CHAOS-8324: an empty list is a DEFINED state: the ratchet is closed (every listed test is frozen). `state` dies on a
+    # file without its header, so a truncated list is never read as empty. The scope job then lists no test and runs none;
+    # the stream and the empty hits file below are its markers (the artifact steps and the compare step need a file), and the full run on main measures every package.
+    bash "${ROOT}/ci/python_free_ratchet.sh" state "${known}" >/dev/null \
+      || die "ci/python_free_known.tsv is not a valid closed list (see python_free_ratchet.sh state)"
+    printf 'python-free-listed: the closed list is EMPTY (every listed test is frozen): no test is run by name; the full go-python-free run on main is the measure\n'
+    mkdir -p "${PYTHON_FREE_OUT:?GO_PYTHON_FREE=1 needs PYTHON_FREE_OUT (a directory for the shard hits)}"
+    printf '{"declared_empty":true,"list":"ci/python_free_known.tsv"}\n' >"${PYTHON_FREE_OUT}/listed-declared-empty.json"
+    : >"${PYTHON_FREE_OUT}/listed-declared-empty.hits"
+    return 0
+  fi
   for package in "${packages[@]}"; do
     index=$((index + 1))
     relative="${package#github.com/full-chaos/dev-health-ops/}"
@@ -2181,6 +2276,10 @@ case "${1:-all}" in
     ;;
   python-free-unit)
     check_python_free_unit
+    ;;
+  race-excluded-ran)
+    [ "$#" -eq 1 ] || die "race-excluded-ran accepts no arguments"
+    check_race_excluded_ran
     ;;
   python-free-listed)
     [ "$#" -eq 1 ] || die "python-free-listed accepts no arguments"

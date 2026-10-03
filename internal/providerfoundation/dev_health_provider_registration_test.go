@@ -3,6 +3,7 @@ package providerfoundation
 import (
 	"bytes"
 	"context"
+	"github.com/full-chaos/dev-health-ops/internal/testsupport/fakehttp"
 	"net/http"
 	"strings"
 	"testing"
@@ -31,15 +32,15 @@ func TestSharedMetricsAccumulateAcrossRealRequestsAndScrape(t *testing.T) {
 	t.Parallel()
 	metrics := NewMetrics()
 
-	successClient := newTestHTTPClient(t, HTTPDoerFunc(func(request *http.Request) (*http.Response, error) {
+	successClient := newTestHTTPClient(t, fakehttp.Client(HTTPDoerFunc(func(request *http.Request) (*http.Response, error) {
 		return testHTTPResponse(request, http.StatusOK, nil, `{}`), nil
-	}), RetryPolicy{MaxAttempts: 1, InitialWait: time.Millisecond, MaxWait: time.Millisecond})
+	})), RetryPolicy{MaxAttempts: 1, InitialWait: time.Millisecond, MaxWait: time.Millisecond})
 	successClient.Metrics = metrics
 	successClient.Provider = "github"
 
-	rateLimitedClient := newTestHTTPClient(t, HTTPDoerFunc(func(request *http.Request) (*http.Response, error) {
+	rateLimitedClient := newTestHTTPClient(t, fakehttp.Client(HTTPDoerFunc(func(request *http.Request) (*http.Response, error) {
 		return testHTTPResponse(request, http.StatusTooManyRequests, nil, `{}`), nil
-	}), RetryPolicy{MaxAttempts: 1, InitialWait: time.Millisecond, MaxWait: time.Millisecond})
+	})), RetryPolicy{MaxAttempts: 1, InitialWait: time.Millisecond, MaxWait: time.Millisecond})
 	rateLimitedClient.Metrics = metrics
 	rateLimitedClient.Provider = "github"
 

@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"github.com/full-chaos/dev-health-ops/internal/testsupport/fakehttp"
 	"net/http"
 	"net/url"
 	"sort"
@@ -217,7 +218,7 @@ func buildGitLabSecurityTraversalTrace(t *testing.T, input map[string]any) gitLa
 	}
 	batch, err := (GitLabSecurityRouteHandler{MaxAlerts: maxAlerts}).Collect(
 		context.Background(), claim, providerfoundation.Credential{},
-		gitLabSecurityRouteClient(t, doer), oracleGitLabSecurityNormalizedAt,
+		gitLabSecurityRouteClient(t, fakehttp.Client(doer)), oracleGitLabSecurityNormalizedAt,
 	)
 	if err != nil {
 		t.Fatal(err)

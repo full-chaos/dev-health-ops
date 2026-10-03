@@ -5,6 +5,8 @@ package syncbudget
 import (
 	"context"
 	"errors"
+	"github.com/full-chaos/dev-health-ops/internal/syncdispatchruntime/synclog"
+	"github.com/full-chaos/dev-health-ops/internal/testsupport/fakehttp"
 	"io"
 	"log/slog"
 	"net/http"
@@ -95,7 +97,7 @@ VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10::json, 'light', 'full', 'planned
 
 func (f *loaderFixture) loader(env map[string]string) Loader {
 	return Loader{
-		DB: f.pool, Decryptor: f.decryptor, Logger: slog.New(slog.DiscardHandler),
+		DB: f.pool, Decryptor: f.decryptor, Logger: synclog.New(slog.New(slog.DiscardHandler)),
 		Getenv: func(name string) string { return env[name] },
 	}
 }
@@ -420,7 +422,7 @@ func TestLoaderHydratesPagerDutyLikeResolveRunAuth(t *testing.T) {
 		doer := &fakeTokenDoer{status: http.StatusOK}
 		loader := func(env map[string]string) Loader {
 			l := f.loader(env)
-			l.PagerDutyOAuth, l.PagerDutyDoer = oauth, doer
+			l.PagerDutyOAuth, l.PagerDutyDoer = oauth, fakehttp.Client(doer)
 			return l
 		}
 
@@ -501,7 +503,7 @@ func TestLoaderRoundTwoParity(t *testing.T) {
 			second := f.unit("pagerduty", "services", nil)
 			doer := &sequenceDoer{statuses: []int{http.StatusTooManyRequests, http.StatusOK}}
 			loader := f.loader(nil)
-			loader.PagerDutyOAuth, loader.PagerDutyDoer = &fakePagerDutyOAuth{}, doer
+			loader.PagerDutyOAuth, loader.PagerDutyDoer = &fakePagerDutyOAuth{}, fakehttp.Client(doer)
 			results, err := loader.EstimateUnits(f.ctx, f.orgID, f.runID, []string{first, second})
 			if err != nil {
 				t.Fatal(err)

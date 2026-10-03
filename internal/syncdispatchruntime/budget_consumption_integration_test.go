@@ -6,6 +6,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"github.com/full-chaos/dev-health-ops/internal/syncdispatchruntime/synclog"
 	"log/slog"
 	"sort"
 	"strings"
@@ -345,7 +346,7 @@ func TestActiveBudgetConsumptionLogsTheGroupFanout(t *testing.T) {
 			t.Fatal(err)
 		}
 		defer func() { _ = tx.Rollback(ctx) }()
-		if _, err := activeBudgetConsumption(ctx, tx, estimator, logger, now, map[string]bool{budgetKey: true}); err != nil {
+		if _, err := activeBudgetConsumption(ctx, tx, estimator, synclog.New(logger), now, map[string]bool{budgetKey: true}); err != nil {
 			t.Fatalf("activeBudgetConsumption: %v", err)
 		}
 

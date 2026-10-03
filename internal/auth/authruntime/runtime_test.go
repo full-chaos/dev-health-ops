@@ -177,6 +177,43 @@ func awaitBoundAddress(t *testing.T, logs *safeBuffer, component string) string 
 	return ""
 }
 
+// awaitBoundAddressOrExit is awaitBoundAddress that also reads the Execute
+// exit channel: if Execute returns before the component's "listener bound"
+// line appears, it fails at once with the exit code and the logs instead of
+// waiting out the limit. heldAddress names the address the test holds open.
+func awaitBoundAddressOrExit(t *testing.T, logs *safeBuffer, exit <-chan int, component, heldAddress string) string {
+	t.Helper()
+	deadline := time.Now().Add(20 * time.Second)
+	for time.Now().Before(deadline) {
+		for _, line := range strings.Split(logs.String(), "\n") {
+			if !strings.Contains(line, `"msg":"listener bound"`) {
+				continue
+			}
+			var entry struct {
+				Component string `json:"component"`
+				Address   string `json:"address"`
+			}
+			if err := json.Unmarshal([]byte(line), &entry); err != nil {
+				t.Fatalf("decode log line %q: %v", line, err)
+			}
+			if entry.Component == component && entry.Address != "" {
+				return entry.Address
+			}
+		}
+		select {
+		case code := <-exit:
+			t.Fatalf(
+				"Execute exited %d before the %s listener bound; the environment's address %s is held, so the flag did not win; logs:\n%s",
+				code, component, heldAddress, logs.String(),
+			)
+		default:
+		}
+		time.Sleep(25 * time.Millisecond)
+	}
+	t.Fatalf("no \"listener bound\" line for %s within 20s; logs:\n%s", component, logs.String())
+	return ""
+}
+
 // awaitResponse polls url until it answers, so the test never races the
 // listener's bind.
 func awaitResponse(t *testing.T, client *http.Client, url string) *http.Response {
@@ -598,13 +635,20 @@ func TestFlagsOverrideTheEnvironment(t *testing.T) {
 	// The API listener spells its ":0" as "localhost:0" only because the
 	// configuration rejects two identically-spelled addresses; both bind an
 	// ephemeral loopback port.
-	operatorAddress := reservePort(t)
+	// The environment's operator address is HELD OPEN by the test for its whole
+	// duration (never reserved and released), so no neighbouring process can be
+	// handed the port while the test runs. The proof that the flag won: the
+	// service started and served on the flag's address while the environment's
+	// address was in use. If the flag were ignored, the service would try to
+	// bind the held address and exit; the wait below reads that exit and
+	// fails at once.
+	held, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("hold the environment's operator address: %v", err)
+	}
+	defer func() { _ = held.Close() }()
+	operatorAddress := held.Addr().String()
 	env := brokenEnvironment(t, "localhost:0", operatorAddress)
-	// Point the environment at an address the flag will override. If the flag
-	// were ignored, the operator listener would bind the environment's
-	// address and the bind check below would fail. The environment's address
-	// is never bound by the service in the passing case, so reserving it is
-	// race-free.
 	env[authconfig.EnvLogLevel] = "info"
 
 	logs := &safeBuffer{}
@@ -618,19 +662,17 @@ func TestFlagsOverrideTheEnvironment(t *testing.T) {
 		)
 	}()
 
-	flagOperator := awaitBoundAddress(t, logs, "operator-http")
+	flagOperator := awaitBoundAddressOrExit(t, logs, exit, "operator-http", operatorAddress)
+	// Guard, not proof of the flag: if the hold were ineffective the service
+	// could have bound the environment's address and this would be equal.
+	if flagOperator == operatorAddress {
+		t.Fatalf("the operator listener bound the held environment address %s: the hold is not effective", operatorAddress)
+	}
 	client := &http.Client{Timeout: 5 * time.Second}
 	defer client.CloseIdleConnections()
 	response := awaitResponse(t, client, "http://"+flagOperator+"/healthz")
 	_, _ = io.Copy(io.Discard, response.Body)
 	_ = response.Body.Close()
-
-	// The environment's address must be free: nothing bound it.
-	listener, err := net.Listen("tcp", operatorAddress)
-	if err != nil {
-		t.Fatalf("the environment's operator address is bound, so the flag did not win: %v", err)
-	}
-	_ = listener.Close()
 
 	cancel()
 	select {

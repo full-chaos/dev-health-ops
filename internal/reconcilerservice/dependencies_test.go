@@ -75,6 +75,19 @@ func TestProductionGenericRelayConstructsBothRecoverySeams(t *testing.T) {
 	if strings.Count(text, "joboutbox.NewRelayWithRoutesRecoveryAndStrandRepair(") != 1 {
 		t.Fatal("production generic relay does not run recovery before ordinary relay")
 	}
+	// CHAOS-8421: the strand repair the relay steps is the idle-backoff wrapper
+	// around the real one, at the default ceiling. Both halves are pinned: the
+	// wrapper must wrap THE constructed repair, and the relay must be handed
+	// the wrapper -- handing it the bare repair compiles, works, and surveys
+	// every second again.
+	if strings.Count(text, "joboutbox.NewIdleBackoffStrandRepair(\n\t\tstrandRepair, joboutbox.DefaultStrandRepairIdleCeiling,\n\t)") != 1 {
+		t.Fatal("production generic relay does not wrap the strand repair in its idle backoff " +
+			"at the default ceiling")
+	}
+	if strings.Count(text, "repository, inserter, routes, repair, idleStrandRepair, joboutbox.DefaultRelayConfig(),") != 1 {
+		t.Fatal("production generic relay is not handed the idle-backoff strand repair; the " +
+			"bare repair surveys on every tick whether or not there is anything to find")
+	}
 	// The narrower constructors would drop a seam silently: both compile, and
 	// both produce a working relay that simply never repairs.
 	for _, superseded := range []string{

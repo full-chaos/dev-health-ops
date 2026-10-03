@@ -5,6 +5,7 @@ package synccli
 import (
 	"context"
 	"encoding/json"
+	"github.com/full-chaos/dev-health-ops/internal/testsupport/fakehttp"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -157,7 +158,7 @@ func TestResolveJiraStoredSettingsWorksWithTheProductionDeps(t *testing.T) {
 	seedJiraIntegration(t, ctx, pool, orgID, "production deps", used)
 
 	d := defaultDeps()
-	settings, err := resolveJiraStoredSettings(ctx, pool, testDecryptor(), d.doer, d.newOrganizationResolver, orgID, envOverrides{})
+	settings, err := resolveJiraStoredSettings(ctx, pool, testDecryptor(), fakehttp.Client(d.doer), d.newOrganizationResolver, orgID, envOverrides{})
 	if err != nil {
 		t.Fatalf("the stored-credential path failed with the production deps: %v", err)
 	}

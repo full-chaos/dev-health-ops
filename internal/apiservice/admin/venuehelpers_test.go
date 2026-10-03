@@ -10,9 +10,9 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
-	"runtime"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/jackc/pgx/v5/pgxpool"
 
@@ -22,6 +22,7 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/auth/edgetoken"
 	"github.com/full-chaos/dev-health-ops/internal/platform/config"
 	"github.com/full-chaos/dev-health-ops/internal/storage/valkey"
+	"github.com/full-chaos/dev-health-ops/internal/testsupport/moduleroot"
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/venueoracle"
 )
 
@@ -109,6 +110,42 @@ func startGoServer(t *testing.T, ctx context.Context, venue *venueoracle.Venue, 
 // enough to redact" (codex round pr2842-r1, P3: the prior version replaced
 // the value with no type check at all, so a temporarily-corrupted
 // expires_at, changed to the JSON number 7 on both planes, still passed).
+// seedClock returns a golden venue's seed clock: each call is the next fixed
+// timestamp (one second apart, with a microsecond fraction so a rendered time
+// keeps its fraction) as an SQL literal. A seed that wrote now() would put the
+// replay's wall clock into bodies the golden holds from the recording.
+func seedClock() func() string {
+	next := time.Date(2026, 1, 1, 0, 0, 0, 123456000, time.UTC)
+	return func() string {
+		next = next.Add(time.Second)
+		return "'" + next.Format("2006-01-02 15:04:05.000000Z07:00") + "'"
+	}
+}
+
+// timeShapeField keeps only the shape of a top-level time string (each digit
+// becomes D): for a time the route renders from a row a seed must write
+// relative to the wall clock (a lookback window), so the recording's and the
+// replay's values differ by construction while their spelling (precision,
+// zone suffix) is still compared. The caller checks the Go value itself
+// against what the seed wrote.
+func timeShapeField(t *testing.T, body, key string) string {
+	t.Helper()
+	return venueoracle.RedactJSON(body, func(path []string, raw string) (string, bool) {
+		if len(path) != 1 || path[0] != key || raw == "null" {
+			return "", false
+		}
+		if !strings.HasPrefix(raw, `"`) {
+			t.Fatalf("timeShapeField(%q): value is %s, want a string or null", key, raw)
+		}
+		return strings.Map(func(r rune) rune {
+			if r >= '0' && r <= '9' {
+				return 'D'
+			}
+			return r
+		}, raw), true
+	})
+}
+
 func redactField(t *testing.T, body, key string) string {
 	t.Helper()
 	// Redact in the raw text (venueoracle.RedactJSON): re-rendering the
@@ -190,7 +227,7 @@ func dropKnownStaleClickHouseWarnings(t *testing.T, body string) string {
 // own repoRoot helper.
 func repoRoot(t *testing.T) string {
 	t.Helper()
-	_, file, _, ok := runtime.Caller(0)
+	_, file, _, ok := moduleroot.Caller(0)
 	if !ok {
 		t.Fatal("cannot locate this test's source file")
 	}
@@ -213,12 +250,16 @@ func repoRoot(t *testing.T) string {
 // columns compact (pyjson.Marshal) where Python stores json.dumps text.
 // That gap is ticketed with the admin route owner; the check fails when
 // it closes, so this call is then replaced by a direct comparison.
-func compareAuditJSONWithSpacingGap(t *testing.T, ctx context.Context, venue *venueoracle.Venue, where string, columns ...string) {
+func compareAuditJSONWithSpacingGap(t *testing.T, ctx context.Context, golden *venueoracle.Golden, venue *venueoracle.Venue, where string, columns ...string) {
 	t.Helper()
 	for _, column := range columns {
 		query := fmt.Sprintf(`SELECT coalesce(string_agg(coalesce(%s::text, '<null>'), E'\x1e' ORDER BY created_at), '')
 FROM audit_logs WHERE %s`, column, where)
-		python := venueoracle.TableRows(t, ctx, venue.AdminURI(t, venue.SourceDB), query)
+		// The Python plane's rows: read from its database while recording, frozen
+		// otherwise (the spacing gap is compared here, not byte for byte).
+		python := golden.InspectRows(t, "audit_logs."+column+" JSON text where "+where, func() string {
+			return venueoracle.TableRows(t, ctx, venue.AdminURI(t, venue.SourceDB), query)
+		})
 		goText := venueoracle.TableRows(t, ctx, venue.AdminURI(t, venue.GoDB), query)
 		venueoracle.CompareJSONSpacingGap(t, "audit_logs."+column, splitRows(python), splitRows(goText))
 	}

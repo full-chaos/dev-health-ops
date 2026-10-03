@@ -2,10 +2,10 @@ package providersync
 
 import (
 	"fmt"
+	"github.com/full-chaos/dev-health-ops/internal/testsupport/moduleroot"
 	"os"
 	"path/filepath"
 	"reflect"
-	"runtime"
 	"slices"
 	"strings"
 	"testing"
@@ -23,7 +23,7 @@ import (
 
 func githubWorkItemMetricRepoRoot(t *testing.T) string {
 	t.Helper()
-	_, currentFile, _, _ := runtime.Caller(0)
+	_, currentFile, _, _ := moduleroot.Caller(0)
 	root, err := filepath.Abs(filepath.Join(filepath.Dir(currentFile), "..", ".."))
 	if err != nil {
 		t.Fatal(err)

@@ -69,6 +69,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"github.com/full-chaos/dev-health-ops/internal/httpguard"
 	"net"
 	"net/http"
 	"net/url"
@@ -568,12 +569,7 @@ func (h handlers) exchangeAndValidate(ctx context.Context, w http.ResponseWriter
 		RedirectURL: state.RedirectURI,
 		Endpoint:    oauth2.Endpoint{TokenURL: metadata.TokenEndpoint, AuthStyle: oauth2.AuthStyleInParams},
 	}
-	exchangeCtx := context.WithValue(ctx, oauth2.HTTPClient, h.HTTPClient)
-	var opts []oauth2.AuthCodeOption
-	if verifier != "" {
-		opts = append(opts, oauth2.VerifierOption(verifier))
-	}
-	token, err := oauthCfg.Exchange(exchangeCtx, code, opts...)
+	token, err := h.exchangeOIDCCode(ctx, oauthCfg, code, verifier)
 	if err != nil {
 		return oidcClaims{}, ssoErr("OIDC token exchange failed")
 	}
@@ -661,7 +657,7 @@ func (h handlers) fetchUserinfo(ctx context.Context, endpoint, accessToken strin
 		return nil, ssoErr("OIDC userinfo request failed")
 	}
 	req.Header.Set("Authorization", "Bearer "+accessToken)
-	resp, err := h.HTTPClient.Do(req)
+	resp, err := httpguard.NoRedirects(h.HTTPClient).Do(req) // the access token rides this request
 	if err != nil {
 		return nil, ssoErr("OIDC userinfo request failed")
 	}
@@ -817,4 +813,15 @@ func userAgentHeader(r *http.Request) *string {
 	}
 	value := policy.Latin1(values[0])
 	return &value
+}
+
+// exchangeOIDCCode is the token-endpoint call: client_secret and the code ride its BODY, which a 307 would send again
+// to any host, so it follows no redirect whatever client was supplied.
+func (h handlers) exchangeOIDCCode(ctx context.Context, oauthCfg oauth2.Config, code, verifier string) (*oauth2.Token, error) {
+	exchangeCtx := context.WithValue(ctx, oauth2.HTTPClient, httpguard.NoRedirects(h.HTTPClient))
+	var opts []oauth2.AuthCodeOption
+	if verifier != "" {
+		opts = append(opts, oauth2.VerifierOption(verifier))
+	}
+	return oauthCfg.Exchange(exchangeCtx, code, opts...)
 }

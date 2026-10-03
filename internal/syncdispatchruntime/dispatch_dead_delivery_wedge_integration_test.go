@@ -6,6 +6,7 @@ import (
 	"bytes"
 	"context"
 	"fmt"
+	"github.com/full-chaos/dev-health-ops/internal/syncdispatchruntime/synclog"
 	"log/slog"
 	"strings"
 	"testing"
@@ -88,7 +89,7 @@ func runDeadDeliveryScenario(t *testing.T, occupantsFinish bool, costClass strin
 		clock := time.Now().UTC().Truncate(time.Microsecond)
 		var captured bytes.Buffer
 		logger := slog.New(slog.NewJSONHandler(&captured, &slog.HandlerOptions{Level: slog.LevelInfo}))
-		service, err := NewNativeDispatchSyncRunService(pool, logger, &fakeBudgetEstimator{}, mustDispatchProducer(t, pool), &fakeJobRegistry{
+		service, err := NewNativeDispatchSyncRunService(pool, synclog.New(logger), &fakeBudgetEstimator{}, mustDispatchProducer(t, pool), &fakeJobRegistry{
 			descriptors: map[string]jobruntime.Descriptor{jobcontract.KindSyncProviderUnit: providerUnitDescriptor("river")},
 		})
 		if err != nil {
@@ -293,7 +294,7 @@ WHERE dedupe_key=$2`, now, "sync.provider_unit:"+deadUnit); err != nil {
 
 		var captured bytes.Buffer
 		logger := slog.New(slog.NewJSONHandler(&captured, &slog.HandlerOptions{Level: slog.LevelInfo}))
-		service, err := NewNativeDispatchSyncRunService(pool, logger, &fakeBudgetEstimator{}, mustDispatchProducer(t, pool), &fakeJobRegistry{
+		service, err := NewNativeDispatchSyncRunService(pool, synclog.New(logger), &fakeBudgetEstimator{}, mustDispatchProducer(t, pool), &fakeJobRegistry{
 			descriptors: map[string]jobruntime.Descriptor{jobcontract.KindSyncProviderUnit: providerUnitDescriptor("river")},
 		})
 		if err != nil {

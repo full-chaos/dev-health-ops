@@ -1,6 +1,23 @@
 # Every file under internal/apiservice/admin/testdata: sha256, kind, path. Written by `go run ./internal/testsupport/recordedfiles/manifest`; never edit it by hand.
 # python-recorded set: e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855 (0 files)
 # header-before-stamp set: c3d34e59f6eca4adf409d5dc646b19677cd267b9e5e36948996656eb543675b1 (17 files)
+-	header	admin/clickhouse_org_tables.json
+-	header	admin/impersonation.json
+-	header	admin/impersonation_ttl_beyond_duration.json
+-	header	admin/impersonation_ttl_unicode_digit.json
+-	header	admin/invites.json
+-	header	admin/llm_readiness_probe.json
+-	header	admin/llmsettingsstatus.json
+-	header	admin/org_deletion_targets.json
+-	header	admin/orgdeletion.json
+-	header	admin/orgdeletion_pagerduty.json
+-	header	admin/orgs_crud.json
+-	header	admin/ratelimit_path_cardinality.json
+-	header	admin/setpassword_ratelimit.json
+-	header	admin/setpassword_ratelimit_independent.json
+-	header	admin/setpassword_validation_before_limit.json
+-	header	admin/sharedlimit.json
+-	header	admin/users.json
 a3ca62cf86105653b606b6e6f310a6f5ebad5087c687c55069627e290f7e3c7f	header-before-stamp	governance/credentialdelete.json
 686d3bae4e71ab6b655b2d57dc647f86b8d907bfef485292a0a7dc151b0ecbcf	header-before-stamp	governance/governance.json
 8406fe1dbdd8b3bc7556426178e4dc7c43f7eab33f1a454c07ef3256d646f140	header-before-stamp	governance/llmsettings_keyed.json

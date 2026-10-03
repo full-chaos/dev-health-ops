@@ -1,12 +1,17 @@
 package syncdispatchruntime
 
 import (
+	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
+	"log/slog"
+	"strings"
 	"testing"
 
 	"github.com/full-chaos/dev-health-ops/internal/jobcontract"
 	"github.com/full-chaos/dev-health-ops/internal/jobruntime"
+	"github.com/full-chaos/dev-health-ops/internal/providersync"
 	"github.com/riverqueue/river"
 )
 
@@ -23,13 +28,14 @@ type recordingDerivationRunner struct {
 	retracted   int
 	inputsReady bool
 	armCounts   map[string]int
+	stats       providersync.TeamRepoOwnershipDerivationStats
 	err         error
 	calls       []string
 }
 
-func (runner *recordingDerivationRunner) Derive(_ context.Context, orgID string) (int, int, bool, map[string]int, error) {
+func (runner *recordingDerivationRunner) DeriveWithStats(_ context.Context, orgID string) (int, int, bool, map[string]int, providersync.TeamRepoOwnershipDerivationStats, error) {
 	runner.calls = append(runner.calls, orgID)
-	return runner.written, runner.retracted, runner.inputsReady, runner.armCounts, runner.err
+	return runner.written, runner.retracted, runner.inputsReady, runner.armCounts, runner.stats, runner.err
 }
 
 type recordingDerivationObserver struct {
@@ -118,6 +124,67 @@ func TestTeamRepoOwnershipDerivationWorkerRecordsResolutionArmCounts(t *testing.
 	}
 	if counts[jobruntime.TeamRepoOwnershipResolutionArmLinearTeamKey] != 2 {
 		t.Fatalf("linear_team_key count = %d, want 2", counts[jobruntime.TeamRepoOwnershipResolutionArmLinearTeamKey])
+	}
+}
+
+// TestTeamRepoOwnershipDerivationWorkerSeparatesUnchangedFromNoSignal pins CHAOS-8148: a run that wrote nothing is "unchanged" when it
+// DERIVED facts and every one is already carried by an open row, and "no_signal" only when it derived nothing; a run that derived facts
+// but wrote none for another reason (some facts are not unchanged) stays no_signal, so the label never claims more than the counts say.
+func TestTeamRepoOwnershipDerivationWorkerSeparatesUnchangedFromNoSignal(t *testing.T) {
+	t.Parallel()
+	cases := []struct {
+		name  string
+		stats providersync.TeamRepoOwnershipDerivationStats
+		want  jobruntime.TeamRepoOwnershipDerivationOutcome
+	}{
+		{"all derived facts unchanged", providersync.TeamRepoOwnershipDerivationStats{Derived: 8, Unchanged: 8}, jobruntime.TeamRepoOwnershipDerivationOutcomeUnchanged},
+		{"one derived fact, unchanged", providersync.TeamRepoOwnershipDerivationStats{Derived: 1, Unchanged: 1}, jobruntime.TeamRepoOwnershipDerivationOutcomeUnchanged},
+		{"derived nothing", providersync.TeamRepoOwnershipDerivationStats{}, jobruntime.TeamRepoOwnershipDerivationOutcomeNoSignal},
+		{"derived some, only some unchanged, none written", providersync.TeamRepoOwnershipDerivationStats{Derived: 8, Unchanged: 5}, jobruntime.TeamRepoOwnershipDerivationOutcomeNoSignal},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			runner := &recordingDerivationRunner{written: 0, inputsReady: true, stats: tc.stats}
+			observer := &recordingDerivationObserver{}
+			worker := &teamRepoOwnershipDerivationWorker{service: runner, observer: observer}
+			if err := worker.Work(context.Background(), &river.Job[TeamRepoOwnershipDerivationJobArgs]{Args: validTeamRepoOwnershipDerivationJobArgs()}); err != nil {
+				t.Fatalf("Work() error = %v, want nil", err)
+			}
+			if len(observer.outcomes) != 1 || observer.outcomes[0] != tc.want {
+				t.Fatalf("observed outcomes = %v, want [%s]", observer.outcomes, tc.want)
+			}
+		})
+	}
+}
+
+// TestTeamRepoOwnershipDerivationWorkerLogsTheDerivedAndUnchangedCounts pins the log line CHAOS-8148 adds: it is the only place the counts are
+// recorded, so a field dropped or filled with the wrong number would pass every other test. Not parallel: it replaces the default logger.
+func TestTeamRepoOwnershipDerivationWorkerLogsTheDerivedAndUnchangedCounts(t *testing.T) {
+	var logged bytes.Buffer
+	previous := slog.Default()
+	slog.SetDefault(slog.New(slog.NewJSONHandler(&logged, nil)))
+	t.Cleanup(func() { slog.SetDefault(previous) })
+
+	runner := &recordingDerivationRunner{written: 0, retracted: 0, inputsReady: true, stats: providersync.TeamRepoOwnershipDerivationStats{Derived: 7, Unchanged: 5}}
+	worker := &teamRepoOwnershipDerivationWorker{service: runner, observer: &recordingDerivationObserver{}}
+	if err := worker.Work(context.Background(), &river.Job[TeamRepoOwnershipDerivationJobArgs]{Args: validTeamRepoOwnershipDerivationJobArgs()}); err != nil {
+		t.Fatalf("Work() error = %v, want nil", err)
+	}
+	var found map[string]any
+	for _, line := range strings.Split(strings.TrimSpace(logged.String()), "\n") {
+		var record map[string]any
+		if json.Unmarshal([]byte(line), &record) == nil && record["msg"] == "team_repo_ownership_derivation" {
+			found = record
+		}
+	}
+	if found == nil {
+		t.Fatalf("no team_repo_ownership_derivation log line in %q", logged.String())
+	}
+	if found["facts_derived"] != float64(7) || found["facts_unchanged"] != float64(5) {
+		t.Fatalf("log fields facts_derived=%v facts_unchanged=%v, want 7 and 5", found["facts_derived"], found["facts_unchanged"])
+	}
+	if found["outcome"] != "no_signal" {
+		t.Fatalf("outcome = %v, want no_signal (7 derived, 5 unchanged: not all unchanged)", found["outcome"])
 	}
 }
 

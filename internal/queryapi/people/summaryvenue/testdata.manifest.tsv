@@ -1,4 +1,6 @@
 # Every file under internal/queryapi/people/summaryvenue/testdata: sha256, kind, path. Written by `go run ./internal/testsupport/recordedfiles/manifest`; never edit it by hand.
 # python-recorded set: e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855 (0 files)
 # header-before-stamp set: e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855 (0 files)
-59c34de63748700c762de22c0e5a5b29eba4facc1ddf13b9f962aad14e583cdb	unclassified	summary_producer.py
+-	header	golden/venue-people-summary-zone.golden.json
+-	header	golden/venue-people-summary.golden.json
+daeeae7c3d1e70b3fb7d0249967fe8b353ff8bf42a6afd52365e11fc5162fe16	hand-written	summary_producer.py

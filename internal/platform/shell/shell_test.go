@@ -1004,6 +1004,64 @@ func TestShellExportsOTelInstrumentsOnMetrics(t *testing.T) {
 	}
 }
 
+// TestShellExposesTheOTelInitFailureCounterAtZero pins CHAOS-8219's registration:
+// every shell binary's /metrics carries dev_health_otel_init_failures_total
+// (both attempt series) on a healthy start, so a process whose tracing failed is
+// distinguishable from one that never exposed the family.
+func TestShellExposesTheOTelInitFailureCounterAtZero(t *testing.T) {
+	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	address := listener.Addr().String()
+	if err := listener.Close(); err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	var stdout, stderr bytes.Buffer
+	done := make(chan int, 1)
+	go func() {
+		done <- Execute(ctx, Spec{Service: "dev-health-worker"}, nil, testLookup(map[string]string{
+			"DEV_HEALTH_HTTP_ADDR":        address,
+			"DEV_HEALTH_SHUTDOWN_TIMEOUT": "1s",
+		}), IO{Stdout: &stdout, Stderr: &stderr})
+	}()
+	client := &http.Client{Timeout: 200 * time.Millisecond}
+	deadline := time.Now().Add(3 * time.Second)
+	for {
+		response, requestErr := client.Get("http://" + address + "/healthz")
+		if requestErr == nil {
+			_ = response.Body.Close()
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("shell did not start: %v logs=%s stderr=%s", requestErr, stdout.String(), stderr.String())
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	response, err := client.Get("http://" + address + "/metrics")
+	if err != nil {
+		t.Fatal(err)
+	}
+	body, _ := io.ReadAll(response.Body)
+	_ = response.Body.Close()
+	for _, want := range []string{
+		`dev_health_otel_init_failures_total{attempt="initial"} 0`,
+		`dev_health_otel_init_failures_total{attempt="final"} 0`,
+	} {
+		if !strings.Contains(string(body), want) {
+			t.Fatalf("/metrics lacks %q:\n%s", want, body)
+		}
+	}
+	cancel()
+	select {
+	case <-done:
+	case <-time.After(3 * time.Second):
+		t.Fatal("shell did not terminate after cancellation")
+	}
+}
+
 // CHAOS-6883: the 503 body names the failing checks and kubelet keeps no body, so
 // a refusal that cleared left no trace anywhere. A shell-run service must log
 // which required check refused and how (bounded cause), and never the error text,

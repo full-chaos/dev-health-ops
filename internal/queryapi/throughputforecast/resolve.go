@@ -82,16 +82,18 @@ func Resolve(
 		return nil, fmt.Errorf("throughputForecast: backlog_size must be non-negative")
 	}
 
-	// Only fetched for a non-empty backlog: coverage OF an empty backlog is not
-	// a meaningful ratio, and Python skips the query rather than reporting a
-	// null one. Ordered before the no-history return because Python computes it
-	// before that branch -- the empty payload still carries coverage.
-	var coverage *estimateCoverage
-	if backlogSize > 0 {
-		coverage, err = loadEstimateCoverage(ctx, client, orgID, input.TeamIds, input.WorkScopeID)
-		if err != nil {
-			return nil, err
-		}
+	// Always fetched (D4373, chris "Keep zero"; D4376): estimateCoverage is built
+	// from the estimate_coverage rows themselves and never from the backlog gate.
+	// The gate reads a DIFFERENT table (work_item_metrics_daily), so a team whose
+	// newest work-item day is old or whose WIP is 0 there used to answer null
+	// while its coverage rows said unestimated=1 -- a null that read as "no
+	// coverage" over a team that has some. With no coverage rows the answer is
+	// the zero object (never null). This departs from the last Python resolver
+	// (forecast.py skipped the read at backlog 0), by chris's decision.
+	// Ordered before the no-history return because the empty payload carries it.
+	coverage, err := loadEstimateCoverage(ctx, client, orgID, input.TeamIds, input.WorkScopeID)
+	if err != nil {
+		return nil, err
 	}
 
 	if len(history) == 0 {

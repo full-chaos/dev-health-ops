@@ -381,10 +381,16 @@ func TestFeatureFlagsRoute_ReachableOnlyWhenSwitchEnabled(t *testing.T) {
 	documentDigest := digestHex(registeredFeatureFlagsDocument)
 	token := signTestEnvelope(t, priv, "org-1")
 
-	t.Run("disabled_by_default", func(t *testing.T) {
+	// CHAOS-8517: this subtest was "disabled_by_default" and pinned 404 for an operation with no
+	// routing-state row. The catalog rule serves a registered operation that has no row at any schema
+	// digest, so on this fresh table the request now reaches the resolver.
+	t.Run("no_routing_row_is_served_by_the_catalog_rule", func(t *testing.T) {
 		rec := postGraphQL(t, handler, registeredFeatureFlagsDocument, token)
-		if rec.Code != http.StatusNotFound {
-			t.Fatalf("no routing-state row: got %d, want 404", rec.Code)
+		if rec.Code != http.StatusOK {
+			t.Fatalf("no routing-state row: got %d, want 200 (served by the catalog rule), body=%s", rec.Code, rec.Body.String())
+		}
+		if strings.Contains(rec.Body.String(), `"errors"`) || !strings.Contains(rec.Body.String(), "flag-a") {
+			t.Fatalf("no routing-state row: expected the fake row's flag key with no errors, got %s", rec.Body.String())
 		}
 	})
 
@@ -478,10 +484,13 @@ func TestReviewEdgesRoute_ReachableOnlyWhenSwitchEnabled(t *testing.T) {
 	documentDigest := digestHex(registeredReviewEdgesDocument)
 	token := signTestEnvelope(t, priv, "org-1")
 
-	t.Run("disabled_by_default", func(t *testing.T) {
+	// CHAOS-8517: this subtest was "disabled_by_default" and pinned 404 for an operation with no
+	// routing-state row. The catalog rule serves a registered operation that has no row at any schema
+	// digest, so on this fresh table the request now reaches the resolver.
+	t.Run("no_routing_row_is_served_by_the_catalog_rule", func(t *testing.T) {
 		rec := postGraphQLWithVariables(t, handler, registeredReviewEdgesDocument, token, reviewEdgesVariables())
-		if rec.Code != http.StatusNotFound {
-			t.Fatalf("no routing-state row: got %d, want 404", rec.Code)
+		if rec.Code != http.StatusOK {
+			t.Fatalf("no routing-state row: got %d, want 200 (served by the catalog rule), body=%s", rec.Code, rec.Body.String())
 		}
 	})
 
@@ -517,11 +526,16 @@ func TestReviewEdgesRoute_ReachableOnlyWhenSwitchEnabled(t *testing.T) {
 	// make featureFlags (a document this test never registered a routing
 	// row for) reachable, and vice versa -- each go_api_routing_state row
 	// is keyed by its own document_digest AND selected_operation.
-	t.Run("enabling_reviewEdges_does_not_enable_featureFlags", func(t *testing.T) {
+	// CHAOS-8517: this subtest was "enabling_reviewEdges_does_not_enable_featureFlags" and relied on
+	// featureFlags having NO row (404). An operation with no row is served now, so the same property --
+	// a row of one operation does not decide another -- is pinned from the side that still refuses:
+	// featureFlags is held dark by its OWN row, and a canary row of reviewEdges does not lift it.
+	t.Run("a_canary_row_of_reviewEdges_does_not_lift_the_hold_on_featureFlags", func(t *testing.T) {
+		setRoutingMode(t, pool, digestHex(registeredFeatureFlagsDocument), "featureFlags", "disabled")
 		setRoutingMode(t, pool, documentDigest, "reviewEdges", "canary")
 		rec := postGraphQL(t, handler, registeredFeatureFlagsDocument, token)
 		if rec.Code != http.StatusNotFound {
-			t.Fatalf("featureFlags should stay unreachable when only reviewEdges is canaried: got %d", rec.Code)
+			t.Fatalf("featureFlags is held dark by its own disabled row and must stay unreachable while only reviewEdges is canaried: got %d", rec.Code)
 		}
 	})
 
@@ -575,10 +589,13 @@ func TestCognitiveLoadRoute_ReachableOnlyWhenSwitchEnabled(t *testing.T) {
 	documentDigest := digestHex(registeredCognitiveLoadDocument)
 	token := signTestEnvelope(t, priv, "org-1")
 
-	t.Run("disabled_by_default", func(t *testing.T) {
+	// CHAOS-8517: this subtest was "disabled_by_default" and pinned 404 for an operation with no
+	// routing-state row. The catalog rule serves a registered operation that has no row at any schema
+	// digest, so on this fresh table the request now reaches the resolver.
+	t.Run("no_routing_row_is_served_by_the_catalog_rule", func(t *testing.T) {
 		rec := postGraphQLWithVariables(t, handler, registeredCognitiveLoadDocument, token, cognitiveLoadVariables())
-		if rec.Code != http.StatusNotFound {
-			t.Fatalf("no routing-state row: got %d, want 404", rec.Code)
+		if rec.Code != http.StatusOK {
+			t.Fatalf("no routing-state row: got %d, want 200 (served by the catalog rule), body=%s", rec.Code, rec.Body.String())
 		}
 	})
 
@@ -611,13 +628,19 @@ func TestCognitiveLoadRoute_ReachableOnlyWhenSwitchEnabled(t *testing.T) {
 
 	// The three operations sharing one Mux/PostgresSwitch instance must
 	// NOT leak reachability into each other.
-	t.Run("enabling_cognitiveLoad_does_not_enable_featureFlags_or_reviewEdges", func(t *testing.T) {
+	// CHAOS-8517: this subtest was "enabling_cognitiveLoad_does_not_enable_featureFlags_or_reviewEdges"
+	// and relied on both having NO row (404). An operation with no row is served now, so the same
+	// property is pinned from the side that still refuses: each is held dark by its OWN row, and a
+	// canary row of cognitiveLoad lifts neither.
+	t.Run("a_canary_row_of_cognitiveLoad_does_not_lift_the_hold_on_featureFlags_or_reviewEdges", func(t *testing.T) {
+		setRoutingMode(t, pool, digestHex(registeredFeatureFlagsDocument), "featureFlags", "disabled")
+		setRoutingMode(t, pool, digestHex(registeredReviewEdgesDocument), "reviewEdges", "disabled")
 		setRoutingMode(t, pool, documentDigest, "cognitiveLoad", "canary")
 		if rec := postGraphQL(t, handler, registeredFeatureFlagsDocument, token); rec.Code != http.StatusNotFound {
-			t.Fatalf("featureFlags should stay unreachable when only cognitiveLoad is canaried: got %d", rec.Code)
+			t.Fatalf("featureFlags is held dark by its own disabled row and must stay unreachable while only cognitiveLoad is canaried: got %d", rec.Code)
 		}
 		if rec := postGraphQLWithVariables(t, handler, registeredReviewEdgesDocument, token, reviewEdgesVariables()); rec.Code != http.StatusNotFound {
-			t.Fatalf("reviewEdges should stay unreachable when only cognitiveLoad is canaried: got %d", rec.Code)
+			t.Fatalf("reviewEdges is held dark by its own disabled row and must stay unreachable while only cognitiveLoad is canaried: got %d", rec.Code)
 		}
 	})
 
@@ -673,10 +696,13 @@ func TestComplexityTimeseriesRoute_ReachableOnlyWhenSwitchEnabled(t *testing.T) 
 	documentDigest := digestHex(registeredComplexityTimeseriesDocument)
 	token := signTestEnvelope(t, priv, "org-1")
 
-	t.Run("disabled_by_default", func(t *testing.T) {
+	// CHAOS-8517: this subtest was "disabled_by_default" and pinned 404 for an operation with no
+	// routing-state row. The catalog rule serves a registered operation that has no row at any schema
+	// digest, so on this fresh table the request now reaches the resolver.
+	t.Run("no_routing_row_is_served_by_the_catalog_rule", func(t *testing.T) {
 		rec := postGraphQLWithVariables(t, handler, registeredComplexityTimeseriesDocument, token, complexityTimeseriesVariables())
-		if rec.Code != http.StatusNotFound {
-			t.Fatalf("no routing-state row: got %d, want 404", rec.Code)
+		if rec.Code != http.StatusOK {
+			t.Fatalf("no routing-state row: got %d, want 200 (served by the catalog rule), body=%s", rec.Code, rec.Body.String())
 		}
 	})
 
@@ -715,11 +741,16 @@ func TestComplexityTimeseriesRoute_ReachableOnlyWhenSwitchEnabled(t *testing.T) 
 
 	// The three operations sharing one Mux/PostgresSwitch instance must NOT
 	// leak reachability into each other.
-	t.Run("enabling_complexityTimeseries_does_not_enable_featureFlags", func(t *testing.T) {
+	// CHAOS-8517: this subtest was "enabling_complexityTimeseries_does_not_enable_featureFlags" and relied on
+	// featureFlags having NO row (404). An operation with no row is served now, so the same property --
+	// a row of one operation does not decide another -- is pinned from the side that still refuses:
+	// featureFlags is held dark by its OWN row, and a canary row of complexityTimeseries does not lift it.
+	t.Run("a_canary_row_of_complexityTimeseries_does_not_lift_the_hold_on_featureFlags", func(t *testing.T) {
+		setRoutingMode(t, pool, digestHex(registeredFeatureFlagsDocument), "featureFlags", "disabled")
 		setRoutingMode(t, pool, documentDigest, "complexityTimeseries", "canary")
 		rec := postGraphQL(t, handler, registeredFeatureFlagsDocument, token)
 		if rec.Code != http.StatusNotFound {
-			t.Fatalf("featureFlags should stay unreachable when only complexityTimeseries is canaried: got %d", rec.Code)
+			t.Fatalf("featureFlags is held dark by its own disabled row and must stay unreachable while only complexityTimeseries is canaried: got %d", rec.Code)
 		}
 	})
 
@@ -775,10 +806,13 @@ func TestHotspotsRoute_ReachableOnlyWhenSwitchEnabled(t *testing.T) {
 	documentDigest := digestHex(registeredHotspotsDocument)
 	token := signTestEnvelope(t, priv, "org-1")
 
-	t.Run("disabled_by_default", func(t *testing.T) {
+	// CHAOS-8517: this subtest was "disabled_by_default" and pinned 404 for an operation with no
+	// routing-state row. The catalog rule serves a registered operation that has no row at any schema
+	// digest, so on this fresh table the request now reaches the resolver.
+	t.Run("no_routing_row_is_served_by_the_catalog_rule", func(t *testing.T) {
 		rec := postGraphQLWithVariables(t, handler, registeredHotspotsDocument, token, hotspotsVariables())
-		if rec.Code != http.StatusNotFound {
-			t.Fatalf("no routing-state row: got %d, want 404", rec.Code)
+		if rec.Code != http.StatusOK {
+			t.Fatalf("no routing-state row: got %d, want 200 (served by the catalog rule), body=%s", rec.Code, rec.Body.String())
 		}
 	})
 
@@ -809,11 +843,16 @@ func TestHotspotsRoute_ReachableOnlyWhenSwitchEnabled(t *testing.T) {
 		}
 	})
 
-	t.Run("enabling_hotspots_does_not_enable_featureFlags", func(t *testing.T) {
+	// CHAOS-8517: this subtest was "enabling_hotspots_does_not_enable_featureFlags" and relied on
+	// featureFlags having NO row (404). An operation with no row is served now, so the same property --
+	// a row of one operation does not decide another -- is pinned from the side that still refuses:
+	// featureFlags is held dark by its OWN row, and a canary row of hotspots does not lift it.
+	t.Run("a_canary_row_of_hotspots_does_not_lift_the_hold_on_featureFlags", func(t *testing.T) {
+		setRoutingMode(t, pool, digestHex(registeredFeatureFlagsDocument), "featureFlags", "disabled")
 		setRoutingMode(t, pool, documentDigest, "hotspots", "canary")
 		rec := postGraphQL(t, handler, registeredFeatureFlagsDocument, token)
 		if rec.Code != http.StatusNotFound {
-			t.Fatalf("featureFlags should stay unreachable when only hotspots is canaried: got %d", rec.Code)
+			t.Fatalf("featureFlags is held dark by its own disabled row and must stay unreachable while only hotspots is canaried: got %d", rec.Code)
 		}
 	})
 
@@ -871,10 +910,13 @@ func TestOperatingReviewRoute_ReachableOnlyWhenSwitchEnabled(t *testing.T) {
 	documentDigest := digestHex(registeredOperatingReviewDocument)
 	token := signTestEnvelope(t, priv, "org-1")
 
-	t.Run("disabled_by_default", func(t *testing.T) {
+	// CHAOS-8517: this subtest was "disabled_by_default" and pinned 404 for an operation with no
+	// routing-state row. The catalog rule serves a registered operation that has no row at any schema
+	// digest, so on this fresh table the request now reaches the resolver.
+	t.Run("no_routing_row_is_served_by_the_catalog_rule", func(t *testing.T) {
 		rec := postGraphQLWithVariables(t, handler, registeredOperatingReviewDocument, token, operatingReviewVariables())
-		if rec.Code != http.StatusNotFound {
-			t.Fatalf("no routing-state row: got %d, want 404", rec.Code)
+		if rec.Code != http.StatusOK {
+			t.Fatalf("no routing-state row: got %d, want 200 (served by the catalog rule), body=%s", rec.Code, rec.Body.String())
 		}
 	})
 
@@ -912,11 +954,16 @@ func TestOperatingReviewRoute_ReachableOnlyWhenSwitchEnabled(t *testing.T) {
 		}
 	})
 
-	t.Run("enabling_operatingReview_does_not_enable_featureFlags", func(t *testing.T) {
+	// CHAOS-8517: this subtest was "enabling_operatingReview_does_not_enable_featureFlags" and relied on
+	// featureFlags having NO row (404). An operation with no row is served now, so the same property --
+	// a row of one operation does not decide another -- is pinned from the side that still refuses:
+	// featureFlags is held dark by its OWN row, and a canary row of operatingReview does not lift it.
+	t.Run("a_canary_row_of_operatingReview_does_not_lift_the_hold_on_featureFlags", func(t *testing.T) {
+		setRoutingMode(t, pool, digestHex(registeredFeatureFlagsDocument), "featureFlags", "disabled")
 		setRoutingMode(t, pool, documentDigest, "operatingReview", "canary")
 		rec := postGraphQL(t, handler, registeredFeatureFlagsDocument, token)
 		if rec.Code != http.StatusNotFound {
-			t.Fatalf("featureFlags should stay unreachable when only operatingReview is canaried: got %d", rec.Code)
+			t.Fatalf("featureFlags is held dark by its own disabled row and must stay unreachable while only operatingReview is canaried: got %d", rec.Code)
 		}
 	})
 
@@ -993,10 +1040,13 @@ func TestHomeRoute_ReachableOnlyWhenSwitchEnabled(t *testing.T) {
 	documentDigest := digestHex(registeredHomeDocument)
 	token := signTestEnvelope(t, priv, "org-1")
 
-	t.Run("disabled_by_default", func(t *testing.T) {
+	// CHAOS-8517: this subtest was "disabled_by_default" and pinned 404 for an operation with no
+	// routing-state row. The catalog rule serves a registered operation that has no row at any schema
+	// digest, so on this fresh table the request now reaches the resolver.
+	t.Run("no_routing_row_is_served_by_the_catalog_rule", func(t *testing.T) {
 		rec := postGraphQLWithVariables(t, handler, registeredHomeDocument, token, homeVariables())
-		if rec.Code != http.StatusNotFound {
-			t.Fatalf("no routing-state row: got %d, want 404", rec.Code)
+		if rec.Code != http.StatusOK {
+			t.Fatalf("no routing-state row: got %d, want 200 (served by the catalog rule), body=%s", rec.Code, rec.Body.String())
 		}
 	})
 
@@ -1040,11 +1090,16 @@ func TestHomeRoute_ReachableOnlyWhenSwitchEnabled(t *testing.T) {
 		}
 	})
 
-	t.Run("enabling_home_does_not_enable_featureFlags", func(t *testing.T) {
+	// CHAOS-8517: this subtest was "enabling_home_does_not_enable_featureFlags" and relied on
+	// featureFlags having NO row (404). An operation with no row is served now, so the same property --
+	// a row of one operation does not decide another -- is pinned from the side that still refuses:
+	// featureFlags is held dark by its OWN row, and a canary row of home does not lift it.
+	t.Run("a_canary_row_of_home_does_not_lift_the_hold_on_featureFlags", func(t *testing.T) {
+		setRoutingMode(t, pool, digestHex(registeredFeatureFlagsDocument), "featureFlags", "disabled")
 		setRoutingMode(t, pool, documentDigest, "home", "canary")
 		rec := postGraphQL(t, handler, registeredFeatureFlagsDocument, token)
 		if rec.Code != http.StatusNotFound {
-			t.Fatalf("featureFlags should stay unreachable when only home is canaried: got %d", rec.Code)
+			t.Fatalf("featureFlags is held dark by its own disabled row and must stay unreachable while only home is canaried: got %d", rec.Code)
 		}
 	})
 
@@ -1174,10 +1229,13 @@ func TestFlowMatrixRoute_ReachableOnlyWhenSwitchEnabled(t *testing.T) {
 	documentDigest := digestHex(registeredFlowMatrixDocument)
 	token := signTestEnvelope(t, priv, "org-1")
 
-	t.Run("disabled_by_default", func(t *testing.T) {
+	// CHAOS-8517: this subtest was "disabled_by_default" and pinned 404 for an operation with no
+	// routing-state row. The catalog rule serves a registered operation that has no row at any schema
+	// digest, so on this fresh table the request now reaches the resolver.
+	t.Run("no_routing_row_is_served_by_the_catalog_rule", func(t *testing.T) {
 		rec := postGraphQLWithVariables(t, handler, registeredFlowMatrixDocument, token, flowMatrixVariables())
-		if rec.Code != http.StatusNotFound {
-			t.Fatalf("no routing-state row: got %d, want 404", rec.Code)
+		if rec.Code != http.StatusOK {
+			t.Fatalf("no routing-state row: got %d, want 200 (served by the catalog rule), body=%s", rec.Code, rec.Body.String())
 		}
 	})
 
@@ -1226,11 +1284,16 @@ func TestFlowMatrixRoute_ReachableOnlyWhenSwitchEnabled(t *testing.T) {
 		}
 	})
 
-	t.Run("enabling_flowMatrix_does_not_enable_featureFlags", func(t *testing.T) {
+	// CHAOS-8517: this subtest was "enabling_flowMatrix_does_not_enable_featureFlags" and relied on
+	// featureFlags having NO row (404). An operation with no row is served now, so the same property --
+	// a row of one operation does not decide another -- is pinned from the side that still refuses:
+	// featureFlags is held dark by its OWN row, and a canary row of flowMatrix does not lift it.
+	t.Run("a_canary_row_of_flowMatrix_does_not_lift_the_hold_on_featureFlags", func(t *testing.T) {
+		setRoutingMode(t, pool, digestHex(registeredFeatureFlagsDocument), "featureFlags", "disabled")
 		setRoutingMode(t, pool, documentDigest, "flowMatrix", "canary")
 		rec := postGraphQL(t, handler, registeredFeatureFlagsDocument, token)
 		if rec.Code != http.StatusNotFound {
-			t.Fatalf("featureFlags should stay unreachable when only flowMatrix is canaried: got %d", rec.Code)
+			t.Fatalf("featureFlags is held dark by its own disabled row and must stay unreachable while only flowMatrix is canaried: got %d", rec.Code)
 		}
 	})
 }

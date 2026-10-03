@@ -147,6 +147,16 @@ type statusReportOperation struct {
 	// is the actual cause. nil when Reachable is true -- a healthy row
 	// needs no explanation.
 	ReachableReason *string `json:"reachable_reason"`
+	// ServedWithoutRow is the catalog rule (CHAOS-8517): true when the operation
+	// has NO routing row at any schema digest and the deployed plane registers it
+	// under the catalog's document digest -- the state in which query-api serves a
+	// registered operation with no row. `reachable` is unchanged and stays a
+	// statement about a ROW (false for such an operation: there is no row); this
+	// field is what says a client is served anyway. null when the deployed plane
+	// could not be asked what it registers; false for every operation that has a
+	// row anywhere. The rule is the rule of the build THIS binary was built from:
+	// a deployed query-api older than CHAOS-8517 refuses such an operation.
+	ServedWithoutRow *bool `json:"served_without_row"`
 
 	// DeployedDigestState and DeployedDocumentDigest report what the
 	// RUNNING go plane's own /registry says about this operation, cross-
@@ -484,7 +494,7 @@ func printStatusText(report statusReport, local string) {
 
 	fmt.Fprintln(stdout, "rows by schema_digest:")
 	if len(report.RowsBySchemaDigest) == 0 {
-		fmt.Fprintln(stdout, "  (table is empty -- nothing is enabled for Go)")
+		fmt.Fprintln(stdout, "  (table is empty -- no row decides anything: query-api serves every registered operation by the catalog rule, and no MCP class root is enabled)")
 	} else {
 		digests := make([]string, 0, len(report.RowsBySchemaDigest))
 		for digest := range report.RowsBySchemaDigest {
@@ -529,6 +539,17 @@ func printStatusText(report statusReport, local string) {
 		}
 		if len(operation.UnreachableDocumentDigests) > 0 {
 			fmt.Fprintf(stdout, "    rows at the LIVE schema digest the edge can never reach, document digest: %v\n", operation.UnreachableDocumentDigests)
+		}
+		// CHAOS-8517: MODE prints "-" for an operation with no row, and "-" used to
+		// mean "not served". For an operation with no row at ANY digest it now means
+		// the opposite, so the line says which.
+		if operation.DigestState == goapiproof.DigestMissing {
+			switch {
+			case operation.ServedWithoutRow == nil:
+				fmt.Fprintln(stdout, "    no routing row at any schema digest: query-api serves such an operation by the catalog rule; the deployed process could not be asked whether it registers this one")
+			case *operation.ServedWithoutRow:
+				fmt.Fprintln(stdout, "    no routing row at any schema digest: SERVED by the catalog rule (to hold it dark, `seed` it: a shadow row is not served)")
+			}
 		}
 		// The deployed plane's own per-operation
 		// document digest, cross-checked against the catalog's -- the
@@ -669,6 +690,14 @@ func toReportOperation(status goapiproof.OperationStatus, deployedDigests map[st
 		reported.ReachableReason = stringPtr("the deployed process reads this row; note this binary's own SDL digest is NOT the deployed one, so enable/disable run from THIS binary would write at a digest nothing is reading")
 	default:
 		reported.Reachable = boolPtr(true)
+	}
+	switch {
+	case !status.ServedWithoutRow():
+		reported.ServedWithoutRow = boolPtr(false)
+	case reported.DeployedDigestState == "UNKNOWN":
+		reported.ServedWithoutRow = nil
+	default:
+		reported.ServedWithoutRow = boolPtr(reported.DeployedDigestState == "AGREE")
 	}
 	if status.DigestState != goapiproof.DigestMatch && status.DigestState != goapiproof.DigestUnregistered {
 		return reported

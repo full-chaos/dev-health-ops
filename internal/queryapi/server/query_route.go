@@ -3167,7 +3167,12 @@ func newQueryHandler(chClient featureflags.QueryClient, pgPool *pgxpool.Pool, ve
 	// uses to answer "is anything actually enabled?".
 	logRoutingStateDrift(pgPool, schemaDigest)
 	registryHandler := newRegistryHandler(schemaDigest, digestByOperation)
-	sw := routeswitch.NewPostgresSwitchWithLegacy(pgPool, schemaDigest, digestByOperation, legacyDigestsByOperation)
+	// CHAOS-8517: the serving switch carries the catalog rule -- a registered operation with no routing
+	// row at any schema digest is served; an operation that has a row keeps its row's answer
+	// (routeswitch/catalog_switch.go holds the rule and its row-state table). Only THIS switch has it:
+	// the proof switch below and the class-row switch (newClassRowSwitch) are built by the other
+	// constructors, so a measurement route still needs a row and an MCP class root with no row is dark.
+	sw := routeswitch.NewCatalogSwitchWithLegacy(pgPool, schemaDigest, digestByOperation, legacyDigestsByOperation)
 	routeMux := routeswitch.NewMux(sw)
 
 	// operationByDigest is digestByOperation's reverse index, built once

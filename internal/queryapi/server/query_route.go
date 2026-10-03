@@ -796,6 +796,51 @@ const registeredCapacityForecastDocument = `query CapacityForecast($orgId: Strin
     historyDays
     insufficientHistory
     highVariance
+    completionDistribution {
+      days {
+        value
+        count
+        __typename
+      }
+      items {
+        value
+        count
+        __typename
+      }
+      __typename
+    }
+    __typename
+  }
+}`
+
+// registeredCapacityForecastV1Document is the text capacityForecast accepted BEFORE it asked for
+// completionDistribution (CHAOS-7994, CHAOS-8000 dual accept). It stays a legacy text (see
+// legacyDigestsByOperation) so a web build still sending it keeps working while the new web rolls out; the
+// operation's ONE current document is registeredCapacityForecastDocument above. Wire form, same provenance:
+// testdata/wire_form/capacityForecast.v1.graphql.
+const registeredCapacityForecastV1Document = `query CapacityForecast($orgId: String!, $input: CapacityForecastInput) {
+  capacityForecast(orgId: $orgId, input: $input) {
+    forecastId
+    computedAt
+    teamId
+    workScopeId
+    backlogSize
+    targetItems
+    targetDate
+    p50Date
+    p85Date
+    p95Date
+    p50Days
+    p85Days
+    p95Days
+    p50Items
+    p85Items
+    p95Items
+    throughputMean
+    throughputStddev
+    historyDays
+    insufficientHistory
+    highVariance
     __typename
   }
 }`
@@ -3587,7 +3632,9 @@ func newDocumentDispatchHandler(getenv getenvFunc, routeMux *routeswitch.Mux, op
 // `registered<Operation>V1Document` const (a literal, so cmd/registrydump can read it) named once here and never in
 // digestByOperation. The literal below is cmd/registrydump's second parse target: keep its exact shape
 // (`"<operation>": {digestHex(<constIdent>), ...}`). Empty = every operation accepts one text.
-var legacyDigestsByOperation = map[string][]string{}
+var legacyDigestsByOperation = map[string][]string{
+	"capacityForecast": {digestHex(registeredCapacityForecastV1Document)},
+}
 
 // buildOperationByDigest is the reverse index digest -> operation over every accepted text: each operation's
 // current digest plus its legacy ones. A digest that maps to two operations is refused (the lookup would be

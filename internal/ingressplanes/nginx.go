@@ -55,6 +55,32 @@ func DefaultOptions() Options {
 	}
 }
 
+// Header is one request header the router writes for the plane.
+type Header struct {
+	Name  string
+	Value string // an nginx value: a variable of the connection or of the request
+}
+
+// ForwardedHeaders are the headers the router sets on every proxied request,
+// with the values ingress-nginx sends for a direct client with its default
+// configuration (use-forwarded-headers and compute-full-forwarded-for off;
+// nginx.tmpl of controller-v1.14.5): the Host the client sent, and every
+// forwarded header from the router's own connection. A client-sent
+// X-Forwarded-For is replaced with the peer address, and is kept only under
+// X-Original-Forwarded-For, as ingress-nginx keeps it.
+var ForwardedHeaders = []Header{
+	{"Host", "$http_host"},
+	{"X-Real-IP", "$remote_addr"},
+	{"X-Forwarded-For", "$remote_addr"},
+	{"X-Forwarded-Host", "$http_host"},
+	{"X-Forwarded-Port", "$server_port"},
+	{"X-Forwarded-Proto", "$scheme"},
+	{"X-Forwarded-Scheme", "$scheme"},
+	{"X-Scheme", "$scheme"},
+	{"X-Original-Forwarded-For", "$http_x_forwarded_for"},
+	{"X-Original-Forwarded-Host", "$http_x_forwarded_host"},
+}
+
 // Location is one nginx location of the router: the text after the keyword
 // `location` and the plane the location proxies to.
 type Location struct {
@@ -65,7 +91,8 @@ type Location struct {
 }
 
 // Locations returns the locations of a valid contract in the order
-// ingress-nginx writes them.
+// ingress-nginx writes them: one for each of Rules. A public host rule gets
+// none: Validate holds that the default rule gives its paths the same plane.
 //
 // Form: ingress-nginx's buildLocation writes `~* "^<path>"` for EVERY path of
 // a server that has one use-regex location, whatever its path type, with
@@ -131,8 +158,9 @@ func Render(c Contract, o Options) ([]byte, error) {
 	line("#")
 	line("# The router of the self-hosted compose stack. One location per rule of the contract, in the")
 	line("# form and the order ingress-nginx writes them for a host in regex mode, so a path reaches the")
-	line("# plane it reaches in prod. The router adds no credential: it never sets Authorization and never")
-	line("# reads a cookie. See contracts/ingress/v1/README.md.")
+	line("# plane it reaches in prod. The paths that only the public host lists get the default plane there,")
+	line("# so they need no location here. The router adds no credential: it never sets Authorization and")
+	line("# never reads a cookie. See contracts/ingress/v1/README.md.")
 	line("")
 	line("worker_processes auto;")
 	line("error_log /dev/stderr notice;")
@@ -169,11 +197,17 @@ func Render(c Contract, o Options) ([]byte, error) {
 	line("        proxy_read_timeout 60s;")
 	line("        proxy_send_timeout 60s;")
 	line("")
-	line("        # The plane sees the Host the client sent, and the router as one more proxy hop.")
-	line("        proxy_set_header Host $http_host;")
-	line("        proxy_set_header X-Real-IP $remote_addr;")
-	line("        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;")
+	line("        # The router owns the forwarded headers, as ingress-nginx does with its defaults: X-Real-IP")
+	line("        # and each X-Forwarded-* are written from the connection the router sees, so a value the")
+	line("        # client sent for them never reaches a plane. X-Forwarded-For is replaced, not added to;")
+	line("        # what the client sent is kept only under X-Original-Forwarded-*.")
+	for _, header := range ForwardedHeaders {
+		line("        proxy_set_header %s %s;", header.Name, header.Value)
+	}
 	line("")
+	line("        # The two planes. Each variable is one constant, set here and nowhere else: nothing a")
+	line("        # request sends can change where a location proxies to. They are variables only so that")
+	line("        # nginx resolves the name when a request comes, not when it starts.")
 	for _, plane := range Planes {
 		line("        set %s \"%s\";", planeVariable(plane), o.Upstreams[plane])
 	}

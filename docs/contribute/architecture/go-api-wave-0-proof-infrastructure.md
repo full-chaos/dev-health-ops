@@ -757,7 +757,12 @@ appear here.
 | `sha256:c210117e47812bc75fbd11a88aa38ff6eaf63887ea13d9324335e913898d84c9` | 2026-09-29 | CHAOS-7070, growing `HomeResult` to the full home payload (freshness sources, constraint cards, events, scope entity refs, health state) and adding the `window` argument (`HomeWindowInput`: rangeDays, compareDays, startDate, endDate) to `home` in the Go-owned SDL; Python's `home` field is deleted | superseded |
 | `sha256:dd83956f18b52a3acf89e73e1f25b0dcf25df706d90eca49c5b66f8b8994f779` | 2026-09-29 | CHAOS-7092, adding `degradedReason` to `FlowMatrixResult` in the Go-owned SDL | superseded |
 | `sha256:330d0ebf0ea59fce8d0b1bb14887cad8e5b3f6971ad02618afa9844b6fac7a50` | 2026-10-02 | CHAOS-7624, adding `completionDistribution` (types `CapacityDistribution`, `CapacityDistributionBin`) to `CapacityForecast` in the Go-owned SDL | superseded |
-| `sha256:c8f6a75c3c2ac376b292dc5a7f9182c36111f3bad47dd65e4a41a0353cef639e` | this revision | CHAOS-7964, adding `teamIds: [String!]` to `CapacityForecastInput` in the Go-owned SDL (`teamId` stays identical to the Python schema; its deprecation waits for Python's removal) | Current. Every routing row written at the digest above stops matching the moment this lands: rebuild and deploy query-api from this SDL FIRST, then re-enable, per the recovery procedure above. |
+| `sha256:c8f6a75c3c2ac376b292dc5a7f9182c36111f3bad47dd65e4a41a0353cef639e` | 2026-10-03 | CHAOS-7964, adding `teamIds: [String!]` to `CapacityForecastInput` in the Go-owned SDL (`teamId` stays identical to the Python schema; its deprecation waits for Python's removal) | superseded |
+| `sha256:f71aa1d9a9dfc367910cc7f29f98508fca63f08a54ca2ad1e2b39bfd8b2e3888` | 2026-10-03 | CHAOS-7773, adding nullable `repoName` and `teamName` to `AiAttributedPr` in the Go-owned SDL (additive; Python never had them) | superseded |
+| `sha256:fff119c64988e2f76442f2b41229a665a2bc6e32cac92e1dd125cf6c07728dab` | 2026-10-03 | CHAOS-7774, adding `day: Date!` to `AIImpactBucketRow` in the Go-owned SDL (additive; Python never had it) | superseded |
+| `sha256:f12739c7f2b04df329e29404e80aae93308553b82fe3f35010e97ed8aa147ddc` | 2026-10-03 | CHAOS-7785, adding the optional `teamIds` argument to `ReviewEdgesInput` (team scope by repository ownership) in the Go-owned SDL | superseded |
+| `sha256:09db2fee13f48e36a1d95bb5d77fb74d327aad851319843b473077891e4c71f4` | 2026-10-03 | CHAOS-7786, adding `truncated` and a real `totalCount` (the deduplicated row count before the cut) to `ReviewEdgesResult` in the Go-owned SDL | superseded |
+| `sha256:af68e95261c6b9750aa3f9c15734c363797ea005eb2da1784806456aa2518ca5` | this revision | CHAOS-7626, adding `value`, `threshold`, `unit` and `thresholdDirection` to `ImproveOpportunity` and the `ImproveOpportunityUnit` and `ThresholdDirection` enums in the Go-owned SDL (additive; Python does not declare them) | Current. Every routing row written at the digest above stops matching the moment this lands: rebuild and deploy query-api from this SDL FIRST, then re-enable, per the recovery procedure above. |
 
 ### Where `bigboy-cut.sh` finds its tools and its tree (CHAOS-7135)
 
@@ -847,7 +852,7 @@ carries the `dho` operator binary on `PATH` (spec S1, CHAOS-6280 folded
 documents dump generated from the SAME commit at build time
 (`/app/go-api/documents.json`), and the checked-in operation catalog at its
 `DefaultCatalogPath` relative to the image's working directory
-(`/app/go-api/src/dev_health_ops/api/graphql/go_api_operations.json`) --
+(`/app/go-api/contracts/graphql/v1/go_api_operations.json`) --
 `dho goapi routing`'s `-catalog` flag needs no override, and neither does
 `carry`'s `-documents` flag, whose default is that same baked-in dump,
 **when run from the image's own WORKDIR (`/app/go-api`)**. `bigboy-cut.sh`

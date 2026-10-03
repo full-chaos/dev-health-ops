@@ -270,8 +270,7 @@ One image serves every Go group: the four River worker groups (`heavy`,
 and `dho stream-runner`, all from the dho image
 (`ghcr.io/full-chaos/dev-health-go-dho:local`, the tag Compose builds), with
 `subcommand` set so the verb is the first argument. The
-`heavy` group is also the metrics compatibility bridge's only caller, so it must
-be present whenever `metricsApi.enabled` is true.
+`heavy` group is the worker group that runs the heavy queues.
 
 Every workload then uses `imagePullPolicy: Never`. Registry images with
 multi-architecture manifest lists (`edoburu/pgbouncer`, `valkey/valkey`) fail
@@ -442,16 +441,13 @@ change every `lane-a` to your own lane name.
 `lane-a-ops.yaml`:
 
 ```yaml
-image: { repository: dev-health-ops-local, tag: "<your-12-char-sha>", pullPolicy: Never }
 webImage: { repository: ghcr.io/full-chaos/dev-health-web, tag: "0.1.0", pullPolicy: Never }
 
 postgresql: { enabled: false }        # the namespace's trial-postgres instead
 clickhouse: { enabled: false }        # the namespace's trial-clickhouse instead
 valkey: { enabled: true, persistence: { enabled: false } }
 
-api: { enabled: true, replicas: 1, autoscaling: { enabled: false } }
-metricsApi: { enabled: true, replicas: 1 }
-web: { enabled: true, replicas: 1, autoscaling: { enabled: false }, backendFromRelease: true }  # exactly one of env.BACKEND_URL / backendFromRelease is required (CHAOS-8310); true = http://<fullname>-api:<api.port>
+web: { enabled: true, replicas: 1, autoscaling: { enabled: false }, env: { BACKEND_URL: "http://<your-ingress-host>" } }  # env.BACKEND_URL is required (CHAOS-8310); the Python api and its values keys are gone (CHAOS-7520)
 networkPolicy: { enabled: false }
 ingress: { enabled: false }
 

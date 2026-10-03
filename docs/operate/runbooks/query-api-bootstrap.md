@@ -277,8 +277,8 @@ Without both keys in the same change, encrypted org settings silently fall back 
 
 query-api's Deployment lists `env` explicitly and has **no `envFrom` by
 default** — it does not pick up any key from the platform Secret
-(`dev-health-ops`) the way the Python `api`/`metricsApi`
-workloads do. For investment-explain, query-api needs four platform vars:
+(`dev-health-ops`) the way the removed Python `api`/`metricsApi`
+workloads did. For investment-explain, query-api needs four platform vars:
 `LLM_PROVIDER`, `OPENAI_API_KEY`, `LLM_MODEL`, and `SETTINGS_ENCRYPTION_KEY`.
 
 Two ways to supply them:

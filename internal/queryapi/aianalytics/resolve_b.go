@@ -202,10 +202,10 @@ func AttributedPrs(ctx context.Context, client QueryClient, orgID string, dr mod
 	}
 
 	distinct := distinctRepoIDs(len(page), func(i int) *string { return &page[i].RepoID })
-	teamMap := repoTeamMap(ctx, client, orgID, distinct, "aiAttributedPrs")
-	if len(teamMap) > 0 {
+	catalogue := loadRepoCatalogue(ctx, client, orgID, distinct, "aiAttributedPrs")
+	if len(catalogue.teamByRepo) > 0 {
 		for i := range page {
-			page[i].TeamID = teamMap[page[i].RepoID]
+			page[i].TeamID = catalogue.teamByRepo[page[i].RepoID]
 		}
 	}
 	if sc.teamID != "" {
@@ -224,6 +224,7 @@ func AttributedPrs(ctx context.Context, client QueryClient, orgID string, dr mod
 		rows = append(rows, model.AiAttributedPr{
 			RepoID: r.RepoID, Number: int(r.Number), Title: r.Title,
 			Kind: r.Kind, WorkType: r.WorkType, TeamID: team, MergedAt: r.MergedAt,
+			RepoName: catalogue.repoName(r.RepoID), TeamName: catalogue.teamName(team),
 		})
 	}
 	return &model.AiAttributedPrsResult{

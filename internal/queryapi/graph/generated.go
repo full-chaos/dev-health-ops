@@ -166,6 +166,7 @@ type ComplexityRoot struct {
 		Bucket                func(childComplexity int) int
 		ChangesRequestedPerPr func(childComplexity int) int
 		CycleTimeAvgHours     func(childComplexity int) int
+		Day                   func(childComplexity int) int
 		IncidentRate          func(childComplexity int) int
 		IncidentsCount        func(childComplexity int) int
 		PrsMerged             func(childComplexity int) int
@@ -349,7 +350,9 @@ type ComplexityRoot struct {
 		MergedAt func(childComplexity int) int
 		Number   func(childComplexity int) int
 		RepoID   func(childComplexity int) int
+		RepoName func(childComplexity int) int
 		TeamID   func(childComplexity int) int
+		TeamName func(childComplexity int) int
 		Title    func(childComplexity int) int
 		WorkType func(childComplexity int) int
 	}
@@ -808,16 +811,20 @@ type ComplexityRoot struct {
 	}
 
 	ImproveOpportunity struct {
-		EntityID          func(childComplexity int) int
-		EntityType        func(childComplexity int) int
-		EvidenceRefs      func(childComplexity int) int
-		Kind              func(childComplexity int) int
-		OpportunityID     func(childComplexity int) int
-		Rationale         func(childComplexity int) int
-		RecommendedAction func(childComplexity int) int
-		Score             func(childComplexity int) int
-		Severity          func(childComplexity int) int
-		Title             func(childComplexity int) int
+		EntityID           func(childComplexity int) int
+		EntityType         func(childComplexity int) int
+		EvidenceRefs       func(childComplexity int) int
+		Kind               func(childComplexity int) int
+		OpportunityID      func(childComplexity int) int
+		Rationale          func(childComplexity int) int
+		RecommendedAction  func(childComplexity int) int
+		Score              func(childComplexity int) int
+		Severity           func(childComplexity int) int
+		Threshold          func(childComplexity int) int
+		ThresholdDirection func(childComplexity int) int
+		Title              func(childComplexity int) int
+		Unit               func(childComplexity int) int
+		Value              func(childComplexity int) int
 	}
 
 	MaintainerShare struct {
@@ -1151,6 +1158,7 @@ type ComplexityRoot struct {
 	ReviewEdgesResult struct {
 		Edges      func(childComplexity int) int
 		TotalCount func(childComplexity int) int
+		Truncated  func(childComplexity int) int
 	}
 
 	ReworkThemeAllocation struct {
@@ -2122,6 +2130,13 @@ func (e *executableSchema) Complexity(typeName, field string, childComplexity in
 
 		return e.complexity.AIImpactBucketRow.CycleTimeAvgHours(childComplexity), true
 
+	case "AIImpactBucketRow.day":
+		if e.complexity.AIImpactBucketRow.Day == nil {
+			break
+		}
+
+		return e.complexity.AIImpactBucketRow.Day(childComplexity), true
+
 	case "AIImpactBucketRow.incidentRate":
 		if e.complexity.AIImpactBucketRow.IncidentRate == nil {
 			break
@@ -3046,12 +3061,26 @@ func (e *executableSchema) Complexity(typeName, field string, childComplexity in
 
 		return e.complexity.AiAttributedPr.RepoID(childComplexity), true
 
+	case "AiAttributedPr.repoName":
+		if e.complexity.AiAttributedPr.RepoName == nil {
+			break
+		}
+
+		return e.complexity.AiAttributedPr.RepoName(childComplexity), true
+
 	case "AiAttributedPr.teamId":
 		if e.complexity.AiAttributedPr.TeamID == nil {
 			break
 		}
 
 		return e.complexity.AiAttributedPr.TeamID(childComplexity), true
+
+	case "AiAttributedPr.teamName":
+		if e.complexity.AiAttributedPr.TeamName == nil {
+			break
+		}
+
+		return e.complexity.AiAttributedPr.TeamName(childComplexity), true
 
 	case "AiAttributedPr.title":
 		if e.complexity.AiAttributedPr.Title == nil {
@@ -5088,12 +5117,40 @@ func (e *executableSchema) Complexity(typeName, field string, childComplexity in
 
 		return e.complexity.ImproveOpportunity.Severity(childComplexity), true
 
+	case "ImproveOpportunity.threshold":
+		if e.complexity.ImproveOpportunity.Threshold == nil {
+			break
+		}
+
+		return e.complexity.ImproveOpportunity.Threshold(childComplexity), true
+
+	case "ImproveOpportunity.thresholdDirection":
+		if e.complexity.ImproveOpportunity.ThresholdDirection == nil {
+			break
+		}
+
+		return e.complexity.ImproveOpportunity.ThresholdDirection(childComplexity), true
+
 	case "ImproveOpportunity.title":
 		if e.complexity.ImproveOpportunity.Title == nil {
 			break
 		}
 
 		return e.complexity.ImproveOpportunity.Title(childComplexity), true
+
+	case "ImproveOpportunity.unit":
+		if e.complexity.ImproveOpportunity.Unit == nil {
+			break
+		}
+
+		return e.complexity.ImproveOpportunity.Unit(childComplexity), true
+
+	case "ImproveOpportunity.value":
+		if e.complexity.ImproveOpportunity.Value == nil {
+			break
+		}
+
+		return e.complexity.ImproveOpportunity.Value(childComplexity), true
 
 	case "MaintainerShare.author":
 		if e.complexity.MaintainerShare.Author == nil {
@@ -6947,6 +7004,13 @@ func (e *executableSchema) Complexity(typeName, field string, childComplexity in
 
 		return e.complexity.ReviewEdgesResult.TotalCount(childComplexity), true
 
+	case "ReviewEdgesResult.truncated":
+		if e.complexity.ReviewEdgesResult.Truncated == nil {
+			break
+		}
+
+		return e.complexity.ReviewEdgesResult.Truncated(childComplexity), true
+
 	case "ReworkThemeAllocation.allocation":
 		if e.complexity.ReworkThemeAllocation.Allocation == nil {
 			break
@@ -8654,6 +8718,7 @@ type AIImpactBucketRow {
   incidentRate: Float
   testGapPrs: Int!
   testGapRate: Float
+  day: Date!
 }
 
 type AIImpactBucketTotals {
@@ -8855,6 +8920,8 @@ type AiAttributedPr {
   workType: String
   teamId: String
   mergedAt: DateTime
+  repoName: String
+  teamName: String
 }
 
 type AiAttributedPrsResult {
@@ -9528,6 +9595,19 @@ type ImproveOpportunity {
   severity: String!
   evidenceRefs: [String!]!
   recommendedAction: String!
+  """
+  The measured metric the rule compared, in ` + "`" + `unit` + "`" + `. The same number the rationale states.
+  """
+  value: Float!
+  """
+  The rule's limit, in ` + "`" + `unit` + "`" + `. A fixed constant of the detector, not a per-organization setting.
+  """
+  threshold: Float!
+  unit: ImproveOpportunityUnit!
+  """
+  Which side of the threshold fires the rule: ABOVE (value > threshold) or BELOW (value < threshold).
+  """
+  thresholdDirection: ThresholdDirection!
 }
 
 enum ImproveOpportunityKind {
@@ -9538,6 +9618,12 @@ enum ImproveOpportunityKind {
   LOW_THROUGHPUT
   HIGH_CHURN
   HIGH_CHANGE_FAILURE
+}
+
+enum ImproveOpportunityUnit {
+  HOURS
+  RATIO
+  ITEMS
 }
 
 """
@@ -10036,12 +10122,23 @@ input ReviewEdgesInput {
   sinceDate: Date!
   untilDate: Date!
   repoIds: [String!] = null
+  """
+  Team ids (CHAOS-7785). Narrows the edges to the repositories these teams OWN (team_repo_ownership, as of now); person membership is never read. Combined with ` + "`" + `` + "`" + `repoIds` + "`" + `` + "`" + ` the two both apply (a pair must be on a listed repository and on a team-owned one).
+  """
+  teamIds: [String!] = null
   limit: Int! = 500
 }
 
 type ReviewEdgesResult {
   edges: [ReviewEdgeRow!]!
+  """
+  Number of deduplicated (pair, day) rows the filters match, before the ` + "`" + `` + "`" + `limit` + "`" + `` + "`" + ` cut (CHAOS-7786). One row is one reviewer-to-author pair on one day, so this counts rows, not distinct pairs. Never less than ` + "`" + `` + "`" + `edges` + "`" + `` + "`" + `.
+  """
   totalCount: Int!
+  """
+  True when ` + "`" + `` + "`" + `totalCount` + "`" + `` + "`" + ` is greater than the number of ` + "`" + `` + "`" + `edges` + "`" + `` + "`" + ` returned: the list was cut by ` + "`" + `` + "`" + `limit` + "`" + `` + "`" + ` (CHAOS-7786).
+  """
+  truncated: Boolean!
 }
 
 type ReworkThemeAllocation {
@@ -10291,6 +10388,11 @@ type TestOpsRiskSparkPoint {
 type TestOpsRiskTrendPoint {
   date: Date!
   riskScore: Float!
+}
+
+enum ThresholdDirection {
+  ABOVE
+  BELOW
 }
 
 type ThroughputEstimateCoverage {
@@ -17909,6 +18011,50 @@ func (ec *executionContext) fieldContext_AIImpactBucketRow_testGapRate(_ context
 	return fc, nil
 }
 
+func (ec *executionContext) _AIImpactBucketRow_day(ctx context.Context, field graphql.CollectedField, obj *model.AIImpactBucketRow) (ret graphql.Marshaler) {
+	fc, err := ec.fieldContext_AIImpactBucketRow_day(ctx, field)
+	if err != nil {
+		return graphql.Null
+	}
+	ctx = graphql.WithFieldContext(ctx, fc)
+	defer func() {
+		if r := recover(); r != nil {
+			ec.Error(ctx, ec.Recover(ctx, r))
+			ret = graphql.Null
+		}
+	}()
+	resTmp, err := ec.ResolverMiddleware(ctx, func(rctx context.Context) (any, error) {
+		ctx = rctx // use context from middleware stack in children
+		return obj.Day, nil
+	})
+	if err != nil {
+		ec.Error(ctx, err)
+		return graphql.Null
+	}
+	if resTmp == nil {
+		if !graphql.HasFieldError(ctx, fc) {
+			ec.Errorf(ctx, "must not be null")
+		}
+		return graphql.Null
+	}
+	res := resTmp.(graphqldate.Date)
+	fc.Result = res
+	return ec.marshalNDate2githubᚗcomᚋfullᚑchaosᚋdevᚑhealthᚑopsᚋinternalᚋqueryapiᚋgraphqldateᚐDate(ctx, field.Selections, res)
+}
+
+func (ec *executionContext) fieldContext_AIImpactBucketRow_day(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "AIImpactBucketRow",
+		Field:      field,
+		IsMethod:   false,
+		IsResolver: false,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return nil, errors.New("field of type Date does not have child fields")
+		},
+	}
+	return fc, nil
+}
+
 func (ec *executionContext) _AIImpactBucketTotals_bucket(ctx context.Context, field graphql.CollectedField, obj *model.AIImpactBucketTotals) (ret graphql.Marshaler) {
 	fc, err := ec.fieldContext_AIImpactBucketTotals_bucket(ctx, field)
 	if err != nil {
@@ -19217,6 +19363,8 @@ func (ec *executionContext) fieldContext_AIImpactSummary_daily(_ context.Context
 				return ec.fieldContext_AIImpactBucketRow_testGapPrs(ctx, field)
 			case "testGapRate":
 				return ec.fieldContext_AIImpactBucketRow_testGapRate(ctx, field)
+			case "day":
+				return ec.fieldContext_AIImpactBucketRow_day(ctx, field)
 			}
 			return nil, fmt.Errorf("no field named %q was found under type AIImpactBucketRow", field.Name)
 		},
@@ -23528,6 +23676,88 @@ func (ec *executionContext) fieldContext_AiAttributedPr_mergedAt(_ context.Conte
 	return fc, nil
 }
 
+func (ec *executionContext) _AiAttributedPr_repoName(ctx context.Context, field graphql.CollectedField, obj *model.AiAttributedPr) (ret graphql.Marshaler) {
+	fc, err := ec.fieldContext_AiAttributedPr_repoName(ctx, field)
+	if err != nil {
+		return graphql.Null
+	}
+	ctx = graphql.WithFieldContext(ctx, fc)
+	defer func() {
+		if r := recover(); r != nil {
+			ec.Error(ctx, ec.Recover(ctx, r))
+			ret = graphql.Null
+		}
+	}()
+	resTmp, err := ec.ResolverMiddleware(ctx, func(rctx context.Context) (any, error) {
+		ctx = rctx // use context from middleware stack in children
+		return obj.RepoName, nil
+	})
+	if err != nil {
+		ec.Error(ctx, err)
+		return graphql.Null
+	}
+	if resTmp == nil {
+		return graphql.Null
+	}
+	res := resTmp.(*string)
+	fc.Result = res
+	return ec.marshalOString2ᚖstring(ctx, field.Selections, res)
+}
+
+func (ec *executionContext) fieldContext_AiAttributedPr_repoName(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "AiAttributedPr",
+		Field:      field,
+		IsMethod:   false,
+		IsResolver: false,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return nil, errors.New("field of type String does not have child fields")
+		},
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _AiAttributedPr_teamName(ctx context.Context, field graphql.CollectedField, obj *model.AiAttributedPr) (ret graphql.Marshaler) {
+	fc, err := ec.fieldContext_AiAttributedPr_teamName(ctx, field)
+	if err != nil {
+		return graphql.Null
+	}
+	ctx = graphql.WithFieldContext(ctx, fc)
+	defer func() {
+		if r := recover(); r != nil {
+			ec.Error(ctx, ec.Recover(ctx, r))
+			ret = graphql.Null
+		}
+	}()
+	resTmp, err := ec.ResolverMiddleware(ctx, func(rctx context.Context) (any, error) {
+		ctx = rctx // use context from middleware stack in children
+		return obj.TeamName, nil
+	})
+	if err != nil {
+		ec.Error(ctx, err)
+		return graphql.Null
+	}
+	if resTmp == nil {
+		return graphql.Null
+	}
+	res := resTmp.(*string)
+	fc.Result = res
+	return ec.marshalOString2ᚖstring(ctx, field.Selections, res)
+}
+
+func (ec *executionContext) fieldContext_AiAttributedPr_teamName(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "AiAttributedPr",
+		Field:      field,
+		IsMethod:   false,
+		IsResolver: false,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return nil, errors.New("field of type String does not have child fields")
+		},
+	}
+	return fc, nil
+}
+
 func (ec *executionContext) _AiAttributedPrsResult_orgId(ctx context.Context, field graphql.CollectedField, obj *model.AiAttributedPrsResult) (ret graphql.Marshaler) {
 	fc, err := ec.fieldContext_AiAttributedPrsResult_orgId(ctx, field)
 	if err != nil {
@@ -23713,6 +23943,10 @@ func (ec *executionContext) fieldContext_AiAttributedPrsResult_rows(_ context.Co
 				return ec.fieldContext_AiAttributedPr_teamId(ctx, field)
 			case "mergedAt":
 				return ec.fieldContext_AiAttributedPr_mergedAt(ctx, field)
+			case "repoName":
+				return ec.fieldContext_AiAttributedPr_repoName(ctx, field)
+			case "teamName":
+				return ec.fieldContext_AiAttributedPr_teamName(ctx, field)
 			}
 			return nil, fmt.Errorf("no field named %q was found under type AiAttributedPr", field.Name)
 		},
@@ -36193,6 +36427,14 @@ func (ec *executionContext) fieldContext_ImproveOpportunitiesResult_opportunitie
 				return ec.fieldContext_ImproveOpportunity_evidenceRefs(ctx, field)
 			case "recommendedAction":
 				return ec.fieldContext_ImproveOpportunity_recommendedAction(ctx, field)
+			case "value":
+				return ec.fieldContext_ImproveOpportunity_value(ctx, field)
+			case "threshold":
+				return ec.fieldContext_ImproveOpportunity_threshold(ctx, field)
+			case "unit":
+				return ec.fieldContext_ImproveOpportunity_unit(ctx, field)
+			case "thresholdDirection":
+				return ec.fieldContext_ImproveOpportunity_thresholdDirection(ctx, field)
 			}
 			return nil, fmt.Errorf("no field named %q was found under type ImproveOpportunity", field.Name)
 		},
@@ -36723,6 +36965,182 @@ func (ec *executionContext) fieldContext_ImproveOpportunity_recommendedAction(_ 
 		IsResolver: false,
 		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
 			return nil, errors.New("field of type String does not have child fields")
+		},
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _ImproveOpportunity_value(ctx context.Context, field graphql.CollectedField, obj *model.ImproveOpportunity) (ret graphql.Marshaler) {
+	fc, err := ec.fieldContext_ImproveOpportunity_value(ctx, field)
+	if err != nil {
+		return graphql.Null
+	}
+	ctx = graphql.WithFieldContext(ctx, fc)
+	defer func() {
+		if r := recover(); r != nil {
+			ec.Error(ctx, ec.Recover(ctx, r))
+			ret = graphql.Null
+		}
+	}()
+	resTmp, err := ec.ResolverMiddleware(ctx, func(rctx context.Context) (any, error) {
+		ctx = rctx // use context from middleware stack in children
+		return obj.Value, nil
+	})
+	if err != nil {
+		ec.Error(ctx, err)
+		return graphql.Null
+	}
+	if resTmp == nil {
+		if !graphql.HasFieldError(ctx, fc) {
+			ec.Errorf(ctx, "must not be null")
+		}
+		return graphql.Null
+	}
+	res := resTmp.(float64)
+	fc.Result = res
+	return ec.marshalNFloat2float64(ctx, field.Selections, res)
+}
+
+func (ec *executionContext) fieldContext_ImproveOpportunity_value(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "ImproveOpportunity",
+		Field:      field,
+		IsMethod:   false,
+		IsResolver: false,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return nil, errors.New("field of type Float does not have child fields")
+		},
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _ImproveOpportunity_threshold(ctx context.Context, field graphql.CollectedField, obj *model.ImproveOpportunity) (ret graphql.Marshaler) {
+	fc, err := ec.fieldContext_ImproveOpportunity_threshold(ctx, field)
+	if err != nil {
+		return graphql.Null
+	}
+	ctx = graphql.WithFieldContext(ctx, fc)
+	defer func() {
+		if r := recover(); r != nil {
+			ec.Error(ctx, ec.Recover(ctx, r))
+			ret = graphql.Null
+		}
+	}()
+	resTmp, err := ec.ResolverMiddleware(ctx, func(rctx context.Context) (any, error) {
+		ctx = rctx // use context from middleware stack in children
+		return obj.Threshold, nil
+	})
+	if err != nil {
+		ec.Error(ctx, err)
+		return graphql.Null
+	}
+	if resTmp == nil {
+		if !graphql.HasFieldError(ctx, fc) {
+			ec.Errorf(ctx, "must not be null")
+		}
+		return graphql.Null
+	}
+	res := resTmp.(float64)
+	fc.Result = res
+	return ec.marshalNFloat2float64(ctx, field.Selections, res)
+}
+
+func (ec *executionContext) fieldContext_ImproveOpportunity_threshold(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "ImproveOpportunity",
+		Field:      field,
+		IsMethod:   false,
+		IsResolver: false,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return nil, errors.New("field of type Float does not have child fields")
+		},
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _ImproveOpportunity_unit(ctx context.Context, field graphql.CollectedField, obj *model.ImproveOpportunity) (ret graphql.Marshaler) {
+	fc, err := ec.fieldContext_ImproveOpportunity_unit(ctx, field)
+	if err != nil {
+		return graphql.Null
+	}
+	ctx = graphql.WithFieldContext(ctx, fc)
+	defer func() {
+		if r := recover(); r != nil {
+			ec.Error(ctx, ec.Recover(ctx, r))
+			ret = graphql.Null
+		}
+	}()
+	resTmp, err := ec.ResolverMiddleware(ctx, func(rctx context.Context) (any, error) {
+		ctx = rctx // use context from middleware stack in children
+		return obj.Unit, nil
+	})
+	if err != nil {
+		ec.Error(ctx, err)
+		return graphql.Null
+	}
+	if resTmp == nil {
+		if !graphql.HasFieldError(ctx, fc) {
+			ec.Errorf(ctx, "must not be null")
+		}
+		return graphql.Null
+	}
+	res := resTmp.(model.ImproveOpportunityUnit)
+	fc.Result = res
+	return ec.marshalNImproveOpportunityUnit2githubᚗcomᚋfullᚑchaosᚋdevᚑhealthᚑopsᚋinternalᚋqueryapiᚋgraphᚋmodelᚐImproveOpportunityUnit(ctx, field.Selections, res)
+}
+
+func (ec *executionContext) fieldContext_ImproveOpportunity_unit(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "ImproveOpportunity",
+		Field:      field,
+		IsMethod:   false,
+		IsResolver: false,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return nil, errors.New("field of type ImproveOpportunityUnit does not have child fields")
+		},
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _ImproveOpportunity_thresholdDirection(ctx context.Context, field graphql.CollectedField, obj *model.ImproveOpportunity) (ret graphql.Marshaler) {
+	fc, err := ec.fieldContext_ImproveOpportunity_thresholdDirection(ctx, field)
+	if err != nil {
+		return graphql.Null
+	}
+	ctx = graphql.WithFieldContext(ctx, fc)
+	defer func() {
+		if r := recover(); r != nil {
+			ec.Error(ctx, ec.Recover(ctx, r))
+			ret = graphql.Null
+		}
+	}()
+	resTmp, err := ec.ResolverMiddleware(ctx, func(rctx context.Context) (any, error) {
+		ctx = rctx // use context from middleware stack in children
+		return obj.ThresholdDirection, nil
+	})
+	if err != nil {
+		ec.Error(ctx, err)
+		return graphql.Null
+	}
+	if resTmp == nil {
+		if !graphql.HasFieldError(ctx, fc) {
+			ec.Errorf(ctx, "must not be null")
+		}
+		return graphql.Null
+	}
+	res := resTmp.(model.ThresholdDirection)
+	fc.Result = res
+	return ec.marshalNThresholdDirection2githubᚗcomᚋfullᚑchaosᚋdevᚑhealthᚑopsᚋinternalᚋqueryapiᚋgraphᚋmodelᚐThresholdDirection(ctx, field.Selections, res)
+}
+
+func (ec *executionContext) fieldContext_ImproveOpportunity_thresholdDirection(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "ImproveOpportunity",
+		Field:      field,
+		IsMethod:   false,
+		IsResolver: false,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return nil, errors.New("field of type ThresholdDirection does not have child fields")
 		},
 	}
 	return fc, nil
@@ -45687,6 +46105,8 @@ func (ec *executionContext) fieldContext_Query_reviewEdges(ctx context.Context, 
 				return ec.fieldContext_ReviewEdgesResult_edges(ctx, field)
 			case "totalCount":
 				return ec.fieldContext_ReviewEdgesResult_totalCount(ctx, field)
+			case "truncated":
+				return ec.fieldContext_ReviewEdgesResult_truncated(ctx, field)
 			}
 			return nil, fmt.Errorf("no field named %q was found under type ReviewEdgesResult", field.Name)
 		},
@@ -48524,6 +48944,50 @@ func (ec *executionContext) fieldContext_ReviewEdgesResult_totalCount(_ context.
 		IsResolver: false,
 		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
 			return nil, errors.New("field of type Int does not have child fields")
+		},
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _ReviewEdgesResult_truncated(ctx context.Context, field graphql.CollectedField, obj *model.ReviewEdgesResult) (ret graphql.Marshaler) {
+	fc, err := ec.fieldContext_ReviewEdgesResult_truncated(ctx, field)
+	if err != nil {
+		return graphql.Null
+	}
+	ctx = graphql.WithFieldContext(ctx, fc)
+	defer func() {
+		if r := recover(); r != nil {
+			ec.Error(ctx, ec.Recover(ctx, r))
+			ret = graphql.Null
+		}
+	}()
+	resTmp, err := ec.ResolverMiddleware(ctx, func(rctx context.Context) (any, error) {
+		ctx = rctx // use context from middleware stack in children
+		return obj.Truncated, nil
+	})
+	if err != nil {
+		ec.Error(ctx, err)
+		return graphql.Null
+	}
+	if resTmp == nil {
+		if !graphql.HasFieldError(ctx, fc) {
+			ec.Errorf(ctx, "must not be null")
+		}
+		return graphql.Null
+	}
+	res := resTmp.(bool)
+	fc.Result = res
+	return ec.marshalNBoolean2bool(ctx, field.Selections, res)
+}
+
+func (ec *executionContext) fieldContext_ReviewEdgesResult_truncated(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "ReviewEdgesResult",
+		Field:      field,
+		IsMethod:   false,
+		IsResolver: false,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return nil, errors.New("field of type Boolean does not have child fields")
 		},
 	}
 	return fc, nil
@@ -60654,7 +61118,7 @@ func (ec *executionContext) unmarshalInputReviewEdgesInput(ctx context.Context, 
 		asMap["limit"] = 500
 	}
 
-	fieldsInOrder := [...]string{"orgId", "sinceDate", "untilDate", "repoIds", "limit"}
+	fieldsInOrder := [...]string{"orgId", "sinceDate", "untilDate", "repoIds", "teamIds", "limit"}
 	for _, k := range fieldsInOrder {
 		v, ok := asMap[k]
 		if !ok {
@@ -60689,6 +61153,13 @@ func (ec *executionContext) unmarshalInputReviewEdgesInput(ctx context.Context, 
 				return it, err
 			}
 			it.RepoIds = data
+		case "teamIds":
+			ctx := graphql.WithPathContext(ctx, graphql.NewPathWithField("teamIds"))
+			data, err := ec.unmarshalOString2ᚕstringᚄ(ctx, v)
+			if err != nil {
+				return it, err
+			}
+			it.TeamIds = data
 		case "limit":
 			ctx := graphql.WithPathContext(ctx, graphql.NewPathWithField("limit"))
 			data, err := ec.unmarshalNInt2int(ctx, v)
@@ -62151,6 +62622,11 @@ func (ec *executionContext) _AIImpactBucketRow(ctx context.Context, sel ast.Sele
 			}
 		case "testGapRate":
 			out.Values[i] = ec._AIImpactBucketRow_testGapRate(ctx, field, obj)
+		case "day":
+			out.Values[i] = ec._AIImpactBucketRow_day(ctx, field, obj)
+			if out.Values[i] == graphql.Null {
+				out.Invalids++
+			}
 		default:
 			panic("unknown field " + strconv.Quote(field.Name))
 		}
@@ -63238,6 +63714,10 @@ func (ec *executionContext) _AiAttributedPr(ctx context.Context, sel ast.Selecti
 			out.Values[i] = ec._AiAttributedPr_teamId(ctx, field, obj)
 		case "mergedAt":
 			out.Values[i] = ec._AiAttributedPr_mergedAt(ctx, field, obj)
+		case "repoName":
+			out.Values[i] = ec._AiAttributedPr_repoName(ctx, field, obj)
+		case "teamName":
+			out.Values[i] = ec._AiAttributedPr_teamName(ctx, field, obj)
 		default:
 			panic("unknown field " + strconv.Quote(field.Name))
 		}
@@ -66507,6 +66987,26 @@ func (ec *executionContext) _ImproveOpportunity(ctx context.Context, sel ast.Sel
 			if out.Values[i] == graphql.Null {
 				out.Invalids++
 			}
+		case "value":
+			out.Values[i] = ec._ImproveOpportunity_value(ctx, field, obj)
+			if out.Values[i] == graphql.Null {
+				out.Invalids++
+			}
+		case "threshold":
+			out.Values[i] = ec._ImproveOpportunity_threshold(ctx, field, obj)
+			if out.Values[i] == graphql.Null {
+				out.Invalids++
+			}
+		case "unit":
+			out.Values[i] = ec._ImproveOpportunity_unit(ctx, field, obj)
+			if out.Values[i] == graphql.Null {
+				out.Invalids++
+			}
+		case "thresholdDirection":
+			out.Values[i] = ec._ImproveOpportunity_thresholdDirection(ctx, field, obj)
+			if out.Values[i] == graphql.Null {
+				out.Invalids++
+			}
 		default:
 			panic("unknown field " + strconv.Quote(field.Name))
 		}
@@ -69404,6 +69904,11 @@ func (ec *executionContext) _ReviewEdgesResult(ctx context.Context, sel ast.Sele
 			}
 		case "totalCount":
 			out.Values[i] = ec._ReviewEdgesResult_totalCount(ctx, field, obj)
+			if out.Values[i] == graphql.Null {
+				out.Invalids++
+			}
+		case "truncated":
+			out.Values[i] = ec._ReviewEdgesResult_truncated(ctx, field, obj)
 			if out.Values[i] == graphql.Null {
 				out.Invalids++
 			}
@@ -74602,6 +75107,16 @@ func (ec *executionContext) marshalNImproveOpportunityKind2githubᚗcomᚋfull�
 	return v
 }
 
+func (ec *executionContext) unmarshalNImproveOpportunityUnit2githubᚗcomᚋfullᚑchaosᚋdevᚑhealthᚑopsᚋinternalᚋqueryapiᚋgraphᚋmodelᚐImproveOpportunityUnit(ctx context.Context, v any) (model.ImproveOpportunityUnit, error) {
+	var res model.ImproveOpportunityUnit
+	err := res.UnmarshalGQL(v)
+	return res, graphql.ErrorOnPath(ctx, err)
+}
+
+func (ec *executionContext) marshalNImproveOpportunityUnit2githubᚗcomᚋfullᚑchaosᚋdevᚑhealthᚑopsᚋinternalᚋqueryapiᚋgraphᚋmodelᚐImproveOpportunityUnit(ctx context.Context, sel ast.SelectionSet, v model.ImproveOpportunityUnit) graphql.Marshaler {
+	return v
+}
+
 func (ec *executionContext) unmarshalNInt2int(ctx context.Context, v any) (int, error) {
 	res, err := graphql.UnmarshalInt(v)
 	return res, graphql.ErrorOnPath(ctx, err)
@@ -76530,6 +77045,16 @@ func (ec *executionContext) marshalNTestOpsRiskTrendPoint2ᚕgithubᚗcomᚋfull
 	}
 
 	return ret
+}
+
+func (ec *executionContext) unmarshalNThresholdDirection2githubᚗcomᚋfullᚑchaosᚋdevᚑhealthᚑopsᚋinternalᚋqueryapiᚋgraphᚋmodelᚐThresholdDirection(ctx context.Context, v any) (model.ThresholdDirection, error) {
+	var res model.ThresholdDirection
+	err := res.UnmarshalGQL(v)
+	return res, graphql.ErrorOnPath(ctx, err)
+}
+
+func (ec *executionContext) marshalNThresholdDirection2githubᚗcomᚋfullᚑchaosᚋdevᚑhealthᚑopsᚋinternalᚋqueryapiᚋgraphᚋmodelᚐThresholdDirection(ctx context.Context, sel ast.SelectionSet, v model.ThresholdDirection) graphql.Marshaler {
+	return v
 }
 
 func (ec *executionContext) unmarshalNThroughputForecastInput2githubᚗcomᚋfullᚑchaosᚋdevᚑhealthᚑopsᚋinternalᚋqueryapiᚋgraphᚋmodelᚐThroughputForecastInput(ctx context.Context, v any) (model.ThroughputForecastInput, error) {

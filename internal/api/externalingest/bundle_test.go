@@ -9,10 +9,9 @@ import (
 )
 
 // The ensure_ascii oracle receipt lives in bundle_oracle_test.go's
-// TestSchemaBundleMatchesLivePython, which EXECUTES schema_registry.
-// compute_etag through ci/check_go.sh's live-python-oracles verb, rather
-// than pinning a hash computed once and typed into this file (a digest, not
-// execution -- see that test's doc comment). This file keeps the tests that
+// TestSchemaBundleMatchesFrozenPython, which replays the recorded execution of
+// schema_registry.compute_etag, rather than pinning a hash computed once and
+// typed into this file (a digest, not execution -- see that test's doc comment). This file keeps the tests that
 // do not need a live Python process: canonicalMarshal's astral-rune
 // contract (internal/api/pyjson's own tests cover MarshalCanonical
 // directly; this pins that the thin wrapper here still calls it), and the

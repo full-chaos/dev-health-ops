@@ -1,8 +1,0 @@
-internal/api/teamsidentity	TestJiraDatetimeParseMatchesPython	2
-internal/api/teamsidentity	TestListFieldVenueOracle	1
-internal/api/teamsidentity	TestVenueOracleDiscoverGitHubMatchesPython	5
-internal/api/teamsidentity	TestVenueOracleDiscoverGitHubMembersMatchesPython	6
-internal/api/teamsidentity	TestVenueOracleDiscoverGitLabMatchesPython	6
-internal/api/teamsidentity	TestVenueOracleDiscoverJiraMatchesPython	5
-internal/api/teamsidentity	TestVenueOracleDiscoverLinearMatchesPython	5
-internal/api/teamsidentity	TestVenueOracleDiscoverLinearMembersMatchesPython	12

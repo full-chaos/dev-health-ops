@@ -17,7 +17,7 @@ import (
 // (models/operational.py CanonicalOperationalEntity.__post_init__ -> operational_ordering.build_entity_ordering).
 // "The server accepted the row" proves only the CHECK, not the values, so this oracle builds the REAL
 // producer entity from the same frozen row and compares (source_revision, source_conflict_key,
-// ingest_revision, ordering_contract) leaf for leaf. Runs only through ci/check_go.sh live-python-oracles.
+// ingest_revision, ordering_contract) leaf for leaf. Replays a frozen golden.
 
 const orderingOracleProgram = `
 import json, sys

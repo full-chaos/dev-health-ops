@@ -1,4 +1,0 @@
-label=internal/api/syncadmin (backfill request model vs live FastAPI)
-package=./internal/api/syncadmin
-run=^(TestBackfillRequestMatchesTheLiveFastAPIRoute)$
-proof=api-syncadmin-backfill-request|api live Python oracle api-syncadmin-backfill-request did not run

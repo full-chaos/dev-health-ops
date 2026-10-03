@@ -201,6 +201,11 @@ jobs:
           args=(detect --redact -v --exit-code=2 --report-format=sarif --report-path=results.sarif --log-level=debug)
           if [ -n "${range}" ]; then
             if [ "${range}" = "-1" ]; then
+              # the last commit alone: a merge commit adds nothing to scan, so that is a scan that reads no commit too
+              if [ "$(git rev-list --parents -n 1 HEAD | wc -w)" -gt 2 ]; then
+                echo "::error::the last commit is a merge commit: nothing to scan"
+                exit 1
+              fi
               args+=("--log-opts=-1")
             else
               # A scan that reads no commit must not pass (an empty or unknown sha, or a range that holds only merge commits): fail

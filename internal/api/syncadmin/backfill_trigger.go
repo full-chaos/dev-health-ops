@@ -25,7 +25,7 @@ const maxErrorTextLength = 4000
 // here, and its text is Go's error, where Python's is the SQLAlchemy or driver
 // exception's class name and message.
 func taskQueueUnavailable(err error) error {
-	return refuse(http.StatusServiceUnavailable, "Task queue unavailable: "+pythonparity.SanitizeErrorText(err.Error(), maxErrorTextLength))
+	return refuse(http.StatusServiceUnavailable, "Task queue unavailable: "+pythonparity.SanitizeErrorTextHardened(err.Error(), maxErrorTextLength))
 }
 
 // backfillSyncConfig is sync.py's trigger_sync_config_backfill, in its order:

@@ -202,7 +202,7 @@ internal/processreadiness	1
 internal/projectmembership	1
 internal/providerfamilycontract	1
 internal/providerfoundation	92
-internal/providersync	589
+internal/providersync	200
 internal/pushcli	3
 internal/pyargparse	1
 internal/pythonparity	89
@@ -287,6 +287,7 @@ internal/synccli	79
 internal/synccoverage	2
 internal/syncdispatchcontract	1
 internal/syncdispatchruntime	47
+internal/syncdispatchruntime/synclog	6
 internal/synchandoff	1
 internal/synclimits	1
 internal/syncreconciler	2
@@ -299,6 +300,7 @@ internal/testsupport/chlogin	1
 internal/testsupport/chquery	1
 internal/testsupport/chschema	2
 internal/testsupport/containers	1
+internal/testsupport/credentialshapes	1
 internal/testsupport/crossorg	1
 internal/testsupport/fakehttp	1
 internal/testsupport/fakepg	1

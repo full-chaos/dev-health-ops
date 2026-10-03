@@ -5,7 +5,7 @@ import (
 	"crypto/sha256"
 	"encoding/binary"
 	"fmt"
-	"log/slog"
+	"github.com/full-chaos/dev-health-ops/internal/syncdispatchruntime/synclog"
 	"sort"
 	"time"
 
@@ -130,23 +130,20 @@ func EffectiveAdmissionCaps() (clamp int, caps map[string]int) {
 // class from the one table, so a cap/budget mismatch or a lowered clamp is
 // visible at Info where the cap is enforced (CHAOS-7881). No org id or tenant
 // data.
-func logAdmissionCaps(logger *slog.Logger) {
-	if logger == nil {
-		logger = slog.Default()
-	}
+func logAdmissionCaps(logger *synclog.Logger) {
 	clamp, caps := EffectiveAdmissionCaps()
 	budget := func(class string) int {
 		limit, _ := providerfoundation.CostClassBudgetLimit(class)
 		return limit
 	}
-	logger.Info("sync_dispatch_admission_caps",
-		"admission_cap_light", caps["light"],
-		"admission_cap_medium", caps["medium"],
-		"admission_cap_heavy", caps["heavy"],
-		"budget_limit_light", budget("light"),
-		"budget_limit_medium", budget("medium"),
-		"budget_limit_heavy", budget("heavy"),
-		"admission_clamp", clamp,
+	logger.Info(context.Background(), synclog.MsgSyncDispatchAdmissionCaps,
+		synclog.Count(synclog.KeyAdmissionCapLight, caps["light"]),
+		synclog.Count(synclog.KeyAdmissionCapMedium, caps["medium"]),
+		synclog.Count(synclog.KeyAdmissionCapHeavy, caps["heavy"]),
+		synclog.Count(synclog.KeyBudgetLimitLight, budget("light")),
+		synclog.Count(synclog.KeyBudgetLimitMedium, budget("medium")),
+		synclog.Count(synclog.KeyBudgetLimitHeavy, budget("heavy")),
+		synclog.Count(synclog.KeyAdmissionClamp, clamp),
 	)
 }
 
@@ -183,10 +180,7 @@ func staleDispatchSeconds() time.Duration {
 // authorize->claim -- Python's own re-query cannot observe anything this
 // transaction hasn't, so skipping it changes no observable behavior, only
 // which frame issues the (redundant, in Python) lookup.
-func authorizeRun(ctx context.Context, tx pgx.Tx, logger *slog.Logger, orgID, runID string, now time.Time) (guardDecision, error) {
-	if logger == nil {
-		logger = slog.Default()
-	}
+func authorizeRun(ctx context.Context, tx pgx.Tx, logger *synclog.Logger, orgID, runID string, now time.Time) (guardDecision, error) {
 	units, err := loadDispatchGuardUnits(ctx, tx, runID)
 	if err != nil {
 		return guardDecision{}, err
@@ -544,16 +538,9 @@ func acquireBucketAdvisoryLocks(ctx context.Context, tx pgx.Tx, buckets []dispat
 // failure here is likewise swallowed, not propagated: attribute.String/Int
 // on a Go span cannot fail the way Python's dynamic OTel calls could, so
 // there is nothing to catch, but the log call is likewise best-effort).
-func emitBucketDecision(ctx context.Context, logger *slog.Logger, bucket dispatchBucket, activeCount, reclaimedStale, cappedNew, cappedStale, slotHeadroom int) {
+func emitBucketDecision(ctx context.Context, logger *synclog.Logger, bucket dispatchBucket, activeCount, reclaimedStale, cappedNew, cappedStale, slotHeadroom int) {
 	bucketLabel := bucket.orgID + "/" + bucket.provider + "/" + bucket.costClass
-	logger.InfoContext(ctx, "dispatch_guard.bucket_decision",
-		slog.String("bucket", bucketLabel),
-		slog.Int("guard.active_count", activeCount),
-		slog.Int("guard.reclaimed_stale", reclaimedStale),
-		slog.Int("guard.capped_new", cappedNew),
-		slog.Int("guard.capped_stale", cappedStale),
-		slog.Int("guard.slot_headroom", slotHeadroom),
-	)
+	logger.Info(ctx, synclog.MsgDispatchGuardBucketDecision, synclog.Text(synclog.KeyBucket, synclog.ParseLabel(bucketLabel)), synclog.Count(synclog.KeyGuardActiveCount, activeCount), synclog.Count(synclog.KeyGuardReclaimedStale, reclaimedStale), synclog.Count(synclog.KeyGuardCappedNew, cappedNew), synclog.Count(synclog.KeyGuardCappedStale, cappedStale), synclog.Count(synclog.KeyGuardSlotHeadroom, slotHeadroom))
 	span := oteltrace.SpanFromContext(ctx)
 	if span == nil || !span.IsRecording() {
 		return

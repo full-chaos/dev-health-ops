@@ -2,6 +2,8 @@ package pythonparity
 
 import (
 	"unicode"
+
+	"github.com/full-chaos/dev-health-ops/internal/platform/logging"
 )
 
 // SanitizeErrorText is src/dev_health_ops/sync/error_sanitize.py's
@@ -19,12 +21,27 @@ import (
 // small matcher over runes that spells those three out; the corpus test in
 // errorsanitize_live_python_oracle_test.go compares every one against `re`.
 func SanitizeErrorText(text string, maxLength int) string {
+	return sanitizeErrorText(text, maxLength, false)
+}
+
+// SanitizeErrorTextHardened is SanitizeErrorText plus the credential shapes Python's list never had: LLM-provider, Stripe,
+// Google, Slack and JWT keys by prefix, and a long value behind a credential word (CHAOS-7937). The frozen Python oracle
+// pins SanitizeErrorText exactly; every production caller that stores or returns error text uses this one, so the two differ
+// only on text that holds such a shape (a named difference: a hardening, not a parity break).
+func SanitizeErrorTextHardened(text string, maxLength int) string {
+	return sanitizeErrorText(text, maxLength, true)
+}
+
+func sanitizeErrorText(text string, maxLength int, harden bool) string {
 	if text == "" {
 		return text
 	}
 	runes := []rune(text)
 	for _, matcher := range sanitizeMatchers {
 		runes = substitute(runes, matcher)
+	}
+	if harden {
+		runes = []rune(logging.RedactCredentialShapes(string(runes)))
 	}
 	if maxLength > 0 && len(runes) > maxLength {
 		const suffix = "...[truncated]"

@@ -46,6 +46,7 @@ STAND_IN_GO = """#!/usr/bin/env bash
 # Stand-in `go`: `go test` records "<pkg args>" and succeeds (or fails when
 # FAKE_GO_FAIL is set); every other subcommand is the real go.
 if [ "$1" != "test" ]; then exec "{real_go}" "$@"; fi
+case " $* " in *" -list "*) exec "{real_go}" "$@" ;; esac
 printf '%s\\n' "$*" >> "${{FAKE_GO_LOG}}"
 [ -z "${{FAKE_GO_FAIL:-}}" ] || exit 1
 exit 0
@@ -264,6 +265,7 @@ def test_the_shard_partition_holds_whatever_the_weights_say(tmp_path: Path) -> N
 def test_race_verb_slices_partition_the_real_packages(tmp_path: Path) -> None:
     mod, pkgs = _go_list()
     seen: list[str] = []
+    provider_calls = 0
     for shard in (1, 2):
         proc, calls = _run_check_go(
             tmp_path / f"s{shard}", "ci-leg", "race", str(shard), "2"
@@ -273,16 +275,24 @@ def test_race_verb_slices_partition_the_real_packages(tmp_path: Path) -> None:
         assert all(" -race " in f" {c} " for c in calls), calls
         for call in calls:
             seen += [w for w in call.split() if w.startswith(mod)]
-    # The root module's packages: every one exactly once across the two slices.
+        # CHAOS-8166: providersync is not a whole-package row; every leg runs its own test-name shard of it.
+        provider_calls += sum(
+            1 for c in calls if "-run" in c and c.endswith("./internal/providersync")
+        )
+    assert provider_calls == 2, "each race leg runs one providersync test shard"
+    # The root module's packages: every one exactly once across the two slices
+    # (providersync through its test-name shards, one per leg).
     root_seen = [p for p in seen if p in set(pkgs)]
-    assert sorted(root_seen) == sorted(pkgs)
+    expected = [p for p in pkgs if p != f"{mod}/internal/providersync"]
+    assert sorted(root_seen) == sorted(expected)
     assert len(root_seen) == len(set(root_seen))
 
 
 def test_a_race_slice_that_selects_nothing_fails_loudly(tmp_path: Path) -> None:
-    proc, calls = _run_check_go(tmp_path, "ci-leg", "race", "999", "1000")
+    # More legs than there are packages and tests: no shard of either selects anything.
+    proc, calls = _run_check_go(tmp_path, "ci-leg", "race", "5000", "5001")
     assert proc.returncode != 0
-    assert "selected zero packages" in proc.stderr
+    assert "select zero" in proc.stderr or "selected zero" in proc.stderr
     assert calls == [], "a zero-package leg must not run go test"
 
 
@@ -578,3 +588,147 @@ def test_check_test_runs_the_race_excluded_proof() -> None:
     script = CHECK_GO.read_text(encoding="utf-8")
     body = _case_block(script, "check_test() {", "\n}\n")
     assert "check_race_excluded_ran" in body
+
+
+# ---------------------------------------------------------------------------
+# 7. CHAOS-8166: internal/providersync runs in every race leg, one test-name shard each.
+# ---------------------------------------------------------------------------
+
+PROVIDER_WEIGHTS = ROOT / "ci" / "go_providersync_race_weights.tsv"
+PROVIDER_AWK = ROOT / "ci" / "go_providersync_race_shard.awk"
+
+
+def _provider_tests() -> list[str]:
+    real_go = shutil.which("go")
+    assert real_go
+    out = subprocess.run(
+        [real_go, "test", "-list", "^Test", "./internal/providersync"],
+        cwd=ROOT,
+        env={**os.environ, "GOWORK": "off", "GOFLAGS": "-mod=readonly"},
+        capture_output=True,
+        text=True,
+        check=True,
+    ).stdout
+    names = [line for line in out.splitlines() if line.startswith("Test")]
+    assert names, "go test -list reported no providersync test"
+    return names
+
+
+def _provider_shard(
+    names: list[str], shard: int, count: int, weights: Path
+) -> subprocess.CompletedProcess[str]:
+    return subprocess.run(
+        [
+            "awk",
+            "-v",
+            f"shard={shard}",
+            "-v",
+            f"count={count}",
+            "-v",
+            f"weights={weights}",
+            "-f",
+            str(PROVIDER_AWK),
+        ],  # fmt: skip
+        input="\n".join(names) + "\n",
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+
+def test_every_providersync_test_is_in_exactly_one_race_shard() -> None:
+    names = _provider_tests()
+    for count in (2, 3, 4):
+        got: list[str] = []
+        for shard in range(1, count + 1):
+            proc = _provider_shard(names, shard, count, PROVIDER_WEIGHTS)
+            assert proc.returncode == 0, proc
+            part = proc.stdout.split()
+            assert part, f"providersync race shard {shard}/{count} is empty"
+            got += part
+        assert sorted(got) == sorted(names), f"count {count}: not an exact partition"
+
+
+def test_the_providersync_race_weights_name_real_tests_and_balance() -> None:
+    names = _provider_tests()
+    rows = [
+        line.split("\t")
+        for line in PROVIDER_WEIGHTS.read_text().splitlines()
+        if line.strip() and not line.startswith("#")
+    ]
+    keys = [r[0] for r in rows]
+    assert keys == sorted(keys) and len(keys) == len(set(keys))
+    assert not [k for k in keys if k not in set(names)], "a weight names a missing test"
+    weights = {r[0]: int(r[1]) for r in rows}
+    totals = []
+    for shard in (1, 2, 3):
+        part = _provider_shard(names, shard, 3, PROVIDER_WEIGHTS).stdout.split()
+        totals.append(sum(weights.get(n, 20) for n in part))
+    # No shard above the heaviest single test plus a fair share of the rest (the measured run: 199 s test, 160 s slices).
+    assert max(totals) <= max(weights.values()) + 0.25 * sum(totals), totals
+
+
+def test_a_providersync_race_leg_whose_shards_do_not_partition_fails_before_any_test_runs(
+    tmp_path: Path,
+) -> None:
+    empty = tmp_path / "empty.tsv"
+    empty.write_text("# no rows\n")
+    proc, calls = _run_check_go(
+        tmp_path / "run",
+        "ci-leg",
+        "race",
+        "1",
+        "3",
+        extra_env={"GO_PROVIDERSYNC_RACE_WEIGHTS": str(empty)},
+    )
+    assert proc.returncode != 0, proc.stdout[-800:]
+    assert "go_providersync_race_shard.awk failed" in proc.stderr
+    assert not [c for c in calls if c.endswith("./internal/providersync")]
+
+
+def _provider_run_names(call: str) -> list[str]:
+    """The test names of the -run regex of a recorded `go test ... ./internal/providersync` call."""
+    words = call.split()
+    regex = words[words.index("-run") + 1]
+    assert regex.startswith("^(") and regex.endswith(")$"), regex
+    return regex[2:-2].split("|")
+
+
+def test_each_race_leg_runs_exactly_its_own_providersync_slice(tmp_path: Path) -> None:
+    names = _provider_tests()
+    count = 3
+    union: list[str] = []
+    for shard in range(1, count + 1):
+        proc, calls = _run_check_go(
+            tmp_path / f"leg{shard}", "ci-leg", "race", str(shard), str(count)
+        )
+        assert proc.returncode == 0, proc.stderr[-1500:] + proc.stdout[-1500:]
+        provider = [c for c in calls if c.endswith("./internal/providersync")]
+        assert len(provider) == 1, provider
+        ran = _provider_run_names(provider[0])
+        want = _provider_shard(names, shard, count, PROVIDER_WEIGHTS).stdout.split()
+        assert sorted(ran) == sorted(want), f"leg {shard} does not run its own slice"
+        union += ran
+    assert sorted(union) == sorted(names), "the legs' slices are not the listed set"
+    assert len(union) == len(set(union)), "a providersync test runs in two legs"
+
+
+def test_a_shard_awk_that_loses_a_test_fails_the_leg_at_the_partition_check(
+    tmp_path: Path,
+) -> None:
+    # Every shard stays non-empty, so only the exact-partition comparison can catch the lost test.
+    broken = tmp_path / "broken.awk"
+    text = PROVIDER_AWK.read_text(encoding="utf-8")
+    assert "$0 ~ /^Test/ {" in text
+    broken.write_text(text.replace("$0 ~ /^Test/ {", "$0 ~ /^Test/ && NR > 1 {"))
+    proc, calls = _run_check_go(
+        tmp_path / "run",
+        "ci-leg",
+        "race",
+        "1",
+        "3",
+        extra_env={"GO_PROVIDERSYNC_RACE_SHARD_AWK": str(broken)},
+    )
+    assert proc.returncode != 0, proc.stdout[-800:]
+    assert "not an exact partition" in proc.stderr
+    assert not [c for c in calls if c.endswith("./internal/providersync")]

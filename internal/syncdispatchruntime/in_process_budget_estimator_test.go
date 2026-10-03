@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"github.com/full-chaos/dev-health-ops/internal/syncdispatchruntime/synclog"
 	"log/slog"
 	"strings"
 	"testing"
@@ -63,7 +64,7 @@ func TestInProcessEstimatorErrorClasses(t *testing.T) {
 	estimate := func(t *testing.T, db scriptedDB, logs *bytes.Buffer) (map[string][]budgetEstimate, error) {
 		t.Helper()
 		estimator, err := newInProcessBudgetEstimator(db, BudgetEstimatorDependencies{
-			Decryptor: unusedDecryptor{}, Getenv: getenv, Logger: slog.New(slog.NewTextHandler(logs, nil)),
+			Decryptor: unusedDecryptor{}, Getenv: getenv, Logger: synclog.New(slog.New(slog.NewTextHandler(logs, nil))),
 		})
 		if err != nil {
 			t.Fatal(err)

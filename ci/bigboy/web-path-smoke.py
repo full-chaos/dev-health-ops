@@ -6,7 +6,7 @@ Every request goes to traefik (DHO_SMOKE_BASE_URL) with the PUBLIC Host header
 call takes the path a real user's browser takes:
 
     traefik (public-host router) -> web -> proxy.ts (session cookie -> bearer)
-        -> BACKEND_URL (traefik, Host: traefik) -> plane-split router -> go-api / query-api / api
+        -> BACKEND_URL (traefik, Host: traefik) -> plane-split router -> go-api / query-api
 
 The session is a real Auth.js session: /api/auth/csrf, then the Credentials
 provider callback (/api/auth/callback/credentials), which calls the backend login

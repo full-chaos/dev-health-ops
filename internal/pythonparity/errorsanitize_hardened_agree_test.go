@@ -1,6 +1,7 @@
 package pythonparity_test
 
 import (
+	"strings"
 	"testing"
 
 	"github.com/full-chaos/dev-health-ops/internal/platform/errortext/hardened"
@@ -27,4 +28,37 @@ func TestEveryEntryPointIsItsNamedComposition(t *testing.T) {
 			t.Fatal("stopping after 12 disagreements")
 		}
 	}
+}
+
+// The sync writers' result is final: a second call over it changes nothing, and the parity sanitizer (the scrub's step over rows the
+// sync writer stored) leaves it as it is. The case that broke the appended pass before it ran inside the last cut: text over the cap
+// whose tail, after the appended pass's own cut, ends inside a userinfo-looking run.
+func TestSyncEntryPointResultIsFinal(t *testing.T) {
+	var texts []string
+	for _, pair := range sanitizeCorpus() {
+		texts = append(texts, pair[0].(string))
+	}
+	texts = append(texts, gateTexts()...)
+	for pad := 0; pad <= 24; pad++ {
+		texts = append(texts, strings.Repeat("a", pad)+" "+strings.Repeat("Bearer x 10.0.0.1:5432 ", 200))
+		texts = append(texts, strings.Repeat("a", pad)+" "+strings.Repeat("Bearer x 10.0.0.1:5432 ", 200))
+		texts = append(texts, strings.Repeat("a", pad)+" "+strings.Repeat("token= abc host:5432@ ", 200))
+	}
+	bad := 0
+	for _, text := range texts {
+		once := syncdispatchruntime.SanitizeErrorText(text)
+		if twice := syncdispatchruntime.SanitizeErrorText(once); twice != once {
+			bad++
+			if bad <= 6 {
+				t.Errorf("a second SanitizeErrorText call changes the result of %.60q: %d runes then %d", text, len([]rune(once)), len([]rune(twice)))
+			}
+		}
+		if again := pythonparity.SanitizeErrorTextHardened(once, 4000); again != once {
+			bad++
+			if bad <= 6 {
+				t.Errorf("the parity sanitizer rewrites a sync-written row of %.60q: %d runes then %d", text, len([]rune(once)), len([]rune(again)))
+			}
+		}
+	}
+	t.Logf("%d texts, %d not final", len(texts), bad)
 }

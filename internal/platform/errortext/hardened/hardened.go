@@ -19,11 +19,13 @@ func Parity(text string, maxLength int) string {
 	return logging.RedactUserinfoLast(errortext.Truncate(shaped, maxLength), func(text string) string { return errortext.Truncate(text, maxLength) })
 }
 
-// SyncWriters is syncdispatchruntime.SanitizeErrorText, the sync writers' path: main's chain byte for byte (the credential shapes
-// first, errortext.Sanitize, the userinfo pass last with a second cut) and the Python-parity pass APPENDED after it (D4495 and
-// the shape of record of D4497: a pass in front of an existing pass changes what that pass hides; a pass after it can only hide
-// more), then the cap once more because the appended pass can add markers.
+// SyncWriters is syncdispatchruntime.SanitizeErrorText, the sync writers' path: main's chain (the credential shapes first,
+// errortext.Sanitize, the userinfo pass last) with the Python-parity pass APPENDED after the userinfo pass (D4495 and the shape of
+// record of D4497: a pass in front of an existing pass changes what that pass hides; a pass after it can only hide more). The
+// appended pass can add markers, so it runs together with the cap INSIDE the cut that RedactUserinfoLast calls before its final
+// tail step: the text the last cut leaves then goes through that step, so a second call over the result changes nothing.
 func SyncWriters(text string) string {
-	inner := logging.RedactUserinfoLast(errortext.Sanitize(logging.RedactCredentialShapesNoUserinfo(text)), errortext.Cap)
-	return errortext.Cap(errortext.Redact(inner))
+	return logging.RedactUserinfoLast(errortext.Sanitize(logging.RedactCredentialShapesNoUserinfo(text)), func(text string) string {
+		return errortext.Cap(errortext.Redact(text))
+	})
 }

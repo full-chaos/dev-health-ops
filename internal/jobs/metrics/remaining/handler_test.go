@@ -539,12 +539,14 @@ func TestPartitionHandlerLogsAFailedExhaustWithoutTheErrorText(t *testing.T) {
 	previous := slog.Default()
 	slog.SetDefault(slog.New(slog.NewTextHandler(&buffer, nil)))
 	t.Cleanup(func() { slog.SetDefault(previous) })
-	store := &handlerStore{claimErr: errors.New("connection reset"), exhaustErr: errors.New("SECRET-DRIVER-TEXT")}
+	store := &handlerStore{claimErr: errors.New("connection reset"), exhaustErr: fmt.Errorf("wrap: %w", &pgconn.PgError{Code: "57014", Message: "SECRET-DRIVER-TEXT"})}
 	handler, _ := NewPartitionHandler[jobruntime.RemainingCapacityArgs](store, &handlerExecutor{}, "capacity")
 	_ = handler.Work(context.Background(), attemptedCapacityExecution(3, 3))
 	logged := buffer.String()
-	if !strings.Contains(logged, "could not exhaust a last-attempt partition") || !strings.Contains(logged, "partition_id") {
-		t.Fatalf("exhaust failure not logged: %q", logged)
+	for _, want := range []string{"could not exhaust a last-attempt partition", "partition_id", "error_class=postgres", "error_type=", "error_code=57014"} {
+		if !strings.Contains(logged, want) {
+			t.Fatalf("exhaust failure log lacks %q: %q", want, logged)
+		}
 	}
 	if strings.Contains(logged, "SECRET-DRIVER-TEXT") {
 		t.Fatalf("log leaks the error text: %q", logged)
@@ -629,6 +631,77 @@ func TestPartitionHandlerLogsAFailedClaimedExhaustWithItsClassOnly(t *testing.T)
 			}
 			if strings.Contains(logged, "SECRET-DRIVER-TEXT") {
 				t.Fatalf("log leaks the error text: %q", logged)
+			}
+		})
+	}
+}
+
+// CHAOS-8163 / D4407: the class attributes must not panic on a typed-nil *pgconn.PgError at ANY depth of the chain
+// (the case that made the stdlib errors.As walk unsafe on a log path): the line is still written, with no error text.
+func TestPartitionHandlerExhaustLogSurvivesATypedNilPostgresErrorAtEveryDepth(t *testing.T) {
+	var typedNil *pgconn.PgError
+	for depth, exhaustErr := range []error{
+		typedNil,
+		fmt.Errorf("wrap1: %w", typedNil),
+		fmt.Errorf("wrap2: %w", fmt.Errorf("wrap1: %w", typedNil)),
+	} {
+		t.Run(fmt.Sprintf("depth %d", depth), func(t *testing.T) {
+			var buffer bytes.Buffer
+			previous := slog.Default()
+			slog.SetDefault(slog.New(slog.NewTextHandler(&buffer, nil)))
+			t.Cleanup(func() { slog.SetDefault(previous) })
+			store := &handlerStore{claimErr: errors.New("connection reset"), exhaustErr: exhaustErr}
+			handler, _ := NewPartitionHandler[jobruntime.RemainingCapacityArgs](store, &handlerExecutor{}, "capacity")
+			_ = handler.Work(context.Background(), attemptedCapacityExecution(3, 3))
+			if !strings.Contains(buffer.String(), "could not exhaust a last-attempt partition") {
+				t.Fatalf("exhaust failure not logged: %q", buffer.String())
+			}
+		})
+	}
+}
+
+type selfUnwrappingError struct{}
+
+func (e *selfUnwrappingError) Error() string { return "self" }
+func (e *selfUnwrappingError) Unwrap() error { return e }
+
+type cycleA struct{ next *cycleB }
+type cycleB struct{ next *cycleA }
+
+func (e *cycleA) Error() string { return "a" }
+func (e *cycleA) Unwrap() error { return e.next }
+func (e *cycleB) Error() string { return "b" }
+func (e *cycleB) Unwrap() error { return e.next }
+
+// CHAOS-8163 / D4407: a self-unwrapping error and a two-error cycle must not hang the exhaust log line (a hand-written
+// unwrap loop at the call site never terminates on them). Each runs under a short deadline so a hang FAILS the test
+// instead of blocking it; the bounded walker of logging.ErrorArgs returns.
+func TestPartitionHandlerExhaustLogSurvivesACyclicErrorChain(t *testing.T) {
+	cycleStart := &cycleA{}
+	cycleStart.next = &cycleB{next: cycleStart}
+	for name, exhaustErr := range map[string]error{
+		"self-unwrapping": &selfUnwrappingError{},
+		"two-error cycle": cycleStart,
+	} {
+		t.Run(name, func(t *testing.T) {
+			var buffer bytes.Buffer
+			previous := slog.Default()
+			slog.SetDefault(slog.New(slog.NewTextHandler(&buffer, nil)))
+			t.Cleanup(func() { slog.SetDefault(previous) })
+			store := &handlerStore{claimErr: errors.New("connection reset"), exhaustErr: exhaustErr}
+			handler, _ := NewPartitionHandler[jobruntime.RemainingCapacityArgs](store, &handlerExecutor{}, "capacity")
+			done := make(chan struct{})
+			go func() {
+				defer close(done)
+				_ = handler.Work(context.Background(), attemptedCapacityExecution(3, 3))
+			}()
+			select {
+			case <-done:
+			case <-time.After(3 * time.Second):
+				t.Fatal("the exhaust log line did not return on a cyclic error chain (an unbounded unwrap loop)")
+			}
+			if !strings.Contains(buffer.String(), "could not exhaust a last-attempt partition") {
+				t.Fatalf("exhaust failure not logged: %q", buffer.String())
 			}
 		})
 	}

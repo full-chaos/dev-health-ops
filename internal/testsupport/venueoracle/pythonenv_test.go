@@ -671,7 +671,7 @@ func TestBothPythonLaunchesRefuseAnotherInterpreterOnPath(t *testing.T) {
 func startWithSettingsInChild(t *testing.T, env string, recorded Options, declared func(name string) (Options, []string), name string) (string, error, bool) {
 	t.Helper()
 	if which := os.Getenv(env); which != "" {
-		t.Setenv("DEV_HEALTH_LIVE_PYTHON_ORACLES", "1")
+		t.Setenv("DEV_HEALTH_VENUE_ORACLES", "1")
 		t.Setenv(goldenUpdateEnv, "")
 		t.Setenv(goldenCandidateEnv, "")
 		golden, _ := frozenWithEnv(t, currentKey(t, recorded), pythonEnvKeyVersion)

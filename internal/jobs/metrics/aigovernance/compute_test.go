@@ -265,9 +265,8 @@ func TestGovernanceRowsMatchLivePythonProduction(t *testing.T) {
 // AFTER ASCII digits and BEFORE lowercase hex letters. So a null-repo group
 // lands in the MIDDLE of the UUID range, not at either end.
 //
-// This is asserted independently of the live oracle because the oracle only
-// runs under ci/check_go.sh's live-python-oracles verb; a plain `go test`
-// would otherwise never exercise the rule at all.
+// This is asserted independently of the golden comparison so that the rule
+// has its own named test.
 func TestCoverageRowOrderPutsNullRepoBetweenTheTwoUUIDs(t *testing.T) {
 	rows := RollupCoverageDaily(fixtureArtifacts(), fixtureDay)
 	var order []string

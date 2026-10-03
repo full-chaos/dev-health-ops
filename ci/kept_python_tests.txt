@@ -1,0 +1,57 @@
+# Python test files that stay in CI after the Python api is switched off
+# (CHAOS-8352). The `tooling-tests` job of .github/workflows/test.yml runs
+# exactly these paths, so the required `test` check fails if one fails.
+#
+# Rule: a file is listed when what it pins still exists after the Python
+# source is deleted: the Helm chart and deploy contracts, compose, alerts and
+# dashboards, workflows, ci scripts and git hooks that stay, the Go config and
+# job contract the Go binaries own, the uv lock. A file that pins only Python
+# source, a Python migration, a Python oracle or a golden recording is NOT
+# listed. New files are NOT picked up: add a path here on purpose.
+tests/scripts/test_strip_agent_attribution.py
+tests/test_ci_closure_pins_match_uv_lock.py
+tests/test_compose_config.py
+tests/test_deploy_alternates_removed.py
+tests/test_e2e_organization_id_contract_conformance.py
+tests/test_executed_proof_family_coverage.py
+tests/test_go_api_routing_digest_checker.py
+tests/test_go_api_routing_operator_text.py
+tests/test_governance_workflow.py
+tests/test_helm_api_probes.py
+tests/test_helm_api_service.py
+tests/test_helm_clickhouse_usersd.py
+tests/test_helm_extra_envfrom.py
+tests/test_helm_go_worker_keda_extra_triggers.py
+tests/test_helm_go_worker_pull_policy.py
+tests/test_helm_go_worker_replicas_keda.py
+tests/test_helm_migration_hook.py
+tests/test_helm_rolling_update.py
+tests/test_helm_valkey_keyspace.py
+tests/test_helm_web_extra_volumes.py
+tests/test_local_validate_credential_exposure.py
+tests/test_local_validate_remote_clickhouse.py
+tests/test_rate_limit_policy_doc.py
+tests/test_runtime_dependency_closure_has_the_redis_client.py
+tests/test_unreclaimable_sweep_deploy_default.py
+tests/test_worker_otel_deployments.py
+tests/worker_baseline/test_canary_release_proof.py
+tests/workers/test_go_worker_alerts.py
+tests/workers/test_go_worker_cli_contract.py
+tests/workers/test_go_worker_dashboard.py
+tests/workers/test_go_worker_deployment_contract.py
+tests/workers/test_helm_billing_edge_removed.py
+tests/workers/test_helm_go_pgbouncer.py
+tests/workers/test_helm_go_worker_labels.py
+tests/workers/test_helm_migration_hook_chain.py
+tests/workers/test_helm_no_cronjobs.py
+tests/workers/test_helm_pinned_operator_image_helper.py
+tests/workers/test_helm_query_api_internal.py
+tests/workers/test_helm_route_activate_hooks.py
+tests/workers/test_helm_routing_carry_hooks_behavior.py
+tests/workers/test_helm_routing_carry_hooks.py
+tests/workers/test_helm_routing_carry_hooks_real_dho.py
+tests/workers/test_helm_routing_repoint_waits_for_rollout.py
+tests/workers/test_helm_worker_disruption_and_drain.py
+tests/workers/test_provider_artifact_skip_alert.py
+tests/workers/test_transitional_inventory_contract.py
+tests/workers/test_unreclaimable_sweep_alerts.py

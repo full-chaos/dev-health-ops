@@ -257,6 +257,20 @@ jobs:
         env:
           OTEL_ENABLED: "false"
         run: pytest tests/tooling -q -n 4
+      # The Python tests that pin things which stay after the Python source is
+      # deleted (Helm chart, compose, alerts, ci scripts, Go contracts). An
+      # explicit list, not a negative filter: a new file is not picked up unseen.
+      - name: Run the kept Python tests
+        env:
+          OTEL_ENABLED: "false"
+        run: |
+          set -euo pipefail
+          mapfile -t kept < <(grep -v '^[[:space:]]*#' ci/kept_python_tests.txt | grep -v '^[[:space:]]*$')
+          if [ "${#kept[@]}" -lt 40 ]; then
+            echo "ci/kept_python_tests.txt lists only ${#kept[@]} files: a short or empty list would run nothing (or everything)" >&2
+            exit 1
+          fi
+          pytest "${kept[@]}" -q -n 4
 
   # Required-status-check gate. Branch protection requires a check named
   # exactly "test". It judges docs-tests and tooling-tests through

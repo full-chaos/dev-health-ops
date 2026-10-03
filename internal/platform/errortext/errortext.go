@@ -64,20 +64,33 @@ func Sanitize(text string) string {
 	return Truncate(Redact(text), defaultMaxErrorTextLength)
 }
 
-// SanitizeHardened is the ONE composition every caller that stores, logs or returns error text uses (CHAOS-7947): the
-// Python-parity pattern pass first (so the recorded Python answer is always applied), then the same patterns with ASCII `\s`/`\b`
-// (what the former RE2 sync port redacted and Python's Unicode word boundary does not), then the credential shapes the Python
+// SanitizeHardened is error_sanitize.py's pattern pass (Python-parity matchers) followed by the credential shapes the Python
 // list never had (LLM-provider, Stripe, Google, Slack and JWT keys by prefix, and a long value behind a credential word,
-// CHAOS-7937), then the cap, so a cap can never cut a key to a fragment below a shape's minimum length. maxLength <= 0 = no cap.
-// It differs from Sanitize only on text holding such a shape (a hardening, not a parity break).
+// CHAOS-7937), then the cap, so a cap can never cut a key to a fragment below a shape's minimum length. maxLength <= 0 = no
+// cap. It is what pythonparity.SanitizeErrorTextHardened always was; it differs from Sanitize only on text holding such a shape.
 func SanitizeHardened(text string, maxLength int) string {
 	if text == "" {
 		return text
 	}
-	return Truncate(logging.RedactCredentialShapes(redactASCII(Redact(text))), maxLength)
+	return Truncate(logging.RedactCredentialShapes(Redact(text)), maxLength)
 }
 
-// SanitizeHardenedDefault is SanitizeHardened with Python's default cap of 4000.
-func SanitizeHardenedDefault(text string) string {
-	return SanitizeHardened(text, defaultMaxErrorTextLength)
+// SanitizeHardenedShapesFirst is the composition of the sync writers' path (CHAOS-7947): the credential shapes FIRST (as that
+// path always did), then the patterns with the former RE2 port's ASCII `\s`/`\b`, then the Python-parity patterns, then the
+// shapes again, then the cap. One engine, two readings: the ASCII pass keeps everything the former RE2 port hid (Python's
+// Unicode `\s` ends a token at a no-break space, RE2's did not; Python sees no boundary between a non-ASCII letter and a key
+// name, RE2 did), the Python pass adds what RE2 missed (a secret behind a no-break space). Every pass only hides more, and the
+// order is the former one: a pass is only ever ADDED after the passes main ran (D4495: a redaction change is monotone). The
+// frozen former port is the reference of TestSyncEntryPointNeverHidesLessThanTheFormerPort.
+func SanitizeHardenedShapesFirst(text string, maxLength int) string {
+	if text == "" {
+		return text
+	}
+	shapes := logging.RedactCredentialShapes
+	return Truncate(shapes(Redact(redactASCII(shapes(text)))), maxLength)
+}
+
+// SanitizeHardenedShapesFirstDefault is SanitizeHardenedShapesFirst with Python's default cap of 4000.
+func SanitizeHardenedShapesFirstDefault(text string) string {
+	return SanitizeHardenedShapesFirst(text, defaultMaxErrorTextLength)
 }

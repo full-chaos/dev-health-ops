@@ -25,8 +25,8 @@ func TestNamedMissesOfTheFormerRE2Port(t *testing.T) {
 	}
 }
 
-// CHAOS-7947: the hardened composition is NEVER weaker than the former RE2 port on a string it redacted. Python's Unicode `\b`
-// does not see a boundary between a non-ASCII letter and a key name; the ASCII pass of SanitizeHardened does (as RE2 did), so
+// CHAOS-7947: the sync writers' hardened composition is NEVER weaker than the former RE2 port on a string it redacted. Python's Unicode `\b`
+// does not see a boundary between a non-ASCII letter and a key name; the ASCII pass of SanitizeHardenedShapesFirst does (as RE2 did), so
 // these still redact. Each wanted value is the former port's own answer, taken from main at beec298d34.
 func TestHardenedKeepsWhatTheFormerPortRedacted(t *testing.T) {
 	rows := []struct{ in, want string }{
@@ -36,8 +36,8 @@ func TestHardenedKeepsWhatTheFormerPortRedacted(t *testing.T) {
 		{"_secretapikeyghr_\u212aclient_secret://secret\u0130", "_secretapikeyghr_\u212a[REDACTED]"},
 	}
 	for _, row := range rows {
-		if got := SanitizeHardened(row.in, 4000); got != row.want {
-			t.Errorf("SanitizeHardened(%q) = %q, want %q", row.in, got, row.want)
+		if got := SanitizeHardenedShapesFirst(row.in, 4000); got != row.want {
+			t.Errorf("SanitizeHardenedShapesFirst(%q) = %q, want %q", row.in, got, row.want)
 		}
 	}
 }

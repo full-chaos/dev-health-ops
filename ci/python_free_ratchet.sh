@@ -215,6 +215,8 @@ compare() {
   : >"${tmp}/listed"
   while IFS= read -r line; do
     case "${line}" in ''|\#*) continue ;; esac
+    # a blank line (only whitespace) is not a row, as in list_rows
+    [ -n "${line//[[:space:]]/}" ] || continue
     IFS=$'\t' read -r pkg test ticket class <<<"${line}"
     if [ -z "${pkg}" ] || [ -z "${test}" ]; then
       die "malformed closed-list row (package<TAB>test<TAB>ticket<TAB>class): ${line}"

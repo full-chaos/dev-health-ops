@@ -717,3 +717,42 @@ def test_the_scope_verb_refuses_a_truncated_list_instead_of_reading_it_as_empty(
     result, out = _listed_verb(tmp_path, "")
     assert result.returncode == 2
     assert not (out / "listed-declared-empty.hits").exists()
+
+
+def test_a_blank_line_is_not_a_row_in_the_state_the_verb_and_compare(
+    tmp_path: Path,
+) -> None:
+    for blank in ("\n", "   \n", "\t\n"):
+        text = HEADER + blank
+        assert _state(tmp_path, text).stdout.strip() == "closed-empty"
+        verb, out = _listed_verb(tmp_path, text)
+        assert verb.returncode == 0, verb.stderr
+        hits = tmp_path / "hits-blank"
+        hits.mkdir(exist_ok=True)
+        (hits / "listed-declared-empty.hits").write_text("")
+        compared = _run(
+            ["bash", str(RATCHET), "compare", str(tmp_path / "known.tsv"), str(hits)]
+        )
+        assert compared.returncode == 0, compared.stderr
+        # a list with a row and a blank line keeps its row and no phantom package
+        rows = _state(
+            tmp_path, HEADER + blank + f"{PKG}\tTestA\tCHAOS-7001\ttripwire\n"
+        )
+        assert rows.stdout.strip() == "rows=1"
+
+
+def test_report_only_compare_accepts_a_headerless_list_with_no_row(
+    tmp_path: Path,
+) -> None:
+    listed = tmp_path / "known.tsv"
+    listed.write_text("# provisional, no header\n")
+    directory = tmp_path / "hits"
+    directory.mkdir()
+    (directory / "a.hits").write_text(f"{PKG}\tTestA\ttripwire\n")
+    reporting = _run(
+        ["bash", str(RATCHET), "compare", str(listed), str(directory)],
+        {"PYTHON_FREE_REPORT_ONLY": "1"},
+    )
+    assert reporting.returncode == 0 and "HIT\t" in reporting.stdout
+    enforcing = _run(["bash", str(RATCHET), "compare", str(listed), str(directory)])
+    assert enforcing.returncode == 2 and "header" in enforcing.stderr

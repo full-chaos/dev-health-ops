@@ -1968,7 +1968,8 @@ check_python_free_listed() {
   local known="${PYTHON_FREE_KNOWN:-${ROOT}/ci/python_free_known.tsv}" package tests index=0 relative
   [ -f "${known}" ] || die "ci/python_free_known.tsv is missing"
   local -a packages=()
-  while IFS= read -r package; do packages+=("${package}"); done < <(grep -v '^#' "${known}" | cut -f1 | sort -u)
+  # a row is a line that is not a comment and not blank (empty or only whitespace): the same definition as python_free_ratchet.sh's list_rows
+  while IFS= read -r package; do packages+=("${package}"); done < <(grep -v -e '^#' -e '^[[:space:]]*$' "${known}" | cut -f1 | sort -u)
   if [ "${#packages[@]}" -eq 0 ]; then
     # CHAOS-8324: an empty list is a DEFINED state: the ratchet is closed (every listed test is frozen). `state` dies on a
     # file without its header, so a truncated list is never read as empty. The scope job then lists no test and runs none;

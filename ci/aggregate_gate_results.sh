@@ -1,7 +1,6 @@
 #!/usr/bin/env bash
 # Verdict for a required status check whose real work happens in path-filtered
-# jobs: `test` (.github/workflows/test.yml), `lint` (lint.yml), and `typecheck`
-# (typecheck.yml).
+# jobs: `test` (.github/workflows/test.yml); go-quality.yml uses it too.
 #
 # CHAOS-3482: the `test` aggregator read only its downstream jobs' results and
 # treated `skipped` as a pass. On 2026-08-06, during a declared GitHub Actions
@@ -41,8 +40,7 @@
 #                    queue has no base/head diff for dorny/paths-filter and
 #                    workflow_dispatch does not run the filter at all, so on
 #                    both of those the job runs unconditionally and a skip is
-#                    never legitimate. Used by test-matrix, lint-job and
-#                    typecheck-mypy.
+#                    never legitimate.
 #   merge-time-only  As above, but excluded outright from pull_request (by
 #                    design, CHAOS-2586 -- the coverage-gated suite runs at
 #                    merge time and on main, not in the iterative PR loop) and

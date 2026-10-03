@@ -211,8 +211,8 @@ bash ci/local_validate.sh
 
 It mirrors the PR-time CI gates of the ops repo and MUST be green before `git push`:
 
-1. `ruff format --check .` and `ruff check .` (== lint.yml)
-2. `mypy --install-types --non-interactive .` (== typecheck.yml)
+1. `ruff format --check .` and `ruff check .` (local only; CI no longer runs ruff)
+2. `mypy --install-types --non-interactive .` (local only; CI no longer runs mypy)
 3. The **FULL** unit suite, byte-for-byte as `ci/run_tests.sh unit_tests()` runs it
    (`pytest tests -m "not benchmark and not clickhouse" --ignore=… -n 4 --dist loadscope`,
    matching CI's `PYTEST_XDIST_WORKERS=4` — the worker count changes the test→worker

@@ -74,12 +74,9 @@ WORKFLOWS_DIR = REPO_ROOT / ".github" / "workflows"
 # Every workflow file this PR (#2242) routes to the self-hosted ARC pool.
 ROUTED_WORKFLOW_FILES = [
     "go-quality.yml",
-    "lint.yml",
-    "typecheck.yml",
     "test.yml",
     "live-e2e.yml",
     "go.yml",
-    "integration.yml",
     "docker-images.yml",
 ]
 
@@ -175,9 +172,7 @@ REQUIRED_CONTEXT_JOBS = {
     # CHAOS-6690: go-quality runs as parallel legs behind a fan-in that keeps the
     # required context name; both are routed by the same ternary.
     "go-quality.yml": ["go-quality-leg", "go-quality"],
-    "lint.yml": ["changes", "lint-job", "lint"],
-    "typecheck.yml": ["typecheck-mypy", "typecheck"],
-    "test.yml": ["changes", "test-matrix", "coverage", "docs-tests", "test"],
+    "test.yml": ["changes", "docs-tests", "tooling-tests", "test"],
     "live-e2e.yml": ["changes", "metrics-executed-proof"],
 }
 
@@ -206,7 +201,7 @@ def test_every_required_context_job_uses_the_allowlist_condition() -> None:
 # only by checking this field directly.
 CACHE_NEGATION_JOBS = {
     "go-quality.yml": "go-quality-leg",
-    "test.yml": "test-matrix",
+    "test.yml": "tooling-tests",
     "live-e2e.yml": "metrics-executed-proof",
 }
 
@@ -262,9 +257,7 @@ _REMAINING_IF_SITES = {
     ("go.yml", "dind-smoke-test"): "if",
     ("docker-images.yml", "dind-smoke-test"): "if",
 }
-_REMAINING_RUNS_ON_SITES = {
-    ("integration.yml", "integration"): "runs-on",
-}
+_REMAINING_RUNS_ON_SITES: dict[tuple[str, str], str] = {}
 # (file, job, matrix-include index for platform == linux/arm64) -> field name
 _REMAINING_MATRIX_SITES = {
     ("docker-images.yml", "go-build"): "runner",
@@ -342,7 +335,7 @@ _CACHE_PATH_STEP_SITES = {
         _CACHE_PATH_STEP_IF_WITH_RELEVANCE,
     ),
     "test.yml": (
-        "test-matrix",
+        "tooling-tests",
         "Configure self-hosted Go cache paths",
         _CACHE_PATH_STEP_IF_PLAIN,
     ),

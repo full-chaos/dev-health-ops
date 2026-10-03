@@ -2,7 +2,7 @@ package analytics
 
 import (
 	"context"
-	"errors"
+	clickhousedriver "github.com/ClickHouse/clickhouse-go/v2"
 	"strings"
 	"testing"
 
@@ -25,15 +25,16 @@ import (
 // this time hiding a telemetry fix rather than a query guard: the
 // injection seam that makes one behaviour testable makes the behaviour
 // BEHIND it untestable, so it needs a test at its own level.
-func TestDefaultRecordDegradation_RecordsDriverCause(t *testing.T) {
+func TestDefaultRecordDegradation_RecordsIdentityNotText(t *testing.T) {
 	recorder := tracetest.NewSpanRecorder()
 	provider := sdktrace.NewTracerProvider(sdktrace.WithSpanProcessor(recorder))
 	t.Cleanup(func() { _ = provider.Shutdown(context.Background()) })
 
 	ctx, span := provider.Tracer("test").Start(context.Background(), "resolve")
 
-	// Real client shape: fixed Error(), cause only via Unwrap().
-	driverErr := errors.New("code: 60, message: Table default.work_item_cycle_times does not exist")
+	// Real client shape: fixed Error(), cause only via Unwrap(). The driver message quotes a table and a value: none of that
+	// text may reach the span (CHAOS-7936); the exception's code and name do (they tell a missing table from a timeout).
+	driverErr := &clickhousedriver.Exception{Code: 60, Name: "UNKNOWN_TABLE", Message: "Table default.planted_table_7936 does not exist for the planted detail of ticket 7936"}
 	wrapped := &fakeOperationError{operation: "query", cause: driverErr}
 
 	defaultRecordDegradation(ctx, "flowMatrix", wrapped)
@@ -50,22 +51,23 @@ func TestDefaultRecordDegradation_RecordsDriverCause(t *testing.T) {
 
 	attrs := map[string]string{}
 	for _, a := range events[0].Attributes {
-		attrs[string(a.Key)] = a.Value.AsString()
+		attrs[string(a.Key)] = a.Value.Emit()
 	}
-
-	if attrs["phase"] != "flowMatrix" {
-		t.Fatalf("phase = %q, want flowMatrix", attrs["phase"])
+	want := map[string]string{
+		"phase":                "flowMatrix",
+		"error.class":          "other",
+		"error.type":           "*proto.Exception",
+		"clickhouse_code":      "60",
+		"clickhouse_exception": "UNKNOWN_TABLE",
 	}
-	// The defect this guards: against the real client, "error" alone is
-	// the fixed "ClickHouse query failed" for EVERY failure.
-	if !strings.Contains(attrs["error"], "ClickHouse query failed") {
-		t.Fatalf("error attr = %q, want the wrapper text", attrs["error"])
+	for key, value := range want {
+		if attrs[key] != value {
+			t.Fatalf("attribute %s = %q, want %q (attributes: %v)", key, attrs[key], value, attrs)
+		}
 	}
-	cause, ok := attrs["error.cause"]
-	if !ok {
-		t.Fatal("no error.cause attribute -- telemetry records only the fixed wrapper string and cannot distinguish a missing table from a timeout")
-	}
-	if !strings.Contains(cause, "code: 60") || !strings.Contains(cause, "work_item_cycle_times") {
-		t.Fatalf("error.cause = %q, want the driver message with code and table", cause)
+	for key, value := range attrs {
+		if key == "error" || key == "error.cause" || strings.Contains(value, "planted") || strings.Contains(value, "ClickHouse query failed") {
+			t.Fatalf("attribute %s = %q carries error text", key, value)
+		}
 	}
 }

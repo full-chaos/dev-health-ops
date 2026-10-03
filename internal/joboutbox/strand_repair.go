@@ -126,6 +126,12 @@ type StrandRepairResult struct {
 	// refused under their own re-proved predicate -- the fence arrived, or the
 	// request moved, between the survey and the write.
 	UndeliveredRaceLost int
+	// PassSkippedIdle is true when no survey ran at all: IdleBackoffStrandRepair
+	// held this pass back because the passes before it saw nothing
+	// (strand_repair_backoff.go). StrandRepair itself never sets it. It is
+	// reported, and counted by ReconcilerLoop, because a pass that did not run
+	// must not read as a pass that ran and found nothing.
+	PassSkippedIdle bool
 }
 
 // retiredKindsObservationCap is deliberately independent of the reconciler's
@@ -849,6 +855,44 @@ const claimStateSQL = `
 // job: same kind, same args, same dedupe key, same domain row. Every kind here
 // already runs with max_attempts > 1, so each handler is required to be
 // re-enterable, and each domain layer fences re-entry with its own claim CAS.
+//
+// # How the survey reaches the outbox (CHAOS-8421)
+//
+// The outbox is bound to its domain row through `args #>> '{domain,id}'`, and
+// worker_job_outbox has no index on that expression. With that binding alone
+// the planner had one way in: a sequential scan of the whole outbox for EVERY
+// candidate domain row. A development stack measured 34 running runs awaiting
+// finalization, so the finalize survey read the 37k-row outbox 34 times per
+// pass, once a second -- 38.7 sequential scans and 1.4 million rows every
+// second, for a survey that returned nothing.
+//
+// The three daily/work-graph shapes therefore ALSO bind the River job to the
+// domain row: `job.args @> {"domain": {"id": <domain id>}}`. River indexes
+// river_job.args with GIN (river_job_args_index), and the outbox is unique on
+// river_job_id, so the planner can now walk domain row -> River job -> outbox
+// row through two indexes, and the cost of a pass no longer includes the size
+// of the outbox at all.
+//
+// The added predicate is redundant by construction, which is what makes it
+// safe: the relay builds a River job's args from the outbox row's own envelope
+// and refuses the insert unless the two agree (inserter.go prepareRow and
+// verifyInsertResult), so the job a row points at through river_job_id always
+// carries that row's domain link. Every earlier predicate is kept, so the
+// result can only be equal to the old one or smaller -- never wider.
+//
+// It is NOT done through dedupe_key, although the canonical key is derived
+// from the domain id and that index exists too. The redrive publishers
+// (PublishRedrivePartitionTx, PublishRedriveFinalizeTx) write keys of the form
+// "<kind>:redrive:<domain id>:<nonce>", those rows strand exactly like the
+// canonical ones, and an equality on the canonical key would drop them from
+// the repair without a trace. The provider-unit shape is different and is left
+// alone: it has always bound the exact key, and already reaches the outbox
+// through uq_worker_job_outbox_dedupe_key.
+//
+// Two facts this rests on are pinned by tests rather than assumed: the GIN
+// index is River's, not ours, so its presence after the pinned River
+// migrations is asserted against a live database; and a River job whose args
+// do not carry the domain link is refused, not rearmed.
 const repairStrandedPartitionSQL = `
 	SELECT outbox.id::text, job.id, outbox.job_kind, outbox.dedupe_key,
 		CASE
@@ -863,6 +907,7 @@ const repairStrandedPartitionSQL = `
 		AND run.org_id::text = outbox.args ->> 'organization_id'
 	JOIN %s AS job
 		ON job.id = outbox.river_job_id
+		AND job.args @> jsonb_build_object('domain', jsonb_build_object('id', partition.id::text))
 	WHERE outbox.job_kind = 'metrics.daily_partition'
 		AND outbox.status = 'delivered'
 		AND outbox.river_job_id IS NOT NULL
@@ -898,6 +943,7 @@ const repairStrandedFinalizeSQL = `
 		AND run.org_id::text = outbox.args ->> 'organization_id'
 	JOIN %s AS job
 		ON job.id = outbox.river_job_id
+		AND job.args @> jsonb_build_object('domain', jsonb_build_object('id', run.id::text))
 	WHERE outbox.job_kind = 'metrics.daily_finalize'
 		AND outbox.status = 'delivered'
 		AND outbox.river_job_id IS NOT NULL
@@ -958,6 +1004,7 @@ const repairStrandedWorkGraphSQL = `
 		AND request.org_id::text = outbox.args ->> 'organization_id'
 	JOIN %s AS job
 		ON job.id = outbox.river_job_id
+		AND job.args @> jsonb_build_object('domain', jsonb_build_object('id', request.id::text))
 	WHERE outbox.job_kind IN (
 			'workgraph.build', 'investment.materialize'
 		)

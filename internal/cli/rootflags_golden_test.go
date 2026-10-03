@@ -7,12 +7,12 @@ import (
 	"io"
 	"os/exec"
 	"path/filepath"
-	"runtime"
 	"sort"
 	"strings"
 	"testing"
 
 	"github.com/full-chaos/dev-health-ops/internal/cli"
+	"github.com/full-chaos/dev-health-ops/internal/testsupport/moduleroot"
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/pyoracle"
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/venueoracle"
 )
@@ -34,7 +34,7 @@ const rootFlagsPythonBuild = "a4847c5e93607451a0c987b314d37e02fc43ce85"
 // environment defaults of the root parser (LOG_LEVEL, POSTGRES_URI, ...) stay
 // each command's own, so the program runs with them unset.
 func TestRootFlagsMatchThePythonRootParser(t *testing.T) {
-	_, currentFile, _, _ := runtime.Caller(0)
+	_, currentFile, _, _ := moduleroot.Caller(0)
 	repoRoot := filepath.Dir(filepath.Dir(filepath.Dir(currentFile)))
 	golden := venueoracle.OpenGolden(t, venueoracle.GoldenSpec{
 		Path:        "testdata/golden/root_flags.json",

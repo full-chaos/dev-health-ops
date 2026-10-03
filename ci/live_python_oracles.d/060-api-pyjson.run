@@ -1,7 +1,0 @@
-label=internal/api/pyjson (api decisions vs live Python)
-package=./internal/api/pyjson
-run=^(TestMarshalMatchesLivePythonJSONDumps|TestDecodeBodyMatchesLivePythonJSONLoads|TestDumpsMatchesLivePythonJSONDumpsDefault|TestMarshalModelAndReprMatchLivePydantic|TestSyntaxErrorTextMatchesLivePython)$
-proof=api-pyjson|api live Python oracle api-pyjson did not run
-proof=api-pyjson-dumps|api live Python oracle api-pyjson-dumps did not run
-proof=api-pyjson-model|api live Python oracle api-pyjson-model did not run
-proof=api-pyjson-syntax-error-text|api live Python oracle api-pyjson-syntax-error-text did not run

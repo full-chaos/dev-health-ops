@@ -34,7 +34,6 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
-	"runtime"
 	"sort"
 	"strings"
 	"sync"
@@ -46,6 +45,7 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/api/oauthprovider"
 	"github.com/full-chaos/dev-health-ops/internal/api/pyjson"
 	"github.com/full-chaos/dev-health-ops/internal/auth/edgetoken"
+	"github.com/full-chaos/dev-health-ops/internal/testsupport/moduleroot"
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/venueoracle"
 )
 
@@ -356,7 +356,7 @@ type Recording struct {
 
 // GoldenPath is the committed Recording.
 func GoldenPath() string {
-	_, file, _, _ := runtime.Caller(0)
+	_, file, _, _ := moduleroot.Caller(0)
 	return filepath.Join(filepath.Dir(file), "testdata", "python_golden.json")
 }
 

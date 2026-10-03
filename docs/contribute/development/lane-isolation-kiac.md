@@ -451,7 +451,7 @@ valkey: { enabled: true, persistence: { enabled: false } }
 
 api: { enabled: true, replicas: 1, autoscaling: { enabled: false } }
 metricsApi: { enabled: true, replicas: 1 }
-web: { enabled: true, replicas: 1, autoscaling: { enabled: false } }
+web: { enabled: true, replicas: 1, autoscaling: { enabled: false }, backendFromRelease: true }  # exactly one of env.BACKEND_URL / backendFromRelease is required (CHAOS-8310); true = http://<fullname>-api:<api.port>
 networkPolicy: { enabled: false }
 ingress: { enabled: false }
 

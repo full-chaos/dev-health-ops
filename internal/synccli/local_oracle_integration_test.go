@@ -5,6 +5,8 @@ package synccli
 import (
 	"bufio"
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -12,6 +14,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	"sort"
 	"strings"
 	"testing"
@@ -20,13 +23,14 @@ import (
 	_ "embed"
 
 	"github.com/ClickHouse/clickhouse-go/v2/lib/driver"
+	"github.com/google/uuid"
 
 	"github.com/full-chaos/dev-health-ops/internal/cli"
 	"github.com/full-chaos/dev-health-ops/internal/localgit"
 	clickhousestore "github.com/full-chaos/dev-health-ops/internal/storage/clickhouse"
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/chschema"
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/containers"
-	"github.com/full-chaos/dev-health-ops/internal/testsupport/pyoracle"
+	"github.com/full-chaos/dev-health-ops/internal/testsupport/venueoracle"
 )
 
 //go:embed testdata/local_sync_oracle.py
@@ -588,7 +592,7 @@ func localScenarios() []localScenario {
 			f.write("staged.txt", "staged\n", 0o644)
 			f.git("add", "staged.txt")
 		}},
-		{name: "blame: symlinks (file, directory, broken, outside) and dotfiles", build: func(f *fixture) {
+		{name: "blame: symlinks (file, directory, broken, broken absolute, outside) and dotfiles", build: func(f *fixture) {
 			f.write("real.txt", "real\n", 0o644)
 			f.write(".hidden", "hidden\n", 0o644)
 			f.write("dir/inner.txt", "inner\n", 0o644)
@@ -600,11 +604,18 @@ func localScenarios() []localScenario {
 			mustSymlink("real.txt", "link-to-file")
 			mustSymlink("dir", "link-to-dir")
 			mustSymlink("nowhere.txt", "broken-link")
+			// A broken link with an ABSOLUTE target at a fixed path that does not exist: the target has no per-run
+			// part, so Python's answer (pathlib's non-strict resolve keeps the target as written) is recorded.
+			mustSymlink("/dho-oracle-missing-dir/absolute-broken.txt", "broken-absolute-link")
+			// A regular file outside the repository, a sibling of the repository directory in the run's own
+			// temporary directory, reached by a RELATIVE link: the link's text is part of the commit, so an
+			// absolute target (the per-run temporary path) would make the commit hash differ between the
+			// recording and the replay. The absolute form of an outside link is not in the frozen corpus.
 			outside := filepath.Join(filepath.Dir(f.dir), "outside.txt")
 			if err := os.WriteFile(outside, []byte("outside\n"), 0o644); err != nil {
 				f.t.Fatal(err)
 			}
-			mustSymlink(outside, "link-outside")
+			mustSymlink("../outside.txt", "link-outside")
 			f.commit("links\n")
 		}},
 		{name: "blame: a .git file and a nested .git directory", build: func(f *fixture) {
@@ -718,11 +729,6 @@ func newLocalOracle(t *testing.T) *localOracle {
 	t.Helper()
 	ctx, cancel := context.WithTimeout(context.Background(), 40*time.Minute)
 	t.Cleanup(cancel)
-	root, err := filepath.Abs(filepath.Join("..", ".."))
-	if err != nil {
-		t.Fatal(err)
-	}
-	python := pyoracle.Resolve(t, root)
 	// Both planes read the same repositories with the same git configuration.
 	t.Setenv("GIT_CONFIG_GLOBAL", "/dev/null")
 	t.Setenv("GIT_CONFIG_SYSTEM", "/dev/null")
@@ -760,9 +766,27 @@ func newLocalOracle(t *testing.T) *localOracle {
 	}
 	goURL := *nativeURL
 	goURL.Path = "/" + goDatabase
+	return &localOracle{t: t, ctx: ctx, admin: admin, pythonDatabase: pythonDatabase, goDB: goDatabase, httpDSN: httpDSN, goDSN: goURL.String()}
+}
 
-	command := exec.Command(python, "-c", localSyncOracleProgram)
-	command.Env = append(os.Environ(), "PYTHONHASHSEED=0", "PYTHONPATH="+filepath.Join(root, "src"))
+// localPythonSettings are the constants of the producer's environment: the closed environment AND part of the
+// golden's request key. The per-scenario variables are passed in each request.
+var localPythonSettings = map[string]string{
+	"PYTHONHASHSEED": "0", "PYTHONDONTWRITEBYTECODE": "1",
+	"GIT_CONFIG_GLOBAL": "/dev/null", "GIT_CONFIG_SYSTEM": "/dev/null", "GIT_CONFIG_NOSYSTEM": "1",
+}
+
+// startPython starts the real Python verb in a long-lived child with a closed environment (the producer only).
+func (o *localOracle) startPython(producer *venueoracle.Producer) {
+	t := o.t
+	t.Helper()
+	producer.RequireDeployed()
+	// The launcher's closed environment: its fixed set and the declared constants (localPythonSettings, in the
+	// golden's key); nothing of the test process's environment.
+	command, err := producer.Command(context.Background(), localPythonSettings, nil, "-c", localSyncOracleProgram)
+	if err != nil {
+		t.Fatal(err)
+	}
 	stdin, err := command.StdinPipe()
 	if err != nil {
 		t.Fatal(err)
@@ -778,7 +802,7 @@ func newLocalOracle(t *testing.T) *localOracle {
 	}
 	t.Cleanup(func() { _ = stdin.Close(); _ = command.Wait() })
 	reader := bufio.NewReaderSize(stdout, 1<<20)
-	ask := func(request map[string]any) map[string]any {
+	o.ask = func(request map[string]any) map[string]any {
 		raw, _ := json.Marshal(request)
 		if _, err := io.WriteString(stdin, string(raw)+"\n"); err != nil {
 			t.Fatalf("python stdin: %v", err)
@@ -793,7 +817,6 @@ func newLocalOracle(t *testing.T) *localOracle {
 		}
 		return answer
 	}
-	return &localOracle{t: t, ctx: ctx, admin: admin, pythonDatabase: pythonDatabase, goDB: goDatabase, httpDSN: httpDSN, goDSN: goURL.String(), ask: ask}
 }
 
 func (o *localOracle) truncate() {
@@ -832,95 +855,258 @@ func setProcessEnv(env map[string]string) func() {
 	}
 }
 
-func TestLocalSyncMatchesLivePython(t *testing.T) {
+// localRecorded is what the Python producer left for one (scenario, target) run: how it ended and the rows it
+// wrote, by table, as the sorted text lines tablesSnapshot reads.
+type localRecorded struct {
+	Name   string              `json:"name"`
+	Target string              `json:"target"`
+	Stage  string              `json:"stage"`
+	Rows   map[string][]string `json:"rows"`
+}
+
+// localRun is one prepared run: the fixture, the arguments both planes take (the analytics database is added
+// per plane) and the variables of the scenario.
+type localRun struct {
+	target string
+	base   []string // after the target, without --analytics-db
+	env    map[string]string
+	// repoIDs names the repository ids a path-derived repo id can take on this run (the SHA-256 of the path
+	// Python or the port hashes), by what was hashed: the fixture directory, its real path, the path as
+	// given. They are per-run values (the temporary directory differs), so rows are compared with them replaced.
+	repoIDs map[string]string
+}
+
+// outsideRepoChain matches the leading `../` chain of the path both planes store for a broken ABSOLUTE symlink whose target is
+// outside the repository (the scenario's "/dho-oracle-missing-dir/absolute-broken.txt"): the path is relative to the repository, so
+// the number of `../` is the depth of the run's temporary directory and differs per run and per machine (TMPDIR=/tmp in CI). The chain
+// is replaced by one placeholder on both planes; the part after it (the target's own name) is still compared. NOT compared here: the
+// depth itself, which is a property of where the test runs; it is pinned by localgit.TestReadFilePinsTheRelativePathOfATargetOutsideTheRepository.
+var outsideRepoChain = regexp.MustCompile(`(?:\.\./)+dho-oracle-missing-dir/`)
+
+// normalizeRepoIDs replaces, in every row of every table, a path-derived repository id with the name of the
+// path it came from, so a golden recorded in one temporary directory compares in another and still pins WHICH
+// path each plane hashed. Ids that are not path-derived (a remote URL, REPO_UUID) stay as they are.
+func normalizeRepoIDs(rows map[string][]string, repoIDs map[string]string) map[string][]string {
+	out := map[string][]string{}
+	for table, lines := range rows {
+		replaced := make([]string, len(lines))
+		for i, line := range lines {
+			for id, label := range repoIDs {
+				line = strings.ReplaceAll(line, id, "<repo-id:"+label+">")
+			}
+			line = outsideRepoChain.ReplaceAllString(line, "<outside-repo>/dho-oracle-missing-dir/")
+			replaced[i] = line
+		}
+		sort.Strings(replaced)
+		out[table] = replaced
+	}
+	return out
+}
+
+func pathRepoIDs(f *fixture, repoPath string) map[string]string {
+	ids := map[string]string{}
+	add := func(label, path string) {
+		if path == "" {
+			return
+		}
+		sum := sha256.Sum256([]byte(path))
+		var id uuid.UUID
+		copy(id[:], sum[:16])
+		if _, taken := ids[id.String()]; !taken {
+			ids[id.String()] = label
+		}
+	}
+	add("dir", f.dir)
+	if real, err := filepath.EvalSymlinks(f.dir); err == nil {
+		add("real", real)
+	}
+	if abs, err := filepath.Abs(repoPath); err == nil {
+		add("arg", abs)
+	}
+	add("arg-raw", repoPath)
+	return ids
+}
+
+// prepareLocalRun empties both databases and builds the arguments of one (scenario, target) run.
+func prepareLocalRun(t *testing.T, oracle *localOracle, scenario localScenario, f *fixture, target string) localRun {
+	t.Helper()
+	oracle.truncate()
+	repoPath := f.dir
+	switch scenario.pathForm {
+	case "symlink":
+		repoPath = filepath.Join(t.TempDir(), "link-to-repo")
+		if err := os.Symlink(f.dir, repoPath); err != nil {
+			t.Fatal(err)
+		}
+	case "relative":
+		cwd, err := os.Getwd()
+		if err != nil {
+			t.Fatal(err)
+		}
+		if repoPath, err = filepath.Rel(cwd, f.dir); err != nil {
+			t.Fatal(err)
+		}
+	case "dots":
+		repoPath = f.dir + "/./"
+	}
+	base := append([]string{"--provider", "local", "--repo-path", repoPath}, scenario.args...)
+	if !scenario.noOrg {
+		base = append(base, "--org", "oracle-org")
+	}
+	env := map[string]string{}
+	for key, value := range scenario.env {
+		env[key] = value
+	}
+	if scenario.envFn != nil {
+		for key, value := range scenario.envFn(f) {
+			env[key] = value
+		}
+	}
+	return localRun{target: target, base: base, env: env, repoIDs: pathRepoIDs(f, repoPath)}
+}
+
+func localTargets(scenario localScenario) []string {
+	if len(scenario.targets) == 0 {
+		return []string{"git", "prs", "blame"}
+	}
+	return scenario.targets
+}
+
+func localFixtureName(scenario localScenario) string {
+	return strings.NewReplacer(" ", "-", ",", "", ":", "", "'", "").Replace(scenario.name)
+}
+
+// localCorpusKey is the golden's request key: every scenario, with its targets, arguments (the repository path
+// is a per-run value and is not in them) and variables; a variable computed from a fixture is named, not valued.
+func localCorpusKey() []byte {
+	type entry struct {
+		Name         string            `json:"name"`
+		Targets      []string          `json:"targets"`
+		Args         []string          `json:"args"`
+		Env          map[string]string `json:"env"`
+		EnvFn        bool              `json:"envFn"`
+		NoOrg        bool              `json:"noOrg"`
+		PathForm     string            `json:"pathForm"`
+		GoRefusesOn  string            `json:"goRefusesOn"`
+		AllOrNothing bool              `json:"allOrNothing"`
+	}
+	var entries []entry
+	for _, scenario := range append(localScenarios(), generatedScenarios()...) {
+		entries = append(entries, entry{scenario.name, localTargets(scenario), scenario.args, scenario.env, scenario.envFn != nil,
+			scenario.noOrg, scenario.pathForm, scenario.goRefusesOn, scenario.allOrNothing})
+	}
+	raw, err := json.Marshal(entries)
+	if err != nil {
+		panic(err)
+	}
+	sum := sha256.Sum256(raw)
+	return []byte("local corpus sha256 " + hex.EncodeToString(sum[:]))
+}
+
+// produceLocal runs every scenario against the REAL Python verb and records how each run ended and what it wrote.
+func produceLocal(t *testing.T, producer *venueoracle.Producer) []localRecorded {
+	t.Helper()
 	oracle := newLocalOracle(t)
-	ctx, admin, ask := oracle.ctx, oracle.admin, oracle.ask
-	pythonDatabase, goDatabase, httpDSN, goDSN, truncate := oracle.pythonDatabase, oracle.goDB, oracle.httpDSN, oracle.goDSN, oracle.truncate
+	oracle.startPython(producer)
+	var recorded []localRecorded
+	for _, scenario := range append(localScenarios(), generatedScenarios()...) {
+		f := newFixture(t, localFixtureName(scenario))
+		scenario.build(f)
+		for _, target := range localTargets(scenario) {
+			run := prepareLocalRun(t, oracle, scenario, f, target)
+			pyArgs := append(append([]string{target}, run.base...), "--analytics-db", oracle.httpDSN)
+			want := oracle.ask(map[string]any{"args": pyArgs, "env": run.env})
+			recorded = append(recorded, localRecorded{scenario.name, target, fmt.Sprint(want["stage"].(map[string]any)["v"]),
+				normalizeRepoIDs(tablesSnapshot(oracle.ctx, t, oracle.admin, oracle.pythonDatabase), run.repoIDs)})
+		}
+	}
+	return recorded
+}
+
+const localPythonBuild = "a4847c5e93607451a0c987b314d37e02fc43ce85"
+
+// TestLocalSyncMatchesFrozenPython compares `dho sync git|prs|blame --provider local` with what the REAL
+// Python verb (build_parser, preflight, run_sync_target, process_local_repo) did over the same fixture
+// repositories: how each run ended and every compared column of the six tables it writes. The answers were
+// executed once on localPythonBuild and are frozen in testdata/golden/local_sync.json (the recipe regenerates
+// them by execution); the scenarios, targets and arguments are the golden's key.
+func TestLocalSyncMatchesFrozenPython(t *testing.T) {
+	repoRoot, err := filepath.Abs(filepath.Join("..", ".."))
+	if err != nil {
+		t.Fatal(err)
+	}
+	golden := venueoracle.OpenGolden(t, venueoracle.GoldenSpec{
+		Path:        "testdata/golden/local_sync.json",
+		PythonBuild: localPythonBuild,
+		SHA256:      "09156a39df42b7ea93aff4cab1f005fe285b4d5687bf96dd7829e679462be68a",
+		Recipe: "git worktree add --detach $DIR " + localPythonBuild + " (with its .venv: uv sync --frozen --no-install-project); then from the repository root: " +
+			"go run ./internal/testsupport/venueoracle/goldenrecord -pkg ./internal/synccli/ -test '^TestLocalSyncMatchesFrozenPython$' -python-root $DIR",
+	})
+	root := golden.PythonRoot(t, repoRoot)
+	request := venueoracle.ProgramRequest("local sync corpus", localSyncOracleProgram, localCorpusKey(), localPythonSettings)
+	answers := golden.Produce(t, root, []venueoracle.Request{request}, func(producer *venueoracle.Producer, _ []venueoracle.Request) []venueoracle.Response {
+		body, err := json.Marshal(produceLocal(t, producer))
+		if err != nil {
+			t.Fatal(err)
+		}
+		return []venueoracle.Response{{Status: 0, Body: venueoracle.PackBody(body)}}
+	})
+	golden.Consumed(t, answers...)
+	var frozen []localRecorded
+	if err := json.Unmarshal([]byte(venueoracle.UnpackBody(t, answers[0].Body)), &frozen); err != nil {
+		t.Fatal(err)
+	}
+
+	oracle := newLocalOracle(t)
+	ctx, admin := oracle.ctx, oracle.admin
+	goDatabase, goDSN := oracle.goDB, oracle.goDSN
 	compared, mismatches, rowsSeen, allOrNothingAsserted := 0, 0, 0, 0
 	perTable := map[string]int{}
+	next := 0
 	for _, scenario := range append(localScenarios(), generatedScenarios()...) {
-		// DHO_ORACLE_SCENARIOS narrows a run to the scenarios whose name contains it
-		// (a debugging aid for kill proofs; a full run leaves it unset).
-		if only := os.Getenv("DHO_ORACLE_SCENARIOS"); only != "" && !strings.Contains(scenario.name, only) {
-			continue
-		}
-		f := newFixture(t, strings.NewReplacer(" ", "-", ",", "", ":", "", "'", "").Replace(scenario.name))
+		f := newFixture(t, localFixtureName(scenario))
 		scenario.build(f)
-		targets := scenario.targets
-		if len(targets) == 0 {
-			targets = []string{"git", "prs", "blame"}
-		}
-		for _, target := range targets {
-			truncate()
-			repoPath := f.dir
-			switch scenario.pathForm {
-			case "symlink":
-				repoPath = filepath.Join(t.TempDir(), "link-to-repo")
-				if err := os.Symlink(f.dir, repoPath); err != nil {
-					t.Fatal(err)
-				}
-			case "relative":
-				cwd, err := os.Getwd()
-				if err != nil {
-					t.Fatal(err)
-				}
-				if repoPath, err = filepath.Rel(cwd, f.dir); err != nil {
-					t.Fatal(err)
-				}
-			case "dots":
-				repoPath = f.dir + "/./"
+		for _, target := range localTargets(scenario) {
+			if next >= len(frozen) || frozen[next].Name != scenario.name || frozen[next].Target != target {
+				t.Fatalf("the golden does not hold the run %q / %s at position %d: the corpus changed without a re-record", scenario.name, target, next)
 			}
-			base := append([]string{target, "--provider", "local", "--repo-path", repoPath}, scenario.args...)
-			if !scenario.noOrg {
-				base = append(base, "--org", "oracle-org")
-			}
-			pyArgs := append(append([]string{}, base...), "--analytics-db", httpDSN)
-			goArgs := append(append([]string{}, base[1:]...), "--analytics-db", goDSN)
-			env := map[string]string{}
-			for key, value := range scenario.env {
-				env[key] = value
-			}
-			if scenario.envFn != nil {
-				for key, value := range scenario.envFn(f) {
-					env[key] = value
-				}
-			}
-			want := ask(map[string]any{"args": pyArgs, "env": env})
-
-			restoreEnv := setProcessEnv(env)
-			code, stdoutText, stderrText := runVerb(t, target, InlineExecutor(InlineDeps{}), goArgs, env)
+			want := frozen[next]
+			next++
+			run := prepareLocalRun(t, oracle, scenario, f, target)
+			goArgs := append(append([]string{}, run.base...), "--analytics-db", goDSN)
+			restoreEnv := setProcessEnv(run.env)
+			code, stdoutText, stderrText := runVerb(t, target, InlineExecutor(InlineDeps{}), goArgs, run.env)
 			restoreEnv()
 
 			// A named divergence: Python writes an instant the ClickHouse client cannot, the
 			// port refuses (exit 1, "outside the range"). Whether Python gets that far can
 			// depend on the git in use (a git that rejects the commit fails both planes), so
 			// the row is asserted only where Python succeeded and compared normally otherwise.
-			if scenario.goRefusesOn == target && fmt.Sprint(want["stage"].(map[string]any)["v"]) == "ok" {
+			if scenario.goRefusesOn == target && want.Stage == "ok" {
 				if code == cli.ExitOK || !strings.Contains(stderrText, "outside the range") {
 					mismatches++
-					t.Errorf("%s / %s: a named divergence must be Python ok and a port refusal, got python %v, go exit %d (%s)", scenario.name, target, want, code, stderrText)
+					t.Errorf("%s / %s: a named divergence must be Python ok and a port refusal, got python %v, go exit %d (%s)", scenario.name, target, want.Stage, code, stderrText)
 				}
 				compared++
 				continue
 			}
-			wantStage := fmt.Sprint(want["stage"].(map[string]any)["v"])
 			gotStage := "ok"
 			if code != cli.ExitOK {
 				gotStage = "failed"
 			}
 			label := scenario.name + " / " + target
 			switch {
-			case wantStage == "ok" && gotStage == "ok":
-			case wantStage != "ok" && gotStage != "ok":
+			case want.Stage == "ok" && gotStage == "ok":
+			case want.Stage != "ok" && gotStage != "ok":
 			default:
 				mismatches++
-				t.Errorf("%s: python ended %v, go exit %d (%s%s)", label, want, code, stdoutText, stderrText)
+				t.Errorf("%s: python ended %v, go exit %d (%s%s)", label, want.Stage, code, stdoutText, stderrText)
 			}
 
-			pythonRows := tablesSnapshot(ctx, t, admin, pythonDatabase)
-			goRows := tablesSnapshot(ctx, t, admin, goDatabase)
+			pythonRows := want.Rows
+			goRows := normalizeRepoIDs(tablesSnapshot(ctx, t, admin, goDatabase), run.repoIDs)
 			compared++
-			if scenario.allOrNothing && wantStage != "ok" && len(pythonRows["git_files"]) > 0 {
+			if scenario.allOrNothing && want.Stage != "ok" && len(pythonRows["git_files"]) > 0 {
 				allOrNothingAsserted++
 				if code == cli.ExitOK || len(goRows["git_files"]) != 0 || len(goRows["git_blame"]) != 0 {
 					mismatches++
@@ -943,10 +1129,10 @@ func TestLocalSyncMatchesLivePython(t *testing.T) {
 			}
 		}
 	}
-	t.Logf("%d scenario runs compared, %d rows seen in the Python tables %v, %d mismatches; %d all-or-nothing divergences asserted", compared, rowsSeen, perTable, mismatches, allOrNothingAsserted)
-	if os.Getenv("DHO_ORACLE_SCENARIOS") != "" {
-		return // a narrowed debugging run: the coverage checks below need the whole corpus
+	if next != len(frozen) {
+		t.Fatalf("the golden holds %d runs, the corpus runs %d", len(frozen), next)
 	}
+	t.Logf("%d scenario runs compared, %d rows seen in the Python tables %v, %d mismatches; %d all-or-nothing divergences asserted", compared, rowsSeen, perTable, mismatches, allOrNothingAsserted)
 	if allOrNothingAsserted < 2 {
 		t.Errorf("only %d runs left Python's earlier batches behind: the all-or-nothing divergence is not exercised", allOrNothingAsserted)
 	}
@@ -958,7 +1144,8 @@ func TestLocalSyncMatchesLivePython(t *testing.T) {
 	if rowsSeen == 0 {
 		t.Fatal("no scenario wrote a row: the corpus does not reach the sink")
 	}
-	writeVenueProof(t)
+	golden.SkipDiff(t)
+	golden.Finish(t)
 }
 
 func equalLines(a, b []string) bool {
@@ -1003,13 +1190,39 @@ func lineDiff(python, goRows []string) string {
 	return fmt.Sprintf("python %d rows, go %d rows\n%s", len(python), len(goRows), strings.Join(out, "\n"))
 }
 
-// A RERUN over a git_pull_requests row another writer filled: the stored-version
-// contract of the port's writer keeps the columns a local source has no field for
-// (R1) where `dev-hops` inserts blindly and CLEARS them. This is a named divergence
-// (decided: the invariant wins, D2598); the test pins both sides so it cannot drift.
-func TestLocalSyncRerunKeepsHeldColumnsUnlikePython(t *testing.T) {
-	oracle := newLocalOracle(t)
-	ctx := oracle.ctx
+// rerunRow is the held row after a rerun, as a plane read it.
+type rerunRow struct {
+	Body      *string `json:"body"`
+	Additions *uint32 `json:"additions"`
+	Reviews   uint32  `json:"reviews"`
+	Title     *string `json:"title"`
+	State     string  `json:"state"`
+}
+
+// seedHeldPullRequest writes the row another writer filled into one database.
+func seedHeldPullRequest(ctx context.Context, t *testing.T, oracle *localOracle, database, id string) {
+	t.Helper()
+	seed := fmt.Sprintf("INSERT INTO %s.git_pull_requests (repo_id, number, title, body, state, created_at, additions, deletions, changed_files, "+
+		"changes_requested_count, reviews_count, comments_count, last_synced, org_id) VALUES (toUUID('%s'), 5, 'held title', 'external body', 'open', "+
+		"toDateTime64('2021-01-01 00:00:00', 3), 7, 2, 3, 1, 4, 5, toDateTime64('2020-01-01 00:00:00', 3), 'oracle-org')", database, id)
+	if err := oracle.admin.Exec(ctx, seed); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func readHeldPullRequest(ctx context.Context, t *testing.T, oracle *localOracle, database string) rerunRow {
+	t.Helper()
+	var row rerunRow
+	query := fmt.Sprintf("SELECT body, additions, reviews_count, title, state FROM %s.git_pull_requests FINAL WHERE number = 5 AND org_id = 'oracle-org'", database)
+	if err := oracle.admin.QueryRow(ctx, query).Scan(&row.Body, &row.Additions, &row.Reviews, &row.Title, &row.State); err != nil {
+		t.Fatalf("%s: %v", database, err)
+	}
+	return row
+}
+
+// rerunFixture builds the rerun fixture and returns its repository id (the id depends on the repository's content, not its path).
+func rerunFixture(ctx context.Context, t *testing.T) (*fixture, string) {
+	t.Helper()
 	f := newFixture(t, "rerun")
 	richRepository(f, "12")
 	repo, err := localgit.Open(f.dir)
@@ -1020,35 +1233,146 @@ func TestLocalSyncRerunKeepsHeldColumnsUnlikePython(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, database := range []string{oracle.pythonDatabase, oracle.goDB} {
-		seed := fmt.Sprintf("INSERT INTO %s.git_pull_requests (repo_id, number, title, body, state, created_at, additions, deletions, changed_files, "+
-			"changes_requested_count, reviews_count, comments_count, last_synced, org_id) VALUES (toUUID('%s'), 5, 'held title', 'external body', 'open', "+
-			"toDateTime64('2021-01-01 00:00:00', 3), 7, 2, 3, 1, 4, 5, toDateTime64('2020-01-01 00:00:00', 3), 'oracle-org')", database, id)
-		if err := oracle.admin.Exec(ctx, seed); err != nil {
+	return f, id.String()
+}
+
+// A RERUN over a git_pull_requests row another writer filled: the stored-version
+// contract of the port's writer keeps the columns a local source has no field for
+// (R1) where `dev-hops` inserts blindly and CLEARS them. This is a named divergence
+// (decided: the invariant wins, D2598); the test pins both sides so it cannot drift: Python's side is
+// frozen in testdata/golden/local_rerun.json, the port's is run.
+func TestLocalSyncRerunKeepsHeldColumnsUnlikePythonFrozen(t *testing.T) {
+	repoRoot, err := filepath.Abs(filepath.Join("..", ".."))
+	if err != nil {
+		t.Fatal(err)
+	}
+	golden := venueoracle.OpenGolden(t, venueoracle.GoldenSpec{
+		Path:        "testdata/golden/local_rerun.json",
+		PythonBuild: localPythonBuild,
+		SHA256:      "bb0224d28b4ff52079d76762425c05d3fff2eb3a8e7ff7517ccf30f8915f25b0",
+		Recipe: "git worktree add --detach $DIR " + localPythonBuild + " (with its .venv: uv sync --frozen --no-install-project); then from the repository root: " +
+			"go run ./internal/testsupport/venueoracle/goldenrecord -pkg ./internal/synccli/ -test '^TestLocalSyncRerunKeepsHeldColumnsUnlikePythonFrozen$' -python-root $DIR",
+	})
+	root := golden.PythonRoot(t, repoRoot)
+	request := venueoracle.ProgramRequest("local sync rerun over a held row", localSyncOracleProgram, []byte("held pull request 5; prs rerun"), localPythonSettings)
+	answers := golden.Produce(t, root, []venueoracle.Request{request}, func(producer *venueoracle.Producer, _ []venueoracle.Request) []venueoracle.Response {
+		oracle := newLocalOracle(t)
+		oracle.startPython(producer)
+		f, id := rerunFixture(oracle.ctx, t)
+		seedHeldPullRequest(oracle.ctx, t, oracle, oracle.pythonDatabase, id)
+		base := []string{"--provider", "local", "--repo-path", f.dir, "--org", "oracle-org"}
+		want := oracle.ask(map[string]any{"args": append(append([]string{"prs"}, base...), "--analytics-db", oracle.httpDSN)})
+		if fmt.Sprint(want["stage"].(map[string]any)["v"]) != "ok" {
+			t.Fatalf("python did not finish: %v", want)
+		}
+		body, err := json.Marshal(readHeldPullRequest(oracle.ctx, t, oracle, oracle.pythonDatabase))
+		if err != nil {
 			t.Fatal(err)
 		}
+		return []venueoracle.Response{{Status: 0, Body: venueoracle.PackBody(body)}}
+	})
+	golden.Consumed(t, answers...)
+	var py rerunRow
+	if err := json.Unmarshal([]byte(venueoracle.UnpackBody(t, answers[0].Body)), &py); err != nil {
+		t.Fatal(err)
 	}
+
+	oracle := newLocalOracle(t)
+	ctx := oracle.ctx
+	f, id := rerunFixture(ctx, t)
+	seedHeldPullRequest(ctx, t, oracle, oracle.goDB, id)
 	base := []string{"--provider", "local", "--repo-path", f.dir, "--org", "oracle-org"}
-	if want := oracle.ask(map[string]any{"args": append(append([]string{"prs"}, base...), "--analytics-db", oracle.httpDSN)}); fmt.Sprint(want["stage"].(map[string]any)["v"]) != "ok" {
-		t.Fatalf("python did not finish: %v", want)
-	}
 	if code, out, errText := runVerb(t, "prs", InlineExecutor(InlineDeps{}), append(append([]string{}, base...), "--analytics-db", oracle.goDSN), map[string]string{}); code != cli.ExitOK {
 		t.Fatalf("go exit %d: %s%s", code, out, errText)
 	}
-	read := func(database string) (body *string, additions *uint32, reviews uint32, title *string, state string) {
-		query := fmt.Sprintf("SELECT body, additions, reviews_count, title, state FROM %s.git_pull_requests FINAL WHERE number = 5 AND org_id = 'oracle-org'", database)
-		if err := oracle.admin.QueryRow(ctx, query).Scan(&body, &additions, &reviews, &title, &state); err != nil {
-			t.Fatalf("%s: %v", database, err)
+	got := readHeldPullRequest(ctx, t, oracle, oracle.goDB)
+	if py.Body != nil || py.Additions != nil || py.Reviews != 0 || py.Title != nil || py.State != "open" {
+		t.Errorf("python clears what it has no field for: %+v", py)
+	}
+	if got.Body == nil || *got.Body != "external body" || got.Additions == nil || *got.Additions != 7 || got.Reviews != 4 || got.Title != nil || got.State != "open" {
+		t.Errorf("the port keeps the held columns and states the rest: %+v", got)
+	}
+	golden.SkipDiff(t)
+	golden.Finish(t)
+}
+
+// outsideLinkRepo builds a repository whose link-outside entry points at a regular file outside it: relatively
+// (the form the frozen corpus holds) or by an ABSOLUTE path in the run's temporary directory (the form it cannot
+// hold, because the link text is in the commit and the path differs per run).
+func outsideLinkRepo(t *testing.T, name string, absolute bool) *fixture {
+	t.Helper()
+	f := newFixture(t, name)
+	f.write("real.txt", "real\n", 0o644)
+	outside := filepath.Join(filepath.Dir(f.dir), "outside.txt")
+	if err := os.WriteFile(outside, []byte("outside\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	target := "../outside.txt"
+	if absolute {
+		target = outside
+	}
+	if err := os.Symlink(target, filepath.Join(f.dir, "link-outside")); err != nil {
+		t.Fatal(err)
+	}
+	f.commit("links\n")
+	return f
+}
+
+// withoutHashes drops the commit hash column (the commit holds the link text, which differs between the two
+// forms by construction) and names the path-derived repository id, so the two repositories compare on the rest.
+func withoutHashes(lines []string) []string {
+	out := make([]string, len(lines))
+	for i, line := range lines {
+		parts := strings.Split(line, "\x1f")
+		kept := parts[:0]
+		for _, part := range parts {
+			if strings.HasPrefix(part, "commit_hash=") || strings.HasPrefix(part, "repo_id=") {
+				continue
+			}
+			kept = append(kept, part)
 		}
-		return
+		out[i] = strings.Join(kept, "\x1f")
 	}
-	pyBody, pyAdditions, pyReviews, pyTitle, pyState := read(oracle.pythonDatabase)
-	goBody, goAdditions, goReviews, goTitle, goState := read(oracle.goDB)
-	if pyBody != nil || pyAdditions != nil || pyReviews != 0 || pyTitle != nil || pyState != "open" {
-		t.Errorf("python clears what it has no field for: body=%v additions=%v reviews=%d title=%v state=%s", pyBody, pyAdditions, pyReviews, pyTitle, pyState)
+	sort.Strings(out)
+	return out
+}
+
+// TestLocalSyncBlameAbsoluteOutsideLinkMatchesRelative closes the gap the frozen corpus has (its outside link is
+// relative): an ABSOLUTE link to a file outside the repository must give the same git_files and git_blame rows,
+// compared without the hash columns, as the relative link, and the outside file must never be blamed. The
+// absolute target takes the same path in localgit.resolve: filepath.EvalSymlinks follows both forms
+// (internal/localgit/blame.go:83); only a BROKEN link tests IsAbs (blame.go:98).
+func TestLocalSyncBlameAbsoluteOutsideLinkMatchesRelative(t *testing.T) {
+	oracle := newLocalOracle(t)
+	rows := map[bool]map[string][]string{}
+	for _, absolute := range []bool{false, true} {
+		name := "outside-relative"
+		if absolute {
+			name = "outside-absolute"
+		}
+		f := outsideLinkRepo(t, name, absolute)
+		oracle.truncate()
+		args := []string{"--provider", "local", "--repo-path", f.dir, "--org", "oracle-org", "--analytics-db", oracle.goDSN}
+		if code, out, errText := runVerb(t, "blame", InlineExecutor(InlineDeps{}), args, map[string]string{}); code != cli.ExitOK {
+			t.Fatalf("%s: exit %d: %s%s", name, code, out, errText)
+		}
+		rows[absolute] = tablesSnapshot(oracle.ctx, t, oracle.admin, oracle.goDB)
 	}
-	if goBody == nil || *goBody != "external body" || goAdditions == nil || *goAdditions != 7 || goReviews != 4 || goTitle != nil || goState != "open" {
-		t.Errorf("the port keeps the held columns and states the rest: body=%v additions=%v reviews=%d title=%v state=%s", goBody, goAdditions, goReviews, goTitle, goState)
+	for _, table := range []string{"git_files", "git_blame"} {
+		relative, absolute := withoutHashes(rows[false][table]), withoutHashes(rows[true][table])
+		if !equalLines(relative, absolute) {
+			t.Errorf("table %s: the absolute outside link differs from the relative one\n%s", table, lineDiff(relative, absolute))
+		}
 	}
-	writeVenueProof(t)
+	if len(rows[true]["git_blame"]) != 1 || !strings.Contains(rows[true]["git_blame"][0], "path=real.txt") {
+		t.Errorf("only real.txt is blamed (the outside file never is): %v", rows[true]["git_blame"])
+	}
+	for _, line := range rows[true]["git_blame"] {
+		if strings.Contains(line, "line=outside") {
+			t.Errorf("the outside file was blamed: %q", line)
+		}
+	}
+	if len(rows[true]["git_files"]) < 2 {
+		t.Errorf("git_files holds %d rows, want the repository file and the link's resolved entry: %v", len(rows[true]["git_files"]), rows[true]["git_files"])
+	}
 }

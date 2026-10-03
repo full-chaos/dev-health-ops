@@ -1,4 +1,4 @@
 # Every file under internal/testsupport/venueoracle/testdata: sha256, kind, path. Written by `go run ./internal/testsupport/recordedfiles/manifest`; never edit it by hand.
 # python-recorded set: e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855 (0 files)
 # header-before-stamp set: e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855 (0 files)
-81a979eb37a2dc0645b4b8c3514195e760558e8250bd595ac4498ecffc41a20c	hand-written	legacy_python_env_goldens.txt
+546e215fef4966f5fbcfce1a9c328d1480f9137069c98a1fecb253a439e1638d	hand-written	legacy_python_env_goldens.txt

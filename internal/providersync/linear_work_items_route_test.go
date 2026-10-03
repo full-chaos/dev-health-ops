@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"github.com/full-chaos/dev-health-ops/internal/testsupport/fakehttp"
 	"io"
 	"net/http"
 	"strings"
@@ -44,7 +45,7 @@ func (doer *linearWorkItemsDoer) Do(request *http.Request) (*http.Response, erro
 func linearWorkItemsClient(t *testing.T, doer providerfoundation.HTTPDoer) *providerfoundation.HTTPClient {
 	t.Helper()
 	client, err := providerfoundation.NewHTTPClient(
-		"linear", "https://api.linear.app", doer,
+		"linear", "https://api.linear.app", fakehttp.Client(doer),
 		func(*http.Request) error { return nil },
 		providerfoundation.RetryPolicy{MaxAttempts: 1, InitialWait: time.Nanosecond, MaxWait: time.Nanosecond},
 		providerfoundation.LeaseGuardFunc(func(context.Context) error { return nil }),
@@ -84,7 +85,7 @@ func TestLinearWorkItemsRouteNormalizesLiveIssueAndHistory(t *testing.T) {
 	batch, err := (LinearWorkItemsRouteHandler{PerPage: 50, MaxPages: 10, FetchCycles: &noCycles}).Collect(
 		context.Background(), claim,
 		providerfoundation.Credential{Provider: "linear", ID: claim.CredentialID},
-		linearWorkItemsClient(t, doer), normalizedAt,
+		linearWorkItemsClient(t, fakehttp.Client(doer)), normalizedAt,
 	)
 	if err != nil {
 		t.Fatal(err)
@@ -184,7 +185,7 @@ func TestLinearWorkItemsRouteCountsFailedAndRetriedAttempts(t *testing.T) {
 	normalizedAt := time.Date(2026, 8, 3, 12, 0, 0, 0, time.UTC)
 	noCycles := false
 	client, err := providerfoundation.NewHTTPClient(
-		"linear", "https://api.linear.app", doer,
+		"linear", "https://api.linear.app", fakehttp.Client(doer),
 		func(*http.Request) error { return nil },
 		providerfoundation.RetryPolicy{
 			MaxAttempts: 2, InitialWait: time.Nanosecond, MaxWait: time.Nanosecond,
@@ -227,7 +228,7 @@ func TestLinearWorkItemsRouteFailsClosedOnGraphQLErrorsAndCaps(t *testing.T) {
 			doer := &linearWorkItemsDoer{responses: testCase.responses}
 			_, err := testCase.handler.Collect(context.Background(), claim,
 				providerfoundation.Credential{Provider: "linear", ID: claim.CredentialID},
-				linearWorkItemsClient(t, doer), time.Date(2026, 8, 3, 12, 0, 0, 0, time.UTC))
+				linearWorkItemsClient(t, fakehttp.Client(doer)), time.Date(2026, 8, 3, 12, 0, 0, 0, time.UTC))
 			if err == nil || !strings.Contains(err.Error(), testCase.want.Error()) {
 				t.Fatalf("error=%v want=%v", err, testCase.want)
 			}
@@ -269,7 +270,7 @@ func TestLinearWorkItemsRouteCollectsRawLinearSurfaces(t *testing.T) {
 	batch, err := (LinearWorkItemsRouteHandler{}).Collect(
 		context.Background(), claim,
 		providerfoundation.Credential{Provider: "linear", ID: claim.CredentialID},
-		linearWorkItemsClient(t, doer), normalizedAt,
+		linearWorkItemsClient(t, fakehttp.Client(doer)), normalizedAt,
 	)
 	if err != nil {
 		t.Fatal(err)
@@ -369,7 +370,7 @@ func TestLinearWorkItemsRouteFetchControlsSuppressOptionalRawFacts(t *testing.T)
 	batch, err := (LinearWorkItemsRouteHandler{FetchComments: &no, FetchHistory: &no, FetchCycles: &no}).Collect(
 		context.Background(), claim,
 		providerfoundation.Credential{Provider: "linear", ID: claim.CredentialID},
-		linearWorkItemsClient(t, doer), time.Date(2026, 8, 3, 12, 0, 0, 0, time.UTC),
+		linearWorkItemsClient(t, fakehttp.Client(doer)), time.Date(2026, 8, 3, 12, 0, 0, 0, time.UTC),
 	)
 	if err != nil {
 		t.Fatal(err)
@@ -400,7 +401,7 @@ func TestLinearWorkItemsRouteCompletesTruncatedNativeRelations(t *testing.T) {
 	batch, err := (LinearWorkItemsRouteHandler{FetchCycles: boolPointer(false)}).Collect(
 		context.Background(), claim,
 		providerfoundation.Credential{Provider: "linear", ID: claim.CredentialID},
-		linearWorkItemsClient(t, doer), time.Date(2026, 8, 3, 12, 0, 0, 0, time.UTC),
+		linearWorkItemsClient(t, fakehttp.Client(doer)), time.Date(2026, 8, 3, 12, 0, 0, 0, time.UTC),
 	)
 	if err != nil {
 		t.Fatal(err)
@@ -435,7 +436,7 @@ func TestLinearWorkItemsRoutePaginatesCommentsWithinPythonBound(t *testing.T) {
 	batch, err := (LinearWorkItemsRouteHandler{FetchCycles: boolPointer(false)}).Collect(
 		context.Background(), claim,
 		providerfoundation.Credential{Provider: "linear", ID: claim.CredentialID},
-		linearWorkItemsClient(t, doer), time.Date(2026, 8, 3, 12, 0, 0, 0, time.UTC),
+		linearWorkItemsClient(t, fakehttp.Client(doer)), time.Date(2026, 8, 3, 12, 0, 0, 0, time.UTC),
 	)
 	if err != nil {
 		t.Fatal(err)
@@ -469,7 +470,7 @@ func TestLinearWorkItemsRouteFailsClosedWhenCommentsExceedBound(t *testing.T) {
 	_, err := (LinearWorkItemsRouteHandler{FetchCycles: boolPointer(false)}).Collect(
 		context.Background(), claim,
 		providerfoundation.Credential{Provider: "linear", ID: claim.CredentialID},
-		linearWorkItemsClient(t, doer), time.Date(2026, 8, 3, 12, 0, 0, 0, time.UTC),
+		linearWorkItemsClient(t, fakehttp.Client(doer)), time.Date(2026, 8, 3, 12, 0, 0, 0, time.UTC),
 	)
 	if !errors.Is(err, ErrPaginationCapExceeded) {
 		t.Fatalf("error=%v, want comment pagination cap", err)
@@ -497,7 +498,7 @@ func TestLinearReferenceTeamAndSprintCacheMirrorPythonResolution(t *testing.T) {
 	batch, err := handler.Collect(
 		context.Background(), claim,
 		providerfoundation.Credential{Provider: "linear", ID: claim.CredentialID},
-		linearWorkItemsClient(t, doer), now,
+		linearWorkItemsClient(t, fakehttp.Client(doer)), now,
 	)
 	if err != nil {
 		t.Fatal(err)
@@ -538,10 +539,10 @@ func TestLinearReferenceTeamRejectsForeignProviderAndUsesFallbacks(t *testing.T)
 func TestLinearWorkItemsRouteRejectsInvalidScopeAndLease(t *testing.T) {
 	t.Parallel()
 	claim := nativeTestClaim("linear", "work-items")
-	client := linearWorkItemsClient(t, &linearWorkItemsDoer{responses: []string{
+	client := linearWorkItemsClient(t, fakehttp.Client(&linearWorkItemsDoer{responses: []string{
 		linearTeamResponse(),
 		`{"data":{"issues":{"nodes":[],"pageInfo":{"hasNextPage":false,"endCursor":null}}}}`,
-	}})
+	}}))
 	validCredential := providerfoundation.Credential{Provider: "linear", ID: claim.CredentialID}
 	normalizedAt := time.Date(2026, 8, 3, 12, 0, 0, 0, time.UTC)
 	for _, testCase := range []struct {
@@ -567,7 +568,7 @@ func TestLinearWorkItemsRouteRejectsInvalidScopeAndLease(t *testing.T) {
 		})
 	}
 	leaseLostClient, err := providerfoundation.NewHTTPClient(
-		"linear", "https://api.linear.app", &linearWorkItemsDoer{},
+		"linear", "https://api.linear.app", fakehttp.Client(&linearWorkItemsDoer{}),
 		func(*http.Request) error { return nil },
 		providerfoundation.RetryPolicy{MaxAttempts: 1, InitialWait: time.Nanosecond, MaxWait: time.Nanosecond},
 		providerfoundation.LeaseGuardFunc(func(context.Context) error {

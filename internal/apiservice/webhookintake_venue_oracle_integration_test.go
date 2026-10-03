@@ -11,7 +11,6 @@ import (
 	"fmt"
 	"path/filepath"
 	"regexp"
-	"runtime"
 	"sort"
 	"strings"
 	"testing"
@@ -22,6 +21,7 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/platform/secrets"
 	"github.com/full-chaos/dev-health-ops/internal/providerfoundation"
 	"github.com/full-chaos/dev-health-ops/internal/storage/valkey"
+	"github.com/full-chaos/dev-health-ops/internal/testsupport/moduleroot"
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/venueoracle"
 	"github.com/jackc/pgx/v5/pgxpool"
 	valkeygo "github.com/valkey-io/valkey-go"
@@ -33,7 +33,7 @@ import (
 // apiservice imports -- an import cycle otherwise).
 func webhookintakeRepoRoot(t *testing.T) string {
 	t.Helper()
-	_, currentFile, _, ok := runtime.Caller(0)
+	_, currentFile, _, ok := moduleroot.Caller(0)
 	if !ok {
 		t.Fatal("resolve package path")
 	}

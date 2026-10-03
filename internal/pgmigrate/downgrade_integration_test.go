@@ -10,7 +10,6 @@ import (
 	"io"
 	"net"
 	"net/url"
-	"os"
 	"os/exec"
 	"path/filepath"
 	"reflect"
@@ -45,35 +44,23 @@ var (
 	upgradePythonSettings   = map[string]string{"PYTHONHASHSEED": "0", "OTEL_ENABLED": "false", "DEV_HEALTH_ALLOW_CELERY_RIVER_CUTOVER": "1"}
 )
 
-func downgradePythonEnv(root string, settings map[string]string) []string {
-	env := []string{"PATH=" + os.Getenv("PATH"), "HOME=" + os.Getenv("HOME"), "PYTHONPATH=" + filepath.Join(root, "src"), "PYTHONDONTWRITEBYTECODE=1"}
-	names := make([]string, 0, len(settings))
-	for name := range settings {
-		names = append(names, name)
-	}
-	sort.Strings(names)
-	for _, name := range names {
-		env = append(env, name+"="+settings[name])
-	}
-	return env
-}
-
 // pythonDowngrade runs the real `dev-hops migrate postgres downgrade <target>` (Alembic's real downgrade,
 // `command.downgrade`) against uri.
-func pythonDowngrade(t *testing.T, root, uri, target string) (code int, output string) {
+func pythonDowngrade(t *testing.T, producer *venueoracle.Producer, uri, target string) (code int, output string) {
 	t.Helper()
-	python := pyoracle.Resolve(t, root)
-	command := exec.Command(python, "-c", downgradePythonProgram, "migrate", "postgres", "downgrade", target)
 	pyURI := strings.Replace(uri, "postgres://", "postgresql://", 1)
-	command.Env = append(downgradePythonEnv(root, downgradePythonSettings), "POSTGRES_URI="+pyURI, "DATABASE_URI="+pyURI)
+	command, err := producer.Command(context.Background(), downgradePythonSettings, []string{"POSTGRES_URI=" + pyURI, "DATABASE_URI=" + pyURI}, "-c", downgradePythonProgram, "migrate", "postgres", "downgrade", target)
+	if err != nil {
+		t.Fatal(err)
+	}
 	var stdout, stderr bytes.Buffer
 	command.Stdout, command.Stderr = &stdout, &stderr
-	err := command.Run()
+	err = command.Run()
 	exitCode := 0
 	if exitErr, ok := err.(*exec.ExitError); ok {
 		exitCode = exitErr.ExitCode()
 	} else if err != nil {
-		t.Fatalf("running the python producer: %v", pyoracle.RunError(python, err, []byte(stderr.String())))
+		t.Fatalf("running the python producer: %v", pyoracle.RunError(command.Path, err, []byte(stderr.String())))
 	}
 	return exitCode, stdout.String() + stderr.String()
 }
@@ -138,7 +125,7 @@ func newDownInstance(t *testing.T) downInstance {
 
 // at is a scratch database at chain revision k of the Go chain (k = 0 is the baseline,
 // len(chain) the head): the baseline plus the first k chain files, built by dho's own
-// upgrade (which TestBaselineVenueOracleIsTheExecutedPythonUpgrade holds equal to the
+// upgrade (which TestBaselineIsTheFrozenPythonUpgrade holds equal to the
 // Python upgrade at every chain revision).
 func (d downInstance) at(t *testing.T, k int) string {
 	t.Helper()
@@ -610,41 +597,43 @@ var downgradeTargets = []string{"0144", "0141", "0139", "0138", "0145"}
 
 // produceDowngrade runs every cell of the oracle against the REAL Python producer (databases built by dho's own
 // upgrade, at the production shape) and returns what it left.
-func produceDowngrade(t *testing.T, root string) downgradeRecorded {
+func produceDowngrade(t *testing.T, producer *venueoracle.Producer) downgradeRecorded {
 	t.Helper()
 	d := newDownInstance(t)
 	chain, _ := pgmigrate.LoadChain()
 	recorded := downgradeRecorded{Targets: map[string]recordedTarget{}, Relative: map[string]int{}}
 	for _, target := range downgradeTargets {
 		uri := d.at(t, len(chain))
-		code, output := pythonDowngrade(t, root, uri, target)
+		code, output := pythonDowngrade(t, producer, uri, target)
 		if code != 0 {
 			t.Fatalf("the real Python downgrade %s failed (exit %d): %s", target, code, output)
 		}
 		recorded.Targets[target] = recordedTarget{Code: code, Shape: schemaShape(t, uri), Versions: alembicVersions(t, uri)}
 	}
 	for _, target := range []string{"-1", "-2"} {
-		code, _ := pythonDowngrade(t, root, d.at(t, len(chain)), target)
+		code, _ := pythonDowngrade(t, producer, d.at(t, len(chain)), target)
 		recorded.Relative[target] = code
 	}
 	failing := d.at(t, len(chain))
 	insertSetupRevocation(t, failing)
 	recorded.Failing.ShapeBefore = schemaShape(t, failing)
-	recorded.Failing.Code, _ = pythonDowngrade(t, root, failing, "0140")
+	recorded.Failing.Code, _ = pythonDowngrade(t, producer, failing, "0140")
 	recorded.Failing.ShapeAfter = schemaShape(t, failing)
 	single := d.at(t, len(chain))
 	if _, err := connect(t, single).Exec(context.Background(), "DELETE FROM alembic_version WHERE version_num = '0066'"); err != nil {
 		t.Fatal(err)
 	}
-	recorded.SingleHead.Code, _ = pythonDowngrade(t, root, single, "-1")
+	recorded.SingleHead.Code, _ = pythonDowngrade(t, producer, single, "-1")
 	recorded.SingleHead.Shape = schemaShape(t, single)
 	up := d.at(t, 0)
 	if _, err := connect(t, up).Exec(context.Background(), "SELECT 1 AS conflict INTO webhook_sync_requests"); err != nil {
 		t.Fatal(err)
 	}
 	recorded.Upgrade.StartVersions = alembicVersions(t, up)
-	upgrade := exec.Command(pyoracle.Resolve(t, root), "-c", upgradeProgram, up, "head")
-	upgrade.Env = downgradePythonEnv(root, upgradePythonSettings)
+	upgrade, err := producer.Command(context.Background(), upgradePythonSettings, nil, "-c", upgradeProgram, up, "head")
+	if err != nil {
+		t.Fatal(err)
+	}
 	_, upgradeErr := upgrade.CombinedOutput()
 	recorded.Upgrade.Failed = upgradeErr != nil
 	recorded.Upgrade.Versions = alembicVersions(t, up)
@@ -679,8 +668,7 @@ func TestDowngradeMatchesFrozenPythonDowngrade(t *testing.T) {
 	}
 	request := venueoracle.ProgramRequest("downgrade cells", downgradePythonProgram, input, downgradePythonSettings)
 	answers := golden.Produce(t, root, []venueoracle.Request{request}, func(producer *venueoracle.Producer, _ []venueoracle.Request) []venueoracle.Response {
-		root := producer.Root
-		body, err := json.Marshal(produceDowngrade(t, root))
+		body, err := json.Marshal(produceDowngrade(t, producer))
 		if err != nil {
 			t.Fatal(err)
 		}

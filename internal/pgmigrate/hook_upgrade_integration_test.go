@@ -8,8 +8,6 @@ import (
 	"crypto/rand"
 	"encoding/hex"
 	"os"
-	"os/exec"
-	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -18,7 +16,6 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/pgmigrate"
 	"github.com/full-chaos/dev-health-ops/internal/rivermigrate"
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/containers"
-	"github.com/full-chaos/dev-health-ops/internal/testsupport/pyoracle"
 )
 
 // oldestSupportedProdHead is the newest Alembic application revision a production database may
@@ -28,19 +25,8 @@ import (
 // when no deployed database is at the old revision any more.
 const oldestSupportedProdHead = "0138"
 
-// eraProgram builds a database as an older release left it: Alembic upgraded to
-// revision <argv[2]> on the application branch, plus the Celery-to-River cutover branch (0066)
-// production has applied. It is the Python hook of the old release, run at the old head.
-const eraProgram = `
-import sys
-from alembic import command
-from dev_health_ops.db import normalize_async_postgres_uri
-from dev_health_ops.migrate import _make_alembic_config
-
-cfg = _make_alembic_config(normalize_async_postgres_uri(sys.argv[1]))
-command.upgrade(cfg, sys.argv[2])
-command.upgrade(cfg, "0066")
-`
+// hookStatesSHA256 pins testdata/golden/hook_states.json (the record verb rewrites it).
+const hookStatesSHA256 = "ab83e1405e206337f020a56bebf9a13e01ebedf2fcb3d22968423346fcb88be7"
 
 // TestHookVerbUpgradesAnOldProductionDatabaseToTheAlembicHead is the differential behind
 // CHAOS-6801. A production database that is at an older Alembic head must be brought to the head by
@@ -48,7 +34,7 @@ command.upgrade(cfg, "0066")
 // `dho migrate postgres upgrade`), and the result must be the database the real Alembic upgrade
 // builds from the same starting point: same schema, same recorded heads, same seeded rows.
 //
-// It is the executed proof the empty-database differential (TestBaselineVenueOracleIsTheExecutedPythonUpgrade)
+// It is the executed proof the empty-database differential (TestBaselineIsTheFrozenPythonUpgrade)
 // cannot give: that one applies the baseline to an EMPTY database, the one starting point the hook
 // never has in production. Trap #415: it runs the verb the hook runs, not a stand-in.
 func TestHookVerbUpgradesAnOldProductionDatabaseToTheAlembicHead(t *testing.T) {
@@ -62,33 +48,24 @@ func TestHookVerbUpgradesAnOldProductionDatabaseToTheAlembicHead(t *testing.T) {
 		t.Fatal("this test dumps databases with the server's own pg_dump and needs a container instance, not a remote DSN")
 	}
 	admin := connect(t, instance.URI)
-	root, err := filepath.Abs(filepath.Join("..", ".."))
-	if err != nil {
-		t.Fatal(err)
-	}
-	python := pyoracle.Resolve(t, root)
+	golden, frozen := openStatesGolden(t, "testdata/golden/hook_states.json", hookStatesSHA256, "TestHookVerbUpgradesAnOldProductionDatabaseToTheAlembicHead",
+		[]stateSpec{{Kind: "era", Revisions: []string{oldestSupportedProdHead}}, {Kind: "era-head", Revisions: []string{oldestSupportedProdHead}}})
 
 	t.Setenv(pgmigrate.CutoverEnv, "1")
 	t.Setenv(pgmigrate.RiverSchemaEnv, productionSettings.RiverSchema)
 	os.Unsetenv("MIGRATION_DATABASE_URI")
-	runPython := func(program string, args ...string) {
-		t.Helper()
-		command := exec.Command(python, append([]string{"-c", program}, args...)...)
-		command.Env = append(os.Environ(), "PYTHONPATH="+filepath.Join(root, "src"))
-		if output, err := command.CombinedOutput(); err != nil {
-			t.Fatalf("python failed: %v", pyoracle.RunError(python, err, output))
-		}
-	}
-
 	// 1. the old release's database.
-	eraDB := scratchDatabase(t, admin)
-	runPython(eraProgram, databaseURI(t, instance.URI, eraDB), oldestSupportedProdHead)
+	// The REAL Python (the old release's hook, run at the old head) built it once; the frozen capture is restored
+	// here and asserted (heads, tables, row counts) before the hook sees it.
+	eraName := "era:" + oldestSupportedProdHead
+	eraRestored := frozen.restoreState(t, ctx, instance, admin, eraName)
+	eraDB := eraRestored.database
 	era := capture(t, ctx, instance, eraDB, window{})
 	if want := []string{"0066", oldestSupportedProdHead}; strings.Join(era.Heads, ",") != strings.Join(want, ",") {
 		t.Fatalf("the old-release database records heads %v, want %v", era.Heads, want)
 	}
 
-	// 2. two identical forks of it (no connection may be open on the template).
+	// 2. a fork of it (no connection may be open on the template).
 	if _, err := admin.Exec(ctx, "SELECT pg_terminate_backend(pid) FROM pg_stat_activity WHERE datname = '"+eraDB+"' AND pid <> pg_backend_pid()"); err != nil {
 		t.Fatal(err)
 	}
@@ -100,17 +77,13 @@ func TestHookVerbUpgradesAnOldProductionDatabaseToTheAlembicHead(t *testing.T) {
 		t.Cleanup(func() { _, _ = admin.Exec(context.Background(), "DROP DATABASE IF EXISTS "+name+" WITH (FORCE)") })
 		return name
 	}
-	alembicDB, hookDB := fork(), fork()
-	// The captures replace a timestamp stamped inside their window (padded by 2 s) with now(). The
-	// old release's own seed rows were stamped just before this point and both forks carry them:
-	// keep them outside every window, or the fork whose window starts closer to them is normalised
-	// and the other is not (a 1.7 s gap failed exactly that way).
+	hookDB := fork()
+	// The capture replaces a timestamp stamped inside its window (padded by 2 s) with now(). The era's
+	// seed rows carry a fixed literal stamp (the recording replaced theirs by eraStampLiteral), so they
+	// stay literal: a hook that rewrote one would show. Keep the pause so the window never reaches them.
 	time.Sleep(3 * time.Second)
 
-	// 3a. the truth: the real Alembic upgrade of the old database to head.
-	alembicStarted := time.Now()
-	runPython(upgradeProgram, databaseURI(t, instance.URI, alembicDB), "head")
-	alembicWindow := window{alembicStarted, time.Now()}
+	// 3a. the truth: the real Alembic upgrade of the old database to head, frozen (see above).
 
 	// 3b. the hook's verb, exactly as the migrate Job runs its first step.
 	hookStarted := time.Now()
@@ -138,8 +111,7 @@ func TestHookVerbUpgradesAnOldProductionDatabaseToTheAlembicHead(t *testing.T) {
 	hookWindow := window{hookStarted, time.Now()}
 
 	// 4. same database.
-	alembicCapture := capture(t, ctx, instance, alembicDB, alembicWindow)
-	alembicCapture.Cutover, alembicCapture.RiverSchema = productionSettings.Cutover, productionSettings.RiverSchema
+	alembicCapture := frozen.state(t, "era-head:"+oldestSupportedProdHead).Capture
 	hookCapture := capture(t, ctx, instance, hookDB, hookWindow)
 	hookCapture.Cutover, hookCapture.RiverSchema = productionSettings.Cutover, productionSettings.RiverSchema
 	alembicCanonical := roundTrip(t, ctx, instance, admin, alembicCapture)
@@ -147,6 +119,8 @@ func TestHookVerbUpgradesAnOldProductionDatabaseToTheAlembicHead(t *testing.T) {
 	if diff := compare(hookCanonical, alembicCanonical); diff != "" {
 		t.Fatalf("the migrate hook's verb built a different database from a %s database than the Alembic upgrade: %s", oldestSupportedProdHead, diff)
 	}
+	golden.SkipDiff(t)
+	golden.Finish(t)
 }
 
 // scratchDatabaseName returns a fresh random database name (the caller creates and drops it).

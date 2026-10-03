@@ -15,6 +15,7 @@ import (
 	"encoding/pem"
 	"errors"
 	"fmt"
+	"github.com/full-chaos/dev-health-ops/internal/testsupport/fakehttp"
 	"io"
 	"net/http"
 	"net/url"
@@ -171,7 +172,7 @@ func (d *bodyDoer) Do(request *http.Request) (*http.Response, error) {
 func TestHTTPClientSurfacesStatusPathAndBodyOnFailure(t *testing.T) {
 	t.Parallel()
 	doer := &bodyDoer{status: http.StatusBadRequest, body: `{"errorMessages":["The value 'bogus' does not exist for the field 'project'."]}`}
-	client, err := NewHTTPClient("jira", "https://acme.atlassian.net", doer, func(request *http.Request) error {
+	client, err := NewHTTPClient("jira", "https://acme.atlassian.net", fakehttp.Client(doer), func(request *http.Request) error {
 		request.SetBasicAuth("dev@acme.test", "token")
 		return nil
 	}, RetryPolicy{MaxAttempts: 1, InitialWait: time.Nanosecond, MaxWait: time.Nanosecond}, LeaseGuardFunc(func(context.Context) error { return nil }))
@@ -213,7 +214,7 @@ func TestHTTPClientSurfacesStatusPathAndBodyOnFailure(t *testing.T) {
 func TestHTTPClientRedactsCredentialShapedBodyOnFailure(t *testing.T) {
 	t.Parallel()
 	doer := &bodyDoer{status: http.StatusBadRequest, body: `see https://user:hunter2@internal.example.com/debug for detail`}
-	client, err := NewHTTPClient("jira", "https://acme.atlassian.net", doer, func(request *http.Request) error {
+	client, err := NewHTTPClient("jira", "https://acme.atlassian.net", fakehttp.Client(doer), func(request *http.Request) error {
 		request.SetBasicAuth("dev@acme.test", "token")
 		return nil
 	}, RetryPolicy{MaxAttempts: 1, InitialWait: time.Nanosecond, MaxWait: time.Nanosecond}, LeaseGuardFunc(func(context.Context) error { return nil }))
@@ -315,7 +316,7 @@ func TestGitHubSecondaryLimitBodyClassification(t *testing.T) {
 func TestHTTPClientRetriesOnlyWithinConfiguredBudget(t *testing.T) {
 	t.Parallel()
 	doer := &sequenceDoer{statuses: []int{http.StatusServiceUnavailable, http.StatusOK}}
-	client, err := NewHTTPClient("gitlab", "https://gitlab.example", doer, TokenAuth("Authorization", "Bearer ", secrets.NewValue("token")), RetryPolicy{MaxAttempts: 2, InitialWait: time.Nanosecond, MaxWait: time.Nanosecond}, LeaseGuardFunc(func(context.Context) error { return nil }))
+	client, err := NewHTTPClient("gitlab", "https://gitlab.example", fakehttp.Client(doer), TokenAuth("Authorization", "Bearer ", secrets.NewValue("token")), RetryPolicy{MaxAttempts: 2, InitialWait: time.Nanosecond, MaxWait: time.Nanosecond}, LeaseGuardFunc(func(context.Context) error { return nil }))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -346,7 +347,7 @@ func TestGitHubAppClientMintsInstallationTokenWithoutGlobalState(t *testing.T) {
 	privateKey := string(pem.EncodeToMemory(&pem.Block{Type: "RSA PRIVATE KEY", Bytes: x509.MarshalPKCS1PrivateKey(key)}))
 	credential := Credential{Provider: "github", fields: map[string]secrets.Value{"app_id": secrets.NewValue("1"), "private_key": secrets.NewValue(privateKey), "installation_id": secrets.NewValue("2")}}
 	doer := &githubAppDoer{}
-	client, err := NewGitHubClient(credential, doer, RetryPolicy{MaxAttempts: 1, InitialWait: time.Nanosecond, MaxWait: time.Nanosecond}, LeaseGuardFunc(func(context.Context) error { return nil }))
+	client, err := NewGitHubClient(credential, fakehttp.Client(doer), RetryPolicy{MaxAttempts: 1, InitialWait: time.Nanosecond, MaxWait: time.Nanosecond}, LeaseGuardFunc(func(context.Context) error { return nil }))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -624,7 +625,7 @@ func TestHTTPClientsReplaceEveryDoerErrorWithTheirOwnClass(t *testing.T) {
 	doer := HTTPDoerFunc(func(*http.Request) (*http.Response, error) {
 		return nil, &url.Error{Op: "Get", URL: "https://api.example.test/x?token=canary-query", Err: errors.New(`malformed HTTP status code "canary-status"`)}
 	})
-	client, err := NewHTTPClient("github", "https://api.example.test", doer, func(*http.Request) error { return nil },
+	client, err := NewHTTPClient("github", "https://api.example.test", fakehttp.Client(doer), func(*http.Request) error { return nil },
 		RetryPolicy{MaxAttempts: 1, InitialWait: time.Nanosecond, MaxWait: time.Nanosecond}, LeaseGuardFunc(func(context.Context) error { return nil }))
 	if err != nil {
 		t.Fatal(err)

@@ -2,7 +2,7 @@ package syncdispatchruntime
 
 import (
 	"context"
-	"log/slog"
+	"github.com/full-chaos/dev-health-ops/internal/syncdispatchruntime/synclog"
 	"sync"
 
 	"github.com/jackc/pgx/v5"
@@ -113,7 +113,7 @@ func flushRollupBumpTally(ctx context.Context, metrics *providerfoundation.Metri
 		for i := 0; i < n; i++ {
 			metrics.RecordSyncRunRollupBumped("failed", path)
 		}
-		slog.Debug("sync_run.rollup_bumped", slog.String("outcome", "failed"), slog.String("path", path), slog.Int("count", n))
+		synclog.Default().Debug(context.Background(), synclog.MsgSyncRunRollupBumped, synclog.Text(synclog.KeyOutcome, synclog.LabelFailed), synclog.Text(synclog.KeyPath, synclog.ParseLabel(path)), synclog.Count(synclog.KeyCount, n))
 		delete(tally.counts, path)
 	}
 }

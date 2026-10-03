@@ -3,6 +3,7 @@ package providersync
 import (
 	"bytes"
 	"compress/gzip"
+	"github.com/full-chaos/dev-health-ops/internal/testsupport/fakehttp"
 	"io"
 	"net/http"
 	"strconv"
@@ -119,7 +120,7 @@ func TestGitHubTestsDockerBuildArtifactsExcludedBeforeDownload(t *testing.T) {
 			"integration-junit",
 		},
 	}
-	walk, err := walkGitHubTestsChunksResult(t, githubTestsClient(t, doer), 4)
+	walk, err := walkGitHubTestsChunksResult(t, githubTestsClient(t, fakehttp.Client(doer)), 4)
 	if err != nil {
 		t.Fatalf("dockerbuild artifacts sank the unit: err=%v, want them excluded, not fatal", err)
 	}
@@ -159,7 +160,7 @@ func TestGitHubTestsDockerBuildArtifactExclusionBookkeeping(t *testing.T) {
 			"integration-junit",
 		},
 	}
-	walk, err := walkGitHubTestsChunksResult(t, githubTestsClient(t, doer), 4)
+	walk, err := walkGitHubTestsChunksResult(t, githubTestsClient(t, fakehttp.Client(doer)), 4)
 	if err != nil {
 		t.Fatalf("dockerbuild artifact sank the unit: err=%v, want it excluded, not fatal", err)
 	}
@@ -262,7 +263,7 @@ func TestGitHubTestsExcludedArtifactSampleNameIsBounded(t *testing.T) {
 		t:     t,
 		names: []string{longName, "integration-junit"},
 	}
-	walk, err := walkGitHubTestsChunksResult(t, githubTestsClient(t, doer), 4)
+	walk, err := walkGitHubTestsChunksResult(t, githubTestsClient(t, fakehttp.Client(doer)), 4)
 	if err != nil {
 		t.Fatalf("walk returned err=%v", err)
 	}
@@ -306,7 +307,7 @@ func TestGitHubTestsDockerBuildArtifactsDoNotConsumePerRunArtifactCap(t *testing
 		},
 	}
 	claim := nativeTestClaim("github", "cicd")
-	client := githubTestsClient(t, doer)
+	client := githubTestsClient(t, fakehttp.Client(doer))
 	walk := walkGitHubTestsChunks(t, GitHubTestsRouteHandler{MaxArtifactsPerRun: 2}, claim, client, 4)
 
 	if walk.cursor.Phase != "done" {

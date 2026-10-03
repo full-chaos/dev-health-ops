@@ -14,7 +14,6 @@ import (
 	"log/slog"
 	"net/url"
 	"os"
-	"path/filepath"
 	"reflect"
 	"strings"
 	"sync"
@@ -26,8 +25,6 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/pgmigrate"
 	"github.com/full-chaos/dev-health-ops/internal/platform/secrets"
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/containers"
-	"github.com/full-chaos/dev-health-ops/internal/testsupport/pyoracle"
-	"github.com/full-chaos/dev-health-ops/internal/testsupport/venueoracle"
 )
 
 // The preflight's oracle is the hook itself. For every state of a grid, the
@@ -42,7 +39,7 @@ import (
 //
 // TestPreflightMatchesTheHookOverTheStateGrid builds the grid with dho itself (a
 // truncated chain leaves a database at that revision; the baseline test proves dho's
-// databases equal Python's). TestPreflightVenueOracleOverRealAlembicStates builds
+// databases equal Python's). TestPreflightMatchesTheHookOverFrozenAlembicStates builds
 // the states that need Python (below the baseline) and the ones the Python upgrade
 // leaves, with the real Alembic.
 
@@ -625,30 +622,30 @@ func TestPreflightIsReadOnly(t *testing.T) {
 	}
 }
 
-// TestPreflightVenueOracleOverRealAlembicStates is the live-Python oracle: the states
-// are built by the REAL Python Alembic upgrade (below the baseline included), the
-// verdict is compared with the real hook on a copy.
-func TestPreflightVenueOracleOverRealAlembicStates(t *testing.T) {
-	if os.Getenv("DEV_HEALTH_LIVE_PYTHON_ORACLES") != "1" {
-		t.Skip("the live Python producer runs only with DEV_HEALTH_LIVE_PYTHON_ORACLES=1 and the full project Python environment")
-	}
+// preflightStatesSHA256 pins testdata/golden/preflight_states.json (the record verb rewrites it).
+const preflightStatesSHA256 = "e9d527247318f7872deba23ff4751eaa1cd7c14e54bea214187c2edf87d2a036"
+
+// TestPreflightMatchesTheHookOverFrozenAlembicStates is the Python-built-state oracle: the states
+// are built by the REAL Python Alembic upgrade (below the baseline included), executed once and frozen
+// (frozen_states_integration_test.go), restored and asserted before use; the verdict is compared with
+// the real hook on a copy. No Python starts here (CHAOS-7797).
+func TestPreflightMatchesTheHookOverFrozenAlembicStates(t *testing.T) {
 	ctx := context.Background()
 	productionEnv(t)
 	t.Setenv("MIGRATION_DATABASE_URI", "")
 	os.Unsetenv("MIGRATION_DATABASE_URI")
 	baseline, current := currentBuild(t)
 	instance, admin := startInstance(t)
-	root, err := filepath.Abs(filepath.Join("..", ".."))
-	if err != nil {
-		t.Fatal(err)
+	specs := []stateSpec{upgradeSpec("0137", "0066"), upgradeSpec("0138", "0066"), upgradeSpec("0138"), upgradeSpec("head")}
+	for index := 0; index < len(current.chain)-1; index++ {
+		specs = append(specs, upgradeSpec(current.chain[index].Revision, "0066"))
 	}
-	python := pyoracle.Resolve(t, root)
+	golden, frozen := openStatesGolden(t, "testdata/golden/preflight_states.json", preflightStatesSHA256, "TestPreflightMatchesTheHookOverFrozenAlembicStates", specs)
 
+	// pythonState is the database the real Python upgrade left at the revisions: the frozen capture restored.
 	pythonState := func(revisions ...string) string {
 		t.Helper()
-		database := scratchDatabase(t, admin)
-		pythonUpgrade(t, python, root, databaseURI(t, instance.URI, database), revisions...)
-		return database
+		return frozen.restoreState(t, ctx, instance, admin, strings.Join(revisions, "+")).database
 	}
 	type state struct {
 		name, database, verdict, reason string
@@ -671,9 +668,8 @@ func TestPreflightVenueOracleOverRealAlembicStates(t *testing.T) {
 			checkAgainstHook(t, ctx, admin, instance, s.name, s.database, productionSettings, baseline, current, s.verdict, s.reason)
 		})
 	}
-	if !t.Failed() {
-		venueoracle.WriteProof(t)
-	}
+	golden.SkipDiff(t)
+	golden.Finish(t)
 }
 
 // pauseAfterVersionCheck is a query tracer that stops the connection right after the

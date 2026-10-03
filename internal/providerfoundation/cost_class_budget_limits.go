@@ -13,6 +13,10 @@ var costClassBudgetLimits = map[string]int{
 	"heavy":  1,
 }
 
+// CostClassBudgetLimitSource names where every limit of the table comes from, for the start lines that print them: the
+// table above, never an environment variable or a config value (CHAOS-8201).
+const CostClassBudgetLimitSource = "table"
+
 // CostClassBudgetLimit returns the concurrent-request limit of a cost class.
 // ok is false for a class outside the table; callers decide what an unknown
 // class means (the dispatch guard keeps its configured clamp, the worker

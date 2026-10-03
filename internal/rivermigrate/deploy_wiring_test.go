@@ -4,17 +4,17 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
-	"runtime"
 	"strings"
 	"testing"
 
+	"github.com/full-chaos/dev-health-ops/internal/testsupport/moduleroot"
 	"gopkg.in/yaml.v3"
 )
 
 // repoFile reads a file relative to the repository root.
 func repoFile(t *testing.T, relative string) []byte {
 	t.Helper()
-	_, filename, _, ok := runtime.Caller(0)
+	_, filename, _, ok := moduleroot.Caller(0)
 	if !ok {
 		t.Fatal("locate test")
 	}

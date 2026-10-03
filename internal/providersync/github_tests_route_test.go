@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"github.com/full-chaos/dev-health-ops/internal/testsupport/fakehttp"
 	"io"
 	"net/http"
 	"reflect"
@@ -78,7 +79,7 @@ func (doer *githubTestsRouteDoer) Do(request *http.Request) (*http.Response, err
 
 func githubTestsClient(t *testing.T, doer providerfoundation.HTTPDoer) *providerfoundation.HTTPClient {
 	t.Helper()
-	client, err := providerfoundation.NewHTTPClient("github", "https://api.github.com", doer, func(request *http.Request) error { request.Header.Set("Authorization", "Bearer secret"); return nil }, providerfoundation.RetryPolicy{MaxAttempts: 1, InitialWait: time.Nanosecond, MaxWait: time.Nanosecond}, providerfoundation.LeaseGuardFunc(func(context.Context) error { return nil }))
+	client, err := providerfoundation.NewHTTPClient("github", "https://api.github.com", fakehttp.Client(doer), func(request *http.Request) error { request.Header.Set("Authorization", "Bearer secret"); return nil }, providerfoundation.RetryPolicy{MaxAttempts: 1, InitialWait: time.Nanosecond, MaxWait: time.Nanosecond}, providerfoundation.LeaseGuardFunc(func(context.Context) error { return nil }))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -159,7 +160,7 @@ func TestGitHubTestsRouteEmitsSixCompleteEffectsAndStripsRedirectAuth(t *testing
 	now := time.Date(2026, 7, 23, 12, 30, 0, 456789000, time.UTC)
 	doer := &githubTestsRouteDoer{t: t, archive: githubTestsZip(t, map[string]string{"junit.xml": githubTestsJUnitFixture, "lcov.info": githubTestsLCOVFixture})}
 	claim := nativeTestClaim("github", "tests")
-	batch, err := (GitHubTestsRouteHandler{}).Collect(context.Background(), claim, providerfoundation.Credential{}, githubTestsClient(t, doer), now)
+	batch, err := (GitHubTestsRouteHandler{}).Collect(context.Background(), claim, providerfoundation.Credential{}, githubTestsClient(t, fakehttp.Client(doer)), now)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -206,7 +207,7 @@ func TestGitHubTestsRouteEmitsSixCompleteEffectsAndStripsRedirectAuth(t *testing
 func TestGitHubTestsRouteExcludesFeatureBranchArtifactsLikePythonProducer(t *testing.T) {
 	doer := &githubTestsRouteDoer{t: t, headBranch: "feature", archive: githubTestsZip(t, map[string]string{"junit.xml": githubTestsJUnitFixture})}
 	claim := nativeTestClaim("github", "tests")
-	batch, err := (GitHubTestsRouteHandler{}).Collect(context.Background(), claim, providerfoundation.Credential{}, githubTestsClient(t, doer), time.Now())
+	batch, err := (GitHubTestsRouteHandler{}).Collect(context.Background(), claim, providerfoundation.Credential{}, githubTestsClient(t, fakehttp.Client(doer)), time.Now())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -226,7 +227,7 @@ func TestGitHubTestsRouteExcludesFeatureBranchArtifactsLikePythonProducer(t *tes
 
 func TestGitHubTestsRouteKeepsPythonDateFloorArtifactSelectionIndependent(t *testing.T) {
 	doer := &githubTestsRouteDoer{t: t, artifactOnly: true, archive: githubTestsZip(t, map[string]string{"junit.xml": githubTestsJUnitFixture})}
-	batch, err := (GitHubTestsRouteHandler{}).Collect(context.Background(), nativeTestClaim("github", "tests"), providerfoundation.Credential{}, githubTestsClient(t, doer), time.Now())
+	batch, err := (GitHubTestsRouteHandler{}).Collect(context.Background(), nativeTestClaim("github", "tests"), providerfoundation.Credential{}, githubTestsClient(t, fakehttp.Client(doer)), time.Now())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -242,7 +243,7 @@ func TestGitHubTestsRouteKeepsPythonDateFloorArtifactSelectionIndependent(t *tes
 func TestGitHubTestsRouteFailsClosedOnRunPaginationCap(t *testing.T) {
 	doer := &githubTestsRouteDoer{t: t, capRuns: true}
 	claim := nativeTestClaim("github", "tests")
-	batch, err := (GitHubTestsRouteHandler{MaxRuns: githubTestsMaxRuns}).Collect(context.Background(), claim, providerfoundation.Credential{}, githubTestsClient(t, doer), time.Now())
+	batch, err := (GitHubTestsRouteHandler{MaxRuns: githubTestsMaxRuns}).Collect(context.Background(), claim, providerfoundation.Credential{}, githubTestsClient(t, fakehttp.Client(doer)), time.Now())
 	if !errors.Is(err, ErrPaginationCapExceeded) {
 		t.Fatalf("error=%v", err)
 	}
@@ -255,7 +256,7 @@ func TestGitHubTestsRouteDefaultCollectsMoreThanTwoPagesOfInWindowRuns(t *testin
 	doer := &githubTestsHighVolumeDoer{t: t}
 	claim := nativeTestClaim("github", "cicd")
 	batch, err := (GitHubTestsRouteHandler{}).Collect(
-		context.Background(), claim, providerfoundation.Credential{}, githubTestsClient(t, doer),
+		context.Background(), claim, providerfoundation.Credential{}, githubTestsClient(t, fakehttp.Client(doer)),
 		time.Date(2026, 7, 23, 12, 30, 0, 0, time.UTC),
 	)
 	if err != nil {
@@ -275,7 +276,7 @@ func TestGitHubTestsRouteDefaultCollectsMoreThanTwoPagesOfInWindowRuns(t *testin
 func TestGitHubTestsRouteFetchFailureCannotCommitEffectsOrWatermark(t *testing.T) {
 	doer := &githubTestsRouteDoer{t: t, failJobs: true}
 	claim := nativeTestClaim("github", "tests")
-	batch, err := (GitHubTestsRouteHandler{}).Collect(context.Background(), claim, providerfoundation.Credential{}, githubTestsClient(t, doer), time.Now())
+	batch, err := (GitHubTestsRouteHandler{}).Collect(context.Background(), claim, providerfoundation.Credential{}, githubTestsClient(t, fakehttp.Client(doer)), time.Now())
 	if err == nil {
 		t.Fatal("expected job inventory failure")
 	}
@@ -294,7 +295,7 @@ func TestGitHubTestsRoutePreservesValidReportsAndRecordsSkippedMember(t *testing
 	claim := nativeTestClaim("github", "tests")
 	batch, err := (GitHubTestsRouteHandler{}).Collect(
 		context.Background(), claim, providerfoundation.Credential{},
-		githubTestsClient(t, doer), now,
+		githubTestsClient(t, fakehttp.Client(doer)), now,
 	)
 	if err != nil {
 		t.Fatal(err)
@@ -389,7 +390,7 @@ func TestGitHubTestsRouteUnsafeArchiveFailureRemainsFailClosed(t *testing.T) {
 	claim := nativeTestClaim("github", "tests")
 	batch, err := (GitHubTestsRouteHandler{}).Collect(
 		context.Background(), claim, providerfoundation.Credential{},
-		githubTestsClient(t, doer), time.Now(),
+		githubTestsClient(t, fakehttp.Client(doer)), time.Now(),
 	)
 	if !errors.Is(err, ErrGitHubTestsIncomplete) {
 		t.Fatalf("error=%v", err)
@@ -404,7 +405,7 @@ func TestGitHubTestsRouteRetryProducesStableEffects(t *testing.T) {
 	claim := nativeTestClaim("github", "tests")
 	collect := func() CompleteRouteBatch {
 		doer := &githubTestsRouteDoer{t: t, archive: githubTestsZip(t, map[string]string{"junit.xml": githubTestsJUnitFixture, "lcov.info": githubTestsLCOVFixture})}
-		batch, err := (GitHubTestsRouteHandler{}).Collect(context.Background(), claim, providerfoundation.Credential{}, githubTestsClient(t, doer), now)
+		batch, err := (GitHubTestsRouteHandler{}).Collect(context.Background(), claim, providerfoundation.Credential{}, githubTestsClient(t, fakehttp.Client(doer)), now)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -420,7 +421,7 @@ func TestGitHubCICDAndTestsAliasesEmitTheSameCompleteEffects(t *testing.T) {
 	now := time.Date(2026, 7, 23, 12, 30, 0, 456789000, time.UTC)
 	collect := func(dataset string) CompleteRouteBatch {
 		doer := &githubTestsRouteDoer{t: t, archive: githubTestsZip(t, map[string]string{"junit.xml": githubTestsJUnitFixture, "lcov.info": githubTestsLCOVFixture})}
-		batch, err := (GitHubTestsRouteHandler{}).Collect(context.Background(), nativeTestClaim("github", dataset), providerfoundation.Credential{}, githubTestsClient(t, doer), now)
+		batch, err := (GitHubTestsRouteHandler{}).Collect(context.Background(), nativeTestClaim("github", dataset), providerfoundation.Credential{}, githubTestsClient(t, fakehttp.Client(doer)), now)
 		if err != nil {
 			t.Fatal(err)
 		}

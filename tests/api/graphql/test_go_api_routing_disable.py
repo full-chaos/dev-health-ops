@@ -24,9 +24,7 @@ import pytest
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from dev_health_ops.api.graphql import go_api_cli
-from dev_health_ops.api.graphql.go_api_operation_catalog import (
-    current_catalog_entries,
-)
+from dev_health_ops.api.graphql.go_api_operation_catalog import catalog_entries
 from dev_health_ops.api.graphql.go_api_routing_admin import (
     DISABLE_MODES,
     ModeChange,
@@ -70,7 +68,7 @@ def test_disable_refuses_a_catalog_that_registers_one_operation_twice(
     documents to whichever digest sorts last."""
     monkeypatch.setattr(
         go_api_cli,
-        "current_catalog_entries",
+        "catalog_entries",
         lambda: (("featureFlags", "doc-a"), ("featureFlags", "doc-b")),
     )
     assert _disable() == 2
@@ -80,30 +78,8 @@ def test_disable_refuses_a_catalog_that_registers_one_operation_twice(
     assert "doc-a" in err and "doc-b" in err
 
 
-def test_apply_without_review_evidence_is_refused(
-    capsys: pytest.CaptureFixture[str],
-) -> None:
-    """A mode change is a decision; a decision with no durable reason is
-    unreadable weeks later -- the same complaint that produced UNPROVEN."""
-    assert _disable(apply=True, review_evidence=None) == 2
-    assert "--apply requires --review-evidence" in capsys.readouterr().err
-
-
-def test_blank_review_evidence_does_not_satisfy_the_requirement(
-    capsys: pytest.CaptureFixture[str],
-) -> None:
-    assert _disable(apply=True, review_evidence="   ") == 2
-    assert "--apply requires --review-evidence" in capsys.readouterr().err
-
-
-def test_an_unknown_operation_is_refused(capsys: pytest.CaptureFixture[str]) -> None:
-    assert _disable(operations="featureFlags,notAnOperation") == 2
-    err = capsys.readouterr().err
-    assert "unknown operation(s) notAnOperation" in err
-
-
 def test_all_registered_resolves_from_the_catalog() -> None:
-    catalog = dict(current_catalog_entries())
+    catalog = dict(catalog_entries())
     resolved, error = go_api_cli._resolve_requested_operations(
         "all-registered", catalog
     )

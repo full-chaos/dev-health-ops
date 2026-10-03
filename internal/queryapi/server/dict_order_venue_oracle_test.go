@@ -12,7 +12,6 @@ import (
 	"net/http/httptest"
 	"path/filepath"
 	"regexp"
-	"runtime"
 	"strings"
 	"testing"
 	"time"
@@ -28,6 +27,7 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/queryapi/investmentexplain"
 	"github.com/full-chaos/dev-health-ops/internal/queryapi/people"
 	chclickhouse "github.com/full-chaos/dev-health-ops/internal/storage/clickhouse"
+	"github.com/full-chaos/dev-health-ops/internal/testsupport/moduleroot"
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/venueoracle"
 )
 
@@ -188,7 +188,7 @@ type dictOrderPythonAnswer struct {
 // with an error fails too: it compares no dict.
 func TestVenueOracleQueryAPIDictOrder(t *testing.T) {
 	ctx := context.Background()
-	_, file, _, _ := runtime.Caller(0)
+	_, file, _, _ := moduleroot.Caller(0)
 	root := filepath.Clean(filepath.Join(filepath.Dir(file), "..", "..", ".."))
 	// The ids are named, not random: the recording and every frozen run seed and send the same ones.
 	orgID := stableVenueID("dict-order/org").String()

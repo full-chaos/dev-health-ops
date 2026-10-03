@@ -2,9 +2,9 @@ package recommendations
 
 import (
 	"path/filepath"
-	"runtime"
 	"testing"
 
+	"github.com/full-chaos/dev-health-ops/internal/testsupport/moduleroot"
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/programoracle"
 )
 
@@ -47,7 +47,7 @@ func frozenPython(t *testing.T, golden string, programs ...programoracle.Program
 // repositoryRoot is the repository root, from this file's own location.
 func repositoryRoot(t *testing.T) string {
 	t.Helper()
-	_, file, _, ok := runtime.Caller(0)
+	_, file, _, ok := moduleroot.Caller(0)
 	if !ok {
 		t.Fatal("cannot locate the test source")
 	}

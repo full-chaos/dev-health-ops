@@ -1,10 +1,10 @@
 package remaining
 
 import (
+	"github.com/full-chaos/dev-health-ops/internal/testsupport/moduleroot"
 	"os"
 	"path/filepath"
 	"regexp"
-	"runtime"
 	"sort"
 	"strconv"
 	"strings"
@@ -128,7 +128,7 @@ func readClickHouseMigrations(t *testing.T) []clickHouseMigration {
 // directory either one reads.
 func clickHouseMigrationsDir(t *testing.T) string {
 	t.Helper()
-	_, file, _, ok := runtime.Caller(0)
+	_, file, _, ok := moduleroot.Caller(0)
 	if !ok {
 		t.Fatal("cannot locate this test file")
 	}

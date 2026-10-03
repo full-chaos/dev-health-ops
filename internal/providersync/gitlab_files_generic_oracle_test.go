@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"github.com/full-chaos/dev-health-ops/internal/testsupport/fakehttp"
 	"io"
 	"net/http"
 	"sort"
@@ -338,7 +339,7 @@ func buildGitLabFilesTraversalTrace(t *testing.T, input map[string]any) gitLabFi
 	normalizedAt := time.Date(2026, 8, 10, 12, 0, 0, 0, time.UTC)
 	batch, err := (GitLabFilesRouteHandler{}).Collect(
 		context.Background(), claim, providerfoundation.Credential{},
-		gitLabRepositoryClient(t, doer, "https://gitlab.test"), normalizedAt,
+		gitLabRepositoryClient(t, fakehttp.Client(doer), "https://gitlab.test"), normalizedAt,
 	)
 	if err != nil {
 		t.Fatal(err)

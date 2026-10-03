@@ -3,6 +3,7 @@ package providersync
 import (
 	"context"
 	"errors"
+	"github.com/full-chaos/dev-health-ops/internal/testsupport/fakehttp"
 	"io"
 	"net/http"
 	"strconv"
@@ -79,7 +80,7 @@ func (doer *gitLabTestsPagedDoer) Do(request *http.Request) (*http.Response, err
 func TestGitLabTestsChunkRouteCountsEachPipelinePageOnce(t *testing.T) {
 	doer := &gitLabTestsPagedDoer{t: t, pages: 2, perPage: 3}
 	claim := nativeTestClaim("gitlab", "tests")
-	client := gitLabRepositoryClient(t, doer, "https://gitlab.example")
+	client := gitLabRepositoryClient(t, fakehttp.Client(doer), "https://gitlab.example")
 	normalizedAt := time.Date(2026, 8, 14, 12, 0, 0, 0, time.UTC)
 	stop := errors.New("test continuation yield")
 
@@ -145,7 +146,7 @@ func TestGitLabTestsChunkRouteCountsEachPipelinePageOnce(t *testing.T) {
 func TestGitLabTestsChunkRouteFinalizesTruncatedInventoryInsteadOfCancelling(t *testing.T) {
 	doer := &gitLabTestsPagedDoer{t: t, pages: 3, perPage: 2}
 	claim := nativeTestClaim("gitlab", "tests")
-	client := gitLabRepositoryClient(t, doer, "https://gitlab.example")
+	client := gitLabRepositoryClient(t, fakehttp.Client(doer), "https://gitlab.example")
 	normalizedAt := time.Date(2026, 8, 14, 12, 0, 0, 0, time.UTC)
 
 	// MaxPages=1 is one page of budget per phase against three real pages.
@@ -215,7 +216,7 @@ func TestGitLabTestsChunkRouteFinalizesTruncatedInventoryInsteadOfCancelling(t *
 func TestGitLabTestsChunkRouteResumeWithExhaustedBudgetFinalizes(t *testing.T) {
 	doer := &gitLabTestsPagedDoer{t: t, pages: 3, perPage: 2}
 	claim := nativeTestClaim("gitlab", "tests")
-	client := gitLabRepositoryClient(t, doer, "https://gitlab.example")
+	client := gitLabRepositoryClient(t, fakehttp.Client(doer), "https://gitlab.example")
 	spent, err := encodeGitLabTestsChunkCursor(gitLabTestsChunkCursor{
 		Phase: "pipelines", PipelinePages: 1, ReportPages: 1, Repo: "acme/api", ProjectID: 123,
 	})

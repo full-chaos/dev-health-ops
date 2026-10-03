@@ -4,10 +4,10 @@ import (
 	"bytes"
 	"context"
 	"path/filepath"
-	"runtime"
 	"testing"
 
 	"github.com/full-chaos/dev-health-ops/internal/api/pyjson"
+	"github.com/full-chaos/dev-health-ops/internal/testsupport/moduleroot"
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/pyoracle"
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/venueoracle"
 )
@@ -26,7 +26,7 @@ print(json.dumps({
 // it, key order included, with the embedded golden the route serves.
 func TestAdminSchemaMatchesFrozenPython(t *testing.T) {
 	frozen := venueoracle.OpenGolden(t, programGolden("admin-schema", t.Name(), "ed4fc8a511f464994c7d8681823eac426c348485f627967cbf020abce8b3380a"))
-	_, file, _, _ := runtime.Caller(0)
+	_, file, _, _ := moduleroot.Caller(0)
 	root := frozen.PythonRoot(t, filepath.Clean(filepath.Join(filepath.Dir(file), "..", "..", "..")))
 	request := venueoracle.ProgramRequest("admin schema producer", pythonAdminSchemaProgram, nil, producerEnv)
 	answers := frozen.Produce(t, root, []venueoracle.Request{request}, func(producer *venueoracle.Producer, _ []venueoracle.Request) []venueoracle.Response {

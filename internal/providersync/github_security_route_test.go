@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"github.com/full-chaos/dev-health-ops/internal/testsupport/fakehttp"
 	"io"
 	"net/http"
 	"strings"
@@ -34,7 +35,7 @@ func TestGitHubSecurityRouteEmitsEachPythonSource(t *testing.T) {
 	// Given
 	doer := &gitHubSecurityDoer{}
 	claim := nativeTestClaim("github", "security")
-	client := gitHubRepositoryClient(t, doer, "https://api.github.com")
+	client := gitHubRepositoryClient(t, fakehttp.Client(doer), "https://api.github.com")
 
 	// When
 	batch, err := (GitHubSecurityRouteHandler{}).Collect(context.Background(), claim, providerfoundation.Credential{}, client, time.Date(2026, 7, 23, 12, 30, 0, 0, time.UTC))
@@ -100,7 +101,7 @@ func TestGitHubSecurityRouteCountsFailedAndRetriedAttempts(t *testing.T) {
 	doer := &gitHubSecurityRetryOnceDoer{failPath: "/repos/acme/api/dependabot/alerts"}
 	claim := nativeTestClaim("github", "security")
 	client, err := providerfoundation.NewHTTPClient(
-		"github", "https://api.github.com", doer,
+		"github", "https://api.github.com", fakehttp.Client(doer),
 		func(*http.Request) error { return nil },
 		providerfoundation.RetryPolicy{
 			MaxAttempts: 2, InitialWait: time.Nanosecond, MaxWait: time.Nanosecond,

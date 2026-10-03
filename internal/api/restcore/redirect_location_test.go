@@ -275,11 +275,13 @@ func TestTheRequestPathChecksAreBoundedOnASelfUnwrappingError(t *testing.T) {
 func TestEveryHopOfAHostileChainAfterAWitnessedRedirectIsSurvived(t *testing.T) {
 	var nilURLError *url.Error
 	var nilOpError *net.OpError
+	var nilLeaf *panickingLeafError
 	shapes := map[string]error{
-		"typed-nil url error":                  error(nilURLError),
-		"url error with a typed-nil url cause": &url.Error{Op: "Get", URL: "https://x.example.test", Err: error(nilURLError)},
-		"url error with a typed-nil op cause":  &url.Error{Op: "Get", URL: "https://x.example.test", Err: error(nilOpError)},
-		"self-unwrapping error":                &selfUnwrappingError{},
+		"typed-nil url error":                                             error(nilURLError),
+		"url error with a typed-nil url cause":                            &url.Error{Op: "Get", URL: "https://x.example.test", Err: error(nilURLError)},
+		"url error with a typed-nil op cause":                             &url.Error{Op: "Get", URL: "https://x.example.test", Err: error(nilOpError)},
+		"self-unwrapping error":                                           &selfUnwrappingError{},
+		"url error with a typed-nil leaf cause (no Unwrap, Error panics)": &url.Error{Op: "Get", URL: "https://x.example.test", Err: error(nilLeaf)},
 	}
 	for name, shape := range shapes {
 		for depth := 0; depth <= 2; depth++ {
@@ -363,3 +365,9 @@ func TestAMultiErrorCauseAfterAWitnessedRedirectIsNotARefusedLocation(t *testing
 		}
 	}
 }
+
+// panickingLeafError is a leaf by structure (no Unwrap) whose Error dereferences its receiver: a typed-nil pointer of it panics in
+// Error, after the leaf check and inside the refusal predicate, where only its recover stops it (CHAOS-8127 vet).
+type panickingLeafError struct{ msg string }
+
+func (n *panickingLeafError) Error() string { return n.msg }

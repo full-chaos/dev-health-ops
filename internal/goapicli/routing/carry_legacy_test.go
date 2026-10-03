@@ -14,9 +14,11 @@ package routing
 import (
 	"bytes"
 	"errors"
+	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"sort"
 	"strings"
 	"testing"
 
@@ -181,6 +183,97 @@ func TestCarryDecisionOverTheRealImagesLegacyDocuments(t *testing.T) {
 			t.Fatalf("%s: shadow %s (%s), want a SKIP naming the changed document", name, shadow.Action, shadow.Reason)
 		}
 	}
+}
+
+// THE PRE-ROLL DRY RUN, as a roll sheet reads it. One routing row for
+// EVERY catalog operation of the real image, keyed to the digest that a
+// process from BEFORE the three swaps registers, decided against this
+// image: nothing is refused, nothing is skipped, and exactly the three
+// swapped operations are named `carried (legacy digest)`. A refusal here
+// is a roll that stops -- with DO NOT ROLL for a go-only operation.
+func TestCarryDryRunOverEveryCatalogOperationOfTheRealImageRefusesNothing(t *testing.T) {
+	documentsPath, catalogPath := realImageArtifacts(t)
+	current, legacy, err := targetDocumentDigests(documentsPath)
+	if err != nil {
+		t.Fatalf("reading the real registered-document dump: %v", err)
+	}
+	catalog, catalogLegacy, err := goapiproof.LoadOperationCatalogWithLegacy(catalogPath)
+	if err != nil {
+		t.Fatalf("reading the real edge catalog: %v", err)
+	}
+	if len(catalog) == 0 || len(catalog) != len(current) {
+		t.Fatalf("the catalog lists %d operations and the document dump %d: this run would not be over every operation of the image", len(catalog), len(current))
+	}
+
+	// The deployed process: an image from before the swaps. It registers
+	// every operation of this image under its current digest, except the
+	// swapped ones, which it registers under the text that is the legacy
+	// one now. Each routing row is keyed to what that process registers.
+	deployed := make(map[string]string, len(current))
+	for operation, digest := range current {
+		deployed[operation] = digest
+	}
+	var swapped []string
+	for operation, digest := range wave1SwappedDocuments {
+		if _, ok := catalog[operation]; !ok {
+			t.Fatalf("%s is not a catalog operation of this image", operation)
+		}
+		deployed[operation] = digest
+		swapped = append(swapped, operation)
+	}
+	sort.Strings(swapped)
+	operations := goapiproof.CatalogOperations(catalog)
+	inputs := goapiproof.CarryInputs{
+		LiveDocumentDigest:           deployed,
+		TargetDocumentDigest:         current,
+		TargetLegacyDocumentDigests:  legacy,
+		CatalogDocumentDigest:        catalog,
+		CatalogLegacyDocumentDigests: catalogLegacy,
+	}
+	const build = "0123456789abcdef0123456789abcdef01234567"
+
+	for _, mode := range []string{goapiproof.TargetModeCanary, goapiproof.TargetModeShadow} {
+		outcomes := make([]goapiproof.CarryOutcome, 0, len(operations))
+		var named []string
+		for _, operation := range operations {
+			outcome := goapiproof.DecideCarry(goapiproof.CarryRow{
+				Operation: operation, DocumentDigest: deployed[operation], Mode: mode,
+				Build: build, Owner: "go", RolloutPercentage: 100, ReviewEvidence: "the original decision",
+			}, inputs)
+			if outcome.Action != goapiproof.CarryActionCarry {
+				t.Errorf("mode=%s %s: %s (%s), want CARRY", mode, operation, outcome.Action, outcome.Reason)
+			}
+			if outcome.LegacyDigest {
+				named = append(named, operation)
+			}
+			outcomes = append(outcomes, outcome)
+		}
+		summary := goapiproof.SummarizeCarry(outcomes)
+		if summary.Refused != 0 || summary.Skipped != 0 || summary.Carried != len(operations) {
+			t.Fatalf("mode=%s: summary = %+v over %d catalog operations, want every row carried and refused=0", mode, summary, len(operations))
+		}
+		if strings.Join(named, ",") != strings.Join(swapped, ",") {
+			t.Fatalf("mode=%s: rows named as legacy-digest carries = %v, want exactly the swapped operations %v", mode, named, swapped)
+		}
+
+		// The same run as the operator reads it.
+		var out, errOut bytes.Buffer
+		savedOut, savedErr := stdout, stderr
+		stdout, stderr = &out, &errOut
+		printCarryPlan(outcomes, "sha256:live", "sha256:target", build, true)
+		stdout, stderr = savedOut, savedErr
+		wantSummary := fmt.Sprintf("would carry=%d unchanged=0 skipped=0 refused=0 of %d row(s) at the live digest", len(operations), len(operations))
+		if !strings.Contains(out.String(), wantSummary) {
+			t.Fatalf("mode=%s: the plan does not print %q:\n%s", mode, wantSummary, out.String())
+		}
+		if got := strings.Count(out.String(), "carried (legacy digest): "); got != len(swapped) {
+			t.Fatalf("mode=%s: the plan names %d legacy-digest carries, want %d:\n%s", mode, got, len(swapped), out.String())
+		}
+		if strings.Contains(out.String(), "REFUSE") || strings.Contains(out.String(), "SKIP") {
+			t.Fatalf("mode=%s: the plan holds a refused or skipped row:\n%s", mode, out.String())
+		}
+	}
+	t.Logf("%d catalog operations: carried=%d refused=0, legacy-digest carries: %v", len(operations), len(operations), swapped)
 }
 
 // The plan names a row carried under a legacy digest, on stdout for the

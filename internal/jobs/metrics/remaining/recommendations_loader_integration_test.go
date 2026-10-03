@@ -94,8 +94,12 @@ const (
 	// stored directly -- which is how it would actually arise in production.
 	// Its own org, so the primary fixture's assertions are undisturbed.
 	loaderInfOrgID = "org-loader-infinite"
-	loaderTeamA    = "team-alpha"
-	loaderTeamB    = "team-beta"
+	// An org that holds SEVERAL computed_at versions of the same key in every table the loader reads with argMax, and whose only
+	// team owns EVERY repo of the org, so the four owned-repo-scoped fields equal the org-wide Python reference and are compared
+	// strictly (CHAOS-8319). See seedVersionedOrg.
+	loaderVersionsOrgID = "org-loader-versions"
+	loaderTeamA         = "team-alpha"
+	loaderTeamB         = "team-beta"
 	// A team in the PRIMARY org with NO team_repo_ownership rows at all --
 	// the empty-ownership boundary team-lead asked to pin explicitly: a team
 	// that owns zero repos must get ABSENT for the four CHAOS-4897 signals,
@@ -488,7 +492,7 @@ func compareSnapshotAgainstPython(t *testing.T, teamID string, got MetricsSnapsh
 const loaderPythonBuild = "a4847c5e93607451a0c987b314d37e02fc43ce85"
 
 // loaderGoldenDigest is the SHA-256 of the golden file, pinned by the record verb ("PIN:..." until its first recording).
-const loaderGoldenDigest = "73a3210b09e8ea19036935f3997268e34f82cfa457241529b1685b348d5ffe2c"
+const loaderGoldenDigest = "694953e00ef4f93462d38b38138d59605d6a5fc49964c1cd27ff28730e0c226b"
 
 // loaderGolden is the GoldenSpec of the loader oracle: test is the oracle's function name, digest the SHA-256 the test pins.
 func loaderGolden(test, digest string) venueoracle.GoldenSpec {
@@ -514,6 +518,7 @@ var loaderCases = [][2]string{
 	{loaderTeamA, loaderInfOrgID},
 	{loaderTeamA, loaderEmptyOrgID},
 	{loaderTeamA, loaderOneHotspotOrgID},
+	{loaderTeamA, loaderVersionsOrgID},
 }
 
 // frozenSnapshots is the Python loader's answer per (team, org).
@@ -1184,7 +1189,150 @@ func seedLoaderFixture(t *testing.T, ctx context.Context, conn driver.Conn) (res
 		loaderOrgID, mustDate(t, "2026-08-20"), loaderTeamA, 0.62,
 		mustTimestamp(t, "2026-08-21 00:00:00"))
 
+	seedVersionedOrg(t, ctx, conn)
+
 	return restoreMerges
+}
+
+// seedVersionedOrg seeds loaderVersionsOrgID: for every table the loader reads with argMax(..., computed_at), the same key holds an
+// OLDER and a NEWER computed_at version whose values differ, with the NEWER one the lower (or NULL) so that max() or argMin() in
+// place of argMax answers differently. Every row has the shape the daily writers emit: an append-only day row, a re-run of the
+// day under a later computed_at (the design's append-only daily tables read by argMax, never merged away in the window a reader
+// sees: the merges of these tables are stopped above), a Nullable cycle time that the work-item writer leaves NULL for a day
+// with nothing completed, a team owning every repo of the org with an open-ended ownership row as the ownership sync writes.
+// loaderTeamA owns both repos, so the owned-repo fields are the org-wide ones and are compared with the Python reference.
+func seedVersionedOrg(t *testing.T, ctx context.Context, conn driver.Conn) {
+	t.Helper()
+	exec := func(query string, args ...any) {
+		if err := conn.Exec(ctx, query, args...); err != nil {
+			t.Fatalf("seed versioned org failed: %v\nquery: %s", err, query)
+		}
+	}
+	const (
+		repoOne = "55555555-5555-5555-5555-555555555551"
+		repoTwo = "55555555-5555-5555-5555-555555555552"
+	)
+	for _, repo := range []string{repoOne, repoTwo} {
+		exec(`INSERT INTO team_repo_ownership
+			(org_id, provider, team_id, repo_id, repo_full_name, match_type,
+			 source, is_primary, specificity, priority, valid_from, valid_to, updated_at)
+			VALUES (?, 'github', ?, ?, 'versions/' || ?, 'exact', 'inferred', 0, 1, 0, ?, NULL, ?)`,
+			loaderVersionsOrgID, loaderTeamA, repo, repo,
+			mustTimestamp(t, "2026-01-01 00:00:00"), mustTimestamp(t, "2026-01-01 00:00:00"))
+	}
+
+	// review latency and rework (argMax over a repo's rows in the window): repoOne's NEWEST row is the LOWER one.
+	for _, seed := range []struct {
+		repo, day, computedAt string
+		p75, rework           float64
+	}{
+		{repoOne, "2026-08-05", "2026-08-06 00:00:00", 90.0, 0.90},
+		{repoOne, "2026-08-10", "2026-08-11 00:00:00", 20.0, 0.10},
+		{repoTwo, "2026-08-08", "2026-08-09 00:00:00", 40.0, 0.40},
+	} {
+		exec(`INSERT INTO repo_metrics_daily
+			(repo_id, day, commits_count, total_loc_touched, avg_commit_size_loc,
+			 large_commit_ratio, prs_merged, median_pr_cycle_hours, pr_cycle_p75_hours,
+			 pr_cycle_p90_hours, prs_with_first_review, large_pr_ratio, pr_rework_ratio,
+			 change_failure_rate, computed_at, org_id)
+			VALUES (?, ?, 0, 0, 0, 0, 0, 0, ?, 0, 0, 0, ?, 0, ?, ?)`,
+			seed.repo, mustDate(t, seed.day), seed.p75, seed.rework,
+			mustTimestamp(t, seed.computedAt), loaderVersionsOrgID)
+	}
+
+	// complexity halves (argMax per (day, repo)): the first-half day of repoOne is re-run with a LOWER value; the second half rises.
+	for _, seed := range []struct {
+		repo, day, computedAt string
+		cpk                   float64
+	}{
+		{repoOne, "2026-08-05", "2026-08-06 00:00:00", 100.0},
+		{repoOne, "2026-08-05", "2026-08-07 00:00:00", 40.0},
+		{repoOne, "2026-08-20", "2026-08-21 00:00:00", 60.0},
+	} {
+		exec(`INSERT INTO repo_complexity_daily
+			(repo_id, day, cyclomatic_per_kloc, computed_at, org_id)
+			VALUES (?, ?, ?, ?, ?)`,
+			seed.repo, mustDate(t, seed.day), seed.cpk, mustTimestamp(t, seed.computedAt), loaderVersionsOrgID)
+	}
+
+	// hotspots: the only file of the second half has risk_score 0 (a file the hotspot job scored and found no risk in), twice
+	// (an older and a newer version, both 0): `risk_score > 0` counts none, so churn_overlap is ABSENT although complexity rises.
+	for _, computedAt := range []string{"2026-08-21 00:00:00", "2026-08-22 00:00:00"} {
+		exec(`INSERT INTO file_hotspot_daily
+			(repo_id, day, file_path, risk_score, computed_at, org_id)
+			VALUES (?, ?, ?, ?, ?, ?)`,
+			repoOne, mustDate(t, "2026-08-20"), "versions/quiet.py", 0.0,
+			mustTimestamp(t, computedAt), loaderVersionsOrgID)
+	}
+
+	// reviewer gini (argMax per (repo, author, day)): author one's day is re-run with FEWER reviews; author two has one version.
+	for _, seed := range []struct {
+		email, computedAt string
+		reviews           uint32
+	}{
+		{"one@versions.example", "2026-08-06 00:00:00", 10},
+		{"one@versions.example", "2026-08-07 00:00:00", 2},
+		{"two@versions.example", "2026-08-06 00:00:00", 10},
+	} {
+		exec(`INSERT INTO user_metrics_daily
+			(repo_id, day, author_email, commits_count, team_id, reviews_given,
+			 computed_at, org_id)
+			VALUES (?, ?, ?, 0, ?, ?, ?, ?)`,
+			repoOne, mustDate(t, "2026-08-05"), seed.email, loaderTeamA,
+			seed.reviews, mustTimestamp(t, seed.computedAt), loaderVersionsOrgID)
+	}
+
+	// after-hours ratio (argMax of commits and of after-hours commits, same (day, repo_id)): the re-run has FEWER commits.
+	for _, seed := range []struct {
+		computedAt     string
+		commits, after uint32
+	}{
+		{"2026-08-06 00:00:00", 100, 50},
+		{"2026-08-07 00:00:00", 10, 5},
+	} {
+		exec(`INSERT INTO team_metrics_daily
+			(day, team_id, repo_id, commits_count, after_hours_commits_count,
+			 computed_at, org_id)
+			VALUES (?, ?, ?, ?, ?, ?, ?)`,
+			mustDate(t, "2026-08-05"), loaderTeamA, repoOne, seed.commits, seed.after,
+			mustTimestamp(t, seed.computedAt), loaderVersionsOrgID)
+	}
+
+	// cycle times: two days with one version each. The case where the NEWEST row of a (day, provider, work_scope) carries a NULL
+	// cycle time is NOT seeded: the Go loader (tuple-wrapped argMax: the NULL row wins and the day is dropped) and the Python
+	// reference (plain argMax, which skips NULL) differ there, a finding for the owner of the semantics, not a golden to record.
+	for _, seed := range []struct {
+		day, computedAt string
+		cycle           float64
+	}{
+		{"2026-08-05", "2026-08-06 00:00:00", 12.0},
+		{"2026-08-06", "2026-08-07 00:00:00", 8.0},
+	} {
+		exec(`INSERT INTO work_item_metrics_daily
+			(day, provider, work_scope_id, team_id, team_name, items_started, items_completed,
+			 items_started_unassigned, items_completed_unassigned, wip_count_end_of_day,
+			 wip_unassigned_end_of_day, cycle_time_p50_hours, bug_completed_ratio,
+			 story_points_completed, computed_at, org_id)
+			VALUES (?, 'github', 'versions/scope', ?, '', 0, 1, 0, 0, 1, 0, ?, 0, 0, ?, ?)`,
+			mustDate(t, seed.day), loaderTeamA, seed.cycle,
+			mustTimestamp(t, seed.computedAt), loaderVersionsOrgID)
+	}
+
+	// persisted compounding risk (argMax over the (score, severity) tuple): an OLDER row with another score and severity.
+	for _, seed := range []struct {
+		day, computedAt, severity string
+		score                     float64
+	}{
+		{"2026-08-03", "2026-08-04 06:30:00", "low", 0.30},
+		{"2026-08-20", "2026-08-27 06:30:00", "high", 0.80},
+	} {
+		exec(`INSERT INTO compounding_risk_daily
+			(org_id, day, scope, scope_id, compounding_risk, severity,
+			 w_churn, w_complexity, w_ownership, w_review, computed_at)
+			VALUES (?, ?, 'team', ?, ?, ?, 0, 0, 0, 0, ?)`,
+			loaderVersionsOrgID, mustDate(t, seed.day), loaderTeamA, seed.score, seed.severity,
+			mustTimestamp(t, seed.computedAt))
+	}
 }
 
 func mustTimestamp(t *testing.T, text string) time.Time {
@@ -1274,6 +1422,39 @@ func assertHotspotBoundaryIsMeasured(t *testing.T, ctx context.Context, conn dri
 		python.of(t, loaderTeamA, loaderEmptyOrgID), false)
 	compareSnapshotAgainstPython(t, "one-hotspot-org", one,
 		python.of(t, loaderTeamA, loaderOneHotspotOrgID), false)
+
+	assertVersionedRowsAreReadAsNewest(t, ctx, conn, python)
+}
+
+// assertVersionedRowsAreReadAsNewest reads loaderVersionsOrgID (seedVersionedOrg: every argMax table holds an older and a newer
+// version of one key, the newer the lower or NULL) and compares the Go snapshot, field by field and strictly (the team owns every
+// repo, so the owned-repo fields equal the Python reference's org-wide ones), with the frozen Python answer. The pinned values below
+// are the PRECONDITION that the fixture is live and that the newest version is what is read: a max() or argMin() in place of argMax,
+// or a loader that stopped reading the rows, moves one of them (CHAOS-8319).
+func assertVersionedRowsAreReadAsNewest(t *testing.T, ctx context.Context, conn driver.Conn, python frozenSnapshots) {
+	t.Helper()
+	got := loadForOrg(t, ctx, conn, loaderVersionsOrgID)
+	if !got.ReviewLatencyP75HoursKnown || got.ReviewLatencyP75Hours != 30.0 {
+		t.Errorf("versions org: review latency = %v (known %v), want 30 (avg of the newest p75 of each repo: 20 and 40)",
+			got.ReviewLatencyP75Hours, got.ReviewLatencyP75HoursKnown)
+	}
+	if !got.ReworkChurnRatioKnown || got.ReworkChurnRatio != 0.25 {
+		t.Errorf("versions org: rework = %v (known %v), want 0.25 (avg of the newest rework of each repo: 0.1 and 0.4)",
+			got.ReworkChurnRatio, got.ReworkChurnRatioKnown)
+	}
+	if got.HotspotChurnOverlapKnown {
+		t.Errorf("versions org: hotspot_churn_overlap is PRESENT (%v); the only hotspot file has risk_score 0, which is not a hotspot",
+			got.HotspotChurnOverlap)
+	}
+	if len(got.CycleTimeByDay) != 2 || got.CycleTimeByDay[0] != 12.0 || got.CycleTimeByDay[1] != 8.0 {
+		t.Errorf("versions org: cycle times = %v, want [12 8]", got.CycleTimeByDay)
+	}
+	if !got.CompoundingRiskScoreKnown || got.CompoundingRiskScore != 0.80 || got.CompoundingRiskSeverity != "high" {
+		t.Errorf("versions org: compounding risk = %v/%q (known %v), want 0.8/high (the NEWEST row)",
+			got.CompoundingRiskScore, got.CompoundingRiskSeverity, got.CompoundingRiskScoreKnown)
+	}
+	compareSnapshotAgainstPython(t, "versions-org", got,
+		python.of(t, loaderTeamA, loaderVersionsOrgID), false)
 }
 
 func loadForOrg(t *testing.T, ctx context.Context, conn driver.Conn, orgID string) MetricsSnapshot {

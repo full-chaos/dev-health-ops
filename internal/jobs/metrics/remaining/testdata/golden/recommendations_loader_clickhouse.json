@@ -57,6 +57,16 @@
       "status": 0,
       "headers": {},
       "body": "{\"team_id\": \"team-alpha\", \"org_id\": \"org-loader-one-hotspot\", \"window_start\": \"2026-08-01\", \"window_end\": \"2026-09-01\", \"wip_by_day\": [], \"throughput_by_cycle\": [], \"review_latency_p75_hours\": null, \"reviewer_gini\": null, \"rework_churn_ratio\": null, \"after_hours_ratio\": null, \"cycle_time_by_day\": [], \"hotspot_complexity_delta\": null, \"hotspot_churn_overlap\": \"0000000000000000\", \"compounding_risk_score\": null, \"compounding_risk_severity\": \"unknown\"}"
+    },
+    {
+      "name": "recommendations loader team=team-alpha org=org-loader-versions",
+      "method": "PYTHON",
+      "path": "program sha256 528b0e29d4c1e497d3276ccb3691065f773589dfde5011fb86f37c207e4da525 env sha256 969169a1702b285f3a9e4b602d19052b0d6a3c6b2a44dd7425bef0f696436295",
+      "body_sha256": "73de5a638d46575fd0d31c9c1c031071712183df26216ef0fecda6d115fd34f8",
+      "request_headers_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "status": 0,
+      "headers": {},
+      "body": "{\"team_id\": \"team-alpha\", \"org_id\": \"org-loader-versions\", \"window_start\": \"2026-08-01\", \"window_end\": \"2026-09-01\", \"wip_by_day\": [\"3ff0000000000000\", \"3ff0000000000000\"], \"throughput_by_cycle\": [\"3ff0000000000000\", \"3ff0000000000000\"], \"review_latency_p75_hours\": \"403e000000000000\", \"reviewer_gini\": \"3fd5555555555554\", \"rework_churn_ratio\": \"3fd0000000000000\", \"after_hours_ratio\": \"3fe0000000000000\", \"cycle_time_by_day\": [\"4028000000000000\", \"4020000000000000\"], \"hotspot_complexity_delta\": \"3fe0000000000000\", \"hotspot_churn_overlap\": null, \"compounding_risk_score\": \"3fe999999999999a\", \"compounding_risk_severity\": \"high\"}"
     }
   ]
 }

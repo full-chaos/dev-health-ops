@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 	"testing"
 
@@ -47,6 +48,9 @@ func validContract() Contract {
 		anchored("/api/v1/people/[^/]+/metric$", PlaneQueryAPI),
 		anchored("/api/v1/auth/login$", PlaneGoAPI),
 		anchored(`/a\.b$`, PlaneGoAPI),
+	}, PublicHostRules: []Rule{
+		rule("/docs", PathTypeExact, PlaneGoAPI),
+		rule("/open-api.v3", PathTypeExact, PlaneGoAPI),
 	}}
 }
 
@@ -71,6 +75,17 @@ func TestCheckedInContractIsTheShapeProdRoutes(t *testing.T) {
 	}
 	if planes[PlaneGoAPI] < 2 || planes[PlaneQueryAPI] < 2 {
 		t.Errorf("want rules on both planes, got %v", planes)
+	}
+	// The paths that only the public host lists: the four Exact paths of its
+	// block object, all to the default plane.
+	var public []string
+	for _, r := range contract.PublicHostRules {
+		public = append(public, r.PathType+" "+r.Path+" "+r.Plane)
+	}
+	sort.Strings(public)
+	want := []string{"Exact /docs go-api", "Exact /metrics go-api", "Exact /openapi.json go-api", "Exact /redoc go-api"}
+	if strings.Join(public, "; ") != strings.Join(want, "; ") {
+		t.Errorf("public host rules: got %v, want %v", public, want)
 	}
 }
 
@@ -123,6 +138,44 @@ func TestValidateRefusesWhatItCannotRoute(t *testing.T) {
 			"can match the same path"},
 		"a token over one-segment rules": {func(c *Contract) { c.Rules = append(c.Rules, anchored("/[^/]+$", PlaneGoAPI)) },
 			"can match the same path"},
+		// Characters that would end or change the nginx directive the path is written into.
+		"semicolon":                 {func(c *Contract) { c.Rules[1].Path = "/gra;phql$" }, "not an anchored path"},
+		"space":                     {func(c *Contract) { c.Rules[1].Path = "/gra phql$" }, "not an anchored path"},
+		"tab":                       {func(c *Contract) { c.Rules[1].Path = "/gra\tphql$" }, "not an anchored path"},
+		"open brace":                {func(c *Contract) { c.Rules[1].Path = "/gra{phql$" }, "not an anchored path"},
+		"close brace":               {func(c *Contract) { c.Rules[1].Path = "/gra}phql$" }, "not an anchored path"},
+		"anchor inside the path":    {func(c *Contract) { c.Rules[1].Path = "/gra$phql$" }, "not an anchored path"},
+		"anchor before a slash":     {func(c *Contract) { c.Rules[1].Path = "/graphql$/x$" }, "not an anchored path"},
+		"newline inside":            {func(c *Contract) { c.Rules[1].Path = "/gra\nphql$" }, "not an anchored path"},
+		"newline at the end":        {func(c *Contract) { c.Rules[1].Path = "/graphql$\n" }, "not an anchored path"},
+		"newline before the anchor": {func(c *Contract) { c.Rules[1].Path = "/graphql\n$" }, "not an anchored path"},
+		"hash":                      {func(c *Contract) { c.Rules[1].Path = "/gra#phql$" }, "not an anchored path"},
+		"single quote":              {func(c *Contract) { c.Rules[1].Path = "/gra'phql$" }, "not an anchored path"},
+		"lone backslash":            {func(c *Contract) { c.Rules[1].Path = `/gra\phql$` }, "not an anchored path"},
+		// The paths that only the public host lists.
+		"public: not exact": {func(c *Contract) { c.PublicHostRules[0].PathType = PathTypePrefix }, "a public host rule is an Exact path"},
+		"public: anchored": {func(c *Contract) {
+			c.PublicHostRules[0] = anchored("/docs$", PlaneGoAPI)
+		}, "a public host rule is an Exact path"},
+		"public: regex in the path": {func(c *Contract) { c.PublicHostRules[0].Path = "/docs$" }, "not a literal path"},
+		"public: token in the path": {func(c *Contract) { c.PublicHostRules[0].Path = "/docs/[^/]+" }, "not a literal path"},
+		"public: semicolon":         {func(c *Contract) { c.PublicHostRules[0].Path = "/do;cs" }, "not a literal path"},
+		"public: trailing slash":    {func(c *Contract) { c.PublicHostRules[0].Path = "/docs/" }, "not a literal path"},
+		"public: root":              {func(c *Contract) { c.PublicHostRules[0].Path = "/" }, "not a literal path"},
+		"public: dot-dot segment":   {func(c *Contract) { c.PublicHostRules[0].Path = "/docs/../x" }, ". or .. segment"},
+		"public: other plane":       {func(c *Contract) { c.PublicHostRules[0].Plane = PlaneQueryAPI }, "is not the default plane"},
+		"public: unknown plane":     {func(c *Contract) { c.PublicHostRules[0].Plane = "web" }, "is not the default plane"},
+		"public: same path twice": {func(c *Contract) {
+			c.PublicHostRules = append(c.PublicHostRules, rule("/DOCS", PathTypeExact, PlaneGoAPI))
+		}, "the path repeats public host rule 0"},
+		// On the public host the Exact path is the regex ^<path>: no end anchor, any case, "." is any character.
+		"public: the path of a rule of the other plane": {func(c *Contract) { c.PublicHostRules[0].Path = "/graphql" }, "can take a request from rule 1"},
+		"public: the same in another case":              {func(c *Contract) { c.PublicHostRules[0].Path = "/GraphQL" }, "can take a request from rule 1"},
+		"public: a start of it":                         {func(c *Contract) { c.PublicHostRules[0].Path = "/graph" }, "can take a request from rule 1"},
+		"public: a dot for a letter":                    {func(c *Contract) { c.PublicHostRules[0].Path = "/gr.phql" }, "can take a request from rule 1"},
+		"public: a dot for a slash":                     {func(c *Contract) { c.PublicHostRules[0].Path = "/api.v1/people" }, "can take a request from rule 2"},
+		"public: a start of a token rule":               {func(c *Contract) { c.PublicHostRules[0].Path = "/api/v1/people/me" }, "can take a request from rule 2"},
+		"public: a token rule in full":                  {func(c *Contract) { c.PublicHostRules[0].Path = "/api/v1/people/me/metric" }, "can take a request from rule 2"},
 	} {
 		t.Run(name, func(t *testing.T) {
 			contract := validContract()
@@ -153,21 +206,64 @@ func TestValidateAcceptsPathsThatDoNotOverlap(t *testing.T) {
 	}
 }
 
+// TestValidateAcceptsPublicHostPathsThatTakeNoRequest: the refusal of a public
+// host path must not take a path that no rule of another plane can match, and
+// must not take one that only meets rules of its own plane.
+func TestValidateAcceptsPublicHostPathsThatTakeNoRequest(t *testing.T) {
+	contract := validContract()
+	contract.PublicHostRules = []Rule{
+		rule("/graphqlx", PathTypeExact, PlaneGoAPI),                 // longer than /graphql$: that rule ends first
+		rule("/graphq.x", PathTypeExact, PlaneGoAPI),                 // the same with a dot
+		rule("/api/v1/people/me/metrics", PathTypeExact, PlaneGoAPI), // longer than the token rule's last word
+		rule("/api/v1/people/a/b/metric", PathTypeExact, PlaneGoAPI), // two segments where the token takes one
+		rule("/api/v1/auth/login", PathTypeExact, PlaneGoAPI),        // meets a rule of its own plane only
+		rule("/api/v1/auth", PathTypeExact, PlaneGoAPI),              // a start of a rule of its own plane
+		rule("/metrics", PathTypeExact, PlaneGoAPI),                  // meets no rule
+	}
+	if err := contract.Validate(); err != nil {
+		t.Fatalf("these public host paths take no request from a rule of the other plane: %v", err)
+	}
+	contract.PublicHostRules = nil
+	if err := contract.Validate(); err != nil {
+		t.Fatalf("a table with no public host rule is valid: %v", err)
+	}
+}
+
 // TestParseRefusesWhatItDoesNotRead: a key this package does not know, and
 // data after the document, must not load.
 func TestParseRefusesWhatItDoesNotRead(t *testing.T) {
-	const good = `{"schema_version": 1, "regex_mode": true, "rules": [{"path": "/", "path_type": "Prefix", "plane": "go-api"}]}`
+	const good = `{"schema_version": 1, "regex_mode": true, "rules": [{"path": "/", "path_type": "Prefix", "plane": "go-api"}], "public_host_rules": [{"path": "/docs", "path_type": "Exact", "plane": "go-api"}]}`
 	if _, err := Parse([]byte(good)); err != nil {
 		t.Fatalf("the base document must load: %v", err)
 	}
 	for name, text := range map[string]string{
-		"unknown top key":  `{"schema_version": 1, "regex_mode": true, "hosts": [], "rules": [{"path": "/", "path_type": "Prefix", "plane": "go-api"}]}`,
-		"unknown rule key": `{"schema_version": 1, "regex_mode": true, "rules": [{"path": "/", "path_type": "Prefix", "plane": "go-api", "service": "web"}]}`,
-		"camel case key":   `{"schema_version": 1, "regex_mode": true, "rules": [{"path": "/", "pathType": "Prefix", "plane": "go-api"}]}`,
-		"two documents":    good + good,
-		"not json":         `rules: []`,
-		"invalid table":    `{"schema_version": 1, "regex_mode": true, "rules": []}`,
+		"unknown top key":      strings.Replace(good, `"regex_mode": true,`, `"regex_mode": true, "hosts": [],`, 1),
+		"unknown rule key":     strings.Replace(good, `"plane": "go-api"}]`, `"plane": "go-api", "service": "web"}]`, 1),
+		"camel case key":       strings.Replace(good, `"path_type": "Prefix"`, `"pathType": "Prefix"`, 1),
+		"two documents":        good + good,
+		"not json":             `rules: []`,
+		"an array":             `[` + good + `]`,
+		"invalid table":        strings.Replace(good, `{"path": "/", "path_type": "Prefix", "plane": "go-api"}`, ``, 1),
+		"rules not a list":     strings.Replace(good, `[{"path": "/", "path_type": "Prefix", "plane": "go-api"}]`, `{}`, 1),
+		"a rule not an object": strings.Replace(good, `{"path": "/", "path_type": "Prefix", "plane": "go-api"}`, `"/"`, 1),
+		// A key that is not there at all.
+		"no public_host_rules": strings.Replace(good, `, "public_host_rules": [{"path": "/docs", "path_type": "Exact", "plane": "go-api"}]`, ``, 1),
+		"no regex_mode":        strings.Replace(good, `"regex_mode": true, `, ``, 1),
+		"no plane":             strings.Replace(good, `, "plane": "go-api"}]`, `}]`, 1),
+		// encoding/json fills a field from a key in any case; the schema does not.
+		"key Schema_Version":        strings.Replace(good, `"schema_version"`, `"Schema_Version"`, 1),
+		"key REGEX_MODE":            strings.Replace(good, `"regex_mode"`, `"REGEX_MODE"`, 1),
+		"key Rules":                 strings.Replace(good, `"rules"`, `"Rules"`, 1),
+		"key Public_Host_Rules":     strings.Replace(good, `"public_host_rules"`, `"Public_Host_Rules"`, 1),
+		"key Path":                  strings.Replace(good, `"path": "/",`, `"Path": "/",`, 1),
+		"key PATH_TYPE":             strings.Replace(good, `"path_type": "Prefix"`, `"PATH_TYPE": "Prefix"`, 1),
+		"key Plane":                 strings.Replace(good, `"plane": "go-api"}]`, `"Plane": "go-api"}]`, 1),
+		"key Path in a public rule": strings.Replace(good, `"path": "/docs"`, `"Path": "/docs"`, 1),
+		"key in both cases":         strings.Replace(good, `"path": "/",`, `"path": "/", "Path": "/x$",`, 1),
 	} {
+		if text == good {
+			t.Fatalf("%s: the case changes nothing in the base document", name)
+		}
 		if _, err := Parse([]byte(text)); err == nil {
 			t.Errorf("%s: must not load", name)
 		}
@@ -176,7 +272,9 @@ func TestParseRefusesWhatItDoesNotRead(t *testing.T) {
 
 // TestSchemaAndValidatorAgree: the JSON Schema is what a reader with no Go
 // sees. The checked-in contract passes it, and each planted defect that the
-// schema can express fails the schema AND the Go validator.
+// schema can express fails the schema AND the Go reader (Parse). The schema
+// holds the shape of a row; the rules across rows (one path one rule, a public
+// host path on the default plane) are the Go validator's alone.
 func TestSchemaAndValidatorAgree(t *testing.T) {
 	schemaBytes, err := os.ReadFile(repoFile(t, "contracts/ingress/v1/planes.schema.json"))
 	if err != nil {
@@ -207,6 +305,9 @@ func TestSchemaAndValidatorAgree(t *testing.T) {
 	}
 	rules := func(document map[string]any) []any { return document["rules"].([]any) }
 	second := func(document map[string]any) map[string]any { return rules(document)[1].(map[string]any) }
+	public := func(document map[string]any) map[string]any {
+		return document["public_host_rules"].([]any)[0].(map[string]any)
+	}
 	for name, mutate := range map[string]func(map[string]any){
 		"other schema version": func(d map[string]any) { d["schema_version"] = 2 },
 		"no regex mode":        func(d map[string]any) { d["regex_mode"] = false },
@@ -223,11 +324,37 @@ func TestSchemaAndValidatorAgree(t *testing.T) {
 		"unescaped dot":    func(d map[string]any) { second(d)["path"] = "/a.b$" },
 		"unknown rule key": func(d map[string]any) { second(d)["service"] = "query-api" },
 		"missing plane":    func(d map[string]any) { delete(second(d), "plane") },
+		"semicolon":        func(d map[string]any) { second(d)["path"] = "/gra;phql$" },
+		"space":            func(d map[string]any) { second(d)["path"] = "/gra phql$" },
+		"open brace":       func(d map[string]any) { second(d)["path"] = "/gra{phql$" },
+		"close brace":      func(d map[string]any) { second(d)["path"] = "/gra}phql$" },
+		"anchor inside":    func(d map[string]any) { second(d)["path"] = "/gra$phql$" },
+		"newline inside":   func(d map[string]any) { second(d)["path"] = "/gra\nphql$" },
+		"hash":             func(d map[string]any) { second(d)["path"] = "/gra#phql$" },
+		// A key in another case: the schema reads it as an unknown key and a missing key.
+		"key Path":  func(d map[string]any) { second(d)["Path"] = second(d)["path"]; delete(second(d), "path") },
+		"key Plane": func(d map[string]any) { second(d)["Plane"] = second(d)["plane"]; delete(second(d), "plane") },
+		"key Rules": func(d map[string]any) { d["Rules"] = d["rules"]; delete(d, "rules") },
+		"key Regex_Mode": func(d map[string]any) {
+			d["Regex_Mode"] = d["regex_mode"]
+			delete(d, "regex_mode")
+		},
+		// The paths that only the public host lists.
+		"no public_host_rules":  func(d map[string]any) { delete(d, "public_host_rules") },
+		"public: not a list":    func(d map[string]any) { d["public_host_rules"] = map[string]any{} },
+		"public: prefix":        func(d map[string]any) { public(d)["path_type"] = "Prefix" },
+		"public: anchored":      func(d map[string]any) { public(d)["path_type"] = "ImplementationSpecific" },
+		"public: regex path":    func(d map[string]any) { public(d)["path"] = "/metrics$" },
+		"public: semicolon":     func(d map[string]any) { public(d)["path"] = "/met;rics" },
+		"public: unknown plane": func(d map[string]any) { public(d)["plane"] = "web" },
+		"public: unknown key":   func(d map[string]any) { public(d)["service"] = "go-api" },
+		"public: missing plane": func(d map[string]any) { delete(public(d), "plane") },
+		"public: key Path":      func(d map[string]any) { public(d)["Path"] = public(d)["path"]; delete(public(d), "path") },
 	} {
 		t.Run(name, func(t *testing.T) {
 			document := load(t)
-			if second(document)["path"] != "/graphql$" {
-				t.Fatalf("the second rule of the contract is not /graphql$: the mutations would not plant what their names say")
+			if second(document)["path"] != "/graphql$" || public(document)["path"] != "/metrics" {
+				t.Fatalf("the second rule of the contract is not /graphql$, or the first public host rule is not /metrics: the mutations would not plant what their names say")
 			}
 			mutate(document)
 			if err := resolved.Validate(document); err == nil {

@@ -104,6 +104,7 @@ func TestCheckedInRouterConfigAgreesWithTheContract(t *testing.T) {
 // directive that sets, reads or checks a credential, it proxies to the two
 // planes only (never to web), and every directive it holds is one this test
 // knows. A new directive must be added here by someone who read the README.
+// The headers the router does set are held by TestRouterOwnsTheForwardedHeaders.
 func TestRouterConfigAddsNoCredential(t *testing.T) {
 	text := string(checkedInRouterConfig(t))
 	top, err := parseNginx(text)
@@ -118,7 +119,6 @@ func TestRouterConfigAddsNoCredential(t *testing.T) {
 		"proxy_http_version": true, "proxy_buffering": true, "proxy_read_timeout": true, "proxy_send_timeout": true,
 		"proxy_set_header": true, "set": true, "location": true, "proxy_pass": true,
 	}
-	headers := map[string]string{}
 	seen := 0
 	var walk func([]directive)
 	walk = func(directives []directive) {
@@ -135,28 +135,12 @@ func TestRouterConfigAddsNoCredential(t *testing.T) {
 					}
 				}
 			}
-			if d.name == "proxy_set_header" && len(d.args) == 2 {
-				headers[d.args[0]] = d.args[1]
-			}
 			walk(d.block)
 		}
 	}
 	walk(top)
 	if seen < 20 {
 		t.Fatalf("only %d directives were read: the file was not checked", seen)
-	}
-	wantHeaders := map[string]string{
-		"Host":            "$http_host",
-		"X-Real-IP":       "$remote_addr",
-		"X-Forwarded-For": "$proxy_add_x_forwarded_for",
-	}
-	if len(headers) != len(wantHeaders) {
-		t.Errorf("the router sets headers %v, want exactly %v", headers, wantHeaders)
-	}
-	for name, value := range wantHeaders {
-		if headers[name] != value {
-			t.Errorf("proxy_set_header %s is %q, want %q", name, headers[name], value)
-		}
 	}
 	upstreams := map[string]bool{}
 	for _, location := range readRouterFile(t, text).locations {
@@ -169,5 +153,144 @@ func TestRouterConfigAddsNoCredential(t *testing.T) {
 	}
 	if len(upstreams) != len(planeOfUpstream) {
 		t.Errorf("the router proxies to %v, want both planes %v", upstreams, planeOfUpstream)
+	}
+}
+
+// TestRouterOwnsTheForwardedHeaders holds the header table of the checked-in
+// file to the one ingress-nginx sends for a direct client with its default
+// configuration (nginx.tmpl of controller-v1.14.5, with use-forwarded-headers
+// and compute-full-forwarded-for off: $pass_access_scheme is $scheme,
+// $pass_port is $server_port, $best_http_host is $http_host). The table is
+// written here, not read from the generator. Every forwarded header comes from
+// the router's own connection, so a value a client sent for one of them never
+// reaches a plane; a client's X-Forwarded-For is replaced, not added to.
+func TestRouterOwnsTheForwardedHeaders(t *testing.T) {
+	want := [][2]string{
+		{"Host", "$http_host"},
+		{"X-Real-IP", "$remote_addr"},
+		{"X-Forwarded-For", "$remote_addr"},
+		{"X-Forwarded-Host", "$http_host"},
+		{"X-Forwarded-Port", "$server_port"},
+		{"X-Forwarded-Proto", "$scheme"},
+		{"X-Forwarded-Scheme", "$scheme"},
+		{"X-Scheme", "$scheme"},
+		{"X-Original-Forwarded-For", "$http_x_forwarded_for"},
+		{"X-Original-Forwarded-Host", "$http_x_forwarded_host"},
+	}
+	file := readRouterFile(t, string(checkedInRouterConfig(t)))
+	var got [][2]string
+	for _, header := range children(file.server, "proxy_set_header") {
+		if len(header.args) != 2 {
+			t.Fatalf("proxy_set_header with %d arguments: %v", len(header.args), header.args)
+		}
+		got = append(got, [2]string{header.args[0], header.args[1]})
+	}
+	if len(got) != len(want) {
+		t.Fatalf("the server sets %d headers, want %d:\n got %v\nwant %v", len(got), len(want), got, want)
+	}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Errorf("header %d: got %v, want %v", i, got[i], want[i])
+		}
+	}
+	// nginx gives a location the server's headers only when the location sets
+	// none of its own, so no other block may hold the directive.
+	top, err := parseNginx(string(checkedInRouterConfig(t)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	total := 0
+	var count func([]directive)
+	count = func(directives []directive) {
+		for _, d := range directives {
+			if d.name == "proxy_set_header" {
+				total++
+			}
+			count(d.block)
+		}
+	}
+	count(top)
+	if total != len(want) {
+		t.Errorf("the file holds %d proxy_set_header directives, %d of them in the server block: a location with its own would drop the server's", total, len(want))
+	}
+}
+
+// TestPlaneUpstreamsAreConstants holds that no request can choose where the
+// router proxies to. A location proxies to a variable only so that nginx
+// resolves the plane's name when a request comes (the router then starts while
+// a plane is not there yet). So: the file has exactly two set directives, both
+// in the server block, each gives a plane variable one literal host:port with
+// no variable in it; every proxy_pass is one of those two variables and has no
+// URI part; and no other directive of the file can give a variable a value.
+func TestPlaneUpstreamsAreConstants(t *testing.T) {
+	text := string(checkedInRouterConfig(t))
+	top, err := parseNginx(text)
+	if err != nil {
+		t.Fatal(err)
+	}
+	file := readRouterFile(t, text)
+	want := map[string]string{"$plane_go_api": "go-api:8000", "$plane_query_api": "query-api:8090"}
+
+	inServer := children(file.server, "set")
+	got := map[string]string{}
+	for _, set := range inServer {
+		if len(set.args) != 2 {
+			t.Fatalf("set with %d arguments: %v", len(set.args), set.args)
+		}
+		if _, twice := got[set.args[0]]; twice {
+			t.Errorf("%s is set more than once", set.args[0])
+		}
+		got[set.args[0]] = set.args[1]
+		if strings.Contains(set.args[1], "$") {
+			t.Errorf("set %s %q: the value holds a variable; a plane's address must be a literal", set.args[0], set.args[1])
+		}
+	}
+	if len(got) != len(want) {
+		t.Errorf("the server sets %v, want exactly %v", got, want)
+	}
+	for name, value := range want {
+		if got[name] != value {
+			t.Errorf("set %s is %q, want the literal %q", name, got[name], value)
+		}
+	}
+
+	// Directives that give a variable a value. Only set is in the file, and
+	// only in the server block.
+	assigning := map[string]bool{
+		"set": true, "map": true, "geo": true, "split_clients": true, "if": true, "rewrite": true,
+		"auth_request_set": true, "perl_set": true, "js_set": true, "set_by_lua": true, "set_by_lua_block": true,
+	}
+	sets, passes := 0, 0
+	var walk func(directives []directive, inLocation bool)
+	walk = func(directives []directive, inLocation bool) {
+		for _, d := range directives {
+			if assigning[d.name] {
+				if d.name != "set" {
+					t.Errorf("directive %s %v can give a variable a value from the request", d.name, d.args)
+				}
+				if inLocation {
+					t.Errorf("%s %v is inside a location: a plane variable is set once, in the server block", d.name, d.args)
+				}
+				sets++
+			}
+			if d.name == "proxy_pass" {
+				passes++
+				if len(d.args) != 1 {
+					t.Fatalf("proxy_pass with %d arguments", len(d.args))
+				}
+				target, ok := strings.CutPrefix(d.args[0], "http://")
+				if _, plane := want[target]; !ok || !plane {
+					t.Errorf("proxy_pass %s: want http:// and one of the two plane variables, nothing after it", d.args[0])
+				}
+			}
+			walk(d.block, inLocation || d.name == "location")
+		}
+	}
+	walk(top, false)
+	if sets != len(inServer) {
+		t.Errorf("the file holds %d assigning directives, %d of them are the server's set directives", sets, len(inServer))
+	}
+	if passes != len(file.locations) || passes == 0 {
+		t.Errorf("%d proxy_pass directives for %d locations", passes, len(file.locations))
 	}
 }

@@ -4,7 +4,7 @@
   "title": "Dev Health route planes of an api host",
   "type": "object",
   "additionalProperties": false,
-  "required": ["schema_version", "regex_mode", "rules"],
+  "required": ["schema_version", "regex_mode", "rules", "public_host_rules"],
   "properties": {
     "schema_version": {"type": "integer", "const": 1},
     "regex_mode": {"type": "boolean", "const": true},
@@ -19,6 +19,10 @@
       "contains": {"$ref": "#/$defs/default_rule"},
       "minContains": 1,
       "maxContains": 1
+    },
+    "public_host_rules": {
+      "type": "array",
+      "items": {"$ref": "#/$defs/exact_rule"}
     }
   },
   "$defs": {
@@ -46,6 +50,19 @@
           "pattern": "^(/(\\[\\^/\\]\\+|([A-Za-z0-9_-]|\\\\\\.)+))+\\$$"
         },
         "path_type": {"type": "string", "const": "ImplementationSpecific"},
+        "plane": {"$ref": "#/$defs/plane"}
+      }
+    },
+    "exact_rule": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["path", "path_type", "plane"],
+      "properties": {
+        "path": {
+          "type": "string",
+          "pattern": "^(/[A-Za-z0-9_.-]+)+$"
+        },
+        "path_type": {"type": "string", "const": "Exact"},
         "plane": {"$ref": "#/$defs/plane"}
       }
     }

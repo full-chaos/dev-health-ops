@@ -26,7 +26,7 @@ var parityGoldenPins = map[string]string{
 	"casing-multi-rune.golden.json":       "4310cc31a85d42ca93e8bb6ef4d614d4a4c02deb5ecd63d376984dfda7fa80f5",
 	"casing-sigma-distance.golden.json":   "3de72ac51892b9a287693cb70ac04d504413ee7accf19095ee060e7e63998190",
 	"casing-sigma-properties.golden.json": "fbd0ed22057ecb8c49bbc024a8d6a30bfc2cf939ad22028764569e8e32e0495d",
-	"errorsanitize.golden.json":           "f24ba04f425c388fdd33ff5714a14dff0fd19cfec58e915ef8efe509c6d7356b",
+	"errorsanitize.golden.json":           "0d9954853a471207c1d5f086d1c18680acd07334d56c080b37976e27af927c8f",
 	"fnmatch.golden.json":                 "5a8b106fb0f27f55610af0eff8089d09b625081f8c901a66802ddc78d102330a",
 	"isoformat.golden.json":               "e1fd71f57ff802c5413412c2d81e3c4bc188744d9c103dc4f5a31ba02e49e540",
 	"seqratio.golden.json":                "a98a13c5da8408a4a5345e6780a80b03ceb0b4f41e4d8b4bc7df61cfe98effe3",

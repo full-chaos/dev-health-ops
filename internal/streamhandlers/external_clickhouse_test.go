@@ -9,13 +9,13 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
-	"runtime"
 	"slices"
 	"strconv"
 	"strings"
 	"testing"
 	"time"
 
+	"github.com/full-chaos/dev-health-ops/internal/testsupport/moduleroot"
 	"github.com/google/uuid"
 )
 
@@ -288,7 +288,7 @@ func TestExternalSchemaRegistryAndSinkCoverTheSameTwentyTwoKinds(t *testing.T) {
 }
 
 func TestExternalClickHouseRowsMatchPythonGoldenOracle(t *testing.T) {
-	_, filename, _, ok := runtime.Caller(0)
+	_, filename, _, ok := moduleroot.Caller(0)
 	if !ok {
 		t.Fatal("locate golden test")
 	}

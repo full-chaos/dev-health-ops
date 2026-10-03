@@ -29,6 +29,9 @@ func TestObserveTeamRepoOwnershipDerivationExposesCounterAndHistogram(t *testing
 	if err := collector.ObserveTeamRepoOwnershipDerivation(TeamRepoOwnershipDerivationOutcomeNoSignal, 0); err != nil {
 		t.Fatal(err)
 	}
+	if err := collector.ObserveTeamRepoOwnershipDerivation(TeamRepoOwnershipDerivationOutcomeUnchanged, 0); err != nil {
+		t.Fatal(err)
+	}
 	if err := collector.ObserveTeamRepoOwnershipDerivation(TeamRepoOwnershipDerivationOutcomeRowsRetracted, 1); err != nil {
 		t.Fatal(err)
 	}
@@ -45,6 +48,7 @@ func TestObserveTeamRepoOwnershipDerivationExposesCounterAndHistogram(t *testing
 	for _, want := range []string{
 		`dev_health_team_repo_ownership_derivation_total{outcome="rows_written"} 2`,
 		`dev_health_team_repo_ownership_derivation_total{outcome="no_signal"} 1`,
+		`dev_health_team_repo_ownership_derivation_total{outcome="unchanged"} 1`,
 		`dev_health_team_repo_ownership_derivation_total{outcome="rows_retracted"} 1`,
 		`dev_health_team_repo_ownership_derivation_total{outcome="error"} 0`,
 	} {

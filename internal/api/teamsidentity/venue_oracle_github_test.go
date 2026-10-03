@@ -5,13 +5,13 @@ package teamsidentity
 import (
 	"errors"
 	"fmt"
+	"github.com/full-chaos/dev-health-ops/internal/testsupport/fakehttp"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
 	"os"
 	"os/exec"
 	"path/filepath"
-	"runtime"
 	"sort"
 	"strings"
 	"sync"
@@ -20,6 +20,7 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/api/pyjson"
 	"github.com/full-chaos/dev-health-ops/internal/platform/secrets"
 	"github.com/full-chaos/dev-health-ops/internal/providerfoundation"
+	"github.com/full-chaos/dev-health-ops/internal/testsupport/moduleroot"
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/pyoracle"
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/venueoracle"
 )
@@ -194,7 +195,7 @@ func TestVenueOracleDiscoverGitHubMatchesPython(t *testing.T) {
 	if os.Getenv("DEV_HEALTH_LIVE_PYTHON_ORACLE_PROOF_DIR") == "" {
 		t.Fatal("live Python oracle opt-in requires a proof directory from ci/check_go.sh")
 	}
-	_, currentFile, _, _ := runtime.Caller(0)
+	_, currentFile, _, _ := moduleroot.Caller(0)
 	packageDir := filepath.Dir(currentFile)
 	repoRoot := filepath.Dir(filepath.Dir(filepath.Dir(packageDir)))
 	python := pyoracle.Resolve(t, repoRoot)
@@ -219,10 +220,12 @@ func TestVenueOracleDiscoverGitHubMatchesPython(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	previousClient, previousExchange := discoveryHTTPClient, discoveryAppExchangeClient
+	previousClient, previousExchange := fakehttp.Client(discoveryHTTPClient), fakehttp.Client(discoveryAppExchangeClient)
 	discoveryHTTPClient = &http.Client{Transport: rewriteHostTransport{target: stubURL}}
-	discoveryAppExchangeClient = discoveryHTTPClient
-	t.Cleanup(func() { discoveryHTTPClient, discoveryAppExchangeClient = previousClient, previousExchange })
+	discoveryAppExchangeClient = fakehttp.Client(discoveryHTTPClient)
+	t.Cleanup(func() {
+		discoveryHTTPClient, discoveryAppExchangeClient = fakehttp.Client(previousClient), fakehttp.Client(previousExchange)
+	})
 
 	goTeams, err := discoverGitHub(t.Context(), credential, org)
 	if err != nil {

@@ -3,6 +3,7 @@ package providersync
 import (
 	"context"
 	"encoding/json"
+	"github.com/full-chaos/dev-health-ops/internal/testsupport/fakehttp"
 	"io"
 	"net/http"
 	"slices"
@@ -50,7 +51,7 @@ func TestGitHubPullRequestReviewRouteComposesOneCompletePRRow(t *testing.T) {
 	claim := nativeTestClaim("github", "pr-reviews")
 	batch, err := (GitHubPullRequestReviewRouteHandler{}).Collect(
 		context.Background(), claim, providerfoundation.Credential{},
-		gitHubPullRequestClient(t, doer, "https://api.github.com"), now,
+		gitHubPullRequestClient(t, fakehttp.Client(doer), "https://api.github.com"), now,
 	)
 	if err != nil {
 		t.Fatal(err)
@@ -104,7 +105,7 @@ func TestGitHubPullRequestSocialRoutePreservesAliasIdentityAndParity(t *testing.
 			claim := nativeTestClaim("github", dataset)
 			batch, err := (GitHubPullRequestSocialRouteHandler{}).Collect(
 				context.Background(), claim, providerfoundation.Credential{},
-				gitHubPullRequestClient(t, doer, "https://api.github.com"), now,
+				gitHubPullRequestClient(t, fakehttp.Client(doer), "https://api.github.com"), now,
 			)
 			if err != nil {
 				t.Fatal(err)
@@ -182,7 +183,7 @@ func TestGitHubPullRequestReviewRoutePreservesBaseRowOnOptionalReviewFailure(t *
 	claim := nativeTestClaim("github", "pr-reviews")
 	batch, err := (GitHubPullRequestReviewRouteHandler{}).Collect(
 		context.Background(), claim, providerfoundation.Credential{},
-		gitHubPullRequestClient(t, doer, "https://api.github.com"), time.Date(2026, 8, 4, 12, 0, 0, 0, time.UTC),
+		gitHubPullRequestClient(t, fakehttp.Client(doer), "https://api.github.com"), time.Date(2026, 8, 4, 12, 0, 0, 0, time.UTC),
 	)
 	if err != nil {
 		t.Fatal(err)

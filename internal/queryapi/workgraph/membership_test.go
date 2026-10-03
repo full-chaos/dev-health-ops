@@ -5,12 +5,12 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
-	"runtime"
 	"sort"
 	"strings"
 	"testing"
 
 	chproto "github.com/ClickHouse/clickhouse-go/v2/lib/proto"
+	"github.com/full-chaos/dev-health-ops/internal/testsupport/moduleroot"
 )
 
 // --- CHAOS-4655: pair-bound (node_type, node_id) match ------------------
@@ -177,7 +177,7 @@ func TestBatchResolveMembership_RecordsTelemetryOnMissingMembershipTable(t *test
 // that depends on this cardinality, instead of a silent live failure
 // discovered the way this ticket's original bug was.
 func TestCategoryKindCardinalityHasNoNewValue(t *testing.T) {
-	_, currentFile, _, ok := runtime.Caller(0)
+	_, currentFile, _, ok := moduleroot.Caller(0)
 	if !ok {
 		t.Fatal("resolve workgraph package path")
 	}

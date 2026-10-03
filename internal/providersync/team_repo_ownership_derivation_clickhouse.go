@@ -82,7 +82,30 @@ type teamRepoOwnershipRepoInfo struct {
 // (providers/teams.py::load_team_repo_ownership_map,
 // native_status_change.py's _TEAM_REPOSITORIES_SQL -- both already filter
 // on valid_to) see it as expired on their very next query.
+// TeamRepoOwnershipDerivationStats is what one Derive run says about HOW MANY facts it derived, beyond what it wrote (CHAOS-8148). A run
+// that writes nothing is one of two different things the written count cannot tell apart: it derived NOTHING (no_signal: the designed-empty
+// case), or it derived facts that EVERY active row already carries unchanged (unchanged: the steady state since "stop re-writing unchanged
+// ownership"). Both stay zero on an early return (inputs not ready, error).
+type TeamRepoOwnershipDerivationStats struct {
+	// Derived is the number of (team, repo) facts the run derived from the synced inputs.
+	Derived int
+	// Unchanged is how many of those an already-open row carried unchanged, so the run did not write them.
+	Unchanged int
+}
+
+// Derive is DeriveWithStats without the stats (the form the integration tests and the older callers use).
 func (service TeamRepoOwnershipDerivationService) Derive(ctx context.Context, orgID string) (written int, retracted int, inputsReady bool, armCounts map[string]int, err error) {
+	written, retracted, inputsReady, armCounts, _, err = service.DeriveWithStats(ctx, orgID)
+	return written, retracted, inputsReady, armCounts, err
+}
+
+// DeriveWithStats is Derive plus the derived/unchanged counts of the run (CHAOS-8148).
+func (service TeamRepoOwnershipDerivationService) DeriveWithStats(ctx context.Context, orgID string) (written int, retracted int, inputsReady bool, armCounts map[string]int, stats TeamRepoOwnershipDerivationStats, err error) {
+	written, retracted, inputsReady, armCounts, err = service.derive(ctx, orgID, &stats)
+	return written, retracted, inputsReady, armCounts, stats, err
+}
+
+func (service TeamRepoOwnershipDerivationService) derive(ctx context.Context, orgID string, stats *TeamRepoOwnershipDerivationStats) (written int, retracted int, inputsReady bool, armCounts map[string]int, err error) {
 	if service.Conn == nil || ctx == nil || orgID == "" {
 		return 0, 0, false, nil, ErrTeamRepoOwnershipDerivationUnavailable
 	}
@@ -213,6 +236,7 @@ func (service TeamRepoOwnershipDerivationService) Derive(ctx context.Context, or
 		}
 	}
 
+	stats.Derived = len(derived)
 	if len(derived) == 0 {
 		return 0, retracted, true, nil, nil
 	}
@@ -224,6 +248,7 @@ func (service TeamRepoOwnershipDerivationService) Derive(ctx context.Context, or
 	// previously retracted and now derived again), is left in toWrite and
 	// gets a fresh open row exactly like today's unconditional write did.
 	toWrite := filterUnchangedTeamRepoOwnershipRows(derived, repos, activeRows)
+	stats.Unchanged = len(derived) - len(toWrite)
 	if len(toWrite) == 0 {
 		return 0, retracted, true, nil, nil
 	}

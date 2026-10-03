@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"github.com/full-chaos/dev-health-ops/internal/testsupport/fakehttp"
 	"io"
 	"net/http"
 	"strconv"
@@ -89,7 +90,7 @@ func TestGitLabCommitStatsRouteCountsFailedAndRetriedAttempts(t *testing.T) {
 		{body: `{"id":"sha-1","stats":{"additions":4,"deletions":2}}`},
 	}}
 	client, err := providerfoundation.NewHTTPClient(
-		"gitlab", "https://gitlab.example", doer,
+		"gitlab", "https://gitlab.example", fakehttp.Client(doer),
 		func(*http.Request) error { return nil },
 		providerfoundation.RetryPolicy{
 			MaxAttempts: 2, InitialWait: time.Nanosecond, MaxWait: time.Nanosecond,
@@ -127,7 +128,7 @@ func TestGitLabCommitStatsRouteFetchesAggregateStatsAcrossCommitPages(t *testing
 	claim := nativeTestClaim("gitlab", "commit-stats")
 	batch, err := (GitLabCommitStatsRouteHandler{}).Collect(
 		context.Background(), claim, providerfoundation.Credential{},
-		gitLabRepositoryClient(t, doer, "https://gitlab.example"), normalizedAt,
+		gitLabRepositoryClient(t, fakehttp.Client(doer), "https://gitlab.example"), normalizedAt,
 	)
 	if err != nil {
 		t.Fatal(err)
@@ -179,7 +180,7 @@ func TestGitLabCommitStatsRouteMirrorsPythonSoftDetailFailure(t *testing.T) {
 	claim := nativeTestClaim("gitlab", "commit-stats")
 	batch, err := (GitLabCommitStatsRouteHandler{}).Collect(
 		context.Background(), claim, providerfoundation.Credential{},
-		gitLabRepositoryClient(t, doer, "https://gitlab.example"), normalizedAt,
+		gitLabRepositoryClient(t, fakehttp.Client(doer), "https://gitlab.example"), normalizedAt,
 	)
 	if err != nil {
 		t.Fatal(err)
@@ -200,7 +201,7 @@ func TestGitLabCommitStatsRoutePropagatesAuthenticationDetailFailure(t *testing.
 	batch, err := (GitLabCommitStatsRouteHandler{}).Collect(
 		context.Background(), nativeTestClaim("gitlab", "commit-stats"),
 		providerfoundation.Credential{},
-		gitLabRepositoryClient(t, doer, "https://gitlab.example"),
+		gitLabRepositoryClient(t, fakehttp.Client(doer), "https://gitlab.example"),
 		time.Date(2026, 8, 3, 15, 0, 0, 0, time.UTC),
 	)
 	var providerErr *providerfoundation.ProviderError
@@ -218,7 +219,7 @@ func TestGitLabCommitStatsRoutePropagatesDetailLeaseLoss(t *testing.T) {
 		{body: `{"id":123,"name":"api","path_with_namespace":"group/api"}`},
 		{body: `[{"id":"sha-1"}]`},
 	}}
-	client := gitLabRepositoryClient(t, doer, "https://gitlab.example")
+	client := gitLabRepositoryClient(t, fakehttp.Client(doer), "https://gitlab.example")
 	assertions := 0
 	client.Lease = providerfoundation.LeaseGuardFunc(func(context.Context) error {
 		assertions++
@@ -250,7 +251,7 @@ func TestGitLabCommitStatsRoutePropagatesDetailBudgetDenial(t *testing.T) {
 		{body: `{"id":123,"name":"api","path_with_namespace":"group/api"}`},
 		{body: `[{"id":"sha-1"}]`},
 	}}
-	client := gitLabRepositoryClient(t, doer, "https://gitlab.example")
+	client := gitLabRepositoryClient(t, fakehttp.Client(doer), "https://gitlab.example")
 	budget := &gitLabCommitStatsBudget{failAt: 3}
 	client.Budget = budget
 	batch, err := (GitLabCommitStatsRouteHandler{}).Collect(
@@ -304,7 +305,7 @@ func TestGitLabCommitStatsRoutePropagatesDetailContextFailure(t *testing.T) {
 			batch, err := (GitLabCommitStatsRouteHandler{}).Collect(
 				ctx, nativeTestClaim("gitlab", "commit-stats"),
 				providerfoundation.Credential{},
-				gitLabRepositoryClient(t, doer, "https://gitlab.example"),
+				gitLabRepositoryClient(t, fakehttp.Client(doer), "https://gitlab.example"),
 				time.Date(2026, 8, 3, 15, 0, 0, 0, time.UTC),
 			)
 			if !errors.Is(err, want) {
@@ -400,7 +401,7 @@ func TestGitLabCommitStatsRouteDeduplicatesAcceptedHashesBeforeSelection(t *test
 	batch, err := (GitLabCommitStatsRouteHandler{}).Collect(
 		context.Background(), nativeTestClaim("gitlab", "commit-stats"),
 		providerfoundation.Credential{},
-		gitLabRepositoryClient(t, doer, "https://gitlab.example"),
+		gitLabRepositoryClient(t, fakehttp.Client(doer), "https://gitlab.example"),
 		time.Date(2026, 8, 3, 15, 0, 0, 0, time.UTC),
 	)
 	if err != nil {
@@ -455,7 +456,7 @@ func TestGitLabCommitStatsRouteFailsClosedOnListCapAndRateLimit(t *testing.T) {
 			batch, err := test.handler.Collect(
 				context.Background(), nativeTestClaim("gitlab", "commit-stats"),
 				providerfoundation.Credential{},
-				gitLabRepositoryClient(t, doer, "https://gitlab.example"), now,
+				gitLabRepositoryClient(t, fakehttp.Client(doer), "https://gitlab.example"), now,
 			)
 			if test.name == "list cap" {
 				if !errors.Is(err, ErrPaginationCapExceeded) {
@@ -516,7 +517,7 @@ func TestGitLabCommitStatsRouteRejectsCrossScopeMalformedIdentityAndProjectMisma
 			doer := &gitLabCommitStatsDoer{t: t, responses: []gitLabCommitStatsResponse{
 				{body: test.project}, {body: test.commits},
 			}}
-			client := gitLabRepositoryClient(t, doer, "https://gitlab.example")
+			client := gitLabRepositoryClient(t, fakehttp.Client(doer), "https://gitlab.example")
 			client.Provider = test.clientProvider
 			batch, err := (GitLabCommitStatsRouteHandler{}).Collect(
 				context.Background(), test.claim, providerfoundation.Credential{}, client, now,
@@ -545,7 +546,7 @@ func TestGitLabCommitStatsRouteFiltersWindowBeforeDetailExpansion(t *testing.T) 
 	batch, err := (GitLabCommitStatsRouteHandler{}).Collect(
 		context.Background(), nativeTestClaim("gitlab", "commit-stats"),
 		providerfoundation.Credential{},
-		gitLabRepositoryClient(t, doer, "https://gitlab.example"),
+		gitLabRepositoryClient(t, fakehttp.Client(doer), "https://gitlab.example"),
 		time.Date(2026, 8, 3, 15, 0, 0, 0, time.UTC),
 	)
 	if err != nil {
@@ -576,7 +577,7 @@ func TestGitLabCommitStatsRouteUsesProjectPathBeforeAmbiguousName(t *testing.T) 
 		batch, collectErr := (GitLabCommitStatsRouteHandler{}).Collect(
 			context.Background(), nativeTestClaim("gitlab", "commit-stats"),
 			providerfoundation.Credential{},
-			gitLabRepositoryClient(t, doer, "https://gitlab.example"),
+			gitLabRepositoryClient(t, fakehttp.Client(doer), "https://gitlab.example"),
 			time.Date(2026, 8, 3, 15, 0, 0, 0, time.UTC),
 		)
 		if collectErr != nil {
@@ -646,7 +647,7 @@ func TestGitLabCommitStatsRoutePreservesPythonSelectionLimits(t *testing.T) {
 			}
 			batch, err := (GitLabCommitStatsRouteHandler{}).Collect(
 				context.Background(), claim, providerfoundation.Credential{},
-				gitLabRepositoryClient(t, doer, "https://gitlab.example"),
+				gitLabRepositoryClient(t, fakehttp.Client(doer), "https://gitlab.example"),
 				time.Date(2026, 8, 3, 15, 0, 0, 0, time.UTC),
 			)
 			if err != nil {

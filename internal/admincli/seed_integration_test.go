@@ -23,18 +23,25 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/admincli"
 	"github.com/full-chaos/dev-health-ops/internal/cli"
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/containers"
+	"github.com/full-chaos/dev-health-ops/internal/testsupport/pgschema"
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/pyoracle"
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/venueoracle"
 )
 
-// upgradeProgram runs the Python upgrade the migrate Job runs, with no River
-// step, so the database holds the schema and the migrations' own seed rows.
-const upgradeProgram = `
-import argparse, sys
-from dev_health_ops.db import normalize_async_postgres_uri
-from dev_health_ops.migrate import _run_upgrade
-sys.exit(_run_upgrade(argparse.Namespace(db=normalize_async_postgres_uri(sys.argv[1]), revision="head")))
-`
+// seedPythonBuild is the build whose seed_feature_flags_async and
+// STANDARD_FEATURES answered the frozen goldens: main when they were recorded.
+const seedPythonBuild = "a4847c5e93607451a0c987b314d37e02fc43ce85"
+
+// seedGolden is the GoldenSpec of one oracle of this file.
+func seedGolden(t *testing.T, file, digest string) venueoracle.GoldenSpec {
+	return venueoracle.GoldenSpec{
+		Path:        "testdata/golden/" + file + ".json",
+		PythonBuild: seedPythonBuild,
+		SHA256:      digest,
+		Recipe: "git worktree add --detach $DIR " + seedPythonBuild + " (with its .venv: uv sync --frozen --no-install-project); then from the repository root: " +
+			"go run ./internal/testsupport/venueoracle/goldenrecord -pkg ./internal/admincli/ -test '^" + t.Name() + "$' -python-root $DIR",
+	}
+}
 
 // seedProgram runs the producer behind the Python verb the migrate Job runs
 // after the upgrade (`dev-hops admin features seed`): seed_feature_flags_async
@@ -68,13 +75,18 @@ from dev_health_ops.licensing.registry import STANDARD_FEATURES
 print(json.dumps([[k, n, c.value, t.value, d] for k, n, c, t, d in STANDARD_FEATURES]))
 `
 
-// TestStandardFeaturesVenueOracleMatchesPythonRegistry requires the Go registry to equal Python's,
-// row for row and in order.
-func TestStandardFeaturesVenueOracleMatchesPythonRegistry(t *testing.T) {
-	root, python := pythonAt(t)
-	output := runPython(t, root, python, registryProgram)
+// TestStandardFeaturesMatchThePythonRegistry requires the Go registry to equal Python's,
+// row for row and in order. Python's registry is frozen at seedPythonBuild.
+func TestStandardFeaturesMatchThePythonRegistry(t *testing.T) {
+	golden := venueoracle.OpenGolden(t, seedGolden(t, "standard_features", "c89c402560cb167990aa27390abf1140a8ca0493f8225fa4cc4cb042860cfe83"))
+	root := golden.PythonRoot(t, repoRoot(t))
+	answers := golden.Produce(t, root, []venueoracle.Request{venueoracle.ProgramRequest("standard features", registryProgram, nil, nil)},
+		func(producer *venueoracle.Producer, _ []venueoracle.Request) []venueoracle.Response {
+			return []venueoracle.Response{{Body: string(runPython(t, producer, registryProgram))}}
+		})
+	golden.Consumed(t, answers...)
 	var rows [][]string
-	if err := json.Unmarshal(output, &rows); err != nil {
+	if err := json.Unmarshal([]byte(answers[0].Body), &rows); err != nil {
 		t.Fatalf("decode the Python registry: %v", err)
 	}
 	var want []admincli.Feature
@@ -84,16 +96,20 @@ func TestStandardFeaturesVenueOracleMatchesPythonRegistry(t *testing.T) {
 	if len(want) == 0 || !reflect.DeepEqual(admincli.StandardFeatures, want) {
 		t.Fatalf("admincli.StandardFeatures differs from Python's STANDARD_FEATURES:\n  go     %v\n  python %v", admincli.StandardFeatures, want)
 	}
-	venueoracle.WriteProof(t)
+	golden.SkipDiff(t)
+	golden.Finish(t)
 }
 
-// TestSeedVenueOracleMatchesThePythonProducer is the differential oracle: two databases built by
-// the real Python upgrade, the same feature rows removed from both, the
-// Python verb on one and dho's on the other. The rows must then be the same
-// -- every column but the random id and the run-time stamps, which are
-// checked for shape -- on a database missing features and on one that
-// holds all of them.
-func TestSeedVenueOracleMatchesThePythonProducer(t *testing.T) {
+// TestSeedMatchesThePythonProducer is the differential oracle: two databases built by
+// the migrator, the same feature rows removed from both, the Python producer
+// on one and dho's on the other. The rows must then be the same -- every
+// column but the random id and the run-time stamps, which are checked for
+// shape -- on a database missing features and on one that holds all of them.
+// The producer's output and rows were executed once on seedPythonBuild and are
+// frozen in testdata/golden/seed.json.
+func TestSeedMatchesThePythonProducer(t *testing.T) {
+	golden := venueoracle.OpenGolden(t, seedGolden(t, "seed", "3f0d8ace1f261f591224db6c8113d9410791c72e96889d0089a761e631c19b43"))
+	root := golden.PythonRoot(t, repoRoot(t))
 	ctx := context.Background()
 	instance, err := containers.StartPostgres(ctx)
 	if err != nil {
@@ -104,7 +120,6 @@ func TestSeedVenueOracleMatchesThePythonProducer(t *testing.T) {
 			t.Errorf("close postgres: %v", err)
 		}
 	})
-	root, python := pythonAt(t)
 	t.Setenv("DEV_HEALTH_ALLOW_CELERY_RIVER_CUTOVER", "1")
 	t.Setenv("MIGRATION_DATABASE_URI", "")
 	os.Unsetenv("MIGRATION_DATABASE_URI")
@@ -120,7 +135,7 @@ func TestSeedVenueOracleMatchesThePythonProducer(t *testing.T) {
 	for index := range databases {
 		name := scratchDatabase(t, ctx, admin)
 		uris[index] = databaseURI(t, instance.URI, name)
-		runPython(t, root, python, upgradeProgram, uris[index])
+		pgschema.ApplyURI(ctx, t, uris[index])
 		conn, err := pgx.Connect(ctx, uris[index])
 		if err != nil {
 			t.Fatal(err)
@@ -134,9 +149,18 @@ func TestSeedVenueOracleMatchesThePythonProducer(t *testing.T) {
 
 	for _, pass := range []string{"missing features", "nothing missing"} {
 		before := [2]map[string]string{existingRows(t, ctx, databases[0]), existingRows(t, ctx, databases[1])}
-		pythonStarted := time.Now()
-		output := runPython(t, root, python, seedProgram, uris[0])
-		pythonWindow := [2]time.Time{pythonStarted, time.Now()}
+		// The Python producer runs only while recording; its printed count
+		// and the rows it left are frozen.
+		var pythonWindow [2]time.Time
+		answers := golden.Produce(t, root, []venueoracle.Request{venueoracle.ProgramRequest("seed: "+pass, seedProgram, nil, nil)},
+			func(producer *venueoracle.Producer, _ []venueoracle.Request) []venueoracle.Response {
+				pythonStarted := time.Now()
+				output := runPython(t, producer, seedProgram, uris[0])
+				pythonWindow = [2]time.Time{pythonStarted, time.Now()}
+				return []venueoracle.Response{{Body: string(output)}}
+			})
+		golden.Consumed(t, answers...)
+		output := answers[0].Body
 		goStarted := time.Now()
 		result, err := admincli.Seed(ctx, databases[1], time.Now)
 		if err != nil {
@@ -152,19 +176,24 @@ func TestSeedVenueOracleMatchesThePythonProducer(t *testing.T) {
 		if !reflect.DeepEqual(sorted(result.Created), sorted(wantCreated)) {
 			t.Fatalf("%s: dho created %v, want %v", pass, result.Created, wantCreated)
 		}
-		if strings.TrimSpace(string(output)) != wantPython {
+		if strings.TrimSpace(output) != wantPython {
 			t.Fatalf("%s: the Python seed created %q row(s), want %s", pass, output, wantPython)
 		}
 		// A row that existed before the seed is left exactly as it was, id and
-		// stamps included, by both seeds.
-		for index, conn := range databases {
-			for key, row := range existingRows(t, ctx, conn) {
+		// stamps included, by both seeds (the Python database's rows are read
+		// while recording, when its seed ran).
+		unchanged := func(index int) {
+			for key, row := range existingRows(t, ctx, databases[index]) {
 				if was, existed := before[index][key]; existed && row != was {
 					t.Fatalf("%s: database %d: the seed changed the existing row %s:\n  before %s\n  after  %s", pass, index, key, was, row)
 				}
 			}
 		}
-		pythonRows := featureRows(t, ctx, databases[0], wantCreated, pythonWindow)
+		unchanged(1)
+		pythonRows := strings.Split(golden.InspectRows(t, "python feature rows: "+pass, func() string {
+			unchanged(0)
+			return strings.Join(featureRows(t, ctx, databases[0], wantCreated, pythonWindow), "\n")
+		}), "\n")
 		goRows := featureRows(t, ctx, databases[1], wantCreated, goWindow)
 		if !reflect.DeepEqual(goRows, pythonRows) {
 			var differing []string
@@ -218,7 +247,8 @@ func TestSeedVenueOracleMatchesThePythonProducer(t *testing.T) {
 	if password != "" && strings.Contains(logged, password) {
 		t.Fatalf("the seed verb logged the password: %s", logged)
 	}
-	venueoracle.WriteProof(t)
+	golden.SkipDiff(t)
+	golden.Finish(t)
 }
 
 // existingRows reads every feature_flags row in full, id and stamps
@@ -299,22 +329,31 @@ func sorted(values []string) []string {
 	return out
 }
 
-func pythonAt(t *testing.T) (string, string) {
+func repoRoot(t *testing.T) string {
 	t.Helper()
 	root, err := filepath.Abs(filepath.Join("..", ".."))
 	if err != nil {
 		t.Fatal(err)
 	}
-	return root, pyoracle.Resolve(t, root)
+	return root
 }
 
-func runPython(t *testing.T, root, python, program string, args ...string) []byte {
+// runPython runs program with args through the harness's launcher: the pinned
+// interpreter in the closed environment, so nothing ambient shapes the answer.
+// args are the program's own (the address of the run's database).
+func runPython(t *testing.T, producer *venueoracle.Producer, program string, args ...string) []byte {
 	t.Helper()
-	command := exec.Command(python, append([]string{"-c", program}, args...)...)
-	command.Env = append(os.Environ(), "PYTHONPATH="+filepath.Join(root, "src"))
-	output, err := command.CombinedOutput()
+	command, err := producer.Command(context.Background(), nil, nil, append([]string{"-c", program}, args...)...)
 	if err != nil {
-		t.Fatalf("python: %v", pyoracle.RunError(python, err, output))
+		t.Fatal(err)
+	}
+	output, err := command.Output()
+	if err != nil {
+		var stderr []byte
+		if exitErr, ok := err.(*exec.ExitError); ok {
+			stderr = exitErr.Stderr
+		}
+		t.Fatalf("python: %v", pyoracle.RunError(command.Path, err, stderr))
 	}
 	return output
 }

@@ -3,9 +3,9 @@ package schedulerservice
 import (
 	"context"
 	"errors"
+	"github.com/full-chaos/dev-health-ops/internal/httpguard"
 	"io"
 	"log/slog"
-	"net/http"
 	"sync"
 	"time"
 
@@ -437,12 +437,7 @@ var productionSchedulerRuntimeSources = schedulerRuntimeSources{
 					Repository: providerfoundation.PostgresCredentialRepository{Pool: domainPool},
 					Decryptor:  decryptor,
 				},
-				&http.Client{
-					Timeout: 45 * time.Second,
-					CheckRedirect: func(*http.Request, []*http.Request) error {
-						return http.ErrUseLastResponse
-					},
-				},
+				httpguard.NewClient(45*time.Second),
 				nil,
 			)
 			if discoveryErr != nil {

@@ -4,6 +4,7 @@ package syncdispatchruntime
 
 import (
 	"context"
+	"github.com/full-chaos/dev-health-ops/internal/syncdispatchruntime/synclog"
 	"log/slog"
 	"strings"
 	"testing"
@@ -77,7 +78,7 @@ func TestObserveRunEmitsTheParityPinnedLogLine(t *testing.T) {
 			t.Fatal(err)
 		}
 		defer func() { _ = tx.Rollback(ctx) }()
-		observations, err := observeRun(ctx, tx, estimator, logger, "org-1", budgetCandidatesRunID, nil, now)
+		observations, err := observeRun(ctx, tx, estimator, synclog.New(logger), "org-1", budgetCandidatesRunID, nil, now)
 		if err != nil {
 			t.Fatalf("observeRun: %v", err)
 		}

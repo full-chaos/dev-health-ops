@@ -2,9 +2,9 @@ package atlassianteams
 
 import (
 	"path/filepath"
-	"runtime"
 	"testing"
 
+	"github.com/full-chaos/dev-health-ops/internal/testsupport/moduleroot"
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/programoracle"
 )
 
@@ -22,7 +22,7 @@ const producerIdentity = "python 3.14.7\nunicodedata 16.0.0\nhttpx 0.28.1"
 // goldenrecord verb writes each digest when it promotes a recording; a new
 // golden starts as "PIN:" + its file name without ".json".
 var goldenPins = map[string]string{
-	"teams-client.golden.json": "ca2e42c5c018f21f8772b702a07e4b183a910d9a6801e2484d8b1b906234d09b",
+	"teams-client.golden.json": "7be724b8ab95c3074fa3d4fbc6db6d1c47217820131f2efd301d6f7034a11389",
 }
 
 // goldens is the set of this package's frozen Python answers.
@@ -48,7 +48,7 @@ func frozenPython(t *testing.T, golden string, programs ...programoracle.Program
 // repositoryRoot is the repository root, from this file's own location.
 func repositoryRoot(t *testing.T) string {
 	t.Helper()
-	_, file, _, ok := runtime.Caller(0)
+	_, file, _, ok := moduleroot.Caller(0)
 	if !ok {
 		t.Fatal("cannot locate the test source")
 	}

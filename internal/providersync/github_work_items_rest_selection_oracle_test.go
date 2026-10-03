@@ -2,6 +2,7 @@ package providersync
 
 import (
 	"context"
+	"github.com/full-chaos/dev-health-ops/internal/testsupport/fakehttp"
 	"testing"
 	"time"
 )
@@ -77,7 +78,7 @@ func buildGitHubWorkItemsRESTSelectionOracleRow(
 	doer := &githubWorkItemsRESTDoer{t: t, replies: githubWorkItemsRESTSelectionFixtures(claim)}
 	result, err := (GitHubWorkItemsRESTCollector{}).Collect(
 		context.Background(), claim,
-		gitHubPullRequestClient(t, doer, "https://api.github.com"),
+		gitHubPullRequestClient(t, fakehttp.Client(doer), "https://api.github.com"),
 		time.Date(2026, 8, 4, 12, 0, 0, 0, time.UTC),
 	)
 	if err != nil {

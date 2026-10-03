@@ -213,7 +213,7 @@ func (collector jiraCombinedTeamCatalogCollector) collectAtlassianTeams(
 	cloudID := strings.TrimSpace(credential.Config["atlassian_cloud_id"])
 	doer := collector.Doer
 	if doer == nil {
-		doer = &http.Client{Timeout: 45 * time.Second, CheckRedirect: providerfoundation.DropCredentialsOnHostChange}
+		doer = defaultAtlassianTeamsDoer()
 	}
 	if cloudID == "" {
 		cloudID, err = atlassianteams.ResolveCloudID(ctx, doer, tenant)
@@ -291,4 +291,10 @@ func normalizeAtlassianTenantURL(value string) (*url.URL, error) {
 		return nil, providerfoundation.ErrNormalizationInvalid
 	}
 	return &url.URL{Scheme: parsed.Scheme, Host: parsed.Host}, nil
+}
+
+// defaultAtlassianTeamsDoer follows redirects (a tenant answers with its canonical host) but never replays a credential
+// to another host.
+func defaultAtlassianTeamsDoer() *http.Client {
+	return &http.Client{Timeout: 45 * time.Second, CheckRedirect: providerfoundation.DropCredentialsOnHostChange}
 }

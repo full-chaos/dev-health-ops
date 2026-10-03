@@ -481,7 +481,7 @@ func TestARunStoppedBeforeItsFirstRequestNamesEveryPlannedRequest(t *testing.T) 
 func TestRunWritesTheReportWhenItStopsBeforeItsFirstRequest(t *testing.T) {
 	dir := t.TempDir()
 	stale := []byte(`{"outcomes":[],"partial":false}`)
-	f := flags{queryAPIURL: "http://127.0.0.1:1", pythonAPIURL: "http://127.0.0.1:1", queryAPISrc: dir + "/no-such-query-api-source",
+	f := flags{queryAPIURL: "http://127.0.0.1:1", pythonAPIURL: "http://127.0.0.1:1",
 		org: "org-1", recordedBy: "r", reviewEvidence: "e", artifactDir: dir + "/artifacts", dryRun: true,
 		reportPath: dir + "/report.json", timeout: time.Second, runDeadline: time.Minute}
 	if err := os.WriteFile(f.reportPath, stale, 0o600); err != nil {
@@ -557,7 +557,7 @@ func TestRunContextIsCancelledBySIGTERM(t *testing.T) {
 // run() stops, so the report it leaves says run_deadline.
 func TestRunIsBoundedByTheRunDeadlineFlag(t *testing.T) {
 	dir := t.TempDir()
-	f := flags{queryAPIURL: "http://127.0.0.1:1", pythonAPIURL: "http://127.0.0.1:1", queryAPISrc: dir + "/no-such-query-api-source",
+	f := flags{queryAPIURL: "http://127.0.0.1:1", pythonAPIURL: "http://127.0.0.1:1",
 		org: "org-1", recordedBy: "r", reviewEvidence: "e", artifactDir: dir + "/artifacts", dryRun: true,
 		reportPath: dir + "/report.json", timeout: time.Second, runDeadline: time.Nanosecond}
 	var err error

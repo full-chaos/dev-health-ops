@@ -43,7 +43,6 @@ from dataclasses import dataclass
 from .go_api_operation_catalog import (
     catalog_entries,
     catalog_loaded_successfully,
-    current_catalog_entries,
 )
 from .go_api_schema_digest import current_schema_digest
 
@@ -324,7 +323,7 @@ async def _cmd_routing_disable(ns: argparse.Namespace) -> int:
 
     from .go_api_routing_admin import DISABLE_MODES, apply_disable, plan_disable
 
-    catalog, error = _catalog_by_operation(current_catalog_entries())
+    catalog, error = _catalog_by_operation(catalog_entries())
     if error:
         return _refuse(error)
     if not catalog:

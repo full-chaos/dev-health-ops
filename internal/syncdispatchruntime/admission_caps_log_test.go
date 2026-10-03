@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"github.com/full-chaos/dev-health-ops/internal/syncdispatchruntime/synclog"
 	"log/slog"
 	"strings"
 	"testing"
@@ -33,7 +34,7 @@ func TestDispatchServiceConstructionLogsTheAdmissionCaps(t *testing.T) {
 	t.Setenv("SYNC_UNIT_CONCURRENCY_PER_BUCKET", "3")
 	var logs bytes.Buffer
 	service, err := NewNativeDispatchSyncRunService(
-		&pgxpool.Pool{}, slog.New(slog.NewJSONHandler(&logs, nil)),
+		&pgxpool.Pool{}, synclog.New(slog.New(slog.NewJSONHandler(&logs, nil))),
 		noopBudgetEstimator{}, &joboutbox.Producer{}, noopPolicyRegistry{},
 	)
 	if err != nil || service == nil {
@@ -80,7 +81,7 @@ func TestDispatchServiceConstructionLogsTheClampWhereItDiffersFromEveryCap(t *te
 	t.Setenv("SYNC_UNIT_CONCURRENCY_PER_BUCKET", "8")
 	var logs bytes.Buffer
 	if _, err := NewNativeDispatchSyncRunService(
-		&pgxpool.Pool{}, slog.New(slog.NewJSONHandler(&logs, nil)),
+		&pgxpool.Pool{}, synclog.New(slog.New(slog.NewJSONHandler(&logs, nil))),
 		noopBudgetEstimator{}, &joboutbox.Producer{}, noopPolicyRegistry{},
 	); err != nil {
 		t.Fatal(err)
@@ -118,7 +119,7 @@ func TestDispatchServiceConstructionLogsEveryCapBelowItsBudgetLimit(t *testing.T
 	t.Setenv("SYNC_UNIT_CONCURRENCY_PER_BUCKET", "1")
 	var logs bytes.Buffer
 	if _, err := NewNativeDispatchSyncRunService(
-		&pgxpool.Pool{}, slog.New(slog.NewJSONHandler(&logs, nil)),
+		&pgxpool.Pool{}, synclog.New(slog.New(slog.NewJSONHandler(&logs, nil))),
 		noopBudgetEstimator{}, &joboutbox.Producer{}, noopPolicyRegistry{},
 	); err != nil {
 		t.Fatal(err)

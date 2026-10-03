@@ -9,6 +9,7 @@ import (
 	"encoding/pem"
 	"errors"
 	"fmt"
+	"github.com/full-chaos/dev-health-ops/internal/testsupport/fakehttp"
 	"io"
 	"net/http"
 	"strings"
@@ -224,7 +225,7 @@ func TestDiscoverGitHubSurfacesPageBudgetExhaustionAsAnError(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	service := &NativeSourceDiscoveryService{doer: doer, retry: fastRetry(), telemetry: newSourceDiscoveryTelemetry(), now: time.Now}
+	service := &NativeSourceDiscoveryService{doer: fakehttp.Client(doer), retry: fastRetry(), telemetry: newSourceDiscoveryTelemetry(), now: time.Now}
 	_, err = service.discoverGitHub(context.Background(), credential, map[string]any{"all_repos": true})
 	if !errors.Is(err, ErrSourceDiscoveryTruncated) {
 		t.Fatalf("discoverGitHub() with an unbounded pagination loop error = %v, want ErrSourceDiscoveryTruncated", err)
@@ -240,7 +241,7 @@ func TestDiscoverGitHubMapsRepositoriesAndFiltersByPattern(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	service := &NativeSourceDiscoveryService{doer: doer, retry: fastRetry(), telemetry: newSourceDiscoveryTelemetry(), now: time.Now}
+	service := &NativeSourceDiscoveryService{doer: fakehttp.Client(doer), retry: fastRetry(), telemetry: newSourceDiscoveryTelemetry(), now: time.Now}
 	sources, err := service.discoverGitHub(context.Background(), credential, map[string]any{"owner": "acme", "search": "acme/api"})
 	if err != nil {
 		t.Fatal(err)
@@ -269,7 +270,7 @@ func TestDiscoverGitHubNonAllReposWithNoOwnerMakesNoAPICall(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	service := &NativeSourceDiscoveryService{doer: doer, retry: fastRetry(), telemetry: newSourceDiscoveryTelemetry(), now: time.Now}
+	service := &NativeSourceDiscoveryService{doer: fakehttp.Client(doer), retry: fastRetry(), telemetry: newSourceDiscoveryTelemetry(), now: time.Now}
 	sources, err := service.discoverGitHub(context.Background(), credential, map[string]any{})
 	if err != nil {
 		t.Fatal(err)
@@ -291,7 +292,7 @@ func TestDiscoverGitHubAllReposListsUserReposAndFiltersByNamespace(t *testing.T)
 	if err != nil {
 		t.Fatal(err)
 	}
-	service := &NativeSourceDiscoveryService{doer: doer, retry: fastRetry(), telemetry: newSourceDiscoveryTelemetry(), now: time.Now}
+	service := &NativeSourceDiscoveryService{doer: fakehttp.Client(doer), retry: fastRetry(), telemetry: newSourceDiscoveryTelemetry(), now: time.Now}
 	sources, err := service.discoverGitHub(context.Background(), credential, map[string]any{"all_repos": true, "owner": "acme"})
 	if err != nil {
 		t.Fatal(err)
@@ -338,7 +339,7 @@ func TestDiscoverGitHubAppAuthUsesInstallationRepositoriesEndpoint(t *testing.T)
 			`{"repositories":[{"name":"api","full_name":"acme/api","owner":{"login":"acme"}}]}`,
 		},
 	}
-	service := &NativeSourceDiscoveryService{doer: doer, retry: fastRetry(), telemetry: newSourceDiscoveryTelemetry(), now: time.Now}
+	service := &NativeSourceDiscoveryService{doer: fakehttp.Client(doer), retry: fastRetry(), telemetry: newSourceDiscoveryTelemetry(), now: time.Now}
 	sources, err := service.discoverGitHub(context.Background(), credential, map[string]any{"all_repos": true})
 	if err != nil {
 		t.Fatal(err)
@@ -389,7 +390,7 @@ func TestDiscoverGitLabNonAllReposListsOneGroupWithoutIncludeSubgroups(t *testin
 	if err != nil {
 		t.Fatal(err)
 	}
-	service := &NativeSourceDiscoveryService{doer: doer, retry: fastRetry(), telemetry: newSourceDiscoveryTelemetry(), now: time.Now}
+	service := &NativeSourceDiscoveryService{doer: fakehttp.Client(doer), retry: fastRetry(), telemetry: newSourceDiscoveryTelemetry(), now: time.Now}
 	sources, err := service.discoverGitLab(context.Background(), credential, map[string]any{"group": "acme"})
 	if err != nil {
 		t.Fatal(err)
@@ -418,7 +419,7 @@ func TestDiscoverGitLabNonAllReposWithNoGroupMakesNoAPICall(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	service := &NativeSourceDiscoveryService{doer: doer, retry: fastRetry(), telemetry: newSourceDiscoveryTelemetry(), now: time.Now}
+	service := &NativeSourceDiscoveryService{doer: fakehttp.Client(doer), retry: fastRetry(), telemetry: newSourceDiscoveryTelemetry(), now: time.Now}
 	sources, err := service.discoverGitLab(context.Background(), credential, map[string]any{})
 	if err != nil {
 		t.Fatal(err)
@@ -440,7 +441,7 @@ func TestDiscoverGitLabAllReposFiltersByNamespaceClientSide(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	service := &NativeSourceDiscoveryService{doer: doer, retry: fastRetry(), telemetry: newSourceDiscoveryTelemetry(), now: time.Now}
+	service := &NativeSourceDiscoveryService{doer: fakehttp.Client(doer), retry: fastRetry(), telemetry: newSourceDiscoveryTelemetry(), now: time.Now}
 	sources, err := service.discoverGitLab(context.Background(), credential, map[string]any{"all_repos": true, "group": "acme"})
 	if err != nil {
 		t.Fatal(err)
@@ -459,7 +460,7 @@ func TestDiscoverGitLabHonorsSyncOptionsGitlabURL(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	service := &NativeSourceDiscoveryService{doer: doer, retry: fastRetry(), telemetry: newSourceDiscoveryTelemetry(), now: time.Now}
+	service := &NativeSourceDiscoveryService{doer: fakehttp.Client(doer), retry: fastRetry(), telemetry: newSourceDiscoveryTelemetry(), now: time.Now}
 	_, err = service.discoverGitLab(context.Background(), credential, map[string]any{
 		"group": "acme", "gitlab_url": "https://gitlab.example.internal",
 	})
@@ -488,7 +489,7 @@ func TestDiscoverJiraMapsProjectsByKey(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	service := &NativeSourceDiscoveryService{doer: doer, retry: fastRetry(), telemetry: newSourceDiscoveryTelemetry(), now: time.Now}
+	service := &NativeSourceDiscoveryService{doer: fakehttp.Client(doer), retry: fastRetry(), telemetry: newSourceDiscoveryTelemetry(), now: time.Now}
 	sources, err := service.discoverJira(context.Background(), credential, nil)
 	if err != nil {
 		t.Fatal(err)
@@ -560,7 +561,7 @@ func TestDiscoverJiraFiltersToExplicitScope(t *testing.T) {
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			doer := &fakeSourceDiscoveryDoer{t: t, body: body}
-			service := &NativeSourceDiscoveryService{doer: doer, retry: fastRetry(), telemetry: newSourceDiscoveryTelemetry(), now: time.Now}
+			service := &NativeSourceDiscoveryService{doer: fakehttp.Client(doer), retry: fastRetry(), telemetry: newSourceDiscoveryTelemetry(), now: time.Now}
 			sources, err := service.discoverJira(context.Background(), credentialFor(t), test.syncOptions)
 			if err != nil {
 				t.Fatal(err)
@@ -607,7 +608,7 @@ func TestDiscoverJiraFallsBackToLegacyProjectEndpoint(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	service := &NativeSourceDiscoveryService{doer: doer, retry: fastRetry(), telemetry: newSourceDiscoveryTelemetry(), now: time.Now}
+	service := &NativeSourceDiscoveryService{doer: fakehttp.Client(doer), retry: fastRetry(), telemetry: newSourceDiscoveryTelemetry(), now: time.Now}
 	sources, err := service.discoverJira(context.Background(), credential, nil)
 	if err != nil {
 		t.Fatal(err)
@@ -657,7 +658,7 @@ func TestDiscoverJiraDoesNotFallBackOnAuthenticationOrRateLimitErrors(t *testing
 			if err != nil {
 				t.Fatal(err)
 			}
-			service := &NativeSourceDiscoveryService{doer: doer, retry: fastRetry(), telemetry: newSourceDiscoveryTelemetry(), now: time.Now}
+			service := &NativeSourceDiscoveryService{doer: fakehttp.Client(doer), retry: fastRetry(), telemetry: newSourceDiscoveryTelemetry(), now: time.Now}
 			_, err = service.discoverJira(context.Background(), credential, nil)
 			if err == nil {
 				t.Fatalf("discoverJira() with a %d response = nil error, want the classified failure surfaced, not silently retried", test.status)
@@ -695,7 +696,7 @@ func TestDiscoverJiraLegacyFallbackFailureSurfacesItsOwnError(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	service := &NativeSourceDiscoveryService{doer: doer, retry: fastRetry(), telemetry: newSourceDiscoveryTelemetry(), now: time.Now}
+	service := &NativeSourceDiscoveryService{doer: fakehttp.Client(doer), retry: fastRetry(), telemetry: newSourceDiscoveryTelemetry(), now: time.Now}
 	_, err = service.discoverJira(context.Background(), credential, nil)
 	if err == nil {
 		t.Fatal("discoverJira() with both endpoints failing = nil error, want the legacy endpoint's own failure surfaced")
@@ -945,7 +946,7 @@ func TestDiscoveryKeepsTheProviderStatusOfAnAuthenticationFailure(t *testing.T) 
 		}, "gitlab", http.StatusForbidden, providerfoundation.ErrorAuthentication},
 	} {
 		doer := &sequencedSourceDiscoveryDoer{t: t, statuses: []int{c.status}, bodies: []string{`{"message":"rejected"}`}}
-		service := &NativeSourceDiscoveryService{doer: doer, retry: fastRetry(), telemetry: newSourceDiscoveryTelemetry(), now: time.Now}
+		service := &NativeSourceDiscoveryService{doer: fakehttp.Client(doer), retry: fastRetry(), telemetry: newSourceDiscoveryTelemetry(), now: time.Now}
 		err := c.run(service)
 		var providerErr *providerfoundation.ProviderError
 		if !errors.As(err, &providerErr) || providerErr.Class != c.class || providerErr.StatusCode != c.status {

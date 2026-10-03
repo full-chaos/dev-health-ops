@@ -12,6 +12,7 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/full-chaos/dev-health-ops/internal/jobruntime"
+	"github.com/full-chaos/dev-health-ops/internal/jobs/metrics/remaining/stepcause"
 	"github.com/full-chaos/dev-health-ops/internal/teamattribution"
 )
 
@@ -570,7 +571,7 @@ FROM work_item_attribution_backstop_scoped_runs
 WHERE org_id = ?
 GROUP BY scope_kind, scope_id`, orgID)
 	if err != nil {
-		return nil, nil, fmt.Errorf("query scoped watermarks: %w", err)
+		return nil, nil, stepcause.Failure(stepcause.QueryScopedWatermarks, err)
 	}
 	defer func() { _ = rows.Close() }()
 	repos = map[string]time.Time{}
@@ -579,7 +580,7 @@ GROUP BY scope_kind, scope_id`, orgID)
 		var kind, id string
 		var completedAt time.Time
 		if err := rows.Scan(&kind, &id, &completedAt); err != nil {
-			return nil, nil, fmt.Errorf("scan scoped watermark: %w", err)
+			return nil, nil, stepcause.Failure(stepcause.ScanScopedWatermark, err)
 		}
 		switch kind {
 		case "repo":
@@ -588,7 +589,7 @@ GROUP BY scope_kind, scope_id`, orgID)
 			projects[id] = completedAt
 		}
 	}
-	return repos, projects, rows.Err()
+	return repos, projects, stepcause.Failure(stepcause.IterateScopedWatermarks, rows.Err())
 }
 
 // scopeChanges runs a `SELECT scope_id, max(updated_at) ... GROUP BY
@@ -598,7 +599,7 @@ func (executor *WorkItemAttributionExecutor) scopeChanges(
 ) (map[string]time.Time, error) {
 	rows, err := executor.conn.Query(ctx, query, asOf, asOf, orgID)
 	if err != nil {
-		return nil, fmt.Errorf("query scope changes: %w", err)
+		return nil, stepcause.Failure(stepcause.QueryScopeChanges, err)
 	}
 	defer func() { _ = rows.Close() }()
 	result := map[string]time.Time{}
@@ -606,11 +607,11 @@ func (executor *WorkItemAttributionExecutor) scopeChanges(
 		var id string
 		var changedAt time.Time
 		if err := rows.Scan(&id, &changedAt); err != nil {
-			return nil, fmt.Errorf("scan scope change: %w", err)
+			return nil, stepcause.Failure(stepcause.ScanScopeChange, err)
 		}
 		result[id] = changedAt
 	}
-	return result, rows.Err()
+	return result, stepcause.Failure(stepcause.IterateScopeChanges, rows.Err())
 }
 
 // maxUpdatedAt runs a single-row `SELECT max(...)` query, treating a
@@ -621,18 +622,18 @@ func (executor *WorkItemAttributionExecutor) maxUpdatedAt(
 ) (time.Time, error) {
 	rows, err := executor.conn.Query(ctx, query, orgID)
 	if err != nil {
-		return time.Time{}, fmt.Errorf("query max updated_at: %w", err)
+		return time.Time{}, stepcause.Failure(stepcause.QueryMaxUpdatedAt, err)
 	}
 	defer func() { _ = rows.Close() }()
 	if !rows.Next() {
-		return time.Time{}, rows.Err()
+		return time.Time{}, stepcause.Failure(stepcause.IterateMaxUpdatedAt, rows.Err())
 	}
 	var value *time.Time
 	if err := rows.Scan(&value); err != nil {
-		return time.Time{}, fmt.Errorf("scan max updated_at: %w", err)
+		return time.Time{}, stepcause.Failure(stepcause.ScanMaxUpdatedAt, err)
 	}
 	if err := rows.Err(); err != nil {
-		return time.Time{}, err
+		return time.Time{}, stepcause.Failure(stepcause.IterateMaxUpdatedAt, err)
 	}
 	if value == nil {
 		return time.Time{}, nil
@@ -654,18 +655,18 @@ func (executor *WorkItemAttributionExecutor) maxEffectiveChangedAt(
 ) (time.Time, error) {
 	rows, err := executor.conn.Query(ctx, query, asOf, asOf, orgID)
 	if err != nil {
-		return time.Time{}, fmt.Errorf("query max effective changed_at: %w", err)
+		return time.Time{}, stepcause.Failure(stepcause.QueryMaxEffectiveChangedAt, err)
 	}
 	defer func() { _ = rows.Close() }()
 	if !rows.Next() {
-		return time.Time{}, rows.Err()
+		return time.Time{}, stepcause.Failure(stepcause.IterateMaxEffectiveChangedAt, rows.Err())
 	}
 	var value *time.Time
 	if err := rows.Scan(&value); err != nil {
-		return time.Time{}, fmt.Errorf("scan max effective changed_at: %w", err)
+		return time.Time{}, stepcause.Failure(stepcause.ScanMaxEffectiveChangedAt, err)
 	}
 	if err := rows.Err(); err != nil {
-		return time.Time{}, err
+		return time.Time{}, stepcause.Failure(stepcause.IterateMaxEffectiveChangedAt, err)
 	}
 	if value == nil {
 		return time.Time{}, nil
@@ -732,7 +733,35 @@ WHERE org_id = ? AND (
   has(?, work_item_id)
   OR (provider IN ('linear', 'jira') AND has(?, upper(splitByChar(':', work_item_id)[-1])))
 )`
-	return querySubjectsInto(ctx, conn, query, orgID, donorIDs, donorKeys)
+	// Both arrays grow with org size and are rendered into the statement text
+	// (see workItemAttributionMaxArrayBytes): one statement per chunk pair, the
+	// subject maps unioned. A row matches by id OR by key, so it is found by
+	// whichever chunk carries its id or its key; the map union dedupes a row
+	// that two chunks both return.
+	idChunks := chunkStringsByRenderedBytes(donorIDs, workItemAttributionMaxArrayBytes)
+	keyChunks := chunkStringsByRenderedBytes(donorKeys, workItemAttributionMaxArrayBytes)
+	statements := len(idChunks)
+	if len(keyChunks) > statements {
+		statements = len(keyChunks)
+	}
+	merged := map[string]teamattribution.GithubWorkItemDerivationSubject{}
+	for i := 0; i < statements; i++ {
+		ids, keys := []string{}, []string{}
+		if i < len(idChunks) {
+			ids = idChunks[i]
+		}
+		if i < len(keyChunks) {
+			keys = keyChunks[i]
+		}
+		part, err := querySubjectsInto(ctx, conn, query, orgID, ids, keys)
+		if err != nil {
+			return nil, err
+		}
+		for id, subject := range part {
+			merged[id] = subject
+		}
+	}
+	return merged, nil
 }
 
 // WorkItemDerivationSubjectColumns is the SELECT list every subject query must
@@ -770,7 +799,7 @@ func querySubjectsInto(
 ) (map[string]teamattribution.GithubWorkItemDerivationSubject, error) {
 	rows, err := conn.Query(ctx, query, args...)
 	if err != nil {
-		return nil, fmt.Errorf("query work_items: %w", err)
+		return nil, stepcause.Failure(stepcause.QueryWorkItems, err)
 	}
 	defer func() { _ = rows.Close() }()
 	result := map[string]teamattribution.GithubWorkItemDerivationSubject{}
@@ -782,14 +811,14 @@ func querySubjectsInto(
 			&subject.ProjectKey, &subject.ProjectID, &subject.ProjectName,
 			&subject.Assignees, &subject.Reporter, &subject.OrgID,
 		); err != nil {
-			return nil, fmt.Errorf("scan work_items row: %w", err)
+			return nil, stepcause.Failure(stepcause.ScanWorkItemsRow, err)
 		}
 		if repoID != "" && repoID != uuid.Nil.String() {
 			subject.RepoID = &repoID
 		}
 		result[subject.WorkItemID] = subject
 	}
-	return result, rows.Err()
+	return result, stepcause.Failure(stepcause.IterateWorkItems, rows.Err())
 }
 
 // loadDependencyEdges loads work_item_dependencies rows whose SOURCE is one
@@ -815,24 +844,42 @@ func LoadWorkItemDependencyEdges(
 	for id := range subjects {
 		ids = append(ids, id)
 	}
+	var result []teamattribution.GithubWorkItemDerivationDependencyEdge
+	// The id array is rendered into the statement text and the org-wide path
+	// passes EVERY work item id: one statement per bounded chunk (see
+	// workItemAttributionMaxArrayBytes). An edge has one source, so it is
+	// returned by exactly one chunk.
+	for _, chunk := range chunkStringsByRenderedBytes(ids, workItemAttributionMaxArrayBytes) {
+		edges, err := queryDependencyEdgesBySource(ctx, conn, orgID, chunk)
+		if err != nil {
+			return nil, err
+		}
+		result = append(result, edges...)
+	}
+	return result, nil
+}
+
+func queryDependencyEdgesBySource(
+	ctx context.Context, conn driver.Conn, orgID string, sourceIDs []string,
+) ([]teamattribution.GithubWorkItemDerivationDependencyEdge, error) {
 	rows, err := conn.Query(ctx, `
 SELECT source_work_item_id, target_work_item_id, relationship_type, last_synced
 FROM work_item_dependencies FINAL
-WHERE org_id = ? AND has(?, source_work_item_id)`, orgID, ids)
+WHERE org_id = ? AND has(?, source_work_item_id)`, orgID, sourceIDs)
 	if err != nil {
-		return nil, fmt.Errorf("query work_item_dependencies: %w", err)
+		return nil, stepcause.Failure(stepcause.QueryWorkItemDependencies, err)
 	}
 	defer func() { _ = rows.Close() }()
 	var result []teamattribution.GithubWorkItemDerivationDependencyEdge
 	for rows.Next() {
 		var edge teamattribution.GithubWorkItemDerivationDependencyEdge
 		if err := rows.Scan(&edge.SourceWorkItemID, &edge.TargetWorkItemID, &edge.RelationshipType, &edge.LastSynced); err != nil {
-			return nil, fmt.Errorf("scan work_item_dependencies row: %w", err)
+			return nil, stepcause.Failure(stepcause.ScanWorkItemDependenciesRow, err)
 		}
 		edge.OrgID = orgID
 		result = append(result, edge)
 	}
-	return result, rows.Err()
+	return result, stepcause.Failure(stepcause.IterateWorkItemDependencies, rows.Err())
 }
 
 // WorkItemAttributionDonorTargets is workItemAttributionDonorTargets, exported
@@ -1002,27 +1049,18 @@ func (executor *WorkItemAttributionExecutor) loadInheritableDependencySourcesTar
 	for id := range targetIDs {
 		ids = append(ids, id)
 	}
-	rows, err := executor.conn.Query(ctx, `
-SELECT source_work_item_id, target_work_item_id, relationship_type, last_synced
-FROM work_item_dependencies FINAL
-WHERE org_id = ? AND has(?, target_work_item_id)`, orgID, ids)
-	if err != nil {
-		return nil, fmt.Errorf("query work_item_dependencies (reverse closure): %w", err)
-	}
-	defer func() { _ = rows.Close() }()
 	var edges []teamattribution.GithubWorkItemDerivationDependencyEdge
-	for rows.Next() {
-		var edge teamattribution.GithubWorkItemDerivationDependencyEdge
-		if err := rows.Scan(
-			&edge.SourceWorkItemID, &edge.TargetWorkItemID, &edge.RelationshipType, &edge.LastSynced,
-		); err != nil {
-			return nil, fmt.Errorf("scan work_item_dependencies row (reverse closure): %w", err)
+	// The target-id array is rendered into the statement text and grows with the
+	// affected set (the whole org on the org-wide path): one statement per
+	// bounded chunk (see workItemAttributionMaxArrayBytes). An edge has one
+	// target, so exactly one chunk returns it, and the latest-edge dedupe below
+	// keys on (source, target) so it is unaffected by the split.
+	for _, chunk := range chunkStringsByRenderedBytes(ids, workItemAttributionMaxArrayBytes) {
+		part, err := executor.queryReverseClosureEdges(ctx, orgID, chunk)
+		if err != nil {
+			return nil, err
 		}
-		edge.OrgID = orgID
-		edges = append(edges, edge)
-	}
-	if err := rows.Err(); err != nil {
-		return nil, err
+		edges = append(edges, part...)
 	}
 	seen := map[string]struct{}{}
 	var sources []string
@@ -1042,6 +1080,31 @@ WHERE org_id = ? AND has(?, target_work_item_id)`, orgID, ids)
 	return sources, nil
 }
 
+func (executor *WorkItemAttributionExecutor) queryReverseClosureEdges(
+	ctx context.Context, orgID string, targetIDs []string,
+) ([]teamattribution.GithubWorkItemDerivationDependencyEdge, error) {
+	rows, err := executor.conn.Query(ctx, `
+SELECT source_work_item_id, target_work_item_id, relationship_type, last_synced
+FROM work_item_dependencies FINAL
+WHERE org_id = ? AND has(?, target_work_item_id)`, orgID, targetIDs)
+	if err != nil {
+		return nil, stepcause.Failure(stepcause.QueryWorkItemDependenciesReverseClosure, err)
+	}
+	defer func() { _ = rows.Close() }()
+	var edges []teamattribution.GithubWorkItemDerivationDependencyEdge
+	for rows.Next() {
+		var edge teamattribution.GithubWorkItemDerivationDependencyEdge
+		if err := rows.Scan(
+			&edge.SourceWorkItemID, &edge.TargetWorkItemID, &edge.RelationshipType, &edge.LastSynced,
+		); err != nil {
+			return nil, stepcause.Failure(stepcause.ScanWorkItemDependenciesRowReverseClosure, err)
+		}
+		edge.OrgID = orgID
+		edges = append(edges, edge)
+	}
+	return edges, stepcause.Failure(stepcause.IterateWorkItemDependenciesReverseClosure, rows.Err())
+}
+
 // orgItemCount returns the org's total work-item count, the denominator
 // evaluateClosurePromotion compares a scoped run's closure size against.
 func (executor *WorkItemAttributionExecutor) orgItemCount(ctx context.Context, orgID string) (int, error) {
@@ -1051,7 +1114,7 @@ func (executor *WorkItemAttributionExecutor) orgItemCount(ctx context.Context, o
 	// the column's own width, not the width this file otherwise thinks in.
 	var count uint64
 	if err := row.Scan(&count); err != nil {
-		return 0, fmt.Errorf("count work_items: %w", err)
+		return 0, stepcause.Failure(stepcause.CountWorkItems, err)
 	}
 	return int(count), nil
 }
@@ -1125,23 +1188,37 @@ func (executor *WorkItemAttributionExecutor) alreadyCoveredToday(
 	for id := range ids {
 		idList = append(idList, id)
 	}
+	// The id array is rendered into the statement text and the org-wide path
+	// passes every affected id: one statement per bounded chunk (see
+	// workItemAttributionMaxArrayBytes), the covered sets unioned.
+	for _, chunk := range chunkStringsByRenderedBytes(idList, workItemAttributionMaxArrayBytes) {
+		if err := executor.collectAlreadyCoveredToday(ctx, orgID, now, chunk, covered); err != nil {
+			return nil, err
+		}
+	}
+	return covered, nil
+}
+
+func (executor *WorkItemAttributionExecutor) collectAlreadyCoveredToday(
+	ctx context.Context, orgID string, now time.Time, ids []string, covered map[string]struct{},
+) error {
 	rows, err := executor.conn.Query(ctx, `
 SELECT DISTINCT work_item_id
 FROM work_item_team_attributions
 WHERE org_id = ? AND has(?, work_item_id) AND toDate(computed_at) = toDate(?)`,
-		orgID, idList, now)
+		orgID, ids, now)
 	if err != nil {
-		return nil, fmt.Errorf("query already-covered-today attributions: %w", err)
+		return stepcause.Failure(stepcause.QueryAlreadyCoveredTodayAttributions, err)
 	}
 	defer func() { _ = rows.Close() }()
 	for rows.Next() {
 		var id string
 		if err := rows.Scan(&id); err != nil {
-			return nil, fmt.Errorf("scan already-covered-today row: %w", err)
+			return stepcause.Failure(stepcause.ScanAlreadyCoveredTodayRow, err)
 		}
 		covered[id] = struct{}{}
 	}
-	return covered, rows.Err()
+	return stepcause.Failure(stepcause.IterateAlreadyCoveredTodayRows, rows.Err())
 }
 
 // publishRunMarkers writes the completion marker(s) for a completed run:

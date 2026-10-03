@@ -3,6 +3,7 @@ package providersync
 import (
 	"context"
 	"errors"
+	"github.com/full-chaos/dev-health-ops/internal/testsupport/fakehttp"
 	"io"
 	"net/http"
 	"strconv"
@@ -146,7 +147,7 @@ func walkGitLabTestsChunksWith(
 func TestGitLabTestsPerRunJobsCapTruncatesAndAdvances(t *testing.T) {
 	doer := &gitLabTestsOversizedRunDoer{t: t, jobs: githubTestsMaxJobsPerRun + 10}
 	claim := nativeTestClaim("gitlab", "tests")
-	walk := walkGitLabTestsChunks(t, claim, gitLabRepositoryClient(t, doer, "https://gitlab.example"), 4)
+	walk := walkGitLabTestsChunks(t, claim, gitLabRepositoryClient(t, fakehttp.Client(doer), "https://gitlab.example"), 4)
 
 	// Anti-vacuity: the fixture must genuinely exceed the cap.
 	if doer.jobs <= githubTestsMaxJobsPerRun {
@@ -189,7 +190,7 @@ func TestGitLabTestsPerRunJobsCapTruncatesAndAdvances(t *testing.T) {
 func TestGitLabTestsPerRunJobsUnderCapIsUntouched(t *testing.T) {
 	doer := &gitLabTestsOversizedRunDoer{t: t, jobs: 2}
 	claim := nativeTestClaim("gitlab", "tests")
-	walk := walkGitLabTestsChunks(t, claim, gitLabRepositoryClient(t, doer, "https://gitlab.example"), 4)
+	walk := walkGitLabTestsChunks(t, claim, gitLabRepositoryClient(t, fakehttp.Client(doer), "https://gitlab.example"), 4)
 
 	if len(walk.cursor.Truncated) != 0 {
 		t.Fatalf("under-cap pipeline recorded truncation %+v", walk.cursor.Truncated)
@@ -268,7 +269,7 @@ func TestGitLabTestsTruncationVocabularyStaysClosed(t *testing.T) {
 func TestGitLabTestsNestedJobPageBudgetWithholdsTheWatermark(t *testing.T) {
 	doer := &gitLabTestsOversizedRunDoer{t: t, jobsPerPage: 2}
 	claim := nativeTestClaim("gitlab", "tests")
-	walk := walkGitLabTestsChunks(t, claim, gitLabRepositoryClient(t, doer, "https://gitlab.example"), 4)
+	walk := walkGitLabTestsChunks(t, claim, gitLabRepositoryClient(t, fakehttp.Client(doer), "https://gitlab.example"), 4)
 
 	found := false
 	for _, component := range walk.cursor.Truncated {
@@ -341,7 +342,7 @@ func TestGitLabTestsPerRunJobPagesOutrunsTheItemCapAtTheExactBoundary(t *testing
 	doer := &gitLabTestsOversizedRunDoer{t: t, jobs: githubTestsMaxJobsPerRun + 25}
 	walk := walkGitLabTestsChunksWith(
 		t, GitLabTestsRouteHandler{MaxPages: 1}, claim,
-		gitLabRepositoryClient(t, doer, "https://gitlab.example"), 4,
+		gitLabRepositoryClient(t, fakehttp.Client(doer), "https://gitlab.example"), 4,
 	)
 	if walk.cursor.Jobs != githubTestsMaxJobsPerRun {
 		t.Fatalf("MaxPages=1 kept %d jobs, want the cap %d; the per-run walk must not inherit the inventory budget",
@@ -367,7 +368,7 @@ func TestGitLabTestsCombinedStopIsClassifiedAsTheItemCapAndAdvances(t *testing.T
 	// surviving defect.
 	doer := &gitLabTestsOversizedRunDoer{t: t, jobsPerPage: nativePerPage}
 	walk := walkGitLabTestsChunks(
-		t, claim, gitLabRepositoryClient(t, doer, "https://gitlab.example"), 4,
+		t, claim, gitLabRepositoryClient(t, fakehttp.Client(doer), "https://gitlab.example"), 4,
 	)
 
 	// Anti-vacuity: both conditions must really hold. The per-run walk must
@@ -461,7 +462,7 @@ func TestGitLabTestsLowPageBudgetDoesNotSilentlyStallTheSource(t *testing.T) {
 	var final CompleteRouteBatch
 	err := (GitLabTestsRouteHandler{MaxPages: starvedBudget}).CollectChunks(
 		context.Background(), claim, providerfoundation.Credential{},
-		gitLabRepositoryClient(t, doer, "https://gitlab.example"),
+		gitLabRepositoryClient(t, fakehttp.Client(doer), "https://gitlab.example"),
 		time.Date(2026, 8, 14, 12, 0, 0, 0, time.UTC), "",
 		func(emission ChunkRouteEmission) error {
 			if emission.Final {

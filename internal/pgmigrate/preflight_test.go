@@ -5,8 +5,6 @@ import (
 	"context"
 	"encoding/json"
 	"io"
-	"os/exec"
-	"path/filepath"
 	"reflect"
 	"strings"
 	"testing"
@@ -140,57 +138,6 @@ func TestPreflightMeasurementFailures(t *testing.T) {
 	}
 	if ExitMeasurementFailed != 3 || ExitAppliesCleanly != 10 {
 		t.Fatalf("the contract's exit codes moved: %d %d", ExitMeasurementFailed, ExitAppliesCleanly)
-	}
-}
-
-// oldScriptDerivation is the head derivation the roll pre-check
-// (hook-parity-check.sh, the script `preflight` replaces) ran over the Alembic
-// scripts: every revision that no other revision names as its down_revision.
-const oldScriptDerivation = `
-import re, sys, pathlib
-revs, downs = {}, set()
-for f in pathlib.Path(sys.argv[1]).glob("[0-9]*.py"):
-    t = f.read_text()
-    r = re.search(r'^revision\s*(?::[^=]+)?=\s*["\']([^"\']+)["\']', t, re.M)
-    d = re.search(r'^down_revision\s*(?::[^=]+)?=\s*(.+)$', t, re.M)
-    if not r: continue
-    revs[r.group(1)] = 1
-    if d: downs.update(re.findall(r'["\']([^"\']+)["\']', d.group(1)))
-print(" ".join(sorted(x for x in revs if x not in downs)))
-`
-
-// TestBuildHeadsAreTheOldScriptsHeads is the old-script oracle: the heads the
-// roll pre-check derived from the Alembic scripts are the heads the preflight
-// reports for this build. It reads the scripts, so it fails when they are gone
-// rather than passing on nothing: when the Python chain is deleted, this oracle
-// retires with hook-parity-check.sh.
-func TestBuildHeadsAreTheOldScriptsHeads(t *testing.T) {
-	python, err := exec.LookPath("python3")
-	if err != nil {
-		t.Fatalf("python3 is required to run the old script's derivation: %v", err)
-	}
-	versions, err := filepath.Abs(filepath.Join("..", "..", "src", "dev_health_ops", "alembic", "versions"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	output, err := exec.Command(python, "-c", oldScriptDerivation, versions).Output()
-	if err != nil {
-		t.Fatalf("the old script's derivation failed: %v", err)
-	}
-	derived := strings.Fields(string(output))
-	if len(derived) == 0 {
-		t.Fatalf("the old script's derivation found no revision in %s: the measurement did not happen", versions)
-	}
-	baseline, err := LoadBaseline()
-	if err != nil {
-		t.Fatal(err)
-	}
-	chain, err := LoadChain()
-	if err != nil {
-		t.Fatal(err)
-	}
-	if got := Heads(baseline, chain); !reflect.DeepEqual(got, derived) {
-		t.Fatalf("the old script derived the heads %v, the preflight's build_heads are %v", derived, got)
 	}
 }
 

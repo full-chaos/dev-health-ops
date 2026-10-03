@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"github.com/full-chaos/dev-health-ops/internal/testsupport/fakehttp"
 	"io"
 	"log/slog"
 	"net/http"
@@ -270,7 +271,7 @@ func TestGitHubDeploymentsRouteAggregatesStatusesAcrossPages(t *testing.T) {
 	t.Parallel()
 	now := time.Date(2026, 7, 23, 12, 30, 0, 0, time.UTC)
 	doer := &githubDeploymentStatusPagedDoer{t: t}
-	client := gitHubRepositoryClient(t, doer, "https://api.github.com")
+	client := gitHubRepositoryClient(t, fakehttp.Client(doer), "https://api.github.com")
 	claim := nativeTestClaim("github", "deployments")
 	batch, err := (GitHubDeploymentsRouteHandler{}).Collect(context.Background(), claim, providerfoundation.Credential{}, client, now)
 	if err != nil {
@@ -311,7 +312,7 @@ func TestGitHubDeploymentsRouteStatusLookupFailureLeavesLifecycleNil(t *testing.
 	log := captureSlog(t)
 	now := time.Date(2026, 7, 23, 12, 30, 0, 0, time.UTC)
 	doer := &githubDeploymentStatusFailingDoer{}
-	client := gitHubRepositoryClient(t, doer, "https://api.github.com")
+	client := gitHubRepositoryClient(t, fakehttp.Client(doer), "https://api.github.com")
 	claim := nativeTestClaim("github", "deployments")
 	batch, err := (GitHubDeploymentsRouteHandler{}).Collect(context.Background(), claim, providerfoundation.Credential{}, client, now)
 	if err != nil {
@@ -345,7 +346,7 @@ func TestGitHubDeploymentsRouteEmptyStatusListLeavesLifecycleNil(t *testing.T) {
 	log := captureSlog(t)
 	now := time.Date(2026, 7, 23, 12, 30, 0, 0, time.UTC)
 	doer := &githubDeploymentStatusEmptyDoer{}
-	client := gitHubRepositoryClient(t, doer, "https://api.github.com")
+	client := gitHubRepositoryClient(t, fakehttp.Client(doer), "https://api.github.com")
 	claim := nativeTestClaim("github", "deployments")
 	batch, err := (GitHubDeploymentsRouteHandler{}).Collect(context.Background(), claim, providerfoundation.Credential{}, client, now)
 	if err != nil {
@@ -424,7 +425,7 @@ func TestGitHubDeploymentsRoutePersistsRunningStatusForFlameReader(t *testing.T)
 	t.Parallel()
 	now := time.Date(2026, 7, 23, 12, 30, 0, 0, time.UTC)
 	doer := &githubDeploymentStatusStillRunningDoer{}
-	client := gitHubRepositoryClient(t, doer, "https://api.github.com")
+	client := gitHubRepositoryClient(t, fakehttp.Client(doer), "https://api.github.com")
 	claim := nativeTestClaim("github", "deployments")
 	batch, err := (GitHubDeploymentsRouteHandler{}).Collect(context.Background(), claim, providerfoundation.Credential{}, client, now)
 	if err != nil {
@@ -460,7 +461,7 @@ func TestGitHubDeploymentsRouteSkipsRemainingStatusLookupsAfterRateLimitExhausti
 	log := captureSlog(t)
 	now := time.Date(2026, 7, 23, 12, 30, 0, 0, time.UTC)
 	doer := &githubDeploymentStatusRateLimitedDoer{}
-	client := gitHubRepositoryClient(t, doer, "https://api.github.com")
+	client := gitHubRepositoryClient(t, fakehttp.Client(doer), "https://api.github.com")
 	claim := nativeTestClaim("github", "deployments")
 	batch, err := (GitHubDeploymentsRouteHandler{}).Collect(context.Background(), claim, providerfoundation.Credential{}, client, now)
 	if err != nil {
@@ -528,7 +529,7 @@ func TestGitHubDeploymentsRouteLogsWhenStatusPagesAreTruncated(t *testing.T) {
 	log := captureSlog(t)
 	now := time.Date(2026, 7, 23, 12, 30, 0, 0, time.UTC)
 	doer := &githubDeploymentStatusTruncatedDoer{}
-	client := gitHubRepositoryClient(t, doer, "https://api.github.com")
+	client := gitHubRepositoryClient(t, fakehttp.Client(doer), "https://api.github.com")
 	claim := nativeTestClaim("github", "deployments")
 	batch, err := (GitHubDeploymentsRouteHandler{}).Collect(context.Background(), claim, providerfoundation.Credential{}, client, now)
 	if err != nil {

@@ -8,6 +8,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"errors"
+	"github.com/full-chaos/dev-health-ops/internal/testsupport/fakehttp"
 	"net/http"
 	"strings"
 	"sync"
@@ -93,7 +94,7 @@ func driftExecutor(
 			Repository: driftCredentialRepository{provider: route.provider, baseURL: route.baseURL},
 			Decryptor:  githubBlameIntegrationCredentialDecryptor{},
 		},
-		Doer: doer,
+		Doer: fakehttp.Client(doer),
 		Retry: providerfoundation.RetryPolicy{
 			MaxAttempts: 1, InitialWait: time.Nanosecond, MaxWait: time.Nanosecond,
 		},
@@ -145,7 +146,7 @@ func runDriftCell(
 		Deadline: harness.now.Add(5 * time.Minute), Now: func() time.Time { return harness.now },
 	}
 	_, firstErr := driftExecutor(route, harness, harness.repository, harness.claim, harness.now,
-		before, crashing, firstSinks).Execute(ctx, firstSession, descriptor)
+		fakehttp.Client(before), crashing, firstSinks).Execute(ctx, firstSession, descriptor)
 
 	recoveryNow := harness.now.Add(61 * time.Second)
 	fresh, err := NewPostgresRepository(harness.repository.Pool)
@@ -163,10 +164,10 @@ func runDriftCell(
 		Repository: fresh, Claim: recovered, LeaseDuration: time.Minute,
 		Deadline: recoveryNow.Add(5 * time.Minute), Now: func() time.Time { return recoveryNow },
 	}
-	counting := &countingDoer{delegate: after}
+	counting := &countingDoer{delegate: fakehttp.Client(after)}
 	sinks := route.sink(harness.conn, leaseGuardAt(fresh, recovered, recoveryNow))
 	result, err := driftExecutor(route, harness, fresh, recovered, recoveryNow,
-		counting, sinks, sinks).Execute(ctx, session, descriptor)
+		fakehttp.Client(counting), sinks, sinks).Execute(ctx, session, descriptor)
 	return driftOutcome{harness: harness, firstErr: firstErr, result: result, err: err, recoveryFetches: counting.requests}
 }
 
@@ -280,7 +281,7 @@ func TestPreparedRecoveryReplaysTheCrashedPassAcrossProviderDrift(t *testing.T) 
 		{"gitlab prs: a merge request is retitled between the crash and the retry", gitlabPRs, gitlabPRsBefore, gitlabPRsAfter},
 	} {
 		t.Run(cell.name, func(t *testing.T) {
-			withSnapshot := runDriftCell(t, ctx, cell.route, cell.before(), cell.after(), true)
+			withSnapshot := runDriftCell(t, ctx, cell.route, fakehttp.Client(cell.before()), fakehttp.Client(cell.after()), true)
 			if !errors.Is(withSnapshot.firstErr, errSimulatedCrash) {
 				t.Fatalf("first pass error=%v, want the simulated crash", withSnapshot.firstErr)
 			}
@@ -292,7 +293,7 @@ func TestPreparedRecoveryReplaysTheCrashedPassAcrossProviderDrift(t *testing.T) 
 				t.Fatalf("prepared recovery err=%v effects=%+v provider_requests=%d, want the crashed pass replayed from its snapshot with no provider request",
 					withSnapshot.err, withSnapshot.result.Effects, withSnapshot.recoveryFetches)
 			}
-			withoutSnapshot := runDriftCell(t, ctx, cell.route, cell.before(), cell.after(), false)
+			withoutSnapshot := runDriftCell(t, ctx, cell.route, fakehttp.Client(cell.before()), fakehttp.Client(cell.after()), false)
 			if !errors.Is(withoutSnapshot.err, ErrEffectLedgerConflict) {
 				t.Fatalf("re-collect recovery err=%v, want ErrEffectLedgerConflict: the cell must drift", withoutSnapshot.err)
 			}
@@ -420,8 +421,8 @@ func runSupersededSnapshotCell(t *testing.T, cell string) {
 	}
 	descriptor, _ := Descriptor("github", "prs")
 	sinks := route.sink(harness.conn, leaseGuardAt(fresh, recovered, recoveryNow))
-	counting := &countingDoer{delegate: newDoer()}
-	executed, execErr := driftExecutor(route, harness, fresh, recovered, recoveryNow, counting, sinks, sinks).
+	counting := &countingDoer{delegate: fakehttp.Client(newDoer())}
+	executed, execErr := driftExecutor(route, harness, fresh, recovered, recoveryNow, fakehttp.Client(counting), sinks, sinks).
 		Execute(ctx, session, descriptor)
 
 	pullRequestRows := func(number int) uint64 {

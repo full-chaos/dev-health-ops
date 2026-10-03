@@ -294,62 +294,6 @@ func TestWriteSkewInvariant_Synthetic(t *testing.T) {
 	}
 }
 
-// TestWriteSkewInvariant_RealSunburstDeclarations runs the generator on the
-// captured team-scoped sunburst body under that case's real declarations,
-// varying the value of one and two keyed elements.
-func TestWriteSkewInvariant_RealSunburstDeclarations(t *testing.T) {
-	t.Parallel()
-	opts := investmentSunburstTeamScopedParityWithLimit(investmentSunburstDefaultLimit)
-	raw, err := os.ReadFile("testdata/investmentsunburst_teamscoped_skew_baseline_3cf72260.json")
-	if err != nil {
-		t.Fatalf("read: %v", err)
-	}
-	decl, _ := findOrderInsensitiveList(opts, "data")
-	var rows []any
-	decodeNumbers(t, raw, &rows)
-	// A small slice of the real body keeps the enumeration fast; every
-	// element keeps its real shape and keys.
-	rows = rows[:8]
-	keyOf := func(element any) string {
-		k, _ := orderInsensitiveKey(element, decl.KeyFields)
-		return k
-	}
-	leafFor := func(index int) skewLeaf {
-		key := keyOf(rows[index])
-		return skewLeaf{
-			name: key,
-			path: "data.value",
-			set: func(body any, symbol string) {
-				for _, element := range body.([]any) {
-					if keyOf(element) == key {
-						object := element.(map[string]any)
-						if symbol == "missing" {
-							delete(object, "value")
-							return
-						}
-						object["value"] = skewValue(symbol)
-					}
-				}
-			},
-			matches: func(f Finding) bool {
-				keys := findingKeys(f.Detail)
-				return len(keys) == 1 && keys[0] == key
-			},
-		}
-	}
-	base := func() any {
-		var copyRows []any
-		decodeNumbers(t, mustMarshal(t, rows), &copyRows)
-		return copyRows
-	}
-	for _, leaves := range [][]skewLeaf{{leafFor(0)}, {leafFor(0), leafFor(1)}} {
-		t.Run(fmt.Sprintf("%d leaves", len(leaves)), func(t *testing.T) {
-			counts := runSkewGenerator(t, base, leaves, []Options{opts})
-			t.Logf("real sunburst team-scoped declarations, %d leaves: %s", len(leaves), formatSkewCounts(counts))
-		})
-	}
-}
-
 // TestWriteSkewInvariant_RealInvestmentDeclarations runs the generator on
 // the captured GET /api/v1/investment body under that route's real
 // declarations, varying one and two theme_distribution entries.

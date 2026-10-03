@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"github.com/full-chaos/dev-health-ops/internal/testsupport/fakehttp"
 	"io"
 	"net/http"
 	"strings"
@@ -51,7 +52,7 @@ func TestPagerDutySchedulesRouteUsesOffsetPaginationAndCanonicalRow(t *testing.T
 			{"id":"PS2","type":"schedule","summary":"Support","created_at":"2026-07-31T09:00:00Z","self":"/schedules/PS2"}],"more":true}`},
 		{body: `{"schedules":[{"id":"PS3","type":"schedule","name":"Operations"}],"more":false}`},
 	}}
-	client := pagerDutySchedulesTestClient(t, doer, providerfoundation.RetryPolicy{
+	client := pagerDutySchedulesTestClient(t, fakehttp.Client(doer), providerfoundation.RetryPolicy{
 		MaxAttempts: 1, InitialWait: time.Nanosecond, MaxWait: time.Nanosecond,
 	})
 	claim := nativeTestClaim("pagerduty", "schedules")
@@ -113,7 +114,7 @@ func TestPagerDutySchedulesRoutePreservesRetryAndPermanentErrorSemantics(t *test
 		{status: http.StatusTooManyRequests, headers: http.Header{"Retry-After": {"0"}}, body: `{"message":"slow down"}`},
 		{body: `{"schedules":[],"more":false}`},
 	}}
-	retryClient := pagerDutySchedulesTestClient(t, retryDoer, providerfoundation.RetryPolicy{
+	retryClient := pagerDutySchedulesTestClient(t, fakehttp.Client(retryDoer), providerfoundation.RetryPolicy{
 		MaxAttempts: 2, InitialWait: time.Nanosecond, MaxWait: time.Nanosecond,
 	})
 	batch, err := (PagerDutySchedulesRouteHandler{Entitlement: allowIncidentEntitlement}).Collect(
@@ -126,7 +127,7 @@ func TestPagerDutySchedulesRoutePreservesRetryAndPermanentErrorSemantics(t *test
 	authDoer := &pagerDutySchedulesDoer{t: t, responses: []pagerDutySchedulesResponse{{
 		status: http.StatusUnauthorized, body: `{"message":"bad token"}`,
 	}}}
-	authClient := pagerDutySchedulesTestClient(t, authDoer, providerfoundation.RetryPolicy{
+	authClient := pagerDutySchedulesTestClient(t, fakehttp.Client(authDoer), providerfoundation.RetryPolicy{
 		MaxAttempts: 3, InitialWait: time.Nanosecond, MaxWait: time.Nanosecond,
 	})
 	_, err = (PagerDutySchedulesRouteHandler{Entitlement: allowIncidentEntitlement}).Collect(
@@ -142,10 +143,10 @@ func TestPagerDutySchedulesRoutePreservesRetryAndPermanentErrorSemantics(t *test
 func TestPagerDutySchedulesRouteFailsClosedOnPaginationCapAndMissingInstance(t *testing.T) {
 	t.Parallel()
 	claim := nativeTestClaim("pagerduty", "schedules")
-	client := pagerDutySchedulesTestClient(t, &pagerDutySchedulesDoer{
+	client := pagerDutySchedulesTestClient(t, fakehttp.Client(&pagerDutySchedulesDoer{
 		t: t, responses: []pagerDutySchedulesResponse{{
 			body: `{"schedules":[{"id":"one"}],"more":true}`,
-		}}}, providerfoundation.RetryPolicy{MaxAttempts: 1, InitialWait: time.Nanosecond, MaxWait: time.Nanosecond})
+		}}}), providerfoundation.RetryPolicy{MaxAttempts: 1, InitialWait: time.Nanosecond, MaxWait: time.Nanosecond})
 	credential := providerfoundation.Credential{Provider: "pagerduty", Config: map[string]string{"subdomain": "acme"}}
 	_, err := (PagerDutySchedulesRouteHandler{Entitlement: allowIncidentEntitlement, MaxPages: 1}).Collect(
 		context.Background(), claim, credential, client, time.Date(2026, 8, 9, 12, 0, 0, 0, time.UTC),
@@ -171,7 +172,7 @@ func TestPagerDutySchedulesRouteStopsWhenLeaseExpiresBetweenPages(t *testing.T) 
 	}}
 	asserts := 0
 	client, err := providerfoundation.NewHTTPClient(
-		"pagerduty", "https://api.pagerduty.com", doer,
+		"pagerduty", "https://api.pagerduty.com", fakehttp.Client(doer),
 		func(*http.Request) error { return nil },
 		providerfoundation.RetryPolicy{MaxAttempts: 1, InitialWait: time.Nanosecond, MaxWait: time.Nanosecond},
 		providerfoundation.LeaseGuardFunc(func(context.Context) error {
@@ -200,7 +201,7 @@ func pagerDutySchedulesTestClient(
 ) *providerfoundation.HTTPClient {
 	t.Helper()
 	client, err := providerfoundation.NewHTTPClient(
-		"pagerduty", "https://api.pagerduty.com", doer,
+		"pagerduty", "https://api.pagerduty.com", fakehttp.Client(doer),
 		func(*http.Request) error { return nil }, retry,
 		providerfoundation.LeaseGuardFunc(func(context.Context) error { return nil }),
 	)

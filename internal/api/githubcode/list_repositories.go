@@ -278,21 +278,9 @@ func merge(base, reference, params string) string {
 // waits by Retry-After or x-ratelimit-reset, and reads a terminal rate-limited
 // 403 as a RateLimitException naming the diagnostic headers.
 func (c Client) core() restcore.Core {
-	return restcore.Core{Provider: "github", HTTP: noRedirects(c.HTTP), Sleep: c.Sleep,
+	return restcore.Core{Provider: "github", HTTP: c.HTTP, Sleep: c.Sleep,
 		Headers:     map[string]string{"Authorization": "token " + c.Token, "Accept": "application/vnd.github+json"},
 		IsRetryable: retryable, RetryAfter: retryAfter, Classify: classify}
-}
-
-// noRedirects is the supplied client with its redirect policy replaced by "answer the 3xx, follow nothing" (what the
-// default client does, and httpx's default): a followed redirect would carry the token to wherever the server sends
-// it (Go keeps Authorization for a subdomain of the original host), past the origin check of the next-page links.
-func noRedirects(client *http.Client) *http.Client {
-	if client == nil {
-		return nil
-	}
-	copied := *client
-	copied.CheckRedirect = func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }
-	return &copied
 }
 
 // diagnostic is _lowered_github_headers: the diagnostic headers present,

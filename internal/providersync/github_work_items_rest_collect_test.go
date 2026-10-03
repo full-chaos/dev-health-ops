@@ -3,6 +3,7 @@ package providersync
 import (
 	"context"
 	"errors"
+	"github.com/full-chaos/dev-health-ops/internal/testsupport/fakehttp"
 	"io"
 	"net/http"
 	"reflect"
@@ -105,7 +106,7 @@ func TestGitHubWorkItemsRESTCollectorBuildsIssueRowsAndPullTargets(t *testing.T)
 	now := time.Date(2026, 8, 4, 12, 0, 0, 123456000, time.UTC)
 	result, err := (GitHubWorkItemsRESTCollector{}).Collect(
 		context.Background(), githubWorkItemsRESTClaim(),
-		gitHubPullRequestClient(t, doer, "https://api.github.com"), now,
+		gitHubPullRequestClient(t, fakehttp.Client(doer), "https://api.github.com"), now,
 	)
 	if err != nil {
 		t.Fatal(err)
@@ -157,7 +158,7 @@ func TestGitHubWorkItemsRESTCollectorHonorsExplicitFalseOptions(t *testing.T) {
 		"/repos/acme/api": {{body: `{"id":4567,"full_name":"Acme/API"}`}},
 	}}
 	result, err := (GitHubWorkItemsRESTCollector{}).Collect(
-		context.Background(), claim, gitHubPullRequestClient(t, doer, "https://api.github.com"), time.Now(),
+		context.Background(), claim, gitHubPullRequestClient(t, fakehttp.Client(doer), "https://api.github.com"), time.Now(),
 	)
 	if err != nil || !result.NoOptionalDegradation() || len(result.Rows.WorkItems) != 0 ||
 		len(result.Rows.Sprints) != 0 || len(result.PullRequests) != 0 ||
@@ -212,7 +213,7 @@ func TestGitHubWorkItemsRESTCollectorFailsClosedOnAnyPaginationCap(t *testing.T)
 		}},
 	}}
 	result, err := (GitHubWorkItemsRESTCollector{MaxPages: 1}).Collect(
-		context.Background(), claim, gitHubPullRequestClient(t, doer, "https://api.github.com"), time.Now(),
+		context.Background(), claim, gitHubPullRequestClient(t, fakehttp.Client(doer), "https://api.github.com"), time.Now(),
 	)
 	if !errors.Is(err, ErrPaginationCapExceeded) || result.Evidence.CapReached == false ||
 		len(result.Rows.WorkItems) != 0 {
@@ -240,7 +241,7 @@ func TestGitHubWorkItemsRESTCollectorFailsClosedOnOptionalAndRequiredChildCaps(t
 			fixtures[test.path][0].link = "<https://api.github.com" + test.path + "?page=2>; rel=\"next\""
 			result, err := (GitHubWorkItemsRESTCollector{MaxPages: 1}).Collect(
 				context.Background(), githubWorkItemsRESTClaim(),
-				gitHubPullRequestClient(t, &githubWorkItemsRESTDoer{t: t, replies: fixtures}, "https://api.github.com"),
+				gitHubPullRequestClient(t, fakehttp.Client(&githubWorkItemsRESTDoer{t: t, replies: fixtures}), "https://api.github.com"),
 				time.Now(),
 			)
 			if !errors.Is(err, ErrPaginationCapExceeded) || !result.Evidence.CapReached {
@@ -265,7 +266,7 @@ func TestGitHubWorkItemsRESTCollectorMarksOptionalDegradationIncomplete(t *testi
 		"/repos/acme/api/issues/42/comments": {{status: http.StatusBadGateway, body: `{"message":"down"}`}},
 	}}
 	result, err := (GitHubWorkItemsRESTCollector{}).Collect(
-		context.Background(), claim, gitHubPullRequestClient(t, doer, "https://api.github.com"), time.Now(),
+		context.Background(), claim, gitHubPullRequestClient(t, fakehttp.Client(doer), "https://api.github.com"), time.Now(),
 	)
 	if err != nil || result.NoOptionalDegradation() || len(result.Incomplete) != 2 ||
 		result.Incomplete[0].Component != "milestones" ||
@@ -302,7 +303,7 @@ func TestGitHubWorkItemsRESTCollectorRetainsOptionalRowsBeforeLaterPageFailure(t
 	}}
 	result, err := (GitHubWorkItemsRESTCollector{}).Collect(
 		context.Background(), claim,
-		gitHubPullRequestClient(t, doer, "https://api.github.com"), time.Now(),
+		gitHubPullRequestClient(t, fakehttp.Client(doer), "https://api.github.com"), time.Now(),
 	)
 	if err != nil || result.NoOptionalDegradation() || len(result.Incomplete) != 2 ||
 		len(result.Rows.Sprints) != 1 || len(result.Rows.Interactions) != 1 ||
@@ -324,7 +325,7 @@ func TestGitHubWorkItemsRESTCollectorPropagatesOptionalRateLimits(t *testing.T) 
 	}}
 	result, err := (GitHubWorkItemsRESTCollector{}).Collect(
 		context.Background(), claim,
-		gitHubPullRequestClient(t, doer, "https://api.github.com"), time.Now(),
+		gitHubPullRequestClient(t, fakehttp.Client(doer), "https://api.github.com"), time.Now(),
 	)
 	var providerErr *providerfoundation.ProviderError
 	if !errors.As(err, &providerErr) || providerErr.Class != providerfoundation.ErrorRateLimited ||
@@ -359,7 +360,7 @@ func TestGitHubWorkItemsRESTCollectorRechecksLeaseBeforeOptionalDegradation(t *t
 	}}
 	lease := &githubWorkItemsRESTExpiringLease{failAt: 5}
 	client, err := providerfoundation.NewHTTPClient(
-		"github", "https://api.github.com", doer,
+		"github", "https://api.github.com", fakehttp.Client(doer),
 		func(*http.Request) error { return nil },
 		providerfoundation.RetryPolicy{
 			MaxAttempts: 1, InitialWait: time.Nanosecond, MaxWait: time.Nanosecond,
@@ -397,7 +398,7 @@ func TestGitHubWorkItemsRESTCollectorRequiredFailuresReturnErrors(t *testing.T) 
 			claim.DatasetOptions["fetch_comments"] = false
 			_, err := (GitHubWorkItemsRESTCollector{}).Collect(
 				context.Background(), claim,
-				gitHubPullRequestClient(t, &githubWorkItemsRESTDoer{t: t, replies: fixtures}, "https://api.github.com"),
+				gitHubPullRequestClient(t, fakehttp.Client(&githubWorkItemsRESTDoer{t: t, replies: fixtures}), "https://api.github.com"),
 				time.Now(),
 			)
 			var providerErr *providerfoundation.ProviderError
@@ -415,7 +416,7 @@ func TestGitHubWorkItemsRESTCollectorRowsAreRetryStable(t *testing.T) {
 		t.Helper()
 		result, err := (GitHubWorkItemsRESTCollector{}).Collect(
 			context.Background(), githubWorkItemsRESTClaim(),
-			gitHubPullRequestClient(t, &githubWorkItemsRESTDoer{t: t, replies: githubWorkItemsRESTFixtures()}, "https://api.github.com"),
+			gitHubPullRequestClient(t, fakehttp.Client(&githubWorkItemsRESTDoer{t: t, replies: githubWorkItemsRESTFixtures()}), "https://api.github.com"),
 			now,
 		)
 		if err != nil {
@@ -443,7 +444,7 @@ func TestGitHubWorkItemsRESTCollectorCountsPhysicalRetries(t *testing.T) {
 			{body: `[]`},
 		},
 	}}
-	client := gitHubPullRequestClient(t, doer, "https://api.github.com")
+	client := gitHubPullRequestClient(t, fakehttp.Client(doer), "https://api.github.com")
 	client.Retry.MaxAttempts = 2
 	result, err := (GitHubWorkItemsRESTCollector{}).Collect(context.Background(), claim, client, time.Now())
 	if err != nil || !result.NoOptionalDegradation() || result.Evidence.Requests != 3 || result.Evidence.Pages != 1 {
@@ -457,7 +458,7 @@ func TestGitHubWorkItemsRESTCollectorRejectsInvalidBooleanOption(t *testing.T) {
 	claim.DatasetOptions["fetch_comments"] = "false"
 	_, err := (GitHubWorkItemsRESTCollector{}).Collect(
 		context.Background(), claim,
-		gitHubPullRequestClient(t, &githubWorkItemsRESTDoer{t: t, replies: map[string][]githubWorkItemsRESTReply{}}, "https://api.github.com"),
+		gitHubPullRequestClient(t, fakehttp.Client(&githubWorkItemsRESTDoer{t: t, replies: map[string][]githubWorkItemsRESTReply{}}), "https://api.github.com"),
 		time.Now(),
 	)
 	if !errors.Is(err, ErrInvalidConfiguration) {
@@ -473,7 +474,7 @@ func TestGitHubWorkItemsRESTPullPayloadNumberMatchesSelectedTarget(t *testing.T)
 	)}}
 	result, err := (GitHubWorkItemsRESTCollector{}).Collect(
 		context.Background(), githubWorkItemsRESTClaim(),
-		gitHubPullRequestClient(t, &githubWorkItemsRESTDoer{t: t, replies: fixtures}, "https://api.github.com"),
+		gitHubPullRequestClient(t, fakehttp.Client(&githubWorkItemsRESTDoer{t: t, replies: fixtures}), "https://api.github.com"),
 		time.Now(),
 	)
 	// A pull-request detail whose number does not match the one we selected is
@@ -506,7 +507,7 @@ func TestGitHubWorkItemsRESTCollectorDegradesOnOptionalPullRequestFailure(t *tes
 		claim.DatasetOptions["fetch_comments"] = false
 		result, err := (GitHubWorkItemsRESTCollector{}).Collect(
 			context.Background(), claim,
-			gitHubPullRequestClient(t, &githubWorkItemsRESTDoer{t: t, replies: fixtures}, "https://api.github.com"),
+			gitHubPullRequestClient(t, fakehttp.Client(&githubWorkItemsRESTDoer{t: t, replies: fixtures}), "https://api.github.com"),
 			time.Now(),
 		)
 		if err != nil {
@@ -536,7 +537,7 @@ func TestGitHubWorkItemsRESTCollectorDegradesOnOptionalPullRequestFailure(t *tes
 		claim.DatasetOptions["fetch_comments"] = false
 		result, err := (GitHubWorkItemsRESTCollector{}).Collect(
 			context.Background(), claim,
-			gitHubPullRequestClient(t, &githubWorkItemsRESTDoer{t: t, replies: fixtures}, "https://api.github.com"),
+			gitHubPullRequestClient(t, fakehttp.Client(&githubWorkItemsRESTDoer{t: t, replies: fixtures}), "https://api.github.com"),
 			time.Now(),
 		)
 		if err != nil {
@@ -559,7 +560,7 @@ func TestGitHubWorkItemsRESTCollectorDegradesOnOptionalPullRequestFailure(t *tes
 		claim.DatasetOptions["fetch_comments"] = false
 		_, err := (GitHubWorkItemsRESTCollector{MaxPages: 1}).Collect(
 			context.Background(), claim,
-			gitHubPullRequestClient(t, &githubWorkItemsRESTDoer{t: t, replies: fixtures}, "https://api.github.com"),
+			gitHubPullRequestClient(t, fakehttp.Client(&githubWorkItemsRESTDoer{t: t, replies: fixtures}), "https://api.github.com"),
 			time.Now(),
 		)
 		if !errors.Is(err, ErrPaginationCapExceeded) {
@@ -590,7 +591,7 @@ func TestGitHubWorkItemsRESTCollectorStopsAtExactlyOneThousandEvents(t *testing.
 	}}
 	result, err := (GitHubWorkItemsRESTCollector{}).Collect(
 		context.Background(), claim,
-		gitHubPullRequestClient(t, doer, "https://api.github.com"), time.Now(),
+		gitHubPullRequestClient(t, fakehttp.Client(doer), "https://api.github.com"), time.Now(),
 	)
 	if err != nil || !result.NoOptionalDegradation() || result.Evidence.Pages != 11 ||
 		result.Evidence.Requests != 12 || len(result.Rows.WorkItems) != 1 {
@@ -624,7 +625,7 @@ func TestGitHubWorkItemsRESTCollectorUsesConfiguredFullPageCommentLimit(t *testi
 	}}
 	result, err := (GitHubWorkItemsRESTCollector{}).Collect(
 		context.Background(), claim,
-		gitHubPullRequestClient(t, doer, "https://api.github.com"), time.Now(),
+		gitHubPullRequestClient(t, fakehttp.Client(doer), "https://api.github.com"), time.Now(),
 	)
 	if err != nil || !result.NoOptionalDegradation() || len(result.Rows.Interactions) != 200 ||
 		result.Evidence.Pages != 4 || result.Evidence.Requests != 5 {

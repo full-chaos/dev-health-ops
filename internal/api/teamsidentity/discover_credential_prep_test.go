@@ -3,6 +3,7 @@ package teamsidentity
 import (
 	"context"
 	"errors"
+	"github.com/full-chaos/dev-health-ops/internal/testsupport/fakehttp"
 	"net/http"
 	"net/netip"
 	"testing"
@@ -22,9 +23,11 @@ func (d *recordingDoer) Do(request *http.Request) (*http.Response, error) {
 
 func withDiscoveryClient(t *testing.T, doer providerfoundation.HTTPDoer) {
 	t.Helper()
-	previous, previousExchange := discoveryHTTPClient, discoveryAppExchangeClient
-	discoveryHTTPClient, discoveryAppExchangeClient = doer, doer
-	t.Cleanup(func() { discoveryHTTPClient, discoveryAppExchangeClient = previous, previousExchange })
+	previous, previousExchange := fakehttp.Client(discoveryHTTPClient), fakehttp.Client(discoveryAppExchangeClient)
+	discoveryHTTPClient, discoveryAppExchangeClient = fakehttp.Client(doer), fakehttp.Client(doer)
+	t.Cleanup(func() {
+		discoveryHTTPClient, discoveryAppExchangeClient = fakehttp.Client(previous), fakehttp.Client(previousExchange)
+	})
 }
 
 func withHostLookup(t *testing.T, lookup func(context.Context, string) ([]netip.Addr, error)) {
@@ -62,7 +65,7 @@ func TestDiscoveryNeverSendsCredentialsToAStoredBaseURL(t *testing.T) {
 
 	t.Run("github PAT", func(t *testing.T) {
 		doer := &recordingDoer{}
-		withDiscoveryClient(t, doer)
+		withDiscoveryClient(t, fakehttp.Client(doer))
 		credential := providerfoundation.NewCredential("github", "c", config,
 			baseFields(map[string]secrets.Value{"token": secrets.NewValue("tok")}))
 		prepared, err := prepareDiscoveryCredential(context.Background(), "github", credential)
@@ -82,7 +85,7 @@ func TestDiscoveryNeverSendsCredentialsToAStoredBaseURL(t *testing.T) {
 
 	t.Run("linear", func(t *testing.T) {
 		doer := &recordingDoer{}
-		withDiscoveryClient(t, doer)
+		withDiscoveryClient(t, fakehttp.Client(doer))
 		credential := providerfoundation.NewCredential("linear", "c", config,
 			baseFields(map[string]secrets.Value{"api_key": secrets.NewValue("key")}))
 		prepared, err := prepareDiscoveryCredential(context.Background(), "linear", credential)
@@ -102,7 +105,7 @@ func TestDiscoveryNeverSendsCredentialsToAStoredBaseURL(t *testing.T) {
 
 	t.Run("gitlab uses config url only", func(t *testing.T) {
 		doer := &recordingDoer{}
-		withDiscoveryClient(t, doer)
+		withDiscoveryClient(t, fakehttp.Client(doer))
 		credential := providerfoundation.NewCredential("gitlab", "c",
 			map[string]string{"url": "https://gitlab.internal.example", "base_url": evil, "gitlab_url": evil},
 			baseFields(map[string]secrets.Value{"token": secrets.NewValue("tok")}))
@@ -158,7 +161,7 @@ func TestGitHubAppBaseURLIsSSRFGuarded(t *testing.T) {
 		}
 		return providerfoundation.NewCredential("github", "c", nil, fields)
 	}
-	withDiscoveryClient(t, &recordingDoer{})
+	withDiscoveryClient(t, fakehttp.Client(&recordingDoer{}))
 	lookup := func(_ context.Context, host string) ([]netip.Addr, error) {
 		switch host {
 		case "internal.example":

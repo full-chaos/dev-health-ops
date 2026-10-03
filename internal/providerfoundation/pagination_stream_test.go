@@ -2,6 +2,7 @@ package providerfoundation
 
 import (
 	"context"
+	"github.com/full-chaos/dev-health-ops/internal/testsupport/fakehttp"
 	"net/http"
 	"testing"
 )
@@ -12,7 +13,7 @@ func TestVisitGitHubLinkPagesDoesNotAccumulatePriorPages(t *testing.T) {
 		{body: `[3,4]`, headers: http.Header{"Link": {`<https://api.github.com/items?page=3>; rel="next"`}}},
 		{body: `[5]`},
 	}}
-	client := paginationClient(t, "github", "https://api.github.com", doer)
+	client := paginationClient(t, "github", "https://api.github.com", fakehttp.Client(doer))
 	var visits int
 	maxItems := 0
 	result, err := VisitGitHubLinkPages(context.Background(), client, GitHubPageOptions{Path: "/items", MaxPages: 3}, func(page PageVisit) error {
@@ -35,7 +36,7 @@ func TestVisitGitHubLinkPagesDoesNotAccumulatePriorPages(t *testing.T) {
 
 func TestVisitGitHubLinkPagesResumesAtInitialURL(t *testing.T) {
 	doer := &paginationDoer{responses: []paginationResponse{{body: `[3]`}}}
-	client := paginationClient(t, "github", "https://api.github.com", doer)
+	client := paginationClient(t, "github", "https://api.github.com", fakehttp.Client(doer))
 	var seen PageVisit
 	result, err := VisitGitHubLinkPages(context.Background(), client, GitHubPageOptions{
 		Path: "/items", InitialURL: "https://api.github.com/items?page=3", MaxPages: 1,
@@ -56,7 +57,7 @@ func TestVisitGitLabPageParamPagesResumesAtInitialPage(t *testing.T) {
 		{body: `[3,4]`, headers: http.Header{"X-Next-Page": {"4"}}},
 		{body: `[5]`},
 	}}
-	client := paginationClient(t, "gitlab", "https://gitlab.example", doer)
+	client := paginationClient(t, "gitlab", "https://gitlab.example", fakehttp.Client(doer))
 	var seen []string
 	result, err := VisitGitLabPageParamPages(context.Background(), client, GitLabPageOptions{Path: "/items", PerPage: 2, MaxPages: 2, InitialPage: 3}, func(page PageVisit) error {
 		seen = append(seen, page.CursorBefore+":"+page.CursorAfter)

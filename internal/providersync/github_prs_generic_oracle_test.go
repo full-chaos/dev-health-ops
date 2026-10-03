@@ -290,6 +290,7 @@ func requireOracleRediscovers[T any](
 	cases []oracleCase,
 	buggyBuilder func(t *testing.T, input map[string]any) T,
 	goOnlyFields map[string]string,
+	expected ...divergenceRead,
 ) {
 	t.Helper()
 	wrapped := func(t *testing.T, input map[string]any) any { return buggyBuilder(t, input) }
@@ -304,6 +305,8 @@ func requireOracleRediscovers[T any](
 		for _, message := range divergences {
 			t.Logf("rediscovered: %s", message)
 		}
+		// The defect's OWN reads, by name: the divergences are exactly these.
+		requireDivergencesAre(t, divergences, expected...)
 	})
 }
 
@@ -327,6 +330,7 @@ func TestGenericOracleRediscoversRowConstructionDefects(t *testing.T) {
 	requireOracleRediscovers(
 		t, "rediscovers pre-M7 state-normalization whitespace bug",
 		"github/prs/row", cases, buggyStateBuilder, oraclePullRequestGoOnlyFields,
+		divergenceRead{"closed_with_trailing_cr", "state"},
 	)
 
 	buggyLoginBuilder := func(t *testing.T, input map[string]any) pullRequestRow {
@@ -337,11 +341,15 @@ func TestGenericOracleRediscoversRowConstructionDefects(t *testing.T) {
 	requireOracleRediscovers(
 		t, "rediscovers pre-M8 non-string login coercion bug",
 		"github/prs/row", cases, buggyLoginBuilder, oraclePullRequestGoOnlyFields,
+		divergenceRead{"closed_merged_with_boolean_login", "author_name"},
+		divergenceRead{"numeric_login_open_pr", "author_name"},
 	)
 
 	requireOracleRediscovers(
 		t, "rediscovers unasserted built fields (merged_at/closed_at swap)",
 		"github/prs/row", cases, buildPullRequestRowForOracleWithCorruptedMergedAt,
 		oraclePullRequestGoOnlyFields,
+		divergenceRead{"closed_with_trailing_cr", "closed_at"},
+		divergenceRead{"closed_with_trailing_cr", "merged_at"},
 	)
 }

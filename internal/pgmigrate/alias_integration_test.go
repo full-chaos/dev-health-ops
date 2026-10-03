@@ -142,7 +142,7 @@ func normalizeAlias(s aliasScenario, text string) string {
 	return text
 }
 
-func pythonAlias(t *testing.T, root, uri string, s aliasScenario) (int, string) {
+func pythonAlias(t *testing.T, producer *venueoracle.Producer, uri string, s aliasScenario) (int, string) {
 	t.Helper()
 	// The cutover switch is part of the scenario; the hash seed is pinned in pgmigratePythonSettings (it
 	// orders Alembic's sets).
@@ -150,7 +150,7 @@ func pythonAlias(t *testing.T, root, uri string, s aliasScenario) (int, string) 
 	if s.cutover {
 		env = append(env, "DEV_HEALTH_ALLOW_CELERY_RIVER_CUTOVER=1")
 	}
-	return pythonCLI(t, root, pgmigratePythonSettings, env, uri, append([]string{"migrate"}, s.args...)...)
+	return pythonCLI(t, producer, pgmigratePythonSettings, env, uri, append([]string{"migrate"}, s.args...)...)
 }
 
 // aliasPythonBuild is the build whose Python CLI answered the scenarios: a build that still carried it.
@@ -184,7 +184,7 @@ func TestAliasesMatchTheFrozenPythonOutput(t *testing.T) {
 		t.Fatal(err)
 	}
 	request := venueoracle.ProgramRequest("alias scenarios", pythonCLIProgram, input, pgmigratePythonSettings)
-	answers := golden.Produce(t, root, []venueoracle.Request{request}, func(_ *venueoracle.Producer, _ []venueoracle.Request) []venueoracle.Response {
+	answers := golden.Produce(t, root, []venueoracle.Request{request}, func(producer *venueoracle.Producer, _ []venueoracle.Request) []venueoracle.Response {
 		uri, exec := revisionsDatabase(t)
 		exec("CREATE TABLE alembic_version_saved AS SELECT * FROM alembic_version")
 		var results []aliasResult
@@ -192,7 +192,7 @@ func TestAliasesMatchTheFrozenPythonOutput(t *testing.T) {
 			if scenario.setup != "" {
 				exec(aliasSetup(t, scenario.setup))
 			}
-			code, text := pythonAlias(t, root, uri, scenario)
+			code, text := pythonAlias(t, producer, uri, scenario)
 			results = append(results, aliasResult{Name: scenario.name, Exit: code, Stdout: text})
 			exec("DROP TABLE IF EXISTS alembic_version")
 			exec("CREATE TABLE alembic_version AS SELECT * FROM alembic_version_saved")

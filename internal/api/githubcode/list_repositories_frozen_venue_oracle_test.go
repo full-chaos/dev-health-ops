@@ -18,8 +18,10 @@ import (
 	"testing"
 	"time"
 
+	"github.com/full-chaos/dev-health-ops/internal/api/restcore"
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/programoracle"
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/venueoracle"
+	"regexp"
 )
 
 // pythonListRepositoriesProgram drives the api's own GitHubCodeClient
@@ -480,6 +482,12 @@ func TestListRepositoriesVenueOracleMatchesFrozenPython(t *testing.T) {
 		}
 		var pythonResult any
 		_ = json.Unmarshal(want[index].Result, &pythonResult)
+		// CHAOS-7927: a redirect error of Go names the scheme and host of the Location only; Python's text carries the raw
+		// header (userinfo, path, query). The recorded Python text is read through the same reduction, so the rest of the
+		// message is still compared byte for byte.
+		if text, ok := pythonResult.(string); ok {
+			pythonResult = reduceRedirectTarget(text)
+		}
 		if s.Loose {
 			if text, ok := got.(string); ok {
 				got, _, _ = strings.Cut(text, ": ")
@@ -623,4 +631,17 @@ func describe(s scenario) string {
 		max = *s.Max
 	}
 	return fmt.Sprintf("%s base=%q org=%q search=%q pattern=%q max=%s", s.Mode, s.Base, s.Org, s.Search, s.Pattern, max)
+}
+
+var redirectTargetPattern = regexp.MustCompile(`(unexpected redirect on .*?: HTTP \d+ -> )([^;]*)(;)`)
+
+// reduceRedirectTarget replaces the Location of a recorded redirect error text by what Go's text carries (restcore.RedirectTarget).
+func reduceRedirectTarget(text string) string {
+	return redirectTargetPattern.ReplaceAllStringFunc(text, func(match string) string {
+		parts := redirectTargetPattern.FindStringSubmatch(match)
+		if parts[2] == "<no Location header>" {
+			return match // Python and Go say the same when there is no header
+		}
+		return parts[1] + restcore.RedirectTarget(parts[2]) + parts[3]
+	})
 }

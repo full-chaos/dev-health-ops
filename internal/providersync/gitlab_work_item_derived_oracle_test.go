@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"github.com/full-chaos/dev-health-ops/internal/testsupport/fakehttp"
 	"strings"
 	"testing"
 	"time"
@@ -252,7 +253,7 @@ func buildGitLabAIAttributionOracleRow(
 	}).Collect(
 		context.Background(), claim,
 		providerfoundation.Credential{Provider: "gitlab", ID: claim.CredentialID},
-		gitLabWorkItemsClient(t, &gitLabWorkItemsDoer{responses: responses}),
+		gitLabWorkItemsClient(t, fakehttp.Client(&gitLabWorkItemsDoer{responses: responses})),
 		time.Date(2026, 8, 3, 12, 0, 0, 0, time.UTC),
 	)
 	if err != nil {
@@ -625,7 +626,7 @@ func TestGitLabWorkItemsRouteComposesSixteenEffectsAndAdvancesWatermark(t *testi
 	}).Collect(
 		context.Background(), claim,
 		providerfoundation.Credential{Provider: "gitlab", ID: claim.CredentialID},
-		gitLabWorkItemsClient(t, doer), time.Date(2026, 8, 3, 12, 0, 0, 0, time.UTC),
+		gitLabWorkItemsClient(t, fakehttp.Client(doer)), time.Date(2026, 8, 3, 12, 0, 0, 0, time.UTC),
 	)
 	if err != nil {
 		t.Fatal(err)
@@ -698,7 +699,7 @@ func TestGitLabWorkItemsRouteRejectsUnavailableDerivedProducerBeforeEffects(t *t
 	}).Collect(
 		context.Background(), claim,
 		providerfoundation.Credential{Provider: "gitlab", ID: claim.CredentialID},
-		gitLabWorkItemsClient(t, &gitLabWorkItemsDoer{responses: gitLabWorkItemResponses()}),
+		gitLabWorkItemsClient(t, fakehttp.Client(&gitLabWorkItemsDoer{responses: gitLabWorkItemResponses()})),
 		time.Date(2026, 8, 3, 12, 0, 0, 0, time.UTC),
 	)
 	if !errors.Is(err, ErrGitLabWorkItemDerivedProducerUnavailable) ||
@@ -727,7 +728,7 @@ func TestGitLabWorkItemsRouteRejectsDerivedWatermarkOutsideClaimBound(t *testing
 	}).Collect(
 		context.Background(), claim,
 		providerfoundation.Credential{Provider: "gitlab", ID: claim.CredentialID},
-		gitLabWorkItemsClient(t, &gitLabWorkItemsDoer{responses: gitLabWorkItemResponses()}),
+		gitLabWorkItemsClient(t, fakehttp.Client(&gitLabWorkItemsDoer{responses: gitLabWorkItemResponses()})),
 		time.Date(2026, 8, 3, 12, 0, 0, 0, time.UTC),
 	)
 	if !errors.Is(err, ErrInvalidConfiguration) {

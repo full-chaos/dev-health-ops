@@ -475,12 +475,21 @@ func TestTheGoProfileRowsValidateAgainstTheSchema(t *testing.T) {
 	}
 }
 
-// (pins) no row of the Python-derived inventory changes: its canonical JSON hashes to the
-// value recorded in endpoint-profiles.ops.pins.tsv, so a row cannot be weakened (a class
-// edited, a validator dropped) without this test failing and the pin being re-recorded on
-// purpose: UPDATE_PROFILE_PINS=1 go test -run TestTheOpsProfileRowsAreWhatTheyWere.
+// (pins) no row of either inventory changes: its canonical JSON hashes to the value recorded
+// next to the file, so a row cannot be weakened (a class edited, a validator dropped, a
+// Go-only row made public) without this test failing and the pin being re-recorded on
+// purpose: UPDATE_PROFILE_PINS=1 go test -run TestTheProfileRowsAreWhatTheyWere.
 func TestTheOpsProfileRowsAreWhatTheyWere(t *testing.T) {
-	rows, err := routeprofile.LoadRows(contractPath(t, "contracts/auth/v1/endpoint-profiles.ops.json"))
+	pinProfileRows(t, "contracts/auth/v1/endpoint-profiles.ops.json", "contracts/auth/v1/endpoint-profiles.ops.pins.tsv", 290)
+}
+
+func TestTheGoOnlyProfileRowsAreWhatTheyWere(t *testing.T) {
+	pinProfileRows(t, "contracts/auth/v1/endpoint-profiles.go.json", "contracts/auth/v1/endpoint-profiles.go.pins.tsv", 30)
+}
+
+func pinProfileRows(t *testing.T, rowsFile, pinsFile string, atLeast int) {
+	t.Helper()
+	rows, err := routeprofile.LoadRows(contractPath(t, rowsFile))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -496,10 +505,10 @@ func TestTheOpsProfileRowsAreWhatTheyWere(t *testing.T) {
 		lines = append(lines, row.ID+"\t"+current[row.ID])
 	}
 	sort.Strings(lines)
-	pinsPath := contractPath(t, "contracts/auth/v1/endpoint-profiles.ops.pins.tsv")
+	pinsPath := contractPath(t, pinsFile)
 	if os.Getenv("UPDATE_PROFILE_PINS") == "1" {
-		header := "# CHAOS-8305: sha256 of each endpoint-profiles.ops.json row's canonical JSON (keys sorted). A changed, removed or added row fails\n" +
-			"# TestTheOpsProfileRowsAreWhatTheyWere until this file is re-recorded on purpose (UPDATE_PROFILE_PINS=1). Deleted with the file (CHAOS-8306).\n"
+		header := "# CHAOS-8305: sha256 of each " + filepath.Base(rowsFile) + " row's canonical JSON (keys sorted). A changed, removed or added row fails\n" +
+			"# the profile-row pin test until this file is re-recorded on purpose (UPDATE_PROFILE_PINS=1). Deleted with the file (CHAOS-8306).\n"
 		if err := os.WriteFile(pinsPath, []byte(header+strings.Join(lines, "\n")+"\n"), 0o600); err != nil {
 			t.Fatal(err)
 		}
@@ -532,7 +541,7 @@ func TestTheOpsProfileRowsAreWhatTheyWere(t *testing.T) {
 			t.Errorf("row %q was removed", id)
 		}
 	}
-	if len(pinned) < 290 {
+	if len(pinned) < atLeast {
 		t.Fatalf("only %d pins", len(pinned))
 	}
 }

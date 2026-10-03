@@ -1,5 +1,5 @@
 # CHAOS-8305: sha256 of each endpoint-profiles.ops.json row's canonical JSON (keys sorted). A changed, removed or added row fails
-# TestTheOpsProfileRowsAreWhatTheyWere until this file is re-recorded on purpose (UPDATE_PROFILE_PINS=1). Deleted with the file (CHAOS-8306).
+# the profile-row pin test until this file is re-recorded on purpose (UPDATE_PROFILE_PINS=1). Deleted with the file (CHAOS-8306).
 DELETE /api/v1/admin/credentials/{provider}/{name} [dev-health-ops-api]	0666f9fbde907e125738b6c9931bf68b05a4d00f81468da4911822e770f0a3f4
 DELETE /api/v1/admin/ip-allowlist/{entry_id} [dev-health-ops-api]	42291582fdbedc47f12c1566627bc665914c01a416b2c7417195f52a565a33a7
 DELETE /api/v1/admin/llm-settings [dev-health-ops-api]	1a570ef78d684d10459d85d0b5ba698b8d952252cf95b96a9101b31aad8e7348

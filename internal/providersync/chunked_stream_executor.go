@@ -115,6 +115,14 @@ func (executor CompleteRouteExecutor) executeChunkedStreaming(
 			}
 		}
 
+		// An attempt that drained prepared chunks up to a bound hands over BEFORE it asks the provider for anything: the drain
+		// loop above does not hand over at its last prepared chunk (nothing was left to drain), and without this check the
+		// attempt would fetch, prepare and commit one more sub-chunk past the bound (CHAOS-8328). The attempt must have committed
+		// at least one chunk, so a bound that is already reached at the start of an attempt still lets every attempt progress.
+		if committedThisAttempt > 0 && (committedThisAttempt >= policy.MaxChunksPerAttempt || attemptElapsed() >= policy.MaxWallTime) {
+			return newChunkContinuation(policy, executor.now().Add(time.Second), committedThisAttempt, attemptElapsed())
+		}
+
 		credential, resolveErr := executor.Credentials.Resolve(
 			workContext, guard, session.Claim.TenantScope(),
 		)
@@ -230,7 +238,7 @@ func (executor CompleteRouteExecutor) executeChunkedStreaming(
 				if prepareErr != nil {
 					return prepareErr
 				}
-				for _, prepared := range preparedGroup {
+				for position, prepared := range preparedGroup {
 					commitResult, commitErr := commitPreparedChunk(
 						workContext, session.Claim, prepared, executor.Committer.Sink,
 						executor.Committer.Readback, executor.Committer.Now, store,
@@ -248,9 +256,14 @@ func (executor CompleteRouteExecutor) executeChunkedStreaming(
 					}
 					nextOrdinal++
 					committedThisAttempt++
-				}
-				if !emission.Final && (committedThisAttempt >= policy.MaxChunksPerAttempt || attemptElapsed() >= policy.MaxWallTime) {
-					return newChunkContinuation(policy, executor.now().Add(time.Second), committedThisAttempt, attemptElapsed())
+					// The bounds are checked after EVERY sub-chunk, also inside this emission (CHAOS-8328): one emission can hold
+					// hundreds of sub-chunks. The rest of the group is already durable (prepared as one group above), so the
+					// continuation costs nothing: the next attempt drains the prepared chunks before it asks the provider for anything.
+					// After the LAST sub-chunk of the FINAL emission there is nothing left to hand over.
+					more := position+1 < len(preparedGroup) || !emission.Final
+					if more && (committedThisAttempt >= policy.MaxChunksPerAttempt || attemptElapsed() >= policy.MaxWallTime) {
+						return newChunkContinuation(policy, executor.now().Add(time.Second), committedThisAttempt, attemptElapsed())
+					}
 				}
 				return nil
 			},

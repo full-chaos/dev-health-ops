@@ -186,6 +186,7 @@ internal/platform/buildstamp	1
 internal/platform/config	12
 internal/platform/dbphase	1
 internal/platform/errortext	1
+internal/platform/errortext/hardened	1
 internal/platform/health	1
 internal/platform/lifecycle	1
 internal/platform/logging	22
@@ -205,7 +206,7 @@ internal/providerfoundation	92
 internal/providersync	200
 internal/pushcli	3
 internal/pyargparse	1
-internal/pythonparity	89
+internal/pythonparity	143
 internal/pythonparity/emailvalidator	230
 internal/pythonparity/pyidna	241
 internal/pythonparity/pyunicodedata	57

@@ -85,3 +85,25 @@ func TestOperatorMetricsExposeTheSyncDriftRepairedFamily(t *testing.T) {
 		t.Fatalf("family not exposed:\n%s", out.String())
 	}
 }
+
+// TestOperatorMetricsExposeTheManualTriggerAwaitFamilies pins CHAOS-8222's
+// registration: an observed await outcome must appear on the api's /metrics.
+func TestOperatorMetricsExposeTheManualTriggerAwaitFamilies(t *testing.T) {
+	registry := health.NewRegistry(time.Second)
+	var deps Deps
+	if err := RegisterOperatorMetrics(registry, &deps); err != nil {
+		t.Fatal(err)
+	}
+	var out bytes.Buffer
+	if err := registry.WriteMetrics(&out); err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{
+		"# TYPE sync_manual_trigger_await_outcome_total counter",
+		"# TYPE sync_manual_trigger_await_latency_seconds histogram",
+	} {
+		if !strings.Contains(out.String(), want) {
+			t.Fatalf("%q not exposed:\n%s", want, out.String())
+		}
+	}
+}

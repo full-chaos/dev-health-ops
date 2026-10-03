@@ -14,6 +14,7 @@ import (
 	"path/filepath"
 	"regexp"
 	"sort"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -23,6 +24,7 @@ import (
 
 	"github.com/full-chaos/dev-health-ops/internal/cli"
 	"github.com/full-chaos/dev-health-ops/internal/pgmigrate"
+	"github.com/full-chaos/dev-health-ops/internal/synchandoff"
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/containers"
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/pyoracle"
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/venueoracle"
@@ -676,6 +678,8 @@ VALUES ($1::uuid, $2, $3::uuid, 'backfill', 'backfill', 'planned', $4, 0, 0, now
 func TestWaitFollowsTheSchedulerToTheOutcome(t *testing.T) {
 	pool, occurrenceID, plan, quarantine := plannedOccurrence(t)
 	ctx := context.Background()
+	// CHAOS-8222: Wait counts each terminal outcome it returns, once.
+	before := awaitScrape(t)
 
 	pending, err := Wait(ctx, pool, occurrenceID, 400*time.Millisecond, 50*time.Millisecond)
 	if err != nil || pending.State != StatePending {
@@ -696,6 +700,77 @@ func TestWaitFollowsTheSchedulerToTheOutcome(t *testing.T) {
 	if err != nil || planned.State != StateMaterialized || planned.TotalUnits != 42 || planned.SyncRunID != uuidN(0x2a, 1) {
 		t.Fatalf("a planned run: %+v, %v", planned, err)
 	}
+	after := awaitScrape(t)
+	for _, outcome := range []string{"pending", "quarantined", "materialized"} {
+		series := `sync_manual_trigger_await_outcome_total{outcome="` + outcome + `"}`
+		if got := after[series] - before[series]; got != 1 {
+			t.Errorf("%s moved by %v, want 1", series, got)
+		}
+		count := `sync_manual_trigger_await_latency_seconds_count{outcome="` + outcome + `"}`
+		if got := after[count] - before[count]; got != 1 {
+			t.Errorf("%s moved by %v, want 1", count, got)
+		}
+	}
+	// The latency is the time Wait polled, not zero: the pending wait lasted its
+	// whole 400ms deadline, so its sum moved by at least 0.3s and its 0.25s bucket
+	// did not move; the +Inf bucket moved by one.
+	sum := `sync_manual_trigger_await_latency_seconds_sum{outcome="pending"}`
+	if got := after[sum] - before[sum]; got < 0.3 {
+		t.Errorf("%s moved by %v, want at least 0.3 (the 400ms wait)", sum, got)
+	}
+	small := `sync_manual_trigger_await_latency_seconds_bucket{outcome="pending",le="0.25"}`
+	if got := after[small] - before[small]; got != 0 {
+		t.Errorf("%s moved by %v, want 0 (a 400ms wait is over 0.25s)", small, got)
+	}
+	inf := `sync_manual_trigger_await_latency_seconds_bucket{outcome="pending",le="+Inf"}`
+	if got := after[inf] - before[inf]; got != 1 {
+		t.Errorf("%s moved by %v, want 1", inf, got)
+	}
+}
+
+// An error return of Wait (a cancelled context on a planned occurrence) is not an
+// outcome: no outcome series and no count moves.
+func TestWaitErrorReturnCountsNothing(t *testing.T) {
+	pool, occurrenceID, _, _ := plannedOccurrence(t)
+	before := awaitScrape(t)
+	cancelled, cancel := context.WithCancel(context.Background())
+	cancel()
+	if _, err := Wait(cancelled, pool, occurrenceID, 400*time.Millisecond, 50*time.Millisecond); err == nil {
+		t.Fatal("a cancelled context must make Wait return an error")
+	}
+	after := awaitScrape(t)
+	for _, outcome := range []string{"pending", "quarantined", "materialized"} {
+		for _, series := range []string{
+			`sync_manual_trigger_await_outcome_total{outcome="` + outcome + `"}`,
+			`sync_manual_trigger_await_latency_seconds_count{outcome="` + outcome + `"}`,
+		} {
+			if got := after[series] - before[series]; got != 0 {
+				t.Errorf("%s moved by %v on an error return, want 0", series, got)
+			}
+		}
+	}
+}
+
+// awaitScrape reads the process-wide await metrics as series -> value.
+func awaitScrape(t *testing.T) map[string]float64 {
+	t.Helper()
+	var b strings.Builder
+	if err := synchandoff.AwaitMetricsSource().WritePrometheus(&b); err != nil {
+		t.Fatal(err)
+	}
+	out := map[string]float64{}
+	for _, line := range strings.Split(b.String(), "\n") {
+		if line == "" || strings.HasPrefix(line, "#") {
+			continue
+		}
+		cut := strings.LastIndex(line, " ")
+		value, err := strconv.ParseFloat(line[cut+1:], 64)
+		if err != nil {
+			t.Fatal(err)
+		}
+		out[line[:cut]] = value
+	}
+	return out
 }
 
 // TestVerbReportsWhatTheSchedulerDid runs the verb end to end: it prints the

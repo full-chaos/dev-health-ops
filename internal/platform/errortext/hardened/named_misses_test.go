@@ -16,6 +16,9 @@ func TestNamedMissesOfTheFormerRE2Port(t *testing.T) {
 		{"kelvin sign folds onto k in a prefixed token", "ghp_KKKKKKKKKKKKKKKKKKKK", "[REDACTED]"},
 		{"kelvin sign folds onto k in a key name", "\u212aey token=1", "\u212aey [REDACTED]"},
 		{"no-break space after a header colon", "Authorization:\u00a0Bearer\u00a0tok", "[REDACTED]"},
+		{"dotted capital I folds onto i in a key name", "ap\u0130_key=1", "[REDACTED]"},
+		{"dotless i folds onto i in a key name", "ap\u0131_key=1", "[REDACTED]"},
+		{"upper-case x in the Slack prefix", "XOXB-aaaaaaaaaa", "[REDACTED]"},
 	}
 	for _, row := range rows {
 		if got := SyncWriters(row.in); got != row.want {

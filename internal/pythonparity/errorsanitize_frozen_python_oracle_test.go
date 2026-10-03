@@ -68,6 +68,14 @@ func sanitizeCorpus() [][2]any {
 		}
 		out = append(out, [2]any{b.String(), cap})
 	}
+	// Appended AFTER the generated texts so no earlier entry moves: the cases where the case fold of the dotted and dotless i, the long s and the
+	// upper-case x decides a match (the second vetter of CHAOS-7947 showed the frozen corpus did not pin them): a key made with those letters, and the
+	// first character of a URL scheme.
+	for _, text := range []string{
+		"ap\u0131key=v1", "ap\u0130_key=v1", "\u0131rc://user:pass@host", "\u0130maps://user:pass@host", "\u017fsh://:pass@host", "XOXB-1111111111-AAAAAAAA",
+	} {
+		out = append(out, [2]any{text, 0})
+	}
 	return out
 }
 

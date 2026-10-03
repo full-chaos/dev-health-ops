@@ -1,7 +1,7 @@
 # Every file under internal/pythonparity/testdata: sha256, kind, path. Written by `go run ./internal/testsupport/recordedfiles/manifest`; never edit it by hand.
 # python-recorded set: c9772c22900bac1d3a82ced8b8fc56c40a0766bbee8df1aef7ca0b838561836b (24 files)
-# header-before-stamp set: 600ae05118d85ef0f5c56214371a33324ba0a392b8435276d5fbe660bfb9e765 (10 files)
-1725a70260264bd5caee808c8d9f8932b7a60b9366c7a95c80d2faf86b6db831	go-generated	errorsanitize_hardened_main.golden.json
+# header-before-stamp set: 524cca7a6568c6423c07fcf1f96d51e9636a9fc231f9860d3d342de380962aba (9 files)
+75b904d8c74cfa0f9552a68fcc230db7d8a05bd6547c269d11924a5c0fdbcd6e	go-generated	errorsanitize_hardened_main.golden.json
 ab525f0193314e087252f94db9893deb3b817b3a3e5dff87fe57f2002439308f	python-recorded	float_text_golden.json
 d2f76eb64bac0c3b86f2e87f5334106699fcf7c72e5ff8c1e333e32323cd13ba	unclassified	generate_float_text_golden.py
 8eec881abea957f546fd0317ef7dd23a28e6e5ee817eaab0f374dbd4f22b5807	unclassified	generate_json_indent_sorted_golden.py
@@ -9,7 +9,7 @@ d2f76eb64bac0c3b86f2e87f5334106699fcf7c72e5ff8c1e333e32323cd13ba	unclassified	ge
 4310cc31a85d42ca93e8bb6ef4d614d4a4c02deb5ecd63d376984dfda7fa80f5	header-before-stamp	golden/casing-multi-rune.golden.json
 3de72ac51892b9a287693cb70ac04d504413ee7accf19095ee060e7e63998190	header-before-stamp	golden/casing-sigma-distance.golden.json
 fbd0ed22057ecb8c49bbc024a8d6a30bfc2cf939ad22028764569e8e32e0495d	header-before-stamp	golden/casing-sigma-properties.golden.json
-f24ba04f425c388fdd33ff5714a14dff0fd19cfec58e915ef8efe509c6d7356b	header-before-stamp	golden/errorsanitize.golden.json
+-	header	golden/errorsanitize.golden.json
 5a8b106fb0f27f55610af0eff8089d09b625081f8c901a66802ddc78d102330a	header-before-stamp	golden/fnmatch.golden.json
 e1fd71f57ff802c5413412c2d81e3c4bc188744d9c103dc4f5a31ba02e49e540	header-before-stamp	golden/isoformat.golden.json
 a98a13c5da8408a4a5345e6780a80b03ceb0b4f41e4d8b4bc7df61cfe98effe3	header-before-stamp	golden/seqratio.golden.json

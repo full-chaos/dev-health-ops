@@ -188,15 +188,30 @@ jobs:
           # The commits this event adds, as the pull_request / push / merge_group scan forms: the new commits only (merges excluded, the
           # first-parent line only), never the history already on main. Any other event (schedule, workflow_dispatch) scans everything.
           case "${EVENT_NAME}" in
-            pull_request) range="${PR_BASE_SHA}..${PR_HEAD_SHA}" ;;
-            merge_group) range="${MQ_BASE_SHA}..${MQ_HEAD_SHA}" ;;
+            pull_request)
+              if [ -z "${PR_BASE_SHA}" ] || [ -z "${PR_HEAD_SHA}" ]; then echo "::error::the pull_request base or head sha is empty"; exit 1; fi
+              range="${PR_BASE_SHA}..${PR_HEAD_SHA}" ;;
+            merge_group)
+              if [ -z "${MQ_BASE_SHA}" ] || [ -z "${MQ_HEAD_SHA}" ]; then echo "::error::the merge_group base or head sha is empty"; exit 1; fi
+              range="${MQ_BASE_SHA}..${MQ_HEAD_SHA}" ;;
             push)
               if [ -n "${PUSH_BEFORE}" ] && [ "${PUSH_BEFORE//0/}" != "" ]; then range="${PUSH_BEFORE}..${PUSH_AFTER}"; else range="-1"; fi ;;
             *) range="" ;;
           esac
           args=(detect --redact -v --exit-code=2 --report-format=sarif --report-path=results.sarif --log-level=debug)
           if [ -n "${range}" ]; then
-            if [ "${range}" = "-1" ]; then args+=("--log-opts=-1"); else args+=("--log-opts=--no-merges --first-parent ${range}"); fi
+            if [ "${range}" = "-1" ]; then
+              args+=("--log-opts=-1")
+            else
+              # A scan that reads no commit must not pass (an empty or unknown sha, or a range that holds only merge commits): fail
+              # before the scan, like the action's unsupported-event failure did. A bad sha fails in rev-list itself.
+              count="$(git rev-list --count --no-merges --first-parent "${range}")"
+              if [ "${count}" -lt 1 ]; then
+                echo "::error::the scan range ${range} holds no commit to scan"
+                exit 1
+              fi
+              args+=("--log-opts=--no-merges --first-parent ${range}")
+            fi
           fi
           echo "gitleaks ${args[*]}"
           "${RUNNER_TEMP}/gitleaks/gitleaks" "${args[@]}"

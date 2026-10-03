@@ -33,14 +33,17 @@ var (
 	dsnPattern           = regexp.MustCompile(`(?i)\b(?:postgres(?:ql)?|clickhouse|redis|rediss|valkey|https?)://[^\s"'<>]+`)
 	credentialURLPattern = regexp.MustCompile(`(?i)\b[a-z][a-z0-9+.-]*://[^/@\s"'<>]+:[^@\s"'<>]+@[^\s"'<>]+`)
 	// userinfoPattern catches a credential written as `user:secret@` with or
-	// without a scheme in front (a DSN or URL without its scheme, a pasted
-	// `postgres:` fragment, a message that quotes the shape): credentialURLPattern
-	// needs `scheme://user:secret@host` whole, so a bare userinfo, or one whose
-	// scheme was cut off before it, reached the log (CHAOS-8260). It replaces the
-	// `user:secret` part and keeps the `@` and the host after it. The user part
-	// cannot hold a quote, a slash, a bracket or `=`, so a JSON `"key":"value@x"`
-	// pair and a `key=value` pair never match.
-	userinfoPattern = regexp.MustCompile(`[^\s/@:"'<>()\[\]{},;=\\]+:[^\s/@"'<>]+@`)
+	// without a scheme in front (a DSN or URL without its scheme, a Valkey/Redis
+	// `:secret@host` with an empty user, a message that quotes the shape):
+	// credentialURLPattern needs `scheme://user:secret@host` whole, so a bare
+	// userinfo, or one whose scheme was cut off before it, reached the log
+	// (CHAOS-8277). The user part may be empty and cannot hold a quote, a slash, a
+	// bracket or `=`, so a JSON `"key":"value@x"` pair and a `key=value` pair never
+	// match; the separator may be a colon or its percent-encoded form; the secret
+	// runs to the LAST `@` of the run, so a `/`, a `%2F` or an `@` inside the
+	// password is covered. A quote or `<`/`>` inside a password ends the run (named
+	// limit: a JSON string or a tag around the text must stay intact).
+	userinfoPattern = regexp.MustCompile(`[^\s/@:"'<>()\[\]{},;=\\]*(?::|%3[aA])[^\s"'<>]*@`)
 	// bareCredentialPatterns catch credential-shaped substrings OUTSIDE a
 	// URL -- an HTTP Authorization header or a bearer/basic credential --
 	// that dsnPattern/credentialURLPattern's URL-anchored matching cannot
@@ -142,7 +145,37 @@ func RedactText(value string) (result string) {
 // redactUserinfo replaces the `user:secret` part of every `user:secret@` in value
 // with the redaction marker and keeps the `@` (so the host after it stays readable).
 func redactUserinfo(value string) string {
-	return userinfoPattern.ReplaceAllString(value, redacted+"@")
+	matches := userinfoPattern.FindAllStringIndex(value, -1)
+	if len(matches) == 0 {
+		return value
+	}
+	var out strings.Builder
+	written := 0
+	for _, match := range matches {
+		// `name:tag@sha256:<digest>` is an image reference, not a credential.
+		if isDigestReference(value[match[1]:]) {
+			continue
+		}
+		out.WriteString(value[written:match[0]])
+		out.WriteString(redacted + "@")
+		written = match[1]
+	}
+	if written == 0 {
+		return value
+	}
+	out.WriteString(value[written:])
+	return out.String()
+}
+
+// isDigestReference reports whether text, the text right after an `@`, starts an
+// image digest (`sha256:`, `sha384:`, `sha512:`).
+func isDigestReference(text string) bool {
+	for _, algorithm := range []string{"sha256:", "sha384:", "sha512:"} {
+		if strings.HasPrefix(text, algorithm) {
+			return true
+		}
+	}
+	return false
 }
 
 // keyVerdicts caches ProtectedKey for attribute keys and group names, which

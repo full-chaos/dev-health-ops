@@ -15,12 +15,24 @@ import (
 // value below is ONE whole literal, never built from parts.
 
 var userinfoCases = []struct {
-	name, text, secret, kept string
+	name, text string
+	hidden     []string // parts of the credential that must be absent
+	kept       string   // a readable part that must survive
 }{
-	{"schemeless host", "cache at svc_user:Zq9plainsecret77@cache.internal:6379 refused", "Zq9plainsecret77", "cache.internal"},
-	{"scheme cut off by a comma", "settings (password=X, ://dbuser:Qv8docshapesecret@host.internal) end", "Qv8docshapesecret", "host.internal"},
-	{"empty host", "tried (login: svc2:Rt4emptyhostsecret@) end", "Rt4emptyhostsecret", "end"},
-	{"password with a colon", "dial ops_user:Wm5colon:inside:secret@db.internal:5432 failed", "inside:secret", "db.internal"},
+	{"host after user and password", "cache at svc_user:Zq9Lm4Nv77@cache.internal:6379 refused", []string{"Zq9Lm4Nv77"}, "cache.internal"},
+	{"empty user", "cache at :Hx7Tk2Pw55@cache.internal:6379 refused", []string{"Hx7Tk2Pw55"}, "cache.internal"},
+	{"empty user at the start", ":Hx7Tk2Pw56@cache.internal refused", []string{"Hx7Tk2Pw56"}, "cache.internal"},
+	{"empty user in a url (the DSN pattern drops the host)", "dial redis://:Bn3Vc8Rd21@cache.internal:6379/0 now", []string{"Bn3Vc8Rd21"}, "now"},
+	{"amqp url with an empty user", "dial amqp://:Bn3Vc8Rd22@mq.internal now", []string{"Bn3Vc8Rd22"}, "mq.internal"},
+	{"slash in the password", "dial svc_user:Aa1Zz/Bb2Yy@db.internal:5432 failed", []string{"Aa1Zz", "Bb2Yy"}, "db.internal"},
+	{"percent-encoded slash", "dial svc_user:Gg7Tt%2FHh8Ss@db.internal failed", []string{"Gg7Tt", "Hh8Ss"}, "db.internal"},
+	{"at sign in the password", "dial svc_user:Cc3Xx@Dd4Ww@db.internal:5432 failed", []string{"Cc3Xx", "Dd4Ww"}, "db.internal"},
+	{"percent-encoded at sign", "dial svc_user:Ee5Vv%40Ff6Uu@db.internal failed", []string{"Ee5Vv", "Ff6Uu"}, "db.internal"},
+	{"colon in the password", "dial ops_user:Ll5Oo:Mm6Nn@db.internal failed", []string{"Ll5Oo", "Mm6Nn"}, "db.internal"},
+	{"percent-encoded colon", "dial svc_user%3AIi9Rr0@db.internal failed", []string{"Ii9Rr0"}, "db.internal"},
+	{"scheme cut off by a comma", "settings (key X, ://dbuser:Jj1Qq2@host.internal) end", []string{"Jj1Qq2"}, "host.internal"},
+	{"empty host", "tried (login: svc2:Rt4Ee6@) end", []string{"Rt4Ee6"}, "end"},
+	{"long text before the cap", strings.Repeat("a", 3990) + " svc_user:Kk3Pp4Qq5@cache.internal", []string{"Kk3Pp4Qq5"}, "cache.internal"},
 }
 
 // Every position a worker log call can carry a text in, at every depth the
@@ -32,14 +44,35 @@ func TestUserinfoWithoutASchemeIsRedactedInEveryPosition(t *testing.T) {
 			var output bytes.Buffer
 			position.log(NewJSON(&output, slog.LevelInfo), tc.text)
 			line := output.String()
-			if strings.Contains(line, tc.secret) {
-				t.Errorf("%s/%s leaked: %s", tc.name, position.name, line)
+			for _, hidden := range tc.hidden {
+				if strings.Contains(line, hidden) {
+					t.Errorf("%s/%s leaked %q: %.300s", tc.name, position.name, hidden, line)
+				}
 			}
 			if !strings.Contains(line, tc.kept) {
-				t.Errorf("%s/%s lost the readable part %q: %s", tc.name, position.name, tc.kept, line)
+				t.Errorf("%s/%s lost the readable part %q: %.300s", tc.name, position.name, tc.kept, line)
 			}
 			if !json.Valid(bytes.TrimSpace(output.Bytes())) {
-				t.Errorf("%s/%s is not valid JSON: %s", tc.name, position.name, line)
+				t.Errorf("%s/%s is not valid JSON: %.300s", tc.name, position.name, line)
+			}
+		}
+	}
+}
+
+// The persisted error columns use RedactCredentialShapes (no percent-decoding
+// first), and the text redactor is the same shape for a bare call.
+func TestUserinfoFormsAreRedactedForThePersistedErrorColumnsAndTheBareRedactor(t *testing.T) {
+	t.Parallel()
+	for _, tc := range userinfoCases {
+		for name, redact := range map[string]func(string) string{"RedactCredentialShapes": RedactCredentialShapes, "RedactText": RedactText} {
+			got := redact(tc.text)
+			for _, hidden := range tc.hidden {
+				if strings.Contains(got, hidden) {
+					t.Errorf("%s/%s leaked %q: %.300s", name, tc.name, hidden, got)
+				}
+			}
+			if !strings.Contains(got, tc.kept) {
+				t.Errorf("%s/%s lost %q: %.300s", name, tc.name, tc.kept, got)
 			}
 		}
 	}
@@ -50,22 +83,13 @@ func TestUserinfoWithoutASchemeIsRedactedInEveryPosition(t *testing.T) {
 func TestUserinfoStraddlingTheValueBoundIsRedactedBeforeTheCut(t *testing.T) {
 	t.Parallel()
 	for pad := maxLoggedValueBytes - 40; pad < maxLoggedValueBytes; pad++ {
-		text := strings.Repeat("a", pad) + " svc_user:Zq9plainsecret77@cache.internal"
+		text := strings.Repeat("a", pad) + " svc_user:Zq9Lm4Nv77@cache.internal"
 		var output bytes.Buffer
 		NewJSON(&output, slog.LevelInfo).Warn("m", "cause", text)
 		line := output.String()
-		if strings.Contains(line, "Zq9") || strings.Contains(line, "plainsecret") {
+		if strings.Contains(line, "Zq9") || strings.Contains(line, "Nv77") {
 			t.Fatalf("pad %d: a part of the secret survived the cut: %.80s...", pad, line[len(line)-200:])
 		}
-	}
-}
-
-// The persisted error columns use RedactCredentialShapes, not RedactText.
-func TestUserinfoIsRedactedForThePersistedErrorColumns(t *testing.T) {
-	t.Parallel()
-	got := RedactCredentialShapes("upstream said svc_user:Zq9plainsecret77@cache.internal refused")
-	if strings.Contains(got, "Zq9plainsecret77") || !strings.Contains(got, "cache.internal") {
-		t.Fatalf("RedactCredentialShapes: %q", got)
 	}
 }
 
@@ -78,6 +102,9 @@ func TestAnAtSignWithoutAUserinfoIsNotRedacted(t *testing.T) {
 		`{"cause":"a@b.example","note":"x"}`,
 		"owner=ops@example.test route=/a/b",
 		"thanks @alice for the report",
+		"image registry.example:5000/repo@sha256:0123456789abcdef pulled",
+		"clone git@github.com:org/repo.git now",
+		"module example.test/x/y@v1.2.3 loaded",
 	} {
 		if got := RedactText(text); got != text {
 			t.Errorf("RedactText(%q) = %q, want it unchanged", text, got)
@@ -133,7 +160,7 @@ func TestShortSecretWarningCarriesNoCredentialShape(t *testing.T) {
 // so a quoted value keeps its quotes and a JSON document stays valid.
 func TestUserinfoRedactionKeepsTheQuotesAroundTheShape(t *testing.T) {
 	t.Parallel()
-	got := RedactText(`dial "svc_user:Zq9plainsecret77@cache.internal" and 'svc_user:Zq9plainsecret77@cache.internal' now`)
+	got := RedactText(`dial "svc_user:Zq9Lm4Nv77@cache.internal" and 'svc_user:Zq9Lm4Nv77@cache.internal' now`)
 	want := `dial "[REDACTED]@cache.internal" and '[REDACTED]@cache.internal' now`
 	if got != want {
 		t.Fatalf("got %q, want %q", got, want)

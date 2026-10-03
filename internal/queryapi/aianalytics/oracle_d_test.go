@@ -42,6 +42,60 @@ type fixtureClientD struct {
 	c          oracleDCase
 	statements []string
 	bindings   [][]clickhouse.Binding
+
+	// The two catalogue name reads of aiOpportunities (CHAOS-8114) are Go-only: the Python detector never
+	// made them. They are answered and recorded APART from the detector reads, so the read-by-read
+	// comparison with the Python calls (checkCallsD) and the statement pins still see exactly the detector
+	// reads. With no rows set the catalogues are empty and every name is null, which is what a recorded
+	// Python case compares with. opportunity_names_test.go sets them.
+	catalogueTeams      [][]any // id, name, repo_patterns
+	catalogueRepos      [][]any // repo_id, full_name
+	catalogueTeamsErr   error
+	catalogueReposErr   error
+	catalogueStatements []string
+	catalogueBindings   [][]clickhouse.Binding
+}
+
+// catalogueNameRead reports which catalogue a statement reads for display names: "teams", "repos" or "".
+// The repository read is told from the slug lookup (also FROM repos) by its id-list binding.
+func catalogueNameRead(st string) string {
+	switch {
+	case strings.Contains(st, "FROM teams"):
+		return "teams"
+	case strings.Contains(st, "FROM repos") && strings.Contains(st, "{repo_ids:Array(String)}"):
+		return "repos"
+	}
+	return ""
+}
+
+func (f *fixtureClientD) catalogueQuery(which, st string, b []clickhouse.Binding) (clickhouse.RowScanner, error) {
+	f.catalogueStatements = append(f.catalogueStatements, st)
+	f.catalogueBindings = append(f.catalogueBindings, b)
+	if which == "teams" {
+		if f.catalogueTeamsErr != nil {
+			return nil, f.catalogueTeamsErr
+		}
+		return &scriptedRows{rows: f.catalogueTeams}, nil
+	}
+	if f.catalogueReposErr != nil {
+		return nil, f.catalogueReposErr
+	}
+	// Like the statement's IN predicate: only the repositories asked for.
+	asked := map[string]bool{}
+	for _, x := range b {
+		if ids, ok := x.Value.([]string); ok && x.Name == "repo_ids" {
+			for _, id := range ids {
+				asked[id] = true
+			}
+		}
+	}
+	var rows [][]any
+	for _, row := range f.catalogueRepos {
+		if asked[row[0].(string)] {
+			rows = append(rows, row)
+		}
+	}
+	return &scriptedRows{rows: rows}, nil
 }
 
 func optF(m map[string]any, k string) any {
@@ -62,6 +116,9 @@ func strList(v any) []string {
 }
 
 func (f *fixtureClientD) Query(_ context.Context, st string, b []clickhouse.Binding) (clickhouse.RowScanner, error) {
+	if which := catalogueNameRead(st); which != "" {
+		return f.catalogueQuery(which, st, b)
+	}
 	f.statements = append(f.statements, st)
 	f.bindings = append(f.bindings, b)
 	c := f.c

@@ -227,6 +227,10 @@ type AIOpportunity struct {
 	Score               float64                   `json:"score"`
 	EvidenceRefs        []string                  `json:"evidenceRefs"`
 	WorkGraphDrilldowns []AIWorkGraphDrilldownRef `json:"workGraphDrilldowns"`
+	// The repository's full name in the org's repository catalogue (CHAOS-8114). Null = the catalogue holds no name for ``repoId``, or the catalogue could not be read. It is never the id.
+	RepoName *string `json:"repoName,omitempty"`
+	// The name of the team ``teamId`` names, from the org's team catalogue (CHAOS-8114). Null = the opportunity has no team, the catalogue holds no name for it, or the catalogue could not be read. It is never the id.
+	TeamName *string `json:"teamName,omitempty"`
 }
 
 type AIReviewLoadResult struct {

@@ -490,11 +490,32 @@ func AiOpportunities(ctx context.Context, client QueryClient, orgID string, in *
 	if len(opps) > bounded {
 		opps = opps[:bounded]
 	}
+	// CHAOS-8114: the display names of the returned page, read once, after the
+	// limit cut. A name is never needed to decide what is returned.
+	catalogue := loadRepoCatalogue(ctx, client, orgID, opportunityRepoIDs(opps), "aiOpportunities")
 	recs := make([]model.AIOpportunity, 0, len(opps))
 	for _, o := range opps {
-		recs = append(recs, o.project())
+		rec := o.project()
+		rec.RepoName = catalogue.repoName(o.repoID)
+		rec.TeamName = catalogue.teamName(o.teamID)
+		recs = append(recs, rec)
 	}
 	return &model.AIOpportunitiesResult{OrgID: orgID, Recommendations: recs, DetectorReady: true}, nil
+}
+
+// opportunityRepoIDs lists the distinct repositories of a page of opportunities
+// in first-seen order, so the name read binds the same ids on every call.
+func opportunityRepoIDs(opps []opportunity) []string {
+	seen := make(map[string]bool, len(opps))
+	var out []string
+	for _, o := range opps {
+		if o.repoID == "" || seen[o.repoID] {
+			continue
+		}
+		seen[o.repoID] = true
+		out = append(out, o.repoID)
+	}
+	return out
 }
 
 // workflowOpportunities runs the repetitive-change, title-pattern,

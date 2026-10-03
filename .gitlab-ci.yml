@@ -26,6 +26,14 @@
 #   - Python lint (ruff) and typecheck (mypy), the Python unit matrix, the
 #     coverage gate and the Python integration tier are gone from GitHub
 #     (#3748, #3761); they are gone here too.
+#   - Stage order: GitLab stages gate each other, so security, scan and build
+#     jobs use `needs: []` to run even when a go or e2e job is red (GitHub runs
+#     its workflows independently); the remaining stage gating is not mirrored.
+#   - go:container-smoke publishes ports on 127.0.0.1 (ci/check_go_containers.sh)
+#     and curls them from the job container; with a dind service the port is in
+#     the dind container. Unproven; expected to work on a pod-network executor.
+#   - docs:guards has no check_ask_dev_copy_drift.py step: correct after #3761
+#     deletes that script and its docs-guards.yml step.
 #   - Needs a runner that allows privileged dind (docker:27-dind services).
 #
 # Job map (GitHub workflow : job -> GitLab job):
@@ -117,6 +125,13 @@ variables:
     changes: *code_changes
   - if: $CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH
     changes: *code_changes
+  - if: $CI_PIPELINE_SOURCE == "web" || $CI_PIPELINE_SOURCE == "schedule" || $CI_COMMIT_TAG
+
+# security-scan.yml has no path filter: the scans run on every merge request,
+# default-branch push, schedule, manual run and tag.
+.security_rules: &security_rules
+  - if: $CI_PIPELINE_SOURCE == "merge_request_event" || $CI_PIPELINE_SOURCE == "merge_train"
+  - if: $CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH
   - if: $CI_PIPELINE_SOURCE == "web" || $CI_PIPELINE_SOURCE == "schedule" || $CI_COMMIT_TAG
 
 .mr_rules: &mr_rules
@@ -422,19 +437,22 @@ docs:health-report:
   stage: test
   rules:
     - if: $CI_PIPELINE_SOURCE == "schedule"
-  allow_failure: true
   before_script:
     - pip install -r requirements-docs.txt
     - mkdir -p .build
   script:
     - python -m mkdocs build --strict --config-file mkdocs.yml
+    # Only the external-link step may fail (continue-on-error in docs-health-report.yml);
+    # the build above fails the job.
     - |
       set -o pipefail
+      rc=0
       python scripts/check_external_links.py \
         --built-site .build/docs \
         --allowlist docs-data/external-link-allowlist.yml \
         --site-url https://docs.fullchaos.dev \
-        2>&1 | tee .build/docs-external-links.log
+        2>&1 | tee .build/docs-external-links.log || rc=$?
+      echo "external link check exit code: ${rc} (diagnostic, does not block)"
   artifacts:
     when: always
     expire_in: 30 days
@@ -459,7 +477,7 @@ go:quality:
     - !reference [.go_job, before_script]
     - |
       if [ "${LEG}" = "static" ]; then
-        # shellcheck is installed pinned (version and sha256), as in go-quality.yml.
+        # Install the pinned linter (version and sha256), as go-quality.yml does.
         version=0.11.0
         case "$(uname -m)" in
           x86_64) arch=x86_64; sha=b7af85e41cc99489dcc21d66c6d5f3685138f06d34651e6d34b42ec6d54fe6f6 ;;
@@ -660,8 +678,14 @@ e2e:live:
   rules: *code_rules
   variables:
     DISABLE_DOTENV: "1"
+    OPERATIONAL_ORDERING_CONTRACT: "2"
+    DEV_HEALTH_ALLOW_CELERY_RIVER_CUTOVER: "1"
+    ENVIRONMENT: test
+    OTEL_ENABLED: "false"
     LIVE_E2E_FIXTURE_SEED: "20260219"
     LIVE_E2E_API_LOG_FILE: ./live-e2e-api.log
+    LIVE_E2E_WORKER_LOG_FILE: ./live-e2e-worker.log
+    LIVE_E2E_RECONCILER_LOG_FILE: ./live-e2e-reconciler.log
   before_script:
     - !reference [.go_job, before_script]
     - !reference [.uv_env, script]
@@ -682,6 +706,13 @@ e2e:metrics-executed-proof:
   stage: e2e
   timeout: 45m
   rules: *code_rules
+  variables:
+    DISABLE_DOTENV: "1"
+    OTEL_ENABLED: "false"
+    OPERATIONAL_ORDERING_CONTRACT: "2"
+    METRICS_PROOF_WORKER_LOG_FILE: ./metrics-executed-proof-worker.log
+    METRICS_PROOF_RECONCILER_LOG_FILE: ./metrics-executed-proof-reconciler.log
+    METRICS_PROOF_SUMMARY_JSON_FILE: ./metrics-executed-proof-family-summary.json
   before_script:
     - !reference [.go_job, before_script]
     - !reference [.uv_env, script]
@@ -705,7 +736,8 @@ e2e:metrics-executed-proof:
 security:pip-audit:
   stage: security
   image: python:3.14
-  rules: *code_rules
+  needs: []
+  rules: *security_rules
   before_script:
     - python -V
     - python -m pip install --upgrade pip
@@ -739,7 +771,8 @@ security:pip-audit:
 security:semgrep:
   stage: security
   image: python:3.14
-  rules: *code_rules
+  needs: []
+  rules: *security_rules
   allow_failure: true
   before_script:
     - apt-get update -y
@@ -771,7 +804,8 @@ security:semgrep:
 security:gitleaks:
   stage: security
   image: python:3.14
-  rules: *code_rules
+  needs: []
+  rules: *security_rules
   variables:
     GITLEAKS_VERSION: "8.24.3"
     GITLEAKS_SHA256: "9991e0b2903da4c8f6122b5c3186448b927a5da4deef1fe45271c3793f4ee29c"
@@ -827,6 +861,7 @@ security:gitleaks:
 security:go-image-build:
   extends: .docker_job
   stage: security
+  needs: []
   timeout: 25m
   rules: *code_rules
   parallel:
@@ -856,6 +891,7 @@ scan:trivy:
   image:
     name: aquasec/trivy:0.70.0
     entrypoint: [""]
+  needs: ["security:go-image-build"]
   rules: *code_rules
   script:
     - |
@@ -871,8 +907,11 @@ scan:trivy:
 scan:sbom:
   stage: scan
   image:
-    name: anchore/syft:v1.42.3
+    # The -debug variant of the same version ships busybox (/busybox/sh is on PATH);
+    # the plain image is FROM scratch and has no shell.
+    name: anchore/syft:v1.42.3-debug
     entrypoint: [""]
+  needs: ["security:go-image-build"]
   rules: *code_rules
   script:
     - |
@@ -903,6 +942,7 @@ scan:sbom:
 build:go-images:
   extends: .docker_job
   stage: build
+  needs: []
   timeout: 45m
   rules: *code_rules
   parallel:
@@ -961,9 +1001,9 @@ build:go-images-manifest:
       set -eu
       printf '%s' "${CI_REGISTRY_PASSWORD}" | docker login -u "${CI_REGISTRY_USER}" --password-stdin "${CI_REGISTRY}"
       repo="${CI_REGISTRY_IMAGE}/dev-health-go-${IMAGE}"
-      tags=(-t "${repo}:${CI_COMMIT_SHORT_SHA}")
-      if [ -n "${CI_COMMIT_TAG:-}" ]; then tags+=(-t "${repo}:${CI_COMMIT_TAG}"); fi
-      docker buildx imagetools create "${tags[@]}" \
+      set -- -t "${repo}:${CI_COMMIT_SHORT_SHA}"
+      if [ -n "${CI_COMMIT_TAG:-}" ]; then set -- "$@" -t "${repo}:${CI_COMMIT_TAG}"; fi
+      docker buildx imagetools create "$@" \
         "${repo}:${CI_COMMIT_SHORT_SHA}-linux-amd64" \
         "${repo}:${CI_COMMIT_SHORT_SHA}-linux-arm64"
       docker buildx imagetools inspect "${repo}:${CI_COMMIT_SHORT_SHA}"

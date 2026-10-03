@@ -898,7 +898,6 @@ internal/synccli/testdata/teams_sync_oracle.py
 internal/synccli/testdata/teams_sync_oracle_gitlab.py
 internal/synccli/testdata/teams_sync_oracle_linear.py
 internal/synccoverage/testdata/python_payload_oracle.py
-internal/syncdispatchruntime/testdata/dispatch_admission_oracle.py
 internal/syncdispatchruntime/testdata/finalize_zero_unit_oracle.py
 internal/testsupport/chschema/testdata/contract1_head.json
 tests/fixtures/ask_dev/status_change/manifest.json

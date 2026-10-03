@@ -3,8 +3,10 @@ package routeswitch
 import (
 	"context"
 	"log"
+	"sync"
 	"time"
 
+	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
@@ -77,7 +79,10 @@ var reachableModes = map[string]bool{
 //     also changing mode does not, by itself, revoke or redirect
 //     reachability here.
 type PostgresSwitch struct {
-	pool            *pgxpool.Pool
+	// pool is *pgxpool.Pool in every production instance (the constructors take nothing else). It is
+	// held as the one method Enabled calls so the unit tier can drive the whole decision, row state by
+	// row state, without a database.
+	pool            registryReader
 	schemaDigest    string
 	documentDigests map[string]string
 	// legacyDigests maps an operation to the document digests of its LEGACY registered texts
@@ -93,6 +98,18 @@ type PostgresSwitch struct {
 	// thing that would get the (schema_digest, document_digest,
 	// selected_operation) key wrong.
 	reachable map[string]bool
+	// serveUnrouted is the catalog rule (CHAOS-8517): an operation with NO routing row at all -- at any
+	// schema digest, under any document digest -- is served. False for every switch but the one
+	// NewCatalogSwitchWithLegacy builds; see catalog_switch.go for the rule and for why the class-row
+	// and proof switches keep "no row = not reachable".
+	serveUnrouted bool
+	// announced holds the operations whose "served with no row" decision has been logged once.
+	announced sync.Map
+}
+
+// registryReader is the read PostgresSwitch makes of go_api_routing_state.
+type registryReader interface {
+	Query(ctx context.Context, sql string, args ...any) (pgx.Rows, error)
 }
 
 // NewPostgresSwitch builds a PostgresSwitch. pool must not be nil.
@@ -127,6 +144,11 @@ func copyLegacy(in map[string][]string) map[string][]string {
 	return out
 }
 
+// liveModesSQL is the one read every switch built on PostgresSwitch makes for an operation: the mode
+// of each row at its live key. Named so the unit tier can tell it from anyRowSQL.
+const liveModesSQL = `SELECT mode FROM go_api_routing_state
+		 WHERE schema_digest = $1 AND document_digest = ANY($2::text[]) AND selected_operation = $3`
+
 // Enabled implements Switch. It queries `go_api_routing_state` for the
 // current mode of (schemaDigest, documentDigest, operation) and returns
 // true only when a row exists AND its mode is "canary" or "primary". Any
@@ -142,6 +164,11 @@ func copyLegacy(in map[string][]string) map[string][]string {
 // it means delegation is silently reverting to Python for this
 // operation, which looks identical to "not canaried yet" unless it is
 // counted and logged separately; see recordDigestMiss.
+//
+// The one exception to "no routing-state row resolves to false" is the
+// catalog switch (serveUnrouted, CHAOS-8517): see unroutedIsServed in
+// catalog_switch.go. Every other switch built on this type keeps the rule
+// above unchanged.
 func (s *PostgresSwitch) Enabled(operation string) bool {
 	documentDigest, ok := s.documentDigests[operation]
 	if !ok {
@@ -150,9 +177,7 @@ func (s *PostgresSwitch) Enabled(operation string) bool {
 
 	ctx, cancel := context.WithTimeout(context.Background(), lookupTimeout)
 	defer cancel()
-	rows, err := s.pool.Query(ctx,
-		`SELECT mode FROM go_api_routing_state
-		 WHERE schema_digest = $1 AND document_digest = ANY($2::text[]) AND selected_operation = $3`,
+	rows, err := s.pool.Query(ctx, liveModesSQL,
 		s.schemaDigest, acceptedDigests(documentDigest, s.legacyDigests[operation]), operation,
 	)
 	if err != nil {
@@ -174,6 +199,9 @@ func (s *PostgresSwitch) Enabled(operation string) bool {
 		return false
 	}
 	if len(modes) == 0 {
+		if s.serveUnrouted {
+			return s.unroutedIsServed(ctx, operation, documentDigest)
+		}
 		recordDigestMiss(ctx, operation, s.schemaDigest, documentDigest)
 		return false
 	}

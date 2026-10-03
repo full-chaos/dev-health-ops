@@ -257,8 +257,15 @@ reachable: `shadow` deliberately does NOT count (the client still gets
 Python's response in shadow mode, plan §5 stage 4), and a missing row, a
 query error, or an operation with no registered document digest all
 resolve to the same safe default as an unregistered operation —
-unreachable. Proven against a real Postgres testcontainer
-(`postgres_switch_integration_test.go`, `go test -tags integration`),
+unreachable. One switch has an exception to the missing-row rule: the one
+`/query` and `/graphql` serve registered documents through
+(`NewCatalogSwitchWithLegacy`, `catalog_switch.go`) serves an operation that
+has no routing row at any schema digest. An operation that has a row
+anywhere keeps the rule above (a row in a non-served mode, or left at
+another digest, holds it dark), and the class-row and proof switches have no
+exception. Proven against a real Postgres testcontainer
+(`postgres_switch_integration_test.go`, `catalog_switch_integration_test.go`,
+`go test -tags integration`),
 including the rollback direction: flipping `mode` away from
 `canary`/`primary` revokes reachability on the very next read, with no
 separate deploy (plan §5: "rollback is a registry change, not an image
@@ -729,11 +736,14 @@ audit table must outlive the row it describes.
 | `devhealth_query_api_routing_rows_for_digest` (gauge, `schema_digest` attr) | `query-api` route construction | Rows keyed to the digest THIS process computed; 0 with the total gauge below `>0` is the DEAD-fleet condition, on every startup, not only at read time |
 | `devhealth_query_api_routing_rows_total` (gauge, `schema_digest` attr) | `query-api` route construction | Disambiguates the gauge above from the legitimate `total == 0` "nothing enabled yet" posture |
 | `devhealth_go_api_dispatch_fallback_total{reason="no_routing_row"}` | Python edge, per request | A dispatch-eligible request found no row |
+| `devhealth_query_api_routeswitch_digest_miss_total{operation}` (and its WARN record) | `query-api`, per request | An operation has no row at the live key and is refused: on the serving route, an operation whose rows are all elsewhere |
+| `devhealth_query_api_routeswitch_served_without_row_total{operation, reason="catalog_no_row"}` (and one INFO record per operation per process) | `query-api`, per request | A registered operation with no routing row at any schema digest was served (the catalog rule). Zero on a stack where every operation has a row |
 | `ci/check_go_api_routing_digest.py` | CI | The SDL moved without updating the pin and this table |
 
-`empty` (nothing enabled) is deliberately reported as a *different* result
-from `stale` (everything enabled is dead). The two look identical from
-outside — no traffic reaches Go either way — and mean opposite things.
+`empty` (no row decides anything) is deliberately reported as a *different*
+result from `stale` (everything enabled is dead), and the two mean opposite
+things: on an empty table query-api serves every registered operation by the
+catalog rule, and on a stale one it serves no operation that has a row.
 
 None of the above shortcuts the recovery procedure. In particular, a schema digest that happens to match a
 previously-proven build is NOT grounds to re-point a DEAD row's `candidate_build` onto a new image without a
@@ -852,7 +862,7 @@ carries the `dho` operator binary on `PATH` (spec S1, CHAOS-6280 folded
 documents dump generated from the SAME commit at build time
 (`/app/go-api/documents.json`), and the checked-in operation catalog at its
 `DefaultCatalogPath` relative to the image's working directory
-(`/app/go-api/src/dev_health_ops/api/graphql/go_api_operations.json`) --
+(`/app/go-api/contracts/graphql/v1/go_api_operations.json`) --
 `dho goapi routing`'s `-catalog` flag needs no override, and neither does
 `carry`'s `-documents` flag, whose default is that same baked-in dump,
 **when run from the image's own WORKDIR (`/app/go-api`)**. `bigboy-cut.sh`

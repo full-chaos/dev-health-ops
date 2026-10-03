@@ -208,6 +208,12 @@ volumes:
     driver: local
   clickhouse_data:
     driver: local
+  # Envelope signing key set, written once by envelope-keys-init. The private
+  # key lives under private/ and is mounted read-only into go-api only; the
+  # JWKS lives under public/ and is the only part query-api mounts. `down`
+  # keeps it; `down -v` deletes it and the next `up` generates a new pair.
+  envelope_keys:
+    driver: local
 
 services:
   postgres:
@@ -843,6 +849,12 @@ services:
       # `dho migrate roles`), which the go-api service below connects as.
       API_DATABASE_ROLE: ${API_DATABASE_ROLE:-devhealth_api}
       API_DATABASE_PASSWORD: ${API_DATABASE_PASSWORD:-devhealth_api}
+      # The dho query-api Service's own registry login (the optional
+      # QUERY_API_DATABASE_ROLE block of `dho migrate roles`), which the
+      # query-api service below connects as. Same local-only convention as
+      # the api role: the default password equals the role name.
+      QUERY_API_DATABASE_ROLE: ${QUERY_API_DATABASE_ROLE:-devhealth_query_api}
+      QUERY_API_DATABASE_PASSWORD: ${QUERY_API_DATABASE_PASSWORD:-devhealth_query_api}
     depends_on:
       migrate:
         condition: service_completed_successfully
@@ -1275,10 +1287,31 @@ services:
       STRIPE_SECRET_KEY: ${STRIPE_SECRET_KEY:-}
       STRIPE_WEBHOOK_SECRET: ${STRIPE_WEBHOOK_SECRET:-}
       LICENSE_PRIVATE_KEY: ${LICENSE_PRIVATE_KEY:-}
+      # The envelope signing key, as a read-only file from the envelope_keys
+      # volume (written by envelope-keys-init). A path, never the key value: it
+      # stays off `docker compose config` and `inspect`. The key id, issuer and
+      # audience must equal what query-api verifies against (same defaults).
+      GO_API_ENVELOPE_PRIVATE_KEY_FILE: /run/envelope/private/envelope-private-key.pem
+      GO_API_ENVELOPE_KEY_ID: ${GO_API_ENVELOPE_KEY_ID:-go-api-envelope-2026-08}
+      GO_API_ENVELOPE_ISSUER: ${GO_API_ENVELOPE_ISSUER:-dev-health-ops-edge}
+      GO_API_ENVELOPE_AUDIENCE: ${GO_API_ENVELOPE_AUDIENCE:-query-api}
+    volumes:
+      # Only the private/ subpath: go-api never sees anything else, and
+      # nothing but go-api mounts this one.
+      - type: volume
+        source: envelope_keys
+        target: /run/envelope/private
+        read_only: true
+        volume:
+          subpath: private
+    # No healthcheck here on purpose: a Python compose test pins go-reconciler
+    # as the only go-* service with one. query-api (below) has its own.
     depends_on:
       # No direct dependency on the Python `migrate` service (a Go service must
       # not gate on it); go-river-provision waits for it, so the api login's
       # grants see every semantic table.
+      envelope-keys-init:
+        condition: service_completed_successfully
       go-river-provision:
         condition: service_completed_successfully
       go-river-migrate:
@@ -1289,6 +1322,115 @@ services:
         condition: service_started
     ports:
       - "8010:8010"
+
+  # One-shot: writes the envelope signing key (0400) and its JWKS (0444) into
+  # the envelope_keys volume on the first `up`, as go-api's uid. `dho mint
+  # envelope-keys` refuses to replace an existing key; with --skip-existing a
+  # later `up` finds the complete set, changes nothing and exits 0 (a partial
+  # or mismatching set exits non-zero and is left as it is). It prints no key
+  # material. A refusal (exit 3: partial-by-hand, mismatching, symlinked or
+  # too-open files) or failure (exit 1) is not retried (`restart: "no"`): the
+  # container stays exited, dependents do not start, `up` reports "service
+  # envelope-keys-init didn't complete successfully", and `docker compose logs
+  # envelope-keys-init` shows the one-line reason naming the file. A crash
+  # during the first write is repaired by the next `up`. Rotation is not automatic. The volume's mount point exists in the
+  # operator image owned by 65532 (docker/go-worker.Dockerfile), which is what
+  # makes a fresh named volume writable by that uid; an older pinned image
+  # without the directory leaves the volume root-owned and this service fails
+  # loudly with a permission error.
+  envelope-keys-init:
+    image: ${DEV_HEALTH_GO_DHO_IMAGE:-ghcr.io/full-chaos/dev-health-go-dho:local}
+    build:
+      context: .
+      dockerfile: docker/go-worker.Dockerfile
+      target: dho
+      args:
+        COMMIT: ${COMMIT:-unknown}
+        BUILD_TIME: ${BUILD_TIME:-1970-01-01T00:00:00Z}
+    restart: "no"
+    read_only: true
+    user: "65532:65532"
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+    tmpfs: [/tmp]
+    command:
+      - mint
+      - envelope-keys
+      - --dir=/var/lib/dev-health/envelope-keys
+      - --key-id=${GO_API_ENVELOPE_KEY_ID:-go-api-envelope-2026-08}
+      - --skip-existing
+    volumes:
+      - envelope_keys:/var/lib/dev-health/envelope-keys
+
+  # The Go query plane (`dho query-api`): /query (GraphQL) and the /api/v1
+  # read routes. It verifies go-api's signed envelope against the JWKS only; it
+  # never mounts the private key. No host port is published: reaching it from
+  # outside the compose network is the router's job. The per-route
+  # GO_API_*_ENABLED switches are not set here: every route stays off until the
+  # router change turns on the ones it serves.
+  query-api:
+    image: ${DEV_HEALTH_GO_DHO_IMAGE:-ghcr.io/full-chaos/dev-health-go-dho:local}
+    build:
+      context: .
+      dockerfile: docker/go-worker.Dockerfile
+      target: dho
+      args:
+        COMMIT: ${COMMIT:-unknown}
+        BUILD_TIME: ${BUILD_TIME:-1970-01-01T00:00:00Z}
+    restart: unless-stopped
+    read_only: true
+    user: "65532:65532"
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+    tmpfs: [/tmp]
+    command:
+      - query-api
+      - --query-addr=:8090
+      - *flag-http-addr
+      - *flag-log-level
+    environment:
+      # ClickHouse on the NATIVE port (9000), the DSN form the query routes read.
+      CLICKHOUSE_URI: clickhouse://${CLICKHOUSE_USER:-ch}:${CLICKHOUSE_PASSWORD:-ch}@clickhouse:9000/${CLICKHOUSE_DB:-default}
+      # The registry pool's own login (provisioned by go-river-provision from
+      # QUERY_API_DATABASE_ROLE / _PASSWORD), on the direct postgres service.
+      # A URI, so a role or password with a reserved URL character must be
+      # percent-encoded by whoever sets it; the local defaults need nothing.
+      GO_API_REGISTRY_POSTGRES_URI: postgresql://${QUERY_API_DATABASE_ROLE:-devhealth_query_api}:${QUERY_API_DATABASE_PASSWORD:-devhealth_query_api}@postgres:5432/${POSTGRES_DB:-postgres}
+      QUERY_API_DATABASE_ROLE: ${QUERY_API_DATABASE_ROLE:-devhealth_query_api}
+      GO_API_ENVELOPE_JWKS_PATH: /run/envelope/public/envelope-jwks.json
+      GO_API_ENVELOPE_ISSUER: ${GO_API_ENVELOPE_ISSUER:-dev-health-ops-edge}
+      GO_API_ENVELOPE_AUDIENCE: ${GO_API_ENVELOPE_AUDIENCE:-query-api}
+      # /query (the end-user edge path) is not mounted without this key; the
+      # same placeholder and variable the api and go-api services read.
+      GO_API_EDGE_JWT_SECRET: ${JWT_SECRET_KEY:-local-dev-jwt-secret-key-0123456789abcdef}
+      CORS_ALLOWED_ORIGINS: ${CORS_ALLOWED_ORIGINS:-http://localhost:3000}
+    volumes:
+      # Only the public/ subpath: the JWKS and nothing else.
+      - type: volume
+        source: envelope_keys
+        target: /run/envelope/public
+        read_only: true
+        volume:
+          subpath: public
+    # Same exec-form probe as go-api (see there): /readyz on --http-addr=:8080.
+    # query-api's /readyz also checks that the JWKS file is readable and valid.
+    healthcheck:
+      test: ["CMD", "/usr/local/bin/dho", "reconciler", "healthcheck"]
+      interval: 15s
+      timeout: 5s
+      retries: 3
+      start_period: 20s
+    depends_on:
+      envelope-keys-init:
+        condition: service_completed_successfully
+      go-river-provision:
+        condition: service_completed_successfully
+      go-river-migrate:
+        condition: service_completed_successfully
+      postgres:
+        condition: service_healthy
+      clickhouse:
+        condition: service_healthy
 
   go-reconciler:
     <<: *go-worker

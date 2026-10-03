@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"reflect"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
@@ -411,12 +412,10 @@ func TestResolve_IndexOrderedFirstError(t *testing.T) {
 	}
 }
 
-func TestResolve_Sankey_ExecuteFailureSwallowsToEmpty(t *testing.T) {
-	client := &routingFakeClient{}
-	client.onErr("'TEAM' AS dimension", errors.New("nodes query failed"))
-	client.on("'TEAM' AS source_dimension", &fakeRowScanner{})
-
-	batch := model.AnalyticsRequestInput{
+// sankeyFailureBatch is a TEAM > REPO sankey on the non-investment path: two
+// reads (the nodes+edges grouped query and the coverage query).
+func sankeyFailureBatch() model.AnalyticsRequestInput {
+	return model.AnalyticsRequestInput{
 		Sankey: &model.SankeyRequestInput{
 			Path:      []model.DimensionInput{model.DimensionInputTeam, model.DimensionInputRepo},
 			Measure:   model.MeasureInputCount,
@@ -425,18 +424,74 @@ func TestResolve_Sankey_ExecuteFailureSwallowsToEmpty(t *testing.T) {
 			MaxEdges:  500,
 		},
 	}
-	result, err := Resolve(context.Background(), client, "org-1", batch)
+}
+
+// CHAOS-8186: a failed sankey read is an error. It was answered as
+// `nodes: [], edges: []` with no error (a port of analytics.py:654-656), which
+// a caller cannot tell from a window that has no flow. The pair below pins
+// the two states apart: without the second test, "always fail" would pass the
+// first.
+func TestResolve_Sankey_ExecuteFailureIsAnError(t *testing.T) {
+	boom := errors.New("nodes query failed")
+	client := &routingFakeClient{}
+	// The one grouped nodes+edges query. The coverage query has no rule: it
+	// degrades to a nil coverage by its own path, and it is not what this
+	// test fails.
+	client.onErr("AS grouping_set,", boom)
+
+	var reported []string
+	orig := recordDegradation
+	recordDegradation = func(_ context.Context, phase string, err error) {
+		if errors.Is(err, boom) {
+			reported = append(reported, phase)
+		}
+	}
+	t.Cleanup(func() { recordDegradation = orig })
+
+	result, err := Resolve(context.Background(), client, "org-1", sankeyFailureBatch())
+	if err == nil {
+		t.Fatalf("Resolve answered %+v and no error: a failed sankey read was served as an empty sankey", result.Sankey)
+	}
+	if !errors.Is(err, boom) {
+		t.Fatalf("Resolve error = %v, want it to wrap the read failure", err)
+	}
+	if !strings.Contains(err.Error(), "analytics: sankey:") {
+		t.Fatalf("Resolve error = %q, want it to name the sankey section", err)
+	}
+	if result != nil {
+		t.Fatalf("Resolve returned a result beside the error: %+v", result)
+	}
+	// The failure is still counted: the telemetry report was the only
+	// signal of it before, and it must not be lost with the swallow.
+	if len(reported) != 1 || reported[0] != "sankey" {
+		t.Fatalf("telemetry reports of the failure = %v, want exactly one for phase sankey", reported)
+	}
+}
+
+func TestResolve_Sankey_AnEmptyReadIsAnAnswer(t *testing.T) {
+	client := &routingFakeClient{}
+	client.on("AS grouping_set,", &fakeRowScanner{})
+
+	var reported []string
+	orig := recordDegradation
+	recordDegradation = func(_ context.Context, phase string, _ error) { reported = append(reported, phase) }
+	t.Cleanup(func() { recordDegradation = orig })
+
+	result, err := Resolve(context.Background(), client, "org-1", sankeyFailureBatch())
 	if err != nil {
-		t.Fatalf("Resolve error = %v -- sankey execution failure must SWALLOW, not propagate", err)
+		t.Fatalf("Resolve error = %v: a sankey read with no rows is an answer, not a failure", err)
 	}
 	if result.Sankey == nil {
-		t.Fatal("expected a non-nil (degraded-empty) SankeyResult")
+		t.Fatal("expected a SankeyResult for an empty window")
 	}
-	if result.Sankey.Nodes != nil || result.Sankey.Edges != nil {
-		t.Fatalf("expected empty nodes/edges after swallowed execute failure, got %+v", result.Sankey)
+	if len(result.Sankey.Nodes) != 0 || len(result.Sankey.Edges) != 0 {
+		t.Fatalf("expected no nodes and no edges for an empty read, got %+v", result.Sankey)
 	}
 	if result.Sankey.Unit != model.SankeyValueUnitWorkUnits {
 		t.Fatalf("unit = %v, want WORK_UNITS for a COUNT measure", result.Sankey.Unit)
+	}
+	if slices.Contains(reported, "sankey") {
+		t.Fatalf("an empty sankey read was reported as a failure: %v", reported)
 	}
 }
 
@@ -705,8 +760,15 @@ func TestResolve_Sankey_UnsetUseInvestment_AutoRoutesToInvestment(t *testing.T) 
 // TEAM/REPO sankeys that Python serves normally.
 func TestResolve_Sankey_UnsetUseInvestment_NonInvestmentDimsStillRun(t *testing.T) {
 	client := &routingFakeClient{}
-	client.on("'TEAM' AS dimension", &fakeRowScanner{rows: [][]any{{"TEAM", "team-a", float64(3)}}})
-	client.on("'TEAM' AS source_dimension", &fakeRowScanner{rows: [][]any{{"TEAM", "REPO", "team-a", "repo-x", float64(1)}}})
+	// One grouped query: grouping set 1 = the TEAM node set, 0 = the
+	// TEAM>REPO edge set. (The two rules this test had before named the
+	// statements of the older two-query shape and matched nothing: the test
+	// passed only because a failed sankey read was answered as an empty
+	// sankey. CHAOS-8186 made that failure an error.)
+	client.on("AS grouping_set,", &fakeRowScanner{rows: [][]any{
+		{uint64(0), "team-a", "repo-x", 1.0},
+		{uint64(1), "team-a", nil, 3.0},
+	}})
 
 	batch := model.AnalyticsRequestInput{
 		Sankey: &model.SankeyRequestInput{
@@ -724,6 +786,9 @@ func TestResolve_Sankey_UnsetUseInvestment_NonInvestmentDimsStillRun(t *testing.
 	if result.Sankey == nil {
 		t.Fatal("expected a sankey result")
 	}
+	if len(result.Sankey.Nodes) == 0 || len(result.Sankey.Edges) == 0 {
+		t.Fatalf("sankey = %+v, want the scripted TEAM node and TEAM>REPO edge: the query did not run", result.Sankey)
+	}
 }
 
 // TestResolveSankey_ArgMaxGuardFiresOnAutoRoutedNodesEdges is CHAOS-4759
@@ -739,11 +804,12 @@ func TestResolveSankey_ArgMaxGuardFiresOnAutoRoutedNodesEdges(t *testing.T) {
 	resetArgMaxNullTransitionGate(t)
 
 	client := &routingFakeClient{}
-	client.on("AS source_dimension,", &fakeRowScanner{rows: [][]any{
-		{"TEAM", "THEME", "team-a", "value-a", 2.0},
-	}})
-	client.on("AS dimension,", &fakeRowScanner{rows: [][]any{
-		{"TEAM", "team-a", 5.0},
+	// One grouped query: grouping set 1 = the TEAM node set, 0 = the
+	// TEAM>THEME edge set. (This test's two older rules named the statements
+	// of the two-query shape and matched nothing; see CHAOS-8186.)
+	client.on("AS grouping_set,", &fakeRowScanner{rows: [][]any{
+		{uint64(0), "team-a", "value-a", 2.0},
+		{uint64(1), "team-a", nil, 5.0},
 	}})
 	// Coverage query: useInvestment=false here (the raw flag), so this is
 	// the NON-investment coverage shape (investment_metrics_daily).

@@ -64,8 +64,8 @@ def test_fan_in_job_exists_and_needs_both_merge_matrices() -> None:
     for name in fan_in_names:
         needs = jobs[name].get("needs")
         needs_list = [needs] if isinstance(needs, str) else list(needs or [])
-        assert "merge" in needs_list and "go-merge" in needs_list, (
-            f"job {name!r} must need BOTH merge and go-merge -- it has to see "
+        assert "go-merge" in needs_list and "go-api-tools-merge" in needs_list, (
+            f"job {name!r} must need BOTH go-merge and go-api-tools-merge -- it has to see "
             f"every family's immutable tag before deciding for any of them, "
             f"got needs={needs_list}"
         )
@@ -79,7 +79,7 @@ def test_merge_matrices_no_longer_decide_moving_tags_per_leg() -> None:
     whether a fan-in job also exists alongside it -- two mechanisms
     deciding the same thing is the two-validators shape, not a fix."""
     jobs = _jobs()
-    for job_name in ("merge", "go-merge"):
+    for job_name in ("go-merge", "go-api-tools-merge"):
         job = jobs.get(job_name)
         assert job is not None, f"expected a {job_name!r} job in docker-images.yml"
         names = _step_names(job)
@@ -242,7 +242,6 @@ def test_dockerfiles_label_the_revision_the_fan_in_job_reads() -> None:
     build-push-action step, that's the second-mechanism regression this
     test also has to catch."""
     dockerfiles = {
-        "build": ROOT / "docker" / "Dockerfile",
         "go-build": ROOT / "docker" / "go-worker.Dockerfile",
     }
     jobs = _jobs()
@@ -1158,7 +1157,7 @@ def test_source_tag_all_unknown_fails_the_job_instead_of_a_silent_noop() -> None
         "merge-base ancestry check instead of failing immediately after "
         "the per-family loop"
     )
-    assert "0 of 6 families had a moving tag applied this run" in stdout, (
+    assert "0 of 5 families had a moving tag applied this run" in stdout, (
         "expected the job-level failure annotation naming the "
         f"moved/ambiguous counts, got stdout:\n{stdout}"
     )
@@ -1202,7 +1201,7 @@ def test_source_tag_mixed_unknown_and_absent_still_fails_the_job() -> None:
         "merge-base ancestry check instead of failing immediately after "
         "the per-family loop"
     )
-    assert "0 of 6 families had a moving tag applied this run" in stdout, (
+    assert "0 of 5 families had a moving tag applied this run" in stdout, (
         "expected the job-level failure annotation naming the "
         f"moved/ambiguous counts, got stdout:\n{stdout}"
     )
@@ -1251,7 +1250,7 @@ def test_latest_check_all_unknown_fails_the_job() -> None:
         "merge-base ancestry check instead of failing immediately after "
         "the per-family loop"
     )
-    assert "0 of 6 families had a moving tag applied this run" in stdout, (
+    assert "0 of 5 families had a moving tag applied this run" in stdout, (
         "expected the job-level failure annotation naming the "
         f"moved/ambiguous counts, got stdout:\n{stdout}"
     )
@@ -1290,7 +1289,7 @@ def test_latest_check_all_families_digest_walk_exhausted_fails_the_job() -> None
         f"log) but never the merge-base ancestry check -- got "
         f"log_called={log_called}, merge_base_called={mb_called}"
     )
-    assert "0 of 6 families had a moving tag applied this run" in stdout, (
+    assert "0 of 5 families had a moving tag applied this run" in stdout, (
         "expected the job-level failure annotation naming the "
         f"moved/ambiguous counts, got stdout:\n{stdout}"
     )
@@ -1329,7 +1328,7 @@ def test_latest_check_all_families_disagree_fails_the_job() -> None:
         f"the platform-label mismatch -- log_called={log_called}, "
         f"merge_base_called={mb_called}"
     )
-    assert "0 of 6 families had a moving tag applied this run" in stdout, (
+    assert "0 of 5 families had a moving tag applied this run" in stdout, (
         "expected the job-level failure annotation naming the "
         f"moved/ambiguous counts, got stdout:\n{stdout}"
     )

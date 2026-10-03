@@ -138,7 +138,7 @@ def test_old8_registry_lookup_uses_the_seven_character_image_tag(
     instead of failing as an unresolvable image."""
     root = _build_root(tmp_path)
     (root / "compose" / "compose.bigboy.images.yml").write_text(
-        "image: ghcr.io/full-chaos/dev-hops-api@sha256:" + "c" * 64 + "\n"
+        "image: ghcr.io/full-chaos/dev-health-go-dho@sha256:" + "c" * 64 + "\n"
     )
     bin_dir = tmp_path / "bin"
     bin_dir.mkdir()
@@ -148,7 +148,7 @@ def test_old8_registry_lookup_uses_the_seven_character_image_tag(
         "#!/bin/bash\n"
         f'echo "$*" >> "{calls}"\n'
         'case "$*" in\n'
-        '  *dev-hops-api:sha-f03f57d\\ *) echo \'{"digest":"sha256:'
+        '  *dev-health-go-dho:sha-f03f57d\\ *) echo \'{"digest":"sha256:'
         + "a"
         * 64
         + "\"}' ;;\n"
@@ -165,8 +165,8 @@ def test_old8_registry_lookup_uses_the_seven_character_image_tag(
         env={"PATH": f"{bin_dir}:/usr/bin:/bin", "BIGBOY_ROOT": str(root)},
     )
     output = proc.stdout + proc.stderr
-    assert "does not resolve to a real dev-hops-api image" not in output, (
+    assert "does not resolve to a real dev-health-go-dho image" not in output, (
         f"the OLD8 lookup used a tag the registry does not have: {output!r}"
     )
     assert "currently pins" in output, output
-    assert "dev-hops-api:sha-f03f57d5" not in calls.read_text(), calls.read_text()
+    assert "dev-health-go-dho:sha-f03f57d5" not in calls.read_text(), calls.read_text()

@@ -2,7 +2,7 @@
 CHAOS-5594: KEDA-driven autoscaling for queue-consuming Go worker groups.
 
 Contract (deploy/docs/canonical-deployment.md §Autoscaling): request-driven
-services use native HPA (api-hpa.yaml, web-hpa.yaml); queue-driven workers use
+services use native HPA (web-hpa.yaml); queue-driven workers use
 KEDA on their authoritative backlog signal; the scheduler singleton is NEVER
 autoscaled. This file is additive -- goWorkers.enabled defaults false and each
 group's autoscaling.enabled defaults per-group, so a disabled chart renders

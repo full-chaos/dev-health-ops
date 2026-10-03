@@ -17,7 +17,7 @@ import (
 // allow-list cover of /api/v1/internal, which existed because the public listener used to serve those routes, is retired.)
 func TestInternalACRRoutesStayOffThePublicIngress(t *testing.T) {
 	output, err := exec.Command("helm", "template", "b", ".",
-		"--set", "goApi.enabled=true",
+		"--set", "goApi.enabled=true", "--set", "queryApi.enabled=true",
 		"--set", "ingress.enabled=true",
 		// A values file that routes a path to every Service the Ingress
 		// template knows, and asks it for the Go api on the internal acr
@@ -177,7 +177,7 @@ func winningBackend(document, url string) string {
 // no go-api path may cover /api/v1/internal.
 func TestGoCatchAllRenderGuards(t *testing.T) {
 	render := func(hosts, allow string) (string, error) {
-		args := []string{"template", "b", ".", "--set", "goApi.enabled=true", "--set", "ingress.enabled=true", "--set-json", "ingress.hosts=" + hosts}
+		args := []string{"template", "b", ".", "--set", "goApi.enabled=true", "--set", "queryApi.enabled=true", "--set", "ingress.enabled=true", "--set-json", "ingress.hosts=" + hosts}
 		if allow != "" {
 			args = append(args, "--set-json", "ingress.pythonAllowList="+allow)
 		}
@@ -186,7 +186,7 @@ func TestGoCatchAllRenderGuards(t *testing.T) {
 	}
 	// rewrite/regex/snippet-class annotations with a go-api route.
 	for _, ann := range []string{"use-regex", "rewrite-target", "app-root", "configuration-snippet", "server-snippet", "permanent-redirect", "temporal-redirect"} {
-		out, err := exec.Command("helm", "template", "b", ".", "--set", "goApi.enabled=true", "--set", "ingress.enabled=true",
+		out, err := exec.Command("helm", "template", "b", ".", "--set", "goApi.enabled=true", "--set", "queryApi.enabled=true", "--set", "ingress.enabled=true",
 			"--set-string", `ingress.annotations.nginx\.ingress\.kubernetes\.io/`+ann+`=/$1`,
 			"--set-json", `ingress.hosts=[{"host":"h","pythonAllowList":true,"paths":[{"path":"/","pathType":"Prefix","service":"go-api"}]}]`).CombinedOutput()
 		if err == nil || !strings.Contains(string(out), "ingress.annotations "+ann+" on an Ingress that routes to go-api") {
@@ -195,8 +195,8 @@ func TestGoCatchAllRenderGuards(t *testing.T) {
 	}
 	// A referenced backend Service must exist.
 	for name, args := range map[string][]string{
-		"goApi disabled": {"--set", "goApi.enabled=false"},
-		"api disabled":   {"--set", "goApi.enabled=true", "--set", "api.enabled=false", "--set-json", `ingress.pythonAllowList=[{"path":"/metrics$","pathType":"ImplementationSpecific"}]`},
+		"goApi disabled":    {"--set", "goApi.enabled=false"},
+		"queryApi disabled": {"--set", "goApi.enabled=true", "--set", "queryApi.enabled=false", "--set-json", `ingress.pythonAllowList=[{"path":"/metrics$","pathType":"ImplementationSpecific","service":"query-api"}]`},
 	} {
 		full := append([]string{"template", "b", ".", "--set", "ingress.enabled=true", "--set-json",
 			`ingress.hosts=[{"host":"h","pythonAllowList":true,"paths":[{"path":"/","pathType":"Prefix","service":"go-api"}]}]`}, args...)
@@ -229,7 +229,7 @@ func TestGoCatchAllRenderGuards(t *testing.T) {
 // shared ingress.pythonAllowList; every guard runs on the EFFECTIVE list.
 func TestPerHostPythonAllowList(t *testing.T) {
 	render := func(hosts string) (string, error) {
-		out, err := exec.Command("helm", "template", "b", ".", "--set", "goApi.enabled=true", "--set", "ingress.enabled=true",
+		out, err := exec.Command("helm", "template", "b", ".", "--set", "goApi.enabled=true", "--set", "queryApi.enabled=true", "--set", "ingress.enabled=true",
 			"--set-json", "ingress.hosts="+hosts).CombinedOutput()
 		return string(out), err
 	}
@@ -244,7 +244,7 @@ func TestPerHostPythonAllowList(t *testing.T) {
 		}
 		return out[at:]
 	}
-	own := `[{"path":"/graphql","pathType":"Prefix"},{"path":"/api/v1/internal","pathType":"Prefix"},{"path":"/metrics","pathType":"Exact"}]`
+	own := `[{"path":"/graphql","pathType":"Prefix","service":"query-api"},{"path":"/api/v1/internal","pathType":"Prefix","service":"query-api"},{"path":"/metrics","pathType":"Exact","service":"query-api"}]`
 	both := `[{"host":"shared.test","pythonAllowList":true,"paths":[{"path":"/","pathType":"Prefix","service":"go-api"}]},` +
 		`{"host":"own.test","pythonAllowList":` + own + `,"paths":[{"path":"/","pathType":"Prefix","service":"go-api"}]}]`
 	out, err := render(both)
@@ -264,10 +264,10 @@ func TestPerHostPythonAllowList(t *testing.T) {
 		t.Errorf("own-list host must render exactly its 3 allow-list paths plus \"/\", got %d paths:\n%s", got, ownRules)
 	}
 	// The shared default is EMPTY (query-api answers /graphql): the shared-list host renders "/" and nothing else.
-	if got := strings.Count(shared, "- path: "); got != 1 || strings.Contains(shared, "dev-health-api\n") {
-		t.Errorf("shared-list host must render exactly \"/\" and no Python backend, got %d paths:\n%s", got, shared)
+	if got := strings.Count(shared, "- path: "); got != 1 || strings.Contains(shared, "dev-health-query-api\n") {
+		t.Errorf("shared-list host must render exactly \"/\" and no query-api backend, got %d paths:\n%s", got, shared)
 	}
-	// Every allow-listed path, on both hosts, backs onto the Python api Service and "/" onto the Go api (r2 P3:
+	// Every allow-listed path, on both hosts, backs onto the query-api Service and "/" onto the Go api (r2 P3:
 	// the security-relevant /api/v1/internal backend was not asserted).
 	backendOf := func(rules, path string) string {
 		parts := strings.SplitN(rules, "- path: "+path+"\n", 2)
@@ -277,19 +277,19 @@ func TestPerHostPythonAllowList(t *testing.T) {
 		return strings.SplitN(parts[1], "- path:", 2)[0]
 	}
 	for _, path := range []string{"/graphql", "/api/v1/internal", "/metrics"} {
-		if !strings.Contains(backendOf(ownRules, path), "name: b-dev-health-api\n") {
-			t.Errorf("own-list host: %s must back onto the Python api Service:\n%s", path, ownRules)
+		if !strings.Contains(backendOf(ownRules, path), "name: b-dev-health-query-api\n") {
+			t.Errorf("own-list host: %s must back onto the query-api Service:\n%s", path, ownRules)
 		}
 	}
 	// A values file that lists a shared path still gets it on the Python api for a `true` host.
-	listed, err := exec.Command("helm", "template", "b", ".", "--set", "goApi.enabled=true", "--set", "ingress.enabled=true",
-		"--set-json", `ingress.pythonAllowList=[{"path":"/graphql$","pathType":"ImplementationSpecific"}]`,
+	listed, err := exec.Command("helm", "template", "b", ".", "--set", "goApi.enabled=true", "--set", "queryApi.enabled=true", "--set", "ingress.enabled=true",
+		"--set-json", `ingress.pythonAllowList=[{"path":"/graphql$","pathType":"ImplementationSpecific","service":"query-api"}]`,
 		"--set-json", `ingress.hosts=[{"host":"shared.test","pythonAllowList":true,"paths":[{"path":"/","pathType":"Prefix","service":"go-api"}]}]`).CombinedOutput()
 	if err != nil {
 		t.Fatalf("a listed shared path must render: %v\n%s", err, listed)
 	}
-	if !strings.Contains(backendOf(hostRules(string(listed), "shared.test"), "/graphql$"), "name: b-dev-health-api\n") {
-		t.Errorf("shared-list host: a listed /graphql$ must back onto the Python api Service:\n%s", listed)
+	if !strings.Contains(backendOf(hostRules(string(listed), "shared.test"), "/graphql$"), "name: b-dev-health-query-api\n") {
+		t.Errorf("shared-list host: a listed /graphql$ must back onto the query-api Service:\n%s", listed)
 	}
 	for _, rules := range []string{ownRules, shared} {
 		if !strings.Contains(backendOf(rules, "/"), "name: b-dev-health-go-api\n") {
@@ -298,18 +298,18 @@ func TestPerHostPythonAllowList(t *testing.T) {
 	}
 	for name, c := range map[string]struct{ list, want string }{
 		"empty list":              {`[]`, "without pythonAllowList"},
-		"regex entry":             {`[{"path":"/api/v1/(internal)","pathType":"Prefix"},{"path":"/api/v1/internal","pathType":"Prefix"}]`, "literal /path"},
-		"implementation specific": {`[{"path":"/x","pathType":"ImplementationSpecific"},{"path":"/api/v1/internal","pathType":"Prefix"}]`, "Prefix|Exact"},
+		"regex entry":             {`[{"path":"/api/v1/(internal)","pathType":"Prefix","service":"query-api"},{"path":"/api/v1/internal","pathType":"Prefix","service":"query-api"}]`, "literal /path"},
+		"implementation specific": {`[{"path":"/x","pathType":"ImplementationSpecific","service":"query-api"},{"path":"/api/v1/internal","pathType":"Prefix","service":"query-api"}]`, "Prefix|Exact"},
 		"entry not a map":         {`["/graphql"]`, "literal /path"},
 		"string value":            {`"yes"`, "must be true or a list"},
 		"map value":               {`{"path":"/x"}`, "must be true or a list"},
-		"root entry":              {`[{"path":"/","pathType":"Prefix"},{"path":"/api/v1/internal","pathType":"Prefix"}]`, "whole host to the Python api"},
-		"double slash root":       {`[{"path":"//","pathType":"Prefix"},{"path":"/api/v1/internal","pathType":"Prefix"}]`, "literal /path"},
-		"double slash inside":     {`[{"path":"/api//v1","pathType":"Prefix"},{"path":"/api/v1/internal","pathType":"Prefix"}]`, "literal /path"},
-		"dot segment":             {`[{"path":"/api/../x","pathType":"Prefix"},{"path":"/api/v1/internal","pathType":"Prefix"}]`, "literal /path"},
-		"root entry only":         {`[{"path":"/","pathType":"Prefix"}]`, "whole host to the Python api"},
-		"duplicate entry":         {`[{"path":"/graphql","pathType":"Prefix"},{"path":"/graphql","pathType":"Exact"},{"path":"/api/v1/internal","pathType":"Prefix"}]`, "duplicates another rule"},
-		"entry repeats host path": {`[{"path":"/api/v1/internal","pathType":"Prefix"},{"path":"/","pathType":"Exact"}]`, "whole host to the Python api"},
+		"root entry":              {`[{"path":"/","pathType":"Prefix","service":"query-api"},{"path":"/api/v1/internal","pathType":"Prefix","service":"query-api"}]`, "whole host to the Python api"},
+		"double slash root":       {`[{"path":"//","pathType":"Prefix","service":"query-api"},{"path":"/api/v1/internal","pathType":"Prefix","service":"query-api"}]`, "literal /path"},
+		"double slash inside":     {`[{"path":"/api//v1","pathType":"Prefix","service":"query-api"},{"path":"/api/v1/internal","pathType":"Prefix","service":"query-api"}]`, "literal /path"},
+		"dot segment":             {`[{"path":"/api/../x","pathType":"Prefix","service":"query-api"},{"path":"/api/v1/internal","pathType":"Prefix","service":"query-api"}]`, "literal /path"},
+		"root entry only":         {`[{"path":"/","pathType":"Prefix","service":"query-api"}]`, "whole host to the Python api"},
+		"duplicate entry":         {`[{"path":"/graphql","pathType":"Prefix","service":"query-api"},{"path":"/graphql","pathType":"Exact","service":"query-api"},{"path":"/api/v1/internal","pathType":"Prefix","service":"query-api"}]`, "duplicates another rule"},
+		"entry repeats host path": {`[{"path":"/api/v1/internal","pathType":"Prefix","service":"query-api"},{"path":"/","pathType":"Exact","service":"query-api"}]`, "whole host to the Python api"},
 		"null value":              {`null`, "must be true or a list"},
 		"zero value":              {`0`, "must be true or a list"},
 		"empty string value":      {`""`, "must be true or a list"},
@@ -321,7 +321,7 @@ func TestPerHostPythonAllowList(t *testing.T) {
 		}
 	}
 	// An allow-list path that repeats one of the host's own paths is refused (two rules on one path).
-	dup := `[{"host":"h","pythonAllowList":[{"path":"/graphql","pathType":"Prefix"},{"path":"/api/v1/internal","pathType":"Prefix"}],` +
+	dup := `[{"host":"h","pythonAllowList":[{"path":"/graphql","pathType":"Prefix","service":"query-api"},{"path":"/api/v1/internal","pathType":"Prefix","service":"query-api"}],` +
 		`"paths":[{"path":"/","pathType":"Prefix","service":"go-api"},{"path":"/graphql","pathType":"Prefix","service":"web"}]}]`
 	if o, err := render(dup); err == nil || !strings.Contains(o, "duplicates another rule") {
 		t.Errorf("an allow-list path repeating a host path must fail the render: err=%v\n%s", err, o)
@@ -333,14 +333,14 @@ func TestPerHostPythonAllowList(t *testing.T) {
 // use-regex to its Ingress exactly when an anchored entry is in use, and malformed anchored entries are refused.
 func TestAnchoredAllowListEntries(t *testing.T) {
 	render := func(hosts string, extra ...string) (string, error) {
-		args := append([]string{"template", "b", ".", "--set", "goApi.enabled=true", "--set", "ingress.enabled=true", "--set-json", "ingress.hosts=" + hosts}, extra...)
+		args := append([]string{"template", "b", ".", "--set", "goApi.enabled=true", "--set", "queryApi.enabled=true", "--set", "ingress.enabled=true", "--set-json", "ingress.hosts=" + hosts}, extra...)
 		out, err := exec.Command("helm", args...).CombinedOutput()
 		return string(out), err
 	}
 	host := func(list string) string {
 		return `[{"host":"h","pythonAllowList":` + list + `,"paths":[{"path":"/","pathType":"Prefix","service":"go-api"}]}]`
 	}
-	internal := `{"path":"/api/v1/internal","pathType":"Prefix"}`
+	internal := `{"path":"/api/v1/internal","pathType":"Prefix","service":"query-api"}`
 	ingressDoc := func(out string) string {
 		for _, d := range strings.Split(out, "\n---") {
 			if documentKind(d) == "Ingress" {
@@ -350,8 +350,8 @@ func TestAnchoredAllowListEntries(t *testing.T) {
 		t.Fatalf("no Ingress in render:\n%s", out)
 		return ""
 	}
-	anchored := `[{"path":"/docs$","pathType":"ImplementationSpecific"},{"path":"/docs/oauth2-redirect$","pathType":"ImplementationSpecific"},` +
-		`{"path":"/openapi\\.json$","pathType":"ImplementationSpecific"},` + internal + `]`
+	anchored := `[{"path":"/docs$","pathType":"ImplementationSpecific","service":"query-api"},{"path":"/docs/oauth2-redirect$","pathType":"ImplementationSpecific","service":"query-api"},` +
+		`{"path":"/openapi\\.json$","pathType":"ImplementationSpecific","service":"query-api"},` + internal + `]`
 	out, err := render(host(anchored))
 	if err != nil {
 		t.Fatalf("anchored list must render: %v\n%s", err, out)
@@ -370,34 +370,34 @@ func TestAnchoredAllowListEntries(t *testing.T) {
 	if o, err := render(host("true")); err != nil || strings.Contains(ingressDoc(o), "use-regex") || strings.Contains(ingressDoc(o), "/graphql") {
 		t.Errorf("a `true` host with the default (empty) shared list must render no Python path and no use-regex: err=%v\n%s", err, o)
 	}
-	if o, err := render(host("true"), "--set-json", `ingress.pythonAllowList=[{"path":"/graphql$","pathType":"ImplementationSpecific"}]`); err != nil || !strings.Contains(ingressDoc(o), `use-regex: "true"`) || !strings.Contains(ingressDoc(o), "- path: /graphql$\n") {
+	if o, err := render(host("true"), "--set-json", `ingress.pythonAllowList=[{"path":"/graphql$","pathType":"ImplementationSpecific","service":"query-api"}]`); err != nil || !strings.Contains(ingressDoc(o), `use-regex: "true"`) || !strings.Contains(ingressDoc(o), "- path: /graphql$\n") {
 		t.Errorf("a `true` host with an anchored shared entry must enable use-regex: err=%v\n%s", err, o)
 	}
 	// No anchored entry anywhere -> no annotation (literal-only lists render as before).
-	if o, err := render(host(`[{"path":"/graphql","pathType":"Exact"},` + internal + `]`)); err != nil || strings.Contains(ingressDoc(o), "use-regex") {
+	if o, err := render(host(`[{"path":"/graphql","pathType":"Exact","service":"query-api"},` + internal + `]`)); err != nil || strings.Contains(ingressDoc(o), "use-regex") {
 		t.Errorf("a literal-only list must not add use-regex: err=%v\n%s", err, o)
 	}
 	// An operator-set use-regex on an Ingress routing to go-api is still refused.
 	if o, err := render(host(anchored), "--set-string", `ingress.annotations.nginx\.ingress\.kubernetes\.io/use-regex=true`); err == nil || !strings.Contains(o, "use-regex on an Ingress that routes to go-api") {
 		t.Errorf("operator-set use-regex must still be refused: err=%v\n%s", err, o)
 	}
-	docs := `{"path":"/docs$","pathType":"ImplementationSpecific"}`
+	docs := `{"path":"/docs$","pathType":"ImplementationSpecific","service":"query-api"}`
 	for name, c := range map[string]struct{ list, want string }{
-		"no trailing dollar":    {`[{"path":"/docs","pathType":"ImplementationSpecific"},` + internal + `]`, "anchored"},
-		"double dollar":         {`[{"path":"/docs$$","pathType":"ImplementationSpecific"},` + internal + `]`, "anchored"},
-		"dollar mid path":       {`[{"path":"/do$cs$","pathType":"ImplementationSpecific"},` + internal + `]`, "anchored"},
-		"unescaped dot":         {`[{"path":"/openapi.json$","pathType":"ImplementationSpecific"},` + internal + `]`, "anchored"},
-		"group":                 {`[{"path":"/(docs)$","pathType":"ImplementationSpecific"},` + internal + `]`, "anchored"},
-		"wildcard":              {`[{"path":"/docs.*$","pathType":"ImplementationSpecific"},` + internal + `]`, "anchored"},
-		"alternation":           {`[{"path":"/docs|x$","pathType":"ImplementationSpecific"},` + internal + `]`, "anchored"},
-		"caret":                 {`[{"path":"^/docs$","pathType":"ImplementationSpecific"},` + internal + `]`, "anchored"},
-		"lone dollar":           {`[{"path":"$","pathType":"ImplementationSpecific"},` + internal + `]`, "anchored"},
-		"root dollar":           {`[{"path":"/$","pathType":"ImplementationSpecific"},` + internal + `]`, "anchored"},
-		"double slash":          {`[{"path":"//docs$","pathType":"ImplementationSpecific"},` + internal + `]`, "anchored"},
-		"literal with dollar":   {`[{"path":"/docs$","pathType":"Exact"},` + internal + `]`, "must be {path"},
-		"duplicate of literal":  {`[` + docs + `,{"path":"/docs","pathType":"Exact"},` + internal + `]`, "duplicates another rule"},
+		"no trailing dollar":    {`[{"path":"/docs","pathType":"ImplementationSpecific","service":"query-api"},` + internal + `]`, "anchored"},
+		"double dollar":         {`[{"path":"/docs$$","pathType":"ImplementationSpecific","service":"query-api"},` + internal + `]`, "anchored"},
+		"dollar mid path":       {`[{"path":"/do$cs$","pathType":"ImplementationSpecific","service":"query-api"},` + internal + `]`, "anchored"},
+		"unescaped dot":         {`[{"path":"/openapi.json$","pathType":"ImplementationSpecific","service":"query-api"},` + internal + `]`, "anchored"},
+		"group":                 {`[{"path":"/(docs)$","pathType":"ImplementationSpecific","service":"query-api"},` + internal + `]`, "anchored"},
+		"wildcard":              {`[{"path":"/docs.*$","pathType":"ImplementationSpecific","service":"query-api"},` + internal + `]`, "anchored"},
+		"alternation":           {`[{"path":"/docs|x$","pathType":"ImplementationSpecific","service":"query-api"},` + internal + `]`, "anchored"},
+		"caret":                 {`[{"path":"^/docs$","pathType":"ImplementationSpecific","service":"query-api"},` + internal + `]`, "anchored"},
+		"lone dollar":           {`[{"path":"$","pathType":"ImplementationSpecific","service":"query-api"},` + internal + `]`, "anchored"},
+		"root dollar":           {`[{"path":"/$","pathType":"ImplementationSpecific","service":"query-api"},` + internal + `]`, "anchored"},
+		"double slash":          {`[{"path":"//docs$","pathType":"ImplementationSpecific","service":"query-api"},` + internal + `]`, "anchored"},
+		"literal with dollar":   {`[{"path":"/docs$","pathType":"Exact","service":"query-api"},` + internal + `]`, "must be {path"},
+		"duplicate of literal":  {`[` + docs + `,{"path":"/docs","pathType":"Exact","service":"query-api"},` + internal + `]`, "duplicates another rule"},
 		"duplicate anchored":    {`[` + docs + `,` + docs + `,` + internal + `]`, "duplicates another rule"},
-		"exact beside anchored": {`[` + docs + `,{"path":"/graphql","pathType":"Exact"},` + internal + `]`, "is Exact on a host that has an anchored entry"},
+		"exact beside anchored": {`[` + docs + `,{"path":"/graphql","pathType":"Exact","service":"query-api"},` + internal + `]`, "is Exact on a host that has an anchored entry"},
 	} {
 		o, err := render(host(c.list))
 		if err == nil || !strings.Contains(o, c.want) {
@@ -405,13 +405,13 @@ func TestAnchoredAllowListEntries(t *testing.T) {
 		}
 	}
 	// An anchored entry whose base path repeats one of the host's own paths is refused.
-	dup := `[{"host":"h","pythonAllowList":[{"path":"/graphql$","pathType":"ImplementationSpecific"},` + internal + `],` +
+	dup := `[{"host":"h","pythonAllowList":[{"path":"/graphql$","pathType":"ImplementationSpecific","service":"query-api"},` + internal + `],` +
 		`"paths":[{"path":"/","pathType":"Prefix","service":"go-api"},{"path":"/graphql","pathType":"Prefix","service":"web"}]}]`
 	if o, err := render(dup); err == nil || !strings.Contains(o, "duplicates another rule") {
 		t.Errorf("an anchored entry repeating a host path must be refused: err=%v\n%s", err, o)
 	}
 	// r1 P2: an escaped dot segment ("/docs/\\.\\.$") is a . or .. segment after unescaping.
-	if o, err := render(host(`[{"path":"/docs/\\.\\.$","pathType":"ImplementationSpecific"},` + internal + `]`)); err == nil || !strings.Contains(o, "path segment") {
+	if o, err := render(host(`[{"path":"/docs/\\.\\.$","pathType":"ImplementationSpecific","service":"query-api"},` + internal + `]`)); err == nil || !strings.Contains(o, "path segment") {
 		t.Errorf("an anchored dot-dot segment must be refused: err=%v\n%s", err, o)
 	}
 }
@@ -420,11 +420,11 @@ func TestAnchoredAllowListEntries(t *testing.T) {
 // that carries it, so a host with an anchored entry lives in its own Ingress (suffix -anchored, annotated) and every
 // other host stays in the unannotated main Ingress, rendered exactly as before.
 func TestAnchoredHostsGetTheirOwnIngress(t *testing.T) {
-	anchoredHost := `{"host":"anchored.test","pythonAllowList":[{"path":"/docs$","pathType":"ImplementationSpecific"},{"path":"/api/v1/internal","pathType":"Prefix"}],"paths":[{"path":"/","pathType":"Prefix","service":"go-api"}]}`
-	literalHost := `{"host":"literal.test","pythonAllowList":[{"path":"/graphql","pathType":"Exact"},{"path":"/api/v1/internal","pathType":"Prefix"}],"paths":[{"path":"/","pathType":"Prefix","service":"go-api"}]}`
+	anchoredHost := `{"host":"anchored.test","pythonAllowList":[{"path":"/docs$","pathType":"ImplementationSpecific","service":"query-api"},{"path":"/api/v1/internal","pathType":"Prefix","service":"query-api"}],"paths":[{"path":"/","pathType":"Prefix","service":"go-api"}]}`
+	literalHost := `{"host":"literal.test","pythonAllowList":[{"path":"/graphql","pathType":"Exact","service":"query-api"},{"path":"/api/v1/internal","pathType":"Prefix","service":"query-api"}],"paths":[{"path":"/","pathType":"Prefix","service":"go-api"}]}`
 	plainHost := `{"host":"plain.test","paths":[{"path":"/","pathType":"Prefix","service":"web"}]}`
 	render := func(hosts string) []string {
-		out, err := exec.Command("helm", "template", "b", ".", "--set", "goApi.enabled=true", "--set", "ingress.enabled=true", "--set-json", "ingress.hosts="+hosts).CombinedOutput()
+		out, err := exec.Command("helm", "template", "b", ".", "--set", "goApi.enabled=true", "--set", "queryApi.enabled=true", "--set", "ingress.enabled=true", "--set-json", "ingress.hosts="+hosts).CombinedOutput()
 		if err != nil {
 			t.Fatalf("render failed: %v\n%s", err, out)
 		}
@@ -472,15 +472,15 @@ func TestAnchoredHostsGetTheirOwnIngress(t *testing.T) {
 // routing anything to the go-api INTERNAL Service stays refused.
 func TestAllowListNeedsNoInternalCover(t *testing.T) {
 	render := func(hosts string) (string, error) {
-		out, err := exec.Command("helm", "template", "b", ".", "--set", "goApi.enabled=true", "--set", "ingress.enabled=true",
+		out, err := exec.Command("helm", "template", "b", ".", "--set", "goApi.enabled=true", "--set", "queryApi.enabled=true", "--set", "ingress.enabled=true",
 			"--set-json", "ingress.hosts="+hosts).CombinedOutput()
 		return string(out), err
 	}
 	for name, list := range map[string]string{
 		"shared default (no internal entry)": `true`,
-		"own list without internal":          `[{"path":"/graphql$","pathType":"ImplementationSpecific"},{"path":"/metrics$","pathType":"ImplementationSpecific"}]`,
-		"literal list without internal":      `[{"path":"/graphql","pathType":"Exact"}]`,
-		"list keeping internal":              `[{"path":"/graphql$","pathType":"ImplementationSpecific"},{"path":"/api/v1/internal","pathType":"Prefix"}]`,
+		"own list without internal":          `[{"path":"/graphql$","pathType":"ImplementationSpecific","service":"query-api"},{"path":"/metrics$","pathType":"ImplementationSpecific","service":"query-api"}]`,
+		"literal list without internal":      `[{"path":"/graphql","pathType":"Exact","service":"query-api"}]`,
+		"list keeping internal":              `[{"path":"/graphql$","pathType":"ImplementationSpecific","service":"query-api"},{"path":"/api/v1/internal","pathType":"Prefix","service":"query-api"}]`,
 	} {
 		hosts := `[{"host":"h","pythonAllowList":` + list + `,"paths":[{"path":"/","pathType":"Prefix","service":"go-api"}]}]`
 		if o, err := render(hosts); err != nil {
@@ -502,7 +502,7 @@ func TestAllowListNeedsNoInternalCover(t *testing.T) {
 // moment a values file lists a path, the Python api Service is required again.
 func TestDefaultAllowListNeedsNoPythonAPI(t *testing.T) {
 	render := func(extra ...string) (string, error) {
-		args := append([]string{"template", "b", ".", "--set", "goApi.enabled=true", "--set", "ingress.enabled=true", "--set", "api.enabled=false",
+		args := append([]string{"template", "b", ".", "--set", "goApi.enabled=true", "--set", "queryApi.enabled=true", "--set", "ingress.enabled=true",
 			"--set-json", `ingress.hosts=[{"host":"h","pythonAllowList":true,"paths":[{"path":"/","pathType":"Prefix","service":"go-api"}]}]`}, extra...)
 		out, err := exec.Command("helm", args...).CombinedOutput()
 		return string(out), err
@@ -519,7 +519,7 @@ func TestDefaultAllowListNeedsNoPythonAPI(t *testing.T) {
 			t.Errorf("the Ingress must carry only \"/\" -> go-api:\n%s", d)
 		}
 	}
-	if out, err := render("--set-json", `ingress.pythonAllowList=[{"path":"/graphql$","pathType":"ImplementationSpecific"}]`); err == nil || !strings.Contains(out, "api.enabled is false") {
-		t.Errorf("a listed path with the Python api disabled must fail the render: err=%v\n%s", err, out)
+	if out, err := render("--set-json", `ingress.pythonAllowList=[{"path":"/graphql$","pathType":"ImplementationSpecific"}]`); err == nil || !strings.Contains(out, "has no service: the Python api (the old default backend) is gone") {
+		t.Errorf("a listed path with no backend must fail the render: err=%v\n%s", err, out)
 	}
 }

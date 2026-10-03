@@ -345,6 +345,8 @@ type AiAttributedPr {
   workType: String
   teamId: String
   mergedAt: DateTime
+  repoName: String
+  teamName: String
 }
 
 type AiAttributedPrsResult {

@@ -32,6 +32,15 @@ const (
 var (
 	dsnPattern           = regexp.MustCompile(`(?i)\b(?:postgres(?:ql)?|clickhouse|redis|rediss|valkey|https?)://[^\s"'<>]+`)
 	credentialURLPattern = regexp.MustCompile(`(?i)\b[a-z][a-z0-9+.-]*://[^/@\s"'<>]+:[^@\s"'<>]+@[^\s"'<>]+`)
+	// userinfoPattern catches a credential written as `user:secret@` with or
+	// without a scheme in front (a DSN or URL without its scheme, a pasted
+	// `postgres:` fragment, a message that quotes the shape): credentialURLPattern
+	// needs `scheme://user:secret@host` whole, so a bare userinfo, or one whose
+	// scheme was cut off before it, reached the log (CHAOS-8260). It replaces the
+	// `user:secret` part and keeps the `@` and the host after it. The user part
+	// cannot hold a quote, a slash, a bracket or `=`, so a JSON `"key":"value@x"`
+	// pair and a `key=value` pair never match.
+	userinfoPattern = regexp.MustCompile(`[^\s/@:"'<>()\[\]{},;=\\]+:[^\s/@"'<>]+@`)
 	// bareCredentialPatterns catch credential-shaped substrings OUTSIDE a
 	// URL -- an HTTP Authorization header or a bearer/basic credential --
 	// that dsnPattern/credentialURLPattern's URL-anchored matching cannot
@@ -110,6 +119,9 @@ func RedactText(value string) (result string) {
 		value = dsnPattern.ReplaceAllString(value, redacted)
 		value = credentialURLPattern.ReplaceAllString(value, redacted)
 	}
+	if strings.Contains(value, "@") {
+		value = redactUserinfo(value)
+	}
 	lower := strings.ToLower(value)
 	for index, pattern := range bareCredentialPatterns {
 		if strings.Contains(lower, bareCredentialLiterals[index]) {
@@ -125,6 +137,12 @@ func RedactText(value string) (result string) {
 	}
 	value = redactProseCredentials(value)
 	return redactPathSegments(value)
+}
+
+// redactUserinfo replaces the `user:secret` part of every `user:secret@` in value
+// with the redaction marker and keeps the `@` (so the host after it stays readable).
+func redactUserinfo(value string) string {
+	return userinfoPattern.ReplaceAllString(value, redacted+"@")
 }
 
 // keyVerdicts caches ProtectedKey for attribute keys and group names, which

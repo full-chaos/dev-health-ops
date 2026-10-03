@@ -333,6 +333,9 @@ func RedactCredentialShapes(value string) (result string) {
 			result = redactionFailed
 		}
 	}()
+	if strings.Contains(value, "@") {
+		value = redactUserinfo(value)
+	}
 	if mayHoldProviderToken(value) {
 		value = providerTokenPattern.ReplaceAllString(value, redacted)
 	}

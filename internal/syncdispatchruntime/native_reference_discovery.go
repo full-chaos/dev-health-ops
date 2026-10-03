@@ -914,21 +914,23 @@ func discoveryHeartbeatInterval() time.Duration {
 	return quarter
 }
 
-// envPositiveIntSet reports whether envPositiveInt would use the environment value (set, an integer, at least 1).
-func envPositiveIntSet(name string) bool {
-	value, err := strconv.Atoi(os.Getenv(name))
-	return err == nil && value >= 1
+// envPositiveIntFrom is the ONE parser of a positive-integer environment setting: the value and whether it came from
+// the environment. A setting that is unset, not an integer (an out-of-range one included) or below 1 gives the
+// fallback and false (CHAOS-8201: the logged clamp and its logged source come from this one call).
+func envPositiveIntFrom(name string, fallback int) (value int, fromEnv bool) {
+	raw := os.Getenv(name)
+	if raw == "" {
+		return fallback, false
+	}
+	parsed, err := strconv.Atoi(raw)
+	if err != nil || parsed < 1 {
+		return fallback, false
+	}
+	return parsed, true
 }
 
 func envPositiveInt(name string, fallback int) int {
-	raw := os.Getenv(name)
-	if raw == "" {
-		return fallback
-	}
-	value, err := strconv.Atoi(raw)
-	if err != nil || value < 1 {
-		return fallback
-	}
+	value, _ := envPositiveIntFrom(name, fallback)
 	return value
 }
 

@@ -28,6 +28,7 @@ func TestAdmissionCapSourcesPerClassAndClampState(t *testing.T) {
 		{"env 1: light and medium clamped, heavy equal to its limit is table", "1", true, "env", "clamp", "clamp", "table"},
 		{"env not an integer falls back to the default", "abc", true, "default", "table", "table", "table"},
 		{"env below 1 falls back to the default", "0", true, "default", "table", "table", "table"},
+		{"env out of integer range falls back to the default", "99999999999999999999", true, "default", "table", "table", "table"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			if tc.set {
@@ -71,11 +72,14 @@ func TestAdmissionCapSourceOfAClassOutsideTheTableIsTheClamp(t *testing.T) {
 // The service-construction line carries the four source attributes with the values above, and nothing tenant-shaped.
 func TestDispatchServiceConstructionLogsTheAdmissionCapSources(t *testing.T) {
 	for _, tc := range []struct {
-		env  string
-		want map[string]string
+		env   string
+		want  map[string]string
+		clamp float64 // the admission_clamp number on the line
 	}{
-		{"3", map[string]string{"admission_clamp_source": "env", "admission_cap_light_source": "clamp", "admission_cap_medium_source": "table", "admission_cap_heavy_source": "table"}},
-		{"", map[string]string{"admission_clamp_source": "default", "admission_cap_light_source": "table", "admission_cap_medium_source": "table", "admission_cap_heavy_source": "table"}},
+		{"3", map[string]string{"admission_clamp_source": "env", "admission_cap_light_source": "clamp", "admission_cap_medium_source": "table", "admission_cap_heavy_source": "table"}, 3},
+		{"1", map[string]string{"admission_clamp_source": "env", "admission_cap_light_source": "clamp", "admission_cap_medium_source": "clamp", "admission_cap_heavy_source": "table"}, 1},
+		{"99999999999999999999", map[string]string{"admission_clamp_source": "default", "admission_cap_light_source": "table", "admission_cap_medium_source": "table", "admission_cap_heavy_source": "table"}, 8},
+		{"", map[string]string{"admission_clamp_source": "default", "admission_cap_light_source": "table", "admission_cap_medium_source": "table", "admission_cap_heavy_source": "table"}, 8},
 	} {
 		t.Setenv("SYNC_UNIT_CONCURRENCY_PER_BUCKET", tc.env)
 		var logs bytes.Buffer
@@ -94,6 +98,9 @@ func TestDispatchServiceConstructionLogsTheAdmissionCapSources(t *testing.T) {
 		}
 		if found == nil {
 			t.Fatalf("env %q: no sync_dispatch_admission_caps line in:\n%s", tc.env, logs.String())
+		}
+		if found["admission_clamp"] != tc.clamp {
+			t.Fatalf("env %q: admission_clamp = %v; want %v in %v", tc.env, found["admission_clamp"], tc.clamp, found)
 		}
 		for key, value := range tc.want {
 			if found[key] != value {

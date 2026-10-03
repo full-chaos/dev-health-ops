@@ -113,7 +113,7 @@ func syncUnitConcurrencyPerBucket() int {
 
 // syncUnitConcurrencyPerBucketSource names where syncUnitConcurrencyPerBucket's value comes from (CHAOS-8201).
 func syncUnitConcurrencyPerBucketSource() string {
-	if envPositiveIntSet("SYNC_UNIT_CONCURRENCY_PER_BUCKET") {
+	if _, fromEnv := envPositiveIntFrom("SYNC_UNIT_CONCURRENCY_PER_BUCKET", 8); fromEnv {
 		return clampSourceEnv
 	}
 	return clampSourceDefault

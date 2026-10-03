@@ -30,6 +30,7 @@ import (
 	"fmt"
 	envsecrets "github.com/full-chaos/dev-health-ops/internal/platform/secrets"
 	"io"
+	"log/slog"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -38,6 +39,7 @@ import (
 	"time"
 
 	"github.com/full-chaos/dev-health-ops/internal/migrationmatrix"
+	"github.com/full-chaos/dev-health-ops/internal/platform/logging"
 	"github.com/full-chaos/dev-health-ops/internal/platform/secrets"
 )
 
@@ -128,6 +130,9 @@ func registerFlags(set *flag.FlagSet) *matrixFlags {
 }
 
 func main() {
+	// The binary links the query-api server package (its route table, CHAOS-8307), whose
+	// dependencies log through slog.Default(); this makes that the redacting handler.
+	logging.InstallDefault(logging.NewJSON(os.Stderr, slog.LevelInfo))
 	f := registerFlags(flag.CommandLine)
 	flag.Parse()
 	secrets.ResolveFlag(flag.CommandLine, f.dsn, "dsn", postgresURIEnvVar)

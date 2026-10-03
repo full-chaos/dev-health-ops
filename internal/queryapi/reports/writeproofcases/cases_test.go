@@ -52,13 +52,15 @@ func TestTheCasesCoverExactlyTheCatalogMutations(t *testing.T) {
 	var catalog []struct {
 		Operation string `json:"operation"`
 		Kind      string `json:"kind"`
+		Legacy    bool   `json:"legacy"`
 	}
 	if err := json.Unmarshal(raw, &catalog); err != nil {
 		t.Fatal(err)
 	}
 	var mutations []string
 	for _, entry := range catalog {
-		if entry.Kind == "mutation" {
+		// A legacy text (CHAOS-8000 dual accept) is another entry of the same operation, not another mutation.
+		if entry.Kind == "mutation" && !entry.Legacy {
 			mutations = append(mutations, entry.Operation)
 		}
 	}

@@ -346,8 +346,9 @@ func matchSpans(text string) [][2]int {
 			for end < len(text) && isSecretByte(text[end]) {
 				end++
 			}
-			if end < len(text) {
-				end++ // its terminator
+			// its terminator: one byte, or the two bytes of a backslash and n or r (the rule's escaped-newline terminator)
+			if end += 2; end > len(text) {
+				end = len(text)
 			}
 			windows = append(windows, [2]int{start, end})
 		}

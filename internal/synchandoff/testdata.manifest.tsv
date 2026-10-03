@@ -1,4 +1,4 @@
 # Every file under internal/synchandoff/testdata: sha256, kind, path. Written by `go run ./internal/testsupport/recordedfiles/manifest`; never edit it by hand.
 # python-recorded set: e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855 (0 files)
 # header-before-stamp set: e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855 (0 files)
-c874e5b62c7b26ad798a901395853f4bff1d71313a707bd6dec22f146a83b974	hand-written	await_python_source.py
+f25e3897b7a6823689e5186b1340a6e11e9f904226c3db37fab0fc0cccd34874	hand-written	await_python_source.py

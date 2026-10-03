@@ -63,6 +63,13 @@ for node in ast.walk(tree):
         and isinstance(node.func, ast.Attribute)
         and node.func.attr == "labels"
     ):
+        # A POSITIONAL label value (`.labels("late")`) is the same write as the keyword form: a constant joins the outcomes, anything else must be
+        # the parameter name `outcome`.
+        for arg in node.args:
+            if isinstance(arg, ast.Constant):
+                outcomes.add(arg.value)
+            else:
+                assert isinstance(arg, ast.Name) and arg.id == "outcome", ast.dump(arg)
         for keyword in node.keywords:
             used.add(keyword.arg)
             if keyword.arg == "outcome":

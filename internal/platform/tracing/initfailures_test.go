@@ -42,3 +42,7 @@ func TestInitFailureCounterStaysFlatWhenTracingIsDisabled(t *testing.T) {
 		t.Fatal("a disabled tracer is not a failure")
 	}
 }
+
+// NOT pinned: the newProvider failure path's record() (tracing.go). The exporter
+// accepts every endpoint shape the environment can supply, so no input drives
+// it without a seam; the sample-rate path above shares the same one-line call.

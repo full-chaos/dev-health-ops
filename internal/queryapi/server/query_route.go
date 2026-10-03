@@ -1324,6 +1324,85 @@ const registeredAiImpactSummaryDocument = `query AIImpactSummary($orgId: String!
       incidentRate
       testGapPrs
       testGapRate
+      day
+      __typename
+    }
+    repoBreakdown {
+      scopeId
+      scopeLabel
+      aiPrsTotal
+      aiAssistedPrRatio
+      reworkRateDelta
+      __typename
+    }
+    teamBreakdown {
+      scopeId
+      scopeLabel
+      aiPrsTotal
+      aiAssistedPrRatio
+      reworkRateDelta
+      __typename
+    }
+    __typename
+  }
+}`
+
+// registeredAiImpactSummaryV1Document is the text of `aiImpactSummary` BEFORE the Impact page asked for `daily.day`
+// (CHAOS-7992, CHAOS-8000 dual accept): a web build still on the old text keeps working while the new one rolls out.
+// Listed in legacyDigestsByOperation; remove it with the cleanup ticket once no client sends it
+// (testdata/wire_capture/aiimpactsummary_v1_captured.graphql).
+const registeredAiImpactSummaryV1Document = `query AIImpactSummary($orgId: String!, $dateRange: AIDateRangeInput!, $scope: AIScopeInput) {
+  aiImpactSummary(orgId: $orgId, dateRange: $dateRange, scope: $scope) {
+    orgId
+    startDate
+    endDate
+    totalPrs
+    aiAssistedPrs
+    agentCreatedPrs
+    humanPrs
+    unknownPrs
+    aiAssistedPrRatio
+    dataAvailable
+    computedAt
+    byBucket {
+      bucket
+      prsTotal
+      prsMerged
+      aiAssistedPrRatio
+      agentCreatedPrCount
+      cycleTimeAvgHours
+      aiCycleTimeDeltaHours
+      aiReviewAmplification
+      reworkDragRate
+      revertRate
+      incidentDragRate
+      testGapRate
+      leverage {
+        prsComponent
+        cycleTimeComponent
+        reviewComponent
+        reworkComponent
+        testComponent
+        incidentComponent
+        __typename
+      }
+      __typename
+    }
+    daily {
+      bucket
+      prsTotal
+      prsMerged
+      cycleTimeAvgHours
+      reviewsPerPr
+      changesRequestedPerPr
+      reworkPrs
+      reworkRate
+      revertPrs
+      revertRate
+      incidentsCount
+      incidentRate
+      testGapPrs
+      testGapRate
       __typename
     }
     repoBreakdown {
@@ -3667,6 +3746,7 @@ func newDocumentDispatchHandler(getenv getenvFunc, routeMux *routeswitch.Mux, op
 // (`"<operation>": {digestHex(<constIdent>), ...}`). Empty = every operation accepts one text.
 var legacyDigestsByOperation = map[string][]string{
 	"aiAttributedPrs":  {digestHex(registeredAiAttributedPrsV1Document)},
+	"aiImpactSummary":  {digestHex(registeredAiImpactSummaryV1Document)},
 	"capacityForecast": {digestHex(registeredCapacityForecastV1Document)},
 }
 

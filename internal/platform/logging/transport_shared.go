@@ -1,7 +1,6 @@
 package logging
 
 import (
-	"errors"
 	"net"
 	"net/url"
 	"strings"
@@ -11,9 +10,17 @@ import (
 // match with a nil target for a typed-nil pointer, and reading a field of it (or walking its Unwrap) panics. The walk is the
 // bounded one: a self-unwrapping, cyclic or panicking error cannot stall or crash the caller (CHAOS-8127).
 func URLError(err error) *url.Error {
+	chain := boundedChain(err)
+	// The first REAL *url.Error of the chain, in any branch of a multi-error: a typed-nil one before it must not hide it
+	// (CHAOS-8127 r2).
+	for _, link := range chain {
+		if found, ok := link.(*url.Error); ok && found != nil {
+			return found
+		}
+	}
 	var found *url.Error
-	if chainAs(boundedChain(err), &found) {
-		return found // a typed-nil match is the nil pointer: callers test for nil
+	if chainAs(chain, &found) {
+		return found // an As method's match; a typed-nil match is the nil pointer: callers test for nil
 	}
 	return nil
 }
@@ -42,7 +49,7 @@ func IsLocationParseRefusal(err error) (refusal bool) {
 		}
 	}()
 	urlErr := URLError(err)
-	if urlErr == nil || urlErr.Err == nil || errors.Unwrap(urlErr.Err) != nil {
+	if urlErr == nil || urlErr.Err == nil || !isLeaf(urlErr.Err) {
 		return false
 	}
 	return strings.HasPrefix(urlErr.Err.Error(), "failed to parse Location header ")

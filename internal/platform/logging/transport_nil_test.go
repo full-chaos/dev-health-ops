@@ -62,6 +62,19 @@ func TestIsLocationParseRefusal(t *testing.T) {
 		"typed-nil op cause":                         {&url.Error{Err: error(nilOp)}, false},
 		"typed-nil url cause, depth two":             {fmt.Errorf("a: %w", fmt.Errorf("b: %w", &url.Error{Err: error(nilURL)})), false},
 		"no error":                                   {nil, false},
+		// CHAOS-8127 r2: a cause that is any multi-error shape is not a leaf, whatever its first message says.
+		"cause is errors.Join, phrase first":         {&url.Error{Err: errors.Join(phrase, errors.New("second"))}, false},
+		"cause is errors.Join of one":                {&url.Error{Err: errors.Join(phrase)}, false},
+		"cause is a two-%w wrapper":                  {&url.Error{Err: fmt.Errorf("failed to parse Location header %w %w", errors.New("a"), errors.New("b"))}, false},
+		"cause is a custom Unwrap() []error":         {&url.Error{Err: multiCause{msg: "failed to parse Location header x", causes: []error{errors.New("c")}}}, false},
+		"cause is a custom multi with a typed nil":   {&url.Error{Err: multiCause{msg: "failed to parse Location header x", causes: []error{error(nilOp)}}}, false},
+		"cause is a custom multi, panicking Unwrap":  {&url.Error{Err: multiCause{msg: "failed to parse Location header x", boom: true}}, false},
+		"cause is a join under a single wrap":        {&url.Error{Err: fmt.Errorf("failed to parse Location header %w", errors.Join(errors.New("a"), errors.New("b")))}, false},
+		"cause is a join with a typed-nil url error": {&url.Error{Err: errors.Join(error(nilURL), phrase)}, false},
+		"an empty multi cause is a leaf":             {&url.Error{Err: multiCause{msg: "failed to parse Location header x"}}, true},
+		"the refusal found inside a join":            {errors.Join(&url.Error{Op: "Get", URL: "https://x.example.test", Err: phrase}, errors.New("other")), true},
+		"the refusal found inside a two-%w wrapper":  {fmt.Errorf("%w; %w", errors.New("other"), &url.Error{Op: "Get", URL: "https://x.example.test", Err: phrase}), true},
+		"a typed-nil url error then the refusal":     {errors.Join(error(nilURL), &url.Error{Op: "Get", URL: "https://x.example.test", Err: phrase}), true},
 	}
 	for name, row := range rows {
 		if got := IsLocationParseRefusal(row.err); got != row.want {
@@ -90,4 +103,19 @@ func TestRetryableTransportRetriesOnlyDialAndTimeout(t *testing.T) {
 			t.Errorf("%s: RetryableTransport = %v, want %v", name, got, row.want)
 		}
 	}
+}
+
+// multiCause is a hostile multi-error: it answers Unwrap() []error (nothing, a list, or a panic).
+type multiCause struct {
+	msg    string
+	causes []error
+	boom   bool
+}
+
+func (m multiCause) Error() string { return m.msg }
+func (m multiCause) Unwrap() []error {
+	if m.boom {
+		panic("hostile Unwrap")
+	}
+	return m.causes
 }

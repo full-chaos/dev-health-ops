@@ -344,3 +344,22 @@ func TestATimeoutIsRetriedByTheCore(t *testing.T) {
 		t.Fatalf("the transport was called %d times, want 2 (one timeout, one retry)", transport.calls)
 	}
 }
+
+// CHAOS-8127 r2: after a witnessed 3xx, a body-read error whose *url.Error cause is ANY multi-error shape (errors.Join, a two-%w
+// wrapper, a custom Unwrap() []error) is not net/http's refusal of a Location, whatever its first message says: it is an ordinary
+// transport error and is never reworded as a redirect.
+func TestAMultiErrorCauseAfterAWitnessedRedirectIsNotARefusedLocation(t *testing.T) {
+	phrase := errors.New("failed to parse Location header \"x\": planted detail")
+	for name, cause := range map[string]error{
+		"errors.Join, phrase first": &url.Error{Op: "Get", URL: "https://api.example.test/x", Err: errors.Join(phrase, errors.New("second"))},
+		"two-%w wrapper":            &url.Error{Op: "Get", URL: "https://api.example.test/x", Err: fmt.Errorf("failed to parse Location header %w %w", errors.New("a"), errors.New("b"))},
+		"join under a single wrap":  fmt.Errorf("read: %w", &url.Error{Op: "Get", URL: "https://api.example.test/x", Err: errors.Join(phrase)}),
+	} {
+		core := Core{Provider: "github", RetryAfter: func(Response) time.Duration { return 0 }, HTTP: &http.Client{Transport: redirectThenBrokenBody{err: cause}}}
+		_, err := core.Get(context.Background(), "https://api.example.test/x", "GET /probe")
+		var apiErr *Error
+		if !errors.As(err, &apiErr) || apiErr.Class != "TransportError" || strings.Contains(apiErr.Message, "unexpected redirect") {
+			t.Fatalf("%s: err = %v, want a TransportError that is not reworded as a redirect", name, err)
+		}
+	}
+}

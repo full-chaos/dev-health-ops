@@ -159,3 +159,25 @@ func unwrappedOne(err error) (next error) {
 	}
 	return nil
 }
+
+// isLeaf reports whether err unwraps to nothing in either form: its Unwrap() error answers nil (or it has none) and its
+// Unwrap() []error holds no non-nil element (or it has none). errors.Unwrap alone answers nil for every multi-error
+// (errors.Join, fmt.Errorf with two %w), so it cannot decide this. A panicking Unwrap is not a leaf (CHAOS-8127 r2).
+func isLeaf(err error) (leaf bool) {
+	defer func() {
+		if recover() != nil {
+			leaf = false
+		}
+	}()
+	if single, ok := err.(interface{ Unwrap() error }); ok && single.Unwrap() != nil {
+		return false
+	}
+	if multi, ok := err.(interface{ Unwrap() []error }); ok {
+		for _, inner := range multi.Unwrap() {
+			if inner != nil {
+				return false
+			}
+		}
+	}
+	return true
+}

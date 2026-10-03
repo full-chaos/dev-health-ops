@@ -133,12 +133,14 @@ func InitWithServiceName(logger *slog.Logger, defaultName string) Component {
 	endpoint := stringEnv("OTEL_EXPORTER_OTLP_ENDPOINT", defaultEndpoint)
 	sampleRate, err := sampleRateFromEnv()
 	if err != nil {
+		initFailures.record()
 		logger.Warn("OpenTelemetry initialisation failed", "error", err)
 		return Component{}
 	}
 
 	provider, err := newProvider(serviceName, environment, endpoint, sampleRate)
 	if err != nil {
+		initFailures.record()
 		logger.Warn("OpenTelemetry initialisation failed", "error", err)
 		return Component{}
 	}

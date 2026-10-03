@@ -557,11 +557,9 @@ def test_overlays_carry_no_literal_credential_and_use_compose_substitution() -> 
     )
 
 
-# Files still to convert, each under its own sub-issue; this list only ever shrinks.
-_c_NOT_YET_CONVERTED = {
-    "pass-bigboy-auth.py": "CHAOS-8370",
-    "pass-bigboy-admin2.sh": "CHAOS-8369 (own PR, converted there; drop this entry once it merges)",
-}
+# Files still to convert, each under its own sub-issue; this list only ever shrinks. It is empty:
+# the two pass scripts it held ran inside the Python api container and are deleted (CHAOS-8361).
+_c_NOT_YET_CONVERTED: dict[str, str] = {}
 
 
 def test_no_bare_docker_exec_run_or_printenv_in_ci_bigboy_run_files() -> None:

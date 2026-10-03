@@ -1,10 +1,10 @@
 #!/usr/bin/env bash
 # bigboy-hook-check.sh (CHAOS-6641): run the SAME verb the prod migrate hook Job runs -- `dho migrate upgrade --river=false`
 # from the pinned OPERATOR image, with the env shape the prod Job gets (native ClickHouse DSN, MIGRATION_DATABASE_URI,
-# contract 2, celery cutover flag) -- against the bigboy stores. bigboy's compose `migrate` service is the Python chain
-# (`dev_health_ops.cli migrate postgres && migrate clickhouse`, HTTP :8123) and never exercises this path. nothing printed but step names/exit codes. usage: bigboy-hook-check.sh [record-dir]
+# contract 2, celery cutover flag) -- against the bigboy stores. bigboy's compose `migrate` service runs `dho migrate upgrade --river`
+# from the dho image (the cut's own migrate step); this check is the hook's verb (`--river=false`) from the OPERATOR image, the image the prod Job runs. nothing printed but step names/exit codes. usage: bigboy-hook-check.sh [record-dir]
 # CHAOS-8371 (D4566 class rules): no credential is read, held or passed by this script. The operator runs as the compose one-off
-# `venue-hook` (compose.bigboy.hook-check.yml); compose interpolates both DSNs from ops/.env itself. No printenv out of the api
+# `venue-hook` (compose.bigboy.hook-check.yml); compose interpolates both DSNs from ops/.env itself. No printenv out of a
 # container, no script-written env file, no bare `docker run`: compose verbs only.
 set -euo pipefail; umask 077
 R=/home/ubuntu/devhealth

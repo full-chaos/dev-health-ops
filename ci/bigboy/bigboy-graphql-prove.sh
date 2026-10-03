@@ -1,14 +1,12 @@
 #!/usr/bin/env bash
 # bigboy-graphql-prove.sh <full ops sha> [--go-edge] -- CHAOS-6993: the bigboy GraphQL prove harness.
 #
-# The edge it proves through is the caller's explicit choice, never inferred:
-#   (default)  the Python edge: api's own /graphql (localhost:8000 from venue-prove, which
-#              shares api's network namespace), the prover's Python-reference mode;
-#   --go-edge  the ROUTED /graphql: the plane-split router's internal hostname, which sends
-#              /graphql to query-api once the pinned deploy values route it there (the
-#              allow-list entry names `service: query-api`, or ingress.queryApiPaths lists the
-#              path), the prover's Go-edge mode. The prover refuses, by name, if a Python
-#              plane still answers there.
+# The edge it proves through is the ROUTED /graphql (CHAOS-8361: the stack has no Python api,
+# so there is no Python edge and no Python-reference mode): the plane-split router's internal
+# hostname, which sends /graphql to query-api (the allow-list entry of the pinned deploy values
+# names `service: query-api`, or ingress.queryApiPaths lists the path), the prover's Go-edge
+# mode. The prover refuses, by name, if a Python plane answers there. `--go-edge` is still
+# accepted and means the same.
 #
 # `dho goapi routing enable` refuses an operation that has no deployed_executed proof
 # receipt for the RUNNING build (prod's receipts do not count on bigboy). This runs the
@@ -17,7 +15,7 @@
 #   1. refuse unless venue-prove's tools image IS the go-api-tools image of <sha>
 #      (prover_build_skew would refuse later; this names the cause first);
 #   2. `dho goapi routing repoint` (provenance only, modes untouched; prove refuses on
-#      rows that name another build), then `dho goapi prove` from venue-prove (api's network namespace: edge = localhost:8000)
+#      rows that name another build), then `dho goapi prove` from venue-prove (on the stack's networks: edge = the router)
 #      for the local org -- read-only against the org's data; it writes proof receipts
 #      only. Both credentials are minted IN PROCESS by prove itself: the envelope key is
 #      loaded from the mounted key file into the process env inside the container, the
@@ -36,8 +34,7 @@
 set -u
 NEW=${1:?full ops sha}; N8=${NEW:0:8}; S7=${NEW:0:7}
 case "${2:-}" in
-  "") EDGE_ARGS="-edge-url http://localhost:8000/graphql"; EDGE_NOTE="the Python edge" ;;
-  --go-edge) EDGE_ARGS="-go-edge -edge-url http://traefik:3000/graphql"; EDGE_NOTE="the routed /graphql in Go-edge mode" ;;
+  ""|--go-edge) EDGE_ARGS="-go-edge -edge-url http://traefik:3000/graphql"; EDGE_NOTE="the routed /graphql in Go-edge mode" ;;
   *) echo "usage: bigboy-graphql-prove.sh <full ops sha> [--go-edge]" >&2; exit 2 ;;
 esac
 # BIGBOY_ROOT is the running tree (compose files, _records, ops/.env): the same root parameter
@@ -50,7 +47,7 @@ st() { echo "STEP $1 rc=$2 $(date -u +%T)"; }
 fail=0
 mkdir -p "$OUT/proof/bodies"; chmod 0755 "$OUT" "$OUT/proof" "$OUT/proof/bodies"
 cd "$R"
-BASE=(--env-file ops/.env -f compose.yml -f compose/compose.go.workers.yml -f compose/compose.metrics-api.local.yml
+BASE=(--env-file ops/.env -f compose.yml -f compose/compose.go.workers.yml
   -f .remember/lanes/team-lead/reconciler-sweep-override.yml -f compose/compose.bigboy.images.yml --profile venue)
 
 # 1. prover build == candidate build

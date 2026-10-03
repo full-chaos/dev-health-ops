@@ -5,6 +5,8 @@ package ingressplanes
 import (
 	"bytes"
 	"context"
+	"fmt"
+	"io"
 	"net"
 	"net/http"
 	"net/http/httptest"
@@ -34,12 +36,39 @@ const (
 	stubPlane         = "X-Stub-Plane"
 	stubURI           = "X-Stub-Uri"
 	stubMethod        = "X-Stub-Method"
-	stubHost          = "X-Stub-Host"
-	stubForwardedFor  = "X-Stub-Xff"
-	stubRealIP        = "X-Stub-Real-Ip"
 	stubAuthorization = "X-Stub-Authorization"
 	stubCookie        = "X-Stub-Cookie"
 )
+
+// stubRequestHeaders are the request headers a stub plane reports, each under
+// the response header name beside it.
+var stubRequestHeaders = [][2]string{
+	{"Host", "X-Stub-Host"},
+	{"X-Real-IP", "X-Stub-Real-Ip"},
+	{"X-Forwarded-For", "X-Stub-Fwd-For"},
+	{"X-Forwarded-Host", "X-Stub-Fwd-Host"},
+	{"X-Forwarded-Port", "X-Stub-Fwd-Port"},
+	{"X-Forwarded-Proto", "X-Stub-Fwd-Proto"},
+	{"X-Forwarded-Scheme", "X-Stub-Fwd-Scheme"},
+	{"X-Scheme", "X-Stub-Scheme"},
+	{"X-Original-Forwarded-For", "X-Stub-Orig-Fwd-For"},
+	{"X-Original-Forwarded-Host", "X-Stub-Orig-Fwd-Host"},
+	{"Authorization", stubAuthorization},
+	{"Cookie", stubCookie},
+}
+
+// stubHeader is the response header under which a stub plane reports the
+// request header name.
+func stubHeader(t *testing.T, name string) string {
+	t.Helper()
+	for _, pair := range stubRequestHeaders {
+		if pair[0] == name {
+			return pair[1]
+		}
+	}
+	t.Fatalf("the stub planes do not report %s", name)
+	return ""
+}
 
 // normalisedRoutingRows are the rows only a real nginx can answer: nginx
 // chooses the location on the path AFTER it decoded percent-escapes, resolved
@@ -57,17 +86,17 @@ var normalisedRoutingRows = []routingRow{
 }
 
 func nginxStubLocation(plane string) string {
-	return `location / {
-            add_header ` + stubPlane + ` ` + plane + ` always;
-            add_header ` + stubURI + ` $request_uri always;
-            add_header ` + stubMethod + ` $request_method always;
-            add_header ` + stubHost + ` $http_host always;
-            add_header ` + stubForwardedFor + ` $http_x_forwarded_for always;
-            add_header ` + stubRealIP + ` $http_x_real_ip always;
-            add_header ` + stubAuthorization + ` $http_authorization always;
-            add_header ` + stubCookie + ` $http_cookie always;
-            return 200;
-        }`
+	var b strings.Builder
+	b.WriteString("location / {\n")
+	fmt.Fprintf(&b, "            add_header %s %s always;\n", stubPlane, plane)
+	fmt.Fprintf(&b, "            add_header %s $request_uri always;\n", stubURI)
+	fmt.Fprintf(&b, "            add_header %s $request_method always;\n", stubMethod)
+	for _, pair := range stubRequestHeaders {
+		variable := "$http_" + strings.ToLower(strings.ReplaceAll(pair[0], "-", "_"))
+		fmt.Fprintf(&b, "            add_header %s %s always;\n", pair[1], variable)
+	}
+	b.WriteString("            return 200;\n        }")
+	return b.String()
 }
 
 // nginxStubConfig is the two stub planes as one nginx: the Go api's port and
@@ -105,22 +134,75 @@ func goStub(plane string) http.Handler {
 		set(stubPlane, plane)
 		set(stubURI, r.RequestURI)
 		set(stubMethod, r.Method)
-		set(stubHost, r.Host)
-		set(stubForwardedFor, strings.Join(r.Header.Values("X-Forwarded-For"), ", "))
-		set(stubRealIP, r.Header.Get("X-Real-IP"))
-		set(stubAuthorization, r.Header.Get("Authorization"))
-		set(stubCookie, r.Header.Get("Cookie"))
+		for _, pair := range stubRequestHeaders {
+			if pair[0] == "Host" {
+				set(pair[1], r.Host)
+				continue
+			}
+			set(pair[1], strings.Join(r.Header.Values(pair[0]), ", "))
+		}
 		w.WriteHeader(http.StatusOK)
 	})
 }
 
-// startRouterInContainers runs the checked-in file in RouterImage. The stub
-// planes are one more container of the same image with the network aliases
-// go-api and query-api, so the router finds them by name through Docker's DNS,
-// as it finds the planes in the compose stack.
-func startRouterInContainers(t *testing.T) string {
+// router is a started router: where to send requests, and the port the router
+// itself listens on (what it must report as X-Forwarded-Port).
+type router struct {
+	base string
+	port string
+}
+
+// waitForPlanes sends GET / until a stub plane answers. The router was started
+// BEFORE the planes, so this is the proof that it finds a plane that comes up
+// later, with no restart.
+func waitForPlanes(t *testing.T, base string, limit time.Duration, diagnose func() string) {
 	t.Helper()
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
+	client := &http.Client{Timeout: 10 * time.Second}
+	deadline := time.Now().Add(limit)
+	last := "no answer yet"
+	for {
+		response, err := client.Get(base + "/")
+		if err != nil {
+			last = err.Error()
+		} else {
+			_ = response.Body.Close()
+			if response.StatusCode == http.StatusOK && response.Header.Get(stubPlane) == PlaneGoAPI {
+				return
+			}
+			last = fmt.Sprintf("status %d, %s %q", response.StatusCode, stubPlane, response.Header.Get(stubPlane))
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("no stub plane answered GET %s/ within %s after the planes were started (last: %s)\n%s", base, limit, last, diagnose())
+		}
+		time.Sleep(200 * time.Millisecond)
+	}
+}
+
+// answersWithoutPlanes holds that a router whose planes are not there yet is
+// up and answers 5xx itself (no stub plane header).
+func answersWithoutPlanes(t *testing.T, base string, diagnose func() string) {
+	t.Helper()
+	client := &http.Client{Timeout: 90 * time.Second}
+	response, err := client.Get(base + "/")
+	if err != nil {
+		t.Fatalf("the router with no plane behind it did not answer: %v\n%s", err, diagnose())
+	}
+	defer func() { _ = response.Body.Close() }()
+	if response.StatusCode < 500 || response.Header.Get(stubPlane) != "" {
+		t.Fatalf("the router with no plane behind it answered %d (%s %q), want its own 5xx\n%s",
+			response.StatusCode, stubPlane, response.Header.Get(stubPlane), diagnose())
+	}
+}
+
+// startRouterInContainers runs the checked-in file in RouterImage. The router
+// starts FIRST, on a network where the names go-api and query-api do not
+// resolve yet: it must start and answer 5xx. Then the stub planes start as one
+// more container of the same image with the network aliases go-api and
+// query-api, and the router must find them by name through Docker's DNS, as it
+// finds the planes in the compose stack.
+func startRouterInContainers(t *testing.T) router {
+	t.Helper()
+	ctx, cancel := context.WithTimeout(context.Background(), 8*time.Minute)
 	defer cancel()
 
 	planes, err := network.New(ctx)
@@ -128,6 +210,58 @@ func startRouterInContainers(t *testing.T) string {
 		t.Fatalf("create the network of the router test: %v", err)
 	}
 	testcontainers.CleanupNetwork(t, planes)
+
+	routerContainer, err := testcontainers.GenericContainer(ctx, testcontainers.GenericContainerRequest{
+		ContainerRequest: testcontainers.ContainerRequest{
+			Image:        RouterImage,
+			ExposedPorts: []string{RouterPort + "/tcp"},
+			Networks:     []string{planes.Name},
+			Files: []testcontainers.ContainerFile{{
+				HostFilePath:      repoFile(t, RouterConfigPath),
+				ContainerFilePath: "/etc/nginx/nginx.conf",
+				FileMode:          0o644,
+			}},
+			// No plane exists yet. A router that listens means: nginx took
+			// the file and started with plane names that do not resolve.
+			// (Not an HTTP wait: its requests give up after one second, and
+			// the answer for a name that does not resolve can take longer.)
+			WaitingFor: wait.ForListeningPort(RouterPort + "/tcp").WithStartupTimeout(3 * time.Minute),
+		},
+		Started: true,
+	})
+	testcontainers.CleanupContainer(t, routerContainer)
+	diagnose := func() (text string) {
+		// The log is help for a failure, never a second failure: a container
+		// that was not created has none.
+		defer func() {
+			if recover() != nil {
+				text = "router log: not available"
+			}
+		}()
+		if routerContainer == nil {
+			return "no router container"
+		}
+		logs, logErr := routerContainer.Logs(context.Background())
+		if logErr != nil {
+			return "router log: " + logErr.Error()
+		}
+		defer func() { _ = logs.Close() }()
+		read, _ := io.ReadAll(io.LimitReader(logs, 16<<10))
+		return "router log:\n" + string(read)
+	}
+	if err != nil {
+		t.Fatalf("start the router (%s) with %s before its planes: %v\n%s", RouterImage, RouterConfigPath, err, diagnose())
+	}
+	host, err := routerContainer.Host(ctx)
+	if err != nil {
+		t.Fatalf("router host: %v", err)
+	}
+	port, err := routerContainer.MappedPort(ctx, RouterPort+"/tcp")
+	if err != nil {
+		t.Fatalf("router port: %v", err)
+	}
+	base := "http://" + net.JoinHostPort(host, port.Port())
+	answersWithoutPlanes(t, base, diagnose)
 
 	stubs, err := testcontainers.GenericContainer(ctx, testcontainers.GenericContainerRequest{
 		ContainerRequest: testcontainers.ContainerRequest{
@@ -151,51 +285,13 @@ func startRouterInContainers(t *testing.T) string {
 	if err != nil {
 		t.Fatalf("start the stub planes (%s): %v", RouterImage, err)
 	}
-
-	router, err := testcontainers.GenericContainer(ctx, testcontainers.GenericContainerRequest{
-		ContainerRequest: testcontainers.ContainerRequest{
-			Image:        RouterImage,
-			ExposedPorts: []string{RouterPort + "/tcp"},
-			Networks:     []string{planes.Name},
-			Files: []testcontainers.ContainerFile{{
-				HostFilePath:      repoFile(t, RouterConfigPath),
-				ContainerFilePath: "/etc/nginx/nginx.conf",
-				FileMode:          0o644,
-			}},
-			// 200 on "/" means: nginx took the file, resolved go-api by
-			// name and the stub answered.
-			WaitingFor: wait.ForHTTP("/").WithPort(RouterPort + "/tcp").WithStartupTimeout(2 * time.Minute),
-		},
-		Started: true,
-	})
-	testcontainers.CleanupContainer(t, router)
-	if err != nil {
-		t.Fatalf("start the router (%s) with %s: %v", RouterImage, RouterConfigPath, err)
-	}
-	host, err := router.Host(ctx)
-	if err != nil {
-		t.Fatalf("router host: %v", err)
-	}
-	port, err := router.MappedPort(ctx, RouterPort+"/tcp")
-	if err != nil {
-		t.Fatalf("router port: %v", err)
-	}
-	return "http://" + net.JoinHostPort(host, port.Port())
+	waitForPlanes(t, base, 90*time.Second, diagnose)
+	return router{base: base, port: RouterPort}
 }
 
-// startRouterAsProcess runs a local nginx binary on the generator's output for
-// the contract, with the stub planes in this process (addresses, so no name
-// lookup) and every path nginx writes below the test's own directory.
-func startRouterAsProcess(t *testing.T, binary string, contract Contract) string {
+// freeAddress is a loopback address nothing listens on now.
+func freeAddress(t *testing.T) string {
 	t.Helper()
-	if _, err := os.Stat(binary); err != nil {
-		t.Fatalf("%s names %q, which is not there: %v", nginxBinaryEnv, binary, err)
-	}
-	goAPI := httptest.NewServer(goStub(PlaneGoAPI))
-	t.Cleanup(goAPI.Close)
-	queryAPI := httptest.NewServer(goStub(PlaneQueryAPI))
-	t.Cleanup(queryAPI.Close)
-
 	listener, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
 		t.Fatalf("find a free port: %v", err)
@@ -204,10 +300,37 @@ func startRouterAsProcess(t *testing.T, binary string, contract Contract) string
 	if err := listener.Close(); err != nil {
 		t.Fatal(err)
 	}
+	return address
+}
+
+// startStubAt starts a stub plane of this process on address.
+func startStubAt(t *testing.T, address, plane string) {
+	t.Helper()
+	listener, err := net.Listen("tcp", address)
+	if err != nil {
+		t.Fatalf("listen on %s for the %s stub: %v", address, plane, err)
+	}
+	server := httptest.NewUnstartedServer(goStub(plane))
+	_ = server.Listener.Close()
+	server.Listener = listener
+	server.Start()
+	t.Cleanup(server.Close)
+}
+
+// startRouterAsProcess runs a local nginx binary on the generator's output for
+// the contract, with the stub planes in this process (addresses, so no name
+// lookup) and every path nginx writes below the test's own directory. As in the
+// container form, the router starts before its planes.
+func startRouterAsProcess(t *testing.T, binary string, contract Contract) router {
+	t.Helper()
+	if _, err := os.Stat(binary); err != nil {
+		t.Fatalf("%s names %q, which is not there: %v", nginxBinaryEnv, binary, err)
+	}
+	goAPI, queryAPI, address := freeAddress(t), freeAddress(t), freeAddress(t)
 	directory := t.TempDir()
 	config, err := Render(contract, Options{
 		Listen:    address,
-		Upstreams: map[string]string{PlaneGoAPI: goAPI.Listener.Addr().String(), PlaneQueryAPI: queryAPI.Listener.Addr().String()},
+		Upstreams: map[string]string{PlaneGoAPI: goAPI, PlaneQueryAPI: queryAPI},
 		RunDir:    directory,
 	})
 	if err != nil {
@@ -227,35 +350,44 @@ func startRouterAsProcess(t *testing.T, binary string, contract Contract) string
 		_ = command.Process.Kill()
 		_ = command.Wait()
 	})
+	diagnose := func() string { return "nginx output:\n" + log.String() }
 	base := "http://" + address
 	deadline := time.Now().Add(15 * time.Second)
 	for {
-		response, err := http.Get(base + "/")
+		connection, err := net.DialTimeout("tcp", address, time.Second)
 		if err == nil {
-			_ = response.Body.Close()
-			if response.StatusCode == http.StatusOK {
-				return base
-			}
+			_ = connection.Close()
+			break
 		}
 		if time.Now().After(deadline) {
-			t.Fatalf("nginx did not answer 200 on %s within 15 s (last error: %v); its output:\n%s", base, err, log.String())
+			t.Fatalf("nginx did not listen on %s within 15 s: %v\n%s", address, err, diagnose())
 		}
 		time.Sleep(100 * time.Millisecond)
 	}
+	answersWithoutPlanes(t, base, diagnose)
+	startStubAt(t, goAPI, PlaneGoAPI)
+	startStubAt(t, queryAPI, PlaneQueryAPI)
+	waitForPlanes(t, base, 15*time.Second, diagnose)
+	_, port, err := net.SplitHostPort(address)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return router{base: base, port: port}
 }
 
 // TestRealNginxRoutesEveryPathToItsPlane sends every routing row through a
 // real nginx and reads which stub plane answered. It also proves what the
-// model cannot: nginx takes the file, the path nginx chooses on is the
-// normalised one, the plane receives the request target as the client sent
-// it, and the router adds no credential.
+// model cannot: nginx takes the file and starts before its planes, the path
+// nginx chooses on is the normalised one, the plane receives the request
+// target as the client sent it, no request can choose the plane, the router
+// owns the forwarded headers, and it adds no credential.
 func TestRealNginxRoutesEveryPathToItsPlane(t *testing.T) {
 	contract := checkedInContract(t)
-	var base string
+	var started router
 	if binary := os.Getenv(nginxBinaryEnv); binary != "" {
-		base = startRouterAsProcess(t, binary, contract)
+		started = startRouterAsProcess(t, binary, contract)
 	} else {
-		base = startRouterInContainers(t)
+		started = startRouterInContainers(t)
 	}
 	client := &http.Client{
 		Timeout:       15 * time.Second,
@@ -263,7 +395,7 @@ func TestRealNginxRoutesEveryPathToItsPlane(t *testing.T) {
 	}
 	send := func(t *testing.T, method, target string, headers map[string]string) http.Header {
 		t.Helper()
-		request, err := http.NewRequest(method, base+target, nil)
+		request, err := http.NewRequest(method, started.base+target, nil)
 		if err != nil {
 			t.Fatalf("%s %s: %v", method, target, err)
 		}
@@ -314,24 +446,76 @@ func TestRealNginxRoutesEveryPathToItsPlane(t *testing.T) {
 		}
 	})
 
-	t.Run("the plane sees the client's Host and the router as one proxy hop", func(t *testing.T) {
-		answer := send(t, http.MethodGet, "/graphql", map[string]string{
-			"Host":            "api.router.test:8000",
-			"X-Forwarded-For": "203.0.113.9",
-			"X-Real-IP":       "203.0.113.9",
-		})
-		if got := answer.Get(stubHost); got != "api.router.test:8000" {
-			t.Errorf("Host at the plane is %q, want the Host the client sent", got)
+	// The plane is chosen by the path only. A request that names the other
+	// plane in its Host, in a header or in its query string reaches the plane
+	// of its path.
+	t.Run("a request cannot choose the plane", func(t *testing.T) {
+		for _, c := range []struct{ target, plane, other string }{
+			{"/api/v1/auth/login", PlaneGoAPI, QueryAPIUpstream},
+			{"/graphql", PlaneQueryAPI, GoAPIUpstream},
+		} {
+			for name, headers := range map[string]map[string]string{
+				"Host":                {"Host": c.other},
+				"X-Forwarded-Host":    {"X-Forwarded-Host": c.other},
+				"plane headers":       {"Plane": c.other, "Plane-Go-Api": c.other, "Plane-Query-Api": c.other, "X-Plane": c.other, "X-Upstream": c.other},
+				"proxy header":        {"Proxy": "http://" + c.other},
+				"no header, by query": nil,
+			} {
+				target := c.target
+				if headers == nil {
+					target += "?plane_go_api=" + c.other + "&plane_query_api=" + c.other + "&plane=" + c.other
+				}
+				if got := send(t, http.MethodGet, target, headers).Get(stubPlane); got != c.plane {
+					t.Errorf("%s with %s naming %s reached %q, want %s", c.target, name, c.other, got, c.plane)
+				}
+			}
 		}
-		hops := strings.Split(answer.Get(stubForwardedFor), ", ")
-		if len(hops) != 2 || hops[0] != "203.0.113.9" || net.ParseIP(hops[1]) == nil {
-			t.Errorf("X-Forwarded-For at the plane is %q, want the client's value and then the router's peer", answer.Get(stubForwardedFor))
+	})
+
+	// The router owns the forwarded headers as ingress-nginx does with its
+	// defaults: each comes from the router's own connection, whatever the
+	// client sent. The client's X-Forwarded-For and X-Forwarded-Host are kept
+	// only under the X-Original-Forwarded-* names.
+	t.Run("the router owns the forwarded headers", func(t *testing.T) {
+		const host = "api.router.test:8000"
+		forged := map[string]string{
+			"Host":                      host,
+			"X-Real-IP":                 "203.0.113.9",
+			"X-Forwarded-For":           "203.0.113.9, 198.51.100.7",
+			"X-Forwarded-Host":          "forged.router.test",
+			"X-Forwarded-Port":          "443",
+			"X-Forwarded-Proto":         "https",
+			"X-Forwarded-Scheme":        "https",
+			"X-Scheme":                  "https",
+			"X-Original-Forwarded-For":  "192.0.2.44",
+			"X-Original-Forwarded-Host": "other.router.test",
 		}
-		if got := answer.Get(stubRealIP); got == "203.0.113.9" || net.ParseIP(got) == nil {
-			t.Errorf("X-Real-IP at the plane is %q, want the router's peer (a client must not choose it)", got)
-		}
-		if len(hops) == 2 && answer.Get(stubRealIP) != hops[1] {
-			t.Errorf("X-Real-IP %q and the last X-Forwarded-For hop %q must both be the router's peer", answer.Get(stubRealIP), hops[1])
+		for _, target := range []string{"/graphql", "/api/v1/auth/login", "/no/such/path"} {
+			for name, sent := range map[string]map[string]string{"forged headers": forged, "no forwarded header": {"Host": host}} {
+				answer := send(t, http.MethodGet, target, sent)
+				at := func(header string) string { return answer.Get(stubHeader(t, header)) }
+				peer := at("X-Real-IP")
+				if net.ParseIP(peer) == nil || peer == "203.0.113.9" {
+					t.Errorf("%s, %s: X-Real-IP at the plane is %q, want the router's peer address", target, name, peer)
+				}
+				want := map[string]string{
+					"Host":               host,
+					"X-Forwarded-For":    peer, // one address: what the client sent is replaced
+					"X-Forwarded-Host":   host,
+					"X-Forwarded-Port":   started.port,
+					"X-Forwarded-Proto":  "http",
+					"X-Forwarded-Scheme": "http",
+					"X-Scheme":           "http",
+					// ingress-nginx keeps what the client sent under these names, and nothing when it sent none.
+					"X-Original-Forwarded-For":  sent["X-Forwarded-For"],
+					"X-Original-Forwarded-Host": sent["X-Forwarded-Host"],
+				}
+				for header, value := range want {
+					if got := at(header); got != value {
+						t.Errorf("%s, %s: %s at the plane is %q, want %q", target, name, header, got, value)
+					}
+				}
+			}
 		}
 	})
 

@@ -1229,7 +1229,7 @@ func (r *queryResolver) ReviewEdges(ctx context.Context, input model.ReviewEdges
 		}
 	}
 
-	result, err := reviewedges.Resolve(spanCtx, r.ClickHouse, claims.OrgID, input.SinceDate, input.UntilDate, input.RepoIds, input.Limit)
+	result, err := reviewedges.ResolveScoped(spanCtx, r.ClickHouse, claims.OrgID, input.SinceDate, input.UntilDate, reviewedges.Scope{RepoIDs: input.RepoIds, TeamIDs: input.TeamIds}, input.Limit)
 	if err != nil {
 		finish("error")
 		return nil, fmt.Errorf("reviewEdges: %w", err)

@@ -11,10 +11,13 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/queryapi/graph/model"
 )
 
-// recordingClient captures every statement issued, then fails it. Failing
-// is deliberate: this test asserts on WHICH query was built, not on any
-// result, and every caller in resolveSankey degrades gracefully on a query
-// error -- so the statements are observable without scripting responses.
+// recordingClient captures every statement issued. It answers the grouped
+// nodes+edges query with no rows and fails every other statement. This test
+// asserts on WHICH coverage query was built, not on any result: the coverage
+// read degrades to a nil coverage on a query error, so its statement is
+// observable without a scripted response. The nodes+edges read does NOT
+// degrade (CHAOS-8186: its failure is an error of the request), so it gets an
+// empty answer.
 type recordingClient struct {
 	mu         sync.Mutex
 	statements []string
@@ -24,6 +27,9 @@ func (c *recordingClient) Query(_ context.Context, statement string, _ []clickho
 	c.mu.Lock()
 	c.statements = append(c.statements, statement)
 	c.mu.Unlock()
+	if strings.Contains(statement, "AS grouping_set,") {
+		return &fakeRowScanner{}, nil
+	}
 	return nil, errors.New("recordingClient: no result scripted")
 }
 

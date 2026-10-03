@@ -115,6 +115,8 @@ var (
 	KeyCountdown                    = Key{"countdown"}
 	KeyRowsWritten                  = Key{"rows_written"}
 	KeyRowsRetracted                = Key{"rows_retracted"}
+	KeyFactsDerived                 = Key{"facts_derived"}
+	KeyFactsUnchanged               = Key{"facts_unchanged"}
 	KeySyncRunId                    = Key{"sync_run_id"}
 	KeyUnitId                       = Key{"unit_id"}
 	KeyDecision                     = Key{"decision"}

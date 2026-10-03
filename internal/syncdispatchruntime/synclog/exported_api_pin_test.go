@@ -95,6 +95,8 @@ var exportedAPI = []string{
 	"var synclog.KeyProvider synclog.Key",
 	"var synclog.KeyQueuedUnits synclog.Key",
 	"var synclog.KeyRateLimitDeferrals synclog.Key",
+	"var synclog.KeyFactsDerived synclog.Key",
+	"var synclog.KeyFactsUnchanged synclog.Key",
 	"var synclog.KeyReason synclog.Key",
 	"var synclog.KeyRepoCount synclog.Key",
 	"var synclog.KeyRestoredAvailableAt synclog.Key",

@@ -2,7 +2,7 @@
 # registered pattern (the wildcard) does not show the literal. Columns (tab separated): method, the profile row's route,
 # the registered wildcard pattern, the literal the handler compares, file:line of that comparison, the proof that runs: "unit"
 # (the gate executes it: the literal reaches its handler, a planted sibling literal on the same wildcard answers 405/404) or
-# "integration" (needs an authenticated request on real stores: the integration shard, CHAOS-pending until it exists).
+# "integration" (needs an authenticated request on real stores: the real-store harness of CHAOS-8323; the gate fails when a row enters or leaves this proof).
 # A row whose proof does not run fails.
 # Shrinks to nothing when the handlers register explicit routes (CHAOS-8320).
 POST	/api/v1/auth/oauth/{provider_id}/authorize	/api/v1/auth/oauth/{first}/{second}	authorize	internal/api/sso/sso.go:233	unit

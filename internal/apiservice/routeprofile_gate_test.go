@@ -14,9 +14,11 @@ import (
 	"sort"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/ClickHouse/clickhouse-go/v2/lib/driver"
 	"github.com/google/jsonschema-go/jsonschema"
+	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgxpool"
 	valkeygo "github.com/valkey-io/valkey-go"
 
@@ -46,6 +48,12 @@ type valkeyStub struct{ valkeygo.Client }
 // silently shrinks the route set. The route-count floor and the per-area names below
 // fail when it does.
 func mountingDeps(t *testing.T) (apiservice.Deps, *slog.Logger) {
+	return mountingDepsWith(t, nil)
+}
+
+// mountingDepsWith is mountingDeps with the users/memberships store behind the
+// authenticator replaced (nil = the Postgres store over the unreachable pool).
+func mountingDepsWith(t *testing.T, store policy.Store) (apiservice.Deps, *slog.Logger) {
 	t.Helper()
 	pool, err := pgxpool.New(context.Background(), "postgres://u:p@127.0.0.1:1/db?sslmode=disable")
 	if err != nil {
@@ -62,7 +70,10 @@ func mountingDeps(t *testing.T) (apiservice.Deps, *slog.Logger) {
 		t.Fatal(err)
 	}
 	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
-	auth, err := policy.NewAuthenticator(verifier, policy.PGStore{Pool: pool}, logger)
+	if store == nil {
+		store = policy.PGStore{Pool: pool}
+	}
+	auth, err := policy.NewAuthenticator(verifier, store, logger)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -184,6 +195,11 @@ func TestEveryServedRouteHasAProfileRowAndEveryRowIsServed(t *testing.T) {
 func goAPIHandler(t *testing.T) http.Handler {
 	t.Helper()
 	deps, logger := mountingDeps(t)
+	return goAPIHandlerFor(t, deps, logger)
+}
+
+func goAPIHandlerFor(t *testing.T, deps apiservice.Deps, logger *slog.Logger) http.Handler {
+	t.Helper()
 	cfg, err := config.Load(config.Spec{Service: config.APIServiceName, LookupEnv: func(string) (string, bool) { return "", false }})
 	if err != nil {
 		t.Fatalf("config.Load: %v", err)
@@ -216,29 +232,48 @@ func TestEveryRefusalStubAnswersItsRefusal(t *testing.T) {
 // classProbe sends a request with NO credential and a well-formed empty JSON body (a
 // body-first route decodes the body before it looks at the credential) and returns the
 // status.
-func classProbe(handler http.Handler, method, path string) int {
+func classProbe(handler http.Handler, method, path string, headers ...[2]string) int {
 	url := routeprofile.Parameter.ReplaceAllString(path, "x")
 	request := httptest.NewRequest(method, url, strings.NewReader("{}"))
 	request.Header.Set("Content-Type", "application/json")
+	for _, header := range headers {
+		request.Header.Set(header[0], header[1])
+	}
 	recorder := httptest.NewRecorder()
 	handler.ServeHTTP(recorder, request)
 	return recorder.Code
 }
 
-// A row whose credential is the api's own access token is checked by the guard BEFORE the
-// handler runs, so an unauthenticated request must be refused with exactly 401: a 500 there
-// is a handler that ran without the guard (the store behind it is unreachable in this
-// test). The other credential classes (external ingest tokens, webhook secrets) are looked
-// up in a store the handler reaches, so with the store unreachable they fail closed with
-// 500/503; a 2xx, a redirect, a 404/405 or a validation answer is never a refusal.
-func refused(row routeprofile.Row, code int) bool {
-	for _, class := range row.Classes {
-		if class == "ops_access_token_hs256" {
-			return code == http.StatusUnauthorized
-		}
-	}
-	return code == http.StatusUnauthorized || code == http.StatusForbidden ||
-		code == http.StatusInternalServerError || code == http.StatusServiceUnavailable
+// A refusal is exactly 401 (or 403 once a credential is present): a 500 or 503 is a
+// handler that failed before it could judge the credential, which is a measurement that
+// did not happen, never a pass (D4551). The routes whose credential is looked up in
+// Postgres cannot be judged without one and are the closed list pendingNeedsPostgres.
+func refused(code int) bool {
+	return code == http.StatusUnauthorized || code == http.StatusForbidden
+}
+
+// wrongCredential is the request a provider-secret route must refuse: the right headers
+// with a signature or token that is wrong (the secrets are set to other values below).
+// A route not listed here is probed with no credential at all.
+var wrongCredential = map[string][][2]string{
+	"/api/v1/webhooks/github": {{"X-GitHub-Event", "push"}, {"X-GitHub-Delivery", "d1"}, {"X-Hub-Signature-256", "sha256=00"}},
+	"/api/v1/webhooks/gitlab": {{"X-Gitlab-Event", "Push Hook"}, {"X-Gitlab-Token", "wrong"}},
+	"/api/v1/webhooks/jira":   {{"X-Hub-Signature", "sha256=00"}},
+}
+
+// pendingNeedsPostgres are the routes whose credential (a push token, a per-binding
+// PagerDuty secret) is read from a Postgres row; with no database they answer 500, which
+// is not a refusal. They are NOT counted as passed. The executed proof is the real-store
+// harness of CHAOS-8323; the gate fails when a route enters or leaves this list.
+var pendingNeedsPostgres = []string{
+	"GET /api/v1/external-ingest/availability",
+	"GET /api/v1/external-ingest/schemas",
+	"GET /api/v1/external-ingest/schemas/{schema_version}",
+	"GET /api/v1/external-ingest/batches",
+	"GET /api/v1/external-ingest/batches/{ingestion_id}",
+	"POST /api/v1/external-ingest/batches",
+	"POST /api/v1/external-ingest/validate",
+	"POST /api/v1/webhooks/pagerduty/{binding_id}",
 }
 
 // (class) every go-api route whose profile row says "protected" refuses an
@@ -246,7 +281,18 @@ func refused(row routeprofile.Row, code int) bool {
 // closed list ci/endpoint_profile_class_exceptions.tsv (each must still answer exactly its
 // recorded status).
 func TestEveryProtectedRowRefusesAnUnauthenticatedRequest(t *testing.T) {
+	// Provider secrets that the wrong credentials above do not match: a webhook with a
+	// wrong signature must be refused (401), not fail on a missing secret (500).
+	t.Setenv("GITHUB_WEBHOOK_SECRET", "gate-secret-github")
+	t.Setenv("GITLAB_WEBHOOK_TOKEN", "gate-secret-gitlab")
+	t.Setenv("JIRA_WEBHOOK_SECRET", "gate-secret-jira")
 	handler := goAPIHandler(t)
+	pending := map[routeprofile.Pair]bool{}
+	for _, entry := range pendingNeedsPostgres {
+		method, path, _ := strings.Cut(entry, " ")
+		pending[routeprofile.Pair{Method: method, Path: routeprofile.Normalize(path)}] = true
+	}
+	pendingSeen := map[routeprofile.Pair]bool{}
 	exceptions, err := routeprofile.LoadClassExceptions(contractPath(t, "ci/endpoint_profile_class_exceptions.tsv"))
 	if err != nil {
 		t.Fatal(err)
@@ -271,16 +317,23 @@ func TestEveryProtectedRowRefusesAnUnauthenticatedRequest(t *testing.T) {
 		if route.Plane != "go-api" || class[route.Pair] != "protected" {
 			continue
 		}
-		code := classProbe(handler, route.Method, route.Path)
-		probed++
+		code := classProbe(handler, route.Method, route.Path, wrongCredential[route.Path]...)
 		seen[route.Pair] = true
+		if pending[route.Pair] {
+			pendingSeen[route.Pair] = true
+			if code != http.StatusInternalServerError {
+				t.Errorf("%s: listed as pending (needs Postgres) but answers %d: it is measurable now, take it off the list and assert its refusal", route.Pair, code)
+			}
+			continue
+		}
+		probed++
 		if entry, ok := excepted[route.Pair]; ok {
 			if code != entry.Status {
 				t.Errorf("%s: listed in the class exceptions with status %d, answers %d (%s)", route.Pair, entry.Status, code, entry.Ref)
 			}
 			continue
 		}
-		if !refused(rowOf[route.Pair], code) {
+		if !refused(code) {
 			t.Errorf("%s: its row says protected (%v), an unauthenticated request answers %d: the Go code does not enforce the row", route.Pair, rowOf[route.Pair].Classes, code)
 		}
 	}
@@ -292,10 +345,15 @@ func TestEveryProtectedRowRefusesAnUnauthenticatedRequest(t *testing.T) {
 			t.Errorf("class exception %s says the row is %q, the row is %q", pair, entry.Profile, class[pair])
 		}
 	}
+	for pair := range pending {
+		if !pendingSeen[pair] {
+			t.Errorf("pending route %s was not reached by the probe: stale", pair)
+		}
+	}
 	if probed < 150 {
 		t.Fatalf("only %d protected routes were probed: the walk or the rows shrank", probed)
 	}
-	t.Logf("probed %d protected routes, %d class exceptions", probed, len(excepted))
+	t.Logf("probed %d protected routes (refusal executed), %d pending a real store, %d class exceptions", probed, len(pendingSeen), len(excepted))
 }
 
 // (wildcard proof, unit) a wildcard handler serves a literal path value by comparing it in
@@ -304,7 +362,8 @@ func TestEveryProtectedRowRefusesAnUnauthenticatedRequest(t *testing.T) {
 // refusal or a missing route) and a planted sibling literal on the SAME wildcard is
 // refused (405 or 404). The wildcards whose literal is dispatched behind the credential
 // ("integration" rows) need an authenticated request on real stores and are listed
-// separately: the gate fails if the list and the rows differ.
+// separately (their executed proof is CHAOS-8323): the gate fails if the list and the rows
+// differ.
 func TestEveryUnitWildcardRowIsServedByItsLiteralAndNotBySiblings(t *testing.T) {
 	handler := goAPIHandler(t)
 	wildcards, err := routeprofile.LoadWildcards(contractPath(t, "ci/go_wildcard_dispatch.tsv"))
@@ -349,9 +408,10 @@ func TestTheIntegrationWildcardProofsAreTheDeclaredOnes(t *testing.T) {
 		}
 	}
 	sort.Strings(got)
-	// The rows whose literal is dispatched behind the credential. The integration proof for
-	// them is a separate sub-issue; until it exists they are named here, so a row cannot
-	// drift into "integration" (and out of every proof) without this list changing.
+	// The rows whose literal is dispatched behind the credential. Their executed proof is
+	// the real-store harness of CHAOS-8323 (the Python gate is not deleted while a row is
+	// here); they are named so a row cannot drift into "integration" (and out of every
+	// proof) without this list changing.
 	want := []string{
 		"GET /api/v1/admin/credentials/{credential_id}/repos",
 		"GET /api/v1/admin/retention-policies/resource-types",
@@ -489,4 +549,113 @@ func TestTheWalkIsTheRecordedServedRoutes(t *testing.T) {
 	if string(got) != want {
 		t.Fatalf("ci/go_served_routes.tsv is not the walk (%d routes walked, %d bytes recorded): re-record it on purpose with UPDATE_SERVED_ROUTES=1", len(lines), len(got))
 	}
+}
+
+// A 500 or 503 is a handler that failed before it judged the credential: never a refusal.
+func TestAServerErrorIsNotARefusal(t *testing.T) {
+	for code, want := range map[int]bool{401: true, 403: true, 200: false, 404: false, 405: false, 422: false, 500: false, 503: false} {
+		if refused(code) != want {
+			t.Errorf("refused(%d) = %v, want %v", code, refused(code), want)
+		}
+	}
+}
+
+// memberStore is the fake users/memberships store behind policy.Authenticator for the
+// member-credential probe: one active, non-superuser user who is a plain "member" of one
+// organization.
+type memberStore struct{}
+
+func (memberStore) UserState(context.Context, uuid.UUID) (policy.UserState, bool, error) {
+	return policy.UserState{IsActive: true}, true, nil
+}
+func (memberStore) Membership(context.Context, uuid.UUID, uuid.UUID) (string, bool, error) {
+	return "member", true, nil
+}
+func (memberStore) ActiveImpersonation(context.Context, uuid.UUID) (*policy.Impersonation, error) {
+	return nil, nil
+}
+
+// adminDeclared says whether the row's primary validator is an admin or platform-role
+// check (require_admin / require_platform_role): the rows a plain member must be refused.
+// memberExceptions are the admin-declared rows where Go (matching Python) serves a signed-in
+// plain member: the profile row over-claims, the handler's own dependency is
+// get_current_user only (CHAOS-4780, true class written at the file merge CHAOS-8306).
+// Closed: each must still answer exactly its recorded status.
+var memberExceptions = map[string]int{
+	"GET /api/v1/admin/impersonate/status": http.StatusOK,
+}
+
+func adminDeclared(row routeprofile.Row) bool {
+	var parsed struct {
+		PrimaryValidator struct {
+			Description string `json:"description"`
+		} `json:"primary_validator"`
+	}
+	if err := json.Unmarshal(row.Raw, &parsed); err != nil {
+		return false
+	}
+	description := parsed.PrimaryValidator.Description
+	return strings.Contains(description, "require_admin") || strings.Contains(description, "require_platform_role")
+}
+
+// (class, member) every go-api route whose row declares an admin or platform-role check
+// refuses a signed-in plain member with exactly 403, through a fake Store behind the real
+// policy.Authenticator. A route that answers anything else is Go enforcing LESS than its
+// declared class: a finding for the lead with this probe as the reproduction, not a
+// list entry.
+func TestEveryAdminRowRefusesAPlainMember(t *testing.T) {
+	const secret = "route-profile-gate-secret-key-32-bytes-long!!"
+	deps, logger := mountingDepsWith(t, memberStore{})
+	handler := goAPIHandlerFor(t, deps, logger)
+	signer, err := edgetoken.NewSigner(secret, "dev-health-ops", "dev-health-api")
+	if err != nil {
+		t.Fatal(err)
+	}
+	user, org := uuid.New().String(), uuid.New().String()
+	token, err := signer.Access(edgetoken.AccessClaims{UserID: user, Email: "member@example.test", OrgID: org, Role: "member"}, time.Now(), "gate-jti")
+	if err != nil {
+		t.Fatal(err)
+	}
+	rowOf := map[routeprofile.Pair]routeprofile.Row{}
+	for _, row := range profileRows(t) {
+		if row.SurfaceKind == "rest" {
+			for _, pair := range row.Pairs() {
+				rowOf[pair] = row
+			}
+		}
+	}
+	probed := 0
+	excepted := map[string]bool{}
+	for _, route := range servedRoutes(t) {
+		row, ok := rowOf[route.Pair]
+		if route.Plane != "go-api" || !ok || row.Classification != "protected" || !adminDeclared(row) {
+			continue
+		}
+		url := routeprofile.Parameter.ReplaceAllString(route.Path, "x")
+		request := httptest.NewRequest(route.Method, url, strings.NewReader("{}"))
+		request.Header.Set("Content-Type", "application/json")
+		request.Header.Set("Authorization", "Bearer "+token)
+		recorder := httptest.NewRecorder()
+		handler.ServeHTTP(recorder, request)
+		probed++
+		if want, ok := memberExceptions[route.Pair.String()]; ok {
+			excepted[route.Pair.String()] = true
+			if recorder.Code != want {
+				t.Errorf("%s: member exception recorded as %d, answers %d", route.Pair, want, recorder.Code)
+			}
+			continue
+		}
+		if recorder.Code != http.StatusForbidden {
+			t.Errorf("%s: declared admin (%s), a plain member answers %d %s", route.Pair, row.ID, recorder.Code, strings.TrimSpace(recorder.Body.String()))
+		}
+	}
+	for entry := range memberExceptions {
+		if !excepted[entry] {
+			t.Errorf("member exception %s names a route the probe did not reach: stale", entry)
+		}
+	}
+	if probed < 100 {
+		t.Fatalf("only %d admin rows were probed: the walk or the rows shrank", probed)
+	}
+	t.Logf("probed %d admin-declared routes with a plain member credential", probed)
 }

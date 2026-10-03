@@ -59,7 +59,9 @@ func TestCapacityForecast_BothTextsResolveToTheOneOperation(t *testing.T) {
 			"capacityForecasts":  digestHex(registeredCapacityForecastsDocument),
 			"throughputForecast": digestHex(registeredThroughputForecastDocument),
 		},
-		legacyDigestsByOperation,
+		// Only this operation's legacy digests: the index refuses a legacy entry of an operation that the map
+		// above does not register, and other operations get legacy texts of their own.
+		map[string][]string{"capacityForecast": legacyDigestsByOperation["capacityForecast"]},
 	)
 	if err != nil {
 		t.Fatal(err)

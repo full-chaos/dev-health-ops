@@ -111,6 +111,13 @@ func RedactText(value string) (result string) {
 	// separator or quote is seen as what it stands for; the key/value scan
 	// runs first, while it still knows which bytes were encoded.
 	value = secrets.RedactRegistered(value)
+	// A userinfo is also matched BEFORE the decode: a password holding a
+	// percent-encoded quote or bracket (%22 %27 %3C %3E) is one run of valid URL
+	// characters here, and decoding first would turn it into a raw quote that ends the
+	// match. The match after the decode (below) covers a raw `/`, `@` or `:`.
+	if strings.Contains(value, "@") {
+		value = redactUserinfo(value)
+	}
 	value, escaped := percentDecoded(value)
 	// The decoded text can hold a registered secret its encoded form hid.
 	value = secrets.RedactRegistered(value)

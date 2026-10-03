@@ -5,12 +5,15 @@ package goapiproof
 import (
 	"context"
 	"errors"
+	"sort"
 	"strings"
 	"testing"
 	"time"
 
 	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgxpool"
+
+	"github.com/full-chaos/dev-health-ops/internal/mcpclass"
 )
 
 // The two digests one carry moves between: what the deployed process
@@ -315,7 +318,7 @@ func TestCarryNeverOverwritesADecisionTakenAtTheTargetDigest(t *testing.T) {
 // already unreachable at the live digest is dead wherever it is copied.
 // Both are REPORTED by name -- an operator must be able to see what was
 // left behind and why -- and neither is fatal.
-func TestCarrySkipsRowsWithNoReachabilityToPreserve(t *testing.T) {
+func TestCarrySkipsRowsWithNoReachabilityToPreserveAndKeepsShadowRows(t *testing.T) {
 	ctx := t.Context()
 	pool := startAuditedRegistryPostgres(t)
 	seedCarryRow(t, ctx, pool, carryIntegrationLiveDigest, CarryRow{
@@ -343,16 +346,25 @@ func TestCarrySkipsRowsWithNoReachabilityToPreserve(t *testing.T) {
 		t.Fatalf("Carry: %v", err)
 	}
 	summary := SummarizeCarry(outcomes)
-	if summary.Carried != 1 || summary.Skipped != 2 {
-		t.Fatalf("summary = %+v, want one carried and two skipped: %+v", summary, outcomes)
+	// CHAOS-8144: the shadow row is a registration and is now carried
+	// (verbatim, still shadow); only the dead-document row is skipped.
+	if summary.Carried != 2 || summary.Skipped != 1 {
+		t.Fatalf("summary = %+v, want two carried (featureFlags, the shadow savedReports) and one skipped (the drifted hotspots): %+v", summary, outcomes)
 	}
 	for _, outcome := range outcomes {
 		if outcome.Action == CarryActionSkip && outcome.Reason == "" {
 			t.Fatalf("%s was skipped with no reason, so an operator cannot tell what was left behind", outcome.Operation)
 		}
 	}
-	if rows := rowsAtDigest(t, ctx, pool, carryIntegrationTargetDigest); len(rows) != 1 || rows[0].Operation != "featureFlags" {
-		t.Fatalf("rows at the target digest = %+v, want only the reachable one", rows)
+	rows := rowsAtDigest(t, ctx, pool, carryIntegrationTargetDigest)
+	if len(rows) != 2 {
+		t.Fatalf("rows at the target digest = %+v, want the served row and the shadow row", rows)
+	}
+	if shadow, ok := carryRowByOperation(rows, "savedReports"); !ok || shadow.Mode != "shadow" {
+		t.Fatalf("savedReports at the target digest = %+v (present=%t), want it carried as mode shadow", shadow, ok)
+	}
+	if _, ok := carryRowByOperation(rows, "hotspots"); ok {
+		t.Fatal("the drifted-document row was carried")
 	}
 }
 
@@ -874,5 +886,390 @@ func TestCarryDoesNotMistakeASkippedRowForANewOne(t *testing.T) {
 	}
 	if rows := rowsAtDigest(t, ctx, pool, carryIntegrationTargetDigest); len(rows) != 1 {
 		t.Fatalf("got %d row(s) at the target digest, want exactly the carried one", len(rows))
+	}
+}
+
+// CHAOS-8144, executed end to end against real Postgres: shadow rows (an
+// operation row and an MCP class row) survive a digest change verbatim,
+// never become a served mode, are audited as an enable-at-new-key whose
+// mode_after is shadow, and the source rows stay untouched.
+func TestCarryPreservesShadowRowsVerbatimAndNeverServesThem(t *testing.T) {
+	ctx := t.Context()
+	pool := startAuditedRegistryPostgres(t)
+	orgs := `{"orgs": ["org-9"]}`
+	classOp, classDoc := mcpclass.Operation("hotspots"), mcpclass.DocumentDigest()
+	seedCarryRow(t, ctx, pool, carryIntegrationLiveDigest, CarryRow{
+		Operation: "featureFlags", DocumentDigest: testDocumentDigest, Mode: "canary",
+		Build: verbsRunningBuild, Owner: "go", RolloutPercentage: 100, ReviewEvidence: "served",
+	})
+	seedCarryRow(t, ctx, pool, carryIntegrationLiveDigest, CarryRow{
+		Operation: "hotspots", DocumentDigest: testDocumentDigest2, Mode: "shadow",
+		Build: verbsRunningBuild, Owner: "go", RolloutPercentage: 0, EligibleOrgs: &orgs, ReviewEvidence: "registered by seed",
+	})
+	seedCarryRow(t, ctx, pool, carryIntegrationLiveDigest, CarryRow{
+		Operation: classOp, DocumentDigest: classDoc, Mode: "shadow",
+		Build: verbsRunningBuild, Owner: "go", RolloutPercentage: 0, ReviewEvidence: "class registered by seed",
+	})
+	request := carryIntegrationRequest()
+	request.Inputs.MCPRoots = map[string]bool{"hotspots": true}
+	before := rowsAtDigest(t, ctx, pool, carryIntegrationLiveDigest)
+
+	outcomes, err := Carry(ctx, pool, request)
+	if err != nil {
+		t.Fatalf("Carry: %v", err)
+	}
+	if summary := SummarizeCarry(outcomes); summary.Carried != 3 || summary.Skipped != 0 {
+		t.Fatalf("summary = %+v, want all three carried: %+v", summary, outcomes)
+	}
+	carried := rowsAtDigest(t, ctx, pool, carryIntegrationTargetDigest)
+	if len(carried) != 3 {
+		t.Fatalf("got %d row(s) at the target digest, want 3: %+v", len(carried), carried)
+	}
+	for _, source := range before {
+		target, ok := carryRowByOperation(carried, source.Operation)
+		if !ok || !sameCarriedState(source, target) {
+			t.Fatalf("%s carried as %+v (present=%t), want every copied column identical to %+v", source.Operation, target, ok, source)
+		}
+		if source.Mode == "shadow" && target.Mode != "shadow" {
+			t.Fatalf("%s: a shadow row was carried as %q -- a mode change is an enablement", source.Operation, target.Mode)
+		}
+		if !strings.HasPrefix(target.ReviewEvidence, CarriedEvidencePrefix) || !strings.Contains(target.ReviewEvidence, source.ReviewEvidence) {
+			t.Fatalf("%s carried with evidence %q, want the carry prefix plus the source reason %q", source.Operation, target.ReviewEvidence, source.ReviewEvidence)
+		}
+	}
+	after := rowsAtDigest(t, ctx, pool, carryIntegrationLiveDigest)
+	for index := range before {
+		if !sameCarriedState(before[index], after[index]) {
+			t.Fatalf("live row %+v was modified to %+v", before[index], after[index])
+		}
+	}
+	for _, audit := range readAuditRows(t, ctx, pool) {
+		if audit.action != AuditActionEnable || audit.schemaDigest != carryIntegrationTargetDigest {
+			t.Fatalf("audit row = %+v, want an enable at the target digest", audit)
+		}
+		if source, _ := carryRowByOperation(before, audit.operation); audit.modeAfter != source.Mode {
+			t.Fatalf("audit for %s says mode_after=%q, want the source mode %q", audit.operation, audit.modeAfter, source.Mode)
+		}
+	}
+}
+
+// CHAOS-8144 / MCP ask (b): a shadow row whose target-digest row DIFFERS
+// is skipped with a named reason -- never refused (a served row would
+// REFUSE) -- and the different row at the target digest is left untouched.
+func TestCarryShadowRowWithADifferentTargetRowIsSkippedNotRefused(t *testing.T) {
+	ctx := t.Context()
+	pool := startAuditedRegistryPostgres(t)
+	seedCarryRow(t, ctx, pool, carryIntegrationLiveDigest, CarryRow{
+		Operation: "featureFlags", DocumentDigest: testDocumentDigest, Mode: "canary",
+		Build: verbsRunningBuild, Owner: "go", RolloutPercentage: 100, ReviewEvidence: "served",
+	})
+	seedCarryRow(t, ctx, pool, carryIntegrationLiveDigest, CarryRow{
+		Operation: "hotspots", DocumentDigest: testDocumentDigest2, Mode: "shadow",
+		Build: verbsRunningBuild, Owner: "go", RolloutPercentage: 0, ReviewEvidence: "shadow",
+	})
+	decided := CarryRow{
+		Operation: "hotspots", DocumentDigest: testDocumentDigest2, Mode: "canary",
+		Build: verbsRunningBuild, Owner: "go", RolloutPercentage: 10, ReviewEvidence: "somebody decided this at the target",
+	}
+	seedCarryRow(t, ctx, pool, carryIntegrationTargetDigest, decided)
+
+	outcomes, err := Carry(ctx, pool, carryIntegrationRequest())
+	if err != nil {
+		t.Fatalf("Carry: %v (a shadow row must never refuse a roll)", err)
+	}
+	var skipped *CarryOutcome
+	for index := range outcomes {
+		if outcomes[index].Operation == "hotspots" {
+			skipped = &outcomes[index]
+		}
+	}
+	if skipped == nil || skipped.Action != CarryActionSkip || !strings.Contains(skipped.Reason, "already holds a different row") {
+		t.Fatalf("hotspots outcome = %+v, want a SKIP naming the different target row", skipped)
+	}
+	row, _ := carryRowByOperation(rowsAtDigest(t, ctx, pool, carryIntegrationTargetDigest), "hotspots")
+	if !sameCarriedState(row, decided) || row.ReviewEvidence != decided.ReviewEvidence {
+		t.Fatalf("target row = %+v, want the decision taken there untouched (%+v)", row, decided)
+	}
+}
+
+// CHAOS-8144: a STALE shadow row (document moved, operation gone from the
+// image, build not running) is skipped with a reason and never blocks the
+// roll; the same three defects on a SERVED row still refuse.
+func TestCarryStaleShadowRowsSkipWhereServedRowsRefuse(t *testing.T) {
+	ctx := t.Context()
+	for name, tc := range map[string]struct {
+		mutate  func(*CarryRequest, *CarryRow)
+		refuses error
+		reason  string
+	}{
+		"document moved at target": {
+			mutate: func(r *CarryRequest, row *CarryRow) {
+				r.Inputs.TargetDocumentDigest[row.Operation] = strings.Repeat("7", 64)
+			},
+			refuses: ErrCarryDocumentMoved, reason: "the registered document changed",
+		},
+		"operation gone from the image": {
+			mutate:  func(r *CarryRequest, row *CarryRow) { delete(r.Inputs.TargetDocumentDigest, row.Operation) },
+			refuses: ErrCarryDocumentMoved, reason: "does not register this operation",
+		},
+		"build is not the running one": {
+			mutate:  func(r *CarryRequest, row *CarryRow) { row.Build = "some-older-build" },
+			refuses: ErrCarryBuildNotRunning, reason: "names build some-older-build",
+		},
+	} {
+		for _, mode := range []string{"shadow", "canary"} {
+			t.Run(name+"/"+mode, func(t *testing.T) {
+				pool := startAuditedRegistryPostgres(t)
+				seedCarryRow(t, ctx, pool, carryIntegrationLiveDigest, CarryRow{
+					Operation: "featureFlags", DocumentDigest: testDocumentDigest, Mode: "canary",
+					Build: verbsRunningBuild, Owner: "go", RolloutPercentage: 100, ReviewEvidence: "served anchor",
+				})
+				row := CarryRow{
+					Operation: "hotspots", DocumentDigest: testDocumentDigest2, Mode: mode,
+					Build: verbsRunningBuild, Owner: "go", RolloutPercentage: 100, ReviewEvidence: "subject",
+				}
+				request := carryIntegrationRequest()
+				tc.mutate(&request, &row)
+				seedCarryRow(t, ctx, pool, carryIntegrationLiveDigest, row)
+				outcomes, err := Carry(ctx, pool, request)
+				if mode == "canary" {
+					if !errors.Is(err, tc.refuses) {
+						t.Fatalf("served row: err = %v, want %v", err, tc.refuses)
+					}
+					return
+				}
+				if err != nil {
+					t.Fatalf("shadow row blocked the carry: %v", err)
+				}
+				for _, outcome := range outcomes {
+					if outcome.Operation == "hotspots" && (outcome.Action != CarryActionSkip || !strings.Contains(outcome.Reason, tc.reason)) {
+						t.Fatalf("hotspots outcome = %+v, want a SKIP naming %q", outcome, tc.reason)
+					}
+				}
+				if _, ok := carryRowByOperation(rowsAtDigest(t, ctx, pool, carryIntegrationTargetDigest), "hotspots"); ok {
+					t.Fatal("a stale shadow row was written at the target digest")
+				}
+			})
+		}
+	}
+}
+
+// CHAOS-8144 (r1 P1): a digest whose live rows are ALL shadow is never
+// refused. A valid shadow-only run writes its registrations (the refusal used
+// to fire after the plan had printed CARRY lines, leaving the target row
+// absent behind a report that said it was written); a stale shadow-only run
+// writes nothing, names every skip, and still succeeds. The refusal survives
+// where a non-shadow live row exists and every row was skipped.
+func TestCarryShadowOnlyDigestIsNeverRefused(t *testing.T) {
+	ctx := t.Context()
+	t.Run("valid shadow row is written", func(t *testing.T) {
+		pool := startAuditedRegistryPostgres(t)
+		seedCarryRow(t, ctx, pool, carryIntegrationLiveDigest, CarryRow{
+			Operation: "featureFlags", DocumentDigest: testDocumentDigest, Mode: "shadow",
+			Build: verbsRunningBuild, Owner: "go", RolloutPercentage: 0, ReviewEvidence: "shadow only",
+		})
+		outcomes, err := Carry(ctx, pool, carryIntegrationRequest())
+		if err != nil {
+			t.Fatalf("Carry: %v (a valid shadow-only digest must not be refused)", err)
+		}
+		if summary := SummarizeCarry(outcomes); summary.Carried != 1 {
+			t.Fatalf("summary = %+v, want the shadow row carried", summary)
+		}
+		row, ok := carryRowByOperation(rowsAtDigest(t, ctx, pool, carryIntegrationTargetDigest), "featureFlags")
+		if !ok || row.Mode != "shadow" || row.RolloutPercentage != 0 {
+			t.Fatalf("target row = %+v (present=%t), want the shadow registration written verbatim", row, ok)
+		}
+	})
+	t.Run("stale shadow row is skipped and the run succeeds", func(t *testing.T) {
+		pool := startAuditedRegistryPostgres(t)
+		seedCarryRow(t, ctx, pool, carryIntegrationLiveDigest, CarryRow{
+			Operation: "featureFlags", DocumentDigest: testDocumentDigest, Mode: "shadow",
+			Build: "some-older-build", Owner: "go", RolloutPercentage: 0, ReviewEvidence: "stale shadow only",
+		})
+		outcomes, err := Carry(ctx, pool, carryIntegrationRequest())
+		if err != nil {
+			t.Fatalf("Carry: %v (a stale shadow row must never block a roll)", err)
+		}
+		if len(outcomes) != 1 || outcomes[0].Action != CarryActionSkip || outcomes[0].Reason == "" {
+			t.Fatalf("outcomes = %+v, want one named SKIP", outcomes)
+		}
+		if rows := rowsAtDigest(t, ctx, pool, carryIntegrationTargetDigest); len(rows) != 0 {
+			t.Fatalf("wrote %d row(s) for a skipped shadow row", len(rows))
+		}
+	})
+	t.Run("a non-shadow live row with every row skipped still refuses", func(t *testing.T) {
+		pool := startAuditedRegistryPostgres(t)
+		seedCarryRow(t, ctx, pool, carryIntegrationLiveDigest, CarryRow{
+			Operation: "featureFlags", DocumentDigest: testDocumentDigest, Mode: "shadow",
+			Build: "some-older-build", Owner: "go", RolloutPercentage: 0, ReviewEvidence: "stale shadow",
+		})
+		seedCarryRow(t, ctx, pool, carryIntegrationLiveDigest, CarryRow{
+			Operation: "hotspots", DocumentDigest: testDocumentDigest2, Mode: "python",
+			Build: verbsRunningBuild, Owner: "go", RolloutPercentage: 0, ReviewEvidence: "off",
+		})
+		if _, err := Carry(ctx, pool, carryIntegrationRequest()); !errors.Is(err, ErrCarryNothingReachable) {
+			t.Fatalf("err = %v, want the nothing-reachable refusal", err)
+		}
+	})
+}
+
+// MCP ask (a): every live row ends in exactly one named outcome, so a
+// post-roll readback can fail on a pre-roll row with no row at the target
+// unless the plan NAMED it SKIP.
+func TestCarryAccountsForEveryLiveRowWithOneOutcome(t *testing.T) {
+	ctx := t.Context()
+	pool := startAuditedRegistryPostgres(t)
+	seeds := []CarryRow{
+		{Operation: "featureFlags", DocumentDigest: testDocumentDigest, Mode: "canary", Build: verbsRunningBuild, Owner: "go", RolloutPercentage: 100, ReviewEvidence: "a"},
+		{Operation: "hotspots", DocumentDigest: testDocumentDigest2, Mode: "shadow", Build: verbsRunningBuild, Owner: "go", ReviewEvidence: "b"},
+		{Operation: "dropped", DocumentDigest: strings.Repeat("c", 64), Mode: "python", Build: verbsRunningBuild, Owner: "go", ReviewEvidence: "c"},
+		{Operation: mcpclass.Operation("hotspots"), DocumentDigest: mcpclass.DocumentDigest(), Mode: "shadow", Build: verbsRunningBuild, Owner: "go", ReviewEvidence: "d"},
+	}
+	for _, seed := range seeds {
+		seedCarryRow(t, ctx, pool, carryIntegrationLiveDigest, seed)
+	}
+	request := carryIntegrationRequest()
+	request.Inputs.MCPRoots = map[string]bool{} // root NOT served: the class shadow row is dropped
+	outcomes, err := Carry(ctx, pool, request)
+	if err != nil {
+		t.Fatalf("Carry: %v", err)
+	}
+	if len(outcomes) != len(seeds) {
+		t.Fatalf("got %d outcome(s) for %d live row(s): %+v", len(outcomes), len(seeds), outcomes)
+	}
+	target := rowsAtDigest(t, ctx, pool, carryIntegrationTargetDigest)
+	for _, outcome := range outcomes {
+		_, atTarget := carryRowByOperation(target, outcome.Operation)
+		switch outcome.Action {
+		case CarryActionCarry, CarryActionUnchanged:
+			if !atTarget {
+				t.Fatalf("%s reported %s but has no row at the target digest", outcome.Operation, outcome.Action)
+			}
+		case CarryActionSkip:
+			if atTarget || outcome.Reason == "" {
+				t.Fatalf("%s is SKIP but atTarget=%t reason=%q: a dropped row must be absent AND named", outcome.Operation, atTarget, outcome.Reason)
+			}
+		default:
+			t.Fatalf("%s ended as %s", outcome.Operation, outcome.Action)
+		}
+	}
+}
+
+// CHAOS-8144: a run whose only kept row is PRIMARY still counts as having
+// preserved reachability (the served-mode clause must admit primary, not
+// just canary), and a stale shadow row beside it is skipped with no
+// evidence text written for it.
+func TestCarryPrimaryOnlyRunSucceedsAndASkippedShadowCarriesNoEvidence(t *testing.T) {
+	ctx := t.Context()
+	pool := startAuditedRegistryPostgres(t)
+	seedCarryRow(t, ctx, pool, carryIntegrationLiveDigest, CarryRow{
+		Operation: "featureFlags", DocumentDigest: testDocumentDigest, Mode: "primary",
+		Build: verbsRunningBuild, Owner: "go", RolloutPercentage: 100, ReviewEvidence: "primary",
+	})
+	seedCarryRow(t, ctx, pool, carryIntegrationLiveDigest, CarryRow{
+		Operation: "hotspots", DocumentDigest: testDocumentDigest2, Mode: "shadow",
+		Build: "some-older-build", Owner: "go", RolloutPercentage: 0, ReviewEvidence: "stale shadow",
+	})
+	outcomes, err := Carry(ctx, pool, carryIntegrationRequest())
+	if err != nil {
+		t.Fatalf("Carry: %v (a primary row alone is reachability)", err)
+	}
+	for _, outcome := range outcomes {
+		switch outcome.Operation {
+		case "featureFlags":
+			if outcome.Action != CarryActionCarry {
+				t.Fatalf("featureFlags = %+v, want CARRY", outcome)
+			}
+		case "hotspots":
+			if outcome.Action != CarryActionSkip || outcome.ReviewEvidence != "" {
+				t.Fatalf("hotspots = %+v, want a SKIP with no would-be evidence text", outcome)
+			}
+		}
+	}
+}
+
+// CHAOS-8144 (R311, after r1 found a path the body did not name): the RUN-LEVEL
+// decision table, every cell executed against real Postgres. Axes: the kinds of
+// live row present (served valid, served unfaithful, shadow valid, shadow stale,
+// python, a mix) x the run options (-operations, dry run). Row-level outcomes
+// are enumerated by TestDecideCarryOverItsWholeInputDomain; this table is what
+// the whole run does with them: refuse, succeed with writes, or succeed with
+// none. The same table is in the lane's invariant.md.
+func TestCarryRunLevelDecisionTable(t *testing.T) {
+	ctx := t.Context()
+	served := CarryRow{Operation: "featureFlags", DocumentDigest: testDocumentDigest, Mode: "canary", Build: verbsRunningBuild, Owner: "go", RolloutPercentage: 100, ReviewEvidence: "served"}
+	shadow := CarryRow{Operation: "hotspots", DocumentDigest: testDocumentDigest2, Mode: "shadow", Build: verbsRunningBuild, Owner: "go", ReviewEvidence: "shadow"}
+	staleShadow := shadow
+	staleShadow.Build = "some-older-build"
+	python := CarryRow{Operation: "savedReports", DocumentDigest: strings.Repeat("e", 64), Mode: "python", Build: verbsRunningBuild, Owner: "go", ReviewEvidence: "off"}
+	for name, tc := range map[string]struct {
+		rows     []CarryRow
+		mutate   func(*CarryRequest)
+		wantErr  error
+		wantRows []string // operations at the target digest after the run
+	}{
+		"R1 served valid only":                      {rows: []CarryRow{served}, wantRows: []string{"featureFlags"}},
+		"R2 shadow valid only":                      {rows: []CarryRow{shadow}, wantRows: []string{"hotspots"}},
+		"R3 shadow stale only (succeeds, no write)": {rows: []CarryRow{staleShadow}, wantRows: nil},
+		"R4 stale shadow + python (nothing kept)":   {rows: []CarryRow{staleShadow, python}, wantErr: ErrCarryNothingReachable},
+		"R5 served valid + shadow valid":            {rows: []CarryRow{served, shadow}, wantRows: []string{"featureFlags", "hotspots"}},
+		"R6 served valid + shadow stale":            {rows: []CarryRow{served, staleShadow}, wantRows: []string{"featureFlags"}},
+		"R7 served unfaithful + shadow valid (REFUSE, nothing written)": {
+			rows:    []CarryRow{served, shadow},
+			mutate:  func(r *CarryRequest) { r.Inputs.TargetDocumentDigest["featureFlags"] = strings.Repeat("7", 64) },
+			wantErr: ErrCarryDocumentMoved,
+		},
+		"R8 python only":                         {rows: []CarryRow{python}, wantErr: ErrCarryNothingReachable},
+		"R9 shadow valid + python (shadow kept)": {rows: []CarryRow{shadow, python}, wantRows: []string{"hotspots"}},
+		"R10 shadow valid + python, -operations on the python row only": {
+			rows:    []CarryRow{shadow, python},
+			mutate:  func(r *CarryRequest) { r.Operations = []string{"savedReports"} },
+			wantErr: ErrCarryNothingReachable,
+		},
+		"R11 shadow valid + python, -operations on the shadow row only": {
+			rows:     []CarryRow{shadow, python},
+			mutate:   func(r *CarryRequest) { r.Operations = []string{"hotspots"} },
+			wantRows: []string{"hotspots"},
+		},
+		"R12 shadow valid only, dry run (plan, no write)": {
+			rows:   []CarryRow{shadow},
+			mutate: func(r *CarryRequest) { r.DryRun = true },
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			pool := startAuditedRegistryPostgres(t)
+			request := carryIntegrationRequest()
+			for _, row := range tc.rows {
+				seedCarryRow(t, ctx, pool, carryIntegrationLiveDigest, row)
+			}
+			if tc.mutate != nil {
+				tc.mutate(&request)
+			}
+			outcomes, err := Carry(ctx, pool, request)
+			if tc.wantErr != nil {
+				if !errors.Is(err, tc.wantErr) {
+					t.Fatalf("err = %v, want %v", err, tc.wantErr)
+				}
+			} else if err != nil {
+				t.Fatalf("Carry: %v", err)
+			}
+			if tc.wantErr == nil {
+				for _, outcome := range outcomes {
+					if outcome.Action == CarryActionSkip && outcome.Reason == "" {
+						t.Fatalf("%s skipped with no reason", outcome.Operation)
+					}
+				}
+			}
+			var got []string
+			for _, row := range rowsAtDigest(t, ctx, pool, carryIntegrationTargetDigest) {
+				got = append(got, row.Operation)
+			}
+			sort.Strings(got)
+			want := append([]string(nil), tc.wantRows...)
+			sort.Strings(want)
+			if strings.Join(got, ",") != strings.Join(want, ",") {
+				t.Fatalf("rows at the target digest = %v, want %v", got, want)
+			}
+		})
 	}
 }

@@ -7,12 +7,12 @@ import (
 	"os/exec"
 	"path/filepath"
 	"reflect"
-	"runtime"
 	"sort"
 	"strings"
 	"sync"
 	"testing"
 
+	"github.com/full-chaos/dev-health-ops/internal/testsupport/moduleroot"
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/programoracle"
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/pyoracle"
 )
@@ -50,7 +50,7 @@ var capabilityGoldens = programoracle.Set{
 // answer of the Python registry (testdata/python_registry_oracle.py on src/dev_health_ops/sync/datasets.py of
 // the pinned build).
 func TestCapabilitiesMatchFrozenPythonProviderRegistry(t *testing.T) {
-	_, currentFile, _, _ := runtime.Caller(0)
+	_, currentFile, _, _ := moduleroot.Caller(0)
 	packageDir := filepath.Dir(currentFile)
 	root := filepath.Clean(filepath.Join(packageDir, "..", ".."))
 	script, err := os.ReadFile(filepath.Join(packageDir, "testdata", "python_registry_oracle.py"))
@@ -104,7 +104,7 @@ type registryEntry struct {
 func pythonExecutable(t *testing.T) string {
 	t.Helper()
 	requireLivePythonOracles(t)
-	_, currentFile, _, _ := runtime.Caller(0)
+	_, currentFile, _, _ := moduleroot.Caller(0)
 	root := filepath.Dir(filepath.Dir(filepath.Dir(currentFile)))
 	resolved := pyoracle.Resolve(t, root)
 	assertPythonProducerIsThisWorktree(t, resolved)
@@ -154,7 +154,7 @@ func assertPythonProducerIsThisWorktree(t *testing.T, python string) {
 			"would compare against nothing. Set PYTHONPATH to this worktree's src/, "+
 			"or run through ci/check_go.sh, which does it for you", python)
 	}
-	_, currentFile, _, _ := runtime.Caller(0)
+	_, currentFile, _, _ := moduleroot.Caller(0)
 	root := filepath.Dir(filepath.Dir(filepath.Dir(currentFile)))
 	if !strings.HasPrefix(pythonProducerOrigin, root+string(filepath.Separator)) {
 		t.Fatalf("live-Python oracle producer is NOT in this worktree:\n"+

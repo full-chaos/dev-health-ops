@@ -9,6 +9,7 @@ import (
 	"encoding/json"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -41,10 +42,12 @@ import (
 // documented, narrower contract instead.
 func TestLLMSettingsStatusRouteVenueOracle(t *testing.T) {
 	ctx := context.Background()
-	root := repoRoot(t)
+	golden := venueoracle.OpenGolden(t, adminRunTimeShapesGolden("llmsettingsstatus", t.Name(), "0e1126a5d5d258ef41627a86bd6ca8720d1ad2390e799810cb1fa1aae5272229"))
+	root := golden.PythonRoot(t, repoRoot(t))
+	nextID := goldenIDs("llmst")
 	const jwtKey = "venue-oracle-test-secret-key-for-llm-status-32-bytes!"
 
-	adminID, memberID, superID := uuid.New(), uuid.New(), uuid.New()
+	adminID, memberID, superID := nextID(), nextID(), nextID()
 	type orgSpec struct {
 		id   uuid.UUID
 		slug string
@@ -63,15 +66,26 @@ func TestLLMSettingsStatusRouteVenueOracle(t *testing.T) {
 		{slug: "off", tier: "team"},            // flag kill switch, 403
 		{slug: "mismatch", tier: "team"},       // active, readiness record certified against a DIFFERENT config -> never_checked here (Python: stale)
 		{slug: "incomplete", tier: "team"},     // active, readiness blob missing required keys -> never_checked
+		{slug: "providernone", tier: "team"},   // provider "none" -> not_configured
+		{slug: "providermock", tier: "team"},   // provider "mock" -> not_configured
+		{slug: "providerblank", tier: "team"},  // a whitespace-only provider normalizes to "" -> not_configured
+		{slug: "keylessbaseurl", tier: "team"}, // a keyless provider with a base_url and no api_key -> active, not missing_credentials
+		{slug: "keylessnothing", tier: "team"}, // a keyless provider with neither -> missing_credentials
 		{slug: "fallback", tier: "team"},       // invalid_base_url with a matching audit_logs fallback row -> last_fallback_at set
 	} {
 		spec := spec
-		spec.id = uuid.New()
+		spec.id = nextID()
 		orgs[spec.slug] = &spec
 	}
-	ghostOrg := uuid.New()
+	ghostOrg := nextID()
 
+	// The fallback row must sit inside the route's lookback window, so it is
+	// written relative to the wall clock (an hour ago); its microsecond
+	// fraction is fixed so the rendered time has one spelling. The response
+	// echoes it: compared by shape against the golden, by value against this.
+	fallbackAt := time.Now().UTC().Add(-time.Hour).Truncate(time.Second).Add(123456 * time.Microsecond)
 	venue := venueoracle.Start(t, ctx, venueoracle.Options{
+		Golden: golden,
 		Root:   root,
 		JWTKey: jwtKey,
 		Seed: func(t *testing.T, ctx context.Context, admin *pgxpool.Pool, v *venueoracle.Venue) map[string]map[string]any {
@@ -89,7 +103,7 @@ VALUES ($1, $2, $2, $3, 'stripe', true, now(), now())`, org.id, "llmstatus-"+org
 			exec(`UPDATE feature_flags SET created_at = '2020-01-01T00:00:00+00:00', updated_at = '2020-01-01T00:00:00+00:00'`)
 			exec(`INSERT INTO org_feature_overrides (id, org_id, feature_id, is_enabled, expires_at, config, reason, created_by, created_at, updated_at)
 VALUES ($1, $2, (SELECT id FROM feature_flags WHERE key = 'byo_llm'), false, NULL, NULL, 'kill switch', NULL, now(), now())`,
-				uuid.New(), orgs["off"].id)
+				nextID(), orgs["off"].id)
 			user := func(id uuid.UUID, email string, super bool) {
 				exec(`INSERT INTO users (id, email, is_active, is_verified, is_superuser, token_version, created_at, updated_at)
 VALUES ($1, $2, true, true, $3, 0, now(), now())`, id, email, super)
@@ -101,13 +115,19 @@ VALUES ($1, $2, true, true, $3, 0, now(), now())`, id, email, super)
 			row := func(org, category, key, value string) {
 				exec(`INSERT INTO settings (id, org_id, category, key, value, is_encrypted, description, created_at, updated_at)
 VALUES ($1, $2, $3, $4, $5, false, NULL, '2026-02-01T00:00:00+00:00', '2026-02-01T00:00:00+00:00')`,
-					uuid.New(), orgs[org].id.String(), category, key, value)
+					nextID(), orgs[org].id.String(), category, key, value)
 			}
 			row("unknown", "llm", "provider", "not-a-real-provider")
 			row("missing", "llm", "provider", "openai")
 			row("invalidurl", "llm", "provider", "openai")
 			row("invalidurl", "llm", "base_url", "https://10.0.0.1/v1")
 			row("invalidurl", "llm", "api_key", "sk-anything")
+			row("providernone", "llm", "provider", "none")
+			row("providermock", "llm", "provider", "mock")
+			row("providerblank", "llm", "provider", "   ")
+			row("keylessbaseurl", "llm", "provider", "ollama")
+			row("keylessbaseurl", "llm", "base_url", "https://8.8.8.8/v1")
+			row("keylessnothing", "llm", "provider", "ollama")
 			row("active", "llm", "provider", "openai")
 			row("active", "llm", "api_key", "sk-anything")
 			row("ready", "llm", "provider", "openai")
@@ -180,8 +200,8 @@ VALUES ($1, $2, $3, $4, $5, false, NULL, '2026-02-01T00:00:00+00:00', '2026-02-0
 				t.Fatalf("encode fallback audit changes: %v", err)
 			}
 			exec(`INSERT INTO audit_logs (id, org_id, action, resource_type, resource_id, changes, request_metadata, status, created_at)
-VALUES ($1, $2, 'other', 'setting', 'llm.base_url', $3::json, '{}'::json, 'failure', now() - interval '1 hour')`,
-				uuid.New(), orgs["fallback"].id.String(), string(fallbackChanges))
+VALUES ($1, $2, 'other', 'setting', 'llm.base_url', $3::json, '{}'::json, 'failure', $4)`,
+				nextID(), orgs["fallback"].id.String(), string(fallbackChanges), fallbackAt)
 
 			tokens := map[string]map[string]any{
 				"member":  {"user_id": memberID.String(), "email": "llmstatus-member@example.com", "org_id": orgs["active"].id.String(), "role": "member"},
@@ -213,6 +233,11 @@ VALUES ($1, $2, 'other', 'setting', 'llm.base_url', $3::json, '{}'::json, 'failu
 		get("readiness record ready", "ready"),
 		get("readiness record failed", "failed"),
 		get("readiness record fingerprint mismatch (python stale, go never_checked)", "mismatch"),
+		get("provider none", "providernone"),
+		get("provider mock", "providermock"),
+		get("provider whitespace only", "providerblank"),
+		get("keyless provider with base_url only", "keylessbaseurl"),
+		get("keyless provider with no credentials", "keylessnothing"),
 		get("community tier gate", "community"),
 		get("kill switch gate", "off"),
 		get("incomplete readiness blob never_checked", "incomplete"),
@@ -225,10 +250,14 @@ VALUES ($1, $2, 'other', 'setting', 'llm.base_url', $3::json, '{}'::json, 'failu
 		{Name: "post is 405", Method: "POST", Path: path, Headers: auth("active")},
 	}
 
-	python := venue.ServePython(t, requests)
+	python := golden.Python(t, venue, requests)
 	goBase, _ := startGoServer(t, ctx, venue, jwtKey, func(deps *apiservice.Deps) {})
 	receipt := venueoracle.Diff(t, goBase, requests, python, venueoracle.DiffOptions{
+		Golden: golden,
 		Normalize: func(request venueoracle.Request, body string) string {
+			if request.Name == "invalid base_url with fallback audit row" {
+				body = timeShapeField(t, body, "last_fallback_at")
+			}
 			if strings.HasPrefix(request.Name, "readiness record ") {
 				for _, field := range []string{"readiness", "binary_transport_readiness", "readiness_checked_at", "readiness_safe_failure_reason"} {
 					body = redactField(t, body, field)
@@ -238,6 +267,8 @@ VALUES ($1, $2, 'other', 'setting', 'llm.base_url', $3::json, '{}'::json, 'failu
 		},
 		Inspect: func(request venueoracle.Request, goResponse venueoracle.Response) {
 			switch request.Name {
+			case "invalid base_url with fallback audit row":
+				assertJSONTime(t, request.Name, goResponse.Body, "last_fallback_at", fallbackAt)
 			case "readiness record ready":
 				assertJSONField(t, request.Name, goResponse.Body, "readiness", "ready")
 				assertJSONField(t, request.Name, goResponse.Body, "binary_transport_readiness", "ready")
@@ -262,6 +293,26 @@ VALUES ($1, $2, 'other', 'setting', 'llm.base_url', $3::json, '{}'::json, 'failu
 		},
 	})
 	t.Log(receipt)
+	golden.Finish(t)
+}
+
+// assertJSONTime checks that a top-level time string names the instant want.
+func assertJSONTime(t *testing.T, name, body, key string, want time.Time) {
+	t.Helper()
+	var decoded map[string]any
+	if err := json.Unmarshal([]byte(body), &decoded); err != nil {
+		t.Errorf("%s: decode: %v", name, err)
+		return
+	}
+	text, ok := decoded[key].(string)
+	if !ok {
+		t.Errorf("%s: %s = %v, want a time string", name, key, decoded[key])
+		return
+	}
+	got, err := time.Parse(time.RFC3339Nano, text)
+	if err != nil || !got.Equal(want) {
+		t.Errorf("%s: %s = %q (%v), want %s", name, key, text, err, want.Format(time.RFC3339Nano))
+	}
 }
 
 // assertJSONField decodes body and checks one top-level field against want

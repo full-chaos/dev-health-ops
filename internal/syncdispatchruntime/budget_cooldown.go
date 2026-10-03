@@ -2,7 +2,7 @@ package syncdispatchruntime
 
 import (
 	"context"
-	"log/slog"
+	"github.com/full-chaos/dev-health-ops/internal/syncdispatchruntime/synclog"
 	"time"
 
 	"github.com/jackc/pgx/v5"
@@ -78,11 +78,8 @@ func cooldownLookbackSeconds() time.Duration {
 // other function in this family does. This is the one deliberate exception
 // to that rule, carried over from Python's own explicit design.
 func activeCooldowns(
-	ctx context.Context, tx pgx.Tx, logger *slog.Logger, syncRunID string, candidates []budgetUnit, now time.Time,
+	ctx context.Context, tx pgx.Tx, logger *synclog.Logger, syncRunID string, candidates []budgetUnit, now time.Time,
 ) (familyCooldowns, dimensionCooldowns map[cooldownKey]time.Time) {
-	if logger == nil {
-		logger = slog.Default()
-	}
 	familyCooldowns = map[cooldownKey]time.Time{}
 	dimensionCooldowns = map[cooldownKey]time.Time{}
 
@@ -107,8 +104,7 @@ WHERE org_id = ANY($1) AND provider = ANY($2) AND integration_id = ANY($3::uuid[
   AND observed_at >= $4`,
 		mapKeysToSlice(orgIDs), mapKeysToSlice(providers), mapKeysToSlice(integrationIDs), lookbackCutoff)
 	if err != nil {
-		logger.WarnContext(ctx, "dispatch_sync_run.cooldown_observation_read_failed",
-			slog.String("sync_run_id", syncRunID), slog.String("error", err.Error()))
+		logger.Warn(ctx, synclog.MsgDispatchSyncRunCooldownObservationReadFailed, synclog.Run(synclog.ParseID(syncRunID)), synclog.Failure(err))
 		return familyCooldowns, dimensionCooldowns
 	}
 	defer rows.Close()
@@ -118,8 +114,7 @@ WHERE org_id = ANY($1) AND provider = ANY($2) AND integration_id = ANY($3::uuid[
 		if err := rows.Scan(&observation.id, &observation.orgID, &observation.provider, &observation.integrationID,
 			&observation.routeFamily, &observation.routeFamilyAttribution, &observation.dimension,
 			&observation.retryAfterSeconds, &observation.resetAt, &observation.observedAt); err != nil {
-			logger.WarnContext(ctx, "dispatch_sync_run.cooldown_observation_row_malformed",
-				slog.String("sync_run_id", syncRunID), slog.String("error", err.Error()))
+			logger.Warn(ctx, synclog.MsgDispatchSyncRunCooldownObservationRowMalformed, synclog.Run(synclog.ParseID(syncRunID)), synclog.Failure(err))
 			continue
 		}
 		expiry := cooldownExpiry(observation)
@@ -156,8 +151,7 @@ WHERE org_id = ANY($1) AND provider = ANY($2) AND integration_id = ANY($3::uuid[
 		// closer match to fail-open's actual intent ("a broken read must
 		// never block dispatch," not "a broken read must erase correct
 		// information this pass already has").
-		logger.WarnContext(ctx, "dispatch_sync_run.cooldown_observation_read_failed",
-			slog.String("sync_run_id", syncRunID), slog.String("error", err.Error()))
+		logger.Warn(ctx, synclog.MsgDispatchSyncRunCooldownObservationReadFailed, synclog.Run(synclog.ParseID(syncRunID)), synclog.Failure(err))
 	}
 	return familyCooldowns, dimensionCooldowns
 }

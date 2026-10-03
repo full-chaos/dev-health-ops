@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"github.com/full-chaos/dev-health-ops/internal/testsupport/fakehttp"
 	"net/http"
 	"reflect"
 	"strings"
@@ -30,7 +31,7 @@ func TestLinearRouteGlobalDiscoveryCrawlsEveryDiscoveredTeam(t *testing.T) {
 	batch, err := (LinearWorkItemsRouteHandler{GlobalDiscovery: true, FetchCycles: &noCycles}).Collect(
 		context.Background(), claim,
 		providerfoundation.Credential{Provider: "linear", ID: claim.CredentialID},
-		linearWorkItemsClient(t, doer), time.Date(2026, 8, 3, 12, 0, 0, 0, time.UTC),
+		linearWorkItemsClient(t, fakehttp.Client(doer)), time.Date(2026, 8, 3, 12, 0, 0, 0, time.UTC),
 	)
 	if err != nil {
 		t.Fatal(err)
@@ -91,7 +92,7 @@ func TestLinearRoutePaginatesInlineHistoryFromTheParentCursor(t *testing.T) {
 	batch, err := (LinearWorkItemsRouteHandler{FetchCycles: &noCycles}).Collect(
 		context.Background(), claim,
 		providerfoundation.Credential{Provider: "linear", ID: claim.CredentialID},
-		linearWorkItemsClient(t, doer), time.Date(2026, 8, 3, 12, 0, 0, 0, time.UTC),
+		linearWorkItemsClient(t, fakehttp.Client(doer)), time.Date(2026, 8, 3, 12, 0, 0, 0, time.UTC),
 	)
 	if err != nil {
 		t.Fatal(err)
@@ -121,7 +122,7 @@ func TestLinearRouteRejectsMalformedNestedConnectionBeforeWatermark(t *testing.T
 	batch, err := (LinearWorkItemsRouteHandler{FetchCycles: &noCycles}).Collect(
 		context.Background(), claim,
 		providerfoundation.Credential{Provider: "linear", ID: claim.CredentialID},
-		linearWorkItemsClient(t, doer), time.Date(2026, 8, 3, 12, 0, 0, 0, time.UTC),
+		linearWorkItemsClient(t, fakehttp.Client(doer)), time.Date(2026, 8, 3, 12, 0, 0, 0, time.UTC),
 	)
 	if !errors.Is(err, providerfoundation.ErrPaginationInvalid) || batch.Watermark != nil {
 		t.Fatalf("batch=%+v error=%v", batch, err)
@@ -134,7 +135,7 @@ func TestLinearRoutePropagatesCancellationBeforeIssuingAnotherPage(t *testing.T)
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
 	client, err := providerfoundation.NewHTTPClient(
-		"linear", "https://api.linear.app", &linearWorkItemsDoer{},
+		"linear", "https://api.linear.app", fakehttp.Client(&linearWorkItemsDoer{}),
 		func(*http.Request) error { return nil },
 		providerfoundation.RetryPolicy{MaxAttempts: 1, InitialWait: time.Nanosecond, MaxWait: time.Nanosecond},
 		providerfoundation.LeaseGuardFunc(func(ctx context.Context) error { return ctx.Err() }),

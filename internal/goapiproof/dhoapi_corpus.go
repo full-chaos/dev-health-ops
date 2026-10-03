@@ -176,6 +176,14 @@ var dhoAPIEndpointSpecs = map[string]RESTEndpointSpec{
 			Name:                "own_org",
 			WantCandidateStatus: 200, WantBaselineStatus: 200,
 			BodyMode: RESTBodyModeJSON,
+			Counters: []RESTCounterPair{{
+				Name:                  "http_requests",
+				BaselineFamily:        "http_requests_total",
+				CandidateFamily:       "dev_health_api_http_requests_total",
+				LabelMap:              map[string]string{"handler": "route", "status": "status_class"},
+				IgnoreCandidateLabels: []string{"listener"},
+				Select:                map[string]string{"route": "/api/v1/orgs/me", "method": "GET"},
+			}},
 		}},
 	},
 	"REST:GET:/api/v1/licensing/entitlements/{org_id}": {

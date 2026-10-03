@@ -2,10 +2,10 @@ package providersync
 
 import (
 	"fmt"
+	"github.com/full-chaos/dev-health-ops/internal/testsupport/moduleroot"
 	"math"
 	"os"
 	"path/filepath"
-	"runtime"
 	"strconv"
 	"testing"
 )
@@ -38,9 +38,9 @@ const d20GoBehaviour = "go:refuses-timestamp-loudly"
 
 func statusMappingRepoRoot(t *testing.T) string {
 	t.Helper()
-	_, currentFile, _, ok := runtime.Caller(0)
+	_, currentFile, _, ok := moduleroot.Caller(0)
 	if !ok {
-		t.Fatal("runtime.Caller failed: cannot locate the repository root")
+		t.Fatal("moduleroot.Caller failed: cannot locate the repository root")
 	}
 	return filepath.Join(filepath.Dir(currentFile), "..", "..")
 }

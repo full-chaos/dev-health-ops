@@ -1,11 +1,13 @@
 package main
 
 import (
+	"math/rand"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
 
+	"github.com/full-chaos/dev-health-ops/internal/testsupport/goldenscan"
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/recordedfiles"
 )
 
@@ -66,4 +68,44 @@ func TestTheVerbFromInsideTheRepository(t *testing.T) {
 	if after, _ := os.ReadFile(filepath.Join(repo, "a", "testdata"+recordedfiles.ManifestSuffix)); string(after) == string(before) {
 		t.Error("with -recorded-again the row did not change")
 	}
+}
+
+// CHAOS-7890: `manifest -check` runs the unpacked secret scan on every JSON file under a manifest root. A file with a keyed
+// high-entropy value and no allowlist row is a problem the check prints; a file that is not JSON by name is not scanned; a .json
+// file that cannot be read as JSON is an error, never a pass.
+func TestTheCheckScansEveryJSONFileOfTheTree(t *testing.T) {
+	repo := t.TempDir()
+	write(t, filepath.Join(repo, "go.mod"), "module example\n")
+	value := generatedValue(7890)
+	write(t, filepath.Join(repo, "a", "testdata", "bad.json"), `{"header":{"python_build":"x"},"requests":[{"body":"{\"client_secret\":\"`+value+`\"}"}]}`)
+	write(t, filepath.Join(repo, "a", "testdata", "clean.json"), `{"header":{"python_build":"x"},"requests":[{"body":"ok"}]}`)
+	write(t, filepath.Join(repo, "a", "testdata", "plain.json"), `{"client_secret":"`+value+`"}`)
+	write(t, filepath.Join(repo, "a", "testdata", "note.txt"), `client_secret = "`+value+`"`)
+	problems, err := goldenscan.TreeProblems(repo, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	joined := strings.Join(problems, "\n")
+	if len(problems) != 2 || !strings.Contains(joined, "a/testdata/bad.json") || !strings.Contains(joined, "a/testdata/plain.json") || strings.Contains(joined, "note.txt") || strings.Contains(joined, value) {
+		t.Fatalf("the tree scan found %d problem(s), want bad.json and plain.json only, with no value: %v", len(problems), problems)
+	}
+	stale := []goldenscan.Row{{Path: "a/testdata/clean.json", Key: "credential_id", Shape: "uuid", Count: 1, Triage: "row 1"}}
+	problems, err = goldenscan.TreeProblems(repo, stale)
+	if err != nil || len(problems) != 3 || !strings.Contains(strings.Join(problems, "\n"), "no hit any more") {
+		t.Fatalf("a stale allowlist row was not found: %v %v", problems, err)
+	}
+	write(t, filepath.Join(repo, "a", "testdata", "broken.json"), `{"a": `)
+	if _, err := goldenscan.TreeProblems(repo, nil); err == nil {
+		t.Fatal("a .json file that is not JSON was passed over")
+	}
+}
+
+func generatedValue(seed int64) string {
+	r := rand.New(rand.NewSource(seed))
+	const alphabet = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789"
+	out := make([]byte, 36)
+	for i := range out {
+		out[i] = alphabet[r.Intn(len(alphabet))]
+	}
+	return string(out)
 }

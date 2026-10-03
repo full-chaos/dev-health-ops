@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"github.com/full-chaos/dev-health-ops/internal/testsupport/fakehttp"
 	"io"
 	"net/http"
 	"net/url"
@@ -67,7 +68,7 @@ func jiraRouteIdentity(email, accountID, displayName string) string {
 func jiraWorkItemsTestClient(t *testing.T, doer providerfoundation.HTTPDoer, lease providerfoundation.LeaseGuard) *providerfoundation.HTTPClient {
 	t.Helper()
 	client, err := providerfoundation.NewHTTPClient(
-		"jira", "https://acme.atlassian.net", doer,
+		"jira", "https://acme.atlassian.net", fakehttp.Client(doer),
 		func(request *http.Request) error {
 			request.SetBasicAuth("jira@example.com", "token")
 			request.Header.Set("Accept", "application/json")
@@ -90,7 +91,7 @@ func TestJiraWorkItemsRouteCollectsCanonicalFamilyAndWithholdsWatermarkOnOptiona
 	}
 	leaseChecks := 0
 	doer := &jiraWorkItemsDoer{t: t}
-	client := jiraWorkItemsTestClient(t, doer, providerfoundation.LeaseGuardFunc(func(context.Context) error {
+	client := jiraWorkItemsTestClient(t, fakehttp.Client(doer), providerfoundation.LeaseGuardFunc(func(context.Context) error {
 		leaseChecks++
 		return nil
 	}))
@@ -206,7 +207,7 @@ func TestJiraWorkItemsRouteCountsFailedAndRetriedAttempts(t *testing.T) {
 		}
 	})
 	client, err := providerfoundation.NewHTTPClient(
-		"jira", "https://acme.atlassian.net", doer,
+		"jira", "https://acme.atlassian.net", fakehttp.Client(doer),
 		func(request *http.Request) error { return nil },
 		providerfoundation.RetryPolicy{MaxAttempts: 2, InitialWait: time.Millisecond, MaxWait: time.Millisecond},
 		providerfoundation.LeaseGuardFunc(func(context.Context) error { return nil }),
@@ -245,7 +246,7 @@ func TestJiraWorkItemsRouteOptionalCommentFailureIsTypedAndDoesNotAdvance(t *tes
 		}
 		return nil, errors.New("comments endpoint unavailable")
 	})
-	client := jiraWorkItemsTestClient(t, doer, providerfoundation.LeaseGuardFunc(func(context.Context) error { return nil }))
+	client := jiraWorkItemsTestClient(t, fakehttp.Client(doer), providerfoundation.LeaseGuardFunc(func(context.Context) error { return nil }))
 	batch, err := (JiraWorkItemsRouteHandler{StatusMapping: loadRealStatusMapping(t)}).Collect(
 		context.Background(), claim, providerfoundation.Credential{}, client, time.Date(2026, 8, 10, 12, 0, 0, 0, time.UTC),
 	)
@@ -270,7 +271,7 @@ func TestJiraWorkItemsRouteFailsClosedWhenJiraDoesNotProvideNextPageToken(t *tes
 			Body: io.NopCloser(strings.NewReader(`{"issues":[],"isLast":false}`)), Request: request,
 		}, nil
 	})
-	client := jiraWorkItemsTestClient(t, doer, providerfoundation.LeaseGuardFunc(func(context.Context) error { return nil }))
+	client := jiraWorkItemsTestClient(t, fakehttp.Client(doer), providerfoundation.LeaseGuardFunc(func(context.Context) error { return nil }))
 	batch, err := (JiraWorkItemsRouteHandler{StatusMapping: loadRealStatusMapping(t)}).Collect(
 		context.Background(), claim, providerfoundation.Credential{}, client, time.Date(2026, 8, 10, 12, 0, 0, 0, time.UTC),
 	)

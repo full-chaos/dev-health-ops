@@ -4,7 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"log/slog"
+	"github.com/full-chaos/dev-health-ops/internal/syncdispatchruntime/synclog"
 	"sort"
 	"time"
 
@@ -118,11 +118,8 @@ func estimateChunk(ctx context.Context, tx pgx.Tx, estimator budgetEstimator, or
 // group's units would have individually logged and gotten had Python
 // called each in its own try/except and hit the same failure.
 func activeBudgetConsumption(
-	ctx context.Context, tx pgx.Tx, bridge budgetEstimator, logger *slog.Logger, now time.Time, budgetKeys map[string]bool,
+	ctx context.Context, tx pgx.Tx, bridge budgetEstimator, logger *synclog.Logger, now time.Time, budgetKeys map[string]bool,
 ) (map[string]int, error) {
-	if logger == nil {
-		logger = slog.Default()
-	}
 	consumedByBucket := map[string]int{}
 	if len(budgetKeys) == 0 {
 		return consumedByBucket, nil
@@ -181,8 +178,7 @@ ORDER BY id`,
 		for _, units := range unitsByGroup {
 			totalUnits += len(units)
 		}
-		logger.InfoContext(ctx, "dispatch_sync_run.budget_guard_active_consumption_fanout",
-			slog.Int("group_count", len(groupKeys)), slog.Int("total_units", totalUnits))
+		logger.Info(ctx, synclog.MsgDispatchSyncRunBudgetGuardActiveConsumptionFanout, synclog.Count(synclog.KeyGroupCount, len(groupKeys)), synclog.Count(synclog.KeyTotalUnits, totalUnits))
 	}
 
 	for _, key := range groupKeys {
@@ -215,8 +211,7 @@ ORDER BY id`,
 					return nil, err
 				}
 				for _, unitID := range chunk {
-					logger.WarnContext(ctx, "dispatch_sync_run.budget_guard_active_estimate_failed",
-						attrsToAny(append(unitLogAttrs(key.syncRunID, unitsByID[unitID]), slog.String("error", err.Error())))...)
+					logger.Warn(ctx, synclog.MsgDispatchSyncRunBudgetGuardActiveEstimateFailed, append(unitLogAttrs(key.syncRunID, unitsByID[unitID]), synclog.Failure(err))...)
 				}
 				continue
 			}

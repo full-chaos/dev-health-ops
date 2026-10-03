@@ -14,10 +14,25 @@ import (
 	"time"
 
 	"github.com/full-chaos/dev-health-ops/internal/platform/health"
+	"github.com/full-chaos/dev-health-ops/internal/platform/tracing"
+	"go.opentelemetry.io/otel/attribute"
 )
 
 var errNotReady = errors.New("stream runner has not completed a successful stream window")
 var errTransientWrite = errors.New("transient stream durable-write failure")
+
+// transientWriteError is errTransientWrite around the handler's own error. It
+// says what the old fmt.Errorf("%w: %w") said (errors.Is(err, errTransientWrite)
+// and the same text) but wraps the cause in a single Unwrap chain, so a handler
+// error that is a pure shutdown (context.Canceled) is still recognised as one by
+// tracing.IsCancellation instead of being mixed with the sentinel.
+type transientWriteError struct{ cause error }
+
+func (e *transientWriteError) Error() string {
+	return errTransientWrite.Error() + ": " + e.cause.Error()
+}
+func (e *transientWriteError) Unwrap() error        { return e.cause }
+func (e *transientWriteError) Is(target error) bool { return target == errTransientWrite }
 
 const initialIdleDelay = 10 * time.Millisecond
 
@@ -91,6 +106,8 @@ func (r *Runner) Start(parent context.Context) error {
 	r.mu.Unlock()
 
 	if err := r.refreshStreams(ctx); err != nil {
+		// A startup discovery failure is as much a failed step as a later one.
+		r.failedStep(ctx, "dev_health.stream.maintenance_failed", "discover", err)
 		cancel()
 		close(done)
 		return err
@@ -146,6 +163,7 @@ func (r *Runner) cycle(ctx context.Context, maintain bool) (bool, error) {
 	}
 	if maintain {
 		if err := r.refreshStreams(ctx); err != nil {
+			r.failedStep(ctx, "dev_health.stream.maintenance_failed", "discover", err)
 			return false, err
 		}
 	}
@@ -169,12 +187,32 @@ func (r *Runner) cycle(ctx context.Context, maintain bool) (bool, error) {
 		messages, err := r.transport.ReadNew(ctx, readStreams, r.config.ConsumerGroup, r.config.ConsumerName, perStreamCount, r.config.Block)
 		if err != nil {
 			failures = append(failures, fmt.Errorf("read streams: %w", err))
+			// A failed read is work that went wrong, not an idle cycle.
+			r.failedStep(ctx, "dev_health.stream.read_failed", "read", err,
+				attribute.Int("dev_health.stream.lanes", len(readStreams)))
 		} else {
 			active = active || len(messages) > 0
-			for _, message := range messages {
-				if err := r.process(ctx, message); err != nil {
-					failures = append(failures, err)
+			if len(messages) > 0 {
+				// One span per NON-EMPTY read batch: an idle cycle (no messages)
+				// repeats about once a second and would be noise.
+				batchCtx, batch := tracing.StartWorkSpan(ctx, runnerTracerName, "dev_health.stream.batch",
+					attribute.String("dev_health.stream.runner", r.config.Name),
+					attribute.Int("dev_health.stream.messages", len(messages)),
+					attribute.Int("dev_health.stream.lanes", len(readStreams)),
+					attribute.String("dev_health.stream.source", "read"),
+				)
+				var batchFailures []error
+				for _, message := range messages {
+					if err := r.process(batchCtx, message); err != nil {
+						failures = append(failures, err)
+						batchFailures = append(batchFailures, err)
+					}
 				}
+				batch.SetAttributes(attribute.Int("dev_health.stream.failed", len(batchFailures)))
+				if len(batchFailures) > 0 {
+					batch.SetAttributes(attribute.String(tracing.StageAttribute, "handle"))
+				}
+				tracing.EndWorkSpan(batch, errors.Join(batchFailures...))
 			}
 		}
 	}
@@ -182,6 +220,7 @@ func (r *Runner) cycle(ctx context.Context, maintain bool) (bool, error) {
 		for _, stream := range streams {
 			stats, err := r.transport.Stats(ctx, stream, r.config.ConsumerGroup)
 			if err != nil {
+				r.failedStep(ctx, "dev_health.stream.maintenance_failed", "stats", err)
 				failures = append(failures, fmt.Errorf("inspect stream %q: %w", stream, err))
 				continue
 			}
@@ -283,6 +322,7 @@ func (r *Runner) refreshStreams(ctx context.Context) error {
 func (r *Runner) reclaim(ctx context.Context, stream string) (bool, error) {
 	pending, err := r.transport.Pending(ctx, stream, r.config.ConsumerGroup, r.config.BatchSize, r.config.ReclaimIdle)
 	if err != nil {
+		r.failedStep(ctx, "dev_health.stream.reclaim_failed", "pending", err)
 		return false, fmt.Errorf("inspect pending: %w", err)
 	}
 	claim := make([]string, 0, len(pending))
@@ -298,8 +338,17 @@ func (r *Runner) reclaim(ctx context.Context, stream string) (bool, error) {
 	}
 	claimed, err := r.transport.Claim(ctx, stream, r.config.ConsumerGroup, r.config.ConsumerName, claim, r.config.ReclaimIdle)
 	if err != nil {
+		r.failedStep(ctx, "dev_health.stream.reclaim_failed", "claim", err)
 		return false, fmt.Errorf("claim pending: %w", err)
 	}
+	// A reclaim pass is a batch like a read batch: every event it handles,
+	// poison included, is a handle child of it.
+	batchCtx, batch := tracing.StartWorkSpan(ctx, runnerTracerName, "dev_health.stream.batch",
+		attribute.String("dev_health.stream.runner", r.config.Name),
+		attribute.Int("dev_health.stream.lanes", 1),
+		attribute.String("dev_health.stream.source", "reclaim"),
+	)
+	handled := 0
 	claimedByID := make(map[string]Message, len(claimed))
 	for _, message := range claimed {
 		claimedByID[message.ID] = message
@@ -319,16 +368,32 @@ func (r *Runner) reclaim(ctx context.Context, stream string) (bool, error) {
 		r.mu.Lock()
 		r.reclaimed++
 		r.mu.Unlock()
+		handled++
 		if _, isPoison := poison[item.MessageID]; isPoison {
-			if err := r.quarantine(ctx, message, "max_deliveries_exceeded"); err != nil {
+			if err := r.tracedHandle(batchCtx, func(ctx context.Context) (string, error) {
+				if err := r.quarantine(ctx, message, "max_deliveries_exceeded"); err != nil {
+					return "quarantine_error", err
+				}
+				return "quarantined", nil
+			}); err != nil {
 				failures = append(failures, err)
 			}
 			continue
 		}
-		if err := r.process(ctx, message); err != nil {
+		if err := r.process(batchCtx, message); err != nil {
 			failures = append(failures, err)
 		}
 	}
+	// messages = the events this pass actually handled (claimed or poison), not
+	// every pending entry: an entry another consumer holds is neither.
+	batch.SetAttributes(
+		attribute.Int("dev_health.stream.messages", handled),
+		attribute.Int("dev_health.stream.failed", len(failures)),
+	)
+	if len(failures) > 0 {
+		batch.SetAttributes(attribute.String(tracing.StageAttribute, "handle"))
+	}
+	tracing.EndWorkSpan(batch, errors.Join(failures...))
 	return len(claimed) > 0, errors.Join(failures...)
 }
 
@@ -340,7 +405,43 @@ func sortedUnique(values []string) []string {
 	return slices.Compact(values)
 }
 
+// process handles one message under one dev_health.stream.handle span. The
+// span carries the runner name and a fixed outcome word; never the stream key,
+// the message id or any payload (CHAOS-7879).
 func (r *Runner) process(ctx context.Context, message Message) error {
+	return r.tracedHandle(ctx, func(ctx context.Context) (string, error) { return r.handle(ctx, message) })
+}
+
+// tracedHandle runs one event's work under one dev_health.stream.handle span
+// and records the fixed outcome word fn returns. Every path that handles an
+// event goes through it: the normal path, a reclaimed event and a poison event.
+func (r *Runner) tracedHandle(ctx context.Context, fn func(context.Context) (string, error)) error {
+	ctx, span := tracing.StartWorkSpan(ctx, runnerTracerName, "dev_health.stream.handle",
+		attribute.String("dev_health.stream.runner", r.config.Name),
+	)
+	outcome, err := fn(ctx)
+	span.SetAttributes(attribute.String("dev_health.stream.outcome", outcome))
+	tracing.EndWorkSpan(span, err)
+	return err
+}
+
+// failedStep emits one Error span for a stream step that failed outside any
+// event (read, reclaim, discovery, stats), with the stage that failed. The
+// error TEXT stays in the log; the span carries only the class.
+func (r *Runner) failedStep(ctx context.Context, name, stage string, err error, attrs ...attribute.KeyValue) {
+	attrs = append([]attribute.KeyValue{
+		attribute.String("dev_health.stream.runner", r.config.Name),
+		attribute.String(tracing.StageAttribute, stage),
+	}, attrs...)
+	_, span := tracing.StartWorkSpan(ctx, runnerTracerName, name, attrs...)
+	tracing.EndWorkSpan(span, err)
+}
+
+// runnerTracerName scopes the stream runner's spans by package.
+const runnerTracerName = "github.com/full-chaos/dev-health-ops/internal/streamrunner"
+
+// handle is process's body; it returns a fixed outcome word with the error.
+func (r *Runner) handle(ctx context.Context, message Message) (string, error) {
 	if err := r.handler.Handle(ctx, message); err != nil {
 		if IsPermanent(err) {
 			reason := "invalid_message"
@@ -348,24 +449,27 @@ func (r *Runner) process(ctx context.Context, message Message) error {
 			if errors.As(err, &permanent) && permanent.Reason != "" {
 				reason = permanent.Reason
 			}
-			return r.quarantine(ctx, message, reason)
+			if err := r.quarantine(ctx, message, reason); err != nil {
+				return "quarantine_error", err
+			}
+			return "quarantined", nil
 		}
 		// A transient durable-write failure must leave the entry in the PEL.
 		r.mu.Lock()
 		r.retries++
 		r.mu.Unlock()
-		return fmt.Errorf("%w: %w", errTransientWrite, err)
+		return "transient_error", &transientWriteError{cause: err}
 	}
 	if err := r.transport.Ack(ctx, message.Stream, r.config.ConsumerGroup, message.ID); err != nil {
 		// The durable write committed but the ACK did not. Redelivery is safe only
 		// because handlers are required to be idempotent at their authoritative
 		// sink boundary; never turn this into an implicit success.
-		return fmt.Errorf("ack durable message: %w", err)
+		return "ack_error", fmt.Errorf("ack durable message: %w", err)
 	}
 	r.mu.Lock()
 	r.processed++
 	r.mu.Unlock()
-	return nil
+	return "acked", nil
 }
 
 func (r *Runner) quarantine(ctx context.Context, message Message, reason string) error {

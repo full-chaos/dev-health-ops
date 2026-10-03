@@ -8,7 +8,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"path/filepath"
-	"runtime"
 	"strings"
 	"testing"
 	"time"
@@ -19,6 +18,7 @@ import (
 	clickhousestore "github.com/full-chaos/dev-health-ops/internal/storage/clickhouse"
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/chschema"
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/containers"
+	"github.com/full-chaos/dev-health-ops/internal/testsupport/moduleroot"
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/pyoracle"
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/venueoracle"
 )
@@ -186,7 +186,7 @@ func TestExternalSinkOutcomesMatchFrozenPythonAgainstClickHouse(t *testing.T) {
 	// The Python plane's outcome and the rows it stored, per case: executed on the pinned build while
 	// recording (the real normalize_batch and write_batch, through the record verb's launcher, against this
 	// test's ClickHouse), frozen after. The golden holds the outcome and the stored rows of each case.
-	_, file, _, _ := runtime.Caller(0)
+	_, file, _, _ := moduleroot.Caller(0)
 	root := filepath.Clean(filepath.Join(filepath.Dir(file), "..", ".."))
 	golden := venueoracle.OpenGolden(t, venueoracle.GoldenSpec{
 		Path:        "testdata/golden/external-overflow-python-outcomes.golden.json",

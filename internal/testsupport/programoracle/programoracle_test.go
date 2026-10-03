@@ -5,11 +5,11 @@ import (
 	"io"
 	"os"
 	"path/filepath"
-	"runtime"
 	"slices"
 	"strings"
 	"testing"
 
+	"github.com/full-chaos/dev-health-ops/internal/testsupport/moduleroot"
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/pyoracle"
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/venueoracle"
 )
@@ -22,7 +22,7 @@ const runGoldenPythonBuild = "a4847c5e93607451a0c987b314d37e02fc43ce85"
 // recorded: its exit code and its stdout are both kept, so a failed producer
 // is never an empty success. No Python runs here.
 func TestRunAnswersFromTheGolden(t *testing.T) {
-	_, file, _, _ := runtime.Caller(0)
+	_, file, _, _ := moduleroot.Caller(0)
 	root := filepath.Clean(filepath.Join(filepath.Dir(file), "..", "..", ".."))
 	spec := venueoracle.GoldenSpec{
 		Path:        "testdata/golden/run.golden.json",
@@ -52,7 +52,7 @@ func TestRunAnswersFromTheGolden(t *testing.T) {
 // starts with a __future__ import, which only the head of a file may hold, and
 // prints where it believes it is, its module name and its input.
 func TestAScriptRunsAsItsFileInThePinnedCheckout(t *testing.T) {
-	_, file, _, _ := runtime.Caller(0)
+	_, file, _, _ := moduleroot.Caller(0)
 	root := filepath.Clean(filepath.Join(filepath.Dir(file), "..", "..", ".."))
 	spec := venueoracle.GoldenSpec{
 		Path:        "testdata/golden/script.golden.json",

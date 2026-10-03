@@ -4,6 +4,7 @@ package providersync
 
 import (
 	"context"
+	"github.com/full-chaos/dev-health-ops/internal/testsupport/fakehttp"
 	"io"
 	"log/slog"
 	"net/http"
@@ -40,9 +41,9 @@ func TestRequestUsageRowsLandOnceInClickHouse(t *testing.T) {
 	failing := completeRouteExecutor(now, &spendingCompleteRouteHandler{
 		calls: 3, err: errScriptedTransport,
 	}, &memoryEffectLedger{}, &memoryEffectSink{})
-	failing.Doer = &scriptedDoer{replies: []scriptedReply{
+	failing.Doer = fakehttp.Client(&scriptedDoer{replies: []scriptedReply{
 		{status: 200}, {status: 429, headers: limited}, {err: errScriptedTransport},
-	}}
+	}})
 	failing.RequestUsage = writer
 	if _, err := failing.Execute(ctx, session, descriptor); err == nil {
 		t.Fatal("failing execution returned no error")
@@ -51,7 +52,7 @@ func TestRequestUsageRowsLandOnceInClickHouse(t *testing.T) {
 	succeeding := completeRouteExecutor(now, &spendingCompleteRouteHandler{
 		calls: 2, batch: completeRouteFixture(t, claim),
 	}, &memoryEffectLedger{}, &memoryEffectSink{})
-	succeeding.Doer = &scriptedDoer{}
+	succeeding.Doer = fakehttp.Client(&scriptedDoer{})
 	succeeding.RequestUsage = writer
 	result, err := succeeding.Execute(ctx, session, descriptor)
 	if err != nil || result.RequestUsage != (RequestUsageTotals{Requests: 2, Responses: 2}) {

@@ -37,6 +37,16 @@ func TestParseLimitMatchesFrozenPython(t *testing.T) {
 		"3/Khour", "3/ſecond", "3 /hour", "3/hour ", "99999999999999999999/hour", "3/99999999999hours",
 		"1000/hour", "500/hour",
 	}
+	// Declared divergence (CHAOS-7861): the recorded Python answer accepts these
+	// as one positive limit; Go refuses them, so an operator-set value stops the
+	// process at startup instead of serving a different limit. Each needs the
+	// refusal below, and the refusal text pins which Go check refused it.
+	declaredRefusals := map[string]string{
+		"3/2147483648seconds": "the window multiple is out of range", // limitspec.go multiple above 2^31-1
+		"3/3000000000seconds": "the window multiple is out of range",
+		"3/2600000hours":      "the window is out of range", // 9.36e9 s overflows time.Duration
+	}
+	corpus = append(corpus, "3/2147483648seconds", "3/3000000000seconds", "3/2600000hours")
 	pieces := []string{"1", "3", "15", "/", " per ", " ", "hour", "hours", "minute", "second", "s", "day", ";", "0", "x"}
 	random := rand.New(rand.NewSource(6260))
 	for range 4000 {
@@ -57,10 +67,26 @@ func TestParseLimitMatchesFrozenPython(t *testing.T) {
 	if len(want) != len(corpus) {
 		t.Fatalf("python returned %d results for %d cases", len(want), len(corpus))
 	}
-	accepted, mismatches, zeroRefused := 0, 0, 0
+	accepted, mismatches, zeroRefused, declaredSeen := 0, 0, 0, 0
 	for index, text := range corpus {
 		limit, err := httpapi.ParseLimit("x", text)
 		expected := want[index]
+		if reason, declared := declaredRefusals[text]; declared {
+			switch {
+			case len(expected) != 1 || expected[0][0] <= 0:
+				mismatches++
+				t.Errorf("%q: declared divergence expects python to accept one positive limit, python %v", text, expected)
+			case err == nil:
+				mismatches++
+				t.Errorf("%q: declared refusal, go now accepts it (%d per %s)", text, limit.Count, limit.Window)
+			case !strings.Contains(err.Error(), reason):
+				mismatches++
+				t.Errorf("%q: go refusal changed class: %q, want text %q", text, err, reason)
+			default:
+				declaredSeen++
+			}
+			continue
+		}
 		switch {
 		case len(expected) == 1 && expected[0][0] == 0:
 			// Python's parser reads "0/hour" as one limit of count 0; Go documents
@@ -90,6 +116,9 @@ func TestParseLimitMatchesFrozenPython(t *testing.T) {
 	}
 	if accepted == 0 {
 		t.Fatal("no case was accepted; the corpus cannot show the accepted branch agrees")
+	}
+	if declaredSeen != len(declaredRefusals) {
+		t.Fatalf("%d of %d declared refusals were checked", declaredSeen, len(declaredRefusals))
 	}
 	if zeroRefused == 0 {
 		t.Fatal("no zero-count case was refused; the corpus cannot show the refusal Go documents")

@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"github.com/full-chaos/dev-health-ops/internal/testsupport/fakehttp"
 	"io"
 	"net/http"
 	"os"
@@ -101,7 +102,7 @@ func TestLinearReferenceCatalogRejectsCrossScopeInputs(t *testing.T) {
 	} {
 		t.Run(testCase.name, func(t *testing.T) {
 			doer := &linearWorkItemsDoer{responses: []string{}}
-			client := linearWorkItemsClient(t, doer)
+			client := linearWorkItemsClient(t, fakehttp.Client(doer))
 			if testCase.client != nil {
 				testCase.client(client)
 			}
@@ -219,7 +220,7 @@ func TestLinearReferenceCatalogCollectsTeamsMembersProjectsAndOwnership(t *testi
 	batch, err := (LinearReferenceCatalogRouteHandler{PerPage: 50, MaxPages: 10}).CollectReferenceCatalog(
 		context.Background(), teamCatalogRefFromClaim(claim),
 		providerfoundation.Credential{Provider: "linear", ID: claim.CredentialID},
-		linearWorkItemsClient(t, doer),
+		linearWorkItemsClient(t, fakehttp.Client(doer)),
 		TeamCatalogSelections{Teams: true, Members: true, Projects: true}, observed,
 	)
 	if err != nil {
@@ -341,7 +342,7 @@ func TestLinearReferenceCatalogDoesNotRetireFromCappedOrMalformedProjects(t *tes
 			batch, err := testCase.handler.CollectReferenceCatalog(
 				context.Background(), ref,
 				providerfoundation.Credential{Provider: "linear", ID: claim.CredentialID},
-				linearWorkItemsClient(t, doer),
+				linearWorkItemsClient(t, fakehttp.Client(doer)),
 				TeamCatalogSelections{Teams: true, Members: true, Projects: true}, time.Date(2026, 8, 10, 12, 0, 0, 0, time.UTC),
 			)
 			if err == nil || !errors.Is(err, testCase.wantErr) || batch.Failure == nil || batch.Failure.Code != testCase.code || batch.Effects.Batches()[0].Destination != "" {
@@ -370,7 +371,7 @@ func TestLinearReferenceCatalogNonStrictMalformedProjectsKeepsOtherRows(t *testi
 	batch, err := (LinearReferenceCatalogRouteHandler{PerPage: 50, MaxPages: 10}).CollectReferenceCatalog(
 		context.Background(), ref,
 		providerfoundation.Credential{Provider: "linear", ID: claim.CredentialID},
-		linearWorkItemsClient(t, doer),
+		linearWorkItemsClient(t, fakehttp.Client(doer)),
 		TeamCatalogSelections{Teams: true, Members: true, Projects: true}, time.Date(2026, 8, 10, 12, 0, 0, 0, time.UTC),
 	)
 	if err != nil {
@@ -396,7 +397,7 @@ func TestLinearReferenceCatalogPaginatesLargeTeamMemberships(t *testing.T) {
 	batch, err := (LinearReferenceCatalogRouteHandler{PerPage: 50, MaxPages: 10}).CollectReferenceCatalog(
 		context.Background(), teamCatalogRefFromClaim(claim),
 		providerfoundation.Credential{Provider: "linear", ID: claim.CredentialID},
-		linearWorkItemsClient(t, doer),
+		linearWorkItemsClient(t, fakehttp.Client(doer)),
 		TeamCatalogSelections{Teams: true, Members: true, Projects: true}, time.Date(2026, 8, 10, 12, 0, 0, 0, time.UTC),
 	)
 	if err != nil || batch.Result.Members != 2 || batch.Evidence.Requests != 4 || !batch.Evidence.MembersComplete {
@@ -457,7 +458,7 @@ func TestLinearReferenceCatalogCollectCountsFailedAndRetriedAttempts(t *testing.
 		}
 	})
 	client, err := providerfoundation.NewHTTPClient(
-		"linear", "https://api.linear.app", doer,
+		"linear", "https://api.linear.app", fakehttp.Client(doer),
 		func(*http.Request) error { return nil },
 		providerfoundation.RetryPolicy{MaxAttempts: 2, InitialWait: time.Nanosecond, MaxWait: time.Nanosecond},
 		providerfoundation.LeaseGuardFunc(func(context.Context) error { return nil }),
@@ -503,7 +504,7 @@ func TestLinearReferenceCatalogCountsMultiplePagesOnce(t *testing.T) {
 	batch, err := (LinearReferenceCatalogRouteHandler{PerPage: 50, MaxPages: 10}).CollectReferenceCatalog(
 		context.Background(), teamCatalogRefFromClaim(claim),
 		providerfoundation.Credential{Provider: "linear", ID: claim.CredentialID},
-		linearWorkItemsClient(t, doer),
+		linearWorkItemsClient(t, fakehttp.Client(doer)),
 		TeamCatalogSelections{Teams: true, Members: true, Projects: true}, time.Date(2026, 8, 10, 12, 0, 0, 0, time.UTC),
 	)
 	if err != nil || batch.Evidence.Requests != 3 || batch.Evidence.Pages != 3 || !batch.Result.Complete {
@@ -529,7 +530,7 @@ func TestLinearReferenceCatalogNonStrictCycleFailureKeepsOtherRows(t *testing.T)
 	batch, err := (LinearReferenceCatalogRouteHandler{PerPage: 50, MaxPages: 10}).CollectReferenceCatalog(
 		context.Background(), ref,
 		providerfoundation.Credential{Provider: "linear", ID: claim.CredentialID},
-		linearWorkItemsClient(t, doer),
+		linearWorkItemsClient(t, fakehttp.Client(doer)),
 		TeamCatalogSelections{Teams: true, Members: true, Projects: true}, time.Date(2026, 8, 10, 12, 0, 0, 0, time.UTC),
 	)
 	if err != nil {
@@ -558,7 +559,7 @@ func TestLinearReferenceCatalogStrictCycleFailureAbortsTheWholeCall(t *testing.T
 	batch, err := (LinearReferenceCatalogRouteHandler{PerPage: 50, MaxPages: 10}).CollectReferenceCatalog(
 		context.Background(), ref,
 		providerfoundation.Credential{Provider: "linear", ID: claim.CredentialID},
-		linearWorkItemsClient(t, doer),
+		linearWorkItemsClient(t, fakehttp.Client(doer)),
 		TeamCatalogSelections{Teams: true, Members: true, Projects: true}, time.Date(2026, 8, 10, 12, 0, 0, 0, time.UTC),
 	)
 	if err == nil || !errors.Is(err, providerfoundation.ErrGraphQLResponse) {
@@ -627,7 +628,7 @@ func chaos4530CollectReferenceCatalog(t *testing.T, selectProjects bool) LinearR
 	batch, err := (LinearReferenceCatalogRouteHandler{PerPage: 50, MaxPages: 10}).CollectReferenceCatalog(
 		context.Background(), teamCatalogRefFromClaim(claim),
 		providerfoundation.Credential{Provider: "linear", ID: claim.CredentialID},
-		linearWorkItemsClient(t, doer),
+		linearWorkItemsClient(t, fakehttp.Client(doer)),
 		TeamCatalogSelections{Teams: true, Members: true, Projects: selectProjects}, time.Date(2026, 8, 10, 12, 0, 0, 0, time.UTC),
 	)
 	if err != nil {
@@ -736,7 +737,7 @@ identities:
 	batch, err := (LinearReferenceCatalogRouteHandler{PerPage: 50, MaxPages: 10}).CollectReferenceCatalog(
 		context.Background(), teamCatalogRefFromClaim(claim),
 		providerfoundation.Credential{Provider: "linear", ID: claim.CredentialID},
-		linearWorkItemsClient(t, doer),
+		linearWorkItemsClient(t, fakehttp.Client(doer)),
 		TeamCatalogSelections{Teams: true, Members: true}, observed,
 	)
 	if err != nil {

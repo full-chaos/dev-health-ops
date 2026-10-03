@@ -3,6 +3,7 @@ package providersync
 import (
 	"context"
 	"errors"
+	"github.com/full-chaos/dev-health-ops/internal/testsupport/fakehttp"
 	"io"
 	"net/http"
 	"os"
@@ -51,7 +52,7 @@ func (doer *githubTeamCatalogFixtureDoer) Do(request *http.Request) (*http.Respo
 func githubTeamCatalogTestClient(t *testing.T, doer providerfoundation.HTTPDoer) *providerfoundation.HTTPClient {
 	t.Helper()
 	client, err := providerfoundation.NewHTTPClient(
-		"github", "https://api.github.com", doer,
+		"github", "https://api.github.com", fakehttp.Client(doer),
 		func(*http.Request) error { return nil },
 		providerfoundation.RetryPolicy{MaxAttempts: 1, InitialWait: time.Nanosecond, MaxWait: time.Nanosecond},
 		providerfoundation.LeaseGuardFunc(func(context.Context) error { return nil }),
@@ -71,7 +72,7 @@ func TestGitHubTeamCatalogCollectWritesTeamsAndMemberships(t *testing.T) {
 		"/orgs/acme/teams/platform/members": `[{"login":"octocat"},{"login":"monalisa"}]`,
 	}}
 	collector := GitHubTeamCatalogRouteHandler{
-		Client: githubTeamCatalogTestClient(t, doer), OrgName: "acme",
+		Client: githubTeamCatalogTestClient(t, fakehttp.Client(doer)), OrgName: "acme",
 		Now: func() time.Time { return now }, ResolveEmail: false,
 	}
 	rows, evidence, err := collector.Collect(context.Background(), "org-1", true, true)
@@ -152,7 +153,7 @@ func TestGitHubTeamCatalogCollectCountsFailedAndRetriedAttempts(t *testing.T) {
 		}
 	})
 	client, err := providerfoundation.NewHTTPClient(
-		"github", "https://api.github.com", doer,
+		"github", "https://api.github.com", fakehttp.Client(doer),
 		func(*http.Request) error { return nil },
 		providerfoundation.RetryPolicy{
 			MaxAttempts: 2, InitialWait: time.Nanosecond, MaxWait: time.Nanosecond,
@@ -193,7 +194,7 @@ func TestGitHubTeamCatalogCollectMembersOnlySkipsRepoFetch(t *testing.T) {
 		"/orgs/acme/teams/platform/members": `[{"login":"octocat"}]`,
 	}}
 	collector := GitHubTeamCatalogRouteHandler{
-		Client: githubTeamCatalogTestClient(t, doer), OrgName: "acme",
+		Client: githubTeamCatalogTestClient(t, fakehttp.Client(doer)), OrgName: "acme",
 		Now: func() time.Time { return now }, ResolveEmail: false,
 	}
 	rows, _, err := collector.Collect(context.Background(), "org-1", false, true)
@@ -221,7 +222,7 @@ func TestGitHubTeamCatalogCollectTeamsOnlySkipsMembersFetch(t *testing.T) {
 		"/orgs/acme/teams/platform/repos": "[]",
 	}}
 	collector := GitHubTeamCatalogRouteHandler{
-		Client: githubTeamCatalogTestClient(t, doer), OrgName: "acme",
+		Client: githubTeamCatalogTestClient(t, fakehttp.Client(doer)), OrgName: "acme",
 		Now: func() time.Time { return now }, ResolveEmail: false,
 	}
 	rows, _, err := collector.Collect(context.Background(), "org-1", true, false)
@@ -258,7 +259,7 @@ func TestGitHubTeamCatalogCollectSkipsTeamOnMemberFetchFailure(t *testing.T) {
 		},
 	}
 	collector := GitHubTeamCatalogRouteHandler{
-		Client: githubTeamCatalogTestClient(t, doer), OrgName: "acme",
+		Client: githubTeamCatalogTestClient(t, fakehttp.Client(doer)), OrgName: "acme",
 		Now: func() time.Time { return now }, ResolveEmail: false,
 	}
 	rows, evidence, err := collector.Collect(context.Background(), "org-1", true, true)
@@ -290,7 +291,7 @@ func TestGitHubTeamCatalogCollectFailsClosedOnMemberFetchFailureUnderStrict(t *t
 		"/orgs/acme/teams/platform/members": `not json`,
 	}}
 	collector := GitHubTeamCatalogRouteHandler{
-		Client: githubTeamCatalogTestClient(t, doer), OrgName: "acme",
+		Client: githubTeamCatalogTestClient(t, fakehttp.Client(doer)), OrgName: "acme",
 		Now: func() time.Time { return now }, ResolveEmail: false, Strict: true,
 	}
 	if _, _, err := collector.Collect(context.Background(), "org-1", true, true); err == nil {
@@ -305,7 +306,7 @@ func TestGitHubTeamCatalogCollectFailsClosedOnInvalidInput(t *testing.T) {
 		"/orgs/acme/teams": `[]`,
 	}}
 	collector := GitHubTeamCatalogRouteHandler{
-		Client: githubTeamCatalogTestClient(t, doer), OrgName: "acme",
+		Client: githubTeamCatalogTestClient(t, fakehttp.Client(doer)), OrgName: "acme",
 		Now: func() time.Time { return now },
 	}
 	if _, _, err := collector.Collect(context.Background(), "", true, true); err != ErrInvalidConfiguration {
@@ -331,7 +332,7 @@ func TestGitHubTeamCatalogCollectResolvesMemberEmail(t *testing.T) {
 		"/users/octocat":                    `{"login":"octocat","email":"octocat@example.com"}`,
 	}}
 	collector := GitHubTeamCatalogRouteHandler{
-		Client: githubTeamCatalogTestClient(t, doer), OrgName: "acme",
+		Client: githubTeamCatalogTestClient(t, fakehttp.Client(doer)), OrgName: "acme",
 		Now: func() time.Time { return now }, ResolveEmail: true,
 	}
 	rows, _, err := collector.Collect(context.Background(), "org-1", true, true)
@@ -384,7 +385,7 @@ identities:
 		"/orgs/acme/teams/platform/members": `[{"login":"octocat"}]`,
 	}}
 	collector := GitHubTeamCatalogRouteHandler{
-		Client: githubTeamCatalogTestClient(t, doer), OrgName: "acme",
+		Client: githubTeamCatalogTestClient(t, fakehttp.Client(doer)), OrgName: "acme",
 		Now: func() time.Time { return now }, ResolveEmail: false,
 	}
 	rows, _, err := collector.Collect(context.Background(), "org-1", true, true)

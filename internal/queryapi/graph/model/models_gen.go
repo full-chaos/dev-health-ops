@@ -402,6 +402,24 @@ type BusFactorScopeInput struct {
 	TeamID *string `json:"teamId,omitempty"`
 }
 
+// One forecast's simulation results as histograms: for each mode, the distinct
+// outcomes of the runs and how many runs produced each, ascending by value. A
+// mode that did not simulate is null. The counts of one mode sum to the
+// forecast's simulation count, so any percentile can be recomputed from the bins.
+type CapacityDistribution struct {
+	// Fixed-scope mode: days to complete the target items, one bin per distinct day count.
+	Days []CapacityDistributionBin `json:"days,omitempty"`
+	// Fixed-date mode: items completed by the target date, one bin per distinct total.
+	Items []CapacityDistributionBin `json:"items,omitempty"`
+}
+
+type CapacityDistributionBin struct {
+	// The outcome: a day count (days) or an item count (items).
+	Value int `json:"value"`
+	// How many simulation runs ended on this value.
+	Count int `json:"count"`
+}
+
 type CapacityForecast struct {
 	ForecastID          string            `json:"forecastId"`
 	ComputedAt          string            `json:"computedAt"`
@@ -424,6 +442,10 @@ type CapacityForecast struct {
 	HistoryDays         int               `json:"historyDays"`
 	InsufficientHistory bool              `json:"insufficientHistory"`
 	HighVariance        bool              `json:"highVariance"`
+	// The Monte Carlo distribution the p50 / p85 / p95 above were taken from, as
+	// histograms (CHAOS-7624). Null = no distribution: a forecast stored before it
+	// existed, or one where neither mode simulated. Never an object of zero bins.
+	CompletionDistribution *CapacityDistribution `json:"completionDistribution,omitempty"`
 }
 
 type CapacityForecastConnection struct {
@@ -447,6 +469,7 @@ type CapacityForecastFilterInput struct {
 
 type CapacityForecastInput struct {
 	TeamID      *string           `json:"teamId,omitempty"`
+	TeamIds     []string          `json:"teamIds,omitempty"`
 	WorkScopeID *string           `json:"workScopeId,omitempty"`
 	TargetItems *int              `json:"targetItems,omitempty"`
 	TargetDate  *graphqldate.Date `json:"targetDate,omitempty"`

@@ -3,6 +3,7 @@ package providersync
 import (
 	"bytes"
 	"context"
+	"github.com/full-chaos/dev-health-ops/internal/testsupport/fakehttp"
 	"log/slog"
 	"net/http"
 	"strings"
@@ -35,7 +36,7 @@ func TestJiraBoardSprintSkipLogsNoProviderText(t *testing.T) {
 	}}
 	_, err := JiraTeamCatalogRouteHandler{}.CollectTeamCatalog(context.Background(),
 		TeamCatalogReference{OrgID: "org-1", SyncRunID: "run-1", Strict: true},
-		providerfoundation.Credential{Provider: "jira"}, jiraTeamCatalogTestClient(t, doer),
+		providerfoundation.Credential{Provider: "jira"}, jiraTeamCatalogTestClient(t, fakehttp.Client(doer)),
 		TeamCatalogSelections{Teams: true}, time.Date(2026, 8, 30, 12, 0, 0, 0, time.UTC))
 	if err != nil {
 		t.Fatal(err)

@@ -3,14 +3,15 @@
 package remaining
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
 	"math"
 	"net/url"
-	"os/exec"
+	"os"
 	"path/filepath"
-	"runtime"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -20,7 +21,7 @@ import (
 
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/chschema"
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/containers"
-	"github.com/full-chaos/dev-health-ops/internal/testsupport/pyoracle"
+	"github.com/full-chaos/dev-health-ops/internal/testsupport/venueoracle"
 )
 
 // End-to-end loader parity against a real ClickHouse.
@@ -31,6 +32,11 @@ import (
 // a `<=` where the reference has `<` -- would pass it while diverging in
 // production. This test closes that gap the only way it can be closed: run the
 // SHIPPED PYTHON LOADER and the Go loader against the SAME DATABASE and compare.
+//
+// CHAOS-8303: the Python loader's answers are FROZEN. They were produced once by the record verb on the pinned build
+// (loaderPythonBuild) against this fixture, one per (team, org) of loaderCases, and are replayed from
+// testdata/golden/recommendations_loader_clickhouse.json with no Python started; the Go loader still runs against a real ClickHouse
+// seeded with the same fixture and is compared field by field (floats as exact bit patterns) with those answers.
 //
 // It also carries the CHAOS-4897 two-team fixture. Teams A and B are given
 // DIFFERENT underlying data AND disjoint team_repo_ownership rows, and the
@@ -89,8 +95,12 @@ const (
 	// stored directly -- which is how it would actually arise in production.
 	// Its own org, so the primary fixture's assertions are undisturbed.
 	loaderInfOrgID = "org-loader-infinite"
-	loaderTeamA    = "team-alpha"
-	loaderTeamB    = "team-beta"
+	// An org that holds SEVERAL computed_at versions of the same key in every table the loader reads with argMax, and whose only
+	// team owns EVERY repo of the org, so the four owned-repo-scoped fields equal the org-wide Python reference and are compared
+	// strictly (CHAOS-8319). See seedVersionedOrg.
+	loaderVersionsOrgID = "org-loader-versions"
+	loaderTeamA         = "team-alpha"
+	loaderTeamB         = "team-beta"
 	// A team in the PRIMARY org with NO team_repo_ownership rows at all --
 	// the empty-ownership boundary team-lead asked to pin explicitly: a team
 	// that owns zero repos must get ABSENT for the four CHAOS-4897 signals,
@@ -152,8 +162,9 @@ type pythonSnapshot struct {
 	CompoundingRiskSever   string   `json:"compounding_risk_severity"`
 }
 
-func TestRecommendationsLoaderMatchesPythonAgainstClickHouse(t *testing.T) {
+func TestRecommendationsLoaderMatchesFrozenPythonAgainstClickHouse(t *testing.T) {
 	ctx := context.Background()
+	frozen := venueoracle.OpenGolden(t, loaderGolden(t.Name(), loaderGoldenDigest))
 
 	instance, err := containers.StartClickHouse(ctx)
 	if err != nil {
@@ -168,6 +179,10 @@ func TestRecommendationsLoaderMatchesPythonAgainstClickHouse(t *testing.T) {
 	}
 	conn := openLoaderClickHouse(t, ctx, dsn)
 	defer seedLoaderFixture(t, ctx, conn)()
+
+	// The Python loader's answers for every (team, org) this test compares: recorded once on the pinned build against this fixture
+	// by the record verb, frozen, and replayed here with no Python started.
+	python := frozenPythonSnapshots(t, frozen, dsn)
 
 	loader, err := NewRecommendationsLoader(conn, loaderOrgID)
 	if err != nil {
@@ -184,7 +199,7 @@ func TestRecommendationsLoaderMatchesPythonAgainstClickHouse(t *testing.T) {
 		}
 		snapshots[teamID] = got
 
-		want := runPythonLoader(t, dsn, teamID, loaderOrgID)
+		want := python.of(t, teamID, loaderOrgID)
 		// true: alpha and beta own disjoint repo sets in this fixture (seeded
 		// below), so the four CHAOS-4897 fields are SUPPOSED to diverge from
 		// Python here -- see assertCHAOS4897FixIsPresent.
@@ -194,8 +209,11 @@ func TestRecommendationsLoaderMatchesPythonAgainstClickHouse(t *testing.T) {
 	assertCHAOS4897FixIsPresent(t, snapshots[loaderTeamA], snapshots[loaderTeamB])
 	assertOwnershipIsResolvedAsOfWindowEnd(t, snapshots[loaderTeamA])
 	assertZeroOwnedReposIsAbsentNotOrgWide(t, ctx, conn, loader, windowStart, windowEnd)
-	assertHotspotBoundaryIsMeasured(t, ctx, conn, dsn)
+	assertHotspotBoundaryIsMeasured(t, ctx, conn, python)
 	assertArgMaxKeysAreUnique(t, ctx, conn)
+
+	frozen.SkipDiff(t)
+	frozen.Finish(t)
 }
 
 // assertOwnershipIsResolvedAsOfWindowEnd closes TWO related codex-review
@@ -470,32 +488,115 @@ func compareSnapshotAgainstPython(t *testing.T, teamID string, got MetricsSnapsh
 	}
 }
 
-func runPythonLoader(t *testing.T, dsn, teamID, orgID string) pythonSnapshot {
+// loaderPythonBuild is the build whose Python recommendations loader the golden holds the answers of: main before the Python loader
+// was deleted.
+const loaderPythonBuild = "a4847c5e93607451a0c987b314d37e02fc43ce85"
+
+// loaderGoldenDigest is the SHA-256 of the golden file, pinned by the record verb ("PIN:..." until its first recording).
+const loaderGoldenDigest = "02985f130dbeb78b985c0e49156833b90b336e18ec932f97274447f77223c4c8"
+
+// loaderGolden is the GoldenSpec of the loader oracle: test is the oracle's function name, digest the SHA-256 the test pins.
+func loaderGolden(test, digest string) venueoracle.GoldenSpec {
+	return venueoracle.GoldenSpec{
+		Path:        "testdata/golden/recommendations_loader_clickhouse.json",
+		PythonBuild: loaderPythonBuild,
+		SHA256:      digest,
+		Recipe: fmt.Sprintf("git worktree add --detach $DIR %s (with its .venv: uv sync --frozen --no-install-project); then from the repository root: "+
+			"go run ./internal/testsupport/venueoracle/goldenrecord -pkg ./internal/jobs/metrics/remaining/ -test '^%s$' -python-root $DIR "+
+			"(records on the pinned build, replays the candidate in a fresh process, and only then promotes it and pins its digest)",
+			loaderPythonBuild, test),
+	}
+}
+
+// loaderProducerEnv is the environment entries that shape the producer's answer; with PATH, HOME and the pinned sources on PYTHONPATH
+// they are the whole environment the producer gets.
+var loaderProducerEnv = map[string]string{"PYTHONHASHSEED": "0", "PYTHONUTF8": "1"}
+
+// loaderCases is every (team, org) pair the test compares with the Python loader, in the order they are asked and recorded.
+var loaderCases = [][2]string{
+	{loaderTeamA, loaderOrgID},
+	{loaderTeamB, loaderOrgID},
+	{loaderTeamA, loaderInfOrgID},
+	{loaderTeamA, loaderEmptyOrgID},
+	{loaderTeamA, loaderOneHotspotOrgID},
+	{loaderTeamA, loaderVersionsOrgID},
+}
+
+// frozenSnapshots is the Python loader's answer per (team, org).
+type frozenSnapshots map[string]pythonSnapshot
+
+func (f frozenSnapshots) of(t *testing.T, team, org string) pythonSnapshot {
+	t.Helper()
+	snapshot, ok := f[team+"|"+org]
+	if !ok {
+		t.Fatalf("no Python loader answer for team %q org %q: loaderCases does not list it", team, org)
+	}
+	return snapshot
+}
+
+// frozenPythonSnapshots asks the golden for the Python loader's answers for loaderCases: replayed from the file (no Python started), or,
+// while the record verb records, produced by the shipped Python loader reading the SAME rows from the SAME database the Go loader reads.
+func frozenPythonSnapshots(t *testing.T, golden *venueoracle.Golden, dsn string) frozenSnapshots {
 	t.Helper()
 	root, err := filepath.Abs("../../../..")
 	if err != nil {
 		t.Fatalf("resolve repo root: %v", err)
 	}
-	script := filepath.Join(root,
-		"internal/jobs/metrics/remaining/testdata/run_recommendations_loader_against_clickhouse.py")
-	python := loaderPythonBinary(t)
-
-	command := exec.Command(python, script,
-		"--dsn", dsn, "--team", teamID, "--org", orgID,
-		"--window-start", loaderWindowStart, "--window-end", loaderWindowEnd)
-	output, err := command.CombinedOutput()
+	root = golden.PythonRoot(t, root)
+	program, err := os.ReadFile("testdata/run_recommendations_loader_against_clickhouse.py")
 	if err != nil {
-		t.Fatalf("python loader (%s) failed: %v\n%s", teamID, err, output)
+		t.Fatal(err)
 	}
-	// The script prints exactly one JSON object on the last non-empty line;
-	// anything the client library logs before it is tolerated rather than
-	// assumed absent.
-	lines := strings.Split(strings.TrimSpace(string(output)), "\n")
-	var snapshot pythonSnapshot
-	if err := json.Unmarshal([]byte(lines[len(lines)-1]), &snapshot); err != nil {
-		t.Fatalf("decode python snapshot (%s): %v\nfull output:\n%s", teamID, err, output)
+	var requests []venueoracle.Request
+	var stdins [][]byte
+	for _, c := range loaderCases {
+		stdin, marshalErr := json.Marshal(map[string]string{
+			"team": c[0], "org": c[1], "window_start": loaderWindowStart, "window_end": loaderWindowEnd})
+		if marshalErr != nil {
+			t.Fatal(marshalErr)
+		}
+		stdins = append(stdins, stdin)
+		requests = append(requests, venueoracle.ProgramRequest(
+			fmt.Sprintf("recommendations loader team=%s org=%s", c[0], c[1]), string(program), stdin, loaderProducerEnv))
 	}
-	return snapshot
+	answers := golden.Produce(t, root, requests, func(producer *venueoracle.Producer, _ []venueoracle.Request) []venueoracle.Response {
+		producer.RequireDeployed()
+		live := make([]venueoracle.Response, 0, len(requests))
+		for index, c := range loaderCases {
+			command, commandErr := producer.Command(context.Background(), loaderProducerEnv, []string{"CLICKHOUSE_URI=" + dsn}, "-c", string(program))
+			if commandErr != nil {
+				t.Fatal(commandErr)
+			}
+			command.Dir = root
+			command.Stdin = bytes.NewReader(stdins[index])
+			var stdout, stderr bytes.Buffer
+			command.Stdout = &stdout
+			command.Stderr = &stderr
+			if runErr := command.Run(); runErr != nil {
+				t.Fatalf("python loader (%s, %s) failed: %v\nstdout:\n%s\nstderr:\n%s", c[0], c[1], runErr, stdout.Bytes(), stderr.Bytes())
+			}
+			live = append(live, venueoracle.Response{Status: 0, Body: lastJSONLine(t, stdout.String())})
+		}
+		return live
+	})
+	golden.Consumed(t, answers...)
+	snapshots := frozenSnapshots{}
+	for index, c := range loaderCases {
+		var snapshot pythonSnapshot
+		if decodeErr := json.Unmarshal([]byte(answers[index].Body), &snapshot); decodeErr != nil {
+			t.Fatalf("decode the Python snapshot (%s, %s): %v\nbody:\n%s", c[0], c[1], decodeErr, answers[index].Body)
+		}
+		snapshots[c[0]+"|"+c[1]] = snapshot
+	}
+	return snapshots
+}
+
+// lastJSONLine is the producer's answer: the script prints exactly one JSON object on its last non-empty line; anything the client library
+// logs before it is tolerated rather than assumed absent.
+func lastJSONLine(t *testing.T, output string) string {
+	t.Helper()
+	lines := strings.Split(strings.TrimSpace(output), "\n")
+	return lines[len(lines)-1]
 }
 
 func openLoaderClickHouse(t *testing.T, ctx context.Context, dsn string) driver.Conn {
@@ -1089,7 +1190,178 @@ func seedLoaderFixture(t *testing.T, ctx context.Context, conn driver.Conn) (res
 		loaderOrgID, mustDate(t, "2026-08-20"), loaderTeamA, 0.62,
 		mustTimestamp(t, "2026-08-21 00:00:00"))
 
+	seedVersionedOrg(t, ctx, conn)
+
 	return restoreMerges
+}
+
+// seedVersionedOrg seeds loaderVersionsOrgID: for every table the loader reads with argMax(..., computed_at), the same key holds an
+// OLDER and a NEWER computed_at version whose values differ, with the NEWER one the lower (or NULL) so that max() or argMin() in
+// place of argMax answers differently. Every row has the shape the daily writers emit: an append-only day row, a re-run of the
+// day under a later computed_at (the design's append-only daily tables read by argMax, never merged away in the window a reader
+// sees: the merges of these tables are stopped above), a Nullable cycle time that the work-item writer leaves NULL for a day
+// with nothing completed, a team owning every repo of the org with an open-ended ownership row as the ownership sync writes.
+// loaderTeamA owns both repos, so the owned-repo fields are the org-wide ones and are compared with the Python reference.
+func seedVersionedOrg(t *testing.T, ctx context.Context, conn driver.Conn) {
+	t.Helper()
+	exec := func(query string, args ...any) {
+		if err := conn.Exec(ctx, query, args...); err != nil {
+			t.Fatalf("seed versioned org failed: %v\nquery: %s", err, query)
+		}
+	}
+	const (
+		repoOne = "55555555-5555-5555-5555-555555555551"
+		repoTwo = "55555555-5555-5555-5555-555555555552"
+	)
+	for _, repo := range []string{repoOne, repoTwo} {
+		exec(`INSERT INTO team_repo_ownership
+			(org_id, provider, team_id, repo_id, repo_full_name, match_type,
+			 source, is_primary, specificity, priority, valid_from, valid_to, updated_at)
+			VALUES (?, 'github', ?, ?, 'versions/' || ?, 'exact', 'inferred', 0, 1, 0, ?, NULL, ?)`,
+			loaderVersionsOrgID, loaderTeamA, repo, repo,
+			mustTimestamp(t, "2026-01-01 00:00:00"), mustTimestamp(t, "2026-01-01 00:00:00"))
+	}
+
+	// review latency and rework (argMax over a repo's rows in the window): repoOne's NEWEST row is the LOWER one.
+	for _, seed := range []struct {
+		repo, day, computedAt string
+		p75, rework           float64
+	}{
+		{repoOne, "2026-08-05", "2026-08-06 00:00:00", 90.0, 0.90},
+		{repoOne, "2026-08-10", "2026-08-11 00:00:00", 20.0, 0.10},
+		{repoTwo, "2026-08-08", "2026-08-09 00:00:00", 40.0, 0.40},
+	} {
+		exec(`INSERT INTO repo_metrics_daily
+			(repo_id, day, commits_count, total_loc_touched, avg_commit_size_loc,
+			 large_commit_ratio, prs_merged, median_pr_cycle_hours, pr_cycle_p75_hours,
+			 pr_cycle_p90_hours, prs_with_first_review, large_pr_ratio, pr_rework_ratio,
+			 change_failure_rate, computed_at, org_id)
+			VALUES (?, ?, 0, 0, 0, 0, 0, 0, ?, 0, 0, 0, ?, 0, ?, ?)`,
+			seed.repo, mustDate(t, seed.day), seed.p75, seed.rework,
+			mustTimestamp(t, seed.computedAt), loaderVersionsOrgID)
+	}
+
+	// complexity halves (argMax per (day, repo)): the first-half day of repoOne is re-run with a LOWER value; the second half rises.
+	for _, seed := range []struct {
+		repo, day, computedAt string
+		cpk                   float64
+	}{
+		{repoOne, "2026-08-05", "2026-08-06 00:00:00", 100.0},
+		{repoOne, "2026-08-05", "2026-08-07 00:00:00", 40.0},
+		{repoOne, "2026-08-20", "2026-08-21 00:00:00", 60.0},
+	} {
+		exec(`INSERT INTO repo_complexity_daily
+			(repo_id, day, cyclomatic_per_kloc, computed_at, org_id)
+			VALUES (?, ?, ?, ?, ?)`,
+			seed.repo, mustDate(t, seed.day), seed.cpk, mustTimestamp(t, seed.computedAt), loaderVersionsOrgID)
+	}
+
+	// hotspots: the only file of the second half has risk_score 0 (a file the hotspot job scored and found no risk in), twice
+	// (an older and a newer version, both 0): `risk_score > 0` counts none, so churn_overlap is ABSENT although complexity rises.
+	for _, computedAt := range []string{"2026-08-21 00:00:00", "2026-08-22 00:00:00"} {
+		exec(`INSERT INTO file_hotspot_daily
+			(repo_id, day, file_path, risk_score, computed_at, org_id)
+			VALUES (?, ?, ?, ?, ?, ?)`,
+			repoOne, mustDate(t, "2026-08-20"), "versions/quiet.py", 0.0,
+			mustTimestamp(t, computedAt), loaderVersionsOrgID)
+	}
+
+	// reviewer gini (argMax per (repo, author, day)): author one's day is re-run with FEWER reviews; author two has one version.
+	for _, seed := range []struct {
+		email, computedAt string
+		reviews           uint32
+	}{
+		{"one@versions.example", "2026-08-06 00:00:00", 10},
+		{"one@versions.example", "2026-08-07 00:00:00", 2},
+		{"two@versions.example", "2026-08-06 00:00:00", 10},
+	} {
+		exec(`INSERT INTO user_metrics_daily
+			(repo_id, day, author_email, commits_count, team_id, reviews_given,
+			 computed_at, org_id)
+			VALUES (?, ?, ?, 0, ?, ?, ?, ?)`,
+			repoOne, mustDate(t, "2026-08-05"), seed.email, loaderTeamA,
+			seed.reviews, mustTimestamp(t, seed.computedAt), loaderVersionsOrgID)
+	}
+
+	// after-hours ratio (argMax of commits and of after-hours commits, same (day, repo_id)): the re-run has FEWER commits.
+	for _, seed := range []struct {
+		computedAt     string
+		commits, after uint32
+	}{
+		{"2026-08-06 00:00:00", 100, 50},
+		{"2026-08-07 00:00:00", 10, 5},
+	} {
+		exec(`INSERT INTO team_metrics_daily
+			(day, team_id, repo_id, commits_count, after_hours_commits_count,
+			 computed_at, org_id)
+			VALUES (?, ?, ?, ?, ?, ?, ?)`,
+			mustDate(t, "2026-08-05"), loaderTeamA, repoOne, seed.commits, seed.after,
+			mustTimestamp(t, seed.computedAt), loaderVersionsOrgID)
+	}
+
+	// cycle times: 08-05 and 08-06 have one version each. 08-07 holds an older value and a NEWER NULL: the Go loader tuple-wraps its
+	// argMax (the NULL newest row wins and the day is DROPPED), the Python reference's plain argMax skips the NULL (the day keeps
+	// the older value). A recorded Go-plane decision (CHAOS-4547, PR 2568), a NAMED divergence declared in the comparison below.
+	for _, seed := range []struct {
+		day, computedAt string
+		cycle           *float64
+	}{
+		{"2026-08-05", "2026-08-06 00:00:00", ptr(12.0)},
+		{"2026-08-06", "2026-08-07 00:00:00", ptr(8.0)},
+		// 08-07 is re-run with a NULL cycle time (the work-item writer leaves it NULL for a day with nothing completed): the
+		// DECLARED divergence of CHAOS-4547 / PR 2568 (see assertVersionedRowsAreReadAsNewest).
+		{"2026-08-07", "2026-08-08 00:00:00", ptr(15.0)},
+		{"2026-08-07", "2026-08-09 00:00:00", nil},
+	} {
+		exec(`INSERT INTO work_item_metrics_daily
+			(day, provider, work_scope_id, team_id, team_name, items_started, items_completed,
+			 items_started_unassigned, items_completed_unassigned, wip_count_end_of_day,
+			 wip_unassigned_end_of_day, cycle_time_p50_hours, bug_completed_ratio,
+			 story_points_completed, computed_at, org_id)
+			VALUES (?, 'github', 'versions/scope', ?, '', 0, 1, 0, 0, 1, 0, ?, 0, 0, ?, ?)`,
+			mustDate(t, seed.day), loaderTeamA, seed.cycle,
+			mustTimestamp(t, seed.computedAt), loaderVersionsOrgID)
+	}
+
+	// persisted compounding risk (argMax over the (score, severity) tuple): an OLDER row with another score and severity.
+	for _, seed := range []struct {
+		day, computedAt, severity string
+		score                     float64
+	}{
+		{"2026-08-03", "2026-08-04 06:30:00", "low", 0.30},
+		{"2026-08-20", "2026-08-27 06:30:00", "high", 0.80},
+	} {
+		exec(`INSERT INTO compounding_risk_daily
+			(org_id, day, scope, scope_id, compounding_risk, severity,
+			 w_churn, w_complexity, w_ownership, w_review, computed_at)
+			VALUES (?, ?, 'team', ?, ?, ?, 0, 0, 0, 0, ?)`,
+			loaderVersionsOrgID, mustDate(t, seed.day), loaderTeamA, seed.score, seed.severity,
+			mustTimestamp(t, seed.computedAt))
+	}
+}
+
+func ptr(value float64) *float64 { return &value }
+
+// bitsHex is the exact-bit encoding the Python producer prints for a float.
+func bitsHex(values []float64) []string {
+	encoded := make([]string, 0, len(values))
+	for _, value := range values {
+		encoded = append(encoded, strconv.FormatUint(math.Float64bits(value), 16))
+	}
+	return encoded
+}
+
+func decodeBits(t *testing.T, encoded []string) []float64 {
+	t.Helper()
+	values := make([]float64, 0, len(encoded))
+	for _, text := range encoded {
+		raw, err := strconv.ParseUint(text, 16, 64)
+		if err != nil {
+			t.Fatalf("parse %q: %v", text, err)
+		}
+		values = append(values, math.Float64frombits(raw))
+	}
+	return values
 }
 
 func mustTimestamp(t *testing.T, text string) time.Time {
@@ -1116,7 +1388,7 @@ func mustTimestamp(t *testing.T, text string) time.Time {
 //
 // Compared against the Python reference on the same empty org rather than
 // against a hard-coded expectation, so it stays a parity assertion.
-func assertHotspotBoundaryIsMeasured(t *testing.T, ctx context.Context, conn driver.Conn, dsn string) {
+func assertHotspotBoundaryIsMeasured(t *testing.T, ctx context.Context, conn driver.Conn, python frozenSnapshots) {
 	t.Helper()
 
 	// PRECONDITION: the instrument must be live before a null reading is
@@ -1163,7 +1435,7 @@ func assertHotspotBoundaryIsMeasured(t *testing.T, ctx context.Context, conn dri
 			infinite.ReviewLatencyP75Hours)
 	}
 	compareSnapshotAgainstPython(t, "inf-org", infinite,
-		runPythonLoader(t, dsn, loaderTeamA, loaderInfOrgID), false)
+		python.of(t, loaderTeamA, loaderInfOrgID), false)
 
 	one := loadForOrg(t, ctx, conn, loaderOneHotspotOrgID)
 	if !one.HotspotChurnOverlapKnown {
@@ -1176,9 +1448,50 @@ func assertHotspotBoundaryIsMeasured(t *testing.T, ctx context.Context, conn dri
 	// Both halves against the Python reference on the same orgs, so this stays
 	// parity rather than a hard-coded expectation.
 	compareSnapshotAgainstPython(t, "empty-org", empty,
-		runPythonLoader(t, dsn, loaderTeamA, loaderEmptyOrgID), false)
+		python.of(t, loaderTeamA, loaderEmptyOrgID), false)
 	compareSnapshotAgainstPython(t, "one-hotspot-org", one,
-		runPythonLoader(t, dsn, loaderTeamA, loaderOneHotspotOrgID), false)
+		python.of(t, loaderTeamA, loaderOneHotspotOrgID), false)
+
+	assertVersionedRowsAreReadAsNewest(t, ctx, conn, python)
+}
+
+// assertVersionedRowsAreReadAsNewest reads loaderVersionsOrgID (seedVersionedOrg: every argMax table holds an older and a newer
+// version of one key, the newer the lower or NULL) and compares the Go snapshot, field by field and strictly (the team owns every
+// repo, so the owned-repo fields equal the Python reference's org-wide ones), with the frozen Python answer. The pinned values below
+// are the PRECONDITION that the fixture is live and that the newest version is what is read: a max() or argMin() in place of argMax,
+// or a loader that stopped reading the rows, moves one of them (CHAOS-8319).
+func assertVersionedRowsAreReadAsNewest(t *testing.T, ctx context.Context, conn driver.Conn, python frozenSnapshots) {
+	t.Helper()
+	got := loadForOrg(t, ctx, conn, loaderVersionsOrgID)
+	if !got.ReviewLatencyP75HoursKnown || got.ReviewLatencyP75Hours != 30.0 {
+		t.Errorf("versions org: review latency = %v (known %v), want 30 (avg of the newest p75 of each repo: 20 and 40)",
+			got.ReviewLatencyP75Hours, got.ReviewLatencyP75HoursKnown)
+	}
+	if !got.ReworkChurnRatioKnown || got.ReworkChurnRatio != 0.25 {
+		t.Errorf("versions org: rework = %v (known %v), want 0.25 (avg of the newest rework of each repo: 0.1 and 0.4)",
+			got.ReworkChurnRatio, got.ReworkChurnRatioKnown)
+	}
+	if got.HotspotChurnOverlapKnown {
+		t.Errorf("versions org: hotspot_churn_overlap is PRESENT (%v); the only hotspot file has risk_score 0, which is not a hotspot",
+			got.HotspotChurnOverlap)
+	}
+	if !got.CompoundingRiskScoreKnown || got.CompoundingRiskScore != 0.80 || got.CompoundingRiskSeverity != "high" {
+		t.Errorf("versions org: compounding risk = %v/%q (known %v), want 0.8/high (the NEWEST row)",
+			got.CompoundingRiskScore, got.CompoundingRiskSeverity, got.CompoundingRiskScoreKnown)
+	}
+	// DECLARED DIVERGENCE (CHAOS-4547, PR 2568): day 08-07 holds an older cycle time 15 and a NEWER NULL. The Python reference's plain
+	// argMax SKIPS the NULL and keeps the older value; the Go loader's tuple-wrapped argMax lets the NULL win and DROPS the day. The
+	// frozen Python answer and Go's behaviour are both pinned, and the rest of the snapshot is compared strictly: a loader that
+	// starts to agree with Python here (the tuple wrap removed) fails this assertion too, so the divergence cannot change unseen.
+	want := python.of(t, loaderTeamA, loaderVersionsOrgID)
+	if frozen := decodeBits(t, want.CycleTimeByDay); !sameFloats(frozen, []float64{12.0, 8.0, 15.0}) {
+		t.Errorf("versions org: the frozen Python cycle times are %v, want [12 8 15] (plain argMax skips the NULL newest row of 08-07)", frozen)
+	}
+	if !sameFloats(got.CycleTimeByDay, []float64{12.0, 8.0}) {
+		t.Errorf("versions org: Go cycle times = %v, want [12 8]: the tuple-wrapped argMax lets the NULL newest row of 08-07 win and drops the day (CHAOS-4547, PR 2568)", got.CycleTimeByDay)
+	}
+	want.CycleTimeByDay = bitsHex(got.CycleTimeByDay)
+	compareSnapshotAgainstPython(t, "versions-org", got, want, false)
 }
 
 func loadForOrg(t *testing.T, ctx context.Context, conn driver.Conn, orgID string) MetricsSnapshot {
@@ -1244,35 +1557,4 @@ func assertArgMaxKeysAreUnique(t *testing.T, ctx context.Context, conn driver.Co
 				group.table, duplicates, group.keyCols)
 		}
 	}
-}
-
-// loaderPythonBinary returns the interpreter chschema itself resolved, and
-// LOGS it so the CI record proves which Python actually ran.
-//
-// This test previously hard-coded <root>/.venv/bin/python. That works on a dev
-// host and on bigboy and FAILS IN CI, which has no .venv -- the comparison died
-// with "fork/exec .../.venv/bin/python: no such file or directory" while
-// chschema had already resolved python3 from PATH and run the migration chain.
-//
-// It went unnoticed because the `Go` workflow never COMPLETED on any earlier
-// tip; every run was superseded by the next push, so the first time the merge
-// oracle ran was the first time this surfaced.
-//
-// Calling chschema's own exported resolver rather than reimplementing its order
-// is the point: a duplicate would be the same defect one refactor later.
-//
-// Deliberately NO skip path. A skip would make this test silently vacuous
-// exactly where it matters, which is the defect class this file exists to
-// close, so a missing interpreter is a hard failure.
-func loaderPythonBinary(t *testing.T) string {
-	t.Helper()
-	_, file, _, _ := runtime.Caller(0)
-	python, rule, err := pyoracle.Interpreter(filepath.Join(filepath.Dir(file), "..", "..", "..", ".."))
-	if err != nil {
-		t.Fatalf("no Python to run the reference loader: %v. This test compares the "+
-			"SHIPPED Python loader against the Go one, so without an interpreter it "+
-			"proves nothing -- failing rather than skipping is deliberate.", err)
-	}
-	t.Logf("reference interpreter resolved to: %s (%s)", python, rule)
-	return python
 }

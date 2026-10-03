@@ -10,7 +10,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/url"
-	"os"
 	"os/exec"
 	"path/filepath"
 	"regexp"
@@ -369,31 +368,29 @@ const maintenancePythonProgram = "import sys\nfrom dev_health_ops import cli\nra
 // construction. A scenario's own variables are in its input; the database address is a per-run value.
 var maintenancePythonSettings = map[string]string{"PYTHONHASHSEED": "0", "OTEL_ENABLED": "false"}
 
-func maintenancePythonEnv(root string) []string {
-	env := []string{"PATH=" + os.Getenv("PATH"), "HOME=" + os.Getenv("HOME"), "PYTHONPATH=" + filepath.Join(root, "src"), "PYTHONDONTWRITEBYTECODE=1"}
-	for _, name := range []string{"OTEL_ENABLED", "PYTHONHASHSEED"} {
-		env = append(env, name+"="+maintenancePythonSettings[name])
-	}
-	return env
-}
-
-func pythonProgram(t *testing.T, root string, db *database, env map[string]string, args ...string) (int, string, string) {
+func pythonProgram(t *testing.T, producer *venueoracle.Producer, db *database, env map[string]string, args ...string) (int, string, string) {
 	t.Helper()
-	python := pyoracle.Resolve(t, root)
-	command := exec.Command(python, append([]string{"-c", maintenancePythonProgram, "maintenance"}, args...)...)
 	pyURI := strings.Replace(db.uri, "postgres://", "postgresql://", 1)
-	command.Env = append(maintenancePythonEnv(root), "POSTGRES_URI="+pyURI, "DATABASE_URI="+pyURI)
+	// A scenario's own variables are in its input (the golden's key): they are declared with the settings.
+	declared := map[string]string{}
+	for name, value := range maintenancePythonSettings {
+		declared[name] = value
+	}
 	for key, value := range env {
-		command.Env = append(command.Env, key+"="+value)
+		declared[key] = value
+	}
+	command, err := producer.Command(context.Background(), declared, []string{"POSTGRES_URI=" + pyURI, "DATABASE_URI=" + pyURI}, append([]string{"-c", maintenancePythonProgram, "maintenance"}, args...)...)
+	if err != nil {
+		t.Fatal(err)
 	}
 	var stdout, stderr bytes.Buffer
 	command.Stdout, command.Stderr = &stdout, &stderr
-	err := command.Run()
+	err = command.Run()
 	code := 0
 	if exit, ok := err.(*exec.ExitError); ok {
 		code = exit.ExitCode()
 	} else if err != nil {
-		t.Fatalf("run python: %v", pyoracle.RunError(python, err, []byte(stderr.String())))
+		t.Fatalf("run python: %v", pyoracle.RunError(command.Path, err, []byte(stderr.String())))
 	}
 	return code, stdout.String(), stderr.String()
 }
@@ -418,11 +415,12 @@ func maintenanceGolden(t *testing.T, name, pin, test string) (*venueoracle.Golde
 
 // maintenanceProduce runs one recorded session: produce is called only while recording, with the Python root
 // of the pinned checkout, and returns the session's answers as JSON; the frozen run gets them from the golden.
-func maintenanceProduce(t *testing.T, golden *venueoracle.Golden, root, label string, input []byte, produce func(root string) any) []byte {
+func maintenanceProduce(t *testing.T, golden *venueoracle.Golden, root, label string, input []byte, produce func(producer *venueoracle.Producer) any) []byte {
 	t.Helper()
 	request := venueoracle.ProgramRequest(label, maintenancePythonProgram, input, maintenancePythonSettings)
-	answers := golden.Produce(t, root, []venueoracle.Request{request}, func(_ *venueoracle.Producer, _ []venueoracle.Request) []venueoracle.Response {
-		body, err := json.Marshal(produce(root))
+	answers := golden.Produce(t, root, []venueoracle.Request{request}, func(producer *venueoracle.Producer, _ []venueoracle.Request) []venueoracle.Response {
+		producer.RequireDeployed()
+		body, err := json.Marshal(produce(producer))
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -432,9 +430,9 @@ func maintenanceProduce(t *testing.T, golden *venueoracle.Golden, root, label st
 	return []byte(answers[0].Body)
 }
 
-func (db *database) pythonScrub(t *testing.T, root string, s scrubScenario) scrubResult {
+func (db *database) pythonScrub(t *testing.T, producer *venueoracle.Producer, s scrubScenario) scrubResult {
 	t.Helper()
-	code, stdout, stderr := pythonProgram(t, root, db, s.env, append([]string{"scrub-error-text"}, s.args...)...)
+	code, stdout, stderr := pythonProgram(t, producer, db, s.env, append([]string{"scrub-error-text"}, s.args...)...)
 	if code != 0 {
 		t.Fatalf("%s: python exit %d, stderr %s", s.name, code, stderr)
 	}
@@ -456,7 +454,7 @@ func canonicalState(t *testing.T, value any) string {
 // execution); the scenarios (their arguments and variables) are part of the golden's key. The seeded error
 // texts carry no literal token (a secret scanner would read it as a real one).
 func TestScrubMatchesTheFrozenPythonOutput(t *testing.T) {
-	golden, root := maintenanceGolden(t, "scrub", "08c77a18208154a68c76364c7d913571ee86e3f70db5e114dda7138657f63fbc", "TestScrubMatchesTheFrozenPythonOutput")
+	golden, root := maintenanceGolden(t, "scrub", "1b14eab8972cfcb0a5077eef844f21ff94d49475de22ff9de671aa03824ec649", "TestScrubMatchesTheFrozenPythonOutput")
 	keys := make([]map[string]any, len(scrubScenarios))
 	for index, s := range scrubScenarios {
 		keys[index] = map[string]any{"name": s.name, "args": s.args, "env": s.env}
@@ -465,12 +463,12 @@ func TestScrubMatchesTheFrozenPythonOutput(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	raw := maintenanceProduce(t, golden, root, "scrub-error-text scenarios", input, func(root string) any {
+	raw := maintenanceProduce(t, golden, root, "scrub-error-text scenarios", input, func(producer *venueoracle.Producer) any {
 		db := startDatabase(t)
 		var produced []scrubResult
 		for _, s := range scrubScenarios {
 			db.resetScrub(t)
-			produced = append(produced, db.pythonScrub(t, root, s))
+			produced = append(produced, db.pythonScrub(t, producer, s))
 		}
 		return produced
 	})
@@ -627,9 +625,9 @@ func (db *database) goHousekeeping(t *testing.T, s housekeepingScenario) houseke
 	return housekeepingResult{Name: s.name, Count: count, State: s.state(db, t)}
 }
 
-func (db *database) pythonHousekeeping(t *testing.T, root string, s housekeepingScenario) housekeepingResult {
+func (db *database) pythonHousekeeping(t *testing.T, producer *venueoracle.Producer, s housekeepingScenario) housekeepingResult {
 	t.Helper()
-	code, _, stderr := pythonProgram(t, root, db, nil, s.verb)
+	code, _, stderr := pythonProgram(t, producer, db, nil, s.verb)
 	if code != 0 {
 		t.Fatalf("%s: python exit %d, stderr %s", s.name, code, stderr)
 	}
@@ -648,7 +646,7 @@ func (db *database) pythonHousekeeping(t *testing.T, root string, s housekeeping
 // (the recipe regenerates them by execution); the scenarios are part of the golden's key. The seeded rows are
 // relative to the database's own clock (hoursAgo), so no answer depends on the day it runs.
 func TestHousekeepingMatchesTheFrozenPythonOutput(t *testing.T) {
-	golden, root := maintenanceGolden(t, "housekeeping", "378dc151bb1a2d5458029f49b5b68c17b3ef1ee7a0457403d84de69cb024f49b", "TestHousekeepingMatchesTheFrozenPythonOutput")
+	golden, root := maintenanceGolden(t, "housekeeping", "be53a74fa67a52feb91ef0a924b13fb101a0a95a3785fe84360080e0079825d3", "TestHousekeepingMatchesTheFrozenPythonOutput")
 	keys := make([]map[string]any, len(housekeepingScenarios))
 	for index, s := range housekeepingScenarios {
 		keys[index] = map[string]any{"name": s.name, "verb": s.verb, "pattern": s.pattern.String()}
@@ -657,12 +655,12 @@ func TestHousekeepingMatchesTheFrozenPythonOutput(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	raw := maintenanceProduce(t, golden, root, "housekeeping scenarios", input, func(root string) any {
+	raw := maintenanceProduce(t, golden, root, "housekeeping scenarios", input, func(producer *venueoracle.Producer) any {
 		db := startDatabase(t)
 		var produced []housekeepingResult
 		for _, s := range housekeepingScenarios {
 			s.seed(db, t)
-			produced = append(produced, db.pythonHousekeeping(t, root, s))
+			produced = append(produced, db.pythonHousekeeping(t, producer, s))
 		}
 		return produced
 	})

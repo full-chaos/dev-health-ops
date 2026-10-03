@@ -238,13 +238,13 @@ make docs:deploy
 ## Inspect CLI commands before changing state
 
 ```bash
-dev-hops --help
-dev-hops sync --help
-dev-hops metrics --help
-dev-hops migrate --help
+dho --help
+dho sync --help
+dho metrics --help
+dho migrate --help
 ```
 
-Bare Python CLI commands run inline. Some provider or job paths are safer and better validated through the API and the Go worker fleet, which supplies the credentials the CLI does not enforce at startup; check the current command `Requires:` output and [CLI reference](../../reference/cli/index.md).
+Some provider or job paths are safer and better validated through the API and the Go worker fleet, which supplies the credentials the CLI does not enforce at startup; check the command's `--help` output (its `Environment:` section where it has one) and the [CLI reference](../../reference/cli/index.md).
 
 ## Before committing
 

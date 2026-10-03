@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"github.com/full-chaos/dev-health-ops/internal/testsupport/fakehttp"
 	"io"
 	"net/http"
 	"strconv"
@@ -135,7 +136,7 @@ func githubTestsArtifactsFixture(count int) string {
 func perRunWalk(t *testing.T, doer *githubTestsOversizedRunDoer) githubTestsWalk {
 	t.Helper()
 	claim := nativeTestClaim("github", "cicd")
-	return walkGitHubTestsChunks(t, GitHubTestsRouteHandler{}, claim, githubTestsClient(t, doer), 4)
+	return walkGitHubTestsChunks(t, GitHubTestsRouteHandler{}, claim, githubTestsClient(t, fakehttp.Client(doer)), 4)
 }
 
 func perRunObservation(
@@ -234,7 +235,7 @@ func TestGitHubTestsPerRunJobsUnderCapIsUntouched(t *testing.T) {
 func TestGitHubTestsInventoryTruncationStillWithholdsTheWatermark(t *testing.T) {
 	doer := &githubTestsPagedDoer{t: t, pages: 3, perPage: 2}
 	claim := nativeTestClaim("github", "tests")
-	walk := walkGitHubTestsChunks(t, GitHubTestsRouteHandler{MaxRuns: 100}, claim, githubTestsClient(t, doer), 2)
+	walk := walkGitHubTestsChunks(t, GitHubTestsRouteHandler{MaxRuns: 100}, claim, githubTestsClient(t, fakehttp.Client(doer)), 2)
 
 	if !githubTestsBlocksWatermark(
 		walk.cursor.Incomplete, walk.cursor.SkippedArtifacts,
@@ -517,7 +518,7 @@ func TestGitHubTestsNestedJobPageBudgetWithholdsTheWatermark(t *testing.T) {
 	// why the branch is kept and still withholds. This test is the evidence
 	// for that "kept because still reachable" claim.
 	handler := GitHubTestsRouteHandler{MaxJobPages: githubTestsMaxJobsPerRun/githubTestsPerRunPerPage + 1}
-	walk := walkGitHubTestsChunks(t, handler, claim, githubTestsClient(t, doer), 4)
+	walk := walkGitHubTestsChunks(t, handler, claim, githubTestsClient(t, fakehttp.Client(doer)), 4)
 
 	observation := perRunObservation(t, walk, githubTestsRunJobsComponent)
 	if observation.Cause != githubTestsPerRunPageBudgetCause {
@@ -659,7 +660,7 @@ func TestGitHubTestsPerRunPageBudgetIsRefusedAtTheEqualityBoundary(t *testing.T)
 
 	err := (GitHubTestsRouteHandler{MaxJobPages: equality}).CollectChunks(
 		context.Background(), claim, providerfoundation.Credential{},
-		githubTestsClient(t, githubTestsRefusingDoer{t: t}),
+		githubTestsClient(t, fakehttp.Client(githubTestsRefusingDoer{t: t})),
 		time.Date(2026, 8, 14, 12, 0, 0, 0, time.UTC), "",
 		func(ChunkRouteEmission) error {
 			t.Fatal("a refused configuration emitted a chunk")
@@ -680,7 +681,7 @@ func TestGitHubTestsPerRunPageBudgetIsRefusedAtTheEqualityBoundary(t *testing.T)
 	// the stall rather than relocating it into a refusal of everything.
 	doer := &githubTestsOversizedRunDoer{t: t, jobs: githubTestsMaxJobsPerRun + 25, artifacts: 0}
 	walk := walkGitHubTestsChunks(
-		t, GitHubTestsRouteHandler{MaxJobPages: equality + 1}, claim, githubTestsClient(t, doer), 4,
+		t, GitHubTestsRouteHandler{MaxJobPages: equality + 1}, claim, githubTestsClient(t, fakehttp.Client(doer)), 4,
 	)
 	if walk.cursor.Jobs != githubTestsMaxJobsPerRun {
 		t.Fatalf("MaxJobPages=%d kept %d jobs, want the cap %d",
@@ -732,7 +733,7 @@ func TestGitHubTestsLowPageBudgetDoesNotSilentlyStallTheSource(t *testing.T) {
 	var final CompleteRouteBatch
 	err := (GitHubTestsRouteHandler{MaxJobPages: starvedBudget}).CollectChunks(
 		context.Background(), claim, providerfoundation.Credential{},
-		githubTestsClient(t, doer),
+		githubTestsClient(t, fakehttp.Client(doer)),
 		time.Date(2026, 8, 14, 12, 0, 0, 0, time.UTC), "",
 		func(emission ChunkRouteEmission) error {
 			if emission.Final {

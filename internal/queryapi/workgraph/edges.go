@@ -2,7 +2,9 @@ package workgraph
 
 import (
 	"context"
+	"errors"
 	"fmt"
+	"reflect"
 	"strings"
 
 	"github.com/full-chaos/dev-health-go/clickhouse"
@@ -149,7 +151,13 @@ func (r edgeRow) identity() identityKey {
 // Go struct field to float32 -- every sibling operation in this codebase
 // (hotspots, cognitiveload, complexitytimeseries) already standardizes on
 // float64 for score-shaped fields.
-func fetchDedupedEdgeRows(ctx context.Context, client QueryClient, orgID string, scope *filterScope, limit int) ([]edgeRow, error) {
+//
+// The statement is built in two parts (CHAOS-8108): dedupedEdgesSelect is the
+// deduped, filtered select with no order and no limit, and
+// fetchDedupedEdgeRows adds the order and the limit. The count of the rows
+// that match before the limit (countMatchingEdges) reads the SAME select, so
+// the count cannot drift from the rows it counts.
+func dedupedEdgesSelect(orgID string, scope *filterScope) (string, []clickhouse.Binding) {
 	// includeRepoFilter=false: this query argMax-collapses repo_id, so
 	// the repo filter is applied AFTER the GROUP BY (in the outer WHERE,
 	// below) -- see buildWorkGraphWhere's doc comment for why filtering
@@ -169,9 +177,9 @@ func fetchDedupedEdgeRows(ctx context.Context, client QueryClient, orgID string,
 
 	// One tupled argMax(tuple(repo_id, provider, provenance, confidence,
 	// evidence), last_synced), computed ONCE in the subquery, parts
-	// extracted in the outer SELECT -- see this function's doc comment
-	// above (CHAOS-4985) for why five independent argMax calls is wrong.
-	query := fmt.Sprintf(`
+	// extracted in the outer SELECT -- see fetchDedupedEdgeRows's doc comment
+	// (CHAOS-4985) for why five independent argMax calls is wrong.
+	selectSQL := fmt.Sprintf(`
         SELECT
             edge_id,
             source_type,
@@ -197,12 +205,24 @@ func fetchDedupedEdgeRows(ctx context.Context, client QueryClient, orgID string,
             %s
             GROUP BY org_id, source_type, source_id, edge_type, target_type, target_id
         )
-        %s
-        ORDER BY confidence DESC, edge_id ASC
-        LIMIT {limit:UInt64}
-    `, where.sql, outerFilterSQL)
+        %s`, where.sql, outerFilterSQL)
 
 	bindings := append(where.bindings, where.repoBindings...)
+	return selectSQL, bindings
+}
+
+// dedupedEdgesOrderAndLimit is the tail fetchDedupedEdgeRows adds to
+// dedupedEdgesSelect. It is a constant so that the row statement is, byte for
+// byte, the select followed by this tail: the count statement
+// (countMatchingEdges) counts the same select with no tail.
+const dedupedEdgesOrderAndLimit = `
+        ORDER BY confidence DESC, edge_id ASC
+        LIMIT {limit:UInt64}
+    `
+
+func fetchDedupedEdgeRows(ctx context.Context, client QueryClient, orgID string, scope *filterScope, limit int) ([]edgeRow, error) {
+	selectSQL, bindings := dedupedEdgesSelect(orgID, scope)
+	query := selectSQL + dedupedEdgesOrderAndLimit
 	bindings = append(bindings, clickhouse.Binding{Name: "limit", Value: limit})
 
 	rows, err := client.Query(ctx, query, bindings)
@@ -245,22 +265,72 @@ func fetchDedupedEdgeRows(ctx context.Context, client QueryClient, orgID string,
 // rowToEdge, which treats an empty string as absent) and avoids a nullable
 // scan for a column that is always empty on this path.
 func queryDependencyEdges(ctx context.Context, client QueryClient, orgID string, filters *model.WorkGraphEdgeFilterInput, scope *filterScope, limit int) ([]edgeRow, error) {
-	edgeTypes := dependencyEdgeFilterValues(filters)
-	if len(edgeTypes) == 0 {
+	selectSQL, bindings, active := dependencyEdgesSelect(orgID, filters, scope, dependencyEdgeTypesParam)
+	if !active {
 		return nil, nil
 	}
+	query := selectSQL + dependencyEdgesOrderAndLimit
+	bindings = append(bindings, clickhouse.Binding{Name: "limit", Value: limit})
+
+	rows, err := client.Query(ctx, query, bindings)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var out []edgeRow
+	for rows.Next() {
+		var r edgeRow
+		if scanErr := rows.Scan(&r.edgeID, &r.sourceType, &r.sourceID, &r.targetType, &r.targetID, &r.edgeType, &r.repoID, &r.provider, &r.provenance, &r.confidence, &r.evidence); scanErr != nil {
+			return nil, fmt.Errorf("workgraph: dependency edges scan: %w", scanErr)
+		}
+		out = append(out, r)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("workgraph: dependency edges rows: %w", err)
+	}
+	return out, nil
+}
+
+// dependencyEdgeTypesParam is the name of the edge-type binding of the
+// dependency ROW statement. The primary statement has a binding of the same
+// name with a different value (every selected edge type, not only the
+// dependency-eligible ones), so the count statement, which holds both selects,
+// gives the dependency side another name (dependencyCountEdgeTypesParam).
+const (
+	dependencyEdgeTypesParam      = "edge_types"
+	dependencyCountEdgeTypesParam = "dependency_edge_types"
+)
+
+// dependencyEdgesOrderAndLimit is the tail queryDependencyEdges adds to
+// dependencyEdgesSelect; see dedupedEdgesOrderAndLimit.
+const dependencyEdgesOrderAndLimit = `
+        ORDER BY last_synced DESC, edge_id ASC
+        LIMIT {limit:UInt64}
+    `
+
+// dependencyEdgesSelect is the filtered select of the dependency edges with no
+// order and no limit, and its bindings. active is false on the two early exits
+// queryDependencyEdges documents (no dependency-eligible edge type selected;
+// any repo scope): no statement is built then. edgeTypesParam names the
+// edge-type binding.
+func dependencyEdgesSelect(orgID string, filters *model.WorkGraphEdgeFilterInput, scope *filterScope, edgeTypesParam string) (selectSQL string, bindings []clickhouse.Binding, active bool) {
+	edgeTypes := dependencyEdgeFilterValues(filters)
+	if len(edgeTypes) == 0 {
+		return "", nil, false
+	}
 	if len(scope.repoIDs) > 0 {
-		return nil, nil
+		return "", nil, false
 	}
 
 	mappedEdgeType := dependencyEdgeTypeSQL()
 	sourceTypeSQL := dependencyNodeTypeSQL("source_work_item_id")
 	targetTypeSQL := dependencyNodeTypeSQL("target_work_item_id")
 
-	clauses := []string{"org_id = {org_id:String}", "mapped_edge_type IN {edge_types:Array(String)}"}
-	bindings := []clickhouse.Binding{
+	clauses := []string{"org_id = {org_id:String}", "mapped_edge_type IN {" + edgeTypesParam + ":Array(String)}"}
+	bindings = []clickhouse.Binding{
 		{Name: "org_id", Value: orgID},
-		{Name: "edge_types", Value: edgeTypes},
+		{Name: edgeTypesParam, Value: edgeTypes},
 	}
 	bindings = addMembershipScopeBindings(bindings, scope)
 
@@ -288,9 +358,7 @@ func queryDependencyEdges(ctx context.Context, client QueryClient, orgID string,
 		bindings = append(bindings, clickhouse.Binding{Name: "wanted_count", Value: tf.wantedCount()})
 	}
 
-	bindings = append(bindings, clickhouse.Binding{Name: "limit", Value: limit})
-
-	query := fmt.Sprintf(`
+	selectSQL = fmt.Sprintf(`
         SELECT
             concat(
                 'wid:',
@@ -320,29 +388,8 @@ func queryDependencyEdges(ctx context.Context, client QueryClient, orgID string,
             FROM work_item_dependencies FINAL
             WHERE org_id = {org_id:String}
         )
-        WHERE %s
-        ORDER BY last_synced DESC, edge_id ASC
-        LIMIT {limit:UInt64}
-    `, mappedEdgeType, sourceTypeSQL, targetTypeSQL, strings.Join(clauses, " AND "))
-
-	rows, err := client.Query(ctx, query, bindings)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-
-	var out []edgeRow
-	for rows.Next() {
-		var r edgeRow
-		if scanErr := rows.Scan(&r.edgeID, &r.sourceType, &r.sourceID, &r.targetType, &r.targetID, &r.edgeType, &r.repoID, &r.provider, &r.provenance, &r.confidence, &r.evidence); scanErr != nil {
-			return nil, fmt.Errorf("workgraph: dependency edges scan: %w", scanErr)
-		}
-		out = append(out, r)
-	}
-	if err := rows.Err(); err != nil {
-		return nil, fmt.Errorf("workgraph: dependency edges rows: %w", err)
-	}
-	return out, nil
+        WHERE %s`, mappedEdgeType, sourceTypeSQL, targetTypeSQL, strings.Join(clauses, " AND "))
+	return selectSQL, bindings, true
 }
 
 // spliceDependencyEdges mirrors work_graph.py:1204-1229's splice EXACTLY:
@@ -372,6 +419,100 @@ func spliceDependencyEdges(primary, dependency []edgeRow, limit int) []edgeRow {
 		combined = combined[:limit]
 	}
 	return combined
+}
+
+// splicedEdgeCount is the number of distinct edges in primary plus dependency
+// by the splice identity: what spliceDependencyEdges would return with no
+// limit.
+func splicedEdgeCount(primary, dependency []edgeRow) int {
+	seen := make(map[identityKey]struct{}, len(primary)+len(dependency))
+	for _, r := range primary {
+		seen[r.identity()] = struct{}{}
+	}
+	count := len(primary)
+	for _, r := range dependency {
+		if _, ok := seen[r.identity()]; ok {
+			continue
+		}
+		count++
+	}
+	return count
+}
+
+// edgeIdentityColumns are the five columns of identityKey, as text, so that
+// the two sides of the count statement's UNION have one type per column
+// (work_graph_edges stores the type columns as LowCardinality).
+const edgeIdentityColumns = `toString(source_type) AS source_type, toString(source_id) AS source_id, toString(edge_type) AS edge_type, toString(target_type) AS target_type, toString(target_id) AS target_id`
+
+// matchingEdgesCountStatement counts the edges the filters match with no
+// limit: the deduped primary select, and, when the dependency splice is
+// active, its union with the dependency select by the splice identity. A
+// dependency edge is very often ALSO a work_graph_edges row (the work graph
+// builder writes the dependency edges there too), so the two counts cannot be
+// added: the union removes the overlap, as spliceDependencyEdges does.
+func matchingEdgesCountStatement(primarySelect, dependencySelect string) string {
+	if dependencySelect == "" {
+		return "SELECT count() FROM (" + primarySelect + "\n    )"
+	}
+	return "SELECT count() FROM (\n    SELECT " + edgeIdentityColumns + " FROM (" + primarySelect + "\n    )\n    UNION DISTINCT\n    SELECT " + edgeIdentityColumns + " FROM (" + dependencySelect + "\n    )\n)"
+}
+
+// mergeCountBindings joins the bindings of the two selects of the count
+// statement. A name that both carry must carry the same value: the two
+// selects are built from one request. A difference is returned as an error
+// rather than sent, because the statement would then count another filter
+// than the rows had.
+func mergeCountBindings(primary, dependency []clickhouse.Binding) ([]clickhouse.Binding, error) {
+	merged := make([]clickhouse.Binding, 0, len(primary)+len(dependency))
+	byName := make(map[string]any, len(primary)+len(dependency))
+	for _, group := range [][]clickhouse.Binding{primary, dependency} {
+		for _, b := range group {
+			if previous, ok := byName[b.Name]; ok {
+				if !reflect.DeepEqual(previous, b.Value) {
+					return nil, fmt.Errorf("workgraph: edges count: binding %q has two values", b.Name)
+				}
+				continue
+			}
+			byName[b.Name] = b.Value
+			merged = append(merged, b)
+		}
+	}
+	return merged, nil
+}
+
+// countMatchingEdges returns the number of edges the filters match BEFORE the
+// limit (CHAOS-8108). It reads the same two selects the rows come from.
+func countMatchingEdges(ctx context.Context, client QueryClient, orgID string, filters *model.WorkGraphEdgeFilterInput, scope *filterScope) (int, error) {
+	primarySelect, primaryBindings := dedupedEdgesSelect(orgID, scope)
+	dependencySelect, dependencyBindings, active := dependencyEdgesSelect(orgID, filters, scope, dependencyCountEdgeTypesParam)
+	if !active {
+		dependencySelect, dependencyBindings = "", nil
+	}
+	bindings, err := mergeCountBindings(primaryBindings, dependencyBindings)
+	if err != nil {
+		return 0, err
+	}
+
+	rows, err := client.Query(ctx, matchingEdgesCountStatement(primarySelect, dependencySelect), bindings)
+	if err != nil {
+		return 0, fmt.Errorf("workgraph: edges count query: %w", err)
+	}
+	defer rows.Close()
+
+	if !rows.Next() {
+		if err := rows.Err(); err != nil {
+			return 0, fmt.Errorf("workgraph: edges count rows: %w", err)
+		}
+		return 0, errors.New("workgraph: edges count query returned no row")
+	}
+	var total uint64
+	if err := rows.Scan(&total); err != nil {
+		return 0, fmt.Errorf("workgraph: edges count scan: %w", err)
+	}
+	if err := rows.Err(); err != nil {
+		return 0, fmt.Errorf("workgraph: edges count rows: %w", err)
+	}
+	return int(total), nil
 }
 
 // clampEdgesLimit applies MaxEdgesLimit's defensive backstop -- see that
@@ -464,7 +605,26 @@ func ResolveEdges(ctx context.Context, client QueryClient, orgID string, filters
 	if err != nil {
 		return nil, fmt.Errorf("workgraph: dependency edges query: %w", err)
 	}
+	// CHAOS-8108: totalCount is the number of edges the filters match BEFORE
+	// the limit. It was the length of the returned page, so "N more edges"
+	// could never be shown.
+	//
+	// Both reads returned fewer rows than the limit, and their splice fits in
+	// it: nothing was cut, so the page IS the full set and its length is the
+	// exact count, with no further read. In every other case something may
+	// have been cut, and the count is read.
+	pageIsComplete := len(rows) < limit && len(dependencyRows) < limit && splicedEdgeCount(rows, dependencyRows) <= limit
 	rows = spliceDependencyEdges(rows, dependencyRows, limit)
+	totalCount := len(rows)
+	if !pageIsComplete {
+		counted, err := countMatchingEdges(ctx, client, orgID, filters, scope)
+		if err != nil {
+			return nil, err
+		}
+		// The count and the rows are separate reads of a table that takes
+		// writes: never report fewer edges available than were returned.
+		totalCount = max(counted, len(rows))
+	}
 
 	var degradedReason *string
 	if themeFilterActive && len(rows) == 0 {
@@ -492,7 +652,9 @@ func ResolveEdges(ctx context.Context, client QueryClient, orgID string, filters
 	}
 
 	pageInfo := &model.PageInfo{
-		HasNextPage:     len(edges) == limit,
+		// More edges match than this page holds. (It was `len(edges) ==
+		// limit`, which is also true when exactly `limit` edges match.)
+		HasNextPage:     totalCount > len(edges),
 		HasPreviousPage: false,
 	}
 	if len(edges) > 0 {
@@ -510,7 +672,7 @@ func ResolveEdges(ctx context.Context, client QueryClient, orgID string, filters
 
 	return &model.WorkGraphEdgesResult{
 		Edges:          edges,
-		TotalCount:     len(edges),
+		TotalCount:     totalCount,
 		PageInfo:       pageInfo,
 		DegradedReason: degradedReason,
 		IsPartial:      scope.usesScopedPartial(),

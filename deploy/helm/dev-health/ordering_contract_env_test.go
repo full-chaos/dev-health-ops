@@ -65,33 +65,9 @@ func TestEveryGoWorkerAndTheMigrateJobCarryOrderingContract2(t *testing.T) {
 	}
 }
 
-// The Python api and metrics-api carry OPERATIONAL_ORDERING_CONTRACT = "2" too: Python reads an unset
-// value as contract 1 (r1 of CHAOS-7421 executed a stale read after a tombstone against a contract-2 table
-// with it unset). Red when the api Deployment lacks it.
-func TestPythonApiDeploymentsCarryOrderingContract2(t *testing.T) {
-	for name, sets := range map[string][]string{
-		"chart default":    {"--set", "metricsApi.enabled=true"},
-		"value left empty": {"--set", "metricsApi.enabled=true", "--set", "goWorkers.operationalOrderingContract="},
-	} {
-		t.Run(name, func(t *testing.T) {
-			output, err := exec.Command("helm", append([]string{"template", "pyapi-test", "."}, sets...)...).CombinedOutput()
-			if err != nil {
-				t.Fatalf("render failed: %v\n%s", err, output)
-			}
-			for _, deployment := range []string{"pyapi-test-dev-health-api", "pyapi-test-dev-health-metrics-api"} {
-				document := deploymentOf(t, string(output), deployment)
-				matches := orderingContractValue.FindAllStringSubmatch(document, -1)
-				if len(matches) != 1 || matches[0][1] != "2" {
-					t.Fatalf("%s renders %v, want exactly one OPERATIONAL_ORDERING_CONTRACT \"2\":\n%s", deployment, matches, document)
-				}
-			}
-		})
-	}
-}
-
 // Contract 1 is unsupported (D3635): a chart value other than "2" fails the render with the
 // reason, so it never reaches a workload (r2 of CHAOS-7421 rendered "1" into all nine workers,
-// the migrate Job and both Python APIs; Python still reads "1" as legacy).
+// the migrate Job and both Python APIs, since deleted; Python still reads "1" as legacy).
 func TestChartRefusesAnOrderingContractOtherThan2(t *testing.T) {
 	for _, value := range []string{"1", "3", " 2", "x"} {
 		t.Run("value "+value, func(t *testing.T) {

@@ -39,6 +39,11 @@ pre-commit:
   commands:
     ruff-format:
       glob: "*.py"
+      # The recorded-oracle script is pinned by a frozen sha256; `exclude` in
+      # pyproject.toml is ignored for files passed by name, so skip it here.
+      # `ruff check` below still lints it (CHAOS-8478).
+      exclude:
+        - "internal/syncdispatchruntime/testdata/dispatch_admission_oracle.py"
       run: scripts/run_py_tool.sh ruff format {staged_files}
       stage_fixed: true
     ruff-fix:
@@ -97,6 +102,8 @@ pre-push:
   commands:
     ruff-format-check:
       glob: "*.py"
+      exclude:
+        - "internal/syncdispatchruntime/testdata/dispatch_admission_oracle.py"
       run: scripts/run_py_tool.sh ruff format --check {push_files}
       fail_text: "Run `ruff format .` locally, commit the result, push again. Or `git push --no-verify` to bypass."
     ruff-check:

@@ -75,7 +75,7 @@ resources exist, that guard has already passed. No need to repeat it.
 {{- $postgresDatabase := include "dev-health.goPgbouncerPostgresDatabase" . }}
 {{- $operatorImage := .Values.migrations.hook.routeActivate.image }}
 {{- /*
-codex review (r2, P2 -- executed): defaulting to .Values.image.pullPolicy
+codex review (r2, P2 -- executed): defaulting to the application image's pull policy
 pulled in a local kind/kiac profile's Never (set for the side-loaded
 APPLICATION image only) and produced ErrImageNeverPull on the operator
 image -- a REGISTRY image, never side-loaded. Same class of bug, same fix, as

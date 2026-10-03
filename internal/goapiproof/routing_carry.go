@@ -159,9 +159,10 @@ func (e carryRefusal) Unwrap() []error { return []error{e.err, ErrCarryRequestRe
 // fleet computes.
 var ErrCarryDigestUnchanged = errors.New("goapiproof: the target schema digest is the live one, so there is nothing to carry")
 
-// ErrCarryNoLiveRows reports that no row exists at the live digest.
-// "The table is empty" and "every row died" must not read alike -- that
-// is the whole lesson of CHAOS-5416.
+// ErrCarryNoLiveRows reports that rows exist, and none of them at the live
+// digest. "The table is empty" and "every row died" must not read alike --
+// that is the whole lesson of CHAOS-5416 -- so a table with no row at any
+// digest is ErrRoutingTableEmpty instead, which is not a refusal.
 var ErrCarryNoLiveRows = errors.New("goapiproof: no routing row exists at the live schema digest")
 
 // ErrCarryNothingReachable reports that rows exist at the live digest but
@@ -751,6 +752,17 @@ func Carry(ctx context.Context, pool *pgxpool.Pool, request CarryRequest) ([]Car
 		return nil, err
 	}
 	if len(liveRows) == 0 {
+		// No row at the live digest is two states, and they answer differently
+		// (CHAOS-8543): a table with no row at ANY digest has nothing to carry and
+		// nothing wrong with it; a table whose rows all sit at other digests holds
+		// those operations dark, and stays the refusal it was.
+		empty, err := routingTableEmpty(ctx, tx)
+		if err != nil {
+			return nil, err
+		}
+		if empty {
+			return nil, ErrRoutingTableEmpty
+		}
 		return nil, fmt.Errorf("%w: %s", ErrCarryNoLiveRows, request.LiveSchemaDigest)
 	}
 	if len(wanted) > 0 {

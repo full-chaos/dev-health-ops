@@ -663,6 +663,15 @@ func printRoutingSQL(w io.Writer) error {
 // of -print-routing-sql. Parsing is migrationmatrix.ParseRoutingSnapshot --
 // the same function ReadRoutingState uses on the same statement's value --
 // so an offline snapshot cannot be read by a different rule than a live one.
+//
+// A snapshot with NO rows is read, as the live reader always read an empty
+// table (CHAOS-8543). It was refused here while an empty go_api_routing_state
+// meant "nothing is served"; since the catalog rule (queryapi/routeswitch/
+// catalog_switch.go) it is a valid state, in which query-api serves every
+// catalog operation with no routing row, and the page says so
+// (migrationmatrix.RenderOpsBlock). A file that is not a snapshot is still
+// refused: ParseRoutingSnapshot requires the object and its proof_run_total,
+// so an empty or hand-built file does not read as an empty table.
 func readRoutingFile(path, currentDigest string) ([]migrationmatrix.OperationRow, int, error) {
 	raw, err := os.ReadFile(path) //nolint:gosec // operator-supplied path
 	if err != nil {
@@ -671,10 +680,6 @@ func readRoutingFile(path, currentDigest string) ([]migrationmatrix.OperationRow
 	rows, total, err := migrationmatrix.ParseRoutingSnapshot(raw, currentDigest)
 	if err != nil {
 		return nil, 0, fmt.Errorf("routing file %s: %w", path, err)
-	}
-	if len(rows) == 0 {
-		return nil, 0, fmt.Errorf("routing file %s has no rows; an EMPTY go_api_routing_state is itself a finding, "+
-			"but it must be recorded deliberately rather than read as a parse failure", path)
 	}
 	return rows, total, nil
 }

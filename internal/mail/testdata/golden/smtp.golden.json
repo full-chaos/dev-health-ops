@@ -339,6 +339,26 @@
       "body": "{\"sent\":true,\"mail\":{\"mail_from\":\"\\u003cdev-health@example.com\\u003e\",\"rcpt_to\":[\"\\u003cowner@example.test\\u003e\"],\"data\":\"Content-Type: multipart/alternative; boundary=\\\"BOUNDARY\\\"\\r\\nMIME-Version: 1.0\\r\\nFrom: dev-health@example.com\\r\\nTo: Owner Name \\u003cowner@example.test\\u003e\\r\\nSubject: Hello\\r\\n\\r\\n--BOUNDARY\\r\\nContent-Type: text/html; charset=\\\"us-ascii\\\"\\r\\nMIME-Version: 1.0\\r\\nContent-Transfer-Encoding: 7bit\\r\\n\\r\\n\\u003cp\\u003ex\\u003c/p\\u003e\\r\\n--BOUNDARY--\\r\\n\"}}"
     },
     {
+      "name": "declared divergence: angle-bracketed recipient with a space inside",
+      "method": "PYTHON",
+      "path": "program sha256 335c5092eb8d7ca289f4db3a8c8940517225d0dada56d00f32a600d6485cbcb4 env sha256 aa3e1f0afa0006ee9b2a34fd9a993c9152ff6e7a77ab139d2aa74365968f84af",
+      "body_sha256": "95b16eee7d56451cb0076a0616708442bb3560156c3e0d10a76afa0db00aa1cf",
+      "request_headers_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "status": 0,
+      "headers": {},
+      "body": "{\"sent\":true,\"mail\":{\"mail_from\":\"\\u003cdev-health@example.com\\u003e\",\"rcpt_to\":[\"\\u003cowner@example.test\\u003e\"],\"data\":\"Content-Type: multipart/alternative; boundary=\\\"BOUNDARY\\\"\\r\\nMIME-Version: 1.0\\r\\nFrom: dev-health@example.com\\r\\nTo: \\u003cowner @example.test\\u003e\\r\\nSubject: Hello\\r\\n\\r\\n--BOUNDARY\\r\\nContent-Type: text/html; charset=\\\"us-ascii\\\"\\r\\nMIME-Version: 1.0\\r\\nContent-Transfer-Encoding: 7bit\\r\\n\\r\\n\\u003cp\\u003ex\\u003c/p\\u003e\\r\\n--BOUNDARY--\\r\\n\"}}"
+    },
+    {
+      "name": "declared divergence: recipient with an opening bracket only",
+      "method": "PYTHON",
+      "path": "program sha256 335c5092eb8d7ca289f4db3a8c8940517225d0dada56d00f32a600d6485cbcb4 env sha256 aa3e1f0afa0006ee9b2a34fd9a993c9152ff6e7a77ab139d2aa74365968f84af",
+      "body_sha256": "6432f95738544e633085d2e65428f6c275c1b1073a997eeb224a1691bc60b158",
+      "request_headers_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "status": 0,
+      "headers": {},
+      "body": "{\"sent\":true,\"mail\":{\"mail_from\":\"\\u003cdev-health@example.com\\u003e\",\"rcpt_to\":[\"\\u003cowner@example.test\\u003e\"],\"data\":\"Content-Type: multipart/alternative; boundary=\\\"BOUNDARY\\\"\\r\\nMIME-Version: 1.0\\r\\nFrom: dev-health@example.com\\r\\nTo: \\u003cowner@example.test\\r\\nSubject: Hello\\r\\n\\r\\n--BOUNDARY\\r\\nContent-Type: text/html; charset=\\\"us-ascii\\\"\\r\\nMIME-Version: 1.0\\r\\nContent-Transfer-Encoding: 7bit\\r\\n\\r\\n\\u003cp\\u003ex\\u003c/p\\u003e\\r\\n--BOUNDARY--\\r\\n\"}}"
+    },
+    {
       "name": "subject with DEL",
       "method": "PYTHON",
       "path": "program sha256 335c5092eb8d7ca289f4db3a8c8940517225d0dada56d00f32a600d6485cbcb4 env sha256 aa3e1f0afa0006ee9b2a34fd9a993c9152ff6e7a77ab139d2aa74365968f84af",

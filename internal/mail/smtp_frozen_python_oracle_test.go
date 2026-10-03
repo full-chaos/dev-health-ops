@@ -57,6 +57,10 @@ type smtpOracleCase struct {
 	// before any SMTP traffic, Go returns an error before dialing. Nothing may
 	// reach the server either way.
 	Refused bool
+	// GoRCPT marks a DECLARED DIVERGENCE (CHAOS-8399): Python's parseaddr repairs the recipient and
+	// sends to an address the caller did not give; Go sends its own RCPT TO line, which is this text.
+	// The test pins both: the recorded Python line (it must differ) and Go's line (it must equal this).
+	GoRCPT string
 }
 
 // smtpAnswer is what one run of the Python service gave: whether it sent, the
@@ -184,7 +188,9 @@ func TestSMTPSenderMatchesFrozenPythonSMTPProvider(t *testing.T) {
 		{Name: "mixed-case plus-address recipient", From: sender, To: "Owner+Tag@Example.TEST", Subject: "Hello", HTML: "<p>x</p>"},
 		{Name: "display-name recipient", From: sender, To: "Owner Name <owner@example.test>", Subject: "Hello", HTML: "<p>x</p>"},
 		// ---- DEL (0x7F) is ASCII; envelope forms parseaddr and the Go parser may read differently ----
-		// NOT recorded (a live difference, CHAOS-8399): To "<owner @example.test>" and "<owner@example.test" give a different RCPT TO in Go.
+		// Declared divergences (CHAOS-8399): Python repairs the recipient, Go does not (see GoRCPT).
+		{Name: "declared divergence: angle-bracketed recipient with a space inside", From: sender, To: "<owner @example.test>", Subject: "Hello", HTML: "<p>x</p>", GoRCPT: "<owner @example.test>"},
+		{Name: "declared divergence: recipient with an opening bracket only", From: sender, To: "<owner@example.test", Subject: "Hello", HTML: "<p>x</p>", GoRCPT: "<<owner@example.test>"},
 		{Name: "subject with DEL", From: sender, To: recipient, Subject: "a\x7fb", HTML: "<p>x</p>"},
 		{Name: "body with DEL", From: sender, To: recipient, Subject: "Hello", HTML: "<p>\x7f</p>"},
 		{Name: "angle-bracketed bare recipient", From: sender, To: "<owner@example.test>", Subject: "Hello", HTML: "<p>x</p>"},
@@ -266,7 +272,14 @@ func TestSMTPSenderMatchesFrozenPythonSMTPProvider(t *testing.T) {
 			if python.MailFrom != goMail.MailFrom {
 				t.Errorf("MAIL FROM differs:\n python: %q\n go:     %q", python.MailFrom, goMail.MailFrom)
 			}
-			if fmt.Sprint(python.RcptTo) != fmt.Sprint(goMail.RcptTo) {
+			if c.GoRCPT != "" {
+				if fmt.Sprint(goMail.RcptTo) != fmt.Sprint([]string{c.GoRCPT}) {
+					t.Errorf("declared divergence: Go RCPT TO changed:\n declared: %q\n go:       %q", []string{c.GoRCPT}, goMail.RcptTo)
+				}
+				if fmt.Sprint(python.RcptTo) == fmt.Sprint(goMail.RcptTo) {
+					t.Errorf("declared divergence: Go now sends the recorded Python line %q; remove GoRCPT from the case", python.RcptTo)
+				}
+			} else if fmt.Sprint(python.RcptTo) != fmt.Sprint(goMail.RcptTo) {
 				t.Errorf("RCPT TO differs:\n python: %q\n go:     %q", python.RcptTo, goMail.RcptTo)
 			}
 			if python.Data != goMail.Data {

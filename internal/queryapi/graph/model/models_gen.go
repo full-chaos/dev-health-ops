@@ -1234,6 +1234,20 @@ type RepoBusFactor struct {
 	EvidenceSampleCount int               `json:"evidenceSampleCount"`
 }
 
+type RepoCoverageBaseline struct {
+	RepoID string `json:"repoId"`
+	// The repository's full name in the org's catalogue. Null = the catalogue holds no name; never the id.
+	RepoName *string `json:"repoName,omitempty"`
+	// Mean line coverage, in percent (0 to 100), over the days of the 30 that hold a value. Null = fewer than 7 such days (``lineDays``): then there is no baseline. Never 0 for "none", never the current value.
+	LineBaselinePct *float64 `json:"lineBaselinePct,omitempty"`
+	// Days of the 30 that hold a line coverage value.
+	LineDays int `json:"lineDays"`
+	// Mean branch coverage, in percent; the same rules as ``lineBaselinePct``.
+	BranchBaselinePct *float64 `json:"branchBaselinePct,omitempty"`
+	// Days of the 30 that hold a branch coverage value.
+	BranchDays int `json:"branchDays"`
+}
+
 type ReportRunConnection struct {
 	Items []ReportRunType `json:"items"`
 	Total int             `json:"total"`

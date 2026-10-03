@@ -16,7 +16,6 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
-	"sort"
 	"strconv"
 	"strings"
 	"sync"
@@ -311,45 +310,19 @@ var (
 )
 
 // netCredentialConstants are the EXACT test credentials the corpus sends: made in the test (net_corpus_test.go), never real,
-// never from the environment. Only these are replaced; any other credential-shaped value that reaches an answer is an error
+// never from the environment. They are declared to the golden (GoldenSpec.CredentialConstants): the recorder replaces each one by
+// a digest placeholder (<credential sha256:...>) before projection and stores only the digests, and the Go plane's answers go
+// through the same function (Golden.DigestDeclared). Any other credential-shaped value that reaches an answer is an error
 // (netUnscrubbed), so a new credential cannot reach a golden without being named here.
-var netCredentialConstants = map[string]bool{
-	netToken: true, "other-secret": true, "fcpush_legacy": true, "fcpush_primary": true, "fcpush_flag": true, "fcpush_f": true,
+var netCredentialConstants = []string{
+	netToken, "fcpush_legacy", "fcpush_primary", "fcpush_flag", "fcpush_f",
 	// the Basic credentials of the userinfo cases: base64 of "ann:s@cret", "ann:" and ":s@cret" (test logins, made in the corpus)
-	"YW5uOnNAY3JldA==": true, "YW5uOg==": true, "OnNAY3JldA==": true,
+	"YW5uOnNAY3JldA==", "YW5uOg==", "OnNAY3JldA==",
 }
 
-// netScrub turns the test credentials the corpus sends (the fake's request log holds the Authorization header; the cases carry
-// test push tokens) into a typed placeholder that keeps what the oracle compares: whether two requests carried the SAME
-// credential (a short digest of the value). A golden stores no token value. It runs on the recorded answers and on dho's answers
-// alike (ONE helper for both planes), and is idempotent.
-//
-// NAMED EXCEPTION (CHAOS-7898): this scrub runs in the PRODUCER, before the answers are stored, because the record verb refused
-// a spec Scrub that replaces a deterministic leaf. It is therefore NOT checked by the record verb: the guards are the exact
-// constant list above, the leftover check netUnscrubbed (a credential-shaped value outside the list fails the producer and the
-// replay), and the plants of CHAOS-7790 (a different token = RED, the scrub removed = RED). CHAOS-7898 moves push_net to a
-// recorder-side digest scrub for a declared credential constant; no other golden uses a producer-side scrub.
-func netScrub(text string) string {
-	// Exact constants only, longest first (fcpush_f is a prefix of fcpush_flag): no pattern decides what is replaced.
-	constants := make([]string, 0, len(netCredentialConstants))
-	for value := range netCredentialConstants {
-		constants = append(constants, value)
-	}
-	sort.Slice(constants, func(i, j int) bool {
-		if len(constants[i]) != len(constants[j]) {
-			return len(constants[i]) > len(constants[j])
-		}
-		return constants[i] < constants[j]
-	})
-	for _, value := range constants {
-		sum := sha256.Sum256([]byte(value))
-		text = strings.ReplaceAll(text, value, "<credential sha256:"+hex.EncodeToString(sum[:6])+">")
-	}
-	return text
-}
-
-// netUnscrubbed is the credential-shaped text still in text after netScrub: a push token of the real shape, or the value of a
-// Bearer/Basic scheme that is not a placeholder. Empty means every credential in the answer was a listed constant.
+// netUnscrubbed is the credential-shaped text still in text after the declared constants are replaced: a push token of the real
+// shape, or the value of a Bearer/Basic scheme that is not a placeholder. Empty means every credential in the answer was a
+// declared constant.
 func netUnscrubbed(text string) []string {
 	var left []string
 	for _, match := range netPushToken.FindAllString(text, -1) {
@@ -363,12 +336,14 @@ func netUnscrubbed(text string) []string {
 	return left
 }
 
-func netScrubResult(result netResult) netResult {
-	result.Stdout = netScrub(result.Stdout)
-	result.Stderr = netScrub(result.Stderr)
+// netDigestResult is a result with every declared credential constant replaced by its digest placeholder (the golden's own
+// function, so both planes go through one).
+func netDigestResult(golden *venueoracle.Golden, result netResult) netResult {
+	result.Stdout = golden.DigestDeclared(result.Stdout)
+	result.Stderr = golden.DigestDeclared(result.Stderr)
 	requests := make([]string, len(result.Requests))
 	for index, request := range result.Requests {
-		requests[index] = netScrub(request)
+		requests[index] = golden.DigestDeclared(request)
 	}
 	result.Requests = requests
 	return result
@@ -469,9 +444,10 @@ func TestPushNetMatchesTheFrozenPythonOutput(t *testing.T) {
 	_, file, _, _ := moduleroot.Caller(0)
 	repoRoot := filepath.Clean(filepath.Join(filepath.Dir(file), "..", ".."))
 	golden := venueoracle.OpenGolden(t, venueoracle.GoldenSpec{
-		Path:        "testdata/golden/push_net.json",
-		PythonBuild: netPythonBuild,
-		SHA256:      "589f2ab0c8c17f047cefbc89ffb9d9b2abca86a98fba5bbca8b58115fdeb5c91",
+		Path:                "testdata/golden/push_net.json",
+		PythonBuild:         netPythonBuild,
+		CredentialConstants: netCredentialConstants,
+		SHA256:              "e5963275756df4e55e3411632b1022833665b30fdd61bc59f3bb92be70e5faa1",
 		Recipe: "git worktree add --detach $DIR " + netPythonBuild + " (with its .venv: uv sync --frozen --no-install-project); then from the repository root: " +
 			"go run ./internal/testsupport/venueoracle/goldenrecord -pkg ./internal/pushcli/ -test '^TestPushNetMatchesTheFrozenPythonOutput$' -python-root $DIR",
 	})
@@ -502,14 +478,13 @@ func TestPushNetMatchesTheFrozenPythonOutput(t *testing.T) {
 	answers := golden.Produce(t, root, []venueoracle.Request{request}, func(producer *venueoracle.Producer, _ []venueoracle.Request) []venueoracle.Response {
 		producer.RequireDeployed()
 		results := netPythonRun(t, producer, cases, input)
-		// The credentials the corpus sends are test constants shaped like credentials: the golden stores their
-		// digest (netScrub), never the value. Scrubbed here, before the answers are stored, so the record verb
-		// has no run-value scrub of its own to check.
+		// The credentials the corpus sends are test constants shaped like credentials (declared in CredentialConstants): the
+		// recorder replaces them by their digest, so the producer returns the answers as Python made them. A credential-shaped
+		// value that is NOT a declared constant is an error here, before anything is stored.
 		for index := range results {
-			results[index] = netScrubResult(results[index])
 			for _, text := range append([]string{results[index].Stdout, results[index].Stderr}, results[index].Requests...) {
-				if left := netUnscrubbed(text); len(left) != 0 {
-					t.Fatalf("case %d: %d credential-shaped value(s) outside netCredentialConstants reached an answer (CHAOS-7898: the producer-side scrub is exact): name the constant or fix the corpus", index, len(left))
+				if left := netUnscrubbed(golden.DigestDeclared(text)); len(left) != 0 {
+					t.Fatalf("case %d: %d credential-shaped value(s) outside netCredentialConstants reached an answer: name the constant or fix the corpus", index, len(left))
 				}
 			}
 		}
@@ -530,7 +505,7 @@ func TestPushNetMatchesTheFrozenPythonOutput(t *testing.T) {
 	got := runNetGoAll(t, cases, t.TempDir())
 	mismatches := 0
 	for index, c := range cases {
-		if !compareNet(t, c, netScrubResult(got[index]), want[index], "frozen Python") {
+		if !compareNet(t, c, netDigestResult(golden, got[index]), want[index], "frozen Python") {
 			mismatches++
 		}
 	}
@@ -576,4 +551,19 @@ func netMeasured(results []netResult) netMeasure {
 		}
 	}
 	return m
+}
+
+// netUnscrubbed finds a credential-shaped value that is not a placeholder (the producer refuses it before anything is stored); a
+// placeholder and plain text are not found.
+func TestNetUnscrubbedFindsAnUndeclaredCredentialAndNotAPlaceholder(t *testing.T) {
+	undeclared := "fcpush_zzzzzzzzzzzzzzzzzzzz"
+	if len(netUnscrubbed("echo "+undeclared)) != 1 {
+		t.Fatal("a push token of the real shape that is not declared was not found")
+	}
+	if len(netUnscrubbed("Authorization: Bearer qqqqqqqqqqqq")) != 1 {
+		t.Fatal("a Bearer value that is not a placeholder was not found")
+	}
+	if left := netUnscrubbed("Authorization: Bearer <credential sha256:0123456789ab> and plain text"); len(left) != 0 {
+		t.Fatalf("a placeholder was reported: %v", left)
+	}
 }

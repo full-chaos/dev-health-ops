@@ -180,6 +180,7 @@ func logProviderBudgetConfig(logger *slog.Logger) {
 		"budget_limit_light", limits[providersync.CostLight],
 		"budget_limit_medium", limits[providersync.CostMedium],
 		"budget_limit_heavy", limits[providersync.CostHeavy],
+		"budget_limit_source", providerfoundation.CostClassBudgetLimitSource,
 	)
 }
 

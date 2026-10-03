@@ -31,6 +31,9 @@ type Store interface {
 	// attempt follows. It marks a non-terminal partition exhausted and terminalizes the run if nothing else can
 	// progress (CHAOS-8024, invariant row 5).
 	ExhaustPartition(context.Context, string) error
+	// ExhaustClaimedPartition is ExhaustPartition for the job that holds the claim (its terminal release failed): it
+	// takes the partition under its own claim token even while that lease is live (CHAOS-8177).
+	ExhaustClaimedPartition(context.Context, Claim) error
 }
 
 type PartitionExecutor interface {
@@ -279,7 +282,23 @@ func releaseClaim(store Store, ctx context.Context, claim Claim) {
 func releaseClaimTerminally(store Store, ctx context.Context, claim Claim) {
 	releaseCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
 	defer cancel()
-	_ = store.ReleasePartitionTerminally(releaseCtx, claim)
+	err := store.ReleasePartitionTerminally(releaseCtx, claim)
+	if err == nil {
+		return
+	}
+	// The terminal release is fenced on a LIVE lease: a claimant whose lease expired (a slow complete, a lost renewal)
+	// cannot take it, and no later attempt exists to move the run out of 'running' (CHAOS-8177). Say so, then mark the
+	// partition exhausted under the claim's own token (an expired lease or our own live claim is taken; another claimant's
+	// live lease is left alone).
+	// Fixed text plus the bounded error class (logging.ErrorArgs, D4317): never the error text.
+	slog.WarnContext(ctx, "remaining metrics terminal release failed; exhausting the partition",
+		append([]any{"partition_id", claim.Partition.ID}, logging.ErrorArgs(err)...)...)
+	exhaustCtx, exhaustCancel := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
+	defer exhaustCancel()
+	if exhaustErr := store.ExhaustClaimedPartition(exhaustCtx, claim); exhaustErr != nil {
+		slog.WarnContext(ctx, "remaining metrics could not exhaust a claimed partition",
+			append([]any{"partition_id", claim.Partition.ID}, logging.ErrorArgs(exhaustErr)...)...)
+	}
 }
 
 func exhaustPartition(store Store, ctx context.Context, partitionID string) {

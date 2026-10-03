@@ -68,6 +68,24 @@ func TestLegacyIngestRefusalsAreScrapedFromTheOperatorRegistry(t *testing.T) {
 	}
 }
 
+// TestOperatorMetricsExposeTheSyncDriftRepairedFamily pins CHAOS-8221's
+// registration: drop the RegisterMetrics call and the family disappears from
+// the api's /metrics with no other test noticing.
+func TestOperatorMetricsExposeTheSyncDriftRepairedFamily(t *testing.T) {
+	registry := health.NewRegistry(time.Second)
+	var deps Deps
+	if err := RegisterOperatorMetrics(registry, &deps); err != nil {
+		t.Fatal(err)
+	}
+	var out bytes.Buffer
+	if err := registry.WriteMetrics(&out); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(out.String(), "# TYPE sync_target_dataset_drift_repaired_total counter") {
+		t.Fatalf("family not exposed:\n%s", out.String())
+	}
+}
+
 // TestOperatorMetricsExposeTheManualTriggerAwaitFamilies pins CHAOS-8222's
 // registration: an observed await outcome must appear on the api's /metrics.
 func TestOperatorMetricsExposeTheManualTriggerAwaitFamilies(t *testing.T) {

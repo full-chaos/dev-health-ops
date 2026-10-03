@@ -303,6 +303,11 @@ func RegisterOperatorMetrics(registry *health.Registry, deps *Deps) error {
 	if err := registry.RegisterMetrics("legacy_ingest", deps.LegacyIngestMetrics); err != nil {
 		return err
 	}
+	// CHAOS-8221: the dataset-drift repair counter (Python's
+	// sync_target_dataset_drift_repaired_total) the PUT /sync-configs path counts.
+	if err := registry.RegisterMetrics("sync_target_dataset_drift_repaired", syncadmin.DriftRepairedMetricsSource()); err != nil {
+		return err
+	}
 	// CHAOS-8222: the manual-trigger await outcome counter and latency histogram
 	// (Python's sync_manual_trigger_await_*), counted inside synchandoff.Wait.
 	return registry.RegisterMetrics("sync_manual_trigger_await", synchandoff.AwaitMetricsSource())

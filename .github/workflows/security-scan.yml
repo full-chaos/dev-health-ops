@@ -163,3 +163,7 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           GITLEAKS_LICENSE: ${{ secrets.GITLEAKS_LICENSE }}
+          # CHAOS-8181: pin the scanner version. The action's own default (src/index.js: `process.env.GITLEAKS_VERSION || "8.24.3"`) is
+          # 8.24.3 today; naming it freezes that behaviour so a bump of the action cannot change the scanner (and the generic-api-key rule
+          # the golden scan in internal/testsupport/goldenscan follows) without a change here.
+          GITLEAKS_VERSION: 8.24.3

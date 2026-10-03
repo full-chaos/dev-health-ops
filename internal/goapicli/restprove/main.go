@@ -160,9 +160,14 @@ type flags struct {
 	serviceName      string
 	service          goapiproof.RESTService
 	pythonAPIURL     string
-	buildInfoURL     string
-	candidateBuild   string
-	queryAPISrc      string
+	// baselineMetricsURL/candidateMetricsURL are the two planes' /metrics
+	// endpoints, scraped around each leg of a request that declares Counters
+	// (CHAOS-8182). Required only when the run plans such a request.
+	baselineMetricsURL  string
+	candidateMetricsURL string
+	buildInfoURL        string
+	candidateBuild      string
+	queryAPISrc         string
 
 	allowProverBuildSkew bool
 
@@ -250,6 +255,8 @@ func registerFlags() (*flag.FlagSet, *flags) {
 	})
 	fs.StringVar(&f.serviceName, "service", string(goapiproof.RESTServiceQueryAPI), "which Go service this run measures: query-api (default) or dho-api. One run measures one service; the build every receipt names is read from that service's /buildinfo, and only that service's corpus entries are sent")
 	fs.StringVar(&f.pythonAPIURL, "python-api-url", "", "the Python api service's OWN in-cluster address -- the baseline leg (required). Never an edge or ingress URL, for the same reason as -query-api-url")
+	fs.StringVar(&f.baselineMetricsURL, "baseline-metrics-url", "", "the Python api's /metrics URL, scraped before and after the baseline leg of every request that declares Counters (per-route counter parity, CHAOS-8182). Required when such a request is planned: without it that request is refused (rest_counter_parity_mismatch), never skipped")
+	fs.StringVar(&f.candidateMetricsURL, "candidate-metrics-url", "", "the Go api's /metrics URL, scraped around the candidate leg like -baseline-metrics-url")
 	fs.BoolVar(&f.pythonForwarderOff, "python-forwarder-off", false, "attest that the Python app's forwarding switch for every endpoint it can forward to query-api (RESTEndpointSpec.PythonForwarder: POST /api/v1/investment/explain) is OFF for this whole run, so a 200 baseline there is Python's own answer and is compared. The Python app relays query-api's answer without any header that marks it, so nothing on the response can show which plane computed it: without this flag such a 200 baseline is refused by name, and with it every receipt for such an endpoint records the attestation")
 	fs.StringVar(&f.buildInfoURL, "buildinfo-url", "", "GET /buildinfo on the service this run measures -- the ONLY source of the build identity every receipt names. Defaults to that service's address + \"/buildinfo\"; under -service=dho-api it must be on the -dho-api-url host")
 	fs.BoolVar(&f.allowProverBuildSkew, proverBuildSkewFlag[1:], false, "measure even when this binary was not built from the candidate build's commit (or carries no commit at all): its declarations, shapes and corpus are then another commit's, and the report records the skew as prover_build_skew_allowed")
@@ -2360,8 +2367,11 @@ func proveOneRESTRequest(
 	// The bracketed re-read (bracketedReread) depends on this order: it
 	// re-reads the baseline after the candidate, so a write landing
 	// between the legs shows as a change on the reference plane itself.
+	counters := newCounterScrape(request.Counters)
+	counters.scrape(ctx, client, f, true, true)
 	baselineStarted := time.Now()
 	baselineLeg, err := doREST(ctx, client, f.pythonAPIURL, spec.Method, spec.Path, request.Query, request.Body, baselineCredential, true, timeout)
+	counters.scrape(ctx, client, f, true, false)
 	if err != nil {
 		if out, ok := legTransportOutcome(ctx, operation, request.Name, "baseline", boundIDs, err); ok {
 			var started answerStartedError
@@ -2373,7 +2383,9 @@ func proveOneRESTRequest(
 		return outcome{}, fmt.Errorf("baseline leg: %w", err)
 	}
 	baselineObservedAt := time.Now().UTC()
+	counters.scrape(ctx, client, f, false, true)
 	candidateLeg, err := doREST(ctx, client, f.candidateBase(), spec.Method, spec.Path, request.Query, request.Body, candidateCredential, false, timeout)
+	counters.scrape(ctx, client, f, false, false)
 	if err != nil {
 		if out, ok := legTransportOutcome(ctx, operation, request.Name, "candidate", boundIDs, err); ok {
 			return out, nil
@@ -2423,6 +2435,12 @@ func proveOneRESTRequest(
 		CandidateObservedAt:   candidateObservedAt,
 	}
 	if !admission.Admitted {
+		return out, nil
+	}
+	if detail := counters.verdict(); detail != "" {
+		out.Admitted = false
+		out.Refusal = goapiproof.RESTRefusalCounterParity
+		out.Detail = detail
 		return out, nil
 	}
 
@@ -2985,4 +3003,91 @@ var newPGXPool = func(ctx context.Context, dsn string) (receiptWriterCloser, err
 		return nil, secrets.RedactedConnectError("connect to postgres", "postgres-uri", postgresURIEnvVar)
 	}
 	return &pgxReceiptWriter{pool: pool}, nil
+}
+
+// counterScrape holds the four /metrics scrapes of one request's declared
+// counter pairs. A scrape that cannot be taken is recorded, never read as an
+// empty exposition: a missing measurement fails the request.
+type counterScrape struct {
+	pairs  []goapiproof.RESTCounterPair
+	text   [4]string // baseline before/after, candidate before/after
+	failed []string
+}
+
+func newCounterScrape(pairs []goapiproof.RESTCounterPair) *counterScrape {
+	return &counterScrape{pairs: pairs}
+}
+
+func (c *counterScrape) scrape(ctx context.Context, client *goapiproof.LegClient, f flags, baseline, before bool) {
+	if len(c.pairs) == 0 {
+		return
+	}
+	idx, url, side := 0, f.baselineMetricsURL, "baseline"
+	if !baseline {
+		idx, url, side = 2, f.candidateMetricsURL, "candidate"
+	}
+	if !before {
+		idx++
+	}
+	if url == "" {
+		c.failed = append(c.failed, side+": no metrics URL given")
+		return
+	}
+	text, err := fetchMetricsText(ctx, client, url)
+	if err != nil {
+		c.failed = append(c.failed, side+": "+err.Error())
+		return
+	}
+	c.text[idx] = text
+}
+
+// verdict returns "" when every declared pair agrees, else the finding lines.
+func (c *counterScrape) verdict() string {
+	if len(c.pairs) == 0 {
+		return ""
+	}
+	if len(c.failed) > 0 {
+		return "counter scrape failed: " + strings.Join(c.failed, "; ")
+	}
+	var lines []string
+	for _, pair := range c.pairs {
+		var samples [4][]goapiproof.CounterSample
+		for i := range samples {
+			family := pair.BaselineFamily
+			if i >= 2 {
+				family = pair.CandidateFamily
+			}
+			s, err := goapiproof.ParseCounterSamples(c.text[i], family)
+			if err != nil {
+				return fmt.Sprintf("counter scrape unreadable (%s): %v", pair.Name, err)
+			}
+			samples[i] = s
+		}
+		for _, finding := range goapiproof.CompareCounterPair(pair, samples[0], samples[1], samples[2], samples[3]) {
+			lines = append(lines, finding.String())
+		}
+	}
+	return strings.Join(lines, "; ")
+}
+
+func fetchMetricsText(ctx context.Context, client *goapiproof.LegClient, url string) (string, error) {
+	ctx, cancel := context.WithTimeout(ctx, 15*time.Second)
+	defer cancel()
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
+	if err != nil {
+		return "", err
+	}
+	leg, err := client.Do(req)
+	if err != nil {
+		return "", fmt.Errorf("metrics scrape transport error")
+	}
+	defer leg.Body.Close()
+	if leg.StatusCode != http.StatusOK {
+		return "", fmt.Errorf("metrics scrape status %d", leg.StatusCode)
+	}
+	body, err := io.ReadAll(io.LimitReader(leg.Body, 64<<20))
+	if err != nil {
+		return "", fmt.Errorf("metrics scrape read error")
+	}
+	return string(body), nil
 }

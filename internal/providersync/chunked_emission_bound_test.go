@@ -390,3 +390,39 @@ func TestAnAttemptThatDrainedUpToTheWallBoundHandsOverBeforeAskingTheProvider(t 
 		t.Fatalf("rows written: distinct=%d duplicated=%d, want 6 and 0", len(sink.rows), sink.duplicates())
 	}
 }
+
+// A FINAL emission of exactly bound + 1 sub-chunks: attempt 1 commits exactly `bound` and hands over (the last-but-one position of the final emission is a
+// hand-over: the last sub-chunk is still outstanding), attempt 2 commits the one left and the unit finishes. Pins the position boundary of the check.
+func TestAFinalEmissionOfBoundPlusOneSubchunksIsSplitExactlyAtTheBound(t *testing.T) {
+	t.Parallel()
+	policy := DefaultChunkPolicy()
+	policy.MaxChunksPerAttempt = 5
+	policy.MaxEffectRows = 1
+	now := time.Date(2026, 10, 1, 12, 0, 0, 0, time.UTC)
+	claim, session := completeRouteSessionFor(t, now, false, "github", "cicd")
+	descriptor, _ := Descriptor("github", "cicd")
+	descriptor.ChunkPolicy = policy
+	store := newChunkMemoryStore()
+	sink := &recoveryRowSink{}
+	executor := completeRouteExecutor(now, &bigFinalChunkHandler{bigPageChunkHandler{rows: 6}}, store, sink)
+	executor.Credentials.Repository = &trackingCompleteRouteCredentialRepository{provider: "github"}
+	executor.Credentials.Decryptor = chunkedCredentialDecryptor{}
+
+	_, err := executor.Execute(context.Background(), session, descriptor)
+	stopped := continuationOf(t, err)
+	checkpoint, _ := store.LoadChunkCheckpoint(context.Background(), claim, now)
+	if stopped.Chunks != 5 || checkpoint.NextOrdinal != 5 {
+		t.Fatalf("attempt 1 committed %d (reports %d), want exactly the bound of 5 with one sub-chunk of the final emission outstanding", checkpoint.NextOrdinal, stopped.Chunks)
+	}
+	result, err := executor.Execute(context.Background(), session, descriptor)
+	if err != nil {
+		t.Fatalf("attempt 2 error=%v, want the unit finished", err)
+	}
+	after, _ := store.LoadChunkCheckpoint(context.Background(), claim, now)
+	if after.NextOrdinal != 6 || result.Result == nil {
+		t.Fatalf("after attempt 2 next=%d result=%v, want 6 committed and the final result", after.NextOrdinal, result.Result)
+	}
+	if sink.duplicates() != 0 || len(sink.rows) != 6 {
+		t.Fatalf("rows written: distinct=%d duplicated=%d, want 6 and 0", len(sink.rows), sink.duplicates())
+	}
+}

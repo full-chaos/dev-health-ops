@@ -144,7 +144,9 @@ jobs:
   gitleaks:
     name: Gitleaks Secret Scan
     runs-on: ubuntu-latest
-    continue-on-error: true
+    # CHAOS-8291: no `continue-on-error`. A finding fails this job (measured on a throwaway PR: step and job failure, the check red,
+    # the workflow run kept green by the old setting, no comment, no Code Scanning alert). The job is NOT a required check of the
+    # ruleset, so a red job blocks no merge; making it required is a separate ruleset decision.
     # Gitleaks needs:
     #   - security-events: write — upload SARIF findings to code-scanning
     #   - pull-requests: write — post the scan summary comment on the PR
@@ -167,3 +169,12 @@ jobs:
           # 8.24.3 today; naming it freezes that behaviour so a bump of the action cannot change the scanner (and the generic-api-key rule
           # the golden scan in internal/testsupport/goldenscan follows) without a change here.
           GITLEAKS_VERSION: 8.24.3
+
+      # CHAOS-8291: the action writes results.sarif to the workspace and uploads it as a workflow artifact only; this step makes a
+      # finding a Code Scanning alert. `if: always()` so a failed scan step still uploads what it found.
+      - name: Upload Gitleaks SARIF to code scanning
+        if: always() && hashFiles('results.sarif') != ''
+        uses: github/codeql-action/upload-sarif@b96794f015dfd88f77b49b1c93e0fa7110f94c63 # v4.38.0
+        with:
+          sarif_file: results.sarif
+          category: gitleaks

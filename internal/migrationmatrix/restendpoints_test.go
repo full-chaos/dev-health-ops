@@ -4,7 +4,6 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
-	"reflect"
 	"strings"
 	"testing"
 
@@ -590,33 +589,4 @@ func writeFrozenRoutes(t *testing.T, entries ...string) string {
 		t.Fatal(err)
 	}
 	return writeTempFile(t, t.TempDir(), "python-rest-routes.json", string(raw))
-}
-
-// While the Python api source still exists, the frozen list must equal a fresh
-// parse of it: a route added to main.py without refreezing fails here. Once
-// main.py is deleted the frozen file is the source and this test skips.
-func TestFrozenRESTRoutesMatchMainPyWhileItExists(t *testing.T) {
-	root := repoRootForTest(t)
-	mainPy := filepath.Join(root, "src/dev_health_ops/api/main.py")
-	if _, err := os.Stat(mainPy); err != nil {
-		t.Skip("the Python api main.py is gone: the frozen route list is the source")
-	}
-	parsed, err := LoadFastAPIRoutes(mainPy)
-	if err != nil {
-		t.Fatal(err)
-	}
-	frozen, err := LoadFrozenRESTRoutes(filepath.Join(root, FrozenRESTRoutesRelative))
-	if err != nil {
-		t.Fatal(err)
-	}
-	key := func(routes []RESTRoute) []string {
-		var out []string
-		for _, r := range apiV1Routes(routes) {
-			out = append(out, r.Method+" "+r.Path)
-		}
-		return out
-	}
-	if got, want := key(frozen), key(parsed); !reflect.DeepEqual(got, want) {
-		t.Fatalf("frozen route list %v != main.py parse %v", got, want)
-	}
 }

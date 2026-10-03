@@ -282,3 +282,133 @@ func mergeBlockedIntervals(intervals []BlockedInterval) []BlockedInterval {
 	}
 	return merged
 }
+
+// BlockingRelation is one work_item_dependencies row, trimmed to the columns
+// the blocked rule reads.
+type BlockingRelation struct {
+	SourceID         string
+	TargetID         string
+	RelationshipType string
+	SemanticsVersion string
+	LastSynced       time.Time
+}
+
+// RelationEnd is the stored work item at one end of a relation.
+type RelationEnd struct {
+	WorkItemID  string
+	Provider    string
+	Status      string
+	CreatedAt   time.Time
+	CompletedAt *time.Time
+	LastSynced  time.Time
+}
+
+// BlockedIntervalsByItem resolves relations against the stored work items
+// and returns, per BLOCKED work item id, the spans in which that item has an
+// open blocker. It is the whole "which items are blocked, and when" decision;
+// both writers call it and then OverlayBlocked.
+//
+// A relation gives a span only when every fact it needs is stored:
+//
+//   - the row is a blocking relation with a dependable direction
+//     (BlockingEndsOf);
+//   - both ends are stored work items -- an external-key end resolves through
+//     the bare issue key of a jira or linear item, and a key that no item or
+//     more than one item carries resolves to nothing;
+//   - the provider still reports the relation (RelationIsCurrent), which
+//     for a one-sided relation also needs its emitter to be stored;
+//   - the blocker has a known open span (BlockedIntervalFor).
+//
+// Anything else contributes nothing. When two rows of ends carry the same
+// work item id, the one synced last is the stored item.
+func BlockedIntervalsByItem(relations []BlockingRelation, ends []RelationEnd) map[string][]BlockedInterval {
+	if len(relations) == 0 || len(ends) == 0 {
+		return nil
+	}
+	byID := make(map[string]RelationEnd, len(ends))
+	for _, end := range ends {
+		if end.WorkItemID == "" {
+			continue
+		}
+		if existing, seen := byID[end.WorkItemID]; seen && !end.LastSynced.After(existing.LastSynced) {
+			continue
+		}
+		byID[end.WorkItemID] = end
+	}
+	keyIndex := issueKeyIndex(byID)
+	resolve := func(id string) (RelationEnd, bool) {
+		if key, external := ExternalKey(id); external {
+			id = keyIndex[key]
+		} else if strings.HasPrefix(id, ExternalKeyPrefix) {
+			return RelationEnd{}, false
+		}
+		end, stored := byID[id]
+		return end, stored
+	}
+
+	result := map[string][]BlockedInterval{}
+	for _, relation := range relations {
+		named, blocking := BlockingEndsOf(relation.SourceID, relation.TargetID, relation.RelationshipType, relation.SemanticsVersion)
+		if !blocking {
+			continue
+		}
+		blocked, blockedStored := resolve(named.BlockedID)
+		blocker, blockerStored := resolve(named.BlockerID)
+		if !blockedStored || !blockerStored || blocked.WorkItemID == blocker.WorkItemID {
+			continue
+		}
+		var emitterLastSynced time.Time
+		emitterKnown := named.EmitterID != ""
+		if emitterKnown {
+			emitter, emitterStored := byID[named.EmitterID]
+			if !emitterStored {
+				continue
+			}
+			emitterLastSynced = emitter.LastSynced
+		}
+		if !RelationIsCurrent(relation.LastSynced, emitterKnown, emitterLastSynced, blocked.LastSynced, blocker.LastSynced) {
+			continue
+		}
+		interval, open := BlockedIntervalFor(blocked.CreatedAt, Blocker{
+			Status: blocker.Status, CreatedAt: blocker.CreatedAt, CompletedAt: blocker.CompletedAt,
+		})
+		if !open {
+			continue
+		}
+		result[blocked.WorkItemID] = append(result[blocked.WorkItemID], interval)
+	}
+	if len(result) == 0 {
+		return nil
+	}
+	return result
+}
+
+// issueKeyIndex indexes jira and linear work items by their bare issue key
+// ("PLAT-9" from "linear:PLAT-9"), the form an external-key target carries.
+// A key that more than one work item carries is ambiguous and is left out:
+// the same rule the team-attribution readers of these targets apply
+// (internal/providersync/team_repo_ownership_derivation.go, buildIssueKeyIndex).
+func issueKeyIndex(byID map[string]RelationEnd) map[string]string {
+	index := map[string]string{}
+	ambiguous := map[string]bool{}
+	for id, end := range byID {
+		if end.Provider != "linear" && end.Provider != "jira" {
+			continue
+		}
+		separator := strings.Index(id, ":")
+		if separator < 0 {
+			continue
+		}
+		key := strings.ToUpper(strings.TrimSpace(id[separator+1:]))
+		if key == "" || ambiguous[key] {
+			continue
+		}
+		if existing, seen := index[key]; seen && existing != id {
+			delete(index, key)
+			ambiguous[key] = true
+			continue
+		}
+		index[key] = id
+	}
+	return index
+}

@@ -248,3 +248,134 @@ func TestOverlayBlockedLeavesItsInputsAlone(t *testing.T) {
 		t.Fatalf("inputs changed: %+v %+v", segments, intervals)
 	}
 }
+
+func relationEnd(id, provider, status string, created int, completed *time.Time, synced int) RelationEnd {
+	return RelationEnd{WorkItemID: id, Provider: provider, Status: status, CreatedAt: blockedTime(created), CompletedAt: completed, LastSynced: blockedTime(synced)}
+}
+
+func blocksRelation(source, target string, synced int) BlockingRelation {
+	return BlockingRelation{SourceID: source, TargetID: target, RelationshipType: "blocks", SemanticsVersion: CanonicalBlocksSemantics, LastSynced: blockedTime(synced)}
+}
+
+// The whole decision, one fact at a time: each case removes or changes ONE
+// thing the rule needs, and the blocked item gets a span only in the cases
+// that keep them all.
+func TestBlockedIntervalsByItemNeedsEveryStoredFact(t *testing.T) {
+	blocked := relationEnd("jira:OPS-2", "jira", "in_progress", 10, nil, 50)
+	blocker := relationEnd("jira:OPS-1", "jira", "in_progress", 4, nil, 50)
+	want := map[string][]BlockedInterval{"jira:OPS-2": {{Start: blockedTime(10)}}}
+
+	for name, tc := range map[string]struct {
+		relations []BlockingRelation
+		ends      []RelationEnd
+		want      map[string][]BlockedInterval
+	}{
+		"an open blocker: blocked from the later creation, still open": {
+			[]BlockingRelation{blocksRelation("jira:OPS-1", "jira:OPS-2", 50)}, []RelationEnd{blocked, blocker}, want,
+		},
+		"a completed blocker: blocked until its completion": {
+			[]BlockingRelation{blocksRelation("jira:OPS-1", "jira:OPS-2", 50)},
+			[]RelationEnd{blocked, relationEnd("jira:OPS-1", "jira", "done", 4, blockedTimePtr(30), 50)},
+			map[string][]BlockedInterval{"jira:OPS-2": {{Start: blockedTime(10), End: blockedTimePtr(30)}}},
+		},
+		"the relation points the other way: the OTHER item is blocked": {
+			[]BlockingRelation{blocksRelation("jira:OPS-2", "jira:OPS-1", 50)}, []RelationEnd{blocked, blocker},
+			map[string][]BlockedInterval{"jira:OPS-1": {{Start: blockedTime(10)}}},
+		},
+		"the blocker is not a stored work item": {
+			[]BlockingRelation{blocksRelation("jira:OPS-1", "jira:OPS-2", 50)}, []RelationEnd{blocked}, nil,
+		},
+		"the blocked item is not a stored work item": {
+			[]BlockingRelation{blocksRelation("jira:OPS-1", "jira:OPS-2", 50)}, []RelationEnd{blocker}, nil,
+		},
+		"the relation does not block": {
+			[]BlockingRelation{{SourceID: "jira:OPS-1", TargetID: "jira:OPS-2", RelationshipType: "relates_to", SemanticsVersion: CanonicalBlocksSemantics, LastSynced: blockedTime(50)}},
+			[]RelationEnd{blocked, blocker}, nil,
+		},
+		"the relation has the legacy direction": {
+			[]BlockingRelation{{SourceID: "jira:OPS-1", TargetID: "jira:OPS-2", RelationshipType: "blocks", SemanticsVersion: "legacy.v1", LastSynced: blockedTime(50)}},
+			[]RelationEnd{blocked, blocker}, nil,
+		},
+		"both ends were synced again and neither reported the relation": {
+			[]BlockingRelation{blocksRelation("jira:OPS-1", "jira:OPS-2", 49)}, []RelationEnd{blocked, blocker}, nil,
+		},
+		"the blocker is done with no completion time": {
+			[]BlockingRelation{blocksRelation("jira:OPS-1", "jira:OPS-2", 50)},
+			[]RelationEnd{blocked, relationEnd("jira:OPS-1", "jira", "done", 4, nil, 50)}, nil,
+		},
+		"the blocker was completed before the item existed": {
+			[]BlockingRelation{blocksRelation("jira:OPS-1", "jira:OPS-2", 50)},
+			[]RelationEnd{blocked, relationEnd("jira:OPS-1", "jira", "done", 4, blockedTimePtr(8), 50)}, nil,
+		},
+		"a relation of another item does not block this one": {
+			[]BlockingRelation{blocksRelation("jira:OPS-1", "jira:OPS-3", 50)},
+			[]RelationEnd{blocked, blocker, relationEnd("jira:OPS-3", "jira", "todo", 20, nil, 50)},
+			map[string][]BlockedInterval{"jira:OPS-3": {{Start: blockedTime(20)}}},
+		},
+		"two blockers give two spans": {
+			[]BlockingRelation{blocksRelation("jira:OPS-1", "jira:OPS-2", 50), blocksRelation("jira:OPS-4", "jira:OPS-2", 50)},
+			[]RelationEnd{blocked, blocker, relationEnd("jira:OPS-4", "jira", "done", 12, blockedTimePtr(20), 50)},
+			map[string][]BlockedInterval{"jira:OPS-2": {{Start: blockedTime(10)}, {Start: blockedTime(12), End: blockedTimePtr(20)}}},
+		},
+		"the newest stored row of an item is the item": {
+			[]BlockingRelation{blocksRelation("jira:OPS-1", "jira:OPS-2", 50)},
+			[]RelationEnd{blocked, relationEnd("jira:OPS-1", "jira", "in_progress", 4, nil, 40), relationEnd("jira:OPS-1", "jira", "done", 4, blockedTimePtr(30), 50)},
+			map[string][]BlockedInterval{"jira:OPS-2": {{Start: blockedTime(10), End: blockedTimePtr(30)}}},
+		},
+		"no relation":    {nil, []RelationEnd{blocked, blocker}, nil},
+		"no stored item": {[]BlockingRelation{blocksRelation("jira:OPS-1", "jira:OPS-2", 50)}, nil, nil},
+	} {
+		t.Run(name, func(t *testing.T) {
+			got := BlockedIntervalsByItem(tc.relations, tc.ends)
+			if !reflect.DeepEqual(got, tc.want) {
+				t.Fatalf("BlockedIntervalsByItem =\n  %+v\nwant\n  %+v", got, tc.want)
+			}
+		})
+	}
+}
+
+// A relation read from text names its blocker by an issue KEY. It blocks only
+// when exactly one stored jira or linear item carries that key, and only while
+// the item that holds the text still reports it.
+func TestBlockedIntervalsByItemResolvesAnExternalKeyOrDerivesNothing(t *testing.T) {
+	item := relationEnd("gh:acme/api#7", "github", "in_progress", 10, nil, 50)
+	blockedBy := func(target string, synced int) BlockingRelation {
+		return BlockingRelation{SourceID: "gh:acme/api#7", TargetID: target, RelationshipType: "blocked_by", SemanticsVersion: CanonicalBlocksSemantics, LastSynced: blockedTime(synced)}
+	}
+	linear := relationEnd("linear:OPS-9", "linear", "todo", 2, nil, 99)
+	want := map[string][]BlockedInterval{"gh:acme/api#7": {{Start: blockedTime(10)}}}
+
+	for name, tc := range map[string]struct {
+		relation BlockingRelation
+		ends     []RelationEnd
+		want     map[string][]BlockedInterval
+	}{
+		"the key names one stored linear item":                {blockedBy("extkey:OPS-9", 50), []RelationEnd{item, linear}, want},
+		"the key is matched without case and outer spaces":    {blockedBy("extkey: ops-9 ", 50), []RelationEnd{item, linear}, want},
+		"the key names one stored jira item":                  {blockedBy("extkey:OPS-9", 50), []RelationEnd{item, relationEnd("jira:OPS-9", "jira", "todo", 2, nil, 99)}, want},
+		"no stored item carries the key":                      {blockedBy("extkey:OPS-8", 50), []RelationEnd{item, linear}, nil},
+		"two stored items carry the key":                      {blockedBy("extkey:OPS-9", 50), []RelationEnd{item, linear, relationEnd("jira:OPS-9", "jira", "todo", 2, nil, 99)}, nil},
+		"a github item with that suffix does not carry a key": {blockedBy("extkey:OPS-9", 50), []RelationEnd{item, relationEnd("gh:OPS-9", "github", "todo", 2, nil, 99)}, nil},
+		"an empty key": {blockedBy("extkey:", 50), []RelationEnd{item, linear}, nil},
+		// The blocker was synced long after the relation (99 > 50). A text
+		// relation is written only by the item that holds the text, so the
+		// blocker's later sync says nothing about it.
+		"the blocker's later sync does not drop a text relation": {blockedBy("extkey:OPS-9", 50), []RelationEnd{item, linear}, want},
+		"the item was synced again and the text is gone":         {blockedBy("extkey:OPS-9", 49), []RelationEnd{item, linear}, nil},
+		"the item that holds the text is not stored":             {blockedBy("extkey:OPS-9", 50), []RelationEnd{linear}, nil},
+	} {
+		t.Run(name, func(t *testing.T) {
+			got := BlockedIntervalsByItem([]BlockingRelation{tc.relation}, tc.ends)
+			if !reflect.DeepEqual(got, tc.want) {
+				t.Fatalf("BlockedIntervalsByItem =\n  %+v\nwant\n  %+v", got, tc.want)
+			}
+		})
+	}
+
+	// The other text form: THIS item's text says it blocks an external key.
+	blocks := BlockingRelation{SourceID: "gh:acme/api#7", TargetID: "extkey:OPS-9", RelationshipType: "blocks", SemanticsVersion: CanonicalBlocksSemantics, LastSynced: blockedTime(50)}
+	got := BlockedIntervalsByItem([]BlockingRelation{blocks}, []RelationEnd{item, linear})
+	if wantLinear := map[string][]BlockedInterval{"linear:OPS-9": {{Start: blockedTime(10)}}}; !reflect.DeepEqual(got, wantLinear) {
+		t.Fatalf("blocks an external key: %+v, want %+v", got, wantLinear)
+	}
+}

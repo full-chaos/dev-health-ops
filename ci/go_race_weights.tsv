@@ -179,6 +179,7 @@ internal/migrationmatrix	4
 internal/mintcli	1
 internal/mintcli/edgetoken	1
 internal/mintcli/envelope	1
+internal/mintcli/envelopekeys	2
 internal/operationalbackfill	2
 internal/operationalordering	35
 internal/pgmigrate	6

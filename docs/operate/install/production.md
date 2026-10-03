@@ -87,7 +87,7 @@ helm upgrade --install dev-health deploy/helm/dev-health \
   -f values.production.yaml
 ```
 
-Set `web.env.BACKEND_URL` in your values file (the chart has no default and the render fails while it is empty): it is the base URL the web Deployment's server-side requests go to. Point it at a host that routes REST requests to the Go api and `/graphql` to query-api (for example your ingress host), or set `web.enabled: false`.
+Set exactly one of `web.env.BACKEND_URL` and `web.backendFromRelease: true` in your values file (the chart has no default and the render fails while neither is set, or when both are): `BACKEND_URL` is the base URL the web Deployment's server-side requests go to. Point it at a host that routes REST requests to the Go api and `/graphql` to query-api (for example your ingress host); `backendFromRelease: true` selects this release's own Python api Service (`http://<release>-api:<api.port>`, the previous default) while that Service exists. Or set `web.enabled: false`.
 
 The migration hooks run before the application workloads roll: the chart's migrate Job applies the PostgreSQL and ClickHouse schema, the optional `provisionRoles` and `riverMigrate` hooks provision the runtime roles and apply the River schema and grants, and the route-activate hook applies the route table. Inspect them before relying on the release:
 

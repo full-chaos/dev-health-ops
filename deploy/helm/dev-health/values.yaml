@@ -761,10 +761,14 @@ web:
       port: http
     initialDelaySeconds: 5
     periodSeconds: 5
+  # -- Explicit opt-in (CHAOS-8310): web's BACKEND_URL is this release's own Python api Service,
+  #    `http://<release>-api:<api.port>`, the pre-CHAOS-8310 default for every release name. Set exactly one of
+  #    this and `web.env.BACKEND_URL`. CHAOS-8314 (E4) retargets or removes it when the Python api Service goes.
+  backendFromRelease: false
   env:
-    # -- REQUIRED when web.enabled (CHAOS-8310): no default. The base URL of web's server-side requests (REST on
-    #    go-api and /graphql on query-api: two services, so no single in-chart default is correct). The render
-    #    fails with a message naming this key while it is empty.
+    # -- REQUIRED when web.enabled, exactly one of this and `web.backendFromRelease` (CHAOS-8310): the base URL of
+    #    web's server-side requests (REST on go-api and /graphql on query-api: two services, so no single in-chart
+    #    default is correct). The render fails with a message naming both keys while neither is set.
     BACKEND_URL: ""
     AUTH_SECRET: ""
     NODE_ENV: "production"

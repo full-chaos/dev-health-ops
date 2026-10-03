@@ -266,7 +266,7 @@ def _run_harness(
             f'cmd="${{cmd//query-api:8090/{fake_addr}}}"\n'
             f'cmd=$(printf "%s" "$cmd" | sed -E \'s#GO_API_ROUTING_BEARER=\\$\\(dho mint envelope[^)]*\\)#GO_API_ROUTING_BEARER={_FAKE_BEARER}#\')\n'
             f'cmd="${{cmd/dho goapi/{dho} goapi}}"\n'
-            f'cmd=$(printf "%s" "$cmd" | sed "s#/app/go-api/src/dev_health_ops/api/graphql/go_api_operations.json#{catalog_path}#; s#/app/go-api/documents.json#{documents_path}#")\n'
+            f'cmd=$(printf "%s" "$cmd" | sed "s#/app/go-api/contracts/graphql/v1/go_api_operations.json#{catalog_path}#; s#/app/go-api/documents.json#{documents_path}#")\n'
             'eval "$cmd"\n'
         )
         docker_stub.chmod(docker_stub.stat().st_mode | stat.S_IEXEC)

@@ -181,3 +181,8 @@ func isLeaf(err error) (leaf bool) {
 	}
 	return true
 }
+
+// ErrorAs is errors.As over a BOUNDED chain with the As methods under recover: a self-returning or panicking Unwrap, a cycle or a
+// panicking As cannot stall or crash the caller (CHAOS-7933). target is a non-nil pointer to an interface or to a type that
+// implements error. It takes an error, never text.
+func ErrorAs(err error, target any) bool { return chainAs(boundedChain(err), target) }

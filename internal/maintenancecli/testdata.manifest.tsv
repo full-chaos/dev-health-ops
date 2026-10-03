@@ -1,5 +1,5 @@
 # Every file under internal/maintenancecli/testdata: sha256, kind, path. Written by `go run ./internal/testsupport/recordedfiles/manifest`; never edit it by hand.
 # python-recorded set: e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855 (0 files)
-# header-before-stamp set: afa9c1689387af167a1dcdd07e4c5d953c7dbf758505bcc430ec78f375280c34 (2 files)
-378dc151bb1a2d5458029f49b5b68c17b3ef1ee7a0457403d84de69cb024f49b	header-before-stamp	golden/housekeeping.json
-08c77a18208154a68c76364c7d913571ee86e3f70db5e114dda7138657f63fbc	header-before-stamp	golden/scrub.json
+# header-before-stamp set: e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855 (0 files)
+-	header	golden/housekeeping.json
+-	header	golden/scrub.json

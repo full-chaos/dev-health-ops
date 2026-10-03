@@ -101,6 +101,19 @@ func extraCorpusA() []scenario {
 		add(everyKey(s, t, fault{status: 200, body: `{"data":{"team":`, truncate: true}))
 	}
 	{
+		// An answer of exactly the 32 MiB the guard buffers: still read.
+		s, _ := miniScenario("answer-at-limit", true)
+		s.faults = map[string][]fault{"teams": {{status: 200, padTo: 32 << 20}}}
+		add(s)
+	}
+	// A non-200 answer whose body promises a page it does not name: the
+	// status decides, not the guard.
+	for _, status := range []int{400, 500} {
+		s, t := miniScenario(fmt.Sprintf("http-%d-incomplete-page", status), true)
+		incomplete := `{"data":{"team":{"teamSearchV2":{"nodes":[],"pageInfo":{"hasNextPage":true}}}}}`
+		add(everyKey(s, t, fault{status: status, body: incomplete}))
+	}
+	{
 		s, _ := miniScenario("oversized-answer", true)
 		s.faults = map[string][]fault{"teams": {{status: 200, padTo: 33 << 20}}}
 		add(s)
@@ -164,6 +177,10 @@ func extraCorpusA() []scenario {
 		{"base-graphql", clientConfig{baseSuffix: "/graphql"}},
 		{"base-graphql-slash", clientConfig{baseSuffix: "/graphql/"}},
 		{"base-trailing-space", clientConfig{baseSuffix: " "}},
+		{"base-invalid-escape", clientConfig{baseSuffix: "/%zz"}},
+		{"base-empty", clientConfig{baseURL: str("")}},
+		{"base-blank", clientConfig{baseURL: str("   ")}},
+		{"base-only-slash", clientConfig{baseURL: str("/")}},
 		{"custom-user-agent", clientConfig{userAgent: "oracle-agent/1.2"}},
 		{"no-auth", clientConfig{noAuth: true}},
 		{"throttled", clientConfig{throttling: true}},

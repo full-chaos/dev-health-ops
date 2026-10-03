@@ -22,7 +22,7 @@ const producerIdentity = "python 3.14.7\nunicodedata 16.0.0\nhttpx 0.28.1"
 // goldenrecord verb writes each digest when it promotes a recording; a new
 // golden starts as "PIN:" + its file name without ".json".
 var goldenPins = map[string]string{
-	"teams-client.golden.json": "e0666ead7154f95df5ed55fefcb7d4785ca9f3a48e70fceec76e2a32960fc31c",
+	"teams-client.golden.json": "7be724b8ab95c3074fa3d4fbc6db6d1c47217820131f2efd301d6f7034a11389",
 }
 
 // goldens is the set of this package's frozen Python answers.

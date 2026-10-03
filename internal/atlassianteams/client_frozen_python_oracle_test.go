@@ -192,7 +192,9 @@ type clientConfig struct {
 	defaultRetries bool // Go MaxRetries429 0 (default 2) against Python 2
 	maxWait        int  // seconds, > 0; 0 leaves the default (60)
 	throttling     bool
-	baseSuffix     string // appended to the gateway address
+	baseSuffix     string  // appended to the gateway address
+	baseURL        *string // replaces the gateway address
+	noGuard        bool    // the Go client without CompletePagesOnly
 	userAgent      string
 	noAuth         bool // an empty email and token
 }
@@ -675,8 +677,16 @@ func goReads(ctx context.Context, base string, scenarios []scenario) map[string]
 			auth = atlassian.BasicAPITokenAuth{}
 		}
 		// As synccli builds it: Strict, and CompletePagesOnly on the transport.
-		client := &graph.Client{BaseURL: base + s.config.baseSuffix, Auth: auth, Strict: s.strict,
-			HTTPClient: &http.Client{Transport: CompletePagesOnly(recorder)},
+		baseURL := base + s.config.baseSuffix
+		if s.config.baseURL != nil {
+			baseURL = *s.config.baseURL
+		}
+		var transport http.RoundTripper = CompletePagesOnly(recorder)
+		if s.config.noGuard {
+			transport = recorder
+		}
+		client := &graph.Client{BaseURL: baseURL, Auth: auth, Strict: s.strict,
+			HTTPClient: &http.Client{Transport: transport},
 			Now:        func() time.Time { return oracleNow },
 			Sleep:      func(d time.Duration) { sleeps = append(sleeps, fmt.Sprintf("%.3f", d.Seconds())) },
 		}
@@ -805,7 +815,7 @@ for sc in req["scenarios"]:
             kwargs["max_wait_seconds"] = cfg["max_wait"]
         if cfg["user_agent"]:
             kwargs["user_agent"] = cfg["user_agent"]
-        client = GraphQLClient(BASE + cfg["base_suffix"], auth, **kwargs)
+        client = GraphQLClient(cfg["base_url"] if cfg["base_url"] is not None else BASE + cfg["base_suffix"], auth, **kwargs)
         failure = None
     except Exception as exc:
         client, failure = None, exc
@@ -841,13 +851,14 @@ func pythonReads(t *testing.T, root, base string, scenarios []scenario) map[stri
 		t.Fatalf("%s has sha256 %s, want %s: the pinned reference changed", pythonClientZip, got, pythonClientSHA256)
 	}
 	type cfg struct {
-		Retries        int    `json:"retries"`
-		DefaultRetries bool   `json:"default_retries"`
-		MaxWait        int    `json:"max_wait"`
-		Throttling     bool   `json:"throttling"`
-		BaseSuffix     string `json:"base_suffix"`
-		UserAgent      string `json:"user_agent"`
-		NoAuth         bool   `json:"no_auth"`
+		Retries        int     `json:"retries"`
+		DefaultRetries bool    `json:"default_retries"`
+		MaxWait        int     `json:"max_wait"`
+		Throttling     bool    `json:"throttling"`
+		BaseSuffix     string  `json:"base_suffix"`
+		BaseURL        *string `json:"base_url"`
+		UserAgent      string  `json:"user_agent"`
+		NoAuth         bool    `json:"no_auth"`
 	}
 	type sc struct {
 		Name   string   `json:"name"`
@@ -864,7 +875,7 @@ func pythonReads(t *testing.T, root, base string, scenarios []scenario) map[stri
 	for _, s := range scenarios {
 		request.Scenarios = append(request.Scenarios, sc{Name: s.name, Strict: s.strict, Teams: s.readTeams(), Org: s.orgArg, Site: s.siteArg, First: s.first,
 			Config: cfg{Retries: s.config.retries, DefaultRetries: s.config.defaultRetries, MaxWait: s.config.maxWait, Throttling: s.config.throttling,
-				BaseSuffix: s.config.baseSuffix, UserAgent: s.config.userAgent, NoAuth: s.config.noAuth}})
+				BaseSuffix: s.config.baseSuffix, BaseURL: s.config.baseURL, UserAgent: s.config.userAgent, NoAuth: s.config.noAuth}})
 	}
 	input, _ := json.Marshal(request)
 	output := frozenPython(t, "teams-client.golden.json", programoracle.Program{
@@ -1249,8 +1260,17 @@ func TestAtlassianTeamsClientMatchesFrozenPython(t *testing.T) {
 // answer, each pinned. Anything else on such a read is a mismatch, and a read
 // where the clients agree again is one too.
 var declaredDivergences = map[string]declared{
-	"cursor-blank teams":     {python: "ok/ records=[id=str:<team>,display_name=str:A,state=str:ACTIVE,description=null:;id=str:<team>,display_name=str:B,state=str:ACTIVE,description=null:] requests=2 first=2,after=<nil> sleeps=", goSide: "error/other records=[] requests=1 first=2,after=<nil> sleeps="},
-	"cursor-blank users ":    {python: "ok/ records=[] requests=2 first=2,after=<nil> sleeps=", goSide: "error/other records=[] requests=1 first=2,after=<nil> sleeps="},
-	"cursor-blank projects ": {python: "ok/ records=[] requests=2 first=2,after=<nil> sleeps=", goSide: "error/other records=[] requests=1 first=2,after=<nil> sleeps="},
-	"oversized-answer teams": {python: "ok/ records=[id=str:<team>,display_name=str:Mini,state=str:ACTIVE,description=null:] requests=1 first=2,after=<nil> sleeps=", goSide: "error/other records=[] requests=1 first=2,after=<nil> sleeps="},
+	"base-only-slash projects ":     {python: "error/other records=[] requests=1 first=2,after=<nil> sleeps=", goSide: "error/other records=[] requests=0 - sleeps="},
+	"base-only-slash users ":        {python: "error/other records=[] requests=1 first=2,after=<nil> sleeps=", goSide: "error/other records=[] requests=0 - sleeps="},
+	"base-only-slash teams":         {python: "error/other records=[] requests=1 first=2,after=<nil> sleeps=", goSide: "error/other records=[] requests=0 - sleeps="},
+	"base-invalid-escape projects ": {python: "error/other records=[] requests=1 first=2,after=<nil> sleeps=", goSide: "error/other records=[] requests=0 - sleeps="},
+	"base-invalid-escape users ":    {python: "error/other records=[] requests=1 first=2,after=<nil> sleeps=", goSide: "error/other records=[] requests=0 - sleeps="},
+	"base-invalid-escape teams":     {python: "error/other records=[] requests=1 first=2,after=<nil> sleeps=", goSide: "error/other records=[] requests=0 - sleeps="},
+	"base-blank projects ":          {python: "error/other records=[] requests=1 first=2,after=<nil> sleeps=", goSide: "error/other records=[] requests=0 - sleeps="},
+	"base-blank users ":             {python: "error/other records=[] requests=1 first=2,after=<nil> sleeps=", goSide: "error/other records=[] requests=0 - sleeps="},
+	"base-blank teams":              {python: "error/other records=[] requests=1 first=2,after=<nil> sleeps=", goSide: "error/other records=[] requests=0 - sleeps="},
+	"cursor-blank teams":            {python: "ok/ records=[id=str:<team>,display_name=str:A,state=str:ACTIVE,description=null:;id=str:<team>,display_name=str:B,state=str:ACTIVE,description=null:] requests=2 first=2,after=<nil> sleeps=", goSide: "error/other records=[] requests=1 first=2,after=<nil> sleeps="},
+	"cursor-blank users ":           {python: "ok/ records=[] requests=2 first=2,after=<nil> sleeps=", goSide: "error/other records=[] requests=1 first=2,after=<nil> sleeps="},
+	"cursor-blank projects ":        {python: "ok/ records=[] requests=2 first=2,after=<nil> sleeps=", goSide: "error/other records=[] requests=1 first=2,after=<nil> sleeps="},
+	"oversized-answer teams":        {python: "ok/ records=[id=str:<team>,display_name=str:Mini,state=str:ACTIVE,description=null:] requests=1 first=2,after=<nil> sleeps=", goSide: "error/other records=[] requests=1 first=2,after=<nil> sleeps="},
 }

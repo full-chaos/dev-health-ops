@@ -58,7 +58,7 @@ func TestResolveEdgesTotalCountIsTheMatchingEdgesOnARealStore(t *testing.T) {
 	base := time.Date(2026, 10, 3, 0, 0, 0, 0, time.UTC)
 	type graphEdge struct {
 		edgeID, source, target, edgeType, targetType, evidence string
-		lastSynced                                              time.Time
+		lastSynced                                             time.Time
 	}
 	graphEdges := []graphEdge{
 		{"8108000000000000000000000000000000000000000000000000000000000001", "jira:I-1", "jira:I-2", "blocks", "issue", "v1", base},

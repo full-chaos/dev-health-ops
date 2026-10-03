@@ -80,8 +80,8 @@ Mako==1.4.3
 MarkupSafe==3.0.3
 psycopg2-binary==2.9.13
 
-# internal/pgmigrate's baseline oracle (frozen by CHAOS-7797; TestBaselineIsTheFrozenPythonUpgrade) ran the whole
-# internal/pgmigrate's TestBaselineVenueOracleIsTheExecutedPythonUpgrade runs the whole
+# --- the full Postgres alembic upgrade (dho migrate postgres oracle) ---
+# internal/pgmigrate's baseline oracle (frozen by CHAOS-7797: TestBaselineIsTheFrozenPythonUpgrade) ran the whole
 # Python upgrade (`dev-hops migrate postgres`, _run_upgrade to head) against
 # its Postgres container. Loading every revision imports croniter (0097) and
 # connecting through the async URI imports asyncpg. Found by installing this

@@ -955,13 +955,47 @@ def _go_call_files() -> list[Path]:
     return sorted(files)
 
 
+def _unquote_command_substitutions(line: str) -> str:
+    """Drop the double quotes around each `"$( ... )"` of a line (matching the closing paren by depth)."""
+    out: list[str] = []
+    i = 0
+    while i < len(line):
+        if line.startswith('"$(', i):
+            depth = 0
+            j = i + 1
+            while j < len(line):
+                if line.startswith("$(", j):
+                    depth += 1
+                    j += 2
+                    continue
+                if line[j] == "(":
+                    depth += 1
+                elif line[j] == ")":
+                    depth -= 1
+                    if depth == 0:
+                        break
+                j += 1
+            if depth == 0 and j + 1 < len(line) and line[j + 1] == '"':
+                out.append(line[i + 1 : j + 1])
+                i = j + 2
+                continue
+        out.append(line[i])
+        i += 1
+    return "".join(out)
+
+
 def _go_calls() -> list[tuple[str, str]]:
     """Every `go build|test|vet|run|install` call of the CI scripts, workflows and Dockerfiles,
     as (repo-relative file, the command text from `go` to the next `&&`, `||`, `;`, `|` or `)`).
 
     Derived by the go verb, not by any flag: comments, YAML names/descriptions, the usage text
     of check_go.sh and quoted strings (the words of a message) are removed first, and a
-    backslash continuation joins a command's lines."""
+    backslash continuation joins a command's lines.
+
+    LIMITS (named, not covered): a workflow `run:` value written as a quoted scalar; a call
+    inside a `bash -c "..."` string; go called by a path or through a variable; files outside
+    the globs of _go_call_files (tools/codex-review/*.sh, .github/actions, Python callers).
+    A call in any of those is not seen by these tests."""
     calls: list[tuple[str, str]] = []
     for path in _go_call_files():
         text = path.read_text(encoding="utf-8")
@@ -970,6 +1004,10 @@ def _go_calls() -> list[tuple[str, str]]:
         text = re.sub(r"(?m)^\s*-?\s*(name|description|summary):.*$", "", text)
         text = re.sub(r"\\\n\s*", " ", text)
         for line in text.split("\n"):
+            # A command substitution inside double quotes ("$(cd x && go test ...)") is
+            # code, not a message: drop the quotes around it so its calls are derived and
+            # only the string literals INSIDE it are blanked.
+            line = _unquote_command_substitutions(line)
             unquoted = re.sub(r"\"(?:[^\"\\]|\\.)*\"|'[^']*'", '""', line)
             for match in GO_CALL.finditer(unquoted):
                 command = re.split(r"&&|\|\||;|\||\)", unquoted[match.start() :])[0]
@@ -1006,7 +1044,7 @@ def test_every_go_call_of_check_go_names_mod_readonly_and_trimpath() -> None:
     # The derivation is by verb, so a call that lost -mod=readonly is still found; and a
     # line that names both a go verb and -mod=readonly must be one the derivation found.
     derived = [command for file, command in _go_calls() if file == "ci/check_go.sh"]
-    assert len(derived) >= 15, f"only {len(derived)} calls derived from check_go.sh"
+    assert len(derived) >= 20, f"only {len(derived)} calls derived from check_go.sh"
     for command in derived:
         assert "-mod=readonly" in command, (
             f"check_go.sh call without -mod=readonly: {command[:90]}"

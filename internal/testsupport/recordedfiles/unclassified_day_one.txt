@@ -417,7 +417,6 @@ internal/jobs/metrics/remaining/testdata/generate_recommendations_engine_golden.
 internal/jobs/metrics/remaining/testdata/generate_recommendations_loader_golden.py
 internal/jobs/metrics/remaining/testdata/generate_recommendations_rules_golden.py
 internal/jobs/metrics/remaining/testdata/generate_recommendations_signals_golden.py
-internal/jobs/metrics/remaining/testdata/run_recommendations_loader_against_clickhouse.py
 internal/jobs/operational/testdata/billing_email/invoice_receipt__ascii.json
 internal/jobs/operational/testdata/billing_email/invoice_receipt__unicode.json
 internal/jobs/operational/testdata/billing_email/payment_failed__ascii.json

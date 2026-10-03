@@ -1,0 +1,62 @@
+{
+  "header": {
+    "test": "TestRecommendationsLoaderMatchesFrozenPythonAgainstClickHouse",
+    "python_build": "a4847c5e93607451a0c987b314d37e02fc43ce85",
+    "producer_digest": "6e1dc97e68624398015f60caee160cceee6ae601bd434d01b8b7d5975267e137",
+    "recipe": "git worktree add --detach $DIR a4847c5e93607451a0c987b314d37e02fc43ce85 (with its .venv: uv sync --frozen --no-install-project); then from the repository root: go run ./internal/testsupport/venueoracle/goldenrecord -pkg ./internal/jobs/metrics/remaining/ -test '^TestRecommendationsLoaderMatchesFrozenPythonAgainstClickHouse$' -python-root $DIR (records on the pinned build, replays the candidate in a fresh process, and only then promotes it and pins its digest)",
+    "recorded_by": "goldenrecord",
+    "blanked": {}
+  },
+  "requests": [
+    {
+      "name": "recommendations loader team=team-alpha org=org-loader-parity",
+      "method": "PYTHON",
+      "path": "program sha256 528b0e29d4c1e497d3276ccb3691065f773589dfde5011fb86f37c207e4da525 env sha256 969169a1702b285f3a9e4b602d19052b0d6a3c6b2a44dd7425bef0f696436295",
+      "body_sha256": "d12ea3fbf4b34a6a874b082237e7cd221a957e24153891adba19fa385902ebc0",
+      "request_headers_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "status": 0,
+      "headers": {},
+      "body": "{\"team_id\": \"team-alpha\", \"org_id\": \"org-loader-parity\", \"window_start\": \"2026-08-01\", \"window_end\": \"2026-09-01\", \"wip_by_day\": [\"4000000000000000\", \"402c000000000000\", \"401c000000000000\", \"4022000000000000\"], \"throughput_by_cycle\": [\"4008000000000000\", \"4020000000000000\", \"4000000000000000\", \"3ff0000000000000\"], \"review_latency_p75_hours\": \"40d8ad7000000000\", \"reviewer_gini\": \"3fe3594d653594d6\", \"rework_churn_ratio\": \"3fe7eb50b0f27bb3\", \"after_hours_ratio\": \"3fe0cccccccccccd\", \"cycle_time_by_day\": [\"4023000000000000\", \"4020d55555555555\", \"402c800000000000\", \"4034000000000000\"], \"hotspot_complexity_delta\": \"4028800000000000\", \"hotspot_churn_overlap\": \"3ff0000000000000\", \"compounding_risk_score\": \"3fe3d70a3d70a3d7\", \"compounding_risk_severity\": \"elevated\"}"
+    },
+    {
+      "name": "recommendations loader team=team-beta org=org-loader-parity",
+      "method": "PYTHON",
+      "path": "program sha256 528b0e29d4c1e497d3276ccb3691065f773589dfde5011fb86f37c207e4da525 env sha256 969169a1702b285f3a9e4b602d19052b0d6a3c6b2a44dd7425bef0f696436295",
+      "body_sha256": "5a699fb7556fcb7c03b10104d551f55becaa1ec237b170d70337d897579777bd",
+      "request_headers_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "status": 0,
+      "headers": {},
+      "body": "{\"team_id\": \"team-beta\", \"org_id\": \"org-loader-parity\", \"window_start\": \"2026-08-01\", \"window_end\": \"2026-09-01\", \"wip_by_day\": [\"3ff0000000000000\", \"4000000000000000\"], \"throughput_by_cycle\": [\"4020000000000000\", \"4022000000000000\"], \"review_latency_p75_hours\": \"40d8ad7000000000\", \"reviewer_gini\": \"0000000000000000\", \"rework_churn_ratio\": \"3fe7eb50b0f27bb3\", \"after_hours_ratio\": \"3fa999999999999a\", \"cycle_time_by_day\": [\"4010000000000000\", \"4016000000000000\"], \"hotspot_complexity_delta\": \"4028800000000000\", \"hotspot_churn_overlap\": \"3ff0000000000000\", \"compounding_risk_score\": null, \"compounding_risk_severity\": \"unknown\"}"
+    },
+    {
+      "name": "recommendations loader team=team-alpha org=org-loader-infinite",
+      "method": "PYTHON",
+      "path": "program sha256 528b0e29d4c1e497d3276ccb3691065f773589dfde5011fb86f37c207e4da525 env sha256 969169a1702b285f3a9e4b602d19052b0d6a3c6b2a44dd7425bef0f696436295",
+      "body_sha256": "d59b5199138a77be5036362d7980b520c0da6c5fa061630404e63ded804d5cd9",
+      "request_headers_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "status": 0,
+      "headers": {},
+      "body": "{\"team_id\": \"team-alpha\", \"org_id\": \"org-loader-infinite\", \"window_start\": \"2026-08-01\", \"window_end\": \"2026-09-01\", \"wip_by_day\": [], \"throughput_by_cycle\": [], \"review_latency_p75_hours\": \"7ff0000000000000\", \"reviewer_gini\": null, \"rework_churn_ratio\": \"7ff0000000000000\", \"after_hours_ratio\": null, \"cycle_time_by_day\": [], \"hotspot_complexity_delta\": null, \"hotspot_churn_overlap\": null, \"compounding_risk_score\": null, \"compounding_risk_severity\": \"unknown\"}"
+    },
+    {
+      "name": "recommendations loader team=team-alpha org=org-loader-empty",
+      "method": "PYTHON",
+      "path": "program sha256 528b0e29d4c1e497d3276ccb3691065f773589dfde5011fb86f37c207e4da525 env sha256 969169a1702b285f3a9e4b602d19052b0d6a3c6b2a44dd7425bef0f696436295",
+      "body_sha256": "b917ec1a83625565334c6acf373be3f87b8bf0d9bd41b2f7331eb2cb20a8816b",
+      "request_headers_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "status": 0,
+      "headers": {},
+      "body": "{\"team_id\": \"team-alpha\", \"org_id\": \"org-loader-empty\", \"window_start\": \"2026-08-01\", \"window_end\": \"2026-09-01\", \"wip_by_day\": [], \"throughput_by_cycle\": [], \"review_latency_p75_hours\": null, \"reviewer_gini\": null, \"rework_churn_ratio\": null, \"after_hours_ratio\": null, \"cycle_time_by_day\": [], \"hotspot_complexity_delta\": null, \"hotspot_churn_overlap\": null, \"compounding_risk_score\": null, \"compounding_risk_severity\": \"unknown\"}"
+    },
+    {
+      "name": "recommendations loader team=team-alpha org=org-loader-one-hotspot",
+      "method": "PYTHON",
+      "path": "program sha256 528b0e29d4c1e497d3276ccb3691065f773589dfde5011fb86f37c207e4da525 env sha256 969169a1702b285f3a9e4b602d19052b0d6a3c6b2a44dd7425bef0f696436295",
+      "body_sha256": "91d0408ae8842ccbc8ae4ffbbb8ccbf9496c0e86f1aa4515347427dd277ab436",
+      "request_headers_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "status": 0,
+      "headers": {},
+      "body": "{\"team_id\": \"team-alpha\", \"org_id\": \"org-loader-one-hotspot\", \"window_start\": \"2026-08-01\", \"window_end\": \"2026-09-01\", \"wip_by_day\": [], \"throughput_by_cycle\": [], \"review_latency_p75_hours\": null, \"reviewer_gini\": null, \"rework_churn_ratio\": null, \"after_hours_ratio\": null, \"cycle_time_by_day\": [], \"hotspot_complexity_delta\": null, \"hotspot_churn_overlap\": \"0000000000000000\", \"compounding_risk_score\": null, \"compounding_risk_severity\": \"unknown\"}"
+    }
+  ]
+}

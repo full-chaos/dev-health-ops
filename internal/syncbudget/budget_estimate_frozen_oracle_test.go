@@ -6,6 +6,9 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
+	"net/http"
+	"net/url"
 	"os"
 	"path"
 	"path/filepath"
@@ -17,6 +20,7 @@ import (
 
 	"github.com/full-chaos/dev-health-ops/internal/platform/secrets"
 	"github.com/full-chaos/dev-health-ops/internal/providerfoundation"
+	"github.com/full-chaos/dev-health-ops/internal/testsupport/fakehttp"
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/programoracle"
 )
 
@@ -84,6 +88,22 @@ type oracleOutput struct {
 		} `json:"input"`
 		Python string `json:"python"`
 	} `json:"pagerduty_hydration"`
+	PagerDutyExchange []struct {
+		Input struct {
+			Descriptor string `json:"descriptor"`
+			Status     int    `json:"status"`
+			Body       string `json:"body"`
+			Label      string `json:"label"`
+		} `json:"input"`
+		Python struct {
+			Outcome  string `json:"outcome"`
+			Requests []struct {
+				Method string      `json:"method"`
+				URL    string      `json:"url"`
+				Form   [][2]string `json:"form"`
+			} `json:"requests"`
+		} `json:"python"`
+	} `json:"pagerduty_exchange"`
 	JSONValues []struct {
 		Input  string `json:"input"`
 		Python struct {
@@ -239,6 +259,53 @@ func TestBudgetEstimatorMatchesFrozenPython(t *testing.T) {
 				t.Errorf("case %d: python returned %s, go failed: %v", index, *oracleCase.Python.Repr, err)
 			case err == nil && pyRepr(mapping) != *oracleCase.Python.Repr:
 				t.Errorf("case %d: python %s, go %s", index, *oracleCase.Python.Repr, pyRepr(mapping))
+			}
+		}
+	})
+
+	t.Run("pagerduty_exchange", func(t *testing.T) {
+		if len(output.PagerDutyExchange) == 0 {
+			t.Fatal("no PagerDuty exchange cases")
+		}
+		declared := map[string]int{}
+		for index, oracleCase := range output.PagerDutyExchange {
+			descriptor, err := decodeJSON([]byte(oracleCase.Input.Descriptor))
+			if err != nil {
+				t.Fatalf("case %d: decode: %v", index, err)
+			}
+			doer := &recordedExchangeDoer{status: oracleCase.Input.Status, body: oracleCase.Input.Body}
+			loader := Loader{PagerDutyDoer: fakehttp.Client(doer)}
+			goErr := loader.hydratePagerDutyOnce(context.Background(), "org", "credential", descriptor.(*object))
+			label := fmt.Sprintf("case %d %s status=%d body=%s", index, oracleCase.Input.Descriptor, oracleCase.Input.Status, oracleCase.Input.Body)
+			same := (oracleCase.Python.Outcome == "ok") == (goErr == nil) && len(doer.requests) == len(oracleCase.Python.Requests)
+			if same {
+				for position, want := range oracleCase.Python.Requests {
+					got := doer.requests[position]
+					if got.method != want.Method || got.url != want.URL || fmt.Sprint(got.form) != fmt.Sprint(want.Form) {
+						same = false
+					}
+				}
+			}
+			if class := oracleCase.Input.Label; class != "" {
+				// A declared divergence (CHAOS-8388): the recorded Python answer
+				// is frozen in the golden, Go's own answer is pinned here, and
+				// either one moving turns this red.
+				declared[class]++
+				if same {
+					t.Errorf("%s: declared divergence %q no longer diverges", label, class)
+				}
+				if got, want := goExchangeSummary(goErr, doer), declaredExchangeGo[class]; got != want {
+					t.Errorf("%s: declared divergence %q pins go %q, got %q", label, class, want, got)
+				}
+				continue
+			}
+			if !same {
+				t.Errorf("%s: python %s %v, go %v %+v", label, oracleCase.Python.Outcome, oracleCase.Python.Requests, goErr, doer.requests)
+			}
+		}
+		for class := range declaredExchangeGo {
+			if declared[class] == 0 {
+				t.Errorf("declared divergence %q has no case", class)
 			}
 		}
 	})
@@ -464,6 +531,79 @@ func oracleContext(input oracleEstimateInput) (Context, error) {
 		WindowStart: start, WindowEnd: end, DatasetOptions: options,
 		Getenv: func(name string) string { return env[name] },
 	}, nil
+}
+
+// recordedExchangeDoer answers a PagerDuty token exchange with a fixed status
+// and body and records each request it receives: the Go half of the fake
+// endpoint the Python oracle stood where identity.pagerduty.com does.
+type recordedExchangeDoer struct {
+	status   int
+	body     string
+	requests []recordedExchange
+}
+
+type recordedExchange struct {
+	method, url string
+	form        [][2]string
+}
+
+func (d *recordedExchangeDoer) Do(request *http.Request) (*http.Response, error) {
+	raw, err := io.ReadAll(request.Body)
+	if err != nil {
+		return nil, err
+	}
+	values, err := url.ParseQuery(string(raw))
+	if err != nil {
+		return nil, err
+	}
+	var form [][2]string
+	for name, list := range values {
+		for _, value := range list {
+			form = append(form, [2]string{name, value})
+		}
+	}
+	sort.Slice(form, func(i, j int) bool {
+		if form[i][0] != form[j][0] {
+			return form[i][0] < form[j][0]
+		}
+		return form[i][1] < form[j][1]
+	})
+	d.requests = append(d.requests, recordedExchange{method: request.Method, url: request.URL.String(), form: form})
+	return &http.Response{
+		StatusCode: d.status, Header: http.Header{"Content-Type": {"application/json"}},
+		Body: io.NopCloser(strings.NewReader(d.body)), Request: request,
+	}, nil
+}
+
+// declaredExchangeGo pins Go's answer for each declared divergence of the
+// PagerDuty client-credentials exchange: scope-missing and redirect-301 are
+// the two classes where Go is looser than the recorded Python answer (Go
+// must refuse a token response without the required read scopes and a
+// non-2xx status; a Go fix, not a recording, flips them); the others are
+// malformed input Python tolerates and Go refuses or defaults.
+var declaredExchangeGo = map[string]string{
+	"scope-missing":    "ok requests=1 region=us",
+	"redirect-301":     "ok requests=1 region=us",
+	"token-not-string": "fail requests=1 region=us",
+	"expires-not-int":  "fail requests=1 region=us",
+	"region-empty":     "ok requests=1 region=us",
+	"credential-empty": "fail requests=0 region=-",
+}
+
+func goExchangeSummary(err error, doer *recordedExchangeDoer) string {
+	outcome := "ok"
+	if err != nil {
+		outcome = "fail"
+	}
+	region := "-"
+	if len(doer.requests) > 0 {
+		for _, pair := range doer.requests[0].form {
+			if pair[0] == "region" {
+				region = pair[1]
+			}
+		}
+	}
+	return fmt.Sprintf("%s requests=%d region=%s", outcome, len(doer.requests), region)
 }
 
 const (

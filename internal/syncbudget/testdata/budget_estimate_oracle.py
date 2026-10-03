@@ -788,6 +788,122 @@ def _json_value_result(text: str) -> dict[str, Any]:
     return result
 
 
+ALL_READ_SCOPES = (
+    "escalation_policies.read incidents.read oncalls.read "
+    "schedules.read services.read teams.read users.read"
+)
+
+
+def _exchange_body(**fields: Any) -> str:
+    return json.dumps(fields, sort_keys=True)
+
+
+_CC_DESCRIPTOR = (
+    '{"auth_mode": "client_credentials", "client_id": "cid-%d", '
+    '"client_secret": "sec-%d", "subdomain": "acme", "region": "us"}'
+)
+
+# (descriptor, HTTP status, response body) of the token exchange a
+# client_credentials descriptor makes: the fake endpoint stands where
+# identity.pagerduty.com does; the request each side sends is compared too.
+EXCHANGE_CASES: tuple[tuple[Any, ...], ...] = (
+    (_CC_DESCRIPTOR, 200, _exchange_body(access_token="tok", expires_in=3600, scope=ALL_READ_SCOPES)),
+    (_CC_DESCRIPTOR, 200, _exchange_body(access_token="tok", scope=ALL_READ_SCOPES)),
+    (_CC_DESCRIPTOR, 200, _exchange_body(access_token="tok", expires_in=3600, scope=ALL_READ_SCOPES + " extra.read")),
+    (_CC_DESCRIPTOR, 200, _exchange_body(access_token="tok", expires_in=3600, scope="  " + ALL_READ_SCOPES.replace(" ", "   ") + " ")),
+    (_CC_DESCRIPTOR, 201, _exchange_body(access_token="tok", scope=ALL_READ_SCOPES)),
+    (_CC_DESCRIPTOR, 204, ""),
+    (_CC_DESCRIPTOR, 302, ""),
+    (_CC_DESCRIPTOR, 400, _exchange_body(error="invalid_client")),
+    (_CC_DESCRIPTOR, 401, _exchange_body(error="invalid_client")),
+    (_CC_DESCRIPTOR, 403, "{}"),
+    (_CC_DESCRIPTOR, 404, ""),
+    (_CC_DESCRIPTOR, 429, _exchange_body(error="rate")),
+    (_CC_DESCRIPTOR, 500, ""),
+    (_CC_DESCRIPTOR, 503, _exchange_body(access_token="tok", scope=ALL_READ_SCOPES)),
+    (_CC_DESCRIPTOR, 200, ""),
+    (_CC_DESCRIPTOR, 200, "not json"),
+    (_CC_DESCRIPTOR, 200, "[]"),
+    (_CC_DESCRIPTOR, 200, "null"),
+    (_CC_DESCRIPTOR, 200, '"text"'),
+    (_CC_DESCRIPTOR, 200, "{}"),
+    (_CC_DESCRIPTOR, 200, _exchange_body(access_token="tok", expires_in="abc", scope=ALL_READ_SCOPES)),
+    (_CC_DESCRIPTOR, 200, _exchange_body(access_token="tok", expires_in=0, scope=ALL_READ_SCOPES)),
+    (_CC_DESCRIPTOR, 200, _exchange_body(access_token="tok", expires_in=-5, scope=ALL_READ_SCOPES)),
+    (_CC_DESCRIPTOR, 200, _exchange_body(access_token="tok", expires_in=None, scope=ALL_READ_SCOPES)),
+    (_CC_DESCRIPTOR, 200, _exchange_body(access_token="tok", expires_in=10**30, scope=ALL_READ_SCOPES)),
+    (
+        '{"auth_mode": "client_credentials", "client_id": "cid-%d", "client_secret": "sec-%d", "subdomain": "acme", "region": "eu"}',
+        200,
+        _exchange_body(access_token="tok", scope=ALL_READ_SCOPES),
+    ),
+    (
+        '{"auth_mode": "client_credentials", "client_id": "cid-%d", "client_secret": "sec-%d", "subdomain": "ac me&x=1", "region": "u s"}',
+        200,
+        _exchange_body(access_token="tok", scope=ALL_READ_SCOPES),
+    ),
+    (
+        '{"auth_mode": "client_credentials", "client_id": "cid-%d", "client_secret": "sec-%d", "subdomain": "acme", "region": "us", "access_token": "stale"}',
+        200,
+        _exchange_body(access_token="fresh", scope=ALL_READ_SCOPES),
+    ),
+    # Declared divergences: the label names the class (see the Go test).
+    (_CC_DESCRIPTOR, 200, _exchange_body(access_token="tok", expires_in=3600), "scope-missing"),
+    (_CC_DESCRIPTOR, 200, _exchange_body(access_token="tok", expires_in=3600, scope=""), "scope-missing"),
+    (_CC_DESCRIPTOR, 200, _exchange_body(access_token="tok", expires_in=3600, scope="incidents.read"), "scope-missing"),
+    (_CC_DESCRIPTOR, 200, _exchange_body(access_token="tok", expires_in=3600, scope=ALL_READ_SCOPES.replace("teams.read", "teams.write")), "scope-missing"),
+    (_CC_DESCRIPTOR, 200, _exchange_body(access_token="tok", expires_in=3600, scope=ALL_READ_SCOPES.split()[:6]), "scope-missing"),
+    (_CC_DESCRIPTOR, 200, _exchange_body(access_token="tok", expires_in=3600, scope=None), "scope-missing"),
+    (_CC_DESCRIPTOR, 200, _exchange_body(access_token="tok", expires_in=3600, scope=7), "scope-missing"),
+    (_CC_DESCRIPTOR, 301, _exchange_body(access_token="tok", scope=ALL_READ_SCOPES), "redirect-301"),
+    (_CC_DESCRIPTOR, 200, _exchange_body(access_token=None, scope=ALL_READ_SCOPES), "token-not-string"),
+    (_CC_DESCRIPTOR, 200, _exchange_body(access_token="", scope=ALL_READ_SCOPES), "token-not-string"),
+    (_CC_DESCRIPTOR, 200, _exchange_body(access_token=12345, scope=ALL_READ_SCOPES), "token-not-string"),
+    (_CC_DESCRIPTOR, 200, _exchange_body(access_token=["a"], scope=ALL_READ_SCOPES), "token-not-string"),
+    (_CC_DESCRIPTOR, 200, _exchange_body(access_token="tok", expires_in="100", scope=ALL_READ_SCOPES), "expires-not-int"),
+    (_CC_DESCRIPTOR, 200, _exchange_body(access_token="tok", expires_in=1.5, scope=ALL_READ_SCOPES), "expires-not-int"),
+    (_CC_DESCRIPTOR, 200, _exchange_body(access_token="tok", expires_in=True, scope=ALL_READ_SCOPES), "expires-not-int"),
+    (_CC_DESCRIPTOR, 200, _exchange_body(access_token="tok", expires_in=[1], scope=ALL_READ_SCOPES), "expires-not-int"),
+    ('{"auth_mode": "client_credentials", "client_id": "cid-%d", "client_secret": "sec-%d", "subdomain": 7, "region": null}', 200, _exchange_body(access_token="tok", scope=ALL_READ_SCOPES), "region-empty"),
+    ('{"auth_mode": "client_credentials", "client_id": 12, "client_secret": "sec-%d", "subdomain": "acme", "region": ""}', 200, _exchange_body(access_token="tok", scope=ALL_READ_SCOPES), "region-empty"),
+    ('{"auth_mode": "client_credentials", "client_id": "cid-%d", "client_secret": "", "subdomain": "acme", "region": "us"}', 200, _exchange_body(access_token="tok", scope=ALL_READ_SCOPES), "credential-empty"),
+    ('{"auth_mode": "client_credentials", "client_id": "cid-%d", "client_secret": null, "subdomain": "acme", "region": "us"}', 200, _exchange_body(access_token="tok", scope=ALL_READ_SCOPES), "credential-empty"),
+    ('{"auth_mode": "client_credentials", "client_id": "", "client_secret": "sec-%d", "subdomain": "", "region": "us"}', 200, _exchange_body(access_token="tok", scope=ALL_READ_SCOPES), "credential-empty"),
+)
+
+
+def _install_fake_token_endpoint(requests: list[dict[str, Any]], answer: dict[str, Any]):
+    import httpx
+
+    real_client = httpx.AsyncClient
+
+    def handler(request: "httpx.Request") -> "httpx.Response":
+        from urllib.parse import parse_qsl
+
+        requests.append(
+            {
+                "method": request.method,
+                "url": str(request.url),
+                "form": sorted(
+                    [k, v] for k, v in parse_qsl(request.content.decode(), keep_blank_values=True)
+                ),
+            }
+        )
+        return httpx.Response(
+            answer["status"],
+            content=answer["body"].encode(),
+            headers={"content-type": "application/json"},
+        )
+
+    class FakeClient(real_client):  # type: ignore[misc, valid-type]
+        def __init__(self, *args: Any, **kwargs: Any) -> None:
+            kwargs["transport"] = httpx.MockTransport(handler)
+            super().__init__(*args, **kwargs)
+
+    httpx.AsyncClient = FakeClient  # type: ignore[misc]
+    return real_client
+
+
 def main() -> int:
     with open(os.devnull, "w") as devnull, contextlib.redirect_stdout(devnull):
         from dev_health_ops.core.encryption import encrypt_value
@@ -848,6 +964,36 @@ def main() -> int:
             {"input": {"descriptor": descriptor, "env": env}, "python": outcome}
         )
 
+    pagerduty_exchange = []
+    answer: dict[str, Any] = {"status": 200, "body": ""}
+    requests: list[dict[str, Any]] = []
+    real_client = _install_fake_token_endpoint(requests, answer)
+    _set_env({})
+    for index, (template, status, body, *rest) in enumerate(EXCHANGE_CASES):
+        label = rest[0] if rest else ""
+        descriptor = template.replace("%d", str(index))
+        answer["status"], answer["body"] = status, body
+        requests.clear()
+        try:
+            hydrate_pagerduty_credentials(json.loads(descriptor), org_id=ORG)
+            outcome = "ok"
+        except Exception as exc:  # noqa: BLE001
+            outcome = type(exc).__name__
+        pagerduty_exchange.append(
+            {
+                "input": {
+                    "descriptor": descriptor,
+                    "status": status,
+                    "body": body,
+                    "label": label,
+                },
+                "python": {"outcome": outcome, "requests": list(requests)},
+            }
+        )
+    import httpx
+
+    httpx.AsyncClient = real_client  # type: ignore[misc]
+
     json_values = [
         {"input": text, "python": _json_value_result(text)}
         for text in _json_texts()
@@ -896,6 +1042,7 @@ def main() -> int:
             "credential_mapping": credential_mapping,
             "pagerduty_hydration": pagerduty_hydration,
             "json_values": json_values,
+            "pagerduty_exchange": pagerduty_exchange,
         },
         sys.stdout,
         ensure_ascii=True,

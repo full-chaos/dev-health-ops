@@ -7,6 +7,8 @@ import (
 	"go/types"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
 	"sort"
 	"strings"
 	"sync/atomic"
@@ -70,9 +72,15 @@ var defaultClientSites = map[string]func(t *testing.T, base string){
 // only). Nothing loaded, or any load or type error, fails the test: a scan that cannot see the code must not pass.
 func loadVendoredPackages(t *testing.T, pattern string) []*packages.Package {
 	t.Helper()
+	return loadPackagesIn(t, "../..", pattern)
+}
+
+// loadPackagesIn is loadVendoredPackages for any module directory (the planted-form fixtures use it).
+func loadPackagesIn(t *testing.T, dir, pattern string) []*packages.Package {
+	t.Helper()
 	loaded, err := packages.Load(&packages.Config{
 		Mode: packages.NeedName | packages.NeedFiles | packages.NeedSyntax | packages.NeedTypes | packages.NeedTypesInfo | packages.NeedImports | packages.NeedDeps,
-		Dir:  "../..",
+		Dir:  dir,
 	}, pattern)
 	if err != nil {
 		t.Fatalf("loading %s: %v", pattern, err)
@@ -157,8 +165,13 @@ type vendoredRedirectScan struct {
 
 func scanVendored(t *testing.T, pattern string) vendoredRedirectScan {
 	t.Helper()
+	return scanPackages(t, "../..", pattern)
+}
+
+func scanPackages(t *testing.T, dir, pattern string) vendoredRedirectScan {
+	t.Helper()
 	scan := vendoredRedirectScan{sites: map[string]int{}}
-	loaded := loadVendoredPackages(t, pattern)
+	loaded := loadPackagesIn(t, dir, pattern)
 	holder := &clientTypes{visiting: map[types.Type]bool{}}
 	packages.Visit(loaded, nil, func(pkg *packages.Package) {
 		if pkg.PkgPath == "net/http" && pkg.Types != nil {
@@ -182,12 +195,27 @@ func scanVendored(t *testing.T, pattern string) vendoredRedirectScan {
 				switch n := node.(type) {
 				case *ast.FuncDecl:
 					enclosing = n.Name.Name
-					if n.Type.Results != nil {
-						for _, result := range n.Type.Results.List {
-							for _, name := range result.Names {
-								if object := info.Defs[name]; object != nil && holder.holdsValue(object.Type()) {
-									report("a named result that holds an http.Client value")
-								}
+					if n.Recv != nil {
+						for _, field := range n.Recv.List {
+							if holder.holdsValue(info.TypeOf(field.Type)) {
+								report("a receiver that holds an http.Client value")
+							}
+						}
+					}
+				case *ast.FuncType:
+					// every function declaration, literal and function TYPE: a parameter passes a client value in by value, a result (named or
+					// not) hands one out; either way a value of the type exists that this scan did not see created.
+					if n.Params != nil {
+						for _, field := range n.Params.List {
+							if holder.holdsValue(info.TypeOf(field.Type)) {
+								report("a parameter that holds an http.Client value")
+							}
+						}
+					}
+					if n.Results != nil {
+						for _, field := range n.Results.List {
+							if holder.holdsValue(info.TypeOf(field.Type)) {
+								report("a result that holds an http.Client value (named or not)")
 							}
 						}
 					}
@@ -246,6 +274,18 @@ func scanVendored(t *testing.T, pattern string) vendoredRedirectScan {
 					}
 				case *ast.Ident:
 					object := info.Uses[n]
+					if instance, ok := info.Instances[n]; ok && instance.TypeArgs != nil {
+						for i := 0; i < instance.TypeArgs.Len(); i++ {
+							if holder.holdsValue(instance.TypeArgs.At(i)) {
+								report("a generic instantiation whose type argument holds an http.Client value")
+							}
+						}
+					}
+					// Reflection builds or rewrites values of a type chosen at run time (reflect.New, Value.SetZero, ...): the scan cannot say
+					// which, so ANY use of an object of package reflect (function, method, type) fails the scan. The vendored source imports none.
+					if object != nil && object.Pkg() != nil && object.Pkg().Path() == "reflect" {
+						report("reflect." + object.Name() + " (reflection is not covered by this scan)")
+					}
 					for _, member := range []string{"DefaultClient", "Get", "Post", "Head", "PostForm"} {
 						if isNetHTTP(object, member) {
 							if function, isFunc := object.(*types.Func); isFunc && function.Type().(*types.Signature).Recv() != nil {
@@ -390,5 +430,44 @@ func TestSuppliedGuardedClientKeepsItsRedirectPolicy(t *testing.T) {
 				}
 			})
 		}
+	}
+}
+
+// The scan's planted-form fixtures (CHAOS-7997): each package of a scratch module holds ONE way to get a redirect-following client that the
+// scan used to miss (or a clean control). Every defect package must be reported by its own name, the control must not.
+func TestRedirectScanSeesTheUnusualWaysToBuildAClient(t *testing.T) {
+	dir := t.TempDir()
+	files := map[string]string{
+		"go.mod":             "module planted\n\ngo 1.22\n",
+		"control/c.go":       "package control\n\nimport \"net/http\"\n\nfunc Use(c *http.Client) *http.Client { return c }\n",
+		"genericzero/g.go":   "package genericzero\n\nimport \"net/http\"\n\nfunc zero[T any]() T { var v T; return v }\n\nfunc Build() *http.Client { client := zero[http.Client](); return &client }\n",
+		"valueparam/v.go":    "package valueparam\n\nimport \"net/http\"\n\ntype sink func(http.Client)\n",
+		"unnamedresult/u.go": "package unnamedresult\n\nimport \"net/http\"\n\ntype maker func() http.Client\n",
+		"receiver/r.go":      "package receiver\n\nimport \"net/http\"\n\ntype mine http.Client\n\nfunc (m mine) Do() {}\n",
+		"secondarg/s.go":     "package secondarg\n\nimport \"net/http\"\n\nfunc second[A, B any]() *B { return new(B) }\n\nfunc Build() *http.Client { c := second[int, http.Client](); return c }\n",
+		"reflectmethod/m.go": "package reflectmethod\n\nimport \"reflect\"\n\nfunc Reset(v reflect.Value) { v.SetZero() }\n",
+		"reflectnew/r.go":    "package reflectnew\n\nimport \"reflect\"\n\nfunc Build(t reflect.Type) reflect.Value { return reflect.New(t) }\n",
+	}
+	for name, text := range files {
+		path := filepath.Join(dir, name)
+		if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(path, []byte(text), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	scan := scanPackages(t, dir, "./...")
+	found := map[string]bool{}
+	for _, creation := range scan.creations {
+		found[strings.SplitN(creation, ".", 2)[0]] = true
+	}
+	for _, defect := range []string{"planted/genericzero", "planted/valueparam", "planted/unnamedresult", "planted/reflectnew", "planted/receiver", "planted/secondarg", "planted/reflectmethod"} {
+		if !found[defect] {
+			t.Errorf("the scan did not report %s (reported: %v)", defect, scan.creations)
+		}
+	}
+	if found["planted/control"] {
+		t.Errorf("the scan reported the clean control package: %v", scan.creations)
 	}
 }

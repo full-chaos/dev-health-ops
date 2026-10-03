@@ -34,7 +34,7 @@ const hookStatesSHA256 = "ab83e1405e206337f020a56bebf9a13e01ebedf2fcb3d229684233
 // `dho migrate postgres upgrade`), and the result must be the database the real Alembic upgrade
 // builds from the same starting point: same schema, same recorded heads, same seeded rows.
 //
-// It is the executed proof the empty-database differential (TestBaselineVenueOracleIsTheExecutedPythonUpgrade)
+// It is the executed proof the empty-database differential (TestBaselineIsTheFrozenPythonUpgrade)
 // cannot give: that one applies the baseline to an EMPTY database, the one starting point the hook
 // never has in production. Trap #415: it runs the verb the hook runs, not a stand-in.
 func TestHookVerbUpgradesAnOldProductionDatabaseToTheAlembicHead(t *testing.T) {

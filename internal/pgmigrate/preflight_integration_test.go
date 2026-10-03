@@ -39,7 +39,7 @@ import (
 //
 // TestPreflightMatchesTheHookOverTheStateGrid builds the grid with dho itself (a
 // truncated chain leaves a database at that revision; the baseline test proves dho's
-// databases equal Python's). TestPreflightVenueOracleOverRealAlembicStates builds
+// databases equal Python's). TestPreflightMatchesTheHookOverFrozenAlembicStates builds
 // the states that need Python (below the baseline) and the ones the Python upgrade
 // leaves, with the real Alembic.
 

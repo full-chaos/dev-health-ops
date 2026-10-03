@@ -36,7 +36,7 @@ document text is readable in the tree, so a reviewer can see the
 
 | operation | sha256 of the trimmed wire text |
 | --- | --- |
-| `capacityForecast` | `7b9840de913ad609fc6fd70bcf4fa74b7d8e8ba5f6d699c48bd3be2ea9c0933f` |
+| `capacityForecast` | `d95197012e32056fcece1f8975d953e7465bb112354cf4201e87b39375f933ef` |
 | `capacityForecast` (legacy V2, `capacityForecast.v2.graphql`, dual accept CHAOS-8477) | `7ec8e919d784ed0dea1b87e85d64ffe18d05557379a397d07da0ab958694ffd1` |
 | `capacityForecast` (legacy V1, `capacityForecast.v1.graphql`, dual accept CHAOS-7994) | `b4fb8f075aba9954714f10f7f4451242d969548d6392d778dae1177759f80780` |
 | `capacityForecasts` | `43890adbbf75ac3ad71c29f728a82e35d035c3f2c701f0ced116559fa28b6c20` |
@@ -44,7 +44,7 @@ document text is readable in the tree, so a reviewer can see the
 
 These are cross-checked twice, by two paths that do not share code:
 `registered_forecast_documents_test.go` digests the Go consts against
-these files, and `src/dev_health_ops/api/graphql/go_api_operations.json`
+these files, and `contracts/graphql/v1/go_api_operations.json`
 carries these values (each legacy text as an entry with `legacy: true`), produced independently by
 `cmd/registrydump` parsing `query_route.go`'s AST.
 

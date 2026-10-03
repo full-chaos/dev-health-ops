@@ -1,0 +1,134 @@
+{
+  "source": "src/dev_health_ops/api/main.py",
+  "frozen_from_commit": "2778ec2ad9a3f1dffbfb743d8a97e54aa7a6c040",
+  "routes": [
+    {
+      "method": "GET",
+      "path": "/api/v1/meta"
+    },
+    {
+      "method": "POST",
+      "path": "/api/v1/home"
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/home"
+    },
+    {
+      "method": "POST",
+      "path": "/api/v1/explain"
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/explain"
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/heatmap"
+    },
+    {
+      "method": "POST",
+      "path": "/api/v1/work-units"
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/work-units"
+    },
+    {
+      "method": "POST",
+      "path": "/api/v1/work-units/{work_unit_id}/explain"
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/flame"
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/flame/aggregated"
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/quadrant"
+    },
+    {
+      "method": "POST",
+      "path": "/api/v1/drilldown/prs"
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/drilldown/prs"
+    },
+    {
+      "method": "POST",
+      "path": "/api/v1/drilldown/issues"
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/drilldown/issues"
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/people"
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/people/{person_id}/summary"
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/people/{person_id}/metric"
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/people/{person_id}/drilldown/prs"
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/people/{person_id}/drilldown/issues"
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/opportunities"
+    },
+    {
+      "method": "POST",
+      "path": "/api/v1/opportunities"
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/investment"
+    },
+    {
+      "method": "POST",
+      "path": "/api/v1/investment"
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/investment/sunburst"
+    },
+    {
+      "method": "POST",
+      "path": "/api/v1/investment/explain"
+    },
+    {
+      "method": "POST",
+      "path": "/api/v1/investment/flow"
+    },
+    {
+      "method": "POST",
+      "path": "/api/v1/investment/flow/repo-team"
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/sankey"
+    },
+    {
+      "method": "POST",
+      "path": "/api/v1/sankey"
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/filters/options"
+    }
+  ]
+}

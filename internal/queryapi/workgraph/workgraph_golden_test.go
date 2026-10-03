@@ -49,6 +49,11 @@ func wgRows(src map[string]any, key string) []map[string]any {
 func wgKind(statement string) string {
 	q := strings.Join(strings.Fields(statement), " ")
 	switch {
+	case strings.HasPrefix(q, "SELECT count() FROM ("):
+		// The count of the edges that match before the limit (CHAOS-8108):
+		// a read the reference never made. It holds the text of the edge
+		// select (and of the dependency select), so it is named first.
+		return "count"
 	case strings.Contains(q, "complete_run_markers"):
 		return "probe"
 	case strings.Contains(q, "FROM git_pull_requests"):
@@ -195,6 +200,21 @@ func (c *wgClient) Query(_ context.Context, statement string, bindings []clickho
 		for _, r := range wgRows(c.src, "deps") {
 			rows = append(rows, []any{r["edge_id"], r["source_type"], r["source_id"], r["target_type"], r["target_id"], r["edge_type"], strOrEmpty(r["repo_id"]), strOrEmpty(r["provider"]), r["provenance"], r["confidence"], r["evidence"]})
 		}
+	case "count":
+		// The store's own answer for the scripted rows: the distinct edges of
+		// the edge rows, plus the dependency rows when the statement holds the
+		// dependency select, by the splice identity.
+		identities := map[[5]string]bool{}
+		sources := []string{"edges"}
+		if strings.Contains(statement, "FROM work_item_dependencies") {
+			sources = append(sources, "deps")
+		}
+		for _, source := range sources {
+			for _, r := range wgRows(c.src, source) {
+				identities[[5]string{r["source_type"].(string), r["source_id"].(string), r["edge_type"].(string), r["target_type"].(string), r["target_id"].(string)}] = true
+			}
+		}
+		rows = append(rows, []any{float64(len(identities))})
 	case "flow":
 		for _, r := range wgRows(c.src, "flow") {
 			rows = append(rows, wgCols(r, "source_type", "target_type", "cnt"))
@@ -350,6 +370,14 @@ func jsonNumber(f float64) string {
 //     repository ids.
 //   - A row cap of zero: the reference sent LIMIT 0; Go raises a non-positive
 //     cap to one row.
+//   - The count of the edge list (CHAOS-8108): the reference answered
+//     totalCount with the length of the returned page, and hasNextPage with
+//     "the page is as long as the limit". Go answers totalCount with the
+//     number of edges the filters match before the limit, and hasNextPage
+//     with "more edges match than the page holds". Three requests show it:
+//     a page of exactly every matching edge (the reference said "more"), and
+//     two dependency splices cut by the limit (the reference counted the 2
+//     of the page; 3 edges match).
 var wgDivergences = map[string]struct {
 	result func(want map[string]any)
 	limit  *float64
@@ -359,9 +387,37 @@ var wgDivergences = map[string]struct {
 	"artifacts/partial_scope_unknown_repo": {result: wgNotPartial},
 	"edges/limit_zero_clamped":             {limit: wgFloat(1)},
 	"artifacts/limit_zero":                 {limit: wgFloat(1)},
+	"edges/limit_equals_rows":              {result: wgNoNextPage},
+	"edges/dependency_only_edge_type":      {result: wgTotalCount(3)},
+	"edges/dependency_limit_cuts_merge":    {result: wgTotalCount(3)},
+}
+
+// wgCountReads names the requests on which Go reads the count of the matching
+// edges: the ones whose page is not provably the full set (a read came back
+// with as many rows as the limit, or more). On every other request the page
+// length IS the count and no count is read. The scripted store does not apply
+// the limit, so `limit_one` and `limit_zero_clamped` get 5 rows for a limit of
+// 1: a count read, with the same answer the reference gave.
+var wgCountReads = map[string]bool{
+	"edges/limit_one":                   true,
+	"edges/limit_zero_clamped":          true,
+	"edges/limit_equals_rows":           true,
+	"edges/dependency_only_edge_type":   true,
+	"edges/dependency_limit_cuts_merge": true,
 }
 
 func wgFloat(f float64) *float64 { return &f }
+
+// wgNoNextPage is the Go answer for a page that holds every matching edge.
+func wgNoNextPage(want map[string]any) {
+	want["pageInfo"].(map[string]any)["hasNextPage"] = false
+}
+
+// wgTotalCount is the Go answer for a page the limit cut: the number of edges
+// that match, not the length of the page.
+func wgTotalCount(n float64) func(want map[string]any) {
+	return func(want map[string]any) { want["totalCount"] = n }
+}
 
 func wgNotPartial(want map[string]any) {
 	want["isPartial"] = false
@@ -450,8 +506,29 @@ func TestWorkGraphResolversMatchTheFrozenGolden(t *testing.T) {
 				}
 				wantKinds = append(wantKinds, k)
 			}
-			if !reflect.DeepEqual(client.kinds, wantKinds) {
-				t.Errorf("tables read %v, want %v", client.kinds, wantKinds)
+			// The count read is Go's own (the reference made none), so it is
+			// compared apart from the reference's reads: which requests make
+			// it is pinned by wgCountReads.
+			var goKinds []string
+			var goBindings []map[string]any
+			countReads := 0
+			for i, k := range client.kinds {
+				if k == "count" {
+					countReads++
+					continue
+				}
+				goKinds = append(goKinds, k)
+				goBindings = append(goBindings, client.bindings[i])
+			}
+			wantCountReads := 0
+			if wgCountReads[tc.Kind+"/"+tc.Name] {
+				wantCountReads = 1
+			}
+			if countReads != wantCountReads {
+				t.Errorf("count reads = %d, want %d", countReads, wantCountReads)
+			}
+			if !reflect.DeepEqual(goKinds, wantKinds) {
+				t.Errorf("tables read %v, want %v", goKinds, wantKinds)
 			}
 
 			// The parameters that name the request, call by call (repository
@@ -466,9 +543,9 @@ func TestWorkGraphResolversMatchTheFrozenGolden(t *testing.T) {
 				}
 			}
 			var goParams []map[string]any
-			for i, k := range client.kinds {
+			for i, k := range goKinds {
 				if k != "repos" {
-					goParams = append(goParams, client.bindings[i])
+					goParams = append(goParams, goBindings[i])
 				}
 			}
 			if len(pyParams) == len(goParams) {

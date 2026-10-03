@@ -421,28 +421,45 @@ type CapacityDistribution struct {
 	// Fixed-date mode: items completed by the target date, one bin per distinct total.
 	Items []CapacityDistributionBin `json:"items,omitempty"`
 	// The number of simulation runs behind each mode (CHAOS-8477): the counts of one
-	// mode's bins sum to it. The modes of one forecast come from one simulation and
-	// hold the same number of runs. The running share of the runs is served on each
-	// bin (cumulativeShare).
+	// mode's bins sum to it, the runs that did not finish included. The modes of one
+	// forecast come from one simulation and hold the same number of runs. The share
+	// of the runs that finished is served on each bin (cumulativeShare).
 	Runs int `json:"runs"`
+	// The number of days-mode runs that did NOT finish inside the simulated horizon
+	// (CHAOS-8477): the simulation stops a run after ``horizonDays`` days, with
+	// items still open, and records it in the ``days`` bin at ``horizonDays``. Such
+	// a run is not done. A run that needs exactly ``horizonDays`` days is recorded
+	// in the same bin and cannot be told apart, so it is counted here too. Null =
+	// the days mode did not simulate (``days`` is null).
+	UnfinishedRuns *int `json:"unfinishedRuns,omitempty"`
+	// The horizon of the days simulation, in days (CHAOS-8477): 365. A ``days`` bin
+	// with this value means "this many days or more".
+	HorizonDays int `json:"horizonDays"`
 }
 
 type CapacityDistributionBin struct {
 	// The outcome: a day count (days) or an item count (items). A day count is the
 	// number of days after the day the forecast was computed: the same axis as
-	// p50Days, p85Days and p95Days (p50Date is that day plus p50Days).
+	// p50Days, p85Days and p95Days (p50Date is that day plus p50Days). A day count
+	// equal to the distribution's horizonDays means "that many days or more": the
+	// simulation stops a run there, done or not.
 	Value int `json:"value"`
-	// How many simulation runs ended on this value.
+	// How many simulation runs ended on this value. In the days bin at horizonDays: how many runs were stopped there.
 	Count int `json:"count"`
-	// The share of the mode's simulation runs that completed on this value or a
-	// lower one (CHAOS-8477), from the same Monte Carlo distribution as p50Days /
-	// p85Days / p95Days: 0 to 1, never lower than on the bin before, and 1 on the
-	// last bin. In the days mode it is the share of the runs in which the target
-	// items were done on or before that day. The percentile days are an
-	// interpolated rank of the same runs: the day on which this share first reaches
-	// 0.50 and p50Days both lie between the outcomes of the same two consecutive
-	// ranked runs, so they are the same day unless those two runs ended on
-	// different days (and so for 0.85 and p85Days, 0.95 and p95Days).
+	// The share of ALL the mode's simulation runs (CHAOS-8477), from the same Monte
+	// Carlo distribution as p50Days / p85Days / p95Days: 0 to 1, never lower than
+	// on the bin before. In the days mode it is the share of the runs that FINISHED
+	// (the target items were done) on or before that day. A run that reached the
+	// horizon is not done: the bin at horizonDays adds nothing to the share, so the
+	// last share is below 1 when any run reached the horizon (unfinishedRuns), and
+	// it is 1 only when every run finished. In the items mode it is the share of
+	// the runs with this many items or fewer, and 1 on the last bin. The percentile
+	// days are an interpolated rank of the same runs: the day on which this share
+	// first reaches 0.50 and p50Days both lie between the outcomes of the same two
+	// consecutive ranked runs, so they are the same day unless those two runs ended
+	// on different days (and so for 0.85 and p85Days, 0.95 and p95Days). When so
+	// many runs reached the horizon that the share never reaches a percentile, that
+	// percentile day is horizonDays and means "horizonDays or more".
 	CumulativeShare float64 `json:"cumulativeShare"`
 }
 

@@ -34,6 +34,8 @@ type auditLog struct {
 	ID, OrgID                        uuid.UUID
 	UserID                           *uuid.UUID
 	Action, ResourceType, ResourceID string
+	ActorDisplayName                 *string
+	ResourceDisplayName              *string
 	Description                      *string
 	Changes, RequestMetadata         []byte
 	Status                           string
@@ -41,12 +43,55 @@ type auditLog struct {
 	CreatedAt                        time.Time
 }
 
-const auditLogColumns = `id, org_id, user_id, action, resource_type, resource_id, description, changes, request_metadata, status, error_message, created_at`
+// auditLogColumns is the administrative audit response projection. Actor and
+// resource labels are read from their authoritative Postgres records. A log
+// can retain a deleted resource, or one of the historical arbitrary resource
+// types that has no canonical owner, so an unavailable label stays null.
+const auditLogColumns = `a.id, a.org_id, a.user_id, a.action, a.resource_type, a.resource_id,
+	coalesce(nullif(btrim(actor.full_name), ''), actor.email),
+	case a.resource_type
+		when 'membership' then invite.email
+		when 'user' then coalesce(nullif(btrim(resource_user.full_name), ''), resource_user.email)
+		when 'session' then coalesce(nullif(btrim(resource_user.full_name), ''), resource_user.email)
+		when 'organization' then resource_org.name
+		when 'sso_provider' then provider.name
+		when 'ingest_source' then coalesce(nullif(btrim(source.display_name), ''), nullif(btrim(source.instance), ''))
+		when 'ingest_token' then token.name
+	end,
+	a.description, a.changes, a.request_metadata, a.status, a.error_message, a.created_at`
+
+// auditLogFrom has one authoritative left join per resource type that the
+// running API writes. It deliberately has no fallback for an unknown type:
+// audit_logs accepts historic extension values, and guessing a name from an
+// opaque ID would misrepresent the audit record. Every resource join is bound
+// to the audit row's organization. The UUID guard keeps legacy non-UUID IDs
+// from reaching a Postgres uuid cast.
+const auditLogFrom = ` FROM audit_logs a
+	LEFT JOIN users actor ON actor.id = a.user_id
+	LEFT JOIN org_invites invite ON a.resource_type = 'membership'
+		AND a.resource_id ~* '^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$'
+		AND invite.id = a.resource_id::uuid AND invite.org_id = a.org_id
+	LEFT JOIN users resource_user ON a.resource_type IN ('user', 'session')
+		AND a.resource_id ~* '^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$'
+		AND resource_user.id = a.resource_id::uuid
+	LEFT JOIN organizations resource_org ON a.resource_type = 'organization'
+		AND a.resource_id ~* '^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$'
+		AND resource_org.id = a.resource_id::uuid AND resource_org.id = a.org_id
+	LEFT JOIN sso_providers provider ON a.resource_type = 'sso_provider'
+		AND a.resource_id ~* '^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$'
+		AND provider.id = a.resource_id::uuid AND provider.org_id = a.org_id
+	LEFT JOIN external_ingest_sources source ON a.resource_type = 'ingest_source'
+		AND a.resource_id ~* '^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$'
+		AND source.id = a.resource_id::uuid AND source.org_id = a.org_id
+	LEFT JOIN external_ingest_tokens token ON a.resource_type = 'ingest_token'
+		AND a.resource_id ~* '^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$'
+		AND token.id = a.resource_id::uuid AND token.org_id = a.org_id`
 
 func scanAuditLog(row pgx.Row) (*auditLog, error) {
 	var log auditLog
 	err := row.Scan(&log.ID, &log.OrgID, &log.UserID, &log.Action, &log.ResourceType, &log.ResourceID,
-		&log.Description, &log.Changes, &log.RequestMetadata, &log.Status, &log.ErrorMessage, &log.CreatedAt)
+		&log.ActorDisplayName, &log.ResourceDisplayName, &log.Description, &log.Changes, &log.RequestMetadata,
+		&log.Status, &log.ErrorMessage, &log.CreatedAt)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return nil, nil
 	}
@@ -81,6 +126,8 @@ func auditLogObject(log *auditLog) (*pyjson.Object, error) {
 	out.Set("action", log.Action)
 	out.Set("resource_type", log.ResourceType)
 	out.Set("resource_id", log.ResourceID)
+	out.Set("actor_display_name", optionalString(log.ActorDisplayName))
+	out.Set("resource_display_name", optionalString(log.ResourceDisplayName))
 	out.Set("description", optionalString(log.Description))
 	out.Set("changes", changes)
 	out.Set("request_metadata", metadata)
@@ -142,25 +189,25 @@ func (f auditFilter) where(conditions []string, args []any) ([]string, []any, bo
 		if err != nil {
 			return nil, nil, false
 		}
-		add("user_id =", id)
+		add("a.user_id =", id)
 	}
 	if f.action != "" {
-		add("action =", f.action)
+		add("a.action =", f.action)
 	}
 	if f.resourceType != "" {
-		add("resource_type =", f.resourceType)
+		add("a.resource_type =", f.resourceType)
 	}
 	if f.resourceID != "" {
-		add("resource_id =", f.resourceID)
+		add("a.resource_id =", f.resourceID)
 	}
 	if f.status != "" {
-		add("status =", f.status)
+		add("a.status =", f.status)
 	}
 	if f.start != nil {
-		add("created_at >=", *f.start)
+		add("a.created_at >=", *f.start)
 	}
 	if f.end != nil {
-		add("created_at <=", *f.end)
+		add("a.created_at <=", *f.end)
 	}
 	return conditions, args, true
 }
@@ -171,12 +218,12 @@ func (s pgStore) auditPage(ctx context.Context, conditions []string, args []any,
 		where = " WHERE " + strings.Join(conditions, " AND ")
 	}
 	var total int64
-	if err := s.Pool.QueryRow(ctx, `SELECT count(*) FROM audit_logs`+where, args...).Scan(&total); err != nil {
+	if err := s.Pool.QueryRow(ctx, `SELECT count(*) FROM audit_logs a`+where, args...).Scan(&total); err != nil {
 		return nil, 0, err
 	}
 	pageArgs := append(append([]any{}, args...), limit, offset)
-	logs, err := s.queryAuditLogs(ctx, `SELECT `+auditLogColumns+` FROM audit_logs`+where+
-		fmt.Sprintf(` ORDER BY created_at DESC LIMIT $%d OFFSET $%d`, len(args)+1, len(args)+2), pageArgs...)
+	logs, err := s.queryAuditLogs(ctx, `SELECT `+auditLogColumns+auditLogFrom+where+
+		fmt.Sprintf(` ORDER BY a.created_at DESC LIMIT $%d OFFSET $%d`, len(args)+1, len(args)+2), pageArgs...)
 	return logs, total, err
 }
 
@@ -231,7 +278,7 @@ func (h *handlers) listAuditLogs(w http.ResponseWriter, r *http.Request) {
 		policy.WriteInternal(w)
 		return
 	}
-	conditions, args, valid := filter.where([]string{"org_id = $1"}, []any{org})
+	conditions, args, valid := filter.where([]string{"a.org_id = $1"}, []any{org})
 	if !valid || offset < 0 {
 		policy.WriteInternal(w)
 		return
@@ -282,7 +329,7 @@ func (h *handlers) getAuditLog(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	log, err := scanAuditLog(h.store.Pool.QueryRow(ctx,
-		`SELECT `+auditLogColumns+` FROM audit_logs WHERE id = $1 AND org_id = $2`, logID, org))
+		`SELECT `+auditLogColumns+auditLogFrom+` WHERE a.id = $1 AND a.org_id = $2`, logID, org))
 	if err != nil {
 		h.internalError(ctx, w, "get audit log", err)
 		return
@@ -320,9 +367,9 @@ func (h *handlers) getResourceAuditHistory(w http.ResponseWriter, r *http.Reques
 		policy.WriteInternal(w)
 		return
 	}
-	logs, err := h.store.queryAuditLogs(ctx, `SELECT `+auditLogColumns+`
-FROM audit_logs WHERE org_id = $1 AND resource_type = $2 AND resource_id = $3
-ORDER BY created_at DESC LIMIT $4`, org, r.PathValue("resource_type"), r.PathValue("resource_id"), limit)
+	logs, err := h.store.queryAuditLogs(ctx, `SELECT `+auditLogColumns+auditLogFrom+`
+WHERE a.org_id = $1 AND a.resource_type = $2 AND a.resource_id = $3
+ORDER BY a.created_at DESC LIMIT $4`, org, r.PathValue("resource_type"), r.PathValue("resource_id"), limit)
 	if err != nil {
 		h.internalError(ctx, w, "get resource audit history", err)
 		return
@@ -352,8 +399,8 @@ func (h *handlers) getUserAuditActivity(w http.ResponseWriter, r *http.Request) 
 		policy.WriteInternal(w)
 		return
 	}
-	logs, err := h.store.queryAuditLogs(ctx, `SELECT `+auditLogColumns+`
-FROM audit_logs WHERE org_id = $1 AND user_id = $2 ORDER BY created_at DESC LIMIT $3`, org, userID, limit)
+	logs, err := h.store.queryAuditLogs(ctx, `SELECT `+auditLogColumns+auditLogFrom+`
+WHERE a.org_id = $1 AND a.user_id = $2 ORDER BY a.created_at DESC LIMIT $3`, org, userID, limit)
 	if err != nil {
 		h.internalError(ctx, w, "get user audit activity", err)
 		return

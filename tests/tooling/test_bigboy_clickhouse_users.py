@@ -77,28 +77,37 @@ def _docker(
     password: str = "the-api-password",
 ) -> dict[str, str]:
     """A stub `docker compose ... exec ... clickhouse-client`: answers the system.users count, and a login as
-    dho_api_ch (`--user dho_api_ch`) succeeds only when the CLICKHOUSE_PASSWORD it was handed through the
-    environment equals `password`. Every call's arguments are logged (never the environment)."""
+    dho_api_ch succeeds only when the config it is handed on stdin carries `password`. Every call's arguments
+    and environment go to logs the tests assert on."""
     bin_dir = tmp_path / "bin"
     bin_dir.mkdir(exist_ok=True)
     args_log = tmp_path / "docker-args.log"
     docker = bin_dir / "docker"
+    env_log = tmp_path / "child-env.log"
     answer = f'echo "{count}"' if count is not None else "true"
+    # The login is a clickhouse-client config on STDIN (--config-file /dev/stdin): it succeeds only when that
+    # config carries `password`. Every call's environment is logged so a credential in a child env is observable.
     login = (
-        'if [ "${CLICKHOUSE_PASSWORD:-}" = "'
+        'if [ "$(cat)" = "<clickhouse><user>dho_api_ch</user><password>'
         + password
-        + '" ]; then echo dho_api_ch; exit 0; fi; exit 1'
+        + '</password></clickhouse>" ]; then echo dho_api_ch; exit 0; fi; exit 1'
         if login_ok
         else "exit 1"
     )
     docker.write_text(
         "#!/usr/bin/env bash\n"
         f'echo "$*" >> "{args_log}"\n'
-        'case "$*" in *"--user dho_api_ch"*)\n'
+        f'env >> "{env_log}"\n'
+        'case "$*" in *"--user dho_api_ch"*|*"--config-file /dev/stdin"*)\n'
         f"  {login} ;;\n"
         "esac\n"
         f"{answer}\nexit {rc}\n"
     )
+    python3 = bin_dir / "python3"
+    python3.write_text(
+        f'#!/usr/bin/env bash\nenv >> "{env_log}"\nexec /usr/bin/python3 "$@"\n'
+    )
+    python3.chmod(python3.stat().st_mode | stat.S_IEXEC)
     docker.chmod(docker.stat().st_mode | stat.S_IEXEC)
     return {"PATH": f"{bin_dir}:/usr/bin:/bin"}
 
@@ -111,13 +120,26 @@ def _check(
     rc: int = 0,
     login_ok: bool = True,
     api_password: str | None = "the-api-password",
+    creds_line: str | None = None,
 ) -> subprocess.CompletedProcess[str]:
     env = _docker(tmp_path, count=count, rc=rc, login_ok=login_ok)
+    scratch = tmp_path / "scratch"
+    scratch.mkdir(exist_ok=True)
+    env["TMPDIR"] = str(scratch)
+    creds = tmp_path / "go-api.creds"
+    creds.write_text(
+        creds_line
+        if creds_line is not None
+        else (
+            f"API_CH_PASSWORD='{api_password}'\n"
+            if api_password is not None
+            else "OTHER=1\n"
+        )
+    )
+    creds.chmod(0o600)
     (tmp_path / "authorization.go").write_text(_MANIFEST)
     env["DHO_API_CH_POSTURE_GO"] = str(tmp_path / "authorization.go")
-    if api_password is not None:
-        env["API_CH_PASSWORD"] = api_password
-    args = ["bash", str(CHECK)] + ([str(file)] if file is not None else [])
+    args = ["bash", str(CHECK)] + ([str(file), str(creds)] if file is not None else [])
     return subprocess.run(args, capture_output=True, text=True, env=env, timeout=30)
 
 
@@ -210,23 +232,68 @@ def test_a_user_that_cannot_log_in_with_the_api_credential_is_refused(
     assert wrong.returncode == 3, (wrong.stdout, wrong.stderr)
     assert "CH_API_USER_AUTH_FAIL" in wrong.stderr and "516" in wrong.stderr
     unset = _check(tmp_path, file, api_password=None)
-    assert unset.returncode == 3 and "API_CH_PASSWORD is not set" in unset.stderr
+    assert unset.returncode == 3 and "no API_CH_PASSWORD value" in unset.stderr
 
 
-def test_the_api_credential_never_reaches_an_argument_list_or_the_output(
+def test_the_api_credential_never_reaches_an_argument_list_an_env_or_the_output(
     tmp_path: Path,
 ) -> None:
+    """CHAOS-8382 guard: no host child (docker, python3) has the password in its argv or environment, the docker
+    CLI gets no -e, and the scratch files live under the caller's TMPDIR. Planted on the old script (password
+    exported to the renderer and to `docker exec -e CLICKHOUSE_PASSWORD`) this fails."""
     secret = "the-api-password"
     proc = _check(tmp_path, _users_file(tmp_path))
     assert proc.returncode == 0, (proc.stdout, proc.stderr)
     args = (tmp_path / "docker-args.log").read_text()
-    assert "--user dho_api_ch" in args and "-e CLICKHOUSE_PASSWORD" in args, args
+    assert "--config-file /dev/stdin" in args, args
+    assert " -e " not in args and "CLICKHOUSE_PASSWORD" not in args, args
     # compose verbs on the service, never a bare `docker exec` on a container name
     for line in args.splitlines():
         assert line.startswith("compose --env-file "), line
         assert " exec -T " in line and " clickhouse clickhouse-client " in line, line
     assert "dev-health-clickhouse-1" not in args
-    assert secret not in args and secret not in proc.stdout + proc.stderr
+    child_env = (tmp_path / "child-env.log").read_text()
+    assert "PATH=" in child_env, (
+        "the stubs logged nothing: this test would prove nothing"
+    )
+    assert secret not in args and secret not in child_env, (
+        "credential in a child env or argv"
+    )
+    assert "API_CH_PASSWORD=" + secret not in child_env
+    assert "CLICKHOUSE_PASSWORD" not in child_env
+    assert secret not in proc.stdout + proc.stderr
+    assert list((tmp_path / "scratch").iterdir()) == [], "scratch dir not cleaned"
+
+
+def test_a_tmpdir_that_is_unset_or_bare_tmp_is_refused(tmp_path: Path) -> None:
+    file = _users_file(tmp_path)
+    for tmpdir in (None, "/tmp", "/tmp/", "/var/tmp"):
+        env = _docker(tmp_path, count="1")
+        (tmp_path / "authorization.go").write_text(_MANIFEST)
+        env["DHO_API_CH_POSTURE_GO"] = str(tmp_path / "authorization.go")
+        if tmpdir is not None:
+            env["TMPDIR"] = tmpdir
+        creds = tmp_path / "go-api.creds"
+        creds.write_text("API_CH_PASSWORD='the-api-password'\n")
+        proc = subprocess.run(
+            ["bash", str(CHECK), str(file), str(creds)],
+            capture_output=True,
+            text=True,
+            env=env,
+            timeout=30,
+        )
+        assert proc.returncode == 1 and "TMPDIR" in proc.stderr, (tmpdir, proc.stderr)
+
+
+def test_the_cut_does_not_source_the_credentials_file_into_any_child() -> None:
+    text = CUT.read_text()
+    assert "set -a" not in text, "set -a exports the credentials to every child"
+    line = next(
+        x
+        for x in text.splitlines()
+        if "check-dho-api-ch-user.sh" in x and "$DHO_API_CH_USERS_XML" in x
+    )
+    assert "go-api.creds" in line and ". " not in line.split("check-dho")[0]
 
 
 def _cut_with_a_fake_check(
@@ -498,10 +565,13 @@ def test_a_missing_posture_manifest_or_credential_is_refused_not_skipped(
 ) -> None:
     file = _users_file(tmp_path)
     env = _docker(tmp_path, count="1")
-    env["API_CH_PASSWORD"] = _PASSWORD
+    (tmp_path / "scratch").mkdir()
+    env["TMPDIR"] = str(tmp_path / "scratch")
+    creds = tmp_path / "go-api.creds"
+    creds.write_text(f"API_CH_PASSWORD={_PASSWORD}\n")
     env["DHO_API_CH_POSTURE_GO"] = str(tmp_path / "absent.go")
     proc = subprocess.run(
-        ["bash", str(CHECK), str(file)],
+        ["bash", str(CHECK), str(file), str(creds)],
         capture_output=True,
         text=True,
         env=env,
@@ -512,7 +582,7 @@ def test_a_missing_posture_manifest_or_credential_is_refused_not_skipped(
     empty.write_text("package clickhouse\n")
     env["DHO_API_CH_POSTURE_GO"] = str(empty)
     proc = subprocess.run(
-        ["bash", str(CHECK), str(file)],
+        ["bash", str(CHECK), str(file), str(creds)],
         capture_output=True,
         text=True,
         env=env,

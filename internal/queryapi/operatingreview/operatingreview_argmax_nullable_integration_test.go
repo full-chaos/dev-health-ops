@@ -246,7 +246,7 @@ func TestFetchAIGovernanceRealClickHouse_RatioOfSumsUsesSelectedRawGroups(t *tes
 	// A present group with no AI activity is fully covered, not missing data.
 	seed(org, zeroTeam, "85240000-0000-4000-8000-000000000005", 0, 0, 0, 0, 0, newer)
 
-	rows, err := fetchAIGovernance(ctx, client, org, &selectedTeam, day, day.AddDate(0, 0, 1))
+	rows, err := fetchAIGovernance(ctx, client, org, teamSelection{selectedTeam}, day, day.AddDate(0, 0, 1))
 	if err != nil {
 		t.Fatalf("fetchAIGovernance(selected team): %v", err)
 	}
@@ -270,7 +270,7 @@ func TestFetchAIGovernanceRealClickHouse_RatioOfSumsUsesSelectedRawGroups(t *tes
 		t.Errorf("aiGovernanceCoverage(all teams) = %v, want %v", got, wantAllTeamsCoverage)
 	}
 
-	zeroRows, err := fetchAIGovernance(ctx, client, org, &zeroActivityTeam, day, day.AddDate(0, 0, 1))
+	zeroRows, err := fetchAIGovernance(ctx, client, org, teamSelection{zeroActivityTeam}, day, day.AddDate(0, 0, 1))
 	if err != nil {
 		t.Fatalf("fetchAIGovernance(zero-activity team): %v", err)
 	}

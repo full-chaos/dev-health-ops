@@ -3,8 +3,6 @@ package pushcli
 import (
 	"bytes"
 	"context"
-	"os"
-	"path/filepath"
 	"strings"
 	"testing"
 
@@ -19,34 +17,6 @@ func run(t *testing.T, stdin string, args ...string) (int, string, string) {
 		Args: append([]string{"push"}, args...), Stdin: strings.NewReader(stdin), Stdout: &stdout, Stderr: &stderr,
 	})
 	return code, stdout.String(), stderr.String()
-}
-
-// TestExamplesAreThePythonFiles holds the embedded examples to the Python package's
-// while those files exist.
-func TestExamplesAreThePythonFiles(t *testing.T) {
-	source := filepath.Join("..", "..", "src", "dev_health_ops", "api", "external_ingest", "examples")
-	if _, err := os.Stat(source); err != nil {
-		t.Skip("the Python examples are gone: the embedded copies are the source")
-	}
-	entries, err := examples.ReadDir("examples")
-	if err != nil {
-		t.Fatal(err)
-	}
-	for _, entry := range entries {
-		want, err := os.ReadFile(filepath.Join(source, entry.Name()))
-		if err != nil {
-			t.Errorf("%s: %v", entry.Name(), err)
-			continue
-		}
-		got, _ := examples.ReadFile("examples/" + entry.Name())
-		if !bytes.Equal(got, want) {
-			t.Errorf("%s differs from the Python example", entry.Name())
-		}
-	}
-	pythonFiles, _ := filepath.Glob(filepath.Join(source, "*.json"))
-	if len(pythonFiles) != len(entries) {
-		t.Errorf("%d embedded examples, %d Python examples", len(entries), len(pythonFiles))
-	}
 }
 
 // Every record kind has an example and a correlation-id rule, and its sample

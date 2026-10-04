@@ -134,10 +134,6 @@ UNCOVERED_FIXTURE_DIRECTORIES: dict[str, str] = {
         "read by the Python testops suite, not by Go tests; covered by the "
         "Python workflow's own filters"
     ),
-    "tests/api/dev/fixtures": (
-        "read by the Python API test suite (tests/api/), not by Go tests; "
-        "covered by the Python workflow's own filters"
-    ),
     "tests/docs/fixtures": (
         "documentation-lint fixtures consumed by the docs workflow; markdown "
         "and mkdocs config, with no Go reader"

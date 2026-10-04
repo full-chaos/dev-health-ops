@@ -951,6 +951,5 @@ tests/fixtures/seed_workgraph_operational_edges_synthetic.sql
 tests/fixtures/test_bridge_density.py
 tests/fixtures/test_demo_identity.py
 tests/fixtures/test_metric_coherence.py
-tests/fixtures/test_product_telemetry_generator.py
 tests/fixtures/test_team_cooccurrence.py
 tests/fixtures/workgraph_components_split_edges.json

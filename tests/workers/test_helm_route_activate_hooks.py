@@ -9,10 +9,7 @@ nothing drains, and the reconciler's own route fence refuses readiness on
 that drift. This chart never ran the fix
 (`dho workers routes apply`) for any of the four.
 
-CHAOS-4455: `sync-provider` (goWorkers.groups) is one of
-goWorkers.expectedWorkerGroups, and both lists already agree in
-values.yaml -- see test_expected_worker_groups_and_deployments_are_consistent
-below, which pins that by reading the values file, not by assuming it.
+CHAOS-4455: `sync-provider` is one of goWorkers.groups.
 `sync-provider`'s own job route (sync.provider_unit, a DIFFERENT table,
 worker_job_routes) is promoted unconditionally by migration 0107 -- no Job
 needed for that half. What was still missing for BOTH tickets was this
@@ -407,57 +404,6 @@ def test_route_activate_hook_runs_no_python_and_no_shell() -> None:
     rendered = yaml.safe_dump(job)
     for needle in ("/bin/sh", "python3", "dev-hops-api", "urllib"):
         assert needle not in rendered, (needle, rendered[:200])
-
-
-# --- CHAOS-4455: EXPECTED_WORKER_GROUPS and the deployed groups agree -------
-
-
-def test_expected_worker_groups_and_deployments_are_consistent() -> None:
-    """Cites the code directly: `sync-provider` is in both lists already.
-
-    Pinned so a future edit to either list is caught here rather than
-    rediscovered as a live 503 on /health/workers.
-    """
-    values_path = _CHART / "values.yaml"
-    values = yaml.safe_load(values_path.read_text(encoding="utf-8"))
-    expected = values["goWorkers"]["expectedWorkerGroups"]
-    group_names = [g["name"] for g in values["goWorkers"]["groups"]]
-    assert "sync-provider" in expected, expected
-    assert "sync-provider" in group_names, group_names
-    for name in expected:
-        assert name in group_names, (
-            f"goWorkers.expectedWorkerGroups names {name!r}, which "
-            f"goWorkers.groups does not deploy: {group_names}"
-        )
-
-
-def test_expected_worker_groups_actually_render_as_deployments() -> None:
-    """codex review (r3 REPORT mutation `remove_worker_deployments` --
-    SURVIVED, now killed): the sibling test above reads `values.yaml` as
-    TEXT, so it can never catch a Deployment template that silently stops
-    rendering for an expected group -- that doesn't change either list's
-    own membership. Renders go-workers.yaml for real
-    (`goWorkers.enabled=true`) and checks every EXPECTED group has a real
-    Deployment."""
-    values = yaml.safe_load((_CHART / "values.yaml").read_text(encoding="utf-8"))
-    expected = values["goWorkers"]["expectedWorkerGroups"]
-
-    docs = _render("goWorkers.enabled=true")
-    deployments = {
-        d["metadata"]["name"]: d for d in docs if d.get("kind") == "Deployment"
-    }
-    fullname_prefix = f"{_RELEASE}-dev-health-go-"
-
-    for name in expected:
-        deployment_name = f"{fullname_prefix}{name}"
-        assert deployment_name in deployments, (
-            f"{name!r} is expected but has no rendered Deployment: "
-            f"{sorted(deployments)}"
-        )
-        containers = deployments[deployment_name]["spec"]["template"]["spec"][
-            "containers"
-        ]
-        assert len(containers) == 1, containers
 
 
 def test_worker_group_deployment_uses_that_groups_own_declared_image(

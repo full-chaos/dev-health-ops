@@ -551,6 +551,10 @@ type repoMetricsRow struct {
 	busFactor               float64
 	changeFailureRate       *float64
 	mttrHours               *float64
+	// storedRows is repo_metrics_known_count: the number of (day, repo) rows
+	// the week holds. The aggregate always returns one row, so this, not the
+	// row itself, says whether the week has data (CHAOS-8115).
+	storedRows uint64
 }
 
 // fetchRepoMetrics ports the "repo_metrics" query verbatim
@@ -618,6 +622,7 @@ func fetchRepoMetrics(ctx context.Context, client QueryClient, orgID string, sta
 			busFactor:               float64(busFactor),
 			changeFailureRate:       knownCountGuard(ctx, "change_failure_rate", changeFailureRate, knownCount),
 			mttrHours:               mttrHours,
+			storedRows:              knownCount,
 		})
 	}
 	return out, rows.Err()
@@ -733,6 +738,11 @@ func fetchComplexityAgg(ctx context.Context, client QueryClient, orgID string, s
 type deploymentsAggRow struct {
 	deploymentsCount       float64
 	failedDeploymentsCount float64
+	// storedRows is deployments_known_count (CHAOS-8115, Go-only): the number
+	// of (day, repo) rows the week holds. The aggregate always returns one
+	// row, and sum() over no rows is 0, so only this count tells a week with
+	// no stored row from a week of stored zeros.
+	storedRows uint64
 }
 
 // fetchDeploymentsAgg ports the "deployments" query verbatim
@@ -741,7 +751,8 @@ func fetchDeploymentsAgg(ctx context.Context, client QueryClient, orgID string, 
 	query := `
         SELECT
           sum(deployments_count) AS deployments_count,
-          sum(failed_deployments_count) AS failed_deployments_count
+          sum(failed_deployments_count) AS failed_deployments_count,
+          count() AS deployments_known_count
         FROM (
           SELECT
             day,
@@ -763,13 +774,14 @@ func fetchDeploymentsAgg(ctx context.Context, client QueryClient, orgID string, 
 
 	var out []deploymentsAggRow
 	for rows.Next() {
-		var deploymentsCount, failedDeploymentsCount uint64
-		if scanErr := rows.Scan(&deploymentsCount, &failedDeploymentsCount); scanErr != nil {
+		var deploymentsCount, failedDeploymentsCount, knownCount uint64
+		if scanErr := rows.Scan(&deploymentsCount, &failedDeploymentsCount, &knownCount); scanErr != nil {
 			return nil, fmt.Errorf("operatingreview: deployments scan: %w", scanErr)
 		}
 		out = append(out, deploymentsAggRow{
 			deploymentsCount:       float64(deploymentsCount),
 			failedDeploymentsCount: float64(failedDeploymentsCount),
+			storedRows:             knownCount,
 		})
 	}
 	return out, rows.Err()
@@ -778,6 +790,9 @@ func fetchDeploymentsAgg(ctx context.Context, client QueryClient, orgID string, 
 type incidentsAggRow struct {
 	incidentsCount float64
 	mttrP50Hours   *float64
+	// storedRows is incidents_known_count (CHAOS-8115, Go-only); see
+	// deploymentsAggRow.storedRows.
+	storedRows uint64
 }
 
 // fetchIncidentsAgg ports the "incidents" query verbatim
@@ -787,7 +802,8 @@ type incidentsAggRow struct {
 // NULL.
 func fetchIncidentsAgg(ctx context.Context, client QueryClient, orgID string, start, end time.Time) ([]incidentsAggRow, error) {
 	query := `
-        SELECT sum(incidents_count) AS incidents_count, avg(mttr_p50_hours) AS mttr_p50_hours
+        SELECT sum(incidents_count) AS incidents_count, avg(mttr_p50_hours) AS mttr_p50_hours,
+          count() AS incidents_known_count
         FROM (
           SELECT
             day,
@@ -809,12 +825,12 @@ func fetchIncidentsAgg(ctx context.Context, client QueryClient, orgID string, st
 
 	var out []incidentsAggRow
 	for rows.Next() {
-		var incidentsCount uint64
+		var incidentsCount, knownCount uint64
 		var mttrP50 *float64
-		if scanErr := rows.Scan(&incidentsCount, &mttrP50); scanErr != nil {
+		if scanErr := rows.Scan(&incidentsCount, &mttrP50, &knownCount); scanErr != nil {
 			return nil, fmt.Errorf("operatingreview: incidents scan: %w", scanErr)
 		}
-		out = append(out, incidentsAggRow{incidentsCount: float64(incidentsCount), mttrP50Hours: mttrP50})
+		out = append(out, incidentsAggRow{incidentsCount: float64(incidentsCount), mttrP50Hours: mttrP50, storedRows: knownCount})
 	}
 	return out, rows.Err()
 }
@@ -1387,6 +1403,9 @@ type metricDelta struct {
 	absolute   float64
 	percent    *float64
 	status     string
+	// hasPriorData: the prior week holds a stored value for the metric
+	// (CHAOS-8115). False = priorValue is a 0 placeholder.
+	hasPriorData bool
 }
 
 type reviewMetric struct {
@@ -1395,6 +1414,149 @@ type reviewMetric struct {
 	value float64
 	unit  string
 	delta metricDelta
+	// hasData: the week holds a stored value for the metric (CHAOS-8115).
+	// False = value is a 0 placeholder, not a measured zero.
+	hasData bool
+}
+
+// dataIn records whether each of the two weeks holds a stored value for the
+// metric, by the metric's own presence rule (the has* functions below). The
+// reducers turn "no value" into 0.0 (as the reference does), so the value
+// alone cannot tell a missing week from a zero one; this is the only place
+// that keeps the difference (CHAOS-8115, Go-only: the reference never served
+// it). It changes no value, delta, status or recommendation.
+func (m reviewMetric) dataIn(current, prior periodRows, has func(periodRows) bool) reviewMetric {
+	m.hasData = has(current)
+	m.delta.hasPriorData = has(prior)
+	return m
+}
+
+// anyPresent reports whether a column holds at least one non-NULL value.
+func anyPresent(vals []*float64) bool { return len(presentValues(vals)) > 0 }
+
+// The presence rules, one per input a metric is computed from. "Stored" means
+// a row of the metric's daily table inside the week: a stored 0 is data, no
+// row is not. A table whose read failed has no rows (fetchPeriodRows), so its
+// metrics have no data. Three shapes:
+//   - a table read row by row (work items, state durations, investment, AI
+//     governance): at least one row;
+//   - a NULLable column, or a column the known_count guard turns into nil
+//     over zero rows: at least one non-NULL value;
+//   - a scalar aggregate that always returns one row (repository metrics,
+//     deployments, incidents): its storedRows count above 0.
+
+func hasWorkItemRows(p periodRows) bool { return len(p.workItems) > 0 }
+
+func hasCycleTimeP50(p periodRows) bool {
+	return anyPresent(pluck(p.workItems, func(r workItemsRow) *float64 { return r.cycleTimeP50Hours }))
+}
+
+func hasWipAgeP90(p periodRows) bool {
+	return anyPresent(pluck(p.workItems, func(r workItemsRow) *float64 { return r.wipAgeP90Hours }))
+}
+
+func hasStateDurationRows(p periodRows) bool { return len(p.stateDurations) > 0 }
+
+func hasReviewLatency(p periodRows) bool {
+	return anyPresent(pluck(p.repoMetrics, func(r repoMetricsRow) *float64 { return r.prFirstReviewP50Hours }))
+}
+
+func hasHotspotRisk(p periodRows) bool {
+	return anyPresent(pluck(p.hotspots, func(r hotspotsAggRow) *float64 { return r.riskScore }))
+}
+
+func hasOwnershipConcentration(p periodRows) bool {
+	return anyPresent(pluck(p.repoMetrics, func(r repoMetricsRow) *float64 { return r.singleOwnerFileRatio30d }))
+}
+
+func hasComplexity(p periodRows) bool {
+	return anyPresent(pluck(p.complexity, func(r complexityAggRow) *float64 { return r.cyclomaticPerKloc }))
+}
+
+func hasRepoMetricRows(p periodRows) bool {
+	for _, r := range p.repoMetrics {
+		if r.storedRows > 0 {
+			return true
+		}
+	}
+	return false
+}
+
+func hasDeploymentRows(p periodRows) bool {
+	for _, r := range p.deployments {
+		if r.storedRows > 0 {
+			return true
+		}
+	}
+	return false
+}
+
+// hasChangeFailureRate follows changeFailureRate: the rate of the week's own
+// deployments when there is at least one, else the stored repository rate.
+// Stored deployment rows that count no deployment give no rate.
+func hasChangeFailureRate(p periodRows) bool {
+	if sumF(pluck(p.deployments, func(r deploymentsAggRow) *float64 { return f(r.deploymentsCount) })) > 0 {
+		return true
+	}
+	return anyPresent(pluck(p.repoMetrics, func(r repoMetricsRow) *float64 { return r.changeFailureRate }))
+}
+
+func hasIncidentRows(p periodRows) bool {
+	for _, r := range p.incidents {
+		if r.storedRows > 0 {
+			return true
+		}
+	}
+	return false
+}
+
+// hasMTTR follows the two sources the MTTR metric reads (firstNonZero).
+func hasMTTR(p periodRows) bool {
+	return anyPresent(pluck(p.incidents, func(r incidentsAggRow) *float64 { return r.mttrP50Hours })) ||
+		anyPresent(pluck(p.repoMetrics, func(r repoMetricsRow) *float64 { return r.mttrHours }))
+}
+
+// hasInvestmentRows: the week's investment distribution is stored. An area
+// with no row in a week that has rows is a real 0.
+func hasInvestmentRows(p periodRows) bool { return len(p.investment) > 0 }
+
+// hasAIPullRequests: the adoption ratio is a share of the week's pull requests,
+// so it needs at least one.
+func hasAIPullRequests(p periodRows) bool {
+	return sumF(pluck(p.aiImpact, func(r aiImpactRow) *float64 { return f(r.prsTotal) })) > 0
+}
+
+func hasAICycleTimeDelta(p periodRows) bool {
+	return anyPresent(pluck(p.aiImpact, func(r aiImpactRow) *float64 { return r.aiCycleTimeDeltaHours }))
+}
+
+func hasAIReviewAmplification(p periodRows) bool {
+	return anyPresent(pluck(p.aiImpact, func(r aiImpactRow) *float64 { return r.aiReviewAmplification }))
+}
+
+func hasAIReworkDrag(p periodRows) bool {
+	return anyPresent(pluck(p.aiImpact, func(r aiImpactRow) *float64 { return r.reworkDragRate }))
+}
+
+func hasAITestGap(p periodRows) bool {
+	return anyPresent(pluck(p.aiImpact, func(r aiImpactRow) *float64 { return r.testGapRate }))
+}
+
+func hasAIIncidentDrag(p periodRows) bool {
+	return anyPresent(pluck(p.aiImpact, func(r aiImpactRow) *float64 { return r.incidentDragRate }))
+}
+
+// hasAIRiskDrag: at least one of the three rates aiRiskDrag averages.
+func hasAIRiskDrag(p periodRows) bool {
+	return hasAIReworkDrag(p) || hasAITestGap(p) || hasAIIncidentDrag(p)
+}
+
+func hasAIGovernanceRows(p periodRows) bool { return len(p.aiGovernance) > 0 }
+
+// hasAIOpportunityInputs: at least one of the four inputs aiOpportunitySignals
+// tests against a threshold.
+func hasAIOpportunityInputs(p periodRows) bool {
+	return hasAIReviewAmplification(p) || hasAIReworkDrag(p) || hasAITestGap(p) || hasAIGovernanceRows(p)
 }
 
 type reviewSection struct {
@@ -1714,16 +1876,18 @@ func toGraphQLSection(s reviewSection) model.OperatingReviewSection {
 	metrics := make([]model.OperatingReviewMetric, 0, len(s.metrics))
 	for _, m := range s.metrics {
 		metrics = append(metrics, model.OperatingReviewMetric{
-			Key:   m.key,
-			Label: m.label,
-			Value: m.value,
-			Unit:  m.unit,
+			Key:     m.key,
+			Label:   m.label,
+			Value:   m.value,
+			Unit:    m.unit,
+			HasData: m.hasData,
 			Delta: &model.OperatingReviewDelta{
-				Value:      m.delta.value,
-				PriorValue: m.delta.priorValue,
-				Absolute:   m.delta.absolute,
-				Percent:    m.delta.percent,
-				Status:     m.delta.status,
+				Value:        m.delta.value,
+				PriorValue:   m.delta.priorValue,
+				Absolute:     m.delta.absolute,
+				Percent:      m.delta.percent,
+				Status:       m.delta.status,
+				HasPriorData: m.delta.hasPriorData,
 			},
 		})
 	}
@@ -1754,15 +1918,15 @@ func deliverySection(current, prior periodRows) reviewSection {
 		buildMetric("cycle_time_p50_hours", "Cycle time p50",
 			avgF(pluck(current.workItems, func(r workItemsRow) *float64 { return r.cycleTimeP50Hours })),
 			avgF(pluck(prior.workItems, func(r workItemsRow) *float64 { return r.cycleTimeP50Hours })),
-			"hours", lowerIsBetter),
+			"hours", lowerIsBetter).dataIn(current, prior, hasCycleTimeP50),
 		buildMetric("throughput", "Throughput",
 			sumF(pluck(current.workItems, func(r workItemsRow) *float64 { return f(r.itemsCompleted) })),
 			sumF(pluck(prior.workItems, func(r workItemsRow) *float64 { return f(r.itemsCompleted) })),
-			"items completed", higherIsBetter),
+			"items completed", higherIsBetter).dataIn(current, prior, hasWorkItemRows),
 		buildMetric("wip_count", "WIP",
 			maxF(pluck(current.workItems, func(r workItemsRow) *float64 { return f(r.wipCountEndOfDay) })),
 			maxF(pluck(prior.workItems, func(r workItemsRow) *float64 { return f(r.wipCountEndOfDay) })),
-			"items", lowerIsBetter),
+			"items", lowerIsBetter).dataIn(current, prior, hasWorkItemRows),
 	})
 }
 
@@ -1779,15 +1943,15 @@ func bottleneckSection(current, prior periodRows) reviewSection {
 				pluck(prior.stateDurations, func(r stateDurationRow) *float64 { return f(r.durationHours) }),
 				pluck(prior.stateDurations, func(r stateDurationRow) *float64 { return f(r.itemsTouched) }),
 			),
-			"hours", lowerIsBetter),
+			"hours", lowerIsBetter).dataIn(current, prior, hasStateDurationRows),
 		buildMetric("review_latency_hours", "Review latency",
 			avgF(pluck(current.repoMetrics, func(r repoMetricsRow) *float64 { return r.prFirstReviewP50Hours })),
 			avgF(pluck(prior.repoMetrics, func(r repoMetricsRow) *float64 { return r.prFirstReviewP50Hours })),
-			"hours", lowerIsBetter),
+			"hours", lowerIsBetter).dataIn(current, prior, hasReviewLatency),
 		buildMetric("wip_age_p90_hours", "WIP age p90",
 			avgF(pluck(current.workItems, func(r workItemsRow) *float64 { return r.wipAgeP90Hours })),
 			avgF(pluck(prior.workItems, func(r workItemsRow) *float64 { return r.wipAgeP90Hours })),
-			"hours", lowerIsBetter),
+			"hours", lowerIsBetter).dataIn(current, prior, hasWipAgeP90),
 	})
 }
 
@@ -1798,19 +1962,19 @@ func riskSection(current, prior periodRows) reviewSection {
 		buildMetric("hotspot_risk_score", "Hotspot risk",
 			avgF(pluck(current.hotspots, func(r hotspotsAggRow) *float64 { return r.riskScore })),
 			avgF(pluck(prior.hotspots, func(r hotspotsAggRow) *float64 { return r.riskScore })),
-			"score", lowerIsBetter),
+			"score", lowerIsBetter).dataIn(current, prior, hasHotspotRisk),
 		buildMetric("ownership_concentration", "Ownership concentration",
 			avgF(pluck(current.repoMetrics, func(r repoMetricsRow) *float64 { return r.singleOwnerFileRatio30d })),
 			avgF(pluck(prior.repoMetrics, func(r repoMetricsRow) *float64 { return r.singleOwnerFileRatio30d })),
-			"ratio", lowerIsBetter),
+			"ratio", lowerIsBetter).dataIn(current, prior, hasOwnershipConcentration),
 		buildMetric("complexity_per_kloc", "Complexity",
 			avgF(pluck(current.complexity, func(r complexityAggRow) *float64 { return r.cyclomaticPerKloc })),
 			avgF(pluck(prior.complexity, func(r complexityAggRow) *float64 { return r.cyclomaticPerKloc })),
-			"cyclomatic/KLOC", lowerIsBetter),
+			"cyclomatic/KLOC", lowerIsBetter).dataIn(current, prior, hasComplexity),
 		buildMetric("bus_factor", "Bus factor",
 			minF(pluck(current.repoMetrics, func(r repoMetricsRow) *float64 { return f(r.busFactor) })),
 			minF(pluck(prior.repoMetrics, func(r repoMetricsRow) *float64 { return f(r.busFactor) })),
-			"people", higherIsBetter),
+			"people", higherIsBetter).dataIn(current, prior, hasRepoMetricRows),
 	})
 }
 
@@ -1821,13 +1985,13 @@ func reliabilitySection(current, prior periodRows) reviewSection {
 		buildMetric("deployments_count", "Deployments",
 			sumF(pluck(current.deployments, func(r deploymentsAggRow) *float64 { return f(r.deploymentsCount) })),
 			sumF(pluck(prior.deployments, func(r deploymentsAggRow) *float64 { return f(r.deploymentsCount) })),
-			"deployments", higherIsBetter),
+			"deployments", higherIsBetter).dataIn(current, prior, hasDeploymentRows),
 		buildMetric("change_failure_rate", "Change failure rate",
-			changeFailureRate(current), changeFailureRate(prior), "ratio", lowerIsBetter),
+			changeFailureRate(current), changeFailureRate(prior), "ratio", lowerIsBetter).dataIn(current, prior, hasChangeFailureRate),
 		buildMetric("incidents_count", "Incidents",
 			sumF(pluck(current.incidents, func(r incidentsAggRow) *float64 { return f(r.incidentsCount) })),
 			sumF(pluck(prior.incidents, func(r incidentsAggRow) *float64 { return f(r.incidentsCount) })),
-			"incidents", lowerIsBetter),
+			"incidents", lowerIsBetter).dataIn(current, prior, hasIncidentRows),
 		buildMetric("mttr_hours", "MTTR",
 			firstNonZero(
 				avgF(pluck(current.incidents, func(r incidentsAggRow) *float64 { return r.mttrP50Hours })),
@@ -1837,7 +2001,7 @@ func reliabilitySection(current, prior periodRows) reviewSection {
 				avgF(pluck(prior.incidents, func(r incidentsAggRow) *float64 { return r.mttrP50Hours })),
 				avgF(pluck(prior.repoMetrics, func(r repoMetricsRow) *float64 { return r.mttrHours })),
 			),
-			"hours", lowerIsBetter),
+			"hours", lowerIsBetter).dataIn(current, prior, hasMTTR),
 	})
 }
 
@@ -1847,10 +2011,10 @@ func investmentSection(current, prior periodRows) reviewSection {
 	currentUnits := investmentUnits(current.investment)
 	priorUnits := investmentUnits(prior.investment)
 	return buildSection("investment", "Investment", []reviewMetric{
-		buildMetric("ktlo_units", "KTLO", currentUnits["ktlo"], priorUnits["ktlo"], "delivery units", lowerIsBetter),
-		buildMetric("new_value_units", "New value", currentUnits["new_value"], priorUnits["new_value"], "delivery units", higherIsBetter),
-		buildMetric("security_units", "Security", currentUnits["security"], priorUnits["security"], "delivery units", neutral),
-		buildMetric("infra_units", "Infra", currentUnits["infra"], priorUnits["infra"], "delivery units", neutral),
+		buildMetric("ktlo_units", "KTLO", currentUnits["ktlo"], priorUnits["ktlo"], "delivery units", lowerIsBetter).dataIn(current, prior, hasInvestmentRows),
+		buildMetric("new_value_units", "New value", currentUnits["new_value"], priorUnits["new_value"], "delivery units", higherIsBetter).dataIn(current, prior, hasInvestmentRows),
+		buildMetric("security_units", "Security", currentUnits["security"], priorUnits["security"], "delivery units", neutral).dataIn(current, prior, hasInvestmentRows),
+		buildMetric("infra_units", "Infra", currentUnits["infra"], priorUnits["infra"], "delivery units", neutral).dataIn(current, prior, hasInvestmentRows),
 	})
 }
 
@@ -1861,24 +2025,24 @@ func investmentSection(current, prior periodRows) reviewSection {
 func aiWorkflowSection(current, prior periodRows) reviewSection {
 	return buildSection("ai_workflow_intelligence", "AI Workflow Intelligence", []reviewMetric{
 		buildMetric("ai_adoption_ratio", "AI adoption mix",
-			aiAdoptionRatio(current.aiImpact), aiAdoptionRatio(prior.aiImpact), "ratio", neutral),
+			aiAdoptionRatio(current.aiImpact), aiAdoptionRatio(prior.aiImpact), "ratio", neutral).dataIn(current, prior, hasAIPullRequests),
 		buildMetric("ai_cycle_time_delta_hours", "AI delivery impact",
 			avgF(pluck(current.aiImpact, func(r aiImpactRow) *float64 { return r.aiCycleTimeDeltaHours })),
 			avgF(pluck(prior.aiImpact, func(r aiImpactRow) *float64 { return r.aiCycleTimeDeltaHours })),
-			"hours", lowerIsBetter),
+			"hours", lowerIsBetter).dataIn(current, prior, hasAICycleTimeDelta),
 		buildMetric("ai_review_amplification", "AI review pressure",
 			avgF(pluck(current.aiImpact, func(r aiImpactRow) *float64 { return r.aiReviewAmplification })),
 			avgF(pluck(prior.aiImpact, func(r aiImpactRow) *float64 { return r.aiReviewAmplification })),
-			"ratio", lowerIsBetter),
+			"ratio", lowerIsBetter).dataIn(current, prior, hasAIReviewAmplification),
 		buildMetric("ai_risk_drag", "AI risk drag",
-			aiRiskDrag(current.aiImpact), aiRiskDrag(prior.aiImpact), "ratio", lowerIsBetter),
+			aiRiskDrag(current.aiImpact), aiRiskDrag(prior.aiImpact), "ratio", lowerIsBetter).dataIn(current, prior, hasAIRiskDrag),
 		buildMetric("ai_governance_coverage", "AI governance coverage",
 			aiGovernanceCoverage(current.aiGovernance), aiGovernanceCoverage(prior.aiGovernance),
-			"ratio", higherIsBetter),
+			"ratio", higherIsBetter).dataIn(current, prior, hasAIGovernanceRows),
 		buildMetric("ai_opportunity_signals", "AI opportunity signals",
 			aiOpportunitySignals(current.aiImpact, current.aiGovernance),
 			aiOpportunitySignals(prior.aiImpact, prior.aiGovernance),
-			"signals", lowerIsBetter),
+			"signals", lowerIsBetter).dataIn(current, prior, hasAIOpportunityInputs),
 	})
 }
 

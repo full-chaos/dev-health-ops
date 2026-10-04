@@ -83,6 +83,14 @@ x-go-worker-flag:
   # anywhere under the stream runner's code, now internal/streamrunnerservice).
   log-level: &flag-log-level "--log-level=${LOG_LEVEL:-info}"
 
+# The coordinator group is all-or-none: a service that does not claim
+# coordinator work blanks all four values, merged ahead of the base.
+x-go-worker-no-coordinator: &go-worker-no-coordinator
+  DEV_HEALTH_PG_COORDINATOR_HOST: ""
+  DEV_HEALTH_PG_COORDINATOR_PORT: ""
+  DEV_HEALTH_PG_COORDINATOR_USER: ""
+  DEV_HEALTH_PG_COORDINATOR_PASSWORD: ""
+
 x-go-worker-env-base: &go-worker-env-base
   # CHAOS-5568: component form, not a pre-built URI. `POSTGRES_URI`/
   # `WORKER_DATABASE_URI`/`CLICKHOUSE_URI` used hand-assembled
@@ -134,11 +142,11 @@ x-go-worker-env-base: &go-worker-env-base
   # in the shared base, sync crash-looped with "worker family builder
   # failed... syncCoordinator... worker readiness dependency is
   # unavailable" instead of the expected live-but-unready shape. Default
-  # here, not just on go-reconciler/go-scheduler; the three stream
-  # services neutralize it back to empty below, same as the overlay this
-  # was folded from -- an empty `DEV_HEALTH_PG_COORDINATOR_HOST` is the
-  # component form's own "not configured" (host absent = component form
-  # not in use), same effect the empty `COORDINATOR_DATABASE_URI` had.
+  # here, not just on go-reconciler/go-scheduler. The three stream services
+  # take the four values back to empty through `x-go-worker-no-coordinator`
+  # (merged BEFORE this base, so it wins). All four, never HOST alone: the
+  # config loader refuses a part-set group (PORT, USER or PASSWORD set while
+  # HOST is empty is a configuration_error), CHAOS-8599.
   DEV_HEALTH_PG_COORDINATOR_HOST: pgbouncer-river-coordinator
   DEV_HEALTH_PG_COORDINATOR_PORT: "6434"
   DEV_HEALTH_PG_COORDINATOR_USER: ${RIVER_COORDINATOR_DATABASE_ROLE:-devhealth_coordinator}
@@ -1524,12 +1532,10 @@ services:
       pgbouncer-river-queue:
         condition: service_healthy
     environment:
-      <<: *go-worker-env-base
-      # Not a River-queue consumer, no
-      # coordinator-claim path -- neutralize the shared base's coordinator
-      # wiring rather than inherit it (same pattern the bigboy overlay this
-      # was folded from uses for its own stream services).
-      DEV_HEALTH_PG_COORDINATOR_HOST: ""
+      <<: [*go-worker-no-coordinator, *go-worker-env-base]
+      # Not a River-queue consumer, no coordinator-claim path: the stream
+      # runner opens the domain pool only. All four coordinator values are
+      # blank (see x-go-worker-no-coordinator), never HOST alone.
     stop_grace_period: 60s
 
   go-stream-ingest:
@@ -1564,12 +1570,10 @@ services:
       pgbouncer-river-queue:
         condition: service_healthy
     environment:
-      <<: *go-worker-env-base
-      # Not a River-queue consumer, no
-      # coordinator-claim path -- neutralize the shared base's coordinator
-      # wiring rather than inherit it (same pattern the bigboy overlay this
-      # was folded from uses for its own stream services).
-      DEV_HEALTH_PG_COORDINATOR_HOST: ""
+      <<: [*go-worker-no-coordinator, *go-worker-env-base]
+      # Not a River-queue consumer, no coordinator-claim path: the stream
+      # runner opens the domain pool only. All four coordinator values are
+      # blank (see x-go-worker-no-coordinator), never HOST alone.
     stop_grace_period: 60s
 
   # PagerDuty webhook delivery is independently routable from dataset sync,
@@ -1607,12 +1611,10 @@ services:
       pgbouncer-river-queue:
         condition: service_healthy
     environment:
-      <<: *go-worker-env-base
-      # Not a River-queue consumer, no
-      # coordinator-claim path -- neutralize the shared base's coordinator
-      # wiring rather than inherit it (same pattern the bigboy overlay this
-      # was folded from uses for its own stream services).
-      DEV_HEALTH_PG_COORDINATOR_HOST: ""
+      <<: [*go-worker-no-coordinator, *go-worker-env-base]
+      # Not a River-queue consumer, no coordinator-claim path: the stream
+      # runner opens the domain pool only. All four coordinator values are
+      # blank (see x-go-worker-no-coordinator), never HOST alone.
     stop_grace_period: 60s
 
   # ---------------------------------------------------------------------------

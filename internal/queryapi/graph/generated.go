@@ -9714,9 +9714,12 @@ type ConnectorStatus {
 }
 
 type Coverage {
-  reposCoveredPct: Float!
-  prsLinkedToIssuesPct: Float!
-  issuesWithCycleStatesPct: Float!
+  """Null when no repositories are available to measure."""
+  reposCoveredPct: Float
+  """Null when the current window contains no work items to link."""
+  prsLinkedToIssuesPct: Float
+  """Null when the current window contains no work items for cycle-state coverage."""
+  issuesWithCycleStatesPct: Float
 }
 
 type CoverageStat {
@@ -31745,14 +31748,11 @@ func (ec *executionContext) _Coverage_reposCoveredPct(ctx context.Context, field
 		return graphql.Null
 	}
 	if resTmp == nil {
-		if !graphql.HasFieldError(ctx, fc) {
-			ec.Errorf(ctx, "must not be null")
-		}
 		return graphql.Null
 	}
-	res := resTmp.(float64)
+	res := resTmp.(*float64)
 	fc.Result = res
-	return ec.marshalNFloat2float64(ctx, field.Selections, res)
+	return ec.marshalOFloat2ᚖfloat64(ctx, field.Selections, res)
 }
 
 func (ec *executionContext) fieldContext_Coverage_reposCoveredPct(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
@@ -31789,14 +31789,11 @@ func (ec *executionContext) _Coverage_prsLinkedToIssuesPct(ctx context.Context, 
 		return graphql.Null
 	}
 	if resTmp == nil {
-		if !graphql.HasFieldError(ctx, fc) {
-			ec.Errorf(ctx, "must not be null")
-		}
 		return graphql.Null
 	}
-	res := resTmp.(float64)
+	res := resTmp.(*float64)
 	fc.Result = res
-	return ec.marshalNFloat2float64(ctx, field.Selections, res)
+	return ec.marshalOFloat2ᚖfloat64(ctx, field.Selections, res)
 }
 
 func (ec *executionContext) fieldContext_Coverage_prsLinkedToIssuesPct(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
@@ -31833,14 +31830,11 @@ func (ec *executionContext) _Coverage_issuesWithCycleStatesPct(ctx context.Conte
 		return graphql.Null
 	}
 	if resTmp == nil {
-		if !graphql.HasFieldError(ctx, fc) {
-			ec.Errorf(ctx, "must not be null")
-		}
 		return graphql.Null
 	}
-	res := resTmp.(float64)
+	res := resTmp.(*float64)
 	fc.Result = res
-	return ec.marshalNFloat2float64(ctx, field.Selections, res)
+	return ec.marshalOFloat2ᚖfloat64(ctx, field.Selections, res)
 }
 
 func (ec *executionContext) fieldContext_Coverage_issuesWithCycleStatesPct(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
@@ -68401,19 +68395,10 @@ func (ec *executionContext) _Coverage(ctx context.Context, sel ast.SelectionSet,
 			out.Values[i] = graphql.MarshalString("Coverage")
 		case "reposCoveredPct":
 			out.Values[i] = ec._Coverage_reposCoveredPct(ctx, field, obj)
-			if out.Values[i] == graphql.Null {
-				out.Invalids++
-			}
 		case "prsLinkedToIssuesPct":
 			out.Values[i] = ec._Coverage_prsLinkedToIssuesPct(ctx, field, obj)
-			if out.Values[i] == graphql.Null {
-				out.Invalids++
-			}
 		case "issuesWithCycleStatesPct":
 			out.Values[i] = ec._Coverage_issuesWithCycleStatesPct(ctx, field, obj)
-			if out.Values[i] == graphql.Null {
-				out.Invalids++
-			}
 		default:
 			panic("unknown field " + strconv.Quote(field.Name))
 		}

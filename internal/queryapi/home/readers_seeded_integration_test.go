@@ -299,8 +299,8 @@ func TestHomeReaders_SeededRealClickHouse(t *testing.T) {
 		// 1/1 = 100% too under THIS metric. The prs_linked pct is the one
 		// that discriminates the two possible readings by CARDINALITY when
 		// combined with total below.
-		if got["prs_linked_to_issues_pct"] != 100.0 {
-			t.Errorf("prs_linked_to_issues_pct = %v, want 100 (only wi-cycle-2 visible: 1 linked / 1 total)", got["prs_linked_to_issues_pct"])
+		if got.PRsLinkedToIssuesPct == nil || *got.PRsLinkedToIssuesPct != 100.0 {
+			t.Errorf("prs_linked_to_issues_pct = %v, want 100 (only wi-cycle-2 visible: 1 linked / 1 total)", got.PRsLinkedToIssuesPct)
 		}
 	})
 

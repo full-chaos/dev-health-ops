@@ -358,6 +358,34 @@ disagree, when a row still names a build the deployed process is not running
 (run `repoint` first), or when the target digest already holds a different
 row for that operation.
 
+A routing table with no row at any schema digest is a valid state (query-api
+serves every catalog operation that has no routing row). On it `carry` and
+`repoint` are a no-op: exit 0, one `NO-OP` line, nothing written, and
+`"empty_table":true` on the `-json` line beside the usual success `reason`,
+so the chart's pre-upgrade and post-upgrade hooks pass. Every other preflight
+still runs (the `-expect-build` cross-check included). When rows exist and
+none of them is at the live schema digest, both verbs refuse as before: a row
+left at another digest holds its operation dark, and an upgrade must not hide
+that.
+
+A registered document that was **swapped with dual accept** is not a changed
+document for `carry`. When an operation gets a new text, the old text stays
+accepted as a legacy one (`legacyDigestsByOperation`, the `"legacy": true`
+entries of the document dump and of the catalog), and query-api reads a
+routing row under any accepted digest. So a row keyed to a digest the image
+being rolled to lists as a legacy text of the same operation is carried
+verbatim, under its own digest, and both texts are served from it; the plan
+names it `carried (legacy digest)`. The row is not re-keyed to the new
+digest. `carry` still refuses a row whose digest is neither the image's
+current digest nor one of its legacy digests for that operation, and it
+refuses when the document dump accepts a legacy digest that the catalog does
+not list. Two limits follow from `/registry` reporting each operation's
+current digest only: `carry` treats a row keyed to a target-legacy digest as
+reachable now without asking the deployed process, and it cannot see that a
+legacy text was **retired** — a row still keyed to a retired digest reads as
+already unreachable and is skipped, not refused. Re-key such rows (`enable`
+at the current digest) before the image that retires the legacy text rolls.
+
 A carried row claims NO proof: receipts are keyed by `schema_digest`, so
 `status` reports every carried row UNPROVEN at the new digest until
 `go-api-prove` runs against the new build, and its `review_evidence` says so
@@ -831,7 +859,7 @@ make it structural:
   the field with `jq`, host-side, after `docker compose run` returns. Any reason other than
   `digest_unchanged` or a successfully-retried `stale_build` aborts the cut before `migrate`/`up`
   ever runs: **refuse-not-skip**, never a silent no-op.
-- **`routing-repoint`**, right after `routing-parity` (post-roll, against the newly-running
+- **`routing-repoint`**, after the roll (against the newly-running
   build), unconditionally on every cut, schema-change or not. Provenance-only -- it never touches
   mode/reachability -- so it is safe to run every time, and it closes the OTHER gap this ticket
   found: routing rows can lag the actually-running build after an ORDINARY roll too, with no

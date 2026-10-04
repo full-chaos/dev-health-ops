@@ -58,6 +58,23 @@ package goapiproof
 // enablement; it keeps the registration that `seed` recorded, which no
 // verb can restore once the digest has moved.
 //
+// LEGACY DOCUMENT DIGESTS (CHAOS-8000 dual accept). An operation can
+// accept more than one text: its CURRENT registered document and the
+// LEGACY ones it registered before (legacyDigestsByOperation in
+// query_route.go, the `"legacy": true` entries of the registered-document
+// dump and of the edge catalog). The Go plane reads a routing row under
+// ANY accepted digest (routeswitch/postgres_switch.go acceptedDigests), so
+// a row keyed to a legacy digest is a live row, not a dead one.
+//
+// A row whose digest the image being rolled to lists as a LEGACY text of
+// the same operation is therefore carried VERBATIM, under its own digest:
+// both texts are served from it after the roll. It is NOT re-keyed to the
+// current digest -- that would be a new enablement at a key nobody
+// decided, and it would leave the old text, which clients still send
+// during a web rollout, without a row. A row whose digest is neither the
+// target image's current digest nor one of its legacy digests is refused
+// exactly as before.
+//
 // WHAT AN AUDIT ROW SAYS. alembic 0130's CHECK admits exactly
 // enable|disable|repoint for `action`, so a carried row is audited as an
 // `enable` -- which is what it is: an enablement at a new key, with the
@@ -142,9 +159,10 @@ func (e carryRefusal) Unwrap() []error { return []error{e.err, ErrCarryRequestRe
 // fleet computes.
 var ErrCarryDigestUnchanged = errors.New("goapiproof: the target schema digest is the live one, so there is nothing to carry")
 
-// ErrCarryNoLiveRows reports that no row exists at the live digest.
-// "The table is empty" and "every row died" must not read alike -- that
-// is the whole lesson of CHAOS-5416.
+// ErrCarryNoLiveRows reports that rows exist, and none of them at the live
+// digest. "The table is empty" and "every row died" must not read alike --
+// that is the whole lesson of CHAOS-5416 -- so a table with no row at any
+// digest is ErrRoutingTableEmpty instead, which is not a refusal.
 var ErrCarryNoLiveRows = errors.New("goapiproof: no routing row exists at the live schema digest")
 
 // ErrCarryNothingReachable reports that rows exist at the live digest but
@@ -158,11 +176,13 @@ var ErrCarryNothingReachable = errors.New("goapiproof: no reachable row at the l
 // ErrCarryDocumentMoved reports operations whose registered document is
 // changed or absent in the image this binary was built from.
 //
-// The verb rests on the document being the SAME text at both digests:
-// the row's key includes document_digest, and the edge looks a row up by
-// the digest of the request text it received. A carried row under a
-// digest the new image does not serve is a dead row written on purpose,
-// so the operation is refused BY NAME and the run stops.
+// The verb rests on the row's document being a text the new image still
+// ACCEPTS for that operation -- its current registered document, or one
+// it lists as a legacy text (CHAOS-8000 dual accept): the row's key
+// includes document_digest, and the edge looks a row up by the digest of
+// the request text it received. A carried row under a digest the new
+// image does not accept is a dead row written on purpose, so the
+// operation is refused BY NAME and the run stops.
 var ErrCarryDocumentMoved = errors.New("goapiproof: the registered document changed or is absent at the target schema digest")
 
 // ErrCarryClassRootGone reports a reachable MCP class row whose root field
@@ -270,10 +290,22 @@ type CarryInputs struct {
 	// registers, computed over its own registered-document dump with the
 	// same function the running process uses.
 	TargetDocumentDigest map[string]string
+	// TargetLegacyDocumentDigests are, per operation, the digests of the
+	// LEGACY texts the image this binary was built from still accepts
+	// (CHAOS-8000 dual accept), computed over the `"legacy": true` entries
+	// of its registered-document dump. A row keyed to one of them is read
+	// by the new image, so it is carried under its own digest. Nil or an
+	// absent operation means the image accepts its current text only.
+	TargetLegacyDocumentDigests map[string][]string
 	// CatalogDocumentDigest is what THIS image's edge catalog carries --
 	// the other half of reachability after the roll, owned by the Python
 	// plane.
 	CatalogDocumentDigest map[string]string
+	// CatalogLegacyDocumentDigests are, per operation, the digests THIS
+	// image's edge catalog lists as legacy texts. A legacy digest the
+	// registered-document dump accepts and the catalog does not list is
+	// the same image disagreement as a differing current digest.
+	CatalogLegacyDocumentDigests map[string][]string
 	// TargetRows are the rows already at the target digest, keyed by
 	// OPERATION rather than by full row identity: a row for this
 	// operation at the target digest under another document digest is not
@@ -312,6 +344,45 @@ type CarryOutcome struct {
 	EligibleOrgs      *string
 	// ReviewEvidence is what was (or would be) written, prefix included.
 	ReviewEvidence string
+	// LegacyDigest is true when the row is keyed to a digest the target
+	// image accepts as a LEGACY text of the operation, not as its current
+	// one (CHAOS-8000 dual accept). The row keeps that digest: DocumentDigest
+	// above is the key at both schema digests. The report names such a row,
+	// because it is the one row class whose key is not the digest `status`
+	// and /registry show for the operation.
+	LegacyDigest bool
+	// TargetCurrentDigest is the digest of the target image's CURRENT text
+	// of the operation, filled only when LegacyDigest is true.
+	TargetCurrentDigest string
+}
+
+// legacyDigestListed reports whether digest is one of the legacy digests
+// listed for operation. Exact match on both: a legacy text belongs to ONE
+// operation, and a digest listed for another operation is not this one's.
+func legacyDigestListed(legacy map[string][]string, operation, digest string) bool {
+	for _, listed := range legacy[operation] {
+		if listed == digest {
+			return true
+		}
+	}
+	return false
+}
+
+// keyedToTargetLegacyDigest reports whether the row is keyed to a digest the
+// target image accepts as a LEGACY text of the row's operation: the image
+// registers the operation under ANOTHER current digest and lists the row's
+// digest among that operation's legacy ones.
+//
+// All three clauses are needed. Without `serves`, a legacy list for an
+// operation the image does not register would carry a row nothing
+// dispatches. Without `target != row.DocumentDigest`, a digest listed as
+// both current and legacy (which every loader refuses, and this pure
+// function must not depend on) would let a row the deployed process does
+// not read pass the reachability check as if it were a legacy one.
+func keyedToTargetLegacyDigest(row CarryRow, inputs CarryInputs) bool {
+	target, serves := inputs.TargetDocumentDigest[row.Operation]
+	return serves && target != row.DocumentDigest &&
+		legacyDigestListed(inputs.TargetLegacyDocumentDigests, row.Operation, row.DocumentDigest)
 }
 
 // DecideCarry is the whole decision for ONE row, as a pure function of
@@ -371,14 +442,40 @@ func DecideCarry(row CarryRow, inputs CarryInputs) CarryOutcome {
 	if mcpclass.IsClassRow(row.Operation, row.DocumentDigest) {
 		return decideClassCarry(row, inputs, outcome, refuse)
 	}
+	// A row keyed to a digest the TARGET image lists as a legacy text of
+	// this operation (CHAOS-8000 dual accept) is carried under its own
+	// digest; see the package comment. Decided once, here, because it
+	// changes two facts below: what "reachable now" means, and what "the
+	// document changed" means.
+	legacy := keyedToTargetLegacyDigest(row, inputs)
+
 	live, registered := inputs.LiveDocumentDigest[row.Operation]
 	if !registered {
 		return skip("the deployed process does not register this operation, so this row is already unreachable")
 	}
-	if live != row.DocumentDigest {
+	if live != row.DocumentDigest && !legacy {
 		// The dead-row shape `status` reports as an unreachable document
 		// digest: present in psql, never looked up. Carrying it would
 		// manufacture a second dead row at the target digest.
+		//
+		// NOT skipped when the digest is a target-legacy one. /registry
+		// reports each operation's CURRENT digest only, so a deployed
+		// process that already registers the newer text and still accepts
+		// this one cannot say so -- and that is the standing state after
+		// every roll that carried a legacy-keyed row. A digest is a legacy
+		// text only because an earlier image registered it as the current
+		// one, so such a row was written while it was reachable; skipping
+		// it here would un-route the operation at the NEXT schema digest,
+		// silently, which is the harm this verb exists to prevent.
+		//
+		// This is an INFERENCE from the target image's list, not a fact
+		// read from the deployed process, and it has one known wrong
+		// reading: a deployment rolled BACK to an image older than this
+		// text does not read the row, and the row is carried anyway --
+		// with the mode an operator gave this operation and this
+		// document. The opposite error is the silent one, so this side is
+		// chosen. A /registry that reports legacy digests would remove
+		// the inference.
 		return skip("this row's document digest is not the one the deployed process registers (%s), so the row is already unreachable", live)
 	}
 
@@ -386,7 +483,7 @@ func DecideCarry(row CarryRow, inputs CarryInputs) CarryOutcome {
 	if !serves {
 		return refuse(ErrCarryDocumentMoved, "the image this binary was built from does not register this operation at all")
 	}
-	if target != row.DocumentDigest {
+	if target != row.DocumentDigest && !legacy {
 		return refuse(ErrCarryDocumentMoved, "the registered document changed: this row is keyed to %s, the target image registers %s", row.DocumentDigest, target)
 	}
 	catalog, inCatalog := inputs.CatalogDocumentDigest[row.Operation]
@@ -395,6 +492,15 @@ func DecideCarry(row CarryRow, inputs CarryInputs) CarryOutcome {
 	}
 	if catalog != target {
 		return refuse(ErrCarryImageDisagrees, "this image's edge catalog says %s and its registered documents say %s -- regenerate the catalog with scripts/go_api/generate_operation_catalog.py against this revision", catalog, target)
+	}
+	if legacy {
+		// The catalog is the edge's map from a request text's digest to
+		// its operation, so it must list the legacy digest too, or the old
+		// text this row exists to keep serving could not be dispatched.
+		if !legacyDigestListed(inputs.CatalogLegacyDocumentDigests, row.Operation, row.DocumentDigest) {
+			return refuse(ErrCarryImageDisagrees, "this image's registered documents accept %s as a legacy text of this operation and its edge catalog does not list it as one -- regenerate the catalog with scripts/go_api/generate_operation_catalog.py against this revision", row.DocumentDigest)
+		}
+		outcome.LegacyDigest, outcome.TargetCurrentDigest = true, target
 	}
 
 	existing, present := inputs.TargetRows[row.Operation]
@@ -433,23 +539,33 @@ func decideShadowCarry(row CarryRow, inputs CarryInputs, outcome CarryOutcome, s
 			return skip("mode=shadow: the image this binary was built from does not serve MCP root field %q, so the shadow registration is dropped (nothing is served from it)", root)
 		}
 	} else {
+		// The same legacy-digest rule as a served row (see DecideCarry): a
+		// shadow registration keyed to a text the target image still
+		// accepts as a legacy one is kept under its own digest.
+		legacy := keyedToTargetLegacyDigest(row, inputs)
 		live, registered := inputs.LiveDocumentDigest[row.Operation]
 		if !registered {
 			return skip("mode=shadow: the deployed process does not register this operation, so this row is already unreachable")
 		}
-		if live != row.DocumentDigest {
+		if live != row.DocumentDigest && !legacy {
 			return skip("mode=shadow: this row's document digest is not the one the deployed process registers (%s), so the row is already unreachable", live)
 		}
 		target, serves := inputs.TargetDocumentDigest[row.Operation]
 		if !serves {
 			return skip("mode=shadow: the image this binary was built from does not register this operation, so the shadow registration is dropped (nothing is served from it)")
 		}
-		if target != row.DocumentDigest {
+		if target != row.DocumentDigest && !legacy {
 			return skip("mode=shadow: the registered document changed (row %s, target image %s), so the shadow registration is dropped (nothing is served from it)", row.DocumentDigest, target)
 		}
 		catalog, inCatalog := inputs.CatalogDocumentDigest[row.Operation]
 		if !inCatalog || catalog != target {
 			return skip("mode=shadow: this image's edge catalog does not agree with its registered document for this operation, so the shadow registration is dropped (nothing is served from it)")
+		}
+		if legacy {
+			if !legacyDigestListed(inputs.CatalogLegacyDocumentDigests, row.Operation, row.DocumentDigest) {
+				return skip("mode=shadow: this image's edge catalog does not agree with its registered document for this operation (it does not list %s as a legacy text), so the shadow registration is dropped (nothing is served from it)", row.DocumentDigest)
+			}
+			outcome.LegacyDigest, outcome.TargetCurrentDigest = true, target
 		}
 	}
 	existing, present := inputs.TargetRows[row.Operation]
@@ -636,6 +752,17 @@ func Carry(ctx context.Context, pool *pgxpool.Pool, request CarryRequest) ([]Car
 		return nil, err
 	}
 	if len(liveRows) == 0 {
+		// No row at the live digest is two states, and they answer differently
+		// (CHAOS-8543): a table with no row at ANY digest has nothing to carry and
+		// nothing wrong with it; a table whose rows all sit at other digests holds
+		// those operations dark, and stays the refusal it was.
+		empty, err := routingTableEmpty(ctx, tx)
+		if err != nil {
+			return nil, err
+		}
+		if empty {
+			return nil, ErrRoutingTableEmpty
+		}
 		return nil, fmt.Errorf("%w: %s", ErrCarryNoLiveRows, request.LiveSchemaDigest)
 	}
 	if len(wanted) > 0 {

@@ -359,6 +359,9 @@ func (c Catalog) Names(operation, documentDigest string) bool {
 	return c.documents[operation][documentDigest]
 }
 
+// OperationCount is the number of operations the catalog registers.
+func (c Catalog) OperationCount() int { return len(c.documents) }
+
 // Documents lists the digests the catalog registers for operation, sorted.
 func (c Catalog) Documents(operation string) []string {
 	out := make([]string, 0, len(c.documents[operation]))

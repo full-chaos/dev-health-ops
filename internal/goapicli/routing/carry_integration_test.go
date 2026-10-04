@@ -235,6 +235,116 @@ func TestCarryRefusesWhenTheImagesOwnDocumentsDoNotMatchTheLiveOnes(t *testing.T
 	}
 }
 
+// writeLegacyArtifacts writes the two artifacts of an image that SWAPPED
+// one operation's registered document with dual accept (CHAOS-8000): the
+// registrydump-shaped dump lists the current text and then the legacy one
+// marked `"legacy": true`, and the catalog lists both digests the same
+// way. Digests are computed from the texts, as everywhere in this file.
+func writeLegacyArtifacts(t *testing.T, operation, currentText, legacyText string) (catalogPath, documentsPath string) {
+	t.Helper()
+	type document struct {
+		Operation string `json:"operation"`
+		Document  string `json:"document"`
+		ConstName string `json:"const_name"`
+		Digest    string `json:"digest"`
+		Legacy    bool   `json:"legacy,omitempty"`
+	}
+	documents, err := json.Marshal([]document{
+		{Operation: operation, Document: currentText, ConstName: "registered" + operation + "V2Document", Digest: goapidigest.Document(currentText)},
+		{Operation: operation, Document: legacyText, ConstName: "registered" + operation + "Document", Digest: goapidigest.Document(legacyText), Legacy: true},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	type catalogEntry struct {
+		Operation string `json:"operation"`
+		Digest    string `json:"digest"`
+		Legacy    bool   `json:"legacy,omitempty"`
+	}
+	catalog, err := json.Marshal([]catalogEntry{
+		{Operation: operation, Digest: goapidigest.Document(currentText)},
+		{Operation: operation, Digest: goapidigest.Document(legacyText), Legacy: true},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	dir := t.TempDir()
+	documentsPath = dir + "/documents.json"
+	catalogPath = dir + "/go_api_operations.json"
+	if err := os.WriteFile(documentsPath, documents, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(catalogPath, catalog, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	return catalogPath, documentsPath
+}
+
+// CHAOS-8000 dual accept, through the real command. The image being
+// rolled to registers a DIFFERENT document text for the operation -- the
+// same change the refusal test above makes -- and still accepts the old
+// text as a legacy one. The row the deployed process serves is keyed to
+// the OLD digest, and it is carried under that digest: the new image reads
+// a row under any accepted digest, so both texts stay served. Without the
+// legacy entries this exact run refuses and, for a go-only operation,
+// prints DO NOT ROLL.
+func TestCarryEndToEndCarriesARowKeyedToALegacyDocumentDigest(t *testing.T) {
+	_, dsn := startVerbPostgres(t)
+	oldDigest := carryTestDocumentDigest()
+	newText := carryTestDocument + "\n# changed"
+	catalogPath, documentsPath := writeLegacyArtifacts(t, verbTestOperation, newText, carryTestDocument)
+	t.Setenv(bearerEnvVar, verbTestBearer)
+	// The deployed process still registers the OLD text.
+	server := startQueryAPI(t, carryDeployedSchemaDigest, map[string]string{verbTestOperation: oldDigest})
+	seedLiveRow(t, dsn, oldDigest, "canary")
+
+	// The dry run names the row and writes nothing.
+	out, errOut, err := captureVerb(t, carryArgs(server, dsn, catalogPath, documentsPath, "-dry-run")...)
+	if err != nil {
+		t.Fatalf("carry -dry-run: %v\nstdout:%s\nstderr:%s", err, out, errOut)
+	}
+	if !strings.Contains(out, "would carry=1") || !strings.Contains(out, "carried (legacy digest)") {
+		t.Fatalf("the dry run must say the row would be carried under a legacy digest:\n%s", out)
+	}
+	if got := countRowsAt(t, dsn, localSchemaDigest()); got != 0 {
+		t.Fatalf("a dry run wrote %d row(s)", got)
+	}
+
+	out, errOut, err = captureVerb(t, carryArgs(server, dsn, catalogPath, documentsPath)...)
+	if err != nil {
+		t.Fatalf("carry: %v\nstdout:%s\nstderr:%s", err, out, errOut)
+	}
+	if got := countRowsAt(t, dsn, localSchemaDigest()); got != 1 {
+		t.Fatalf("%d row(s) at this binary's digest, want the carried one\nstdout:%s", got, out)
+	}
+	// THE STATE: the row at the new schema digest keeps the OLD document
+	// digest and the reachability it had.
+	var documentDigest, mode string
+	if err := queryRow(t, dsn,
+		`SELECT document_digest, mode FROM go_api_routing_state WHERE schema_digest = '`+localSchemaDigest()+`'`,
+		&documentDigest, &mode); err != nil {
+		t.Fatal(err)
+	}
+	if documentDigest != oldDigest {
+		t.Fatalf("carried under document digest %s, want the row's own digest %s (the image's current text digests to %s)",
+			documentDigest, oldDigest, goapidigest.Document(newText))
+	}
+	if mode != "canary" {
+		t.Fatalf("carried mode = %q, want the reachability it had", mode)
+	}
+	if got := countRowsAt(t, dsn, carryDeployedSchemaDigest); got != 1 {
+		t.Fatalf("%d row(s) at the live digest, want the original one left untouched", got)
+	}
+	for _, want := range []string{"carried=1", "carried (legacy digest)", goapidigest.Document(newText)} {
+		if !strings.Contains(out, want) {
+			t.Fatalf("stdout does not mention %q:\n%s", want, out)
+		}
+	}
+	if !strings.Contains(errOut, "go_api_routing.carried operation="+verbTestOperation) || !strings.Contains(errOut, "legacy_digest=true") {
+		t.Fatalf("the structured line must name the row as carried under a legacy digest:\n%s", errOut)
+	}
+}
+
 // -dry-run answers "what would this do" without doing any of it.
 func TestCarryDryRunEndToEndWritesNothing(t *testing.T) {
 	_, dsn := startVerbPostgres(t)

@@ -662,9 +662,6 @@ internal/queryapi/flame/testdata/issue_no_backlog_wait.json
 internal/queryapi/flame/testdata/issue_with_backlog_wait.json
 internal/queryapi/flame/testdata/pr_no_review.json
 internal/queryapi/flame/testdata/pr_with_rework.json
-internal/queryapi/home/testdata/org_default.json
-internal/queryapi/home/testdata/repo_scoped.json
-internal/queryapi/home/testdata/team_scoped.json
 internal/queryapi/investment/testdata/investment_basic.json
 internal/queryapi/investment/testdata/investment_missing_table.json
 internal/queryapi/investment/testdata/sunburst_basic.json
@@ -763,8 +760,6 @@ internal/queryapi/investmentflow/testdata/team_category_repo.json
 internal/queryapi/investmentflow/testdata/team_category_subcategory_repo.json
 internal/queryapi/investmentflow/testdata/team_subcategory_repo.json
 internal/queryapi/meta/testdata/meta.json
-internal/queryapi/opportunities/testdata/no_cards_fallback.json
-internal/queryapi/opportunities/testdata/pr_rework_ratio_default_experiments.json
 internal/queryapi/people/testdata/alias_mapping.json
 internal/queryapi/people/testdata/no_alias_mapping.json
 internal/queryapi/quadrant/testdata/churn_throughput_team_forces_repo.json
@@ -848,7 +843,6 @@ internal/queryapi/server/testdata/wire_capture/featureflagevents_captured.graphq
 internal/queryapi/server/testdata/wire_capture/featureflags_captured.graphql
 internal/queryapi/server/testdata/wire_capture/featureflagtimeseries_captured.graphql
 internal/queryapi/server/testdata/wire_capture/home_captured.graphql
-internal/queryapi/server/testdata/wire_capture/improveopportunities_captured.graphql
 internal/queryapi/server/testdata/wire_capture/pr_captured.graphql
 internal/queryapi/server/testdata/wire_capture/product_telemetry_dashboard_captured.graphql
 internal/queryapi/server/testdata/wire_capture/product_telemetry_platform_dashboard_captured.graphql

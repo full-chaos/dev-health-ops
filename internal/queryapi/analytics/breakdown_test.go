@@ -5,6 +5,8 @@ import (
 	"errors"
 	"strings"
 	"testing"
+
+	"github.com/full-chaos/dev-health-ops/internal/queryapi/graph/model"
 )
 
 // TestCompileBreakdown_Investment_CompilesInlinedSource is CHAOS-4538's
@@ -84,6 +86,61 @@ func TestBreakdownRequestFromInput_TopNValidation(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+func TestBreakdownRequestFromInput_PreservesBoundedExactKeys(t *testing.T) {
+	keys := []string{"repo-line", "repo-branch"}
+	req, err := BreakdownRequestFromInput(model.BreakdownRequestInput{
+		Dimension: model.DimensionInputRepo,
+		Measure:   model.MeasureInputCoverageBranchPct,
+		DateRange: &model.DateRangeInput{
+			StartDate: mustGraphQLDate("2026-01-01"),
+			EndDate:   mustGraphQLDate("2026-01-08"),
+		},
+		TopN: 1,
+		Keys: keys,
+	})
+	if err != nil {
+		t.Fatalf("BreakdownRequestFromInput: %v", err)
+	}
+	if len(req.Keys) != len(keys) || req.Keys[0] != keys[0] || req.Keys[1] != keys[1] {
+		t.Fatalf("Keys = %#v, want %#v", req.Keys, keys)
+	}
+	if req.TopN != 1 {
+		t.Fatalf("TopN = %d, want 1", req.TopN)
+	}
+	if err := validateBreakdownKeys(make([]string, maxTopN+1)); err == nil {
+		t.Fatal("expected more than maxTopN exact keys to be rejected")
+	}
+}
+
+func TestCompileBreakdown_ExactKeysBypassIndependentTopNCut(t *testing.T) {
+	req := BreakdownRequest{
+		Dimension: DimensionRepo,
+		Measure:   MeasureCoverageBranchPct,
+		StartDate: mustDate(t, "2026-01-01"),
+		EndDate:   mustDate(t, "2026-01-31"),
+		TopN:      1,
+		Keys:      []string{"repo-line", "repo-branch"},
+	}
+	q, err := CompileBreakdown(req, "org-1", 30, false, nil)
+	if err != nil {
+		t.Fatalf("CompileBreakdown: %v", err)
+	}
+	if !strings.Contains(q.sql, "repo_id IN {breakdown_keys:Array(String)}") {
+		t.Errorf("exact-key predicate missing from breakdown SQL: %s", q.sql)
+	}
+	if strings.Contains(q.sql, "LIMIT {top_n:UInt32}") {
+		t.Errorf("exact keys must not retain the independent topN cut: %s", q.sql)
+	}
+	bindings := bindingMap(q.bindings)
+	if _, ok := bindings["top_n"]; ok {
+		t.Errorf("exact keys must not bind top_n: %#v", bindings)
+	}
+	got, ok := bindings["breakdown_keys"].([]string)
+	if !ok || len(got) != 2 || got[0] != "repo-line" || got[1] != "repo-branch" {
+		t.Errorf("breakdown_keys binding = %#v, want the requested keys", bindings["breakdown_keys"])
 	}
 }
 

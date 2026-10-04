@@ -210,4 +210,28 @@ func TestCompileBreakdown_ThemeCount_SeededRealClickHouse_ExactAggregate(t *test
 	if second.Value == nil || *second.Value != 3 {
 		t.Errorf("Items[1].Value = %v, want 3", second.Value)
 	}
+
+	// CHAOS-8497: request the two known keys while topN is deliberately one.
+	// The answer must retain both requested values: the key set defines this
+	// response, so a measure's independent topN ranking cannot omit a join key.
+	exactReq := req
+	exactReq.TopN = 1
+	exactReq.Keys = []string{"feature", "bug"}
+	exactQuery, err := CompileBreakdown(exactReq, orgID, queryTimeoutSecs, false, nil)
+	if err != nil {
+		t.Fatalf("CompileBreakdown exact keys: %v", err)
+	}
+	exact, err := ExecuteBreakdown(ctx, client, "org-1", exactQuery, "theme", "count")
+	if err != nil {
+		t.Fatalf("ExecuteBreakdown exact keys: %v", err)
+	}
+	if len(exact.Items) != 2 {
+		t.Fatalf("exact-key len(Items) = %d, want 2 despite topN=1: %+v", len(exact.Items), exact.Items)
+	}
+	if exact.Items[0].Key != "feature" || exact.Items[0].Value == nil || *exact.Items[0].Value != 12 {
+		t.Errorf("exact Items[0] = %+v, want feature=12", exact.Items[0])
+	}
+	if exact.Items[1].Key != "bug" || exact.Items[1].Value == nil || *exact.Items[1].Value != 3 {
+		t.Errorf("exact Items[1] = %+v, want bug=3", exact.Items[1])
+	}
 }

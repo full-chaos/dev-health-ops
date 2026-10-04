@@ -89,17 +89,51 @@ func loadWorkItemBlockedIntervalsForProvider(
 // mergeBlockingRelations returns one row per (source, target, type): of a
 // stored and a fresh row for the same relation, the one synced last. The
 // result is in key order, so it does not depend on the order of its inputs.
+//
+// The two times a relation start comes from are carried across the merge:
+//
+//   - FirstSeenAt is the STORED first-seen time when the relation is stored.
+//     A fresh relation that is not stored yet was first seen by THIS sync, so
+//     its first-seen time is its own last_synced -- the value the store will
+//     hold for it once this unit's rows are written. A stored relation with
+//     no stored first-seen time keeps none: its start is not known.
+//   - StartedAt (the provider's own link time) is the surviving row's, else
+//     the other row's: a provider that reported the time once is not
+//     forgotten because a later payload omitted it.
 func mergeBlockingRelations(stored, fresh []workitemmetrics.BlockingRelation) []workitemmetrics.BlockingRelation {
 	type key struct{ source, target, relationship string }
+	keyOf := func(relation workitemmetrics.BlockingRelation) key {
+		return key{relation.SourceID, relation.TargetID, relation.RelationshipType}
+	}
 	newest := make(map[key]workitemmetrics.BlockingRelation, len(stored)+len(fresh))
-	for _, relations := range [][]workitemmetrics.BlockingRelation{stored, fresh} {
-		for _, relation := range relations {
-			k := key{relation.SourceID, relation.TargetID, relation.RelationshipType}
-			if existing, seen := newest[k]; seen && !relation.LastSynced.After(existing.LastSynced) {
-				continue
-			}
-			newest[k] = relation
+	for _, relation := range stored {
+		k := keyOf(relation)
+		if existing, seen := newest[k]; seen && !relation.LastSynced.After(existing.LastSynced) {
+			continue
 		}
+		newest[k] = relation
+	}
+	for _, relation := range fresh {
+		k := keyOf(relation)
+		existing, isStored := newest[k]
+		merged := relation
+		if !isStored {
+			// First written by this sync (or by an earlier row of this same
+			// unit): the earliest of them is when the relation was first seen.
+			firstSeen := relation.LastSynced.UTC()
+			merged.FirstSeenAt = &firstSeen
+			newest[k] = merged
+			continue
+		}
+		other := existing
+		if !relation.LastSynced.After(existing.LastSynced) {
+			merged, other = existing, relation
+		}
+		merged.FirstSeenAt = existing.FirstSeenAt
+		if merged.StartedAt == nil {
+			merged.StartedAt = other.StartedAt
+		}
+		newest[k] = merged
 	}
 	keys := make([]key, 0, len(newest))
 	for k := range newest {

@@ -32,24 +32,33 @@ package workitemmetrics
 // reader would count those hours twice. Both call the functions in this file,
 // for the reason this package exists.
 //
-// # What the stored relation does NOT say
+// # When a relation starts and ends
 //
-// A work_item_dependencies row has no start time and no end time: it says the
-// relation exists, as of its last_synced. Two consequences, both deliberate:
+// A blocked interval never covers time in which the relation is not KNOWN to
+// have existed. A work_item_dependencies row only says the relation exists as
+// of its last_synced, so the start and the end come from what is stored
+// about the relation, never from the two items' creation times:
 //
-//   - START. The interval starts when both items exist (the later of the two
-//     created_at). When the link was added later than that, this is too
-//     early. It is the earliest instant the relation can have held, and no
-//     stored fact gives a later one.
-//   - REMOVAL. A link removed at the provider leaves its row behind: the
-//     table is insert-only. A re-synced item re-emits the relations it still
-//     has, with the new last_synced, so a relation OLDER than the latest
-//     sync of the item that emits it is one the provider no longer reports.
-//     RelationIsCurrent applies that.
+//   - START: the provider's own time of the link when the synced payload
+//     carries one (relation_started_at), else the first time a sync wrote the
+//     relation (work_item_dependency_first_seen). The second is too late when
+//     the link is older than our first sync of it -- it understates, and it
+//     never overstates. A relation with neither stored has no known start and
+//     gives no interval.
+//   - END: none while the provider still reports the relation. A link
+//     removed at the provider leaves its row behind (the table is
+//     insert-only), but a re-synced item re-emits only the relations it
+//     still has, so a relation OLDER than the latest sync of the item(s)
+//     that write it is one the provider no longer reports
+//     (RelationIsCurrent). Its interval ends at the relation's own
+//     last_synced: the last time a sync saw it. The time a sync first saw it
+//     GONE is not stored (an item's last_synced is its latest sync), so this
+//     end can be too early and is never too late.
 //
-// A relation whose blocker is not a stored work item, or whose blocker is
-// terminal without a completion time, gives NO interval. A missing fact is
-// not derived, never guessed.
+// The two items' creation times and the blocker's completion only CLAMP the
+// interval. A relation whose blocker is not a stored work item, or whose
+// blocker is terminal without a completion time, gives NO interval. A
+// missing fact is not derived, never guessed.
 
 import (
 	"sort"
@@ -186,25 +195,40 @@ func IsTerminalStatus(status string) bool {
 }
 
 // BlockedIntervalFor returns the span in which blocker blocks an item
-// created at itemCreatedAt. ok is false when the blocker gives no span: it
-// was completed before both items existed, or it is terminal with no
-// completion time (its end is not known, so nothing is derived).
-func BlockedIntervalFor(itemCreatedAt time.Time, blocker Blocker) (BlockedInterval, bool) {
-	start := itemCreatedAt.UTC()
-	if created := blocker.CreatedAt.UTC(); created.After(start) {
-		start = created
-	}
-	if blocker.CompletedAt == nil {
-		if IsTerminalStatus(blocker.Status) {
-			return BlockedInterval{}, false
+// created at itemCreatedAt, through a relation known to exist from
+// relationStart until relationEnd (nil: the provider still reports it).
+//
+// The span starts at relationStart, moved LATER to the creation of either
+// item when that is later (a relation cannot hold before both items exist; a
+// later start never overstates). It ends at the earlier of relationEnd and
+// the blocker's completion. ok is false when that leaves no time, or when the
+// blocker is terminal with no completion time: its end is not known, so
+// nothing is derived.
+func BlockedIntervalFor(
+	itemCreatedAt, relationStart time.Time, relationEnd *time.Time, blocker Blocker,
+) (BlockedInterval, bool) {
+	start := relationStart.UTC()
+	for _, created := range []time.Time{itemCreatedAt.UTC(), blocker.CreatedAt.UTC()} {
+		if created.After(start) {
+			start = created
 		}
-		return BlockedInterval{Start: start}, true
 	}
-	end := blocker.CompletedAt.UTC()
-	if !end.After(start) {
+	var end *time.Time
+	if blocker.CompletedAt != nil {
+		completed := blocker.CompletedAt.UTC()
+		end = &completed
+	} else if IsTerminalStatus(blocker.Status) {
 		return BlockedInterval{}, false
 	}
-	return BlockedInterval{Start: start, End: &end}, true
+	if relationEnd != nil {
+		if ended := relationEnd.UTC(); end == nil || ended.Before(*end) {
+			end = &ended
+		}
+	}
+	if end != nil && !end.After(start) {
+		return BlockedInterval{}, false
+	}
+	return BlockedInterval{Start: start, End: end}, true
 }
 
 // OverlayBlocked rewrites segments so that the parts of a NON-terminal
@@ -291,6 +315,27 @@ type BlockingRelation struct {
 	RelationshipType string
 	SemanticsVersion string
 	LastSynced       time.Time
+	// StartedAt is the provider's own time of the link
+	// (work_item_dependencies.relation_started_at); nil when the synced
+	// payload carried none.
+	StartedAt *time.Time
+	// FirstSeenAt is the first time a sync wrote the relation
+	// (work_item_dependency_first_seen); nil when none is stored.
+	FirstSeenAt *time.Time
+}
+
+// Start returns the time from which the relation is known to have existed:
+// the provider's own time when there is one, else the first time a sync
+// wrote it. known is false when neither is stored; such a relation gives no
+// blocked interval.
+func (relation BlockingRelation) Start() (start time.Time, known bool) {
+	switch {
+	case relation.StartedAt != nil:
+		return relation.StartedAt.UTC(), true
+	case relation.FirstSeenAt != nil:
+		return relation.FirstSeenAt.UTC(), true
+	}
+	return time.Time{}, false
 }
 
 // RelationEnd is the stored work item at one end of a relation.
@@ -315,11 +360,13 @@ type RelationEnd struct {
 //   - both ends are stored work items -- an external-key end resolves through
 //     the bare issue key of a jira or linear item, and a key that no item or
 //     more than one item carries resolves to nothing;
-//   - the provider still reports the relation (RelationIsCurrent), which
-//     for a one-sided relation also needs its emitter to be stored;
-//   - the blocker has a known open span (BlockedIntervalFor).
+//   - the relation has a known start (BlockingRelation.Start);
+//   - the blocker has a known open span that overlaps the relation
+//     (BlockedIntervalFor).
 //
-// Anything else contributes nothing. When two rows of ends carry the same
+// Anything else contributes nothing. A relation the provider no longer
+// reports (RelationIsCurrent) still gives its span, ended at the last time a
+// sync saw it: the hours it covered did happen. When two rows of ends carry the same
 // work item id, the one synced last is the stored item.
 func BlockedIntervalsByItem(relations []BlockingRelation, ends []RelationEnd) map[string][]BlockedInterval {
 	if len(relations) == 0 || len(ends) == 0 {
@@ -357,19 +404,26 @@ func BlockedIntervalsByItem(relations []BlockingRelation, ends []RelationEnd) ma
 		if !blockedStored || !blockerStored || blocked.WorkItemID == blocker.WorkItemID {
 			continue
 		}
+		start, known := relation.Start()
+		if !known {
+			continue
+		}
+		// The emitter of a one-sided relation is its source, which is one of
+		// the two ends just resolved (an external key is only ever a target).
 		var emitterLastSynced time.Time
 		emitterKnown := named.EmitterID != ""
 		if emitterKnown {
-			emitter, emitterStored := byID[named.EmitterID]
-			if !emitterStored {
-				continue
+			emitterLastSynced = blocker.LastSynced
+			if named.EmitterID == blocked.WorkItemID {
+				emitterLastSynced = blocked.LastSynced
 			}
-			emitterLastSynced = emitter.LastSynced
 		}
+		var relationEnd *time.Time
 		if !RelationIsCurrent(relation.LastSynced, emitterKnown, emitterLastSynced, blocked.LastSynced, blocker.LastSynced) {
-			continue
+			lastSeen := relation.LastSynced.UTC()
+			relationEnd = &lastSeen
 		}
-		interval, open := BlockedIntervalFor(blocked.CreatedAt, Blocker{
+		interval, open := BlockedIntervalFor(blocked.CreatedAt, start, relationEnd, Blocker{
 			Status: blocker.Status, CreatedAt: blocker.CreatedAt, CompletedAt: blocker.CompletedAt,
 		})
 		if !open {

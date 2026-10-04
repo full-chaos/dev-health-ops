@@ -112,6 +112,18 @@ func blockedTestBlocker(provider, workItemID string, completedAt *time.Time) wor
 	}
 }
 
+// blockedTestStored is the STORED copy of a relation the unit emits again: the
+// same key, written by an earlier sync and first seen three days before the
+// day under test.
+func blockedTestStored(fresh githubWorkItemDependencyRow) workitemmetrics.BlockingRelation {
+	firstSeen := blockedTestDay.AddDate(0, 0, -3)
+	return workitemmetrics.BlockingRelation{
+		SourceID: fresh.SourceWorkItemID, TargetID: fresh.TargetWorkItemID,
+		RelationshipType: fresh.RelationshipType, SemanticsVersion: fresh.RelationshipSemanticsVersion,
+		LastSynced: blockedTestDay.AddDate(0, 0, -1), FirstSeenAt: &firstSeen,
+	}
+}
+
 func blockedTestHours(t *testing.T, provider string, claim Claim, rows githubWorkItemRows, source *blockedFactsSource) map[string]float64 {
 	t.Helper()
 	blocked, err := loadWorkItemBlockedIntervalsForProvider(context.Background(), provider, claim, rows, source)
@@ -200,8 +212,10 @@ func TestEveryProviderDerivesBlockedFromItsOwnBlockingRelation(t *testing.T) {
 			}
 			rows := blockedTestRows(claim, provider, tc.blockedID, dependencies)
 
-			// The blocker is a STORED item, not part of this unit, and open.
-			open := &blockedFactsSource{ends: []workitemmetrics.RelationEnd{blockedTestBlocker(provider, tc.blockerID, nil)}}
+			// The store already holds the relation (first seen before the day),
+			// and the blocker: a stored item, not part of this unit, and open.
+			stored := []workitemmetrics.BlockingRelation{blockedTestStored(dependencies[0])}
+			open := &blockedFactsSource{relations: stored, ends: []workitemmetrics.RelationEnd{blockedTestBlocker(provider, tc.blockerID, nil)}}
 			if got, want := blockedTestHours(t, provider, claim, rows, open), (map[string]float64{"blocked": 24}); !reflect.DeepEqual(got, want) {
 				t.Fatalf("open blocker: hours by status = %v, want %v", got, want)
 			}
@@ -212,13 +226,21 @@ func TestEveryProviderDerivesBlockedFromItsOwnBlockingRelation(t *testing.T) {
 
 			// The blocker was completed at 12:00: blocked until then.
 			completed := blockedTestDay.Add(12 * time.Hour)
-			closed := &blockedFactsSource{ends: []workitemmetrics.RelationEnd{blockedTestBlocker(provider, tc.blockerID, &completed)}}
+			closed := &blockedFactsSource{relations: stored, ends: []workitemmetrics.RelationEnd{blockedTestBlocker(provider, tc.blockerID, &completed)}}
 			if got, want := blockedTestHours(t, provider, claim, rows, closed), (map[string]float64{"blocked": 12, "in_progress": 12}); !reflect.DeepEqual(got, want) {
 				t.Fatalf("blocker completed at 12:00: hours by status = %v, want %v", got, want)
 			}
 
+			// THIS sync is the first to see the relation (the store does not
+			// hold it): it starts now, so no hour of an earlier day is blocked.
+			// The item's creation time is never the start.
+			firstSeenNow := &blockedFactsSource{ends: []workitemmetrics.RelationEnd{blockedTestBlocker(provider, tc.blockerID, nil)}}
+			if got, want := blockedTestHours(t, provider, claim, rows, firstSeenNow), (map[string]float64{"todo": 6, "in_progress": 18}); !reflect.DeepEqual(got, want) {
+				t.Fatalf("relation first seen by this sync: hours by status = %v, want %v", got, want)
+			}
+
 			// The blocker is not a stored work item: nothing is derived.
-			unknown := &blockedFactsSource{}
+			unknown := &blockedFactsSource{relations: stored}
 			if got, want := blockedTestHours(t, provider, claim, rows, unknown), (map[string]float64{"todo": 6, "in_progress": 18}); !reflect.DeepEqual(got, want) {
 				t.Fatalf("unknown blocker: hours by status = %v, want %v", got, want)
 			}
@@ -234,31 +256,35 @@ func TestEveryProviderDerivesBlockedFromItsOwnBlockingRelation(t *testing.T) {
 
 // At sync time the unit's own rows are newer than the store and are not in it
 // yet. A link the provider no longer reports is a STORED relation that the
-// re-synced item did not emit again; a link it still reports is emitted again
-// and is the newer row.
+// re-synced item did not emit again: it blocked the item until the last time
+// a sync saw it, and not after. A link it still reports is emitted again and
+// is the newer row; it keeps the stored first-seen time.
 func TestSyncTimeBlockedUsesTheUnitsFreshRowsOverTheStore(t *testing.T) {
 	claim := blockedTestClaim(t, "jira")
-	earlier := blockedTestSyncedAt.Add(-48 * time.Hour)
+	firstSeen := blockedTestDay.AddDate(0, 0, -3)
+	lastSeen := blockedTestDay.Add(12 * time.Hour)
 	stored := workitemmetrics.BlockingRelation{
 		SourceID: "jira:OPS-1", TargetID: "jira:OPS-2", RelationshipType: "blocks",
-		SemanticsVersion: workitemmetrics.CanonicalBlocksSemantics, LastSynced: earlier,
+		SemanticsVersion: workitemmetrics.CanonicalBlocksSemantics, LastSynced: lastSeen, FirstSeenAt: &firstSeen,
 	}
 	// Both ends were synced after the stored relation row: the stored copy of
-	// the blocked item is OLD (it is the fresh row that is new), the blocker
-	// was synced again later.
+	// the blocked item is OLD (it is the unit's fresh row that is new), the
+	// blocker was synced again later.
 	storedEnds := []workitemmetrics.RelationEnd{
-		{WorkItemID: "jira:OPS-2", Provider: "jira", Status: "todo", CreatedAt: blockedTestDay, LastSynced: earlier},
+		{WorkItemID: "jira:OPS-2", Provider: "jira", Status: "todo", CreatedAt: blockedTestDay, LastSynced: lastSeen},
 		blockedTestBlocker("jira", "jira:OPS-1", nil),
 	}
 
-	// The unit re-synced OPS-2 and did NOT emit the relation again.
+	// The unit re-synced OPS-2 and did NOT emit the relation again: blocked
+	// until 12:00, the last time a sync saw the relation.
 	removed := blockedTestRows(claim, "jira", "jira:OPS-2", nil)
 	source := &blockedFactsSource{relations: []workitemmetrics.BlockingRelation{stored}, ends: storedEnds}
-	if got, want := blockedTestHours(t, "jira", claim, removed, source), (map[string]float64{"todo": 6, "in_progress": 18}); !reflect.DeepEqual(got, want) {
+	if got, want := blockedTestHours(t, "jira", claim, removed, source), (map[string]float64{"blocked": 12, "in_progress": 12}); !reflect.DeepEqual(got, want) {
 		t.Fatalf("link removed at the provider: hours by status = %v, want %v", got, want)
 	}
 
-	// The unit re-synced OPS-2 and emitted the relation again.
+	// The unit re-synced OPS-2 and emitted the relation again: still blocked,
+	// from the STORED first-seen time (before the day), not from this sync.
 	fresh := githubWorkItemDependencyRow{
 		SourceWorkItemID: "jira:OPS-1", TargetWorkItemID: "jira:OPS-2", RelationshipType: "blocks",
 		RelationshipTypeRaw: "is blocked by", RelationshipSemanticsVersion: workitemmetrics.CanonicalBlocksSemantics,
@@ -316,27 +342,51 @@ func TestSyncTimeBlockedFailsClosedAndStaysInItsTenant(t *testing.T) {
 }
 
 // Of a stored and a fresh row for one relation the one synced last is the
-// relation, and the result does not depend on the order of the inputs.
-func TestMergeBlockingRelationsKeepsTheRowSyncedLast(t *testing.T) {
-	row := func(source, target string, hour int) workitemmetrics.BlockingRelation {
+// relation, the result does not depend on the order of the rows, and the two
+// start times are carried: the stored first-seen time survives, a relation
+// the store does not hold was first seen by this sync, and a provider time is
+// not lost when the newer row has none.
+func TestMergeBlockingRelationsKeepsTheRowSyncedLastAndTheStartTimes(t *testing.T) {
+	at := func(hour int) time.Time { return blockedTestDay.Add(time.Duration(hour) * time.Hour) }
+	ptr := func(hour int) *time.Time { value := at(hour); return &value }
+	row := func(source, target string, synced int, firstSeen, started *time.Time) workitemmetrics.BlockingRelation {
 		return workitemmetrics.BlockingRelation{
 			SourceID: source, TargetID: target, RelationshipType: "blocks",
-			SemanticsVersion: workitemmetrics.CanonicalBlocksSemantics, LastSynced: blockedTestDay.Add(time.Duration(hour) * time.Hour),
+			SemanticsVersion: workitemmetrics.CanonicalBlocksSemantics, LastSynced: at(synced),
+			FirstSeenAt: firstSeen, StartedAt: started,
 		}
 	}
-	stored := []workitemmetrics.BlockingRelation{row("b", "c", 1), row("a", "c", 5), row("a", "b", 9)}
-	fresh := []workitemmetrics.BlockingRelation{row("a", "c", 7), row("a", "b", 3)}
-	want := []workitemmetrics.BlockingRelation{row("a", "b", 9), row("a", "c", 7), row("b", "c", 1)}
-	if got := mergeBlockingRelations(stored, fresh); !reflect.DeepEqual(got, want) {
-		t.Fatalf("merge(stored, fresh) = %+v, want %+v", got, want)
+	stored := []workitemmetrics.BlockingRelation{
+		row("b", "c", 1, ptr(1), nil),    // stored only
+		row("a", "c", 5, ptr(2), ptr(0)), // re-emitted by the unit, which carries no provider time
+		row("a", "b", 9, ptr(3), nil),    // the stored row is NEWER than the unit's
+		row("e", "f", 4, nil, nil),       // stored, with no stored first-seen time
 	}
-	if got := mergeBlockingRelations(fresh, stored); !reflect.DeepEqual(got, want) {
-		t.Fatalf("merge(fresh, stored) = %+v, want %+v", got, want)
+	fresh := []workitemmetrics.BlockingRelation{
+		row("a", "c", 7, nil, nil),
+		row("a", "b", 3, nil, ptr(1)),
+		row("d", "e", 7, nil, nil), // not stored: first seen by this sync
+		row("e", "f", 8, nil, nil),
+	}
+	want := []workitemmetrics.BlockingRelation{
+		row("a", "b", 9, ptr(3), ptr(1)),
+		row("a", "c", 7, ptr(2), ptr(0)),
+		row("b", "c", 1, ptr(1), nil),
+		row("d", "e", 7, ptr(7), nil),
+		row("e", "f", 8, nil, nil),
+	}
+	if got := mergeBlockingRelations(stored, fresh); !reflect.DeepEqual(got, want) {
+		t.Fatalf("merge =\n  %+v\nwant\n  %+v", got, want)
+	}
+	reversedStored := []workitemmetrics.BlockingRelation{stored[3], stored[2], stored[1], stored[0]}
+	reversedFresh := []workitemmetrics.BlockingRelation{fresh[3], fresh[2], fresh[1], fresh[0]}
+	if got := mergeBlockingRelations(reversedStored, reversedFresh); !reflect.DeepEqual(got, want) {
+		t.Fatalf("merge of the same rows in another order =\n  %+v\nwant\n  %+v", got, want)
 	}
 	// A different relationship type between the same items is another relation.
-	other := row("a", "b", 1)
+	other := row("a", "b", 1, nil, nil)
 	other.RelationshipType = "blocked_by"
-	if got := mergeBlockingRelations([]workitemmetrics.BlockingRelation{row("a", "b", 9)}, []workitemmetrics.BlockingRelation{other}); len(got) != 2 {
+	if got := mergeBlockingRelations([]workitemmetrics.BlockingRelation{row("a", "b", 9, ptr(3), nil)}, []workitemmetrics.BlockingRelation{other}); len(got) != 2 {
 		t.Fatalf("two relation types between the same items merged into %d row(s)", len(got))
 	}
 }

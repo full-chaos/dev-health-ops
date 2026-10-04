@@ -105,46 +105,88 @@ func TestRelationIsCurrentDropsARelationTheProviderNoLongerReports(t *testing.T)
 	}
 }
 
-func TestBlockedIntervalForNeedsAKnownSpan(t *testing.T) {
+// A blocked span starts at the relation's start -- never earlier -- and the
+// creation of either item can only move it later. It ends at the earlier of
+// the relation's end and the blocker's completion.
+func TestBlockedIntervalForStartsAtTheRelationAndNeverBeforeIt(t *testing.T) {
+	open := Blocker{Status: "in_progress", CreatedAt: blockedTime(2)}
+	done := func(completed int) Blocker {
+		return Blocker{Status: "done", CreatedAt: blockedTime(2), CompletedAt: blockedTimePtr(completed)}
+	}
 	for name, tc := range map[string]struct {
-		itemCreated int
-		blocker     Blocker
-		want        BlockedInterval
-		ok          bool
+		itemCreated   int
+		relationStart int
+		relationEnd   *time.Time
+		blocker       Blocker
+		want          BlockedInterval
+		ok            bool
 	}{
-		"an open blocker created first: from the item's creation, open": {
-			10, Blocker{Status: "in_progress", CreatedAt: blockedTime(2)},
-			BlockedInterval{Start: blockedTime(10)}, true,
+		"the relation started after both items existed: from the relation": {
+			10, 14, nil, open, BlockedInterval{Start: blockedTime(14)}, true,
 		},
-		"an open blocker created later: from the blocker's creation": {
-			10, Blocker{Status: "todo", CreatedAt: blockedTime(14)},
-			BlockedInterval{Start: blockedTime(14)}, true,
+		"the relation start is before the item's creation: from the item's creation": {
+			10, 5, nil, open, BlockedInterval{Start: blockedTime(10)}, true,
+		},
+		"the relation start is before the blocker's creation: from the blocker's creation": {
+			10, 12, nil, Blocker{Status: "todo", CreatedAt: blockedTime(16)}, BlockedInterval{Start: blockedTime(16)}, true,
 		},
 		"a completed blocker: until its completion": {
-			10, Blocker{Status: "done", CreatedAt: blockedTime(2), CompletedAt: blockedTimePtr(20)},
-			BlockedInterval{Start: blockedTime(10), End: blockedTimePtr(20)}, true,
+			10, 14, nil, done(20), BlockedInterval{Start: blockedTime(14), End: blockedTimePtr(20)}, true,
 		},
-		"a blocker completed before the item existed: no span": {
-			10, Blocker{Status: "done", CreatedAt: blockedTime(2), CompletedAt: blockedTimePtr(8)},
-			BlockedInterval{}, false,
+		"the relation was last seen at 18 and the blocker is open: until 18": {
+			10, 14, blockedTimePtr(18), open, BlockedInterval{Start: blockedTime(14), End: blockedTimePtr(18)}, true,
 		},
-		"a blocker completed at the instant the item was created: no span": {
-			10, Blocker{Status: "done", CreatedAt: blockedTime(2), CompletedAt: blockedTimePtr(10)},
-			BlockedInterval{}, false,
+		"the relation ended before the blocker was completed: until the relation's end": {
+			10, 14, blockedTimePtr(18), done(20), BlockedInterval{Start: blockedTime(14), End: blockedTimePtr(18)}, true,
+		},
+		"the blocker was completed before the relation ended: until the completion": {
+			10, 14, blockedTimePtr(25), done(20), BlockedInterval{Start: blockedTime(14), End: blockedTimePtr(20)}, true,
+		},
+		"the blocker was completed before the relation started: no span": {
+			10, 14, nil, done(12), BlockedInterval{}, false,
+		},
+		"the blocker was completed at the instant the relation started: no span": {
+			10, 14, nil, done(14), BlockedInterval{}, false,
+		},
+		"the relation ended at the instant it started: no span": {
+			10, 14, blockedTimePtr(14), open, BlockedInterval{}, false,
 		},
 		"a done blocker with no completion time: its end is not known": {
-			10, Blocker{Status: "done", CreatedAt: blockedTime(2)},
-			BlockedInterval{}, false,
+			10, 14, nil, Blocker{Status: "done", CreatedAt: blockedTime(2)}, BlockedInterval{}, false,
 		},
 		"a canceled blocker with no completion time: its end is not known": {
-			10, Blocker{Status: "canceled", CreatedAt: blockedTime(2)},
-			BlockedInterval{}, false,
+			10, 14, blockedTimePtr(18), Blocker{Status: "canceled", CreatedAt: blockedTime(2)}, BlockedInterval{}, false,
 		},
 	} {
 		t.Run(name, func(t *testing.T) {
-			got, ok := BlockedIntervalFor(blockedTime(tc.itemCreated), tc.blocker)
+			got, ok := BlockedIntervalFor(blockedTime(tc.itemCreated), blockedTime(tc.relationStart), tc.relationEnd, tc.blocker)
 			if ok != tc.ok || !reflect.DeepEqual(got, tc.want) {
 				t.Fatalf("BlockedIntervalFor = %+v, %t; want %+v, %t", got, ok, tc.want, tc.ok)
+			}
+		})
+	}
+}
+
+// The start of a relation: the provider's own time when there is one, else
+// the first time a sync wrote it, else not known.
+func TestBlockingRelationStartPrefersTheProviderTimeAndNeedsOneOfTheTwo(t *testing.T) {
+	for name, tc := range map[string]struct {
+		relation BlockingRelation
+		want     time.Time
+		known    bool
+	}{
+		"the provider's time":            {BlockingRelation{StartedAt: blockedTimePtr(6)}, blockedTime(6), true},
+		"first seen":                     {BlockingRelation{FirstSeenAt: blockedTimePtr(9)}, blockedTime(9), true},
+		"both: the provider's time wins": {BlockingRelation{StartedAt: blockedTimePtr(6), FirstSeenAt: blockedTimePtr(9)}, blockedTime(6), true},
+		"both, the provider's time later than first seen: still the provider's": {
+			BlockingRelation{StartedAt: blockedTimePtr(11), FirstSeenAt: blockedTimePtr(9)}, blockedTime(11), true,
+		},
+		"neither: not known": {BlockingRelation{LastSynced: blockedTime(50)}, time.Time{}, false},
+	} {
+		t.Run(name, func(t *testing.T) {
+			got, known := tc.relation.Start()
+			if known != tc.known || !got.Equal(tc.want) {
+				t.Fatalf("Start = %v, %t; want %v, %t", got, known, tc.want, tc.known)
 			}
 		})
 	}
@@ -253,77 +295,101 @@ func relationEnd(id, provider, status string, created int, completed *time.Time,
 	return RelationEnd{WorkItemID: id, Provider: provider, Status: status, CreatedAt: blockedTime(created), CompletedAt: completed, LastSynced: blockedTime(synced)}
 }
 
-func blocksRelation(source, target string, synced int) BlockingRelation {
-	return BlockingRelation{SourceID: source, TargetID: target, RelationshipType: "blocks", SemanticsVersion: CanonicalBlocksSemantics, LastSynced: blockedTime(synced)}
+// blocksRelation is a canonical `blocks` row first seen at firstSeen and last
+// written at synced.
+func blocksRelation(source, target string, firstSeen, synced int) BlockingRelation {
+	return BlockingRelation{
+		SourceID: source, TargetID: target, RelationshipType: "blocks", SemanticsVersion: CanonicalBlocksSemantics,
+		LastSynced: blockedTime(synced), FirstSeenAt: blockedTimePtr(firstSeen),
+	}
 }
 
 // The whole decision, one fact at a time: each case removes or changes ONE
-// thing the rule needs, and the blocked item gets a span only in the cases
-// that keep them all.
+// thing the rule needs. The blocked item was created at 10, the blocker at 4,
+// the relation was first seen at 14, and every row was synced at 50.
 func TestBlockedIntervalsByItemNeedsEveryStoredFact(t *testing.T) {
 	blocked := relationEnd("jira:OPS-2", "jira", "in_progress", 10, nil, 50)
 	blocker := relationEnd("jira:OPS-1", "jira", "in_progress", 4, nil, 50)
-	want := map[string][]BlockedInterval{"jira:OPS-2": {{Start: blockedTime(10)}}}
+	relation := blocksRelation("jira:OPS-1", "jira:OPS-2", 14, 50)
+	want := map[string][]BlockedInterval{"jira:OPS-2": {{Start: blockedTime(14)}}}
+	with := func(mutate func(*BlockingRelation)) []BlockingRelation {
+		changed := relation
+		mutate(&changed)
+		return []BlockingRelation{changed}
+	}
 
 	for name, tc := range map[string]struct {
 		relations []BlockingRelation
 		ends      []RelationEnd
 		want      map[string][]BlockedInterval
 	}{
-		"an open blocker: blocked from the later creation, still open": {
-			[]BlockingRelation{blocksRelation("jira:OPS-1", "jira:OPS-2", 50)}, []RelationEnd{blocked, blocker}, want,
+		"an open blocker: blocked from the time the relation was first seen, still open": {
+			[]BlockingRelation{relation}, []RelationEnd{blocked, blocker}, want,
+		},
+		"the provider gave the link time: blocked from that time, not from first seen": {
+			with(func(r *BlockingRelation) { r.StartedAt = blockedTimePtr(12) }), []RelationEnd{blocked, blocker},
+			map[string][]BlockedInterval{"jira:OPS-2": {{Start: blockedTime(12)}}},
+		},
+		"the provider's link time is before the item existed: from the item's creation": {
+			with(func(r *BlockingRelation) { r.StartedAt = blockedTimePtr(6) }), []RelationEnd{blocked, blocker},
+			map[string][]BlockedInterval{"jira:OPS-2": {{Start: blockedTime(10)}}},
+		},
+		"no stored start of the relation: nothing is derived": {
+			with(func(r *BlockingRelation) { r.FirstSeenAt = nil }), []RelationEnd{blocked, blocker}, nil,
 		},
 		"a completed blocker: blocked until its completion": {
-			[]BlockingRelation{blocksRelation("jira:OPS-1", "jira:OPS-2", 50)},
+			[]BlockingRelation{relation},
 			[]RelationEnd{blocked, relationEnd("jira:OPS-1", "jira", "done", 4, blockedTimePtr(30), 50)},
-			map[string][]BlockedInterval{"jira:OPS-2": {{Start: blockedTime(10), End: blockedTimePtr(30)}}},
+			map[string][]BlockedInterval{"jira:OPS-2": {{Start: blockedTime(14), End: blockedTimePtr(30)}}},
 		},
 		"the relation points the other way: the OTHER item is blocked": {
-			[]BlockingRelation{blocksRelation("jira:OPS-2", "jira:OPS-1", 50)}, []RelationEnd{blocked, blocker},
-			map[string][]BlockedInterval{"jira:OPS-1": {{Start: blockedTime(10)}}},
+			[]BlockingRelation{blocksRelation("jira:OPS-2", "jira:OPS-1", 14, 50)}, []RelationEnd{blocked, blocker},
+			map[string][]BlockedInterval{"jira:OPS-1": {{Start: blockedTime(14)}}},
 		},
 		"the blocker is not a stored work item": {
-			[]BlockingRelation{blocksRelation("jira:OPS-1", "jira:OPS-2", 50)}, []RelationEnd{blocked}, nil,
+			[]BlockingRelation{relation}, []RelationEnd{blocked}, nil,
 		},
 		"the blocked item is not a stored work item": {
-			[]BlockingRelation{blocksRelation("jira:OPS-1", "jira:OPS-2", 50)}, []RelationEnd{blocker}, nil,
+			[]BlockingRelation{relation}, []RelationEnd{blocker}, nil,
 		},
 		"the relation does not block": {
-			[]BlockingRelation{{SourceID: "jira:OPS-1", TargetID: "jira:OPS-2", RelationshipType: "relates_to", SemanticsVersion: CanonicalBlocksSemantics, LastSynced: blockedTime(50)}},
-			[]RelationEnd{blocked, blocker}, nil,
+			with(func(r *BlockingRelation) { r.RelationshipType = "relates_to" }), []RelationEnd{blocked, blocker}, nil,
 		},
 		"the relation has the legacy direction": {
-			[]BlockingRelation{{SourceID: "jira:OPS-1", TargetID: "jira:OPS-2", RelationshipType: "blocks", SemanticsVersion: "legacy.v1", LastSynced: blockedTime(50)}},
-			[]RelationEnd{blocked, blocker}, nil,
+			with(func(r *BlockingRelation) { r.SemanticsVersion = "legacy.v1" }), []RelationEnd{blocked, blocker}, nil,
 		},
-		"both ends were synced again and neither reported the relation": {
-			[]BlockingRelation{blocksRelation("jira:OPS-1", "jira:OPS-2", 49)}, []RelationEnd{blocked, blocker}, nil,
+		// The link was removed at the provider: both items were synced at 50
+		// and the relation was last written at 40. The hours up to the last
+		// time it was seen did happen; nothing after that is counted.
+		"the provider no longer reports the relation: blocked until it was last seen": {
+			with(func(r *BlockingRelation) { r.LastSynced = blockedTime(40) }), []RelationEnd{blocked, blocker},
+			map[string][]BlockedInterval{"jira:OPS-2": {{Start: blockedTime(14), End: blockedTimePtr(40)}}},
 		},
 		"the blocker is done with no completion time": {
-			[]BlockingRelation{blocksRelation("jira:OPS-1", "jira:OPS-2", 50)},
+			[]BlockingRelation{relation},
 			[]RelationEnd{blocked, relationEnd("jira:OPS-1", "jira", "done", 4, nil, 50)}, nil,
 		},
-		"the blocker was completed before the item existed": {
-			[]BlockingRelation{blocksRelation("jira:OPS-1", "jira:OPS-2", 50)},
-			[]RelationEnd{blocked, relationEnd("jira:OPS-1", "jira", "done", 4, blockedTimePtr(8), 50)}, nil,
+		"the blocker was completed before the relation was first seen": {
+			[]BlockingRelation{relation},
+			[]RelationEnd{blocked, relationEnd("jira:OPS-1", "jira", "done", 4, blockedTimePtr(12), 50)}, nil,
 		},
 		"a relation of another item does not block this one": {
-			[]BlockingRelation{blocksRelation("jira:OPS-1", "jira:OPS-3", 50)},
+			[]BlockingRelation{blocksRelation("jira:OPS-1", "jira:OPS-3", 14, 50)},
 			[]RelationEnd{blocked, blocker, relationEnd("jira:OPS-3", "jira", "todo", 20, nil, 50)},
 			map[string][]BlockedInterval{"jira:OPS-3": {{Start: blockedTime(20)}}},
 		},
 		"two blockers give two spans": {
-			[]BlockingRelation{blocksRelation("jira:OPS-1", "jira:OPS-2", 50), blocksRelation("jira:OPS-4", "jira:OPS-2", 50)},
+			[]BlockingRelation{relation, blocksRelation("jira:OPS-4", "jira:OPS-2", 16, 50)},
 			[]RelationEnd{blocked, blocker, relationEnd("jira:OPS-4", "jira", "done", 12, blockedTimePtr(20), 50)},
-			map[string][]BlockedInterval{"jira:OPS-2": {{Start: blockedTime(10)}, {Start: blockedTime(12), End: blockedTimePtr(20)}}},
+			map[string][]BlockedInterval{"jira:OPS-2": {{Start: blockedTime(14)}, {Start: blockedTime(16), End: blockedTimePtr(20)}}},
 		},
 		"the newest stored row of an item is the item": {
-			[]BlockingRelation{blocksRelation("jira:OPS-1", "jira:OPS-2", 50)},
+			[]BlockingRelation{relation},
 			[]RelationEnd{blocked, relationEnd("jira:OPS-1", "jira", "in_progress", 4, nil, 40), relationEnd("jira:OPS-1", "jira", "done", 4, blockedTimePtr(30), 50)},
-			map[string][]BlockedInterval{"jira:OPS-2": {{Start: blockedTime(10), End: blockedTimePtr(30)}}},
+			map[string][]BlockedInterval{"jira:OPS-2": {{Start: blockedTime(14), End: blockedTimePtr(30)}}},
 		},
 		"no relation":    {nil, []RelationEnd{blocked, blocker}, nil},
-		"no stored item": {[]BlockingRelation{blocksRelation("jira:OPS-1", "jira:OPS-2", 50)}, nil, nil},
+		"no stored item": {[]BlockingRelation{relation}, nil, nil},
 	} {
 		t.Run(name, func(t *testing.T) {
 			got := BlockedIntervalsByItem(tc.relations, tc.ends)
@@ -335,15 +401,19 @@ func TestBlockedIntervalsByItemNeedsEveryStoredFact(t *testing.T) {
 }
 
 // A relation read from text names its blocker by an issue KEY. It blocks only
-// when exactly one stored jira or linear item carries that key, and only while
-// the item that holds the text still reports it.
+// when exactly one stored jira or linear item carries that key. It is written
+// only by the item that holds the text, so that item's later sync without it
+// ends it -- and the OTHER item's later sync says nothing.
 func TestBlockedIntervalsByItemResolvesAnExternalKeyOrDerivesNothing(t *testing.T) {
 	item := relationEnd("gh:acme/api#7", "github", "in_progress", 10, nil, 50)
 	blockedBy := func(target string, synced int) BlockingRelation {
-		return BlockingRelation{SourceID: "gh:acme/api#7", TargetID: target, RelationshipType: "blocked_by", SemanticsVersion: CanonicalBlocksSemantics, LastSynced: blockedTime(synced)}
+		return BlockingRelation{
+			SourceID: "gh:acme/api#7", TargetID: target, RelationshipType: "blocked_by", SemanticsVersion: CanonicalBlocksSemantics,
+			LastSynced: blockedTime(synced), FirstSeenAt: blockedTimePtr(14),
+		}
 	}
 	linear := relationEnd("linear:OPS-9", "linear", "todo", 2, nil, 99)
-	want := map[string][]BlockedInterval{"gh:acme/api#7": {{Start: blockedTime(10)}}}
+	want := map[string][]BlockedInterval{"gh:acme/api#7": {{Start: blockedTime(14)}}}
 
 	for name, tc := range map[string]struct {
 		relation BlockingRelation
@@ -359,10 +429,15 @@ func TestBlockedIntervalsByItemResolvesAnExternalKeyOrDerivesNothing(t *testing.
 		"an empty key": {blockedBy("extkey:", 50), []RelationEnd{item, linear}, nil},
 		// The blocker was synced long after the relation (99 > 50). A text
 		// relation is written only by the item that holds the text, so the
-		// blocker's later sync says nothing about it.
-		"the blocker's later sync does not drop a text relation": {blockedBy("extkey:OPS-9", 50), []RelationEnd{item, linear}, want},
-		"the item was synced again and the text is gone":         {blockedBy("extkey:OPS-9", 49), []RelationEnd{item, linear}, nil},
-		"the item that holds the text is not stored":             {blockedBy("extkey:OPS-9", 50), []RelationEnd{linear}, nil},
+		// blocker's later sync does not end it.
+		"the blocker's later sync does not end a text relation": {blockedBy("extkey:OPS-9", 50), []RelationEnd{item, linear}, want},
+		// The item was synced at 50 and the relation was last written at 40:
+		// the text is gone. Blocked until the last time it was seen.
+		"the item was synced again and the text is gone": {
+			blockedBy("extkey:OPS-9", 40), []RelationEnd{item, linear},
+			map[string][]BlockedInterval{"gh:acme/api#7": {{Start: blockedTime(14), End: blockedTimePtr(40)}}},
+		},
+		"the item that holds the text is not stored": {blockedBy("extkey:OPS-9", 50), []RelationEnd{linear}, nil},
 	} {
 		t.Run(name, func(t *testing.T) {
 			got := BlockedIntervalsByItem([]BlockingRelation{tc.relation}, tc.ends)
@@ -373,9 +448,17 @@ func TestBlockedIntervalsByItemResolvesAnExternalKeyOrDerivesNothing(t *testing.
 	}
 
 	// The other text form: THIS item's text says it blocks an external key.
-	blocks := BlockingRelation{SourceID: "gh:acme/api#7", TargetID: "extkey:OPS-9", RelationshipType: "blocks", SemanticsVersion: CanonicalBlocksSemantics, LastSynced: blockedTime(50)}
-	got := BlockedIntervalsByItem([]BlockingRelation{blocks}, []RelationEnd{item, linear})
-	if wantLinear := map[string][]BlockedInterval{"linear:OPS-9": {{Start: blockedTime(10)}}}; !reflect.DeepEqual(got, wantLinear) {
+	// The emitter is still this item (the source), here the BLOCKER.
+	blocks := BlockingRelation{
+		SourceID: "gh:acme/api#7", TargetID: "extkey:OPS-9", RelationshipType: "blocks", SemanticsVersion: CanonicalBlocksSemantics,
+		LastSynced: blockedTime(50), FirstSeenAt: blockedTimePtr(14),
+	}
+	if got, wantLinear := BlockedIntervalsByItem([]BlockingRelation{blocks}, []RelationEnd{item, linear}), (map[string][]BlockedInterval{"linear:OPS-9": {{Start: blockedTime(14)}}}); !reflect.DeepEqual(got, wantLinear) {
 		t.Fatalf("blocks an external key: %+v, want %+v", got, wantLinear)
+	}
+	// ... and when this item is synced again without the text, it ends.
+	blocks.LastSynced = blockedTime(40)
+	if got, wantEnded := BlockedIntervalsByItem([]BlockingRelation{blocks}, []RelationEnd{item, linear}), (map[string][]BlockedInterval{"linear:OPS-9": {{Start: blockedTime(14), End: blockedTimePtr(40)}}}); !reflect.DeepEqual(got, wantEnded) {
+		t.Fatalf("blocks an external key, text gone: %+v, want %+v", got, wantEnded)
 	}
 }

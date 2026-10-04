@@ -80,18 +80,26 @@ For case 2 the item is `blocked` only while all of these hold:
 
 - its own status is not `done` or `canceled`;
 - the blocker is a synced work item of the same organization;
-- the blocker is open, from the later creation time of the two items until
-  the blocker's completion time.
+- the relation is known to exist;
+- the blocker is open (until its completion time).
 
 In that interval `blocked` replaces the item's own status. The item's total
 hours in the day do not change.
 
+When the relation is known to exist:
+
+- **Start.** The provider's own time of the link, when the synced data
+  carries one. If it does not, the first time a sync saw the relation. The
+  second is too late when the link is older than the first sync that saw it,
+  so blocked hours can be too low. They are never too high: the creation time
+  of the two items is never used as the start.
+- **End.** When the provider no longer reports the relation, the last time a
+  sync saw it. A removed link is noticed when the items it belongs to are
+  synced again.
+
 Limits of the relation data:
 
-- A relation has no start time. An item counts as blocked from the time both
-  items exist, also when the link was added later.
-- A relation that the provider no longer reports stops counting when the
-  items it belongs to are synced again. Until then it still counts.
+- A relation with no stored start gives no blocked hours.
 - A blocker that is not a synced work item, or a finished blocker that has no
   completion time, gives no blocked hours. Missing data is not estimated.
 - The current status of an item (for example in `work_item_cycle_times`) is

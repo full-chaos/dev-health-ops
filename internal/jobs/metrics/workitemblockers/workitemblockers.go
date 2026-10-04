@@ -85,7 +85,7 @@ func loadRelations(
 		return nil, ErrInvalidRequest
 	}
 	query := `
-SELECT source_work_item_id, target_work_item_id, relationship_type, relationship_semantics_version, last_synced
+SELECT source_work_item_id, target_work_item_id, relationship_type, relationship_semantics_version, last_synced, relation_started_at
 FROM work_item_dependencies FINAL
 WHERE org_id = ?
   AND relationship_type IN ('blocks', 'blocked_by')
@@ -114,22 +114,104 @@ LIMIT ?`
 		if limit > 0 && len(relations) >= limit {
 			return nil, fmt.Errorf("%w: more than %d blocking relations", ErrLimitExceeded, limit)
 		}
-		var relation workitemmetrics.BlockingRelation
+		var (
+			relation  workitemmetrics.BlockingRelation
+			startedAt *time.Time
+		)
 		if err := rows.Scan(
 			&relation.SourceID, &relation.TargetID, &relation.RelationshipType,
-			&relation.SemanticsVersion, &relation.LastSynced,
+			&relation.SemanticsVersion, &relation.LastSynced, &startedAt,
 		); err != nil {
 			return nil, fmt.Errorf("scan blocking relation: %w", err)
 		}
-		// last_synced is DateTime64(3) with no time zone; converting is the
-		// rule every reader of this table applies (edges.ReadDependencies).
+		// last_synced and relation_started_at are DateTime64(3) with no time
+		// zone; converting is the rule every reader of this table applies
+		// (edges.ReadDependencies).
 		relation.LastSynced = relation.LastSynced.UTC()
+		if startedAt != nil {
+			started := startedAt.UTC()
+			relation.StartedAt = &started
+		}
 		relations = append(relations, relation)
 	}
 	if err := rows.Err(); err != nil {
 		return nil, fmt.Errorf("iterate blocking relations: %w", err)
 	}
+	if len(relations) == 0 {
+		return nil, nil
+	}
+	firstSeen, err := loadFirstSeen(ctx, conn, organizationID, naming, limit)
+	if err != nil {
+		return nil, err
+	}
+	for index := range relations {
+		key := relationKey{relations[index].SourceID, relations[index].TargetID, relations[index].RelationshipType}
+		if seen, stored := firstSeen[key]; stored {
+			seen := seen
+			relations[index].FirstSeenAt = &seen
+		}
+	}
 	return relations, nil
+}
+
+// relationKey is a relation's identity within one organization: the sorting
+// key of work_item_dependencies and of work_item_dependency_first_seen after
+// org_id.
+type relationKey struct{ source, target, relationship string }
+
+// loadFirstSeen reads, per blocking relation, the first time a sync wrote it:
+// min(first_seen_at) of work_item_dependency_first_seen, which a materialized
+// view keeps as min(work_item_dependencies.last_synced). The minimum is taken
+// HERE, grouped by the key: the table is AggregatingMergeTree and holds one
+// row per part until parts merge. It is a second read, merged in Go, and not
+// a LEFT JOIN: a relation with no first-seen row must read as "not stored",
+// and a join would give it the type's default time.
+func loadFirstSeen(
+	ctx context.Context, conn Querier, organizationID string, naming []string, limit int,
+) (map[relationKey]time.Time, error) {
+	query := `
+SELECT source_work_item_id, target_work_item_id, relationship_type, min(first_seen_at)
+FROM work_item_dependency_first_seen
+WHERE org_id = ?
+  AND relationship_type IN ('blocks', 'blocked_by')`
+	args := []any{organizationID}
+	if len(naming) > 0 {
+		query += `
+  AND (has(?, source_work_item_id) OR has(?, target_work_item_id))`
+		args = append(args, naming, naming)
+	}
+	query += `
+GROUP BY source_work_item_id, target_work_item_id, relationship_type
+ORDER BY source_work_item_id, target_work_item_id, relationship_type`
+	if limit > 0 {
+		query += `
+LIMIT ?`
+		args = append(args, limit+1)
+	}
+	rows, err := conn.Query(ctx, query, args...)
+	if err != nil {
+		return nil, fmt.Errorf("load relation first-seen times: %w", err)
+	}
+	defer rows.Close()
+
+	firstSeen := map[relationKey]time.Time{}
+	for rows.Next() {
+		if limit > 0 && len(firstSeen) >= limit {
+			return nil, fmt.Errorf("%w: more than %d relation first-seen times", ErrLimitExceeded, limit)
+		}
+		var (
+			key  relationKey
+			seen time.Time
+		)
+		if err := rows.Scan(&key.source, &key.target, &key.relationship, &seen); err != nil {
+			return nil, fmt.Errorf("scan relation first-seen time: %w", err)
+		}
+		firstSeen[key] = seen.UTC()
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterate relation first-seen times: %w", err)
+	}
+	return firstSeen, nil
 }
 
 // endLookup splits the ends that relations name into plain

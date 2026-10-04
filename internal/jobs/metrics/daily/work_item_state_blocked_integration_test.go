@@ -13,13 +13,25 @@ import (
 )
 
 // workItemStateDependenciesDDL is work_item_dependencies as the migration
-// chain leaves it (011 + 024 + 027 + 065 + 071): no time zone on last_synced,
-// org_id first in the key, the semantics version defaulting to the legacy one.
+// chain leaves it (011 + 024 + 027 + 065 + 071 + 102): no time zone on
+// last_synced, org_id first in the key, the semantics version defaulting to
+// the legacy one, the provider's link time nullable.
 const workItemStateDependenciesDDL = `CREATE TABLE work_item_dependencies (
     source_work_item_id String, target_work_item_id String, relationship_type String,
     relationship_type_raw String, last_synced DateTime64(3), org_id String,
-    source_id Nullable(UUID), relationship_semantics_version String DEFAULT 'legacy.v1'
+    source_id Nullable(UUID), relationship_semantics_version String DEFAULT 'legacy.v1',
+    relation_started_at Nullable(DateTime64(3))
 ) ENGINE = ReplacingMergeTree(last_synced) ORDER BY (org_id, source_work_item_id, target_work_item_id, relationship_type)`
+
+// workItemStateFirstSeenDDL is work_item_dependency_first_seen (migration
+// 102). Production fills it through a materialized view on
+// work_item_dependencies; the tests here insert its rows themselves, so each
+// case states its first-seen time. The view has its own database test in
+// internal/chmigrate.
+const workItemStateFirstSeenDDL = `CREATE TABLE work_item_dependency_first_seen (
+    org_id String, source_work_item_id String, target_work_item_id String, relationship_type String,
+    first_seen_at SimpleAggregateFunction(min, DateTime64(3))
+) ENGINE = AggregatingMergeTree ORDER BY (org_id, source_work_item_id, target_work_item_id, relationship_type)`
 
 // TestWorkItemStateComputeFamilyWritesBlockedRowsFromOpenBlockers is the
 // live-ClickHouse proof of CHAOS-8493 through the production entry point
@@ -27,21 +39,28 @@ const workItemStateDependenciesDDL = `CREATE TABLE work_item_dependencies (
 // is a `blocked` row in work_item_state_durations_daily for an item whose
 // status NAME never said "blocked".
 //
-// Organization A, target day 2026-08-24, four items in repository A. Each is
+// Organization A, target day 2026-08-24, five items in repository A. Each is
 // created at 00:00 and goes todo -> in_progress at 06:00, so with no blocker
 // each contributes todo 6h + in_progress 18h.
 //
 //	#1  blocked by #2, a stored item of ANOTHER repository, completed at
-//	    18:00: blocked 00:00-18:00 (18h), in_progress 18:00-24:00 (6h).
+//	    18:00. The relation was FIRST SEEN at 03:00: blocked 03:00-18:00
+//	    (15h), todo 00:00-03:00 (3h), in_progress 18:00-24:00 (6h). Not from
+//	    00:00: the items' creation is never the start.
 //	#3  its text says "blocked by OPS-9"; one stored linear item carries that
-//	    key and is open: blocked all day (24h).
-//	#4  a blocking relation that NEITHER end reported at its latest sync (the
-//	    link was removed at the provider): not blocked.
+//	    key and is open. The PROVIDER gave the link time (2026-08-10), and
+//	    the relation was first seen only on 2026-08-25: blocked all day (24h),
+//	    from the provider's time.
+//	#4  a blocking relation that neither end reported at its latest sync (the
+//	    link was removed at the provider). It was last seen at 12:00: blocked
+//	    00:00-12:00 (12h), in_progress 12:00-24:00 (12h).
 //	#5  a relation under the legacy semantics version: not blocked.
+//	#6  a current relation with NO stored start (no provider time, no
+//	    first-seen row): not blocked.
 //
 // Organization B holds the same relation as #1 between its own items of the
-// same ids and is not computed; organization A's rows must not change for it,
-// and organization B gets no row.
+// same ids, first seen at 00:00. Organization A's rows must not change for
+// it, and it gets rows only when it is computed itself.
 func TestWorkItemStateComputeFamilyWritesBlockedRowsFromOpenBlockers(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
 	defer cancel()
@@ -82,6 +101,7 @@ func TestWorkItemStateComputeFamilyWritesBlockedRowsFromOpenBlockers(t *testing.
     avg_wip Float64, org_id String
 ) ENGINE = MergeTree PARTITION BY toYYYYMM(day) ORDER BY (provider, work_scope_id, team_id, status, day)`,
 		workItemStateDependenciesDDL,
+		workItemStateFirstSeenDDL,
 	} {
 		if err := conn.Exec(ctx, statement); err != nil {
 			t.Fatal(err)
@@ -96,7 +116,6 @@ func TestWorkItemStateComputeFamilyWritesBlockedRowsFromOpenBlockers(t *testing.
 		repoB = "00000000-0000-4000-8000-0000000000b1"
 		// Every row of one sync carries one last_synced.
 		synced = "toDateTime64('2026-08-25 00:00:00', 3, 'UTC')"
-		older  = "toDateTime64('2026-08-23 00:00:00', 3, 'UTC')"
 		day0   = "toDateTime64('2026-08-24 00:00:00', 3, 'UTC')"
 	)
 	targetDay := time.Date(2026, 8, 24, 0, 0, 0, 0, time.UTC)
@@ -112,6 +131,7 @@ INSERT INTO work_items (repo_id, work_item_id, provider, status, project_key, pr
 `+item(orgA, repoX, "linear:OPS-9", "linear", "todo", "", "toDateTime64('2026-08-01 00:00:00', 3, 'UTC')", "NULL")+`,
 `+item(orgA, repoA, "gh:a/repo#4", "github", "in_progress", "a/repo", day0, "NULL")+`,
 `+item(orgA, repoA, "gh:a/repo#5", "github", "in_progress", "a/repo", day0, "NULL")+`,
+`+item(orgA, repoA, "gh:a/repo#6", "github", "in_progress", "a/repo", day0, "NULL")+`,
 `+item(orgB, repoB, "gh:a/repo#1", "github", "in_progress", "a/repo", day0, "NULL")+`,
 `+item(orgB, repoB, "gh:a/other#2", "github", "todo", "a/other", "toDateTime64('2026-08-20 00:00:00', 3, 'UTC')", "NULL")); err != nil {
 		t.Fatal(err)
@@ -125,22 +145,44 @@ INSERT INTO work_item_transitions (repo_id, work_item_id, occurred_at, provider,
 `+transition(orgA, repoA, "gh:a/repo#3")+`,
 `+transition(orgA, repoA, "gh:a/repo#4")+`,
 `+transition(orgA, repoA, "gh:a/repo#5")+`,
+`+transition(orgA, repoA, "gh:a/repo#6")+`,
 `+transition(orgB, repoB, "gh:a/repo#1")); err != nil {
 		t.Fatal(err)
 	}
-	// last_synced has no time zone in this table; the session is UTC.
-	relation := func(org, source, target, relationship, raw, version, lastSynced string) string {
-		return `('` + source + `', '` + target + `', '` + relationship + `', '` + raw + `', ` + lastSynced + `, '` + org + `', '` + version + `')`
+	// last_synced, relation_started_at and first_seen_at have no time zone
+	// in these tables; the session is UTC.
+	relation := func(org, source, target, relationship, raw, version, lastSynced, startedAt string) string {
+		return `('` + source + `', '` + target + `', '` + relationship + `', '` + raw + `', ` + lastSynced + `, '` + org + `', '` + version + `', ` + startedAt + `)`
 	}
+	lastSeenAtNoon := "toDateTime64('2026-08-24 12:00:00', 3, 'UTC')"
 	if err := conn.Exec(ctx, `
-INSERT INTO work_item_dependencies (source_work_item_id, target_work_item_id, relationship_type, relationship_type_raw, last_synced, org_id, relationship_semantics_version) VALUES
-`+relation(orgA, "gh:a/other#2", "gh:a/repo#1", "blocks", "blocked by a/other#2", "canonical-blocks.v2", synced)+`,
-`+relation(orgA, "gh:a/repo#3", "extkey:OPS-9", "blocked_by", "external_issue_key", "canonical-blocks.v2", synced)+`,
-`+relation(orgA, "linear:OPS-9", "gh:a/repo#4", "blocks", "linear_relation:blocks", "canonical-blocks.v2", older)+`,
-`+relation(orgA, "linear:OPS-9", "gh:a/repo#5", "blocks", "blocks", "legacy.v1", synced)+`,
-`+relation(orgA, "gh:a/repo#1", "gh:a/repo#3", "relates_to", "relates", "canonical-blocks.v2", synced)+`,
-`+relation(orgB, "gh:a/other#2", "gh:a/repo#1", "blocks", "blocked by a/other#2", "canonical-blocks.v2", synced)); err != nil {
+INSERT INTO work_item_dependencies (source_work_item_id, target_work_item_id, relationship_type, relationship_type_raw, last_synced, org_id, relationship_semantics_version, relation_started_at) VALUES
+`+relation(orgA, "gh:a/other#2", "gh:a/repo#1", "blocks", "blocked by a/other#2", "canonical-blocks.v2", synced, "NULL")+`,
+`+relation(orgA, "gh:a/repo#3", "extkey:OPS-9", "blocked_by", "external_issue_key", "canonical-blocks.v2", synced, "toDateTime64('2026-08-10 00:00:00', 3, 'UTC')")+`,
+`+relation(orgA, "linear:OPS-9", "gh:a/repo#4", "blocks", "linear_relation:blocks", "canonical-blocks.v2", lastSeenAtNoon, "NULL")+`,
+`+relation(orgA, "linear:OPS-9", "gh:a/repo#5", "blocks", "blocks", "legacy.v1", synced, "NULL")+`,
+`+relation(orgA, "linear:OPS-9", "gh:a/repo#6", "blocks", "linear_relation:blocks", "canonical-blocks.v2", synced, "NULL")+`,
+`+relation(orgA, "gh:a/repo#1", "gh:a/repo#3", "relates_to", "relates", "canonical-blocks.v2", synced, "NULL")+`,
+`+relation(orgB, "gh:a/other#2", "gh:a/repo#1", "blocks", "blocked by a/other#2", "canonical-blocks.v2", synced, "NULL")); err != nil {
 		t.Fatal(err)
+	}
+	// Two parts for #1's relation, as two syncs leave them before a merge:
+	// the reader takes the minimum. #6's relation has no row here.
+	firstSeen := func(org, source, target, relationship, at string) string {
+		return `('` + org + `', '` + source + `', '` + target + `', '` + relationship + `', toDateTime64('` + at + `', 3, 'UTC'))`
+	}
+	for _, values := range []string{
+		firstSeen(orgA, "gh:a/other#2", "gh:a/repo#1", "blocks", "2026-08-25 00:00:00") + `,
+` + firstSeen(orgA, "gh:a/repo#3", "extkey:OPS-9", "blocked_by", "2026-08-25 00:00:00") + `,
+` + firstSeen(orgA, "linear:OPS-9", "gh:a/repo#4", "blocks", "2026-08-20 00:00:00") + `,
+` + firstSeen(orgA, "linear:OPS-9", "gh:a/repo#5", "blocks", "2026-08-20 00:00:00") + `,
+` + firstSeen(orgB, "gh:a/other#2", "gh:a/repo#1", "blocks", "2026-08-24 00:00:00"),
+		firstSeen(orgA, "gh:a/other#2", "gh:a/repo#1", "blocks", "2026-08-24 03:00:00"),
+	} {
+		if err := conn.Exec(ctx, `INSERT INTO work_item_dependency_first_seen (org_id, source_work_item_id, target_work_item_id, relationship_type, first_seen_at) VALUES
+`+values); err != nil {
+			t.Fatal(err)
+		}
 	}
 
 	executor, err := NewWorkItemStateExecutor(conn)
@@ -190,12 +232,13 @@ GROUP BY status`, org)
 		return totals
 	}
 
-	// #1: blocked 18h + in_progress 6h. #3: blocked 24h. #4 and #5: todo 6h +
-	// in_progress 18h each. Four items, 96 hours.
+	// #1: todo 3h + blocked 15h + in_progress 6h. #3: blocked 24h. #4: blocked
+	// 12h + in_progress 12h. #5 and #6: todo 6h + in_progress 18h each. Five
+	// items, 120 hours.
 	want := map[string]statusTotal{
-		"blocked":     {Hours: 42, Items: 2},
-		"in_progress": {Hours: 42, Items: 3},
-		"todo":        {Hours: 12, Items: 2},
+		"blocked":     {Hours: 51, Items: 3},
+		"in_progress": {Hours: 54, Items: 4},
+		"todo":        {Hours: 15, Items: 3},
 	}
 	if got := readTotals(orgA); !reflect.DeepEqual(got, want) {
 		t.Fatalf("org A totals by status = %+v, want %+v", got, want)
@@ -204,8 +247,9 @@ GROUP BY status`, org)
 		t.Fatalf("org B was not computed and has rows: %+v", got)
 	}
 
-	// The other tenant, computed on its own: its blocker is open all day, so
-	// its one item is blocked for 24 hours -- from ITS relation, not org A's.
+	// The other tenant, computed on its own: its blocker is open all day and
+	// its relation was first seen at 00:00, so its one item is blocked for 24
+	// hours -- from ITS relation and ITS first-seen time, not org A's.
 	if _, err := executor.ComputeFamily(ctx, Run{OrganizationID: orgB, TargetDay: targetDay}, Partition{
 		ID: "00000000-0000-4000-8000-0000000000c3", RunID: "00000000-0000-4000-8000-0000000000c2",
 		RepoIDs: []RepositoryID{RepositoryID(repoB)},

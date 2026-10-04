@@ -52,9 +52,11 @@ type githubWorkItemDerivationContextSource interface {
 
 	// LoadStoredBlockingFacts returns the STORED inputs of the "blocked from
 	// open blockers" rule (CHAOS-8493) for this unit's items: the stored
-	// blocking relations that name one of the given work items at either
-	// end, and the stored work items that those relations AND the given
-	// fresh relations name. A blocker is rarely in the unit being synced --
+	// blocking relations that name one of the given ids at either end, and
+	// the stored work items that those relations AND the given fresh
+	// relations name. The ids are the unit's work item ids and, for a jira
+	// or linear item, the external-key form of its issue key
+	// (workitemmetrics.ExternalKeyTarget). A blocker is rarely in the unit being synced --
 	// it is another item, often of another repository or another provider --
 	// so without this read the unit could not tell which of its items are
 	// blocked, and the state durations it writes would disagree with the

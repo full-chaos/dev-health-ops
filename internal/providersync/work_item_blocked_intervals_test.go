@@ -151,6 +151,10 @@ func blockedTestHours(t *testing.T, provider string, claim Claim, rows githubWor
 func TestEveryProviderDerivesBlockedFromItsOwnBlockingRelation(t *testing.T) {
 	type providerCase struct {
 		blockedID, blockerID string
+		// naming is what the store is asked for: the unit's item id and, for
+		// a jira or linear item, the external-key form of its issue key (a
+		// relation read from text in another item names it by that key).
+		naming []string
 		// dependencies runs the provider's real relation normalizer over the
 		// payload the provider returns for the BLOCKED item.
 		dependencies func(t *testing.T, claim Claim) []githubWorkItemDependencyRow
@@ -158,7 +162,7 @@ func TestEveryProviderDerivesBlockedFromItsOwnBlockingRelation(t *testing.T) {
 	cases := map[string]providerCase{
 		// Jira: the issue's `issuelinks`, here the inward side of a "Blocks"
 		// link ("OPS-2 is blocked by OPS-1").
-		"jira": {"jira:OPS-2", "jira:OPS-1", func(t *testing.T, claim Claim) []githubWorkItemDependencyRow {
+		"jira": {"jira:OPS-2", "jira:OPS-1", []string{"extkey:OPS-2", "jira:OPS-2"}, func(t *testing.T, claim Claim) []githubWorkItemDependencyRow {
 			var issue map[string]any
 			if err := json.Unmarshal([]byte(`{"key":"OPS-2","fields":{"issuelinks":[
 				{"type":{"name":"Blocks","inward":"is blocked by","outward":"blocks"},"inwardIssue":{"key":"OPS-1"}}
@@ -168,7 +172,7 @@ func TestEveryProviderDerivesBlockedFromItsOwnBlockingRelation(t *testing.T) {
 			return normalizeJiraDependencies(claim, "jira:OPS-2", issue, blockedTestSyncedAt)
 		}},
 		// GitLab: the issue links API, link_type from this issue's side.
-		"gitlab": {"gitlab:acme/api#7", "gitlab:acme/api#5", func(t *testing.T, claim Claim) []githubWorkItemDependencyRow {
+		"gitlab": {"gitlab:acme/api#7", "gitlab:acme/api#5", []string{"gitlab:acme/api#7"}, func(t *testing.T, claim Claim) []githubWorkItemDependencyRow {
 			var links []gitlabIssueLinkPayload
 			if err := json.Unmarshal([]byte(`[{"link_type":"is_blocked_by","iid":5,"references":{"full":"acme/api#5"}}]`), &links); err != nil {
 				t.Fatal(err)
@@ -176,7 +180,7 @@ func TestEveryProviderDerivesBlockedFromItsOwnBlockingRelation(t *testing.T) {
 			return normalizeGitLabDependencies(claim, "gitlab:acme/api#7", "acme/api", "", links, blockedTestSyncedAt)
 		}},
 		// Linear: the issue's inverse relations ("OPS-1 blocks OPS-2").
-		"linear": {"linear:OPS-2", "linear:OPS-1", func(t *testing.T, claim Claim) []githubWorkItemDependencyRow {
+		"linear": {"linear:OPS-2", "linear:OPS-1", []string{"extkey:OPS-2", "linear:OPS-2"}, func(t *testing.T, claim Claim) []githubWorkItemDependencyRow {
 			var payload linearWorkItemPayload
 			if err := json.Unmarshal([]byte(`{"identifier":"OPS-2","inverseRelations":{"nodes":[
 				{"type":"blocks","issue":{"identifier":"OPS-1"},"relatedIssue":{"identifier":"OPS-2"}}
@@ -187,7 +191,7 @@ func TestEveryProviderDerivesBlockedFromItsOwnBlockingRelation(t *testing.T) {
 		}},
 		// GitHub: no native relation is synced. The relation is TEXT in the
 		// issue body.
-		"github": {"gh:acme/api#7", "gh:acme/api#12", func(t *testing.T, claim Claim) []githubWorkItemDependencyRow {
+		"github": {"gh:acme/api#7", "gh:acme/api#12", []string{"gh:acme/api#7"}, func(t *testing.T, claim Claim) []githubWorkItemDependencyRow {
 			rows, err := extractGitHubWorkItemDependencies(claim, "gh:acme/api#7", "acme/api", "Blocked by #12", "", nil, blockedTestSyncedAt)
 			if err != nil {
 				t.Fatal(err)
@@ -219,9 +223,12 @@ func TestEveryProviderDerivesBlockedFromItsOwnBlockingRelation(t *testing.T) {
 			if got, want := blockedTestHours(t, provider, claim, rows, open), (map[string]float64{"blocked": 24}); !reflect.DeepEqual(got, want) {
 				t.Fatalf("open blocker: hours by status = %v, want %v", got, want)
 			}
-			if open.calls != 1 || !reflect.DeepEqual(open.itemIDs, []string{tc.blockedID}) || len(open.fresh) != 1 {
-				t.Fatalf("the store was asked %d time(s) for items %v with %d fresh relation(s), want once for [%s] with the unit's relation",
-					open.calls, open.itemIDs, len(open.fresh), tc.blockedID)
+			if open.calls != 1 || !reflect.DeepEqual(open.itemIDs, tc.naming) || len(open.fresh) != 1 {
+				t.Fatalf("the store was asked %d time(s) for %v with %d fresh relation(s), want once for %v with the unit's relation",
+					open.calls, open.itemIDs, len(open.fresh), tc.naming)
+			}
+			if open.fresh[0].Raw != dependencies[0].RelationshipTypeRaw || open.fresh[0].Raw == "" {
+				t.Fatalf("the unit's relation reached the rule with the raw type %q, want the normalizer's %q", open.fresh[0].Raw, dependencies[0].RelationshipTypeRaw)
 			}
 
 			// The blocker was completed at 12:00: blocked until then.

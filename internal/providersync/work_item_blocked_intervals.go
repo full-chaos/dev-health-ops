@@ -46,23 +46,34 @@ func loadWorkItemBlockedIntervalsForProvider(
 	if len(rows.WorkItems) == 0 {
 		return nil, nil
 	}
-	idSet := make(map[string]struct{}, len(rows.WorkItems))
 	ends := make([]workitemmetrics.RelationEnd, 0, len(rows.WorkItems))
 	for _, item := range rows.WorkItems {
 		if item.OrgID != claim.OrgID {
 			return nil, providerfoundation.ErrInvalidScope
 		}
-		idSet[item.WorkItemID] = struct{}{}
 		ends = append(ends, workitemmetrics.RelationEnd{
 			WorkItemID: item.WorkItemID, Provider: item.Provider, Status: item.Status,
 			CreatedAt: item.CreatedAt.UTC(), CompletedAt: item.CompletedAt, LastSynced: item.LastSynced.UTC(),
 		})
 	}
-	itemIDs := make([]string, 0, len(idSet))
-	for id := range idSet {
-		itemIDs = append(itemIDs, id)
+	// The stored relations that name one of the unit's items: by the item's
+	// id, and -- for a jira or linear item -- by the external-key form of its
+	// issue key. A relation read from text in ANOTHER item ("blocks OPS-9")
+	// names this unit's item only by that key; without it this deriver would
+	// not see a relation the daily family sees, and the two writers of
+	// work_item_state_durations_daily would write different rows.
+	namingSet := make(map[string]struct{}, len(rows.WorkItems))
+	for _, item := range rows.WorkItems {
+		namingSet[item.WorkItemID] = struct{}{}
+		if target, keyed := workitemmetrics.ExternalKeyTarget(item.Provider, item.WorkItemID); keyed {
+			namingSet[target] = struct{}{}
+		}
 	}
-	sort.Strings(itemIDs)
+	naming := make([]string, 0, len(namingSet))
+	for id := range namingSet {
+		naming = append(naming, id)
+	}
+	sort.Strings(naming)
 
 	fresh := make([]workitemmetrics.BlockingRelation, 0, len(rows.Dependencies))
 	for _, dependency := range rows.Dependencies {
@@ -72,12 +83,13 @@ func loadWorkItemBlockedIntervalsForProvider(
 		fresh = append(fresh, workitemmetrics.BlockingRelation{
 			SourceID: dependency.SourceWorkItemID, TargetID: dependency.TargetWorkItemID,
 			RelationshipType: dependency.RelationshipType,
+			Raw:              dependency.RelationshipTypeRaw,
 			SemanticsVersion: dependency.RelationshipSemanticsVersion,
 			LastSynced:       dependency.LastSynced.UTC(),
 		})
 	}
 
-	stored, storedEnds, err := source.LoadStoredBlockingFacts(ctx, claim, itemIDs, fresh)
+	stored, storedEnds, err := source.LoadStoredBlockingFacts(ctx, claim, naming, fresh)
 	if err != nil {
 		return nil, err
 	}

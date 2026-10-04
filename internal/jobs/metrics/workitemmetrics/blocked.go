@@ -144,6 +144,34 @@ func ExternalKey(id string) (string, bool) {
 	return key, key != ""
 }
 
+// BareIssueKey returns the bare issue key of a jira or linear work item
+// ("PLAT-9" from "linear:PLAT-9"), trimmed and upper-cased: the form an
+// external-key target carries (ExternalKey). ok is false for an item of
+// another provider, for an id with no provider prefix and for an empty key.
+func BareIssueKey(provider, workItemID string) (string, bool) {
+	if provider != "linear" && provider != "jira" {
+		return "", false
+	}
+	separator := strings.Index(workItemID, ":")
+	if separator < 0 {
+		return "", false
+	}
+	key := strings.ToUpper(strings.TrimSpace(workItemID[separator+1:]))
+	return key, key != ""
+}
+
+// ExternalKeyTarget returns the relation target that names a jira or linear
+// work item by its issue key: the id a relation read from TEXT carries for
+// that item ("extkey:PLAT-9" for "linear:PLAT-9"). A reader that wants every
+// relation naming an item must look for this form as well as the item's id.
+func ExternalKeyTarget(provider, workItemID string) (string, bool) {
+	key, ok := BareIssueKey(provider, workItemID)
+	if !ok {
+		return "", false
+	}
+	return ExternalKeyPrefix + key, true
+}
+
 // RelationIsCurrent reports whether a stored relation is one the provider
 // still reports.
 //
@@ -315,6 +343,9 @@ type BlockingRelation struct {
 	SourceID         string
 	TargetID         string
 	RelationshipType string
+	// Raw is relationship_type_raw: the provider's own name of the relation,
+	// or the text it was read from.
+	Raw              string
 	SemanticsVersion string
 	LastSynced       time.Time
 	// StartedAt is the provider's own time of the link
@@ -448,15 +479,8 @@ func issueKeyIndex(byID map[string]RelationEnd) map[string]string {
 	index := map[string]string{}
 	ambiguous := map[string]bool{}
 	for id, end := range byID {
-		if end.Provider != "linear" && end.Provider != "jira" {
-			continue
-		}
-		separator := strings.Index(id, ":")
-		if separator < 0 {
-			continue
-		}
-		key := strings.ToUpper(strings.TrimSpace(id[separator+1:]))
-		if key == "" || ambiguous[key] {
+		key, keyed := BareIssueKey(end.Provider, id)
+		if !keyed || ambiguous[key] {
 			continue
 		}
 		if existing, seen := index[key]; seen && existing != id {

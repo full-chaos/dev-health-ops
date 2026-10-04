@@ -110,6 +110,82 @@ type responseModelOracleRoute struct {
 	data func(value any) (string, error)
 }
 
+// opportunitiesPythonCard and opportunitiesPythonResponse are the shape the
+// frozen FastAPI model of /api/v1/opportunities has: the five fields the
+// Python reference served. The Go response (opportunities.Card) has four more
+// since CHAOS-8109 (change_percent, direction, range_days, compare_days), which
+// the Python model never had. The frozen program was recorded for the Python
+// shape and nothing is recorded again, so the oracle below still checks THAT
+// shape, written by the production writer: the five shared fields are byte
+// identical to FastAPI's. It says nothing about the four Go-only fields.
+//
+// TestOpportunitiesCardIsThePythonCardPlusTheDeclaredGoOnlyFields ties this
+// shape to the production type: the production card must be exactly these
+// five fields, in this order, followed by exactly the four declared ones. A
+// field added, removed, renamed or moved in either type fails it.
+type opportunitiesPythonCard struct {
+	ID                   string   `json:"id"`
+	Title                string   `json:"title"`
+	Rationale            string   `json:"rationale"`
+	EvidenceLinks        []string `json:"evidence_links"`
+	SuggestedExperiments []string `json:"suggested_experiments"`
+}
+
+type opportunitiesPythonResponse struct {
+	Items []opportunitiesPythonCard `json:"items"`
+}
+
+// opportunitiesGoOnlyCardFields are the fields of opportunities.Card the
+// Python model does not have (CHAOS-8109), in declaration order.
+var opportunitiesGoOnlyCardFields = []struct{ name, goType, tag string }{
+	{"ChangePercent", "*float64", `json:"change_percent"`},
+	{"Direction", "*string", `json:"direction"`},
+	{"RangeDays", "int", `json:"range_days"`},
+	{"CompareDays", "int", `json:"compare_days"`},
+}
+
+func TestOpportunitiesCardIsThePythonCardPlusTheDeclaredGoOnlyFields(t *testing.T) {
+	type field struct{ name, goType, tag string }
+	fieldsOf := func(typ reflect.Type) []field {
+		out := make([]field, 0, typ.NumField())
+		for index := range typ.NumField() {
+			f := typ.Field(index)
+			out = append(out, field{f.Name, f.Type.String(), string(f.Tag)})
+		}
+		return out
+	}
+
+	want := fieldsOf(reflect.TypeOf(opportunitiesPythonCard{}))
+	for _, goOnly := range opportunitiesGoOnlyCardFields {
+		want = append(want, field{goOnly.name, goOnly.goType, goOnly.tag})
+	}
+	if got := fieldsOf(reflect.TypeOf(opportunities.Card{})); !reflect.DeepEqual(got, want) {
+		t.Errorf("opportunities.Card fields =\n %v\nwant the five Python fields, then the four Go-only ones:\n %v", got, want)
+	}
+
+	response := fieldsOf(reflect.TypeOf(opportunities.Response{}))
+	if len(response) != 1 || response[0] != (field{"Items", "[]opportunities.Card", `json:"items"`}) {
+		t.Errorf("opportunities.Response fields = %v, want Items alone", response)
+	}
+
+	// The production writer does write the Go-only fields: the oracle's
+	// Python shape must not be read as "the route serves five fields".
+	change, direction := 12.5, opportunities.DirectionUp
+	recorder := httptest.NewRecorder()
+	if err := writeModelResponse(recorder, &opportunities.Response{Items: []opportunities.Card{{
+		ID: "opp-1", Title: "Reduce Cycle Time", Rationale: "r", EvidenceLinks: []string{}, SuggestedExperiments: []string{},
+		ChangePercent: &change, Direction: &direction, RangeDays: 30, CompareDays: 14,
+	}}}); err != nil {
+		t.Fatalf("writeModelResponse: %v", err)
+	}
+	body := recorder.Body.String()
+	for _, part := range []string{`"change_percent":12.5`, `"direction":"up"`, `"range_days":30`, `"compare_days":14`} {
+		if !strings.Contains(body, part) {
+			t.Errorf("the production body has no %s: %s", part, body)
+		}
+	}
+}
+
 func responseModelOracleRoutes() map[string]responseModelOracleRoute {
 	plain := func(response any) responseModelOracleRoute { return responseModelOracleRoute{response: response} }
 	sankeyRoute := plain((*sankey.Response)(nil))
@@ -135,8 +211,8 @@ func responseModelOracleRoutes() map[string]responseModelOracleRoute {
 		"GET /api/v1/people/{person_id}/metric":           plain(people.MetricResponse{}),
 		"GET /api/v1/people/{person_id}/drilldown/prs":    plain((*people.DrilldownPRsResponse)(nil)),
 		"GET /api/v1/people/{person_id}/drilldown/issues": plain((*people.DrilldownIssuesResponse)(nil)),
-		"GET /api/v1/opportunities":                       plain((*opportunities.Response)(nil)),
-		"POST /api/v1/opportunities":                      plain((*opportunities.Response)(nil)),
+		"GET /api/v1/opportunities":                       plain((*opportunitiesPythonResponse)(nil)),
+		"POST /api/v1/opportunities":                      plain((*opportunitiesPythonResponse)(nil)),
 		"GET /api/v1/investment":                          plain((*investment.Response)(nil)),
 		"POST /api/v1/investment":                         plain((*investment.Response)(nil)),
 		"GET /api/v1/investment/sunburst":                 plain([]investment.SunburstSlice(nil)),

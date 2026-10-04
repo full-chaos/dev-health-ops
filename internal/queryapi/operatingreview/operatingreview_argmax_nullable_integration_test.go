@@ -4,6 +4,7 @@ package operatingreview
 
 import (
 	"context"
+	"math"
 	"testing"
 	"time"
 
@@ -198,5 +199,85 @@ func TestFetchAIImpactReturnsNewestNullRatesNotStaleValues(t *testing.T) {
 			t.Errorf("%s = %v, want nil (newest row's NULL) -- argMax skipped the NULL and returned the stale %v instead",
 				name, *field, staleRate)
 		}
+	}
+}
+
+// TestFetchAIGovernanceRealClickHouse_RatioOfSumsUsesSelectedRawGroups runs
+// the production reader against ClickHouse. The selected team has unequal
+// (day, team_id, repo_id) groups, so a mean of ratios would be 0.85 while the
+// required ratio of sums is 107/110. Rows from another team and org must not
+// enter the reader, and a zero-activity group remains fully covered.
+func TestFetchAIGovernanceRealClickHouse_RatioOfSumsUsesSelectedRawGroups(t *testing.T) {
+	ctx, admin, client := startOperatingReviewSchema(t)
+
+	const (
+		org       = "org-8524"
+		otherOrg  = "org-8524-other"
+		team      = "team-8524"
+		otherTeam = "team-8524-other"
+		zeroTeam  = "team-8524-zero"
+	)
+	selectedTeam := team
+	zeroActivityTeam := zeroTeam
+	day := time.Date(2026, 8, 24, 0, 0, 0, 0, time.UTC)
+	older := day.Add(time.Hour)
+	newer := day.Add(2 * time.Hour)
+
+	seed := func(rowOrg, rowTeam, repoID string, aiArtifacts, declaredArtifacts, humanReviewedPrs, securityScannedPrs, inPolicyArtifacts uint64, computedAt time.Time) {
+		t.Helper()
+		if err := admin.Exec(ctx, `INSERT INTO ai_governance_coverage_daily
+			(org_id, team_id, repo_id, day, ai_artifacts, declared_artifacts,
+			 human_reviewed_prs, security_scanned_prs, in_policy_artifacts, computed_at)
+			VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+			rowOrg, rowTeam, repoID, day, aiArtifacts, declaredArtifacts,
+			humanReviewedPrs, securityScannedPrs, inPolicyArtifacts, computedAt); err != nil {
+			t.Fatalf("seed ai governance row: %v", err)
+		}
+	}
+
+	// The newer value of this identity is 7/10 in every coverage kind. The
+	// older all-zero value must not be selected by the argMax reader.
+	seed(org, team, "85240000-0000-4000-8000-000000000001", 10, 0, 0, 0, 0, older)
+	seed(org, team, "85240000-0000-4000-8000-000000000001", 10, 7, 7, 7, 7, newer)
+	seed(org, team, "85240000-0000-4000-8000-000000000002", 100, 100, 100, 100, 100, newer)
+	// Neither of these rows belongs in the selected-team result.
+	seed(org, otherTeam, "85240000-0000-4000-8000-000000000003", 1000, 0, 0, 0, 0, newer)
+	seed(otherOrg, team, "85240000-0000-4000-8000-000000000004", 1000, 0, 0, 0, 0, newer)
+	// A present group with no AI activity is fully covered, not missing data.
+	seed(org, zeroTeam, "85240000-0000-4000-8000-000000000005", 0, 0, 0, 0, 0, newer)
+
+	rows, err := fetchAIGovernance(ctx, client, org, &selectedTeam, day, day.AddDate(0, 0, 1))
+	if err != nil {
+		t.Fatalf("fetchAIGovernance(selected team): %v", err)
+	}
+	if len(rows) != 2 {
+		t.Fatalf("fetchAIGovernance(selected team) returned %d rows, want 2: %+v", len(rows), rows)
+	}
+	const wantCoverage = 107.0 / 110.0
+	if got := aiGovernanceCoverage(rows); math.Abs(got-wantCoverage) > 1e-12 {
+		t.Errorf("aiGovernanceCoverage(selected team) = %v, want %v", got, wantCoverage)
+	}
+
+	allRows, err := fetchAIGovernance(ctx, client, org, nil, day, day.AddDate(0, 0, 1))
+	if err != nil {
+		t.Fatalf("fetchAIGovernance(all teams): %v", err)
+	}
+	if len(allRows) != 4 {
+		t.Fatalf("fetchAIGovernance(all teams) returned %d rows, want 4: %+v", len(allRows), allRows)
+	}
+	const wantAllTeamsCoverage = 107.0 / 1110.0
+	if got := aiGovernanceCoverage(allRows); math.Abs(got-wantAllTeamsCoverage) > 1e-12 {
+		t.Errorf("aiGovernanceCoverage(all teams) = %v, want %v", got, wantAllTeamsCoverage)
+	}
+
+	zeroRows, err := fetchAIGovernance(ctx, client, org, &zeroActivityTeam, day, day.AddDate(0, 0, 1))
+	if err != nil {
+		t.Fatalf("fetchAIGovernance(zero-activity team): %v", err)
+	}
+	if len(zeroRows) != 1 {
+		t.Fatalf("fetchAIGovernance(zero-activity team) returned %d rows, want 1: %+v", len(zeroRows), zeroRows)
+	}
+	if got := aiGovernanceCoverage(zeroRows); got != 1.0 {
+		t.Errorf("aiGovernanceCoverage(zero-activity team) = %v, want 1.0", got)
 	}
 }

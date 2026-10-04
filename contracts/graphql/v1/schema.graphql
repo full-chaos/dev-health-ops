@@ -1486,6 +1486,11 @@ type Query {
   testopsRisk(orgId: String!, input: TestOpsRiskInput!): TestOpsRiskResult!
 
   """
+  CI job names that failed in a window, by workflow and job name (CHAOS-8513). Computed at read time from the stored job runs of every CI provider.
+  """
+  testopsJobFailures(orgId: String!, input: TestOpsJobFailuresInput!): TestOpsJobFailuresResult!
+
+  """
   Cyclomatic complexity trend by repo or file. Reads from append-only ``repo_complexity_daily`` / ``file_complexity_snapshots`` tables — no recomputation, pure surface of persisted data.
   """
   complexityTimeseries(input: ComplexityTimeseriesInput!): ComplexityTimeseriesResult!
@@ -1862,6 +1867,59 @@ enum TeamAttributionSource {
   AUTHOR_MEMBERSHIP
   MANUAL_FALLBACK
   UNASSIGNED
+}
+
+type TestOpsJobFailureGroup {
+  """
+  The workflow (GitHub Actions) or pipeline (GitLab CI) name of the runs. Null = the job runs have no stored pipeline row, or the row has no name.
+  """
+  workflowName: String
+  jobName: String!
+  """
+  The CI provider of the runs, as the pipeline row stores it (for example ``github_actions``). Null = the job runs have no stored pipeline row.
+  """
+  provider: String
+  """
+  Job runs of this group that started in the window and reached a result (success, failure or cancelled). A skipped, queued or running job is not a run.
+  """
+  runs: Int!
+  """
+  The runs that failed (a failure, an error or a timeout). Always above 0: a group with no failed run is not served.
+  """
+  failedRuns: Int!
+  """
+  ``failedRuns / runs``: a share from 0 to 1, NOT a percent. Null = no run to divide by (not served today: every served group has a failed run).
+  """
+  failureRate: Float
+}
+
+input TestOpsJobFailuresInput {
+  """First day of the window (UTC), included. The day a job run started places it."""
+  sinceDate: Date!
+  """
+  Last day of the window (UTC), included. At most 90 days after ``sinceDate`` (a "90 days" window of today minus 90 days to today is served); a later day, or a day before ``sinceDate``, is an error, not a cut answer.
+  """
+  untilDate: Date!
+  repoIds: [String!] = null
+  """
+  Team ids. Narrows the runs to the repositories these teams OWN (team_repo_ownership, as of now); person membership is never read. With ``repoIds`` both apply.
+  """
+  teamIds: [String!] = null
+  """Most groups to serve: 1 to 100."""
+  limit: Int! = 20
+}
+
+type TestOpsJobFailuresResult {
+  """
+  The groups with the most failed runs first (then by job name, workflow name and provider), cut at ``limit``.
+  """
+  groups: [TestOpsJobFailureGroup!]!
+  """
+  Number of groups that match before the ``limit`` cut. Never less than ``groups``.
+  """
+  totalCount: Int!
+  """True = ``totalCount`` is above the number of ``groups`` served."""
+  truncated: Boolean!
 }
 
 type TestOpsRiskBreakdownItem {

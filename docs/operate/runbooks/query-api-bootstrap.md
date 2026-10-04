@@ -247,7 +247,7 @@ The verb writes only in the Fixture Org named by the environment (it never creat
 compares the persisted effects with the case's committed baseline digest, and refuses to call a run a match unless the
 response carries the candidate build. A match removes its dataset; anything else keeps it and names it. `-via query-api`
 (a direct POST to query-api) records route `proof` and admits `canary`; `-via edge` records route `edge`, which
-`primary` requires. `enable` then admits the mutation only on that receipt.
+`primary` requires. A catalog mutation needs no receipt to be enabled (the catalog rule admits it, `routing_enable.go:396-416`); the receipt is evidence, and `enable` records which of proof run, named limit or catalog rule admitted it.
 
 ### Enable the canary set
 

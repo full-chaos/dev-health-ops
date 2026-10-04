@@ -28,7 +28,7 @@ python -m pip install -e '.[dev]'
 Verify the CLI and import path:
 
 ```bash
-dev-hops --help
+go build -o dho ./cmd/dho && ./dho help
 python -c "import dev_health_ops; print(dev_health_ops.__file__)"
 ```
 
@@ -37,7 +37,6 @@ python -c "import dev_health_ops; print(dev_health_ops.__file__)"
 ```bash
 ruff format --check .
 ruff check .
-mypy
 ```
 
 Apply formatting or safe lint fixes deliberately, then review the diff:
@@ -166,11 +165,11 @@ Fresh local PostgreSQL volumes provision the development domain and River queue 
 
 ## Run migrations
 
-Python application and analytics migrations:
+Application and analytics migrations:
 
 ```bash
-dev-hops migrate postgres
-dev-hops migrate clickhouse
+dho migrate postgres upgrade
+dho migrate clickhouse upgrade
 ```
 
 The Go coexistence foundation requires a distinct direct migration DSN and runtime roles. Use the current migration command and provisioning script documented in [Databases and storage](../../operate/configure/databases-and-storage.md). Do not run a production migration from a development shell.
@@ -180,16 +179,19 @@ The Go coexistence foundation requires a distinct direct migration DSN and runti
 Review current options:
 
 ```bash
-dev-hops fixtures generate --help
+dho fixtures generate --help
 ```
 
-Generate a 30-day synthetic dataset with derived metrics:
+`dho fixtures generate` loads a frozen parameter set, needs `--seed`, and writes analytics rows only. Load the 14-day synthetic dataset with derived metrics:
 
 ```bash
-dev-hops fixtures generate \
-  --db "$CLICKHOUSE_URI" \
-  --days 30 \
-  --with-metrics
+dho fixtures generate \
+  --sink "$CLICKHOUSE_URI" \
+  --provider synthetic --repo-name acme/live-e2e --repo-count 1 \
+  --days 14 --commits-per-day 6 --pr-count 24 --team-count 10 \
+  --seed 20260219 \
+  --with-metrics \
+  --with-work-graph
 ```
 
 Use a disposable local store or explicitly approved fixture database.
@@ -202,7 +204,7 @@ Install dependencies:
 python -m pip install -r requirements-docs.txt
 ```
 
-Fast authoring server:
+Fast authoring server (serves on `http://127.0.0.1:8001`; port 8000 is the Compose router):
 
 ```bash
 make docs:serve

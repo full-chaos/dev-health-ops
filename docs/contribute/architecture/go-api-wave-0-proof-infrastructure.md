@@ -27,6 +27,8 @@ future cutover. It does not port any resolver, and nothing on a live
 request path calls either piece yet.
 {: .fc-page-lede }
 
+> **Note:** The Python edge and the Python-reference mode that this page describes were removed with the Python api. This page is a record of that surface.
+
 ## Effective-principal envelope
 
 `query-api` (Go) does not independently re-derive auth state from
@@ -257,7 +259,7 @@ reachable: `shadow` deliberately does NOT count (the client still gets
 Python's response in shadow mode, plan §5 stage 4), and a missing row, a
 query error, or an operation with no registered document digest all
 resolve to the same safe default as an unregistered operation —
-unreachable. One switch has an exception to the missing-row rule: the one
+unreachable. One switch has an exception to the missing-row rule: the switch that
 `/query` and `/graphql` serve registered documents through
 (`NewCatalogSwitchWithLegacy`, `catalog_switch.go`) serves an operation that
 has no routing row at any schema digest. An operation that has a row
@@ -436,7 +438,7 @@ It bounds each statement individually, never the run as a whole.
 
 ```bash
 # 1. What does each plane think the digest is, and which rows are alive?
-dev-hops go-api routing status --query-api-url http://query-api:8080
+dho goapi routing status --registry-url http://query-api:8080/registry
 
 # 2. If the planes disagree, STOP: rebuild/redeploy the query-api image
 #    from this SDL. `enable` will refuse until they agree, by design.
@@ -447,7 +449,7 @@ dev-hops go-api routing status --query-api-url http://query-api:8080
 
 # 4. Confirm every operation reads MATCH, and none reads UNPROVEN
 #    unless the go-served ledger names a written limit for it.
-dev-hops go-api routing status
+dho goapi routing status
 ```
 
 `enable` refuses (exit 2, writing nothing) when query-api is unreachable,
@@ -475,7 +477,7 @@ cited-`mismatch` admission print different lines.
 The enablement rule requires `build_binding = 'per_request'` on every
 receipt, and rows written before 0129 carry `build_binding` NULL. So the
 moment 0129 is applied, **every operation proven before it reads UNPROVEN**
-on `dev-hops go-api routing status` and on the migration-status page, and
+on `dho goapi routing status` and on the migration-status page, and
 `dho goapi routing enable` refuses it -- including operations whose old receipt was a
 sound `match`. Nothing is lost from the table; the old receipts stay as
 history. Re-run `go-api-prove` at the deployed build (JOB 6's re-prove step
@@ -762,7 +764,7 @@ audit table must outlive the row it describes.
 | `query-api: ROUTING ROWS STALE` (log) | `query-api` route construction | Same condition, on the Go plane |
 | structured ERROR-level record (`slog`, no fixed line text) | `query-api` route construction (`registry_drift_telemetry.go`) | Same condition, leveled so a log-level alert rule fires on it -- the plain-text line above carries no level at all |
 | `devhealth_query_api_routing_rows_for_digest` (gauge, `schema_digest` attr) | `query-api` route construction | Rows keyed to the digest THIS process computed; 0 with the total gauge below `>0` is the DEAD-fleet condition, on every startup, not only at read time |
-| `devhealth_query_api_routing_rows_total` (gauge, `schema_digest` attr) | `query-api` route construction | Disambiguates the gauge above from the legitimate `total == 0` "nothing enabled yet" posture |
+| `devhealth_query_api_routing_rows_total` (gauge, `schema_digest` attr) | `query-api` route construction | Disambiguates the gauge above from the legitimate `total == 0` posture, where no row decides anything and the catalog rule serves every registered operation |
 | `devhealth_go_api_dispatch_fallback_total{reason="no_routing_row"}` | Python edge, per request | A dispatch-eligible request found no row |
 | `devhealth_query_api_routeswitch_digest_miss_total{operation}` (and its WARN record) | `query-api`, per request | An operation has no row at the live key and is refused: on the serving route, an operation whose rows are all elsewhere |
 | `devhealth_query_api_routeswitch_served_without_row_total{operation, reason="catalog_no_row"}` (and one INFO record per operation per process) | `query-api`, per request | A registered operation with no routing row at any schema digest was served (the catalog rule). Zero on a stack where every operation has a row |
@@ -836,11 +838,11 @@ The file must be world-readable (0644): it holds only the password hash and gran
 uid 101 in the container and **exits** on a mounted file it cannot read, so a 0600 file owned by the host user
 takes ClickHouse down. `ci/bigboy/check-dho-api-ch-user.sh` refuses such a file (or a missing one, which Docker
 would turn into a directory), and then requires the file to EQUAL the canonical render byte for byte: it re-renders
-from the posture manifest (this checkout's `authorization.go`, or `DHO_API_CH_POSTURE_GO`) and `API_CH_PASSWORD` in
-process and compares. The file is valid if and only if it is that render, so a comment, an edit, a malformed grant or
+from the posture manifest (this checkout's `authorization.go`, or `DHO_API_CH_POSTURE_GO`) and the API password in
+process and compares (CHAOS-8382: the password is read by pipe from the 0600 credentials file passed as arg 2, never sourced; the renderer runs with a placeholder and its hash is swapped for the real one; the login proof sends a clickhouse-client config on stdin; no credential is in any host argv or child env, and scratch lives under a private `TMPDIR`, never `/tmp`). The file is valid if and only if it is that render, so a comment, an edit, a malformed grant or
 a hash for another password is refused (rc 4, `CH_API_USER_FILE_MISMATCH`) without printing any content. After that it
-checks `dho_api_ch` is in `system.users` and that it logs in with `API_CH_PASSWORD`; `bigboy-cut.sh` runs it as the
-STEP `ch-api-user` and aborts before go-api is recreated when it fails. Do not hand-edit the file; regenerate it. Run it by hand before recreating ClickHouse.
+checks `dho_api_ch` is in `system.users` and that it logs in with the API password; `bigboy-cut.sh` runs it as the
+STEP `ch-api-user` and aborts before go-api is recreated when it fails. Do not hand-edit the file; regenerate it. Run the check by hand before recreating ClickHouse as `TMPDIR=<0700 dir outside /tmp> ci/bigboy/check-dho-api-ch-user.sh <users.xml> <go-api.creds>`. The renderer itself still takes `API_CH_PASSWORD` in its environment when an operator regenerates the file (tracked on CHAOS-8382, not on the cut path).
 
 ### Automated in `bigboy-cut.sh` (CHAOS-7022): digest change = carry before swap; repoint after
 

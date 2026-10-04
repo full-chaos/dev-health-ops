@@ -131,7 +131,7 @@ compute_parity_fixtures.py produce --kind metrics.dora --dsn "$LEFT"  --as-of ..
 ```
 
 `provision` applies the **real checked-in migration chain** through the same
-`dev-hops` entrypoint the CLI uses. No DDL is authored in a test: a hand-typed
+`dho migrate` entrypoint the CLI uses. No DDL is authored in a test: a hand-typed
 schema is a second, unversioned copy of one, and a comparison over it only ever
 confirms what the test itself declared.
 

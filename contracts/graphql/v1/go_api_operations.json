@@ -35,7 +35,12 @@
   },
   {
     "operation": "aiOpportunities",
-    "digest": "fad9b02c4e8a4a7023bf9a7ba988a04346473cdd9d840ec76d611f92e1b5af2e"
+    "digest": "7cd9dfba84aa25a1c3b931819f29729e60f6fa395a1c1f2389ddabd329d3d6e0"
+  },
+  {
+    "operation": "aiOpportunities",
+    "digest": "fad9b02c4e8a4a7023bf9a7ba988a04346473cdd9d840ec76d611f92e1b5af2e",
+    "legacy": true
   },
   {
     "operation": "aiReviewLoad",

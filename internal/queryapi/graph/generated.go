@@ -250,8 +250,10 @@ type ComplexityRoot struct {
 		OpportunityID       func(childComplexity int) int
 		Rationale           func(childComplexity int) int
 		RepoID              func(childComplexity int) int
+		RepoName            func(childComplexity int) int
 		Score               func(childComplexity int) int
 		TeamID              func(childComplexity int) int
+		TeamName            func(childComplexity int) int
 		Title               func(childComplexity int) int
 		WorkGraphDrilldowns func(childComplexity int) int
 	}
@@ -2579,6 +2581,13 @@ func (e *executableSchema) Complexity(typeName, field string, childComplexity in
 
 		return e.complexity.AIOpportunity.RepoID(childComplexity), true
 
+	case "AIOpportunity.repoName":
+		if e.complexity.AIOpportunity.RepoName == nil {
+			break
+		}
+
+		return e.complexity.AIOpportunity.RepoName(childComplexity), true
+
 	case "AIOpportunity.score":
 		if e.complexity.AIOpportunity.Score == nil {
 			break
@@ -2592,6 +2601,13 @@ func (e *executableSchema) Complexity(typeName, field string, childComplexity in
 		}
 
 		return e.complexity.AIOpportunity.TeamID(childComplexity), true
+
+	case "AIOpportunity.teamName":
+		if e.complexity.AIOpportunity.TeamName == nil {
+			break
+		}
+
+		return e.complexity.AIOpportunity.TeamName(childComplexity), true
 
 	case "AIOpportunity.title":
 		if e.complexity.AIOpportunity.Title == nil {
@@ -8859,6 +8875,14 @@ type AIOpportunity {
   score: Float!
   evidenceRefs: [String!]!
   workGraphDrilldowns: [AIWorkGraphDrilldownRef!]!
+  """
+  The repository's full name in the org's repository catalogue (CHAOS-8114). Null = the catalogue holds no name for ` + "`" + `` + "`" + `repoId` + "`" + `` + "`" + `, or the catalogue could not be read. It is never the id.
+  """
+  repoName: String
+  """
+  The name of the team ` + "`" + `` + "`" + `teamId` + "`" + `` + "`" + ` names, from the org's team catalogue (CHAOS-8114). Null = the opportunity has no team, the catalogue holds no name for it, or the catalogue could not be read. It is never the id.
+  """
+  teamName: String
 }
 
 enum AIOpportunityKind {
@@ -20233,6 +20257,10 @@ func (ec *executionContext) fieldContext_AIOpportunitiesResult_recommendations(_
 				return ec.fieldContext_AIOpportunity_evidenceRefs(ctx, field)
 			case "workGraphDrilldowns":
 				return ec.fieldContext_AIOpportunity_workGraphDrilldowns(ctx, field)
+			case "repoName":
+				return ec.fieldContext_AIOpportunity_repoName(ctx, field)
+			case "teamName":
+				return ec.fieldContext_AIOpportunity_teamName(ctx, field)
 			}
 			return nil, fmt.Errorf("no field named %q was found under type AIOpportunity", field.Name)
 		},
@@ -20677,6 +20705,88 @@ func (ec *executionContext) fieldContext_AIOpportunity_workGraphDrilldowns(_ con
 				return ec.fieldContext_AIWorkGraphDrilldownRef_label(ctx, field)
 			}
 			return nil, fmt.Errorf("no field named %q was found under type AIWorkGraphDrilldownRef", field.Name)
+		},
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _AIOpportunity_repoName(ctx context.Context, field graphql.CollectedField, obj *model.AIOpportunity) (ret graphql.Marshaler) {
+	fc, err := ec.fieldContext_AIOpportunity_repoName(ctx, field)
+	if err != nil {
+		return graphql.Null
+	}
+	ctx = graphql.WithFieldContext(ctx, fc)
+	defer func() {
+		if r := recover(); r != nil {
+			ec.Error(ctx, ec.Recover(ctx, r))
+			ret = graphql.Null
+		}
+	}()
+	resTmp, err := ec.ResolverMiddleware(ctx, func(rctx context.Context) (any, error) {
+		ctx = rctx // use context from middleware stack in children
+		return obj.RepoName, nil
+	})
+	if err != nil {
+		ec.Error(ctx, err)
+		return graphql.Null
+	}
+	if resTmp == nil {
+		return graphql.Null
+	}
+	res := resTmp.(*string)
+	fc.Result = res
+	return ec.marshalOString2ᚖstring(ctx, field.Selections, res)
+}
+
+func (ec *executionContext) fieldContext_AIOpportunity_repoName(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "AIOpportunity",
+		Field:      field,
+		IsMethod:   false,
+		IsResolver: false,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return nil, errors.New("field of type String does not have child fields")
+		},
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _AIOpportunity_teamName(ctx context.Context, field graphql.CollectedField, obj *model.AIOpportunity) (ret graphql.Marshaler) {
+	fc, err := ec.fieldContext_AIOpportunity_teamName(ctx, field)
+	if err != nil {
+		return graphql.Null
+	}
+	ctx = graphql.WithFieldContext(ctx, fc)
+	defer func() {
+		if r := recover(); r != nil {
+			ec.Error(ctx, ec.Recover(ctx, r))
+			ret = graphql.Null
+		}
+	}()
+	resTmp, err := ec.ResolverMiddleware(ctx, func(rctx context.Context) (any, error) {
+		ctx = rctx // use context from middleware stack in children
+		return obj.TeamName, nil
+	})
+	if err != nil {
+		ec.Error(ctx, err)
+		return graphql.Null
+	}
+	if resTmp == nil {
+		return graphql.Null
+	}
+	res := resTmp.(*string)
+	fc.Result = res
+	return ec.marshalOString2ᚖstring(ctx, field.Selections, res)
+}
+
+func (ec *executionContext) fieldContext_AIOpportunity_teamName(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "AIOpportunity",
+		Field:      field,
+		IsMethod:   false,
+		IsResolver: false,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return nil, errors.New("field of type String does not have child fields")
 		},
 	}
 	return fc, nil
@@ -63574,6 +63684,10 @@ func (ec *executionContext) _AIOpportunity(ctx context.Context, sel ast.Selectio
 			if out.Values[i] == graphql.Null {
 				out.Invalids++
 			}
+		case "repoName":
+			out.Values[i] = ec._AIOpportunity_repoName(ctx, field, obj)
+		case "teamName":
+			out.Values[i] = ec._AIOpportunity_teamName(ctx, field, obj)
 		default:
 			panic("unknown field " + strconv.Quote(field.Name))
 		}

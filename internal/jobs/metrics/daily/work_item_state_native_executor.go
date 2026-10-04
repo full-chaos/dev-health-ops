@@ -154,7 +154,18 @@ func (executor *WorkItemStateExecutor) ComputeFamily(
 			// One line per partition, no id: how many relations the end rule
 			// closed, by provider, and how many of them are the named case of
 			// a github issue on a Projects v2 board.
-			slog.Info(workitemmetrics.EndedRelationsLogMessage, ended.LogArgs("daily_family")...)
+			counts := ended.Counts()
+			slog.Info(workitemmetrics.EndedRelationsLogMessage,
+				"writer", "daily_family",
+				"relations", counts.Relations,
+				"ended", counts.Ended,
+				"ended_github", counts.EndedGitHub,
+				"ended_gitlab", counts.EndedGitLab,
+				"ended_jira", counts.EndedJira,
+				"ended_linear", counts.EndedLinear,
+				"ended_other", counts.EndedOther,
+				"github_board_candidates", counts.GitHubBoardCandidates,
+			)
 		}
 
 		// One honest, real-wall-clock timestamp per repo group -- see

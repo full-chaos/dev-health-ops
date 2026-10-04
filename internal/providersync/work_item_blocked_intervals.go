@@ -101,7 +101,18 @@ func loadWorkItemBlockedIntervalsForProvider(
 	// One line per unit, no id: how many relations the end rule closed, by
 	// provider, and how many of them are the named case of a github issue on
 	// a Projects v2 board.
-	slog.Info(workitemmetrics.EndedRelationsLogMessage, ended.LogArgs("sync_time_deriver")...)
+	counts := ended.Counts()
+	slog.Info(workitemmetrics.EndedRelationsLogMessage,
+		"writer", "sync_time_deriver",
+		"relations", counts.Relations,
+		"ended", counts.Ended,
+		"ended_github", counts.EndedGitHub,
+		"ended_gitlab", counts.EndedGitLab,
+		"ended_jira", counts.EndedJira,
+		"ended_linear", counts.EndedLinear,
+		"ended_other", counts.EndedOther,
+		"github_board_candidates", counts.GitHubBoardCandidates,
+	)
 	return intervals, nil
 }
 

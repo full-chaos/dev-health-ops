@@ -748,7 +748,18 @@ func TestEndedRelationStatsCountByTheProviderOfTheWriterThatEndedIt(t *testing.T
 			},
 		})))
 		defer slog.SetDefault(previous)
-		slog.Info(EndedRelationsLogMessage, stats.LogArgs(writer)...)
+		counts := stats.Counts()
+		slog.Info(EndedRelationsLogMessage,
+			"writer", writer,
+			"relations", counts.Relations,
+			"ended", counts.Ended,
+			"ended_github", counts.EndedGitHub,
+			"ended_gitlab", counts.EndedGitLab,
+			"ended_jira", counts.EndedJira,
+			"ended_linear", counts.EndedLinear,
+			"ended_other", counts.EndedOther,
+			"github_board_candidates", counts.GitHubBoardCandidates,
+		)
 		return out.String()
 	}
 	const message = `level=INFO msg="blocked rule: relations ended by a later sync of an item that writes them" `

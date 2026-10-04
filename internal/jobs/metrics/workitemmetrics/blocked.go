@@ -526,32 +526,45 @@ func (stats *EndedRelationStats) countEnded(writer RelationEnd) {
 }
 
 // EndedRelationsLogMessage is the message of the one log line a writer of
-// work_item_state_durations_daily emits per run (LogArgs).
+// work_item_state_durations_daily emits per run, with the fields of
+// EndedRelationCounts as its counts.
 const EndedRelationsLogMessage = "blocked rule: relations ended by a later sync of an item that writes them"
 
-// LogArgs returns the stats as the key-value pairs of ONE log line: the same
-// keys for every run and for both writers, counts only, no id of any kind.
-// writer names the caller ("daily_family", "sync_time_deriver"). The caller
-// logs them with EndedRelationsLogMessage; this package imports no log
-// package (the sync dispatch runtime depends on it, and its closed list of
-// log users only shrinks). The line is the way to see, on a real
-// organization, how many relations the end rule closes and how many of those
-// are the named case of a github issue on a Projects v2 board.
-func (stats EndedRelationStats) LogArgs(writer string) []any {
+// EndedRelationCounts are the counts of that log line: the same fields for
+// every run and for both writers, counts only, no id of any kind. Each writer
+// logs them itself, as named scalars, under the keys writer, relations,
+// ended, ended_github, ended_gitlab, ended_jira, ended_linear, ended_other
+// and github_board_candidates (this package imports no log package: the
+// sync dispatch runtime depends on it, and its closed list of log users only
+// shrinks). The line is the way to see, on a real organization, how many
+// relations the end rule closes and how many of those are the named case of
+// a github issue on a Projects v2 board.
+type EndedRelationCounts struct {
+	Relations             int
+	Ended                 int
+	EndedGitHub           int
+	EndedGitLab           int
+	EndedJira             int
+	EndedLinear           int
+	EndedOther            int
+	GitHubBoardCandidates int
+}
+
+// Counts returns the stats as the counts of the log line.
+func (stats EndedRelationStats) Counts() EndedRelationCounts {
 	total := 0
 	for _, count := range stats.Ended {
 		total += count
 	}
-	return []any{
-		"writer", writer,
-		"relations", stats.Relations,
-		"ended", total,
-		"ended_github", stats.Ended["github"],
-		"ended_gitlab", stats.Ended["gitlab"],
-		"ended_jira", stats.Ended["jira"],
-		"ended_linear", stats.Ended["linear"],
-		"ended_other", stats.Ended["other"],
-		"github_board_candidates", stats.GitHubBoardCandidates,
+	return EndedRelationCounts{
+		Relations:             stats.Relations,
+		Ended:                 total,
+		EndedGitHub:           stats.Ended["github"],
+		EndedGitLab:           stats.Ended["gitlab"],
+		EndedJira:             stats.Ended["jira"],
+		EndedLinear:           stats.Ended["linear"],
+		EndedOther:            stats.Ended["other"],
+		GitHubBoardCandidates: stats.GitHubBoardCandidates,
 	}
 }
 

@@ -90,7 +90,7 @@ dho workers metrics daily-start --org <org-id> --day <YYYY-MM-DD> --reason <code
 
 - API endpoint tests follow [`tests/api/auth/test_invite_flow.py`](tests/api/auth/test_invite_flow.py) (aiosqlite in-memory, `dependency_overrides`, `httpx.ASGITransport`). Journey: [`tests/api/test_new_user_journey.py`](tests/api/test_new_user_journey.py). Admin CRUD: `tests/api/admin/`.
 - GraphQL schema export `api/graphql/export_schema.py` is consumed by web CI for drift detection.
-- **Lefthook** (`make install` once — `core.hooksPath` is shared across worktrees): `commit-msg` strips agent attribution; `pre-commit` ruff format+fix then `mypy` gate; `pre-push` `ruff format --check` + `ruff check` + `mypy`. Fix code, don't add ignores/config exclusions.
+- **Lefthook** (`make install` once — `core.hooksPath` is shared across worktrees): `commit-msg` strips agent attribution; `pre-commit` ruff format+fix; `pre-push` `ruff format --check` + `ruff check` (no mypy: CI retired it, CHAOS-8616). Fix code, don't add ignores/config exclusions.
 - **Mutation testing has no shared harness — do not write one.** `scripts/mutation_harness.py`, its ~8k lines of meta-tests, and its 98 checked-in plan JSONs were removed under CHAOS-3875: no GitHub workflow ever ran them, only `ci/local_validate.sh`'s `verify` stage touched the harness at all, and the plans had to be re-anchored by hand on every refactor of the files they pinned. The durable lesson from the 2026-07-26 incident survives the tool: three ad-hoc per-lane harnesses produced false results, all the same shape — the harness could not detect its own failure. One left `if false && (guard)` on disk while reporting a restore it had "verified" with `go build`; one used `git checkout` to restore and silently reverted unrelated uncommitted edits; one waited on `pgrep -qf "m22.sh"`, matched its own command line, and hung. **Never verify a restore with a build or a git check** (`go build`/`go vet` pass on `if false && …`; `git diff` calls an *untracked* file clean whatever it contains), and **mutate compound predicates clause by clause** — a wholesale mutation reported KILLED on a condition holding a wrong, unasserted clause. If you need a one-off kill proof, run it by hand, restore by content digest, and keep it out of the tree.
 
 ## Worktrees and branches
@@ -212,8 +212,7 @@ bash ci/local_validate.sh
 It mirrors the PR-time CI gates of the ops repo and MUST be green before `git push`:
 
 1. `ruff format --check .` and `ruff check .` (local only; CI no longer runs ruff)
-2. `mypy --install-types --non-interactive .` (local only; CI no longer runs mypy)
-3. The **FULL** unit suite, byte-for-byte as `ci/run_tests.sh unit_tests()` runs it
+2. The **FULL** unit suite, byte-for-byte as `ci/run_tests.sh unit_tests()` runs it
    (`pytest tests -m "not benchmark and not clickhouse" --ignore=… -n 4 --dist loadscope`,
    matching CI's `PYTEST_XDIST_WORKERS=4` — the worker count changes the test→worker
    distribution and a different count surfaces order-dependent pollution CI never hits),
@@ -232,7 +231,7 @@ It mirrors the PR-time CI gates of the ops repo and MUST be green before `git pu
    hard-fails before the unit suite ever runs at all (see CHAOS-3571 below) — the
    module-deselect behavior only fires under the explicit `SKIP_CLICKHOUSE=1` opt-out,
    where the pure-Python guards still run but that one CH-dependent module is skipped.
-4. A **live-ClickHouse argMax proof** that CI's unit/ci tiers never run: after migrating
+3. A **live-ClickHouse argMax proof** that CI's unit/ci tiers never run: after migrating
    the scratch db, it builds a real `ClickHouseDataLoader` and `await`s
    `load_team_attribution_context`, forcing the real engine to parse + EXECUTE every
    `argMax(…, (updated_at, valid_from))` / `GROUP BY` block. The mock-based unit test
@@ -240,7 +239,7 @@ It mirrors the PR-time CI gates of the ops repo and MUST be green before `git pu
    unescaped-`%` mistake. (The broader seeded `pytest -m clickhouse` suite —
    flow-matrix-live, recommendations, resolver EXPLAIN — needs `dev-hops fixtures
    generate` and is a separate opt-in run, not part of this gate; CI does not run it either.)
-5. A **host-wide single-flight lock** (CHAOS-3403): the gate serializes across every
+4. A **host-wide single-flight lock** (CHAOS-3403): the gate serializes across every
    worktree on the host, since all worktrees share one ClickHouse container and one
    host's CPU/RAM. A run that finds the lock already held blocks, waiting up to
    `LOCK_WAIT_SECS` (default 1800s = 30 minutes), then fails with an actionable

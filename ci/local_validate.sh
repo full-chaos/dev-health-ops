@@ -9,7 +9,7 @@
 #   NO live-ClickHouse execution proof (clickhouse-marked tests are opt-in / skipped).
 #   This gate closes BOTH gaps.
 #
-# WHAT IT DOES (a LOCAL gate; hosted CI no longer runs ruff, mypy or the Python
+# WHAT IT DOES (a LOCAL gate; hosted CI no longer runs ruff, mypy (this gate no longer runs it either: CHAOS-8616) or the Python
 # test matrix: it runs the Go gates, the tooling and docs tests and the kept list
 # ci/kept_python_tests.txt):
 #   0. preflight also installs requirements-docs.txt into .venv so
@@ -17,11 +17,10 @@
 #      "No module named mkdocs" in a freshly `uv sync`'d worktree venv.
 #   1. ruff format --check .
 #   2. ruff check .
-#   3. mypy --install-types ... .
-#   4. the fast Go gate (format, vet, test; race remains in the dedicated Go CI)
-#   5. the FULL Python unit tier, as ci/run_tests.sh unit_tests() runs it, with
+#   3. the fast Go gate (format, vet, test; race remains in the dedicated Go CI)
+#   4. the FULL Python unit tier, as ci/run_tests.sh unit_tests() runs it, with
 #      the local socks5h proxy neutralized.
-#   6. an ISOLATED live-ClickHouse stage that the CI unit/ci tiers never run:
+#   5. an ISOLATED live-ClickHouse stage that the CI unit/ci tiers never run:
 #      apply the schema to a SCRATCH db, run the clickhouse-marked attribution
 #      tests, AND execute the new argMax query against a real engine. The scratch
 #      db is DROPPED on exit via a trap.
@@ -95,9 +94,9 @@
 #   A machine-readable `GATE_STAGE_MANIFEST ... declared=<N> executed=<N>
 #   declared_ids=... executed_ids=...` log line carries the literal counts and
 #   ids, and the human verdict line carries the same information formatted as
-#   `[executed/declared: ids]` (`GATE PASSED. [8/8: lint_format,lint_check,
-#   typecheck,ch_probe,ch_scratch_create,ch_migrate,unit_suite,ch_argmax_proof]
-#   safe to push.`, or `[4/4: ...]` under SKIP_CLICKHOUSE=1) -- a degraded run
+#   `[executed/declared: ids]` (`GATE PASSED. [7/7: lint_format,lint_check,
+#   ch_probe,ch_scratch_create,ch_migrate,unit_suite,ch_argmax_proof]
+#   safe to push.`, or `[3/3: ...]` under SKIP_CLICKHOUSE=1) -- a degraded run
 #   cannot produce a verdict line indistinguishable from a full one, even in a
 #   copy-pasted PR quote. `verify_stage_manifest()` additionally self-checks
 #   that the set of stages that actually ran equals the declared set and fails
@@ -329,7 +328,6 @@ redact_uri() {
 
 PYBIN="${ROOT}/.venv/bin/python"
 RUFF="${ROOT}/.venv/bin/ruff"
-MYPY="${ROOT}/.venv/bin/mypy"
 # Overridable (CHAOS-3571): every real caller gets the identical computed
 # default (env unset), so this changes no production behavior. It lets a test
 # point DHO at a deliberately-missing path to exercise ch_ensure_dho()'s
@@ -974,7 +972,6 @@ preflight() {
    UV_CACHE_DIR keeps either recipe off the shared ~/.cache/uv/.lock other worktrees hold —
    CHAOS-4411.)"
   [ -x "${RUFF}" ] || die "missing ${RUFF}; install the [dev] extra into .venv."
-  [ -x "${MYPY}" ] || die "missing ${MYPY}; install the [dev] extra into .venv."
   ensure_docs_deps
   printf '   worktree root : %s\n' "${ROOT}"
   printf '   interpreter   : %s\n' "${PYBIN}"
@@ -984,7 +981,6 @@ preflight() {
 # --- Pure-Python CI-parity gates (no services). ------------------------------------
 gate_lint_format() { "${RUFF}" format --check .; }
 gate_lint_check() { "${RUFF}" check .; }
-gate_typecheck() { "${MYPY}" --install-types --non-interactive .; }
 gate_go_fast() { bash "${ROOT}/ci/check_go.sh" fast; }
 gate_river_compat_static() { bash "${ROOT}/ci/check_river_compat_static.sh"; }
 
@@ -1520,14 +1516,13 @@ verify_stage_manifest() {
 # release_lock without paying for preflight/lint/mypy/the unit suite.
 run_declared_stages() {
   if [ "${SKIP_CLICKHOUSE:-0}" = "1" ]; then
-    DECLARED_STAGE_IDS=(lint_format lint_check typecheck unit_suite)
+    DECLARED_STAGE_IDS=(lint_format lint_check unit_suite)
   else
-    DECLARED_STAGE_IDS=(lint_format lint_check typecheck ch_probe ch_scratch_create ch_migrate unit_suite ch_argmax_proof)
+    DECLARED_STAGE_IDS=(lint_format lint_check ch_probe ch_scratch_create ch_migrate unit_suite ch_argmax_proof)
   fi
 
   run_stage "lint: ruff format --check" lint_format gate_lint_format
   run_stage "lint: ruff check" lint_check gate_lint_check
-  run_stage "typecheck: mypy" typecheck gate_typecheck
   # run_stage "go: format + vet + test"     go_fast    gate_go_fast
   # run_stage "river: static compatibility harness" river_compat gate_river_compat_static
   ch_provision # scratch db + migrations; exports CLICKHOUSE_URI when available
@@ -1714,7 +1709,6 @@ if [ "${1:-}" = "--stage-manifest-probe" ]; then
   shift
   gate_lint_format() { return 0; }
   gate_lint_check() { return 0; }
-  gate_typecheck() { return 0; }
   gate_unit_suite() { return 0; }
   ch_probe_docker() {
     CH_PROBE_DETAIL="stubbed: available"

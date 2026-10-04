@@ -37,7 +37,6 @@ python -c "import dev_health_ops; print(dev_health_ops.__file__)"
 ```bash
 ruff format --check .
 ruff check .
-mypy
 ```
 
 Apply formatting or safe lint fixes deliberately, then review the diff:

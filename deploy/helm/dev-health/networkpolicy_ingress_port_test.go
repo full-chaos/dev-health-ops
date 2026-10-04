@@ -52,7 +52,7 @@ type netpolDoc struct {
 
 func renderNetpols(t *testing.T, args ...string) []netpolDoc {
 	t.Helper()
-	full := append([]string{"template", "np", ".", "--set", "networkPolicy.enabled=true", "--set", "goApi.enabled=true",
+	full := append([]string{"template", "np", ".", "--namespace", releaseNamespace, "--set", "networkPolicy.enabled=true", "--set", "goApi.enabled=true",
 		"--set", "goWorkers.pgbouncer.postgres.networkPolicyCIDR=10.0.0.0/24"}, args...)
 	out, err := exec.Command("helm", full...).CombinedOutput()
 	if err != nil {
@@ -95,12 +95,43 @@ func admittedFromIngressController(policies []netpolDoc, pod map[string]string, 
 	return admittedFrom(policies, pod, probes, sourceController)
 }
 
-type netpolSource int
+// netpolSource is the namespace labels and pod labels of one connecting pod. A peer admits it by the SELECTOR, whatever
+// label form the selector uses (an empty namespaceSelector selects every namespace, an empty podSelector every pod).
+type netpolSource struct {
+	name            string
+	namespaceLabels map[string]string
+	podLabels       map[string]string
+}
 
 const (
-	sourceController netpolSource = iota // a pod of the ingress-nginx namespace
-	sourceStranger                       // a pod of the release namespace no rule names
+	releaseNamespace           = "rel-ns"
+	defaultControllerNamespace = "ingress-nginx"
+	namespaceNameLabel         = "kubernetes.io/metadata.name"
 )
+
+// controllerSourceFor is a pod of the ingress controller's namespace; Kubernetes labels every namespace with its name.
+func controllerSourceFor(namespace string) netpolSource {
+	return netpolSource{"the ingress controller", map[string]string{namespaceNameLabel: namespace}, map[string]string{"app.kubernetes.io/name": "ingress-nginx"}}
+}
+
+var (
+	sourceController = controllerSourceFor(defaultControllerNamespace)
+	sourceStranger   = netpolSource{"an unnamed in-namespace pod", map[string]string{namespaceNameLabel: releaseNamespace}, map[string]string{"app": "stranger"}}
+)
+
+func (peer netpolPeer) admits(source netpolSource) bool {
+	if peer.NamespaceSelector == nil && peer.PodSelector == nil {
+		return false
+	}
+	if peer.NamespaceSelector != nil {
+		if !peer.NamespaceSelector.selects(source.namespaceLabels) {
+			return false
+		}
+	} else if source.namespaceLabels[namespaceNameLabel] != releaseNamespace {
+		return false // a bare podSelector means the policy's own namespace
+	}
+	return peer.PodSelector == nil || peer.PodSelector.selects(source.podLabels)
+}
 
 func admittedFrom(policies []netpolDoc, pod map[string]string, probes []int, source netpolSource) (admitted []int, selected bool) {
 	for _, probe := range probes {
@@ -129,16 +160,7 @@ func policyAdmitsPort(policy netpolDoc, probe int, source netpolSource) bool {
 	for _, rule := range policy.Spec.Ingress {
 		admits := len(rule.From) == 0
 		for _, peer := range rule.From {
-			switch source {
-			case sourceController:
-				if peer.NamespaceSelector != nil && peer.PodSelector == nil && peer.NamespaceSelector.MatchLabels["name"] == "ingress-nginx" {
-					admits = true
-				}
-			case sourceStranger:
-				if peer.NamespaceSelector == nil && peer.PodSelector != nil && peer.PodSelector.selects(map[string]string{"app": "stranger"}) {
-					admits = true
-				}
-			}
+			admits = admits || peer.admits(source)
 		}
 		if !admits {
 			continue
@@ -216,6 +238,7 @@ func TestIngressControllerReachesOnlyGoAPIAndWebOnTheirOwnPorts(t *testing.T) {
 		"go-api port = clickhouse native":    {[]string{"--set", "goApi.internal.enabled=false", "--set", "goApi.port=9000"}, 9000, 3000, false, false},
 		"go-api port = pgbouncer, internal":  {[]string{"--set", "goApi.internal.enabled=true", "--set", "goApi.port=6432"}, 6432, 3000, false, true},
 		"web port = pgbouncer queue session": {[]string{"--set", "goApi.internal.enabled=false", "--set", "web.port=6433"}, 8000, 6433, false, false},
+		"query-api, no internal listener":    {[]string{"--set", "goApi.internal.enabled=false", "--set", "queryApi.enabled=true"}, 8000, 3000, true, false},
 		"query-api with internal listener": {[]string{"--set", "goApi.internal.enabled=false", "--set", "queryApi.enabled=true",
 			"--set", "queryApi.internal.enabled=true", "--set", "queryApi.internal.allowedFrom[0].matchLabels.app=tools"}, 8000, 3000, true, false},
 		"go workers with pgbouncer, bundled postgresql": {[]string{"--set", "goApi.internal.enabled=false", "--set", "postgresql.enabled=true"}, 8000, 3000, false, false},
@@ -257,6 +280,25 @@ func TestIngressControllerReachesOnlyGoAPIAndWebOnTheirOwnPorts(t *testing.T) {
 	}
 }
 
+// The controller namespace is a value (default ingress-nginx), matched by the label Kubernetes puts on every namespace:
+// with another namespace configured, that namespace is admitted to go-api, web and query-api on their ports and the
+// default one is admitted nowhere.
+func TestIngressControllerNamespaceIsConfigurable(t *testing.T) {
+	policies := renderNetpols(t, "--set", "goApi.internal.enabled=false", "--set", "queryApi.enabled=true",
+		"--set", "networkPolicy.ingressControllerNamespace=edge-proxy")
+	probes := []int{3000, 8000, 8090, 9000}
+	for component, want := range map[string][]int{"go-api": {8000}, "web": {3000}, "query-api": {8090}, "clickhouse": nil} {
+		labels := map[string]string{"app.kubernetes.io/name": "dev-health", "app.kubernetes.io/instance": "np", "app.kubernetes.io/component": component}
+		got, _ := admittedFrom(policies, labels, probes, controllerSourceFor("edge-proxy"))
+		if fmt.Sprint(got) != fmt.Sprint(want) {
+			t.Errorf("%s: namespace edge-proxy is admitted to %v, want %v", component, got, want)
+		}
+		if old, _ := admittedFrom(policies, labels, probes, sourceController); len(old) != 0 {
+			t.Errorf("%s: the default namespace is still admitted to %v after the value moved", component, old)
+		}
+	}
+}
+
 // The go-api internal port stays closed to the ingress controller and to any in-namespace pod no rule names, on the
 // union of every policy (CHAOS-7181), and the same for the query-api internal port.
 func TestInternalPortsAreClosedOnTheUnion(t *testing.T) {
@@ -264,7 +306,8 @@ func TestInternalPortsAreClosedOnTheUnion(t *testing.T) {
 		"--set", "queryApi.internal.enabled=true", "--set", "queryApi.internal.allowedFrom[0].matchLabels.app=tools")
 	for component, port := range map[string]int{"go-api": 8091} {
 		labels := map[string]string{"app.kubernetes.io/name": "dev-health", "app.kubernetes.io/instance": "np", "app.kubernetes.io/component": component}
-		for source, who := range map[netpolSource]string{sourceController: "the ingress controller", sourceStranger: "an unnamed in-namespace pod"} {
+		for _, source := range []netpolSource{sourceController, sourceStranger} {
+			who := source.name
 			admitted, selected := admittedFrom(policies, labels, []int{port}, source)
 			if !selected {
 				t.Fatalf("no ingress policy selects the %s pods", component)

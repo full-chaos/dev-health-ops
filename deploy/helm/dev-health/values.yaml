@@ -895,6 +895,9 @@ ingress:
 # =============================================================================
 networkPolicy:
   enabled: false
+  # -- Namespace of the ingress controller; the policy admits it (label kubernetes.io/metadata.name) to the go-api, web and
+  #    query-api Service ports only.
+  ingressControllerNamespace: ingress-nginx
 
 # =============================================================================
 # Configuration (non-secret)

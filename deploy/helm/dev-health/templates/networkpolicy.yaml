@@ -1,4 +1,11 @@
 {{- if .Values.networkPolicy.enabled }}
+{{- /*
+CHAOS-8552 follow-up: the shared policy below admits every pod of the release namespace on every port. A controller that runs in
+that same namespace is one of those pods, so the per-component policies could not narrow it; refuse the combination.
+*/}}
+{{- if eq (toString .Values.networkPolicy.ingressControllerNamespace) (include "dev-health.namespace" .) }}
+{{- fail (printf "networkPolicy.ingressControllerNamespace %q is the namespace this release is installed in (%s): the in-namespace rule of the release-wide NetworkPolicy would admit the ingress controller on every port of every pod. Run the ingress controller in its own namespace, or leave networkPolicy.enabled=false" (toString .Values.networkPolicy.ingressControllerNamespace) (include "dev-health.namespace" .)) }}
+{{- end }}
 apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy
 metadata:
@@ -24,16 +31,13 @@ spec:
     - Ingress
     - Egress
   ingress:
-    # Allow ingress controller traffic
-    - from:
-        - namespaceSelector:
-            matchLabels:
-              name: ingress-nginx
-      ports:
-        - protocol: TCP
-          port: {{ .Values.goApi.port }}
-        - protocol: TCP
-          port: {{ .Values.web.port }}
+    {{- /*
+    CHAOS-8552: no ingress-controller rule on this policy. It selects (almost) every pod of the release, so a controller rule
+    here would admit the controller at the datastores and workers too (a goApi.port of 9000 or 6432 opened the ClickHouse native
+    or PgBouncer port to it). The controller is admitted by the per-component policies below, to the components the Ingress
+    routes to (go-api, web, query-api) on their Service port. The go-api pods also keep whatever the go-api-internal policy
+    opens (every port but the internal one); this policy's in-namespace rule below still admits every release pod on every port.
+    */}}
     # Allow pod-to-pod within namespace
     - from:
         - podSelector: {}
@@ -54,6 +58,34 @@ spec:
       ports:
         - protocol: TCP
           port: 443
+{{- range $target := list (dict "component" "go-api" "enabled" .Values.goApi.enabled "port" .Values.goApi.port) (dict "component" "web" "enabled" .Values.web.enabled "port" .Values.web.port) (dict "component" "query-api" "enabled" .Values.queryApi.enabled "port" .Values.queryApi.port) }}
+{{- if $target.enabled }}
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ include "dev-health.fullname" $ }}-ingress-{{ $target.component }}
+  namespace: {{ include "dev-health.namespace" $ }}
+  labels:
+    {{- include "dev-health.componentLabels" (dict "component" (printf "%s-ingress" $target.component) "context" $) | nindent 4 }}
+spec:
+  podSelector:
+    matchLabels:
+      {{- include "dev-health.componentSelectorLabels" (dict "component" $target.component "context" $) | nindent 6 }}
+  policyTypes:
+    - Ingress
+  ingress:
+    # CHAOS-8552: the ingress controller reaches this component's Service port and nothing else. The controller namespace is
+    # matched by the label Kubernetes sets on every namespace (kubernetes.io/metadata.name).
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: {{ $.Values.networkPolicy.ingressControllerNamespace | quote }}
+      ports:
+        - protocol: TCP
+          port: {{ $target.port }}
+{{- end }}
+{{- end }}
 {{- if and .Values.goApi.enabled .Values.goApi.internal.enabled }}
 ---
 apiVersion: networking.k8s.io/v1

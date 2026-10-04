@@ -197,6 +197,14 @@ func LoadOperationCatalogWithLegacy(path string) (map[string]string, map[string]
 	return byOperation, legacy, err
 }
 
+// LoadOperationCatalogWithKindsAndLegacy is LoadOperationCatalogWithKinds plus
+// LoadOperationCatalogWithLegacy's legacy digests, from ONE read of the file:
+// `status` needs all three (CHAOS-8649) and must not judge proof by one
+// version of the file and reachability by another.
+func LoadOperationCatalogWithKindsAndLegacy(path string) (map[string]string, map[string]string, map[string][]string, error) {
+	return readOperationCatalog(path)
+}
+
 // readOperationCatalog is the one reader of go_api_operations.json:
 // operation -> current digest, operation -> kind, operation -> legacy
 // digests. Every guard runs for every caller, whichever part it asks for.

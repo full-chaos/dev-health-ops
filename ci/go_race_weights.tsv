@@ -341,6 +341,7 @@ internal/testsupport/venuechanged	15
 internal/testsupport/venueoracle	76
 internal/testsupport/venueoracle/goldenhygiene	60
 internal/testsupport/venueoracle/goldenrecord	5
+internal/websmoke	3
 internal/workersctl	10
 internal/workerservice	20
 internal/workitemcontract	1

@@ -42,8 +42,8 @@ The bigboy stack runs no Python api, as prod does. The base `compose.yml` of the
   api container's network namespace). No service names the Python api image.
 - The cut's chain no longer holds the host side file `compose/compose.metrics-api.local.yml` (the Python
   `metrics-api` service), and the cut's `up` list is `query-api go-api web`.
-- `compose.bigboy.smoke.yml` runs the web-path smoke on a plain Python base image
-  (`ghcr.io/full-chaos/python:3.14-slim`, by digest); the script uses the standard library only.
+- `compose.bigboy.smoke.yml` runs the web-path smoke as `dho smoke web-path`; its image is the dho image
+  by digest, set in `compose.bigboy.images.yml` with the other dho pins.
 - `bigboy-graphql-prove.sh` proves through the routed `/graphql` in Go-edge mode only.
 - The router file names no Python backend: `/docs`, `/redoc`, `/openapi.json` and `/metrics` reach the
   default backend (the Go api's 404), as in prod. Regenerate `.traefik-dynamic/planes.yml` with the cut.
@@ -59,7 +59,7 @@ The bigboy stack runs no Python api, as prod does. The base `compose.yml` of the
 
 ORDER for the first cut with these files (the same order the billing-edge retirement used): (1) put
 the tracked `compose.bigboy.images.yml` in place of the host copy `compose/compose.bigboy.images.yml`,
-keeping the digests the host copy has; (2) with the OLD chain still exported, name and remove the two
+keeping the digests the host copy has (web-path-smoke.sh reads the HOST overlay, so the `web-smoke` block of the tracked file, which carries the smoke's image, must be in it); and repin the dho digests to a build that has the `dho smoke web-path` verb (the smoke works only with both); (2) with the OLD chain still exported, name and remove the two
 Python containers with compose verbs (`docker compose ... ps api metrics-api`, then
 `docker compose ... rm -sf api metrics-api`; one approved line, run on the lead's GO); (3) regenerate
 `.traefik-dynamic/planes.yml`; (4) run the cut.
@@ -210,7 +210,7 @@ quiet retry on Python.
 
 ## Web-path smoke (CHAOS-6987/R460)
 
-`web-path-smoke.sh` (+ `web-path-smoke.py`, `compose.bigboy.smoke.yml`) is the one proof that
+`web-path-smoke.sh` (+ the `dho smoke web-path` verb in `internal/websmoke`, `compose.bigboy.smoke.yml`) is the one proof that
 closes the loop for a REAL browser session, not a hand-minted token: it logs in through web's own
 `/api/v1/auth/login` route as the bigboy admin, then issues the EXACT operations web's Cockpit
 (`/api/v1/home`, `/api/v1/investment`, `/api/v1/opportunities` REST threads) and Diagnose
@@ -277,16 +277,14 @@ Every check below fails loud with a named finding; none can pass on an empty or 
   prod. The cut has no such STEP (it had `routing-enable` / `routing-parity`), and
   `bigboy-graphql-prove.sh` has no parity step. `routing-ops.txt` stays: the web-path smoke reads
   its `KNOWN-MISSING` markers, and prove step 4 enables each of them.
-- **Web-path smoke, real browser session** (`web-path-smoke.py`): now logs in through Auth.js
+- **Web-path smoke, real browser session** (`dho smoke web-path`, Go, run from the dho image the stack pins): logs in through Auth.js
   (csrf + Credentials callback) with the PUBLIC Host header on traefik, so every call takes the
   browser's path through `web`'s proxy.ts. Checks: unauthenticated public-host request lands on web
   (303, no plane header); callback-url cookie and sign-out redirect carry the public origin; backend
   `/health`; Cockpit threads; `filters/options`; `investment/explain`; `work-units`
   (`include_textual=true`); `drilldown/prs` feeding a real `flame` entity; GraphQL
   `complexityTimeseries`, `workGraphFlow` (no empty `nodeType`) and `testopsRisk`; the
-  `/testops/risk` page. GraphQL documents are derived from web source through urql's formatDocument
-  transform and must hash to the edge catalog's registered digests at the deployed sha
-  (`DHO_SMOKE_CATALOG_FILE`, or `DHO_SMOKE_OPS_SHA` for a standalone run). Exit 3 = passed except
+  `/testops/risk` page. GraphQL documents sent are the registered wire-form documents compiled into the dho build (no printer). Web's own `export const ..._QUERY` text is read from `web/src` and formatted as urql formats it (`__typename` appended to every non-root selection set, `@_` directives dropped) must carry exactly the GraphQL tokens of the registered document (whitespace and commas aside), and the registered document must hash to a digest the edge catalog holds for that operation (current or legacy) at the deployed sha, so a change in web's document fails as `document_digest_mismatch`; each REST path must still appear in the web source file that calls it. The catalog comes from `DHO_SMOKE_CATALOG_FILE`, or `DHO_SMOKE_OPS_SHA` for a standalone run. Exit 3 = passed except
   named KNOWN-MISSING checks (read from `routing-ops.txt`).
 
 ### Running the web-path smoke

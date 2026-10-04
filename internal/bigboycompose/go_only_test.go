@@ -232,9 +232,9 @@ func TestBigboyGoOnlyCheckSeesEachDefect(t *testing.T) {
 		},
 		{
 			name: "the smoke runner on the Python api image",
-			file: smokeOverlayName,
-			old:  "    image: ghcr.io/full-chaos/python:3.14-slim@sha256:",
-			new:  "    image: ghcr.io/full-chaos/dev-hops-api@sha256:",
+			file: imagesOverlayName,
+			old:  "  web-smoke:\n    image: " + dhoImageRepository,
+			new:  "  web-smoke:\n    image: ghcr.io/full-chaos/dev-hops-api",
 			want: "web-smoke runs the Python api image",
 		},
 		{

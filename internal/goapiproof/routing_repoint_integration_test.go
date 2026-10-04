@@ -346,8 +346,8 @@ func TestRepointSelectDocumentDigestRefusesWhenNoRowCarriesIt(t *testing.T) {
 //
 // An empty table is a valid state since the catalog rule: nothing to re-point,
 // nothing wrong, and its own value that is not a refusal. Rows that exist only
-// at another schema digest keep the refusal: a table whose rows nothing reads
-// and a fully-correct one must never read alike.
+// at another schema digest keep the refusal when one is in a served mode: a
+// table whose rows nothing reads and a fully-correct one must never read alike.
 func TestRepointTellsAnEmptyTableFromATableWhoseRowsAreAllElsewhere(t *testing.T) {
 	ctx := t.Context()
 	pool := startAuditedRegistryPostgres(t)
@@ -377,6 +377,24 @@ func TestRepointTellsAnEmptyTableFromATableWhoseRowsAreAllElsewhere(t *testing.T
 	}
 
 	const elsewhere = "sha256:0000000000000000000000000000000000000000000000000000000000000e15"
+	// CHAOS-8586: rows only at another digest, all in a dark mode, hold their
+	// operations dark at any digest -- the state one roll after a stack holds an
+	// operation dark, since `carry` skips that row. A no-op, never a refusal.
+	for _, mode := range []string{"python", "disabled", "shadow"} {
+		operation := "dark_" + mode
+		if _, err := pool.Exec(ctx, `INSERT INTO go_api_candidate_build (schema_digest, document_digest, selected_operation, candidate_build) VALUES ($1, $2, $3, $4)`,
+			elsewhere, testDocumentDigest, operation, testCandidateBuild); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := pool.Exec(ctx, `INSERT INTO go_api_routing_state (schema_digest, document_digest, selected_operation, current_candidate_build, owner, mode, rollout_percentage)
+			VALUES ($1, $2, $3, $4, 'go', $5, 0)`, elsewhere, testDocumentDigest, operation, testCandidateBuild, mode); err != nil {
+			t.Fatal(err)
+		}
+		outcomes, err := Repoint(ctx, pool, request)
+		if !errors.Is(err, ErrRoutingRowsOnlyDark) || errors.Is(err, ErrRepointNoRows) || errors.Is(err, ErrRoutingTableEmpty) || len(outcomes) != 0 {
+			t.Fatalf("Repoint with only dark rows (up to %s) at another digest = %v (outcomes %+v), want ErrRoutingRowsOnlyDark and no outcome", mode, err, outcomes)
+		}
+	}
 	for _, statement := range []string{
 		`INSERT INTO go_api_candidate_build (schema_digest, document_digest, selected_operation, candidate_build) VALUES ($1, $2, 'featureFlags', $3)`,
 		`INSERT INTO go_api_routing_state (schema_digest, document_digest, selected_operation, current_candidate_build, owner, mode, rollout_percentage)
@@ -390,7 +408,7 @@ func TestRepointTellsAnEmptyTableFromATableWhoseRowsAreAllElsewhere(t *testing.T
 		t.Fatalf("Repoint with a row only at another schema digest = %v, want the refusal ErrRepointNoRows", err)
 	}
 	var build string
-	if err := pool.QueryRow(ctx, `SELECT current_candidate_build FROM go_api_routing_state`).Scan(&build); err != nil || build != testCandidateBuild {
+	if err := pool.QueryRow(ctx, `SELECT current_candidate_build FROM go_api_routing_state WHERE selected_operation = 'featureFlags'`).Scan(&build); err != nil || build != testCandidateBuild {
 		t.Fatalf("the row at the other digest was touched: build %q err %v", build, err)
 	}
 	var audits int

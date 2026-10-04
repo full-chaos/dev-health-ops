@@ -53,7 +53,9 @@ package workitemmetrics
 //     (RelationIsCurrent). Its interval ends at the relation's own
 //     last_synced: the last time a sync saw it. The time a sync first saw it
 //     GONE is not stored (an item's last_synced is its latest sync), so this
-//     end can be too early and is never too late.
+//     end can be too early and is never too late. The hours before it stay
+//     blocked: a removed link does not change the blocked hours of earlier
+//     days.
 //
 // The two items' creation times and the blocker's completion only CLAMP the
 // interval. A relation whose blocker is not a stored work item, or whose

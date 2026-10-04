@@ -64,6 +64,13 @@ func TestComputeWorkItemStateDurationsMovesHoursToBlockedWhileABlockerIsOpen(t *
 			map[string][]workitemmetrics.BlockedInterval{"jira:OPS-2": {{Start: mustParseUTC(t, "2025-12-01T00:00:00Z")}}},
 			map[string]float64{"blocked": 24},
 		},
+		// A relation the provider no longer reports ends at the last time a
+		// sync saw it. Here that is the NEXT day at 06:00: this day keeps
+		// every blocked hour from 12:00 on.
+		"a relation last seen on the next day": {
+			map[string][]workitemmetrics.BlockedInterval{"jira:OPS-2": {{Start: at("12:00"), End: func() *time.Time { v := mustParseUTC(t, "2025-12-19T06:00:00Z"); return &v }()}}},
+			map[string]float64{"todo": 6, "in_progress": 6, "blocked": 12},
+		},
 		"a blocker completed before the day": {
 			map[string][]workitemmetrics.BlockedInterval{"jira:OPS-2": {{Start: mustParseUTC(t, "2025-12-01T00:00:00Z"), End: func() *time.Time { v := mustParseUTC(t, "2025-12-17T00:00:00Z"); return &v }()}}},
 			map[string]float64{"todo": 6, "in_progress": 18},

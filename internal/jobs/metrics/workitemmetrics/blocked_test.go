@@ -462,3 +462,35 @@ func TestBlockedIntervalsByItemResolvesAnExternalKeyOrDerivesNothing(t *testing.
 		t.Fatalf("blocks an external key, text gone: %+v, want %+v", got, wantEnded)
 	}
 }
+
+// THE END RULE, pinned as one statement: a relation that the latest sync of
+// its item(s) did not write again ends at its OWN last_synced -- the last
+// time a sync saw it -- and the hours before that stay blocked. Nothing after
+// it is blocked, and nothing before it is un-blocked.
+func TestARelationNotWrittenAgainEndsAtItsOwnLastSyncAndKeepsEarlierHours(t *testing.T) {
+	blocked := relationEnd("jira:OPS-2", "jira", "in_progress", 10, nil, 60)
+	blocker := relationEnd("jira:OPS-1", "jira", "in_progress", 4, nil, 70)
+	history := []StatusSegment{seg("in_progress", 10, 80)}
+
+	// Last written at 40; both items were synced after that (60 and 70).
+	removed := blocksRelation("jira:OPS-1", "jira:OPS-2", 14, 40)
+	intervals := BlockedIntervalsByItem([]BlockingRelation{removed}, []RelationEnd{blocked, blocker})
+	wantIntervals := map[string][]BlockedInterval{"jira:OPS-2": {{Start: blockedTime(14), End: blockedTimePtr(40)}}}
+	if !reflect.DeepEqual(intervals, wantIntervals) {
+		t.Fatalf("removed relation: intervals = %+v, want %+v (the end is the relation's own last_synced, not a later sync of an item)", intervals, wantIntervals)
+	}
+	got := OverlayBlocked(history, intervals["jira:OPS-2"])
+	want := []StatusSegment{seg("in_progress", 10, 14), seg("blocked", 14, 40), seg("in_progress", 40, 80)}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("removed relation: history = %+v, want %+v", got, want)
+	}
+
+	// The same relation while it is still reported (written at 70, the
+	// latest sync of its items): the hours up to 40 are the SAME, and it
+	// goes on.
+	current := blocksRelation("jira:OPS-1", "jira:OPS-2", 14, 70)
+	still := OverlayBlocked(history, BlockedIntervalsByItem([]BlockingRelation{current}, []RelationEnd{blocked, blocker})["jira:OPS-2"])
+	if wantStill := []StatusSegment{seg("in_progress", 10, 14), seg("blocked", 14, 80)}; !reflect.DeepEqual(still, wantStill) {
+		t.Fatalf("current relation: history = %+v, want %+v", still, wantStill)
+	}
+}

@@ -95,7 +95,8 @@ When the relation is known to exist:
   of the two items is never used as the start.
 - **End.** When the provider no longer reports the relation, the last time a
   sync saw it. A removed link is noticed when the items it belongs to are
-  synced again.
+  synced again. This end can be too early and is never too late. The blocked
+  hours of earlier days do not change when a link is removed.
 
 Limits of the relation data:
 

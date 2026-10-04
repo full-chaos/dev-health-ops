@@ -906,23 +906,35 @@ scan:trivy:
 
 scan:sbom:
   stage: scan
-  image:
-    # The -debug variant of the same version ships busybox (/busybox/sh is on PATH);
-    # the plain image is FROM scratch and has no shell.
-    name: anchore/syft:v1.42.3-debug
-    entrypoint: [""]
+  # A normal image with a shell, running as root; syft is the pinned release
+  # binary (v1.42.3, sha256 from the release checksums file), run by absolute path.
+  image: python:3.14
   needs: ["security:go-image-build"]
   rules: *code_rules
+  variables:
+    SYFT_VERSION: "1.42.3"
   script:
     - |
       set -eu
+      case "$(uname -m)" in
+        x86_64) arch=amd64; sha=0d6be741479eddd2c8644a288990c04f3df0d609bbc1599a005532a9dff63509 ;;
+        aarch64|arm64) arch=arm64; sha=dc630590c953347789d08f8ebf57c7d8094db89100785fcd94b1cddeac791804 ;;
+        *) echo "unsupported architecture: $(uname -m)" >&2; exit 1 ;;
+      esac
+      tarball="syft_${SYFT_VERSION}_linux_${arch}.tar.gz"
+      curl -sSfL --retry 3 -o "/tmp/${tarball}" \
+        "https://github.com/anchore/syft/releases/download/v${SYFT_VERSION}/${tarball}"
+      echo "${sha}  /tmp/${tarball}" | sha256sum --check --strict
+      mkdir -p /tmp/syft
+      tar -xzf "/tmp/${tarball}" -C /tmp/syft syft
+      test "$(/tmp/syft/syft version | awk '/^Version:/ {print $2}')" = "${SYFT_VERSION}"
       found=0
       mkdir -p sbom
       for tar in images/*.tar; do
         [ -e "${tar}" ] || continue
         found=$((found + 1))
         name="$(basename "${tar}" .tar)"
-        syft scan "docker-archive:${tar}" -o "spdx-json=sbom/go-${name}-sbom.spdx.json"
+        /tmp/syft/syft scan "docker-archive:${tar}" -o "spdx-json=sbom/go-${name}-sbom.spdx.json"
       done
       [ "${found}" -ge 4 ] || { echo "expected 4 image archives, found ${found}: the SBOM did not run on every image" >&2; exit 1; }
   artifacts:

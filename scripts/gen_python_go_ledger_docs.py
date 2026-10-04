@@ -430,11 +430,6 @@ WORKER_FILE_LEDGER: dict[str, dict[str, str]] = {
         "evidence": "imported by sync_units.py — shared credential/cache helpers; system_webhooks.py was also an importer until CHAOS-4105 deleted it, work_graph_tasks.py until CHAOS-3093 deleted it, and reference_discovery.py/team_autoimport.py until CHAOS-4435/CHAOS-5713 deleted their own imports of it",
         "ticket": "n/a",
     },
-    "tasks.py": {
-        "category": "b",
-        "evidence": "Celery task-name aggregator (__all__ re-export of every task); no api/internal reference — dead since CHAOS-4026",
-        "ticket": "CHAOS-4439 (dead worker modules)",
-    },
     "team_autoimport_categories.py": {
         "category": "a",
         "evidence": "imported by post_sync_dispatch.py (live, gates plan.TeamAutoimport) -- the provider populate() modules and their team_autoimport.py executor that used to import it are deleted (CHAOS-4435/CHAOS-5713)",

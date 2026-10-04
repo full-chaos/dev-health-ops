@@ -2,19 +2,24 @@ package operatingreview
 
 import (
 	"encoding/json"
+	"flag"
 	"math"
 	"os"
 	"reflect"
 	"testing"
 	"time"
+
+	"github.com/full-chaos/dev-health-ops/internal/queryapi/graph/model"
 )
 
 // The go-generated golden holds the exact output of the weekly operating review
 // computation for nine neutral, synthetic period-row sets (both periods
 // populated, reversed periods, no deployments, empty periods, current-only,
-// prior-only, identical periods, two AI threshold-boundary sets). The rows are the shape the ten period
-// queries return; the expected review is frozen Go regression data. An
-// intentional metric change updates the affected snapshot under D4662.
+// prior-only, identical periods, two AI threshold-boundary sets). The rows are
+// the shape the ten period queries return; the expected review is frozen Go
+// regression data. A change to a metric, unit, direction, threshold, or
+// no-data rule goes red here. An intentional change re-records the affected
+// snapshot under D4662.
 //
 // CHAOS-8524 changes the unchanged_identical_periods governance snapshot.
 // The former mean of group ratios was (1.0 + 0.7) / 2 = 0.85. The decided
@@ -27,6 +32,8 @@ import (
 // no status, recommendation or key depends on that bit.
 
 const goldenFloatTolerance = 1e-12
+
+var updateOperatingReviewGolden = flag.Bool("update-operating-review-golden", false, "write Go-generated operating review snapshots")
 
 func goldenFloatEqual(a, b float64) bool {
 	if a == b {
@@ -121,6 +128,7 @@ func (g goldenRows) toPeriodRows() periodRows {
 			singleOwnerFileRatio30d: gNullable(r, "single_owner_file_ratio_30d"),
 			codeOwnershipGini:       gNum(r, "code_ownership_gini"), busFactor: gNum(r, "bus_factor"),
 			changeFailureRate: gNullable(r, "change_failure_rate"), mttrHours: gNullable(r, "mttr_hours"),
+			storedRows: uint64(len(g["repo_metrics"])),
 		})
 	}
 	for _, r := range g["hotspots"] {
@@ -132,10 +140,14 @@ func (g goldenRows) toPeriodRows() periodRows {
 	for _, r := range g["deployments"] {
 		p.deployments = append(p.deployments, deploymentsAggRow{
 			deploymentsCount: gNum(r, "deployments_count"), failedDeploymentsCount: gNum(r, "failed_deployments_count"),
+			storedRows: uint64(len(g["deployments"])),
 		})
 	}
 	for _, r := range g["incidents"] {
-		p.incidents = append(p.incidents, incidentsAggRow{incidentsCount: gNum(r, "incidents_count"), mttrP50Hours: gNullable(r, "mttr_p50_hours")})
+		p.incidents = append(p.incidents, incidentsAggRow{
+			incidentsCount: gNum(r, "incidents_count"), mttrP50Hours: gNullable(r, "mttr_p50_hours"),
+			storedRows: uint64(len(g["incidents"])),
+		})
 	}
 	for _, r := range g["investment"] {
 		area, _ := r["investment_area"].(string)
@@ -168,7 +180,47 @@ func normalizeStrings(s []string) []string {
 	return s
 }
 
-func TestOperatingReviewMatchesTheFrozenGolden(t *testing.T) {
+func goldenFromReview(review *model.OperatingReview) goldenReview {
+	out := goldenReview{
+		PriorWeekStart:            review.PriorWeekStart.String(),
+		Recommendations:           normalizeStrings(review.Recommendations),
+		RecommendationsEmptyState: review.RecommendationsEmptyState,
+	}
+	for _, section := range review.Sections {
+		goldenSection := goldenSection{
+			Key:      section.Key,
+			Title:    section.Title,
+			Changed:  normalizeStrings(section.Changed),
+			Improved: normalizeStrings(section.Improved),
+			Worsened: normalizeStrings(section.Worsened),
+		}
+		for _, metric := range section.Metrics {
+			if metric.Delta == nil {
+				panic("operating review metric has no delta")
+			}
+			goldenSection.Metrics = append(goldenSection.Metrics, goldenMetric{
+				Key: metric.Key, Label: metric.Label, Value: metric.Value, Unit: metric.Unit,
+				Delta: goldenDelta{
+					Value: metric.Delta.Value, PriorValue: metric.Delta.PriorValue,
+					Absolute: metric.Delta.Absolute, Percent: metric.Delta.Percent, Status: metric.Delta.Status,
+				},
+			})
+		}
+		out.Sections = append(out.Sections, goldenSection)
+	}
+	return out
+}
+
+func reviewForGolden(t *testing.T, tc goldenCase) *model.OperatingReview {
+	t.Helper()
+	week, err := time.Parse("2006-01-02", tc.WeekStart)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return computeReview(tc.OrgID, tc.TeamID, week, tc.Current.toPeriodRows(), tc.Prior.toPeriodRows())
+}
+
+func TestOperatingReviewMatchesTheGoGeneratedSnapshot(t *testing.T) {
 	raw, err := os.ReadFile("testdata/operating_review_golden.json")
 	if err != nil {
 		t.Fatal(err)
@@ -180,13 +232,22 @@ func TestOperatingReviewMatchesTheFrozenGolden(t *testing.T) {
 	if len(cases) != 9 {
 		t.Fatalf("golden holds %d cases, want 9", len(cases))
 	}
+	if *updateOperatingReviewGolden {
+		for i := range cases {
+			cases[i].Expected = goldenFromReview(reviewForGolden(t, cases[i]))
+		}
+		updated, err := json.Marshal(cases)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile("testdata/operating_review_golden.json", append(updated, '\n'), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		return
+	}
 	for _, tc := range cases {
 		t.Run(tc.Name, func(t *testing.T) {
-			week, err := time.Parse("2006-01-02", tc.WeekStart)
-			if err != nil {
-				t.Fatal(err)
-			}
-			got := computeReview(tc.OrgID, tc.TeamID, week, tc.Current.toPeriodRows(), tc.Prior.toPeriodRows())
+			got := reviewForGolden(t, tc)
 			if got.PriorWeekStart.String() != tc.Expected.PriorWeekStart {
 				t.Errorf("prior week %s, want %s", got.PriorWeekStart.String(), tc.Expected.PriorWeekStart)
 			}

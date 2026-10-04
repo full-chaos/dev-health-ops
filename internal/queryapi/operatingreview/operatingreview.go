@@ -1457,10 +1457,16 @@ func metricScope(m reviewMetric) model.OperatingReviewMetricScope {
 // reducers turn "no value" into 0.0 (as the reference does), so the value
 // alone cannot tell a missing week from a zero one; this is the only place
 // that keeps the difference (CHAOS-8115, Go-only: the reference never served
-// it). It changes no value, delta, status or recommendation.
+// it). A comparison needs both weeks. When either is absent, clear the status
+// claim; buildSection and recommendationsFromSections then omit the derived
+// sentence or recommendation (CHAOS-8525). Numeric wire placeholders remain
+// unchanged and the two flags explain them.
 func (m reviewMetric) dataIn(current, prior periodRows, has func(periodRows) bool) reviewMetric {
 	m.hasData = has(current)
 	m.delta.hasPriorData = has(prior)
+	if !m.hasData || !m.delta.hasPriorData {
+		m.delta.status = ""
+	}
 	return m
 }
 

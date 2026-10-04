@@ -23,7 +23,7 @@ import (
 // CHAOS-8598: the per-team completionDistribution read document that MCP run_operation serves by digest.
 
 // The digest is pinned as a literal: a change to the text changes the digest acr vendors, and the routing row a deploy seeds is keyed on it.
-const capacityCompletionDistributionPinnedDigest = "35c0db3c5676f0f1d6a267c8c3a622d36e300a70dc54a03f2990a2bf71c64af5"
+const capacityCompletionDistributionPinnedDigest = "52cfd38c3f8346aec89fe807abda5a72fa24596a0fad9f302ca6121510b302e9"
 
 func loadCapacityCompletionDistribution(t *testing.T) *ast.OperationDefinition {
 	t.Helper()
@@ -112,22 +112,52 @@ func TestCapacityCompletionDistributionDocument_SelectsExactlyTheDistribution(t 
 	}
 }
 
-func TestCapacityCompletionDistributionDocument_DefaultsAreHistory90Simulations10000(t *testing.T) {
+// The document carries no defaults of its own: the input is one required variable and the SDL input type supplies historyDays 90 and simulations 10000.
+func TestCapacityCompletionDistributionDocument_InputIsOneVariableWithSDLDefaults(t *testing.T) {
 	op := loadCapacityCompletionDistribution(t)
-	defaults := map[string]string{}
 	for _, v := range op.VariableDefinitions {
 		if v.DefaultValue != nil {
-			defaults[v.Variable] = v.DefaultValue.String()
-		}
-		if v.Variable == "teamId" && (v.DefaultValue != nil || !v.Type.NonNull) {
-			t.Errorf("teamId must be a required client value, got default %v nonNull %v", v.DefaultValue, v.Type.NonNull)
+			t.Errorf("variable %s carries a default %v: defaults belong to the SDL input type", v.Variable, v.DefaultValue)
 		}
 	}
-	if defaults["historyDays"] != "90" || defaults["simulations"] != "10000" || len(defaults) != 2 {
-		t.Fatalf("defaults %v, want historyDays 90 and simulations 10000 only", defaults)
+	if len(op.VariableDefinitions) != 2 || op.VariableDefinitions[1].Variable != "input" ||
+		op.VariableDefinitions[1].Type.String() != "CapacityForecastInput" {
+		t.Fatalf("variables %v, want $orgId and $input: CapacityForecastInput", op.VariableDefinitions)
+	}
+	root := op.SelectionSet[0].(*ast.Field)
+	for _, arg := range root.Arguments {
+		if arg.Value.Kind != ast.Variable {
+			t.Errorf("root argument %s is %v, want a bare variable (acr refuses a variable nested in a literal)", arg.Name, arg.Value.Kind)
+		}
+	}
+	input := graph.NewExecutableSchema(graph.Config{}).Schema().Types["CapacityForecastInput"]
+	defaults := map[string]string{}
+	for _, f := range input.Fields {
+		if f.DefaultValue != nil && f.DefaultValue.String() != "null" {
+			defaults[f.Name] = f.DefaultValue.String()
+		}
+	}
+	if len(defaults) != 2 || defaults["historyDays"] != "90" || defaults["simulations"] != "10000" {
+		t.Fatalf("SDL input defaults %v, want historyDays 90 and simulations 10000 only", defaults)
 	}
 	if mcpMaxSimulations != 10000 {
 		t.Fatalf("the default simulations (10000) must not exceed mcpMaxSimulations (%d)", mcpMaxSimulations)
+	}
+}
+
+// The simulations bound holds for a value inside $input.
+func TestCapacityCompletionDistributionDocument_SimulationsBoundHoldsInsideInput(t *testing.T) {
+	schema := graph.NewExecutableSchema(graph.Config{}).Schema()
+	op := loadCapacityCompletionDistribution(t)
+	for _, tc := range []struct {
+		sims       int
+		wantStatus int
+	}{{10001, http.StatusBadRequest}, {10000, 0}} {
+		vars := map[string]any{"orgId": "org-7", "input": map[string]any{"teamId": "team-a", "simulations": tc.sims}}
+		status, reason := mcpCheckRequestInputs(schema, op, nil, vars, vars, "org-7")
+		if status != tc.wantStatus || (tc.wantStatus != 0 && reason != mcpReasonInputLimit) {
+			t.Errorf("simulations %d inside $input: status %d reason %q, want %d", tc.sims, status, reason, tc.wantStatus)
+		}
 	}
 }
 
@@ -180,7 +210,7 @@ func TestCapacityCompletionDistributionDocument_ServesTheCapacityForecastShapePe
 
 	body, _ := json.Marshal(map[string]any{
 		"query":     registeredCapacityCompletionDistributionDocument,
-		"variables": map[string]any{"orgId": "org-7", "teamId": "team-a"},
+		"variables": map[string]any{"orgId": "org-7", "input": map[string]any{"teamId": "team-a"}},
 	})
 	req := httptest.NewRequest(http.MethodPost, "/query", strings.NewReader(string(body)))
 	req.Header.Set("Content-Type", "application/json")

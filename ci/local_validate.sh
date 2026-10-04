@@ -9,18 +9,18 @@
 #   NO live-ClickHouse execution proof (clickhouse-marked tests are opt-in / skipped).
 #   This gate closes BOTH gaps.
 #
-# WHAT IT DOES (mirrors the PR-time CI gates of PR #1018, in order):
-#   0. preflight also installs requirements-docs.txt into .venv (mirrors the
-#      `pip install -r requirements-docs.txt` step in test.yml's test-matrix
-#      and coverage jobs) so tests/docs/*.py's `mkdocs build --strict` shells
-#      don't false-fail with "No module named mkdocs" in a freshly `uv sync`'d
-#      worktree venv, which never pulls that requirements file in on its own.
-#   1. ruff format --check .         (== lint.yml)
-#   2. ruff check .                  (== lint.yml)
-#   3. mypy --install-types ... .    (== typecheck.yml)
+# WHAT IT DOES (a LOCAL gate; hosted CI no longer runs ruff, mypy or the Python
+# test matrix: it runs the Go gates, the tooling and docs tests and the kept list
+# ci/kept_python_tests.txt):
+#   0. preflight also installs requirements-docs.txt into .venv so
+#      tests/docs/*.py's `mkdocs build --strict` shells don't false-fail with
+#      "No module named mkdocs" in a freshly `uv sync`'d worktree venv.
+#   1. ruff format --check .
+#   2. ruff check .
+#   3. mypy --install-types ... .
 #   4. the fast Go gate (format, vet, test; race remains in the dedicated Go CI)
-#   5. the FULL unit tier, byte-for-byte as ci/run_tests.sh unit_tests() runs it
-#      (== test.yml test-matrix), with the local socks5h proxy neutralized.
+#   5. the FULL Python unit tier, as ci/run_tests.sh unit_tests() runs it, with
+#      the local socks5h proxy neutralized.
 #   6. an ISOLATED live-ClickHouse stage that the CI unit/ci tiers never run:
 #      apply the schema to a SCRATCH db, run the clickhouse-marked attribution
 #      tests, AND execute the new argMax query against a real engine. The scratch
@@ -1004,20 +1004,8 @@ gate_river_compat_static() { bash "${ROOT}/ci/check_river_compat_static.sh"; }
 gate_unit_suite() {
   local nw="${PYTEST_XDIST_WORKERS:-4}"
   local extra=()
-  if [ "${CH_READY:-0}" != "1" ]; then
-    # A few NON-marked API tests (tests/api/admin/test_org_deletion.py) call
-    # get_clickhouse_uri() and need a reachable, schema-applied ClickHouse: CI
-    # provides one; ch_provision() points CLICKHOUSE_URI at the scratch db. With
-    # no scratch CH (no docker / SKIP_CLICKHOUSE), they connect to the no-password
-    # localhost:8123/default that a locked dev container rejects (auth 194) — a
-    # false red. Deselect ONLY that module so every pure-Python guard in the FULL
-    # suite still runs. CI validates it.
-    extra+=(--ignore=tests/api/admin/test_org_deletion.py)
-    skip "unit: tests/api/admin/test_org_deletion.py" "needs scratch ClickHouse — CI validates it"
-  fi
   # When CH_READY=1, ch_provision exported CLICKHOUSE_URI=<scratch>; it is
-  # inherited here (PROXY_OFF only unsets proxy vars), so org_deletion connects to
-  # the empty scratch db (org-scoped counts -> 0) exactly like CI.
+  # inherited here (PROXY_OFF only unsets proxy vars).
   OTEL_ENABLED=false PYTHONPATH=src \
     "${PROXY_OFF[@]}" "${PYBIN}" -m pytest tests \
     -m "not benchmark and not clickhouse" \

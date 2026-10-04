@@ -1,0 +1,18 @@
+query CapacityCompletionDistribution($orgId: String!, $input: CapacityForecastInput) {
+  capacityForecast(orgId: $orgId, input: $input) {
+    completionDistribution {
+      days {
+        value
+        count
+        __typename
+      }
+      items {
+        value
+        count
+        __typename
+      }
+      __typename
+    }
+    __typename
+  }
+}

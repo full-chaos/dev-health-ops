@@ -28,7 +28,6 @@ drift apart while every row here keeps passing.
 
 from __future__ import annotations
 
-import importlib.util
 import re
 import subprocess
 from pathlib import Path

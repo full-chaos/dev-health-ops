@@ -1,6 +1,6 @@
 ---
 page_id: con-platform
-summary: Current route, provider, execution, storage, and deployment responsibilities across the Python platform and additive Go worker foundations.
+summary: Current route, provider, execution, storage, and deployment responsibilities across the Go api, query plane and workers and the Python provider, metrics and sink code.
 content_type: architecture
 owner: engineering
 source_of_truth:
@@ -16,14 +16,14 @@ lifecycle: active
 
 # Platform architecture
 
-Dev Health has a Python product and data platform with additive Go worker foundations. The coexistence boundary is deliberate: Python still owns the API, GraphQL, providers, processors, and domain behavior it serves. The Go worker fleet owns every production job route and schedule; no Celery process exists in any shipped topology (CHAOS-4026, CHAOS-7059). Go components provide versioned job contracts, River execution, health, operator controls, and migration evidence.
+Dev Health has a Go api, query plane and worker fleet, and a Python data platform. The boundary is deliberate: Go owns the API (`dho api`) and GraphQL (`dho query-api`), and Python owns providers, processors, and the domain behavior they serve. The Go worker fleet owns every production job route and schedule; no Celery process exists in any shipped topology (CHAOS-4026, CHAOS-7059). Go components provide versioned job contracts, River execution, health, operator controls, and migration evidence.
 {: .fc-page-lede }
 
 ## Primary request and data paths
 
 ```text
 web route
-  → FastAPI / GraphQL
+  → Go api (REST) / query-api (GraphQL)
   → service or query layer
   → PostgreSQL semantic state or ClickHouse analytics
 
@@ -49,6 +49,8 @@ versioned job contract + checked-in route
 The checked-in sync-dispatch routes target River and declare no rollback transport (`rollback_route: none`). Deployment requires live Go consumers and an audited route apply; changing configuration alone does not activate a database route.
 
 ## Ask Dev and Context Fabric runtime
+
+> **Note:** The Go api does not serve the Ask Dev (`/api/v1/dev`) surface. This section is a record of the Python surface that was removed.
 
 Ask Dev remains part of the existing Python application and API. It is not a browser-side agent, a new generic agent service, or an MCP-driven web chatbot. The authoritative Ask Dev runtime path is:
 
@@ -116,7 +118,7 @@ compatible agent client
 ## Ownership boundaries
 
 - **dev-health-web** owns product routes, navigation, UI state, charts, browser interactions, Ask Dev window/workspace composition, and client-side GraphQL behavior.
-- **FastAPI and GraphQL** own public request authentication, authorization, schema, and response contracts.
+- **The Go api and query-api** own public request authentication, authorization, schema, and response contracts.
 - **Ask Dev orchestration in dev-health-ops** owns server intent interpretation, subject preflight, investigation planning, deterministic source execution, canonical answer frames, optional narrative, and safe outcomes.
 - **dev-health-acr** owns hosted context-packet assembly, authorized evidence expansion, ACR credentials, and the local MCP adapter.
 - **Services** own business orchestration and domain decisions.

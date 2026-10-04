@@ -18,7 +18,7 @@ lifecycle: active
 Companion to [`python-go-live-path-ledger.md`](reference/runtime/python-go-live-path-ledger.md) (narrative +
 mermaid diagrams) and [`contracts/provider-matrix/v1/README.md`](https://github.com/full-chaos/dev-health-ops/blob/main/contracts/provider-matrix/v1/README.md)
 (the frozen provider x dataset parity contract, CUT-08). This page's top-level sections mirror the operator's
-own mental model -- the CLI areas `dev-hops`/`dho workers` expose -- with the generated,
+own mental model -- the CLI areas `dho` and `dho workers` expose -- with the generated,
 drift-gated tables nested under them (chris, 2026-09-04). Every generated table's Executor column answers
 "who runs this today":
 
@@ -50,7 +50,7 @@ registration wiring, so no curated Python dict or hand-set JSON field can silent
 worker actually executes. INVESTMENT/WORK-GRAPH's table is entirely hand-curated (no registry file exists
 for those 5 kinds; see [Known gaps](#known-gaps-not-fixed-in-this-pr)). Every CLI-verb sub-table under SYNC/
 METRICS/RECOMMENDATIONS/WEBHOOKS/STREAMS/SCHEDULER-RECONCILER-OPERATOR is hand-curated prose (read against
-both CLI trees -- Python `dev_health_ops.cli` and Go `internal/workersctl`/`dho stream-runner` --
+the Go CLI trees -- `internal/workersctl` and `dho stream-runner` --
 at the pinned sha below), because no JSON registry maps a CLI verb to a River kind or Python entrypoint.
 
 Regenerate the generated tables after any change to a source-of-truth file:
@@ -70,17 +70,16 @@ with its producer, or a family/dataset gains or loses a row without the doc bein
 hand-curated citation/CLI-verb row on this page was read against. The generated tables always reflect
 whatever their producer files say at build time, independent of this date.
 
-**This stamp is now enforced.** `ci/check_migration_matrix.sh freshness` runs on EVERY pull request --
-unconditionally, before any relevance decision, because a page rots when nobody touches it and no path
-filter can fire on an absence. Until 2026-09-09 nothing read this line at all: it had been sitting at a
-2026-09-04 commit through roughly forty merges while the page read as current.
+**This page is a record of the finished api migration (CHAOS-8620).** No age budget applies to its stamps; a
+refresh is done by hand with a live stack, never by CI. `ci/check_migration_matrix.sh stamp` still runs on every
+pull request and checks only that the stamps are real commits (shape and ancestry), not how old they are.
 
-The gate checks **two** shas, for the two halves of the page:
+The check covers **two** shas, for the two halves of the page:
 
 | Sha | Whose claim | Checked for |
 |---|---|---|
-| **Last verified** (this line) | a human's, about the hand-curated citation and CLI-verb rows | 40-hex, ancestor of `HEAD`, age <= `MATRIX_MAX_AGE_DAYS` (default 7) |
-| `ops_sha` in [`last-render.json`](https://github.com/full-chaos/dev-health-ops/blob/main/contracts/migration-status/v1/last-render.json) | the tool's, about the generated cells | same three, and it is written by `-render` itself, so it cannot be typed by hand |
+| **Last verified** (this line) | a human's, about the hand-curated citation and CLI-verb rows | 40-hex, ancestor of `HEAD` |
+| `ops_sha` in [`last-render.json`](https://github.com/full-chaos/dev-health-ops/blob/main/contracts/migration-status/v1/last-render.json) | the tool's, about the generated cells | same two, and it is written by `-render` itself, so it cannot be typed by hand |
 
 `ops_sha` is the **merge-base with main** at render time -- the last main commit the render observed -- not
 the commit `-render` ran on. That distinction is load-bearing: a squash merge replaces a branch's commits
@@ -90,8 +89,7 @@ it was fixed. The merge-base survives the squash and still bounds staleness, bec
 long-stale branch carries a correspondingly old merge-base. The commit `-render` actually ran on is recorded
 beside it as `render_commit`, for the audit trail, and is deliberately never ancestry-checked.
 
-Re-verifying the generated half is one command plus a commit, and every staleness failure prints it verbatim
-along with the age in days:
+Re-verifying the generated half is by hand, needs a live Postgres and a fleet file, and is optional:
 
 ```bash
 go run ./cmd/dev-health-migration-matrix -render -root .
@@ -208,7 +206,7 @@ exactly one such tuple and is never carried forward across any of the four chang
 
 `Live at current pin` compares each row's `schema_digest` against
 `contracts/graphql/v1/schema-digest.json`. A row at any other digest is **DEAD**: the router's lookup misses,
-`PostgresSwitch.Enabled` returns false, and every request silently falls back to Python. That is not
+`PostgresSwitch.Enabled` returns false, and the operation is held dark: the row decides it, so it is not served. That is not
 hypothetical -- PR #2065 moved the digest on 2026-09-01 hours after twelve `canary` rows were seeded at the
 old value, and the twelve dead rows below are those rows, still sitting in the table six days later. They are
 rendered rather than filtered out precisely because filtering them is how they went unnoticed.
@@ -220,7 +218,7 @@ The table above is a point-in-time render; it does not page anyone. `query-api` 
 gauges, `devhealth_query_api_routing_rows_for_digest` (rows keyed to the digest this process actually
 computed) and `devhealth_query_api_routing_rows_total` (rows across every digest, alive or dead) --
 `for_digest == 0 AND total > 0` is the DEAD-fleet condition above, distinguishable on a dashboard from the
-legitimate `total == 0` "nothing enabled yet" default posture. The same check also emits an ERROR-level
+legitimate `total == 0` posture, where no row decides anything and the catalog rule serves every registered operation. The same check also emits an ERROR-level
 structured log record for exactly that condition (`internal/queryapi/server/registry_drift_telemetry.go`), separate
 from the pre-existing plain-text `ROUTING ROWS STALE` line, which carries no level at all and only reaches
 someone tailing logs at the moment it is written.
@@ -244,9 +242,9 @@ is required before stage 4/5, and "a bare 200 does not qualify".
 <!-- BEGIN GENERATED GO API OPERATIONS -->
 _Rendered 2026-09-28T10:08:59Z against main merge-base `f03f57d51c957ad7601fd2154089e152f8cf30d2`; SDL digest pin `sha256:17ee55f4bbc25e2457d30871714eb8221028eec1f4c22b0a2a3d23187e2f5ebc`; fleet read 2026-09-28T10:08:59Z via fleet file fleet-prod-2026-09-28.json._
 
-_Rows in `go_api_proof_run` at read time: **16991**. Operations reachable to real clients with no deployed-executed proof: **50**. Rows whose mode says Go but whose schema digest no longer matches the pin, so every request silently falls back to Python: **88**._
+_Rows in `go_api_proof_run` at read time: **16991**. Operations reachable to real clients with no deployed-executed proof: **50**. Rows whose mode says Go but whose schema digest no longer matches the pin, so the row cannot be matched and its operation is held dark, not served: **88**._
 
-_Live rows the edge cannot dispatch -- serving a document the operation catalog does not name (DOCUMENT_DRIFT, as `dev-hops go-api routing status` reports it): **0**; for an operation the catalog does not register (UNREGISTERED, as `dev-hops go-api routing status` reports it): **0**. Live rows with no recorded document digest, read before the reader carried it, so neither can be judged for them: **0**._
+_Live rows the edge cannot dispatch -- serving a document the operation catalog does not name (DOCUMENT_DRIFT, as `dho goapi routing status` reports it): **0**; for an operation the catalog does not register (UNREGISTERED, as `dho goapi routing status` reports it): **0**. Live rows with no recorded document digest, read before the reader carried it, so neither can be judged for them: **0**._
 
 | Operation | Mode | Schema digest | Candidate build | Live at current pin | Proven (derived) | Parity ticket |
 | --- | --- | --- | --- | --- | --- | --- |
@@ -400,7 +398,7 @@ _Live rows the edge cannot dispatch -- serving a document the operation catalog 
 
 Every `/api/v1/*` route the Python api declared, read from the frozen route list
 `contracts/migration-status/v1/python-rest-routes.json` (parsed from `src/dev_health_ops/api/main.py`'s FastAPI
-decorators by `internal/migrationmatrix.LoadFastAPIRoutes` at the commit recorded in that file; the Python source is being deleted) and cross-referenced against every `/api/v1/*`
+decorators by `internal/migrationmatrix.LoadFastAPIRoutes` at the commit recorded in that file; the Python source was deleted with the Python api) and cross-referenced against every `/api/v1/*`
 path query-api's own mux registers (`internal/migrationmatrix.LoadQueryAPIMuxRoutes`, read straight from
 `internal/queryapi/server`'s Go source -- query-api has no separate REST route registry the way it has an operation
 catalog for GraphQL). `ported` means the path is registered on query-api's mux; `python-only` is the
@@ -459,7 +457,7 @@ tooling and Python trigger shells over the same native path:
 
 | CLI verb/area | Executor | Writer call site | Ticket |
 |---|---|---|---|
-| `dev-hops sync` (git/prs/blame/cicd/deployments/incidents/teams/work-items) | NATIVE (worker-side; Python CLI verbs are operator-trigger shells over the same Go sync-dispatch path, `sync_processor.register_commands`) | `internal/providersync/*` -- see the generated table below, all NATIVE (jira team/project/membership catalog collection moved to `JiraTeamCatalogCollector` last) | -- |
+| `dho sync` (git/prs/blame/cicd/deployments/incidents/security/tests/teams) | NATIVE (worker-side; the CLI verbs run the same Go provider routes in-process, `internal/synccli`; `work-items` has no verb) | `internal/providersync/*` -- see the generated table below, all NATIVE (jira team/project/membership catalog collection moved to `JiraTeamCatalogCollector` last) | -- |
 | `dho workers providersync retire-linear-pseudo-projects` / `retire-stale-linear-project-ownership` | NATIVE | `internal/workersctl/main.go:1423-1602` | -- |
 | `dho workers sync-dispatch-outbox close-backlog` | NATIVE | `internal/workersctl/main.go:1605-1665` | -- |
 
@@ -573,7 +571,7 @@ which had been unreachable dead code (never wired into `cli.py`'s argparse tree)
 | `dho workers metrics partition-recompute` | PARTIAL | `internal/jobs/metrics/daily/partition_recompute.go` -- Go-native REDRIVE only (bumps `daily_metrics_runs.generation`, republishes the partition claim); the recompute itself is the ordinary all-native partition handler re-running every family for the reset days (no Python on this path), not a compute engine on its own. `--family` (repo_user_commit only) scopes audit intent, not blast radius: every family in the partition is recomputed; the daily-family output tables are ReplacingMergeTree since migration 096 and Go readers dedup, while `compounding_risk_daily` is append-only MergeTree with reader-side argMax, so a recompute appends duplicate physical rows there by design. Known gaps: days whose run generation was replaced by finalize-redrive are excluded from eligibility | CHAOS-4459 |
 | `dho workers metrics daily-redrive` / `daily-finalize` / `finalize-redrive` | NATIVE (ledger repair) -> replays the ordinary all-native handler | `internal/workersctl/main.go:821-953,1164-1420` (`dispatchMetrics`'s inline `daily-redrive` case, `dispatchMetricsDailyFinalize`, `finalizeLedgerRepairGate`, `dispatchMetricsFinalizeRedrive`) | CHAOS-4358/4389/4405 |
 | `dev-hops metrics complexity` / `dora` / `capacity` | DELETED (spec S2) | The wrappers only exec'd `dho workers metrics remaining trigger-backstop --family <name> --reason <code> --correlation-id <id>`; run that verb directly. | -- |
-| `dev-hops metrics validate-flags` | **N/A -- confirmed still a read-only diagnostic**, no ClickHouse write, no worker path | `job_ff_validation.py` `_cmd_validate_flags` -> `run_validate_flags` (prints a report only) | -- |
+| `dho metrics validate-flags` | **N/A -- confirmed still a read-only diagnostic**, no ClickHouse write, no worker path | `internal/metricscli/validateflags.go` (prints a report only) | -- |
 | `dev-hops metrics compounding-risk` | DELETED (CHAOS-5308) -- was a standalone CLI backfill wrapper, duplicate coverage of `job_daily.py`'s finalize (which already writes `compounding_risk_daily` nightly regardless); `job_compounding_risk.py` deleted whole, along with its orchestrator (`build_compounding_risk_rows_for_day`, `compounding_risk.py`) -- no remaining Python producer of this family at any scope | -- | CHAOS-4287/CHAOS-5308 |
 | `dho workers metrics remaining start` | NATIVE (manual backfill trigger) | `internal/workersctl/main.go:1829-1977` (`dispatchMetricsRemaining`'s `start` case) -- help text is stale, only lists complexity/dora/release_impact (doesn't mention membership_backfill/recommendations/work_item_attribution, which also exist) | CHAOS-4254 |
 | membership_backfill / cognitive load / benchmarking | no dedicated Python CLI verb found | see the two tables below | -- |
@@ -657,7 +655,7 @@ deleted, the frozen file and this one test survive.
 | Area | Executor | Writer call site | Ticket |
 |---|---|---|---|
 | ai_governance / ai_impact / ai_workflow | NATIVE | see METRICS' daily-families table above (all three now native; this hand-authored row is not generator-checked and had drifted stale for all three, not just the family this row's own PR ported -- caught by codex round chaos-5220-r1) | CHAOS-4285/4280/4286 |
-| **ai attribution** | **NATIVE** | WRITE path: NATIVE for github (`internal/providersync/github_work_items_ai_attribution_effects_clickhouse.go`, part of native work-items sync) and gitlab/linear (`internal/providersync/gitlab_work_item_derived.go:286-293,570-581`, `internal/providersync/linear_work_items_derived.go:52,286` -- both build/write the `ai_attribution` projection as part of native work-items sync); jira explicitly writes **zero** rows by design ("evaluated-empty effect", `internal/providersync/jira_work_item_derived.go:14-20` -- no AI-attribution signal exists for jira, not a gap). READ: `src/dev_health_ops/api/graphql/resolvers/ai.py:1395` (`AIImpactClickHouseLoader.load_ai_pr_attributions`) is the query-api plane (Go query-api epic CHAOS-4352), out of CHAOS-3092 scope -- CHAOS-3092 is about worker compute families and the bridge, not the API read plane. | none found |
+| **ai attribution** | **NATIVE** | WRITE path: NATIVE for github (`internal/providersync/github_work_items_ai_attribution_effects_clickhouse.go`, part of native work-items sync) and gitlab/linear (`internal/providersync/gitlab_work_item_derived.go:286-293,570-581`, `internal/providersync/linear_work_items_derived.go:52,286` -- both build/write the `ai_attribution` projection as part of native work-items sync); jira explicitly writes **zero** rows by design ("evaluated-empty effect", `internal/providersync/jira_work_item_derived.go:14-20` -- no AI-attribution signal exists for jira, not a gap). READ: `internal/queryapi/aianalytics` (which replaced the Python `AIImpactClickHouseLoader`) is the query-api plane (Go query-api epic CHAOS-4352), out of CHAOS-3092 scope -- CHAOS-3092 is about worker compute families and the bridge, not the API read plane. | none found |
 
 ## INVESTMENT / WORK-GRAPH
 
@@ -724,17 +722,18 @@ All NATIVE, no Python involvement found in any of the three:
 | `dev-health-reconciler` | NATIVE | `internal/reconcilerservice/` -- relays outbox into `river_job` |
 | `dho workers` (operator CLI: status/jobs/queues/routes/job-routes/contracts) | NATIVE | pure Go, no Python calls found in this CLI's own dispatch tree |
 
-## Out of migration scope (Python by design)
+## CLI areas outside the worker migration
 
-Chris, 2026-09-04 05:54: these `dev-hops` CLI areas are **not part of the Go worker migration** -- separate
-Python functions, untouched by design, no further tracing needed:
+Chris, 2026-09-04 05:54: these `dev-hops` CLI areas were **not part of the Go worker migration**. The Python
+CLI was deleted afterwards, and each area is now:
 
-- `dev-hops audit *` (completeness/schema/perf/coverage subcommands) -- likely out of date
+- `dev-hops audit *` (completeness/schema/perf/coverage subcommands) -- dropped, no `dho` verb
 - `dev-hops maintenance *` (cleanup-tokens/cleanup-all/scrub-error-text/backfill-ask-dev-ephemeral-expiry) --
-  likely out of date
-- `dev-hops push` (customer-push external ingestion, CHAOS-2700)
-- `dev-hops billing` / `service-credentials` / `admin` / `migrate`
-- `dev-hops workers inspect` -- candidate for deprecation
+  `dho maintenance`
+- `dev-hops push` (customer-push external ingestion, CHAOS-2700) -- `dho push`
+- `dev-hops billing` / `service-credentials` / `admin` / `migrate` -- `dho billing`, `dho service-credentials`,
+  `dho admin`, `dho migrate`
+- `dev-hops workers inspect` -- `dho workers` (partial)
 
 ## Known gaps (not fixed in this PR)
 

@@ -21,6 +21,7 @@ cmd/gqlgen-guard	69
 cmd/registrydump	1
 contracts/graphql/v1	1
 contracts/jobs/v1	1
+contracts/sync-dispatch/v1	1
 deploy/helm/dev-health	27
 internal/admincli	1
 internal/adminops	19

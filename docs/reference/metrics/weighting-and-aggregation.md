@@ -4,8 +4,8 @@ summary: Exact Investment contribution, aggregation, and displayed-share contrac
 content_type: reference
 owner: product-analytics
 source_of_truth:
-  - src/dev_health_ops/api/queries/investment.py
-  - src/dev_health_ops/api/services/investment.py
+  - internal/queryapi/investment/reader.go
+  - internal/queryapi/investment/response.go
   - src/components/work/investment/charts/InvestmentMixSection.tsx
 applicability: current
 lifecycle: active
@@ -52,6 +52,6 @@ Theme and subcategory keys come from the [canonical Investment taxonomy](../taxo
 
 ## Implementation sources
 
-- `src/dev_health_ops/api/queries/investment.py::fetch_investment_breakdown`
-- `src/dev_health_ops/api/services/investment.py::build_investment_response`
+- `internal/queryapi/investment/reader.go`
+- `internal/queryapi/investment/response.go::BuildResponse`
 - `src/components/work/investment/charts/InvestmentMixSection.tsx`

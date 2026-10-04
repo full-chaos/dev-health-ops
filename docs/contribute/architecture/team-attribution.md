@@ -639,6 +639,8 @@ One path: `run_team_autoimport` → `team_autoimport_<provider>.populate()` → 
 > populate()` or bypass it entirely — status as of CHAOS-4431's base branch (`team-catalog-native-dispatch`,
 > stacked PRs #1989/#1984/#1985, NOT YET MERGED — main is under deploy-freeze).**
 >
+> The first two rows name `src/dev_health_ops/api/internal/worker_sync.py`, which was removed with the Python api.
+>
 > | Producer | Chain | Honours the 3 flags? | Providers |
 > |---|---|---|---|
 > | Go post-sync River job → HTTP bridge → Python `populate()` | `internal/syncdispatchruntime/worker.go:93` (`RegisterTeamAutoimportWorker`, the one bounded-registry River kind this runtime hosts) → `internal/syncdispatchruntime/bridge.go:113` (`POST /api/internal/worker-sync/team-autoimport`) → `src/dev_health_ops/api/internal/worker_sync.py:269-278` (`team_autoimport_reference`) → `workers/team_autoimport.py:228` (`run_post_sync_team_autoimport`) → `team_autoimport_<provider>.populate()` (file:line above) | **Yes** — reads `sync_options`' three independent booleans | jira always; github/gitlab/linear only when their native collector degrades (resolver/collector error, or no registered native collector) — see `teamCatalogAutoimportBridge` below |
@@ -2067,8 +2069,8 @@ native family construction is attempted if the ClickHouse connection fails
 to open, so a construction-time fallback to Python was never actually
 reachable in production.
 
-**Fixtures finding (CHAOS-4365 item 3):** `dev-hops fixtures generate
---with-metrics` never called `run_daily_metrics_finalize` before this
+**Fixtures finding (CHAOS-4365 item 3):** the Python fixtures generator
+(`fixtures/runner.py`, run with `--with-metrics`) never called `run_daily_metrics_finalize` before this
 change — it only ran `run_daily_metrics_job`'s own older, narrower inline
 finalize block (IC metrics/landscape only). Every `--with-metrics` fixtures
 run therefore produced REPO-scope rows only for `compounding_risk_daily`,
@@ -2102,7 +2104,6 @@ only the two doc references were fixed here; the rest are reported for a follow-
 **Still stale — code comments, out of scope for a docs-only change:**
 - `src/dev_health_ops/metrics/compute_work_items.py:135` (on `_SOURCE_ORDER`) and `:154` (on
   `_DONOR_SOURCES`) — two citations in this one file, not one.
-- `src/dev_health_ops/api/queries/investment.py:267` (on `PRIMARY_WORK_ITEM_TEAM_ATTRIBUTION_SOURCE`).
 - `src/dev_health_ops/external_ingest/sinks.py:514`.
 
 **Planning records — now honoured, not just flagged:**

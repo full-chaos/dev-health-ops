@@ -34,12 +34,17 @@ case "$mode" in
   *[4-7]) ;;
   *) echo "CH_API_USER_FILE_FAIL: $FILE is mode $mode, not world-readable: clickhouse-server (uid 101) cannot read a mounted 0600 file and exits; the file holds only a password hash, chmod 644" >&2; exit 1 ;;
 esac
-tmp_root=${TMPDIR:-}
-tmp_root=${tmp_root%/}
+# Scratch rule: TMPDIR must resolve (symlinks and `..` followed) to a directory that is NOT /tmp, /var/tmp or under them, is
+# owned by the caller and is mode 0700. The scratch dir below is made only with `mktemp -p` on that resolved path.
+tmp_root=""
+[ -n "${TMPDIR:-}" ] && tmp_root=$(cd -P -- "$TMPDIR" 2>/dev/null && pwd -P)
+[ -z "$tmp_root" ] || tmp_root=/${tmp_root#"${tmp_root%%[!/]*}"}   # pwd -P keeps a leading "//" ("//tmp/x"): collapse it to one slash
 case "$tmp_root" in
-  ""|/tmp|/var/tmp) echo "CH_API_USER_FILE_FAIL: TMPDIR must name a private scratch directory (not unset, not /tmp, not /var/tmp): the scratch files of this check must stay off /tmp" >&2; exit 1 ;;
+  ""|/|/tmp|/tmp/*|/var/tmp|/var/tmp/*) echo "CH_API_USER_FILE_FAIL: TMPDIR must name an existing private scratch directory that resolves outside /tmp and /var/tmp (got: ${tmp_root:-unset or not a directory}): the scratch files of this check must stay off /tmp" >&2; exit 1 ;;
 esac
-[ -d "$tmp_root" ] || { echo "CH_API_USER_FILE_FAIL: TMPDIR $tmp_root is not a directory" >&2; exit 1; }
+if [ "$(stat -c '%a %u' "$tmp_root")" != "700 $(id -u)" ]; then
+  echo "CH_API_USER_FILE_FAIL: TMPDIR $tmp_root must be mode 0700 and owned by the caller" >&2; exit 1
+fi
 HERE=$(cd "$(dirname "$0")" && pwd)
 POSTURE=${DHO_API_CH_POSTURE_GO:-$HERE/../../internal/storage/clickhouse/authorization.go}
 [ -f "$POSTURE" ] || { echo "CH_API_USER_FILE_FAIL: the posture manifest $POSTURE is not a file, so the canonical render cannot be computed (DHO_API_CH_POSTURE_GO)" >&2; exit 1; }

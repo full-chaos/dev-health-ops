@@ -150,11 +150,16 @@
   },
   {
     "operation": "home",
-    "digest": "c02bb493d709b8c445e2ac711bdf93d6a2cdb7933d1073a20bf7dad3ffd06545"
+    "digest": "cff105a9f8c5d5f2363f3d50510db34081c84c9c652afe380975b49c15a4c6eb"
   },
   {
     "operation": "home",
     "digest": "9776798e809030868e3a7fc8643b06d122573f03a3c48a7710d86b1842b33554",
+    "legacy": true
+  },
+  {
+    "operation": "home",
+    "digest": "c02bb493d709b8c445e2ac711bdf93d6a2cdb7933d1073a20bf7dad3ffd06545",
     "legacy": true
   },
   {

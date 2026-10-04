@@ -10,6 +10,8 @@ import (
 	"time"
 
 	"github.com/jackc/pgx/v5/pgxpool"
+
+	"github.com/full-chaos/dev-health-ops/internal/mcpclass"
 )
 
 const verbsRunningBuild = "ffd9e5d5dc8ee21de5befa1bae47ba9195be135e"
@@ -78,49 +80,79 @@ func enableRequest(operations ...string) EnableRequest {
 	}
 }
 
-// THE GATE. An operation with no deployed_executed/match receipt for THIS
-// build is refused outright: plan section 5 stage 3 requires the exact
-// candidate build to have served it through real ingress, auth,
-// parse/validate, dispatch and a real database.
-func TestEnableRefusesAnOperationWithNoProofForThisBuild(t *testing.T) {
+// THE CATALOG RULE (CHAOS-8586, owner's decision of 2026-10-04). A catalog
+// operation with no receipt for this build and no ledger limit is ADMITTED:
+// query-api serves it when it has no row, so a proof check on the row that
+// lifts a hold guards nothing. The row and its audit row are written, and the
+// row says on itself what admitted it.
+func TestEnableAdmitsACatalogOperationWithNoProofAndNoLedgerLimit(t *testing.T) {
 	ctx := t.Context()
 	pool := startAuditedRegistryPostgres(t)
+	seedRow(t, ctx, "featureFlags", testDocumentDigest, "shadow", testCandidateBuild, pool)
 
-	if _, err := Enable(ctx, pool, enableRequest("featureFlags")); !errors.Is(err, ErrEnableUnproven) {
-		t.Fatalf("Enable = %v, want ErrEnableUnproven", err)
+	request := enableRequest("featureFlags")
+	request.Ledger = ledgerNamingLimits(t, "otherOperation")
+	outcomes, err := Enable(ctx, pool, request)
+	if err != nil {
+		t.Fatalf("Enable = %v, want the catalog operation admitted with no receipt and no ledger limit", err)
 	}
-	var rows int
-	if err := pool.QueryRow(ctx, `SELECT count(*) FROM go_api_routing_state`).Scan(&rows); err != nil {
+	if len(outcomes) != 1 || outcomes[0].Proven || outcomes[0].NamedLimit != "" || !outcomes[0].CatalogRule {
+		t.Fatalf("outcomes = %+v, want one CATALOG-RULE outcome (not proven, no named limit)", outcomes)
+	}
+	if !outcomes[0].HadRowBefore || outcomes[0].ModeBefore != "shadow" {
+		t.Fatalf("before-state = had %t mode %q, want the shadow row the enable lifted", outcomes[0].HadRowBefore, outcomes[0].ModeBefore)
+	}
+	mode, build, evidence, _, rollout := readRow(t, ctx, pool, "featureFlags")
+	if mode != "canary" || build != verbsRunningBuild || rollout != EnforcedRolloutPercentage {
+		t.Fatalf("row = mode %q build %q rollout %d, want canary/%s/%d", mode, build, rollout, verbsRunningBuild, EnforcedRolloutPercentage)
+	}
+	if want := CatalogRuleEvidence(request.ReviewEvidence); evidence != want || HasNamedLimitEvidence(evidence) {
+		t.Fatalf("review_evidence = %q, want %q: the CATALOG-RULE prefix in front of the operator's own words, and never NAMED-LIMIT", evidence, want)
+	}
+	audits := readAuditRows(t, ctx, pool)
+	if len(audits) != 1 || audits[0].action != AuditActionEnable || audits[0].operation != "featureFlags" ||
+		audits[0].modeBefore == nil || *audits[0].modeBefore != "shadow" || audits[0].modeAfter != "canary" {
+		t.Fatalf("audit rows = %+v, want one enable entry shadow -> canary", audits)
+	}
+
+	statuses, err := RoutingStatusRows(ctx, pool, testSchemaDigest, "", map[string]string{"featureFlags": testDocumentDigest})
+	if err != nil {
 		t.Fatal(err)
 	}
-	if rows != 0 {
-		t.Fatalf("a refused enable wrote %d row(s) -- it must write NOTHING", rows)
+	if len(statuses) != 1 || !statuses[0].Reachable() || statuses[0].Proven || statuses[0].NamedLimit {
+		t.Fatalf("status = %+v, want the row reachable and reported neither proven nor named-limit", statuses)
 	}
 }
 
-// A written limit admits only the operation it names: enabling one limited
-// and one unlimited operation together is refused as a whole and writes
-// nothing, and the refusal names only the unlimited one.
-func TestEnableWithALedgerLimitStillRefusesAnUnlimitedOperationAndWritesNothing(t *testing.T) {
+// The ledger limit and the catalog rule admit side by side: one run enables a
+// limited and an unlimited catalog operation, and each row names what admitted
+// it.
+func TestEnableOfALimitedAndAnUnlimitedCatalogOperationMarksEachByWhatAdmittedIt(t *testing.T) {
 	ctx := t.Context()
 	pool := startAuditedRegistryPostgres(t)
 
 	request := enableRequest("featureFlags", "hotspots")
 	request.DocumentDigest["hotspots"] = "1111111111111111111111111111111111111111111111111111111111111111"
 	request.Ledger = ledgerNamingLimits(t, "featureFlags")
-	_, err := Enable(ctx, pool, request)
-	if !errors.Is(err, ErrEnableUnproven) {
-		t.Fatalf("Enable = %v, want ErrEnableUnproven", err)
+	outcomes, err := Enable(ctx, pool, request)
+	if err != nil {
+		t.Fatalf("Enable = %v, want both admitted", err)
 	}
-	if !strings.Contains(err.Error(), "[hotspots]") || strings.Contains(err.Error(), "featureFlags") {
-		t.Fatalf("the refusal must name only the unlimited operation: %v", err)
+	byOperation := map[string]EnableOutcome{}
+	for _, outcome := range outcomes {
+		byOperation[outcome.Operation] = outcome
 	}
-	var rows int
-	if err := pool.QueryRow(ctx, `SELECT count(*) FROM go_api_routing_state`).Scan(&rows); err != nil {
-		t.Fatal(err)
+	if limited := byOperation["featureFlags"]; limited.NamedLimit != testEnableLimitReason || limited.CatalogRule || limited.Proven {
+		t.Fatalf("featureFlags = %+v, want NAMED-LIMIT only", limited)
 	}
-	if rows != 0 {
-		t.Fatalf("a refused enable wrote %d row(s) -- it must write NOTHING", rows)
+	if unlimited := byOperation["hotspots"]; unlimited.NamedLimit != "" || !unlimited.CatalogRule || unlimited.Proven {
+		t.Fatalf("hotspots = %+v, want CATALOG-RULE only", unlimited)
+	}
+	if _, _, evidence, _, _ := readRow(t, ctx, pool, "featureFlags"); !HasNamedLimitEvidence(evidence) {
+		t.Fatalf("featureFlags review_evidence = %q, want the NAMED-LIMIT prefix", evidence)
+	}
+	if _, _, evidence, _, _ := readRow(t, ctx, pool, "hotspots"); evidence != CatalogRuleEvidence(request.ReviewEvidence) {
+		t.Fatalf("hotspots review_evidence = %q, want the CATALOG-RULE prefix", evidence)
 	}
 }
 
@@ -177,7 +209,9 @@ func TestEnableOfAProvenOperationIgnoresItsLedgerLimit(t *testing.T) {
 
 // A receipt for a DIFFERENT build, or in a non-terminal-match state, is
 // not proof. Plan §8.3: a proof is evidence for exactly one 4-column key
-// and is never carried forward across any of the four changing.
+// and is never carried forward across any of the four changing. The catalog
+// rule still admits the operation (CHAOS-8586); the outcome and the row must
+// not claim the receipt proved it.
 func TestEnableRefusesAProofRecordedAgainstAnythingElse(t *testing.T) {
 	cases := map[string]struct{ build, stage, terminalState string }{
 		"an older candidate build": {testCandidateBuild, EnablementProofStage, EnablementProofTerminalState},
@@ -191,8 +225,17 @@ func TestEnableRefusesAProofRecordedAgainstAnythingElse(t *testing.T) {
 			pool := startAuditedRegistryPostgres(t)
 			seedProof(t, ctx, pool, "featureFlags", testDocumentDigest, seed.build, seed.stage, seed.terminalState)
 
-			if _, err := Enable(ctx, pool, enableRequest("featureFlags")); !errors.Is(err, ErrEnableUnproven) {
-				t.Fatalf("Enable with %s = %v, want ErrEnableUnproven", name, err)
+			request := enableRequest("featureFlags")
+			request.Ledger = ledgerNamingLimits(t, "otherOperation")
+			outcomes, err := Enable(ctx, pool, request)
+			if err != nil {
+				t.Fatalf("Enable with %s = %v, want the catalog rule to admit it", name, err)
+			}
+			if len(outcomes) != 1 || outcomes[0].Proven || !outcomes[0].CatalogRule {
+				t.Fatalf("Enable with %s: outcomes = %+v, want CATALOG-RULE, never proven", name, outcomes)
+			}
+			if _, _, evidence, _, _ := readRow(t, ctx, pool, "featureFlags"); evidence != CatalogRuleEvidence(request.ReviewEvidence) {
+				t.Fatalf("Enable with %s: review_evidence = %q, want the CATALOG-RULE prefix", name, evidence)
 			}
 		})
 	}
@@ -282,18 +325,49 @@ func TestEnableDryRunRunsTheGateAndWritesNothing(t *testing.T) {
 		t.Fatalf("a dry run wrote %d routing row(s)", rows)
 	}
 
-	request.DryRun = false
+	// A dry run of a catalog-rule enablement reports it and writes nothing too.
 	request.Operations = []string{"featureFlags", "flowMatrix"}
 	request.OperationKinds = queryKinds("featureFlags", "flowMatrix")
 	request.DocumentDigest["flowMatrix"] = "1111111111111111111111111111111111111111111111111111111111111111"
-	if _, err := Enable(ctx, pool, request); !errors.Is(err, ErrEnableUnproven) {
-		t.Fatalf("Enable = %v, want ErrEnableUnproven for the unproven half", err)
+	request.Ledger = ledgerNamingLimits(t, "otherOperation")
+	outcomes, err := Enable(ctx, pool, request)
+	if err != nil || len(outcomes) != 2 {
+		t.Fatalf("Enable dry-run of a proven and a catalog-rule operation = %+v, %v", outcomes, err)
+	}
+	for _, outcome := range outcomes {
+		if outcome.CatalogRule != (outcome.Operation == "flowMatrix") || outcome.Proven != (outcome.Operation == "featureFlags") {
+			t.Fatalf("dry-run outcome %+v: featureFlags must be proven and flowMatrix catalog-rule", outcome)
+		}
 	}
 	if err := pool.QueryRow(ctx, `SELECT count(*) FROM go_api_routing_state`).Scan(&rows); err != nil {
 		t.Fatal(err)
 	}
 	if rows != 0 {
-		t.Fatalf("a partially-unproven enable wrote %d row(s) -- it is all or nothing", rows)
+		t.Fatalf("a dry run wrote %d row(s)", rows)
+	}
+
+	// All or nothing still holds where proof still decides: one proven and one
+	// unproven MCP class root in one run are refused together, nothing written.
+	proven := seedAndProveClass(t, pool, "hotspots", classProvenance(t, "hotspots", nil))
+	unproven := mcpclass.Operation("workGraphEdges")
+	if _, err := Seed(ctx, pool, SeedRequest{
+		SchemaDigest: testSchemaDigest, RunningBuild: testCandidateBuild, Operations: []string{unproven},
+		DocumentDigest: mcpclass.Digests(), RecordedBy: "test", ReviewEvidence: "class row", PrincipalID: "test-principal",
+	}); err != nil {
+		t.Fatalf("seed: %v", err)
+	}
+	if _, err := Enable(ctx, pool, EnableRequest{
+		SchemaDigest: testSchemaDigest, RunningBuild: testCandidateBuild, Operations: []string{proven, unproven},
+		OperationKinds: map[string]string{proven: OperationKindMCPClass, unproven: OperationKindMCPClass},
+		DocumentDigest: mcpclass.Digests(), Mode: TargetModeCanary, RolloutPercentage: EnforcedRolloutPercentage,
+		RecordedBy: "test", ReviewEvidence: "enable", PrincipalID: "test-principal",
+	}); !errors.Is(err, ErrEnableUnproven) {
+		t.Fatalf("Enable of a proven and an unproven class root = %v, want ErrEnableUnproven", err)
+	}
+	for _, op := range []string{proven, unproven} {
+		if mode := classRowMode(t, pool, op); mode != "shadow" {
+			t.Fatalf("%s mode = %s after a refused enable, want shadow: it is all or nothing", op, mode)
+		}
 	}
 }
 

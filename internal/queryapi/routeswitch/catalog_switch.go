@@ -32,7 +32,8 @@ package routeswitch
 //
 // The lever to hold a catalog operation dark is therefore a routing row in a non-served mode: `disable`
 // where a row exists, `seed` (it writes a shadow row) where none does. It is stored, it is visible in
-// `dho goapi routing status`, and only `enable` -- with its proof rules -- lifts it.
+// `dho goapi routing status`, and only `enable` lifts it -- with no proof rule for a catalog operation,
+// since a check on the row that lifts a hold guards nothing the rule does not already serve (CHAOS-8586).
 //
 // What this does NOT touch: the class-row switch (server/class_row_gate.go, newClassRowSwitch) and the
 // proof switches (proof_switch.go) are built by the other constructors and never set serveUnrouted, so

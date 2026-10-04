@@ -458,33 +458,78 @@ func TestCarrySkipsRowsWithNoReachabilityToPreserveAndKeepsShadowRows(t *testing
 	}
 }
 
-// Rows exist, none of them reachable: the operator believes something is
-// being served and must be told plainly that nothing is, rather than
-// reading a successful run over an empty list.
+// CHAOS-8586: live rows that are ALL in a dark mode are never refused. Each
+// holds its operation dark, and by the catalog rule it keeps holding it dark at
+// the old digest after the roll, so the roll changes nothing anyone is served.
+// The run succeeds, names each row SKIP with its reason, and writes nothing.
+func TestCarryOfOnlyDarkLiveRowsSucceedsAndWritesNothing(t *testing.T) {
+	ctx := t.Context()
+	for _, mode := range []string{"python", "disabled"} {
+		t.Run(mode, func(t *testing.T) {
+			pool := startAuditedRegistryPostgres(t)
+			seedCarryRow(t, ctx, pool, carryIntegrationLiveDigest, CarryRow{
+				Operation: "featureFlags", DocumentDigest: testDocumentDigest, Mode: mode,
+				Build: verbsRunningBuild, Owner: "go", RolloutPercentage: 0, ReviewEvidence: "held dark",
+			})
+			outcomes, err := Carry(ctx, pool, carryIntegrationRequest())
+			if err != nil {
+				t.Fatalf("Carry over one %s row = %v, want success: the row holds its operation dark before and after the roll", mode, err)
+			}
+			if len(outcomes) != 1 || outcomes[0].Action != CarryActionSkip || outcomes[0].Reason == "" {
+				t.Fatalf("outcomes = %+v, want one named SKIP", outcomes)
+			}
+			if rows := rowsAtDigest(t, ctx, pool, carryIntegrationTargetDigest); len(rows) != 0 {
+				t.Fatalf("wrote %d row(s) at the target digest for a dark row", len(rows))
+			}
+			live := rowsAtDigest(t, ctx, pool, carryIntegrationLiveDigest)
+			if len(live) != 1 || live[0].Mode != mode {
+				t.Fatalf("live rows = %+v, want the %s row left as it was: it is what keeps the operation dark after the roll", live, mode)
+			}
+			var audits int
+			if err := pool.QueryRow(ctx, `SELECT count(*) FROM go_api_routing_audits`).Scan(&audits); err != nil || audits != 0 {
+				t.Fatalf("audit rows = %d (err %v), want none", audits, err)
+			}
+		})
+	}
+}
+
+// A live row in a SERVED mode that nothing can carry still refuses: an operator
+// who turned the operation on believes it is served and must be told plainly
+// that nothing is, rather than reading a successful run over an empty list.
 func TestCarryRefusesWhenNothingAtTheLiveDigestIsReachable(t *testing.T) {
 	ctx := t.Context()
-	pool := startAuditedRegistryPostgres(t)
-	seedCarryRow(t, ctx, pool, carryIntegrationLiveDigest, CarryRow{
-		Operation: "featureFlags", DocumentDigest: testDocumentDigest, Mode: "python",
-		Build: verbsRunningBuild, Owner: "go", RolloutPercentage: 0, ReviewEvidence: "off",
-	})
-	if _, err := Carry(ctx, pool, carryIntegrationRequest()); !errors.Is(err, ErrCarryNothingReachable) {
-		t.Fatalf("err = %v, want the refusal that says nothing is reachable", err)
-	}
-	if rows := rowsAtDigest(t, ctx, pool, carryIntegrationTargetDigest); len(rows) != 0 {
-		t.Fatalf("wrote %d row(s) on a refusal", len(rows))
+	for _, mode := range []string{"canary", "primary"} {
+		t.Run(mode, func(t *testing.T) {
+			pool := startAuditedRegistryPostgres(t)
+			seedCarryRow(t, ctx, pool, carryIntegrationLiveDigest, CarryRow{
+				Operation: "unregisteredOperation", DocumentDigest: testDocumentDigest, Mode: mode,
+				Build: verbsRunningBuild, Owner: "go", RolloutPercentage: 100, ReviewEvidence: "on, but dead",
+			})
+			seedCarryRow(t, ctx, pool, carryIntegrationLiveDigest, CarryRow{
+				Operation: "featureFlags", DocumentDigest: testDocumentDigest, Mode: "python",
+				Build: verbsRunningBuild, Owner: "go", RolloutPercentage: 0, ReviewEvidence: "off",
+			})
+			if _, err := Carry(ctx, pool, carryIntegrationRequest()); !errors.Is(err, ErrCarryNothingReachable) {
+				t.Fatalf("err = %v, want the refusal that says nothing is reachable", err)
+			}
+			if rows := rowsAtDigest(t, ctx, pool, carryIntegrationTargetDigest); len(rows) != 0 {
+				t.Fatalf("wrote %d row(s) on a refusal", len(rows))
+			}
+		})
 	}
 }
 
 // An empty table and a table whose rows all died must not read alike
-// (CHAOS-8543). Until this change both answered ErrCarryNoLiveRows, and this
+// (CHAOS-8543). Until that change both answered ErrCarryNoLiveRows, and this
 // test -- then TestCarryRefusesWhenTheLiveDigestHasNoRowAtAll -- pinned that
 // for the empty table.
 //
 // The empty table is a valid state since the catalog rule: nothing to carry,
-// nothing wrong, and its own value that is not a refusal. Rows that exist only
-// at another schema digest hold their operations dark by the same rule, so
-// that state keeps the refusal, whatever the modes of those rows.
+// nothing wrong, and its own value that is not a refusal. So is a table whose
+// rows all sit at other digests in a dark mode (CHAOS-8586): each holds its
+// operation dark at any digest, before and after the roll. A row in a SERVED
+// mode at another digest is an operation somebody turned on that is dark, and
+// keeps the refusal.
 func TestCarryTellsAnEmptyTableFromATableWhoseRowsAreAllElsewhere(t *testing.T) {
 	ctx := t.Context()
 	pool := startAuditedRegistryPostgres(t)
@@ -493,7 +538,7 @@ func TestCarryTellsAnEmptyTableFromATableWhoseRowsAreAllElsewhere(t *testing.T) 
 	if !errors.Is(err, ErrRoutingTableEmpty) {
 		t.Fatalf("empty table: err = %v, want ErrRoutingTableEmpty", err)
 	}
-	if errors.Is(err, ErrCarryNoLiveRows) || errors.Is(err, ErrCarryRequestRefused) || len(outcomes) != 0 {
+	if errors.Is(err, ErrCarryNoLiveRows) || errors.Is(err, ErrRoutingRowsOnlyDark) || errors.Is(err, ErrCarryRequestRefused) || len(outcomes) != 0 {
 		t.Fatalf("empty table: err = %v outcomes = %+v, want a value that is neither refusal and no outcome", err, outcomes)
 	}
 	// A named operation changes nothing: there is no row for it to be missing from.
@@ -504,14 +549,44 @@ func TestCarryTellsAnEmptyTableFromATableWhoseRowsAreAllElsewhere(t *testing.T) 
 	}
 
 	const elsewhere = "sha256:0000000000000000000000000000000000000000000000000000000000000e15"
-	for _, mode := range []string{"disabled", "canary"} {
+	for _, step := range []struct {
+		mode string
+		want error
+	}{
+		{"disabled", ErrRoutingRowsOnlyDark},
+		{"python", ErrRoutingRowsOnlyDark},
+		{"shadow", ErrRoutingRowsOnlyDark},
+		{"canary", ErrCarryNoLiveRows},
+	} {
+		// Rows accumulate: the canary step holds three dark rows beside it.
 		seedCarryRow(t, ctx, pool, elsewhere, CarryRow{
-			Operation: "op_" + mode, DocumentDigest: testDocumentDigest, Mode: mode,
+			Operation: "op_" + step.mode, DocumentDigest: testDocumentDigest, Mode: step.mode,
 			Build: verbsRunningBuild, Owner: "go", RolloutPercentage: 100, ReviewEvidence: "left at another digest",
 		})
-		_, err := Carry(ctx, pool, carryIntegrationRequest())
-		if !errors.Is(err, ErrCarryNoLiveRows) || errors.Is(err, ErrRoutingTableEmpty) {
-			t.Fatalf("a %s row only at another schema digest: err = %v, want the refusal ErrCarryNoLiveRows", mode, err)
+		outcomes, err := Carry(ctx, pool, carryIntegrationRequest())
+		if !errors.Is(err, step.want) || errors.Is(err, ErrRoutingTableEmpty) || len(outcomes) != 0 {
+			t.Fatalf("with a %s row only at another schema digest: err = %v outcomes = %+v, want %v and no outcome", step.mode, err, outcomes, step.want)
+		}
+		if step.want == ErrRoutingRowsOnlyDark {
+			if errors.Is(err, ErrCarryNoLiveRows) || errors.Is(err, ErrCarryRequestRefused) {
+				t.Fatalf("with only dark rows elsewhere: err = %v, want no refusal", err)
+			}
+			// The answer names every row it rests on, so the verb can say which
+			// operations it left dark.
+			var dark *RoutingRowsOnlyDarkError
+			if !errors.As(err, &dark) || dark.SchemaDigest != carryIntegrationLiveDigest {
+				t.Fatalf("with only dark rows elsewhere: err = %#v, want a RoutingRowsOnlyDarkError for %s", err, carryIntegrationLiveDigest)
+			}
+			found := false
+			for _, row := range dark.Rows {
+				if row.SchemaDigest != elsewhere || servedMode(row.Mode) {
+					t.Fatalf("dark rows = %+v, want only dark-mode rows at %s", dark.Rows, elsewhere)
+				}
+				found = found || (row.Operation == "op_"+step.mode && row.Mode == step.mode)
+			}
+			if !found {
+				t.Fatalf("dark rows = %+v, want op_%s (%s) named", dark.Rows, step.mode, step.mode)
+			}
 		}
 	}
 	for _, digest := range []string{carryIntegrationLiveDigest, carryIntegrationTargetDigest} {
@@ -522,6 +597,16 @@ func TestCarryTellsAnEmptyTableFromATableWhoseRowsAreAllElsewhere(t *testing.T) 
 	var audits int
 	if err := pool.QueryRow(ctx, `SELECT count(*) FROM go_api_routing_audits`).Scan(&audits); err != nil || audits != 0 {
 		t.Fatalf("audit rows = %d (err %v), want none: nothing was written", audits, err)
+	}
+
+	// primary is a served mode too: alone at another digest, it refuses.
+	primaryPool := startAuditedRegistryPostgres(t)
+	seedCarryRow(t, ctx, primaryPool, elsewhere, CarryRow{
+		Operation: "op_primary", DocumentDigest: testDocumentDigest, Mode: "primary",
+		Build: verbsRunningBuild, Owner: "go", RolloutPercentage: 100, ReviewEvidence: "left at another digest",
+	})
+	if _, err := Carry(ctx, primaryPool, carryIntegrationRequest()); !errors.Is(err, ErrCarryNoLiveRows) {
+		t.Fatalf("a primary row only at another schema digest: err = %v, want the refusal ErrCarryNoLiveRows", err)
 	}
 }
 
@@ -1227,7 +1312,7 @@ func TestCarryShadowOnlyDigestIsNeverRefused(t *testing.T) {
 			t.Fatalf("wrote %d row(s) for a skipped shadow row", len(rows))
 		}
 	})
-	t.Run("a non-shadow live row with every row skipped still refuses", func(t *testing.T) {
+	t.Run("a stale shadow row beside a python row succeeds with nothing written", func(t *testing.T) {
 		pool := startAuditedRegistryPostgres(t)
 		seedCarryRow(t, ctx, pool, carryIntegrationLiveDigest, CarryRow{
 			Operation: "featureFlags", DocumentDigest: testDocumentDigest, Mode: "shadow",
@@ -1236,6 +1321,23 @@ func TestCarryShadowOnlyDigestIsNeverRefused(t *testing.T) {
 		seedCarryRow(t, ctx, pool, carryIntegrationLiveDigest, CarryRow{
 			Operation: "hotspots", DocumentDigest: testDocumentDigest2, Mode: "python",
 			Build: verbsRunningBuild, Owner: "go", RolloutPercentage: 0, ReviewEvidence: "off",
+		})
+		if _, err := Carry(ctx, pool, carryIntegrationRequest()); err != nil {
+			t.Fatalf("err = %v, want success: both rows are dark (CHAOS-8586)", err)
+		}
+		if rows := rowsAtDigest(t, ctx, pool, carryIntegrationTargetDigest); len(rows) != 0 {
+			t.Fatalf("wrote %d row(s) for two skipped rows", len(rows))
+		}
+	})
+	t.Run("a served live row with every row skipped still refuses", func(t *testing.T) {
+		pool := startAuditedRegistryPostgres(t)
+		seedCarryRow(t, ctx, pool, carryIntegrationLiveDigest, CarryRow{
+			Operation: "featureFlags", DocumentDigest: testDocumentDigest, Mode: "shadow",
+			Build: "some-older-build", Owner: "go", RolloutPercentage: 0, ReviewEvidence: "stale shadow",
+		})
+		seedCarryRow(t, ctx, pool, carryIntegrationLiveDigest, CarryRow{
+			Operation: "unregisteredOperation", DocumentDigest: testDocumentDigest2, Mode: "canary",
+			Build: verbsRunningBuild, Owner: "go", RolloutPercentage: 100, ReviewEvidence: "on, but dead",
 		})
 		if _, err := Carry(ctx, pool, carryIntegrationRequest()); !errors.Is(err, ErrCarryNothingReachable) {
 			t.Fatalf("err = %v, want the nothing-reachable refusal", err)
@@ -1332,6 +1434,7 @@ func TestCarryRunLevelDecisionTable(t *testing.T) {
 	staleShadow := shadow
 	staleShadow.Build = "some-older-build"
 	python := CarryRow{Operation: "savedReports", DocumentDigest: strings.Repeat("e", 64), Mode: "python", Build: verbsRunningBuild, Owner: "go", ReviewEvidence: "off"}
+	deadServed := CarryRow{Operation: "unregisteredOperation", DocumentDigest: strings.Repeat("d", 64), Mode: "canary", Build: verbsRunningBuild, Owner: "go", RolloutPercentage: 100, ReviewEvidence: "on, but dead"}
 	for name, tc := range map[string]struct {
 		rows     []CarryRow
 		mutate   func(*CarryRequest)
@@ -1341,7 +1444,7 @@ func TestCarryRunLevelDecisionTable(t *testing.T) {
 		"R1 served valid only":                      {rows: []CarryRow{served}, wantRows: []string{"featureFlags"}},
 		"R2 shadow valid only":                      {rows: []CarryRow{shadow}, wantRows: []string{"hotspots"}},
 		"R3 shadow stale only (succeeds, no write)": {rows: []CarryRow{staleShadow}, wantRows: nil},
-		"R4 stale shadow + python (nothing kept)":   {rows: []CarryRow{staleShadow, python}, wantErr: ErrCarryNothingReachable},
+		"R4 stale shadow + python (nothing kept)":   {rows: []CarryRow{staleShadow, python}, wantRows: nil},
 		"R5 served valid + shadow valid":            {rows: []CarryRow{served, shadow}, wantRows: []string{"featureFlags", "hotspots"}},
 		"R6 served valid + shadow stale":            {rows: []CarryRow{served, staleShadow}, wantRows: []string{"featureFlags"}},
 		"R7 served unfaithful + shadow valid (REFUSE, nothing written)": {
@@ -1349,17 +1452,21 @@ func TestCarryRunLevelDecisionTable(t *testing.T) {
 			mutate:  func(r *CarryRequest) { r.Inputs.TargetDocumentDigest["featureFlags"] = strings.Repeat("7", 64) },
 			wantErr: ErrCarryDocumentMoved,
 		},
-		"R8 python only":                         {rows: []CarryRow{python}, wantErr: ErrCarryNothingReachable},
+		"R8 python only":                         {rows: []CarryRow{python}, wantRows: nil},
 		"R9 shadow valid + python (shadow kept)": {rows: []CarryRow{shadow, python}, wantRows: []string{"hotspots"}},
 		"R10 shadow valid + python, -operations on the python row only": {
-			rows:    []CarryRow{shadow, python},
-			mutate:  func(r *CarryRequest) { r.Operations = []string{"savedReports"} },
-			wantErr: ErrCarryNothingReachable,
+			rows:     []CarryRow{shadow, python},
+			mutate:   func(r *CarryRequest) { r.Operations = []string{"savedReports"} },
+			wantRows: nil,
 		},
 		"R11 shadow valid + python, -operations on the shadow row only": {
 			rows:     []CarryRow{shadow, python},
 			mutate:   func(r *CarryRequest) { r.Operations = []string{"hotspots"} },
 			wantRows: []string{"hotspots"},
+		},
+		"R13 served but unregistered + python (REFUSE, nothing written)": {
+			rows:    []CarryRow{deadServed, python},
+			wantErr: ErrCarryNothingReachable,
 		},
 		"R12 shadow valid only, dry run (plan, no write)": {
 			rows:   []CarryRow{shadow},

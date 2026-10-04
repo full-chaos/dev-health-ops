@@ -16,13 +16,19 @@ package goapiproof
 //     cannot write a row at a digest no binary computes.
 //  2. the running query-api must register every named operation, under
 //     the same DOCUMENT digest the edge's catalog carries.
-//  3. the exact candidate build must have a `deployed_executed`/`match`
-//     proof run for each operation, or the go-served ledger compiled into
-//     this binary must name a written limit for it (goserved_ledger.json:
-//     `unproven_reason` or `enable_limit`) -- in which case the row carries
-//     a NAMED-LIMIT review_evidence prefix DURABLY, so `status` can report
-//     it for as long as the enablement is in force. No flag, environment
-//     variable or file an operator passes can add an operation to that set.
+//  3. an MCP class operation (`mcp:<root>`) must have a per-root receipt
+//     for the exact candidate build. A CATALOG operation (every other one:
+//     a registered document) is admitted with no receipt and no ledger
+//     limit (CHAOS-8586, owner's decision of 2026-10-04): the catalog rule
+//     (queryapi/routeswitch/catalog_switch.go) serves it when it has no row,
+//     so a proof check on the row that lifts a hold guards nothing. The
+//     outcome still says what admitted it: a `deployed_executed`/`match`
+//     proof run, else a written limit in the go-served ledger compiled into
+//     this binary (goserved_ledger.json: `unproven_reason` or
+//     `enable_limit`, written as a NAMED-LIMIT review_evidence prefix), else
+//     the catalog rule (a CATALOG-RULE prefix). Both prefixes are DURABLE on
+//     the row. No flag, environment variable or file an operator passes
+//     changes any of the three.
 //
 // WHAT IS DELIBERATELY DIFFERENT. The Python verb takes the candidate
 // build as a flag, documented "by CONVENTION, unverified" -- the fifteen
@@ -88,9 +94,9 @@ import (
 // "enable" a name that does not describe what ran.
 var EnableModes = []string{"canary", "primary"}
 
-// ErrEnableUnproven reports that an operation has no deployed-executed
-// proof for this candidate build and the go-served ledger names no written
-// limit for it.
+// ErrEnableUnproven reports that an MCP class operation has no per-root
+// receipt for this candidate build. A catalog operation is never refused
+// with it (CHAOS-8586).
 var ErrEnableUnproven = errors.New("goapiproof: no deployed_executed/match proof run recorded for this candidate build")
 
 // EnableRequest is one invocation.
@@ -160,6 +166,10 @@ type EnableOutcome struct {
 	// NamedLimit is the ledger's written reason when the row was admitted
 	// from it instead of a store proof run; empty otherwise.
 	NamedLimit string
+	// CatalogRule is true when a catalog operation was admitted with neither
+	// a store proof run nor a ledger limit (CHAOS-8586). Never true for an
+	// MCP class operation, and never together with Proven or NamedLimit.
+	CatalogRule bool
 	// ReviewEvidence is what was actually written, prefix included.
 	ReviewEvidence string
 	// ModeBefore/CandidateBuildBefore/HadRowBefore are
@@ -383,28 +393,27 @@ func Enable(ctx context.Context, pool *pgxpool.Pool, request EnableRequest) ([]E
 		return nil, err
 	}
 	namedLimit := make(map[string]string, len(unproven))
+	catalogRule := make(map[string]bool, len(unproven))
 	var refused []string
 	for _, operation := range unproven {
 		if reason, ok := ledger.EnableLimitReason(operation); ok {
 			namedLimit[operation] = reason
 			continue
 		}
+		if !mcpclass.IsOperation(operation) {
+			catalogRule[operation] = true
+			continue
+		}
 		refused = append(refused, operation)
 	}
-	if len(refused) > 0 && mcpclass.IsOperation(refused[0]) {
+	if len(refused) > 0 {
 		// A class row is admitted by its per-root receipt and by nothing else: no
-		// go-served ledger limit can stand in for it.
+		// go-served ledger limit can stand in for it, and the catalog rule never
+		// serves a class root.
 		return nil, fmt.Errorf("%w (%s=%s stage=%s terminal_state=%s route=%s document_digest=%s) for: %v\n"+
 			"  An MCP class root needs a per-root receipt for the exact candidate build. Record it with `dho goapi prove -mcp-roots <roots> -proof-url <internal listener>/query/proof-mcp` (the root's row must exist: `dho goapi routing seed -operations mcp:<root>`)",
 			ErrEnableUnproven, "candidate_build", request.RunningBuild,
 			EnablementProofStage, EnablementProofTerminalState, RouteProof, mcpclass.DocumentDigest(), refused)
-	}
-	if len(refused) > 0 {
-		return nil, fmt.Errorf("%w (%s=%s stage=%s terminal_state=%s) for: %v\n"+
-			"  Plan section 5 stage 3 requires the exact candidate build to have served the operation through real ingress, auth, parse/validate, dispatch and a real database -- a constructor, health check or bare 200 does not qualify.\n"+
-			"  Record it with go-api-prove. An operation that can never be proven that way needs a written limit in the go-served ledger (goserved_ledger.json), reviewed with the change; enable takes no flag for it",
-			ErrEnableUnproven, "candidate_build", request.RunningBuild,
-			EnablementProofStage, EnablementProofTerminalState, refused)
 	}
 
 	outcomes := make([]EnableOutcome, 0, len(request.Operations))
@@ -414,7 +423,10 @@ func Enable(ctx context.Context, pool *pgxpool.Pool, request EnableRequest) ([]E
 			evidence += " [allow-excluded: " + strings.Join(names, ",") + "]"
 		}
 		reason := namedLimit[operation]
-		if !proven[operation] {
+		switch {
+		case catalogRule[operation]:
+			evidence = CatalogRuleEvidence(evidence)
+		case !proven[operation]:
 			evidence = NamedLimitEvidence(reason, evidence)
 		}
 		outcomes = append(outcomes, EnableOutcome{
@@ -424,6 +436,7 @@ func Enable(ctx context.Context, pool *pgxpool.Pool, request EnableRequest) ([]E
 			CandidateBuild: request.RunningBuild,
 			Proven:         proven[operation],
 			NamedLimit:     reason,
+			CatalogRule:    catalogRule[operation],
 			ReviewEvidence: evidence,
 		})
 	}

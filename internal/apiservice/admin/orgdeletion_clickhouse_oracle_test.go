@@ -186,4 +186,8 @@ var clickHouseOrgTablesAfterThePythonFreeze = map[string]string{
 	// (CHAOS-8578). Keyed by org_id and filled by a materialized view from
 	// work_items, so an organization's rows in it go with its work items.
 	"work_item_relations_read": "103_work_item_relation_writer_and_read.sql",
+	// The latest blocked duration snapshot for each work item (CHAOS-8489).
+	// It is keyed by org_id and the daily worker writes it directly, so an
+	// organization's evidence rows must go when the organization is deleted.
+	"work_item_blocked_durations_daily": "104_work_item_blocked_durations.sql",
 }

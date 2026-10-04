@@ -152,36 +152,83 @@ type router struct {
 	port string
 }
 
-// waitForPlanes sends GET / until a stub plane answers. The router was started
-// BEFORE the planes, so this is the proof that it finds a plane that comes up
-// later, with no restart.
-func waitForPlanes(t *testing.T, base string, limit time.Duration, diagnose func() string) {
+// planeProbes are one request per plane: a path the router sends to that plane.
+// A probe on a path that does not reach its plane cannot pass silently: the
+// wait for it runs into its bound. TestPlaneProbesNameEveryPlane holds that no
+// plane is left out.
+var planeProbes = []routingRow{
+	{"the Go api", "/", PlaneGoAPI},
+	{"the query api", "/graphql", PlaneQueryAPI},
+}
+
+// waitForPlanes sends one request per plane until EVERY stub plane answers
+// through the router. The router was started BEFORE the planes, so this is the
+// proof that it finds a plane that comes up later, with no restart. It waits
+// for each plane, not for the first one: a router that has found go-api can
+// still give 502 for query-api (CHAOS-8542). Bounded; when the bound wins it
+// names the plane that did not answer and prints the router log.
+func waitForPlanes(t testing.TB, base string, limit time.Duration, diagnose func() string) {
 	t.Helper()
 	client := &http.Client{Timeout: 10 * time.Second}
 	deadline := time.Now().Add(limit)
-	last := "no answer yet"
-	for {
-		response, err := client.Get(base + "/")
-		if err != nil {
-			last = err.Error()
-		} else {
-			_ = response.Body.Close()
-			if response.StatusCode == http.StatusOK && response.Header.Get(stubPlane) == PlaneGoAPI {
-				return
+	for _, probe := range planeProbes {
+		last := "no answer yet"
+		for {
+			response, err := client.Get(base + probe.path)
+			if err != nil {
+				last = err.Error()
+			} else {
+				_ = response.Body.Close()
+				if response.StatusCode == http.StatusOK && response.Header.Get(stubPlane) == probe.plane {
+					break
+				}
+				last = fmt.Sprintf("status %d, %s %q", response.StatusCode, stubPlane, response.Header.Get(stubPlane))
 			}
-			last = fmt.Sprintf("status %d, %s %q", response.StatusCode, stubPlane, response.Header.Get(stubPlane))
+			if time.Now().After(deadline) {
+				t.Fatalf("the %s stub plane did not answer GET %s%s within %s after the planes were started (last: %s)\n%s", probe.plane, base, probe.path, limit, last, diagnose())
+			}
+			time.Sleep(200 * time.Millisecond)
+		}
+	}
+}
+
+// waitForRouter sends GET / until the router itself answers an HTTP request,
+// with any status. "The port listens" is not "the router answers": the mapped
+// port of a container accepts a connection before nginx listens behind it, and
+// that connection ends with no answer (EOF, or a reset). On a slow host the
+// wait strategy of the container returned while nginx was still in its
+// entrypoint, and the one request of answersWithoutPlanes got EOF (CHAOS-8542).
+// Bounded; when the bound wins it fails with the last error and the router log.
+// It does not judge the answer: the caller does, on a request of its own.
+func waitForRouter(t testing.TB, base string, limit time.Duration, diagnose func() string) {
+	t.Helper()
+	client := &http.Client{Timeout: 90 * time.Second}
+	start := time.Now()
+	deadline := start.Add(limit)
+	for attempt := 1; ; attempt++ {
+		response, err := client.Get(base + "/")
+		if err == nil {
+			_ = response.Body.Close()
+			if attempt > 1 {
+				// Loud on purpose: this is the path that used to fail the test.
+				t.Logf("the router answered on attempt %d, %s after its port was reported as listening", attempt, time.Since(start).Round(time.Millisecond))
+			}
+			return
 		}
 		if time.Now().After(deadline) {
-			t.Fatalf("no stub plane answered GET %s/ within %s after the planes were started (last: %s)\n%s", base, limit, last, diagnose())
+			t.Fatalf("the router did not answer an HTTP request within %s (%d attempts, last: %v)\n%s", limit, attempt, err, diagnose())
 		}
 		time.Sleep(200 * time.Millisecond)
 	}
 }
 
 // answersWithoutPlanes holds that a router whose planes are not there yet is
-// up and answers 5xx itself (no stub plane header).
-func answersWithoutPlanes(t *testing.T, base string, diagnose func() string) {
+// up and answers 5xx itself (no stub plane header). It first waits, bounded by
+// limit, until the router answers at all (waitForRouter); the 5xx is then read
+// from ONE more request, which is not repeated.
+func answersWithoutPlanes(t testing.TB, base string, limit time.Duration, diagnose func() string) {
 	t.Helper()
+	waitForRouter(t, base, limit, diagnose)
 	client := &http.Client{Timeout: 90 * time.Second}
 	response, err := client.Get(base + "/")
 	if err != nil {
@@ -225,6 +272,8 @@ func startRouterInContainers(t *testing.T) router {
 			// the file and started with plane names that do not resolve.
 			// (Not an HTTP wait: its requests give up after one second, and
 			// the answer for a name that does not resolve can take longer.)
+			// This strategy can return before nginx listens: the mapped port
+			// accepts first. answersWithoutPlanes waits for the first answer.
 			WaitingFor: wait.ForListeningPort(RouterPort + "/tcp").WithStartupTimeout(3 * time.Minute),
 		},
 		Started: true,
@@ -261,7 +310,7 @@ func startRouterInContainers(t *testing.T) router {
 		t.Fatalf("router port: %v", err)
 	}
 	base := "http://" + net.JoinHostPort(host, port.Port())
-	answersWithoutPlanes(t, base, diagnose)
+	answersWithoutPlanes(t, base, 2*time.Minute, diagnose)
 
 	stubs, err := testcontainers.GenericContainer(ctx, testcontainers.GenericContainerRequest{
 		ContainerRequest: testcontainers.ContainerRequest{
@@ -364,7 +413,7 @@ func startRouterAsProcess(t *testing.T, binary string, contract Contract) router
 		}
 		time.Sleep(100 * time.Millisecond)
 	}
-	answersWithoutPlanes(t, base, diagnose)
+	answersWithoutPlanes(t, base, 15*time.Second, diagnose)
 	startStubAt(t, goAPI, PlaneGoAPI)
 	startStubAt(t, queryAPI, PlaneQueryAPI)
 	waitForPlanes(t, base, 15*time.Second, diagnose)

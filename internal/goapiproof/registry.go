@@ -824,9 +824,43 @@ const DefaultDocumentsPath = "documents.json"
 // text must digest to what the RUNNING process registers, or the run
 // refuses. A stale documents file cannot produce a receipt.
 func LoadDocuments(path string) (map[string]string, error) {
+	current, _, err := readDocuments(path)
+	return current, err
+}
+
+// LoadDocumentsWithLegacy is LoadDocuments plus, per operation, the LEGACY
+// texts registrydump lists after the current one (CHAOS-8000 dual accept),
+// in file order.
+//
+// `carry` needs them: a routing row keyed to a legacy text's digest is
+// still read by the image this dump was built from, so it is carried under
+// that digest. The texts are returned, not their digests, for the reason
+// targetDocumentDigests gives: a digest is computed over the text by the
+// caller, never read from the file.
+//
+// A legacy text for an operation with no current text is refused here.
+// registrydump never writes one, and a caller that keyed a decision on a
+// legacy list for an operation the image does not register would be
+// deciding on a broken dump.
+func LoadDocumentsWithLegacy(path string) (current map[string]string, legacy map[string][]string, err error) {
+	current, legacy, err = readDocuments(path)
+	if err != nil {
+		return nil, nil, err
+	}
+	for operation := range legacy {
+		if _, ok := current[operation]; !ok {
+			return nil, nil, fmt.Errorf("goapiproof: documents file %s lists a legacy text for %q, which has no current text -- a legacy text needs a current one", path, operation)
+		}
+	}
+	return current, legacy, nil
+}
+
+// readDocuments is the one reader of the registered-document dump:
+// operation -> current text, and operation -> legacy texts.
+func readDocuments(path string) (map[string]string, map[string][]string, error) {
 	raw, err := os.ReadFile(path) //nolint:gosec // operator-supplied path to their own registrydump output
 	if err != nil {
-		return nil, fmt.Errorf("goapiproof: read documents file: %w", err)
+		return nil, nil, fmt.Errorf("goapiproof: read documents file: %w", err)
 	}
 	// The same silent
 	// U+FFFD substitution the catalog/registry/buildinfo gates close
@@ -835,10 +869,10 @@ func LoadDocuments(path string) (map[string]string, error) {
 	// otherwise decode without error into a corrupted value this
 	// function hands back as if it were the real registered text.
 	if !utf8.Valid(raw) {
-		return nil, fmt.Errorf("goapiproof: documents file %s is not valid UTF-8", path)
+		return nil, nil, fmt.Errorf("goapiproof: documents file %s is not valid UTF-8", path)
 	}
 	if err := rejectUnpairedSurrogateEscapes(raw); err != nil {
-		return nil, fmt.Errorf("goapiproof: documents file %s: %w", path, err)
+		return nil, nil, fmt.Errorf("goapiproof: documents file %s: %w", path, err)
 	}
 	// This was the last plain struct-tag decode left in the package
 	// (team-lead's decoder sweep, 01:0xZ): `registrydumpDocument`'s
@@ -849,24 +883,25 @@ func LoadDocuments(path string) (map[string]string, error) {
 	// exact-key map lookup as every other decoder in this file now uses.
 	var rawDocuments []map[string]json.RawMessage
 	if err := json.Unmarshal(raw, &rawDocuments); err != nil {
-		return nil, fmt.Errorf("goapiproof: decode documents file (expected `registrydump -file ...` output): %w", err)
+		return nil, nil, fmt.Errorf("goapiproof: decode documents file (expected `registrydump -file ...` output): %w", err)
 	}
 	if len(rawDocuments) == 0 {
-		return nil, fmt.Errorf("goapiproof: documents file %s is empty", path)
+		return nil, nil, fmt.Errorf("goapiproof: documents file %s is empty", path)
 	}
 
 	byOperation := make(map[string]string, len(rawDocuments))
+	legacyByOperation := map[string][]string{}
 	for index, rawDoc := range rawDocuments {
 		operation, _, err := exactStringField(rawDoc, "operation")
 		if err != nil {
-			return nil, fmt.Errorf("goapiproof: documents file %s entry %d: %w", path, index, err)
+			return nil, nil, fmt.Errorf("goapiproof: documents file %s entry %d: %w", path, index, err)
 		}
 		documentText, _, err := exactStringField(rawDoc, "document")
 		if err != nil {
-			return nil, fmt.Errorf("goapiproof: documents file %s entry %d: %w", path, index, err)
+			return nil, nil, fmt.Errorf("goapiproof: documents file %s entry %d: %w", path, index, err)
 		}
 		if documentText == "" {
-			return nil, fmt.Errorf("goapiproof: documents file carries no text for %q", operation)
+			return nil, nil, fmt.Errorf("goapiproof: documents file carries no text for %q", operation)
 		}
 		// CHAOS-8000 dual accept: registrydump lists an operation's LEGACY texts after its current one, marked
 		// `"legacy": true`. The running process registers the CURRENT text under the operation (a legacy
@@ -874,13 +909,14 @@ func LoadDocuments(path string) (map[string]string, error) {
 		// VerifyDocuments compare the old text with the registered digest and refuse as document drift.
 		if rawLegacy, present := rawDoc["legacy"]; present {
 			if string(rawLegacy) != "true" {
-				return nil, fmt.Errorf("goapiproof: documents file %s entry %d (%q) has legacy %s; the key is absent or true", path, index, operation, rawLegacy)
+				return nil, nil, fmt.Errorf("goapiproof: documents file %s entry %d (%q) has legacy %s; the key is absent or true", path, index, operation, rawLegacy)
 			}
+			legacyByOperation[operation] = append(legacyByOperation[operation], documentText)
 			continue
 		}
 		byOperation[operation] = documentText
 	}
-	return byOperation, nil
+	return byOperation, legacyByOperation, nil
 }
 
 // VerifyDocuments proves the local document text is byte-identical to

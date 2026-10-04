@@ -494,7 +494,7 @@ go:quality:
     - |
       set -euo pipefail
       if [ "${LEG}" = "static" ]; then
-        bash ci/check_migration_matrix.sh freshness
+        bash ci/check_migration_matrix.sh stamp
         bash ci/check_migration_matrix.sh contract
         bash ci/check_migration_matrix_test.sh
         bash ci/go_worker_fixture_test.sh

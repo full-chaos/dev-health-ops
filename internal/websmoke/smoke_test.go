@@ -712,7 +712,7 @@ func TestCatalogLegacyRowAfterCurrentPasses(t *testing.T) {
 
 func TestGraphqlTokens(t *testing.T) {
 	got := strings.Join(graphqlTokens("query Q($a: Int!, $b: [String]) { x(a: $a, s: \"q\\\"r\") { ...F __typename y } } # c\n"), " ")
-	want := `query Q ( $ a : Int ! $ b : [ String ] ) { x ( a : $ a s : "q\"r" ) { ... F y } }`
+	want := `query Q ( $ a : Int ! $ b : [ String ] ) { x ( a : $ a s : "q\"r" ) { ... F __typename y } }`
 	if got != want {
 		t.Fatalf("got %s", got)
 	}
@@ -864,5 +864,80 @@ func TestRedirectIsNotFollowed(t *testing.T) {
 	r, err := c.do("GET", "/api/v1/work-units", reqOpts{})
 	if err != nil || r.status != http.StatusSeeOther {
 		t.Fatalf("status=%v err=%v", r, err)
+	}
+}
+
+// ---- __typename placement (urql formatDocument) ------------------------------------------------
+
+func TestUrqlFormatRule(t *testing.T) {
+	for name, tc := range map[string]struct{ web, wire string }{
+		"nested sets, root excepted": {`query Q { a { b { c } } }`, `query Q { a { b { c __typename } __typename } }`},
+		"existing last is kept":      {`query Q { a { b __typename } }`, `query Q { a { b __typename } }`},
+		"existing first is kept":     {`query Q { a { __typename b } }`, `query Q { a { __typename b } }`},
+		"alias does not count":       {`query Q { a { kind: __typename } }`, `query Q { a { kind : __typename __typename } }`},
+		"alias of a field":           {`query Q { a { __typename: b } }`, `query Q { a { __typename : b __typename } }`},
+		"root typename untouched":    {`query Q { __typename a { b } }`, `query Q { __typename a { b __typename } }`},
+		"anonymous root":             {`{ a { b } }`, `{ a { b __typename } }`},
+		"fragment definition":        {`query Q { a { ...F } } fragment F on T { x }`, `query Q { a { ... F __typename } } fragment F on T { x __typename }`},
+		"inline fragment":            {`query Q { a { ... on T { x } } }`, `query Q { a { ... on T { x __typename } __typename } }`},
+		"object value braces":        {`query Q($v: In = {k: 1}) { a(f: {k: 1}) { b } }`, `query Q ( $ v : In = { k : 1 } ) { a ( f : { k : 1 } ) { b __typename } }`},
+		"underscore directive":       {`query Q { a @_opt(x: 1) { b } }`, `query Q { a { b __typename } }`},
+		"plain directive kept":       {`query Q { a @skip(if: true) { b } }`, `query Q { a @ skip ( if : true ) { b __typename } }`},
+	} {
+		t.Run(name, func(t *testing.T) {
+			got, want := strings.Join(urqlFormat(graphqlTokens(tc.web)), " "), strings.Join(graphqlTokens(tc.wire), " ")
+			if got != want {
+				t.Fatalf("got  %s\nwant %s", got, want)
+			}
+		})
+	}
+}
+
+// Each of these breaks web's real request (the edge hashes web's urql output), so each must fail.
+func TestTypenamePlacementDriftFails(t *testing.T) {
+	doc, _ := server.WebPathSmokeDocument("workGraphFlow")
+	web := webText(doc)
+	cases := map[string]struct{ web, registered string }{
+		"web explicit typename first in rows": {strings.Replace(web, "rows {", "rows {\n      __typename", 1), doc},
+		"web typename at the operation root":  {strings.Replace(web, "{\n  workGraphFlow", "{\n  __typename\n  workGraphFlow", 1), doc},
+		// CHAOS-4696 shape: the registered document lacks a typename urql adds.
+		"registered lacks one typename":  {web, strings.Replace(doc, "      __typename\n    }\n    degradedReason", "    }\n    degradedReason", 1)},
+		"registered has a root typename": {web, strings.Replace(doc, "{\n  workGraphFlow", "{\n  __typename\n  workGraphFlow", 1)},
+	}
+	for name, c := range cases {
+		t.Run(name, func(t *testing.T) {
+			if c.web == web && c.registered == doc {
+				t.Fatal("the plant changed nothing")
+			}
+			if sameTokens(c.web, c.registered) {
+				t.Fatal("drift not detected")
+			}
+		})
+	}
+	for name, c := range map[string]struct{ web, registered string }{
+		"web explicit typename last": {strings.Replace(web, "outflow", "outflow\n      __typename", 1), doc},
+		"real document":              {web, doc},
+	} {
+		if !sameTokens(c.web, c.registered) {
+			t.Fatalf("%s: false drift", name)
+		}
+	}
+}
+
+func TestTypenameDriftFailsTheRun(t *testing.T) {
+	h := newHarness(t, "")
+	doc, _ := server.WebPathSmokeDocument("workGraphFlow")
+	setWebDoc(t, h, "workGraphFlow", strings.Replace(webText(doc), "rows {", "rows {\n      __typename", 1))
+	if c := Run(h.cfg).check("web_source"); c["reason"] != "document_digest_mismatch=workGraphFlow" {
+		t.Fatalf("check=%v", c)
+	}
+}
+
+func TestEverySmokeDocumentPassesAsWebWritesIt(t *testing.T) {
+	for _, g := range graphqlSources {
+		doc, _ := server.WebPathSmokeDocument(g.Op)
+		if !sameTokens(webText(doc), doc) {
+			t.Fatalf("%s: the registered document differs from urql's output for its own web text", g.Op)
+		}
 	}
 }

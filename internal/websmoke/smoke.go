@@ -14,8 +14,8 @@
 //
 // GraphQL documents sent are the registered wire-form documents of the Go plane
 // (Config.Documents), never re-printed here. Web's own document text is read from its source
-// (Config.WebSrc, `export const NAME = `...`;`) and must carry the same GraphQL tokens as the
-// registered document (urql's __typename additions, whitespace and commas aside), and the
+// (Config.WebSrc, `export const NAME = `...`;`) and after urql's formatDocument rule must carry exactly the
+// GraphQL tokens of the registered document (whitespace and commas aside), and the
 // registered document's sha256 must be a digest the edge catalog (Config.Catalog) holds for its
 // operation (current or legacy); either failing is document_digest_mismatch, so a change in web's
 // document is caught. REST paths must still appear as a literal in the web source file that
@@ -600,8 +600,8 @@ func (s *runner) webSource() (result, error) {
 		if !ok {
 			return nil, fail("registered_document_missing=%s", g.Op)
 		}
-		// Web's own text (urql adds __typename on the wire) must carry the same GraphQL tokens as the
-		// registered document, and the registered document must hash to the catalog: so a change in
+		// Web's own text, formatted as urql formats it (the Python urql_format rule), must carry the
+		// GraphQL tokens of the registered document, __typename placement included, and the registered document must hash to the catalog: so a change in
 		// web's document is a mismatch, exactly as the printed-document digest was.
 		if !sameTokens(webDoc, doc) || !catalog[g.Op][DocumentDigest(doc)] {
 			mismatched = append(mismatched, g.Op)
@@ -1206,7 +1206,7 @@ func tsDocument(source, name string) (string, bool) {
 
 // graphqlTokens splits a document into its lexical tokens: names, numbers, strings and
 // punctuators. Whitespace, commas and comments are insignificant, so a printer's layout is not
-// compared. `__typename` tokens are dropped: urql adds them on the wire.
+// compared.
 func graphqlTokens(doc string) []string {
 	var out []string
 	rs := []rune(doc)
@@ -1252,9 +1252,7 @@ func graphqlTokens(doc string) []string {
 			for j < len(rs) && isName(rs[j], false) {
 				j++
 			}
-			if tok := string(rs[i:j]); tok != "__typename" {
-				out = append(out, tok)
-			}
+			out = append(out, string(rs[i:j]))
 			i = j
 		case r == '-' || (r >= '0' && r <= '9'):
 			j := i + 1
@@ -1271,8 +1269,81 @@ func graphqlTokens(doc string) []string {
 	return out
 }
 
-func sameTokens(a, b string) bool {
-	x, y := graphqlTokens(a), graphqlTokens(b)
+// urqlFormat is urql's formatDocument rule (urql-core formatNode) applied to a token stream, as
+// the Python smoke's urql_format did on the parsed document: `@_name(...)` directives are
+// dropped, and `__typename` is appended before the closing brace of every selection set that is
+// not an operation's root and has no unaliased `__typename` of its own. Braces inside parentheses
+// are object values, not selection sets; fragment definitions and inline fragments are selection
+// sets like any other.
+func urqlFormat(in []string) []string {
+	type frame struct{ root, object, typename bool }
+	var out []string
+	var stack []frame
+	parens := 0
+	defStart := 0 // index in `in` of the first token of the current top-level definition
+	for i := 0; i < len(in); i++ {
+		tok := in[i]
+		switch tok {
+		case "@":
+			if i+1 < len(in) && strings.HasPrefix(in[i+1], "_") {
+				i++ // the directive name
+				if i+1 < len(in) && in[i+1] == "(" {
+					depth := 0
+					for i+1 < len(in) {
+						i++
+						if in[i] == "(" {
+							depth++
+						} else if in[i] == ")" {
+							depth--
+							if depth == 0 {
+								break
+							}
+						}
+					}
+				}
+				continue
+			}
+		case "(":
+			parens++
+		case ")":
+			parens--
+		case "{":
+			switch {
+			case parens > 0:
+				stack = append(stack, frame{object: true})
+			case len(stack) == 0:
+				stack = append(stack, frame{root: in[defStart] != "fragment"})
+			default:
+				stack = append(stack, frame{})
+			}
+		case "}":
+			if n := len(stack); n > 0 {
+				top := stack[n-1]
+				stack = stack[:n-1]
+				if !top.object && !top.root && !top.typename {
+					out = append(out, "__typename")
+				}
+				if len(stack) == 0 {
+					defStart = i + 1
+				}
+			}
+		case "__typename":
+			if n := len(stack); n > 0 && parens == 0 && !stack[n-1].object {
+				aliased := (len(out) > 0 && out[len(out)-1] == ":") || (i+1 < len(in) && in[i+1] == ":")
+				if !aliased {
+					stack[n-1].typename = true
+				}
+			}
+		}
+		out = append(out, tok)
+	}
+	return out
+}
+
+// sameTokens reports whether web's document text, after urql's formatting, carries exactly the
+// GraphQL tokens of the registered (wire-form) document, `__typename` placement included.
+func sameTokens(web, registered string) bool {
+	x, y := urqlFormat(graphqlTokens(web)), graphqlTokens(registered)
 	if len(x) != len(y) {
 		return false
 	}

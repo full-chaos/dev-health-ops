@@ -161,7 +161,7 @@ VALUES ($1, $2, '10.0.0.0/8', true, now(), now())`, nextID(), controlOrgID)
 	normalize := venueoracle.DiffOptions{
 		Golden: golden,
 		Normalize: func(request venueoracle.Request, body string) string {
-			return dropKnownStaleClickHouseWarnings(t, redactField(t, body, "timestamp"))
+			return dropClickHouseTablesAfterThePythonFreeze(t, dropKnownStaleClickHouseWarnings(t, redactField(t, body, "timestamp")))
 		},
 	}
 

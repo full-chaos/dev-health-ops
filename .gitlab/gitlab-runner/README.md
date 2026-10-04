@@ -1,6 +1,6 @@
 # GitLab Runner (Docker) template
 
-This folder provides a simple Docker-based GitLab Runner setup suitable for running `.gitlab-ci.yml` (including `services` like Postgres/Mongo).
+This folder provides a simple Docker-based GitLab Runner setup suitable for running `.gitlab-ci.yml` (including `services` like Postgres, ClickHouse, Valkey and `docker:27-dind`).
 
 ## Start the runner container
 
@@ -19,7 +19,8 @@ docker exec -it gitlab-runner gitlab-runner register
 Recommended answers:
 
 - **Executor**: `docker`
-- **Default Docker image**: `python:3.11`
+- **Default Docker image**: `python:3.14`
+- **Privileged**: yes (the Go, container and live-e2e jobs start a `docker:27-dind` service)
 - **Tags**: `docker` (optional; only needed if your project requires tagged runners)
 
 ## Notes

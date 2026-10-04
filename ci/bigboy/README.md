@@ -272,13 +272,13 @@ Every check below fails loud with a named finding; none can pass on an empty or 
   expected public values; the running web container (names via `container-env-names.sh`) must carry
   every prod name. `AUTH_URL` stays hand-maintained per the lead's ruling; this check is what makes
   the hand list loud.
-- **Routing-ledger parity** (`routing-ops.txt` + `check-routing-parity.py`, STEPs `routing-enable` /
-  `routing-parity`): `routing-ops.txt` is the list of GraphQL operations enabled on prod. Each cut
-  enables whatever listed operation bigboy lacks (`dho goapi routing enable`, envelope minted inside
-  `venue-tools`, fixture org), then a fresh `status -json` must match: listed ops reachable, nothing
-  unlisted reachable, every row canary/100/go. `testopsRisk` is `KNOWN-MISSING CHAOS-6993` (the
-  enable proof gate needs a bigboy go-api-prove run; do not bypass it): the STEP exits 3, never 0,
-  and fails once it becomes reachable so the marker is removed.
+- **Routing-ledger parity** (`routing-ops.txt` + `check-routing-parity.py`): NOT a STEP of the cut
+  any more (CHAOS-8543; the STEPs were `routing-enable` / `routing-parity`). query-api serves a
+  catalog operation that has no routing row, so the cut has no row to enable, and the check reads
+  only rows (`reachable`): it reports a served operation with no row as missing. The script stays
+  for `bigboy-graphql-prove.sh` (its step 5, below), where each listed operation has a row.
+  `routing-ops.txt` is the list of GraphQL operations that had an enabled row on prod; the web-path
+  smoke reads its `KNOWN-MISSING` markers.
 - **Web-path smoke, real browser session** (`web-path-smoke.py`): now logs in through Auth.js
   (csrf + Credentials callback) with the PUBLIC Host header on traefik, so every call takes the
   browser's path through `web`'s proxy.ts. Checks: unauthenticated public-host request lands on web

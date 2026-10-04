@@ -40,6 +40,10 @@ func orgScopedCalls() map[string]orgScopedCall {
 			_, err := r.Query().TestopsRisk(ctx, orgID, model.TestOpsRiskInput{})
 			return err
 		},
+		"testopsJobFailures": func(r *Resolver, ctx context.Context, orgID string) error {
+			_, err := r.Query().TestopsJobFailures(ctx, orgID, model.TestOpsJobFailuresInput{Limit: 20})
+			return err
+		},
 		"busFactor": func(r *Resolver, ctx context.Context, orgID string) error {
 			_, err := r.Query().BusFactor(ctx, orgID, nil)
 			return err

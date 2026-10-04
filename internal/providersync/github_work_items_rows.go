@@ -95,6 +95,16 @@ type githubWorkItemDependencyRow struct {
 	LastSynced                   time.Time  `json:"last_synced"`
 	OrgID                        string     `json:"org_id"`
 	SourceID                     *uuid.UUID `json:"source_id"`
+	// RelationStartedAt is the provider's own time of the link, when the
+	// payload carries one (gitlab link_created_at, linear relation
+	// createdAt; CHAOS-8578). nil: not reported. Omitted from the effect
+	// when nil, so a row without it encodes as before the column existed.
+	RelationStartedAt *time.Time `json:"relation_started_at,omitempty"`
+	// RelationWriter is the items of the row that write it when they are
+	// synced (workitemmetrics.RelationWriterSource/Target/Both;
+	// CHAOS-8578). nil: not stored, the reader derives it from the row.
+	// Omitted from the effect when nil.
+	RelationWriter *string `json:"relation_writer,omitempty"`
 }
 
 type githubWorkItemReopenRow struct {

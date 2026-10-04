@@ -187,7 +187,7 @@ func readRelations(
 ) error {
 	query := `
 SELECT source_work_item_id, target_work_item_id, relationship_type, relationship_type_raw,
-       relationship_semantics_version, last_synced, relation_started_at
+       relationship_semantics_version, last_synced, relation_started_at, relation_writer
 FROM work_item_dependencies FINAL
 WHERE ` + blockingRelationFilter
 	args := []any{organizationID, workitemmetrics.CanonicalBlocksSemantics}
@@ -215,7 +215,7 @@ LIMIT ?`
 		)
 		if err := rows.Scan(
 			&relation.SourceID, &relation.TargetID, &relation.RelationshipType, &relation.Raw,
-			&relation.SemanticsVersion, &relation.LastSynced, &startedAt,
+			&relation.SemanticsVersion, &relation.LastSynced, &startedAt, &relation.Writer,
 		); err != nil {
 			return fmt.Errorf("scan blocking relation: %w", err)
 		}
@@ -379,7 +379,22 @@ ORDER BY work_item_id, last_synced`
 	}, ends); err != nil {
 		return nil, err
 	}
-	return ends.sorted(), nil
+	readTimes := map[string]time.Time{}
+	if err := readRelationsRead(ctx, conn, `
+WITH relation_ends AS (
+    SELECT arrayJoin([source_work_item_id, target_work_item_id]) AS end_id
+    FROM work_item_dependencies FINAL
+    WHERE `+blockingRelationFilter+`
+)
+SELECT work_item_id, max(relations_read_at)
+FROM work_item_relations_read
+WHERE org_id = ?
+  AND work_item_id IN (SELECT end_id FROM relation_ends)
+GROUP BY work_item_id
+ORDER BY work_item_id`, []any{organizationID, workitemmetrics.CanonicalBlocksSemantics, organizationID}, readTimes); err != nil {
+		return nil, err
+	}
+	return withRelationsRead(ends.sorted(), readTimes), nil
 }
 
 // LoadEndsLimited reads the stored work items that the GIVEN relations name,
@@ -419,7 +434,71 @@ LIMIT ?`
 	if err := read(`provider IN ('jira', 'linear') AND `+bareIssueKeySQL+` IN ?`, keys); err != nil {
 		return nil, err
 	}
-	return ends.sorted(), nil
+	readTimes := map[string]time.Time{}
+	for _, chunk := range querybound.ChunkStringsByRenderedBytes(ids, maxArrayBytes) {
+		if err := readRelationsRead(ctx, conn, `
+SELECT work_item_id, max(relations_read_at)
+FROM work_item_relations_read
+WHERE org_id = ? AND work_item_id IN ?
+GROUP BY work_item_id
+ORDER BY work_item_id`, []any{organizationID, chunk}, readTimes); err != nil {
+			return nil, err
+		}
+	}
+	return withRelationsRead(ends.sorted(), readTimes), nil
+}
+
+// readRelationsRead reads, per work item, the latest time a pass that reads
+// the item's relations wrote it: max(relations_read_at) of
+// work_item_relations_read (CHAOS-8578), which a materialized view fills from
+// every work_items row except a github Projects v2 board row. The maximum is
+// taken HERE, grouped by the item: the table is a ReplacingMergeTree and
+// holds one row per insert until parts merge.
+//
+// It is a second read, merged in Go (withRelationsRead), and not a LEFT
+// JOIN: an item with no row must read as "not stored", and a join would give
+// it the type's default time. Only items named by their id are read: an end
+// found by its issue key is a jira or linear item, which only passes that
+// read its relations write.
+func readRelationsRead(ctx context.Context, conn Querier, query string, args []any, readTimes map[string]time.Time) error {
+	rows, err := conn.Query(ctx, query, args...)
+	if err != nil {
+		return fmt.Errorf("load relation read times: %w", err)
+	}
+	defer rows.Close()
+
+	for rows.Next() {
+		var (
+			id   string
+			read time.Time
+		)
+		if err := rows.Scan(&id, &read); err != nil {
+			return fmt.Errorf("scan relation read time: %w", err)
+		}
+		// relations_read_at is DateTime64(3) with no time zone, as
+		// work_items.last_synced it is copied from.
+		read = read.UTC()
+		if existing, stored := readTimes[id]; stored && !read.After(existing) {
+			continue
+		}
+		readTimes[id] = read
+	}
+	if err := rows.Err(); err != nil {
+		return fmt.Errorf("iterate relation read times: %w", err)
+	}
+	return nil
+}
+
+// withRelationsRead sets each end's RelationsReadAt from readTimes; an end
+// with no stored read time keeps nil.
+func withRelationsRead(ends []workitemmetrics.RelationEnd, readTimes map[string]time.Time) []workitemmetrics.RelationEnd {
+	for index := range ends {
+		if read, stored := readTimes[ends[index].WorkItemID]; stored {
+			read := read
+			ends[index].RelationsReadAt = &read
+		}
+	}
+	return ends
 }
 
 // endIdentity is every column of a relation end as comparable values. Two

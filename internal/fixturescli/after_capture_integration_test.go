@@ -40,7 +40,12 @@ import (
 var columnsAfterTheCapture = map[string]map[string]string{
 	// The provider's own time of a work item relation (CHAOS-8574). No
 	// frozen relation has one.
-	"work_item_dependencies": {"relation_started_at": "102_work_item_dependency_first_seen.sql"},
+	// Which items of a relation write it (CHAOS-8578). No frozen relation
+	// has one either.
+	"work_item_dependencies": {
+		"relation_started_at": "102_work_item_dependency_first_seen.sql",
+		"relation_writer":     "103_work_item_relation_writer_and_read.sql",
+	},
 }
 
 // viewFilledTable is one table that a materialized view fills.
@@ -54,6 +59,9 @@ type viewFilledTable struct {
 	Key        []string
 	Column     string
 	SourceRule string
+	// SourceWhere, when set, is the filter of the view: only the Source
+	// rows it keeps reach the table, so only they enter the rule.
+	SourceWhere string
 }
 
 // viewFilledAfterTheCapture names every table a migration added, after the
@@ -68,6 +76,18 @@ var viewFilledAfterTheCapture = map[string]viewFilledTable{
 		Key:        []string{"org_id", "source_work_item_id", "target_work_item_id", "relationship_type"},
 		Column:     "first_seen_at",
 		SourceRule: "min(last_synced)",
+	},
+	// The latest time a pass that READS an item's relations wrote the item
+	// (CHAOS-8578): one row per item, relations_read_at = the largest
+	// last_synced of its work_items rows that are not github Projects v2
+	// board rows.
+	"work_item_relations_read": {
+		View: "work_item_relations_read_mv", Source: "work_items",
+		Migration:   "103_work_item_relation_writer_and_read.sql",
+		Key:         []string{"org_id", "work_item_id"},
+		Column:      "relations_read_at",
+		SourceRule:  "max(last_synced)",
+		SourceWhere: "NOT (provider = 'github' AND startsWith(project_id, 'ghprojv2:'))",
 	},
 }
 
@@ -217,7 +237,11 @@ func viewFilledProblems(t *testing.T, dsn string) []string {
 		}
 		keys := "`" + strings.Join(rule.Key, "`, `") + "`"
 		aggregate := rule.SourceRule[:strings.Index(rule.SourceRule, "(")]
-		want := keyedValues(clickHouseHTTP(t, dsn, fmt.Sprintf("SELECT %s, toString(%s) FROM `%s` GROUP BY %s ORDER BY %s FORMAT TSV", keys, rule.SourceRule, rule.Source, keys, keys)), len(rule.Key))
+		where := ""
+		if rule.SourceWhere != "" {
+			where = " WHERE " + rule.SourceWhere
+		}
+		want := keyedValues(clickHouseHTTP(t, dsn, fmt.Sprintf("SELECT %s, toString(%s) FROM `%s`%s GROUP BY %s ORDER BY %s FORMAT TSV", keys, rule.SourceRule, rule.Source, where, keys, keys)), len(rule.Key))
 		got := keyedValues(clickHouseHTTP(t, dsn, fmt.Sprintf("SELECT %s, toString(%s(`%s`)) FROM `%s` GROUP BY %s ORDER BY %s FORMAT TSV", keys, aggregate, rule.Column, name, keys, keys)), len(rule.Key))
 		problems = append(problems, viewFilledRowProblems(name, rule, want, got)...)
 	}

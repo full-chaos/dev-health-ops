@@ -9,6 +9,7 @@ import (
 	"time"
 	"unicode/utf8"
 
+	"github.com/full-chaos/dev-health-ops/internal/jobs/metrics/workitemmetrics"
 	"github.com/full-chaos/dev-health-ops/internal/providerfoundation"
 	"github.com/google/uuid"
 )
@@ -115,6 +116,9 @@ type gitlabIssueLinkPayload struct {
 	References struct {
 		Full string `json:"full"`
 	} `json:"references"`
+	// LinkCreatedAt is when the link was made at gitlab (the issue links
+	// API's link_created_at): the relation's start (CHAOS-8578).
+	LinkCreatedAt *string `json:"link_created_at"`
 }
 
 type gitlabIdentityResolver func(gitlabWorkItemUserPayload) string
@@ -681,7 +685,17 @@ func normalizeGitLabDependencies(
 ) []gitlabWorkItemDependencyRow {
 	rows := make([]gitlabWorkItemDependencyRow, 0)
 	seenTargets := map[string]struct{}{}
-	appendRow := func(source, target, relationship, raw string) {
+	// writer stores which items of the row write it (CHAOS-8578): a native
+	// issue link is on both issues, a description keyword or an issue key
+	// only in this item's text. The raw value cannot say it: "blocks" is
+	// both a link type and a keyword.
+	writerOf := func(source string) string {
+		if source == workItemID {
+			return workitemmetrics.RelationWriterSource
+		}
+		return workitemmetrics.RelationWriterTarget
+	}
+	appendRow := func(source, target, relationship, raw, writer string, startedAt *time.Time) {
 		if source == "" || target == "" || relationship == "" || raw == "" {
 			return
 		}
@@ -689,6 +703,7 @@ func normalizeGitLabDependencies(
 			SourceWorkItemID: source, TargetWorkItemID: target, RelationshipType: relationship,
 			RelationshipTypeRaw: raw, RelationshipSemanticsVersion: "canonical-blocks.v2",
 			LastSynced: normalizedAt.UTC(), OrgID: claim.OrgID,
+			RelationStartedAt: startedAt, RelationWriter: &writer,
 		}
 		if validateGitLabDependencyRow(row, claim) == nil {
 			rows = append(rows, row)
@@ -719,7 +734,7 @@ func normalizeGitLabDependencies(
 				source, target = targetID, workItemID
 			}
 		}
-		appendRow(source, target, relationship, linkType)
+		appendRow(source, target, relationship, linkType, workitemmetrics.RelationWriterBoth, parseGitLabWorkItemTime(link.LinkCreatedAt))
 	}
 	for _, match := range gitlabIssueReferencePattern.FindAllStringSubmatch(description, -1) {
 		project := match[1]
@@ -749,7 +764,7 @@ func normalizeGitLabDependencies(
 				break
 			}
 		}
-		appendRow(source, target, relationship, raw)
+		appendRow(source, target, relationship, raw, writerOf(source), nil)
 	}
 	seenExternal := map[string]struct{}{}
 	for _, match := range gitlabExternalKeyPattern.FindAllStringSubmatch(description, -1) {
@@ -768,7 +783,7 @@ func normalizeGitLabDependencies(
 		case "blocked by", "depends on":
 			relationship = "blocked_by"
 		}
-		appendRow(workItemID, "extkey:"+key, relationship, "external_issue_key")
+		appendRow(workItemID, "extkey:"+key, relationship, "external_issue_key", workitemmetrics.RelationWriterSource, nil)
 	}
 	return rows
 }

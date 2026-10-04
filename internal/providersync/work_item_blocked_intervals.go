@@ -4,6 +4,8 @@ import (
 	"context"
 	"log/slog"
 	"sort"
+	"strings"
+	"time"
 
 	"github.com/full-chaos/dev-health-ops/internal/jobs/metrics/workitemmetrics"
 	"github.com/full-chaos/dev-health-ops/internal/providerfoundation"
@@ -52,11 +54,20 @@ func loadWorkItemBlockedIntervalsForProvider(
 		if item.OrgID != claim.OrgID {
 			return nil, providerfoundation.ErrInvalidScope
 		}
-		ends = append(ends, workitemmetrics.RelationEnd{
+		end := workitemmetrics.RelationEnd{
 			WorkItemID: item.WorkItemID, Provider: item.Provider, ProjectID: derefString(item.ProjectID),
 			Status: item.Status, CreatedAt: item.CreatedAt.UTC(), CompletedAt: item.CompletedAt,
 			LastSynced: item.LastSynced.UTC(),
-		})
+		}
+		// This sync read the item's relations unless it is the github
+		// Projects v2 board pass, the one work_items writer that reads none
+		// -- the same test the view over work_items applies when the row is
+		// stored (work_item_relations_read, CHAOS-8578).
+		if relationsReadBy(end) {
+			read := end.LastSynced
+			end.RelationsReadAt = &read
+		}
+		ends = append(ends, end)
 	}
 	// The stored relations that name one of the unit's items: by the item's
 	// id, and -- for a jira or linear item -- by the external-key form of its
@@ -88,6 +99,10 @@ func loadWorkItemBlockedIntervalsForProvider(
 			Raw:              dependency.RelationshipTypeRaw,
 			SemanticsVersion: dependency.RelationshipSemanticsVersion,
 			LastSynced:       dependency.LastSynced.UTC(),
+			// What the normalizer stored with the row (CHAOS-8578): the
+			// provider's time of the link and who writes the row.
+			StartedAt: utcTimePointer(dependency.RelationStartedAt),
+			Writer:    dependency.RelationWriter,
 		})
 	}
 
@@ -184,4 +199,22 @@ func mergeBlockingRelations(stored, fresh []workitemmetrics.BlockingRelation) []
 		merged = append(merged, newest[k])
 	}
 	return merged
+}
+
+// relationsReadBy reports whether the sync that wrote this work item row read
+// the item's relations: every row except a github row written by the
+// Projects v2 board pass (project_id workitemmetrics.GitHubBoardProjectPrefix),
+// which reads no issue text. It is the test of the view that fills
+// work_item_relations_read (migration 103_work_item_relation_writer_and_read).
+func relationsReadBy(end workitemmetrics.RelationEnd) bool {
+	return end.Provider != "github" || !strings.HasPrefix(end.ProjectID, workitemmetrics.GitHubBoardProjectPrefix)
+}
+
+// utcTimePointer returns a copy of value in UTC, or nil.
+func utcTimePointer(value *time.Time) *time.Time {
+	if value == nil {
+		return nil
+	}
+	utc := value.UTC()
+	return &utc
 }

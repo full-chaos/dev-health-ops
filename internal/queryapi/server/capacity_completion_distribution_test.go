@@ -23,7 +23,7 @@ import (
 // CHAOS-8598: the per-team completionDistribution read document that MCP run_operation serves by digest.
 
 // The digest is pinned as a literal: a change to the text changes the digest acr vendors, and the routing row a deploy seeds is keyed on it.
-const capacityCompletionDistributionPinnedDigest = "ff9677f7be8d853764d7f4c629a862e63a641443cd3df458b39ffe2451750bff"
+const capacityCompletionDistributionPinnedDigest = "35c0db3c5676f0f1d6a267c8c3a622d36e300a70dc54a03f2990a2bf71c64af5"
 
 func loadCapacityCompletionDistribution(t *testing.T) *ast.OperationDefinition {
 	t.Helper()
@@ -62,24 +62,52 @@ func TestCapacityCompletionDistributionDocument_DigestIsPinnedAndCataloged(t *te
 	t.Fatalf("digest %s is not in the checked-in operation catalog", got)
 }
 
+// The document is the wire form the graphql-wire-parity gate derives from the web source const: the fixture is that gate's own wireForm output.
+func TestCapacityCompletionDistributionDocument_IsTheWireFormFixture(t *testing.T) {
+	fixture := readWireFormFile(t, "capacityCompletionDistribution.graphql")
+	if !strings.Contains(fixture, "__typename") {
+		t.Fatal("the fixture carries no __typename: it is not a wire form")
+	}
+	if got, want := digestHex(registeredCapacityCompletionDistributionDocument), digestHex(fixture); got != want {
+		t.Fatalf("document digests to %s, the wire form fixture to %s", got, want)
+	}
+}
+
 func TestCapacityCompletionDistributionDocument_SelectsExactlyTheDistribution(t *testing.T) {
 	op := loadCapacityCompletionDistribution(t)
-	if len(op.SelectionSet) != 1 {
-		t.Fatalf("%d root selections, want 1", len(op.SelectionSet))
+	// names lists a selection set's field names, __typename (the wire form's injection) set aside.
+	names := func(set ast.SelectionSet) []string {
+		var out []string
+		for _, sel := range set {
+			if f := sel.(*ast.Field); f.Name != "__typename" {
+				out = append(out, f.Name)
+			}
+		}
+		return out
 	}
-	root := op.SelectionSet[0].(*ast.Field)
-	if root.Name != "capacityForecast" || len(root.SelectionSet) != 1 {
-		t.Fatalf("root %q with %d selections, want capacityForecast with only completionDistribution", root.Name, len(root.SelectionSet))
+	field := func(set ast.SelectionSet, name string) *ast.Field {
+		for _, sel := range set {
+			if f := sel.(*ast.Field); f.Name == name {
+				return f
+			}
+		}
+		t.Fatalf("no %s selection", name)
+		return nil
 	}
-	dist := root.SelectionSet[0].(*ast.Field)
-	if dist.Name != "completionDistribution" || len(dist.SelectionSet) != 2 {
-		t.Fatalf("selection %q with %d members, want completionDistribution{days items}", dist.Name, len(dist.SelectionSet))
+	if got := names(op.SelectionSet); len(got) != 1 || got[0] != "capacityForecast" {
+		t.Fatalf("root selections %v, want capacityForecast only", got)
 	}
-	for i, want := range []string{"days", "items"} {
-		list := dist.SelectionSet[i].(*ast.Field)
-		if list.Name != want || len(list.SelectionSet) != 2 ||
-			list.SelectionSet[0].(*ast.Field).Name != "value" || list.SelectionSet[1].(*ast.Field).Name != "count" {
-			t.Fatalf("%s does not select exactly {value count}", want)
+	root := field(op.SelectionSet, "capacityForecast")
+	if got := names(root.SelectionSet); len(got) != 1 || got[0] != "completionDistribution" {
+		t.Fatalf("capacityForecast selects %v, want only completionDistribution", got)
+	}
+	dist := field(root.SelectionSet, "completionDistribution")
+	if got := names(dist.SelectionSet); len(got) != 2 || got[0] != "days" || got[1] != "items" {
+		t.Fatalf("completionDistribution selects %v, want days and items", got)
+	}
+	for _, list := range []string{"days", "items"} {
+		if got := names(field(dist.SelectionSet, list).SelectionSet); len(got) != 2 || got[0] != "value" || got[1] != "count" {
+			t.Fatalf("%s selects %v, want exactly value and count", list, got)
 		}
 	}
 }
@@ -165,17 +193,22 @@ func TestCapacityCompletionDistributionDocument_ServesTheCapacityForecastShapePe
 
 	var out struct {
 		Data struct {
-			CapacityForecast map[string]map[string]json.RawMessage `json:"capacityForecast"`
+			CapacityForecast map[string]json.RawMessage `json:"capacityForecast"`
 		} `json:"data"`
 		Errors []any `json:"errors"`
 	}
 	if err := json.Unmarshal(rec.Body.Bytes(), &out); err != nil || len(out.Errors) > 0 {
 		t.Fatalf("bad answer (%v, errors %v): %s", err, out.Errors, rec.Body.String())
 	}
+	delete(out.Data.CapacityForecast, "__typename")
 	if len(out.Data.CapacityForecast) != 1 {
 		t.Fatalf("capacityForecast carries %d members, want only completionDistribution: %s", len(out.Data.CapacityForecast), rec.Body.String())
 	}
-	dist := out.Data.CapacityForecast["completionDistribution"]
+	var dist map[string]json.RawMessage
+	if err := json.Unmarshal(out.Data.CapacityForecast["completionDistribution"], &dist); err != nil {
+		t.Fatal(err)
+	}
+	delete(dist, "__typename")
 	if len(dist) != 2 {
 		t.Fatalf("completionDistribution members %v, want days and items only", dist)
 	}

@@ -195,8 +195,12 @@ func metricRules(a *repoAgg) []opportunity {
 	return out
 }
 
-// project renders an opportunity as its response object.
-func (o opportunity) project() model.AIOpportunity {
+// project renders an opportunity as its response object, with the catalogue
+// names of its repository and team (CHAOS-8114; nil = no name). The names are
+// set in the literal: the registered-document gate
+// (TestRegisteredDocumentFieldsArePopulatable) reads a field as served only when
+// a literal sets it.
+func (o opportunity) project(repoName, teamName *string) model.AIOpportunity {
 	drill := []model.AIWorkGraphDrilldownRef{}
 	for _, ref := range o.refs {
 		parts := strings.Split(ref, ":")
@@ -220,6 +224,8 @@ func (o opportunity) project() model.AIOpportunity {
 		Score:               o.score,
 		EvidenceRefs:        o.refs,
 		WorkGraphDrilldowns: drill,
+		RepoName:            repoName,
+		TeamName:            teamName,
 	}
 }
 
@@ -490,11 +496,29 @@ func AiOpportunities(ctx context.Context, client QueryClient, orgID string, in *
 	if len(opps) > bounded {
 		opps = opps[:bounded]
 	}
+	// CHAOS-8114: the display names of the returned page, read once, after the
+	// limit cut. A name is never needed to decide what is returned.
+	catalogue := loadRepoCatalogue(ctx, client, orgID, opportunityRepoIDs(opps), "aiOpportunities")
 	recs := make([]model.AIOpportunity, 0, len(opps))
 	for _, o := range opps {
-		recs = append(recs, o.project())
+		recs = append(recs, o.project(catalogue.repoName(o.repoID), catalogue.teamName(o.teamID)))
 	}
 	return &model.AIOpportunitiesResult{OrgID: orgID, Recommendations: recs, DetectorReady: true}, nil
+}
+
+// opportunityRepoIDs lists the distinct repositories of a page of opportunities
+// in first-seen order, so the name read binds the same ids on every call.
+func opportunityRepoIDs(opps []opportunity) []string {
+	seen := make(map[string]bool, len(opps))
+	var out []string
+	for _, o := range opps {
+		if o.repoID == "" || seen[o.repoID] {
+			continue
+		}
+		seen[o.repoID] = true
+		out = append(out, o.repoID)
+	}
+	return out
 }
 
 // workflowOpportunities runs the repetitive-change, title-pattern,

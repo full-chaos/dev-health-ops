@@ -12,20 +12,26 @@ import (
 // restmounted.go's mountedRESTPaths each carry one further line.
 // Nothing else in those shared files changes here.
 //
-// opportunitiesNumericLeaves declares ZERO numeric leaves: every field
-// OpportunitiesResponse can reach (id, title, rationale, evidence_links,
-// suggested_experiments) is a string or a list of strings -- the one
-// numeric value the route computes, delta_pct, is only ever interpolated
-// into the "rationale" STRING (services/opportunities.py:80-83,
-// "{delta.delta_pct:.0f}%"), never emitted as its own JSON leaf.
-// NumericLeavesDeclared is still set (with empty FloatTierB/
-// FloatExactLeaves/IntegerLeaves) so a future numeric field added to this
-// shape would fail UndeclaredNumericLeaves rather than silently comparing
-// Tier A -- the same reason a route with a genuinely empty declaration
-// still sets the marker (Options.NumericLeavesDeclared's own doc
-// comment).
+// opportunitiesNumericLeaves declares the three numeric leaves a card has
+// since CHAOS-8109 (change_percent, range_days, compare_days). Before that
+// ticket the shape had none: every field (id, title, rationale,
+// evidence_links, suggested_experiments) was a string or a list of strings,
+// and the one numeric value the route computes, delta_pct, was only ever
+// interpolated into the "rationale" STRING (services/opportunities.py:80-83,
+// "{delta.delta_pct:.0f}%"). The three leaves are Go-only: the Python
+// reference never served them, so a comparison against a Python answer
+// reports them as leaves the baseline does not have, whatever their tier.
+// NumericLeavesDeclared stays set, so a further numeric field added to this
+// shape fails UndeclaredNumericLeaves rather than silently comparing Tier A.
 var opportunitiesNumericLeaves = Options{
 	NumericLeavesDeclared: true,
+	FloatTierB: map[string]string{
+		"data.items.change_percent": "the metric's delta_pct of the Home response the card is built from (CHAOS-8109): a ratio of two merged ClickHouse aggregates, the same value home's own deltas.delta_pct holds.",
+	},
+	IntegerLeaves: map[string]string{
+		"data.items.range_days":   "the request's own time filter (CHAOS-8109): an integer of the request, never computed.",
+		"data.items.compare_days": "the request's own time filter (CHAOS-8109): an integer of the request, never computed.",
+	},
 }
 
 // opportunitiesTeamScopeSubsetDefect declares the team-scoped candidate
@@ -44,14 +50,15 @@ var opportunitiesNumericLeaves = Options{
 // candidate cause by its own metric, one title per metric); rationale,
 // evidence_links and suggested_experiments are declared EQUAL because
 // this route computes no per-item aggregate a narrower scope could
-// legitimately shrink -- opportunitiesNumericLeaves' own doc comment
-// above already establishes that delta_pct, this route's one numeric
-// value, is only ever interpolated into the rationale STRING, never its
-// own leaf, so an admitted opportunity's rationale is expected to read
-// identically whether the underlying delta was computed org-wide or over
-// the team's own narrower repository set for a genuinely stable driver;
-// a rationale that in fact differs (a real percentage change) simply
-// fails the equality check and stays outside, correctly.
+// legitimately shrink -- the Python baseline interpolates delta_pct, its
+// one numeric value, only into the rationale STRING, so an admitted
+// opportunity's rationale is expected to read identically whether the
+// underlying delta was computed org-wide or over the team's own narrower
+// repository set for a genuinely stable driver; a rationale that in fact
+// differs (a real percentage change) simply fails the equality check and
+// stays outside, correctly. change_percent, direction, range_days and
+// compare_days (CHAOS-8109, Go-only) are NOT declared equal: the delta of
+// a narrower scope is another number, and the baseline has no such leaf.
 var opportunitiesTeamScopeSubsetDefect = BaselineDefect{
 	Ticket: "CHAOS-5920",
 	Reason: "GET/POST /api/v1/opportunities' team scope resolves a team's repositories from team_repo_ownership through one shared condition (internal/queryapi/teamscope.RepoCondition), while the reference plane resolves the same scope from user_metrics_daily.team_id (resolve_repo_ids_for_teams, api/queries/scopes.py) and, for this route's own home-response composition, additionally drops the filter outright before an org_id ever reaches it -- either way the baseline answers organization-wide for a request the candidate answers over the team's own narrower repository set. For a genuinely narrower team the candidate's item list is therefore a subset of the baseline's own list, paired by title rather than the response's own rank-assigned id (see this var's own doc comment). Go is correct.",
@@ -70,6 +77,8 @@ var opportunitiesTeamScopeSubsetDefect = BaselineDefect{
 // opportunities_team_scoped entries.
 var opportunitiesTeamScopedParity = Options{
 	NumericLeavesDeclared: true,
+	FloatTierB:            opportunitiesNumericLeaves.FloatTierB,
+	IntegerLeaves:         opportunitiesNumericLeaves.IntegerLeaves,
 	BaselineDefects:       []BaselineDefect{opportunitiesTeamScopeSubsetDefect},
 }
 

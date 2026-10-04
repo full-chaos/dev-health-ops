@@ -227,6 +227,10 @@ type AIOpportunity struct {
 	Score               float64                   `json:"score"`
 	EvidenceRefs        []string                  `json:"evidenceRefs"`
 	WorkGraphDrilldowns []AIWorkGraphDrilldownRef `json:"workGraphDrilldowns"`
+	// The repository's full name in the org's repository catalogue (CHAOS-8114). Null = the catalogue holds no name for ``repoId``, or the catalogue could not be read. It is never the id.
+	RepoName *string `json:"repoName,omitempty"`
+	// The name of the team ``teamId`` names, from the org's team catalogue (CHAOS-8114). Null = the opportunity has no team, the catalogue holds no name for it, or the catalogue could not be read. It is never the id.
+	TeamName *string `json:"teamName,omitempty"`
 }
 
 type AIReviewLoadResult struct {
@@ -1262,11 +1266,21 @@ type ReportRunType struct {
 }
 
 type ReviewEdgeRow struct {
-	Reviewer     string           `json:"reviewer"`
+	// The stored identity of the reviewer: a provider login or a display name. Deprecated in favour of reviewerName and reviewerKey (CHAOS-8485); it stays for clients that still read it.
+	Reviewer string `json:"reviewer"`
+	// The stored identity of the author: the pull request's author e-mail address when there is one, else its author name, else "unknown". It can be an e-mail address. Deprecated in favour of authorName and authorKey (CHAOS-8485): a client that may not show an e-mail address must not select it.
 	Author       string           `json:"author"`
 	ReviewsCount int              `json:"reviewsCount"`
 	Day          graphqldate.Date `json:"day"`
 	RepoID       *string          `json:"repoId,omitempty"`
+	// The reviewer's display name (CHAOS-8485): the display name of the org's identity the stored reviewer belongs to; else the stored reviewer itself when it is not an e-mail address (a provider login). Never an e-mail address. Null = no name is known.
+	ReviewerName *string `json:"reviewerName,omitempty"`
+	// The author's display name (CHAOS-8485): the display name of the org's identity the stored author belongs to; else, for an author stored by e-mail address, the author name the provider gave on the pull request; else the stored author itself when it is not an e-mail address. Never an e-mail address. Null = no name is known.
+	AuthorName *string `json:"authorName,omitempty"`
+	// An opaque key of the reviewer inside the org (CHAOS-8485): the same person has the same key in every answer, as reviewer and as author when the identity resolves. It is not an e-mail address and not a name; use it only to tell people apart and to join rows.
+	ReviewerKey string `json:"reviewerKey"`
+	// An opaque key of the author inside the org (CHAOS-8485); see reviewerKey.
+	AuthorKey string `json:"authorKey"`
 }
 
 type ReviewEdgesInput struct {

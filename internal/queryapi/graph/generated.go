@@ -250,8 +250,10 @@ type ComplexityRoot struct {
 		OpportunityID       func(childComplexity int) int
 		Rationale           func(childComplexity int) int
 		RepoID              func(childComplexity int) int
+		RepoName            func(childComplexity int) int
 		Score               func(childComplexity int) int
 		TeamID              func(childComplexity int) int
+		TeamName            func(childComplexity int) int
 		Title               func(childComplexity int) int
 		WorkGraphDrilldowns func(childComplexity int) int
 	}
@@ -1153,9 +1155,13 @@ type ComplexityRoot struct {
 
 	ReviewEdgeRow struct {
 		Author       func(childComplexity int) int
+		AuthorKey    func(childComplexity int) int
+		AuthorName   func(childComplexity int) int
 		Day          func(childComplexity int) int
 		RepoID       func(childComplexity int) int
 		Reviewer     func(childComplexity int) int
+		ReviewerKey  func(childComplexity int) int
+		ReviewerName func(childComplexity int) int
 		ReviewsCount func(childComplexity int) int
 	}
 
@@ -2575,6 +2581,13 @@ func (e *executableSchema) Complexity(typeName, field string, childComplexity in
 
 		return e.complexity.AIOpportunity.RepoID(childComplexity), true
 
+	case "AIOpportunity.repoName":
+		if e.complexity.AIOpportunity.RepoName == nil {
+			break
+		}
+
+		return e.complexity.AIOpportunity.RepoName(childComplexity), true
+
 	case "AIOpportunity.score":
 		if e.complexity.AIOpportunity.Score == nil {
 			break
@@ -2588,6 +2601,13 @@ func (e *executableSchema) Complexity(typeName, field string, childComplexity in
 		}
 
 		return e.complexity.AIOpportunity.TeamID(childComplexity), true
+
+	case "AIOpportunity.teamName":
+		if e.complexity.AIOpportunity.TeamName == nil {
+			break
+		}
+
+		return e.complexity.AIOpportunity.TeamName(childComplexity), true
 
 	case "AIOpportunity.title":
 		if e.complexity.AIOpportunity.Title == nil {
@@ -6994,6 +7014,20 @@ func (e *executableSchema) Complexity(typeName, field string, childComplexity in
 
 		return e.complexity.ReviewEdgeRow.Author(childComplexity), true
 
+	case "ReviewEdgeRow.authorKey":
+		if e.complexity.ReviewEdgeRow.AuthorKey == nil {
+			break
+		}
+
+		return e.complexity.ReviewEdgeRow.AuthorKey(childComplexity), true
+
+	case "ReviewEdgeRow.authorName":
+		if e.complexity.ReviewEdgeRow.AuthorName == nil {
+			break
+		}
+
+		return e.complexity.ReviewEdgeRow.AuthorName(childComplexity), true
+
 	case "ReviewEdgeRow.day":
 		if e.complexity.ReviewEdgeRow.Day == nil {
 			break
@@ -7014,6 +7048,20 @@ func (e *executableSchema) Complexity(typeName, field string, childComplexity in
 		}
 
 		return e.complexity.ReviewEdgeRow.Reviewer(childComplexity), true
+
+	case "ReviewEdgeRow.reviewerKey":
+		if e.complexity.ReviewEdgeRow.ReviewerKey == nil {
+			break
+		}
+
+		return e.complexity.ReviewEdgeRow.ReviewerKey(childComplexity), true
+
+	case "ReviewEdgeRow.reviewerName":
+		if e.complexity.ReviewEdgeRow.ReviewerName == nil {
+			break
+		}
+
+		return e.complexity.ReviewEdgeRow.ReviewerName(childComplexity), true
 
 	case "ReviewEdgeRow.reviewsCount":
 		if e.complexity.ReviewEdgeRow.ReviewsCount == nil {
@@ -8827,6 +8875,14 @@ type AIOpportunity {
   score: Float!
   evidenceRefs: [String!]!
   workGraphDrilldowns: [AIWorkGraphDrilldownRef!]!
+  """
+  The repository's full name in the org's repository catalogue (CHAOS-8114). Null = the catalogue holds no name for ` + "`" + `` + "`" + `repoId` + "`" + `` + "`" + `, or the catalogue could not be read. It is never the id.
+  """
+  repoName: String
+  """
+  The name of the team ` + "`" + `` + "`" + `teamId` + "`" + `` + "`" + ` names, from the org's team catalogue (CHAOS-8114). Null = the opportunity has no team, the catalogue holds no name for it, or the catalogue could not be read. It is never the id.
+  """
+  teamName: String
 }
 
 enum AIOpportunityKind {
@@ -10186,11 +10242,33 @@ type ReportRunType {
 }
 
 type ReviewEdgeRow {
+  """
+  The stored identity of the reviewer: a provider login or a display name. Deprecated in favour of reviewerName and reviewerKey (CHAOS-8485); it stays for clients that still read it.
+  """
   reviewer: String!
+  """
+  The stored identity of the author: the pull request's author e-mail address when there is one, else its author name, else "unknown". It can be an e-mail address. Deprecated in favour of authorName and authorKey (CHAOS-8485): a client that may not show an e-mail address must not select it.
+  """
   author: String!
   reviewsCount: Int!
   day: Date!
   repoId: String
+  """
+  The reviewer's display name (CHAOS-8485): the display name of the org's identity the stored reviewer belongs to; else the stored reviewer itself when it is not an e-mail address (a provider login). Never an e-mail address. Null = no name is known.
+  """
+  reviewerName: String
+  """
+  The author's display name (CHAOS-8485): the display name of the org's identity the stored author belongs to; else, for an author stored by e-mail address, the author name the provider gave on the pull request; else the stored author itself when it is not an e-mail address. Never an e-mail address. Null = no name is known.
+  """
+  authorName: String
+  """
+  An opaque key of the reviewer inside the org (CHAOS-8485): the same person has the same key in every answer, as reviewer and as author when the identity resolves. It is not an e-mail address and not a name; use it only to tell people apart and to join rows.
+  """
+  reviewerKey: String!
+  """
+  An opaque key of the author inside the org (CHAOS-8485); see reviewerKey.
+  """
+  authorKey: String!
 }
 
 input ReviewEdgesInput {
@@ -20179,6 +20257,10 @@ func (ec *executionContext) fieldContext_AIOpportunitiesResult_recommendations(_
 				return ec.fieldContext_AIOpportunity_evidenceRefs(ctx, field)
 			case "workGraphDrilldowns":
 				return ec.fieldContext_AIOpportunity_workGraphDrilldowns(ctx, field)
+			case "repoName":
+				return ec.fieldContext_AIOpportunity_repoName(ctx, field)
+			case "teamName":
+				return ec.fieldContext_AIOpportunity_teamName(ctx, field)
 			}
 			return nil, fmt.Errorf("no field named %q was found under type AIOpportunity", field.Name)
 		},
@@ -20623,6 +20705,88 @@ func (ec *executionContext) fieldContext_AIOpportunity_workGraphDrilldowns(_ con
 				return ec.fieldContext_AIWorkGraphDrilldownRef_label(ctx, field)
 			}
 			return nil, fmt.Errorf("no field named %q was found under type AIWorkGraphDrilldownRef", field.Name)
+		},
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _AIOpportunity_repoName(ctx context.Context, field graphql.CollectedField, obj *model.AIOpportunity) (ret graphql.Marshaler) {
+	fc, err := ec.fieldContext_AIOpportunity_repoName(ctx, field)
+	if err != nil {
+		return graphql.Null
+	}
+	ctx = graphql.WithFieldContext(ctx, fc)
+	defer func() {
+		if r := recover(); r != nil {
+			ec.Error(ctx, ec.Recover(ctx, r))
+			ret = graphql.Null
+		}
+	}()
+	resTmp, err := ec.ResolverMiddleware(ctx, func(rctx context.Context) (any, error) {
+		ctx = rctx // use context from middleware stack in children
+		return obj.RepoName, nil
+	})
+	if err != nil {
+		ec.Error(ctx, err)
+		return graphql.Null
+	}
+	if resTmp == nil {
+		return graphql.Null
+	}
+	res := resTmp.(*string)
+	fc.Result = res
+	return ec.marshalOString2ᚖstring(ctx, field.Selections, res)
+}
+
+func (ec *executionContext) fieldContext_AIOpportunity_repoName(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "AIOpportunity",
+		Field:      field,
+		IsMethod:   false,
+		IsResolver: false,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return nil, errors.New("field of type String does not have child fields")
+		},
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _AIOpportunity_teamName(ctx context.Context, field graphql.CollectedField, obj *model.AIOpportunity) (ret graphql.Marshaler) {
+	fc, err := ec.fieldContext_AIOpportunity_teamName(ctx, field)
+	if err != nil {
+		return graphql.Null
+	}
+	ctx = graphql.WithFieldContext(ctx, fc)
+	defer func() {
+		if r := recover(); r != nil {
+			ec.Error(ctx, ec.Recover(ctx, r))
+			ret = graphql.Null
+		}
+	}()
+	resTmp, err := ec.ResolverMiddleware(ctx, func(rctx context.Context) (any, error) {
+		ctx = rctx // use context from middleware stack in children
+		return obj.TeamName, nil
+	})
+	if err != nil {
+		ec.Error(ctx, err)
+		return graphql.Null
+	}
+	if resTmp == nil {
+		return graphql.Null
+	}
+	res := resTmp.(*string)
+	fc.Result = res
+	return ec.marshalOString2ᚖstring(ctx, field.Selections, res)
+}
+
+func (ec *executionContext) fieldContext_AIOpportunity_teamName(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "AIOpportunity",
+		Field:      field,
+		IsMethod:   false,
+		IsResolver: false,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return nil, errors.New("field of type String does not have child fields")
 		},
 	}
 	return fc, nil
@@ -49108,6 +49272,176 @@ func (ec *executionContext) fieldContext_ReviewEdgeRow_repoId(_ context.Context,
 	return fc, nil
 }
 
+func (ec *executionContext) _ReviewEdgeRow_reviewerName(ctx context.Context, field graphql.CollectedField, obj *model.ReviewEdgeRow) (ret graphql.Marshaler) {
+	fc, err := ec.fieldContext_ReviewEdgeRow_reviewerName(ctx, field)
+	if err != nil {
+		return graphql.Null
+	}
+	ctx = graphql.WithFieldContext(ctx, fc)
+	defer func() {
+		if r := recover(); r != nil {
+			ec.Error(ctx, ec.Recover(ctx, r))
+			ret = graphql.Null
+		}
+	}()
+	resTmp, err := ec.ResolverMiddleware(ctx, func(rctx context.Context) (any, error) {
+		ctx = rctx // use context from middleware stack in children
+		return obj.ReviewerName, nil
+	})
+	if err != nil {
+		ec.Error(ctx, err)
+		return graphql.Null
+	}
+	if resTmp == nil {
+		return graphql.Null
+	}
+	res := resTmp.(*string)
+	fc.Result = res
+	return ec.marshalOString2ᚖstring(ctx, field.Selections, res)
+}
+
+func (ec *executionContext) fieldContext_ReviewEdgeRow_reviewerName(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "ReviewEdgeRow",
+		Field:      field,
+		IsMethod:   false,
+		IsResolver: false,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return nil, errors.New("field of type String does not have child fields")
+		},
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _ReviewEdgeRow_authorName(ctx context.Context, field graphql.CollectedField, obj *model.ReviewEdgeRow) (ret graphql.Marshaler) {
+	fc, err := ec.fieldContext_ReviewEdgeRow_authorName(ctx, field)
+	if err != nil {
+		return graphql.Null
+	}
+	ctx = graphql.WithFieldContext(ctx, fc)
+	defer func() {
+		if r := recover(); r != nil {
+			ec.Error(ctx, ec.Recover(ctx, r))
+			ret = graphql.Null
+		}
+	}()
+	resTmp, err := ec.ResolverMiddleware(ctx, func(rctx context.Context) (any, error) {
+		ctx = rctx // use context from middleware stack in children
+		return obj.AuthorName, nil
+	})
+	if err != nil {
+		ec.Error(ctx, err)
+		return graphql.Null
+	}
+	if resTmp == nil {
+		return graphql.Null
+	}
+	res := resTmp.(*string)
+	fc.Result = res
+	return ec.marshalOString2ᚖstring(ctx, field.Selections, res)
+}
+
+func (ec *executionContext) fieldContext_ReviewEdgeRow_authorName(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "ReviewEdgeRow",
+		Field:      field,
+		IsMethod:   false,
+		IsResolver: false,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return nil, errors.New("field of type String does not have child fields")
+		},
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _ReviewEdgeRow_reviewerKey(ctx context.Context, field graphql.CollectedField, obj *model.ReviewEdgeRow) (ret graphql.Marshaler) {
+	fc, err := ec.fieldContext_ReviewEdgeRow_reviewerKey(ctx, field)
+	if err != nil {
+		return graphql.Null
+	}
+	ctx = graphql.WithFieldContext(ctx, fc)
+	defer func() {
+		if r := recover(); r != nil {
+			ec.Error(ctx, ec.Recover(ctx, r))
+			ret = graphql.Null
+		}
+	}()
+	resTmp, err := ec.ResolverMiddleware(ctx, func(rctx context.Context) (any, error) {
+		ctx = rctx // use context from middleware stack in children
+		return obj.ReviewerKey, nil
+	})
+	if err != nil {
+		ec.Error(ctx, err)
+		return graphql.Null
+	}
+	if resTmp == nil {
+		if !graphql.HasFieldError(ctx, fc) {
+			ec.Errorf(ctx, "must not be null")
+		}
+		return graphql.Null
+	}
+	res := resTmp.(string)
+	fc.Result = res
+	return ec.marshalNString2string(ctx, field.Selections, res)
+}
+
+func (ec *executionContext) fieldContext_ReviewEdgeRow_reviewerKey(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "ReviewEdgeRow",
+		Field:      field,
+		IsMethod:   false,
+		IsResolver: false,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return nil, errors.New("field of type String does not have child fields")
+		},
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _ReviewEdgeRow_authorKey(ctx context.Context, field graphql.CollectedField, obj *model.ReviewEdgeRow) (ret graphql.Marshaler) {
+	fc, err := ec.fieldContext_ReviewEdgeRow_authorKey(ctx, field)
+	if err != nil {
+		return graphql.Null
+	}
+	ctx = graphql.WithFieldContext(ctx, fc)
+	defer func() {
+		if r := recover(); r != nil {
+			ec.Error(ctx, ec.Recover(ctx, r))
+			ret = graphql.Null
+		}
+	}()
+	resTmp, err := ec.ResolverMiddleware(ctx, func(rctx context.Context) (any, error) {
+		ctx = rctx // use context from middleware stack in children
+		return obj.AuthorKey, nil
+	})
+	if err != nil {
+		ec.Error(ctx, err)
+		return graphql.Null
+	}
+	if resTmp == nil {
+		if !graphql.HasFieldError(ctx, fc) {
+			ec.Errorf(ctx, "must not be null")
+		}
+		return graphql.Null
+	}
+	res := resTmp.(string)
+	fc.Result = res
+	return ec.marshalNString2string(ctx, field.Selections, res)
+}
+
+func (ec *executionContext) fieldContext_ReviewEdgeRow_authorKey(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "ReviewEdgeRow",
+		Field:      field,
+		IsMethod:   false,
+		IsResolver: false,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return nil, errors.New("field of type String does not have child fields")
+		},
+	}
+	return fc, nil
+}
+
 func (ec *executionContext) _ReviewEdgesResult_edges(ctx context.Context, field graphql.CollectedField, obj *model.ReviewEdgesResult) (ret graphql.Marshaler) {
 	fc, err := ec.fieldContext_ReviewEdgesResult_edges(ctx, field)
 	if err != nil {
@@ -49157,6 +49491,14 @@ func (ec *executionContext) fieldContext_ReviewEdgesResult_edges(_ context.Conte
 				return ec.fieldContext_ReviewEdgeRow_day(ctx, field)
 			case "repoId":
 				return ec.fieldContext_ReviewEdgeRow_repoId(ctx, field)
+			case "reviewerName":
+				return ec.fieldContext_ReviewEdgeRow_reviewerName(ctx, field)
+			case "authorName":
+				return ec.fieldContext_ReviewEdgeRow_authorName(ctx, field)
+			case "reviewerKey":
+				return ec.fieldContext_ReviewEdgeRow_reviewerKey(ctx, field)
+			case "authorKey":
+				return ec.fieldContext_ReviewEdgeRow_authorKey(ctx, field)
 			}
 			return nil, fmt.Errorf("no field named %q was found under type ReviewEdgeRow", field.Name)
 		},
@@ -63342,6 +63684,10 @@ func (ec *executionContext) _AIOpportunity(ctx context.Context, sel ast.Selectio
 			if out.Values[i] == graphql.Null {
 				out.Invalids++
 			}
+		case "repoName":
+			out.Values[i] = ec._AIOpportunity_repoName(ctx, field, obj)
+		case "teamName":
+			out.Values[i] = ec._AIOpportunity_teamName(ctx, field, obj)
 		default:
 			panic("unknown field " + strconv.Quote(field.Name))
 		}
@@ -70139,6 +70485,20 @@ func (ec *executionContext) _ReviewEdgeRow(ctx context.Context, sel ast.Selectio
 			}
 		case "repoId":
 			out.Values[i] = ec._ReviewEdgeRow_repoId(ctx, field, obj)
+		case "reviewerName":
+			out.Values[i] = ec._ReviewEdgeRow_reviewerName(ctx, field, obj)
+		case "authorName":
+			out.Values[i] = ec._ReviewEdgeRow_authorName(ctx, field, obj)
+		case "reviewerKey":
+			out.Values[i] = ec._ReviewEdgeRow_reviewerKey(ctx, field, obj)
+			if out.Values[i] == graphql.Null {
+				out.Invalids++
+			}
+		case "authorKey":
+			out.Values[i] = ec._ReviewEdgeRow_authorKey(ctx, field, obj)
+			if out.Values[i] == graphql.Null {
+				out.Invalids++
+			}
 		default:
 			panic("unknown field " + strconv.Quote(field.Name))
 		}

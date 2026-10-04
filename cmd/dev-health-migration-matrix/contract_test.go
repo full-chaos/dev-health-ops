@@ -2,6 +2,7 @@ package main
 
 import (
 	"bytes"
+	"fmt"
 	"io"
 	"os"
 	"os/exec"
@@ -755,6 +756,112 @@ func TestRenderFailsOnALiveRowTheCatalogCannotDispatch(t *testing.T) {
 		t.Fatalf("-render must fail on R14 for a drifted live row; err=%v stderr=%s", renderErr, printed.String())
 	}
 	t.Logf("cell -render on a drifted live row -> err=%q, R14 printed: true", renderErr)
+}
+
+// CHAOS-8543: an EMPTY go_api_routing_state is a valid state since the catalog
+// rule (query-api serves every catalog operation that has no routing row), and
+// the offline reader refused it ("has no rows; an EMPTY go_api_routing_state is
+// itself a finding"), so the tool could not render a stack in that state.
+//
+// The reader half: the snapshot `psql -At` writes for an empty table carries
+// `"rows": null`, and it is read as no rows with its proof total. What is NOT
+// a snapshot is still refused, so a truncated or hand-built file cannot read as
+// an empty table.
+func TestAnEmptyRoutingSnapshotIsRead(t *testing.T) {
+	dir := t.TempDir()
+	write := func(name, payload string) string {
+		t.Helper()
+		path := filepath.Join(dir, name)
+		if err := os.WriteFile(path, []byte(payload), 0o600); err != nil {
+			t.Fatalf("write: %v", err)
+		}
+		return path
+	}
+	for name, tc := range map[string]struct {
+		payload string
+		total   int
+	}{
+		"rows null, as psql prints an empty table": {`{"proof_run_total" : 0, "rows" : null}` + "\n", 0},
+		"rows empty": {`{"proof_run_total":7,"rows":[]}`, 7},
+	} {
+		rows, total, err := readRoutingFile(write("empty.json", tc.payload), "sha256:pin")
+		if err != nil || len(rows) != 0 || total != tc.total {
+			t.Errorf("%s: rows=%+v total=%d err=%v, want no row, total %d and no error", name, rows, total, err, tc.total)
+		}
+	}
+	for name, payload := range map[string]string{
+		"an empty file":                   "",
+		"an object with no proof total":   `{"rows":[]}`,
+		"an empty object":                 `{}`,
+		"a bare array":                    `[]`,
+		"rows that are not a list":        `{"proof_run_total":0,"rows":"none"}`,
+		"a key the statement never emits": `{"proof_run_total":0,"rows":[],"note":"empty"}`,
+	} {
+		if rows, _, err := readRoutingFile(write("not-a-snapshot.json", payload), "sha256:pin"); err == nil {
+			t.Errorf("%s was read as a snapshot with %d row(s); only the statement's own output is an empty table", name, len(rows))
+		}
+	}
+}
+
+// The render half, through the real runRender and the real -check in a scratch
+// git repository: an empty snapshot renders, the page says that the catalog is
+// served with no routing row (with the catalog's own operation count), the
+// table has no row, and the page -render wrote passes -check.
+func TestRenderOfAnEmptyRoutingSnapshotSaysTheCatalogIsServed(t *testing.T) {
+	root := copyContractTree(t)
+	for _, args := range [][]string{
+		{"init", "-q"},
+		{"-c", "user.email=t@example.com", "-c", "user.name=t", "-c", "commit.gpgsign=false", "add", "-A"},
+		{"-c", "user.email=t@example.com", "-c", "user.name=t", "-c", "commit.gpgsign=false", "commit", "-qm", "scratch"},
+	} {
+		if out, err := scratchGit(append([]string{"-C", root}, args...)...).CombinedOutput(); err != nil {
+			t.Fatalf("git %v: %v %s", args, err, out)
+		}
+	}
+	routing := filepath.Join(t.TempDir(), "routing.json")
+	if err := os.WriteFile(routing, []byte(`{"proof_run_total" : 0, "rows" : null}`+"\n"), 0o600); err != nil {
+		t.Fatalf("write routing: %v", err)
+	}
+	reader, writer, _ := os.Pipe()
+	saved := os.Stderr
+	os.Stderr = writer
+	renderErr := runRender(root, "", routing, "none", nil)
+	os.Stderr = saved
+	_ = writer.Close()
+	var printed bytes.Buffer
+	_, _ = io.Copy(&printed, reader)
+	if renderErr != nil {
+		t.Fatalf("-render of an empty routing snapshot failed: %v\n%s", renderErr, printed.String())
+	}
+
+	snapshot, err := migrationmatrix.LoadRender(filepath.Join(root, renderRelative))
+	if err != nil || len(snapshot.Operations) != 0 {
+		t.Fatalf("the written snapshot: %d operation(s), err %v; want none", len(snapshot.Operations), err)
+	}
+	catalog, err := migrationmatrix.LoadCatalog(filepath.Join(root, catalogRelative))
+	if err != nil || catalog.OperationCount() == 0 {
+		t.Fatalf("the copied catalog: %d operation(s), err %v", catalog.OperationCount(), err)
+	}
+	page, err := os.ReadFile(filepath.Join(root, docRelative))
+	if err != nil {
+		t.Fatal(err)
+	}
+	begin, end := strings.Index(string(page), migrationmatrix.OpsBlockBegin), strings.Index(string(page), migrationmatrix.OpsBlockEnd)
+	if begin < 0 || end < begin {
+		t.Fatalf("the page has no operations block")
+	}
+	block := string(page)[begin:end]
+	want := fmt.Sprintf("`go_api_routing_state` held no row at read time. That is a valid state: query-api serves every catalog operation that has no routing row, so all **%d** catalog operations are served", catalog.OperationCount())
+	if strings.Count(block, want) != 1 {
+		t.Errorf("the operations block of an empty snapshot does not say the catalog is served (want once: %q):\n%s", want, block)
+	}
+	if strings.Count(block, "\n| `") != 0 {
+		t.Errorf("the operations block of an empty snapshot lists a routing row:\n%s", block)
+	}
+
+	if err, checked := runCheckCapturingViolations(t, root); err != nil {
+		t.Fatalf("the page -render wrote for an empty snapshot does not pass -check: %v\n%s", err, checked)
+	}
 }
 
 // Mutant g36: -check's warning about rows it cannot judge was

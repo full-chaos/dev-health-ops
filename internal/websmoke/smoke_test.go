@@ -858,12 +858,24 @@ func TestRefusedHostHeaderOpensNoConnection(t *testing.T) {
 	}
 }
 
-func TestRedirectIsNotFollowed(t *testing.T) {
-	h := newHarness(t, "")
-	c := newClient(h.cfg)
-	r, err := c.do("GET", "/api/v1/work-units", reqOpts{})
-	if err != nil || r.status != http.StatusSeeOther {
-		t.Fatalf("status=%v err=%v", r, err)
+// The client carries the login form and the session cookie, so a redirect to another origin must never be followed.
+func TestTheSmokeClientNeverFollowsARedirect(t *testing.T) {
+	other := 0
+	second := httptest.NewServer(http.HandlerFunc(func(http.ResponseWriter, *http.Request) { other++ }))
+	defer second.Close()
+	first := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		http.Redirect(w, r, second.URL+"/x", http.StatusFound)
+	}))
+	defer first.Close()
+	host, portText, _ := net.SplitHostPort(strings.TrimPrefix(first.URL, "http://"))
+	port, _ := strconv.Atoi(portText)
+	c := newClient(Config{Target: Target{Host: host, Port: port}, PublicHost: publicHost})
+	if err := c.http.CheckRedirect(nil, nil); err != http.ErrUseLastResponse {
+		t.Fatalf("CheckRedirect = %v, want ErrUseLastResponse", err)
+	}
+	r, err := c.do("GET", "/x", reqOpts{jar: &cookieJar{items: []cookie{{"authjs.session-token", "sess"}}}})
+	if err != nil || r.status != http.StatusFound || other != 0 {
+		t.Fatalf("status=%v err=%v other-origin requests=%d", r, err, other)
 	}
 }
 

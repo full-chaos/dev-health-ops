@@ -30,10 +30,11 @@ PATH = "internal/apiservice/testdata/python_raw_http_golden.json.gz"
 
 def build_app():
     os.environ.pop("CORS_ALLOWED_ORIGINS", None)
+    from fastapi import FastAPI
+
     import dev_health_ops.api._errors as errors
     import dev_health_ops.api._middleware as middleware
     from dev_health_ops.api.middleware.rate_limit import limiter
-    from fastapi import FastAPI
 
     app = FastAPI()
     app.state.limiter = limiter

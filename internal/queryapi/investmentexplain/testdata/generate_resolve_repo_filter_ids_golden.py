@@ -21,7 +21,6 @@ from unittest import mock
 from dev_health_ops.api.models.filters import MetricFilter, ScopeFilter, WhatFilter
 from dev_health_ops.api.queries import scopes as scopes_module
 from dev_health_ops.api.services.filtering import resolve_repo_filter_ids
-
 from dev_health_ops.metrics.sinks.base import BaseMetricsSink
 
 OUT_DIR = Path(__file__).parent

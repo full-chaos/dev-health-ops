@@ -33,10 +33,6 @@ sys.path.insert(0, str(REPO_ROOT / "src"))
 from dev_health_ops.api.webhooks.pagerduty_models import (  # noqa: E402
     PagerDutyV3Webhook,
 )
-from dev_health_ops.providers.pagerduty.webhooks import (  # noqa: E402
-    reconcile_pagerduty_webhook,
-)
-
 from dev_health_ops.models.operational import (  # noqa: E402
     OPERATIONAL_ENTITY_TABLES,
     CanonicalOperationalEntity,
@@ -45,6 +41,9 @@ from dev_health_ops.models.operational_ordering_types import (  # noqa: E402
     ORDERING_FIELD_NAMES,
 )
 from dev_health_ops.providers.pagerduty.models import Incident  # noqa: E402
+from dev_health_ops.providers.pagerduty.webhooks import (  # noqa: E402
+    reconcile_pagerduty_webhook,
+)
 
 ORG_ID = "org-4105"
 PROVIDER_INSTANCE_ID = "acme"

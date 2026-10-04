@@ -26,7 +26,6 @@ import sys
 from datetime import datetime
 
 from dev_health_ops.api.product_telemetry import persist
-
 from dev_health_ops.fixtures.generators.product_telemetry import (
     SOURCE,
     ProductTelemetryGenerator,

@@ -15,7 +15,6 @@ from typing import Any, cast
 
 from dev_health_ops.api.models.filters import MetricFilter
 from dev_health_ops.api.services import work_units
-
 from dev_health_ops.external_ingest.ids import derive_work_item_id
 
 OUT_DIR = Path(__file__).parent

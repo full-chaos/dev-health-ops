@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log/slog"
 	"net/http"
 	"reflect"
 	"strings"
@@ -233,5 +234,39 @@ func TestGitLabClosingFetchOutcome(t *testing.T) {
 		if got := gitLabClosingFetchOutcome(c.err); got != c.want {
 			t.Errorf("%s: outcome %q want %q", name, got, c.want)
 		}
+	}
+}
+
+// The failed-fetch log line carries the error's class and type, never its text (CHAOS-7933, D4270).
+func TestGitLabClosedByFailureLogCarriesNoErrorText(t *testing.T) {
+	var out strings.Builder
+	previous := slog.Default()
+	slog.SetDefault(slog.New(slog.NewJSONHandler(&out, nil)))
+	t.Cleanup(func() { slog.SetDefault(previous) })
+	classifier, err := NewInvestmentClassifier(investmentConfigPath(t, "real"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	deriver := GitLabWorkItemDeriver{Source: &githubMultiDayOracleSource{}, statusMapping: loadRealStatusMapping(t), investmentClassifier: classifier}
+	responses := gitLabWorkItemResponses()
+	root := "/api/v4/projects/123"
+	responses[root+"/merge_requests?page=1"] = []string{
+		`[{"iid":9,"title":"Ship the API","description":"","state":"opened","created_at":"2026-07-04T09:00:00Z","updated_at":"2026-07-04T10:00:00Z","labels":["priority::low"],"assignees":[],"author":{"username":"alice","bot":false},"source_branch":"feature/ship-api"}]`, `[]`,
+	}
+	delete(responses, root+"/issues/42/closed_by?page=1")
+	claim := nativeTestClaim("gitlab", "work-items")
+	claim.OrgID = "77777777-7777-4777-8777-777777777777"
+	if _, err := (GitLabWorkItemsRouteHandler{
+		StatusMapping: loadRealStatusMapping(t), Derived: deriver, PerPage: 2, MaxPages: 10, NestedMaxPages: 10,
+	}).Collect(context.Background(), claim, providerfoundation.Credential{Provider: "gitlab", ID: claim.CredentialID},
+		gitLabWorkItemsClient(t, fakehttp.Client(&gitLabWorkItemsDoer{responses: responses})), time.Date(2026, 8, 3, 12, 0, 0, 0, time.UTC)); err != nil {
+		t.Fatal(err)
+	}
+	line := out.String()
+	if !strings.Contains(line, "providersync.gitlab.closing_mr_fetch_failed") || !strings.Contains(line, `"issue":"gitlab:acme/api#42"`) || !strings.Contains(line, "error_class") {
+		t.Fatalf("the failure line lacks the issue or the error class: %s", line)
+	}
+	if strings.Contains(line, "missing fake GitLab response") {
+		t.Fatalf("the failure line carries error text: %s", line)
 	}
 }

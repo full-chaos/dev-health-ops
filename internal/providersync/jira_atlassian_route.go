@@ -12,6 +12,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"github.com/full-chaos/dev-health-ops/internal/platform/logging"
 	"io"
 	"log/slog"
 	"net/http"
@@ -926,13 +927,14 @@ func nilIfEmpty(value string) any {
 // type whose application-type value is wrong shows as gitlab_empty / gitlab_dev_status_unavailable, not as a silent zero.
 func recordJiraDevStatusTypeOutcome(client *providerfoundation.HTTPClient, claim Claim, issue string, outcome jiraDevStatusTypeOutcome) {
 	client.Metrics.RecordJiraDevStatus(strings.ToLower(outcome.ApplicationType) + "_" + outcome.Outcome)
-	attrs := []any{
-		"org_id", claim.OrgID, "unit_id", claim.ID, "issue", issue, "application_type", outcome.ApplicationType,
-		"outcome", outcome.Outcome, "pull_requests", outcome.PullRequests,
-	}
 	if outcome.Err != nil {
-		slog.Warn("providersync.jira.dev_status_type_failed", append(attrs, "cause", outcome.Err.Error())...)
+		errorClass, errorType := logging.ErrorClass(outcome.Err), logging.ErrorType(outcome.Err) // never the error text (CHAOS-7933)
+		slog.Warn("providersync.jira.dev_status_type_failed",
+			"org_id", claim.OrgID, "unit_id", claim.ID, "issue", issue, "application_type", outcome.ApplicationType,
+			"outcome", outcome.Outcome, "pull_requests", outcome.PullRequests, "error_class", errorClass, "error_type", errorType)
 		return
 	}
-	slog.Info("providersync.jira.dev_status_type", attrs...)
+	slog.Info("providersync.jira.dev_status_type",
+		"org_id", claim.OrgID, "unit_id", claim.ID, "issue", issue, "application_type", outcome.ApplicationType,
+		"outcome", outcome.Outcome, "pull_requests", outcome.PullRequests)
 }

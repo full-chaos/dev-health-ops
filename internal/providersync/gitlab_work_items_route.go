@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"github.com/full-chaos/dev-health-ops/internal/platform/logging"
 	"log/slog"
 	"net/http"
 	"net/url"
@@ -339,8 +340,10 @@ func (handler GitLabWorkItemsRouteHandler) Collect(
 					closingTerminal++
 				}
 				counted.Metrics.RecordGitLabClosingMRFetch(outcome)
+				errorClass, errorType := logging.ErrorClass(closingErr), logging.ErrorType(closingErr) // never the error text (CHAOS-7933)
 				slog.Warn("providersync.gitlab.closing_mr_fetch_failed",
-					"org_id", claim.OrgID, "unit_id", claim.ID, "issue", item.WorkItemID, "outcome", outcome, "cause", closingErr.Error())
+					"org_id", claim.OrgID, "unit_id", claim.ID, "issue", item.WorkItemID, "outcome", outcome,
+					"error_class", errorClass, "error_type", errorType)
 			} else {
 				counted.Metrics.RecordGitLabClosingMRFetch("synced")
 				closingRows := normalizeGitLabClosingMergeRequests(claim, item.WorkItemID, fullName, closing, normalizedAt)

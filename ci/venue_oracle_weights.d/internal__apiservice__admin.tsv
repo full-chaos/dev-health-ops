@@ -1,3 +1,4 @@
+internal/apiservice/admin	TestAuditLogDisplayNamesVenueOracle	60
 internal/apiservice/admin	TestCreateOrgInviteVenueOracle	62
 internal/apiservice/admin	TestCredentialDeleteVenueOracle	61
 internal/apiservice/admin	TestGovernanceRoutesVenueOracle	80

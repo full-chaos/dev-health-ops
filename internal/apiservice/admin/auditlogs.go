@@ -46,31 +46,29 @@ type auditLog struct {
 // auditLogColumns is the administrative audit response projection. Actor and
 // resource labels are read from their authoritative Postgres records. A log
 // can retain a deleted resource, or one of the historical arbitrary resource
-// types that has no canonical owner, so an unavailable label stays null.
+// types that has no canonical display-name source, so an unavailable label
+// stays null. An e-mail address, source instance, and opaque ID are not
+// display-name fallbacks.
 const auditLogColumns = `a.id, a.org_id, a.user_id, a.action, a.resource_type, a.resource_id,
-	coalesce(nullif(btrim(actor.full_name), ''), actor.email),
+	nullif(btrim(actor.full_name), ''),
 	case a.resource_type
-		when 'membership' then invite.email
-		when 'user' then coalesce(nullif(btrim(resource_user.full_name), ''), resource_user.email)
-		when 'session' then coalesce(nullif(btrim(resource_user.full_name), ''), resource_user.email)
+		when 'user' then nullif(btrim(resource_user.full_name), '')
+		when 'session' then nullif(btrim(resource_user.full_name), '')
 		when 'organization' then resource_org.name
 		when 'sso_provider' then provider.name
-		when 'ingest_source' then coalesce(nullif(btrim(source.display_name), ''), nullif(btrim(source.instance), ''))
+		when 'ingest_source' then nullif(btrim(source.display_name), '')
 		when 'ingest_token' then token.name
 	end,
 	a.description, a.changes, a.request_metadata, a.status, a.error_message, a.created_at`
 
-// auditLogFrom has one authoritative left join per resource type that the
-// running API writes. It deliberately has no fallback for an unknown type:
-// audit_logs accepts historic extension values, and guessing a name from an
-// opaque ID would misrepresent the audit record. Every resource join is bound
-// to the audit row's organization. The UUID guard keeps legacy non-UUID IDs
-// from reaching a Postgres uuid cast.
+// auditLogFrom has one authoritative left join per resource type with a
+// supported display-name field. It deliberately has no fallback for an
+// unknown type: audit_logs accepts historic extension values, and guessing a
+// name from an opaque ID would misrepresent the audit record. Every resource
+// join is bound to the audit row's organization. The UUID guard keeps legacy
+// non-UUID IDs from reaching a Postgres uuid cast.
 const auditLogFrom = ` FROM audit_logs a
 	LEFT JOIN users actor ON actor.id = a.user_id
-	LEFT JOIN org_invites invite ON a.resource_type = 'membership'
-		AND a.resource_id ~* '^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$'
-		AND invite.id = a.resource_id::uuid AND invite.org_id = a.org_id
 	LEFT JOIN memberships resource_membership ON a.resource_type IN ('user', 'session')
 		AND a.resource_id ~* '^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$'
 		AND resource_membership.user_id = a.resource_id::uuid AND resource_membership.org_id = a.org_id

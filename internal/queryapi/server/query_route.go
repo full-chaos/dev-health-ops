@@ -1670,7 +1670,7 @@ const registeredImproveOpportunitiesDocument = `query ImproveOpportunities($scop
 }`
 
 // registeredImproveOpportunitiesV1Document is the text of `improveOpportunities` BEFORE the Automations table asked
-// for `value`, `threshold`, `unit` and `thresholdDirection` (CHAOS-8500; the fields are CHAOS-7626). It stays a
+// for `value`, `threshold`, `unit` and `thresholdDirection` (CHAOS-8537; the web half is CHAOS-8500; the fields are CHAOS-7626). It stays a
 // legacy text (see legacyDigestsByOperation), so a web build still sending it keeps working while the new one rolls
 // out; the operation's ONE current document is registeredImproveOpportunitiesDocument above. Remove it with the
 // cleanup ticket once no client sends it (testdata/wire_capture/improveopportunities_v1_captured.graphql).

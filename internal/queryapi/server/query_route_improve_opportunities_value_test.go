@@ -6,7 +6,7 @@ import (
 	"testing"
 )
 
-// CHAOS-8500 on top of CHAOS-8000 dual accept: `improveOpportunities` has ONE current text, the one that asks for
+// CHAOS-8537 on top of CHAOS-8000 dual accept: `improveOpportunities` has ONE current text, the one that asks for
 // the measured value, its threshold, the unit and the threshold direction of an opportunity (the fields of
 // CHAOS-7626), and keeps the text it accepted before as a legacy text, so a web build still on the old text keeps
 // working while the new web rolls out.

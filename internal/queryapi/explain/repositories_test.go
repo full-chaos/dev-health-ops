@@ -192,6 +192,11 @@ func TestOnlyAnAbsoluteWebURLIsServed(t *testing.T) {
 		"https:///acme/webapp":                 "",
 		"git@github.com:acme/webapp.git":       "",
 		"ssh://git@github.com/acme/webapp.git": "",
+		// User info is never served, and never stripped and served.
+		"https://user:secret@github.com/acme/webapp": "",
+		"https://token@github.com/acme/webapp":       "",
+		"https://:secret@github.com/acme/webapp":     "",
+		"http://user@gitlab.internal/acme/webapp":    "",
 	} {
 		got, ok := servableSourceURL(stored)
 		if got != want || ok != (want != "") {
@@ -241,5 +246,29 @@ func TestTheSourceURLReadIsOrgBoundAndFailsLoudly(t *testing.T) {
 	}
 	if ids, _ := bindingValue(bindings, "repo_ids"); !reflect.DeepEqual(ids, []string{"repo-a"}) {
 		t.Fatalf("repo_ids binding = %v", ids)
+	}
+}
+
+// A stored URL that carries user info is served as no URL, for a repository
+// of the list and for the scope's repository alike.
+func TestAStoredURLWithUserInfoIsNeverServed(t *testing.T) {
+	const scoped = "33333333-3333-3333-3333-333333333333"
+	dispatch := &explainQueryDispatch{
+		resolveRepoIDRow: []any{scoped},
+		contributorRows:  [][]any{{scoped, 1.0}},
+		sourceURLRows:    [][]any{{scoped, "https://user:secret@github.com/acme/webapp"}},
+	}
+	got, err := explainFor(t, dispatch, "churn", "repo", "acme/webapp")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.SourceURL != nil {
+		t.Fatalf("top-level source_url = %q, want null", *got.SourceURL)
+	}
+	if got.Repositories == nil || len(*got.Repositories) != 1 || (*got.Repositories)[0].SourceURL != nil {
+		t.Fatalf("repositories = %s, want one repository with no source_url", mustMarshal(t, got.Repositories))
+	}
+	if body := mustMarshal(t, got); strings.Contains(body, "secret") || strings.Contains(body, "user:") {
+		t.Fatalf("the body holds the user info: %s", body)
 	}
 }

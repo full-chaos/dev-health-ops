@@ -75,15 +75,18 @@ WHERE org_id = {org_id:String}
 }
 
 // servableSourceURL returns a stored URL only when it is an absolute http or
-// https URL with a host: the value is served as a link, so any other stored
-// text (empty, relative, another scheme) is served as no URL.
+// https URL with a host and no user info: the value is served as a link to the
+// browser, so any other stored text (empty, relative, another scheme) is
+// served as no URL, and so is a URL that carries a user name or password
+// (https://user:token@host/...): it is never stripped and served, because no
+// URL is built here.
 func servableSourceURL(stored string) (string, bool) {
 	stored = strings.TrimSpace(stored)
 	if stored == "" {
 		return "", false
 	}
 	parsed, err := url.Parse(stored)
-	if err != nil || parsed.Host == "" {
+	if err != nil || parsed.Host == "" || parsed.User != nil {
 		return "", false
 	}
 	switch strings.ToLower(parsed.Scheme) {

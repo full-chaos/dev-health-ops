@@ -8,10 +8,9 @@ import re
 import sys
 from datetime import date
 
-from pydantic import TypeAdapter
-
 import dev_health_ops.api.services.people as svc
 from dev_health_ops.api.models.schemas import PersonSummaryResponse
+from pydantic import TypeAdapter
 
 args = json.loads(sys.argv[1])
 today = date.fromisoformat(args["today"])

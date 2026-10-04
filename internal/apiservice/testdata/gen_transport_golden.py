@@ -76,10 +76,9 @@ def client_for(origins: str | None):
     import dev_health_ops.api._middleware as middleware
 
     importlib.reload(middleware)
+    from dev_health_ops.api.middleware.rate_limit import limiter
     from fastapi import FastAPI
     from fastapi.testclient import TestClient
-
-    from dev_health_ops.api.middleware.rate_limit import limiter
 
     app = FastAPI()
     # api/main.py sets the limiter the slowapi middleware reads.

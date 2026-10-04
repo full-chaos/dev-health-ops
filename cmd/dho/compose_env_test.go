@@ -9,6 +9,7 @@ import (
 	"regexp"
 	"sort"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -199,6 +200,31 @@ func lookupOf(env map[string]string) secrets.LookupEnv {
 	}
 }
 
+// syncBuffer is a buffer a background goroutine of the service under test may
+// still write to (the dependency stage starts probes) after Execute returned.
+type syncBuffer struct {
+	mu     sync.Mutex
+	buffer bytes.Buffer
+}
+
+func (b *syncBuffer) Write(p []byte) (int, error) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.buffer.Write(p)
+}
+
+func (b *syncBuffer) Len() int {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.buffer.Len()
+}
+
+func (b *syncBuffer) String() string {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.buffer.String()
+}
+
 // startFindings returns what the production start path refuses in the
 // environment of one compose service; empty means it accepts it.
 func startFindings(service composeGoService) []string {
@@ -213,7 +239,7 @@ func startFindings(service composeGoService) []string {
 	}
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel() // no dependency is opened: only the configuration is read
-	var stdout, stderr bytes.Buffer
+	var stdout, stderr syncBuffer
 	done := make(chan int, 1)
 	go func() {
 		done <- cli.Execute(ctx, "dho", commands(), cli.Env{

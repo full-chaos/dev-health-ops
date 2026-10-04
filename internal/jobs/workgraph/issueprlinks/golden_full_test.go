@@ -338,12 +338,13 @@ func TestReservedKindsAreNotActive(t *testing.T) {
 	// live gate exactly -- see DefaultAdmissions's doc. What this asserts
 	// instead: the active set is EXACTLY what has been deliberately activated
 	// (linear_attachment always; github_closing_reference and jira_dev_status
-	// since CHAOS-4757/CHAOS-4769), so a silent widening still fails loudly
+	// since CHAOS-4757/CHAOS-4769; gitlab_closing_reference since CHAOS-8526), so a silent widening still fails loudly
 	// here.
 	wantActive := map[string]struct{}{
 		"linear_attachment":        {},
 		"github_closing_reference": {},
 		"jira_dev_status":          {},
+		"gitlab_closing_reference": {},
 	}
 	if len(DefaultAdmissions) != len(wantActive) {
 		t.Fatalf("active admissions are %+v, want exactly %v", DefaultAdmissions, wantActive)

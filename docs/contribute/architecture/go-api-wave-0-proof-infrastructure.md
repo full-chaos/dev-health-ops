@@ -365,10 +365,18 @@ serves every catalog operation that has no routing row). On it `carry` and
 `repoint` are a no-op: exit 0, one `NO-OP` line, nothing written, and
 `"empty_table":true` on the `-json` line beside the usual success `reason`,
 so the chart's pre-upgrade and post-upgrade hooks pass. Every other preflight
-still runs (the `-expect-build` cross-check included). When rows exist and
-none of them is at the live schema digest, both verbs refuse as before: a row
-left at another digest holds its operation dark, and an upgrade must not hide
-that.
+still runs (the `-expect-build` cross-check included). When rows exist,
+none of them is at the live schema digest, and every one is in a dark mode
+(`python`, `disabled` or `shadow`), both verbs are the same no-op with
+`"dark_rows_only":true`: each such row holds its operation dark at any digest,
+before and after the roll. When one of those rows is `canary` or `primary`,
+both verbs refuse as before: an operation somebody turned on is dark, and an
+upgrade must not hide that. The answer is decided under a `SHARE` lock on
+the routing table, so a writer whose row was in flight when the verb looked
+is waited for, never answered around (`carry` then refuses and asks for a
+re-run; `repoint` starts over). Live rows that are all in a dark mode are
+skipped by `carry`, each named, and the run succeeds: the "no reachable row"
+refusal needs a `canary` or `primary` live row with every row skipped.
 
 A registered document that was **swapped with dual accept** is not a changed
 document for `carry`. When an operation gets a new text, the old text stays
@@ -447,21 +455,27 @@ dho goapi routing status --registry-url http://query-api:8080/registry
 #    (`dho goapi routing enable`, next section). It reads the candidate build
 #    from the running query-api's /buildinfo; there is no Python enable.
 
-# 4. Confirm every operation reads MATCH, and none reads UNPROVEN
-#    unless the go-served ledger names a written limit for it.
+# 4. Confirm every operation reads MATCH. A row enabled by the catalog
+#    rule (review_evidence starts CATALOG-RULE:) reads UNPROVEN: no proof
+#    run admitted it, and none was required.
 dho goapi routing status
 ```
 
 `enable` refuses (exit 2, writing nothing) when query-api is unreachable,
 when the two planes' digests disagree, when the running binary does not
 register an operation or registers it under a different document digest,
-or when no admissible proof run exists for the candidate build: a
-`deployed_executed` run bound to the serving build per request that ended
-in `match`, or in a `mismatch` whose every difference is cited against a
-declared Python baseline defect (primary also requires the edge route).
-Nothing waives the last of these on the command line. `enable` admits an
-operation without a proof run only through a written limit in the go-served
-ledger.
+or, for an MCP class root (`mcp:<root>`), when no admissible per-root
+receipt exists for the candidate build. A catalog operation needs no proof
+run and no ledger limit: query-api serves it when it has no routing row, so
+the check would guard nothing (CHAOS-8586). Each row still says what admitted
+it: a proof run (a `deployed_executed` run bound to the serving build per
+request that ended in `match`, or in a `mismatch` whose every difference is
+cited against a declared Python baseline defect; primary also requires the
+edge route), else a written limit in the go-served ledger (`NAMED-LIMIT:`
+prefix on `review_evidence`), else the catalog rule (`CATALOG-RULE:` prefix,
+`catalog_rule=` in the summary line, one `go_api_routing.enabled_catalog_rule`
+line per row on stderr). Nothing waives the class-root receipt on the command
+line.
 
 On success `enable` names, for every proven row, the receipt that
 authorized it -- its id, terminal state, citations (for a cited mismatch),
@@ -647,12 +661,20 @@ document_digest, selected_operation)`, so one operation can have several
 rows under different document digests; leaving one behind would report
 success while the operation stayed reachable.
 
-**Only one of those rows is ever reachable**, and `status` says which. The
-edge resolves a request to an operation through the catalog and then looks
-the row up by the *catalog's* document digest — so a row at the live
-schema digest under any other document digest is dead in exactly the way a
-row at a stale schema digest is dead. `status` reports it as `STALE`,
-never `MATCH`, never reachable, and names its digest under
+**Only the rows under a document the operation accepts are ever
+reachable**, and `status` says which. The edge resolves a request to an
+operation through the catalog and then reads the rows under the documents
+that operation accepts: the catalog's current document digest and the
+legacy digests the catalog registers for it (`"legacy": true`, dual
+accept). query-api serves the operation when any one of those rows is in
+`canary` or `primary`. `status` counts the same rows (CHAOS-8649): such a
+row reads `MATCH`, its `document_class` is `current` or `legacy`,
+`row_document_digest` names the row's own digest, `mode` and
+`current_candidate_build` are read from it, and `accepted_document_digests`
+lists every accepted row the operation has at the live schema digest. A row
+at the live schema digest under any other document digest is dead in
+exactly the way a row at a stale schema digest is dead: `status` reports it
+as `STALE`, never `MATCH`, never reachable, and names its digest under
 `unreachable_document_digests`. A row that is present in `psql` and can
 never be consulted is the CHAOS-5416 shape; only the column that moved is
 different.

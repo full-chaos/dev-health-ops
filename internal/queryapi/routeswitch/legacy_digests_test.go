@@ -7,16 +7,16 @@ import (
 
 // CHAOS-8000: an operation accepts its current document digest and any legacy ones.
 func TestAcceptedDigests_CurrentFirstThenLegacyWithoutRepeats(t *testing.T) {
-	got := acceptedDigests("new", []string{"old", "new", "old", "older"})
+	got := AcceptedDigests("new", []string{"old", "new", "old", "older"})
 	want := []string{"new", "old", "older"}
 	if !reflect.DeepEqual(got, want) {
-		t.Fatalf("acceptedDigests = %v, want %v", got, want)
+		t.Fatalf("AcceptedDigests = %v, want %v", got, want)
 	}
 }
 
 func TestAcceptedDigests_NoLegacyIsJustTheCurrentDigest(t *testing.T) {
-	if got := acceptedDigests("only", nil); !reflect.DeepEqual(got, []string{"only"}) {
-		t.Fatalf("acceptedDigests = %v, want [only]", got)
+	if got := AcceptedDigests("only", nil); !reflect.DeepEqual(got, []string{"only"}) {
+		t.Fatalf("AcceptedDigests = %v, want [only]", got)
 	}
 }
 

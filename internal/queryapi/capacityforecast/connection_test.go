@@ -325,7 +325,13 @@ func TestResolveForecastsMapsAPersistedDistribution(t *testing.T) {
 	if node.CompletionDistribution == nil {
 		t.Fatal("completionDistribution: got nil, want the persisted days histogram")
 	}
-	want := []model.CapacityDistributionBin{{Value: 18, Count: 50}, {Value: 19, Count: 120}, {Value: 24, Count: 30}}
+	// 200 runs: 50, then 170, then all 200 of them ended on or before the day
+	// (CHAOS-8477: the cumulative share is served per bin).
+	want := []model.CapacityDistributionBin{
+		{Value: 18, Count: 50, CumulativeShare: 0.25},
+		{Value: 19, Count: 120, CumulativeShare: 0.85},
+		{Value: 24, Count: 30, CumulativeShare: 1},
+	}
 	if got := node.CompletionDistribution.Days; len(got) != len(want) {
 		t.Fatalf("days: got %v, want %v", got, want)
 	} else {

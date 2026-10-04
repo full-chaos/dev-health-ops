@@ -797,6 +797,56 @@ const registeredCapacityForecastDocument = `query CapacityForecast($orgId: Strin
     insufficientHistory
     highVariance
     completionDistribution {
+      runs
+      unfinishedRuns
+      horizonDays
+      days {
+        value
+        count
+        cumulativeShare
+        __typename
+      }
+      items {
+        value
+        count
+        cumulativeShare
+        __typename
+      }
+      __typename
+    }
+    __typename
+  }
+}`
+
+// registeredCapacityForecastV2Document is the text capacityForecast accepted BEFORE it asked for `runs` and for
+// `cumulativeShare` on the bins of completionDistribution (CHAOS-8477): the text CHAOS-7994 registered. It stays a
+// legacy text (see legacyDigestsByOperation), beside V1 below, so a web build still sending it keeps working
+// while the new web rolls out; the operation's ONE current document is registeredCapacityForecastDocument above.
+// Wire form, same provenance: testdata/wire_form/capacityForecast.v2.graphql.
+const registeredCapacityForecastV2Document = `query CapacityForecast($orgId: String!, $input: CapacityForecastInput) {
+  capacityForecast(orgId: $orgId, input: $input) {
+    forecastId
+    computedAt
+    teamId
+    workScopeId
+    backlogSize
+    targetItems
+    targetDate
+    p50Date
+    p85Date
+    p95Date
+    p50Days
+    p85Days
+    p95Days
+    p50Items
+    p85Items
+    p95Items
+    throughputMean
+    throughputStddev
+    historyDays
+    insufficientHistory
+    highVariance
+    completionDistribution {
       days {
         value
         count
@@ -3777,13 +3827,13 @@ func newDocumentDispatchHandler(getenv getenvFunc, routeMux *routeswitch.Mux, op
 // current one (CHAOS-8000 dual accept). A request carrying a legacy text resolves to the same operation as one
 // carrying the current text, so a web build still on the old text keeps working while the new text rolls out;
 // the operation keeps ONE current document in digestByOperation. Each legacy text is a
-// `registered<Operation>V1Document` const (a literal, so cmd/registrydump can read it) named once here and never in
+// `registered<Operation>V<n>Document` const (a literal, so cmd/registrydump can read it) named once here and never in
 // digestByOperation. The literal below is cmd/registrydump's second parse target: keep its exact shape
 // (`"<operation>": {digestHex(<constIdent>), ...}`). Empty = every operation accepts one text.
 var legacyDigestsByOperation = map[string][]string{
 	"aiAttributedPrs":      {digestHex(registeredAiAttributedPrsV1Document)},
 	"aiImpactSummary":      {digestHex(registeredAiImpactSummaryV1Document)},
-	"capacityForecast":     {digestHex(registeredCapacityForecastV1Document)},
+	"capacityForecast":     {digestHex(registeredCapacityForecastV1Document), digestHex(registeredCapacityForecastV2Document)},
 	"improveOpportunities": {digestHex(registeredImproveOpportunitiesV1Document)},
 }
 

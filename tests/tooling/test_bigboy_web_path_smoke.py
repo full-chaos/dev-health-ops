@@ -105,6 +105,16 @@ def test_tracked_routing_ops_marks_testops_risk(smoke: ModuleType) -> None:
     assert known == {"testopsRisk": "CHAOS-6993"}
 
 
+def test_tracked_routing_ops_keeps_every_listed_operation() -> None:
+    # An operation dropped from the list would make the smoke skip it without a sign.
+    # Count the operation lines (comment-only and blank lines are not operations).
+    lines = [
+        ln.split("#", 1)[0].split()
+        for ln in ROUTING_OPS.read_text(encoding="utf-8").splitlines()
+    ]
+    assert len([parts for parts in lines if parts]) == 58
+
+
 # --- verdict semantics against a scripted fake of the whole web path --------------
 
 

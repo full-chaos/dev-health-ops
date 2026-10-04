@@ -314,14 +314,19 @@ func TestBothWritersOfStateDurationsWriteTheSameBlockedRows(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	// syncTimeRows runs the sync-time deriver (LinearWorkItemDeriver.Derive,
-	// the production entry) over the unit, with its stored facts read through
-	// queries, and returns what it derived by destination.
+	// syncTimeRows runs the sync-time deriver over the unit, with its stored
+	// facts read through queries, and returns what it derived by destination.
+	// The deriver is built by its production constructor
+	// (NewLinearWorkItemDeriver, as the worker builds it), with the real
+	// status mapping and investment configuration: its engine derives the
+	// destinations the deriver requires of every run.
 	syncTimeRows := func(queries driver.Conn) map[string][]json.RawMessage {
 		t.Helper()
-		deriver := LinearWorkItemDeriver{
-			Source:       githubWorkItemClickHouseDerivationContextSource{Conn: queries, Lease: lease},
-			observations: newWorkItemDerivationObservations(),
+		deriver, err := NewLinearWorkItemDeriver(
+			queries, lease, resolveStatusMappingConfig(t, "real"), investmentConfigPath(t, "real"),
+		)
+		if err != nil {
+			t.Fatalf("sync-time deriver: %v", err)
 		}
 		derived, _, err := deriver.Derive(ctx, claim, unit, normalizedAt)
 		if err != nil {

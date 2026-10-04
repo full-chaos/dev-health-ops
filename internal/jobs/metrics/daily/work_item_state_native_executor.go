@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log/slog"
 	"sort"
 	"time"
 
@@ -153,7 +154,7 @@ func (executor *WorkItemStateExecutor) ComputeFamily(
 			// One line per partition, no id: how many relations the end rule
 			// closed, by provider, and how many of them are the named case of
 			// a github issue on a Projects v2 board.
-			ended.Log("daily_family")
+			slog.Info(workitemmetrics.EndedRelationsLogMessage, ended.LogArgs("daily_family")...)
 		}
 
 		// One honest, real-wall-clock timestamp per repo group -- see

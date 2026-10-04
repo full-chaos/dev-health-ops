@@ -2,6 +2,7 @@ package providersync
 
 import (
 	"context"
+	"log/slog"
 	"sort"
 
 	"github.com/full-chaos/dev-health-ops/internal/jobs/metrics/workitemmetrics"
@@ -100,7 +101,7 @@ func loadWorkItemBlockedIntervalsForProvider(
 	// One line per unit, no id: how many relations the end rule closed, by
 	// provider, and how many of them are the named case of a github issue on
 	// a Projects v2 board.
-	ended.Log("sync_time_deriver")
+	slog.Info(workitemmetrics.EndedRelationsLogMessage, ended.LogArgs("sync_time_deriver")...)
 	return intervals, nil
 }
 

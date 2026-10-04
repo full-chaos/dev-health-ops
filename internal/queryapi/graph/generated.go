@@ -753,9 +753,17 @@ type ComplexityRoot struct {
 		HealthState           func(childComplexity int) int
 		LimitingFactor        func(childComplexity int) int
 		ReworkThemeAllocation func(childComplexity int) int
+		ScopeDataConfidence   func(childComplexity int) int
 		Signals               func(childComplexity int) int
 		Summary               func(childComplexity int) int
 		Tiles                 func(childComplexity int) int
+	}
+
+	HomeScopeDataConfidence struct {
+		Caveats        func(childComplexity int) int
+		CoveragePct    func(childComplexity int) int
+		LastIngestedAt func(childComplexity int) int
+		Level          func(childComplexity int) int
 	}
 
 	HomeSignal struct {
@@ -4870,6 +4878,13 @@ func (e *executableSchema) Complexity(typeName, field string, childComplexity in
 
 		return e.complexity.HomeResult.ReworkThemeAllocation(childComplexity), true
 
+	case "HomeResult.scopeDataConfidence":
+		if e.complexity.HomeResult.ScopeDataConfidence == nil {
+			break
+		}
+
+		return e.complexity.HomeResult.ScopeDataConfidence(childComplexity), true
+
 	case "HomeResult.signals":
 		if e.complexity.HomeResult.Signals == nil {
 			break
@@ -4890,6 +4905,34 @@ func (e *executableSchema) Complexity(typeName, field string, childComplexity in
 		}
 
 		return e.complexity.HomeResult.Tiles(childComplexity), true
+
+	case "HomeScopeDataConfidence.caveats":
+		if e.complexity.HomeScopeDataConfidence.Caveats == nil {
+			break
+		}
+
+		return e.complexity.HomeScopeDataConfidence.Caveats(childComplexity), true
+
+	case "HomeScopeDataConfidence.coveragePct":
+		if e.complexity.HomeScopeDataConfidence.CoveragePct == nil {
+			break
+		}
+
+		return e.complexity.HomeScopeDataConfidence.CoveragePct(childComplexity), true
+
+	case "HomeScopeDataConfidence.lastIngestedAt":
+		if e.complexity.HomeScopeDataConfidence.LastIngestedAt == nil {
+			break
+		}
+
+		return e.complexity.HomeScopeDataConfidence.LastIngestedAt(childComplexity), true
+
+	case "HomeScopeDataConfidence.level":
+		if e.complexity.HomeScopeDataConfidence.Level == nil {
+			break
+		}
+
+		return e.complexity.HomeScopeDataConfidence.Level(childComplexity), true
 
 	case "HomeSignal.affectedScope":
 		if e.complexity.HomeSignal.AffectedScope == nil {
@@ -9904,6 +9947,16 @@ type HomeDataConfidence {
   caveats: [String!]!
 }
 
+"""Coverage and metric-ingestion quality for the repositories selected by this Home request."""
+type HomeScopeDataConfidence {
+  level: String!
+  """Null when the selected scope has no repositories."""
+  coveragePct: Float
+  """Most recent in-window repository-metric ingestion, or null when the scope has none."""
+  lastIngestedAt: String
+  caveats: [String!]!
+}
+
 type HomeTile {
   title: String!
   subtitle: String!
@@ -9937,6 +9990,8 @@ type HomeResult {
   signals: [HomeSignal!]!
   limitingFactor: HomeLimitingFactor!
   dataConfidence: HomeDataConfidence!
+  """Coverage and ingestion quality for the selected repository scope; distinct from org-wide dataConfidence."""
+  scopeDataConfidence: HomeScopeDataConfidence!
 }
 
 type SummarySentence {
@@ -35907,6 +35962,230 @@ func (ec *executionContext) fieldContext_HomeResult_dataConfidence(_ context.Con
 	return fc, nil
 }
 
+func (ec *executionContext) _HomeResult_scopeDataConfidence(ctx context.Context, field graphql.CollectedField, obj *model.HomeResult) (ret graphql.Marshaler) {
+	fc, err := ec.fieldContext_HomeResult_scopeDataConfidence(ctx, field)
+	if err != nil {
+		return graphql.Null
+	}
+	ctx = graphql.WithFieldContext(ctx, fc)
+	defer func() {
+		if r := recover(); r != nil {
+			ec.Error(ctx, ec.Recover(ctx, r))
+			ret = graphql.Null
+		}
+	}()
+	resTmp, err := ec.ResolverMiddleware(ctx, func(rctx context.Context) (any, error) {
+		ctx = rctx // use context from middleware stack in children
+		return obj.ScopeDataConfidence, nil
+	})
+	if err != nil {
+		ec.Error(ctx, err)
+		return graphql.Null
+	}
+	if resTmp == nil {
+		if !graphql.HasFieldError(ctx, fc) {
+			ec.Errorf(ctx, "must not be null")
+		}
+		return graphql.Null
+	}
+	res := resTmp.(*model.HomeScopeDataConfidence)
+	fc.Result = res
+	return ec.marshalNHomeScopeDataConfidence2ᚖgithubᚗcomᚋfullᚑchaosᚋdevᚑhealthᚑopsᚋinternalᚋqueryapiᚋgraphᚋmodelᚐHomeScopeDataConfidence(ctx, field.Selections, res)
+}
+
+func (ec *executionContext) fieldContext_HomeResult_scopeDataConfidence(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "HomeResult",
+		Field:      field,
+		IsMethod:   false,
+		IsResolver: false,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			switch field.Name {
+			case "level":
+				return ec.fieldContext_HomeScopeDataConfidence_level(ctx, field)
+			case "coveragePct":
+				return ec.fieldContext_HomeScopeDataConfidence_coveragePct(ctx, field)
+			case "lastIngestedAt":
+				return ec.fieldContext_HomeScopeDataConfidence_lastIngestedAt(ctx, field)
+			case "caveats":
+				return ec.fieldContext_HomeScopeDataConfidence_caveats(ctx, field)
+			}
+			return nil, fmt.Errorf("no field named %q was found under type HomeScopeDataConfidence", field.Name)
+		},
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _HomeScopeDataConfidence_level(ctx context.Context, field graphql.CollectedField, obj *model.HomeScopeDataConfidence) (ret graphql.Marshaler) {
+	fc, err := ec.fieldContext_HomeScopeDataConfidence_level(ctx, field)
+	if err != nil {
+		return graphql.Null
+	}
+	ctx = graphql.WithFieldContext(ctx, fc)
+	defer func() {
+		if r := recover(); r != nil {
+			ec.Error(ctx, ec.Recover(ctx, r))
+			ret = graphql.Null
+		}
+	}()
+	resTmp, err := ec.ResolverMiddleware(ctx, func(rctx context.Context) (any, error) {
+		ctx = rctx // use context from middleware stack in children
+		return obj.Level, nil
+	})
+	if err != nil {
+		ec.Error(ctx, err)
+		return graphql.Null
+	}
+	if resTmp == nil {
+		if !graphql.HasFieldError(ctx, fc) {
+			ec.Errorf(ctx, "must not be null")
+		}
+		return graphql.Null
+	}
+	res := resTmp.(string)
+	fc.Result = res
+	return ec.marshalNString2string(ctx, field.Selections, res)
+}
+
+func (ec *executionContext) fieldContext_HomeScopeDataConfidence_level(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "HomeScopeDataConfidence",
+		Field:      field,
+		IsMethod:   false,
+		IsResolver: false,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return nil, errors.New("field of type String does not have child fields")
+		},
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _HomeScopeDataConfidence_coveragePct(ctx context.Context, field graphql.CollectedField, obj *model.HomeScopeDataConfidence) (ret graphql.Marshaler) {
+	fc, err := ec.fieldContext_HomeScopeDataConfidence_coveragePct(ctx, field)
+	if err != nil {
+		return graphql.Null
+	}
+	ctx = graphql.WithFieldContext(ctx, fc)
+	defer func() {
+		if r := recover(); r != nil {
+			ec.Error(ctx, ec.Recover(ctx, r))
+			ret = graphql.Null
+		}
+	}()
+	resTmp, err := ec.ResolverMiddleware(ctx, func(rctx context.Context) (any, error) {
+		ctx = rctx // use context from middleware stack in children
+		return obj.CoveragePct, nil
+	})
+	if err != nil {
+		ec.Error(ctx, err)
+		return graphql.Null
+	}
+	if resTmp == nil {
+		return graphql.Null
+	}
+	res := resTmp.(*float64)
+	fc.Result = res
+	return ec.marshalOFloat2ᚖfloat64(ctx, field.Selections, res)
+}
+
+func (ec *executionContext) fieldContext_HomeScopeDataConfidence_coveragePct(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "HomeScopeDataConfidence",
+		Field:      field,
+		IsMethod:   false,
+		IsResolver: false,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return nil, errors.New("field of type Float does not have child fields")
+		},
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _HomeScopeDataConfidence_lastIngestedAt(ctx context.Context, field graphql.CollectedField, obj *model.HomeScopeDataConfidence) (ret graphql.Marshaler) {
+	fc, err := ec.fieldContext_HomeScopeDataConfidence_lastIngestedAt(ctx, field)
+	if err != nil {
+		return graphql.Null
+	}
+	ctx = graphql.WithFieldContext(ctx, fc)
+	defer func() {
+		if r := recover(); r != nil {
+			ec.Error(ctx, ec.Recover(ctx, r))
+			ret = graphql.Null
+		}
+	}()
+	resTmp, err := ec.ResolverMiddleware(ctx, func(rctx context.Context) (any, error) {
+		ctx = rctx // use context from middleware stack in children
+		return obj.LastIngestedAt, nil
+	})
+	if err != nil {
+		ec.Error(ctx, err)
+		return graphql.Null
+	}
+	if resTmp == nil {
+		return graphql.Null
+	}
+	res := resTmp.(*string)
+	fc.Result = res
+	return ec.marshalOString2ᚖstring(ctx, field.Selections, res)
+}
+
+func (ec *executionContext) fieldContext_HomeScopeDataConfidence_lastIngestedAt(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "HomeScopeDataConfidence",
+		Field:      field,
+		IsMethod:   false,
+		IsResolver: false,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return nil, errors.New("field of type String does not have child fields")
+		},
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _HomeScopeDataConfidence_caveats(ctx context.Context, field graphql.CollectedField, obj *model.HomeScopeDataConfidence) (ret graphql.Marshaler) {
+	fc, err := ec.fieldContext_HomeScopeDataConfidence_caveats(ctx, field)
+	if err != nil {
+		return graphql.Null
+	}
+	ctx = graphql.WithFieldContext(ctx, fc)
+	defer func() {
+		if r := recover(); r != nil {
+			ec.Error(ctx, ec.Recover(ctx, r))
+			ret = graphql.Null
+		}
+	}()
+	resTmp, err := ec.ResolverMiddleware(ctx, func(rctx context.Context) (any, error) {
+		ctx = rctx // use context from middleware stack in children
+		return obj.Caveats, nil
+	})
+	if err != nil {
+		ec.Error(ctx, err)
+		return graphql.Null
+	}
+	if resTmp == nil {
+		if !graphql.HasFieldError(ctx, fc) {
+			ec.Errorf(ctx, "must not be null")
+		}
+		return graphql.Null
+	}
+	res := resTmp.([]string)
+	fc.Result = res
+	return ec.marshalNString2ᚕstringᚄ(ctx, field.Selections, res)
+}
+
+func (ec *executionContext) fieldContext_HomeScopeDataConfidence_caveats(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "HomeScopeDataConfidence",
+		Field:      field,
+		IsMethod:   false,
+		IsResolver: false,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return nil, errors.New("field of type String does not have child fields")
+		},
+	}
+	return fc, nil
+}
+
 func (ec *executionContext) _HomeSignal_id(ctx context.Context, field graphql.CollectedField, obj *model.HomeSignal) (ret graphql.Marshaler) {
 	fc, err := ec.fieldContext_HomeSignal_id(ctx, field)
 	if err != nil {
@@ -45723,6 +46002,8 @@ func (ec *executionContext) fieldContext_Query_home(ctx context.Context, field g
 				return ec.fieldContext_HomeResult_limitingFactor(ctx, field)
 			case "dataConfidence":
 				return ec.fieldContext_HomeResult_dataConfidence(ctx, field)
+			case "scopeDataConfidence":
+				return ec.fieldContext_HomeResult_scopeDataConfidence(ctx, field)
 			}
 			return nil, fmt.Errorf("no field named %q was found under type HomeResult", field.Name)
 		},
@@ -69165,6 +69446,59 @@ func (ec *executionContext) _HomeResult(ctx context.Context, sel ast.SelectionSe
 			if out.Values[i] == graphql.Null {
 				out.Invalids++
 			}
+		case "scopeDataConfidence":
+			out.Values[i] = ec._HomeResult_scopeDataConfidence(ctx, field, obj)
+			if out.Values[i] == graphql.Null {
+				out.Invalids++
+			}
+		default:
+			panic("unknown field " + strconv.Quote(field.Name))
+		}
+	}
+	out.Dispatch(ctx)
+	if out.Invalids > 0 {
+		return graphql.Null
+	}
+
+	atomic.AddInt32(&ec.deferred, int32(len(deferred)))
+
+	for label, dfs := range deferred {
+		ec.processDeferredGroup(graphql.DeferredGroup{
+			Label:    label,
+			Path:     graphql.GetPath(ctx),
+			FieldSet: dfs,
+			Context:  ctx,
+		})
+	}
+
+	return out
+}
+
+var homeScopeDataConfidenceImplementors = []string{"HomeScopeDataConfidence"}
+
+func (ec *executionContext) _HomeScopeDataConfidence(ctx context.Context, sel ast.SelectionSet, obj *model.HomeScopeDataConfidence) graphql.Marshaler {
+	fields := graphql.CollectFields(ec.OperationContext, sel, homeScopeDataConfidenceImplementors)
+
+	out := graphql.NewFieldSet(fields)
+	deferred := make(map[string]*graphql.FieldSet)
+	for i, field := range fields {
+		switch field.Name {
+		case "__typename":
+			out.Values[i] = graphql.MarshalString("HomeScopeDataConfidence")
+		case "level":
+			out.Values[i] = ec._HomeScopeDataConfidence_level(ctx, field, obj)
+			if out.Values[i] == graphql.Null {
+				out.Invalids++
+			}
+		case "coveragePct":
+			out.Values[i] = ec._HomeScopeDataConfidence_coveragePct(ctx, field, obj)
+		case "lastIngestedAt":
+			out.Values[i] = ec._HomeScopeDataConfidence_lastIngestedAt(ctx, field, obj)
+		case "caveats":
+			out.Values[i] = ec._HomeScopeDataConfidence_caveats(ctx, field, obj)
+			if out.Values[i] == graphql.Null {
+				out.Invalids++
+			}
 		default:
 			panic("unknown field " + strconv.Quote(field.Name))
 		}
@@ -77814,6 +78148,16 @@ func (ec *executionContext) marshalNHomeResult2ᚖgithubᚗcomᚋfullᚑchaosᚋ
 		return graphql.Null
 	}
 	return ec._HomeResult(ctx, sel, v)
+}
+
+func (ec *executionContext) marshalNHomeScopeDataConfidence2ᚖgithubᚗcomᚋfullᚑchaosᚋdevᚑhealthᚑopsᚋinternalᚋqueryapiᚋgraphᚋmodelᚐHomeScopeDataConfidence(ctx context.Context, sel ast.SelectionSet, v *model.HomeScopeDataConfidence) graphql.Marshaler {
+	if v == nil {
+		if !graphql.HasFieldError(ctx, graphql.GetFieldContext(ctx)) {
+			ec.Errorf(ctx, "the requested element is null which the schema does not allow")
+		}
+		return graphql.Null
+	}
+	return ec._HomeScopeDataConfidence(ctx, sel, v)
 }
 
 func (ec *executionContext) marshalNHomeSignal2githubᚗcomᚋfullᚑchaosᚋdevᚑhealthᚑopsᚋinternalᚋqueryapiᚋgraphᚋmodelᚐHomeSignal(ctx context.Context, sel ast.SelectionSet, v model.HomeSignal) graphql.Marshaler {

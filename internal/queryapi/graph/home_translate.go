@@ -161,6 +161,7 @@ func homeResultFromResponse(resp *home.Response) *model.HomeResult {
 		Signals:               homeSignalsFromResponse(resp.Signals),
 		LimitingFactor:        homeLimitingFactorFromResponse(resp.LimitingFactor),
 		DataConfidence:        homeDataConfidenceFromResponse(resp.DataConfidence),
+		ScopeDataConfidence:   homeScopeDataConfidenceFromResponse(resp.ScopeDataConfidence),
 	}
 }
 
@@ -315,6 +316,19 @@ func homeDataConfidenceFromResponse(dc home.DataConfidence) *model.HomeDataConfi
 		ConnectedSources: connected,
 		MissingSources:   missing,
 		Caveats:          caveats,
+	}
+}
+
+func homeScopeDataConfidenceFromResponse(dc home.ScopeDataConfidence) *model.HomeScopeDataConfidence {
+	caveats := dc.Caveats
+	if caveats == nil {
+		caveats = []string{}
+	}
+	return &model.HomeScopeDataConfidence{
+		Level:          dc.Level,
+		CoveragePct:    dc.CoveragePct,
+		LastIngestedAt: naiveDateTimeToGraphQL(dc.LastIngestedAt),
+		Caveats:        caveats,
 	}
 }
 

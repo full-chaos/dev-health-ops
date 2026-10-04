@@ -164,6 +164,18 @@ type DataConfidence struct {
 	Caveats          []string `json:"caveats"`
 }
 
+// ScopeDataConfidence reports coverage and ingestion for the repositories
+// selected by this Home request. It is deliberately separate from
+// DataConfidence: the latter remains the organization-wide source-freshness
+// assessment, while this value answers whether the selected repository scope
+// has metrics for this response window.
+type ScopeDataConfidence struct {
+	Level          string                `json:"level"`
+	CoveragePct    *float64              `json:"coverage_pct"`
+	LastIngestedAt *pytime.NaiveDateTime `json:"last_ingested_at"`
+	Caveats        []string              `json:"caveats"`
+}
+
 // Response is the wire shape of HomeResponse (schemas.py:127-138).
 type Response struct {
 	Freshness             Freshness               `json:"freshness"`
@@ -177,6 +189,7 @@ type Response struct {
 	Signals               []Signal                `json:"signals"`
 	LimitingFactor        LimitingFactor          `json:"limiting_factor"`
 	DataConfidence        DataConfidence          `json:"data_confidence"`
+	ScopeDataConfidence   ScopeDataConfidence     `json:"scope_data_confidence"`
 }
 
 // Tile is one entry of HomeResponse.tiles (services/home.py:1187-1208) --

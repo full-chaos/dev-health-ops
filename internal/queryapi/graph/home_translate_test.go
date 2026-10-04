@@ -229,6 +229,9 @@ func TestHomeResultFromResponse_MapsEveryFieldAgainstTheRESTShape(t *testing.T) 
 			Level: "high", CoveragePct: floatPtr(72.5),
 			ConnectedSources: []string{"github", "jira"}, MissingSources: []string{"linear"}, Caveats: []string{"partial window"},
 		},
+		ScopeDataConfidence: home.ScopeDataConfidence{
+			Level: "medium", CoveragePct: floatPtr(50), LastIngestedAt: &ingested, Caveats: []string{"scope partial"},
+		},
 	}
 
 	restJSON, err := json.Marshal(resp)
@@ -325,6 +328,10 @@ func TestHomeResultFromResponse_MapsEveryFieldAgainstTheRESTShape(t *testing.T) 
 		{"data_confidence.connected_sources.0", "dataConfidence.connectedSources.0"},
 		{"data_confidence.missing_sources.0", "dataConfidence.missingSources.0"},
 		{"data_confidence.caveats.0", "dataConfidence.caveats.0"},
+		{"scope_data_confidence.level", "scopeDataConfidence.level"},
+		{"scope_data_confidence.coverage_pct", "scopeDataConfidence.coveragePct"},
+		{"scope_data_confidence.last_ingested_at", "scopeDataConfidence.lastIngestedAt"},
+		{"scope_data_confidence.caveats.0", "scopeDataConfidence.caveats.0"},
 	}
 	for _, pair := range leafPaths {
 		restVal, restOK := jsonPathValue(t, rest, pair[0])

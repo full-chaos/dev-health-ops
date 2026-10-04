@@ -365,7 +365,7 @@ func TestAfterCaptureRulesCatchPlantedDefectsOnALiveClickHouse(t *testing.T) {
 	}
 	columnProblems := func() []string {
 		t.Helper()
-		_, problems := withoutColumnsAfterTheCapture(dumpTable(t, ch.httpDSN, "work_item_dependencies"))
+		_, problems := withoutColumnsAfterTheCapture(dumpWorldTable(t, ch.httpDSN, "work_item_dependencies"))
 		return problems
 	}
 

@@ -209,6 +209,13 @@ func simulationCount(simulations int) int {
 	return simulations
 }
 
+// ForecastHorizonDays is the horizon of the days simulation: a run stops at
+// this many days whether or not its items are done. So a completion-day value
+// equal to it means "this many days OR MORE", and a run recorded at it is not
+// known to be done (CHAOS-8477). It is the reference's 365, as a named value so
+// that a reader of the histogram can serve the same number.
+const ForecastHorizonDays = 365
+
 // MonteCarloForecastDays ports monte_carlo_forecast_days.
 func MonteCarloForecastDays(
 	throughputHistory []int, targetItems, simulations int, seed int64,
@@ -221,7 +228,7 @@ func MonteCarloForecastDays(
 	if targetItems <= 0 {
 		return make([]int, simulationCount(simulations)), nil
 	}
-	const maxDays = 365
+	const maxDays = ForecastHorizonDays
 	source := cpyrandom.New(seed)
 	completionDays := make([]int, 0, simulationCount(simulations))
 	for simulation := 0; simulation < simulations; simulation++ {

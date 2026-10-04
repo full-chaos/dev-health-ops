@@ -358,6 +358,24 @@ disagree, when a row still names a build the deployed process is not running
 (run `repoint` first), or when the target digest already holds a different
 row for that operation.
 
+A registered document that was **swapped with dual accept** is not a changed
+document for `carry`. When an operation gets a new text, the old text stays
+accepted as a legacy one (`legacyDigestsByOperation`, the `"legacy": true`
+entries of the document dump and of the catalog), and query-api reads a
+routing row under any accepted digest. So a row keyed to a digest the image
+being rolled to lists as a legacy text of the same operation is carried
+verbatim, under its own digest, and both texts are served from it; the plan
+names it `carried (legacy digest)`. The row is not re-keyed to the new
+digest. `carry` still refuses a row whose digest is neither the image's
+current digest nor one of its legacy digests for that operation, and it
+refuses when the document dump accepts a legacy digest that the catalog does
+not list. Two limits follow from `/registry` reporting each operation's
+current digest only: `carry` treats a row keyed to a target-legacy digest as
+reachable now without asking the deployed process, and it cannot see that a
+legacy text was **retired** — a row still keyed to a retired digest reads as
+already unreachable and is skipped, not refused. Re-key such rows (`enable`
+at the current digest) before the image that retires the legacy text rolls.
+
 A carried row claims NO proof: receipts are keyed by `schema_digest`, so
 `status` reports every carried row UNPROVEN at the new digest until
 `go-api-prove` runs against the new build, and its `review_evidence` says so
@@ -772,7 +790,8 @@ appear here.
 | `sha256:fff119c64988e2f76442f2b41229a665a2bc6e32cac92e1dd125cf6c07728dab` | 2026-10-03 | CHAOS-7774, adding `day: Date!` to `AIImpactBucketRow` in the Go-owned SDL (additive; Python never had it) | superseded |
 | `sha256:f12739c7f2b04df329e29404e80aae93308553b82fe3f35010e97ed8aa147ddc` | 2026-10-03 | CHAOS-7785, adding the optional `teamIds` argument to `ReviewEdgesInput` (team scope by repository ownership) in the Go-owned SDL | superseded |
 | `sha256:09db2fee13f48e36a1d95bb5d77fb74d327aad851319843b473077891e4c71f4` | 2026-10-03 | CHAOS-7786, adding `truncated` and a real `totalCount` (the deduplicated row count before the cut) to `ReviewEdgesResult` in the Go-owned SDL | superseded |
-| `sha256:af68e95261c6b9750aa3f9c15734c363797ea005eb2da1784806456aa2518ca5` | this revision | CHAOS-7626, adding `value`, `threshold`, `unit` and `thresholdDirection` to `ImproveOpportunity` and the `ImproveOpportunityUnit` and `ThresholdDirection` enums in the Go-owned SDL (additive; Python does not declare them) | Current. Every routing row written at the digest above stops matching the moment this lands: rebuild and deploy query-api from this SDL FIRST, then re-enable, per the recovery procedure above. |
+| `sha256:af68e95261c6b9750aa3f9c15734c363797ea005eb2da1784806456aa2518ca5` | 2026-10-03 | CHAOS-7626, adding `value`, `threshold`, `unit` and `thresholdDirection` to `ImproveOpportunity` and the `ImproveOpportunityUnit` and `ThresholdDirection` enums in the Go-owned SDL (additive; Python does not declare them) | superseded |
+| `sha256:c71f3c428b0de016a80cc8a40003a04d1b452d85f616ff31e1ff73dbec294cd6` | this revision | CHAOS-8477, adding `runs: Int!`, `unfinishedRuns: Int` and `horizonDays: Int!` to `CapacityDistribution` and `cumulativeShare: Float!` to `CapacityDistributionBin` (the run total, the runs that did not finish inside the simulated horizon, the horizon in days, and the share of the simulation runs that finished on or before each value, from the same Monte Carlo distribution as the percentile days) in the Go-owned SDL (additive; Python never had the types) | Current. Every routing row written at the digest above stops matching the moment this lands: rebuild and deploy query-api from this SDL FIRST, then re-enable, per the recovery procedure above. |
 
 ### Where `bigboy-cut.sh` finds its tools and its tree (CHAOS-7135)
 

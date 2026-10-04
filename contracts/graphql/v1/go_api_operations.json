@@ -140,7 +140,12 @@
   },
   {
     "operation": "improveOpportunities",
-    "digest": "8890d7aeddfebaa9683d6c8834c82b059e345af1dbf42db14eebba840fcd87d2"
+    "digest": "645f285412fb2c9517238aabca7e1204f530b66748893b748c0e5160cccf35c4"
+  },
+  {
+    "operation": "improveOpportunities",
+    "digest": "8890d7aeddfebaa9683d6c8834c82b059e345af1dbf42db14eebba840fcd87d2",
+    "legacy": true
   },
   {
     "operation": "investmentBreakdown",
@@ -188,7 +193,12 @@
   },
   {
     "operation": "reviewEdges",
-    "digest": "4a759f9e3d3e903b03a3aae8039b3bdca2ed69b3af25a0b20f01c1da55d97123"
+    "digest": "6b45584e433c1f7d281f29fd17044858457f5334aa282531463060d676a07bc9"
+  },
+  {
+    "operation": "reviewEdges",
+    "digest": "4a759f9e3d3e903b03a3aae8039b3bdca2ed69b3af25a0b20f01c1da55d97123",
+    "legacy": true
   },
   {
     "operation": "savedReport",

@@ -243,6 +243,11 @@ func ResolveScoped(ctx context.Context, client QueryClient, orgID string, sinceD
 		total = len(edges)
 	}
 
+	// CHAOS-8485: the display names and the keys of the people of the returned rows.
+	if err := attachPeople(ctx, client, orgID, edges); err != nil {
+		return nil, err
+	}
+
 	return &model.ReviewEdgesResult{
 		Edges:      edges,
 		TotalCount: total,

@@ -11,6 +11,7 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/full-chaos/dev-health-ops/internal/jobruntime"
+	"github.com/full-chaos/dev-health-ops/internal/jobs/metrics/workitemblockers"
 	"github.com/full-chaos/dev-health-ops/internal/jobs/metrics/workitemmetrics"
 )
 
@@ -107,6 +108,12 @@ func (executor *WorkItemStateExecutor) ComputeFamily(
 	end := start.Add(24 * time.Hour)
 
 	total := 0
+	// The blocked spans (CHAOS-8493) are organization-wide -- a blocker lives
+	// in any repository, or in none -- so they are read ONCE for the
+	// partition, by the first repository that has anything to compute, and
+	// not at all when no repository does.
+	var blocked map[string][]workitemmetrics.BlockedInterval
+	blockedLoaded := false
 	for _, repoID := range repoIDs {
 		items, err := LoadWorkItemStateWorkItems(ctx, executor.conn, run.OrganizationID, repoID, start, end)
 		if err != nil {
@@ -133,13 +140,24 @@ func (executor *WorkItemStateExecutor) ComputeFamily(
 			return wrapWorkItemStatePartialWrite(total, repoID, err)
 		}
 
+		if !blockedLoaded {
+			// A failed read fails the partition. Computing without it would
+			// write full-length rows for the statuses the blocked hours
+			// belong to, and those rows would read as a complete answer.
+			blocked, err = workitemblockers.LoadBlockedIntervals(ctx, executor.conn, run.OrganizationID)
+			if err != nil {
+				return wrapWorkItemStatePartialWrite(total, repoID, err)
+			}
+			blockedLoaded = true
+		}
+
 		// One honest, real-wall-clock timestamp per repo group -- see
 		// WriteTeamMetricsDailyPerRepo's doc comment for why this
 		// mirrors Python's real per-repo_id call cadence rather than
 		// stamping the whole partition with one shared value.
 		computedAt := executor.nowUTC()
 
-		rows, missingAttribution := computeWorkItemStateDurationsForRepo(day, start, end, items, transitions, attributions, computedAt)
+		rows, missingAttribution := computeWorkItemStateDurationsForRepo(day, start, end, items, transitions, attributions, computedAt, blocked)
 
 		// CHAOS-4278 (codex round-1 P2 finding): observe as soon as the
 		// count is known, BEFORE attempting the write -- unlike
@@ -274,6 +292,27 @@ func segmentWorkItemStatuses(
 	return filtered
 }
 
+// overlayWorkItemStateBlocked applies workitemmetrics.OverlayBlocked to this
+// family's own segment type. With no interval the segments are returned as
+// they are, so an item with no open blocker is computed exactly as before.
+func overlayWorkItemStateBlocked(
+	segments []workItemStateSegment, intervals []workitemmetrics.BlockedInterval,
+) []workItemStateSegment {
+	if len(segments) == 0 || len(intervals) == 0 {
+		return segments
+	}
+	shared := make([]workitemmetrics.StatusSegment, 0, len(segments))
+	for _, segment := range segments {
+		shared = append(shared, workitemmetrics.StatusSegment{Status: segment.status, Start: segment.start, End: segment.end})
+	}
+	overlaid := workitemmetrics.OverlayBlocked(shared, intervals)
+	result := make([]workItemStateSegment, 0, len(overlaid))
+	for _, segment := range overlaid {
+		result = append(result, workItemStateSegment{status: segment.Status, start: segment.Start, end: segment.End})
+	}
+	return result
+}
+
 // workItemStateTotalKey mirrors the Python (provider, work_scope_id,
 // team_id, status) aggregation key.
 type workItemStateTotalKey struct {
@@ -298,6 +337,7 @@ func computeWorkItemStateDurationsForRepo(
 	transitions []workItemStateTransition,
 	attributions map[string]workItemPrimaryAttribution,
 	computedAt time.Time,
+	blocked map[string][]workitemmetrics.BlockedInterval,
 ) ([]workItemStateDailyRow, int) {
 	transitionsByItem := make(map[string][]workItemStateTransition, len(transitions))
 	for _, transition := range transitions {
@@ -332,7 +372,12 @@ func computeWorkItemStateDurationsForRepo(
 		workScopeID := item.workScopeID()
 		teamNameByKey[[3]string{item.Provider, workScopeID, teamID}] = teamName
 
-		for _, segment := range segmentWorkItemStatuses(item.CreatedAt, item.CompletedAt, item.Status, itemTransitions, computedAt) {
+		segments := segmentWorkItemStatuses(item.CreatedAt, item.CompletedAt, item.Status, itemTransitions, computedAt)
+		// CHAOS-8493: the parts of a non-terminal segment in which the item
+		// has an open blocker are "blocked". The hours of the item do not
+		// change; see workitemmetrics.OverlayBlocked.
+		segments = overlayWorkItemStateBlocked(segments, blocked[item.WorkItemID])
+		for _, segment := range segments {
 			overlapStart := segment.start
 			if start.After(overlapStart) {
 				overlapStart = start

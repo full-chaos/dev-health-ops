@@ -152,7 +152,7 @@ Inspect state and logs:
 
 ```bash
 docker compose ps
-docker compose logs -f api migrate
+docker compose logs -f router go-api query-api migrate
 docker compose logs -f clickhouse postgres valkey
 ```
 

@@ -5,16 +5,13 @@ import (
 	"encoding/json"
 	"errors"
 	"github.com/full-chaos/dev-health-ops/internal/storedversion"
-	"io/fs"
 	"os"
 	"path/filepath"
 	"regexp"
-	"sort"
 	"strings"
 	"testing"
 
 	"github.com/full-chaos/dev-health-ops/internal/streamrunner"
-	"github.com/full-chaos/dev-health-ops/internal/testsupport/moduleroot"
 	"github.com/google/uuid"
 )
 
@@ -270,38 +267,6 @@ func pythonIngestClassFields(t *testing.T, source, class string) []string {
 		}
 	}
 	return fields
-}
-
-// While schemas.py still exists, the frozen field lists must equal a fresh read
-// of it. Once the Python source is deleted the frozen file is the source and
-// this skips.
-func TestFrozenIngestFieldsMatchSchemasPyWhileItExists(t *testing.T) {
-	_, filename, _, ok := moduleroot.Caller(0)
-	if !ok {
-		t.Fatal("locate test")
-	}
-	raw, err := os.ReadFile(filepath.Join(filepath.Dir(filename), "..", "..", "src", "dev_health_ops", "api", "ingest", "schemas.py"))
-	if errors.Is(err, fs.ErrNotExist) {
-		t.Skip("the Python schemas.py is gone: the frozen ingest fields are the source")
-	}
-	if err != nil {
-		t.Fatal(err)
-	}
-	frozen := frozenIngestFields(t)
-	wantClasses := []string{"IngestCommit", "IngestDeployment", "IngestPullRequest", "IngestPullRequestReview", "IngestWorkItem"}
-	var haveClasses []string
-	for class := range frozen {
-		haveClasses = append(haveClasses, class)
-	}
-	sort.Strings(haveClasses)
-	if strings.Join(haveClasses, ",") != strings.Join(wantClasses, ",") {
-		t.Fatalf("the frozen ingest file holds classes %v; the contracts under test need %v", haveClasses, wantClasses)
-	}
-	for class, want := range frozen {
-		if got := pythonIngestClassFields(t, string(raw), class); strings.Join(got, ",") != strings.Join(want, ",") {
-			t.Errorf("%s: schemas.py declares %v; the frozen list says %v", class, got, want)
-		}
-	}
 }
 
 // Every field the ingest API declares for an entity reaches a column

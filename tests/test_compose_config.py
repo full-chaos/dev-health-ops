@@ -282,7 +282,6 @@ def test_every_buildable_service_declares_an_overridable_image() -> None:
     built today.
     """
     published_families = {
-        "ghcr.io/full-chaos/dev-hops-api",
         "ghcr.io/full-chaos/dev-health-go-worker",
         "ghcr.io/full-chaos/dev-health-go-scheduler",
         "ghcr.io/full-chaos/dev-health-go-operator",
@@ -683,31 +682,6 @@ def test_least_privilege_domain_grants_reject_swapped_privilege_blocks(
     )
 
 
-def test_legacy_compose_disables_ambient_migrations() -> None:
-    services = _load_yaml(_LEGACY_COMPOSE)["services"]
-    for name in (
-        "api",
-        "metrics-api",
-    ):
-        env = services[name].get("environment") or {}
-        assert env.get("AUTO_RUN_MIGRATIONS") == "false", (
-            f"{name} must set AUTO_RUN_MIGRATIONS=false — schema is applied by "
-            f"the one-shot migrate service"
-        )
-
-
-def test_legacy_compose_app_services_gate_on_migrate() -> None:
-    services = _load_yaml(_LEGACY_COMPOSE)["services"]
-    for name in (
-        "api",
-        "metrics-api",
-    ):
-        deps = services[name].get("depends_on") or {}
-        assert (
-            deps.get("migrate", {}).get("condition") == "service_completed_successfully"
-        ), f"{name} must gate on migrate completing successfully"
-
-
 def test_helm_chart_runs_migrations_as_pre_upgrade_hook() -> None:
     # Helm templates are Go-templated, so assert on text rather than YAML.
     template = (_HELM_DIR / "templates" / "migrate-job.yaml").read_text(
@@ -1050,31 +1024,11 @@ def test_compose_declares_no_provider_route_switches() -> None:
     """Ticket step-5 acceptance: the rendered compose config contains ZERO
     ``WORKER_*_ENABLED`` keys anywhere -- not on the shared env anchor, not
     on the go-* fleet. The route switch plane is deleted, not defaulted off.
-    CHAOS-5589 deleted the celery-legacy worker/beat services outright, so
-    only the `api` anchor and the go-* fleet remain to check.
-
-    The GitHub work-item route's two file-path configs are NOT switches
-    (``WORKER_GITHUB_WORK_ITEMS_STATUS_MAPPING_PATH`` /
-    ``..._INVESTMENT_CONFIG_PATH``) and must still be present, unset by
-    default, on the Python side. CHAOS-3088 deleted deploy/go-workers/
-    compose-go-workers.yml, whose go-worker service used to carry these two
-    keys too (pass-through, unset) -- the folded-in go-* fleet (copied from
-    deploy/docker-compose/compose.go-workers.yml (deleted, CHAOS-6950)) never has, since that file
-    relies on the worker image's own packaged /app/config default instead;
-    that is a pre-existing difference between the two overlays, not
-    something this PR changes, so only the negative (no switches) half
-    extends to the go-* fleet below.
+    CHAOS-5589 deleted the celery-legacy worker/beat services outright and
+    CHAOS-8361 deleted the Python `api` service, so only the go-* fleet
+    remains to check.
     """
     services = _load_yaml(_LEGACY_COMPOSE)["services"]
-
-    shared_env = services["api"]["environment"]  # &env anchor
-    for name in ("api",):
-        env = services[name]["environment"]
-        matched = [key for key in env if _WORKER_ENABLED_SWITCH_PATTERN.fullmatch(key)]
-        assert not matched, f"{name} still declares route switches: {sorted(matched)}"
-
-    for name in _PROVIDER_ROUTE_CONFIG_NAMES:
-        assert shared_env[name] == f"${{{name}:-}}"
 
     for name, spec in services.items():
         if not name.startswith("go-"):
@@ -1471,12 +1425,12 @@ def test_go_reconciler_declares_a_readyz_healthcheck() -> None:
     (internal/reconcilerservice/service.go), never a CMD-SHELL
     one-liner that could not run in this image at all.
 
-    No other `go-*` service in root compose.yml declares a healthcheck to
-    match interval/timeout/retries against -- this asserts the reconciler's
-    own values are present and sane, not copied from a sibling. (Other,
-    non-Go services in this file -- clickhouse, api, metrics-api --
-    declare their own unrelated healthchecks; this test only
-    claims uniqueness within the go-* fleet.) Ported from the now-deleted
+    One other `go-*` service in root compose.yml declares a healthcheck:
+    go-api, with the same probe (CHAOS-8361: the router waits for it). This
+    asserts the reconciler's own values are present and sane. (Other,
+    non-go-* services in this file -- clickhouse, query-api, router --
+    declare their own healthchecks; this test only claims the list within
+    the go-* fleet.) Ported from the now-deleted
     deploy/go-workers/compose-go-workers.yml (CHAOS-3088) -- that file was
     the only place this healthcheck was defined before being folded into
     root compose.yml; deploy/docker-compose/compose.go-workers.yml (deleted, CHAOS-6950) never had
@@ -1540,12 +1494,14 @@ def test_go_reconciler_declares_a_readyz_healthcheck() -> None:
     )
 
     for other_name, other_spec in services.items():
-        if other_name == "go-reconciler" or not other_name.startswith("go-"):
+        if other_name in ("go-reconciler", "go-api") or not other_name.startswith(
+            "go-"
+        ):
             continue
         assert "healthcheck" not in other_spec, (
             f"{other_name} declares a healthcheck too, but this test's "
-            "docstring claims go-reconciler's is the only one in the go-* "
-            "fleet -- update the docstring if that changed on purpose"
+            "docstring claims go-reconciler's and go-api's are the only ones "
+            "in the go-* fleet -- update the docstring if that changed on purpose"
         )
 
 
@@ -1883,7 +1839,7 @@ def test_go_api_serves_the_billing_edge_on_the_operator_image() -> None:
     assert command[0] == "api", command
     assert "--api-billing-edge-addr=:8010" in command, command
     assert "8010:8010" in api["ports"], api.get("ports")
-    # The api listener is not published: the Python api owns host port 8000.
+    # The api listener is not published: the router owns host port 8000.
     assert not any(str(p).endswith(":8000") for p in api["ports"]), api["ports"]
     deps = api["depends_on"]
     for name in ("go-river-provision", "go-river-migrate"):

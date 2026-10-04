@@ -2,16 +2,13 @@ package goapiproof
 
 import (
 	"encoding/json"
-	"errors"
 	"go/ast"
 	"go/parser"
 	"go/token"
-	"io/fs"
 	"os"
 	"path/filepath"
 	"regexp"
 	"sort"
-	"strconv"
 	"strings"
 	"testing"
 )
@@ -104,37 +101,6 @@ func frozenSchemaFacts(t *testing.T) pythonSchemaFacts {
 	return facts
 }
 
-// While schema.py still exists, the frozen facts must equal a fresh read of it:
-// a field body changed in schema.py without refreezing turns this red. Once the
-// Python source is deleted the frozen file is the source and this skips.
-func TestFrozenSchemaFactsMatchSchemaPyWhileItExists(t *testing.T) {
-	root := repoRootFromTest(t)
-	raw, err := os.ReadFile(filepath.Join(root, filepath.FromSlash("src/dev_health_ops/api/graphql/schema.py")))
-	if errors.Is(err, fs.ErrNotExist) {
-		t.Skip("the Python schema.py is gone: the frozen schema facts are the source")
-	}
-	if err != nil {
-		t.Fatal(err)
-	}
-	source := string(raw)
-	callers := map[string]bool{}
-	for _, match := range regexp.MustCompile(`_raise_served_by_query_api\(\s*"([A-Za-z0-9_]+)"`).FindAllStringSubmatch(source, -1) {
-		callers[match[1]] = true
-	}
-	var fresh []string
-	for operation := range callers {
-		fresh = append(fresh, operation)
-	}
-	sort.Strings(fresh)
-	frozen := frozenSchemaFacts(t)
-	if strings.Join(fresh, ",") != strings.Join(frozen.RaisingFields, ",") {
-		t.Fatalf("schema.py raises the deletion error for %v; the frozen facts say %v", fresh, frozen.RaisingFields)
-	}
-	if got := pythonRaisedMessage(t, source); got != frozen.Message {
-		t.Fatalf("schema.py raises\n%q\nthe frozen facts say\n%q", got, frozen.Message)
-	}
-}
-
 // The ledger names exactly the operations whose Strawberry field body raises
 // the deletion error, and its message template is the text that field body
 // raises. A ledger entry with a live Python path, or a deleted path with no
@@ -171,37 +137,6 @@ func TestLedgerMatchesTheDeletedFieldBodiesInSchemaPy(t *testing.T) {
 	if frozen.Message != ledger.MessageTemplate {
 		t.Fatalf("schema.py raises\n%q\nthe ledger expects\n%q", frozen.Message, ledger.MessageTemplate)
 	}
-}
-
-// pythonRaisedMessage concatenates the string literals of the
-// GoServedOperationUnavailableError raise in _raise_served_by_query_api,
-// keeping the f-string placeholder for the operation as "{operation}".
-func pythonRaisedMessage(t *testing.T, source string) string {
-	t.Helper()
-	marker := "raise GoServedOperationUnavailableError("
-	start := strings.Index(source, marker)
-	if start < 0 {
-		t.Fatal("schema.py has no GoServedOperationUnavailableError raise")
-	}
-	rest := source[start+len(marker):]
-	literal := regexp.MustCompile(`^\s*f?"((?:[^"\\]|\\.)*)"`)
-	var message strings.Builder
-	for {
-		match := literal.FindStringSubmatch(rest)
-		if match == nil {
-			break
-		}
-		unquoted, err := strconv.Unquote(`"` + match[1] + `"`)
-		if err != nil {
-			t.Fatalf("unquote %q: %v", match[1], err)
-		}
-		message.WriteString(unquoted)
-		rest = rest[len(match[0]):]
-	}
-	if message.Len() == 0 {
-		t.Fatal("no string literal found in the raise")
-	}
-	return message.String()
 }
 
 func TestLedgerRejectsMalformedDocuments(t *testing.T) {

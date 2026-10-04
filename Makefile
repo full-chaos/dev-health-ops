@@ -48,7 +48,6 @@ docs\:check:
 docs\:check-fast:
 	$(PYTHON) scripts/check_investment_docs_drift.py
 	$(PYTHON) scripts/check_queue_mapping_docs_drift.py
-	$(PYTHON) scripts/check_ask_dev_copy_drift.py
 	$(PYTHON) scripts/check_docs_links.py
 
 docs\:build:

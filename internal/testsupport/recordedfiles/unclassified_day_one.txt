@@ -760,8 +760,6 @@ internal/queryapi/investmentflow/testdata/team_category_repo.json
 internal/queryapi/investmentflow/testdata/team_category_subcategory_repo.json
 internal/queryapi/investmentflow/testdata/team_subcategory_repo.json
 internal/queryapi/meta/testdata/meta.json
-internal/queryapi/opportunities/testdata/no_cards_fallback.json
-internal/queryapi/opportunities/testdata/pr_rework_ratio_default_experiments.json
 internal/queryapi/people/testdata/alias_mapping.json
 internal/queryapi/people/testdata/no_alias_mapping.json
 internal/queryapi/quadrant/testdata/churn_throughput_team_forces_repo.json

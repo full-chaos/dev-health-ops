@@ -5,12 +5,16 @@
       "title": "Reduce PR Rework Ratio",
       "rationale": "PR Rework Ratio climbed 15% in the last 14 days.",
       "evidence_links": [
-        "/api/v1/explain?metric=pr_rework_ratio&scope_type=team&scope_id=team-9&range_days=14&compare_days=14"
+        "/api/v1/explain?metric=pr_rework_ratio\u0026scope_type=team\u0026scope_id=team-9\u0026range_days=14\u0026compare_days=14"
       ],
       "suggested_experiments": [
         "Triage the top 10 longest-running work items.",
         "Introduce a rotating on-call reviewer for stalled PRs."
-      ]
+      ],
+      "change_percent": 15,
+      "direction": "up",
+      "range_days": 14,
+      "compare_days": 14
     }
   ]
 }

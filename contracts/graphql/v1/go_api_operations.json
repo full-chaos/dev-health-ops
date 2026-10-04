@@ -64,6 +64,10 @@
     "digest": "1b3480a8830f9eed583e47174b7759740a7f34182c2a7a8d92f28eb1c2253cb7"
   },
   {
+    "operation": "capacityCompletionDistribution",
+    "digest": "ff9677f7be8d853764d7f4c629a862e63a641443cd3df458b39ffe2451750bff"
+  },
+  {
     "operation": "capacityForecast",
     "digest": "d95197012e32056fcece1f8975d953e7465bb112354cf4201e87b39375f933ef"
   },

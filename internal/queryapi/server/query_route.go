@@ -880,6 +880,25 @@ const registeredCapacityForecastDocument = `query CapacityForecast($orgId: Strin
   }
 }`
 
+// registeredCapacityCompletionDistributionDocument is CHAOS-8598's per-team read document: one team's capacityForecast, selecting only
+// completionDistribution{days items}. It is the MCP run_operation read of the Monte Carlo histograms and carries no web wire form (no __typename).
+// The team id comes from the client; historyDays and simulations default in the document (90 and 10000, the SDL defaults, and 10000 is
+// mcpMaxSimulations). The operation key differs from the GraphQL root (capacityForecast) because a digest maps to exactly one operation.
+const registeredCapacityCompletionDistributionDocument = `query CapacityCompletionDistribution($orgId: String!, $teamId: String!, $historyDays: Int! = 90, $simulations: Int! = 10000) {
+  capacityForecast(orgId: $orgId, input: {teamId: $teamId, historyDays: $historyDays, simulations: $simulations}) {
+    completionDistribution {
+      days {
+        value
+        count
+      }
+      items {
+        value
+        count
+      }
+    }
+  }
+}`
+
 // registeredCapacityForecastV2Document is the text capacityForecast accepted BEFORE it asked for `runs` and for
 // `cumulativeShare` on the bins of completionDistribution (CHAOS-8477): the text CHAOS-7994 registered. It stays a
 // legacy text (see legacyDigestsByOperation), beside V1 below, so a web build still sending it keeps working
@@ -3483,6 +3502,7 @@ func newQueryHandler(chClient featureflags.QueryClient, pgPool *pgxpool.Pool, ve
 		"investmentBreakdown":               digestHex(registeredInvestmentBreakdownDocument),
 		"investmentFull":                    digestHex(registeredInvestmentFullDocument),
 		"capacityForecast":                  digestHex(registeredCapacityForecastDocument),
+		"capacityCompletionDistribution":    digestHex(registeredCapacityCompletionDistributionDocument),
 		"capacityForecasts":                 digestHex(registeredCapacityForecastsDocument),
 		"throughputForecast":                digestHex(registeredThroughputForecastDocument),
 		"featureFlagEvents":                 digestHex(registeredFeatureFlagEventsDocument),

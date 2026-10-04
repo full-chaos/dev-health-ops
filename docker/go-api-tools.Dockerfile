@@ -59,8 +59,9 @@ RUN --mount=type=cache,target=/go/pkg/mod \
 # cmd/dho pulls in every vertical under internal/ (including
 # internal/goapicli, internal/mintcli, internal/goapidigest and
 # internal/goapiproof) plus contracts/graphql/v1 (the schemav1.SDL embed
-# the posture/schema-digest is computed from) and contracts/jobs/v1 (the job
-# migration policy `dho migrate river` embeds). cmd/registrydump is needed
+# the posture/schema-digest is computed from), contracts/jobs/v1 (the job
+# migration policy `dho migrate river` embeds) and contracts/sync-dispatch/v1
+# (the sync-dispatch route policy the same verb embeds). cmd/registrydump is needed
 # too, with the query_route.go it reads (below, inside internal/). The
 # whole internal/ tree is copied, not an enumerated subpackage list: an
 # enumerated list is how the next import added to any of these goes
@@ -70,6 +71,7 @@ COPY cmd/dho ./cmd/dho
 COPY cmd/registrydump ./cmd/registrydump
 COPY contracts/graphql/v1 ./contracts/graphql/v1
 COPY contracts/jobs/v1 ./contracts/jobs/v1
+COPY contracts/sync-dispatch/v1 ./contracts/sync-dispatch/v1
 COPY internal ./internal
 
 RUN --mount=type=cache,target=/go/pkg/mod \
@@ -142,6 +144,6 @@ USER 10001:10001
 # `dho mint edge-token` runs, so no ENTRYPOINT is set: a caller-supplied
 # command replaces CMD outright instead of trailing a fixed entrypoint
 # binary. The default CMD only needs to keep the Pod alive when no
-# command is given (docker/Dockerfile's `api` and `runner` targets exist
-# because THEIR image runs continuously; this one never does).
+# command is given (a long-running image sets its own entrypoint; this one
+# never runs continuously).
 CMD ["sleep", "infinity"]

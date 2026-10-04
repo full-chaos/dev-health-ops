@@ -314,10 +314,10 @@ a bug and re-discover it from scratch.
   `replicas: 0` as the compose *default* for `go-worker-heavy`; prod's actual
   replica count (3) comes from the deploy records, not the checked-in file. A
   reader of the file alone concludes heavy work is not running.
-- **Service-list deltas.** Prod-only: `go-river-migrate`, `acr-material-init`.
-  Local-only: `bugsink`, `mailpit`, `falkordb`, `riverui`,
-  `go-worker-consumers-ready`, `go-worker-ready`, the `*-route-activate`
-  services, `go-worker-migrate`. `go-worker-heavy`
+- **Service-list deltas.** The root `compose.yml` runs `bugsink` and the
+  `*-route-activate` services, and it has no `mailpit`, `falkordb`, `riverui`,
+  `go-worker-consumers-ready`, `go-worker-ready` or `go-worker-migrate`
+  service. `go-worker-heavy`
   (`investment,metrics,reports,workgraph`) and `go-worker-ops`
   (`coverage,heartbeat,retention,webhooks`) are identical in both.
 - **Archived Celery naming, checked-in vs. actually deployed.** The Celery

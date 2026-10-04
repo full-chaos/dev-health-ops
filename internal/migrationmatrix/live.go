@@ -103,8 +103,10 @@ func RoutingStateSQL() (string, error) {
 // a JSON null and `[]` decode to the same empty slice, so a coalesce() here
 // was measured to change no outcome (the mutant removing it survived every
 // test, and could only survive) -- and a clause that cannot change an
-// outcome is one more thing a reader has to reason about for nothing. The
-// offline reader refuses an empty snapshot BY NAME either way.
+// outcome is one more thing a reader has to reason about for nothing. Both
+// readers read an empty table as no rows, which is a valid state since the
+// catalog rule (CHAOS-8543): the page then says that query-api serves every
+// catalog operation with no routing row (RenderOpsBlock).
 func routingSnapshotQuery(rowQuery string) string {
 	return `
 SELECT json_build_object(

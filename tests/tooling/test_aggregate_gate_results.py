@@ -1116,9 +1116,6 @@ def test_paths_filter_covers_every_file_the_gated_jobs_install(
     )
 
 
-LEFTHOOK_PATH = ROOT / "lefthook.yml"
-
-
 def test_paths_filter_covers_lefthook_yml() -> None:
     # CHAOS-4843, round 2 of #2169's peer review, P2b. Guards on lefthook.yml
     # only run if this workflow's own `changes` job selects lefthook.yml

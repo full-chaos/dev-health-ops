@@ -117,11 +117,15 @@ type Contributor struct {
 
 // Response ports api/models/schemas.py's ExplainResponse model.
 type Response struct {
-	Metric         string                    `json:"metric"`
-	Label          string                    `json:"label"`
-	Unit           string                    `json:"unit"`
-	Value          float64                   `json:"value"`
-	DeltaPct       float64                   `json:"delta_pct"`
+	Metric   string  `json:"metric"`
+	Label    string  `json:"label"`
+	Unit     string  `json:"unit"`
+	Value    float64 `json:"value"`
+	DeltaPct float64 `json:"delta_pct"`
+	// HasData / HasPriorData (CHAOS-8491): the current / comparison window holds a stored
+	// value. When false, the matching value (or the delta's base) is a placeholder 0.
+	HasData        bool                      `json:"has_data"`
+	HasPriorData   bool                      `json:"has_prior_data"`
 	Drivers        []Contributor             `json:"drivers"`
 	Contributors   []Contributor             `json:"contributors"`
 	DrilldownLinks pyjson.OrderedMap[string] `json:"drilldown_links"`

@@ -234,7 +234,7 @@ func TestMetricValueProjectionUsesTupleArgMaxForNullableColumn(t *testing.T) {
 // raw time.Time (the exact defect class six other call sites in this
 // repo shared before that fix).
 func TestFetchMetricValueBindsDateAsString(t *testing.T) {
-	client := &queryCapturingClient{rows: [][]any{{12.5}}}
+	client := &queryCapturingClient{rows: [][]any{{12.5, uint64(1)}}}
 	reader, err := NewReader(client)
 	if err != nil {
 		t.Fatalf("NewReader: %v", err)

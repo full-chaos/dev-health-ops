@@ -4,6 +4,8 @@
   "unit": "hours",
   "value": 12.0,
   "delta_pct": 50.0,
+  "has_data": true,
+  "has_prior_data": true,
   "drivers": [
     {
       "id": "team-ops",

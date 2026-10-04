@@ -149,9 +149,10 @@ migrate_and_assert_river() {
 
 # ---------------------------------------------------------------------------
 # provision_river -- applies the ClickHouse migration, the three River
-# runtime roles, the pinned River schema, and the sync-orchestration
-# transport flip a fresh CI database needs before the Go worker can process
-# anything. Call AFTER migrate_and_assert_river. Reads: CLICKHOUSE_URI_NATIVE,
+# runtime roles and the pinned River schema, and reads back that the migrate
+# step left the sync-orchestration routes on river, which a fresh CI database
+# needs before the Go worker can process anything. Call AFTER
+# migrate_and_assert_river. Reads: CLICKHOUSE_URI_NATIVE,
 # POSTGRES_HOST/PORT/SUPERUSER/SUPERUSER_PASSWORD/DB, RIVER_DOMAIN_ROLE/
 # QUEUE_ROLE/COORDINATOR_ROLE (+ their _PASSWORD counterparts), BIN_DIR,
 # ROOT_DIR. Requires build_go_binaries to have run (BIN_DIR/dho) and CLICKHOUSE_URI_NATIVE.
@@ -221,29 +222,31 @@ provision_river() {
     exit "${EXIT_FAILURE}"
   fi
 
-  # A fresh Alembic install creates sync_dispatch_transport_routes rows with
-  # transport='celery' for every sync-orchestration kind (post_sync,
-  # dispatch_sync_run, finalize_sync_run, reference_discovery) -- prod flips
-  # these to 'river' as an explicit, authorized cutover action, which a
-  # fresh CI database has no history to inherit. Without this flip the
-  # reconciler's outbox relay finds these kinds routed to celery and never
-  # enqueues the River job that would let dev-health-worker process the
-  # post_sync fanout at all. This is CI-only test-data setup on a throwaway
-  # database, not a product code change.
+  # A fresh database seeds the sync_dispatch_transport_routes row of every
+  # sync-orchestration kind (post_sync, dispatch_sync_run, finalize_sync_run,
+  # reference_discovery) with transport='celery'. `dho migrate river` above
+  # moves each such row to river (CHAOS-8600), as it does in every
+  # deployment. This fixture used to do that itself with superuser SQL, and
+  # that hid that no product path did it: a fresh install outside CI never
+  # had a ready reconciler.
   #
-  # rollback_transport is pinned to 'none' here, matching the checked-in
-  # contract (contracts/sync-dispatch/v1/transport-routes.json) for all four
-  # kinds: no Celery producer exists for any of them, so 'none' is their only
-  # legal rollback_transport now. internal/syncroute.Fence.Check compares
-  # this column against that checked-in value per kind (not a hardcoded
-  # literal) and fails the reconciler's readiness closed on any mismatch --
-  # leaving this row on 'celery' after the flip below would have made
-  # /readyz spin forever waiting on a drift that never resolves.
-  echo "==> routing sync-orchestration kinds to river for this CI run (fresh installs default to celery)"
-  PGPASSWORD="${POSTGRES_SUPERUSER_PASSWORD}" psql \
+  # So this is a READ of the state the migrate step must leave, never a
+  # write: every route row is on river, not paused, with no rollback route
+  # (the checked-in contract, contracts/sync-dispatch/v1/transport-routes.json).
+  # internal/syncroute.Fence.Check compares each row with that contract and
+  # keeps the reconciler's readiness closed on any mismatch, so without this
+  # read a row left on celery shows only as a /readyz wait that never ends.
+  echo "==> asserting dho migrate river left every sync-orchestration route row on river (read only)"
+  local sync_routes
+  sync_routes="$(PGPASSWORD="${POSTGRES_SUPERUSER_PASSWORD}" psql \
     --host="${POSTGRES_HOST}" --port="${POSTGRES_PORT}" --username="${POSTGRES_SUPERUSER}" --dbname="${POSTGRES_DB}" \
-    --set=ON_ERROR_STOP=1 \
-    -c "UPDATE sync_dispatch_transport_routes SET transport='river', rollback_transport='none', generation=generation+1, updated_at=now() WHERE kind IN ('post_sync','dispatch_sync_run','finalize_sync_run','reference_discovery') AND transport <> 'river';"
+    --set=ON_ERROR_STOP=1 --tuples-only --no-align \
+    -c "SELECT count(*) FILTER (WHERE transport = 'river' AND rollback_transport = 'none' AND NOT paused) || ' of ' || count(*) FROM sync_dispatch_transport_routes;")"
+  local sync_routes_on_river="${sync_routes%% of *}" sync_routes_total="${sync_routes##* of }"
+  if [ -z "${sync_routes}" ] || [ "${sync_routes_total}" = "0" ] || [ "${sync_routes_on_river}" != "${sync_routes_total}" ]; then
+    echo "ERROR: sync_dispatch_transport_routes has '${sync_routes}' rows on river (not paused, no rollback route) after dho migrate river --apply-and-check, want every row and at least one -- the reconciler's route fence stays closed"
+    exit "${EXIT_FAILURE}"
+  fi
 }
 
 # ---------------------------------------------------------------------------

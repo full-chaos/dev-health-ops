@@ -17,6 +17,7 @@ import (
 	"time"
 
 	jobsv1 "github.com/full-chaos/dev-health-ops/contracts/jobs/v1"
+	syncdispatchv1 "github.com/full-chaos/dev-health-ops/contracts/sync-dispatch/v1"
 	"github.com/full-chaos/dev-health-ops/internal/chmigrate"
 	"github.com/full-chaos/dev-health-ops/internal/cli"
 	"github.com/full-chaos/dev-health-ops/internal/jobcontract"
@@ -27,6 +28,7 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/platform/version"
 	postgresstore "github.com/full-chaos/dev-health-ops/internal/storage/postgres"
 	riverstore "github.com/full-chaos/dev-health-ops/internal/storage/river"
+	"github.com/full-chaos/dev-health-ops/internal/syncdispatchcontract"
 )
 
 const (
@@ -230,6 +232,11 @@ func Execute(
 		fmt.Fprintln(stderr, "migration error: embedded job migration policy is invalid")
 		return 1
 	}
+	syncRoutes, err := syncdispatchcontract.NativeRiverRouteKinds(syncdispatchv1.TransportRoutes)
+	if err != nil {
+		fmt.Fprintln(stderr, "migration error: embedded sync-dispatch route policy is invalid")
+		return 1
+	}
 	migrationOptions := riverstore.MigrationOptions{
 		Schema:                  schema,
 		DomainRole:              domainRole,
@@ -248,6 +255,7 @@ func Execute(
 		PostureManifestDigest:   postureManifestDigest,
 		PostureManifestBuildID:  migrateBuildID,
 		NativeRiverRoutes:       nativeRoutes,
+		RiverSyncDispatchRoutes: syncRoutes,
 	}
 	if err := riverstore.ValidateMigrationOptions(migrationOptions); err != nil ||
 		migrationRole == domainRole || migrationRole == queueRole || migrationRole == coordinatorRole ||
@@ -295,6 +303,7 @@ func Execute(
 	// way the prod incident's `go-river-provision` REVOKE ALL once did
 	// silently.
 	logRouteSeed(ctx, infoLogger, result)
+	logSyncRouteMove(ctx, infoLogger, result)
 	postureResult := checkExecutedGrantPosture(ctx, pool, domainRole, queueRole, coordinatorRole, logger)
 	writePostureTelemetry(stdout, postureResult)
 	if !postureResult.OK {
@@ -348,6 +357,38 @@ func logRouteSeed(ctx context.Context, logger *slog.Logger, result riverstore.Mi
 	}
 	for _, kind := range result.PresentRoutes {
 		logger.InfoContext(ctx, "worker job route present", "job_kind", kind)
+	}
+}
+
+// logSyncRouteMove records, per sync-dispatch kind, what this run found and
+// whether it moved the route row from the retired Celery seed to river
+// (CHAOS-8600). A row the run did not move and that is not on river is a
+// warning that names its state: the reconciler's route fence stays closed for
+// it, and only an operator can say why it is there. A moved row is an Info
+// line with the generation it left; a deployed database prints `present` for
+// every kind and nothing else.
+func logSyncRouteMove(ctx context.Context, logger *slog.Logger, result riverstore.MigrationResult) {
+	if result.SyncRouteTableAbsent {
+		logger.WarnContext(ctx, "sync dispatch route move skipped",
+			"reason", "sync_dispatch_transport_routes_absent")
+		return
+	}
+	for _, route := range result.SyncRoutes {
+		switch route.Outcome {
+		case riverstore.SyncRouteMoved:
+			logger.InfoContext(ctx, "sync dispatch route moved",
+				"kind", route.Kind, "from_transport", route.Transport, "transport", "river",
+				"from_generation", route.Generation)
+		case riverstore.SyncRoutePresent:
+			logger.InfoContext(ctx, "sync dispatch route present", "kind", route.Kind)
+		case riverstore.SyncRouteMissing:
+			logger.WarnContext(ctx, "sync dispatch route row missing", "kind", route.Kind)
+		default:
+			logger.WarnContext(ctx, "sync dispatch route left as found",
+				"kind", route.Kind, "transport", route.Transport,
+				"rollback_transport", route.RollbackTransport, "paused", route.Paused,
+				"live_claims", route.LiveClaims)
+		}
 	}
 }
 

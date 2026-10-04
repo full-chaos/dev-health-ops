@@ -1660,6 +1660,18 @@ converges one unpaused legacy-transport route to its checked-in River transport 
 matching capability exists and no live outbox claim remains. It is idempotent
 when the route is already active.
 
+A fresh database seeds these four route rows on `celery`. With the rollback
+transport retired, `routes apply` reads such a row as drift and does not move
+it. `dho migrate river` moves it: a row that is on `celery` with no rollback
+transport, not paused and with no live outbox claim goes to River at
+`generation + 1`, in the same transaction as the runtime grants. A row in any
+other state (already on River, paused, still naming a rollback transport, or
+with a live claim) is not changed. The run logs one line for each kind:
+`sync dispatch route moved`, `sync dispatch route present`, or the warning
+`sync dispatch route left as found` with the row's state. After
+`dho migrate river`, `routes apply` on a fresh database finds the route active
+and changes nothing.
+
 **`routes resume` no longer takes a `--transport` flag (CHAOS-5626).** The
 celery transport is retired: no Celery consumer runs anywhere, and it is not a
 supported rollback target (ruling R146). `resume` now always resumes onto

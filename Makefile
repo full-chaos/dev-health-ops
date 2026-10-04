@@ -42,13 +42,12 @@ docs\:check:
 	@$(MAKE) --no-print-directory docs\:check-fast
 	$(PYTHON) scripts/build_docs_cloudflare.py --mode preview --full-check
 
-# Fast inner loop while editing pages: catches taxonomy drift, published-copy drift,
+# Fast inner loop while editing pages: catches taxonomy drift, queue-mapping drift,
 # and broken relative links/anchors without a full site build. Not sufficient before
 # pushing.
 docs\:check-fast:
 	$(PYTHON) scripts/check_investment_docs_drift.py
 	$(PYTHON) scripts/check_queue_mapping_docs_drift.py
-	$(PYTHON) scripts/check_ask_dev_copy_drift.py
 	$(PYTHON) scripts/check_docs_links.py
 
 docs\:build:
@@ -70,7 +69,7 @@ docs\:check-code-prerequisites:
 
 # Canonical documentation lifecycle:
 #   make docs:serve
-#       Fast MkDocs live reload at http://127.0.0.1:8000.
+#       Fast MkDocs live reload at http://127.0.0.1:8001.
 #   make docs:preview
 #       Local Cloudflare-shaped preview at http://localhost:8787.
 #   make docs:version PREVIEW_ALIAS=pr-1256
@@ -81,7 +80,7 @@ docs\:check-code-prerequisites:
 #       Roll production back to an explicit Worker version.
 
 docs\:serve:
-	$(PYTHON) -m mkdocs serve --strict --config-file mkdocs.yml --dev-addr 127.0.0.1:8000
+	$(PYTHON) -m mkdocs serve --strict --config-file mkdocs.yml --dev-addr 127.0.0.1:8001
 
 docs\:build-preview:
 	$(PYTHON) scripts/build_docs_cloudflare.py --mode preview

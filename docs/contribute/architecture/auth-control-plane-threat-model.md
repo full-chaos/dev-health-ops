@@ -5,8 +5,8 @@ content_type: architecture
 owner: engineering
 source_of_truth:
   - Linear document "Auth Control Plane threat model (Wave 0)", project Auth Control Plane (full analysis; private)
-  - src/dev_health_ops/api/telemetry/router.py (071c27890 closed CHAOS-4722)
-  - src/dev_health_ops/api/ingest/auth.py (512c4e77b closed CHAOS-4720)
+  - src/dev_health_ops/api/telemetry/router.py (071c27890 closed CHAOS-4722; removed with the Python api)
+  - src/dev_health_ops/api/ingest/auth.py (512c4e77b closed CHAOS-4720; removed with the Python api)
 applicability: current
 lifecycle: active
 ---

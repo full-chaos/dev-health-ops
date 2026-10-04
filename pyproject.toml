@@ -140,11 +140,6 @@ Issues = "https://github.com/chrisgeo/dev-health-ops/issues"
 Documentation = "https://github.com/chrisgeo/dev-health-ops/blob/main/docs/architecture/licensing.md"
 License = "https://github.com/chrisgeo/dev-health-ops/blob/main/LICENSE.md"
 
-[project.scripts]
-dev-health-ops = "dev_health_ops.cli:main"
-dev-hops = "dev_health_ops.cli:main"
-
-
 [tool.setuptools_scm]
 version_scheme = "post-release"
 local_scheme = "dirty-tag"
@@ -265,6 +260,9 @@ per-file-ignores = { "__init__.py" = [
 ], "tests/api/test_external_ingest_stream_health.py" = [
   "E402",
 ] }
+
+[tool.ruff.lint.isort]
+known-first-party = ["dev_health_ops"]
 
 [tool.ruff.format]
 quote-style = "double"

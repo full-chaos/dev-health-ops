@@ -66,6 +66,7 @@ func gitLabWorkItemResponses() map[string][]string {
 		root + "/issues/42/resource_label_events?page=1":        {`[{"action":"add","created_at":"2026-07-02T10:00:00Z","label":{"name":"done"}}]`, `[]`},
 		root + "/issues/42/resource_state_events?page=1":        {`[{"state":"reopened","created_at":"2026-07-03T10:00:00Z","user":{"username":"bob","name":"Bob"}}]`, `[]`},
 		root + "/issues/42/links?page=1":                        {`[{"link_type":"blocks","iid":7,"references":{"full":"acme/api#7"}}]`, `[]`},
+		root + "/issues/42/closed_by?page=1":                    {`[{"iid":9,"references":{"full":"acme/api!9"}}]`, `[]`},
 		root + "/issues/42/notes?page=1":                        {`[{"system":true,"body":"label changed","created_at":"2026-07-02T11:00:00Z"},{"system":false,"body":"hello 🌍","created_at":"2026-07-02T12:00:00Z","author":{"username":"alice"}}]`, `[]`},
 		root + "/merge_requests?page=1":                         {`[{"iid":9,"title":"Ship the API","description":"","state":"opened","created_at":"2026-07-04T09:00:00Z","updated_at":"2026-07-04T10:00:00Z","closed_at":null,"merged_at":null,"labels":["priority::low"],"assignees":[],"author":{"username":"alice"},"web_url":"https://gitlab.example/acme/api/-/merge_requests/9","milestone":null}]`, `[]`},
 		root + "/merge_requests/9/resource_state_events?page=1": {`[{"state":"opened","created_at":"2026-07-04T09:00:00Z","user":{"username":"alice"}},{"state":"merged","created_at":"2026-07-05T09:00:00Z","user":{"username":"bob"}}]`, `[]`},
@@ -95,11 +96,27 @@ func TestGitLabWorkItemsRouteNormalizesSixRawFactsAndReportsDerivedGap(t *testin
 	}
 	if len(byDestination) != 6 || len(byDestination["work_items"].Rows) != 2 ||
 		len(byDestination["work_item_transitions"].Rows) != 3 ||
-		len(byDestination["work_item_dependencies"].Rows) != 2 ||
+		len(byDestination["work_item_dependencies"].Rows) != 3 ||
 		len(byDestination["work_item_reopen_events"].Rows) != 1 ||
 		len(byDestination["work_item_interactions"].Rows) != 2 ||
 		len(byDestination["sprints"].Rows) != 1 {
 		t.Fatalf("raw effects=%+v", byDestination)
+	}
+	closingRows := 0
+	for _, raw := range byDestination["work_item_dependencies"].Rows {
+		var dependency gitlabWorkItemDependencyRow
+		if err := jsonUnmarshalEffect(raw, &dependency); err != nil {
+			t.Fatal(err)
+		}
+		if dependency.RelationshipTypeRaw == "gitlab_closing_reference" {
+			closingRows++
+			if dependency.SourceWorkItemID != "gitlab:acme/api!9" || dependency.TargetWorkItemID != "gitlab:acme/api#42" {
+				t.Fatalf("closing row=%+v", dependency)
+			}
+		}
+	}
+	if closingRows != 1 {
+		t.Fatalf("gitlab_closing_reference rows=%d want=1 (the issue's closed_by fetch must reach the dependency effect)", closingRows)
 	}
 	var issue gitlabWorkItemRow
 	for _, raw := range byDestination["work_items"].Rows {

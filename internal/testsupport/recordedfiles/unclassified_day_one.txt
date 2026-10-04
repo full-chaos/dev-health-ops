@@ -596,7 +596,6 @@ internal/providersync/testdata/oracle_pairs/syncunit_budget_exhaustion.py
 internal/providersync/testdata/oracle_pairs/team-catalog_drift_change-id.py
 internal/providersync/testdata/oracle_pairs/team-catalog_drift_observed-row.py
 internal/providersync/testdata/oracle_registry.py
-internal/providersync/testdata/pagerduty_webhook_goldens/capture.py
 internal/providersync/testdata/prepared_snapshots/github_deployments_ledger.json
 internal/providersync/testdata/prepared_snapshots/github_deployments_payload.json
 internal/providersync/testdata/python_generic_row_oracle.py
@@ -950,6 +949,5 @@ tests/fixtures/seed_workgraph_operational_edges_synthetic.sql
 tests/fixtures/test_bridge_density.py
 tests/fixtures/test_demo_identity.py
 tests/fixtures/test_metric_coherence.py
-tests/fixtures/test_product_telemetry_generator.py
 tests/fixtures/test_team_cooccurrence.py
 tests/fixtures/workgraph_components_split_edges.json

@@ -1,0 +1,156 @@
+{
+  "ok": true,
+  "failures": [],
+  "known_missing": [
+    "graphql:testopsRisk (reason-word) status=200 plane=go",
+    "page:testops/risk (reason-word) status=200 unavailable=true"
+  ],
+  "generated_at": "2026-10-04T12:00:00Z",
+  "checks": [
+    {
+      "check": "web_source",
+      "digests_match": true,
+      "graphql_documents": 6,
+      "ok": true,
+      "rest_paths": 7
+    },
+    {
+      "check": "public_host_unauth_on_web",
+      "location_path": "/auth/signin",
+      "ok": true,
+      "plane": null,
+      "status": 303
+    },
+    {
+      "check": "login",
+      "ok": true,
+      "org_id_present": true,
+      "status": "ok"
+    },
+    {
+      "check": "callback_url_origin",
+      "cookie_present": true,
+      "ok": true,
+      "origin_is_public": true
+    },
+    {
+      "check": "backend_health",
+      "ok": true,
+      "plane": "go",
+      "status": 200,
+      "status_ok": true
+    },
+    {
+      "check": "rest:understand",
+      "ok": true,
+      "path": "/api/v1/home",
+      "plane": "go",
+      "row_count": 1,
+      "status": 200
+    },
+    {
+      "check": "rest:align",
+      "ok": true,
+      "path": "/api/v1/investment",
+      "plane": "go",
+      "row_count": 1,
+      "status": 200
+    },
+    {
+      "check": "rest:execute",
+      "ok": true,
+      "path": "/api/v1/opportunities",
+      "plane": "go",
+      "row_count": 1,
+      "status": 200
+    },
+    {
+      "check": "rest:filters_options",
+      "ok": true,
+      "plane": "go",
+      "row_count": 1,
+      "status": 200
+    },
+    {
+      "check": "rest:investment_explain",
+      "ok": true,
+      "plane": "go",
+      "row_count": 1,
+      "status": 200
+    },
+    {
+      "check": "rest:work_units",
+      "ok": true,
+      "plane": "go",
+      "row_count": 1,
+      "status": 200
+    },
+    {
+      "check": "rest:drilldown_prs",
+      "ok": true,
+      "plane": "go",
+      "range_days": 14,
+      "row_count": 1,
+      "status": 200
+    },
+    {
+      "check": "rest:flame",
+      "ok": true,
+      "plane": "go",
+      "row_count": 1,
+      "status": 200
+    },
+    {
+      "check": "graphql:complexityTimeseries",
+      "ok": true,
+      "plane": "go",
+      "row_count": 1,
+      "status": 200
+    },
+    {
+      "check": "graphql:workGraphFlow",
+      "empty_node_type": 0,
+      "ok": true,
+      "plane": "go",
+      "row_count": 1,
+      "status": 200
+    },
+    {
+      "check": "graphql:home",
+      "ok": true,
+      "plane": "go",
+      "status": 200
+    },
+    {
+      "check": "graphql:recommendations",
+      "ok": true,
+      "plane": "go",
+      "row_count": 1,
+      "status": 200
+    },
+    {
+      "check": "graphql:workItemTeamAttributions",
+      "ok": true,
+      "plane": "go",
+      "row_count": 1,
+      "status": 200
+    },
+    {
+      "check": "graphql:testopsRisk",
+      "known_missing": true,
+      "ok": false
+    },
+    {
+      "check": "page:testops_risk",
+      "known_missing": true,
+      "ok": false
+    },
+    {
+      "check": "logout",
+      "ok": true,
+      "redirect_origin_is_public": true,
+      "session_cleared": true,
+      "status": 302
+    }
+  ]
+}

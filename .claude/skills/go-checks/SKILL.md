@@ -91,10 +91,7 @@ watch it FAIL, and check that the diff names the recorded value you expect.
 ## Constants that must move in lockstep
 
 `internal/synccoverage/types.go`'s `projectionVersion` and
-`SYNC_COVERAGE_PROJECTION_VERSION` in
-`src/dev_health_ops/api/services/sync_coverage.py` are read by different
-processes against the same table. The API filters projections on its value, so
-a mismatch makes every projection unreadable and coverage returns 503
-indefinitely. Bump both in one changeset, and remember the Python side is
-bind-mounted into the API container (live on save) while the Go side ships in a
-built image — they do **not** go live at the same moment locally.
+`coverageProjectionVersion` in `internal/api/syncadmin/coverage.go` are read by
+different processes against the same table. The API filters projections on its
+value, so a mismatch makes every projection unreadable and coverage returns 503
+indefinitely. Bump both in one changeset.

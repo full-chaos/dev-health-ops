@@ -26,9 +26,9 @@ Dev Health separates semantic authority, analytics, asynchronous coordination, a
 - **River** is the PostgreSQL-backed execution queue the Go worker fleet uses for production jobs.
 - **Domain run tables** remain product-visible execution history. Bounded queue rows are not a replacement for durable domain evidence.
 
-## Python and Go PostgreSQL access
+## PostgreSQL access
 
-The Python API uses semantic PostgreSQL access. Transaction-mode PgBouncer is supported when prepared-statement behavior is disabled through the configured engine path.
+The Go api uses semantic PostgreSQL access. Transaction-mode PgBouncer is supported when `PGBOUNCER_TRANSACTION_MODE=true`, which the Go runtime reads as its domain-transaction-pooler setting.
 
 The Go coexistence foundation splits database responsibilities:
 
@@ -320,6 +320,55 @@ is best-effort by design -- a dispatch failure is logged, never raised, and
 a crash before that point is recovered by the scheduler's pending-scope scan
 rather than by replaying already-terminal sink writes -- so a missed
 dispatch delays derived materializations but never loses a transition row.
+
+## Entity tree: repositories, pull requests, issues, projects
+
+Every integration places delivery work in one tree: **Repository <> Pull
+request <> Issue <> Project**. A pull request or merge request is itself a
+work item (type `pr` or `merge_request`); an issue is a work item of any other
+type. Teams and deployments hang off the tree. Each edge below is the
+relationship name the graph uses, with the table that supplies it.
+
+```mermaid
+flowchart TB
+    REPO["Repository<br/>repos"]
+    PR["Pull request / merge request<br/>work_items, type pr or merge_request"]
+    ISSUE["Issue<br/>work_items, any other type"]
+    PROJ["Project<br/>projects"]
+    TEAM["Team<br/>teams"]
+    DEP["Deployment<br/>deployments"]
+
+    PR ==>|"BELONGS_TO_REPOSITORY<br/>the pull request's work_items.repo_id"| REPO
+    PR ==>|"RELATES_TO<br/>work_item_dependencies link row"| ISSUE
+    ISSUE ==>|"BELONGS_TO_PROJECT<br/>project_membership_presence"| PROJ
+    REPO -.->|"OWNED_BY_TEAM<br/>team_repo_ownership"| TEAM
+    PROJ -.->|"OWNED_BY_TEAM<br/>team_project_ownership"| TEAM
+    DEP -.->|"BELONGS_TO_REPOSITORY<br/>deployments.repo_id"| REPO
+    REPO x-.-|"not the tree: the issue's<br/>own work_items.repo_id"| ISSUE
+    ISSUE -.-x|"not ownership: OWNED_BY_TEAM<br/>work_item_team_attributions"| TEAM
+```
+
+Every issue tracker and every code host writes these same rows; no edge is
+specific to one provider.
+
+- **Thick edges** are the tree. A repository's issues are the issues linked to
+  its pull requests; a project's repositories are reached through its issues'
+  linked pull requests.
+- **Dotted edges** hang off the tree: a team owns a repository or a project,
+  and a deployment belongs to a repository.
+- **Crossed edges** exist but are never tree membership.
+
+Two rules hold for every read of the tree:
+
+1. A link is an actual linked row in `work_item_dependencies` whose two ends
+   are real work items. An issue-key prefix, an unresolved external key, or an
+   issue's own repository column is never a link.
+2. A team is reached through ownership only (`team_repo_ownership`,
+   `team_project_ownership`), never through person membership or a computed
+   attribution.
+
+How each provider captures the pull request ↔ issue link is described in
+[Work-item team attribution](team-attribution.md), section 2.
 
 ## Migration rules
 

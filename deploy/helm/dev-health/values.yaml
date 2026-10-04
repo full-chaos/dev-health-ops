@@ -134,7 +134,9 @@ queryApi:
     enabled: false
     port: 8091
     # -- Pod selectors (each `{matchLabels: {...}}`) allowed to reach the internal port (empty
-    #    admits nobody; CHAOS-7520: there is no release-local peer). The internal listener trusts X-DH-Internal-* identity
+    #    admits nobody through this policy; CHAOS-7520: there is no release-local peer. With
+    #    networkPolicy.enabled the release-wide policy's in-namespace rule still admits every pod of the
+    #    release on this port, NetworkPolicies being additive). The internal listener trusts X-DH-Internal-* identity
     #    headers from any peer that can connect, so add only the pods that must call it, and
     #    only while they must. The tools pod that runs `dho goapi prove-write` is NOT admitted
     #    by default; to admit it for a proof run:
@@ -267,13 +269,6 @@ goWorkers:
   #    `rollingUpdate` wins. {maxUnavailable: 1, maxSurge: 0} on a single-replica
   #    group means no surge pod (the consumer restarts in place).
   rollingUpdate: {}
-  # -- River/queue-consumer worker groups the API's /health/workers checks
-  #    for live worker_instances heartbeats once goWorkers.enabled is true
-  #    (CHAOS-3942). Reconciler/scheduler/stream-* are deliberately excluded:
-  #    they run a separate role with their own /healthz and never register
-  #    worker_instances presence, so including them would make the check
-  #    wait on a heartbeat that will never appear.
-  expectedWorkerGroups: [heavy, ops, sync, sync-provider]
   # -- ClickHouse URI for the Go workers, which speak the NATIVE wire protocol
   #    (port 9000) rather than the HTTP interface (8123) that Python's
   #    clickhouse-connect uses. Leave empty with the bundled ClickHouse and it
@@ -902,6 +897,11 @@ ingress:
 # =============================================================================
 networkPolicy:
   enabled: false
+  # -- Namespace of the ingress controller; the policy admits it (label kubernetes.io/metadata.name) to the go-api, web and
+  #    query-api Service ports only.
+  ingressControllerNamespace: ingress-nginx
+  #    Must differ from the namespace the release is installed in: the render fails when networkPolicy.enabled
+  #    and the two are equal (the in-namespace rule would admit the controller on every port).
 
 # =============================================================================
 # Configuration (non-secret)

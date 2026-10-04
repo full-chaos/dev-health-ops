@@ -147,5 +147,4 @@ Named divergences from the Python routes: a configuration that is neither
 planner-managed nor pinned to one source (which Python plans in process) is
 refused with 409 and nothing written, the same ruling as the integration routes;
 an infrastructure failure past the guards answers 503 with Go's own error text;
-the request bodies are the same pydantic models (`date`, `AwareDatetime`), pinned
-to the live FastAPI route and to pydantic's datetime grammar by executed oracles.
+the request bodies follow the pydantic models (`date`, `AwareDatetime`) of the Python routes, which were pinned to pydantic's datetime grammar by executed oracles before the Python api was removed.

@@ -32,6 +32,7 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/servicecredcli"
 	"github.com/full-chaos/dev-health-ops/internal/streamrunnerservice"
 	"github.com/full-chaos/dev-health-ops/internal/synccli"
+	"github.com/full-chaos/dev-health-ops/internal/websmoke"
 	"github.com/full-chaos/dev-health-ops/internal/workersctl"
 	"github.com/full-chaos/dev-health-ops/internal/workerservice"
 )
@@ -60,6 +61,7 @@ func commands() []cli.Command {
 		servicecredcli.Command(),
 		streamrunnerservice.Command(),
 		synccli.Command(),
+		websmoke.Command(),
 		workerservice.Command(),
 		workersctl.Command(),
 	}

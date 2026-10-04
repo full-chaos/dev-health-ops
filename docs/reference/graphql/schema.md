@@ -4,7 +4,7 @@ summary: Generated GraphQL schema entry points and supported analytics result fa
 content_type: generated-reference
 owner: platform-api
 source_of_truth:
-  - src/dev_health_ops/api/graphql/schema.py
+  - contracts/graphql/v1/schema.graphql
   - generated GraphQL schema artifact
 applicability: current
 lifecycle: active

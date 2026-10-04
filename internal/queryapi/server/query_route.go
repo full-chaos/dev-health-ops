@@ -880,6 +880,29 @@ const registeredCapacityForecastDocument = `query CapacityForecast($orgId: Strin
   }
 }`
 
+// registeredCapacityCompletionDistributionDocument is CHAOS-8598's per-team read document: one team's capacityForecast, selecting only
+// completionDistribution{days items}. It is the MCP run_operation read of the Monte Carlo histograms. The text is the wire form (urql formatDocument + stringifyDocument, so __typename is injected) of the web source const the graphql-wire-parity gate pairs it with.
+// The whole input is ONE variable ($input: CapacityForecastInput): acr refuses a variable nested in a literal argument. The client supplies
+// {teamId}; historyDays and simulations default in the SDL input type (90 and 10000; 10000 is mcpMaxSimulations). The operation key differs from the GraphQL root (capacityForecast) because a digest maps to exactly one operation.
+const registeredCapacityCompletionDistributionDocument = `query CapacityCompletionDistribution($orgId: String!, $input: CapacityForecastInput) {
+  capacityForecast(orgId: $orgId, input: $input) {
+    completionDistribution {
+      days {
+        value
+        count
+        __typename
+      }
+      items {
+        value
+        count
+        __typename
+      }
+      __typename
+    }
+    __typename
+  }
+}`
+
 // registeredCapacityForecastV2Document is the text capacityForecast accepted BEFORE it asked for `runs` and for
 // `cumulativeShare` on the bins of completionDistribution (CHAOS-8477): the text CHAOS-7994 registered. It stays a
 // legacy text (see legacyDigestsByOperation), beside V1 below, so a web build still sending it keeps working
@@ -3556,6 +3579,7 @@ func newQueryHandler(chClient featureflags.QueryClient, pgPool *pgxpool.Pool, ve
 		"investmentBreakdown":               digestHex(registeredInvestmentBreakdownDocument),
 		"investmentFull":                    digestHex(registeredInvestmentFullDocument),
 		"capacityForecast":                  digestHex(registeredCapacityForecastDocument),
+		"capacityCompletionDistribution":    digestHex(registeredCapacityCompletionDistributionDocument),
 		"capacityForecasts":                 digestHex(registeredCapacityForecastsDocument),
 		"throughputForecast":                digestHex(registeredThroughputForecastDocument),
 		"featureFlagEvents":                 digestHex(registeredFeatureFlagEventsDocument),

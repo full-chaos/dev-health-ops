@@ -22,11 +22,13 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"slices"
 	"sort"
 	"strings"
 	"time"
 
 	"github.com/full-chaos/dev-health-ops/internal/mcpclass"
+	"github.com/full-chaos/dev-health-ops/internal/queryapi/routeswitch"
 )
 
 // Digest states a routing row can be in, relative to the LIVE schema
@@ -37,7 +39,7 @@ const (
 	DigestMatch = "MATCH"
 	// DigestStale: rows exist for this operation but NONE of them is
 	// reachable -- either they sit at other SCHEMA digests, or they sit
-	// at the live one under a DOCUMENT digest the catalog does not carry.
+	// at the live one under a DOCUMENT digest the operation does not accept.
 	// Both are the silent-death shape: present in psql, never consulted.
 	DigestStale = "STALE"
 	// DigestMissing: no row at any digest. Never enabled, or cleaned up.
@@ -61,6 +63,16 @@ const (
 	// it is invisible (missing is not healthy). Python's status lists these rows
 	// under the same word.
 	DigestUnregistered = "UNREGISTERED"
+)
+
+// Document classes of the row a MATCH reports (CHAOS-8649), named in OperationStatus.DocumentClass.
+const (
+	// DocumentClassCurrent: the row sits under the catalog's current document digest.
+	DocumentClassCurrent = "current"
+	// DocumentClassLegacy: the row sits under a document digest the catalog registers as a LEGACY text of
+	// the operation (CHAOS-8000 dual accept). query-api's switch reads such a row exactly as it reads the
+	// current one (routeswitch.AcceptedDigests), so in a served mode it serves the operation.
+	DocumentClassLegacy = "legacy"
 )
 
 // OperationStatus is one row of `status`.
@@ -88,6 +100,21 @@ type OperationStatus struct {
 
 	StaleDigests []string
 	Proven       bool
+
+	// DocumentClass names which accepted document the row a MATCH reports sits under:
+	// DocumentClassCurrent or DocumentClassLegacy (CHAOS-8649). Empty for every other DigestState.
+	DocumentClass string
+	// RowDocumentDigest is the document digest of the row a MATCH reports: DocumentDigest for a
+	// current-class row, the legacy text's own digest for a legacy-class one. Empty for every other
+	// DigestState.
+	RowDocumentDigest string
+	// AcceptedDocumentDigests names, sorted, the document digest of EVERY row this operation has at the
+	// live schema digest under a document it accepts: its current text or a registered legacy one
+	// (routeswitch.AcceptedDigests, the switch's own rule). query-api's switch reads each of them and
+	// serves the operation when any one is in a served mode; the row a MATCH reports is the one that
+	// decides that answer (see RoutingStatusRowsWithLegacy). Listed so that a second accepted row is never
+	// invisible. Empty when there is none.
+	AcceptedDocumentDigests []string
 	// NamedLimit is true for a NOT store-proven live row whose own
 	// review_evidence says the go-served ledger's written limit admitted it.
 	// It is deliberately not Proven.
@@ -112,15 +139,18 @@ type OperationStatus struct {
 	PendingDigests []string
 
 	// UnreachableDocumentDigests names rows this operation has AT THE LIVE
-	// SCHEMA DIGEST whose document digest is NOT the catalog's.
+	// SCHEMA DIGEST whose document digest is NOT one the operation accepts:
+	// neither the catalog's current digest nor a legacy digest the catalog
+	// registers for it (CHAOS-8649).
 	//
 	// The routing table's primary key is (schema_digest, document_digest,
 	// selected_operation), so one operation can have several rows at the
-	// live digest. Only ONE of them is reachable: the edge resolves a
-	// request to an operation through the catalog, then looks the row up
-	// by the CATALOG's document digest. Every other row is dead in exactly
-	// the way a stale schema digest is dead -- present in psql, never
-	// consulted.
+	// live digest. The edge resolves a request to an operation through the
+	// catalog, then reads the rows under the documents that operation
+	// ACCEPTS (routeswitch.AcceptedDigests): the current text and its
+	// registered legacy texts (CHAOS-8000 dual accept); those rows are in
+	// AcceptedDocumentDigests. Every other row is dead in exactly the way a
+	// stale schema digest is dead -- present in psql, never consulted.
 	//
 	// r1 fixed the arbitrary-pick half of this (a reader that kept
 	// whichever row came last). r2 found the half that remained: a LONE
@@ -192,7 +222,7 @@ func eligibleOrgsIsEmpty(text string) bool {
 // row at all is not Reachable in this sense, and query-api serves it all
 // the same (CHAOS-8517). ServedWithoutRow says that.
 func (s OperationStatus) Reachable() bool {
-	return s.DigestState == DigestMatch && (s.Mode == "canary" || s.Mode == "primary")
+	return s.DigestState == DigestMatch && servedMode(s.Mode)
 }
 
 // ServedWithoutRow reports the one state in which query-api serves a
@@ -287,6 +317,21 @@ func RoutingStatusRows(ctx context.Context, db Querier, liveSchemaDigest, pendin
 // only by a write_executed write receipt, a query by a deployed_executed one, the
 // same rule `enable` applies; an operation with no known kind is never PROVEN.
 func RoutingStatusRowsWithKinds(ctx context.Context, db Querier, liveSchemaDigest, pendingSchemaDigest string, catalog map[string]string, operationKinds map[string]string) ([]OperationStatus, error) {
+	return RoutingStatusRowsWithLegacy(ctx, db, liveSchemaDigest, pendingSchemaDigest, catalog, operationKinds, nil)
+}
+
+// RoutingStatusRowsWithLegacy is RoutingStatusRowsWithKinds for a catalog that registers LEGACY texts
+// (CHAOS-8000 dual accept; LoadOperationCatalogWithKindsAndLegacy reads them). legacy maps an operation to
+// the document digests of its legacy texts; nil, or an operation absent from it, means the operation
+// accepts its current text only, which is exactly RoutingStatusRowsWithKinds.
+//
+// CHAOS-8649: query-api's switch reads an operation's rows at the live schema digest under EVERY document
+// the operation accepts (routeswitch.AcceptedDigests: the current digest, then the legacy ones) and serves
+// the operation when any one of them is in a served mode. The census uses the same function on the same
+// catalog data, so it counts exactly those rows: a row under a registered legacy digest is MATCH, with
+// DocumentClass DocumentClassLegacy and its own mode and build, not UNREACHABLE. A row under a digest the
+// operation does not accept stays in UnreachableDocumentDigests.
+func RoutingStatusRowsWithLegacy(ctx context.Context, db Querier, liveSchemaDigest, pendingSchemaDigest string, catalog map[string]string, operationKinds map[string]string, legacy map[string][]string) ([]OperationStatus, error) {
 	if db == nil {
 		return nil, errors.New("goapiproof: nil database handle")
 	}
@@ -322,11 +367,11 @@ func RoutingStatusRowsWithKinds(ctx context.Context, db Querier, liveSchemaDiges
 	}
 
 	// A row is REACHABLE only if it sits at the live schema digest AND
-	// carries the catalog's document digest -- both halves of the key the
-	// edge looks it up by. Anything else at the live digest is dead in the
-	// same way a stale schema digest is dead, so it is collected, not
+	// carries a document digest the operation accepts -- both halves of the
+	// key the edge looks it up by. Anything else at the live digest is dead
+	// in the same way a stale schema digest is dead, so it is collected, not
 	// promoted (r2 R2-03).
-	liveByOperation := map[string]routingStateRow{}
+	acceptedByOperation := map[string][]routingStateRow{}
 	var unregistered []routingStateRow
 	unreachable := map[string][]string{}
 	staleDigests := map[string]map[string]bool{}
@@ -359,25 +404,33 @@ func RoutingStatusRowsWithKinds(ctx context.Context, db Querier, liveSchemaDiges
 			unregistered = append(unregistered, row)
 			continue
 		}
-		if row.documentDigest != catalog[row.operation] {
+		// The switch's own rule, on the same catalog data: the rows it reads for this
+		// operation are the ones under routeswitch.AcceptedDigests (CHAOS-8649).
+		if !slices.Contains(routeswitch.AcceptedDigests(catalog[row.operation], legacy[row.operation]), row.documentDigest) {
 			unreachable[row.operation] = append(unreachable[row.operation], row.documentDigest)
 			continue
 		}
-		// Keyed by operation ALONE, and that is safe HERE for a reason
-		// worth stating, because the same shape one file over was the r1
-		// F5 defect. A row only reaches this line if its document digest
-		// EQUALS the catalog's, and the table's primary key is
-		// (schema_digest, document_digest, selected_operation) -- so at a
-		// fixed live schema digest and a fixed catalog digest there is at
-		// most ONE such row per operation, and this map cannot collapse
-		// two rows into one. Every other row at the live digest went to
-		// `unreachable` above, where each is kept. The catalog digest is
-		// the missing third part of the key, supplied by the guard rather
-		// than by the map.
-		liveByOperation[row.operation] = row
+		// Every accepted row is KEPT, never collapsed into one per operation
+		// (the r1 F5 defect one file over was a map that did that). The
+		// table's primary key is (schema_digest, document_digest,
+		// selected_operation), so at the live schema digest there is at most
+		// one row per accepted document; decidingRow picks the one that
+		// decides the switch's answer, and AcceptedDocumentDigests names all.
+		acceptedByOperation[row.operation] = append(acceptedByOperation[row.operation], row)
 	}
 	for operation := range unreachable {
 		sort.Strings(unreachable[operation])
+	}
+	liveByOperation := make(map[string]routingStateRow, len(acceptedByOperation))
+	acceptedDigestsByOperation := make(map[string][]string, len(acceptedByOperation))
+	for operation, rows := range acceptedByOperation {
+		liveByOperation[operation] = decidingRow(rows, routeswitch.AcceptedDigests(catalog[operation], legacy[operation]))
+		digests := make([]string, 0, len(rows))
+		for _, row := range rows {
+			digests = append(digests, row.documentDigest)
+		}
+		sort.Strings(digests)
+		acceptedDigestsByOperation[operation] = digests
 	}
 
 	// Proof is keyed by the exact (schema_digest, candidate_build,
@@ -447,6 +500,7 @@ func RoutingStatusRowsWithKinds(ctx context.Context, db Querier, liveSchemaDiges
 			StaleDigests:               stale,
 			PendingDigests:             pending,
 			UnreachableDocumentDigests: unreachable[operation],
+			AcceptedDocumentDigests:    acceptedDigestsByOperation[operation],
 		}
 		row, live := liveByOperation[operation]
 		switch {
@@ -454,6 +508,11 @@ func RoutingStatusRowsWithKinds(ctx context.Context, db Querier, liveSchemaDiges
 			rollout := row.rollout
 			updatedAt := row.updatedAt
 			status.DigestState = DigestMatch
+			status.RowDocumentDigest = row.documentDigest
+			status.DocumentClass = DocumentClassCurrent
+			if row.documentDigest != catalog[operation] {
+				status.DocumentClass = DocumentClassLegacy
+			}
 			status.Mode = row.mode
 			status.CurrentCandidateBuild = row.candidateBuild
 			status.RolloutPercentage = &rollout
@@ -508,4 +567,22 @@ func RoutingStatusRowsWithKinds(ctx context.Context, db Querier, liveSchemaDiges
 		})
 	}
 	return statuses, nil
+}
+
+// decidingRow is the one of an operation's accepted rows that decides the switch's answer, so the census
+// reports the row the switch acts on. PostgresSwitch.Enabled serves the operation when ANY accepted row is
+// in a served mode (anyReachable), so the deciding row is the first row in a served mode, in the order of
+// accepted (the current digest, then the legacy ones as the catalog lists them); when none is served, the
+// first row in that order, whose mode then says why the operation is not served. rows is never empty.
+func decidingRow(rows []routingStateRow, accepted []string) routingStateRow {
+	ordered := slices.Clone(rows)
+	slices.SortStableFunc(ordered, func(a, b routingStateRow) int {
+		return slices.Index(accepted, a.documentDigest) - slices.Index(accepted, b.documentDigest)
+	})
+	for _, row := range ordered {
+		if servedMode(row.mode) {
+			return row
+		}
+	}
+	return ordered[0]
 }

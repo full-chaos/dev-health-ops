@@ -169,6 +169,27 @@ const registeredFeatureFlagsDocument = `query FeatureFlagRegistry($orgId: String
 const registeredReviewEdgesDocument = `query ReviewEdges($input: ReviewEdgesInput!) {
   reviewEdges(input: $input) {
     edges {
+      reviewerKey
+      authorKey
+      reviewerName
+      authorName
+      reviewsCount
+      day
+      repoId
+      __typename
+    }
+    totalCount
+    __typename
+  }
+}`
+
+// registeredReviewEdgesV1Document is the text of `reviewEdges` BEFORE the Review Network table asked for the served names and keys instead of the stored reviewer and author strings (CHAOS-8485).
+// It stays a legacy text (see legacyDigestsByOperation), so a web build still sending it keeps working while the
+// new one rolls out; the operation's ONE current document is registeredReviewEdgesDocument above. Remove it
+// with the cleanup ticket once no client sends it (testdata/wire_capture/reviewedges_v1_captured.graphql).
+const registeredReviewEdgesV1Document = `query ReviewEdges($input: ReviewEdgesInput!) {
+  reviewEdges(input: $input) {
+    edges {
       reviewer
       author
       reviewsCount
@@ -3835,6 +3856,7 @@ var legacyDigestsByOperation = map[string][]string{
 	"aiImpactSummary":      {digestHex(registeredAiImpactSummaryV1Document)},
 	"capacityForecast":     {digestHex(registeredCapacityForecastV1Document), digestHex(registeredCapacityForecastV2Document)},
 	"improveOpportunities": {digestHex(registeredImproveOpportunitiesV1Document)},
+	"reviewEdges":          {digestHex(registeredReviewEdgesV1Document)},
 }
 
 // buildOperationByDigest is the reverse index digest -> operation over every accepted text: each operation's

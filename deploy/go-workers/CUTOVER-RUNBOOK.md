@@ -22,8 +22,12 @@ Celery to River, verifying them, and rolling back.
 - **The four sync-dispatch kinds** (`dispatch_sync_run`, `finalize_sync_run`,
   `post_sync`, `reference_discovery`). Those live in
   `sync_dispatch_transport_routes`, which `0049` seeds `transport='celery'` and
-  which no migration flips. They move only through
-  `dho workers routes apply`, separately from this procedure.
+  which no application migration flips. Their Celery rollback route is retired
+  (`0132`), so `dho workers routes apply` reads a row that is still on that
+  seed as drift. `dho migrate river` moves such a row to `river` (only a row
+  on `celery` with no rollback route, not paused, with no live outbox claim;
+  every deployed database already holds `river` and is not changed). This
+  procedure does not move them.
 - **The scheduler.** Beat ownership is not transferred here.
 
 ---

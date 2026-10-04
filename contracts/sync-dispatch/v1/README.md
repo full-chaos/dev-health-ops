@@ -11,6 +11,14 @@ no supported rollback target left below `river`. Editing this artifact alone
 still cannot activate or roll back a transport; that remains the audited
 durable route-row controller's job (`internal/syncroute`).
 
+One row state is outside that controller. A fresh database seeds every kind on
+`celery`, and with the rollback route retired the controller reads a row that
+is still on that seed as drift: it cannot move it. `dho migrate river` moves
+exactly that state (`celery`, rollback `none`, not paused, no live outbox
+claim) to `river` at `generation + 1`, from this artifact as embedded in the
+binary (`embed.go`), for the kinds it names as `river` with rollback `none`.
+It changes no row in any other state.
+
 All four wakeups are `at_least_once`. `post_sync` uses the same live-claim,
 publish-or-insert, and terminal-mark transaction boundary as the other kinds.
 On a publish or insert failure the claim is released with bounded backoff. The

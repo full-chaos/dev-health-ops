@@ -383,7 +383,7 @@ def test_a_tmpdir_in_or_resolving_into_tmp_or_not_private_is_refused(
     os.chmod(under_tmp, 0o700)
     link = tmp_path / "link-to-tmp"
     link.symlink_to("/tmp")
-    shm_open = _scratch(mode=0o711)  # not 0700
+    shm_open = _scratch(mode=0o500)  # not 0700 (owner-only, read-only)
     holder = _scratch()
     (holder / "lnk").symlink_to(
         under_tmp

@@ -237,7 +237,20 @@ func TestGitLabClosingFetchOutcome(t *testing.T) {
 	}
 }
 
-// The failed-fetch log line carries the error's class and type, never its text (CHAOS-7933, D4270).
+// closedByFailingDoer fails the closed_by request with an error whose text is a distinctive plain sentinel.
+type closedByFailingDoer struct{ inner *gitLabWorkItemsDoer }
+
+const closedByErrorSentinel = "closed-by-detail-marker"
+
+func (doer closedByFailingDoer) Do(request *http.Request) (*http.Response, error) {
+	if strings.HasSuffix(request.URL.Path, "/closed_by") {
+		return nil, errors.New(closedByErrorSentinel)
+	}
+	return doer.inner.Do(request)
+}
+
+// The failed-fetch log line carries the error's class and type, never its text (CHAOS-7933, D4270): neither the sentinel
+// text of the transport error, nor the text the provider layer wraps it in ("provider request failed"), nor a "cause" key.
 func TestGitLabClosedByFailureLogCarriesNoErrorText(t *testing.T) {
 	var out strings.Builder
 	previous := slog.Default()
@@ -253,20 +266,28 @@ func TestGitLabClosedByFailureLogCarriesNoErrorText(t *testing.T) {
 	responses[root+"/merge_requests?page=1"] = []string{
 		`[{"iid":9,"title":"Ship the API","description":"","state":"opened","created_at":"2026-07-04T09:00:00Z","updated_at":"2026-07-04T10:00:00Z","labels":["priority::low"],"assignees":[],"author":{"username":"alice","bot":false},"source_branch":"feature/ship-api"}]`, `[]`,
 	}
-	delete(responses, root+"/issues/42/closed_by?page=1")
 	claim := nativeTestClaim("gitlab", "work-items")
 	claim.OrgID = "77777777-7777-4777-8777-777777777777"
 	if _, err := (GitLabWorkItemsRouteHandler{
 		StatusMapping: loadRealStatusMapping(t), Derived: deriver, PerPage: 2, MaxPages: 10, NestedMaxPages: 10,
 	}).Collect(context.Background(), claim, providerfoundation.Credential{Provider: "gitlab", ID: claim.CredentialID},
-		gitLabWorkItemsClient(t, fakehttp.Client(&gitLabWorkItemsDoer{responses: responses})), time.Date(2026, 8, 3, 12, 0, 0, 0, time.UTC)); err != nil {
+		gitLabWorkItemsClient(t, fakehttp.Client(closedByFailingDoer{inner: &gitLabWorkItemsDoer{responses: responses}})),
+		time.Date(2026, 8, 3, 12, 0, 0, 0, time.UTC)); err != nil {
 		t.Fatal(err)
 	}
-	line := out.String()
-	if !strings.Contains(line, "providersync.gitlab.closing_mr_fetch_failed") || !strings.Contains(line, `"issue":"gitlab:acme/api#42"`) || !strings.Contains(line, "error_class") {
-		t.Fatalf("the failure line lacks the issue or the error class: %s", line)
+	failureLines := 0
+	for _, line := range strings.Split(strings.TrimSpace(out.String()), "\n") {
+		if strings.Contains(line, closedByErrorSentinel) || strings.Contains(line, "provider request failed") || strings.Contains(line, `"cause"`) {
+			t.Fatalf("a log line carries error text or a cause key: %s", line)
+		}
+		if strings.Contains(line, "providersync.gitlab.closing_mr_fetch_failed") {
+			failureLines++
+			if !strings.Contains(line, `"issue":"gitlab:acme/api#42"`) || !strings.Contains(line, `"error_class"`) || !strings.Contains(line, `"error_type"`) {
+				t.Fatalf("the failure line lacks the issue, the error class or the error type: %s", line)
+			}
+		}
 	}
-	if strings.Contains(line, "missing fake GitLab response") {
-		t.Fatalf("the failure line carries error text: %s", line)
+	if failureLines != 1 {
+		t.Fatalf("failure lines=%d want 1\n%s", failureLines, out.String())
 	}
 }

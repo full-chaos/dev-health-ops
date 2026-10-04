@@ -94,9 +94,16 @@ When the relation is known to exist:
   so blocked hours can be too low. They are never too high: the creation time
   of the two items is never used as the start.
 - **End.** When the provider no longer reports the relation, the last time a
-  sync saw it. A removed link is noticed when the items it belongs to are
-  synced again. This end can be too early and is never too late. The blocked
-  hours of earlier days do not change when a link is removed.
+  sync saw it. A removed link is noticed when an item that carries it is
+  synced again. For a link of the provider (Jira issue links, Linear
+  relations, GitLab issue links) that is either of the two items. For a
+  relation read from text (GitHub, GitLab description keywords, an issue key
+  in text) it is the item that holds the text; a sync of the other item says
+  nothing about it. This end is never too late. It can be too early: by the
+  time between the last sync that saw the relation and its removal, and for
+  the two cases named in the limits below (a GitLab description keyword
+  `blocks`; a GitHub issue on a Projects v2 board). The blocked hours of
+  earlier days do not change when a link is removed.
 
 Limits of the relation data:
 
@@ -105,3 +112,12 @@ Limits of the relation data:
   completion time, gives no blocked hours. Missing data is not estimated.
 - The current status of an item (for example in `work_item_cycle_times`) is
   not changed by a relation. Only the daily hours are.
+- **GitLab, description keyword `blocks`.** The stored relation does not say
+  if it came from an issue link or from the word in a description. It then
+  ends at its last sync when the blocked issue is synced later than the
+  blocker, and is open again when the blocker is synced again. Blocked hours
+  can be too low.
+- **GitHub issues on a Projects v2 board.** The board sync does not read the
+  issue text. A text relation of a board issue ends at the last sync that
+  read the text, so the blocked hours of an issue that nobody updates can be
+  too low.

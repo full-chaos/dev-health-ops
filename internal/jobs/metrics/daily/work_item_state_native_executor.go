@@ -144,11 +144,16 @@ func (executor *WorkItemStateExecutor) ComputeFamily(
 			// A failed read fails the partition. Computing without it would
 			// write full-length rows for the statuses the blocked hours
 			// belong to, and those rows would read as a complete answer.
-			blocked, err = workitemblockers.LoadBlockedIntervals(ctx, executor.conn, run.OrganizationID)
+			var ended workitemmetrics.EndedRelationStats
+			blocked, ended, err = workitemblockers.LoadBlockedIntervals(ctx, executor.conn, run.OrganizationID)
 			if err != nil {
 				return wrapWorkItemStatePartialWrite(total, repoID, err)
 			}
 			blockedLoaded = true
+			// One line per partition, no id: how many relations the end rule
+			// closed, by provider, and how many of them are the named case of
+			// a github issue on a Projects v2 board.
+			ended.Log("daily_family")
 		}
 
 		// One honest, real-wall-clock timestamp per repo group -- see

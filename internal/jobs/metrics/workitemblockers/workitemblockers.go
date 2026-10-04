@@ -330,7 +330,7 @@ func endLookup(relations []workitemmetrics.BlockingRelation) (ids, keys []string
 }
 
 // endColumns is the select list of every read of relation ends.
-const endColumns = `work_item_id, provider, status, created_at, completed_at, last_synced`
+const endColumns = `work_item_id, provider, project_id, status, created_at, completed_at, last_synced`
 
 // bareIssueKeySQL is the bare issue key of a work_items row: its id after the
 // provider prefix, trimmed and upper-cased, the form
@@ -426,17 +426,17 @@ LIMIT ?`
 // statements can return one stored row (an item named by its id and by its
 // key); the set keeps it once.
 type endIdentity struct {
-	workItemID, provider, status string
-	createdAt, lastSynced        int64
-	completed                    bool
-	completedAt                  int64
+	workItemID, provider, projectID, status string
+	createdAt, lastSynced                   int64
+	completed                               bool
+	completedAt                             int64
 }
 
 type endSet map[endIdentity]workitemmetrics.RelationEnd
 
 func (ends endSet) add(end workitemmetrics.RelationEnd) {
 	identity := endIdentity{
-		workItemID: end.WorkItemID, provider: end.Provider, status: end.Status,
+		workItemID: end.WorkItemID, provider: end.Provider, projectID: end.ProjectID, status: end.Status,
 		createdAt: end.CreatedAt.UnixNano(), lastSynced: end.LastSynced.UnixNano(),
 	}
 	if end.CompletedAt != nil {
@@ -464,6 +464,8 @@ func (ends endSet) sorted() []workitemmetrics.RelationEnd {
 			return a.lastSynced < b.lastSynced
 		case a.provider != b.provider:
 			return a.provider < b.provider
+		case a.projectID != b.projectID:
+			return a.projectID < b.projectID
 		case a.status != b.status:
 			return a.status < b.status
 		case a.createdAt != b.createdAt:
@@ -494,7 +496,7 @@ func readEnds(ctx context.Context, conn Querier, query string, args []any, ends 
 			completedAt *time.Time
 		)
 		if err := rows.Scan(
-			&end.WorkItemID, &end.Provider, &end.Status, &end.CreatedAt, &completedAt, &end.LastSynced,
+			&end.WorkItemID, &end.Provider, &end.ProjectID, &end.Status, &end.CreatedAt, &completedAt, &end.LastSynced,
 		); err != nil {
 			return fmt.Errorf("scan relation end: %w", err)
 		}
@@ -514,20 +516,22 @@ func readEnds(ctx context.Context, conn Querier, query string, args []any, ends 
 // LoadBlockedIntervals returns, per blocked work item id, the spans in
 // which the item has an open blocker: the organization's blocking relations,
 // resolved against the stored items they name by the ONE rule both writers of
-// work_item_state_durations_daily share.
+// work_item_state_durations_daily share. The stats count what the rule's end
+// did; the caller logs them (workitemmetrics.EndedRelationsLogMessage).
 func LoadBlockedIntervals(
 	ctx context.Context, conn Querier, organizationID string,
-) (map[string][]workitemmetrics.BlockedInterval, error) {
+) (map[string][]workitemmetrics.BlockedInterval, workitemmetrics.EndedRelationStats, error) {
 	relations, err := LoadRelations(ctx, conn, organizationID)
 	if err != nil {
-		return nil, err
+		return nil, workitemmetrics.EndedRelationStats{}, err
 	}
 	if len(relations) == 0 {
-		return nil, nil
+		return nil, workitemmetrics.EndedRelationStats{}, nil
 	}
 	ends, err := LoadEnds(ctx, conn, organizationID)
 	if err != nil {
-		return nil, err
+		return nil, workitemmetrics.EndedRelationStats{}, err
 	}
-	return workitemmetrics.BlockedIntervalsByItem(relations, ends), nil
+	intervals, stats := workitemmetrics.BlockedIntervalsWithStats(relations, ends)
+	return intervals, stats, nil
 }

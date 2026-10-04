@@ -46,7 +46,7 @@ func TestReadsRefuseAMissingConnectionOrOrganization(t *testing.T) {
 	if _, err := LoadEnds(ctx, nil, "org"); !errors.Is(err, ErrInvalidRequest) {
 		t.Fatalf("LoadEnds with no connection: %v", err)
 	}
-	if _, err := LoadBlockedIntervals(ctx, nil, "org"); !errors.Is(err, ErrInvalidRequest) {
+	if _, _, err := LoadBlockedIntervals(ctx, nil, "org"); !errors.Is(err, ErrInvalidRequest) {
 		t.Fatalf("LoadBlockedIntervals with no connection: %v", err)
 	}
 	if _, err := LoadRelationsNaming(ctx, nil, "org", []string{"jira:OPS-1"}, 10); !errors.Is(err, ErrInvalidRequest) {
@@ -308,7 +308,7 @@ func TestAFailedStatementFailsTheRead(t *testing.T) {
 	for failAt := 0; failAt < 3; failAt++ {
 		store := newMemoryStore(3)
 		store.failAt = failAt + 1
-		if _, err := LoadBlockedIntervals(ctx, store, "org"); err == nil || !strings.Contains(err.Error(), "memory store: statement refused") {
+		if _, _, err := LoadBlockedIntervals(ctx, store, "org"); err == nil || !strings.Contains(err.Error(), "memory store: statement refused") {
 			t.Fatalf("organization-wide read, statement %d refused: %v", failAt+1, err)
 		}
 	}
@@ -322,6 +322,48 @@ func TestAFailedStatementFailsTheRead(t *testing.T) {
 		if err == nil || !strings.Contains(err.Error(), "memory store: statement refused") {
 			t.Fatalf("keyed read, statement %d refused: %v", failAt+1, err)
 		}
+	}
+}
+
+// The end set keeps a stored row once, and two rows that differ in ANY column
+// as two: an item has one row for each repository id it was written under,
+// and the rule picks the one synced last.
+func TestTheEndSetKeepsEachStoredRowOnce(t *testing.T) {
+	at := time.Date(2026, 8, 20, 0, 0, 0, 0, time.UTC)
+	completed := at.Add(time.Hour)
+	base := workitemmetrics.RelationEnd{
+		WorkItemID: "gh:acme/api#7", Provider: "github", ProjectID: "acme/api", Status: "todo", CreatedAt: at, LastSynced: at,
+	}
+	variants := []workitemmetrics.RelationEnd{base, base, base, base, base, base, base, base}
+	variants[1].WorkItemID = "gh:acme/api#8"
+	variants[2].Provider = "gitlab"
+	variants[3].ProjectID = "ghprojv2:acme#3"
+	variants[4].Status = "done"
+	variants[5].CreatedAt = at.Add(time.Minute)
+	variants[6].LastSynced = at.Add(time.Minute)
+	variants[7].CompletedAt = &completed
+	ends := endSet{}
+	for _, end := range variants {
+		ends.add(end)
+		// The same stored row read by a second statement.
+		again := end
+		if end.CompletedAt != nil {
+			copied := *end.CompletedAt
+			again.CompletedAt = &copied
+		}
+		ends.add(again)
+	}
+	if len(ends) != len(variants) {
+		t.Fatalf("%d rows kept of %d that differ in one column each", len(ends), len(variants))
+	}
+	sorted := ends.sorted()
+	for index := 1; index < len(sorted); index++ {
+		if sorted[index-1].WorkItemID > sorted[index].WorkItemID {
+			t.Fatalf("the rows are not in work item id order: %q before %q", sorted[index-1].WorkItemID, sorted[index].WorkItemID)
+		}
+	}
+	if (endSet{}).sorted() != nil {
+		t.Fatal("no row: want no slice")
 	}
 }
 
@@ -501,7 +543,7 @@ func (store *memoryStore) Query(_ context.Context, query string, args ...any) (d
 		for _, item := range items {
 			key, keyed := workitemmetrics.BareIssueKey(item.Provider, item.WorkItemID)
 			if idSet[item.WorkItemID] || (keyed && keySet[key]) {
-				rows.rows = append(rows.rows, []any{item.WorkItemID, item.Provider, item.Status, item.CreatedAt, nil, item.LastSynced})
+				rows.rows = append(rows.rows, []any{item.WorkItemID, item.Provider, item.ProjectID, item.Status, item.CreatedAt, nil, item.LastSynced})
 			}
 		}
 	default:

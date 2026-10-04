@@ -206,6 +206,9 @@ func TestBothWritersOfStateDurationsWriteTheSameBlockedRows(t *testing.T) {
 	normalizedAt := nextDay.Add(2 * time.Hour) // the sync of the unit under test
 
 	claim := nativeTestClaim("linear", "work-items")
+	// The linear deriver needs a tenant id that is a UUID (its AI attribution
+	// rows are keyed by one).
+	claim.OrgID = "77777777-7777-4777-8777-777777777777"
 	claim.SinceAt, claim.BeforeAt = &day, &nextDay
 	if err := claim.Validate(); err != nil {
 		t.Fatal(err)
@@ -265,18 +268,20 @@ func TestBothWritersOfStateDurationsWriteTheSameBlockedRows(t *testing.T) {
 	githubItem := workItemTestRow(org, earlier)
 	githubItem.WorkItemID, githubItem.Status = "gh:acme/api#7", "in_progress"
 	githubItem.CreatedAt, githubItem.UpdatedAt = longAgo, earlier
-	identity, effect := workItemEffect(t, "work_items", githubItem)
-	if err := (GitHubWorkItemsClickHouseAdapter{Conn: conn}).WriteGitHubWorkItemEffect(ctx, identity, effect); err != nil {
-		t.Fatal(err)
+	writeGitHubRow := func(destination string, row any, write func(context.Context, GitHubWorkItemEffectIdentity, EffectBatch) error) {
+		t.Helper()
+		identity, effect := workItemEffect(t, destination, row)
+		identity.OrgID = org
+		if err := write(ctx, identity, effect); err != nil {
+			t.Fatalf("write github %s: %v", destination, err)
+		}
 	}
-	identity, effect = workItemEffect(t, "work_item_dependencies", githubWorkItemDependencyRow{
+	writeGitHubRow("work_items", githubItem, GitHubWorkItemsClickHouseAdapter{Conn: conn}.WriteGitHubWorkItemEffect)
+	writeGitHubRow("work_item_dependencies", githubWorkItemDependencyRow{
 		SourceWorkItemID: "gh:acme/api#7", TargetWorkItemID: "extkey:OPS-6", RelationshipType: "blocks",
 		RelationshipTypeRaw: "external_issue_key", RelationshipSemanticsVersion: workitemmetrics.CanonicalBlocksSemantics,
 		LastSynced: earlier, OrgID: org,
-	})
-	if err := (GitHubWorkItemDependenciesClickHouseAdapter{Conn: conn}).WriteGitHubWorkItemEffect(ctx, identity, effect); err != nil {
-		t.Fatal(err)
-	}
+	}, GitHubWorkItemDependenciesClickHouseAdapter{Conn: conn}.WriteGitHubWorkItemEffect)
 
 	// --- the unit under test: what THIS sync normalized ----------------
 	tenOClock := day.Add(10 * time.Hour)
@@ -519,9 +524,13 @@ FROM numbers(` + fmt.Sprint(keyed) + `)`,
 			t.Fatalf("relation %s -> %s has no first-seen time; the migration's view fills it", relation.SourceID, relation.TargetID)
 		}
 	}
-	blocked, err := workitemblockers.LoadBlockedIntervals(ctx, conn, org)
+	blocked, ended, err := workitemblockers.LoadBlockedIntervals(ctx, conn, org)
 	if err != nil {
 		t.Fatalf("organization-wide blocked intervals: %v", err)
+	}
+	// Every relation is one its writer wrote at its latest sync: none ended.
+	if ended.Relations != relations+keyed || len(ended.Ended) != 0 || ended.GitHubBoardCandidates != 0 {
+		t.Fatalf("stats = %+v, want %d relations and none ended", ended, relations+keyed)
 	}
 	// Each web item is blocked by its api item; each of the first 1,000 api
 	// items is blocked by the linear issue its text names.

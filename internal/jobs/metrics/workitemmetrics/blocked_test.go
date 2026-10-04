@@ -1,6 +1,8 @@
 package workitemmetrics
 
 import (
+	"bytes"
+	"log/slog"
 	"reflect"
 	"testing"
 	"time"
@@ -17,42 +19,107 @@ func blockedTimePtr(hour int) *time.Time {
 
 // A relation row names a blocker and a blocked item only when its direction
 // is dependable: the canonical semantics version, one of the two blocking
-// types, two different non-empty ends.
+// types, two different non-empty ends. It also says which of the two items
+// write the row.
 func TestBlockingEndsOfReadsOnlyCanonicalBlockingRows(t *testing.T) {
 	for name, tc := range map[string]struct {
-		source, target, relationship, version string
-		want                                  BlockingEnds
-		ok                                    bool
+		source, target, relationship, raw, version string
+		want                                       BlockingEnds
+		ok                                         bool
 	}{
-		"blocks: the source is the blocker": {
-			"jira:OPS-1", "jira:OPS-2", "blocks", CanonicalBlocksSemantics,
-			BlockingEnds{BlockerID: "jira:OPS-1", BlockedID: "jira:OPS-2"}, true,
+		"blocks, a native link: the source is the blocker, both items write": {
+			"jira:OPS-1", "jira:OPS-2", "blocks", "blocks", CanonicalBlocksSemantics,
+			BlockingEnds{BlockerID: "jira:OPS-1", BlockerWrites: true, BlockedID: "jira:OPS-2", BlockedWrites: true}, true,
 		},
-		"blocked_by: the source is the blocked item, and its only emitter": {
-			"gh:acme/api#7", "extkey:OPS-2", "blocked_by", CanonicalBlocksSemantics,
-			BlockingEnds{BlockedID: "gh:acme/api#7", BlockerID: "extkey:OPS-2", EmitterID: "gh:acme/api#7"}, true,
+		"blocked_by to an external key: the source is the blocked item, and the only writer": {
+			"gh:acme/api#7", "extkey:OPS-2", "blocked_by", "external_issue_key", CanonicalBlocksSemantics,
+			BlockingEnds{BlockedID: "gh:acme/api#7", BlockedWrites: true, BlockerID: "extkey:OPS-2"}, true,
 		},
-		"blocks to an external key: the source wrote it": {
-			"gitlab:acme/api#7", "extkey:OPS-2", "blocks", CanonicalBlocksSemantics,
-			BlockingEnds{BlockerID: "gitlab:acme/api#7", BlockedID: "extkey:OPS-2", EmitterID: "gitlab:acme/api#7"}, true,
+		"blocks to an external key: the source is the blocker, and the only writer": {
+			"gitlab:acme/api#7", "extkey:OPS-2", "blocks", "external_issue_key", CanonicalBlocksSemantics,
+			BlockingEnds{BlockerID: "gitlab:acme/api#7", BlockerWrites: true, BlockedID: "extkey:OPS-2"}, true,
 		},
-		"blocked_by between two work items: no single emitter is claimed": {
-			"linear:A-1", "linear:A-2", "blocked_by", CanonicalBlocksSemantics,
-			BlockingEnds{BlockedID: "linear:A-1", BlockerID: "linear:A-2"}, true,
+		"blocks from github text in the BLOCKED item: the target writes": {
+			"gh:acme/api#12", "gh:acme/api#7", "blocks", "blocked by #12", CanonicalBlocksSemantics,
+			BlockingEnds{BlockerID: "gh:acme/api#12", BlockedID: "gh:acme/api#7", BlockedWrites: true}, true,
 		},
-		"a relation that does not block":          {"jira:OPS-1", "jira:OPS-2", "relates_to", CanonicalBlocksSemantics, BlockingEnds{}, false},
-		"a duplicate relation":                    {"linear:A-1", "linear:A-2", "duplicates", CanonicalBlocksSemantics, BlockingEnds{}, false},
-		"the legacy direction is not dependable":  {"jira:OPS-1", "jira:OPS-2", "blocks", "legacy.v1", BlockingEnds{}, false},
-		"no semantics version":                    {"jira:OPS-1", "jira:OPS-2", "blocks", "", BlockingEnds{}, false},
-		"no source":                               {"", "jira:OPS-2", "blocks", CanonicalBlocksSemantics, BlockingEnds{}, false},
-		"no target":                               {"jira:OPS-1", "", "blocks", CanonicalBlocksSemantics, BlockingEnds{}, false},
-		"an item cannot block itself":             {"jira:OPS-1", "jira:OPS-1", "blocks", CanonicalBlocksSemantics, BlockingEnds{}, false},
-		"the type is matched exactly, not folded": {"jira:OPS-1", "jira:OPS-2", "Blocks", CanonicalBlocksSemantics, BlockingEnds{}, false},
+		"blocks from github text in the BLOCKER: the source writes": {
+			"gh:acme/api#12", "gh:acme/api#7", "blocks", "blocks #7", CanonicalBlocksSemantics,
+			BlockingEnds{BlockerID: "gh:acme/api#12", BlockerWrites: true, BlockedID: "gh:acme/api#7"}, true,
+		},
+		"blocked_by between two work items: both items write": {
+			"linear:A-1", "linear:A-2", "blocked_by", "linear_relation:blocked_by", CanonicalBlocksSemantics,
+			BlockingEnds{BlockedID: "linear:A-1", BlockedWrites: true, BlockerID: "linear:A-2", BlockerWrites: true}, true,
+		},
+		"a relation that does not block":          {"jira:OPS-1", "jira:OPS-2", "relates_to", "relates to", CanonicalBlocksSemantics, BlockingEnds{}, false},
+		"a duplicate relation":                    {"linear:A-1", "linear:A-2", "duplicates", "linear_relation:duplicate", CanonicalBlocksSemantics, BlockingEnds{}, false},
+		"the legacy direction is not dependable":  {"jira:OPS-1", "jira:OPS-2", "blocks", "blocks", "legacy.v1", BlockingEnds{}, false},
+		"no semantics version":                    {"jira:OPS-1", "jira:OPS-2", "blocks", "blocks", "", BlockingEnds{}, false},
+		"no source":                               {"", "jira:OPS-2", "blocks", "blocks", CanonicalBlocksSemantics, BlockingEnds{}, false},
+		"no target":                               {"jira:OPS-1", "", "blocks", "blocks", CanonicalBlocksSemantics, BlockingEnds{}, false},
+		"an item cannot block itself":             {"jira:OPS-1", "jira:OPS-1", "blocks", "blocks", CanonicalBlocksSemantics, BlockingEnds{}, false},
+		"the type is matched exactly, not folded": {"jira:OPS-1", "jira:OPS-2", "Blocks", "blocks", CanonicalBlocksSemantics, BlockingEnds{}, false},
 	} {
 		t.Run(name, func(t *testing.T) {
-			got, ok := BlockingEndsOf(tc.source, tc.target, tc.relationship, tc.version)
+			got, ok := BlockingEndsOf(tc.source, tc.target, tc.relationship, tc.raw, tc.version)
 			if ok != tc.ok || got != tc.want {
 				t.Fatalf("BlockingEndsOf = %+v, %t; want %+v, %t", got, ok, tc.want, tc.ok)
+			}
+		})
+	}
+}
+
+// Which item writes a relation comes from the stored row alone: its two ids
+// and its raw type. Each raw value here is one a provider's normalizer writes
+// (internal/providersync: jira_work_items_rows.go, linear_work_items_route.go,
+// gitlab_work_items_rows.go, github_work_items_rows.go).
+func TestRelationWritersComeFromTheStoredRow(t *testing.T) {
+	for name, tc := range map[string]struct {
+		source, target, raw        string
+		sourceWrites, targetWrites bool
+	}{
+		// Native links: on both issues at the provider, written by either sync.
+		"jira link, outward name":     {"jira:OPS-1", "jira:OPS-2", "blocks", true, true},
+		"jira link, inward name":      {"jira:OPS-1", "jira:OPS-2", "is blocked by", true, true},
+		"linear relation":             {"linear:OPS-1", "linear:OPS-2", "linear_relation:blocks", true, true},
+		"linear inverse relation":     {"linear:OPS-1", "linear:OPS-2", "linear_relation:blocked_by", true, true},
+		"gitlab link, blocked side":   {"gitlab:acme/api#5", "gitlab:acme/api#7", "is_blocked_by", true, true},
+		"gitlab link across projects": {"gitlab:acme/web#5", "gitlab:acme/api#7", "is_blocked_by", true, true},
+		// Text: only the item that holds the text writes the row.
+		"external key, any provider":               {"gh:acme/api#7", "extkey:OPS-2", "external_issue_key", true, false},
+		"external key from a linear comment":       {"gh:acme/api#7", "extkey:OPS-2", "github_comment_linear_url", true, false},
+		"external key, gitlab":                     {"gitlab:acme/api#7", "extkey:OPS-2", "external_issue_key", true, false},
+		"external key with a native raw value":     {"jira:OPS-1", "extkey:OPS-2", "blocks", true, false},
+		"github: blocked by":                       {"gh:acme/api#12", "gh:acme/api#7", "blocked by #12", false, true},
+		"github: blocked by another repository":    {"gh:acme/web#12", "gh:acme/api#7", "blocked by acme/web#12", false, true},
+		"github: depends on":                       {"gh:acme/api#12", "gh:acme/api#7", "depends on: #12", false, true},
+		"github: the keyword in upper case":        {"gh:acme/api#12", "gh:acme/api#7", "Blocked By #12", false, true},
+		"github: a merge request id is not github": {"gh:acme/api#12", "gitlab:acme/api!7", "blocked by #12", true, true},
+		"github: depends on, wide white space":     {"gh:acme/api#12", "gh:acme/api#7", "depends  \ton #12", false, true},
+		"github: blocks":                           {"gh:acme/api#12", "gh:acme/api#7", "blocks #7", true, false},
+		"github: a pull request holds the text":    {"gh:acme/api#12", "ghpr:acme/api#7", "blocked by #12", false, true},
+		"gitlab keyword: blocked by":               {"gitlab:acme/api#5", "gitlab:acme/api#7", "blocked by", false, true},
+		"gitlab keyword: blocking":                 {"gitlab:acme/api#5", "gitlab:acme/api#7", "blocking", true, false},
+		// Not derivable: both items are taken as writers.
+		"gitlab: blocks is a link type and a keyword": {"gitlab:acme/api#5", "gitlab:acme/api#7", "blocks", true, true},
+		"gitlab: an unknown raw value":                {"gitlab:acme/api#5", "gitlab:acme/api#7", "description_reference", true, true},
+		"github: an unknown raw value":                {"gh:acme/api#12", "gh:acme/api#7", "github_closing_reference", true, true},
+		"github: no raw value":                        {"gh:acme/api#12", "gh:acme/api#7", "", true, true},
+		"github: the keyword is not at the start":     {"gh:acme/api#12", "gh:acme/api#7", "not blocked by #12", true, true},
+		"the two ids are of two providers":            {"gh:acme/api#12", "gitlab:acme/api#7", "blocked by #12", true, true},
+		"an id with no provider prefix":               {"OPS-1", "OPS-2", "blocked by", true, true},
+		"an id of an unknown provider":                {"asana:1", "asana:2", "blocked by", true, true},
+		"a gitlab keyword is not read as github text": {"gh:acme/api#12", "gh:acme/api#7", "blocking", true, true},
+		"github text is not read as a gitlab keyword": {"gitlab:acme/api#5", "gitlab:acme/api#7", "blocked by #5", true, true},
+	} {
+		t.Run(name, func(t *testing.T) {
+			source, target := RelationWriters(tc.source, tc.target, tc.raw)
+			if source != tc.sourceWrites || target != tc.targetWrites {
+				t.Fatalf("RelationWriters(%q, %q, %q) = source %t, target %t; want %t, %t",
+					tc.source, tc.target, tc.raw, source, target, tc.sourceWrites, tc.targetWrites)
+			}
+			if !source && !target {
+				t.Fatal("a relation with no writer could never end")
 			}
 		})
 	}
@@ -75,30 +142,33 @@ func TestExternalKeyNormalizesAndRefusesAnEmptyKey(t *testing.T) {
 	}
 }
 
-// A relation the provider no longer reports is the one that was NOT written
-// again by the latest sync of the item(s) that write it.
-func TestRelationIsCurrentDropsARelationTheProviderNoLongerReports(t *testing.T) {
+// A relation the provider no longer reports is the one that a WRITER's later
+// sync did not write again. The sync of an item that does not write it says
+// nothing.
+func TestRelationIsCurrentDropsARelationAWriterDidNotWriteAgain(t *testing.T) {
 	for name, tc := range map[string]struct {
-		relation                  int
-		emitterKnown              bool
-		emitter, blocked, blocker int
-		want                      bool
+		relation int
+		writers  []int
+		want     bool
 	}{
-		// One emitter (a relation read from text in that item).
-		"one emitter: written by its latest sync":       {relation: 5, emitterKnown: true, emitter: 5, blocked: 9, blocker: 9, want: true},
-		"one emitter: written after its latest sync":    {relation: 6, emitterKnown: true, emitter: 5, blocked: 9, blocker: 9, want: true},
-		"one emitter: its latest sync did not write it": {relation: 5, emitterKnown: true, emitter: 6, blocked: 1, blocker: 1, want: false},
-		// Two emitters (a native link: each end reports it).
-		"two emitters: both ends at the relation's sync":         {relation: 5, blocked: 5, blocker: 5, want: true},
-		"two emitters: the blocked item's sync wrote it again":   {relation: 7, blocked: 7, blocker: 5, want: true},
-		"two emitters: the blocker's sync wrote it again":        {relation: 7, blocked: 5, blocker: 7, want: true},
-		"two emitters: only the blocked item was synced again":   {relation: 5, blocked: 7, blocker: 5, want: true},
-		"two emitters: only the blocker was synced again":        {relation: 5, blocked: 5, blocker: 7, want: true},
-		"two emitters: both were synced again, neither wrote it": {relation: 5, blocked: 6, blocker: 7, want: false},
+		"one writer: written by its latest sync":       {relation: 5, writers: []int{5}, want: true},
+		"one writer: written after its latest sync":    {relation: 6, writers: []int{5}, want: true},
+		"one writer: its latest sync did not write it": {relation: 5, writers: []int{6}, want: false},
+		// A native link: each end writes it.
+		"two writers: both at the relation's sync":             {relation: 5, writers: []int{5, 5}, want: true},
+		"two writers: the first wrote it again":                {relation: 7, writers: []int{7, 5}, want: true},
+		"two writers: the second wrote it again":               {relation: 7, writers: []int{5, 7}, want: true},
+		"two writers: only the first was synced again":         {relation: 5, writers: []int{7, 5}, want: false},
+		"two writers: only the second was synced again":        {relation: 5, writers: []int{5, 7}, want: false},
+		"two writers: both synced again, neither wrote it":     {relation: 5, writers: []int{6, 7}, want: false},
+		"no writer is passed: nothing says the relation ended": {relation: 5, writers: nil, want: true},
 	} {
 		t.Run(name, func(t *testing.T) {
-			got := RelationIsCurrent(blockedTime(tc.relation), tc.emitterKnown, blockedTime(tc.emitter), blockedTime(tc.blocked), blockedTime(tc.blocker))
-			if got != tc.want {
+			writers := make([]time.Time, 0, len(tc.writers))
+			for _, hour := range tc.writers {
+				writers = append(writers, blockedTime(hour))
+			}
+			if got := RelationIsCurrent(blockedTime(tc.relation), writers...); got != tc.want {
 				t.Fatalf("RelationIsCurrent = %t, want %t", got, tc.want)
 			}
 		})
@@ -492,5 +562,236 @@ func TestARelationNotWrittenAgainEndsAtItsOwnLastSyncAndKeepsEarlierHours(t *tes
 	still := OverlayBlocked(history, BlockedIntervalsByItem([]BlockingRelation{current}, []RelationEnd{blocked, blocker})["jira:OPS-2"])
 	if wantStill := []StatusSegment{seg("in_progress", 10, 14), seg("blocked", 14, 80)}; !reflect.DeepEqual(still, wantStill) {
 		t.Fatalf("current relation: history = %+v, want %+v", still, wantStill)
+	}
+}
+
+// A relation ends when an item that WRITES it has a later sync that did not
+// write it again, and only then. Each case is one relation last written at
+// 40 and first seen at 14, with one of its two items synced again at 60 and
+// the other not synced since 30.
+//
+// The first case is a github text relation whose target is a real work item
+// id ("Blocked by #12" in #7): the text is removed, #7 is synced again, and
+// #12 is not updated. It must end, though #12 was never synced again.
+func TestARelationEndsOnlyWhenAnItemThatWritesItIsSyncedWithoutIt(t *testing.T) {
+	const firstSeen, lastWritten, before, after = 14, 40, 30, 60
+	ended := BlockedInterval{Start: blockedTime(firstSeen), End: blockedTimePtr(lastWritten)}
+	open := BlockedInterval{Start: blockedTime(firstSeen)}
+	for name, tc := range map[string]struct {
+		source, target, relationship, raw string
+		// provider of the item an external key resolves to, "" when the
+		// target is a work item id.
+		keyedProvider              string
+		sourceSynced, targetSynced int
+		want                       BlockedInterval
+	}{
+		"github text in the blocked item; the blocked item is synced without it":    {"gh:a/r#12", "gh:a/r#7", "blocks", "blocked by #12", "", before, after, ended},
+		"github text in the blocked item; only the blocker is synced again":         {"gh:a/r#12", "gh:a/r#7", "blocks", "blocked by #12", "", after, lastWritten, open},
+		"github text in the blocker; the blocker is synced without it":              {"gh:a/r#12", "gh:a/r#7", "blocks", "blocks #7", "", after, before, ended},
+		"github text in the blocker; only the blocked item is synced again":         {"gh:a/r#12", "gh:a/r#7", "blocks", "blocks #7", "", lastWritten, after, open},
+		"gitlab keyword in the blocked item; the blocked item is synced without it": {"gitlab:a/r#5", "gitlab:a/r#7", "blocks", "blocked by", "", before, after, ended},
+		"gitlab keyword in the blocked item; only the blocker is synced again":      {"gitlab:a/r#5", "gitlab:a/r#7", "blocks", "blocked by", "", after, lastWritten, open},
+		"gitlab keyword in the blocker; the blocker is synced without it":           {"gitlab:a/r#5", "gitlab:a/r#7", "blocks", "blocking", "", after, before, ended},
+		"gitlab keyword in the blocker; only the blocked item is synced again":      {"gitlab:a/r#5", "gitlab:a/r#7", "blocks", "blocking", "", lastWritten, after, open},
+		"a text relation to a key; the item with the text is synced without it":     {"gh:a/r#7", "extkey:OPS-9", "blocked_by", "external_issue_key", "linear", after, before, ended},
+		"a text relation to a key; only the item the key names is synced again":     {"gh:a/r#7", "extkey:OPS-9", "blocked_by", "external_issue_key", "linear", lastWritten, after, open},
+		"a native jira link; the blocker is synced without it":                      {"jira:OPS-1", "jira:OPS-2", "blocks", "blocks", "", after, before, ended},
+		"a native jira link; the blocked item is synced without it":                 {"jira:OPS-1", "jira:OPS-2", "blocks", "is blocked by", "", before, after, ended},
+		"a native linear relation; the blocker is synced without it":                {"linear:OPS-1", "linear:OPS-2", "blocks", "linear_relation:blocks", "", after, before, ended},
+		"a native linear relation; the blocked item is synced without it":           {"linear:OPS-1", "linear:OPS-2", "blocks", "linear_relation:blocks", "", before, after, ended},
+		"a native gitlab link; the blocker is synced without it":                    {"gitlab:a/r#5", "gitlab:a/r#7", "blocks", "is_blocked_by", "", after, before, ended},
+		"a native gitlab link; the blocked item is synced without it":               {"gitlab:a/r#5", "gitlab:a/r#7", "blocks", "is_blocked_by", "", before, after, ended},
+		"gitlab `blocks`, writer not derivable; the blocker is synced without it":   {"gitlab:a/r#5", "gitlab:a/r#7", "blocks", "blocks", "", after, before, ended},
+		"gitlab `blocks`, writer not derivable; the blocked item is synced again":   {"gitlab:a/r#5", "gitlab:a/r#7", "blocks", "blocks", "", before, after, ended},
+		"a native link that both items wrote at the relation's sync":                {"jira:OPS-1", "jira:OPS-2", "blocks", "blocks", "", lastWritten, lastWritten, open},
+	} {
+		t.Run(name, func(t *testing.T) {
+			relation := BlockingRelation{
+				SourceID: tc.source, TargetID: tc.target, RelationshipType: tc.relationship, Raw: tc.raw,
+				SemanticsVersion: CanonicalBlocksSemantics, LastSynced: blockedTime(lastWritten), FirstSeenAt: blockedTimePtr(firstSeen),
+			}
+			targetID, targetProvider := tc.target, "github"
+			if key, external := ExternalKey(tc.target); external {
+				targetID, targetProvider = tc.keyedProvider+":"+key, tc.keyedProvider
+			}
+			ends := []RelationEnd{
+				relationEnd(tc.source, "github", "in_progress", 4, nil, tc.sourceSynced),
+				relationEnd(targetID, targetProvider, "in_progress", 4, nil, tc.targetSynced),
+			}
+			named, blocking := BlockingEndsOf(tc.source, tc.target, tc.relationship, tc.raw, CanonicalBlocksSemantics)
+			if !blocking {
+				t.Fatal("the case is not a blocking relation")
+			}
+			blockedID := named.BlockedID
+			if _, external := ExternalKey(blockedID); external {
+				blockedID = targetID
+			}
+			got := BlockedIntervalsByItem([]BlockingRelation{relation}, ends)
+			if want := (map[string][]BlockedInterval{blockedID: {tc.want}}); !reflect.DeepEqual(got, want) {
+				t.Fatalf("intervals = %+v, want %+v", got, want)
+			}
+		})
+	}
+}
+
+// The bare issue key is the id of a jira or linear item after its provider
+// prefix, trimmed and upper-cased; no other item has one. The external-key
+// target is that key behind the prefix a text relation stores.
+func TestBareIssueKeyIsTheKeyOfAJiraOrLinearItemOnly(t *testing.T) {
+	for _, tc := range []struct {
+		provider, id string
+		key          string
+	}{
+		{"linear", "linear:OPS-9", "OPS-9"},
+		{"linear", "linear: ops-9 ", "OPS-9"},
+		{"jira", "jira:OPS-9", "OPS-9"},
+		{"github", "gh:acme/api#7", ""},
+		{"gitlab", "gitlab:acme/api#7", ""},
+		{"", "linear:OPS-9", ""},
+		{"linear", "OPS-9", ""},
+		{"jira", "jira:", ""},
+		{"jira", "jira:   ", ""},
+	} {
+		key, ok := BareIssueKey(tc.provider, tc.id)
+		if key != tc.key || ok != (tc.key != "") {
+			t.Fatalf("BareIssueKey(%q, %q) = %q, %t; want %q, %t", tc.provider, tc.id, key, ok, tc.key, tc.key != "")
+		}
+		target, ok := ExternalKeyTarget(tc.provider, tc.id)
+		want := ""
+		if tc.key != "" {
+			want = ExternalKeyPrefix + tc.key
+		}
+		if target != want || ok != (want != "") {
+			t.Fatalf("ExternalKeyTarget(%q, %q) = %q, %t; want %q", tc.provider, tc.id, target, ok, want)
+		}
+		// The target is one ExternalKey reads back to the same key.
+		if back, external := ExternalKey(target); want != "" && (!external || back != tc.key) {
+			t.Fatalf("ExternalKey(%q) = %q, %t; want %q", target, back, external, tc.key)
+		}
+	}
+}
+
+// The counts of what the end rule did: one per relation it ended, under the
+// provider of the item whose later sync did not write the relation again.
+// A github relation whose writer's latest stored row is a Projects v2 board
+// row is also counted as a board candidate.
+func TestEndedRelationStatsCountByTheProviderOfTheWriterThatEndedIt(t *testing.T) {
+	end := func(id, provider, projectID string, synced int) RelationEnd {
+		return RelationEnd{WorkItemID: id, Provider: provider, ProjectID: projectID, Status: "in_progress", CreatedAt: blockedTime(4), LastSynced: blockedTime(synced)}
+	}
+	relation := func(source, target, raw string, synced int) BlockingRelation {
+		return BlockingRelation{
+			SourceID: source, TargetID: target, RelationshipType: "blocks", Raw: raw,
+			SemanticsVersion: CanonicalBlocksSemantics, LastSynced: blockedTime(synced), FirstSeenAt: blockedTimePtr(14),
+		}
+	}
+	relations := []BlockingRelation{
+		// github text in #7, last written at 40. #7's latest row is the board
+		// pass's (60): ended, a board candidate.
+		relation("gh:a/r#12", "gh:a/r#7", "blocked by #12", 40),
+		// github text in #8, last written at 40; #8 was synced again at 60 by
+		// the pass that reads the text: ended, not a board candidate.
+		relation("gh:a/r#12", "gh:a/r#8", "blocked by #12", 40),
+		// github text in #9, written by #9's latest sync: current.
+		relation("gh:a/r#12", "gh:a/r#9", "blocked by #12", 60),
+		// a native jira link; the blocker was synced again without it: ended.
+		relation("jira:OPS-1", "jira:OPS-2", "blocks", 40),
+		// a native linear relation, both items at its sync: current.
+		relation("linear:OPS-1", "linear:OPS-2", "linear_relation:blocks", 40),
+		// gitlab `blocks`, the blocked issue synced later: ended.
+		relation("gitlab:a/r#5", "gitlab:a/r#7", "blocks", 40),
+		// an item of a provider the stats do not name: ended, under "other".
+		relation("asana:1", "asana:2", "blocks", 40),
+		// not a relation the end rule sees: no stored blocker.
+		relation("gh:a/r#99", "gh:a/r#9", "blocked by #99", 40),
+		// not a relation the end rule sees: the legacy direction.
+		{SourceID: "jira:OPS-1", TargetID: "jira:OPS-2", RelationshipType: "blocks", SemanticsVersion: "legacy.v1", LastSynced: blockedTime(40), FirstSeenAt: blockedTimePtr(14)},
+	}
+	ends := []RelationEnd{
+		end("gh:a/r#12", "github", "a/r", 30),
+		// #7 has two stored rows: the row of the pass that read its text (40)
+		// and the later board row (60). The later row is the stored item.
+		end("gh:a/r#7", "github", "a/r", 40),
+		end("gh:a/r#7", "github", GitHubBoardProjectPrefix+"acme#3", 60),
+		end("gh:a/r#8", "github", "a/r", 60),
+		end("gh:a/r#9", "github", "a/r", 60),
+		end("jira:OPS-1", "jira", "", 60), end("jira:OPS-2", "jira", "", 30),
+		end("linear:OPS-1", "linear", "", 40), end("linear:OPS-2", "linear", "", 40),
+		// The gitlab writer's project id has the board prefix: only a GITHUB
+		// row is a board candidate.
+		end("gitlab:a/r#5", "gitlab", "a/r", 30), end("gitlab:a/r#7", "gitlab", GitHubBoardProjectPrefix+"x", 60),
+		end("asana:1", "asana", "", 60), end("asana:2", "asana", "", 60),
+	}
+	intervals, stats := BlockedIntervalsWithStats(relations, ends)
+	want := EndedRelationStats{
+		Relations:             7,
+		Ended:                 map[string]int{"github": 2, "jira": 1, "gitlab": 1, "other": 1},
+		GitHubBoardCandidates: 1,
+	}
+	if !reflect.DeepEqual(stats, want) {
+		t.Fatalf("stats = %+v, want %+v", stats, want)
+	}
+	// The stats change no interval.
+	if plain := BlockedIntervalsByItem(relations, ends); !reflect.DeepEqual(plain, intervals) {
+		t.Fatalf("BlockedIntervalsByItem = %+v, BlockedIntervalsWithStats = %+v", plain, intervals)
+	}
+	// The log line: the same keys for every run, counts only.
+	logged := func(stats EndedRelationStats, writer string) string {
+		var out bytes.Buffer
+		previous := slog.Default()
+		slog.SetDefault(slog.New(slog.NewTextHandler(&out, &slog.HandlerOptions{
+			ReplaceAttr: func(_ []string, attr slog.Attr) slog.Attr {
+				if attr.Key == slog.TimeKey {
+					return slog.Attr{}
+				}
+				return attr
+			},
+		})))
+		defer slog.SetDefault(previous)
+		stats.Log(writer)
+		return out.String()
+	}
+	const message = `level=INFO msg="blocked rule: relations ended by a later sync of an item that writes them" `
+	if got, wantLine := logged(stats, "daily_family"), message+
+		"writer=daily_family relations=7 ended=5 ended_github=2 ended_gitlab=1 ended_jira=1 ended_linear=0 ended_other=1 github_board_candidates=1\n"; got != wantLine {
+		t.Fatalf("log line = %q, want %q", got, wantLine)
+	}
+	if got, wantLine := logged(EndedRelationStats{}, "sync_time_deriver"), message+
+		"writer=sync_time_deriver relations=0 ended=0 ended_github=0 ended_gitlab=0 ended_jira=0 ended_linear=0 ended_other=0 github_board_candidates=0\n"; got != wantLine {
+		t.Fatalf("log line of a run with no relation = %q, want %q", got, wantLine)
+	}
+	// No relation, or no stored item: nothing counted.
+	if _, none := BlockedIntervalsWithStats(nil, ends); !reflect.DeepEqual(none, EndedRelationStats{}) {
+		t.Fatalf("no relation: stats = %+v", none)
+	}
+	if _, none := BlockedIntervalsWithStats(relations, nil); !reflect.DeepEqual(none, EndedRelationStats{}) {
+		t.Fatalf("no stored item: stats = %+v", none)
+	}
+}
+
+// RelationEndedBy names the writer whose later sync did not write the
+// relation: the first one in the order given.
+func TestRelationEndedByNamesTheFirstWriterWithALaterSync(t *testing.T) {
+	for name, tc := range map[string]struct {
+		relation int
+		writers  []int
+		want     int
+	}{
+		"no writer":                       {5, nil, -1},
+		"one writer at the relation":      {5, []int{5}, -1},
+		"one writer later":                {5, []int{6}, 0},
+		"the second writer is later":      {5, []int{5, 7}, 1},
+		"both are later: the first":       {5, []int{6, 7}, 0},
+		"both wrote it at or before that": {7, []int{5, 7}, -1},
+	} {
+		t.Run(name, func(t *testing.T) {
+			writers := make([]time.Time, 0, len(tc.writers))
+			for _, hour := range tc.writers {
+				writers = append(writers, blockedTime(hour))
+			}
+			if got := RelationEndedBy(blockedTime(tc.relation), writers...); got != tc.want {
+				t.Fatalf("RelationEndedBy = %d, want %d", got, tc.want)
+			}
+		})
 	}
 }

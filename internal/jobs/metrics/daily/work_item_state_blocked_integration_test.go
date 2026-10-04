@@ -3,11 +3,15 @@
 package daily
 
 import (
+	"bytes"
 	"context"
+	"log/slog"
 	"reflect"
+	"strings"
 	"testing"
 	"time"
 
+	"github.com/full-chaos/dev-health-ops/internal/jobs/metrics/workitemmetrics"
 	clickhousestore "github.com/full-chaos/dev-health-ops/internal/storage/clickhouse"
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/containers"
 )
@@ -189,12 +193,32 @@ INSERT INTO work_item_dependencies (source_work_item_id, target_work_item_id, re
 	if err != nil {
 		t.Fatal(err)
 	}
+	var logged bytes.Buffer
+	previousLogger := slog.Default()
+	slog.SetDefault(slog.New(slog.NewTextHandler(&logged, nil)))
 	written, err := executor.ComputeFamily(ctx, Run{OrganizationID: orgA, TargetDay: targetDay}, Partition{
 		ID: "00000000-0000-4000-8000-0000000000c1", RunID: "00000000-0000-4000-8000-0000000000c0",
 		RepoIDs: []RepositoryID{RepositoryID(repoA)},
 	})
+	slog.SetDefault(previousLogger)
 	if err != nil {
 		t.Fatalf("org A partition: %v", err)
+	}
+	// ONE log line for the partition says what the end rule did: three
+	// relations of org A reach it (#1, #3, #4; #5 is legacy and #6 has no
+	// start), and #4's is ended by #4's later sync. No id is in the line.
+	var endedLines []string
+	for _, line := range strings.Split(logged.String(), "\n") {
+		if strings.Contains(line, workitemmetrics.EndedRelationsLogMessage) {
+			endedLines = append(endedLines, line)
+		}
+	}
+	const wantCounts = "writer=daily_family relations=3 ended=1 ended_github=1 ended_gitlab=0 ended_jira=0 ended_linear=0 ended_other=0 github_board_candidates=0"
+	if len(endedLines) != 1 || !strings.HasSuffix(endedLines[0], wantCounts) {
+		t.Fatalf("log lines of the end rule = %q, want one line ending in %q", endedLines, wantCounts)
+	}
+	if strings.Contains(endedLines[0], orgA) || strings.Contains(endedLines[0], "gh:a/") {
+		t.Fatalf("the log line holds an id: %s", endedLines[0])
 	}
 	if written == 0 {
 		t.Fatal("org A partition wrote no row")

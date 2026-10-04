@@ -52,8 +52,9 @@ func loadWorkItemBlockedIntervalsForProvider(
 			return nil, providerfoundation.ErrInvalidScope
 		}
 		ends = append(ends, workitemmetrics.RelationEnd{
-			WorkItemID: item.WorkItemID, Provider: item.Provider, Status: item.Status,
-			CreatedAt: item.CreatedAt.UTC(), CompletedAt: item.CompletedAt, LastSynced: item.LastSynced.UTC(),
+			WorkItemID: item.WorkItemID, Provider: item.Provider, ProjectID: derefString(item.ProjectID),
+			Status: item.Status, CreatedAt: item.CreatedAt.UTC(), CompletedAt: item.CompletedAt,
+			LastSynced: item.LastSynced.UTC(),
 		})
 	}
 	// The stored relations that name one of the unit's items: by the item's
@@ -93,9 +94,14 @@ func loadWorkItemBlockedIntervalsForProvider(
 	if err != nil {
 		return nil, err
 	}
-	return workitemmetrics.BlockedIntervalsByItem(
+	intervals, ended := workitemmetrics.BlockedIntervalsWithStats(
 		mergeBlockingRelations(stored, fresh), append(storedEnds, ends...),
-	), nil
+	)
+	// One line per unit, no id: how many relations the end rule closed, by
+	// provider, and how many of them are the named case of a github issue on
+	// a Projects v2 board.
+	ended.Log("sync_time_deriver")
+	return intervals, nil
 }
 
 // mergeBlockingRelations returns one row per (source, target, type): of a

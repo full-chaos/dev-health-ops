@@ -12,10 +12,13 @@ package providersync
 // rows REACH it, and reach it with the direction the rule reads.
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
+	"log/slog"
 	"reflect"
+	"strings"
 	"testing"
 	"time"
 
@@ -398,5 +401,179 @@ func TestMergeBlockingRelationsKeepsTheRowSyncedLastAndTheStartTimes(t *testing.
 	other.RelationshipType = "blocked_by"
 	if got := mergeBlockingRelations([]workitemmetrics.BlockingRelation{row("a", "b", 9, ptr(3), nil)}, []workitemmetrics.BlockingRelation{other}); len(got) != 2 {
 		t.Fatalf("two relation types between the same items merged into %d row(s)", len(got))
+	}
+}
+
+// PINS A KNOWN UNDERSTATEMENT (CHAOS-8493, named in
+// docs/reference/metrics/definitions.md): a github issue on a Projects v2
+// board.
+//
+// The pass that reads an issue's text is incremental: it reads an issue again
+// only after the issue is updated. The board pass reads every board item on
+// every run, writes the issue's work_items row again with a new last_synced,
+// and reads no issue text (its query has no body), so it writes no relation.
+// The rule cannot tell that sync from one that read the text and found the
+// relation gone: the item that writes the relation has a later sync that did
+// not write it. So the relation ends at its last write, though the text is
+// still there.
+//
+// This test shows that behaviour with the real normalizers, and that the run
+// counts it as a board candidate. It is here so that the day the stored row
+// can tell the two syncs apart, this test is the one that changes.
+func TestAGitHubBoardPassEndsTheTextRelationOfAnIssueNobodyUpdates(t *testing.T) {
+	claim := blockedTestClaim(t, "github")
+	// The text was read two times: first seen two days before the last read.
+	textRead := time.Date(2026, 8, 3, 12, 0, 0, 0, time.UTC)
+	firstSeen := textRead.AddDate(0, 0, -2)
+
+	// The pass that reads the text: "Blocked by #12" in issue #7.
+	dependencies, err := extractGitHubWorkItemDependencies(claim, "gh:acme/api#7", "acme/api", "Blocked by #12", "", nil, textRead)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(dependencies) != 1 || dependencies[0].RelationshipTypeRaw != "blocked by #12" {
+		t.Fatalf("the text normalizer emitted %+v, want one relation with the phrase as its raw type", dependencies)
+	}
+	stored := workitemmetrics.BlockingRelation{
+		SourceID: dependencies[0].SourceWorkItemID, TargetID: dependencies[0].TargetWorkItemID,
+		RelationshipType: dependencies[0].RelationshipType, Raw: dependencies[0].RelationshipTypeRaw,
+		SemanticsVersion: dependencies[0].RelationshipSemanticsVersion,
+		LastSynced:       dependencies[0].LastSynced, FirstSeenAt: &firstSeen,
+	}
+	issue := workitemmetrics.RelationEnd{
+		WorkItemID: "gh:acme/api#7", Provider: "github", ProjectID: "acme/api", Status: "in_progress",
+		CreatedAt: textRead.AddDate(0, 0, -5), LastSynced: textRead,
+	}
+	blocker := workitemmetrics.RelationEnd{
+		WorkItemID: "gh:acme/api#12", Provider: "github", ProjectID: "acme/api", Status: "in_progress",
+		CreatedAt: textRead.AddDate(0, 0, -9), LastSynced: textRead,
+	}
+
+	// Before any board pass the relation is open.
+	intervals, stats := workitemmetrics.BlockedIntervalsWithStats([]workitemmetrics.BlockingRelation{stored}, []workitemmetrics.RelationEnd{issue, blocker})
+	if want := (map[string][]workitemmetrics.BlockedInterval{"gh:acme/api#7": {{Start: firstSeen}}}); !reflect.DeepEqual(intervals, want) {
+		t.Fatalf("before the board pass: intervals = %+v, want %+v", intervals, want)
+	}
+	if len(stats.Ended) != 0 || stats.GitHubBoardCandidates != 0 {
+		t.Fatalf("before the board pass: stats = %+v, want nothing ended", stats)
+	}
+
+	// The board pass, one day later, through its real normalizer: the SAME
+	// work item id, a new last_synced, a board project id, and no relation.
+	boardRow, _, emitted := buildGitHubProjectV2OracleRows(t, gitHubProjectV2OracleInput())
+	if !emitted || boardRow.WorkItemID != issue.WorkItemID {
+		t.Fatalf("the board pass emitted %t a row for %q, want a row for %q", emitted, boardRow.WorkItemID, issue.WorkItemID)
+	}
+	if !boardRow.LastSynced.After(textRead) || boardRow.ProjectID == nil ||
+		!strings.HasPrefix(*boardRow.ProjectID, workitemmetrics.GitHubBoardProjectPrefix) {
+		t.Fatalf("the board row = last_synced %s, project %v; want a later sync and a %q project id",
+			boardRow.LastSynced, boardRow.ProjectID, workitemmetrics.GitHubBoardProjectPrefix)
+	}
+	if boardRow.Description != nil && *boardRow.Description != "" {
+		t.Fatalf("the board row carries issue text %q: the board pass can read relations now, and this exception is gone", *boardRow.Description)
+	}
+	rows := githubWorkItemRows{
+		WorkItems: []githubWorkItemRow{boardRow},
+		StatusTransitions: []githubWorkItemTransitionRow{{
+			WorkItemID: boardRow.WorkItemID, Provider: "github", OccurredAt: textRead.AddDate(0, 0, -4),
+			FromStatus: "todo", ToStatus: "in_progress", OrgID: claim.OrgID,
+		}},
+	}
+	source := &blockedFactsSource{relations: []workitemmetrics.BlockingRelation{stored}, ends: []workitemmetrics.RelationEnd{issue, blocker}}
+
+	var logged bytes.Buffer
+	previous := slog.Default()
+	slog.SetDefault(slog.New(slog.NewTextHandler(&logged, nil)))
+	defer slog.SetDefault(previous)
+	blocked, err := loadWorkItemBlockedIntervalsForProvider(context.Background(), "github", claim, rows, source)
+	slog.SetDefault(previous)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// TODAY'S BEHAVIOUR: the relation ends at its last write, the text pass.
+	want := map[string][]workitemmetrics.BlockedInterval{"gh:acme/api#7": {{Start: firstSeen, End: &textRead}}}
+	if !reflect.DeepEqual(blocked, want) {
+		t.Fatalf("after the board pass: intervals = %+v, want %+v (ended at the last sync that read the text)", blocked, want)
+	}
+	// ONE log line for the run, with the count and no id.
+	var lines []string
+	for _, line := range strings.Split(logged.String(), "\n") {
+		if strings.Contains(line, workitemmetrics.EndedRelationsLogMessage) {
+			lines = append(lines, line)
+		}
+	}
+	if len(lines) != 1 {
+		t.Fatalf("%d log lines of the end rule for one run, want 1:\n%s", len(lines), logged.String())
+	}
+	for _, part := range []string{
+		`msg="` + workitemmetrics.EndedRelationsLogMessage + `"`, "writer=sync_time_deriver",
+		"relations=1", "ended=1", "ended_github=1", "ended_gitlab=0", "ended_jira=0", "ended_linear=0", "ended_other=0",
+		"github_board_candidates=1",
+	} {
+		if !strings.Contains(lines[0], part) {
+			t.Fatalf("the log line has no %q:\n%s", part, lines[0])
+		}
+	}
+	for _, id := range []string{"gh:acme/api#7", "gh:acme/api#12", claim.OrgID, claim.ID} {
+		if strings.Contains(lines[0], id) {
+			t.Fatalf("the log line holds the id %q:\n%s", id, lines[0])
+		}
+	}
+}
+
+// PINS A KNOWN UNDERSTATEMENT (CHAOS-8493, named in
+// docs/reference/metrics/definitions.md): the gitlab description keyword
+// "blocks".
+//
+// "blocks #7" in the description of #5 is stored with the raw value "blocks",
+// which is also the raw value of a native issue link seen from the blocker.
+// A native link is written by both issues; the keyword only by #5. The stored
+// row cannot say which it is, so both issues are taken as writers: when the
+// BLOCKED issue #7 is synced later, the relation ends at its last write,
+// though the text in #5 is still there. With the keyword "blocking", whose
+// raw value is its own, the same sync ends nothing.
+func TestAGitLabBlocksKeywordEndsWhenTheBlockedIssueIsSyncedLater(t *testing.T) {
+	claim := blockedTestClaim(t, "gitlab")
+	written := time.Date(2026, 8, 3, 12, 0, 0, 0, time.UTC)
+	firstSeen := written.AddDate(0, 0, -2)
+	later := written.Add(24 * time.Hour)
+	ends := []workitemmetrics.RelationEnd{
+		{WorkItemID: "gitlab:acme/api#5", Provider: "gitlab", Status: "in_progress", CreatedAt: written.AddDate(0, 0, -9), LastSynced: written},
+		// The blocked issue was synced again; it holds no text about #5.
+		{WorkItemID: "gitlab:acme/api#7", Provider: "gitlab", Status: "in_progress", CreatedAt: written.AddDate(0, 0, -5), LastSynced: later},
+	}
+	for description, tc := range map[string]struct {
+		raw  string
+		want workitemmetrics.BlockedInterval
+	}{
+		"this blocks #7":      {"blocks", workitemmetrics.BlockedInterval{Start: firstSeen, End: &written}},
+		"this is blocking #7": {"blocking", workitemmetrics.BlockedInterval{Start: firstSeen}},
+	} {
+		t.Run(tc.raw, func(t *testing.T) {
+			rows := normalizeGitLabDependencies(claim, "gitlab:acme/api#5", "acme/api", description, nil, written)
+			if len(rows) != 1 || rows[0].SourceWorkItemID != "gitlab:acme/api#5" || rows[0].TargetWorkItemID != "gitlab:acme/api#7" ||
+				rows[0].RelationshipType != "blocks" || rows[0].RelationshipTypeRaw != tc.raw {
+				t.Fatalf("the description %q gave %+v, want one `blocks` row from #5 to #7 with the raw value %q", description, rows, tc.raw)
+			}
+			relation := workitemmetrics.BlockingRelation{
+				SourceID: rows[0].SourceWorkItemID, TargetID: rows[0].TargetWorkItemID, RelationshipType: rows[0].RelationshipType,
+				Raw: rows[0].RelationshipTypeRaw, SemanticsVersion: rows[0].RelationshipSemanticsVersion,
+				LastSynced: rows[0].LastSynced, FirstSeenAt: &firstSeen,
+			}
+			got := workitemmetrics.BlockedIntervalsByItem([]workitemmetrics.BlockingRelation{relation}, ends)
+			if want := (map[string][]workitemmetrics.BlockedInterval{"gitlab:acme/api#7": {tc.want}}); !reflect.DeepEqual(got, want) {
+				t.Fatalf("intervals = %+v, want %+v", got, want)
+			}
+		})
+	}
+	// The native link from the blocker's side stores the same raw value.
+	var links []gitlabIssueLinkPayload
+	if err := json.Unmarshal([]byte(`[{"link_type":"blocks","iid":7,"references":{"full":"acme/api#7"}}]`), &links); err != nil {
+		t.Fatal(err)
+	}
+	native := normalizeGitLabDependencies(claim, "gitlab:acme/api#5", "acme/api", "", links, written)
+	if len(native) != 1 || native[0].RelationshipTypeRaw != "blocks" || native[0].SourceWorkItemID != "gitlab:acme/api#5" {
+		t.Fatalf("the native link gave %+v, want one row with the raw value `blocks`: the two forms are no longer the same stored row, and this exception is gone", native)
 	}
 }

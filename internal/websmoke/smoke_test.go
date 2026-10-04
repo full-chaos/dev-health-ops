@@ -871,18 +871,20 @@ func TestRedirectIsNotFollowed(t *testing.T) {
 
 func TestUrqlFormatRule(t *testing.T) {
 	for name, tc := range map[string]struct{ web, wire string }{
-		"nested sets, root excepted": {`query Q { a { b { c } } }`, `query Q { a { b { c __typename } __typename } }`},
-		"existing last is kept":      {`query Q { a { b __typename } }`, `query Q { a { b __typename } }`},
-		"existing first is kept":     {`query Q { a { __typename b } }`, `query Q { a { __typename b } }`},
-		"alias does not count":       {`query Q { a { kind: __typename } }`, `query Q { a { kind : __typename __typename } }`},
-		"alias of a field":           {`query Q { a { __typename: b } }`, `query Q { a { __typename : b __typename } }`},
-		"root typename untouched":    {`query Q { __typename a { b } }`, `query Q { __typename a { b __typename } }`},
-		"anonymous root":             {`{ a { b } }`, `{ a { b __typename } }`},
-		"fragment definition":        {`query Q { a { ...F } } fragment F on T { x }`, `query Q { a { ... F __typename } } fragment F on T { x __typename }`},
-		"inline fragment":            {`query Q { a { ... on T { x } } }`, `query Q { a { ... on T { x __typename } __typename } }`},
-		"object value braces":        {`query Q($v: In = {k: 1}) { a(f: {k: 1}) { b } }`, `query Q ( $ v : In = { k : 1 } ) { a ( f : { k : 1 } ) { b __typename } }`},
-		"underscore directive":       {`query Q { a @_opt(x: 1) { b } }`, `query Q { a { b __typename } }`},
-		"plain directive kept":       {`query Q { a @skip(if: true) { b } }`, `query Q { a @ skip ( if : true ) { b __typename } }`},
+		"nested sets, root excepted":                 {`query Q { a { b { c } } }`, `query Q { a { b { c __typename } __typename } }`},
+		"existing last is kept":                      {`query Q { a { b __typename } }`, `query Q { a { b __typename } }`},
+		"existing first is kept":                     {`query Q { a { __typename b } }`, `query Q { a { __typename b } }`},
+		"alias does not count":                       {`query Q { a { kind: __typename } }`, `query Q { a { kind : __typename __typename } }`},
+		"alias of a field":                           {`query Q { a { __typename: b } }`, `query Q { a { __typename : b __typename } }`},
+		"root typename untouched":                    {`query Q { __typename a { b } }`, `query Q { __typename a { b __typename } }`},
+		"anonymous root":                             {`{ a { b } }`, `{ a { b __typename } }`},
+		"fragment definition":                        {`query Q { a { ...F } } fragment F on T { x }`, `query Q { a { ... F __typename } } fragment F on T { x __typename }`},
+		"inline fragment":                            {`query Q { a { ... on T { x } } }`, `query Q { a { ... on T { x __typename } __typename } }`},
+		"object value braces":                        {`query Q($v: In = {k: 1}) { a(f: {k: 1}) { b } }`, `query Q ( $ v : In = { k : 1 } ) { a ( f : { k : 1 } ) { b __typename } }`},
+		"underscore directive":                       {`query Q { a @_opt(x: 1) { b } }`, `query Q { a { b __typename } }`},
+		"fragment with an object-valued directive":   {`query Q { a { b } } fragment F on T @d(a: {b: 1}) { x }`, `query Q { a { b __typename } } fragment F on T @ d ( a : { b : 1 } ) { x __typename }`},
+		"underscore directive on a variable is kept": {`query Q($v: Int @_x) { a { b } }`, `query Q ( $ v : Int @ _x ) { a { b __typename } }`},
+		"plain directive kept":                       {`query Q { a @skip(if: true) { b } }`, `query Q { a @ skip ( if : true ) { b __typename } }`},
 	} {
 		t.Run(name, func(t *testing.T) {
 			got, want := strings.Join(urqlFormat(graphqlTokens(tc.web)), " "), strings.Join(graphqlTokens(tc.wire), " ")

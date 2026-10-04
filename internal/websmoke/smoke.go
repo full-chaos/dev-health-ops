@@ -1285,7 +1285,7 @@ func urqlFormat(in []string) []string {
 		tok := in[i]
 		switch tok {
 		case "@":
-			if i+1 < len(in) && strings.HasPrefix(in[i+1], "_") {
+			if parens == 0 && i+1 < len(in) && strings.HasPrefix(in[i+1], "_") {
 				i++ // the directive name
 				if i+1 < len(in) && in[i+1] == "(" {
 					depth := 0
@@ -1323,7 +1323,7 @@ func urqlFormat(in []string) []string {
 				if !top.object && !top.root && !top.typename {
 					out = append(out, "__typename")
 				}
-				if len(stack) == 0 {
+				if len(stack) == 0 && !top.object {
 					defStart = i + 1
 				}
 			}

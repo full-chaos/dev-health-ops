@@ -140,7 +140,12 @@
   },
   {
     "operation": "improveOpportunities",
-    "digest": "8890d7aeddfebaa9683d6c8834c82b059e345af1dbf42db14eebba840fcd87d2"
+    "digest": "645f285412fb2c9517238aabca7e1204f530b66748893b748c0e5160cccf35c4"
+  },
+  {
+    "operation": "improveOpportunities",
+    "digest": "8890d7aeddfebaa9683d6c8834c82b059e345af1dbf42db14eebba840fcd87d2",
+    "legacy": true
   },
   {
     "operation": "investmentBreakdown",

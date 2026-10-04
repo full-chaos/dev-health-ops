@@ -1659,6 +1659,37 @@ const registeredImproveOpportunitiesDocument = `query ImproveOpportunities($scop
       severity
       evidenceRefs
       recommendedAction
+      value
+      threshold
+      unit
+      thresholdDirection
+      __typename
+    }
+    __typename
+  }
+}`
+
+// registeredImproveOpportunitiesV1Document is the text of `improveOpportunities` BEFORE the Automations table asked
+// for `value`, `threshold`, `unit` and `thresholdDirection` (CHAOS-8537; the web half is CHAOS-8500; the fields are CHAOS-7626). It stays a
+// legacy text (see legacyDigestsByOperation), so a web build still sending it keeps working while the new one rolls
+// out; the operation's ONE current document is registeredImproveOpportunitiesDocument above. Remove it with the
+// cleanup ticket once no client sends it (testdata/wire_capture/improveopportunities_v1_captured.graphql).
+const registeredImproveOpportunitiesV1Document = `query ImproveOpportunities($scope: AIScopeInput, $limit: Int! = 10, $windowDays: Int! = 30) {
+  improveOpportunities(scope: $scope, limit: $limit, windowDays: $windowDays) {
+    orgId
+    detectorReady
+    totalCount
+    opportunities {
+      opportunityId
+      kind
+      entityType
+      entityId
+      title
+      rationale
+      score
+      severity
+      evidenceRefs
+      recommendedAction
       __typename
     }
     __typename
@@ -3800,9 +3831,10 @@ func newDocumentDispatchHandler(getenv getenvFunc, routeMux *routeswitch.Mux, op
 // digestByOperation. The literal below is cmd/registrydump's second parse target: keep its exact shape
 // (`"<operation>": {digestHex(<constIdent>), ...}`). Empty = every operation accepts one text.
 var legacyDigestsByOperation = map[string][]string{
-	"aiAttributedPrs":  {digestHex(registeredAiAttributedPrsV1Document)},
-	"aiImpactSummary":  {digestHex(registeredAiImpactSummaryV1Document)},
-	"capacityForecast": {digestHex(registeredCapacityForecastV1Document), digestHex(registeredCapacityForecastV2Document)},
+	"aiAttributedPrs":      {digestHex(registeredAiAttributedPrsV1Document)},
+	"aiImpactSummary":      {digestHex(registeredAiImpactSummaryV1Document)},
+	"capacityForecast":     {digestHex(registeredCapacityForecastV1Document), digestHex(registeredCapacityForecastV2Document)},
+	"improveOpportunities": {digestHex(registeredImproveOpportunitiesV1Document)},
 }
 
 // buildOperationByDigest is the reverse index digest -> operation over every accepted text: each operation's

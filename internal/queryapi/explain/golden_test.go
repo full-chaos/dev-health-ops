@@ -40,6 +40,9 @@ func (s *fixtureRowScanner) Scan(dest ...any) error {
 		case *string:
 			v, _ := row[i].(string)
 			*typed = v
+		case *uint64:
+			v, _ := row[i].(uint64)
+			*typed = v
 		case **float64:
 			if row[i] == nil {
 				*typed = nil
@@ -66,6 +69,14 @@ type fakeQueryClient struct {
 
 func (c fakeQueryClient) Query(_ context.Context, query string, bindings []dhclickhouse.Binding) (dhclickhouse.RowScanner, error) {
 	return c.handler(c.t, query, bindings)
+}
+
+// knownCount is the count(col) column of a headline read: 0 for an empty window, 1 otherwise.
+func knownCount(empty bool) uint64 {
+	if empty {
+		return 0
+	}
+	return 1
 }
 
 func day(y int, m time.Month, d int) time.Time {
@@ -115,6 +126,8 @@ type explainQueryDispatch struct {
 	displayNameRows  [][]any
 	valueCurrent     float64
 	valuePrevious    float64
+	currentEmpty     bool   // the current window holds no stored value: known_count 0 (CHAOS-8491)
+	previousEmpty    bool   // the comparison window holds no stored value: known_count 0
 	currentStartDay  string // "YYYY-MM-DD" -- distinguishes the current-window fetchMetricValue call from the previous/compare one (identical query TEXT, different bound start_day)
 	driverRows       [][]any
 	contributorRows  [][]any
@@ -133,9 +146,9 @@ func (d *explainQueryDispatch) handle(t *testing.T, query string, bindings []dhc
 	case strings.Contains(query, "FROM ("):
 		startDay, _ := bindingValue(bindings, "start_day")
 		if fmt.Sprint(startDay) == d.currentStartDay {
-			return &fixtureRowScanner{rows: [][]any{{d.valueCurrent}}}, nil
+			return &fixtureRowScanner{rows: [][]any{{d.valueCurrent, knownCount(d.currentEmpty)}}}, nil
 		}
-		return &fixtureRowScanner{rows: [][]any{{d.valuePrevious}}}, nil
+		return &fixtureRowScanner{rows: [][]any{{d.valuePrevious, knownCount(d.previousEmpty)}}}, nil
 	default:
 		t.Fatalf("unexpected query:\n%s", query)
 		return nil, nil
@@ -410,5 +423,60 @@ func TestGoldenBlockedWorkSumsOnlyBlockedStatus(t *testing.T) {
 	want := loadGolden(t, "team_scope_blocked_work_status_filter.json")
 	if gotJSON, wantJSON := mustMarshal(t, got), mustMarshal(t, want); gotJSON != wantJSON {
 		t.Fatalf("response mismatch\n got:  %s\nwant: %s", gotJSON, wantJSON)
+	}
+}
+
+// TestHasDataFlagsSeparateAnEmptyWindowFromAStoredZero (CHAOS-8491) pins the
+// three cases that must differ. The headline read answers value 0 for a window
+// with no row at all (sum() of nothing) and for a window whose stored value is
+// 0; only known_count (count(col) from the same query) tells them apart.
+//
+//   - empty current, real prior (100): has_data=false, has_prior_data=true, and
+//     delta_pct 0, not the -100 that (0-100)/100 would serve;
+//   - real current (50), empty prior: has_data=true, has_prior_data=false, delta 0;
+//   - stored 0 in both windows: both flags true, value 0, delta 0 (a measured 0).
+func TestHasDataFlagsSeparateAnEmptyWindowFromAStoredZero(t *testing.T) {
+	cases := []struct {
+		name                          string
+		current, previous             float64
+		currentEmpty, previousEmpty   bool
+		wantValue, wantDelta          float64
+		wantHasData, wantHasPriorData bool
+	}{
+		{"empty current, real prior", 0, 100, true, false, 0, 0, false, true},
+		{"real current, empty prior", 50, 0, false, true, 50, 0, true, false},
+		{"stored zero in both windows", 0, 0, false, false, 0, 0, true, true},
+		{"stored zero current, real prior is a real -100", 0, 100, false, false, 0, -100, true, true},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			dispatch := &explainQueryDispatch{
+				t:               t,
+				valueCurrent:    tc.current,
+				valuePrevious:   tc.previous,
+				currentEmpty:    tc.currentEmpty,
+				previousEmpty:   tc.previousEmpty,
+				currentStartDay: "2024-06-01",
+			}
+			reader, err := NewReader(fakeQueryClient{t: t, handler: dispatch.handle})
+			if err != nil {
+				t.Fatalf("NewReader: %v", err)
+			}
+			got, err := BuildExplainResponse(context.Background(), reader, "org-acme", Params{
+				Metric:       "throughput",
+				StartDay:     day(2024, 6, 1),
+				EndDay:       day(2024, 6, 15),
+				CompareStart: day(2024, 5, 18),
+				CompareEnd:   day(2024, 6, 1),
+				ScopeLevel:   "org",
+			})
+			if err != nil {
+				t.Fatalf("BuildExplainResponse: %v", err)
+			}
+			if got.Value != tc.wantValue || got.DeltaPct != tc.wantDelta || got.HasData != tc.wantHasData || got.HasPriorData != tc.wantHasPriorData {
+				t.Fatalf("value=%v delta_pct=%v has_data=%v has_prior_data=%v, want %v/%v/%v/%v",
+					got.Value, got.DeltaPct, got.HasData, got.HasPriorData, tc.wantValue, tc.wantDelta, tc.wantHasData, tc.wantHasPriorData)
+			}
+		})
 	}
 }

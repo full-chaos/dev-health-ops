@@ -30,7 +30,7 @@ RENDER = TOOLS / "render-dho-api-ch-users.py"
 CUT = TOOLS / "bigboy-cut.sh"
 
 _PASSWORD = "the-api-password"
-_CUT_SECRET = "cut-secret-4d7a91"
+_CUT_PASSWORD = "the-cut-test-password"
 _HASH = hashlib.sha256(_PASSWORD.encode()).hexdigest()
 
 _MANIFEST = """package clickhouse
@@ -366,7 +366,7 @@ def test_a_tmpdir_in_or_resolving_into_tmp_or_not_private_is_refused(
     os.chmod(under_tmp, 0o700)
     link = tmp_path / "link-to-tmp"
     link.symlink_to("/tmp")
-    shm_open = _scratch(mode=0o755)
+    shm_open = _scratch(mode=0o750)  # not 0700: group-readable
     holder = _scratch()
     (holder / "lnk").symlink_to(
         under_tmp
@@ -404,7 +404,7 @@ def test_the_cut_hands_the_credentials_path_to_the_check_and_the_password_to_no_
     assert "STEP ch-api-user rc=0" in proc.stdout, (proc.stdout, proc.stderr)
     check_log = (tmp_path / "fake-check.log").read_text()
     assert "args=" in check_log and "go-api.creds" in check_log, check_log
-    secret = _CUT_SECRET
+    secret = _CUT_PASSWORD
     for log in ("fake-check.log", "docker-env.log"):
         text = (tmp_path / log).read_text()
         assert text.strip(), f"{log} is empty: this test would prove nothing"
@@ -427,7 +427,7 @@ def _cut_with_a_fake_check(
     fake = tools / CHECK.name
     root.joinpath(".go-api-dev").mkdir(exist_ok=True)
     creds = root / ".go-api-dev" / "go-api.creds"
-    creds.write_text(f"API_CH_PASSWORD='{_CUT_SECRET}'\n")
+    creds.write_text(f"API_CH_PASSWORD='{_CUT_PASSWORD}'\n")
     creds.chmod(0o600)
     fake.write_text(
         "#!/usr/bin/env bash\necho fake-check\n"

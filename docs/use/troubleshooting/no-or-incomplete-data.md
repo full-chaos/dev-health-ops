@@ -5,7 +5,7 @@ content_type: troubleshooting
 owner: product-analytics
 source_of_truth:
   - current product state behavior
-  - src/dev_health_ops/api/services/investment.py
+  - internal/queryapi/investment/response.go
   - docs/user-guide/how-to-read-dev-health.md
 applicability: current
 lifecycle: active

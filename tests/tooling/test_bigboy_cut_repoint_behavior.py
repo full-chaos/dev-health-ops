@@ -26,7 +26,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[2]
 CUT = ROOT / "ci" / "bigboy" / "bigboy-cut.sh"
 
-# Start right after the PRECEDING step (routing-parity), not the repoint call itself: a
+# Start right after the PRECEDING step (go-api-ready), not the repoint call itself: a
 # mutation that inserts an early `exit`/`return` ANYWHERE in the gap between the two steps
 # -- not just on the exact line immediately above the repoint call -- must still land
 # inside the executed block, or this test would miss it the same way the text-only suite

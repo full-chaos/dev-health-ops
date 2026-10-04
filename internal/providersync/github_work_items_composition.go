@@ -420,6 +420,10 @@ func (deriver GitHubWorkItemDeriver) deriveForProvider(
 		return nil, nil, err
 	}
 	deriver.observations.recordStoredEdgeMerge(derivationContext.StoredEdgeMerge)
+	blocked, err := loadWorkItemBlockedIntervalsForProvider(ctx, provider, claim, rows, deriver.Source)
+	if err != nil {
+		return nil, nil, err
+	}
 	// Every owned destination is present from the start, so a destination that
 	// legitimately produces no rows on any day is still reported as evaluated.
 	derived := make(map[string][]json.RawMessage, len(githubWorkItemDerivedDestinations))
@@ -447,7 +451,7 @@ func (deriver GitHubWorkItemDeriver) deriveForProvider(
 			return nil, nil, err
 		}
 		surfaces, err := buildWorkItemDerivedSurfacesForProvider(
-			provider, claim, rows, day, normalizedAt, derivationContext,
+			provider, claim, rows, day, normalizedAt, derivationContext, blocked,
 		)
 		if err != nil {
 			return nil, nil, err

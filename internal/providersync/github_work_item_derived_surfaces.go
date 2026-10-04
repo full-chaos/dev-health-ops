@@ -226,7 +226,7 @@ func buildGitHubWorkItemDerivedSurfaces(
 	derived teamattribution.GithubWorkItemDerivationContext,
 ) (githubWorkItemDerivedSurfaces, error) {
 	return buildWorkItemDerivedSurfacesForProvider(
-		"github", claim, rows, day, computedAt, derived,
+		"github", claim, rows, day, computedAt, derived, nil,
 	)
 }
 
@@ -241,6 +241,7 @@ func buildWorkItemDerivedSurfacesForProvider(
 	day time.Time,
 	computedAt time.Time,
 	derived teamattribution.GithubWorkItemDerivationContext,
+	blocked map[string][]workitemmetrics.BlockedInterval,
 ) (githubWorkItemDerivedSurfaces, error) {
 	if claim.Validate() != nil || claim.Provider != provider ||
 		!isWorkItemFamilyDataset(claim.Dataset) || day.IsZero() || computedAt.IsZero() {
@@ -268,7 +269,7 @@ func buildWorkItemDerivedSurfacesForProvider(
 		return githubWorkItemDerivedSurfaces{}, err
 	}
 	durations, err := buildGitHubWorkItemStateDurationsDaily(
-		claim, rows, dayUTC, end, computedAt, derived,
+		claim, rows, dayUTC, end, computedAt, derived, blocked,
 	)
 	if err != nil {
 		return githubWorkItemDerivedSurfaces{}, err
@@ -437,6 +438,7 @@ func buildGitHubWorkItemStateDurationsDaily(
 	rows githubWorkItemRows,
 	dayUTC, end, computedAt time.Time,
 	derived teamattribution.GithubWorkItemDerivationContext,
+	blocked map[string][]workitemmetrics.BlockedInterval,
 ) ([]githubWorkItemStateDurationDailyRow, error) {
 	transitionsByItem := make(map[string][]githubWorkItemTransitionRow)
 	for _, transition := range rows.StatusTransitions {
@@ -474,7 +476,12 @@ func buildGitHubWorkItemStateDurationsDaily(
 		// the two rules disagree in Python and must not be shared.
 		teamNames[githubStateDurationTeamKey{item.Provider, workScopeID, teamID}] = teamName
 
-		for _, segment := range githubWorkItemStatusSegments(item, itemTransitions, computedAt) {
+		segments := githubWorkItemStatusSegments(item, itemTransitions, computedAt)
+		// CHAOS-8493: the parts of a non-terminal segment in which the item
+		// has an open blocker are "blocked". Same overlay, same inputs, as
+		// the work_item_state daily family -- the other writer of this table.
+		segments = overlayGitHubWorkItemBlocked(segments, blocked[item.WorkItemID])
+		for _, segment := range segments {
 			overlapStart := segment.start
 			if dayUTC.After(overlapStart) {
 				overlapStart = dayUTC
@@ -601,6 +608,27 @@ func githubWorkItemStatusSegments(
 		if segment.end.After(segment.start) {
 			result = append(result, segment)
 		}
+	}
+	return result
+}
+
+// overlayGitHubWorkItemBlocked applies workitemmetrics.OverlayBlocked to this
+// builder's own segment type. With no interval the segments are returned as
+// they are, so an item with no open blocker is computed exactly as before.
+func overlayGitHubWorkItemBlocked(
+	segments []githubWorkItemStatusSegment, intervals []workitemmetrics.BlockedInterval,
+) []githubWorkItemStatusSegment {
+	if len(segments) == 0 || len(intervals) == 0 {
+		return segments
+	}
+	shared := make([]workitemmetrics.StatusSegment, 0, len(segments))
+	for _, segment := range segments {
+		shared = append(shared, workitemmetrics.StatusSegment{Status: segment.status, Start: segment.start, End: segment.end})
+	}
+	overlaid := workitemmetrics.OverlayBlocked(shared, intervals)
+	result := make([]githubWorkItemStatusSegment, 0, len(overlaid))
+	for _, segment := range overlaid {
+		result = append(result, githubWorkItemStatusSegment{status: segment.Status, start: segment.Start, end: segment.End})
 	}
 	return result
 }

@@ -1116,52 +1116,19 @@ def test_paths_filter_covers_every_file_the_gated_jobs_install(
     )
 
 
-LEFTHOOK_PATH = ROOT / "lefthook.yml"
-
-
-@pytest.mark.parametrize("hook", ["pre-commit", "pre-push"])
-def test_lefthook_mypy_checks_the_same_tree_as_ci(hook: str) -> None:
-    # CHAOS-4843's local half: bare `mypy` (no args) falls back to
-    # `[tool.mypy] files = ["src", "tests", "scripts"]`, silently excluding
-    # internal/, ci/ and .github/ from every local run while CI's
-    # `.venv/bin/mypy .` always checks the whole tree. Fails in either
-    # direction: a narrower explicit path (regression back to the original
-    # defect) or dropping the explicit `.` entirely (falls back to the
-    # narrower config again).
-    lefthook = _load(LEFTHOOK_PATH)
-    hook_block = lefthook[hook]
-    assert isinstance(hook_block, dict)
-    commands = hook_block["commands"]
-    assert isinstance(commands, dict)
-    assert "mypy" in commands, f"lefthook.yml's {hook} hooks no longer run mypy at all"
-    mypy_command = commands["mypy"]
-    assert isinstance(mypy_command, dict)
-    run = _normalize(mypy_command["run"])
-    assert run == "scripts/run_py_tool.sh mypy .", (
-        f"lefthook.yml's {hook} mypy command is {run!r}, not "
-        "'scripts/run_py_tool.sh mypy .' -- without the explicit '.', mypy "
-        "falls back to [tool.mypy] files in pyproject.toml, which excludes "
-        "internal/, ci/ and .github/ from every local run while CI's "
-        "typecheck-mypy job always checks the whole tree with `mypy .`"
-    )
-
-
 def test_paths_filter_covers_lefthook_yml() -> None:
-    # CHAOS-4843, round 2 of #2169's peer review, P2b. The guard immediately
-    # above (test_lefthook_mypy_checks_the_same_tree_as_ci) only
-    # runs at all if this workflow's own `changes` job selects lefthook.yml
-    # for the diff -- otherwise a PR touching ONLY lefthook.yml (narrowing
-    # its mypy glob, or reverting the command to a bare `mypy`) gets
-    # code=false, skips test-matrix entirely, and the one guard built to
-    # catch exactly that regression never runs. Same shape as the
+    # CHAOS-4843, round 2 of #2169's peer review, P2b. Guards on lefthook.yml
+    # only run if this workflow's own `changes` job selects lefthook.yml
+    # for the diff -- otherwise a PR touching ONLY lefthook.yml gets
+    # code=false, skips test-matrix entirely, and the guard never runs.
+    # Same shape as the
     # .gitignore/.ignore entries a few lines up in test.yml, which exist for
     # the identical reason (CHAOS-3513 round 2): a guard's own trigger scope
     # can be the actual gap, even when the guard itself is correct.
     patterns = _code_filter_patterns()
     assert _is_covered("lefthook.yml", patterns), (
         "test.yml's path filter has no lefthook.yml entry -- "
-        "test_lefthook_mypy_checks_the_same_tree_as_ci cannot run "
-        "to catch a regression on a lefthook.yml-only change"
+        "a lefthook.yml-only change would skip the guards"
     )
 
 

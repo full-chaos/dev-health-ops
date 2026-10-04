@@ -107,6 +107,14 @@
     "digest": "0e43d67d571539081b2006ae8b2148dd4ea31c959be22be1db9e927083060baa"
   },
   {
+    "operation": "coverageBaselines",
+    "digest": "141ed14fc636739e1184716167148d7d17c35180a09a83dc9ef2b04bfb1dd638"
+  },
+  {
+    "operation": "coverageScopeBaseline",
+    "digest": "2badf6b15232c05fb72f06c74a5da54a6037ba0a69e400aaba346dee5633dc5f"
+  },
+  {
     "operation": "createSavedReport",
     "digest": "2834bc84c1a065ef44dff96e02f6e5d2ca55608053f96a52366eac429aafc0f0",
     "kind": "mutation"
@@ -247,6 +255,10 @@
   {
     "operation": "testOpsTest",
     "digest": "20eeea67bfc1cfa0f809188878476a0fe40565bc583009151e1f7c8cf2f3be5c"
+  },
+  {
+    "operation": "testopsJobFailures",
+    "digest": "3966554a57e957978b5777cbb8b51bf6e0f41feb2181b89f7ad138e1c81c67c9"
   },
   {
     "operation": "testopsRisk",

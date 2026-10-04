@@ -37,6 +37,7 @@ GO_API_PROVE_E2E_PRINCIPAL_ID="00000000-0000-4000-8000-00000000e0e1"
 # query_api_e2e_mint_envelope_token.
 GO_API_PROVE_E2E_DIR=""
 GO_API_PROVE_E2E_ENVELOPE_PEM=""
+GO_API_PROVE_E2E_JWKS=""
 
 # The fixture program that checks the migrated proof service principal row,
 # grants it an org membership, and then mutates it. The users row itself comes
@@ -106,11 +107,6 @@ with engine.begin() as conn:
     ), dict(key, owner="go", mode=mode, why="live-e2e: measure through the proof route (shadow), then through /graphql (canary)",
             who="live-e2e", now=datetime.now(timezone.utc)))
 engine.dispose()
-'
-
-GO_API_PROVE_E2E_JWKS_PROGRAM='import json
-from dev_health_ops.api.graphql.principal_envelope import build_envelope_jwks
-print(json.dumps(build_envelope_jwks()))
 '
 
 go_api_prove_e2e_fail() {
@@ -195,8 +191,8 @@ query_api_e2e_start() {
   GO_API_PROVE_E2E_DIR="${dir}"
   mkdir -p "${dir}/artifacts"
   chmod 700 "${dir}"
-  GO_API_PROVE_E2E_ENVELOPE_PEM="${dir}/envelope.pem"
-  printf '%s' "${GO_API_PROVE_E2E_JWKS_PROGRAM}" > "${dir}/jwks.py"
+  GO_API_PROVE_E2E_ENVELOPE_PEM="${dir}/envelope-keys/private/envelope-private-key.pem"
+  GO_API_PROVE_E2E_JWKS="${dir}/envelope-keys/public/envelope-jwks.json"
 
   echo "==> [query-api] building dho (query-api, goapi prove, mint envelope, mint edge-token)"
   # query-api refuses to identify an unstamped or modified build, and
@@ -213,8 +209,7 @@ query_api_e2e_start() {
   go run ./cmd/registrydump -file internal/queryapi/server/query_route.go > "${dir}/documents.json"
 
   echo "==> [query-api] generating a throwaway envelope key pair"
-  (umask 077 && openssl genpkey -algorithm ed25519 -out "${GO_API_PROVE_E2E_ENVELOPE_PEM}")
-  GO_API_ENVELOPE_PRIVATE_KEY="$(cat "${GO_API_PROVE_E2E_ENVELOPE_PEM}")" run_python "${dir}/jwks.py" > "${dir}/jwks.json"
+  "${BIN_DIR}/dho" mint envelope-keys -dir "${dir}/envelope-keys" > /dev/null
 
   echo "==> [query-api] starting query-api on :${QUERY_API_PORT} (REST + measurement route)"
   pgx_uri="$(go_api_prove_e2e_pgx_uri)"
@@ -222,7 +217,7 @@ query_api_e2e_start() {
   (
     export CLICKHOUSE_URI="${CLICKHOUSE_URI_NATIVE}"
     export GO_API_REGISTRY_POSTGRES_URI="${pgx_uri}"
-    export GO_API_ENVELOPE_JWKS_PATH="${dir}/jwks.json"
+    export GO_API_ENVELOPE_JWKS_PATH="${GO_API_PROVE_E2E_JWKS}"
     export GO_API_ENVELOPE_ISSUER="dev-health-ops-edge"
     export GO_API_ENVELOPE_AUDIENCE="query-api"
     export QUERY_API_ADDR="127.0.0.1:${QUERY_API_PORT}"

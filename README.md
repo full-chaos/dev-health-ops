@@ -40,11 +40,11 @@ Providers → Processors → Sinks → Metrics → API / Visualization
 - **API/GraphQL** serves persisted analytics to `dev-health-web` and other
   consumers.
 
-Python remains the owner of the API, GraphQL schema, provider fetch and
-normalization, processors, and the job implementations the Go fleet runs. The
-repository also contains an additive Go worker-runtime foundation under `cmd/`
-and `internal/`; adding those process shells does not move a job out of Python
-or change its routing.
+Go owns the API and the GraphQL schema: `dho api` serves REST, `dho query-api`
+serves GraphQL, and the schema pin is `contracts/graphql/v1/schema.graphql`.
+The Go runtime lives under `cmd/` and `internal/`. Python remains the owner of
+provider fetch and normalization, processors, and the job implementations the
+Go fleet runs.
 
 The primary visualization surface is now `dev-health-web`. Grafana is optional,
 and this repository no longer ships the old sample dashboard gallery in this
@@ -52,20 +52,19 @@ README.
 
 ## Install
 
-Use the package directly:
+The command-line interface is `dho`, a Go binary. Build it from this
+repository, or use the `dev-health-go-dho` container image:
 
 ```bash
-pip install dev-health-ops
-dev-hops --help
+go build -o dho ./cmd/dho
+./dho help
 ```
 
-For local development from this repository:
+For Python development from this repository:
 
 ```bash
 pip install -r requirements.txt
 ```
-
-The installed command is `dev-hops`.
 
 ## Database model
 
@@ -85,11 +84,12 @@ Start local services and run migrations:
 ```bash
 docker compose up -d postgres clickhouse valkey
 
-export POSTGRES_URI="postgresql+asyncpg://postgres:postgres@localhost:5555/postgres"
-export CLICKHOUSE_URI="clickhouse://ch:ch@localhost:8123/default"
+export POSTGRES_URI="postgresql://postgres:postgres@localhost:5555/postgres"
+export CLICKHOUSE_URI="clickhouse://ch:ch@localhost:9000/default"
+export DEV_HEALTH_ALLOW_CELERY_RIVER_CUTOVER=1 RIVER_DATABASE_SCHEMA=river
 
-dev-hops migrate postgres
-dev-hops migrate clickhouse
+dho migrate postgres upgrade
+dho migrate clickhouse upgrade
 ```
 
 See [`docs/contribute/architecture/data-and-storage.md`](docs/contribute/architecture/data-and-storage.md)
@@ -101,35 +101,35 @@ and [`docs/reference/cli/index.md`](docs/reference/cli/index.md) for details.
 
 ```bash
 # Local git repository
-CLICKHOUSE_URI="clickhouse://ch:ch@localhost:8123/default" \
-  dev-hops sync git --provider local --repo-path /path/to/repo
+CLICKHOUSE_URI="clickhouse://ch:ch@localhost:9000/default" \
+  dho sync git --provider local --repo-path /path/to/repo
 
 # GitHub repository
-CLICKHOUSE_URI="clickhouse://ch:ch@localhost:8123/default" \
-  dev-hops sync git --provider github \
+CLICKHOUSE_URI="clickhouse://ch:ch@localhost:9000/default" \
+  dho sync git --provider github \
   --auth "$GITHUB_TOKEN" \
   --owner <owner> \
   --repo <repo>
 
 # Pull requests
-CLICKHOUSE_URI="clickhouse://ch:ch@localhost:8123/default" \
-  dev-hops sync prs --provider github \
+CLICKHOUSE_URI="clickhouse://ch:ch@localhost:9000/default" \
+  dho sync prs --provider github \
   --auth "$GITHUB_TOKEN" \
   --owner <owner> \
   --repo <repo>
 
-# Work items from Jira, GitHub, GitLab, Linear, synthetic data, or all providers
-CLICKHOUSE_URI="clickhouse://ch:ch@localhost:8123/default" \
-  dev-hops sync work-items --provider all --backfill 30
+# Work items: the native Go provider-sync route syncs them, with no manual
+# per-provider command. Force a window for one sync configuration:
+dho backfill run --config-id <config-uuid> --backfill 30
 
 # Teams into the ClickHouse team catalog (ClickHouse is the system of record)
-CLICKHOUSE_URI="clickhouse://ch:ch@localhost:8123/default" \
-  dev-hops sync teams --provider config --path src/dev_health_ops/config/team_mapping.yaml --allow-empty
+CLICKHOUSE_URI="clickhouse://ch:ch@localhost:9000/default" \
+  dho sync teams --provider github --org <org-uuid> --owner <github-org> --auth "$GITHUB_TOKEN"
 ```
 
-The bundled `team_mapping.yaml` is an empty onboarding sample. `sync teams`
-exits non-zero when no teams are persisted; pass `--allow-empty` only for
-intentional empty/no-op syncs such as validating the sample config.
+`sync teams` takes `--provider jira|github|gitlab|linear`. It exits non-zero
+when no teams are persisted; pass `--allow-empty` only for an intentional empty
+sync.
 
 Provider authentication can come from CLI flags or environment variables such as
 `GITHUB_TOKEN`, `GITLAB_TOKEN`, `JIRA_*`, `ATLASSIAN_*`, and `LINEAR_API_KEY`.
@@ -151,24 +151,34 @@ dho workers metrics remaining trigger-backstop --family complexity --org <org-uu
 
 ### Generate demo data
 
+`dho fixtures generate` loads a frozen parameter set, needs `--seed`, and
+writes analytics rows only (no PostgreSQL users). Create the first user and
+organization with `dho admin users create` and `dho admin orgs create`.
+
 ```bash
-dev-hops fixtures generate \
-  --sink "clickhouse://ch:ch@localhost:8123/default" \
-  --days 30 \
+dho fixtures generate \
+  --sink "clickhouse://ch:ch@localhost:9000/default" \
+  --provider synthetic --repo-name acme/live-e2e --repo-count 1 \
+  --days 14 --commits-per-day 6 --pr-count 24 --team-count 10 \
+  --seed 20260219 \
   --with-metrics \
   --with-work-graph
 ```
 
 ### Run the API
 
+The Compose stack runs the Go api. A router on <http://localhost:8000> sends
+`/graphql` and the query REST paths to `query-api` and every other path to
+`go-api`:
+
 ```bash
-POSTGRES_URI="postgresql+asyncpg://postgres:postgres@localhost:5555/postgres" \
-CLICKHOUSE_URI="clickhouse://ch:ch@localhost:8123/default" \
-  dev-hops api --reload
+docker compose up -d --build
+curl --fail http://localhost:8000/ready
 ```
 
-OpenAPI docs are available at <http://localhost:8000/docs> when the API is
-running. GraphQL is served by the API for the web app.
+To run the api binary yourself, use `dho api` (`--api-addr` sets the listen
+address, default `:8000`; `dho api --help` lists the flags). The Go api serves
+no `/docs` page.
 
 ### Run workers
 
@@ -218,7 +228,7 @@ Notes:
 
 ## Container images
 
-CI no longer builds or publishes the Python API image (`dev-hops-api`, from `docker/Dockerfile`; CHAOS-7674). The last published image stays in the registry for the root compose stack and the bigboy test host until they move to Go. The root compose file still builds that image locally; the Python API source is removed by CHAOS-6264. The Go images (`dev-health-go-*`) are the published images; run CLI jobs with `dho`.
+CI no longer builds or publishes the Python API image (`dev-hops-api`, from `docker/Dockerfile`; CHAOS-7674). The root compose stack does not run it (CHAOS-8361): a router on host port 8000 sends each request to the Go api or the Go query-api. The last published image stays in the registry for the bigboy test host until that stack moves to Go; the Python API source is removed. The Go images (`dev-health-go-*`) are the published images; run CLI jobs with `dho`.
 
 ## Key docs
 

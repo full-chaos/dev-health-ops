@@ -35,10 +35,8 @@ mutation -- the job, queue and route verbs and every write verb below -- require
 `audit_unavailable` and changes nothing. `--review-evidence`, where a verb takes it, keeps its own meaning. The
 metrics/workgraph repair verbs (`workgraph repair`,
 `metrics execution-repair`, bulk `daily-redrive`) run Go-native Postgres transactions on the operator (coordinator)
-DB role and need no API bridge (CHAOS-5459). `dev-hops` = the Python CLI (`src/dev_health_ops/cli.py`); every `dev-hops metrics ...`
-verb below is marked **no longer legacy** (dispatches through the Go worker, CHAOS-5055/#2232), **legacy**
-(still a standalone Python compute path), or **deleted** (CHAOS-5307) -- see the table below for which is
-which per verb.
+DB role and need no API bridge (CHAOS-5459). The Python `dev-hops` CLI was deleted. The `dev-hops metrics ...` rows below record
+that deletion and name the `dho` verb that replaces each one.
 
 ## (a) Daily metrics backfill / redrive per org/day/family
 
@@ -52,8 +50,8 @@ which per verb.
 | `dho workers metrics remaining trigger-backstop --family <work_item_attribution\|complexity\|dora\|release_impact\|capacity\|recommendations> --org <uuid> [--day <YYYY-MM-DD>] [--today] --review-evidence "<text>" [--team <uuid>\|--all-teams] [--window <days>] --reason <code> --correlation-id <id>` | `main.go:2148-2285` | Trigger a fixed-schedule backstop family NOW instead of waiting for its own occurrence (e.g. work_item_attribution's watermark-driven recompute). `--day` is a **dedup key for the run this becomes, not a compute window** -- work_item_attribution always recomputes from its live watermark regardless of `--day`. Defaults to yesterday UTC; `--today` is required to target today explicitly (coexists with, never suppresses, the schedule's own occurrence -- the two compete for the family's single worker slot, not correctness). `capacity`/`recommendations` require exactly one of `--team`/`--all-teams`; every other family ignores both. |
 | `dev-hops metrics daily` / `rebuild` | deleted (spec S2) | Run `dho workers metrics daily-start` (the row above). |
 | `dev-hops metrics complexity` / `dora` / `capacity` | deleted (spec S2) | Run `dho workers metrics remaining trigger-backstop --family <name> --reason <code> --correlation-id <id>` (the row above). |
-| `dev-hops metrics compounding-risk` | `job_compounding_risk.py` | **Legacy**, duplicate coverage -- `job_daily.py`'s finalize already writes this nightly. |
-| `dev-hops metrics validate-flags` | `job_ff_validation.py` | Read-only diagnostic, no write. Safe to run any time. |
+| `dev-hops metrics compounding-risk` | deleted (CHAOS-5308) | No operator verb. The daily finalize already writes `compounding_risk_daily` nightly. |
+| `dho metrics validate-flags` | `internal/metricscli/validateflags.go` | Read-only diagnostic, no write. Safe to run any time. |
 
 Daily-metrics family compute status (source of truth: `internal/jobs/metrics/daily/families.json` +
 `docs/go-migration-matrix.md`): all real families are NATIVE (Go computes and writes) **except**
@@ -103,7 +101,7 @@ Diff it against the same query after step 5. This is a prerequisite, not an opti
 
 | Command | Source | When to use |
 |---|---|---|
-| No manual trigger | `internal/workerservice/provider_sync.go`'s work-items dataset case (CHAOS-5351) | `work_item_team_attributions` is recomputed automatically: the native Go provider-sync route (river `sync_provider` queue, one work-items case per provider) and webhooks keep it current for every provider, with no operator action needed. `dev-hops sync work-items` is deleted (CHAOS-5351) -- it called the now-deleted `run_work_items_sync_job` directly. `dev-hops backfill run` still exists but now dispatches a provider backfill through the SAME native route (`run_backfill_via_planner`) rather than recomputing attributions on its own; use `dho workers jobs list --queue sync_provider --kind <kind>` / `jobs inspect <id>` to inspect what the river queue is doing for a given org's units. |
+| No manual trigger | `internal/workerservice/provider_sync.go`'s work-items dataset case (CHAOS-5351) | `work_item_team_attributions` is recomputed automatically: the native Go provider-sync route (river `sync_provider` queue, one work-items case per provider) and webhooks keep it current for every provider, with no operator action needed. `dev-hops sync work-items` is deleted (CHAOS-5351). `dho backfill run` dispatches a provider backfill through the SAME native route rather than recomputing attributions on its own; use `dho workers jobs list --queue sync_provider --kind <kind>` / `jobs inspect <id>` to inspect what the river queue is doing for a given org's units. |
 | `dho workers workgraph trigger --org <uuid> [--from <YYYY-MM-DD>] [--to <YYYY-MM-DD>] --review-evidence "<text>" [--dry-run] --reason <code> --correlation-id <id>` | `trigger_workgraph.go:98-283` (CHAOS-5172) | Step 3: enqueue a fresh `workgraph.build` request through the same `workgraph.RequestWriter.WriteTx` path the automatic post-sync/scheduled producers use. |
 | `dho workers investment trigger --org <uuid> [--from <YYYY-MM-DD>] [--to <YYYY-MM-DD>] --review-evidence "<text>" [--dry-run] --reason <code> --correlation-id <id>` | `trigger_investment.go:73-222` (CHAOS-5173) | Step 4, native path: enqueue a fresh `investment.materialize` request through the native executor. Drops every flag with no Go-side equivalent (`--window-days`, `--repo-id`, `--team-id`, every LLM flag, `--force`, `--persist-evidence-snippets`, `--allow-unscoped`, `--analytics-db`/`--db`) -- only an org id and an optional `--from`/`--to` window exist on the request. |
 | `dho workers providersync retire-linear-pseudo-projects [--org <uuid>] [--dry-run] --reason <code> --correlation-id <id>` | `main.go:1408-1466` (CHAOS-4530 follow-up) | One-time cleanup of `{org_id}:linear:{team_key}` pseudo-project rows in `projects`. Destructive (physical delete), authorized before any ClickHouse call is attempted. |
@@ -112,7 +110,7 @@ Diff it against the same query after step 5. This is a prerequisite, not an opti
 
 **Team-attribution recovery order** (`docs/contribute/architecture/team-attribution.md` §5): (1) merge +
 deploy the mechanism, (2) confirm ALL providers' work-items ingestion is current (automatic via native
-provider sync -- `dev-hops backfill run` if a specific window needs forcing), (3) `workgraph trigger`, (4)
+provider sync -- `dho backfill run` if a specific window needs forcing), (3) `workgraph trigger`, (4)
 `investment trigger`, (5) verify via the query-time join (coverage %, chord). Ingestion does **not** fan out
 to work-graph or investment automatically; both must be triggered explicitly.
 
@@ -183,14 +181,13 @@ See §(c) above for the full ordered recovery sequence these two commands partic
 
 Provider sync raw ingestion is essentially 100% NATIVE for every provider/dataset pair (github, gitlab,
 jira, linear, launchdarkly, pagerduty -- see `docs/go-migration-matrix.md` SYNC's generated table; the one
-exception is jira team-membership auto-import, still Python, CHAOS-4198). `dev-hops sync <git|prs|blame|
-cicd|deployments|incidents|teams>` is an operator-trigger shell over the same native Go sync-dispatch path
-(`sync_processor.register_commands`) -- the CLI verb dispatches through the native path, it is not itself
-a Python compute engine, unlike the metrics CLI verbs in §(a). `work-items` has NO CLI verb at all
+exception is jira team-membership auto-import, still Python, CHAOS-4198). `dho sync <git|prs|blame|
+cicd|deployments|incidents|security|tests|teams>` runs the same native Go provider routes in-process,
+in your terminal session, with no scheduler. `work-items` has NO CLI verb at all
 (CHAOS-5351 deleted `sync work-items`) -- it is synced automatically by the native provider-sync route and
-by webhooks; use `dev-hops backfill run --config-id <uuid>` to force a window.
+by webhooks; use `dho backfill run --config-id <uuid>` to force a window.
 
-Run `dev-hops sync --help` for the exact current flag syntax before using it in prod.
+Run `dho sync <target> --help` for the exact current flag syntax before using it in prod.
 
 Incremental-window/backfill semantics (watermarks, heavy-dataset window ratchet, corrupt-watermark recovery)
 are documented in [Ingestion and backfills](../run/ingestion-and-backfills.md), which describes planner
@@ -217,7 +214,7 @@ After fixing a defect in daily metrics computation, run this sequence to backfil
 1. `migrate` (Alembic + ClickHouse) → `go-river-provision` (grants) → `go-river-migrate` (River schema) →
    `go-contractcheck` → workers/reconciler/scheduler/stream runners. This ordering is a dependency chain, not
    a convention -- see [Run workers and jobs § Deploy the Go fleet in order](../run/workers-and-jobs.md#deploy-the-go-fleet-in-order).
-2. Re-run `dev-hops sync <dataset>` (or the native sync-dispatch path directly) per provider, per org --
+2. Re-run `dho sync <dataset>` (or the native sync-dispatch path directly) per provider, per org --
    raw ingestion, native.
 3. `metrics daily-start` (or the automatic post-sync fanout) per org/day-range -- daily metrics, mostly
    native.

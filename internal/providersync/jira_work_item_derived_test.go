@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"github.com/full-chaos/dev-health-ops/internal/jobs/metrics/workitemmetrics"
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/fakehttp"
 	"testing"
 	"time"
@@ -497,4 +498,12 @@ func TestJiraCanonicalAliasesComposeSixteenDestinationsPlusWorklogs(t *testing.T
 			}
 		})
 	}
+}
+
+// LoadStoredBlockingFacts: this double holds no stored blocking relation
+// (CHAOS-8493), so no item of its units has an open blocker.
+func (source jiraDerivedFailingContextSource) LoadStoredBlockingFacts(
+	context.Context, Claim, []string, []workitemmetrics.BlockingRelation,
+) ([]workitemmetrics.BlockingRelation, []workitemmetrics.RelationEnd, error) {
+	return nil, nil, nil
 }

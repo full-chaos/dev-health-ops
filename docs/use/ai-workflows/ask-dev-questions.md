@@ -17,6 +17,8 @@ lifecycle: active
 Ask Dev answers a bounded set of question families about work your organization already has data for. It is a read-only investigator: it looks things up, explains what it found, and shows the evidence. Knowing the boundary in advance is faster than discovering it one refusal at a time.
 {: .fc-page-lede }
 
+> **Note:** The Go api does not serve the Ask Dev (`/api/v1/dev`) surface. This page is a record of the Python surface that was removed.
+
 For the surfaces themselves — the in-app window, the `/dev` workspace, shared conversation history, and retention — see [Ask Dev, Context Fabric, and agent context](index.md#ask-dev-context-fabric-and-agent-context). For what an answer's parts mean, see [Read an Ask Dev answer](ask-dev-answers.md).
 
 <figure class="fc-product-figure" markdown="1">

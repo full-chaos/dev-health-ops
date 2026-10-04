@@ -3,23 +3,23 @@
     "last_ingested_at": "2024-01-08T10:00:00",
     "latest_successful_sync_at": null,
     "sources": {
+      "ci": "ok",
       "github": "ok",
-      "jira": "degraded",
-      "ci": "ok"
+      "jira": "degraded"
     },
     "coverage": {
-      "repos_covered_pct": 80.0,
-      "prs_linked_to_issues_pct": 80.0,
-      "issues_with_cycle_states_pct": 90.0
+      "repos_covered_pct": 80,
+      "prs_linked_to_issues_pct": 80,
+      "issues_with_cycle_states_pct": 90
     }
   },
   "deltas": [
     {
       "metric": "cycle_time",
       "label": "Cycle Time",
-      "value": 2.0,
+      "value": 2,
       "unit": "days",
-      "delta_pct": -20.0,
+      "delta_pct": -20,
       "spark": [
         {
           "ts": "2024-01-02T00:00:00",
@@ -34,9 +34,9 @@
     {
       "metric": "review_latency",
       "label": "Review Latency",
-      "value": 5.0,
+      "value": 5,
       "unit": "hours",
-      "delta_pct": 25.0,
+      "delta_pct": 25,
       "spark": [
         {
           "ts": "2024-01-02T00:00:00",
@@ -51,64 +51,64 @@
     {
       "metric": "throughput",
       "label": "Throughput",
-      "value": 20.0,
+      "value": 20,
       "unit": "items",
       "delta_pct": 33.33333333333333,
       "spark": [
         {
           "ts": "2024-01-02T00:00:00",
-          "value": 9.0
+          "value": 9
         },
         {
           "ts": "2024-01-05T00:00:00",
-          "value": 11.0
+          "value": 11
         }
       ]
     },
     {
       "metric": "deploy_freq",
       "label": "Deploy Frequency",
-      "value": 3.0,
+      "value": 3,
       "unit": "deploys",
-      "delta_pct": 0.0,
+      "delta_pct": 0,
       "spark": [
         {
           "ts": "2024-01-02T00:00:00",
-          "value": 1.0
+          "value": 1
         },
         {
           "ts": "2024-01-05T00:00:00",
-          "value": 2.0
+          "value": 2
         }
       ]
     },
     {
       "metric": "churn",
       "label": "Code Churn",
-      "value": 1000.0,
+      "value": 1000,
       "unit": "loc",
-      "delta_pct": 25.0,
+      "delta_pct": 25,
       "spark": [
         {
           "ts": "2024-01-02T00:00:00",
-          "value": 400.0
+          "value": 400
         },
         {
           "ts": "2024-01-05T00:00:00",
-          "value": 600.0
+          "value": 600
         }
       ]
     },
     {
       "metric": "wip_saturation",
       "label": "WIP Saturation",
-      "value": 50.0,
+      "value": 50,
       "unit": "%",
       "delta_pct": 24.999999999999993,
       "spark": [
         {
           "ts": "2024-01-02T00:00:00",
-          "value": 45.0
+          "value": 45
         },
         {
           "ts": "2024-01-05T00:00:00",
@@ -119,85 +119,85 @@
     {
       "metric": "blocked_work",
       "label": "Blocked Work",
-      "value": 10.0,
+      "value": 10,
       "unit": "hours",
-      "delta_pct": 25.0,
+      "delta_pct": 25,
       "spark": [
         {
           "ts": "2024-01-02T00:00:00",
-          "value": 6.0
+          "value": 6
         },
         {
           "ts": "2024-01-05T00:00:00",
-          "value": 4.0
+          "value": 4
         }
       ]
     },
     {
       "metric": "change_failure_rate",
       "label": "Change Failure Rate",
-      "value": 10.0,
+      "value": 10,
       "unit": "%",
       "delta_pct": 25.000000000000007,
       "spark": [
         {
           "ts": "2024-01-02T00:00:00",
-          "value": 9.0
+          "value": 9
         },
         {
           "ts": "2024-01-05T00:00:00",
-          "value": 11.0
+          "value": 11
         }
       ]
     },
     {
       "metric": "rework_ratio",
       "label": "Rework Ratio",
-      "value": 20.0,
+      "value": 20,
       "unit": "%",
       "delta_pct": 33.33333333333335,
       "spark": [
         {
           "ts": "2024-01-02T00:00:00",
-          "value": 18.0
+          "value": 18
         },
         {
           "ts": "2024-01-05T00:00:00",
-          "value": 22.0
+          "value": 22
         }
       ]
     },
     {
       "metric": "pr_rework_ratio",
       "label": "PR Rework Ratio",
-      "value": 12.0,
+      "value": 12,
       "unit": "%",
       "delta_pct": 19.99999999999999,
       "spark": [
         {
           "ts": "2024-01-02T00:00:00",
-          "value": 11.0
+          "value": 11
         },
         {
           "ts": "2024-01-05T00:00:00",
-          "value": 13.0
+          "value": 13
         }
       ]
     },
     {
       "metric": "ci_success",
       "label": "CI Success Rate",
-      "value": 95.0,
+      "value": 95,
       "unit": "%",
       "delta_pct": 5.555555555555548,
       "spark": [
         {
           "ts": "2024-01-02T00:00:00",
-          "value": 93.0
+          "value": 93
         },
         {
           "ts": "2024-01-05T00:00:00",
-          "value": 97.0
+          "value": 97
         }
       ]
     }
@@ -206,7 +206,7 @@
     {
       "theme": "feature_delivery",
       "label": "Feature Delivery",
-      "allocation": 100.0,
+      "allocation": 100,
       "allocation_pct": 66.66666666666666,
       "prs_merged": 20,
       "churn_loc": 500
@@ -214,7 +214,7 @@
     {
       "theme": "maintenance",
       "label": "Maintenance / Tech Debt",
-      "allocation": 50.0,
+      "allocation": 50,
       "allocation_pct": 33.33333333333333,
       "prs_merged": 10,
       "churn_loc": 300
@@ -224,7 +224,7 @@
     {
       "id": "s1",
       "text": "Rework Ratio rose 33% driven by team-alpha.",
-      "evidence_link": "/api/v1/explain?metric=rework_ratio&scope_type=repo&scope_id=checkout-service&range_days=7&compare_days=7"
+      "evidence_link": "/api/v1/explain?metric=rework_ratio\u0026scope_type=repo\u0026scope_id=checkout-service\u0026range_days=7\u0026compare_days=7"
     }
   ],
   "tiles": {
@@ -235,7 +235,7 @@
     },
     "measure": {
       "title": "Measure",
-      "subtitle": "Coverage & freshness",
+      "subtitle": "Coverage \u0026 freshness",
       "link": "/explore?view=measure"
     },
     "align": {
@@ -255,7 +255,7 @@
     "evidence": [
       {
         "label": "Drill into Rework Ratio",
-        "link": "/api/v1/explain?metric=rework_ratio&scope_type=repo&scope_id=checkout-service&range_days=7&compare_days=7"
+        "link": "/api/v1/explain?metric=rework_ratio\u0026scope_type=repo\u0026scope_id=checkout-service\u0026range_days=7\u0026compare_days=7"
       }
     ],
     "experiments": [
@@ -268,37 +268,37 @@
       "ts": "2024-01-08T12:00:00Z",
       "type": "regression",
       "text": "Review Latency shifted 25% over the last 7 days.",
-      "link": "/api/v1/explain?metric=review_latency&scope_type=repo&scope_id=checkout-service&range_days=7&compare_days=7"
+      "link": "/api/v1/explain?metric=review_latency\u0026scope_type=repo\u0026scope_id=checkout-service\u0026range_days=7\u0026compare_days=7"
     },
     {
       "ts": "2024-01-08T12:00:00Z",
       "type": "regression",
       "text": "Throughput shifted 33% over the last 7 days.",
-      "link": "/api/v1/explain?metric=throughput&scope_type=repo&scope_id=checkout-service&range_days=7&compare_days=7"
+      "link": "/api/v1/explain?metric=throughput\u0026scope_type=repo\u0026scope_id=checkout-service\u0026range_days=7\u0026compare_days=7"
     },
     {
       "ts": "2024-01-08T12:00:00Z",
       "type": "regression",
       "text": "Code Churn shifted 25% over the last 7 days.",
-      "link": "/api/v1/explain?metric=churn&scope_type=repo&scope_id=checkout-service&range_days=7&compare_days=7"
+      "link": "/api/v1/explain?metric=churn\u0026scope_type=repo\u0026scope_id=checkout-service\u0026range_days=7\u0026compare_days=7"
     },
     {
       "ts": "2024-01-08T12:00:00Z",
       "type": "regression",
       "text": "Blocked Work shifted 25% over the last 7 days.",
-      "link": "/api/v1/explain?metric=blocked_work&scope_type=repo&scope_id=checkout-service&range_days=7&compare_days=7"
+      "link": "/api/v1/explain?metric=blocked_work\u0026scope_type=repo\u0026scope_id=checkout-service\u0026range_days=7\u0026compare_days=7"
     },
     {
       "ts": "2024-01-08T12:00:00Z",
       "type": "regression",
       "text": "Change Failure Rate shifted 25% over the last 7 days.",
-      "link": "/api/v1/explain?metric=change_failure_rate&scope_type=repo&scope_id=checkout-service&range_days=7&compare_days=7"
+      "link": "/api/v1/explain?metric=change_failure_rate\u0026scope_type=repo\u0026scope_id=checkout-service\u0026range_days=7\u0026compare_days=7"
     },
     {
       "ts": "2024-01-08T12:00:00Z",
       "type": "regression",
       "text": "Rework Ratio shifted 33% over the last 7 days.",
-      "link": "/api/v1/explain?metric=rework_ratio&scope_type=repo&scope_id=checkout-service&range_days=7&compare_days=7"
+      "link": "/api/v1/explain?metric=rework_ratio\u0026scope_type=repo\u0026scope_id=checkout-service\u0026range_days=7\u0026compare_days=7"
     }
   ],
   "health_state": {
@@ -343,7 +343,7 @@
       "evidence_count": 2,
       "why_it_matters": "Rework Ratio appears rising; rework suggests unclear requirements or fragile implementation paths may be taxing focus.",
       "recommended_action": "Review reopened or rewritten work and pick one root-cause experiment.",
-      "evidence_ref": "/api/v1/explain?metric=rework_ratio&scope_type=repo&scope_id=checkout-service&range_days=7&compare_days=7",
+      "evidence_ref": "/api/v1/explain?metric=rework_ratio\u0026scope_type=repo\u0026scope_id=checkout-service\u0026range_days=7\u0026compare_days=7",
       "category": "durability",
       "scope_entity": null
     },
@@ -361,7 +361,7 @@
       "evidence_count": 2,
       "why_it_matters": "Review Latency appears rising; review queues shape how quickly teams can learn from completed work.",
       "recommended_action": "Rebalance reviewer rotation and clear stale review queues.",
-      "evidence_ref": "/api/v1/explain?metric=review_latency&scope_type=repo&scope_id=checkout-service&range_days=7&compare_days=7",
+      "evidence_ref": "/api/v1/explain?metric=review_latency\u0026scope_type=repo\u0026scope_id=checkout-service\u0026range_days=7\u0026compare_days=7",
       "category": "dynamics",
       "scope_entity": null
     },
@@ -369,7 +369,7 @@
       "id": "metric:churn",
       "title": "Code Churn appears up",
       "metric": "churn",
-      "current_value": "1000 loc",
+      "current_value": "1,000 loc",
       "prior_value": "800 loc",
       "delta": "+25%",
       "direction": "up",
@@ -379,7 +379,7 @@
       "evidence_count": 2,
       "why_it_matters": "Code Churn appears rising; higher churn suggests effort may be cycling through rework rather than durable progress.",
       "recommended_action": "Inspect hotspots and stabilize rework loops before expanding the change set.",
-      "evidence_ref": "/api/v1/explain?metric=churn&scope_type=repo&scope_id=checkout-service&range_days=7&compare_days=7",
+      "evidence_ref": "/api/v1/explain?metric=churn\u0026scope_type=repo\u0026scope_id=checkout-service\u0026range_days=7\u0026compare_days=7",
       "category": "durability",
       "scope_entity": null
     },
@@ -397,7 +397,7 @@
       "evidence_count": 2,
       "why_it_matters": "WIP Saturation appears rising; saturation suggests active work may exceed the team's coordination capacity.",
       "recommended_action": "Set a short-term WIP limit and finish active items before starting more.",
-      "evidence_ref": "/api/v1/explain?metric=wip_saturation&scope_type=repo&scope_id=checkout-service&range_days=7&compare_days=7",
+      "evidence_ref": "/api/v1/explain?metric=wip_saturation\u0026scope_type=repo\u0026scope_id=checkout-service\u0026range_days=7\u0026compare_days=7",
       "category": "dynamics",
       "scope_entity": null
     },
@@ -415,7 +415,7 @@
       "evidence_count": 2,
       "why_it_matters": "Blocked Work appears rising; blocked time suggests dependencies may be consuming delivery capacity.",
       "recommended_action": "Triage blocked items by owner and unblock the oldest high-impact queue first.",
-      "evidence_ref": "/api/v1/explain?metric=blocked_work&scope_type=repo&scope_id=checkout-service&range_days=7&compare_days=7",
+      "evidence_ref": "/api/v1/explain?metric=blocked_work\u0026scope_type=repo\u0026scope_id=checkout-service\u0026range_days=7\u0026compare_days=7",
       "category": "delivery",
       "scope_entity": null
     },
@@ -433,7 +433,7 @@
       "evidence_count": 2,
       "why_it_matters": "Change Failure Rate appears rising; failed changes suggest reliability work may be competing with delivery.",
       "recommended_action": "Inspect recent failed changes and tighten pre-release checks around the common failure mode.",
-      "evidence_ref": "/api/v1/explain?metric=change_failure_rate&scope_type=repo&scope_id=checkout-service&range_days=7&compare_days=7",
+      "evidence_ref": "/api/v1/explain?metric=change_failure_rate\u0026scope_type=repo\u0026scope_id=checkout-service\u0026range_days=7\u0026compare_days=7",
       "category": "durability",
       "scope_entity": null
     },
@@ -451,7 +451,7 @@
       "evidence_count": 2,
       "why_it_matters": "PR Rework Ratio appears rising; PR Rework Ratio movement suggests an operating signal to inspect.",
       "recommended_action": "Inspect supporting evidence and choose one reversible operating experiment.",
-      "evidence_ref": "/api/v1/explain?metric=pr_rework_ratio&scope_type=repo&scope_id=checkout-service&range_days=7&compare_days=7",
+      "evidence_ref": "/api/v1/explain?metric=pr_rework_ratio\u0026scope_type=repo\u0026scope_id=checkout-service\u0026range_days=7\u0026compare_days=7",
       "category": "durability",
       "scope_entity": null
     },
@@ -469,7 +469,7 @@
       "evidence_count": 2,
       "why_it_matters": "Throughput appears rising; throughput movement changes the team's ability to keep commitments credible.",
       "recommended_action": "Review WIP and dependency queues before changing delivery commitments.",
-      "evidence_ref": "/api/v1/explain?metric=throughput&scope_type=repo&scope_id=checkout-service&range_days=7&compare_days=7",
+      "evidence_ref": "/api/v1/explain?metric=throughput\u0026scope_type=repo\u0026scope_id=checkout-service\u0026range_days=7\u0026compare_days=7",
       "category": "delivery",
       "scope_entity": null
     },
@@ -487,7 +487,7 @@
       "evidence_count": 2,
       "why_it_matters": "Cycle Time appears falling; longer cycle time suggests delivery work may spend more time waiting than moving.",
       "recommended_action": "Inspect the slowest stage and rebalance active work before adding scope.",
-      "evidence_ref": "/api/v1/explain?metric=cycle_time&scope_type=repo&scope_id=checkout-service&range_days=7&compare_days=7",
+      "evidence_ref": "/api/v1/explain?metric=cycle_time\u0026scope_type=repo\u0026scope_id=checkout-service\u0026range_days=7\u0026compare_days=7",
       "category": "delivery",
       "scope_entity": null
     },
@@ -505,7 +505,7 @@
       "evidence_count": 2,
       "why_it_matters": "CI Success Rate appears rising; CI health suggests whether the delivery path is dependable.",
       "recommended_action": "Inspect failing pipelines and restore the most common broken check first.",
-      "evidence_ref": "/api/v1/explain?metric=ci_success&scope_type=repo&scope_id=checkout-service&range_days=7&compare_days=7",
+      "evidence_ref": "/api/v1/explain?metric=ci_success\u0026scope_type=repo\u0026scope_id=checkout-service\u0026range_days=7\u0026compare_days=7",
       "category": "durability",
       "scope_entity": null
     },
@@ -523,7 +523,7 @@
       "evidence_count": 2,
       "why_it_matters": "Deploy Frequency appears flat; deployment cadence suggests whether finished work can reach users smoothly.",
       "recommended_action": "Check release blockers and restore the smallest safe deployment path.",
-      "evidence_ref": "/api/v1/explain?metric=deploy_freq&scope_type=repo&scope_id=checkout-service&range_days=7&compare_days=7",
+      "evidence_ref": "/api/v1/explain?metric=deploy_freq\u0026scope_type=repo\u0026scope_id=checkout-service\u0026range_days=7\u0026compare_days=7",
       "category": "delivery",
       "scope_entity": null
     }

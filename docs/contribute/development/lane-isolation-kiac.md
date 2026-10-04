@@ -61,7 +61,7 @@ flowchart TB
             apga[("trial-postgres")]
             acha[("trial-clickhouse")]
             afka[("trial-falkordb")]
-            aapp["ops api · metrics-api · web · valkey<br/>3 × pgbouncer · 9 go-worker groups"]
+            aapp["go-api · query-api · web · valkey<br/>3 × pgbouncer · 9 go-worker groups"]
             aacr["acr-api · acr-projector"]
             aapp --> apga & acha
             aacr --> apga & acha & afka
@@ -70,7 +70,7 @@ flowchart TB
             bpga[("trial-postgres")]
             bcha[("trial-clickhouse")]
             bfka[("trial-falkordb")]
-            bapp["ops api · metrics-api · web · valkey<br/>3 × pgbouncer · 9 go-worker groups"]
+            bapp["go-api · query-api · web · valkey<br/>3 × pgbouncer · 9 go-worker groups"]
             bacr["acr-api · acr-projector"]
             bapp --> bpga & bcha
             bacr --> bpga & bcha & bfka
@@ -224,11 +224,11 @@ Every path is explicit — the build must happen in the **ops** worktree, while
 the image bridge lives in the ACR one:
 
 ```bash
-# 1. ops runtime, built from the OPS worktree
+# 1. ops runtime (the dho image), built from the OPS worktree
 SHA=$(git -C "$OPS_WT" rev-parse --verify HEAD)
-docker build --target api \
-  --build-arg "SETUPTOOLS_SCM_PRETEND_VERSION=0.0.0+g${SHA:0:12}" \
-  -f "$OPS_WT/docker/Dockerfile" -t "dev-health-ops-local:${SHA:0:12}" "$OPS_WT"
+docker build --target dho \
+  --build-arg "COMMIT=${SHA:0:12}" \
+  -f "$OPS_WT/docker/go-worker.Dockerfile" -t "ghcr.io/full-chaos/dev-health-go-dho:local" "$OPS_WT"
 
 # 1b. the web image. The Compose stack builds it as dev-health-web:latest; the
 #     ghcr tag below only exists if you pulled it. `docker save` neither pulls
@@ -237,11 +237,9 @@ docker build --target api \
 docker image inspect ghcr.io/full-chaos/dev-health-web:0.1.0 >/dev/null 2>&1 \
   || docker tag dev-health-web:latest ghcr.io/full-chaos/dev-health-web:0.1.0
 
-# 2. the complete set. The Go worker, web and ACR images are the ones the
-#    Compose stack already builds -- `docker images | grep dev-health` shows
-#    them. Substitute your own ops tag on the first line.
+# 2. the complete set. The web and ACR images are the ones the Compose stack
+#    already builds -- `docker images | grep dev-health` shows them.
 cat > /tmp/image-list.txt <<EOF
-dev-health-ops-local:${SHA:0:12}
 ghcr.io/full-chaos/dev-health-web:0.1.0
 dev-health-acr:dev
 ghcr.io/full-chaos/dev-health-go-dho:local
@@ -571,25 +569,14 @@ The ACR chart's values schema has no `httpRoute` key; adding one fails
 rendering. The three Secrets are created in step 6, before these installs, because
 the ACR migration hook resolves them at deploy time.
 
-Two things the values must NOT do:
+Two rules for the values:
 
-- **Do not set `migrations.hook.secretData.MIGRATION_DATABASE_URI`.** The chart
-  documents it as preferred and as what activates the River step, but neither
-  way of using it works:
-    - **Set it alongside `POSTGRES_URI`** and the run dies with
-      `ValueError: --db cannot be combined with MIGRATION_DATABASE_URI`,
-      because `cli.py:741` defaults the global `--db` from
-      `POSTGRES_URI`/`DATABASE_URI`.
-    - **Set it alone** and the run dies with `migrate postgres: error: missing
-      required input(s): PostgreSQL semantic database`. The migration Secret
-      then holds only `MIGRATION_DATABASE_URI` and `CLICKHOUSE_URI` —
-      `_helpers.tpl`'s `dev-health.migrationSecretData` deliberately suppresses
-      `POSTGRES_URI`/`DATABASE_URI` once a dedicated URI is present — but the
-      Job's command still invokes `dev-hops migrate postgres` **without passing
-      `--db`**, and the CLI never reads `MIGRATION_DATABASE_URI`, so Alembic
-      never sees a DSN at all.
-
-    Set `POSTGRES_URI` instead and run River separately, per step 5.
+- **Do not set `migrations.hook.secretData.MIGRATION_DATABASE_URI` in this recipe.**
+  The migrate Job runs `dho migrate upgrade`, which takes the database from
+  `MIGRATION_DATABASE_URI`, else `POSTGRES_URI` (see
+  [Go worker Helm lifecycle](../architecture/go-worker-helm-lifecycle.md)). This
+  recipe sets `POSTGRES_URI` and runs River separately, per step 5; the
+  `MIGRATION_DATABASE_URI` path was not exercised in a kiac lane.
 - **Leave `sync-provider` at `replicas: 0`.** That group cannot compose until
   the provider job-routes are activated, and the chart renders no
   route-activation Job (Compose does this with four `*-route-activate`

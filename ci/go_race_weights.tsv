@@ -21,6 +21,7 @@ cmd/gqlgen-guard	69
 cmd/registrydump	1
 contracts/graphql/v1	1
 contracts/jobs/v1	1
+contracts/sync-dispatch/v1	1
 deploy/helm/dev-health	27
 internal/admincli	1
 internal/adminops	19
@@ -149,10 +150,12 @@ internal/jobs/metrics/daily/reviewedges	1
 internal/jobs/metrics/finite	1
 internal/jobs/metrics/numerical	4
 internal/jobs/metrics/numerical/cpyrandom	4
+internal/jobs/metrics/querybound	1
 internal/jobs/metrics/remaining	31
 internal/jobs/metrics/remaining/stepcause	68
 internal/jobs/metrics/testops	1
 internal/jobs/metrics/workgraphedges	1
+internal/jobs/metrics/workitemblockers	1
 internal/jobs/metrics/workitemmetrics	1
 internal/jobs/operational	4
 internal/jobs/pagerduty	1
@@ -224,6 +227,7 @@ internal/queryapi/chpairliteral	1
 internal/queryapi/cognitiveload	1
 internal/queryapi/complexitytimeseries	1
 internal/queryapi/compoundingrisk	1
+internal/queryapi/coveragebaselines	1
 internal/queryapi/datahealth	1
 internal/queryapi/digest	1
 internal/queryapi/drilldown	1
@@ -261,6 +265,7 @@ internal/queryapi/scopelabel	1
 internal/queryapi/security	1
 internal/queryapi/server	26
 internal/queryapi/teamscope	1
+internal/queryapi/testopsjobfailures	1
 internal/queryapi/testopsrisk	1
 internal/queryapi/throughputforecast	1
 internal/queryapi/timewindow	3
@@ -338,6 +343,7 @@ internal/testsupport/venuechanged	15
 internal/testsupport/venueoracle	76
 internal/testsupport/venueoracle/goldenhygiene	60
 internal/testsupport/venueoracle/goldenrecord	5
+internal/websmoke	3
 internal/workersctl	10
 internal/workerservice	20
 internal/workitemcontract	1

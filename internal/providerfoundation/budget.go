@@ -290,6 +290,8 @@ type Metrics struct {
 	// jiraDevStatus counts CHAOS-4757's dev-status (GitHub-for-Jira panel)
 	// fetches, by outcome -- see RecordJiraDevStatus.
 	jiraDevStatus map[string]uint64
+	// gitlabClosingMR counts CHAOS-8526's per-issue closed_by fetches, by outcome -- see RecordGitLabClosingMRFetch.
+	gitlabClosingMR map[string]uint64
 }
 
 func NewMetrics() *Metrics {
@@ -320,6 +322,7 @@ func NewMetrics() *Metrics {
 		chunkContinuation:              map[string]uint64{},
 		unitDeferred:                   map[string]uint64{},
 		jiraDevStatus:                  map[string]uint64{},
+		gitlabClosingMR:                map[string]uint64{},
 	}
 }
 
@@ -1160,8 +1163,15 @@ func (m *Metrics) RecordJiraSearchPage(outcome string) {
 // "nobody has this app installed" apart from "the endpoint is broken" at a
 // glance. Named to match jiraDevStatusUnavailableCause (providersync)
 // verbatim, per the ruling's exact wording.
+//
+// CHAOS-8526: the endpoint is asked once per SCM application type, so each type also has its own outcomes under the same
+// metric, `<application type>_<outcome>` (github_synced, gitlab_empty, ...): "empty" is a 200 that carried no pull
+// requests, so a wrong application-type value shows as a loud gitlab_empty / gitlab_dev_status_unavailable count instead
+// of a silent zero beside a "synced" issue.
 var metricJiraDevStatusOutcomeVocabulary = map[string]struct{}{
 	"synced": {}, "dev_status_unavailable": {}, "failed": {}, "cap_skipped": {},
+	"github_synced": {}, "github_empty": {}, "github_dev_status_unavailable": {}, "github_failed": {}, "github_cap_skipped": {},
+	"gitlab_synced": {}, "gitlab_empty": {}, "gitlab_dev_status_unavailable": {}, "gitlab_failed": {}, "gitlab_cap_skipped": {},
 }
 
 // MetricJiraDevStatusOutcomeLabel bounds the outcome label by allowlist, the
@@ -1186,6 +1196,29 @@ func (m *Metrics) RecordJiraDevStatus(outcome string) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	m.jiraDevStatus[label]++
+}
+
+// metricGitLabClosingMROutcomeVocabulary: synced (answered), transient_failed (5xx, timeout, 429, network: the watermark
+// is held and the next run asks again) and terminal_unavailable (404/403: the issue's closed_by is not readable with this
+// credential; retrying cannot help, so the watermark advances and the issue is reported incomplete). Two more terminal
+// reasons repeat on every run for the same issue and are handled the same way: terminal_page_cap (the answer exceeds the
+// page cap) and terminal_undecodable (the answer does not decode).
+var metricGitLabClosingMROutcomeVocabulary = map[string]struct{}{
+	"synced": {}, "transient_failed": {}, "terminal_unavailable": {}, "terminal_page_cap": {}, "terminal_undecodable": {},
+}
+
+// RecordGitLabClosingMRFetch counts one issue's closed_by fetch (CHAOS-8526), by outcome.
+func (m *Metrics) RecordGitLabClosingMRFetch(outcome string) {
+	if m == nil {
+		return
+	}
+	label := strings.ToLower(strings.TrimSpace(outcome))
+	if _, known := metricGitLabClosingMROutcomeVocabulary[label]; !known {
+		label = "other"
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.gitlabClosingMR[label]++
 }
 
 // metricWorkItemTeamAttributionSourceVocabulary is the closed set of
@@ -1648,6 +1681,13 @@ func (m *Metrics) WritePrometheus(writer io.Writer) error {
 		writer, "dev_health_jira_dev_status_total",
 		"Jira dev-status (GitHub-for-Jira panel) PRIMARY PR-issue link fetches, by outcome (CHAOS-4757). \"unavailable\" is the ruled clean no-op (no GitHub-for-Jira app configured for this issue), distinct from \"failed\" (a genuine fetch error).",
 		"outcome", m.jiraDevStatus,
+	); err != nil {
+		return err
+	}
+	if err := writeLabeledCounter(
+		writer, "dev_health_gitlab_closing_mr_fetch_total",
+		"GitLab per-issue closed_by (closing merge request) fetches, by outcome (CHAOS-8526). The terminal_* outcomes (404/403, page cap exceeded, undecodable answer) repeat on every run, so the watermark advances; \"transient_failed\" is a retryable failure (watermark held).",
+		"outcome", m.gitlabClosingMR,
 	); err != nil {
 		return err
 	}

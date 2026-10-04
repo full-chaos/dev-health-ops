@@ -11,31 +11,26 @@ no supported rollback target left below `river`. Editing this artifact alone
 still cannot activate or roll back a transport; that remains the audited
 durable route-row controller's job (`internal/syncroute`).
 
+One row state is outside that controller. A fresh database seeds every kind on
+`celery`, and with the rollback route retired the controller reads a row that
+is still on that seed as drift: it cannot move it. `dho migrate river` moves
+exactly that state (`celery`, rollback `none`, not paused, no live outbox
+claim) to `river` at `generation + 1`, from this artifact as embedded in the
+binary (`embed.go`), for the kinds it names as `river` with rollback `none`.
+It changes no row in any other state.
+
 All four wakeups are `at_least_once`. `post_sync` uses the same live-claim,
 publish-or-insert, and terminal-mark transaction boundary as the other kinds.
 On a publish or insert failure the claim is released with bounded backoff. The
 post-sync consumers are generation-safe: readers select the newest compute
 generation per logical key, so a re-drive cannot inflate their result.
 
-## Narrow bridge calls are a dependency, not a fifth route
+## No bridge calls into the Python api
 
-Two of the four native Go coordinator kinds also make a synchronous HTTP call
-back into `src/dev_health_ops/api/internal/worker_sync.py` as part of their
-OWN work, not as a routing decision this contract governs:
-
-* `reference_discovery` calls `/reference-discovery-populate` (identifiers
-  in, the populator's summary dict out) for the one step -- credential
-  resolution and the team/sprint import -- that stays Python-side
-  (CHAOS-4175, CHAOS-4198).
-* `dispatch_sync_run` no longer calls the api: credential resolution and the
-  six per-provider budget estimators run in-process in Go
-  (`internal/syncbudget`, CHAOS-6243).
-
-Neither call is `transport-routes.json`-governed: they are not claimed,
-published, or retried through the outbox/transport-route machinery this
-file describes, they carry no `route_generation`, and pausing or rolling
-back a kind's transport route here has no effect on them. They are a plain
-dependency of the Go worker's own business logic on Python-side machinery
-that has not been ported yet (see CHAOS-4198's residual-bridge inventory),
-gone once that porting lands -- not a parallel routing surface to reason
-about alongside the four coordinator kinds above.
+No native Go coordinator kind calls the Python api. The synchronous HTTP bridge
+into `src/dev_health_ops/api/internal/worker_sync.py` was removed with the
+Python api. `dispatch_sync_run` runs credential resolution and the six
+per-provider budget estimators in-process in Go (`internal/syncbudget`,
+CHAOS-6243), and reference discovery runs natively in Go. The error names in
+`internal/syncdispatchruntime/bridge.go` still carry the word "bridge" for the
+call path they replaced.

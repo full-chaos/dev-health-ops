@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/ClickHouse/clickhouse-go/v2/lib/driver"
+	"github.com/full-chaos/dev-health-ops/internal/jobs/metrics/workitemmetrics"
 	"github.com/full-chaos/dev-health-ops/internal/providerfoundation"
 	"github.com/full-chaos/dev-health-ops/internal/teamattribution"
 )
@@ -189,6 +190,23 @@ func (source jiraWorkItemClickHouseDerivationContextSource) LoadStoredInheritabl
 	return source.delegate.LoadStoredInheritableEdges(ctx, claim, sourceWorkItemIDs)
 }
 
+// LoadStoredBlockingFacts keeps the Jira-local source on the shared
+// blocking-facts contract (CHAOS-8493), fenced to Jira exactly as Load is:
+// the read is provider-neutral, because a Jira issue's blocker can be an item
+// another provider's sync stored.
+func (source jiraWorkItemClickHouseDerivationContextSource) LoadStoredBlockingFacts(
+	ctx context.Context,
+	claim Claim,
+	itemIDs []string,
+	fresh []workitemmetrics.BlockingRelation,
+) ([]workitemmetrics.BlockingRelation, []workitemmetrics.RelationEnd, error) {
+	if ctx == nil || claim.Validate() != nil || claim.Provider != "jira" ||
+		claim.Dataset != "work-items" {
+		return nil, nil, ErrInvalidConfiguration
+	}
+	return source.delegate.LoadStoredBlockingFacts(ctx, claim, itemIDs, fresh)
+}
+
 func NewJiraWorkItemDeriver(
 	conn driver.Conn,
 	lease providerfoundation.LeaseGuard,
@@ -251,6 +269,10 @@ func (deriver JiraWorkItemDeriver) Derive(
 		return JiraWorkItemDerivedRows{}, err
 	}
 	deriver.observations.recordStoredEdgeMerge(contextFacts.StoredEdgeMerge)
+	blocked, err := loadWorkItemBlockedIntervalsForProvider(ctx, "jira", canonicalClaim, githubRows, deriver.Source)
+	if err != nil {
+		return JiraWorkItemDerivedRows{}, err
+	}
 	result := JiraWorkItemDerivedRows{
 		EstimateCoverageMetricsDaily:   []JiraEstimateCoverageMetricsDailyRow{},
 		InvestmentClassificationsDaily: []JiraInvestmentClassificationDailyRow{},
@@ -276,7 +298,7 @@ func (deriver JiraWorkItemDeriver) Derive(
 		}
 
 		surfaces, err := buildWorkItemDerivedSurfacesForProvider(
-			"jira", claim, githubRows, day, normalizedAt, contextFacts,
+			"jira", claim, githubRows, day, normalizedAt, contextFacts, blocked,
 		)
 		if err != nil {
 			return JiraWorkItemDerivedRows{}, err

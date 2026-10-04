@@ -26,9 +26,9 @@ Dev Health separates semantic authority, analytics, asynchronous coordination, a
 - **River** is the PostgreSQL-backed execution queue the Go worker fleet uses for production jobs.
 - **Domain run tables** remain product-visible execution history. Bounded queue rows are not a replacement for durable domain evidence.
 
-## Python and Go PostgreSQL access
+## PostgreSQL access
 
-The Python API uses semantic PostgreSQL access. Transaction-mode PgBouncer is supported when prepared-statement behavior is disabled through the configured engine path.
+The Go api uses semantic PostgreSQL access. Transaction-mode PgBouncer is supported when `PGBOUNCER_TRANSACTION_MODE=true`, which the Go runtime reads as its domain-transaction-pooler setting.
 
 The Go coexistence foundation splits database responsibilities:
 

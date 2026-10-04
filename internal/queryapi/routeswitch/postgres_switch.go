@@ -178,7 +178,7 @@ func (s *PostgresSwitch) Enabled(operation string) bool {
 	ctx, cancel := context.WithTimeout(context.Background(), lookupTimeout)
 	defer cancel()
 	rows, err := s.pool.Query(ctx, liveModesSQL,
-		s.schemaDigest, acceptedDigests(documentDigest, s.legacyDigests[operation]), operation,
+		s.schemaDigest, AcceptedDigests(documentDigest, s.legacyDigests[operation]), operation,
 	)
 	if err != nil {
 		log.Printf("routeswitch: PostgresSwitch lookup failed for operation %q: %v", operation, err)
@@ -208,8 +208,11 @@ func (s *PostgresSwitch) Enabled(operation string) bool {
 	return anyReachable(modes, s.reachable)
 }
 
-// acceptedDigests is the operation's current digest followed by its legacy ones, without a repeat.
-func acceptedDigests(current string, legacy []string) []string {
+// AcceptedDigests is the operation's current digest followed by its legacy ones, without a repeat: the
+// document digests whose routing rows Enabled reads for the operation. Exported for the one other reader that
+// must agree with it, the routing status census (goapiproof.RoutingStatusRowsWithLegacy, CHAOS-8649), so the
+// census counts exactly the rows this switch serves from rather than a copy of the rule.
+func AcceptedDigests(current string, legacy []string) []string {
 	out := []string{current}
 	for _, digest := range legacy {
 		if digest != current && !contains(out, digest) {

@@ -775,6 +775,7 @@ func buildGitHubDerivedOracleSurfaces(
 	)
 	surfaces, err := buildWorkItemDerivedSurfacesForProvider(
 		provider, claim, rows, day, computedAt, derived,
+		nil,
 	)
 	if err != nil {
 		t.Fatal(err)

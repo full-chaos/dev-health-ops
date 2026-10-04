@@ -127,21 +127,6 @@ def setup_test_env(monkeypatch):
 
 
 @pytest.fixture(autouse=True)
-def mock_analytics_db_url(monkeypatch):
-    """Mock analytics DB URL so endpoints don't return 503 in tests.
-
-    CHAOS-6241 deleted main.py's own callers of ``_analytics_db_url``; the
-    former surviving importer, api/dev/router.py's ask-dev endpoints, was
-    itself deleted under CHAOS-6262.
-    """
-
-    def stub() -> str:
-        return "clickhouse://localhost:8123/default"
-
-    monkeypatch.setattr("dev_health_ops.api._health._analytics_db_url", stub)
-
-
-@pytest.fixture(autouse=True)
 def _reset_sync_db_engine():
     """Reset the cached global sync Postgres engine around every test.
 

@@ -104,9 +104,11 @@ type statusReportMCPRoot struct {
 // addition Python has no equivalent read for: ReviewEvidence and
 // RecordedBy (the row's own provenance columns, 0127),
 // UnreachableDocumentDigests (a dead row at the live schema digest under
-// a different document digest), ReachableReason, DeployedDigestState and
-// DeployedDocumentDigest (what the DEPLOYED plane, not just this row,
-// actually reports).
+// a document digest the operation does not accept), DocumentClass,
+// RowDocumentDigest and AcceptedDocumentDigests (CHAOS-8649: which accepted
+// document, current or legacy, the row sits under), ReachableReason,
+// DeployedDigestState and DeployedDocumentDigest (what the DEPLOYED plane,
+// not just this row, actually reports).
 type statusReportOperation struct {
 	Operation             string   `json:"operation"`
 	DocumentDigest        string   `json:"document_digest"`
@@ -126,7 +128,18 @@ type statusReportOperation struct {
 	RecordedBy                 *string  `json:"recorded_by"`
 	StaleDigests               []string `json:"stale_digests"`
 	UnreachableDocumentDigests []string `json:"unreachable_document_digests"`
-	Proven                     bool     `json:"proven"`
+	// DocumentClass is "current" or "legacy" for a MATCH row: whether the row sits under the catalog's
+	// current document digest or under a legacy one the catalog registers for the operation (CHAOS-8000
+	// dual accept), which query-api's switch reads alike. null for every other digest_state.
+	DocumentClass *string `json:"document_class"`
+	// RowDocumentDigest is the MATCH row's own document digest: document_digest for a current row, the
+	// legacy text's digest for a legacy row. null for every other digest_state.
+	RowDocumentDigest *string `json:"row_document_digest"`
+	// AcceptedDocumentDigests names every row the operation has at the live schema digest under a document
+	// it accepts (current or registered legacy); the switch serves the operation when any one of them is in
+	// canary or primary, and mode/current_candidate_build are read from that row. [] when there is none.
+	AcceptedDocumentDigests []string `json:"accepted_document_digests"`
+	Proven                  bool     `json:"proven"`
 	// NamedLimit is true for a live row enabled from the go-served ledger's
 	// written limit (not store-proven).
 	NamedLimit bool `json:"named_limit"`
@@ -258,11 +271,14 @@ func runStatus(argv []string) error {
 		report.GoPlaneError = stringPtr(registryURLSanitizeErr.Error())
 	}
 
-	catalog, kinds, catalogErr := goapiproof.LoadOperationCatalogWithKinds(common.catalogPath)
+	// The legacy digests too (CHAOS-8649): query-api's switch reads an operation's rows under its current
+	// AND its registered legacy texts (CHAOS-8000 dual accept), so a census that read the current one alone
+	// reported every carried legacy-keyed row unreachable while it served.
+	catalog, kinds, legacy, catalogErr := goapiproof.LoadOperationCatalogWithKindsAndLegacy(common.catalogPath)
 	report.CatalogLoaded = catalogErr == nil
 	if catalogErr != nil {
 		report.CatalogError = stringPtr(catalogErr.Error())
-		catalog, kinds = map[string]string{}, nil
+		catalog, kinds, legacy = map[string]string{}, nil, nil
 	}
 
 	// No credential is read here, deliberately. /registry is
@@ -384,7 +400,7 @@ func runStatus(argv []string) error {
 				// authority on what is live, so this falls back to this
 				// binary's digest and printStatusText says so rather
 				// than presenting a guess as a classification.
-				statuses, err = goapiproof.RoutingStatusRowsWithKinds(dbCtx, pool, liveDigest, pendingDigest, catalog, kinds)
+				statuses, err = goapiproof.RoutingStatusRowsWithLegacy(dbCtx, pool, liveDigest, pendingDigest, catalog, kinds, legacy)
 				if err != nil {
 					// Its OWN field: the census above succeeded and must
 					// still be printed (r2 R2-04).
@@ -542,6 +558,15 @@ func printStatusText(report statusReport, local string) {
 		if len(operation.UnreachableDocumentDigests) > 0 {
 			fmt.Fprintf(stdout, "    rows at the LIVE schema digest the edge can never reach, document digest: %v\n", operation.UnreachableDocumentDigests)
 		}
+		// CHAOS-8649: a row under a registered LEGACY text is a live row the switch reads, and MODE above is
+		// its mode; the line names the row, so it is never mistaken for one under the current text.
+		if operation.DocumentClass != nil && *operation.DocumentClass == goapiproof.DocumentClassLegacy {
+			fmt.Fprintf(stdout, "    row under a LEGACY document digest the catalog registers for this operation (served alike, CHAOS-8000 dual accept): %s, build %s\n",
+				derefOr(operation.RowDocumentDigest, "unknown"), derefOr(operation.CurrentCandidateBuild, "unknown"))
+		}
+		if len(operation.AcceptedDocumentDigests) > 1 {
+			fmt.Fprintf(stdout, "    rows at the LIVE schema digest under accepted documents (current and legacy), any one in canary/primary serves: %v\n", operation.AcceptedDocumentDigests)
+		}
 		// CHAOS-8517: MODE prints "-" for an operation with no row, and "-" used to
 		// mean "not served". For an operation with no row at ANY digest it now means
 		// the opposite, so the line says which.
@@ -583,10 +608,18 @@ func toReportOperation(status goapiproof.OperationStatus, deployedDigests map[st
 		StaleDigests:               status.StaleDigests,
 		PendingDigests:             status.PendingDigests,
 		UnreachableDocumentDigests: status.UnreachableDocumentDigests,
+		AcceptedDocumentDigests:    status.AcceptedDocumentDigests,
 		Proven:                     status.Proven,
 		NamedLimit:                 status.NamedLimit,
 		VenueProof:                 status.VenueProof,
 		NotEnforced:                []string{},
+	}
+	if reported.AcceptedDocumentDigests == nil {
+		reported.AcceptedDocumentDigests = []string{}
+	}
+	if status.DocumentClass != "" {
+		reported.DocumentClass = stringPtr(status.DocumentClass)
+		reported.RowDocumentDigest = stringPtr(status.RowDocumentDigest)
 	}
 	if reported.StaleDigests == nil {
 		reported.StaleDigests = []string{}

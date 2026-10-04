@@ -27,6 +27,8 @@ future cutover. It does not port any resolver, and nothing on a live
 request path calls either piece yet.
 {: .fc-page-lede }
 
+> **Note:** The Python edge and the Python-reference mode that this page describes were removed with the Python api. This page is a record of that surface.
+
 ## Effective-principal envelope
 
 `query-api` (Go) does not independently re-derive auth state from
@@ -257,7 +259,7 @@ reachable: `shadow` deliberately does NOT count (the client still gets
 Python's response in shadow mode, plan §5 stage 4), and a missing row, a
 query error, or an operation with no registered document digest all
 resolve to the same safe default as an unregistered operation —
-unreachable. One switch has an exception to the missing-row rule: the one
+unreachable. One switch has an exception to the missing-row rule: the switch that
 `/query` and `/graphql` serve registered documents through
 (`NewCatalogSwitchWithLegacy`, `catalog_switch.go`) serves an operation that
 has no routing row at any schema digest. An operation that has a row
@@ -363,10 +365,18 @@ serves every catalog operation that has no routing row). On it `carry` and
 `repoint` are a no-op: exit 0, one `NO-OP` line, nothing written, and
 `"empty_table":true` on the `-json` line beside the usual success `reason`,
 so the chart's pre-upgrade and post-upgrade hooks pass. Every other preflight
-still runs (the `-expect-build` cross-check included). When rows exist and
-none of them is at the live schema digest, both verbs refuse as before: a row
-left at another digest holds its operation dark, and an upgrade must not hide
-that.
+still runs (the `-expect-build` cross-check included). When rows exist,
+none of them is at the live schema digest, and every one is in a dark mode
+(`python`, `disabled` or `shadow`), both verbs are the same no-op with
+`"dark_rows_only":true`: each such row holds its operation dark at any digest,
+before and after the roll. When one of those rows is `canary` or `primary`,
+both verbs refuse as before: an operation somebody turned on is dark, and an
+upgrade must not hide that. The answer is decided under a `SHARE` lock on
+the routing table, so a writer whose row was in flight when the verb looked
+is waited for, never answered around (`carry` then refuses and asks for a
+re-run; `repoint` starts over). Live rows that are all in a dark mode are
+skipped by `carry`, each named, and the run succeeds: the "no reachable row"
+refusal needs a `canary` or `primary` live row with every row skipped.
 
 A registered document that was **swapped with dual accept** is not a changed
 document for `carry`. When an operation gets a new text, the old text stays
@@ -436,7 +446,7 @@ It bounds each statement individually, never the run as a whole.
 
 ```bash
 # 1. What does each plane think the digest is, and which rows are alive?
-dev-hops go-api routing status --query-api-url http://query-api:8080
+dho goapi routing status --registry-url http://query-api:8080/registry
 
 # 2. If the planes disagree, STOP: rebuild/redeploy the query-api image
 #    from this SDL. `enable` will refuse until they agree, by design.
@@ -445,21 +455,27 @@ dev-hops go-api routing status --query-api-url http://query-api:8080
 #    (`dho goapi routing enable`, next section). It reads the candidate build
 #    from the running query-api's /buildinfo; there is no Python enable.
 
-# 4. Confirm every operation reads MATCH, and none reads UNPROVEN
-#    unless the go-served ledger names a written limit for it.
-dev-hops go-api routing status
+# 4. Confirm every operation reads MATCH. A row enabled by the catalog
+#    rule (review_evidence starts CATALOG-RULE:) reads UNPROVEN: no proof
+#    run admitted it, and none was required.
+dho goapi routing status
 ```
 
 `enable` refuses (exit 2, writing nothing) when query-api is unreachable,
 when the two planes' digests disagree, when the running binary does not
 register an operation or registers it under a different document digest,
-or when no admissible proof run exists for the candidate build: a
-`deployed_executed` run bound to the serving build per request that ended
-in `match`, or in a `mismatch` whose every difference is cited against a
-declared Python baseline defect (primary also requires the edge route).
-Nothing waives the last of these on the command line. `enable` admits an
-operation without a proof run only through a written limit in the go-served
-ledger.
+or, for an MCP class root (`mcp:<root>`), when no admissible per-root
+receipt exists for the candidate build. A catalog operation needs no proof
+run and no ledger limit: query-api serves it when it has no routing row, so
+the check would guard nothing (CHAOS-8586). Each row still says what admitted
+it: a proof run (a `deployed_executed` run bound to the serving build per
+request that ended in `match`, or in a `mismatch` whose every difference is
+cited against a declared Python baseline defect; primary also requires the
+edge route), else a written limit in the go-served ledger (`NAMED-LIMIT:`
+prefix on `review_evidence`), else the catalog rule (`CATALOG-RULE:` prefix,
+`catalog_rule=` in the summary line, one `go_api_routing.enabled_catalog_rule`
+line per row on stderr). Nothing waives the class-root receipt on the command
+line.
 
 On success `enable` names, for every proven row, the receipt that
 authorized it -- its id, terminal state, citations (for a cited mismatch),
@@ -475,7 +491,7 @@ cited-`mismatch` admission print different lines.
 The enablement rule requires `build_binding = 'per_request'` on every
 receipt, and rows written before 0129 carry `build_binding` NULL. So the
 moment 0129 is applied, **every operation proven before it reads UNPROVEN**
-on `dev-hops go-api routing status` and on the migration-status page, and
+on `dho goapi routing status` and on the migration-status page, and
 `dho goapi routing enable` refuses it -- including operations whose old receipt was a
 sound `match`. Nothing is lost from the table; the old receipts stay as
 history. Re-run `go-api-prove` at the deployed build (JOB 6's re-prove step
@@ -645,12 +661,20 @@ document_digest, selected_operation)`, so one operation can have several
 rows under different document digests; leaving one behind would report
 success while the operation stayed reachable.
 
-**Only one of those rows is ever reachable**, and `status` says which. The
-edge resolves a request to an operation through the catalog and then looks
-the row up by the *catalog's* document digest — so a row at the live
-schema digest under any other document digest is dead in exactly the way a
-row at a stale schema digest is dead. `status` reports it as `STALE`,
-never `MATCH`, never reachable, and names its digest under
+**Only the rows under a document the operation accepts are ever
+reachable**, and `status` says which. The edge resolves a request to an
+operation through the catalog and then reads the rows under the documents
+that operation accepts: the catalog's current document digest and the
+legacy digests the catalog registers for it (`"legacy": true`, dual
+accept). query-api serves the operation when any one of those rows is in
+`canary` or `primary`. `status` counts the same rows (CHAOS-8649): such a
+row reads `MATCH`, its `document_class` is `current` or `legacy`,
+`row_document_digest` names the row's own digest, `mode` and
+`current_candidate_build` are read from it, and `accepted_document_digests`
+lists every accepted row the operation has at the live schema digest. A row
+at the live schema digest under any other document digest is dead in
+exactly the way a row at a stale schema digest is dead: `status` reports it
+as `STALE`, never `MATCH`, never reachable, and names its digest under
 `unreachable_document_digests`. A row that is present in `psql` and can
 never be consulted is the CHAOS-5416 shape; only the column that moved is
 different.
@@ -762,7 +786,7 @@ audit table must outlive the row it describes.
 | `query-api: ROUTING ROWS STALE` (log) | `query-api` route construction | Same condition, on the Go plane |
 | structured ERROR-level record (`slog`, no fixed line text) | `query-api` route construction (`registry_drift_telemetry.go`) | Same condition, leveled so a log-level alert rule fires on it -- the plain-text line above carries no level at all |
 | `devhealth_query_api_routing_rows_for_digest` (gauge, `schema_digest` attr) | `query-api` route construction | Rows keyed to the digest THIS process computed; 0 with the total gauge below `>0` is the DEAD-fleet condition, on every startup, not only at read time |
-| `devhealth_query_api_routing_rows_total` (gauge, `schema_digest` attr) | `query-api` route construction | Disambiguates the gauge above from the legitimate `total == 0` "nothing enabled yet" posture |
+| `devhealth_query_api_routing_rows_total` (gauge, `schema_digest` attr) | `query-api` route construction | Disambiguates the gauge above from the legitimate `total == 0` posture, where no row decides anything and the catalog rule serves every registered operation |
 | `devhealth_go_api_dispatch_fallback_total{reason="no_routing_row"}` | Python edge, per request | A dispatch-eligible request found no row |
 | `devhealth_query_api_routeswitch_digest_miss_total{operation}` (and its WARN record) | `query-api`, per request | An operation has no row at the live key and is refused: on the serving route, an operation whose rows are all elsewhere |
 | `devhealth_query_api_routeswitch_served_without_row_total{operation, reason="catalog_no_row"}` (and one INFO record per operation per process) | `query-api`, per request | A registered operation with no routing row at any schema digest was served (the catalog rule). Zero on a stack where every operation has a row |
@@ -806,7 +830,11 @@ appear here.
 | `sha256:2d5839ecc2f1352f4b64f812fc4a503976b36deafc5b89058080345a13437dd0` | 2026-10-03 | CHAOS-8114, adding nullable `repoName` and `teamName` to `AIOpportunity` (the catalogue names of the repository and the team an opportunity carries, never the id) in the Go-owned SDL (additive; Python never had them) | superseded |
 | `sha256:b91a544c7a7bb1ca09f11ca568cb255dba7f1a2ea36d4d58322cfceb10ef0892` | 2026-10-03 | CHAOS-8113, adding nullable `displayName` and `nameExpected: Boolean!` to `AIWorkflowGraphNodeOut` (a pull request title, a deployment environment, an incident title and status, or a readable issue key, never an id that holds a UUID or an opaque hash; and whether the node type carries a name at all) in the Go-owned SDL (additive; Python never had them) | superseded |
 | `sha256:fdff794c3fa3de956e07061645b7494cca33ed760f9405d405c912ae01d3e34b` | 2026-10-03 | CHAOS-8115, adding `hasData: Boolean!` to `OperatingReviewMetric` and `hasPriorData: Boolean!` to `OperatingReviewDelta` (whether each week holds a stored value for the metric, so a stored zero and a missing week differ) in the Go-owned SDL (additive; Python never had them) | superseded |
-| `sha256:97ab98858f93bed65cbc51657f29e20164851dbdab35ea77e05195afad0f70f4` | this revision | CHAOS-8516, adding `teamIds: [String!]` to `OperatingReviewInput` (the review of the union of several teams stored rows) and `scope: OperatingReviewMetricScope!` (TEAM or ORGANIZATION) to `OperatingReviewMetric` in the Go-owned SDL (additive; Python never had them) | Current. Every routing row written at the digest above stops matching the moment this lands: rebuild and deploy query-api from this SDL FIRST, then re-enable, per the recovery procedure above. |
+| `sha256:17ee55f4bbc25e2457d30871714eb8221028eec1f4c22b0a2a3d23187e2f5ebc` | 2026-10-03 | CHAOS-8513, adding the root field `testopsJobFailures` with `TestOpsJobFailuresInput`, `TestOpsJobFailuresResult` and `TestOpsJobFailureGroup` (CI job names that failed in a window, by workflow and job name, with runs, failed runs and the failure rate as a share) in the Go-owned SDL (additive; Python never had it) | superseded |
+| `sha256:eedd1cd00de75fd9bab0e82248261ec10ad219be9b9156359f9af4131eaf140a` | 2026-10-03 | CHAOS-8111, adding the root field `coverageBaselines` and `RepoCoverageBaseline` (each repository mean line and branch coverage over the 30 days before a day, null below 7 days with a value, with the number of days used) in the Go-owned SDL (additive; Python never had it) | superseded |
+| `sha256:f06d06c0882b90d27a4d8c16dd0f62754d68c8689c3263671a31d346be611f62` | 2026-10-03 | CHAOS-8541, adding the root field `coverageScopeBaseline` and `ScopeCoverageBaseline` (the coverage baseline of a whole scope: the mean over the 30 days before a day of the mean coverage of the scope repositories of each day, null below 7 days with a value, with the number of days used) in the Go-owned SDL (additive; Python never had it) | superseded |
+| `sha256:97ab98858f93bed65cbc51657f29e20164851dbdab35ea77e05195afad0f70f4` | 2026-10-03 | CHAOS-8516's unstacked SDL, adding `teamIds: [String!]` to `OperatingReviewInput` (the review of the union of several teams stored rows) and `scope: OperatingReviewMetricScope!` (TEAM or ORGANIZATION) to `OperatingReviewMetric` in the Go-owned SDL (additive; Python never had them) | superseded by the stacked digest below before landing |
+| `sha256:70ea633c2ddf24ab4a7a080aa0cbc2d032a753840f5ef71110948b308d4f9c56` | this revision | CHAOS-8516, stacking `teamIds: [String!]` and `scope: OperatingReviewMetricScope!` after CHAOS-8513, CHAOS-8111, and CHAOS-8541 in the Go-owned SDL (all additive; Python never had them) | Current. Every routing row written at the digest above stops matching the moment this lands: rebuild and deploy query-api from this SDL FIRST, then re-enable, per the recovery procedure above. |
 
 ### Where `bigboy-cut.sh` finds its tools and its tree (CHAOS-7135)
 
@@ -835,11 +863,11 @@ The file must be world-readable (0644): it holds only the password hash and gran
 uid 101 in the container and **exits** on a mounted file it cannot read, so a 0600 file owned by the host user
 takes ClickHouse down. `ci/bigboy/check-dho-api-ch-user.sh` refuses such a file (or a missing one, which Docker
 would turn into a directory), and then requires the file to EQUAL the canonical render byte for byte: it re-renders
-from the posture manifest (this checkout's `authorization.go`, or `DHO_API_CH_POSTURE_GO`) and `API_CH_PASSWORD` in
-process and compares. The file is valid if and only if it is that render, so a comment, an edit, a malformed grant or
+from the posture manifest (this checkout's `authorization.go`, or `DHO_API_CH_POSTURE_GO`) and the API password in
+process and compares (CHAOS-8382: the password is read by pipe from the 0600 credentials file passed as arg 2, never sourced; the renderer runs with a placeholder and its hash is swapped for the real one; the login proof sends a clickhouse-client config on stdin; no credential is in any host argv or child env, and scratch lives under a private `TMPDIR`, never `/tmp`). The file is valid if and only if it is that render, so a comment, an edit, a malformed grant or
 a hash for another password is refused (rc 4, `CH_API_USER_FILE_MISMATCH`) without printing any content. After that it
-checks `dho_api_ch` is in `system.users` and that it logs in with `API_CH_PASSWORD`; `bigboy-cut.sh` runs it as the
-STEP `ch-api-user` and aborts before go-api is recreated when it fails. Do not hand-edit the file; regenerate it. Run it by hand before recreating ClickHouse.
+checks `dho_api_ch` is in `system.users` and that it logs in with the API password; `bigboy-cut.sh` runs it as the
+STEP `ch-api-user` and aborts before go-api is recreated when it fails. Do not hand-edit the file; regenerate it. Run the check by hand before recreating ClickHouse as `TMPDIR=<0700 dir outside /tmp> ci/bigboy/check-dho-api-ch-user.sh <users.xml> <go-api.creds>`. The renderer itself still takes `API_CH_PASSWORD` in its environment when an operator regenerates the file (tracked on CHAOS-8382, not on the cut path).
 
 ### Automated in `bigboy-cut.sh` (CHAOS-7022): digest change = carry before swap; repoint after
 

@@ -109,21 +109,12 @@ jobs:
           # cannot see it. This is a git fetch, not a Docker Hub pull.
           fetch-depth: 0
 
-      - name: Check the migration matrix has not gone stale
+      - name: Check the migration matrix stamps are real commits
         if: matrix.name == 'static'
-        # UNCONDITIONAL, and deliberately placed before the relevance
-        # decision below. Every other gate in this repo fires because a PR
-        # TOUCHED something; this one has to fire because nobody did. The
-        # "Last verified" stamp on docs/go-migration-matrix.md sat five days
-        # and roughly forty merges behind main while the page read as
-        # current, and no test, script or workflow read it at all -- a
-        # path-filtered check could not have caught that, because the
-        # failure is an absence of commits, not a commit.
-        #
-        # bash + git only: no Go toolchain, no venv, no network, so it runs
-        # on either leg before anything is installed. The heavier contract
-        # half runs under `go test ./...` on the Go-relevant leg.
-        run: bash ci/check_migration_matrix.sh freshness
+        # Structural only (CHAOS-8620): the stamps must be 40-hex ancestors of
+        # HEAD. No age budget: the matrix is a record of a finished migration.
+        # bash + git only, so it runs on either leg before anything installs.
+        run: bash ci/check_migration_matrix.sh stamp
 
       - name: Decide whether this change set is Go-relevant
         id: relevance

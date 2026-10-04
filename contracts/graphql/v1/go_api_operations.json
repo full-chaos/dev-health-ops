@@ -64,6 +64,10 @@
     "digest": "1b3480a8830f9eed583e47174b7759740a7f34182c2a7a8d92f28eb1c2253cb7"
   },
   {
+    "operation": "capacityCompletionDistribution",
+    "digest": "35c0db3c5676f0f1d6a267c8c3a622d36e300a70dc54a03f2990a2bf71c64af5"
+  },
+  {
     "operation": "capacityForecast",
     "digest": "d95197012e32056fcece1f8975d953e7465bb112354cf4201e87b39375f933ef"
   },
@@ -105,6 +109,14 @@
   {
     "operation": "connectorsDataHealth",
     "digest": "0e43d67d571539081b2006ae8b2148dd4ea31c959be22be1db9e927083060baa"
+  },
+  {
+    "operation": "coverageBaselines",
+    "digest": "141ed14fc636739e1184716167148d7d17c35180a09a83dc9ef2b04bfb1dd638"
+  },
+  {
+    "operation": "coverageScopeBaseline",
+    "digest": "2badf6b15232c05fb72f06c74a5da54a6037ba0a69e400aaba346dee5633dc5f"
   },
   {
     "operation": "createSavedReport",
@@ -247,6 +259,10 @@
   {
     "operation": "testOpsTest",
     "digest": "20eeea67bfc1cfa0f809188878476a0fe40565bc583009151e1f7c8cf2f3be5c"
+  },
+  {
+    "operation": "testopsJobFailures",
+    "digest": "3966554a57e957978b5777cbb8b51bf6e0f41feb2181b89f7ad138e1c81c67c9"
   },
   {
     "operation": "testopsRisk",

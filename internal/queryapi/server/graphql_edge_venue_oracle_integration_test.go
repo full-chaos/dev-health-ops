@@ -94,6 +94,9 @@ type registeredEdgeDocument struct {
 	Legacy bool `json:"legacy"`
 }
 
+// postFreezeOperations are registered operations with no frozen Python answer (CHAOS-8598: capacityCompletionDistribution, an MCP-only read).
+var postFreezeOperations = map[string]bool{"capacityCompletionDistribution": true}
+
 func registeredEdgeDocuments(t *testing.T, root string) []registeredEdgeDocument {
 	t.Helper()
 	command := exec.Command("go", "run", "./cmd/registrydump", "-file", "internal/queryapi/server/query_route.go")
@@ -124,6 +127,19 @@ func registeredEdgeDocuments(t *testing.T, root string) []registeredEdgeDocument
 		case doc.Legacy && !held.Legacy:
 			measured[doc.Operation] = doc
 		}
+	}
+	// An operation registered after the freeze has no Python answer and the recordings are stopped, so it cannot be in the golden. Its
+	// document is pinned by the Go tests of the operation itself. A name here that is not registered is stale and fails the run.
+	for operation := range postFreezeOperations {
+		if _, registered := measured[operation]; !registered {
+			t.Fatalf("postFreezeOperations names %q, which registrydump does not list: remove the stale entry", operation)
+		}
+		delete(measured, operation)
+	}
+	// CHAOS-8513: an operation that was Go-only from its first day has no Python answer, live or frozen, so it
+	// is not a case of this oracle (edgeGoOnlyFromBirth, whose own test keeps the list honest).
+	for operation := range edgeGoOnlyFromBirth {
+		delete(measured, operation)
 	}
 	docs = docs[:0]
 	for _, doc := range measured {

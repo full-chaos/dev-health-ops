@@ -364,7 +364,9 @@ def test_inventory_is_non_empty_and_matches_audit_row_count():
     # so does the call_site_getattr_indirection row for the denied-active
     # finalize publish (replaced by a durable outbox wakeup). The PagerDuty
     # stream_surface row is only re-anchored (one line up). Net: 34 - 3 = 31.
-    assert inventory["row_count"] == 31
+    # CHAOS-8315: -4. The four stream_surface rows were anchored in the Python
+    # api tree, which is deleted. Net: 31 - 4 = 27.
+    assert inventory["row_count"] == 27
 
 
 def test_retired_beat_entries_are_evidenced_and_absent_from_source():
@@ -549,8 +551,8 @@ def test_billing_rows_point_at_a_real_billing_acceptance_test():
     ]
     for row in billing_rows:
         assert row["acceptance_test_id"] == (
-            "tests/test_credential_confusion_production_stack.py"
-            "::test_the_deleted_billing_route_is_gone_not_merely_unused"
+            "tests/workers/test_helm_billing_edge_removed.py"
+            "::test_no_workload_or_service_is_named_billing_edge"
         ), row
 
 

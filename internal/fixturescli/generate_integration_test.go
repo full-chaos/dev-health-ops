@@ -341,7 +341,10 @@ func TestLoadWorldReproducesTheRecordedCapture(t *testing.T) {
 				} else if counts[table.Name] != len(table.Rows) {
 					t.Fatalf("%s: the loader reported %d row(s), frozen %d", table.Name, counts[table.Name], len(table.Rows))
 				}
-				got := dumpWorldTable(t, ch.httpDSN, table.Name)
+				// A nullable column a migration added after the capture is held
+				// to NULL on every loaded row, and only then left out of the
+				// comparison with the frozen columns (columnsAfterTheCapture).
+				got := requireColumnsAfterTheCapture(t, dumpWorldTable(t, ch.httpDSN, table.Name))
 				if !reflect.DeepEqual(got.Columns, table.Columns) {
 					t.Fatalf("%s: the schema's columns differ from the frozen ones", table.Name)
 				}
@@ -357,11 +360,13 @@ func TestLoadWorldReproducesTheRecordedCapture(t *testing.T) {
 					t.Fatalf("%s: the loaded rows differ from the capture:\n%s", table.Name, diff)
 				}
 			}
-			for table, count := range rowCounts(t, ch.httpDSN) {
-				if !names[table] && count != before[table] {
-					t.Fatalf("the load changed %s (%s -> %s), which the world does not write", table, before[table], count)
-				}
+			// No table outside the world changed. A table that a view fills,
+			// added after the capture, is not in the world: it is held to its
+			// own rule on the rows the load just wrote (viewFilledAfterTheCapture).
+			if problems := unwrittenTableProblems(before, rowCounts(t, ch.httpDSN), names); len(problems) > 0 {
+				t.Fatalf("the world does not write these tables:\n  %s", strings.Join(problems, "\n  "))
 			}
+			requireViewFilledTables(t, ch.httpDSN)
 
 			// Another day, another organization: the same rows, moved and rewritten.
 			other := startClickHouse(t)
@@ -378,7 +383,7 @@ func TestLoadWorldReproducesTheRecordedCapture(t *testing.T) {
 				t.Fatalf("whole days = %d, %v; want 9", days, err)
 			}
 			for _, table := range world.Tables {
-				got := dumpWorldTable(t, other.httpDSN, table.Name)
+				got := requireColumnsAfterTheCapture(t, dumpWorldTable(t, other.httpDSN, table.Name))
 				back, err := WorldTable{FrozenTable: got}.Transform(-days, org, world.OrgID)
 				if err != nil {
 					t.Fatal(err)

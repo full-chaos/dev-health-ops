@@ -13,10 +13,14 @@ import importlib
 import importlib.util
 import json
 import os
+import shutil
 import stat
 import subprocess
+import tempfile
 import xml.etree.ElementTree as ET
 from pathlib import Path
+
+import pytest
 
 ROOT = Path(__file__).resolve().parents[2]
 TOOLS = ROOT / "ci" / "bigboy"
@@ -26,6 +30,7 @@ RENDER = TOOLS / "render-dho-api-ch-users.py"
 CUT = TOOLS / "bigboy-cut.sh"
 
 _PASSWORD = "the-api-password"
+_CUT_SENTINEL = "copper-lantern-value"
 _HASH = hashlib.sha256(_PASSWORD.encode()).hexdigest()
 
 _MANIFEST = """package clickhouse
@@ -68,6 +73,44 @@ def _users_file(tmp_path: Path, *, mode: int = 0o644, body: str = _XML) -> Path:
     return file
 
 
+_SCRATCHES: list[str] = []
+
+#: Every external command the check runs. Each gets a PATH shim that records argv and environment, and PATH holds
+#: nothing else: a command the check starts that is not listed fails the run (rc != 0), so the set cannot go stale.
+_CHECK_COMMANDS = (
+    "stat id sed tail tr wc cut awk cmp head dirname mktemp chmod rm sha256sum python3 cat"
+).split()
+
+
+@pytest.fixture(autouse=True)
+def _remove_scratches():
+    yield
+    while _SCRATCHES:
+        shutil.rmtree(_SCRATCHES.pop(), ignore_errors=True)
+
+
+def _scratch(*, mode: int = 0o700) -> Path:
+    """A private TMPDIR for the check, outside /tmp (the check refuses /tmp, so pytest's tmp_path cannot be it)."""
+    base = "/dev/shm" if os.access("/dev/shm", os.W_OK) else str(ROOT / "tests")
+    path = tempfile.mkdtemp(prefix="dho-check-scratch-", dir=base)
+    os.chmod(path, mode)
+    _SCRATCHES.append(path)
+    return Path(path)
+
+
+def _var_trap(tmp_path: Path) -> dict[str, str]:
+    """BASH_ENV file: a DEBUG trap that dumps EVERY shell variable (`declare -p`) before each command of every
+    bash process into a 0600 file. A credential held in any shell variable (assignment, `read`, here-string...)
+    shows up there even when xtrace never prints it."""
+    trap = tmp_path / "var-trap.sh"
+    trap.write_text(
+        "set -o functrace\ntrap 'declare -p >> \"$VARLOG\" 2>/dev/null' DEBUG\n"
+    )
+    log = tmp_path / "vars.log"
+    log.touch(mode=0o600)
+    return {"BASH_ENV": str(trap), "VARLOG": str(log)}
+
+
 def _docker(
     tmp_path: Path,
     *,
@@ -76,31 +119,55 @@ def _docker(
     login_ok: bool = True,
     password: str = "the-api-password",
 ) -> dict[str, str]:
-    """A stub `docker compose ... exec ... clickhouse-client`: answers the system.users count, and a login as
-    dho_api_ch (`--user dho_api_ch`) succeeds only when the CLICKHOUSE_PASSWORD it was handed through the
-    environment equals `password`. Every call's arguments are logged (never the environment)."""
+    """PATH shims for the whole check. `docker` is a stub of `docker compose ... exec ... clickhouse-client`:
+    it answers the system.users count and logs in only when the config on its STDIN carries `password` (that
+    stdin is also saved, so the one channel the credential may use is observable). Every other command the
+    check runs is a recording shim around the real binary. All shims append argv (one word per line) to
+    child-argv.log and their environment to child-env.log."""
     bin_dir = tmp_path / "bin"
     bin_dir.mkdir(exist_ok=True)
     args_log = tmp_path / "docker-args.log"
-    docker = bin_dir / "docker"
+    argv_log = tmp_path / "child-argv.log"
+    env_log = tmp_path / "child-env.log"
+    stdin_log = tmp_path / "docker-stdin.log"
+    for name in _CHECK_COMMANDS:
+        real = shutil.which(name, path="/usr/bin:/bin")
+        assert real, name
+        shim = bin_dir / name
+        shim.write_text(
+            "#!/bin/bash\n"
+            f'{{ echo "== {name}"; printf "%s\\n" "$@"; }} >> "{argv_log}"\n'
+            f'{{ echo "== {name}"; /usr/bin/env; }} >> "{env_log}"\n'
+            f'exec {real} "$@"\n'
+        )
+        shim.chmod(0o755)
     answer = f'echo "{count}"' if count is not None else "true"
     login = (
-        'if [ "${CLICKHOUSE_PASSWORD:-}" = "'
+        'if [ "$(cat "'
+        + str(stdin_log)
+        + '")" = "<clickhouse><user>dho_api_ch</user><password>'
         + password
-        + '" ]; then echo dho_api_ch; exit 0; fi; exit 1'
+        + '</password></clickhouse>" ]; then echo dho_api_ch; exit 0; fi; exit 1'
         if login_ok
         else "exit 1"
     )
+    docker = bin_dir / "docker"
     docker.write_text(
-        "#!/usr/bin/env bash\n"
+        "#!/bin/bash\n"
+        "PATH=/usr/bin:/bin\n"
         f'echo "$*" >> "{args_log}"\n'
-        'case "$*" in *"--user dho_api_ch"*)\n'
+        f'{{ echo "== docker"; printf "%s\\n" "$@"; }} >> "{argv_log}"\n'
+        f'{{ echo "== docker"; env; }} >> "{env_log}"\n'
+        'case "$*" in *"--config-file /dev/stdin"*) cat > "'
+        + str(stdin_log)
+        + '" ;; esac\n'
+        'case "$*" in *"--user dho_api_ch"*|*"--config-file /dev/stdin"*)\n'
         f"  {login} ;;\n"
         "esac\n"
         f"{answer}\nexit {rc}\n"
     )
-    docker.chmod(docker.stat().st_mode | stat.S_IEXEC)
-    return {"PATH": f"{bin_dir}:/usr/bin:/bin"}
+    docker.chmod(0o755)
+    return {"PATH": str(bin_dir)}
 
 
 def _check(
@@ -111,14 +178,47 @@ def _check(
     rc: int = 0,
     login_ok: bool = True,
     api_password: str | None = "the-api-password",
+    creds_line: str | None = None,
+    scratch: Path | None = None,
+    tmpdir: str | None = None,
+    script: Path | None = None,
 ) -> subprocess.CompletedProcess[str]:
+    """Run the check with a bare environment (no inherited variable), PATH holding only shims, and xtrace going
+    to a 0600 file (tmp_path/xtrace.log). The scratch dir used is returned in proc.scratch."""
     env = _docker(tmp_path, count=count, rc=rc, login_ok=login_ok)
+    env.update(_var_trap(tmp_path))
+    scratch = scratch or _scratch()
+    env["TMPDIR"] = tmpdir if tmpdir is not None else str(scratch)
+    creds = tmp_path / "go-api.creds"
+    creds.write_text(
+        creds_line
+        if creds_line is not None
+        else (
+            f"API_CH_PASSWORD='{api_password}'\n"
+            if api_password is not None
+            else "OTHER=1\n"
+        )
+    )
+    creds.chmod(0o600)
     (tmp_path / "authorization.go").write_text(_MANIFEST)
     env["DHO_API_CH_POSTURE_GO"] = str(tmp_path / "authorization.go")
-    if api_password is not None:
-        env["API_CH_PASSWORD"] = api_password
-    args = ["bash", str(CHECK)] + ([str(file)] if file is not None else [])
-    return subprocess.run(args, capture_output=True, text=True, env=env, timeout=30)
+    env["XT"] = str(tmp_path / "xtrace.log")
+    args = [str(file), str(creds)] if file is not None else []
+    proc = subprocess.run(
+        [
+            "/bin/bash",
+            "-c",
+            'umask 077; exec 9>"$XT"; BASH_XTRACEFD=9 exec /bin/bash -x "$0" "$@"',
+            str(script or CHECK),
+            *args,
+        ],
+        capture_output=True,
+        text=True,
+        env=env,
+        timeout=60,
+    )
+    proc.scratch = scratch  # type: ignore[attr-defined]
+    return proc
 
 
 def test_a_readable_declared_file_and_a_live_user_pass(tmp_path: Path) -> None:
@@ -210,23 +310,124 @@ def test_a_user_that_cannot_log_in_with_the_api_credential_is_refused(
     assert wrong.returncode == 3, (wrong.stdout, wrong.stderr)
     assert "CH_API_USER_AUTH_FAIL" in wrong.stderr and "516" in wrong.stderr
     unset = _check(tmp_path, file, api_password=None)
-    assert unset.returncode == 3 and "API_CH_PASSWORD is not set" in unset.stderr
+    assert unset.returncode == 3 and "no API_CH_PASSWORD value" in unset.stderr
 
 
-def test_the_api_credential_never_reaches_an_argument_list_or_the_output(
-    tmp_path: Path,
-) -> None:
+def test_the_api_credential_is_only_ever_on_dockers_stdin(tmp_path: Path) -> None:
+    """CHAOS-8382 guard, generic: the check runs with a bare env, every command it starts is a recording shim,
+    and it runs under xtrace. The secret may appear nowhere (any argv, any child env, the xtrace, the output)
+    except the stdin of docker, which is the one channel. Planted forms (each goes RED): password in a child
+    env (export / VAR=... cmd), in another child's argv, in a shell variable (xtrace), in `docker -e`."""
     secret = "the-api-password"
     proc = _check(tmp_path, _users_file(tmp_path))
     assert proc.returncode == 0, (proc.stdout, proc.stderr)
+    argv = (tmp_path / "child-argv.log").read_text()
+    child_env = (tmp_path / "child-env.log").read_text()
+    xtrace = (tmp_path / "xtrace.log").read_text()
+    variables = (tmp_path / "vars.log").read_text()
+    assert "declare -- CREDS=" in variables, "the variable dump is empty: no proof"
+    stdin = (tmp_path / "docker-stdin.log").read_text()
+    assert stat.S_IMODE((tmp_path / "xtrace.log").stat().st_mode) == 0o600
+    assert "== docker" in argv and "== sed" in argv and "== sha256sum" in argv
+    assert "+ " in xtrace and "api_password" in xtrace, (
+        "xtrace is empty: this test would prove nothing"
+    )
+    assert secret in stdin, "the login config never reached docker's stdin"
+    for name, text in (
+        ("argv", argv),
+        ("child env", child_env),
+        ("xtrace", xtrace),
+        ("shell variables", variables),
+        ("stdout", proc.stdout),
+        ("stderr", proc.stderr),
+        ("docker-args", (tmp_path / "docker-args.log").read_text()),
+    ):
+        assert secret not in text, f"credential in {name}"
+    assert "CLICKHOUSE_PASSWORD" not in child_env + argv
+    # the renderer's env may name API_CH_PASSWORD, but only with the placeholder (not a credential)
+    for line in child_env.splitlines():
+        if line.startswith("API_CH_PASSWORD="):
+            assert line == "API_CH_PASSWORD=placeholder-not-a-credential", (
+                "real password in a child env"
+            )
     args = (tmp_path / "docker-args.log").read_text()
-    assert "--user dho_api_ch" in args and "-e CLICKHOUSE_PASSWORD" in args, args
-    # compose verbs on the service, never a bare `docker exec` on a container name
-    for line in args.splitlines():
+    assert "--config-file /dev/stdin" in args and " -e " not in args, args
+    for line in (
+        args.splitlines()
+    ):  # compose verbs on the service, never a bare `docker exec` on a container name
         assert line.startswith("compose --env-file "), line
         assert " exec -T " in line and " clickhouse clickhouse-client " in line, line
-    assert "dev-health-clickhouse-1" not in args
-    assert secret not in args and secret not in proc.stdout + proc.stderr
+
+
+def test_the_scratch_is_made_under_the_callers_tmpdir_with_mode_0700(
+    tmp_path: Path,
+) -> None:
+    scratch = _scratch()
+    proc = _check(tmp_path, _users_file(tmp_path), scratch=scratch)
+    assert proc.returncode == 0, (proc.stdout, proc.stderr)
+    argv = (tmp_path / "child-argv.log").read_text().split("== ")
+    mktemp = next(x for x in argv if x.startswith("mktemp\n")).split("\n")
+    assert mktemp[1:4] == ["-d", "-p", str(scratch.resolve())], mktemp
+    chmod = [x.split("\n") for x in argv if x.startswith("chmod\n")]
+    assert chmod and all(
+        c[1] == "700" and c[2].startswith(str(scratch.resolve()) + "/") for c in chmod
+    ), chmod
+    assert [p.name for p in scratch.iterdir()] == [], "scratch not cleaned"
+
+
+def test_a_tmpdir_in_or_resolving_into_tmp_or_not_private_is_refused(
+    tmp_path: Path,
+) -> None:
+    file = _users_file(tmp_path)
+    under_tmp = Path(tempfile.mkdtemp(prefix="dho-sub-", dir="/tmp"))
+    os.chmod(under_tmp, 0o700)
+    link = tmp_path / "link-to-tmp"
+    link.symlink_to("/tmp")
+    shm_open = _scratch(mode=0o500)  # not 0700 (owner-only, read-only)
+    holder = _scratch()
+    (holder / "lnk").symlink_to(
+        under_tmp
+    )  # a symlink OUTSIDE /tmp that resolves into /tmp (0700, ours)
+    try:
+        spellings = [
+            "/tmp//", "//tmp", "/tmp/.", "/tmp", "/var/tmp", str(under_tmp),
+            str(under_tmp) + "/../" + under_tmp.name, str(link),
+            str(holder / "lnk"),
+            # a `..` path from outside /tmp that lands in /tmp (only realpath catches it)
+            str(holder) + "/" + "../" * len(holder.parts[1:]) + "tmp/" + under_tmp.name,
+            "/" + str(under_tmp), str(link) + "/",
+            str(tmp_path / "absent"), "", str(shm_open),
+        ]  # fmt: skip
+        for tmpdir in spellings:
+            proc = _check(tmp_path, file, tmpdir=tmpdir)
+            assert proc.returncode == 1 and "TMPDIR" in proc.stderr, (
+                tmpdir,
+                proc.stderr,
+            )
+            assert not (tmp_path / "docker-args.log").exists(), tmpdir
+        env_unset = _check(tmp_path, file, tmpdir="")  # TMPDIR set empty
+        assert env_unset.returncode == 1
+    finally:
+        shutil.rmtree(under_tmp, ignore_errors=True)
+
+
+def test_the_cut_hands_the_credentials_path_to_the_check_and_the_password_to_no_child(
+    tmp_path: Path,
+) -> None:
+    """Executed: the real cut with a secret-bearing creds file under its root, a fake check and a docker stub that
+    both log their environment. The secret must be in no env (so no env prefix, `set -a`, `allexport` or export
+    reaches a child) and not in the check's argv; the check gets the creds PATH as arg 2."""
+    proc, calls = _cut_with_a_fake_check(tmp_path, 0)
+    assert "STEP ch-api-user rc=0" in proc.stdout, (proc.stdout, proc.stderr)
+    check_log = (tmp_path / "fake-check.log").read_text()
+    assert "args=" in check_log and "go-api.creds" in check_log, check_log
+    secret = _CUT_SENTINEL
+    assert "declare -- R=" in (tmp_path / "vars.log").read_text(), "no variable dump"
+    for log in ("fake-check.log", "docker-env.log", "vars.log"):
+        text = (tmp_path / log).read_text()
+        assert text.strip(), f"{log} is empty: this test would prove nothing"
+        assert secret not in text, f"credential in {log}"
+    assert secret not in proc.stdout + proc.stderr
 
 
 def _cut_with_a_fake_check(
@@ -242,7 +443,15 @@ def _cut_with_a_fake_check(
         if source.is_file() and source.name != CHECK.name:
             (tools / source.name).symlink_to(source)
     fake = tools / CHECK.name
-    fake.write_text(f"#!/usr/bin/env bash\necho fake-check\nexit {check_rc}\n")
+    root.joinpath(".go-api-dev").mkdir(exist_ok=True)
+    creds = root / ".go-api-dev" / "go-api.creds"
+    creds.write_text(f"API_CH_PASSWORD='{_CUT_SENTINEL}'\n")
+    creds.chmod(0o600)
+    fake.write_text(
+        "#!/usr/bin/env bash\necho fake-check\n"
+        f'{{ echo "args=$*"; env; }} >> "{tmp_path / "fake-check.log"}"\n'
+        f"exit {check_rc}\n"
+    )
     fake.chmod(0o755)
     stub_bin = tmp_path / "stubbin"
     stub_bin.mkdir()
@@ -250,6 +459,10 @@ def _cut_with_a_fake_check(
         stub_bin, routing_response=entry._routing_json("digest_unchanged"), routing_rc=0
     )
     entry._gh_stub(stub_bin)
+    docker_stub = stub_bin / "docker"
+    lines = docker_stub.read_text().splitlines(keepends=True)
+    lines.insert(1, f'env >> "{tmp_path / "docker-env.log"}"\n')
+    docker_stub.write_text("".join(lines))
     args_log = tmp_path / "docker-args.log"
     proc = subprocess.run(
         ["bash", str(CUT), entry._OLD8, entry._NEW],
@@ -262,6 +475,7 @@ def _cut_with_a_fake_check(
             "BIGBOY_ROOT": str(root),
             "BIGBOY_TOOLS_DIR": str(tools),
             "DOCKER_STUB_ARGS_LOG": str(args_log),
+            **_var_trap(tmp_path),
         },
     )
     calls = args_log.read_text().splitlines() if args_log.exists() else []
@@ -498,10 +712,12 @@ def test_a_missing_posture_manifest_or_credential_is_refused_not_skipped(
 ) -> None:
     file = _users_file(tmp_path)
     env = _docker(tmp_path, count="1")
-    env["API_CH_PASSWORD"] = _PASSWORD
+    env["TMPDIR"] = str(_scratch())
+    creds = tmp_path / "go-api.creds"
+    creds.write_text(f"API_CH_PASSWORD={_PASSWORD}\n")
     env["DHO_API_CH_POSTURE_GO"] = str(tmp_path / "absent.go")
     proc = subprocess.run(
-        ["bash", str(CHECK), str(file)],
+        ["/bin/bash", str(CHECK), str(file), str(creds)],
         capture_output=True,
         text=True,
         env=env,
@@ -512,7 +728,7 @@ def test_a_missing_posture_manifest_or_credential_is_refused_not_skipped(
     empty.write_text("package clickhouse\n")
     env["DHO_API_CH_POSTURE_GO"] = str(empty)
     proc = subprocess.run(
-        ["bash", str(CHECK), str(file)],
+        ["/bin/bash", str(CHECK), str(file), str(creds)],
         capture_output=True,
         text=True,
         env=env,

@@ -18,6 +18,8 @@ lifecycle: active
 Every Ask Dev answer carries its own outcome, its provenance, what it could not cover, and the evidence behind it. Read those before the prose. An answer that stopped short says so; it does not present a partial result as a complete one.
 {: .fc-page-lede }
 
+> **Note:** The Go api does not serve the Ask Dev (`/api/v1/dev`) surface. This page is a record of the Python surface that was removed. The copy-drift check of this page was removed with that surface, so the strings on this page are not checked against any code.
+
 <figure class="fc-product-figure" markdown="1">
 ![A completed Ask Dev answer showing the outcome badge, the scope-outcome and coverage lines, findings with citation and provenance labels, and the unfolded evidence list, desktop, dark theme.](../../assets/ask-dev/ask-dev-answers-completed-desktop-dark.png)
 <figcaption>Completed answer — outcome, a finding with its provenance label, coverage, and the evidence list — desktop, dark theme. Source: dev-health-web PR #859 (merged to main as 45f9026d0), captured 2026-08-07. Seeded local acceptance fixture data only (admin@devhealth.example test org) — no customer data. Owner: Ask Dev web lane. Review trigger: re-capture when answer rendering or the evidence accordion changes materially.</figcaption>

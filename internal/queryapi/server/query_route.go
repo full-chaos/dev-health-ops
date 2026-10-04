@@ -923,6 +923,32 @@ const registeredCapacityForecastDocument = `query CapacityForecast($orgId: Strin
   }
 }`
 
+// registeredCapacityCompletionDistributionDocument is CHAOS-8598's per-team read document: one team's capacityForecast, selecting only
+// completionDistribution{days items}. It is the MCP run_operation read of the Monte Carlo histograms. The text is the wire form (urql formatDocument + stringifyDocument, so __typename is injected) of the web source const the graphql-wire-parity gate pairs it with.
+// The team id comes from the client; historyDays and simulations default in the document (90 and 10000, the SDL defaults, and 10000 is
+// mcpMaxSimulations). The operation key differs from the GraphQL root (capacityForecast) because a digest maps to exactly one operation.
+const registeredCapacityCompletionDistributionDocument = `query CapacityCompletionDistribution($orgId: String!, $teamId: String!, $historyDays: Int! = 90, $simulations: Int! = 10000) {
+  capacityForecast(
+    orgId: $orgId
+    input: {teamId: $teamId, historyDays: $historyDays, simulations: $simulations}
+  ) {
+    completionDistribution {
+      days {
+        value
+        count
+        __typename
+      }
+      items {
+        value
+        count
+        __typename
+      }
+      __typename
+    }
+    __typename
+  }
+}`
+
 // registeredCapacityForecastV2Document is the text capacityForecast accepted BEFORE it asked for `runs` and for
 // `cumulativeShare` on the bins of completionDistribution (CHAOS-8477): the text CHAOS-7994 registered. It stays a
 // legacy text (see legacyDigestsByOperation), beside V1 below, so a web build still sending it keeps working
@@ -1340,6 +1366,64 @@ const registeredFeatureFlagTimeseriesDocument = `query FeatureFlagTimeseries($or
       }
       __typename
     }
+    __typename
+  }
+}`
+
+// registeredCoverageBaselinesDocument is the registered document for the
+// `coverageBaselines` operation (CHAOS-8111, Go-only: no Python resolver
+// exists), the exact wire-form text the web client sends
+// (testdata/wire_capture/coveragebaselines_captured.graphql; the wire form of
+// TESTOPS_COVERAGE_BASELINES_QUERY, computed with the web's pinned urql).
+const registeredCoverageBaselinesDocument = `query CoverageBaselines($orgId: String!, $endDate: Date!, $repoIds: [String!], $teamIds: [String!]) {
+  coverageBaselines(
+    orgId: $orgId
+    endDate: $endDate
+    repoIds: $repoIds
+    teamIds: $teamIds
+  ) {
+    repoId
+    repoName
+    lineBaselinePct
+    lineDays
+    branchBaselinePct
+    branchDays
+    __typename
+  }
+}`
+
+// registeredCoverageScopeBaselineDocument is the registered document for the
+// `coverageScopeBaseline` operation (CHAOS-8541, Go-only: no Python resolver
+// exists), the exact wire-form text the web client sends
+// (testdata/wire_capture/coveragescopebaseline_captured.graphql; the wire form
+// of TESTOPS_COVERAGE_SCOPE_BASELINE_QUERY, computed with the web's pinned
+// urql). The web sends no scope and reads the line baseline only.
+const registeredCoverageScopeBaselineDocument = `query CoverageScopeBaseline($orgId: String!, $endDate: Date!) {
+  coverageScopeBaseline(orgId: $orgId, endDate: $endDate) {
+    lineBaselinePct
+    lineDays
+    __typename
+  }
+}`
+
+// registeredTestopsJobFailuresDocument is the registered document for the
+// `testopsJobFailures` operation (CHAOS-8513, Go-only: no Python resolver
+// exists), the exact wire-form text the web client sends
+// (testdata/wire_capture/testopsjobfailures_captured.graphql; the wire form of
+// TESTOPS_JOB_FAILURES_QUERY, computed with the web's pinned urql).
+const registeredTestopsJobFailuresDocument = `query TestOpsJobFailures($orgId: String!, $input: TestOpsJobFailuresInput!) {
+  testopsJobFailures(orgId: $orgId, input: $input) {
+    groups {
+      workflowName
+      jobName
+      provider
+      runs
+      failedRuns
+      failureRate
+      __typename
+    }
+    totalCount
+    truncated
     __typename
   }
 }`
@@ -3526,6 +3610,7 @@ func newQueryHandler(chClient featureflags.QueryClient, pgPool *pgxpool.Pool, ve
 		"investmentBreakdown":               digestHex(registeredInvestmentBreakdownDocument),
 		"investmentFull":                    digestHex(registeredInvestmentFullDocument),
 		"capacityForecast":                  digestHex(registeredCapacityForecastDocument),
+		"capacityCompletionDistribution":    digestHex(registeredCapacityCompletionDistributionDocument),
 		"capacityForecasts":                 digestHex(registeredCapacityForecastsDocument),
 		"throughputForecast":                digestHex(registeredThroughputForecastDocument),
 		"featureFlagEvents":                 digestHex(registeredFeatureFlagEventsDocument),
@@ -3566,6 +3651,9 @@ func newQueryHandler(chClient featureflags.QueryClient, pgPool *pgxpool.Pool, ve
 		"aiAttributedPrs":                   digestHex(registeredAiAttributedPrsDocument),
 		"aiAttributionOverview":             digestHex(registeredAiAttributionOverviewDocument),
 		"testopsRisk":                       digestHex(registeredTestopsRiskDocument),
+		"testopsJobFailures":                digestHex(registeredTestopsJobFailuresDocument),
+		"coverageBaselines":                 digestHex(registeredCoverageBaselinesDocument),
+		"coverageScopeBaseline":             digestHex(registeredCoverageScopeBaselineDocument),
 		"workItemTeamAttributions":          digestHex(registeredWorkItemTeamAttributionsDocument),
 		"recommendations":                   digestHex(registeredRecommendationsDocument),
 	}

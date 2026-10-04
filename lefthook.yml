@@ -1,4 +1,4 @@
-# Pre-commit + pre-push hooks for ruff format + lint, plus a mypy type-check gate.
+# Pre-commit + pre-push hooks for ruff format + lint.
 #
 # Design rationale:
 #   - pre-commit hook auto-fixes formatting + lint on staged files and
@@ -10,11 +10,8 @@
 #     cannot modify the commits being pushed (git's model), so auto-fix would
 #     leave uncommitted changes in the working tree and block the push without
 #     resolving anything. Final-gate-without-auto-fix is the correct shape here.
-#   - mypy runs as a non-fixable gate in BOTH pre-commit and pre-push. It type-
-#     checks the whole project (the `files` set in [tool.mypy], not just staged
-#     files) because per-file mypy is unreliable — it needs full module context.
-#     The glob "*.py" means it only fires when Python files are involved, and the
-#     incremental cache (.mypy_cache/) keeps warm runs well under a second.
+#   - There is no mypy hook: hosted CI retired mypy (CHAOS-8352) and the kept
+#     Python no longer type-checks clean (CHAOS-8616).
 #     Every Python tool here goes through scripts/run_py_tool.sh so it always
 #     resolves the PROJECT environment. A bare tool name picks up whatever is
 #     first on PATH -- or nothing at all -- and
@@ -50,45 +47,6 @@ pre-commit:
       glob: "*.py"
       run: scripts/run_py_tool.sh ruff check --fix {staged_files}
       stage_fixed: true
-    mypy:
-      # CHAOS-4843: a bare `glob: "*.py"` meant a change touching ONLY a config
-      # file this gate cares about (mypy.ini, pyproject.toml, ...) never
-      # triggered this command. CI's mypy job and its relevance script were
-      # removed (CHAOS-8352); this hook is now local-only.
-      glob:
-        - ".github/workflows/**"
-        - "src/**"
-        - ".gitignore"
-        - ".ignore"
-        - "ruff.toml"
-        - ".ruff.toml"
-        - "mypy.ini"
-        - ".mypy.ini"
-        - "setup.cfg"
-        - "tests/**"
-        - "ci/**"
-        - "migrations/**"
-        - "requirements.txt"
-        - "pyproject.toml"
-        - "uv.lock"
-        - "scripts/**"
-        - "**/*.py"
-        - "lefthook.yml"
-      # CHAOS-4843: bare `mypy` (no args) falls back to `[tool.mypy] files =
-      # ["src", "tests", "scripts"]` in pyproject.toml, silently excluding
-      # internal/, ci/ and .github/ (196+ Python files, including every
-      # live-Python-oracle generator) from every local run. CI's typecheck job
-      # always runs `mypy .` once triggered -- the whole tree, no files-list
-      # restriction, since an explicit path argument overrides `files`
-      # entirely. Passing `.` here matches that exactly: the third,
-      # independently-drifting set is eliminated rather than kept in sync by
-      # enumeration (the same lesson #2157/CHAOS-4281 already learned for the
-      # workflow's own trigger-path list). `[tool.mypy] files` is left as-is
-      # in pyproject.toml for IDEs and any other bare invocation; it is just
-      # no longer load-bearing for this gate.
-      run: scripts/run_py_tool.sh mypy .
-      fail_text: "mypy found type errors. Fix them, or `git commit --no-verify` to bypass (discouraged)."
-
 pre-push:
   parallel: true
   commands:
@@ -102,44 +60,6 @@ pre-push:
       glob: "*.py"
       run: scripts/run_py_tool.sh ruff check {push_files}
       fail_text: "Run `ruff check --fix .` locally, commit the result, push again. Or `git push --no-verify` to bypass."
-    mypy:
-      # CHAOS-4843: a bare `glob: "*.py"` meant a change touching ONLY a config
-      # file this gate cares about (mypy.ini, pyproject.toml, ...) never
-      # triggered this command. CI's mypy job and its relevance script were
-      # removed (CHAOS-8352); this hook is now local-only.
-      glob:
-        - ".github/workflows/**"
-        - "src/**"
-        - ".gitignore"
-        - ".ignore"
-        - "ruff.toml"
-        - ".ruff.toml"
-        - "mypy.ini"
-        - ".mypy.ini"
-        - "setup.cfg"
-        - "tests/**"
-        - "ci/**"
-        - "migrations/**"
-        - "requirements.txt"
-        - "pyproject.toml"
-        - "uv.lock"
-        - "scripts/**"
-        - "**/*.py"
-        - "lefthook.yml"
-      # CHAOS-4843: bare `mypy` (no args) falls back to `[tool.mypy] files =
-      # ["src", "tests", "scripts"]` in pyproject.toml, silently excluding
-      # internal/, ci/ and .github/ (196+ Python files, including every
-      # live-Python-oracle generator) from every local run. CI's typecheck job
-      # always runs `mypy .` once triggered -- the whole tree, no files-list
-      # restriction, since an explicit path argument overrides `files`
-      # entirely. Passing `.` here matches that exactly: the third,
-      # independently-drifting set is eliminated rather than kept in sync by
-      # enumeration (the same lesson #2157/CHAOS-4281 already learned for the
-      # workflow's own trigger-path list). `[tool.mypy] files` is left as-is
-      # in pyproject.toml for IDEs and any other bare invocation; it is just
-      # no longer load-bearing for this gate.
-      run: scripts/run_py_tool.sh mypy .
-      fail_text: "mypy found type errors. Run `mypy` locally, fix them, commit, push again. Or `git push --no-verify` to bypass."
     shellcheck-pin:
       # CHAOS-4915. Same pinned version and same file set as CI, from one
       # source of truth (ci/shellcheck_pinned.sh), so local and CI cannot

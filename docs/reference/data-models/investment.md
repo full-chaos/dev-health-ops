@@ -10,7 +10,7 @@ source_of_truth:
   - internal/jobs/investment/materialize.go
   - src/dev_health_ops/investment_taxonomy.py
   - src/dev_health_ops/work_graph/investment/
-  - src/dev_health_ops/api/queries/investment.py
+  - internal/queryapi/investment/reader.go
 applicability: current
 lifecycle: active
 ---
@@ -157,7 +157,7 @@ Both counts are of DISTINCT keys -- `(work unit, repository)` pairs on top, work
 
 A work unit is in scope for a category when it carries POSITIVE weight in that category, not merely a subcategory entry for it. Distributions are dense -- every unit carries an entry for every subcategory, weight zero where it does not apply -- so selecting on the presence of an entry would put every unit in scope and the filter would never remove anything. On the reference organization, all units carry a `feature_delivery` entry while about 71 percent carry positive `feature_delivery` weight.
 
-Note that the Python implementation still carries the old behaviour, so the two API planes can disagree on filtered coverage. The Go plane is the source of truth for these figures.
+The Go plane is the source of truth for these figures.
 
 What the split guarantees, and has guaranteed throughout: direct plus team-fallback always equals the headline `repoCoverage` numerator exactly.
 

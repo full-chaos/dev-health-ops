@@ -548,6 +548,15 @@ var operationSpecs = map[string]OperationSpec{
 			StochasticLeaves: capacityForecastStochasticLeaves,
 		},
 	},
+	// capacityCompletionDistribution (CHAOS-8598) is the per-team MCP read of capacityForecast's histograms. The bins are drawn values (fresh
+	// seed per request, see capacityForecastStochasticLeaves), so no leaf of it is comparable across two responses.
+	"capacityCompletionDistribution": {
+		ResponseRoot: "capacityForecast",
+		RootNullable: true,
+		Variables: func(orgID string, _ Window) map[string]any {
+			return map[string]any{"orgId": orgID, "teamId": "team-proof"}
+		},
+	},
 	// capacityForecasts (the LIST) declares no Tier-B and no volatile
 	// fields: its resolver reads stored columns back rather than
 	// recomputing, so forecastId/computedAt are not per-request values and
@@ -1140,6 +1149,42 @@ var operationSpecs = map[string]OperationSpec{
 				},
 				Parity: testopsRiskParity(false, testopsRiskAllDeltas...),
 			},
+		},
+	},
+	// coverageBaselines (CHAOS-8111) is Go-only from its first day: no Python
+	// resolver ever existed. Its two floats are ClickHouse avg() values of the
+	// stored daily percentages; with no baseline answer to compare with, no
+	// Tier-B leaf is declared. The request is the web's: the day after the
+	// window's last day, and no scope.
+	"coverageBaselines": {
+		ResponseRoot: "coverageBaselines",
+		Variables: func(orgID string, w Window) map[string]any {
+			return map[string]any{"orgId": orgID, "endDate": w.UntilDate}
+		},
+	},
+	// coverageScopeBaseline (CHAOS-8541) is Go-only from its first day, as
+	// coverageBaselines is. Its one float is a ClickHouse avg() of avg() values
+	// of the stored daily percentages; with no baseline answer to compare with,
+	// no Tier-B leaf is declared. The request is the web's: the day after the
+	// window's last day, and no scope.
+	"coverageScopeBaseline": {
+		ResponseRoot: "coverageScopeBaseline",
+		Variables: func(orgID string, w Window) map[string]any {
+			return map[string]any{"orgId": orgID, "endDate": w.UntilDate}
+		},
+	},
+	// testopsJobFailures (CHAOS-8513) is Go-only from its first day: no Python
+	// resolver ever existed, so there is no baseline answer to compare it with.
+	// Its one float, failureRate, is failedRuns / runs: two integer counts of
+	// the same answer divided once in Go, so it declares no Tier-B leaf. The
+	// request is the web's 30-day window with the default limit: the operation
+	// refuses a range of more than 90 days, and the proof window is 92.
+	"testopsJobFailures": {
+		ResponseRoot: "testopsJobFailures",
+		Variables: func(orgID string, w Window) map[string]any {
+			return map[string]any{"orgId": orgID, "input": map[string]any{
+				"sinceDate": testopsJobFailuresSince(w.UntilDate), "untilDate": w.UntilDate, "limit": 20,
+			}}
 		},
 	},
 	"throughputForecast": {
@@ -2757,6 +2802,17 @@ var testopsRiskDeltaReasons = map[string]string{
 	"data.testopsRisk.confidenceDelta": "derived from avg(confidence_score) (CHAOS-5451)",
 	"data.testopsRisk.dragDelta":       testopsFloatAggregate,
 	"data.testopsRisk.stabilityDelta":  "derived from avg(stability_index) (CHAOS-5451)",
+}
+
+// testopsJobFailuresSince is the first day of the 30-day range that ends on
+// until (CHAOS-8513). A date it cannot read is returned as it is, so the
+// operation's own validation answers for it.
+func testopsJobFailuresSince(until string) string {
+	day, err := time.Parse("2006-01-02", until)
+	if err != nil {
+		return until
+	}
+	return day.AddDate(0, 0, -30).Format("2006-01-02")
 }
 
 // testopsRiskWeekStart is the first day of the seven-day range that ends on

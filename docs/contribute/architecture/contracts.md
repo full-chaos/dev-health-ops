@@ -31,6 +31,8 @@ Jira Service Management incident code is not a supported public capability until
 
 ## Public API and schema contracts
 
+> **Note:** The Go api does not serve the Ask Dev (`/api/v1/dev`) surface. The Ask Dev paragraphs of this section are a record of the Python surface that was removed.
+
 - Public REST, GraphQL, CLI, webhook, and Customer Push schemas are generated or verified from code.
 - Incompatible public changes require an explicit version, compatibility bridge, or deprecation path.
 - Nullability, pagination, rate limits, errors, and authorization are part of the contract, not implementation details.
@@ -77,7 +79,7 @@ organization, and conversation, and persists a distinct linked run. Closing a
 browser stream signals cancellation and waits for the recorder to persist the
 terminal `cancelled` state.
 
-The production runtime is request-scoped. FastAPI dependency cleanup closes it
+The production runtime is request-scoped. Dependency cleanup closes it
 exactly once after a new stream, an idempotent replay, or an early validation or
 persistence response; replay never executes the provider a second time.
 

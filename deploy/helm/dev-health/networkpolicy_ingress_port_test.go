@@ -3,6 +3,7 @@ package devhealth_test
 import (
 	"fmt"
 	"os/exec"
+	"sort"
 	"strings"
 	"testing"
 
@@ -91,6 +92,17 @@ func (s netpolSelector) selects(labels map[string]string) bool {
 // admittedFromIngressController returns which of the probe ports some policy selecting `pod` admits from a pod of the
 // ingress-nginx namespace. selected reports whether any ingress policy selects the pod at all.
 func admittedFromIngressController(policies []netpolDoc, pod map[string]string, probes []int) (admitted []int, selected bool) {
+	return admittedFrom(policies, pod, probes, sourceController)
+}
+
+type netpolSource int
+
+const (
+	sourceController netpolSource = iota // a pod of the ingress-nginx namespace
+	sourceStranger                       // a pod of the release namespace no rule names
+)
+
+func admittedFrom(policies []netpolDoc, pod map[string]string, probes []int, source netpolSource) (admitted []int, selected bool) {
 	for _, probe := range probes {
 		for _, policy := range policies {
 			if !policy.Spec.PodSelector.selects(pod) {
@@ -104,7 +116,7 @@ func admittedFromIngressController(policies []netpolDoc, pod map[string]string, 
 				continue
 			}
 			selected = true
-			if policyAdmitsPort(policy, probe) {
+			if policyAdmitsPort(policy, probe, source) {
 				admitted = append(admitted, probe)
 				break
 			}
@@ -113,12 +125,19 @@ func admittedFromIngressController(policies []netpolDoc, pod map[string]string, 
 	return admitted, selected
 }
 
-func policyAdmitsPort(policy netpolDoc, probe int) bool {
+func policyAdmitsPort(policy netpolDoc, probe int, source netpolSource) bool {
 	for _, rule := range policy.Spec.Ingress {
 		admits := len(rule.From) == 0
 		for _, peer := range rule.From {
-			if peer.NamespaceSelector != nil && peer.PodSelector == nil && peer.NamespaceSelector.MatchLabels["name"] == "ingress-nginx" {
-				admits = true
+			switch source {
+			case sourceController:
+				if peer.NamespaceSelector != nil && peer.PodSelector == nil && peer.NamespaceSelector.MatchLabels["name"] == "ingress-nginx" {
+					admits = true
+				}
+			case sourceStranger:
+				if peer.NamespaceSelector == nil && peer.PodSelector != nil && peer.PodSelector.selects(map[string]string{"app": "stranger"}) {
+					admits = true
+				}
 			}
 		}
 		if !admits {
@@ -150,8 +169,8 @@ func TestNetworkPolicyLetsTheIngressControllerReachGoAPI(t *testing.T) {
 		port int
 		want []int // the probe ports the ingress controller may reach on the go-api pods
 	}{
-		"internal listener off":          {[]string{"--set", "goApi.internal.enabled=false"}, 8000, []int{3000, 8000}},
-		"internal off, another api port": {[]string{"--set", "goApi.internal.enabled=false", "--set", "goApi.port=9000"}, 9000, []int{3000, 9000}},
+		"internal listener off":          {[]string{"--set", "goApi.internal.enabled=false"}, 8000, []int{8000}},
+		"internal off, another api port": {[]string{"--set", "goApi.internal.enabled=false", "--set", "goApi.port=9000"}, 9000, []int{9000}},
 		// With the internal listener on, the go-api-internal policy governs the go-api pods: every port but the internal
 		// one (8091), which only goApi.internal.allowedFrom reaches.
 		"internal listener on":          {[]string{"--set", "goApi.internal.enabled=true"}, 8000, []int{3000, 8000, 8010, 8090, 8092, 9000, 9001}},
@@ -177,29 +196,87 @@ func TestNetworkPolicyLetsTheIngressControllerReachGoAPI(t *testing.T) {
 	}
 }
 
-// The shared policy opens exactly the go-api port and the web port to the ingress controller (what it opened before the
-// Python api was deleted, with the api port now the go-api port) on the pods it selects.
-func TestSharedNetworkPolicyIngressControllerPorts(t *testing.T) {
-	for _, internal := range []string{"false", "true"} {
-		policies := renderNetpols(t, "--set", "goApi.internal.enabled="+internal)
-		for _, policy := range policies {
-			if policy.Metadata.Name != "np-dev-health" {
-				continue
-			}
-			var got []int
-			for _, rule := range policy.Spec.Ingress {
-				for _, peer := range rule.From {
-					if peer.NamespaceSelector != nil && peer.PodSelector == nil {
-						for _, port := range rule.Ports {
-							got = append(got, port.Port)
+// CHAOS-8552: the ingress controller reaches only the pods the Ingress routes to (go-api and web), on the port of that
+// component's Service, and no other pod of the release on any port. The check runs on the UNION of every rendered
+// policy (NetworkPolicies are additive), per pod, so a broad rule on one policy cannot hide behind a narrow one on another.
+func TestIngressControllerReachesOnlyGoAPIAndWebOnTheirOwnPorts(t *testing.T) {
+	probes := []int{3000, 5432, 6379, 6432, 6433, 6434, 8000, 8010, 8080, 8090, 8091, 8092, 8123, 9000, 9001}
+	pods := []string{"go-api", "web", "query-api", "go-worker", "valkey", "clickhouse", "postgresql",
+		"go-pgbouncer-transaction", "go-pgbouncer-queue-session", "go-pgbouncer-coordinator-session",
+		"migrate", "provision-roles", "river-migrate"}
+	for name, c := range map[string]struct {
+		args     []string
+		goPort   int
+		webPort  int
+		queryAPI bool
+		goAll    bool // go-api-internal governs the go-api pods: every port but the internal one (CHAOS-7181)
+	}{
+		"defaults, internal listener off":    {[]string{"--set", "goApi.internal.enabled=false"}, 8000, 3000, false, false},
+		"defaults, internal listener on":     {[]string{"--set", "goApi.internal.enabled=true"}, 8000, 3000, false, true},
+		"go-api port = clickhouse native":    {[]string{"--set", "goApi.internal.enabled=false", "--set", "goApi.port=9000"}, 9000, 3000, false, false},
+		"go-api port = pgbouncer, internal":  {[]string{"--set", "goApi.internal.enabled=true", "--set", "goApi.port=6432"}, 6432, 3000, false, true},
+		"web port = pgbouncer queue session": {[]string{"--set", "goApi.internal.enabled=false", "--set", "web.port=6433"}, 8000, 6433, false, false},
+		"query-api with internal listener": {[]string{"--set", "goApi.internal.enabled=false", "--set", "queryApi.enabled=true",
+			"--set", "queryApi.internal.enabled=true", "--set", "queryApi.internal.allowedFrom[0].matchLabels.app=tools"}, 8000, 3000, true, false},
+		"go workers with pgbouncer, bundled postgresql": {[]string{"--set", "goApi.internal.enabled=false", "--set", "postgresql.enabled=true"}, 8000, 3000, false, false},
+	} {
+		t.Run(name, func(t *testing.T) {
+			policies := renderNetpols(t, c.args...)
+			for _, component := range pods {
+				labels := map[string]string{"app.kubernetes.io/name": "dev-health", "app.kubernetes.io/instance": "np", "app.kubernetes.io/component": component}
+				admitted, _ := admittedFromIngressController(policies, labels, probes)
+				var want []int
+				switch {
+				case component == "go-api" && c.goAll:
+					for _, probe := range probes {
+						if probe != 8091 {
+							want = append(want, probe)
 						}
 					}
+				case component == "go-api":
+					want = []int{c.goPort}
+				case component == "web":
+					want = []int{c.webPort}
+				case component == "query-api" && c.queryAPI:
+					want = []int{8090} // the query-api policy opens its public port to every source; the Ingress routes /graphql there
+				}
+				sort.Ints(want)
+				sort.Ints(admitted)
+				if fmt.Sprint(admitted) != fmt.Sprint(want) {
+					t.Errorf("%s pods: the ingress controller is admitted to %v, want exactly %v", component, admitted, want)
 				}
 			}
-			if want := []int{8000, 3000}; len(got) != 2 || got[0] != want[0] || got[1] != want[1] {
-				t.Errorf("internal=%s: the shared policy admits the ingress controller on %v, want %v", internal, got, want)
+			// Every pod's allowed sources, for the log of a failing run.
+			for _, component := range pods {
+				labels := map[string]string{"app.kubernetes.io/name": "dev-health", "app.kubernetes.io/instance": "np", "app.kubernetes.io/component": component}
+				fromController, _ := admittedFrom(policies, labels, probes, sourceController)
+				fromStranger, _ := admittedFrom(policies, labels, probes, sourceStranger)
+				t.Logf("%-34s controller:%v in-namespace-stranger:%v", component, fromController, fromStranger)
+			}
+		})
+	}
+}
+
+// The go-api internal port stays closed to the ingress controller and to any in-namespace pod no rule names, on the
+// union of every policy (CHAOS-7181), and the same for the query-api internal port.
+func TestInternalPortsAreClosedOnTheUnion(t *testing.T) {
+	policies := renderNetpols(t, "--set", "goApi.internal.enabled=true", "--set", "queryApi.enabled=true",
+		"--set", "queryApi.internal.enabled=true", "--set", "queryApi.internal.allowedFrom[0].matchLabels.app=tools")
+	for component, port := range map[string]int{"go-api": 8091} {
+		labels := map[string]string{"app.kubernetes.io/name": "dev-health", "app.kubernetes.io/instance": "np", "app.kubernetes.io/component": component}
+		for source, who := range map[netpolSource]string{sourceController: "the ingress controller", sourceStranger: "an unnamed in-namespace pod"} {
+			admitted, selected := admittedFrom(policies, labels, []int{port}, source)
+			if !selected {
+				t.Fatalf("no ingress policy selects the %s pods", component)
+			}
+			if len(admitted) != 0 {
+				t.Errorf("%s is admitted to the %s internal port %d", who, component, port)
 			}
 		}
+	}
+	queryAPI := map[string]string{"app.kubernetes.io/name": "dev-health", "app.kubernetes.io/instance": "np", "app.kubernetes.io/component": "query-api"}
+	if admitted, _ := admittedFrom(policies, queryAPI, []int{8091}, sourceController); len(admitted) != 0 {
+		t.Errorf("the ingress controller is admitted to the query-api internal port: %v", admitted)
 	}
 }
 

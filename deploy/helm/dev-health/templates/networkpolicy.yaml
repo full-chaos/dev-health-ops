@@ -24,16 +24,12 @@ spec:
     - Ingress
     - Egress
   ingress:
-    # Allow ingress controller traffic
-    - from:
-        - namespaceSelector:
-            matchLabels:
-              name: ingress-nginx
-      ports:
-        - protocol: TCP
-          port: {{ .Values.goApi.port }}
-        - protocol: TCP
-          port: {{ .Values.web.port }}
+    {{- /*
+    CHAOS-8552: no ingress-controller rule here. This policy selects (almost) every pod of the release, so a controller rule
+    on it admitted the controller on the same ports at the datastores and workers too (a goApi.port of 9000 or 6432 opened the
+    ClickHouse native or PgBouncer port to it). The controller reaches only the pods the Ingress routes to, through the
+    per-component policies below.
+    */}}
     # Allow pod-to-pod within namespace
     - from:
         - podSelector: {}
@@ -54,6 +50,35 @@ spec:
       ports:
         - protocol: TCP
           port: 443
+{{- range $component := list "go-api" "web" }}
+{{- $enabled := ternary $.Values.goApi.enabled $.Values.web.enabled (eq $component "go-api") }}
+{{- $port := ternary $.Values.goApi.port $.Values.web.port (eq $component "go-api") }}
+{{- if $enabled }}
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ include "dev-health.fullname" $ }}-ingress-{{ $component }}
+  namespace: {{ include "dev-health.namespace" $ }}
+  labels:
+    {{- include "dev-health.componentLabels" (dict "component" (printf "%s-ingress" $component) "context" $) | nindent 4 }}
+spec:
+  podSelector:
+    matchLabels:
+      {{- include "dev-health.componentSelectorLabels" (dict "component" $component "context" $) | nindent 6 }}
+  policyTypes:
+    - Ingress
+  ingress:
+    # CHAOS-8552: the ingress controller reaches this component's Service port and nothing else.
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              name: ingress-nginx
+      ports:
+        - protocol: TCP
+          port: {{ $port }}
+{{- end }}
+{{- end }}
 {{- if and .Values.goApi.enabled .Values.goApi.internal.enabled }}
 ---
 apiVersion: networking.k8s.io/v1

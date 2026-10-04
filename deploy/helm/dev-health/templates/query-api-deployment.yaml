@@ -312,7 +312,7 @@ spec:
     boundary: only the pod selectors the operator names under queryApi.internal.allowedFrom (for example the tools pod
     that runs `dho goapi prove-write`). CHAOS-7520: no workload of this release calls the internal port any more (its
     only caller was the Python api's edge dispatcher), so there is no release-local peer. With allowedFrom empty the
-    rule is OMITTED: a rule with an empty `from` admits every source, so the port is denied to everybody instead.
+    rule is OMITTED: a rule with an empty `from` admits every source, so this policy denies the port to everybody. With networkPolicy.enabled the shared policy's in-namespace rule still admits every release pod on this port (NetworkPolicies are additive); only the ingress controller and sources outside the namespace are denied.
     */}}
     {{- with .Values.queryApi.internal.allowedFrom }}
     - from:

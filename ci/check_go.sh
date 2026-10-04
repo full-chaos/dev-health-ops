@@ -7,13 +7,24 @@ SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" >/dev/null 2>&1 && pwd -
 ROOT="$(cd -- "${SCRIPT_DIR}/.." >/dev/null 2>&1 && pwd -P)"
 GO_TOOLCHAIN="go1.27.0"
 export GOTOOLCHAIN="${GO_TOOLCHAIN}"
-# CHAOS-5224: precedence is an explicit DEV_HEALTH_GO_CACHE first, then an
-# already-inherited GOCACHE, and only then the tmp fallback. The old code
-# skipped straight to the tmp fallback regardless of what the caller already
-# exported, silently overwriting an inherited GOCACHE and growing a THIRD Go
-# build cache on bigboy's root disk (7.5G observed) alongside the two
-# legitimate bind-mounted caches.
-DEV_HEALTH_GO_CACHE="${DEV_HEALTH_GO_CACHE:-${GOCACHE:-${TMPDIR:-/tmp}/dev-health-go-build-cache}}"
+# CHAOS-5224 / CHAOS-5268: precedence is an explicit DEV_HEALTH_GO_CACHE first,
+# then an already-inherited GOCACHE, then `go env GOCACHE` (which reads the Go
+# env file written by `go env -w` as well as Go's own default dir), and only
+# when all three give nothing the tmp fallback. PR #2281 fixed the inherited
+# GOCACHE case only. Agent and tool shells are not login shells, so a GOCACHE
+# set by `go env -w` or in a login profile never reached this script's
+# environment, and every run wrote a cache under /tmp/dev-health-go-build-cache
+# on the root disk (106 GB in three days, root disk full on 2026-10-04). The tmp
+# fallback is now loud: it prints one line on stderr when it wins.
+# GOTOOLCHAIN=local: asking for a path must never download a toolchain.
+DEV_HEALTH_GO_CACHE="${DEV_HEALTH_GO_CACHE:-${GOCACHE:-}}"
+if [ -z "${DEV_HEALTH_GO_CACHE}" ]; then
+  DEV_HEALTH_GO_CACHE="$(GOTOOLCHAIN=local go env GOCACHE 2>/dev/null || true)"
+fi
+if [ -z "${DEV_HEALTH_GO_CACHE}" ]; then
+  DEV_HEALTH_GO_CACHE="${TMPDIR:-/tmp}/dev-health-go-build-cache"
+  echo "check_go.sh: WARNING: DEV_HEALTH_GO_CACHE, GOCACHE and 'go env GOCACHE' are all empty; using tmp fallback ${DEV_HEALTH_GO_CACHE}" >&2
+fi
 mkdir -p "${DEV_HEALTH_GO_CACHE}"
 export GOCACHE="${DEV_HEALTH_GO_CACHE}"
 DEV_HEALTH_GO_BUILD_OUTPUT=""

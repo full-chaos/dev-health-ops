@@ -9,9 +9,13 @@ the root disk (7.5G observed), separate from the two legitimate bind-mounted
 caches (``~/.cache/go-build``, ``~/go/pkg/mod``). Exporting ``GOCACHE``
 before calling the script was silently ineffective.
 
-The fixed precedence: an explicit ``DEV_HEALTH_GO_CACHE`` wins first;
-otherwise an already-inherited ``GOCACHE`` wins; only when NEITHER is set
-does the script fall back to ``${TMPDIR:-/tmp}/dev-health-go-build-cache``.
+The fixed precedence (CHAOS-5224, extended by CHAOS-5268): an explicit
+``DEV_HEALTH_GO_CACHE`` wins first; then an already-inherited ``GOCACHE``;
+then ``go env GOCACHE`` (the Go env file written by ``go env -w`` is invisible
+to a non-login agent shell's environment, which is how every run still wrote
+to /tmp); only when all three are empty does the script fall back to
+``${TMPDIR:-/tmp}/dev-health-go-build-cache``, and then it says so on stderr.
+A fake ``go`` on PATH stands in for ``go env GOCACHE``.
 
 WHAT THIS ASSERTS
 -----------------
@@ -45,9 +49,26 @@ def _gocache_precedence_snippet() -> str:
     return "\n".join(lines[start : end + 1])
 
 
+def _fake_go(tmp_path: Path, goenv_value: str) -> str:
+    """Return a PATH whose `go env GOCACHE` prints `goenv_value`."""
+    bindir = tmp_path / "fakebin"
+    bindir.mkdir(exist_ok=True)
+    go = bindir / "go"
+    go.write_text(
+        f'#!/usr/bin/env bash\n[ "$*" = "env GOCACHE" ] && echo "{goenv_value}"\nexit 0\n'
+    )
+    go.chmod(0o755)
+    return f"{bindir}:/usr/bin:/bin"
+
+
 def _run(env: dict[str, str]) -> str:
     """Run the extracted snippet under real bash with exactly `env`, return
     the resulting GOCACHE value it exports."""
+    return _run_full(env)[0]
+
+
+def _run_full(env: dict[str, str]) -> tuple[str, str]:
+    """Like _run, but also return stderr."""
     script = _gocache_precedence_snippet() + '\nprintf "%s" "$GOCACHE"\n'
     proc = subprocess.run(
         ["bash", "-c", script],
@@ -60,7 +81,7 @@ def _run(env: dict[str, str]) -> str:
         f"snippet exited {proc.returncode}\nstdout={proc.stdout!r}\n"
         f"stderr={proc.stderr!r}"
     )
-    return proc.stdout
+    return proc.stdout, proc.stderr
 
 
 def test_snippet_still_matches_the_expected_precedence_shape() -> None:
@@ -68,19 +89,53 @@ def test_snippet_still_matches_the_expected_precedence_shape() -> None:
     ever regresses to skip straight to the tmp fallback, fail loudly here
     rather than silently testing stale text."""
     snippet = _gocache_precedence_snippet()
-    assert "${DEV_HEALTH_GO_CACHE:-${GOCACHE:-" in snippet, (
+    assert "${DEV_HEALTH_GO_CACHE:-${GOCACHE:-}}" in snippet, (
         "ci/check_go.sh's DEV_HEALTH_GO_CACHE precedence no longer falls "
         "back through an inherited GOCACHE before the tmp default -- "
         f"CHAOS-5224 has regressed. Extracted snippet:\n{snippet}"
     )
 
 
-def test_neither_set_falls_back_to_tmpdir_default(tmp_path: Path) -> None:
-    env = {"PATH": "/usr/bin:/bin", "TMPDIR": str(tmp_path)}
-    result = _run(env)
+def test_all_empty_falls_back_to_tmpdir_default_and_says_so(tmp_path: Path) -> None:
+    env = {"PATH": _fake_go(tmp_path, ""), "TMPDIR": str(tmp_path)}
+    result, stderr = _run_full(env)
     expected = str(tmp_path / "dev-health-go-build-cache")
     assert result == expected, f"expected tmp fallback {expected!r}, got {result!r}"
     assert Path(result).is_dir(), f"expected {result!r} to have been mkdir -p'd"
+    assert "WARNING" in stderr and "tmp fallback" in stderr and expected in stderr, (
+        f"the tmp fallback must be loud on stderr, got {stderr!r}"
+    )
+
+
+def test_go_env_gocache_wins_over_tmp_fallback_silently(tmp_path: Path) -> None:
+    """CHAOS-5268: GOCACHE unset in the environment, but `go env GOCACHE`
+    (Go env file / default dir) gives a path: use it, not /tmp."""
+    goenv = tmp_path / "from-go-env"
+    env = {"PATH": _fake_go(tmp_path, str(goenv)), "TMPDIR": str(tmp_path / "unused")}
+    result, stderr = _run_full(env)
+    assert result == str(goenv), f"expected go env path {goenv!r}, got {result!r}"
+    assert Path(result).is_dir(), f"expected {result!r} to have been mkdir -p'd"
+    assert stderr == "", f"no fallback warning expected, got {stderr!r}"
+
+
+def test_inherited_gocache_wins_over_go_env(tmp_path: Path) -> None:
+    inherited = tmp_path / "caller-chosen-cache"
+    env = {
+        "PATH": _fake_go(tmp_path, str(tmp_path / "from-go-env")),
+        "TMPDIR": str(tmp_path / "unused"),
+        "GOCACHE": str(inherited),
+    }
+    assert _run(env) == str(inherited)
+
+
+def test_explicit_dev_health_go_cache_wins_over_go_env(tmp_path: Path) -> None:
+    chosen = tmp_path / "explicitly-chosen-cache"
+    env = {
+        "PATH": _fake_go(tmp_path, str(tmp_path / "from-go-env")),
+        "TMPDIR": str(tmp_path / "unused"),
+        "DEV_HEALTH_GO_CACHE": str(chosen),
+    }
+    assert _run(env) == str(chosen)
 
 
 def test_inherited_gocache_is_respected_not_overwritten(tmp_path: Path) -> None:

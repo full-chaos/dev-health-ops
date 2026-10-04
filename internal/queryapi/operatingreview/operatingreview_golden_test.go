@@ -9,17 +9,21 @@ import (
 	"time"
 )
 
-// The golden holds the exact output of the weekly operating review
+// The go-generated golden holds the exact output of the weekly operating review
 // computation for nine neutral, synthetic period-row sets (both periods
 // populated, reversed periods, no deployments, empty periods, current-only,
 // prior-only, identical periods, two AI threshold-boundary sets). The rows are the shape the ten period
-// queries return; the expected review is frozen data. Regenerating it needs
-// a reference implementation; a change to a metric, unit, direction or
-// threshold goes red here.
+// queries return; the expected review is frozen Go regression data. An
+// intentional metric change updates the affected snapshot under D4662.
 //
-// Floats compare within goldenFloatTolerance (relative). The reference
-// implementation summed with compensated summation, so a sum of three
-// unequal rates can differ from the plain left-to-right sum in the last bit;
+// CHAOS-8524 changes the unchanged_identical_periods governance snapshot.
+// The former mean of group ratios was (1.0 + 0.7) / 2 = 0.85. The decided
+// ratio of summed raw counts is 107 / 110 = 0.9727272727272728. Both remain
+// outside aiOpportunitySignals' below-0.80 threshold, so that output stays
+// at 3. This is a Go-to-Go regression snapshot, not a Python parity capture.
+//
+// Floats compare within goldenFloatTolerance (relative). A sum of three
+// unequal rates can differ from plain left-to-right summation in the last bit;
 // no status, recommendation or key depends on that bit.
 
 const goldenFloatTolerance = 1e-12
@@ -143,6 +147,15 @@ func (g goldenRows) toPeriodRows() periodRows {
 			humanPrs: gNum(r, "human_prs"), unknownPrs: gNum(r, "unknown_prs"),
 			aiCycleTimeDeltaHours: gNullable(r, "ai_cycle_time_delta_hours"), aiReviewAmplification: gNullable(r, "ai_review_amplification"),
 			reworkDragRate: gNullable(r, "rework_drag_rate"), testGapRate: gNullable(r, "test_gap_rate"), incidentDragRate: gNullable(r, "incident_drag_rate"),
+		})
+	}
+	for _, r := range g["ai_governance"] {
+		p.aiGovernance = append(p.aiGovernance, aiGovernanceRawRow{
+			aiArtifacts:        gNum(r, "ai_artifacts"),
+			declaredArtifacts:  gNum(r, "declared_artifacts"),
+			humanReviewedPrs:   gNum(r, "human_reviewed_prs"),
+			securityScannedPrs: gNum(r, "security_scanned_prs"),
+			inPolicyArtifacts:  gNum(r, "in_policy_artifacts"),
 		})
 	}
 	return p

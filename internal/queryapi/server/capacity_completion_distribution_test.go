@@ -23,7 +23,7 @@ import (
 // CHAOS-8598: the per-team completionDistribution read document that MCP run_operation serves by digest.
 
 // The digest is pinned as a literal: a change to the text changes the digest acr vendors, and the routing row a deploy seeds is keyed on it.
-const capacityCompletionDistributionPinnedDigest = "8588bc03a769c3703811e1a49189715f6acc2155a8897c476c4bbdab3aa6b4ba"
+const capacityCompletionDistributionPinnedDigest = "52cfd38c3f8346aec89fe807abda5a72fa24596a0fad9f302ca6121510b302e9"
 
 func loadCapacityCompletionDistribution(t *testing.T) *ast.OperationDefinition {
 	t.Helper()
@@ -121,8 +121,8 @@ func TestCapacityCompletionDistributionDocument_InputIsOneVariableWithSDLDefault
 		}
 	}
 	if len(op.VariableDefinitions) != 2 || op.VariableDefinitions[1].Variable != "input" ||
-		op.VariableDefinitions[1].Type.String() != "CapacityForecastInput!" {
-		t.Fatalf("variables %v, want $orgId and $input: CapacityForecastInput!", op.VariableDefinitions)
+		op.VariableDefinitions[1].Type.String() != "CapacityForecastInput" {
+		t.Fatalf("variables %v, want $orgId and $input: CapacityForecastInput", op.VariableDefinitions)
 	}
 	root := op.SelectionSet[0].(*ast.Field)
 	for _, arg := range root.Arguments {

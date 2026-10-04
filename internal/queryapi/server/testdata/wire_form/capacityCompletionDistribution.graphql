@@ -1,4 +1,4 @@
-query CapacityCompletionDistribution($orgId: String!, $input: CapacityForecastInput!) {
+query CapacityCompletionDistribution($orgId: String!, $input: CapacityForecastInput) {
   capacityForecast(orgId: $orgId, input: $input) {
     completionDistribution {
       days {

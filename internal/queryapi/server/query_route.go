@@ -882,9 +882,9 @@ const registeredCapacityForecastDocument = `query CapacityForecast($orgId: Strin
 
 // registeredCapacityCompletionDistributionDocument is CHAOS-8598's per-team read document: one team's capacityForecast, selecting only
 // completionDistribution{days items}. It is the MCP run_operation read of the Monte Carlo histograms. The text is the wire form (urql formatDocument + stringifyDocument, so __typename is injected) of the web source const the graphql-wire-parity gate pairs it with.
-// The whole input is ONE variable ($input: CapacityForecastInput!): acr refuses a variable nested in a literal argument. The client supplies
+// The whole input is ONE variable ($input: CapacityForecastInput): acr refuses a variable nested in a literal argument. The client supplies
 // {teamId}; historyDays and simulations default in the SDL input type (90 and 10000; 10000 is mcpMaxSimulations). The operation key differs from the GraphQL root (capacityForecast) because a digest maps to exactly one operation.
-const registeredCapacityCompletionDistributionDocument = `query CapacityCompletionDistribution($orgId: String!, $input: CapacityForecastInput!) {
+const registeredCapacityCompletionDistributionDocument = `query CapacityCompletionDistribution($orgId: String!, $input: CapacityForecastInput) {
   capacityForecast(orgId: $orgId, input: $input) {
     completionDistribution {
       days {

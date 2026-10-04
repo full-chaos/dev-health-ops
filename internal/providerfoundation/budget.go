@@ -1160,8 +1160,15 @@ func (m *Metrics) RecordJiraSearchPage(outcome string) {
 // "nobody has this app installed" apart from "the endpoint is broken" at a
 // glance. Named to match jiraDevStatusUnavailableCause (providersync)
 // verbatim, per the ruling's exact wording.
+//
+// CHAOS-8526: the endpoint is asked once per SCM application type, so each type also has its own outcomes under the same
+// metric, `<application type>_<outcome>` (github_synced, gitlab_empty, ...): "empty" is a 200 that carried no pull
+// requests, so a wrong application-type value shows as a loud gitlab_empty / gitlab_dev_status_unavailable count instead
+// of a silent zero beside a "synced" issue.
 var metricJiraDevStatusOutcomeVocabulary = map[string]struct{}{
 	"synced": {}, "dev_status_unavailable": {}, "failed": {}, "cap_skipped": {},
+	"github_synced": {}, "github_empty": {}, "github_dev_status_unavailable": {}, "github_failed": {}, "github_cap_skipped": {},
+	"gitlab_synced": {}, "gitlab_empty": {}, "gitlab_dev_status_unavailable": {}, "gitlab_failed": {}, "gitlab_cap_skipped": {},
 }
 
 // MetricJiraDevStatusOutcomeLabel bounds the outcome label by allowlist, the

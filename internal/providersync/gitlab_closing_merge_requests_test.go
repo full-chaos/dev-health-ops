@@ -1,6 +1,7 @@
 package providersync
 
 import (
+	"context"
 	"encoding/json"
 	"reflect"
 	"testing"
@@ -9,6 +10,8 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/full-chaos/dev-health-ops/internal/jobs/workgraph/issueprlinks"
+	"github.com/full-chaos/dev-health-ops/internal/providerfoundation"
+	"github.com/full-chaos/dev-health-ops/internal/testsupport/fakehttp"
 )
 
 func closingMRs(t *testing.T, raw string) []gitlabClosingMergeRequestPayload {
@@ -86,5 +89,67 @@ func TestGitLabClosingReferenceRowsBecomeNativeLinks(t *testing.T) {
 	}
 	if got[9] != apiRepo || got[3] != forkRepo {
 		t.Fatalf("links resolved to repos %v, want MR 9 -> %s and MR 3 -> %s", got, apiRepo, forkRepo)
+	}
+}
+
+// The closed_by response carries MRs of every state (opened, merged, closed without merging). The GitHub linker
+// (extractGitHubClosingIssueReferences) emits a row for every closingIssuesReferences entry whatever the PR's state, and
+// so does this one: provider-agnostic parity, CHAOS-8526. The state is the provider's own, not a filter of ours.
+func TestNormalizeGitLabClosingMergeRequestsKeepsEveryMergeRequestState(t *testing.T) {
+	t.Parallel()
+	claim := nativeTestClaim("gitlab", "work-items")
+	rows := normalizeGitLabClosingMergeRequests(claim, "gitlab:acme/api#42", "acme/api", closingMRs(t, `[
+		{"iid":1,"state":"opened","references":{"full":"acme/api!1"}},
+		{"iid":2,"state":"merged","references":{"full":"acme/api!2"}},
+		{"iid":3,"state":"closed","references":{"full":"acme/api!3"}}
+	]`), time.Date(2026, 9, 1, 12, 0, 0, 0, time.UTC))
+	if len(rows) != 3 {
+		t.Fatalf("rows=%d want 3 (open, merged and closed-unmerged all link, as on GitHub)", len(rows))
+	}
+}
+
+// The closed_by fetch of one issue failing is not swallowed and does not poison the batch: it is logged with the issue,
+// counted, the other rows are kept, and the watermark is held so the next run asks again.
+func TestGitLabWorkItemsRouteClosedByFailureIsCountedAndHoldsTheWatermark(t *testing.T) {
+	for name, withClosedBy := range map[string]bool{"closed_by answers": true, "closed_by fails": false} {
+		t.Run(name, func(t *testing.T) {
+			classifier, err := NewInvestmentClassifier(investmentConfigPath(t, "real"))
+			if err != nil {
+				t.Fatal(err)
+			}
+			deriver := GitLabWorkItemDeriver{Source: &githubMultiDayOracleSource{}, statusMapping: loadRealStatusMapping(t), investmentClassifier: classifier}
+			responses := gitLabWorkItemResponses()
+			root := "/api/v4/projects/123"
+			responses[root+"/merge_requests?page=1"] = []string{
+				`[{"iid":9,"title":"Ship the API","description":"","state":"opened","created_at":"2026-07-04T09:00:00Z","updated_at":"2026-07-04T10:00:00Z","labels":["priority::low"],"assignees":[],"author":{"username":"alice","bot":false},"source_branch":"feature/ship-api"}]`, `[]`,
+			}
+			if !withClosedBy {
+				delete(responses, root+"/issues/42/closed_by?page=1")
+			}
+			doer := &gitLabWorkItemsDoer{responses: responses}
+			claim := nativeTestClaim("gitlab", "work-items")
+			claim.OrgID = "77777777-7777-4777-8777-777777777777"
+			batch, err := (GitLabWorkItemsRouteHandler{
+				StatusMapping: loadRealStatusMapping(t), Derived: deriver, PerPage: 2, MaxPages: 10, NestedMaxPages: 10,
+			}).Collect(context.Background(), claim, providerfoundation.Credential{Provider: "gitlab", ID: claim.CredentialID},
+				gitLabWorkItemsClient(t, fakehttp.Client(doer)), time.Date(2026, 8, 3, 12, 0, 0, 0, time.UTC))
+			if err != nil {
+				t.Fatalf("a closed_by failure must not fail the batch: %v", err)
+			}
+			failed, synced := batch.Result["closing_reference_fetch_failed"], batch.Result["closing_reference_dependencies_synced"]
+			_, incomplete := batch.Result["incomplete"]
+			if withClosedBy {
+				if failed != 0 || synced != 1 || incomplete || batch.Watermark == nil {
+					t.Fatalf("answering closed_by: failed=%v synced=%v incomplete=%v watermark=%v", failed, synced, incomplete, batch.Watermark)
+				}
+				return
+			}
+			if failed != 1 || synced != 0 || !incomplete || batch.Watermark != nil {
+				t.Fatalf("failing closed_by: failed=%v synced=%v incomplete=%v watermark=%v (counted, loud, watermark held)", failed, synced, incomplete, batch.Watermark)
+			}
+			if got := batch.Result["incomplete"].([]string); len(got) != 1 || got[0] != "gitlab:acme/api#42" {
+				t.Fatalf("incomplete=%v want the issue ref", got)
+			}
+		})
 	}
 }

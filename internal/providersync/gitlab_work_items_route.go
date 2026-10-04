@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"log/slog"
 	"net/http"
 	"net/url"
 	"strconv"
@@ -222,6 +223,8 @@ func (handler GitLabWorkItemsRouteHandler) Collect(
 	fetchMilestones := gitLabWorkItemsFlag(handler.FetchMilestones)
 	includeMRs := gitLabWorkItemsFlag(handler.IncludeMRs)
 	pages := 1 // the project binding request
+	closingSynced := 0
+	closingFetchFailed := make([]string, 0)
 
 	if fetchMilestones {
 		milestones, milestonePages, milestoneErr := collectGitLabMilestones(
@@ -316,12 +319,22 @@ func (handler GitLabWorkItemsRouteHandler) Collect(
 				ctx, &counted, root+"/issues/"+strconv.Itoa(payload.IID)+"/closed_by",
 				perPage, nestedMaxPages,
 			)
-			if closingErr != nil {
-				return CompleteRouteBatch{}, closingErr
-			}
 			pages += closingPages
-			rows.Dependencies = append(rows.Dependencies,
-				normalizeGitLabClosingMergeRequests(claim, item.WorkItemID, fullName, closing, normalizedAt)...)
+			if closingErr != nil {
+				// An optional sub-fetch: a cancelled run still stops, any other failure is logged with the issue and
+				// counted, the batch goes on, and the watermark is held below so the next run asks again (a closing MR
+				// does not move the issue's updated_at, so a lost answer would otherwise never be re-fetched).
+				if ctx.Err() != nil {
+					return CompleteRouteBatch{}, closingErr
+				}
+				closingFetchFailed = append(closingFetchFailed, item.WorkItemID)
+				slog.Warn("providersync.gitlab.closing_mr_fetch_failed",
+					"org_id", claim.OrgID, "unit_id", claim.ID, "issue", item.WorkItemID, "cause", closingErr.Error())
+			} else {
+				closingRows := normalizeGitLabClosingMergeRequests(claim, item.WorkItemID, fullName, closing, normalizedAt)
+				closingSynced += len(closingRows)
+				rows.Dependencies = append(rows.Dependencies, closingRows...)
+			}
 		}
 		if fetchComments {
 			notes, notePages, noteErr := collectGitLabNotes(
@@ -432,6 +445,9 @@ func (handler GitLabWorkItemsRouteHandler) Collect(
 			return CompleteRouteBatch{}, ErrInvalidConfiguration
 		}
 		watermark = derived.Watermark
+		if len(closingFetchFailed) > 0 {
+			watermark = nil
+		}
 		derivedRecords = len(derived.AIAttributions) + len(derived.EstimateCoverageMetricsDaily) +
 			len(derived.InvestmentClassificationsDaily) + len(derived.InvestmentMetricsDaily) +
 			len(derived.IssueTypeMetricsDaily) + len(derived.WorkItemCycleTimes) +
@@ -459,6 +475,13 @@ func (handler GitLabWorkItemsRouteHandler) Collect(
 		"derived_destinations_unimplemented": derivedUnimplemented,
 		"watermark_held_for_derived_gap":     len(derivedUnimplemented) > 0,
 		"gitlab_work_items":                  summary,
+		// CHAOS-8526: gitlab_closing_reference rows synced, and the issues whose closed_by fetch failed (the watermark is
+		// held while any did).
+		"closing_reference_dependencies_synced": closingSynced,
+		"closing_reference_fetch_failed":        len(closingFetchFailed),
+	}
+	if len(closingFetchFailed) > 0 {
+		result["incomplete"] = closingFetchFailed
 	}
 	result = attachWorkItemTeamInheritanceObservation(result, handler.Derived)
 	return CompleteRouteBatch{

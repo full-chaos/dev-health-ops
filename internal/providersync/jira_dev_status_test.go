@@ -173,9 +173,10 @@ func TestFetchJiraDevStatusPullRequestsCountingAttemptsCountsRetries(t *testing.
 		body: `{"errorMessages":["temporarily unavailable"]}`,
 	}
 	client := jiraDevStatusTestClientWithRetries(t, fakehttp.Client(doer), 3)
-	_, available, attempts, err := fetchJiraDevStatusPullRequestsCountingAttempts(
+	_, available, attempts, outcomes, err := fetchJiraDevStatusPullRequestsCountingAttempts(
 		context.Background(), client, "10050", 0,
 	)
+	assertDevStatusOutcomes(t, outcomes, "GitHub:failed,GitLab:failed")
 	if err == nil || available {
 		t.Fatalf("expected a genuine error after exhausting retries, available=%v err=%v", available, err)
 	}
@@ -201,9 +202,10 @@ func TestFetchJiraDevStatusPullRequestsCountingAttemptsHonorsRemainingBudget(t *
 	}
 	// Client policy allows up to 3 attempts, but only 1 remains in the budget.
 	client := jiraDevStatusTestClientWithRetries(t, fakehttp.Client(doer), 3)
-	_, available, attempts, err := fetchJiraDevStatusPullRequestsCountingAttempts(
+	_, available, attempts, outcomes, err := fetchJiraDevStatusPullRequestsCountingAttempts(
 		context.Background(), client, "10050", 1,
 	)
+	assertDevStatusOutcomes(t, outcomes, "GitHub:failed,GitLab:cap_skipped")
 	if err == nil || available {
 		t.Fatalf("expected a genuine error, available=%v err=%v", available, err)
 	}
@@ -225,9 +227,10 @@ func TestFetchJiraDevStatusPullRequestsCountingAttemptsCountsExactlyOneOnSuccess
 		body: `{"detail":[{"pullRequests":[{"url":"https://github.com/acme/api/pull/968"}]}]}`,
 	}
 	client := jiraDevStatusTestClientWithRetries(t, fakehttp.Client(doer), 3)
-	payload, available, attempts, err := fetchJiraDevStatusPullRequestsCountingAttempts(
+	payload, available, attempts, outcomes, err := fetchJiraDevStatusPullRequestsCountingAttempts(
 		context.Background(), client, "10050", 0,
 	)
+	assertDevStatusOutcomes(t, outcomes, "GitHub:synced,GitLab:synced")
 	if err != nil || !available {
 		t.Fatalf("available=%v err=%v", available, err)
 	}
@@ -301,7 +304,8 @@ func TestFetchJiraDevStatusAllProvidersMergesGitLabLinks(t *testing.T) {
 		"GitLab": `{"detail":[{"pullRequests":[{"url":"https://gitlab.com/acme/platform/api/-/merge_requests/12"}]}]}`,
 	}}
 	client := jiraDevStatusTestClientWithRetries(t, fakehttp.Client(doer), 1)
-	payload, available, attempts, err := fetchJiraDevStatusPullRequestsCountingAttempts(context.Background(), client, "10050", 0)
+	payload, available, attempts, outcomes, err := fetchJiraDevStatusPullRequestsCountingAttempts(context.Background(), client, "10050", 0)
+	assertDevStatusOutcomes(t, outcomes, "GitHub:synced,GitLab:synced")
 	if err != nil || !available || attempts != 2 {
 		t.Fatalf("available=%v attempts=%d err=%v", available, attempts, err)
 	}
@@ -328,7 +332,9 @@ func TestFetchJiraDevStatusAllProvidersOneTypeDownKeepsTheOther(t *testing.T) {
 		t.Run(name, func(t *testing.T) {
 			doer := &jiraDevStatusDoer{t: t, bodyByType: map[string]string{"GitHub": github}, statusByType: map[string]int{"GitLab": c.status}}
 			client := jiraDevStatusTestClientWithRetries(t, fakehttp.Client(doer), 1)
-			payload, available, _, err := fetchJiraDevStatusPullRequestsCountingAttempts(context.Background(), client, "10050", 0)
+			payload, available, _, outcomes, err := fetchJiraDevStatusPullRequestsCountingAttempts(context.Background(), client, "10050", 0)
+			wantOutcomes := map[int]string{http.StatusNotFound: "GitHub:synced,GitLab:dev_status_unavailable", http.StatusInternalServerError: "GitHub:synced,GitLab:failed"}[c.status]
+			assertDevStatusOutcomes(t, outcomes, wantOutcomes)
 			if (err != nil) != c.wantErr || !available || len(payload.Detail) != 1 {
 				t.Fatalf("available=%v detail=%d err=%v wantErr=%v", available, len(payload.Detail), err, c.wantErr)
 			}
@@ -342,9 +348,24 @@ func TestFetchJiraDevStatusAllProvidersSharesTheRequestBudget(t *testing.T) {
 	for budget, want := range map[int][]string{1: {"GitHub"}, 2: {"GitHub", "GitLab"}} {
 		doer := &jiraDevStatusDoer{t: t, status: http.StatusOK, body: `{"detail":[]}`}
 		client := jiraDevStatusTestClientWithRetries(t, fakehttp.Client(doer), 1)
-		_, _, attempts, err := fetchJiraDevStatusPullRequestsCountingAttempts(context.Background(), client, "10050", budget)
+		_, _, attempts, outcomes, err := fetchJiraDevStatusPullRequestsCountingAttempts(context.Background(), client, "10050", budget)
+		wantOutcomes := map[int]string{1: "GitHub:empty,GitLab:cap_skipped", 2: "GitHub:empty,GitLab:empty"}[budget]
+		assertDevStatusOutcomes(t, outcomes, wantOutcomes)
 		if err != nil || attempts != len(want) || !reflect.DeepEqual(doer.applicationTypes, want) {
 			t.Fatalf("budget=%d attempts=%d types=%v err=%v want=%v", budget, attempts, doer.applicationTypes, err, want)
 		}
+	}
+}
+
+// assertDevStatusOutcomes pins the per-application-type result of one issue's dev-status fetch, so a type that is skipped by
+// the cap, unavailable, empty or failing is counted under its own outcome (CHAOS-8526) and never reads as a silent zero.
+func assertDevStatusOutcomes(t *testing.T, outcomes []jiraDevStatusTypeOutcome, want string) {
+	t.Helper()
+	parts := make([]string, 0, len(outcomes))
+	for _, outcome := range outcomes {
+		parts = append(parts, outcome.ApplicationType+":"+outcome.Outcome)
+	}
+	if got := strings.Join(parts, ","); got != want {
+		t.Fatalf("per-type outcomes=%q want=%q", got, want)
 	}
 }

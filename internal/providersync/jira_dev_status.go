@@ -212,14 +212,16 @@ func fetchJiraDevStatusPullRequestsCountingAttempts(
 	client *providerfoundation.HTTPClient,
 	issueID string,
 	remainingBudget int,
-) (payload jiraDevStatusPayload, available bool, attempts int, err error) {
+) (payload jiraDevStatusPayload, available bool, attempts int, outcomes []jiraDevStatusTypeOutcome, err error) {
 	counted := *client
 	counted.Doer = jiraDevStatusCountingDoer{delegate: client.Doer, attempts: &attempts}
 	for _, applicationType := range jiraDevStatusApplicationTypes {
 		budget := 0
 		if remainingBudget > 0 {
 			if budget = remainingBudget - attempts; budget <= 0 {
-				break // the cap is spent: no further application type is asked
+				// The cap is spent: this application type is not asked, and that is counted, not silent.
+				outcomes = append(outcomes, jiraDevStatusTypeOutcome{ApplicationType: applicationType, Outcome: "cap_skipped"})
+				continue
 			}
 		}
 		call := counted
@@ -227,18 +229,38 @@ func fetchJiraDevStatusPullRequestsCountingAttempts(
 			call.Retry.MaxAttempts = budget
 		}
 		one, ok, oneErr := fetchJiraDevStatusPullRequests(ctx, &call, issueID, applicationType)
-		if oneErr != nil {
+		switch {
+		case oneErr != nil:
 			// A failing application type must not hide the links another one returned: the error is reported
 			// (the issue is recorded incomplete) and the payload of the types that answered is still returned.
 			if err == nil {
 				err = oneErr
 			}
-			continue
-		}
-		if ok {
+			outcomes = append(outcomes, jiraDevStatusTypeOutcome{ApplicationType: applicationType, Outcome: "failed", Err: oneErr})
+		case !ok:
+			outcomes = append(outcomes, jiraDevStatusTypeOutcome{ApplicationType: applicationType, Outcome: jiraDevStatusUnavailableCause})
+		default:
 			available = true
 			payload.Detail = append(payload.Detail, one.Detail...)
+			pullRequests := 0
+			for _, detail := range one.Detail {
+				pullRequests += len(detail.PullRequests)
+			}
+			outcome := "synced"
+			if pullRequests == 0 {
+				outcome = "empty"
+			}
+			outcomes = append(outcomes, jiraDevStatusTypeOutcome{ApplicationType: applicationType, Outcome: outcome, PullRequests: pullRequests})
 		}
 	}
-	return payload, available, attempts, err
+	return payload, available, attempts, outcomes, err
+}
+
+// jiraDevStatusTypeOutcome is the result of one dev-status request for one application type.
+type jiraDevStatusTypeOutcome struct {
+	ApplicationType string
+	// Outcome is synced, empty (200, no pull requests), dev_status_unavailable (400/404), failed or cap_skipped.
+	Outcome      string
+	PullRequests int
+	Err          error
 }

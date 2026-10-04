@@ -160,6 +160,12 @@ func truncateSynthetic(t *testing.T, dsn string) {
 	for _, table := range syntheticTables {
 		clickHouseHTTP(t, dsn, "TRUNCATE TABLE `"+table+"`")
 	}
+	// A table a view fills from a synthetic table keeps the rows of the
+	// target loaded before: truncate it with its source, or the next
+	// target's check would find rows from nowhere.
+	for table := range viewFilledAfterTheCapture {
+		clickHouseHTTP(t, dsn, "TRUNCATE TABLE `"+table+"`")
+	}
 }
 
 func loadThroughTheNativeClient(t *testing.T, ch clickHouse, org, repo string, days int, target string, now time.Time) map[string]int {
@@ -209,7 +215,9 @@ func TestLoadSyntheticInsertsTheFrozenRows(t *testing.T) {
 					if counts[table.Name] != len(table.Rows) {
 						t.Fatalf("%s: the loader reported %d row(s), frozen %d", table.Name, counts[table.Name], len(table.Rows))
 					}
-					got := dumpTable(t, ch.httpDSN, table.Name)
+					// See columnsAfterTheCapture: a nullable column added after
+					// the capture is held to NULL, then left out.
+					got := requireColumnsAfterTheCapture(t, dumpTable(t, ch.httpDSN, table.Name))
 					if _, operational := operationalFamilies[table.Name]; operational {
 						// The stored stamp is the one derived from the stored row; the
 						// remaining columns are then compared with the frozen ones.
@@ -223,12 +231,10 @@ func TestLoadSyntheticInsertsTheFrozenRows(t *testing.T) {
 						t.Fatalf("%s: the loaded rows differ from the frozen rows (shifted by %s):\n%s", table.Name, delta, diff)
 					}
 				}
-				after := rowCounts(t, ch.httpDSN)
-				for table, count := range after {
-					if !wroteTables[table] && count != before[table] {
-						t.Fatalf("the load changed %s (%s -> %s), which target %s does not write", table, before[table], count, target.Name)
-					}
+				if problems := unwrittenTableProblems(before, rowCounts(t, ch.httpDSN), wroteTables); len(problems) > 0 {
+					t.Fatalf("target %s does not write these tables:\n  %s", target.Name, strings.Join(problems, "\n  "))
 				}
+				requireViewFilledTables(t, ch.httpDSN)
 			})
 		}
 	}

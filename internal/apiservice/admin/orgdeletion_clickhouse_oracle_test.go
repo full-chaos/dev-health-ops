@@ -176,4 +176,10 @@ print(json.dumps(sorted(org_deletion._clickhouse_tables_from_migrations())))
 // clickHouseOrgTablesAfterThePythonFreeze names each org-scoped ClickHouse
 // table a migration added after adminPythonBuild, where org_deletion.py's
 // list was frozen: table -> the migration that added it.
-var clickHouseOrgTablesAfterThePythonFreeze = map[string]string{}
+var clickHouseOrgTablesAfterThePythonFreeze = map[string]string{
+	// The first time a sync wrote each work item relation (CHAOS-8574). It
+	// is keyed by org_id and filled by a materialized view from
+	// work_item_dependencies, so an organization's rows in it must go when
+	// the organization is deleted, like the relations themselves.
+	"work_item_dependency_first_seen": "102_work_item_dependency_first_seen.sql",
+}

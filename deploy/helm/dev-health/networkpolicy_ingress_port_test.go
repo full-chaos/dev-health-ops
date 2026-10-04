@@ -115,8 +115,9 @@ func controllerSourceFor(namespace string) netpolSource {
 }
 
 var (
-	sourceController = controllerSourceFor(defaultControllerNamespace)
-	sourceStranger   = netpolSource{"an unnamed in-namespace pod", map[string]string{namespaceNameLabel: releaseNamespace}, map[string]string{"app": "stranger"}}
+	sourceController     = controllerSourceFor(defaultControllerNamespace)
+	sourceOtherNamespace = netpolSource{"a pod of an unrelated namespace", map[string]string{namespaceNameLabel: "other-ns", "name": "ingress-nginx"}, map[string]string{"app": "stranger"}}
+	sourceStranger       = netpolSource{"an unnamed in-namespace pod", map[string]string{namespaceNameLabel: releaseNamespace}, map[string]string{"app": "stranger"}}
 )
 
 func (peer netpolPeer) admits(source netpolSource) bool {
@@ -267,6 +268,25 @@ func TestIngressControllerReachesOnlyGoAPIAndWebOnTheirOwnPorts(t *testing.T) {
 				sort.Ints(admitted)
 				if fmt.Sprint(admitted) != fmt.Sprint(want) {
 					t.Errorf("%s pods: the ingress controller is admitted to %v, want exactly %v", component, admitted, want)
+				}
+			}
+			// Effective reachability from another namespace, whatever selector form a rule uses: nothing (the go-api pods
+			// under go-api-internal keep every port but the internal one for every source, by its own design).
+			for _, component := range pods {
+				labels := map[string]string{"app.kubernetes.io/name": "dev-health", "app.kubernetes.io/instance": "np", "app.kubernetes.io/component": component}
+				fromOther, _ := admittedFrom(policies, labels, probes, sourceOtherNamespace)
+				if component == "go-api" && c.goAll {
+					continue
+				}
+				if component == "query-api" && strings.Contains(strings.Join(c.args, " "), "queryApi.internal.enabled=true") {
+					// The query-api-internal policy opens the public port to every source, exactly as before it existed.
+					if fmt.Sprint(fromOther) != "[8090]" {
+						t.Errorf("query-api pods: a pod of another namespace is admitted to %v, want only the public port [8090]", fromOther)
+					}
+					continue
+				}
+				if len(fromOther) != 0 {
+					t.Errorf("%s pods: a pod of another namespace is admitted to %v, want nothing", component, fromOther)
 				}
 			}
 			// Every pod's allowed sources, for the log of a failing run.

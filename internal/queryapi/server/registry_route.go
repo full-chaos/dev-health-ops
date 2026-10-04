@@ -147,8 +147,10 @@ func newRegistryHandler(schemaDigest string, digestByOperation map[string]string
 // them is what hid the September failure:
 //
 //   - rows exist at this digest       -> routing can work.
-//   - table is empty                  -> nothing enabled. The legitimate
-//     default posture, NOT an incident.
+//   - table is empty                  -> no row decides anything: every
+//     registered operation is served by the catalog rule (CHAOS-8517) and no
+//     MCP class root is enabled. The legitimate default posture, NOT an
+//     incident.
 //   - rows exist, none at this digest -> every one of them is dead. Looks
 //     identical from outside to the empty case, means the opposite.
 func logRoutingStateDrift(pool *pgxpool.Pool, schemaDigest string) {
@@ -210,7 +212,7 @@ func classifyRoutingDrift(counts map[string]int64, schemaDigest string) []string
 	}
 
 	if total == 0 {
-		return []string{fmt.Sprintf("query-api: routing rows: table is empty at live schema digest %s -- no operation is enabled for Go (default posture, not an incident)", schemaDigest)}
+		return []string{fmt.Sprintf("query-api: routing rows: table is empty at live schema digest %s -- every registered operation is served with no routing row (the catalog rule); no MCP class root is enabled (default posture, not an incident)", schemaDigest)}
 	}
 	if live := counts[schemaDigest]; live > 0 {
 		return []string{fmt.Sprintf("query-api: routing rows: %d at live schema digest %s, %d at other digests", live, schemaDigest, total-live)}
@@ -226,7 +228,7 @@ func classifyRoutingDrift(counts map[string]int64, schemaDigest string) []string
 	sort.Strings(staleDigests)
 	lines := make([]string, 0, len(staleDigests))
 	for _, digest := range staleDigests {
-		lines = append(lines, fmt.Sprintf("query-api: ROUTING ROWS STALE: %d rows at %s, 0 at %s -- these rows are keyed to a schema digest this binary does not compute, so NO operation is reachable and every request silently falls back to Python. The SDL moved after they were written. Re-run `dho goapi routing enable` against THIS image; see docs/contribute/architecture/go-api-wave-0-proof-infrastructure.md (section: When the schema digest moves)", counts[digest], digest, schemaDigest))
+		lines = append(lines, fmt.Sprintf("query-api: ROUTING ROWS STALE: %d rows at %s, 0 at %s -- these rows are keyed to a schema digest this binary does not compute, so NO operation that has a routing row is reachable (an operation with no row at any digest is still served). The SDL moved after they were written. Re-run `dho goapi routing enable` against THIS image; see docs/contribute/architecture/go-api-wave-0-proof-infrastructure.md (section: When the schema digest moves)", counts[digest], digest, schemaDigest))
 	}
 	return lines
 }

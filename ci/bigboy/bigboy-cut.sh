@@ -2,7 +2,7 @@
 # bigboy-cut.sh <old8> <full new ops sha>  -- the whole bigboy phase of a group cut, sequential, logs to _records/bigboy-<new8>/cut.log.
 # waits for the CI-built images -> re-pin (ops images + web, CHAOS-7019) -> pre-roll routing carry
 # (CHAOS-7022, refuse-not-skip) -> migrate -> recreate query-api/go-api/web -> the worker plane ->
-# route coverage -> routing enable/parity/repoint (CHAOS-7022, every cut) -> log and worker checks ->
+# route coverage -> routing repoint (CHAOS-7022, every cut) -> log and worker checks ->
 # river apply -> hook check -> CH grants check -> PG grants read-back -> the web-path smoke (R460).
 # Every step prints one `STEP <name> rc=<n>` line; nothing secret is printed.
 # CHAOS-8361: the stack is Go-only. The Python `api` and `metrics-api` services are not in this cut:
@@ -267,28 +267,16 @@ sleep 45; curl -s -o /dev/null -w "%{http_code}" http://127.0.0.1:8093/ready | g
 # R467: every path the router sends to a Go plane has a handler in the build just started (405/401 to a
 # ROUTEPROBE request; 404 = values ahead of the build). Runs only with pinned values.
 if [ -n "$VALUES" ]; then python3 "$HERE/check-route-coverage.py" "$VALUES"; st route-coverage $?; else st route-coverage 2; fi
-# CHAOS-6987 gap 5 (D2731): GraphQL routing-ledger parity with prod. ci/bigboy/routing-ops.txt is the
-# tracked list of operations enabled on prod; every listed operation bigboy's ledger lacks is enabled
-# here (`dho goapi routing enable`, envelope minted INSIDE venue-tools, never leaves the container),
-# then a fresh status read must match the list. KNOWN-MISSING entries (testopsRisk, CHAOS-6993: the
-# enable proof gate needs a bigboy go-api-prove run) make this STEP rc=3 -- a named gap, never rc=0.
-# The catalog is fetched at THIS cut's sha so status/enable classify against the deployed build.
+# CHAOS-8543: the routing-ledger parity STEPs with prod (routing-enable, routing-parity; CHAOS-6987
+# gap 5) are gone from the cut. They enabled every operation of ci/bigboy/routing-ops.txt that had no
+# reachable routing ROW, then required a reachable row for each. Since the catalog rule query-api
+# serves a catalog operation that has NO routing row: no row has to be enabled, and the check read a
+# served operation with no row as missing. What this cut serves is measured by the web-path smoke
+# below. The catalog is still fetched at THIS cut's sha: the web-path smoke reads it
+# (DHO_SMOKE_CATALOG_FILE) and vt mounts it for the post-cut repoint.
 ROUTING_ORG=${ROUTING_ORG:-67f1add8-9fcb-4272-addb-044b70c442c8}  # the disposable fixture org, never the local org
 gh api "repos/full-chaos/dev-health-ops/contents/contracts/graphql/v1/go_api_operations.json?ref=$NEW" -H 'Accept: application/vnd.github.raw' > "$REC.catalog.json" 2>/dev/null && chmod 644 "$REC.catalog.json"
 vt() { docker compose --env-file ops/.env --profile venue run --rm --no-deps -T -v "$REC.catalog.json:/catalog.json:ro" venue-tools "$1"; }
-ROUTING_ARGS='-catalog /catalog.json -registry-url http://query-api:8090/registry'
-vt "dho goapi routing status -json $ROUTING_ARGS" > "$REC.routing-status-pre.json" 2>/dev/null
-TO_ENABLE=$(python3 "$HERE/check-routing-parity.py" "$HERE/routing-ops.txt" "$REC.routing-status-pre.json" --to-enable 2>>"$REC.routing.err"); rc_te=$?
-if [ $rc_te -ne 0 ]; then
-  st routing-enable 1; echo "FAIL: routing status read is incomplete, see $REC.routing.err" >&2
-elif [ -n "$TO_ENABLE" ]; then
-  vt "GO_API_ROUTING_BEARER=\$(dho mint envelope -org $ROUTING_ORG -key-file /keys/envelope.pem) dho goapi routing enable $ROUTING_ARGS -buildinfo-url http://query-api:8090/buildinfo -expect-build $NEW -operations $TO_ENABLE -mode canary -recorded-by bigboy-cut -review-evidence 'CHAOS-6987 gap 5: prod parity from ci/bigboy/routing-ops.txt'" > "$REC.routing-enable.out" 2>&1
-  st routing-enable $?; echo "enabled: $TO_ENABLE"
-else
-  st routing-enable 0; echo "enabled: none needed"
-fi
-vt "dho goapi routing status -json $ROUTING_ARGS" > "$REC.routing-status.json" 2>/dev/null
-python3 "$HERE/check-routing-parity.py" "$HERE/routing-ops.txt" "$REC.routing-status.json"; st routing-parity $?
 # CHAOS-7022 (D2811 addendum): repoint after EVERY cut, schema-change or not -- routing rows must
 # never lag the actually-running build by more than one cut (the rev195->rev196 prod gap: rows
 # still named the build from two rolls back, with no schema change involved at all). Provenance

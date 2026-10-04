@@ -227,6 +227,10 @@ type AIOpportunity struct {
 	Score               float64                   `json:"score"`
 	EvidenceRefs        []string                  `json:"evidenceRefs"`
 	WorkGraphDrilldowns []AIWorkGraphDrilldownRef `json:"workGraphDrilldowns"`
+	// The repository's full name in the org's repository catalogue (CHAOS-8114). Null = the catalogue holds no name for ``repoId``, or the catalogue could not be read. It is never the id.
+	RepoName *string `json:"repoName,omitempty"`
+	// The name of the team ``teamId`` names, from the org's team catalogue (CHAOS-8114). Null = the opportunity has no team, the catalogue holds no name for it, or the catalogue could not be read. It is never the id.
+	TeamName *string `json:"teamName,omitempty"`
 }
 
 type AIReviewLoadResult struct {
@@ -412,13 +416,47 @@ type CapacityDistribution struct {
 	Days []CapacityDistributionBin `json:"days,omitempty"`
 	// Fixed-date mode: items completed by the target date, one bin per distinct total.
 	Items []CapacityDistributionBin `json:"items,omitempty"`
+	// The number of simulation runs behind each mode (CHAOS-8477): the counts of one
+	// mode's bins sum to it, the runs that did not finish included. The modes of one
+	// forecast come from one simulation and hold the same number of runs. The share
+	// of the runs that finished is served on each bin (cumulativeShare).
+	Runs int `json:"runs"`
+	// The number of days-mode runs that did NOT finish inside the simulated horizon
+	// (CHAOS-8477): the simulation stops a run after ``horizonDays`` days, with
+	// items still open, and records it in the ``days`` bin at ``horizonDays``. Such
+	// a run is not done. A run that needs exactly ``horizonDays`` days is recorded
+	// in the same bin and cannot be told apart, so it is counted here too. Null =
+	// the days mode did not simulate (``days`` is null).
+	UnfinishedRuns *int `json:"unfinishedRuns,omitempty"`
+	// The horizon of the days simulation, in days (CHAOS-8477): 365. A ``days`` bin
+	// with this value means "this many days or more".
+	HorizonDays int `json:"horizonDays"`
 }
 
 type CapacityDistributionBin struct {
-	// The outcome: a day count (days) or an item count (items).
+	// The outcome: a day count (days) or an item count (items). A day count is the
+	// number of days after the day the forecast was computed: the same axis as
+	// p50Days, p85Days and p95Days (p50Date is that day plus p50Days). A day count
+	// equal to the distribution's horizonDays means "that many days or more": the
+	// simulation stops a run there, done or not.
 	Value int `json:"value"`
-	// How many simulation runs ended on this value.
+	// How many simulation runs ended on this value. In the days bin at horizonDays: how many runs were stopped there.
 	Count int `json:"count"`
+	// The share of ALL the mode's simulation runs (CHAOS-8477), from the same Monte
+	// Carlo distribution as p50Days / p85Days / p95Days: 0 to 1, never lower than
+	// on the bin before. In the days mode it is the share of the runs that FINISHED
+	// (the target items were done) on or before that day. A run that reached the
+	// horizon is not done: the bin at horizonDays adds nothing to the share, so the
+	// last share is below 1 when any run reached the horizon (unfinishedRuns), and
+	// it is 1 only when every run finished. In the items mode it is the share of
+	// the runs with this many items or fewer, and 1 on the last bin. The percentile
+	// days are an interpolated rank of the same runs: the day on which this share
+	// first reaches 0.50 and p50Days both lie between the outcomes of the same two
+	// consecutive ranked runs, so they are the same day unless those two runs ended
+	// on different days (and so for 0.85 and p85Days, 0.95 and p95Days). When so
+	// many runs reached the horizon that the share never reaches a percentile, that
+	// percentile day is horizonDays and means "horizonDays or more".
+	CumulativeShare float64 `json:"cumulativeShare"`
 }
 
 type CapacityForecast struct {
@@ -1228,11 +1266,21 @@ type ReportRunType struct {
 }
 
 type ReviewEdgeRow struct {
-	Reviewer     string           `json:"reviewer"`
+	// The stored identity of the reviewer: a provider login or a display name. Deprecated in favour of reviewerName and reviewerKey (CHAOS-8485); it stays for clients that still read it.
+	Reviewer string `json:"reviewer"`
+	// The stored identity of the author: the pull request's author e-mail address when there is one, else its author name, else "unknown". It can be an e-mail address. Deprecated in favour of authorName and authorKey (CHAOS-8485): a client that may not show an e-mail address must not select it.
 	Author       string           `json:"author"`
 	ReviewsCount int              `json:"reviewsCount"`
 	Day          graphqldate.Date `json:"day"`
 	RepoID       *string          `json:"repoId,omitempty"`
+	// The reviewer's display name (CHAOS-8485): the display name of the org's identity the stored reviewer belongs to; else the stored reviewer itself when it is not an e-mail address (a provider login). Never an e-mail address. Null = no name is known.
+	ReviewerName *string `json:"reviewerName,omitempty"`
+	// The author's display name (CHAOS-8485): the display name of the org's identity the stored author belongs to; else, for an author stored by e-mail address, the author name the provider gave on the pull request; else the stored author itself when it is not an e-mail address. Never an e-mail address. Null = no name is known.
+	AuthorName *string `json:"authorName,omitempty"`
+	// An opaque key of the reviewer inside the org (CHAOS-8485): the same person has the same key in every answer, as reviewer and as author when the identity resolves. It is not an e-mail address and not a name; use it only to tell people apart and to join rows.
+	ReviewerKey string `json:"reviewerKey"`
+	// An opaque key of the author inside the org (CHAOS-8485); see reviewerKey.
+	AuthorKey string `json:"authorKey"`
 }
 
 type ReviewEdgesInput struct {

@@ -257,8 +257,15 @@ reachable: `shadow` deliberately does NOT count (the client still gets
 Python's response in shadow mode, plan §5 stage 4), and a missing row, a
 query error, or an operation with no registered document digest all
 resolve to the same safe default as an unregistered operation —
-unreachable. Proven against a real Postgres testcontainer
-(`postgres_switch_integration_test.go`, `go test -tags integration`),
+unreachable. One switch has an exception to the missing-row rule: the one
+`/query` and `/graphql` serve registered documents through
+(`NewCatalogSwitchWithLegacy`, `catalog_switch.go`) serves an operation that
+has no routing row at any schema digest. An operation that has a row
+anywhere keeps the rule above (a row in a non-served mode, or left at
+another digest, holds it dark), and the class-row and proof switches have no
+exception. Proven against a real Postgres testcontainer
+(`postgres_switch_integration_test.go`, `catalog_switch_integration_test.go`,
+`go test -tags integration`),
 including the rollback direction: flipping `mode` away from
 `canary`/`primary` revokes reachability on the very next read, with no
 separate deploy (plan §5: "rollback is a registry change, not an image
@@ -350,6 +357,34 @@ for any go-only one), when this image's document dump and edge catalog
 disagree, when a row still names a build the deployed process is not running
 (run `repoint` first), or when the target digest already holds a different
 row for that operation.
+
+A routing table with no row at any schema digest is a valid state (query-api
+serves every catalog operation that has no routing row). On it `carry` and
+`repoint` are a no-op: exit 0, one `NO-OP` line, nothing written, and
+`"empty_table":true` on the `-json` line beside the usual success `reason`,
+so the chart's pre-upgrade and post-upgrade hooks pass. Every other preflight
+still runs (the `-expect-build` cross-check included). When rows exist and
+none of them is at the live schema digest, both verbs refuse as before: a row
+left at another digest holds its operation dark, and an upgrade must not hide
+that.
+
+A registered document that was **swapped with dual accept** is not a changed
+document for `carry`. When an operation gets a new text, the old text stays
+accepted as a legacy one (`legacyDigestsByOperation`, the `"legacy": true`
+entries of the document dump and of the catalog), and query-api reads a
+routing row under any accepted digest. So a row keyed to a digest the image
+being rolled to lists as a legacy text of the same operation is carried
+verbatim, under its own digest, and both texts are served from it; the plan
+names it `carried (legacy digest)`. The row is not re-keyed to the new
+digest. `carry` still refuses a row whose digest is neither the image's
+current digest nor one of its legacy digests for that operation, and it
+refuses when the document dump accepts a legacy digest that the catalog does
+not list. Two limits follow from `/registry` reporting each operation's
+current digest only: `carry` treats a row keyed to a target-legacy digest as
+reachable now without asking the deployed process, and it cannot see that a
+legacy text was **retired** — a row still keyed to a retired digest reads as
+already unreachable and is skipped, not refused. Re-key such rows (`enable`
+at the current digest) before the image that retires the legacy text rolls.
 
 A carried row claims NO proof: receipts are keyed by `schema_digest`, so
 `status` reports every carried row UNPROVEN at the new digest until
@@ -729,11 +764,14 @@ audit table must outlive the row it describes.
 | `devhealth_query_api_routing_rows_for_digest` (gauge, `schema_digest` attr) | `query-api` route construction | Rows keyed to the digest THIS process computed; 0 with the total gauge below `>0` is the DEAD-fleet condition, on every startup, not only at read time |
 | `devhealth_query_api_routing_rows_total` (gauge, `schema_digest` attr) | `query-api` route construction | Disambiguates the gauge above from the legitimate `total == 0` "nothing enabled yet" posture |
 | `devhealth_go_api_dispatch_fallback_total{reason="no_routing_row"}` | Python edge, per request | A dispatch-eligible request found no row |
+| `devhealth_query_api_routeswitch_digest_miss_total{operation}` (and its WARN record) | `query-api`, per request | An operation has no row at the live key and is refused: on the serving route, an operation whose rows are all elsewhere |
+| `devhealth_query_api_routeswitch_served_without_row_total{operation, reason="catalog_no_row"}` (and one INFO record per operation per process) | `query-api`, per request | A registered operation with no routing row at any schema digest was served (the catalog rule). Zero on a stack where every operation has a row |
 | `ci/check_go_api_routing_digest.py` | CI | The SDL moved without updating the pin and this table |
 
-`empty` (nothing enabled) is deliberately reported as a *different* result
-from `stale` (everything enabled is dead). The two look identical from
-outside — no traffic reaches Go either way — and mean opposite things.
+`empty` (no row decides anything) is deliberately reported as a *different*
+result from `stale` (everything enabled is dead), and the two mean opposite
+things: on an empty table query-api serves every registered operation by the
+catalog rule, and on a stale one it serves no operation that has a row.
 
 None of the above shortcuts the recovery procedure. In particular, a schema digest that happens to match a
 previously-proven build is NOT grounds to re-point a DEAD row's `candidate_build` onto a new image without a
@@ -762,7 +800,10 @@ appear here.
 | `sha256:fff119c64988e2f76442f2b41229a665a2bc6e32cac92e1dd125cf6c07728dab` | 2026-10-03 | CHAOS-7774, adding `day: Date!` to `AIImpactBucketRow` in the Go-owned SDL (additive; Python never had it) | superseded |
 | `sha256:f12739c7f2b04df329e29404e80aae93308553b82fe3f35010e97ed8aa147ddc` | 2026-10-03 | CHAOS-7785, adding the optional `teamIds` argument to `ReviewEdgesInput` (team scope by repository ownership) in the Go-owned SDL | superseded |
 | `sha256:09db2fee13f48e36a1d95bb5d77fb74d327aad851319843b473077891e4c71f4` | 2026-10-03 | CHAOS-7786, adding `truncated` and a real `totalCount` (the deduplicated row count before the cut) to `ReviewEdgesResult` in the Go-owned SDL | superseded |
-| `sha256:af68e95261c6b9750aa3f9c15734c363797ea005eb2da1784806456aa2518ca5` | this revision | CHAOS-7626, adding `value`, `threshold`, `unit` and `thresholdDirection` to `ImproveOpportunity` and the `ImproveOpportunityUnit` and `ThresholdDirection` enums in the Go-owned SDL (additive; Python does not declare them) | Current. Every routing row written at the digest above stops matching the moment this lands: rebuild and deploy query-api from this SDL FIRST, then re-enable, per the recovery procedure above. |
+| `sha256:af68e95261c6b9750aa3f9c15734c363797ea005eb2da1784806456aa2518ca5` | 2026-10-03 | CHAOS-7626, adding `value`, `threshold`, `unit` and `thresholdDirection` to `ImproveOpportunity` and the `ImproveOpportunityUnit` and `ThresholdDirection` enums in the Go-owned SDL (additive; Python does not declare them) | superseded |
+| `sha256:c71f3c428b0de016a80cc8a40003a04d1b452d85f616ff31e1ff73dbec294cd6` | 2026-10-03 | CHAOS-8477, adding `runs: Int!`, `unfinishedRuns: Int` and `horizonDays: Int!` to `CapacityDistribution` and `cumulativeShare: Float!` to `CapacityDistributionBin` (the run total, the runs that did not finish inside the simulated horizon, the horizon in days, and the share of the simulation runs that finished on or before each value, from the same Monte Carlo distribution as the percentile days) in the Go-owned SDL (additive; Python never had the types) | superseded |
+| `sha256:6e53d73cc690622e183d24c4024ca38ee508803c4fd250616e88a7d7ae3a21f4` | 2026-10-03 | CHAOS-8485, adding nullable `reviewerName` and `authorName` and the opaque `reviewerKey` and `authorKey` to `ReviewEdgeRow`, and deprecation notes on `reviewer` and `author`, in the Go-owned SDL (additive; Python never had them) | superseded |
+| `sha256:2d5839ecc2f1352f4b64f812fc4a503976b36deafc5b89058080345a13437dd0` | this revision | CHAOS-8114, adding nullable `repoName` and `teamName` to `AIOpportunity` (the catalogue names of the repository and the team an opportunity carries, never the id) in the Go-owned SDL (additive; Python never had them) | Current. Every routing row written at the digest above stops matching the moment this lands: rebuild and deploy query-api from this SDL FIRST, then re-enable, per the recovery procedure above. |
 
 ### Where `bigboy-cut.sh` finds its tools and its tree (CHAOS-7135)
 
@@ -819,7 +860,7 @@ make it structural:
   the field with `jq`, host-side, after `docker compose run` returns. Any reason other than
   `digest_unchanged` or a successfully-retried `stale_build` aborts the cut before `migrate`/`up`
   ever runs: **refuse-not-skip**, never a silent no-op.
-- **`routing-repoint`**, right after `routing-parity` (post-roll, against the newly-running
+- **`routing-repoint`**, after the roll (against the newly-running
   build), unconditionally on every cut, schema-change or not. Provenance-only -- it never touches
   mode/reachability -- so it is safe to run every time, and it closes the OTHER gap this ticket
   found: routing rows can lag the actually-running build after an ORDINARY roll too, with no

@@ -33,6 +33,44 @@ type Card struct {
 	Rationale            string   `json:"rationale"`
 	EvidenceLinks        []string `json:"evidence_links"`
 	SuggestedExperiments []string `json:"suggested_experiments"`
+
+	// The move the card is about, as values (CHAOS-8109). Before, the size
+	// and the direction of the move were only inside the rationale sentence
+	// ("... climbed 33% in the last 7 days."), so a caller that wanted to show
+	// them had to parse served text. Go-only fields: the Python reference
+	// never had them.
+
+	// ChangePercent is the metric's delta_pct of the Home response this card
+	// was built from, unrounded and signed: the same number Home serves for
+	// the metric, so the two surfaces cannot disagree. Null on the fallback
+	// card ("Maintain steady flow"), which is about no metric: no move is not
+	// a move of 0.
+	ChangePercent *float64 `json:"change_percent"`
+	// Direction is "up" for a metric that climbed and "down" for one that
+	// fell: the sign of ChangePercent, as a word. It is NOT good or bad (a
+	// card exists only for a move the wrong way; which way that is depends on
+	// the metric). Null on the fallback card.
+	Direction *string `json:"direction"`
+	// RangeDays and CompareDays are the comparison window ChangePercent was
+	// computed over: the request's own time filter (the current window and
+	// the window before it).
+	RangeDays   int `json:"range_days"`
+	CompareDays int `json:"compare_days"`
+}
+
+// The two values of Card.Direction.
+const (
+	DirectionUp   = "up"
+	DirectionDown = "down"
+)
+
+// directionFor is the direction of a worsened metric's move. A worsened delta
+// is never 0 (isWorsened), so there is no third value.
+func directionFor(d home.MetricDelta) string {
+	if d.DeltaPct < 0 {
+		return DirectionDown
+	}
+	return DirectionUp
 }
 
 // Response is the wire shape of OpportunitiesResponse (schemas.py:205-206).
@@ -171,6 +209,8 @@ func FromHomeResponse(h *home.Response, f home.Filters) *Response {
 	scopeID := primaryScopeID(f)
 	cards := make([]Card, 0, len(ranked))
 	for idx, delta := range ranked {
+		changePercent := delta.DeltaPct
+		direction := directionFor(delta)
 		cards = append(cards, Card{
 			ID:        fmt.Sprintf("opp-%d", idx+1),
 			Title:     titleFor(delta),
@@ -180,6 +220,10 @@ func FromHomeResponse(h *home.Response, f home.Filters) *Response {
 				delta.Metric, f.Scope.Level, scopeID, f.Time.RangeDays, f.Time.CompareDays,
 			)},
 			SuggestedExperiments: suggestedExperimentsFor(delta.Metric),
+			ChangePercent:        &changePercent,
+			Direction:            &direction,
+			RangeDays:            f.Time.RangeDays,
+			CompareDays:          f.Time.CompareDays,
 		})
 	}
 
@@ -193,6 +237,9 @@ func FromHomeResponse(h *home.Response, f home.Filters) *Response {
 				f.Scope.Level, scopeID,
 			)},
 			SuggestedExperiments: []string{"Share the current playbook with new teams."},
+			// No metric moved the wrong way: no change and no direction.
+			RangeDays:   f.Time.RangeDays,
+			CompareDays: f.Time.CompareDays,
 		})
 	}
 

@@ -169,6 +169,27 @@ const registeredFeatureFlagsDocument = `query FeatureFlagRegistry($orgId: String
 const registeredReviewEdgesDocument = `query ReviewEdges($input: ReviewEdgesInput!) {
   reviewEdges(input: $input) {
     edges {
+      reviewerKey
+      authorKey
+      reviewerName
+      authorName
+      reviewsCount
+      day
+      repoId
+      __typename
+    }
+    totalCount
+    __typename
+  }
+}`
+
+// registeredReviewEdgesV1Document is the text of `reviewEdges` BEFORE the Review Network table asked for the served names and keys instead of the stored reviewer and author strings (CHAOS-8485).
+// It stays a legacy text (see legacyDigestsByOperation), so a web build still sending it keeps working while the
+// new one rolls out; the operation's ONE current document is registeredReviewEdgesDocument above. Remove it
+// with the cleanup ticket once no client sends it (testdata/wire_capture/reviewedges_v1_captured.graphql).
+const registeredReviewEdgesV1Document = `query ReviewEdges($input: ReviewEdgesInput!) {
+  reviewEdges(input: $input) {
+    edges {
       reviewer
       author
       reviewsCount
@@ -797,6 +818,56 @@ const registeredCapacityForecastDocument = `query CapacityForecast($orgId: Strin
     insufficientHistory
     highVariance
     completionDistribution {
+      runs
+      unfinishedRuns
+      horizonDays
+      days {
+        value
+        count
+        cumulativeShare
+        __typename
+      }
+      items {
+        value
+        count
+        cumulativeShare
+        __typename
+      }
+      __typename
+    }
+    __typename
+  }
+}`
+
+// registeredCapacityForecastV2Document is the text capacityForecast accepted BEFORE it asked for `runs` and for
+// `cumulativeShare` on the bins of completionDistribution (CHAOS-8477): the text CHAOS-7994 registered. It stays a
+// legacy text (see legacyDigestsByOperation), beside V1 below, so a web build still sending it keeps working
+// while the new web rolls out; the operation's ONE current document is registeredCapacityForecastDocument above.
+// Wire form, same provenance: testdata/wire_form/capacityForecast.v2.graphql.
+const registeredCapacityForecastV2Document = `query CapacityForecast($orgId: String!, $input: CapacityForecastInput) {
+  capacityForecast(orgId: $orgId, input: $input) {
+    forecastId
+    computedAt
+    teamId
+    workScopeId
+    backlogSize
+    targetItems
+    targetDate
+    p50Date
+    p85Date
+    p95Date
+    p50Days
+    p85Days
+    p95Days
+    p50Items
+    p85Items
+    p95Items
+    throughputMean
+    throughputStddev
+    historyDays
+    insufficientHistory
+    highVariance
+    completionDistribution {
       days {
         value
         count
@@ -1324,6 +1395,85 @@ const registeredAiImpactSummaryDocument = `query AIImpactSummary($orgId: String!
       incidentRate
       testGapPrs
       testGapRate
+      day
+      __typename
+    }
+    repoBreakdown {
+      scopeId
+      scopeLabel
+      aiPrsTotal
+      aiAssistedPrRatio
+      reworkRateDelta
+      __typename
+    }
+    teamBreakdown {
+      scopeId
+      scopeLabel
+      aiPrsTotal
+      aiAssistedPrRatio
+      reworkRateDelta
+      __typename
+    }
+    __typename
+  }
+}`
+
+// registeredAiImpactSummaryV1Document is the text of `aiImpactSummary` BEFORE the Impact page asked for `daily.day`
+// (CHAOS-7992, CHAOS-8000 dual accept): a web build still on the old text keeps working while the new one rolls out.
+// Listed in legacyDigestsByOperation; remove it with the cleanup ticket once no client sends it
+// (testdata/wire_capture/aiimpactsummary_v1_captured.graphql).
+const registeredAiImpactSummaryV1Document = `query AIImpactSummary($orgId: String!, $dateRange: AIDateRangeInput!, $scope: AIScopeInput) {
+  aiImpactSummary(orgId: $orgId, dateRange: $dateRange, scope: $scope) {
+    orgId
+    startDate
+    endDate
+    totalPrs
+    aiAssistedPrs
+    agentCreatedPrs
+    humanPrs
+    unknownPrs
+    aiAssistedPrRatio
+    dataAvailable
+    computedAt
+    byBucket {
+      bucket
+      prsTotal
+      prsMerged
+      aiAssistedPrRatio
+      agentCreatedPrCount
+      cycleTimeAvgHours
+      aiCycleTimeDeltaHours
+      aiReviewAmplification
+      reworkDragRate
+      revertRate
+      incidentDragRate
+      testGapRate
+      leverage {
+        prsComponent
+        cycleTimeComponent
+        reviewComponent
+        reworkComponent
+        testComponent
+        incidentComponent
+        __typename
+      }
+      __typename
+    }
+    daily {
+      bucket
+      prsTotal
+      prsMerged
+      cycleTimeAvgHours
+      reviewsPerPr
+      changesRequestedPerPr
+      reworkPrs
+      reworkRate
+      revertPrs
+      revertRate
+      incidentsCount
+      incidentRate
+      testGapPrs
+      testGapRate
       __typename
     }
     repoBreakdown {
@@ -1494,6 +1644,37 @@ const registeredAiOpportunitiesDocument = `query AIOpportunities($orgId: String!
       opportunityId
       kind
       repoId
+      repoName
+      teamId
+      teamName
+      title
+      rationale
+      score
+      evidenceRefs
+      workGraphDrilldowns {
+        rootType
+        rootId
+        label
+        __typename
+      }
+      __typename
+    }
+    __typename
+  }
+}`
+
+// registeredAiOpportunitiesV1Document is the text of `aiOpportunities` BEFORE the AI opportunity list asked for the served repository and team names (CHAOS-8114).
+// It stays a legacy text (see legacyDigestsByOperation), so a web build still sending it keeps working while the
+// new one rolls out; the operation's ONE current document is registeredAiOpportunitiesDocument above. Remove it
+// with the cleanup ticket once no client sends it (testdata/wire_capture/aiopportunities_v1_captured.graphql).
+const registeredAiOpportunitiesV1Document = `query AIOpportunities($orgId: String!, $scope: AIScopeInput, $limit: Int! = 5) {
+  aiOpportunities(orgId: $orgId, scope: $scope, limit: $limit) {
+    orgId
+    detectorReady
+    recommendations {
+      opportunityId
+      kind
+      repoId
       teamId
       title
       rationale
@@ -1515,6 +1696,37 @@ const registeredAiOpportunitiesDocument = `query AIOpportunities($orgId: String!
 // `improveOpportunities` operation, the exact wire-form text a real web client sends
 // (testdata/wire_capture/improveopportunities_captured.graphql).
 const registeredImproveOpportunitiesDocument = `query ImproveOpportunities($scope: AIScopeInput, $limit: Int! = 10, $windowDays: Int! = 30) {
+  improveOpportunities(scope: $scope, limit: $limit, windowDays: $windowDays) {
+    orgId
+    detectorReady
+    totalCount
+    opportunities {
+      opportunityId
+      kind
+      entityType
+      entityId
+      title
+      rationale
+      score
+      severity
+      evidenceRefs
+      recommendedAction
+      value
+      threshold
+      unit
+      thresholdDirection
+      __typename
+    }
+    __typename
+  }
+}`
+
+// registeredImproveOpportunitiesV1Document is the text of `improveOpportunities` BEFORE the Automations table asked
+// for `value`, `threshold`, `unit` and `thresholdDirection` (CHAOS-8537; the web half is CHAOS-8500; the fields are CHAOS-7626). It stays a
+// legacy text (see legacyDigestsByOperation), so a web build still sending it keeps working while the new one rolls
+// out; the operation's ONE current document is registeredImproveOpportunitiesDocument above. Remove it with the
+// cleanup ticket once no client sends it (testdata/wire_capture/improveopportunities_v1_captured.graphql).
+const registeredImproveOpportunitiesV1Document = `query ImproveOpportunities($scope: AIScopeInput, $limit: Int! = 10, $windowDays: Int! = 30) {
   improveOpportunities(scope: $scope, limit: $limit, windowDays: $windowDays) {
     orgId
     detectorReady
@@ -3245,7 +3457,12 @@ func newQueryHandler(chClient featureflags.QueryClient, pgPool *pgxpool.Pool, ve
 	// uses to answer "is anything actually enabled?".
 	logRoutingStateDrift(pgPool, schemaDigest)
 	registryHandler := newRegistryHandler(schemaDigest, digestByOperation)
-	sw := routeswitch.NewPostgresSwitchWithLegacy(pgPool, schemaDigest, digestByOperation, legacyDigestsByOperation)
+	// CHAOS-8517: the serving switch carries the catalog rule -- a registered operation with no routing
+	// row at any schema digest is served; an operation that has a row keeps its row's answer
+	// (routeswitch/catalog_switch.go holds the rule and its row-state table). Only THIS switch has it:
+	// the proof switch below and the class-row switch (newClassRowSwitch) are built by the other
+	// constructors, so a measurement route still needs a row and an MCP class root with no row is dark.
+	sw := routeswitch.NewCatalogSwitchWithLegacy(pgPool, schemaDigest, digestByOperation, legacyDigestsByOperation)
 	routeMux := routeswitch.NewMux(sw)
 
 	// operationByDigest is digestByOperation's reverse index, built once
@@ -3662,12 +3879,16 @@ func newDocumentDispatchHandler(getenv getenvFunc, routeMux *routeswitch.Mux, op
 // current one (CHAOS-8000 dual accept). A request carrying a legacy text resolves to the same operation as one
 // carrying the current text, so a web build still on the old text keeps working while the new text rolls out;
 // the operation keeps ONE current document in digestByOperation. Each legacy text is a
-// `registered<Operation>V1Document` const (a literal, so cmd/registrydump can read it) named once here and never in
+// `registered<Operation>V<n>Document` const (a literal, so cmd/registrydump can read it) named once here and never in
 // digestByOperation. The literal below is cmd/registrydump's second parse target: keep its exact shape
 // (`"<operation>": {digestHex(<constIdent>), ...}`). Empty = every operation accepts one text.
 var legacyDigestsByOperation = map[string][]string{
-	"aiAttributedPrs":  {digestHex(registeredAiAttributedPrsV1Document)},
-	"capacityForecast": {digestHex(registeredCapacityForecastV1Document)},
+	"aiAttributedPrs":      {digestHex(registeredAiAttributedPrsV1Document)},
+	"aiImpactSummary":      {digestHex(registeredAiImpactSummaryV1Document)},
+	"aiOpportunities":      {digestHex(registeredAiOpportunitiesV1Document)},
+	"capacityForecast":     {digestHex(registeredCapacityForecastV1Document), digestHex(registeredCapacityForecastV2Document)},
+	"improveOpportunities": {digestHex(registeredImproveOpportunitiesV1Document)},
+	"reviewEdges":          {digestHex(registeredReviewEdgesV1Document)},
 }
 
 // buildOperationByDigest is the reverse index digest -> operation over every accepted text: each operation's

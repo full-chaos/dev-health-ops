@@ -250,8 +250,10 @@ type ComplexityRoot struct {
 		OpportunityID       func(childComplexity int) int
 		Rationale           func(childComplexity int) int
 		RepoID              func(childComplexity int) int
+		RepoName            func(childComplexity int) int
 		Score               func(childComplexity int) int
 		TeamID              func(childComplexity int) int
+		TeamName            func(childComplexity int) int
 		Title               func(childComplexity int) int
 		WorkGraphDrilldowns func(childComplexity int) int
 	}
@@ -409,13 +411,17 @@ type ComplexityRoot struct {
 	}
 
 	CapacityDistribution struct {
-		Days  func(childComplexity int) int
-		Items func(childComplexity int) int
+		Days           func(childComplexity int) int
+		HorizonDays    func(childComplexity int) int
+		Items          func(childComplexity int) int
+		Runs           func(childComplexity int) int
+		UnfinishedRuns func(childComplexity int) int
 	}
 
 	CapacityDistributionBin struct {
-		Count func(childComplexity int) int
-		Value func(childComplexity int) int
+		Count           func(childComplexity int) int
+		CumulativeShare func(childComplexity int) int
+		Value           func(childComplexity int) int
 	}
 
 	CapacityForecast struct {
@@ -1149,9 +1155,13 @@ type ComplexityRoot struct {
 
 	ReviewEdgeRow struct {
 		Author       func(childComplexity int) int
+		AuthorKey    func(childComplexity int) int
+		AuthorName   func(childComplexity int) int
 		Day          func(childComplexity int) int
 		RepoID       func(childComplexity int) int
 		Reviewer     func(childComplexity int) int
+		ReviewerKey  func(childComplexity int) int
+		ReviewerName func(childComplexity int) int
 		ReviewsCount func(childComplexity int) int
 	}
 
@@ -2571,6 +2581,13 @@ func (e *executableSchema) Complexity(typeName, field string, childComplexity in
 
 		return e.complexity.AIOpportunity.RepoID(childComplexity), true
 
+	case "AIOpportunity.repoName":
+		if e.complexity.AIOpportunity.RepoName == nil {
+			break
+		}
+
+		return e.complexity.AIOpportunity.RepoName(childComplexity), true
+
 	case "AIOpportunity.score":
 		if e.complexity.AIOpportunity.Score == nil {
 			break
@@ -2584,6 +2601,13 @@ func (e *executableSchema) Complexity(typeName, field string, childComplexity in
 		}
 
 		return e.complexity.AIOpportunity.TeamID(childComplexity), true
+
+	case "AIOpportunity.teamName":
+		if e.complexity.AIOpportunity.TeamName == nil {
+			break
+		}
+
+		return e.complexity.AIOpportunity.TeamName(childComplexity), true
 
 	case "AIOpportunity.title":
 		if e.complexity.AIOpportunity.Title == nil {
@@ -3313,6 +3337,13 @@ func (e *executableSchema) Complexity(typeName, field string, childComplexity in
 
 		return e.complexity.CapacityDistribution.Days(childComplexity), true
 
+	case "CapacityDistribution.horizonDays":
+		if e.complexity.CapacityDistribution.HorizonDays == nil {
+			break
+		}
+
+		return e.complexity.CapacityDistribution.HorizonDays(childComplexity), true
+
 	case "CapacityDistribution.items":
 		if e.complexity.CapacityDistribution.Items == nil {
 			break
@@ -3320,12 +3351,33 @@ func (e *executableSchema) Complexity(typeName, field string, childComplexity in
 
 		return e.complexity.CapacityDistribution.Items(childComplexity), true
 
+	case "CapacityDistribution.runs":
+		if e.complexity.CapacityDistribution.Runs == nil {
+			break
+		}
+
+		return e.complexity.CapacityDistribution.Runs(childComplexity), true
+
+	case "CapacityDistribution.unfinishedRuns":
+		if e.complexity.CapacityDistribution.UnfinishedRuns == nil {
+			break
+		}
+
+		return e.complexity.CapacityDistribution.UnfinishedRuns(childComplexity), true
+
 	case "CapacityDistributionBin.count":
 		if e.complexity.CapacityDistributionBin.Count == nil {
 			break
 		}
 
 		return e.complexity.CapacityDistributionBin.Count(childComplexity), true
+
+	case "CapacityDistributionBin.cumulativeShare":
+		if e.complexity.CapacityDistributionBin.CumulativeShare == nil {
+			break
+		}
+
+		return e.complexity.CapacityDistributionBin.CumulativeShare(childComplexity), true
 
 	case "CapacityDistributionBin.value":
 		if e.complexity.CapacityDistributionBin.Value == nil {
@@ -6962,6 +7014,20 @@ func (e *executableSchema) Complexity(typeName, field string, childComplexity in
 
 		return e.complexity.ReviewEdgeRow.Author(childComplexity), true
 
+	case "ReviewEdgeRow.authorKey":
+		if e.complexity.ReviewEdgeRow.AuthorKey == nil {
+			break
+		}
+
+		return e.complexity.ReviewEdgeRow.AuthorKey(childComplexity), true
+
+	case "ReviewEdgeRow.authorName":
+		if e.complexity.ReviewEdgeRow.AuthorName == nil {
+			break
+		}
+
+		return e.complexity.ReviewEdgeRow.AuthorName(childComplexity), true
+
 	case "ReviewEdgeRow.day":
 		if e.complexity.ReviewEdgeRow.Day == nil {
 			break
@@ -6982,6 +7048,20 @@ func (e *executableSchema) Complexity(typeName, field string, childComplexity in
 		}
 
 		return e.complexity.ReviewEdgeRow.Reviewer(childComplexity), true
+
+	case "ReviewEdgeRow.reviewerKey":
+		if e.complexity.ReviewEdgeRow.ReviewerKey == nil {
+			break
+		}
+
+		return e.complexity.ReviewEdgeRow.ReviewerKey(childComplexity), true
+
+	case "ReviewEdgeRow.reviewerName":
+		if e.complexity.ReviewEdgeRow.ReviewerName == nil {
+			break
+		}
+
+		return e.complexity.ReviewEdgeRow.ReviewerName(childComplexity), true
 
 	case "ReviewEdgeRow.reviewsCount":
 		if e.complexity.ReviewEdgeRow.ReviewsCount == nil {
@@ -8795,6 +8875,14 @@ type AIOpportunity {
   score: Float!
   evidenceRefs: [String!]!
   workGraphDrilldowns: [AIWorkGraphDrilldownRef!]!
+  """
+  The repository's full name in the org's repository catalogue (CHAOS-8114). Null = the catalogue holds no name for ` + "`" + `` + "`" + `repoId` + "`" + `` + "`" + `, or the catalogue could not be read. It is never the id.
+  """
+  repoName: String
+  """
+  The name of the team ` + "`" + `` + "`" + `teamId` + "`" + `` + "`" + ` names, from the org's team catalogue (CHAOS-8114). Null = the opportunity has no team, the catalogue holds no name for it, or the catalogue could not be read. It is never the id.
+  """
+  teamName: String
 }
 
 enum AIOpportunityKind {
@@ -9043,13 +9131,57 @@ type CapacityDistribution {
   days: [CapacityDistributionBin!]
   "Fixed-date mode: items completed by the target date, one bin per distinct total."
   items: [CapacityDistributionBin!]
+  """
+  The number of simulation runs behind each mode (CHAOS-8477): the counts of one
+  mode's bins sum to it, the runs that did not finish included. The modes of one
+  forecast come from one simulation and hold the same number of runs. The share
+  of the runs that finished is served on each bin (cumulativeShare).
+  """
+  runs: Int!
+  """
+  The number of days-mode runs that did NOT finish inside the simulated horizon
+  (CHAOS-8477): the simulation stops a run after ` + "`" + `` + "`" + `horizonDays` + "`" + `` + "`" + ` days, with
+  items still open, and records it in the ` + "`" + `` + "`" + `days` + "`" + `` + "`" + ` bin at ` + "`" + `` + "`" + `horizonDays` + "`" + `` + "`" + `. Such
+  a run is not done. A run that needs exactly ` + "`" + `` + "`" + `horizonDays` + "`" + `` + "`" + ` days is recorded
+  in the same bin and cannot be told apart, so it is counted here too. Null =
+  the days mode did not simulate (` + "`" + `` + "`" + `days` + "`" + `` + "`" + ` is null).
+  """
+  unfinishedRuns: Int
+  """
+  The horizon of the days simulation, in days (CHAOS-8477): 365. A ` + "`" + `` + "`" + `days` + "`" + `` + "`" + ` bin
+  with this value means "this many days or more".
+  """
+  horizonDays: Int!
 }
 
 type CapacityDistributionBin {
-  "The outcome: a day count (days) or an item count (items)."
+  """
+  The outcome: a day count (days) or an item count (items). A day count is the
+  number of days after the day the forecast was computed: the same axis as
+  p50Days, p85Days and p95Days (p50Date is that day plus p50Days). A day count
+  equal to the distribution's horizonDays means "that many days or more": the
+  simulation stops a run there, done or not.
+  """
   value: Int!
-  "How many simulation runs ended on this value."
+  "How many simulation runs ended on this value. In the days bin at horizonDays: how many runs were stopped there."
   count: Int!
+  """
+  The share of ALL the mode's simulation runs (CHAOS-8477), from the same Monte
+  Carlo distribution as p50Days / p85Days / p95Days: 0 to 1, never lower than
+  on the bin before. In the days mode it is the share of the runs that FINISHED
+  (the target items were done) on or before that day. A run that reached the
+  horizon is not done: the bin at horizonDays adds nothing to the share, so the
+  last share is below 1 when any run reached the horizon (unfinishedRuns), and
+  it is 1 only when every run finished. In the items mode it is the share of
+  the runs with this many items or fewer, and 1 on the last bin. The percentile
+  days are an interpolated rank of the same runs: the day on which this share
+  first reaches 0.50 and p50Days both lie between the outcomes of the same two
+  consecutive ranked runs, so they are the same day unless those two runs ended
+  on different days (and so for 0.85 and p85Days, 0.95 and p95Days). When so
+  many runs reached the horizon that the share never reaches a percentile, that
+  percentile day is horizonDays and means "horizonDays or more".
+  """
+  cumulativeShare: Float!
 }
 
 type CapacityForecastConnection {
@@ -10110,11 +10242,33 @@ type ReportRunType {
 }
 
 type ReviewEdgeRow {
+  """
+  The stored identity of the reviewer: a provider login or a display name. Deprecated in favour of reviewerName and reviewerKey (CHAOS-8485); it stays for clients that still read it.
+  """
   reviewer: String!
+  """
+  The stored identity of the author: the pull request's author e-mail address when there is one, else its author name, else "unknown". It can be an e-mail address. Deprecated in favour of authorName and authorKey (CHAOS-8485): a client that may not show an e-mail address must not select it.
+  """
   author: String!
   reviewsCount: Int!
   day: Date!
   repoId: String
+  """
+  The reviewer's display name (CHAOS-8485): the display name of the org's identity the stored reviewer belongs to; else the stored reviewer itself when it is not an e-mail address (a provider login). Never an e-mail address. Null = no name is known.
+  """
+  reviewerName: String
+  """
+  The author's display name (CHAOS-8485): the display name of the org's identity the stored author belongs to; else, for an author stored by e-mail address, the author name the provider gave on the pull request; else the stored author itself when it is not an e-mail address. Never an e-mail address. Null = no name is known.
+  """
+  authorName: String
+  """
+  An opaque key of the reviewer inside the org (CHAOS-8485): the same person has the same key in every answer, as reviewer and as author when the identity resolves. It is not an e-mail address and not a name; use it only to tell people apart and to join rows.
+  """
+  reviewerKey: String!
+  """
+  An opaque key of the author inside the org (CHAOS-8485); see reviewerKey.
+  """
+  authorKey: String!
 }
 
 input ReviewEdgesInput {
@@ -20103,6 +20257,10 @@ func (ec *executionContext) fieldContext_AIOpportunitiesResult_recommendations(_
 				return ec.fieldContext_AIOpportunity_evidenceRefs(ctx, field)
 			case "workGraphDrilldowns":
 				return ec.fieldContext_AIOpportunity_workGraphDrilldowns(ctx, field)
+			case "repoName":
+				return ec.fieldContext_AIOpportunity_repoName(ctx, field)
+			case "teamName":
+				return ec.fieldContext_AIOpportunity_teamName(ctx, field)
 			}
 			return nil, fmt.Errorf("no field named %q was found under type AIOpportunity", field.Name)
 		},
@@ -20547,6 +20705,88 @@ func (ec *executionContext) fieldContext_AIOpportunity_workGraphDrilldowns(_ con
 				return ec.fieldContext_AIWorkGraphDrilldownRef_label(ctx, field)
 			}
 			return nil, fmt.Errorf("no field named %q was found under type AIWorkGraphDrilldownRef", field.Name)
+		},
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _AIOpportunity_repoName(ctx context.Context, field graphql.CollectedField, obj *model.AIOpportunity) (ret graphql.Marshaler) {
+	fc, err := ec.fieldContext_AIOpportunity_repoName(ctx, field)
+	if err != nil {
+		return graphql.Null
+	}
+	ctx = graphql.WithFieldContext(ctx, fc)
+	defer func() {
+		if r := recover(); r != nil {
+			ec.Error(ctx, ec.Recover(ctx, r))
+			ret = graphql.Null
+		}
+	}()
+	resTmp, err := ec.ResolverMiddleware(ctx, func(rctx context.Context) (any, error) {
+		ctx = rctx // use context from middleware stack in children
+		return obj.RepoName, nil
+	})
+	if err != nil {
+		ec.Error(ctx, err)
+		return graphql.Null
+	}
+	if resTmp == nil {
+		return graphql.Null
+	}
+	res := resTmp.(*string)
+	fc.Result = res
+	return ec.marshalOString2ᚖstring(ctx, field.Selections, res)
+}
+
+func (ec *executionContext) fieldContext_AIOpportunity_repoName(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "AIOpportunity",
+		Field:      field,
+		IsMethod:   false,
+		IsResolver: false,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return nil, errors.New("field of type String does not have child fields")
+		},
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _AIOpportunity_teamName(ctx context.Context, field graphql.CollectedField, obj *model.AIOpportunity) (ret graphql.Marshaler) {
+	fc, err := ec.fieldContext_AIOpportunity_teamName(ctx, field)
+	if err != nil {
+		return graphql.Null
+	}
+	ctx = graphql.WithFieldContext(ctx, fc)
+	defer func() {
+		if r := recover(); r != nil {
+			ec.Error(ctx, ec.Recover(ctx, r))
+			ret = graphql.Null
+		}
+	}()
+	resTmp, err := ec.ResolverMiddleware(ctx, func(rctx context.Context) (any, error) {
+		ctx = rctx // use context from middleware stack in children
+		return obj.TeamName, nil
+	})
+	if err != nil {
+		ec.Error(ctx, err)
+		return graphql.Null
+	}
+	if resTmp == nil {
+		return graphql.Null
+	}
+	res := resTmp.(*string)
+	fc.Result = res
+	return ec.marshalOString2ᚖstring(ctx, field.Selections, res)
+}
+
+func (ec *executionContext) fieldContext_AIOpportunity_teamName(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "AIOpportunity",
+		Field:      field,
+		IsMethod:   false,
+		IsResolver: false,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return nil, errors.New("field of type String does not have child fields")
 		},
 	}
 	return fc, nil
@@ -25202,6 +25442,8 @@ func (ec *executionContext) fieldContext_CapacityDistribution_days(_ context.Con
 				return ec.fieldContext_CapacityDistributionBin_value(ctx, field)
 			case "count":
 				return ec.fieldContext_CapacityDistributionBin_count(ctx, field)
+			case "cumulativeShare":
+				return ec.fieldContext_CapacityDistributionBin_cumulativeShare(ctx, field)
 			}
 			return nil, fmt.Errorf("no field named %q was found under type CapacityDistributionBin", field.Name)
 		},
@@ -25249,8 +25491,139 @@ func (ec *executionContext) fieldContext_CapacityDistribution_items(_ context.Co
 				return ec.fieldContext_CapacityDistributionBin_value(ctx, field)
 			case "count":
 				return ec.fieldContext_CapacityDistributionBin_count(ctx, field)
+			case "cumulativeShare":
+				return ec.fieldContext_CapacityDistributionBin_cumulativeShare(ctx, field)
 			}
 			return nil, fmt.Errorf("no field named %q was found under type CapacityDistributionBin", field.Name)
+		},
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _CapacityDistribution_runs(ctx context.Context, field graphql.CollectedField, obj *model.CapacityDistribution) (ret graphql.Marshaler) {
+	fc, err := ec.fieldContext_CapacityDistribution_runs(ctx, field)
+	if err != nil {
+		return graphql.Null
+	}
+	ctx = graphql.WithFieldContext(ctx, fc)
+	defer func() {
+		if r := recover(); r != nil {
+			ec.Error(ctx, ec.Recover(ctx, r))
+			ret = graphql.Null
+		}
+	}()
+	resTmp, err := ec.ResolverMiddleware(ctx, func(rctx context.Context) (any, error) {
+		ctx = rctx // use context from middleware stack in children
+		return obj.Runs, nil
+	})
+	if err != nil {
+		ec.Error(ctx, err)
+		return graphql.Null
+	}
+	if resTmp == nil {
+		if !graphql.HasFieldError(ctx, fc) {
+			ec.Errorf(ctx, "must not be null")
+		}
+		return graphql.Null
+	}
+	res := resTmp.(int)
+	fc.Result = res
+	return ec.marshalNInt2int(ctx, field.Selections, res)
+}
+
+func (ec *executionContext) fieldContext_CapacityDistribution_runs(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "CapacityDistribution",
+		Field:      field,
+		IsMethod:   false,
+		IsResolver: false,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return nil, errors.New("field of type Int does not have child fields")
+		},
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _CapacityDistribution_unfinishedRuns(ctx context.Context, field graphql.CollectedField, obj *model.CapacityDistribution) (ret graphql.Marshaler) {
+	fc, err := ec.fieldContext_CapacityDistribution_unfinishedRuns(ctx, field)
+	if err != nil {
+		return graphql.Null
+	}
+	ctx = graphql.WithFieldContext(ctx, fc)
+	defer func() {
+		if r := recover(); r != nil {
+			ec.Error(ctx, ec.Recover(ctx, r))
+			ret = graphql.Null
+		}
+	}()
+	resTmp, err := ec.ResolverMiddleware(ctx, func(rctx context.Context) (any, error) {
+		ctx = rctx // use context from middleware stack in children
+		return obj.UnfinishedRuns, nil
+	})
+	if err != nil {
+		ec.Error(ctx, err)
+		return graphql.Null
+	}
+	if resTmp == nil {
+		return graphql.Null
+	}
+	res := resTmp.(*int)
+	fc.Result = res
+	return ec.marshalOInt2ᚖint(ctx, field.Selections, res)
+}
+
+func (ec *executionContext) fieldContext_CapacityDistribution_unfinishedRuns(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "CapacityDistribution",
+		Field:      field,
+		IsMethod:   false,
+		IsResolver: false,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return nil, errors.New("field of type Int does not have child fields")
+		},
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _CapacityDistribution_horizonDays(ctx context.Context, field graphql.CollectedField, obj *model.CapacityDistribution) (ret graphql.Marshaler) {
+	fc, err := ec.fieldContext_CapacityDistribution_horizonDays(ctx, field)
+	if err != nil {
+		return graphql.Null
+	}
+	ctx = graphql.WithFieldContext(ctx, fc)
+	defer func() {
+		if r := recover(); r != nil {
+			ec.Error(ctx, ec.Recover(ctx, r))
+			ret = graphql.Null
+		}
+	}()
+	resTmp, err := ec.ResolverMiddleware(ctx, func(rctx context.Context) (any, error) {
+		ctx = rctx // use context from middleware stack in children
+		return obj.HorizonDays, nil
+	})
+	if err != nil {
+		ec.Error(ctx, err)
+		return graphql.Null
+	}
+	if resTmp == nil {
+		if !graphql.HasFieldError(ctx, fc) {
+			ec.Errorf(ctx, "must not be null")
+		}
+		return graphql.Null
+	}
+	res := resTmp.(int)
+	fc.Result = res
+	return ec.marshalNInt2int(ctx, field.Selections, res)
+}
+
+func (ec *executionContext) fieldContext_CapacityDistribution_horizonDays(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "CapacityDistribution",
+		Field:      field,
+		IsMethod:   false,
+		IsResolver: false,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return nil, errors.New("field of type Int does not have child fields")
 		},
 	}
 	return fc, nil
@@ -25339,6 +25712,50 @@ func (ec *executionContext) fieldContext_CapacityDistributionBin_count(_ context
 		IsResolver: false,
 		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
 			return nil, errors.New("field of type Int does not have child fields")
+		},
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _CapacityDistributionBin_cumulativeShare(ctx context.Context, field graphql.CollectedField, obj *model.CapacityDistributionBin) (ret graphql.Marshaler) {
+	fc, err := ec.fieldContext_CapacityDistributionBin_cumulativeShare(ctx, field)
+	if err != nil {
+		return graphql.Null
+	}
+	ctx = graphql.WithFieldContext(ctx, fc)
+	defer func() {
+		if r := recover(); r != nil {
+			ec.Error(ctx, ec.Recover(ctx, r))
+			ret = graphql.Null
+		}
+	}()
+	resTmp, err := ec.ResolverMiddleware(ctx, func(rctx context.Context) (any, error) {
+		ctx = rctx // use context from middleware stack in children
+		return obj.CumulativeShare, nil
+	})
+	if err != nil {
+		ec.Error(ctx, err)
+		return graphql.Null
+	}
+	if resTmp == nil {
+		if !graphql.HasFieldError(ctx, fc) {
+			ec.Errorf(ctx, "must not be null")
+		}
+		return graphql.Null
+	}
+	res := resTmp.(float64)
+	fc.Result = res
+	return ec.marshalNFloat2float64(ctx, field.Selections, res)
+}
+
+func (ec *executionContext) fieldContext_CapacityDistributionBin_cumulativeShare(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "CapacityDistributionBin",
+		Field:      field,
+		IsMethod:   false,
+		IsResolver: false,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return nil, errors.New("field of type Float does not have child fields")
 		},
 	}
 	return fc, nil
@@ -26269,6 +26686,12 @@ func (ec *executionContext) fieldContext_CapacityForecast_completionDistribution
 				return ec.fieldContext_CapacityDistribution_days(ctx, field)
 			case "items":
 				return ec.fieldContext_CapacityDistribution_items(ctx, field)
+			case "runs":
+				return ec.fieldContext_CapacityDistribution_runs(ctx, field)
+			case "unfinishedRuns":
+				return ec.fieldContext_CapacityDistribution_unfinishedRuns(ctx, field)
+			case "horizonDays":
+				return ec.fieldContext_CapacityDistribution_horizonDays(ctx, field)
 			}
 			return nil, fmt.Errorf("no field named %q was found under type CapacityDistribution", field.Name)
 		},
@@ -48849,6 +49272,176 @@ func (ec *executionContext) fieldContext_ReviewEdgeRow_repoId(_ context.Context,
 	return fc, nil
 }
 
+func (ec *executionContext) _ReviewEdgeRow_reviewerName(ctx context.Context, field graphql.CollectedField, obj *model.ReviewEdgeRow) (ret graphql.Marshaler) {
+	fc, err := ec.fieldContext_ReviewEdgeRow_reviewerName(ctx, field)
+	if err != nil {
+		return graphql.Null
+	}
+	ctx = graphql.WithFieldContext(ctx, fc)
+	defer func() {
+		if r := recover(); r != nil {
+			ec.Error(ctx, ec.Recover(ctx, r))
+			ret = graphql.Null
+		}
+	}()
+	resTmp, err := ec.ResolverMiddleware(ctx, func(rctx context.Context) (any, error) {
+		ctx = rctx // use context from middleware stack in children
+		return obj.ReviewerName, nil
+	})
+	if err != nil {
+		ec.Error(ctx, err)
+		return graphql.Null
+	}
+	if resTmp == nil {
+		return graphql.Null
+	}
+	res := resTmp.(*string)
+	fc.Result = res
+	return ec.marshalOString2ᚖstring(ctx, field.Selections, res)
+}
+
+func (ec *executionContext) fieldContext_ReviewEdgeRow_reviewerName(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "ReviewEdgeRow",
+		Field:      field,
+		IsMethod:   false,
+		IsResolver: false,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return nil, errors.New("field of type String does not have child fields")
+		},
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _ReviewEdgeRow_authorName(ctx context.Context, field graphql.CollectedField, obj *model.ReviewEdgeRow) (ret graphql.Marshaler) {
+	fc, err := ec.fieldContext_ReviewEdgeRow_authorName(ctx, field)
+	if err != nil {
+		return graphql.Null
+	}
+	ctx = graphql.WithFieldContext(ctx, fc)
+	defer func() {
+		if r := recover(); r != nil {
+			ec.Error(ctx, ec.Recover(ctx, r))
+			ret = graphql.Null
+		}
+	}()
+	resTmp, err := ec.ResolverMiddleware(ctx, func(rctx context.Context) (any, error) {
+		ctx = rctx // use context from middleware stack in children
+		return obj.AuthorName, nil
+	})
+	if err != nil {
+		ec.Error(ctx, err)
+		return graphql.Null
+	}
+	if resTmp == nil {
+		return graphql.Null
+	}
+	res := resTmp.(*string)
+	fc.Result = res
+	return ec.marshalOString2ᚖstring(ctx, field.Selections, res)
+}
+
+func (ec *executionContext) fieldContext_ReviewEdgeRow_authorName(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "ReviewEdgeRow",
+		Field:      field,
+		IsMethod:   false,
+		IsResolver: false,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return nil, errors.New("field of type String does not have child fields")
+		},
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _ReviewEdgeRow_reviewerKey(ctx context.Context, field graphql.CollectedField, obj *model.ReviewEdgeRow) (ret graphql.Marshaler) {
+	fc, err := ec.fieldContext_ReviewEdgeRow_reviewerKey(ctx, field)
+	if err != nil {
+		return graphql.Null
+	}
+	ctx = graphql.WithFieldContext(ctx, fc)
+	defer func() {
+		if r := recover(); r != nil {
+			ec.Error(ctx, ec.Recover(ctx, r))
+			ret = graphql.Null
+		}
+	}()
+	resTmp, err := ec.ResolverMiddleware(ctx, func(rctx context.Context) (any, error) {
+		ctx = rctx // use context from middleware stack in children
+		return obj.ReviewerKey, nil
+	})
+	if err != nil {
+		ec.Error(ctx, err)
+		return graphql.Null
+	}
+	if resTmp == nil {
+		if !graphql.HasFieldError(ctx, fc) {
+			ec.Errorf(ctx, "must not be null")
+		}
+		return graphql.Null
+	}
+	res := resTmp.(string)
+	fc.Result = res
+	return ec.marshalNString2string(ctx, field.Selections, res)
+}
+
+func (ec *executionContext) fieldContext_ReviewEdgeRow_reviewerKey(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "ReviewEdgeRow",
+		Field:      field,
+		IsMethod:   false,
+		IsResolver: false,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return nil, errors.New("field of type String does not have child fields")
+		},
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _ReviewEdgeRow_authorKey(ctx context.Context, field graphql.CollectedField, obj *model.ReviewEdgeRow) (ret graphql.Marshaler) {
+	fc, err := ec.fieldContext_ReviewEdgeRow_authorKey(ctx, field)
+	if err != nil {
+		return graphql.Null
+	}
+	ctx = graphql.WithFieldContext(ctx, fc)
+	defer func() {
+		if r := recover(); r != nil {
+			ec.Error(ctx, ec.Recover(ctx, r))
+			ret = graphql.Null
+		}
+	}()
+	resTmp, err := ec.ResolverMiddleware(ctx, func(rctx context.Context) (any, error) {
+		ctx = rctx // use context from middleware stack in children
+		return obj.AuthorKey, nil
+	})
+	if err != nil {
+		ec.Error(ctx, err)
+		return graphql.Null
+	}
+	if resTmp == nil {
+		if !graphql.HasFieldError(ctx, fc) {
+			ec.Errorf(ctx, "must not be null")
+		}
+		return graphql.Null
+	}
+	res := resTmp.(string)
+	fc.Result = res
+	return ec.marshalNString2string(ctx, field.Selections, res)
+}
+
+func (ec *executionContext) fieldContext_ReviewEdgeRow_authorKey(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "ReviewEdgeRow",
+		Field:      field,
+		IsMethod:   false,
+		IsResolver: false,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return nil, errors.New("field of type String does not have child fields")
+		},
+	}
+	return fc, nil
+}
+
 func (ec *executionContext) _ReviewEdgesResult_edges(ctx context.Context, field graphql.CollectedField, obj *model.ReviewEdgesResult) (ret graphql.Marshaler) {
 	fc, err := ec.fieldContext_ReviewEdgesResult_edges(ctx, field)
 	if err != nil {
@@ -48898,6 +49491,14 @@ func (ec *executionContext) fieldContext_ReviewEdgesResult_edges(_ context.Conte
 				return ec.fieldContext_ReviewEdgeRow_day(ctx, field)
 			case "repoId":
 				return ec.fieldContext_ReviewEdgeRow_repoId(ctx, field)
+			case "reviewerName":
+				return ec.fieldContext_ReviewEdgeRow_reviewerName(ctx, field)
+			case "authorName":
+				return ec.fieldContext_ReviewEdgeRow_authorName(ctx, field)
+			case "reviewerKey":
+				return ec.fieldContext_ReviewEdgeRow_reviewerKey(ctx, field)
+			case "authorKey":
+				return ec.fieldContext_ReviewEdgeRow_authorKey(ctx, field)
 			}
 			return nil, fmt.Errorf("no field named %q was found under type ReviewEdgeRow", field.Name)
 		},
@@ -63083,6 +63684,10 @@ func (ec *executionContext) _AIOpportunity(ctx context.Context, sel ast.Selectio
 			if out.Values[i] == graphql.Null {
 				out.Invalids++
 			}
+		case "repoName":
+			out.Values[i] = ec._AIOpportunity_repoName(ctx, field, obj)
+		case "teamName":
+			out.Values[i] = ec._AIOpportunity_teamName(ctx, field, obj)
 		default:
 			panic("unknown field " + strconv.Quote(field.Name))
 		}
@@ -64120,6 +64725,18 @@ func (ec *executionContext) _CapacityDistribution(ctx context.Context, sel ast.S
 			out.Values[i] = ec._CapacityDistribution_days(ctx, field, obj)
 		case "items":
 			out.Values[i] = ec._CapacityDistribution_items(ctx, field, obj)
+		case "runs":
+			out.Values[i] = ec._CapacityDistribution_runs(ctx, field, obj)
+			if out.Values[i] == graphql.Null {
+				out.Invalids++
+			}
+		case "unfinishedRuns":
+			out.Values[i] = ec._CapacityDistribution_unfinishedRuns(ctx, field, obj)
+		case "horizonDays":
+			out.Values[i] = ec._CapacityDistribution_horizonDays(ctx, field, obj)
+			if out.Values[i] == graphql.Null {
+				out.Invalids++
+			}
 		default:
 			panic("unknown field " + strconv.Quote(field.Name))
 		}
@@ -64161,6 +64778,11 @@ func (ec *executionContext) _CapacityDistributionBin(ctx context.Context, sel as
 			}
 		case "count":
 			out.Values[i] = ec._CapacityDistributionBin_count(ctx, field, obj)
+			if out.Values[i] == graphql.Null {
+				out.Invalids++
+			}
+		case "cumulativeShare":
+			out.Values[i] = ec._CapacityDistributionBin_cumulativeShare(ctx, field, obj)
 			if out.Values[i] == graphql.Null {
 				out.Invalids++
 			}
@@ -69863,6 +70485,20 @@ func (ec *executionContext) _ReviewEdgeRow(ctx context.Context, sel ast.Selectio
 			}
 		case "repoId":
 			out.Values[i] = ec._ReviewEdgeRow_repoId(ctx, field, obj)
+		case "reviewerName":
+			out.Values[i] = ec._ReviewEdgeRow_reviewerName(ctx, field, obj)
+		case "authorName":
+			out.Values[i] = ec._ReviewEdgeRow_authorName(ctx, field, obj)
+		case "reviewerKey":
+			out.Values[i] = ec._ReviewEdgeRow_reviewerKey(ctx, field, obj)
+			if out.Values[i] == graphql.Null {
+				out.Invalids++
+			}
+		case "authorKey":
+			out.Values[i] = ec._ReviewEdgeRow_authorKey(ctx, field, obj)
+			if out.Values[i] == graphql.Null {
+				out.Invalids++
+			}
 		default:
 			panic("unknown field " + strconv.Quote(field.Name))
 		}

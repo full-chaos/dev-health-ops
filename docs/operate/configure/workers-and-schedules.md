@@ -164,7 +164,10 @@ same binary.
 | `DEV_HEALTH_GO_DHO_IMAGE` | `dev-health-go-dho` | the four `go-worker-*` processes (`dho worker`), `go-reconciler` (`dho reconciler`), `go-scheduler` (`dho scheduler`), the three `go-stream-*` processes (`dho stream-runner`), `query-api` (`dho query-api`, the `go-api` compose profile, `deploy/go-api/compose-query-api.yml`) and the one-shot `migrate` (`dho migrate upgrade --river`) |
 | `DEV_HEALTH_GO_OPERATOR_IMAGE` | `dev-health-go-operator` | the four `go-sync-*-route-activate` one-shots |
 | `DEV_HEALTH_GO_CONTRACTCHECK_IMAGE` | `dev-health-go-contractcheck` | `go-contractcheck` |
-| `DEV_HEALTH_API_IMAGE` | `dev-hops-api` | `api`, `metrics-api` |
+
+The `router` service (nginx on host port 8000) builds nothing and has no pin
+variable: its image is fixed by digest in `compose.yml`, the same image the
+routing test of `internal/ingressplanes` runs.
 
 Every default is the `:local` tag of its family, a tag no registry
 publishes. Unpinned, Compose has nothing to fetch under that name and
@@ -270,10 +273,14 @@ any of them unset `/health` answers 503 and names which one is
 delivery uses the Stripe CLI's own forwarder beside the stack: `stripe listen
 --forward-to http://localhost:8010/api/v1/billing/webhooks/stripe` (run from a
 host shell, not part of this repo). The api listener itself is not published
-(the Python `api` service owns host port 8000). `go-api` connects as its own
-least-privilege login, `devhealth_api`, which `go-river-provision` creates and
-`go-river-migrate` grants; `API_DATABASE_ROLE` / `API_DATABASE_PASSWORD` change
-it.
+(the `router` service owns host port 8000 and sends requests to it). `go-api`
+connects to PostgreSQL as its own least-privilege login, `devhealth_api`, which
+`go-river-provision` creates and `go-river-migrate` grants; `API_DATABASE_ROLE`
+/ `API_DATABASE_PASSWORD` change it. It connects to ClickHouse as its own
+login, `dho_api_ch`, which the `clickhouse` service declares from the mounted
+file `docker/clickhouse-users.d/dho_api_ch.xml` (generated from the api's
+privilege manifest; do not edit it); `API_CLICKHOUSE_PASSWORD` sets its
+password for both services.
 
 ## Known divergences: local vs prod worker topology
 

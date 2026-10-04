@@ -6,6 +6,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 )
 
 // newPair generates a valid pair under a fresh dir and returns dir and paths.
@@ -248,6 +249,7 @@ func TestKillAtEachWritePointLeavesAStateTheNextRunRecovers(t *testing.T) {
 			if _, err := os.Stat(paths.JWKS); err == nil && point != "jwks:committed" {
 				t.Fatal("the JWKS exists before its commit point")
 			}
+			ageTemps(t, paths) // the next `up` is later than a minute after the kill
 			if _, err := EnsureKeyFiles(dir, "kid-a"); err != nil {
 				t.Fatalf("next run after a kill at %s failed: %v", point, err)
 			}
@@ -308,5 +310,47 @@ func TestACommitNeverOverwritesAFileThatAppearedAfterTheCheck(t *testing.T) {
 	}
 	if b, _ := os.ReadFile(paths.Private); string(b) != "planted" {
 		t.Fatal("the commit overwrote a file that appeared after the existence check")
+	}
+}
+
+func ageTemps(t *testing.T, paths KeyPaths) {
+	t.Helper()
+	old := time.Now().Add(-2 * staleTempAge)
+	for _, d := range []string{filepath.Dir(paths.Private), filepath.Dir(paths.JWKS)} {
+		entries, _ := os.ReadDir(d)
+		for _, e := range entries {
+			if strings.Contains(e.Name(), tempMarker) {
+				if err := os.Chtimes(filepath.Join(d, e.Name()), old, old); err != nil {
+					t.Fatal(err)
+				}
+			}
+		}
+	}
+}
+
+// A temp file young enough to belong to a run that is still writing is left
+// alone; an old one is removed.
+func TestOnlyOldTempFilesAreRemoved(t *testing.T) {
+	dir, paths := newPair(t)
+	d := filepath.Dir(paths.JWKS)
+	young := filepath.Join(d, ".envelope-jwks.json.tmp-young")
+	old := filepath.Join(d, ".envelope-jwks.json.tmp-old")
+	for _, f := range []string{young, old} {
+		if err := os.WriteFile(f, []byte("x"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	past := time.Now().Add(-2 * staleTempAge)
+	if err := os.Chtimes(old, past, past); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := EnsureKeyFiles(dir, "kid-a"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(young); err != nil {
+		t.Error("a young temp file (possibly another run's) was removed")
+	}
+	if _, err := os.Stat(old); !errors.Is(err, os.ErrNotExist) {
+		t.Error("an old temp file was not removed")
 	}
 }

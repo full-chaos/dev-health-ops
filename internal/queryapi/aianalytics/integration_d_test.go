@@ -133,6 +133,66 @@ func TestRealClickHouse_AIDetectors(t *testing.T) {
 		}
 	})
 
+	// CHAOS-8114: the names come from the org's own catalogues, on a real store.
+	t.Run("AI opportunities carry the catalogue names of their own org", func(t *testing.T) {
+		got, err := AiOpportunities(ctx, client, org1, nil, 100)
+		if err != nil {
+			t.Fatal(err)
+		}
+		wantRepo := map[string]string{rA: "acme/alpha", rB: "acme/beta"}
+		teamed, perRepo := 0, map[string]int{}
+		for _, r := range got.Recommendations {
+			if r.RepoID == nil {
+				t.Fatalf("%s has no repository id", r.Kind)
+			}
+			perRepo[*r.RepoID]++
+			if want, ok := wantRepo[*r.RepoID]; !ok || nameOrNil(r.RepoName) != want {
+				t.Errorf("%s on %s: repoName = %s, want %q", r.Kind, *r.RepoID, nameOrNil(r.RepoName), want)
+			}
+			if r.TeamID == nil {
+				if r.TeamName != nil {
+					t.Errorf("%s: teamName = %q for a row with no team", r.Kind, *r.TeamName)
+				}
+				continue
+			}
+			teamed++
+			if *r.TeamID != "team-a" || nameOrNil(r.TeamName) != "Team A" {
+				t.Errorf("%s: team = %s / %s, want team-a / Team A", r.Kind, *r.TeamID, nameOrNil(r.TeamName))
+			}
+		}
+		if teamed == 0 || perRepo[rA] == 0 || perRepo[rB] == 0 {
+			t.Fatalf("nothing measured: %d row(s) with a team, rows per repository %v", teamed, perRepo)
+		}
+
+		// org-2 holds repository A under another name and has no catalogue row for
+		// repository B: org-1's names must not reach it.
+		other, err := AiOpportunities(ctx, client, org2, nil, 100)
+		if err != nil {
+			t.Fatal(err)
+		}
+		onA, onB := 0, 0
+		for _, r := range other.Recommendations {
+			switch *r.RepoID {
+			case rA:
+				onA++
+				if nameOrNil(r.RepoName) != "other/alpha" {
+					t.Errorf("org-2 %s on A: repoName = %s, want other/alpha", r.Kind, nameOrNil(r.RepoName))
+				}
+			case rB:
+				onB++
+				if r.RepoName != nil {
+					t.Errorf("org-2 %s on B: repoName = %q, want nil (org-2's catalogue has no row for B)", r.Kind, *r.RepoName)
+				}
+			}
+			if r.TeamName != nil && *r.TeamName != "Other Team A" {
+				t.Errorf("org-2 %s: teamName = %q is not a name of org-2", r.Kind, *r.TeamName)
+			}
+		}
+		if onA+onB == 0 {
+			t.Fatalf("org-2 answered no opportunity on A or B: nothing measured (%+v)", other.Recommendations)
+		}
+	})
+
 	t.Run("AI opportunity scope and limit branches", func(t *testing.T) {
 		repo, team, none := rA, "team-a", "team-none"
 		got, err := AiOpportunities(ctx, client, org1, &model.AIScopeInput{RepoID: &repo}, 100)

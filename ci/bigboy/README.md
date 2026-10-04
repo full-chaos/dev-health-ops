@@ -59,7 +59,7 @@ The bigboy stack runs no Python api, as prod does. The base `compose.yml` of the
 
 ORDER for the first cut with these files (the same order the billing-edge retirement used): (1) put
 the tracked `compose.bigboy.images.yml` in place of the host copy `compose/compose.bigboy.images.yml`,
-keeping the digests the host copy has; (2) with the OLD chain still exported, name and remove the two
+keeping the digests the host copy has (web-path-smoke.sh reads the HOST overlay, so the `web-smoke` block of the tracked file, which carries the smoke's image, must be in it); and repin the dho digests to a build that has the `dho smoke web-path` verb (the smoke works only with both); (2) with the OLD chain still exported, name and remove the two
 Python containers with compose verbs (`docker compose ... ps api metrics-api`, then
 `docker compose ... rm -sf api metrics-api`; one approved line, run on the lead's GO); (3) regenerate
 `.traefik-dynamic/planes.yml`; (4) run the cut.

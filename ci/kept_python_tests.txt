@@ -13,6 +13,7 @@ tests/test_ci_closure_pins_match_uv_lock.py
 tests/test_compose_config.py
 tests/test_deploy_alternates_removed.py
 tests/test_e2e_organization_id_contract_conformance.py
+tests/test_executed_proof_ledger_write_path_audit.py
 tests/test_executed_proof_family_coverage.py
 tests/test_go_api_routing_digest_checker.py
 tests/test_go_api_routing_operator_text.py

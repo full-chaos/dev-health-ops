@@ -309,6 +309,47 @@ const registeredOperatingReviewDocument = `query OperatingReview($orgId: String!
         label
         value
         unit
+        hasData
+        delta {
+          value
+          priorValue
+          absolute
+          percent
+          status
+          hasPriorData
+          __typename
+        }
+        __typename
+      }
+      __typename
+    }
+    recommendations
+    recommendationsEmptyState
+    __typename
+  }
+}`
+
+// registeredOperatingReviewV1Document is the text of `operatingReview` BEFORE the Operating Review asked whether each week of a metric holds data (CHAOS-8115).
+// It stays a legacy text (see legacyDigestsByOperation), so a web build still sending it keeps working while the
+// new one rolls out; the operation's ONE current document is registeredOperatingReviewDocument above. Remove it
+// with the cleanup ticket once no client sends it (testdata/wire_capture/operatingreview_v1_captured.graphql).
+const registeredOperatingReviewV1Document = `query OperatingReview($orgId: String!, $input: OperatingReviewInput!) {
+  operatingReview(orgId: $orgId, input: $input) {
+    orgId
+    teamId
+    weekStart
+    priorWeekStart
+    sections {
+      key
+      title
+      changed
+      improved
+      worsened
+      metrics {
+        key
+        label
+        value
+        unit
         delta {
           value
           priorValue
@@ -1781,6 +1822,48 @@ const registeredAiGovernanceSummaryDocument = `query AIGovernanceSummary($orgId:
 // `aiWorkflowDrilldown` operation, the exact wire-form text a real web client sends
 // (testdata/wire_capture/aiworkflowdrilldown_captured.graphql).
 const registeredAiWorkflowDrilldownDocument = `query AIWorkflowDrilldown($orgId: String!, $rootType: AIWorkflowRootTypeInput!, $rootId: String!, $depth: Int! = 3, $limit: Int! = 100) {
+  aiWorkflowDrilldown(
+    orgId: $orgId
+    rootType: $rootType
+    rootId: $rootId
+    depth: $depth
+    limit: $limit
+  ) {
+    orgId
+    rootType
+    rootId
+    partial
+    dataAvailable
+    nodes {
+      nodeType
+      nodeId
+      displayName
+      nameExpected
+      __typename
+    }
+    edges {
+      edgeId
+      sourceType
+      sourceId
+      targetType
+      targetId
+      edgeType
+      confidence
+      source
+      evidence
+      provider
+      repoId
+      __typename
+    }
+    __typename
+  }
+}`
+
+// registeredAiWorkflowDrilldownV1Document is the text of `aiWorkflowDrilldown` BEFORE the AI evidence rows asked for the served node names and whether a node type carries a name (CHAOS-8113).
+// It stays a legacy text (see legacyDigestsByOperation), so a web build still sending it keeps working while the
+// new one rolls out; the operation's ONE current document is registeredAiWorkflowDrilldownDocument above. Remove it
+// with the cleanup ticket once no client sends it (testdata/wire_capture/aiworkflowdrilldown_v1_captured.graphql).
+const registeredAiWorkflowDrilldownV1Document = `query AIWorkflowDrilldown($orgId: String!, $rootType: AIWorkflowRootTypeInput!, $rootId: String!, $depth: Int! = 3, $limit: Int! = 100) {
   aiWorkflowDrilldown(
     orgId: $orgId
     rootType: $rootType
@@ -3886,8 +3969,10 @@ var legacyDigestsByOperation = map[string][]string{
 	"aiAttributedPrs":      {digestHex(registeredAiAttributedPrsV1Document)},
 	"aiImpactSummary":      {digestHex(registeredAiImpactSummaryV1Document)},
 	"aiOpportunities":      {digestHex(registeredAiOpportunitiesV1Document)},
+	"aiWorkflowDrilldown":  {digestHex(registeredAiWorkflowDrilldownV1Document)},
 	"capacityForecast":     {digestHex(registeredCapacityForecastV1Document), digestHex(registeredCapacityForecastV2Document)},
 	"improveOpportunities": {digestHex(registeredImproveOpportunitiesV1Document)},
+	"operatingReview":      {digestHex(registeredOperatingReviewV1Document)},
 	"reviewEdges":          {digestHex(registeredReviewEdgesV1Document)},
 }
 

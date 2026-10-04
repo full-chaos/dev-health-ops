@@ -52,7 +52,12 @@
   },
   {
     "operation": "aiWorkflowDrilldown",
-    "digest": "42bfc78e3f533b51578eb3575c027a61f9c81bfc9a7bf843c4c2f9979972fea4"
+    "digest": "5f489ef8f1ba43d3fa2c84ec607d46882fcace1ff8a9913ece369b85e1e60afa"
+  },
+  {
+    "operation": "aiWorkflowDrilldown",
+    "digest": "42bfc78e3f533b51578eb3575c027a61f9c81bfc9a7bf843c4c2f9979972fea4",
+    "legacy": true
   },
   {
     "operation": "busFactor",
@@ -170,7 +175,12 @@
   },
   {
     "operation": "operatingReview",
-    "digest": "c376a5dc191fd8d8759578ccd9dffaffadcd621bdc0625fe62c4c08619f3363e"
+    "digest": "d26e965931987ac4bdf607f43f542e2bd3f49f91561400287014a161371726e9"
+  },
+  {
+    "operation": "operatingReview",
+    "digest": "c376a5dc191fd8d8759578ccd9dffaffadcd621bdc0625fe62c4c08619f3363e",
+    "legacy": true
   },
   {
     "operation": "pr",

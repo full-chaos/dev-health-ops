@@ -4,8 +4,8 @@ summary: Read how effort-weighted Investment contributions connect categories wi
 content_type: workflow-guide
 owner: product-analytics
 source_of_truth:
-  - src/dev_health_ops/api/services/investment_flow.py
-  - src/dev_health_ops/api/queries/investment.py
+  - internal/queryapi/investmentflow/investmentflow.go
+  - internal/queryapi/investment/reader.go
 applicability: current
 lifecycle: active
 ---

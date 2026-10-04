@@ -6,7 +6,7 @@ owner: product-analytics
 source_of_truth:
   - src/components/work/investment/charts/InvestmentMixSection.tsx
   - src/lib/workGraphDrilldownUrl.ts
-  - src/dev_health_ops/api/queries/work_unit_investments.py
+  - internal/queryapi/investmentexplain/
 applicability: current
 lifecycle: active
 ---

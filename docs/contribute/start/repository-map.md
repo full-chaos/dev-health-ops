@@ -31,14 +31,14 @@ Use it for changes to:
 
 Python code under `src/dev_health_ops/` owns:
 
-- FastAPI and GraphQL;
-- authentication, authorization, licensing, and credentials;
+- licensing and credentials models;
 - providers, discovery, pagination, normalization, and sync planning;
 - Customer Push and webhook ingestion;
 - PostgreSQL and ClickHouse models, queries, migrations, and sinks;
 - metrics, Work Graph, Investment, reports, and fixtures;
-- sync-dispatch and worker job contracts, and the queue/route registry the Go workers read;
-- the `dev-hops` CLI.
+- sync-dispatch and worker job contracts, and the queue/route registry the Go workers read.
+
+The api (`dho api`), the GraphQL query plane (`dho query-api`), authentication and authorization, and the `dho` CLI are Go (`cmd/` and `internal/`).
 
 New provider work belongs under `src/dev_health_ops/providers/<provider>/`. Legacy code under `connectors/` is not the destination for new provider implementations except compatibility shims.
 

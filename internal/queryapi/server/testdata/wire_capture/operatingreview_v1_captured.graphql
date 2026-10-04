@@ -1,0 +1,34 @@
+query OperatingReview($orgId: String!, $input: OperatingReviewInput!) {
+  operatingReview(orgId: $orgId, input: $input) {
+    orgId
+    teamId
+    weekStart
+    priorWeekStart
+    sections {
+      key
+      title
+      changed
+      improved
+      worsened
+      metrics {
+        key
+        label
+        value
+        unit
+        delta {
+          value
+          priorValue
+          absolute
+          percent
+          status
+          __typename
+        }
+        __typename
+      }
+      __typename
+    }
+    recommendations
+    recommendationsEmptyState
+    __typename
+  }
+}

@@ -327,6 +327,10 @@ type AIWorkflowGraphEdgeOut struct {
 type AIWorkflowGraphNodeOut struct {
 	NodeType string `json:"nodeType"`
 	NodeID   string `json:"nodeId"`
+	// The node's display name (CHAOS-8113). By ``nodeType``: ``pr`` = the pull request's title; ``deployment`` = "<environment> deploy"; ``incident`` = "<title> (<status>)"; ``issue`` = the issue's own id when it is a readable key. Null = no name is known: the catalogue does not name the node, the name read failed, or the type carries no name (see ``nameExpected``). It is never an id that is, or holds, a UUID or an opaque hash. Every end of an edge in ``edges`` that has an id has a node in ``nodes`` with the same type and id, so a client names an edge end by that node.
+	DisplayName *string `json:"displayName,omitempty"`
+	// True = nodes of this type carry a name (``pr``, ``deployment``, ``incident``, ``issue``): a null ``displayName`` is then a gap, and a client draws "Not reported". False = the type has no name by design (a review outcome, an AI workflow run, a diff): a client draws the type words alone.
+	NameExpected bool `json:"nameExpected"`
 }
 
 type AiAttributedPr struct {
@@ -1033,6 +1037,8 @@ type OperatingReviewDelta struct {
 	Absolute   float64  `json:"absolute"`
 	Percent    *float64 `json:"percent,omitempty"`
 	Status     string   `json:"status"`
+	// False = the prior week holds no stored value for the metric (CHAOS-8115); see ``OperatingReviewMetric.hasData``. ``priorValue`` is then a 0 placeholder, and ``absolute``, ``percent`` and ``status`` compare with that placeholder: a client draws "No data" for the prior week and no change.
+	HasPriorData bool `json:"hasPriorData"`
 }
 
 type OperatingReviewInput struct {
@@ -1046,6 +1052,8 @@ type OperatingReviewMetric struct {
 	Value float64               `json:"value"`
 	Unit  string                `json:"unit"`
 	Delta *OperatingReviewDelta `json:"delta"`
+	// True = the week holds a stored value for the metric (CHAOS-8115). False = no row of the metric's daily table in the week, only NULL values, or a read that failed: ``value`` is then a 0 placeholder, not a measured zero, and a client draws "No data". True with ``value`` 0 is a stored zero.
+	HasData bool `json:"hasData"`
 }
 
 type OperatingReviewSection struct {

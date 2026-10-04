@@ -523,6 +523,7 @@ func TestGitHubWorkItemDerivedBuildersAssertTenancyBeforeSkipping(t *testing.T) 
 	}
 	if _, err := buildGitHubWorkItemStateDurationsDaily(
 		claim, rows, day, day.AddDate(0, 0, 1), computedAt, derived,
+		nil,
 	); !errors.Is(err, ErrInvalidConfiguration) {
 		t.Errorf("state durations: got %v, want ErrInvalidConfiguration", err)
 	}

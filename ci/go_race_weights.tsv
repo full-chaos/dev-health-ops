@@ -149,10 +149,12 @@ internal/jobs/metrics/daily/reviewedges	1
 internal/jobs/metrics/finite	1
 internal/jobs/metrics/numerical	4
 internal/jobs/metrics/numerical/cpyrandom	4
+internal/jobs/metrics/querybound	1
 internal/jobs/metrics/remaining	31
 internal/jobs/metrics/remaining/stepcause	68
 internal/jobs/metrics/testops	1
 internal/jobs/metrics/workgraphedges	1
+internal/jobs/metrics/workitemblockers	1
 internal/jobs/metrics/workitemmetrics	1
 internal/jobs/operational	4
 internal/jobs/pagerduty	1

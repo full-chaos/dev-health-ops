@@ -68,6 +68,7 @@ func TestComputeWorkItemStateDurationsGolden(t *testing.T) {
 		[]workItemStateWorkItem{item}, transitions,
 		map[string]workItemPrimaryAttribution{}, // no attribution row -> unassigned, matches team_resolver=None in the Python test
 		computedAt,
+		nil,
 	)
 	if missingAttribution != 1 {
 		t.Fatalf("missingAttribution=%d, want 1 (the one item has no attribution row)", missingAttribution)
@@ -258,7 +259,7 @@ func TestComputeWorkItemStateDurationsItemsTouchedDedupesRepeatVisits(t *testing
 		{WorkItemID: item.WorkItemID, OccurredAt: mustParseUTC(t, "2025-12-18T06:00:00Z"), FromStatus: "blocked", ToStatus: "in_progress"},
 	}
 
-	rows, missingAttribution := computeWorkItemStateDurationsForRepo(day, start, end, []workItemStateWorkItem{item}, transitions, nil, computedAt)
+	rows, missingAttribution := computeWorkItemStateDurationsForRepo(day, start, end, []workItemStateWorkItem{item}, transitions, nil, computedAt, nil)
 	if missingAttribution != 1 {
 		t.Fatalf("missingAttribution=%d, want 1", missingAttribution)
 	}
@@ -287,7 +288,7 @@ func TestComputeWorkItemStateDurationsItemsTouchedDedupesRepeatVisits(t *testing
 func TestComputeWorkItemStateDurationsSkipsItemsWithNoTransitions(t *testing.T) {
 	day := mustParseUTC(t, "2025-12-18T00:00:00Z")
 	item := workItemStateWorkItem{WorkItemID: "gh:o/r#2", Provider: "github", Status: "todo", ProjectID: "o/r", CreatedAt: day}
-	rows, missingAttribution := computeWorkItemStateDurationsForRepo(day, day, day.Add(24*time.Hour), []workItemStateWorkItem{item}, nil, nil, day)
+	rows, missingAttribution := computeWorkItemStateDurationsForRepo(day, day, day.Add(24*time.Hour), []workItemStateWorkItem{item}, nil, nil, day, nil)
 	if len(rows) != 0 {
 		t.Fatalf("got %#v, want no rows", rows)
 	}
@@ -320,6 +321,7 @@ func TestComputeWorkItemStateDurationsMissingAttributionCountsOnlyProcessedItems
 		transitions,
 		map[string]workItemPrimaryAttribution{}, // neither item has an attribution row
 		computedAt,
+		nil,
 	)
 	if missingAttribution != 1 {
 		t.Fatalf("missingAttribution=%d, want 1 (only withTransitions was processed)", missingAttribution)
@@ -339,6 +341,7 @@ func TestComputeWorkItemStateDurationsZeroItemsReturnsNoRows(t *testing.T) {
 
 	rows, missingAttribution := computeWorkItemStateDurationsForRepo(
 		day, start, end, nil, nil, nil, computedAt,
+		nil,
 	)
 	if len(rows) != 0 {
 		t.Fatalf("got %#v, want no rows for zero items", rows)

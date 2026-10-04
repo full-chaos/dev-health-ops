@@ -4,9 +4,8 @@ summary: Exact GraphQL schema, filters, scope, cost, nullability, and error beha
 content_type: landing
 owner: platform-api
 source_of_truth:
-  - src/dev_health_ops/api/graphql/schema.py
-  - src/dev_health_ops/api/graphql/resolvers/
-  - src/dev_health_ops/api/graphql/sql/
+  - contracts/graphql/v1/schema.graphql
+  - internal/queryapi/analytics/
 applicability: current
 lifecycle: active
 ---

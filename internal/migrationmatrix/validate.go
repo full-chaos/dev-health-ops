@@ -244,7 +244,7 @@ func ValidateRender(render *Render) []Violation {
 }
 
 // DocumentDrift reports whether a LIVE row serves a document the catalog
-// does not name: the DOCUMENT_DRIFT state `dev-hops go-api routing status`
+// does not name: the DOCUMENT_DRIFT state `dho goapi routing status`
 // reports. The edge resolves a request to an operation through the
 // catalog, so such a row can never be dispatched, whatever its mode says.
 //
@@ -285,7 +285,7 @@ func UnprovenReachable(rows []OperationRow, catalog Catalog) int {
 	return count
 }
 
-// The two states `dev-hops go-api routing status` names for a live row the
+// The two states `dho goapi routing status` names for a live row the
 // edge cannot dispatch.
 const (
 	StateDocumentDrift = "DOCUMENT_DRIFT"
@@ -358,7 +358,7 @@ func ValidateDocumentDrift(render *Render, catalog Catalog) []Violation {
 		if !DocumentDrift(row, catalog) {
 			continue
 		}
-		// The state `dev-hops go-api routing status` names for this row:
+		// The state `dho goapi routing status` names for this row:
 		// DOCUMENT_DRIFT when the catalog registers the operation at another
 		// document, UNREGISTERED when it does not register the operation at
 		// all -- this message used to claim DOCUMENT_DRIFT for both, and
@@ -374,7 +374,7 @@ func ValidateDocumentDrift(render *Render, catalog Catalog) []Violation {
 		// it. Until a disable-by-document verb exists, the row is removed by
 		// its full key.
 		out = append(out, Violation{row.Operation, "R14-document-drift",
-			fmt.Sprintf("a live %s row at digest %s serves document %s, but %s: the edge resolves requests through the catalog, so this row cannot be dispatched and every request for it is served elsewhere. `dev-hops go-api routing status` reports it %s. No shipped verb reaches it (`dho goapi routing disable` keys on the catalog's document): remove it by its full key -- DELETE FROM go_api_routing_state WHERE schema_digest = %s AND document_digest = %s AND selected_operation = %s -- then re-render",
+			fmt.Sprintf("a live %s row at digest %s serves document %s, but %s: the edge resolves requests through the catalog, so this row cannot be dispatched and every request for it is served elsewhere. `dho goapi routing status` reports it %s. No shipped verb reaches it (`dho goapi routing disable` keys on the catalog's document): remove it by its full key -- DELETE FROM go_api_routing_state WHERE schema_digest = %s AND document_digest = %s AND selected_operation = %s -- then re-render",
 				row.Mode, row.SchemaDigest, row.DocumentDigest, want, state, sqlLiteral(row.SchemaDigest), sqlLiteral(row.DocumentDigest), sqlLiteral(row.Operation))})
 	}
 	return out
@@ -382,7 +382,7 @@ func ValidateDocumentDrift(render *Render, catalog Catalog) []Violation {
 
 // DeadReachable counts rows whose mode says a client can be served by Go but
 // whose schema digest no longer matches the pin -- so the router can never
-// match them and every request falls back to Python, silently. A non-zero
+// match them and the operation is held dark, silently. A non-zero
 // count here is that same failure mode still on the board.
 func DeadReachable(rows []OperationRow) int {
 	count := 0

@@ -25,25 +25,12 @@ On a publish or insert failure the claim is released with bounded backoff. The
 post-sync consumers are generation-safe: readers select the newest compute
 generation per logical key, so a re-drive cannot inflate their result.
 
-## Narrow bridge calls are a dependency, not a fifth route
+## No bridge calls into the Python api
 
-Two of the four native Go coordinator kinds also make a synchronous HTTP call
-back into `src/dev_health_ops/api/internal/worker_sync.py` as part of their
-OWN work, not as a routing decision this contract governs:
-
-* `reference_discovery` calls `/reference-discovery-populate` (identifiers
-  in, the populator's summary dict out) for the one step -- credential
-  resolution and the team/sprint import -- that stays Python-side
-  (CHAOS-4175, CHAOS-4198).
-* `dispatch_sync_run` no longer calls the api: credential resolution and the
-  six per-provider budget estimators run in-process in Go
-  (`internal/syncbudget`, CHAOS-6243).
-
-Neither call is `transport-routes.json`-governed: they are not claimed,
-published, or retried through the outbox/transport-route machinery this
-file describes, they carry no `route_generation`, and pausing or rolling
-back a kind's transport route here has no effect on them. They are a plain
-dependency of the Go worker's own business logic on Python-side machinery
-that has not been ported yet (see CHAOS-4198's residual-bridge inventory),
-gone once that porting lands -- not a parallel routing surface to reason
-about alongside the four coordinator kinds above.
+No native Go coordinator kind calls the Python api. The synchronous HTTP bridge
+into `src/dev_health_ops/api/internal/worker_sync.py` was removed with the
+Python api. `dispatch_sync_run` runs credential resolution and the six
+per-provider budget estimators in-process in Go (`internal/syncbudget`,
+CHAOS-6243), and reference discovery runs natively in Go. The error names in
+`internal/syncdispatchruntime/bridge.go` still carry the word "bridge" for the
+call path they replaced.

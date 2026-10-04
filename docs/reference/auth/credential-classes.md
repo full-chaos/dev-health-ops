@@ -1,5 +1,7 @@
 # Credential-class inventory (CHAOS-3273 Wave 0 freeze)
 
+> **Note:** The Python api (FastAPI and Strawberry) that this page inventories was removed. This page is a record of that Python surface, not of the Go api.
+
 !!! info "Machine-readable contract"
     This page is prose over
     [`contracts/auth/v1/credential-classes.json`](https://github.com/full-chaos/dev-health-ops/blob/main/contracts/auth/v1/credential-classes.json)

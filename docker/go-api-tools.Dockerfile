@@ -144,6 +144,6 @@ USER 10001:10001
 # `dho mint edge-token` runs, so no ENTRYPOINT is set: a caller-supplied
 # command replaces CMD outright instead of trailing a fixed entrypoint
 # binary. The default CMD only needs to keep the Pod alive when no
-# command is given (docker/Dockerfile's `api` and `runner` targets exist
-# because THEIR image runs continuously; this one never does).
+# command is given (a long-running image sets its own entrypoint; this one
+# never runs continuously).
 CMD ["sleep", "infinity"]

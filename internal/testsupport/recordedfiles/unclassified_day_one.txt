@@ -650,11 +650,6 @@ internal/queryapi/drilldown/testdata/get_repo_scope_explicit_dates.json
 internal/queryapi/drilldown/testdata/get_team_scope_explicit_dates_issues.json
 internal/queryapi/drilldown/testdata/post_repo_scope_ignored_limit_fallback_issues.json
 internal/queryapi/drilldown/testdata/post_team_scope_limit_fallback.json
-internal/queryapi/explain/testdata/org_scope_throughput.json
-internal/queryapi/explain/testdata/repo_scope_deploy_freq_sum_ranking.json
-internal/queryapi/explain/testdata/repo_scope_review_latency.json
-internal/queryapi/explain/testdata/team_scope_blocked_work_status_filter.json
-internal/queryapi/explain/testdata/unknown_metric_falls_back.json
 internal/queryapi/filteroptions/testdata/filters_options_org1.json
 internal/queryapi/flame/testdata/deployment_pipeline_only.json
 internal/queryapi/flame/testdata/deployment_with_queue_and_deploy.json

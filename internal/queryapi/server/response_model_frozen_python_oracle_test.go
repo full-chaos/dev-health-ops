@@ -186,6 +186,82 @@ func TestOpportunitiesCardIsThePythonCardPlusTheDeclaredGoOnlyFields(t *testing.
 	}
 }
 
+// explainPythonResponse is the shape the frozen FastAPI model of
+// /api/v1/explain has: the eight fields of ExplainResponse the Python
+// reference served. The Go response (explain.Response) has two more since
+// CHAOS-8103 (repositories, source_url), which the Python model never had.
+// Nothing is recorded again, so the oracle below still checks THIS shape,
+// written by the production writer: the eight shared fields are byte
+// identical to FastAPI's. It says nothing about the two Go-only fields.
+//
+// TestExplainResponseIsThePythonResponsePlusTheDeclaredGoOnlyFields ties
+// this shape to the production type: the production response must be
+// exactly these eight fields, in this order, followed by exactly the two
+// declared ones.
+type explainPythonResponse struct {
+	Metric         string                    `json:"metric"`
+	Label          string                    `json:"label"`
+	Unit           string                    `json:"unit"`
+	Value          float64                   `json:"value"`
+	DeltaPct       float64                   `json:"delta_pct"`
+	Drivers        []explain.Contributor     `json:"drivers"`
+	Contributors   []explain.Contributor     `json:"contributors"`
+	DrilldownLinks pyjson.OrderedMap[string] `json:"drilldown_links"`
+}
+
+// explainGoOnlyResponseFields are the fields of explain.Response the Python
+// model does not have (CHAOS-8103), in declaration order.
+var explainGoOnlyResponseFields = []struct{ name, goType, tag string }{
+	{"Repositories", "*[]explain.Repository", `json:"repositories"`},
+	{"SourceURL", "*string", `json:"source_url"`},
+}
+
+func TestExplainResponseIsThePythonResponsePlusTheDeclaredGoOnlyFields(t *testing.T) {
+	type field struct{ name, goType, tag string }
+	fieldsOf := func(typ reflect.Type) []field {
+		out := make([]field, 0, typ.NumField())
+		for index := range typ.NumField() {
+			f := typ.Field(index)
+			out = append(out, field{f.Name, f.Type.String(), string(f.Tag)})
+		}
+		return out
+	}
+	want := fieldsOf(reflect.TypeOf(explainPythonResponse{}))
+	for _, goOnly := range explainGoOnlyResponseFields {
+		want = append(want, field{goOnly.name, goOnly.goType, goOnly.tag})
+	}
+	if got := fieldsOf(reflect.TypeOf(explain.Response{})); !reflect.DeepEqual(got, want) {
+		t.Errorf("explain.Response fields =\n %v\nwant the eight Python fields, then the two Go-only ones:\n %v", got, want)
+	}
+
+	// The production writer does write the Go-only fields, null included:
+	// the oracle's Python shape must not be read as "the route serves eight
+	// fields".
+	name, sourceURL := "webapp", "https://github.com/acme/webapp"
+	repositories := []explain.Repository{{ID: "repo-a", Name: &name, Value: 3, SourceURL: &sourceURL}, {ID: "repo-b", Value: 1}}
+	for _, testCase := range []struct {
+		response explain.Response
+		parts    []string
+	}{
+		{explain.Response{Drivers: []explain.Contributor{}, Contributors: []explain.Contributor{}, Repositories: &repositories, SourceURL: &sourceURL}, []string{
+			`"repositories":[{"id":"repo-a","name":"webapp","value":3.0,"source_url":"https://github.com/acme/webapp"},{"id":"repo-b","name":null,"value":1.0,"source_url":null}]`,
+			`"source_url":"https://github.com/acme/webapp"}`,
+		}},
+		{explain.Response{Drivers: []explain.Contributor{}, Contributors: []explain.Contributor{}}, []string{`"repositories":null,"source_url":null}`}},
+	} {
+		recorder := httptest.NewRecorder()
+		if err := writeModelResponse(recorder, &testCase.response); err != nil {
+			t.Fatalf("writeModelResponse: %v", err)
+		}
+		body := recorder.Body.String()
+		for _, part := range testCase.parts {
+			if !strings.Contains(body, part) {
+				t.Errorf("the production body has no %s: %s", part, body)
+			}
+		}
+	}
+}
+
 func responseModelOracleRoutes() map[string]responseModelOracleRoute {
 	plain := func(response any) responseModelOracleRoute { return responseModelOracleRoute{response: response} }
 	sankeyRoute := plain((*sankey.Response)(nil))
@@ -193,8 +269,8 @@ func responseModelOracleRoutes() map[string]responseModelOracleRoute {
 		"GET /api/v1/meta":                                plain(meta.Response{}),
 		"GET /api/v1/home":                                plain((*home.Response)(nil)),
 		"POST /api/v1/home":                               plain((*home.Response)(nil)),
-		"GET /api/v1/explain":                             plain((*explain.Response)(nil)),
-		"POST /api/v1/explain":                            plain((*explain.Response)(nil)),
+		"GET /api/v1/explain":                             plain((*explainPythonResponse)(nil)),
+		"POST /api/v1/explain":                            plain((*explainPythonResponse)(nil)),
 		"GET /api/v1/heatmap":                             plain((*heatmap.Response)(nil)),
 		"GET /api/v1/work-units":                          plain([]workUnitInvestmentWire(nil)),
 		"POST /api/v1/work-units":                         plain([]workUnitInvestmentWire(nil)),

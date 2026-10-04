@@ -159,18 +159,22 @@ func (e carryRefusal) Unwrap() []error { return []error{e.err, ErrCarryRequestRe
 // fleet computes.
 var ErrCarryDigestUnchanged = errors.New("goapiproof: the target schema digest is the live one, so there is nothing to carry")
 
-// ErrCarryNoLiveRows reports that rows exist, and none of them at the live
-// digest. "The table is empty" and "every row died" must not read alike --
-// that is the whole lesson of CHAOS-5416 -- so a table with no row at any
-// digest is ErrRoutingTableEmpty instead, which is not a refusal.
+// ErrCarryNoLiveRows reports that rows exist, none of them at the live
+// digest, and at least one of them is in a served mode. "The table is empty"
+// and "every row died" must not read alike -- that is the whole lesson of
+// CHAOS-5416 -- so a table with no row at any digest is ErrRoutingTableEmpty
+// instead, and one whose rows elsewhere are all in a dark mode is
+// ErrRoutingRowsOnlyDark; neither is a refusal.
 var ErrCarryNoLiveRows = errors.New("goapiproof: no routing row exists at the live schema digest")
 
-// ErrCarryNothingReachable reports that rows exist at the live digest but
-// none is reachable, so the roll would un-route nothing.
+// ErrCarryNothingReachable reports that rows in a served mode exist at the
+// live digest but none is reachable, so the roll would un-route nothing.
 //
-// Still a refusal: an operator runs this verb believing operations are
-// being served, and "nothing is on" is an answer they must read, not
-// infer from a run that reported success over an empty list.
+// Still a refusal: an operator who turned operations on believes they are
+// being served, and "nothing is on" is an answer they must read, not infer
+// from a run that reported success over an empty list. Live rows that are all
+// in a dark mode (python, disabled, shadow) are never refused (CHAOS-8586):
+// each holds its operation dark, as decided, before and after the roll.
 var ErrCarryNothingReachable = errors.New("goapiproof: no reachable row at the live schema digest")
 
 // ErrCarryDocumentMoved reports operations whose registered document is
@@ -752,18 +756,26 @@ func Carry(ctx context.Context, pool *pgxpool.Pool, request CarryRequest) ([]Car
 		return nil, err
 	}
 	if len(liveRows) == 0 {
-		// No row at the live digest is two states, and they answer differently
-		// (CHAOS-8543): a table with no row at ANY digest has nothing to carry and
-		// nothing wrong with it; a table whose rows all sit at other digests holds
-		// those operations dark, and stays the refusal it was.
-		empty, err := routingTableEmpty(ctx, tx)
+		// No row at the live digest is three states, and they answer differently
+		// (CHAOS-8543, CHAOS-8586), decided under the table lock: a table with no
+		// row at ANY digest, or whose rows elsewhere are all in a dark mode, has
+		// nothing to carry and nothing wrong with it; a served row at another
+		// digest is an operation somebody turned on that is dark, and stays the
+		// refusal it was.
+		answer, err := answerNoLiveRow(ctx, tx, request.LiveSchemaDigest)
 		if err != nil {
 			return nil, err
 		}
-		if empty {
-			return nil, ErrRoutingTableEmpty
+		switch answer {
+		case noLiveRowTableEmpty, noLiveRowOnlyDark:
+			return nil, noLiveRowError(ctx, tx, request.LiveSchemaDigest, answer)
+		case noLiveRowAppeared:
+			return nil, fmt.Errorf("%w: a row APPEARED at %s after this run read none there.\n"+
+				"  NOTHING was written. Run `carry` again; it will copy what the live digest says NOW.",
+				ErrCarrySourceRowChanged, request.LiveSchemaDigest)
+		default:
+			return nil, fmt.Errorf("%w: %s", ErrCarryNoLiveRows, request.LiveSchemaDigest)
 		}
-		return nil, fmt.Errorf("%w: %s", ErrCarryNoLiveRows, request.LiveSchemaDigest)
 	}
 	if len(wanted) > 0 {
 		present := map[string]bool{}
@@ -848,21 +860,22 @@ func Carry(ctx context.Context, pool *pgxpool.Pool, request CarryRequest) ([]Car
 	}
 
 	summary := SummarizeCarry(outcomes)
-	// A digest whose live rows are ALL shadow can never be refused here (r1 on
-	// this change): a shadow row serves no client, so there is nothing a roll
-	// could un-route, and refusing after the plan has printed its CARRY lines and
-	// the event has been emitted left a registration absent behind a report that
-	// said it was written. The refusal stays for the case it exists for -- some
-	// live row is not shadow (a served, python or disabled row) and every row was
-	// skipped -- so an operator who believes something is served still hears
-	// that nothing is.
-	nonShadowLive := false
+	// A digest whose live rows are ALL in a dark mode -- shadow (r1 on
+	// CHAOS-8144), python or disabled (CHAOS-8586) -- can never be refused
+	// here. No client is served from such a row, and by the catalog rule the
+	// row holds its operation dark at whichever digest it stays at, so a roll
+	// changes nothing anyone is served; refusing failed the pre-upgrade hook of
+	// a stack that serves the catalog without rows and holds one operation
+	// dark. The refusal stays for the case it exists for -- some live row is in
+	// a served mode and every row was skipped -- so an operator who believes
+	// something is served still hears that nothing is.
+	servedLive := false
 	for _, row := range liveRows {
-		if (len(wanted) == 0 || wanted[row.Operation]) && row.Mode != TargetModeShadow {
-			nonShadowLive = true
+		if (len(wanted) == 0 || wanted[row.Operation]) && servedMode(row.Mode) {
+			servedLive = true
 		}
 	}
-	if summary.Carried == 0 && summary.Unchanged == 0 && nonShadowLive {
+	if summary.Carried == 0 && summary.Unchanged == 0 && servedLive {
 		return outcomes, fmt.Errorf("%w: %d row(s) exist at %s and every one was skipped -- each outcome names why",
 			ErrCarryNothingReachable, len(liveRows), request.LiveSchemaDigest)
 	}

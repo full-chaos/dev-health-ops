@@ -12,8 +12,10 @@ package routing
 // HTTP server standing in for the deployed process, with the flags the hooks pass.
 //
 // The second test is the state that must stay loud: rows exist, none of them at the live schema
-// digest. A row left at another digest holds its operation dark by the same catalog rule, so both
-// verbs still refuse it.
+// digest, and one is canary. A row left at another digest holds its operation dark by the same
+// catalog rule, so an operation somebody turned on is dark, and both verbs still refuse it. When every
+// such row is in a dark mode (python, disabled, shadow) nothing is lost by a roll, and both verbs are a
+// no-op that names the rows (CHAOS-8586, the tests at the end of this file).
 
 import (
 	"strings"
@@ -166,5 +168,181 @@ func TestUpgradeHookVerbsStillRefuseWhenEveryRowIsAtAnotherDigest(t *testing.T) 
 	}
 	if _, audits := routingTableCounts(t, dsn); audits != 0 {
 		t.Fatalf("the refused runs wrote %d audit row(s)", audits)
+	}
+}
+
+// CHAOS-8586: a stack that serves the catalog with no rows and holds ONE operation dark with a python or
+// disabled row passes both hooks of a schema-changing upgrade, and the hooks of the next one.
+//
+// The row holds its operation dark at whichever digest it sits (the catalog rule), so a roll changes
+// nothing anyone is served. Before the change the pre-upgrade carry refused it ("no reachable row"), and
+// a carry that skipped it would have left the post-upgrade repoint refusing ("rows exist, none live").
+func TestUpgradeHookVerbsPassAStackThatHoldsOneOperationDark(t *testing.T) {
+	for _, mode := range []string{"python", "disabled"} {
+		t.Run(mode, func(t *testing.T) {
+			pool, dsn := startVerbPostgres(t)
+			digest := carryTestDocumentDigest()
+			catalogPath := writeCatalog(t, map[string]string{verbTestOperation: digest})
+			documentsPath := writeDocumentsDump(t, map[string]string{verbTestOperation: carryTestDocument})
+			t.Setenv(bearerEnvVar, verbTestBearer)
+			insertRowAt(t, pool, carryDeployedSchemaDigest, digest, verbTestOperation, mode)
+
+			// PRE-UPGRADE: the dark row is at the live digest. Skipped, named, nothing written, exit 0.
+			preRoll := startQueryAPI(t, carryDeployedSchemaDigest, map[string]string{verbTestOperation: digest})
+			out, errOut, err := captureVerb(t, append(emptyTableHookArgs("carry", preRoll.URL, dsn, "helm-pre-upgrade", "-catalog", catalogPath, "-documents", documentsPath), "-json")...)
+			if err != nil {
+				t.Fatalf("pre-upgrade carry with one %s row = %v (exit %d), want exit 0\nstdout:%s\nstderr:%s", mode, err, exitCodeFor(err), out, errOut)
+			}
+			if result := extractCarryJSON(t, out); result.Reason != "carried" || result.Carried != 0 || result.EmptyTable || result.DarkRowsOnly {
+				t.Errorf("pre-upgrade carry: -json = %+v, want reason carried, carried 0, neither no-op flag (a row IS live)", result)
+			}
+			if !strings.Contains(out, "carried=0 unchanged=0 skipped=1 refused=0 of 1 row(s)") || !strings.Contains(out, "SKIP") {
+				t.Errorf("pre-upgrade carry does not name the skipped row:\n%s", out)
+			}
+
+			// POST-UPGRADE: the new pods compute this binary's digest; no row is there and the dark row
+			// stays at the old one. A no-op, exit 0, said once.
+			postRoll := startQueryAPI(t, localSchemaDigest(), map[string]string{verbTestOperation: digest})
+			out, errOut, err = captureVerb(t, append(emptyTableHookArgs("repoint", postRoll.URL, dsn, "helm-post-upgrade"),
+				"-operations", "all-registered", "-expect-build", verbTestBuild, "-json")...)
+			if err != nil {
+				t.Fatalf("post-upgrade repoint = %v (exit %d), want exit 0\nstdout:%s\nstderr:%s", err, exitCodeFor(err), out, errOut)
+			}
+			if result := extractRepointJSON(t, out); result.Reason != "repointed" || !result.DarkRowsOnly || result.EmptyTable || result.Message != "" {
+				t.Errorf("post-upgrade repoint: -json = %+v, want reason repointed and dark_rows_only true", result)
+			}
+			if strings.Count(out, "NO-OP: go_api_routing_state has no row at this schema digest, and every row at another digest is in a dark mode") != 1 {
+				t.Errorf("post-upgrade repoint does not say, once, that it did nothing and why:\n%s", out)
+			}
+			assertDarkRowLine(t, errOut, "repoint", verbTestOperation, mode, carryDeployedSchemaDigest)
+
+			// THE NEXT UPGRADE's pre-upgrade carry sees the same table from one digest further on: no row
+			// at the live digest, the dark row at an older one. Moving the row back one digest builds that
+			// state with the one binary a test has.
+			if _, err := pool.Exec(t.Context(), `DELETE FROM go_api_routing_state`); err != nil {
+				t.Fatal(err)
+			}
+			insertRowAt(t, pool, seedOlder, digest, verbTestOperation, mode)
+			out, errOut, err = captureVerb(t, append(emptyTableHookArgs("carry", preRoll.URL, dsn, "helm-pre-upgrade", "-catalog", catalogPath, "-documents", documentsPath), "-json")...)
+			if err != nil {
+				t.Fatalf("next pre-upgrade carry = %v (exit %d), want exit 0\nstdout:%s\nstderr:%s", err, exitCodeFor(err), out, errOut)
+			}
+			if result := extractCarryJSON(t, out); result.Reason != "carried" || !result.DarkRowsOnly || result.EmptyTable {
+				t.Errorf("next pre-upgrade carry: -json = %+v, want reason carried and dark_rows_only true", result)
+			}
+			if strings.Count(out, "NO-OP: go_api_routing_state has no row at this schema digest, and every row at another digest is in a dark mode (python, disabled or shadow), so there is nothing to carry") != 1 {
+				t.Errorf("next pre-upgrade carry does not say, once, that it did nothing and why:\n%s", out)
+			}
+			assertDarkRowLine(t, errOut, "carry", verbTestOperation, mode, seedOlder)
+
+			// The state all three runs must reach: the one dark row, untouched, and no audit row.
+			rows := readSeedRows(t, pool)
+			if len(rows) != 1 || rows[0].schema != seedOlder || rows[0].mode != mode || rows[0].op != verbTestOperation || rows[0].build != verbTestBuild {
+				t.Fatalf("routing rows = %+v, want the one %s row untouched: it is what holds the operation dark", rows, mode)
+			}
+			if _, audits := routingTableCounts(t, dsn); audits != 0 {
+				t.Fatalf("the runs wrote %d audit row(s), want none", audits)
+			}
+		})
+	}
+}
+
+// assertDarkRowLine requires exactly one go_api_routing.noop_dark_rows_only line on stderr, naming the
+// operation, its dark mode and the digest the row sits at: the no-op must say WHICH operations it left
+// dark, not only that it did nothing.
+func assertDarkRowLine(t *testing.T, errOut, verb, operation, mode, rowDigest string) {
+	t.Helper()
+	var lines []string
+	for _, line := range strings.Split(errOut, "\n") {
+		if strings.HasPrefix(line, "go_api_routing.noop_dark_rows_only ") {
+			lines = append(lines, line)
+		}
+	}
+	want := []string{"verb=" + verb, `operation="` + operation + `"`, `mode="` + mode + `"`, `row_schema_digest="` + rowDigest + `"`}
+	if len(lines) != 1 {
+		t.Fatalf("want one go_api_routing.noop_dark_rows_only line, got %d:\n%s", len(lines), errOut)
+	}
+	for _, field := range want {
+		if !strings.Contains(lines[0], field) {
+			t.Fatalf("the dark-row line lacks %s:\n%s", field, lines[0])
+		}
+	}
+}
+
+// The case #3769 pinned the other way, reversed by CHAOS-8586 on purpose: ONE disabled row, only at a
+// schema digest that is neither the deployed one nor this binary's. #3769 refused it ("rows exist, none
+// live"). The row still holds its operation dark at its old digest (the catalog rule's any-digest rule),
+// so a roll loses nothing, and both hooks now pass with a no-op that names the row. Beside it, the
+// shapes that keep the refusal: a canary or primary row at another digest, alone or mixed with dark rows.
+func TestUpgradeHookVerbsAreANoOpWhenTheOnlyRowElsewhereIsDisabled(t *testing.T) {
+	digest := carryTestDocumentDigest()
+	cases := map[string]struct {
+		rows   map[string]string // operation -> mode, all at seedOlder
+		refuse bool
+	}{
+		"one disabled row (reversed #3769 case)": {rows: map[string]string{verbTestOperation: "disabled"}},
+		"one canary row":                         {rows: map[string]string{verbTestOperation: "canary"}, refuse: true},
+		"one primary row":                        {rows: map[string]string{verbTestOperation: "primary"}, refuse: true},
+		"dark rows mixed with a canary row":      {rows: map[string]string{verbTestOperation: "disabled", "otherOperation": "python", "thirdOperation": "canary"}, refuse: true},
+	}
+	for name, tc := range cases {
+		t.Run(name, func(t *testing.T) {
+			pool, dsn := startVerbPostgres(t)
+			catalogPath := writeCatalog(t, map[string]string{verbTestOperation: digest})
+			documentsPath := writeDocumentsDump(t, map[string]string{verbTestOperation: carryTestDocument})
+			t.Setenv(bearerEnvVar, verbTestBearer)
+			for operation, mode := range tc.rows {
+				insertRowAt(t, pool, seedOlder, digest, operation, mode)
+			}
+			before := readSeedRows(t, pool)
+
+			preRoll := startQueryAPI(t, carryDeployedSchemaDigest, map[string]string{verbTestOperation: digest})
+			carryOut, carryErrOut, carryErr := captureVerb(t, append(emptyTableHookArgs("carry", preRoll.URL, dsn, "helm-pre-upgrade", "-catalog", catalogPath, "-documents", documentsPath), "-json")...)
+			postRoll := startQueryAPI(t, localSchemaDigest(), map[string]string{verbTestOperation: digest})
+			repointOut, repointErrOut, repointErr := captureVerb(t, append(emptyTableHookArgs("repoint", postRoll.URL, dsn, "helm-post-upgrade"),
+				"-operations", "all-registered", "-expect-build", verbTestBuild, "-json")...)
+
+			if tc.refuse {
+				if carryErr == nil || exitCodeFor(carryErr) != 3 || !strings.Contains(carryErr.Error(), "no routing row exists at the live schema digest") {
+					t.Fatalf("carry = %v, want the refusal (exit 3)\n%s", carryErr, carryOut)
+				}
+				if repointErr == nil || exitCodeFor(repointErr) != 3 || !strings.Contains(repointErr.Error(), "no routing rows at this schema digest") {
+					t.Fatalf("repoint = %v, want the refusal (exit 3)\n%s", repointErr, repointOut)
+				}
+				if r := extractCarryJSON(t, carryOut); r.Reason != "refused" || r.DarkRowsOnly || r.EmptyTable {
+					t.Errorf("carry -json = %+v, want reason refused and no no-op flag", r)
+				}
+				if r := extractRepointJSON(t, repointOut); r.Reason != "refused" || r.DarkRowsOnly || r.EmptyTable {
+					t.Errorf("repoint -json = %+v, want reason refused and no no-op flag", r)
+				}
+				if strings.Contains(carryOut+repointOut, "NO-OP") || strings.Contains(carryErrOut+repointErrOut, "noop_dark_rows_only") {
+					t.Errorf("a refusal printed the no-op:\n%s\n%s", carryOut+repointOut, carryErrOut+repointErrOut)
+				}
+			} else {
+				if carryErr != nil || repointErr != nil {
+					t.Fatalf("carry = %v, repoint = %v, want both exit 0\n%s\n%s", carryErr, repointErr, carryOut, repointOut)
+				}
+				if r := extractCarryJSON(t, carryOut); r.Reason != "carried" || !r.DarkRowsOnly || r.EmptyTable || r.Carried != 0 {
+					t.Errorf("carry -json = %+v, want reason carried, dark_rows_only true", r)
+				}
+				if r := extractRepointJSON(t, repointOut); r.Reason != "repointed" || !r.DarkRowsOnly || r.EmptyTable {
+					t.Errorf("repoint -json = %+v, want reason repointed, dark_rows_only true", r)
+				}
+				assertDarkRowLine(t, carryErrOut, "carry", verbTestOperation, "disabled", seedOlder)
+				assertDarkRowLine(t, repointErrOut, "repoint", verbTestOperation, "disabled", seedOlder)
+			}
+			after := readSeedRows(t, pool)
+			if len(after) != len(before) {
+				t.Fatalf("routing rows %d -> %d, want the table untouched", len(before), len(after))
+			}
+			for i := range before {
+				if before[i] != after[i] {
+					t.Fatalf("routing row %d changed: %+v -> %+v", i, before[i], after[i])
+				}
+			}
+			if _, audits := routingTableCounts(t, dsn); audits != 0 {
+				t.Fatalf("the runs wrote %d audit row(s)", audits)
+			}
+		})
 	}
 }

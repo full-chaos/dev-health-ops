@@ -261,6 +261,9 @@ per-file-ignores = { "__init__.py" = [
   "E402",
 ] }
 
+[tool.ruff.lint.isort]
+known-first-party = ["dev_health_ops"]
+
 [tool.ruff.format]
 quote-style = "double"
 indent-style = "space"

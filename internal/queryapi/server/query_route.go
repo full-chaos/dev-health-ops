@@ -1323,6 +1323,20 @@ const registeredCoverageBaselinesDocument = `query CoverageBaselines($orgId: Str
   }
 }`
 
+// registeredCoverageScopeBaselineDocument is the registered document for the
+// `coverageScopeBaseline` operation (CHAOS-8541, Go-only: no Python resolver
+// exists), the exact wire-form text the web client sends
+// (testdata/wire_capture/coveragescopebaseline_captured.graphql; the wire form
+// of TESTOPS_COVERAGE_SCOPE_BASELINE_QUERY, computed with the web's pinned
+// urql). The web sends no scope and reads the line baseline only.
+const registeredCoverageScopeBaselineDocument = `query CoverageScopeBaseline($orgId: String!, $endDate: Date!) {
+  coverageScopeBaseline(orgId: $orgId, endDate: $endDate) {
+    lineBaselinePct
+    lineDays
+    __typename
+  }
+}`
+
 // registeredTestopsJobFailuresDocument is the registered document for the
 // `testopsJobFailures` operation (CHAOS-8513, Go-only: no Python resolver
 // exists), the exact wire-form text the web client sends
@@ -3538,6 +3552,7 @@ func newQueryHandler(chClient featureflags.QueryClient, pgPool *pgxpool.Pool, ve
 		"testopsRisk":                       digestHex(registeredTestopsRiskDocument),
 		"testopsJobFailures":                digestHex(registeredTestopsJobFailuresDocument),
 		"coverageBaselines":                 digestHex(registeredCoverageBaselinesDocument),
+		"coverageScopeBaseline":             digestHex(registeredCoverageScopeBaselineDocument),
 		"workItemTeamAttributions":          digestHex(registeredWorkItemTeamAttributionsDocument),
 		"recommendations":                   digestHex(registeredRecommendationsDocument),
 	}

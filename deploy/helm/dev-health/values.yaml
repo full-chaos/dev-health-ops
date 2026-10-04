@@ -134,7 +134,9 @@ queryApi:
     enabled: false
     port: 8091
     # -- Pod selectors (each `{matchLabels: {...}}`) allowed to reach the internal port (empty
-    #    admits nobody; CHAOS-7520: there is no release-local peer). The internal listener trusts X-DH-Internal-* identity
+    #    admits nobody through this policy; CHAOS-7520: there is no release-local peer. With
+    #    networkPolicy.enabled the release-wide policy's in-namespace rule still admits every pod of the
+    #    release on this port, NetworkPolicies being additive). The internal listener trusts X-DH-Internal-* identity
     #    headers from any peer that can connect, so add only the pods that must call it, and
     #    only while they must. The tools pod that runs `dho goapi prove-write` is NOT admitted
     #    by default; to admit it for a proof run:
@@ -898,6 +900,8 @@ networkPolicy:
   # -- Namespace of the ingress controller; the policy admits it (label kubernetes.io/metadata.name) to the go-api, web and
   #    query-api Service ports only.
   ingressControllerNamespace: ingress-nginx
+  #    Must differ from the namespace the release is installed in: the render fails when networkPolicy.enabled
+  #    and the two are equal (the in-namespace rule would admit the controller on every port).
 
 # =============================================================================
 # Configuration (non-secret)

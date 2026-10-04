@@ -219,14 +219,14 @@ func TestNetworkPolicyLetsTheIngressControllerReachGoAPI(t *testing.T) {
 	}
 }
 
-// CHAOS-8552: the ingress controller reaches only the pods the Ingress routes to (go-api and web), on the port of that
-// component's Service, and no other pod of the release on any port. The check runs on the UNION of every rendered
+// CHAOS-8552: the ingress controller reaches only the pods the Ingress routes to (go-api, web and query-api), on the port
+// of that component's Service, and no other pod of the release on any port. The check runs on the UNION of every rendered
 // policy (NetworkPolicies are additive), per pod, so a broad rule on one policy cannot hide behind a narrow one on another.
 func TestIngressControllerReachesOnlyGoAPIAndWebOnTheirOwnPorts(t *testing.T) {
 	probes := []int{3000, 5432, 6379, 6432, 6433, 6434, 8000, 8010, 8080, 8090, 8091, 8092, 8123, 9000, 9001}
 	pods := []string{"go-api", "web", "query-api", "go-worker", "valkey", "clickhouse", "postgresql",
 		"go-pgbouncer-transaction", "go-pgbouncer-queue-session", "go-pgbouncer-coordinator-session",
-		"migrate", "provision-roles", "river-migrate"}
+		"migrate", "provision-roles", "river-migrate", "route-activate", "routing-carry", "routing-repoint"}
 	for name, c := range map[string]struct {
 		args     []string
 		goPort   int
@@ -320,7 +320,8 @@ func TestIngressControllerNamespaceIsConfigurable(t *testing.T) {
 }
 
 // The go-api internal port stays closed to the ingress controller and to any in-namespace pod no rule names, on the
-// union of every policy (CHAOS-7181), and the same for the query-api internal port.
+// union of every policy (CHAOS-7181); the query-api internal port is checked from the ingress controller only (the shared
+// in-namespace rule admits release pods on it by design, see the query-api-internal template comment).
 func TestInternalPortsAreClosedOnTheUnion(t *testing.T) {
 	policies := renderNetpols(t, "--set", "goApi.internal.enabled=true", "--set", "queryApi.enabled=true",
 		"--set", "queryApi.internal.enabled=true", "--set", "queryApi.internal.allowedFrom[0].matchLabels.app=tools")
@@ -387,5 +388,35 @@ func TestQueryAPIInternalPolicyAdmitsOnlyAllowedFrom(t *testing.T) {
 	peer := rules[0].From[0]
 	if peer.PodSelector == nil || peer.PodSelector.MatchLabels["app"] != "tools" || len(peer.PodSelector.MatchLabels) != 1 {
 		t.Errorf("the only peer must be the allowedFrom selector, got %+v", peer.PodSelector)
+	}
+}
+
+// A controller namespace equal to the release namespace voids the per-component split (the shared policy's in-namespace
+// rule admits the controller on every port), so the render refuses it when the policy is on, for the release namespace and
+// for global.namespaceOverride, and renders as before when the policy is off.
+func TestControllerNamespaceEqualToReleaseNamespaceFailsTheRender(t *testing.T) {
+	render := func(args ...string) (string, error) {
+		out, err := exec.Command("helm", append([]string{"template", "np", ".", "--namespace", releaseNamespace, "--set", "goApi.enabled=true",
+			"--set", "goWorkers.pgbouncer.postgres.networkPolicyCIDR=10.0.0.0/24"}, args...)...).CombinedOutput()
+		return string(out), err
+	}
+	for name, args := range map[string][]string{
+		"release namespace": {"--set", "networkPolicy.enabled=true", "--set", "networkPolicy.ingressControllerNamespace=" + releaseNamespace},
+		"namespace override": {"--set", "networkPolicy.enabled=true", "--set", "global.namespaceOverride=edge",
+			"--set", "networkPolicy.ingressControllerNamespace=edge"},
+	} {
+		out, err := render(args...)
+		if err == nil || !strings.Contains(out, "is the namespace this release is installed in") {
+			t.Errorf("%s: the render must fail with the namespace message, err=%v out=%.300s", name, err, out)
+		}
+	}
+	for name, args := range map[string][]string{
+		"policy off, same namespace":                      {"--set", "networkPolicy.ingressControllerNamespace=" + releaseNamespace},
+		"policy on, other namespace":                      {"--set", "networkPolicy.enabled=true"},
+		"policy on, override differs from the controller": {"--set", "networkPolicy.enabled=true", "--set", "global.namespaceOverride=edge"},
+	} {
+		if out, err := render(args...); err != nil {
+			t.Errorf("%s: the render must succeed: %v\n%.300s", name, err, out)
+		}
 	}
 }

@@ -225,11 +225,6 @@ func (s OperationStatus) Reachable() bool {
 	return s.DigestState == DigestMatch && servedMode(s.Mode)
 }
 
-// servedMode is the mode half of Reachable: canary and primary only.
-func servedMode(mode string) bool {
-	return mode == "canary" || mode == "primary"
-}
-
 // ServedWithoutRow reports the one state in which query-api serves a
 // catalog operation that has no routing row (CHAOS-8517,
 // queryapi/routeswitch/catalog_switch.go): the operation has NO row at

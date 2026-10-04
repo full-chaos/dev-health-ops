@@ -56,8 +56,10 @@ COPY cmd/dev-health-worker-migrate ./cmd/dev-health-worker-migrate
 COPY cmd/ask-dev-jobs-probe ./cmd/ask-dev-jobs-probe
 COPY internal ./internal
 # dev-health-worker-migrate embeds the job migration policy it seeds route
-# rows from (contracts/jobs/v1/embed.go).
+# rows from (contracts/jobs/v1/embed.go) and the sync-dispatch route policy
+# it moves seeded route rows by (contracts/sync-dispatch/v1/embed.go).
 COPY contracts/jobs/v1 ./contracts/jobs/v1
+COPY contracts/sync-dispatch/v1 ./contracts/sync-dispatch/v1
 
 RUN --mount=type=cache,target=/go/pkg/mod \
     --mount=type=cache,target=/root/.cache/go-build \

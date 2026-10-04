@@ -946,8 +946,6 @@ tests/fixtures/pr_dependency_id_parity.json
 tests/fixtures/risk_hotspots_order_golden.json
 tests/fixtures/seed_workgraph_operational_edges_org_70d529e0.sql
 tests/fixtures/seed_workgraph_operational_edges_synthetic.sql
-tests/fixtures/test_bridge_density.py
 tests/fixtures/test_demo_identity.py
 tests/fixtures/test_metric_coherence.py
-tests/fixtures/test_team_cooccurrence.py
 tests/fixtures/workgraph_components_split_edges.json

@@ -206,6 +206,7 @@ func TestRegisteredCapturedDocuments_MatchCapturedWireFixtures(t *testing.T) {
 		{"testdata/wire_capture/improveopportunities_v1_captured.graphql", registeredImproveOpportunitiesV1Document},
 		{"testdata/wire_capture/aigovernancesummary_captured.graphql", registeredAiGovernanceSummaryDocument},
 		{"testdata/wire_capture/aiworkflowdrilldown_captured.graphql", registeredAiWorkflowDrilldownDocument},
+		{"testdata/wire_capture/aiworkflowdrilldown_v1_captured.graphql", registeredAiWorkflowDrilldownV1Document},
 		{"testdata/wire_capture/airiskbreakdown_captured.graphql", registeredAiRiskBreakdownDocument},
 		{"testdata/wire_capture/aiattributedprs_captured.graphql", registeredAiAttributedPrsDocument},
 		{"testdata/wire_capture/aiattributedprs_v1_captured.graphql", registeredAiAttributedPrsV1Document},

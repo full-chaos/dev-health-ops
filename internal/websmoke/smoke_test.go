@@ -305,7 +305,7 @@ func newHarness(t *testing.T, routingOps string) *harness {
 		h.catalog = append(h.catalog, map[string]string{"operation": g.Op, "digest": DocumentDigest(doc)})
 	}
 	h.writeCatalog()
-	mustWrite(t, filepath.Join(dir, "routing-ops.txt"), routingOps)
+	mustWrite(t, filepath.Join(dir, "known-missing.txt"), routingOps)
 	mustWrite(t, filepath.Join(dir, "password"), fakePassword+"\n")
 
 	host, portText, _ := net.SplitHostPort(strings.TrimPrefix(h.srv.URL, "http://"))
@@ -317,7 +317,7 @@ func newHarness(t *testing.T, routingOps string) *harness {
 		PasswordFile: filepath.Join(dir, "password"),
 		WebSrc:       src,
 		Catalog:      filepath.Join(dir, "catalog.json"),
-		RoutingOps:   filepath.Join(dir, "routing-ops.txt"),
+		RoutingOps:   filepath.Join(dir, "known-missing.txt"),
 		ReceiptPath:  filepath.Join(dir, "receipts", "web-path-smoke-receipt.json"),
 		Documents:    server.WebPathSmokeDocument,
 		Now:          func() time.Time { return time.Date(2026, 10, 4, 12, 0, 0, 0, time.UTC) },

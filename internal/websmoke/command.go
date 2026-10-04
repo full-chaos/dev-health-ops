@@ -84,6 +84,10 @@ func runVerb(env cli.Env) error {
 	if passwordFile == "" {
 		missing = append(missing, "DHO_SMOKE_ADMIN_PASSWORD_FILE")
 	}
+	routingOps := get("DHO_SMOKE_ROUTING_OPS", "")
+	if routingOps == "" {
+		missing = append(missing, "DHO_SMOKE_ROUTING_OPS")
+	}
 	if len(missing) > 0 {
 		return &exitError{ExitFail, "FAIL: unset: " + strings.Join(missing, ", ")}
 	}
@@ -94,7 +98,7 @@ func runVerb(env cli.Env) error {
 		PasswordFile: passwordFile,
 		WebSrc:       get("DHO_SMOKE_WEB_SRC", "/web-src"),
 		Catalog:      get("DHO_SMOKE_CATALOG", "/catalog/catalog.json"),
-		RoutingOps:   get("DHO_SMOKE_ROUTING_OPS", "/smoke/routing-ops.txt"),
+		RoutingOps:   routingOps,
 		ReceiptPath:  get("DHO_SMOKE_RECEIPT_PATH", "/receipts/web-path-smoke-receipt.json"),
 		Documents:    server.WebPathSmokeDocument,
 	}

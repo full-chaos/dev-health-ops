@@ -21,7 +21,7 @@
 // document is caught. REST paths must still appear as a literal in the web source file that
 // calls them.
 //
-// KNOWN-MISSING operations come from ci/bigboy/routing-ops.txt. A known-missing check is
+// KNOWN-MISSING operations come from the bigboy routing-ops list (ci/bigboy). A known-missing check is
 // reported by name and makes the exit code 3, never 0; if it starts passing, the smoke fails so
 // the marker is removed.
 //

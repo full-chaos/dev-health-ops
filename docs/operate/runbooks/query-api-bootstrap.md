@@ -247,11 +247,11 @@ The verb writes only in the Fixture Org named by the environment (it never creat
 compares the persisted effects with the case's committed baseline digest, and refuses to call a run a match unless the
 response carries the candidate build. A match removes its dataset; anything else keeps it and names it. `-via query-api`
 (a direct POST to query-api) records route `proof` and admits `canary`; `-via edge` records route `edge`, which
-`primary` requires. `enable` then admits the mutation only on that receipt.
+`primary` requires. A catalog mutation needs no receipt to be enabled (the catalog rule admits it, `routing_enable.go:396-416`); the receipt is evidence, and `enable` records which of proof run, named limit or catalog rule admitted it.
 
 ### Enable the canary set
 
-After the proof run records a `deployed_executed` result for each canary operation at the running build, enable them with the Go verb. The candidate build is read from the deployed process's `/buildinfo`; there is no build flag and no waiver flag. Operations are one comma-separated value:
+Enable the canary operations with the Go verb. An MCP class operation (`mcp:<root>`) needs a per-root `deployed_executed` receipt for the running build. A catalog operation (every other registered document) is admitted without a receipt: the catalog rule serves it when it has no routing row, so `enable` records `CATALOG-RULE:` in `review_evidence` instead of refusing. A written limit in the go-served ledger is recorded as `NAMED-LIMIT:`. The candidate build is read from the deployed process's `/buildinfo`; there is no build flag and no waiver flag. Operations are one comma-separated value:
 
 ```bash
 GO_API_ROUTING_BEARER=<envelope> dho goapi routing enable \
@@ -263,7 +263,7 @@ GO_API_ROUTING_BEARER=<envelope> dho goapi routing enable \
   -review-evidence "First-time enable on prod k3s, JOB 7 step 6"
 ```
 
-Add `-dry-run` first to see which operations would be admitted; a refusal names the operations with no proof run.
+Add `-dry-run` first to see which operations would be admitted and what admits each (proof run, named limit, or catalog rule); a refusal names only MCP class operations that have no per-root receipt.
 
 ## Step 8: Enable the investment explanation (optional, requires encryption keys)
 

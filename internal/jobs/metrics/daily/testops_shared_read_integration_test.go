@@ -45,8 +45,8 @@ import (
 //   - the same repo_id under another org and a sibling repo in the same org,
 //     each carrying many case rows, so a case-side read that is not scoped to
 //     (org, repo) shows up in read_rows, and in the golden if it leaks;
-//   - a team whose repo pattern matches the partition repo, so the team id is
-//     written through each family's own resolver.
+//   - an in-day primary ownership claim for the partition repo, so the team
+//     id is written through each family's own resolver.
 func TestTestopsTestAndRiskReadCaseResultsOnceAgainstRealClickHouse(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 4*time.Minute)
 	defer cancel()
@@ -167,10 +167,7 @@ func seedTestopsSharedReadHostility(ctx context.Context, t *testing.T, conn driv
 	historyDay := seed.day.AddDate(0, 0, -10).Add(9 * time.Hour)
 	synced := seed.day.Add(23 * time.Hour)
 
-	if err := conn.Exec(ctx, `INSERT INTO teams (id, name, members, repo_patterns, org_id) VALUES (?, ?, ?, ?, ?)`,
-		"team-a", "Team A", []string{}, []string{seed.repoID.String()}, seed.orgID); err != nil {
-		t.Fatalf("seed teams: %v", err)
-	}
+	seedTestopsRepositoryOwnerClaims(ctx, t, conn, seed.orgID, seed.repoID, seed.day, "team-a")
 
 	insertSuite := func(orgID string, repoID uuid.UUID, runID, suiteID string, started time.Time) {
 		t.Helper()

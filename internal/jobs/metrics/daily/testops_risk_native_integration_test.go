@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/ClickHouse/clickhouse-go/v2/lib/driver"
+	"github.com/google/uuid"
 
 	clickhousestore "github.com/full-chaos/dev-health-ops/internal/storage/clickhouse"
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/containers"
@@ -40,16 +41,6 @@ func TestTestopsRiskExecutorComputeFamilyWritesAllThreeTablesAgainstRealClickHou
 	defer conn.Close()
 
 	for _, statement := range []string{
-		// ComputeFamily unconditionally calls LoadWellbeingTeams (reused
-		// from team_wellbeing, CHAOS-4276) to build the repo_team_resolver
-		// -- codex round 2 (P2, EXECUTED) caught this fixture omitting the
-		// teams table entirely, so the real production entry point this
-		// test claims to exercise never got past that first query. Same
-		// shape as wellbeing_native_executor_multi_repo_integration_test.go's
-		// own teams table.
-		`CREATE TABLE teams (
-    id String, name String, members Array(String), repo_patterns Array(String), org_id String
-) ENGINE = ReplacingMergeTree ORDER BY (id)`,
 		// Matches 000_raw_tables.sql's ci_pipeline_runs plus every column
 		// 029_testops_tables.sql ALTERs onto it.
 		`CREATE TABLE ci_pipeline_runs (
@@ -116,6 +107,7 @@ func TestTestopsRiskExecutorComputeFamilyWritesAllThreeTablesAgainstRealClickHou
 			t.Fatal(err)
 		}
 	}
+	applyTestopsRepositoryOwnershipSchema(ctx, t, conn)
 
 	// Freeze background merges on the seeded source tables BEFORE anything is
 	// written. Without this the engine can collapse the superseded row above
@@ -144,6 +136,8 @@ func TestTestopsRiskExecutorComputeFamilyWritesAllThreeTablesAgainstRealClickHou
 
 	const orgID = "00000000-0000-4000-8000-000000000009"
 	repoID := "00000000-0000-4000-8000-0000000000a1"
+	repoUUID := uuid.MustParse(repoID)
+	targetDay := time.Date(2026, 8, 15, 0, 0, 0, 0, time.UTC)
 
 	if err := conn.Exec(ctx, `
 INSERT INTO ci_pipeline_runs (repo_id, run_id, status, queued_at, started_at, finished_at, last_synced, retry_count, org_id) VALUES
@@ -212,12 +206,13 @@ WHERE org_id = ? AND repo_id = toUUID(?) AND run_id = 'run-1' AND suite_id = 'su
 		t.Fatalf("contested row count = %d, want 2: the superseded row did not land, so this "+
 			"fixture cannot tell a deduplicating read from a non-deduplicating one", contested)
 	}
+	seedTestopsAuthoritativeOwner(ctx, t, conn, orgID, repoUUID, targetDay)
 
 	executor, err := NewTestopsRiskExecutor(conn)
 	if err != nil {
 		t.Fatal(err)
 	}
-	run := Run{OrganizationID: orgID, TargetDay: time.Date(2026, 8, 15, 0, 0, 0, 0, time.UTC)}
+	run := Run{OrganizationID: orgID, TargetDay: targetDay}
 	partition := Partition{
 		ID:      "00000000-0000-4000-8000-000000000121",
 		RunID:   "00000000-0000-4000-8000-000000000120",
@@ -236,6 +231,13 @@ WHERE org_id = ? AND repo_id = toUUID(?) AND run_id = 'run-1' AND suite_id = 'su
 	assertOneRow(ctx, t, conn, "testops_release_confidence", orgID)
 	assertOneRow(ctx, t, conn, "testops_quality_drag", orgID)
 	assertOneRow(ctx, t, conn, "testops_pipeline_stability", orgID)
+	for _, table := range []string{
+		"testops_release_confidence",
+		"testops_quality_drag",
+		"testops_pipeline_stability",
+	} {
+		assertTestopsDailyTeam(ctx, t, conn, table, orgID, repoUUID, testopsAuthoritativeTeamID)
+	}
 
 	var confidenceScore float64
 	rows, err := conn.Query(ctx, `SELECT confidence_score FROM testops_release_confidence WHERE org_id = ?`, orgID)
@@ -304,9 +306,6 @@ func TestTestopsRiskExecutorComputeFamilyReportsPartialWriteAtTheCallSite(t *tes
 	defer conn.Close()
 
 	for _, statement := range []string{
-		`CREATE TABLE teams (
-    id String, name String, members Array(String), repo_patterns Array(String), org_id String
-) ENGINE = ReplacingMergeTree ORDER BY (id)`,
 		`CREATE TABLE ci_pipeline_runs (
     repo_id UUID, run_id String, status Nullable(String),
     queued_at Nullable(DateTime64(3, 'UTC')), started_at DateTime64(3, 'UTC'),
@@ -370,6 +369,7 @@ func TestTestopsRiskExecutorComputeFamilyReportsPartialWriteAtTheCallSite(t *tes
 			t.Fatal(err)
 		}
 	}
+	applyTestopsRepositoryOwnershipSchema(ctx, t, conn)
 
 	const orgID = "00000000-0000-4000-8000-00000000000a"
 	repoID := "00000000-0000-4000-8000-0000000000b1"

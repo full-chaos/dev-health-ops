@@ -246,7 +246,6 @@ Category key: **LIVE** = reached today from a live caller (the FastAPI bridge ro
 | `sync_bootstrap.py` | LIVE | imported by sync_units.py:134; resolve_run_auth reached from dispatch_sync_run | n/a |
 | `sync_units.py` | LIVE | dispatch_sync_run called directly by backfill/runner.py; finalize_sync_run called directly by processors/sync.py and dispatch_sync_run itself -- the /dispatch and /finalize HTTP bridge routes (and their dead Go HTTPBridge.Dispatch/.Finalize callers) are deleted outright | n/a |
 | `task_utils.py` | LIBRARY / SHARED | imported by sync_units.py — shared credential/cache helpers; system_webhooks.py was also an importer until CHAOS-4105 deleted it, work_graph_tasks.py until CHAOS-3093 deleted it, and reference_discovery.py/team_autoimport.py until CHAOS-4435/CHAOS-5713 deleted their own imports of it | n/a |
-| `tasks.py` | CELERY-TASK-ONLY / DEAD | Celery task-name aggregator (__all__ re-export of every task); no api/internal reference — dead since CHAOS-4026 | CHAOS-4439 (dead worker modules) |
 | `team_autoimport_categories.py` | LIVE | imported by post_sync_dispatch.py (live, gates plan.TeamAutoimport) -- the provider populate() modules and their team_autoimport.py executor that used to import it are deleted (CHAOS-4435/CHAOS-5713) | n/a |
 <!-- END GENERATED WORKER FILE LEDGER -->
 

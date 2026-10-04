@@ -51,7 +51,7 @@ import (
 // to change without notice.
 type carryResult struct {
 	// Reason is exactly one of: "carried" (success, including a run that carried zero
-	// eligible rows), "digest_unchanged" (Preflight 2: this binary's SDL is already live
+	// eligible rows and the no-op on an empty table, which EmptyTable marks), "digest_unchanged" (Preflight 2: this binary's SDL is already live
 	// -- an ordinary, expected no-op on a non-schema-changing roll), "stale_build" (a row
 	// names a build the deployed process is not running -- the caller's cue to `repoint`
 	// then retry, the rev196 exception), "refused" (any OTHER refusal -- catalog/document
@@ -63,6 +63,21 @@ type carryResult struct {
 	TargetDigest string `json:"target_schema_digest,omitempty"`
 	Carried      int    `json:"carried,omitempty"`
 	Message      string `json:"message,omitempty"`
+	// EmptyTable is true on the one success that carried nothing because there
+	// was nothing: go_api_routing_state held no row at any schema digest
+	// (CHAOS-8543). Reason stays "carried" -- the callers' success value, which
+	// already covers a run that carried zero rows -- so no caller that switches
+	// on reason has to learn a new one; this field is what tells the two apart.
+	// It is the LAST field, so `reason` is still the first key of the line.
+	EmptyTable bool `json:"empty_table,omitempty"`
+}
+
+// routingTableEmptyNote is the one line `carry` and `repoint` print when
+// go_api_routing_state has no row at any schema digest and the verb therefore
+// did nothing (CHAOS-8543). what is the thing the verb would have done.
+func routingTableEmptyNote(what string) string {
+	return fmt.Sprintf("go-api-routing: NO-OP: go_api_routing_state has no row at any schema digest, so there is nothing to %s and nothing was written. "+
+		"An empty table is a valid state: a query-api of this build serves every registered operation that has no routing row, and no MCP class root is enabled.", what)
 }
 
 // carryJSONPrefix marks the one line of a -json run's stdout that is machine-readable --
@@ -145,6 +160,7 @@ func runCarry(argv []string) (err error) {
 	// call printCarryResult at each one.
 	var reason, liveDigest, targetDigest string
 	var carriedCount int
+	var emptyTable bool
 	defer func() {
 		if !jsonOut {
 			return
@@ -159,7 +175,7 @@ func runCarry(argv []string) (err error) {
 				reason = "refused"
 			}
 		}
-		result := carryResult{Reason: reason, LiveDigest: liveDigest, TargetDigest: targetDigest, Carried: carriedCount}
+		result := carryResult{Reason: reason, LiveDigest: liveDigest, TargetDigest: targetDigest, Carried: carriedCount, EmptyTable: emptyTable}
 		if err != nil {
 			// Same defense-in-depth as the command's other error-print sites (see
 			// credentialBoundary's own doc comment): refuse/internal already redact
@@ -315,6 +331,17 @@ func runCarry(argv []string) (err error) {
 	// and an operator deciding whether to roll needs both halves.
 	printCarryPlan(outcomes, registry.SchemaDigest, target, running, dryRun)
 	carriedCount = goapiproof.SummarizeCarry(outcomes).Carried
+	if errors.Is(carryErr, goapiproof.ErrRoutingTableEmpty) {
+		// CHAOS-8543: an empty table is a valid state since the catalog rule, and
+		// a schema-changing upgrade of a stack that serves from one must not fail
+		// its pre-upgrade hook. Every preflight above still ran (the registry, the
+		// digests, the build, the -expect-build cross-check); only the answer to
+		// "there is no row at all" changed, from a refusal to this no-op. Rows that
+		// exist only at other digests are still ErrCarryNoLiveRows, below.
+		emptyTable = true
+		fmt.Fprintln(stdout, routingTableEmptyNote("carry"))
+		return nil
+	}
 	if carryErr != nil {
 		if errors.Is(carryErr, goapiproof.ErrCarryBuildNotRunning) {
 			// The rev196 exception, D2828/D2829's whole reason for a distinct

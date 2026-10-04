@@ -301,44 +301,14 @@ func rowToWorkUnitTeamAttribution(workUnitID, teamIDCol, teamNameCol, sourceRaw,
 // it falls back, so this port must not invent stricter behavior than the
 // function it is porting.
 func mapTeamAttributionSource(raw string) model.TeamAttributionSource {
-	switch strings.ToLower(raw) {
-	case "native_team":
-		return model.TeamAttributionSourceNativeTeam
-	case "issue_project":
-		return model.TeamAttributionSourceIssueProject
-	case "project_ownership":
-		return model.TeamAttributionSourceProjectOwnership
-	case "repo_ownership":
-		return model.TeamAttributionSourceRepoOwnership
-	case "assignee_membership":
-		return model.TeamAttributionSourceAssigneeMembership
-	case "linked_issue":
-		return model.TeamAttributionSourceLinkedIssue
-	case "author_membership":
-		return model.TeamAttributionSourceAuthorMembership
-	case "manual_fallback":
-		return model.TeamAttributionSourceManualFallback
-	default:
-		return model.TeamAttributionSourceUnassigned
-	}
+	return model.TeamAttributionSourceFromStored(raw)
 }
 
 // mapTeamAttributionConfidence mirrors team_attribution.py's
 // _map_confidence: same unrecognized-> floor-value (NONE) fallback
 // contract as mapTeamAttributionSource above.
 func mapTeamAttributionConfidence(raw string) model.TeamAttributionConfidence {
-	switch strings.ToLower(raw) {
-	case "high":
-		return model.TeamAttributionConfidenceHigh
-	case "medium":
-		return model.TeamAttributionConfidenceMedium
-	case "low":
-		return model.TeamAttributionConfidenceLow
-	case "manual":
-		return model.TeamAttributionConfidenceManual
-	default:
-		return model.TeamAttributionConfidenceNone
-	}
+	return model.TeamAttributionConfidenceFromStored(raw)
 }
 
 // recordWorkUnitTeamAttributionsTruncation is CHAOS-3969's actual

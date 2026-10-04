@@ -160,6 +160,44 @@ func TestHomeResultFromResponse_NilCoverageLeavesStayNil(t *testing.T) {
 	}
 }
 
+func TestHomeResultFromResponse_MapsSignalAttributionDistribution(t *testing.T) {
+	resp := &home.Response{Signals: []home.Signal{{
+		ID: "metric:throughput",
+		Attribution: &home.SignalAttribution{
+			Items: 3,
+			Sources: []home.SignalAttributionSourceCount{
+				{Source: "native_team", Items: 2, Share: 2.0 / 3.0},
+				{Source: "unexpected_future_source", Items: 1, Share: 1.0 / 3.0},
+			},
+			Confidence: []home.SignalAttributionConfidenceCount{
+				{Confidence: "high", Items: 2, Share: 2.0 / 3.0},
+				{Confidence: "unexpected_future_confidence", Items: 1, Share: 1.0 / 3.0},
+			},
+		},
+	}}}
+
+	got := homeResultFromResponse(resp)
+	if len(got.Signals) != 1 || got.Signals[0].Attribution == nil {
+		t.Fatalf("Signals = %+v, want one mapped attribution", got.Signals)
+	}
+	attribution := got.Signals[0].Attribution
+	if attribution.Items != 3 || len(attribution.Sources) != 2 || len(attribution.Confidence) != 2 {
+		t.Fatalf("Attribution = %+v, want two source and two confidence buckets for three items", attribution)
+	}
+	if got := attribution.Sources[0]; got.Source != model.TeamAttributionSourceNativeTeam || got.Items != 2 || got.Share != 2.0/3.0 {
+		t.Errorf("Sources[0] = %+v, want native-team 2/3", got)
+	}
+	if got := attribution.Sources[1]; got.Source != model.TeamAttributionSourceUnassigned || got.Items != 1 || got.Share != 1.0/3.0 {
+		t.Errorf("Sources[1] = %+v, want the established unrecognized-source fallback", got)
+	}
+	if got := attribution.Confidence[0]; got.Confidence != model.TeamAttributionConfidenceHigh || got.Items != 2 || got.Share != 2.0/3.0 {
+		t.Errorf("Confidence[0] = %+v, want high 2/3", got)
+	}
+	if got := attribution.Confidence[1]; got.Confidence != model.TeamAttributionConfidenceNone || got.Items != 1 || got.Share != 1.0/3.0 {
+		t.Errorf("Confidence[1] = %+v, want the established unrecognized-confidence fallback", got)
+	}
+}
+
 func TestHomeResultFromResponse_NilLastIngestedAtStaysNil(t *testing.T) {
 	resp := &home.Response{}
 	got := homeResultFromResponse(resp)

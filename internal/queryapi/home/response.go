@@ -148,6 +148,38 @@ type Signal struct {
 	EvidenceRef       *string         `json:"evidence_ref"`
 	Category          string          `json:"category"`
 	ScopeEntity       *ScopeEntityRef `json:"scope_entity"`
+	// Attribution is the distribution of current primary work-item
+	// attribution evidence behind a work-item metric. It is nil when this
+	// window has no attributable work items. It is never attached to
+	// repository, recommendation, or risk signals.
+	Attribution *SignalAttribution `json:"-"`
+}
+
+// SignalAttribution summarizes the current primary attribution evidence for
+// the work items that contribute to one Home work-item metric. The same item
+// count is the denominator for each served source and confidence share.
+type SignalAttribution struct {
+	Items      int                                `json:"items"`
+	Sources    []SignalAttributionSourceCount     `json:"sources"`
+	Confidence []SignalAttributionConfidenceCount `json:"confidence"`
+}
+
+// SignalAttributionSourceCount is one source bucket in SignalAttribution.
+// Source is the stored, lowercase work-item attribution source; GraphQL maps
+// it through the existing TeamAttributionSource contract.
+type SignalAttributionSourceCount struct {
+	Source string  `json:"source"`
+	Items  int     `json:"items"`
+	Share  float64 `json:"share"`
+}
+
+// SignalAttributionConfidenceCount is one confidence bucket in
+// SignalAttribution. Confidence is the stored, lowercase confidence value;
+// GraphQL maps it through TeamAttributionConfidence.
+type SignalAttributionConfidenceCount struct {
+	Confidence string  `json:"confidence"`
+	Items      int     `json:"items"`
+	Share      float64 `json:"share"`
 }
 
 // LimitingFactor is the wire shape of HomeLimitingFactor

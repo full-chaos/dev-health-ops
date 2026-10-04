@@ -229,6 +229,23 @@ func parseGithubIssueNumber(number string) (int, bool) {
 	return int(n), true
 }
 
+// isWellFormedGitlabIssueTarget is the GitLab counterpart of isWellFormedGithubIssueTarget: gitlab:<path>#<positive-int>,
+// the id normalizeGitLabIssueWorkItem mints. A merge request id (`!`) is NOT an issue target, and a repo path may itself
+// contain "#", so the split is on the LAST "#". CHAOS-8526.
+func isWellFormedGitlabIssueTarget(target string) bool {
+	body := strings.TrimPrefix(target, "gitlab:")
+	index := strings.LastIndex(body, "#")
+	if index < 0 {
+		return false
+	}
+	path, number := body[:index], body[index+1:]
+	if path == "" || strings.Contains(number, "!") {
+		return false
+	}
+	n, ok := parseGithubIssueNumber(number)
+	return ok && n >= 1
+}
+
 // DefaultAdmissions is the ACTIVE admission table: the raw kinds this producer
 // will turn into mapping rows today.
 //
@@ -280,6 +297,10 @@ var DefaultAdmissions = []Admission{
 	{RelationshipTypeRaw: "linear_attachment", TargetPrefix: "linear:"},
 	{RelationshipTypeRaw: "github_closing_reference", TargetPrefix: "gh:", TargetValidator: isWellFormedGithubIssueTarget},
 	{RelationshipTypeRaw: "jira_dev_status", TargetPrefix: "jira:"},
+	// CHAOS-8526: GitLab's own closing-MR relation (GET .../issues/:iid/closed_by); the MR is the source, the GitLab issue
+	// the target. A Jira issue linked to a GitLab MR rides jira_dev_status, a Linear issue linear_attachment; both sources
+	// parse through ParsePRSource's gitlab: branch.
+	{RelationshipTypeRaw: "gitlab_closing_reference", TargetPrefix: "gitlab:", TargetValidator: isWellFormedGitlabIssueTarget},
 }
 
 // ReservedAdmissions are the raw kinds whose shape is FROZEN and implemented

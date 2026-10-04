@@ -315,8 +315,8 @@ func TestJiraAtlassianRouteDevStatusSyncsPrimaryDependencyRow(t *testing.T) {
 	if batch.Watermark == nil {
 		t.Fatalf("expected the watermark to advance (dev-status success is not incompleteness): batch=%+v", batch)
 	}
-	if doer.devStatus != 1 {
-		t.Fatalf("dev-status requests=%d want=1", doer.devStatus)
+	if doer.devStatus != 2 {
+		t.Fatalf("dev-status requests=%d want=2 (GitHub, then GitLab; CHAOS-8526)", doer.devStatus)
 	}
 	if got := batch.Result["dev_status_pull_requests_synced"]; got != 1 {
 		t.Fatalf("result=%v", batch.Result)
@@ -533,7 +533,7 @@ func TestJiraAtlassianRouteDevStatusCleanNoOpStillDebitsSharedBudget(t *testing.
 	claim := nativeTestClaim("jira", "work-items")
 	claim.SourceExternalID = "OPS"
 	claim.DatasetOptions = map[string]any{
-		"fetch_dev_status": true, "dev_status_max_requests": 2,
+		"fetch_dev_status": true, "dev_status_max_requests": 3,
 	}
 	client := jiraDevStatusTestClientWithRetries(t, fakehttp.Client(doer), 3)
 	batch, err := jiraAtlassianCompleteHandler(t).Collect(
@@ -543,7 +543,9 @@ func TestJiraAtlassianRouteDevStatusCleanNoOpStillDebitsSharedBudget(t *testing.
 	if err != nil {
 		t.Fatal(err)
 	}
-	want := []string{"20001", "20002"}
+	// CHAOS-8526: each issue asks GitHub then GitLab. OPS-401: two clean 404 no-ops (2 wire calls, both debited);
+	// OPS-402: 1 of the budget of 3 remains, so one capped 503 attempt on GitHub and no GitLab request.
+	want := []string{"20001", "20001", "20002"}
 	if !reflect.DeepEqual(devStatusIssueIDs, want) {
 		t.Fatalf("dev-status issue sequence=%v want=%v (the 404 no-op must debit the shared budget; "+
 			"if it didn't, OPS-402 would retry its full undebited share and this sequence would diverge)",
@@ -724,4 +726,82 @@ type jiraAtlassianDoerFunc func(*http.Request) (*http.Response, error)
 
 func (doer jiraAtlassianDoerFunc) Do(request *http.Request) (*http.Response, error) {
 	return doer(request)
+}
+
+// CHAOS-8526: the route-level behaviour when one dev-status application type answers and the other does not. The rows of
+// the type that answered are kept; a failing type holds the watermark and marks the issue incomplete and is counted under
+// its own outcome; a type that is not configured (404) or answers empty is counted too (a loud zero), and does not hold it.
+func TestJiraAtlassianRouteDevStatusOneApplicationTypeDown(t *testing.T) {
+	github := `{"detail":[{"pullRequests":[{"url":"https://github.com/acme/api/pull/968"}]}]}`
+	for name, c := range map[string]struct {
+		gitlabStatus   int
+		gitlabBody     string
+		wantWatermark  bool
+		wantIncomplete bool
+		wantMetrics    []string
+	}{
+		"gitlab failing":         {http.StatusInternalServerError, `{}`, false, true, []string{`outcome="github_synced"} 1`, `outcome="gitlab_failed"} 1`, `outcome="failed"} 1`, `!outcome="synced"}`}},
+		"gitlab not configured":  {http.StatusNotFound, `{}`, true, false, []string{`outcome="github_synced"} 1`, `outcome="gitlab_dev_status_unavailable"} 1`, `outcome="synced"} 1`}},
+		"gitlab answers nothing": {http.StatusOK, `{"detail":[]}`, true, false, []string{`outcome="github_synced"} 1`, `outcome="gitlab_empty"} 1`, `outcome="synced"} 1`}},
+	} {
+		t.Run(name, func(t *testing.T) {
+			doer := jiraWorkItemsDoerFunc(func(request *http.Request) (*http.Response, error) {
+				respond := func(status int, body string) (*http.Response, error) {
+					return &http.Response{StatusCode: status, Header: http.Header{"Content-Type": []string{"application/json"}}, Body: io.NopCloser(strings.NewReader(body)), Request: request}, nil
+				}
+				switch {
+				case request.URL.Path == "/rest/api/3/search/jql":
+					return respond(http.StatusOK, `{"issues":[{"id":"20001","key":"OPS-501","self":"https://acme.atlassian.net/rest/api/3/issue/OPS-501","fields":{"project":{"key":"OPS"},"summary":"First","status":{"name":"Open","statusCategory":{"key":"new"}},"issuetype":{"name":"Task"},"labels":[],"created":"2026-08-01T00:00:00Z","updated":"2026-08-01T00:00:00Z"},"changelog":{"histories":[]}}],"isLast":true}`)
+				case strings.HasSuffix(request.URL.Path, "/changelog"):
+					return respond(http.StatusOK, `{"values":[],"total":0,"isLast":true}`)
+				case request.URL.Path == "/rest/dev-status/1.0/issue/detail":
+					if request.URL.Query().Get("applicationType") == "GitLab" {
+						return respond(c.gitlabStatus, c.gitlabBody)
+					}
+					return respond(http.StatusOK, github)
+				default:
+					t.Fatalf("unexpected request %s", request.URL.String())
+					return nil, nil
+				}
+			})
+			claim := nativeTestClaim("jira", "work-items")
+			claim.SourceExternalID = "OPS"
+			claim.DatasetOptions = map[string]any{"fetch_dev_status": true}
+			client := jiraDevStatusTestClientWithRetries(t, fakehttp.Client(doer), 1)
+			client.Metrics = providerfoundation.NewMetrics()
+			batch, err := jiraAtlassianCompleteHandler(t).Collect(context.Background(), claim, providerfoundation.Credential{}, client, time.Date(2026, 8, 10, 12, 0, 0, 0, time.UTC))
+			if err != nil {
+				t.Fatal(err)
+			}
+			if (batch.Watermark != nil) != c.wantWatermark {
+				t.Fatalf("watermark=%v want present=%v", batch.Watermark, c.wantWatermark)
+			}
+			_, incomplete := batch.Result["incomplete"]
+			if incomplete != c.wantIncomplete {
+				t.Fatalf("result=%v want incomplete=%v", batch.Result, c.wantIncomplete)
+			}
+			if got := batch.Result["dev_status_pull_requests_synced"]; got != 1 {
+				t.Fatalf("the GitHub row must be kept whatever GitLab answered: result=%v", batch.Result)
+			}
+			var exposition strings.Builder
+			if err := client.Metrics.WritePrometheus(&exposition); err != nil {
+				t.Fatal(err)
+			}
+			for _, want := range c.wantMetrics {
+				if absent, isAbsent := strings.CutPrefix(want, "!"); isAbsent {
+					if strings.Contains(exposition.String(), "dev_health_jira_dev_status_total{"+absent) {
+						t.Errorf("metrics must not carry %s (a partial failure is not a synced issue):\n%s", absent, exposition.String())
+					}
+					continue
+				}
+				if !strings.Contains(exposition.String(), "dev_health_jira_dev_status_total{"+want) {
+					t.Errorf("metrics lack %s:\n%s", want, exposition.String())
+				}
+			}
+			byType, _ := batch.Result["dev_status_by_application_type"].(map[string]map[string]int)
+			if byType["GitHub"]["synced"] != 1 || len(byType["GitLab"]) != 1 {
+				t.Fatalf("by application type=%v", byType)
+			}
+		})
+	}
 }

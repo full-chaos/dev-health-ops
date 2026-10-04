@@ -291,6 +291,8 @@ func newExclusionFixture(ctx context.Context, t *testing.T) QueryClient {
 		{"Bob", "bob", 50},
 		{"carol", "carol", 40},
 		{"gl-user", "gl-user", 30},
+		// The literal "unknown" on both sides is a self pair like any other (CHAOS-8499): left out.
+		{"unknown", "unknown", 45},
 	}
 	for i, e := range seeds {
 		if err := admin.Exec(ctx, `INSERT INTO review_edges_daily (repo_id, day, reviewer, author, reviews_count, computed_at, org_id) VALUES (?, ?, ?, ?, ?, ?, ?)`,

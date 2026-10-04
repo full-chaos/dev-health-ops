@@ -548,6 +548,15 @@ var operationSpecs = map[string]OperationSpec{
 			StochasticLeaves: capacityForecastStochasticLeaves,
 		},
 	},
+	// capacityCompletionDistribution (CHAOS-8598) is the per-team MCP read of capacityForecast's histograms. The bins are drawn values (fresh
+	// seed per request, see capacityForecastStochasticLeaves), so no leaf of it is comparable across two responses.
+	"capacityCompletionDistribution": {
+		ResponseRoot: "capacityForecast",
+		RootNullable: true,
+		Variables: func(orgID string, _ Window) map[string]any {
+			return map[string]any{"orgId": orgID, "teamId": "team-proof"}
+		},
+	},
 	// capacityForecasts (the LIST) declares no Tier-B and no volatile
 	// fields: its resolver reads stored columns back rather than
 	// recomputing, so forecastId/computedAt are not per-request values and

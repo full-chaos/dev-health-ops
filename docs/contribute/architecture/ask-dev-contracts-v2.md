@@ -25,6 +25,8 @@ those are separate Wave 3.1 issues (CHAOS-3292, CHAOS-3295, CHAOS-3297,
 CHAOS-3301) that consume these contracts.
 {: .fc-page-lede }
 
+> **Note:** The Go api does not serve the Ask Dev (`/api/v1/dev`) surface. This page is a record of the Python surface that was removed.
+
 v1 (`dev_answer.v1` / `DevMessageRequest`) is untouched. v2 lives alongside
 it in a new `contracts_v2` package and a new `contracts/ask-dev/v2`
 generated-artifact tree, using the exact same producer pattern

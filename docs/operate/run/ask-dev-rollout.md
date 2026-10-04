@@ -18,6 +18,8 @@ lifecycle: active
 Two operator actions accompany an Ask Dev deployment: a one-time repair of conversations that the 0-day retention tier could never delete, and an optional, separately budgeted question-understanding shadow used to gather evaluation evidence. Neither is required to serve Ask Dev traffic, and neither changes an answer a user receives.
 {: .fc-page-lede }
 
+> **Note:** The Go api does not serve the Ask Dev (`/api/v1/dev`) surface. This page is a record of the Python surface that was removed.
+
 ## Before you begin
 
 - Required role: platform operator with shell access to an API or worker container and the deployment's environment configuration.

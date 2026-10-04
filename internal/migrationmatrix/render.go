@@ -142,14 +142,14 @@ func RenderOpsBlock(render *Render, catalog Catalog) string {
 	// the page rather than left to be tallied by eye, because the tally is
 	// exactly what nobody did: every "Go API is live" claim was read off a
 	// mode column while these three said otherwise.
-	b.WriteString(fmt.Sprintf("_Rows in `go_api_proof_run` at read time: **%d**. Operations reachable to real clients with no deployed-executed proof: **%d**. Rows whose mode says Go but whose schema digest no longer matches the pin, so every request silently falls back to Python: **%d**._\n\n",
+	b.WriteString(fmt.Sprintf("_Rows in `go_api_proof_run` at read time: **%d**. Operations reachable to real clients with no deployed-executed proof: **%d**. Rows whose mode says Go but whose schema digest no longer matches the pin, so the row cannot be matched and its operation is held dark, not served: **%d**._\n\n",
 		render.ProofRunTotal,
 		UnprovenReachable(render.Operations, catalog),
 		DeadReachable(render.Operations),
 	))
 	// Always printed, zero included: a count that appears only when it is
 	// non-zero reads the same as a count nobody computed.
-	b.WriteString(fmt.Sprintf("_Live rows the edge cannot dispatch -- serving a document the operation catalog does not name (DOCUMENT_DRIFT, as `dev-hops go-api routing status` reports it): **%d**; for an operation the catalog does not register (UNREGISTERED, as `dev-hops go-api routing status` reports it): **%d**. Live rows with no recorded document digest, read before the reader carried it, so neither can be judged for them: **%d**._\n\n",
+	b.WriteString(fmt.Sprintf("_Live rows the edge cannot dispatch -- serving a document the operation catalog does not name (DOCUMENT_DRIFT, as `dho goapi routing status` reports it): **%d**; for an operation the catalog does not register (UNREGISTERED, as `dho goapi routing status` reports it): **%d**. Live rows with no recorded document digest, read before the reader carried it, so neither can be judged for them: **%d**._\n\n",
 		DriftedLive(render.Operations, catalog, StateDocumentDrift),
 		DriftedLive(render.Operations, catalog, StateUnregistered),
 		UnjudgedLive(render.Operations),

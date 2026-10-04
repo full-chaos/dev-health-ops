@@ -12,7 +12,9 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"github.com/full-chaos/dev-health-ops/internal/platform/logging"
 	"io"
+	"log/slog"
 	"net/http"
 	"net/url"
 	"strconv"
@@ -239,6 +241,7 @@ func (handler JiraAtlassianRouteHandler) Collect(
 	// times as many actual requests during an outage, unobserved.
 	devStatusRequestsIssued := 0
 	devStatusCapSkipped := 0
+	devStatusByType := map[string]map[string]int{}
 	devStatusUnavailableCount := 0
 	devStatusPullRequestsSynced := 0
 	// CHAOS-4193: same project-membership resolution cache/counter as
@@ -286,14 +289,23 @@ func (handler JiraAtlassianRouteHandler) Collect(
 				// (dev_status_max_requests=1 permitted 3 real requests under
 				// sustained 503s, since nothing stopped HTTPClient.Do's
 				// internal retry loop mid-flight).
-				devStatusPayload, devStatusAvailable, devStatusAttempts, devStatusErr := fetchJiraDevStatusPullRequestsCountingAttempts(
+				devStatusPayload, devStatusAvailable, devStatusAttempts, devStatusOutcomes, devStatusErr := fetchJiraDevStatusPullRequestsCountingAttempts(
 					ctx, client, issueID, devStatusMaxRequests-devStatusRequestsIssued,
 				)
 				devStatusRequestsIssued += devStatusAttempts
-				switch {
-				case devStatusErr != nil:
+				for _, outcome := range devStatusOutcomes {
+					recordJiraDevStatusTypeOutcome(client, claim, item.WorkItemID, outcome)
+					if devStatusByType[outcome.ApplicationType] == nil {
+						devStatusByType[outcome.ApplicationType] = map[string]int{}
+					}
+					devStatusByType[outcome.ApplicationType][outcome.Outcome]++
+				}
+				if devStatusErr != nil {
 					optionalIncomplete = append(optionalIncomplete, "dev_status:"+item.WorkItemID)
 					client.Metrics.RecordJiraDevStatus("failed")
+				}
+				switch {
+				case devStatusErr != nil && !devStatusAvailable:
 				case !devStatusAvailable:
 					devStatusUnavailableCount++
 					client.Metrics.RecordJiraDevStatus(jiraDevStatusUnavailableCause)
@@ -303,7 +315,9 @@ func (handler JiraAtlassianRouteHandler) Collect(
 					)
 					rows.Dependencies = append(rows.Dependencies, devStatusDependencies...)
 					devStatusPullRequestsSynced += len(devStatusDependencies)
-					client.Metrics.RecordJiraDevStatus("synced")
+					if devStatusErr == nil {
+						client.Metrics.RecordJiraDevStatus("synced")
+					}
 				}
 			}
 		}
@@ -533,6 +547,9 @@ func (handler JiraAtlassianRouteHandler) Collect(
 		"dev_status_pull_requests_synced": devStatusPullRequestsSynced,
 		"dev_status_unavailable_count":    devStatusUnavailableCount,
 		"dev_status_cap_skipped":          devStatusCapSkipped,
+		// CHAOS-8526: per application type (GitHub, GitLab), outcome -> issues, so a type that never answers shows as a
+		// count of empty / dev_status_unavailable, not as nothing.
+		"dev_status_by_application_type": devStatusByType,
 	}
 	if len(optionalIncomplete) > 0 {
 		result["incomplete"] = optionalIncomplete
@@ -904,4 +921,20 @@ func nilIfEmpty(value string) any {
 		return nil
 	}
 	return value
+}
+
+// recordJiraDevStatusTypeOutcome counts and logs one application type's dev-status result for one issue (CHAOS-8526), so a
+// type whose application-type value is wrong shows as gitlab_empty / gitlab_dev_status_unavailable, not as a silent zero.
+func recordJiraDevStatusTypeOutcome(client *providerfoundation.HTTPClient, claim Claim, issue string, outcome jiraDevStatusTypeOutcome) {
+	client.Metrics.RecordJiraDevStatus(strings.ToLower(outcome.ApplicationType) + "_" + outcome.Outcome)
+	if outcome.Err != nil {
+		errorClass, errorType := logging.ErrorClass(outcome.Err), logging.ErrorType(outcome.Err) // never the error text (CHAOS-7933)
+		slog.Warn("providersync.jira.dev_status_type_failed",
+			"org_id", claim.OrgID, "unit_id", claim.ID, "issue", issue, "application_type", outcome.ApplicationType,
+			"outcome", outcome.Outcome, "pull_requests", outcome.PullRequests, "error_class", errorClass, "error_type", errorType)
+		return
+	}
+	slog.Info("providersync.jira.dev_status_type",
+		"org_id", claim.OrgID, "unit_id", claim.ID, "issue", issue, "application_type", outcome.ApplicationType,
+		"outcome", outcome.Outcome, "pull_requests", outcome.PullRequests)
 }

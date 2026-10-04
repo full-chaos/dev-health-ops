@@ -36,7 +36,7 @@ var registeredOperations = []string{
 	"productTelemetryDashboard", "productTelemetryPlatformDashboard",
 	"aiGovernanceSummary", "aiWorkflowDrilldown",
 	"connectorsDataHealth", "dataHealthIdentity", "mappingCoverageHealth", "metricLineage",
-	"capacityForecast", "capacityForecasts", "cognitiveLoad", "compoundingRisk", "complexityTimeseries",
+	"capacityForecast", "capacityCompletionDistribution", "capacityForecasts", "cognitiveLoad", "compoundingRisk", "complexityTimeseries",
 	"featureFlagEvents", "featureFlags", "flowMatrix", "home", "hotspots",
 	"releaseImpact",
 	"investmentBreakdown", "investmentFull", "operatingReview", "pr",
@@ -131,7 +131,7 @@ func TestWindowedSpecsUseTheWindow(t *testing.T) {
 	windowless := map[string]bool{
 		"acrRepositoryScopes": true, "catalogValues": true,
 		"connectorsDataHealth": true, "dataHealthIdentity": true, "mappingCoverageHealth": true, "metricLineage": true,
-		"capacityForecast": true, "capacityForecasts": true,
+		"capacityForecast": true, "capacityCompletionDistribution": true, "capacityForecasts": true,
 		"featureFlagEvents": true, "featureFlags": true, "pr": true,
 		// home's SDL input (FilterInput) carries no date range at all --
 		// same reason featureFlags is windowless.
@@ -372,12 +372,12 @@ func TestEverySpecDeclaresItsResponseRoot(t *testing.T) {
 	}
 	// flowMatrix, investmentBreakdown and investmentFull all select
 	// `analytics`; catalogValues and acrRepositoryScopes both select
-	// `catalog`; releaseImpact selects `workGraphEdges`. If this ever reads 0, either the documents changed or
+	// `catalog`; releaseImpact selects `workGraphEdges`; capacityCompletionDistribution selects `capacityForecast`. If this ever reads 0, either the documents changed or
 	// someone "tidied" ResponseRoot into a copy of the operation name --
 	// and the parity-path checks above would silently start passing for
 	// paths that can never match.
-	if sharedRoots != 14 {
-		t.Fatalf("expected 14 operations whose response root differs from their name, got %d", sharedRoots)
+	if sharedRoots != 15 {
+		t.Fatalf("expected 15 operations whose response root differs from their name, got %d", sharedRoots)
 	}
 }
 

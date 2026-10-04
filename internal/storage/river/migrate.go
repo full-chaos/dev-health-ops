@@ -163,7 +163,19 @@ type MigrationOptions struct {
 	// Go reach production without a hand-written seed. Optional: empty seeds
 	// nothing.
 	NativeRiverRoutes []string
-	Logger            *slog.Logger
+	// RiverSyncDispatchRoutes are the sync-dispatch kinds whose checked-in
+	// route is river with rollback "none" (contracts/sync-dispatch/v1). A
+	// public.sync_dispatch_transport_routes row of such a kind that still
+	// holds the retired Celery seed -- transport celery, rollback_transport
+	// none, not paused, no live outbox claim -- is moved to transport river
+	// at generation + 1 (CHAOS-8600). That seed is what a fresh database
+	// holds; the route controller reads it as drift and no operator verb can
+	// move it, so the reconciler was never ready and no sync ran. A row in
+	// any other state (already on river, paused, still naming a rollback
+	// route, or with a live claim) is read and never changed. Optional: empty
+	// moves nothing.
+	RiverSyncDispatchRoutes []string
+	Logger                  *slog.Logger
 }
 
 // postureManifestAppliedTable mirrors postgres.PostureManifestAppliedTable's
@@ -196,6 +208,12 @@ type MigrationResult struct {
 	SeededRoutes     []string
 	PresentRoutes    []string
 	RouteTableAbsent bool
+	// SyncRoutes is what this run found, and did, for every kind of
+	// RiverSyncDispatchRoutes, in that order. SyncRouteTableAbsent reports
+	// that the route table (or its outbox) does not exist yet, so no row was
+	// read.
+	SyncRoutes           []SyncRouteOutcome
+	SyncRouteTableAbsent bool
 }
 
 // ApplyPinnedMigrations is the only production schema-changing River API in
@@ -393,6 +411,11 @@ func ApplyPinnedMigrations(
 		logMigrationStageFailure(ctx, options.Logger, "seed native river routes", err)
 		return MigrationResult{}, migrationStageError("seed native river routes")
 	}
+	syncRoutes, syncRouteTableAbsent, err := convergeSyncDispatchRoutes(ctx, tx, options.RiverSyncDispatchRoutes)
+	if err != nil {
+		logMigrationStageFailure(ctx, options.Logger, "move retired sync dispatch routes", err)
+		return MigrationResult{}, migrationStageError("move retired sync dispatch routes")
+	}
 	if options.PostureManifestDigest != "" {
 		buildID := options.PostureManifestBuildID
 		if buildID == "" {
@@ -427,6 +450,9 @@ func ApplyPinnedMigrations(
 		SeededRoutes:     routes.seeded,
 		PresentRoutes:    routes.present,
 		RouteTableAbsent: routes.tableAbsent,
+
+		SyncRoutes:           syncRoutes,
+		SyncRouteTableAbsent: syncRouteTableAbsent,
 	}, nil
 }
 
@@ -600,6 +626,16 @@ func ValidateMigrationOptions(options MigrationOptions) error {
 			return ErrMigrationConfiguration
 		}
 		seenRoutes[kind] = struct{}{}
+	}
+	seenSyncRoutes := make(map[string]struct{}, len(options.RiverSyncDispatchRoutes))
+	for _, kind := range options.RiverSyncDispatchRoutes {
+		if len(kind) > 96 || !syncDispatchKindPattern.MatchString(kind) {
+			return ErrMigrationConfiguration
+		}
+		if _, duplicate := seenSyncRoutes[kind]; duplicate {
+			return ErrMigrationConfiguration
+		}
+		seenSyncRoutes[kind] = struct{}{}
 	}
 	if options.DomainRole == options.QueueRole {
 		return ErrMigrationConfiguration

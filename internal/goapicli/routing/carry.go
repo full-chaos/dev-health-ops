@@ -51,7 +51,8 @@ import (
 // to change without notice.
 type carryResult struct {
 	// Reason is exactly one of: "carried" (success, including a run that carried zero
-	// eligible rows and the no-op on an empty table, which EmptyTable marks), "digest_unchanged" (Preflight 2: this binary's SDL is already live
+	// eligible rows, the no-op on an empty table, which EmptyTable marks, and the no-op on
+	// a table whose rows are all dark and elsewhere, which DarkRowsOnly marks), "digest_unchanged" (Preflight 2: this binary's SDL is already live
 	// -- an ordinary, expected no-op on a non-schema-changing roll), "stale_build" (a row
 	// names a build the deployed process is not running -- the caller's cue to `repoint`
 	// then retry, the rev196 exception), "refused" (any OTHER refusal -- catalog/document
@@ -70,6 +71,34 @@ type carryResult struct {
 	// on reason has to learn a new one; this field is what tells the two apart.
 	// It is the LAST field, so `reason` is still the first key of the line.
 	EmptyTable bool `json:"empty_table,omitempty"`
+	// DarkRowsOnly is true on the success that carried nothing because no row sat at
+	// the live digest and every row elsewhere is in a dark mode (CHAOS-8586,
+	// goapiproof.ErrRoutingRowsOnlyDark). Reason stays "carried", as for EmptyTable.
+	DarkRowsOnly bool `json:"dark_rows_only,omitempty"`
+}
+
+// routingRowsOnlyDarkNote is the one line `carry` and `repoint` print when no row
+// sits at the schema digest they work on and every row elsewhere is in a dark mode,
+// so the verb did nothing (CHAOS-8586). what is the thing the verb would have done.
+func routingRowsOnlyDarkNote(what string) string {
+	return fmt.Sprintf("go-api-routing: NO-OP: go_api_routing_state has no row at this schema digest, and every row at another digest is in a dark mode (python, disabled or shadow), so there is nothing to %s and nothing was written. "+
+		"Each of those rows still holds its operation dark at any digest; a canary or primary row at another digest would be refused.", what)
+}
+
+// printDarkRowsOnly names, on stderr, every row behind a dark-rows-only no-op, one
+// structured line each (CHAOS-8586): a verb that did nothing because each row holds
+// its operation dark must still say WHICH operations it left dark, and in what mode,
+// so a log search finds them. The values are read from the table, so each is quoted
+// as one field.
+func printDarkRowsOnly(err error, verb string) {
+	var dark *goapiproof.RoutingRowsOnlyDarkError
+	if !errors.As(err, &dark) {
+		return
+	}
+	for _, row := range dark.Rows {
+		fmt.Fprintf(stderr, "go_api_routing.noop_dark_rows_only verb=%s operation=%q mode=%q row_schema_digest=%q live_schema_digest=%s document_digest=%q\n",
+			verb, row.Operation, row.Mode, row.SchemaDigest, dark.SchemaDigest, row.DocumentDigest)
+	}
 }
 
 // routingTableEmptyNote is the one line `carry` and `repoint` print when
@@ -160,7 +189,7 @@ func runCarry(argv []string) (err error) {
 	// call printCarryResult at each one.
 	var reason, liveDigest, targetDigest string
 	var carriedCount int
-	var emptyTable bool
+	var emptyTable, darkRowsOnly bool
 	defer func() {
 		if !jsonOut {
 			return
@@ -175,7 +204,7 @@ func runCarry(argv []string) (err error) {
 				reason = "refused"
 			}
 		}
-		result := carryResult{Reason: reason, LiveDigest: liveDigest, TargetDigest: targetDigest, Carried: carriedCount, EmptyTable: emptyTable}
+		result := carryResult{Reason: reason, LiveDigest: liveDigest, TargetDigest: targetDigest, Carried: carriedCount, EmptyTable: emptyTable, DarkRowsOnly: darkRowsOnly}
 		if err != nil {
 			// Same defense-in-depth as the command's other error-print sites (see
 			// credentialBoundary's own doc comment): refuse/internal already redact
@@ -336,10 +365,19 @@ func runCarry(argv []string) (err error) {
 		// a schema-changing upgrade of a stack that serves from one must not fail
 		// its pre-upgrade hook. Every preflight above still ran (the registry, the
 		// digests, the build, the -expect-build cross-check); only the answer to
-		// "there is no row at all" changed, from a refusal to this no-op. Rows that
-		// exist only at other digests are still ErrCarryNoLiveRows, below.
+		// "there is no row at all" changed, from a refusal to this no-op.
 		emptyTable = true
 		fmt.Fprintln(stdout, routingTableEmptyNote("carry"))
+		return nil
+	}
+	if errors.Is(carryErr, goapiproof.ErrRoutingRowsOnlyDark) {
+		// CHAOS-8586: the same no-op for a table whose rows all sit at other digests
+		// in a dark mode -- each holds its operation dark whatever digest the fleet
+		// computes, so the roll changes nothing anyone is served. A served row at
+		// another digest is still ErrCarryNoLiveRows, below.
+		darkRowsOnly = true
+		fmt.Fprintln(stdout, routingRowsOnlyDarkNote("carry"))
+		printDarkRowsOnly(carryErr, "carry")
 		return nil
 	}
 	if carryErr != nil {

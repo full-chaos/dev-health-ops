@@ -159,10 +159,10 @@ def test_carry_retry_failure_after_repoint_still_aborts() -> None:
 def test_repoint_runs_after_routing_parity_every_cut_unconditionally() -> None:
     """D2811 addendum: repoint runs after every cut, schema-change or not -- no digest gate."""
     lines = _lines()
-    parity_at = _first(lines, "st routing-parity")
+    parity_at = _first(lines, "st go-api-ready")
     repoint_at = _first(lines, "dho goapi routing repoint", start=parity_at)
     assert parity_at < repoint_at, (
-        f"routing repoint (line {repoint_at + 1}) must run after routing-parity "
+        f"routing repoint (line {repoint_at + 1}) must run after go-api-ready "
         f"(line {parity_at + 1}), against the newly-running build"
     )
     # Unconditional: the repoint invocation line itself carries no digest/schema comparison,

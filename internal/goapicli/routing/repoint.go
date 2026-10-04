@@ -30,11 +30,16 @@ import (
 // carryResult provides -- see its doc comment for the reasoning (D2828/D2829). repoint's
 // own refusal vocabulary is flatter than carry's: it has no equivalent of "digest_unchanged"
 // or "stale_build" (nothing bigboy-cut.sh or the Helm hook currently branches on for
-// repoint), so Reason is one of "repointed" (success, including a dry run or a run that
-// repointed zero eligible rows), "refused" (any refusal), or "error" (an internal defect).
+// repoint), so Reason is one of "repointed" (success, including a dry run, a run that
+// repointed zero eligible rows and the no-op on an empty table, which EmptyTable marks),
+// "refused" (any refusal), or "error" (an internal defect).
 type repointResult struct {
 	Reason  string `json:"reason"`
 	Message string `json:"message,omitempty"`
+	// EmptyTable is true on the one success that re-pointed nothing because
+	// go_api_routing_state held no row at any schema digest (CHAOS-8543); see
+	// carryResult.EmptyTable. Reason stays "repointed".
+	EmptyTable bool `json:"empty_table,omitempty"`
 }
 
 // repointJSONPrefix mirrors carryJSONPrefix -- see its doc comment.
@@ -65,6 +70,7 @@ func runRepoint(argv []string) (err error) {
 	set.BoolVar(&jsonOut, "json", false, "also print one machine-readable line to stdout, prefixed `"+repointJSONPrefix+"`, classifying the outcome by a stable `reason` field (\"repointed\", \"refused\", \"error\")")
 	set.DurationVar(&common.timeout, "timeout", 30*time.Second, "bounds EACH HTTP request, the Postgres dial, and EACH database statement (server-side statement_timeout/lock_timeout) -- never the run as a whole")
 
+	var emptyTable bool
 	defer func() {
 		if !jsonOut {
 			return
@@ -76,7 +82,7 @@ func runRepoint(argv []string) (err error) {
 				reason = "error"
 			}
 		}
-		result := repointResult{Reason: reason}
+		result := repointResult{Reason: reason, EmptyTable: emptyTable}
 		if err != nil {
 			result.Message = redactCredentials(err.Error())
 		}
@@ -199,7 +205,14 @@ func runRepoint(argv []string) (err error) {
 		PrincipalID: principalID,
 		DryRun:      dryRun,
 	})
-	if err != nil {
+	// CHAOS-8543: an empty table is a valid state since the catalog rule, and the
+	// post-upgrade hook of a stack that serves from one must not fail. Every
+	// preflight above still ran, and so did the request's own checks -- the
+	// -expect-build cross-check included, which is what the hook waits on -- so
+	// only the answer to "there is no row at all" changed, from a refusal to a
+	// no-op. Rows that exist only at other digests are still ErrRepointNoRows.
+	emptyTable = errors.Is(err, goapiproof.ErrRoutingTableEmpty)
+	if err != nil && !emptyTable {
 		return classifyWriteError(err)
 	}
 
@@ -234,6 +247,9 @@ func runRepoint(argv []string) (err error) {
 			fmt.Fprintf(stderr, "go_api_routing.repointed operation=%s mode_before=%s mode_after=%s build_before=%s build_after=%s schema_digest=%s document_digest=%s recorded_by=%q\n",
 				outcome.Operation, outcome.ModeBefore, outcome.ModeAfter, outcome.BuildFrom, outcome.BuildTo, registry.SchemaDigest, outcome.DocumentDigest, common.recordedBy)
 		}
+	}
+	if emptyTable {
+		fmt.Fprintln(stdout, routingTableEmptyNote("re-point"))
 	}
 	return nil
 }

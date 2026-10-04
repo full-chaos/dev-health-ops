@@ -1,8 +1,11 @@
-// Team- and repo-scope golden parity tests -- siblings of
-// TestGoldenOrgScopeDefault (golden_test.go), same capture technique and
-// the same range_days=7/compare_days=7/end_date=2024-01-08 window.
+// Team- and repo-scope snapshot tests -- siblings of
+// TestGoldenOrgScopeDefault (golden_test.go), with the same
+// range_days=7/compare_days=7/end_date=2024-01-08 window. The two files are
+// GO SNAPSHOTS since CHAOS-8178 (kind go-generated; see golden_test.go for
+// what changed and why): regression snapshots, not parity with Python.
 //
-// CAPTURE COMMANDS: identical structure to golden_test.go's own, with
+// HOW THE FILES WERE FIRST MADE (the Python captures, before CHAOS-8178):
+// identical structure to golden_test.go's own, with
 // filters.scope set to ScopeFilter(level="team", ids=["team-1"]) (team
 // fixture) or ScopeFilter(level="repo", ids=["checkout-service"]) (repo
 // fixture) respectively. The team fixture additionally seeds a real

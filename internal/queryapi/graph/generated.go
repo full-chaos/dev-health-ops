@@ -1082,6 +1082,7 @@ type ComplexityRoot struct {
 		ComplexityTimeseries              func(childComplexity int, input model.ComplexityTimeseriesInput) int
 		CompoundingRisk                   func(childComplexity int, orgID string, filter *model.CompoundingRiskFilterInput) int
 		CoverageBaselines                 func(childComplexity int, orgID string, endDate graphqldate.Date, repoIds []string, teamIds []string) int
+		CoverageScopeBaseline             func(childComplexity int, orgID string, endDate graphqldate.Date, repoIds []string, teamIds []string) int
 		DataHealth                        func(childComplexity int, team string) int
 		Experiments                       func(childComplexity int, orgID string, filters *model.FilterInput) int
 		FeatureFlagEvents                 func(childComplexity int, orgID string, flagKey *string, environment *string, limit int) int
@@ -1244,6 +1245,13 @@ type ComplexityRoot struct {
 		ScheduleID       func(childComplexity int) int
 		TemplateSourceID func(childComplexity int) int
 		UpdatedAt        func(childComplexity int) int
+	}
+
+	ScopeCoverageBaseline struct {
+		BranchBaselinePct func(childComplexity int) int
+		BranchDays        func(childComplexity int) int
+		LineBaselinePct   func(childComplexity int) int
+		LineDays          func(childComplexity int) int
 	}
 
 	ScopeEntityRef struct {
@@ -1561,6 +1569,7 @@ type QueryResolver interface {
 	TestopsRisk(ctx context.Context, orgID string, input model.TestOpsRiskInput) (*model.TestOpsRiskResult, error)
 	TestopsJobFailures(ctx context.Context, orgID string, input model.TestOpsJobFailuresInput) (*model.TestOpsJobFailuresResult, error)
 	CoverageBaselines(ctx context.Context, orgID string, endDate graphqldate.Date, repoIds []string, teamIds []string) ([]model.RepoCoverageBaseline, error)
+	CoverageScopeBaseline(ctx context.Context, orgID string, endDate graphqldate.Date, repoIds []string, teamIds []string) (*model.ScopeCoverageBaseline, error)
 	ComplexityTimeseries(ctx context.Context, input model.ComplexityTimeseriesInput) (*model.ComplexityTimeseriesResult, error)
 	Hotspots(ctx context.Context, input model.HotspotsInput) (*model.HotspotsResult, error)
 	CognitiveLoad(ctx context.Context, input model.CognitiveLoadInput) (*model.CognitiveLoadResult, error)
@@ -6541,6 +6550,18 @@ func (e *executableSchema) Complexity(typeName, field string, childComplexity in
 
 		return e.complexity.Query.CoverageBaselines(childComplexity, args["orgId"].(string), args["endDate"].(graphqldate.Date), args["repoIds"].([]string), args["teamIds"].([]string)), true
 
+	case "Query.coverageScopeBaseline":
+		if e.complexity.Query.CoverageScopeBaseline == nil {
+			break
+		}
+
+		args, err := ec.field_Query_coverageScopeBaseline_args(context.TODO(), rawArgs)
+		if err != nil {
+			return 0, false
+		}
+
+		return e.complexity.Query.CoverageScopeBaseline(childComplexity, args["orgId"].(string), args["endDate"].(graphqldate.Date), args["repoIds"].([]string), args["teamIds"].([]string)), true
+
 	case "Query.dataHealth":
 		if e.complexity.Query.DataHealth == nil {
 			break
@@ -7489,6 +7510,34 @@ func (e *executableSchema) Complexity(typeName, field string, childComplexity in
 		}
 
 		return e.complexity.SavedReportType.UpdatedAt(childComplexity), true
+
+	case "ScopeCoverageBaseline.branchBaselinePct":
+		if e.complexity.ScopeCoverageBaseline.BranchBaselinePct == nil {
+			break
+		}
+
+		return e.complexity.ScopeCoverageBaseline.BranchBaselinePct(childComplexity), true
+
+	case "ScopeCoverageBaseline.branchDays":
+		if e.complexity.ScopeCoverageBaseline.BranchDays == nil {
+			break
+		}
+
+		return e.complexity.ScopeCoverageBaseline.BranchDays(childComplexity), true
+
+	case "ScopeCoverageBaseline.lineBaselinePct":
+		if e.complexity.ScopeCoverageBaseline.LineBaselinePct == nil {
+			break
+		}
+
+		return e.complexity.ScopeCoverageBaseline.LineBaselinePct(childComplexity), true
+
+	case "ScopeCoverageBaseline.lineDays":
+		if e.complexity.ScopeCoverageBaseline.LineDays == nil {
+			break
+		}
+
+		return e.complexity.ScopeCoverageBaseline.LineDays(childComplexity), true
 
 	case "ScopeEntityRef.displayName":
 		if e.complexity.ScopeEntityRef.DisplayName == nil {
@@ -10340,6 +10389,11 @@ type Query {
   coverageBaselines(orgId: String!, endDate: Date!, repoIds: [String!] = null, teamIds: [String!] = null): [RepoCoverageBaseline!]!
 
   """
+  The coverage baseline of a whole scope (CHAOS-8541): the mean, over the 30 days before ` + "`" + `` + "`" + `endDate` + "`" + `` + "`" + ` (` + "`" + `` + "`" + `endDate` + "`" + `` + "`" + ` itself is not included), of the scope's coverage of each day. The scope's coverage of a day is the mean of its repositories' coverage of that day (a repository with no value that day is left out): the value the coverage trend serves for a day. The same window and the same 7-day minimum as ` + "`" + `` + "`" + `coverageBaselines` + "`" + `` + "`" + `. Not a set target, and not the mean of the repository baselines. Scope: ` + "`" + `` + "`" + `repoIds` + "`" + `` + "`" + ` and the repositories that ` + "`" + `` + "`" + `teamIds` + "`" + `` + "`" + ` own; neither = the whole org.
+  """
+  coverageScopeBaseline(orgId: String!, endDate: Date!, repoIds: [String!] = null, teamIds: [String!] = null): ScopeCoverageBaseline!
+
+  """
   Cyclomatic complexity trend by repo or file. Reads from append-only ` + "`" + `` + "`" + `repo_complexity_daily` + "`" + `` + "`" + ` / ` + "`" + `` + "`" + `file_complexity_snapshots` + "`" + `` + "`" + ` tables — no recomputation, pure surface of persisted data.
   """
   complexityTimeseries(input: ComplexityTimeseriesInput!): ComplexityTimeseriesResult!
@@ -10599,6 +10653,19 @@ type SavedReportType {
   createdAt: DateTime!
   updatedAt: DateTime!
   createdBy: String
+}
+
+type ScopeCoverageBaseline {
+  """
+  Mean, in percent (0 to 100), of the scope's line coverage of each day that holds a value, over the 30 days. Null = fewer than 7 such days (` + "`" + `` + "`" + `lineDays` + "`" + `` + "`" + `): then there is no baseline. Never 0 for "none", never the current value.
+  """
+  lineBaselinePct: Float
+  """Days of the 30 on which at least one repository of the scope holds a line coverage value."""
+  lineDays: Int!
+  """Mean branch coverage, in percent; the same rules as ` + "`" + `` + "`" + `lineBaselinePct` + "`" + `` + "`" + `."""
+  branchBaselinePct: Float
+  """Days of the 30 on which at least one repository of the scope holds a branch coverage value."""
+  branchDays: Int!
 }
 
 input ScopeFilterInput {
@@ -12793,6 +12860,103 @@ func (ec *executionContext) field_Query_coverageBaselines_argsRepoIds(
 }
 
 func (ec *executionContext) field_Query_coverageBaselines_argsTeamIds(
+	ctx context.Context,
+	rawArgs map[string]any,
+) ([]string, error) {
+	if _, ok := rawArgs["teamIds"]; !ok {
+		var zeroVal []string
+		return zeroVal, nil
+	}
+
+	ctx = graphql.WithPathContext(ctx, graphql.NewPathWithField("teamIds"))
+	if tmp, ok := rawArgs["teamIds"]; ok {
+		return ec.unmarshalOString2ᚕstringᚄ(ctx, tmp)
+	}
+
+	var zeroVal []string
+	return zeroVal, nil
+}
+
+func (ec *executionContext) field_Query_coverageScopeBaseline_args(ctx context.Context, rawArgs map[string]any) (map[string]any, error) {
+	var err error
+	args := map[string]any{}
+	arg0, err := ec.field_Query_coverageScopeBaseline_argsOrgID(ctx, rawArgs)
+	if err != nil {
+		return nil, err
+	}
+	args["orgId"] = arg0
+	arg1, err := ec.field_Query_coverageScopeBaseline_argsEndDate(ctx, rawArgs)
+	if err != nil {
+		return nil, err
+	}
+	args["endDate"] = arg1
+	arg2, err := ec.field_Query_coverageScopeBaseline_argsRepoIds(ctx, rawArgs)
+	if err != nil {
+		return nil, err
+	}
+	args["repoIds"] = arg2
+	arg3, err := ec.field_Query_coverageScopeBaseline_argsTeamIds(ctx, rawArgs)
+	if err != nil {
+		return nil, err
+	}
+	args["teamIds"] = arg3
+	return args, nil
+}
+func (ec *executionContext) field_Query_coverageScopeBaseline_argsOrgID(
+	ctx context.Context,
+	rawArgs map[string]any,
+) (string, error) {
+	if _, ok := rawArgs["orgId"]; !ok {
+		var zeroVal string
+		return zeroVal, nil
+	}
+
+	ctx = graphql.WithPathContext(ctx, graphql.NewPathWithField("orgId"))
+	if tmp, ok := rawArgs["orgId"]; ok {
+		return ec.unmarshalNString2string(ctx, tmp)
+	}
+
+	var zeroVal string
+	return zeroVal, nil
+}
+
+func (ec *executionContext) field_Query_coverageScopeBaseline_argsEndDate(
+	ctx context.Context,
+	rawArgs map[string]any,
+) (graphqldate.Date, error) {
+	if _, ok := rawArgs["endDate"]; !ok {
+		var zeroVal graphqldate.Date
+		return zeroVal, nil
+	}
+
+	ctx = graphql.WithPathContext(ctx, graphql.NewPathWithField("endDate"))
+	if tmp, ok := rawArgs["endDate"]; ok {
+		return ec.unmarshalNDate2githubᚗcomᚋfullᚑchaosᚋdevᚑhealthᚑopsᚋinternalᚋqueryapiᚋgraphqldateᚐDate(ctx, tmp)
+	}
+
+	var zeroVal graphqldate.Date
+	return zeroVal, nil
+}
+
+func (ec *executionContext) field_Query_coverageScopeBaseline_argsRepoIds(
+	ctx context.Context,
+	rawArgs map[string]any,
+) ([]string, error) {
+	if _, ok := rawArgs["repoIds"]; !ok {
+		var zeroVal []string
+		return zeroVal, nil
+	}
+
+	ctx = graphql.WithPathContext(ctx, graphql.NewPathWithField("repoIds"))
+	if tmp, ok := rawArgs["repoIds"]; ok {
+		return ec.unmarshalOString2ᚕstringᚄ(ctx, tmp)
+	}
+
+	var zeroVal []string
+	return zeroVal, nil
+}
+
+func (ec *executionContext) field_Query_coverageScopeBaseline_argsTeamIds(
 	ctx context.Context,
 	rawArgs map[string]any,
 ) ([]string, error) {
@@ -47046,6 +47210,71 @@ func (ec *executionContext) fieldContext_Query_coverageBaselines(ctx context.Con
 	return fc, nil
 }
 
+func (ec *executionContext) _Query_coverageScopeBaseline(ctx context.Context, field graphql.CollectedField) (ret graphql.Marshaler) {
+	fc, err := ec.fieldContext_Query_coverageScopeBaseline(ctx, field)
+	if err != nil {
+		return graphql.Null
+	}
+	ctx = graphql.WithFieldContext(ctx, fc)
+	defer func() {
+		if r := recover(); r != nil {
+			ec.Error(ctx, ec.Recover(ctx, r))
+			ret = graphql.Null
+		}
+	}()
+	resTmp, err := ec.ResolverMiddleware(ctx, func(rctx context.Context) (any, error) {
+		ctx = rctx // use context from middleware stack in children
+		return ec.resolvers.Query().CoverageScopeBaseline(rctx, fc.Args["orgId"].(string), fc.Args["endDate"].(graphqldate.Date), fc.Args["repoIds"].([]string), fc.Args["teamIds"].([]string))
+	})
+	if err != nil {
+		ec.Error(ctx, err)
+		return graphql.Null
+	}
+	if resTmp == nil {
+		if !graphql.HasFieldError(ctx, fc) {
+			ec.Errorf(ctx, "must not be null")
+		}
+		return graphql.Null
+	}
+	res := resTmp.(*model.ScopeCoverageBaseline)
+	fc.Result = res
+	return ec.marshalNScopeCoverageBaseline2ᚖgithubᚗcomᚋfullᚑchaosᚋdevᚑhealthᚑopsᚋinternalᚋqueryapiᚋgraphᚋmodelᚐScopeCoverageBaseline(ctx, field.Selections, res)
+}
+
+func (ec *executionContext) fieldContext_Query_coverageScopeBaseline(ctx context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "Query",
+		Field:      field,
+		IsMethod:   true,
+		IsResolver: true,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			switch field.Name {
+			case "lineBaselinePct":
+				return ec.fieldContext_ScopeCoverageBaseline_lineBaselinePct(ctx, field)
+			case "lineDays":
+				return ec.fieldContext_ScopeCoverageBaseline_lineDays(ctx, field)
+			case "branchBaselinePct":
+				return ec.fieldContext_ScopeCoverageBaseline_branchBaselinePct(ctx, field)
+			case "branchDays":
+				return ec.fieldContext_ScopeCoverageBaseline_branchDays(ctx, field)
+			}
+			return nil, fmt.Errorf("no field named %q was found under type ScopeCoverageBaseline", field.Name)
+		},
+	}
+	defer func() {
+		if r := recover(); r != nil {
+			err = ec.Recover(ctx, r)
+			ec.Error(ctx, err)
+		}
+	}()
+	ctx = graphql.WithFieldContext(ctx, fc)
+	if fc.Args, err = ec.field_Query_coverageScopeBaseline_args(ctx, field.ArgumentMap(ec.Variables)); err != nil {
+		ec.Error(ctx, err)
+		return fc, err
+	}
+	return fc, nil
+}
+
 func (ec *executionContext) _Query_complexityTimeseries(ctx context.Context, field graphql.CollectedField) (ret graphql.Marshaler) {
 	fc, err := ec.fieldContext_Query_complexityTimeseries(ctx, field)
 	if err != nil {
@@ -52329,6 +52558,176 @@ func (ec *executionContext) fieldContext_SavedReportType_createdBy(_ context.Con
 		IsResolver: false,
 		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
 			return nil, errors.New("field of type String does not have child fields")
+		},
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _ScopeCoverageBaseline_lineBaselinePct(ctx context.Context, field graphql.CollectedField, obj *model.ScopeCoverageBaseline) (ret graphql.Marshaler) {
+	fc, err := ec.fieldContext_ScopeCoverageBaseline_lineBaselinePct(ctx, field)
+	if err != nil {
+		return graphql.Null
+	}
+	ctx = graphql.WithFieldContext(ctx, fc)
+	defer func() {
+		if r := recover(); r != nil {
+			ec.Error(ctx, ec.Recover(ctx, r))
+			ret = graphql.Null
+		}
+	}()
+	resTmp, err := ec.ResolverMiddleware(ctx, func(rctx context.Context) (any, error) {
+		ctx = rctx // use context from middleware stack in children
+		return obj.LineBaselinePct, nil
+	})
+	if err != nil {
+		ec.Error(ctx, err)
+		return graphql.Null
+	}
+	if resTmp == nil {
+		return graphql.Null
+	}
+	res := resTmp.(*float64)
+	fc.Result = res
+	return ec.marshalOFloat2ᚖfloat64(ctx, field.Selections, res)
+}
+
+func (ec *executionContext) fieldContext_ScopeCoverageBaseline_lineBaselinePct(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "ScopeCoverageBaseline",
+		Field:      field,
+		IsMethod:   false,
+		IsResolver: false,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return nil, errors.New("field of type Float does not have child fields")
+		},
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _ScopeCoverageBaseline_lineDays(ctx context.Context, field graphql.CollectedField, obj *model.ScopeCoverageBaseline) (ret graphql.Marshaler) {
+	fc, err := ec.fieldContext_ScopeCoverageBaseline_lineDays(ctx, field)
+	if err != nil {
+		return graphql.Null
+	}
+	ctx = graphql.WithFieldContext(ctx, fc)
+	defer func() {
+		if r := recover(); r != nil {
+			ec.Error(ctx, ec.Recover(ctx, r))
+			ret = graphql.Null
+		}
+	}()
+	resTmp, err := ec.ResolverMiddleware(ctx, func(rctx context.Context) (any, error) {
+		ctx = rctx // use context from middleware stack in children
+		return obj.LineDays, nil
+	})
+	if err != nil {
+		ec.Error(ctx, err)
+		return graphql.Null
+	}
+	if resTmp == nil {
+		if !graphql.HasFieldError(ctx, fc) {
+			ec.Errorf(ctx, "must not be null")
+		}
+		return graphql.Null
+	}
+	res := resTmp.(int)
+	fc.Result = res
+	return ec.marshalNInt2int(ctx, field.Selections, res)
+}
+
+func (ec *executionContext) fieldContext_ScopeCoverageBaseline_lineDays(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "ScopeCoverageBaseline",
+		Field:      field,
+		IsMethod:   false,
+		IsResolver: false,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return nil, errors.New("field of type Int does not have child fields")
+		},
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _ScopeCoverageBaseline_branchBaselinePct(ctx context.Context, field graphql.CollectedField, obj *model.ScopeCoverageBaseline) (ret graphql.Marshaler) {
+	fc, err := ec.fieldContext_ScopeCoverageBaseline_branchBaselinePct(ctx, field)
+	if err != nil {
+		return graphql.Null
+	}
+	ctx = graphql.WithFieldContext(ctx, fc)
+	defer func() {
+		if r := recover(); r != nil {
+			ec.Error(ctx, ec.Recover(ctx, r))
+			ret = graphql.Null
+		}
+	}()
+	resTmp, err := ec.ResolverMiddleware(ctx, func(rctx context.Context) (any, error) {
+		ctx = rctx // use context from middleware stack in children
+		return obj.BranchBaselinePct, nil
+	})
+	if err != nil {
+		ec.Error(ctx, err)
+		return graphql.Null
+	}
+	if resTmp == nil {
+		return graphql.Null
+	}
+	res := resTmp.(*float64)
+	fc.Result = res
+	return ec.marshalOFloat2ᚖfloat64(ctx, field.Selections, res)
+}
+
+func (ec *executionContext) fieldContext_ScopeCoverageBaseline_branchBaselinePct(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "ScopeCoverageBaseline",
+		Field:      field,
+		IsMethod:   false,
+		IsResolver: false,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return nil, errors.New("field of type Float does not have child fields")
+		},
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _ScopeCoverageBaseline_branchDays(ctx context.Context, field graphql.CollectedField, obj *model.ScopeCoverageBaseline) (ret graphql.Marshaler) {
+	fc, err := ec.fieldContext_ScopeCoverageBaseline_branchDays(ctx, field)
+	if err != nil {
+		return graphql.Null
+	}
+	ctx = graphql.WithFieldContext(ctx, fc)
+	defer func() {
+		if r := recover(); r != nil {
+			ec.Error(ctx, ec.Recover(ctx, r))
+			ret = graphql.Null
+		}
+	}()
+	resTmp, err := ec.ResolverMiddleware(ctx, func(rctx context.Context) (any, error) {
+		ctx = rctx // use context from middleware stack in children
+		return obj.BranchDays, nil
+	})
+	if err != nil {
+		ec.Error(ctx, err)
+		return graphql.Null
+	}
+	if resTmp == nil {
+		if !graphql.HasFieldError(ctx, fc) {
+			ec.Errorf(ctx, "must not be null")
+		}
+		return graphql.Null
+	}
+	res := resTmp.(int)
+	fc.Result = res
+	return ec.marshalNInt2int(ctx, field.Selections, res)
+}
+
+func (ec *executionContext) fieldContext_ScopeCoverageBaseline_branchDays(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "ScopeCoverageBaseline",
+		Field:      field,
+		IsMethod:   false,
+		IsResolver: false,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return nil, errors.New("field of type Int does not have child fields")
 		},
 	}
 	return fc, nil
@@ -71275,6 +71674,28 @@ func (ec *executionContext) _Query(ctx context.Context, sel ast.SelectionSet) gr
 			}
 
 			out.Concurrently(i, func(ctx context.Context) graphql.Marshaler { return rrm(innerCtx) })
+		case "coverageScopeBaseline":
+			field := field
+
+			innerFunc := func(ctx context.Context, fs *graphql.FieldSet) (res graphql.Marshaler) {
+				defer func() {
+					if r := recover(); r != nil {
+						ec.Error(ctx, ec.Recover(ctx, r))
+					}
+				}()
+				res = ec._Query_coverageScopeBaseline(ctx, field)
+				if res == graphql.Null {
+					atomic.AddUint32(&fs.Invalids, 1)
+				}
+				return res
+			}
+
+			rrm := func(ctx context.Context) graphql.Marshaler {
+				return ec.OperationContext.RootResolverMiddleware(ctx,
+					func(ctx context.Context) graphql.Marshaler { return innerFunc(ctx, out) })
+			}
+
+			out.Concurrently(i, func(ctx context.Context) graphql.Marshaler { return rrm(innerCtx) })
 		case "complexityTimeseries":
 			field := field
 
@@ -72519,6 +72940,54 @@ func (ec *executionContext) _SavedReportType(ctx context.Context, sel ast.Select
 			}
 		case "createdBy":
 			out.Values[i] = ec._SavedReportType_createdBy(ctx, field, obj)
+		default:
+			panic("unknown field " + strconv.Quote(field.Name))
+		}
+	}
+	out.Dispatch(ctx)
+	if out.Invalids > 0 {
+		return graphql.Null
+	}
+
+	atomic.AddInt32(&ec.deferred, int32(len(deferred)))
+
+	for label, dfs := range deferred {
+		ec.processDeferredGroup(graphql.DeferredGroup{
+			Label:    label,
+			Path:     graphql.GetPath(ctx),
+			FieldSet: dfs,
+			Context:  ctx,
+		})
+	}
+
+	return out
+}
+
+var scopeCoverageBaselineImplementors = []string{"ScopeCoverageBaseline"}
+
+func (ec *executionContext) _ScopeCoverageBaseline(ctx context.Context, sel ast.SelectionSet, obj *model.ScopeCoverageBaseline) graphql.Marshaler {
+	fields := graphql.CollectFields(ec.OperationContext, sel, scopeCoverageBaselineImplementors)
+
+	out := graphql.NewFieldSet(fields)
+	deferred := make(map[string]*graphql.FieldSet)
+	for i, field := range fields {
+		switch field.Name {
+		case "__typename":
+			out.Values[i] = graphql.MarshalString("ScopeCoverageBaseline")
+		case "lineBaselinePct":
+			out.Values[i] = ec._ScopeCoverageBaseline_lineBaselinePct(ctx, field, obj)
+		case "lineDays":
+			out.Values[i] = ec._ScopeCoverageBaseline_lineDays(ctx, field, obj)
+			if out.Values[i] == graphql.Null {
+				out.Invalids++
+			}
+		case "branchBaselinePct":
+			out.Values[i] = ec._ScopeCoverageBaseline_branchBaselinePct(ctx, field, obj)
+		case "branchDays":
+			out.Values[i] = ec._ScopeCoverageBaseline_branchDays(ctx, field, obj)
+			if out.Values[i] == graphql.Null {
+				out.Invalids++
+			}
 		default:
 			panic("unknown field " + strconv.Quote(field.Name))
 		}
@@ -78842,6 +79311,20 @@ func (ec *executionContext) marshalNSavedReportType2ᚖgithubᚗcomᚋfullᚑcha
 		return graphql.Null
 	}
 	return ec._SavedReportType(ctx, sel, v)
+}
+
+func (ec *executionContext) marshalNScopeCoverageBaseline2githubᚗcomᚋfullᚑchaosᚋdevᚑhealthᚑopsᚋinternalᚋqueryapiᚋgraphᚋmodelᚐScopeCoverageBaseline(ctx context.Context, sel ast.SelectionSet, v model.ScopeCoverageBaseline) graphql.Marshaler {
+	return ec._ScopeCoverageBaseline(ctx, sel, &v)
+}
+
+func (ec *executionContext) marshalNScopeCoverageBaseline2ᚖgithubᚗcomᚋfullᚑchaosᚋdevᚑhealthᚑopsᚋinternalᚋqueryapiᚋgraphᚋmodelᚐScopeCoverageBaseline(ctx context.Context, sel ast.SelectionSet, v *model.ScopeCoverageBaseline) graphql.Marshaler {
+	if v == nil {
+		if !graphql.HasFieldError(ctx, graphql.GetFieldContext(ctx)) {
+			ec.Errorf(ctx, "the requested element is null which the schema does not allow")
+		}
+		return graphql.Null
+	}
+	return ec._ScopeCoverageBaseline(ctx, sel, v)
 }
 
 func (ec *executionContext) unmarshalNScopeLevelInput2githubᚗcomᚋfullᚑchaosᚋdevᚑhealthᚑopsᚋinternalᚋqueryapiᚋgraphᚋmodelᚐScopeLevelInput(ctx context.Context, v any) (model.ScopeLevelInput, error) {

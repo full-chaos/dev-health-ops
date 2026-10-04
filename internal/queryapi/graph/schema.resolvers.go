@@ -1114,6 +1114,20 @@ func (r *queryResolver) CoverageBaselines(ctx context.Context, orgID string, end
 	return result, nil
 }
 
+// CoverageScopeBaseline is the resolver for the coverageScopeBaseline field
+// (CHAOS-8541, Go-only). The org is the authorized one: a mismatched orgId is
+// refused before any read (requireOwnOrg), as for coverageBaselines.
+func (r *queryResolver) CoverageScopeBaseline(ctx context.Context, orgID string, endDate graphqldate.Date, repoIds []string, teamIds []string) (*model.ScopeCoverageBaseline, error) {
+	if err := requireOwnOrg(ctx, orgID); err != nil {
+		return nil, err
+	}
+	result, err := coveragebaselines.ResolveScope(ctx, r.ClickHouse, orgID, endDate, coveragebaselines.Scope{RepoIDs: repoIds, TeamIDs: teamIds})
+	if err != nil {
+		return nil, fmt.Errorf("coverageScopeBaseline: %w", err)
+	}
+	return result, nil
+}
+
 // ComplexityTimeseries is the resolver for the complexityTimeseries field.
 func (r *queryResolver) ComplexityTimeseries(ctx context.Context, input model.ComplexityTimeseriesInput) (*model.ComplexityTimeseriesResult, error) {
 	// The span now starts BEFORE the authorization guard (org-scoping span

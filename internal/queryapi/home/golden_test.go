@@ -1,8 +1,35 @@
-// Golden parity test for GET+POST /api/v1/home's org-scope default
-// request -- replays testdata/org_default.json, captured by running the
-// EXISTING Python build_home_response once with every ClickHouse/
-// Postgres reader monkeypatched to a canned dispatcher, org scope,
-// range_days=7 compare_days=7 end_date=2024-01-08.
+// Snapshot test for GET+POST /api/v1/home's org-scope default request:
+// replays testdata/org_default.json for org scope, range_days=7
+// compare_days=7 end_date=2024-01-08.
+//
+// THE FILE IS A GO SNAPSHOT (kind go-generated in testdata.manifest.tsv), and
+// so are team_scoped.json and repo_scoped.json (golden_scoped_test.go). The
+// three tests that read them are regression snapshots, Go against Go: they
+// are NOT parity with Python and they prove nothing about the Python port.
+//
+// Until CHAOS-8178 the three files were Python captures (made as described
+// below). That ticket decided a divergence from the Python port: a served
+// signal value groups the digits of its whole part in threes (formatValue,
+// signals.go). So the Python answer for these inputs is no longer the
+// expected answer. The difference, the same in each of the three files (old
+// Python capture -> Go snapshot):
+//
+//   - signals[]: the Code Churn signal's current_value "1000 loc" is
+//     "1,000 loc". No other value is 1,000 or more, so no other value
+//     changes.
+//
+// The snapshots are written by encoding/json (two-space indent) from the
+// response these tests build, so their BYTES also differ from the Python
+// captures where the two encoders differ (a whole float is "80", not
+// "80.0"; "&" is written as its escape; the keys of a map are sorted). The
+// decoded values are the same but for the one string above. The behaviour
+// itself (the grouping) is pinned by TestFormatValueGroupsTheWholePartInThrees
+// (signals_test.go); the snapshots only keep the whole response of three
+// inputs from changing unseen.
+//
+// HOW THE FILES WERE FIRST MADE (the Python capture, before CHAOS-8178): by
+// running the Python build_home_response once with every ClickHouse/
+// Postgres reader monkeypatched to a canned dispatcher.
 //
 // CAPTURE COMMAND (verbatim, from the ops repo root, this worktree's
 // venv):
@@ -24,8 +51,7 @@
 // (timezone.utc) has no injectable clock in the reference) and was
 // normalized to the fixed instant "2024-01-08T12:00:00Z" post-capture;
 // this test passes that exact instant as BuildResponse's own now
-// parameter, so the replay is byte-exact without editing any computed
-// value.
+// parameter, so the replay needs no edit of any computed value.
 package home
 
 import (

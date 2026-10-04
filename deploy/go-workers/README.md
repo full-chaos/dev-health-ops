@@ -195,12 +195,10 @@ worker to contract 2 together. Concretely:
      `${OPERATIONAL_ORDERING_CONTRACT:-2}`.
    - **Helm**: `goWorkers.operationalOrderingContract` (default `"2"`) feeds
      the migrate Job and every worker group.
-3. The Python `api`/`metrics-api` services are **not** wired here on
-   purpose. `src/dev_health_ops/storage/operational_current.py` reads the
-   same env var for its own reader-shape selection, so once 067 is applied
-   in an environment where those services must see the v2 shape, that is a
-   separate, tracked follow-up — do not fold it into this Go-only wiring
-   without its own review.
+3. The Python `api` and `metrics-api` services no longer exist in
+   `compose.yml`, so there is nothing to wire for them.
+   `src/dev_health_ops/storage/operational_current.py` still reads the same
+   env var for its own reader-shape selection.
 
 ### Health is a work-receipt, not process liveness (CHAOS-4029)
 
@@ -469,37 +467,28 @@ own compose file(s) for exactly which services exist and where.
 > `--format json` piped through `jq 'del(...)'` to strip the fields you
 > don't need before looking at it.
 
-### Bring-up order: the Python schema is a prerequisite, never a `depends_on`
+### Bring-up order: the schema is a prerequisite, never a `depends_on` of a long-running process
 
-**`depends_on` ignores profiles.** A profiled service that declares
-`depends_on: migrate` pulls the *unprofiled* Python migrator into the plan. The
-application migrator advances ordinary schema on a separate branch and leaves
-`0066` pending unless `DEV_HEALTH_ALLOW_CELERY_RIVER_CUTOVER=1`, but a
-deployment carrying that one-shot authorization would still run
-`0066_activate_river_worker_job_routes` before the downstream Go runtimes can
-start. That is precisely the ordering `0066`'s own docstring forbids: routes
-flip to River before any River consumer is available, and envelopes then
-accumulate in `worker_job_outbox` with nothing to execute them.
-
-`go-worker-migrate` therefore does **not** depend on `migrate`, and standing up
-the Go observation path cannot move real traffic as a side effect.
+The one-shot `migrate` service runs `dho migrate upgrade --river`: the
+PostgreSQL head, the standard feature flags, the ClickHouse head, then the River
+schema when `MIGRATION_DATABASE_URI` is set. The one-shot setup services
+(`go-river-provision`, `go-river-migrate`, `go-contractcheck` and the four
+`*-route-activate` services) wait on it. No long-running Go process (worker,
+reconciler, scheduler, stream runner) declares `depends_on: migrate`;
 `tests/test_compose_config.py::test_go_profile_overlay_never_depends_on_python_migrate`
-is the regression barrier.
+pins that. `compose.yml` has no profiles.
 
-Bring the Python application schema current without activating the cutover,
-first:
+Bring the application schema current first, from the `migrate` service (its image
+is `dho`, so the arguments after the service name are `dho` arguments):
 
 ```bash
-# Without the cutover opt-in, ordinary schema advances and 0066 remains pending.
-docker compose run --rm --entrypoint sh migrate -c \
-  'python -m dev_health_ops.cli migrate postgres upgrade'
+docker compose run --rm migrate migrate postgres upgrade
 
 # Confirm the application schema is current before going further.
-docker compose run --rm --entrypoint sh migrate -c \
-  'python -m dev_health_ops.cli migrate postgres status --check'
+docker compose run --rm migrate migrate status --check
 
 # Only then start the Go path.
-docker compose --profile go up -d go-worker-heavy go-reconciler
+docker compose up -d go-worker-heavy go-reconciler
 ```
 
 If the database is behind `0065`, nothing fails loudly at migration time — the
@@ -705,14 +694,12 @@ to `transport='river'` and, per its own docstring, requires Go consumers to
 already be running for every affected queue before it commits. Direct
 `alembic upgrade head` on a database with no Go workers running would silently
 stop background processing for every one of those job kinds. The application
-`migrate postgres` command advances the separate `application_schema` branch
-while leaving the sibling `0066` River activation pending unless
+`migrate postgres upgrade` verb applies the whole head, `0066` included, with
 `DEV_HEALTH_ALLOW_CELERY_RIVER_CUTOVER=1`. Do not use direct
 `alembic upgrade head`: the graph intentionally has multiple heads. Use the
-application migrator, and confirm first that the
-`api`/`migrate` container actually has your target revision's file available
-(root compose mounts `./ops:/app`, so it does if you're on a branch with that
-migration file; it does not against an unmodified `origin/main` checkout).
+application migrator, and confirm first that the `dho` image you run was built
+from a tree that carries your target revision (the `migrate` service builds from
+this checkout unless `DEV_HEALTH_GO_DHO_IMAGE` pins an image).
 
 ### `go-river-provision` is bootstrap-only — never reach it without `go-river-migrate`
 
@@ -771,7 +758,7 @@ anyway, the recovery is to force a fresh migrate run and read the posture
 back, never to hand-edit grants:
 
 ```sh
-docker compose --profile go-workers up -d --no-deps --force-recreate go-river-migrate
+docker compose up -d --no-deps --force-recreate go-river-migrate
 ```
 
 (`--no-deps` so provisioning does not run again first; `--force-recreate`
@@ -813,8 +800,8 @@ it deserves review as its own item, independent of the Go execution path
 this document otherwise covers. Tracked as CHAOS-3143.
 
 What CHAOS-3142 *did* close is the narrower case where bringing up the Go path
-was itself the trigger: `go-worker-migrate` no longer declares
-`depends_on: migrate`, so `--profile go up` cannot pull the Python migrator
+was itself the trigger: no long-running Go service declares
+`depends_on: migrate`, so bringing them up cannot pull the migrator
 into the plan (see "Bring-up order" above, and its regression test). The
 general hazard remains — any `up` that restarts `migrate` for any other reason
 still runs to head — which is why CHAOS-3143 stays open.
@@ -855,6 +842,8 @@ container's actual environment (`docker inspect --format
 file.
 
 ### Daily-metrics compatibility bridge: a child OOM kill inside `api` shows up nowhere `docker`/SigNoz look (CHAOS-4264)
+
+> **Note:** The Python `api` and `metrics-api` services and the bridge child process described in this section no longer exist. This section is a record of the 2026-08-25 incident.
 
 The daily/remaining-metrics compatibility bridge (`internal/jobs/metrics/daily`,
 `internal/jobs/metrics/remaining`) still runs its Python compute as a child
@@ -949,18 +938,16 @@ own request handling as collateral damage.
 
 ### `metrics-api` (CHAOS-4351, historical) -- its routing rationale is retired (CHAOS-6279)
 
-`compose.yml` and `deploy/helm/dev-health`'s chart all still define a
-`metrics-api` service/Deployment (the production Compose file that did too is
-deleted, CHAOS-6950): a second copy of `api` originally created to be the
-target of `go-worker-heavy`'s `--operational-bridge-url` flag. CHAOS-6279
+`metrics-api` was a second copy of `api`, originally created to be the
+target of `go-worker-heavy`'s `--operational-bridge-url` flag. It no longer
+exists in `compose.yml` or in the chart (the production Compose file that
+defined it was deleted, CHAOS-6950). CHAOS-6279
 deletes that flag entirely -- it no longer exists on any Go binary
 (CHAOS-5320 already deleted the Python HTTP bridge it pointed at, and
 CHAOS-6240 deleted the worker_metrics.py routes/subprocess mechanism the
 whole incident history above (CHAOS-4264/CHAOS-4317/CHAOS-4350) was
 bounding). No worker group's command line points at `metrics-api` any
-more, on any renderer. The service/Deployment itself is left in place --
-retiring it is a separate, not-yet-decided follow-up, not this ticket's
-call. The "hand-maintained stacks that wire the bridge via env" guidance
+more, on any renderer. The "hand-maintained stacks that wire the bridge via env" guidance
 and the deploy-5 manual-step note that used to live here are moot along
 with the mechanism they described.
 

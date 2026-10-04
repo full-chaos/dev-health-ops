@@ -22,8 +22,12 @@ Celery to River, verifying them, and rolling back.
 - **The four sync-dispatch kinds** (`dispatch_sync_run`, `finalize_sync_run`,
   `post_sync`, `reference_discovery`). Those live in
   `sync_dispatch_transport_routes`, which `0049` seeds `transport='celery'` and
-  which no migration flips. They move only through
-  `dho workers routes apply`, separately from this procedure.
+  which no application migration flips. Their Celery rollback route is retired
+  (`0132`), so `dho workers routes apply` reads a row that is still on that
+  seed as drift. `dho migrate river` moves such a row to `river` (only a row
+  on `celery` with no rollback route, not paused, with no live outbox claim;
+  every deployed database already holds `river` and is not changed). This
+  procedure does not move them.
 - **The scheduler.** Beat ownership is not transferred here.
 
 ---
@@ -52,12 +56,14 @@ Do not start until every one of these is true. Each is a stop, not a warning.
 4. **The application schema is current, with `0066` still pending.**
 
    ```bash
-   python -m dev_health_ops.cli migrate postgres upgrade
-   python -m dev_health_ops.cli migrate postgres status --check
+   dho migrate postgres upgrade
+   dho migrate status --check
    ```
 
-   Without the opt-in below, this advances the `application_schema` branch and
-   leaves the sibling `0066` River activation pending. **Never run
+   `dho` applies the whole PostgreSQL head in one run, `0066` included, and it
+   refuses to run unless `DEV_HEALTH_ALLOW_CELERY_RIVER_CUTOVER=1` is set. The
+   staged state with `0066` pending belonged to the removed Python migrator.
+   **Never run
    `alembic upgrade head`** — the graph intentionally has multiple heads, and a
    direct run against a database with no Go workers would silently stop
    background processing for every retargeted kind.
@@ -99,14 +105,14 @@ migration run that reaches `0066` applies it.
 ```bash
 # 1. SET — scoped to this command, not exported to a shell you keep using.
 DEV_HEALTH_ALLOW_CELERY_RIVER_CUTOVER=1 \
-  python -m dev_health_ops.cli migrate postgres upgrade
+  dho migrate postgres upgrade
 
 # 2. VERIFY — the river_cutover branch head is now applied.
-python -m dev_health_ops.cli migrate postgres status --check
+DEV_HEALTH_ALLOW_CELERY_RIVER_CUTOVER=1 dho migrate status --check
 ```
 
-Without the variable, `0066` raises rather than applying — that refusal is the
-guard working, not a failure to diagnose.
+Without the variable, `dho` refuses before it connects (`settings_mismatch`) —
+that refusal is the guard working, not a failure to diagnose.
 
 **3. UNSET.** Remove the authorization from the environment, the deployment
 manifest, the CI job, and any shell still open. Leaving it set turns every

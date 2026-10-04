@@ -59,7 +59,7 @@ Use an external secret store or the scheduler's secret mechanism. Never commit p
 
 ## Database identities and migration ordering
 
-For the Python API runtime, `POSTGRES_URI` may use transaction-mode PgBouncer when `PGBOUNCER_TRANSACTION_MODE=true`. Migrations must bypass the transaction pooler.
+For the Go runtime, `POSTGRES_URI` may use transaction-mode PgBouncer when `PGBOUNCER_TRANSACTION_MODE=true`. Migrations must bypass the transaction pooler.
 
 When the Go coexistence foundation is deployed, keep these responsibilities distinct:
 

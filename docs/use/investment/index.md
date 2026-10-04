@@ -4,8 +4,8 @@ summary: Understand where effort appears to be going, how the Investment views d
 content_type: landing
 owner: product-analytics
 source_of_truth:
-  - src/dev_health_ops/api/services/investment.py
-  - src/dev_health_ops/api/queries/investment.py
+  - internal/queryapi/investment/response.go
+  - internal/queryapi/investment/reader.go
   - docs/user-guide/views/investment-mix.md
   - docs/user-guide/journeys/investment-view.md
 applicability: current

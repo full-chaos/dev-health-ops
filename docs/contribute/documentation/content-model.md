@@ -67,7 +67,7 @@ summary: Determine where effort appears to be going and follow the result to evi
 content_type: task-guide
 owner: product-analytics
 source_of_truth:
-  - src/dev_health_ops/api/queries/investment.py
+  - internal/queryapi/investment/reader.go
 applicability: current
 lifecycle: active
 ```

@@ -15,20 +15,15 @@ Public schemas must be generated from the same models that validate requests. Ex
 
 ## Ask Dev v1 contracts
 
-Ask Dev's provider-neutral contracts are generated from the strict Pydantic
-models in `src/dev_health_ops/api/dev/contracts.py`. The checked-in Draft
+Ask Dev's provider-neutral contracts were generated from the strict Pydantic
+models of the Python Dev API, which was removed with the Python api; the Go api
+does not serve this surface. The checked-in Draft
 2020-12 schemas, fixture manifest, and positive and negative goldens live in
 `contracts/ask-dev/v1/`. They cover capabilities, conversations, requests,
 answers, claims, metrics, evidence references and evidence expansion, scope
 resolution, bounded tool messages, feedback, stream events, and safe errors.
 
-Generate and verify the artifacts from the repository root:
-
-```bash
-python -m dev_health_ops.api.dev.export_contracts write
-python -m dev_health_ops.api.dev.export_contracts check
-pytest tests/api/dev/test_contracts.py
-```
+The generator and its test were removed with the Python api, so these artifacts are no longer regenerated from code.
 
 The web repository vendors the exact generated schemas and examples, records
 their source commit and SHA-256 digests, and generates TypeScript declarations

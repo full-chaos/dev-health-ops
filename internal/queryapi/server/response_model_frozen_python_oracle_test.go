@@ -262,6 +262,69 @@ func TestExplainResponseIsThePythonResponsePlusTheDeclaredGoOnlyFields(t *testin
 	}
 }
 
+// withoutExplainGoOnlyFields returns an explain body as the production writer
+// writes it, without its declared Go-only fields (explainGoOnlyResponseFields),
+// so that it can be compared byte for byte with a frozen Python body. The
+// fields are the last ones of the type, so they are the tail of the body:
+// that tail must hold exactly them, in their order, or it is an error -- it
+// never silently drops anything else.
+func withoutExplainGoOnlyFields(body string) (string, error) {
+	jsonName := func(tag string) string {
+		name, _, _ := strings.Cut(strings.TrimSuffix(strings.TrimPrefix(tag, `json:"`), `"`), ",")
+		return name
+	}
+	first := jsonName(explainGoOnlyResponseFields[0].tag)
+	marker := `,"` + first + `":`
+	at := strings.LastIndex(body, marker)
+	if at < 0 || !strings.HasSuffix(body, "}") {
+		return "", fmt.Errorf("explain body has no %s tail: %s", first, body)
+	}
+	tail := "{" + body[at+1:]
+	decoder := json.NewDecoder(strings.NewReader(tail))
+	if _, err := decoder.Token(); err != nil {
+		return "", err
+	}
+	for index, field := range explainGoOnlyResponseFields {
+		key, err := decoder.Token()
+		if err != nil {
+			return "", err
+		}
+		if want := jsonName(field.tag); key != want {
+			return "", fmt.Errorf("explain body tail field %d is %v, want %q: %s", index, key, jsonName(field.tag), tail)
+		}
+		var value json.RawMessage
+		if err := decoder.Decode(&value); err != nil {
+			return "", err
+		}
+	}
+	if closing, err := decoder.Token(); err != nil || closing != json.Delim('}') || decoder.More() {
+		return "", fmt.Errorf("explain body tail holds more than the Go-only fields: %s", tail)
+	}
+	return body[:at] + "}", nil
+}
+
+func TestWithoutExplainGoOnlyFieldsLeavesThePythonShapeOrFails(t *testing.T) {
+	for _, testCase := range []struct{ body, want string }{
+		{`{"metric":"churn","drilldown_links":{"prs":"a"},"repositories":null,"source_url":null}`, `{"metric":"churn","drilldown_links":{"prs":"a"}}`},
+		{`{"metric":"churn","repositories":[{"id":"r","name":null,"value":1.0,"source_url":"https://github.com/a/repositories"}],"source_url":"https://x"}`, `{"metric":"churn"}`},
+	} {
+		got, err := withoutExplainGoOnlyFields(testCase.body)
+		if err != nil || got != testCase.want {
+			t.Fatalf("withoutExplainGoOnlyFields(%s) = %s, %v; want %s", testCase.body, got, err, testCase.want)
+		}
+	}
+	for _, body := range []string{
+		`{"metric":"churn"}`,
+		`{"metric":"churn","repositories":null}`,
+		`{"metric":"churn","repositories":null,"source_url":null,"extra":1}`,
+		`{"metric":"churn","source_url":null,"repositories":null}`,
+	} {
+		if got, err := withoutExplainGoOnlyFields(body); err == nil {
+			t.Fatalf("withoutExplainGoOnlyFields(%s) = %s, want an error", body, got)
+		}
+	}
+}
+
 func responseModelOracleRoutes() map[string]responseModelOracleRoute {
 	plain := func(response any) responseModelOracleRoute { return responseModelOracleRoute{response: response} }
 	sankeyRoute := plain((*sankey.Response)(nil))

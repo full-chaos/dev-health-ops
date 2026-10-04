@@ -241,7 +241,7 @@ func TestFetchMetricValueBindsDateAsString(t *testing.T) {
 	}
 	start := time.Date(2024, 3, 1, 0, 0, 0, 0, time.UTC)
 	end := time.Date(2024, 3, 15, 0, 0, 0, 0, time.UTC)
-	if _, err := reader.fetchMetricValue(context.Background(), "repo_metrics_daily", "total_loc_touched", "sum", start, end, "", nil, "org-1"); err != nil {
+	if _, _, err := reader.fetchMetricValue(context.Background(), "repo_metrics_daily", "total_loc_touched", "sum", start, end, "", nil, "org-1"); err != nil {
 		t.Fatalf("fetchMetricValue: %v", err)
 	}
 	if v, _ := bindingValue(client.lastBindings, "start_day"); v != "2024-03-01" {

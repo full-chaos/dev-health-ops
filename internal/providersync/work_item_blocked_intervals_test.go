@@ -361,6 +361,8 @@ func TestMergeBlockingRelationsKeepsTheRowSyncedLastAndTheStartTimes(t *testing.
 		row("a", "c", 5, ptr(2), ptr(0)), // re-emitted by the unit, which carries no provider time
 		row("a", "b", 9, ptr(3), nil),    // the stored row is NEWER than the unit's
 		row("e", "f", 4, nil, nil),       // stored, with no stored first-seen time
+		row("g", "h", 2, ptr(2), nil),    // two stored copies of one relation:
+		row("g", "h", 6, ptr(2), nil),    // the one synced last is the relation
 	}
 	fresh := []workitemmetrics.BlockingRelation{
 		row("a", "c", 7, nil, nil),
@@ -374,11 +376,12 @@ func TestMergeBlockingRelationsKeepsTheRowSyncedLastAndTheStartTimes(t *testing.
 		row("b", "c", 1, ptr(1), nil),
 		row("d", "e", 7, ptr(7), nil),
 		row("e", "f", 8, nil, nil),
+		row("g", "h", 6, ptr(2), nil),
 	}
 	if got := mergeBlockingRelations(stored, fresh); !reflect.DeepEqual(got, want) {
 		t.Fatalf("merge =\n  %+v\nwant\n  %+v", got, want)
 	}
-	reversedStored := []workitemmetrics.BlockingRelation{stored[3], stored[2], stored[1], stored[0]}
+	reversedStored := []workitemmetrics.BlockingRelation{stored[5], stored[4], stored[3], stored[2], stored[1], stored[0]}
 	reversedFresh := []workitemmetrics.BlockingRelation{fresh[3], fresh[2], fresh[1], fresh[0]}
 	if got := mergeBlockingRelations(reversedStored, reversedFresh); !reflect.DeepEqual(got, want) {
 		t.Fatalf("merge of the same rows in another order =\n  %+v\nwant\n  %+v", got, want)

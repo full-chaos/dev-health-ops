@@ -71,6 +71,14 @@ type dayValueRow struct {
 	Value float64
 }
 
+// metricValue preserves whether the aggregate read found any source row.
+// ClickHouse returns one aggregate row for an empty source, where sum is 0
+// and avg is NaN; neither value proves that the metric was reported.
+type metricValue struct {
+	Value   float64
+	HasData bool
+}
+
 // fetchMetricSeries ports fetch_metric_series (api/queries/metrics.py:
 // 107-152).
 func fetchMetricSeries(ctx context.Context, client QueryClient, table, column string, startDay, endDay time.Time, scopeFilter string, scopeBindings []dhclickhouse.Binding, aggregator, orgID string) ([]dayValueRow, error) {
@@ -124,19 +132,21 @@ func fetchMetricSeries(ctx context.Context, client QueryClient, table, column st
 
 // fetchMetricValue ports fetch_metric_value (api/queries/metrics.py:
 // 155-198).
-func fetchMetricValue(ctx context.Context, client QueryClient, table, column string, startDay, endDay time.Time, scopeFilter string, scopeBindings []dhclickhouse.Binding, aggregator, orgID string) (float64, error) {
+func fetchMetricValue(ctx context.Context, client QueryClient, table, column string, startDay, endDay time.Time, scopeFilter string, scopeBindings []dhclickhouse.Binding, aggregator, orgID string) (metricValue, error) {
 	valueExpr := metricValueExpression(table, column, aggregator)
 	var query string
 	if _, dedup := dedupByComputedAt[table]; dedup {
 		fromClause := metricFromClause(table, column, scopeFilter, "start_day", "end_day")
 		query = fmt.Sprintf(`
         SELECT
+			toInt64(count()) AS row_count,
             %s AS value
         FROM %s
     `, valueExpr, fromClause)
 	} else {
 		query = fmt.Sprintf(`
         SELECT
+			toInt64(count()) AS row_count,
             %s AS value
         FROM %s
         WHERE day >= {start_day:Date} AND day < {end_day:Date}
@@ -152,23 +162,24 @@ func fetchMetricValue(ctx context.Context, client QueryClient, table, column str
 
 	rows, err := client.Query(ctx, query, bindings)
 	if err != nil {
-		return 0, fmt.Errorf("home: fetch_metric_value query: %w", err)
+		return metricValue{}, fmt.Errorf("home: fetch_metric_value query: %w", err)
 	}
 	defer rows.Close()
 
 	if !rows.Next() {
-		return 0, rows.Err()
+		return metricValue{}, rows.Err()
 	}
+	var rowCount int64
 	var value float64
-	if err := rows.Scan(&value); err != nil {
-		return 0, fmt.Errorf("home: fetch_metric_value scan: %w", err)
+	if err := rows.Scan(&rowCount, &value); err != nil {
+		return metricValue{}, fmt.Errorf("home: fetch_metric_value scan: %w", err)
 	}
-	return value, rows.Err()
+	return metricValue{Value: value, HasData: rowCount > 0}, rows.Err()
 }
 
 // fetchBlockedHours ports fetch_blocked_hours (api/queries/metrics.py:
 // 207-248).
-func fetchBlockedHours(ctx context.Context, client QueryClient, startDay, endDay time.Time, scopeFilter string, scopeBindings []dhclickhouse.Binding, orgID string) (float64, []dayValueRow, error) {
+func fetchBlockedHours(ctx context.Context, client QueryClient, startDay, endDay time.Time, scopeFilter string, scopeBindings []dhclickhouse.Binding, orgID string) (float64, []dayValueRow, bool, error) {
 	query := fmt.Sprintf(`
         SELECT
             day,
@@ -199,7 +210,7 @@ func fetchBlockedHours(ctx context.Context, client QueryClient, startDay, endDay
 
 	rows, err := client.Query(ctx, query, bindings)
 	if err != nil {
-		return 0, nil, fmt.Errorf("home: fetch_blocked_hours query: %w", err)
+		return 0, nil, false, fmt.Errorf("home: fetch_blocked_hours query: %w", err)
 	}
 	defer rows.Close()
 
@@ -208,12 +219,12 @@ func fetchBlockedHours(ctx context.Context, client QueryClient, startDay, endDay
 	for rows.Next() {
 		var row dayValueRow
 		if err := rows.Scan(&row.Day, &row.Value); err != nil {
-			return 0, nil, fmt.Errorf("home: fetch_blocked_hours scan: %w", err)
+			return 0, nil, false, fmt.Errorf("home: fetch_blocked_hours scan: %w", err)
 		}
 		total += row.Value
 		out = append(out, row)
 	}
-	return total, out, rows.Err()
+	return total, out, len(out) > 0, rows.Err()
 }
 
 type driverRow struct {

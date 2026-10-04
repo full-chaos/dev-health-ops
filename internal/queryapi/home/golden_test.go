@@ -153,9 +153,9 @@ func orgGoldenHandler(t *testing.T) func(t *testing.T, query string, bindings []
 				return seriesScanner(fx.series), nil
 			}
 			if isCurrentWindow(bindings) {
-				return &fixtureRowScanner{rows: [][]any{{fx.current}}}, nil
+				return &fixtureRowScanner{rows: [][]any{{int64(1), fx.current}}}, nil
 			}
-			return &fixtureRowScanner{rows: [][]any{{fx.previous}}}, nil
+			return &fixtureRowScanner{rows: [][]any{{int64(1), fx.previous}}}, nil
 
 		case strings.Contains(q, "duration_hours") && strings.Contains(q, "FROM work_item_state_durations_daily"):
 			if isCurrentWindow(bindings) {
@@ -190,9 +190,9 @@ func orgGoldenHandler(t *testing.T) func(t *testing.T, query string, bindings []
 				return seriesScanner(fx.series), nil
 			}
 			if isCurrentWindow(bindings) {
-				return &fixtureRowScanner{rows: [][]any{{fx.current}}}, nil
+				return &fixtureRowScanner{rows: [][]any{{int64(1), fx.current}}}, nil
 			}
-			return &fixtureRowScanner{rows: [][]any{{fx.previous}}}, nil
+			return &fixtureRowScanner{rows: [][]any{{int64(1), fx.previous}}}, nil
 		}
 
 		t.Fatalf("unexpected query for org golden fixture:\n%s", query)

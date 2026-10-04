@@ -325,8 +325,18 @@ func TestHomeReaders_SeededRealClickHouse(t *testing.T) {
 		if err != nil {
 			t.Fatalf("fetchMetricValue: %v", err)
 		}
-		if got != 1000 {
-			t.Errorf("sum(total_loc_touched) = %v, want 1000 (deduped: the stale 999999 row must not be summed)", got)
+		if got.Value != 1000 || !got.HasData {
+			t.Errorf("sum(total_loc_touched) = %+v, want value 1000 with data (deduped: the stale 999999 row must not be summed)", got)
+		}
+	})
+
+	t.Run("fetchMetricValue_emptyWindowHasNoData", func(t *testing.T) {
+		got, err := fetchMetricValue(ctx, client, "repo_metrics_daily", "total_loc_touched", startDay.AddDate(10, 0, 0), endDay.AddDate(10, 0, 0), "", nil, "sum", seededOrgID)
+		if err != nil {
+			t.Fatalf("fetchMetricValue: %v", err)
+		}
+		if got.Value != 0 || got.HasData {
+			t.Errorf("empty metric value = %+v, want value 0 with hasData false", got)
 		}
 	})
 
@@ -341,7 +351,7 @@ func TestHomeReaders_SeededRealClickHouse(t *testing.T) {
 	})
 
 	t.Run("fetchBlockedHours_argMaxDedupChangesTheAnswer", func(t *testing.T) {
-		total, rows, err := fetchBlockedHours(ctx, client, startDay, endDay, "", nil, seededOrgID)
+		total, rows, hasData, err := fetchBlockedHours(ctx, client, startDay, endDay, "", nil, seededOrgID)
 		if err != nil {
 			t.Fatalf("fetchBlockedHours: %v", err)
 		}
@@ -350,6 +360,9 @@ func TestHomeReaders_SeededRealClickHouse(t *testing.T) {
 		}
 		if len(rows) != 1 {
 			t.Fatalf("fetchBlockedHours rows = %+v, want exactly one day", rows)
+		}
+		if !hasData {
+			t.Fatal("fetchBlockedHours hasData = false, want true for the stored blocked row")
 		}
 	})
 
@@ -420,8 +433,8 @@ func TestHomeReaders_SeededRealClickHouse(t *testing.T) {
 		if err != nil {
 			t.Fatalf("fetchMetricValue with team scope: %v", err)
 		}
-		if got != 1000 {
-			t.Errorf("fetchMetricValue with team-1's scope = %v, want 1000 (team-1 owns repoID and nothing else; repoID2 carries no ownership row and must not be counted)", got)
+		if got.Value != 1000 || !got.HasData {
+			t.Errorf("fetchMetricValue with team-1's scope = %+v, want value 1000 with data (team-1 owns repoID and nothing else; repoID2 carries no ownership row and must not be counted)", got)
 		}
 	})
 

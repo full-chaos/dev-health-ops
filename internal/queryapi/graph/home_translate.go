@@ -117,12 +117,14 @@ func homeResultFromResponse(resp *home.Response) *model.HomeResult {
 	deltas := make([]model.MetricDelta, 0, len(resp.Deltas))
 	for _, d := range resp.Deltas {
 		deltas = append(deltas, model.MetricDelta{
-			Metric:   d.Metric,
-			Label:    d.Label,
-			Value:    d.Value,
-			Unit:     d.Unit,
-			DeltaPct: d.DeltaPct,
-			Spark:    homeSparkFromResponse(d.Spark),
+			Metric:       d.Metric,
+			Label:        d.Label,
+			Value:        d.Value,
+			Unit:         d.Unit,
+			DeltaPct:     d.DeltaPct,
+			HasData:      d.HasData,
+			HasPriorData: d.HasPriorData,
+			Spark:        homeSparkFromResponse(d.Spark),
 		})
 	}
 
@@ -211,7 +213,10 @@ func homeTilesFromResponse(tiles pyjson.OrderedMap[home.Tile]) []model.HomeTileE
 	return out
 }
 
-func homeConstraintFromResponse(c home.ConstraintCard) *model.ConstraintCard {
+func homeConstraintFromResponse(c *home.ConstraintCard) *model.ConstraintCard {
+	if c == nil {
+		return nil
+	}
 	evidence := make([]model.ConstraintEvidence, 0, len(c.Evidence))
 	for _, e := range c.Evidence {
 		evidence = append(evidence, model.ConstraintEvidence{Label: e.Label, Link: e.Link})

@@ -54,6 +54,7 @@ func computeMetricDelta(ctx context.Context, client QueryClient, spec metricSpec
 	}
 
 	var currentValue, previousValue float64
+	var hasData, hasPriorData bool
 	var series []dayValueRow
 
 	if spec.Metric == "blocked_work" {
@@ -62,11 +63,11 @@ func computeMetricDelta(ctx context.Context, client QueryClient, spec metricSpec
 		wg.Add(2)
 		go func() {
 			defer wg.Done()
-			currentValue, series, errCur = fetchBlockedHours(ctx, client, startDay, endDay, scopeFilter, scopeBindings, orgID)
+			currentValue, series, hasData, errCur = fetchBlockedHours(ctx, client, startDay, endDay, scopeFilter, scopeBindings, orgID)
 		}()
 		go func() {
 			defer wg.Done()
-			previousValue, _, errPrev = fetchBlockedHours(ctx, client, compareStart, compareEnd, scopeFilter, scopeBindings, orgID)
+			previousValue, _, hasPriorData, errPrev = fetchBlockedHours(ctx, client, compareStart, compareEnd, scopeFilter, scopeBindings, orgID)
 		}()
 		wg.Wait()
 		if errCur != nil {
@@ -78,14 +79,15 @@ func computeMetricDelta(ctx context.Context, client QueryClient, spec metricSpec
 	} else {
 		var wg sync.WaitGroup
 		var errCur, errPrev, errSeries error
+		var current, previous metricValue
 		wg.Add(3)
 		go func() {
 			defer wg.Done()
-			currentValue, errCur = fetchMetricValue(ctx, client, spec.Table, spec.Column, startDay, endDay, scopeFilter, scopeBindings, spec.Aggregator, orgID)
+			current, errCur = fetchMetricValue(ctx, client, spec.Table, spec.Column, startDay, endDay, scopeFilter, scopeBindings, spec.Aggregator, orgID)
 		}()
 		go func() {
 			defer wg.Done()
-			previousValue, errPrev = fetchMetricValue(ctx, client, spec.Table, spec.Column, compareStart, compareEnd, scopeFilter, scopeBindings, spec.Aggregator, orgID)
+			previous, errPrev = fetchMetricValue(ctx, client, spec.Table, spec.Column, compareStart, compareEnd, scopeFilter, scopeBindings, spec.Aggregator, orgID)
 		}()
 		go func() {
 			defer wg.Done()
@@ -101,6 +103,8 @@ func computeMetricDelta(ctx context.Context, client QueryClient, spec metricSpec
 		if errSeries != nil {
 			return MetricDelta{}, errSeries
 		}
+		currentValue, previousValue = current.Value, previous.Value
+		hasData, hasPriorData = current.HasData, previous.HasData
 	}
 
 	currentValue = safeFloat(currentValue)
@@ -109,12 +113,14 @@ func computeMetricDelta(ctx context.Context, client QueryClient, spec metricSpec
 	pctChange := safeFloat(deltaPct(currentValue, previousValue))
 
 	return MetricDelta{
-		Metric:   spec.Metric,
-		Label:    spec.Label,
-		Value:    safeFloat(spec.Transform(currentValue)),
-		Unit:     spec.Unit,
-		DeltaPct: pctChange,
-		Spark:    spark,
+		Metric:       spec.Metric,
+		Label:        spec.Label,
+		Value:        safeFloat(spec.Transform(currentValue)),
+		Unit:         spec.Unit,
+		DeltaPct:     pctChange,
+		HasData:      hasData,
+		HasPriorData: hasPriorData,
+		Spark:        spark,
 	}, nil
 }
 
@@ -217,6 +223,9 @@ func BuildResponse(ctx context.Context, chClient QueryClient, pgClient PGQueryCl
 	}
 
 	dataConfidence := BuildDataConfidence(coverage, sources)
+	if !hasCurrentMetricData(deltas) {
+		return noDataResponse(lastIngested, latestSuccessfulSyncAt, coverage, sources, deltas, reworkAllocation, dataConfidence), nil
+	}
 	metricSignals := BuildMetricSignals(deltas, f, dataConfidence)
 
 	var recommendationRows []RecommendationRow
@@ -343,13 +352,58 @@ func BuildResponse(ctx context.Context, chClient QueryClient, pgClient PGQueryCl
 		ReworkThemeAllocation: reworkAllocation,
 		Summary:               summary,
 		Tiles:                 tiles(),
-		Constraint:            constraint,
+		Constraint:            &constraint,
 		Events:                events,
 		HealthState:           healthState,
 		Signals:               signals,
 		LimitingFactor:        limitingFactor,
 		DataConfidence:        dataConfidence,
 	}, nil
+}
+
+func hasCurrentMetricData(deltas []MetricDelta) bool {
+	for _, delta := range deltas {
+		if delta.HasData {
+			return true
+		}
+	}
+	return false
+}
+
+func noDataResponse(lastIngested *time.Time, latestSuccessfulSyncAt *time.Time, coverage map[string]float64, sources map[string]string, deltas []MetricDelta, reworkAllocation []ReworkThemeAllocation, dataConfidence DataConfidence) *Response {
+	if deltas == nil {
+		deltas = []MetricDelta{}
+	}
+	if reworkAllocation == nil {
+		reworkAllocation = []ReworkThemeAllocation{}
+	}
+	return &Response{
+		Freshness: Freshness{
+			LastIngestedAt:         (*pytime.NaiveDateTime)(lastIngested),
+			LatestSuccessfulSyncAt: (*MicroDateTime)(latestSuccessfulSyncAt),
+			Sources:                sources,
+			Coverage: Coverage{
+				ReposCoveredPct:          coverage["repos_covered_pct"],
+				PRsLinkedToIssuesPct:     coverage["prs_linked_to_issues_pct"],
+				IssuesWithCycleStatesPct: coverage["issues_with_cycle_states_pct"],
+			},
+		},
+		Deltas:                deltas,
+		ReworkThemeAllocation: reworkAllocation,
+		Summary:               []SummarySentence{},
+		Tiles:                 tiles(),
+		Constraint:            nil,
+		Events:                []EventItem{},
+		HealthState: HealthState{
+			Status: "no_data",
+			AsOf:   (*pytime.NaiveDateTime)(lastIngested),
+		},
+		Signals: []Signal{},
+		LimitingFactor: LimitingFactor{
+			Confidence: "low",
+		},
+		DataConfidence: dataConfidence,
+	}
 }
 
 // topDeltaByMagnitude ports `max(deltas, key=lambda d: abs(d.delta_pct),
@@ -360,14 +414,19 @@ func topDeltaByMagnitude(deltas []MetricDelta) (MetricDelta, bool) {
 	if len(deltas) == 0 {
 		return MetricDelta{}, false
 	}
-	best := deltas[0]
-	bestMag := absFloat(best.DeltaPct)
-	for _, d := range deltas[1:] {
+	var best MetricDelta
+	var bestMag float64
+	found := false
+	for _, d := range deltas {
+		if !d.HasData {
+			continue
+		}
 		mag := absFloat(d.DeltaPct)
-		if mag > bestMag {
+		if !found || mag > bestMag {
 			best = d
 			bestMag = mag
+			found = true
 		}
 	}
-	return best, true
+	return best, found
 }

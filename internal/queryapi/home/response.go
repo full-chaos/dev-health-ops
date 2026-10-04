@@ -47,12 +47,14 @@ type SparkPoint struct {
 
 // MetricDelta is the wire shape of MetricDelta (schemas.py:27-33).
 type MetricDelta struct {
-	Metric   string       `json:"metric"`
-	Label    string       `json:"label"`
-	Value    float64      `json:"value"`
-	Unit     string       `json:"unit"`
-	DeltaPct float64      `json:"delta_pct"`
-	Spark    []SparkPoint `json:"spark"`
+	Metric       string       `json:"metric"`
+	Label        string       `json:"label"`
+	Value        float64      `json:"value"`
+	Unit         string       `json:"unit"`
+	DeltaPct     float64      `json:"delta_pct"`
+	HasData      bool         `json:"has_data"`
+	HasPriorData bool         `json:"has_prior_data"`
+	Spark        []SparkPoint `json:"spark"`
 }
 
 // ReworkThemeAllocation is the wire shape of ReworkThemeAllocation
@@ -169,7 +171,7 @@ type Response struct {
 	ReworkThemeAllocation []ReworkThemeAllocation `json:"rework_theme_allocation"`
 	Summary               []SummarySentence       `json:"summary"`
 	Tiles                 pyjson.OrderedMap[Tile] `json:"tiles"`
-	Constraint            ConstraintCard          `json:"constraint"`
+	Constraint            *ConstraintCard         `json:"constraint"`
 	Events                []EventItem             `json:"events"`
 	HealthState           HealthState             `json:"health_state"`
 	Signals               []Signal                `json:"signals"`

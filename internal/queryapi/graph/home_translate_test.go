@@ -102,7 +102,7 @@ func TestHomeResultFromResponse_MapsTheOriginalThreeFields(t *testing.T) {
 		},
 		Deltas: []home.MetricDelta{
 			{
-				Metric: "throughput", Label: "Throughput", Value: 42, Unit: "units", DeltaPct: 12.5,
+				Metric: "throughput", Label: "Throughput", Value: 42, Unit: "units", DeltaPct: 12.5, HasData: true,
 				Spark: []home.SparkPoint{{TS: pytime.NaiveDateTime(time.Date(2024, 1, 7, 0, 0, 0, 0, time.UTC)), Value: 40}},
 			},
 		},
@@ -133,6 +133,9 @@ func TestHomeResultFromResponse_MapsTheOriginalThreeFields(t *testing.T) {
 	if d.Metric != "throughput" || d.Label != "Throughput" || d.Value != 42 || d.Unit != "units" || d.DeltaPct != 12.5 {
 		t.Errorf("Deltas[0] = %+v, want the mapped MetricDelta", d)
 	}
+	if !d.HasData || d.HasPriorData {
+		t.Errorf("Deltas[0] data flags = current:%t prior:%t, want current:true prior:false", d.HasData, d.HasPriorData)
+	}
 	if len(d.Spark) != 1 || d.Spark[0].Value != 40 || d.Spark[0].Ts != "2024-01-07T00:00:00" {
 		t.Errorf("Deltas[0].Spark = %+v, want one point at 2024-01-07T00:00:00 value 40", d.Spark)
 	}
@@ -161,6 +164,9 @@ func TestHomeResultFromResponse_NilLastIngestedAtStaysNil(t *testing.T) {
 	if got.ReworkThemeAllocation == nil {
 		t.Error("ReworkThemeAllocation must be an empty slice, not nil, for the same reason")
 	}
+	if got.Constraint != nil {
+		t.Errorf("Constraint = %+v, want nil when the response has no constraint", got.Constraint)
+	}
 }
 
 // TestHomeResultFromResponse_MapsEveryFieldAgainstTheRESTShape is the
@@ -184,7 +190,7 @@ func TestHomeResultFromResponse_MapsEveryFieldAgainstTheRESTShape(t *testing.T) 
 			Coverage:               home.Coverage{ReposCoveredPct: 80, PRsLinkedToIssuesPct: 60, IssuesWithCycleStatesPct: 40},
 		},
 		Deltas: []home.MetricDelta{
-			{Metric: "throughput", Label: "Throughput", Value: 42, Unit: "units", DeltaPct: 12.5,
+			{Metric: "throughput", Label: "Throughput", Value: 42, Unit: "units", DeltaPct: 12.5, HasData: true, HasPriorData: true,
 				Spark: []home.SparkPoint{{TS: pytime.NaiveDateTime(time.Date(2024, 1, 7, 0, 0, 0, 0, time.UTC)), Value: 40}}},
 		},
 		ReworkThemeAllocation: []home.ReworkThemeAllocation{
@@ -194,7 +200,7 @@ func TestHomeResultFromResponse_MapsEveryFieldAgainstTheRESTShape(t *testing.T) 
 			{ID: "s1", Text: "Throughput is up.", EvidenceLink: "/evidence/s1"},
 		},
 		Tiles: tiles,
-		Constraint: home.ConstraintCard{
+		Constraint: &home.ConstraintCard{
 			Title: "Reviewer capacity", Claim: "Reviews are the bottleneck.",
 			Evidence:    []home.ConstraintEvidence{{Label: "Review latency", Link: "/evidence/c1"}},
 			Experiments: []string{"add-reviewer"},
@@ -263,6 +269,13 @@ func TestHomeResultFromResponse_MapsEveryFieldAgainstTheRESTShape(t *testing.T) 
 		{"freshness.coverage.repos_covered_pct", "freshness.coverage.reposCoveredPct"},
 		{"freshness.coverage.prs_linked_to_issues_pct", "freshness.coverage.prsLinkedToIssuesPct"},
 		{"freshness.coverage.issues_with_cycle_states_pct", "freshness.coverage.issuesWithCycleStatesPct"},
+		{"deltas.0.metric", "deltas.0.metric"},
+		{"deltas.0.label", "deltas.0.label"},
+		{"deltas.0.value", "deltas.0.value"},
+		{"deltas.0.unit", "deltas.0.unit"},
+		{"deltas.0.delta_pct", "deltas.0.deltaPct"},
+		{"deltas.0.has_data", "deltas.0.hasData"},
+		{"deltas.0.has_prior_data", "deltas.0.hasPriorData"},
 		{"summary.0.id", "summary.0.id"},
 		{"summary.0.text", "summary.0.text"},
 		{"summary.0.evidence_link", "summary.0.evidenceLink"},

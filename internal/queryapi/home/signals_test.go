@@ -95,9 +95,9 @@ func TestRecommendationSignalRequiresTitle(t *testing.T) {
 
 func TestSelectConstraintPicksHighestDeltaPct(t *testing.T) {
 	deltas := []MetricDelta{
-		{Metric: "a", Label: "A", DeltaPct: -10},
-		{Metric: "b", Label: "B", DeltaPct: 30},
-		{Metric: "c", Label: "C", DeltaPct: 5},
+		{Metric: "a", Label: "A", DeltaPct: -10, HasData: true},
+		{Metric: "b", Label: "B", DeltaPct: 30, HasData: true},
+		{Metric: "c", Label: "C", DeltaPct: 5, HasData: true},
 	}
 	got := SelectConstraint(deltas)
 	if got.Metric != "b" {
@@ -158,7 +158,7 @@ func TestGroupThousands(t *testing.T) {
 
 // The signal a caller reads carries the grouped value, current and prior.
 func TestBuildMetricSignalsServesGroupedValues(t *testing.T) {
-	deltas := []MetricDelta{{Metric: "churn", Label: "Code Churn", Unit: "loc", Value: 3387254, DeltaPct: 25}}
+	deltas := []MetricDelta{{Metric: "churn", Label: "Code Churn", Unit: "loc", Value: 3387254, DeltaPct: 25, HasData: true}}
 	signals := BuildMetricSignals(deltas, Filters{Scope: ScopeFilter{Level: "org"}}, DataConfidence{})
 	if len(signals) != 1 {
 		t.Fatalf("signals = %d, want 1", len(signals))

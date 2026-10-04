@@ -48,10 +48,12 @@ import (
 // exactly the "somebody typed a sha" provenance the proof runner refuses.
 var ErrRepointBuildMismatch = errors.New("goapiproof: re-point build does not match the running build")
 
-// ErrRepointNoRows is returned when no routing row exists at the schema
-// digest. It is an error rather than an empty success for the reason the
-// whole subsystem exists: "the registry is unreachable or empty" and
-// "every row is already correct" must not read alike.
+// ErrRepointNoRows is returned when routing rows exist and none of them at
+// the schema digest. It is an error rather than an empty success for the
+// reason the whole subsystem exists: "every row sits at a digest nothing
+// reads" and "every row is already correct" must not read alike. A table with
+// no row at any digest is ErrRoutingTableEmpty instead, which is not a
+// refusal.
 var ErrRepointNoRows = errors.New("goapiproof: no routing rows at this schema digest")
 
 // ErrRepointUnknownOperation reports an --operations name with no row at
@@ -300,6 +302,16 @@ func repointOnce(ctx context.Context, pool *pgxpool.Pool, request RepointRequest
 		return nil, err
 	}
 	if len(surveyed) == 0 {
+		// The same split `carry` makes (CHAOS-8543): no row at ANY digest is a
+		// valid state with nothing to re-point; rows that exist only at other
+		// digests are the refusal this always was.
+		empty, err := routingTableEmpty(ctx, tx)
+		if err != nil {
+			return nil, err
+		}
+		if empty {
+			return nil, ErrRoutingTableEmpty
+		}
 		return nil, fmt.Errorf("%w: %s", ErrRepointNoRows, request.SchemaDigest)
 	}
 	surveyedByKey := make(map[rowKey]routingRow, len(surveyed))

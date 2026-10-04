@@ -70,17 +70,16 @@ with its producer, or a family/dataset gains or loses a row without the doc bein
 hand-curated citation/CLI-verb row on this page was read against. The generated tables always reflect
 whatever their producer files say at build time, independent of this date.
 
-**This stamp is now enforced.** `ci/check_migration_matrix.sh freshness` runs on EVERY pull request --
-unconditionally, before any relevance decision, because a page rots when nobody touches it and no path
-filter can fire on an absence. Until 2026-09-09 nothing read this line at all: it had been sitting at a
-2026-09-04 commit through roughly forty merges while the page read as current.
+**This page is a record of the finished api migration (CHAOS-8620).** No age budget applies to its stamps; a
+refresh is done by hand with a live stack, never by CI. `ci/check_migration_matrix.sh stamp` still runs on every
+pull request and checks only that the stamps are real commits (shape and ancestry), not how old they are.
 
-The gate checks **two** shas, for the two halves of the page:
+The check covers **two** shas, for the two halves of the page:
 
 | Sha | Whose claim | Checked for |
 |---|---|---|
-| **Last verified** (this line) | a human's, about the hand-curated citation and CLI-verb rows | 40-hex, ancestor of `HEAD`, age <= `MATRIX_MAX_AGE_DAYS` (default 7) |
-| `ops_sha` in [`last-render.json`](https://github.com/full-chaos/dev-health-ops/blob/main/contracts/migration-status/v1/last-render.json) | the tool's, about the generated cells | same three, and it is written by `-render` itself, so it cannot be typed by hand |
+| **Last verified** (this line) | a human's, about the hand-curated citation and CLI-verb rows | 40-hex, ancestor of `HEAD` |
+| `ops_sha` in [`last-render.json`](https://github.com/full-chaos/dev-health-ops/blob/main/contracts/migration-status/v1/last-render.json) | the tool's, about the generated cells | same two, and it is written by `-render` itself, so it cannot be typed by hand |
 
 `ops_sha` is the **merge-base with main** at render time -- the last main commit the render observed -- not
 the commit `-render` ran on. That distinction is load-bearing: a squash merge replaces a branch's commits
@@ -90,8 +89,7 @@ it was fixed. The merge-base survives the squash and still bounds staleness, bec
 long-stale branch carries a correspondingly old merge-base. The commit `-render` actually ran on is recorded
 beside it as `render_commit`, for the audit trail, and is deliberately never ancestry-checked.
 
-Re-verifying the generated half is one command plus a commit, and every staleness failure prints it verbatim
-along with the age in days:
+Re-verifying the generated half is by hand, needs a live Postgres and a fleet file, and is optional:
 
 ```bash
 go run ./cmd/dev-health-migration-matrix -render -root .

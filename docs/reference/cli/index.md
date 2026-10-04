@@ -1,50 +1,49 @@
-# CLI Reference
+# `dho` CLI Reference
 
-Complete reference for the dev-health-ops command-line interface.
+Complete reference for `dho`, the command-line interface of dev-health-ops.
 
 ---
 
 ## Overview
 
-The operator CLI is `dho` (Go). The Python `dev-hops` CLI (module `dev_health_ops.cli`) is being deleted (CHAOS-6469); verbs below that show `dev-hops` still run only until their `dho` port lands, and a `dho` equivalent is named where one exists. Command groups:
+`dho` is one Go binary. `dho help` lists the commands, and `dho <command> --help` prints the flags and the environment of one command. Command groups:
 
-- `sync` : ingest provider data (git, prs, blame, cicd, deployments, incidents, security, tests, teams) -- `work-items` is native-only now (see `sync work-items` below)
-- `teams` : team catalog operations (ClickHouse-backed sync)
-- `metrics` — compute analytics (daily, rebuild, dora, complexity, capacity, release-impact, validate-flags, compounding-risk)
-- `audit` — diagnostics (completeness, schema, perf, coverage)
-- `fixtures` — synthetic/demo data (generate, validate, product-telemetry)
-- `work-graph` / `investment` / `recommendations` — no `dev-hops` verb: the native Go jobs compute them; `dho workers` enqueues them (see the Work Graph, Investment and Recommendations sections below)
-- `admin` — users, orgs, licenses, feature flags, billing plans, feature bundles
-- `billing` — Stripe reconciliation
-- `ai` — AI governance allowlist
-- `migrate` — PostgreSQL (Alembic) and ClickHouse schema migrations
-- `api` — run the REST/GraphQL API server
-- `maintenance` — operational cleanup
+- `sync` : ingest provider data (git, prs, blame, cicd, deployments, incidents, security, tests) and sync team catalogs (teams). Work items are synced by the native Go provider-sync route, with no command (see `sync work-items` below)
+- `metrics` : `metrics validate-flags` is the read-only diagnostic; metric runs are dispatched with `dho workers metrics ...`
+- `fixtures` : frozen synthetic data for CI and local work (generate, product-telemetry, load-synthetic, finalize-synthetic-sync)
+- `work-graph` / `investment` / `recommendations` : no `dho` verb of their own: native Go jobs compute them, and `dho workers` enqueues them (see the Work Graph, Investment and Recommendations sections below)
+- `admin` : users, orgs, licenses, feature flags, billing plans, feature bundles, LLM settings
+- `billing` : Stripe reconciliation
+- `ai` : AI governance allowlist
+- `migrate` : PostgreSQL and ClickHouse schema migrations
+- `api`, `query-api`, `worker`, `scheduler`, `reconciler`, `stream-runner` : the long-running services
+- `workers` : the operator CLI for the Go job runtime
+- `backfill` : historical backfill
+- `maintenance` : operational cleanup
+- `service-credentials`, `mint` : internal service credentials and credential minting
+- `push` : customer push ingestion client
+- `goapi`, `contracts` : Go API rollout and job-contract operator verbs
 
-### Verbs that still run as `dev-hops` (until CHAOS-6469)
+### Running a verb
 
-These verbs have no `dho` port at this commit, so their examples below keep the Python form; the page is not rewritten for them until the port lands or the verb is removed: `audit completeness|schema|perf|coverage` (frozen, CHAOS-6894), `fixtures validate` and `fixtures world|world-snapshot|world-restore` (CHAOS-6885, CHAOS-6886), `metrics daily|compounding-risk|complexity` (the work runs as Go jobs; no operator verb), `api` (the Go service is `dho api`, with different flags), `workers inspect` and `workers start-*` (the Go equivalent is `dho worker` / `dho workers`), and `sync teams --path` (the team-mapping file mode), `sync <provider>` without `--org` and every `sync teams` form (the Go verb refuses a sync with no organization, CHAOS-6710, and takes only jira, github, gitlab or linear for teams), `fixtures generate` (the Go verb loads three frozen worlds only), and `migrate postgres|clickhouse` (the Go verbs refuse unless the environment matches the baseline: `DEV_HEALTH_ALLOW_CELERY_RIVER_CUTOVER`, native ClickHouse protocol on 9000, not the HTTP port 8123; their examples need a run-checked rewrite). Every other `dev-hops <verb>` of this page now reads `dho <verb>`, with the verb path and flags checked against `dho <verb> --help`; the examples were not executed.
-
-### Inline execution and its enforcement gaps
-
-Bare CLI commands run inline, executing immediately in your terminal session. However, several commands have argument-enforcement gaps (CHAOS-2475). These operations require credentials or inputs that the CLI doesn't enforce at startup. Running them inline without these inputs can lead to silent failures or incomplete runs.
-
-The advice that used to sit here -- trigger the equivalent Celery job instead -- no longer applies: there is no Celery runtime to trigger. The Go worker fleet runs this work on its own schedules, in an environment where the same credentials and configuration are validated before a job is admitted. Prefer letting the scheduled run do the work, and treat an inline invocation as a diagnostic you supply every input to yourself. See [Run workers and jobs](../../operate/run/workers-and-jobs.md) for the Go worker, scheduler, reconciler, and stream-runner processes.
+`dho` verbs run in your terminal session and exit when they finish. The Go worker fleet runs scheduled work on its own schedules, in an environment where credentials and configuration are validated before a job is admitted. Prefer letting the scheduled run do the work, and treat an inline invocation as a diagnostic you supply every input to yourself. See [Run workers and jobs](../../operate/run/workers-and-jobs.md) for the Go worker, scheduler, reconciler, and stream-runner processes.
 
 ---
 
 ## Global Arguments
 
+Global flags go **after** the verb (`dho sync git --org <org-id> ...`).
+
 | Argument | Environment Variable | Description |
 |----------|---------------------|-------------|
 | `--db` | `POSTGRES_URI` | PostgreSQL connection (semantic: users, settings) |
 | `--analytics-db` | `CLICKHOUSE_URI` | ClickHouse connection (analytics: metrics, data) |
+| `--org` | `ORG_ID` | Organization id. If it is not set, the verb uses the first organization in PostgreSQL |
 
-`--db` and `--analytics-db` are **not** aliases. They point to different databases serving different roles (see Dual-Database Architecture below). If `POSTGRES_URI` is not set, `--db` falls back to `DATABASE_URI`.
+`--db` and `--analytics-db` are **not** aliases. They point to different databases serving different roles (see Dual-Database Architecture below). If `POSTGRES_URI` is not set, `--db` falls back to `DATABASE_URI`. Each verb's `--help` lists the flags and environment variables it reads.
 
-Subcommands that write analytics accept `--sink` to select the output backend. Legacy values (`mongo`, `sqlite`, `postgres`, `both`) are rejected immediately with a migration message. ClickHouse is the only supported analytics backend.
+Verbs that write analytics accept `--sink`; ClickHouse is the only supported analytics backend, and any other value is refused.
 
-> **Caveat:** Some subcommands (e.g., `audit completeness`, `audit coverage`) define their own `--db` flag that accepts an **analytics** (ClickHouse) connection string, overriding the global `--db` meaning for that subcommand. Check individual subcommand docs below for the expected connection type.
 
 ### Dual-Database Architecture
 
@@ -61,54 +60,55 @@ See [Data and storage boundaries](../../contribute/architecture/data-and-storage
 
 | Backend | Format | Example |
 |---------|--------|---------|
-| PostgreSQL | `postgresql+asyncpg://` | `postgresql+asyncpg://localhost:5555/postgres` |
-| ClickHouse | `clickhouse://` | `clickhouse://localhost:8123/default` |
+| PostgreSQL | `postgresql://` | `postgresql://postgres:postgres@localhost:5555/postgres` |
+| ClickHouse (native protocol) | `clickhouse://` | `clickhouse://ch:ch@localhost:9000/default` |
+
+The `dho` verbs that read ClickHouse speak the native protocol (port 9000 on the local compose stack). `fixtures generate` also accepts a DSN on the HTTP port (8123, or 8443 with TLS) and speaks HTTP to it.
 
 ---
 
 ## Input Validation (Preflight)
 
-Before a subcommand runs, the CLI validates that the inputs it actually needs are present. Commands that require a database connection or an organization id **fail fast** with an argparse usage error (**exit code 2**) that names exactly what is missing — instead of failing deep inside the handler with a logged error or a traceback.
-
-These inputs are supplied through global flags or environment variables (`--analytics-db`/`CLICKHOUSE_URI`, `--db`/`POSTGRES_URI`, `--org`/`ORG_ID`), so they cannot be marked `required` on individual subparsers. The preflight closes that gap centrally.
+Before a verb runs, `dho` checks that the inputs it needs are present. A missing required input ends the verb with exit code **2** and a message that names what is missing, and nothing runs:
 
 ```bash
-$ dev-hops metrics compounding-risk        # no CLICKHOUSE_URI / org configured
-usage: dev-health-ops metrics compounding-risk [-h] [--since SINCE | --backfill BACKFILL] ...
-dev-health-ops metrics compounding-risk: error: missing required input(s):
-  - ClickHouse analytics database — pass --analytics-db or set CLICKHOUSE_URI (...)
-  - organization id — pass --org or set ORG_ID (could not auto-resolve ...)
+$ dho sync git --provider github
+dho sync git: missing required input(s): ClickHouse analytics database: pass --analytics-db or set CLICKHOUSE_URI
 ```
 
-Each affected command also lists its requirements at the bottom of `--help`:
-
-```bash
-$ dev-hops metrics compounding-risk --help
-...
-Requires: ClickHouse (--analytics-db / CLICKHOUSE_URI), organization (--org / ORG_ID).
-```
+When a preflight check says no (for example a refused environment or a refused parameter set), the verb exits with code **3** and writes nothing. See [Exit Codes](#exit-codes).
 
 **Requirement matrix:**
 
 | Requirement | Commands |
 |-------------|----------|
-| ClickHouse (`--analytics-db` / `CLICKHOUSE_URI`) | `sync git`, `sync prs`, `sync blame`, `sync cicd`, `sync deployments`, `sync incidents`, `sync security`, `sync tests`, `sync teams`; `metrics validate-flags`, `metrics compounding-risk` (+org); `audit perf`, `audit schema`; `ai allowlist list/set` (+org); `migrate clickhouse` (bare + `upgrade`/`status`/`repair`) |
-| PostgreSQL (`--db` / `POSTGRES_URI`) | `billing reconcile`; `migrate postgres` (bare + `upgrade`/`downgrade`/`current`); `migrate configs-to-integrations` (one-time child-config -> integration data migration; `--dry-run` to preview); legacy `migrate upgrade`/`downgrade`/`current` |
-| Organization (`--org` / `ORG_ID`) | `metrics compounding-risk`, `backfill run`, `ai allowlist list/set` |
+| ClickHouse (`--analytics-db` / `CLICKHOUSE_URI`) | `sync git`, `sync prs`, `sync blame`, `sync cicd`, `sync deployments`, `sync incidents`, `sync security`, `sync tests`, `sync teams`; `metrics validate-flags`; `ai allowlist list/set` (+org); `migrate clickhouse upgrade/status/repair`; `fixtures generate` (`--sink`) |
+| PostgreSQL (`MIGRATION_DATABASE_URI`, else `POSTGRES_URI`) | `admin ...`; `billing reconcile`; `maintenance ...`; `service-credentials ...`; `migrate postgres ...` |
+| Organization (`--org` / `ORG_ID`) | `ai allowlist list/set`, `sync teams` |
 
-> The org id auto-resolves from the first organization in PostgreSQL when `--org`/`ORG_ID` are omitted; the preflight only fails when no org can be resolved.
+> The org id of the `sync <target>` verbs falls back to the first organization in PostgreSQL when `--org` and `ORG_ID` are omitted.
 
-> Read-only Alembic commands that do not open a connection (`migrate [postgres] heads`, `migrate [postgres] history`) are intentionally **not** gated. Commands that declare their own `required=True` flag (e.g. `audit completeness`/`coverage` `--db`, `fixtures validate` `--sink`) keep using argparse's own required-argument error.
+> Read-only commands that do not open a connection (`migrate postgres heads`, `migrate postgres history`) need no environment.
 
 ---
 
 ## Sync Commands
 
-> ⚠️ **Warning (CHAOS-2475):** Sync commands run inline and require provider credentials (such as `GITHUB_TOKEN`, `GITLAB_TOKEN`, `JIRA_EMAIL`, `JIRA_API_TOKEN`, or `LINEAR_API_KEY`) that the CLI doesn't enforce at startup. Running them inline without these inputs can cause silent failures.
+> **Warning:** `dho sync <target>` runs in your terminal session and needs provider credentials (such as `GITHUB_TOKEN`, `GITLAB_TOKEN`, or the GitHub App flags). Running it without them ends the verb with a message that names the missing credential.
 >
-> **Interim Workaround:** Trigger the sync via `POST /api/v1/admin/sync-configs/{config_id}/trigger`. The API plans the `SyncRun` and commits a durable reference-discovery wakeup; the reconciler publishes it through the active sync-dispatch route.
+> **Scheduled alternative:** trigger the sync via `POST /api/v1/admin/sync-configs/{config_id}/trigger`. The API plans the `SyncRun` and commits a durable reference-discovery wakeup; the reconciler publishes it through the active sync-dispatch route.
 
-> **`dho sync <target>` (Go):** `dho sync git|prs|blame|cicd|deployments|incidents|security|tests` accepts and refuses the same command lines as the `dev-hops` verbs below (flags, `--since`/`--before`/`--backfill` window, `--sink`, credential rules, exit codes: 0 ok, 1 refused by the verb or failed, 2 usage error, 3 not available in dho yet). Today `dho` runs, in-process and without a scheduler, `git` (repository metadata, commit stats, commits, files), `prs`, `blame`, `cicd`, `tests`, `deployments`, `security` and, for GitLab only, `incidents` (GitHub has no native incident source: the verb exits 1 with `dev-hops`'s own message) for a single GitHub repository (`--owner/--repo`) or GitLab project (`--project-id`), or for every repository or project a `--search PATTERN` batch lists (`--group`, `--max-repos`, `--batch-size`, `--max-concurrent`), through the same provider routes the worker runs; give a credential with `--auth` (or `GITHUB_TOKEN`/`GITLAB_TOKEN`, or the GitHub App flags) and an organization with `--org` (or `ORG_ID`). Like `dev-hops`, `dho` reads PostgreSQL for what is left out: with no `--org`/`ORG_ID` it uses the oldest organization (`--db`, `POSTGRES_URI` or `DATABASE_URI` names the database), and for GitHub with no token or App flags it uses that organization's `default` GitHub integration credential (decrypted with `SETTINGS_ENCRYPTION_KEY`/`SETTINGS_ENCRYPTION_SALT`); when either read finds nothing usable the verb ends with `dev-hops`'s own `Missing GitHub credentials` message, and a database URL the SQLAlchemy async engine cannot open fails as `dev-hops` does. Two differences: with no organization at all and a token given, `dev-hops` goes on with no organization while `dho` exits **3** and names the ticket; a stored credential field that is not a JSON string counts as no credential. `--provider local` runs `git`, `prs` and `blame` on a local repository (`--repo-path`, default `.`) with the `git` binary instead of GitPython: the repository row (its id is the digest of the origin remote URL, or of the absolute path; `REPO_UUID` overrides it), the commits, the per-file commit stats and the merged and open pull requests inferred from merge-commit messages and `refs/pull|merge-requests/<n>/head`, written to the same ClickHouse tables with the same values as `dev-hops` (a differential test against the real Python verb pins them, including its quirks: `author_when` is the committer time, file modes are printed as decimal integers, a root commit is diffed against the working tree, and a path git quotes in `--numstat` gets 0/0 counts). `blame` writes the working tree's files (`git_files`: path, executable bit, text contents) and the line-by-line `git blame` of every file that `dev-hops` does not skip (binary and media extensions, dependency and build directories; `git_blame`), the same rows as `dho sync blame --provider local`. A commit whose time Python cannot represent (past year 9999) ends the blame lines of its file at that point, in both. Differences: `dev-hops` logs a failed ClickHouse insert and exits 0, `dho` exits 1; a commit, pull request or blame line timestamp after the year 2262 (which the ClickHouse client cannot write as a `DateTime64`) makes `dho` exit 1 where `dev-hops` writes a value outside the column's range; `dev-hops` writes files and blame lines in batches (2000-file chunks, a write at 1000 rows), so a run that fails partway (a file name that is not valid UTF-8 in a large repository) leaves the batches before the failing one, where `dho` validates first and writes no file or blame row; a symbolic ref loop under `refs/` hangs `dev-hops` (GitPython follows it forever) and is skipped by `dho`. A commit message in a non-UTF-8 encoding is read as UTF-8 by both. Everything else (`--provider synthetic`) exits **3** with nothing written and names the ticket; run the `dev-hops` verb for those meanwhile. `cicd` and `tests` run the worker's chunked routes (bounded chunks, each written and read back before the next) with the chunk checkpoint held in memory for the run: nothing is resumable across processes, so a run that is interrupted starts again from the beginning of its window (rows written by the earlier run are written again under the new run and converge to the same logical rows in ClickHouse), and the run continues past the per-attempt chunk bounds by itself. Batch differences to know: a failed repository or dataset never stops the batch and is never swallowed: each failure is named on stderr (repository, dataset, cause) and the command exits 1 if any failed (`dev-hops` logs it and continues and exits 0; a provider rate-limit error ends a `dev-hops` batch with its traceback, while `dho`, whose routes back off on their own, records it as that repository's failure and runs the rest); `--use-async` is accepted and ignored (so does `dev-hops`, which never reads it); `--max-concurrent` bounds repositories in flight, and `--batch-size` groups them the way `dev-hops` does (GitHub always: one group after the other; GitLab only for `git`; every other GitLab target starts them all and only `--max-concurrent` bounds them; a differential test against the real `process_github_repos_batch` and `process_gitlab_projects_batch` pins it, except GitLab `git`, whose commit-stats phase and serial store `dho` does not reproduce). Two flags `dev-hops` applies and the Go routes do not are refused, not ignored, with a usage error (exit **2**, nothing listed, opened or written): `--max-commits-per-repo` on `git` and `blame` (the routes fetch the whole window and stop at their own page caps; `dev-hops` also caps at 100 commits when neither that flag nor a window is given, which the routes do not) and `--rate-limit-delay` on a `prs` batch (`dev-hops` seeds its pull-request backoff with it; the routes back off on the provider's own rate-limit signals). On the targets that do not use them `dev-hops` ignores both flags too, and so does `dho`. Other differences to know: the routes write the repository row from the provider's repository metadata, not `dev-hops`'s batch `settings` and `tags`, Go's `git` target does not also run blame (it is the separate `blame` target), and global flags go **after** the verb (`dho sync git --org X ...`), not before it.
+`dho sync git|prs|blame|cicd|deployments|incidents|security|tests` run in-process, without a scheduler, through the same provider routes the worker runs. They work on a single GitHub repository (`--owner/--repo`), a single GitLab project (`--project-id`), or every repository or project a `--search PATTERN` batch lists (`--group`, `--max-repos`, `--batch-size`, `--max-concurrent`). Exit codes: 0 ok, 1 refused by the verb or failed, 2 usage error, 3 not available in `dho`.
+
+- **Credentials.** Give a credential with `--auth` (or `GITHUB_TOKEN` / `GITLAB_TOKEN`, or the GitHub App flags) and an organization with `--org` (or `ORG_ID`). With no organization, `dho` uses the oldest organization in PostgreSQL (`--db`, `POSTGRES_URI` or `DATABASE_URI` names the database). For GitHub with no token or App flags, it uses that organization's `default` GitHub integration credential (decrypted with `SETTINGS_ENCRYPTION_KEY` and `SETTINGS_ENCRYPTION_SALT`). When neither read finds a usable credential, the verb ends with `Missing GitHub credentials`.
+- **Targets.** `incidents` runs for GitLab only: GitHub has no native incident source, and the verb exits 1 with a message that says so.
+- **Local repositories.** `--provider local` runs `git`, `prs` and `blame` on a local repository (`--repo-path`, default `.`) with the `git` binary: the repository row (its id is the digest of the origin remote URL, or of the absolute path; `REPO_UUID` overrides it), the commits, the per-file commit stats, and the merged and open pull requests inferred from merge-commit messages and `refs/pull|merge-requests/<n>/head`. `blame` writes the working tree's files (`git_files`) and the line-by-line `git blame` of every file that is not binary, media, dependency or build output (`git_blame`).
+- **Failures.** A failed ClickHouse insert makes the verb exit 1. A commit, pull request or blame line timestamp after the year 2262 (which the ClickHouse client cannot write as a `DateTime64`) also makes it exit 1.
+- **Chunked targets.** `cicd` and `tests` run the worker's chunked routes (bounded chunks, each written and read back before the next). The chunk checkpoint is held in memory for the run: nothing is resumable across processes, so an interrupted run starts again from the beginning of its window, and rows written by the earlier run converge to the same logical rows in ClickHouse.
+- **Batches.** A failed repository or dataset never stops the batch and is never swallowed: each failure is named on stderr (repository, dataset, cause), and the command exits 1 if any failed. `--max-concurrent` bounds repositories in flight. `--use-async` is accepted and ignored.
+- **Refused flags.** `--max-commits-per-repo` on `git` and `blame` (the routes fetch the whole window and stop at their own page caps) and `--rate-limit-delay` on a `prs` batch (the routes back off on the provider's own rate-limit signals) are refused with a usage error (exit 2, nothing listed, opened or written).
+- **Repository row.** The routes write the repository row from the provider's repository metadata. The `git` target does not also run blame: blame is the separate `blame` target.
+- **Synthetic data.** `--provider synthetic` is not a source of real data. The CI synthetic targets load with `dho fixtures load-synthetic`.
 
 ### `sync git`
 
@@ -116,17 +116,17 @@ Sync git repository data. Uses `CLICKHOUSE_URI` (analytics layer).
 
 ```bash
 # Local repository
-dev-hops sync git --provider local \
+dho sync git --provider local \
   --repo-path /path/to/repo
 
 # GitHub
-dev-hops sync git --provider github \
+dho sync git --provider github \
   --auth "$GITHUB_TOKEN" \
   --owner torvalds \
   --repo linux
 
 # GitHub App
-dev-hops sync git --provider github \
+dho sync git --provider github \
   --github-app-id "$GITHUB_APP_ID" \
   --github-app-key-path "$GITHUB_APP_PRIVATE_KEY_PATH" \
   --github-app-installation-id "$GITHUB_APP_INSTALLATION_ID" \
@@ -134,7 +134,7 @@ dev-hops sync git --provider github \
   --repo my-repo
 
 # GitLab
-dev-hops sync git --provider gitlab \
+dho sync git --provider gitlab \
   --auth "$GITLAB_TOKEN" \
   --project-id 278964
 ```
@@ -142,18 +142,17 @@ dev-hops sync git --provider gitlab \
 **Options:**
 | Option | Description |
 |--------|-------------|
-| `--provider` | `local`, `github`, `gitlab` |
+| `--provider` | `local`, `github`, `gitlab` (`synthetic` is not a source of real data) |
 | `--auth` | GitHub/GitLab token override (PAT mode for GitHub) |
 | `--github-app-id`, `--github-app-key-path`, `--github-app-installation-id` | GitHub App auth flags. Mutually exclusive with PAT auth. |
 | `--repo-path` | Path to local repo |
 | `--owner`, `--repo` | GitHub owner/repo |
 | `--project-id` | GitLab project ID |
-| `--since` | Start datetime (ISO 8601). Mutually exclusive with `--backfill` |
-| `--before` | End date (exclusive, default: tomorrow) |
-| `--backfill N` | Backfill N days ending before `--before`. Mutually exclusive with `--since` |
+| `--gitlab-url` | GitLab instance URL (default `$GITLAB_URL` or `https://gitlab.com`) |
+| `--since` | Start date, inclusive (ISO `YYYY-MM-DD`). Mutually exclusive with `--backfill` |
+| `--before` | End date (exclusive, ISO `YYYY-MM-DD`, default: tomorrow) |
+| `--backfill N` | Backfill N days ending before `--before` (default 1). Mutually exclusive with `--since` |
 | `--sink` | Analytics backend (`clickhouse` only; default) |
-
-`--date` is a deprecated hidden alias for `--before`.
 
 GitHub authentication precedence is CLI flags > environment variables > stored database credentials. Use either PAT auth (`--auth` or `GITHUB_TOKEN`) or GitHub App auth, not both. See [Connect GitHub](../../admin/data-sources/github.md).
 
@@ -162,7 +161,7 @@ GitHub authentication precedence is CLI flags > environment variables > stored d
 Sync pull request data. Uses `CLICKHOUSE_URI`.
 
 ```bash
-dev-hops sync prs --provider github \
+dho sync prs --provider github \
   --auth "$GITHUB_TOKEN" \
   --owner org \
   --repo repo
@@ -194,13 +193,13 @@ pipeline is green.
 
 ```bash
 # GitHub
-dev-hops sync cicd --provider github \
+dho sync cicd --provider github \
   --auth "$GITHUB_TOKEN" \
   --owner org \
   --repo repo
 
 # GitLab
-dev-hops sync cicd --provider gitlab \
+dho sync cicd --provider gitlab \
   --auth "$GITLAB_TOKEN" \
   --gitlab-url "https://gitlab.com" \
   --project-id 123
@@ -218,7 +217,7 @@ rows degrade status instead of silently proving completion.
 Sync deployment events. Uses `CLICKHOUSE_URI`.
 
 ```bash
-dev-hops sync deployments --provider github \
+dho sync deployments --provider github \
   --auth "$GITHUB_TOKEN" \
   --owner org \
   --repo repo
@@ -229,7 +228,7 @@ dev-hops sync deployments --provider github \
 Sync incident data. Uses `CLICKHOUSE_URI`.
 
 ```bash
-dev-hops sync incidents --provider gitlab \
+dho sync incidents --provider gitlab \
   --auth "$GITLAB_TOKEN" \
   --gitlab-url "https://gitlab.com" \
   --project-id 123
@@ -243,7 +242,7 @@ ordinary GitHub issues, including label-bearing issues, remain work items.
 Sync git blame data only (line-level authorship). Uses `CLICKHOUSE_URI`.
 
 ```bash
-dev-hops sync blame --provider local --repo-path /path/to/repo
+dho sync blame --provider local --repo-path /path/to/repo
 ```
 
 Accepts the same provider, auth, single-repo, batch-mode, and date-range options as [`sync git`](#sync-git). Providers: `local`, `github`, `gitlab`, `synthetic`.
@@ -263,7 +262,7 @@ dataset endpoint can toggle it like any other dataset.
 Sync security and dependency alerts (Dependabot, code-scanning, advisories, GitLab vulnerability/dependency findings). Uses `CLICKHOUSE_URI`.
 
 ```bash
-dev-hops sync security --provider github \
+dho sync security --provider github \
   --auth "$GITHUB_TOKEN" --owner org --repo repo
 ```
 
@@ -274,7 +273,7 @@ Accepts the same provider/auth/batch options as [`sync git`](#sync-git). Provide
 Sync CI test results and coverage (TestOps). Uses `CLICKHOUSE_URI`.
 
 ```bash
-dev-hops sync tests --provider github \
+dho sync tests --provider github \
   --auth "$GITHUB_TOKEN" --owner org --repo repo
 ```
 
@@ -282,38 +281,33 @@ Accepts the same provider/auth/batch options as [`sync git`](#sync-git). Provide
 
 ### `sync teams`
 
-Sync team definitions. ClickHouse is the system of record for teams (CHAOS-2600 CS5); both paths write ClickHouse directly. The only difference is org tagging:
-
-- **Org-scoped (`--org ORG`)**: The provider data is written **directly to ClickHouse** via `insert_teams`, with each team row tagged with `org_id` (and any Jira ops links inserted). It does **not** project to PostgreSQL `team_mappings` and does **not** call any Postgres→ClickHouse bridge.
-- **No-org (no `--org`)**: The provider data is written directly to ClickHouse (preserving synthetic/local seeding), untagged.
-
-`CLICKHOUSE_URI` (or `--analytics-db`) is required. `POSTGRES_URI` / `--db` is **not** required for `sync teams` (no Postgres team write).
+Sync team catalogs. ClickHouse is the system of record for teams (CHAOS-2600 CS5): `dho sync teams` writes ClickHouse only, tags every team row with `org_id`, and does not write PostgreSQL or call any Postgres-to-ClickHouse bridge. `--provider` is one of `jira`, `github`, `gitlab` or `linear`, and `--org <org-id>` is required. `CLICKHOUSE_URI` (or `--analytics-db`) is required. By default the verb exits 1 when discovery or persistence results in zero teams; use `--allow-empty` only when an empty sync is expected.
 
 ```bash
-# From config file
-dev-hops sync teams --path src/dev_health_ops/config/team_mapping.yaml --allow-empty
+# Atlassian Teams of a Jira organization
+dho sync teams --provider jira --org "$ORG_ID"
 
-# From Jira projects
-dev-hops sync teams --provider jira
-
-# Synthetic teams
-dev-hops sync teams --provider synthetic
-
-# From GitHub org (requires --owner and token)
-dev-hops sync teams --provider github \
+# From a GitHub org (requires --owner and a token)
+dho sync teams --provider github --org "$ORG_ID" \
   --owner my-org \
   --auth "$GITHUB_TOKEN"
 
-# From GitLab group (fetches group + subgroups)
-dev-hops sync teams --provider gitlab \
+# From a GitLab group (fetches group + subgroups)
+dho sync teams --provider gitlab --org "$ORG_ID" \
   --owner my-group/path \
   --auth "$GITLAB_TOKEN"
+
+# From a Linear workspace
+dho sync teams --provider linear --org "$ORG_ID" \
+  --auth "$LINEAR_API_KEY"
 ```
 
-The bundled `src/dev_health_ops/config/team_mapping.yaml` is intentionally empty for onboarding. By default, `sync teams` exits non-zero when discovery or persistence results in zero teams; use `--allow-empty` only when an empty/no-op sync is expected.
+Team rows for Jira **projects** come from the automatic team import that runs after a Jira sync (`internal/providersync/jira_team_catalog.go`). There is no command for it, and `--provider jira` here syncs Atlassian Teams, which is different data.
 
-
-> **`dho sync teams` (Go):** four providers today. `--provider jira` syncs the organization's **Atlassian Teams** (structure, members, active projects; `--org`, `--structure`/`--members`/`--projects`, `--allow-empty`); it is not the Jira-projects-as-teams mode of `dev-hops`, which has no dho verb. Its Atlassian credential (email, api token, tenant URL) is resolved from the org's **stored jira integration** in Postgres (`POSTGRES_URI` or `--db`) -- the same integration row and credential work-items sync and the worker's post-sync team auto-import job already use, decrypted with `SETTINGS_ENCRYPTION_KEY` -- never from an environment variable by default. The integration's `atlassian_organization_id` config key is an **override only** (CHAOS-7020/D2817): when absent, it is derived live via the AGG (Atlassian GraphQL gateway) `tenantContexts(cloudIds: [...])` query using the same stored credential (`internal/atlassianteams.ResolveOrganizationID`), so no manual config step is required for a jira integration to get real Atlassian Teams rows. A set value must be UUID- or ARI-shaped (`ari:cloud:platform::org/<uuid>`), validated on save by the admin credentials API (`PATCH /api/v1/admin/credentials/jira/{name}`); `atlassian_cloud_id` is likewise optional and otherwise derived live from the tenant's own site (its `_edge/tenant_info` endpoint). `ATLASSIAN_ORGANIZATION_ID`/`ATLASSIAN_CLOUD_ID`/`ATLASSIAN_EMAIL`/`ATLASSIAN_API_TOKEN`/`ATLASSIAN_JIRA_BASE_URL` (`_FILE` accepted; `JIRA_EMAIL`/`JIRA_API_TOKEN`/`JIRA_BASE_URL` as legacy fallbacks) are an **override at most**: each one individually overrides the corresponding stored/resolved value, or, when `ATLASSIAN_EMAIL`+`ATLASSIAN_API_TOKEN`+`ATLASSIAN_JIRA_BASE_URL` are ALL set, the verb runs fully from the environment with no database at all (an offline/test path only -- CHAOS-7002/D2770; the env-only design this replaced could never run in a real venue, since the real Atlassian credential is never an environment variable there). This CLI verb is one of two entry points into `internal/atlassianteams`: the same collection also runs automatically as an additional step of the jira team-catalog auto-import, whenever team import is selected at all (`auto_import_teams`/`auto_import_projects`/`auto_import_members`) -- unchanged by CHAOS-7020 -- so a normal scheduled jira sync produces real Atlassian Teams rows on its own with no `atlassian_organization_id` config step, resolving it the same way as the CLI verb. A resolution failure (no organization context, or no permission) degrades non-strict: it logs and keeps the project-as-team fallback's result, never losing it. See `architecture/team-attribution.md` §0.2a. `--provider github --org <org-id> --owner <github-org> [--auth <token>]` (the token else `GITHUB_TOKEN`; a GitHub Enterprise base URL from `GITHUB_URL`/`GITHUB_BASE_URL` as `dho sync <target>` reads it) runs the provider's **team catalog**: the producer the worker's post-sync team autoimport runs, which writes the ClickHouse team dimensions the team-attribution contract prescribes (`teams` rows of `provider_access`, `team_memberships`, `team_repo_ownership`; see `architecture/team-attribution.md` §0). It is **not** a port of the legacy writer: it does not extend the frozen legacy team path (CHAOS-2600). The refusals of `dev-hops` are kept (no owner, no token, an empty result without `--allow-empty`: exit 1; a provider or write failure: exit 1, nothing written). A differential test runs the real `dho sync teams --provider github` (PyGithub pointed at a fake) and `dho` over one fake GitHub (pagination, members, repositories, empty and odd names, a rejected token, an unreadable roster, an admin override) and compares the `teams` rows column by column. Equal: `id` (`gh:<slug>`), `name`, `is_active`, `org_id`, `manual_members` (an admin override survives), `project_keys`, `parent_team_id`, `source_id`, the provider description, and the member **logins**. Different by design: `description` (`dev-hops` invents "GitHub team <slug>" when the provider has none; dho keeps the provider's value), `members` (bare logins vs provider-scoped identity facets `github:<login>` plus the member's public email), `team_uuid` (a random uuid4 per run vs a stable uuid5 of the team id), `provider` (empty vs `github`), `native_team_key` (none vs the slug), `repo_patterns` (none vs the team's repositories as `owner/name`), `updated_at`/`last_synced` (the run's clock). A team name is trimmed (`dev-hops` keeps the padding), and the member facet email is lower-cased. A team with a non-zero `sync_policy` in `team_sync_policies` is left untouched and reported as `teams_skipped_policy`, not as an empty catalog. A `403` on one team's repositories fails the run with exit 1 and writes nothing (`dev-hops` skips that team's repositories and exits 0). The catalog writes its tables in order and not in one transaction: a write that fails part way leaves the earlier tables written, and the next run finishes them (the oracle runs that case). dho also writes `team_memberships` and `team_repo_ownership`, which `dev-hops` never wrote, and needs `--org` (the rows are org-scoped; `dev-hops` without `--org` writes untagged rows). `--provider gitlab --org <org-id> --owner <group-path> [--auth <token>]` (the token else `GITLAB_TOKEN`; the instance URL from `GITLAB_URL`, default `https://gitlab.com`, the same spelling `dho sync <target>` and `dev-hops` both read) runs the same team catalog seam for GitLab: the group and its direct subgroups become `teams` rows (`provider_access`), the group's own projects populate `team_project_ownership`, members populate `team_memberships`, and the group's full project tree (including subgroups) populates the native `projects` catalog (CHAOS-3380) -- none of which `dho sync teams --provider gitlab` ever wrote. A differential test runs the real verb (python-gitlab pointed at a fake via `GITLAB_URL`) and `dho` over one fake GitLab group and compares the `teams` rows column by column for a top-level group (where `dev-hops`'s `gl:<group.path>` id and dho's `gl:<full_path>` id coincide). Equal: `id`, `name`, `is_active`, `org_id`, `manual_members`, `parent_team_id`, `source_id`, `repo_patterns` (GitLab ownership is `team_project_ownership`, not `repo_patterns`; neither plane writes it). Different by design: `description` (`dev-hops` invents "GitLab group <full_path>" when the provider has none; dho keeps the provider's value), `members` (bare usernames vs `gitlab:<username>` identity facets plus the member's email), `team_uuid` (a random uuid4 per run vs a stable uuid5 of the team id), `provider` (empty vs `gitlab`), `native_team_key` (none vs the group's `full_path`), `project_keys` (none vs the group's own `path_with_namespace` values). **Named, untested divergence:** for a SUBGROUP, `dev-hops`'s id keys off the subgroup's own short `path` (`gl:<path>`) while dho's keys off the full, namespaced path (`gl:<parent>/<path>`) -- the two rows would not even align by id, so the oracle exercises only a top-level group; `internal/providersync/gitlab_team_catalog_subgroup_id_test.go` pins dho's id formula directly. `--provider linear --org <org-id> [--auth <token>]` (the token else `LINEAR_API_KEY`; a fake-API base for testing only from `LINEAR_URL` -- a Go-only addition, `dev-hops`'s `LinearClient` hardcodes its GraphQL endpoint with no override at all) needs no `--owner`: an API key scopes the whole Linear workspace, so every team is in scope by construction. It runs the same team catalog seam: teams become `teams` rows (`provider_access`), members populate `team_memberships` (and the shared `members` dimension), and Linear's own projects populate the native `projects` catalog and `team_project_ownership` when `--projects` is selected; `dho sync teams --provider linear` never wrote any of the last three. A differential test runs the real verb (`LinearClient` repointed at a fake GraphQL endpoint) and `dho` over one fake Linear workspace and compares the `teams` rows column by column. Equal: `is_active`, `org_id`, `manual_members`, `project_keys` (CHAOS-4530: a team key is not a project key; neither plane populates it here), `parent_team_id`, `source_id`, `repo_patterns` (no repository-ownership concept for Linear). Different by design: `id` (`dev-hops`'s `linear:<key>` vs dho's bare team key -- both consistently ordered, so an index-matched row comparison still holds), `members` (email-or-name identities vs `linear:<email-or-id>` identity facets, lower-cased), `team_uuid` (a random uuid4 per run vs a stable uuid5 of the bare key), `provider` (empty vs `linear`), `native_team_key` (none vs the team's key). Neither plane invents a description when the provider has none (unlike GitHub/GitLab's legacy fallback text) -- `description` is equal when present, NULL on both otherwise. **Named, proven divergence:** for a team with ten or fewer members, `dev-hops` keeps a member with `active=false` in `teams.members` (its inline page-1 path never filters on `active` -- only the separate full-pagination path does), while dho's catalog always excludes an inactive member regardless of team size. Proven directly in the oracle as a `goDiffers` scenario (different member sets), not diffed row by row. **Checked and ruled out:** an org-archived Linear team is NOT a divergence -- `dev-hops`'s `t.get("archivedAt")` check reads a field its own `TEAMS_QUERY` never selects at all (`client.py`), so against the real Linear API that check is dead code and always false; both `dev-hops` and dho include every team the workspace returns, archived or not (an earlier draft of this doc and its oracle wrongly claimed a divergence here, by having the test fake return a field no conforming GraphQL server would send for this query -- caught in review, corrected). `config`, `synthetic`, `jira-ops` and `ms-teams` are not served by dho yet.
+- **`--provider jira`** syncs the organization's **Atlassian Teams** (structure, members, active projects; `--structure`, `--members`, `--projects`; with none of the three, all are synced; `--allow-empty`). Members and project links that a team no longer has are retracted (closed); an empty result is refused, so a permissions problem retracts nothing, unless `--allow-empty`. Its Atlassian credential (email, api token, tenant URL) is resolved from the org's **stored jira integration** in PostgreSQL (`POSTGRES_URI` or `--db`), the same integration row and credential that work-items sync and the worker's post-sync team auto-import use, decrypted with `SETTINGS_ENCRYPTION_KEY`. The integration's `atlassian_organization_id` config key is an **override only**: when absent, it is derived live from the AGG (Atlassian GraphQL gateway) `tenantContexts(cloudIds: [...])` query using the same stored credential (`internal/atlassianteams.ResolveOrganizationID`). A set value must be UUID- or ARI-shaped (`ari:cloud:platform::org/<uuid>`), validated on save by the admin credentials API (`PATCH /api/v1/admin/credentials/jira/{name}`). `atlassian_cloud_id` is likewise optional and otherwise derived live from the tenant's own site (its `_edge/tenant_info` endpoint). `ATLASSIAN_ORGANIZATION_ID`, `ATLASSIAN_CLOUD_ID`, `ATLASSIAN_EMAIL`, `ATLASSIAN_API_TOKEN` and `ATLASSIAN_JIRA_BASE_URL` (`_FILE` accepted; `JIRA_EMAIL`, `JIRA_API_TOKEN` and `JIRA_BASE_URL` as fallbacks) each override the corresponding stored or resolved value. When `ATLASSIAN_EMAIL`, `ATLASSIAN_API_TOKEN` and `ATLASSIAN_JIRA_BASE_URL` are ALL set, the verb runs fully from the environment with no database at all (an offline or test path only). The same collection also runs automatically as an additional step of the jira team-catalog auto-import, whenever team import is selected (`auto_import_teams`, `auto_import_projects`, `auto_import_members`), so a normal scheduled jira sync produces Atlassian Teams rows on its own. A resolution failure (no organization context, or no permission) degrades non-strict: it logs and keeps the project-as-team result. See `architecture/team-attribution.md` §0.2a.
+- **`--provider github`** `--owner <github-org> [--auth <token>]` (the token else `GITHUB_TOKEN`; a GitHub Enterprise base URL from `GITHUB_URL` or `GITHUB_BASE_URL`) runs the provider's **team catalog**: the producer the worker's post-sync team autoimport runs. It writes the ClickHouse team dimensions the team-attribution contract prescribes (`teams` rows of `provider_access`, `team_memberships`, `team_repo_ownership`; see `architecture/team-attribution.md` §0). A missing owner, a missing token, or an empty result without `--allow-empty` exits 1; a provider or write failure exits 1 with nothing written. A `403` on one team's repositories fails the run with exit 1 and writes nothing. A team with a non-zero `sync_policy` in `team_sync_policies` is left untouched and reported as `teams_skipped_policy`, not as an empty catalog. A team row has `id` `gh:<slug>`, a trimmed `name`, the provider's `description`, `members` as provider-scoped identity facets (`github:<login>` plus the member's public email, lower-cased), a stable `team_uuid` (uuid5 of the team id), `provider` `github`, `native_team_key` (the slug), `repo_patterns` (the team's repositories as `owner/name`), and `manual_members` (an admin override survives). The catalog writes its tables in order and not in one transaction: a write that fails part way leaves the earlier tables written, and the next run finishes them.
+- **`--provider gitlab`** `--owner <group-path> [--auth <token>]` (the token else `GITLAB_TOKEN`; the instance URL from `GITLAB_URL`, default `https://gitlab.com`) runs the same team catalog seam for GitLab. The group and its direct subgroups become `teams` rows (`provider_access`, `id` `gl:<full_path>`, `native_team_key` the group's `full_path`, `project_keys` the group's own `path_with_namespace` values). The group's own projects populate `team_project_ownership`, members populate `team_memberships` (identity facets `gitlab:<username>` plus the member's email), and the group's full project tree, including subgroups, populates the native `projects` catalog (CHAOS-3380).
+- **`--provider linear`** `[--auth <token>]` (the token else `LINEAR_API_KEY`; `LINEAR_URL` points the verb at a fake API for testing only) needs no `--owner`: an API key scopes the whole Linear workspace, so every team is in scope. Teams become `teams` rows (`provider_access`, `id` the bare team key, `native_team_key` the team's key). Members populate `team_memberships` and the shared `members` dimension (identity facets `linear:<email-or-id>`, lower-cased), and an inactive member is excluded. Linear's own projects populate the native `projects` catalog and `team_project_ownership` when `--projects` is selected. An org-archived Linear team is included, as the workspace returns it. No description is invented when the provider has none.
 
 ---
 
@@ -380,112 +374,7 @@ dho metrics validate-flags --lookback 30
 | Option | Description |
 |--------|-------------|
 | `--lookback N` | Number of days to inspect (default: 30) |
-| `--sink` | Analytics backend (`clickhouse` only) |
-
-### `metrics compounding-risk`
-
-Compute the Compounding Risk composite from persisted inputs (`repo_metrics_daily` + `repo_complexity_daily`) and write `compounding_risk_daily`. Requires `CLICKHOUSE_URI` **and** an organization id.
-
-> **Note (CHAOS-2888):** this command exits `0` whenever the compounding-risk query and write both complete, even if some rows have `severity="unknown"` due to missing required inputs — it exits non-zero only for configuration, validation, or infrastructure failures. Missing-input reason counts (`missing_rework_churn`, `missing_complexity_delta`, `missing_review_latency`, `missing_ownership_signal`) are logged per run. For API-triggered backfills, the same missing-input counts and per-day table coverage are surfaced on `GET /backfill-jobs/{job_id}` via `metrics_diagnostics`.
-
-```bash
-dev-hops metrics compounding-risk --org "$ORG_ID"
-
-# Backfill seven days ending before 2025-02-02, i.e. through 2025-02-01
-dev-hops metrics compounding-risk --before 2025-02-02 --backfill 7
-
-# Explicit inclusive start with exclusive end
-dev-hops metrics compounding-risk --since 2025-01-01 --before 2025-02-02
-```
-
-**Options:**
-| Option | Description |
-|--------|-------------|
-| `--since` | Start date (inclusive). Mutually exclusive with `--backfill` |
-| `--before` | End date (exclusive, default: tomorrow) |
-| `--backfill N` | Process N days ending before `--before` (default: 1) |
-| `--sink` | Analytics backend (`clickhouse` only) |
-
-> CHAOS-2475 follow-up: `--day` is not supported. Use `--before <day-after-target> --backfill 1` for one historical day.
-
----
-
-## Audit Commands
-
-Diagnostic audits for data completeness, schema integrity, provider coverage, and query performance.
-
-### `audit completeness`
-
-Check data freshness and completeness across providers within a time window.
-
-```bash
-# Table output (default)
-dev-hops audit completeness --db "clickhouse://localhost:8123/default" --org ORG_ID --days 7
-
-# JSON output
-dev-hops audit completeness --db "clickhouse://localhost:8123/default" --org ORG_ID --days 30 --format json
-```
-
-**Options:**
-| Option | Description |
-|--------|-------------|
-| `--db` | Database connection string (required) |
-| `--org` | Organization ID used to scope canonical incident and mapping rows (required) |
-| `--days N` | Lookback window in days (default: 7) |
-| `--format` | Output format: `table` or `json` (default: `table`) |
-
-Checks work items, transitions, git commits, PRs, deployments, incidents, and CI pipeline runs across providers (jira, github, gitlab, synthetic). Reports staleness and missing data.
-
-### `audit schema`
-
-Verify the database schema matches expected migrations (tables, columns, types).
-
-```bash
-dev-hops audit schema
-```
-
-Supports ClickHouse (compares against SQL migration files) and PostgreSQL/SQLite (compares against SQLAlchemy model definitions). Reports missing tables, missing columns, and type mismatches with migration file hints.
-
-### `audit perf`
-
-Find slow queries in the ClickHouse query log.
-
-```bash
-# Default: queries > 1000ms in the last 60 minutes
-dev-hops audit perf
-
-# Custom thresholds
-dev-hops audit perf --threshold 500 --lookback 120 --limit 50
-```
-
-**Options:**
-| Option | Description |
-|--------|-------------|
-| `--threshold` | Slow query threshold in ms (default: 1000) |
-| `--lookback` | Lookback window in minutes (default: 60) |
-| `--limit` | Max queries to display (default: 20) |
-
-### `audit coverage`
-
-Audit provider implementation coverage -- checks that collectors, config, schema, sinks, and CLI commands are wired up for each provider.
-
-```bash
-# All providers
-dev-hops audit coverage --db "clickhouse://localhost:8123/default"
-
-# Specific providers
-dev-hops audit coverage --db "clickhouse://localhost:8123/default" --provider jira,github
-
-# JSON output
-dev-hops audit coverage --db "clickhouse://localhost:8123/default" --format json
-```
-
-**Options:**
-| Option | Description |
-|--------|-------------|
-| `--db` | Database connection string (required) |
-| `--provider` | Comma-separated provider list (default: all) |
-| `--format` | Output format: `table` or `json` (default: `table`) |
+| `--org` | Organization to validate (default: `ORG_ID`, else the empty organization) |
 
 ---
 
@@ -493,45 +382,48 @@ dev-hops audit coverage --db "clickhouse://localhost:8123/default" --format json
 
 ### `fixtures generate`
 
-Generate synthetic test data. Uses `CLICKHOUSE_URI`.
+Load a frozen synthetic world into ClickHouse. Uses `CLICKHOUSE_URI`. `dho fixtures generate` loads a **frozen parameter set**, not a free generator: the worlds were written once into a real ClickHouse at the migration head, dumped table by table, committed (digest-pinned) and embedded in `dho`. The verb loads the one that matches the flags, moved by whole days so that its last generated day is today, and written for the given organization (`--org`, else `ORG_ID`, else the default demo organization; it must be a UUID). `--seed` is required: an unseeded run is not repeatable. A parameter set that was not frozen is refused (exit 3), and the refusal names the ones that were.
 
 ```bash
-# Basic generation
-dev-hops fixtures generate --days 30
-
-# Full generation with metrics and work graph
-dev-hops fixtures generate \
+dho fixtures generate \
   --sink "$CLICKHOUSE_URI" \
-  --repo-name "meridian/web-app" \
-  --repo-count 3 \
-  --days 60 \
-  --commits-per-day 10 \
-  --pr-count 40 \
-  --seed 42 \
+  --provider synthetic \
+  --repo-name acme/live-e2e \
+  --repo-count 1 \
+  --days 14 \
+  --commits-per-day 6 \
+  --pr-count 24 \
+  --team-count 10 \
+  --seed 20260219 \
   --with-metrics \
-  --with-work-graph \
-  --team-count 10
+  --with-work-graph
 ```
 
 **Options:**
 | Option | Default | Description |
 |--------|---------|-------------|
-| `--sink` | `$CLICKHOUSE_URI` | Analytics sink URI (ClickHouse) |
-| `--repo-name` | `meridian/web-app` | Base repository name |
-| `--repo-count` | `1` | Number of repos to generate |
-| `--days` | `30` | Number of days of historical data |
+| `--sink` | `$CLICKHOUSE_URI` | ClickHouse DSN. A DSN on the HTTP port (8123, or 8443 with TLS) is spoken to over HTTP |
+| `--org` | `$ORG_ID`, else the default demo organization | Organization id (a UUID) the rows are written for |
+| `--repo-name` | `acme/demo-app` | Base repository name |
+| `--repo-count` | `1` | Number of repos |
+| `--days` | `30` | Number of days of data |
 | `--commits-per-day` | `5` | Average commits per day |
-| `--pr-count` | `20` | Total pull requests to generate |
-| `--seed` | random | Deterministic seed for repeatable runs |
+| `--pr-count` | `20` | Total pull requests |
+| `--team-count` | `10` | Number of teams |
+| `--seed` | required | Seed of the frozen world |
 | `--provider` | `synthetic` | Provider label: `synthetic`, `github`, `gitlab`, `jira` |
-| `--with-metrics` | off | Also generate derived metrics (daily, DORA, complexity, investment, Cockpit/TestOps risk inputs, etc.) |
-| `--with-work-graph` | off | Build work graph edges after generation (ClickHouse only) |
-| `--team-count` | `10` | Number of synthetic teams to create |
-| `--db-type` | auto-detected | Explicit DB type (`postgres`, `clickhouse`, etc). Overrides the auto-detection described below; only needed when the sink URI's scheme doesn't name it unambiguously. |
+| `--with-metrics` | off | Also the derived metrics |
+| `--with-work-graph` | off | Also the work graph |
+| `--db-type` | — | Must be `clickhouse` when given |
+| `--skip-coherence-validation`, `--allow-mixed-org` | off | Skip the coherence check; allow an organization that holds synced rows |
 
-Database type is auto-detected from the sink URI unless `--db-type` overrides it.
+Frozen parameter sets:
 
-> **`dev-hops fixtures generate` (Go):** a frozen world, not a generator. The Python verb is not repeatable even against itself (its ids are `uuid4` and its timestamps follow the run's clock, so no two runs are byte-identical, although the same seed always writes the same tables with the same number of rows in each). So the parameter sets the callers run were written once by the real `dev-hops fixtures generate` into a real ClickHouse at the migration head, dumped table by table and committed (digest-pinned, embedded in `dho`), and `dev-hops fixtures generate` loads the one that matches the flags, moved by whole days so its last generated day is today and written for the given organization (`--org`, else `ORG_ID`, else the default demo organization; it must be a UUID). A set that was not frozen is refused (exit 3), naming the ones that were; `--seed` is required. Frozen today: `--provider synthetic --repo-name acme/live-e2e --repo-count 1 --days 14 --commits-per-day 6 --pr-count 24 --team-count 10 --seed 20260219 --with-metrics --with-work-graph` (the acr end-to-end run). Also frozen (CHAOS-7301, the ops CI scripts): `--provider github --repo-name acme/live-e2e --repo-count 1 --days 14 --commits-per-day 6 --pr-count 24 --team-count 10 --seed 20260219` (live backend e2e) and `--provider synthetic --repo-name ci-metrics-executed-proof/repo --repo-count 1 --days 7 --commits-per-day 5 --pr-count 20 --team-count 1 --seed 4276` (metrics executed proof; one team keeps the repository single-owner). The ClickHouse schema must be at the head first (`dev-hops migrate clickhouse upgrade`). Differences to know: analytics rows only: the users, organization and license the Python verb also wrote to PostgreSQL are not written yet, and a `DATABASE_URI`, `POSTGRES_URI` or `DATABASE_URL` in the environment is refused (exit 3) so a missing account is never silent; a `--sink` on the HTTP port (8123, or 8443 with TLS) is spoken to over HTTP, as the Python client did; `--overwrite-real-users` is not accepted; the mixed-organization guard is kept (an organization holding synced `github`/`gitlab`/`jira`/`linear`/`bitbucket` rows is refused unless `--allow-mixed-org`); running the verb twice for the same organization inserts the rows twice (as the Python verb does; neither checks for a prior synthetic run) -- use a fresh organization or database per run; the embedded world's content digest and the destination server's timezone (must be UTC, as the world was captured) are checked before any row is written, refusing cleanly rather than loading a corrupted world or reinterpreting its timestamps at the wrong offset; a table missing partway through the frozen order is also caught before any row is written; a JSON summary (`org_id`, `params`, `rows` per table) goes to stdout. A differential test loads each world and compares every table with the capture (the rows a materialized view fills as a set without their timestamps), moved and rewritten it compares them moved back, and while the Python verb exists a fresh run of it must still write the same tables, columns and row counts as the world holds.
+- `--provider synthetic --repo-name acme/live-e2e --repo-count 1 --days 14 --commits-per-day 6 --pr-count 24 --team-count 10 --seed 20260219 --with-metrics --with-work-graph` (the acr end-to-end run).
+- `--provider github --repo-name acme/live-e2e --repo-count 1 --days 14 --commits-per-day 6 --pr-count 24 --team-count 10 --seed 20260219` (the live backend end-to-end run).
+- `--provider synthetic --repo-name ci-metrics-executed-proof/repo --repo-count 1 --days 7 --commits-per-day 5 --pr-count 20 --team-count 1 --seed 4276` (the metrics executed proof; one team keeps the repository single-owner).
+
+The ClickHouse schema must be at the head first (`dho migrate clickhouse upgrade`). The verb writes **analytics rows only**: it writes no users, organization or license to PostgreSQL, and a `DATABASE_URI`, `POSTGRES_URI` or `DATABASE_URL` in the environment is refused (exit 3) so that a missing account is never silent. Create the first user and organization with the [admin verbs](#admin-commands). `--overwrite-real-users` is not accepted. The mixed-organization guard is kept: an organization that holds synced `github`, `gitlab`, `jira`, `linear` or `bitbucket` rows is refused unless `--allow-mixed-org`. Running the verb twice for the same organization inserts the rows twice, so use a fresh organization or database per run. Before any row is written, the verb checks the embedded world's content digest and the destination server's timezone (it must be UTC, as the world was captured); a table missing partway through the frozen order is also caught before any row is written. A JSON summary (`org_id`, `params`, `rows` per table) goes to stdout.
 
 Every fixture run also seeds synthetic security alert rows into
 `security_alerts` for each generated repo. These rows include Dependabot,
@@ -556,23 +448,6 @@ Risk and TestOps Delivery Risk: `repo_complexity_daily`, `repo_metrics_daily`,
 fixture run without this flag is suitable for raw-ingest checks, but those risk
 surfaces should be expected to report missing inputs until metrics are computed.
 
-### `fixtures validate`
-
-Validate that fixture data is sufficient for work graph and investment analysis.
-
-```bash
-dev-hops fixtures validate --sink "clickhouse://localhost:8123/default"
-```
-
-**Options:**
-| Option | Description |
-|--------|-------------|
-| `--sink` | Analytics sink URI (required, ClickHouse only) |
-
-Checks raw data counts, the ClickHouse team catalog, cycle time metrics, work
-graph edges, connected components, security alert fixture coverage, AI
-fixture/rollup tables, and evidence bundle quality.
-
 ### `fixtures product-telemetry`
 
 Seed `product_telemetry_events` across one or more orgs so the platform-admin dashboard and per-org product views have data locally. Uses `CLICKHOUSE_URI`, and reads org IDs from PostgreSQL when `--org` is not supplied.
@@ -590,121 +465,71 @@ dho fixtures product-telemetry \
 **Options:**
 | Option | Default | Description |
 |--------|---------|-------------|
-| `--orgs` | — | Number of orgs to seed when `--org` is not provided (first N from Postgres `organizations`; falls back to synthetic UUIDs) |
+| `--orgs` | `5` | Number of orgs to seed when `--org` is not provided (first N from Postgres `organizations`; falls back to synthetic UUIDs) |
 | `--org` | — | Explicit org id to seed (repeatable; overrides `--orgs`) |
-| `--days` | — | Days of data per org |
-| `--sessions-per-day` | — | Average synthetic sessions per day per org |
-| `--seed` | random | Deterministic seed (mixed with org_id) for repeatable runs |
+| `--days` | `30` | Days of data per org (capped at the table's TTL horizon minus its safety margin: values above 149 seed 149) |
+| `--sessions-per-day` | `50` | Average synthetic sessions per day per org |
+| `--seed` | none | Deterministic seed (mixed with org_id) for repeatable runs; it must be an integer that fits 64 bits |
 
-> **`dho fixtures product-telemetry` (Go):** the same flags and defaults (`--orgs 5`, `--days 30`, `--sessions-per-day 50`, no seed = seed 0 mixed with the org id), the same rows: a differential test runs the real `ProductTelemetryGenerator` and the real `persist_product_telemetry_events` row builder and compares every column of every row with the Go generator, over the random stream (`getrandbits`, `randrange`, `randint`, `choice`, `random`), the days ceiling (the table's 180-day TTL minus the 30-day shelf-life margin minus one day: `--days` above 149 seeds 149) and empty inputs. It reads `CLICKHOUSE_URI` and, without `--org`, the first `--orgs` rows of `organizations` through `POSTGRES_URI` (or the `DEV_HEALTH_PG_DOMAIN_*` component form), falling back to the synthetic ids `uuid5(NAMESPACE_URL, "seed-org-<i>")` with a warning when Postgres cannot be read. Differences to know: a JSON summary (`orgs`, `rows` per org, `total`) goes to stdout and the log lines are JSON on stderr; `--seed` must be an integer that fits 64 bits; a positional argument is a usage error (exit 2).
-
----
-
-### `fixtures world-snapshot` / `fixtures world-restore`
-
-Move the versioned `ask-dev-world.v1` fixture world from a scratch database into the database a stack actually serves.
-
-`fixtures world` deliberately refuses to run against a non-scratch database (`_require_scratch_database`), which includes ClickHouse `default` and Postgres `postgres` — the two databases the Ask Dev acceptance stack serves. Separately, two independent `fixtures world` runs do **not** produce the same `WORLD_DIGEST` (declared-blocked, see `world.json`'s `cross_generation_digest_status`), so regenerating the world per boot can never match a pinned digest.
-
-Both are solved the same way: **generate once into scratch, snapshot it, restore that snapshot on every boot.**
-
-```bash
-# 1. generate once, into a real scratch database
-dev-hops fixtures world --manifest tests/acceptance/world/ask-dev-world.v1/world.json \
-  --sink clickhouse://ch:ch@clickhouse:8123/ask_dev_world_scratch \
-  --postgres-uri postgresql+asyncpg://postgres:postgres@postgres:5432/ask_dev_world_scratch
-
-# 2. snapshot it (which tables were written is derived by diffing against a
-#    freshly-migrated baseline, never from a hardcoded list)
-dev-hops fixtures world-snapshot --manifest .../world.json \
-  --sink clickhouse://.../ask_dev_world_scratch \
-  --postgres-uri postgresql+asyncpg://.../ask_dev_world_scratch \
-  --baseline-sink clickhouse://.../default \
-  --baseline-postgres-uri postgresql+asyncpg://.../postgres \
-  --out tests/acceptance/world/ask-dev-world.v1/snapshot
-
-# 3. restore into the serving databases and verify the pin (what every boot runs)
-dev-hops fixtures world-restore --manifest .../world.json \
-  --sink clickhouse://.../default \
-  --postgres-uri postgresql+asyncpg://.../postgres \
-  --snapshot tests/acceptance/world/ask-dev-world.v1/snapshot
-```
-
-CHAOS-6262 deleted the two launcher scripts that used to wrap these steps
-(`run_ask_dev_compose.sh`, then `mint_ask_dev_world_snapshot.sh` -- CHAOS-7034); run the
-three `dho fixtures` commands above directly.
-
-`world-restore` is INSERT-only and issues no DDL. It refuses, before writing anything, unless `ENVIRONMENT=acceptance` **and** every table its snapshot carries is empty in the target — a real dev or production database always has organizations and commits, so it always fails that check. There is no `--force`. After restoring it verifies two things and exits non-zero on either: the per-table row-count delta it produced must equal the delta the original generation produced (which catches a table the snapshot missed), and the recomputed `WORLD_DIGEST` must equal the pinned one.
-
-It also refuses a snapshot that was not minted for the *current* `world.json`: the artifact records the world's `schema_version`, `master_seed`, and a hash of the identity/credential contract (org and user aliases, `id_seed`s, emails, usernames, roles, superuser flags), and all three must match the manifest being restored. This is not redundant with the digest guard — `WORLD_DIGEST` is computed from the restored *database*, so a `world.json` edit that leaves the derived ids alone (a changed email or `membership_role`, say) leaves every restored row and the digest bit-for-bit identical, while the manifest every consumer reads now disagrees with what the stack serves. A snapshot carrying no contract hash is refused rather than trusted. Re-mint after any such edit.
-
-Every acceptance boot additionally proves the restored world's principals can actually *authenticate* (`scripts/acceptance/assert_world_principals_can_log_in.py`, the same script the mint runs, wrong-password negative control included). The digest cannot cover this: it proves the credential bytes restored identically, not that the API still accepts them, so a login-path or bcrypt-policy regression would otherwise ride behind a green digest with the corpus silently falling back to the superuser.
-
-**`world-snapshot` options:**
-| Option | Default | Description |
-|--------|---------|-------------|
-| `--manifest` | — | Path to `world.json` (required) |
-| `--sink` | `CLICKHOUSE_URI` | ClickHouse URI of the **generated scratch** database |
-| `--postgres-uri` | — | Postgres URI of the **generated scratch** database (required) |
-| `--baseline-sink` | — | ClickHouse URI of a freshly-migrated, unseeded database (required) |
-| `--baseline-postgres-uri` | — | Postgres URI of a freshly-migrated, unseeded database (required) |
-| `--out` | — | Directory to write the snapshot into (required) |
-
-**`world-restore` options:**
-| Option | Default | Description |
-|--------|---------|-------------|
-| `--manifest` | — | Path to `world.json` (required) |
-| `--sink` | `CLICKHOUSE_URI` | Target ClickHouse URI |
-| `--postgres-uri` | — | Target Postgres URI (required) |
-| `--snapshot` | — | Snapshot directory to restore (required) |
-| `--digest-path` | alongside `--manifest` | `WORLD_DIGEST` file to verify against |
-| `--mint-digest` | off | Re-pin `WORLD_DIGEST` from the restored state instead of verifying. Mint flow only — on an ordinary boot this would make the digest guard verify the world against itself |
+It reads `CLICKHOUSE_URI` and, without `--org`, the first `--orgs` rows of `organizations` through `POSTGRES_URI` (or the `DEV_HEALTH_PG_DOMAIN_*` component form). When PostgreSQL cannot be read, it falls back to the synthetic ids `uuid5(NAMESPACE_URL, "seed-org-<i>")` with a warning. A JSON summary (`orgs`, `rows` per org, `total`) goes to stdout, and the log lines are JSON on stderr. A positional argument is a usage error (exit 2).
 
 ---
 
 ## Admin Commands
 
-User and organization management commands. These use PostgreSQL (`POSTGRES_URI`).
+User and organization management commands. These use PostgreSQL: the database is `MIGRATION_DATABASE_URI`, else `POSTGRES_URI`.
 
 > **Important:** Users must belong to an organization to log in. Always create an organization after creating a user.
+
+### Create the first admin
+
+A stack on empty volumes has no user. Create the first user and its organization with the two admin verbs below. On the Compose stack, run them in the `migrate` service: its image is `dho`, so the arguments after the service name are the `dho` arguments, and it has the database login these verbs use. Read the password from standard input (the first line of a file here), never from an argument:
+
+```bash
+docker compose run --rm --no-deps -T migrate admin users create \
+  --email admin@example.com --full-name "Admin User" --superuser --password-stdin < password.txt
+docker compose run --rm --no-deps -T migrate admin orgs create \
+  --name "My Organization" --owner-email admin@example.com
+```
+
+Outside Compose, run the same verbs with `dho` and the database environment set (`dho admin users create ...`, then `dho admin orgs create ...`). Remove the password file afterwards.
 
 ### `admin users create`
 
 Create a new user.
 
 ```bash
-python -m dev_health_ops.cli admin users create \
+dho admin users create \
   --email admin@example.com \
-  --password secretpass123 \
+  --password-stdin \
   --full-name "Admin User" \
-  --superuser
+  --superuser < password.txt
 ```
 
 **Options:**
 | Option | Description |
 |--------|-------------|
-| `--db` | PostgreSQL URI override (or set `POSTGRES_URI`) |
 | `--email` | User email (required) |
-| `--password` | Password, min 8 chars (required) |
+| `--password` | Password, min 8 chars. It shows in the process list: prefer `--password-stdin` |
+| `--password-stdin` | Read the password from the first line of standard input. One of `--password` and `--password-stdin` is required |
 | `--username` | Optional username |
 | `--full-name` | User's full name |
 | `--superuser` | Grant superuser privileges |
 
 ### `admin orgs create`
 
-Create a new organization. Uses `POSTGRES_URI`.
+Create a new organization.
 
 ```bash
-python -m dev_health_ops.cli admin orgs create \
+dho admin orgs create \
   --name "My Organization" \
   --owner-email admin@example.com \
-  --tier free
+  --tier community
 ```
 
 **Options:**
 | Option | Description |
 |--------|-------------|
-| `--db` | PostgreSQL URI override (or set `POSTGRES_URI`) |
 | `--name` | Organization name (required) |
 | `--slug` | URL-safe slug (auto-generated if omitted) |
 | `--description` | Organization description |
@@ -713,32 +538,32 @@ python -m dev_health_ops.cli admin orgs create \
 
 ### `admin users list`
 
-List all users.
+List users (`--limit`, default 100; `--include-inactive`).
 
 ```bash
-python -m dev_health_ops.cli admin users list --limit 50
+dho admin users list --limit 50
 ```
 
 ### `admin orgs list`
 
-List all organizations.
+List organizations (`--limit`, default 100; `--include-inactive`).
 
 ```bash
-python -m dev_health_ops.cli admin orgs list --include-inactive
+dho admin orgs list --include-inactive
 ```
 
 ### `admin users update`
 
-Update an existing user (identified by `--id`, `--email`, or `--username`) and optionally manage org memberships. Uses `POSTGRES_URI`.
+Update an existing user (identified by `--id`, `--email`, or `--username`) and optionally manage org memberships.
 
 ```bash
-python -m dev_health_ops.cli admin users update \
+dho admin users update \
   --email user@example.com \
   --full-name "New Name" \
   --no-active
 
 # Add to an org with a role
-python -m dev_health_ops.cli admin users update \
+dho admin users update \
   --email user@example.com --org my-org --role admin
 ```
 
@@ -748,24 +573,24 @@ python -m dev_health_ops.cli admin users update \
 | `--id` / `--email` / `--username` | Identify the user to update |
 | `--new-email` / `--new-username` | Change email/username (empty string clears username) |
 | `--full-name` | Set the user's full name |
-| `--password` | Set a new password (min 8 chars; revokes existing sessions) |
+| `--password` / `--password-stdin` | Set a new password (min 8 chars; revokes existing sessions) |
 | `--verified` / `--no-verified` | Set verified status |
 | `--superuser` / `--no-superuser` | Set superuser status |
 | `--active` / `--no-active` | Set active status |
 | `--org` | Org slug or ID: add the user or update their role |
-| `--role` | Membership role with `--org`: `owner`, `admin`, `member`, `viewer` (default: `member`) |
+| `--role` | Membership role with `--org`: `owner`, `admin`, `member`, `viewer` |
 | `--remove-from-org` | Org slug or ID: remove the user's membership |
 
 ### `admin orgs delete`
 
-Delete an organization and all of its scoped data. Uses `POSTGRES_URI`.
+Delete an organization and all of its scoped data.
 
 ```bash
 # Preview the deletion plan
-python -m dev_health_ops.cli admin orgs delete --org-id <uuid> --dry-run
+dho admin orgs delete --org-id <uuid> --dry-run
 
 # Delete
-python -m dev_health_ops.cli admin orgs delete --org-id <uuid>
+dho admin orgs delete --org-id <uuid>
 ```
 
 **Options:**
@@ -773,17 +598,18 @@ python -m dev_health_ops.cli admin orgs delete --org-id <uuid>
 |--------|-------------|
 | `--org-id` | Organization ID (required) |
 | `--dry-run` | Return the deletion plan without deleting data |
+| `--analytics-db` | ClickHouse URI (default: `CLICKHOUSE_URI`) |
 
 ### `admin licenses`
 
-Offline license key management (Ed25519-signed). `create` uses `POSTGRES_URI`.
+Offline license key management (Ed25519-signed). `create` uses PostgreSQL.
 
 ```bash
 # Generate a signing key pair
-python -m dev_health_ops.cli admin licenses keygen
+dho admin licenses keygen
 
 # Create a signed license key
-python -m dev_health_ops.cli admin licenses create \
+dho admin licenses create \
   --org-id <uuid> --tier enterprise --duration-days 365 \
   --org-name "Acme" --contact-email billing@acme.com
 ```
@@ -795,10 +621,10 @@ python -m dev_health_ops.cli admin licenses create \
 
 ### `admin features`
 
-Feature flag management. Uses `POSTGRES_URI`.
+Feature flag management.
 
 ```bash
-python -m dev_health_ops.cli admin features seed
+dho admin features seed
 ```
 
 | Subcommand | Description |
@@ -807,13 +633,13 @@ python -m dev_health_ops.cli admin features seed
 
 ### `admin billing`
 
-Billing plan management and Stripe synchronization. Uses `POSTGRES_URI`.
+Billing plan management and Stripe synchronization.
 
 ```bash
-python -m dev_health_ops.cli admin billing seed
-python -m dev_health_ops.cli admin billing list
-python -m dev_health_ops.cli admin billing pull-stripe --dry-run
-python -m dev_health_ops.cli admin billing sync-stripe
+dho admin billing seed
+dho admin billing list
+dho admin billing pull-stripe --dry-run
+dho admin billing sync-stripe
 ```
 
 | Subcommand | Description |
@@ -825,14 +651,14 @@ python -m dev_health_ops.cli admin billing sync-stripe
 
 ### `admin bundles`
 
-Feature bundle management (groups of feature keys mapped to plans/orgs). Uses `POSTGRES_URI`.
+Feature bundle management (groups of feature keys mapped to plans/orgs).
 
 ```bash
-python -m dev_health_ops.cli admin bundles create \
+dho admin bundles create \
   --key pro --name "Pro" --features "metrics,investment,reports"
-python -m dev_health_ops.cli admin bundles list
-python -m dev_health_ops.cli admin bundles assign-plan --bundle-key pro --plan-key team
-python -m dev_health_ops.cli admin bundles assign-org --org-id <uuid> --feature-key reports
+dho admin bundles list
+dho admin bundles assign-plan --bundle-key pro --plan-key team
+dho admin bundles assign-org --org-id <uuid> --feature-key reports
 ```
 
 | Subcommand | Description |
@@ -842,17 +668,21 @@ python -m dev_health_ops.cli admin bundles assign-org --org-id <uuid> --feature-
 | `assign-plan` | Assign a bundle to a billing plan (`--bundle-key`, `--plan-key`) |
 | `assign-org` | Grant an org a feature override (`--org-id`, `--feature-key`, `--reason`, `--expires-days`) |
 
+### `admin llm-settings`
+
+Read and change the LLM settings of an organization (`get`, `set`, `delete`). Run `dho admin llm-settings <verb> --help` for the flags.
+
 ---
 
 ## Backfill Commands
 
 ### `backfill run`
 
-> ⚠️ **Warning (CHAOS-2475):** The `backfill run` command runs inline and requires provider credentials that the CLI doesn't enforce at startup. Running it inline can cause silent failures. Additionally, there is a known preflight-token bug (CHAOS-2479) where the CLI fails to validate credentials correctly.
+> **Warning:** the `backfill run` verb starts a run through the scheduler. Only a planner-managed configuration, or one pinned to a single source, can be started this way.
 >
-> **Interim Workaround:** Trigger the backfill via `POST /api/v1/admin/sync-configs/{config_id}/backfill`. The API plans a backfill-mode `SyncRun` and commits the same durable reference-discovery wakeup used by full and continuation syncs.
+> **API alternative:** trigger the backfill via `POST /api/v1/admin/sync-configs/{config_id}/backfill`. The API plans a backfill-mode `SyncRun` and commits the same durable reference-discovery wakeup used by full and continuation syncs.
 
-Run historical data backfill for a sync configuration. Data is synced in chunked 7-day windows. Uses `CLICKHOUSE_URI`.
+Start a historical data backfill for a sync configuration over a window of whole days. Data is synced in chunked 7-day windows. The verb validates the configuration, writes one scheduled occurrence and its backfill trigger, and the scheduler plans and dispatches the run. It waits for the plan (30 seconds by default), or prints the occurrence id at once with `--no-wait`. Uses `MIGRATION_DATABASE_URI` (or the `DEV_HEALTH_PG_*` component form).
 
 ```bash
 dho backfill run \
@@ -866,10 +696,12 @@ dho backfill run \
 | Option | Description |
 |--------|-------------|
 | `--config-id` | Sync configuration UUID (required) |
-| `--since` | Start date (ISO 8601). Mutually exclusive with `--backfill` |
-| `--before` | End date (exclusive, default: tomorrow) |
-| `--backfill N` | Backfill N days ending before `--before`. Mutually exclusive with `--since` |
-| `--sink` | Analytics backend (`clickhouse` only; default) |
+| `--since` | Start date (ISO `YYYY-MM-DD`). Mutually exclusive with `--backfill` |
+| `--before` | End date (exclusive, default: today). The window ends the day before |
+| `--backfill N` | Backfill N days ending before `--before` (default 1). Mutually exclusive with `--since` |
+| `--org` | Organization UUID |
+| `--no-wait` | Print the occurrence id at once instead of waiting for the plan |
+| `--wait-seconds N` | Seconds to wait for the plan |
 
 Backfill depth is limited by organization tier:
 
@@ -885,22 +717,22 @@ Backfill depth is limited by organization tier:
 
 ### `api`
 
-Run the Dev Health Ops API server (FastAPI/uvicorn), which serves REST and GraphQL for `dev-health-web`. Uses both `POSTGRES_URI` and `CLICKHOUSE_URI`.
+Run the Dev Health Ops API server (Go), which serves REST for `dev-health-web`. GraphQL is served by the read-only query plane (`dho query-api`); on the local Compose stack a router on port 8000 sends each request to the right one. The verb is a long-running service: it is configured flag-first, every flag also has an environment variable, and a flag wins over the environment. An unknown flag is rejected at startup.
 
 ```bash
-dev-hops api --reload
-dev-hops api --host 0.0.0.0 --port 8000 --workers 4
+dho api --api-addr :8000
+dho api --help
 ```
 
-**Options:**
-| Option | Description |
-|--------|-------------|
-| `--host` | Bind host |
-| `--port` | Bind port |
-| `--workers` | Number of worker processes |
-| `--reload` | Enable auto-reload for local development |
+**Options (the main ones; `dho api --help` lists all):**
+| Option | Environment | Description |
+|--------|-------------|-------------|
+| `--api-addr` | `DEV_HEALTH_API_ADDR` | `host:port` of the api HTTP server (default `:8000`) |
+| `--http-addr` | `DEV_HEALTH_HTTP_ADDR` | `host:port` of the operator HTTP server: `/healthz`, `/readyz`, `/metrics` (default `:8080`); it must differ from `--api-addr` |
+| `--log-level` | `DEV_HEALTH_LOG_LEVEL` | `debug`, `info`, `warn`, `error` or `critical` (default `info`) |
+| `--cors-allowed-origins` | `CORS_ALLOWED_ORIGINS` | Comma-separated CORS allow-list (default `http://localhost:3000`) |
 
-OpenAPI docs are served at `/docs` and GraphQL at the API's GraphQL endpoint when the server is running.
+The api has no auto-reload, and it does not serve an OpenAPI or `/docs` page.
 
 ---
 
@@ -1719,7 +1551,7 @@ dho service-credentials revoke <credential-id>
 | `rotate` | `<credential_id>` then the `create` options plus `--overlap-seconds` (0 to 3600, default 0). The credential must belong to `--service` (the default is `acr`: pass `--service worker-operator` to rotate a worker-operator credential) and be active; its expiry is set to now + the overlap (even if it had less time left) and a replacement is issued |
 | `revoke` | `<credential_id>`; sets `revoked_at` to now, also on an already revoked credential |
 
-> **`dho service-credentials` (Go):** the same four verbs, flags and defaults, printing the same bytes and leaving the same rows: a differential test runs one 96-step script, and a second differential test runs 192 thousand command lines (every combination of up to three tokens from an alphabet of options, values, `--` and abbreviations, plus a sample of longer ones, for each verb) through the real `argparse` and through dho's parser, which is the argparse algorithm the other dho commands share (`internal/pyargparse`), and compares whether each parses and every value it yields (every option in its accepted and refused forms, `datetime.fromisoformat` spellings, UUID spellings, overlaps, wrong-service and revoked credentials, options before and after the credential id) through the real `dev-hops` verbs and through `dho` on real PostgreSQL databases and compares every step's exit code, stdout and rows. Differences to know: a refusal `dev-hops` raises as a `ValueError` (a traceback, exit 1, nothing on stdout) is one JSON error line on stderr, exit 1, with the same message; the database is `MIGRATION_DATABASE_URI`, else `POSTGRES_URI` (as every `dho admin` verb), and a missing one is exit 1 where `dev-hops` exits 2; `rotate` locks the credential row while it checks and changes it; `--help` prints dho's own usage (stdout, exit 0); `--db` names the database as it does for `dev-hops` and the other leaf globals (`--log-level`, `--analytics-db`, `--org`, `-l`, `-m`) are accepted; `list` keeps `dev-hops`'s shape (CHAOS-4032: no computed validity).
+> **Notes:** the database is `MIGRATION_DATABASE_URI`, else `POSTGRES_URI` (as every `dho admin` verb); a missing one is exit 1. `rotate` locks the credential row while it checks and changes it. `--help` prints usage on stdout (exit 0). A refusal is one JSON error line on stderr with exit 1. `list` prints no computed validity (CHAOS-4032): an expired credential prints like a live one.
 
 ## Billing
 
@@ -1741,7 +1573,7 @@ dho billing reconcile --org-id <uuid> --since 2025-01-01
 | `--org-id` | Reconcile a single organization (UUID). Omit to reconcile all orgs |
 | `--since` | Only reconcile invoices on or after this date (ISO YYYY-MM-DD) |
 
-> **`dho billing reconcile` (Go):** the same command line and the same report (one line of JSON: `started_at`, `completed_at`, the three `*_checked` counts, `mismatches`, `missing_local`, `missing_stripe`), the same audit rows for a named organization, and the same second invoice pass for `--since`. It needs a database (`MIGRATION_DATABASE_URI` or `POSTGRES_URI`) and `STRIPE_SECRET_KEY`. Differences: `dev-hops` asks Stripe for each list with a call the Stripe library refuses, catches that, and reads Stripe as empty, so every stored row shows as `missing_stripe` and no status is ever compared (CHAOS-6479); `dho` lists every subscription, invoice and refund (100 a page, every page followed) and compares them. A `--since` with no UTC offset is read as UTC (`dev-hops` reads it in the process time zone). A bad `--org-id` or `--since`, or a missing `STRIPE_SECRET_KEY`, ends `dev-hops` with a Python traceback and `dho` with a one-line message; both exit 1.
+> **Notes:** the report is one line of JSON (`started_at`, `completed_at`, the three `*_checked` counts, `mismatches`, `missing_local`, `missing_stripe`). The verb needs a database (`MIGRATION_DATABASE_URI` or `POSTGRES_URI`) and `STRIPE_SECRET_KEY`. It lists every subscription, invoice and refund (100 a page, every page followed) and compares them, writes audit rows for a named organization, and runs a second invoice pass for `--since`. A `--since` with no UTC offset is read as UTC. A bad `--org-id` or `--since`, or a missing `STRIPE_SECRET_KEY`, ends the verb with a one-line message and exit 1.
 
 ---
 
@@ -1932,78 +1764,70 @@ For GitHub/GitLab batch operations:
 
 ## Migrate Commands
 
-Database schema migrations for PostgreSQL (Alembic) and ClickHouse.
+Database schema migrations for PostgreSQL and ClickHouse. `dho migrate upgrade` runs the whole set in order: the PostgreSQL head (`dho migrate postgres upgrade`), the standard feature flags (`dho admin features seed`), then the ClickHouse head (`dho migrate clickhouse upgrade`). `--river` also applies the River schema right after the PostgreSQL step. The first step that fails stops the run, and the exit code is that step's.
 
 ### `migrate postgres`
 
-Run PostgreSQL (Alembic) schema migrations. Uses `POSTGRES_URI`.
+Run PostgreSQL schema migrations. Uses `MIGRATION_DATABASE_URI` (a direct, elevated DSN), else `POSTGRES_URI`. The bare `dho migrate postgres` prints usage only; the verbs are:
 
 ```bash
 # Apply all ordinary pending migrations
-dev-hops migrate postgres
-dev-hops migrate postgres upgrade
-
-# Upgrade to a specific revision
-dev-hops migrate postgres upgrade abc123
+dho migrate postgres upgrade
 
 # Revert one migration
-dev-hops migrate postgres downgrade -1
+dho migrate postgres downgrade -1
 
 # Show current applied revision
-dev-hops migrate postgres current
+dho migrate postgres current
+
+# Show recorded, missing and pending revisions
+dho migrate postgres status
 
 # Read-only application-schema check (exit 1 while required revisions are pending)
-dev-hops migrate postgres status --check
+dho migrate status --check
+
+# Print, read-only, what the upgrade will do to this database
+dho migrate postgres preflight
 
 # Show migration history
-dev-hops migrate postgres history
+dho migrate postgres history
 
 # Show available heads
-dev-hops migrate postgres heads
+dho migrate postgres heads
 ```
 
-The migration graph has two branches after revision `0065`:
+`upgrade` takes no revision argument: it applies the head baseline to an empty database, then every revision after the head. `downgrade` takes a target: a revision id (`0138` to `0145`, which reverts everything above it) or `-N` (revert N steps).
 
-- `application_schema` contains ordinary application migrations and is always
-  advanced by `dev-hops migrate postgres`;
-- `river_cutover` contains revision `0066`, the Celery-to-River ownership
-  activation, and remains pending by default.
+`upgrade` and `status` require `DEV_HEALTH_ALLOW_CELERY_RIVER_CUTOVER=1`, because the head has the River cutover (revision `0066`) applied, as production does, and `RIVER_DATABASE_SCHEMA` set to the head's River schema (`river`). `dho` refuses any other value and names it.
 
-Set `DEV_HEALTH_ALLOW_CELERY_RIVER_CUTOVER=1` only on the explicitly authorized
-migration run after the River consumers are ready and Celery is drained. With
-that opt-in, the migrator advances both heads. Without it, River support tables
-and route records may remain present but unused while application schema such
-as Ask Dev persistence continues to migrate normally.
+`dho migrate status --check` is read-only. It exits 1 if a required migration is pending and 0 if the application schema is current. Only this flat form takes `--check`: `dho migrate postgres status` takes no flags.
 
-`migrate postgres status --check` is read-only. It requires the current
-`application_schema` head and, only when the cutover opt-in is present, the
-`river_cutover` head.
+`dho migrate postgres preflight` is read-only and exits 0 when the database is at the head, 10 when the upgrade applies cleanly (1 with `--strict`), 1 when the upgrade needs manual work, and 3 when the measurement did not happen.
 
-**Backward-compatible aliases:** `dev-hops migrate upgrade`, `dev-hops migrate downgrade`, etc. still work and target PostgreSQL.
+**Flat aliases:** `dho migrate current`, `heads`, `history`, `status` and `downgrade` target PostgreSQL. `dho migrate upgrade` is not an alias: it runs the full set described above.
 
 ### `migrate clickhouse`
 
-Run ClickHouse schema migrations. Uses `CLICKHOUSE_URI`.
+Run ClickHouse schema migrations. Uses `CLICKHOUSE_URI` (native protocol), or the `DEV_HEALTH_CH_*` component form.
 
-ClickHouse migrations are numbered `.sql` and `.py` files in `migrations/clickhouse/`, tracked via a `schema_migrations` table in ClickHouse.
+ClickHouse migrations are tracked in a `schema_migrations` table in ClickHouse. `upgrade` applies the head baseline to an empty database, then every migration after the head. The bare `dho migrate clickhouse` prints usage only.
 
 ```bash
 # Apply all pending migrations
-dev-hops migrate clickhouse
-dev-hops migrate clickhouse upgrade
+dho migrate clickhouse upgrade
 
-# Show applied and pending migrations
-dev-hops migrate clickhouse status
+# Show applied, missing and pending migrations (read-only)
+dho migrate clickhouse status
 
-# Exit non-zero if any migration is pending (read-only wait primitive for deploy tooling)
-dev-hops migrate clickhouse status --check
+# Exit 1 unless the database is at the head (read-only wait primitive for deploy tooling)
+dho migrate clickhouse status --check
 
-# Remediate stale duplicate repo rows (dry-run unless --apply)
-dev-hops migrate clickhouse repair
-dev-hops migrate clickhouse repair --apply
+# List stale duplicate repo rows (a dry run unless --apply)
+dho migrate clickhouse repair
+dho migrate clickhouse repair --apply
 ```
 
-> **Important:** Run `dev-hops migrate clickhouse` after setting up a fresh environment, before running any sync or metrics commands. ClickHouse tables are **not** auto-created — they require migrations to be applied first.
+> **Important:** Run `dho migrate clickhouse upgrade` after setting up a fresh environment, before running any sync or metrics commands. ClickHouse tables are **not** auto-created — they require migrations to be applied first.
 
 ---
 
@@ -2013,15 +1837,16 @@ dev-hops migrate clickhouse repair --apply
 
 ```bash
 # Set environment variables
-export CLICKHOUSE_URI="clickhouse://ch:ch@localhost:8123/default"
-export POSTGRES_URI="postgresql+asyncpg://postgres:postgres@localhost:5555/postgres"
+export CLICKHOUSE_URI="clickhouse://ch:ch@localhost:9000/default"
+export POSTGRES_URI="postgresql://postgres:postgres@localhost:5555/postgres"
+export DEV_HEALTH_ALLOW_CELERY_RIVER_CUTOVER=1 RIVER_DATABASE_SCHEMA=river
 
 # 1. Run migrations
-dev-hops migrate postgres
-dev-hops migrate clickhouse
+dho migrate postgres upgrade
+dho migrate clickhouse upgrade
 
 # 2. Sync git data
-dev-hops sync git --provider github \
+dho sync git --provider github \
   --auth "$GITHUB_TOKEN" \
   --owner myorg \
   --repo myrepo
@@ -2044,22 +1869,21 @@ dho workers metrics daily-start \
 # Start databases
 docker compose up -d clickhouse postgres
 
-# Run migrations
-dev-hops migrate postgres
-dev-hops migrate clickhouse
+# Run migrations (the compose `migrate` service runs `dho migrate upgrade`)
+docker compose run --rm migrate
 
-# Generate synthetic data and compute metrics for it in one pass (fixtures
-# generation computes metrics in-process against the sink you pass it --
-# unaffected by CHAOS-5055, which is about the standalone `metrics daily`/
-# `rebuild` verbs against already-synced real data, not fixtures)
-dev-hops fixtures generate --days 30 --with-metrics
+# Load a frozen synthetic world with its derived metrics and work graph
+# (analytics rows only: create the first user with `dho admin users create`)
+dho fixtures generate --sink "$CLICKHOUSE_URI" --provider synthetic \
+  --repo-name acme/live-e2e --repo-count 1 --days 14 --commits-per-day 6 \
+  --pr-count 24 --team-count 10 --seed 20260219 --with-metrics --with-work-graph
 ```
 
 ### Batch Organization Sync
 
 ```bash
 # Sync all repos in org
-dev-hops sync git --provider github \
+dho sync git --provider github \
   --auth "$GITHUB_TOKEN" \
   -s "myorg/*" \
   --group myorg \
@@ -2075,8 +1899,8 @@ dev-hops sync git --provider github \
 — submitting your own data to `/api/v1/external-ingest/*` instead of relying on a FullChaos-managed
 connector. See [Register a source](../../integrate/customer-push/register-source.md) for a full first-batch
 walkthrough and [Record kinds and enums](../../reference/schemas/record-kinds-and-enums.md)
-for the record kinds. `push` subcommands are excluded from `dev-hops`'s global `--org` auto-resolution
-and ClickHouse/Postgres preflight entirely — `validate`/`sample` are fully offline; `batch`/`status`
+for the record kinds. `push` subcommands use neither the global `--org` auto-resolution
+nor the ClickHouse/PostgreSQL preflight — `validate`/`sample` are fully offline; `batch`/`status`
 talk to the FullChaos API over HTTP and resolve their own credentials (below).
 
 ### Credentials (`batch` / `status`)
@@ -2161,7 +1985,7 @@ FullChaos connector, in the meantime.
 
 ### `push` exit codes
 
-`push` uses its own exit-code contract, distinct from the rest of `dev-hops` (see
+`push` uses its own exit-code contract, distinct from the rest of `dho` (see
 [Exit Codes](#exit-codes) below):
 
 | Code | Meaning |
@@ -2179,7 +2003,7 @@ FullChaos connector, in the meantime.
 | Code | Meaning |
 |------|---------|
 | 0 | Success |
-| 1 | General error |
-| 2 | Configuration error — includes argparse usage errors and missing required inputs surfaced by the [preflight](#input-validation-preflight) (e.g. unset `CLICKHOUSE_URI`/`POSTGRES_URI`/`ORG_ID`) |
-| 3 | Authentication error |
-| 4 | Rate limit exceeded |
+| 1 | Failure: a dependency is down, the operation failed, or the configuration is invalid |
+| 2 | Usage error: an unknown command, flag or positional argument, or a missing required input surfaced by the [preflight](#input-validation-preflight) (e.g. unset `CLICKHOUSE_URI`). Nothing ran |
+| 3 | Refused: a preflight said no and nothing was written, or the verb is not available in `dho` |
+

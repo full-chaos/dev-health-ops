@@ -128,7 +128,7 @@ ARG BUILD_TIME="1970-01-01T00:00:00Z"
 # org.opencontainers.image.revision off whatever is currently tagged
 # `latest` to decide whether a new build may move that tag.
 LABEL org.opencontainers.image.title="Dev Health ops runtime" \
-      org.opencontainers.image.description="dev-health-ops API and runner images" \
+      org.opencontainers.image.description="dev-health-ops runtime image" \
       org.opencontainers.image.source="https://github.com/full-chaos/dev-health-ops" \
       org.opencontainers.image.version=${VERSION} \
       org.opencontainers.image.revision=${COMMIT} \

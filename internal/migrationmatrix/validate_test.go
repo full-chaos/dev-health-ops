@@ -387,7 +387,7 @@ func TestADocumentDriftRowIsNamedCountedAndFailsThePage(t *testing.T) {
 	if got := UnprovenReachable(render.Operations, catalog); got != 1 {
 		t.Fatalf("UnprovenReachable = %d, want 1: the served canary row counts, the drifted primary row does not", got)
 	}
-	if !strings.Contains(block, "(DOCUMENT_DRIFT, as `dev-hops go-api routing status` reports it): **1**") {
+	if !strings.Contains(block, "(DOCUMENT_DRIFT, as `dho goapi routing status` reports it): **1**") {
 		t.Fatalf("the drift count must be on the page; got:\n%s", block)
 	}
 
@@ -901,8 +901,8 @@ func TestAnUnregisteredRowIsNamedAsStatusNamesIt(t *testing.T) {
 	for _, want := range []string{
 		"**DOCUMENT_DRIFT** (serves document `000000000000…`, which the catalog does not name)",
 		"**UNREGISTERED** (serves document `eeeeeeeeeeee…`; the catalog does not register this operation)",
-		"(DOCUMENT_DRIFT, as `dev-hops go-api routing status` reports it): **1**",
-		"(UNREGISTERED, as `dev-hops go-api routing status` reports it): **2**",
+		"(DOCUMENT_DRIFT, as `dho goapi routing status` reports it): **1**",
+		"(UNREGISTERED, as `dho goapi routing status` reports it): **2**",
 	} {
 		if !strings.Contains(page, want) {
 			t.Fatalf("the page does not contain %q:\n%s", want, page)

@@ -4,8 +4,8 @@ summary: Move from a question about engineering effort to the Investment theme m
 content_type: task-guide
 owner: product-analytics
 source_of_truth:
-  - src/dev_health_ops/api/services/investment.py
-  - src/dev_health_ops/api/queries/investment.py
+  - internal/queryapi/investment/response.go
+  - internal/queryapi/investment/reader.go
   - src/components/work/investment/charts/InvestmentMixSection.tsx
   - docs/user-guide/journeys/investment-view.md
 applicability: current

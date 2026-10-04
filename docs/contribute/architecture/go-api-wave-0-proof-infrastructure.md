@@ -647,12 +647,20 @@ document_digest, selected_operation)`, so one operation can have several
 rows under different document digests; leaving one behind would report
 success while the operation stayed reachable.
 
-**Only one of those rows is ever reachable**, and `status` says which. The
-edge resolves a request to an operation through the catalog and then looks
-the row up by the *catalog's* document digest — so a row at the live
-schema digest under any other document digest is dead in exactly the way a
-row at a stale schema digest is dead. `status` reports it as `STALE`,
-never `MATCH`, never reachable, and names its digest under
+**Only the rows under a document the operation accepts are ever
+reachable**, and `status` says which. The edge resolves a request to an
+operation through the catalog and then reads the rows under the documents
+that operation accepts: the catalog's current document digest and the
+legacy digests the catalog registers for it (`"legacy": true`, dual
+accept). query-api serves the operation when any one of those rows is in
+`canary` or `primary`. `status` counts the same rows (CHAOS-8649): such a
+row reads `MATCH`, its `document_class` is `current` or `legacy`,
+`row_document_digest` names the row's own digest, `mode` and
+`current_candidate_build` are read from it, and `accepted_document_digests`
+lists every accepted row the operation has at the live schema digest. A row
+at the live schema digest under any other document digest is dead in
+exactly the way a row at a stale schema digest is dead: `status` reports it
+as `STALE`, never `MATCH`, never reachable, and names its digest under
 `unreachable_document_digests`. A row that is present in `psql` and can
 never be consulted is the CHAOS-5416 shape; only the column that moved is
 different.

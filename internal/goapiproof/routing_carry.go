@@ -63,7 +63,7 @@ package goapiproof
 // LEGACY ones it registered before (legacyDigestsByOperation in
 // query_route.go, the `"legacy": true` entries of the registered-document
 // dump and of the edge catalog). The Go plane reads a routing row under
-// ANY accepted digest (routeswitch/postgres_switch.go acceptedDigests), so
+// ANY accepted digest (routeswitch/postgres_switch.go AcceptedDigests), so
 // a row keyed to a legacy digest is a live row, not a dead one.
 //
 // A row whose digest the image being rolled to lists as a LEGACY text of

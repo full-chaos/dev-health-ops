@@ -51,6 +51,9 @@ Team identity for a work item is read from the latest primary attribution record
 not denormalized onto every downstream table, so a small number of read paths (documented on the full
 page) intentionally read a stored team column instead.
 
+Repositories, pull requests, issues, and projects form one entity tree; see
+[Entity tree: repositories, pull requests, issues, projects](../../contribute/architecture/data-and-storage.md#entity-tree-repositories-pull-requests-issues-projects).
+
 For the full precedence decision tree, the source reference matrix, the provider coverage contract,
 symptom-to-fix diagnostics, and the recovery/backfill runbook, see
 [Work-item team attribution](../../contribute/architecture/team-attribution.md).

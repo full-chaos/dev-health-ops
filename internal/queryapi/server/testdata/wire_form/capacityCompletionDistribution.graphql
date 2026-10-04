@@ -1,8 +1,5 @@
-query CapacityCompletionDistribution($orgId: String!, $teamId: String!, $historyDays: Int! = 90, $simulations: Int! = 10000) {
-  capacityForecast(
-    orgId: $orgId
-    input: {teamId: $teamId, historyDays: $historyDays, simulations: $simulations}
-  ) {
+query CapacityCompletionDistribution($orgId: String!, $input: CapacityForecastInput) {
+  capacityForecast(orgId: $orgId, input: $input) {
     completionDistribution {
       days {
         value

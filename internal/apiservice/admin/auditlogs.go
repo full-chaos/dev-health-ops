@@ -71,9 +71,10 @@ const auditLogFrom = ` FROM audit_logs a
 	LEFT JOIN org_invites invite ON a.resource_type = 'membership'
 		AND a.resource_id ~* '^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$'
 		AND invite.id = a.resource_id::uuid AND invite.org_id = a.org_id
-	LEFT JOIN users resource_user ON a.resource_type IN ('user', 'session')
+	LEFT JOIN memberships resource_membership ON a.resource_type IN ('user', 'session')
 		AND a.resource_id ~* '^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$'
-		AND resource_user.id = a.resource_id::uuid
+		AND resource_membership.user_id = a.resource_id::uuid AND resource_membership.org_id = a.org_id
+	LEFT JOIN users resource_user ON resource_user.id = resource_membership.user_id
 	LEFT JOIN organizations resource_org ON a.resource_type = 'organization'
 		AND a.resource_id ~* '^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$'
 		AND resource_org.id = a.resource_id::uuid AND resource_org.id = a.org_id

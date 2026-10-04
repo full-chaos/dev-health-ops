@@ -159,18 +159,22 @@ func (e carryRefusal) Unwrap() []error { return []error{e.err, ErrCarryRequestRe
 // fleet computes.
 var ErrCarryDigestUnchanged = errors.New("goapiproof: the target schema digest is the live one, so there is nothing to carry")
 
-// ErrCarryNoLiveRows reports that rows exist, and none of them at the live
-// digest. "The table is empty" and "every row died" must not read alike --
-// that is the whole lesson of CHAOS-5416 -- so a table with no row at any
-// digest is ErrRoutingTableEmpty instead, which is not a refusal.
+// ErrCarryNoLiveRows reports that rows exist, none of them at the live
+// digest, and at least one of them is in a served mode. "The table is empty"
+// and "every row died" must not read alike -- that is the whole lesson of
+// CHAOS-5416 -- so a table with no row at any digest is ErrRoutingTableEmpty
+// instead, and one whose rows elsewhere are all in a dark mode is
+// ErrRoutingRowsOnlyDark; neither is a refusal.
 var ErrCarryNoLiveRows = errors.New("goapiproof: no routing row exists at the live schema digest")
 
-// ErrCarryNothingReachable reports that rows exist at the live digest but
-// none is reachable, so the roll would un-route nothing.
+// ErrCarryNothingReachable reports that rows in a served mode exist at the
+// live digest but none is reachable, so the roll would un-route nothing.
 //
-// Still a refusal: an operator runs this verb believing operations are
-// being served, and "nothing is on" is an answer they must read, not
-// infer from a run that reported success over an empty list.
+// Still a refusal: an operator who turned operations on believes they are
+// being served, and "nothing is on" is an answer they must read, not infer
+// from a run that reported success over an empty list. Live rows that are all
+// in a dark mode (python, disabled, shadow) are never refused (CHAOS-8586):
+// each holds its operation dark, as decided, before and after the roll.
 var ErrCarryNothingReachable = errors.New("goapiproof: no reachable row at the live schema digest")
 
 // ErrCarryDocumentMoved reports operations whose registered document is
@@ -752,18 +756,26 @@ func Carry(ctx context.Context, pool *pgxpool.Pool, request CarryRequest) ([]Car
 		return nil, err
 	}
 	if len(liveRows) == 0 {
-		// No row at the live digest is two states, and they answer differently
-		// (CHAOS-8543): a table with no row at ANY digest has nothing to carry and
-		// nothing wrong with it; a table whose rows all sit at other digests holds
-		// those operations dark, and stays the refusal it was.
-		empty, err := routingTableEmpty(ctx, tx)
+		// No row at the live digest is three states, and they answer differently
+		// (CHAOS-8543, CHAOS-8586), decided under the table lock: a table with no
+		// row at ANY digest, or whose rows elsewhere are all in a dark mode, has
+		// nothing to carry and nothing wrong with it; a served row at another
+		// digest is an operation somebody turned on that is dark, and stays the
+		// refusal it was.
+		answer, err := answerNoLiveRow(ctx, tx, request.LiveSchemaDigest)
 		if err != nil {
 			return nil, err
 		}
-		if empty {
-			return nil, ErrRoutingTableEmpty
+		switch answer {
+		case noLiveRowTableEmpty, noLiveRowOnlyDark:
+			return nil, noLiveRowError(ctx, tx, request.LiveSchemaDigest, answer)
+		case noLiveRowAppeared:
+			return nil, fmt.Errorf("%w: a row APPEARED at %s after this run read none there.\n"+
+				"  NOTHING was written. Run `carry` again; it will copy what the live digest says NOW.",
+				ErrCarrySourceRowChanged, request.LiveSchemaDigest)
+		default:
+			return nil, fmt.Errorf("%w: %s", ErrCarryNoLiveRows, request.LiveSchemaDigest)
 		}
-		return nil, fmt.Errorf("%w: %s", ErrCarryNoLiveRows, request.LiveSchemaDigest)
 	}
 	if len(wanted) > 0 {
 		present := map[string]bool{}
@@ -848,21 +860,22 @@ func Carry(ctx context.Context, pool *pgxpool.Pool, request CarryRequest) ([]Car
 	}
 
 	summary := SummarizeCarry(outcomes)
-	// A digest whose live rows are ALL shadow can never be refused here (r1 on
-	// this change): a shadow row serves no client, so there is nothing a roll
-	// could un-route, and refusing after the plan has printed its CARRY lines and
-	// the event has been emitted left a registration absent behind a report that
-	// said it was written. The refusal stays for the case it exists for -- some
-	// live row is not shadow (a served, python or disabled row) and every row was
-	// skipped -- so an operator who believes something is served still hears
-	// that nothing is.
-	nonShadowLive := false
+	// A digest whose live rows are ALL in a dark mode -- shadow (r1 on
+	// CHAOS-8144), python or disabled (CHAOS-8586) -- can never be refused
+	// here. No client is served from such a row, and by the catalog rule the
+	// row holds its operation dark at whichever digest it stays at, so a roll
+	// changes nothing anyone is served; refusing failed the pre-upgrade hook of
+	// a stack that serves the catalog without rows and holds one operation
+	// dark. The refusal stays for the case it exists for -- some live row is in
+	// a served mode and every row was skipped -- so an operator who believes
+	// something is served still hears that nothing is.
+	servedLive := false
 	for _, row := range liveRows {
-		if (len(wanted) == 0 || wanted[row.Operation]) && row.Mode != TargetModeShadow {
-			nonShadowLive = true
+		if (len(wanted) == 0 || wanted[row.Operation]) && servedMode(row.Mode) {
+			servedLive = true
 		}
 	}
-	if summary.Carried == 0 && summary.Unchanged == 0 && nonShadowLive {
+	if summary.Carried == 0 && summary.Unchanged == 0 && servedLive {
 		return outcomes, fmt.Errorf("%w: %d row(s) exist at %s and every one was skipped -- each outcome names why",
 			ErrCarryNothingReachable, len(liveRows), request.LiveSchemaDigest)
 	}
@@ -911,8 +924,9 @@ func Carry(ctx context.Context, pool *pgxpool.Pool, request CarryRequest) ([]Car
 	//
 	// Everything above decided what to copy from an UNLOCKED read, which
 	// under READ COMMITTED is a photograph of a moment that has since
-	// passed. This pass locks those rows FOR SHARE and compares them to
-	// what was actually written; from here to COMMIT they cannot move, so
+	// passed. This pass locks those rows (FOR SHARE, or the table SHARE lock
+	// when every row was skipped) and compares every row it decided about
+	// to what it read; from here to COMMIT they cannot move, so
 	// the row committed at the target digest is the decision standing at
 	// the live digest at the instant this transaction becomes real --
 	// which is the only reading of "preserve" that is worth anything to
@@ -1000,41 +1014,57 @@ func carryOneRow(ctx context.Context, tx pgx.Tx, targetSchemaDigest, recordedBy 
 	return false, nil
 }
 
-// revalidateCarriedSourceRows re-reads the LIVE rows under a share lock
-// and refuses if any row this run copied is no longer what was copied.
+// revalidateCarriedSourceRows re-reads the LIVE rows under a lock and
+// refuses if any row this run decided about -- carried, unchanged OR skipped
+// -- is no longer what it read, or if a live row appeared.
 //
-// It compares only the rows whose outcome was CARRY or UNCHANGED: a
-// SKIPPED row was never copied, so a concurrent change to it changes
-// nothing this transaction claims, and refusing over it would block a
-// correct carry for a row nothing at the target digest will ever read.
+// SKIPPED rows are compared too (CHAOS-8586). By the catalog rule a skipped
+// python or disabled row holds its operation dark at the old digest after the
+// roll; a concurrent `enable` that turns it canary while this run prepares
+// leaves a served operation with no row at the target digest, which the roll
+// then un-routes -- the harm this verb exists to prevent.
 //
-// Both directions are a refusal, and for the same reason: a row whose
-// carried columns CHANGED means the target digest would hold a
-// superseded decision, and a row that VANISHED means the operator
-// removed the decision entirely -- in both cases what is about to commit
-// at the target digest is no longer what is standing at the live one.
+// THE LOCK depends on whether this run wrote anything. When it carried or
+// found UNCHANGED at least one row, it is lockCarrySourceRowsSQL (FOR SHARE),
+// taken after every write for the lock-order reason that statement's comment
+// gives. When every row was skipped, this run has written nothing, so it takes
+// the table SHARE lock answerNoLiveRow takes: no lock-order hazard, and it also
+// waits for a writer whose NEW live row is in flight, which FOR SHARE (a lock
+// on rows that already exist) does not see.
+//
+// Every difference is a refusal: a row whose columns CHANGED means the run
+// decided on a superseded state, and a row that VANISHED means the operator
+// removed the decision -- in both cases what is about to commit is no longer
+// what is standing at the live digest.
 func revalidateCarriedSourceRows(ctx context.Context, tx pgx.Tx, liveSchemaDigest string, surveyed []CarryRow, outcomes []CarryOutcome) error {
-	copied := map[carryRowKey]CarryRow{}
+	decided := map[carryRowKey]CarryRow{}
+	copiedAny := false
 	for _, outcome := range outcomes {
 		switch outcome.Action {
 		case CarryActionCarry, CarryActionUnchanged:
-			copied[carryRowKey{Operation: outcome.Operation, DocumentDigest: outcome.DocumentDigest}] = carriedRowOf(outcome)
+			copiedAny = true
+			decided[carryRowKey{Operation: outcome.Operation, DocumentDigest: outcome.DocumentDigest}] = carriedRowOf(outcome)
+		case CarryActionSkip:
+			decided[carryRowKey{Operation: outcome.Operation, DocumentDigest: outcome.DocumentDigest}] = carriedRowOf(outcome)
 		}
 	}
-	// EVERY surveyed key, not only the copied ones (r2 F2). A row the
-	// survey saw and deliberately skipped is accounted for; a row NOBODY
-	// saw is the gap. Built even when nothing was copied, because a run
-	// that carried nothing has already refused elsewhere and a run that
-	// carried something must still be able to tell an old row from a new
-	// one.
+	// EVERY surveyed key, not only the decided ones (r2 F2). A row the survey
+	// saw is accounted for; a row NOBODY saw is the gap.
 	seen := map[carryRowKey]bool{}
 	for _, row := range surveyed {
 		seen[carryRowKey{Operation: row.Operation, DocumentDigest: row.DocumentDigest}] = true
 	}
-	if len(copied) == 0 {
+	if len(decided) == 0 {
 		return nil
 	}
-	locked, err := readCarryRows(ctx, tx, lockCarrySourceRowsSQL, liveSchemaDigest)
+	read := lockCarrySourceRowsSQL
+	if !copiedAny {
+		if _, err := tx.Exec(ctx, lockRoutingTableSQL); err != nil {
+			return fmt.Errorf("goapiproof: lock go_api_routing_state: %w", err)
+		}
+		read = surveyCarryRowsSQL
+	}
+	locked, err := readCarryRows(ctx, tx, read, liveSchemaDigest)
 	if err != nil {
 		return err
 	}
@@ -1043,13 +1073,13 @@ func revalidateCarriedSourceRows(ctx context.Context, tx pgx.Tx, liveSchemaDiges
 		present[carryRowKey{Operation: row.Operation, DocumentDigest: row.DocumentDigest}] = row
 	}
 	var changed []string
-	for key, was := range copied {
+	for key, was := range decided {
 		now, ok := present[key]
 		switch {
 		case !ok:
 			changed = append(changed, fmt.Sprintf("%s (document %s) was REMOVED at the live digest", key.Operation, key.DocumentDigest))
 		case !sameCarriedState(was, now):
-			changed = append(changed, fmt.Sprintf("%s (document %s) now reads mode %s, rollout %d, build %s -- this run was copying mode %s, rollout %d, build %s",
+			changed = append(changed, fmt.Sprintf("%s (document %s) now reads mode %s, rollout %d, build %s -- this run read mode %s, rollout %d, build %s",
 				key.Operation, key.DocumentDigest, now.Mode, now.RolloutPercentage, now.Build, was.Mode, was.RolloutPercentage, was.Build))
 		}
 	}

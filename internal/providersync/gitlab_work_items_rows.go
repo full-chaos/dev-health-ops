@@ -121,6 +121,15 @@ type gitlabIssueLinkPayload struct {
 	LinkCreatedAt *string `json:"link_created_at"`
 }
 
+// gitlabClosingMergeRequestPayload is one entry of GET /projects/:id/issues/:iid/closed_by: a merge request that closes
+// the issue on merge (closing keyword in its description or title; GitLab's own statement of the link).
+type gitlabClosingMergeRequestPayload struct {
+	IID        json.Number `json:"iid"`
+	References struct {
+		Full string `json:"full"`
+	} `json:"references"`
+}
+
 type gitlabIdentityResolver func(gitlabWorkItemUserPayload) string
 
 func resolveGitLabWorkItemIdentity(
@@ -674,6 +683,49 @@ var (
 	gitlabIssueReferencePattern = regexp.MustCompile(`(?m)(?:^|[^\w])(?:(?:([\w/-]+))?#(\d+))`)
 	gitlabExternalKeyPattern    = regexp.MustCompile(`(?i)(depends\s+on|blocked\s+by|blocks|fixes|closes|resolves|relates\s+to|part\s+of|see)\s*:?\s*([A-Za-z]{2,}-\d+)\b`)
 )
+
+// normalizeGitLabClosingMergeRequests emits the PRIMARY provider-attached MR<->issue link for GitLab (CHAOS-8526), the
+// counterpart of extractGitHubClosingIssueReferences: source = the MR (gitlab:<path>!<iid>, the id
+// normalizeGitLabMergeRequestWorkItem mints), target = this issue, raw kind gitlab_closing_reference. The MR's own
+// project path comes from references.full (an MR from another project keeps its path); only when that is absent does
+// the issue's project stand in.
+func normalizeGitLabClosingMergeRequests(
+	claim Claim,
+	issueWorkItemID string,
+	fullName string,
+	mergeRequests []gitlabClosingMergeRequestPayload,
+	normalizedAt time.Time,
+) []gitlabWorkItemDependencyRow {
+	rows := make([]gitlabWorkItemDependencyRow, 0, len(mergeRequests))
+	seen := make(map[string]struct{}, len(mergeRequests))
+	for _, mergeRequest := range mergeRequests {
+		iid := mergeRequest.IID.String()
+		if parsed, err := strconv.Atoi(iid); err != nil || parsed < 1 {
+			continue
+		}
+		path := strings.TrimSpace(mergeRequest.References.Full)
+		if index := strings.LastIndex(path, "!"); index >= 0 {
+			path = path[:index]
+		}
+		if path == "" {
+			path = fullName
+		}
+		source := "gitlab:" + path + "!" + iid
+		if _, duplicate := seen[source]; duplicate || source == issueWorkItemID {
+			continue
+		}
+		seen[source] = struct{}{}
+		row := gitlabWorkItemDependencyRow{
+			SourceWorkItemID: source, TargetWorkItemID: issueWorkItemID, RelationshipType: "relates_to",
+			RelationshipTypeRaw: "gitlab_closing_reference", RelationshipSemanticsVersion: "canonical-blocks.v2",
+			LastSynced: normalizedAt.UTC(), OrgID: claim.OrgID,
+		}
+		if validateGitLabDependencyRow(row, claim) == nil {
+			rows = append(rows, row)
+		}
+	}
+	return rows
+}
 
 func normalizeGitLabDependencies(
 	claim Claim,

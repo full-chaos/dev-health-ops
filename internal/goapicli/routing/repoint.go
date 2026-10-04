@@ -31,7 +31,8 @@ import (
 // own refusal vocabulary is flatter than carry's: it has no equivalent of "digest_unchanged"
 // or "stale_build" (nothing bigboy-cut.sh or the Helm hook currently branches on for
 // repoint), so Reason is one of "repointed" (success, including a dry run, a run that
-// repointed zero eligible rows and the no-op on an empty table, which EmptyTable marks),
+// repointed zero eligible rows, the no-op on an empty table, which EmptyTable marks, and
+// the no-op on a table whose rows are all dark and elsewhere, which DarkRowsOnly marks),
 // "refused" (any refusal), or "error" (an internal defect).
 type repointResult struct {
 	Reason  string `json:"reason"`
@@ -40,6 +41,8 @@ type repointResult struct {
 	// go_api_routing_state held no row at any schema digest (CHAOS-8543); see
 	// carryResult.EmptyTable. Reason stays "repointed".
 	EmptyTable bool `json:"empty_table,omitempty"`
+	// DarkRowsOnly is carryResult.DarkRowsOnly for `repoint` (CHAOS-8586).
+	DarkRowsOnly bool `json:"dark_rows_only,omitempty"`
 }
 
 // repointJSONPrefix mirrors carryJSONPrefix -- see its doc comment.
@@ -70,7 +73,7 @@ func runRepoint(argv []string) (err error) {
 	set.BoolVar(&jsonOut, "json", false, "also print one machine-readable line to stdout, prefixed `"+repointJSONPrefix+"`, classifying the outcome by a stable `reason` field (\"repointed\", \"refused\", \"error\")")
 	set.DurationVar(&common.timeout, "timeout", 30*time.Second, "bounds EACH HTTP request, the Postgres dial, and EACH database statement (server-side statement_timeout/lock_timeout) -- never the run as a whole")
 
-	var emptyTable bool
+	var emptyTable, darkRowsOnly bool
 	defer func() {
 		if !jsonOut {
 			return
@@ -82,7 +85,7 @@ func runRepoint(argv []string) (err error) {
 				reason = "error"
 			}
 		}
-		result := repointResult{Reason: reason, EmptyTable: emptyTable}
+		result := repointResult{Reason: reason, EmptyTable: emptyTable, DarkRowsOnly: darkRowsOnly}
 		if err != nil {
 			result.Message = redactCredentials(err.Error())
 		}
@@ -210,9 +213,12 @@ func runRepoint(argv []string) (err error) {
 	// preflight above still ran, and so did the request's own checks -- the
 	// -expect-build cross-check included, which is what the hook waits on -- so
 	// only the answer to "there is no row at all" changed, from a refusal to a
-	// no-op. Rows that exist only at other digests are still ErrRepointNoRows.
+	// no-op. Rows that exist only at other digests, all in a dark mode, are the
+	// same no-op (CHAOS-8586); a served row at another digest is still
+	// ErrRepointNoRows.
 	emptyTable = errors.Is(err, goapiproof.ErrRoutingTableEmpty)
-	if err != nil && !emptyTable {
+	darkRowsOnly = errors.Is(err, goapiproof.ErrRoutingRowsOnlyDark)
+	if err != nil && !emptyTable && !darkRowsOnly {
 		return classifyWriteError(err)
 	}
 
@@ -250,6 +256,10 @@ func runRepoint(argv []string) (err error) {
 	}
 	if emptyTable {
 		fmt.Fprintln(stdout, routingTableEmptyNote("re-point"))
+	}
+	if darkRowsOnly {
+		fmt.Fprintln(stdout, routingRowsOnlyDarkNote("re-point"))
+		printDarkRowsOnly(err, "repoint")
 	}
 	return nil
 }

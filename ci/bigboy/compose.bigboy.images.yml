@@ -148,6 +148,12 @@ services:
   migrate:
     image: ghcr.io/full-chaos/dev-health-go-dho@sha256:970d2b765aac5da23e1ec58482663e51ac1ab5a78fc024d3d81feabfb0e14d44
     build: !reset null
+  # CHAOS-8647: the web-path smoke runs `dho smoke web-path` from the dho image, the same digest as query-api and
+  # migrate. compose.bigboy.smoke.yml (the smoke's own chain) holds the rest of the service.
+  web-smoke:
+    image: ghcr.io/full-chaos/dev-health-go-dho@sha256:970d2b765aac5da23e1ec58482663e51ac1ab5a78fc024d3d81feabfb0e14d44
+    build: !reset null
+    profiles: ["smoke"]
   # one-off prover shell, never started by 'up' (profile venue). POSTGRES_URI is interpolated by compose from
   # the same defaults the stack uses, so no credential passes through a file or argv of this lane.
   venue-tools:

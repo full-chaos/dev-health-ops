@@ -1041,10 +1041,9 @@ func (emptyHomeCHClient) Query(_ context.Context, _ string, _ []clickhouse.Bindi
 // real pool too, not a fake; an empty, migrated table answers
 // pgx.ErrNoRows, which FetchLatestSuccessfulSyncAt already maps to
 // (nil, nil). Proves home's reachability is gated independently by its
-// OWN go_api_routing_state row, using registeredHomeDocument's own
-// AUTHORED text (see that const's doc comment for why it is authored
-// rather than captured from a real client file: CHAOS-6084 found zero
-// web callers of this field).
+// OWN go_api_routing_state row, using registeredHomeDocument's real
+// captured wire text. The capture test keeps this request byte-identical
+// to the normal web client request.
 func TestHomeRoute_ReachableOnlyWhenSwitchEnabled(t *testing.T) {
 	pool := startTestRegistryPostgres(t)
 

@@ -102,22 +102,6 @@ query Home($orgId: String!, $filters: FilterInput, $window: HomeWindowInput) {
         displayName
         __typename
       }
-      attribution {
-        items
-        sources {
-          source
-          items
-          share
-          __typename
-        }
-        confidence {
-          confidence
-          items
-          share
-          __typename
-        }
-        __typename
-      }
       __typename
     }
     limitingFactor {

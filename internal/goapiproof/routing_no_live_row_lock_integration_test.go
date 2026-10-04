@@ -3,7 +3,9 @@
 package goapiproof
 
 // CHAOS-8586 defect 3: the answer `carry` and `repoint` give when their survey
-// finds no row at the live digest is decided under a table lock.
+// finds no row at the live digest is decided under a table lock; so is the
+// answer of a `carry` that skipped every live row, and a carry re-checks the
+// rows it skipped as well as the rows it copied.
 //
 // The race, as the review found it: the check was a plain read, so a writer
 // whose row at the live digest was written but not yet committed was invisible
@@ -17,6 +19,7 @@ package goapiproof
 import (
 	"context"
 	"errors"
+	"strings"
 	"testing"
 	"time"
 
@@ -72,8 +75,9 @@ func holdEnableBeforeCommit(t *testing.T, ctx context.Context, pool *pgxpool.Poo
 	}()
 	awaitLockWaiters(t, ctx, pool, 1, results)
 	var inFlight int
-	if err := pool.QueryRow(ctx, `SELECT count(*) FROM go_api_routing_state`).Scan(&inFlight); err != nil || inFlight != 0 {
-		t.Fatalf("enable's row is visible before it committed (%d row(s), err %v): the setup is not the race", inFlight, err)
+	if err := pool.QueryRow(ctx, `SELECT count(*) FROM go_api_routing_state WHERE mode IN ('canary', 'primary') AND selected_operation = $1`,
+		request.Operations[0]).Scan(&inFlight); err != nil || inFlight != 0 {
+		t.Fatalf("enable's row is visible as served before it committed (%d row(s), err %v): the setup is not the race", inFlight, err)
 	}
 	return func() {
 		if err := holder.Commit(ctx); err != nil {
@@ -176,5 +180,134 @@ func TestRepointRacingEnableWaitsForItsRowAndRepointsIt(t *testing.T) {
 	var mode, build string
 	if err := pool.QueryRow(ctx, `SELECT mode, current_candidate_build FROM go_api_routing_state WHERE selected_operation = 'featureFlags'`).Scan(&mode, &build); err != nil || mode != "canary" || build != repointRunningBuild {
 		t.Fatalf("row = mode %q build %q (err %v), want canary at %s", mode, build, err, repointRunningBuild)
+	}
+}
+
+// A live digest whose rows are all dark: carry skips them and answers OK. An
+// enable of one of those rows, in flight, turns it canary; carry must wait for
+// it and refuse, or the roll leaves that served operation with no row at the
+// target digest.
+func TestCarryOverAnAllDarkLiveDigestWaitsForAnEnableOfItsRow(t *testing.T) {
+	ctx := t.Context()
+	pool := startAuditedRegistryPostgres(t)
+	seedCarryRow(t, ctx, pool, carryIntegrationLiveDigest, CarryRow{
+		Operation: "featureFlags", DocumentDigest: testDocumentDigest, Mode: "disabled",
+		Build: verbsRunningBuild, Owner: "go", RolloutPercentage: 0, ReviewEvidence: "held dark",
+	})
+	release, enabled := holdEnableBeforeCommit(t, ctx, pool, enableRequest("featureFlags"))
+
+	carried := make(chan error, 1)
+	go func() {
+		_, err := Carry(ctx, pool, carryIntegrationRequest())
+		carried <- err
+	}()
+	awaitLockWaiters(t, ctx, pool, 2, carried, enabled)
+	release()
+
+	if err := awaitResult(t, "enable", enabled); err != nil {
+		t.Fatalf("enable: %v", err)
+	}
+	err := awaitResult(t, "carry", carried)
+	if !errors.Is(err, ErrCarrySourceRowChanged) {
+		t.Fatalf("carry = %v, want ErrCarrySourceRowChanged: the row it skipped as disabled is canary now", err)
+	}
+	if rows := rowsAtDigest(t, ctx, pool, carryIntegrationTargetDigest); len(rows) != 0 {
+		t.Fatalf("the refused run wrote %d row(s) at the target digest", len(rows))
+	}
+	outcomes, err := Carry(ctx, pool, carryIntegrationRequest())
+	if err != nil {
+		t.Fatalf("carry re-run: %v", err)
+	}
+	if summary := SummarizeCarry(outcomes); summary.Carried != 1 {
+		t.Fatalf("carry re-run summary = %+v, want the enabled row carried", summary)
+	}
+	row, ok := carryRowByOperation(rowsAtDigest(t, ctx, pool, carryIntegrationTargetDigest), "featureFlags")
+	if !ok || row.Mode != "canary" {
+		t.Fatalf("target row = %+v (present=%t), want the enabled canary row carried", row, ok)
+	}
+}
+
+// The same race beside a row that IS carried: carry copies hotspots and skips
+// the disabled featureFlags row, which an enable in flight turns canary. The
+// skipped row is re-checked under the lock like the copied one, so the run
+// refuses whole rather than leave featureFlags behind.
+func TestCarryRechecksASkippedRowThatAnEnableTurnsOnWhileItRuns(t *testing.T) {
+	ctx := t.Context()
+	pool := startAuditedRegistryPostgres(t)
+	seedCarryRow(t, ctx, pool, carryIntegrationLiveDigest, CarryRow{
+		Operation: "hotspots", DocumentDigest: testDocumentDigest2, Mode: "canary",
+		Build: verbsRunningBuild, Owner: "go", RolloutPercentage: 100, ReviewEvidence: "on",
+	})
+	seedCarryRow(t, ctx, pool, carryIntegrationLiveDigest, CarryRow{
+		Operation: "featureFlags", DocumentDigest: testDocumentDigest, Mode: "disabled",
+		Build: verbsRunningBuild, Owner: "go", RolloutPercentage: 0, ReviewEvidence: "held dark",
+	})
+	release, enabled := holdEnableBeforeCommit(t, ctx, pool, enableRequest("featureFlags"))
+
+	carried := make(chan error, 1)
+	go func() {
+		_, err := Carry(ctx, pool, carryIntegrationRequest())
+		carried <- err
+	}()
+	awaitLockWaiters(t, ctx, pool, 2, carried, enabled)
+	release()
+
+	if err := awaitResult(t, "enable", enabled); err != nil {
+		t.Fatalf("enable: %v", err)
+	}
+	err := awaitResult(t, "carry", carried)
+	if !errors.Is(err, ErrCarrySourceRowChanged) {
+		t.Fatalf("carry = %v, want ErrCarrySourceRowChanged: the row it skipped as disabled is canary now", err)
+	}
+	if rows := rowsAtDigest(t, ctx, pool, carryIntegrationTargetDigest); len(rows) != 0 {
+		t.Fatalf("the refused run must roll back whole, found %d row(s) at the target digest", len(rows))
+	}
+	outcomes, err := Carry(ctx, pool, carryIntegrationRequest())
+	if err != nil {
+		t.Fatalf("carry re-run: %v", err)
+	}
+	if summary := SummarizeCarry(outcomes); summary.Carried != 2 {
+		t.Fatalf("carry re-run summary = %+v, want both served rows carried", summary)
+	}
+}
+
+// An all-dark live digest and an enable in flight that INSERTS a new live row
+// (an operation with no row before): a row lock on the rows carry read cannot
+// see it, so the all-skipped answer must wait on the table lock.
+func TestCarryOverAnAllDarkLiveDigestWaitsForANewLiveRowInFlight(t *testing.T) {
+	ctx := t.Context()
+	pool := startAuditedRegistryPostgres(t)
+	seedCarryRow(t, ctx, pool, carryIntegrationLiveDigest, CarryRow{
+		Operation: "featureFlags", DocumentDigest: testDocumentDigest, Mode: "disabled",
+		Build: verbsRunningBuild, Owner: "go", RolloutPercentage: 0, ReviewEvidence: "held dark",
+	})
+	request := enableRequest("hotspots")
+	request.DocumentDigest["hotspots"] = testDocumentDigest2
+	release, enabled := holdEnableBeforeCommit(t, ctx, pool, request)
+
+	carried := make(chan error, 1)
+	go func() {
+		_, err := Carry(ctx, pool, carryIntegrationRequest())
+		carried <- err
+	}()
+	awaitLockWaiters(t, ctx, pool, 2, carried, enabled)
+	release()
+
+	if err := awaitResult(t, "enable", enabled); err != nil {
+		t.Fatalf("enable: %v", err)
+	}
+	err := awaitResult(t, "carry", carried)
+	if !errors.Is(err, ErrCarrySourceRowChanged) || !strings.Contains(err.Error(), "APPEARED") {
+		t.Fatalf("carry = %v, want ErrCarrySourceRowChanged naming the row that APPEARED", err)
+	}
+	outcomes, err := Carry(ctx, pool, carryIntegrationRequest())
+	if err != nil {
+		t.Fatalf("carry re-run: %v", err)
+	}
+	if summary := SummarizeCarry(outcomes); summary.Carried != 1 || summary.Skipped != 1 {
+		t.Fatalf("carry re-run summary = %+v, want the new canary row carried and the disabled row skipped", summary)
+	}
+	if row, ok := carryRowByOperation(rowsAtDigest(t, ctx, pool, carryIntegrationTargetDigest), "hotspots"); !ok || row.Mode != "canary" {
+		t.Fatalf("target row = %+v (present=%t), want the enabled hotspots row carried", row, ok)
 	}
 }

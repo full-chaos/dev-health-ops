@@ -924,8 +924,9 @@ func Carry(ctx context.Context, pool *pgxpool.Pool, request CarryRequest) ([]Car
 	//
 	// Everything above decided what to copy from an UNLOCKED read, which
 	// under READ COMMITTED is a photograph of a moment that has since
-	// passed. This pass locks those rows FOR SHARE and compares them to
-	// what was actually written; from here to COMMIT they cannot move, so
+	// passed. This pass locks those rows (FOR SHARE, or the table SHARE lock
+	// when every row was skipped) and compares every row it decided about
+	// to what it read; from here to COMMIT they cannot move, so
 	// the row committed at the target digest is the decision standing at
 	// the live digest at the instant this transaction becomes real --
 	// which is the only reading of "preserve" that is worth anything to
@@ -1013,41 +1014,57 @@ func carryOneRow(ctx context.Context, tx pgx.Tx, targetSchemaDigest, recordedBy 
 	return false, nil
 }
 
-// revalidateCarriedSourceRows re-reads the LIVE rows under a share lock
-// and refuses if any row this run copied is no longer what was copied.
+// revalidateCarriedSourceRows re-reads the LIVE rows under a lock and
+// refuses if any row this run decided about -- carried, unchanged OR skipped
+// -- is no longer what it read, or if a live row appeared.
 //
-// It compares only the rows whose outcome was CARRY or UNCHANGED: a
-// SKIPPED row was never copied, so a concurrent change to it changes
-// nothing this transaction claims, and refusing over it would block a
-// correct carry for a row nothing at the target digest will ever read.
+// SKIPPED rows are compared too (CHAOS-8586). By the catalog rule a skipped
+// python or disabled row holds its operation dark at the old digest after the
+// roll; a concurrent `enable` that turns it canary while this run prepares
+// leaves a served operation with no row at the target digest, which the roll
+// then un-routes -- the harm this verb exists to prevent.
 //
-// Both directions are a refusal, and for the same reason: a row whose
-// carried columns CHANGED means the target digest would hold a
-// superseded decision, and a row that VANISHED means the operator
-// removed the decision entirely -- in both cases what is about to commit
-// at the target digest is no longer what is standing at the live one.
+// THE LOCK depends on whether this run wrote anything. When it carried or
+// found UNCHANGED at least one row, it is lockCarrySourceRowsSQL (FOR SHARE),
+// taken after every write for the lock-order reason that statement's comment
+// gives. When every row was skipped, this run has written nothing, so it takes
+// the table SHARE lock answerNoLiveRow takes: no lock-order hazard, and it also
+// waits for a writer whose NEW live row is in flight, which FOR SHARE (a lock
+// on rows that already exist) does not see.
+//
+// Every difference is a refusal: a row whose columns CHANGED means the run
+// decided on a superseded state, and a row that VANISHED means the operator
+// removed the decision -- in both cases what is about to commit is no longer
+// what is standing at the live digest.
 func revalidateCarriedSourceRows(ctx context.Context, tx pgx.Tx, liveSchemaDigest string, surveyed []CarryRow, outcomes []CarryOutcome) error {
-	copied := map[carryRowKey]CarryRow{}
+	decided := map[carryRowKey]CarryRow{}
+	copiedAny := false
 	for _, outcome := range outcomes {
 		switch outcome.Action {
 		case CarryActionCarry, CarryActionUnchanged:
-			copied[carryRowKey{Operation: outcome.Operation, DocumentDigest: outcome.DocumentDigest}] = carriedRowOf(outcome)
+			copiedAny = true
+			decided[carryRowKey{Operation: outcome.Operation, DocumentDigest: outcome.DocumentDigest}] = carriedRowOf(outcome)
+		case CarryActionSkip:
+			decided[carryRowKey{Operation: outcome.Operation, DocumentDigest: outcome.DocumentDigest}] = carriedRowOf(outcome)
 		}
 	}
-	// EVERY surveyed key, not only the copied ones (r2 F2). A row the
-	// survey saw and deliberately skipped is accounted for; a row NOBODY
-	// saw is the gap. Built even when nothing was copied, because a run
-	// that carried nothing has already refused elsewhere and a run that
-	// carried something must still be able to tell an old row from a new
-	// one.
+	// EVERY surveyed key, not only the decided ones (r2 F2). A row the survey
+	// saw is accounted for; a row NOBODY saw is the gap.
 	seen := map[carryRowKey]bool{}
 	for _, row := range surveyed {
 		seen[carryRowKey{Operation: row.Operation, DocumentDigest: row.DocumentDigest}] = true
 	}
-	if len(copied) == 0 {
+	if len(decided) == 0 {
 		return nil
 	}
-	locked, err := readCarryRows(ctx, tx, lockCarrySourceRowsSQL, liveSchemaDigest)
+	read := lockCarrySourceRowsSQL
+	if !copiedAny {
+		if _, err := tx.Exec(ctx, lockRoutingTableSQL); err != nil {
+			return fmt.Errorf("goapiproof: lock go_api_routing_state: %w", err)
+		}
+		read = surveyCarryRowsSQL
+	}
+	locked, err := readCarryRows(ctx, tx, read, liveSchemaDigest)
 	if err != nil {
 		return err
 	}
@@ -1056,13 +1073,13 @@ func revalidateCarriedSourceRows(ctx context.Context, tx pgx.Tx, liveSchemaDiges
 		present[carryRowKey{Operation: row.Operation, DocumentDigest: row.DocumentDigest}] = row
 	}
 	var changed []string
-	for key, was := range copied {
+	for key, was := range decided {
 		now, ok := present[key]
 		switch {
 		case !ok:
 			changed = append(changed, fmt.Sprintf("%s (document %s) was REMOVED at the live digest", key.Operation, key.DocumentDigest))
 		case !sameCarriedState(was, now):
-			changed = append(changed, fmt.Sprintf("%s (document %s) now reads mode %s, rollout %d, build %s -- this run was copying mode %s, rollout %d, build %s",
+			changed = append(changed, fmt.Sprintf("%s (document %s) now reads mode %s, rollout %d, build %s -- this run read mode %s, rollout %d, build %s",
 				key.Operation, key.DocumentDigest, now.Mode, now.RolloutPercentage, now.Build, was.Mode, was.RolloutPercentage, was.Build))
 		}
 	}

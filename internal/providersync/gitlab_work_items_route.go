@@ -312,6 +312,16 @@ func (handler GitLabWorkItemsRouteHandler) Collect(
 			}
 			rows.Dependencies = append(rows.Dependencies,
 				normalizeGitLabDependencies(claim, item.WorkItemID, fullName, description, links, normalizedAt)...)
+			closing, closingPages, closingErr := collectGitLabClosingMergeRequests(
+				ctx, &counted, root+"/issues/"+strconv.Itoa(payload.IID)+"/closed_by",
+				perPage, nestedMaxPages,
+			)
+			if closingErr != nil {
+				return CompleteRouteBatch{}, closingErr
+			}
+			pages += closingPages
+			rows.Dependencies = append(rows.Dependencies,
+				normalizeGitLabClosingMergeRequests(claim, item.WorkItemID, fullName, closing, normalizedAt)...)
 		}
 		if fetchComments {
 			notes, notePages, noteErr := collectGitLabNotes(
@@ -554,6 +564,25 @@ func collectGitLabIssueLinks(
 	result := make([]gitlabIssueLinkPayload, 0, len(items))
 	for _, raw := range items {
 		var payload gitlabIssueLinkPayload
+		if err := json.Unmarshal(raw, &payload); err != nil {
+			return nil, pages, providerfoundation.ErrNormalizationInvalid
+		}
+		result = append(result, payload)
+	}
+	return result, pages, nil
+}
+
+func collectGitLabClosingMergeRequests(
+	ctx context.Context, client *providerfoundation.HTTPClient, path string,
+	perPage, maxPages int,
+) ([]gitlabClosingMergeRequestPayload, int, error) {
+	items, pages, err := collectGitLabPayloads(ctx, client, path, nil, perPage, maxPages)
+	if err != nil {
+		return nil, pages, err
+	}
+	result := make([]gitlabClosingMergeRequestPayload, 0, len(items))
+	for _, raw := range items {
+		var payload gitlabClosingMergeRequestPayload
 		if err := json.Unmarshal(raw, &payload); err != nil {
 			return nil, pages, providerfoundation.ErrNormalizationInvalid
 		}

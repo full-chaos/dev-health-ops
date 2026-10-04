@@ -290,10 +290,12 @@ func (handler JiraAtlassianRouteHandler) Collect(
 					ctx, client, issueID, devStatusMaxRequests-devStatusRequestsIssued,
 				)
 				devStatusRequestsIssued += devStatusAttempts
-				switch {
-				case devStatusErr != nil:
+				if devStatusErr != nil {
 					optionalIncomplete = append(optionalIncomplete, "dev_status:"+item.WorkItemID)
 					client.Metrics.RecordJiraDevStatus("failed")
+				}
+				switch {
+				case devStatusErr != nil && !devStatusAvailable:
 				case !devStatusAvailable:
 					devStatusUnavailableCount++
 					client.Metrics.RecordJiraDevStatus(jiraDevStatusUnavailableCause)
@@ -303,7 +305,9 @@ func (handler JiraAtlassianRouteHandler) Collect(
 					)
 					rows.Dependencies = append(rows.Dependencies, devStatusDependencies...)
 					devStatusPullRequestsSynced += len(devStatusDependencies)
-					client.Metrics.RecordJiraDevStatus("synced")
+					if devStatusErr == nil {
+						client.Metrics.RecordJiraDevStatus("synced")
+					}
 				}
 			}
 		}

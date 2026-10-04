@@ -315,8 +315,8 @@ func TestJiraAtlassianRouteDevStatusSyncsPrimaryDependencyRow(t *testing.T) {
 	if batch.Watermark == nil {
 		t.Fatalf("expected the watermark to advance (dev-status success is not incompleteness): batch=%+v", batch)
 	}
-	if doer.devStatus != 1 {
-		t.Fatalf("dev-status requests=%d want=1", doer.devStatus)
+	if doer.devStatus != 2 {
+		t.Fatalf("dev-status requests=%d want=2 (GitHub, then GitLab; CHAOS-8526)", doer.devStatus)
 	}
 	if got := batch.Result["dev_status_pull_requests_synced"]; got != 1 {
 		t.Fatalf("result=%v", batch.Result)
@@ -533,7 +533,7 @@ func TestJiraAtlassianRouteDevStatusCleanNoOpStillDebitsSharedBudget(t *testing.
 	claim := nativeTestClaim("jira", "work-items")
 	claim.SourceExternalID = "OPS"
 	claim.DatasetOptions = map[string]any{
-		"fetch_dev_status": true, "dev_status_max_requests": 2,
+		"fetch_dev_status": true, "dev_status_max_requests": 3,
 	}
 	client := jiraDevStatusTestClientWithRetries(t, fakehttp.Client(doer), 3)
 	batch, err := jiraAtlassianCompleteHandler(t).Collect(
@@ -543,7 +543,9 @@ func TestJiraAtlassianRouteDevStatusCleanNoOpStillDebitsSharedBudget(t *testing.
 	if err != nil {
 		t.Fatal(err)
 	}
-	want := []string{"20001", "20002"}
+	// CHAOS-8526: each issue asks GitHub then GitLab. OPS-401: two clean 404 no-ops (2 wire calls, both debited);
+	// OPS-402: 1 of the budget of 3 remains, so one capped 503 attempt on GitHub and no GitLab request.
+	want := []string{"20001", "20001", "20002"}
 	if !reflect.DeepEqual(devStatusIssueIDs, want) {
 		t.Fatalf("dev-status issue sequence=%v want=%v (the 404 no-op must debit the shared budget; "+
 			"if it didn't, OPS-402 would retry its full undebited share and this sequence would diverge)",

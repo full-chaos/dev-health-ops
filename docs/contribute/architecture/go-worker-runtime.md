@@ -1352,7 +1352,7 @@ flowchart TD
     CNT["emitted_total{provider}++ always;<br/>consumed_total{provider}++ only on Valkey ACK<br/>(devhealth_sync_coverage_cache_invalidations_*)"]
   end
 
-  subgraph CACHEHOP["Python API — home / explain read path"]
+  subgraph CACHEHOP["Former Python API (removed) — home / explain read path"]
     EPOCHREAD["epoch_cache_key: ONE GET of cache_epoch:org:{org_id}<br/>via REDIS_URL (same Valkey, DB 1); absent / memory fallback = 0<br/>[external — Valkey, no Postgres role]"]
     VALKEY["TTLCache entry home:{filters, _org_id, _cache_epoch}.<br/>Epoch changed ⇒ miss ⇒ recompute from ClickHouse +<br/>sync_coverage_projections; old entries age out by TTL (60s/120s)<br/>[external — Valkey; recompute reads ClickHouse + domain]"]
   end
@@ -1453,8 +1453,8 @@ topology](#queue-topology)):**
   one key `cache_epoch:org:{org_id}` (contract:
   `contracts/cache-invalidation/v1/org_cache_epoch_key.json`, regenerated
   from the Python producer `core.cache.org_cache_epoch_key` and asserted by
-  `internal/cacheinvalidation/contract_test.go`). Readers fold its value
-  into the key (`api/services/filtering.py::epoch_cache_key`, one GET per
+  `internal/cacheinvalidation/contract_test.go`). Readers folded its value
+  into the key (`api/services/filtering.py::epoch_cache_key` in the Python api, removed with it; the Go api caches no home or explain response. One GET per
   request; absent = 0, UNREADABLE = bypass the cache for that request rather
   than guess 0); the Go finalize INCR+EXPIREs it **after**
   `tx.Commit` on the once-only branch (the `already_dispatched` re-finalize
@@ -1502,7 +1502,7 @@ table, including on an already-initialised volume.
 Provisioning (`go-river-provision`, `dho migrate roles`) and the River migration
 run from the **Go operator image** (`DEV_HEALTH_GO_OPERATOR_IMAGE`); the runtime
 image (`DEV_HEALTH_IMAGE`) still carries `psql` and `provision_river_roles.sql`
-(`docker/Dockerfile:98`) for the callers that have not moved (`ci/lib/go_worker_fixture.sh`;
+(the `runtime` stage of `docker/Dockerfile`) for the callers that have not moved (`ci/lib/go_worker_fixture.sh`;
 the chart's provision-roles Job runs `dho migrate roles` on the operator image since
 CHAOS-6951). The posture assertions that check those grants ship in
 the **Go worker image**, the dho image (`DEV_HEALTH_GO_DHO_IMAGE`).

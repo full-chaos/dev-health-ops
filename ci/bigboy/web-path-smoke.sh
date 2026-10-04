@@ -2,7 +2,7 @@
 # web-path-smoke.sh -- CHAOS-6987/R460: the ONLY sanctioned proof that a bigboy cut
 # serves the real org end to end through a real browser session, not a hand-minted
 # token. Logs in through web's real /api/v1/auth/login route as the bigboy admin,
-# then runs web-path-smoke.py's exact Cockpit/Diagnose operations against the router.
+# then runs the Cockpit/Diagnose operations (`dho smoke web-path`, internal/websmoke, from the dho image) against the router.
 #
 # Credentials: DHO_SMOKE_ADMIN_EMAIL + DHO_SMOKE_ADMIN_PASSWORD_FILE (0600, *_FILE
 # convention, CHAOS-6972) in ops/.env. FAILS LOUD (rc=1, named reason) while either

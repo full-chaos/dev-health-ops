@@ -134,12 +134,8 @@ func Load(root string) (*Registry, error) {
 	if err != nil {
 		return nil, err
 	}
-
-	var parsed artifact
-	if err := decodeStrict(data, &parsed); err != nil {
-		return nil, fmt.Errorf("decode %s: %w", Filename, err)
-	}
-	if err := parsed.validate(); err != nil {
+	parsed, err := parseArtifact(data)
+	if err != nil {
 		return nil, err
 	}
 
@@ -148,6 +144,44 @@ func Load(root string) (*Registry, error) {
 		byKind[descriptor.Kind] = descriptor
 	}
 	return &Registry{byKind: byKind}, nil
+}
+
+// parseArtifact decodes and validates the bytes of the route artifact. Load
+// and NativeRiverRouteKinds both go through it, so the bytes a binary embeds
+// pass the same checks as the file a process loads.
+func parseArtifact(data []byte) (artifact, error) {
+	if len(data) > maxArtifactBytes {
+		return artifact{}, fmt.Errorf("%s exceeds %d bytes", Filename, maxArtifactBytes)
+	}
+	var parsed artifact
+	if err := decodeStrict(data, &parsed); err != nil {
+		return artifact{}, fmt.Errorf("decode %s: %w", Filename, err)
+	}
+	if err := parsed.validate(); err != nil {
+		return artifact{}, err
+	}
+	return parsed, nil
+}
+
+// NativeRiverRouteKinds returns, in artifact order, the kinds of the route
+// artifact in data whose checked-in route is river with no rollback route.
+// The Celery rollback route of such a kind is retired, so a route row of it
+// that is still on celery can only be a seed row that was never activated
+// (the River migrator moves it: internal/storage/river). A kind that still
+// names celery as its rollback route is not returned. data is validated as
+// Load validates the file.
+func NativeRiverRouteKinds(data []byte) ([]string, error) {
+	parsed, err := parseArtifact(data)
+	if err != nil {
+		return nil, err
+	}
+	kinds := make([]string, 0, len(parsed.Routes))
+	for _, descriptor := range parsed.Routes {
+		if descriptor.Route == RouteRiver && descriptor.RollbackRoute == RouteNone {
+			kinds = append(kinds, descriptor.Kind)
+		}
+	}
+	return kinds, nil
 }
 
 // Lookup returns a value copy of the descriptor for kind. Altering the

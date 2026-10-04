@@ -251,9 +251,10 @@ docker compose --env-file ops/.env run --rm --no-deps migrate > $REC/migrate.out
 # CHAOS-7162: go-api's ClickHouse login must be declared durably and be live BEFORE go-api is recreated: without
 # `dho_api_ch` in system.users every ClickHouse call fails with code 516 (rev 198, after a ClickHouse recreate rebuilt
 # users.d from the image). Names only; the check refuses a file ClickHouse could not read (it would exit on it).
-# API_CH_PASSWORD (the credential go-api logs in with) comes from the credentials file, sourced in a subshell that only the
-# check sees; the check proves dho_api_ch authenticates with it. Nothing prints it.
-( set -a; . "${DHO_API_CH_CREDS:-$R/.go-api-dev/go-api.creds}" 2>/dev/null; set +a; exec "$HERE/check-dho-api-ch-user.sh" "$DHO_API_CH_USERS_XML" ) > $REC/ch-api-user.out 2>&1; rc_chu=$?; st ch-api-user $rc_chu
+# The credentials file is passed to the check BY PATH (arg 2), never sourced here: the password is not in this shell, in the
+# check's environment, or in any child's (CHAOS-8382). The check reads it by pipe and proves dho_api_ch authenticates. Nothing
+# prints it. The check needs a private TMPDIR (not /tmp), set by the cut's launcher.
+"$HERE/check-dho-api-ch-user.sh" "$DHO_API_CH_USERS_XML" "${DHO_API_CH_CREDS:-$R/.go-api-dev/go-api.creds}" > $REC/ch-api-user.out 2>&1; rc_chu=$?; st ch-api-user $rc_chu
 [ "$rc_chu" = 0 ] || { echo "FAIL: dho_api_ch is not usable (see $REC/ch-api-user.out); ABORTING before go-api is recreated" >&2; cat $REC/ch-api-user.out >&2; exit 1; }
 # CHAOS-8361: no `api` in this list (the Python api is retired). `--no-deps` skips nothing these three need:
 # the one dependency the cut owns, `migrate`, ran on the line above, and the bigboy chain declares no

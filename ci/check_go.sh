@@ -7,13 +7,40 @@ SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" >/dev/null 2>&1 && pwd -
 ROOT="$(cd -- "${SCRIPT_DIR}/.." >/dev/null 2>&1 && pwd -P)"
 GO_TOOLCHAIN="go1.27.0"
 export GOTOOLCHAIN="${GO_TOOLCHAIN}"
-# CHAOS-5224: precedence is an explicit DEV_HEALTH_GO_CACHE first, then an
-# already-inherited GOCACHE, and only then the tmp fallback. The old code
-# skipped straight to the tmp fallback regardless of what the caller already
-# exported, silently overwriting an inherited GOCACHE and growing a THIRD Go
-# build cache on bigboy's root disk (7.5G observed) alongside the two
-# legitimate bind-mounted caches.
-DEV_HEALTH_GO_CACHE="${DEV_HEALTH_GO_CACHE:-${GOCACHE:-${TMPDIR:-/tmp}/dev-health-go-build-cache}}"
+# CHAOS-5224 / CHAOS-5268: precedence is an explicit DEV_HEALTH_GO_CACHE first,
+# then an already-inherited GOCACHE, then a GOCACHE CONFIGURED on the machine
+# (`go env -changed GOCACHE`: the Go env file written by `go env -w`, which is
+# not in the environment of a non-login agent shell), and only when all three
+# give nothing the tmp fallback. PR #2281 fixed the inherited GOCACHE case only;
+# the build host's `go env -w` setting never reached this script, so every run
+# wrote a cache under /tmp/dev-health-go-build-cache on the root disk (106 GB in
+# three days, root disk full on 2026-10-04). Go's built-in DEFAULT dir is
+# deliberately NOT used: on a hosted runner it would put the build cache where
+# setup-go saves it, a CI behaviour change. `-changed` prints GOCACHE='<path>'
+# (single-quoted) only when the value differs from the default; it is parsed,
+# never eval'd. GOTOOLCHAIN=local: asking must never download a toolchain.
+DEV_HEALTH_GO_CACHE="${DEV_HEALTH_GO_CACHE:-${GOCACHE:-}}"
+if [ -z "${DEV_HEALTH_GO_CACHE}" ]; then
+  go_changed_line="$(GOTOOLCHAIN=local go env -changed GOCACHE 2>/dev/null || true)"
+  case "${go_changed_line}" in
+    "GOCACHE='"*"'")
+      go_changed_value="${go_changed_line#GOCACHE=\'}"
+      go_changed_value="${go_changed_value%\'}"
+      # A value holding a quote needs shell-unquoting we do not attempt: ignore it.
+      case "${go_changed_value}" in
+        *"'"*) ;;
+        *) DEV_HEALTH_GO_CACHE="${go_changed_value}" ;;
+      esac
+      ;;
+    GOCACHE=?*)
+      DEV_HEALTH_GO_CACHE="${go_changed_line#GOCACHE=}"
+      ;;
+  esac
+fi
+if [ -z "${DEV_HEALTH_GO_CACHE}" ]; then
+  DEV_HEALTH_GO_CACHE="${TMPDIR:-/tmp}/dev-health-go-build-cache"
+  echo "check_go.sh: no Go build cache dir is configured (DEV_HEALTH_GO_CACHE, GOCACHE, go env -changed GOCACHE); using ${DEV_HEALTH_GO_CACHE}" >&2
+fi
 mkdir -p "${DEV_HEALTH_GO_CACHE}"
 export GOCACHE="${DEV_HEALTH_GO_CACHE}"
 DEV_HEALTH_GO_BUILD_OUTPUT=""

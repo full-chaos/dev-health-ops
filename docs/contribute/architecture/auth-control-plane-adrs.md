@@ -5,9 +5,9 @@ content_type: architecture
 owner: engineering
 source_of_truth:
   - contracts/auth/v1/credential-classes.json (closed credential vocabulary)
-  - contracts/auth/v1/endpoint-profiles.ops.json (frozen ops surface inventory)
-  - src/dev_health_ops/api/services/auth.py (current HS256 issuer, TTLs, superuser verification)
-  - src/dev_health_ops/api/graphql/principal_envelope.py (current EdDSA envelope issuer)
+  - contracts/auth/v1/endpoint-profiles.ops.json (frozen ops surface inventory; removed with the Python api)
+  - src/dev_health_ops/api/services/auth.py (the former HS256 issuer, TTLs, superuser verification; removed with the Python api)
+  - src/dev_health_ops/api/graphql/principal_envelope.py (the former EdDSA envelope issuer; removed with the Python api)
   - internal/queryapi/principal (current EdDSA verifier, the prior art for ADR-01)
 applicability: current
 lifecycle: active
@@ -21,6 +21,8 @@ in [CHAOS-3270's "Wave 0 ratification pass" comment](https://linear.app/fullchao
 over the [decision sheet](auth-control-plane-decision-sheet.md), which carries
 the recommendation, the alternatives considered, and the risk for each.
 {: .fc-page-lede }
+
+> **Note:** The Python api paths and tools that this page names (`src/dev_health_ops/api/...`, `ci/check_endpoint_profiles.py`, `contracts/auth/v1/endpoint-profiles.ops.json`) were removed with the Python api. This page is a record of the design as ratified.
 
 !!! info "What is and is not settled"
     The ADR *"Implement the Auth Control Plane in Go"* is **Accepted** and sits

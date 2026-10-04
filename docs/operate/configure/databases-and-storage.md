@@ -28,9 +28,9 @@ A queue, cache, or stream is not the system of record unless its contract explic
 
 ## PostgreSQL connection model
 
-### Python API domain access
+### Go api domain access
 
-A horizontally scaled API can multiply SQLAlchemy pools. Use transaction-mode PgBouncer where appropriate and set:
+A horizontally scaled API can multiply connection pools. Use transaction-mode PgBouncer where appropriate and set:
 
 ```dotenv
 POSTGRES_URI="postgresql+asyncpg://...@pgbouncer:6432/devhealth"

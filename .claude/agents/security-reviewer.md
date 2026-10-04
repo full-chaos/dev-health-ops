@@ -19,13 +19,13 @@ These directories contain security-critical code — scrutinize changes here:
 
 | Path | Contains |
 |------|----------|
-| `src/dev_health_ops/api/auth/` | JWT auth, login/logout, session management, RBAC |
-| `src/dev_health_ops/api/auth/sso/` | SAML SSO provider integration |
+| `internal/auth/`, `internal/api/session/`, `internal/api/policy/` | JWT auth, login/logout, session management, RBAC |
+| `internal/api/sso/` | SAML SSO provider integration |
 | `src/dev_health_ops/credentials/` | Credential storage, encryption (PyNaCl), resolver |
-| `src/dev_health_ops/api/billing/` | Stripe integration, subscription management |
-| `src/dev_health_ops/api/licensing/` | License validation, feature gating |
-| `src/dev_health_ops/api/admin/` | Admin-only endpoints (elevated privileges) |
-| `src/dev_health_ops/api/webhooks/` | Inbound webhook handlers (external input) |
+| `internal/api/billing/` | Stripe integration, subscription management |
+| `internal/api/licensing/` | License validation, feature gating |
+| `internal/api/orgs/`, `internal/api/integrationsadmin/`, `internal/api/syncadmin/` | Admin-only endpoints (elevated privileges) |
+| `internal/api/webhookintake/` | Inbound webhook handlers (external input) |
 
 ## Review Checklist
 

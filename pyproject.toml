@@ -140,11 +140,6 @@ Issues = "https://github.com/chrisgeo/dev-health-ops/issues"
 Documentation = "https://github.com/chrisgeo/dev-health-ops/blob/main/docs/architecture/licensing.md"
 License = "https://github.com/chrisgeo/dev-health-ops/blob/main/LICENSE.md"
 
-[project.scripts]
-dev-health-ops = "dev_health_ops.cli:main"
-dev-hops = "dev_health_ops.cli:main"
-
-
 [tool.setuptools_scm]
 version_scheme = "post-release"
 local_scheme = "dirty-tag"

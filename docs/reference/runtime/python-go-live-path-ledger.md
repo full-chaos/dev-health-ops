@@ -228,7 +228,7 @@ The separate budget-estimate bridge (`POST /api/internal/worker-sync/dispatch-bu
 
 ## Python worker modules (`src/dev_health_ops/workers/*.py`)
 
-Category key: **LIVE** = reached today from a live FastAPI bridge route. **CELERY-TASK-ONLY / DEAD** = decorated as a Celery task with no live route caller; Celery itself has been archived in production since 2026-08-19 (CHAOS-4026), so these files have zero production callers. **LIBRARY / SHARED** = helper code imported by other worker modules, not itself a route or task target. **TEST/FIXTURE ONLY** = referenced only from `tests/` (none found).
+Category key: **LIVE** = reached today from a live caller (the FastAPI bridge routes that used to reach these files were removed with the Python api). **CELERY-TASK-ONLY / DEAD** = decorated as a Celery task with no live route caller; Celery itself has been archived in production since 2026-08-19 (CHAOS-4026), so these files have zero production callers. **LIBRARY / SHARED** = helper code imported by other worker modules, not itself a route or task target. **TEST/FIXTURE ONLY** = referenced only from `tests/` (none found).
 
 <!-- BEGIN GENERATED WORKER FILE LEDGER -->
 | file | category | evidence | ticket |

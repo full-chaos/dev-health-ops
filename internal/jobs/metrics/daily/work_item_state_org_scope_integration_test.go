@@ -70,6 +70,9 @@ func TestWorkItemStateComputeFamilyIsolatesTenantsAndReadsPrimaryAttribution(t *
     status String, duration_hours Float64, items_touched UInt32, computed_at DateTime,
     avg_wip Float64, org_id String
 ) ENGINE = MergeTree PARTITION BY toYYYYMM(day) ORDER BY (provider, work_scope_id, team_id, status, day)`,
+		// CHAOS-8493: the family also reads the organization's blocking
+		// relations. The table is empty here: neither item has a blocker.
+		workItemStateDependenciesDDL,
 	} {
 		if err := conn.Exec(ctx, statement); err != nil {
 			t.Fatal(err)

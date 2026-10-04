@@ -22,15 +22,13 @@
 #      edge-token key comes from compose substitution (compose.bigboy.prove.yml). No
 #      credential is printed, written to a file, or put on argv;
 #   3. `dho goapi routing enable` for each KNOWN-MISSING operation in routing-ops.txt
-#      (default) or ENABLE_OPS, one at a time, no waiver (there is none);
-#   4. a fresh `dho goapi routing status -json` and check-routing-parity.py.
+#      (default) or ENABLE_OPS, one at a time, no waiver (there is none).
 #
 # The local org id is derived at run time from Postgres (the single org of the local
 # admin account, read-only) and never printed. Full prove output (it names the org) stays
 # under $R/_records/bigboy-<sha8>/graphql-prove-<ts>/; only counts are echoed.
 #
-# Every STEP prints `STEP <name> rc=<n>`. Exit: 0 every enabled op reached parity; 1 any
-# step failed.
+# Every STEP prints `STEP <name> rc=<n>`. Exit: 0 every step passed; 1 any step failed.
 set -u
 NEW=${1:?full ops sha}; N8=${NEW:0:8}; S7=${NEW:0:7}
 case "${2:-}" in
@@ -98,9 +96,5 @@ for op in $OPS; do
   rc=$?; st "enable:$op" $rc; [ $rc = 0 ] || { fail=1; tail -3 "$OUT/enable-$op.out" | sed 's/org=[^ ]*/org=<local>/'; }
 done
 
-# 5. parity (routing-ops.txt as committed; after a successful enable the KNOWN-MISSING
-#    marker for that op must be removed, and this check says so by name)
-vt "dho goapi routing status -json -catalog /catalog.json -registry-url http://query-api:8090/registry" > "$OUT/routing-status.json" 2>/dev/null
-python3 "$HERE/check-routing-parity.py" "$HERE/routing-ops.txt" "$OUT/routing-status.json"; st routing-parity $?
 echo "records: $OUT"
 exit $fail

@@ -272,13 +272,11 @@ Every check below fails loud with a named finding; none can pass on an empty or 
   expected public values; the running web container (names via `container-env-names.sh`) must carry
   every prod name. `AUTH_URL` stays hand-maintained per the lead's ruling; this check is what makes
   the hand list loud.
-- **Routing-ledger parity** (`routing-ops.txt` + `check-routing-parity.py`): NOT a STEP of the cut
-  any more (CHAOS-8543; the STEPs were `routing-enable` / `routing-parity`). query-api serves a
-  catalog operation that has no routing row, so the cut has no row to enable, and the check reads
-  only rows (`reachable`): it reports a served operation with no row as missing. The script stays
-  for `bigboy-graphql-prove.sh` (its step 5, below), where each listed operation has a row.
-  `routing-ops.txt` is the list of GraphQL operations that had an enabled row on prod; the web-path
-  smoke reads its `KNOWN-MISSING` markers.
+- **Routing-ledger parity**: removed (CHAOS-8543; PRs #3751, #3769). query-api serves a catalog
+  operation that has no routing row, so there is no row to enable and no ledger to compare with
+  prod. The cut has no such STEP (it had `routing-enable` / `routing-parity`), and
+  `bigboy-graphql-prove.sh` has no parity step. `routing-ops.txt` stays: the web-path smoke reads
+  its `KNOWN-MISSING` markers, and prove step 4 enables each of them.
 - **Web-path smoke, real browser session** (`web-path-smoke.py`): now logs in through Auth.js
   (csrf + Credentials callback) with the PUBLIC Host header on traefik, so every call takes the
   browser's path through `web`'s proxy.ts. Checks: unauthenticated public-host request lands on web
@@ -318,7 +316,7 @@ and the prover refuses by name if a Python plane answers the routed `/graphql`. 
 4. `dho goapi prove` for the local org -- read-only against org data, writes proof receipts only;
    both credentials are minted in process (envelope key loaded from the mounted file inside the
    container; `JWT_SECRET_KEY` by compose substitution from `ops/.env`);
-5. `dho goapi routing enable` for each `KNOWN-MISSING` op in `routing-ops.txt`, then the parity check.
+5. `dho goapi routing enable` for each `KNOWN-MISSING` op in `routing-ops.txt`.
 
 Full output names the org and stays under the devhealth-root `_records/bigboy-<sha8>/graphql-prove-<ts>/`.
 `BIGBOY_ROOT` (default `/home/ubuntu/devhealth`) is the running tree the harness works in, the same
@@ -341,8 +339,7 @@ step**, one sitting, and this lane's permission classifier denied it (not attemp
 3. `dho goapi prove ... -proof-url http://query-api:8090/query/proof`;
 4. `dho goapi routing enable -operations testopsRisk -mode canary ...`;
 5. remove both names, recreate query-api, check with `container-env-names.sh` that both are gone,
-   re-run the 12-path plane readback, and expect `check-routing-parity.py` to report 50/50 once the
-   `KNOWN-MISSING` marker is removed from `routing-ops.txt`.
+   re-run the 12-path plane readback, and remove the `KNOWN-MISSING` marker from `routing-ops.txt`.
 
 If a step fails, revert step 1 first. No named limit in `goserved_ledger.json` is used for testopsRisk.
 

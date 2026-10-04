@@ -10,6 +10,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 	"testing"
 	"time"
@@ -220,6 +221,150 @@ func dropKnownStaleClickHouseWarnings(t *testing.T, body string) string {
 		return body
 	}
 	return string(encoded)
+}
+
+// withoutClickHouseTablesAfterThePythonFreeze removes, from a delete-org
+// response body's clickhouse.tables, each table that
+// clickHouseOrgTablesAfterThePythonFreeze names (orgdeletion_clickhouse_
+// oracle_test.go): a table a migration added after the Python list was
+// frozen. Go finds its org tables live from system.columns, so its body
+// names such a table; the frozen Python body never can. That the table IS
+// Go-only, and that nothing else is, is proven separately
+// (TestClickHouseOrgTableDiscoveryMatchesThePythonMigrationRegex).
+//
+// Only the table's KEY is taken out, and only when its count is 0. A count
+// above 0 also changes clickhouse.total, which this rule does not rewrite:
+// that case is returned as a problem, not hidden. Every other key, and the
+// total, are still compared. A body with no clickhouse.tables object passes
+// through unchanged.
+func withoutClickHouseTablesAfterThePythonFreeze(body string) (string, []string) {
+	if body == "" {
+		return body, nil
+	}
+	value, err := pyjson.DecodeString(body)
+	if err != nil {
+		return body, nil
+	}
+	object, ok := value.(*pyjson.Object)
+	if !ok {
+		return body, nil
+	}
+	rawClickHouse, present := object.Get("clickhouse")
+	if !present {
+		return body, nil
+	}
+	clickHouse, ok := rawClickHouse.(*pyjson.Object)
+	if !ok {
+		return body, nil
+	}
+	rawTables, present := clickHouse.Get("tables")
+	if !present {
+		return body, nil
+	}
+	tables, ok := rawTables.(*pyjson.Object)
+	if !ok {
+		return body, nil
+	}
+	names := make([]string, 0, len(clickHouseOrgTablesAfterThePythonFreeze))
+	for name := range clickHouseOrgTablesAfterThePythonFreeze {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+	var problems []string
+	removed := false
+	for _, name := range names {
+		count, present := tables.Get(name)
+		if !present {
+			continue
+		}
+		if !pyjson.Equal(count, pyjson.IntOf(0)) {
+			problems = append(problems, fmt.Sprintf(
+				"clickhouse.tables.%s is %s: a table added after the Python freeze (%s) holds rows of this organization, so clickhouse.total differs from the frozen Python body by that count; this rule only takes out a key whose count is 0",
+				name, pyjson.Str(count), clickHouseOrgTablesAfterThePythonFreeze[name]))
+			continue
+		}
+		tables.Delete(name)
+		removed = true
+	}
+	if !removed {
+		return body, problems
+	}
+	encoded, err := pyjson.Marshal(object)
+	if err != nil {
+		return body, append(problems, "encode the body without the tables after the Python freeze: "+err.Error())
+	}
+	return string(encoded), problems
+}
+
+// dropClickHouseTablesAfterThePythonFreeze is
+// withoutClickHouseTablesAfterThePythonFreeze for an oracle's Normalize: a
+// problem fails the test.
+func dropClickHouseTablesAfterThePythonFreeze(t *testing.T, body string) string {
+	t.Helper()
+	out, problems := withoutClickHouseTablesAfterThePythonFreeze(body)
+	if len(problems) > 0 {
+		t.Fatalf("tables after the Python freeze:\n  %s", strings.Join(problems, "\n  "))
+	}
+	return out
+}
+
+// The rule takes out the key of a table added after the Python freeze and
+// nothing else, and reports a count above 0 by name.
+func TestTablesAfterThePythonFreezeLeaveADeleteOrgBodyOnlyAtCountZero(t *testing.T) {
+	if len(clickHouseOrgTablesAfterThePythonFreeze) == 0 {
+		t.Skip("no table after the Python freeze: the rule has nothing to take out")
+	}
+	var table string
+	for name := range clickHouseOrgTablesAfterThePythonFreeze {
+		if table == "" || name < table {
+			table = name
+		}
+	}
+	python := `{"organization_id":"o","clickhouse":{"total":1,"tables":{"backfill_log":1,"work_items":0}},"warnings":[]}`
+	goBody := `{"organization_id":"o","clickhouse":{"total":1,"tables":{"backfill_log":1,"` + table + `":0,"work_items":0}},"warnings":[]}`
+
+	gotGo, problems := withoutClickHouseTablesAfterThePythonFreeze(goBody)
+	if len(problems) != 0 {
+		t.Fatalf("a count of 0: %v", problems)
+	}
+	gotPython, problems := withoutClickHouseTablesAfterThePythonFreeze(python)
+	if len(problems) != 0 || gotPython != python {
+		t.Fatalf("a body without the table changed: %q %v", gotPython, problems)
+	}
+	wantGo, err := pyjson.DecodeString(python)
+	if err != nil {
+		t.Fatal(err)
+	}
+	haveGo, err := pyjson.DecodeString(gotGo)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !pyjson.Equal(wantGo, haveGo) {
+		t.Fatalf("the Go body without the table = %s, want the Python body %s", gotGo, python)
+	}
+
+	// A table that is NOT in the list stays: the comparison still sees it.
+	other := `{"clickhouse":{"total":0,"tables":{"a_table_in_no_list":0}}}`
+	if got, problems := withoutClickHouseTablesAfterThePythonFreeze(other); got != other || len(problems) != 0 {
+		t.Fatalf("a table in no list was changed: %q %v", got, problems)
+	}
+
+	// A count above 0 is a problem by name, and the key stays.
+	withRows := `{"clickhouse":{"total":4,"tables":{"backfill_log":1,"` + table + `":3}}}`
+	got, problems := withoutClickHouseTablesAfterThePythonFreeze(withRows)
+	if len(problems) != 1 || !strings.HasPrefix(problems[0], "clickhouse.tables."+table+" is 3: ") {
+		t.Fatalf("a count above 0: %q", problems)
+	}
+	if !strings.Contains(got, `"`+table+`"`) {
+		t.Fatalf("the key with rows was taken out: %s", got)
+	}
+
+	// Not a delete-org body: unchanged.
+	for _, body := range []string{"", "not json", `[1]`, `{"clickhouse":null}`, `{"clickhouse":{"tables":[]}}`, `{"detail":"Forbidden"}`} {
+		if got, problems := withoutClickHouseTablesAfterThePythonFreeze(body); got != body || len(problems) != 0 {
+			t.Fatalf("body %q changed to %q %v", body, got, problems)
+		}
+	}
 }
 
 // repoRoot walks up from THIS file to the directory holding src/dev_health_ops

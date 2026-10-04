@@ -183,7 +183,7 @@ VALUES ($1, 'pagerduty', 'default', $2, 1, now(), now(), true)`, org.String(), c
 	receipt := venueoracle.Diff(t, goBase, requests, python, venueoracle.DiffOptions{
 		Golden: golden,
 		Normalize: func(request venueoracle.Request, body string) string {
-			return dropKnownStaleClickHouseWarnings(t, redactField(t, body, "timestamp"))
+			return dropClickHouseTablesAfterThePythonFreeze(t, dropKnownStaleClickHouseWarnings(t, redactField(t, body, "timestamp")))
 		},
 	})
 	t.Log(receipt)

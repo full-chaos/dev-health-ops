@@ -3,6 +3,8 @@ package providersync
 import (
 	"context"
 	"encoding/json"
+	"errors"
+	"fmt"
 	"io"
 	"net/http"
 	"reflect"
@@ -115,13 +117,14 @@ func TestNormalizeGitLabClosingMergeRequestsKeepsEveryMergeRequestState(t *testi
 type closedByStatusDoer struct {
 	inner  *gitLabWorkItemsDoer
 	status int
+	body   string // the answer body; empty means a small error object
 }
 
 func (doer closedByStatusDoer) Do(request *http.Request) (*http.Response, error) {
 	if strings.HasSuffix(request.URL.Path, "/closed_by") {
 		return &http.Response{
 			StatusCode: doer.status, Status: http.StatusText(doer.status), Header: make(http.Header),
-			Body: io.NopCloser(strings.NewReader(`{"message":"closed_by"}`)), Request: request,
+			Body: io.NopCloser(strings.NewReader(firstNonEmpty(doer.body, `{"message":"closed_by"}`))), Request: request,
 		}, nil
 	}
 	return doer.inner.Do(request)
@@ -134,18 +137,21 @@ func (doer closedByStatusDoer) Do(request *http.Request) (*http.Response, error)
 func TestGitLabWorkItemsRouteClosedByFailureClassSplitsTheWatermark(t *testing.T) {
 	cases := map[string]struct {
 		status        int // 0: answers normally
+		body          string
 		wantOutcome   string
 		wantWatermark bool
 		wantTerminal  int
 		wantTransient int
 	}{
-		"answers":                       {0, "synced", true, 0, 0},
-		"terminal 404":                  {http.StatusNotFound, "terminal_unavailable", true, 1, 0},
-		"terminal 403":                  {http.StatusForbidden, "terminal_unavailable", true, 1, 0},
-		"transient 503":                 {http.StatusServiceUnavailable, "transient_failed", false, 0, 1},
-		"transient 429":                 {http.StatusTooManyRequests, "transient_failed", false, 0, 1},
-		"transient 500":                 {http.StatusInternalServerError, "transient_failed", false, 0, 1},
-		"transient transport (no body)": {-1, "transient_failed", false, 0, 1},
+		"answers":                       {0, "", "synced", true, 0, 0},
+		"terminal 404":                  {http.StatusNotFound, "", "terminal_unavailable", true, 1, 0},
+		"terminal 403":                  {http.StatusForbidden, "", "terminal_unavailable", true, 1, 0},
+		"transient 503":                 {http.StatusServiceUnavailable, "", "transient_failed", false, 0, 1},
+		"transient 429":                 {http.StatusTooManyRequests, "", "transient_failed", false, 0, 1},
+		"transient 500":                 {http.StatusInternalServerError, "", "transient_failed", false, 0, 1},
+		"transient transport (no body)": {-1, "", "transient_failed", false, 0, 1},
+		"terminal page cap exceeded":    {http.StatusOK, `[{"iid":9,"references":{"full":"acme/api!9"}},{"iid":10,"references":{"full":"acme/api!10"}}]`, "terminal_page_cap", true, 1, 0},
+		"terminal undecodable answer":   {http.StatusOK, `["not an object"]`, "terminal_undecodable", true, 1, 0},
 	}
 	for name, c := range cases {
 		t.Run(name, func(t *testing.T) {
@@ -165,7 +171,7 @@ func TestGitLabWorkItemsRouteClosedByFailureClassSplitsTheWatermark(t *testing.T
 			inner := &gitLabWorkItemsDoer{responses: responses}
 			var doer providerfoundation.HTTPDoer = inner
 			if c.status > 0 {
-				doer = closedByStatusDoer{inner: inner, status: c.status}
+				doer = closedByStatusDoer{inner: inner, status: c.status, body: c.body}
 			}
 			claim := nativeTestClaim("gitlab", "work-items")
 			claim.OrgID = "77777777-7777-4777-8777-777777777777"
@@ -203,5 +209,29 @@ func TestGitLabWorkItemsRouteClosedByFailureClassSplitsTheWatermark(t *testing.T
 				t.Fatalf("metrics lack %s:\n%s", want, exposition.String())
 			}
 		})
+	}
+}
+
+// The classifier of a failed closed_by fetch (D4771): terminal reasons repeat on every run and let the watermark advance;
+// everything else, an error that is not a ProviderError included, is transient and holds it.
+func TestGitLabClosingFetchOutcome(t *testing.T) {
+	t.Parallel()
+	for name, c := range map[string]struct {
+		err  error
+		want string
+	}{
+		"plain error is not a ProviderError": {errors.New("boom"), "transient_failed"},
+		"wrapped plain error":                {fmt.Errorf("closed_by: %w", errors.New("boom")), "transient_failed"},
+		"404":                                {&providerfoundation.ProviderError{StatusCode: http.StatusNotFound}, "terminal_unavailable"},
+		"wrapped 403":                        {fmt.Errorf("closed_by: %w", &providerfoundation.ProviderError{StatusCode: http.StatusForbidden}), "terminal_unavailable"},
+		"401 is not terminal here":           {&providerfoundation.ProviderError{StatusCode: http.StatusUnauthorized}, "transient_failed"},
+		"429":                                {&providerfoundation.ProviderError{StatusCode: http.StatusTooManyRequests}, "transient_failed"},
+		"503":                                {&providerfoundation.ProviderError{StatusCode: http.StatusServiceUnavailable}, "transient_failed"},
+		"page cap":                           {ErrPaginationCapExceeded, "terminal_page_cap"},
+		"undecodable":                        {fmt.Errorf("closed_by: %w", providerfoundation.ErrNormalizationInvalid), "terminal_undecodable"},
+	} {
+		if got := gitLabClosingFetchOutcome(c.err); got != c.want {
+			t.Errorf("%s: outcome %q want %q", name, got, c.want)
+		}
 	}
 }

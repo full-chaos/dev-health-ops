@@ -1200,9 +1200,11 @@ func (m *Metrics) RecordJiraDevStatus(outcome string) {
 
 // metricGitLabClosingMROutcomeVocabulary: synced (answered), transient_failed (5xx, timeout, 429, network: the watermark
 // is held and the next run asks again) and terminal_unavailable (404/403: the issue's closed_by is not readable with this
-// credential; retrying cannot help, so the watermark advances and the issue is reported incomplete).
+// credential; retrying cannot help, so the watermark advances and the issue is reported incomplete). Two more terminal
+// reasons repeat on every run for the same issue and are handled the same way: terminal_page_cap (the answer exceeds the
+// page cap) and terminal_undecodable (the answer does not decode).
 var metricGitLabClosingMROutcomeVocabulary = map[string]struct{}{
-	"synced": {}, "transient_failed": {}, "terminal_unavailable": {},
+	"synced": {}, "transient_failed": {}, "terminal_unavailable": {}, "terminal_page_cap": {}, "terminal_undecodable": {},
 }
 
 // RecordGitLabClosingMRFetch counts one issue's closed_by fetch (CHAOS-8526), by outcome.
@@ -1684,7 +1686,7 @@ func (m *Metrics) WritePrometheus(writer io.Writer) error {
 	}
 	if err := writeLabeledCounter(
 		writer, "dev_health_gitlab_closing_mr_fetch_total",
-		"GitLab per-issue closed_by (closing merge request) fetches, by outcome (CHAOS-8526). \"terminal_unavailable\" is a 404/403 (watermark advances), \"transient_failed\" a retryable failure (watermark held).",
+		"GitLab per-issue closed_by (closing merge request) fetches, by outcome (CHAOS-8526). The terminal_* outcomes (404/403, page cap exceeded, undecodable answer) repeat on every run, so the watermark advances; \"transient_failed\" is a retryable failure (watermark held).",
 		"outcome", m.gitlabClosingMR,
 	); err != nil {
 		return err

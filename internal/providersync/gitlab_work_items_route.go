@@ -332,12 +332,11 @@ func (handler GitLabWorkItemsRouteHandler) Collect(
 					return CompleteRouteBatch{}, closingErr
 				}
 				closingIncomplete = append(closingIncomplete, item.WorkItemID)
-				outcome := "transient_failed"
-				if gitLabClosingFetchIsTerminal(closingErr) {
-					outcome = "terminal_unavailable"
-					closingTerminal++
-				} else {
+				outcome := gitLabClosingFetchOutcome(closingErr)
+				if outcome == "transient_failed" {
 					closingTransient++
+				} else {
+					closingTerminal++
 				}
 				counted.Metrics.RecordGitLabClosingMRFetch(outcome)
 				slog.Warn("providersync.gitlab.closing_mr_fetch_failed",
@@ -661,13 +660,22 @@ func buildGitLabWorkItemEffectsFromRows(rows gitlabWorkItemRows) ([]EffectBatch,
 
 var _ CompleteRouteHandler = GitLabWorkItemsRouteHandler{}
 
-// gitLabClosingFetchIsTerminal reports a 404/403 from the closed_by endpoint: the answer is not readable with this
-// credential, and a retry cannot change it. Anything else (including an error that is not a ProviderError) is treated as
-// transient, the safe side for a watermark.
-func gitLabClosingFetchIsTerminal(err error) bool {
-	var providerErr *providerfoundation.ProviderError
-	if !errors.As(err, &providerErr) || providerErr == nil {
-		return false
+// gitLabClosingFetchOutcome classifies a failed closed_by fetch for the watermark (D4771). Terminal outcomes repeat on
+// every run for the same issue, so retrying cannot help: terminal_unavailable (404/403, not readable with this
+// credential), terminal_page_cap (the answer exceeds the page cap) and terminal_undecodable (the answer does not decode).
+// Anything else (5xx, timeout, 429, network, or an error that is not a ProviderError) is transient_failed, the safe side
+// for a watermark.
+func gitLabClosingFetchOutcome(err error) string {
+	switch {
+	case errors.Is(err, ErrPaginationCapExceeded):
+		return "terminal_page_cap"
+	case errors.Is(err, providerfoundation.ErrNormalizationInvalid):
+		return "terminal_undecodable"
 	}
-	return providerErr.StatusCode == http.StatusNotFound || providerErr.StatusCode == http.StatusForbidden
+	var providerErr *providerfoundation.ProviderError
+	if errors.As(err, &providerErr) && providerErr != nil &&
+		(providerErr.StatusCode == http.StatusNotFound || providerErr.StatusCode == http.StatusForbidden) {
+		return "terminal_unavailable"
+	}
+	return "transient_failed"
 }

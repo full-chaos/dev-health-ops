@@ -131,3 +131,8 @@ Limits of the relation data:
     time, a board sync ends nothing.
 
   In both cases blocked hours can be too low, never too high.
+- **GitHub relations read from a comment** (a Linear bot's link-back). The
+  comments of an issue are optional data: when a sync cannot read them, or
+  reads only the first comments, it still writes the issue, and a relation
+  that only a comment held ends at the last sync that read it. Blocked hours
+  can be too low, never too high.

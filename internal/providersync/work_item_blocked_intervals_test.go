@@ -756,3 +756,63 @@ func TestTheUnitsFreshRowsCarryTheirReadTimeWriterAndLinkTime(t *testing.T) {
 		}
 	})
 }
+
+// PINS A KNOWN UNDERSTATEMENT (CHAOS-8578, a third named case of an early end,
+// in docs/reference/metrics/definitions.md): a github relation read from a
+// COMMENT (a Linear bot's link-back) when a later sync wrote the issue without
+// reading its comments. The comments are optional data: a failed comment fetch
+// is recorded as an incomplete `issue_comments` component and the issue is
+// still written (github_work_items_rest_collect.go, githubWorkItemsOptionalIncompleteComponents),
+// and a comments limit reads only the first comments. That sync is a read of
+// the issue's relations (it is not the board pass), so the relation the
+// comment held looks not written again and ends at its last write. Blocked
+// hours can be too low, never too high. This test is the one that changes
+// the day a sync records which relations it could not read.
+func TestACommentRelationEndsWhenALaterSyncDidNotReadTheComments(t *testing.T) {
+	claim := blockedTestClaim(t, "github")
+	firstSeen := blockedTestDay.Add(2 * time.Hour)
+	commentRead := blockedTestDay.Add(12 * time.Hour)
+	comment, err := json.Marshal(map[string]any{
+		"id": 101, "body": "Blocked by https://linear.app/fullchaos/issue/OPS-9/task",
+		"created_at": "2026-08-03T08:00:00Z", "user": map[string]any{"login": "linear[bot]"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	// The sync that read the comment stored the relation.
+	read, err := extractGitHubWorkItemDependencies(claim, "gh:acme/api#7", "acme/api", "Routine repair", "", []json.RawMessage{comment}, commentRead)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(read) != 1 || read[0].SourceWorkItemID != "gh:acme/api#7" || read[0].TargetWorkItemID != "extkey:OPS-9" || read[0].RelationshipType != "blocked_by" {
+		t.Fatalf("the comment gave %+v, want gh:acme/api#7 blocked_by extkey:OPS-9", read)
+	}
+	// The later sync read the issue but not its comments: no relation.
+	unread, err := extractGitHubWorkItemDependencies(claim, "gh:acme/api#7", "acme/api", "Routine repair", "", nil, blockedTestSyncedAt)
+	if err != nil || len(unread) != 0 {
+		t.Fatalf("without the comments: %+v, %v; want no relation", unread, err)
+	}
+	stored := workitemmetrics.BlockingRelation{
+		SourceID: read[0].SourceWorkItemID, TargetID: read[0].TargetWorkItemID, RelationshipType: read[0].RelationshipType,
+		Raw: read[0].RelationshipTypeRaw, SemanticsVersion: read[0].RelationshipSemanticsVersion,
+		LastSynced: read[0].LastSynced, FirstSeenAt: &firstSeen,
+	}
+	issue := workitemmetrics.RelationEnd{
+		WorkItemID: "gh:acme/api#7", Provider: "github", ProjectID: "acme/api", Status: "in_progress",
+		CreatedAt: blockedTestDay, LastSynced: commentRead, RelationsReadAt: &commentRead,
+	}
+	blocker := workitemmetrics.RelationEnd{
+		WorkItemID: "linear:OPS-9", Provider: "linear", Status: "in_progress",
+		CreatedAt: blockedTestDay.Add(-72 * time.Hour), LastSynced: commentRead,
+	}
+	rows := blockedTestRows(claim, "github", "gh:acme/api#7", unread)
+	source := &blockedFactsSource{relations: []workitemmetrics.BlockingRelation{stored}, ends: []workitemmetrics.RelationEnd{issue, blocker}}
+	blocked, err := loadWorkItemBlockedIntervalsForProvider(context.Background(), "github", claim, rows, source)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// TODAY'S BEHAVIOUR: ended at the sync that last read the comment.
+	if want := (map[string][]workitemmetrics.BlockedInterval{"gh:acme/api#7": {{Start: firstSeen, End: &commentRead}}}); !reflect.DeepEqual(blocked, want) {
+		t.Fatalf("intervals = %+v, want %+v", blocked, want)
+	}
+}

@@ -231,21 +231,38 @@ func viewFilledProblems(t *testing.T, dsn string) []string {
 	sort.Strings(names)
 	var problems []string
 	for _, name := range names {
-		rule := viewFilledAfterTheCapture[name]
-		if views := strings.TrimSpace(clickHouseHTTP(t, dsn, "SELECT count() FROM system.tables WHERE database = currentDatabase() AND name = '"+rule.View+"' AND engine = 'MaterializedView' FORMAT TSV")); views != "1" {
-			problems = append(problems, fmt.Sprintf("%s (migration %s): the materialized view %s does not exist; nothing fills the table", name, rule.Migration, rule.View))
-		}
-		keys := "`" + strings.Join(rule.Key, "`, `") + "`"
-		aggregate := rule.SourceRule[:strings.Index(rule.SourceRule, "(")]
-		where := ""
-		if rule.SourceWhere != "" {
-			where = " WHERE " + rule.SourceWhere
-		}
-		want := keyedValues(clickHouseHTTP(t, dsn, fmt.Sprintf("SELECT %s, toString(%s) FROM `%s`%s GROUP BY %s ORDER BY %s FORMAT TSV", keys, rule.SourceRule, rule.Source, where, keys, keys)), len(rule.Key))
-		got := keyedValues(clickHouseHTTP(t, dsn, fmt.Sprintf("SELECT %s, toString(%s(`%s`)) FROM `%s` GROUP BY %s ORDER BY %s FORMAT TSV", keys, aggregate, rule.Column, name, keys, keys)), len(rule.Key))
-		problems = append(problems, viewFilledRowProblems(name, rule, want, got)...)
+		problems = append(problems, viewFilledTableProblems(t, dsn, name, viewFilledAfterTheCapture[name])...)
 	}
 	return problems
+}
+
+// viewFilledTableProblems checks one view-filled table against its rule on
+// the live database (viewFilledProblems).
+func viewFilledTableProblems(t *testing.T, dsn, name string, rule viewFilledTable) []string {
+	t.Helper()
+	var problems []string
+	if views := strings.TrimSpace(clickHouseHTTP(t, dsn, "SELECT count() FROM system.tables WHERE database = currentDatabase() AND name = '"+rule.View+"' AND engine = 'MaterializedView' FORMAT TSV")); views != "1" {
+		problems = append(problems, fmt.Sprintf("%s (migration %s): the materialized view %s does not exist; nothing fills the table", name, rule.Migration, rule.View))
+	}
+	wantQuery, gotQuery := viewFilledQueries(name, rule)
+	want := keyedValues(clickHouseHTTP(t, dsn, wantQuery), len(rule.Key))
+	got := keyedValues(clickHouseHTTP(t, dsn, gotQuery), len(rule.Key))
+	return append(problems, viewFilledRowProblems(name, rule, want, got)...)
+}
+
+// viewFilledQueries are the two reads of the check: what the rule gives over
+// the source rows the view keeps (its SourceWhere), and what the table holds,
+// each as the aggregate over the key.
+func viewFilledQueries(name string, rule viewFilledTable) (want, got string) {
+	keys := "`" + strings.Join(rule.Key, "`, `") + "`"
+	aggregate := rule.SourceRule[:strings.Index(rule.SourceRule, "(")]
+	where := ""
+	if rule.SourceWhere != "" {
+		where = " WHERE " + rule.SourceWhere
+	}
+	want = fmt.Sprintf("SELECT %s, toString(%s) FROM `%s`%s GROUP BY %s ORDER BY %s FORMAT TSV", keys, rule.SourceRule, rule.Source, where, keys, keys)
+	got = fmt.Sprintf("SELECT %s, toString(%s(`%s`)) FROM `%s` GROUP BY %s ORDER BY %s FORMAT TSV", keys, aggregate, rule.Column, name, keys, keys)
+	return want, got
 }
 
 // requireViewFilledTables fails the test on any problem of a view-filled
@@ -289,9 +306,10 @@ func TestAfterCaptureRulesReportEveryDefectByName(t *testing.T) {
 	columns := []FrozenColumn{
 		{Name: "source_work_item_id", Type: "String"},
 		{Name: "relation_started_at", Type: "Nullable(DateTime64(3))"},
+		{Name: "relation_writer", Type: "Nullable(String)"},
 		{Name: "org_id", Type: "String"},
 	}
-	clean := FrozenTable{Name: "work_item_dependencies", Columns: columns, Rows: [][]any{{"a", nil, "o"}, {"b", nil, "o"}}}
+	clean := FrozenTable{Name: "work_item_dependencies", Columns: columns, Rows: [][]any{{"a", nil, nil, "o"}, {"b", nil, nil, "o"}}}
 	out, problems := withoutColumnsAfterTheCapture(clean)
 	if len(problems) != 0 {
 		t.Fatalf("every row NULL: %v", problems)
@@ -300,27 +318,27 @@ func TestAfterCaptureRulesReportEveryDefectByName(t *testing.T) {
 		len(out.Rows) != 2 || len(out.Rows[0]) != 2 || out.Rows[0][0] != "a" || out.Rows[0][1] != "o" || out.Rows[1][0] != "b" {
 		t.Fatalf("the table without the added column = %+v", out)
 	}
-	if len(clean.Columns) != 3 || len(clean.Rows[0]) != 3 {
+	if len(clean.Columns) != 4 || len(clean.Rows[0]) != 4 {
 		t.Fatal("the input table was edited")
 	}
 	// PLANT 1: a load that writes a value into the new column.
-	written := FrozenTable{Name: "work_item_dependencies", Columns: columns, Rows: [][]any{{"a", nil, "o"}, {"b", "2026-08-01 00:00:00.000", "o"}}}
+	written := FrozenTable{Name: "work_item_dependencies", Columns: columns, Rows: [][]any{{"a", nil, nil, "o"}, {"b", "2026-08-01 00:00:00.000", nil, "o"}}}
 	if _, problems := withoutColumnsAfterTheCapture(written); len(problems) != 1 ||
 		!strings.HasPrefix(problems[0], "work_item_dependencies.relation_started_at (added by 102_work_item_dependency_first_seen.sql, after the capture): 1 of 2 loaded rows hold a value") {
 		t.Fatalf("a value in the added column: %q", problems)
 	}
 	// The entry outlived its column, or the column is not nullable.
 	gone := FrozenTable{Name: "work_item_dependencies", Columns: columns[:1], Rows: [][]any{{"a"}}}
-	if _, problems := withoutColumnsAfterTheCapture(gone); len(problems) != 1 || !strings.Contains(problems[0], "the table has no such column") {
-		t.Fatalf("a named column that is not in the table: %q", problems)
+	if _, problems := withoutColumnsAfterTheCapture(gone); len(problems) != 2 || !strings.Contains(problems[0], "the table has no such column") || !strings.Contains(problems[1], "the table has no such column") {
+		t.Fatalf("two named columns that are not in the table: %q", problems)
 	}
-	notNullable := FrozenTable{Name: "work_item_dependencies", Columns: []FrozenColumn{{Name: "relation_started_at", Type: "DateTime64(3)"}}, Rows: [][]any{{"1970-01-01 00:00:00.000"}}}
+	notNullable := FrozenTable{Name: "work_item_dependencies", Columns: []FrozenColumn{{Name: "relation_started_at", Type: "DateTime64(3)"}, {Name: "relation_writer", Type: "Nullable(String)"}}, Rows: [][]any{{"1970-01-01 00:00:00.000", nil}}}
 	if _, problems := withoutColumnsAfterTheCapture(notNullable); len(problems) != 1 || !strings.Contains(problems[0], "not Nullable") {
 		t.Fatalf("a named column that is not nullable: %q", problems)
 	}
 	// A table with no added column is returned as it is.
-	other := FrozenTable{Name: "repos", Columns: columns, Rows: [][]any{{"a", "value", "o"}}}
-	if out, problems := withoutColumnsAfterTheCapture(other); len(problems) != 0 || len(out.Columns) != 3 {
+	other := FrozenTable{Name: "repos", Columns: columns, Rows: [][]any{{"a", "value", "x", "o"}}}
+	if out, problems := withoutColumnsAfterTheCapture(other); len(problems) != 0 || len(out.Columns) != 4 {
 		t.Fatalf("a table that is not in the list: %+v %v", out, problems)
 	}
 
@@ -429,6 +447,32 @@ func TestAfterCaptureRulesCatchPlantedDefectsOnALiveClickHouse(t *testing.T) {
 		t.Fatalf("the view is still right after plant 1: %v", problems)
 	}
 
+	// work_item_relations_read (migration 103): a text row and a later board
+	// row of one item, and a board row alone of another. The view keeps the
+	// text row only; the rule, with the view's filter, agrees. The same rule
+	// WITHOUT the filter (an in-test plant of the check) reports both items.
+	item := func(id, project, lastSynced string) {
+		t.Helper()
+		clickHouseHTTP(t, ch.httpDSN, "INSERT INTO work_items (repo_id, work_item_id, provider, project_id, last_synced, org_id) VALUES (toUUID('00000000-0000-0000-0000-000000000000'), '"+id+"', 'github', '"+project+"', '"+lastSynced+"', '"+org+"')")
+	}
+	item("gh:acme/api#7", "acme/api", "2026-08-05 10:00:00.000")
+	item("gh:acme/api#7", "ghprojv2:acme#1", "2026-08-07 10:00:00.000")
+	item("gh:acme/api#8", "ghprojv2:acme#1", "2026-08-07 10:00:00.000")
+	readRule := viewFilledAfterTheCapture["work_item_relations_read"]
+	if problems := viewFilledTableProblems(t, ch.httpDSN, "work_item_relations_read", readRule); len(problems) != 0 {
+		t.Fatalf("the real view of work_item_relations_read: %v", problems)
+	}
+	if got := strings.TrimSpace(clickHouseHTTP(t, ch.httpDSN, "SELECT toString(max(relations_read_at)) FROM work_item_relations_read WHERE work_item_id = 'gh:acme/api#7' FORMAT TSV")); got != "2026-08-05 10:00:00.000" {
+		t.Fatalf("read time of #7 = %q, want the text row's, not the board row's", got)
+	}
+	unfiltered := readRule
+	unfiltered.SourceWhere = ""
+	if problems := viewFilledTableProblems(t, ch.httpDSN, "work_item_relations_read", unfiltered); len(problems) != 2 ||
+		!strings.Contains(problems[0], "relations_read_at of "+org+"\tgh:acme/api#7 is 2026-08-05 10:00:00.000, want max(last_synced) = 2026-08-07 10:00:00.000") ||
+		!strings.Contains(problems[1], "no row for "+org+"\tgh:acme/api#8") {
+		t.Fatalf("the rule without the view's filter: %q", problems)
+	}
+
 	// PLANT 2: a view that writes a wrong first seen (one day early).
 	clickHouseHTTP(t, ch.httpDSN, "DROP VIEW work_item_dependency_first_seen_mv")
 	clickHouseHTTP(t, ch.httpDSN, "CREATE MATERIALIZED VIEW work_item_dependency_first_seen_mv TO work_item_dependency_first_seen AS SELECT org_id, source_work_item_id, target_work_item_id, relationship_type, min(last_synced) - INTERVAL 1 DAY AS first_seen_at FROM work_item_dependencies GROUP BY org_id, source_work_item_id, target_work_item_id, relationship_type")
@@ -446,5 +490,24 @@ func TestAfterCaptureRulesCatchPlantedDefectsOnALiveClickHouse(t *testing.T) {
 		!strings.Contains(problems[1], "first_seen_at of "+org+"\tjira:A-5\tjira:A-2\tblocks") ||
 		!strings.Contains(problems[2], "no row for "+org+"\tjira:A-6\tjira:A-2\tblocks") {
 		t.Fatalf("a view that writes no row: %q", problems)
+	}
+}
+
+// The view of work_item_relations_read keeps every work_items row except a
+// github Projects v2 board row (migration 103, CHAOS-8578); the rule's read of
+// the source must keep the same rows, or the check compares the table with
+// rows the view never saw. The first-seen view has no filter.
+func TestViewFilledRulesReadTheSourceRowsTheirViewKeeps(t *testing.T) {
+	read := viewFilledAfterTheCapture["work_item_relations_read"]
+	want, got := viewFilledQueries("work_item_relations_read", read)
+	if wantText := "FROM `work_items` WHERE NOT (provider = 'github' AND startsWith(project_id, 'ghprojv2:')) GROUP BY `org_id`, `work_item_id`"; !strings.Contains(want, wantText) {
+		t.Fatalf("the rule's read of work_items = %q, want it to hold %q", want, wantText)
+	}
+	if !strings.Contains(got, "toString(max(`relations_read_at`)) FROM `work_item_relations_read`") || strings.Contains(got, "WHERE") {
+		t.Fatalf("the table read = %q", got)
+	}
+	firstSeen, _ := viewFilledQueries("work_item_dependency_first_seen", viewFilledAfterTheCapture["work_item_dependency_first_seen"])
+	if strings.Contains(firstSeen, "WHERE") {
+		t.Fatalf("the first-seen rule has no filter, but its read is %q", firstSeen)
 	}
 }

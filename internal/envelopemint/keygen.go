@@ -164,11 +164,18 @@ func ensureOnce(dir, keyID string) (changed bool, err error) {
 	paths := PathsIn(dir)
 	removeStaleTemps(filepath.Dir(paths.Private))
 	removeStaleTemps(filepath.Dir(paths.JWKS))
-	privMissing, err := missing(paths.Private)
+	// Read order matters. Commits go private key first, JWKS second, and
+	// nothing is ever removed, so a JWKS that is present at the first read
+	// implies a private key that is present at the later read. Reading the
+	// private key first would let a concurrent run commit both files between
+	// the two reads and show "JWKS without private key", a state no crash can
+	// leave and which is refused. This order cannot show it.
+	jwksMissing, err := missing(paths.JWKS)
 	if err != nil {
 		return false, err
 	}
-	jwksMissing, err := missing(paths.JWKS)
+	_ = crashHook("ensure:between-state-reads") // test seam: cut point of the two reads
+	privMissing, err := missing(paths.Private)
 	if err != nil {
 		return false, err
 	}

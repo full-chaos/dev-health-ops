@@ -51,7 +51,7 @@ import (
 // to change without notice.
 type carryResult struct {
 	// Reason is exactly one of: "carried" (success, including a run that carried zero
-	// eligible rows), "digest_unchanged" (Preflight 2: this binary's SDL is already live
+	// eligible rows and the no-op on an empty table, which EmptyTable marks), "digest_unchanged" (Preflight 2: this binary's SDL is already live
 	// -- an ordinary, expected no-op on a non-schema-changing roll), "stale_build" (a row
 	// names a build the deployed process is not running -- the caller's cue to `repoint`
 	// then retry, the rev196 exception), "refused" (any OTHER refusal -- catalog/document
@@ -63,6 +63,21 @@ type carryResult struct {
 	TargetDigest string `json:"target_schema_digest,omitempty"`
 	Carried      int    `json:"carried,omitempty"`
 	Message      string `json:"message,omitempty"`
+	// EmptyTable is true on the one success that carried nothing because there
+	// was nothing: go_api_routing_state held no row at any schema digest
+	// (CHAOS-8543). Reason stays "carried" -- the callers' success value, which
+	// already covers a run that carried zero rows -- so no caller that switches
+	// on reason has to learn a new one; this field is what tells the two apart.
+	// It is the LAST field, so `reason` is still the first key of the line.
+	EmptyTable bool `json:"empty_table,omitempty"`
+}
+
+// routingTableEmptyNote is the one line `carry` and `repoint` print when
+// go_api_routing_state has no row at any schema digest and the verb therefore
+// did nothing (CHAOS-8543). what is the thing the verb would have done.
+func routingTableEmptyNote(what string) string {
+	return fmt.Sprintf("go-api-routing: NO-OP: go_api_routing_state has no row at any schema digest, so there is nothing to %s and nothing was written. "+
+		"An empty table is a valid state: a query-api of this build serves every registered operation that has no routing row, and no MCP class root is enabled.", what)
 }
 
 // carryJSONPrefix marks the one line of a -json run's stdout that is machine-readable --
@@ -95,16 +110,27 @@ func printCarryResult(w io.Writer, result carryResult) {
 // file. A digest read from a file is a digest somebody could have typed;
 // a digest computed over the text is a fact about the text, and the text
 // is what the new image will serve.
-func targetDocumentDigests(path string) (map[string]string, error) {
-	documents, err := goapiproof.LoadDocuments(path)
+//
+// The second map is, per operation, the digests of the LEGACY texts the
+// image still accepts (CHAOS-8000 dual accept), computed the same way
+// over the dump's `"legacy": true` entries. A routing row keyed to one of
+// them is read by the new image, so `carry` copies it under that digest.
+func targetDocumentDigests(path string) (map[string]string, map[string][]string, error) {
+	documents, legacyDocuments, err := goapiproof.LoadDocumentsWithLegacy(path)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	digests := make(map[string]string, len(documents))
 	for operation, text := range documents {
 		digests[operation] = goapidigest.Document(text)
 	}
-	return digests, nil
+	legacyDigests := make(map[string][]string, len(legacyDocuments))
+	for operation, texts := range legacyDocuments {
+		for _, text := range texts {
+			legacyDigests[operation] = append(legacyDigests[operation], goapidigest.Document(text))
+		}
+	}
+	return digests, legacyDigests, nil
 }
 
 func runCarry(argv []string) (err error) {
@@ -134,6 +160,7 @@ func runCarry(argv []string) (err error) {
 	// call printCarryResult at each one.
 	var reason, liveDigest, targetDigest string
 	var carriedCount int
+	var emptyTable bool
 	defer func() {
 		if !jsonOut {
 			return
@@ -148,7 +175,7 @@ func runCarry(argv []string) (err error) {
 				reason = "refused"
 			}
 		}
-		result := carryResult{Reason: reason, LiveDigest: liveDigest, TargetDigest: targetDigest, Carried: carriedCount}
+		result := carryResult{Reason: reason, LiveDigest: liveDigest, TargetDigest: targetDigest, Carried: carriedCount, EmptyTable: emptyTable}
 		if err != nil {
 			// Same defense-in-depth as the command's other error-print sites (see
 			// credentialBoundary's own doc comment): refuse/internal already redact
@@ -176,7 +203,7 @@ func runCarry(argv []string) (err error) {
 		return err
 	}
 
-	catalog, err := goapiproof.LoadOperationCatalog(common.catalogPath)
+	catalog, catalogLegacyDigests, err := goapiproof.LoadOperationCatalogWithLegacy(common.catalogPath)
 	if err != nil {
 		return refuse("%v -- refusing to carry anything on a catalog this process cannot read", err)
 	}
@@ -206,7 +233,7 @@ func runCarry(argv []string) (err error) {
 			}
 		}
 	}
-	targetDigests, err := targetDocumentDigests(documentsPath)
+	targetDigests, targetLegacyDigests, err := targetDocumentDigests(documentsPath)
 	if err != nil {
 		return refuse("%v -- the registered-document dump for THIS image is what says the documents did not change; without it nothing can be carried safely", err)
 	}
@@ -285,10 +312,12 @@ func runCarry(argv []string) (err error) {
 		RunningBuild:       running,
 		ExpectBuild:        expectBuild,
 		Inputs: goapiproof.CarryInputs{
-			LiveDocumentDigest:    registry.DocumentDigest,
-			TargetDocumentDigest:  targetDigests,
-			CatalogDocumentDigest: catalog,
-			MCPRoots:              mcpRoots,
+			LiveDocumentDigest:           registry.DocumentDigest,
+			TargetDocumentDigest:         targetDigests,
+			TargetLegacyDocumentDigests:  targetLegacyDigests,
+			CatalogDocumentDigest:        catalog,
+			CatalogLegacyDocumentDigests: catalogLegacyDigests,
+			MCPRoots:                     mcpRoots,
 		},
 		Operations:     operationFilter,
 		RecordedBy:     common.recordedBy,
@@ -302,6 +331,17 @@ func runCarry(argv []string) (err error) {
 	// and an operator deciding whether to roll needs both halves.
 	printCarryPlan(outcomes, registry.SchemaDigest, target, running, dryRun)
 	carriedCount = goapiproof.SummarizeCarry(outcomes).Carried
+	if errors.Is(carryErr, goapiproof.ErrRoutingTableEmpty) {
+		// CHAOS-8543: an empty table is a valid state since the catalog rule, and
+		// a schema-changing upgrade of a stack that serves from one must not fail
+		// its pre-upgrade hook. Every preflight above still ran (the registry, the
+		// digests, the build, the -expect-build cross-check); only the answer to
+		// "there is no row at all" changed, from a refusal to this no-op. Rows that
+		// exist only at other digests are still ErrCarryNoLiveRows, below.
+		emptyTable = true
+		fmt.Fprintln(stdout, routingTableEmptyNote("carry"))
+		return nil
+	}
 	if carryErr != nil {
 		if errors.Is(carryErr, goapiproof.ErrCarryBuildNotRunning) {
 			// The rev196 exception, D2828/D2829's whole reason for a distinct
@@ -317,6 +357,26 @@ func runCarry(argv []string) (err error) {
 		return classifyWriteError(carryErr)
 	}
 	return nil
+}
+
+// carryLegacyDigestNote is the line the plan prints under a row that is
+// (or would be) carried under a LEGACY document digest, and the empty
+// string for every other row.
+//
+// Only CARRY and UNCHANGED get it: those are the rows that exist at the
+// target digest after the run. A skipped or refused row already prints
+// the reason that decided it.
+func carryLegacyDigestNote(outcome goapiproof.CarryOutcome) string {
+	if !outcome.LegacyDigest {
+		return ""
+	}
+	switch outcome.Action {
+	case goapiproof.CarryActionCarry:
+		return fmt.Sprintf("carried (legacy digest): the row keeps its document digest, which the target image accepts as a legacy text of this operation (its current text is %s); both texts are served from this row", outcome.TargetCurrentDigest)
+	case goapiproof.CarryActionUnchanged:
+		return fmt.Sprintf("already carried (legacy digest): the row at the target digest keeps its document digest, which the target image accepts as a legacy text of this operation (its current text is %s)", outcome.TargetCurrentDigest)
+	}
+	return ""
 }
 
 func printCarryPlan(outcomes []goapiproof.CarryOutcome, liveDigest, targetDigest, running string, dryRun bool) {
@@ -338,14 +398,21 @@ func printCarryPlan(outcomes []goapiproof.CarryOutcome, liveDigest, targetDigest
 		if outcome.Reason != "" {
 			fmt.Fprintf(stdout, "go-api-routing:              %s\n", outcome.Reason)
 		}
+		// A row carried under a LEGACY digest is named as one (CHAOS-8000
+		// dual accept): its key is not the digest /registry and `status`
+		// show for the operation, and an operator who compares the two
+		// must read here that this is intended, not drift.
+		if note := carryLegacyDigestNote(outcome); note != "" {
+			fmt.Fprintf(stdout, "go-api-routing:              %s\n", note)
+		}
 		// One structured line PER ROW written, mirroring `enable`'s
 		// go_api_routing.enabled and `repoint`'s go_api_routing.repointed:
 		// a log search six weeks later must find WHICH operations moved to
 		// the new digest, under whose name, not merely that some did.
 		if outcome.Action == goapiproof.CarryActionCarry && !dryRun {
-			fmt.Fprintf(stderr, "go_api_routing.carried operation=%s mode=%s rollout=%d build=%s from_schema_digest=%s to_schema_digest=%s document_digest=%s proof=none_at_target_digest\n",
+			fmt.Fprintf(stderr, "go_api_routing.carried operation=%s mode=%s rollout=%d build=%s from_schema_digest=%s to_schema_digest=%s document_digest=%s proof=none_at_target_digest legacy_digest=%t\n",
 				outcome.Operation, outcome.Mode, outcome.RolloutPercentage, outcome.Build,
-				liveDigest, targetDigest, outcome.DocumentDigest)
+				liveDigest, targetDigest, outcome.DocumentDigest, outcome.LegacyDigest)
 		}
 	}
 	if summary.Carried > 0 && !dryRun {

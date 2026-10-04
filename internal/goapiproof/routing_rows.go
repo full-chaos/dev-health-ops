@@ -10,10 +10,46 @@ package goapiproof
 
 import (
 	"context"
+	"errors"
 	"fmt"
 
 	"github.com/jackc/pgx/v5"
 )
+
+// ErrRoutingTableEmpty reports that go_api_routing_state holds NO row at any
+// schema digest (CHAOS-8543).
+//
+// It is not a refusal. Since the catalog rule (queryapi/routeswitch/
+// catalog_switch.go) an empty table is a valid state: query-api serves every
+// registered operation that has no routing row, and no MCP class root is
+// enabled. `carry` and `repoint` have nothing to do on it and nothing is
+// wrong, so the commands answer it as a no-op, exit 0, and say so in one
+// line -- a chart install that serves from an empty table must not fail its
+// pre-upgrade or post-upgrade hook.
+//
+// It is a DIFFERENT value from ErrCarryNoLiveRows and ErrRepointNoRows on
+// purpose. Those name "rows exist, none at the live digest": by the same
+// catalog rule a row left at another digest holds its operation dark, so that
+// state stays a refusal an upgrade cannot hide. "The table is empty" and
+// "every row died" must not read alike (CHAOS-5416), and until this value
+// existed both verbs answered the two with the same error.
+var ErrRoutingTableEmpty = errors.New("goapiproof: go_api_routing_state has no row at any schema digest")
+
+// anyRoutingRowSQL asks whether the table holds a row at all: any schema
+// digest, any document digest, any operation, any mode.
+const anyRoutingRowSQL = `SELECT EXISTS (SELECT 1 FROM public.go_api_routing_state)`
+
+// routingTableEmpty reports whether go_api_routing_state holds no row at all.
+// A verb calls it only after its own read found no row at the schema digest it
+// works on, inside the same transaction, so a run that finds rows makes no
+// extra read.
+func routingTableEmpty(ctx context.Context, tx pgx.Tx) (bool, error) {
+	var exists bool
+	if err := tx.QueryRow(ctx, anyRoutingRowSQL).Scan(&exists); err != nil {
+		return false, fmt.Errorf("goapiproof: read whether any routing row exists: %w", err)
+	}
+	return !exists, nil
+}
 
 // routingRowColumns is the column list every read below selects, in the
 // order routingRow's scan expects. Shared so a column added to one read

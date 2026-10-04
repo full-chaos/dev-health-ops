@@ -284,8 +284,7 @@ Every check below fails loud with a named finding; none can pass on an empty or 
   `/health`; Cockpit threads; `filters/options`; `investment/explain`; `work-units`
   (`include_textual=true`); `drilldown/prs` feeding a real `flame` entity; GraphQL
   `complexityTimeseries`, `workGraphFlow` (no empty `nodeType`) and `testopsRisk`; the
-  `/testops/risk` page. GraphQL documents are the registered wire-form documents compiled into the dho build (the exact text web sends; no printer), and each must hash to the edge catalog's registered digest at the deployed sha; the web source must still hold each document's constant and each REST path
-  (`DHO_SMOKE_CATALOG_FILE`, or `DHO_SMOKE_OPS_SHA` for a standalone run). Exit 3 = passed except
+  `/testops/risk` page. GraphQL documents sent are the registered wire-form documents compiled into the dho build (no printer). Web's own `export const ..._QUERY` text is read from `web/src` and must carry the same GraphQL tokens as the registered document (urql's `__typename` additions, whitespace and commas aside), and the registered document must hash to a digest the edge catalog holds for that operation (current or legacy) at the deployed sha, so a change in web's document fails as `document_digest_mismatch`; each REST path must still appear in the web source file that calls it. The catalog comes from `DHO_SMOKE_CATALOG_FILE`, or `DHO_SMOKE_OPS_SHA` for a standalone run. Exit 3 = passed except
   named KNOWN-MISSING checks (read from `routing-ops.txt`).
 
 ### Running the web-path smoke

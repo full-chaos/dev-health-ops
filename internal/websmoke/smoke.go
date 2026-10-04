@@ -12,11 +12,14 @@
 // callback, which calls the backend login exactly as web/src/lib/auth.ts does. No hand-minted
 // token is used.
 //
-// GraphQL documents are the registered wire-form documents of the Go plane (Config.Documents,
-// the constants query-api hashes into its catalog), never re-printed here. Each document's
-// sha256 must equal the digest the edge catalog (Config.Catalog) holds for its operation; a
-// mismatch fails as document_digest_mismatch. REST paths must still appear as a literal in the
-// web source file that calls them (Config.WebSrc).
+// GraphQL documents sent are the registered wire-form documents of the Go plane
+// (Config.Documents), never re-printed here. Web's own document text is read from its source
+// (Config.WebSrc, `export const NAME = `...`;`) and must carry the same GraphQL tokens as the
+// registered document (urql's __typename additions, whitespace and commas aside), and the
+// registered document's sha256 must be a digest the edge catalog (Config.Catalog) holds for its
+// operation (current or legacy); either failing is document_digest_mismatch, so a change in web's
+// document is caught. REST paths must still appear as a literal in the web source file that
+// calls them.
 //
 // KNOWN-MISSING operations come from ci/bigboy/routing-ops.txt. A known-missing check is
 // reported by name and makes the exit code 3, never 0; if it starts passing, the smoke fails so
@@ -41,6 +44,7 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"regexp"
 	"sort"
 	"strconv"
 	"strings"
@@ -567,25 +571,39 @@ func (s *runner) webSource() (result, error) {
 	if err != nil {
 		return nil, fail("catalog_unreadable")
 	}
-	var entries []struct{ Operation, Digest string }
+	var entries []struct {
+		Operation string
+		Digest    string
+	}
 	if err := json.Unmarshal(rawCatalog, &entries); err != nil {
 		return nil, fail("catalog_unparsable")
 	}
-	catalog := map[string]string{}
+	// Every digest of an operation is accepted (current and legacy rows), whatever their order.
+	catalog := map[string]map[string]bool{}
 	for _, e := range entries {
-		catalog[e.Operation] = e.Digest
+		if catalog[e.Operation] == nil {
+			catalog[e.Operation] = map[string]bool{}
+		}
+		catalog[e.Operation][e.Digest] = true
 	}
 	var mismatched []string
 	for _, g := range graphqlSources {
 		text, err := os.ReadFile(filepath.Join(s.cfg.WebSrc, g.File))
-		if err != nil || !strings.Contains(string(text), "export const "+g.Const+" =") {
+		if err != nil {
+			return nil, fail("web_source_document_missing=%s", g.Const)
+		}
+		webDoc, ok := tsDocument(string(text), g.Const)
+		if !ok {
 			return nil, fail("web_source_document_missing=%s", g.Const)
 		}
 		doc, ok := s.cfg.Documents(g.Op)
 		if !ok {
 			return nil, fail("registered_document_missing=%s", g.Op)
 		}
-		if catalog[g.Op] != DocumentDigest(doc) {
+		// Web's own text (urql adds __typename on the wire) must carry the same GraphQL tokens as the
+		// registered document, and the registered document must hash to the catalog: so a change in
+		// web's document is a mismatch, exactly as the printed-document digest was.
+		if !sameTokens(webDoc, doc) || !catalog[g.Op][DocumentDigest(doc)] {
 			mismatched = append(mismatched, g.Op)
 		}
 		s.documents[g.Op] = doc
@@ -1173,4 +1191,95 @@ func WriteReceipt(path string, rec Receipt) error {
 		return err
 	}
 	return os.WriteFile(path, append(b, '\n'), 0o644)
+}
+
+// tsDocument is the text of `export const NAME = `...`;` with no ${} interpolation, the same
+// extraction the Python smoke used.
+func tsDocument(source, name string) (string, bool) {
+	re := regexp.MustCompile("export const " + regexp.QuoteMeta(name) + " = `([^`]*)`;")
+	m := re.FindStringSubmatch(source)
+	if m == nil || strings.Contains(m[1], "${") {
+		return "", false
+	}
+	return m[1], true
+}
+
+// graphqlTokens splits a document into its lexical tokens: names, numbers, strings and
+// punctuators. Whitespace, commas and comments are insignificant, so a printer's layout is not
+// compared. `__typename` tokens are dropped: urql adds them on the wire.
+func graphqlTokens(doc string) []string {
+	var out []string
+	rs := []rune(doc)
+	isName := func(r rune, first bool) bool {
+		return r == '_' || (r >= 'a' && r <= 'z') || (r >= 'A' && r <= 'Z') || (!first && r >= '0' && r <= '9')
+	}
+	for i := 0; i < len(rs); {
+		r := rs[i]
+		switch {
+		case r == ' ' || r == '\t' || r == '\n' || r == '\r' || r == ',' || r == '\ufeff':
+			i++
+		case r == '#':
+			for i < len(rs) && rs[i] != '\n' && rs[i] != '\r' {
+				i++
+			}
+		case r == '.' && i+2 < len(rs) && rs[i+1] == '.' && rs[i+2] == '.':
+			out = append(out, "...")
+			i += 3
+		case r == '"':
+			j := i + 1
+			if i+2 < len(rs) && rs[i+1] == '"' && rs[i+2] == '"' {
+				j = i + 3
+				for j+2 < len(rs) && !(rs[j] == '"' && rs[j+1] == '"' && rs[j+2] == '"') {
+					j++
+				}
+				j += 3
+			} else {
+				for j < len(rs) && rs[j] != '"' {
+					if rs[j] == '\\' {
+						j++
+					}
+					j++
+				}
+				j++
+			}
+			if j > len(rs) {
+				j = len(rs)
+			}
+			out = append(out, string(rs[i:j]))
+			i = j
+		case isName(r, true):
+			j := i
+			for j < len(rs) && isName(rs[j], false) {
+				j++
+			}
+			if tok := string(rs[i:j]); tok != "__typename" {
+				out = append(out, tok)
+			}
+			i = j
+		case r == '-' || (r >= '0' && r <= '9'):
+			j := i + 1
+			for j < len(rs) && (rs[j] == '.' || rs[j] == 'e' || rs[j] == 'E' || rs[j] == '+' || rs[j] == '-' || (rs[j] >= '0' && rs[j] <= '9')) {
+				j++
+			}
+			out = append(out, string(rs[i:j]))
+			i = j
+		default:
+			out = append(out, string(r))
+			i++
+		}
+	}
+	return out
+}
+
+func sameTokens(a, b string) bool {
+	x, y := graphqlTokens(a), graphqlTokens(b)
+	if len(x) != len(y) {
+		return false
+	}
+	for i := range x {
+		if x[i] != y[i] {
+			return false
+		}
+	}
+	return true
 }

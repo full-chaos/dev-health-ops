@@ -4,12 +4,14 @@ import (
 	"bytes"
 	"encoding/json"
 	"fmt"
+	"io"
 	"net"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strconv"
 	"strings"
 	"testing"
@@ -28,13 +30,18 @@ const (
 
 // fake stands in for web and the api behind it. A zero row set, a missing plane or a refused login is a knob.
 type fake struct {
-	zero        map[string]bool // check name -> answer with no rows
-	graphqlErr  map[string]bool // operation -> answer with GraphQL errors
-	loginFails  bool
-	logins      int
-	noPlane     map[string]bool // path -> omit the plane header
-	pageGone    bool
-	seenCookies []string
+	zero       map[string]bool // check name -> answer with no rows
+	graphqlErr map[string]bool // operation -> answer with GraphQL errors
+	loginFails bool
+	logins     int
+	noPlane    map[string]bool // path -> omit the plane header
+	noPlaneOp  map[string]bool // graphql operation -> omit the plane header
+	pageGone   bool
+	knob       map[string]bool // named misbehaviours, see the handler
+	vars       map[string]map[string]any
+	drilldown  []int // range_days of each drilldown request
+	hijackPath string
+	gqlShape   map[string]any // operation -> data value override
 }
 
 func (f *fake) rows(name string, key string) any {
@@ -55,9 +62,30 @@ func (f *fake) handler(t *testing.T) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		p := r.URL.Path
 		hasSession := strings.Contains(r.Header.Get("Cookie"), "authjs.session-token=")
-		if p != "/health" && !strings.HasPrefix(p, "/api/auth/") && !hasSession {
-			http.Redirect(w, r, "https://"+publicHost+"/auth/signin", http.StatusSeeOther)
+		if f.hijackPath != "" && p == f.hijackPath {
+			conn, _, _ := w.(http.Hijacker).Hijack()
+			_ = conn.Close()
 			return
+		}
+		if p != "/health" && !strings.HasPrefix(p, "/api/auth/") && !hasSession {
+			switch {
+			case f.knob["unauth_reaches_plane"]:
+				writeJSON(w, p, map[string]any{"items": []any{}})
+			case f.knob["unauth_redirect_with_plane"]:
+				w.Header().Set(planeHeader, "go")
+				http.Redirect(w, r, "https://"+publicHost+"/auth/signin", http.StatusSeeOther)
+			default:
+				http.Redirect(w, r, "https://"+publicHost+"/auth/signin", http.StatusSeeOther)
+			}
+			return
+		}
+		switch p {
+		case "/api/v1/home", "/api/v1/investment", "/api/v1/opportunities":
+			q := r.URL.Query()
+			if q.Get("scope_id") != fakeOrg || q.Get("scope_type") != "org" || q.Get("thread") == "" {
+				w.WriteHeader(http.StatusBadRequest)
+				return
+			}
 		}
 		switch p {
 		case "/health":
@@ -71,25 +99,56 @@ func (f *fake) handler(t *testing.T) http.Handler {
 		case "/api/auth/callback/credentials":
 			f.logins++
 			_ = r.ParseForm()
-			if f.loginFails || r.PostForm.Get("password") != fakePassword || r.PostForm.Get("email") != fakeEmail {
+			bad := f.loginFails || r.PostForm.Get("password") != fakePassword || r.PostForm.Get("email") != fakeEmail
+			if bad && !f.knob["login_error_with_cookie"] && !f.knob["login_200_with_cookie"] {
 				w.Header().Set("Location", "https://"+publicHost+"/auth/signin?error=CredentialsSignin")
 				w.WriteHeader(http.StatusFound)
 				return
 			}
+			callback := "https://" + publicHost + "/dashboard"
+			if f.knob["callback_bind_origin"] {
+				callback = "http://0.0.0.0:3000/dashboard"
+			}
 			http.SetCookie(w, &http.Cookie{Name: "authjs.session-token", Value: "sess", Secure: true})
-			http.SetCookie(w, &http.Cookie{Name: "authjs.callback-url", Value: url.QueryEscape("https://" + publicHost + "/dashboard")})
-			w.Header().Set("Location", "https://"+publicHost+"/dashboard")
-			w.WriteHeader(http.StatusFound)
+			http.SetCookie(w, &http.Cookie{Name: "authjs.callback-url", Value: url.QueryEscape(callback)})
+			switch {
+			case f.knob["login_200_with_cookie"]:
+				w.WriteHeader(http.StatusOK)
+			case f.knob["login_error_with_cookie"]:
+				w.Header().Set("Location", "https://"+publicHost+"/auth/signin?error=CredentialsSignin")
+				w.WriteHeader(http.StatusFound)
+			default:
+				w.Header().Set("Location", "https://"+publicHost+"/dashboard")
+				w.WriteHeader(http.StatusFound)
+			}
 		case "/api/auth/session":
 			writeJSON(w, p, map[string]any{"user": map[string]any{"org_id": fakeOrg}})
 		case "/api/auth/signout":
 			http.SetCookie(w, &http.Cookie{Name: "authjs.session-token", Value: "", MaxAge: -1})
 			w.Header().Set("Location", "https://"+publicHost+"/")
+			if f.knob["signout_bind_origin"] {
+				w.Header().Set("Location", "http://0.0.0.0:3000/")
+			}
+			if f.knob["signout_status_200"] {
+				w.WriteHeader(http.StatusOK)
+				return
+			}
 			w.WriteHeader(http.StatusFound)
 		case "/api/v1/home":
+			if f.knob["understand_unknown_shape"] {
+				writeJSON(w, p, map[string]any{"weird": 1})
+				return
+			}
 			writeJSON(w, p, f.rows("understand", "tiles"))
 		case "/api/v1/investment":
-			writeJSON(w, p, f.rows("align", "rows"))
+			switch {
+			case f.knob["align_distribution_empties"]:
+				writeJSON(w, p, map[string]any{"theme_distribution": map[string]any{"a": 0, "b": "", "c": []any{}, "d": nil}})
+			case f.knob["align_distribution"]:
+				writeJSON(w, p, map[string]any{"theme_distribution": map[string]any{"a": 0.5, "b": 0}})
+			default:
+				writeJSON(w, p, f.rows("align", "rows"))
+			}
 		case "/api/v1/opportunities":
 			writeJSON(w, p, f.rows("execute", "opportunities"))
 		case "/api/v1/filters/options":
@@ -107,7 +166,21 @@ func (f *fake) handler(t *testing.T) http.Handler {
 		case "/api/v1/work-units":
 			writeJSON(w, p, f.rows("work_units", "items"))
 		case "/api/v1/drilldown/prs":
-			writeJSON(w, p, map[string]any{"items": []any{map[string]any{"repo_id": "repo-1", "number": 7}}})
+			var body struct {
+				Filters struct {
+					Time struct {
+						RangeDays int `json:"range_days"`
+					} `json:"time"`
+				} `json:"filters"`
+			}
+			_ = json.NewDecoder(r.Body).Decode(&body)
+			f.drilldown = append(f.drilldown, body.Filters.Time.RangeDays)
+			switch {
+			case f.knob["drilldown_empty"], f.knob["drilldown_empty_14"] && body.Filters.Time.RangeDays == 14:
+				writeJSON(w, p, map[string]any{"items": []any{}})
+			default:
+				writeJSON(w, p, map[string]any{"items": []any{map[string]any{"repo_id": "repo-1", "number": 7}}})
+			}
 		case "/api/v1/flame":
 			if r.URL.Query().Get("entity_id") != "repo-1:7" {
 				w.WriteHeader(http.StatusBadRequest)
@@ -133,7 +206,8 @@ func (f *fake) graphql(w http.ResponseWriter, r *http.Request, writeJSON func(ht
 	var req struct {
 		Query string `json:"query"`
 	}
-	_ = json.NewDecoder(r.Body).Decode(&req)
+	mustBody, _ := io.ReadAll(r.Body)
+	_ = json.Unmarshal(mustBody, &req)
 	op := ""
 	for _, name := range []string{"complexityTimeseries", "workGraphFlow", "testopsRisk", "home", "recommendations", "workItemTeamAttributions"} {
 		if doc, _ := server.WebPathSmokeDocument(name); doc == req.Query {
@@ -144,6 +218,14 @@ func (f *fake) graphql(w http.ResponseWriter, r *http.Request, writeJSON func(ht
 		w.WriteHeader(http.StatusBadRequest)
 		return
 	}
+	var gq struct {
+		Variables map[string]any `json:"variables"`
+	}
+	_ = json.Unmarshal(mustBody, &gq)
+	if f.vars == nil {
+		f.vars = map[string]map[string]any{}
+	}
+	f.vars[op] = gq.Variables
 	resp := map[string]any{}
 	if f.graphqlErr[op] {
 		resp["errors"] = []any{map[string]any{"message": "no"}}
@@ -151,6 +233,9 @@ func (f *fake) graphql(w http.ResponseWriter, r *http.Request, writeJSON func(ht
 	nonEmpty := func(key string, zero bool) any {
 		if zero {
 			return map[string]any{key: []any{}}
+		}
+		if f.knob["empty_node_type"] {
+			return map[string]any{key: []any{map[string]any{"nodeType": ""}}}
 		}
 		return map[string]any{key: []any{map[string]any{"nodeType": "PR"}}}
 	}
@@ -160,7 +245,11 @@ func (f *fake) graphql(w http.ResponseWriter, r *http.Request, writeJSON func(ht
 	case "workGraphFlow":
 		resp["data"] = map[string]any{op: nonEmpty("rows", f.zero["workGraphFlow"])}
 	case "home":
-		resp["data"] = map[string]any{op: map[string]any{"freshness": map[string]any{}}}
+		if f.knob["home_no_freshness"] {
+			resp["data"] = map[string]any{op: map[string]any{}}
+		} else {
+			resp["data"] = map[string]any{op: map[string]any{"freshness": map[string]any{}}}
+		}
 	case "recommendations", "workItemTeamAttributions":
 		if f.zero[op] {
 			resp["data"] = map[string]any{op: []any{}}
@@ -169,6 +258,14 @@ func (f *fake) graphql(w http.ResponseWriter, r *http.Request, writeJSON func(ht
 		}
 	case "testopsRisk":
 		resp["data"] = map[string]any{op: map[string]any{}}
+	}
+	if v, ok := f.gqlShape[op]; ok {
+		resp["data"] = map[string]any{op: v}
+	}
+	if f.noPlaneOp[op] {
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(resp)
+		return
 	}
 	writeJSON(w, "/graphql", resp)
 }
@@ -186,7 +283,7 @@ type harness struct {
 func newHarness(t *testing.T, routingOps string) *harness {
 	t.Helper()
 	dir := t.TempDir()
-	h := &harness{t: t, dir: dir, fake: &fake{zero: map[string]bool{}, graphqlErr: map[string]bool{}, noPlane: map[string]bool{}}}
+	h := &harness{t: t, dir: dir, fake: &fake{zero: map[string]bool{}, graphqlErr: map[string]bool{}, noPlane: map[string]bool{}, noPlaneOp: map[string]bool{}, knob: map[string]bool{}, gqlShape: map[string]any{}}}
 	h.srv = httptest.NewServer(h.fake.handler(t))
 	t.Cleanup(h.srv.Close)
 
@@ -197,13 +294,14 @@ func newHarness(t *testing.T, routingOps string) *harness {
 	}
 	for _, g := range graphqlSources {
 		file := filepath.Join(src, g.File)
-		mustWrite(t, file, appendFile(file, "export const "+g.Const+" = `query {}`;\n"))
-	}
-	for _, g := range graphqlSources {
 		doc, ok := server.WebPathSmokeDocument(g.Op)
 		if !ok {
 			t.Fatalf("no registered document for %s", g.Op)
 		}
+		mustWrite(t, file, appendFile(file, "export const "+g.Const+" = `"+webText(doc)+"`;\n"))
+	}
+	for _, g := range graphqlSources {
+		doc, _ := server.WebPathSmokeDocument(g.Op)
 		h.catalog = append(h.catalog, map[string]string{"operation": g.Op, "digest": DocumentDigest(doc)})
 	}
 	h.writeCatalog()
@@ -226,6 +324,11 @@ func newHarness(t *testing.T, routingOps string) *harness {
 	}
 	return h
 }
+
+var typenameLine = regexp.MustCompile(`\n\s*__typename`)
+
+// webText is the document as web's source holds it: the registered text without urql's __typename lines.
+func webText(doc string) string { return typenameLine.ReplaceAllString(doc, "") }
 
 func (h *harness) writeCatalog() {
 	b, _ := json.Marshal(h.catalog)
@@ -525,4 +628,241 @@ func asExit(err error, target **exitError) bool {
 		*target = e
 	}
 	return ok
+}
+
+// ---- web-document drift (H1) -------------------------------------------------------------------
+
+func setWebDoc(t *testing.T, h *harness, op, text string) {
+	t.Helper()
+	for _, g := range graphqlSources {
+		if g.Op != op {
+			continue
+		}
+		file := filepath.Join(h.cfg.WebSrc, g.File)
+		src, _ := os.ReadFile(file)
+		re := regexp.MustCompile("(?s)(export const " + g.Const + " = `)[^`]*(`;)")
+		if !re.Match(src) {
+			t.Fatalf("constant %s not found", g.Const)
+		}
+		mustWrite(t, file, string(re.ReplaceAll(src, []byte("${1}"+strings.ReplaceAll(text, "$", "$$")+"${2}"))))
+		return
+	}
+	t.Fatalf("unknown op %s", op)
+}
+
+func TestWebDocumentDriftFails(t *testing.T) {
+	doc, _ := server.WebPathSmokeDocument("workGraphFlow")
+	for name, mutate := range map[string]func(string) string{
+		"added field":   func(d string) string { return strings.Replace(d, "inflow", "inflow\n      netFlow", 1) },
+		"removed field": func(d string) string { return strings.Replace(d, "outflow", "", 1) },
+		"renamed var":   func(d string) string { return strings.ReplaceAll(d, "$orgId", "$org") },
+	} {
+		t.Run(name, func(t *testing.T) {
+			h := newHarness(t, "")
+			setWebDoc(t, h, "workGraphFlow", webText(mutate(doc)))
+			out := Run(h.cfg)
+			c := out.check("web_source")
+			if out.ExitCode() != ExitFail || c["reason"] != "document_digest_mismatch=workGraphFlow" || h.fake.logins != 0 {
+				t.Fatalf("exit=%d check=%v logins=%d", out.ExitCode(), c, h.fake.logins)
+			}
+		})
+	}
+}
+
+func TestWebDocumentLayoutIsNotDrift(t *testing.T) {
+	doc, _ := server.WebPathSmokeDocument("workGraphFlow")
+	h := newHarness(t, "")
+	spaced := "# a comment\n" + strings.NewReplacer("\n", "\n\n", "  ", "\t", "(", "( ", "$filters:", "$filters :").Replace(webText(doc))
+	setWebDoc(t, h, "workGraphFlow", spaced)
+	if out := Run(h.cfg); out.ExitCode() != ExitPass {
+		t.Fatalf("exit=%d failures=%v", out.ExitCode(), out.Receipt.Failures)
+	}
+}
+
+func TestWebDocumentConstantMissingFails(t *testing.T) {
+	h := newHarness(t, "")
+	for _, g := range graphqlSources {
+		if g.Op == "home" {
+			mustWrite(t, filepath.Join(h.cfg.WebSrc, g.File), strings.ReplaceAll(appendFile(filepath.Join(h.cfg.WebSrc, g.File), ""), "export const "+g.Const+" =", "const "+g.Const+" ="))
+		}
+	}
+	out := Run(h.cfg)
+	if c := out.check("web_source"); out.ExitCode() != ExitFail || c["reason"] != "web_source_document_missing=HOME_QUERY" {
+		t.Fatalf("exit=%d check=%v", out.ExitCode(), c)
+	}
+}
+
+func TestWebDocumentWithInterpolationIsMissing(t *testing.T) {
+	h := newHarness(t, "")
+	setWebDoc(t, h, "home", "query { home { ${FRAGMENT} } }")
+	if c := Run(h.cfg).check("web_source"); c["reason"] != "web_source_document_missing=HOME_QUERY" {
+		t.Fatalf("check=%v", c)
+	}
+}
+
+// F1: a legacy catalog row listed after the current one must not break the check.
+func TestCatalogLegacyRowAfterCurrentPasses(t *testing.T) {
+	h := newHarness(t, "")
+	h.catalog = append(h.catalog, map[string]string{"operation": "workGraphFlow", "digest": strings.Repeat("a", 64), "legacy": "true"})
+	h.writeCatalog()
+	if out := Run(h.cfg); out.ExitCode() != ExitPass {
+		t.Fatalf("exit=%d failures=%v", out.ExitCode(), out.Receipt.Failures)
+	}
+}
+
+func TestGraphqlTokens(t *testing.T) {
+	got := strings.Join(graphqlTokens("query Q($a: Int!, $b: [String]) { x(a: $a, s: \"q\\\"r\") { ...F __typename y } } # c\n"), " ")
+	want := `query Q ( $ a : Int ! $ b : [ String ] ) { x ( a : $ a s : "q\"r" ) { ... F y } }`
+	if got != want {
+		t.Fatalf("got %s", got)
+	}
+}
+
+// ---- guards that must fail closed (H2) ---------------------------------------------------------
+
+func failureOf(t *testing.T, h *harness, check string) string {
+	t.Helper()
+	out := Run(h.cfg)
+	if out.ExitCode() != ExitFail {
+		t.Fatalf("exit=%d, want fail", out.ExitCode())
+	}
+	c := out.check(check)
+	if c == nil || c["ok"] != false {
+		t.Fatalf("check %s = %v (failures %v)", check, c, out.Receipt.Failures)
+	}
+	return fmt.Sprint(c["reason"])
+}
+
+func TestGuardsFailClosed(t *testing.T) {
+	cases := []struct {
+		name, check, reason string
+		arrange             func(*harness)
+	}{
+		{"workGraphFlow errors", "graphql:workGraphFlow", "work_graph_flow_graphql_errors", func(h *harness) { h.fake.graphqlErr["workGraphFlow"] = true }},
+		{"complexity errors", "graphql:complexityTimeseries", "complexity_graphql_errors", func(h *harness) { h.fake.graphqlErr["complexityTimeseries"] = true }},
+		{"home errors", "graphql:home", "home_graphql_errors", func(h *harness) { h.fake.graphqlErr["home"] = true }},
+		{"recommendations errors", "graphql:recommendations", "recommendations_graphql_errors", func(h *harness) { h.fake.graphqlErr["recommendations"] = true }},
+		{"attributions errors", "graphql:workItemTeamAttributions", "workItemTeamAttributions_graphql_errors", func(h *harness) { h.fake.graphqlErr["workItemTeamAttributions"] = true }},
+		{"login 200 with a session cookie", "login", "login_failed status=200", func(h *harness) { h.fake.knob["login_200_with_cookie"] = true }},
+		{"login error= with a session cookie", "login", "login_failed status=302 session_cookie=true error=CredentialsSignin", func(h *harness) { h.fake.knob["login_error_with_cookie"] = true; h.fake.loginFails = true }},
+		{"unauthenticated request reaches a plane", "public_host_unauth_on_web", "public_host_unauth_not_on_web status=200 plane=go", func(h *harness) { h.fake.knob["unauth_reaches_plane"] = true }},
+		{"unauthenticated redirect carries a plane", "public_host_unauth_on_web", "public_host_unauth_not_on_web status=303 plane=go", func(h *harness) { h.fake.knob["unauth_redirect_with_plane"] = true }},
+		{"callback origin is the bind address", "callback_url_origin", "callback_url_origin=http://0.0.0.0:3000 expected=https://" + publicHost, func(h *harness) { h.fake.knob["callback_bind_origin"] = true }},
+		{"logout to the bind address", "logout", "logout_redirect_origin=http://0.0.0.0:3000 status=302", func(h *harness) { h.fake.knob["signout_bind_origin"] = true }},
+		{"logout status 200", "logout", "logout_redirect_origin=https://" + publicHost + " status=200", func(h *harness) { h.fake.knob["signout_status_200"] = true }},
+		{"empty nodeType", "graphql:workGraphFlow", "work_graph_flow_empty_node_type=1", func(h *harness) { h.fake.knob["empty_node_type"] = true }},
+		{"home without freshness", "graphql:home", "home_field_missing=freshness", func(h *harness) { h.fake.knob["home_no_freshness"] = true }},
+		{"home as a list", "graphql:home", "home_data_shape", func(h *harness) { h.fake.gqlShape["home"] = []any{} }},
+		{"recommendations as an object", "graphql:recommendations", "recommendations_data_shape", func(h *harness) { h.fake.gqlShape["recommendations"] = map[string]any{} }},
+		{"attributions as an object", "graphql:workItemTeamAttributions", "workItemTeamAttributions_data_shape", func(h *harness) { h.fake.gqlShape["workItemTeamAttributions"] = map[string]any{} }},
+		{"distribution of empty entries", "rest:align", "rest_align_zero_rows", func(h *harness) { h.fake.knob["align_distribution_empties"] = true }},
+		{"unknown response shape", "rest:understand", "rest_understand_unknown_response_shape keys=weird", func(h *harness) { h.fake.knob["understand_unknown_shape"] = true }},
+		{"no PR row in 14 or 90 days", "rest:drilldown_prs", "drilldown_prs_no_pr_row_for_flame", func(h *harness) { h.fake.knob["drilldown_empty"] = true }},
+		{"testopsRisk without the go plane", "graphql:testopsRisk", "testops_risk status=200 plane=missing errors=false", func(h *harness) { h.fake.noPlaneOp["testopsRisk"] = true }},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			h := newHarness(t, "")
+			c.arrange(h)
+			if got := failureOf(t, h, c.check); !strings.HasPrefix(got, c.reason) {
+				t.Fatalf("reason=%q, want prefix %q", got, c.reason)
+			}
+		})
+	}
+}
+
+func TestDistributionCountsOnlyNonEmptyEntries(t *testing.T) {
+	h := newHarness(t, "")
+	h.fake.knob["align_distribution"] = true
+	out := Run(h.cfg)
+	if c := out.check("rest:align"); out.ExitCode() != ExitPass || c["row_count"] != 1 {
+		t.Fatalf("exit=%d check=%v", out.ExitCode(), c)
+	}
+}
+
+func TestCountRowsShapes(t *testing.T) {
+	if n, err := CountRows(map[string]any{"theme_distribution": map[string]any{"a": json.Number("0"), "b": "", "c": []any{}, "d": map[string]any{}, "e": nil, "f": false, "g": json.Number("2")}}); err != nil || n != 1 {
+		t.Fatalf("n=%d err=%v", n, err)
+	}
+	if _, err := CountRows(map[string]any{"b": 1, "a": 2}); err == nil || err.Error() != "unknown_response_shape keys=a,b" {
+		t.Fatalf("err=%v", err)
+	}
+	if _, err := CountRows(json.Number("3")); err == nil || !strings.HasPrefix(err.Error(), "unknown_response_shape type=") {
+		t.Fatalf("err=%v", err)
+	}
+	if n, err := CountRows(map[string]any{"data": map[string]any{"rows": []any{1, 2}}}); err != nil || n != 2 {
+		t.Fatalf("n=%d err=%v", n, err)
+	}
+}
+
+func TestDrilldownFallsBackTo90Days(t *testing.T) {
+	h := newHarness(t, "")
+	h.fake.knob["drilldown_empty_14"] = true
+	out := Run(h.cfg)
+	if c := out.check("rest:drilldown_prs"); out.ExitCode() != ExitPass || c["range_days"] != 90 {
+		t.Fatalf("exit=%d check=%v", out.ExitCode(), c)
+	}
+	if fmt.Sprint(h.fake.drilldown) != "[14 90]" {
+		t.Fatalf("drilldown requests %v", h.fake.drilldown)
+	}
+}
+
+// The attribution probe names exactly one id that matches no row: an empty list would scan the whole org.
+func TestAttributionProbeSendsOneUnmatchedID(t *testing.T) {
+	h := newHarness(t, "")
+	Run(h.cfg)
+	ids, _ := h.fake.vars["workItemTeamAttributions"]["workItemIds"].([]any)
+	if len(ids) != 1 || ids[0] != "smoke-probe-no-such-item" {
+		t.Fatalf("workItemIds=%v", ids)
+	}
+}
+
+func TestTransportErrorReportsTypeOnly(t *testing.T) {
+	h := newHarness(t, "")
+	h.fake.hijackPath = "/api/v1/home"
+	out := Run(h.cfg)
+	c := out.check("rest:understand")
+	reason := fmt.Sprint(c["reason"])
+	if out.ExitCode() != ExitFail || !strings.HasPrefix(reason, "unexpected_error=") || strings.ContainsAny(reason, "/? ") {
+		t.Fatalf("check=%v", c)
+	}
+	var stdout, stderr bytes.Buffer
+	_ = report(h.cfg, &stdout, &stderr)
+	receipt, _ := os.ReadFile(h.cfg.ReceiptPath)
+	for name, text := range map[string]string{"receipt": string(receipt), "stdout": stdout.String(), "stderr": stderr.String()} {
+		if strings.Contains(text, fakeOrg) || strings.Contains(text, "scope_id") {
+			t.Fatalf("%s holds the request URL", name)
+		}
+	}
+}
+
+func TestRefusedHostHeaderOpensNoConnection(t *testing.T) {
+	h := newHarness(t, "")
+	hits := 0
+	srv := httptest.NewServer(http.HandlerFunc(func(http.ResponseWriter, *http.Request) { hits++ }))
+	defer srv.Close()
+	host, portText, _ := net.SplitHostPort(strings.TrimPrefix(srv.URL, "http://"))
+	port, _ := strconv.Atoi(portText)
+	h.cfg.Target = Target{Host: host, Port: port}
+	c := newClient(h.cfg)
+	for _, tc := range []struct{ host, path, want string }{
+		{"evil.example.test", "/x", "host_header_not_allowed"},
+		{"", "relative", "request_path_must_be_absolute"},
+	} {
+		if _, err := c.do("GET", tc.path, reqOpts{host: tc.host}); err == nil || err.Error() != tc.want {
+			t.Fatalf("%+v: err=%v", tc, err)
+		}
+	}
+	if hits != 0 {
+		t.Fatalf("a refused request opened a connection (%d hits)", hits)
+	}
+}
+
+func TestRedirectIsNotFollowed(t *testing.T) {
+	h := newHarness(t, "")
+	c := newClient(h.cfg)
+	r, err := c.do("GET", "/api/v1/work-units", reqOpts{})
+	if err != nil || r.status != http.StatusSeeOther {
+		t.Fatalf("status=%v err=%v", r, err)
+	}
 }

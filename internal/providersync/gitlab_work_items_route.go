@@ -3,6 +3,7 @@ package providersync
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log/slog"
 	"net/http"
@@ -224,7 +225,8 @@ func (handler GitLabWorkItemsRouteHandler) Collect(
 	includeMRs := gitLabWorkItemsFlag(handler.IncludeMRs)
 	pages := 1 // the project binding request
 	closingSynced := 0
-	closingFetchFailed := make([]string, 0)
+	closingIncomplete := make([]string, 0)
+	closingTransient, closingTerminal := 0, 0
 
 	if fetchMilestones {
 		milestones, milestonePages, milestoneErr := collectGitLabMilestones(
@@ -321,16 +323,27 @@ func (handler GitLabWorkItemsRouteHandler) Collect(
 			)
 			pages += closingPages
 			if closingErr != nil {
-				// An optional sub-fetch: a cancelled run still stops, any other failure is logged with the issue and
-				// counted, the batch goes on, and the watermark is held below so the next run asks again (a closing MR
-				// does not move the issue's updated_at, so a lost answer would otherwise never be re-fetched).
+				// An optional sub-fetch: a cancelled run still stops. A terminal answer (404/403: not readable with this
+				// credential) is logged, counted under its own outcome and reported incomplete, but the watermark advances,
+				// since retrying cannot help. Any other failure (5xx, timeout, 429, network) is transient: logged, counted,
+				// reported incomplete, and the watermark is held so the next run asks again (a closing MR does not move the
+				// issue's updated_at, so a lost answer would otherwise never be re-fetched). The batch goes on either way.
 				if ctx.Err() != nil {
 					return CompleteRouteBatch{}, closingErr
 				}
-				closingFetchFailed = append(closingFetchFailed, item.WorkItemID)
+				closingIncomplete = append(closingIncomplete, item.WorkItemID)
+				outcome := "transient_failed"
+				if gitLabClosingFetchIsTerminal(closingErr) {
+					outcome = "terminal_unavailable"
+					closingTerminal++
+				} else {
+					closingTransient++
+				}
+				counted.Metrics.RecordGitLabClosingMRFetch(outcome)
 				slog.Warn("providersync.gitlab.closing_mr_fetch_failed",
-					"org_id", claim.OrgID, "unit_id", claim.ID, "issue", item.WorkItemID, "cause", closingErr.Error())
+					"org_id", claim.OrgID, "unit_id", claim.ID, "issue", item.WorkItemID, "outcome", outcome, "cause", closingErr.Error())
 			} else {
+				counted.Metrics.RecordGitLabClosingMRFetch("synced")
 				closingRows := normalizeGitLabClosingMergeRequests(claim, item.WorkItemID, fullName, closing, normalizedAt)
 				closingSynced += len(closingRows)
 				rows.Dependencies = append(rows.Dependencies, closingRows...)
@@ -445,7 +458,7 @@ func (handler GitLabWorkItemsRouteHandler) Collect(
 			return CompleteRouteBatch{}, ErrInvalidConfiguration
 		}
 		watermark = derived.Watermark
-		if len(closingFetchFailed) > 0 {
+		if closingTransient > 0 {
 			watermark = nil
 		}
 		derivedRecords = len(derived.AIAttributions) + len(derived.EstimateCoverageMetricsDaily) +
@@ -475,13 +488,15 @@ func (handler GitLabWorkItemsRouteHandler) Collect(
 		"derived_destinations_unimplemented": derivedUnimplemented,
 		"watermark_held_for_derived_gap":     len(derivedUnimplemented) > 0,
 		"gitlab_work_items":                  summary,
-		// CHAOS-8526: gitlab_closing_reference rows synced, and the issues whose closed_by fetch failed (the watermark is
-		// held while any did).
+		// CHAOS-8526: gitlab_closing_reference rows synced, and the issues whose closed_by fetch failed, split into
+		// transient (the watermark is held while any did) and terminal 404/403 (the watermark advances).
 		"closing_reference_dependencies_synced": closingSynced,
-		"closing_reference_fetch_failed":        len(closingFetchFailed),
+		"closing_reference_fetch_failed":        closingTransient + closingTerminal,
+		"closing_reference_fetch_transient":     closingTransient,
+		"closing_reference_fetch_terminal":      closingTerminal,
 	}
-	if len(closingFetchFailed) > 0 {
-		result["incomplete"] = closingFetchFailed
+	if len(closingIncomplete) > 0 {
+		result["incomplete"] = closingIncomplete
 	}
 	result = attachWorkItemTeamInheritanceObservation(result, handler.Derived)
 	return CompleteRouteBatch{
@@ -645,3 +660,14 @@ func buildGitLabWorkItemEffectsFromRows(rows gitlabWorkItemRows) ([]EffectBatch,
 }
 
 var _ CompleteRouteHandler = GitLabWorkItemsRouteHandler{}
+
+// gitLabClosingFetchIsTerminal reports a 404/403 from the closed_by endpoint: the answer is not readable with this
+// credential, and a retry cannot change it. Anything else (including an error that is not a ProviderError) is treated as
+// transient, the safe side for a watermark.
+func gitLabClosingFetchIsTerminal(err error) bool {
+	var providerErr *providerfoundation.ProviderError
+	if !errors.As(err, &providerErr) || providerErr == nil {
+		return false
+	}
+	return providerErr.StatusCode == http.StatusNotFound || providerErr.StatusCode == http.StatusForbidden
+}

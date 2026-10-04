@@ -290,6 +290,8 @@ type Metrics struct {
 	// jiraDevStatus counts CHAOS-4757's dev-status (GitHub-for-Jira panel)
 	// fetches, by outcome -- see RecordJiraDevStatus.
 	jiraDevStatus map[string]uint64
+	// gitlabClosingMR counts CHAOS-8526's per-issue closed_by fetches, by outcome -- see RecordGitLabClosingMRFetch.
+	gitlabClosingMR map[string]uint64
 }
 
 func NewMetrics() *Metrics {
@@ -320,6 +322,7 @@ func NewMetrics() *Metrics {
 		chunkContinuation:              map[string]uint64{},
 		unitDeferred:                   map[string]uint64{},
 		jiraDevStatus:                  map[string]uint64{},
+		gitlabClosingMR:                map[string]uint64{},
 	}
 }
 
@@ -1195,6 +1198,27 @@ func (m *Metrics) RecordJiraDevStatus(outcome string) {
 	m.jiraDevStatus[label]++
 }
 
+// metricGitLabClosingMROutcomeVocabulary: synced (answered), transient_failed (5xx, timeout, 429, network: the watermark
+// is held and the next run asks again) and terminal_unavailable (404/403: the issue's closed_by is not readable with this
+// credential; retrying cannot help, so the watermark advances and the issue is reported incomplete).
+var metricGitLabClosingMROutcomeVocabulary = map[string]struct{}{
+	"synced": {}, "transient_failed": {}, "terminal_unavailable": {},
+}
+
+// RecordGitLabClosingMRFetch counts one issue's closed_by fetch (CHAOS-8526), by outcome.
+func (m *Metrics) RecordGitLabClosingMRFetch(outcome string) {
+	if m == nil {
+		return
+	}
+	label := strings.ToLower(strings.TrimSpace(outcome))
+	if _, known := metricGitLabClosingMROutcomeVocabulary[label]; !known {
+		label = "other"
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.gitlabClosingMR[label]++
+}
+
 // metricWorkItemTeamAttributionSourceVocabulary is the closed set of
 // CHAOS-4244 written-source labels for work_item_team_attributions. This is
 // deliberately a COARSER vocabulary than the ClickHouse `source` enum
@@ -1655,6 +1679,13 @@ func (m *Metrics) WritePrometheus(writer io.Writer) error {
 		writer, "dev_health_jira_dev_status_total",
 		"Jira dev-status (GitHub-for-Jira panel) PRIMARY PR-issue link fetches, by outcome (CHAOS-4757). \"unavailable\" is the ruled clean no-op (no GitHub-for-Jira app configured for this issue), distinct from \"failed\" (a genuine fetch error).",
 		"outcome", m.jiraDevStatus,
+	); err != nil {
+		return err
+	}
+	if err := writeLabeledCounter(
+		writer, "dev_health_gitlab_closing_mr_fetch_total",
+		"GitLab per-issue closed_by (closing merge request) fetches, by outcome (CHAOS-8526). \"terminal_unavailable\" is a 404/403 (watermark advances), \"transient_failed\" a retryable failure (watermark held).",
+		"outcome", m.gitlabClosingMR,
 	); err != nil {
 		return err
 	}

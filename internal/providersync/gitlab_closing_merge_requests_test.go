@@ -3,7 +3,10 @@ package providersync
 import (
 	"context"
 	"encoding/json"
+	"io"
+	"net/http"
 	"reflect"
+	"strings"
 	"testing"
 	"time"
 
@@ -108,10 +111,43 @@ func TestNormalizeGitLabClosingMergeRequestsKeepsEveryMergeRequestState(t *testi
 	}
 }
 
+// closedByStatusDoer answers the closed_by endpoint with a fixed status and delegates everything else.
+type closedByStatusDoer struct {
+	inner  *gitLabWorkItemsDoer
+	status int
+}
+
+func (doer closedByStatusDoer) Do(request *http.Request) (*http.Response, error) {
+	if strings.HasSuffix(request.URL.Path, "/closed_by") {
+		return &http.Response{
+			StatusCode: doer.status, Status: http.StatusText(doer.status), Header: make(http.Header),
+			Body: io.NopCloser(strings.NewReader(`{"message":"closed_by"}`)), Request: request,
+		}, nil
+	}
+	return doer.inner.Do(request)
+}
+
 // The closed_by fetch of one issue failing is not swallowed and does not poison the batch: it is logged with the issue,
-// counted, the other rows are kept, and the watermark is held so the next run asks again.
-func TestGitLabWorkItemsRouteClosedByFailureIsCountedAndHoldsTheWatermark(t *testing.T) {
-	for name, withClosedBy := range map[string]bool{"closed_by answers": true, "closed_by fails": false} {
+// counted under its own outcome, reported incomplete, and the other rows are kept. The watermark depends on the class
+// (D4771): a TERMINAL answer (404/403, not readable with this credential) advances it, since retrying cannot help; a
+// TRANSIENT one (5xx, 429, network) holds it, so the next run asks again.
+func TestGitLabWorkItemsRouteClosedByFailureClassSplitsTheWatermark(t *testing.T) {
+	cases := map[string]struct {
+		status        int // 0: answers normally
+		wantOutcome   string
+		wantWatermark bool
+		wantTerminal  int
+		wantTransient int
+	}{
+		"answers":                       {0, "synced", true, 0, 0},
+		"terminal 404":                  {http.StatusNotFound, "terminal_unavailable", true, 1, 0},
+		"terminal 403":                  {http.StatusForbidden, "terminal_unavailable", true, 1, 0},
+		"transient 503":                 {http.StatusServiceUnavailable, "transient_failed", false, 0, 1},
+		"transient 429":                 {http.StatusTooManyRequests, "transient_failed", false, 0, 1},
+		"transient 500":                 {http.StatusInternalServerError, "transient_failed", false, 0, 1},
+		"transient transport (no body)": {-1, "transient_failed", false, 0, 1},
+	}
+	for name, c := range cases {
 		t.Run(name, func(t *testing.T) {
 			classifier, err := NewInvestmentClassifier(investmentConfigPath(t, "real"))
 			if err != nil {
@@ -123,32 +159,48 @@ func TestGitLabWorkItemsRouteClosedByFailureIsCountedAndHoldsTheWatermark(t *tes
 			responses[root+"/merge_requests?page=1"] = []string{
 				`[{"iid":9,"title":"Ship the API","description":"","state":"opened","created_at":"2026-07-04T09:00:00Z","updated_at":"2026-07-04T10:00:00Z","labels":["priority::low"],"assignees":[],"author":{"username":"alice","bot":false},"source_branch":"feature/ship-api"}]`, `[]`,
 			}
-			if !withClosedBy {
+			if c.status == -1 {
 				delete(responses, root+"/issues/42/closed_by?page=1")
 			}
-			doer := &gitLabWorkItemsDoer{responses: responses}
+			inner := &gitLabWorkItemsDoer{responses: responses}
+			var doer providerfoundation.HTTPDoer = inner
+			if c.status > 0 {
+				doer = closedByStatusDoer{inner: inner, status: c.status}
+			}
 			claim := nativeTestClaim("gitlab", "work-items")
 			claim.OrgID = "77777777-7777-4777-8777-777777777777"
+			client := gitLabWorkItemsClient(t, fakehttp.Client(doer))
+			client.Metrics = providerfoundation.NewMetrics()
 			batch, err := (GitLabWorkItemsRouteHandler{
 				StatusMapping: loadRealStatusMapping(t), Derived: deriver, PerPage: 2, MaxPages: 10, NestedMaxPages: 10,
 			}).Collect(context.Background(), claim, providerfoundation.Credential{Provider: "gitlab", ID: claim.CredentialID},
-				gitLabWorkItemsClient(t, fakehttp.Client(doer)), time.Date(2026, 8, 3, 12, 0, 0, 0, time.UTC))
+				client, time.Date(2026, 8, 3, 12, 0, 0, 0, time.UTC))
 			if err != nil {
 				t.Fatalf("a closed_by failure must not fail the batch: %v", err)
 			}
-			failed, synced := batch.Result["closing_reference_fetch_failed"], batch.Result["closing_reference_dependencies_synced"]
-			_, incomplete := batch.Result["incomplete"]
-			if withClosedBy {
-				if failed != 0 || synced != 1 || incomplete || batch.Watermark == nil {
-					t.Fatalf("answering closed_by: failed=%v synced=%v incomplete=%v watermark=%v", failed, synced, incomplete, batch.Watermark)
+			if (batch.Watermark != nil) != c.wantWatermark {
+				t.Fatalf("watermark=%v want advanced=%v", batch.Watermark, c.wantWatermark)
+			}
+			if batch.Result["closing_reference_fetch_terminal"] != c.wantTerminal || batch.Result["closing_reference_fetch_transient"] != c.wantTransient {
+				t.Fatalf("terminal=%v transient=%v want %d/%d", batch.Result["closing_reference_fetch_terminal"], batch.Result["closing_reference_fetch_transient"], c.wantTerminal, c.wantTransient)
+			}
+			incomplete, hasIncomplete := batch.Result["incomplete"].([]string)
+			if failed := c.wantTerminal + c.wantTransient; failed > 0 {
+				if !hasIncomplete || len(incomplete) != 1 || incomplete[0] != "gitlab:acme/api#42" {
+					t.Fatalf("incomplete=%v want the issue ref (the row is reported incomplete in both classes)", batch.Result["incomplete"])
 				}
-				return
+				if dependencies := batch.Result["closing_reference_dependencies_synced"]; dependencies != 0 {
+					t.Fatalf("closing rows synced=%v want 0", dependencies)
+				}
+			} else if hasIncomplete || batch.Result["closing_reference_dependencies_synced"] != 1 {
+				t.Fatalf("answering closed_by: result=%v", batch.Result)
 			}
-			if failed != 1 || synced != 0 || !incomplete || batch.Watermark != nil {
-				t.Fatalf("failing closed_by: failed=%v synced=%v incomplete=%v watermark=%v (counted, loud, watermark held)", failed, synced, incomplete, batch.Watermark)
+			var exposition strings.Builder
+			if err := client.Metrics.WritePrometheus(&exposition); err != nil {
+				t.Fatal(err)
 			}
-			if got := batch.Result["incomplete"].([]string); len(got) != 1 || got[0] != "gitlab:acme/api#42" {
-				t.Fatalf("incomplete=%v want the issue ref", got)
+			if want := `dev_health_gitlab_closing_mr_fetch_total{outcome="` + c.wantOutcome + `"} 1`; !strings.Contains(exposition.String(), want) {
+				t.Fatalf("metrics lack %s:\n%s", want, exposition.String())
 			}
 		})
 	}

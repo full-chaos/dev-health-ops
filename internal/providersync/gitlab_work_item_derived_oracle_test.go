@@ -410,7 +410,7 @@ func TestGitLabDerivedSurfacesMatchFrozenPythonProduction(t *testing.T) {
 	// testdata/oracle_frozen/README.md.
 	compareRowsAgainstFrozenOracle(t, "gitlab_work-items_team-attributions", cases, func(t *testing.T, input map[string]any) githubTeamAttributionColumns {
 		claim, rows, derived := gitlabWorkItemOracleRows(t, input)
-		surfaces, err := buildWorkItemDerivedSurfacesForProvider("gitlab", claim, rows, gitlabWorkItemOracleDay(t, input), gitlabWorkItemOracleComputedAt(t, input), derived)
+		surfaces, err := buildWorkItemDerivedSurfacesForProvider("gitlab", claim, rows, gitlabWorkItemOracleDay(t, input), gitlabWorkItemOracleComputedAt(t, input), derived, nil)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -418,7 +418,7 @@ func TestGitLabDerivedSurfacesMatchFrozenPythonProduction(t *testing.T) {
 	}, nil)
 	compareRowsAgainstFrozenOracle(t, "gitlab_work-items_state-durations", cases, func(t *testing.T, input map[string]any) githubStateDurationColumns {
 		claim, rows, derived := gitlabWorkItemOracleRows(t, input)
-		surfaces, err := buildWorkItemDerivedSurfacesForProvider("gitlab", claim, rows, gitlabWorkItemOracleDay(t, input), gitlabWorkItemOracleComputedAt(t, input), derived)
+		surfaces, err := buildWorkItemDerivedSurfacesForProvider("gitlab", claim, rows, gitlabWorkItemOracleDay(t, input), gitlabWorkItemOracleComputedAt(t, input), derived, nil)
 		if err != nil {
 			t.Fatal(err)
 		}

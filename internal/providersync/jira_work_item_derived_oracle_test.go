@@ -121,6 +121,7 @@ func TestJiraDerivedSurfacesMatchFrozenPythonProduction(t *testing.T) {
 			surfaces, err := buildWorkItemDerivedSurfacesForProvider(
 				"jira", claim, rows, gitlabWorkItemOracleDay(t, input),
 				gitlabWorkItemOracleComputedAt(t, input), derived,
+				nil,
 			)
 			if err != nil {
 				t.Fatal(err)
@@ -133,6 +134,7 @@ func TestJiraDerivedSurfacesMatchFrozenPythonProduction(t *testing.T) {
 			surfaces, err := buildWorkItemDerivedSurfacesForProvider(
 				"jira", claim, rows, gitlabWorkItemOracleDay(t, input),
 				gitlabWorkItemOracleComputedAt(t, input), derived,
+				nil,
 			)
 			if err != nil {
 				t.Fatal(err)

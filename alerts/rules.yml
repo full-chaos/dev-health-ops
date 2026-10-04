@@ -536,8 +536,8 @@ groups:
       #
       # KNOWN LIMITATION 1a, stated deliberately (adversarial codex review,
       # round 4): "as shipped" is doing real work in that sentence.
-      # `TierLimitService._resolve_tier_limits`
-      # (src/dev_health_ops/api/services/licensing.py:352-399) resolves
+      # `GetLimitFrom`
+      # (internal/api/licensing/tierlimits.go) resolves
       # `min_sync_interval_hours` from THREE layers, in order: a per-org
       # `OrgLicense.limits_override` JSON column, then the `tier_limits` DB
       # table, then `TIER_LIMITS_DEFAULTS` last. Both of the first two are

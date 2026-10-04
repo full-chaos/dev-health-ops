@@ -343,8 +343,10 @@ type ComplexityRoot struct {
 	}
 
 	AIWorkflowGraphNodeOut struct {
-		NodeID   func(childComplexity int) int
-		NodeType func(childComplexity int) int
+		DisplayName  func(childComplexity int) int
+		NameExpected func(childComplexity int) int
+		NodeID       func(childComplexity int) int
+		NodeType     func(childComplexity int) int
 	}
 
 	AiAttributedPr struct {
@@ -884,19 +886,21 @@ type ComplexityRoot struct {
 	}
 
 	OperatingReviewDelta struct {
-		Absolute   func(childComplexity int) int
-		Percent    func(childComplexity int) int
-		PriorValue func(childComplexity int) int
-		Status     func(childComplexity int) int
-		Value      func(childComplexity int) int
+		Absolute     func(childComplexity int) int
+		HasPriorData func(childComplexity int) int
+		Percent      func(childComplexity int) int
+		PriorValue   func(childComplexity int) int
+		Status       func(childComplexity int) int
+		Value        func(childComplexity int) int
 	}
 
 	OperatingReviewMetric struct {
-		Delta func(childComplexity int) int
-		Key   func(childComplexity int) int
-		Label func(childComplexity int) int
-		Unit  func(childComplexity int) int
-		Value func(childComplexity int) int
+		Delta   func(childComplexity int) int
+		HasData func(childComplexity int) int
+		Key     func(childComplexity int) int
+		Label   func(childComplexity int) int
+		Unit    func(childComplexity int) int
+		Value   func(childComplexity int) int
 	}
 
 	OperatingReviewSection struct {
@@ -3042,6 +3046,20 @@ func (e *executableSchema) Complexity(typeName, field string, childComplexity in
 		}
 
 		return e.complexity.AIWorkflowGraphEdgeOut.TargetType(childComplexity), true
+
+	case "AIWorkflowGraphNodeOut.displayName":
+		if e.complexity.AIWorkflowGraphNodeOut.DisplayName == nil {
+			break
+		}
+
+		return e.complexity.AIWorkflowGraphNodeOut.DisplayName(childComplexity), true
+
+	case "AIWorkflowGraphNodeOut.nameExpected":
+		if e.complexity.AIWorkflowGraphNodeOut.NameExpected == nil {
+			break
+		}
+
+		return e.complexity.AIWorkflowGraphNodeOut.NameExpected(childComplexity), true
 
 	case "AIWorkflowGraphNodeOut.nodeId":
 		if e.complexity.AIWorkflowGraphNodeOut.NodeID == nil {
@@ -5439,6 +5457,13 @@ func (e *executableSchema) Complexity(typeName, field string, childComplexity in
 
 		return e.complexity.OperatingReviewDelta.Absolute(childComplexity), true
 
+	case "OperatingReviewDelta.hasPriorData":
+		if e.complexity.OperatingReviewDelta.HasPriorData == nil {
+			break
+		}
+
+		return e.complexity.OperatingReviewDelta.HasPriorData(childComplexity), true
+
 	case "OperatingReviewDelta.percent":
 		if e.complexity.OperatingReviewDelta.Percent == nil {
 			break
@@ -5473,6 +5498,13 @@ func (e *executableSchema) Complexity(typeName, field string, childComplexity in
 		}
 
 		return e.complexity.OperatingReviewMetric.Delta(childComplexity), true
+
+	case "OperatingReviewMetric.hasData":
+		if e.complexity.OperatingReviewMetric.HasData == nil {
+			break
+		}
+
+		return e.complexity.OperatingReviewMetric.HasData(childComplexity), true
 
 	case "OperatingReviewMetric.key":
 		if e.complexity.OperatingReviewMetric.Key == nil {
@@ -8992,6 +9024,14 @@ type AIWorkflowGraphEdgeOut {
 type AIWorkflowGraphNodeOut {
   nodeType: String!
   nodeId: String!
+  """
+  The node's display name (CHAOS-8113). By ` + "`" + `` + "`" + `nodeType` + "`" + `` + "`" + `: ` + "`" + `` + "`" + `pr` + "`" + `` + "`" + ` = the pull request's title; ` + "`" + `` + "`" + `deployment` + "`" + `` + "`" + ` = "<environment> deploy"; ` + "`" + `` + "`" + `incident` + "`" + `` + "`" + ` = "<title> (<status>)"; ` + "`" + `` + "`" + `issue` + "`" + `` + "`" + ` = the issue's own id when it is a readable key. Null = no name is known: the catalogue does not name the node, the name read failed, or the type carries no name (see ` + "`" + `` + "`" + `nameExpected` + "`" + `` + "`" + `). It is never an id that is, or holds, a UUID or an opaque hash. Every end of an edge in ` + "`" + `` + "`" + `edges` + "`" + `` + "`" + ` that has an id has a node in ` + "`" + `` + "`" + `nodes` + "`" + `` + "`" + ` with the same type and id, so a client names an edge end by that node.
+  """
+  displayName: String
+  """
+  True = nodes of this type carry a name (` + "`" + `` + "`" + `pr` + "`" + `` + "`" + `, ` + "`" + `` + "`" + `deployment` + "`" + `` + "`" + `, ` + "`" + `` + "`" + `incident` + "`" + `` + "`" + `, ` + "`" + `` + "`" + `issue` + "`" + `` + "`" + `): a null ` + "`" + `` + "`" + `displayName` + "`" + `` + "`" + ` is then a gap, and a client draws "Not reported". False = the type has no name by design (a review outcome, an AI workflow run, a diff): a client draws the type words alone.
+  """
+  nameExpected: Boolean!
 }
 
 enum AIWorkflowRootTypeInput {
@@ -9852,6 +9892,10 @@ type OperatingReviewDelta {
   absolute: Float!
   percent: Float
   status: String!
+  """
+  False = the prior week holds no stored value for the metric (CHAOS-8115); see ` + "`" + `` + "`" + `OperatingReviewMetric.hasData` + "`" + `` + "`" + `. ` + "`" + `` + "`" + `priorValue` + "`" + `` + "`" + ` is then a 0 placeholder, and ` + "`" + `` + "`" + `absolute` + "`" + `` + "`" + `, ` + "`" + `` + "`" + `percent` + "`" + `` + "`" + ` and ` + "`" + `` + "`" + `status` + "`" + `` + "`" + ` compare with that placeholder: a client draws "No data" for the prior week and no change.
+  """
+  hasPriorData: Boolean!
 }
 
 input OperatingReviewInput {
@@ -9865,6 +9909,10 @@ type OperatingReviewMetric {
   value: Float!
   unit: String!
   delta: OperatingReviewDelta!
+  """
+  True = the week holds a stored value for the metric (CHAOS-8115). False = no row of the metric's daily table in the week, only NULL values, or a read that failed: ` + "`" + `` + "`" + `value` + "`" + `` + "`" + ` is then a 0 placeholder, not a measured zero, and a client draws "No data". True with ` + "`" + `` + "`" + `value` + "`" + `` + "`" + ` 0 is a stored zero.
+  """
+  hasData: Boolean!
 }
 
 type OperatingReviewSection {
@@ -22894,6 +22942,10 @@ func (ec *executionContext) fieldContext_AIWorkflowDrilldownResult_nodes(_ conte
 				return ec.fieldContext_AIWorkflowGraphNodeOut_nodeType(ctx, field)
 			case "nodeId":
 				return ec.fieldContext_AIWorkflowGraphNodeOut_nodeId(ctx, field)
+			case "displayName":
+				return ec.fieldContext_AIWorkflowGraphNodeOut_displayName(ctx, field)
+			case "nameExpected":
+				return ec.fieldContext_AIWorkflowGraphNodeOut_nameExpected(ctx, field)
 			}
 			return nil, fmt.Errorf("no field named %q was found under type AIWorkflowGraphNodeOut", field.Name)
 		},
@@ -23618,6 +23670,91 @@ func (ec *executionContext) fieldContext_AIWorkflowGraphNodeOut_nodeId(_ context
 		IsResolver: false,
 		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
 			return nil, errors.New("field of type String does not have child fields")
+		},
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _AIWorkflowGraphNodeOut_displayName(ctx context.Context, field graphql.CollectedField, obj *model.AIWorkflowGraphNodeOut) (ret graphql.Marshaler) {
+	fc, err := ec.fieldContext_AIWorkflowGraphNodeOut_displayName(ctx, field)
+	if err != nil {
+		return graphql.Null
+	}
+	ctx = graphql.WithFieldContext(ctx, fc)
+	defer func() {
+		if r := recover(); r != nil {
+			ec.Error(ctx, ec.Recover(ctx, r))
+			ret = graphql.Null
+		}
+	}()
+	resTmp, err := ec.ResolverMiddleware(ctx, func(rctx context.Context) (any, error) {
+		ctx = rctx // use context from middleware stack in children
+		return obj.DisplayName, nil
+	})
+	if err != nil {
+		ec.Error(ctx, err)
+		return graphql.Null
+	}
+	if resTmp == nil {
+		return graphql.Null
+	}
+	res := resTmp.(*string)
+	fc.Result = res
+	return ec.marshalOString2ᚖstring(ctx, field.Selections, res)
+}
+
+func (ec *executionContext) fieldContext_AIWorkflowGraphNodeOut_displayName(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "AIWorkflowGraphNodeOut",
+		Field:      field,
+		IsMethod:   false,
+		IsResolver: false,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return nil, errors.New("field of type String does not have child fields")
+		},
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _AIWorkflowGraphNodeOut_nameExpected(ctx context.Context, field graphql.CollectedField, obj *model.AIWorkflowGraphNodeOut) (ret graphql.Marshaler) {
+	fc, err := ec.fieldContext_AIWorkflowGraphNodeOut_nameExpected(ctx, field)
+	if err != nil {
+		return graphql.Null
+	}
+	ctx = graphql.WithFieldContext(ctx, fc)
+	defer func() {
+		if r := recover(); r != nil {
+			ec.Error(ctx, ec.Recover(ctx, r))
+			ret = graphql.Null
+		}
+	}()
+	resTmp, err := ec.ResolverMiddleware(ctx, func(rctx context.Context) (any, error) {
+		ctx = rctx // use context from middleware stack in children
+		return obj.NameExpected, nil
+	})
+	if err != nil {
+		ec.Error(ctx, err)
+		return graphql.Null
+	}
+	if resTmp == nil {
+		if !graphql.HasFieldError(ctx, fc) {
+			ec.Errorf(ctx, "must not be null")
+		}
+		return graphql.Null
+	}
+	res := resTmp.(bool)
+	fc.Result = res
+	return ec.marshalNBoolean2bool(ctx, field.Selections, res)
+}
+
+func (ec *executionContext) fieldContext_AIWorkflowGraphNodeOut_nameExpected(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "AIWorkflowGraphNodeOut",
+		Field:      field,
+		IsMethod:   false,
+		IsResolver: false,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return nil, errors.New("field of type Boolean does not have child fields")
 		},
 	}
 	return fc, nil
@@ -39270,6 +39407,50 @@ func (ec *executionContext) fieldContext_OperatingReviewDelta_status(_ context.C
 	return fc, nil
 }
 
+func (ec *executionContext) _OperatingReviewDelta_hasPriorData(ctx context.Context, field graphql.CollectedField, obj *model.OperatingReviewDelta) (ret graphql.Marshaler) {
+	fc, err := ec.fieldContext_OperatingReviewDelta_hasPriorData(ctx, field)
+	if err != nil {
+		return graphql.Null
+	}
+	ctx = graphql.WithFieldContext(ctx, fc)
+	defer func() {
+		if r := recover(); r != nil {
+			ec.Error(ctx, ec.Recover(ctx, r))
+			ret = graphql.Null
+		}
+	}()
+	resTmp, err := ec.ResolverMiddleware(ctx, func(rctx context.Context) (any, error) {
+		ctx = rctx // use context from middleware stack in children
+		return obj.HasPriorData, nil
+	})
+	if err != nil {
+		ec.Error(ctx, err)
+		return graphql.Null
+	}
+	if resTmp == nil {
+		if !graphql.HasFieldError(ctx, fc) {
+			ec.Errorf(ctx, "must not be null")
+		}
+		return graphql.Null
+	}
+	res := resTmp.(bool)
+	fc.Result = res
+	return ec.marshalNBoolean2bool(ctx, field.Selections, res)
+}
+
+func (ec *executionContext) fieldContext_OperatingReviewDelta_hasPriorData(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "OperatingReviewDelta",
+		Field:      field,
+		IsMethod:   false,
+		IsResolver: false,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return nil, errors.New("field of type Boolean does not have child fields")
+		},
+	}
+	return fc, nil
+}
+
 func (ec *executionContext) _OperatingReviewMetric_key(ctx context.Context, field graphql.CollectedField, obj *model.OperatingReviewMetric) (ret graphql.Marshaler) {
 	fc, err := ec.fieldContext_OperatingReviewMetric_key(ctx, field)
 	if err != nil {
@@ -39495,8 +39676,54 @@ func (ec *executionContext) fieldContext_OperatingReviewMetric_delta(_ context.C
 				return ec.fieldContext_OperatingReviewDelta_percent(ctx, field)
 			case "status":
 				return ec.fieldContext_OperatingReviewDelta_status(ctx, field)
+			case "hasPriorData":
+				return ec.fieldContext_OperatingReviewDelta_hasPriorData(ctx, field)
 			}
 			return nil, fmt.Errorf("no field named %q was found under type OperatingReviewDelta", field.Name)
+		},
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _OperatingReviewMetric_hasData(ctx context.Context, field graphql.CollectedField, obj *model.OperatingReviewMetric) (ret graphql.Marshaler) {
+	fc, err := ec.fieldContext_OperatingReviewMetric_hasData(ctx, field)
+	if err != nil {
+		return graphql.Null
+	}
+	ctx = graphql.WithFieldContext(ctx, fc)
+	defer func() {
+		if r := recover(); r != nil {
+			ec.Error(ctx, ec.Recover(ctx, r))
+			ret = graphql.Null
+		}
+	}()
+	resTmp, err := ec.ResolverMiddleware(ctx, func(rctx context.Context) (any, error) {
+		ctx = rctx // use context from middleware stack in children
+		return obj.HasData, nil
+	})
+	if err != nil {
+		ec.Error(ctx, err)
+		return graphql.Null
+	}
+	if resTmp == nil {
+		if !graphql.HasFieldError(ctx, fc) {
+			ec.Errorf(ctx, "must not be null")
+		}
+		return graphql.Null
+	}
+	res := resTmp.(bool)
+	fc.Result = res
+	return ec.marshalNBoolean2bool(ctx, field.Selections, res)
+}
+
+func (ec *executionContext) fieldContext_OperatingReviewMetric_hasData(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "OperatingReviewMetric",
+		Field:      field,
+		IsMethod:   false,
+		IsResolver: false,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return nil, errors.New("field of type Boolean does not have child fields")
 		},
 	}
 	return fc, nil
@@ -39639,6 +39866,8 @@ func (ec *executionContext) fieldContext_OperatingReviewSection_metrics(_ contex
 				return ec.fieldContext_OperatingReviewMetric_unit(ctx, field)
 			case "delta":
 				return ec.fieldContext_OperatingReviewMetric_delta(ctx, field)
+			case "hasData":
+				return ec.fieldContext_OperatingReviewMetric_hasData(ctx, field)
 			}
 			return nil, fmt.Errorf("no field named %q was found under type OperatingReviewMetric", field.Name)
 		},
@@ -64265,6 +64494,13 @@ func (ec *executionContext) _AIWorkflowGraphNodeOut(ctx context.Context, sel ast
 			if out.Values[i] == graphql.Null {
 				out.Invalids++
 			}
+		case "displayName":
+			out.Values[i] = ec._AIWorkflowGraphNodeOut_displayName(ctx, field, obj)
+		case "nameExpected":
+			out.Values[i] = ec._AIWorkflowGraphNodeOut_nameExpected(ctx, field, obj)
+			if out.Values[i] == graphql.Null {
+				out.Invalids++
+			}
 		default:
 			panic("unknown field " + strconv.Quote(field.Name))
 		}
@@ -68071,6 +68307,11 @@ func (ec *executionContext) _OperatingReviewDelta(ctx context.Context, sel ast.S
 			if out.Values[i] == graphql.Null {
 				out.Invalids++
 			}
+		case "hasPriorData":
+			out.Values[i] = ec._OperatingReviewDelta_hasPriorData(ctx, field, obj)
+			if out.Values[i] == graphql.Null {
+				out.Invalids++
+			}
 		default:
 			panic("unknown field " + strconv.Quote(field.Name))
 		}
@@ -68127,6 +68368,11 @@ func (ec *executionContext) _OperatingReviewMetric(ctx context.Context, sel ast.
 			}
 		case "delta":
 			out.Values[i] = ec._OperatingReviewMetric_delta(ctx, field, obj)
+			if out.Values[i] == graphql.Null {
+				out.Invalids++
+			}
+		case "hasData":
+			out.Values[i] = ec._OperatingReviewMetric_hasData(ctx, field, obj)
 			if out.Values[i] == graphql.Null {
 				out.Invalids++
 			}

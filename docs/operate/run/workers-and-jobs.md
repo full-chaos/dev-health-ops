@@ -19,10 +19,8 @@ cadence this doc used to describe running via `dev-hops workers start-worker`/
 `start-scheduler` -- those two CLI subcommands were deleted (they were the
 last CLI-level way to falsify CUT-18's "no Celery process is running"
 criterion). The Go worker deployment contract selects queues; it does not
-change the canonical job-kind-to-queue mapping. This page still needs a full
-rewrite around the Go-only runtime (tracked separately); until then, treat
-the sections below that still show `dev-hops workers start-*` commands as
-historical, not runnable.
+change the canonical job-kind-to-queue mapping. The Go processes are started
+with `dho worker` and `dho scheduler`.
 
 **CHAOS-4164 (2026-08-23), superseded:** the checked-in compose files were
 first marked ARCHIVED with the Celery `worker`/`beat` fleet still defined, and

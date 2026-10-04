@@ -184,6 +184,12 @@ func (deriver GitLabWorkItemDeriver) Derive(
 		return GitLabWorkItemDerivedRows{}, err
 	}
 	deriver.observations.recordStoredEdgeMerge(contextFacts.StoredEdgeMerge)
+	blocked, err := loadWorkItemBlockedIntervalsForProvider(
+		ctx, "gitlab", claim, gitlabWorkItemRowsAsGitHub(rows), deriver.Source,
+	)
+	if err != nil {
+		return GitLabWorkItemDerivedRows{}, err
+	}
 	var watermark *time.Time
 	if claim.BeforeAt != nil {
 		value := claim.BeforeAt.UTC()
@@ -217,7 +223,7 @@ func (deriver GitLabWorkItemDeriver) Derive(
 		}
 
 		surfaces, err := buildWorkItemDerivedSurfacesForProvider(
-			"gitlab", claim, gitlabWorkItemRowsAsGitHub(rows), day, normalizedAt, contextFacts,
+			"gitlab", claim, gitlabWorkItemRowsAsGitHub(rows), day, normalizedAt, contextFacts, blocked,
 		)
 		if err != nil {
 			return GitLabWorkItemDerivedRows{}, err

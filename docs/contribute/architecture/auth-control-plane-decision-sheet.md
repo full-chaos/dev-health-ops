@@ -21,6 +21,8 @@ not resolved; **C3 = retain, fail-closed** — removal of the six legacy ingest
 routes is scheduled for Wave 10 (CHAOS-3283), after customer notice.
 {: .fc-page-lede }
 
+> **Note:** The Python api paths and tools that this page names (`src/dev_health_ops/api/...`, `ci/check_endpoint_profiles.py`, `contracts/auth/v1/endpoint-profiles.ops.json`) were removed with the Python api. This page is a record of the design as ratified.
+
 !!! info "How to use this"
     **Part A** is twelve ADR decisions. **Part B** is nine contract changes that
     need a yes/no, not a design. **Part C** is the residual risks that stay open

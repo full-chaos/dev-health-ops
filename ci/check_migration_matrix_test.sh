@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
-# RED/GREEN for ci/check_migration_matrix.sh's `freshness` mode.
+# RED/GREEN for ci/check_migration_matrix.sh's `stamp` mode (structural checks only;
+# CHAOS-8620 removed the age budget, and an old stamp must now PASS).
 #
 # Freshness is the half of the gate that runs with no Go toolchain, on every
 # PR, including PRs that touch nothing near the matrix -- which is exactly the
@@ -92,7 +93,7 @@ expect() {
   # Cleared here rather than in fixture(), so a case that sets it affects
   # exactly one run and cannot leak into the next.
   unset FIXTURE_OPS_SHA
-  output="$(MATRIX_ROOT="${repo}" MATRIX_MAX_AGE_DAYS=7 bash "${UNDER_TEST}" freshness 2>&1)" || rc=$?
+  output="$(MATRIX_ROOT="${repo}" bash "${UNDER_TEST}" stamp 2>&1)" || rc=$?
 
   if { [ "${want}" = "fail" ] && [ "${rc}" -ne 0 ]; } || { [ "${want}" = "pass" ] && [ "${rc}" -eq 0 ]; }; then
     printf 'ok   %s (%s)\n' "${name}" "${description}"
@@ -107,8 +108,8 @@ expect fail no_stamp "a page with the stamp deleted is not a fresh page" NOLINE 
 expect fail abbreviated "an abbreviated sha cannot be checked for ancestry" e3e2e77c 1 0
 expect fail not_hex "a non-hex stamp is not a commit" not-a-sha-at-all 1 0
 expect fail unknown_commit "a 40-hex sha this repo does not contain" "$(printf 'a%.0s' {1..40})" 1 0
-expect fail stale_stamp "a stamp older than the budget" SENTINEL 9 0
-expect fail stale_render "live sources last read outside the budget" SENTINEL 1 9
+expect pass old_stamp "a stamp far older than the former 7-day budget no longer fails" SENTINEL 400 0
+expect pass old_render "a render far older than the former 7-day budget no longer fails" SENTINEL 1 400
 expect pass fresh "a real, recent, ancestor stamp with a recent render" SENTINEL 1 0
 
 # The ops_sha half: the sha `-render` actually read from. A human cannot type
@@ -119,26 +120,6 @@ FIXTURE_OPS_SHA="deadbeef" \
   expect fail render_sha_abbreviated "an abbreviated ops_sha cannot be checked for ancestry" SENTINEL 1 0
 FIXTURE_OPS_SHA="" \
   expect fail render_sha_missing "a render with no ops_sha cannot say what it read" SENTINEL 1 0
-
-# Every staleness failure must hand the operator the exact re-verify command.
-# A weekly gate whose message says "re-verify" without saying HOW is a gate
-# people learn to route around (team-lead ruling, 2026-09-09).
-check_message_names_the_command() {
-  local repo output
-  repo="$(fixture message_check SENTINEL 9 0)"
-  unset FIXTURE_OPS_SHA
-  output="$(MATRIX_ROOT="${repo}" MATRIX_MAX_AGE_DAYS=7 bash "${UNDER_TEST}" freshness 2>&1)" || true
-
-  if printf '%s' "${output}" | grep -qF 'go run ./cmd/dev-health-migration-matrix -render -root .' \
-    && printf '%s' "${output}" | grep -qE '[0-9]+ days old \(budget 7 days\)'; then
-    printf 'ok   message_check (a stale failure prints the exact command and the age in days)\n'
-    PASSED=$((PASSED + 1))
-  else
-    printf 'FAIL message_check: the failure text must carry the re-verify command AND the age in days:\n%s\n' "${output}"
-    FAILED=$((FAILED + 1))
-  fi
-}
-check_message_names_the_command
 
 # THE REGRESSION CASE. This is the one that was missing, and its absence took
 # main red for every PR the moment #2389 squash-merged.
@@ -204,7 +185,7 @@ check_survives_a_squash_merge() {
     return
   fi
 
-  output="$(MATRIX_ROOT="${repo}" MATRIX_MAX_AGE_DAYS=7 bash "${UNDER_TEST}" freshness 2>&1)" || rc=$?
+  output="$(MATRIX_ROOT="${repo}" bash "${UNDER_TEST}" stamp 2>&1)" || rc=$?
   if [ "${rc}" -eq 0 ]; then
     printf 'ok   squash_merge (a merge-base ops_sha survives a squash merge onto main)\n'
     PASSED=$((PASSED + 1))

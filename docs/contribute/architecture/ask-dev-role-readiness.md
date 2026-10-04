@@ -29,6 +29,8 @@ structural rejection (the provider cannot handle the shape at all) as a
 different, non-retryable outcome from a transient one (the network blipped).
 {: .fc-page-lede }
 
+> **Note:** The Go api does not serve the Ask Dev (`/api/v1/dev`) surface. This page is a record of the Python surface that was removed.
+
 ## Why one badge was not enough
 
 Before this work, Ask Dev certified a provider with a single exchange: a

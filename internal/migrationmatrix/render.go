@@ -155,6 +155,16 @@ func RenderOpsBlock(render *Render, catalog Catalog) string {
 		UnjudgedLive(render.Operations),
 	))
 
+	// An empty table is a valid state since the catalog rule (CHAOS-8543), and
+	// on it every count above is 0 and the table below has no row -- which, with
+	// nothing else said, reads as "nothing is served". The opposite is true, so
+	// the page says it. Written ONLY for a snapshot with no row: a snapshot that
+	// has rows renders exactly what it rendered before.
+	if len(render.Operations) == 0 {
+		b.WriteString(fmt.Sprintf("_`go_api_routing_state` held no row at read time. That is a valid state: query-api serves every catalog operation that has no routing row, so all **%d** catalog operations are served, none of them through a routing row and none of them proven by one. The counts above read routing rows only._\n\n",
+			catalog.OperationCount()))
+	}
+
 	b.WriteString("| Operation | Mode | Schema digest | Candidate build | Live at current pin | Proven (derived) | Parity ticket |\n")
 	b.WriteString("| --- | --- | --- | --- | --- | --- | --- |\n")
 

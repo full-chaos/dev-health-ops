@@ -37,7 +37,7 @@ from .external_ingest import (
     ExternalIngestRejection,
 )
 from .git import Base, GitBlame, GitBlameMixin, GitCommit, GitCommitStat, GitFile, Repo
-from .go_api_registry import CandidateBuild, ProofRun, RoutingState
+from .go_api_registry import CandidateBuild, ProofRun
 from .health_rule_governance import HealthRuleCalibration, HealthRuleVersionFingerprint
 from .impersonation import ImpersonationSession
 from .ingest_auth import (
@@ -175,7 +175,6 @@ __all__ = [
     "GithubAppInstallation",
     "CandidateBuild",
     "ProofRun",
-    "RoutingState",
     "HealthRuleCalibration",
     "HealthRuleVersionFingerprint",
     "IngestSource",

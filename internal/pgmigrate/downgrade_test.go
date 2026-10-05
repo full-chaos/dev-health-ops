@@ -51,7 +51,7 @@ func TestDownChainCoversEveryChainRevision(t *testing.T) {
 		if down[index].Name != file.Name {
 			t.Errorf("sql/down/%s does not pair with sql/%s", down[index].Name, file.Name)
 		}
-		if strings.TrimSpace(down[index].SQL) == "" || !regexp.MustCompile(`(?im)^\s*(DROP|ALTER|UPDATE|DELETE)\b`).MatchString(down[index].SQL) {
+		if strings.TrimSpace(down[index].SQL) == "" || !regexp.MustCompile(`(?im)^\s*(CREATE|DROP|ALTER|UPDATE|DELETE)\b`).MatchString(down[index].SQL) {
 			t.Errorf("sql/down/%s holds no statement", down[index].Name)
 		}
 	}
@@ -94,10 +94,10 @@ func TestPlanDowngradeCells(t *testing.T) {
 		{"explicit to the floor", []string{"0066", top}, "0138", steps(top, "0138"), ""},
 		{"explicit equal to current", []string{"0066", top}, top, nil, ""},
 		{"explicit, single head", []string{"0141"}, "0139", steps("0141", "0139"), ""},
-		{"-1, single head", []string{top}, "-1", steps(top, "0145"), ""},
-		{"-3, single head", []string{top}, "-3", steps(top, "0143"), ""},
-		{"-8 reaches exactly the floor", []string{top}, "-8", steps(top, "0138"), ""},
-		{"-9 needs the floor revision itself", []string{top}, "-9", nil, "below_baseline_floor"},
+		{"-1, single head", []string{top}, "-1", steps(top, "0146"), ""},
+		{"-3, single head", []string{top}, "-3", steps(top, "0144"), ""},
+		{"-9 reaches exactly the floor", []string{top}, "-9", steps(top, "0138"), ""},
+		{"-10 needs the floor revision itself", []string{top}, "-10", nil, "below_baseline_floor"},
 		{"-1 with 0066 recorded: Python reverts 0066 first", []string{"0066", top}, "-1", nil, "below_baseline_floor"},
 		{"-2 with 0066 recorded", []string{"0066", top}, "-2", nil, "below_baseline_floor"},
 		{"-1 at the floor", []string{"0066", "0138"}, "-1", nil, "below_baseline_floor"},

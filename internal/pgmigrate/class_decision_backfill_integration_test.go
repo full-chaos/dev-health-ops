@@ -49,6 +49,19 @@ type classDecision struct {
 	decidedAt           time.Time
 }
 
+// positionOf0146 is the chain position of revision 0146 (the number of files before it). The walks stop at 0146:
+// revision 0147 (CHAOS-8706) drops the source table of the backfill.
+func positionOf0146(t *testing.T, chain []pgmigrate.ChainFile) int {
+	t.Helper()
+	for i, file := range chain {
+		if file.Revision == "0146" {
+			return i
+		}
+	}
+	t.Fatal("the chain holds no revision 0146")
+	return 0
+}
+
 // at0145 is a scratch database one revision below the head (0145), holding rows.
 func at0145(t *testing.T, d downInstance, rows []routingRow) (string, *pgx.Conn) {
 	t.Helper()
@@ -56,10 +69,7 @@ func at0145(t *testing.T, d downInstance, rows []routingRow) (string, *pgx.Conn)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got := chain[len(chain)-1].Revision; got != "0146" {
-		t.Fatalf("the chain head is %s; this test seeds the database one revision below 0146", got)
-	}
-	uri := d.at(t, len(chain)-1)
+	uri := d.at(t, positionOf0146(t, chain))
 	conn := connect(t, uri)
 	ctx := context.Background()
 	for _, row := range rows {
@@ -91,7 +101,7 @@ func upgradeWithDigest(t *testing.T, conn *pgx.Conn, digest *string) error {
 	if digest != nil {
 		settings = pgmigrate.WalkSettings{pgmigrate.ClassDecisionLiveDigestSetting: *digest}
 	}
-	_, err = pgmigrate.UpgradeLoggedWithSettings(context.Background(), conn, baseline, chain, slog.New(slog.DiscardHandler), settings)
+	_, err = pgmigrate.UpgradeLoggedWithSettings(context.Background(), conn, baseline, chain[:positionOf0146(t, chain)+1], slog.New(slog.DiscardHandler), settings)
 	return err
 }
 
@@ -318,8 +328,9 @@ func TestClassDecisionBackfillThroughTheUpgradeVerbTreatsAnEmptyLiveDigestAsUnse
 			if err != nil {
 				t.Fatal(err)
 			}
-			if !hasRevision(recorded, "0146") {
-				t.Errorf("alembic_version = %v, want 0146 recorded", recorded)
+			// The verb walks to the head, 0147 (CHAOS-8706), which drops the source table after 0146 ran.
+			if !hasRevision(recorded, "0147") {
+				t.Errorf("alembic_version = %v, want the head 0147 recorded", recorded)
 			}
 			if got := readDecisions(t, conn); len(got) != 0 {
 				t.Errorf("decisions %+v, want none", got)

@@ -43,8 +43,8 @@ func TestEveryHelperInsertsIntoTheMigratedSchema(t *testing.T) {
 	pgseed.Integration(ctx, t, pool, integration, org, "github")
 	pgseed.IntegrationSource(ctx, t, pool, source, org, integration, "github", "acme/api")
 	pgseed.Credential(ctx, t, pool, credential, org, "github")
-	pgseed.RoutingState(ctx, t, pool, "schema", "document", "operation", "canary")
-	pgseed.RoutingState(ctx, t, pool, "schema", "document", "operation", "primary") // the upsert path
+	pgseed.ClassDecision(ctx, t, pool, "mcp:operation", "canary")
+	pgseed.ClassDecision(ctx, t, pool, "mcp:operation", "primary") // the upsert path
 	unit, run := uuid.NewString(), uuid.NewString()
 	pgseed.EnsureSyncRun(ctx, t, pool, pgseed.SyncRun{ID: run, TotalUnits: 1})
 	pgseed.EnsureSyncRun(ctx, t, pool, pgseed.SyncRun{ID: run}) // idempotent
@@ -82,7 +82,7 @@ func TestEveryHelperInsertsIntoTheMigratedSchema(t *testing.T) {
 		{"sync_configurations", `SELECT count(*) FROM sync_configurations WHERE id = '` + config + `'`, 1},
 		{"job_runs", `SELECT count(*) FROM job_runs WHERE id = '` + jobRun + `' AND job_id = '` + job + `'`, 1},
 		{"tier_limits", `SELECT count(*) FROM tier_limits WHERE tier = 'community' AND limit_key = 'max_sync_units' AND limit_value = '4'`, 1},
-		{"go_api_routing_state", `SELECT count(*) FROM go_api_routing_state WHERE mode = 'primary'`, 1},
+		{"go_api_class_decision", `SELECT count(*) FROM go_api_class_decision WHERE mode = 'primary'`, 1},
 	} {
 		var got int
 		if err := pool.QueryRow(ctx, table.query).Scan(&got); err != nil {

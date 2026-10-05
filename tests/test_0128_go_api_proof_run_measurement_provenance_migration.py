@@ -299,6 +299,20 @@ def test_registry_ddl_mirror_covers_every_migrated_column() -> None:
     )
     column_pattern = re.compile(r'sa\.Column\(\s*"([a-z_]+)"')
 
+    # The one table these migrations create that the mirror no longer declares:
+    # alembic 0147 (CHAOS-8706) dropped it. Named explicitly -- the checked set is
+    # NOT derived from the tables the mirror still declares, so any other missing
+    # table or column still fails. Only the columns of this table's own
+    # create_table call are exempt (0127's shared loop also adds columns to
+    # go_api_proof_run, which stay required).
+    dropped_tables = {"go_api_routing_state": "dropped by 0147"}
+    for table in dropped_tables:
+        assert f"CREATE TABLE {table} " not in ddl, (
+            f"{table} is exempt as {dropped_tables[table]}, yet the mirror still declares it"
+        )
+    table_pattern = re.compile(r'op\.create_table\(\s*(?:"([a-z_]+)"|(_[A-Z_]+))')
+    constant_pattern = re.compile(r'^(_[A-Z_]+) = "([a-z_]+)"$', re.MULTILINE)
+
     checked = 0
     missing: list[str] = []
     for migration in (
@@ -308,11 +322,24 @@ def test_registry_ddl_mirror_covers_every_migrated_column() -> None:
         "0129_add_go_api_proof_run_build_binding.py",
     ):
         source = (_ALEMBIC_DIR / "versions" / migration).read_text(encoding="utf-8")
-        for match in column_pattern.finditer(source):
-            column = match.group(1)
-            checked += 1
-            if f"\t{column} " not in ddl:
-                missing.append(f"{migration}: {column}")
+        # Split at each create_table call; a chunk's columns belong to the table
+        # that call names (the chunk before the first call holds add_column calls).
+        chunks = re.split(r"(?=op\.create_table\()", source)
+        for chunk in chunks:
+            created = table_pattern.match(chunk)
+            if created:
+                constants = dict(constant_pattern.findall(source))
+                created_table = created.group(1) or constants.get(created.group(2))
+                assert created_table, (
+                    f"{migration}: cannot resolve the table of {chunk[:60]!r}"
+                )
+                if created_table in dropped_tables:
+                    continue
+            for match in column_pattern.finditer(chunk):
+                column = match.group(1)
+                checked += 1
+                if f"\t{column} " not in ddl:
+                    missing.append(f"{migration}: {column}")
 
     assert not missing, (
         "registryDDL does not declare these migrated columns -- update the "
@@ -404,7 +431,8 @@ def test_registry_ddl_mirror_matches_live_column_nullability(
     someone to run a comparison by hand.
     """
     command.upgrade(_config(), "0129")
-    for table in ("go_api_candidate_build", "go_api_routing_state", "go_api_proof_run"):
+    # go_api_routing_state is gone from the mirror and the schema (0147, CHAOS-8706).
+    for table in ("go_api_candidate_build", "go_api_proof_run"):
         migrated_columns = _columns(migrated, table)
         mirror_columns = _columns(ddl_mirror_db, table)
         assert mirror_columns, (

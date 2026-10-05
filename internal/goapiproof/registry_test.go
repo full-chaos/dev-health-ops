@@ -266,8 +266,11 @@ func TestAStaleRoutingRowRefusesTheRun(t *testing.T) {
 	if !strings.Contains(err.Error(), "dho goapi routing repoint") {
 		t.Fatalf("the refusal must name the mode-preserving re-point verb, got %v", err)
 	}
-	if !strings.Contains(err.Error(), "would also change the mode") {
-		t.Fatalf("the refusal must warn why `routing enable` is the wrong remedy here, got %v", err)
+	if !strings.Contains(err.Error(), "A document operation has no routing row to re-point") {
+		t.Fatalf("the refusal must say a document operation has no row to re-point, got %v", err)
+	}
+	if strings.Contains(err.Error(), "routing enable") {
+		t.Fatalf("the refusal names a verb that refuses catalog operations, got %v", err)
 	}
 }
 

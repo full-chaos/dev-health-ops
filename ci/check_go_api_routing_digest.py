@@ -1,13 +1,17 @@
 #!/usr/bin/env python3
 """Fail when the Go-API schema digest moves without being written down.
 
-Every ``go_api_routing_state`` row is keyed by the canonical schema digest
-of ``contracts/graphql/v1/schema.graphql``. Change that file by one byte
-and every existing routing row stops matching: the Python dispatcher's
-lookup misses, ``PostgresSwitch.Enabled`` returns false, and every request
-falls back to Python. Correctly, safely -- and completely silently.
+History: until CHAOS-8702 every ``go_api_routing_state`` row was keyed by the
+canonical schema digest of ``contracts/graphql/v1/schema.graphql``. Change that
+file by one byte and every existing routing row stopped matching: the Python
+dispatcher's lookup missed, ``PostgresSwitch.Enabled`` returned false, and every
+request fell back to Python -- correctly, safely, and completely silently. That
+table is dropped (alembic 0147, CHAOS-8706) and query-api reads no routing row,
+so a moved digest can no longer darken an operation. The pin still matters: the
+digest is what proof receipts, acr vendoring and an MCP class decision's recorded
+schema digest name, so a silent move still leaves them naming a stale schema.
 
-That is not a hypothetical. On 2026-09-01, PR #2065 (``33b3f3f21d``) moved
+The original incident. On 2026-09-01, PR #2065 (``33b3f3f21d``) moved
 the digest from ``sha256:67b87d38…`` to ``sha256:29d509cd…`` hours after
 twelve ``canary``/``100`` rows had been seeded at the old value. All twelve
 died on that commit. No test, no log line, no metric and no review comment
@@ -51,10 +55,9 @@ REGENERATE_HINT = (
     '  1. Update {pin} -> "schema_digest": "{actual}"\n'
     "  2. Add a dated row for {actual} to the '{heading}' table in {doc}\n"
     "     (the recovery procedure an operator needs is the section above it)\n"
-    "  3. Re-enable routing AFTER the query-api image is rebuilt from this\n"
-    "     SDL:  dho goapi routing enable -operations all-registered -mode canary\n"
-    "             (the build is read from the running query-api's /buildinfo)\n"
-    "     Then confirm with:  dho goapi routing status\n"
+    "  3. Rebuild the query-api image from this SDL. No routing step follows:\n"
+    "     query-api reads no routing row (CHAOS-8702) and serves every registered\n"
+    "     operation; an MCP class decision is keyed by operation, not by digest.\n"
     "  4. Re-run this checker:  python ci/check_go_api_routing_digest.py --root ."
 )
 
@@ -181,10 +184,11 @@ def main(argv: list[str] | None = None) -> int:
             f"  computed from {SDL_RELATIVE}: {actual}\n"
             f"  pinned in {PIN_RELATIVE}:     {pinned}\n"
             "\n"
-            "  Every go_api_routing_state row keyed to the pinned digest is now\n"
-            "  DEAD: both planes will fall back to Python on every request, and\n"
-            "  neither will error. This is the 2026-09-01 failure -- it went\n"
-            "  undetected for six days.\n"
+            "  The pinned digest no longer names the SDL: a consumer keyed to it\n"
+            "  (a proof receipt, a recorded schema digest) now holds a stale schema.\n"
+            "  The 2026-09-01 failure -- routing rows keyed to the old\n"
+            "  digest all died silently -- cannot recur (CHAOS-8706 dropped the\n"
+            "  table), but the move still has to be written down.\n"
             "\n"
             f"{hint}",
             file=sys.stderr,

@@ -17,8 +17,6 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/jackc/pgx/v5/pgxpool"
-
 	"github.com/full-chaos/dev-health-ops/internal/mcpclass"
 	"github.com/full-chaos/dev-health-ops/internal/queryapi/principal"
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/pgseed"
@@ -53,7 +51,7 @@ func TestCatalogRuleServesAnOperationWithNoRowAndLeavesTheClassRowsAlone(t *test
 	}
 
 	var rows int
-	if err := pool.QueryRow(context.Background(), `SELECT count(*) FROM go_api_routing_state`).Scan(&rows); err != nil || rows != 0 {
+	if err := pool.QueryRow(context.Background(), `SELECT count(*) FROM go_api_class_decision`).Scan(&rows); err != nil || rows != 0 {
 		t.Fatalf("the table must start empty for this test to measure a fresh stack: %d row(s), err %v", rows, err)
 	}
 
@@ -109,24 +107,8 @@ func TestCatalogRuleServesAnOperationWithNoRowAndLeavesTheClassRowsAlone(t *test
 		}
 	})
 
-	t.Run("a stale row (another schema digest) does not refuse its operation", func(t *testing.T) {
-		for operation, document := range map[string]string{"cognitiveLoad": registeredCognitiveLoadDocument, "reviewEdges": registeredReviewEdgesDocument} {
-			mode := map[string]string{"cognitiveLoad": "disabled", "reviewEdges": "canary"}[operation]
-			pgseed.RoutingState(context.Background(), t, pool, catalogRuleOlderSchemaDigest, digestHex(document), operation, mode)
-		}
-		if rec := postGraphQLWithVariables(t, handler, registeredCognitiveLoadDocument, token, cognitiveLoadVariables()); rec.Code == http.StatusNotFound {
-			t.Errorf("cognitiveLoad, disabled at another schema digest: status %d, want the executor's answer, not a refusal", rec.Code)
-		}
-		if rec := postGraphQLWithVariables(t, handler, registeredReviewEdgesDocument, token, reviewEdgesVariables()); rec.Code == http.StatusNotFound {
-			t.Errorf("reviewEdges, canary at another schema digest only: status %d, want the executor's answer, not a refusal", rec.Code)
-		}
-	})
-
 	t.Run("production-like rows: the document rows serve, the securityAlerts class root stays dark", func(t *testing.T) {
-		// Production: a canary document row per catalog operation, a canary class row for 13 roots, and
-		// the securityAlerts class row only at an older schema digest, in shadow (CHAOS-8143).
-		plantRoutingRow(t, pool, digestHex(registeredHotspotsDocument), "hotspots", "canary")
-		plantRoutingRow(t, pool, digestHex(registeredSecurityAlertsDocument), "securityAlerts", "canary")
+		// Production: a canary class row for 13 roots, and the securityAlerts class row in shadow (CHAOS-8143).
 		for _, root := range mcpclass.SortedRoots() {
 			if root != "securityAlerts" {
 				classRow(itTestSchemaDigest, root, "canary")
@@ -141,20 +123,4 @@ func TestCatalogRuleServesAnOperationWithNoRowAndLeavesTheClassRowsAlone(t *test
 		classRow(itTestSchemaDigest, "securityAlerts", "shadow")
 		assertClassRefusal(t, "securityAlerts, class row shadow at the live schema digest", postAsRunOperation(t, runOperation, registeredSecurityAlertsDocument, securityAlertsVariables))
 	})
-
-	t.Run("a row in a non-served mode does not hold a catalog operation dark", func(t *testing.T) {
-		for _, mode := range []string{"disabled", "python", "shadow"} {
-			plantRoutingRow(t, pool, digestHex(registeredHotspotsDocument), "hotspots", mode)
-			rec := postGraphQLWithVariables(t, handler, registeredHotspotsDocument, token, hotspotsVariables())
-			served("hotspots with a "+mode+" row", rec.Code, rec.Body.String())
-		}
-	})
-}
-
-// plantRoutingRow writes a go_api_routing_state row, which this build never reads: the tests above plant rows of every
-// mode and digest to show that serving ignores them. The only writer of the table left in this package; CHAOS-8706
-// drops the table and this test with it.
-func plantRoutingRow(t *testing.T, pool *pgxpool.Pool, documentDigest, operation, mode string) {
-	t.Helper()
-	pgseed.RoutingState(context.Background(), t, pool, itTestSchemaDigest, documentDigest, operation, mode)
 }

@@ -70,6 +70,9 @@ func TestBlockedWorkMetric_StatusFilterExcludesNonBlockedRows_LiveEngine(t *test
 	if got.Value != 0 {
 		t.Errorf("value = %v, want 0 (the seeded row's status is not 'blocked')", got.Value)
 	}
+	if got.HasData || got.HasPriorData {
+		t.Errorf("has_data=%v has_prior_data=%v, want false/false (no blocked row in either window: an empty window, not a stored 0)", got.HasData, got.HasPriorData)
+	}
 	if len(got.Drivers) != 0 {
 		t.Errorf("drivers = %+v, want empty", got.Drivers)
 	}
@@ -152,6 +155,9 @@ func TestBlockedWorkMetric_StatusFilterIncludesBlockedRows_LiveEngine(t *testing
 	}
 	if got.Value != 20.0 {
 		t.Errorf("value = %v, want 20 (the seeded row's status IS 'blocked')", got.Value)
+	}
+	if !got.HasData || got.HasPriorData {
+		t.Errorf("has_data=%v has_prior_data=%v, want true/false (the blocked row is in the current window only)", got.HasData, got.HasPriorData)
 	}
 	if len(got.Drivers) != 1 || got.Drivers[0].Value != 20.0 {
 		t.Errorf("drivers = %+v, want one 20-value driver", got.Drivers)

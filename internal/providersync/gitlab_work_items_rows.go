@@ -126,6 +126,18 @@ type gitlabClosingMergeRequestPayload struct {
 	} `json:"references"`
 }
 
+// valid reports whether the closed_by entry carries what a link needs: a positive integer iid and the MR's own
+// references.full ("<project path>!<iid>"). Anything less is an answer-shape change, never a guess: the issue's project
+// cannot stand in for the MR's, since a cross-project MR could then match a local MR with the same iid.
+func (payload gitlabClosingMergeRequestPayload) valid() bool {
+	iid, err := strconv.Atoi(payload.IID.String())
+	if err != nil || iid < 1 {
+		return false
+	}
+	path, suffix, found := strings.Cut(strings.TrimSpace(payload.References.Full), "!")
+	return found && strings.TrimSpace(path) != "" && suffix == strconv.Itoa(iid)
+}
+
 type gitlabIdentityResolver func(gitlabWorkItemUserPayload) string
 
 func resolveGitLabWorkItemIdentity(
@@ -683,29 +695,22 @@ var (
 // normalizeGitLabClosingMergeRequests emits the PRIMARY provider-attached MR<->issue link for GitLab (CHAOS-8526), the
 // counterpart of extractGitHubClosingIssueReferences: source = the MR (gitlab:<path>!<iid>, the id
 // normalizeGitLabMergeRequestWorkItem mints), target = this issue, raw kind gitlab_closing_reference. The MR's own
-// project path comes from references.full (an MR from another project keeps its path); only when that is absent does
-// the issue's project stand in.
+// project path comes from references.full (an MR from another project keeps its path); an entry without it is rejected
+// by the collector (gitlabClosingMergeRequestPayload.valid), never completed from the issue's project.
 func normalizeGitLabClosingMergeRequests(
 	claim Claim,
 	issueWorkItemID string,
-	fullName string,
 	mergeRequests []gitlabClosingMergeRequestPayload,
 	normalizedAt time.Time,
 ) []gitlabWorkItemDependencyRow {
 	rows := make([]gitlabWorkItemDependencyRow, 0, len(mergeRequests))
 	seen := make(map[string]struct{}, len(mergeRequests))
 	for _, mergeRequest := range mergeRequests {
-		iid := mergeRequest.IID.String()
-		if parsed, err := strconv.Atoi(iid); err != nil || parsed < 1 {
+		if !mergeRequest.valid() {
 			continue
 		}
-		path := strings.TrimSpace(mergeRequest.References.Full)
-		if index := strings.LastIndex(path, "!"); index >= 0 {
-			path = path[:index]
-		}
-		if path == "" {
-			path = fullName
-		}
+		iid := mergeRequest.IID.String()
+		path, _, _ := strings.Cut(strings.TrimSpace(mergeRequest.References.Full), "!")
 		source := "gitlab:" + path + "!" + iid
 		if _, duplicate := seen[source]; duplicate || source == issueWorkItemID {
 			continue

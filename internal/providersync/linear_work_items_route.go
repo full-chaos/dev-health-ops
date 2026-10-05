@@ -899,16 +899,13 @@ func validateLinearSprint(row linearSprintRow, claim Claim) error {
 }
 
 func linearTrustedSCMHosts() map[string]struct{} {
-	hosts := map[string]struct{}{
-		"github.com": {}, "www.github.com": {},
-		"gitlab.com": {}, "www.gitlab.com": {},
-	}
-	for _, value := range strings.Split(os.Getenv("LINEAR_TRUSTED_SCM_HOSTS"), ",") {
-		if host := strings.ToLower(strings.TrimSpace(value)); host != "" {
-			hosts[host] = struct{}{}
-		}
-	}
+	hosts, _ := linearTrustedSCMHostsAndRoots()
 	return hosts
+}
+
+func linearTrustedSCMHostsAndRoots() (map[string]struct{}, map[string][]string) {
+	return parseTrustedSCMHostEntries(os.Getenv("LINEAR_TRUSTED_SCM_HOSTS"),
+		"github.com", "www.github.com", "gitlab.com", "www.gitlab.com")
 }
 
 func linearAttachmentWorkItemID(attachment linearAttachmentPayload) string {
@@ -923,10 +920,14 @@ func linearAttachmentWorkItemID(attachment linearAttachmentPayload) string {
 	// Python's `_trusted_scm_hosts` compares urlsplit(...).netloc exactly.  Use
 	// URL.Host (including an explicit port) and reject userinfo so a URL that
 	// merely has a trusted hostname does not widen the Python allowlist.
-	if _, ok := linearTrustedSCMHosts()[strings.ToLower(parsed.Host)]; !ok {
+	hosts, roots := linearTrustedSCMHostsAndRoots()
+	if _, ok := hosts[strings.ToLower(parsed.Host)]; !ok {
 		return ""
 	}
-	parts := strings.Split(strings.Trim(parsed.Path, "/"), "/")
+	parts, ok := stripSCMURLRoot(roots, parsed.Host, strings.Split(strings.Trim(parsed.Path, "/"), "/"))
+	if !ok {
+		return ""
+	}
 	if strings.Contains(sourceType, "github") && len(parts) >= 4 &&
 		parts[len(parts)-2] == "pull" {
 		return "ghpr:" + strings.Join(parts[:len(parts)-2], "/") + "#" + parts[len(parts)-1]

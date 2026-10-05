@@ -346,7 +346,7 @@ func (handler GitLabWorkItemsRouteHandler) Collect(
 					"error_class", errorClass, "error_type", errorType)
 			} else {
 				counted.Metrics.RecordGitLabClosingMRFetch("synced")
-				closingRows := normalizeGitLabClosingMergeRequests(claim, item.WorkItemID, fullName, closing, normalizedAt)
+				closingRows := normalizeGitLabClosingMergeRequests(claim, item.WorkItemID, closing, normalizedAt)
 				closingSynced += len(closingRows)
 				rows.Dependencies = append(rows.Dependencies, closingRows...)
 			}
@@ -623,7 +623,7 @@ func collectGitLabClosingMergeRequests(
 	result := make([]gitlabClosingMergeRequestPayload, 0, len(items))
 	for _, raw := range items {
 		var payload gitlabClosingMergeRequestPayload
-		if err := json.Unmarshal(raw, &payload); err != nil {
+		if err := json.Unmarshal(raw, &payload); err != nil || !payload.valid() {
 			return nil, pages, providerfoundation.ErrNormalizationInvalid
 		}
 		result = append(result, payload)
@@ -665,7 +665,7 @@ var _ CompleteRouteHandler = GitLabWorkItemsRouteHandler{}
 
 // gitLabClosingFetchOutcome classifies a failed closed_by fetch for the watermark (D4771). Terminal outcomes repeat on
 // every run for the same issue, so retrying cannot help: terminal_unavailable (404/403, not readable with this
-// credential), terminal_page_cap (the answer exceeds the page cap) and terminal_undecodable (the answer does not decode).
+// credential; a rate-limited 403 is not that, it clears with time), terminal_page_cap (the answer exceeds the page cap) and terminal_undecodable (the answer does not decode).
 // Anything else (5xx, timeout, 429, network, or an error that is not a ProviderError) is transient_failed, the safe side
 // for a watermark.
 func gitLabClosingFetchOutcome(err error) string {
@@ -676,7 +676,7 @@ func gitLabClosingFetchOutcome(err error) string {
 		return "terminal_undecodable"
 	}
 	var providerErr *providerfoundation.ProviderError
-	if errors.As(err, &providerErr) && providerErr != nil &&
+	if errors.As(err, &providerErr) && providerErr != nil && providerErr.Class != providerfoundation.ErrorRateLimited &&
 		(providerErr.StatusCode == http.StatusNotFound || providerErr.StatusCode == http.StatusForbidden) {
 		return "terminal_unavailable"
 	}

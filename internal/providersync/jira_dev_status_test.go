@@ -369,3 +369,22 @@ func assertDevStatusOutcomes(t *testing.T, outcomes []jiraDevStatusTypeOutcome, 
 		t.Fatalf("per-type outcomes=%q want=%q", got, want)
 	}
 }
+
+// A self-managed instance under a relative URL root keeps the root out of the project path: the host is configured as
+// "host/root" and the root is stripped; a URL on that host outside the root is not an id.
+func TestJiraDevStatusPullRequestSourceIDStripsConfiguredURLRoot(t *testing.T) {
+	t.Setenv("JIRA_TRUSTED_SCM_HOSTS", "git.internal.example.com/gitlab, other.example.com")
+	cases := map[string]struct{ url, want string }{
+		"relative root stripped":           {"https://git.internal.example.com/gitlab/group/subgroup/project/-/merge_requests/9", "gitlab:group/subgroup/project!9"},
+		"two-segment project":              {"https://git.internal.example.com/gitlab/acme/api/-/merge_requests/9", "gitlab:acme/api!9"},
+		"outside the root is rejected":     {"https://git.internal.example.com/group/project/-/merge_requests/9", ""},
+		"root only, no project":            {"https://git.internal.example.com/gitlab/-/merge_requests/9", ""},
+		"host without a root is untouched": {"https://other.example.com/acme/api/-/merge_requests/9", "gitlab:acme/api!9"},
+		"default host untouched":           {"https://gitlab.com/acme/api/-/merge_requests/9", "gitlab:acme/api!9"},
+	}
+	for name, c := range cases {
+		if got := jiraDevStatusPullRequestSourceID(c.url); got != c.want {
+			t.Errorf("%s: %q want %q", name, got, c.want)
+		}
+	}
+}

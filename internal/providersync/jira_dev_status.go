@@ -98,15 +98,12 @@ func fetchJiraDevStatusPullRequests(
 // set (parity ruled, team-lead 2026-09-01) under its own env var, since this
 // route's trust boundary is independently configurable from Linear's.
 func jiraTrustedSCMHosts() map[string]struct{} {
-	hosts := map[string]struct{}{
-		"github.com": {}, "www.github.com": {}, "gitlab.com": {},
-	}
-	for _, value := range strings.Split(os.Getenv("JIRA_TRUSTED_SCM_HOSTS"), ",") {
-		if host := strings.ToLower(strings.TrimSpace(value)); host != "" {
-			hosts[host] = struct{}{}
-		}
-	}
+	hosts, _ := jiraTrustedSCMHostsAndRoots()
 	return hosts
+}
+
+func jiraTrustedSCMHostsAndRoots() (map[string]struct{}, map[string][]string) {
+	return parseTrustedSCMHostEntries(os.Getenv("JIRA_TRUSTED_SCM_HOSTS"), "github.com", "www.github.com", "gitlab.com")
 }
 
 // jiraDevStatusPullRequestSourceID parses a PR/MR URL from the dev-status
@@ -121,10 +118,14 @@ func jiraDevStatusPullRequestSourceID(rawURL string) string {
 	if err != nil || parsed.Host == "" || parsed.User != nil {
 		return ""
 	}
-	if _, ok := jiraTrustedSCMHosts()[strings.ToLower(parsed.Host)]; !ok {
+	hosts, roots := jiraTrustedSCMHostsAndRoots()
+	if _, ok := hosts[strings.ToLower(parsed.Host)]; !ok {
 		return ""
 	}
-	parts := strings.Split(strings.Trim(parsed.Path, "/"), "/")
+	parts, ok := stripSCMURLRoot(roots, parsed.Host, strings.Split(strings.Trim(parsed.Path, "/"), "/"))
+	if !ok {
+		return ""
+	}
 	if len(parts) >= 4 && parts[len(parts)-2] == "pull" {
 		return "ghpr:" + strings.Join(parts[:len(parts)-2], "/") + "#" + parts[len(parts)-1]
 	}

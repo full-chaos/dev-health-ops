@@ -6,6 +6,8 @@ import (
 	"log/slog"
 	"strings"
 	"testing"
+
+	"github.com/full-chaos/dev-health-ops/internal/platform/secrets"
 )
 
 const llmKeySentinel = "sentinel-value-8716-not-a-key"
@@ -30,6 +32,16 @@ func assertNoKey(t *testing.T, name string, subject any) {
 		outputs["slog.Any/"+label] = anyBuf.String()
 		outputs["slog.Group/"+label] = groupBuf.String()
 	}
+	wrapped := fmt.Errorf("op failed: %v", subject)
+	outputs["error %v"] = wrapped.Error()
+	outputs["error %w"] = fmt.Errorf("op failed: %w", wrapped).Error()
+	holder := struct{ hidden any }{subject}
+	holderPtr := &holder
+	for _, verb := range []string{"%v", "%+v", "%#v", "%s", "%q", "%d", "%x"} {
+		outputs["unexported holder "+verb] = fmt.Sprintf(verb, holder)
+		outputs["unexported holder ptr "+verb] = fmt.Sprintf(verb, holderPtr)
+		outputs["slice "+verb] = fmt.Sprintf(verb, []any{subject})
+	}
 	for label, out := range outputs {
 		if strings.Contains(out, llmKeySentinel) {
 			t.Errorf("%s: %s output leaks the API key: %s", name, label, out)
@@ -50,9 +62,9 @@ func assertNoKey(t *testing.T, name string, subject any) {
 }
 
 func TestProviderStructsRedactAPIKey(t *testing.T) {
-	openAI := OpenAIProviderConfig{APIKey: llmKeySentinel, Model: "m"}
-	local := LocalProviderConfig{APIKey: llmKeySentinel}
-	ollama := OllamaProviderConfig{APIKey: llmKeySentinel}
+	openAI := OpenAIProviderConfig{APIKey: secrets.NewHidden(llmKeySentinel), Model: "m"}
+	local := LocalProviderConfig{APIKey: secrets.NewHidden(llmKeySentinel)}
+	ollama := OllamaProviderConfig{APIKey: secrets.NewHidden(llmKeySentinel)}
 	subjects := map[string]any{
 		"OpenAIProviderConfig": openAI, "*OpenAIProviderConfig": &openAI,
 		"LocalProviderConfig": local, "*LocalProviderConfig": &local,
@@ -69,13 +81,13 @@ func TestProviderStructsRedactAPIKey(t *testing.T) {
 }
 
 func TestProviderConfigStillCarriesRealKey(t *testing.T) {
-	if got := NewOpenAIProvider(OpenAIProviderConfig{APIKey: llmKeySentinel}).cfg.APIKey; got != llmKeySentinel {
+	if got := NewOpenAIProvider(OpenAIProviderConfig{APIKey: secrets.NewHidden(llmKeySentinel)}).cfg.APIKey.Reveal(); got != llmKeySentinel {
 		t.Fatalf("OpenAI cfg.APIKey changed: %q", got)
 	}
-	if got := NewLocalProvider(LocalProviderConfig{APIKey: llmKeySentinel}).cfg.APIKey; got != llmKeySentinel {
+	if got := NewLocalProvider(LocalProviderConfig{APIKey: secrets.NewHidden(llmKeySentinel)}).cfg.APIKey.Reveal(); got != llmKeySentinel {
 		t.Fatalf("Local cfg.APIKey changed: %q", got)
 	}
-	if got := NewOllamaProvider(OllamaProviderConfig{APIKey: llmKeySentinel}).cfg.APIKey; got != llmKeySentinel {
+	if got := NewOllamaProvider(OllamaProviderConfig{APIKey: secrets.NewHidden(llmKeySentinel)}).cfg.APIKey.Reveal(); got != llmKeySentinel {
 		t.Fatalf("Ollama cfg.APIKey changed: %q", got)
 	}
 }

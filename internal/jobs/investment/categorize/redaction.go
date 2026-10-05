@@ -14,7 +14,6 @@ import (
 
 func (c OpenAIProviderConfig) redacted() any {
 	type plain OpenAIProviderConfig
-	c.APIKey = secrets.RedactString(c.APIKey)
 	return plain(c)
 }
 
@@ -25,7 +24,6 @@ func (c OpenAIProviderConfig) LogValue() slog.Value { return secrets.LogRedacted
 
 func (c LocalProviderConfig) redacted() any {
 	type plain LocalProviderConfig
-	c.APIKey = secrets.RedactString(c.APIKey)
 	return plain(c)
 }
 
@@ -36,7 +34,6 @@ func (c LocalProviderConfig) LogValue() slog.Value { return secrets.LogRedacted(
 
 func (c OllamaProviderConfig) redacted() any {
 	type plain OllamaProviderConfig
-	c.APIKey = secrets.RedactString(c.APIKey)
 	return plain(c)
 }
 

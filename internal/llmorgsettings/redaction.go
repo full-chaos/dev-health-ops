@@ -9,7 +9,6 @@ import (
 
 func (c Credentials) redacted() any {
 	type plain Credentials
-	c.APIKey = secrets.RedactString(c.APIKey)
 	return plain(c)
 }
 

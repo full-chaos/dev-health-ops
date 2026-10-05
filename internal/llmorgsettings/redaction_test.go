@@ -6,6 +6,8 @@ import (
 	"log/slog"
 	"strings"
 	"testing"
+
+	"github.com/full-chaos/dev-health-ops/internal/platform/secrets"
 )
 
 const llmKeySentinel = "sentinel-value-8716-not-a-key"
@@ -30,6 +32,16 @@ func assertNoKey(t *testing.T, name string, subject any) {
 		outputs["slog.Any/"+label] = anyBuf.String()
 		outputs["slog.Group/"+label] = groupBuf.String()
 	}
+	wrapped := fmt.Errorf("op failed: %v", subject)
+	outputs["error %v"] = wrapped.Error()
+	outputs["error %w"] = fmt.Errorf("op failed: %w", wrapped).Error()
+	holder := struct{ hidden any }{subject}
+	holderPtr := &holder
+	for _, verb := range []string{"%v", "%+v", "%#v", "%s", "%q", "%d", "%x"} {
+		outputs["unexported holder "+verb] = fmt.Sprintf(verb, holder)
+		outputs["unexported holder ptr "+verb] = fmt.Sprintf(verb, holderPtr)
+		outputs["slice "+verb] = fmt.Sprintf(verb, []any{subject})
+	}
 	for label, out := range outputs {
 		if strings.Contains(out, llmKeySentinel) {
 			t.Errorf("%s: %s output leaks the API key: %s", name, label, out)
@@ -50,10 +62,10 @@ func assertNoKey(t *testing.T, name string, subject any) {
 }
 
 func TestCredentialsRedactAPIKey(t *testing.T) {
-	creds := Credentials{APIKey: llmKeySentinel, BaseURL: "https://example.invalid"}
+	creds := Credentials{APIKey: secrets.NewHidden(llmKeySentinel), BaseURL: "https://example.invalid"}
 	assertNoKey(t, "Credentials", creds)
 	assertNoKey(t, "*Credentials", &creds)
-	if creds.APIKey != llmKeySentinel {
+	if creds.APIKey.Reveal() != llmKeySentinel {
 		t.Fatal("APIKey field value changed")
 	}
 }

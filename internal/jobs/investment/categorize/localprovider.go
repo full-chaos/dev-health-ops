@@ -10,6 +10,7 @@ import (
 	"net/http"
 
 	"github.com/full-chaos/dev-health-ops/internal/platform/logging"
+	"github.com/full-chaos/dev-health-ops/internal/platform/secrets"
 )
 
 // LocalProviderConfig configures LocalProvider.
@@ -26,7 +27,7 @@ type LocalProviderConfig struct {
 	// rather than invent one). Set LOCAL_LLM_MODEL to override.
 	Model string
 	// APIKey is sent as a bearer token; most local servers ignore it.
-	APIKey          string `json:"-"`
+	APIKey          secrets.Hidden `json:"-"`
 	MaxOutputTokens int
 	// Temperature is a pointer so an explicitly requested 0.0 (deterministic
 	// sampling -- a valid Chat Completions value) is distinguishable from
@@ -65,8 +66,8 @@ func NewLocalProvider(cfg LocalProviderConfig) *LocalProvider {
 	if cfg.Model == "" {
 		cfg.Model = defaultLocalModel
 	}
-	if cfg.APIKey == "" {
-		cfg.APIKey = defaultLocalAPIKey
+	if !cfg.APIKey.Configured() {
+		cfg.APIKey = secrets.NewHidden(defaultLocalAPIKey)
 	}
 	if cfg.MaxOutputTokens <= 0 {
 		cfg.MaxOutputTokens = defaultLocalMaxTokens
@@ -200,7 +201,7 @@ func (p *LocalProvider) executeChatCompletionRequest(ctx context.Context, body l
 		return "", nil, fmt.Errorf("build request: %w", err)
 	}
 	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("Authorization", "Bearer "+p.cfg.APIKey)
+	req.Header.Set("Authorization", "Bearer "+p.cfg.APIKey.Reveal())
 
 	resp, err := httpguard.NoRedirects(p.client).Do(req) // the API key rides this request
 	if err != nil {

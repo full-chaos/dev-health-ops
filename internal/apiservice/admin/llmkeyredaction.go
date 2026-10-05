@@ -12,9 +12,11 @@ import (
 // slog) hides it.
 
 func (c readinessBYOConfig) redacted() any {
-	type plain readinessBYOConfig
-	c.apiKey = secrets.RedactString(c.apiKey)
-	return plain(c)
+	return struct {
+		Provider, Model string
+		APIKey          secrets.Hidden
+		BaseURL         string
+	}{c.provider, c.model, c.apiKey, c.baseURL}
 }
 
 func (c readinessBYOConfig) Format(state fmt.State, verb rune) {

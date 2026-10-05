@@ -3,6 +3,8 @@ package llmorgsettings
 import (
 	"context"
 	"strings"
+
+	"github.com/full-chaos/dev-health-ops/internal/platform/secrets"
 )
 
 // knownProviders mirrors llm/credentials.py's _is_known_llm_provider (the
@@ -93,7 +95,7 @@ func credentialsComplete(provider, apiKey string) bool {
 
 // Credentials is an org's BYO api_key/base_url pair for one provider.
 type Credentials struct {
-	APIKey  string `json:"-"`
+	APIKey  secrets.Hidden `json:"-"`
 	BaseURL string
 }
 
@@ -123,11 +125,11 @@ func (s Store) ResolveUsableProvider(ctx context.Context, orgID string) (string,
 	if !isKnownProvider(provider) {
 		return "", nil
 	}
-	creds := Credentials{APIKey: settings[keyAPIKey], BaseURL: settings[keyBaseURL]}
-	if creds.APIKey == "" && creds.BaseURL == "" {
+	creds := Credentials{APIKey: secrets.NewHidden(settings[keyAPIKey]), BaseURL: settings[keyBaseURL]}
+	if !creds.APIKey.Configured() && creds.BaseURL == "" {
 		return "", nil
 	}
-	if !credentialsComplete(provider, creds.APIKey) {
+	if !credentialsComplete(provider, creds.APIKey.Reveal()) {
 		return "", nil
 	}
 	// An escaped ValueError (a malformed IPv6 bracket) raises in Python; it is
@@ -163,11 +165,11 @@ func (s Store) Credentials(ctx context.Context, orgID, provider string) (Credent
 	if requested != "auto" && requested != configured {
 		return Credentials{}, false, nil
 	}
-	creds := Credentials{APIKey: settings[keyAPIKey], BaseURL: settings[keyBaseURL]}
-	if creds.APIKey == "" && creds.BaseURL == "" {
+	creds := Credentials{APIKey: secrets.NewHidden(settings[keyAPIKey]), BaseURL: settings[keyBaseURL]}
+	if !creds.APIKey.Configured() && creds.BaseURL == "" {
 		return Credentials{}, false, nil
 	}
-	if !credentialsComplete(requested, creds.APIKey) {
+	if !credentialsComplete(requested, creds.APIKey.Reveal()) {
 		return Credentials{}, false, nil
 	}
 	ok, _, verr := ValidateBaseURLChecked(ctx, creds.BaseURL)

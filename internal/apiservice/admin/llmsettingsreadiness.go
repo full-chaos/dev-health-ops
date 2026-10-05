@@ -11,6 +11,7 @@ import (
 
 	"github.com/full-chaos/dev-health-ops/internal/api/policy"
 	"github.com/full-chaos/dev-health-ops/internal/llmorgsettings"
+	"github.com/full-chaos/dev-health-ops/internal/platform/secrets"
 )
 
 // CHAOS-6976: POST /llm-settings/readiness (settings.py:352-466,
@@ -87,16 +88,17 @@ const readinessModelNotSupportedMessage = "The configured Ask Dev model is not s
 type readinessBYOConfig struct {
 	provider string
 	model    string
-	apiKey   string
+	apiKey   secrets.Hidden
 	baseURL  string
 }
 
 func (h *handlers) loadReadinessBYOConfig(ctx context.Context, orgID string) (readinessBYOConfig, error) {
 	var cfg readinessBYOConfig
+	var apiKey string
 	for key, dest := range map[string]*string{
 		"provider": &cfg.provider,
 		"model":    &cfg.model,
-		"api_key":  &cfg.apiKey,
+		"api_key":  &apiKey,
 		"base_url": &cfg.baseURL,
 	} {
 		row, err := settingByKeyOn(ctx, h.store.Pool, orgID, llmCategory, key)
@@ -109,6 +111,7 @@ func (h *handlers) loadReadinessBYOConfig(ctx context.Context, orgID string) (re
 		}
 		*dest = strOrEmpty(value)
 	}
+	cfg.apiKey = secrets.NewHidden(apiKey)
 	return cfg, nil
 }
 
@@ -138,7 +141,7 @@ func (h *handlers) postLLMSettingsReadiness(w http.ResponseWriter, r *http.Reque
 		h.internalError(ctx, w, "read byo llm config", err)
 		return
 	}
-	if cfg.provider == "" && cfg.model == "" && cfg.apiKey == "" && cfg.baseURL == "" {
+	if cfg.provider == "" && cfg.model == "" && !cfg.apiKey.Configured() && cfg.baseURL == "" {
 		policy.WriteDetail(w, http.StatusNotFound, readinessNoBYOConfigMessage, nil)
 		return
 	}
@@ -155,7 +158,7 @@ func (h *handlers) postLLMSettingsReadiness(w http.ResponseWriter, r *http.Reque
 		h.internalError(ctx, w, "validate byo base url", err)
 		return
 	}
-	usable := cfg.model != "" && cfg.apiKey != "" && validURL
+	usable := cfg.model != "" && cfg.apiKey.Configured() && validURL
 	if !usable {
 		policy.WriteDetail(w, http.StatusNotFound, readinessNoBYOConfigMessage, nil)
 		return
@@ -166,10 +169,10 @@ func (h *handlers) postLLMSettingsReadiness(w http.ResponseWriter, r *http.Reque
 	// pagerduty_oauth_callback.go's calls already use, see
 	// newOpenAICompatibleReadinessProber's own doc comment.
 	var prober readinessProber = newOpenAICompatibleReadinessProber(h.upstreamDoer)
-	outcome, safeErrorCode := prober.probe(ctx, resolvedProvider, cfg.model, cfg.baseURL, cfg.apiKey)
+	outcome, safeErrorCode := prober.probe(ctx, resolvedProvider, cfg.model, cfg.baseURL, cfg.apiKey.Reveal())
 
 	record := agentReadinessRecord{
-		Fingerprint:      readinessFingerprint(resolvedProvider, cfg.model, cfg.baseURL, cfg.apiKey),
+		Fingerprint:      readinessFingerprint(resolvedProvider, cfg.model, cfg.baseURL, cfg.apiKey.Reveal()),
 		ReadinessVersion: askDevReadinessVersion,
 		CheckedAt:        h.store.now().UTC().Format(time.RFC3339Nano),
 		Outcome:          outcome,

@@ -12,6 +12,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"github.com/full-chaos/dev-health-ops/internal/mcpclass"
 
 	"github.com/jackc/pgx/v5"
 )
@@ -97,13 +98,15 @@ const noLiveRowCensusSQL = `
 SELECT count(*) FILTER (WHERE schema_digest = $1),
        count(*) FILTER (WHERE schema_digest <> $1 AND mode = ANY($2)),
        count(*)
-  FROM public.go_api_routing_state`
+  FROM public.go_api_routing_state
+ WHERE left(selected_operation, ` + mcpClassPrefixLength + `) <> '` + mcpclass.OperationPrefix + `'`
 
 // darkRowsElsewhereSQL lists every row once the census has found them all dark
 // and none at $1, in the table's one total order.
 const darkRowsElsewhereSQL = `
 SELECT schema_digest, document_digest, selected_operation, mode
   FROM public.go_api_routing_state
+ WHERE left(selected_operation, ` + mcpClassPrefixLength + `) <> '` + mcpclass.OperationPrefix + `'
  ORDER BY selected_operation, schema_digest, document_digest`
 
 // noLiveRowAnswer is what a verb whose survey found no row at its schema digest
@@ -265,7 +268,18 @@ SELECT ` + carryRowColumns + routingRowSource + `
 // it, and reading it under a lock is what put the two writers in opposite
 // orders.
 const surveyRoutingRowsSQL = `
-SELECT ` + routingRowColumns + routingRowSource
+SELECT ` + routingRowColumns + documentRoutingRowSource
+
+// documentRoutingRowSource is routingRowSource without the MCP class rows: a class root is decided by
+// go_api_class_decision (CHAOS-8735), so the document verbs (repoint, disable) neither survey nor lock a
+// legacy class row, and a stale one at another digest cannot make them refuse.
+const documentRoutingRowSource = `
+  FROM public.go_api_routing_state
+ WHERE schema_digest = $1
+   AND left(selected_operation, ` + mcpClassPrefixLength + `) <> '` + mcpclass.OperationPrefix + `'
+ ORDER BY selected_operation, document_digest`
+
+const mcpClassPrefixLength = "4"
 
 // selectRepointCandidatesSQL is that same read, now LOCKING.
 //

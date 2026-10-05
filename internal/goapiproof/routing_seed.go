@@ -35,6 +35,8 @@ import (
 
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
+
+	"github.com/full-chaos/dev-health-ops/internal/mcpclass"
 )
 
 // SeedMode is the only mode `seed` writes.
@@ -333,6 +335,9 @@ func classifySeed(rows []seedStateRow, request SeedRequest, operation, documentD
 }
 
 func seedOne(ctx context.Context, tx pgx.Tx, request SeedRequest, evidence, operation string, now time.Time) (SeedOutcome, error) {
+	if mcpclass.IsOperation(operation) {
+		return seedClassDecision(ctx, tx, request, evidence, operation)
+	}
 	documentDigest := request.DocumentDigest[operation]
 	read := func() ([]seedStateRow, error) {
 		rs, err := tx.Query(ctx, seedLockedRowsSQL, operation)

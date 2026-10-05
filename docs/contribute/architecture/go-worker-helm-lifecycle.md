@@ -155,6 +155,11 @@ weight-0 Job (`migrations.hook.celeryRiverCutover`,
 values; a database built under other settings must be re-created from the
 head.
 
+`migrations.hook.classDecisionLiveSchemaDigest` (CHAOS-8744) has no default.
+When it is set, the chart passes it to the weight-0 Job as the env
+`DHO_CLASS_DECISION_LIVE_SCHEMA_DIGEST`; when it is empty, the Job has no such
+env. The chart refuses a value that is not `sha256:<64 hex>`.
+
 ## Drain and rollout safety
 
 Three separate properties, each enforced at render time so a misconfiguration

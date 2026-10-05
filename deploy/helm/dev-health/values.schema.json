@@ -63,6 +63,11 @@
               ]
             },
             "localBundledPostgres": { "type": "boolean" },
+            "classDecisionLiveSchemaDigest": {
+              "type": "string",
+              "pattern": "^(sha256:[0-9a-f]{64})?$",
+              "description": "CHAOS-8744: the schema_digest of the running query-api's GET /registry, read before the upgrade; the migrate Job gets it as env DHO_CLASS_DECISION_LIVE_SCHEMA_DIGEST (Postgres migration 0146). Empty means unset."
+            },
             "routeActivate": {
               "type": "object",
               "properties": {

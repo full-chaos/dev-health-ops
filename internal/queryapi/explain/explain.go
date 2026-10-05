@@ -116,8 +116,9 @@ type Contributor struct {
 }
 
 // Response ports api/models/schemas.py's ExplainResponse model (the first
-// eight fields), followed by the Go-only fields of CHAOS-8103 that the Python
-// model never had: Repositories and SourceURL (repositories.go).
+// eight fields), followed by Go-only fields that the Python model never had:
+// Repositories and SourceURL (CHAOS-8103), then the window-presence flags
+// (CHAOS-8491). The order keeps the frozen Python response oracle intact.
 type Response struct {
 	Metric         string                    `json:"metric"`
 	Label          string                    `json:"label"`
@@ -135,6 +136,10 @@ type Response struct {
 	// when the scope is one repository; null otherwise and when none is
 	// stored.
 	SourceURL *string `json:"source_url"`
+	// HasData / HasPriorData (CHAOS-8491): the current / comparison window holds a stored
+	// value. When false, the matching value (or the delta's base) is a placeholder 0.
+	HasData      bool `json:"has_data"`
+	HasPriorData bool `json:"has_prior_data"`
 }
 
 // safeFloat ports api/utils/numeric.py's safe_float for an already-float64

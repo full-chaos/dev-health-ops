@@ -410,6 +410,18 @@ func TestVenueOracleQueryAPIDictOrder(t *testing.T) {
 			// side; and its spark timestamps are CHAOS-6605.
 			goBody = freshnessObject(t, goBody)
 		}
+		if tc.Kind == "home" {
+			if recorder.Code != answer.Status {
+				t.Errorf("%s: status DIFF\n python %d %s\n go     %d", tc.Name, answer.Status, answer.Error, recorder.Code)
+				continue
+			}
+			// CHAOS-8169 / GWC D4834: the frozen a484 Python response keeps
+			// executing. This ledger permits only the approved empty-window
+			// difference and makes every other JSON leaf strict.
+			assertCHAOS8169HomeNoDataLedger(t, pythonBody, goBody)
+			same++
+			continue
+		}
 		if recorder.Code != answer.Status || goBody != pythonBody {
 			t.Errorf("%s: DIFF\n python %d %s %s\n go     %d %s", tc.Name, answer.Status, pythonBody, answer.Error, recorder.Code, goBody)
 			continue

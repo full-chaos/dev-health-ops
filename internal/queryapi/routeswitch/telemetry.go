@@ -49,32 +49,3 @@ func defaultRecordDigestMiss(ctx context.Context, operation, schemaDigest, docum
 	slog.WarnContext(ctx, "routeswitch: no go_api_routing_state row for operation; falling back to Python",
 		"operation", operation, "schema_digest", schemaDigest, "document_digest", documentDigest)
 }
-
-// ReasonCatalogNoRow is the reason value of the one decision that serves an operation with no routing
-// row (CHAOS-8517): a closed vocabulary, never a value from a request.
-const ReasonCatalogNoRow = "catalog_no_row"
-
-// servedWithoutRowMetric names the counter of that decision.
-const servedWithoutRowMetric = "devhealth_query_api_routeswitch_served_without_row_total"
-
-var servedWithoutRowCounter = mustRouteswitchCounter(
-	servedWithoutRowMetric,
-	"PostgresSwitch.Enabled decisions that served a registered operation with no go_api_routing_state row at any schema digest, by operation and reason",
-)
-
-// recordServedWithoutRow is a package var for the reason recordDigestMiss is: the signal is the only
-// thing that tells "served because a row says so" from "served because no row exists", so a test must
-// be able to see it fire.
-var recordServedWithoutRow = defaultRecordServedWithoutRow
-
-// defaultRecordServedWithoutRow counts every such decision and logs the first one per operation per
-// process: on a stack with an empty table it is every request, and a line per request would bury the
-// log it is meant to inform. No request content: the operation is the registered document's name.
-func defaultRecordServedWithoutRow(ctx context.Context, operation string, first bool) {
-	servedWithoutRowCounter.Add(ctx, 1, metric.WithAttributes(
-		attribute.String("operation", operation), attribute.String("reason", ReasonCatalogNoRow)))
-	if first {
-		slog.InfoContext(ctx, "routeswitch: operation served with no go_api_routing_state row (catalog rule)",
-			"operation", operation, "reason", ReasonCatalogNoRow)
-	}
-}

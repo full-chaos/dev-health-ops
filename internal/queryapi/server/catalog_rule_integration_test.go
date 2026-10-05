@@ -2,13 +2,12 @@
 
 package server
 
-// CHAOS-8517 wiring proof: the REAL newQueryHandler (real Mux, the catalog switch over a real, migrated
-// Postgres, real gqlgen) serves a registered operation that has no routing row, and nothing else moved:
-// the class gate of /query/run-operation and the MCP listener keep every root dark until its class row
-// says otherwise (securityAlerts with them), the proof route still needs a row, a document that is not a
-// registered text is refused, and a row -- at the live digest or left at another one -- still holds an
-// operation dark. routeswitch's own tests pin the rule; this pins that the routes are wired to it and
-// that the class rows are not.
+// CHAOS-8702 wiring proof: the REAL newQueryHandler (real Mux, the catalog switch over a real, migrated
+// Postgres, real gqlgen) serves a registered operation whatever its routing row says -- no row, a row
+// left at another schema digest, a row in shadow, python or disabled -- and nothing else moved: the
+// class gate of /query/run-operation and the MCP listener keep every root dark until its class row says
+// otherwise (securityAlerts with them), the proof route still needs a row, and a document that is not a
+// registered text is refused.
 
 import (
 	"context"
@@ -107,16 +106,16 @@ func TestCatalogRuleServesAnOperationWithNoRowAndLeavesTheClassRowsAlone(t *test
 		}
 	})
 
-	t.Run("a row left at another schema digest still holds its operation dark", func(t *testing.T) {
+	t.Run("a stale row (another schema digest) does not refuse its operation", func(t *testing.T) {
 		for operation, document := range map[string]string{"cognitiveLoad": registeredCognitiveLoadDocument, "reviewEdges": registeredReviewEdgesDocument} {
 			mode := map[string]string{"cognitiveLoad": "disabled", "reviewEdges": "canary"}[operation]
 			pgseed.RoutingState(context.Background(), t, pool, catalogRuleOlderSchemaDigest, digestHex(document), operation, mode)
 		}
-		if rec := postGraphQLWithVariables(t, handler, registeredCognitiveLoadDocument, token, cognitiveLoadVariables()); rec.Code != http.StatusNotFound {
-			t.Errorf("cognitiveLoad, disabled at another schema digest: status %d, want 404", rec.Code)
+		if rec := postGraphQLWithVariables(t, handler, registeredCognitiveLoadDocument, token, cognitiveLoadVariables()); rec.Code == http.StatusNotFound {
+			t.Errorf("cognitiveLoad, disabled at another schema digest: status %d, want the executor's answer, not a refusal", rec.Code)
 		}
-		if rec := postGraphQLWithVariables(t, handler, registeredReviewEdgesDocument, token, reviewEdgesVariables()); rec.Code != http.StatusNotFound {
-			t.Errorf("reviewEdges, canary at another schema digest only: status %d, want 404 (a stale row, as before)", rec.Code)
+		if rec := postGraphQLWithVariables(t, handler, registeredReviewEdgesDocument, token, reviewEdgesVariables()); rec.Code == http.StatusNotFound {
+			t.Errorf("reviewEdges, canary at another schema digest only: status %d, want the executor's answer, not a refusal", rec.Code)
 		}
 	})
 
@@ -140,12 +139,11 @@ func TestCatalogRuleServesAnOperationWithNoRowAndLeavesTheClassRowsAlone(t *test
 		assertClassRefusal(t, "securityAlerts, class row shadow at the live schema digest", postAsRunOperation(t, runOperation, registeredSecurityAlertsDocument, securityAlertsVariables))
 	})
 
-	t.Run("a row in a non-served mode holds a catalog operation dark", func(t *testing.T) {
+	t.Run("a row in a non-served mode does not hold a catalog operation dark", func(t *testing.T) {
 		for _, mode := range []string{"disabled", "python", "shadow"} {
 			setRoutingMode(t, pool, digestHex(registeredHotspotsDocument), "hotspots", mode)
-			if rec := postGraphQLWithVariables(t, handler, registeredHotspotsDocument, token, hotspotsVariables()); rec.Code != http.StatusNotFound {
-				t.Errorf("hotspots with a %s row: status %d, want 404", mode, rec.Code)
-			}
+			rec := postGraphQLWithVariables(t, handler, registeredHotspotsDocument, token, hotspotsVariables())
+			served("hotspots with a "+mode+" row", rec.Code, rec.Body.String())
 		}
 	})
 }

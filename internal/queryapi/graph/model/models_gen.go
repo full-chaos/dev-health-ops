@@ -1386,6 +1386,17 @@ type SavedReportType struct {
 	CreatedBy        *string          `json:"createdBy,omitempty"`
 }
 
+type ScopeCoverageBaseline struct {
+	// Mean, in percent (0 to 100), of the scope's line coverage of each day that holds a value, over the 30 days. Null = fewer than 7 such days (``lineDays``): then there is no baseline. Never 0 for "none", never the current value.
+	LineBaselinePct *float64 `json:"lineBaselinePct,omitempty"`
+	// Days of the 30 on which at least one repository of the scope holds a line coverage value.
+	LineDays int `json:"lineDays"`
+	// Mean branch coverage, in percent; the same rules as ``lineBaselinePct``.
+	BranchBaselinePct *float64 `json:"branchBaselinePct,omitempty"`
+	// Days of the 30 on which at least one repository of the scope holds a branch coverage value.
+	BranchDays int `json:"branchDays"`
+}
+
 type ScopeEntityRef struct {
 	ID          string `json:"id"`
 	DisplayName string `json:"displayName"`

@@ -66,21 +66,13 @@ func baseline(mean *float64, days int) *float64 {
 	return &value
 }
 
-// statement reads, per repository, the mean of each measure over the window and
-// the number of days that hold a value. The inner query keeps the newest version
-// of each (repository, day); the tuple keeps a NULL of the newest version from
-// being skipped for an older value. avg() over a Nullable column leaves the NULL
-// days out and is NULL when no day holds a value.
-func statement(scopeFilter string) string {
+// newestPerRepoDay is the one coverage read of this package: the newest version
+// of each (repository, day) of the window, inside the scope. The tuple keeps a
+// NULL of the newest version from being skipped for an older value. Both
+// baselines (per repository and of the whole scope) are built on this read, so
+// they cannot read different rows.
+func newestPerRepoDay(scopeFilter string) string {
 	return `
-        SELECT
-            toString(b.repo_id) AS repo_id,
-            nullIf(r.repo, '') AS repo_name,
-            avg(b.line_pct) AS line_mean,
-            countIf(b.line_pct IS NOT NULL) AS line_days,
-            avg(b.branch_pct) AS branch_mean,
-            countIf(b.branch_pct IS NOT NULL) AS branch_days
-        FROM (
             SELECT
                 repo_id,
                 day,
@@ -90,7 +82,22 @@ func statement(scopeFilter string) string {
             WHERE org_id = {org_id:String}
               AND day >= {start_day:Date}
               AND day < {end_day:Date}` + scopeFilter + `
-            GROUP BY repo_id, day
+            GROUP BY repo_id, day`
+}
+
+// statement reads, per repository, the mean of each measure over the window and
+// the number of days that hold a value. avg() over a Nullable column leaves the
+// NULL days out and is NULL when no day holds a value.
+func statement(scopeFilter string) string {
+	return `
+        SELECT
+            toString(b.repo_id) AS repo_id,
+            nullIf(r.repo, '') AS repo_name,
+            avg(b.line_pct) AS line_mean,
+            countIf(b.line_pct IS NOT NULL) AS line_days,
+            avg(b.branch_pct) AS branch_mean,
+            countIf(b.branch_pct IS NOT NULL) AS branch_days
+        FROM (` + newestPerRepoDay(scopeFilter) + `
         ) AS b
         LEFT JOIN (
             SELECT id, argMax(repo, last_synced) AS repo
@@ -102,13 +109,10 @@ func statement(scopeFilter string) string {
         ORDER BY repo_id`
 }
 
-// Resolve answers coverageBaselines. orgID must be the AUTHORIZED org. endDate
-// is the day the window ends before: the window is the WindowDays days before
-// it.
-func Resolve(ctx context.Context, client QueryClient, orgID string, endDate graphqldate.Date, scope Scope) ([]model.RepoCoverageBaseline, error) {
-	if client == nil {
-		return nil, errors.New("coveragebaselines: clickhouse client is required")
-	}
+// windowAndScope gives the bindings of the window and the scope filter of the
+// coverage read. endDate is the day the window ends before. Shared by the two
+// baselines.
+func windowAndScope(orgID string, endDate graphqldate.Date, scope Scope) (string, []clickhouse.Binding) {
 	end := endDate.Time()
 	bindings := []clickhouse.Binding{
 		{Name: "org_id", Value: orgID},
@@ -133,6 +137,17 @@ func Resolve(ctx context.Context, client QueryClient, orgID string, endDate grap
 		scopeFilter += "\n              AND " + teamCondition
 		bindings = append(bindings, teamBindings...)
 	}
+	return scopeFilter, bindings
+}
+
+// Resolve answers coverageBaselines. orgID must be the AUTHORIZED org. endDate
+// is the day the window ends before: the window is the WindowDays days before
+// it.
+func Resolve(ctx context.Context, client QueryClient, orgID string, endDate graphqldate.Date, scope Scope) ([]model.RepoCoverageBaseline, error) {
+	if client == nil {
+		return nil, errors.New("coveragebaselines: clickhouse client is required")
+	}
+	scopeFilter, bindings := windowAndScope(orgID, endDate, scope)
 
 	rows, err := client.Query(ctx, statement(scopeFilter), bindings)
 	if err != nil {

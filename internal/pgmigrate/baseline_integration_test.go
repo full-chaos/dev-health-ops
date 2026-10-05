@@ -28,7 +28,7 @@ import (
 )
 
 // baselineStatesSHA256 pins testdata/golden/baseline_states.json (the record verb rewrites it).
-const baselineStatesSHA256 = "0fb604ebb9779d7349690056311b702b7c319e39eaad1c6f055dc7d5147f62d0"
+const baselineStatesSHA256 = "e6181286666d6164fd061e2c4b578315213aaa05aeacb86bf73964135f07c25c"
 
 // updateEnv, set to 1, rewrites baseline/head.json from the executed
 // upgrade instead of comparing against it. CI never sets it, so there the

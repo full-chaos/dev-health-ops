@@ -12,11 +12,16 @@ class operation, so the digest cannot matter by construction: ``decided_at`` is 
 when ``enable``/``disable``/``seed`` change the mode, and ``repoint`` rewrites ``current_candidate_build``
 and nothing else.
 
-**Backfill.** Each class operation gets the NEWEST of its ``go_api_routing_state`` rows (``updated_at``).
-On an equal timestamp the pick is deterministic and fails closed: a row that is not in a served mode
-(canary or primary) beats one that is, then the greater ``schema_digest``. The source rows are left in
-place (not deleted), so rolling the build back to one that reads them still finds them; nothing reads them
-after this change and ``go_api_routing_state`` is dropped separately.
+**Backfill (D4819).** Each class operation gets exactly the ``go_api_routing_state`` row the RUNNING (old)
+image serves: the row at that image's schema digest under the class document digest. That is the table's primary
+key, so there is at most one row per operation and no timestamp or tie-break takes part (a newer row at another
+digest, which the old image never read, is never copied). The old image's digest comes from the environment,
+``DHO_CLASS_DECISION_LIVE_SCHEMA_DIGEST`` (the roll reads it from the old image's ``GET /registry``), set as the
+session setting ``dho.class_decision_live_schema_digest`` -- the same setting ``dho migrate postgres upgrade``
+sets. An operation with no row at that digest gets no decision: dark, as the old image answers. With class rows
+present, a missing or malformed digest, or a digest that holds no class row, fails the upgrade (the walk rolls back
+whole). The source rows are left in place (not deleted), so rolling the build back to one that reads them still
+finds them; nothing reads them after this change and ``go_api_routing_state`` is dropped separately.
 
 **No foreign key** to ``go_api_candidate_build``: that table is keyed by schema digest, which is exactly
 what this table must not depend on. ``schema_digest`` here is the live digest of the verb run that wrote
@@ -24,6 +29,8 @@ the row, kept for the audit reader and never read to decide.
 """
 
 from __future__ import annotations
+
+import os
 
 import sqlalchemy as sa
 from alembic import op
@@ -34,6 +41,15 @@ branch_labels = None
 depends_on = None
 
 _TABLE = "go_api_class_decision"
+
+#: The environment variable and session setting that carry the old image's live schema digest (D4819).
+LIVE_DIGEST_ENV = "DHO_CLASS_DECISION_LIVE_SCHEMA_DIGEST"
+LIVE_DIGEST_SETTING = "dho.class_decision_live_schema_digest"
+
+#: The MCP class document digest (internal/mcpclass DocumentDigest(): sha256 of its DocumentKey).
+CLASS_DOCUMENT_DIGEST = (
+    "9c509c3594856bed7f4896345d687c0fca3a1e298b65b440ae519938bac7ed92"
+)
 
 #: The modes of go_api_routing_state (0114): the same vocabulary, so a backfilled row is valid as it is.
 MODES = ("python", "shadow", "canary", "primary", "disabled")
@@ -68,19 +84,49 @@ def upgrade() -> None:
             name="ck_go_api_class_decision_operation",
         ),
     )
+    live_digest = os.environ.get(LIVE_DIGEST_ENV)
+    if live_digest is not None:
+        op.execute(
+            sa.text("SELECT set_config(:name, :value, true)").bindparams(
+                name=LIVE_DIGEST_SETTING, value=live_digest
+            )
+        )
     op.execute(
+        f"""
+        DO $$
+        DECLARE
+            live_digest text := coalesce(current_setting('{LIVE_DIGEST_SETTING}', true), '');
+            class_rows bigint;
+            live_rows bigint;
+        BEGIN
+            SELECT count(*) INTO class_rows FROM go_api_routing_state WHERE left(selected_operation, 4) = 'mcp:';
+            IF class_rows = 0 THEN
+                RETURN;
+            END IF;
+            IF live_digest !~ '^sha256:[0-9a-f]{{64}}$' THEN
+                RAISE EXCEPTION 'go_api_class_decision backfill: % MCP class rows exist and {LIVE_DIGEST_SETTING} is empty or not sha256:<64 hex>; set {LIVE_DIGEST_ENV} to the schema_digest of the running query-api (GET /registry)', class_rows;
+            END IF;
+            SELECT count(*) INTO live_rows FROM go_api_routing_state
+             WHERE left(selected_operation, 4) = 'mcp:'
+               AND schema_digest = live_digest
+               AND document_digest = '{CLASS_DOCUMENT_DIGEST}';
+            IF live_rows = 0 THEN
+                RAISE EXCEPTION 'go_api_class_decision backfill: % MCP class rows exist and none is at schema digest % under the class document digest', class_rows, live_digest;
+            END IF;
+        END
+        $$
         """
+    )
+    op.execute(
+        f"""
         INSERT INTO go_api_class_decision
             (operation, mode, current_candidate_build, schema_digest, review_evidence, recorded_by, decided_at)
-        SELECT DISTINCT ON (selected_operation)
-               selected_operation, mode, current_candidate_build, schema_digest,
+        SELECT selected_operation, mode, current_candidate_build, schema_digest,
                review_evidence, recorded_by, updated_at
           FROM go_api_routing_state
          WHERE left(selected_operation, 4) = 'mcp:'
-         ORDER BY selected_operation,
-                  updated_at DESC,
-                  (mode IN ('canary', 'primary')) ASC,
-                  schema_digest DESC
+           AND schema_digest = current_setting('{LIVE_DIGEST_SETTING}', true)
+           AND document_digest = '{CLASS_DOCUMENT_DIGEST}'
         """
     )
 

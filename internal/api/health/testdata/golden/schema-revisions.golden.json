@@ -1,9 +1,9 @@
 {
   "header": {
     "test": "TestSchemaRevisionsMatchFrozenPythonAlembic",
-    "python_build": "dc20788d69ae68129772e6cb5fd3fe972b27c843",
-    "producer_digest": "944277e57e9b5e2f99a22ac18647f035225fe644f52a1b781179122140ddc9d8",
-    "recipe": "git worktree add --detach $DIR dc20788d69ae68129772e6cb5fd3fe972b27c843 (with its .venv: uv sync --frozen --no-install-project); then from the repository root: go run ./internal/testsupport/venueoracle/goldenrecord -pkg ./internal/api/health/ -test '^TestSchemaRevisionsMatchFrozenPythonAlembic$' -python-root $DIR",
+    "python_build": "2a8e926ff82961863c0ce12eb7701d2daaf2cb7d",
+    "producer_digest": "1031824a913ad1861eba30c044f8593d58e295c3bba70c7cb3e3c76dc878610d",
+    "recipe": "git worktree add --detach $DIR 2a8e926ff82961863c0ce12eb7701d2daaf2cb7d (with its .venv: uv sync --frozen --no-install-project); then from the repository root: go run ./internal/testsupport/venueoracle/goldenrecord -pkg ./internal/api/health/ -test '^TestSchemaRevisionsMatchFrozenPythonAlembic$' -python-root $DIR",
     "recorded_by": "goldenrecord",
     "blanked": {}
   },

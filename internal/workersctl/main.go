@@ -1018,6 +1018,12 @@ func dispatchMetricsDailyBlocked(
 	})
 }
 
+// finalizeRedriveWritesMarker reports whether a finalize-redrive pass can append
+// a run marker: only a real (not dry-run) reset of a succeeded run does.
+func finalizeRedriveWritesMarker(dryRun, includeSucceeded bool) bool {
+	return !dryRun && includeSucceeded
+}
+
 // attachRunMarker opens ClickHouse and gives the store the CHAOS-8710 run
 // marker writer. A verb that reopens a succeeded run needs it: the reopen
 // appends 'reopened' first and is refused when that append fails.
@@ -1395,7 +1401,10 @@ func dispatchMetricsFinalizeRedrive(
 		if !*dryRun {
 			nonce = uuid.NewString()
 		}
-		if !*dryRun {
+		// Only a reset of a succeeded run writes a marker, and that happens
+		// only with --include-succeeded, so ClickHouse is opened (and its
+		// credential read) only on that path.
+		if finalizeRedriveWritesMarker(*dryRun, *includeSucceeded) {
 			closeMarker, code := attachRunMarker(ctx, runtime, store, stderr)
 			if code != 0 {
 				return code

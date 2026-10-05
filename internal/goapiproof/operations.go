@@ -1151,6 +1151,20 @@ var operationSpecs = map[string]OperationSpec{
 			},
 		},
 	},
+	// testopsJobFailures (CHAOS-8513) is Go-only from its first day: no Python
+	// resolver ever existed, so there is no baseline answer to compare it with.
+	// Its one float, failureRate, is failedRuns / runs: two integer counts of
+	// the same answer divided once in Go, so it declares no Tier-B leaf. The
+	// request is the web's 30-day window with the default limit: the operation
+	// refuses a range of more than 90 days, and the proof window is 92.
+	"testopsJobFailures": {
+		ResponseRoot: "testopsJobFailures",
+		Variables: func(orgID string, w Window) map[string]any {
+			return map[string]any{"orgId": orgID, "input": map[string]any{
+				"sinceDate": testopsJobFailuresSince(w.UntilDate), "untilDate": w.UntilDate, "limit": 20,
+			}}
+		},
+	},
 	"throughputForecast": {
 		ResponseRoot: "throughputForecast",
 		RootNullable: true,
@@ -2766,6 +2780,17 @@ var testopsRiskDeltaReasons = map[string]string{
 	"data.testopsRisk.confidenceDelta": "derived from avg(confidence_score) (CHAOS-5451)",
 	"data.testopsRisk.dragDelta":       testopsFloatAggregate,
 	"data.testopsRisk.stabilityDelta":  "derived from avg(stability_index) (CHAOS-5451)",
+}
+
+// testopsJobFailuresSince is the first day of the 30-day range that ends on
+// until (CHAOS-8513). A date it cannot read is returned as it is, so the
+// operation's own validation answers for it.
+func testopsJobFailuresSince(until string) string {
+	day, err := time.Parse("2006-01-02", until)
+	if err != nil {
+		return until
+	}
+	return day.AddDate(0, 0, -30).Format("2006-01-02")
 }
 
 // testopsRiskWeekStart is the first day of the seven-day range that ends on

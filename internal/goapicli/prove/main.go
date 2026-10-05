@@ -22,9 +22,8 @@
 //
 // What this command will NOT do:
 //
-//   - It never writes or mutates a go_api_routing_state row. Enablement is
-//     a rollout decision; this only records evidence a rollout decision can
-//     later read.
+//   - It never writes or mutates a routing decision. Enablement is a rollout
+//     decision; this only records evidence a rollout decision can later read.
 //   - It never names a candidate build from a flag. The build identity
 //     comes from the RUNNING process (GET /buildinfo) or the run refuses --
 //     a receipt built from a hand-typed sha proves that somebody typed a
@@ -48,13 +47,11 @@ import (
 	"net/url"
 	"os"
 	"os/signal"
-	"reflect"
 	"sort"
 	"strings"
 	"syscall"
 	"time"
 
-	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/full-chaos/dev-health-ops/internal/cli"
@@ -197,7 +194,7 @@ func registerFlags() (*flag.FlagSet, *flags) {
 	fs.StringVar(&f.mcpRoots, "mcp-roots", "", "MCP class proof (CHAOS-7214): comma-separated mcp:<root> names (or all-mcp). Measures every registered query document whose response root is that field through -proof-url (which MUST be the internal listener's /query/proof-mcp) and the reference selected by -mcp-reference (the Python edge by default), and records ONE receipt per root keyed to the class document digest -- never a receipt for the documents' own operations. Needs the roots' routing rows at shadow or canary|primary (`routing seed`), -go-edge is refused")
 	fs.StringVar(&f.mcpReference, "mcp-reference", "python", "with -mcp-roots: what the MCP pipeline is compared with. python (default): the Python edge at -edge-url, which no longer answers most operations. doc-route: query-api's OWN /graphql at -edge-url answering the same registered document, variables and identity (a second Go implementation; the edge token is minted in process as for -go-edge). In doc-route mode a shape counts only if its document operation is itself receipt-backed at this build, a shape whose document operation is not is excluded and named, and any MCP-vs-document-route mismatch blocks the root")
 	fs.StringVar(&f.documentsPath, "documents", "", "path to `registrydump -file internal/queryapi/server/query_route.go` JSON output (required)")
-	secrets.BindFlag(fs, &f.postgresURI, "postgres-uri", postgresURIEnvVar, "domain Postgres DSN holding go_api_routing_state / go_api_proof_run")
+	secrets.BindFlag(fs, &f.postgresURI, "postgres-uri", postgresURIEnvVar, "domain Postgres DSN holding go_api_proof_run")
 	fs.StringVar(&f.orgID, "org", "", "org id every request is made for (required)")
 	fs.StringVar(&f.artifactDir, "artifact-dir", "", "directory for content-addressed response bodies; receipts store a reference, never an inlined body (required)")
 	fs.StringVar(&f.recordedBy, "recorded-by", "", "WHO is running this, recorded on every receipt (required)")
@@ -206,7 +203,7 @@ func registerFlags() (*flag.FlagSet, *flags) {
 	fs.StringVar(&f.audience, "audience", "query-api", "envelope audience, part of the auth-context shape")
 	fs.StringVar(&f.keyID, "key-id", "", "envelope signing key id (kid) -- a public identifier, and the value that silently broke routing three times on 2026-09-07")
 	fs.BoolVar(&f.goEdge, "go-edge", false, "Go-edge mode: -edge-url is query-api's own /graphql with NO Python plane behind it. No Python answer is read: each operation is proven by its candidate alone (PROVEN_GO_ONLY, for an operation the go-served ledger names), and the control document must be refused by query-api (404 UNREGISTERED_DOCUMENT, plane go, the named build). Never detected: without this flag an edge with no Python plane is refused, and with it an edge that has one is refused")
-	fs.BoolVar(&f.dryRun, "dry-run", false, "open NO database and write NO receipts. Without -mcp-roots no routing row is read, so every operation is refused as not routed: nothing is executed or compared and the run ends with the measured-nothing error (the registry and /buildinfo are still read, and the reference-principal check too unless -go-edge). With -mcp-roots the class proof still runs against -proof-url and the reference and reports what it measured; only the receipt write is skipped (-mcp-reference doc-route refuses a dry run)")
+	fs.BoolVar(&f.dryRun, "dry-run", false, "open NO database and write NO receipts. Without -mcp-roots a dry run takes no document operation to the edge, so every one is refused as not routed: nothing is executed or compared and the run ends with the measured-nothing error (the registry and /buildinfo are still read, and the reference-principal check too unless -go-edge). With -mcp-roots the class proof still runs against -proof-url and the reference and reports what it measured; only the receipt write is skipped (-mcp-reference doc-route refuses a dry run)")
 	fs.BoolVar(&f.adminPrincipal, "admin-principal", false, "mint the org-admin proof principal's edge token (mint edge-token -principal admin-proof) for the operations on the closed operator-gated allowlist (internal/goapiproof/principal.go); without it those operations are refused by name, never measured as the read-level principal. Read-only queries only: a document that is not a query is refused")
 	fs.DurationVar(&f.timeout, "timeout", 60*time.Second, "per-request timeout")
 	fs.StringVar(&f.reportPath, "report", "", "write the full JSON report here in addition to stdout")
@@ -481,8 +478,14 @@ func run(args []string) (err error) {
 		}
 		registry.DocumentDigest, documents = selected, selectedDocuments
 	} else {
-		routing, err = readRoutingState(ctx, pool, registry, f.candidateBuild)
-		if err != nil {
+		// query-api serves every registered operation and no routing row decides it (CHAOS-8702), so a document
+		// operation is measured as served: through the edge, against the running build. A dry run opens no database
+		// and measures no document operation: every one is refused as not routed (CHAOS-7440).
+		routing = map[string]goapiproof.RoutingRow{}
+		if !f.dryRun {
+			routing = servedRouting(registry)
+		}
+		if err := goapiproof.VerifyCandidateBuild(registry.BuildIdentity, f.candidateBuild, routing); err != nil {
 			return err
 		}
 	}
@@ -629,43 +632,18 @@ const (
 	exitRefusedBeforeMeasuring = "refused_before_measuring"
 )
 
-// readRoutingState reads each registered operation's current mode from
-// go_api_routing_state at the LIVE schema digest.
-//
-// Read at the live digest only, never "the newest row for this
-// operation": rows keyed to a superseded digest are dead by construction
-// (PostgresSwitch looks up by the digest the running binary computes),
-// and treating one as current is precisely the six-day outage CHAOS-5416
-// records.
-// readRoutingState reads the rows AND verifies them against the running
-// build, returning both or neither.
-//
-// A mutation killed the previous shape by replacing the CALLER's `return err` with
-// `_ = err`: the check was a separate statement in run(), so it could be
-// ignored, and nothing failed. Folding it in means a caller cannot obtain
-// the rows without the check having run.
-//
-// It does NOT make the mutation unwritable -- an earlier version of this
-// comment claimed that, and further testing disproved it with the exact
-// mutation the comment named: `if err := VerifyCandidateBuild(...); err
-// != nil { _ = err }` compiles here just as well as it did one level up.
-// What changed is that the guard now lives with the data it guards, and
-// it is under test: TestReadRoutingStateRefusesAndFilters drives this
-// function against a fake Querier.
-//
-// A comment asserting a guarantee the code does not have is worse than no
-// comment, so this one now says what is true.
-// routingRowSource is the narrow slice of pgx readRoutingState needs, so
-// a test can drive it without a database. Extracted for exactly that
-// reason: the function had zero tests, and both of its guards survived
-// removal.
-type routingRowSource interface {
-	Query(ctx context.Context, sql string, args ...any) (pgx.Rows, error)
+// servedRouting is the mode and build every registered document operation is measured under: canary (the route a
+// client takes, through the edge) against the running build. There is no row to read.
+func servedRouting(registry goapiproof.RegistryView) map[string]goapiproof.RoutingRow {
+	routing := make(map[string]goapiproof.RoutingRow, len(registry.DocumentDigest))
+	for operation := range registry.DocumentDigest {
+		routing[operation] = goapiproof.RoutingRow{Mode: "canary", CandidateBuild: registry.BuildIdentity}
+	}
+	return routing
 }
 
-// dbPool is the Postgres surface run() needs: reading routing rows
-// (routingRowSource) plus writing receipts (goapiproof.Querier) and
-// closing the connection when the run ends.
+// dbPool is the Postgres surface run() needs: writing receipts (goapiproof.Querier) and closing the connection when
+// the run ends.
 //
 // openPostgresPool is a package-level function var rather than a direct
 // pgxpool.New call at the call site, so a test can substitute a fake pool
@@ -673,7 +651,6 @@ type routingRowSource interface {
 // never dials at construction (the first query does), so this
 // substitution changes nothing about how a real invocation connects.
 type dbPool interface {
-	routingRowSource
 	goapiproof.Querier
 	Close()
 }
@@ -684,7 +661,7 @@ var openPostgresPool = func(ctx context.Context, uri string) (dbPool, error) {
 		return nil, err
 	}
 	// pgxpool.New never dials -- the first real operation does, and
-	// readRoutingState's own pool.Query would otherwise be the first
+	// the first real query would otherwise be the first
 	// thing to discover a bad DSN, with pgx's connection error (which can
 	// carry the DSN itself) surfacing through THAT call's %w wrap instead
 	// of the redacted one right below. Ping forces the dial here, while
@@ -708,64 +685,6 @@ func refuseEmptyRegistry(registry goapiproof.RegistryView, registryURL string) e
 		return fmt.Errorf("goapiproof: %s registers no operations -- there is nothing to prove", goapiproof.EndpointLabel(registryURL))
 	}
 	return nil
-}
-
-// isNilSource reports whether the source is absent, including the
-// typed-nil-in-an-interface case the --dry-run path produces.
-func isNilSource(source routingRowSource) bool {
-	if source == nil {
-		return true
-	}
-	value := reflect.ValueOf(source)
-	switch value.Kind() {
-	case reflect.Ptr, reflect.Interface, reflect.Map, reflect.Slice, reflect.Func, reflect.Chan:
-		return value.IsNil()
-	}
-	return false
-}
-
-func readRoutingState(ctx context.Context, pool routingRowSource, registry goapiproof.RegistryView, expectedBuild string) (map[string]goapiproof.RoutingRow, error) {
-	routing := map[string]goapiproof.RoutingRow{}
-	// A typed-nil *pgxpool.Pool in an interface is not == nil, and
-	// reflect.IsNil panics on a non-pointer kind, so both are handled.
-	if isNilSource(pool) {
-		// --dry-run with no database: every operation is reported as
-		// unrouted and refused BY NAME. It never silently assumes canary.
-		return routing, nil
-	}
-
-	rows, err := pool.Query(ctx,
-		`SELECT selected_operation, document_digest, mode, current_candidate_build
-		   FROM go_api_routing_state
-		  WHERE schema_digest = $1`,
-		registry.SchemaDigest)
-	if err != nil {
-		return nil, fmt.Errorf("read go_api_routing_state: %w", err)
-	}
-	defer rows.Close()
-
-	for rows.Next() {
-		var operation, documentDigest, mode, candidateBuild string
-		if err := rows.Scan(&operation, &documentDigest, &mode, &candidateBuild); err != nil {
-			return nil, fmt.Errorf("scan go_api_routing_state row: %w", err)
-		}
-		// A row whose document digest is not the one the running process
-		// registers for that operation is dead the same way a stale schema
-		// digest is dead -- do not adopt its mode.
-		if registry.DocumentDigest[operation] != documentDigest {
-			continue
-		}
-		routing[operation] = goapiproof.RoutingRow{Mode: mode, CandidateBuild: candidateBuild}
-	}
-	if err := rows.Err(); err != nil {
-		return nil, err
-	}
-	// The rows and the verdict on them come back together, or neither
-	// does. See this function's doc comment.
-	if err := goapiproof.VerifyCandidateBuild(registry.BuildIdentity, expectedBuild, routing); err != nil {
-		return nil, err
-	}
-	return routing, nil
 }
 
 type report struct {

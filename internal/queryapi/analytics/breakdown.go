@@ -191,24 +191,12 @@ ORDER BY value DESC, dimension_value ASC
 // the identical *float64 scan and the same product ruling; see
 // timeseries.go's ExecuteTimeseries doc comment.
 //
-// REACHABILITY, checked by mechanism not by ticket state (CHAOS-4538
-// itself merged 08-30/31, bba15566d -- citing it as a blocker is
-// stale): `investmentBreakdown` IS pre-registered in query_route.go,
-// but dispatch requires its OWN row in routeswitch's dynamic switch
-// (switch.go), and no go_api_routing_state row currently enables
-// `investmentBreakdown` or `investmentFull` -- verified locally.
-// PRODUCTION ROUTING STATE IS UNVERIFIED; this is a local fact only.
-// So nothing observes the internal/schema nullability mismatch TODAY
-// -- BUT THAT COULD CHANGE THE MOMENT A ROUTING-STATE ROW IS ADDED,
-// WITH NO FURTHER CODE CHANGE. That is the sharp edge of CHAOS-4658:
-// the mismatch becomes observable through a DATA change (a routing
-// row), not a code change, so no code review will ever catch it
-// turning live. Whoever enables that row MUST widen
-// contracts/graphql/v1/schema.graphql's `value: Float!` to `value:
-// Float` (and its Python Strawberry counterpart,
-// src/dev_health_ops/api/graphql/models/outputs.py's BreakdownItem)
-// in that same change, or a live all-NULL group will make gqlgen's
-// exec engine reject the whole response ("must not be null") instead
+// REACHABILITY (CHAOS-8702): `investmentBreakdown` and `investmentFull` are registered in query_route.go, and the
+// catalog switch serves every registered document, so the internal/schema nullability mismatch is observable the
+// moment a request reaches them. contracts/graphql/v1/schema.graphql's BreakdownItem.value is already `Float`
+// (nullable), and the Strawberry counterpart is src/dev_health_ops/api/graphql/models/outputs.py's BreakdownItem: a
+// live all-NULL group must render as null, or gqlgen's exec engine would reject the whole response ("must not be
+// null") instead
 // of rendering the empty state this ticket exists to enable. THIS
 // COMMENT, NOT the ones in models_gen.go/generated.go, is the durable
 // copy: gqlgen generate overwrites both of those files wholesale (see

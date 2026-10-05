@@ -26,10 +26,10 @@ package server
 //   - an orgId/org_id argument, at any depth and INSIDE input objects and
 //     variables (hotspots and cognitiveLoad carry the org in `input`, which
 //     graph.OperationOrgGuard does not read), that is not the header org;
-//   - a root field whose class routing row (go_api_routing_state, see
+//   - a root field whose class decision (go_api_class_decision, see
 //     mcpRoutingDigests) is not canary/primary.
 //
-// Which routing rows govern this route, and which govern the named-operation route acr's run_operation uses:
+// Which state governs this route, and which governs the named-operation route acr's run_operation uses:
 // .github/docs-legacy/architecture/mcp-class-vs-document-routing-rows.md (CHAOS-7833).
 //
 // What passes runs on its OWN gqlgen server (same explicit options as
@@ -148,20 +148,18 @@ const mcpCallerClass = "mcp"
 // (D.5), not this list.
 var mcpRootFieldAllowlist = mcpclass.AllowedRoots()
 
-// mcpClassDocumentKey names the free-form class in go_api_routing_state. A
-// free-form query has no registered document, so no per-document row can
-// exist for it; the class row stands in, one per root field, keyed
-// (schema_digest, sha256(mcpClassDocumentKey), "mcp:<rootField>"). Bump the
-// version only with the routing tooling that writes these rows.
+// mcpClassDocumentKey names the free-form class: its digest is the document digest class proof receipts carry. A
+// free-form query has no registered document, so the class decision stands in, one per root field, keyed
+// "mcp:<rootField>" in go_api_class_decision. Bump the version only with the routing tooling that writes these
+// decisions.
 const mcpClassDocumentKey = mcpclass.DocumentKey
 
-// mcpRoutingOperationPrefix prefixes a root field to form its class row's
-// selected_operation. No registered operation name contains ':', so a class
-// row can never collide with a per-document row.
+// mcpRoutingOperationPrefix prefixes a root field to form its class decision's operation. No registered operation
+// name contains ':', so a class decision can never collide with a catalog operation.
 const mcpRoutingOperationPrefix = mcpclass.OperationPrefix
 
 // mcpRoutingDigests is the operation -> document digest map the class's
-// routeswitch.PostgresSwitch looks rows up by.
+// routeswitch.ClassDecisionSwitch takes its inventory from.
 func mcpRoutingDigests() map[string]string { return mcpclass.Digests() }
 
 // mcpOperatorRoles is datahealth.RequireOperator's role set (compared

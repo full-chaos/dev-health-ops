@@ -157,3 +157,47 @@ func TestOperationOrgGuardRunsTheOperationAgainstTheNamedOrgForASuperuser(t *tes
 		t.Errorf("superuser naming their own org: ran as %q, want org-own", seenOrg)
 	}
 }
+
+// CHAOS-7710 (owner decision 2026-10-04): an org-less verified superuser has
+// no org data access. Naming an org without an org in the claims is refused,
+// and the operation never runs. The recorded Python answer rebinds instead;
+// the difference is declared in docs/go-migration-matrix.md.
+func TestOperationOrgGuardRefusesAnOrglessSuperuserNamingAnOrg(t *testing.T) {
+	t.Parallel()
+	operation := guardOperation(t, `query Q($orgId: String) { doIt(orgId: $orgId) }`, map[string]any{"orgId": "org-other"})
+	ctx := graphql.WithOperationContext(authctx.WithClaims(context.Background(), authctx.Claims{IsSuperuser: true}), operation)
+	ran := false
+	response := OperationOrgGuard{}.InterceptOperation(ctx, func(context.Context) graphql.ResponseHandler {
+		ran = true
+		return func(context.Context) *graphql.Response { return &graphql.Response{} }
+	})(ctx)
+	if ran {
+		t.Fatal("an org-less superuser naming an org must not run the operation")
+	}
+	if response == nil || len(response.Errors) != 1 || response.Errors[0].Message != "Authorization required" {
+		t.Fatalf("got %+v, want one error %q", response, "Authorization required")
+	}
+}
+
+// An impersonation session carries the target org id, so the operation naming
+// that org runs, as that org.
+func TestOperationOrgGuardServesAnImpersonationSessionNamingItsOrg(t *testing.T) {
+	t.Parallel()
+	operation := guardOperation(t, `query Q($orgId: String) { doIt(orgId: $orgId) }`, map[string]any{"orgId": "org-target"})
+	claims := authctx.Claims{OrgID: "org-target", IsSuperuser: true, ImpersonationActive: true}
+	ctx := graphql.WithOperationContext(authctx.WithClaims(context.Background(), claims), operation)
+	var seenOrg string
+	ran := false
+	response := OperationOrgGuard{}.InterceptOperation(ctx, func(inner context.Context) graphql.ResponseHandler {
+		ran = true
+		seen, _ := authctx.FromContext(inner)
+		seenOrg = seen.OrgID
+		return func(context.Context) *graphql.Response { return &graphql.Response{} }
+	})(ctx)
+	if !ran || seenOrg != "org-target" {
+		t.Fatalf("ran=%v org=%q, want the operation to run as org-target", ran, seenOrg)
+	}
+	if response == nil || len(response.Errors) != 0 {
+		t.Fatalf("got %+v, want no errors", response)
+	}
+}

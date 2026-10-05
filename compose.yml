@@ -122,6 +122,10 @@ x-go-worker-env-base: &go-worker-env-base
   # is postgres/postgres/postgres (container_name: postgres), not a
   # `devhealth` role or database (see `migrate`'s own comment above).
   DEV_HEALTH_PG_DB: ${POSTGRES_DB:-postgres}
+  # Trusted self-managed SCM hosts for Jira dev-status / Linear attachment PR links; an entry is `host` or
+  # `host/root` (relative URL root). Same keys as the chart config map; empty means public SaaS hosts only.
+  JIRA_TRUSTED_SCM_HOSTS: ${JIRA_TRUSTED_SCM_HOSTS:-}
+  LINEAR_TRUSTED_SCM_HOSTS: ${LINEAR_TRUSTED_SCM_HOSTS:-}
   # Port 9000 is the NATIVE protocol, not 8123 -- the Go worker speaks the
   # native wire protocol through clickhouse-go and eagerly Ping()s at
   # construction (CHAOS-3872, deploy/go-workers/README.md).
@@ -577,6 +581,9 @@ services:
       # against a still-contract-1 table. Must move with the worker export
       # in the same deploy pass; see deploy/go-workers/README.md.
       OPERATIONAL_ORDERING_CONTRACT: ${OPERATIONAL_ORDERING_CONTRACT:-2}
+      # CHAOS-8744: the chart's migrations.hook.classDecisionLiveSchemaDigest, passed through from
+      # the invoking environment; empty by default.
+      DHO_CLASS_DECISION_LIVE_SCHEMA_DIGEST: ${DHO_CLASS_DECISION_LIVE_SCHEMA_DIGEST:-}
       # Class sweep over the whole file, not only the knob found: user/password were hardcoded past the
       # clickhouse server's own CLICKHOUSE_USER/_PASSWORD overrides (fixed
       # below); DB was already templated. dho speaks ClickHouse's native

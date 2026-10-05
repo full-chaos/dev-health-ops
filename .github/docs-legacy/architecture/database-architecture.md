@@ -192,7 +192,7 @@ graph TD
 | GraphQL Resolvers | ClickHouse | `get_clickhouse_session()` |
 | Metrics API | ClickHouse | `get_clickhouse_session()` |
 
-Which `go_api_routing_state` rows govern which query-api route (named-operation route vs the MCP class listener): [mcp-class-vs-document-routing-rows.md](mcp-class-vs-document-routing-rows.md).
+What decides which query-api route serves what (catalog operations vs the MCP class listener, `go_api_class_decision`): [mcp-class-vs-document-routing-rows.md](mcp-class-vs-document-routing-rows.md).
 
 ## Connection Strings
 

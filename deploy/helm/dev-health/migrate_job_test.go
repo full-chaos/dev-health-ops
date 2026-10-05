@@ -332,3 +332,41 @@ func TestMigrateJobLockstepAcceptsMatchingGoImagesAndSkipsWhatItCannotCompare(t 
 		})
 	}
 }
+
+// CHAOS-8744: migrations.hook.classDecisionLiveSchemaDigest reaches the
+// migrate Job as DHO_CLASS_DECISION_LIVE_SCHEMA_DIGEST only when it is set;
+// a value that is not sha256:<64 hex> is refused.
+func TestMigrateJobClassDecisionLiveSchemaDigest(t *testing.T) {
+	digest := "sha256:" + strings.Repeat("b", 64)
+	for _, testCase := range []struct {
+		name    string
+		sets    []string
+		want    string
+		present bool
+	}{
+		{"unset: no env", nil, "", false},
+		{"set: the env carries the value", []string{"migrations.hook.classDecisionLiveSchemaDigest=" + digest}, digest, true},
+	} {
+		t.Run(testCase.name, func(t *testing.T) {
+			jobs, _, refusal := renderJobs(t, testCase.sets...)
+			if refusal != "" {
+				t.Fatalf("render refused: %s", refusal)
+			}
+			entry, ok := envOf(container(t, jobs["t-dev-health-migrate"], "migrate"))["DHO_CLASS_DECISION_LIVE_SCHEMA_DIGEST"].(map[string]any)
+			if ok != testCase.present {
+				t.Fatalf("env DHO_CLASS_DECISION_LIVE_SCHEMA_DIGEST present = %v, want %v", ok, testCase.present)
+			}
+			if ok && entry["value"] != testCase.want {
+				t.Fatalf("env DHO_CLASS_DECISION_LIVE_SCHEMA_DIGEST = %v, want %q", entry["value"], testCase.want)
+			}
+		})
+	}
+	for _, bad := range []string{"sha256:abc", "fdff794c3fa3", "sha256:" + strings.Repeat("B", 64)} {
+		t.Run("refused "+bad, func(t *testing.T) {
+			_, _, refusal := renderJobs(t, "migrations.hook.classDecisionLiveSchemaDigest="+bad)
+			if !strings.Contains(refusal, "classDecisionLiveSchemaDigest") {
+				t.Fatalf("render of %q was not refused by name: %q", bad, refusal)
+			}
+		})
+	}
+}

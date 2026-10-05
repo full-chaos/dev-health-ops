@@ -388,7 +388,18 @@ func TestVenueOracleQueryAPIDictOrder(t *testing.T) {
 		answer := python[index]
 		// The golden holds its answers projected (the run values of a plane become placeholders), and the Go answer is projected
 		// the same way before the two are compared.
-		goBody := golden.Project(t, venueoracle.Response{Status: recorder.Code, Body: recorder.Body.String()}).Body
+		goWritten := recorder.Body.String()
+		if tc.Kind == "explain" && recorder.Code == http.StatusOK {
+			// The explain body ends with the Go-only fields of CHAOS-8103,
+			// which the frozen Python model never had: compared without
+			// them, and only them (withoutExplainGoOnlyFields).
+			stripped, err := withoutExplainGoOnlyFields(goWritten)
+			if err != nil {
+				t.Fatalf("%s: %v", tc.Name, err)
+			}
+			goWritten = stripped
+		}
+		goBody := golden.Project(t, venueoracle.Response{Status: recorder.Code, Body: goWritten}).Body
 		pythonBody := golden.Project(t, venueoracle.Response{Status: answer.Status, Body: answer.Body}).Body
 		if tc.Kind == "people_summary" && recorder.Code == http.StatusOK && answer.Status == http.StatusOK {
 			// The person summary is compared on its freshness object only

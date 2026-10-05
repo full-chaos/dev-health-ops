@@ -1310,6 +1310,7 @@ var explainAggregateFloats = map[string]string{
 	"data.drivers.delta_pct":      "derived from the same float aggregates as data.drivers.value",
 	"data.contributors.value":     "the same aggregate read as data.drivers.value",
 	"data.contributors.delta_pct": "derived from the same float aggregates as data.contributors.value -- the same Contributor struct backs both drivers and contributors (schemas.py's Contributor model), so this leaf shares data.drivers.delta_pct's own provenance.",
+	"data.repositories.value":     "Go-only (CHAOS-8103): the same per-repository aggregate read as data.contributors.value, served for a metric stored per repository; the Python reference never served it, so a comparison against a Python answer reports it as a leaf the baseline does not have, whatever its tier.",
 }
 
 // explainDriverRankOrderInsensitive declares data.drivers/data.contributors

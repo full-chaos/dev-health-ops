@@ -135,6 +135,41 @@ type opportunitiesPythonResponse struct {
 	Items []opportunitiesPythonCard `json:"items"`
 }
 
+// issuesPythonResponse is the frozen FastAPI response shape for the issue
+// drilldown. The Go-only Count field is emitted only for the new
+// filters.how.blocked=true contract (CHAOS-8106); ordinary issue drilldowns
+// retain this Python shape. The declaration test below makes that widening
+// explicit instead of treating the frozen model as an API ceiling.
+type issuesPythonResponse struct {
+	Items []drilldown.IssueItem `json:"items"`
+}
+
+func TestIssuesResponseIsThePythonResponsePlusBlockedCount(t *testing.T) {
+	type field struct{ name, goType, tag string }
+	fieldsOf := func(typ reflect.Type) []field {
+		fields := make([]field, 0, typ.NumField())
+		for index := range typ.NumField() {
+			f := typ.Field(index)
+			fields = append(fields, field{f.Name, f.Type.String(), string(f.Tag)})
+		}
+		return fields
+	}
+
+	want := append(fieldsOf(reflect.TypeOf(issuesPythonResponse{})), field{"Count", "*uint64", `json:"count,omitempty"`})
+	if got := fieldsOf(reflect.TypeOf(drilldown.IssuesResponse{})); !reflect.DeepEqual(got, want) {
+		t.Errorf("drilldown.IssuesResponse fields =\n %v\nwant the Python fields followed by blocked-only Count:\n %v", got, want)
+	}
+
+	count := uint64(1)
+	recorder := httptest.NewRecorder()
+	if err := writeModelResponse(recorder, &drilldown.IssuesResponse{Items: []drilldown.IssueItem{}, Count: &count}); err != nil {
+		t.Fatalf("writeModelResponse: %v", err)
+	}
+	if body := recorder.Body.String(); !strings.Contains(body, `"count":1`) {
+		t.Errorf("the production body has no blocked-only count: %s", body)
+	}
+}
+
 // opportunitiesGoOnlyCardFields are the fields of opportunities.Card the
 // Python model does not have (CHAOS-8109), in declaration order.
 var opportunitiesGoOnlyCardFields = []struct{ name, goType, tag string }{
@@ -186,6 +221,145 @@ func TestOpportunitiesCardIsThePythonCardPlusTheDeclaredGoOnlyFields(t *testing.
 	}
 }
 
+// explainPythonResponse is the shape the frozen FastAPI model of
+// /api/v1/explain has: the eight fields of ExplainResponse the Python
+// reference served. The Go response (explain.Response) has two more since
+// CHAOS-8103 (repositories, source_url), which the Python model never had.
+// Nothing is recorded again, so the oracle below still checks THIS shape,
+// written by the production writer: the eight shared fields are byte
+// identical to FastAPI's. It says nothing about the two Go-only fields.
+//
+// TestExplainResponseIsThePythonResponsePlusTheDeclaredGoOnlyFields ties
+// this shape to the production type: the production response must be
+// exactly these eight fields, in this order, followed by exactly the two
+// declared ones.
+type explainPythonResponse struct {
+	Metric         string                    `json:"metric"`
+	Label          string                    `json:"label"`
+	Unit           string                    `json:"unit"`
+	Value          float64                   `json:"value"`
+	DeltaPct       float64                   `json:"delta_pct"`
+	Drivers        []explain.Contributor     `json:"drivers"`
+	Contributors   []explain.Contributor     `json:"contributors"`
+	DrilldownLinks pyjson.OrderedMap[string] `json:"drilldown_links"`
+}
+
+// explainGoOnlyResponseFields are the fields of explain.Response the Python
+// model does not have (CHAOS-8103), in declaration order.
+var explainGoOnlyResponseFields = []struct{ name, goType, tag string }{
+	{"Repositories", "*[]explain.Repository", `json:"repositories"`},
+	{"SourceURL", "*string", `json:"source_url"`},
+}
+
+func TestExplainResponseIsThePythonResponsePlusTheDeclaredGoOnlyFields(t *testing.T) {
+	type field struct{ name, goType, tag string }
+	fieldsOf := func(typ reflect.Type) []field {
+		out := make([]field, 0, typ.NumField())
+		for index := range typ.NumField() {
+			f := typ.Field(index)
+			out = append(out, field{f.Name, f.Type.String(), string(f.Tag)})
+		}
+		return out
+	}
+	want := fieldsOf(reflect.TypeOf(explainPythonResponse{}))
+	for _, goOnly := range explainGoOnlyResponseFields {
+		want = append(want, field{goOnly.name, goOnly.goType, goOnly.tag})
+	}
+	if got := fieldsOf(reflect.TypeOf(explain.Response{})); !reflect.DeepEqual(got, want) {
+		t.Errorf("explain.Response fields =\n %v\nwant the eight Python fields, then the two Go-only ones:\n %v", got, want)
+	}
+
+	// The production writer does write the Go-only fields, null included:
+	// the oracle's Python shape must not be read as "the route serves eight
+	// fields".
+	name, sourceURL := "webapp", "https://github.com/acme/webapp"
+	repositories := []explain.Repository{{ID: "repo-a", Name: &name, Value: 3, SourceURL: &sourceURL}, {ID: "repo-b", Value: 1}}
+	for _, testCase := range []struct {
+		response explain.Response
+		parts    []string
+	}{
+		{explain.Response{Drivers: []explain.Contributor{}, Contributors: []explain.Contributor{}, Repositories: &repositories, SourceURL: &sourceURL}, []string{
+			`"repositories":[{"id":"repo-a","name":"webapp","value":3.0,"source_url":"https://github.com/acme/webapp"},{"id":"repo-b","name":null,"value":1.0,"source_url":null}]`,
+			`"source_url":"https://github.com/acme/webapp"}`,
+		}},
+		{explain.Response{Drivers: []explain.Contributor{}, Contributors: []explain.Contributor{}}, []string{`"repositories":null,"source_url":null}`}},
+	} {
+		recorder := httptest.NewRecorder()
+		if err := writeModelResponse(recorder, &testCase.response); err != nil {
+			t.Fatalf("writeModelResponse: %v", err)
+		}
+		body := recorder.Body.String()
+		for _, part := range testCase.parts {
+			if !strings.Contains(body, part) {
+				t.Errorf("the production body has no %s: %s", part, body)
+			}
+		}
+	}
+}
+
+// withoutExplainGoOnlyFields returns an explain body as the production writer
+// writes it, without its declared Go-only fields (explainGoOnlyResponseFields),
+// so that it can be compared byte for byte with a frozen Python body. The
+// fields are the last ones of the type, so they are the tail of the body:
+// that tail must hold exactly them, in their order, or it is an error -- it
+// never silently drops anything else.
+func withoutExplainGoOnlyFields(body string) (string, error) {
+	jsonName := func(tag string) string {
+		name, _, _ := strings.Cut(strings.TrimSuffix(strings.TrimPrefix(tag, `json:"`), `"`), ",")
+		return name
+	}
+	first := jsonName(explainGoOnlyResponseFields[0].tag)
+	marker := `,"` + first + `":`
+	at := strings.LastIndex(body, marker)
+	if at < 0 || !strings.HasSuffix(body, "}") {
+		return "", fmt.Errorf("explain body has no %s tail: %s", first, body)
+	}
+	tail := "{" + body[at+1:]
+	decoder := json.NewDecoder(strings.NewReader(tail))
+	if _, err := decoder.Token(); err != nil {
+		return "", err
+	}
+	for index, field := range explainGoOnlyResponseFields {
+		key, err := decoder.Token()
+		if err != nil {
+			return "", err
+		}
+		if want := jsonName(field.tag); key != want {
+			return "", fmt.Errorf("explain body tail field %d is %v, want %q: %s", index, key, jsonName(field.tag), tail)
+		}
+		var value json.RawMessage
+		if err := decoder.Decode(&value); err != nil {
+			return "", err
+		}
+	}
+	if closing, err := decoder.Token(); err != nil || closing != json.Delim('}') || decoder.More() {
+		return "", fmt.Errorf("explain body tail holds more than the Go-only fields: %s", tail)
+	}
+	return body[:at] + "}", nil
+}
+
+func TestWithoutExplainGoOnlyFieldsLeavesThePythonShapeOrFails(t *testing.T) {
+	for _, testCase := range []struct{ body, want string }{
+		{`{"metric":"churn","drilldown_links":{"prs":"a"},"repositories":null,"source_url":null}`, `{"metric":"churn","drilldown_links":{"prs":"a"}}`},
+		{`{"metric":"churn","repositories":[{"id":"r","name":null,"value":1.0,"source_url":"https://github.com/a/repositories"}],"source_url":"https://x"}`, `{"metric":"churn"}`},
+	} {
+		got, err := withoutExplainGoOnlyFields(testCase.body)
+		if err != nil || got != testCase.want {
+			t.Fatalf("withoutExplainGoOnlyFields(%s) = %s, %v; want %s", testCase.body, got, err, testCase.want)
+		}
+	}
+	for _, body := range []string{
+		`{"metric":"churn"}`,
+		`{"metric":"churn","repositories":null}`,
+		`{"metric":"churn","repositories":null,"source_url":null,"extra":1}`,
+		`{"metric":"churn","source_url":null,"repositories":null}`,
+	} {
+		if got, err := withoutExplainGoOnlyFields(body); err == nil {
+			t.Fatalf("withoutExplainGoOnlyFields(%s) = %s, want an error", body, got)
+		}
+	}
+}
+
 func responseModelOracleRoutes() map[string]responseModelOracleRoute {
 	plain := func(response any) responseModelOracleRoute { return responseModelOracleRoute{response: response} }
 	sankeyRoute := plain((*sankey.Response)(nil))
@@ -193,8 +367,8 @@ func responseModelOracleRoutes() map[string]responseModelOracleRoute {
 		"GET /api/v1/meta":                                plain(meta.Response{}),
 		"GET /api/v1/home":                                plain((*home.Response)(nil)),
 		"POST /api/v1/home":                               plain((*home.Response)(nil)),
-		"GET /api/v1/explain":                             plain((*explain.Response)(nil)),
-		"POST /api/v1/explain":                            plain((*explain.Response)(nil)),
+		"GET /api/v1/explain":                             plain((*explainPythonResponse)(nil)),
+		"POST /api/v1/explain":                            plain((*explainPythonResponse)(nil)),
 		"GET /api/v1/heatmap":                             plain((*heatmap.Response)(nil)),
 		"GET /api/v1/work-units":                          plain([]workUnitInvestmentWire(nil)),
 		"POST /api/v1/work-units":                         plain([]workUnitInvestmentWire(nil)),
@@ -204,8 +378,8 @@ func responseModelOracleRoutes() map[string]responseModelOracleRoute {
 		"GET /api/v1/quadrant":                            plain((*quadrant.Response)(nil)),
 		"GET /api/v1/drilldown/prs":                       plain((*drilldown.PRsResponse)(nil)),
 		"POST /api/v1/drilldown/prs":                      plain((*drilldown.PRsResponse)(nil)),
-		"GET /api/v1/drilldown/issues":                    plain((*drilldown.IssuesResponse)(nil)),
-		"POST /api/v1/drilldown/issues":                   plain((*drilldown.IssuesResponse)(nil)),
+		"GET /api/v1/drilldown/issues":                    plain((*issuesPythonResponse)(nil)),
+		"POST /api/v1/drilldown/issues":                   plain((*issuesPythonResponse)(nil)),
 		"GET /api/v1/people":                              plain([]people.SearchResult(nil)),
 		"GET /api/v1/people/{person_id}/summary":          plain(people.SummaryResponse{}),
 		"GET /api/v1/people/{person_id}/metric":           plain(people.MetricResponse{}),

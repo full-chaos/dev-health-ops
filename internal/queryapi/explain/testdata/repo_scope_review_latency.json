@@ -27,5 +27,14 @@
   "drilldown_links": {
     "prs": "/api/v1/drilldown/prs?metric=review_latency",
     "issues": "/api/v1/drilldown/issues?metric=review_latency"
-  }
+  },
+  "repositories": [
+    {
+      "id": "33333333-3333-3333-3333-333333333333",
+      "name": "acme/webapp",
+      "value": 5.0,
+      "source_url": "https://github.com/acme/webapp"
+    }
+  ],
+  "source_url": "https://github.com/acme/webapp"
 }

@@ -303,6 +303,20 @@ type workItemStateDailyRow struct {
 	AvgWIP        float64
 }
 
+// workItemBlockedDurationDailyRow is one item's daily blocked-duration
+// snapshot. Every item the daily state worker processes that contributes state
+// time to the day has a row, including a zero duration. The zero replaces a
+// prior blocked result when a recompute finds no blocked interval for that
+// item.
+type workItemBlockedDurationDailyRow struct {
+	Provider      string
+	WorkScopeID   string
+	TeamID        string
+	TeamName      string
+	WorkItemID    string
+	DurationHours float64
+}
+
 // workItemStateBatchConn is the narrow write capability
 // WriteWorkItemStateDurationsDaily needs.
 type workItemStateBatchConn interface {
@@ -352,6 +366,44 @@ func WriteWorkItemStateDurationsDaily(
 	// work_graph_edges_native_clickhouse.go's established pattern).
 	if err := batch.Send(); err != nil {
 		return len(rows), fmt.Errorf("send work_item_state_durations_daily batch: %w", err)
+	}
+	return len(rows), nil
+}
+
+// WriteWorkItemBlockedDurationsDaily writes the per-item source for the
+// Blocked Work evidence list. The migration defines a
+// ReplacingMergeTree(computed_at) keyed by the item's stable day identity, so
+// a positive duration and a later zero are two versions of one daily snapshot.
+// Scope and team remain snapshot fields: including either in the key would
+// keep a stale positive result if the item's attribution changes.
+func WriteWorkItemBlockedDurationsDaily(
+	ctx context.Context, conn workItemStateBatchConn, organizationID string, day time.Time,
+	rows []workItemBlockedDurationDailyRow, computedAt time.Time,
+) (int, error) {
+	if len(rows) == 0 {
+		return 0, nil
+	}
+	if conn == nil || strings.TrimSpace(organizationID) == "" {
+		return 0, ErrInvalidState
+	}
+	batch, err := conn.PrepareBatch(ctx, `INSERT INTO work_item_blocked_durations_daily (
+		day, provider, work_scope_id, team_id, team_name, work_item_id,
+		duration_hours, computed_at, org_id)`)
+	if err != nil {
+		return 0, fmt.Errorf("prepare work_item_blocked_durations_daily batch: %w", err)
+	}
+	dayValue := time.Date(day.UTC().Year(), day.UTC().Month(), day.UTC().Day(), 0, 0, 0, 0, time.UTC)
+	computedAtUTC := computedAt.UTC()
+	for _, row := range rows {
+		if err := batch.Append(
+			dayValue, row.Provider, row.WorkScopeID, row.TeamID, row.TeamName, row.WorkItemID,
+			row.DurationHours, computedAtUTC, organizationID,
+		); err != nil {
+			return 0, fmt.Errorf("append work_item_blocked_durations_daily row: %w", err)
+		}
+	}
+	if err := batch.Send(); err != nil {
+		return len(rows), fmt.Errorf("send work_item_blocked_durations_daily batch: %w", err)
 	}
 	return len(rows), nil
 }

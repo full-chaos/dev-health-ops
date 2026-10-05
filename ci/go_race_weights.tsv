@@ -227,6 +227,7 @@ internal/queryapi/chpairliteral	1
 internal/queryapi/cognitiveload	1
 internal/queryapi/complexitytimeseries	1
 internal/queryapi/compoundingrisk	1
+internal/queryapi/coveragebaselines	1
 internal/queryapi/datahealth	1
 internal/queryapi/digest	1
 internal/queryapi/drilldown	1
@@ -264,6 +265,7 @@ internal/queryapi/scopelabel	1
 internal/queryapi/security	1
 internal/queryapi/server	26
 internal/queryapi/teamscope	1
+internal/queryapi/testopsjobfailures	1
 internal/queryapi/testopsrisk	1
 internal/queryapi/throughputforecast	1
 internal/queryapi/timewindow	3

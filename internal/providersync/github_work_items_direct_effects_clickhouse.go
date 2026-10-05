@@ -463,9 +463,9 @@ func (adapter GitHubWorkItemTransitionsClickHouseAdapter) InspectGitHubWorkItemE
 // their NULLs rather than collapsing to "".
 type GitHubWorkItemDependenciesClickHouseAdapter struct{ Conn driver.Conn }
 
-const gitHubWorkItemDependenciesInsert = `INSERT INTO work_item_dependencies (source_work_item_id, target_work_item_id, relationship_type, relationship_type_raw, relationship_semantics_version, last_synced, org_id, source_id)`
+const gitHubWorkItemDependenciesInsert = `INSERT INTO work_item_dependencies (source_work_item_id, target_work_item_id, relationship_type, relationship_type_raw, relationship_semantics_version, last_synced, org_id, source_id, relation_started_at, relation_writer)`
 
-const gitHubWorkItemDependenciesSelect = `SELECT source_work_item_id, target_work_item_id, relationship_type, relationship_type_raw, relationship_semantics_version, last_synced, org_id, source_id FROM work_item_dependencies FINAL WHERE org_id = ? AND source_work_item_id = ? AND target_work_item_id = ? AND relationship_type = ?`
+const gitHubWorkItemDependenciesSelect = `SELECT source_work_item_id, target_work_item_id, relationship_type, relationship_type_raw, relationship_semantics_version, last_synced, org_id, source_id, relation_started_at, relation_writer FROM work_item_dependencies FINAL WHERE org_id = ? AND source_work_item_id = ? AND target_work_item_id = ? AND relationship_type = ?`
 
 func (adapter GitHubWorkItemDependenciesClickHouseAdapter) WriteGitHubWorkItemEffect(
 	ctx context.Context,
@@ -543,6 +543,7 @@ func (adapter GitHubWorkItemDependenciesClickHouseAdapter) InspectGitHubWorkItem
 				&actual.RelationshipType, &actual.RelationshipTypeRaw,
 				&actual.RelationshipSemanticsVersion, &actual.LastSynced,
 				&actual.OrgID, &actual.SourceID,
+				&actual.RelationStartedAt, &actual.RelationWriter,
 			); err != nil {
 				return EffectConflict, err
 			}
@@ -563,7 +564,9 @@ func (adapter GitHubWorkItemDependenciesClickHouseAdapter) InspectGitHubWorkItem
 			actual.RelationshipTypeRaw != row.RelationshipTypeRaw ||
 			actual.RelationshipSemanticsVersion != row.RelationshipSemanticsVersion ||
 			actual.OrgID != row.OrgID ||
-			!uuidPointersEqual(actual.SourceID, row.SourceID) {
+			!uuidPointersEqual(actual.SourceID, row.SourceID) ||
+			!timePointersEqual(utcPointer(actual.RelationStartedAt), utcPointer(row.RelationStartedAt)) ||
+			!stringPointersEqual(actual.RelationWriter, row.RelationWriter) {
 			return EffectConflict, nil
 		}
 		return EffectExact, nil
@@ -1088,6 +1091,7 @@ func workItemDependencyValues(row githubWorkItemDependencyRow) []any {
 		row.SourceWorkItemID, row.TargetWorkItemID, row.RelationshipType,
 		row.RelationshipTypeRaw, row.RelationshipSemanticsVersion,
 		clickHouseMillis(row.LastSynced), row.OrgID, row.SourceID,
+		utcPointer(row.RelationStartedAt), row.RelationWriter,
 	}
 }
 

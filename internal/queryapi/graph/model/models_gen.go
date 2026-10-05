@@ -1268,6 +1268,20 @@ type RepoBusFactor struct {
 	EvidenceSampleCount int               `json:"evidenceSampleCount"`
 }
 
+type RepoCoverageBaseline struct {
+	RepoID string `json:"repoId"`
+	// The repository's full name in the org's catalogue. Null = the catalogue holds no name; never the id.
+	RepoName *string `json:"repoName,omitempty"`
+	// Mean line coverage, in percent (0 to 100), over the days of the 30 that hold a value. Null = fewer than 7 such days (``lineDays``): then there is no baseline. Never 0 for "none", never the current value.
+	LineBaselinePct *float64 `json:"lineBaselinePct,omitempty"`
+	// Days of the 30 that hold a line coverage value.
+	LineDays int `json:"lineDays"`
+	// Mean branch coverage, in percent; the same rules as ``lineBaselinePct``.
+	BranchBaselinePct *float64 `json:"branchBaselinePct,omitempty"`
+	// Days of the 30 that hold a branch coverage value.
+	BranchDays int `json:"branchDays"`
+}
+
 type ReportRunConnection struct {
 	Items []ReportRunType `json:"items"`
 	Total int             `json:"total"`
@@ -1456,6 +1470,41 @@ type SummarySentence struct {
 	ID           string `json:"id"`
 	Text         string `json:"text"`
 	EvidenceLink string `json:"evidenceLink"`
+}
+
+type TestOpsJobFailureGroup struct {
+	// The workflow (GitHub Actions) or pipeline (GitLab CI) name of the runs. Null = the job runs have no stored pipeline row, or the row has no name.
+	WorkflowName *string `json:"workflowName,omitempty"`
+	JobName      string  `json:"jobName"`
+	// The CI provider of the runs, as the pipeline row stores it (for example ``github_actions``). Null = the job runs have no stored pipeline row.
+	Provider *string `json:"provider,omitempty"`
+	// Job runs of this group that started in the window and reached a result (success, failure or cancelled). A skipped, queued or running job is not a run.
+	Runs int `json:"runs"`
+	// The runs that failed (a failure, an error or a timeout). Always above 0: a group with no failed run is not served.
+	FailedRuns int `json:"failedRuns"`
+	// ``failedRuns / runs``: a share from 0 to 1, NOT a percent. Null = no run to divide by (not served today: every served group has a failed run).
+	FailureRate *float64 `json:"failureRate,omitempty"`
+}
+
+type TestOpsJobFailuresInput struct {
+	// First day of the window (UTC), included. The day a job run started places it.
+	SinceDate graphqldate.Date `json:"sinceDate"`
+	// Last day of the window (UTC), included. At most 90 days after ``sinceDate`` (a "90 days" window of today minus 90 days to today is served); a later day, or a day before ``sinceDate``, is an error, not a cut answer.
+	UntilDate graphqldate.Date `json:"untilDate"`
+	RepoIds   []string         `json:"repoIds,omitempty"`
+	// Team ids. Narrows the runs to the repositories these teams OWN (team_repo_ownership, as of now); person membership is never read. With ``repoIds`` both apply.
+	TeamIds []string `json:"teamIds,omitempty"`
+	// Most groups to serve: 1 to 100.
+	Limit int `json:"limit"`
+}
+
+type TestOpsJobFailuresResult struct {
+	// The groups with the most failed runs first (then by job name, workflow name and provider), cut at ``limit``.
+	Groups []TestOpsJobFailureGroup `json:"groups"`
+	// Number of groups that match before the ``limit`` cut. Never less than ``groups``.
+	TotalCount int `json:"totalCount"`
+	// True = ``totalCount`` is above the number of ``groups`` served.
+	Truncated bool `json:"truncated"`
 }
 
 type TestOpsRiskBreakdownItem struct {

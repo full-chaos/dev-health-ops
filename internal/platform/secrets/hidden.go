@@ -36,11 +36,6 @@ func (h Hidden) GoString() string { return h.String() }
 // Format redacts for every verb, so %d, %x and %q cannot print the credential.
 func (h Hidden) Format(state fmt.State, _ rune) { _, _ = fmt.Fprint(state, h.String()) }
 
-func (h Hidden) LogValue() slog.Value {
-	if !h.Configured() {
-		return slog.StringValue("")
-	}
-	return slog.StringValue(redacted)
-}
+func (h Hidden) LogValue() slog.Value { return slog.StringValue(h.String()) }
 
 func (h Hidden) MarshalJSON() ([]byte, error) { return json.Marshal(h.String()) }

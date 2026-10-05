@@ -564,8 +564,9 @@ type LLMSettingsConfig struct {
 // LLMSettingsInput is `admin llm-settings set`: Model, APIKey and BaseURL nil
 // when not given.
 type LLMSettingsInput struct {
-	Provider               string
-	Model, APIKey, BaseURL *string
+	Provider       string
+	Model, BaseURL *string
+	APIKey         *string `json:"-"`
 }
 
 func (o Operator) llmHandlers(config LLMSettingsConfig) *handlers {

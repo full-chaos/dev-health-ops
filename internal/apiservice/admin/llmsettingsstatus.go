@@ -311,7 +311,7 @@ func (h *handlers) llmSettingsStatusResponse(ctx context.Context, orgID string) 
 		if resolvedProvider == "" {
 			resolvedProvider = "openai"
 		}
-		currentFingerprint := readinessFingerprint(resolvedProvider, cfg.model, cfg.baseURL, cfg.apiKey)
+		currentFingerprint := readinessFingerprint(resolvedProvider, cfg.model, cfg.baseURL, cfg.apiKey.Reveal())
 		if currentFingerprint == record.Fingerprint {
 			if dt, ok := pytime.FromISOFormat(record.CheckedAt); ok {
 				formatted := pytime.Pydantic(dt)

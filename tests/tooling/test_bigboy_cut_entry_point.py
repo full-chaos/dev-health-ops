@@ -34,9 +34,7 @@ _IMAGES = (
     "dev-health-go-operator",
 )
 
-_MIGRATE_MARKER = (
-    "--no-deps migrate"  # the compose command line of the migrate STEP: the stub exits nonzero on it
-)
+_MIGRATE_MARKER = "--no-deps migrate"  # the compose command line of the migrate STEP: the stub exits nonzero on it
 # so a run that reaches migrate is unambiguous in the captured output. bigboy-cut.sh redirects that
 # command's own stdout/stderr to a FILE ($REC/migrate.out), never to the script's own streams.
 

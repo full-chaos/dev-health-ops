@@ -336,9 +336,9 @@ func nullIfEmpty(value string) any {
 // route rule each carries (CHAOS-5484).
 //
 // TargetModeCanary admits a receipt measured on ANY recorded route,
-// because a shadow operation can only ever be measured on /query/proof:
-// PostgresSwitch.Enabled admits canary|primary only, so the deployed
-// build will not execute a shadow operation on /query at all. Requiring
+// because a shadow decision can only ever be measured on a proof route:
+// the class-decision switch admits canary|primary only on the serving
+// route, so the deployed build will not execute a shadow root there at all. Requiring
 // edge evidence there would mean an operation could only be proven after
 // it had already been enabled.
 //

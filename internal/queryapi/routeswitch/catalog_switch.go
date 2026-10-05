@@ -10,9 +10,8 @@ package routeswitch
 // The rule: an operation in the registered-document inventory of the process is served. No routing row
 // is read: not at the live digest, not at another one, in no mode.
 //
-// Not touched: the class-row switch (server/class_row_gate.go) and the proof switches (proof_switch.go)
-// are still PostgresSwitch values that read rows. An MCP class root with no class row stays dark, and
-// a measurement route still needs a row.
+// Not touched: the class-decision switch (class_decision_switch.go) reads go_api_class_decision. An MCP class root
+// with no decision stays dark.
 
 // NewCatalogSwitch is the switch /query and /graphql serve registered documents through.
 // documentDigests must be the registered-document inventory of the process (server/query_route.go

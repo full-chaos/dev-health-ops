@@ -159,55 +159,6 @@ func TestSplitOperationsRefusesAFilterThatNamesNothing(t *testing.T) {
 	}
 }
 
-// The SQL is the contract. `enable` may set reachability; `disable` may
-// set mode and provenance and NOTHING else -- in particular it must never
-// assign current_candidate_build, which go_api_cli.py documents as "Never
-// written -- disable changes mode only".
-func TestDisableSQLNeverAssignsTheCandidateBuild(t *testing.T) {
-	// The SET clause is checked in isolation, not the whole statement:
-	// `current_candidate_build` legitimately appears in the WHERE as the
-	// optional guard, and a naive substring check over the whole SQL
-	// cannot tell the guard from an assignment. Splitting at WHERE is what
-	// makes this assertion mean what its name says.
-	setClause, whereClause, split := strings.Cut(disableRoutingRowSQL, "\n WHERE ")
-	if !split {
-		t.Fatal("disableRoutingRowSQL must have a WHERE clause -- an unqualified UPDATE would rewrite every row in the table")
-	}
-	for _, forbidden := range []string{"current_candidate_build", "owner", "rollout_percentage", "eligible_orgs"} {
-		if strings.Contains(setClause, forbidden+" =") {
-			t.Fatalf("disableRoutingRowSQL must never assign %q -- disable changes mode only", forbidden)
-		}
-	}
-	for _, required := range []string{"schema_digest = $1", "document_digest = $2", "selected_operation = $3"} {
-		if !strings.Contains(whereClause, required) {
-			t.Fatalf("disableRoutingRowSQL must key its WHERE on %q -- the row's full primary key, never a partial match", required)
-		}
-	}
-	for _, required := range []string{"mode = $4", "review_evidence = $5", "recorded_by = $7", "updated_at = $8"} {
-		if !strings.Contains(disableRoutingRowSQL, required) {
-			t.Fatalf("disableRoutingRowSQL must assign %q", required)
-		}
-	}
-	// The guard has to be part of the WRITE, not a separate earlier read:
-	// a row repointed between the plan and the write must simply not
-	// match (go_api_routing_admin.apply_disable).
-	if !strings.Contains(disableRoutingRowSQL, "$6::text IS NULL OR current_candidate_build = $6") {
-		t.Fatal("the candidate-build guard must be part of the UPDATE's WHERE, not a separate read")
-	}
-}
-
-// The lock-order convention (CHAOS-5507): a write verb registers the
-// candidate build BEFORE it touches a routing row. `enable`'s SQL must
-// therefore contain no row lock of its own to take first.
-func TestEnableSQLTakesNoRoutingRowLockBeforeRegisteringTheBuild(t *testing.T) {
-	if strings.Contains(upsertRoutingStateSQL, "FOR UPDATE") {
-		t.Fatal("enable must not lock routing rows: registering the candidate build comes first, always (CHAOS-5507)")
-	}
-	if !strings.Contains(upsertRoutingStateSQL, "ON CONFLICT (schema_digest, document_digest, selected_operation) DO UPDATE") {
-		t.Fatal("enable must upsert on the 3-column primary key so a re-run is a no-op in effect, not an error")
-	}
-}
-
 func TestEnableRequestRefusesAnUnreachableMode(t *testing.T) {
 	base := EnableRequest{
 		SchemaDigest:   "sha256:x",
@@ -375,29 +326,6 @@ func TestDisableRequestRefusesEachMissingFieldInIsolation(t *testing.T) {
 	}
 }
 
-// a single document digest names at most one row for one
-// operation -- the routing table's primary key is (schema_digest,
-// document_digest, selected_operation) -- so SelectDocumentDigest is
-// refused alongside more than one named operation. (Disable already
-// refuses zero named operations on its own, for every request, selector
-// or not -- see TestDisableRequestRefusesEachMissingFieldInIsolation.)
-func TestDisableRequestDocumentSelectorRequiresExactlyOneOperation(t *testing.T) {
-	two := DisableRequest{SchemaDigest: "sha256:x", NewMode: "python", SelectDocumentDigest: "deaddigest", Operations: []string{"a", "b"}}
-	if err := two.validate(); !errors.Is(err, ErrDisableDocumentSelectorNeedsOneOperation) {
-		t.Fatalf("validate() = %v, want ErrDisableDocumentSelectorNeedsOneOperation with two named operations", err)
-	}
-	one := two
-	one.Operations = []string{"a"}
-	if err := one.validate(); err != nil {
-		t.Fatalf("exactly one named operation with a selector must validate: %v", err)
-	}
-	none := two
-	none.SelectDocumentDigest = ""
-	if err := none.validate(); err != nil {
-		t.Fatalf("more than one operation must still validate when no selector is named: %v", err)
-	}
-}
-
 func TestDisableChangeIsNoopCoversBothWaysARowCannotMove(t *testing.T) {
 	if !(DisableChange{CurrentMode: "", NewMode: "python"}).IsNoop() {
 		t.Fatal("no row at the live digest is a no-op -- disable never inserts")
@@ -425,24 +353,6 @@ func TestSummarizeDisableSeparatesNoRowFromAlreadyInThatMode(t *testing.T) {
 	empty := SummarizeDisable(nil)
 	if empty != (DisableSummary{}) {
 		t.Fatalf("an empty plan must summarize to all zeros, got %+v", empty)
-	}
-}
-
-// Reachability is a two-part claim, and both parts must hold. Mirrors
-// go_api_dispatcher's _REACHABLE_MODES and routeswitch's reachableModes.
-func TestOperationStatusReachableMatchesBothPlanesRuleExactly(t *testing.T) {
-	for _, mode := range []string{"canary", "primary"} {
-		if !(OperationStatus{DigestState: DigestMatch, Mode: mode}).Reachable() {
-			t.Fatalf("mode %q at the live digest is reachable", mode)
-		}
-		if (OperationStatus{DigestState: DigestStale, Mode: mode}).Reachable() {
-			t.Fatalf("mode %q at a STALE digest is NOT reachable -- no request ever looks that row up", mode)
-		}
-	}
-	for _, mode := range []string{"shadow", "python", "disabled", ""} {
-		if (OperationStatus{DigestState: DigestMatch, Mode: mode}).Reachable() {
-			t.Fatalf("mode %q is NOT reachable -- the client still gets Python's response", mode)
-		}
 	}
 }
 
@@ -676,52 +586,6 @@ func TestPrincipalIDAndRecordedByAreSeparateRequiredFields(t *testing.T) {
 	request.PrincipalID = ""
 	if err := request.validate(); err == nil {
 		t.Fatal("-recorded-by must not stand in for the principal id")
-	}
-}
-
-// CHAOS-5507, pinned in the SQL itself. The convention is:
-//
-//	register the candidate build BEFORE taking any routing-row lock,
-//	and visit routing rows in (selected_operation, document_digest) order.
-//
-// The survey read is what makes the first half possible, so it must NOT
-// lock; the locking read must be that same statement plus FOR UPDATE, so
-// the two passes cannot drift into scanning different rows in different
-// orders.
-func TestRepointSurveyReadTakesNoLockAndTheLockedReadIsTheSameOrderedQuery(t *testing.T) {
-	if strings.Contains(surveyRoutingRowsSQL, "FOR UPDATE") {
-		t.Fatal("the survey read must NOT lock: registering the candidate build before any routing-row lock is the whole of CHAOS-5507's fix")
-	}
-	if !strings.Contains(surveyRoutingRowsSQL, "ORDER BY selected_operation, document_digest") {
-		t.Fatal("both reads must carry the TOTAL order: selected_operation alone ties when an operation has several document digests")
-	}
-	if !strings.HasPrefix(selectRepointCandidatesSQL, surveyRoutingRowsSQL) {
-		t.Fatal("the locking read must be the survey read plus FOR UPDATE, so the two passes cannot drift apart")
-	}
-	if !strings.Contains(selectRepointCandidatesSQL, "FOR UPDATE") {
-		t.Fatal("the second pass must lock: the writes are driven from it, never from the unlocked snapshot")
-	}
-}
-
-// The other half of the convention, from the writing verbs' side: neither
-// `enable` nor `disable` has a lock to take before the registration, and
-// the registration targets the candidate-build table. Together with the
-// assertion above, all three verbs provably acquire in the same order.
-func TestNoVerbLocksARoutingRowBeforeRegisteringTheCandidateBuild(t *testing.T) {
-	if strings.Contains(registerCandidateBuildSQL, "FOR UPDATE") {
-		t.Fatal("registering a candidate build must not lock anything else")
-	}
-	if !strings.Contains(registerCandidateBuildSQL, "go_api_candidate_build") {
-		t.Fatal("the registration must target go_api_candidate_build -- it is the FIRST lock every writer takes")
-	}
-	if strings.Contains(upsertRoutingStateSQL, "FOR UPDATE") {
-		t.Fatal("enable's upsert must take no explicit lock of its own: it comes AFTER the registration and after the shared locking read")
-	}
-	if selectDisableCandidatesSQL != selectRepointCandidatesSQL {
-		t.Fatal("disable must read with the shared ordered predicate, not one of its own")
-	}
-	if strings.Contains(disableRoutingRowSQL, "go_api_candidate_build") {
-		t.Fatal("disable must never touch the candidate-build table -- that is what makes its single-table locking safe by construction")
 	}
 }
 

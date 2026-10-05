@@ -184,19 +184,6 @@ func LoadOperationCatalogWithKinds(path string) (map[string]string, map[string]s
 	return byOperation, kinds, err
 }
 
-// LoadOperationCatalogWithLegacy is LoadOperationCatalog plus, per
-// operation, the digests the catalog lists as LEGACY texts (`"legacy":
-// true`, CHAOS-8000 dual accept), in file order.
-//
-// `carry` needs them for the same reason it needs the current digest: the
-// catalog is the edge's map from a request text's digest to its
-// operation, so a routing row keyed to a legacy digest is dispatchable
-// after the roll only when this file lists that digest too.
-func LoadOperationCatalogWithLegacy(path string) (map[string]string, map[string][]string, error) {
-	byOperation, _, legacy, err := readOperationCatalog(path)
-	return byOperation, legacy, err
-}
-
 // LoadOperationCatalogWithKindsAndLegacy is LoadOperationCatalogWithKinds plus
 // LoadOperationCatalogWithLegacy's legacy digests, from ONE read of the file:
 // `status` needs all three (CHAOS-8649) and must not judge proof by one

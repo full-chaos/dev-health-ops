@@ -161,14 +161,9 @@ func newBuildInfoHandler(verifier *principal.Verifier) http.HandlerFunc {
 // mountProofRoute registers POST /query/proof only when this deployment
 // has explicitly opted in AND is not production.
 //
-// Why the route exists: routeswitch.PostgresSwitch admits canary|primary
-// only, so the deployed Go build cannot execute a SHADOW-mode operation
-// at all -- /query answers 404 (measured live 2026-09-07, enablement
-// artifact 51-harness-control.json). The four shadow operations could
-// therefore never be proven, and the parity defects that put them in
-// shadow (CHAOS-5447-5451) could never be re-measured after a fix without
-// canarying them, which exposes real traffic to the divergence under
-// investigation.
+// Why the route exists: the serving switches admit canary|primary only, so the deployed Go build cannot execute a
+// SHADOW-mode root at all on the serving route. A shadow decision could therefore never be proven without canarying
+// it, which exposes real traffic to the divergence under investigation.
 //
 // Why it is safe: it is a second handler on a second path over the same
 // pipeline, differing ONLY in reachability; the Python edge forwards to

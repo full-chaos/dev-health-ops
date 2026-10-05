@@ -128,41 +128,6 @@ type StatusLedger struct {
 	Families map[string]FamilyStatus `json:"families"`
 }
 
-// OperationRow is one of the Go-API operations, rendered entirely from live
-// sources. No cell here is hand-editable.
-type OperationRow struct {
-	Operation string `json:"operation"`
-	// Mode is go_api_routing_state.mode: python|shadow|canary|primary|disabled.
-	Mode string `json:"mode"`
-	// SchemaDigest is the row's schema_digest. A row at a digest other than
-	// the current pin is DEAD -- it can never be matched by the router.
-	SchemaDigest string `json:"schema_digest"`
-	// DocumentDigest is the registered document this row routes.
-	//
-	// Carried because two rows can share (schema_digest, operation) and
-	// differ only here -- the DOCUMENT_DRIFT shape the Python status
-	// surface names. Without it the two are indistinguishable in the
-	// render and R8 reports a duplicate.
-	DocumentDigest string `json:"document_digest"`
-	// CandidateBuild is current_candidate_build.
-	CandidateBuild string `json:"candidate_build"`
-	// Live is false when SchemaDigest != the current SDL pin.
-	Live bool `json:"live"`
-	// Proven is DERIVED, never a column: the id of a proof run that
-	// satisfies goapiproof.EnablementProofClause for this exact
-	// (schema_digest, document_digest, operation, candidate_build) and for
-	// THIS row's mode, or NoProof.
-	//
-	// Deliberately not restated here. This comment used to say
-	// "deployed_executed/match", which stopped being the rule when
-	// CHAOS-5484 admitted a fully-cited mismatch and split admission by
-	// target mode -- and a comment describing a rule it does not own is
-	// how the copy in live.go drifted unnoticed.
-	Proven string `json:"proven"`
-	// ParityTicket is the open parity ticket for this operation, if any.
-	ParityTicket string `json:"parity_ticket,omitempty"`
-}
-
 // Render is contracts/migration-status/v1/last-render.json: the committed
 // snapshot of the last live render. CI re-renders the doc from THIS file, not
 // from a database -- so the check needs no Postgres, no docker, and no
@@ -194,11 +159,6 @@ type Render struct {
 	FleetReadAt time.Time `json:"fleet_read_at"`
 	// FleetSource names how the fleet was read.
 	FleetSource string `json:"fleet_source"`
-	// Operations is every go_api_routing_state row, live and dead.
-	Operations []OperationRow `json:"operations"`
-	// ProofRunTotal is the total row count of go_api_proof_run at read time.
-	// Rendered as a bare number because zero is the fact that matters.
-	ProofRunTotal int `json:"proof_run_total"`
 	// RESTProven is every REST routeswitch operation name (RESTOperationName's
 	// own form, e.g. "REST:GET:/api/v1/quadrant") ReadRESTProof found an
 	// admissible receipt for at render time, mapped to that receipt's id --
@@ -336,52 +296,21 @@ func LoadNativeFamilies(path string) (*NativeFamilies, error) {
 	return &families, nil
 }
 
-// Catalog is the registered-operation catalog,
-// contracts/graphql/v1/go_api_operations.json: the
-// (operation, document digest) pairs the edge dispatches by. It is the SAME
-// file `dho goapi routing status` reports against.
-//
-// Why the matrix reads it: a routing row at the LIVE schema
-// digest whose document the catalog does not name cannot be dispatched --
-// the edge resolves a request to an operation THROUGH the catalog -- and
-// `routing status` names that row DOCUMENT_DRIFT. This page had no way to:
-// its only liveness test was `schema_digest == pin`, so the drifted row
-// rendered "live, primary, proven" and -check passed, on the page whose
-// stated reason for existing is that a silent death must not look like
-// health. A reader of the page cannot tell drift from service without the
-// pairs the edge actually dispatches by, so the page reads them.
+// Catalog is the registered-operation catalog, contracts/graphql/v1/go_api_operations.json: the (operation, document
+// digest) pairs the edge dispatches by. The matrix reads it for the number of operations query-api serves.
 type Catalog struct {
 	documents map[string]map[string]bool // operation -> document digests
-}
-
-// Names reports whether the catalog registers exactly this pair.
-func (c Catalog) Names(operation, documentDigest string) bool {
-	return c.documents[operation][documentDigest]
 }
 
 // OperationCount is the number of operations the catalog registers.
 func (c Catalog) OperationCount() int { return len(c.documents) }
 
-// Documents lists the digests the catalog registers for operation, sorted.
-func (c Catalog) Documents(operation string) []string {
-	out := make([]string, 0, len(c.documents[operation]))
-	for digest := range c.documents[operation] {
-		out = append(out, digest)
-	}
-	sort.Strings(out)
-	return out
-}
-
 // NewCatalog builds a Catalog from (operation, document digest) pairs.
 //
-// Its refusals are a strict SUPERSET of the Python loader's
-// (go_api_operation_catalog._load): every file Python refuses -- not an
-// array, empty, an entry missing a key or not an object, a digest
-// registered twice -- this refuses too, so the page can never judge drift
-// against a catalog the edge itself could not load. It additionally
-// refuses a blank, null or non-string name and (in LoadCatalog) an unknown
-// key, all of which Python loads: judging drift against a malformed catalog
-// would be a silent wrong answer, and refusing it is a loud one.
+// Its refusals are a strict SUPERSET of the Python loader's (go_api_operation_catalog._load): every file Python
+// refuses -- not an array, empty, an entry missing a key or not an object, a digest registered twice -- this refuses
+// too, so the page can never count against a catalog the edge itself could not load. It additionally refuses a blank,
+// null or non-string name and (in LoadCatalog) an unknown key, all of which Python loads.
 // TestLoadCatalogOverItsInputDomain executes every cell.
 func NewCatalog(pairs [][2]string) (Catalog, error) {
 	catalog := Catalog{documents: map[string]map[string]bool{}}
@@ -401,7 +330,7 @@ func NewCatalog(pairs [][2]string) (Catalog, error) {
 		catalog.documents[operation][digest] = true
 	}
 	if len(owner) == 0 {
-		return Catalog{}, fmt.Errorf("catalog is empty: a page cannot judge DOCUMENT_DRIFT against a catalog that registers nothing")
+		return Catalog{}, fmt.Errorf("catalog is empty: a page cannot count the operations of a catalog that registers nothing")
 	}
 	return catalog, nil
 }

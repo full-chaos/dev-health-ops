@@ -41,11 +41,9 @@ port reproduces that "authorized org always wins" behavior exactly (see
 `GO_API_REGISTRY_POSTGRES_URI`, `GO_API_ENVELOPE_JWKS_PATH`,
 `GO_API_ENVELOPE_ISSUER`, and `GO_API_ENVELOPE_AUDIENCE` are all set —
 otherwise it stays Wave-0-empty (only `/healthz`/`/readyz`). `/query`
-requests are gated by `routeswitch.Mux` +
-`PostgresSwitch` (reachable only when `go_api_routing_state.mode` is
-`canary`/`primary` for the SPECIFIC operation being dispatched —
-featureFlags, reviewEdges, cognitiveLoad, complexityTimeseries, and
-hotspots each have their own row and are gated fully independently) and
+requests are dispatched by `routeswitch.Mux` +
+the catalog switch (every operation in the process's registered-document
+inventory is served; no routing row decides it, CHAOS-8702) and
 authenticated by `authenticateInternalRequest` (`internal_auth.go`,
 CHAOS-6144): the four `X-DH-Internal-*` identity headers an in-cluster
 caller sends with no token, OR the `principal.Verifier` effective-principal
@@ -103,10 +101,9 @@ batch; a root field outside `mcpRootFieldAllowlist` (14 fields, reviewed by
 PR); depth > 10, aliases > 15, complexity > 150; an `orgId`/`org_id` that is
 not the header org, at any depth, inside input objects and variables
 (`hotspots`/`cognitiveLoad` carry it in `input`, which
-`graph.OperationOrgGuard` does not read); a root field whose class routing row
-is not canary/primary. Class rows live in `go_api_routing_state` keyed
-(`schema_digest`, `sha256("dev-health-ops/mcp-freeform-class/v1")`,
-`mcp:<rootField>`); no row = refused, so the class ships dormant. What passes
+`graph.OperationOrgGuard` does not read); a root field whose class decision
+is not canary/primary. Class decisions live in `go_api_class_decision`, one row per
+`mcp:<rootField>` and independent of the schema digest; no decision = refused, so the class ships dormant. What passes
 runs on its own gqlgen server (POST only, no introspection/APQ, the same caps,
 the operation guard again) over its own ClickHouse client:
 `MaxBytesToRead` 4 GiB and `max_execution_time` 10 s (CHAOS-7091; the shared

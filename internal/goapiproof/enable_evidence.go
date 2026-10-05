@@ -1,54 +1,17 @@
 package goapiproof
 
-// The review_evidence prefixes `enable` and `status` agree on.
-//
-// A row enabled without a store proof run says so on the row itself, in the
-// one place a reader six weeks later still looks. `enable` writes two such
-// prefixes (NamedLimitEvidencePrefix, CatalogRuleEvidencePrefix); the two
-// older prefixes below are only READ, so a row written before the change
-// keeps its own word in `status` until the next `enable` rewrites it.
+// The review_evidence prefix `enable` writes for a root admitted from the go-served ledger's written limit instead of a
+// store proof run: the one place a reader six weeks later still looks.
 
 import (
 	"crypto/sha256"
 	"encoding/hex"
-	"regexp"
-	"strings"
 )
 
 // NamedLimitEvidencePrefix starts review_evidence on a row enabled from the
 // go-served ledger's written limit instead of a store proof run. The sha256
 // of that written reason follows, then the operator's evidence.
 const NamedLimitEvidencePrefix = "NAMED-LIMIT:"
-
-// CatalogRuleEvidencePrefix starts review_evidence on a catalog operation's
-// row enabled with neither a store proof run nor a ledger limit (CHAOS-8586):
-// the catalog rule serves the operation without a row, so no proof guards the
-// row that lifts a hold. The operator's evidence follows.
-const CatalogRuleEvidencePrefix = "CATALOG-RULE:"
-
-// CatalogRuleEvidence is the ONE writer of that prefix.
-func CatalogRuleEvidence(operatorEvidence string) string {
-	return CatalogRuleEvidencePrefix + " " + operatorEvidence
-}
-
-// legacyVenueEvidencePrefix and legacyNoProdDataEvidencePrefix start
-// review_evidence on rows written by the venue-receipt path this package no
-// longer has. They are read, never written.
-const (
-	legacyVenueEvidencePrefix      = "VENUE-PROOF:"
-	legacyNoProdDataEvidencePrefix = "NO-PROD-DATA:"
-)
-
-// Legacy venue classes as `status` reports them.
-const (
-	VenueClassAdmin  = "admin_only"
-	VenueClassNoData = "no_production_data"
-)
-
-var (
-	namedLimitEvidenceRE = regexp.MustCompile(`^NAMED-LIMIT:[0-9a-f]{64}( |$)`)
-	venueEvidenceRE      = regexp.MustCompile(`^(NO-PROD-DATA:[0-9a-f]{64} )?VENUE-PROOF:[0-9a-f]{64}( |$)`)
-)
 
 // NamedLimitDigest is the sha256 of a ledger reason, as hex.
 func NamedLimitDigest(reason string) string {
@@ -60,23 +23,4 @@ func NamedLimitDigest(reason string) string {
 // row enabled from the ledger's written limit.
 func NamedLimitEvidence(reason, operatorEvidence string) string {
 	return NamedLimitEvidencePrefix + NamedLimitDigest(reason) + " " + operatorEvidence
-}
-
-// HasNamedLimitEvidence is the ONE reader: whether a row's own review_evidence
-// claims an enablement from the ledger's written limit. It reads the row's
-// text; it does not prove the ledger still holds the reason.
-func HasNamedLimitEvidence(evidence string) bool {
-	return namedLimitEvidenceRE.MatchString(evidence)
-}
-
-// LegacyVenueEvidenceClass is the class a row written by the retired venue
-// path claims, or "" for anything else.
-func LegacyVenueEvidenceClass(evidence string) string {
-	if !venueEvidenceRE.MatchString(evidence) {
-		return ""
-	}
-	if strings.HasPrefix(evidence, legacyNoProdDataEvidencePrefix) {
-		return VenueClassNoData
-	}
-	return VenueClassAdmin
 }

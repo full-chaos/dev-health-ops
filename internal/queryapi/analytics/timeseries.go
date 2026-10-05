@@ -308,13 +308,11 @@ ORDER BY bucket ASC, value DESC, dimension_value ASC
 // operand to 0, so a null would be silently averaged in as a measured
 // zero, reproducing THIS SAME defect one layer up in the web client
 // were it ever null on the wire). These four operations' documents are
-// registered in query_route.go's digestByOperation map, so serving them
-// from Go is gated by the go_api_routing_state row
-// (PostgresSwitch.Enabled()) like any other registered document. The
+// registered in query_route.go's digestByOperation map, so they are served
+// from Go like any other registered document (the catalog switch). The
 // SDL's TimeseriesBucket.value (and BreakdownItem.value) is nullable on
 // both planes; the web client's mergeToSpark (or equivalent) still needs
-// a real null-handling branch before any of these four routing rows is
-// enabled.
+// a real null-handling branch: they are already served.
 func ExecuteTimeseries(ctx context.Context, client QueryClient, q compiledQuery, dimensionName, measureName string) ([]model.TimeseriesResult, error) {
 	rows, err := client.Query(ctx, q.sql, q.bindings)
 	if err != nil {

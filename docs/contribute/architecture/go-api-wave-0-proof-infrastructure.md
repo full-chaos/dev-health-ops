@@ -8,7 +8,7 @@ source_of_truth:
   - .github/docs-legacy/plans/chaos-4381-parity-rules-proposal.md (comparator parity rules, ACCEPTED 2026-08-27)
   - src/dev_health_ops/api/graphql/go_api_comparator.py (comparator implementation)
   - internal/queryapi/principal (Go envelope verifier)
-  - internal/queryapi/routeswitch (reachability gate, incl. PostgresSwitch)
+  - internal/queryapi/routeswitch (reachability gate: catalog and class-decision switches)
   - src/dev_health_ops/api/graphql/principal_envelope.py (envelope issuer)
   - src/dev_health_ops/models/go_api_registry.py (registry + ledger schema)
   - src/dev_health_ops/alembic/versions/0114_add_go_api_operation_registry.py
@@ -245,50 +245,32 @@ true, checked on every dispatch, makes it reachable.
 flowchart LR
     Client -->|dispatch operation| Mux[routeswitch.Mux]
     Mux -->|Enabled?| Switch{routeswitch.Switch}
+    Switch -->|CatalogSwitch| Inventory[(registered-document inventory<br/>of the process)]
+    Switch -->|ClassDecisionSwitch| Decisions[(go_api_class_decision<br/>one row per mcp:root)]
     Switch -->|StaticSwitch / DynamicSwitch| Memory[(in-memory map)]
-    Switch -->|PostgresSwitch| Registry[(go_api_routing_state<br/>schema_digest+document_digest+selected_operation)]
     Switch -->|false| NotFound[404 -- identical to<br/>no handler registered]
-    Switch -->|true, mode in canary/primary| Handler[registered http.Handler]
+    Switch -->|true| Handler[registered http.Handler]
 ```
 
-`PostgresSwitch` (`internal/queryapi/routeswitch/postgres_switch.go`)
-is the `go_api_registry`-backed `Switch` plan §6 forward-declared —
-implementing the same interface `StaticSwitch`/`DynamicSwitch` already do,
-not a redesign of it. It treats only `mode IN ('canary', 'primary')` as
-reachable: `shadow` deliberately does NOT count (the client still gets
-Python's response in shadow mode, plan §5 stage 4), and a missing row, a
-query error, or an operation with no registered document digest all
-resolve to the same safe default as an unregistered operation —
-unreachable. One switch has an exception to the missing-row rule: the switch that
-`/query` and `/graphql` serve registered documents through
-(`NewCatalogSwitchWithLegacy`, `catalog_switch.go`) serves an operation that
-has no routing row at any schema digest. An operation that has a row
-anywhere keeps the rule above (a row in a non-served mode, or left at
-another digest, holds it dark), and the class-row and proof switches have no
-exception. Proven against a real Postgres testcontainer
-(`postgres_switch_integration_test.go`, `catalog_switch_integration_test.go`,
-`go test -tags integration`),
-including the rollback direction: flipping `mode` away from
-`canary`/`primary` revokes reachability on the very next read, with no
-separate deploy (plan §5: "rollback is a registry change, not an image
-rollback").
+There are two switches that decide serving, and neither reads a per-digest routing row (CHAOS-8702):
 
-### `canary` and `primary` are the same reachability
+- **`CatalogSwitch`** (`internal/queryapi/routeswitch/catalog_switch.go`) is the switch `/query`, `/graphql` and the proof
+  route serve registered documents through. An operation in the registered-document inventory of the process is served;
+  one that is not is unreachable. No database is read, so a schema change, a missing row or a stale row cannot hold an
+  operation dark. The Python api that a routing row used to choose between is deleted.
+- **`ClassDecisionSwitch`** (`class_decision_switch.go`) is the switch of the MCP listener and the class-row gate. A class
+  root is lit by ONE row in `go_api_class_decision`, keyed by `mcp:<root>`: `canary` or `primary` serves it, `shadow`
+  serves only the measurement-only proof route, and `python`, `disabled` or no row keep it dark. A decision read that fails
+  refuses. Proven against a real Postgres testcontainer (`go test -tags integration`), including the rollback direction:
+  flipping `mode` away from `canary`/`primary` revokes reachability on the very next read, with no separate deploy
+  (plan §5: "rollback is a registry change, not an image rollback").
 
-`eligible_orgs` and `rollout_percentage` on a routing row are inert: no plane
-reads them. `Enabled(operation)` takes no organisation, the Python edge
-dispatcher that decides delegation does not enforce them either, and the
-delegated operations have no Python resolver for an organisation outside a
-cohort to fall back to (that organisation would get an error, not Python's
-answer). So `canary` and `primary` both mean *on for every authenticated
-organisation, revocable only by mode* (`python` or `disabled` turn an
-operation off; `shadow` is not reachable). `dho goapi routing enable`
-refuses any `-rollout` other than 100, and `dho goapi routing status`
-names a reachable row that still records a partial rollout or a non-empty
-`eligible_orgs` (`not_enforced` in the JSON, `!! NOT ENFORCED` in the text).
-A real staged rollout would need the organisation threaded through
-`Enabled` and a served answer for the organisations outside the cohort; that
-is a new design, not a flag.
+A class decision has no `rollout_percentage` or `eligible_orgs`: `Enabled(operation)` takes no organisation, and the
+delegated operations have no Python resolver for an organisation outside a cohort to fall back to, so a decision is *on
+for every authenticated organisation, revocable only by mode*.
+
+`go_api_routing_state` is read by nothing that serves or proves (CHAOS-8705). It stays in the schema until CHAOS-8706 drops
+it, and until then only the rollback gate of a roll sheet reads it.
 
 ## Canonical SDL pin
 
@@ -312,8 +294,8 @@ cannot matter, and nothing has to move the row on a roll. `dho goapi routing car
 the stale-rows alarm are gone.
 
 `repoint` rewrites the build a class decision names, and never its mode or `decided_at`; it works after a schema move.
-`dho goapi prove` refuses a document row that names a build other than the running one, so `bigboy-graphql-prove.sh`
-runs `repoint` before it proves.
+`dho goapi prove` of a document operation reads no routing row: it measures every registered operation through the edge
+against the running build.
 
 ### After alembic 0129: every earlier proof reads UNPROVEN until re-proven
 
@@ -333,9 +315,9 @@ proofs.
 `cmd/go-api-routing` binary into the `dho` operator binary's `goapi
 routing` verb) is the Go implementation of the same contract, built
 because the cutover rule forbids new Python compute on the critical path
-of a rollout operation. The Python `status` and `disable` verbs still
-work. `enable` exists only in Go, and the Go verbs are the only ones that can
-re-point a `shadow` row.
+of a rollout operation. The verbs `seed`, `enable`, `disable` and `repoint` take MCP class
+operations only (`-operations mcp:<root>[,...]` or `all-mcp`) and refuse a catalog operation: query-api serves
+every registered operation, so there is nothing to seed, enable, disable or repoint for it. `status` lists both.
 
 ```bash
 # A typed -postgres-uri flag value reaches /proc/<pid>/cmdline and shell
@@ -346,20 +328,22 @@ re-point a `shadow` row.
 # environment and omit the flag entirely.
 export POSTGRES_URI=<dsn>
 
-# 1. Same question. Never refuses, works with query-api down.
+# 1. Never refuses, works with query-api down: the catalog operations against the
+#    deployed registry, and the class decisions.
 dho goapi routing status -registry-url http://query-api:8090/registry
 
-# 2. Re-enable. NOTE the difference that matters: there is no
+# 2. Light a class root. NOTE the difference that matters: there is no
 #    -candidate-build to type. The build is READ from the deployed
 #    process's authenticated /buildinfo; -expect-build is a cross-check
 #    that can only FAIL a run, never the source of what is written. The
 #    credential is the effective-principal ENVELOPE in
 #    GO_API_ROUTING_BEARER -- an env var, not a flag, because a flag value
-#    reaches `ps` and shell history.
+#    reaches `ps` and shell history. The root needs a per-root receipt for
+#    the running build (dho goapi prove -mcp-roots ...).
 GO_API_ROUTING_BEARER=<envelope> dho goapi routing enable \
   -registry-url  http://query-api:8090/registry \
   -buildinfo-url http://query-api:8090/buildinfo \
-  -operations    all-registered \
+  -operations    mcp:hotspots \
   -mode          canary \
   -recorded-by   <who> \
   -review-evidence '<why>'
@@ -369,16 +353,13 @@ GO_API_ROUTING_BEARER=<envelope> dho goapi routing enable \
 #    deployed process is down. -candidate-build here is a GUARD ("refuse
 #    if somebody repointed this since I looked"), never written.
 dho goapi routing disable \
-  -operations all-registered -mode python        # dry run, writes nothing
+  -operations all-mcp -mode python        # dry run, writes nothing
 dho goapi routing disable \
-  -operations all-registered -mode python -apply \
+  -operations all-mcp -mode python -apply \
   -recorded-by <who> -review-evidence '<why>'
 
-# 4. Provenance only: point rows at the running build without touching a
-#    single column that decides reachability. This is the verb the Python
-#    pair cannot express -- `enable --mode` accepts only canary|primary,
-#    and `disable` never writes the build -- so a shadow row could not be
-#    re-pointed at all before it existed.
+# 4. Provenance only: point decisions at the running build without touching a
+#    single column that decides reachability.
 GO_API_ROUTING_BEARER=<envelope> dho goapi routing repoint ... -dry-run
 ```
 
@@ -392,19 +373,6 @@ decision.
   Python is documented "by CONVENTION, unverified"; the fifteen live rows
   carry a sha nothing ever checked. The Go verb reads it from
   `/buildinfo` and refuses when the process cannot identify its build.
-* **`disable` keys its UPDATE on the row's OWN document digest**, not the
-  catalog's. A row whose document digest has drifted from the catalog is
-  still turned off; in Python that write silently matches nothing. An
-  off-ramp that stops working precisely when something has drifted is an
-  off-ramp with a hole in it.
-* **`disable -document <digest>` (and `repoint -document <digest>`) select
-  the live row by that exact digest instead of the catalog's**, which is
-  the only way to guard-check `-candidate-build` against a DOCUMENT_DRIFT
-  row (the catalog-driven path has no catalog digest of its own to
-  compare the guard against, so it skips such a row rather than checking
-  it) or to act on one specific row of several an operation has, without
-  touching the others; it refuses outright when no live row for the
-  named operation carries that digest.
 * **`-recorded-by` and `-review-evidence` are required on every write.**
   Python derives `recorded_by` from `$DEV_HOPS_OPERATOR` / `$SUDO_USER` /
   `$USER` and falls back to the literal `unknown`, and it permits an
@@ -414,26 +382,6 @@ decision.
   columns; an append-only audit row carrying the same two fields on every
   write, independent of the current row, arrives with CHAOS-5505 (the
   audit PR that follows this one).
-* **`disable` never refuses the WHOLE run over one operation's per-row
-  guard state -- a stale schema digest, or a `-candidate-build` guard
-  named against an operation whose only live-digest rows are DEAD (no
-  catalog document digest)** -- refusing here would contradict this
-  verb's own documented contract of working when the planes disagree.
-  Either state is SKIPPED for that operation alone, reported on its own
-  plan line, so the documented rollback recipe (`-operations
-  all-registered -mode python`) can still turn everything else off when
-  one operation's rows are stale or dead to this checkout. Because
-  something was still skipped, the run exits non-zero (2) even though
-  the healthy operations were disabled -- an operator sees both facts:
-  what moved, and what needed a second look. **This is a declared
-  divergence from Python, in the STRONGER direction**: on the identical
-  fixture, Python's guarded `-operations all-registered` also exits 2,
-  but its plan LISTS the dead-only operation as if it would move, then
-  silently leaves it untouched at apply time and blames a misattributed
-  cause ("their candidate build moved between the plan and the write").
-  Go never lists a row it will not touch as moving, and names the real
-  reason (no catalog row to check the guard against) instead of a
-  generic race that did not happen.
 * **`-candidate-build` passed as an explicitly empty value is refused**,
   not silently treated as "no guard" -- an empty value reads identically
   to the flag never being passed at all otherwise, which would apply an
@@ -444,16 +392,10 @@ decision.
   falls back to `GO_API_QUERY_API_URL` (or nothing) can silently split a
   single preflight across two different processes; only both-explicit or
   neither is accepted.
-* **`status`'s `reachable` field is tri-state (`true`/`false`/`null`, not
-  a plain bool) and carries a `reachable_reason` naming the actual cause**
-  -- the row's own mode, the row's own digest_state, a schema-level
-  mismatch, a per-operation document-digest mismatch, or "the go plane
-  could not be reached" -- rather than requiring a JSON consumer to
-  cross-reference several other fields by hand to learn why.
 * **`status` never refuses**, even on an UNUSABLE (not merely unset)
   `GO_API_QUERY_API_URL` inherited from the environment: it reports
   `go_plane_error` and still prints everything that needed no registry
-  call (the local schema digest, the database census).
+  call (the local schema digest, the catalog operations).
 * **`<verb> -h`/`-help` exits 0**, printing that verb's usage text, the
   same as this binary's own top-level `-h` and Python's argparse --  not a
   refusal (exit 2).
@@ -468,32 +410,7 @@ decision.
   `python_plane_digest_error` (always `null` -- computing this value has
   no runtime failure mode in Go, present for key-set parity only), not
   the earlier `local_schema_digest` with no digest-error key at all.
-  `catalog_error` and `classification_error` remain Go-only additions
-  Python has no equivalent read for.
-
-`disable` also turns off **every** row an operation has at the live
-digest, not one of them. The routing primary key is `(schema_digest,
-document_digest, selected_operation)`, so one operation can have several
-rows under different document digests; leaving one behind would report
-success while the operation stayed reachable.
-
-**Only the rows under a document the operation accepts are ever
-reachable**, and `status` says which. The edge resolves a request to an
-operation through the catalog and then reads the rows under the documents
-that operation accepts: the catalog's current document digest and the
-legacy digests the catalog registers for it (`"legacy": true`, dual
-accept). query-api serves the operation when any one of those rows is in
-`canary` or `primary`. `status` counts the same rows (CHAOS-8649): such a
-row reads `MATCH`, its `document_class` is `current` or `legacy`,
-`row_document_digest` names the row's own digest, `mode` and
-`current_candidate_build` are read from it, and `accepted_document_digests`
-lists every accepted row the operation has at the live schema digest. A row
-at the live schema digest under any other document digest is dead in
-exactly the way a row at a stale schema digest is dead: `status` reports it
-as `STALE`, never `MATCH`, never reachable, and names its digest under
-`unreachable_document_digests`. A row that is present in `psql` and can
-never be consulted is the CHAOS-5416 shape; only the column that moved is
-different.
+  `catalog_error` remains a Go-only addition Python has no equivalent read for.
 
 **Endpoint URLs are refused if they carry userinfo, a query or a fragment,
 and what the command actually uses is rebuilt from scheme, host and path.**
@@ -586,33 +503,26 @@ mode only).
 
 Only rows that ACTUALLY moved are audited: a `repoint` that finds every row
 already naming the running build writes no audit rows, and a `disable`
-naming an operation with no row audits nothing for it. An entry for an
+naming a class root with no decision audits nothing for it. An entry for an
 unchanged row would record a change that did not happen, in a table nothing
 can later correct.
 
-There is deliberately **no foreign key** to `go_api_routing_state`: the
-audit table must outlive the row it describes.
+There is deliberately **no foreign key** from the audit table to the decision it
+describes: the audit table must outlive the row it describes.
 
 ### How this is now detected
 
+The silent death of CHAOS-5416 (a routing row at a dead digest holding an operation dark) cannot happen to a catalog
+operation any more: nothing is keyed by the schema digest that serves. What remains is the pin itself:
+
 | Signal | Where | Fires when |
 |---|---|---|
-| `go_api_routing.rows_stale` (ERROR log) | Python edge startup (`api/_lifespan.py`) | Rows exist, none at the live digest |
-| `devhealth_go_api_routing_digest_drift_total{result="stale"}` | Python edge startup | Same condition, as a scrapeable counter |
-| `devhealth_go_api_dispatch_fallback_total{reason="no_routing_row"}` | Python edge, per request | A dispatch-eligible request found no row |
-| `devhealth_query_api_routeswitch_digest_miss_total{operation}` (and its WARN record) | `query-api`, per request | An operation has no row at the live key and is refused: on the class-row and proof switches only. The serving route (`/query`, `/graphql`) reads no row (CHAOS-8702) |
-| `ci/check_go_api_routing_digest.py` | CI | The SDL moved without updating the pin and this table |
+| `ci/check_go_api_routing_digest.py` | CI | The SDL moved without updating the pin and the table below |
+| `dho goapi routing status` | operator | A catalog operation is `MISMATCH` or `UNREGISTERED` against the deployed registry, or a class root reads `MISSING` (dark) |
 
-`empty` (no row decides anything) is deliberately reported as a *different*
-result from `stale` (everything enabled is dead), and the two mean opposite
-things: query-api's serving route (`/query`, `/graphql`) serves every registered
-operation whatever the rows say (CHAOS-8702); the difference matters for the
-class-row and proof switches, which still read rows.
-
-None of the above shortcuts the recovery procedure. In particular, a schema digest that happens to match a
-previously-proven build is NOT grounds to re-point a DEAD row's `candidate_build` onto a new image without a
-fresh `go-api-prove` run: see "Per Go-API operation" in `docs/go-migration-matrix.md` ("The condition is now
-observable, not just render-visible") for why that specific shortcut was considered and rejected.
+None of the above shortcuts the recovery procedure: a schema digest that happens to match a previously-proven build is NOT
+grounds to carry a proof onto a new image without a fresh `go-api-prove` run: a proof is evidence for one immutable
+`(schema_digest, document_digest, selected_operation, candidate_build)` tuple.
 
 ### Schema-digest history
 
@@ -824,7 +734,7 @@ entry matching no compared field **fails the run**.
 As of 2026-08-27, every Wave 0 deliverable exists and is tested: the
 envelope issuer and its Go verifier (`principal.Verifier`, cross-checked
 against a real Python-issued envelope), the registry/ledger schema and its
-`PostgresSwitch` reader, the SDL pin, the switch-gated-reachability empty
+switch readers (the per-row `PostgresSwitch` of that wave is gone, CHAOS-8702), the SDL pin, the switch-gated-reachability empty
 scaffold, and the comparator (CHAOS-4366 deliverable 5, CHAOS-4381 signed
 off 2026-08-27 19:44 PT). None of these is wired into a live request
 path yet — that is a later wave, per plan §6's Wave-0 scope ("no

@@ -3,13 +3,12 @@ package migrationmatrix
 import (
 	"os"
 	"path/filepath"
-	"reflect"
 	"strings"
 	"testing"
 )
 
-// CHAOS-8000 dual accept: a legacy catalog entry is a document the catalog still names, so a live row at it is
-// NOT drift (R14), while a row at a digest the catalog does not name still is.
+// CHAOS-8000 dual accept: a legacy entry is another document of the same operation, so it counts toward the operation
+// once, not twice.
 func TestLoadCatalog_LegacyEntryIsAnotherNamedDocumentOfTheOperation(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "go_api_operations.json")
 	body := `[
@@ -24,20 +23,11 @@ func TestLoadCatalog_LegacyEntryIsAnotherNamedDocumentOfTheOperation(t *testing.
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got := catalog.Documents("foo"); !reflect.DeepEqual(got, []string{"d-new", "d-old"}) {
-		t.Fatalf("Documents(foo) = %v, want both texts", got)
+	if got := catalog.OperationCount(); got != 2 {
+		t.Fatalf("OperationCount = %d, want 2: a legacy text is another document of foo, not another operation", got)
 	}
-	row := func(digest string) OperationRow {
-		return OperationRow{Operation: "foo", Mode: "canary", Live: true, DocumentDigest: digest}
-	}
-	if DocumentDrift(row("d-old"), catalog) {
-		t.Error("a live row at the legacy text is DOCUMENT_DRIFT; the catalog names it")
-	}
-	if DocumentDrift(row("d-new"), catalog) {
-		t.Error("a live row at the current text is DOCUMENT_DRIFT")
-	}
-	if !DocumentDrift(row("d-unknown"), catalog) {
-		t.Error("a live row at a digest the catalog does not name must still be DOCUMENT_DRIFT")
+	if got := len(catalog.documents["foo"]); got != 2 {
+		t.Fatalf("foo has %d documents, want both texts", got)
 	}
 }
 

@@ -272,7 +272,7 @@ func classifyWriteError(err error) error {
 		case "57014", "55P03":
 			return refuse("the database did not answer within the -timeout: %s.\n"+
 				"  The statement was cancelled by this command's own statement_timeout/lock_timeout, so the transaction ROLLED BACK WHOLE and NOTHING was written -- this is not a partial write.\n"+
-				"  Something else is most likely holding a lock on go_api_routing_state. Find it, or raise -timeout, then run the command again.", pgErr.Message)
+				"  Something else is most likely holding a lock on go_api_class_decision. Find it, or raise -timeout, then run the command again.", pgErr.Message)
 		}
 		return internal("%v", err)
 	}
@@ -426,7 +426,7 @@ const postgresURIEnvVar = "POSTGRES_URI"
 // missing value, `-h`. Measured against a real database before the fix:
 //
 //	-postgres-uri string
-//	  domain Postgres DSN holding go_api_routing_state (default
+//	  domain Postgres DSN holding go_api_class_decision (default
 //	  "postgresql://postgres:<the actual password>@127.0.0.1:55437/devhealth")
 //
 // A password reaching stderr is a password reaching CI logs, scrollback
@@ -889,11 +889,10 @@ func sanitizeEndpointURL(flagName, raw string) (string, error) {
 // A DIAL-ONLY BOUND IS NOT THE BOUND THE FLAG ADVERTISES, and the gap is
 // not theoretical: a dial succeeds against a perfectly healthy database
 // and the QUERY then blocks behind somebody else's `LOCK TABLE
-// go_api_routing_state IN ACCESS EXCLUSIVE MODE`. Executed before this
-// fix: `carry -timeout 100ms` was still blocked after 501ms with such a
-// lock held, and only returned when the lock was released -- so the one
-// operator running the one command that must complete BEFORE a roll
-// could not tell "still running" from "committed".
+// go_api_class_decision IN ACCESS EXCLUSIVE MODE`. Executed before this
+// fix: a verb with `-timeout 100ms` was still blocked after 501ms with such a
+// lock held, and only returned when the lock was released -- so the
+// operator could not tell "still running" from "committed".
 //
 // The bound is set on the SERVER (`statement_timeout` and `lock_timeout`
 // as connection runtime parameters) rather than by cancelling a client

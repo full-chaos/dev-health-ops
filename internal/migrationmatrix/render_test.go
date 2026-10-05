@@ -1,7 +1,6 @@
 package migrationmatrix
 
 import (
-	"strings"
 	"testing"
 )
 
@@ -30,34 +29,5 @@ func TestShortHexPrintsNonHexWhole(t *testing.T) {
 				t.Fatalf("shortHex(%q) = %q, want %q", c.input, got, c.want)
 			}
 		})
-	}
-}
-
-// F10 (CHAOS-5581, opus-r10): the sort's live-first key survives losing it
-// in the mutation sense -- deleting `rows[i].Live != rows[j].Live` /
-// `return rows[i].Live` and falling through to the schema-digest
-// comparison leaves every existing test green, because in every existing
-// fixture live-first and schema-digest order already coincide. Here they
-// deliberately do not: the DEAD row's schema digest sorts BEFORE the live
-// row's, so only the live-first key -- not the digest tie-break below it,
-// which is already pinned by TestTheOpsBlockDoesNotDependOnTheOrderRowsArriveIn
-// -- can put the live row first.
-func TestLiveRowsSortBeforeDeadOnesEvenWhenTheirSchemaDigestSortsAfter(t *testing.T) {
-	live := liveRow("zzLastAlphabetically", "canary")
-	dead := liveRow("aaFirstAlphabetically", "primary")
-	dead.Live = false
-	dead.SchemaDigest = "sha256:" + strings.Repeat("0", 64)
-	if dead.SchemaDigest >= live.SchemaDigest {
-		t.Fatalf("test setup: the dead row's schema digest must sort BEFORE the live row's for this to distinguish the live-first key from the digest tie-break (dead=%q live=%q)", dead.SchemaDigest, live.SchemaDigest)
-	}
-	catalog := catalogFor(t, live.Operation, dead.Operation)
-	block := RenderOpsBlock(snapshot(dead, live), catalog)
-	liveAt := strings.Index(block, live.Operation)
-	deadAt := strings.Index(block, dead.Operation)
-	if liveAt < 0 || deadAt < 0 {
-		t.Fatalf("both operations must appear in the rendered block:\n%s", block)
-	}
-	if liveAt > deadAt {
-		t.Fatalf("the live row must render before the dead one despite sorting after it by schema digest:\n%s", block)
 	}
 }

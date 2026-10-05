@@ -1,6 +1,7 @@
 # Every file under internal/queryapi/server/testdata: sha256, kind, path. Written by `go run ./internal/testsupport/recordedfiles/manifest`; never edit it by hand.
 # python-recorded set: bdb5ef02c2f3471672adbee4dc4defef0a4219227eeaeb0ca573ed332b858ce2 (3 files)
 # header-before-stamp set: e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855 (0 files)
+a09b10b437af2280224d96494819572bd9a3ad38687b209ae00e5a6a2abc88f8	go-generated	chaos-8169/home-no-data-go-b6.json
 b78e43f65d75c523e68dfa7a54602ffcfba1316a85f0b48840ff002565c0755b	unclassified	drilldown_issues_422/get_malformed_end_date.json
 28c27bc15e37194ab95118b313da3b1bef2d0709d52ee1756ce6520196fb8d7d	unclassified	drilldown_issues_422/get_malformed_start_date.json
 208cf9e78dfb5f6b16ac600542beb8de93451e77456c0cdf43fffe9752d52397	unclassified	drilldown_issues_422/get_non_numeric_range_days.json

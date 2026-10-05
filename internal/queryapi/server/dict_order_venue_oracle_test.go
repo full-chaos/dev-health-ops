@@ -377,7 +377,8 @@ func TestVenueOracleQueryAPIDictOrder(t *testing.T) {
 	}
 
 	python := runDictOrderPython(t, golden, venue, root, cases)
-	same := 0
+	byteIdentical := 0
+	ledgerValidated := 0
 	for index, tc := range cases {
 		request := httptest.NewRequest(tc.method, tc.path, strings.NewReader(tc.body))
 		if tc.body != "" {
@@ -419,7 +420,7 @@ func TestVenueOracleQueryAPIDictOrder(t *testing.T) {
 			// executing. This ledger permits only the approved empty-window
 			// difference and makes every other JSON leaf strict.
 			assertCHAOS8169HomeNoDataLedger(t, pythonBody, goBody)
-			same++
+			ledgerValidated++
 			continue
 		}
 		if recorder.Code != answer.Status || goBody != pythonBody {
@@ -433,9 +434,9 @@ func TestVenueOracleQueryAPIDictOrder(t *testing.T) {
 			t.Errorf("%s: both answered %d, so the case compares no dict (python: %s)", tc.Name, answer.Status, answer.Error)
 			continue
 		}
-		same++
+		byteIdentical++
 	}
-	t.Logf("%d of %d cases byte-identical to the Python service's response_model body", same, len(cases))
+	t.Logf("%d of %d cases byte-identical to the Python service's response_model body; %d CHAOS-8169 D4834 ledger-validated", byteIdentical, len(cases), ledgerValidated)
 	golden.SkipDiff(t)
 	venueoracle.WriteGoOnlyProof(t, "the Go query-api's response bodies against the frozen answers of the Python services")
 	golden.Finish(t)

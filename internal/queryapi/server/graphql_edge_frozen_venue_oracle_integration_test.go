@@ -4,6 +4,7 @@ package server
 
 import (
 	"context"
+	"encoding/json"
 	"net"
 	"regexp"
 	"strings"
@@ -96,7 +97,7 @@ func TestGraphQLEdgeFrozenVenueOracle(t *testing.T) {
 	})
 
 	// A registered operation whose routing row is off: both planes' rows are turned off, as an operator
-	// would. The Python plane's database exists only while recording.
+	// would. query-api reads no routing row any more (CHAOS-8702), so it serves both operations. The Python plane's database exists only while recording.
 	for _, database := range []string{venue.SourceDB, venue.GoDB} {
 		if database == venue.SourceDB && !golden.Recording() {
 			continue
@@ -114,12 +115,21 @@ func TestGraphQLEdgeFrozenVenueOracle(t *testing.T) {
 	mutationSpec, _ := goapiproof.SpecFor(mutation.Operation)
 	run([]edgeCase{
 		{request: edgePost("row off: "+query.Operation, member, queryBody, nil),
-			declared: "routing row off: Python's Strawberry fallback raised for the query; query-api answers a GraphQL error",
-			pyWant:   edgeAnswer{status: 200, body: `"errors"`}, goWant: edgeAnswer{status: 200, body: "OPERATION_NOT_ENABLED"}},
-		{request: edgePost("row off: "+mutation.Operation, member, urqlBody(t, documentOperationName(mutation.Document), mutation.Document, mutationSpec.Variables(edgeOrgA, goapiproof.DefaultWindow())), nil),
-			declared: "routing row off: Python ran its own mutation body; query-api answers a GraphQL error and runs nothing",
-			pyWant:   edgeAnswer{status: 200, body: `"deleteSavedReport"`}, goWant: edgeAnswer{status: 200, body: "OPERATION_NOT_ENABLED"}},
-	}, nil)
+			declared: "routing row off: Python's Strawberry fallback raised for the query; query-api reads no routing row and serves it",
+			pyWant:   edgeAnswer{status: 200, body: `"errors"`}, goWant: edgeAnswer{status: 200, body: `"catalog"`}},
+		{request: edgePost("row off: "+mutation.Operation, member, urqlBody(t, documentOperationName(mutation.Document), mutation.Document, mutationSpec.Variables(edgeOrgA, goapiproof.DefaultWindow())), nil)},
+	}, func(_ venueoracle.Request, body string) string {
+		// Both planes now run the mutation and answer the same error; only the key order of the body differs.
+		var decoded any
+		if json.Unmarshal([]byte(body), &decoded) != nil {
+			return body
+		}
+		canonical, err := json.Marshal(decoded)
+		if err != nil {
+			return body
+		}
+		return string(canonical)
+	})
 
 	// A write last: createSavedReport mints an id and a timestamp per call, so those are blanked; nothing else is.
 	uuidPattern := regexp.MustCompile(`[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}`)

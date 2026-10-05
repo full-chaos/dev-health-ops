@@ -173,7 +173,7 @@ func TestNewProviderFromEnvOpenAIReadsEnv(t *testing.T) {
 	if !ok {
 		t.Fatalf("provider = %T, want *OpenAIProvider", provider)
 	}
-	if openAIProvider.cfg.APIKey != "sk-test-key-value" {
+	if openAIProvider.cfg.APIKey.Reveal() != "sk-test-key-value" {
 		t.Error("APIKey not read from OPENAI_API_KEY")
 	}
 	if openAIProvider.cfg.Model != "gpt-5-nano-preview" {
@@ -313,8 +313,8 @@ func TestNewProviderFromEnvGenericBaseURLAndAPIKeyOverrideAnyProvider(t *testing
 		t.Fatalf("unexpected error: %v", err)
 	}
 	openAIProvider := provider.(*OpenAIProvider)
-	if openAIProvider.cfg.APIKey != "sk-generic-override" {
-		t.Errorf("APIKey = %q, want generic LLM_API_KEY to win over OPENAI_API_KEY", openAIProvider.cfg.APIKey)
+	if openAIProvider.cfg.APIKey.Reveal() != "sk-generic-override" {
+		t.Errorf("APIKey = %q, want generic LLM_API_KEY to win over OPENAI_API_KEY", openAIProvider.cfg.APIKey.Reveal())
 	}
 	if openAIProvider.cfg.BaseURL != "https://generic-override.invalid/v1" {
 		t.Errorf("BaseURL = %q, want generic LLM_BASE_URL to win over OPENAI_BASE_URL", openAIProvider.cfg.BaseURL)
@@ -334,8 +334,8 @@ func TestNewProviderFromEnvGenericBaseURLAndAPIKeyOverrideAnyProvider(t *testing
 	if ollamaProvider.cfg.BaseURL != "http://generic-override.invalid" {
 		t.Errorf("BaseURL = %q, want generic LLM_BASE_URL to win over OLLAMA_BASE_URL", ollamaProvider.cfg.BaseURL)
 	}
-	if ollamaProvider.cfg.APIKey != "generic-override-key" {
-		t.Errorf("APIKey = %q, want generic LLM_API_KEY to win over OLLAMA_API_KEY", ollamaProvider.cfg.APIKey)
+	if ollamaProvider.cfg.APIKey.Reveal() != "generic-override-key" {
+		t.Errorf("APIKey = %q, want generic LLM_API_KEY to win over OLLAMA_API_KEY", ollamaProvider.cfg.APIKey.Reveal())
 	}
 }
 

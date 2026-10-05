@@ -718,8 +718,8 @@ def test_default_lock_dir_ignores_tmpdir_and_still_serializes(tmp_path):
     TMPDIR values and asserts they still serialize (i.e. resolve to the same
     path). CH_CONTAINER is pinned to a unique per-test value (not the real
     'dev-health-clickhouse-1') so this can never collide with a real gate
-    running elsewhere on the host, even though it uses the real default path
-    template under /tmp.
+    running elsewhere on the host; DEV_HEALTH_LOCK_ROOT points at a test dir so
+    nothing is written to /tmp (CHAOS-8760).
     """
     container = f"test-lockdir-tmpdir-{tmp_path.name}"
     hold_secs = 3
@@ -727,19 +727,29 @@ def test_default_lock_dir_ignores_tmpdir_and_still_serializes(tmp_path):
     tmpdir_b = tmp_path / "tmpdir_b"
     tmpdir_a.mkdir()
     tmpdir_b.mkdir()
-    expected_lock_dir = Path(f"/tmp/dev-health-ops-local-validate.{container}.lock")
+    lock_root = tmp_path / "lockroot"
+    lock_root.mkdir()
+    expected_lock_dir = lock_root / f"dev-health-ops-local-validate.{container}.lock"
 
     try:
         proc_a = _spawn_probe_with_env(
             hold_secs,
             wait_secs=_WAIT_SECS,
-            extra_env={"TMPDIR": str(tmpdir_a), "CH_CONTAINER": container},
+            extra_env={
+                "TMPDIR": str(tmpdir_a),
+                "CH_CONTAINER": container,
+                "DEV_HEALTH_LOCK_ROOT": str(lock_root),
+            },
             out_dir=tmp_path,
         )
         proc_b = _spawn_probe_with_env(
             hold_secs,
             wait_secs=_WAIT_SECS,
-            extra_env={"TMPDIR": str(tmpdir_b), "CH_CONTAINER": container},
+            extra_env={
+                "TMPDIR": str(tmpdir_b),
+                "CH_CONTAINER": container,
+                "DEV_HEALTH_LOCK_ROOT": str(lock_root),
+            },
             out_dir=tmp_path,
         )
 
@@ -762,10 +772,51 @@ def test_default_lock_dir_ignores_tmpdir_and_still_serializes(tmp_path):
             f"$TMPDIR after all, giving each probe its own lock.\nA:\n{out_a}\nB:\n{out_b}"
         )
         assert str(expected_lock_dir) in out_a + out_b, (
-            f"expected the fixed /tmp default path in the logs.\nA:\n{out_a}\nB:\n{out_b}"
+            f"expected the lock-root default path in the logs.\nA:\n{out_a}\nB:\n{out_b}"
         )
     finally:
         expected_lock_dir.unlink(missing_ok=True)
+
+
+@pytest.mark.parametrize("case", ["root_env", "shared_dir_exists", "shared_dir_absent"])
+def test_default_lock_root_resolution(tmp_path, case):
+    """CHAOS-8760: the default lock root is DEV_HEALTH_LOCK_ROOT, else the shared dir
+    when it exists, else /tmp -- never derived from TMPDIR. The probe prints its lock path.
+
+    The /tmp case only reads the printed path: the probe's lock symlink lands in /tmp for
+    a moment, under a per-test container name, exactly as the old default did.
+    """
+    container = f"test-lockroot-{case}-{tmp_path.name}"
+    shared = tmp_path / "shared"
+    root = tmp_path / "root"
+    shared.mkdir()
+    root.mkdir()
+    tmpdir = tmp_path / "ambient_tmpdir"
+    tmpdir.mkdir()
+    extra = {"TMPDIR": str(tmpdir), "CH_CONTAINER": container}
+    if case == "root_env":
+        extra["DEV_HEALTH_LOCK_ROOT"] = str(root)
+        extra["DEV_HEALTH_LOCK_SHARED_DIR"] = str(shared)
+        expected_root = root
+    elif case == "shared_dir_exists":
+        extra["DEV_HEALTH_LOCK_SHARED_DIR"] = str(shared)
+        expected_root = shared
+    else:
+        extra["DEV_HEALTH_LOCK_SHARED_DIR"] = str(tmp_path / "does-not-exist")
+        expected_root = Path("/tmp")
+    expected = expected_root / f"dev-health-ops-local-validate.{container}.lock"
+    try:
+        proc = _spawn_probe_with_env(
+            0.2, wait_secs=_WAIT_SECS, extra_env=extra, out_dir=tmp_path
+        )
+        out = proc.communicate(timeout=_REAP_SECS)[0]
+        assert proc.returncode == 0, out
+        assert str(expected) in out, f"expected {expected} in the logs.\n{out}"
+        assert str(tmpdir) not in out.replace(str(tmp_path / "x"), ""), (
+            "the lock path must not derive from TMPDIR"
+        )
+    finally:
+        expected.unlink(missing_ok=True)
 
 
 # --- CHAOS-3403 adversarial-review follow-up findings. -----------------------------

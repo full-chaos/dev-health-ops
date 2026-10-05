@@ -34,7 +34,7 @@ func TestNewProviderFromCredentialsOpenAIUsesExplicitValues(t *testing.T) {
 	if !ok {
 		t.Fatalf("provider = %T, want *OpenAIProvider", provider)
 	}
-	if openAIProvider.cfg.APIKey != "sk-org-secret" {
+	if openAIProvider.cfg.APIKey.Reveal() != "sk-org-secret" {
 		t.Error("APIKey not set from the explicit apiKey argument")
 	}
 	if openAIProvider.cfg.BaseURL != "https://org-gateway.example.com/v1" {
@@ -62,8 +62,8 @@ func TestNewProviderFromCredentialsIgnoresAmbientEnv(t *testing.T) {
 		t.Fatalf("unexpected error: %v", err)
 	}
 	openAIProvider := provider.(*OpenAIProvider)
-	if openAIProvider.cfg.APIKey != "sk-org-secret" {
-		t.Fatalf("APIKey = %q, an ambient env var leaked into an org-BYO construction", openAIProvider.cfg.APIKey)
+	if openAIProvider.cfg.APIKey.Reveal() != "sk-org-secret" {
+		t.Fatalf("APIKey = %q, an ambient env var leaked into an org-BYO construction", openAIProvider.cfg.APIKey.Reveal())
 	}
 	if openAIProvider.cfg.BaseURL != "https://org-gateway.example.com/v1" {
 		t.Fatalf("BaseURL = %q, an ambient env var leaked into an org-BYO construction", openAIProvider.cfg.BaseURL)
@@ -106,8 +106,8 @@ func TestNewProviderFromCredentialsOllamaUsesExplicitValues(t *testing.T) {
 	if localProvider.cfg.BaseURL != "https://org-ollama.example.com/v1" {
 		t.Errorf("BaseURL = %q, want the explicit argument", localProvider.cfg.BaseURL)
 	}
-	if localProvider.cfg.APIKey != "org-key" {
-		t.Errorf("APIKey = %q, want the explicit argument", localProvider.cfg.APIKey)
+	if localProvider.cfg.APIKey.Reveal() != "org-key" {
+		t.Errorf("APIKey = %q, want the explicit argument", localProvider.cfg.APIKey.Reveal())
 	}
 	if localProvider.cfg.Model != "gemma3:4b" {
 		t.Errorf("Model = %q, want the explicit argument", localProvider.cfg.Model)

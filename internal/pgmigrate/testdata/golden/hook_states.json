@@ -1,9 +1,9 @@
 {
   "header": {
     "test": "TestHookVerbUpgradesAnOldProductionDatabaseToTheAlembicHead",
-    "python_build": "dc20788d69ae68129772e6cb5fd3fe972b27c843",
-    "producer_digest": "944277e57e9b5e2f99a22ac18647f035225fe644f52a1b781179122140ddc9d8",
-    "recipe": "git worktree add --detach $DIR dc20788d69ae68129772e6cb5fd3fe972b27c843 (with its .venv: uv sync --frozen --no-install-project); then from the repository root: go run ./internal/testsupport/venueoracle/goldenrecord -pkg ./internal/pgmigrate/ -test '^TestHookVerbUpgradesAnOldProductionDatabaseToTheAlembicHead$' -python-root $DIR",
+    "python_build": "7eff91a89925ddcaa12ffa3c9d66ad095b349111",
+    "producer_digest": "98d53b9e548c3e54815c9656d01b61df9960e3233c2312e18fe5c74f72787175",
+    "recipe": "git worktree add --detach $DIR 7eff91a89925ddcaa12ffa3c9d66ad095b349111 (with its .venv: uv sync --frozen --no-install-project); then from the repository root: go run ./internal/testsupport/venueoracle/goldenrecord -pkg ./internal/pgmigrate/ -test '^TestHookVerbUpgradesAnOldProductionDatabaseToTheAlembicHead$' -python-root $DIR",
     "recorded_by": "goldenrecord",
     "blanked": {}
   },

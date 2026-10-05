@@ -221,18 +221,11 @@ func TestOpportunitiesCardIsThePythonCardPlusTheDeclaredGoOnlyFields(t *testing.
 	}
 }
 
-// explainPythonResponse is the shape the frozen FastAPI model of
-// /api/v1/explain has: the eight fields of ExplainResponse the Python
-// reference served. The Go response (explain.Response) has two more since
-// CHAOS-8103 (repositories, source_url), which the Python model never had.
-// Nothing is recorded again, so the oracle below still checks THIS shape,
-// written by the production writer: the eight shared fields are byte
-// identical to FastAPI's. It says nothing about the two Go-only fields.
-//
-// TestExplainResponseIsThePythonResponsePlusTheDeclaredGoOnlyFields ties
-// this shape to the production type: the production response must be
-// exactly these eight fields, in this order, followed by exactly the two
-// declared ones.
+// explainPythonResponse is the typed input for the existing frozen Python
+// response-model differential. TestQueryAPIResponseModelsMatchFrozenPython
+// validates it against the FastAPI response model. It does not define the
+// prefix that withoutExplainGoOnlyFields may remove; that comes directly from
+// the frozen producer schema below.
 type explainPythonResponse struct {
 	Metric         string                    `json:"metric"`
 	Label          string                    `json:"label"`
@@ -245,10 +238,12 @@ type explainPythonResponse struct {
 }
 
 // explainGoOnlyResponseFields are the fields of explain.Response the Python
-// model does not have (CHAOS-8103), in declaration order.
+// model does not have, in declaration order.
 var explainGoOnlyResponseFields = []struct{ name, goType, tag string }{
 	{"Repositories", "*[]explain.Repository", `json:"repositories"`},
 	{"SourceURL", "*string", `json:"source_url"`},
+	{"HasData", "bool", `json:"has_data"`},
+	{"HasPriorData", "bool", `json:"has_prior_data"`},
 }
 
 func TestExplainResponseIsThePythonResponsePlusTheDeclaredGoOnlyFields(t *testing.T) {
@@ -261,12 +256,14 @@ func TestExplainResponseIsThePythonResponsePlusTheDeclaredGoOnlyFields(t *testin
 		}
 		return out
 	}
-	want := fieldsOf(reflect.TypeOf(explainPythonResponse{}))
+	pythonFields := fieldsOf(reflect.TypeOf(explainPythonResponse{}))
+	want := append([]field(nil), pythonFields...)
 	for _, goOnly := range explainGoOnlyResponseFields {
 		want = append(want, field{goOnly.name, goOnly.goType, goOnly.tag})
 	}
-	if got := fieldsOf(reflect.TypeOf(explain.Response{})); !reflect.DeepEqual(got, want) {
-		t.Errorf("explain.Response fields =\n %v\nwant the eight Python fields, then the two Go-only ones:\n %v", got, want)
+	got := fieldsOf(reflect.TypeOf(explain.Response{}))
+	if !reflect.DeepEqual(got, want) {
+		t.Errorf("explain.Response fields =\n %v\nwant the typed differential fields, then the declared Go-only tail:\n %v", got, want)
 	}
 
 	// The production writer does write the Go-only fields, null included:
@@ -278,11 +275,11 @@ func TestExplainResponseIsThePythonResponsePlusTheDeclaredGoOnlyFields(t *testin
 		response explain.Response
 		parts    []string
 	}{
-		{explain.Response{Drivers: []explain.Contributor{}, Contributors: []explain.Contributor{}, Repositories: &repositories, SourceURL: &sourceURL}, []string{
+		{explain.Response{Drivers: []explain.Contributor{}, Contributors: []explain.Contributor{}, Repositories: &repositories, SourceURL: &sourceURL, HasData: true, HasPriorData: true}, []string{
 			`"repositories":[{"id":"repo-a","name":"webapp","value":3.0,"source_url":"https://github.com/acme/webapp"},{"id":"repo-b","name":null,"value":1.0,"source_url":null}]`,
-			`"source_url":"https://github.com/acme/webapp"}`,
+			`"source_url":"https://github.com/acme/webapp","has_data":true,"has_prior_data":true}`,
 		}},
-		{explain.Response{Drivers: []explain.Contributor{}, Contributors: []explain.Contributor{}}, []string{`"repositories":null,"source_url":null}`}},
+		{explain.Response{Drivers: []explain.Contributor{}, Contributors: []explain.Contributor{}}, []string{`"repositories":null,"source_url":null,"has_data":false,"has_prior_data":false}`}},
 	} {
 		recorder := httptest.NewRecorder()
 		if err := writeModelResponse(recorder, &testCase.response); err != nil {
@@ -297,12 +294,67 @@ func TestExplainResponseIsThePythonResponsePlusTheDeclaredGoOnlyFields(t *testin
 	}
 }
 
+func explainPythonResponseFieldNames() []string {
+	typ := reflect.TypeOf(explainPythonResponse{})
+	fields := make([]string, 0, typ.NumField())
+	for index := range typ.NumField() {
+		tag := typ.Field(index).Tag.Get("json")
+		name, _, _ := strings.Cut(tag, ",")
+		fields = append(fields, name)
+	}
+	return fields
+}
+
+// assertExplainTailMatchesProducerModel derives the legacy prefix directly
+// from the frozen FastAPI ExplainResponse schema recorded by this test's real
+// producer. The typed Go differential input and the tail stripper must agree
+// with that model. A changed or undeclared legacy field is rejected before
+// any Go-only field can be stripped.
+func assertExplainTailMatchesProducerModel(t *testing.T, rawSchema json.RawMessage) {
+	t.Helper()
+	var schema struct {
+		Properties pyjson.OrderedMap[json.RawMessage] `json:"properties"`
+	}
+	if err := json.Unmarshal(rawSchema, &schema); err != nil {
+		t.Fatalf("decode frozen FastAPI ExplainResponse schema: %v", err)
+	}
+	producerFields := schema.Properties.Keys()
+	if len(producerFields) == 0 {
+		t.Fatalf("frozen FastAPI ExplainResponse schema has no ordered properties: %s", rawSchema)
+	}
+	if legacyFields := explainPythonResponseFieldNames(); !reflect.DeepEqual(legacyFields, producerFields) {
+		t.Fatalf("typed legacy fields = %v, want frozen FastAPI ExplainResponse fields %v", legacyFields, producerFields)
+	}
+
+	var prefix strings.Builder
+	prefix.WriteByte('{')
+	for index, name := range producerFields {
+		if index > 0 {
+			prefix.WriteByte(',')
+		}
+		fmt.Fprintf(&prefix, "%q:null", name)
+	}
+	valid := prefix.String() + `,"repositories":null,"source_url":null,"has_data":false,"has_prior_data":false}`
+	if got, err := withoutExplainGoOnlyFields(valid); err != nil || got != prefix.String()+`}` {
+		t.Fatalf("withoutExplainGoOnlyFields(valid producer body) = %s, %v; want %s", got, err, prefix.String()+`}`)
+	}
+	for _, body := range []string{
+		strings.Replace(valid, fmt.Sprintf(`"%s":null`, producerFields[0]), `"changed_legacy_field":null`, 1),
+		strings.Replace(valid, `,"repositories":`, `,"undeclared_legacy_field":null,"repositories":`, 1),
+	} {
+		if got, err := withoutExplainGoOnlyFields(body); err == nil {
+			t.Fatalf("withoutExplainGoOnlyFields(%s) = %s, want an error", body, got)
+		}
+	}
+}
+
 // withoutExplainGoOnlyFields returns an explain body as the production writer
 // writes it, without its declared Go-only fields (explainGoOnlyResponseFields),
 // so that it can be compared byte for byte with a frozen Python body. The
-// fields are the last ones of the type, so they are the tail of the body:
-// that tail must hold exactly them, in their order, or it is an error -- it
-// never silently drops anything else.
+// prefix must be exactly the typed legacy response used by the frozen
+// producer differential, and the tail must hold exactly the declared Go-only
+// fields, both in order. The differential verifies that legacy shape against
+// the frozen FastAPI producer model.
 func withoutExplainGoOnlyFields(body string) (string, error) {
 	jsonName := func(tag string) string {
 		name, _, _ := strings.Cut(strings.TrimSuffix(strings.TrimPrefix(tag, `json:"`), `"`), ",")
@@ -314,8 +366,43 @@ func withoutExplainGoOnlyFields(body string) (string, error) {
 	if at < 0 || !strings.HasSuffix(body, "}") {
 		return "", fmt.Errorf("explain body has no %s tail: %s", first, body)
 	}
+	prefix := body[:at] + "}"
+	decoder := json.NewDecoder(strings.NewReader(prefix))
+	opening, err := decoder.Token()
+	if err != nil {
+		return "", fmt.Errorf("decode explain body prefix: %w", err)
+	}
+	if opening != json.Delim('{') {
+		return "", fmt.Errorf("explain body prefix opens with %v, want {", opening)
+	}
+	var prefixFields []string
+	for decoder.More() {
+		key, err := decoder.Token()
+		if err != nil {
+			return "", err
+		}
+		name, ok := key.(string)
+		if !ok {
+			return "", fmt.Errorf("explain body prefix key is %T, want string", key)
+		}
+		prefixFields = append(prefixFields, name)
+		var value json.RawMessage
+		if err := decoder.Decode(&value); err != nil {
+			return "", err
+		}
+	}
+	closing, err := decoder.Token()
+	if err != nil {
+		return "", fmt.Errorf("decode explain body prefix closing: %w", err)
+	}
+	if closing != json.Delim('}') {
+		return "", fmt.Errorf("explain body prefix closes with %v, want }", closing)
+	}
+	if legacyFields := explainPythonResponseFieldNames(); !reflect.DeepEqual(prefixFields, legacyFields) {
+		return "", fmt.Errorf("explain body legacy fields = %v, want typed frozen-producer differential fields %v", prefixFields, legacyFields)
+	}
 	tail := "{" + body[at+1:]
-	decoder := json.NewDecoder(strings.NewReader(tail))
+	decoder = json.NewDecoder(strings.NewReader(tail))
 	if _, err := decoder.Token(); err != nil {
 		return "", err
 	}
@@ -335,13 +422,22 @@ func withoutExplainGoOnlyFields(body string) (string, error) {
 	if closing, err := decoder.Token(); err != nil || closing != json.Delim('}') || decoder.More() {
 		return "", fmt.Errorf("explain body tail holds more than the Go-only fields: %s", tail)
 	}
-	return body[:at] + "}", nil
+	return prefix, nil
 }
 
 func TestWithoutExplainGoOnlyFieldsLeavesThePythonShapeOrFails(t *testing.T) {
+	producerFields := explainPythonResponseFieldNames()
+	var prefix strings.Builder
+	prefix.WriteByte('{')
+	for index, name := range producerFields {
+		if index > 0 {
+			prefix.WriteByte(',')
+		}
+		fmt.Fprintf(&prefix, "%q:null", name)
+	}
+	valid := prefix.String() + `,"repositories":null,"source_url":null,"has_data":false,"has_prior_data":false}`
 	for _, testCase := range []struct{ body, want string }{
-		{`{"metric":"churn","drilldown_links":{"prs":"a"},"repositories":null,"source_url":null}`, `{"metric":"churn","drilldown_links":{"prs":"a"}}`},
-		{`{"metric":"churn","repositories":[{"id":"r","name":null,"value":1.0,"source_url":"https://github.com/a/repositories"}],"source_url":"https://x"}`, `{"metric":"churn"}`},
+		{valid, prefix.String() + `}`},
 	} {
 		got, err := withoutExplainGoOnlyFields(testCase.body)
 		if err != nil || got != testCase.want {
@@ -349,10 +445,10 @@ func TestWithoutExplainGoOnlyFieldsLeavesThePythonShapeOrFails(t *testing.T) {
 		}
 	}
 	for _, body := range []string{
-		`{"metric":"churn"}`,
-		`{"metric":"churn","repositories":null}`,
-		`{"metric":"churn","repositories":null,"source_url":null,"extra":1}`,
-		`{"metric":"churn","source_url":null,"repositories":null}`,
+		strings.Replace(valid, fmt.Sprintf(`"%s":null`, producerFields[0]), `"changed_legacy_field":null`, 1),
+		strings.Replace(valid, `,"repositories":`, `,"undeclared_legacy_field":null,"repositories":`, 1),
+		strings.Replace(valid, `,"has_prior_data":false`, ``, 1),
+		strings.Replace(valid, `,"repositories":null,"source_url":null`, `,"source_url":null,"repositories":null`, 1),
 	} {
 		if got, err := withoutExplainGoOnlyFields(body); err == nil {
 			t.Fatalf("withoutExplainGoOnlyFields(%s) = %s, want an error", body, got)
@@ -451,13 +547,25 @@ func TestQueryAPIResponseModelsMatchFrozenPython(t *testing.T) {
 		}
 	}
 	sort.Strings(keys)
+	tableBody := runPython("table", keys)
 	var table struct {
 		Routes  [][3]any                  `json:"routes"`
 		Schemas map[string]map[string]any `json:"schemas"`
 	}
-	if err := json.Unmarshal(runPython("table", keys), &table); err != nil {
+	if err := json.Unmarshal(tableBody, &table); err != nil {
 		t.Fatal(err)
 	}
+	var rawTable struct {
+		Schemas map[string]json.RawMessage `json:"schemas"`
+	}
+	if err := json.Unmarshal(tableBody, &rawTable); err != nil {
+		t.Fatal(err)
+	}
+	explainSchema, ok := rawTable.Schemas["GET /api/v1/explain"]
+	if !ok {
+		t.Fatal("frozen FastAPI response-model table has no GET /api/v1/explain schema")
+	}
+	assertExplainTailMatchesProducerModel(t, explainSchema)
 
 	// The route table, both directions, on the paths the query-api serves.
 	served := map[string]bool{}

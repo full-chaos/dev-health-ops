@@ -234,14 +234,14 @@ func TestMetricValueProjectionUsesTupleArgMaxForNullableColumn(t *testing.T) {
 // raw time.Time (the exact defect class six other call sites in this
 // repo shared before that fix).
 func TestFetchMetricValueBindsDateAsString(t *testing.T) {
-	client := &queryCapturingClient{rows: [][]any{{12.5}}}
+	client := &queryCapturingClient{rows: [][]any{{12.5, uint64(1)}}}
 	reader, err := NewReader(client)
 	if err != nil {
 		t.Fatalf("NewReader: %v", err)
 	}
 	start := time.Date(2024, 3, 1, 0, 0, 0, 0, time.UTC)
 	end := time.Date(2024, 3, 15, 0, 0, 0, 0, time.UTC)
-	if _, err := reader.fetchMetricValue(context.Background(), "repo_metrics_daily", "total_loc_touched", "sum", start, end, "", nil, "org-1"); err != nil {
+	if _, _, err := reader.fetchMetricValue(context.Background(), "repo_metrics_daily", "total_loc_touched", "sum", start, end, "", nil, "org-1"); err != nil {
 		t.Fatalf("fetchMetricValue: %v", err)
 	}
 	if v, _ := bindingValue(client.lastBindings, "start_day"); v != "2024-03-01" {

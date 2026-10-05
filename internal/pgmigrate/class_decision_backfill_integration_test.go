@@ -327,8 +327,9 @@ func TestClassDecisionBackfillThroughTheUpgradeVerbTreatsAnEmptyLiveDigestAsUnse
 			if err != nil {
 				t.Fatal(err)
 			}
-			if !hasRevision(recorded, "0146") {
-				t.Errorf("alembic_version = %v, want 0146 recorded", recorded)
+			// The verb walks to the head, 0147 (CHAOS-8706), which drops the source table after 0146 ran.
+			if !hasRevision(recorded, "0147") {
+				t.Errorf("alembic_version = %v, want the head 0147 recorded", recorded)
 			}
 			if got := readDecisions(t, conn); len(got) != 0 {
 				t.Errorf("decisions %+v, want none", got)

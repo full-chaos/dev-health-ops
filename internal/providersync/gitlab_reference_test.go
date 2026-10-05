@@ -1,0 +1,119 @@
+package providersync
+
+import (
+	"context"
+	"encoding/json"
+	"io"
+	"net/http"
+	"strings"
+	"testing"
+	"time"
+
+	"github.com/full-chaos/dev-health-ops/internal/providerfoundation"
+	"github.com/full-chaos/dev-health-ops/internal/testsupport/fakehttp"
+)
+
+func TestParseGitLabReference(t *testing.T) {
+	t.Parallel()
+	for name, c := range map[string]struct {
+		full   string
+		marker byte
+		path   string
+		iid    uint32
+		ok     bool
+	}{
+		"merge request":        {"acme/api!9", '!', "acme/api", 9, true},
+		"subgroup":             {"acme/platform/api!12", '!', "acme/platform/api", 12, true},
+		"issue":                {"acme/api#7", '#', "acme/api", 7, true},
+		"max uint32":           {"acme/api!4294967295", '!', "acme/api", 4294967295, true},
+		"empty":                {"", '!', "", 0, false},
+		"wrong marker":         {"acme/api#7", '!', "", 0, false},
+		"no marker":            {"acme/api", '!', "", 0, false},
+		"empty path":           {"!9", '!', "", 0, false},
+		"dot-dot first":        {"../acme/api!9", '!', "", 0, false},
+		"dot-dot middle":       {"acme/../api!9", '!', "", 0, false},
+		"dot segment":          {"acme/./api!9", '!', "", 0, false},
+		"leading slash":        {"/acme/api!9", '!', "", 0, false},
+		"trailing slash":       {"acme/api/!9", '!', "", 0, false},
+		"empty segment":        {"acme//api!9", '!', "", 0, false},
+		"whitespace in path":   {"acme/ api!9", '!', "", 0, false},
+		"trailing whitespace":  {"acme/api!9 ", '!', "", 0, false},
+		"absolute URL":         {"https://x.test/acme/api!9", '!', "", 0, false},
+		"issue iid zero":       {"acme/api#0", '#', "", 0, false},
+		"iid zero":             {"acme/api!0", '!', "", 0, false},
+		"iid beyond uint32":    {"acme/api!4294967296", '!', "", 0, false},
+		"iid leading zero":     {"acme/api!09", '!', "", 0, false},
+		"iid signed":           {"acme/api!+9", '!', "", 0, false},
+		"issue iid beyond u32": {"acme/api#4294967296", '#', "", 0, false},
+	} {
+		got, err := parseGitLabReference(c.full, c.marker)
+		if (err == nil) != c.ok || (c.ok && (got.Path != c.path || got.IID != c.iid)) {
+			t.Errorf("%s: parse(%q)=%+v err=%v want ok=%v path=%q iid=%d", name, c.full, got, err, c.ok, c.path, c.iid)
+		}
+	}
+}
+
+// A /links target without references.full is not linked: the source issue's project does not stand in for it.
+func TestNormalizeGitLabDependenciesNeverGuessesTheLinkTargetProject(t *testing.T) {
+	t.Parallel()
+	claim := nativeTestClaim("gitlab", "work-items")
+	var links []gitlabIssueLinkPayload
+	for _, raw := range []string{
+		`{"link_type":"blocks","iid":7}`,
+		`{"link_type":"blocks","iid":7,"references":{"full":""}}`,
+		`{"link_type":"blocks","iid":7,"references":{"full":"../acme/api#7"}}`,
+		`{"link_type":"blocks","iid":7,"references":{"full":"acme/api#8"}}`,
+		`{"link_type":"blocks","iid":4294967296,"references":{"full":"acme/api#4294967296"}}`,
+		`{"link_type":"blocks","iid":3,"references":{"full":"other/proj#3"}}`,
+	} {
+		var link gitlabIssueLinkPayload
+		if err := json.Unmarshal([]byte(raw), &link); err != nil {
+			t.Fatal(err)
+		}
+		links = append(links, link)
+	}
+	rows, unsupported := normalizeGitLabDependencies(claim, "gitlab:acme/api#5", "acme/api", "", links, time.Now())
+	if unsupported != 5 || len(rows) != 1 || rows[0].TargetWorkItemID != "gitlab:other/proj#3" {
+		t.Fatalf("unsupported=%d rows=%+v want 5 unsupported and one row to other/proj#3", unsupported, rows)
+	}
+}
+
+type linksBodyDoer struct {
+	inner *gitLabWorkItemsDoer
+	body  string
+}
+
+func (doer linksBodyDoer) Do(request *http.Request) (*http.Response, error) {
+	if strings.HasSuffix(request.URL.Path, "/issues/42/links") && request.URL.Query().Get("page") == "1" {
+		return &http.Response{
+			StatusCode: http.StatusOK, Status: "OK", Header: make(http.Header),
+			Body: io.NopCloser(strings.NewReader(doer.body)), Request: request,
+		}, nil
+	}
+	return doer.inner.Do(request)
+}
+
+// Through the production route: a /links entry without references.full is counted as an unsupported shape and writes no
+// dependency row.
+func TestGitLabWorkItemsRouteCountsLinksWithoutReferencesAsUnsupported(t *testing.T) {
+	classifier, err := NewInvestmentClassifier(investmentConfigPath(t, "real"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	deriver := GitLabWorkItemDeriver{Source: &githubMultiDayOracleSource{}, statusMapping: loadRealStatusMapping(t), investmentClassifier: classifier}
+	inner := &gitLabWorkItemsDoer{responses: gitLabWorkItemResponses()}
+	claim := nativeTestClaim("gitlab", "work-items")
+	claim.OrgID = "77777777-7777-4777-8777-777777777777"
+	client := gitLabWorkItemsClient(t, fakehttp.Client(linksBodyDoer{inner: inner, body: `[{"link_type":"blocks","iid":7}]`}))
+	client.Metrics = providerfoundation.NewMetrics()
+	batch, err := (GitLabWorkItemsRouteHandler{
+		StatusMapping: loadRealStatusMapping(t), Derived: deriver, PerPage: 2, MaxPages: 10, NestedMaxPages: 10,
+	}).Collect(context.Background(), claim, providerfoundation.Credential{Provider: "gitlab", ID: claim.CredentialID},
+		client, time.Date(2026, 8, 3, 12, 0, 0, 0, time.UTC))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if batch.Result["issue_links_unsupported_shape"] != 1 {
+		t.Fatalf("result=%v want issue_links_unsupported_shape=1", batch.Result)
+	}
+}

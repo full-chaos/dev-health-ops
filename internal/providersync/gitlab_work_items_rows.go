@@ -126,16 +126,14 @@ type gitlabClosingMergeRequestPayload struct {
 	} `json:"references"`
 }
 
-// valid reports whether the closed_by entry carries what a link needs: a positive integer iid and the MR's own
-// references.full ("<project path>!<iid>"). Anything less is an answer-shape change, never a guess: the issue's project
-// cannot stand in for the MR's, since a cross-project MR could then match a local MR with the same iid.
-func (payload gitlabClosingMergeRequestPayload) valid() bool {
-	iid, err := strconv.Atoi(payload.IID.String())
-	if err != nil || iid < 1 {
-		return false
+// reference parses the entry's references.full as a merge-request reference and requires the iid field to agree with it.
+// Anything less is an answer-shape change, never a guess.
+func (payload gitlabClosingMergeRequestPayload) reference() (gitlabReference, bool) {
+	reference, err := parseGitLabReference(payload.References.Full, gitlabMergeRequestMarker)
+	if err != nil || payload.IID.String() != strconv.FormatUint(uint64(reference.IID), 10) {
+		return gitlabReference{}, false
 	}
-	path, suffix, found := strings.Cut(strings.TrimSpace(payload.References.Full), "!")
-	return found && strings.TrimSpace(path) != "" && suffix == strconv.Itoa(iid)
+	return reference, true
 }
 
 type gitlabIdentityResolver func(gitlabWorkItemUserPayload) string
@@ -696,7 +694,7 @@ var (
 // counterpart of extractGitHubClosingIssueReferences: source = the MR (gitlab:<path>!<iid>, the id
 // normalizeGitLabMergeRequestWorkItem mints), target = this issue, raw kind gitlab_closing_reference. The MR's own
 // project path comes from references.full (an MR from another project keeps its path); an entry without it is rejected
-// by the collector (gitlabClosingMergeRequestPayload.valid), never completed from the issue's project.
+// by the collector (gitlabClosingMergeRequestPayload.reference), never completed from the issue's project.
 func normalizeGitLabClosingMergeRequests(
 	claim Claim,
 	issueWorkItemID string,
@@ -706,12 +704,11 @@ func normalizeGitLabClosingMergeRequests(
 	rows := make([]gitlabWorkItemDependencyRow, 0, len(mergeRequests))
 	seen := make(map[string]struct{}, len(mergeRequests))
 	for _, mergeRequest := range mergeRequests {
-		if !mergeRequest.valid() {
+		reference, ok := mergeRequest.reference()
+		if !ok {
 			continue
 		}
-		iid := mergeRequest.IID.String()
-		path, _, _ := strings.Cut(strings.TrimSpace(mergeRequest.References.Full), "!")
-		source := "gitlab:" + path + "!" + iid
+		source := "gitlab:" + reference.Path + "!" + strconv.FormatUint(uint64(reference.IID), 10)
 		if _, duplicate := seen[source]; duplicate || source == issueWorkItemID {
 			continue
 		}
@@ -735,8 +732,8 @@ func normalizeGitLabDependencies(
 	description string,
 	links []gitlabIssueLinkPayload,
 	normalizedAt time.Time,
-) []gitlabWorkItemDependencyRow {
-	rows := make([]gitlabWorkItemDependencyRow, 0)
+) (rows []gitlabWorkItemDependencyRow, unsupportedLinks int) {
+	rows = make([]gitlabWorkItemDependencyRow, 0)
 	seenTargets := map[string]struct{}{}
 	appendRow := func(source, target, relationship, raw string) {
 		if source == "" || target == "" || relationship == "" || raw == "" {
@@ -752,18 +749,12 @@ func normalizeGitLabDependencies(
 		}
 	}
 	for _, link := range links {
-		targetIID := link.IID.String()
-		if targetIID == "" || targetIID == "0" {
+		reference, err := parseGitLabReference(link.References.Full, gitlabIssueMarker)
+		if err != nil || link.IID.String() != strconv.FormatUint(uint64(reference.IID), 10) {
+			unsupportedLinks++
 			continue
 		}
-		targetPath := link.References.Full
-		if index := strings.Index(targetPath, "#"); index >= 0 {
-			targetPath = targetPath[:index]
-		}
-		if strings.TrimSpace(targetPath) == "" {
-			targetPath = fullName
-		}
-		targetID := "gitlab:" + targetPath + "#" + targetIID
+		targetID := "gitlab:" + reference.Path + "#" + strconv.FormatUint(uint64(reference.IID), 10)
 		if _, seen := seenTargets[targetID]; seen {
 			continue
 		}
@@ -827,7 +818,7 @@ func normalizeGitLabDependencies(
 		}
 		appendRow(workItemID, "extkey:"+key, relationship, "external_issue_key")
 	}
-	return rows
+	return rows, unsupportedLinks
 }
 
 func validateGitLabWorkItemRow(row gitlabWorkItemRow, claim Claim) error {

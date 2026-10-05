@@ -226,6 +226,7 @@ func (handler GitLabWorkItemsRouteHandler) Collect(
 	includeMRs := gitLabWorkItemsFlag(handler.IncludeMRs)
 	pages := 1 // the project binding request
 	closingSynced := 0
+	issueLinksUnsupported := 0
 	closingIncomplete := make([]string, 0)
 	closingTransient, closingTerminal := 0, 0
 
@@ -316,8 +317,13 @@ func (handler GitLabWorkItemsRouteHandler) Collect(
 			if payload.Description != nil {
 				description = *payload.Description
 			}
-			rows.Dependencies = append(rows.Dependencies,
-				normalizeGitLabDependencies(claim, item.WorkItemID, fullName, description, links, normalizedAt)...)
+			linkRows, unsupported := normalizeGitLabDependencies(claim, item.WorkItemID, fullName, description, links, normalizedAt)
+			rows.Dependencies = append(rows.Dependencies, linkRows...)
+			if unsupported > 0 {
+				issueLinksUnsupported += unsupported
+				slog.Warn("providersync.gitlab.issue_link_unsupported_shape",
+					"org_id", claim.OrgID, "unit_id", claim.ID, "issue", item.WorkItemID, "count", unsupported)
+			}
 			closing, closingPages, closingErr := collectGitLabClosingMergeRequests(
 				ctx, &counted, root+"/issues/"+strconv.Itoa(payload.IID)+"/closed_by",
 				perPage, nestedMaxPages,
@@ -493,6 +499,7 @@ func (handler GitLabWorkItemsRouteHandler) Collect(
 		// CHAOS-8526: gitlab_closing_reference rows synced, and the issues whose closed_by fetch failed, split into
 		// transient (the watermark is held while any did) and terminal 404/403 (the watermark advances).
 		"closing_reference_dependencies_synced": closingSynced,
+		"issue_links_unsupported_shape":         issueLinksUnsupported,
 		"closing_reference_fetch_failed":        closingTransient + closingTerminal,
 		"closing_reference_fetch_transient":     closingTransient,
 		"closing_reference_fetch_terminal":      closingTerminal,
@@ -623,7 +630,10 @@ func collectGitLabClosingMergeRequests(
 	result := make([]gitlabClosingMergeRequestPayload, 0, len(items))
 	for _, raw := range items {
 		var payload gitlabClosingMergeRequestPayload
-		if err := json.Unmarshal(raw, &payload); err != nil || !payload.valid() {
+		if err := json.Unmarshal(raw, &payload); err != nil {
+			return nil, pages, providerfoundation.ErrNormalizationInvalid
+		}
+		if _, ok := payload.reference(); !ok {
 			return nil, pages, providerfoundation.ErrNormalizationInvalid
 		}
 		result = append(result, payload)
@@ -664,8 +674,8 @@ func buildGitLabWorkItemEffectsFromRows(rows gitlabWorkItemRows) ([]EffectBatch,
 var _ CompleteRouteHandler = GitLabWorkItemsRouteHandler{}
 
 // gitLabClosingFetchOutcome classifies a failed closed_by fetch for the watermark (D4771). Terminal outcomes repeat on
-// every run for the same issue, so retrying cannot help: terminal_unavailable (404/403, not readable with this
-// credential; a rate-limited 403 is not that, it clears with time), terminal_page_cap (the answer exceeds the page cap) and terminal_undecodable (the answer does not decode).
+// every run for the same issue, so retrying cannot help: terminal_unavailable (404, or a 403 that is not rate
+// limiting: not readable with this credential), terminal_page_cap (the answer exceeds the page cap) and terminal_undecodable (the answer does not decode).
 // Anything else (5xx, timeout, 429, network, or an error that is not a ProviderError) is transient_failed, the safe side
 // for a watermark.
 func gitLabClosingFetchOutcome(err error) string {

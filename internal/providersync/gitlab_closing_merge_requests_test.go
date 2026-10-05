@@ -167,6 +167,11 @@ func TestGitLabWorkItemsRouteClosedByFailureClassSplitsTheWatermark(t *testing.T
 		"entry with iid 0":                        {http.StatusOK, `[{"iid":0,"references":{"full":"acme/api!0"}}]`, nil, "terminal_undecodable", true, 1, 0},
 		"entry without references.full":           {http.StatusOK, `[{"iid":9,"references":{}}]`, nil, "terminal_undecodable", true, 1, 0},
 		"entry with empty project path":           {http.StatusOK, `[{"iid":9,"references":{"full":"!9"}}]`, nil, "terminal_undecodable", true, 1, 0},
+		"entry with a dot-dot path segment":       {http.StatusOK, `[{"iid":9,"references":{"full":"../acme/api!9"}}]`, nil, "terminal_undecodable", true, 1, 0},
+		"entry with an empty path segment":        {http.StatusOK, `[{"iid":9,"references":{"full":"acme//api!9"}}]`, nil, "terminal_undecodable", true, 1, 0},
+		"entry with an iid beyond uint32":         {http.StatusOK, `[{"iid":4294967296,"references":{"full":"acme/api!4294967296"}}]`, nil, "terminal_undecodable", true, 1, 0},
+		"entry with a non-canonical iid":          {http.StatusOK, `[{"iid":9,"references":{"full":"acme/api!09"}}]`, nil, "terminal_undecodable", true, 1, 0},
+		"entry with trailing whitespace":          {http.StatusOK, `[{"iid":9,"references":{"full":"acme/api!9 "}}]`, nil, "terminal_undecodable", true, 1, 0},
 		"entry whose references.full iid differs": {http.StatusOK, `[{"iid":9,"references":{"full":"acme/api!8"}}]`, nil, "terminal_undecodable", true, 1, 0},
 	}
 	for name, c := range cases {

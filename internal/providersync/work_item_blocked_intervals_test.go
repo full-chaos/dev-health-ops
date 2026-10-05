@@ -180,7 +180,8 @@ func TestEveryProviderDerivesBlockedFromItsOwnBlockingRelation(t *testing.T) {
 			if err := json.Unmarshal([]byte(`[{"link_type":"is_blocked_by","iid":5,"references":{"full":"acme/api#5"}}]`), &links); err != nil {
 				t.Fatal(err)
 			}
-			return normalizeGitLabDependencies(claim, "gitlab:acme/api#7", "acme/api", "", links, blockedTestSyncedAt)
+			rows, _ := normalizeGitLabDependencies(claim, "gitlab:acme/api#7", "acme/api", "", links, blockedTestSyncedAt)
+			return rows
 		}},
 		// Linear: the issue's inverse relations ("OPS-1 blocks OPS-2").
 		"linear": {"linear:OPS-2", "linear:OPS-1", []string{"extkey:OPS-2", "linear:OPS-2"}, func(t *testing.T, claim Claim) []githubWorkItemDependencyRow {
@@ -551,7 +552,7 @@ func TestAGitLabBlocksKeywordEndsWhenTheBlockedIssueIsSyncedLater(t *testing.T) 
 		"this is blocking #7": {"blocking", workitemmetrics.BlockedInterval{Start: firstSeen}},
 	} {
 		t.Run(tc.raw, func(t *testing.T) {
-			rows := normalizeGitLabDependencies(claim, "gitlab:acme/api#5", "acme/api", description, nil, written)
+			rows, _ := normalizeGitLabDependencies(claim, "gitlab:acme/api#5", "acme/api", description, nil, written)
 			if len(rows) != 1 || rows[0].SourceWorkItemID != "gitlab:acme/api#5" || rows[0].TargetWorkItemID != "gitlab:acme/api#7" ||
 				rows[0].RelationshipType != "blocks" || rows[0].RelationshipTypeRaw != tc.raw {
 				t.Fatalf("the description %q gave %+v, want one `blocks` row from #5 to #7 with the raw value %q", description, rows, tc.raw)
@@ -572,7 +573,7 @@ func TestAGitLabBlocksKeywordEndsWhenTheBlockedIssueIsSyncedLater(t *testing.T) 
 	if err := json.Unmarshal([]byte(`[{"link_type":"blocks","iid":7,"references":{"full":"acme/api#7"}}]`), &links); err != nil {
 		t.Fatal(err)
 	}
-	native := normalizeGitLabDependencies(claim, "gitlab:acme/api#5", "acme/api", "", links, written)
+	native, _ := normalizeGitLabDependencies(claim, "gitlab:acme/api#5", "acme/api", "", links, written)
 	if len(native) != 1 || native[0].RelationshipTypeRaw != "blocks" || native[0].SourceWorkItemID != "gitlab:acme/api#5" {
 		t.Fatalf("the native link gave %+v, want one row with the raw value `blocks`: the two forms are no longer the same stored row, and this exception is gone", native)
 	}

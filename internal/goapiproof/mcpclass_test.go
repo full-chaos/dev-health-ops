@@ -9,61 +9,6 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/mcpclass"
 )
 
-func classRow(root, mode string) CarryRow {
-	return CarryRow{Operation: mcpclass.Operation(root), DocumentDigest: mcpclass.DocumentDigest(), Mode: mode,
-		Build: "build-a", Owner: "go", RolloutPercentage: 100}
-}
-
-// DecideCarry over the class's whole input domain: the class row is judged by
-// the target image's served roots and by nothing else.
-func TestDecideCarryForAClassRow(t *testing.T) {
-	served := map[string]bool{"hotspots": true}
-	for name, tc := range map[string]struct {
-		row     CarryRow
-		inputs  CarryInputs
-		want    string
-		refusal error
-	}{
-		"reachable, root served": {classRow("hotspots", TargetModeCanary), CarryInputs{MCPRoots: served}, CarryActionCarry, nil},
-		"primary, root served":   {classRow("hotspots", TargetModePrimary), CarryInputs{MCPRoots: served}, CarryActionCarry, nil},
-		// CHAOS-8144: a shadow class row is preserved verbatim while its
-		// root is served, and every failed fact SKIPs (never REFUSEs).
-		"shadow, root served":             {classRow("hotspots", TargetModeShadow), CarryInputs{MCPRoots: served}, CarryActionCarry, nil},
-		"shadow, root gone from image":    {classRow("hotspots", TargetModeShadow), CarryInputs{MCPRoots: map[string]bool{"analytics": true}}, CarryActionSkip, nil},
-		"shadow, root set not computed":   {classRow("hotspots", TargetModeShadow), CarryInputs{}, CarryActionSkip, nil},
-		"shadow, identical row at target": {classRow("hotspots", TargetModeShadow), CarryInputs{MCPRoots: served, TargetRows: map[string]CarryRow{mcpclass.Operation("hotspots"): classRow("hotspots", TargetModeShadow)}}, CarryActionUnchanged, nil},
-		"shadow, different row at target": {classRow("hotspots", TargetModeShadow), CarryInputs{MCPRoots: served, TargetRows: map[string]CarryRow{mcpclass.Operation("hotspots"): classRow("hotspots", TargetModePrimary)}}, CarryActionSkip, nil},
-		"python is still not reachable":   {classRow("hotspots", "python"), CarryInputs{MCPRoots: served}, CarryActionSkip, nil},
-		"disabled is still not reachable": {classRow("hotspots", "disabled"), CarryInputs{MCPRoots: served}, CarryActionSkip, nil},
-		"root gone from image":            {classRow("hotspots", TargetModeCanary), CarryInputs{MCPRoots: map[string]bool{"analytics": true}}, CarryActionRefuse, ErrCarryClassRootGone},
-		"root set not computed":           {classRow("hotspots", TargetModeCanary), CarryInputs{}, CarryActionRefuse, ErrCarryClassRootGone},
-		"identical row at target":         {classRow("hotspots", TargetModeCanary), CarryInputs{MCPRoots: served, TargetRows: map[string]CarryRow{mcpclass.Operation("hotspots"): classRow("hotspots", TargetModeCanary)}}, CarryActionUnchanged, nil},
-		"different row at target":         {classRow("hotspots", TargetModeCanary), CarryInputs{MCPRoots: served, TargetRows: map[string]CarryRow{mcpclass.Operation("hotspots"): classRow("hotspots", TargetModePrimary)}}, CarryActionRefuse, ErrCarryTargetRowExists},
-	} {
-		t.Run(name, func(t *testing.T) {
-			got := DecideCarry(tc.row, tc.inputs)
-			if got.Action != tc.want {
-				t.Fatalf("action = %s (%s), want %s", got.Action, got.Reason, tc.want)
-			}
-			if tc.refusal != nil && got.Refusal != tc.refusal {
-				t.Fatalf("refusal = %v, want %v", got.Refusal, tc.refusal)
-			}
-		})
-	}
-}
-
-// A row with the class prefix under ANOTHER document digest is not a class row: it
-// is judged as the document operation it claims to be (unregistered, so skipped),
-// never carried as a class row.
-func TestDecideCarryDoesNotTreatAPrefixOnlyRowAsAClassRow(t *testing.T) {
-	row := classRow("hotspots", TargetModeCanary)
-	row.DocumentDigest = "sha256:" + strings.Repeat("9", 64)
-	got := DecideCarry(row, CarryInputs{MCPRoots: map[string]bool{"hotspots": true}})
-	if got.Action != CarryActionSkip {
-		t.Fatalf("action = %s, want SKIP (an unregistered document operation)", got.Action)
-	}
-}
-
 func TestEnableRefusesClassRequestsThatBreakTheClassRules(t *testing.T) {
 	op, digest := mcpclass.Operation("hotspots"), mcpclass.DocumentDigest()
 	base := func() EnableRequest {

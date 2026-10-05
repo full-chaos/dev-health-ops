@@ -12,6 +12,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"github.com/full-chaos/dev-health-ops/internal/mcpclass"
 
 	"github.com/jackc/pgx/v5"
 )
@@ -27,8 +28,7 @@ import (
 // line -- a chart install that serves from an empty table must not fail its
 // pre-upgrade or post-upgrade hook.
 //
-// It is a DIFFERENT value from ErrCarryNoLiveRows and ErrRepointNoRows on
-// purpose. Those name "rows exist, none at the live digest, and one of them is
+// It is a DIFFERENT value from ErrRepointNoRows on purpose. That one names "rows exist, none at the live digest, and one of them is
 // in a served mode": by the same catalog rule a row left at another digest
 // holds its operation dark, so an operation somebody turned on is dark, and
 // that state stays a refusal an upgrade cannot hide. "The table is empty" and
@@ -51,7 +51,7 @@ var ErrRoutingTableEmpty = errors.New("goapiproof: go_api_routing_state has no r
 //
 // A row in a served mode (canary or primary) at another digest is different:
 // an operation an operator turned on is dark, and that stays the refusal
-// (ErrCarryNoLiveRows, ErrRepointNoRows) an upgrade must not hide.
+// (ErrRepointNoRows) an upgrade must not hide.
 var ErrRoutingRowsOnlyDark = errors.New("goapiproof: no routing row at this schema digest, and every row at another digest holds its operation dark by its own mode")
 
 // DarkRoutingRow is one row behind an ErrRoutingRowsOnlyDark answer: where it
@@ -97,13 +97,15 @@ const noLiveRowCensusSQL = `
 SELECT count(*) FILTER (WHERE schema_digest = $1),
        count(*) FILTER (WHERE schema_digest <> $1 AND mode = ANY($2)),
        count(*)
-  FROM public.go_api_routing_state`
+  FROM public.go_api_routing_state
+ WHERE left(selected_operation, ` + mcpClassPrefixLength + `) <> '` + mcpclass.OperationPrefix + `'`
 
 // darkRowsElsewhereSQL lists every row once the census has found them all dark
 // and none at $1, in the table's one total order.
 const darkRowsElsewhereSQL = `
 SELECT schema_digest, document_digest, selected_operation, mode
   FROM public.go_api_routing_state
+ WHERE left(selected_operation, ` + mcpClassPrefixLength + `) <> '` + mcpclass.OperationPrefix + `'
  ORDER BY selected_operation, schema_digest, document_digest`
 
 // noLiveRowAnswer is what a verb whose survey found no row at its schema digest
@@ -265,7 +267,18 @@ SELECT ` + carryRowColumns + routingRowSource + `
 // it, and reading it under a lock is what put the two writers in opposite
 // orders.
 const surveyRoutingRowsSQL = `
-SELECT ` + routingRowColumns + routingRowSource
+SELECT ` + routingRowColumns + documentRoutingRowSource
+
+// documentRoutingRowSource is routingRowSource without the MCP class rows: a class root is decided by
+// go_api_class_decision (CHAOS-8735), so the document verbs (repoint, disable) neither survey nor lock a
+// legacy class row, and a stale one at another digest cannot make them refuse.
+const documentRoutingRowSource = `
+  FROM public.go_api_routing_state
+ WHERE schema_digest = $1
+   AND left(selected_operation, ` + mcpClassPrefixLength + `) <> '` + mcpclass.OperationPrefix + `'
+ ORDER BY selected_operation, document_digest`
+
+const mcpClassPrefixLength = "4"
 
 // selectRepointCandidatesSQL is that same read, now LOCKING.
 //
@@ -325,45 +338,4 @@ func readRoutingRows(ctx context.Context, tx pgx.Tx, sql, schemaDigest string) (
 		return nil, fmt.Errorf("goapiproof: read routing rows: %w", err)
 	}
 	return found, nil
-}
-
-// readCarryRows is readRoutingRows over the wider column list. Two
-// readers rather than one widened reader because `repoint` and `disable`
-// must keep scanning exactly what they write from: a reader that handed
-// them four more columns would invite a future write to set one.
-func readCarryRows(ctx context.Context, tx pgx.Tx, sql, schemaDigest string) ([]CarryRow, error) {
-	rows, err := tx.Query(ctx, sql, schemaDigest)
-	if err != nil {
-		return nil, fmt.Errorf("goapiproof: read routing rows: %w", err)
-	}
-	defer rows.Close()
-	var found []CarryRow
-	for rows.Next() {
-		row, err := scanCarryRow(rows)
-		if err != nil {
-			return nil, err
-		}
-		found = append(found, row)
-	}
-	if err := rows.Err(); err != nil {
-		return nil, fmt.Errorf("goapiproof: read routing rows: %w", err)
-	}
-	return found, nil
-}
-
-// rowScanner is what both a multi-row pgx.Rows and a single pgx.Row
-// satisfy, so the wide row is scanned by ONE function wherever it is
-// read -- a second hand-written scan is how a column list and its scan
-// order drift apart.
-type rowScanner interface {
-	Scan(destination ...any) error
-}
-
-func scanCarryRow(scanner rowScanner) (CarryRow, error) {
-	var row CarryRow
-	if err := scanner.Scan(&row.Operation, &row.DocumentDigest, &row.Mode, &row.Build,
-		&row.Owner, &row.RolloutPercentage, &row.EligibleOrgs, &row.ReviewEvidence); err != nil {
-		return CarryRow{}, fmt.Errorf("goapiproof: scan routing row: %w", err)
-	}
-	return row, nil
 }

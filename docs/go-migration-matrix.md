@@ -211,17 +211,11 @@ hypothetical -- PR #2065 moved the digest on 2026-09-01 hours after twelve `cana
 old value, and the twelve dead rows below are those rows, still sitting in the table six days later. They are
 rendered rather than filtered out precisely because filtering them is how they went unnoticed.
 
-#### The condition is now observable, not just render-visible
+#### The startup drift alarm is gone
 
-The table above is a point-in-time render; it does not page anyone. `query-api` itself now surfaces the same
-"zero rows at my own digest" condition continuously: on every startup (and drift-check re-run) it records two
-gauges, `devhealth_query_api_routing_rows_for_digest` (rows keyed to the digest this process actually
-computed) and `devhealth_query_api_routing_rows_total` (rows across every digest, alive or dead) --
-`for_digest == 0 AND total > 0` is the DEAD-fleet condition above, distinguishable on a dashboard from the
-legitimate `total == 0` posture, where no row decides anything and the catalog rule serves every registered operation. The same check also emits an ERROR-level
-structured log record for exactly that condition (`internal/queryapi/server/registry_drift_telemetry.go`), separate
-from the pre-existing plain-text `ROUTING ROWS STALE` line, which carries no level at all and only reaches
-someone tailing logs at the moment it is written.
+`query-api` no longer records `devhealth_query_api_routing_rows_for_digest`, `devhealth_query_api_routing_rows_total` or the
+`ROUTING ROWS STALE` line (CHAOS-8704): it reads no routing row to serve a catalog operation, and an MCP class root is decided
+by its newest row at any digest, so "no row at my own digest" is no longer a dead state. This table is the only view of the rows.
 
 **No carry-forward on an unchanged digest.** It might look tempting to auto-repoint a DEAD row's
 `candidate_build` onto a newly deployed image whenever the new image's schema digest happens to equal the

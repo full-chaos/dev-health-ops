@@ -465,6 +465,37 @@ func Enable(ctx context.Context, pool *pgxpool.Pool, request EnableRequest) ([]E
 
 	for i := range outcomes {
 		outcome := &outcomes[i]
+		if mcpclass.IsOperation(outcome.Operation) {
+			// CHAOS-8735: a class root's decision is one row per operation (go_api_class_decision), written
+			// with no candidate-build registration (no foreign key) and with the database's now() as its time.
+			switch err := tx.QueryRow(ctx, classDecisionLockSQL, outcome.Operation).Scan(&outcome.ModeBefore, &outcome.CandidateBuildBefore); {
+			case err == nil:
+				outcome.HadRowBefore = true
+			case errors.Is(err, pgx.ErrNoRows):
+			default:
+				return nil, fmt.Errorf("goapiproof: read before-state for %s: %w", outcome.Operation, err)
+			}
+			tag, err := tx.Exec(ctx, classDecisionUpsertSQL, outcome.Operation, request.Mode, request.RunningBuild, request.SchemaDigest, outcome.ReviewEvidence, request.RecordedBy)
+			if err != nil {
+				return nil, fmt.Errorf("goapiproof: enable %s: %w", outcome.Operation, err)
+			}
+			if tag.RowsAffected() != 1 {
+				return nil, fmt.Errorf("goapiproof: enable %s affected %d rows, want exactly 1", outcome.Operation, tag.RowsAffected())
+			}
+			entry := RoutingAuditEntry{
+				DocumentDigest:      outcome.DocumentDigest,
+				Operation:           outcome.Operation,
+				CandidateBuildAfter: request.RunningBuild,
+				ModeAfter:           request.Mode,
+			}
+			if outcome.HadRowBefore {
+				buildBefore, modeBefore := outcome.CandidateBuildBefore, outcome.ModeBefore
+				entry.CandidateBuildBefore = &buildBefore
+				entry.ModeBefore = &modeBefore
+			}
+			audit.Entries = append(audit.Entries, entry)
+			continue
+		}
 		// Candidate build FIRST. The routing row's 4-column foreign key
 		// makes the order mandatory -- but this is NOT a deadlock-avoiding
 		// "lock-order convention". `repoint` locks the routing row

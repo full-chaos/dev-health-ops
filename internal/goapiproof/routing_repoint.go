@@ -248,6 +248,33 @@ func Repoint(ctx context.Context, pool *pgxpool.Pool, request RepointRequest) ([
 	if err := request.validate(); err != nil {
 		return nil, err
 	}
+	// CHAOS-8735: MCP class roots are decided by go_api_class_decision; repoint rewrites the build they name and
+	// nothing else, whatever the schema digest, so the proof harness can run after a schema move.
+	class, document := splitClassOperations(request.Operations)
+	if len(class) > 0 && len(document) > 0 {
+		return nil, errMixedClassAndDocument
+	}
+	var classOutcomes []RepointOutcome
+	if len(request.Operations) == 0 || len(class) > 0 {
+		var err error
+		if classOutcomes, err = repointClassDecisions(ctx, pool, request, class); err != nil {
+			return nil, err
+		}
+		if len(class) > 0 {
+			return classOutcomes, nil
+		}
+	}
+	documentOutcomes, err := repointDocumentRows(ctx, pool, request)
+	if err != nil {
+		if len(classOutcomes) > 0 && (errors.Is(err, ErrRoutingTableEmpty) || errors.Is(err, ErrRoutingRowsOnlyDark) || errors.Is(err, ErrRepointNoRows)) {
+			return classOutcomes, nil
+		}
+		return nil, err
+	}
+	return append(classOutcomes, documentOutcomes...), nil
+}
+
+func repointDocumentRows(ctx context.Context, pool *pgxpool.Pool, request RepointRequest) ([]RepointOutcome, error) {
 	var lastRace error
 	for attempt := 0; attempt < repointAttempts; attempt++ {
 		outcomes, err := repointOnce(ctx, pool, request)
@@ -263,12 +290,6 @@ func Repoint(ctx context.Context, pool *pgxpool.Pool, request RepointRequest) ([
 		ErrRepointRacedAnotherWriter, repointAttempts, lastRace)
 }
 
-// rowKey is a routing row's full identity within one schema digest.
-//
-// Keyed by BOTH columns, never by operation alone: one operation can have
-// several rows at a schema digest under different document digests, and
-// three separate findings across three review rounds were all a map that
-// forgot that (r1 F5, r2 R2-03, r3 CONC-01).
 type rowKey struct{ operation, documentDigest string }
 
 func repointOnce(ctx context.Context, pool *pgxpool.Pool, request RepointRequest) ([]RepointOutcome, error) {

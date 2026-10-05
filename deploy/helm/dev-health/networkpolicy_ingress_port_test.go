@@ -226,7 +226,7 @@ func TestIngressControllerReachesOnlyGoAPIAndWebOnTheirOwnPorts(t *testing.T) {
 	probes := []int{3000, 5432, 6379, 6432, 6433, 6434, 8000, 8010, 8080, 8090, 8091, 8092, 8123, 9000, 9001}
 	pods := []string{"go-api", "web", "query-api", "go-worker", "valkey", "clickhouse", "postgresql",
 		"go-pgbouncer-transaction", "go-pgbouncer-queue-session", "go-pgbouncer-coordinator-session",
-		"migrate", "provision-roles", "river-migrate", "route-activate", "routing-carry", "routing-repoint"}
+		"migrate", "provision-roles", "river-migrate", "route-activate"}
 	for name, c := range map[string]struct {
 		args     []string
 		goPort   int

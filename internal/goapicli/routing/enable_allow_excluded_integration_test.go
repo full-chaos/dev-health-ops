@@ -62,7 +62,7 @@ func classEnableArgs(server *httptest.Server, dsn string, extra ...string) []str
 func classRowModeOf(t *testing.T, pool *pgxpool.Pool, op string) string {
 	t.Helper()
 	var mode string
-	if err := pool.QueryRow(context.Background(), `SELECT mode FROM go_api_routing_state WHERE selected_operation = $1`, op).Scan(&mode); err != nil {
+	if err := pool.QueryRow(context.Background(), `SELECT mode FROM go_api_class_decision WHERE operation = $1`, op).Scan(&mode); err != nil {
 		t.Fatal(err)
 	}
 	return mode

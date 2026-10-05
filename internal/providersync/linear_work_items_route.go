@@ -3,6 +3,7 @@ package providersync
 import (
 	"context"
 	"encoding/json"
+	"log/slog"
 	"net/http"
 	"net/url"
 	"os"
@@ -904,43 +905,51 @@ func validateLinearSprint(row linearSprintRow, claim Claim) error {
 }
 
 func linearTrustedSCMHosts() map[string]struct{} {
-	hosts := map[string]struct{}{
-		"github.com": {}, "www.github.com": {},
-		"gitlab.com": {}, "www.gitlab.com": {},
-	}
-	for _, value := range strings.Split(os.Getenv("LINEAR_TRUSTED_SCM_HOSTS"), ",") {
-		if host := strings.ToLower(strings.TrimSpace(value)); host != "" {
-			hosts[host] = struct{}{}
-		}
-	}
+	hosts, _ := linearTrustedSCMHostsAndRoots()
 	return hosts
 }
 
+func linearTrustedSCMHostsAndRoots() (map[string]struct{}, map[string][]string) {
+	return parseTrustedSCMHostEntries(os.Getenv("LINEAR_TRUSTED_SCM_HOSTS"),
+		"github.com", "www.github.com", "gitlab.com", "www.gitlab.com")
+}
+
 func linearAttachmentWorkItemID(attachment linearAttachmentPayload) string {
+	source, _ := linearAttachmentSource(attachment)
+	return source
+}
+
+// linearAttachmentSource is linearAttachmentWorkItemID that also reports a GitLab merge-request URL whose project path or
+// number fails parseGitLabReference (rejected): not written, not counted as synced.
+func linearAttachmentSource(attachment linearAttachmentPayload) (source string, rejected bool) {
 	sourceType := strings.ToLower(attachment.SourceType)
 	if !strings.Contains(sourceType, "github") && !strings.Contains(sourceType, "gitlab") {
-		return ""
+		return "", false
 	}
 	parsed, err := url.Parse(attachment.URL)
 	if err != nil || parsed.Host == "" || parsed.User != nil {
-		return ""
+		return "", false
 	}
 	// Python's `_trusted_scm_hosts` compares urlsplit(...).netloc exactly.  Use
 	// URL.Host (including an explicit port) and reject userinfo so a URL that
 	// merely has a trusted hostname does not widen the Python allowlist.
-	if _, ok := linearTrustedSCMHosts()[strings.ToLower(parsed.Host)]; !ok {
-		return ""
+	hosts, roots := linearTrustedSCMHostsAndRoots()
+	if _, ok := hosts[strings.ToLower(parsed.Host)]; !ok {
+		return "", false
 	}
-	parts := strings.Split(strings.Trim(parsed.Path, "/"), "/")
+	parts, ok := stripSCMURLRoot(roots, parsed.Host, strings.Split(strings.Trim(parsed.Path, "/"), "/"))
+	if !ok {
+		return "", false
+	}
 	if strings.Contains(sourceType, "github") && len(parts) >= 4 &&
 		parts[len(parts)-2] == "pull" {
-		return "ghpr:" + strings.Join(parts[:len(parts)-2], "/") + "#" + parts[len(parts)-1]
+		return "ghpr:" + strings.Join(parts[:len(parts)-2], "/") + "#" + parts[len(parts)-1], false
 	}
 	if strings.Contains(sourceType, "gitlab") && len(parts) >= 4 &&
 		parts[len(parts)-2] == "merge_requests" && parts[len(parts)-3] == "-" {
-		return "gitlab:" + strings.Join(parts[:len(parts)-3], "/") + "!" + parts[len(parts)-1]
+		return gitlabMergeRequestSourceID(strings.Join(parts[:len(parts)-3], "/"), parts[len(parts)-1])
 	}
-	return ""
+	return "", false
 }
 
 func normalizeLinearDependencies(
@@ -969,7 +978,12 @@ func normalizeLinearDependencies(
 		})
 	}
 	for _, attachment := range payload.Attachments.Nodes {
-		if source := linearAttachmentWorkItemID(attachment); source != "" {
+		source, rejected := linearAttachmentSource(attachment)
+		if rejected {
+			slog.Warn("providersync.linear.attachment_gitlab_reference_rejected", "org_id", claim.OrgID, "issue", workItemID)
+			continue
+		}
+		if source != "" {
 			appendRow(source, workItemID, "relates_to", "linear_attachment", nil)
 		}
 	}

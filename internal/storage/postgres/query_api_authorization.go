@@ -80,7 +80,7 @@ import (
 //
 // scheduled_report_occurrences is absent on purpose: only the SCHEDULED
 // execution path writes it, and that path is the scheduler's, not this
-// role's. go_api_candidate_build and go_api_proof_run are absent because only
+// role's. go_api_class_decision is read by the class switches (CHAOS-8735). go_api_candidate_build and go_api_proof_run are absent because only
 // the goapiproof CLI touches them. No sequence is needed: every id this
 // process writes is supplied by the caller.
 //
@@ -95,6 +95,7 @@ func queryAPIPosture() RolePosture {
 			{"worker_job_outbox", true, false, false},
 			{"go_api_routing_state", false, false, false},
 			{"go_api_proof_orgs", false, false, false},
+			{"go_api_class_decision", false, false, false},
 			{"sync_configurations", false, false, false},
 			{"job_runs", false, false, false},
 			{"sync_runs", false, false, false},

@@ -100,14 +100,14 @@ func TestStatusTextSaysServedOnlyForAnOperationWithNoRow(t *testing.T) {
 	missing := goapiproof.OperationStatus{Operation: "hotspots", DocumentDigest: "catalog-digest", DigestState: goapiproof.DigestMissing}
 
 	out := text(map[string]int{}, missing, agree, false)
-	if !strings.Contains(out, "no routing row at any schema digest: SERVED by the catalog rule of this build; a query-api older than this build refuses it") {
+	if !strings.Contains(out, "no routing row at any schema digest: SERVED by this build, which reads no routing row for a catalog operation") {
 		t.Errorf("an operation with no row is not reported served:\n%s", out)
 	}
-	if !strings.Contains(out, "table is empty") || !strings.Contains(out, "a query-api of this build serves every registered operation") || strings.Contains(out, "nothing is enabled") {
+	if !strings.Contains(out, "table is empty") || !strings.Contains(out, "a query-api of this build serves every registered operation without a row") || strings.Contains(out, "nothing is enabled") {
 		t.Errorf("the empty-table line still reads as if nothing were served:\n%s", out)
 	}
 
-	if out := text(map[string]int{}, missing, nil, true); strings.Contains(out, "SERVED by the catalog rule") || !strings.Contains(out, "could not be asked whether it registers this one") {
+	if out := text(map[string]int{}, missing, nil, true); strings.Contains(out, "SERVED by this build") || !strings.Contains(out, "could not be asked whether it registers this one") {
 		t.Errorf("with the deployed plane unreachable the text must not claim the operation is served:\n%s", out)
 	}
 	for name, status := range map[string]goapiproof.OperationStatus{
@@ -119,7 +119,7 @@ func TestStatusTextSaysServedOnlyForAnOperationWithNoRow(t *testing.T) {
 			t.Errorf("%s: an operation that has a row was reported under the catalog rule:\n%s", name, out)
 		}
 	}
-	if out := text(map[string]int{}, missing, map[string]string{"hotspots": "other"}, false); strings.Contains(out, "SERVED by the catalog rule") {
+	if out := text(map[string]int{}, missing, map[string]string{"hotspots": "other"}, false); strings.Contains(out, "SERVED by this build") {
 		t.Errorf("an operation the deployed plane registers under another document was reported served:\n%s", out)
 	}
 	// An entry that is not MISSING never gets the line, whatever its served_without_row holds: a report
@@ -134,68 +134,17 @@ func TestStatusTextSaysServedOnlyForAnOperationWithNoRow(t *testing.T) {
 	}
 }
 
-// TestDisableSaysWhenItLeavesAnOperationServing: the plan line appears for a catalog operation with no
-// row at any schema digest, and for nothing else. Each clause of the condition has its own row.
-func TestDisableSaysWhenItLeavesAnOperationServing(t *testing.T) {
-	noRow := goapiproof.DisableChange{Operation: "hotspots", NewMode: "disabled"}
-	note := disableStillServedNote(noRow, false)
-	for _, want := range []string{"a query-api of this build SERVES this operation", "NOT held dark", "dho goapi routing seed -operations hotspots"} {
-		if !strings.Contains(note, want) {
-			t.Errorf("the note for an operation with no row lacks %q: %q", want, note)
-		}
+func TestNoteCatalogOperationsPrintsOnlyForACatalogScope(t *testing.T) {
+	var out strings.Builder
+	saved := stderr
+	stderr = &out
+	t.Cleanup(func() { stderr = saved })
+	noteCatalogOperations(true)
+	if out.Len() != 0 {
+		t.Fatalf("an MCP class scope printed a note: %q", out.String())
 	}
-	if !strings.HasPrefix(note, "    !! ") {
-		t.Errorf("the note must be an indented `!!` plan line (the plan parsers read operation lines and NOTE lines only): %q", note)
-	}
-
-	withRow, deadOnly, staleOnly := noRow, noRow, noRow
-	withRow.CurrentMode = "canary"
-	deadOnly.DeadRowsOnly = true
-	staleOnly.StaleSchemaDigests = []string{"sha256:old"}
-	for name, got := range map[string]string{
-		"an MCP class row with no row":                       disableStillServedNote(goapiproof.DisableChange{Operation: "mcp:hotspots", NewMode: "disabled"}, true),
-		"an operation with a row at this digest":             disableStillServedNote(withRow, false),
-		"an operation whose rows here serve other documents": disableStillServedNote(deadOnly, false),
-		"an operation with a row at another schema digest":   disableStillServedNote(staleOnly, false),
-	} {
-		if got != "" {
-			t.Errorf("%s: the note was printed (%q); that operation is not served by the catalog rule", name, got)
-		}
-	}
-}
-
-// TestSeedSaysWhenItHoldsACatalogOperationDark: the first row of a catalog operation takes it out of the
-// catalog rule, and `seed` names every such operation -- written, or planned in a dry run or after a
-// refusal. Not for MCP class rows, and not when no first row is involved.
-func TestSeedSaysWhenItHoldsACatalogOperationDark(t *testing.T) {
-	outcomes := func(actions ...string) []goapiproof.SeedOutcome {
-		var out []goapiproof.SeedOutcome
-		for index, action := range actions {
-			out = append(out, goapiproof.SeedOutcome{Operation: []string{"home", "hotspots", "pr"}[index], Action: action})
-		}
-		return out
-	}
-	written := seedHoldsDarkNote(outcomes(goapiproof.SeedActionCreated, goapiproof.SeedActionAlreadyPresent, goapiproof.SeedActionCreated), false)
-	if !strings.Contains(written, "2 catalog operation(s) had no routing row, and a query-api of this build SERVES such an operation") || !strings.Contains(written, "NOT served until") || !strings.HasSuffix(written, ": home,pr") {
-		t.Errorf("note after a write = %q", written)
-	}
-	planned := seedHoldsDarkNote(outcomes(goapiproof.SeedActionWouldCreate, goapiproof.SeedActionRefused), false)
-	if !strings.Contains(planned, "1 catalog operation(s) have no routing row, and a query-api of this build SERVES such an operation") || !strings.Contains(planned, "would hold each dark") || !strings.HasSuffix(planned, ": home") {
-		t.Errorf("note for a planned write = %q", planned)
-	}
-	for name, got := range map[string]string{
-		"MCP class rows":                    seedHoldsDarkNote(outcomes(goapiproof.SeedActionCreated), true),
-		"nothing created":                   seedHoldsDarkNote(outcomes(goapiproof.SeedActionAlreadyPresent, goapiproof.SeedActionRefused), false),
-		"no outcome":                        seedHoldsDarkNote(nil, false),
-		"MCP class rows, planned (dry run)": seedHoldsDarkNote(outcomes(goapiproof.SeedActionWouldCreate), true),
-	} {
-		if got != "" {
-			t.Errorf("%s: a note was printed: %q", name, got)
-		}
-	}
-	for _, note := range []string{written, planned} {
-		if strings.Contains(note, "go_api_routing.seeded") || strings.Contains(note, "recorded_by=") {
-			t.Errorf("the note must not look like the seeded event line: %q", note)
-		}
+	noteCatalogOperations(false)
+	if strings.TrimSpace(out.String()) != catalogOperationNote {
+		t.Fatalf("a catalog scope printed %q, want the note", out.String())
 	}
 }

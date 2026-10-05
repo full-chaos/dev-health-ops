@@ -111,6 +111,10 @@
     "digest": "0e43d67d571539081b2006ae8b2148dd4ea31c959be22be1db9e927083060baa"
   },
   {
+    "operation": "coverageBaselines",
+    "digest": "141ed14fc636739e1184716167148d7d17c35180a09a83dc9ef2b04bfb1dd638"
+  },
+  {
     "operation": "createSavedReport",
     "digest": "2834bc84c1a065ef44dff96e02f6e5d2ca55608053f96a52366eac429aafc0f0",
     "kind": "mutation"

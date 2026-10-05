@@ -390,7 +390,7 @@ func TestTheClassRowSwitchIsBuiltByOneConstructorThatDoesNotAdmitShadowRows(t *t
 		t.Fatal(err)
 	}
 	text := string(raw)
-	if got := strings.Count(text, "classSwitch := newClassRowSwitch(pgPool, schemaDigest)"); got != 2 {
+	if got := strings.Count(text, "classSwitch := newClassRowSwitch(pgPool)"); got != 2 {
 		t.Fatalf("query_route.go builds the class-row switch through newClassRowSwitch %d times, want 2 (buildQueryRoute and newQueryHandler's default)", got)
 	}
 	if !strings.Contains(text, "newMCPHandler(mcpClient, pgPool, classSwitch, getenv)") {
@@ -399,11 +399,11 @@ func TestTheClassRowSwitchIsBuiltByOneConstructorThatDoesNotAdmitShadowRows(t *t
 	if !strings.Contains(text, "handlers.RunOperation = markClassGated(handler)") {
 		t.Fatal("buildQueryRoute does not build RunOperation as the class-gated alias of the serving handler")
 	}
-	if strings.Contains(text, "NewPostgresSwitch(pgPool, schemaDigest, mcpRoutingDigests())") {
+	if strings.Contains(text, "NewClassDecisionSwitch(pgPool, mcpRoutingDigests())") {
 		t.Fatal("query_route.go builds a class-row switch itself instead of through newClassRowSwitch")
 	}
-	if got := strings.Count(text, "NewProofSwitch(pgPool, schemaDigest, mcpRoutingDigests())"); got != 1 {
-		t.Fatalf("NewProofSwitch over the class rows appears %d times in query_route.go, want 1 (the MCP proof handler only)", got)
+	if got := strings.Count(text, "NewClassDecisionProofSwitch(pgPool, mcpRoutingDigests())"); got != 1 {
+		t.Fatalf("NewClassDecisionProofSwitch appears %d times in query_route.go, want 1 (the MCP proof handler only)", got)
 	}
 	gate, err := os.ReadFile("class_row_gate.go")
 	if err != nil {
@@ -415,8 +415,8 @@ func TestTheClassRowSwitchIsBuiltByOneConstructorThatDoesNotAdmitShadowRows(t *t
 	}
 	body := string(gate)[start:]
 	body = body[:strings.Index(body, "\n}\n")]
-	if !strings.Contains(body, "return routeswitch.NewPostgresSwitch(pool, schemaDigest, mcpRoutingDigests())") || strings.Contains(body, "NewProofSwitch") {
-		t.Fatal("newClassRowSwitch is not the canary/primary-only PostgresSwitch")
+	if !strings.Contains(body, "return routeswitch.NewClassDecisionSwitch(pool, mcpRoutingDigests())") || strings.Contains(body, "NewClassDecisionProofSwitch") {
+		t.Fatal("newClassRowSwitch is not the canary/primary-only ClassDecisionSwitch")
 	}
 }
 

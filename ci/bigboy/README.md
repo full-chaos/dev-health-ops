@@ -276,7 +276,7 @@ Every check below fails loud with a named finding; none can pass on an empty or 
   operation that has no routing row, so there is no row to enable and no ledger to compare with
   prod. The cut has no such STEP (it had `routing-enable` / `routing-parity`), and
   `bigboy-graphql-prove.sh` has no parity step. `routing-ops.txt` stays: the web-path smoke reads
-  its `KNOWN-MISSING` markers, and prove step 4 enables each of them.
+  its `KNOWN-MISSING` markers.
 - **Web-path smoke, real browser session** (`dho smoke web-path`, Go, run from the dho image the stack pins): logs in through Auth.js
   (csrf + Credentials callback) with the PUBLIC Host header on traefik, so every call takes the
   browser's path through `web`'s proxy.ts. Checks: unauthenticated public-host request lands on web
@@ -314,7 +314,6 @@ and the prover refuses by name if a Python plane answers the routed `/graphql`. 
 4. `dho goapi prove` for the local org -- read-only against org data, writes proof receipts only;
    both credentials are minted in process (envelope key loaded from the mounted file inside the
    container; `JWT_SECRET_KEY` by compose substitution from `ops/.env`);
-5. `dho goapi routing enable` for each `KNOWN-MISSING` op in `routing-ops.txt`.
 
 Full output names the org and stays under the devhealth-root `_records/bigboy-<sha8>/graphql-prove-<ts>/`.
 `BIGBOY_ROOT` (default `/home/ubuntu/devhealth`) is the running tree the harness works in, the same

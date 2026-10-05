@@ -48,9 +48,7 @@ var sinkTable = map[string]struct {
 	"main.go:refuse:fmt.Errorf":                 {treatBuilder, 1, "refuse redacts what it builds"},
 	"main.go:internal:fmt.Errorf":               {treatBuilder, 1, "internal redacts what it builds"},
 	"status.go:runStatus:.Error() [redacted]":   {treatRedacted, 4, "status's database errors (connect, census, classification, MCP class rows)"},
-	"carry.go:runCarry:.Error() [redacted]":     {treatRedacted, 1, "the -json result's Message field -- the same defense-in-depth redaction runCarry's other error-print sites apply"},
-	"carry.go:printCarryResult:.Error()":        {treatNotDatabase, 1, "a json.Marshal failure encoding carryResult's own string/int fields -- never a database error"},
-	"repoint.go:runRepoint:.Error() [redacted]": {treatRedacted, 1, "the -json result's Message field -- same defense-in-depth redaction as carry.go's"},
+	"repoint.go:runRepoint:.Error() [redacted]": {treatRedacted, 1, "the -json result's Message field -- defense-in-depth redaction of the error text"},
 	"repoint.go:printRepointResult:.Error()":    {treatNotDatabase, 1, "a json.Marshal failure encoding repointResult's own string fields -- never a database error"},
 	"status.go:runStatus:.Error()":              {treatNotDatabase, 3, "the registry URL sanitizer, the catalog loader and the registry HTTP fetch: no database"},
 }

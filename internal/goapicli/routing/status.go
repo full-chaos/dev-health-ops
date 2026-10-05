@@ -512,7 +512,7 @@ func printStatusText(report statusReport, local string) {
 
 	fmt.Fprintln(stdout, "rows by schema_digest:")
 	if len(report.RowsBySchemaDigest) == 0 {
-		fmt.Fprintln(stdout, "  (table is empty -- no row decides anything: a query-api of this build serves every registered operation by the catalog rule, and no MCP class root is enabled)")
+		fmt.Fprintln(stdout, "  (table is empty -- no row decides anything: a query-api of this build serves every registered operation without a row, and no MCP class root is enabled)")
 	} else {
 		digests := make([]string, 0, len(report.RowsBySchemaDigest))
 		for digest := range report.RowsBySchemaDigest {
@@ -567,15 +567,20 @@ func printStatusText(report statusReport, local string) {
 		if len(operation.AcceptedDocumentDigests) > 1 {
 			fmt.Fprintf(stdout, "    rows at the LIVE schema digest under accepted documents (current and legacy), any one in canary/primary serves: %v\n", operation.AcceptedDocumentDigests)
 		}
+		// CHAOS-8704: a catalog operation is served whatever its row's mode says, so MODE (and "not reachable")
+		// must not read as the operation being dark.
+		if operation.Mode != nil {
+			fmt.Fprintf(stdout, "    note: this build serves the operation whatever this row's mode says (%s); the row matters only to the proof route\n", *operation.Mode)
+		}
 		// CHAOS-8517: MODE prints "-" for an operation with no row, and "-" used to
 		// mean "not served". For an operation with no row at ANY digest it now means
 		// the opposite, so the line says which.
 		if operation.DigestState == goapiproof.DigestMissing {
 			switch {
 			case operation.ServedWithoutRow == nil:
-				fmt.Fprintln(stdout, "    no routing row at any schema digest: a query-api of this build serves such an operation by the catalog rule; the deployed process could not be asked whether it registers this one")
+				fmt.Fprintln(stdout, "    no routing row at any schema digest: a query-api of this build serves a registered operation whatever its routing row says; the deployed process could not be asked whether it registers this one")
 			case *operation.ServedWithoutRow:
-				fmt.Fprintln(stdout, "    no routing row at any schema digest: SERVED by the catalog rule of this build; a query-api older than this build refuses it (to hold it dark, `seed` it: a shadow row is not served)")
+				fmt.Fprintln(stdout, "    no routing row at any schema digest: SERVED by this build, which reads no routing row for a catalog operation (a query-api older than #3798 refuses it)")
 			}
 		}
 		// The deployed plane's own per-operation

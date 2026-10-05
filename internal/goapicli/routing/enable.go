@@ -110,6 +110,7 @@ func runEnable(argv []string) error {
 	if err != nil {
 		return err
 	}
+	noteCatalogOperations(isClass)
 	var catalog, kinds map[string]string
 	var operations []string
 	if isClass {

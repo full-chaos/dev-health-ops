@@ -182,8 +182,7 @@ func newBuildInfoHandler(verifier *principal.Verifier) http.HandlerFunc {
 // The absent case LOGS, with an explicit zero. "The proof route is off"
 // and "the proof route is on but nothing used it" are different states,
 // and an operator debugging a shadow operation that will not measure must
-// be able to tell them apart from the process log alone -- the same
-// lesson logRoutingStateDrift exists to encode one table over.
+// be able to tell them apart from the process log alone.
 // withProofProvenance wraps the proof handler so every response it serves
 // names the plane and the build that served it. See planeHeaderName.
 func withProofProvenance(handler http.HandlerFunc, commit string) http.HandlerFunc {

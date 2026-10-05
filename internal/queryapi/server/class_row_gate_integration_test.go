@@ -45,7 +45,7 @@ func postAsRunOperation(t *testing.T, handler http.HandlerFunc, document string,
 
 func setClassRowMode(t *testing.T, pool *pgxpool.Pool, operation, mode string) {
 	t.Helper()
-	tag, err := pool.Exec(context.Background(), `UPDATE go_api_routing_state SET mode = $1 WHERE schema_digest = $2 AND selected_operation = $3`, mode, classTestSchema, operation)
+	tag, err := pool.Exec(context.Background(), `UPDATE go_api_class_decision SET mode = $1 WHERE operation = $2`, mode, operation)
 	if err != nil || tag.RowsAffected() != 1 {
 		t.Fatalf("set class row %s to %s: %v (rows %d)", operation, mode, err, tag.RowsAffected())
 	}
@@ -76,12 +76,12 @@ func TestRunOperationRouteFollowsTheClassRowOfItsRoot(t *testing.T) {
 	t.Run("a SHADOW class row is dark: refused on this route and not enabled by the shared constructor", func(t *testing.T) {
 		classSeed(t, pool, hotspots) // seeds the class row in mode shadow
 		assertClassRefusal(t, "shadow class root", postAsRunOperation(t, runOperation, registeredHotspotsDocument, hotspotsVariables()))
-		if newClassRowSwitch(pool, itTestSchemaDigest).Enabled(hotspots) {
+		if newClassRowSwitch(pool).Enabled(hotspots) {
 			t.Fatal("the class-row switch enabled a shadow row")
 		}
 		// The same shadow row on the MCP listener (:8092), built over the same constructor, is refused too: one decision on both ports.
 		ch := &countingMCPClient{}
-		mcpListener := internalidentity.MCP(newMCPHandlerWithLimits(ch, nil, newClassRowSwitch(pool, itTestSchemaDigest), func(string) string { return "" }, mcpDefaultLimits()))
+		mcpListener := internalidentity.MCP(newMCPHandlerWithLimits(ch, nil, newClassRowSwitch(pool), func(string) string { return "" }, mcpDefaultLimits()))
 		assertMCPRefused(t, classHotspots(t, mcpListener), ch, http.StatusNotFound, mcpReasonRootFieldNotEnabled)
 	})
 
@@ -104,7 +104,7 @@ func TestRunOperationRouteFollowsTheClassRowOfItsRoot(t *testing.T) {
 		if _, err := classEnable(pool, hotspots); err != nil {
 			t.Fatal(err)
 		}
-		if !newClassRowSwitch(pool, itTestSchemaDigest).Enabled(hotspots) {
+		if !newClassRowSwitch(pool).Enabled(hotspots) {
 			t.Fatal("the class-row switch did not enable a canary row")
 		}
 		recorder := postAsRunOperation(t, runOperation, registeredHotspotsDocument, hotspotsVariables())

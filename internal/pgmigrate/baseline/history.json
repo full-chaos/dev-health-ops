@@ -8,11 +8,17 @@
   "doc": "Move the checked-in worker job kinds to the River transport."
  },
  {
-  "revision": "0145",
-  "down": "0144",
+  "revision": "0146",
+  "down": "0145",
   "labels": "application_schema",
   "realHead": true,
   "head": true,
+  "doc": "Add ``go_api_class_decision`` -- the MCP class root decision, keyed by operation only."
+ },
+ {
+  "revision": "0145",
+  "down": "0144",
+  "labels": "application_schema",
   "doc": "Add ``go_api_proof_orgs`` -- the org allowlist for ``/query/proof-write``."
  },
  {

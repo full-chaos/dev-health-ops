@@ -67,7 +67,8 @@ All deployment methods use the same environment variables:
 | `JIRA_EMAIL` | Jira account email |
 | `JIRA_API_TOKEN` | Jira API token |
 | `LINEAR_API_KEY` | Linear API key for Linear work-item sync |
-| `LINEAR_TRUSTED_SCM_HOSTS` | Additional self-hosted SCM hosts trusted in Linear issue attachment links |
+| `LINEAR_TRUSTED_SCM_HOSTS` | Additional self-hosted SCM hosts trusted in Linear issue attachment links. An entry is `host` or `host/root` (the instance's relative URL root, e.g. `gitlab.example.com/gitlab`; the root is stripped before the project path, case-sensitive) |
+| `JIRA_TRUSTED_SCM_HOSTS` | Additional self-hosted SCM hosts trusted in Jira dev-status PR/MR links; same `host` or `host/root` form |
 
 ### Application
 

@@ -145,12 +145,9 @@ func TestMCPClassStatusShowsWhatTheClassProofRestsOn(t *testing.T) {
 	ctx := context.Background()
 	pool := startRegistryPostgres(t)
 	op, digest := mcpclass.Operation("hotspots"), mcpclass.DocumentDigest()
-	if _, err := pool.Exec(ctx, registerCandidateBuildSQL, testSchemaDigest, digest, op, testCandidateBuild); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := pool.Exec(ctx, `INSERT INTO go_api_routing_state
-		(schema_digest, document_digest, selected_operation, current_candidate_build, owner, mode, rollout_percentage, review_evidence, recorded_by)
-		VALUES ($1,$2,$3,$4,'go','canary',100,'e','t')`, testSchemaDigest, digest, op, testCandidateBuild); err != nil {
+	if _, err := pool.Exec(ctx, `INSERT INTO go_api_class_decision
+		(operation, mode, current_candidate_build, schema_digest, review_evidence, recorded_by)
+		VALUES ($1,'canary',$2,$3,'e','t')`, op, testCandidateBuild, testSchemaDigest); err != nil {
 		t.Fatal(err)
 	}
 	evidence, _ := json.Marshal(ReceiptProvenance{

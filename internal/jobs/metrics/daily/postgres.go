@@ -287,10 +287,15 @@ func (store *PostgresStore) StartRunTx(
 	}
 	run := newRun(request.OrganizationID, request.TargetDay, request.Generation)
 	now := store.now().UTC()
+	// CHAOS-8710: created_at is the Postgres clock, not the worker's. The run
+	// marker's "latest full-org run of the day" is picked by created_at, so every
+	// writer must stamp it from the one clock (a skewed worker would otherwise
+	// sort a newer run before an older succeeded one). updated_at stays on the
+	// worker clock: the leases compare against it.
 	command, err := tx.Exec(ctx, `
 INSERT INTO public.daily_metrics_runs
     (id, org_id, target_day, generation, status, finalization_status, created_at, updated_at, full_org)
-VALUES ($1::uuid, $2::uuid, $3::date, $4, 'pending', 'pending', $5, $5, $6)
+VALUES ($1::uuid, $2::uuid, $3::date, $4, 'pending', 'pending', clock_timestamp(), $5, $6)
 ON CONFLICT DO NOTHING`,
 		run.ID, run.OrganizationID, request.TargetDay.Format("2006-01-02"), run.Generation, now, len(partitions) == 0)
 	if err != nil {
@@ -438,10 +443,11 @@ func (store *PostgresStore) StartScheduledFanoutRunTx(
 	}
 	run := newRun(normalized.OrganizationID, normalized.TargetDay, normalized.Generation)
 	now := store.now().UTC()
+	// CHAOS-8710: created_at is the Postgres clock (see StartRunTx).
 	command, err := tx.Exec(ctx, `
 INSERT INTO public.daily_metrics_runs
     (id, org_id, target_day, generation, status, finalization_status, created_at, updated_at, full_org)
-VALUES ($1::uuid, $2::uuid, $3::date, $4, 'pending', 'pending', $5, $5, true)
+VALUES ($1::uuid, $2::uuid, $3::date, $4, 'pending', 'pending', clock_timestamp(), $5, true)
 ON CONFLICT DO NOTHING`,
 		run.ID, run.OrganizationID, normalized.TargetDay.Format("2006-01-02"), run.Generation, now)
 	if err != nil {

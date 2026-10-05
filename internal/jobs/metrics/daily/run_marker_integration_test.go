@@ -1157,3 +1157,41 @@ func TestRunMarkerBackfillCanonicalizesTheOrganization(t *testing.T) {
 		t.Fatalf("rows under the non-canonical spelling = %d, want 0", rows)
 	}
 }
+
+// r2 P1 (reproduced by the reviewer): the day's latest full-org run is picked by
+// created_at, so created_at must come from the one database clock. An OLDER run
+// created by a worker whose clock is a year ahead would otherwise carry the
+// greater created_at, sort first, and let markerSync re-certify the day
+// 'succeeded' while a NEWER run is claimed and running.
+func TestRunMarkerSkewedWorkerClockAtRunCreationCannotRecertifyAnInFlightRun(t *testing.T) {
+	stack := newMarkerStack(t)
+	ctx := context.Background()
+	real := stack.store.now
+	ahead := time.Now().UTC().AddDate(1, 0, 0)
+	stack.store.now = func() time.Time { return ahead }
+	older := stack.finishFullOrgRun(t, markerOrgA, markerDay(1), "post-sync:00000000-0000-4000-8000-000000087361")
+	stack.store.now = real
+	if got := stack.states(t, markerOrgA, markerDay(1), markerDay(1))["2026-09-01"]; got != RunMarkerSucceeded {
+		t.Fatalf("setup: the older run left the day %q, want succeeded", got)
+	}
+
+	newer := stack.startRun(t, markerOrgA, markerDay(1), "post-sync:00000000-0000-4000-8000-000000087362", nil)
+	if _, err := stack.store.ClaimDispatch(ctx, newer); err != nil {
+		t.Fatal(err)
+	}
+	// The claim wrote 'reopened'. Every markerSync pass must keep it.
+	if _, err := stack.store.BackfillRunMarkers(ctx, markerOrgA, markerDay(1), markerDay(1), false); err != nil {
+		t.Fatal(err)
+	}
+	if got := stack.states(t, markerOrgA, markerDay(1), markerDay(1))["2026-09-01"]; got != RunMarkerReopened {
+		t.Errorf("state = %q after a sync while a newer full-org run is in flight, want reopened (the skewed older run was picked as latest)", got)
+	}
+	var olderIsFirst bool
+	if err := stack.pool.QueryRow(ctx, `SELECT (SELECT created_at FROM daily_metrics_runs WHERE id = $1::uuid) < (SELECT created_at FROM daily_metrics_runs WHERE id = $2::uuid)`, older, newer).
+		Scan(&olderIsFirst); err != nil {
+		t.Fatal(err)
+	}
+	if !olderIsFirst {
+		t.Error("the older run's created_at is not before the newer run's: created_at is not the database clock")
+	}
+}

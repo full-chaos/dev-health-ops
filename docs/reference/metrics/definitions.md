@@ -173,7 +173,7 @@ state of the daily metrics run so a reader can tell the two apart.
 | `generation` | The run generation the event came from. Informational, not ordered. |
 | `state` | `succeeded` or `reopened`. |
 | `finalized_at` | The version as a timestamp. |
-| `version` | Postgres clock reading in milliseconds, taken in the transaction that changed the run state. Orders the events of one day. |
+| `version` | Postgres clock reading in milliseconds, taken in the transaction that appends the row: the claim or reset that writes `reopened`, or the sync function's own transaction for `succeeded` (which runs after the finalize commit). Orders the events of one day. |
 
 **The invariant.** The marker says `succeeded` for an organization and day
 only when, at the moment of the append, committed Postgres says the latest run
@@ -220,7 +220,9 @@ failure is logged, and `dev_health_daily_metrics_run_marker_appends_total`
 counts it with `outcome="failed"`. `dho workers metrics daily-marker-backfill
 --org <uuid> --from <day> --to <day>` runs the same function for each day of a
 range. It appends only when the table differs from Postgres, so a second run
-appends nothing. A run with status `no_repositories` is not marked.
+appends nothing. A run with status `no_repositories` never writes `succeeded`, but a full-org run that was claimed first has already written `reopened`, so its day reads unknown (never certified).
+
+The day's latest full-org run is the one with the greatest `created_at`, and that column is stamped from the Postgres clock when the run is created, not from the worker's, so a skewed worker cannot sort a newer run before an older one.
 
 Concurrency. Every writer of one organization and day takes one Postgres
 advisory lock: the sync function, the dispatch claim, and the redrive and

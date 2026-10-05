@@ -11226,7 +11226,8 @@ type WorkUnitTeamAttribution {
   isPrimary: Boolean!
   memberCount: Int!
   evidence: String!
-}`, BuiltIn: false},
+}
+`, BuiltIn: false},
 }
 var parsedSchema = gqlparser.MustLoadSchema(sources...)
 

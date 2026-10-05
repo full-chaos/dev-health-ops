@@ -6,6 +6,7 @@ import (
 	"context"
 	"errors"
 	"os"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -1068,5 +1069,91 @@ func TestRunMarkerClaimAndReopenOfOneDayNeverDeadlock(t *testing.T) {
 		if err := <-errs; err != nil {
 			t.Fatalf("concurrent claim and reopen: %v", err)
 		}
+	}
+}
+
+// F12 (vet 2): a pre-2026-08-25 post-sync run carried an explicit repository list
+// (698271e7c removed `RepositoryIDs: plan.RepositoryIDs`). Build that row on the
+// 0146 schema, apply the shipped 0147 up file, and see whether it certifies.
+func TestRunMarkerMigration0147DoesNotClassAnOldPostSyncRunAsFullOrg(t *testing.T) {
+	stack := newMarkerStack(t)
+	ctx := context.Background()
+	read := func(p string) string {
+		b, err := os.ReadFile(p)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return string(b)
+	}
+	exec := func(sql string) {
+		for _, stmt := range strings.Split(sql, ";") {
+			lines := []string{}
+			for _, l := range strings.Split(stmt, "\n") {
+				if !strings.HasPrefix(strings.TrimSpace(l), "--") {
+					lines = append(lines, l)
+				}
+			}
+			if s := strings.TrimSpace(strings.Join(lines, "\n")); s != "" {
+				if _, err := stack.pool.Exec(ctx, s); err != nil {
+					t.Fatalf("%s: %v", s, err)
+				}
+			}
+		}
+	}
+	exec(read("../../../pgmigrate/sql/down/0147_add_daily_metrics_run_full_org.sql"))
+	const runID = "00000000-0000-4000-8000-0000000c7241"
+	if _, err := stack.pool.Exec(ctx, `
+INSERT INTO daily_metrics_runs (id,org_id,target_day,generation,status,finalization_status,created_at,updated_at)
+VALUES ($1,$2,$3,'post-sync:00000000-0000-4000-8000-0000000c7243','running','pending',$4,$4)`,
+		runID, markerOrgA, markerDay(1), time.Date(2026, 8, 10, 3, 0, 0, 0, time.UTC)); err != nil {
+		t.Fatal(err)
+	}
+	insertFinalizeTestPartition(t, ctx, stack.pool, "00000000-0000-4000-8000-0000000c7242", runID, 0, "succeeded", time.Date(2026, 8, 10, 3, 0, 0, 0, time.UTC))
+	if _, err := stack.pool.Exec(ctx, `UPDATE daily_metrics_partitions SET repo_ids = '["00000000-0000-4000-8000-0000000c7249"]'::jsonb WHERE run_id = $1::uuid`, runID); err != nil {
+		t.Fatal(err)
+	}
+	exec(read("../../../pgmigrate/sql/0147_add_daily_metrics_run_full_org.sql"))
+	var fullOrg bool
+	var parts int
+	var scope string
+	if err := stack.pool.QueryRow(ctx, `SELECT full_org, (SELECT count(*) FROM daily_metrics_partitions WHERE run_id = $1::uuid), (SELECT coalesce(string_agg(repo_ids::text, ','), '') FROM daily_metrics_partitions WHERE run_id = $1::uuid) FROM daily_metrics_runs WHERE id = $1::uuid`, runID).Scan(&fullOrg, &parts, &scope); err != nil {
+		t.Fatal(err)
+	}
+	processFinalizeJob(t, ctx, stack.store, runID)
+	stack.clearMarkers(t, markerOrgA)
+	out, err := stack.store.BackfillRunMarkers(ctx, markerOrgA, markerDay(1), markerDay(1), false)
+	ch := stack.states(t, markerOrgA, markerDay(1), markerDay(1))["2026-09-01"]
+	t.Logf("after 0147: full_org=%v partitions=%d scope=%s backfill=%+v err=%v marker=%q", fullOrg, parts, scope, out, err, ch)
+	if fullOrg {
+		t.Errorf("0147 classed an old post-sync run (explicit repository list until 698271e7c) as full-org")
+	}
+	if ch == RunMarkerSucceeded {
+		t.Errorf("FALSE SUCCEEDED: 0147 classed an explicit-repository-list post-sync run as full-org and the backfill certified the org-day")
+	}
+}
+
+// F13 (vet 2): uuid.Parse accepts "{...}" and upper case. The backfill must put
+// the marker on the canonical organization (one spelling for the lock key, the
+// ClickHouse org_id and the readers).
+func TestRunMarkerBackfillCanonicalizesTheOrganization(t *testing.T) {
+	stack := newMarkerStack(t)
+	ctx := context.Background()
+	const runID = "00000000-0000-4000-8000-000000087351"
+	stack.seedRun(t, runID, "00000000-0000-4000-8000-000000087352", markerOrgA, markerDay(1))
+	processFinalizeJob(t, ctx, stack.store, runID)
+	stack.clearMarkers(t, markerOrgA)
+	odd := "{" + strings.ToUpper(markerOrgA) + "}"
+	outcome, err := stack.store.BackfillRunMarkers(ctx, odd, markerDay(1), markerDay(1), false)
+	if err != nil {
+		t.Fatalf("backfill with the organization spelled %q: %v", odd, err)
+	}
+	if outcome.Appended != 1 {
+		t.Fatalf("backfill = %+v, want one row appended", outcome)
+	}
+	if got := stack.states(t, markerOrgA, markerDay(1), markerDay(1))["2026-09-01"]; got != RunMarkerSucceeded {
+		t.Fatalf("canonical organization reads %q, want succeeded (the marker went to a non-canonical org_id)", got)
+	}
+	if rows := stack.rawCount(odd); rows != 0 {
+		t.Fatalf("rows under the non-canonical spelling = %d, want 0", rows)
 	}
 }

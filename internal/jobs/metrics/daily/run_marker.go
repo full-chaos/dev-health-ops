@@ -7,6 +7,7 @@ import (
 	"log/slog"
 	"time"
 
+	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
 
 	"github.com/ClickHouse/clickhouse-go/v2/lib/driver"
@@ -268,6 +269,18 @@ func (store *PostgresStore) markInFlight(ctx context.Context, run Run, claimedAt
 	return nil
 }
 
+// canonicalOrgID parses an organization id and returns its canonical text
+// (lower case, no braces). uuid.Parse also accepts "{...}" and upper case; a
+// marker, its lock key and its ClickHouse org_id must all use ONE spelling, or a
+// pass reports success for an organization the readers never ask about.
+func canonicalOrgID(orgID string) (string, bool) {
+	parsed, err := uuid.Parse(orgID)
+	if err != nil {
+		return "", false
+	}
+	return parsed.String(), true
+}
+
 // lockMarkerDay takes the transaction-scoped lock that serializes every marker
 // writer of one (org, day). A hash collision only serializes two days.
 func lockMarkerDay(ctx context.Context, tx pgx.Tx, orgID, day string) error {
@@ -334,7 +347,8 @@ const (
 func (store *PostgresStore) markerSync(
 	ctx context.Context, orgID string, day time.Time, dryRun bool,
 ) (markerSyncResult, error) {
-	if !store.valid() || !store.markerEnabled() || !validUUID(orgID) {
+	orgID, ok := canonicalOrgID(orgID)
+	if !store.valid() || !store.markerEnabled() || !ok {
 		return markerSyncNoRun, ErrUnavailable
 	}
 	key := day.UTC().Format(dailyTargetDayLayout)
@@ -432,7 +446,8 @@ func (store *PostgresStore) BackfillRunMarkers(
 	ctx context.Context, orgID string, from, to time.Time, dryRun bool,
 ) (RunMarkerBackfillOutcome, error) {
 	var outcome RunMarkerBackfillOutcome
-	if !store.valid() || !store.markerEnabled() || !validUUID(orgID) || to.Before(from) {
+	orgID, ok := canonicalOrgID(orgID)
+	if !store.valid() || !store.markerEnabled() || !ok || to.Before(from) {
 		return outcome, ErrUnavailable
 	}
 	from = from.UTC().Truncate(24 * time.Hour)

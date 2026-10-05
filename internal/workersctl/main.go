@@ -1080,9 +1080,12 @@ func dispatchMetricsDailyMarkerBackfill(
 	if flags.Parse(args) != nil || flags.NArg() != 0 {
 		return writeError(stderr, "invalid_request")
 	}
-	if _, err := uuid.Parse(*org); err != nil {
+	parsedOrg, err := uuid.Parse(*org)
+	if err != nil {
 		return writeError(stderr, "invalid_request")
 	}
+	// One spelling of the organization reaches the marker path.
+	canonicalOrg := parsedOrg.String()
 	fromDay, err := time.Parse("2006-01-02", *from)
 	if err != nil {
 		return writeError(stderr, "invalid_request")
@@ -1105,7 +1108,7 @@ func dispatchMetricsDailyMarkerBackfill(
 	defer closeConn()
 	store.SetRunMarkerWriter(markerStore)
 	store.SetRunMarkerReader(markerStore)
-	outcome, err := store.BackfillRunMarkers(ctx, *org, fromDay, toDay, *dryRun)
+	outcome, err := store.BackfillRunMarkers(ctx, canonicalOrg, fromDay, toDay, *dryRun)
 	if err != nil {
 		return writeServiceError(stderr, err)
 	}

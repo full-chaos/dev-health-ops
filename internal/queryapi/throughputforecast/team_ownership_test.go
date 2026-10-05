@@ -69,3 +69,16 @@ func bindingValueOf(bindings []clickhouse.Binding, name string) (any, bool) {
 	}
 	return nil, false
 }
+
+// Only the ownership read fails; every other read would answer. The resolver must stop with an error: an
+// unscoped or team_id-keyed answer from a failed ownership check would be fail-open.
+func TestResolveFailsClosedWhenOnlyTheOwnershipReadFails(t *testing.T) {
+	client := &fakeClient{ownershipErr: errors.New("ownership down"), responses: []*fakeRowScanner{{}, {}, {}, {}, {}, {}, {}}}
+	got, err := Resolve(context.Background(), client, "org-7", model.ThroughputForecastInput{TeamIds: []string{"team-a"}, HistoryWeeks: 8}, mustDay(t, "2026-09-01"))
+	if err == nil || got != nil {
+		t.Fatalf("forecast %v, err %v; want an error and no forecast", got, err)
+	}
+	if len(client.statements) != 0 {
+		t.Fatalf("a team_id-keyed table was read after the ownership read failed: %d statements", len(client.statements))
+	}
+}

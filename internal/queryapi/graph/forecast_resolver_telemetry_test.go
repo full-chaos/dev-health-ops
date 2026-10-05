@@ -9,6 +9,9 @@ import (
 	sdktrace "go.opentelemetry.io/otel/sdk/trace"
 	"go.opentelemetry.io/otel/sdk/trace/tracetest"
 
+	"github.com/full-chaos/dev-health-go/clickhouse"
+
+	"github.com/full-chaos/dev-health-ops/internal/queryapi/authctx"
 	"github.com/full-chaos/dev-health-ops/internal/queryapi/graph/model"
 )
 
@@ -131,4 +134,44 @@ func TestThroughputForecastRecordsAuthorizationDenial(t *testing.T) {
 	}
 	requireAuthorizationError(t, err)
 	requireDeniedSpan(t, recorder, "query-api.throughputForecast")
+}
+
+// emptyClient answers every read with no rows: no team owns anything.
+type emptyClient struct{}
+
+func (emptyClient) Query(context.Context, string, []clickhouse.Binding) (clickhouse.RowScanner, error) {
+	return emptyScanner{}, nil
+}
+
+type emptyScanner struct{}
+
+func (emptyScanner) Next() bool        { return false }
+func (emptyScanner) Scan(...any) error { return nil }
+func (emptyScanner) Err() error        { return nil }
+func (emptyScanner) Close() error      { return nil }
+
+// CHAOS-8727: a requested team with no ownership row is a null answer, and its span records that as its own
+// outcome, never as "ok" (the resolver used to say it never answers null).
+func TestThroughputForecastRecordsAMissingTeamAsNoTeamOwnership(t *testing.T) {
+	recorder := recordSpans(t)
+	resolver := &queryResolver{&Resolver{ClickHouse: emptyClient{}}}
+	ctx := authctx.WithClaims(context.Background(), authctx.Claims{OrgID: "org-1"})
+
+	result, err := resolver.ThroughputForecast(ctx, "org-1", model.ThroughputForecastInput{TeamIds: []string{"team-unowned"}, HistoryWeeks: 12})
+	if err != nil || result != nil {
+		t.Fatalf("an unowned team: result %+v, err %v; want a nil result", result, err)
+	}
+	ended := recorder.Ended()
+	if len(ended) != 1 {
+		t.Fatalf("recorded %d spans, want 1", len(ended))
+	}
+	var outcome string
+	for _, attribute := range ended[0].Attributes() {
+		if string(attribute.Key) == "outcome" {
+			outcome = attribute.Value.AsString()
+		}
+	}
+	if outcome != "no_team_ownership" {
+		t.Fatalf("outcome %q, want no_team_ownership: a missing team counted as ok or empty hides the refusal", outcome)
+	}
 }

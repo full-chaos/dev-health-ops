@@ -114,11 +114,16 @@ type fakeClient struct {
 	// apart from statements/bindings.
 	owners            []string
 	ownershipBindings [][]clickhouse.Binding
+	// ownershipErr, when set, fails ONLY the ownership read; every other read still answers.
+	ownershipErr error
 }
 
 func (f *fakeClient) Query(_ context.Context, statement string, bindings []clickhouse.Binding) (clickhouse.RowScanner, error) {
 	if strings.Contains(statement, teamscope.OwnedTeamsMarker) {
 		f.ownershipBindings = append(f.ownershipBindings, bindings)
+		if f.ownershipErr != nil {
+			return nil, f.ownershipErr
+		}
 		owned := f.owners
 		if owned == nil {
 			for _, b := range bindings {

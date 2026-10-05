@@ -2,6 +2,7 @@ package capacityforecast
 
 import (
 	"context"
+	"errors"
 	"testing"
 
 	"github.com/full-chaos/dev-health-ops/internal/queryapi/graph/model"
@@ -43,5 +44,17 @@ func TestResolveForecastsAnOwnedTeamIsReadAndNoTeamReadsNoOwnership(t *testing.T
 	}
 	if len(orgWide.ownershipBindings) != 0 || len(orgWide.statements) != 1 {
 		t.Fatalf("an unfiltered list: ownership reads %d, forecast reads %d; want 0 and 1", len(orgWide.ownershipBindings), len(orgWide.statements))
+	}
+}
+
+func TestResolveForecastsFailsClosedWhenOnlyTheOwnershipReadFails(t *testing.T) {
+	team := "team-a"
+	client := &fakeClient{ownershipErr: errors.New("ownership down"), responses: []*fakeRowScanner{{}}}
+	got, err := ResolveForecasts(context.Background(), client, "org-7", &model.CapacityForecastFilterInput{TeamID: &team, Limit: 10})
+	if err == nil || got != nil {
+		t.Fatalf("connection %v, err %v; want an error and no connection", got, err)
+	}
+	if len(client.statements) != 0 {
+		t.Fatalf("capacity_forecasts was read after the ownership read failed: %v", client.statements)
 	}
 }

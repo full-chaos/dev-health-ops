@@ -13,6 +13,7 @@ import (
 type ownedRows struct {
 	ids    []string
 	cursor int
+	err    error
 }
 
 func (r *ownedRows) Next() bool { return r.cursor < len(r.ids) }
@@ -21,12 +22,13 @@ func (r *ownedRows) Scan(dest ...any) error {
 	r.cursor++
 	return nil
 }
-func (*ownedRows) Err() error   { return nil }
+func (r *ownedRows) Err() error { return r.err }
 func (*ownedRows) Close() error { return nil }
 
 type ownedClient struct {
 	answer   []string
 	err      error
+	rowsErr  error
 	reads    int
 	bindings []dhclickhouse.Binding
 	text     string
@@ -38,7 +40,7 @@ func (c *ownedClient) Query(_ context.Context, statement string, bindings []dhcl
 	if c.err != nil {
 		return nil, c.err
 	}
-	return &ownedRows{ids: c.answer}, nil
+	return &ownedRows{ids: c.answer, err: c.rowsErr}, nil
 }
 
 func TestOwnedTeamsKeepsRequestOrderDropsBlanksAndBindsTheOrg(t *testing.T) {
@@ -70,5 +72,14 @@ func TestOwnedTeamsAnEmptyRequestReadsNothingAndAReadErrorIsAnError(t *testing.T
 	}
 	if _, err := OwnedTeams(context.Background(), &ownedClient{err: errors.New("boom")}, "org-7", []string{"a"}, time.Now()); err == nil {
 		t.Fatal("a failed read was treated as an answer")
+	}
+}
+
+// The rows ended on an error after the ids that were read: those ids are not an answer.
+func TestOwnedTeamsReturnsTheErrorTheRowsEndedOn(t *testing.T) {
+	client := &ownedClient{answer: []string{"a"}, rowsErr: errors.New("stream cut")}
+	got, err := OwnedTeams(context.Background(), client, "org-7", []string{"a"}, time.Now())
+	if err == nil || got != nil {
+		t.Fatalf("owned %v, err %v; want an error and no teams", got, err)
 	}
 }

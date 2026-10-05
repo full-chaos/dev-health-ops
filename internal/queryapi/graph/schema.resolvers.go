@@ -934,12 +934,15 @@ func (r *queryResolver) ThroughputForecast(ctx context.Context, orgID string, in
 		finish("error")
 		return nil, fmt.Errorf("throughputForecast: %w", err)
 	}
-	// This resolver never answers null -- an empty scope gets the structured
-	// no-history payload instead -- so "empty" is detected from the sentinel
-	// forecast id rather than from a nil result.
-	if result != nil && result.ForecastID == "no-history" {
+	// A null answer is a team with no ownership row (CHAOS-8727): missing, recorded as its own outcome so it
+	// is not counted as ok. An empty scope of an owned team gets the structured no-history payload instead, so
+	// "empty" is detected from the sentinel forecast id rather than from a nil result.
+	switch {
+	case result == nil:
+		finish("no_team_ownership")
+	case result.ForecastID == "no-history":
 		finish("empty")
-	} else {
+	default:
 		finish("ok")
 	}
 	return result, nil

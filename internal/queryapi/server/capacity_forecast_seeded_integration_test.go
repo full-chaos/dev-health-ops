@@ -43,6 +43,7 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/queryapi/capacityforecast"
 	"github.com/full-chaos/dev-health-ops/internal/queryapi/graph/model"
 	"github.com/full-chaos/dev-health-ops/internal/queryapi/graphqldate"
+	"github.com/full-chaos/dev-health-ops/internal/queryapi/teamscope"
 	"github.com/full-chaos/dev-health-ops/internal/queryapi/throughputforecast"
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/chschema"
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/containers"
@@ -378,11 +379,40 @@ func TestCapacityForecastReturnsNilForAnOrgWithNoRows(t *testing.T) {
 // seedTeamOwnership writes one open team_repo_ownership row (CHAOS-8727).
 func seedTeamOwnership(ctx context.Context, t *testing.T, raw stdclickhouse.Conn, org, team, repo string) {
 	t.Helper()
+	seedTeamOwnershipWindow(ctx, t, raw, org, team, repo, "2026-01-01 00:00:00", "")
+}
+
+// seedTeamOwnershipWindow writes one team_repo_ownership row valid from validFrom until validTo ("" = open).
+func seedTeamOwnershipWindow(ctx context.Context, t *testing.T, raw stdclickhouse.Conn, org, team, repo, validFrom, validTo string) {
+	t.Helper()
+	to := "NULL"
+	if validTo != "" {
+		to = fmt.Sprintf("toDateTime64('%s',3)", validTo)
+	}
 	if err := raw.Exec(ctx, fmt.Sprintf(
 		`INSERT INTO team_repo_ownership (org_id, provider, team_id, repo_id, repo_full_name, match_type, source, is_primary, specificity, priority, valid_from, valid_to, updated_at)
-		VALUES ('%s', 'github', '%s', NULL, '%s', 'exact', 'inferred', 0, 0, 0, toDateTime64('2026-01-01 00:00:00',3), NULL, toDateTime64('2026-01-01 00:00:00',3))`,
-		org, team, repo)); err != nil {
+		VALUES ('%s', 'github', '%s', NULL, '%s', 'exact', 'inferred', 0, 0, 0, toDateTime64('%s',3), %s, toDateTime64('2026-01-01 00:00:00',3))`,
+		org, team, repo, validFrom, to)); err != nil {
 		t.Fatalf("seed team_repo_ownership: %v", err)
+	}
+}
+
+// CHAOS-8727: only an ownership row that is open at the instant counts. A row that closed before it and a
+// row that opens after it do not.
+func TestOwnedTeamsCountsOnlyAnOpenWindowOnARealEngine(t *testing.T) {
+	ctx := context.Background()
+	_, client, raw := migratedClickHouse(ctx, t)
+	asOf := time.Date(2026, 9, 1, 0, 0, 0, 0, time.UTC)
+	seedTeamOwnershipWindow(ctx, t, raw, "org-mine", "team-open", "acme/open", "2026-01-01 00:00:00", "")
+	seedTeamOwnershipWindow(ctx, t, raw, "org-mine", "team-closed", "acme/closed", "2026-01-01 00:00:00", "2026-08-01 00:00:00")
+	seedTeamOwnershipWindow(ctx, t, raw, "org-mine", "team-future", "acme/future", "2026-10-01 00:00:00", "")
+	seedTeamOwnershipWindow(ctx, t, raw, "org-theirs", "team-theirs", "acme/theirs", "2026-01-01 00:00:00", "")
+	got, err := teamscope.OwnedTeams(ctx, client, "org-mine", []string{"team-open", "team-closed", "team-future", "team-theirs", "team-none"}, asOf)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != 1 || got[0] != "team-open" {
+		t.Fatalf("owned = %v, want only team-open (closed, future, other-org and unknown teams do not count)", got)
 	}
 }
 

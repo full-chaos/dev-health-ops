@@ -157,7 +157,7 @@ func TestGitHubWorkItemDependencyMatchesFrozenPythonProductionRows(t *testing.T)
 			{ID: "trusted_linear_comment", Input: commentInput},
 		},
 		buildGitHubDependencyOracleRow,
-		nil,
+		workItemDependencyColumnsAfterThePythonFreeze,
 	)
 }
 

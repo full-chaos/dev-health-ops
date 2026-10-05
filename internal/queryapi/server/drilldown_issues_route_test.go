@@ -167,6 +167,56 @@ func TestNewDrilldownIssuesPostHandlerHappyPathNoDeprecatedHeader(t *testing.T) 
 	}
 }
 
+// MetricFilter accepts the string "true" as a Pydantic bool. This route must
+// retain that coerced value when it selects the persisted blocked-item source;
+// the count field proves it did not fall back to the ordinary issue drilldown.
+func TestNewDrilldownIssuesPostHandlerUsesPersistedBlockedItemsForCoercedTrue(t *testing.T) {
+	handler := newDrilldownIssuesPostHandler(newEmptyRowsDrilldownIssuesReader(t))
+	body := `{"filters":{"how":{"blocked":"true"}}}`
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/drilldown/issues", bytes.NewReader([]byte(body)))
+	req = req.WithContext(authctx.WithClaims(req.Context(), authctx.Claims{OrgID: "org-1"}))
+	rec := httptest.NewRecorder()
+	serveRoute(t, handler, rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d, body=%s", rec.Code, http.StatusOK, rec.Body.String())
+	}
+	var response struct {
+		Items []any   `json:"items"`
+		Count *uint64 `json:"count"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &response); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+	if response.Items == nil || response.Count == nil || *response.Count != 0 {
+		t.Fatalf("response = %+v, want items=[] and measured count=0", response)
+	}
+}
+
+func TestNewDrilldownIssuesPostHandlerKeepsFalseOnTheOrdinaryDrilldown(t *testing.T) {
+	client := fakeQueryClientFunc(func(_ context.Context, query string, _ []dhclickhouse.Binding) (dhclickhouse.RowScanner, error) {
+		if !strings.Contains(query, "FROM work_item_cycle_times") || strings.Contains(query, "work_item_blocked_durations_daily") {
+			return nil, errors.New("filters.how.blocked=false selected the blocked-only source")
+		}
+		return emptyRowsDrilldownScanner{}, nil
+	})
+	reader, err := drilldown.NewReader(client)
+	if err != nil {
+		t.Fatalf("drilldown.NewReader: %v", err)
+	}
+	handler := newDrilldownIssuesPostHandler(reader)
+	body := `{"filters":{"how":{"blocked":false}}}`
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/drilldown/issues", bytes.NewReader([]byte(body)))
+	req = req.WithContext(authctx.WithClaims(req.Context(), authctx.Claims{OrgID: "org-1"}))
+	rec := httptest.NewRecorder()
+	serveRoute(t, handler, rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d, body=%s", rec.Code, http.StatusOK, rec.Body.String())
+	}
+	if strings.Contains(rec.Body.String(), `"count"`) {
+		t.Fatalf("false response has blocked-only count: %s", rec.Body.String())
+	}
+}
+
 // TestNewDrilldownIssuesPostHandlerLimitFallback pins "payload.limit or
 // 50" (api/main.py:1000): an explicit 0 falls back to 50.
 func TestNewDrilldownIssuesPostHandlerLimitFallback(t *testing.T) {

@@ -85,6 +85,7 @@ query LinearWorkItems($first: Int!, $after: String, $filter: IssueFilter) {
       relations(first: 50) {
         nodes {
           type
+          createdAt
           issue { identifier }
           relatedIssue { identifier }
         }
@@ -93,6 +94,7 @@ query LinearWorkItems($first: Int!, $after: String, $filter: IssueFilter) {
       inverseRelations(first: 50) {
         nodes {
           type
+          createdAt
           issue { identifier }
           relatedIssue { identifier }
         }
@@ -136,7 +138,7 @@ const linearWorkItemsRelationsQuery = `
 query LinearWorkItemsRelations($first: Int!, $after: String, $issueId: String!) {
   issue(id: $issueId) {
     relations(first: $first, after: $after) {
-      nodes { type issue { identifier } relatedIssue { identifier } }
+      nodes { type createdAt issue { identifier } relatedIssue { identifier } }
       pageInfo { hasNextPage endCursor }
     }
   }
@@ -178,7 +180,7 @@ const linearWorkItemsInverseRelationsQuery = `
 query LinearWorkItemsInverseRelations($first: Int!, $after: String, $issueId: String!) {
   issue(id: $issueId) {
     inverseRelations(first: $first, after: $after) {
-      nodes { type issue { identifier } relatedIssue { identifier } }
+      nodes { type createdAt issue { identifier } relatedIssue { identifier } }
       pageInfo { hasNextPage endCursor }
     }
   }
@@ -302,7 +304,10 @@ type linearRelationIssuePayload struct {
 }
 
 type linearRelationPayload struct {
-	Type         string                      `json:"type"`
+	Type string `json:"type"`
+	// CreatedAt is when the relation was made at linear: the relation's
+	// start (CHAOS-8578).
+	CreatedAt    *string                     `json:"createdAt"`
 	Issue        *linearRelationIssuePayload `json:"issue"`
 	RelatedIssue *linearRelationIssuePayload `json:"relatedIssue"`
 }
@@ -946,7 +951,7 @@ func normalizeLinearDependencies(
 ) []linearWorkItemDependencyRow {
 	rows := make([]linearWorkItemDependencyRow, 0)
 	seen := make(map[string]struct{})
-	appendRow := func(source, target, relationType, relationRaw string) {
+	appendRow := func(source, target, relationType, relationRaw string, startedAt *time.Time) {
 		if source == "" || target == "" || relationType == "" {
 			return
 		}
@@ -960,11 +965,12 @@ func normalizeLinearDependencies(
 			RelationshipType: relationType, RelationshipTypeRaw: relationRaw,
 			RelationshipSemanticsVersion: "canonical-blocks.v2",
 			LastSynced:                   normalizedAt.UTC(), OrgID: claim.OrgID,
+			RelationStartedAt: startedAt,
 		})
 	}
 	for _, attachment := range payload.Attachments.Nodes {
 		if source := linearAttachmentWorkItemID(attachment); source != "" {
-			appendRow(source, workItemID, "relates_to", "linear_attachment")
+			appendRow(source, workItemID, "relates_to", "linear_attachment", nil)
 		}
 	}
 	for _, relations := range []linearRelationsPayload{payload.Relations, payload.InverseRelations} {
@@ -987,7 +993,8 @@ func normalizeLinearDependencies(
 			default:
 				continue
 			}
-			appendRow(source, target, relationType, "linear_relation:"+strings.ToLower(strings.TrimSpace(relation.Type)))
+			// The provider's own time of the link (CHAOS-8578).
+			appendRow(source, target, relationType, "linear_relation:"+strings.ToLower(strings.TrimSpace(relation.Type)), parseLinearTimePtr(relation.CreatedAt))
 		}
 	}
 	return rows

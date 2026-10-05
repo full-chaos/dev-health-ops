@@ -195,7 +195,7 @@ func (conn *workItemSendFailingConn) PrepareBatch(_ context.Context, query strin
 	table := "unknown"
 	for _, candidate := range []string{
 		"work_item_metrics_daily", "work_item_user_metrics_daily", "work_item_cycle_times",
-		"estimate_coverage_metrics_daily", "work_item_state_durations_daily",
+		"estimate_coverage_metrics_daily", "work_item_state_durations_daily", "work_item_blocked_durations_daily",
 	} {
 		if strings.Contains(query, candidate) {
 			table = candidate
@@ -296,5 +296,27 @@ func TestWorkItemStateComputeFamilyReportsTheFailingWritesOwnCountOnSendAmbiguit
 		t.Fatalf("written=%d, want 2 -- the two segment rows this ambiguous Send() failure may have "+
 			"already landed (this is the ONLY write in this executor's loop) -- reporting 0 here is "+
 			"exactly the bug this pass exists to catch", written)
+	}
+}
+
+// The per-item blocked snapshot is the second state write. It carries a
+// separate durable list/count source, so an ambiguous acknowledgement must
+// report the aggregate state rows that landed before it and this writer's own
+// attempted snapshot row.
+func TestWorkItemStateComputeFamilyReportsBlockedItemWritesOwnCountOnSendAmbiguity(t *testing.T) {
+	conn := &workItemSendFailingConn{failTable: "work_item_blocked_durations_daily"}
+	executor := &WorkItemStateExecutor{conn: conn, nowUTC: func() time.Time { return time.Unix(0, 0).UTC() }}
+	run := Run{OrganizationID: "org-42", TargetDay: time.Date(2026, 9, 3, 0, 0, 0, 0, time.UTC)}
+	partition := Partition{ID: "p1", RepoIDs: []RepositoryID{RepositoryID(workItemFamilyTestRepoID.String())}}
+
+	written, err := executor.ComputeFamily(context.Background(), run, partition)
+	if err == nil {
+		t.Fatal("ComputeFamily err = nil, want the forced work_item_blocked_durations_daily Send() failure to surface")
+	}
+	if written != 3 {
+		t.Fatalf("written=%d, want 3 (two aggregate state rows plus one blocked-item snapshot that may have landed)", written)
+	}
+	if len(conn.targets) != 2 || conn.targets[0] != "work_item_state_durations_daily" || conn.targets[1] != "work_item_blocked_durations_daily" {
+		t.Fatalf("write targets=%v, want state aggregate then per-item blocked snapshot", conn.targets)
 	}
 }

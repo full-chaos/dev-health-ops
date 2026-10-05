@@ -10,10 +10,15 @@ explicit repository list inserts its partitions in the creating transaction, a r
 all-repository fallback) discovers the repository set later. The column records it at creation:
 ``true`` when no explicit repository list was given.
 
-**Backfill.** The scheduled fan-out and the post-sync generation prefixes were always full-organization,
-so those rows become ``true``. Every other existing row stays ``false``: a manual or external-recompute
-run of the past cannot be told apart, and ``false`` means "never certifies a day", the safe side.
-New code writes the column on every insert; an older build that does not leaves the default ``false``.
+**Backfill.** Only the scheduled fan-out generation prefix becomes ``true``: that run was always the
+nightly organization-wide fan-out. A ``post-sync:`` row stays ``false``. The post-sync creation site
+stopped passing a repository list on 2026-08-25 (CHAOS-4263, commit 698271e7c "Resolve post-sync
+daily-metrics repositories through live ClickHouse discovery"); a post-sync run created before that
+carried the triggering sync's repository ids, and no stored field says which kind an old row is, so the
+history cannot prove an old row org-wide. ``false`` means "never certifies a day", the safe side. A manual
+or external-recompute run of the past is likewise unknowable and stays ``false``. New code writes the
+column on every insert (a post-sync run created now has no repository list, so it is ``true``); an older
+build that does not leaves the default ``false``.
 """
 
 from __future__ import annotations
@@ -39,8 +44,7 @@ def upgrade() -> None:
     op.execute(
         sa.text(
             "UPDATE daily_metrics_runs SET full_org = true "
-            "WHERE starts_with(generation, 'fixed-schedule:daily_metrics_fanout:') "
-            "OR starts_with(generation, 'post-sync:')"
+            "WHERE starts_with(generation, 'fixed-schedule:daily_metrics_fanout:')"
         )
     )
 

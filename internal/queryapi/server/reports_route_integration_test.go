@@ -54,15 +54,6 @@ func TestSavedReportRoutes_ThroughTheSignedEnvelope(t *testing.T) {
 		t.Fatal(err)
 	}
 	handler, _, _, _, _ := newQueryHandler(emptyCHClient{}, pool, verifier, itTestSchemaDigest, os.Getenv)
-	for doc, op := range map[string]string{
-		registeredSavedReportsDocument: "savedReports",
-		registeredSavedReportDocument:  "savedReport",
-		registeredReportRunsDocument:   "reportRuns",
-		registeredBusFactorDocument:    "busFactor",
-	} {
-		setRoutingMode(t, pool, digestHex(doc), op, "canary")
-	}
-
 	token := func(org string) string {
 		return signDataHealthEnvelope(t, priv, principal.Claims{OrgID: org, Role: "member"}, time.Now().Add(time.Hour))
 	}

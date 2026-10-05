@@ -213,7 +213,7 @@ jobs:
         # -update is deliberately absent: it REWRITES the record instead of
         # comparing against it, which would make this step incapable of failing.
         # A test asserts this command does not carry it.
-        run: go run ./cmd/gqlgen-guard check-drift
+        run: go run -trimpath ./cmd/gqlgen-guard check-drift
 
       - name: Prepare base job contracts
         if: steps.relevance.outputs.relevant == 'true' && matrix.name == 'static' && (github.event_name == 'pull_request' || github.event_name == 'merge_group')

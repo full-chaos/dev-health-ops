@@ -13,8 +13,7 @@ import (
 
 // This file adds the REST surface's "proven" state -- the fourth column
 // go-api-rest-prove's own package doc comment (goapiproof/restcorpus.go)
-// exists to feed. Modelled on live.go's OperationRow.Proven, and built
-// from the SAME rule class as the GraphQL Ops block: an admissible
+// exists to feed: an admissible
 // go_api_rest_proof_run row, judged through goapiproof.EnablementProofClause
 // -- one predicate, reused unchanged (not a second copy of it) because
 // go_api_rest_proof_run's stage/terminal_state/candidate_build/
@@ -27,17 +26,10 @@ import (
 // module doc comment for why no second, GraphQL-shaped registry table
 // exists alongside it.
 //
-// It differs from the GraphQL column in one structural way. A GraphQL
-// operation's admissible candidate build is READ from
-// go_api_routing_state.current_candidate_build -- a live row this page
-// already reads for the Ops block. A REST route has no such row:
-// restendpoints.go's own package doc comment states the REST section is
-// read ENTIRELY from committed source on every render, with no per-row
-// ledger. So "proven at which build" has no live column to read it from
-// here, and the caller must SUPPLY the candidate build to check against
-// -- see ApplyRESTProof's own doc comment for why that build is
-// deliberately left the caller's decision rather than guessed at by this
-// package.
+// A REST route carries no per-row ledger: restendpoints.go's own package doc comment states the REST section is
+// read ENTIRELY from committed source on every render. So "proven at which build" has no live column to read it
+// from here, and the caller must SUPPLY the candidate build to check against -- see ApplyRESTProof's own doc
+// comment for why that build is deliberately left the caller's decision rather than guessed at by this package.
 
 // RESTOperationName renders the routeswitch operation name one REST route
 // carries -- "REST:<METHOD>:<path>", the SAME string query-api's route files

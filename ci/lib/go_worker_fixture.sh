@@ -88,7 +88,7 @@ clickhouse_native_uri() {
 # ---------------------------------------------------------------------------
 build_go_binaries() {
   echo "==> building Go binaries (dho)"
-  go build -o "${BIN_DIR}/dho" ./cmd/dho
+  go build -trimpath -o "${BIN_DIR}/dho" ./cmd/dho
 }
 
 # ---------------------------------------------------------------------------

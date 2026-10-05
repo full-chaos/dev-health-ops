@@ -32,14 +32,12 @@ import (
 // at once would race.
 
 // e2ePool is the smallest Postgres double run() needs to be driven end
-// to end: readRoutingState's one Query and WriteReceipts' two Exec
-// statements per receipt. It satisfies dbPool. It does not implement
+// to end: WriteReceipts' two Exec statements per receipt. It satisfies dbPool. It does not implement
 // TxBeginner, so WriteAtomic falls back to a direct (non-transactional)
 // Write -- enough to prove a receipt lands, without needing a real
 // transaction.
 type e2ePool struct {
-	mu          sync.Mutex
-	routingRows [][]any
+	mu sync.Mutex
 	// backedOps, when set, are the document operations the receipt-backed reader
 	// (go_api_proof_run) finds: CHAOS-7442's doc-route class proof reads them.
 	backedOps []string
@@ -66,7 +64,7 @@ func (p *e2ePool) Query(_ context.Context, sql string, _ ...any) (pgx.Rows, erro
 		}
 		return &fakeRoutingRows{rows: rows}, nil
 	}
-	return &fakeRoutingRows{rows: p.routingRows}, nil
+	return &fakeRoutingRows{}, nil
 }
 
 func (p *e2ePool) Exec(_ context.Context, sql string, args ...any) (pgconn.CommandTag, error) {
@@ -365,10 +363,7 @@ func runTwoOperationsEndToEnd(t *testing.T, extraArgs ...string) (stdout string,
 		t.Fatalf("write documents file: %v", err)
 	}
 
-	pool = &e2ePool{routingRows: [][]any{
-		{"featureFlags", featureFlagsDigest, "canary", buildSHA},
-		{"hotspots", hotspotsDigest, "canary", buildSHA},
-	}}
+	pool = &e2ePool{}
 	if e2ePoolHook != nil {
 		e2ePoolHook(pool)
 	}
@@ -608,27 +603,30 @@ func TestRunWhoseReceiptWritesFailKeepsTheMeasuredReport(t *testing.T) {
 	}
 }
 
-// A run stopped by an error carrying the Postgres DSN writes its stopped
-// report with the DSN redacted, as the returned error is.
-func TestRunStoppedReportIsRedacted(t *testing.T) {
+// A run whose receipt write fails with an error carrying the Postgres DSN keeps its measured report and returned error with
+// the DSN redacted.
+func TestRunWhoseReceiptWriteErrorCarriesTheDSNIsRedacted(t *testing.T) {
 	withProverCommit(t, e2eBuildSHA)
 	dsn := "postgres://user:" + postgresURIMarker + "@host/db"
 	e2ePoolHook = func(p *e2ePool) {
-		p.queryErr = errors.New("failed to connect to `" + dsn + "`: server closed the connection")
+		p.execErr = errors.New("failed to connect to `" + dsn + "`: server closed the connection")
 	}
 	t.Cleanup(func() { e2ePoolHook = nil })
 	_, runErr, reportPath, _ := runTwoOperationsEndToEnd(t, "-postgres-uri="+dsn)
 	if runErr == nil {
-		t.Fatal("run() = nil, want the routing-state read failure")
+		t.Fatal("run() = nil, want the receipt write failure")
+	}
+	if strings.Contains(runErr.Error(), postgresURIMarker) {
+		t.Fatalf("the returned error carries the DSN secret: %v", runErr)
 	}
 	raw, err := os.ReadFile(reportPath)
 	if err != nil {
 		t.Fatalf("read report: %v", err)
 	}
 	if strings.Contains(string(raw), postgresURIMarker) {
-		t.Fatalf("the stopped report carries the DSN secret:\n%s", raw)
+		t.Fatalf("the report carries the DSN secret:\n%s", raw)
 	}
-	if !strings.Contains(string(raw), `"exit_cause": "refused_before_measuring"`) {
-		t.Fatalf("want a report refused before measuring:\n%s", raw)
+	if !strings.Contains(string(raw), `"exit_cause": "completed_with_run_error"`) {
+		t.Fatalf("want a measured report with a run error:\n%s", raw)
 	}
 }

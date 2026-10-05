@@ -123,11 +123,11 @@ Or use `--patch-file` to avoid credential exposure (Trap #121).
 
 **A catalog operation needs no routing row, and no routing row can hold it dark.** query-api's `/query` and `/graphql` serve every registered operation and read no `go_api_routing_state` row to decide (CHAOS-8702): a missing row, a row at an older schema digest, and a row in mode `shadow`, `python` or `disabled` all serve. A stack whose routing table is empty serves the whole catalog, and this step is not part of a first start. To hold a catalog operation dark, change the code and deploy.
 
-**MCP class roots are decided by one row per root, in `go_api_class_decision` (CHAOS-8735), not by a routing row.** The row is keyed by the operation alone (`mcp:<root>`), so a schema change moves nothing: the class switch, the proof route, `status`, `enable`, `disable`, `seed` and `repoint` all read and write that one row, and no step has to carry it to a new schema digest. `enable` still needs a class receipt for the running build at the live schema digest (a proof is a fact about a build at a schema digest); `repoint` rewrites only the build the decision names and never its mode or `decided_at`. Migration 0146 creates the table and copies the newest `go_api_routing_state` row of each class root into it (on an equal timestamp a row that is not in a served mode wins, then the greater schema digest); the old rows are left in place and nothing reads them.
+**MCP class roots are decided by one row per root, in `go_api_class_decision` (CHAOS-8735), not by a routing row.** The row is keyed by the operation alone (`mcp:<root>`), so a schema change moves nothing: the class switch, the proof route, `status`, `enable`, `disable`, `seed` and `repoint` all read and write that one row, and no step has to carry it to a new schema digest. `enable` still needs a class receipt for the running build at the live schema digest (a proof is a fact about a build at a schema digest); `repoint` rewrites only the build the decision names and never its mode or `decided_at`. Migration 0146 creates the table and copies into it, for each class root, exactly the `go_api_routing_state` row the running (old) query-api serves: the row at that build's schema digest under the class document digest. A root with no row at that digest gets no decision and stays dark, as the old build answers; a newer row at another digest is never copied. The upgrade reads the old build's digest from `DHO_CLASS_DECISION_LIVE_SCHEMA_DIGEST`: read `schema_digest` from the running query-api's `GET /registry` before the upgrade starts and set it on the migrate step. When class rows exist and the value is unset, malformed (`sha256:` and 64 lowercase hex) or holds no class row, the migration fails and changes nothing. A database with no class rows needs no value. The old rows are left in place and nothing reads them.
 
 **Roll sheet: make no routing writes during the roll.** Do not run `enable`, `disable`, `seed` or `repoint` between the migration and the new query-api serving: an old tools image writes the old table.
 
-`seed`, `enable` and `disable` take the roots by name (`-operations mcp:<root>`, or `all-mcp`): `seed` writes a shadow decision, `enable` a canary or primary one after the class receipt, `disable` any other mode. They still accept a catalog operation, but its row is not read for serving, so it changes nothing (those catalog-operation paths are removed in CHAOS-8705). Nothing is typed but the root names; the schema digest and the build come from the running query-api's `/registry` and `/buildinfo`. Run from the tools image of the same cut, with the Postgres DSN and the envelope key in the environment (never argv):
+`seed`, `enable`, `disable` and `repoint` take the roots by name (`-operations mcp:<root>`, or `all-mcp`): `seed` writes a shadow decision, `enable` a canary or primary one after the class receipt, `disable` any other mode, `repoint` the build. They refuse a catalog operation (CHAOS-8705): it has no routing state to write. Nothing is typed but the root names; the schema digest and the build come from the running query-api's `/registry` and `/buildinfo`. Run from the tools image of the same cut, with the Postgres DSN and the envelope key in the environment (never argv):
 
 ```bash
 dho goapi routing seed -operations mcp:hotspots \
@@ -136,13 +136,11 @@ dho goapi routing seed -operations mcp:hotspots \
 dho goapi routing enable -operations mcp:hotspots -recorded-by <operator> -review-evidence "<why>"
 ```
 
-`seed` writes a **shadow** row (owner `go`, rollout 0) and never changes an existing row. It prints `created`, `already-present` or `refused` (exit 2): a row at the running digest in any other mode, or a row only at an older schema digest (that row already decides the root). `enable` needs a per-root `deployed_executed` receipt for the running build (`dho goapi prove -mcp-roots <root>`), and there is no waiver flag. `repoint` stays only so `dho goapi prove` accepts the rows: it refuses a row that names another build.
-
-The Step 7 text below was written when catalog operations were enabled by row; it describes the proof harness, and the catalog parts of it are being removed (CHAOS-8705).
+`seed` writes a **shadow** decision and never changes an existing one. It prints `created`, `already-present` or `refused` (exit 2): a decision in any other mode. `enable` needs a per-root `deployed_executed` receipt for the running build (`dho goapi prove -mcp-roots <root>`), and there is no waiver flag. `repoint` points every decision at the running build and never changes a mode.
 
 ## Step 7: Real proof (go-api-prove)
 
-**Production note.** The proof route (`/query/proof`) does not mount on a production posture, so a read operation that is held in shadow has no proof path on production (an operation with no row at all is served, see Step 6). A shadow row from Step 6 does not make it reachable. Moving it to canary goes through `dho goapi routing enable`, which admits a catalog operation with no proof receipt and no ledger entry (CHAOS-8586) and marks the row `CATALOG-RULE:`; a proof receipt or a reviewed `enable_limit` in the compiled go-served ledger (`internal/goapiproof/goserved_ledger.json`) is still recorded as what admitted it when one exists. An MCP class root still needs a per-root receipt.
+**Production note.** The proof route (`/query/proof`) does not mount on a production posture. A catalog operation is served whatever the proof route does (Step 6), so it needs no proof to be reachable; `dho goapi prove` measures every registered operation through the edge against the running build and records receipts as evidence. An MCP class root needs a per-root receipt, and a root held in shadow has no proof path on production.
 
 ### Grant the proof service principal read access to the org (once per org)
 
@@ -249,23 +247,23 @@ The verb writes only in the Fixture Org named by the environment (it never creat
 compares the persisted effects with the case's committed baseline digest, and refuses to call a run a match unless the
 response carries the candidate build. A match removes its dataset; anything else keeps it and names it. `-via query-api`
 (a direct POST to query-api) records route `proof` and admits `canary`; `-via edge` records route `edge`, which
-`primary` requires. A catalog mutation needs no receipt to be enabled (the catalog rule admits it, `routing_enable.go:396-416`); the receipt is evidence, and `enable` records which of proof run, named limit or catalog rule admitted it.
+`primary` requires. A catalog mutation needs no receipt to be served; the receipt is evidence.
 
-### Enable the canary set
+### Enable the MCP class roots
 
-Enable the canary operations with the Go verb. An MCP class operation (`mcp:<root>`) needs a per-root `deployed_executed` receipt for the running build. A catalog operation (every other registered document) is admitted without a receipt: the catalog rule serves it when it has no routing row, so `enable` records `CATALOG-RULE:` in `review_evidence` instead of refusing. A written limit in the go-served ledger is recorded as `NAMED-LIMIT:`. The candidate build is read from the deployed process's `/buildinfo`; there is no build flag and no waiver flag. Operations are one comma-separated value:
+Only an MCP class operation (`mcp:<root>`) is enabled: it needs a per-root `deployed_executed` receipt for the running build. A catalog operation is served by query-api whenever it is registered, and `enable` refuses it. The candidate build is read from the deployed process's `/buildinfo`; there is no build flag and no waiver flag. Roots are one comma-separated value (or `all-mcp`):
 
 ```bash
 GO_API_ROUTING_BEARER=<envelope> dho goapi routing enable \
   -registry-url  http://dev-health-query-api:8000/registry \
   -buildinfo-url http://dev-health-query-api:8000/buildinfo \
-  -operations <op1>,<op2>,<op12> \
+  -operations mcp:<root1>,mcp:<root2> \
   -mode canary \
   -recorded-by <operator> \
   -review-evidence "First-time enable on prod k3s, JOB 7 step 6"
 ```
 
-Add `-dry-run` first to see which operations would be admitted and what admits each (proof run, named limit, or catalog rule); a refusal names only MCP class operations that have no per-root receipt.
+Add `-dry-run` first to see which roots would be admitted; a refusal names the class roots that have no per-root receipt.
 
 ## Step 8: Enable the investment explanation (optional, requires encryption keys)
 

@@ -47,14 +47,31 @@ func UpgradeLogged(ctx context.Context, conn *pgx.Conn, baseline Baseline, chain
 	if err != nil {
 		return Result{Heads: Heads(baseline, chain)}, err
 	}
-	return upgrade(ctx, conn, baseline, chain, known, logger)
+	return upgrade(ctx, conn, baseline, chain, known, logger, nil)
+}
+
+// WalkSettings are configuration settings the walk sets for its own transaction only:
+// set_config(name, value, true) inside the walk's one transaction, before it plans or
+// applies anything, so every revision of the walk reads them and nothing outside the
+// transaction does (no session state that a pooler could hand to another client, or
+// that a later transaction on the same connection could read). Revision 0146 reads
+// ClassDecisionLiveDigestSetting this way (CHAOS-8735).
+type WalkSettings map[string]string
+
+// UpgradeLoggedWithSettings is UpgradeLogged with settings set for the walk's transaction.
+func UpgradeLoggedWithSettings(ctx context.Context, conn *pgx.Conn, baseline Baseline, chain []ChainFile, logger *slog.Logger, settings WalkSettings) (Result, error) {
+	known, err := embeddedKnown(baseline, chain)
+	if err != nil {
+		return Result{Heads: Heads(baseline, chain)}, err
+	}
+	return upgrade(ctx, conn, baseline, chain, known, logger, settings)
 }
 
 // UpgradeWithHistory is UpgradeLogged for a build whose Alembic walk is history
 // rather than the embedded one: an older build (an image rolled back) knows fewer
 // revisions than this one.
 func UpgradeWithHistory(ctx context.Context, conn *pgx.Conn, baseline Baseline, chain []ChainFile, history []HistoryEntry, logger *slog.Logger) (Result, error) {
-	return upgrade(ctx, conn, baseline, chain, KnownRevisions(history, baseline, chain), logger)
+	return upgrade(ctx, conn, baseline, chain, KnownRevisions(history, baseline, chain), logger, nil)
 }
 
 // upgrade brings the database to the head in ONE transaction: the advisory lock,
@@ -68,10 +85,10 @@ func UpgradeWithHistory(ctx context.Context, conn *pgx.Conn, baseline Baseline, 
 // for it ran, so the SQL fails although the database is where this run wants it. The
 // failed walk is rolled back whole; when the revision it was applying is now
 // recorded, the walk is planned again under the lock, once.
-func upgrade(ctx context.Context, conn *pgx.Conn, baseline Baseline, chain []ChainFile, known map[string]bool, logger *slog.Logger) (Result, error) {
+func upgrade(ctx context.Context, conn *pgx.Conn, baseline Baseline, chain []ChainFile, known map[string]bool, logger *slog.Logger, settings WalkSettings) (Result, error) {
 	result := Result{Heads: Heads(baseline, chain)}
 	done, err := walkWithRetry(
-		func() (walked, error) { return walkOnce(ctx, conn, baseline, chain, known) },
+		func() (walked, error) { return walkOnce(ctx, conn, baseline, chain, known, settings) },
 		func(revision string) bool { return revisionRecordedSince(ctx, conn, baseline, chain, known, revision) },
 		logger)
 	if err != nil {
@@ -112,10 +129,13 @@ type walked struct {
 
 // walkOnce is one transaction: plan under the lock, apply the baseline of an empty
 // database, apply every pending chain revision in order.
-func walkOnce(ctx context.Context, conn *pgx.Conn, baseline Baseline, chain []ChainFile, known map[string]bool) (walked, error) {
+func walkOnce(ctx context.Context, conn *pgx.Conn, baseline Baseline, chain []ChainFile, known map[string]bool, settings WalkSettings) (walked, error) {
 	var done walked
 	err := inTransaction(ctx, conn, func(tx pgx.Tx) error {
 		done = walked{}
+		if err := setForTransaction(ctx, tx, settings); err != nil {
+			return err
+		}
 		observation, err := observe(ctx, tx)
 		if err != nil {
 			return err
@@ -296,6 +316,21 @@ func observe(ctx context.Context, tx pgx.Tx) (Observation, error) {
 	sort.Strings(versions)
 	observation.Versions = versions
 	return observation, nil
+}
+
+// setForTransaction sets each setting for tx only (is_local = true), in name order.
+func setForTransaction(ctx context.Context, tx pgx.Tx, settings WalkSettings) error {
+	names := make([]string, 0, len(settings))
+	for name := range settings {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+	for _, name := range names {
+		if _, err := tx.Exec(ctx, "SELECT set_config($1, $2, true)", name, settings[name]); err != nil {
+			return fmt.Errorf("set %s for the walk's transaction: %w", name, err)
+		}
+	}
+	return nil
 }
 
 func inTransaction(ctx context.Context, conn *pgx.Conn, fn func(pgx.Tx) error) error {

@@ -14,8 +14,8 @@
 //
 // That class of bug is dangerous specifically because it is invisible to
 // code review (each side is locally correct in isolation) and arms via a
-// DATA change with no code change: the moment a go_api_routing_state row
-// enables the operation, a client reading the published SDL believes a
+// change with no code change: the moment a registered operation is served
+// (the catalog switch serves every registered document), a client reading the published SDL believes a
 // field is non-null and receives JSON null instead.
 //
 // Four hand-found instances of this class exist in this epic's history

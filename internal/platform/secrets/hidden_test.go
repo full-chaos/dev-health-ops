@@ -1,8 +1,10 @@
 package secrets
 
 import (
+	"bytes"
 	"encoding/json"
 	"fmt"
+	"log/slog"
 	"strings"
 	"testing"
 )
@@ -63,5 +65,31 @@ func TestFormatRedactedPassesVerbAndFlags(t *testing.T) {
 	}
 	if got := fmt.Sprintf("%x", p); got != "{1 2}" {
 		t.Errorf("%%x = %q", got)
+	}
+}
+
+func TestBareHiddenInSlogShowsMarkerOrNothing(t *testing.T) {
+	for _, tc := range []struct {
+		name, key, want string
+	}{{"set", hiddenSentinel, "[REDACTED]"}, {"empty", "", `""`}} {
+		for handlerName, newHandler := range map[string]func(*bytes.Buffer) slog.Handler{
+			"text": func(b *bytes.Buffer) slog.Handler { return slog.NewTextHandler(b, nil) },
+			"json": func(b *bytes.Buffer) slog.Handler { return slog.NewJSONHandler(b, nil) },
+		} {
+			var anyBuf, groupBuf bytes.Buffer
+			slog.New(newHandler(&anyBuf)).Info("m", slog.Any("k", NewHidden(tc.key)))
+			slog.New(newHandler(&groupBuf)).Info("m", slog.Group("g", slog.Any("k", NewHidden(tc.key))))
+			for form, out := range map[string]string{"Any": anyBuf.String(), "Group": groupBuf.String()} {
+				if strings.Contains(out, hiddenSentinel) {
+					t.Errorf("%s/%s/%s leaks: %s", tc.name, handlerName, form, out)
+				}
+				if tc.name == "set" && !strings.Contains(out, tc.want) {
+					t.Errorf("%s/%s/%s lacks the marker: %s", tc.name, handlerName, form, out)
+				}
+				if tc.name == "empty" && strings.Contains(out, "REDACTED") {
+					t.Errorf("%s/%s/%s shows the marker for an empty key: %s", tc.name, handlerName, form, out)
+				}
+			}
+		}
 	}
 }

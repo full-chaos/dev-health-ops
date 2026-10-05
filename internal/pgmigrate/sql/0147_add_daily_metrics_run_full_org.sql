@@ -3,4 +3,4 @@
 
 ALTER TABLE daily_metrics_runs ADD COLUMN full_org BOOLEAN DEFAULT false NOT NULL;
 
-UPDATE daily_metrics_runs SET full_org = true WHERE starts_with(generation, 'fixed-schedule:daily_metrics_fanout:') OR starts_with(generation, 'post-sync:');
+UPDATE daily_metrics_runs SET full_org = true WHERE starts_with(generation, 'fixed-schedule:daily_metrics_fanout:');

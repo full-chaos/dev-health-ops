@@ -743,6 +743,12 @@ func (store *PostgresStore) redriveOneFinalizeForRange(
 		_ = tx.Rollback(rollbackCtx)
 	}()
 
+	// CHAOS-8710: the (org, day) marker lock first, the run row lock second.
+	if !dryRun {
+		if err := store.lockMarkerDayForRun(ctx, tx, runID); err != nil {
+			return false, false, err
+		}
+	}
 	var run Run
 	var targetDay, status, finalizationStatus string
 	var leaseExpiresAt *time.Time
@@ -850,9 +856,6 @@ VALUES ($1::uuid, $2::uuid, $3::uuid, $4::date, $5, $6, 'finalize-redrive', $7, 
 		// One Postgres clock read in the reset itself is the 'reopened'
 		// marker's version. A marker that cannot be written refuses the reset
 		// (the tx rolls back).
-		if err := store.lockMarkerDayIfEnabled(ctx, tx, run.OrganizationID, targetDay); err != nil {
-			return false, false, err
-		}
 		var reopenedAtMs int64
 		err := tx.QueryRow(ctx, `
 UPDATE public.daily_metrics_runs

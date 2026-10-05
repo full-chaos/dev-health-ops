@@ -278,9 +278,24 @@ func lockMarkerDay(ctx context.Context, tx pgx.Tx, orgID, day string) error {
 	return nil
 }
 
-func (store *PostgresStore) lockMarkerDayIfEnabled(ctx context.Context, tx pgx.Tx, orgID, day string) error {
+// lockMarkerDayForRun takes the (org, day) marker lock for the run's day BEFORE
+// the caller takes the run's row lock. Every path takes the advisory lock first
+// and a run row lock second (the dispatch claim does the same: advisory, then
+// its UPDATE), so no two paths can wait on each other in opposite orders. The
+// org and day are read without a lock; they never change for a run. A missing
+// run takes no lock: the caller's own locking read reports it.
+func (store *PostgresStore) lockMarkerDayForRun(ctx context.Context, tx pgx.Tx, runID string) error {
 	if !store.markerEnabled() {
 		return nil
+	}
+	var orgID, day string
+	err := tx.QueryRow(ctx, `SELECT org_id::text, target_day::text FROM public.daily_metrics_runs WHERE id = $1::uuid`, runID).
+		Scan(&orgID, &day)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return nil
+	}
+	if err != nil {
+		return ErrUnavailable
 	}
 	return lockMarkerDay(ctx, tx, orgID, day)
 }

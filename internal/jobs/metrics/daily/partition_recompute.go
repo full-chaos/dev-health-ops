@@ -309,6 +309,13 @@ func (store *PostgresStore) redriveOnePartitionsForRange(
 		_ = tx.Rollback(rollbackCtx)
 	}()
 
+	// CHAOS-8710: the (org, day) marker lock first, the run row lock second.
+	if !dryRun {
+		if err := store.lockMarkerDayForRun(ctx, tx, runID); err != nil {
+			return false, err
+		}
+	}
+
 	var run Run
 	var targetDay, status, priorGeneration string
 	var hasPartitions, allPartitionsSucceeded bool
@@ -393,9 +400,6 @@ VALUES ($1::uuid, $2::uuid, $3::uuid, $4::date, $5, $6, $7, 'partition-recompute
 	// 'reopened' marker below carries that value as its version, so every
 	// marker version of a day comes from one clock. A marker that cannot be
 	// written refuses the reopen: the tx rolls back and nothing changes.
-	if err := store.lockMarkerDayIfEnabled(ctx, tx, run.OrganizationID, targetDay); err != nil {
-		return false, err
-	}
 	var reopenedAtMs int64
 	err = tx.QueryRow(ctx, `
 UPDATE public.daily_metrics_runs

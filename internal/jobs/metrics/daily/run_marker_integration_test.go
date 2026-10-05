@@ -961,3 +961,112 @@ func TestRunMarkerRunScopeIsRecordedAtCreation(t *testing.T) {
 		t.Fatalf("full_org: fan-out=%v listed=%v list-free=%v, want true false true", scope(fanout.ID), scope(listed), scope(free))
 	}
 }
+
+// Lock order (vet 1 P2): every marker path takes the (org, day) advisory lock
+// FIRST and the run row lock SECOND. While another transaction holds the day's
+// lock, a reopen must wait on it without holding the run's row lock; with the
+// old order (row lock, then advisory lock) it would hold the row lock while it
+// waits, which is the half of a deadlock cycle with the dispatch claim.
+func TestRunMarkerReopenWaitsForTheDayLockWithoutHoldingTheRunRow(t *testing.T) {
+	for _, path := range []string{"finalize-redrive", "partition-recompute"} {
+		t.Run(path, func(t *testing.T) {
+			stack := newMarkerStack(t)
+			ctx := context.Background()
+			const runID = "00000000-0000-4000-8000-000000087331"
+			stack.seedRun(t, runID, "00000000-0000-4000-8000-000000087332", markerOrgA, markerDay(1))
+			processFinalizeJob(t, ctx, stack.store, runID)
+			if path == "partition-recompute" {
+				if _, err := stack.pool.Exec(ctx, `UPDATE daily_metrics_runs SET generation = 'fixed-schedule:daily_metrics_fanout:2026-09-02T01:00:00Z' WHERE id = $1::uuid`, runID); err != nil {
+					t.Fatal(err)
+				}
+			}
+			holder, err := stack.pool.Begin(ctx)
+			if err != nil {
+				t.Fatal(err)
+			}
+			// A failing assertion must not leave this transaction open: it would
+			// hang the container cleanup.
+			t.Cleanup(func() { _ = holder.Rollback(ctx) })
+			if err := lockMarkerDay(ctx, holder, markerOrgA, "2026-09-01"); err != nil {
+				t.Fatal(err)
+			}
+			done := make(chan error, 1)
+			go func() {
+				var err error
+				if path == "finalize-redrive" {
+					_, err = stack.store.RedriveFinalizeForRange(ctx, stack.publisher, markerOrgA, markerDay(1), markerDay(1),
+						"marker-order", true, testFinalizeRedriveReason, false)
+				} else {
+					_, err = stack.store.RedrivePartitionsForRange(ctx, stack.publisher, markerOrgA, markerDay(1), markerDay(1),
+						"marker-order", "repo_user_commit", testPartitionRecomputeReason, false)
+				}
+				done <- err
+			}()
+			// Wait until the reopen is blocked on the advisory lock.
+			blocked := false
+			for deadline := time.Now().Add(20 * time.Second); time.Now().Before(deadline); time.Sleep(100 * time.Millisecond) {
+				var waiting int
+				if err := stack.pool.QueryRow(ctx, `
+SELECT count(*) FROM pg_locks WHERE locktype = 'advisory' AND NOT granted
+  AND database = (SELECT oid FROM pg_database WHERE datname = current_database())`).Scan(&waiting); err != nil {
+					t.Fatal(err)
+				}
+				if waiting > 0 {
+					blocked = true
+					break
+				}
+			}
+			if !blocked {
+				_ = holder.Rollback(ctx)
+				<-done
+				t.Fatal("the reopen never waited on the day lock")
+			}
+			probe, err := stack.pool.Begin(ctx)
+			if err != nil {
+				t.Fatal(err)
+			}
+			_, rowErr := probe.Exec(ctx, `SELECT 1 FROM daily_metrics_runs WHERE id = $1::uuid FOR UPDATE NOWAIT`, runID)
+			_ = probe.Rollback(ctx)
+			if rowErr != nil {
+				t.Errorf("the reopen holds the run row while it waits for the day lock (%v): lock order is row then advisory", rowErr)
+			}
+			if err := holder.Rollback(ctx); err != nil {
+				t.Fatal(err)
+			}
+			select {
+			case err := <-done:
+				if err != nil {
+					t.Fatalf("reopen: %v", err)
+				}
+			case <-time.After(30 * time.Second):
+				t.Fatal("the reopen never finished after the lock was released")
+			}
+		})
+	}
+}
+
+// No deadlock between a dispatch claim and a reopen of the same org-day, run
+// concurrently many times.
+func TestRunMarkerClaimAndReopenOfOneDayNeverDeadlock(t *testing.T) {
+	stack := newMarkerStack(t)
+	ctx := context.Background()
+	const firstRun = "00000000-0000-4000-8000-000000087341"
+	stack.seedRun(t, firstRun, "00000000-0000-4000-8000-000000087342", markerOrgA, markerDay(1))
+	processFinalizeJob(t, ctx, stack.store, firstRun)
+	second := stack.startRun(t, markerOrgA, markerDay(1), "post-sync:00000000-0000-4000-8000-000000087343", nil)
+	errs := make(chan error, 2)
+	go func() {
+		_, err := stack.store.ClaimDispatch(ctx, second)
+		errs <- err
+	}()
+	go func() {
+		_, err := stack.store.RedriveFinalizeForRange(ctx, stack.publisher, markerOrgA, markerDay(1), markerDay(1),
+			"marker-concurrent", true, testFinalizeRedriveReason, false)
+		errs <- err
+	}()
+	for i := 0; i < 2; i++ {
+		if err := <-errs; err != nil {
+			t.Fatalf("concurrent claim and reopen: %v", err)
+		}
+	}
+}

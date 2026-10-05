@@ -183,9 +183,11 @@ computes the whole organization is recorded when it is created
 given): the scheduled fan-out, the post-sync run, a manual run without
 `--repo-id`, and the external-recompute all-repository fallback all qualify. A
 run started with a repository list computes only those repositories and never
-certifies the day. Runs created before the column existed are classed by their
-generation (scheduled fan-out and post-sync only); an older manual or
-external-recompute run stays unmarked.
+certifies the day. Runs created before the column existed are classed by their generation: only
+the scheduled fan-out counts. Older post-sync, manual and external-recompute
+runs stay unmarked, because the post-sync site passed the triggering sync's
+repository ids until 2026-08-25 (CHAOS-4263) and nothing stored says which kind
+an old row is; their days read unknown, never a false succeeded.
 
 The table is append-only and has two writers of `succeeded`: the function that
 runs after a finalize commits, and the backfill. They are the same function

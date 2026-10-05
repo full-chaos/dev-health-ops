@@ -70,21 +70,26 @@ const auditLogColumns = `a.id, a.org_id, a.user_id, a.action, a.resource_type, a
 const auditLogFrom = ` FROM audit_logs a
 	LEFT JOIN users actor ON actor.id = a.user_id
 	LEFT JOIN memberships resource_membership ON a.resource_type IN ('user', 'session')
-		AND a.resource_id ~* '^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$'
-		AND resource_membership.user_id = a.resource_id::uuid AND resource_membership.org_id = a.org_id
+		AND resource_membership.user_id = CASE
+			WHEN a.resource_id ~* '^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$' THEN a.resource_id::uuid
+		END AND resource_membership.org_id = a.org_id
 	LEFT JOIN users resource_user ON resource_user.id = resource_membership.user_id
 	LEFT JOIN organizations resource_org ON a.resource_type = 'organization'
-		AND a.resource_id ~* '^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$'
-		AND resource_org.id = a.resource_id::uuid AND resource_org.id = a.org_id
+		AND resource_org.id = CASE
+			WHEN a.resource_id ~* '^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$' THEN a.resource_id::uuid
+		END AND resource_org.id = a.org_id
 	LEFT JOIN sso_providers provider ON a.resource_type = 'sso_provider'
-		AND a.resource_id ~* '^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$'
-		AND provider.id = a.resource_id::uuid AND provider.org_id = a.org_id
+		AND provider.id = CASE
+			WHEN a.resource_id ~* '^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$' THEN a.resource_id::uuid
+		END AND provider.org_id = a.org_id
 	LEFT JOIN external_ingest_sources source ON a.resource_type = 'ingest_source'
-		AND a.resource_id ~* '^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$'
-		AND source.id = a.resource_id::uuid AND source.org_id = a.org_id::text
+		AND source.id = CASE
+			WHEN a.resource_id ~* '^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$' THEN a.resource_id::uuid
+		END AND source.org_id = a.org_id::text
 	LEFT JOIN external_ingest_tokens token ON a.resource_type = 'ingest_token'
-		AND a.resource_id ~* '^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$'
-		AND token.id = a.resource_id::uuid AND token.org_id = a.org_id::text`
+		AND token.id = CASE
+			WHEN a.resource_id ~* '^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$' THEN a.resource_id::uuid
+		END AND token.org_id = a.org_id::text`
 
 func scanAuditLog(row pgx.Row) (*auditLog, error) {
 	var log auditLog

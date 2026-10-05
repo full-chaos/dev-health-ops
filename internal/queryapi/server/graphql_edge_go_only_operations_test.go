@@ -18,6 +18,7 @@ import (
 // This list must not become a way to stop measuring an operation the golden does measure: the test below fails
 // for a listed operation that has a frozen request.
 var edgeGoOnlyFromBirth = map[string]string{
+	"coverageBaselines":  registeredCoverageBaselinesDocument,
 	"testopsJobFailures": registeredTestopsJobFailuresDocument,
 }
 

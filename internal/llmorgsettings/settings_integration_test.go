@@ -315,7 +315,7 @@ func TestCredentials_SourceBound(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !ok || creds.APIKey != "sk-org" {
+	if !ok || creds.APIKey.Reveal() != "sk-org" {
 		t.Fatalf("expected the org's own api_key for a matching provider, got ok=%v creds=%+v", ok, creds)
 	}
 

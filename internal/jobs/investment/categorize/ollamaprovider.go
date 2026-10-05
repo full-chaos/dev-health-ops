@@ -12,6 +12,7 @@ import (
 	"strings"
 
 	"github.com/full-chaos/dev-health-ops/internal/platform/logging"
+	"github.com/full-chaos/dev-health-ops/internal/platform/secrets"
 )
 
 // OllamaProviderConfig configures OllamaProvider.
@@ -31,7 +32,7 @@ type OllamaProviderConfig struct {
 	// enforce one (CHAOS-4978: mirrors credentials.py's
 	// _API_KEY_ENV_BY_PROVIDER["ollama"] table existing at all, even though
 	// Ollama itself has no native auth concept).
-	APIKey          string
+	APIKey          secrets.Hidden `json:"-"`
 	MaxOutputTokens int
 	// Temperature is a pointer for the same reason LocalProviderConfig's is:
 	// an explicit 0.0 must be distinguishable from "unset".
@@ -231,8 +232,8 @@ func (p *OllamaProvider) executeChatRequest(ctx context.Context, body ollamaChat
 		return "", nil, nil, fmt.Errorf("build request: %w", err)
 	}
 	req.Header.Set("Content-Type", "application/json")
-	if p.cfg.APIKey != "" {
-		req.Header.Set("Authorization", "Bearer "+p.cfg.APIKey)
+	if p.cfg.APIKey.Configured() {
+		req.Header.Set("Authorization", "Bearer "+p.cfg.APIKey.Reveal())
 	}
 
 	resp, err := httpguard.NoRedirects(p.client).Do(req) // the API key rides this request

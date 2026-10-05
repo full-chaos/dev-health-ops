@@ -126,7 +126,8 @@ cluster, they do not apply to you:
 - **Compose heads-up before a rebuild.** `helm upgrade` touches one namespace,
   so no cross-domain heads-up is needed.
 - **The `local_validate` lock — scoped, not host-wide.** `LOCK_DIR` is
-  `/tmp/dev-health-ops-local-validate.${CH_CONTAINER}.lock`, so runs targeting
+  `<root>/dev-health-ops-local-validate.${CH_CONTAINER}.lock` (root: `DEV_HEALTH_LOCK_ROOT`, else
+  `/var/lib/oci-cache/lane-scratch/tmp` if it exists, else `/tmp`; never `TMPDIR`; an explicit `LOCK_DIR` wins), so runs targeting
   *different* ClickHouse instances never serialize against each other. A lane
   passes a lane-scoped `CH_CONTAINER` and runs beside a Compose-stack gate by
   construction. (An earlier draft of this section claimed lanes were exempt from

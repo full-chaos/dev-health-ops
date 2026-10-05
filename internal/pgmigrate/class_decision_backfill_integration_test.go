@@ -5,6 +5,7 @@ package pgmigrate_test
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"io"
 	"log/slog"
 	"strings"
@@ -435,6 +436,158 @@ func TestClassDecisionBackfillNeedsNoDigestWithoutClassRows(t *testing.T) {
 			}
 			if got := readDecisions(t, conn); len(got) != 0 {
 				t.Errorf("decisions %+v, want none", got)
+			}
+		})
+	}
+}
+
+// CHAOS-8755 (r1 of #3818, reproduced): with the environment naming no digest, a role or database default of the
+// setting (ALTER ROLE/DATABASE ... SET) must not reach revision 0146. The walk sets the setting empty for its own
+// transaction, so the unset environment refuses exactly as an empty one does, and the stale row is never copied.
+func TestClassDecisionUnsetDigestDoesNotInheritARoleOrDatabaseDefault(t *testing.T) {
+	ctx := context.Background()
+	for _, scope := range []string{"role", "database"} {
+		t.Run(scope, func(t *testing.T) {
+			d := newDownInstance(t)
+			// seeded is a database at 0145 holding the class rows, with the stale digest as the scope's default; a
+			// connection opened after the default was set reads it (checked, so the test cannot pass unmeasured).
+			seeded := func(t *testing.T) (string, *pgx.Conn) {
+				t.Helper()
+				uri, conn := at0145(t, d, backfillCaseRows())
+				target := "ROLE CURRENT_USER"
+				if scope == "database" {
+					var name string
+					if err := conn.QueryRow(ctx, "SELECT current_database()").Scan(&name); err != nil {
+						t.Fatal(err)
+					}
+					target = "DATABASE " + pgx.Identifier{name}.Sanitize()
+				}
+				if _, err := conn.Exec(ctx, "ALTER "+target+" SET dho.class_decision_live_schema_digest TO '"+backfillOldDigest+"'"); err != nil {
+					t.Fatalf("set the %s default: %v", scope, err)
+				}
+				fresh := connect(t, uri)
+				var inherited string
+				if err := fresh.QueryRow(ctx, "SELECT coalesce(current_setting('dho.class_decision_live_schema_digest', true), '')").Scan(&inherited); err != nil {
+					t.Fatal(err)
+				}
+				if inherited != backfillOldDigest {
+					t.Fatalf("the %s default is not in effect on a new connection (%q): nothing was measured", scope, inherited)
+				}
+				return uri, fresh
+			}
+
+			t.Run("upgrade verb, environment unset", func(t *testing.T) {
+				uri, conn := seeded(t)
+				code, stderr := runUpgradeVerb(t, uri, nil)
+				if code == cli.ExitOK {
+					t.Fatalf("the upgrade verb used the %s default %s and succeeded (securityAlerts = %+v); it must refuse",
+						scope, backfillOldDigest, readDecisions(t, conn)["mcp:securityAlerts"])
+				}
+				if !strings.Contains(stderr, "13 MCP class rows exist and dho.class_decision_live_schema_digest is empty or not sha256:") {
+					t.Errorf("refusal %q does not name the class row count and the missing digest", stderr)
+				}
+				assertRolledBack(t, conn)
+			})
+			t.Run("library walk, no settings", func(t *testing.T) {
+				_, conn := seeded(t)
+				if err := upgradeWithDigest(t, conn, nil); err == nil {
+					t.Fatalf("the walk with no settings used the %s default and succeeded (securityAlerts = %+v); it must refuse",
+						scope, readDecisions(t, conn)["mcp:securityAlerts"])
+				}
+				assertRolledBack(t, conn)
+			})
+		})
+	}
+}
+
+func runPreflightVerb(t *testing.T, uri string, extra map[string]string) (int, pgmigrate.PreflightReport, string) {
+	t.Helper()
+	resolve := pgmigrate.ResolveDSN(func(secrets.LookupEnv, io.Writer) (secrets.Value, string, bool) {
+		return secrets.NewValue(uri), "test", true
+	})
+	var run func(context.Context, cli.Env) int
+	for _, child := range pgmigrate.Command(resolve).Children {
+		if child.Name == "preflight" {
+			run = child.Run
+		}
+	}
+	env := map[string]string{pgmigrate.CutoverEnv: "1"}
+	for key, value := range extra {
+		env[key] = value
+	}
+	lookup := func(key string) (string, bool) {
+		value, ok := env[key]
+		return value, ok
+	}
+	var stdout, stderr bytes.Buffer
+	code := run(context.Background(), cli.Env{Lookup: lookup, Stdout: &stdout, Stderr: &stderr})
+	var report pgmigrate.PreflightReport
+	if code != pgmigrate.ExitMeasurementFailed {
+		if err := json.Unmarshal(stdout.Bytes(), &report); err != nil {
+			t.Fatalf("preflight exit %d, stdout %q is not a report: %v", code, stdout.String(), err)
+		}
+	}
+	return code, report, stderr.String()
+}
+
+// CHAOS-8755 (r1 of #3818, reproduced): with 0146 pending, the preflight predicts the 0146 guard. For every input the
+// guard decides on, the preflight verb and then the upgrade verb run on the same database with the same environment:
+// needs_manual/class_decision_digest exactly when the upgrade refuses, applies_cleanly exactly when it applies.
+func TestPreflightPredictsTheClassDecisionGuard(t *testing.T) {
+	ctx := context.Background()
+	d := newDownInstance(t)
+	digest := func(v string) map[string]string { return map[string]string{pgmigrate.ClassDecisionLiveDigestEnv: v} }
+	cases := []struct {
+		name       string
+		rows       []routingRow
+		env        map[string]string
+		roleOldDef bool
+		refuses    bool
+	}{
+		{"live digest", backfillCaseRows(), digest(backfillLiveDigest), false, false},
+		{"unset", backfillCaseRows(), nil, false, true},
+		{"empty", backfillCaseRows(), digest(""), false, true},
+		{"malformed", backfillCaseRows(), digest("sha256:fdff794c3fa3"), false, true},
+		{"trailing character", backfillCaseRows(), digest(backfillLiveDigest + "0"), false, true},
+		{"digest with no class row", append(backfillCaseRows(),
+			routingRow{"mcp:securityAlerts", backfillUnusedDigest, "another-document", "canary", "build-x", backfillT1},
+			routingRow{"featureFlags", backfillUnusedDigest, mcpclass.DocumentDigest(), "canary", "build-x", backfillT1},
+		), digest(backfillUnusedDigest), false, true},
+		// A malformed digest that a class row does hold: the format check alone refuses it.
+		{"malformed digest a class row holds", append(backfillCaseRows(),
+			routingRow{"mcp:securityAlerts", "sha256:fdff794c3fa3", mcpclass.DocumentDigest(), "canary", "build-x", backfillT1},
+		), digest("sha256:fdff794c3fa3"), false, true},
+		{"unset with a stale role default", backfillCaseRows(), nil, true, true},
+		{"no class rows, unset", nil, nil, false, false},
+		{"document rows only, unset", []routingRow{{"featureFlags", backfillLiveDigest, mcpclass.DocumentDigest(), "canary", "build-live", backfillT1}}, nil, false, false},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			uri, conn := at0145(t, d, c.rows)
+			if c.roleOldDef {
+				if _, err := conn.Exec(ctx, "ALTER ROLE CURRENT_USER SET dho.class_decision_live_schema_digest TO '"+backfillOldDigest+"'"); err != nil {
+					t.Fatal(err)
+				}
+				t.Cleanup(func() {
+					_, _ = conn.Exec(context.Background(), "ALTER ROLE CURRENT_USER RESET dho.class_decision_live_schema_digest")
+				})
+			}
+			code, report, stderr := runPreflightVerb(t, uri, c.env)
+			upgradeCode, upgradeStderr := runUpgradeVerb(t, uri, c.env)
+			upgradeRefused := upgradeCode != cli.ExitOK
+			if upgradeRefused != c.refuses {
+				t.Fatalf("upgrade refused = %v, want %v (exit %d: %s)", upgradeRefused, c.refuses, upgradeCode, upgradeStderr)
+			}
+			if c.refuses {
+				if report.Verdict != pgmigrate.VerdictNeedsManual || report.Reason != pgmigrate.ReasonClassDecisionDigest || code != cli.ExitFailure {
+					t.Errorf("preflight = %s/%s exit %d (%s), want needs_manual/%s exit 1: the upgrade refuses",
+						report.Verdict, report.Reason, code, stderr, pgmigrate.ReasonClassDecisionDigest)
+				}
+				return
+			}
+			if report.Verdict != pgmigrate.VerdictAppliesCleanly || code != pgmigrate.ExitAppliesCleanly || !hasRevision(report.Pending, "0146") {
+				t.Errorf("preflight = %s/%s exit %d pending %v (%s), want applies_cleanly exit 10 with 0146 pending: the upgrade applies",
+					report.Verdict, report.Reason, code, report.Pending, stderr)
 			}
 		})
 	}

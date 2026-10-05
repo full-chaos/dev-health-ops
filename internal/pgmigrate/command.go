@@ -177,9 +177,9 @@ const ClassDecisionLiveDigestEnv = "DHO_CLASS_DECISION_LIVE_SCHEMA_DIGEST"
 const ClassDecisionLiveDigestSetting = "dho.class_decision_live_schema_digest"
 
 // ClassDecisionWalkSettings is the walk setting ClassDecisionLiveDigestSetting from ClassDecisionLiveDigestEnv, set
-// for the walk's own transaction (the transaction that runs revision 0146). Unset sets nothing; an empty value is set
-// empty, which revision 0146 treats exactly as unset: it refuses a database that holds MCP class rows and needs
-// nothing on one that holds none.
+// for the walk's own transaction (the transaction that runs revision 0146). Unset names nothing, and the walk then sets
+// the setting empty (walkDefaults), never leaving a role or database default in view; empty is what revision 0146
+// refuses with MCP class rows present and needs nothing without them.
 func ClassDecisionWalkSettings(lookup func(string) (string, bool)) WalkSettings {
 	if lookup == nil {
 		return nil

@@ -58,6 +58,11 @@ func TestClassDecisionBackfillNamesTheClassDigestAndTheVerbsSetting(t *testing.T
 		if !strings.Contains(text, `sa.text("SELECT set_config(:name, :value, true)")`) {
 			t.Errorf("the Alembic mirror does not set the live digest for the migration's transaction only (set_config(..., true))")
 		}
+		// Always set, empty when the environment names no digest, so a role or database default never shows through
+		// (CHAOS-8755), as the walk's walkDefaults do.
+		if !strings.Contains(text, `value=os.environ.get(LIVE_DIGEST_ENV, "")`) || strings.Contains(text, "is not None") {
+			t.Errorf("the Alembic mirror does not always set the live digest (empty when the environment names none)")
+		}
 		if !strings.Contains(text, `LIVE_DIGEST_SETTING = "`+pgmigrate.ClassDecisionLiveDigestSetting+`"`) ||
 			!strings.Contains(text, `LIVE_DIGEST_ENV = "`+pgmigrate.ClassDecisionLiveDigestEnv+`"`) {
 			t.Errorf("the Alembic mirror does not name the verb's setting and environment variable")

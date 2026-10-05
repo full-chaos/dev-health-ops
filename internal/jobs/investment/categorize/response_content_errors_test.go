@@ -2,6 +2,7 @@ package categorize
 
 import (
 	"context"
+	"github.com/full-chaos/dev-health-ops/internal/platform/secrets"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -25,7 +26,7 @@ func TestProviderErrorsCarryNoResponseContent(t *testing.T) {
 			w.WriteHeader(response.status)
 			_, _ = w.Write([]byte(response.body))
 		}))
-		provider := NewOpenAIProvider(OpenAIProviderConfig{APIKey: "unused", BaseURL: server.URL, Model: "gpt-5-nano"})
+		provider := NewOpenAIProvider(OpenAIProviderConfig{APIKey: secrets.NewHidden("unused"), BaseURL: server.URL, Model: "gpt-5-nano"})
 		_, err := provider.Complete(context.Background(), CompletionRequest{})
 		provider.Close()
 		server.Close()

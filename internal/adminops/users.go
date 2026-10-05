@@ -56,6 +56,7 @@ func (o *optString) Set(v string) error {
 	o.value, o.set = v, true
 	return nil
 }
+func (o *optString) wasSet() bool { return o.set }
 func (o *optString) ptr() *string {
 	if !o.set {
 		return nil
@@ -200,20 +201,26 @@ func runUsersCreate(ctx context.Context, env cli.Env) int {
 	return cli.ExitOK
 }
 
+// secretFlag is a string flag that holds a secret and also has a --<name>-stdin form.
+type secretFlag interface {
+	Set(string) error
+	wasSet() bool
+}
+
 // secretFromStdin settles one secret flag that also has a --<name>-stdin form.
 // With the stdin form it reads the first line of standard input into v (an
 // empty line is a refusal, and so is giving both forms). With only the argv
 // form it prints a WARN that names the flag and never its value: an argv value
 // shows in the process list and the shell history. ok false means the exit
 // code in code.
-func secretFromStdin(env cli.Env, name string, v *optString, useStdin bool) (code int, ok bool) {
+func secretFromStdin(env cli.Env, name string, v secretFlag, useStdin bool) (code int, ok bool) {
 	if !useStdin {
-		if v.set {
+		if v.wasSet() {
 			fmt.Fprintf(env.Stderr, "WARN: --%s puts the secret in the process list and the shell history; use --%s-stdin\n", name, name)
 		}
 		return 0, true
 	}
-	if v.set {
+	if v.wasSet() {
 		fmt.Fprintf(env.Stderr, "argument error: --%s and --%s-stdin are mutually exclusive\n", name, name)
 		return cli.ExitUsage, false
 	}

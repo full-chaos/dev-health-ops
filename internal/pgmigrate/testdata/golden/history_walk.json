@@ -1,9 +1,9 @@
 {
   "header": {
     "test": "TestHistoryGraphIsTheAlembicChain",
-    "python_build": "edc056c0cc804928666b13cf02611e9325b777a4",
-    "producer_digest": "46a8feb54c8fe1c91f96702d858f5c4f3cec04bcd34bc171a5caf5854e662103",
-    "recipe": "git worktree add --detach $DIR edc056c0cc804928666b13cf02611e9325b777a4 (with its .venv: uv sync --frozen --no-install-project); then from the repository root: go run ./internal/testsupport/venueoracle/goldenrecord -pkg ./internal/pgmigrate/ -test '^TestHistoryGraphIsTheAlembicChain$' -python-root $DIR",
+    "python_build": "8a4b34d8ac8efb7701f7c4545d14f146539fa3dd",
+    "producer_digest": "fb8355b268b49c12e34a4eafd9fbfe28bc460c03d7e2af075aada04f507b239b",
+    "recipe": "git worktree add --detach $DIR 8a4b34d8ac8efb7701f7c4545d14f146539fa3dd (with its .venv: uv sync --frozen --no-install-project); then from the repository root: go run ./internal/testsupport/venueoracle/goldenrecord -pkg ./internal/pgmigrate/ -test '^TestHistoryGraphIsTheAlembicChain$' -python-root $DIR",
     "recorded_by": "goldenrecord",
     "blanked": {}
   },

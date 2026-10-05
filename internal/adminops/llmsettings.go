@@ -118,7 +118,8 @@ func runLLMGet(ctx context.Context, env cli.Env) int {
 
 func runLLMSet(ctx context.Context, env cli.Env) int {
 	flags := newFlags(env, "dho admin llm-settings set")
-	var org, provider, model, apiKey, baseURL optString
+	var org, provider, model, baseURL optString
+	var apiKey secretOptString
 	flags.Var(&org, "org", "organization id (default: ORG_ID)")
 	flags.Var(&provider, "provider", "BYO LLM provider (required)")
 	flags.Var(&model, "model", "BYO LLM model")
@@ -152,8 +153,8 @@ func runLLMSet(ctx context.Context, env cli.Env) int {
 		Model: model.ptr(), APIKey: apiKey.ptr(), BaseURL: baseURL.ptr()}, config)
 	if err != nil {
 		typed := secrets.CredentialComponents(baseURL.value)
-		if apiKey.value != "" {
-			typed = append(typed, apiKey.value)
+		if apiKey.value.Configured() {
+			typed = append(typed, apiKey.value.Reveal())
 		}
 		return finishLLM(env, redact, err, typed...)
 	}

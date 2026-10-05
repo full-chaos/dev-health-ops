@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"github.com/full-chaos/dev-health-ops/internal/platform/secrets"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -27,7 +28,7 @@ func newTestOpenAIProvider(t *testing.T, handler http.HandlerFunc) (*OpenAIProvi
 	t.Cleanup(server.Close)
 
 	provider := NewOpenAIProvider(OpenAIProviderConfig{
-		APIKey:  "test-key",
+		APIKey:  secrets.NewHidden("test-key"),
 		BaseURL: server.URL,
 		Model:   "gpt-5-nano",
 	})
@@ -81,7 +82,7 @@ func TestOpenAIProviderPerFormatMaxOutputTokensFloor(t *testing.T) {
 			t.Cleanup(server.Close)
 
 			provider := NewOpenAIProvider(OpenAIProviderConfig{
-				APIKey: "unused", BaseURL: server.URL, Model: "gpt-5-nano",
+				APIKey: secrets.NewHidden("unused"), BaseURL: server.URL, Model: "gpt-5-nano",
 				MaxOutputTokens: tc.configFloor,
 			})
 			t.Cleanup(func() { provider.Close() })
@@ -296,7 +297,7 @@ func (rt *dnsFailureRoundTripper) RoundTrip(*http.Request) (*http.Response, erro
 func TestOpenAIProviderClassifiesDNSFailureAsRetryableTransport(t *testing.T) {
 	transport := &dnsFailureRoundTripper{}
 	provider := NewOpenAIProvider(OpenAIProviderConfig{
-		APIKey: "unused", BaseURL: "https://example.invalid/v1", Model: "gpt-5-nano",
+		APIKey: secrets.NewHidden("unused"), BaseURL: "https://example.invalid/v1", Model: "gpt-5-nano",
 		HTTPClient: &http.Client{Transport: transport},
 	})
 	t.Cleanup(func() { provider.Close() })
@@ -339,7 +340,7 @@ func TestOpenAIProviderTrimsTrailingSlashFromBaseURL(t *testing.T) {
 	// trailing slash produced "/v1//responses".
 	transport := &pathCapturingRoundTripper{}
 	provider := NewOpenAIProvider(OpenAIProviderConfig{
-		APIKey: "unused", BaseURL: "https://example.invalid/v1/", Model: "gpt-5-nano",
+		APIKey: secrets.NewHidden("unused"), BaseURL: "https://example.invalid/v1/", Model: "gpt-5-nano",
 		HTTPClient: &http.Client{Transport: transport},
 	})
 	t.Cleanup(func() { provider.Close() })

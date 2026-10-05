@@ -15,10 +15,10 @@ import (
 
 // statesPythonBuild is the build whose Python answered the upgrade, walk and derivation oracles of this package
 // (the same build as the downgrade golden).
-const statesPythonBuild = "edc056c0cc804928666b13cf02611e9325b777a4"
+const statesPythonBuild = "8a4b34d8ac8efb7701f7c4545d14f146539fa3dd"
 
 // oldScriptHeadsSHA256 pins testdata/golden/old_script_heads.json (the record verb rewrites it).
-const oldScriptHeadsSHA256 = "6df7c4118b53e4618642c07fd73cf042bbf00802a619a43b6e97ea4b9b07a782"
+const oldScriptHeadsSHA256 = "e450e271b5b4e2c2bf387cdef8c500322d51692b57c6511ef77034e9ecbfc584"
 
 // oldScriptDerivation is the head derivation the roll pre-check (hook-parity-check.sh, the script `preflight`
 // replaces) ran over the Alembic scripts: every revision that no other revision names as its down_revision.

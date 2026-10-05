@@ -558,8 +558,8 @@ PROXY_OFF=(env -u ALL_PROXY -u HTTPS_PROXY -u HTTP_PROXY -u all_proxy -u https_p
 # class of bug: two agents with different ambient TMPDIR (a sandbox, a
 # session-scoped scratch dir, anyone who exports it) would silently acquire two
 # DIFFERENT lock names and both proceed, with no error and no diagnostic — the
-# worst possible failure shape for a mutex. /tmp is fixed and shared by every
-# process on the host regardless of its shell's TMPDIR. LOCK_DIR itself is still
+# worst possible failure shape for a mutex. The lock root below is fixed per host
+# regardless of any shell's TMPDIR. LOCK_DIR itself is still
 # explicitly overridable (tests need this to avoid colliding with a real gate) —
 # guarded below against the most catastrophic accidental values.
 #

@@ -488,8 +488,8 @@ type RegistryView struct {
 	DocumentDigest map[string]string // operation -> digest, as the process registers it
 }
 
-// RoutingRow is one go_api_routing_state row as the operator's status
-// read reports it.
+// RoutingRow is the mode and build a run measures one operation under: canary against the running build for a
+// document operation (query-api serves every registered operation, no row decides it), shadow for an MCP class root.
 type RoutingRow struct {
 	Mode           string
 	CandidateBuild string
@@ -1044,8 +1044,7 @@ func (r *Runner) proveRequest(ctx context.Context, operation string, variantName
 	}
 
 	// The candidate leg's URL is decided by the operation's MODE, because
-	// the production route switch admits canary/primary only
-	// (routeswitch.PostgresSwitch.reachableModes). A shadow operation sent
+	// the production route switches admit canary/primary only. A shadow operation sent
 	// to /graphql is served by Python and would produce a receipt claiming
 	// Go executed when it did not.
 	var candidateURL string
@@ -1064,7 +1063,7 @@ func (r *Runner) proveRequest(ctx context.Context, operation string, variantName
 		candidateCredential = r.Config.ProofCredential
 		if r.Config.GoProofURL == "" {
 			return refuse(RefusalShadowUnmeasurable,
-				"mode=shadow: PostgresSwitch.Enabled admits canary|primary only, and this deployment exposes no measurement-only route, so the deployed Go build cannot execute this operation at all")
+				"mode=shadow: the serving switches admit canary|primary only, and this deployment exposes no measurement-only route, so the deployed Go build cannot execute this operation at all")
 		}
 		candidateURL = r.Config.GoProofURL
 	default:

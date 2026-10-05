@@ -72,7 +72,7 @@ type OperationSpec struct {
 	// DOCUMENT selects at the top of `data` -- which is not always the
 	// operation name. flowMatrix, investmentBreakdown and investmentFull
 	// all select `analytics`, because query_route.go's operation keys are
-	// its own Mux/PostgresSwitch keys, chosen to disambiguate several
+	// its own Mux keys, chosen to disambiguate several
 	// registered documents that share a root field.
 	//
 	// It exists so every declared parity path can be checked against the
@@ -208,6 +208,9 @@ func InstanceKey(operation, variant string) string { return operation + "." + va
 // volatileReason documents one excluded field. Kept as a named constant
 // so the reason travels with every operation that cites it rather than
 // being retyped (and drifting) per entry.
+// volatileDistributionBins is the reason for excluding the Monte Carlo histogram bins of capacityCompletionDistribution (CHAOS-8733).
+const volatileDistributionBins = "drawn per request: the Monte Carlo runs with a fresh seed on every request, so two responses to one request carry different bin values and counts (see capacityForecastStochasticLeaves, CHAOS-5901). Scoped to the days bin list of capacityCompletionDistribution; the items bin list is null without a target date and stays compared."
+
 const volatileForecastIdentity = "freshly generated per request: an identical request produced Go forecastId=33fb9f32... / Python 78296c67... with computedAt ~350ms apart (CHAOS-5425, 2026-09-07 live measurement). Excluded per CHAOS-4381; scoped to the forecast operations only, and NOT a licence to exclude any other field."
 
 // operationSpecs is the committed per-operation table.
@@ -548,13 +551,24 @@ var operationSpecs = map[string]OperationSpec{
 			StochasticLeaves: capacityForecastStochasticLeaves,
 		},
 	},
-	// capacityCompletionDistribution (CHAOS-8598) is the per-team MCP read of capacityForecast's histograms. The bins are drawn values (fresh
-	// seed per request, see capacityForecastStochasticLeaves), so no leaf of it is comparable across two responses.
+	// capacityCompletionDistribution (CHAOS-8598) is the MCP read of capacityForecast's histograms. The document reads ONE variable, `$input`
+	// (CapacityForecastInput), so the proof sends the same shape: a top-level teamId is not declared by the document and is dropped (CHAOS-8733).
+	// The proof sends no team: the org scope the nullable input permits, which is what a proof can run without a real team id. A team scope is
+	// not proven here.
+	// The bins are drawn values (fresh seed per request, see capacityForecastStochasticLeaves) and the leaf class cannot express a list of
+	// bins, so the days bin list is excluded from comparison. What the proof still compares exactly: that the root is answered or null on
+	// both planes, the completionDistribution members that are not the days list (items, null without a target date) and __typename. NOT
+	// compared: every bin value, every bin count, the number of bins, and that the counts sum to the simulation count.
 	"capacityCompletionDistribution": {
 		ResponseRoot: "capacityForecast",
 		RootNullable: true,
 		Variables: func(orgID string, _ Window) map[string]any {
-			return map[string]any{"orgId": orgID, "teamId": "team-proof"}
+			return map[string]any{"orgId": orgID, "input": map[string]any{}}
+		},
+		Parity: Options{
+			VolatileFields: map[string]string{
+				"data.capacityForecast.completionDistribution.days": volatileDistributionBins,
+			},
 		},
 	},
 	// capacityForecasts (the LIST) declares no Tier-B and no volatile

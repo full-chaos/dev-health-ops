@@ -166,12 +166,12 @@ esac
 # ------------------------------------------------------------- build then vet
 # Build is whole-repo: a mutant that breaks a package outside the tested set is
 # still a harness error, and no scoping is allowed to hide that.
-brc=0; go build ./... >> "$LOG" 2>&1 || brc=$?
+brc=0; go build -trimpath ./... >> "$LOG" 2>&1 || brc=$?
 if [ "$brc" -ne 0 ]; then
   emit_build_failure "go build" "$brc"
   exit 0
 fi
-vrc=0; go vet $PKGS >> "$LOG" 2>&1 || vrc=$?
+vrc=0; go vet -trimpath $PKGS >> "$LOG" 2>&1 || vrc=$?
 if [ "$vrc" -ne 0 ]; then
   emit_build_failure "go vet" "$vrc"
   exit 0
@@ -184,7 +184,7 @@ fi
 # WHOLE PACKAGES. No -run selector is derived anywhere: `go test -run` matching
 # nothing exits 0 and reads as a survivor, so the floor replaces it.
 trc=0
-go test -count=1 -timeout="$GO_TEST_TIMEOUT" -v $PKGS >> "$LOG" 2>&1 || trc=$?
+go test -trimpath -count=1 -timeout="$GO_TEST_TIMEOUT" -v $PKGS >> "$LOG" 2>&1 || trc=$?
 
 ran=$(grep -c '^=== RUN' "$LOG")
 named=$(grep -cE '^[[:space:]]*--- FAIL: Test' "$LOG")

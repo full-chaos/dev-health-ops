@@ -1,74 +1,20 @@
 package goapiproof
 
-// CHAOS-5486: the Go port of `dev-hops go-api routing enable`.
+// `enable` lights an MCP class root. It is a mutation that refuses on any doubt at all, and every refusal answers a
+// question the 2026-09-01 six-day outage (CHAOS-5416) could not:
 //
-// WHAT IS PRESERVED FROM THE PYTHON VERB, exactly. `enable` is a
-// mutation that refuses on any doubt at all, and every refusal below
-// answers a question the 2026-09-01 six-day outage (CHAOS-5416) could
-// not:
+//  1. the running query-api must be reachable and must agree with this checkout on the SCHEMA digest. Checked by the
+//     CALLER, which is the half that owns HTTP; Enable then writes the digest the RUNNING process reported, so a
+//     caller that skipped the check still cannot record a digest no binary computes.
+//  2. the class root must have a per-root receipt for the exact candidate build (EnablementProofStage), and a
+//     receipt that lists an excluded shape is refused unless the operator names it and the go-served ledger holds an
+//     unproven named-limit entry for it (CHAOS-7512).
 //
-//  1. the running query-api must be reachable and must agree with this
-//     checkout on the SCHEMA digest -- rows follow the deployed image,
-//     so a row written from a checkout that has moved ahead is
-//     unreachable the moment it is written. Checked by the CALLER, which
-//     is the half that owns HTTP; Enable then writes the digest the
-//     RUNNING process reported, so a caller that skipped the check still
-//     cannot write a row at a digest no binary computes.
-//  2. the running query-api must register every named operation, under
-//     the same DOCUMENT digest the edge's catalog carries.
-//  3. an MCP class operation (`mcp:<root>`) must have a per-root receipt
-//     for the exact candidate build. A CATALOG operation (every other one:
-//     a registered document) is admitted with no receipt and no ledger
-//     limit (CHAOS-8586, owner's decision of 2026-10-04): the catalog rule
-//     (queryapi/routeswitch/catalog_switch.go) serves it when it has no row,
-//     so a proof check on the row that lifts a hold guards nothing. The
-//     outcome still says what admitted it: a `deployed_executed`/`match`
-//     proof run, else a written limit in the go-served ledger compiled into
-//     this binary (goserved_ledger.json: `unproven_reason` or
-//     `enable_limit`, written as a NAMED-LIMIT review_evidence prefix), else
-//     the catalog rule (a CATALOG-RULE prefix). Both prefixes are DURABLE on
-//     the row. No flag, environment variable or file an operator passes
-//     changes any of the three.
+// A catalog operation has no routing state: query-api serves every registered operation, so Enable refuses one
+// (ErrDocumentOperationNotRouted).
 //
-// WHAT IS DELIBERATELY DIFFERENT. The Python verb takes the candidate
-// build as a flag, documented "by CONVENTION, unverified" -- the fifteen
-// live rows carry a sha nothing ever checked. Here the build is READ from
-// the deployed process's /buildinfo and the flag is a cross-check that can
-// only FAIL a run (team-lead ruling R51). A row's provenance must not rest
-// on somebody having typed the right thing.
-//
-// WHY THERE IS NO PRE-READ OF THE ROW, AND THE LIVE DEADLOCK THIS LEAVES.
-//
-// Enable inserts the candidate build and then upserts the routing row,
-// per operation, in that order -- CB then RS. It does NOT first
-// SELECT ... FOR UPDATE the routing rows the way `repoint` does
-// (routing_rows.go's selectRepointCandidatesSQL locks EVERY routing row
-// at a schema digest, UP FRONT, before it registers a single candidate
-// build -- RS then, per row, CB then RS again). That is a genuine
-// LOCK-ORDER INVERSION: the textbook rule for avoiding a deadlock between
-// two transactions is that they acquire contended resources in the SAME
-// order, and CB-then-RS vs RS-then-CB is exactly the shape that produces
-// one when they run concurrently over the same rows.
-//
-// Executed with the two real binaries: a third session holds one routing
-// row for 4s while `repoint` (queued first, so its FOR UPDATE lock lands
-// first) races `enable` (registering a candidate build the same
-// operation names). Result: `repoint` exit=0; `enable`:
-// `ERROR: deadlock detected (SQLSTATE 40P01)` exit=2. Postgres:
-// `Process 139 waits for ShareLock on transaction 799; blocked by
-// process 137. Process 137 waits for ShareLock on transaction 798;
-// blocked by process 139.` Both sides roll back cleanly -- Postgres
-// aborts one, and no row is left half-written -- so this is a FAILED
-// WRITE an operator retries, not corruption.
-//
-// NOT FIXED IN THIS PR (RISK-NOTES names it explicitly): the real fix is
-// making `enable` acquire the SAME lock in the SAME order `repoint` does
-// -- pre-locking the target routing rows (where one already exists) via
-// routing_rows.go's shared reader BEFORE touching go_api_candidate_build
-// -- and it is deferred to a dedicated follow-up PR rather than folded
-// in here. Pinned by `TestEnableAndRepointLockOrderInversionDeadlocks`,
-// in routing_repoint_integration_test.go, so that follow-up starts from
-// what the code actually does.
+// The candidate build is READ from the deployed process's /buildinfo and the flag is a cross-check that can only FAIL
+// a run (team-lead ruling R51). A decision's provenance must not rest on somebody having typed the right thing.
 
 import (
 	"context"
@@ -84,14 +30,9 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/mcpclass"
 )
 
-// EnableModes are the only modes `enable` may set. Both make an operation
-// reachable to a real client, which is the whole point of the verb;
-// python/disabled/shadow do not, so they belong to `disable`.
-//
-// Mirrors go_api_cli.py's `--mode` choices exactly. A shadow row is
-// re-pointed by the `repoint` verb, never by widening this set: an
-// enablement that could also leave an operation unreachable would make
-// "enable" a name that does not describe what ran.
+// EnableModes are the only modes `enable` may set. Both make a class root reachable to a real client, which is the
+// whole point of the verb; python/disabled/shadow do not, so they belong to `disable`. A shadow decision is re-pointed
+// by the `repoint` verb, never by widening this set.
 var EnableModes = []string{"canary", "primary"}
 
 // ErrEnableUnproven reports that an MCP class operation has no per-root
@@ -166,10 +107,6 @@ type EnableOutcome struct {
 	// NamedLimit is the ledger's written reason when the row was admitted
 	// from it instead of a store proof run; empty otherwise.
 	NamedLimit string
-	// CatalogRule is true when a catalog operation was admitted with neither
-	// a store proof run nor a ledger limit (CHAOS-8586). Never true for an
-	// MCP class operation, and never together with Proven or NamedLimit.
-	CatalogRule bool
 	// ReviewEvidence is what was actually written, prefix included.
 	ReviewEvidence string
 	// ModeBefore/CandidateBuildBefore/HadRowBefore are
@@ -255,7 +192,7 @@ func (r EnableRequest) validateFields() error {
 	case len(r.Operations) == 0:
 		return errors.New("goapiproof: no operations selected -- 'all-registered' must be resolved to a concrete list before it reaches Enable")
 	case r.RolloutPercentage < 0 || r.RolloutPercentage > 100:
-		return fmt.Errorf("goapiproof: rollout percentage %d is outside 0..100, which ck_go_api_routing_state_rollout_percentage rejects", r.RolloutPercentage)
+		return fmt.Errorf("goapiproof: rollout percentage %d is outside 0..100, which no plane could obey", r.RolloutPercentage)
 	case r.RolloutPercentage != EnforcedRolloutPercentage:
 		return ErrRolloutNotEnforced(r.RolloutPercentage)
 	}
@@ -312,37 +249,6 @@ func contains(values []string, want string) bool {
 	return false
 }
 
-// upsertRoutingStateSQL mirrors go_api_routing_admin.upsert_routing_state
-// exactly, including which columns the ON CONFLICT branch overwrites.
-// `updated_at` is refreshed even on a no-change write, on purpose: it is
-// the row's only timestamp, and "re-confirmed today" reads very
-// differently from "nothing has touched this since September".
-const upsertRoutingStateSQL = `
-INSERT INTO public.go_api_routing_state
-	(schema_digest, document_digest, selected_operation, current_candidate_build,
-	 owner, mode, rollout_percentage, review_evidence, recorded_by, updated_at)
-VALUES ($1, $2, $3, $4, 'go', $5, $6, $7, $8, $9)
-ON CONFLICT (schema_digest, document_digest, selected_operation) DO UPDATE
-   SET current_candidate_build = EXCLUDED.current_candidate_build,
-       owner = EXCLUDED.owner,
-       mode = EXCLUDED.mode,
-       rollout_percentage = EXCLUDED.rollout_percentage,
-       review_evidence = EXCLUDED.review_evidence,
-       recorded_by = EXCLUDED.recorded_by,
-       updated_at = EXCLUDED.updated_at`
-
-// selectEnableBeforeStateSQL reads the target row's mode/build UNDER THE
-// SAME LOCK the upsert immediately below it takes -- see
-// EnableOutcome.ModeBefore's own doc comment. Scoped to the row's
-// FULL identity, matching the upsert's own ON CONFLICT columns exactly --
-// there is no ambiguity to resolve with an ORDER BY the way the shared
-// multi-row reads elsewhere in this package need one.
-const selectEnableBeforeStateSQL = `
-SELECT mode, current_candidate_build
-  FROM public.go_api_routing_state
- WHERE schema_digest = $1 AND document_digest = $2 AND selected_operation = $3
-   FOR UPDATE`
-
 // Enable registers the candidate build and points the named routing rows
 // at it, in ONE transaction.
 //
@@ -356,6 +262,9 @@ func Enable(ctx context.Context, pool *pgxpool.Pool, request EnableRequest) ([]E
 	}
 	if err := request.validate(); err != nil {
 		return nil, err
+	}
+	if _, document := splitClassOperations(request.Operations); len(document) > 0 {
+		return nil, enableRefusal{refuseDocumentOperations("enable", document)}
 	}
 
 	wanted := make(map[string]string, len(request.Operations))
@@ -393,15 +302,10 @@ func Enable(ctx context.Context, pool *pgxpool.Pool, request EnableRequest) ([]E
 		return nil, err
 	}
 	namedLimit := make(map[string]string, len(unproven))
-	catalogRule := make(map[string]bool, len(unproven))
 	var refused []string
 	for _, operation := range unproven {
 		if reason, ok := ledger.EnableLimitReason(operation); ok {
 			namedLimit[operation] = reason
-			continue
-		}
-		if !mcpclass.IsOperation(operation) {
-			catalogRule[operation] = true
 			continue
 		}
 		refused = append(refused, operation)
@@ -423,10 +327,7 @@ func Enable(ctx context.Context, pool *pgxpool.Pool, request EnableRequest) ([]E
 			evidence += " [allow-excluded: " + strings.Join(names, ",") + "]"
 		}
 		reason := namedLimit[operation]
-		switch {
-		case catalogRule[operation]:
-			evidence = CatalogRuleEvidence(evidence)
-		case !proven[operation]:
+		if !proven[operation] {
 			evidence = NamedLimitEvidence(reason, evidence)
 		}
 		outcomes = append(outcomes, EnableOutcome{
@@ -436,7 +337,6 @@ func Enable(ctx context.Context, pool *pgxpool.Pool, request EnableRequest) ([]E
 			CandidateBuild: request.RunningBuild,
 			Proven:         proven[operation],
 			NamedLimit:     reason,
-			CatalogRule:    catalogRule[operation],
 			ReviewEvidence: evidence,
 		})
 	}
@@ -465,56 +365,19 @@ func Enable(ctx context.Context, pool *pgxpool.Pool, request EnableRequest) ([]E
 
 	for i := range outcomes {
 		outcome := &outcomes[i]
-		// Candidate build FIRST. The routing row's 4-column foreign key
-		// makes the order mandatory -- but this is NOT a deadlock-avoiding
-		// "lock-order convention". `repoint` locks the routing row
-		// FIRST, then registers the build; this locks the build FIRST,
-		// then the routing row. That is the exact lock-order INVERSION
-		// the package comment (above, "WHY THERE IS NO PRE-READ OF THE
-		// ROW") documents as a genuine, executed, reproduced deadlock
-		// between enable and repoint -- not something this order avoids.
-		// The FK dependency (a routing row cannot name a build that does
-		// not exist yet) is why THIS order is mandatory on its own; fixing
-		// the inversion means making `repoint` acquire its lock in this
-		// SAME order instead, tracked against the same follow-up PR named
-		// above.
-		if _, err := tx.Exec(ctx, registerCandidateBuildSQL,
-			request.SchemaDigest, outcome.DocumentDigest, outcome.Operation, request.RunningBuild); err != nil {
-			return nil, fmt.Errorf("goapiproof: register candidate build for %s: %w", outcome.Operation, err)
-		}
-		// The row's BEFORE state, read under the SAME
-		// FOR-UPDATE lock the upsert immediately below takes, in the SAME
-		// CB-then-RS order the upsert already uses -- see
-		// EnableOutcome.ModeBefore's own doc comment for why this is a
-		// locked read rather than an unlocked, outside-the-transaction
-		// pre-read. A genuine query error here (never observed with a
-		// real, privilege-restricted role -- Postgres's privilege model
-		// requires the SAME grant for the UPSERT immediately below, so a
-		// role that cannot run this SELECT cannot run that UPSERT either)
-		// now aborts the WHOLE enable the same way any other
-		// mid-transaction database error already does, rather than
-		// degrading to a silently-wrong logged value -- the same "a
-		// measurement that did not happen is not a pass" rule applied to
-		// this read too.
-		switch err := tx.QueryRow(ctx, selectEnableBeforeStateSQL,
-			request.SchemaDigest, outcome.DocumentDigest, outcome.Operation,
-		).Scan(&outcome.ModeBefore, &outcome.CandidateBuildBefore); {
+		// CHAOS-8735: a class root's decision is one row per operation (go_api_class_decision), written
+		// with no candidate-build registration (no foreign key) and with the database's now() as its time.
+		switch err := tx.QueryRow(ctx, classDecisionLockSQL, outcome.Operation).Scan(&outcome.ModeBefore, &outcome.CandidateBuildBefore); {
 		case err == nil:
 			outcome.HadRowBefore = true
 		case errors.Is(err, pgx.ErrNoRows):
-			// Genuinely no row yet -- not a failure.
 		default:
 			return nil, fmt.Errorf("goapiproof: read before-state for %s: %w", outcome.Operation, err)
 		}
-		tag, err := tx.Exec(ctx, upsertRoutingStateSQL,
-			request.SchemaDigest, outcome.DocumentDigest, outcome.Operation, request.RunningBuild,
-			request.Mode, request.RolloutPercentage, outcome.ReviewEvidence, request.RecordedBy, now)
+		tag, err := tx.Exec(ctx, classDecisionUpsertSQL, outcome.Operation, request.Mode, request.RunningBuild, request.SchemaDigest, outcome.ReviewEvidence, request.RecordedBy)
 		if err != nil {
 			return nil, fmt.Errorf("goapiproof: enable %s: %w", outcome.Operation, err)
 		}
-		// An upsert that matched nothing is a silent no-op an operator
-		// would read as success -- the failure mode CHAOS-5416 spent six
-		// days in. Refuse instead.
 		if tag.RowsAffected() != 1 {
 			return nil, fmt.Errorf("goapiproof: enable %s affected %d rows, want exactly 1", outcome.Operation, tag.RowsAffected())
 		}
@@ -524,14 +387,6 @@ func Enable(ctx context.Context, pool *pgxpool.Pool, request EnableRequest) ([]E
 			CandidateBuildAfter: request.RunningBuild,
 			ModeAfter:           request.Mode,
 		}
-		// A pointer, not "": an operation that had NO row and one that
-		// had a row saying `python` are different facts, and an audit
-		// row that rendered them alike would answer "was this already
-		// on?" wrongly. Sourced from the SAME locked read above
-		// (outcome.ModeBefore/CandidateBuildBefore/HadRowBefore), not a
-		// separate pre-read: see EnableOutcome.ModeBefore's doc comment
-		// for why an unlocked pre-read taken before this call starts can
-		// log a value a concurrent write had already moved past.
 		if outcome.HadRowBefore {
 			buildBefore, modeBefore := outcome.CandidateBuildBefore, outcome.ModeBefore
 			entry.CandidateBuildBefore = &buildBefore

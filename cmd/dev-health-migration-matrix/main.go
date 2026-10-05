@@ -3,8 +3,8 @@
 //
 // Two modes, and the split between them is the design:
 //
-//	-render   reads LIVE sources (Postgres go_api_routing_state /
-//	          go_api_proof_run, the running fleet's image labels) plus the
+//	-render   reads LIVE sources (the running fleet's image labels, and with
+//	          -dsn the REST proof table go_api_rest_proof_run) plus the
 //	          committed ledger, writes the rendered blocks into the doc AND
 //	          a snapshot of what it read into
 //	          contracts/migration-status/v1/last-render.json.
@@ -28,8 +28,6 @@ import (
 	"errors"
 	"flag"
 	"fmt"
-	envsecrets "github.com/full-chaos/dev-health-ops/internal/platform/secrets"
-	"io"
 	"log/slog"
 	"os"
 	"os/exec"
@@ -79,12 +77,10 @@ const (
 // "what commit is running?". One per distinct image, not one per replica.
 //
 // queryAPIContainerName is the compose container ReadFleetRevisions reads
-// query-api's OWN build identity from -- REST proof has no
-// go_api_routing_state row to read a per-operation candidate build from
-// (restproven.go's own package doc comment), so -render checks REST
-// receipts against THIS container's label specifically, never the
-// fleet-wide Revision field, which requires every container (including
-// worker images unrelated to query-api) to agree.
+// query-api's OWN build identity from -- REST proof has no per-operation candidate build to read
+// (restproven.go's own package doc comment), so -render checks REST receipts against THIS container's label
+// specifically, never the fleet-wide Revision field, which requires every container (including worker images
+// unrelated to query-api) to agree.
 const queryAPIContainerName = "dev-health-query-api-1"
 
 // postgresURIEnvVar is the ONLY place the DSN may come from other than the
@@ -105,8 +101,8 @@ var defaultFleetContainers = []string{
 // main's own local vars so a test can register on a private *flag.FlagSet
 // instead of the process-global flag.CommandLine.
 type matrixFlags struct {
-	root, fleet, routing, containers, dsn *string
-	render, check, printSQL               *bool
+	root, fleet, containers, dsn *string
+	render, check                *bool
 }
 
 // registerFlags binds every flag this command accepts on set. -dsn is
@@ -121,11 +117,9 @@ func registerFlags(set *flag.FlagSet) *matrixFlags {
 	f.render = set.Bool("render", false, "read live sources and rewrite the generated blocks")
 	f.check = set.Bool("check", false, "validate the committed doc against the committed sources")
 	f.dsn = new(string)
-	secrets.BindFlag(set, f.dsn, "dsn", postgresURIEnvVar, "Postgres DSN for the go_api_registry tables")
+	secrets.BindFlag(set, f.dsn, "dsn", postgresURIEnvVar, "Postgres DSN for the REST proof table (go_api_rest_proof_run)")
 	f.fleet = set.String("fleet", "docker", `how to read the fleet: "docker", "none", or a path to a JSON {container: revision} file`)
-	f.routing = set.String("routing", "", "path to a JSON routing snapshot, INSTEAD of -dsn (for hosts where the operator has no DSN; build it with -print-routing-sql)")
 	f.containers = set.String("containers", strings.Join(defaultFleetContainers, ","), "comma-separated container names to inspect")
-	f.printSQL = set.Bool("print-routing-sql", false, "print the statement ReadRoutingState runs and exit; `psql -At -f -` on it writes a -routing snapshot file as-is")
 	return f
 }
 
@@ -148,24 +142,9 @@ func main() {
 
 	explicit := map[string]bool{}
 	flag.Visit(func(fl *flag.Flag) { explicit[fl.Name] = true })
-	notice, err := checkFlagCombination(explicit, *f.printSQL, *f.render, *f.check, *f.fleet, envsecrets.GetenvNamed(postgresURIEnvVar) != "")
-	if err != nil {
+	if err := checkFlagCombination(explicit, *f.render, *f.check, *f.fleet); err != nil {
 		fmt.Fprintf(os.Stderr, "dev-health-migration-matrix: %v\n", boundary.Redact(err))
 		os.Exit(2)
-	}
-	if notice != "" {
-		fmt.Fprintf(os.Stderr, "notice: %s\n", notice)
-	}
-
-	// Printing the statement is not a render or a check, so it is answered
-	// before the -render/-check exclusivity rule: an operator asking how to
-	// produce a routing snapshot has neither yet.
-	if *f.printSQL {
-		if err := printRoutingSQL(os.Stdout); err != nil {
-			fmt.Fprintf(os.Stderr, "dev-health-migration-matrix: %v\n", boundary.Redact(err))
-			os.Exit(1)
-		}
-		return
 	}
 
 	if *f.render == *f.check {
@@ -173,8 +152,9 @@ func main() {
 		os.Exit(2)
 	}
 
+	var err error
 	if *f.render {
-		err = runRender(*f.root, *f.dsn, *f.routing, *f.fleet, splitCSV(*f.containers))
+		err = runRender(*f.root, *f.dsn, *f.fleet, splitCSV(*f.containers))
 	} else {
 		err = runCheck(*f.root)
 	}
@@ -184,68 +164,31 @@ func main() {
 	}
 }
 
-// checkFlagCombination refuses every pair of flags in which one would be
-// silently ignored, and names the one pair that is honoured on purpose.
+// checkFlagCombination refuses every pair of flags in which one would be silently ignored.
 //
-// Executed before this existed: `-render -dsn X -routing F` rendered from F
-// and never mentioned X, and `-check -dsn X -routing /nonexistent -fleet
-// /nonexistent` printed "migration matrix OK" -- three flags naming three
-// sources, none read, no word said. An operator who passes a source and is
-// not told it was ignored believes the page describes that source. Two
-// knobs naming one resource must never resolve silently.
-//
-//   - -print-routing-sql prints a statement and reads nothing, so any other
-//     flag with it is refused.
-//   - -check reads ONLY committed files, so -dsn, -routing, -fleet and
-//     -containers with it are refused.
-//   - -render takes ONE routing source: -dsn and -routing together are
-//     refused. -routing while $POSTGRES_URI is set (the -dsn DEFAULT) is
-//     honoured -- the explicit flag wins -- and says so in a notice.
-//   - -containers applies only to `-fleet docker`; with any other -fleet it
-//     is refused.
-func checkFlagCombination(explicit map[string]bool, printSQL, render, check bool, fleet string, envDSN bool) (string, error) {
-	// The mode flags are judged by VALUE (`-check=false` is set but is not
-	// -check); only the source flags are judged by presence.
-	sources := []string{"dsn", "routing", "fleet", "containers", "root"}
-	others := func(allowed ...string) []string {
-		allow := map[string]bool{}
-		for _, name := range allowed {
-			allow[name] = true
-		}
-		var out []string
+//   - -check reads ONLY committed files, so -dsn, -fleet and -containers with it are refused.
+//   - -containers applies only to `-fleet docker`; with any other -fleet it is refused.
+func checkFlagCombination(explicit map[string]bool, render, check bool, fleet string) error {
+	// The mode flags are judged by VALUE (`-check=false` is set but is not -check); only the source flags are
+	// judged by presence.
+	sources := []string{"dsn", "fleet", "containers", "root"}
+	if check {
+		var extra []string
 		for _, name := range sources {
-			if explicit[name] && !allow[name] {
-				out = append(out, "-"+name)
+			if explicit[name] && name != "root" {
+				extra = append(extra, "-"+name)
 			}
 		}
-		sort.Strings(out)
-		return out
-	}
-	switch {
-	case printSQL:
-		if render || check {
-			return "", fmt.Errorf("-print-routing-sql prints a statement and exits; it cannot be combined with -render or -check")
+		sort.Strings(extra)
+		if len(extra) > 0 {
+			return fmt.Errorf("-check reads only committed files; %s would be ignored -- those flags apply to -render", strings.Join(extra, " "))
 		}
-		if extra := others(); len(extra) > 0 {
-			return "", fmt.Errorf("-print-routing-sql prints a statement and reads nothing; %s would be ignored -- pass it alone", strings.Join(extra, " "))
-		}
-		return "", nil
-	case check:
-		if extra := others("root"); len(extra) > 0 {
-			return "", fmt.Errorf("-check reads only committed files; %s would be ignored -- those flags apply to -render", strings.Join(extra, " "))
-		}
-		return "", nil
-	}
-	if explicit["dsn"] && explicit["routing"] {
-		return "", fmt.Errorf("-dsn and -routing both name the routing source and only one can be read -- pass one")
+		return nil
 	}
 	if explicit["containers"] && fleet != "docker" {
-		return "", fmt.Errorf("-containers applies only to -fleet docker; with -fleet %q it would be ignored", fleet)
+		return fmt.Errorf("-containers applies only to -fleet docker; with -fleet %q it would be ignored", fleet)
 	}
-	if explicit["routing"] && envDSN {
-		return "reading routing rows from -routing; $POSTGRES_URI (the -dsn default) is set and is NOT read", nil
-	}
-	return "", nil
+	return nil
 }
 
 // legacyBlocks renders the four blocks CHAOS-5473 absorbed from the deleted
@@ -327,7 +270,6 @@ func runCheck(root string) error {
 
 	violations := migrationmatrix.ValidateLedger(ledger, families)
 	violations = append(violations, migrationmatrix.ValidateRender(snapshot)...)
-	violations = append(violations, migrationmatrix.ValidateDocumentDrift(snapshot, catalog)...)
 
 	// ops_sha's SHAPE is checked above (R7); this checks its TRUTH -- that
 	// the merge-base -render recorded is still reachable from the tree
@@ -341,15 +283,8 @@ func runCheck(root string) error {
 	}
 	violations = append(violations, opsShaViolations...)
 
-	if unjudged := migrationmatrix.UnjudgedLive(snapshot.Operations); unjudged > 0 {
-		fmt.Fprintf(os.Stderr, "warning: %d live routing row(s) in the committed render carry no document digest -- the snapshot predates the reader carrying the routing key -- so DOCUMENT_DRIFT / UNREGISTERED cannot be judged for them until the next -render. The page states the count.\n", unjudged)
-	}
-
-	// The digest pin is checked against the snapshot rather than the
-	// database: if the SDL moved after the last render, every "live" row in
-	// the committed page is describing rows that can no longer be matched.
-	// That is precisely the kind of failure a stale pin causes, and it is a
-	// doc-level fact this offline check can catch.
+	// The digest pin is checked against the snapshot: if the SDL moved after the last render, the committed page
+	// carries a stale pin, a doc-level fact this offline check can catch.
 	pin, err := migrationmatrix.SchemaDigestPin(filepath.Join(root, digestPinRelative))
 	if err != nil {
 		return err
@@ -358,9 +293,7 @@ func runCheck(root string) error {
 		violations = append(violations, migrationmatrix.Violation{
 			Subject: "schema digest",
 			Rule:    "R12-digest-moved",
-			Detail: fmt.Sprintf("the SDL pin is now %s but the committed render was made at %s; "+
-				"every routing row on this page is keyed by the old digest and cannot be matched by the router. "+
-				"Re-render, and re-enable routing after the query-api image is rebuilt.", pin, snapshot.SchemaDigest),
+			Detail:  fmt.Sprintf("the SDL pin is now %s but the committed render was made at %s; re-render", pin, snapshot.SchemaDigest),
 		})
 	}
 
@@ -412,12 +345,12 @@ func runCheck(root string) error {
 			docRelative, len(violations), migrationmatrix.FormatViolations(violations))
 		return fmt.Errorf("migration matrix contract failed")
 	}
-	fmt.Printf("migration matrix OK: %d families, %d routing rows, rendered %s\n",
-		len(ledger.Families), len(snapshot.Operations), snapshot.RenderedAt.UTC().Format(time.RFC3339))
+	fmt.Printf("migration matrix OK: %d families, rendered %s\n",
+		len(ledger.Families), snapshot.RenderedAt.UTC().Format(time.RFC3339))
 	return nil
 }
 
-func runRender(root, dsn, routingFile, fleetMode string, containers []string) error {
+func runRender(root, dsn, fleetMode string, containers []string) error {
 	ctx := context.Background()
 
 	ledger, err := migrationmatrix.LoadStatusLedger(filepath.Join(root, statusRelative))
@@ -441,7 +374,7 @@ func runRender(root, dsn, routingFile, fleetMode string, containers []string) er
 		return err
 	}
 
-	previous, prevErr := migrationmatrix.LoadRender(filepath.Join(root, renderRelative))
+	previous, _ := migrationmatrix.LoadRender(filepath.Join(root, renderRelative))
 
 	snapshot := &migrationmatrix.Render{
 		SchemaVersion: 1,
@@ -454,52 +387,6 @@ func runRender(root, dsn, routingFile, fleetMode string, containers []string) er
 		OpsSha:       opsSha,
 		RenderCommit: renderCommit,
 		SchemaDigest: pin,
-	}
-
-	switch {
-	case routingFile != "":
-		rows, proofTotal, err := readRoutingFile(routingFile, pin)
-		if err != nil {
-			return err
-		}
-		snapshot.Operations = rows
-		snapshot.ProofRunTotal = proofTotal
-	case dsn != "":
-		rows, proofTotal, err := migrationmatrix.ReadRoutingState(ctx, dsn, pin)
-		if err != nil {
-			return err
-		}
-		snapshot.Operations = rows
-		snapshot.ProofRunTotal = proofTotal
-	default:
-		if prevErr != nil {
-			return fmt.Errorf("no -routing file, no -dsn/$POSTGRES_URI and no previous render to carry forward: %w", prevErr)
-		}
-		// Carrying forward is allowed but never silent: the timestamp
-		// stays the OLD one, so the freshness gate still fails on it.
-		fmt.Fprintf(os.Stderr, "warning: no routing source; carrying forward the rows read at %s (their timestamp is NOT refreshed, so the freshness gate still ages them out)\n",
-			previous.RenderedAt.UTC().Format(time.RFC3339))
-		snapshot.Operations = previous.Operations
-		snapshot.ProofRunTotal = previous.ProofRunTotal
-		snapshot.RenderedAt = previous.RenderedAt
-	}
-
-	// Carry the parity tickets curated per operation forward across renders
-	// -- they are a human's judgement, not a live fact, and must survive a
-	// re-read of the database.
-	if previous != nil {
-		carried := map[string]string{}
-		for _, row := range previous.Operations {
-			if row.ParityTicket != "" {
-				carried[row.SchemaDigest+"/"+row.Operation] = row.ParityTicket
-			}
-		}
-		for i := range snapshot.Operations {
-			key := snapshot.Operations[i].SchemaDigest + "/" + snapshot.Operations[i].Operation
-			if ticket, ok := carried[key]; ok && snapshot.Operations[i].ParityTicket == "" {
-				snapshot.Operations[i].ParityTicket = ticket
-			}
-		}
 	}
 
 	// queryAPIBuild is query-api's OWN fleet-label revision (never the
@@ -608,15 +495,13 @@ func runRender(root, dsn, routingFile, fleetMode string, containers []string) er
 
 	violations := migrationmatrix.ValidateLedger(ledger, families)
 	violations = append(violations, migrationmatrix.ValidateRender(snapshot)...)
-	violations = append(violations, migrationmatrix.ValidateDocumentDrift(snapshot, catalog)...)
 	if len(violations) > 0 {
 		fmt.Fprintf(os.Stderr, "rendered, but the result has %d violation(s):\n%s",
 			len(violations), migrationmatrix.FormatViolations(violations))
 		return fmt.Errorf("migration matrix contract failed after render")
 	}
-	fmt.Printf("rendered %s at %s (main merge-base %s, render commit %s, %d routing rows, %d proof runs)\n",
-		docRelative, snapshot.RenderedAt.UTC().Format(time.RFC3339), opsSha[:12], renderCommit[:12],
-		len(snapshot.Operations), snapshot.ProofRunTotal)
+	fmt.Printf("rendered %s at %s (main merge-base %s, render commit %s)\n",
+		docRelative, snapshot.RenderedAt.UTC().Format(time.RFC3339), opsSha[:12], renderCommit[:12])
 	return nil
 }
 
@@ -632,56 +517,6 @@ func applyFleet(ledger *migrationmatrix.StatusLedger, reading *migrationmatrix.F
 		}
 		ledger.Families[id] = entry
 	}
-}
-
-// printRoutingSQL writes the statement -print-routing-sql prints: exactly
-// migrationmatrix.RoutingStateSQL(), the statement ReadRoutingState runs.
-//
-// The offline pipeline, which the lane's executed claim runs literally on
-// PostgreSQL 16, 17 and 18:
-//
-//	dev-health-migration-matrix -print-routing-sql > routing.sql
-//	docker exec -i <pg> psql -U <user> -d <db> -At -f - < routing.sql > routing.json
-//	dev-health-migration-matrix -render -routing routing.json
-//
-// The statement emits the whole snapshot payload as one JSON value, so the
-// file psql writes IS the -routing file, unedited: an earlier version
-// printed only the row statement, whose `psql -At` output the reader
-// rejected, leaving the JSON wrapper and a second count query to be
-// written by hand. Credentials stay with psql -- its own environment or
-// ~/.pgpass -- never in this tool's argv or the docs generator's code.
-func printRoutingSQL(w io.Writer) error {
-	statement, err := migrationmatrix.RoutingStateSQL()
-	if err != nil {
-		return err
-	}
-	_, err = fmt.Fprintln(w, strings.TrimSpace(statement))
-	return err
-}
-
-// readRoutingFile reads a -routing snapshot: the unedited `psql -At` output
-// of -print-routing-sql. Parsing is migrationmatrix.ParseRoutingSnapshot --
-// the same function ReadRoutingState uses on the same statement's value --
-// so an offline snapshot cannot be read by a different rule than a live one.
-//
-// A snapshot with NO rows is read, as the live reader always read an empty
-// table (CHAOS-8543). It was refused here while an empty go_api_routing_state
-// meant "nothing is served"; since the catalog rule (queryapi/routeswitch/
-// catalog_switch.go) it is a valid state, in which query-api serves every
-// catalog operation with no routing row, and the page says so
-// (migrationmatrix.RenderOpsBlock). A file that is not a snapshot is still
-// refused: ParseRoutingSnapshot requires the object and its proof_run_total,
-// so an empty or hand-built file does not read as an empty table.
-func readRoutingFile(path, currentDigest string) ([]migrationmatrix.OperationRow, int, error) {
-	raw, err := os.ReadFile(path) //nolint:gosec // operator-supplied path
-	if err != nil {
-		return nil, 0, fmt.Errorf("read routing file: %w", err)
-	}
-	rows, total, err := migrationmatrix.ParseRoutingSnapshot(raw, currentDigest)
-	if err != nil {
-		return nil, 0, fmt.Errorf("routing file %s: %w", path, err)
-	}
-	return rows, total, nil
 }
 
 func fleetFromFile(path string) (*migrationmatrix.FleetReading, error) {

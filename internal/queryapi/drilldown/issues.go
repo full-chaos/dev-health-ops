@@ -32,6 +32,11 @@ type IssueParams struct {
 	// "payload.limit or 50" / GET-hardcoded-50 contract PRParams.Limit
 	// documents.
 	Limit int
+	// BlockedOnly selects the persisted per-item blocked-duration source.
+	// It is true only for a POST body whose validated filters.how.blocked
+	// value is true. False and absent retain the established drilldown
+	// response from work_item_cycle_times.
+	BlockedOnly bool
 }
 
 // IssueItem ports one dict fetch_issues (api/queries/drilldown.py:60-93)
@@ -61,9 +66,12 @@ type IssueItem struct {
 	CompletedAt    *time.Time `json:"completed_at"`
 }
 
-// IssuesResponse ports DrilldownResponse(items=...) for the issues route.
+// IssuesResponse ports DrilldownResponse(items=...) for ordinary issue
+// drilldowns. BlockedOnly requests add Count: it is the full count before the
+// request limit, so it remains useful when Items is a truncated page.
 type IssuesResponse struct {
 	Items []IssueItem `json:"items"`
+	Count *uint64     `json:"count,omitempty"`
 }
 
 // formatDay renders t as the plain YYYY-MM-DD form a ClickHouse `Date`
@@ -194,6 +202,84 @@ LIMIT {limit:UInt64}
 %s
 `
 
+// latestBlockedItemDaysSource first takes the latest snapshot for each
+// (day, provider, work item) identity that migration 104 defines. Its outer
+// predicate then removes zero snapshots. The order is required: filtering
+// positive stored rows before argMax would make a stale positive reappear
+// after a recompute writes zero for that item-day.
+//
+// work_scope_id and team values are part of the tuple, so the selected team
+// belongs to the same snapshot as the selected duration. The later window
+// source groups those kept item-days to the one work item a result-table row
+// represents.
+const latestBlockedItemDaysSource = `(
+    SELECT
+        day,
+        provider,
+        work_item_id,
+        latest_snapshot.1 AS work_scope_id,
+        latest_snapshot.2 AS team_id,
+        latest_snapshot.3 AS team_name,
+        latest_snapshot.4 AS duration_hours
+    FROM (
+        SELECT
+            day,
+            provider,
+            work_item_id,
+            argMax(tuple(work_scope_id, team_id, team_name, duration_hours), computed_at) AS latest_snapshot
+        FROM work_item_blocked_durations_daily
+        WHERE org_id = {org_id:String}
+          AND day >= {start_day:Date} AND day < {end_day:Date}
+        GROUP BY day, provider, work_item_id
+    )
+    WHERE latest_snapshot.4 > 0
+)`
+
+// blockedIssueWindowSource reduces the latest positive item-day snapshots to
+// one list row per provider/work-item over the requested window. A team scope
+// narrows the snapshots before that reduction: blocked time recorded while an
+// item belonged to the requested team counts for that team's evidence even if
+// a later day records a different team.
+const blockedIssueWindowSource = `(
+    SELECT
+        provider,
+        work_item_id,
+        argMax(team_id, day) AS team_id
+    FROM %s AS b
+    WHERE 1 = 1%s
+    GROUP BY provider, work_item_id
+)`
+
+func blockedScopeClauseTeam(scopeLevel string, teamIDs []string) (filterSQL string, bindings []dhclickhouse.Binding) {
+	if scopeLevel != "team" || len(teamIDs) == 0 {
+		return "", nil
+	}
+	return " AND b.team_id IN {scope_ids:Array(String)}", []dhclickhouse.Binding{
+		{Name: "scope_ids", Value: teamIDs},
+	}
+}
+
+func renderBlockedIssueWindowSource(scopeLevel string, teamIDs []string) (string, []dhclickhouse.Binding) {
+	scopeSQL, scopeBindings := blockedScopeClauseTeam(scopeLevel, teamIDs)
+	return fmt.Sprintf(blockedIssueWindowSource, latestBlockedItemDaysSource, scopeSQL), scopeBindings
+}
+
+// fetchBlockedIssuesQuery returns the page and its full, unpaginated count
+// from one ClickHouse statement. count() OVER () runs before LIMIT, so Count
+// describes all matching work items and is measured on the same snapshot as
+// Items. This avoids a second read racing a recompute that appends a zero row.
+const fetchBlockedIssuesQuery = `
+SELECT
+    b.work_item_id AS work_item_id,
+    b.provider AS provider,
+    nullIf(b.team_id, '') AS team_id,
+    count() OVER () AS total_count
+FROM %s AS b
+ORDER BY b.work_item_id ASC, b.provider ASC
+LIMIT {limit:UInt64}
+%s
+`
+
 // BuildIssuesResponse is the Go port of drilldown_issues/
 // drilldown_issues_post's shared body (api/main.py:984-1005, 1020-1045):
 // resolve the team scope, run fetch_issues, wrap the rows as items. Auth
@@ -204,6 +290,9 @@ LIMIT {limit:UInt64}
 func BuildIssuesResponse(ctx context.Context, reader *Reader, orgID string, params IssueParams) (*IssuesResponse, error) {
 	if reader == nil {
 		return nil, ErrUnavailable
+	}
+	if params.BlockedOnly {
+		return buildBlockedIssuesResponse(ctx, reader, orgID, params)
 	}
 
 	scopeSQL, scopeBindings := scopeClauseTeam(params.ScopeLevel, params.ScopeIDs)
@@ -239,4 +328,44 @@ func BuildIssuesResponse(ctx context.Context, reader *Reader, orgID string, para
 	}
 
 	return &IssuesResponse{Items: items}, nil
+}
+
+func buildBlockedIssuesResponse(ctx context.Context, reader *Reader, orgID string, params IssueParams) (*IssuesResponse, error) {
+	source, scopeBindings := renderBlockedIssueWindowSource(params.ScopeLevel, params.ScopeIDs)
+	query := fmt.Sprintf(fetchBlockedIssuesQuery, source, settingsMaxExecutionTime())
+	bindings := append([]dhclickhouse.Binding{
+		{Name: "start_day", Value: formatDay(params.StartDay)},
+		{Name: "end_day", Value: formatDay(params.EndDay)},
+		{Name: "org_id", Value: orgID},
+		{Name: "limit", Value: params.Limit},
+	}, scopeBindings...)
+
+	rows, err := reader.client.Query(ctx, query, bindings)
+	if err != nil {
+		return nil, fmt.Errorf("fetch blocked issues: %w", err)
+	}
+	defer rows.Close()
+
+	items := make([]IssueItem, 0)
+	var count uint64
+	for rows.Next() {
+		var (
+			item     IssueItem
+			rowCount uint64
+		)
+		if err := rows.Scan(&item.WorkItemID, &item.Provider, &item.TeamID, &rowCount); err != nil {
+			return nil, fmt.Errorf("scan blocked issue row: %w", err)
+		}
+		if len(items) > 0 && rowCount != count {
+			return nil, fmt.Errorf("scan blocked issue row: inconsistent window count %d, want %d", rowCount, count)
+		}
+		count = rowCount
+		item.Status = "blocked"
+		items = append(items, item)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterate blocked issue rows: %w", err)
+	}
+
+	return &IssuesResponse{Items: items, Count: &count}, nil
 }

@@ -3,29 +3,16 @@ package routing
 // The `enable` verb: a mutation that refuses -- exit 2, nothing written --
 // on any doubt at all.
 //
-// The four preflights are the Python verb's, in the same order, and each
-// answers a question the 2026-09-01 six-day outage (CHAOS-5416) could
-// not:
+// `enable` lights an MCP class root: it records a canary or primary decision for the root. The preflights answer
+// what the 2026-09-01 six-day outage (CHAOS-5416) could not:
 //
-//  1. Is query-api reachable? No answer is not a pass. A measurement that
-//     did not happen must fail loudly (root AGENTS.md).
-//  2. Do both planes hash the same SDL? The Python edge computes its
-//     routing key from contracts/graphql/v1/schema.graphql; the deployed
-//     Go binary hashes its own go:embed'ed copy; this command hashes the
-//     copy IT was built from, with the same one implementation
-//     (internal/goapidigest.Schema). Rows follow the IMAGE. Writing rows
-//     from a checkout that has moved ahead of the deployed image produces
-//     exactly the dead rows this command exists to recover from.
-//  3. Does the running binary register the operation, under the same
-//     document digest the edge's catalog carries? The deployed image is
-//     the authority on what it serves; the catalog is the authority on
-//     what the edge can dispatch. Both must say yes or the row is
-//     unreachable from one side or the other.
-//  4. Has this exact candidate build been proven? Asked of an MCP class
-//     root only (goapiproof.EnablementProofStage). A catalog operation is
-//     admitted without a receipt or a ledger limit, because the catalog
-//     rule serves it when it has no row (CHAOS-8586); the outcome still
-//     names what admitted it.
+//  1. Is query-api reachable? No answer is not a pass.
+//  2. Do both planes hash the same SDL? The decision records the schema digest as provenance, and this binary must
+//     be built from the same commit as the deployed image.
+//  3. Has this exact candidate build been proven for the root (goapiproof.EnablementProofStage)? A class root is
+//     admitted by its per-root receipt and by nothing else.
+//
+// A catalog operation has no routing state (query-api serves every registered operation), so this verb refuses it.
 
 import (
 	"context"
@@ -62,10 +49,9 @@ func runEnable(argv []string) error {
 	var dryRun bool
 	set.StringVar(&registryURL, "registry-url", "", "GET /registry on the DEPLOYED query-api (falls back to "+queryAPIURLEnvVar+"+\"/registry\")")
 	set.StringVar(&buildInfoURL, "buildinfo-url", "", "GET /buildinfo on the DEPLOYED query-api -- the ONLY source of the candidate build written (falls back to "+queryAPIURLEnvVar+"+\"/buildinfo\")")
-	common.bindPostgresURI(set, "domain Postgres DSN holding go_api_routing_state")
+	common.bindPostgresURI(set, "domain Postgres DSN holding go_api_class_decision")
 	set.StringVar(&allowExcluded, "allow-excluded", "", "MCP class roots only (CHAOS-7512): comma-separated OPERATION names whose excluded (unmeasured) shapes on a class receipt you accept. Default empty = refuse any class receipt that lists an excluded shape. A name counts only if the go-served ledger also holds an UNPROVEN named-limit entry for that operation")
-	set.StringVar(&common.operations, "operations", "all-registered", "comma-separated operation names, or 'all-registered' (default)")
-	set.StringVar(&common.catalogPath, "catalog", goapiproof.DefaultCatalogPath, "the edge's registered-document catalog -- what the Python dispatcher can map a request to")
+	set.StringVar(&common.operations, "operations", "", classOperationsUsage)
 	set.StringVar(&common.recordedBy, "recorded-by", "", "WHO is running this, recorded on every row touched (required)")
 	set.StringVar(&common.reviewEvidence, "review-evidence", "", "WHY, in your own words, recorded on every row touched (required)")
 	set.StringVar(&mode, "mode", "", "routing mode: canary or primary. Only these two make an operation reachable, so they are the only ones an 'enable' verb offers (required)")
@@ -106,29 +92,14 @@ func runEnable(argv []string) error {
 	if err != nil {
 		return err
 	}
-	scope, isClass, err := resolveClassScope(common.operations)
+	scope, err := requireClassScope("enable", common.operations)
 	if err != nil {
 		return err
 	}
-	var catalog, kinds map[string]string
-	var operations []string
-	if isClass {
-		// MCP class rows (CHAOS-7214): no catalog and no registered document. The
-		// root-field checks below and the per-root proof receipt stand in.
-		if err := requireClassRootsServed(scope.Operations); err != nil {
-			return err
-		}
-		operations, kinds = scope.Operations, classKinds(scope.Operations)
-	} else {
-		catalog, kinds, err = goapiproof.LoadOperationCatalogWithKinds(common.catalogPath)
-		if err != nil {
-			return refuse("%v -- refusing to enable anything on a catalog this process cannot read", err)
-		}
-		operations, err = goapiproof.ResolveOperations(common.operations, catalog)
-		if err != nil {
-			return refuse("%v", err)
-		}
+	if err := requireClassRootsServed(scope.Operations); err != nil {
+		return err
 	}
+	operations, kinds := scope.Operations, classKinds(scope.Operations)
 
 	ctx := context.Background()
 	client := httpClient(common.timeout)
@@ -193,54 +164,16 @@ func runEnable(argv []string) error {
 		return refuse("schema digest MISMATCH between planes.\n"+
 			"  this binary's embedded SDL: %s\n"+
 			"  running query-api (go)    : %s\n"+
-			"  Routing rows are keyed by schema_digest, so rows written now would be unreachable to the running binary -- the exact defect of 2026-09-01.\n"+
 			"  Rebuild and redeploy query-api from this SDL (and rebuild THIS binary from the same commit as the Python edge), THEN re-run.\n"+
 			"  See %s", local, registry.SchemaDigest, runbook)
 	}
 
-	// --- Preflight 3: does the binary register each operation, under the
-	// digest the edge's catalog carries? --------------------------------
-	documentDigests := registry.DocumentDigest
-	if isClass {
-		documentDigests = scope.Digests
-	} else {
-		var notRegistered, digestDivergent []string
-		for _, operation := range operations {
-			registered, ok := registry.DocumentDigest[operation]
-			if !ok {
-				notRegistered = append(notRegistered, operation)
-				continue
-			}
-			if registered != catalog[operation] {
-				digestDivergent = append(digestDivergent,
-					fmt.Sprintf("%s: catalog=%s go=%s", operation, catalog[operation], registered))
-			}
-		}
-		// `FetchRegistry`
-		// (internal/goapiproof/registry.go) REFUSES a /registry response
-		// that lists the same operation twice, matching the Python verb,
-		// rather than silently keeping the last one. This preflight's
-		// `registry.DocumentDigest` map can
-		// therefore never be decided by a malformed or tampered registry
-		// picking whichever duplicate the JSON decoder scanned last.
-		if len(notRegistered) > 0 {
-			return refuse("the running query-api does not register: %v. It serves %d operation(s); the catalog lists %d.\n"+
-				"  The deployed image is the authority -- an operation it does not serve cannot be enabled into it.",
-				notRegistered, len(registry.DocumentDigest), len(catalog))
-		}
-		if len(digestDivergent) > 0 {
-			return refuse("document digest MISMATCH for %d operation(s): %v.\n"+
-				"  The registered document text differs between the edge's catalog and the deployed binary; a row written with the catalog's digest would never be looked up.\n"+
-				"  Regenerate the catalog (scripts/go_api/generate_operation_catalog.py) against the deployed revision, or redeploy.",
-				len(digestDivergent), digestDivergent)
-		}
-
-	}
+	documentDigests := scope.Digests
 	// The build is READ, never typed. -expect-build can only FAIL a run.
 	running, err := goapiproof.FetchBuildIdentity(ctx, client, buildInfoURL, credential)
 	if err != nil {
 		if errors.Is(err, goapiproof.ErrNoBuildIdentity) {
-			return refuse("%v\n  the deployed query-api must identify its build at %s before any row can be pointed at it", err, goapiproof.EndpointLabelWithPort(buildInfoURL))
+			return refuse("%v\n  the deployed query-api must identify its build at %s before any decision can be pointed at it", err, goapiproof.EndpointLabelWithPort(buildInfoURL))
 		}
 		return refuse("%v", err)
 	}
@@ -298,21 +231,11 @@ func runEnable(argv []string) error {
 		return classifyWriteError(err)
 	}
 
-	var namedLimit, catalogRule int
+	var namedLimit int
 	for _, outcome := range outcomes {
-		if outcome.CatalogRule {
-			catalogRule++
-			fmt.Fprintf(stderr,
-				"go_api_routing.enabled_catalog_rule operation=%s stage_evidence=none candidate_build=%s schema_digest=%s document_digest=%s mode=%s dry_run=%t\n",
-				outcome.Operation, running, registry.SchemaDigest, outcome.DocumentDigest, mode, dryRun)
-			continue
-		}
 		if !outcome.Proven {
 			namedLimit++
-			// One structured line PER ROW, not one per invocation: an
-			// operator (or a log search six weeks later) must be able to
-			// find WHICH operations were turned on without a proof run, not
-			// merely that some were.
+			// One structured line PER ROW: a log search must find WHICH roots were turned on without a proof run.
 			fmt.Fprintf(stderr,
 				"WARNING: go_api_routing.enabled_named_limit operation=%s stage_evidence=none named_limit_sha256=%s candidate_build=%s schema_digest=%s document_digest=%s mode=%s dry_run=%t\n",
 				outcome.Operation, goapiproof.NamedLimitDigest(outcome.NamedLimit), running, registry.SchemaDigest, outcome.DocumentDigest, mode, dryRun)
@@ -334,14 +257,11 @@ func runEnable(argv []string) error {
 		goapiproof.EndpointLabelWithPort(registryURL), goapiproof.EndpointLabelWithPort(buildInfoURL))
 	fmt.Fprintf(stdout, "go-api-routing: schema_digest=%s candidate_build=%s mode=%s rollout=%d dry_run=%t\n",
 		registry.SchemaDigest, running, mode, rollout, dryRun)
-	fmt.Fprintf(stdout, "go-api-routing: %s total=%d proven=%d named_limit=%d catalog_rule=%d\n",
-		verb, len(outcomes), len(outcomes)-namedLimit-catalogRule, namedLimit, catalogRule)
+	fmt.Fprintf(stdout, "go-api-routing: %s total=%d proven=%d named_limit=%d\n",
+		verb, len(outcomes), len(outcomes)-namedLimit, namedLimit)
 	for _, outcome := range outcomes {
 		flag := ""
-		switch {
-		case outcome.CatalogRule:
-			flag = "  (CATALOG-RULE)"
-		case !outcome.Proven:
+		if !outcome.Proven {
 			flag = "  (NAMED-LIMIT " + goapiproof.NamedLimitDigest(outcome.NamedLimit) + ")"
 		}
 		fmt.Fprintf(stdout, "go-api-routing:   %-24s mode=%-8s %-40s digest=%s%s\n", outcome.Operation, outcome.Mode, outcome.CandidateBuild, outcome.DocumentDigest, flag)
@@ -357,7 +277,7 @@ func runEnable(argv []string) error {
 			// no "(unknown)" case: a genuine read failure there
 			// aborts the whole enable rather than reaching this line at
 			// all.
-			modeBefore, buildBefore := "(no row)", "-"
+			modeBefore, buildBefore := "(no decision)", "-"
 			if outcome.HadRowBefore {
 				modeBefore, buildBefore = outcome.ModeBefore, outcome.CandidateBuildBefore
 			}

@@ -51,11 +51,11 @@ func trimNewline(text string) string {
 }
 
 // readyzOutcomeTotal reads devhealth_query_api_readyz_total for one outcome and check
-// from the test binary's one meter provider (registry_drift_telemetry_test.go).
+// from the test binary's one meter provider (main_test.go).
 func readyzOutcomeTotal(t *testing.T, outcome, check string) int64 {
 	t.Helper()
 	var collected metricdata.ResourceMetrics
-	if err := driftMeterReader.Collect(context.Background(), &collected); err != nil {
+	if err := testMeterReader.Collect(context.Background(), &collected); err != nil {
 		t.Fatal(err)
 	}
 	var total int64

@@ -374,9 +374,7 @@ def test_the_cut_stops_before_migrate_when_the_web_repin_fails(tmp_path: Path) -
     assert "STEP repin-web rc=3" in proc.stdout, proc.stdout
     assert proc.returncode == 1, (proc.returncode, proc.stdout)
     assert "cut stops: web re-pin failed rc=3" in proc.stdout
-    assert (
-        "STEP migrate" not in proc.stdout and "STEP routing-carry" not in proc.stdout
-    ), proc.stdout
+    assert "STEP migrate" not in proc.stdout, proc.stdout
 
 
 def test_the_cut_goes_on_to_migrate_when_the_web_repin_succeeds(tmp_path: Path) -> None:

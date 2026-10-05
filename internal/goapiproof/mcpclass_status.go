@@ -13,7 +13,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"sort"
 
 	"github.com/full-chaos/dev-health-ops/internal/mcpclass"
 )
@@ -62,40 +61,15 @@ func MCPClassStatusRows(ctx context.Context, db Querier, liveSchemaDigest string
 	if liveSchemaDigest == "" {
 		return nil, errors.New("goapiproof: cannot classify MCP class rows without a live schema digest")
 	}
-	rows, err := db.Query(ctx, `
-		SELECT schema_digest, document_digest, selected_operation, current_candidate_build, mode
-		  FROM public.go_api_routing_state
-		 WHERE left(selected_operation, `+fmt.Sprint(len(mcpclass.OperationPrefix))+`) = '`+mcpclass.OperationPrefix+`'`)
+	decisions, err := ReadClassDecisions(ctx, db)
 	if err != nil {
-		return nil, fmt.Errorf("goapiproof: read MCP class rows: %w", err)
+		return nil, err
 	}
-	type classRow struct{ schemaDigest, documentDigest, operation, build, mode string }
-	var all []classRow
-	for rows.Next() {
-		var row classRow
-		if err := rows.Scan(&row.schemaDigest, &row.documentDigest, &row.operation, &row.build, &row.mode); err != nil {
-			rows.Close()
-			return nil, fmt.Errorf("goapiproof: scan MCP class row: %w", err)
-		}
-		all = append(all, row)
-	}
-	rows.Close()
-	if err := rows.Err(); err != nil {
-		return nil, fmt.Errorf("goapiproof: read MCP class rows: %w", err)
-	}
-
 	classDigest := mcpclass.DocumentDigest()
+	type classRow struct{ build, mode string }
 	live := map[string]classRow{}
-	stale := map[string]map[string]bool{}
-	for _, row := range all {
-		if row.schemaDigest == liveSchemaDigest && row.documentDigest == classDigest {
-			live[row.operation] = row
-			continue
-		}
-		if stale[row.operation] == nil {
-			stale[row.operation] = map[string]bool{}
-		}
-		stale[row.operation][row.schemaDigest] = true
+	for operation, decision := range decisions {
+		live[operation] = classRow{build: decision.Build, mode: decision.Mode}
 	}
 
 	// Proof is read per (build): a row naming an older build must not borrow a
@@ -138,10 +112,6 @@ func MCPClassStatusRows(ctx context.Context, db Querier, liveSchemaDigest string
 	for _, root := range mcpclass.SortedRoots() {
 		operation := mcpclass.Operation(root)
 		status := MCPClassRootStatus{Root: root, Operation: operation, ServedByBinary: served[root]}
-		for digest := range stale[operation] {
-			status.StaleDigests = append(status.StaleDigests, digest)
-		}
-		sort.Strings(status.StaleDigests)
 		if row, ok := live[operation]; ok {
 			status.DigestState = DigestMatch
 			status.Mode = row.mode
@@ -152,8 +122,6 @@ func MCPClassStatusRows(ctx context.Context, db Querier, liveSchemaDigest string
 				status.ProofReference, status.ProofExecuted, status.ProofMatched, status.ProofExcluded = p.Reference, p.Executed, p.Matched, p.Excluded
 				status.ProofStochastic = p.Stochastic
 			}
-		} else if len(status.StaleDigests) > 0 {
-			status.DigestState = DigestStale
 		} else {
 			status.DigestState = DigestMissing
 		}

@@ -75,44 +75,16 @@ func (executor *TestopsRiskExecutor) ComputeFamily(
 		return 0, fmt.Errorf("%w: partition %s repo_ids: %v", ErrInvalidState, partition.ID, err)
 	}
 
-	// job_daily.py builds repo_team_resolver ONCE per run
-	// (build_repo_pattern_resolver(teams_data)) and passes it into every
-	// family's compute call, testops included. Reuse the identical
-	// LoadWellbeingTeams/NewRepoPatternResolver this package already built
-	// for team_wellbeing (CHAOS-4276) rather than a second implementation of
-	// the same query+resolver -- codex adversarial review round 1
-	// (CHAOS-4294) caught that testops_risk had NO team resolution at all in
-	// an earlier revision, silently dropping every repo-pattern-derived
-	// team_id to nil.
-	teams, err := LoadWellbeingTeams(ctx, executor.conn, run.OrganizationID)
+	// TestOps rows use the repository's one authoritative owner, as of the
+	// end of the target day. This is the same resolver the native
+	// pipeline/test/coverage executors use (CHAOS-8512).
+	day := chDate(run.TargetDay)
+	end := day.Add(24 * time.Hour)
+	repoResolver, err := loadTestopsRepoOwnerResolver(ctx, executor.conn, run.OrganizationID, end)
 	if err != nil {
 		return 0, err
 	}
-	repoResolver := NewRepoPatternResolver(teams)
-
-	// repoName is DELIBERATELY the repo_id string, not the real synced repo
-	// name -- codex round 2 (P2, ARGUED then verified by direct code read)
-	// caught that the live bridge call site (worker_metrics.py:1749-1760)
-	// never passes repo_name to run_daily_metrics_job, so
-	// discover_repos(repo_id=repo_id, repo_name=None, ...) falls back to
-	// `full_name = repo_name or str(repo_id)` (job_daily.py:135) -- in
-	// PRODUCTION, repo_names_by_id[repo_id] IS the stringified UUID, never
-	// the real "org/repo" name, so repo_team_resolver.resolve(...) can never
-	// match a real pattern for THIS call path and the repo-pattern fallback
-	// is a live no-op. Loading the real name here (as an earlier revision
-	// did, via LoadRepoNames -- the same call TeamWellbeingExecutor makes)
-	// would make Go MORE accurate than live Python, not row-identical to
-	// it -- exactly the kind of "improvement" the standing rule forbids
-	// (reproduce Python's behavior, including its latent defects, don't fix
-	// them here; team-lead ruling 2026-09-01 on the pipeline_stability
-	// rolling-window issue applies identically to this one). Note: this
-	// means TeamWellbeingExecutor likely has the SAME divergence from live
-	// Python today -- flagged to team-lead, out of this ticket's scope to
-	// fix.
-
-	day := chDate(run.TargetDay)
 	start := day
-	end := start.Add(24 * time.Hour)
 	historyStart := day.AddDate(0, 0, -29)
 	priorCoverageStart := day.AddDate(0, 0, -30)
 	computedAt := executor.nowUTC()

@@ -1,9 +1,9 @@
 // Package mcpclass is the ONE home of the facts that define the MCP caller
-// class's routing rows (CHAOS-7085 listener, CHAOS-7214 routing verbs).
+// class's routing decisions (CHAOS-7085 listener, CHAOS-7214 routing verbs).
 //
-// The listener (internal/queryapi/server) reads a class row per root field
-// from go_api_routing_state; the routing verbs (internal/goapicli/routing,
-// internal/goapiproof) write, carry, repoint and prove them. Both sides
+// The listener (internal/queryapi/server) reads a class decision per root field
+// from go_api_class_decision; the routing verbs (internal/goapicli/routing,
+// internal/goapiproof) write, repoint and prove them. Both sides
 // import these definitions, so the key the verbs write is by construction
 // the key the listener reads.
 //

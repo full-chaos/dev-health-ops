@@ -3,6 +3,7 @@ package providersync
 import (
 	"context"
 	"encoding/json"
+	"log/slog"
 	"net/http"
 	"net/url"
 	"os"
@@ -85,6 +86,7 @@ query LinearWorkItems($first: Int!, $after: String, $filter: IssueFilter) {
       relations(first: 50) {
         nodes {
           type
+          createdAt
           issue { identifier }
           relatedIssue { identifier }
         }
@@ -93,6 +95,7 @@ query LinearWorkItems($first: Int!, $after: String, $filter: IssueFilter) {
       inverseRelations(first: 50) {
         nodes {
           type
+          createdAt
           issue { identifier }
           relatedIssue { identifier }
         }
@@ -136,7 +139,7 @@ const linearWorkItemsRelationsQuery = `
 query LinearWorkItemsRelations($first: Int!, $after: String, $issueId: String!) {
   issue(id: $issueId) {
     relations(first: $first, after: $after) {
-      nodes { type issue { identifier } relatedIssue { identifier } }
+      nodes { type createdAt issue { identifier } relatedIssue { identifier } }
       pageInfo { hasNextPage endCursor }
     }
   }
@@ -178,7 +181,7 @@ const linearWorkItemsInverseRelationsQuery = `
 query LinearWorkItemsInverseRelations($first: Int!, $after: String, $issueId: String!) {
   issue(id: $issueId) {
     inverseRelations(first: $first, after: $after) {
-      nodes { type issue { identifier } relatedIssue { identifier } }
+      nodes { type createdAt issue { identifier } relatedIssue { identifier } }
       pageInfo { hasNextPage endCursor }
     }
   }
@@ -302,7 +305,10 @@ type linearRelationIssuePayload struct {
 }
 
 type linearRelationPayload struct {
-	Type         string                      `json:"type"`
+	Type string `json:"type"`
+	// CreatedAt is when the relation was made at linear: the relation's
+	// start (CHAOS-8578).
+	CreatedAt    *string                     `json:"createdAt"`
 	Issue        *linearRelationIssuePayload `json:"issue"`
 	RelatedIssue *linearRelationIssuePayload `json:"relatedIssue"`
 }
@@ -899,43 +905,51 @@ func validateLinearSprint(row linearSprintRow, claim Claim) error {
 }
 
 func linearTrustedSCMHosts() map[string]struct{} {
-	hosts := map[string]struct{}{
-		"github.com": {}, "www.github.com": {},
-		"gitlab.com": {}, "www.gitlab.com": {},
-	}
-	for _, value := range strings.Split(os.Getenv("LINEAR_TRUSTED_SCM_HOSTS"), ",") {
-		if host := strings.ToLower(strings.TrimSpace(value)); host != "" {
-			hosts[host] = struct{}{}
-		}
-	}
+	hosts, _ := linearTrustedSCMHostsAndRoots()
 	return hosts
 }
 
+func linearTrustedSCMHostsAndRoots() (map[string]struct{}, map[string][]string) {
+	return parseTrustedSCMHostEntries(os.Getenv("LINEAR_TRUSTED_SCM_HOSTS"),
+		"github.com", "www.github.com", "gitlab.com", "www.gitlab.com")
+}
+
 func linearAttachmentWorkItemID(attachment linearAttachmentPayload) string {
+	source, _ := linearAttachmentSource(attachment)
+	return source
+}
+
+// linearAttachmentSource is linearAttachmentWorkItemID that also reports a GitLab merge-request URL whose project path or
+// number fails parseGitLabReference (rejected): not written, not counted as synced.
+func linearAttachmentSource(attachment linearAttachmentPayload) (source string, rejected bool) {
 	sourceType := strings.ToLower(attachment.SourceType)
 	if !strings.Contains(sourceType, "github") && !strings.Contains(sourceType, "gitlab") {
-		return ""
+		return "", false
 	}
 	parsed, err := url.Parse(attachment.URL)
 	if err != nil || parsed.Host == "" || parsed.User != nil {
-		return ""
+		return "", false
 	}
 	// Python's `_trusted_scm_hosts` compares urlsplit(...).netloc exactly.  Use
 	// URL.Host (including an explicit port) and reject userinfo so a URL that
 	// merely has a trusted hostname does not widen the Python allowlist.
-	if _, ok := linearTrustedSCMHosts()[strings.ToLower(parsed.Host)]; !ok {
-		return ""
+	hosts, roots := linearTrustedSCMHostsAndRoots()
+	if _, ok := hosts[strings.ToLower(parsed.Host)]; !ok {
+		return "", false
 	}
-	parts := strings.Split(strings.Trim(parsed.Path, "/"), "/")
+	parts, ok := stripSCMURLRoot(roots, parsed.Host, strings.Split(strings.Trim(parsed.Path, "/"), "/"))
+	if !ok {
+		return "", false
+	}
 	if strings.Contains(sourceType, "github") && len(parts) >= 4 &&
 		parts[len(parts)-2] == "pull" {
-		return "ghpr:" + strings.Join(parts[:len(parts)-2], "/") + "#" + parts[len(parts)-1]
+		return "ghpr:" + strings.Join(parts[:len(parts)-2], "/") + "#" + parts[len(parts)-1], false
 	}
 	if strings.Contains(sourceType, "gitlab") && len(parts) >= 4 &&
 		parts[len(parts)-2] == "merge_requests" && parts[len(parts)-3] == "-" {
-		return "gitlab:" + strings.Join(parts[:len(parts)-3], "/") + "!" + parts[len(parts)-1]
+		return gitlabMergeRequestSourceID(strings.Join(parts[:len(parts)-3], "/"), parts[len(parts)-1])
 	}
-	return ""
+	return "", false
 }
 
 func normalizeLinearDependencies(
@@ -946,7 +960,7 @@ func normalizeLinearDependencies(
 ) []linearWorkItemDependencyRow {
 	rows := make([]linearWorkItemDependencyRow, 0)
 	seen := make(map[string]struct{})
-	appendRow := func(source, target, relationType, relationRaw string) {
+	appendRow := func(source, target, relationType, relationRaw string, startedAt *time.Time) {
 		if source == "" || target == "" || relationType == "" {
 			return
 		}
@@ -960,11 +974,17 @@ func normalizeLinearDependencies(
 			RelationshipType: relationType, RelationshipTypeRaw: relationRaw,
 			RelationshipSemanticsVersion: "canonical-blocks.v2",
 			LastSynced:                   normalizedAt.UTC(), OrgID: claim.OrgID,
+			RelationStartedAt: startedAt,
 		})
 	}
 	for _, attachment := range payload.Attachments.Nodes {
-		if source := linearAttachmentWorkItemID(attachment); source != "" {
-			appendRow(source, workItemID, "relates_to", "linear_attachment")
+		source, rejected := linearAttachmentSource(attachment)
+		if rejected {
+			slog.Warn("providersync.linear.attachment_gitlab_reference_rejected", "org_id", claim.OrgID, "issue", workItemID)
+			continue
+		}
+		if source != "" {
+			appendRow(source, workItemID, "relates_to", "linear_attachment", nil)
 		}
 	}
 	for _, relations := range []linearRelationsPayload{payload.Relations, payload.InverseRelations} {
@@ -987,7 +1007,8 @@ func normalizeLinearDependencies(
 			default:
 				continue
 			}
-			appendRow(source, target, relationType, "linear_relation:"+strings.ToLower(strings.TrimSpace(relation.Type)))
+			// The provider's own time of the link (CHAOS-8578).
+			appendRow(source, target, relationType, "linear_relation:"+strings.ToLower(strings.TrimSpace(relation.Type)), parseLinearTimePtr(relation.CreatedAt))
 		}
 	}
 	return rows

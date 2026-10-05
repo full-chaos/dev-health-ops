@@ -6,7 +6,7 @@
 // EXACT SAME digest a running query-api process would, by importing it
 // instead of re-typing the algorithm in a different binary and hoping the
 // two copies never drift. PR2 added Schema for the same reason one level
-// up: a running process (its PostgresSwitch routing key,
+// up: a running process (its schema digest,
 // query_route.go's buildQueryRoute) and registrydump's schema-digest
 // producer must compute the canonical value from the same function.
 //

@@ -69,3 +69,36 @@ func TestCredentialsRedactAPIKey(t *testing.T) {
 		t.Fatal("APIKey field value changed")
 	}
 }
+
+// A map prints its entries through an unexported field, so only a top-level
+// print of orgSettings is guarded; the test pins that.
+func TestOrgSettingsRedactAPIKey(t *testing.T) {
+	settings := orgSettings{keyAPIKey: llmKeySentinel, keyProvider: "openai"}
+	for _, verb := range []string{"%v", "%+v", "%#v", "%s", "%q"} {
+		for name, subject := range map[string]any{"value": settings, "slice": []any{settings}} {
+			out := fmt.Sprintf(verb, subject)
+			if strings.Contains(out, llmKeySentinel) || !strings.Contains(out, "[REDACTED]") || !strings.Contains(out, "openai") {
+				t.Errorf("%s %s: %s", name, verb, out)
+			}
+		}
+	}
+	for _, newHandler := range []func(*bytes.Buffer) slog.Handler{
+		func(b *bytes.Buffer) slog.Handler { return slog.NewTextHandler(b, nil) },
+		func(b *bytes.Buffer) slog.Handler { return slog.NewJSONHandler(b, nil) },
+	} {
+		var anyBuf, groupBuf bytes.Buffer
+		slog.New(newHandler(&anyBuf)).Info("m", slog.Any("s", settings))
+		slog.New(newHandler(&groupBuf)).Info("m", slog.Group("g", slog.Any("s", settings)))
+		for _, out := range []string{anyBuf.String(), groupBuf.String()} {
+			if strings.Contains(out, llmKeySentinel) || !strings.Contains(out, "REDACTED") {
+				t.Errorf("slog output: %s", out)
+			}
+		}
+	}
+	if settings[keyAPIKey] != llmKeySentinel {
+		t.Fatal("the stored value changed")
+	}
+	if got := fmt.Sprint(orgSettings{keyProvider: "openai"}); strings.Contains(got, "REDACTED") {
+		t.Errorf("no api_key row, yet a marker: %s", got)
+	}
+}

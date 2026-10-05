@@ -6,13 +6,9 @@ script, unmodified, running end to end inside that sandbox instead of the real b
 tree. `docker` and `gh` are stubbed on PATH (the only externals this test replaces); `jq`,
 `sed`, `grep`, and every other tool the scripts call is the real system binary.
 
-r3's own mutation (`exit 0` inserted immediately before the carry block) is exactly the class
-this file exists to catch: a suite that only ever runs the extracted carry block cannot see a
-defect in anything BEFORE that block, including the reachability question itself. Running the
-real entry point end to end, with `docker` controlled per test case for the ONE
-routing-carry/routing-repoint call this module cares about and canned-success for everything
-else (image waits, digest resolution, repin), proves reachability AND the one-function success
-rule (`routing_call_succeeded`, D2886 condition 1) together, against the real script text.
+Running the real entry point end to end, with `docker` canned-success for everything (image waits,
+digest resolution, repin), proves the script's start-up guards against the real script text. The
+pre-roll routing carry step is gone (CHAOS-8704): query-api reads no routing row to serve.
 """
 
 from __future__ import annotations
@@ -121,28 +117,6 @@ def _gh_stub(stub_bin: Path) -> None:
     )
 
 
-def _run_entry_point(
-    tmp_path: Path, *, routing_response: str, routing_rc: int, timeout: float = 60
-) -> subprocess.CompletedProcess[str]:
-    root = _build_bigboy_root(tmp_path)
-    stub_bin = tmp_path / "stubbin"
-    stub_bin.mkdir()
-    _docker_stub(stub_bin, routing_response=routing_response, routing_rc=routing_rc)
-    _gh_stub(stub_bin)
-    env = {
-        "PATH": f"{stub_bin}:/usr/bin:/bin",
-        "BIGBOY_ROOT": str(root),
-    }
-    return subprocess.run(
-        ["bash", str(CUT), _OLD8, _NEW],
-        capture_output=True,
-        text=True,
-        timeout=timeout,
-        check=False,
-        env=env,
-    )
-
-
 def _routing_json(reason: str) -> str:
     return "GOAPI_ROUTING_JSON " + json.dumps({"reason": reason})
 
@@ -165,72 +139,6 @@ def test_root_is_printed_and_layout_is_verified(tmp_path: Path) -> None:
     )
     assert f"BIGBOY_ROOT={root}" in proc.stderr, (
         f"the refusal must name the resolved root -- stderr={proc.stderr!r}"
-    )
-
-
-def test_real_zero_exit_no_json_aborts_from_the_real_entry_point(
-    tmp_path: Path,
-) -> None:
-    """r3 P1, driven through the real entry point this time: a docker/compose-layer zero exit
-    with no GOAPI_ROUTING_JSON line at all must abort before migrate, never reach it."""
-    proc = _run_entry_point(tmp_path, routing_response="", routing_rc=0)
-    assert proc.returncode != 0, f"stdout={proc.stdout!r} stderr={proc.stderr!r}"
-    assert "STEP routing-carry rc=1" in proc.stdout, proc.stdout
-    assert _MIGRATE_STEP not in proc.stdout, proc.stdout
-
-
-def test_real_zero_exit_malformed_json_aborts_from_the_real_entry_point(
-    tmp_path: Path,
-) -> None:
-    """Same class: the exit code is 0 but the JSON line does not parse."""
-    proc = _run_entry_point(
-        tmp_path, routing_response="GOAPI_ROUTING_JSON {not valid json", routing_rc=0
-    )
-    assert proc.returncode != 0, f"stdout={proc.stdout!r} stderr={proc.stderr!r}"
-    assert "STEP routing-carry rc=1" in proc.stdout, proc.stdout
-
-
-def test_real_zero_exit_unknown_reason_aborts_from_the_real_entry_point(
-    tmp_path: Path,
-) -> None:
-    """The exit code is 0, the JSON parses, but the reason is not one carry ever emits."""
-    proc = _run_entry_point(
-        tmp_path, routing_response=_routing_json("something_new"), routing_rc=0
-    )
-    assert proc.returncode != 0, f"stdout={proc.stdout!r} stderr={proc.stderr!r}"
-    assert "STEP routing-carry rc=1" in proc.stdout, proc.stdout
-
-
-def test_real_zero_exit_empty_reason_aborts_from_the_real_entry_point(
-    tmp_path: Path,
-) -> None:
-    """The exit code is 0, the JSON parses, but the reason field is present and empty."""
-    proc = _run_entry_point(tmp_path, routing_response=_routing_json(""), routing_rc=0)
-    assert proc.returncode != 0, f"stdout={proc.stdout!r} stderr={proc.stderr!r}"
-    assert "STEP routing-carry rc=1" in proc.stdout, proc.stdout
-
-
-def test_real_nonzero_exit_with_carried_reason_still_aborts(tmp_path: Path) -> None:
-    """The other half of the rule: exit code alone cannot rescue a nonzero exit even if a
-    `carried` reason string is somehow present in the captured output -- rc must be 0 too."""
-    proc = _run_entry_point(
-        tmp_path, routing_response=_routing_json("carried"), routing_rc=1
-    )
-    assert proc.returncode != 0, f"stdout={proc.stdout!r} stderr={proc.stderr!r}"
-    assert "STEP routing-carry rc=1" in proc.stdout, proc.stdout
-
-
-def test_real_carried_reaches_past_the_carry_block(tmp_path: Path) -> None:
-    """The success case: exit 0 AND a `carried` reason must reach the step after carry. The
-    migrate STEP itself is made to fail (rc=9) by the docker stub -- irrelevant here (bigboy-
-    cut.sh does not gate on migrate's own exit code), it only bounds this test's runtime; the
-    assertion is on REACHING that STEP at all, printed by the script's own unredirected `st()`."""
-    proc = _run_entry_point(
-        tmp_path, routing_response=_routing_json("carried"), routing_rc=0, timeout=120
-    )
-    assert "STEP routing-carry rc=0" in proc.stdout, proc.stdout
-    assert _MIGRATE_STEP in proc.stdout, (
-        f"a real carry success must reach the migrate step -- stdout={proc.stdout!r} stderr={proc.stderr!r}"
     )
 
 

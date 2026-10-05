@@ -415,8 +415,8 @@ func TestTheClassRowSwitchIsBuiltByOneConstructorThatDoesNotAdmitShadowRows(t *t
 	}
 	body := string(gate)[start:]
 	body = body[:strings.Index(body, "\n}\n")]
-	if !strings.Contains(body, "return routeswitch.NewPostgresSwitch(pool, schemaDigest, mcpRoutingDigests())") || strings.Contains(body, "NewProofSwitch") {
-		t.Fatal("newClassRowSwitch is not the canary/primary-only PostgresSwitch")
+	if !strings.Contains(body, "return routeswitch.NewClassSwitch(pool, schemaDigest, mcpRoutingDigests())") || strings.Contains(body, "NewProofSwitch") {
+		t.Fatal("newClassRowSwitch is not the ClassSwitch")
 	}
 }
 

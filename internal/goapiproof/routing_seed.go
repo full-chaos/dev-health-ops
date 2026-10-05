@@ -325,7 +325,7 @@ func classifySeed(rows []seedStateRow, request SeedRequest, operation, documentD
 		outcome.Reason = "shadow row already at the running schema digest"
 	case len(others) > 0:
 		outcome.Action = SeedActionRefused
-		outcome.Reason = fmt.Sprintf("a row exists only at an older schema digest (%v); run routing carry instead", others)
+		outcome.Reason = fmt.Sprintf("a row exists only at an older schema digest (%v); that row still decides the root at any schema digest, so nothing is seeded", others)
 	default:
 		return outcome, false
 	}

@@ -8,9 +8,9 @@
 # mode. The prover refuses, by name, if a Python plane answers there. `--go-edge` is still
 # accepted and means the same.
 #
-# `dho goapi routing enable` refuses an operation that has no deployed_executed proof
-# receipt for the RUNNING build (prod's receipts do not count on bigboy). This runs the
-# same proof prod's STEP 216 runs (pod-r216.sh lineage), on the compose stack:
+# This runs the same proof prod's STEP 216 runs (pod-r216.sh lineage), on the compose stack. No
+# `enable` step follows it any more: query-api serves every catalog operation without a routing
+# row (CHAOS-8702), and `enable` takes MCP class rows only:
 #
 #   1. refuse unless venue-prove's tools image IS the go-api-tools image of <sha>
 #      (prover_build_skew would refuse later; this names the cause first);
@@ -21,8 +21,6 @@
 #      loaded from the mounted key file into the process env inside the container, the
 #      edge-token key comes from compose substitution (compose.bigboy.prove.yml). No
 #      credential is printed, written to a file, or put on argv;
-#   3. `dho goapi routing enable` for each KNOWN-MISSING operation in routing-ops.txt
-#      (default) or ENABLE_OPS, one at a time, no waiver (there is none).
 #
 # The local org id is derived at run time from Postgres (the single org of the local
 # admin account, read-only) and never printed. Full prove output (it names the org) stays
@@ -86,15 +84,6 @@ docker compose "${BASE[@]}" -f "$HERE/compose.bigboy.prove.yml" run --rm --no-de
    -report /proof/prove-report.json" > "$OUT/prove.out" 2>&1
 rc=$?; st prove $rc; [ $rc = 0 ] || fail=1
 grep -E 'edge_mode=|attempted=|PROVEN_GO_ONLY|terminal_state|refused ' "$OUT/prove.out" | sed 's/org=[^ ]*/org=<local>/' | head -20
-
-# 4. enable the known-missing operations, one at a time
-OPS=${ENABLE_OPS:-$(awk '!/^#/ && $2=="KNOWN-MISSING"{print $1}' "$HERE/routing-ops.txt")}
-for op in $OPS; do
-  vt "GO_API_ROUTING_BEARER=\$(dho mint envelope -org \"\$PROVE_ORG\" -key-file /keys/envelope.pem) dho goapi routing enable -catalog /catalog.json $U \
-      -expect-build $NEW -operations $op -mode canary -recorded-by bigboy-graphql-prove \
-      -review-evidence 'CHAOS-6993: $op proven by the bigboy deployed_executed receipt at build $NEW'" > "$OUT/enable-$op.out" 2>&1
-  rc=$?; st "enable:$op" $rc; [ $rc = 0 ] || { fail=1; tail -3 "$OUT/enable-$op.out" | sed 's/org=[^ ]*/org=<local>/'; }
-done
 
 echo "records: $OUT"
 exit $fail

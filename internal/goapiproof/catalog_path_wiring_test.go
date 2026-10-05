@@ -12,7 +12,7 @@ import (
 // The catalog is read by path at run time, from four places that must agree:
 // DefaultCatalogPath (the Go default, relative to the working directory), the
 // tools image (docker/go-api-tools.Dockerfile copies the file under its WORKDIR
-// so the chart's routing carry/repoint hooks need no -catalog flag), the bigboy
+// so a run in that image needs no -catalog flag), the bigboy
 // scripts (an absolute in-image path, and a fetch of the file from GitHub at a
 // sha), and the repo itself. A path that no longer resolves in the tree, or two
 // spellings that drifted apart, turns this red -- not a hook on a roll.
@@ -109,18 +109,3 @@ func TestEveryCatalogPathNamedByScriptsAndChartAgreesWithTheDefault(t *testing.T
 	}
 }
 
-// The routing carry/repoint hooks pass no -catalog and rely on the image's
-// WORKDIR. A workingDir override would silently break the relative default.
-func TestRoutingHooksRelyOnTheImageWorkdir(t *testing.T) {
-	root := repoRootFromTest(t)
-	hooks := readFileAtRoot(t, root, "deploy/helm/dev-health/templates/routing-carry-hooks.yaml")
-	if !strings.Contains(hooks, "dho goapi routing carry") {
-		t.Fatal("routing-carry-hooks.yaml no longer runs `dho goapi routing carry`: this guard measures nothing")
-	}
-	if strings.Contains(hooks, "workingDir:") {
-		t.Error("routing-carry-hooks.yaml sets workingDir: the hooks' relative DefaultCatalogPath would not resolve")
-	}
-	if strings.Contains(hooks, "-catalog") {
-		t.Error("routing-carry-hooks.yaml passes -catalog: it must then agree with the image path; extend this guard")
-	}
-}

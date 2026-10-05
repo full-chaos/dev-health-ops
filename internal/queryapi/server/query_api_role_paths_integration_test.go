@@ -3,11 +3,9 @@
 package server
 
 import (
-	"bytes"
 	"context"
 	"errors"
 	"fmt"
-	"log"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -336,17 +334,6 @@ func (f *queryAPIRoleFixture) driveEveryPathCollecting(t *testing.T, ctx context
 			`SELECT mode FROM go_api_routing_state WHERE schema_digest = $1 AND document_digest = $2 AND selected_operation = $3`,
 			pathsSchema, pathsDocument, pathsOp).Scan(&mode))
 	}
-	var logged bytes.Buffer
-	previous := log.Writer()
-	log.SetOutput(&logged)
-	logRoutingStateDrift(pool, pathsSchema)
-	log.SetOutput(previous)
-	if strings.Contains(logged.String(), "failed") {
-		var pgErr error
-		_, pgErr = pool.Exec(ctx, `SELECT schema_digest, count(*) FROM go_api_routing_state GROUP BY schema_digest`)
-		fail("registry drift", pgErr)
-	}
-
 	// Saved reports: every mutation, then every read.
 	writer := newReportWriter(pool, filepath.Join(repoRootFromHere(t), "contracts", "jobs", "v1"))
 	if writer == nil || writer.Outbox == nil {

@@ -3562,7 +3562,6 @@ func newQueryHandler(chClient featureflags.QueryClient, pgPool *pgxpool.Pool, ve
 	// That is the same by-construction discipline mountedRouteLogMessage
 	// above exists to enforce, applied to the two surfaces an operator
 	// uses to answer "is anything actually enabled?".
-	logRoutingStateDrift(pgPool, schemaDigest)
 	registryHandler := newRegistryHandler(schemaDigest, digestByOperation)
 	// CHAOS-8702: the serving switch reads no routing row -- a registered operation is served
 	// (routeswitch/catalog_switch.go). The proof switch below and the class-row switch

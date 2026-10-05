@@ -27,6 +27,7 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/queryapi/internalidentity"
 	"github.com/full-chaos/dev-health-ops/internal/queryapi/principal"
 	"github.com/full-chaos/dev-health-ops/internal/queryapi/routeswitch"
+	"github.com/full-chaos/dev-health-ops/internal/testsupport/pgseed"
 )
 
 const (
@@ -79,7 +80,7 @@ func classEnable(pool *pgxpool.Pool, operations ...string) ([]goapiproof.EnableO
 func classListener(t *testing.T, pool *pgxpool.Pool) (http.Handler, *countingMCPClient) {
 	t.Helper()
 	ch := &countingMCPClient{}
-	sw := routeswitch.NewPostgresSwitch(pool, classTestSchema, mcpRoutingDigests())
+	sw := routeswitch.NewClassSwitch(pool, classTestSchema, mcpRoutingDigests())
 	getenv := getenvFunc(func(string) string { return "" })
 	return internalidentity.MCP(newMCPHandlerWithLimits(ch, nil, sw, getenv, mcpDefaultLimits())), ch
 }
@@ -127,20 +128,43 @@ func TestMCPClassRowServesOnlyAfterSeedProofAndEnable(t *testing.T) {
 	}
 }
 
-// A stale-digest row is not served: a row at another schema digest is invisible
-// to a listener that computes this one.
-func TestMCPClassRowAtAnotherSchemaDigestIsNotServed(t *testing.T) {
+// CHAOS-8704 (owner ruling D4789): a class row at another schema digest is served. The listener that
+// computes a different digest than the row's still lights the root; no carry has to move the row.
+func TestMCPClassRowAtAnotherSchemaDigestIsServed(t *testing.T) {
 	pool := startTestRegistryPostgres(t)
-	hotspots := mcpclass.Operation("hotspots")
-	classSeed(t, pool, hotspots)
-	classReceipt(t, pool, hotspots, goapiproof.RouteProof, goapiproof.EdgeBuildPresent)
-	if _, err := classEnable(pool, hotspots); err != nil {
-		t.Fatal(err)
+	classEnabled(t, pool, "hotspots")
+	if !classServedAt(t, pool, "sha256:"+strings.Repeat("c", 64)) {
+		t.Fatal("a canary class row at another schema digest does not serve the root")
 	}
-	ch := &countingMCPClient{}
-	moved := routeswitch.NewPostgresSwitch(pool, "sha256:"+strings.Repeat("c", 64), mcpRoutingDigests())
-	listener := internalidentity.MCP(newMCPHandlerWithLimits(ch, nil, moved, getenvFunc(func(string) string { return "" }), mcpDefaultLimits()))
-	assertMCPRefused(t, classHotspots(t, listener), ch, http.StatusNotFound, mcpReasonRootFieldNotEnabled)
+}
+
+// The other three states stay dark: no class row at any digest, a non-served mode at another digest,
+// and a non-served row at the LIVE digest over an older canary row (the live digest decides first, so
+// `disable` still darks a root).
+func TestMCPClassRowStatesThatStayDark(t *testing.T) {
+	const moved = "sha256:7214-moved-schema-digest"
+	hotspots := mcpclass.Operation("hotspots")
+	t.Run("no class row", func(t *testing.T) {
+		pool := startTestRegistryPostgres(t)
+		if classServedAt(t, pool, moved) {
+			t.Fatal("a root with no class row is served")
+		}
+	})
+	t.Run("a python row at another digest", func(t *testing.T) {
+		pool := startTestRegistryPostgres(t)
+		pgseed.RoutingState(t.Context(), t, pool, classTestSchema, mcpclass.DocumentDigest(), hotspots, "python")
+		if classServedAt(t, pool, moved) {
+			t.Fatal("a python class row at another digest serves the root")
+		}
+	})
+	t.Run("a live shadow row over an older canary row", func(t *testing.T) {
+		pool := startTestRegistryPostgres(t)
+		pgseed.RoutingState(t.Context(), t, pool, "sha256:an-older-digest", mcpclass.DocumentDigest(), hotspots, "canary")
+		pgseed.RoutingState(t.Context(), t, pool, moved, mcpclass.DocumentDigest(), hotspots, "shadow")
+		if classServedAt(t, pool, moved) {
+			t.Fatal("the live digest's shadow row did not dark the root over an older canary row")
+		}
+	})
 }
 
 // Enable admits a class root by its class receipt in BOTH directions' terms: a
@@ -263,70 +287,10 @@ func classEnabled(t *testing.T, pool *pgxpool.Pool, root string) {
 func classServedAt(t *testing.T, pool *pgxpool.Pool, schemaDigest string) bool {
 	t.Helper()
 	ch := &countingMCPClient{}
-	sw := routeswitch.NewPostgresSwitch(pool, schemaDigest, mcpRoutingDigests())
+	sw := routeswitch.NewClassSwitch(pool, schemaDigest, mcpRoutingDigests())
 	listener := internalidentity.MCP(newMCPHandlerWithLimits(ch, nil, sw, getenvFunc(func(string) string { return "" }), mcpDefaultLimits()))
 	rec := classHotspots(t, listener)
 	return rec.Code == http.StatusOK
-}
-
-func classCarryRequest(roots map[string]bool) goapiproof.CarryRequest {
-	const movedDigest = "sha256:7214-moved-schema-digest"
-	// The documents are unchanged in the image being rolled to; the class rows
-	// are NOT in any of these maps, because they have no registered document.
-	documents := map[string]string{"featureFlags": "sha256:" + strings.Repeat("a", 64)}
-	return goapiproof.CarryRequest{
-		LiveSchemaDigest: classTestSchema, TargetSchemaDigest: movedDigest, RunningBuild: classTestBuild,
-		RecordedBy: "test", ReviewEvidence: "digest move", PrincipalID: "test-principal",
-		Inputs: goapiproof.CarryInputs{
-			LiveDocumentDigest: documents, TargetDocumentDigest: documents, CatalogDocumentDigest: documents,
-			MCPRoots: roots,
-		},
-	}
-}
-
-// The class must not go dark on a schema digest move: carry copies the class
-// rows to the digest the new image computes, and the listener's reader at THAT
-// digest serves what it served before the move.
-func TestMCPClassRowsSurviveASchemaDigestMove(t *testing.T) {
-	pool := startTestRegistryPostgres(t)
-	classEnabled(t, pool, "hotspots")
-	if !classServedAt(t, pool, classTestSchema) {
-		t.Fatal("precondition: the enabled root is served at the live digest")
-	}
-	request := classCarryRequest(map[string]bool{"hotspots": true})
-	if classServedAt(t, pool, request.TargetSchemaDigest) {
-		t.Fatal("precondition: nothing is served at the new digest before the carry")
-	}
-	if _, err := goapiproof.Carry(t.Context(), pool, request); err != nil {
-		t.Fatalf("carry: %v", err)
-	}
-	if !classServedAt(t, pool, request.TargetSchemaDigest) {
-		t.Fatal("after the carry the class root is dark at the new digest: the digest move un-routed the MCP class")
-	}
-	if !classServedAt(t, pool, classTestSchema) {
-		t.Fatal("the carry changed the live digest's row: a rollback would find it different")
-	}
-}
-
-// A class row whose root the target image no longer serves is refused by name,
-// never skipped (a skip is the dark failure) and never carried (a dead row).
-func TestMCPClassCarryRefusesARootTheTargetImageNoLongerServes(t *testing.T) {
-	pool := startTestRegistryPostgres(t)
-	classEnabled(t, pool, "hotspots")
-	for name, roots := range map[string]map[string]bool{
-		"root removed from the allowlist or SDL": {"analytics": true},
-		"root set not computed":                  nil,
-	} {
-		t.Run(name, func(t *testing.T) {
-			request := classCarryRequest(roots)
-			if _, err := goapiproof.Carry(t.Context(), pool, request); err == nil || !strings.Contains(err.Error(), "MCP class row") {
-				t.Fatalf("carry err = %v, want the class-root refusal", err)
-			}
-			if classServedAt(t, pool, request.TargetSchemaDigest) {
-				t.Fatal("a refused carry wrote a row")
-			}
-		})
-	}
 }
 
 // Repoint moves provenance only: a class row keeps serving and now names the

@@ -75,6 +75,9 @@ func runDisable(argv []string) error {
 	if err := common.requirePositiveTimeout(); err != nil {
 		return err
 	}
+	if err := requireClassOperations("disable", common.operations); err != nil {
+		return err
+	}
 	if mode == "" {
 		return refuse("-mode is required and must be one of %v", goapiproof.DisableModes)
 	}
@@ -223,9 +226,6 @@ func runDisable(argv []string) error {
 		// operation was SKIPPED rather than aborting every other named
 		// operation. Every OTHER row in this plan, including this same
 		// operation's own live row if it has one elsewhere, is unaffected.
-		if note := disableStillServedNote(change, isClass); note != "" {
-			fmt.Fprintln(stdout, note)
-		}
 		if change.DeadRowsOnly {
 			fmt.Fprintf(stdout, "    !! -candidate-build could not be checked: every row this operation has at the live schema digest is DEAD (no catalog document digest) -- SKIPPED, not disabled; re-run without the guard, or on an operation with a live row, to act on it\n")
 			skippedOperations = append(skippedOperations, change.Operation)
@@ -265,24 +265,4 @@ func runDisable(argv []string) error {
 		return refuse("-candidate-build could not be checked for: %v -- SKIPPED, not disabled; the rest of this plan was still applied above", skippedOperations)
 	}
 	return nil
-}
-
-// disableStillServedNote is the plan line for a named operation `disable` cannot turn off (CHAOS-8517).
-//
-// "(no row)" used to mean "already not served". For a CATALOG operation with no row at ANY schema digest
-// it now means the opposite: query-api's catalog rule serves it, and this verb -- which never inserts --
-// leaves it serving. The verb contacts nothing, so it states the rule of its own build ("a query-api of
-// this build"), never an observation of the deployed process. An off-ramp that prints "[no change]" over an operation that keeps serving has to
-// say so. The exit status is unchanged: a named operation with no row has always been a no-op here,
-// never a refusal.
-//
-// Empty for every other state: an MCP class row (a class root with no row is dark), an operation that
-// has a row at this digest (it is written, or already in the mode), one whose only rows at this digest
-// serve another document (DeadRowsOnly), and one that has a row at another schema digest (that row
-// still holds it dark, and its own line names those digests).
-func disableStillServedNote(change goapiproof.DisableChange, isClass bool) string {
-	if isClass || change.CurrentMode != "" || change.DeadRowsOnly || len(change.StaleSchemaDigests) > 0 {
-		return ""
-	}
-	return fmt.Sprintf("    !! no routing row at any schema digest: a query-api of this build SERVES this operation by the catalog rule, and `disable` never inserts a row, so it is NOT held dark. To hold it dark run `dho goapi routing seed -operations %s` (a shadow row is not served)", change.Operation)
 }

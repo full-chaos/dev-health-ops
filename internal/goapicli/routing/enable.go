@@ -79,6 +79,9 @@ func runEnable(argv []string) error {
 	if err := common.requirePositiveTimeout(); err != nil {
 		return err
 	}
+	if err := requireClassOperations("enable", common.operations); err != nil {
+		return err
+	}
 	if rollout != goapiproof.EnforcedRolloutPercentage {
 		return refuse("%v", goapiproof.ErrRolloutNotEnforced(rollout))
 	}

@@ -32,7 +32,7 @@ import (
 // so a root's class row is one decision. It reads canary and primary rows only: a SHADOW class row is dark. (routeswitch.NewProofSwitch admits shadow
 // rows and is for the measurement-only proof routes; using it here would SERVE a shadow root on both ports.)
 func newClassRowSwitch(pool *pgxpool.Pool, schemaDigest string) routeswitch.Switch {
-	return routeswitch.NewPostgresSwitch(pool, schemaDigest, mcpRoutingDigests())
+	return routeswitch.NewClassSwitch(pool, schemaDigest, mcpRoutingDigests())
 }
 
 // runOperationPath is the internal-listener route acr's run_operation posts to. Only requests that came through it are class-gated.
@@ -65,7 +65,7 @@ type documentGate func(w http.ResponseWriter, r *http.Request, operation, query 
 
 const classRowRefusalMessage = "a root field is not enabled for the MCP caller class"
 
-// newClassRowGate builds the gate over sw, the class-row switch (the one type :8092 uses: routeswitch.NewPostgresSwitch over mcpRoutingDigests()).
+// newClassRowGate builds the gate over sw, the class-row switch (the one type :8092 uses: routeswitch.NewClassSwitch over mcpRoutingDigests()).
 func newClassRowGate(sw routeswitch.Switch) documentGate {
 	schema := graph.NewExecutableSchema(graph.Config{}).Schema()
 	// digest of the document text -> []string, the root fields of that document. Keyed by the DOCUMENT digest, not the operation name: an operation

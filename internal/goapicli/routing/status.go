@@ -512,7 +512,7 @@ func printStatusText(report statusReport, local string) {
 
 	fmt.Fprintln(stdout, "rows by schema_digest:")
 	if len(report.RowsBySchemaDigest) == 0 {
-		fmt.Fprintln(stdout, "  (table is empty -- no row decides anything: a query-api of this build serves every registered operation by the catalog rule, and no MCP class root is enabled)")
+		fmt.Fprintln(stdout, "  (table is empty -- no row decides anything: a query-api of this build serves every registered operation without a row, and no MCP class root is enabled)")
 	} else {
 		digests := make([]string, 0, len(report.RowsBySchemaDigest))
 		for digest := range report.RowsBySchemaDigest {
@@ -573,9 +573,9 @@ func printStatusText(report statusReport, local string) {
 		if operation.DigestState == goapiproof.DigestMissing {
 			switch {
 			case operation.ServedWithoutRow == nil:
-				fmt.Fprintln(stdout, "    no routing row at any schema digest: a query-api of this build serves such an operation by the catalog rule; the deployed process could not be asked whether it registers this one")
+				fmt.Fprintln(stdout, "    no routing row at any schema digest: a query-api of this build serves a registered operation whatever its routing row says; the deployed process could not be asked whether it registers this one")
 			case *operation.ServedWithoutRow:
-				fmt.Fprintln(stdout, "    no routing row at any schema digest: SERVED by the catalog rule of this build; a query-api older than this build refuses it (to hold it dark, `seed` it: a shadow row is not served)")
+				fmt.Fprintln(stdout, "    no routing row at any schema digest: SERVED by this build, which reads no routing row for a catalog operation (a query-api older than #3798 refuses it)")
 			}
 		}
 		// The deployed plane's own per-operation

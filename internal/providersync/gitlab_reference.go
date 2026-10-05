@@ -69,3 +69,13 @@ func validGitLabProjectPath(path string) bool {
 	}
 	return true
 }
+
+// gitlabMergeRequestSourceID mints the work-item id of a merge request named by a web URL's path and number, through
+// parseGitLabReference; rejected is true when either fails the grammar.
+func gitlabMergeRequestSourceID(projectPath, number string) (source string, rejected bool) {
+	reference, err := parseGitLabReference(projectPath+string(rune(gitlabMergeRequestMarker))+number, gitlabMergeRequestMarker)
+	if err != nil {
+		return "", true
+	}
+	return "gitlab:" + reference.Path + "!" + strconv.FormatUint(uint64(reference.IID), 10), false
+}

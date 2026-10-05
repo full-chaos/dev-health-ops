@@ -141,3 +141,44 @@ func TestParseGitLabReferenceAgreesWithDerive(t *testing.T) {
 		}
 	}
 }
+
+// A GitLab merge-request URL whose project or number fails the one reference parser is rejected at the Jira and Linear
+// sites: no id is minted, so nothing is written or counted as synced.
+func TestScmURLSitesRejectGitLabURLsThatFailTheReferenceParser(t *testing.T) {
+	t.Setenv("JIRA_TRUSTED_SCM_HOSTS", "")
+	t.Setenv("LINEAR_TRUSTED_SCM_HOSTS", "")
+	for name, c := range map[string]struct {
+		url      string
+		want     string
+		rejected bool
+	}{
+		"good":                 {"https://gitlab.com/acme/api/-/merge_requests/9", "gitlab:acme/api!9", false},
+		"non-numeric number":   {"https://gitlab.com/acme/api/-/merge_requests/abc", "", true},
+		"number beyond uint32": {"https://gitlab.com/acme/api/-/merge_requests/4294967296", "", true},
+		"leading zero":         {"https://gitlab.com/acme/api/-/merge_requests/09", "", true},
+		"zero":                 {"https://gitlab.com/acme/api/-/merge_requests/0", "", true},
+		"percent-encoded path": {"https://gitlab.com/acme/a%20pi/-/merge_requests/9", "", true},
+		"dot-dot project":      {"https://gitlab.com/acme/../-/merge_requests/9", "", true},
+		"not a merge request":  {"https://gitlab.com/acme/api/-/issues/9", "", false},
+	} {
+		jiraSource, jiraRejected := jiraDevStatusPullRequestSource(c.url)
+		if jiraSource != c.want || jiraRejected != c.rejected {
+			t.Errorf("jira %s: %q rejected=%v want %q rejected=%v", name, jiraSource, jiraRejected, c.want, c.rejected)
+		}
+		linearSource, linearRejected := linearAttachmentSource(linearAttachmentPayload{SourceType: "gitlab", URL: c.url})
+		if linearSource != c.want || linearRejected != c.rejected {
+			t.Errorf("linear %s: %q rejected=%v want %q rejected=%v", name, linearSource, linearRejected, c.want, c.rejected)
+		}
+	}
+	for _, url := range []string{
+		"https://gitlab.com/acme/api/-/merge_requests/abc", "https://gitlab.com/acme/api/-/merge_requests/4294967296",
+		"https://gitlab.com/acme/api/-/merge_requests/09",
+	} {
+		if got := jiraDevStatusPullRequestSourceID(url); got != "" {
+			t.Errorf("jira id for %s = %q, want none", url, got)
+		}
+		if got := linearAttachmentWorkItemID(linearAttachmentPayload{SourceType: "gitlab", URL: url}); got != "" {
+			t.Errorf("linear id for %s = %q, want none", url, got)
+		}
+	}
+}

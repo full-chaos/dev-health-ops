@@ -419,7 +419,7 @@ func TestVenueOracleQueryAPIDictOrder(t *testing.T) {
 			// CHAOS-8169 / GWC D4834: the frozen a484 Python response keeps
 			// executing. This ledger permits only the approved empty-window
 			// difference and makes every other JSON leaf strict.
-			assertCHAOS8169HomeNoDataLedger(t, pythonBody, goBody)
+			assertCHAOS8169HomeNoDataLedger(t, chaos8169DictOrderHomeLedgerKey, pythonBody, goBody)
 			ledgerValidated++
 			continue
 		}

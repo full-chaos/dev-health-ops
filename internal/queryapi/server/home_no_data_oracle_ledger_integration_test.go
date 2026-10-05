@@ -10,10 +10,15 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/api/pyjson"
 )
 
-// chaos8169HomeNoDataLedgerTicket documents GWC ruling D4834. It keeps the
-// a484 frozen Python response measured while declaring the approved Home
-// empty-window difference without changing, skipping, or masking that oracle.
+// chaos8169HomeNoDataLedgerTicket names the D4834/D4840 exception. It reads
+// exact captured bodies and permits only their generated, keyed leaf ledger.
+// It does not normalize, mask, skip, or alter either response.
 const chaos8169HomeNoDataLedgerTicket = "CHAOS-8169"
+
+type chaos8169HomeNoDataLedgerKey struct {
+	Oracle string
+	Case   string
+}
 
 type chaos8169HomeNoDataLedgerEntry struct {
 	Path   string
@@ -22,12 +27,37 @@ type chaos8169HomeNoDataLedgerEntry struct {
 	Leaves int
 }
 
-var chaos8169HomeNoDataLedger = []chaos8169HomeNoDataLedgerEntry{
-	{Path: "/summary", Python: `[{"id":"s1","text":"Cycle Time held steady 0%.","evidence_link":"/api/v1/explain?metric=cycle_time&scope_type=org&scope_id=&range_days=7&compare_days=14"}]`, Go: `[]`, Leaves: 3},
-	{Path: "/constraint", Python: `{"title":"This week's constraint: CI Success Rate","claim":"CI Success Rate held steady 0% over the last 7 days.","evidence":[{"label":"Drill into CI Success Rate","link":"/api/v1/explain?metric=ci_success&scope_type=org&scope_id=&range_days=7&compare_days=14"}],"experiments":["Rebalance reviewer rotation to reduce queueing.","Set WIP limits per team and auto-alert at saturation."]}`, Go: `{"title":"","claim":"","evidence":[],"experiments":[]}`, Leaves: 6},
-	{Path: "/health_state", Python: `{"status":"watch","headline":"Cycle Time appears flat across org","summary":"The strongest signal suggests Cycle Time appears flat; longer cycle time suggests delivery work may spend more time waiting than moving.","as_of":null}`, Go: `{"status":"no_data","headline":"","summary":"","as_of":null}`, Leaves: 3},
-	{Path: "/signals", Python: `[{"id":"metric:cycle_time","title":"Cycle Time appears flat","metric":"cycle_time","current_value":"0 days","prior_value":"0 days","delta":"+0%","direction":"flat","severity":"low","confidence":"low","affected_scope":"org","evidence_count":0,"why_it_matters":"Cycle Time appears flat; longer cycle time suggests delivery work may spend more time waiting than moving.","recommended_action":"Inspect the slowest stage and rebalance active work before adding scope.","evidence_ref":"/api/v1/explain?metric=cycle_time&scope_type=org&scope_id=&range_days=7&compare_days=14","category":"delivery","scope_entity":null},{"id":"metric:review_latency","title":"Review Latency appears flat","metric":"review_latency","current_value":"0 hours","prior_value":"0 hours","delta":"+0%","direction":"flat","severity":"low","confidence":"low","affected_scope":"org","evidence_count":0,"why_it_matters":"Review Latency appears flat; review queues shape how quickly teams can learn from completed work.","recommended_action":"Rebalance reviewer rotation and clear stale review queues.","evidence_ref":"/api/v1/explain?metric=review_latency&scope_type=org&scope_id=&range_days=7&compare_days=14","category":"dynamics","scope_entity":null},{"id":"metric:throughput","title":"Throughput appears flat","metric":"throughput","current_value":"0 items","prior_value":"0 items","delta":"+0%","direction":"flat","severity":"low","confidence":"low","affected_scope":"org","evidence_count":0,"why_it_matters":"Throughput appears flat; throughput movement changes the team's ability to keep commitments credible.","recommended_action":"Review WIP and dependency queues before changing delivery commitments.","evidence_ref":"/api/v1/explain?metric=throughput&scope_type=org&scope_id=&range_days=7&compare_days=14","category":"delivery","scope_entity":null},{"id":"metric:deploy_freq","title":"Deploy Frequency appears flat","metric":"deploy_freq","current_value":"0 deploys","prior_value":"0 deploys","delta":"+0%","direction":"flat","severity":"low","confidence":"low","affected_scope":"org","evidence_count":0,"why_it_matters":"Deploy Frequency appears flat; deployment cadence suggests whether finished work can reach users smoothly.","recommended_action":"Check release blockers and restore the smallest safe deployment path.","evidence_ref":"/api/v1/explain?metric=deploy_freq&scope_type=org&scope_id=&range_days=7&compare_days=14","category":"delivery","scope_entity":null},{"id":"metric:churn","title":"Code Churn appears flat","metric":"churn","current_value":"0 loc","prior_value":"0 loc","delta":"+0%","direction":"flat","severity":"low","confidence":"low","affected_scope":"org","evidence_count":0,"why_it_matters":"Code Churn appears flat; higher churn suggests effort may be cycling through rework rather than durable progress.","recommended_action":"Inspect hotspots and stabilize rework loops before expanding the change set.","evidence_ref":"/api/v1/explain?metric=churn&scope_type=org&scope_id=&range_days=7&compare_days=14","category":"durability","scope_entity":null},{"id":"metric:wip_saturation","title":"WIP Saturation appears flat","metric":"wip_saturation","current_value":"0 %","prior_value":"0 %","delta":"+0%","direction":"flat","severity":"low","confidence":"low","affected_scope":"org","evidence_count":0,"why_it_matters":"WIP Saturation appears flat; saturation suggests active work may exceed the team's coordination capacity.","recommended_action":"Set a short-term WIP limit and finish active items before starting more.","evidence_ref":"/api/v1/explain?metric=wip_saturation&scope_type=org&scope_id=&range_days=7&compare_days=14","category":"dynamics","scope_entity":null},{"id":"metric:blocked_work","title":"Blocked Work appears flat","metric":"blocked_work","current_value":"0 hours","prior_value":"0 hours","delta":"+0%","direction":"flat","severity":"low","confidence":"low","affected_scope":"org","evidence_count":0,"why_it_matters":"Blocked Work appears flat; blocked time suggests dependencies may be consuming delivery capacity.","recommended_action":"Triage blocked items by owner and unblock the oldest high-impact queue first.","evidence_ref":"/api/v1/explain?metric=blocked_work&scope_type=org&scope_id=&range_days=7&compare_days=14","category":"delivery","scope_entity":null},{"id":"metric:change_failure_rate","title":"Change Failure Rate appears flat","metric":"change_failure_rate","current_value":"0 %","prior_value":"0 %","delta":"+0%","direction":"flat","severity":"low","confidence":"low","affected_scope":"org","evidence_count":0,"why_it_matters":"Change Failure Rate appears flat; failed changes suggest reliability work may be competing with delivery.","recommended_action":"Inspect recent failed changes and tighten pre-release checks around the common failure mode.","evidence_ref":"/api/v1/explain?metric=change_failure_rate&scope_type=org&scope_id=&range_days=7&compare_days=14","category":"durability","scope_entity":null},{"id":"metric:rework_ratio","title":"Rework Ratio appears flat","metric":"rework_ratio","current_value":"0 %","prior_value":"0 %","delta":"+0%","direction":"flat","severity":"low","confidence":"low","affected_scope":"org","evidence_count":0,"why_it_matters":"Rework Ratio appears flat; rework suggests unclear requirements or fragile implementation paths may be taxing focus.","recommended_action":"Review reopened or rewritten work and pick one root-cause experiment.","evidence_ref":"/api/v1/explain?metric=rework_ratio&scope_type=org&scope_id=&range_days=7&compare_days=14","category":"durability","scope_entity":null},{"id":"metric:pr_rework_ratio","title":"PR Rework Ratio appears flat","metric":"pr_rework_ratio","current_value":"0 %","prior_value":"0 %","delta":"+0%","direction":"flat","severity":"low","confidence":"low","affected_scope":"org","evidence_count":0,"why_it_matters":"PR Rework Ratio appears flat; PR Rework Ratio movement suggests an operating signal to inspect.","recommended_action":"Inspect supporting evidence and choose one reversible operating experiment.","evidence_ref":"/api/v1/explain?metric=pr_rework_ratio&scope_type=org&scope_id=&range_days=7&compare_days=14","category":"durability","scope_entity":null},{"id":"metric:ci_success","title":"CI Success Rate appears flat","metric":"ci_success","current_value":"0 %","prior_value":"0 %","delta":"+0%","direction":"flat","severity":"low","confidence":"low","affected_scope":"org","evidence_count":0,"why_it_matters":"CI Success Rate appears flat; CI health suggests whether the delivery path is dependable.","recommended_action":"Inspect failing pipelines and restore the most common broken check first.","evidence_ref":"/api/v1/explain?metric=ci_success&scope_type=org&scope_id=&range_days=7&compare_days=14","category":"durability","scope_entity":null}]`, Go: `[]`, Leaves: 176},
-	{Path: "/limiting_factor", Python: `{"claim":"Cycle Time appears flat appears to be the current limiting factor.","why_it_matters":"Cycle Time appears flat; longer cycle time suggests delivery work may spend more time waiting than moving.","recommended_action":"Inspect the slowest stage and rebalance active work before adding scope.","confidence":"low","evidence_ref":"/api/v1/explain?metric=cycle_time&scope_type=org&scope_id=&range_days=7&compare_days=14"}`, Go: `{"claim":"","why_it_matters":"","recommended_action":"","confidence":"low","evidence_ref":null}`, Leaves: 4},
+type chaos8169HomeNoDataStrictRoot struct {
+	Path   string
+	Kind   string
+	Length int
+}
+
+type chaos8169HomeNoDataLedger struct {
+	Entries     []chaos8169HomeNoDataLedgerEntry
+	StrictRoots []chaos8169HomeNoDataStrictRoot
+}
+
+var (
+	chaos8169DictOrderHomeLedgerKey    = chaos8169HomeNoDataLedgerKey{Oracle: "dict-order", Case: "home no data"}
+	chaos8169GraphQLEdgeHomeLedgerKeys = map[string]chaos8169HomeNoDataLedgerKey{
+		"POST home": {Oracle: "graphql-edge", Case: "POST home"},
+		"GET home":  {Oracle: "graphql-edge", Case: "GET home"},
+	}
+)
+
+func chaos8169HomeLedgerFor(t *testing.T, key chaos8169HomeNoDataLedgerKey) chaos8169HomeNoDataLedger {
+	t.Helper()
+	ledger, ok := chaos8169HomeNoDataLedgers[key]
+	if !ok {
+		t.Fatalf("%s has no ledger for %s/%s", chaos8169HomeNoDataLedgerTicket, key.Oracle, key.Case)
+	}
+	return ledger
+}
+
+func chaos8169GraphQLEdgeHomeLedgerKey(name string) (chaos8169HomeNoDataLedgerKey, bool) {
+	key, ok := chaos8169GraphQLEdgeHomeLedgerKeys[name]
+	return key, ok
 }
 
 func chaos8169HomeObject(t *testing.T, body string) *pyjson.Object {
@@ -54,6 +84,24 @@ func chaos8169HomeValue(t *testing.T, object *pyjson.Object, path string) pyjson
 		t.Fatalf("%s ledger path %s is absent", chaos8169HomeNoDataLedgerTicket, path)
 	}
 	return value
+}
+
+func chaos8169GraphQLHomeBody(t *testing.T, body string) string {
+	t.Helper()
+	envelope := chaos8169HomeObject(t, body)
+	data, ok := envelope.Get("data")
+	if !ok {
+		t.Fatalf("%s GraphQL response data is absent", chaos8169HomeNoDataLedgerTicket)
+	}
+	dataObject, ok := data.(*pyjson.Object)
+	if !ok {
+		t.Fatalf("%s GraphQL response data is %T, want JSON object", chaos8169HomeNoDataLedgerTicket, data)
+	}
+	home, ok := dataObject.Get("home")
+	if !ok {
+		t.Fatalf("%s GraphQL response data.home is absent", chaos8169HomeNoDataLedgerTicket)
+	}
+	return chaos8169JSONText(t, home)
 }
 
 func chaos8169JSONText(t *testing.T, value pyjson.Value) string {
@@ -173,39 +221,43 @@ func chaos8169JSONTextNoFail(value pyjson.Value) string {
 	return string(encoded)
 }
 
-func chaos8169HomeArrayLength(t *testing.T, object *pyjson.Object, path string, want int) {
+func chaos8169HomeStrictRoot(t *testing.T, object *pyjson.Object, root chaos8169HomeNoDataStrictRoot) {
 	t.Helper()
-	value := chaos8169HomeValue(t, object, path)
-	items, ok := value.([]pyjson.Value)
-	if !ok {
-		t.Fatalf("%s %s is %T, want JSON array", chaos8169HomeNoDataLedgerTicket, path, value)
-	}
-	if len(items) != want {
-		t.Fatalf("%s %s length = %d, want %d", chaos8169HomeNoDataLedgerTicket, path, len(items), want)
+	value := chaos8169HomeValue(t, object, root.Path)
+	switch root.Kind {
+	case "array":
+		items, ok := value.([]pyjson.Value)
+		if !ok {
+			t.Errorf("%s %s is %T, want JSON array", chaos8169HomeNoDataLedgerTicket, root.Path, value)
+			return
+		}
+		if len(items) != root.Length {
+			t.Errorf("%s %s length = %d, want %d", chaos8169HomeNoDataLedgerTicket, root.Path, len(items), root.Length)
+		}
+	case "object":
+		item, ok := value.(*pyjson.Object)
+		if !ok {
+			t.Errorf("%s %s is %T, want JSON object", chaos8169HomeNoDataLedgerTicket, root.Path, value)
+			return
+		}
+		if item.Len() != root.Length {
+			t.Errorf("%s %s length = %d, want %d", chaos8169HomeNoDataLedgerTicket, root.Path, item.Len(), root.Length)
+		}
+	default:
+		t.Fatalf("%s ledger strict root %s has unsupported kind %q", chaos8169HomeNoDataLedgerTicket, root.Path, root.Kind)
 	}
 }
 
-func chaos8169HomeObjectLength(t *testing.T, object *pyjson.Object, path string, want int) {
+// assertCHAOS8169HomeNoDataLedger verifies a captured Python/Go Home pair. It
+// permits only the generated D4834 or D4840 roots; every other JSON leaf and
+// strict root remains measured exactly.
+func assertCHAOS8169HomeNoDataLedger(t *testing.T, key chaos8169HomeNoDataLedgerKey, pythonBody, goBody string) {
 	t.Helper()
-	value := chaos8169HomeValue(t, object, path)
-	item, ok := value.(*pyjson.Object)
-	if !ok {
-		t.Fatalf("%s %s is %T, want JSON object", chaos8169HomeNoDataLedgerTicket, path, value)
-	}
-	if item.Len() != want {
-		t.Fatalf("%s %s length = %d, want %d", chaos8169HomeNoDataLedgerTicket, path, item.Len(), want)
-	}
-}
-
-// assertCHAOS8169HomeNoDataLedger verifies the actual a484 and Go responses.
-// It accepts only D4834's five exact values, records 192 differing leaves, and
-// makes all 11 REST deltas, four tiles, and every other JSON leaf strict.
-func assertCHAOS8169HomeNoDataLedger(t *testing.T, pythonBody, goBody string) {
-	t.Helper()
+	ledger := chaos8169HomeLedgerFor(t, key)
 	python := chaos8169HomeObject(t, pythonBody)
 	goResponse := chaos8169HomeObject(t, goBody)
 
-	for _, entry := range chaos8169HomeNoDataLedger {
+	for _, entry := range ledger.Entries {
 		if got := chaos8169JSONText(t, chaos8169HomeValue(t, python, entry.Path)); got != entry.Python {
 			t.Errorf("%s ledger Python %s = %s, want %s", chaos8169HomeNoDataLedgerTicket, entry.Path, got, entry.Python)
 		}
@@ -213,20 +265,17 @@ func assertCHAOS8169HomeNoDataLedger(t *testing.T, pythonBody, goBody string) {
 			t.Errorf("%s ledger Go %s = %s, want %s", chaos8169HomeNoDataLedgerTicket, entry.Path, got, entry.Go)
 		}
 	}
-
-	for _, path := range []string{"/deltas", "/tiles"} {
-		if got, want := chaos8169JSONText(t, chaos8169HomeValue(t, goResponse, path)), chaos8169JSONText(t, chaos8169HomeValue(t, python, path)); got != want {
-			t.Errorf("%s %s changed outside the ledger: Go %s, Python %s", chaos8169HomeNoDataLedgerTicket, path, got, want)
+	for _, root := range ledger.StrictRoots {
+		if got, want := chaos8169JSONText(t, chaos8169HomeValue(t, goResponse, root.Path)), chaos8169JSONText(t, chaos8169HomeValue(t, python, root.Path)); got != want {
+			t.Errorf("%s %s changed outside the ledger: Go %s, Python %s", chaos8169HomeNoDataLedgerTicket, root.Path, got, want)
 		}
+		chaos8169HomeStrictRoot(t, python, root)
+		chaos8169HomeStrictRoot(t, goResponse, root)
 	}
-	chaos8169HomeArrayLength(t, python, "/deltas", 11)
-	chaos8169HomeArrayLength(t, goResponse, "/deltas", 11)
-	chaos8169HomeObjectLength(t, python, "/tiles", 4)
-	chaos8169HomeObjectLength(t, goResponse, "/tiles", 4)
 
-	entries := make(map[string]chaos8169HomeNoDataLedgerEntry, len(chaos8169HomeNoDataLedger))
+	entries := make(map[string]chaos8169HomeNoDataLedgerEntry, len(ledger.Entries))
 	wantLeaves := 0
-	for _, entry := range chaos8169HomeNoDataLedger {
+	for _, entry := range ledger.Entries {
 		entries[entry.Path] = entry
 		wantLeaves += entry.Leaves
 	}
@@ -247,7 +296,7 @@ func assertCHAOS8169HomeNoDataLedger(t *testing.T, pythonBody, goBody string) {
 	if len(differences) != wantLeaves {
 		t.Errorf("%s difference leaf count = %d, want %d", chaos8169HomeNoDataLedgerTicket, len(differences), wantLeaves)
 	}
-	for _, entry := range chaos8169HomeNoDataLedger {
+	for _, entry := range ledger.Entries {
 		if got := counts[entry.Path]; got != entry.Leaves {
 			t.Errorf("%s difference leaves at %s = %d, want %d", chaos8169HomeNoDataLedgerTicket, entry.Path, got, entry.Leaves)
 		}

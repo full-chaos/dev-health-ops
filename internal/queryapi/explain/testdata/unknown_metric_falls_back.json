@@ -9,5 +9,7 @@
   "drilldown_links": {
     "prs": "/api/v1/drilldown/prs?metric=totally_bogus",
     "issues": "/api/v1/drilldown/issues?metric=totally_bogus"
-  }
+  },
+  "repositories": null,
+  "source_url": null
 }

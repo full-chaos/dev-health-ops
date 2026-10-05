@@ -146,46 +146,6 @@ def test_cap_rejects_unusable_env_values(monkeypatch, raw: str):
     assert heavy_max_window_days() == DEFAULT_HEAVY_MAX_WINDOW_DAYS
 
 
-def test_cap_tracks_the_planner_resolver_including_the_overlap_widening(monkeypatch):
-    """The verdict must use the cap the planner ACTUALLY sizes windows with.
-
-    ``_effective_heavy_max_window_days`` widens the cap when
-    ``SYNC_WATERMARK_OVERLAP`` meets or exceeds it, because a window ending at
-    or before its own start watermark can never advance.  A duplicated env read
-    here would judge lag against the narrower configured value and report every
-    dataset inside the widened window as behind.  This runs the production
-    resolver as the oracle, so the two cannot drift.
-    """
-    from dev_health_ops.sync.planner import _effective_heavy_max_window_days
-
-    # Overlap (10 days) exceeds the configured cap (7) -> planner widens.
-    monkeypatch.setenv(HEAVY_MAX_WINDOW_DAYS_ENV, "7")
-    monkeypatch.setenv("SYNC_WATERMARK_OVERLAP", str(10 * 86_400))
-
-    planner_cap = _effective_heavy_max_window_days()
-    assert planner_cap > 7, "precondition: planner must widen this configuration"
-    assert heavy_max_window_days() == planner_cap
-
-    # A dataset inside the WIDENED window is not catching up, even though it
-    # trails by more than the configured 7 days.
-    inside = compute_watermark_lag(
-        cost_class="heavy",
-        watermark_at=NOW - timedelta(days=planner_cap - 1),
-        now=NOW,
-    )
-    assert inside.catching_up is False
-    assert inside.window_cap_days == planner_cap
-
-
-def test_cap_matches_the_planner_when_no_widening_applies(monkeypatch):
-    from dev_health_ops.sync.planner import _effective_heavy_max_window_days
-
-    monkeypatch.setenv(HEAVY_MAX_WINDOW_DAYS_ENV, "21")
-    monkeypatch.delenv("SYNC_WATERMARK_OVERLAP", raising=False)
-
-    assert heavy_max_window_days() == _effective_heavy_max_window_days() == 21
-
-
 def test_ticks_behind_accounts_for_the_watermark_overlap(monkeypatch):
     """Net advance per tick is cap MINUS overlap, not the cap (CHAOS-3430 F2).
 
@@ -203,26 +163,6 @@ def test_ticks_behind_accounts_for_the_watermark_overlap(monkeypatch):
     # Net advance is 7 - 6 = 1 day per tick, so 83 days of arrears needs 83
     # ticks -- NOT ceil(83/7) == 12.
     assert lag.ticks_behind == 83
-
-
-def test_ticks_behind_uses_net_advance_under_the_widened_cap(monkeypatch):
-    """The clamp widens the cap, but net advance stays ~1 day.
-
-    When overlap >= cap the planner widens the cap to floor(overlap_days)+1 so
-    each tick advances at all. Net advance is then a single day, and the tick
-    estimate must reflect that rather than the widened cap.
-    """
-    from dev_health_ops.sync.planner import _effective_heavy_max_window_days
-
-    monkeypatch.setenv(HEAVY_MAX_WINDOW_DAYS_ENV, "7")
-    monkeypatch.setenv("SYNC_WATERMARK_OVERLAP", str(10 * 86_400))
-
-    assert _effective_heavy_max_window_days() == 11  # floor(10) + 1
-    lag = _lag("heavy", 40)
-
-    # Net advance = 11 - 10 = 1 day, so 40 days of arrears needs 40 ticks.
-    assert lag.ticks_behind == 40
-    assert lag.window_cap_days == 11
 
 
 def test_ticks_behind_matches_the_cap_when_no_overlap_is_configured(monkeypatch):

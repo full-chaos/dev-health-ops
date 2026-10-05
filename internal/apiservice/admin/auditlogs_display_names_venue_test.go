@@ -146,10 +146,10 @@ VALUES ($1, $2, $3, $4, $5, $6, $4, '{}'::json, '{}'::json, 'success',
 		Name: "audit list resolved display names", Method: http.MethodGet, Path: "/api/v1/admin/audit-logs", Headers: auth,
 	})
 	auditDisplayNamesDiagnostic(t, ctx, venue, apiPool, listResponse.Status, orgID, []auditDisplayDiagnosticFixture{
-		{action: "organization", logID: logIDs["organization"], resourceID: orgID, table: "organizations", orgColumn: "id", visibilitySQL: auditDisplayOrganizationVisibilitySQL},
-		{action: "sso-provider", logID: logIDs["sso-provider"], resourceID: providerID, table: "sso_providers", orgColumn: "org_id", visibilitySQL: auditDisplayProviderVisibilitySQL},
-		{action: "ingest-source", logID: logIDs["ingest-source"], resourceID: sourceID, table: "external_ingest_sources", orgColumn: "org_id", visibilitySQL: auditDisplaySourceVisibilitySQL},
-		{action: "ingest-token", logID: logIDs["ingest-token"], resourceID: tokenID, table: "external_ingest_tokens", orgColumn: "org_id", visibilitySQL: auditDisplayTokenVisibilitySQL},
+		{action: "organization", resourceType: "organization", logID: logIDs["organization"], resourceID: orgID, table: "organizations", orgColumn: "id", visibilitySQL: auditDisplayOrganizationVisibilitySQL, directPredicateSQL: auditDisplayOrganizationDirectPredicateSQL},
+		{action: "sso-provider", resourceType: "sso_provider", logID: logIDs["sso-provider"], resourceID: providerID, table: "sso_providers", orgColumn: "org_id", visibilitySQL: auditDisplayProviderVisibilitySQL, directPredicateSQL: auditDisplayProviderDirectPredicateSQL},
+		{action: "ingest-source", resourceType: "ingest_source", logID: logIDs["ingest-source"], resourceID: sourceID, table: "external_ingest_sources", orgColumn: "org_id", visibilitySQL: auditDisplaySourceVisibilitySQL, directPredicateSQL: auditDisplaySourceDirectPredicateSQL},
+		{action: "ingest-token", resourceType: "ingest_token", logID: logIDs["ingest-token"], resourceID: tokenID, table: "external_ingest_tokens", orgColumn: "org_id", visibilitySQL: auditDisplayTokenVisibilitySQL, directPredicateSQL: auditDisplayTokenDirectPredicateSQL},
 	})
 	list := auditLogPage(t, listResponse)
 	if list.Total != len(expected) || len(list.Items) != len(expected) {
@@ -197,22 +197,55 @@ const (
 	auditDisplayOrganizationVisibilitySQL = `SELECT
 	EXISTS (SELECT 1 FROM organizations WHERE id = $1::uuid),
 	EXISTS (SELECT 1 FROM organizations WHERE id = $1::uuid AND id = $2::uuid)`
+	auditDisplayOrganizationDirectPredicateSQL = `SELECT EXISTS (
+	SELECT 1
+	FROM audit_logs a
+	JOIN organizations resource_org ON resource_org.id = CASE
+		WHEN a.resource_id ~* '^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$' THEN a.resource_id::uuid
+	END AND resource_org.id = a.org_id
+	WHERE a.id = $1::uuid AND a.org_id = $2::uuid AND a.resource_type = 'organization'
+)`
 	auditDisplayProviderVisibilitySQL = `SELECT
 	EXISTS (SELECT 1 FROM sso_providers WHERE id = $1::uuid),
 	EXISTS (SELECT 1 FROM sso_providers WHERE id = $1::uuid AND org_id = $2::uuid)`
+	auditDisplayProviderDirectPredicateSQL = `SELECT EXISTS (
+	SELECT 1
+	FROM audit_logs a
+	JOIN sso_providers provider ON provider.id = CASE
+		WHEN a.resource_id ~* '^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$' THEN a.resource_id::uuid
+	END AND provider.org_id = a.org_id
+	WHERE a.id = $1::uuid AND a.org_id = $2::uuid AND a.resource_type = 'sso_provider'
+)`
 	auditDisplaySourceVisibilitySQL = `SELECT
 	EXISTS (SELECT 1 FROM external_ingest_sources WHERE id = $1::uuid),
 	EXISTS (SELECT 1 FROM external_ingest_sources WHERE id = $1::uuid AND org_id = $2::text)`
+	auditDisplaySourceDirectPredicateSQL = `SELECT EXISTS (
+	SELECT 1
+	FROM audit_logs a
+	JOIN external_ingest_sources source ON source.id = CASE
+		WHEN a.resource_id ~* '^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$' THEN a.resource_id::uuid
+	END AND source.org_id = a.org_id::text
+	WHERE a.id = $1::uuid AND a.org_id = $2::uuid AND a.resource_type = 'ingest_source'
+)`
 	auditDisplayTokenVisibilitySQL = `SELECT
 	EXISTS (SELECT 1 FROM external_ingest_tokens WHERE id = $1::uuid),
 	EXISTS (SELECT 1 FROM external_ingest_tokens WHERE id = $1::uuid AND org_id = $2::text)`
+	auditDisplayTokenDirectPredicateSQL = `SELECT EXISTS (
+	SELECT 1
+	FROM audit_logs a
+	JOIN external_ingest_tokens token ON token.id = CASE
+		WHEN a.resource_id ~* '^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$' THEN a.resource_id::uuid
+	END AND token.org_id = a.org_id::text
+	WHERE a.id = $1::uuid AND a.org_id = $2::uuid AND a.resource_type = 'ingest_token'
+)`
 )
 
 type auditDisplayDiagnosticFixture struct {
-	action            string
-	logID, resourceID uuid.UUID
-	table, orgColumn  string
-	visibilitySQL     string
+	action, resourceType string
+	logID, resourceID    uuid.UUID
+	table, orgColumn     string
+	visibilitySQL        string
+	directPredicateSQL   string
 }
 
 // auditDisplayNamesDiagnostic records bounded facts from the real venue when
@@ -250,6 +283,18 @@ func auditDisplayNamesDiagnostic(
 		}
 
 		for _, fixture := range fixtures {
+			actualResourceType, organizationRow, organizationDisplay, providerRow, providerDisplay, sourceRow, sourceDisplay, tokenRow, tokenDisplay, err := admininternal.AuditLogJoinStateForTest(
+				connection.pool.QueryRow(ctx, admininternal.AuditLogJoinDiagnosticSQLForTest()+` WHERE a.id = $1 AND a.org_id = $2`, fixture.logID, orgID),
+			)
+			requireAuditDisplayDiagnostic(t, connection.name, fixture.action, "production-join-branches", err)
+			joinedRowPresent, joinedDisplayFieldPresent := auditDisplayJoinedBranchState(
+				fixture.action,
+				organizationRow, organizationDisplay,
+				providerRow, providerDisplay,
+				sourceRow, sourceDisplay,
+				tokenRow, tokenDisplay,
+			)
+
 			projectionFound, projectionResourceDisplayNamePresent, encodedResourceDisplayNamePresent, err := admininternal.AuditLogResourceDisplayNameStateForTest(
 				connection.pool.QueryRow(ctx, admininternal.AuditLogProjectionSQLForTest()+` WHERE a.id = $1 AND a.org_id = $2`, fixture.logID, orgID),
 			)
@@ -288,10 +333,20 @@ WHERE schema.nspname = 'public' AND relation.relname = $1`, fixture.table, fixtu
 			err = connection.pool.QueryRow(ctx, fixture.visibilitySQL, fixture.resourceID, orgID).Scan(&targetVisible, &scopedTargetVisible)
 			requireAuditDisplayDiagnostic(t, connection.name, fixture.action, "target-visibility", err)
 
-			t.Logf("audit display diagnostic role=%s endpoint_status=%d action=%s production_projection_found=%t production_scan_resource_display_name_present=%t production_encoder_resource_display_name_present=%t audit_resource_id_type=%s target_id_type=%s table_id_type=%s table_org_id_type=%s target_id_matches=%t case_uuid_matches=%t audit_org_matches_scope=%t target_visible=%t scoped_target_visible=%t",
+			var directJoinPredicateMatches bool
+			err = connection.pool.QueryRow(ctx, fixture.directPredicateSQL, fixture.logID, orgID).Scan(&directJoinPredicateMatches)
+			requireAuditDisplayDiagnostic(t, connection.name, fixture.action, "direct-join-predicate", err)
+
+			t.Logf("audit display diagnostic role=%s endpoint_status=%d action=%s actual_resource_type_matches_expected=%t direct_target_visible=%t direct_target_scope_matches=%t direct_join_predicate_matches=%t combined_joined_row_present=%t combined_joined_display_column_present=%t production_case_projection_found=%t production_case_projection_present=%t production_encoder_resource_display_name_present=%t audit_resource_id_type=%s target_id_type=%s table_id_type=%s table_org_id_type=%s target_id_matches=%t case_uuid_matches=%t audit_org_matches_scope=%t",
 				connection.name,
 				endpointStatus,
 				fixture.action,
+				actualResourceType == fixture.resourceType,
+				targetVisible,
+				scopedTargetVisible,
+				directJoinPredicateMatches,
+				joinedRowPresent,
+				joinedDisplayFieldPresent,
 				projectionFound,
 				projectionResourceDisplayNamePresent,
 				encodedResourceDisplayNamePresent,
@@ -302,10 +357,29 @@ WHERE schema.nspname = 'public' AND relation.relname = $1`, fixture.table, fixtu
 				targetIDMatches,
 				caseUUIDMatches,
 				auditOrgMatchesScope,
-				targetVisible,
-				scopedTargetVisible,
 			)
 		}
+	}
+}
+
+func auditDisplayJoinedBranchState(
+	action string,
+	organizationRow, organizationDisplay bool,
+	providerRow, providerDisplay bool,
+	sourceRow, sourceDisplay bool,
+	tokenRow, tokenDisplay bool,
+) (rowPresent, displayPresent bool) {
+	switch action {
+	case "organization":
+		return organizationRow, organizationDisplay
+	case "sso-provider":
+		return providerRow, providerDisplay
+	case "ingest-source":
+		return sourceRow, sourceDisplay
+	case "ingest-token":
+		return tokenRow, tokenDisplay
+	default:
+		return false, false
 	}
 }
 

@@ -17,15 +17,24 @@ import (
 )
 
 // workItemStateDependenciesDDL is work_item_dependencies as the migration
-// chain leaves it (011 + 024 + 027 + 065 + 071 + 102): no time zone on
+// chain leaves it (011 + 024 + 027 + 065 + 071 + 102 + 103): no time zone on
 // last_synced, org_id first in the key, the semantics version defaulting to
-// the legacy one, the provider's link time nullable.
+// the legacy one, the provider's link time and the stored writer nullable.
 const workItemStateDependenciesDDL = `CREATE TABLE work_item_dependencies (
     source_work_item_id String, target_work_item_id String, relationship_type String,
     relationship_type_raw String, last_synced DateTime64(3), org_id String,
     source_id Nullable(UUID), relationship_semantics_version String DEFAULT 'legacy.v1',
-    relation_started_at Nullable(DateTime64(3))
+    relation_started_at Nullable(DateTime64(3)), relation_writer Nullable(String)
 ) ENGINE = ReplacingMergeTree(last_synced) ORDER BY (org_id, source_work_item_id, target_work_item_id, relationship_type)`
+
+// workItemStateRelationsReadDDL is work_item_relations_read (migration 103).
+// Production fills it through a materialized view on work_items; the tests
+// here leave it empty unless a case states a read time, so every item falls
+// back to its latest sync (the rule before CHAOS-8578). The view has its own
+// database test in internal/chmigrate.
+const workItemStateRelationsReadDDL = `CREATE TABLE work_item_relations_read (
+    org_id String, provider String, work_item_id String, relations_read_at DateTime64(3)
+) ENGINE = ReplacingMergeTree(relations_read_at) ORDER BY (org_id, work_item_id)`
 
 // workItemStateFirstSeenDDL is work_item_dependency_first_seen (migration
 // 102). Production fills it through a materialized view on
@@ -106,6 +115,7 @@ func TestWorkItemStateComputeFamilyWritesBlockedRowsFromOpenBlockers(t *testing.
 ) ENGINE = MergeTree PARTITION BY toYYYYMM(day) ORDER BY (provider, work_scope_id, team_id, status, day)`,
 		workItemStateDependenciesDDL,
 		workItemStateFirstSeenDDL,
+		workItemStateRelationsReadDDL,
 	} {
 		if err := conn.Exec(ctx, statement); err != nil {
 			t.Fatal(err)

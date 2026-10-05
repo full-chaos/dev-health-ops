@@ -483,6 +483,17 @@ means the ClickHouse `teams` dimension is empty.
 > GitLab/Jira/Linear-only orgs have no `team_repo_ownership` writer by design (§0.2 above); their
 > repos resolve to a team only via `teams.repo_patterns` (manually configured, or fixtures).
 
+> **CHAOS-8512: TestOps daily rows use repository ownership, not patterns.** The native
+> `testops_pipeline`, `testops_test`, `testops_coverage`, and `testops_risk` families retain a
+> non-empty source-row `team_id` when one exists. Otherwise, they use the single authoritative
+> `team_repo_ownership` owner for the repository at the **end of the target day**, ranked by
+> `is_primary DESC, specificity DESC, updated_at DESC, team_id ASC`. An unowned repository stays
+> NULL: these families do not fall back to `teams.repo_patterns` or person membership. The shared
+> ownership reader resolves direct and provider-access ownership rows by repository identity before
+> it applies that ranking, so the TestOps consumer has no provider-specific branch. Real-ClickHouse
+> integration tests seed an in-day multi-claim and require the primary owner on all six TestOps
+> output tables.
+
 > **CHAOS-4365 item 2 (merged, `dev-health-ops#1963`, squash `017f964b2`): `team_cognitive_load_daily` — an
 > append-only, ownership-scoped table.** The `resolveCognitiveLoad` GraphQL resolver's single-team
 > path (`teamId` set, `repoId` NOT set) reads this table directly instead of the org-wide

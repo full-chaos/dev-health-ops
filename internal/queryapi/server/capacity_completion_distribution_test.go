@@ -22,7 +22,7 @@ import (
 
 // CHAOS-8598: the per-team completionDistribution read document that MCP run_operation serves by digest.
 
-// The digest is pinned as a literal: a change to the text changes the digest acr vendors, and the routing row a deploy seeds is keyed on it.
+// The digest is pinned as a literal: a change to the text changes the digest acr vendors and the receipts name.
 const capacityCompletionDistributionPinnedDigest = "52cfd38c3f8346aec89fe807abda5a72fa24596a0fad9f302ca6121510b302e9"
 
 func loadCapacityCompletionDistribution(t *testing.T) *ast.OperationDefinition {
@@ -37,7 +37,7 @@ func loadCapacityCompletionDistribution(t *testing.T) *ast.OperationDefinition {
 func TestCapacityCompletionDistributionDocument_DigestIsPinnedAndCataloged(t *testing.T) {
 	got := digestHex(registeredCapacityCompletionDistributionDocument)
 	if got != capacityCompletionDistributionPinnedDigest {
-		t.Fatalf("digest %s, pinned %s: a changed text needs a new routing row and an acr re-vendor", got, capacityCompletionDistributionPinnedDigest)
+		t.Fatalf("digest %s, pinned %s: a changed text needs an acr re-vendor", got, capacityCompletionDistributionPinnedDigest)
 	}
 	raw, err := os.ReadFile(filepath.Join("..", "..", "..", "contracts", "graphql", "v1", "go_api_operations.json"))
 	if err != nil {

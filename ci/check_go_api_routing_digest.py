@@ -1,13 +1,17 @@
 #!/usr/bin/env python3
 """Fail when the Go-API schema digest moves without being written down.
 
-Every ``go_api_routing_state`` row is keyed by the canonical schema digest
-of ``contracts/graphql/v1/schema.graphql``. Change that file by one byte
-and every existing routing row stops matching: the Python dispatcher's
-lookup misses, ``PostgresSwitch.Enabled`` returns false, and every request
-falls back to Python. Correctly, safely -- and completely silently.
+History: until CHAOS-8702 every ``go_api_routing_state`` row was keyed by the
+canonical schema digest of ``contracts/graphql/v1/schema.graphql``. Change that
+file by one byte and every existing routing row stopped matching: the Python
+dispatcher's lookup missed, ``PostgresSwitch.Enabled`` returned false, and every
+request fell back to Python -- correctly, safely, and completely silently. That
+table is dropped (alembic 0147, CHAOS-8706) and query-api reads no routing row,
+so a moved digest can no longer darken an operation. The pin still matters: the
+digest is what proof receipts, acr vendoring and an MCP class decision's recorded
+schema digest name, so a silent move still leaves them naming a stale schema.
 
-That is not a hypothetical. On 2026-09-01, PR #2065 (``33b3f3f21d``) moved
+The original incident. On 2026-09-01, PR #2065 (``33b3f3f21d``) moved
 the digest from ``sha256:67b87d38…`` to ``sha256:29d509cd…`` hours after
 twelve ``canary``/``100`` rows had been seeded at the old value. All twelve
 died on that commit. No test, no log line, no metric and no review comment

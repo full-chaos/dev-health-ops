@@ -1,6 +1,6 @@
 ---
 page_id: op-rb-query-api-bootstrap
-summary: First-time bootstrap of the Go query-api on prod k3s — image build, envelope key generation, digest pairing, and routing enablement.
+summary: First-time bootstrap of the Go query-api on prod k3s — image build, envelope key generation, digest pairing, and MCP class-decision enablement.
 content_type: runbook
 owner: platform-operations
 applicability: current
@@ -9,12 +9,12 @@ lifecycle: active
 
 # Query-api bootstrap on prod k3s (first-time deploy)
 
-Query-api provides the schema digest, routing tables, and proof harness for the Go API footprint on prod k3s. This runbook covers the one-time bootstrap.
+Query-api provides the schema digest, the MCP class decision table, and the proof harness for the Go API footprint on prod k3s. This runbook covers the one-time bootstrap.
 
 ## Prerequisites
 
 - **Prod k3s cluster running** (CHAOS-5590).
-- **Go API binary and routing state** — the `dho` operator binary (`goapi routing` and `goapi prove`/`goapi rest-prove`) available.
+- **Go API binary and class decisions** — the `dho` operator binary (`goapi routing` and `goapi prove`/`goapi rest-prove`) available.
 - **Image registry credentials** — `ghcr-pull` Secret with `write:packages` scope.
 - **PostgreSQL query role** — `devhealth` user via pgbouncer-transaction (not direct `:5432` in this design, though current prod still uses direct due to chart limitations — see section **"Registry DSN"** below).
 
@@ -50,13 +50,13 @@ Record the manifest-list sha256 from the push output.
 
 ## Step 2: Verify schema digest pairing
 
-The schema digest must match between the API instance and the query-api image. This is verified at first-time routing enable via three parity checks:
+The schema digest must match between the API instance and the query-api image. This is verified when an MCP class root is first enabled, via three parity checks:
 
 1. **Inside the prod API pod**: `current_schema_digest()` — the digest computed from the API's local SDL.
 2. **Query-api `GET /registry`** response: `schema_digest` field in the JSON.
 3. **Routing binary's local digest check**: `[AGREE]` line in the enable output.
 
-All three must be identical before routing is enabled. If they diverge, a mismatch is caught immediately at step 6.
+All three must be identical before a class root is enabled. If they diverge, a mismatch is caught immediately at step 6.
 
 ### Generate the envelope Ed25519 keypair and JWKS
 
@@ -95,7 +95,7 @@ kubectl create secret generic dev-health-query-api-envelope \
 
 ## Step 4: Apply the query-api Deployment and Service
 
-Digest pairing is verified automatically when routing is enabled (end of step 7). Apply the manifest and wait for the pod to reach ready.
+Digest pairing is verified automatically when a class root is enabled (end of step 7). Apply the manifest and wait for the pod to reach ready.
 
 ### Manifest values
 
@@ -119,9 +119,9 @@ kubectl patch deployment dev-health-ops -p '{"spec":{"template":{"spec":{"contai
 
 Or use `--patch-file` to avoid credential exposure (Trap #121).
 
-## Step 6: First-time routing rows
+## Step 6: MCP class decisions (document operations need no routing rows)
 
-**A catalog operation needs no routing row, and no routing row can hold it dark.** query-api's `/query` and `/graphql` serve every registered operation and read no routing row to decide (CHAOS-8702; the table `go_api_routing_state` is dropped by migration 0147, CHAOS-8706): a missing row, a row at an older schema digest, and a row in mode `shadow`, `python` or `disabled` all serve. A stack whose routing table is empty serves the whole catalog, and this step is not part of a first start. To hold a catalog operation dark, change the code and deploy.
+**A catalog operation needs no routing row, and no routing row can hold it dark.** query-api's `/query` and `/graphql` serve every registered operation and read no routing row to decide (CHAOS-8702). The table that held them, `go_api_routing_state`, is dropped by migration 0147 (CHAOS-8706), so there is nothing to seed and nothing to hold an operation dark: a fresh stack serves the whole catalog, and this step is not part of a first start. To hold a catalog operation dark, change the code and deploy.
 
 **MCP class roots are decided by one row per root, in `go_api_class_decision` (CHAOS-8735), not by a routing row.** The row is keyed by the operation alone (`mcp:<root>`), so a schema change moves nothing: the class switch, the proof route, `status`, `enable`, `disable`, `seed` and `repoint` all read and write that one row, and no step has to carry it to a new schema digest. `enable` still needs a class receipt for the running build at the live schema digest (a proof is a fact about a build at a schema digest); `repoint` rewrites only the build the decision names and never its mode or `decided_at`. Migration 0146 creates the table and copies into it, for each class root, exactly the `go_api_routing_state` row the running (old) query-api serves: the row at that build's schema digest under the class document digest. A root with no row at that digest gets no decision and stays dark, as the old build answers; a newer row at another digest is never copied. The upgrade reads the old build's digest from `DHO_CLASS_DECISION_LIVE_SCHEMA_DIGEST`: read `schema_digest` from the running query-api's `GET /registry` before the upgrade starts and set it on the migrate step. When class rows exist and the value is unset, malformed (`sha256:` and 64 lowercase hex) or holds no class row, the migration fails and changes nothing. A database with no class rows needs no value. Migration 0147 (CHAOS-8706) then drops `go_api_routing_state`, so a rollback to an image older than 0146 is no longer possible once 0147 has run (a downgrade of 0147 recreates the table empty).
 
@@ -228,7 +228,7 @@ GO_API_PROVE_WRITE_FIXTURE_ORG=<fixture org id> dho goapi prove-write \
 Both verbs read the domain Postgres DSN from `POSTGRES_URI` in the environment when `-postgres-uri` is absent; keep it out of the command line, where it would show in the process arguments.
 
 `-query-url` must name the INTERNAL listener's `/query/proof-write`. The verb's default (`http://localhost:8090/query`) is the
-public route, which answers 404 for a mutation whose routing row is not yet eligible: exactly the bootstrap case. Before the
+public route: it carries real traffic and has no proof-org allowlist, so a proof write goes through the internal listener's `/query/proof-write` instead (mutation-only, mounted only on the internal listener, and refusing every org not on the allowlist). Before the
 first run, on the query-api Deployment: enable the internal listener (`queryApi.internal.enabled`, or the umbrella chart's
 `queryApiInternal`), set `GO_API_PROOF_WRITE_ROUTE_ENABLED=true`, and put the Fixture Org on the allowlist with
 `dho goapi routing proof-org add -org <fixture org id> -recorded-by <operator> -review-evidence "<why>"` (with `POSTGRES_URI` in the environment, never on the command line). The route refuses every org not

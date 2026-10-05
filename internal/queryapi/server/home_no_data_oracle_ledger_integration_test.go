@@ -4,6 +4,7 @@ package server
 
 import (
 	"fmt"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -221,6 +222,78 @@ func chaos8169JSONTextNoFail(value pyjson.Value) string {
 	return string(encoded)
 }
 
+// chaos8509HomeDiagnosticPath is intentionally separate from the D4834/D4840
+// ledger. It only records the five observed CHAOS-8509 differences from the
+// real venue pair so their contract can be decided. It never permits them.
+func chaos8509HomeDiagnosticPath(key chaos8169HomeNoDataLedgerKey, path string) bool {
+	var paths map[string]bool
+	switch key {
+	case chaos8169DictOrderHomeLedgerKey:
+		paths = map[string]bool{
+			"/freshness/coverage/repos_covered_pct":            true,
+			"/freshness/coverage/prs_linked_to_issues_pct":     true,
+			"/freshness/coverage/issues_with_cycle_states_pct": true,
+			"/data_confidence/coverage_pct":                    true,
+			"/data_confidence/caveats/0":                       true,
+		}
+	case chaos8169GraphQLEdgeHomeLedgerKeys["POST home"], chaos8169GraphQLEdgeHomeLedgerKeys["GET home"]:
+		paths = map[string]bool{
+			"/freshness/coverage/reposCoveredPct":          true,
+			"/freshness/coverage/prsLinkedToIssuesPct":     true,
+			"/freshness/coverage/issuesWithCycleStatesPct": true,
+			"/dataConfidence/coveragePct":                  true,
+			"/dataConfidence/caveats/0":                    true,
+		}
+	default:
+		return false
+	}
+	return paths[path]
+}
+
+// chaos8509HomeDiagnosticValue returns one JSON leaf at a known pointer. It
+// has no fallback because an absent leaf is itself contract evidence.
+func chaos8509HomeDiagnosticValue(object *pyjson.Object, path string) (pyjson.Value, bool) {
+	var value pyjson.Value = object
+	for _, component := range strings.Split(strings.TrimPrefix(path, "/"), "/") {
+		switch typed := value.(type) {
+		case *pyjson.Object:
+			item, ok := typed.Get(component)
+			if !ok {
+				return nil, false
+			}
+			value = item
+		case []pyjson.Value:
+			index, err := strconv.Atoi(component)
+			if err != nil || index < 0 || index >= len(typed) {
+				return nil, false
+			}
+			value = typed[index]
+		default:
+			return nil, false
+		}
+	}
+	return value, true
+}
+
+// chaos8509LogHomeDiagnostic records only the approved candidate paths from
+// an already-failing real pair. The assertion below remains fail-closed.
+func chaos8509LogHomeDiagnostic(t *testing.T, key chaos8169HomeNoDataLedgerKey, path string, python, goResponse *pyjson.Object) {
+	t.Helper()
+	if !chaos8509HomeDiagnosticPath(key, path) {
+		return
+	}
+	pythonValue, pythonOK := chaos8509HomeDiagnosticValue(python, path)
+	goValue, goOK := chaos8509HomeDiagnosticValue(goResponse, path)
+	pythonText, goText := "<absent>", "<absent>"
+	if pythonOK {
+		pythonText = chaos8169JSONText(t, pythonValue)
+	}
+	if goOK {
+		goText = chaos8169JSONText(t, goValue)
+	}
+	t.Logf("CHAOS-8509 diagnostic capture oracle=%s case=%s path=%s python=%s go=%s", key.Oracle, key.Case, path, pythonText, goText)
+}
+
 func chaos8169HomeStrictRoot(t *testing.T, object *pyjson.Object, root chaos8169HomeNoDataStrictRoot) {
 	t.Helper()
 	value := chaos8169HomeValue(t, object, root.Path)
@@ -288,6 +361,7 @@ func assertCHAOS8169HomeNoDataLedger(t *testing.T, key chaos8169HomeNoDataLedger
 			root = "/" + strings.Split(trimmed, "/")[0]
 		}
 		if _, ok := entries[root]; !ok {
+			chaos8509LogHomeDiagnostic(t, key, path, python, goResponse)
 			t.Errorf("%s unledgered difference at %s", chaos8169HomeNoDataLedgerTicket, path)
 			continue
 		}

@@ -55,6 +55,9 @@ func TestClassDecisionBackfillNamesTheClassDigestAndTheVerbsSetting(t *testing.T
 		if !regexp.MustCompile(`CLASS_DOCUMENT_DIGEST = \(?\s*"` + mcpclass.DocumentDigest() + `"`).MatchString(text) {
 			t.Errorf("the Alembic mirror's CLASS_DOCUMENT_DIGEST is not mcpclass.DocumentDigest()")
 		}
+		if !strings.Contains(text, `sa.text("SELECT set_config(:name, :value, true)")`) {
+			t.Errorf("the Alembic mirror does not set the live digest for the migration's transaction only (set_config(..., true))")
+		}
 		if !strings.Contains(text, `LIVE_DIGEST_SETTING = "`+pgmigrate.ClassDecisionLiveDigestSetting+`"`) ||
 			!strings.Contains(text, `LIVE_DIGEST_ENV = "`+pgmigrate.ClassDecisionLiveDigestEnv+`"`) {
 			t.Errorf("the Alembic mirror does not name the verb's setting and environment variable")

@@ -6,6 +6,7 @@ import (
 	"bytes"
 	"context"
 	"io"
+	"log/slog"
 	"strings"
 	"testing"
 	"time"
@@ -73,15 +74,10 @@ func at0145(t *testing.T, d downInstance, rows []routingRow) (string, *pgx.Conn)
 	return uri, conn
 }
 
-// upgradeWithDigest runs dho's upgrade on conn with the live-digest setting set on its session (nil: not set).
+// upgradeWithDigest runs dho's upgrade on conn with the live digest as a walk setting (nil: not set), the way
+// `dho migrate postgres upgrade` passes it.
 func upgradeWithDigest(t *testing.T, conn *pgx.Conn, digest *string) error {
 	t.Helper()
-	ctx := context.Background()
-	if digest != nil {
-		if _, err := conn.Exec(ctx, "SELECT set_config('dho.class_decision_live_schema_digest', $1, false)", *digest); err != nil {
-			t.Fatal(err)
-		}
-	}
 	baseline, err := pgmigrate.LoadBaseline()
 	if err != nil {
 		t.Fatal(err)
@@ -90,8 +86,66 @@ func upgradeWithDigest(t *testing.T, conn *pgx.Conn, digest *string) error {
 	if err != nil {
 		t.Fatal(err)
 	}
-	_, err = pgmigrate.Upgrade(ctx, conn, baseline, chain)
+	var settings pgmigrate.WalkSettings
+	if digest != nil {
+		settings = pgmigrate.WalkSettings{pgmigrate.ClassDecisionLiveDigestSetting: *digest}
+	}
+	_, err = pgmigrate.UpgradeLoggedWithSettings(context.Background(), conn, baseline, chain, slog.New(slog.DiscardHandler), settings)
 	return err
+}
+
+// sessionSetting is the live-digest setting as the connection's session sees it after the walk: "" or NULL when the
+// walk set it for its own transaction only.
+func sessionSetting(t *testing.T, conn *pgx.Conn) string {
+	t.Helper()
+	var value *string
+	if err := conn.QueryRow(context.Background(), "SELECT current_setting($1, true)", pgmigrate.ClassDecisionLiveDigestSetting).Scan(&value); err != nil {
+		t.Fatal(err)
+	}
+	if value == nil {
+		return ""
+	}
+	return *value
+}
+
+// The walk sets the live digest for its own transaction only (set_config(..., true) inside the transaction that runs
+// 0146): revision 0146 reads it, and neither the session nor a later transaction on the connection does. A session
+// SET through a transaction-pooling pgbouncer could miss the walk's transaction or reach another client.
+func TestClassDecisionLiveDigestIsSetForTheWalksTransactionOnly(t *testing.T) {
+	d := newDownInstance(t)
+	t.Run("applied", func(t *testing.T) {
+		_, conn := at0145(t, d, backfillCaseRows())
+		live := backfillLiveDigest
+		if err := upgradeWithDigest(t, conn, &live); err != nil {
+			t.Fatalf("upgrade to the head: %v", err)
+		}
+		assertDecisions(t, readDecisions(t, conn), backfillWant())
+		if got := sessionSetting(t, conn); got != "" {
+			t.Errorf("after the walk the session reads %s = %q; the walk must set it for its transaction only", pgmigrate.ClassDecisionLiveDigestSetting, got)
+		}
+	})
+	t.Run("refused", func(t *testing.T) {
+		_, conn := at0145(t, d, backfillCaseRows())
+		unused := backfillUnusedDigest
+		if err := upgradeWithDigest(t, conn, &unused); err == nil {
+			t.Fatalf("upgrade succeeded with a live digest that holds no class row; it must refuse")
+		}
+		if got := sessionSetting(t, conn); got != "" {
+			t.Errorf("after a refused walk the session reads %s = %q; the walk must set it for its transaction only", pgmigrate.ClassDecisionLiveDigestSetting, got)
+		}
+	})
+	// A session-level value is not what the walk reads when the walk is given one: the walk's own value wins.
+	t.Run("walk value wins over a session value", func(t *testing.T) {
+		_, conn := at0145(t, d, backfillCaseRows())
+		if _, err := conn.Exec(context.Background(), "SELECT set_config($1, $2, false)", pgmigrate.ClassDecisionLiveDigestSetting, backfillUnusedDigest); err != nil {
+			t.Fatal(err)
+		}
+		live := backfillLiveDigest
+		if err := upgradeWithDigest(t, conn, &live); err != nil {
+			t.Fatalf("upgrade to the head: %v", err)
+		}
+		assertDecisions(t, readDecisions(t, conn), backfillWant())
+	})
 }
 
 func readDecisions(t *testing.T, conn *pgx.Conn) map[string]classDecision {

@@ -140,12 +140,9 @@ func run(ctx context.Context, verb string, resolve ResolveDSN, env cli.Env) int 
 		}
 		return writeResult(env.Stdout, env.Stderr, status)
 	}
-	if err := SetClassDecisionLiveDigest(ctx, conn, env.Lookup); err != nil {
-		return writeError(env.Stderr, "migration_failed", boundary.Redact(err).Error())
-	}
 	logger := logging.NewJSON(env.Stderr, slog.LevelInfo)
 	before, _ := Recorded(ctx, conn)
-	result, err := UpgradeLogged(ctx, conn, baseline, chain, logger)
+	result, err := UpgradeLoggedWithSettings(ctx, conn, baseline, chain, logger, ClassDecisionWalkSettings(env.Lookup))
 	// One final line per run, from state read back afterwards: the step logs fire
 	// before their SQL. A failed upgrade's outcome is what alembic_version holds now.
 	observed, readErr := Recorded(ctx, conn)
@@ -179,10 +176,11 @@ const ClassDecisionLiveDigestEnv = "DHO_CLASS_DECISION_LIVE_SCHEMA_DIGEST"
 // ClassDecisionLiveDigestSetting is the session setting revision 0146 reads; the Alembic mirror sets the same one.
 const ClassDecisionLiveDigestSetting = "dho.class_decision_live_schema_digest"
 
-// SetClassDecisionLiveDigest sets ClassDecisionLiveDigestSetting on conn's session from ClassDecisionLiveDigestEnv
-// when the env is set. Unset leaves the setting undefined: revision 0146 then refuses a database that holds MCP class
-// rows and needs nothing on one that holds none.
-func SetClassDecisionLiveDigest(ctx context.Context, conn *pgx.Conn, lookup func(string) (string, bool)) error {
+// ClassDecisionWalkSettings is the walk setting ClassDecisionLiveDigestSetting from ClassDecisionLiveDigestEnv, set
+// for the walk's own transaction (the transaction that runs revision 0146). Unset sets nothing; an empty value is set
+// empty, which revision 0146 treats exactly as unset: it refuses a database that holds MCP class rows and needs
+// nothing on one that holds none.
+func ClassDecisionWalkSettings(lookup func(string) (string, bool)) WalkSettings {
 	if lookup == nil {
 		return nil
 	}
@@ -190,10 +188,7 @@ func SetClassDecisionLiveDigest(ctx context.Context, conn *pgx.Conn, lookup func
 	if !ok {
 		return nil
 	}
-	if _, err := conn.Exec(ctx, "SELECT set_config($1, $2, false)", ClassDecisionLiveDigestSetting, value); err != nil {
-		return fmt.Errorf("set %s: %w", ClassDecisionLiveDigestSetting, err)
-	}
-	return nil
+	return WalkSettings{ClassDecisionLiveDigestSetting: value}
 }
 
 func writeResult(stdout, stderr io.Writer, value any) int {

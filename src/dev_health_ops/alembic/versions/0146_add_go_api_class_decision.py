@@ -51,6 +51,33 @@ CLASS_DOCUMENT_DIGEST = (
     "9c509c3594856bed7f4896345d687c0fca3a1e298b65b440ae519938bac7ed92"
 )
 
+#: Refuses the backfill, with class rows present, when the live digest is unset, empty or malformed, or holds no class
+#: row under the class document digest. Static text (a DO block takes no bind parameters), the chain file's own.
+_CLASS_ROW_GUARD = """
+DO $$
+DECLARE
+    live_digest text := coalesce(current_setting('dho.class_decision_live_schema_digest', true), '');
+    class_rows bigint;
+    live_rows bigint;
+BEGIN
+    SELECT count(*) INTO class_rows FROM go_api_routing_state WHERE left(selected_operation, 4) = 'mcp:';
+    IF class_rows = 0 THEN
+        RETURN;
+    END IF;
+    IF live_digest !~ '^sha256:[0-9a-f]{64}$' THEN
+        RAISE EXCEPTION 'go_api_class_decision backfill: % MCP class rows exist and dho.class_decision_live_schema_digest is empty or not sha256:<64 hex>; set DHO_CLASS_DECISION_LIVE_SCHEMA_DIGEST to the schema_digest of the running query-api (GET /registry)', class_rows;
+    END IF;
+    SELECT count(*) INTO live_rows FROM go_api_routing_state
+     WHERE left(selected_operation, 4) = 'mcp:'
+       AND schema_digest = live_digest
+       AND document_digest = '9c509c3594856bed7f4896345d687c0fca3a1e298b65b440ae519938bac7ed92';
+    IF live_rows = 0 THEN
+        RAISE EXCEPTION 'go_api_class_decision backfill: % MCP class rows exist and none is at schema digest % under the class document digest', class_rows, live_digest;
+    END IF;
+END
+$$
+"""
+
 #: The modes of go_api_routing_state (0114): the same vocabulary, so a backfilled row is valid as it is.
 MODES = ("python", "shadow", "canary", "primary", "disabled")
 
@@ -91,43 +118,25 @@ def upgrade() -> None:
                 name=LIVE_DIGEST_SETTING, value=live_digest
             )
         )
+    # A DO block takes no bind parameters, so the guard is a static statement: the same text as the chain file's
+    # (internal/pgmigrate/sql/0146_add_go_api_class_decision.sql), which reads the live digest from the setting above.
+    op.execute(_CLASS_ROW_GUARD)
     op.execute(
-        f"""
-        DO $$
-        DECLARE
-            live_digest text := coalesce(current_setting('{LIVE_DIGEST_SETTING}', true), '');
-            class_rows bigint;
-            live_rows bigint;
-        BEGIN
-            SELECT count(*) INTO class_rows FROM go_api_routing_state WHERE left(selected_operation, 4) = 'mcp:';
-            IF class_rows = 0 THEN
-                RETURN;
-            END IF;
-            IF live_digest !~ '^sha256:[0-9a-f]{{64}}$' THEN
-                RAISE EXCEPTION 'go_api_class_decision backfill: % MCP class rows exist and {LIVE_DIGEST_SETTING} is empty or not sha256:<64 hex>; set {LIVE_DIGEST_ENV} to the schema_digest of the running query-api (GET /registry)', class_rows;
-            END IF;
-            SELECT count(*) INTO live_rows FROM go_api_routing_state
+        sa.text(
+            """
+            INSERT INTO go_api_class_decision
+                (operation, mode, current_candidate_build, schema_digest, review_evidence, recorded_by, decided_at)
+            SELECT selected_operation, mode, current_candidate_build, schema_digest,
+                   review_evidence, recorded_by, updated_at
+              FROM go_api_routing_state
              WHERE left(selected_operation, 4) = 'mcp:'
-               AND schema_digest = live_digest
-               AND document_digest = '{CLASS_DOCUMENT_DIGEST}';
-            IF live_rows = 0 THEN
-                RAISE EXCEPTION 'go_api_class_decision backfill: % MCP class rows exist and none is at schema digest % under the class document digest', class_rows, live_digest;
-            END IF;
-        END
-        $$
-        """
-    )
-    op.execute(
-        f"""
-        INSERT INTO go_api_class_decision
-            (operation, mode, current_candidate_build, schema_digest, review_evidence, recorded_by, decided_at)
-        SELECT selected_operation, mode, current_candidate_build, schema_digest,
-               review_evidence, recorded_by, updated_at
-          FROM go_api_routing_state
-         WHERE left(selected_operation, 4) = 'mcp:'
-           AND schema_digest = current_setting('{LIVE_DIGEST_SETTING}', true)
-           AND document_digest = '{CLASS_DOCUMENT_DIGEST}'
-        """
+               AND schema_digest = current_setting(:live_digest_setting, true)
+               AND document_digest = :class_document_digest
+            """
+        ).bindparams(
+            live_digest_setting=LIVE_DIGEST_SETTING,
+            class_document_digest=CLASS_DOCUMENT_DIGEST,
+        )
     )
 
 

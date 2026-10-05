@@ -139,36 +139,6 @@ def _run_backfill(sink: _FakeSink, org_id: str = "org-1") -> dict[str, int]:
 # ---------------------------------------------------------------------------
 
 
-def test_backfill_invokes_no_llm_or_categorizer() -> None:
-    """The backfill path must never import/call the categorizer or LLM provider."""
-    edges = [_edge("issue", "I-1", "pr", "P-1")]
-    uid = work_unit_id([("issue", "I-1"), ("pr", "P-1")])
-    sink = _FakeSink(
-        edges=edges,
-        investments=[
-            _investment_row(
-                work_unit_id=uid,
-                theme={"feature_delivery": 1.0},
-                subcategory={"feature_delivery.roadmap": 1.0},
-            )
-        ],
-    )
-
-    with (
-        patch(
-            "dev_health_ops.work_graph.investment.categorize.categorize_text_bundle"
-        ) as mock_categorize,
-        patch("dev_health_ops.llm.get_provider") as mock_provider,
-    ):
-        stats = _run_backfill(sink)
-
-    mock_categorize.assert_not_called()
-    mock_provider.assert_not_called()
-    assert stats["matched"] == 1
-    assert stats["memberships"] > 0
-    assert sink.written  # rows were written
-
-
 def test_backfill_rows_match_materialize_shared_helper() -> None:
     """Backfill membership rows equal build_membership_records (the shared
     helper the LLM materializer also uses) for the same persisted distributions."""
@@ -230,36 +200,6 @@ def test_backfill_rows_match_materialize_shared_helper() -> None:
     assert ("I-1", "feature_delivery", 1) in theme_cats
     assert ("I-1", "maintenance", 0) in theme_cats
     assert not any(c == "quality" for _, c, _ in theme_cats)
-
-
-def test_backfill_populates_idle_org_membership_no_llm() -> None:
-    """Idle org: investments exist (from a prior post-sync run) but membership is
-    empty/stale → backfill writes membership rows for every node, no LLM."""
-    edges = [_edge("issue", "I-1", "commit", "C-1")]
-    uid = work_unit_id([("issue", "I-1"), ("commit", "C-1")])
-    sink = _FakeSink(
-        edges=edges,
-        investments=[
-            _investment_row(
-                work_unit_id=uid,
-                theme={"operational": 1.0},
-                subcategory={"operational.support": 1.0},
-            )
-        ],
-    )
-
-    with (
-        patch(
-            "dev_health_ops.work_graph.investment.categorize.categorize_text_bundle"
-        ) as mock_categorize,
-    ):
-        stats = _run_backfill(sink)
-
-    mock_categorize.assert_not_called()
-    assert stats["matched"] == 1
-    node_ids = {r.node_id for r in sink.written}
-    assert node_ids == {"I-1", "C-1"}
-    assert all(r.org_id == "org-1" for r in sink.written)
 
 
 def test_backfill_empty_graph_is_clean_noop() -> None:

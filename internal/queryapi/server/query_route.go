@@ -1346,6 +1346,28 @@ const registeredTestopsJobFailuresDocument = `query TestOpsJobFailures($orgId: S
   }
 }`
 
+// registeredCoverageBaselinesDocument is the registered document for the
+// `coverageBaselines` operation (CHAOS-8111, Go-only: no Python resolver
+// exists), the exact wire-form text the web client sends
+// (testdata/wire_capture/coveragebaselines_captured.graphql; the wire form of
+// TESTOPS_COVERAGE_BASELINES_QUERY, computed with the web's pinned urql).
+const registeredCoverageBaselinesDocument = `query CoverageBaselines($orgId: String!, $endDate: Date!, $repoIds: [String!], $teamIds: [String!]) {
+  coverageBaselines(
+    orgId: $orgId
+    endDate: $endDate
+    repoIds: $repoIds
+    teamIds: $teamIds
+  ) {
+    repoId
+    repoName
+    lineBaselinePct
+    lineDays
+    branchBaselinePct
+    branchDays
+    __typename
+  }
+}`
+
 // registeredTestopsRiskDocument is the registered document for the
 // `testopsRisk` operation, the exact wire-form text a real web client
 // sends (testdata/wire_capture/testopsrisk_captured.graphql).
@@ -3570,6 +3592,7 @@ func newQueryHandler(chClient featureflags.QueryClient, pgPool *pgxpool.Pool, ve
 		"aiAttributionOverview":             digestHex(registeredAiAttributionOverviewDocument),
 		"testopsRisk":                       digestHex(registeredTestopsRiskDocument),
 		"testopsJobFailures":                digestHex(registeredTestopsJobFailuresDocument),
+		"coverageBaselines":                 digestHex(registeredCoverageBaselinesDocument),
 		"workItemTeamAttributions":          digestHex(registeredWorkItemTeamAttributionsDocument),
 		"recommendations":                   digestHex(registeredRecommendationsDocument),
 	}
@@ -3587,12 +3610,11 @@ func newQueryHandler(chClient featureflags.QueryClient, pgPool *pgxpool.Pool, ve
 	// uses to answer "is anything actually enabled?".
 	logRoutingStateDrift(pgPool, schemaDigest)
 	registryHandler := newRegistryHandler(schemaDigest, digestByOperation)
-	// CHAOS-8517: the serving switch carries the catalog rule -- a registered operation with no routing
-	// row at any schema digest is served; an operation that has a row keeps its row's answer
-	// (routeswitch/catalog_switch.go holds the rule and its row-state table). Only THIS switch has it:
-	// the proof switch below and the class-row switch (newClassRowSwitch) are built by the other
-	// constructors, so a measurement route still needs a row and an MCP class root with no row is dark.
-	sw := routeswitch.NewCatalogSwitchWithLegacy(pgPool, schemaDigest, digestByOperation, legacyDigestsByOperation)
+	// CHAOS-8702: the serving switch reads no routing row -- a registered operation is served
+	// (routeswitch/catalog_switch.go). The proof switch below and the class-row switch
+	// (newClassRowSwitch) still read rows: a measurement route needs a row and an MCP class root with no
+	// row is dark.
+	sw := routeswitch.NewCatalogSwitch(digestByOperation)
 	routeMux := routeswitch.NewMux(sw)
 
 	// operationByDigest is digestByOperation's reverse index, built once

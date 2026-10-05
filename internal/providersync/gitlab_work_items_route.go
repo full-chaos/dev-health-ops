@@ -317,8 +317,14 @@ func (handler GitLabWorkItemsRouteHandler) Collect(
 			if payload.Description != nil {
 				description = *payload.Description
 			}
-			linkRows, unsupported := normalizeGitLabDependencies(claim, item.WorkItemID, fullName, description, links, normalizedAt)
-			rows.Dependencies = append(rows.Dependencies, linkRows...)
+			rows.Dependencies = append(rows.Dependencies,
+				normalizeGitLabDependencies(claim, item.WorkItemID, fullName, description, links, normalizedAt)...)
+			unsupported := 0
+			for _, link := range links {
+				if _, ok := link.targetWorkItemID(); !ok {
+					unsupported++
+				}
+			}
 			if unsupported > 0 {
 				issueLinksUnsupported += unsupported
 				slog.Warn("providersync.gitlab.issue_link_unsupported_shape",

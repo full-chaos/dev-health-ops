@@ -27,5 +27,7 @@
   "drilldown_links": {
     "prs": "/api/v1/drilldown/prs?metric=blocked_work",
     "issues": "/api/v1/drilldown/issues?metric=blocked_work"
-  }
+  },
+  "repositories": null,
+  "source_url": null
 }

@@ -72,7 +72,13 @@ func TestNormalizeGitLabDependenciesNeverGuessesTheLinkTargetProject(t *testing.
 		}
 		links = append(links, link)
 	}
-	rows, unsupported := normalizeGitLabDependencies(claim, "gitlab:acme/api#5", "acme/api", "", links, time.Now())
+	rows := normalizeGitLabDependencies(claim, "gitlab:acme/api#5", "acme/api", "", links, time.Now())
+	unsupported := 0
+	for _, link := range links {
+		if _, ok := link.targetWorkItemID(); !ok {
+			unsupported++
+		}
+	}
 	if unsupported != 5 || len(rows) != 1 || rows[0].TargetWorkItemID != "gitlab:other/proj#3" {
 		t.Fatalf("unsupported=%d rows=%+v want 5 unsupported and one row to other/proj#3", unsupported, rows)
 	}

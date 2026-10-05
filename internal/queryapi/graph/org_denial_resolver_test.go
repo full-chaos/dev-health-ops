@@ -9,6 +9,7 @@ import (
 
 	"github.com/full-chaos/dev-health-ops/internal/queryapi/authctx"
 	"github.com/full-chaos/dev-health-ops/internal/queryapi/graph/model"
+	"github.com/full-chaos/dev-health-ops/internal/queryapi/graphqldate"
 )
 
 // scopeRecordingClient records every statement's bindings and fails, so a
@@ -42,6 +43,10 @@ func orgScopedCalls() map[string]orgScopedCall {
 		},
 		"testopsJobFailures": func(r *Resolver, ctx context.Context, orgID string) error {
 			_, err := r.Query().TestopsJobFailures(ctx, orgID, model.TestOpsJobFailuresInput{Limit: 20})
+			return err
+		},
+		"coverageBaselines": func(r *Resolver, ctx context.Context, orgID string) error {
+			_, err := r.Query().CoverageBaselines(ctx, orgID, graphqldate.Date{}, nil, nil)
 			return err
 		},
 		"busFactor": func(r *Resolver, ctx context.Context, orgID string) error {

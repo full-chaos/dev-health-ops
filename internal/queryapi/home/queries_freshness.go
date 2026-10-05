@@ -151,7 +151,7 @@ func fetchScopeDataConfidence(ctx context.Context, client QueryClient, f Filters
             toInt64(countDistinct(r.id)) AS total_repos,
             toInt64(countDistinctIf(r.id, metrics.is_covered = 1)) AS covered_repos,
             maxOrNull(if(metrics.is_covered = 1, metrics.last_ingested_at, NULL)) AS last_ingested_at
-        FROM repos FINAL AS r
+        FROM repos AS r FINAL
         LEFT JOIN (
             SELECT
                 repo_id,

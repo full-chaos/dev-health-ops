@@ -1,0 +1,7 @@
+query CoverageScopeBaseline($orgId: String!, $endDate: Date!) {
+  coverageScopeBaseline(orgId: $orgId, endDate: $endDate) {
+    lineBaselinePct
+    lineDays
+    __typename
+  }
+}

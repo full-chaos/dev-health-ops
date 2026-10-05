@@ -1165,6 +1165,28 @@ var operationSpecs = map[string]OperationSpec{
 			},
 		},
 	},
+	// coverageBaselines (CHAOS-8111) is Go-only from its first day: no Python
+	// resolver ever existed. Its two floats are ClickHouse avg() values of the
+	// stored daily percentages; with no baseline answer to compare with, no
+	// Tier-B leaf is declared. The request is the web's: the day after the
+	// window's last day, and no scope.
+	"coverageBaselines": {
+		ResponseRoot: "coverageBaselines",
+		Variables: func(orgID string, w Window) map[string]any {
+			return map[string]any{"orgId": orgID, "endDate": w.UntilDate}
+		},
+	},
+	// coverageScopeBaseline (CHAOS-8541) is Go-only from its first day, as
+	// coverageBaselines is. Its one float is a ClickHouse avg() of avg() values
+	// of the stored daily percentages; with no baseline answer to compare with,
+	// no Tier-B leaf is declared. The request is the web's: the day after the
+	// window's last day, and no scope.
+	"coverageScopeBaseline": {
+		ResponseRoot: "coverageScopeBaseline",
+		Variables: func(orgID string, w Window) map[string]any {
+			return map[string]any{"orgId": orgID, "endDate": w.UntilDate}
+		},
+	},
 	// testopsJobFailures (CHAOS-8513) is Go-only from its first day: no Python
 	// resolver ever existed, so there is no baseline answer to compare it with.
 	// Its one float, failureRate, is failedRuns / runs: two integer counts of
@@ -1177,17 +1199,6 @@ var operationSpecs = map[string]OperationSpec{
 			return map[string]any{"orgId": orgID, "input": map[string]any{
 				"sinceDate": testopsJobFailuresSince(w.UntilDate), "untilDate": w.UntilDate, "limit": 20,
 			}}
-		},
-	},
-	// coverageBaselines (CHAOS-8111) is Go-only from its first day: no Python
-	// resolver ever existed. Its two floats are ClickHouse avg() values of the
-	// stored daily percentages; with no baseline answer to compare with, no
-	// Tier-B leaf is declared. The request is the web's: the day after the
-	// window's last day, and no scope.
-	"coverageBaselines": {
-		ResponseRoot: "coverageBaselines",
-		Variables: func(orgID string, w Window) map[string]any {
-			return map[string]any{"orgId": orgID, "endDate": w.UntilDate}
 		},
 	},
 	"throughputForecast": {

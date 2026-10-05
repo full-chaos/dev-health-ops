@@ -9,11 +9,8 @@ package routing
 // and reads the real event off stderr.
 
 import (
-	"context"
 	"strings"
 	"testing"
-
-	"github.com/jackc/pgx/v5/pgxpool"
 )
 
 const eventPlant = "lane operation=forged mode_after=primary"
@@ -38,12 +35,11 @@ func assertQuotedPlant(t *testing.T, stderrOut, event string) {
 }
 
 func TestEnableEventQuotesRecordedBy(t *testing.T) {
-	_, dsn := startVerbPostgres(t)
-	digest := "9999999999999999999999999999999999999999999999999999999999999999"
-	catalogPath := writeCatalog(t, map[string]string{verbTestOperation: digest})
+	pool, dsn := startVerbPostgres(t)
 	t.Setenv(bearerEnvVar, verbTestBearer)
-	server := startQueryAPI(t, localSchemaDigest(), map[string]string{verbTestOperation: digest})
-	_, stderrOut, err := captureVerb(t, enableArgs(server, dsn, catalogPath, "-recorded-by", eventPlant)...)
+	seedClassRootWithExcludedShape(t, pool)
+	server := queryAPIFor(t)
+	_, stderrOut, err := captureVerb(t, classEnableArgs(server, dsn, "-allow-excluded", allowExcludedOp, "-recorded-by", eventPlant)...)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -52,11 +48,9 @@ func TestEnableEventQuotesRecordedBy(t *testing.T) {
 
 func TestDisableEventQuotesRecordedBy(t *testing.T) {
 	pool, dsn := startVerbPostgres(t)
-	digest := "9999999999999999999999999999999999999999999999999999999999999999"
-	catalogPath := writeCatalog(t, map[string]string{verbTestOperation: digest})
-	insertRowAtOperation(t, pool, localSchemaDigest(), digest, verbTestOperation, "canary", verbTestBuild)
-	_, stderrOut, err := captureVerb(t, "disable", "-postgres-uri", dsn, "-catalog", catalogPath,
-		"-operations", verbTestOperation, "-mode", "python", "-apply",
+	insertClassDecision(t, pool, verbTestClassOperation, "canary", verbTestBuild)
+	_, stderrOut, err := captureVerb(t, "disable", "-postgres-uri", dsn,
+		"-operations", verbTestClassOperation, "-mode", "python", "-apply",
 		"-recorded-by", eventPlant, "-review-evidence", "why")
 	if err != nil {
 		t.Fatal(err)
@@ -66,11 +60,10 @@ func TestDisableEventQuotesRecordedBy(t *testing.T) {
 
 func TestRepointEventQuotesRecordedBy(t *testing.T) {
 	pool, dsn := startVerbPostgres(t)
-	digest := "9999999999999999999999999999999999999999999999999999999999999999"
 	t.Setenv(bearerEnvVar, verbTestBearer)
-	server := startQueryAPI(t, localSchemaDigest(), map[string]string{verbTestOperation: digest})
-	// A row that names a build that is NOT the running one, so repoint writes.
-	insertRowAtOperation(t, pool, localSchemaDigest(), digest, verbTestOperation, "canary", "0000000000000000000000000000000000000001")
+	server := queryAPIFor(t)
+	// A decision that names a build that is NOT the running one, so repoint writes.
+	insertClassDecision(t, pool, verbTestClassOperation, "canary", "0000000000000000000000000000000000000001")
 	_, stderrOut, err := captureVerb(t, "repoint",
 		"-registry-url", server.URL+"/registry", "-buildinfo-url", server.URL+"/buildinfo",
 		"-postgres-uri", dsn,
@@ -79,18 +72,4 @@ func TestRepointEventQuotesRecordedBy(t *testing.T) {
 		t.Fatal(err)
 	}
 	assertQuotedPlant(t, stderrOut, "go_api_routing.repointed")
-}
-
-func insertRowAtOperation(t *testing.T, pool *pgxpool.Pool, schema, doc, op, mode, build string) {
-	t.Helper()
-	ctx := context.Background()
-	if _, err := pool.Exec(ctx, `INSERT INTO go_api_candidate_build (schema_digest, document_digest, selected_operation, candidate_build)
-		VALUES ($1,$2,$3,$4) ON CONFLICT DO NOTHING`, schema, doc, op, build); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := pool.Exec(ctx, `INSERT INTO go_api_routing_state
-		(schema_digest, document_digest, selected_operation, current_candidate_build, owner, mode, rollout_percentage, review_evidence, recorded_by)
-		VALUES ($1,$2,$3,$4,'go',$5,100,'pre-existing decision','operator')`, schema, doc, op, build, mode); err != nil {
-		t.Fatal(err)
-	}
 }

@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
 # bigboy-cut.sh <old8> <full new ops sha>  -- the whole bigboy phase of a group cut, sequential, logs to _records/bigboy-<new8>/cut.log.
-# waits for the CI-built images -> re-pin (ops images + web, CHAOS-7019) -> pre-roll routing carry
-# (CHAOS-7022, refuse-not-skip) -> migrate -> recreate query-api/go-api/web -> the worker plane ->
-# route coverage -> routing repoint (CHAOS-7022, every cut) -> log and worker checks ->
+# waits for the CI-built images -> re-pin (ops images + web, CHAOS-7019) -> migrate
+# -> recreate query-api/go-api/web -> the worker plane ->
+# route coverage -> log and worker checks ->
 # river apply -> hook check -> CH grants check -> PG grants read-back -> the web-path smoke (R460).
 # Every step prints one `STEP <name> rc=<n>` line; nothing secret is printed.
 # CHAOS-8361: the stack is Go-only. The Python `api` and `metrics-api` services are not in this cut:
@@ -151,97 +151,6 @@ $HERE/bigboy-repin-web.sh > $REC.repin-web.out 2>&1; rc_web=$?; st repin-web $rc
 # explicit way to keep the current web pin.
 [ $rc_web = 0 ] || { echo "cut stops: web re-pin failed rc=$rc_web (see $REC.repin-web.out); WEB_REPIN=skip keeps the current web pin"; exit 1; }
 
-# CHAOS-7022 (D2804/D2811): pre-roll routing carry, refuse-not-skip. Runs HERE -- after repin
-# (compose/compose.bigboy.images.yml already names the round's NEW tools image, so venue-tools
-# computes the NEW schema digest from its own embedded SDL) but BEFORE migrate/up/up-workers
-# recreate query-api/go-api, while query-api is still the OLD, pre-roll, live process: the
-# exact source `carry` is designed to read from (docs/contribute/architecture/go-api-wave-0-
-# proof-infrastructure.md, "When the schema digest moves"). `carry` itself refuses (exit 2) when
-# the live and target schema digests already agree -- the EXPECTED shape for an ordinary,
-# non-schema-changing roll, not a failure. One documented, real exception (rev196, both
-# bigboy's own re-cut and the actual prod roll, _records/bigboy-1b05473e/prod-rev196-step1.5-
-# carry-lines.md's own ABORT RULE A): a "stale build" refusal means the live rows lag the
-# actually-running build (no schema change involved at all) -- repoint against the same live
-# process, then ONE retry of carry; only a second refusal is fatal. Any other non-zero result
-# aborts the cut before migrate/up ever runs.
-#
-# D2828/D2829 (CHAOS-7022 r1 self-correction, CHAOS-7023/#3369 r1 P1): branching on carry's
-# human-readable TEXT was wrong TWICE, in two different ways -- first a hand-typed grep that
-# never matched the real Go string at all, then (once fixed to match) a second finding that
-# text was never a stable contract in the first place: it differs between the CLI's own early
-# preflight and the goapiproof package's differently-worded sentinel errors for the exact same
-# condition, and a caller has no way to know which layer's wording it is reading. Structural
-# fix: `carry -json` prints one `GOAPI_ROUTING_JSON {...}` line with a `reason` field from a
-# small, closed vocabulary ("carried", "digest_unchanged", "stale_build", "refused", "error"),
-# set at the Go call site that KNOWS why, not guessed from prose. Extracted with jq (already
-# used elsewhere in this script, host-side, after `docker compose run` returns -- no new
-# dependency), never grep on error text again.
-ROUTING_ORG=${ROUTING_ORG:-67f1add8-9fcb-4272-addb-044b70c442c8}  # the disposable fixture org, never the local org
-# carry's -catalog/-documents default to paths relative to CWD (the tools image's own WORKDIR,
-# /app/go-api, per docker/go-api-tools.Dockerfile) -- but venue-tools' compose service overrides
-# working_dir to /work (a host-mounted scratch dir, always empty), so those relative defaults can
-# never resolve there. Point carry at the SAME files by their absolute, image-baked path instead
-# (still the tools image's own catalog/documents -- "the image THIS binary was built from", per
-# carry.go's flag help -- never a separately fetched copy). repoint has no -catalog/-documents
-# flags at all, so it keeps its own, shorter arg list.
-CARRY_ARGS="-registry-url http://query-api:8090/registry -buildinfo-url http://query-api:8090/buildinfo -json -catalog /app/go-api/contracts/graphql/v1/go_api_operations.json -documents /app/go-api/documents.json"
-REPOINT_ARGS="-registry-url http://query-api:8090/registry -buildinfo-url http://query-api:8090/buildinfo -json"
-carry_reason() {
-  # $1: the captured carry/repoint stdout+stderr blob. Prints the GOAPI_ROUTING_JSON line's
-  # `reason` field, or empty if the line is missing/unparseable -- never dies (a missing/
-  # malformed JSON line is itself meaningful: the caller below treats an empty reason as "not
-  # a case we recognize", the same conservative default text-matching always fell back to).
-  printf '%s\n' "$1" | grep '^GOAPI_ROUTING_JSON ' | sed 's/^GOAPI_ROUTING_JSON //' | jq -r '.reason // empty' 2>/dev/null
-}
-# routing_call_succeeded RC OUTPUT EXPECTED -- the ONE success rule (r3 D2886 condition 1),
-# shared by every carry/repoint call site below: a call succeeds ONLY when the exit code is 0
-# AND the GOAPI_ROUTING_JSON line's reason parses AND equals EXPECTED ("carried" for carry,
-# "repointed" for repoint). Every other combination -- nonzero exit, no JSON line at all,
-# malformed JSON, an empty reason, or a reason that parsed but does not match EXPECTED -- is a
-# failure, indistinguishable in effect from a real refusal. r3's P1 (real, reproduced): a zero
-# exit status alone used to be read as proof of success at each of these call sites
-# independently, so a docker/compose-layer zero exit with no JSON line at all (never touching
-# the real dho binary) fell straight into a success branch.
-routing_call_succeeded() {
-  local rc="$1" output="$2" expected="$3"
-  [ "$rc" -eq 0 ] && [ "$(carry_reason "$output")" = "$expected" ]
-}
-CARRY_OUT=$(docker compose --env-file ops/.env --profile venue run --rm --no-deps -T venue-tools \
-  "GO_API_ROUTING_BEARER=\$(dho mint envelope -org $ROUTING_ORG -key-file /keys/envelope.pem) dho goapi routing carry $CARRY_ARGS -recorded-by bigboy-cut -review-evidence 'CHAOS-7022: pre-roll carry, cut $OLD8 -> $N8'" 2>&1)
-CARRY_RC=$?
-echo "$CARRY_OUT" > "$REC.routing-carry.out"
-CARRY_REASON=$(carry_reason "$CARRY_OUT")
-if routing_call_succeeded "$CARRY_RC" "$CARRY_OUT" carried; then
-  st routing-carry 0
-elif [ "$CARRY_REASON" = "digest_unchanged" ]; then
-  st routing-carry 0; echo "no schema-digest change this cut -- nothing to carry"
-elif [ "$CARRY_REASON" = "stale_build" ]; then
-  echo "pre-roll carry: rows lag the actually-running build (no schema change) -- repointing then retrying once"
-  REPOINT_OUT=$(docker compose --env-file ops/.env --profile venue run --rm --no-deps -T venue-tools \
-    "GO_API_ROUTING_BEARER=\$(dho mint envelope -org $ROUTING_ORG -key-file /keys/envelope.pem) dho goapi routing repoint $REPOINT_ARGS -operations all-registered -recorded-by bigboy-cut -review-evidence 'CHAOS-7022: pre-roll repoint-before-retry, cut $OLD8 -> $N8'" 2>&1)
-  REPOINT_RC=$?
-  echo "$REPOINT_OUT" >> "$REC.routing-carry.out"
-  if ! routing_call_succeeded "$REPOINT_RC" "$REPOINT_OUT" repointed; then
-    st routing-carry 1
-    echo "FAIL: pre-roll repoint-before-retry itself failed (rc=$REPOINT_RC reason=$(carry_reason "$REPOINT_OUT")) -- see $REC.routing-carry.out; ABORTING (CHAOS-7022)" >&2
-    exit 1
-  fi
-  CARRY_OUT2=$(docker compose --env-file ops/.env --profile venue run --rm --no-deps -T venue-tools \
-    "GO_API_ROUTING_BEARER=\$(dho mint envelope -org $ROUTING_ORG -key-file /keys/envelope.pem) dho goapi routing carry $CARRY_ARGS -recorded-by bigboy-cut -review-evidence 'CHAOS-7022: pre-roll carry retry after repoint, cut $OLD8 -> $N8'" 2>&1)
-  CARRY_RC2=$?
-  echo "$CARRY_OUT2" >> "$REC.routing-carry.out"
-  if routing_call_succeeded "$CARRY_RC2" "$CARRY_OUT2" carried; then
-    st routing-carry 0; echo "pre-roll carry: OK after repoint-then-retry"
-  else
-    st routing-carry 1
-    echo "FAIL: pre-roll routing carry still refused after repoint-then-retry (rc=$CARRY_RC2 reason=$(carry_reason "$CARRY_OUT2")) -- see $REC.routing-carry.out; ABORTING before migrate/up/up-workers (CHAOS-7022 refuse-not-skip)" >&2
-    exit 1
-  fi
-else
-  st routing-carry 1
-  echo "FAIL: pre-roll routing carry refused for a reason other than 'no schema change' or a stale build (rc=$CARRY_RC reason=${CARRY_REASON:-unrecognized}) -- see $REC.routing-carry.out; ABORTING before migrate/up/up-workers (CHAOS-7022 refuse-not-skip)" >&2
-  exit 1
-fi
 # CHAOS-6987 (D2728): --env-file is required from here on -- docker compose's default .env
 # auto-load only reads the PROJECT ROOT .env, never ops/.env, so a compose-level ${VAR}
 # substitution referencing a var that ONLY lives in ops/.env (e.g. query-api's
@@ -274,30 +183,8 @@ if [ -n "$VALUES" ]; then python3 "$HERE/check-route-coverage.py" "$VALUES"; st 
 # serves a catalog operation that has NO routing row: no row has to be enabled, and the check read a
 # served operation with no row as missing. What this cut serves is measured by the web-path smoke
 # below. The catalog is still fetched at THIS cut's sha: the web-path smoke reads it
-# (DHO_SMOKE_CATALOG_FILE) and vt mounts it for the post-cut repoint.
-ROUTING_ORG=${ROUTING_ORG:-67f1add8-9fcb-4272-addb-044b70c442c8}  # the disposable fixture org, never the local org
+# (DHO_SMOKE_CATALOG_FILE).
 gh api "repos/full-chaos/dev-health-ops/contents/contracts/graphql/v1/go_api_operations.json?ref=$NEW" -H 'Accept: application/vnd.github.raw' > "$REC.catalog.json" 2>/dev/null && chmod 644 "$REC.catalog.json"
-vt() { docker compose --env-file ops/.env --profile venue run --rm --no-deps -T -v "$REC.catalog.json:/catalog.json:ro" venue-tools "$1"; }
-# CHAOS-7022 (D2811 addendum): repoint after EVERY cut, schema-change or not -- routing rows must
-# never lag the actually-running build by more than one cut (the rev195->rev196 prod gap: rows
-# still named the build from two rolls back, with no schema change involved at all). Provenance
-# only -- repoint never touches mode/reachability (docs/contribute/architecture/go-api-wave-0-
-# proof-infrastructure.md's "repoint" section), so it is safe unconditionally, every cut.
-#
-# D2823 (r1 P1 #1): `st` only PRINTS a step's rc -- it never fails the script -- so a failed
-# post-cut repoint used to leave the cut reporting overall success while routing rows silently
-# stayed stale. Capture the rc explicitly and abort, same shape as the up-workers guard above
-# (Trap #420).
-#
-# D2823 (r1 P1 #2): pin with -expect-build $NEW, the SAME guard bigboy-graphql-prove.sh already
-# uses on its own repoint call. Unpinned, this call accepts whatever build query-api's /buildinfo
-# happens to report right now -- if the query-api/go-api recreate above (STEP up) left an
-# OLDER query-api still serving (a partial or failed recreate), this call would silently write
-# routing-repoint rows for that STALE build while the cut still reports success.
-vt "GO_API_ROUTING_BEARER=\$(dho mint envelope -org $ROUTING_ORG -key-file /keys/envelope.pem) dho goapi routing repoint -registry-url http://query-api:8090/registry -buildinfo-url http://query-api:8090/buildinfo -expect-build $NEW -operations all-registered -recorded-by bigboy-cut -review-evidence 'CHAOS-7022: post-cut repoint, cut $OLD8 -> $N8'" > "$REC.routing-repoint.out" 2>&1
-rc_repoint=$?
-st routing-repoint "$rc_repoint"
-[ "$rc_repoint" = 0 ] || { echo "ABORT: post-cut routing repoint failed or refused (-expect-build $NEW) -- see $REC.routing-repoint.out; routing rows may be stale (CHAOS-7022)" >&2; exit 1; }
 $HERE/bigboy-log-checks.sh $REC > $REC/log-checks.out 2>&1; st log-checks $?; tail -6 $REC/log-checks.out
 $HERE/bigboy-6889-checks.sh $REC > $REC/6889-checks.out 2>&1; st worker-checks $?; tail -4 $REC/6889-checks.out | cut -c1-200
 $HERE/bigboy-river-apply.sh > $REC/river-apply.out 2>&1; st river-apply $?

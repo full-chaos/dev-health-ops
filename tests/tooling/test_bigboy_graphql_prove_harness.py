@@ -31,11 +31,11 @@ def test_script_never_changes_query_api_posture() -> None:
         assert forbidden not in text, forbidden
 
 
-def test_script_refuses_prover_build_skew_and_repoints_before_prove() -> None:
+def test_script_refuses_prover_build_skew_and_runs_no_routing_verb() -> None:
     text = SCRIPT.read_text(encoding="utf-8")
     assert "go-api-tools:sha-$S7" in text and "REFUSED: venue-prove image" in text
-    assert text.index("routing repoint") < text.index("dho goapi prove")
-    assert "-candidate-build $NEW" in text and "-expect-build $NEW" in text
+    assert "dho goapi routing" not in text
+    assert "-candidate-build $NEW" in text
 
 
 def test_credentials_never_on_argv_or_stdout() -> None:

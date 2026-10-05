@@ -9,6 +9,7 @@ import (
 	"time"
 	"unicode/utf8"
 
+	"github.com/full-chaos/dev-health-ops/internal/jobs/metrics/workitemmetrics"
 	"github.com/full-chaos/dev-health-ops/internal/providerfoundation"
 	"github.com/google/uuid"
 )
@@ -115,6 +116,19 @@ type gitlabIssueLinkPayload struct {
 	References struct {
 		Full string `json:"full"`
 	} `json:"references"`
+	// LinkCreatedAt is when the link was made at gitlab (the issue links
+	// API's link_created_at): the relation's start (CHAOS-8578).
+	LinkCreatedAt *string `json:"link_created_at"`
+}
+
+// targetWorkItemID is the linked issue's work-item id from its references.full, never completed from the source issue's
+// project; ok is false for an entry without a usable reference (an unsupported shape).
+func (link gitlabIssueLinkPayload) targetWorkItemID() (string, bool) {
+	reference, err := parseGitLabReference(link.References.Full, gitlabIssueMarker)
+	if err != nil || link.IID.String() != strconv.FormatUint(uint64(reference.IID), 10) {
+		return "", false
+	}
+	return "gitlab:" + reference.Path + "#" + strconv.FormatUint(uint64(reference.IID), 10), true
 }
 
 // gitlabClosingMergeRequestPayload is one entry of GET /projects/:id/issues/:iid/closed_by: a merge request that closes
@@ -124,6 +138,16 @@ type gitlabClosingMergeRequestPayload struct {
 	References struct {
 		Full string `json:"full"`
 	} `json:"references"`
+}
+
+// reference parses the entry's references.full as a merge-request reference and requires the iid field to agree with it.
+// Anything less is an answer-shape change, never a guess.
+func (payload gitlabClosingMergeRequestPayload) reference() (gitlabReference, bool) {
+	reference, err := parseGitLabReference(payload.References.Full, gitlabMergeRequestMarker)
+	if err != nil || payload.IID.String() != strconv.FormatUint(uint64(reference.IID), 10) {
+		return gitlabReference{}, false
+	}
+	return reference, true
 }
 
 type gitlabIdentityResolver func(gitlabWorkItemUserPayload) string
@@ -683,30 +707,22 @@ var (
 // normalizeGitLabClosingMergeRequests emits the PRIMARY provider-attached MR<->issue link for GitLab (CHAOS-8526), the
 // counterpart of extractGitHubClosingIssueReferences: source = the MR (gitlab:<path>!<iid>, the id
 // normalizeGitLabMergeRequestWorkItem mints), target = this issue, raw kind gitlab_closing_reference. The MR's own
-// project path comes from references.full (an MR from another project keeps its path); only when that is absent does
-// the issue's project stand in.
+// project path comes from references.full (an MR from another project keeps its path); an entry without it is rejected
+// by the collector (gitlabClosingMergeRequestPayload.reference), never completed from the issue's project.
 func normalizeGitLabClosingMergeRequests(
 	claim Claim,
 	issueWorkItemID string,
-	fullName string,
 	mergeRequests []gitlabClosingMergeRequestPayload,
 	normalizedAt time.Time,
 ) []gitlabWorkItemDependencyRow {
 	rows := make([]gitlabWorkItemDependencyRow, 0, len(mergeRequests))
 	seen := make(map[string]struct{}, len(mergeRequests))
 	for _, mergeRequest := range mergeRequests {
-		iid := mergeRequest.IID.String()
-		if parsed, err := strconv.Atoi(iid); err != nil || parsed < 1 {
+		reference, ok := mergeRequest.reference()
+		if !ok {
 			continue
 		}
-		path := strings.TrimSpace(mergeRequest.References.Full)
-		if index := strings.LastIndex(path, "!"); index >= 0 {
-			path = path[:index]
-		}
-		if path == "" {
-			path = fullName
-		}
-		source := "gitlab:" + path + "!" + iid
+		source := "gitlab:" + reference.Path + "!" + strconv.FormatUint(uint64(reference.IID), 10)
 		if _, duplicate := seen[source]; duplicate || source == issueWorkItemID {
 			continue
 		}
@@ -733,7 +749,17 @@ func normalizeGitLabDependencies(
 ) []gitlabWorkItemDependencyRow {
 	rows := make([]gitlabWorkItemDependencyRow, 0)
 	seenTargets := map[string]struct{}{}
-	appendRow := func(source, target, relationship, raw string) {
+	// writer stores which items of the row write it (CHAOS-8578): a native
+	// issue link is on both issues, a description keyword or an issue key
+	// only in this item's text. The raw value cannot say it: "blocks" is
+	// both a link type and a keyword.
+	writerOf := func(source string) string {
+		if source == workItemID {
+			return workitemmetrics.RelationWriterSource
+		}
+		return workitemmetrics.RelationWriterTarget
+	}
+	appendRow := func(source, target, relationship, raw, writer string, startedAt *time.Time) {
 		if source == "" || target == "" || relationship == "" || raw == "" {
 			return
 		}
@@ -741,24 +767,17 @@ func normalizeGitLabDependencies(
 			SourceWorkItemID: source, TargetWorkItemID: target, RelationshipType: relationship,
 			RelationshipTypeRaw: raw, RelationshipSemanticsVersion: "canonical-blocks.v2",
 			LastSynced: normalizedAt.UTC(), OrgID: claim.OrgID,
+			RelationStartedAt: startedAt, RelationWriter: &writer,
 		}
 		if validateGitLabDependencyRow(row, claim) == nil {
 			rows = append(rows, row)
 		}
 	}
 	for _, link := range links {
-		targetIID := link.IID.String()
-		if targetIID == "" || targetIID == "0" {
+		targetID, ok := link.targetWorkItemID()
+		if !ok {
 			continue
 		}
-		targetPath := link.References.Full
-		if index := strings.Index(targetPath, "#"); index >= 0 {
-			targetPath = targetPath[:index]
-		}
-		if strings.TrimSpace(targetPath) == "" {
-			targetPath = fullName
-		}
-		targetID := "gitlab:" + targetPath + "#" + targetIID
 		if _, seen := seenTargets[targetID]; seen {
 			continue
 		}
@@ -771,7 +790,7 @@ func normalizeGitLabDependencies(
 				source, target = targetID, workItemID
 			}
 		}
-		appendRow(source, target, relationship, linkType)
+		appendRow(source, target, relationship, linkType, workitemmetrics.RelationWriterBoth, parseGitLabWorkItemTime(link.LinkCreatedAt))
 	}
 	for _, match := range gitlabIssueReferencePattern.FindAllStringSubmatch(description, -1) {
 		project := match[1]
@@ -801,7 +820,7 @@ func normalizeGitLabDependencies(
 				break
 			}
 		}
-		appendRow(source, target, relationship, raw)
+		appendRow(source, target, relationship, raw, writerOf(source), nil)
 	}
 	seenExternal := map[string]struct{}{}
 	for _, match := range gitlabExternalKeyPattern.FindAllStringSubmatch(description, -1) {
@@ -820,7 +839,7 @@ func normalizeGitLabDependencies(
 		case "blocked by", "depends on":
 			relationship = "blocked_by"
 		}
-		appendRow(workItemID, "extkey:"+key, relationship, "external_issue_key")
+		appendRow(workItemID, "extkey:"+key, relationship, "external_issue_key", workitemmetrics.RelationWriterSource, nil)
 	}
 	return rows
 }

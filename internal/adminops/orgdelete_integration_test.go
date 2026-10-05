@@ -116,7 +116,9 @@ func normalize(t *testing.T, stdout string, clickhouse bool) string {
 // was recorded: table -> the migration that added it. The same tables are
 // named in internal/apiservice/admin's clickHouseOrgTablesAfterThePythonFreeze.
 var orgDeleteTablesAfterThePythonFreeze = map[string]string{
-	"work_item_dependency_first_seen": "102_work_item_dependency_first_seen.sql", // CHAOS-8574
+	"work_item_dependency_first_seen":   "102_work_item_dependency_first_seen.sql",    // CHAOS-8574
+	"work_item_relations_read":          "103_work_item_relation_writer_and_read.sql", // CHAOS-8578
+	"work_item_blocked_durations_daily": "104_work_item_blocked_durations.sql",        // CHAOS-8489
 }
 
 // planClickHouseTables returns the table -> row count map of a delete

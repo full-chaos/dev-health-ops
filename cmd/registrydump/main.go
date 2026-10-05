@@ -83,11 +83,11 @@ func main() {
 	flag.Parse()
 
 	// CHAOS-4696 PR2: -schema-digest is the ONE producer of the schema
-	// digest used to key go_api_routing_state/go_api_candidate_build rows
-	// -- ops CI, harnesses, and anyone seeding those rows should all run
+	// digest used to key proof receipts (go_api_proof_run/go_api_candidate_build)
+	// -- ops CI, harnesses, and anyone recording those rows should all run
 	// THIS, never hand-type or copy a value from somewhere else. It calls
 	// the exact same digest.Schema(schemav1.SDL) a running query-api
-	// process computes internally for its own PostgresSwitch routing key
+	// process computes internally for its own schema digest
 	// (query_route.go's buildQueryRoute; CHAOS-5013 removed the
 	// operator-supplied GO_API_SCHEMA_DIGEST env var and the startup
 	// verification against it -- the process no longer takes this value

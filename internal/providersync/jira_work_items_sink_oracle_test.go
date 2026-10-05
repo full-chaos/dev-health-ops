@@ -118,15 +118,22 @@ func TestJiraDirectAdapterProjectionsMatchFrozenPythonSink(t *testing.T) {
 		}
 		testCase := cases[index]
 		t.Run(result.ID, func(t *testing.T) {
-			goColumns := insertColumns(t, testCase.columns)
+			goColumns, goRows := insertColumns(t, testCase.columns), testCase.goRows
+			if testCase.destination == "work_item_dependencies" {
+				var problems []string
+				goColumns, goRows, problems = withoutDependencyColumnsAfterThePythonFreeze(goColumns, goRows)
+				if len(problems) > 0 {
+					t.Fatalf("columns after the Python freeze: %v", problems)
+				}
+			}
 			if strings.Join(goColumns, ",") != strings.Join(result.ColumnNames, ",") {
 				t.Fatalf("column list diverges: python=%v go=%v", result.ColumnNames, goColumns)
 			}
-			if len(result.Rows) != len(testCase.goRows) {
-				t.Fatalf("row count diverges python=%d go=%d", len(result.Rows), len(testCase.goRows))
+			if len(result.Rows) != len(goRows) {
+				t.Fatalf("row count diverges python=%d go=%d", len(result.Rows), len(goRows))
 			}
 			for rowIndex, pythonRow := range result.Rows {
-				compareSinkRow(t, result.ID, rowIndex, result.ColumnNames, pythonRow, testCase.goRows[rowIndex])
+				compareSinkRow(t, result.ID, rowIndex, result.ColumnNames, pythonRow, goRows[rowIndex])
 			}
 		})
 	}

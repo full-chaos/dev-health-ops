@@ -27,8 +27,10 @@ import (
 // is the completeness proof: it drives each of these paths as the role.
 //
 // Reads:
-//   - go_api_routing_state: routeswitch.PostgresSwitch.Enabled (every request),
-//     the proof switch, and the registry route's digest-drift log.
+//   - go_api_routing_state: read by no code of this build (CHAOS-8702). It stays here only until CHAOS-8706 drops the table:
+//     an older build, the rollback window, still reads it, and the posture check refuses a role that holds a privilege
+//     the manifest does not declare.
+//   - go_api_class_decision: routeswitch.ClassDecisionSwitch.Enabled, the MCP listener's and the class-row gate's read.
 //   - go_api_proof_orgs: /query/proof-write's org allowlist (CHAOS-7096) --
 //     a per-request lookup keyed on the authenticated claims' OrgID, checked
 //     before routeMux.Dispatch. Empty by default; only dho goapi routing
@@ -80,7 +82,7 @@ import (
 //
 // scheduled_report_occurrences is absent on purpose: only the SCHEDULED
 // execution path writes it, and that path is the scheduler's, not this
-// role's. go_api_candidate_build and go_api_proof_run are absent because only
+// role's. go_api_class_decision is read by the class switches (CHAOS-8735). go_api_candidate_build and go_api_proof_run are absent because only
 // the goapiproof CLI touches them. No sequence is needed: every id this
 // process writes is supplied by the caller.
 //
@@ -95,6 +97,7 @@ func queryAPIPosture() RolePosture {
 			{"worker_job_outbox", true, false, false},
 			{"go_api_routing_state", false, false, false},
 			{"go_api_proof_orgs", false, false, false},
+			{"go_api_class_decision", false, false, false},
 			{"sync_configurations", false, false, false},
 			{"job_runs", false, false, false},
 			{"sync_runs", false, false, false},

@@ -177,7 +177,7 @@ spec:
             - name: CLICKHOUSE_URI
               valueFrom: {secretKeyRef: {name: {{ include "dev-health.secretName" . }}, key: CLICKHOUSE_NATIVE_URI}}
             {{- /*
-            Registry tables (go_api_candidate_build / go_api_routing_state /
+            Registry tables (go_api_candidate_build / go_api_class_decision /
             go_api_proof_run). Its own Secret key rather than the migration
             credential a long-running service should not be borrowing; see
             secrets.data.GO_API_REGISTRY_POSTGRES_URI in values.yaml for what

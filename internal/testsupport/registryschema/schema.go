@@ -89,6 +89,20 @@ CREATE TABLE go_api_routing_state (
 		CHECK (rollout_percentage >= 0 AND rollout_percentage <= 100)
 );
 
+CREATE TABLE go_api_class_decision (
+	operation TEXT NOT NULL,
+	mode TEXT NOT NULL,
+	current_candidate_build TEXT NOT NULL,
+	schema_digest TEXT NOT NULL,
+	review_evidence TEXT,
+	recorded_by TEXT,
+	decided_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+	CONSTRAINT go_api_class_decision_pkey PRIMARY KEY (operation),
+	CONSTRAINT ck_go_api_class_decision_mode
+		CHECK (mode IN ('python', 'shadow', 'canary', 'primary', 'disabled')),
+	CONSTRAINT ck_go_api_class_decision_operation CHECK (left(operation, 4) = 'mcp:')
+);
+
 CREATE TABLE go_api_proof_run (
 	id UUID NOT NULL PRIMARY KEY,
 	schema_digest TEXT NOT NULL,

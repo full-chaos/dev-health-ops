@@ -41,6 +41,9 @@ func (s *fixtureRowScanner) Scan(dest ...any) error {
 		case *uint32:
 			v, _ := row[i].(uint32)
 			*typed = v
+		case *uint64:
+			v, _ := row[i].(uint64)
+			*typed = v
 		case **string:
 			if row[i] == nil {
 				*typed = nil

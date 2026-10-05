@@ -4,8 +4,6 @@
   "unit": "hours",
   "value": 5.0,
   "delta_pct": -50.0,
-  "has_data": true,
-  "has_prior_data": true,
   "drivers": [
     {
       "id": "33333333-3333-3333-3333-333333333333",
@@ -38,5 +36,7 @@
       "source_url": "https://github.com/acme/webapp"
     }
   ],
-  "source_url": "https://github.com/acme/webapp"
+  "source_url": "https://github.com/acme/webapp",
+  "has_data": true,
+  "has_prior_data": true
 }

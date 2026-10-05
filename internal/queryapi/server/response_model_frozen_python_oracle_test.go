@@ -223,15 +223,16 @@ func TestOpportunitiesCardIsThePythonCardPlusTheDeclaredGoOnlyFields(t *testing.
 
 // explainPythonResponse is the shape the frozen FastAPI model of
 // /api/v1/explain has: the eight fields of ExplainResponse the Python
-// reference served. The Go response (explain.Response) has two more since
-// CHAOS-8103 (repositories, source_url), which the Python model never had.
+// reference served. The Go response (explain.Response) has four more:
+// CHAOS-8103's repositories/source_url and CHAOS-8491's has_data/
+// has_prior_data. The Python model never had these fields.
 // Nothing is recorded again, so the oracle below still checks THIS shape,
 // written by the production writer: the eight shared fields are byte
-// identical to FastAPI's. It says nothing about the two Go-only fields.
+// identical to FastAPI's. It says nothing about the four Go-only fields.
 //
 // TestExplainResponseIsThePythonResponsePlusTheDeclaredGoOnlyFields ties
 // this shape to the production type: the production response must be
-// exactly these eight fields, in this order, followed by exactly the two
+// exactly these eight fields, in this order, followed by exactly the four
 // declared ones.
 type explainPythonResponse struct {
 	Metric         string                    `json:"metric"`
@@ -245,10 +246,12 @@ type explainPythonResponse struct {
 }
 
 // explainGoOnlyResponseFields are the fields of explain.Response the Python
-// model does not have (CHAOS-8103), in declaration order.
+// model does not have, in declaration order.
 var explainGoOnlyResponseFields = []struct{ name, goType, tag string }{
 	{"Repositories", "*[]explain.Repository", `json:"repositories"`},
 	{"SourceURL", "*string", `json:"source_url"`},
+	{"HasData", "bool", `json:"has_data"`},
+	{"HasPriorData", "bool", `json:"has_prior_data"`},
 }
 
 func TestExplainResponseIsThePythonResponsePlusTheDeclaredGoOnlyFields(t *testing.T) {
@@ -266,7 +269,7 @@ func TestExplainResponseIsThePythonResponsePlusTheDeclaredGoOnlyFields(t *testin
 		want = append(want, field{goOnly.name, goOnly.goType, goOnly.tag})
 	}
 	if got := fieldsOf(reflect.TypeOf(explain.Response{})); !reflect.DeepEqual(got, want) {
-		t.Errorf("explain.Response fields =\n %v\nwant the eight Python fields, then the two Go-only ones:\n %v", got, want)
+		t.Errorf("explain.Response fields =\n %v\nwant the eight Python fields, then the four Go-only ones:\n %v", got, want)
 	}
 
 	// The production writer does write the Go-only fields, null included:
@@ -278,11 +281,11 @@ func TestExplainResponseIsThePythonResponsePlusTheDeclaredGoOnlyFields(t *testin
 		response explain.Response
 		parts    []string
 	}{
-		{explain.Response{Drivers: []explain.Contributor{}, Contributors: []explain.Contributor{}, Repositories: &repositories, SourceURL: &sourceURL}, []string{
+		{explain.Response{Drivers: []explain.Contributor{}, Contributors: []explain.Contributor{}, Repositories: &repositories, SourceURL: &sourceURL, HasData: true, HasPriorData: true}, []string{
 			`"repositories":[{"id":"repo-a","name":"webapp","value":3.0,"source_url":"https://github.com/acme/webapp"},{"id":"repo-b","name":null,"value":1.0,"source_url":null}]`,
-			`"source_url":"https://github.com/acme/webapp"}`,
+			`"source_url":"https://github.com/acme/webapp","has_data":true,"has_prior_data":true}`,
 		}},
-		{explain.Response{Drivers: []explain.Contributor{}, Contributors: []explain.Contributor{}}, []string{`"repositories":null,"source_url":null}`}},
+		{explain.Response{Drivers: []explain.Contributor{}, Contributors: []explain.Contributor{}}, []string{`"repositories":null,"source_url":null,"has_data":false,"has_prior_data":false}`}},
 	} {
 		recorder := httptest.NewRecorder()
 		if err := writeModelResponse(recorder, &testCase.response); err != nil {
@@ -340,8 +343,8 @@ func withoutExplainGoOnlyFields(body string) (string, error) {
 
 func TestWithoutExplainGoOnlyFieldsLeavesThePythonShapeOrFails(t *testing.T) {
 	for _, testCase := range []struct{ body, want string }{
-		{`{"metric":"churn","drilldown_links":{"prs":"a"},"repositories":null,"source_url":null}`, `{"metric":"churn","drilldown_links":{"prs":"a"}}`},
-		{`{"metric":"churn","repositories":[{"id":"r","name":null,"value":1.0,"source_url":"https://github.com/a/repositories"}],"source_url":"https://x"}`, `{"metric":"churn"}`},
+		{`{"metric":"churn","drilldown_links":{"prs":"a"},"repositories":null,"source_url":null,"has_data":false,"has_prior_data":false}`, `{"metric":"churn","drilldown_links":{"prs":"a"}}`},
+		{`{"metric":"churn","repositories":[{"id":"r","name":null,"value":1.0,"source_url":"https://github.com/a/repositories"}],"source_url":"https://x","has_data":true,"has_prior_data":false}`, `{"metric":"churn"}`},
 	} {
 		got, err := withoutExplainGoOnlyFields(testCase.body)
 		if err != nil || got != testCase.want {

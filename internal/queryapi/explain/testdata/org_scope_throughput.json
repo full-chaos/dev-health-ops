@@ -4,8 +4,6 @@
   "unit": "items",
   "value": 120.0,
   "delta_pct": 20.0,
-  "has_data": true,
-  "has_prior_data": true,
   "drivers": [
     {
       "id": "team-a",
@@ -47,5 +45,7 @@
     "issues": "/api/v1/drilldown/issues?metric=throughput"
   },
   "repositories": null,
-  "source_url": null
+  "source_url": null,
+  "has_data": true,
+  "has_prior_data": true
 }

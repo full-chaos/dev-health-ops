@@ -4,8 +4,6 @@
   "unit": "deploys",
   "value": 30.0,
   "delta_pct": 50.0,
-  "has_data": true,
-  "has_prior_data": true,
   "drivers": [
     {
       "id": "repo-a",
@@ -60,5 +58,7 @@
       "source_url": null
     }
   ],
-  "source_url": null
+  "source_url": null,
+  "has_data": true,
+  "has_prior_data": true
 }

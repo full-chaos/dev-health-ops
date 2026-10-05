@@ -880,6 +880,18 @@ type HomeResult struct {
 	Signals        []HomeSignal        `json:"signals"`
 	LimitingFactor *HomeLimitingFactor `json:"limitingFactor"`
 	DataConfidence *HomeDataConfidence `json:"dataConfidence"`
+	// Coverage and ingestion quality for the selected repository scope; distinct from org-wide dataConfidence.
+	ScopeDataConfidence *HomeScopeDataConfidence `json:"scopeDataConfidence"`
+}
+
+// Coverage and metric-ingestion quality for the repositories selected by this Home request.
+type HomeScopeDataConfidence struct {
+	Level string `json:"level"`
+	// Null when the selected scope has no repositories.
+	CoveragePct *float64 `json:"coveragePct,omitempty"`
+	// Most recent in-window repository-metric ingestion, or null when the scope has none.
+	LastIngestedAt *string  `json:"lastIngestedAt,omitempty"`
+	Caveats        []string `json:"caveats"`
 }
 
 type HomeSignal struct {

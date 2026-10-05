@@ -186,12 +186,13 @@ func BuildResponse(ctx context.Context, chClient QueryClient, pgClient PGQueryCl
 	var lastIngested *time.Time
 	var coverage map[string]float64
 	var sources map[string]string
+	var scopeDataConfidence ScopeDataConfidence
 	var deltas []MetricDelta
 	var reworkAllocation []ReworkThemeAllocation
-	var errIngested, errCoverage, errSources, errDeltas, errRework error
+	var errIngested, errCoverage, errSources, errScopeConfidence, errDeltas, errRework error
 
 	var wg sync.WaitGroup
-	wg.Add(5)
+	wg.Add(6)
 	go func() {
 		defer wg.Done()
 		lastIngested, errIngested = fetchLastIngestedAt(ctx, chClient, orgID)
@@ -206,6 +207,10 @@ func BuildResponse(ctx context.Context, chClient QueryClient, pgClient PGQueryCl
 	}()
 	go func() {
 		defer wg.Done()
+		scopeDataConfidence, errScopeConfidence = fetchScopeDataConfidence(ctx, chClient, f, startDay, endDay, orgID, now)
+	}()
+	go func() {
+		defer wg.Done()
 		deltas, errDeltas = computeMetricDeltas(ctx, chClient, f, startDay, endDay, compareStart, compareEnd, orgID, now)
 	}()
 	go func() {
@@ -213,7 +218,7 @@ func BuildResponse(ctx context.Context, chClient QueryClient, pgClient PGQueryCl
 		reworkAllocation, errRework = fetchReworkThemeAllocation(ctx, chClient, startDay, endDay, allocationScopeFilter, allocationScopeBindings, allocationCategorySQL, allocationCategoryBindings, orgID)
 	}()
 	wg.Wait()
-	for _, err := range []error{errIngested, errCoverage, errSources, errDeltas, errRework} {
+	for _, err := range []error{errIngested, errCoverage, errSources, errScopeConfidence, errDeltas, errRework} {
 		if err != nil {
 			return nil, err
 		}
@@ -224,7 +229,7 @@ func BuildResponse(ctx context.Context, chClient QueryClient, pgClient PGQueryCl
 
 	dataConfidence := BuildDataConfidence(coverage, sources)
 	if !hasCurrentMetricData(deltas) {
-		return noDataResponse(lastIngested, latestSuccessfulSyncAt, coverage, sources, deltas, reworkAllocation, dataConfidence), nil
+		return noDataResponse(lastIngested, latestSuccessfulSyncAt, coverage, sources, deltas, reworkAllocation, dataConfidence, scopeDataConfidence), nil
 	}
 	metricSignals := BuildMetricSignals(deltas, f, dataConfidence)
 
@@ -358,6 +363,7 @@ func BuildResponse(ctx context.Context, chClient QueryClient, pgClient PGQueryCl
 		Signals:               signals,
 		LimitingFactor:        limitingFactor,
 		DataConfidence:        dataConfidence,
+		ScopeDataConfidence:   scopeDataConfidence,
 	}, nil
 }
 
@@ -370,7 +376,7 @@ func hasCurrentMetricData(deltas []MetricDelta) bool {
 	return false
 }
 
-func noDataResponse(lastIngested *time.Time, latestSuccessfulSyncAt *time.Time, coverage map[string]float64, sources map[string]string, deltas []MetricDelta, reworkAllocation []ReworkThemeAllocation, dataConfidence DataConfidence) *Response {
+func noDataResponse(lastIngested *time.Time, latestSuccessfulSyncAt *time.Time, coverage map[string]float64, sources map[string]string, deltas []MetricDelta, reworkAllocation []ReworkThemeAllocation, dataConfidence DataConfidence, scopeDataConfidence ScopeDataConfidence) *Response {
 	if deltas == nil {
 		deltas = []MetricDelta{}
 	}
@@ -402,7 +408,8 @@ func noDataResponse(lastIngested *time.Time, latestSuccessfulSyncAt *time.Time, 
 		LimitingFactor: LimitingFactor{
 			Confidence: "low",
 		},
-		DataConfidence: dataConfidence,
+		DataConfidence:      dataConfidence,
+		ScopeDataConfidence: scopeDataConfidence,
 	}
 }
 

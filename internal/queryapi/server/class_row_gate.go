@@ -29,10 +29,11 @@ import (
 )
 
 // newClassRowSwitch is the ONE constructor of the class-row switch: the MCP listener (:8092) and the named-operation route (:8091) both serve through it,
-// so a root's class row is one decision. It reads canary and primary rows only: a SHADOW class row is dark. (routeswitch.NewProofSwitch admits shadow
-// rows and is for the measurement-only proof routes; using it here would SERVE a shadow root on both ports.)
-func newClassRowSwitch(pool *pgxpool.Pool, schemaDigest string) routeswitch.Switch {
-	return routeswitch.NewPostgresSwitch(pool, schemaDigest, mcpRoutingDigests())
+// so a root's decision is one row (go_api_class_decision, keyed by operation: no schema digest, CHAOS-8735). It serves canary and primary decisions
+// only: a SHADOW decision is dark. (routeswitch.NewClassDecisionProofSwitch admits shadow and is for the measurement-only proof route; using it here
+// would SERVE a shadow root on both ports.)
+func newClassRowSwitch(pool *pgxpool.Pool) routeswitch.Switch {
+	return routeswitch.NewClassDecisionSwitch(pool, mcpRoutingDigests())
 }
 
 // runOperationPath is the internal-listener route acr's run_operation posts to. Only requests that came through it are class-gated.

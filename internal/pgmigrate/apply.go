@@ -133,7 +133,7 @@ func walkOnce(ctx context.Context, conn *pgx.Conn, baseline Baseline, chain []Ch
 	var done walked
 	err := inTransaction(ctx, conn, func(tx pgx.Tx) error {
 		done = walked{}
-		if err := setForTransaction(ctx, tx, settings); err != nil {
+		if err := setForTransaction(ctx, tx, withWalkDefaults(settings)); err != nil {
 			return err
 		}
 		observation, err := observe(ctx, tx)
@@ -316,6 +316,25 @@ func observe(ctx context.Context, tx pgx.Tx) (Observation, error) {
 	sort.Strings(versions)
 	observation.Versions = versions
 	return observation, nil
+}
+
+// walkDefaults are set for every walk unless its settings name them. The live digest
+// defaults to empty so that revision 0146 never reads a value the walk did not set: a
+// role or database default of the setting (ALTER ROLE/DATABASE ... SET) would otherwise
+// show through current_setting when the environment does not name a digest (CHAOS-8755).
+// Empty is what revision 0146 refuses with MCP class rows present.
+var walkDefaults = WalkSettings{ClassDecisionLiveDigestSetting: ""}
+
+// withWalkDefaults is settings with every walk default it does not name.
+func withWalkDefaults(settings WalkSettings) WalkSettings {
+	out := make(WalkSettings, len(walkDefaults)+len(settings))
+	for name, value := range walkDefaults {
+		out[name] = value
+	}
+	for name, value := range settings {
+		out[name] = value
+	}
+	return out
 }
 
 // setForTransaction sets each setting for tx only (is_local = true), in name order.

@@ -9,6 +9,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"math"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -946,6 +947,29 @@ type fakeFlowMatrixCHClient struct {
 	mu sync.Mutex
 }
 
+// fakeInvestmentEvidenceQualityCHClient drives the existing analytics
+// resolver through the real HTTP route. The group-query rows distinguish an
+// observed zero from an unknown mean; the stats row exists because Resolve
+// executes that existing aggregate for every investment request.
+type fakeInvestmentEvidenceQualityCHClient struct{}
+
+func (fakeInvestmentEvidenceQualityCHClient) Query(_ context.Context, statement string, _ []clickhouse.Binding) (clickhouse.RowScanner, error) {
+	switch {
+	case strings.Contains(statement, "evidence_quality_group_key"):
+		return &fakeRows{rows: [][]any{
+			{"feature_delivery", 0.0, uint64(2), uint64(2)},
+			{"maintenance", math.NaN(), uint64(1), uint64(0)},
+		}}, nil
+	case strings.Contains(statement, "quality_known_count"):
+		return &fakeRows{rows: [][]any{{
+			uint64(3), uint64(2), 0.0, 0.0,
+			uint64(0), uint64(0), uint64(0), uint64(0), uint64(1),
+		}}}, nil
+	default:
+		return &fakeRows{}, nil
+	}
+}
+
 func (c *fakeFlowMatrixCHClient) Query(_ context.Context, statement string, _ []clickhouse.Binding) (clickhouse.RowScanner, error) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
@@ -1065,6 +1089,78 @@ func TestFlowMatrixRoute_IsServedByTheCatalog(t *testing.T) {
 		}
 	})
 
+}
+
+func investmentEvidenceQualityVariables() map[string]any {
+	return map[string]any{
+		"orgId": "org-1",
+		"batch": map[string]any{
+			"useInvestment":          true,
+			"evidenceQualityGroupBy": "THEME",
+			"breakdowns": []any{map[string]any{
+				"dimension": "THEME",
+				"measure":   "COUNT",
+				"dateRange": map[string]any{
+					"startDate": "2026-04-01",
+					"endDate":   "2026-04-30",
+				},
+				"topN": 1,
+			}},
+		},
+	}
+}
+
+// TestInvestmentEvidenceQualityRoute_IsServedByTheCatalogAndPreservesNullZero
+// sends CHAOS-8745's captured document through the real document dispatcher,
+// gqlgen selection, authentication, and analytics resolver. It proves that
+// the selected group field is served, an observed zero remains zero, and a
+// group with no persisted quality has a null mean rather than a NaN.
+func TestInvestmentEvidenceQualityRoute_IsServedByTheCatalogAndPreservesNullZero(t *testing.T) {
+	pool := startTestRegistryPostgres(t)
+
+	pub, priv, err := ed25519.GenerateKey(nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	verifier, err := principal.NewVerifier(writeTestJWKS(t, pub), itTestIssuer, itTestAudience)
+	if err != nil {
+		t.Fatal(err)
+	}
+	handler, _, _, _, _ := newQueryHandler(fakeInvestmentEvidenceQualityCHClient{}, pool, verifier, itTestSchemaDigest, os.Getenv)
+
+	rec := postGraphQLWithVariables(t, handler, registeredInvestmentEvidenceQualityDocument, signTestEnvelope(t, priv, "org-1"), investmentEvidenceQualityVariables())
+	if rec.Code != http.StatusOK {
+		t.Fatalf("catalog request status = %d, want 200: %s", rec.Code, rec.Body.String())
+	}
+	var response struct {
+		Data struct {
+			Analytics struct {
+				EvidenceQualityByGroup []struct {
+					Key   string   `json:"key"`
+					Label *string  `json:"label"`
+					Mean  *float64 `json:"mean"`
+					Total int      `json:"total"`
+				} `json:"evidenceQualityByGroup"`
+			} `json:"analytics"`
+		} `json:"data"`
+		Errors any `json:"errors"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &response); err != nil {
+		t.Fatalf("decode GraphQL response: %v; body=%s", err, rec.Body.String())
+	}
+	if response.Errors != nil {
+		t.Fatalf("catalog request returned GraphQL errors: %s", rec.Body.String())
+	}
+	groups := response.Data.Analytics.EvidenceQualityByGroup
+	if len(groups) != 2 {
+		t.Fatalf("served evidenceQualityByGroup = %#v, want two groups", groups)
+	}
+	if first := groups[0]; first.Key != "feature_delivery" || first.Label == nil || *first.Label != "feature_delivery" || first.Mean == nil || *first.Mean != 0.0 || first.Total != 2 {
+		t.Fatalf("first served group = %#v, want feature_delivery observed mean 0 over total 2", first)
+	}
+	if second := groups[1]; second.Key != "maintenance" || second.Label == nil || *second.Label != "maintenance" || second.Mean != nil || second.Total != 1 {
+		t.Fatalf("second served group = %#v, want maintenance null mean over total 1", second)
+	}
 }
 
 // TestQueryRouteClickHouseClient_ToleratesRealResultVolume is the

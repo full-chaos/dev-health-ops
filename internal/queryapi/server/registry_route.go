@@ -148,8 +148,8 @@ func newRegistryHandler(schemaDigest string, digestByOperation map[string]string
 //
 //   - rows exist at this digest       -> routing can work.
 //   - table is empty                  -> no row decides anything: every
-//     registered operation is served by the catalog rule (CHAOS-8517) and no
-//     MCP class root is enabled. The legitimate default posture, NOT an
+//     registered operation is served (the serving route reads no row,
+//     CHAOS-8702) and no MCP class root is enabled. The legitimate default posture, NOT an
 //     incident.
 //   - rows exist, none at this digest -> every one of them is dead. Looks
 //     identical from outside to the empty case, means the opposite.

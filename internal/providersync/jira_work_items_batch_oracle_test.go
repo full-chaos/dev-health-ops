@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/full-chaos/dev-health-ops/internal/providerfoundation"
+	"github.com/google/uuid"
 )
 
 // jiraBatchOracleRow is the complete six-list return boundary of Python's
@@ -22,10 +23,38 @@ import (
 type jiraBatchOracleRow struct {
 	WorkItems    []jiraWorkItemOraclePrepRow  `json:"work_items"`
 	Transitions  []jiraBatchTransitionRow     `json:"transitions"`
-	Dependencies []jiraWorkItemDependencyRow  `json:"dependencies"`
+	Dependencies []jiraBatchDependencyRow     `json:"dependencies"`
 	ReopenEvents []jiraWorkItemReopenRow      `json:"reopen_events"`
 	Interactions []jiraWorkItemInteractionRow `json:"interactions"`
 	Sprints      []jiraSprintRow              `json:"sprints"`
+}
+
+// jiraBatchDependencyRow is the frozen Python dependency row: the Go row
+// without the columns added after the freeze
+// (workItemDependencyColumnsAfterThePythonFreeze). Jira writes neither, and
+// jiraBatchSemanticDependency fails when it does.
+type jiraBatchDependencyRow struct {
+	SourceWorkItemID             string     `json:"source_work_item_id"`
+	TargetWorkItemID             string     `json:"target_work_item_id"`
+	RelationshipType             string     `json:"relationship_type"`
+	RelationshipTypeRaw          string     `json:"relationship_type_raw"`
+	RelationshipSemanticsVersion string     `json:"relationship_semantics_version"`
+	LastSynced                   time.Time  `json:"last_synced"`
+	OrgID                        string     `json:"org_id"`
+	SourceID                     *uuid.UUID `json:"source_id"`
+}
+
+func jiraBatchSemanticDependency(t *testing.T, row jiraWorkItemDependencyRow) jiraBatchDependencyRow {
+	t.Helper()
+	if row.RelationStartedAt != nil || row.RelationWriter != nil {
+		t.Fatalf("a jira dependency row carries a column added after the Python freeze: started %v, writer %v", row.RelationStartedAt, row.RelationWriter)
+	}
+	return jiraBatchDependencyRow{
+		SourceWorkItemID: row.SourceWorkItemID, TargetWorkItemID: row.TargetWorkItemID,
+		RelationshipType: row.RelationshipType, RelationshipTypeRaw: row.RelationshipTypeRaw,
+		RelationshipSemanticsVersion: row.RelationshipSemanticsVersion,
+		LastSynced:                   row.LastSynced, OrgID: row.OrgID, SourceID: row.SourceID,
+	}
 }
 
 type jiraBatchTransitionRow struct {
@@ -107,7 +136,7 @@ func buildJiraProducerBatchOracleRow(
 	if err != nil {
 		t.Fatalf("Jira route oracle collect: %v", err)
 	}
-	result := jiraBatchOracleRow{WorkItems: make([]jiraWorkItemOraclePrepRow, 0), Transitions: make([]jiraBatchTransitionRow, 0), Dependencies: make([]jiraWorkItemDependencyRow, 0), ReopenEvents: make([]jiraWorkItemReopenRow, 0), Interactions: make([]jiraWorkItemInteractionRow, 0), Sprints: make([]jiraSprintRow, 0)}
+	result := jiraBatchOracleRow{WorkItems: make([]jiraWorkItemOraclePrepRow, 0), Transitions: make([]jiraBatchTransitionRow, 0), Dependencies: make([]jiraBatchDependencyRow, 0), ReopenEvents: make([]jiraWorkItemReopenRow, 0), Interactions: make([]jiraWorkItemInteractionRow, 0), Sprints: make([]jiraSprintRow, 0)}
 	for _, effect := range batch.Effects {
 		for _, raw := range effect.Rows {
 			switch effect.Destination {
@@ -128,7 +157,7 @@ func buildJiraProducerBatchOracleRow(
 				if err := json.Unmarshal(raw, &row); err != nil {
 					t.Fatal(err)
 				}
-				result.Dependencies = append(result.Dependencies, row)
+				result.Dependencies = append(result.Dependencies, jiraBatchSemanticDependency(t, row))
 			case "work_item_reopen_events":
 				var row jiraWorkItemReopenRow
 				if err := json.Unmarshal(raw, &row); err != nil {

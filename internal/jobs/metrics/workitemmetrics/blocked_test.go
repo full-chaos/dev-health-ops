@@ -806,3 +806,89 @@ func TestRelationEndedByNamesTheFirstWriterWithALaterSync(t *testing.T) {
 		})
 	}
 }
+
+// CHAOS-8578: a stored writer decides which items end a relation; a value
+// that is none of the three is not trusted and the row is derived.
+func TestAStoredWriterDecidesWhoEndsARelation(t *testing.T) {
+	const firstSeen, lastWritten, before, after = 14, 40, 30, 60
+	ended := BlockedInterval{Start: blockedTime(firstSeen), End: blockedTimePtr(lastWritten)}
+	open := BlockedInterval{Start: blockedTime(firstSeen)}
+	text := func(value string) *string { return &value }
+	for name, tc := range map[string]struct {
+		writer                     *string
+		sourceSynced, targetSynced int
+		want                       BlockedInterval
+	}{
+		// gitlab raw "blocks": derived, both write.
+		"no writer stored; the blocked item is synced again":   {nil, before, after, ended},
+		"writer source; the blocked item is synced again":      {text(RelationWriterSource), before, after, open},
+		"writer source; the blocker is synced without it":      {text(RelationWriterSource), after, before, ended},
+		"writer target; the blocker is synced again":           {text(RelationWriterTarget), after, before, open},
+		"writer target; the blocked item is synced without it": {text(RelationWriterTarget), before, after, ended},
+		"writer both; the blocked item is synced without it":   {text(RelationWriterBoth), before, after, ended},
+		"writer both; the blocker is synced without it":        {text(RelationWriterBoth), after, before, ended},
+		"an unknown stored value is derived (both write)":      {text("neither"), before, after, ended},
+		"writer source; neither is synced after the relation":  {text(RelationWriterSource), lastWritten, lastWritten, open},
+	} {
+		t.Run(name, func(t *testing.T) {
+			relation := BlockingRelation{
+				SourceID: "gitlab:a/r#5", TargetID: "gitlab:a/r#7", RelationshipType: "blocks", Raw: "blocks",
+				SemanticsVersion: CanonicalBlocksSemantics, LastSynced: blockedTime(lastWritten), FirstSeenAt: blockedTimePtr(firstSeen),
+				Writer: tc.writer,
+			}
+			ends := []RelationEnd{
+				relationEnd("gitlab:a/r#5", "gitlab", "in_progress", 4, nil, tc.sourceSynced),
+				relationEnd("gitlab:a/r#7", "gitlab", "in_progress", 4, nil, tc.targetSynced),
+			}
+			got := BlockedIntervalsByItem([]BlockingRelation{relation}, ends)
+			if want := (map[string][]BlockedInterval{"gitlab:a/r#7": {tc.want}}); !reflect.DeepEqual(got, want) {
+				t.Fatalf("intervals = %+v, want %+v", got, want)
+			}
+		})
+	}
+}
+
+// CHAOS-8578: a writer's time is the latest time its relations were READ
+// (RelationsReadAt), over every row given for the item; with none stored it
+// is the item's latest sync. A board candidate is counted only on that
+// fallback.
+func TestAWriterIsComparedAtTheTimeItLastReadItsRelations(t *testing.T) {
+	const firstSeen, lastWritten, board = 14, 40, 60
+	relation := BlockingRelation{
+		SourceID: "gh:a/r#12", TargetID: "gh:a/r#7", RelationshipType: "blocks", Raw: "blocked by #12",
+		SemanticsVersion: CanonicalBlocksSemantics, LastSynced: blockedTime(lastWritten), FirstSeenAt: blockedTimePtr(firstSeen),
+	}
+	blocker := relationEnd("gh:a/r#12", "github", "in_progress", 4, nil, lastWritten)
+	// #7 holds the text; its latest row is a board row.
+	boardRow := relationEnd("gh:a/r#7", "github", "in_progress", 4, nil, board)
+	boardRow.ProjectID = GitHubBoardProjectPrefix + "acme#1"
+	textRow := relationEnd("gh:a/r#7", "github", "in_progress", 4, nil, lastWritten)
+	textRow.ProjectID = "a/r"
+	read := func(end RelationEnd, hour int) RelationEnd {
+		end.RelationsReadAt = blockedTimePtr(hour)
+		return end
+	}
+	ended := BlockedInterval{Start: blockedTime(firstSeen), End: blockedTimePtr(lastWritten)}
+	open := BlockedInterval{Start: blockedTime(firstSeen)}
+	for name, tc := range map[string]struct {
+		ends       []RelationEnd
+		want       BlockedInterval
+		candidates int
+	}{
+		"no read time stored: the board row's sync ends it":       {[]RelationEnd{blocker, boardRow}, ended, 1},
+		"read time at the text sync: the board row ends nothing":  {[]RelationEnd{blocker, read(boardRow, lastWritten)}, open, 0},
+		"read time on an older row of the item counts too":        {[]RelationEnd{blocker, boardRow, read(textRow, lastWritten)}, open, 0},
+		"a later read without the relation ends it, no candidate": {[]RelationEnd{blocker, read(boardRow, board)}, ended, 0},
+		"the latest of two read times is taken":                   {[]RelationEnd{blocker, read(boardRow, lastWritten), read(textRow, board)}, ended, 0},
+	} {
+		t.Run(name, func(t *testing.T) {
+			got, stats := BlockedIntervalsWithStats([]BlockingRelation{relation}, tc.ends)
+			if want := (map[string][]BlockedInterval{"gh:a/r#7": {tc.want}}); !reflect.DeepEqual(got, want) {
+				t.Fatalf("intervals = %+v, want %+v", got, want)
+			}
+			if stats.GitHubBoardCandidates != tc.candidates {
+				t.Fatalf("board candidates = %d, want %d (stats %+v)", stats.GitHubBoardCandidates, tc.candidates, stats)
+			}
+		})
+	}
+}

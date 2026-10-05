@@ -171,9 +171,9 @@ query_api_e2e_start() {
   # prover are the same build and run_go_api_prove_e2e (below) builds
   # nothing of its own.
   commit="${GITHUB_SHA:-$(git -C "${ROOT_DIR}" rev-parse HEAD)}"
-  go build -buildvcs=false -ldflags "-X github.com/full-chaos/dev-health-ops/internal/platform/version.Commit=${commit}" \
+  go build -buildvcs=false -trimpath -ldflags "-X github.com/full-chaos/dev-health-ops/internal/platform/version.Commit=${commit}" \
     -o "${BIN_DIR}/dho" ./cmd/dho
-  go run ./cmd/registrydump -file internal/queryapi/server/query_route.go > "${dir}/documents.json"
+  go run -trimpath ./cmd/registrydump -file internal/queryapi/server/query_route.go > "${dir}/documents.json"
 
   echo "==> [query-api] generating a throwaway envelope key pair"
   "${BIN_DIR}/dho" mint envelope-keys -dir "${dir}/envelope-keys" > /dev/null
@@ -266,7 +266,7 @@ run_go_api_prove_e2e() {
   # dho (goapi prove, mint edge-token) is already built, by
   # query_api_e2e_start -- nothing to build here.
   commit="${GITHUB_SHA:-$(git -C "${ROOT_DIR}" rev-parse HEAD)}"
-  go run ./cmd/registrydump -file internal/queryapi/server/query_route.go > "${dir}/documents.json"
+  go run -trimpath ./cmd/registrydump -file internal/queryapi/server/query_route.go > "${dir}/documents.json"
 
   run_python "${dir}/edge-request.py" "${dir}/documents.json" "${GO_API_PROVE_E2E_OPERATION}" "${E2E_ORG_ID}" > "${dir}/edge-request.json" \
     || go_api_prove_e2e_fail "could not build the registered ${GO_API_PROVE_E2E_OPERATION} request"

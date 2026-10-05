@@ -93,7 +93,7 @@ func credentialsComplete(provider, apiKey string) bool {
 
 // Credentials is an org's BYO api_key/base_url pair for one provider.
 type Credentials struct {
-	APIKey  string
+	APIKey  string `json:"-"`
 	BaseURL string
 }
 

@@ -15,7 +15,7 @@ import (
 
 // OpenAIProviderConfig configures OpenAIProvider.
 type OpenAIProviderConfig struct {
-	APIKey string
+	APIKey string `json:"-"`
 	// BaseURL defaults to https://api.openai.com/v1 -- overridable for a
 	// self-hosted gateway or for tests.
 	BaseURL string

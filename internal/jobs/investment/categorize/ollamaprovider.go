@@ -31,7 +31,7 @@ type OllamaProviderConfig struct {
 	// enforce one (CHAOS-4978: mirrors credentials.py's
 	// _API_KEY_ENV_BY_PROVIDER["ollama"] table existing at all, even though
 	// Ollama itself has no native auth concept).
-	APIKey          string
+	APIKey          string `json:"-"`
 	MaxOutputTokens int
 	// Temperature is a pointer for the same reason LocalProviderConfig's is:
 	// an explicit 0.0 must be distinguishable from "unset".

@@ -26,7 +26,7 @@ type LocalProviderConfig struct {
 	// rather than invent one). Set LOCAL_LLM_MODEL to override.
 	Model string
 	// APIKey is sent as a bearer token; most local servers ignore it.
-	APIKey          string
+	APIKey          string `json:"-"`
 	MaxOutputTokens int
 	// Temperature is a pointer so an explicitly requested 0.0 (deterministic
 	// sampling -- a valid Chat Completions value) is distinguishable from

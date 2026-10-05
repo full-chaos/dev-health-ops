@@ -118,11 +118,12 @@ type PostgresStore struct {
 	// markerWriter and markerObserver are the CHAOS-8710 ClickHouse run
 	// marker (run_marker.go). Nil writer: no marker is written.
 	markerWriter   RunMarkerWriter
+	markerReader   RunMarkerReader
 	markerObserver RunMarkerObserver
-	// backfillHook is a test seam: BackfillRunMarkers calls it with
-	// "marker_read" after its ClickHouse read and "postgres_read" after its
-	// Postgres read, so a test can force a race deterministically.
-	backfillHook func(stage string)
+	// syncHook is a test seam: markerSync calls it with "marker_read" after its
+	// ClickHouse read and "postgres_read" after its Postgres read, so a test
+	// can force a race deterministically.
+	syncHook func(stage string)
 }
 
 // SetRedriveObserver wires the optional operator-redrive telemetry observer
@@ -288,10 +289,10 @@ func (store *PostgresStore) StartRunTx(
 	now := store.now().UTC()
 	command, err := tx.Exec(ctx, `
 INSERT INTO public.daily_metrics_runs
-    (id, org_id, target_day, generation, status, finalization_status, created_at, updated_at)
-VALUES ($1::uuid, $2::uuid, $3::date, $4, 'pending', 'pending', $5, $5)
+    (id, org_id, target_day, generation, status, finalization_status, created_at, updated_at, full_org)
+VALUES ($1::uuid, $2::uuid, $3::date, $4, 'pending', 'pending', $5, $5, $6)
 ON CONFLICT DO NOTHING`,
-		run.ID, run.OrganizationID, request.TargetDay.Format("2006-01-02"), run.Generation, now)
+		run.ID, run.OrganizationID, request.TargetDay.Format("2006-01-02"), run.Generation, now, len(partitions) == 0)
 	if err != nil {
 		return Run{}, ErrUnavailable
 	}
@@ -439,8 +440,8 @@ func (store *PostgresStore) StartScheduledFanoutRunTx(
 	now := store.now().UTC()
 	command, err := tx.Exec(ctx, `
 INSERT INTO public.daily_metrics_runs
-    (id, org_id, target_day, generation, status, finalization_status, created_at, updated_at)
-VALUES ($1::uuid, $2::uuid, $3::date, $4, 'pending', 'pending', $5, $5)
+    (id, org_id, target_day, generation, status, finalization_status, created_at, updated_at, full_org)
+VALUES ($1::uuid, $2::uuid, $3::date, $4, 'pending', 'pending', $5, $5, true)
 ON CONFLICT DO NOTHING`,
 		run.ID, run.OrganizationID, normalized.TargetDay.Format("2006-01-02"), run.Generation, now)
 	if err != nil {
@@ -742,7 +743,7 @@ func (store *PostgresStore) ClaimDispatch(ctx context.Context, runID string) (*R
 		defer cancel()
 		_ = tx.Rollback(rollbackCtx)
 	}()
-	if store.markerWriter != nil {
+	if store.markerEnabled() {
 		var lockOrg, lockDay string
 		err := tx.QueryRow(ctx, `SELECT org_id::text, target_day::text FROM public.daily_metrics_runs WHERE id = $1::uuid`, runID).
 			Scan(&lockOrg, &lockDay)
@@ -771,8 +772,8 @@ WHERE id = $2::uuid AND status IN ('pending', 'running')
 RETURNING id::text, org_id::text, generation, status, target_day::text,
   NOT EXISTS (
     SELECT 1 FROM public.daily_metrics_partitions WHERE run_id = daily_metrics_runs.id
-  ), `+pgClockMillis, store.now().UTC(), runID).
-		Scan(&run.ID, &run.OrganizationID, &run.Generation, &run.Status, &targetDay, &run.RepositoryDiscoveryRequired, &claimedAtMs)
+  ), full_org, `+pgClockMillis, store.now().UTC(), runID).
+		Scan(&run.ID, &run.OrganizationID, &run.Generation, &run.Status, &targetDay, &run.RepositoryDiscoveryRequired, &run.FullOrg, &claimedAtMs)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return nil, nil
 	}
@@ -1490,23 +1491,19 @@ func (store *PostgresStore) CompleteFinalize(ctx context.Context, claim Finalize
 		_ = tx.Rollback(rollbackCtx)
 	}()
 	now := store.now().UTC()
-	// CHAOS-8710: finalized_at is the Postgres clock, not the worker's, and the
-	// same reading is the marker's version (one clock for every marker version).
-	var finalizedAtMs int64
-	err = tx.QueryRow(ctx, `
+	command, err := tx.Exec(ctx, `
 UPDATE public.daily_metrics_runs
 SET finalization_status = 'succeeded', finalization_claim_token = NULL,
-    finalization_lease_expires_at = NULL, finalized_at = clock_timestamp(),
+    finalization_lease_expires_at = NULL, finalized_at = $1,
     status = 'succeeded', updated_at = $1
 WHERE id = $2::uuid AND finalization_status = 'running'
   AND finalization_claim_token = $3::uuid AND status = 'running'
-  AND finalization_lease_expires_at > $1
-RETURNING (extract(epoch from finalized_at) * 1000)::bigint`, now, claim.Run.ID, claim.Token).Scan(&finalizedAtMs)
-	if errors.Is(err, pgx.ErrNoRows) {
-		return ErrLeaseLost
-	}
+  AND finalization_lease_expires_at > $1`, now, claim.Run.ID, claim.Token)
 	if err != nil {
 		return ErrUnavailable
+	}
+	if command.RowsAffected() != 1 {
+		return ErrLeaseLost
 	}
 	// A repaired finalize ledger row (metric_compatibility_executions,
 	// operation='finalize') must not outlive the run it was blocking: the
@@ -1541,8 +1538,9 @@ WHERE run_id = $2::uuid AND status = 'open'`, now, claim.Run.ID); err != nil {
 		return ErrUnavailable
 	}
 	// CHAOS-8710: after the commit, never before it, and never able to fail
-	// the run. A failed append leaves the day unknown to marker readers.
-	store.markSucceeded(ctx, claim.Run, finalizedAtMs)
+	// the run. markerSync certifies the day only if committed Postgres says the
+	// day's latest full-org run is succeeded; a failure leaves the day unknown.
+	store.markerSyncAfterCommit(ctx, claim.Run)
 	return nil
 }
 

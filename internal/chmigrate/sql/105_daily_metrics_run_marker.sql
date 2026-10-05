@@ -3,14 +3,17 @@
 -- (daily_metrics_runs), so a reader on ClickHouse cannot tell the two apart.
 -- This table is the ClickHouse record of that run state, one event per row.
 --
--- Append-only. Only a run that computes the whole organization (the scheduled
--- fan-out, or a post-sync run) writes rows. A run started with an explicit
--- repository list never does, because it computes only those repositories.
--- The worker appends state 'succeeded' after the Postgres commit that moves the
--- org-day run to status and finalization_status 'succeeded'. It appends
--- 'reopened' when such a run is claimed for dispatch, and a redrive or
--- partition recompute that reopens a succeeded run appends 'reopened' inside
--- the reopen transaction. Nothing is updated or deleted.
+-- Append-only. The marker may say 'succeeded' for an (org_id, target_day) only
+-- when, at the moment of the append, committed Postgres says the latest run of
+-- that day that computes the whole organization is succeeded. Whether a run
+-- computes the whole organization is recorded at its creation in
+-- daily_metrics_runs.full_org (true when no explicit repository list was
+-- given). A run started with a repository list never certifies the day.
+-- 'succeeded' is appended by one sync function after the finalize commit and by
+-- the backfill verb. 'reopened' is appended when such a run is claimed for
+-- dispatch and when a redrive or partition recompute reopens a succeeded run,
+-- inside the transaction that does it, before its commit. Every writer of one
+-- (org, day) holds one Postgres advisory lock. Nothing is updated or deleted.
 --
 -- Version is a Postgres clock reading in milliseconds taken in the transaction
 -- that changed the run state, never the writing host's clock. Generation is

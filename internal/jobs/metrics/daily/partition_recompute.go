@@ -313,7 +313,7 @@ func (store *PostgresStore) redriveOnePartitionsForRange(
 	var targetDay, status, priorGeneration string
 	var hasPartitions, allPartitionsSucceeded bool
 	err = tx.QueryRow(ctx, `
-SELECT run.id::text, run.org_id::text, run.generation, run.status, run.target_day::text,
+SELECT run.id::text, run.org_id::text, run.generation, run.status, run.target_day::text, run.full_org,
   EXISTS (
       SELECT 1 FROM public.daily_metrics_partitions AS partition
       WHERE partition.run_id = run.id
@@ -325,7 +325,7 @@ SELECT run.id::text, run.org_id::text, run.generation, run.status, run.target_da
 FROM public.daily_metrics_runs AS run
 WHERE run.id = $1::uuid
 FOR UPDATE OF run`, runID).Scan(
-		&run.ID, &run.OrganizationID, &priorGeneration, &status, &targetDay,
+		&run.ID, &run.OrganizationID, &priorGeneration, &status, &targetDay, &run.FullOrg,
 		&hasPartitions, &allPartitionsSucceeded,
 	)
 	if err == pgx.ErrNoRows {
@@ -412,7 +412,7 @@ RETURNING `+pgClockMillis, now, runID, newGeneration).Scan(&reopenedAtMs)
 	if err != nil {
 		return false, ErrUnavailable
 	}
-	if err := store.markReopened(ctx, run.OrganizationID, targetDay, priorGeneration, reopenedAtMs); err != nil {
+	if err := store.markReopened(ctx, run, targetDay, reopenedAtMs); err != nil {
 		return false, err
 	}
 

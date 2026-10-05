@@ -1035,6 +1035,7 @@ func attachRunMarker(
 		return nil, writeError(stderr, "operator_backend_unavailable")
 	}
 	store.SetRunMarkerWriter(markerStore)
+	store.SetRunMarkerReader(markerStore)
 	return closeConn, 0
 }
 
@@ -1103,7 +1104,8 @@ func dispatchMetricsDailyMarkerBackfill(
 	}
 	defer closeConn()
 	store.SetRunMarkerWriter(markerStore)
-	outcome, err := store.BackfillRunMarkers(ctx, markerStore, *org, fromDay, toDay, *dryRun)
+	store.SetRunMarkerReader(markerStore)
+	outcome, err := store.BackfillRunMarkers(ctx, *org, fromDay, toDay, *dryRun)
 	if err != nil {
 		return writeServiceError(stderr, err)
 	}

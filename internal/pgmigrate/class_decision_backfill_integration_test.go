@@ -48,17 +48,24 @@ type classDecision struct {
 	decidedAt           time.Time
 }
 
-// at0145 is a scratch database one revision below the head (0145), holding rows.
+// at0145 is a scratch database at revision 0145 (one below 0146), holding rows.
 func at0145(t *testing.T, d downInstance, rows []routingRow) (string, *pgx.Conn) {
 	t.Helper()
 	chain, err := pgmigrate.LoadChain()
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got := chain[len(chain)-1].Revision; got != "0146" {
-		t.Fatalf("the chain head is %s; this test seeds the database one revision below 0146", got)
+	// 0146 is not the head any more (0147 follows it): seed one revision below 0146, wherever it sits.
+	below0146 := -1
+	for index, entry := range chain {
+		if entry.Revision == "0146" {
+			below0146 = index
+		}
 	}
-	uri := d.at(t, len(chain)-1)
+	if below0146 < 0 {
+		t.Fatal("the chain holds no revision 0146; this test seeds the database one revision below it")
+	}
+	uri := d.at(t, below0146)
 	conn := connect(t, uri)
 	ctx := context.Background()
 	for _, row := range rows {
@@ -317,8 +324,9 @@ func TestClassDecisionBackfillThroughTheUpgradeVerbTreatsAnEmptyLiveDigestAsUnse
 			if err != nil {
 				t.Fatal(err)
 			}
-			if !hasRevision(recorded, "0146") {
-				t.Errorf("alembic_version = %v, want 0146 recorded", recorded)
+			// alembic_version holds the head, which is 0147 now that it follows 0146.
+			if !hasRevision(recorded, "0147") {
+				t.Errorf("alembic_version = %v, want the head 0147 recorded", recorded)
 			}
 			if got := readDecisions(t, conn); len(got) != 0 {
 				t.Errorf("decisions %+v, want none", got)

@@ -175,20 +175,29 @@ state of the daily metrics run so a reader can tell the two apart.
 | `finalized_at` | The version as a timestamp. |
 | `version` | Postgres clock reading in milliseconds, taken in the transaction that changed the run state. Orders the events of one day. |
 
-**Only a run that computes the whole organization writes the marker**: the
-scheduled fan-out and the post-sync run, which both discover the repository
-set live. A run started with an explicit repository list (an external
-recompute, a manual run with repositories) computes only those repositories,
-so it never certifies the day.
+**The invariant.** The marker says `succeeded` for an organization and day
+only when, at the moment of the append, committed Postgres says the latest run
+of that day that computes the whole organization is succeeded. Whether a run
+computes the whole organization is recorded when it is created
+(`daily_metrics_runs.full_org`, true when no explicit repository list was
+given): the scheduled fan-out, the post-sync run, a manual run without
+`--repo-id`, and the external-recompute all-repository fallback all qualify. A
+run started with a repository list computes only those repositories and never
+certifies the day. Runs created before the column existed are classed by their
+generation (scheduled fan-out and post-sync only); an older manual or
+external-recompute run stays unmarked.
 
-The table is append-only. The worker appends `succeeded` after the run for one
-organization and day reaches status and finalization status `succeeded` in
-Postgres. It appends `reopened` when such a run is claimed for dispatch, so a
-day that a new run is recomputing is not certified. A redrive or partition
-recompute that reopens a succeeded run appends `reopened` inside the reopen
-transaction, and is refused if that append fails. Nothing is updated or
-deleted. Versions come from one clock, the Postgres server, never from the
-writing host.
+The table is append-only and has two writers of `succeeded`: the function that
+runs after a finalize commits, and the backfill. They are the same function
+(`markerSync`): it takes the lock, reads committed Postgres, and appends
+`succeeded` only if the day's latest full-org run is succeeded, `reopened` if
+that run is not, and nothing if the table already agrees. `reopened` is also
+appended when a full-org run is claimed for dispatch (so a day that a run is
+recomputing is not certified) and when a redrive or partition recompute
+reopens a succeeded run, inside the transaction that does it and before its
+commit; if the append fails, that transaction rolls back and nothing changes.
+Versions come from one clock, the Postgres server, read under the lock, never
+from the writing host.
 
 **Reader rule.** For each `(org_id, target_day)` take the row with the greatest
 `version` over all generations, and let `reopened` win a tie:
@@ -207,19 +216,18 @@ GROUP BY org_id, target_day
 A failed `succeeded` append never fails the run. The day stays unknown, the
 failure is logged, and `dev_health_daily_metrics_run_marker_appends_total`
 counts it with `outcome="failed"`. `dho workers metrics daily-marker-backfill
---org <uuid> --from <day> --to <day>` makes the table agree with Postgres for
-a range. It looks only at full-org runs and takes the latest of them by
-creation time. It appends a row only when the current state differs, so a
-second run appends nothing. A run with status `no_repositories` is not marked.
+--org <uuid> --from <day> --to <day>` runs the same function for each day of a
+range. It appends only when the table differs from Postgres, so a second run
+appends nothing. A run with status `no_repositories` is not marked.
 
-Concurrency. The backfill, the reopen resets (finalize-redrive,
-partition-recompute) and the dispatch claim all take one Postgres advisory
-lock per organization and day. The backfill takes it first, then reads
-ClickHouse, then reads Postgres, then appends, then commits. A reopen that is
-still inside its transaction therefore blocks the backfill until it commits or
-rolls back, and the backfill then reads the state after it. The guarantee is
-that a backfill never certifies a day from a Postgres state older than a
-marker event it could see; a reopen that rolled back after writing its marker is
-healed by the next backfill. The live `succeeded` append after a finalize commit
-is not under the lock: its version is the stored `finalized_at`, which every
-later reopen outranks.
+Concurrency. Every writer of one organization and day takes one Postgres
+advisory lock: the sync function, the dispatch claim, and the redrive and
+recompute resets. The sync function takes it first, then reads ClickHouse, then
+reads Postgres, then appends, then commits. A claim or reopen that is still
+inside its transaction therefore blocks the sync until it commits or rolls
+back, and the sync then reads the state after it. The guarantee: no `succeeded`
+is appended from a Postgres state older than a transition that had already
+written its `reopened`. A reopen whose transaction rolled back after writing
+its marker leaves the day unknown until the next sync, which heals it because
+Postgres still says succeeded. A run that was created but not yet claimed does
+not hide an older `succeeded` (it has not started computing); the claim does.

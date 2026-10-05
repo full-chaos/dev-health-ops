@@ -161,6 +161,7 @@ func buildDailyWorker(
 			return workerFamily{}, errWorkerDependencyUnavailable
 		}
 		store.SetRunMarkerWriter(markerStore)
+		store.SetRunMarkerReader(markerStore)
 		if markerObserver, ok := observer.(jobruntime.DailyMetricsRunMarkerObserver); ok {
 			store.SetRunMarkerObserver(markerObserver)
 		}

@@ -123,7 +123,7 @@ func revisionsDatabase(t *testing.T) (uri string, admin func(string)) {
 
 // revisionsPythonBuild is the build whose Python CLI (Alembic) answered the scenarios: a build that still
 // carried the Python CLI.
-const revisionsPythonBuild = "969cd8f6a6cf9adcae1d34bb83a1480fdd942c15"
+const revisionsPythonBuild = "7f1735a706c311c61d3332a1f10cc4aff4e56724"
 
 // revisionsPythonProgram is the entry point the producer runs: the real dev-hops CLI.
 const revisionsPythonProgram = "import sys\nfrom dev_health_ops import cli\nraise SystemExit(cli.main(sys.argv[1:]))\n"
@@ -141,7 +141,7 @@ func TestRevisionsMatchTheFrozenAlembicOutput(t *testing.T) {
 	golden := venueoracle.OpenGolden(t, venueoracle.GoldenSpec{
 		Path:        "testdata/golden/revisions.json",
 		PythonBuild: revisionsPythonBuild,
-		SHA256:      "ffc3f84db3ed441ab0c2797db774b1d68f335c880494bba72c2dd7fc588a5f23",
+		SHA256:      "b186872f83a61623f99afd3b257ef02b5e2bfadaffbefd54cc195fbc2edaf757",
 		Recipe: "git worktree add --detach $DIR " + revisionsPythonBuild + " (with its .venv: uv sync --frozen --no-install-project); then from the repository root: " +
 			"go run ./internal/testsupport/venueoracle/goldenrecord -pkg ./internal/pgmigrate/ -test '^TestRevisionsMatchTheFrozenAlembicOutput$' -python-root $DIR",
 	})

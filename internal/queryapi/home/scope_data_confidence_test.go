@@ -77,7 +77,7 @@ func TestFetchScopeDataConfidenceUsesRepositoryOwnershipAndWindow(t *testing.T) 
 	if got.Level != "medium" || got.CoveragePct == nil || *got.CoveragePct != 50 {
 		t.Fatalf("confidence = %#v, want medium with 50%% coverage", got)
 	}
-	for _, marker := range []string{"FROM repos FINAL AS r", "FROM repo_metrics_daily FINAL", teamscope.Marker, "day >= {start_day:Date}", "day < {end_day:Date}"} {
+	for _, marker := range []string{"FROM repos AS r FINAL", "FROM repo_metrics_daily FINAL", teamscope.Marker, "day >= {start_day:Date}", "day < {end_day:Date}"} {
 		if !strings.Contains(query, marker) {
 			t.Fatalf("scope confidence query missing %q", marker)
 		}

@@ -1,9 +1,9 @@
 {
   "header": {
     "test": "TestBaselineIsTheFrozenPythonUpgrade",
-    "python_build": "2a8e926ff82961863c0ce12eb7701d2daaf2cb7d",
-    "producer_digest": "1031824a913ad1861eba30c044f8593d58e295c3bba70c7cb3e3c76dc878610d",
-    "recipe": "git worktree add --detach $DIR 2a8e926ff82961863c0ce12eb7701d2daaf2cb7d (with its .venv: uv sync --frozen --no-install-project); then from the repository root: go run ./internal/testsupport/venueoracle/goldenrecord -pkg ./internal/pgmigrate/ -test '^TestBaselineIsTheFrozenPythonUpgrade$' -python-root $DIR",
+    "python_build": "969cd8f6a6cf9adcae1d34bb83a1480fdd942c15",
+    "producer_digest": "135ab7b0e062a879df646d57e50ff3c9b3a299f6119dfcc2f2fd49a1b3445a37",
+    "recipe": "git worktree add --detach $DIR 969cd8f6a6cf9adcae1d34bb83a1480fdd942c15 (with its .venv: uv sync --frozen --no-install-project); then from the repository root: go run ./internal/testsupport/venueoracle/goldenrecord -pkg ./internal/pgmigrate/ -test '^TestBaselineIsTheFrozenPythonUpgrade$' -python-root $DIR",
     "recorded_by": "goldenrecord",
     "blanked": {}
   },

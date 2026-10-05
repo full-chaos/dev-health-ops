@@ -62,5 +62,22 @@ func TestClassDecisionBackfillNamesTheClassDigestAndTheVerbsSetting(t *testing.T
 			!strings.Contains(text, `LIVE_DIGEST_ENV = "`+pgmigrate.ClassDecisionLiveDigestEnv+`"`) {
 			t.Errorf("the Alembic mirror does not name the verb's setting and environment variable")
 		}
+		// The guard is a DO block, which takes no bind parameters: the mirror runs the chain file's own text.
+		guard := regexp.MustCompile(`(?s)DO \$\$\n.*?\nEND\n\$\$`)
+		sqlGuard, mirrorGuard := guard.FindString(sql), guard.FindString(text)
+		if sqlGuard == "" || mirrorGuard != sqlGuard {
+			t.Errorf("the Alembic mirror's guard is not the chain file's DO block:\nmirror: %q\nchain:  %q", mirrorGuard, sqlGuard)
+		}
+		// The copy binds the setting name and the class digest (no SQL built from strings).
+		for _, want := range []string{
+			"AND schema_digest = current_setting(:live_digest_setting, true)",
+			"AND document_digest = :class_document_digest",
+			"live_digest_setting=LIVE_DIGEST_SETTING,",
+			"class_document_digest=CLASS_DOCUMENT_DIGEST,",
+		} {
+			if !strings.Contains(text, want) {
+				t.Errorf("the Alembic mirror's copy does not hold %q", want)
+			}
+		}
 	})
 }

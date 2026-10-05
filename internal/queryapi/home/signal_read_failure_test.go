@@ -86,6 +86,16 @@ func TestBuildResponse_AFailedSignalReadIsAnErrorNotAnEmptyPanel(t *testing.T) {
 			base:  func(t *testing.T) signalReadHandler { return teamGoldenHandler(t) },
 			table: "recommendations_daily", scanner: &brokenRowsScanner{err: boom},
 		},
+		{
+			name: "signal attribution: the query fails", level: "org",
+			base:  func(t *testing.T) signalReadHandler { return orgGoldenHandler(t) },
+			table: "work_item_team_attributions", err: boom,
+		},
+		{
+			name: "signal attribution: the row stream fails", level: "org",
+			base:  func(t *testing.T) signalReadHandler { return orgGoldenHandler(t) },
+			table: "work_item_team_attributions", scanner: &brokenRowsScanner{err: boom},
+		},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {

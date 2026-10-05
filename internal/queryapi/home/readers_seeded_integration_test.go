@@ -39,6 +39,7 @@ package home
 import (
 	"context"
 	"fmt"
+	"reflect"
 	"testing"
 	"time"
 
@@ -162,6 +163,27 @@ func TestHomeReaders_SeededRealClickHouse(t *testing.T) {
 		`INSERT INTO work_item_cycle_times (work_item_id, provider, day, work_scope_id, type, status, created_at, cycle_time_hours, computed_at, org_id) VALUES
 		 ('wi-cycle-2', 'jira', '%s', 'scope-1', 'bug', 'closed', toDateTime('%s'), 3.0, toDateTime('%s'), '%s')`,
 		day1, tNew, tNew, seededOrgID))
+	// The signal-attribution reader joins cycle times to work_items for
+	// repository scope. wi-cycle-2 belongs to team-1's owned repository;
+	// wi-cycle-3 belongs to an unowned repository and is its control row.
+	// The two sources on wi-cycle-2 have different computed_at values: only
+	// the newer linked_issue/medium attribution may survive the reader's
+	// latest-primary selection.
+	seededExec(ctx, t, conn, fmt.Sprintf(
+		`INSERT INTO work_items (repo_id, work_item_id, provider, title, status, status_raw, created_at, updated_at, last_synced, org_id) VALUES
+		 ('%s', 'wi-cycle-2', 'jira', 'owned current item', 'closed', 'closed', toDateTime64('%s',3), toDateTime64('%s',3), toDateTime64('%s',3), '%s'),
+		 ('%s', 'wi-cycle-3', 'jira', 'unowned current item', 'closed', 'closed', toDateTime64('%s',3), toDateTime64('%s',3), toDateTime64('%s',3), '%s')`,
+		repoID, tNew, tNew, tNew, seededOrgID, repoID2, tNew, tNew, tNew, seededOrgID))
+	seededExec(ctx, t, conn, fmt.Sprintf(
+		`INSERT INTO work_item_cycle_times (work_item_id, provider, day, work_scope_id, type, status, created_at, cycle_time_hours, computed_at, org_id) VALUES
+		 ('wi-cycle-3', 'jira', '%s', 'scope-2', 'bug', 'closed', toDateTime('%s'), 4.0, toDateTime('%s'), '%s')`,
+		day1, tNew, tNew, seededOrgID))
+	seededExec(ctx, t, conn, fmt.Sprintf(
+		`INSERT INTO work_item_team_attributions (org_id, repo_id, work_item_id, provider, team_id, team_name, source, is_primary, confidence, evidence, computed_at) VALUES
+		 ('%s', toUUID('%s'), 'wi-cycle-2', 'jira', 'team-1', 'Team One', 'native_team', 1, 'high', 'old direct team', toDateTime64('%s',3)),
+		 ('%s', toUUID('%s'), 'wi-cycle-2', 'jira', 'team-1', 'Team One', 'linked_issue', 1, 'medium', 'new linked issue', toDateTime64('%s',3)),
+		 ('%s', toUUID('%s'), 'wi-cycle-3', 'jira', NULL, NULL, 'unassigned', 1, 'none', 'no ownership evidence', toDateTime64('%s',3))`,
+		seededOrgID, repoID, tOld, seededOrgID, repoID, tNew, seededOrgID, repoID2, tNew))
 
 	// --- repo_metrics_daily: two versions, same (org_id, repo_id, day).
 	// Old carries an inflated churn value that must NOT survive dedup.
@@ -301,6 +323,36 @@ func TestHomeReaders_SeededRealClickHouse(t *testing.T) {
 		// combined with total below.
 		if got.PRsLinkedToIssuesPct == nil || *got.PRsLinkedToIssuesPct != 100.0 {
 			t.Errorf("prs_linked_to_issues_pct = %v, want 100 (only wi-cycle-2 visible: 1 linked / 1 total)", got.PRsLinkedToIssuesPct)
+		}
+	})
+
+	t.Run("fetchSignalAttribution_latestPrimaryAndOwnedRepoScope", func(t *testing.T) {
+		asOf := time.Date(2026, 1, 2, 11, 0, 0, 0, time.UTC)
+		orgAttribution, err := fetchSignalAttribution(ctx, client, Filters{}, startDay, endDay, seededOrgID, asOf)
+		if err != nil {
+			t.Fatalf("fetchSignalAttribution org: %v", err)
+		}
+		if orgAttribution == nil || orgAttribution.Items != 2 {
+			t.Fatalf("org signal attribution = %+v, want two attributed current work items", orgAttribution)
+		}
+		wantSources := []SignalAttributionSourceCount{
+			{Source: "linked_issue", Items: 1, Share: 0.5},
+			{Source: "unassigned", Items: 1, Share: 0.5},
+		}
+		wantConfidence := []SignalAttributionConfidenceCount{
+			{Confidence: "medium", Items: 1, Share: 0.5},
+			{Confidence: "none", Items: 1, Share: 0.5},
+		}
+		if !reflect.DeepEqual(orgAttribution.Sources, wantSources) || !reflect.DeepEqual(orgAttribution.Confidence, wantConfidence) {
+			t.Fatalf("org signal attribution = %+v, want sources=%+v confidence=%+v; the stale native_team/high row must not survive", orgAttribution, wantSources, wantConfidence)
+		}
+
+		teamAttribution, err := fetchSignalAttribution(ctx, client, Filters{Scope: ScopeFilter{Level: "team", IDs: []string{"team-1"}}}, startDay, endDay, seededOrgID, asOf)
+		if err != nil {
+			t.Fatalf("fetchSignalAttribution team: %v", err)
+		}
+		if teamAttribution == nil || teamAttribution.Items != 1 || len(teamAttribution.Sources) != 1 || teamAttribution.Sources[0].Source != "linked_issue" || len(teamAttribution.Confidence) != 1 || teamAttribution.Confidence[0].Confidence != "medium" {
+			t.Fatalf("team signal attribution = %+v, want only team-1's owned linked-issue item; unowned UNASSIGNED/NONE must stay out", teamAttribution)
 		}
 	})
 

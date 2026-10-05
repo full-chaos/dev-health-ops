@@ -971,6 +971,32 @@ type HomeSignal {
   category: String!
   """Null when the signal is not scoped to one entity (e.g. an org-wide signal)."""
   scopeEntity: ScopeEntityRef
+  """Current primary work-item attribution evidence for work-item metrics; null when this window has no attributable work items."""
+  attribution: SignalAttribution
+}
+
+"""Source and confidence distribution for the work items behind one Home signal."""
+type SignalAttribution {
+  """Number of attributed work items behind these distributions."""
+  items: Int!
+  sources: [SignalAttributionSourceCount!]!
+  confidence: [SignalAttributionConfidenceCount!]!
+}
+
+"""One source bucket of a Home signal's work-item attribution distribution."""
+type SignalAttributionSourceCount {
+  source: TeamAttributionSource!
+  items: Int!
+  """Fraction of SignalAttribution.items in this bucket."""
+  share: Float!
+}
+
+"""One confidence bucket of a Home signal's work-item attribution distribution."""
+type SignalAttributionConfidenceCount {
+  confidence: TeamAttributionConfidence!
+  items: Int!
+  """Fraction of SignalAttribution.items in this bucket."""
+  share: Float!
 }
 
 type HomeLimitingFactor {

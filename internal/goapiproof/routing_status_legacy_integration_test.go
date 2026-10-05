@@ -14,7 +14,7 @@ import (
 // document digests (CHAOS-8000 dual accept). The census must count exactly those rows: a carried row under
 // a registered legacy digest is MATCH with its own mode and build, and a row under any other digest stays
 // unreachable. The switch itself is the oracle: for every operation, the census's answer is checked against
-// what routeswitch.NewCatalogSwitchWithLegacy says over the same rows and the same catalog data.
+// what routeswitch.NewPostgresSwitchWithLegacy (the row-reading switch) says over the same rows and the same catalog data.
 func TestRoutingStatusRowsWithLegacyAgreesWithTheSwitchOnLegacyDigestRows(t *testing.T) {
 	ctx := t.Context()
 	pool := startAuditedRegistryPostgres(t)
@@ -93,10 +93,10 @@ func TestRoutingStatusRowsWithLegacyAgreesWithTheSwitchOnLegacyDigestRows(t *tes
 		}
 	}
 
-	// The oracle: the switch query-api serves through, over the same rows and the same catalog data. Every
-	// operation here has a row, so the catalog rule (served with no row) never applies and the census's
-	// Reachable must equal Enabled exactly.
-	sw := routeswitch.NewCatalogSwitchWithLegacy(pool, testSchemaDigest, catalog, legacy)
+	// The oracle: the row-reading switch (the class-row and proof switches), over the same rows and the
+	// same catalog data. The census's Reachable must equal its Enabled exactly. query-api's /query and
+	// /graphql switch reads no row any more (CHAOS-8702).
+	sw := routeswitch.NewPostgresSwitchWithLegacy(pool, testSchemaDigest, catalog, legacy)
 	for operation := range catalog {
 		status := byOperation[operation]
 		if served := sw.Enabled(operation); served != status.Reachable() || status.ServedWithoutRow() {

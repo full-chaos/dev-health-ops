@@ -1520,6 +1520,11 @@ type Query {
   coverageBaselines(orgId: String!, endDate: Date!, repoIds: [String!] = null, teamIds: [String!] = null): [RepoCoverageBaseline!]!
 
   """
+  The coverage baseline of a whole scope (CHAOS-8541): the mean, over the 30 days before ``endDate`` (``endDate`` itself is not included), of the scope's coverage of each day. The scope's coverage of a day is the mean of its repositories' coverage of that day (a repository with no value that day is left out): the value the coverage trend serves for a day. The same window and the same 7-day minimum as ``coverageBaselines``. Not a set target, and not the mean of the repository baselines. Scope: ``repoIds`` and the repositories that ``teamIds`` own; neither = the whole org.
+  """
+  coverageScopeBaseline(orgId: String!, endDate: Date!, repoIds: [String!] = null, teamIds: [String!] = null): ScopeCoverageBaseline!
+
+  """
   Cyclomatic complexity trend by repo or file. Reads from append-only ``repo_complexity_daily`` / ``file_complexity_snapshots`` tables — no recomputation, pure surface of persisted data.
   """
   complexityTimeseries(input: ComplexityTimeseriesInput!): ComplexityTimeseriesResult!
@@ -1779,6 +1784,19 @@ type SavedReportType {
   createdAt: DateTime!
   updatedAt: DateTime!
   createdBy: String
+}
+
+type ScopeCoverageBaseline {
+  """
+  Mean, in percent (0 to 100), of the scope's line coverage of each day that holds a value, over the 30 days. Null = fewer than 7 such days (``lineDays``): then there is no baseline. Never 0 for "none", never the current value.
+  """
+  lineBaselinePct: Float
+  """Days of the 30 on which at least one repository of the scope holds a line coverage value."""
+  lineDays: Int!
+  """Mean branch coverage, in percent; the same rules as ``lineBaselinePct``."""
+  branchBaselinePct: Float
+  """Days of the 30 on which at least one repository of the scope holds a branch coverage value."""
+  branchDays: Int!
 }
 
 input ScopeFilterInput {

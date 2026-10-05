@@ -41,7 +41,7 @@ var registeredOperations = []string{
 	"releaseImpact",
 	"investmentBreakdown", "investmentFull", "operatingReview", "pr",
 	"createSavedReport", "updateSavedReport", "deleteSavedReport", "cloneSavedReport", "triggerReport",
-	"reportRuns", "reviewEdges", "savedReport", "savedReports", "securityAlerts", "securityOverview", "testopsRisk", "testopsJobFailures", "coverageBaselines", "throughputForecast", "testOpsCoverage", "testOpsPipeline", "testOpsTest", "featureFlagTimeseries",
+	"reportRuns", "reviewEdges", "savedReport", "savedReports", "securityAlerts", "securityOverview", "testopsRisk", "testopsJobFailures", "coverageBaselines", "coverageScopeBaseline", "throughputForecast", "testOpsCoverage", "testOpsPipeline", "testOpsTest", "featureFlagTimeseries",
 	"workGraphArtifacts", "workGraphEdges", "workGraphFlow",
 	"workUnitTeamAttributions",
 	"workItemTeamAttributions",

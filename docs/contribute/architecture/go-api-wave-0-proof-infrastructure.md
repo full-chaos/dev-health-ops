@@ -788,14 +788,14 @@ audit table must outlive the row it describes.
 | `devhealth_query_api_routing_rows_for_digest` (gauge, `schema_digest` attr) | `query-api` route construction | Rows keyed to the digest THIS process computed; 0 with the total gauge below `>0` is the DEAD-fleet condition, on every startup, not only at read time |
 | `devhealth_query_api_routing_rows_total` (gauge, `schema_digest` attr) | `query-api` route construction | Disambiguates the gauge above from the legitimate `total == 0` posture, where no row decides anything and the catalog rule serves every registered operation |
 | `devhealth_go_api_dispatch_fallback_total{reason="no_routing_row"}` | Python edge, per request | A dispatch-eligible request found no row |
-| `devhealth_query_api_routeswitch_digest_miss_total{operation}` (and its WARN record) | `query-api`, per request | An operation has no row at the live key and is refused: on the serving route, an operation whose rows are all elsewhere |
-| `devhealth_query_api_routeswitch_served_without_row_total{operation, reason="catalog_no_row"}` (and one INFO record per operation per process) | `query-api`, per request | A registered operation with no routing row at any schema digest was served (the catalog rule). Zero on a stack where every operation has a row |
+| `devhealth_query_api_routeswitch_digest_miss_total{operation}` (and its WARN record) | `query-api`, per request | An operation has no row at the live key and is refused: on the class-row and proof switches only. The serving route (`/query`, `/graphql`) reads no row (CHAOS-8702) |
 | `ci/check_go_api_routing_digest.py` | CI | The SDL moved without updating the pin and this table |
 
 `empty` (no row decides anything) is deliberately reported as a *different*
 result from `stale` (everything enabled is dead), and the two mean opposite
-things: on an empty table query-api serves every registered operation by the
-catalog rule, and on a stale one it serves no operation that has a row.
+things: query-api's serving route (`/query`, `/graphql`) serves every registered
+operation whatever the rows say (CHAOS-8702); the difference matters for the
+class-row and proof switches, which still read rows.
 
 None of the above shortcuts the recovery procedure. In particular, a schema digest that happens to match a
 previously-proven build is NOT grounds to re-point a DEAD row's `candidate_build` onto a new image without a

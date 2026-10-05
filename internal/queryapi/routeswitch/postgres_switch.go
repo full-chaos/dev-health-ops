@@ -3,7 +3,6 @@ package routeswitch
 import (
 	"context"
 	"log"
-	"sync"
 	"time"
 
 	"github.com/jackc/pgx/v5"
@@ -98,13 +97,6 @@ type PostgresSwitch struct {
 	// thing that would get the (schema_digest, document_digest,
 	// selected_operation) key wrong.
 	reachable map[string]bool
-	// serveUnrouted is the catalog rule (CHAOS-8517): an operation with NO routing row at all -- at any
-	// schema digest, under any document digest -- is served. False for every switch but the one
-	// NewCatalogSwitchWithLegacy builds; see catalog_switch.go for the rule and for why the class-row
-	// and proof switches keep "no row = not reachable".
-	serveUnrouted bool
-	// announced holds the operations whose "served with no row" decision has been logged once.
-	announced sync.Map
 }
 
 // registryReader is the read PostgresSwitch makes of go_api_routing_state.
@@ -165,10 +157,8 @@ const liveModesSQL = `SELECT mode FROM go_api_routing_state
 // operation, which looks identical to "not canaried yet" unless it is
 // counted and logged separately; see recordDigestMiss.
 //
-// The one exception to "no routing-state row resolves to false" is the
-// catalog switch (serveUnrouted, CHAOS-8517): see unroutedIsServed in
-// catalog_switch.go. Every other switch built on this type keeps the rule
-// above unchanged.
+// Only the class-row and proof switches are built on this type now: the
+// catalog switch (catalog_switch.go) reads no row.
 func (s *PostgresSwitch) Enabled(operation string) bool {
 	documentDigest, ok := s.documentDigests[operation]
 	if !ok {
@@ -199,9 +189,6 @@ func (s *PostgresSwitch) Enabled(operation string) bool {
 		return false
 	}
 	if len(modes) == 0 {
-		if s.serveUnrouted {
-			return s.unroutedIsServed(ctx, operation, documentDigest)
-		}
 		recordDigestMiss(ctx, operation, s.schemaDigest, documentDigest)
 		return false
 	}

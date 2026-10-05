@@ -4,7 +4,8 @@ import "strings"
 
 // parseTrustedSCMHostEntries reads a trusted-SCM-host env list. An entry is "host" or "host/url-root"; the second form
 // names the relative URL root of a self-managed instance (GitLab's relative_url_root, e.g. "gitlab.example.com/gitlab"),
-// which is part of every web URL but never part of a project path.
+// which is part of every web URL but never part of a project path. The host is case-folded; the root keeps its case and
+// is compared exactly, as URL paths are case-sensitive.
 func parseTrustedSCMHostEntries(raw string, defaults ...string) (map[string]struct{}, map[string][]string) {
 	hosts := make(map[string]struct{}, len(defaults))
 	roots := make(map[string][]string)
@@ -12,9 +13,8 @@ func parseTrustedSCMHostEntries(raw string, defaults ...string) (map[string]stru
 		hosts[host] = struct{}{}
 	}
 	for _, value := range strings.Split(raw, ",") {
-		entry := strings.ToLower(strings.TrimSpace(value))
-		host, root, _ := strings.Cut(entry, "/")
-		if host == "" {
+		host, root, _ := strings.Cut(strings.TrimSpace(value), "/")
+		if host = strings.ToLower(host); host == "" {
 			continue
 		}
 		hosts[host] = struct{}{}

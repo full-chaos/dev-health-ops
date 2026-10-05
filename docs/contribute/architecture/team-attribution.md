@@ -1420,7 +1420,7 @@ A PR/MR only inherits a team if an edge to its issue exists. The link is capture
 
 | Tier | Source | Trust gate | Edge |
 |---|---|---|---|
-| Primary | **Linear issue attachment** (the integration's PR/MR link) | integration `sourceType` **AND** allowlisted host (public SaaS + `LINEAR_TRUSTED_SCM_HOSTS`) | `ghpr:…`/`gitlab:… → linear:KEY` (direct id) |
+| Primary | **Linear issue attachment** (the integration's PR/MR link) | integration `sourceType` **AND** allowlisted host (public SaaS + `LINEAR_TRUSTED_SCM_HOSTS`; an entry may be `host/root` for a self-managed instance under a relative URL root, which is stripped before the project path) | `ghpr:…`/`gitlab:… → linear:KEY` (direct id) |
 | Secondary | **GitHub PR comment** (the Linear bot's linkback) | exact `linear[bot]` actor (`GITHUB_LINEAR_LINKBACK_BOTS`) + `linear.app` URL | `ghpr:… → extkey:KEY` |
 | Tertiary | **PR body / head branch** (the author's own ref) | magic-word / Linear branch convention | `ghpr:… → extkey:KEY` |
 

@@ -388,3 +388,13 @@ func TestJiraDevStatusPullRequestSourceIDStripsConfiguredURLRoot(t *testing.T) {
 		}
 	}
 }
+
+func TestJiraDevStatusPullRequestSourceIDURLRootIsCaseConsistent(t *testing.T) {
+	t.Setenv("JIRA_TRUSTED_SCM_HOSTS", "Git.Internal.Example.com/GitLab")
+	if got := jiraDevStatusPullRequestSourceID("https://git.internal.example.com/GitLab/acme/api/-/merge_requests/9"); got != "gitlab:acme/api!9" {
+		t.Fatalf("exact-case root: %q", got)
+	}
+	if got := jiraDevStatusPullRequestSourceID("https://git.internal.example.com/gitlab/acme/api/-/merge_requests/9"); got != "" {
+		t.Fatalf("different-case root must not match: %q", got)
+	}
+}

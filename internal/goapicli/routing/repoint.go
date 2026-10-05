@@ -263,3 +263,28 @@ func runRepoint(argv []string) (err error) {
 	}
 	return nil
 }
+
+// routingRowsOnlyDarkNote is the one line `repoint` prints when no row sits at the schema digest it
+// works on and every row elsewhere is in a dark mode, so the verb did nothing (CHAOS-8586).
+func routingRowsOnlyDarkNote(what string) string {
+	return fmt.Sprintf("go-api-routing: NO-OP: go_api_routing_state has no row at this schema digest, and every row at another digest is in a dark mode (python, disabled or shadow), so there is nothing to %s and nothing was written.", what)
+}
+
+// printDarkRowsOnly names, on stderr, every row behind a dark-rows-only no-op, one structured line each.
+func printDarkRowsOnly(err error, verb string) {
+	var dark *goapiproof.RoutingRowsOnlyDarkError
+	if !errors.As(err, &dark) {
+		return
+	}
+	for _, row := range dark.Rows {
+		fmt.Fprintf(stderr, "go_api_routing.noop_dark_rows_only verb=%s operation=%q mode=%q row_schema_digest=%q live_schema_digest=%s document_digest=%q\n",
+			verb, row.Operation, row.Mode, row.SchemaDigest, dark.SchemaDigest, row.DocumentDigest)
+	}
+}
+
+// routingTableEmptyNote is the one line `repoint` prints when go_api_routing_state has no row at any
+// schema digest and the verb therefore did nothing (CHAOS-8543).
+func routingTableEmptyNote(what string) string {
+	return fmt.Sprintf("go-api-routing: NO-OP: go_api_routing_state has no row at any schema digest, so there is nothing to %s and nothing was written. "+
+		"An empty table is a valid state: query-api serves every registered operation without a routing row, and no MCP class root is enabled.", what)
+}

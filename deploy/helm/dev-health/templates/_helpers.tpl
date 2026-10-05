@@ -422,8 +422,8 @@ CHAOS-8309: the comparison targets are the Go serving images -- queryApi.image
 (when queryApi.enabled) and goApi.image (when goApi.enabled). When both are
 enabled the hook tag must equal BOTH. Before this change the one target was
 the Python api image: that is the wrong reference for a Go-only concern, and the
-routing-carry hooks already compare against queryApi.image inline for the same
-reason (routing-carry-hooks.yaml). A component that is not enabled has no image
+route-activate already compares against queryApi.image for the same
+reason. A component that is not enabled has no image
 being rolled, so it is not a comparison target.
 
 CHAOS-7520: the Python image clause is gone (the Python api image has no

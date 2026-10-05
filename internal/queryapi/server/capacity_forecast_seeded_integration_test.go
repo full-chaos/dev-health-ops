@@ -43,6 +43,7 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/queryapi/capacityforecast"
 	"github.com/full-chaos/dev-health-ops/internal/queryapi/graph/model"
 	"github.com/full-chaos/dev-health-ops/internal/queryapi/graphqldate"
+	"github.com/full-chaos/dev-health-ops/internal/queryapi/throughputforecast"
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/chschema"
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/containers"
 )
@@ -230,6 +231,23 @@ func TestCapacityForecastsFiltersAgainstRealColumns(t *testing.T) {
 		t.Fatalf("seed capacity_forecasts: %v", err)
 	}
 
+	// CHAOS-8727: a requested team is listed only through an open ownership row in the caller's org.
+	// team-alpha owns a repository in org-mine; team-beta owns none anywhere; team-theirs owns one only in
+	// org-theirs (and has a forecast row in org-mine).
+	seedTeamOwnership(ctx, t, raw, "org-mine", "team-alpha", "acme/alpha")
+	seedTeamOwnership(ctx, t, raw, "org-theirs", "team-beta", "acme/theirs")
+	for _, unowned := range []string{"team-beta", "team-theirs"} {
+		if err := raw.Exec(ctx, fmt.Sprintf(`INSERT INTO capacity_forecasts (forecast_id, computed_at, org_id, team_id, work_scope_id, backlog_size, history_days, simulation_count, throughput_mean, throughput_stddev, insufficient_history, high_variance)
+			VALUES ('%s-extra', toDateTime64('2026-09-12 00:00:00.000', 3, 'UTC'), 'org-mine', '%s', 'scope-x', 1, 90, 100, 1.0, 0.0, 0, 0)`, unowned, unowned)); err != nil {
+			t.Fatalf("seed capacity_forecasts for %s: %v", unowned, err)
+		}
+		team := unowned
+		listed, err := capacityforecast.ResolveForecasts(ctx, client, "org-mine", &model.CapacityForecastFilterInput{TeamID: &team, Limit: 10})
+		if err != nil || listed == nil || len(listed.Edges) != 0 {
+			t.Errorf("%s has forecast rows in org-mine and no ownership there: %+v, err %v; want an empty connection", unowned, listed, err)
+		}
+	}
+
 	teamID := "team-alpha"
 	from := graphqldate.New(time.Date(2026, 9, 1, 0, 0, 0, 0, time.UTC))
 	filters := &model.CapacityForecastFilterInput{TeamID: &teamID, FromDate: &from, Limit: 10}
@@ -354,5 +372,53 @@ func TestCapacityForecastReturnsNilForAnOrgWithNoRows(t *testing.T) {
 	// error, and not a zero-valued forecast.
 	if got != nil {
 		t.Fatalf("got %+v, want nil for an org with no throughput history", got)
+	}
+}
+
+// seedTeamOwnership writes one open team_repo_ownership row (CHAOS-8727).
+func seedTeamOwnership(ctx context.Context, t *testing.T, raw stdclickhouse.Conn, org, team, repo string) {
+	t.Helper()
+	if err := raw.Exec(ctx, fmt.Sprintf(
+		`INSERT INTO team_repo_ownership (org_id, provider, team_id, repo_id, repo_full_name, match_type, source, is_primary, specificity, priority, valid_from, valid_to, updated_at)
+		VALUES ('%s', 'github', '%s', NULL, '%s', 'exact', 'inferred', 0, 0, 0, toDateTime64('2026-01-01 00:00:00',3), NULL, toDateTime64('2026-01-01 00:00:00',3))`,
+		org, team, repo)); err != nil {
+		t.Fatalf("seed team_repo_ownership: %v", err)
+	}
+}
+
+// CHAOS-8727: throughputForecast answers a requested team only through an open ownership row in the caller's org.
+func TestThroughputForecastAnswersATeamOnlyThroughOwnershipRows(t *testing.T) {
+	ctx := context.Background()
+	_, client, raw := migratedClickHouse(ctx, t)
+	anchor := time.Date(2026, 9, 1, 0, 0, 0, 0, time.UTC)
+	for _, team := range []string{"team-alpha", "team-noown", "team-theirs"} {
+		values := ""
+		for week := range 8 {
+			if values != "" {
+				values += ","
+			}
+			values += fmt.Sprintf("(toDate('%s'), 'jira', 'scope-x', '%s', 5, 10, toDateTime('2026-09-01 00:00:00'), 'org-mine')",
+				anchor.AddDate(0, 0, -7*week-1).Format("2006-01-02"), team)
+		}
+		if err := raw.Exec(ctx, `INSERT INTO work_item_metrics_daily (day, provider, work_scope_id, team_id, items_completed, wip_count_end_of_day, computed_at, org_id) VALUES `+values); err != nil {
+			t.Fatalf("seed work_item_metrics_daily for %s: %v", team, err)
+		}
+	}
+	seedTeamOwnership(ctx, t, raw, "org-mine", "team-alpha", "acme/alpha")
+	seedTeamOwnership(ctx, t, raw, "org-theirs", "team-theirs", "acme/theirs")
+
+	for _, team := range []string{"team-noown", "team-theirs"} {
+		got, err := throughputforecast.Resolve(ctx, client, "org-mine", model.ThroughputForecastInput{TeamIds: []string{team}, HistoryWeeks: 12}, anchor)
+		if err != nil || got != nil {
+			t.Errorf("%s has throughput rows in org-mine and no ownership there: %+v, err %v; want a nil forecast", team, got, err)
+		}
+	}
+	got, err := throughputforecast.Resolve(ctx, client, "org-mine", model.ThroughputForecastInput{TeamIds: []string{"team-alpha"}, HistoryWeeks: 12}, anchor)
+	if err != nil || got == nil || got.TeamID == nil || *got.TeamID != "team-alpha" {
+		t.Fatalf("an owned team: %+v, err %v; want an answer labelled team-alpha", got, err)
+	}
+	both, err := throughputforecast.Resolve(ctx, client, "org-mine", model.ThroughputForecastInput{TeamIds: []string{"team-alpha", "team-noown"}, HistoryWeeks: 12}, anchor)
+	if err != nil || both == nil || both.TeamID == nil || *both.TeamID != "team-alpha" {
+		t.Fatalf("one owned and one unowned team: %+v, err %v; want the unowned one dropped (single-team label team-alpha)", both, err)
 	}
 }

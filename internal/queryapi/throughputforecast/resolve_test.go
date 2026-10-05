@@ -10,6 +10,7 @@ import (
 	"github.com/full-chaos/dev-health-go/clickhouse"
 
 	"github.com/full-chaos/dev-health-ops/internal/queryapi/graph/model"
+	"github.com/full-chaos/dev-health-ops/internal/queryapi/teamscope"
 )
 
 // Fake row scanner and client, same shape as the sibling operation packages'.
@@ -36,6 +37,8 @@ func (f *fakeRowScanner) Scan(dest ...any) error {
 	for index, destination := range dest {
 		value := row[index]
 		switch pointer := destination.(type) {
+		case *string:
+			*pointer = value.(string)
 		case *time.Time:
 			*pointer = value.(time.Time)
 		case *uint64:
@@ -65,9 +68,30 @@ type fakeClient struct {
 	calls      int
 	statements []string
 	bindings   [][]clickhouse.Binding
+	// owners is the set of teams the ownership read (teamscope.OwnedTeams) answers for. Nil means every
+	// requested team owns a repository, so a test that is not about ownership need not state it; a non-nil
+	// empty slice means no team does. The ownership read is kept apart from statements/bindings.
+	owners            []string
+	ownershipBindings [][]clickhouse.Binding
 }
 
 func (f *fakeClient) Query(_ context.Context, statement string, bindings []clickhouse.Binding) (clickhouse.RowScanner, error) {
+	if strings.Contains(statement, teamscope.OwnedTeamsMarker) {
+		f.ownershipBindings = append(f.ownershipBindings, bindings)
+		owned := f.owners
+		if owned == nil {
+			for _, b := range bindings {
+				if b.Name == teamscope.BindingTeamIDs {
+					owned, _ = b.Value.([]string)
+				}
+			}
+		}
+		rows := make([][]any, 0, len(owned))
+		for _, id := range owned {
+			rows = append(rows, []any{id})
+		}
+		return &fakeRowScanner{rows: rows}, nil
+	}
 	index := f.calls
 	f.calls++
 	f.statements = append(f.statements, statement)

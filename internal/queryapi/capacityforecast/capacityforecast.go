@@ -83,6 +83,7 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/jobs/metrics/numerical"
 	"github.com/full-chaos/dev-health-ops/internal/queryapi/graph/model"
 	"github.com/full-chaos/dev-health-ops/internal/queryapi/graphqldate"
+	"github.com/full-chaos/dev-health-ops/internal/queryapi/teamscope"
 )
 
 // QueryClient is the read-only ClickHouse query boundary this package needs --
@@ -438,6 +439,28 @@ func ResolveForecasts(
 	limit := 10
 	if filters != nil {
 		limit = filters.Limit
+	}
+
+	// CHAOS-8727: a requested team answers only through ownership rows. An unowned team has no forecasts to
+	// list: the connection is empty, and capacity_forecasts is never read for it.
+	if filters != nil && filters.TeamID != nil && *filters.TeamID != "" {
+		owned, ownErr := teamscope.OwnedTeams(ctx, client, orgID, []string{*filters.TeamID}, time.Now())
+		if ownErr != nil {
+			return nil, fmt.Errorf("capacityForecasts: %w", ownErr)
+		}
+		if len(owned) == 0 {
+			slog.WarnContext(ctx, "query_api.capacity_forecasts.empty",
+				"org_id", orgID,
+				"filters", filterLabel(filters),
+				"limit", limit,
+				"reason", "no_team_ownership: the requested team has no team_repo_ownership row open now",
+				"duration_ms", time.Since(started).Milliseconds(),
+			)
+			return &model.CapacityForecastConnection{
+				Edges:    make([]model.CapacityForecastEdge, 0),
+				PageInfo: &model.PageInfo{},
+			}, nil
+		}
 	}
 
 	conditions := []string{"org_id = {org_id:String}"}

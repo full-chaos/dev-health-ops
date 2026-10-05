@@ -13,6 +13,7 @@ import (
 	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgxpool"
 
+	admininternal "github.com/full-chaos/dev-health-ops/internal/apiservice/admin"
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/venueoracle"
 )
 
@@ -249,9 +250,14 @@ func auditDisplayNamesDiagnostic(
 		}
 
 		for _, fixture := range fixtures {
+			projectionFound, projectionResourceDisplayNamePresent, encodedResourceDisplayNamePresent, err := admininternal.AuditLogResourceDisplayNameStateForTest(
+				connection.pool.QueryRow(ctx, admininternal.AuditLogProjectionSQLForTest()+` WHERE a.id = $1 AND a.org_id = $2`, fixture.logID, orgID),
+			)
+			requireAuditDisplayDiagnostic(t, connection.name, fixture.action, "production-projection-and-scan", err)
+
 			auditResourceIDType, targetIDType := "", ""
 			var targetIDMatches, caseUUIDMatches, auditOrgMatchesScope bool
-			err := connection.pool.QueryRow(ctx, `SELECT
+			err = connection.pool.QueryRow(ctx, `SELECT
 	pg_typeof(a.resource_id)::text,
 	pg_typeof($2::uuid)::text,
 	a.resource_id = $2::text,
@@ -282,10 +288,13 @@ WHERE schema.nspname = 'public' AND relation.relname = $1`, fixture.table, fixtu
 			err = connection.pool.QueryRow(ctx, fixture.visibilitySQL, fixture.resourceID, orgID).Scan(&targetVisible, &scopedTargetVisible)
 			requireAuditDisplayDiagnostic(t, connection.name, fixture.action, "target-visibility", err)
 
-			t.Logf("audit display diagnostic role=%s endpoint_status=%d action=%s audit_resource_id_type=%s target_id_type=%s table_id_type=%s table_org_id_type=%s target_id_matches=%t case_uuid_matches=%t audit_org_matches_scope=%t target_visible=%t scoped_target_visible=%t",
+			t.Logf("audit display diagnostic role=%s endpoint_status=%d action=%s production_projection_found=%t production_scan_resource_display_name_present=%t production_encoder_resource_display_name_present=%t audit_resource_id_type=%s target_id_type=%s table_id_type=%s table_org_id_type=%s target_id_matches=%t case_uuid_matches=%t audit_org_matches_scope=%t target_visible=%t scoped_target_visible=%t",
 				connection.name,
 				endpointStatus,
 				fixture.action,
+				projectionFound,
+				projectionResourceDisplayNamePresent,
+				encodedResourceDisplayNamePresent,
 				auditResourceIDType,
 				targetIDType,
 				tableIDType,

@@ -134,6 +134,41 @@ type opportunitiesPythonResponse struct {
 	Items []opportunitiesPythonCard `json:"items"`
 }
 
+// issuesPythonResponse is the frozen FastAPI response shape for the issue
+// drilldown. The Go-only Count field is emitted only for the new
+// filters.how.blocked=true contract (CHAOS-8106); ordinary issue drilldowns
+// retain this Python shape. The declaration test below makes that widening
+// explicit instead of treating the frozen model as an API ceiling.
+type issuesPythonResponse struct {
+	Items []drilldown.IssueItem `json:"items"`
+}
+
+func TestIssuesResponseIsThePythonResponsePlusBlockedCount(t *testing.T) {
+	type field struct{ name, goType, tag string }
+	fieldsOf := func(typ reflect.Type) []field {
+		fields := make([]field, 0, typ.NumField())
+		for index := range typ.NumField() {
+			f := typ.Field(index)
+			fields = append(fields, field{f.Name, f.Type.String(), string(f.Tag)})
+		}
+		return fields
+	}
+
+	want := append(fieldsOf(reflect.TypeOf(issuesPythonResponse{})), field{"Count", "*uint64", `json:"count,omitempty"`})
+	if got := fieldsOf(reflect.TypeOf(drilldown.IssuesResponse{})); !reflect.DeepEqual(got, want) {
+		t.Errorf("drilldown.IssuesResponse fields =\n %v\nwant the Python fields followed by blocked-only Count:\n %v", got, want)
+	}
+
+	count := uint64(1)
+	recorder := httptest.NewRecorder()
+	if err := writeModelResponse(recorder, &drilldown.IssuesResponse{Items: []drilldown.IssueItem{}, Count: &count}); err != nil {
+		t.Fatalf("writeModelResponse: %v", err)
+	}
+	if body := recorder.Body.String(); !strings.Contains(body, `"count":1`) {
+		t.Errorf("the production body has no blocked-only count: %s", body)
+	}
+}
+
 // opportunitiesGoOnlyCardFields are the fields of opportunities.Card the
 // Python model does not have (CHAOS-8109), in declaration order.
 var opportunitiesGoOnlyCardFields = []struct{ name, goType, tag string }{
@@ -342,8 +377,8 @@ func responseModelOracleRoutes() map[string]responseModelOracleRoute {
 		"GET /api/v1/quadrant":                            plain((*quadrant.Response)(nil)),
 		"GET /api/v1/drilldown/prs":                       plain((*drilldown.PRsResponse)(nil)),
 		"POST /api/v1/drilldown/prs":                      plain((*drilldown.PRsResponse)(nil)),
-		"GET /api/v1/drilldown/issues":                    plain((*drilldown.IssuesResponse)(nil)),
-		"POST /api/v1/drilldown/issues":                   plain((*drilldown.IssuesResponse)(nil)),
+		"GET /api/v1/drilldown/issues":                    plain((*issuesPythonResponse)(nil)),
+		"POST /api/v1/drilldown/issues":                   plain((*issuesPythonResponse)(nil)),
 		"GET /api/v1/people":                              plain([]people.SearchResult(nil)),
 		"GET /api/v1/people/{person_id}/summary":          plain(people.SummaryResponse{}),
 		"GET /api/v1/people/{person_id}/metric":           plain(people.MetricResponse{}),

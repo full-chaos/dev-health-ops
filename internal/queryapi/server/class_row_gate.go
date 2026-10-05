@@ -1,9 +1,9 @@
 package server
 
-// CHAOS-7831: a root's class row (go_api_routing_state, "mcp:<root>") is the single serving decision for that root. The MCP listener (:8092) reads
-// it in mcp_route.go; this gate reads the SAME rows, through the SAME switch type and key function, for the named-operation route acr's
-// run_operation calls (the internal listener, /query), so a root that is dark on :8092 is dark on :8091 too. The document rows (routeMux) stay as
-// they are: this check runs IN FRONT of them.
+// CHAOS-7831: a root's class decision (go_api_class_decision, "mcp:<root>") is the single serving decision for that root. The MCP listener (:8092) reads
+// it in mcp_route.go; this gate reads the SAME decisions, through the SAME switch type and key function, for the named-operation route acr's
+// run_operation calls (the internal listener, /query), so a root that is dark on :8092 is dark on :8091 too. The catalog operations (routeMux) are
+// served as they are: this check runs IN FRONT of them.
 //
 // The identity reads go through mcpProofAdmit / mcpIdentityHeadersPresent (mcp_route.go): TestOnlyInternalPathsReadTheInternalIdentity pins which
 // files may import the identity package, and this one may not.
@@ -29,10 +29,11 @@ import (
 )
 
 // newClassRowSwitch is the ONE constructor of the class-row switch: the MCP listener (:8092) and the named-operation route (:8091) both serve through it,
-// so a root's class row is one decision. It reads canary and primary rows only: a SHADOW class row is dark. (routeswitch.NewProofSwitch admits shadow
-// rows and is for the measurement-only proof routes; using it here would SERVE a shadow root on both ports.)
-func newClassRowSwitch(pool *pgxpool.Pool, schemaDigest string) routeswitch.Switch {
-	return routeswitch.NewPostgresSwitch(pool, schemaDigest, mcpRoutingDigests())
+// so a root's decision is one row (go_api_class_decision, keyed by operation: no schema digest, CHAOS-8735). It serves canary and primary decisions
+// only: a SHADOW decision is dark. (routeswitch.NewClassDecisionProofSwitch admits shadow and is for the measurement-only proof route; using it here
+// would SERVE a shadow root on both ports.)
+func newClassRowSwitch(pool *pgxpool.Pool) routeswitch.Switch {
+	return routeswitch.NewClassDecisionSwitch(pool, mcpRoutingDigests())
 }
 
 // runOperationPath is the internal-listener route acr's run_operation posts to. Only requests that came through it are class-gated.
@@ -65,7 +66,7 @@ type documentGate func(w http.ResponseWriter, r *http.Request, operation, query 
 
 const classRowRefusalMessage = "a root field is not enabled for the MCP caller class"
 
-// newClassRowGate builds the gate over sw, the class-row switch (the one type :8092 uses: routeswitch.NewPostgresSwitch over mcpRoutingDigests()).
+// newClassRowGate builds the gate over sw, the class-row switch (the one type :8092 uses: routeswitch.NewClassDecisionSwitch over mcpRoutingDigests()).
 func newClassRowGate(sw routeswitch.Switch) documentGate {
 	schema := graph.NewExecutableSchema(graph.Config{}).Schema()
 	// digest of the document text -> []string, the root fields of that document. Keyed by the DOCUMENT digest, not the operation name: an operation

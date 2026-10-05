@@ -63,23 +63,29 @@ package workitemmetrics
 //     blocked: a removed link does not change the blocked hours of earlier
 //     days.
 //
-//     TWO NAMED CASES in which the end is too early (blocked time is
-//     understated, never overstated):
+//     TWO NAMED CASES in which the end was too early (blocked time is
+//     understated, never overstated). Both are exact since CHAOS-8578
+//     stores the fact each one needs, and stay as described for a row or
+//     an item with nothing stored (written before that migration and not
+//     synced since):
 //
 //     1. GitLab description keyword "blocks". Its stored raw value is the
 //     same as the native link type, so the writer is not derivable and
 //     both items are taken as writers: the relation ends at its last write
-//     as soon as the BLOCKED issue has a later sync. It is open again when
-//     the blocker is synced again and writes it again.
+//     as soon as the BLOCKED issue has a later sync. The gitlab normalizer
+//     now stores the writer (work_item_dependencies.relation_writer:
+//     the description's item for a keyword, both for a native link), and
+//     the rule takes the stored writer (BlockingRelation.RelationWritersOf).
 //
 //     2. GitHub issues on a Projects v2 board. The board pass writes the
 //     issue's work_items row again, with a new last_synced, and reads no
 //     issue text; the pass that reads the text is incremental. For an issue
-//     that is on a board and is not updated, each board pass makes its text
-//     relations look not written again, and they end at their last write.
-//
-//     Both need a fact the row does not store (who wrote the relation, and
-//     when the item's relations were last read).
+//     that is on a board and is not updated, each board pass made its text
+//     relations look not written again. The time a writer last READ its
+//     relations is now stored (work_item_relations_read, filled by a view
+//     from every work_items row except a board row), and the rule compares
+//     a relation with that time (RelationEnd.RelationsReadAt), not with the
+//     item's latest sync.
 //
 // The two items' creation times and the blocker's completion only CLAMP the
 // interval. A relation whose blocker is not a stored work item, or whose
@@ -136,10 +142,22 @@ type BlockingEnds struct {
 //
 // raw is the row's relationship_type_raw; it says which item writes the row.
 func BlockingEndsOf(sourceID, targetID, relationshipType, raw, semanticsVersion string) (BlockingEnds, bool) {
+	sourceWrites, targetWrites := RelationWriters(sourceID, targetID, raw)
+	return blockingEnds(sourceID, targetID, relationshipType, semanticsVersion, sourceWrites, targetWrites)
+}
+
+// BlockingEndsOfRelation is BlockingEndsOf for a stored or fresh relation:
+// its writers are the stored ones when the row has them
+// (BlockingRelation.RelationWritersOf).
+func BlockingEndsOfRelation(relation BlockingRelation) (BlockingEnds, bool) {
+	sourceWrites, targetWrites := relation.RelationWritersOf()
+	return blockingEnds(relation.SourceID, relation.TargetID, relation.RelationshipType, relation.SemanticsVersion, sourceWrites, targetWrites)
+}
+
+func blockingEnds(sourceID, targetID, relationshipType, semanticsVersion string, sourceWrites, targetWrites bool) (BlockingEnds, bool) {
 	if semanticsVersion != CanonicalBlocksSemantics || sourceID == "" || targetID == "" || sourceID == targetID {
 		return BlockingEnds{}, false
 	}
-	sourceWrites, targetWrites := RelationWriters(sourceID, targetID, raw)
 	switch relationshipType {
 	case "blocks":
 		return BlockingEnds{
@@ -450,6 +468,35 @@ type BlockingRelation struct {
 	// FirstSeenAt is the first time a sync wrote the relation
 	// (work_item_dependency_first_seen); nil when none is stored.
 	FirstSeenAt *time.Time
+	// Writer is work_item_dependencies.relation_writer: the items of the row
+	// that write it ("source", "target" or "both"), as the normalizer stored
+	// it; nil when none is stored (RelationWritersOf).
+	Writer *string
+}
+
+// Values of work_item_dependencies.relation_writer.
+const (
+	RelationWriterSource = "source"
+	RelationWriterTarget = "target"
+	RelationWriterBoth   = "both"
+)
+
+// RelationWritersOf reports which of the relation's two items write its row:
+// the stored writer when the normalizer stored one (CHAOS-8578), else the
+// derivation from the row (RelationWriters). A stored value that is none of
+// the three is not trusted and the row is derived.
+func (relation BlockingRelation) RelationWritersOf() (source, target bool) {
+	if relation.Writer != nil {
+		switch *relation.Writer {
+		case RelationWriterSource:
+			return true, false
+		case RelationWriterTarget:
+			return false, true
+		case RelationWriterBoth:
+			return true, true
+		}
+	}
+	return RelationWriters(relation.SourceID, relation.TargetID, relation.Raw)
 }
 
 // Start returns the time from which the relation is known to have existed:
@@ -478,6 +525,11 @@ type RelationEnd struct {
 	CreatedAt   time.Time
 	CompletedAt *time.Time
 	LastSynced  time.Time
+	// RelationsReadAt is the latest time a pass that READS the item's
+	// relations wrote the item (work_item_relations_read, CHAOS-8578): every
+	// work_items writer except the github Projects v2 board pass. nil when
+	// none is stored; the rule then takes LastSynced.
+	RelationsReadAt *time.Time
 }
 
 // GitHubBoardProjectPrefix opens the project_id of a github work_items row
@@ -497,6 +549,7 @@ type EndedRelationStats struct {
 	// item ("github", "gitlab", "jira", "linear", else "other").
 	Ended map[string]int
 	// GitHubBoardCandidates counts, of Ended["github"], the relations whose
+	// writer has no stored read time (RelationEnd.RelationsReadAt) and whose
 	// writer's latest stored row is a Projects v2 board row. The board pass
 	// writes the issue again and reads no issue text, so such a relation may
 	// still be in the text: its end is the named case of a too early end.
@@ -509,7 +562,7 @@ type EndedRelationStats struct {
 // other provider is counted under "other".
 var endedRelationProviders = []string{"github", "gitlab", "jira", "linear"}
 
-func (stats *EndedRelationStats) countEnded(writer RelationEnd) {
+func (stats *EndedRelationStats) countEnded(writer RelationEnd, readStored bool) {
 	provider := "other"
 	for _, known := range endedRelationProviders {
 		if writer.Provider == known {
@@ -520,7 +573,7 @@ func (stats *EndedRelationStats) countEnded(writer RelationEnd) {
 		stats.Ended = map[string]int{}
 	}
 	stats.Ended[provider]++
-	if provider == "github" && strings.HasPrefix(writer.ProjectID, GitHubBoardProjectPrefix) {
+	if provider == "github" && !readStored && strings.HasPrefix(writer.ProjectID, GitHubBoardProjectPrefix) {
 		stats.GitHubBoardCandidates++
 	}
 }
@@ -602,14 +655,31 @@ func BlockedIntervalsWithStats(relations []BlockingRelation, ends []RelationEnd)
 		return nil, stats
 	}
 	byID := make(map[string]RelationEnd, len(ends))
+	// readAt is, per item, the latest time its relations were read, over
+	// every row given for it: the store's rows and a sync unit's fresh one
+	// each carry their own.
+	readAt := map[string]time.Time{}
 	for _, end := range ends {
 		if end.WorkItemID == "" {
 			continue
+		}
+		if end.RelationsReadAt != nil {
+			if existing, seen := readAt[end.WorkItemID]; !seen || end.RelationsReadAt.After(existing) {
+				readAt[end.WorkItemID] = end.RelationsReadAt.UTC()
+			}
 		}
 		if existing, seen := byID[end.WorkItemID]; seen && !end.LastSynced.After(existing.LastSynced) {
 			continue
 		}
 		byID[end.WorkItemID] = end
+	}
+	// The time a writer last READ the item's relations: its stored read time,
+	// else its latest sync (an item with no read time stored, CHAOS-8578).
+	relationsRead := func(writer RelationEnd) (time.Time, bool) {
+		if read, stored := readAt[writer.WorkItemID]; stored {
+			return read, true
+		}
+		return writer.LastSynced, false
 	}
 	keyIndex := issueKeyIndex(byID)
 	resolve := func(id string) (RelationEnd, bool) {
@@ -624,7 +694,7 @@ func BlockedIntervalsWithStats(relations []BlockingRelation, ends []RelationEnd)
 
 	result := map[string][]BlockedInterval{}
 	for _, relation := range relations {
-		named, blocking := BlockingEndsOf(relation.SourceID, relation.TargetID, relation.RelationshipType, relation.Raw, relation.SemanticsVersion)
+		named, blocking := BlockingEndsOfRelation(relation)
 		if !blocking {
 			continue
 		}
@@ -646,15 +716,18 @@ func BlockedIntervalsWithStats(relations []BlockingRelation, ends []RelationEnd)
 			writers = append(writers, blocker)
 		}
 		synced := make([]time.Time, 0, len(writers))
+		readStored := make([]bool, 0, len(writers))
 		for _, writer := range writers {
-			synced = append(synced, writer.LastSynced)
+			read, stored := relationsRead(writer)
+			synced = append(synced, read)
+			readStored = append(readStored, stored)
 		}
 		stats.Relations++
 		var relationEnd *time.Time
 		if endedBy := RelationEndedBy(relation.LastSynced, synced...); endedBy >= 0 {
 			lastSeen := relation.LastSynced.UTC()
 			relationEnd = &lastSeen
-			stats.countEnded(writers[endedBy])
+			stats.countEnded(writers[endedBy], readStored[endedBy])
 		}
 		interval, open := BlockedIntervalFor(blocked.CreatedAt, start, relationEnd, Blocker{
 			Status: blocker.Status, CreatedAt: blocker.CreatedAt, CompletedAt: blocker.CompletedAt,

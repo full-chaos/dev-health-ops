@@ -50,9 +50,6 @@ func TestTestopsRiskExecutorStreamsPastTheOldRowCapAgainstRealClickHouse(t *test
 	defer conn.Close()
 
 	for _, statement := range []string{
-		`CREATE TABLE teams (
-    id String, name String, members Array(String), repo_patterns Array(String), org_id String
-) ENGINE = ReplacingMergeTree ORDER BY (id)`,
 		`CREATE TABLE ci_pipeline_runs (
     repo_id UUID, run_id String, status Nullable(String),
     queued_at Nullable(DateTime64(3, 'UTC')), started_at DateTime64(3, 'UTC'),
@@ -111,6 +108,7 @@ func TestTestopsRiskExecutorStreamsPastTheOldRowCapAgainstRealClickHouse(t *test
 			t.Fatal(err)
 		}
 	}
+	applyTestopsRepositoryOwnershipSchema(ctx, t, conn)
 
 	const orgID = "00000000-0000-4000-8000-000000000009"
 	repoID := "00000000-0000-4000-8000-0000000000c1"

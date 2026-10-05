@@ -382,8 +382,21 @@ func seedTeamOwnership(ctx context.Context, t *testing.T, raw stdclickhouse.Conn
 	seedTeamOwnershipWindow(ctx, t, raw, org, team, repo, "2026-01-01 00:00:00", "")
 }
 
-// seedTeamOwnershipWindow writes one team_repo_ownership row valid from validFrom until validTo ("" = open).
+// seedTeamOwnershipWindow writes one team_repo_ownership row valid from validFrom until validTo ("" = open),
+// on a repository the catalog holds (a repos row is written for it).
 func seedTeamOwnershipWindow(ctx context.Context, t *testing.T, raw stdclickhouse.Conn, org, team, repo, validFrom, validTo string) {
+	t.Helper()
+	if err := raw.Exec(ctx, fmt.Sprintf(
+		`INSERT INTO repos (id, repo, created_at, last_synced, org_id, provider)
+		VALUES (generateUUIDv4(), '%s', toDateTime64('2026-01-01 00:00:00',3), toDateTime64('2026-01-01 00:00:00',3), '%s', 'github')`,
+		repo, org)); err != nil {
+		t.Fatalf("seed repos: %v", err)
+	}
+	seedOwnershipRowOnly(ctx, t, raw, org, team, repo, validFrom, validTo)
+}
+
+// seedOwnershipRowOnly writes the ownership row alone: its repository is NOT in the catalog (an orphan).
+func seedOwnershipRowOnly(ctx context.Context, t *testing.T, raw stdclickhouse.Conn, org, team, repo, validFrom, validTo string) {
 	t.Helper()
 	to := "NULL"
 	if validTo != "" {
@@ -407,12 +420,13 @@ func TestOwnedTeamsCountsOnlyAnOpenWindowOnARealEngine(t *testing.T) {
 	seedTeamOwnershipWindow(ctx, t, raw, "org-mine", "team-closed", "acme/closed", "2026-01-01 00:00:00", "2026-08-01 00:00:00")
 	seedTeamOwnershipWindow(ctx, t, raw, "org-mine", "team-future", "acme/future", "2026-10-01 00:00:00", "")
 	seedTeamOwnershipWindow(ctx, t, raw, "org-theirs", "team-theirs", "acme/theirs", "2026-01-01 00:00:00", "")
-	got, err := teamscope.OwnedTeams(ctx, client, "org-mine", []string{"team-open", "team-closed", "team-future", "team-theirs", "team-none"}, asOf)
+	seedOwnershipRowOnly(ctx, t, raw, "org-mine", "team-orphan", "acme/not-in-catalog", "2026-01-01 00:00:00", "")
+	got, err := teamscope.OwnedTeams(ctx, client, "org-mine", []string{"team-open", "team-closed", "team-future", "team-theirs", "team-none", "team-orphan"}, asOf)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if len(got) != 1 || got[0] != "team-open" {
-		t.Fatalf("owned = %v, want only team-open (closed, future, other-org and unknown teams do not count)", got)
+		t.Fatalf("owned = %v, want only team-open (closed, future, other-org, unknown and orphan-repository teams do not count)", got)
 	}
 }
 
@@ -448,7 +462,11 @@ func TestThroughputForecastAnswersATeamOnlyThroughOwnershipRows(t *testing.T) {
 		t.Fatalf("an owned team: %+v, err %v; want an answer labelled team-alpha", got, err)
 	}
 	both, err := throughputforecast.Resolve(ctx, client, "org-mine", model.ThroughputForecastInput{TeamIds: []string{"team-alpha", "team-noown"}, HistoryWeeks: 12}, anchor)
-	if err != nil || both == nil || both.TeamID == nil || *both.TeamID != "team-alpha" {
-		t.Fatalf("one owned and one unowned team: %+v, err %v; want the unowned one dropped (single-team label team-alpha)", both, err)
+	if err != nil || both != nil {
+		t.Fatalf("one owned and one unowned team: %+v, err %v; want a nil forecast (all-or-nothing)", both, err)
+	}
+	blank, err := throughputforecast.Resolve(ctx, client, "org-mine", model.ThroughputForecastInput{TeamIds: []string{"", ""}, HistoryWeeks: 12}, anchor)
+	if err != nil || blank != nil {
+		t.Fatalf("a supplied list of blank ids: %+v, err %v; want a nil forecast, not the org scope", blank, err)
 	}
 }

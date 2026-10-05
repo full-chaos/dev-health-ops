@@ -27,16 +27,41 @@ func TestResolveATeamWithNoOwnershipRowsIsMissingAndReadsNothingElse(t *testing.
 	}
 }
 
-func TestResolveReadsOnlyTheOwnedTeamsOfSeveral(t *testing.T) {
-	client := &fakeClient{owners: []string{"team-b", "team-a"}, errs: nil, responses: []*fakeRowScanner{{}}}
-	_, _ = Resolve(context.Background(), client, "org-7", model.ThroughputForecastInput{TeamIds: []string{"team-a", "team-unowned", "team-b"}, HistoryWeeks: 8}, mustDay(t, "2026-09-01"))
+// All-or-nothing: if any requested team is unowned the answer is missing, and no team_id-keyed table is read
+// for the owned remainder either (CHAOS-8727, ruling D4792).
+func TestResolveIsMissingWhenAnyOfSeveralRequestedTeamsIsUnowned(t *testing.T) {
+	client := &fakeClient{owners: []string{"team-b", "team-a"}, responses: []*fakeRowScanner{{}}}
+	got, err := Resolve(context.Background(), client, "org-7", model.ThroughputForecastInput{TeamIds: []string{"team-a", "team-unowned", "team-b"}, HistoryWeeks: 8}, mustDay(t, "2026-09-01"))
+	if err != nil || got != nil {
+		t.Fatalf("forecast %v, err %v; want a nil forecast: a partial answer would look like the whole cohort's", got, err)
+	}
+	if len(client.statements) != 0 {
+		t.Fatalf("a team_id-keyed table was read for a partly unowned cohort: %d statements", len(client.statements))
+	}
+}
+
+func TestResolveReadsEveryTeamWhenAllAreOwned(t *testing.T) {
+	client := &fakeClient{owners: []string{"team-b", "team-a"}, responses: []*fakeRowScanner{{}}}
+	_, _ = Resolve(context.Background(), client, "org-7", model.ThroughputForecastInput{TeamIds: []string{"team-b", "", "team-a", "team-b"}, HistoryWeeks: 8}, mustDay(t, "2026-09-01"))
 	if len(client.bindings) == 0 {
 		t.Fatal("the owned teams were not read")
 	}
 	value, _ := bindingValueOf(client.bindings[0], "team_ids")
 	ids, _ := value.([]string)
-	if len(ids) != 2 || ids[0] != "team-a" || ids[1] != "team-b" {
-		t.Fatalf("throughput read team_ids %v, want the owned teams in requested order [team-a team-b]", value)
+	if len(ids) != 2 || ids[0] != "team-b" || ids[1] != "team-a" {
+		t.Fatalf("throughput read team_ids %v, want the distinct requested teams [team-b team-a]", value)
+	}
+}
+
+// A supplied list with no usable id is missing, never the org scope: org scope is an absent list.
+func TestResolveASuppliedListOfBlankIdsIsMissingNotOrgWide(t *testing.T) {
+	client := &fakeClient{responses: []*fakeRowScanner{{}, {}, {}, {}, {}, {}, {}}}
+	got, err := Resolve(context.Background(), client, "org-7", model.ThroughputForecastInput{TeamIds: []string{"", ""}, HistoryWeeks: 8}, mustDay(t, "2026-09-01"))
+	if err != nil || got != nil {
+		t.Fatalf("forecast %v, err %v; want a nil forecast", got, err)
+	}
+	if len(client.statements) != 0 {
+		t.Fatalf("an org-wide read ran for an all-blank team list: %d statements", len(client.statements))
 	}
 }
 

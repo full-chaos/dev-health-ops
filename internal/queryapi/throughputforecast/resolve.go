@@ -50,32 +50,30 @@ func Resolve(
 		return nil, fmt.Errorf("throughputForecast: history_weeks must be positive")
 	}
 
-	// CHAOS-8727: a requested team answers only through ownership rows (teamscope.OwnedTeams: open, bound to
-	// this org). None owned is MISSING: a null forecast with its reason logged, and no team_id-keyed table is
-	// read. That is different from the structured empty payload below, which answers an OWNED team that has
-	// no history yet. Of several teams only the owned ones are read. No team at all is the org-wide scope.
+	// CHAOS-8727: a requested team answers only through ownership rows (teamscope.OwnedTeams: open, in the
+	// catalog, bound to this org), and all-or-nothing: if ANY requested team is unowned the answer is MISSING,
+	// a null forecast with its reason logged, and no team_id-keyed table is read. There is no partial answer
+	// until the schema can say "partial" (CHAOS-8729). A supplied list that holds no usable id (all blank) is
+	// missing too, never the org scope: org scope is an ABSENT team list. This is different from the
+	// structured empty payload below, which answers an OWNED team that has no history yet.
 	if len(input.TeamIds) > 0 {
-		owned, err := teamscope.OwnedTeams(ctx, client, orgID, input.TeamIds, now)
+		requested := teamscope.DistinctTeamIDs(input.TeamIds)
+		owned, err := teamscope.OwnedTeams(ctx, client, orgID, requested, now)
 		if err != nil {
 			return nil, fmt.Errorf("throughputForecast: %w", err)
 		}
-		if len(owned) == 0 {
+		if len(requested) == 0 || len(owned) < len(requested) {
 			slog.WarnContext(ctx, "query_api.throughput_forecast.empty",
 				"org_id", orgID,
 				"scope", scopeLabel(input),
-				"reason", "no_team_ownership: none of the requested teams has a team_repo_ownership row open now",
+				"requested", len(requested),
+				"owned", len(owned),
+				"reason", "no_team_ownership: a requested team has no team_repo_ownership row open now on a catalogued repository, or no usable team id was supplied",
 				"duration_ms", time.Since(started).Milliseconds(),
 			)
 			return nil, nil
 		}
-		if len(owned) < len(input.TeamIds) {
-			slog.WarnContext(ctx, "query_api.throughput_forecast.teams_without_ownership_dropped",
-				"org_id", orgID,
-				"requested", len(input.TeamIds),
-				"owned", len(owned),
-			)
-			input.TeamIds = owned
-		}
+		input.TeamIds = owned
 	}
 
 	// Single-team scopes carry the team on the result so the UI can label the

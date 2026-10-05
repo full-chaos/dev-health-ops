@@ -252,7 +252,7 @@ func TestEveryVerbRefusesACatalogOperationAndWritesNothing(t *testing.T) {
 	if mode := classRowMode(t, pool, class); mode != "canary" {
 		t.Fatalf("a refused request changed a decision: mode = %s", mode)
 	}
-	for _, table := range []string{"go_api_routing_state", "go_api_routing_audits"} {
+	for _, table := range []string{"go_api_routing_audits"} {
 		if n := countRows(t, pool, table); n != 0 {
 			t.Fatalf("%s holds %d row(s) after refusals: a refused verb must write nothing", table, n)
 		}

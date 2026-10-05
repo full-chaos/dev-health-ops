@@ -24,7 +24,17 @@ func TestClassDecisionBackfillPicksTheNewestRowAndFailsClosedOnATie(t *testing.T
 	if err != nil {
 		t.Fatal(err)
 	}
-	uri := d.at(t, len(chain)-1)
+	// The position just before 0146 and the chain up to 0146: 0147 drops the source table (CHAOS-8706).
+	before, through := -1, -1
+	for i, file := range chain {
+		if file.Revision == "0146" {
+			before, through = i, i+1
+		}
+	}
+	if before < 0 {
+		t.Fatal("the chain holds no revision 0146")
+	}
+	uri := d.at(t, before)
 	conn := connect(t, uri)
 
 	older := time.Date(2026, 9, 1, 0, 0, 0, 0, time.UTC)
@@ -52,8 +62,8 @@ func TestClassDecisionBackfillPicksTheNewestRowAndFailsClosedOnATie(t *testing.T
 			t.Fatal(err)
 		}
 	}
-	if _, err := pgmigrate.Upgrade(ctx, conn, baseline, chain); err != nil {
-		t.Fatalf("upgrade to the head: %v", err)
+	if _, err := pgmigrate.Upgrade(ctx, conn, baseline, chain[:through]); err != nil {
+		t.Fatalf("upgrade through 0146: %v", err)
 	}
 
 	type decision struct {

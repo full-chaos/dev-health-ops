@@ -3,7 +3,7 @@
 
 The edge dispatcher (``api/graphql/go_api_dispatcher.py``) must know, given
 an incoming request's document digest, which ``selected_operation`` string
-to use for the ``go_api_routing_state`` lookup -- that string is
+to use for the registry lookup (the retired ``go_api_routing_state`` table, dropped by 0147, was keyed by it) -- that string is
 query-api's OWN internal registry key (``digestByOperation`` in
 ``internal/queryapi/server/query_route.go``), not derivable from the GraphQL
 operation name (see that map's doc comment: "investmentBreakdown"/

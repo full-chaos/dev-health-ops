@@ -733,15 +733,10 @@ func VerifyCandidateBuild(running string, expected string, routing map[string]Ro
 	for _, operation := range sortedOperations(stale) {
 		disagreeing = append(disagreeing, fmt.Sprintf("%s points at %s", operation, stale[operation]))
 	}
-	// The remedy names the MODE-PRESERVING verb on purpose. `routing
-	// enable --candidate-build` re-points a row, but its --mode accepts
-	// canary|primary only, so pointing a SHADOW row at the running build
-	// with it also flips that row to canary -- a routing change nobody
-	// asked for, produced by following a message whose only job is to say
-	// how to clear this block safely. CHAOS-5486's `dho goapi routing
-	// repoint` preserves the mode and reads the running build from
-	// /buildinfo rather than taking it on trust from an operator.
-	return fmt.Errorf("goapiproof: routing rows point at a build the running process is not (running=%s): %s.\n  Re-point the row to the running build with `dho goapi routing repoint` (mode preserved); `dho goapi routing enable` would also change the mode. This is a REFUSAL, not a warning: see StaleRoutingRows for the replica argument that makes it one",
+	// Only an MCP class decision can name a build now: a document operation has no routing row (CHAOS-8702), so
+	// the advice names the class verb alone. `dho goapi routing repoint` preserves the mode and reads the running
+	// build from /buildinfo rather than taking it on trust from an operator.
+	return fmt.Errorf("goapiproof: routing rows point at a build the running process is not (running=%s): %s.\n  Re-point an MCP class decision to the running build with `dho goapi routing repoint` (mode preserved). A document operation has no routing row to re-point. This is a REFUSAL, not a warning: see StaleRoutingRows for the replica argument that makes it one",
 		running, strings.Join(disagreeing, "; "))
 }
 

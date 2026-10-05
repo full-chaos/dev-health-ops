@@ -181,8 +181,8 @@ func TestCheckQueryAPIAuthorizationRefusesEveryWayOfHoldingMore(t *testing.T) {
 			return []string{"GRANT SELECT ON unrelated_read_table TO " + r}
 		}, "unrelated_read_table"},
 		{"insert on a read-only relation", func(r string) []string {
-			return []string{"GRANT INSERT ON go_api_routing_state TO " + r}
-		}, "go_api_routing_state"},
+			return []string{"GRANT INSERT ON go_api_class_decision TO " + r}
+		}, "go_api_class_decision"},
 		{"update on a read-only relation", func(r string) []string {
 			return []string{"GRANT UPDATE ON organizations TO " + r}
 		}, "organizations"},
@@ -406,7 +406,7 @@ func TestQueryAPIRoleEndToEndThroughTheMigrateLeg(t *testing.T) {
 			VALUES ('44444444-4444-4444-8444-444444444444', 'report.run:3', 'report.execute_on_demand', 1, '{}', 'sha256:x', 'reports', 0, 3, now(), 'pending', 0, now(), now(), now())
 			ON CONFLICT (dedupe_key) DO NOTHING`,
 		"SELECT job_kind, status FROM public.worker_job_outbox WHERE dedupe_key = 'report.run:3'",
-		"SELECT id FROM public.go_api_routing_state LIMIT 1",
+		"SELECT id FROM public.go_api_class_decision LIMIT 1",
 		"SELECT id FROM public.settings LIMIT 1",
 		"DELETE FROM public.saved_reports WHERE org_id = 'o'",
 	}
@@ -429,7 +429,7 @@ func TestQueryAPIRoleEndToEndThroughTheMigrateLeg(t *testing.T) {
 		"DELETE FROM public.report_runs WHERE id = '33333333-3333-4333-8333-333333333333'",
 		"UPDATE public.worker_job_outbox SET status = 'x' WHERE dedupe_key = 'report.run:3'",
 		"DELETE FROM public.worker_job_outbox WHERE dedupe_key = 'report.run:3'",
-		"INSERT INTO public.go_api_routing_state (id) VALUES ('66666666-6666-4666-8666-666666666666')",
+		"INSERT INTO public.go_api_class_decision (id) VALUES ('66666666-6666-4666-8666-666666666666')",
 		"TRUNCATE public.saved_reports",
 		"SELECT id FROM public.integrations",
 		"INSERT INTO public.integrations (id) VALUES ('55555555-5555-4555-8555-555555555555')",
@@ -487,9 +487,9 @@ func TestQueryAPILegRefusesARoleItMustNeverRevoke(t *testing.T) {
 		undo  func(role string) []string
 	}{
 		{"table", func(r string) []string {
-			return []string{"ALTER TABLE public.go_api_routing_state OWNER TO " + r}
+			return []string{"ALTER TABLE public.go_api_class_decision OWNER TO " + r}
 		}, func(string) []string {
-			return []string{"ALTER TABLE public.go_api_routing_state OWNER TO CURRENT_USER"}
+			return []string{"ALTER TABLE public.go_api_class_decision OWNER TO CURRENT_USER"}
 		}},
 		{"schema", func(r string) []string {
 			return []string{"CREATE SCHEMA qapi_owned_schema AUTHORIZATION " + r}
@@ -549,7 +549,7 @@ func TestQueryAPILegRefusesARoleItMustNeverRevoke(t *testing.T) {
 	// objects: the table is still readable by the migration identity and its
 	// ACL is untouched.
 	var aclUntouched bool
-	if err := admin.QueryRow(ctx, "SELECT relacl IS NULL FROM pg_class WHERE oid = 'public.go_api_routing_state'::regclass").Scan(&aclUntouched); err != nil || !aclUntouched {
+	if err := admin.QueryRow(ctx, "SELECT relacl IS NULL FROM pg_class WHERE oid = 'public.go_api_class_decision'::regclass").Scan(&aclUntouched); err != nil || !aclUntouched {
 		t.Fatalf("a refused leg changed the table ACL (untouched=%v, err=%v)", aclUntouched, err)
 	}
 

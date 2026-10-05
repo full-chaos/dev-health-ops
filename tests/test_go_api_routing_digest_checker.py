@@ -108,8 +108,8 @@ def test_moving_the_sdl_without_updating_the_pin_fails(
     # The message must say what it BREAKS and what to do, not just that two
     # strings differ -- the 2026-09-01 failure was a person not knowing this
     # table existed.
-    assert "DEAD" in err
-    assert "dho goapi routing enable" in err
+    assert "stale schema" in err
+    assert "routing enable" not in err  # the verb refuses catalog operations (CHAOS-8705)
 
 
 def test_bumping_the_pin_without_documenting_it_still_fails(

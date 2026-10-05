@@ -28,8 +28,7 @@ import (
 // line -- a chart install that serves from an empty table must not fail its
 // pre-upgrade or post-upgrade hook.
 //
-// It is a DIFFERENT value from ErrCarryNoLiveRows and ErrRepointNoRows on
-// purpose. Those name "rows exist, none at the live digest, and one of them is
+// It is a DIFFERENT value from ErrRepointNoRows on purpose. That one names "rows exist, none at the live digest, and one of them is
 // in a served mode": by the same catalog rule a row left at another digest
 // holds its operation dark, so an operation somebody turned on is dark, and
 // that state stays a refusal an upgrade cannot hide. "The table is empty" and
@@ -52,7 +51,7 @@ var ErrRoutingTableEmpty = errors.New("goapiproof: go_api_routing_state has no r
 //
 // A row in a served mode (canary or primary) at another digest is different:
 // an operation an operator turned on is dark, and that stays the refusal
-// (ErrCarryNoLiveRows, ErrRepointNoRows) an upgrade must not hide.
+// (ErrRepointNoRows) an upgrade must not hide.
 var ErrRoutingRowsOnlyDark = errors.New("goapiproof: no routing row at this schema digest, and every row at another digest holds its operation dark by its own mode")
 
 // DarkRoutingRow is one row behind an ErrRoutingRowsOnlyDark answer: where it

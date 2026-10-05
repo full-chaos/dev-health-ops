@@ -7,8 +7,7 @@ tree. `docker` and `gh` are stubbed on PATH (the only externals this test replac
 `sed`, `grep`, and every other tool the scripts call is the real system binary.
 
 Running the real entry point end to end, with `docker` canned-success for everything (image waits,
-digest resolution, repin), proves the script's start-up guards against the real script text. The
-pre-roll routing carry step is gone (CHAOS-8704): query-api reads no routing row to serve.
+digest resolution, repin), proves the script's start-up guards against the real script text.
 """
 
 from __future__ import annotations
@@ -36,13 +35,10 @@ _IMAGES = (
 )
 
 _MIGRATE_MARKER = (
-    "--no-deps migrate"  # the compose command line for the STEP right after the
+    "--no-deps migrate"  # the compose command line of the migrate STEP: the stub exits nonzero on it
 )
-# carry block. bigboy-cut.sh redirects that command's own stdout/stderr to a FILE
-# ($REC/migrate.out), never to the script's own streams, so a docker-side message here would
-# be invisible to this test -- the migrate STEP's presence in the script's OWN stdout (`st
-# migrate $?`, printed unredirected) is what every test below checks for reachability instead.
-_MIGRATE_STEP = "STEP migrate rc="
+# so a run that reaches migrate is unambiguous in the captured output. bigboy-cut.sh redirects that
+# command's own stdout/stderr to a FILE ($REC/migrate.out), never to the script's own streams.
 
 
 def _build_bigboy_root(tmp_path: Path) -> Path:

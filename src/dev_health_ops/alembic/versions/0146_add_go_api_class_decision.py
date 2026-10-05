@@ -111,13 +111,13 @@ def upgrade() -> None:
             name="ck_go_api_class_decision_operation",
         ),
     )
-    live_digest = os.environ.get(LIVE_DIGEST_ENV)
-    if live_digest is not None:
-        op.execute(
-            sa.text("SELECT set_config(:name, :value, true)").bindparams(
-                name=LIVE_DIGEST_SETTING, value=live_digest
-            )
+    # Always set, empty when the environment names no digest: a role or database default of the setting must never
+    # show through (CHAOS-8755). Empty is what the guard refuses with class rows present.
+    op.execute(
+        sa.text("SELECT set_config(:name, :value, true)").bindparams(
+            name=LIVE_DIGEST_SETTING, value=os.environ.get(LIVE_DIGEST_ENV, "")
         )
+    )
     # A DO block takes no bind parameters, so the guard is a static statement: the same text as the chain file's
     # (internal/pgmigrate/sql/0146_add_go_api_class_decision.sql), which reads the live digest from the setting above.
     op.execute(_CLASS_ROW_GUARD)

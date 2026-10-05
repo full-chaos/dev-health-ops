@@ -47,7 +47,9 @@ LIVE_DIGEST_ENV = "DHO_CLASS_DECISION_LIVE_SCHEMA_DIGEST"
 LIVE_DIGEST_SETTING = "dho.class_decision_live_schema_digest"
 
 #: The MCP class document digest (internal/mcpclass DocumentDigest(): sha256 of its DocumentKey).
-CLASS_DOCUMENT_DIGEST = "9c509c3594856bed7f4896345d687c0fca3a1e298b65b440ae519938bac7ed92"
+CLASS_DOCUMENT_DIGEST = (
+    "9c509c3594856bed7f4896345d687c0fca3a1e298b65b440ae519938bac7ed92"
+)
 
 #: The modes of go_api_routing_state (0114): the same vocabulary, so a backfilled row is valid as it is.
 MODES = ("python", "shadow", "canary", "primary", "disabled")

@@ -58,5 +58,7 @@
       "source_url": null
     }
   ],
-  "source_url": null
+  "source_url": null,
+  "has_data": true,
+  "has_prior_data": true
 }

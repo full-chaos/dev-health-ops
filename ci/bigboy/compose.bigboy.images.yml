@@ -148,6 +148,11 @@ services:
   migrate:
     image: ghcr.io/full-chaos/dev-health-go-dho@sha256:970d2b765aac5da23e1ec58482663e51ac1ab5a78fc024d3d81feabfb0e14d44
     build: !reset null
+    # CHAOS-8744: the chart's migrations.hook.classDecisionLiveSchemaDigest, passed through from the invoking environment
+    # (empty by default). This overlay is in the cut's chain (bigboy-cut.sh COMPOSE_FILE), so the base file's entry is
+    # restated here: the bigboy base compose.yml is a host file, not this repo's.
+    environment:
+      DHO_CLASS_DECISION_LIVE_SCHEMA_DIGEST: ${DHO_CLASS_DECISION_LIVE_SCHEMA_DIGEST:-}
   # CHAOS-8647: the web-path smoke runs `dho smoke web-path` from the dho image, the same digest as query-api and
   # migrate. compose.bigboy.smoke.yml (the smoke's own chain) holds the rest of the service.
   web-smoke:

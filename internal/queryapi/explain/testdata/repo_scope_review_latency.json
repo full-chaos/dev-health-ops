@@ -36,5 +36,7 @@
       "source_url": "https://github.com/acme/webapp"
     }
   ],
-  "source_url": "https://github.com/acme/webapp"
+  "source_url": "https://github.com/acme/webapp",
+  "has_data": true,
+  "has_prior_data": true
 }

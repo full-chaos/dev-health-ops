@@ -119,6 +119,42 @@ func TestNewExplainGetHandlerHappyPathSetsDeprecatedHeader(t *testing.T) {
 	}
 }
 
+// TestNewExplainGetHandlerEmptyWindowStatesBothDataFlags is a REST-contract
+// regression check for CHAOS-8491. The empty reader models a metric query
+// whose requested and comparison windows contain no stored values. Both
+// placeholder zeroes must be identified in the JSON response; a client must
+// not infer their meaning from value or delta_pct.
+func TestNewExplainGetHandlerEmptyWindowStatesBothDataFlags(t *testing.T) {
+	handler := newExplainGetHandler(newEmptyRowsExplainReader(t))
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/explain?metric=cycle_time&range_days=7", nil)
+	req = req.WithContext(authctx.WithClaims(req.Context(), authctx.Claims{OrgID: "org-1"}))
+	rec := httptest.NewRecorder()
+	serveRoute(t, handler, rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d, body=%s", rec.Code, http.StatusOK, rec.Body.String())
+	}
+
+	var body map[string]json.RawMessage
+	if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
+		t.Fatalf("decode body: %v (body=%s)", err, rec.Body.String())
+	}
+	for _, key := range []string{"has_data", "has_prior_data"} {
+		raw, ok := body[key]
+		if !ok {
+			t.Errorf("response has no %q key: %s", key, rec.Body.String())
+			continue
+		}
+		var got bool
+		if err := json.Unmarshal(raw, &got); err != nil {
+			t.Errorf("decode %s: %v", key, err)
+			continue
+		}
+		if got {
+			t.Errorf("%s = true, want false for an empty window", key)
+		}
+	}
+}
+
 // TestNewExplainPostHandlerRequiresAuthContext mirrors the GET handler's
 // own auth-context guard.
 func TestNewExplainPostHandlerRequiresAuthContext(t *testing.T) {
@@ -150,14 +186,22 @@ func TestNewExplainPostHandlerHappyPathNoDeprecatedHeader(t *testing.T) {
 		t.Fatalf("X-DevHealth-Deprecated = %q, want unset on POST", got)
 	}
 	var decoded struct {
-		Metric string `json:"metric"`
-		Label  string `json:"label"`
+		Metric       string `json:"metric"`
+		Label        string `json:"label"`
+		HasData      *bool  `json:"has_data"`
+		HasPriorData *bool  `json:"has_prior_data"`
 	}
 	if err := json.Unmarshal(rec.Body.Bytes(), &decoded); err != nil {
 		t.Fatalf("decode body: %v (body=%s)", err, rec.Body.String())
 	}
 	if decoded.Metric != "totally_bogus" || decoded.Label != "Cycle Time" {
 		t.Fatalf("decoded = %+v, want metric=totally_bogus label=Cycle Time", decoded)
+	}
+	if decoded.HasData == nil || decoded.HasPriorData == nil {
+		t.Fatalf("response must contain has_data and has_prior_data: %s", rec.Body.String())
+	}
+	if *decoded.HasData || *decoded.HasPriorData {
+		t.Fatalf("empty response flags = has_data:%t has_prior_data:%t, want both false", *decoded.HasData, *decoded.HasPriorData)
 	}
 }
 

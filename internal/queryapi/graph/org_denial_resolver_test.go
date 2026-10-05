@@ -49,6 +49,10 @@ func orgScopedCalls() map[string]orgScopedCall {
 			_, err := r.Query().CoverageBaselines(ctx, orgID, graphqldate.Date{}, nil, nil)
 			return err
 		},
+		"coverageScopeBaseline": func(r *Resolver, ctx context.Context, orgID string) error {
+			_, err := r.Query().CoverageScopeBaseline(ctx, orgID, graphqldate.Date{}, nil, nil)
+			return err
+		},
 		"busFactor": func(r *Resolver, ctx context.Context, orgID string) error {
 			_, err := r.Query().BusFactor(ctx, orgID, nil)
 			return err

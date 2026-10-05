@@ -16,6 +16,7 @@ import (
 	dhclickhouse "github.com/full-chaos/dev-health-go/clickhouse"
 
 	"github.com/full-chaos/dev-health-ops/internal/queryapi/analytics"
+	"github.com/full-chaos/dev-health-ops/internal/queryapi/graph/model"
 	"github.com/full-chaos/dev-health-ops/internal/queryapi/principal"
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/chschema"
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/containers"
@@ -108,7 +109,7 @@ func TestTestOpsCoverageRoute_ExactRepoKeysReturnBranchCoverageOutsideIndependen
 	variables := func(branchTopN int, branchKeys []string) map[string]any {
 		branch := map[string]any{
 			"dimension": "REPO",
-			"measure":   "COVERAGE_BRANCH_PCT",
+			"measure":   string(model.MeasureInputCoverageBranchPct),
 			"dateRange": map[string]any{
 				"startDate": day.Format("2006-01-02"),
 				"endDate":   day.Format("2006-01-02"),
@@ -124,7 +125,7 @@ func TestTestOpsCoverageRoute_ExactRepoKeysReturnBranchCoverageOutsideIndependen
 				"breakdowns": []any{
 					map[string]any{
 						"dimension": "REPO",
-						"measure":   "COVERAGE_LINE_PCT",
+						"measure":   string(model.MeasureInputCoverageLinePct),
 						"dateRange": map[string]any{
 							"startDate": day.Format("2006-01-02"),
 							"endDate":   day.Format("2006-01-02"),
@@ -187,12 +188,12 @@ func TestTestOpsCoverageRoute_ExactRepoKeysReturnBranchCoverageOutsideIndependen
 		t.Fatalf("independent TestOps Coverage request: got HTTP %d, want 200: %s", independent.Code, independent.Body.String())
 	}
 	initial := decode(independent.Body.Bytes())
-	lineItems := itemsFor(initial, "coverage_line_pct")
+	lineItems := itemsFor(initial, string(model.MeasureInputCoverageLinePct))
 	if len(lineItems) != 1 || lineItems[0].Key != targetRepo || lineItems[0].Value == nil || *lineItems[0].Value != 99 {
 		t.Fatalf("line top-1 = %+v, want the target repository at 99", lineItems)
 	}
 	lineKeys := []string{lineItems[0].Key} // derive the branch request from the actual line response.
-	branchTop100 := itemsFor(initial, "coverage_branch_pct")
+	branchTop100 := itemsFor(initial, string(model.MeasureInputCoverageBranchPct))
 	if len(branchTop100) != 100 || containsKey(branchTop100, targetRepo) {
 		t.Fatalf("independent branch top-100 must omit the line-result key %q, got %d rows: %+v", targetRepo, len(branchTop100), branchTop100)
 	}
@@ -201,7 +202,7 @@ func TestTestOpsCoverageRoute_ExactRepoKeysReturnBranchCoverageOutsideIndependen
 	if exact.Code != http.StatusOK {
 		t.Fatalf("exact-key TestOps Coverage request: got HTTP %d, want 200: %s", exact.Code, exact.Body.String())
 	}
-	exactBranch := itemsFor(decode(exact.Body.Bytes()), "coverage_branch_pct")
+	exactBranch := itemsFor(decode(exact.Body.Bytes()), string(model.MeasureInputCoverageBranchPct))
 	if len(exactBranch) != 1 || exactBranch[0].Key != targetRepo || exactBranch[0].Value == nil || *exactBranch[0].Value != 1 {
 		t.Fatalf("branch exact-key result with topN=1 = %+v, want the target repository at 1", exactBranch)
 	}

@@ -665,6 +665,16 @@ migrations:
     #    (revision 0066) applied, as production runs, and dho refuses any
     #    other value. Kept a value so an operator sees what the Job runs with.
     celeryRiverCutover: "1"
+    # -- CHAOS-8744 (CHAOS-8735): the schema_digest of the RUNNING query-api's
+    #    GET /registry, read by the roll BEFORE the upgrade starts (after the
+    #    pods roll it would be the new digest). When set, the migrate Job gets
+    #    it as env DHO_CLASS_DECISION_LIVE_SCHEMA_DIGEST; the migrator passes it
+    #    to Postgres migration 0146 as the setting
+    #    dho.class_decision_live_schema_digest, and 0146 copies each MCP class
+    #    row at that digest into go_api_class_decision. No default: with MCP
+    #    class rows present and this empty, 0146 refuses and its transaction
+    #    rolls back (nothing changes). Format sha256:<64 hex>; not a secret.
+    classDecisionLiveSchemaDigest: ""
     # -- CHAOS-4428: the two migration steps that were previously run by hand.
     #    Ordered by hook weight behind the migrate Job (0): provisionRoles (5)
     #    creates the three runtime logins, riverMigrate (10) applies the River

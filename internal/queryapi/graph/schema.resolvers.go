@@ -20,10 +20,12 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/queryapi/cognitiveload"
 	"github.com/full-chaos/dev-health-ops/internal/queryapi/complexitytimeseries"
 	"github.com/full-chaos/dev-health-ops/internal/queryapi/compoundingrisk"
+	"github.com/full-chaos/dev-health-ops/internal/queryapi/coveragebaselines"
 	"github.com/full-chaos/dev-health-ops/internal/queryapi/datahealth"
 	"github.com/full-chaos/dev-health-ops/internal/queryapi/experiments"
 	"github.com/full-chaos/dev-health-ops/internal/queryapi/featureflags"
 	"github.com/full-chaos/dev-health-ops/internal/queryapi/graph/model"
+	"github.com/full-chaos/dev-health-ops/internal/queryapi/graphqldate"
 	"github.com/full-chaos/dev-health-ops/internal/queryapi/home"
 	"github.com/full-chaos/dev-health-ops/internal/queryapi/hotspots"
 	"github.com/full-chaos/dev-health-ops/internal/queryapi/operatingreview"
@@ -32,6 +34,7 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/queryapi/reports"
 	"github.com/full-chaos/dev-health-ops/internal/queryapi/reviewedges"
 	"github.com/full-chaos/dev-health-ops/internal/queryapi/security"
+	"github.com/full-chaos/dev-health-ops/internal/queryapi/testopsjobfailures"
 	"github.com/full-chaos/dev-health-ops/internal/queryapi/testopsrisk"
 	"github.com/full-chaos/dev-health-ops/internal/queryapi/throughputforecast"
 	"github.com/full-chaos/dev-health-ops/internal/queryapi/workgraph"
@@ -1078,6 +1081,35 @@ func (r *queryResolver) TestopsRisk(ctx context.Context, orgID string, input mod
 	result, err := testopsrisk.Resolve(ctx, r.ClickHouse, orgID, input)
 	if err != nil {
 		return nil, fmt.Errorf("testopsRisk: %w", err)
+	}
+	return result, nil
+}
+
+// TestopsJobFailures is the resolver for the testopsJobFailures field
+// (CHAOS-8513, Go-only). The org is the authorized one: a mismatched orgId is
+// refused before any read (requireOwnOrg), as for testopsRisk.
+func (r *queryResolver) TestopsJobFailures(ctx context.Context, orgID string, input model.TestOpsJobFailuresInput) (*model.TestOpsJobFailuresResult, error) {
+	if err := requireOwnOrg(ctx, orgID); err != nil {
+		return nil, err
+	}
+	result, err := testopsjobfailures.Resolve(ctx, r.ClickHouse, orgID, input.SinceDate, input.UntilDate,
+		testopsjobfailures.Scope{RepoIDs: input.RepoIds, TeamIDs: input.TeamIds}, input.Limit)
+	if err != nil {
+		return nil, fmt.Errorf("testopsJobFailures: %w", err)
+	}
+	return result, nil
+}
+
+// CoverageBaselines is the resolver for the coverageBaselines field
+// (CHAOS-8111, Go-only). The org is the authorized one: a mismatched orgId is
+// refused before any read (requireOwnOrg), as for testopsRisk.
+func (r *queryResolver) CoverageBaselines(ctx context.Context, orgID string, endDate graphqldate.Date, repoIds []string, teamIds []string) ([]model.RepoCoverageBaseline, error) {
+	if err := requireOwnOrg(ctx, orgID); err != nil {
+		return nil, err
+	}
+	result, err := coveragebaselines.Resolve(ctx, r.ClickHouse, orgID, endDate, coveragebaselines.Scope{RepoIDs: repoIds, TeamIDs: teamIds})
+	if err != nil {
+		return nil, fmt.Errorf("coverageBaselines: %w", err)
 	}
 	return result, nil
 }

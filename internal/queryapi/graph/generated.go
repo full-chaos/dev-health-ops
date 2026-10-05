@@ -1081,6 +1081,7 @@ type ComplexityRoot struct {
 		CognitiveLoad                     func(childComplexity int, input model.CognitiveLoadInput) int
 		ComplexityTimeseries              func(childComplexity int, input model.ComplexityTimeseriesInput) int
 		CompoundingRisk                   func(childComplexity int, orgID string, filter *model.CompoundingRiskFilterInput) int
+		CoverageBaselines                 func(childComplexity int, orgID string, endDate graphqldate.Date, repoIds []string, teamIds []string) int
 		DataHealth                        func(childComplexity int, team string) int
 		Experiments                       func(childComplexity int, orgID string, filters *model.FilterInput) int
 		FeatureFlagEvents                 func(childComplexity int, orgID string, flagKey *string, environment *string, limit int) int
@@ -1099,6 +1100,7 @@ type ComplexityRoot struct {
 		SavedReports                      func(childComplexity int, orgID string, limit int, offset int) int
 		SecurityAlerts                    func(childComplexity int, orgID string, filters *model.SecurityAlertFilterInput, pagination *model.SecurityPaginationInput) int
 		SecurityOverview                  func(childComplexity int, orgID string, filters *model.SecurityAlertFilterInput) int
+		TestopsJobFailures                func(childComplexity int, orgID string, input model.TestOpsJobFailuresInput) int
 		TestopsRisk                       func(childComplexity int, orgID string, input model.TestOpsRiskInput) int
 		ThroughputForecast                func(childComplexity int, orgID string, input model.ThroughputForecastInput) int
 		WorkGraphArtifacts                func(childComplexity int, orgID string, filters *model.WorkGraphEdgeFilterInput) int
@@ -1135,6 +1137,15 @@ type ComplexityRoot struct {
 		RepoName            func(childComplexity int) int
 		TopMaintainers      func(childComplexity int) int
 		Value               func(childComplexity int) int
+	}
+
+	RepoCoverageBaseline struct {
+		BranchBaselinePct func(childComplexity int) int
+		BranchDays        func(childComplexity int) int
+		LineBaselinePct   func(childComplexity int) int
+		LineDays          func(childComplexity int) int
+		RepoID            func(childComplexity int) int
+		RepoName          func(childComplexity int) int
 	}
 
 	ReportRunConnection struct {
@@ -1298,6 +1309,21 @@ type ComplexityRoot struct {
 		EvidenceLink func(childComplexity int) int
 		ID           func(childComplexity int) int
 		Text         func(childComplexity int) int
+	}
+
+	TestOpsJobFailureGroup struct {
+		FailedRuns   func(childComplexity int) int
+		FailureRate  func(childComplexity int) int
+		JobName      func(childComplexity int) int
+		Provider     func(childComplexity int) int
+		Runs         func(childComplexity int) int
+		WorkflowName func(childComplexity int) int
+	}
+
+	TestOpsJobFailuresResult struct {
+		Groups     func(childComplexity int) int
+		TotalCount func(childComplexity int) int
+		Truncated  func(childComplexity int) int
 	}
 
 	TestOpsRiskBreakdownItem struct {
@@ -1533,6 +1559,8 @@ type QueryResolver interface {
 	BusFactor(ctx context.Context, orgID string, scope *model.BusFactorScopeInput) (*model.BusFactor, error)
 	CompoundingRisk(ctx context.Context, orgID string, filter *model.CompoundingRiskFilterInput) (*model.CompoundingRiskResult, error)
 	TestopsRisk(ctx context.Context, orgID string, input model.TestOpsRiskInput) (*model.TestOpsRiskResult, error)
+	TestopsJobFailures(ctx context.Context, orgID string, input model.TestOpsJobFailuresInput) (*model.TestOpsJobFailuresResult, error)
+	CoverageBaselines(ctx context.Context, orgID string, endDate graphqldate.Date, repoIds []string, teamIds []string) ([]model.RepoCoverageBaseline, error)
 	ComplexityTimeseries(ctx context.Context, input model.ComplexityTimeseriesInput) (*model.ComplexityTimeseriesResult, error)
 	Hotspots(ctx context.Context, input model.HotspotsInput) (*model.HotspotsResult, error)
 	CognitiveLoad(ctx context.Context, input model.CognitiveLoadInput) (*model.CognitiveLoadResult, error)
@@ -6501,6 +6529,18 @@ func (e *executableSchema) Complexity(typeName, field string, childComplexity in
 
 		return e.complexity.Query.CompoundingRisk(childComplexity, args["orgId"].(string), args["filter"].(*model.CompoundingRiskFilterInput)), true
 
+	case "Query.coverageBaselines":
+		if e.complexity.Query.CoverageBaselines == nil {
+			break
+		}
+
+		args, err := ec.field_Query_coverageBaselines_args(context.TODO(), rawArgs)
+		if err != nil {
+			return 0, false
+		}
+
+		return e.complexity.Query.CoverageBaselines(childComplexity, args["orgId"].(string), args["endDate"].(graphqldate.Date), args["repoIds"].([]string), args["teamIds"].([]string)), true
+
 	case "Query.dataHealth":
 		if e.complexity.Query.DataHealth == nil {
 			break
@@ -6716,6 +6756,18 @@ func (e *executableSchema) Complexity(typeName, field string, childComplexity in
 		}
 
 		return e.complexity.Query.SecurityOverview(childComplexity, args["orgId"].(string), args["filters"].(*model.SecurityAlertFilterInput)), true
+
+	case "Query.testopsJobFailures":
+		if e.complexity.Query.TestopsJobFailures == nil {
+			break
+		}
+
+		args, err := ec.field_Query_testopsJobFailures_args(context.TODO(), rawArgs)
+		if err != nil {
+			return 0, false
+		}
+
+		return e.complexity.Query.TestopsJobFailures(childComplexity, args["orgId"].(string), args["input"].(model.TestOpsJobFailuresInput)), true
 
 	case "Query.testopsRisk":
 		if e.complexity.Query.TestopsRisk == nil {
@@ -6940,6 +6992,48 @@ func (e *executableSchema) Complexity(typeName, field string, childComplexity in
 		}
 
 		return e.complexity.RepoBusFactor.Value(childComplexity), true
+
+	case "RepoCoverageBaseline.branchBaselinePct":
+		if e.complexity.RepoCoverageBaseline.BranchBaselinePct == nil {
+			break
+		}
+
+		return e.complexity.RepoCoverageBaseline.BranchBaselinePct(childComplexity), true
+
+	case "RepoCoverageBaseline.branchDays":
+		if e.complexity.RepoCoverageBaseline.BranchDays == nil {
+			break
+		}
+
+		return e.complexity.RepoCoverageBaseline.BranchDays(childComplexity), true
+
+	case "RepoCoverageBaseline.lineBaselinePct":
+		if e.complexity.RepoCoverageBaseline.LineBaselinePct == nil {
+			break
+		}
+
+		return e.complexity.RepoCoverageBaseline.LineBaselinePct(childComplexity), true
+
+	case "RepoCoverageBaseline.lineDays":
+		if e.complexity.RepoCoverageBaseline.LineDays == nil {
+			break
+		}
+
+		return e.complexity.RepoCoverageBaseline.LineDays(childComplexity), true
+
+	case "RepoCoverageBaseline.repoId":
+		if e.complexity.RepoCoverageBaseline.RepoID == nil {
+			break
+		}
+
+		return e.complexity.RepoCoverageBaseline.RepoID(childComplexity), true
+
+	case "RepoCoverageBaseline.repoName":
+		if e.complexity.RepoCoverageBaseline.RepoName == nil {
+			break
+		}
+
+		return e.complexity.RepoCoverageBaseline.RepoName(childComplexity), true
 
 	case "ReportRunConnection.items":
 		if e.complexity.ReportRunConnection.Items == nil {
@@ -7661,6 +7755,69 @@ func (e *executableSchema) Complexity(typeName, field string, childComplexity in
 		}
 
 		return e.complexity.SummarySentence.Text(childComplexity), true
+
+	case "TestOpsJobFailureGroup.failedRuns":
+		if e.complexity.TestOpsJobFailureGroup.FailedRuns == nil {
+			break
+		}
+
+		return e.complexity.TestOpsJobFailureGroup.FailedRuns(childComplexity), true
+
+	case "TestOpsJobFailureGroup.failureRate":
+		if e.complexity.TestOpsJobFailureGroup.FailureRate == nil {
+			break
+		}
+
+		return e.complexity.TestOpsJobFailureGroup.FailureRate(childComplexity), true
+
+	case "TestOpsJobFailureGroup.jobName":
+		if e.complexity.TestOpsJobFailureGroup.JobName == nil {
+			break
+		}
+
+		return e.complexity.TestOpsJobFailureGroup.JobName(childComplexity), true
+
+	case "TestOpsJobFailureGroup.provider":
+		if e.complexity.TestOpsJobFailureGroup.Provider == nil {
+			break
+		}
+
+		return e.complexity.TestOpsJobFailureGroup.Provider(childComplexity), true
+
+	case "TestOpsJobFailureGroup.runs":
+		if e.complexity.TestOpsJobFailureGroup.Runs == nil {
+			break
+		}
+
+		return e.complexity.TestOpsJobFailureGroup.Runs(childComplexity), true
+
+	case "TestOpsJobFailureGroup.workflowName":
+		if e.complexity.TestOpsJobFailureGroup.WorkflowName == nil {
+			break
+		}
+
+		return e.complexity.TestOpsJobFailureGroup.WorkflowName(childComplexity), true
+
+	case "TestOpsJobFailuresResult.groups":
+		if e.complexity.TestOpsJobFailuresResult.Groups == nil {
+			break
+		}
+
+		return e.complexity.TestOpsJobFailuresResult.Groups(childComplexity), true
+
+	case "TestOpsJobFailuresResult.totalCount":
+		if e.complexity.TestOpsJobFailuresResult.TotalCount == nil {
+			break
+		}
+
+		return e.complexity.TestOpsJobFailuresResult.TotalCount(childComplexity), true
+
+	case "TestOpsJobFailuresResult.truncated":
+		if e.complexity.TestOpsJobFailuresResult.Truncated == nil {
+			break
+		}
+
+		return e.complexity.TestOpsJobFailuresResult.Truncated(childComplexity), true
 
 	case "TestOpsRiskBreakdownItem.category":
 		if e.complexity.TestOpsRiskBreakdownItem.Category == nil {
@@ -8578,6 +8735,7 @@ func (e *executableSchema) Exec(ctx context.Context) graphql.ResponseHandler {
 		ec.unmarshalInputScopeFilterInput,
 		ec.unmarshalInputSecurityAlertFilterInput,
 		ec.unmarshalInputSecurityPaginationInput,
+		ec.unmarshalInputTestOpsJobFailuresInput,
 		ec.unmarshalInputTestOpsRiskInput,
 		ec.unmarshalInputThroughputForecastInput,
 		ec.unmarshalInputTimeseriesRequestInput,
@@ -10172,6 +10330,16 @@ type Query {
   testopsRisk(orgId: String!, input: TestOpsRiskInput!): TestOpsRiskResult!
 
   """
+  CI job names that failed in a window, by workflow and job name (CHAOS-8513). Computed at read time from the stored job runs of every CI provider.
+  """
+  testopsJobFailures(orgId: String!, input: TestOpsJobFailuresInput!): TestOpsJobFailuresResult!
+
+  """
+  Each repository's coverage baseline (CHAOS-8111): its own mean coverage over the 30 days before ` + "`" + `` + "`" + `endDate` + "`" + `` + "`" + ` (` + "`" + `` + "`" + `endDate` + "`" + `` + "`" + ` itself is not included). Not a set target. One row per repository with a stored coverage row in those 30 days, in ` + "`" + `` + "`" + `repoId` + "`" + `` + "`" + ` order.
+  """
+  coverageBaselines(orgId: String!, endDate: Date!, repoIds: [String!] = null, teamIds: [String!] = null): [RepoCoverageBaseline!]!
+
+  """
   Cyclomatic complexity trend by repo or file. Reads from append-only ` + "`" + `` + "`" + `repo_complexity_daily` + "`" + `` + "`" + ` / ` + "`" + `` + "`" + `file_complexity_snapshots` + "`" + `` + "`" + ` tables — no recomputation, pure surface of persisted data.
   """
   complexityTimeseries(input: ComplexityTimeseriesInput!): ComplexityTimeseriesResult!
@@ -10267,6 +10435,22 @@ type RepoBusFactor {
   value: Int!
   topMaintainers: [MaintainerShare!]!
   evidenceSampleCount: Int!
+}
+
+type RepoCoverageBaseline {
+  repoId: String!
+  """The repository's full name in the org's catalogue. Null = the catalogue holds no name; never the id."""
+  repoName: String
+  """
+  Mean line coverage, in percent (0 to 100), over the days of the 30 that hold a value. Null = fewer than 7 such days (` + "`" + `` + "`" + `lineDays` + "`" + `` + "`" + `): then there is no baseline. Never 0 for "none", never the current value.
+  """
+  lineBaselinePct: Float
+  """Days of the 30 that hold a line coverage value."""
+  lineDays: Int!
+  """Mean branch coverage, in percent; the same rules as ` + "`" + `` + "`" + `lineBaselinePct` + "`" + `` + "`" + `."""
+  branchBaselinePct: Float
+  """Days of the 30 that hold a branch coverage value."""
+  branchDays: Int!
 }
 
 type ReportRunConnection {
@@ -10548,6 +10732,59 @@ enum TeamAttributionSource {
   AUTHOR_MEMBERSHIP
   MANUAL_FALLBACK
   UNASSIGNED
+}
+
+type TestOpsJobFailureGroup {
+  """
+  The workflow (GitHub Actions) or pipeline (GitLab CI) name of the runs. Null = the job runs have no stored pipeline row, or the row has no name.
+  """
+  workflowName: String
+  jobName: String!
+  """
+  The CI provider of the runs, as the pipeline row stores it (for example ` + "`" + `` + "`" + `github_actions` + "`" + `` + "`" + `). Null = the job runs have no stored pipeline row.
+  """
+  provider: String
+  """
+  Job runs of this group that started in the window and reached a result (success, failure or cancelled). A skipped, queued or running job is not a run.
+  """
+  runs: Int!
+  """
+  The runs that failed (a failure, an error or a timeout). Always above 0: a group with no failed run is not served.
+  """
+  failedRuns: Int!
+  """
+  ` + "`" + `` + "`" + `failedRuns / runs` + "`" + `` + "`" + `: a share from 0 to 1, NOT a percent. Null = no run to divide by (not served today: every served group has a failed run).
+  """
+  failureRate: Float
+}
+
+input TestOpsJobFailuresInput {
+  """First day of the window (UTC), included. The day a job run started places it."""
+  sinceDate: Date!
+  """
+  Last day of the window (UTC), included. At most 90 days after ` + "`" + `` + "`" + `sinceDate` + "`" + `` + "`" + ` (a "90 days" window of today minus 90 days to today is served); a later day, or a day before ` + "`" + `` + "`" + `sinceDate` + "`" + `` + "`" + `, is an error, not a cut answer.
+  """
+  untilDate: Date!
+  repoIds: [String!] = null
+  """
+  Team ids. Narrows the runs to the repositories these teams OWN (team_repo_ownership, as of now); person membership is never read. With ` + "`" + `` + "`" + `repoIds` + "`" + `` + "`" + ` both apply.
+  """
+  teamIds: [String!] = null
+  """Most groups to serve: 1 to 100."""
+  limit: Int! = 20
+}
+
+type TestOpsJobFailuresResult {
+  """
+  The groups with the most failed runs first (then by job name, workflow name and provider), cut at ` + "`" + `` + "`" + `limit` + "`" + `` + "`" + `.
+  """
+  groups: [TestOpsJobFailureGroup!]!
+  """
+  Number of groups that match before the ` + "`" + `` + "`" + `limit` + "`" + `` + "`" + ` cut. Never less than ` + "`" + `` + "`" + `groups` + "`" + `` + "`" + `.
+  """
+  totalCount: Int!
+  """True = ` + "`" + `` + "`" + `totalCount` + "`" + `` + "`" + ` is above the number of ` + "`" + `` + "`" + `groups` + "`" + `` + "`" + ` served."""
+  truncated: Boolean!
 }
 
 type TestOpsRiskBreakdownItem {
@@ -10922,7 +11159,8 @@ type WorkUnitTeamAttribution {
   isPrimary: Boolean!
   memberCount: Int!
   evidence: String!
-}`, BuiltIn: false},
+}
+`, BuiltIn: false},
 }
 var parsedSchema = gqlparser.MustLoadSchema(sources...)
 
@@ -12476,6 +12714,103 @@ func (ec *executionContext) field_Query_compoundingRisk_argsFilter(
 	return zeroVal, nil
 }
 
+func (ec *executionContext) field_Query_coverageBaselines_args(ctx context.Context, rawArgs map[string]any) (map[string]any, error) {
+	var err error
+	args := map[string]any{}
+	arg0, err := ec.field_Query_coverageBaselines_argsOrgID(ctx, rawArgs)
+	if err != nil {
+		return nil, err
+	}
+	args["orgId"] = arg0
+	arg1, err := ec.field_Query_coverageBaselines_argsEndDate(ctx, rawArgs)
+	if err != nil {
+		return nil, err
+	}
+	args["endDate"] = arg1
+	arg2, err := ec.field_Query_coverageBaselines_argsRepoIds(ctx, rawArgs)
+	if err != nil {
+		return nil, err
+	}
+	args["repoIds"] = arg2
+	arg3, err := ec.field_Query_coverageBaselines_argsTeamIds(ctx, rawArgs)
+	if err != nil {
+		return nil, err
+	}
+	args["teamIds"] = arg3
+	return args, nil
+}
+func (ec *executionContext) field_Query_coverageBaselines_argsOrgID(
+	ctx context.Context,
+	rawArgs map[string]any,
+) (string, error) {
+	if _, ok := rawArgs["orgId"]; !ok {
+		var zeroVal string
+		return zeroVal, nil
+	}
+
+	ctx = graphql.WithPathContext(ctx, graphql.NewPathWithField("orgId"))
+	if tmp, ok := rawArgs["orgId"]; ok {
+		return ec.unmarshalNString2string(ctx, tmp)
+	}
+
+	var zeroVal string
+	return zeroVal, nil
+}
+
+func (ec *executionContext) field_Query_coverageBaselines_argsEndDate(
+	ctx context.Context,
+	rawArgs map[string]any,
+) (graphqldate.Date, error) {
+	if _, ok := rawArgs["endDate"]; !ok {
+		var zeroVal graphqldate.Date
+		return zeroVal, nil
+	}
+
+	ctx = graphql.WithPathContext(ctx, graphql.NewPathWithField("endDate"))
+	if tmp, ok := rawArgs["endDate"]; ok {
+		return ec.unmarshalNDate2githubᚗcomᚋfullᚑchaosᚋdevᚑhealthᚑopsᚋinternalᚋqueryapiᚋgraphqldateᚐDate(ctx, tmp)
+	}
+
+	var zeroVal graphqldate.Date
+	return zeroVal, nil
+}
+
+func (ec *executionContext) field_Query_coverageBaselines_argsRepoIds(
+	ctx context.Context,
+	rawArgs map[string]any,
+) ([]string, error) {
+	if _, ok := rawArgs["repoIds"]; !ok {
+		var zeroVal []string
+		return zeroVal, nil
+	}
+
+	ctx = graphql.WithPathContext(ctx, graphql.NewPathWithField("repoIds"))
+	if tmp, ok := rawArgs["repoIds"]; ok {
+		return ec.unmarshalOString2ᚕstringᚄ(ctx, tmp)
+	}
+
+	var zeroVal []string
+	return zeroVal, nil
+}
+
+func (ec *executionContext) field_Query_coverageBaselines_argsTeamIds(
+	ctx context.Context,
+	rawArgs map[string]any,
+) ([]string, error) {
+	if _, ok := rawArgs["teamIds"]; !ok {
+		var zeroVal []string
+		return zeroVal, nil
+	}
+
+	ctx = graphql.WithPathContext(ctx, graphql.NewPathWithField("teamIds"))
+	if tmp, ok := rawArgs["teamIds"]; ok {
+		return ec.unmarshalOString2ᚕstringᚄ(ctx, tmp)
+	}
+
+	var zeroVal []string
+	return zeroVal, nil
+}
+
 func (ec *executionContext) field_Query_dataHealth_args(ctx context.Context, rawArgs map[string]any) (map[string]any, error) {
 	var err error
 	args := map[string]any{}
@@ -13552,6 +13887,57 @@ func (ec *executionContext) field_Query_securityOverview_argsFilters(
 	}
 
 	var zeroVal *model.SecurityAlertFilterInput
+	return zeroVal, nil
+}
+
+func (ec *executionContext) field_Query_testopsJobFailures_args(ctx context.Context, rawArgs map[string]any) (map[string]any, error) {
+	var err error
+	args := map[string]any{}
+	arg0, err := ec.field_Query_testopsJobFailures_argsOrgID(ctx, rawArgs)
+	if err != nil {
+		return nil, err
+	}
+	args["orgId"] = arg0
+	arg1, err := ec.field_Query_testopsJobFailures_argsInput(ctx, rawArgs)
+	if err != nil {
+		return nil, err
+	}
+	args["input"] = arg1
+	return args, nil
+}
+func (ec *executionContext) field_Query_testopsJobFailures_argsOrgID(
+	ctx context.Context,
+	rawArgs map[string]any,
+) (string, error) {
+	if _, ok := rawArgs["orgId"]; !ok {
+		var zeroVal string
+		return zeroVal, nil
+	}
+
+	ctx = graphql.WithPathContext(ctx, graphql.NewPathWithField("orgId"))
+	if tmp, ok := rawArgs["orgId"]; ok {
+		return ec.unmarshalNString2string(ctx, tmp)
+	}
+
+	var zeroVal string
+	return zeroVal, nil
+}
+
+func (ec *executionContext) field_Query_testopsJobFailures_argsInput(
+	ctx context.Context,
+	rawArgs map[string]any,
+) (model.TestOpsJobFailuresInput, error) {
+	if _, ok := rawArgs["input"]; !ok {
+		var zeroVal model.TestOpsJobFailuresInput
+		return zeroVal, nil
+	}
+
+	ctx = graphql.WithPathContext(ctx, graphql.NewPathWithField("input"))
+	if tmp, ok := rawArgs["input"]; ok {
+		return ec.unmarshalNTestOpsJobFailuresInput2githubᚗcomᚋfullᚑchaosᚋdevᚑhealthᚑopsᚋinternalᚋqueryapiᚋgraphᚋmodelᚐTestOpsJobFailuresInput(ctx, tmp)
+	}
+
+	var zeroVal model.TestOpsJobFailuresInput
 	return zeroVal, nil
 }
 
@@ -46529,6 +46915,138 @@ func (ec *executionContext) fieldContext_Query_testopsRisk(ctx context.Context, 
 	return fc, nil
 }
 
+func (ec *executionContext) _Query_testopsJobFailures(ctx context.Context, field graphql.CollectedField) (ret graphql.Marshaler) {
+	fc, err := ec.fieldContext_Query_testopsJobFailures(ctx, field)
+	if err != nil {
+		return graphql.Null
+	}
+	ctx = graphql.WithFieldContext(ctx, fc)
+	defer func() {
+		if r := recover(); r != nil {
+			ec.Error(ctx, ec.Recover(ctx, r))
+			ret = graphql.Null
+		}
+	}()
+	resTmp, err := ec.ResolverMiddleware(ctx, func(rctx context.Context) (any, error) {
+		ctx = rctx // use context from middleware stack in children
+		return ec.resolvers.Query().TestopsJobFailures(rctx, fc.Args["orgId"].(string), fc.Args["input"].(model.TestOpsJobFailuresInput))
+	})
+	if err != nil {
+		ec.Error(ctx, err)
+		return graphql.Null
+	}
+	if resTmp == nil {
+		if !graphql.HasFieldError(ctx, fc) {
+			ec.Errorf(ctx, "must not be null")
+		}
+		return graphql.Null
+	}
+	res := resTmp.(*model.TestOpsJobFailuresResult)
+	fc.Result = res
+	return ec.marshalNTestOpsJobFailuresResult2ᚖgithubᚗcomᚋfullᚑchaosᚋdevᚑhealthᚑopsᚋinternalᚋqueryapiᚋgraphᚋmodelᚐTestOpsJobFailuresResult(ctx, field.Selections, res)
+}
+
+func (ec *executionContext) fieldContext_Query_testopsJobFailures(ctx context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "Query",
+		Field:      field,
+		IsMethod:   true,
+		IsResolver: true,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			switch field.Name {
+			case "groups":
+				return ec.fieldContext_TestOpsJobFailuresResult_groups(ctx, field)
+			case "totalCount":
+				return ec.fieldContext_TestOpsJobFailuresResult_totalCount(ctx, field)
+			case "truncated":
+				return ec.fieldContext_TestOpsJobFailuresResult_truncated(ctx, field)
+			}
+			return nil, fmt.Errorf("no field named %q was found under type TestOpsJobFailuresResult", field.Name)
+		},
+	}
+	defer func() {
+		if r := recover(); r != nil {
+			err = ec.Recover(ctx, r)
+			ec.Error(ctx, err)
+		}
+	}()
+	ctx = graphql.WithFieldContext(ctx, fc)
+	if fc.Args, err = ec.field_Query_testopsJobFailures_args(ctx, field.ArgumentMap(ec.Variables)); err != nil {
+		ec.Error(ctx, err)
+		return fc, err
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _Query_coverageBaselines(ctx context.Context, field graphql.CollectedField) (ret graphql.Marshaler) {
+	fc, err := ec.fieldContext_Query_coverageBaselines(ctx, field)
+	if err != nil {
+		return graphql.Null
+	}
+	ctx = graphql.WithFieldContext(ctx, fc)
+	defer func() {
+		if r := recover(); r != nil {
+			ec.Error(ctx, ec.Recover(ctx, r))
+			ret = graphql.Null
+		}
+	}()
+	resTmp, err := ec.ResolverMiddleware(ctx, func(rctx context.Context) (any, error) {
+		ctx = rctx // use context from middleware stack in children
+		return ec.resolvers.Query().CoverageBaselines(rctx, fc.Args["orgId"].(string), fc.Args["endDate"].(graphqldate.Date), fc.Args["repoIds"].([]string), fc.Args["teamIds"].([]string))
+	})
+	if err != nil {
+		ec.Error(ctx, err)
+		return graphql.Null
+	}
+	if resTmp == nil {
+		if !graphql.HasFieldError(ctx, fc) {
+			ec.Errorf(ctx, "must not be null")
+		}
+		return graphql.Null
+	}
+	res := resTmp.([]model.RepoCoverageBaseline)
+	fc.Result = res
+	return ec.marshalNRepoCoverageBaseline2ᚕgithubᚗcomᚋfullᚑchaosᚋdevᚑhealthᚑopsᚋinternalᚋqueryapiᚋgraphᚋmodelᚐRepoCoverageBaselineᚄ(ctx, field.Selections, res)
+}
+
+func (ec *executionContext) fieldContext_Query_coverageBaselines(ctx context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "Query",
+		Field:      field,
+		IsMethod:   true,
+		IsResolver: true,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			switch field.Name {
+			case "repoId":
+				return ec.fieldContext_RepoCoverageBaseline_repoId(ctx, field)
+			case "repoName":
+				return ec.fieldContext_RepoCoverageBaseline_repoName(ctx, field)
+			case "lineBaselinePct":
+				return ec.fieldContext_RepoCoverageBaseline_lineBaselinePct(ctx, field)
+			case "lineDays":
+				return ec.fieldContext_RepoCoverageBaseline_lineDays(ctx, field)
+			case "branchBaselinePct":
+				return ec.fieldContext_RepoCoverageBaseline_branchBaselinePct(ctx, field)
+			case "branchDays":
+				return ec.fieldContext_RepoCoverageBaseline_branchDays(ctx, field)
+			}
+			return nil, fmt.Errorf("no field named %q was found under type RepoCoverageBaseline", field.Name)
+		},
+	}
+	defer func() {
+		if r := recover(); r != nil {
+			err = ec.Recover(ctx, r)
+			ec.Error(ctx, err)
+		}
+	}()
+	ctx = graphql.WithFieldContext(ctx, fc)
+	if fc.Args, err = ec.field_Query_coverageBaselines_args(ctx, field.ArgumentMap(ec.Variables)); err != nil {
+		ec.Error(ctx, err)
+		return fc, err
+	}
+	return fc, nil
+}
+
 func (ec *executionContext) _Query_complexityTimeseries(ctx context.Context, field graphql.CollectedField) (ret graphql.Marshaler) {
 	fc, err := ec.fieldContext_Query_complexityTimeseries(ctx, field)
 	if err != nil {
@@ -48653,6 +49171,261 @@ func (ec *executionContext) _RepoBusFactor_evidenceSampleCount(ctx context.Conte
 func (ec *executionContext) fieldContext_RepoBusFactor_evidenceSampleCount(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
 	fc = &graphql.FieldContext{
 		Object:     "RepoBusFactor",
+		Field:      field,
+		IsMethod:   false,
+		IsResolver: false,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return nil, errors.New("field of type Int does not have child fields")
+		},
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _RepoCoverageBaseline_repoId(ctx context.Context, field graphql.CollectedField, obj *model.RepoCoverageBaseline) (ret graphql.Marshaler) {
+	fc, err := ec.fieldContext_RepoCoverageBaseline_repoId(ctx, field)
+	if err != nil {
+		return graphql.Null
+	}
+	ctx = graphql.WithFieldContext(ctx, fc)
+	defer func() {
+		if r := recover(); r != nil {
+			ec.Error(ctx, ec.Recover(ctx, r))
+			ret = graphql.Null
+		}
+	}()
+	resTmp, err := ec.ResolverMiddleware(ctx, func(rctx context.Context) (any, error) {
+		ctx = rctx // use context from middleware stack in children
+		return obj.RepoID, nil
+	})
+	if err != nil {
+		ec.Error(ctx, err)
+		return graphql.Null
+	}
+	if resTmp == nil {
+		if !graphql.HasFieldError(ctx, fc) {
+			ec.Errorf(ctx, "must not be null")
+		}
+		return graphql.Null
+	}
+	res := resTmp.(string)
+	fc.Result = res
+	return ec.marshalNString2string(ctx, field.Selections, res)
+}
+
+func (ec *executionContext) fieldContext_RepoCoverageBaseline_repoId(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "RepoCoverageBaseline",
+		Field:      field,
+		IsMethod:   false,
+		IsResolver: false,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return nil, errors.New("field of type String does not have child fields")
+		},
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _RepoCoverageBaseline_repoName(ctx context.Context, field graphql.CollectedField, obj *model.RepoCoverageBaseline) (ret graphql.Marshaler) {
+	fc, err := ec.fieldContext_RepoCoverageBaseline_repoName(ctx, field)
+	if err != nil {
+		return graphql.Null
+	}
+	ctx = graphql.WithFieldContext(ctx, fc)
+	defer func() {
+		if r := recover(); r != nil {
+			ec.Error(ctx, ec.Recover(ctx, r))
+			ret = graphql.Null
+		}
+	}()
+	resTmp, err := ec.ResolverMiddleware(ctx, func(rctx context.Context) (any, error) {
+		ctx = rctx // use context from middleware stack in children
+		return obj.RepoName, nil
+	})
+	if err != nil {
+		ec.Error(ctx, err)
+		return graphql.Null
+	}
+	if resTmp == nil {
+		return graphql.Null
+	}
+	res := resTmp.(*string)
+	fc.Result = res
+	return ec.marshalOString2ᚖstring(ctx, field.Selections, res)
+}
+
+func (ec *executionContext) fieldContext_RepoCoverageBaseline_repoName(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "RepoCoverageBaseline",
+		Field:      field,
+		IsMethod:   false,
+		IsResolver: false,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return nil, errors.New("field of type String does not have child fields")
+		},
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _RepoCoverageBaseline_lineBaselinePct(ctx context.Context, field graphql.CollectedField, obj *model.RepoCoverageBaseline) (ret graphql.Marshaler) {
+	fc, err := ec.fieldContext_RepoCoverageBaseline_lineBaselinePct(ctx, field)
+	if err != nil {
+		return graphql.Null
+	}
+	ctx = graphql.WithFieldContext(ctx, fc)
+	defer func() {
+		if r := recover(); r != nil {
+			ec.Error(ctx, ec.Recover(ctx, r))
+			ret = graphql.Null
+		}
+	}()
+	resTmp, err := ec.ResolverMiddleware(ctx, func(rctx context.Context) (any, error) {
+		ctx = rctx // use context from middleware stack in children
+		return obj.LineBaselinePct, nil
+	})
+	if err != nil {
+		ec.Error(ctx, err)
+		return graphql.Null
+	}
+	if resTmp == nil {
+		return graphql.Null
+	}
+	res := resTmp.(*float64)
+	fc.Result = res
+	return ec.marshalOFloat2ᚖfloat64(ctx, field.Selections, res)
+}
+
+func (ec *executionContext) fieldContext_RepoCoverageBaseline_lineBaselinePct(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "RepoCoverageBaseline",
+		Field:      field,
+		IsMethod:   false,
+		IsResolver: false,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return nil, errors.New("field of type Float does not have child fields")
+		},
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _RepoCoverageBaseline_lineDays(ctx context.Context, field graphql.CollectedField, obj *model.RepoCoverageBaseline) (ret graphql.Marshaler) {
+	fc, err := ec.fieldContext_RepoCoverageBaseline_lineDays(ctx, field)
+	if err != nil {
+		return graphql.Null
+	}
+	ctx = graphql.WithFieldContext(ctx, fc)
+	defer func() {
+		if r := recover(); r != nil {
+			ec.Error(ctx, ec.Recover(ctx, r))
+			ret = graphql.Null
+		}
+	}()
+	resTmp, err := ec.ResolverMiddleware(ctx, func(rctx context.Context) (any, error) {
+		ctx = rctx // use context from middleware stack in children
+		return obj.LineDays, nil
+	})
+	if err != nil {
+		ec.Error(ctx, err)
+		return graphql.Null
+	}
+	if resTmp == nil {
+		if !graphql.HasFieldError(ctx, fc) {
+			ec.Errorf(ctx, "must not be null")
+		}
+		return graphql.Null
+	}
+	res := resTmp.(int)
+	fc.Result = res
+	return ec.marshalNInt2int(ctx, field.Selections, res)
+}
+
+func (ec *executionContext) fieldContext_RepoCoverageBaseline_lineDays(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "RepoCoverageBaseline",
+		Field:      field,
+		IsMethod:   false,
+		IsResolver: false,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return nil, errors.New("field of type Int does not have child fields")
+		},
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _RepoCoverageBaseline_branchBaselinePct(ctx context.Context, field graphql.CollectedField, obj *model.RepoCoverageBaseline) (ret graphql.Marshaler) {
+	fc, err := ec.fieldContext_RepoCoverageBaseline_branchBaselinePct(ctx, field)
+	if err != nil {
+		return graphql.Null
+	}
+	ctx = graphql.WithFieldContext(ctx, fc)
+	defer func() {
+		if r := recover(); r != nil {
+			ec.Error(ctx, ec.Recover(ctx, r))
+			ret = graphql.Null
+		}
+	}()
+	resTmp, err := ec.ResolverMiddleware(ctx, func(rctx context.Context) (any, error) {
+		ctx = rctx // use context from middleware stack in children
+		return obj.BranchBaselinePct, nil
+	})
+	if err != nil {
+		ec.Error(ctx, err)
+		return graphql.Null
+	}
+	if resTmp == nil {
+		return graphql.Null
+	}
+	res := resTmp.(*float64)
+	fc.Result = res
+	return ec.marshalOFloat2ᚖfloat64(ctx, field.Selections, res)
+}
+
+func (ec *executionContext) fieldContext_RepoCoverageBaseline_branchBaselinePct(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "RepoCoverageBaseline",
+		Field:      field,
+		IsMethod:   false,
+		IsResolver: false,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return nil, errors.New("field of type Float does not have child fields")
+		},
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _RepoCoverageBaseline_branchDays(ctx context.Context, field graphql.CollectedField, obj *model.RepoCoverageBaseline) (ret graphql.Marshaler) {
+	fc, err := ec.fieldContext_RepoCoverageBaseline_branchDays(ctx, field)
+	if err != nil {
+		return graphql.Null
+	}
+	ctx = graphql.WithFieldContext(ctx, fc)
+	defer func() {
+		if r := recover(); r != nil {
+			ec.Error(ctx, ec.Recover(ctx, r))
+			ret = graphql.Null
+		}
+	}()
+	resTmp, err := ec.ResolverMiddleware(ctx, func(rctx context.Context) (any, error) {
+		ctx = rctx // use context from middleware stack in children
+		return obj.BranchDays, nil
+	})
+	if err != nil {
+		ec.Error(ctx, err)
+		return graphql.Null
+	}
+	if resTmp == nil {
+		if !graphql.HasFieldError(ctx, fc) {
+			ec.Errorf(ctx, "must not be null")
+		}
+		return graphql.Null
+	}
+	res := resTmp.(int)
+	fc.Result = res
+	return ec.marshalNInt2int(ctx, field.Selections, res)
+}
+
+func (ec *executionContext) fieldContext_RepoCoverageBaseline_branchDays(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "RepoCoverageBaseline",
 		Field:      field,
 		IsMethod:   false,
 		IsResolver: false,
@@ -53286,6 +54059,407 @@ func (ec *executionContext) fieldContext_SummarySentence_evidenceLink(_ context.
 		IsResolver: false,
 		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
 			return nil, errors.New("field of type String does not have child fields")
+		},
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _TestOpsJobFailureGroup_workflowName(ctx context.Context, field graphql.CollectedField, obj *model.TestOpsJobFailureGroup) (ret graphql.Marshaler) {
+	fc, err := ec.fieldContext_TestOpsJobFailureGroup_workflowName(ctx, field)
+	if err != nil {
+		return graphql.Null
+	}
+	ctx = graphql.WithFieldContext(ctx, fc)
+	defer func() {
+		if r := recover(); r != nil {
+			ec.Error(ctx, ec.Recover(ctx, r))
+			ret = graphql.Null
+		}
+	}()
+	resTmp, err := ec.ResolverMiddleware(ctx, func(rctx context.Context) (any, error) {
+		ctx = rctx // use context from middleware stack in children
+		return obj.WorkflowName, nil
+	})
+	if err != nil {
+		ec.Error(ctx, err)
+		return graphql.Null
+	}
+	if resTmp == nil {
+		return graphql.Null
+	}
+	res := resTmp.(*string)
+	fc.Result = res
+	return ec.marshalOString2ᚖstring(ctx, field.Selections, res)
+}
+
+func (ec *executionContext) fieldContext_TestOpsJobFailureGroup_workflowName(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "TestOpsJobFailureGroup",
+		Field:      field,
+		IsMethod:   false,
+		IsResolver: false,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return nil, errors.New("field of type String does not have child fields")
+		},
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _TestOpsJobFailureGroup_jobName(ctx context.Context, field graphql.CollectedField, obj *model.TestOpsJobFailureGroup) (ret graphql.Marshaler) {
+	fc, err := ec.fieldContext_TestOpsJobFailureGroup_jobName(ctx, field)
+	if err != nil {
+		return graphql.Null
+	}
+	ctx = graphql.WithFieldContext(ctx, fc)
+	defer func() {
+		if r := recover(); r != nil {
+			ec.Error(ctx, ec.Recover(ctx, r))
+			ret = graphql.Null
+		}
+	}()
+	resTmp, err := ec.ResolverMiddleware(ctx, func(rctx context.Context) (any, error) {
+		ctx = rctx // use context from middleware stack in children
+		return obj.JobName, nil
+	})
+	if err != nil {
+		ec.Error(ctx, err)
+		return graphql.Null
+	}
+	if resTmp == nil {
+		if !graphql.HasFieldError(ctx, fc) {
+			ec.Errorf(ctx, "must not be null")
+		}
+		return graphql.Null
+	}
+	res := resTmp.(string)
+	fc.Result = res
+	return ec.marshalNString2string(ctx, field.Selections, res)
+}
+
+func (ec *executionContext) fieldContext_TestOpsJobFailureGroup_jobName(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "TestOpsJobFailureGroup",
+		Field:      field,
+		IsMethod:   false,
+		IsResolver: false,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return nil, errors.New("field of type String does not have child fields")
+		},
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _TestOpsJobFailureGroup_provider(ctx context.Context, field graphql.CollectedField, obj *model.TestOpsJobFailureGroup) (ret graphql.Marshaler) {
+	fc, err := ec.fieldContext_TestOpsJobFailureGroup_provider(ctx, field)
+	if err != nil {
+		return graphql.Null
+	}
+	ctx = graphql.WithFieldContext(ctx, fc)
+	defer func() {
+		if r := recover(); r != nil {
+			ec.Error(ctx, ec.Recover(ctx, r))
+			ret = graphql.Null
+		}
+	}()
+	resTmp, err := ec.ResolverMiddleware(ctx, func(rctx context.Context) (any, error) {
+		ctx = rctx // use context from middleware stack in children
+		return obj.Provider, nil
+	})
+	if err != nil {
+		ec.Error(ctx, err)
+		return graphql.Null
+	}
+	if resTmp == nil {
+		return graphql.Null
+	}
+	res := resTmp.(*string)
+	fc.Result = res
+	return ec.marshalOString2ᚖstring(ctx, field.Selections, res)
+}
+
+func (ec *executionContext) fieldContext_TestOpsJobFailureGroup_provider(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "TestOpsJobFailureGroup",
+		Field:      field,
+		IsMethod:   false,
+		IsResolver: false,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return nil, errors.New("field of type String does not have child fields")
+		},
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _TestOpsJobFailureGroup_runs(ctx context.Context, field graphql.CollectedField, obj *model.TestOpsJobFailureGroup) (ret graphql.Marshaler) {
+	fc, err := ec.fieldContext_TestOpsJobFailureGroup_runs(ctx, field)
+	if err != nil {
+		return graphql.Null
+	}
+	ctx = graphql.WithFieldContext(ctx, fc)
+	defer func() {
+		if r := recover(); r != nil {
+			ec.Error(ctx, ec.Recover(ctx, r))
+			ret = graphql.Null
+		}
+	}()
+	resTmp, err := ec.ResolverMiddleware(ctx, func(rctx context.Context) (any, error) {
+		ctx = rctx // use context from middleware stack in children
+		return obj.Runs, nil
+	})
+	if err != nil {
+		ec.Error(ctx, err)
+		return graphql.Null
+	}
+	if resTmp == nil {
+		if !graphql.HasFieldError(ctx, fc) {
+			ec.Errorf(ctx, "must not be null")
+		}
+		return graphql.Null
+	}
+	res := resTmp.(int)
+	fc.Result = res
+	return ec.marshalNInt2int(ctx, field.Selections, res)
+}
+
+func (ec *executionContext) fieldContext_TestOpsJobFailureGroup_runs(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "TestOpsJobFailureGroup",
+		Field:      field,
+		IsMethod:   false,
+		IsResolver: false,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return nil, errors.New("field of type Int does not have child fields")
+		},
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _TestOpsJobFailureGroup_failedRuns(ctx context.Context, field graphql.CollectedField, obj *model.TestOpsJobFailureGroup) (ret graphql.Marshaler) {
+	fc, err := ec.fieldContext_TestOpsJobFailureGroup_failedRuns(ctx, field)
+	if err != nil {
+		return graphql.Null
+	}
+	ctx = graphql.WithFieldContext(ctx, fc)
+	defer func() {
+		if r := recover(); r != nil {
+			ec.Error(ctx, ec.Recover(ctx, r))
+			ret = graphql.Null
+		}
+	}()
+	resTmp, err := ec.ResolverMiddleware(ctx, func(rctx context.Context) (any, error) {
+		ctx = rctx // use context from middleware stack in children
+		return obj.FailedRuns, nil
+	})
+	if err != nil {
+		ec.Error(ctx, err)
+		return graphql.Null
+	}
+	if resTmp == nil {
+		if !graphql.HasFieldError(ctx, fc) {
+			ec.Errorf(ctx, "must not be null")
+		}
+		return graphql.Null
+	}
+	res := resTmp.(int)
+	fc.Result = res
+	return ec.marshalNInt2int(ctx, field.Selections, res)
+}
+
+func (ec *executionContext) fieldContext_TestOpsJobFailureGroup_failedRuns(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "TestOpsJobFailureGroup",
+		Field:      field,
+		IsMethod:   false,
+		IsResolver: false,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return nil, errors.New("field of type Int does not have child fields")
+		},
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _TestOpsJobFailureGroup_failureRate(ctx context.Context, field graphql.CollectedField, obj *model.TestOpsJobFailureGroup) (ret graphql.Marshaler) {
+	fc, err := ec.fieldContext_TestOpsJobFailureGroup_failureRate(ctx, field)
+	if err != nil {
+		return graphql.Null
+	}
+	ctx = graphql.WithFieldContext(ctx, fc)
+	defer func() {
+		if r := recover(); r != nil {
+			ec.Error(ctx, ec.Recover(ctx, r))
+			ret = graphql.Null
+		}
+	}()
+	resTmp, err := ec.ResolverMiddleware(ctx, func(rctx context.Context) (any, error) {
+		ctx = rctx // use context from middleware stack in children
+		return obj.FailureRate, nil
+	})
+	if err != nil {
+		ec.Error(ctx, err)
+		return graphql.Null
+	}
+	if resTmp == nil {
+		return graphql.Null
+	}
+	res := resTmp.(*float64)
+	fc.Result = res
+	return ec.marshalOFloat2ᚖfloat64(ctx, field.Selections, res)
+}
+
+func (ec *executionContext) fieldContext_TestOpsJobFailureGroup_failureRate(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "TestOpsJobFailureGroup",
+		Field:      field,
+		IsMethod:   false,
+		IsResolver: false,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return nil, errors.New("field of type Float does not have child fields")
+		},
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _TestOpsJobFailuresResult_groups(ctx context.Context, field graphql.CollectedField, obj *model.TestOpsJobFailuresResult) (ret graphql.Marshaler) {
+	fc, err := ec.fieldContext_TestOpsJobFailuresResult_groups(ctx, field)
+	if err != nil {
+		return graphql.Null
+	}
+	ctx = graphql.WithFieldContext(ctx, fc)
+	defer func() {
+		if r := recover(); r != nil {
+			ec.Error(ctx, ec.Recover(ctx, r))
+			ret = graphql.Null
+		}
+	}()
+	resTmp, err := ec.ResolverMiddleware(ctx, func(rctx context.Context) (any, error) {
+		ctx = rctx // use context from middleware stack in children
+		return obj.Groups, nil
+	})
+	if err != nil {
+		ec.Error(ctx, err)
+		return graphql.Null
+	}
+	if resTmp == nil {
+		if !graphql.HasFieldError(ctx, fc) {
+			ec.Errorf(ctx, "must not be null")
+		}
+		return graphql.Null
+	}
+	res := resTmp.([]model.TestOpsJobFailureGroup)
+	fc.Result = res
+	return ec.marshalNTestOpsJobFailureGroup2ᚕgithubᚗcomᚋfullᚑchaosᚋdevᚑhealthᚑopsᚋinternalᚋqueryapiᚋgraphᚋmodelᚐTestOpsJobFailureGroupᚄ(ctx, field.Selections, res)
+}
+
+func (ec *executionContext) fieldContext_TestOpsJobFailuresResult_groups(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "TestOpsJobFailuresResult",
+		Field:      field,
+		IsMethod:   false,
+		IsResolver: false,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			switch field.Name {
+			case "workflowName":
+				return ec.fieldContext_TestOpsJobFailureGroup_workflowName(ctx, field)
+			case "jobName":
+				return ec.fieldContext_TestOpsJobFailureGroup_jobName(ctx, field)
+			case "provider":
+				return ec.fieldContext_TestOpsJobFailureGroup_provider(ctx, field)
+			case "runs":
+				return ec.fieldContext_TestOpsJobFailureGroup_runs(ctx, field)
+			case "failedRuns":
+				return ec.fieldContext_TestOpsJobFailureGroup_failedRuns(ctx, field)
+			case "failureRate":
+				return ec.fieldContext_TestOpsJobFailureGroup_failureRate(ctx, field)
+			}
+			return nil, fmt.Errorf("no field named %q was found under type TestOpsJobFailureGroup", field.Name)
+		},
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _TestOpsJobFailuresResult_totalCount(ctx context.Context, field graphql.CollectedField, obj *model.TestOpsJobFailuresResult) (ret graphql.Marshaler) {
+	fc, err := ec.fieldContext_TestOpsJobFailuresResult_totalCount(ctx, field)
+	if err != nil {
+		return graphql.Null
+	}
+	ctx = graphql.WithFieldContext(ctx, fc)
+	defer func() {
+		if r := recover(); r != nil {
+			ec.Error(ctx, ec.Recover(ctx, r))
+			ret = graphql.Null
+		}
+	}()
+	resTmp, err := ec.ResolverMiddleware(ctx, func(rctx context.Context) (any, error) {
+		ctx = rctx // use context from middleware stack in children
+		return obj.TotalCount, nil
+	})
+	if err != nil {
+		ec.Error(ctx, err)
+		return graphql.Null
+	}
+	if resTmp == nil {
+		if !graphql.HasFieldError(ctx, fc) {
+			ec.Errorf(ctx, "must not be null")
+		}
+		return graphql.Null
+	}
+	res := resTmp.(int)
+	fc.Result = res
+	return ec.marshalNInt2int(ctx, field.Selections, res)
+}
+
+func (ec *executionContext) fieldContext_TestOpsJobFailuresResult_totalCount(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "TestOpsJobFailuresResult",
+		Field:      field,
+		IsMethod:   false,
+		IsResolver: false,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return nil, errors.New("field of type Int does not have child fields")
+		},
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _TestOpsJobFailuresResult_truncated(ctx context.Context, field graphql.CollectedField, obj *model.TestOpsJobFailuresResult) (ret graphql.Marshaler) {
+	fc, err := ec.fieldContext_TestOpsJobFailuresResult_truncated(ctx, field)
+	if err != nil {
+		return graphql.Null
+	}
+	ctx = graphql.WithFieldContext(ctx, fc)
+	defer func() {
+		if r := recover(); r != nil {
+			ec.Error(ctx, ec.Recover(ctx, r))
+			ret = graphql.Null
+		}
+	}()
+	resTmp, err := ec.ResolverMiddleware(ctx, func(rctx context.Context) (any, error) {
+		ctx = rctx // use context from middleware stack in children
+		return obj.Truncated, nil
+	})
+	if err != nil {
+		ec.Error(ctx, err)
+		return graphql.Null
+	}
+	if resTmp == nil {
+		if !graphql.HasFieldError(ctx, fc) {
+			ec.Errorf(ctx, "must not be null")
+		}
+		return graphql.Null
+	}
+	res := resTmp.(bool)
+	fc.Result = res
+	return ec.marshalNBoolean2bool(ctx, field.Selections, res)
+}
+
+func (ec *executionContext) fieldContext_TestOpsJobFailuresResult_truncated(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "TestOpsJobFailuresResult",
+		Field:      field,
+		IsMethod:   false,
+		IsResolver: false,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return nil, errors.New("field of type Boolean does not have child fields")
 		},
 	}
 	return fc, nil
@@ -62231,6 +63405,65 @@ func (ec *executionContext) unmarshalInputSecurityPaginationInput(ctx context.Co
 	return it, nil
 }
 
+func (ec *executionContext) unmarshalInputTestOpsJobFailuresInput(ctx context.Context, obj any) (model.TestOpsJobFailuresInput, error) {
+	var it model.TestOpsJobFailuresInput
+	asMap := map[string]any{}
+	for k, v := range obj.(map[string]any) {
+		asMap[k] = v
+	}
+
+	if _, present := asMap["limit"]; !present {
+		asMap["limit"] = 20
+	}
+
+	fieldsInOrder := [...]string{"sinceDate", "untilDate", "repoIds", "teamIds", "limit"}
+	for _, k := range fieldsInOrder {
+		v, ok := asMap[k]
+		if !ok {
+			continue
+		}
+		switch k {
+		case "sinceDate":
+			ctx := graphql.WithPathContext(ctx, graphql.NewPathWithField("sinceDate"))
+			data, err := ec.unmarshalNDate2githubᚗcomᚋfullᚑchaosᚋdevᚑhealthᚑopsᚋinternalᚋqueryapiᚋgraphqldateᚐDate(ctx, v)
+			if err != nil {
+				return it, err
+			}
+			it.SinceDate = data
+		case "untilDate":
+			ctx := graphql.WithPathContext(ctx, graphql.NewPathWithField("untilDate"))
+			data, err := ec.unmarshalNDate2githubᚗcomᚋfullᚑchaosᚋdevᚑhealthᚑopsᚋinternalᚋqueryapiᚋgraphqldateᚐDate(ctx, v)
+			if err != nil {
+				return it, err
+			}
+			it.UntilDate = data
+		case "repoIds":
+			ctx := graphql.WithPathContext(ctx, graphql.NewPathWithField("repoIds"))
+			data, err := ec.unmarshalOString2ᚕstringᚄ(ctx, v)
+			if err != nil {
+				return it, err
+			}
+			it.RepoIds = data
+		case "teamIds":
+			ctx := graphql.WithPathContext(ctx, graphql.NewPathWithField("teamIds"))
+			data, err := ec.unmarshalOString2ᚕstringᚄ(ctx, v)
+			if err != nil {
+				return it, err
+			}
+			it.TeamIds = data
+		case "limit":
+			ctx := graphql.WithPathContext(ctx, graphql.NewPathWithField("limit"))
+			data, err := ec.unmarshalNInt2int(ctx, v)
+			if err != nil {
+				return it, err
+			}
+			it.Limit = data
+		}
+	}
+
+	return it, nil
+}
+
 func (ec *executionContext) unmarshalInputTestOpsRiskInput(ctx context.Context, obj any) (model.TestOpsRiskInput, error) {
 	var it model.TestOpsRiskInput
 	asMap := map[string]any{}
@@ -69999,6 +71232,50 @@ func (ec *executionContext) _Query(ctx context.Context, sel ast.SelectionSet) gr
 			}
 
 			out.Concurrently(i, func(ctx context.Context) graphql.Marshaler { return rrm(innerCtx) })
+		case "testopsJobFailures":
+			field := field
+
+			innerFunc := func(ctx context.Context, fs *graphql.FieldSet) (res graphql.Marshaler) {
+				defer func() {
+					if r := recover(); r != nil {
+						ec.Error(ctx, ec.Recover(ctx, r))
+					}
+				}()
+				res = ec._Query_testopsJobFailures(ctx, field)
+				if res == graphql.Null {
+					atomic.AddUint32(&fs.Invalids, 1)
+				}
+				return res
+			}
+
+			rrm := func(ctx context.Context) graphql.Marshaler {
+				return ec.OperationContext.RootResolverMiddleware(ctx,
+					func(ctx context.Context) graphql.Marshaler { return innerFunc(ctx, out) })
+			}
+
+			out.Concurrently(i, func(ctx context.Context) graphql.Marshaler { return rrm(innerCtx) })
+		case "coverageBaselines":
+			field := field
+
+			innerFunc := func(ctx context.Context, fs *graphql.FieldSet) (res graphql.Marshaler) {
+				defer func() {
+					if r := recover(); r != nil {
+						ec.Error(ctx, ec.Recover(ctx, r))
+					}
+				}()
+				res = ec._Query_coverageBaselines(ctx, field)
+				if res == graphql.Null {
+					atomic.AddUint32(&fs.Invalids, 1)
+				}
+				return res
+			}
+
+			rrm := func(ctx context.Context) graphql.Marshaler {
+				return ec.OperationContext.RootResolverMiddleware(ctx,
+					func(ctx context.Context) graphql.Marshaler { return innerFunc(ctx, out) })
+			}
+
+			out.Concurrently(i, func(ctx context.Context) graphql.Marshaler { return rrm(innerCtx) })
 		case "complexityTimeseries":
 			field := field
 
@@ -70555,6 +71832,61 @@ func (ec *executionContext) _RepoBusFactor(ctx context.Context, sel ast.Selectio
 			}
 		case "evidenceSampleCount":
 			out.Values[i] = ec._RepoBusFactor_evidenceSampleCount(ctx, field, obj)
+			if out.Values[i] == graphql.Null {
+				out.Invalids++
+			}
+		default:
+			panic("unknown field " + strconv.Quote(field.Name))
+		}
+	}
+	out.Dispatch(ctx)
+	if out.Invalids > 0 {
+		return graphql.Null
+	}
+
+	atomic.AddInt32(&ec.deferred, int32(len(deferred)))
+
+	for label, dfs := range deferred {
+		ec.processDeferredGroup(graphql.DeferredGroup{
+			Label:    label,
+			Path:     graphql.GetPath(ctx),
+			FieldSet: dfs,
+			Context:  ctx,
+		})
+	}
+
+	return out
+}
+
+var repoCoverageBaselineImplementors = []string{"RepoCoverageBaseline"}
+
+func (ec *executionContext) _RepoCoverageBaseline(ctx context.Context, sel ast.SelectionSet, obj *model.RepoCoverageBaseline) graphql.Marshaler {
+	fields := graphql.CollectFields(ec.OperationContext, sel, repoCoverageBaselineImplementors)
+
+	out := graphql.NewFieldSet(fields)
+	deferred := make(map[string]*graphql.FieldSet)
+	for i, field := range fields {
+		switch field.Name {
+		case "__typename":
+			out.Values[i] = graphql.MarshalString("RepoCoverageBaseline")
+		case "repoId":
+			out.Values[i] = ec._RepoCoverageBaseline_repoId(ctx, field, obj)
+			if out.Values[i] == graphql.Null {
+				out.Invalids++
+			}
+		case "repoName":
+			out.Values[i] = ec._RepoCoverageBaseline_repoName(ctx, field, obj)
+		case "lineBaselinePct":
+			out.Values[i] = ec._RepoCoverageBaseline_lineBaselinePct(ctx, field, obj)
+		case "lineDays":
+			out.Values[i] = ec._RepoCoverageBaseline_lineDays(ctx, field, obj)
+			if out.Values[i] == graphql.Null {
+				out.Invalids++
+			}
+		case "branchBaselinePct":
+			out.Values[i] = ec._RepoCoverageBaseline_branchBaselinePct(ctx, field, obj)
+		case "branchDays":
+			out.Values[i] = ec._RepoCoverageBaseline_branchDays(ctx, field, obj)
 			if out.Values[i] == graphql.Null {
 				out.Invalids++
 			}
@@ -71654,6 +72986,110 @@ func (ec *executionContext) _SummarySentence(ctx context.Context, sel ast.Select
 			}
 		case "evidenceLink":
 			out.Values[i] = ec._SummarySentence_evidenceLink(ctx, field, obj)
+			if out.Values[i] == graphql.Null {
+				out.Invalids++
+			}
+		default:
+			panic("unknown field " + strconv.Quote(field.Name))
+		}
+	}
+	out.Dispatch(ctx)
+	if out.Invalids > 0 {
+		return graphql.Null
+	}
+
+	atomic.AddInt32(&ec.deferred, int32(len(deferred)))
+
+	for label, dfs := range deferred {
+		ec.processDeferredGroup(graphql.DeferredGroup{
+			Label:    label,
+			Path:     graphql.GetPath(ctx),
+			FieldSet: dfs,
+			Context:  ctx,
+		})
+	}
+
+	return out
+}
+
+var testOpsJobFailureGroupImplementors = []string{"TestOpsJobFailureGroup"}
+
+func (ec *executionContext) _TestOpsJobFailureGroup(ctx context.Context, sel ast.SelectionSet, obj *model.TestOpsJobFailureGroup) graphql.Marshaler {
+	fields := graphql.CollectFields(ec.OperationContext, sel, testOpsJobFailureGroupImplementors)
+
+	out := graphql.NewFieldSet(fields)
+	deferred := make(map[string]*graphql.FieldSet)
+	for i, field := range fields {
+		switch field.Name {
+		case "__typename":
+			out.Values[i] = graphql.MarshalString("TestOpsJobFailureGroup")
+		case "workflowName":
+			out.Values[i] = ec._TestOpsJobFailureGroup_workflowName(ctx, field, obj)
+		case "jobName":
+			out.Values[i] = ec._TestOpsJobFailureGroup_jobName(ctx, field, obj)
+			if out.Values[i] == graphql.Null {
+				out.Invalids++
+			}
+		case "provider":
+			out.Values[i] = ec._TestOpsJobFailureGroup_provider(ctx, field, obj)
+		case "runs":
+			out.Values[i] = ec._TestOpsJobFailureGroup_runs(ctx, field, obj)
+			if out.Values[i] == graphql.Null {
+				out.Invalids++
+			}
+		case "failedRuns":
+			out.Values[i] = ec._TestOpsJobFailureGroup_failedRuns(ctx, field, obj)
+			if out.Values[i] == graphql.Null {
+				out.Invalids++
+			}
+		case "failureRate":
+			out.Values[i] = ec._TestOpsJobFailureGroup_failureRate(ctx, field, obj)
+		default:
+			panic("unknown field " + strconv.Quote(field.Name))
+		}
+	}
+	out.Dispatch(ctx)
+	if out.Invalids > 0 {
+		return graphql.Null
+	}
+
+	atomic.AddInt32(&ec.deferred, int32(len(deferred)))
+
+	for label, dfs := range deferred {
+		ec.processDeferredGroup(graphql.DeferredGroup{
+			Label:    label,
+			Path:     graphql.GetPath(ctx),
+			FieldSet: dfs,
+			Context:  ctx,
+		})
+	}
+
+	return out
+}
+
+var testOpsJobFailuresResultImplementors = []string{"TestOpsJobFailuresResult"}
+
+func (ec *executionContext) _TestOpsJobFailuresResult(ctx context.Context, sel ast.SelectionSet, obj *model.TestOpsJobFailuresResult) graphql.Marshaler {
+	fields := graphql.CollectFields(ec.OperationContext, sel, testOpsJobFailuresResultImplementors)
+
+	out := graphql.NewFieldSet(fields)
+	deferred := make(map[string]*graphql.FieldSet)
+	for i, field := range fields {
+		switch field.Name {
+		case "__typename":
+			out.Values[i] = graphql.MarshalString("TestOpsJobFailuresResult")
+		case "groups":
+			out.Values[i] = ec._TestOpsJobFailuresResult_groups(ctx, field, obj)
+			if out.Values[i] == graphql.Null {
+				out.Invalids++
+			}
+		case "totalCount":
+			out.Values[i] = ec._TestOpsJobFailuresResult_totalCount(ctx, field, obj)
+			if out.Values[i] == graphql.Null {
+				out.Invalids++
+			}
+		case "truncated":
+			out.Values[i] = ec._TestOpsJobFailuresResult_truncated(ctx, field, obj)
 			if out.Values[i] == graphql.Null {
 				out.Invalids++
 			}
@@ -77006,6 +78442,54 @@ func (ec *executionContext) marshalNRepoBusFactor2ᚕgithubᚗcomᚋfullᚑchaos
 	return ret
 }
 
+func (ec *executionContext) marshalNRepoCoverageBaseline2githubᚗcomᚋfullᚑchaosᚋdevᚑhealthᚑopsᚋinternalᚋqueryapiᚋgraphᚋmodelᚐRepoCoverageBaseline(ctx context.Context, sel ast.SelectionSet, v model.RepoCoverageBaseline) graphql.Marshaler {
+	return ec._RepoCoverageBaseline(ctx, sel, &v)
+}
+
+func (ec *executionContext) marshalNRepoCoverageBaseline2ᚕgithubᚗcomᚋfullᚑchaosᚋdevᚑhealthᚑopsᚋinternalᚋqueryapiᚋgraphᚋmodelᚐRepoCoverageBaselineᚄ(ctx context.Context, sel ast.SelectionSet, v []model.RepoCoverageBaseline) graphql.Marshaler {
+	ret := make(graphql.Array, len(v))
+	var wg sync.WaitGroup
+	isLen1 := len(v) == 1
+	if !isLen1 {
+		wg.Add(len(v))
+	}
+	for i := range v {
+		i := i
+		fc := &graphql.FieldContext{
+			Index:  &i,
+			Result: &v[i],
+		}
+		ctx := graphql.WithFieldContext(ctx, fc)
+		f := func(i int) {
+			defer func() {
+				if r := recover(); r != nil {
+					ec.Error(ctx, ec.Recover(ctx, r))
+					ret = nil
+				}
+			}()
+			if !isLen1 {
+				defer wg.Done()
+			}
+			ret[i] = ec.marshalNRepoCoverageBaseline2githubᚗcomᚋfullᚑchaosᚋdevᚑhealthᚑopsᚋinternalᚋqueryapiᚋgraphᚋmodelᚐRepoCoverageBaseline(ctx, sel, v[i])
+		}
+		if isLen1 {
+			f(i)
+		} else {
+			go f(i)
+		}
+
+	}
+	wg.Wait()
+
+	for _, e := range ret {
+		if e == graphql.Null {
+			return graphql.Null
+		}
+	}
+
+	return ret
+}
+
 func (ec *executionContext) marshalNReportRunConnection2githubᚗcomᚋfullᚑchaosᚋdevᚑhealthᚑopsᚋinternalᚋqueryapiᚋgraphᚋmodelᚐReportRunConnection(ctx context.Context, sel ast.SelectionSet, v model.ReportRunConnection) graphql.Marshaler {
 	return ec._ReportRunConnection(ctx, sel, &v)
 }
@@ -77716,6 +79200,73 @@ func (ec *executionContext) unmarshalNTeamAttributionSource2githubᚗcomᚋfull�
 
 func (ec *executionContext) marshalNTeamAttributionSource2githubᚗcomᚋfullᚑchaosᚋdevᚑhealthᚑopsᚋinternalᚋqueryapiᚋgraphᚋmodelᚐTeamAttributionSource(ctx context.Context, sel ast.SelectionSet, v model.TeamAttributionSource) graphql.Marshaler {
 	return v
+}
+
+func (ec *executionContext) marshalNTestOpsJobFailureGroup2githubᚗcomᚋfullᚑchaosᚋdevᚑhealthᚑopsᚋinternalᚋqueryapiᚋgraphᚋmodelᚐTestOpsJobFailureGroup(ctx context.Context, sel ast.SelectionSet, v model.TestOpsJobFailureGroup) graphql.Marshaler {
+	return ec._TestOpsJobFailureGroup(ctx, sel, &v)
+}
+
+func (ec *executionContext) marshalNTestOpsJobFailureGroup2ᚕgithubᚗcomᚋfullᚑchaosᚋdevᚑhealthᚑopsᚋinternalᚋqueryapiᚋgraphᚋmodelᚐTestOpsJobFailureGroupᚄ(ctx context.Context, sel ast.SelectionSet, v []model.TestOpsJobFailureGroup) graphql.Marshaler {
+	ret := make(graphql.Array, len(v))
+	var wg sync.WaitGroup
+	isLen1 := len(v) == 1
+	if !isLen1 {
+		wg.Add(len(v))
+	}
+	for i := range v {
+		i := i
+		fc := &graphql.FieldContext{
+			Index:  &i,
+			Result: &v[i],
+		}
+		ctx := graphql.WithFieldContext(ctx, fc)
+		f := func(i int) {
+			defer func() {
+				if r := recover(); r != nil {
+					ec.Error(ctx, ec.Recover(ctx, r))
+					ret = nil
+				}
+			}()
+			if !isLen1 {
+				defer wg.Done()
+			}
+			ret[i] = ec.marshalNTestOpsJobFailureGroup2githubᚗcomᚋfullᚑchaosᚋdevᚑhealthᚑopsᚋinternalᚋqueryapiᚋgraphᚋmodelᚐTestOpsJobFailureGroup(ctx, sel, v[i])
+		}
+		if isLen1 {
+			f(i)
+		} else {
+			go f(i)
+		}
+
+	}
+	wg.Wait()
+
+	for _, e := range ret {
+		if e == graphql.Null {
+			return graphql.Null
+		}
+	}
+
+	return ret
+}
+
+func (ec *executionContext) unmarshalNTestOpsJobFailuresInput2githubᚗcomᚋfullᚑchaosᚋdevᚑhealthᚑopsᚋinternalᚋqueryapiᚋgraphᚋmodelᚐTestOpsJobFailuresInput(ctx context.Context, v any) (model.TestOpsJobFailuresInput, error) {
+	res, err := ec.unmarshalInputTestOpsJobFailuresInput(ctx, v)
+	return res, graphql.ErrorOnPath(ctx, err)
+}
+
+func (ec *executionContext) marshalNTestOpsJobFailuresResult2githubᚗcomᚋfullᚑchaosᚋdevᚑhealthᚑopsᚋinternalᚋqueryapiᚋgraphᚋmodelᚐTestOpsJobFailuresResult(ctx context.Context, sel ast.SelectionSet, v model.TestOpsJobFailuresResult) graphql.Marshaler {
+	return ec._TestOpsJobFailuresResult(ctx, sel, &v)
+}
+
+func (ec *executionContext) marshalNTestOpsJobFailuresResult2ᚖgithubᚗcomᚋfullᚑchaosᚋdevᚑhealthᚑopsᚋinternalᚋqueryapiᚋgraphᚋmodelᚐTestOpsJobFailuresResult(ctx context.Context, sel ast.SelectionSet, v *model.TestOpsJobFailuresResult) graphql.Marshaler {
+	if v == nil {
+		if !graphql.HasFieldError(ctx, graphql.GetFieldContext(ctx)) {
+			ec.Errorf(ctx, "the requested element is null which the schema does not allow")
+		}
+		return graphql.Null
+	}
+	return ec._TestOpsJobFailuresResult(ctx, sel, v)
 }
 
 func (ec *executionContext) marshalNTestOpsRiskBreakdownItem2githubᚗcomᚋfullᚑchaosᚋdevᚑhealthᚑopsᚋinternalᚋqueryapiᚋgraphᚋmodelᚐTestOpsRiskBreakdownItem(ctx context.Context, sel ast.SelectionSet, v model.TestOpsRiskBreakdownItem) graphql.Marshaler {

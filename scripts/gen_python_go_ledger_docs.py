@@ -420,20 +420,10 @@ WORKER_FILE_LEDGER: dict[str, dict[str, str]] = {
         "evidence": "imported by sync_units.py:134; resolve_run_auth reached from dispatch_sync_run",
         "ticket": "n/a",
     },
-    "sync_units.py": {
-        "category": "a",
-        "evidence": "dispatch_sync_run called directly by backfill/runner.py; finalize_sync_run called directly by processors/sync.py and dispatch_sync_run itself -- the /dispatch and /finalize HTTP bridge routes (and their dead Go HTTPBridge.Dispatch/.Finalize callers) are deleted outright",
-        "ticket": "n/a",
-    },
     "task_utils.py": {
         "category": "c",
         "evidence": "imported by sync_units.py — shared credential/cache helpers; system_webhooks.py was also an importer until CHAOS-4105 deleted it, work_graph_tasks.py until CHAOS-3093 deleted it, and reference_discovery.py/team_autoimport.py until CHAOS-4435/CHAOS-5713 deleted their own imports of it",
         "ticket": "n/a",
-    },
-    "tasks.py": {
-        "category": "b",
-        "evidence": "Celery task-name aggregator (__all__ re-export of every task); no api/internal reference — dead since CHAOS-4026",
-        "ticket": "CHAOS-4439 (dead worker modules)",
     },
     "team_autoimport_categories.py": {
         "category": "a",

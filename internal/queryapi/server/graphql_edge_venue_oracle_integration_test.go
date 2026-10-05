@@ -136,6 +136,11 @@ func registeredEdgeDocuments(t *testing.T, root string) []registeredEdgeDocument
 		}
 		delete(measured, operation)
 	}
+	// CHAOS-8513: an operation that was Go-only from its first day has no Python answer, live or frozen, so it
+	// is not a case of this oracle (edgeGoOnlyFromBirth, whose own test keeps the list honest).
+	for operation := range edgeGoOnlyFromBirth {
+		delete(measured, operation)
+	}
 	docs = docs[:0]
 	for _, doc := range measured {
 		docs = append(docs, doc)

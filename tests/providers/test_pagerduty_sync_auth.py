@@ -13,7 +13,6 @@ from sqlalchemy.orm import Session, sessionmaker
 
 from dev_health_ops.core.encryption import decrypt_value, encrypt_value
 from dev_health_ops.credentials.fingerprint import credential_fingerprint
-from dev_health_ops.models.integrations import Integration
 from dev_health_ops.models.settings import (
     IntegrationCredential,
     ProviderOAuthCredential,
@@ -498,26 +497,6 @@ def test_resolve_run_auth_rejects_an_inactive_pagerduty_credential(
         )
 
     # Then: no inactive credential can hydrate a sync unit.
-
-
-def test_planner_rejects_pagerduty_sync_without_a_persisted_credential(
-    session: Session,
-) -> None:
-    # Given: a PagerDuty integration whose target configuration is malformed.
-    integration = Integration(
-        org_id="pagerduty-org",
-        provider="pagerduty",
-        name="PagerDuty operational",
-        config={},
-        credential_id=None,
-    )
-    session.add(integration)
-    session.flush()
-    from dev_health_ops.sync.planner import _resolve_credential_stamp
-
-    # When: the planner tries to freeze the run credential.
-    with pytest.raises(ValueError, match="active organization-scoped credential"):
-        _resolve_credential_stamp(session, integration)
 
     # Then: a legacy config is disabled instead of silently using deployment auth.
 

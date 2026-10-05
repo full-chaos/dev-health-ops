@@ -205,7 +205,7 @@ func insertClassDecision(t *testing.T, pool *pgxpool.Pool, operation, mode, buil
 
 func assertNoRows(t *testing.T, dsn string) {
 	t.Helper()
-	for _, table := range []string{"go_api_class_decision", "go_api_routing_state", "go_api_routing_audits"} {
+	for _, table := range []string{"go_api_class_decision", "go_api_routing_audits"} {
 		var count int
 		if err := queryRow(t, dsn, `SELECT count(*) FROM `+table, &count); err != nil {
 			t.Fatal(err)

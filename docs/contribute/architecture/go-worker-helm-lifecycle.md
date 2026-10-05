@@ -156,13 +156,9 @@ values; a database built under other settings must be re-created from the
 head.
 
 `migrations.hook.classDecisionLiveSchemaDigest` (CHAOS-8744) has no default.
-When it is set, the weight-0 Job gets it as `DHO_CLASS_DECISION_LIVE_SCHEMA_DIGEST`.
-Postgres migration 0146 then copies each MCP class row at that schema digest
-into `go_api_class_decision`. The value is the `schema_digest` of the running
-query-api's `GET /registry`. Read it before the upgrade starts: after the pods
-roll, that endpoint gives the new digest. If MCP class rows exist and the value
-is empty, 0146 refuses and its transaction rolls back. The chart refuses a
-value that is not `sha256:<64 hex>`.
+When it is set, the chart passes it to the weight-0 Job as the env
+`DHO_CLASS_DECISION_LIVE_SCHEMA_DIGEST`; when it is empty, the Job has no such
+env. The chart refuses a value that is not `sha256:<64 hex>`.
 
 ## Drain and rollout safety
 

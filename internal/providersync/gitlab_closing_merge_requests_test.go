@@ -36,7 +36,7 @@ func TestNormalizeGitLabClosingMergeRequests(t *testing.T) {
 	claim := nativeTestClaim("gitlab", "work-items")
 	at := time.Date(2026, 9, 1, 12, 0, 0, 0, time.UTC)
 	issue := "gitlab:acme/api#42"
-	rows := normalizeGitLabClosingMergeRequests(claim, issue, "acme/api", closingMRs(t, `[
+	rows := normalizeGitLabClosingMergeRequests(claim, issue, closingMRs(t, `[
 		{"iid":9,"references":{"full":"acme/api!9"}},
 		{"iid":9,"references":{"full":"acme/api!9"}},
 		{"iid":3,"references":{"full":"other/fork!3"}},
@@ -53,10 +53,10 @@ func TestNormalizeGitLabClosingMergeRequests(t *testing.T) {
 		}
 	}
 	want := [][2]string{
-		{"gitlab:acme/api!9", issue}, {"gitlab:other/fork!3", issue}, {"gitlab:acme/api!4", issue}, {"gitlab:acme/api!5", issue},
+		{"gitlab:acme/api!9", issue}, {"gitlab:other/fork!3", issue},
 	}
 	if !reflect.DeepEqual(got, want) {
-		t.Fatalf("rows=%v want=%v (duplicates and iid 0 dropped; a cross-project MR keeps its own path; a missing path falls back to the issue's project)", got, want)
+		t.Fatalf("rows=%v want=%v (duplicates dropped; a cross-project MR keeps its own path; an entry without a usable path or iid never becomes a link)", got, want)
 	}
 }
 
@@ -67,7 +67,7 @@ func TestGitLabClosingReferenceRowsBecomeNativeLinks(t *testing.T) {
 	claim := nativeTestClaim("gitlab", "work-items")
 	at := time.Date(2026, 9, 1, 12, 0, 0, 0, time.UTC)
 	issue := "gitlab:acme/api#42"
-	rows := normalizeGitLabClosingMergeRequests(claim, issue, "acme/api", closingMRs(t,
+	rows := normalizeGitLabClosingMergeRequests(claim, issue, closingMRs(t,
 		`[{"iid":9,"references":{"full":"acme/api!9"}},{"iid":3,"references":{"full":"other/fork!3"}}]`), at)
 	apiRepo, forkRepo := uuid.MustParse("44444444-4444-4444-8444-444444444444"), uuid.MustParse("55555555-5555-4555-8555-555555555555")
 	inputs := issueprlinks.Inputs{
@@ -104,7 +104,7 @@ func TestGitLabClosingReferenceRowsBecomeNativeLinks(t *testing.T) {
 func TestNormalizeGitLabClosingMergeRequestsKeepsEveryMergeRequestState(t *testing.T) {
 	t.Parallel()
 	claim := nativeTestClaim("gitlab", "work-items")
-	rows := normalizeGitLabClosingMergeRequests(claim, "gitlab:acme/api#42", "acme/api", closingMRs(t, `[
+	rows := normalizeGitLabClosingMergeRequests(claim, "gitlab:acme/api#42", closingMRs(t, `[
 		{"iid":1,"state":"opened","references":{"full":"acme/api!1"}},
 		{"iid":2,"state":"merged","references":{"full":"acme/api!2"}},
 		{"iid":3,"state":"closed","references":{"full":"acme/api!3"}}
@@ -114,17 +114,25 @@ func TestNormalizeGitLabClosingMergeRequestsKeepsEveryMergeRequestState(t *testi
 	}
 }
 
+func firstHeader(header http.Header) http.Header {
+	if header == nil {
+		return make(http.Header)
+	}
+	return header.Clone()
+}
+
 // closedByStatusDoer answers the closed_by endpoint with a fixed status and delegates everything else.
 type closedByStatusDoer struct {
 	inner  *gitLabWorkItemsDoer
 	status int
 	body   string // the answer body; empty means a small error object
+	header http.Header
 }
 
 func (doer closedByStatusDoer) Do(request *http.Request) (*http.Response, error) {
 	if strings.HasSuffix(request.URL.Path, "/closed_by") {
 		return &http.Response{
-			StatusCode: doer.status, Status: http.StatusText(doer.status), Header: make(http.Header),
+			StatusCode: doer.status, Status: http.StatusText(doer.status), Header: firstHeader(doer.header),
 			Body: io.NopCloser(strings.NewReader(firstNonEmpty(doer.body, `{"message":"closed_by"}`))), Request: request,
 		}, nil
 	}
@@ -139,20 +147,32 @@ func TestGitLabWorkItemsRouteClosedByFailureClassSplitsTheWatermark(t *testing.T
 	cases := map[string]struct {
 		status        int // 0: answers normally
 		body          string
+		header        http.Header
 		wantOutcome   string
 		wantWatermark bool
 		wantTerminal  int
 		wantTransient int
 	}{
-		"answers":                       {0, "", "synced", true, 0, 0},
-		"terminal 404":                  {http.StatusNotFound, "", "terminal_unavailable", true, 1, 0},
-		"terminal 403":                  {http.StatusForbidden, "", "terminal_unavailable", true, 1, 0},
-		"transient 503":                 {http.StatusServiceUnavailable, "", "transient_failed", false, 0, 1},
-		"transient 429":                 {http.StatusTooManyRequests, "", "transient_failed", false, 0, 1},
-		"transient 500":                 {http.StatusInternalServerError, "", "transient_failed", false, 0, 1},
-		"transient transport (no body)": {-1, "", "transient_failed", false, 0, 1},
-		"terminal page cap exceeded":    {http.StatusOK, `[{"iid":9,"references":{"full":"acme/api!9"}},{"iid":10,"references":{"full":"acme/api!10"}}]`, "terminal_page_cap", true, 1, 0},
-		"terminal undecodable answer":   {http.StatusOK, `["not an object"]`, "terminal_undecodable", true, 1, 0},
+		"answers":                                 {0, "", nil, "synced", true, 0, 0},
+		"terminal 404":                            {http.StatusNotFound, "", nil, "terminal_unavailable", true, 1, 0},
+		"terminal 403":                            {http.StatusForbidden, "", nil, "terminal_unavailable", true, 1, 0},
+		"transient 503":                           {http.StatusServiceUnavailable, "", nil, "transient_failed", false, 0, 1},
+		"transient 429":                           {http.StatusTooManyRequests, "", nil, "transient_failed", false, 0, 1},
+		"transient 500":                           {http.StatusInternalServerError, "", nil, "transient_failed", false, 0, 1},
+		"transient transport (no body)":           {-1, "", nil, "transient_failed", false, 0, 1},
+		"terminal page cap exceeded":              {http.StatusOK, `[{"iid":9,"references":{"full":"acme/api!9"}},{"iid":10,"references":{"full":"acme/api!10"}}]`, nil, "terminal_page_cap", true, 1, 0},
+		"terminal undecodable answer":             {http.StatusOK, `["not an object"]`, nil, "terminal_undecodable", true, 1, 0},
+		"rate-limited 403 holds the watermark":    {http.StatusForbidden, "", http.Header{"Ratelimit-Remaining": {"0"}}, "transient_failed", false, 0, 1},
+		"entry without iid":                       {http.StatusOK, `[{"references":{"full":"acme/api!9"}}]`, nil, "terminal_undecodable", true, 1, 0},
+		"entry with iid 0":                        {http.StatusOK, `[{"iid":0,"references":{"full":"acme/api!0"}}]`, nil, "terminal_undecodable", true, 1, 0},
+		"entry without references.full":           {http.StatusOK, `[{"iid":9,"references":{}}]`, nil, "terminal_undecodable", true, 1, 0},
+		"entry with empty project path":           {http.StatusOK, `[{"iid":9,"references":{"full":"!9"}}]`, nil, "terminal_undecodable", true, 1, 0},
+		"entry with a dot-dot path segment":       {http.StatusOK, `[{"iid":9,"references":{"full":"../acme/api!9"}}]`, nil, "terminal_undecodable", true, 1, 0},
+		"entry with an empty path segment":        {http.StatusOK, `[{"iid":9,"references":{"full":"acme//api!9"}}]`, nil, "terminal_undecodable", true, 1, 0},
+		"entry with an iid beyond uint32":         {http.StatusOK, `[{"iid":4294967296,"references":{"full":"acme/api!4294967296"}}]`, nil, "terminal_undecodable", true, 1, 0},
+		"entry with a non-canonical iid":          {http.StatusOK, `[{"iid":9,"references":{"full":"acme/api!09"}}]`, nil, "terminal_undecodable", true, 1, 0},
+		"entry with trailing whitespace":          {http.StatusOK, `[{"iid":9,"references":{"full":"acme/api!9 "}}]`, nil, "terminal_undecodable", true, 1, 0},
+		"entry whose references.full iid differs": {http.StatusOK, `[{"iid":9,"references":{"full":"acme/api!8"}}]`, nil, "terminal_undecodable", true, 1, 0},
 	}
 	for name, c := range cases {
 		t.Run(name, func(t *testing.T) {
@@ -172,7 +192,7 @@ func TestGitLabWorkItemsRouteClosedByFailureClassSplitsTheWatermark(t *testing.T
 			inner := &gitLabWorkItemsDoer{responses: responses}
 			var doer providerfoundation.HTTPDoer = inner
 			if c.status > 0 {
-				doer = closedByStatusDoer{inner: inner, status: c.status, body: c.body}
+				doer = closedByStatusDoer{inner: inner, status: c.status, body: c.body, header: c.header}
 			}
 			claim := nativeTestClaim("gitlab", "work-items")
 			claim.OrgID = "77777777-7777-4777-8777-777777777777"
@@ -227,6 +247,7 @@ func TestGitLabClosingFetchOutcome(t *testing.T) {
 		"wrapped 403":                        {fmt.Errorf("closed_by: %w", &providerfoundation.ProviderError{StatusCode: http.StatusForbidden}), "terminal_unavailable"},
 		"401 is not terminal here":           {&providerfoundation.ProviderError{StatusCode: http.StatusUnauthorized}, "transient_failed"},
 		"429":                                {&providerfoundation.ProviderError{StatusCode: http.StatusTooManyRequests}, "transient_failed"},
+		"rate-limited 403":                   {&providerfoundation.ProviderError{Class: providerfoundation.ErrorRateLimited, StatusCode: http.StatusForbidden}, "transient_failed"},
 		"503":                                {&providerfoundation.ProviderError{StatusCode: http.StatusServiceUnavailable}, "transient_failed"},
 		"page cap":                           {ErrPaginationCapExceeded, "terminal_page_cap"},
 		"undecodable":                        {fmt.Errorf("closed_by: %w", providerfoundation.ErrNormalizationInvalid), "terminal_undecodable"},

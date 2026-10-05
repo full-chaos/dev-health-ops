@@ -49,7 +49,7 @@ func (r ProofOrgRequest) validate() error {
 
 // AddProofOrg allowlists an org (upsert: re-adding an already-allowed org
 // refreshes added_by/reason/added_at rather than refusing -- the same
-// "state, not a one-shot event" shape go_api_routing_state itself has).
+// "state, not a one-shot event" shape).
 // The live row write and its audit row commit in ONE transaction: a rolled
 // back write must never leave an audit entry claiming it happened.
 func AddProofOrg(ctx context.Context, pool *pgxpool.Pool, req ProofOrgRequest) error {

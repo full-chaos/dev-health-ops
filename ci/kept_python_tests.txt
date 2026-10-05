@@ -47,10 +47,6 @@ tests/workers/test_helm_no_cronjobs.py
 tests/workers/test_helm_pinned_operator_image_helper.py
 tests/workers/test_helm_query_api_internal.py
 tests/workers/test_helm_route_activate_hooks.py
-tests/workers/test_helm_routing_carry_hooks_behavior.py
-tests/workers/test_helm_routing_carry_hooks.py
-tests/workers/test_helm_routing_carry_hooks_real_dho.py
-tests/workers/test_helm_routing_repoint_waits_for_rollout.py
 tests/workers/test_helm_worker_disruption_and_drain.py
 tests/workers/test_provider_artifact_skip_alert.py
 tests/workers/test_transitional_inventory_contract.py

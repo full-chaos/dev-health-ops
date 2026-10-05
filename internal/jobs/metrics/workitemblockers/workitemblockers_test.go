@@ -109,8 +109,8 @@ func TestTheOrganizationWideReadSendsNoList(t *testing.T) {
 		if len(relations) != count+1 || len(ends) != 2*count+1 {
 			t.Fatalf("%d relations: read %d relations and %d ends, want %d and %d", count, len(relations), len(ends), count+1, 2*count+1)
 		}
-		if len(store.statements) != 3 {
-			t.Fatalf("%d relations: %d statements, want 3 (relations, first seen, ends)", count, len(store.statements))
+		if len(store.statements) != 4 {
+			t.Fatalf("%d relations: %d statements, want 4 (relations, first seen, ends, read times)", count, len(store.statements))
 		}
 		for _, statement := range store.statements {
 			if lists := statement.lists(); len(lists) != 0 {
@@ -161,9 +161,9 @@ func TestTheKeyedReadsSendTheirIdsInChunksUnderTheCap(t *testing.T) {
 	if len(wantRelations) != count+1 || len(wantEnds) != 2*count+1 {
 		t.Fatalf("one chunk: %d relations and %d ends, want %d and %d", len(wantRelations), len(wantEnds), count+1, 2*count+1)
 	}
-	// relations, first seen, ends by id, ends by key.
-	if len(whole.statements) != 4 {
-		t.Fatalf("one chunk: %d statements, want 4", len(whole.statements))
+	// relations, first seen, ends by id, ends by key, read times by id.
+	if len(whole.statements) != 5 {
+		t.Fatalf("one chunk: %d statements, want 5", len(whole.statements))
 	}
 
 	const capBytes = 300
@@ -277,7 +277,7 @@ func TestARelationReadTwiceKeepsTheRowSyncedLast(t *testing.T) {
 	late := early.Add(48 * time.Hour)
 	relations := map[relationKey]workitemmetrics.BlockingRelation{}
 	rows := func(lastSynced time.Time, raw string) *memoryRows {
-		return &memoryRows{rows: [][]any{{"gh:a#1", "gh:a#2", "blocks", raw, workitemmetrics.CanonicalBlocksSemantics, lastSynced, nil}}}
+		return &memoryRows{rows: [][]any{{"gh:a#1", "gh:a#2", "blocks", raw, workitemmetrics.CanonicalBlocksSemantics, lastSynced, nil, nil}}}
 	}
 	for _, read := range []*memoryRows{rows(late, "late"), rows(early, "early"), rows(late, "late again")} {
 		if err := readRelations(context.Background(), queryFunc(func(string, []any) driver.Rows { return read }), "org", nil, 0, relations); err != nil {
@@ -300,19 +300,31 @@ func TestARelationReadTwiceKeepsTheRowSyncedLast(t *testing.T) {
 	if got := firstSeen[relationKey{"gh:a#1", "gh:a#2", "blocks"}]; !got.Equal(early) {
 		t.Fatalf("first seen = %s, want the earliest read %s", got, early)
 	}
+
+	// Read times (CHAOS-8578): of several reads of one item, the latest.
+	readTimes := map[string]time.Time{}
+	for _, at := range []time.Time{early, late, early} {
+		read := &memoryRows{rows: [][]any{{"gh:a#1", at}}}
+		if err := readRelationsRead(context.Background(), queryFunc(func(string, []any) driver.Rows { return read }), "q", nil, readTimes); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if got := readTimes["gh:a#1"]; len(readTimes) != 1 || !got.Equal(late) {
+		t.Fatalf("read times = %v, want the latest read %s", readTimes, late)
+	}
 }
 
 // A failed statement fails the read; it is never an empty answer.
 func TestAFailedStatementFailsTheRead(t *testing.T) {
 	ctx := context.Background()
-	for failAt := 0; failAt < 3; failAt++ {
+	for failAt := 0; failAt < 4; failAt++ {
 		store := newMemoryStore(3)
 		store.failAt = failAt + 1
 		if _, _, err := LoadBlockedIntervals(ctx, store, "org"); err == nil || !strings.Contains(err.Error(), "memory store: statement refused") {
 			t.Fatalf("organization-wide read, statement %d refused: %v", failAt+1, err)
 		}
 	}
-	for failAt := 0; failAt < 4; failAt++ {
+	for failAt := 0; failAt < 5; failAt++ {
 		store := newMemoryStore(3)
 		store.failAt = failAt + 1
 		relations, err := LoadRelationsNaming(ctx, store, "org", []string{"gh:acme/api#0", "gh:acme/api#1"}, 100)
@@ -457,9 +469,16 @@ func newMemoryStore(count int) *memoryStore {
 			SemanticsVersion: workitemmetrics.CanonicalBlocksSemantics, LastSynced: synced, FirstSeenAt: &seen,
 		})
 		for _, id := range []string{source, target} {
-			store.items = append(store.items, workitemmetrics.RelationEnd{
+			end := workitemmetrics.RelationEnd{
 				WorkItemID: id, Provider: "github", Status: "in_progress", CreatedAt: seen, LastSynced: synced,
-			})
+			}
+			if id == source {
+				// The api items' relations were last read before their
+				// latest sync (a board pass wrote them since).
+				read := synced.Add(-time.Hour)
+				end.RelationsReadAt = &read
+			}
+			store.items = append(store.items, end)
 		}
 	}
 	store.relations = append(store.relations,
@@ -523,6 +542,21 @@ func (store *memoryStore) Query(_ context.Context, query string, args ...any) (d
 	}
 	rows := &memoryRows{}
 	switch {
+	case strings.Contains(query, "FROM work_item_relations_read"):
+		var ids []string
+		if strings.Contains(query, "WITH relation_ends") {
+			ids, _ = endLookup(blocking(nil))
+		} else {
+			ids = lists[0]
+		}
+		idSet := setOf(ids)
+		items := append([]workitemmetrics.RelationEnd(nil), store.items...)
+		sort.Slice(items, func(left, right int) bool { return items[left].WorkItemID < items[right].WorkItemID })
+		for _, item := range items {
+			if idSet[item.WorkItemID] && item.RelationsReadAt != nil {
+				rows.rows = append(rows.rows, []any{item.WorkItemID, *item.RelationsReadAt})
+			}
+		}
 	case strings.Contains(query, "FROM work_item_dependency_first_seen"):
 		for _, relation := range blocking(naming) {
 			rows.rows = append(rows.rows, []any{relation.SourceID, relation.TargetID, relation.RelationshipType, *relation.FirstSeenAt})
@@ -548,9 +582,13 @@ func (store *memoryStore) Query(_ context.Context, query string, args ...any) (d
 		}
 	default:
 		for _, relation := range blocking(naming) {
+			var writer any
+			if relation.Writer != nil {
+				writer = *relation.Writer
+			}
 			rows.rows = append(rows.rows, []any{
 				relation.SourceID, relation.TargetID, relation.RelationshipType, relation.Raw,
-				relation.SemanticsVersion, relation.LastSynced, nil,
+				relation.SemanticsVersion, relation.LastSynced, nil, writer,
 			})
 		}
 	}
@@ -596,9 +634,95 @@ func (rows *memoryRows) Scan(dest ...any) error {
 			}
 			held := value.(time.Time)
 			*target = &held
+		case **string:
+			if value == nil {
+				*target = nil
+				continue
+			}
+			held := value.(string)
+			*target = &held
 		default:
 			return fmt.Errorf("memory rows: a destination of type %T", target)
 		}
 	}
 	return nil
+}
+
+// CHAOS-8578: each relation carries its stored writer, and each end its
+// stored read time, from both the organization-wide and the keyed reads. An
+// item with no read time stored reads as nil, never as a default time; the
+// read time is the maximum per item, taken in the statement.
+func TestEachEndCarriesItsStoredReadTimeAndEachRelationItsStoredWriter(t *testing.T) {
+	ctx := context.Background()
+	writer := workitemmetrics.RelationWriterSource
+	check := func(t *testing.T, store *memoryStore, relations []workitemmetrics.BlockingRelation, ends []workitemmetrics.RelationEnd) {
+		t.Helper()
+		writers := 0
+		for _, relation := range relations {
+			if relation.Writer != nil {
+				writers++
+				if *relation.Writer != writer || relation.SourceID != "gh:acme/api#0" || relation.TargetID != "gh:acme/web#0" {
+					t.Fatalf("relation %s -> %s carries the writer %q", relation.SourceID, relation.TargetID, *relation.Writer)
+				}
+			}
+		}
+		if writers != 1 {
+			t.Fatalf("%d relations carry a stored writer, want 1", writers)
+		}
+		read := time.Date(2026, 8, 25, 0, 0, 0, 0, time.UTC).Add(-time.Hour)
+		for _, end := range ends {
+			api := strings.HasPrefix(end.WorkItemID, "gh:acme/api#")
+			switch {
+			case api && (end.RelationsReadAt == nil || !end.RelationsReadAt.Equal(read)):
+				t.Fatalf("end %s: read time %v, want %v", end.WorkItemID, end.RelationsReadAt, read)
+			case !api && end.RelationsReadAt != nil:
+				t.Fatalf("end %s: read time %v, want none stored", end.WorkItemID, *end.RelationsReadAt)
+			}
+		}
+		statements := 0
+		for _, statement := range store.statements {
+			if !strings.Contains(statement.query, "FROM work_item_relations_read") {
+				continue
+			}
+			statements++
+			for _, part := range []string{"max(relations_read_at)", "GROUP BY work_item_id", "WHERE org_id = ?"} {
+				if !strings.Contains(statement.query, part) {
+					t.Fatalf("the read-time statement has no %q:\n%s", part, statement.query)
+				}
+			}
+			if !strings.Contains(statement.rendered(), "org_id = 'org'") {
+				t.Fatalf("the read-time statement is not bound to the organization:\n%s", statement.rendered())
+			}
+		}
+		if statements == 0 {
+			t.Fatal("no read-time statement")
+		}
+	}
+
+	t.Run("organization-wide", func(t *testing.T) {
+		store := newMemoryStore(3)
+		store.relations[0].Writer = &writer
+		relations, err := LoadRelations(ctx, store, "org")
+		if err != nil {
+			t.Fatal(err)
+		}
+		ends, err := LoadEnds(ctx, store, "org")
+		if err != nil {
+			t.Fatal(err)
+		}
+		check(t, store, relations, ends)
+	})
+	t.Run("keyed", func(t *testing.T) {
+		store := newMemoryStore(3)
+		store.relations[0].Writer = &writer
+		relations, err := LoadRelationsNaming(ctx, store, "org", []string{"gh:acme/api#0", "gh:acme/api#1", "gh:acme/api#2"}, 100)
+		if err != nil {
+			t.Fatal(err)
+		}
+		ends, err := LoadEndsLimited(ctx, store, "org", relations, 100)
+		if err != nil {
+			t.Fatal(err)
+		}
+		check(t, store, relations, ends)
+	})
 }

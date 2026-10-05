@@ -558,11 +558,24 @@ PROXY_OFF=(env -u ALL_PROXY -u HTTPS_PROXY -u HTTP_PROXY -u all_proxy -u https_p
 # class of bug: two agents with different ambient TMPDIR (a sandbox, a
 # session-scoped scratch dir, anyone who exports it) would silently acquire two
 # DIFFERENT lock names and both proceed, with no error and no diagnostic — the
-# worst possible failure shape for a mutex. /tmp is fixed and shared by every
-# process on the host regardless of its shell's TMPDIR. LOCK_DIR itself is still
+# worst possible failure shape for a mutex. The lock root below is fixed per host
+# regardless of any shell's TMPDIR. LOCK_DIR itself is still
 # explicitly overridable (tests need this to avoid colliding with a real gate) —
 # guarded below against the most catastrophic accidental values.
-LOCK_DIR="${LOCK_DIR:-/tmp/dev-health-ops-local-validate.${CH_CONTAINER}.lock}"
+#
+# Nothing on this host writes to /tmp (CHAOS-8760), and the lock root is STILL
+# TMPDIR-independent: DEV_HEALTH_LOCK_ROOT if set, else the fixed shared lane
+# scratch dir (DEV_HEALTH_LOCK_SHARED_DIR, default below) when it exists, else /tmp
+# on a host that has no such dir. Every session on a host resolves the same root.
+LOCK_SHARED_DIR="${DEV_HEALTH_LOCK_SHARED_DIR:-/var/lib/oci-cache/lane-scratch/tmp}"
+if [ -n "${DEV_HEALTH_LOCK_ROOT:-}" ]; then
+  LOCK_ROOT="${DEV_HEALTH_LOCK_ROOT}"
+elif [ -d "${LOCK_SHARED_DIR}" ]; then
+  LOCK_ROOT="${LOCK_SHARED_DIR}"
+else
+  LOCK_ROOT=/tmp
+fi
+LOCK_DIR="${LOCK_DIR:-${LOCK_ROOT}/dev-health-ops-local-validate.${CH_CONTAINER}.lock}"
 LOCK_WAIT_SECS="${LOCK_WAIT_SECS:-1800}"
 # Whole seconds only: acquire_lock's retry loop does `waited=$((waited +
 # LOCK_POLL_SECS))`, bash integer arithmetic — a fractional override (e.g.
@@ -1082,7 +1095,7 @@ ch_ensure_dho() {
     CH_PROBE_DETAIL="could not create a temp file for the dho build log"
     return 1
   }
-  if ! (cd "${ROOT}" && go build -o "${DHO}" ./cmd/dho) >"${build_log}" 2>&1; then
+  if ! (cd "${ROOT}" && go build -trimpath -o "${DHO}" ./cmd/dho) >"${build_log}" 2>&1; then
     CH_PROBE_DETAIL="go build -o ${DHO} ./cmd/dho FAILED: $(tr '\n' ' ' <"${build_log}" | cut -c1-400)"
     rm -f "${build_log}"
     return 1

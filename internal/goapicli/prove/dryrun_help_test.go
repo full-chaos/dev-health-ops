@@ -18,7 +18,7 @@ import (
 )
 
 // CHAOS-7440: the help text of -dry-run said "execute and compare, but write NO receipts" while the run opens no
-// database, reads no routing row, refuses every operation and measures nothing. This test runs -dry-run end to
+// database, refuses every operation and measures nothing. This test runs -dry-run end to
 // end and pins what it does (no pool is opened, no operation request reaches the edge, nothing executed, no
 // receipt written, the run ends in ErrNothingMeasured), then pins that the help text says exactly that and does
 // not claim execution or comparison.

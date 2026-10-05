@@ -276,7 +276,7 @@ Every check below fails loud with a named finding; none can pass on an empty or 
   operation that has no routing row, so there is no row to enable and no ledger to compare with
   prod. The cut has no such STEP (it had `routing-enable` / `routing-parity`), and
   `bigboy-graphql-prove.sh` has no parity step. `routing-ops.txt` stays: the web-path smoke reads
-  its `KNOWN-MISSING` markers, and prove step 4 enables each of them.
+  its `KNOWN-MISSING` markers.
 - **Web-path smoke, real browser session** (`dho smoke web-path`, Go, run from the dho image the stack pins): logs in through Auth.js
   (csrf + Credentials callback) with the PUBLIC Host header on traefik, so every call takes the
   browser's path through `web`'s proxy.ts. Checks: unauthenticated public-host request lands on web
@@ -310,36 +310,18 @@ and the prover refuses by name if a Python plane answers the routed `/graphql`. 
 
 1. refuse unless `venue-prove`'s image is `go-api-tools:sha-<sha>` (prover build skew);
 2. derive the local org read-only (the single org of the local admin account; never printed);
-3. `dho goapi routing repoint` every row to the running build (provenance only; prove refuses stale rows);
-4. `dho goapi prove` for the local org -- read-only against org data, writes proof receipts only;
+3. `dho goapi prove` for the local org -- read-only against org data, writes proof receipts only;
    both credentials are minted in process (envelope key loaded from the mounted file inside the
    container; `JWT_SECRET_KEY` by compose substitution from `ops/.env`);
-5. `dho goapi routing enable` for each `KNOWN-MISSING` op in `routing-ops.txt`.
 
 Full output names the org and stays under the devhealth-root `_records/bigboy-<sha8>/graphql-prove-<ts>/`.
 `BIGBOY_ROOT` (default `/home/ubuntu/devhealth`) is the running tree the harness works in, the same
 parameter `bigboy-cut.sh` reads.
 
-First live run (4f014a9d): repoint 49 rows (47 changed), prove attempted=250 executed=183
-PROVEN_GO_ONLY=178. **testopsRisk is still not provable here**: it has no routing row, so prove
-refuses it (`operation_not_routed_to_go`). An unrouted op can only be proven as a `shadow` row through
-query-api's measurement route `POST /query/proof`, which query-api registers only when BOTH are set:
-
-- `DEV_HEALTH_ENV` = a declared non-production posture (e.g. `bigboy`; never `prod`/`production`)
-- `GO_API_PROOF_ROUTE_ENABLED=true`
-
-Bigboy's query-api sets neither (same posture as prod). The remaining sequence is an **operator
-step**, one sitting, and this lane's permission classifier denied it (not attempted):
-
-1. set both names on query-api, recreate query-api only; probe that `/query/proof` is not reachable
-   through the public host (it must land on web) nor through `Host: traefik`;
-2. `dho goapi routing disable -operations testopsRisk -mode shadow -apply ...`, then repoint;
-3. `dho goapi prove ... -proof-url http://query-api:8090/query/proof`;
-4. `dho goapi routing enable -operations testopsRisk -mode canary ...`;
-5. remove both names, recreate query-api, check with `container-env-names.sh` that both are gone,
-   re-run the 12-path plane readback, and remove the `KNOWN-MISSING` marker from `routing-ops.txt`.
-
-If a step fails, revert step 1 first. No named limit in `goserved_ledger.json` is used for testopsRisk.
+First live run (4f014a9d, before CHAOS-8702): prove attempted=250 executed=183 PROVEN_GO_ONLY=178. Since CHAOS-8702 there is no
+routing row to read or repoint for a catalog operation: query-api serves every registered operation, and the prover measures each
+one through the routed `/graphql` against the running build. A catalog operation that was once unprovable here for want of a
+routing row (testopsRisk) is measured like any other; the old `shadow` / `/query/proof` procedure for it is gone with the rows.
 
 ## Pinned deploy values (R467)
 

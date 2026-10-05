@@ -1,9 +1,9 @@
 {
   "header": {
     "test": "TestBuildHeadsAreTheOldScriptsHeads",
-    "python_build": "a4847c5e93607451a0c987b314d37e02fc43ce85",
-    "producer_digest": "6e1dc97e68624398015f60caee160cceee6ae601bd434d01b8b7d5975267e137",
-    "recipe": "git worktree add --detach $DIR a4847c5e93607451a0c987b314d37e02fc43ce85 (with its .venv: uv sync --frozen --no-install-project); then from the repository root: go run ./internal/testsupport/venueoracle/goldenrecord -pkg ./internal/pgmigrate/ -test '^TestBuildHeadsAreTheOldScriptsHeads$' -python-root $DIR",
+    "python_build": "7eff91a89925ddcaa12ffa3c9d66ad095b349111",
+    "producer_digest": "98d53b9e548c3e54815c9656d01b61df9960e3233c2312e18fe5c74f72787175",
+    "recipe": "git worktree add --detach $DIR 7eff91a89925ddcaa12ffa3c9d66ad095b349111 (with its .venv: uv sync --frozen --no-install-project); then from the repository root: go run ./internal/testsupport/venueoracle/goldenrecord -pkg ./internal/pgmigrate/ -test '^TestBuildHeadsAreTheOldScriptsHeads$' -python-root $DIR",
     "recorded_by": "goldenrecord",
     "blanked": {}
   },
@@ -16,7 +16,7 @@
       "request_headers_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
       "status": 0,
       "headers": {},
-      "body": "0066 0145\n"
+      "body": "0066 0146\n"
     }
   ]
 }

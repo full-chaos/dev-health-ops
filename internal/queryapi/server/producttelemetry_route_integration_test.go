@@ -32,8 +32,6 @@ func TestProductTelemetryRoute_GatesThroughTheSignedEnvelope(t *testing.T) {
 		t.Fatal(err)
 	}
 	handler, _, _, _, _ := newQueryHandler(emptyCHClient{}, pool, verifier, itTestSchemaDigest, os.Getenv)
-	setRoutingMode(t, pool, digestHex(registeredProductTelemetryPlatformDashboardDocument), "productTelemetryPlatformDashboard", "canary")
-	setRoutingMode(t, pool, digestHex(registeredProductTelemetryDashboardDocument), "productTelemetryDashboard", "canary")
 
 	input := map[string]any{"startDate": "2026-01-01", "endDate": "2026-01-08"}
 	platform := func(bearer string) (int, string) {

@@ -90,40 +90,13 @@ func TestEnableLimitReasonDecisionTable(t *testing.T) {
 	}
 }
 
-func TestNamedLimitEvidenceRoundTrips(t *testing.T) {
+func TestNamedLimitEvidenceCarriesTheReasonDigestAndTheOperatorsWords(t *testing.T) {
 	evidence := NamedLimitEvidence("reason", "the operator's words")
-	if !HasNamedLimitEvidence(evidence) {
-		t.Fatalf("%q is not recognised as named-limit evidence", evidence)
+	if !strings.HasPrefix(evidence, NamedLimitEvidencePrefix+NamedLimitDigest("reason")+" ") {
+		t.Fatalf("evidence %q does not open with the prefix and the reason digest", evidence)
 	}
-	if !strings.HasSuffix(evidence, " the operator's words") || !strings.Contains(evidence, NamedLimitDigest("reason")) {
-		t.Fatalf("evidence %q lost the operator's words or the reason digest", evidence)
-	}
-	for name, text := range map[string]string{
-		"empty":            "",
-		"plain":            "the operator's words",
-		"short digest":     "NAMED-LIMIT:abc the operator's words",
-		"upper digest":     "NAMED-LIMIT:" + strings.ToUpper(NamedLimitDigest("reason")) + " x",
-		"prefix not first": "x " + evidence,
-		"legacy waiver":    "ACKNOWLEDGED-UNPROVEN: the operator's words",
-	} {
-		if HasNamedLimitEvidence(text) {
-			t.Errorf("%s: %q was read as named-limit evidence", name, text)
-		}
-	}
-}
-
-// Rows the retired venue path wrote keep their own word in status.
-func TestLegacyVenueEvidenceIsStillRead(t *testing.T) {
-	digest := strings.Repeat("d", 64)
-	for name, tc := range map[string]struct{ evidence, want string }{
-		"admin":   {"VENUE-PROOF:" + digest + " why", VenueClassAdmin},
-		"no data": {"NO-PROD-DATA:" + digest + " VENUE-PROOF:" + digest + " why", VenueClassNoData},
-		"waiver":  {"ACKNOWLEDGED-UNPROVEN: why", ""},
-		"named":   {NamedLimitEvidence("r", "why"), ""},
-	} {
-		if got := LegacyVenueEvidenceClass(tc.evidence); got != tc.want {
-			t.Errorf("%s: class %q, want %q", name, got, tc.want)
-		}
+	if !strings.HasSuffix(evidence, " the operator's words") {
+		t.Fatalf("evidence %q lost the operator's words", evidence)
 	}
 }
 

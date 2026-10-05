@@ -2,8 +2,8 @@
 # Source: the prod routing readback of 2026-10-01T07:53:40Z (`dho goapi routing status -json` from the
 # tools pod, helm revision 209, ops 187024533): 58 rows, all canary, rollout 100, owner go, reachable.
 # Every registered operation is enabled on prod, the five saved-report mutations included.
-# Readers: `dho smoke web-path` (the KNOWN-MISSING markers) and bigboy-graphql-prove.sh (step 4 enables
-# each KNOWN-MISSING operation). bigboy-cut.sh does not read it (CHAOS-8543).
+# Reader: `dho smoke web-path` (the KNOWN-MISSING markers). bigboy-cut.sh does not read it (CHAOS-8543), and
+# bigboy-graphql-prove.sh no longer enables from it (CHAOS-8704).
 # KNOWN-MISSING = enabled on prod, cannot be enabled on bigboy yet; reported, never passed silently.
 acrRepositoryScopes
 aiAttributedPrs
@@ -54,7 +54,7 @@ securityOverview
 testOpsCoverage
 testOpsPipeline
 testOpsTest
-testopsRisk KNOWN-MISSING CHAOS-6993 enable refused by the proof gate: no bigboy go-api-prove run (prod's proof does not count)
+testopsRisk
 throughputForecast
 triggerReport
 updateSavedReport

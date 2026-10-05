@@ -1,11 +1,12 @@
-# gwc-venue-bigboy (2026-09-20, chris: "just go ahead and deploy bigboy images"); re-pinned 2026-09-24 by prod-ops
-# (R427 pre-prod venue, D2288) to ops main a97b97ed (CHAOS-6512+6259 group; previous overlay kept as .bak-1152962c): bigboy runs PROD's build
-# (was rev 156, ops 3689edec) so a venue receipt admits at the same build production runs.
+# gwc-venue-bigboy (2026-09-20, chris: "just go ahead and deploy bigboy images"). The ops image digests below are
+# re-pinned at every bigboy cut (bigboy-repin.sh, or a roll sheet that copies this file); the digests in this tracked
+# copy are the last ones a PR recorded, not the build bigboy runs now. The host copy (compose/compose.bigboy.images.yml)
+# is the running pin.
 # Self-contained: also carries compose.bigboy.overrides.yml content (query-api x2 + ports) so the
 # recreate does not drop the running project's overrides.
 # CHAOS-8361: the stack is Go-only. No service here runs the Python api image: the `api` service of the base
-# compose.yml is in a profile nothing enables, `migrate` runs the dho image, the smoke runner
-# (compose.bigboy.smoke.yml) runs a plain Python base image, and venue-prove is on the stack's networks itself.
+# compose.yml is in a profile nothing enables, `migrate` runs the dho image, the smoke runner (`web-smoke` below,
+# CHAOS-8647) runs `dho smoke web-path` from the dho image, and venue-prove is on the stack's networks itself.
 services:
   # CHAOS-8361: the Python api is retired on bigboy, as in prod. The base compose.yml (a host file) still
   # declares the service, so it moves to a profile nothing enables: `up` never starts it and `ps` never lists
@@ -148,6 +149,11 @@ services:
   migrate:
     image: ghcr.io/full-chaos/dev-health-go-dho@sha256:970d2b765aac5da23e1ec58482663e51ac1ab5a78fc024d3d81feabfb0e14d44
     build: !reset null
+    # CHAOS-8744: the chart's migrations.hook.classDecisionLiveSchemaDigest, passed through from the invoking environment
+    # (empty by default). This overlay is in the cut's chain (bigboy-cut.sh COMPOSE_FILE), so the base file's entry is
+    # restated here: the bigboy base compose.yml is a host file, not this repo's.
+    environment:
+      DHO_CLASS_DECISION_LIVE_SCHEMA_DIGEST: ${DHO_CLASS_DECISION_LIVE_SCHEMA_DIGEST:-}
   # CHAOS-8647: the web-path smoke runs `dho smoke web-path` from the dho image, the same digest as query-api and
   # migrate. compose.bigboy.smoke.yml (the smoke's own chain) holds the rest of the service.
   web-smoke:

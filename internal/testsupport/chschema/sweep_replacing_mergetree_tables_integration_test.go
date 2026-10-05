@@ -184,8 +184,16 @@ func sweepReplacingMergeTreeTables(t *testing.T) []replacingMergeTreeTable {
 // failing run's printed list was the prior 94 plus exactly those 19 names.
 // 113 -> 114: 098_provider_request_usage.sql adds `provider_request_usage`
 // (version recorded_at), keyed on the full per-flush row identity.
+// 114 -> 115: 103_work_item_relation_writer_and_read.sql adds
+// `work_item_relations_read` (version relations_read_at), keyed on
+// (org_id, work_item_id) -- CHAOS-8578. Recounted from the failing hosted
+// run's printed list: the prior 114 plus exactly this name.
+// 115 -> 116: 104_work_item_blocked_durations.sql adds
+// `work_item_blocked_durations_daily` (version computed_at), keyed on
+// (org_id, day, provider, work_item_id) -- CHAOS-8489. Recounted from the
+// failing hosted run's printed list: the prior 115 plus exactly this name.
 func TestSweepReplacingMergeTreeTablesMatchesTheAuthoritativeCount(t *testing.T) {
-	const wantCount = 114
+	const wantCount = 116
 
 	tables := sweepReplacingMergeTreeTables(t)
 	if len(tables) != wantCount {

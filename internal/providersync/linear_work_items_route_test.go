@@ -605,3 +605,18 @@ func TestLinearWorkItemClosedAtPrefersCompletedAt(t *testing.T) {
 		t.Fatalf("closed_at=%v", row.ClosedAt)
 	}
 }
+
+func TestLinearAttachmentWorkItemIDStripsConfiguredURLRoot(t *testing.T) {
+	t.Setenv("LINEAR_TRUSTED_SCM_HOSTS", "git.internal.example.com/gitlab")
+	cases := map[string]struct{ url, want string }{
+		"relative root stripped":       {"https://git.internal.example.com/gitlab/group/subgroup/project/-/merge_requests/9", "gitlab:group/subgroup/project!9"},
+		"outside the root is rejected": {"https://git.internal.example.com/group/project/-/merge_requests/9", ""},
+		"default host untouched":       {"https://gitlab.com/acme/api/-/merge_requests/9", "gitlab:acme/api!9"},
+	}
+	for name, c := range cases {
+		got := linearAttachmentWorkItemID(linearAttachmentPayload{SourceType: "gitlab", URL: c.url})
+		if got != c.want {
+			t.Errorf("%s: %q want %q", name, got, c.want)
+		}
+	}
+}

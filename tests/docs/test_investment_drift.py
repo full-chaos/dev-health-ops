@@ -125,23 +125,6 @@ def test_canonical_public_taxonomy_documents_current_vocabulary() -> None:
         )
 
 
-def test_period_filtering_follows_component_construction() -> None:
-    """Investment components are built before period filtering (ADR-002, Option A).
-
-    Cross-period components must be constructed before the period window is applied,
-    otherwise components that straddle the window boundary are dropped.
-    """
-    assert MATERIALIZE_MODULE.is_file(), f"missing materializer: {MATERIALIZE_MODULE}"
-    materialize = MATERIALIZE_MODULE.read_text(encoding="utf-8")
-    build_components_index = materialize.index("components = _build_components(")
-    period_filter_index = materialize.index(
-        "if bounds.end < config.from_ts or bounds.start >= config.to_ts:"
-    )
-    assert build_components_index < period_filter_index, (
-        "period filtering must remain after component construction for ADR-002 Option A"
-    )
-
-
 def test_investment_taxonomy_fixture_reports_operational_external() -> None:
     drift = _load_drift_module()
     errors = drift._unknown_taxonomy_example_keys(

@@ -141,4 +141,3 @@ func TestRepointRacingEnableWaitsForItsRowAndRepointsIt(t *testing.T) {
 		t.Fatalf("row = mode %q build %q (err %v), want canary at %s", mode, build, err, repointRunningBuild)
 	}
 }
-

@@ -108,4 +108,3 @@ func TestEveryCatalogPathNamedByScriptsAndChartAgreesWithTheDefault(t *testing.T
 		t.Fatal("found no catalog path in any script or chart template: the scan matched nothing, so it measured nothing")
 	}
 }
-

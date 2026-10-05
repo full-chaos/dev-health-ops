@@ -4,10 +4,10 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+	"strings"
 	"time"
 
 	"github.com/ClickHouse/clickhouse-go/v2/lib/driver"
-	"github.com/jackc/pgx/v5"
 )
 
 // CHAOS-8710: the ClickHouse record of the daily metrics run state.
@@ -19,10 +19,43 @@ import (
 // that only has ClickHouse can learn that a day's run succeeded.
 //
 // Reader rule (the same text sits in the migration and the metrics docs):
-// per (org_id, target_day) take argMax(state, version) over all generations.
-// 'succeeded' certifies the day. No row or 'reopened' means unknown, never
-// zero. Writers err toward unknown: a failed 'succeeded' append leaves the day
-// unknown, and a failed 'reopened' append refuses the reopen.
+// per (org_id, target_day) take the row with the greatest version over all
+// generations, 'reopened' winning a tie. 'succeeded' certifies the day. No row
+// or 'reopened' means unknown, never zero. Writers err toward unknown: a failed
+// 'succeeded' append leaves the day unknown, and a failed 'reopened' append
+// refuses the reopen (or the dispatch claim).
+//
+// Two rules keep a marker true:
+//
+//   - Only a full-org run writes markers (isFullOrgGeneration). A run started
+//     with an explicit repository list computes only those repositories, so it
+//     must never certify the org-day.
+//   - One clock. Every version is a Postgres clock reading taken in the
+//     transaction that changes the run state (finalized_at at completion, the
+//     reset statement at a reopen, the claim statement at dispatch), never the
+//     writing host's clock. The backfill replays the stored state's version.
+
+// redriveFullGenerationPrefix is the generation prefix finalize-redrive gives a
+// full-org run it resets, so the classification survives the redrive.
+const redriveFullGenerationPrefix = "redrive-full:"
+
+// pgClockMillis is the RETURNING expression that reads the Postgres clock in
+// milliseconds since the epoch.
+const pgClockMillis = `(extract(epoch from clock_timestamp()) * 1000)::bigint`
+
+// isFullOrgGeneration reports whether a run of this generation computes the
+// whole organization: the scheduled fan-out and the post-sync run both
+// discover the repository set live (RepositoryDiscoveryRequired), and a
+// finalize-redriven full-org run keeps its class in redriveFullGenerationPrefix.
+// Manual and external-recompute runs can carry an explicit repository list and
+// are never treated as full-org.
+func isFullOrgGeneration(generation string) bool {
+	if strings.HasPrefix(generation, redriveFullGenerationPrefix) && len(generation) <= 64 {
+		return true
+	}
+	base := baseGeneration(generation)
+	return isScheduledFanoutGeneration(base) || isPostSyncGeneration(base)
+}
 
 // RunMarkerState is the state an appended marker row records.
 type RunMarkerState string
@@ -52,10 +85,16 @@ type RunMarkerWriter interface {
 	AppendRunMarker(context.Context, RunMarker) error
 }
 
-// RunMarkerReader reads the current marker state of every day in a range for
-// one organization. A day with no marker row is absent from the result.
+// RunMarkerObservation is the winning row of one org-day.
+type RunMarkerObservation struct {
+	State   RunMarkerState
+	Version uint64
+}
+
+// RunMarkerReader reads the current marker of every day in a range for one
+// organization. A day with no marker row is absent from the result.
 type RunMarkerReader interface {
-	RunMarkerStates(ctx context.Context, organizationID string, from, to time.Time) (map[string]RunMarkerState, error)
+	RunMarkerStates(ctx context.Context, organizationID string, from, to time.Time) (map[string]RunMarkerObservation, error)
 }
 
 // RunMarkerObserver counts marker appends. Nil is a silent no-op.
@@ -102,16 +141,18 @@ func (store *ClickHouseRunMarkerStore) AppendRunMarker(ctx context.Context, mark
 	return nil
 }
 
-// RunMarkerStatesSQL is the documented reader: the latest state per org-day.
+// RunMarkerStatesSQL is the documented reader: the winning row per org-day.
+// The greatest version wins and 'reopened' wins a tie, so two events in the
+// same millisecond never read as succeeded.
 const RunMarkerStatesSQL = `
-SELECT toString(target_day), argMax(state, version)
+SELECT toString(target_day), argMax(state, (version, state = 'reopened')), max(version)
 FROM daily_metrics_run_marker
 WHERE org_id = ? AND target_day BETWEEN ? AND ?
 GROUP BY org_id, target_day`
 
 func (store *ClickHouseRunMarkerStore) RunMarkerStates(
 	ctx context.Context, organizationID string, from, to time.Time,
-) (map[string]RunMarkerState, error) {
+) (map[string]RunMarkerObservation, error) {
 	if store == nil || store.conn == nil || !validUUID(organizationID) {
 		return nil, ErrInvalidState
 	}
@@ -120,13 +161,14 @@ func (store *ClickHouseRunMarkerStore) RunMarkerStates(
 		return nil, fmt.Errorf("read daily_metrics_run_marker: %w", err)
 	}
 	defer rows.Close()
-	states := make(map[string]RunMarkerState)
+	states := make(map[string]RunMarkerObservation)
 	for rows.Next() {
 		var day, state string
-		if err := rows.Scan(&day, &state); err != nil {
+		var version uint64
+		if err := rows.Scan(&day, &state, &version); err != nil {
 			return nil, fmt.Errorf("scan daily_metrics_run_marker: %w", err)
 		}
-		states[day] = RunMarkerState(state)
+		states[day] = RunMarkerObservation{State: RunMarkerState(state), Version: version}
 	}
 	if err := rows.Err(); err != nil {
 		return nil, fmt.Errorf("read daily_metrics_run_marker: %w", err)
@@ -156,22 +198,23 @@ func (store *PostgresStore) SetRunMarkerObserver(observer RunMarkerObserver) {
 	store.markerObserver = observer
 }
 
-func (store *PostgresStore) appendMarker(ctx context.Context, orgID, day, generation string, state RunMarkerState) error {
+func (store *PostgresStore) appendMarker(
+	ctx context.Context, orgID, day, generation string, state RunMarkerState, versionMs int64,
+) error {
 	if store.markerWriter == nil {
 		return nil
 	}
 	targetDay, err := time.Parse(dailyTargetDayLayout, day)
-	if err != nil {
+	if err != nil || versionMs < 0 {
 		return ErrInvalidState
 	}
-	now := store.now().UTC()
-	// The write happens after a Postgres commit, so a cancelled request
-	// context must not be what loses it.
+	// The write happens after a Postgres commit on some paths, so a cancelled
+	// request context must not be what loses it.
 	writeCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 10*time.Second)
 	defer cancel()
 	err = store.markerWriter.AppendRunMarker(writeCtx, RunMarker{
 		OrganizationID: orgID, TargetDay: targetDay, Generation: generation,
-		State: state, FinalizedAt: now, Version: markerVersion(now),
+		State: state, FinalizedAt: time.UnixMilli(versionMs).UTC(), Version: uint64(versionMs),
 	})
 	outcome := "ok"
 	if err != nil {
@@ -186,28 +229,46 @@ func (store *PostgresStore) appendMarker(ctx context.Context, orgID, day, genera
 	return err
 }
 
-func markerVersion(now time.Time) uint64 {
-	millis := now.UnixMilli()
-	if millis < 0 {
-		return 0
+// markSucceeded appends 'succeeded' after CompleteFinalize committed, with the
+// Postgres finalized_at the same transaction stored as its version. Only a
+// full-org run certifies its day. It never fails the run: on error the day
+// stays unknown (logged and counted) and the backfill restores it.
+func (store *PostgresStore) markSucceeded(ctx context.Context, run Run, finalizedAtMs int64) {
+	if !isFullOrgGeneration(run.Generation) {
+		return
 	}
-	return uint64(millis)
-}
-
-// markSucceeded appends 'succeeded' after CompleteFinalize committed. It never
-// fails the run: on error the day stays unknown (logged and counted) and the
-// backfill restores it.
-func (store *PostgresStore) markSucceeded(ctx context.Context, run Run) {
 	_ = store.appendMarker(ctx, run.OrganizationID, run.TargetDay.UTC().Format(dailyTargetDayLayout),
-		run.Generation, RunMarkerSucceeded)
+		run.Generation, RunMarkerSucceeded, finalizedAtMs)
 }
 
-// markReopened appends 'reopened' BEFORE a reopen commits, so a failed append
-// refuses the reopen (the caller returns ErrUnavailable and rolls back). The
-// reverse failure, a committed marker with a reopen that then fails to commit,
-// only hides a succeeded day until the next backfill.
-func (store *PostgresStore) markReopened(ctx context.Context, orgID, day, generation string) error {
-	if err := store.appendMarker(ctx, orgID, day, generation, RunMarkerReopened); err != nil {
+// markReopened appends 'reopened' inside the reopen transaction, after the
+// reset statement and before the commit, so a failed append refuses the reopen
+// (the caller returns the error and the transaction rolls back). The reverse
+// failure, a written marker with a reopen that then fails to commit, only hides
+// a succeeded day until the backfill heals it. A partial-scope run never wrote
+// 'succeeded', so reopening it writes nothing.
+func (store *PostgresStore) markReopened(ctx context.Context, orgID, day, priorGeneration string, versionMs int64) error {
+	if !isFullOrgGeneration(priorGeneration) {
+		return nil
+	}
+	if err := store.appendMarker(ctx, orgID, day, priorGeneration, RunMarkerReopened, versionMs); err != nil {
+		return ErrUnavailable
+	}
+	return nil
+}
+
+// markInFlight appends 'reopened' when a full-org run is claimed for dispatch:
+// while a new generation computes the day it is not certified, even if an
+// earlier generation succeeded. The version is the Postgres clock of the claim
+// statement. A failed append fails the claim (the job retries), because
+// dispatch already needs ClickHouse for repository discovery and a stale
+// 'succeeded' would be a false success.
+func (store *PostgresStore) markInFlight(ctx context.Context, run Run, claimedAtMs int64) error {
+	if !isFullOrgGeneration(run.Generation) {
+		return nil
+	}
+	if err := store.appendMarker(ctx, run.OrganizationID, run.TargetDay.UTC().Format(dailyTargetDayLayout),
+		run.Generation, RunMarkerReopened, claimedAtMs); err != nil {
 		return ErrUnavailable
 	}
 	return nil
@@ -223,13 +284,19 @@ type RunMarkerBackfillOutcome struct {
 }
 
 // BackfillRunMarkers makes ClickHouse agree with Postgres for every org-day in
-// [from, to] that has a run. For each day the latest run by created_at decides:
-// status and finalization_status both 'succeeded' means 'succeeded', anything
-// else means 'reopened' (not certified). A row is appended only when the
-// current ClickHouse state differs, so a second pass appends nothing. A day
-// with no run gets no row. no_repositories runs are not marked: the contract
-// is status 'succeeded', and an org with no repositories has no repository
-// rows to explain.
+// [from, to] that has a full-org run. Per day the latest FULL-ORG run by
+// created_at decides (a partial-scope run is ignored): status and
+// finalization_status both 'succeeded' means 'succeeded', anything else means
+// 'reopened'. A row is appended only when the current ClickHouse state
+// differs, so a second pass appends nothing. A day with no full-org run gets no
+// row. no_repositories runs are not marked.
+//
+// Versions. ClickHouse is read FIRST and Postgres second, and a 'succeeded'
+// replay carries the run's stored finalized_at (the Postgres clock), raised to
+// one above the version it observed. A later live reopen therefore outranks
+// the replay, and a replay of one state twice is the same row. A 'reopened'
+// replay carries one above the observed version, so it outranks exactly the
+// row it saw and never a newer one.
 func (store *PostgresStore) BackfillRunMarkers(
 	ctx context.Context, reader RunMarkerReader, orgID string, from, to time.Time, dryRun bool,
 ) (RunMarkerBackfillOutcome, error) {
@@ -239,9 +306,17 @@ func (store *PostgresStore) BackfillRunMarkers(
 	}
 	from = from.UTC().Truncate(24 * time.Hour)
 	to = to.UTC().Truncate(24 * time.Hour)
+	current, err := reader.RunMarkerStates(ctx, orgID, from, to)
+	if err != nil {
+		return outcome, ErrUnavailable
+	}
+	if store.backfillHook != nil {
+		store.backfillHook("marker_read")
+	}
 	rows, err := store.pool.Query(ctx, `
-SELECT DISTINCT ON (run.target_day) run.target_day::text, run.generation,
-       (run.status = 'succeeded' AND run.finalization_status = 'succeeded')
+SELECT run.target_day::text, run.generation,
+       (run.status = 'succeeded' AND run.finalization_status = 'succeeded'),
+       (extract(epoch from COALESCE(run.finalized_at, run.updated_at)) * 1000)::bigint
 FROM public.daily_metrics_runs AS run
 WHERE run.org_id = $1::uuid AND run.target_day BETWEEN $2::date AND $3::date
 ORDER BY run.target_day, run.created_at DESC, run.id`, orgID, from, to)
@@ -251,25 +326,29 @@ ORDER BY run.target_day, run.created_at DESC, run.id`, orgID, from, to)
 	type dayState struct {
 		generation string
 		succeeded  bool
+		storedMs   int64
 	}
 	days := map[string]dayState{}
 	for rows.Next() {
 		var day, generation string
 		var succeeded bool
-		if err := rows.Scan(&day, &generation, &succeeded); err != nil {
+		var storedMs int64
+		if err := rows.Scan(&day, &generation, &succeeded, &storedMs); err != nil {
 			rows.Close()
 			return outcome, ErrUnavailable
 		}
-		days[day] = dayState{generation: generation, succeeded: succeeded}
+		if _, seen := days[day]; seen || !isFullOrgGeneration(generation) {
+			continue
+		}
+		days[day] = dayState{generation: generation, succeeded: succeeded, storedMs: storedMs}
 	}
 	rowsErr := rows.Err()
 	rows.Close()
-	if rowsErr != nil && rowsErr != pgx.ErrNoRows {
+	if rowsErr != nil {
 		return outcome, ErrUnavailable
 	}
-	current, err := reader.RunMarkerStates(ctx, orgID, from, to)
-	if err != nil {
-		return outcome, ErrUnavailable
+	if store.backfillHook != nil {
+		store.backfillHook("postgres_read")
 	}
 	for day := from; !day.After(to); day = day.AddDate(0, 0, 1) {
 		key := day.Format(dailyTargetDayLayout)
@@ -285,15 +364,21 @@ ORDER BY run.target_day, run.created_at DESC, run.id`, orgID, from, to)
 		have, hasRow := current[key]
 		// A day with no marker row and a run that is not succeeded is already
 		// unknown: appending 'reopened' would add nothing.
-		if (hasRow && have == desired) || (!hasRow && desired == RunMarkerReopened) {
+		if (hasRow && have.State == desired) || (!hasRow && desired == RunMarkerReopened) {
 			outcome.Unchanged++
 			continue
+		}
+		version := want.storedMs
+		if desired == RunMarkerReopened {
+			version = int64(have.Version) + 1
+		} else if hasRow && int64(have.Version)+1 > version {
+			version = int64(have.Version) + 1
 		}
 		if dryRun {
 			outcome.Appended++
 			continue
 		}
-		if err := store.appendMarker(ctx, orgID, key, want.generation, desired); err != nil {
+		if err := store.appendMarker(ctx, orgID, key, want.generation, desired, version); err != nil {
 			return outcome, ErrUnavailable
 		}
 		outcome.Appended++

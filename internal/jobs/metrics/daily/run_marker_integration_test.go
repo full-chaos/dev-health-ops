@@ -72,6 +72,7 @@ type markerStack struct {
 	reader    *ClickHouseRunMarkerStore
 	observer  *countingMarkerObserver
 	rawCount  func(orgID string) int
+	rawExec   func(statement string) error
 }
 
 func newMarkerStack(t *testing.T) *markerStack {
@@ -120,6 +121,7 @@ func newMarkerStack(t *testing.T) *markerStack {
 		tick++
 		return base.Add(time.Duration(tick) * time.Second)
 	}
+	stack.rawExec = func(statement string) error { return conn.Exec(context.Background(), statement) }
 	stack.rawCount = func(orgID string) int {
 		var count uint64
 		if err := conn.QueryRow(context.Background(), `SELECT count() FROM daily_metrics_run_marker WHERE org_id = ?`, orgID).Scan(&count); err != nil {
@@ -132,9 +134,13 @@ func newMarkerStack(t *testing.T) *markerStack {
 
 func (stack *markerStack) states(t *testing.T, orgID string, from, to time.Time) map[string]RunMarkerState {
 	t.Helper()
-	states, err := stack.reader.RunMarkerStates(context.Background(), orgID, from, to)
+	observed, err := stack.reader.RunMarkerStates(context.Background(), orgID, from, to)
 	if err != nil {
 		t.Fatal(err)
+	}
+	states := make(map[string]RunMarkerState, len(observed))
+	for day, observation := range observed {
+		states[day] = observation.State
 	}
 	return states
 }
@@ -356,5 +362,256 @@ func TestRunMarkerPartitionRecomputeReopensAndIsRefusedWhenTheMarkerFails(t *tes
 	}
 	if got := stack.states(t, markerOrgA, markerDay(1), markerDay(1))["2026-09-01"]; got != RunMarkerReopened {
 		t.Fatalf("state after recompute = %q, want reopened", got)
+	}
+}
+
+// startFullOrgRun creates a deferred-discovery run (no repository list), the
+// shape of the post-sync run, and returns its id.
+func (stack *markerStack) startRun(t *testing.T, orgID string, day time.Time, generation string, repos []RepositoryID) string {
+	t.Helper()
+	ctx := context.Background()
+	tx, err := stack.pool.Begin(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	run, err := stack.store.StartRunTx(ctx, tx, StartRunRequest{
+		OrganizationID: orgID, TargetDay: day, Generation: generation, RepositoryIDs: repos,
+	}, stack.publisher)
+	if err != nil {
+		_ = tx.Rollback(ctx)
+		t.Fatal(err)
+	}
+	if err := tx.Commit(ctx); err != nil {
+		t.Fatal(err)
+	}
+	return run.ID
+}
+
+// F1 (vet 2): a run started with an explicit repository list computes only
+// those repositories. It must never certify the org-day, live or by backfill.
+func TestRunMarkerPartialScopeRunNeverCertifiesTheDay(t *testing.T) {
+	stack := newMarkerStack(t)
+	ctx := context.Background()
+	runID := stack.startRun(t, markerOrgA, markerDay(1),
+		"ext-recompute:00000000-0000-4000-8000-0000000a7609", []RepositoryID{"00000000-0000-4000-8000-0000000a7601"})
+	if _, err := stack.store.ClaimDispatch(ctx, runID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := stack.pool.Exec(ctx, `UPDATE daily_metrics_partitions SET status = 'succeeded' WHERE run_id = $1::uuid`, runID); err != nil {
+		t.Fatal(err)
+	}
+	processFinalizeJob(t, ctx, stack.store, runID)
+
+	var status string
+	if err := stack.pool.QueryRow(ctx, `SELECT status FROM daily_metrics_runs WHERE id = $1::uuid`, runID).Scan(&status); err != nil || status != "succeeded" {
+		t.Fatalf("partial run status = %q, err = %v, want succeeded (the run itself finished)", status, err)
+	}
+	if states := stack.states(t, markerOrgA, markerDay(1), markerDay(1)); len(states) != 0 {
+		t.Fatalf("live: states = %v, want none (a partial-scope run must not certify the day)", states)
+	}
+	outcome, err := stack.store.BackfillRunMarkers(ctx, stack.reader, markerOrgA, markerDay(1), markerDay(1), false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if outcome.Appended != 0 || stack.rawCount(markerOrgA) != 0 {
+		t.Fatalf("backfill = %+v, rows = %d, want nothing appended for a partial-scope run", outcome, stack.rawCount(markerOrgA))
+	}
+	// Reopening a partial-scope run writes nothing either: it never certified.
+	reopen, err := stack.store.RedriveFinalizeForRange(
+		ctx, stack.publisher, markerOrgA, markerDay(1), markerDay(1), "marker-partial-reopen", true, testFinalizeRedriveReason, false)
+	if err != nil || len(reopen.Days) != 1 || reopen.Days[0].Outcome != "redriven_reset_from_succeeded" {
+		t.Fatalf("reopen of the partial run = %#v, err = %v, want redriven_reset_from_succeeded", reopen, err)
+	}
+	if rows := stack.rawCount(markerOrgA); rows != 0 {
+		t.Fatalf("rows after reopening a partial-scope run = %d, want 0", rows)
+	}
+}
+
+// A partial-scope run on a day a full-org run already certified leaves the
+// certification alone, and a partial run that is the latest run of the day does
+// not hide it in the backfill either.
+func TestRunMarkerPartialScopeRunDoesNotDisturbAFullOrgDay(t *testing.T) {
+	stack := newMarkerStack(t)
+	ctx := context.Background()
+	const fullRun = "00000000-0000-4000-8000-000000087201"
+	stack.seedRun(t, fullRun, "00000000-0000-4000-8000-000000087202", markerOrgA, markerDay(1))
+	processFinalizeJob(t, ctx, stack.store, fullRun)
+	partial := stack.startRun(t, markerOrgA, markerDay(1),
+		"manual-daily:00000000-0000-4000-8000-0000000a7609", []RepositoryID{"00000000-0000-4000-8000-0000000a7601"})
+	if _, err := stack.store.ClaimDispatch(ctx, partial); err != nil {
+		t.Fatal(err)
+	}
+	if got := stack.states(t, markerOrgA, markerDay(1), markerDay(1))["2026-09-01"]; got != RunMarkerSucceeded {
+		t.Fatalf("state with a partial run in flight = %q, want succeeded (it is not a full-org run)", got)
+	}
+	outcome, err := stack.store.BackfillRunMarkers(ctx, stack.reader, markerOrgA, markerDay(1), markerDay(1), false)
+	if err != nil || outcome.Appended != 0 {
+		t.Fatalf("backfill = %+v, err = %v, want nothing appended", outcome, err)
+	}
+}
+
+// F2 (vet 2): a backfill that reads Postgres before a live reopen commits must
+// not certify the reopened day. Forced at both read boundaries.
+func TestRunMarkerBackfillRacingAReopenNeverCertifiesAReopenedDay(t *testing.T) {
+	for _, stage := range []string{"marker_read", "postgres_read"} {
+		t.Run(stage, func(t *testing.T) {
+			stack := newMarkerStack(t)
+			ctx := context.Background()
+			const runID = "00000000-0000-4000-8000-000000087211"
+			stack.seedRun(t, runID, "00000000-0000-4000-8000-000000087212", markerOrgA, markerDay(1))
+			processFinalizeJob(t, ctx, stack.store, runID)
+			stack.store.backfillHook = func(at string) {
+				if at != stage {
+					return
+				}
+				stack.store.backfillHook = nil
+				if _, err := stack.store.RedriveFinalizeForRange(
+					ctx, stack.publisher, markerOrgA, markerDay(1), markerDay(1), "marker-race-"+stage, true, testFinalizeRedriveReason, false); err != nil {
+					t.Errorf("reopen inside the backfill window: %v", err)
+				}
+			}
+			// Remove the live row so the backfill wants to append 'succeeded'.
+			stack.clearMarkers(t, markerOrgA)
+			if _, err := stack.store.BackfillRunMarkers(ctx, stack.reader, markerOrgA, markerDay(1), markerDay(1), false); err != nil {
+				t.Fatal(err)
+			}
+			var status, finalization string
+			if err := stack.pool.QueryRow(ctx, `SELECT status, finalization_status FROM daily_metrics_runs WHERE id = $1::uuid`, runID).
+				Scan(&status, &finalization); err != nil {
+				t.Fatal(err)
+			}
+			state := stack.states(t, markerOrgA, markerDay(1), markerDay(1))["2026-09-01"]
+			if status == "running" && finalization == "pending" && state == RunMarkerSucceeded {
+				t.Fatalf("FALSE SUCCEEDED: run is %s/%s (reopened) but the marker reads %q", status, finalization, state)
+			}
+		})
+	}
+}
+
+// F3 (vet 2): the version is the Postgres clock. A worker whose clock is a year
+// ahead finalizes, then an operator reopens: the reopen must outrank it.
+func TestRunMarkerWorkerClockSkewCannotOutrankALaterReopen(t *testing.T) {
+	stack := newMarkerStack(t)
+	ctx := context.Background()
+	const runID = "00000000-0000-4000-8000-000000087221"
+	stack.seedRun(t, runID, "00000000-0000-4000-8000-000000087222", markerOrgA, markerDay(1))
+	ahead := time.Now().UTC().AddDate(1, 0, 0)
+	stack.store.now = func() time.Time { return ahead }
+	processFinalizeJob(t, ctx, stack.store, runID)
+	stack.store.now = func() time.Time { return time.Now().UTC() }
+	if _, err := stack.store.RedriveFinalizeForRange(
+		ctx, stack.publisher, markerOrgA, markerDay(1), markerDay(1), "marker-skew", true, testFinalizeRedriveReason, false); err != nil {
+		t.Fatal(err)
+	}
+	if got := stack.states(t, markerOrgA, markerDay(1), markerDay(1))["2026-09-01"]; got != RunMarkerReopened {
+		t.Fatalf("state after a later reopen = %q, want reopened (a skewed worker clock must not win)", got)
+	}
+}
+
+// F3 (vet 2): two events with the same version never read as succeeded, in
+// either insertion order.
+func TestRunMarkerSameVersionTieReadsReopened(t *testing.T) {
+	stack := newMarkerStack(t)
+	ctx := context.Background()
+	at := time.Date(2026, 10, 5, 12, 0, 0, 0, time.UTC)
+	for index, order := range [][]RunMarkerState{
+		{RunMarkerSucceeded, RunMarkerReopened}, {RunMarkerReopened, RunMarkerSucceeded},
+	} {
+		day := markerDay(1 + index)
+		for _, state := range order {
+			if err := stack.reader.AppendRunMarker(ctx, RunMarker{
+				OrganizationID: markerOrgA, TargetDay: day, Generation: "post-sync:tie",
+				State: state, FinalizedAt: at, Version: uint64(at.UnixMilli()),
+			}); err != nil {
+				t.Fatal(err)
+			}
+		}
+	}
+	for _, day := range []string{"2026-09-01", "2026-09-02"} {
+		if got := stack.states(t, markerOrgA, markerDay(1), markerDay(2))[day]; got != RunMarkerReopened {
+			t.Fatalf("%s: tie reads %q, want reopened", day, got)
+		}
+	}
+}
+
+// F4 / vet 1: a new full-org generation starting for a day that succeeded makes
+// the day unknown until that generation finalizes.
+func TestRunMarkerNewGenerationInFlightMakesTheDayUnknown(t *testing.T) {
+	stack := newMarkerStack(t)
+	ctx := context.Background()
+	const firstRun = "00000000-0000-4000-8000-000000087231"
+	stack.seedRun(t, firstRun, "00000000-0000-4000-8000-000000087232", markerOrgA, markerDay(1))
+	processFinalizeJob(t, ctx, stack.store, firstRun)
+	if got := stack.states(t, markerOrgA, markerDay(1), markerDay(1))["2026-09-01"]; got != RunMarkerSucceeded {
+		t.Fatalf("state before the new generation = %q, want succeeded", got)
+	}
+
+	second := stack.startRun(t, markerOrgA, markerDay(1), "post-sync:00000000-0000-4000-8000-000000087233", nil)
+	if _, err := stack.store.ClaimDispatch(ctx, second); err != nil {
+		t.Fatal(err)
+	}
+	if got := stack.states(t, markerOrgA, markerDay(1), markerDay(1))["2026-09-01"]; got != RunMarkerReopened {
+		t.Fatalf("state with a new generation in flight = %q, want reopened (unknown)", got)
+	}
+	// Live and backfill now agree on this PG state.
+	outcome, err := stack.store.BackfillRunMarkers(ctx, stack.reader, markerOrgA, markerDay(1), markerDay(1), false)
+	if err != nil || outcome.Appended != 0 {
+		t.Fatalf("backfill = %+v, err = %v, want nothing to append (live already says reopened)", outcome, err)
+	}
+
+	// The claim is refused, not skipped, when the marker cannot be written.
+	stack.writer.setFail(true)
+	third := stack.startRun(t, markerOrgA, markerDay(2), "post-sync:00000000-0000-4000-8000-000000087234", nil)
+	if _, err := stack.store.ClaimDispatch(ctx, third); err == nil {
+		t.Fatal("ClaimDispatch succeeded with the marker writer down, want an error")
+	}
+}
+
+func (stack *markerStack) clearMarkers(t *testing.T, orgID string) {
+	t.Helper()
+	if err := stack.rawExec(`ALTER TABLE daily_metrics_run_marker DELETE WHERE org_id = '` + orgID + `' SETTINGS mutations_sync = 2`); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// A day whose run is not succeeded and that has no marker row is already
+// unknown: the backfill adds nothing for it.
+func TestRunMarkerBackfillAddsNothingForAnUnfinishedDayWithNoMarker(t *testing.T) {
+	stack := newMarkerStack(t)
+	ctx := context.Background()
+	stack.seedRun(t, "00000000-0000-4000-8000-000000087241", "00000000-0000-4000-8000-000000087242", markerOrgA, markerDay(1))
+	outcome, err := stack.store.BackfillRunMarkers(ctx, stack.reader, markerOrgA, markerDay(1), markerDay(1), false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if outcome.DaysExamined != 1 || outcome.Unchanged != 1 || outcome.Appended != 0 || stack.rawCount(markerOrgA) != 0 {
+		t.Fatalf("backfill = %+v, rows = %d, want one day unchanged and no row", outcome, stack.rawCount(markerOrgA))
+	}
+}
+
+// A reopen whose marker landed but whose transaction rolled back leaves a
+// 'reopened' row newer than the stored succeeded state. The backfill must still
+// restore the day (its version is raised above the row it observed).
+func TestRunMarkerBackfillHealsARolledBackReopen(t *testing.T) {
+	stack := newMarkerStack(t)
+	ctx := context.Background()
+	const runID = "00000000-0000-4000-8000-000000087251"
+	stack.seedRun(t, runID, "00000000-0000-4000-8000-000000087252", markerOrgA, markerDay(1))
+	processFinalizeJob(t, ctx, stack.store, runID)
+	later := time.Now().UTC().Add(time.Hour)
+	if err := stack.reader.AppendRunMarker(ctx, RunMarker{
+		OrganizationID: markerOrgA, TargetDay: markerDay(1), Generation: "post-sync:rolled-back",
+		State: RunMarkerReopened, FinalizedAt: later, Version: uint64(later.UnixMilli()),
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if got := stack.states(t, markerOrgA, markerDay(1), markerDay(1))["2026-09-01"]; got != RunMarkerReopened {
+		t.Fatalf("setup: state = %q, want reopened", got)
+	}
+	if _, err := stack.store.BackfillRunMarkers(ctx, stack.reader, markerOrgA, markerDay(1), markerDay(1), false); err != nil {
+		t.Fatal(err)
+	}
+	if got := stack.states(t, markerOrgA, markerDay(1), markerDay(1))["2026-09-01"]; got != RunMarkerSucceeded {
+		t.Fatalf("state after the backfill = %q, want succeeded (Postgres says the run is succeeded)", got)
 	}
 }

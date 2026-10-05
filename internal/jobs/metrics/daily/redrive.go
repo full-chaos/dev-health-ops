@@ -846,25 +846,37 @@ VALUES ($1::uuid, $2::uuid, $3::uuid, $4::date, $5, $6, 'finalize-redrive', $7, 
 		// will never be redispatched under any generation, so nothing else
 		// ever reads this run's stored generation value for partition
 		// identity again.
+		// CHAOS-8710: a run that certifies its org-day (full-org scope) keeps
+		// that classification through the redrive: its new generation is
+		// "redrive-full:<nonce>" (13 + 36 = 49 bytes), a partial-scope run's
+		// stays "redrive:<nonce>". Without it the redriven finalize could not
+		// tell whether it may certify the day.
 		newGeneration := "redrive:" + nonce
-		// CHAOS-8710: marker first; a failed append refuses the reset.
-		if err := store.markReopened(ctx, run.OrganizationID, targetDay, run.Generation); err != nil {
-			return false, false, err
+		if isFullOrgGeneration(run.Generation) {
+			newGeneration = redriveFullGenerationPrefix + nonce
 		}
-		command, err := tx.Exec(ctx, `
+		// One Postgres clock read in the reset itself is the 'reopened'
+		// marker's version. A marker that cannot be written refuses the reset
+		// (the tx rolls back).
+		var reopenedAtMs int64
+		err := tx.QueryRow(ctx, `
 UPDATE public.daily_metrics_runs
 SET status = 'running', finalization_status = 'pending',
     finalization_claim_token = NULL, finalization_lease_expires_at = NULL,
     generation = $3, updated_at = $1
-WHERE id = $2::uuid AND status = 'succeeded' AND finalization_status = 'succeeded'`,
-			now, runID, newGeneration)
-		if err != nil {
-			return false, false, ErrUnavailable
-		}
-		if command.RowsAffected() != 1 {
+WHERE id = $2::uuid AND status = 'succeeded' AND finalization_status = 'succeeded'
+RETURNING `+pgClockMillis,
+			now, runID, newGeneration).Scan(&reopenedAtMs)
+		if errors.Is(err, pgx.ErrNoRows) {
 			// Settled differently under us since the row lock above (e.g. a
 			// concurrent caller already reset it) -- skip, don't force it.
 			return false, false, nil
+		}
+		if err != nil {
+			return false, false, ErrUnavailable
+		}
+		if err := store.markReopened(ctx, run.OrganizationID, targetDay, run.Generation, reopenedAtMs); err != nil {
+			return false, false, err
 		}
 		run.Status = "running"
 		run.Generation = newGeneration

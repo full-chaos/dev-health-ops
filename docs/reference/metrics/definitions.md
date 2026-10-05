@@ -170,40 +170,45 @@ state of the daily metrics run so a reader can tell the two apart.
 | --- | --- |
 | `org_id` | Organization. Every read filters on it. |
 | `target_day` | The calendar day the run computed (UTC). |
-| `generation` | The run generation the event came from. Not ordered. |
+| `generation` | The run generation the event came from. Informational, not ordered. |
 | `state` | `succeeded` or `reopened`. |
-| `finalized_at` | When the event was recorded. |
-| `version` | Milliseconds since the epoch. Orders the events of one day. |
+| `finalized_at` | The version as a timestamp. |
+| `version` | Postgres clock reading in milliseconds, taken in the transaction that changed the run state. Orders the events of one day. |
+
+**Only a run that computes the whole organization writes the marker**: the
+scheduled fan-out and the post-sync run, which both discover the repository
+set live. A run started with an explicit repository list (an external
+recompute, a manual run with repositories) computes only those repositories,
+so it never certifies the day.
 
 The table is append-only. The worker appends `succeeded` after the run for one
 organization and day reaches status and finalization status `succeeded` in
-Postgres. A redrive or partition recompute that reopens a succeeded run
-appends `reopened` before it commits the reopen, and is refused if that
-append fails. Nothing is updated or deleted.
+Postgres. It appends `reopened` when such a run is claimed for dispatch, so a
+day that a new run is recomputing is not certified. A redrive or partition
+recompute that reopens a succeeded run appends `reopened` inside the reopen
+transaction, and is refused if that append fails. Nothing is updated or
+deleted. Versions come from one clock, the Postgres server, never from the
+writing host.
 
-**Reader rule.** For each `(org_id, target_day)` take `argMax(state, version)`
-over all generations:
+**Reader rule.** For each `(org_id, target_day)` take the row with the greatest
+`version` over all generations, and let `reopened` win a tie:
 
 ```sql
-SELECT target_day, argMax(state, version) AS state
+SELECT target_day, argMax(state, (version, state = 'reopened')) AS state
 FROM daily_metrics_run_marker
 WHERE org_id = {org} AND target_day BETWEEN {from} AND {to}
 GROUP BY org_id, target_day
 ```
 
-- `succeeded`: the run finished for that organization and day. A day with no
-  repository row is a day with no activity.
+- `succeeded`: a full-org run finished for that organization and day. A day
+  with no repository row is a day with no activity.
 - `reopened`, or no row at all: unknown. Never read this as zero activity.
 
 A failed `succeeded` append never fails the run. The day stays unknown, the
 failure is logged, and `dev_health_daily_metrics_run_marker_appends_total`
 counts it with `outcome="failed"`. `dho workers metrics daily-marker-backfill
 --org <uuid> --from <day> --to <day>` makes the table agree with Postgres for
-a range. It appends a row only when the current state differs, so a second
-run appends nothing. The backfill takes the latest run of each day by
-creation time.
-
-Limits. The marker records a run that finished. It does not say a newer run
-for the same day is not in flight: a day stays `succeeded` until that run is
-reopened or the backfill sees it not succeeded. A run with status
-`no_repositories` is not marked.
+a range. It looks only at full-org runs and takes the latest of them by
+creation time. It appends a row only when the current state differs, so a
+second run appends nothing, and the version it writes cannot outrank a later
+live event. A run with status `no_repositories` is not marked.

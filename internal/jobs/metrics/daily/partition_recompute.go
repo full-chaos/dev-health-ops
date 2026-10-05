@@ -2,6 +2,7 @@ package daily
 
 import (
 	"context"
+	"errors"
 	"strings"
 	"time"
 
@@ -387,26 +388,29 @@ VALUES ($1::uuid, $2::uuid, $3::uuid, $4::date, $5, $6, $7, 'partition-recompute
 		return false, ErrUnavailable
 	}
 
-	// CHAOS-8710: the marker goes first. If it cannot be written the reopen is
-	// refused, because a reopened day must never keep reading as succeeded.
-	if err := store.markReopened(ctx, run.OrganizationID, targetDay, priorGeneration); err != nil {
-		return false, err
-	}
 	now := store.now().UTC()
-	command, err := tx.Exec(ctx, `
+	// CHAOS-8710: the reset reads the Postgres clock once (reopenedAtMs); the
+	// 'reopened' marker below carries that value as its version, so every
+	// marker version of a day comes from one clock. A marker that cannot be
+	// written refuses the reopen: the tx rolls back and nothing changes.
+	var reopenedAtMs int64
+	err = tx.QueryRow(ctx, `
 UPDATE public.daily_metrics_runs
 SET status = 'running', generation = $3,
     finalization_status = 'pending', finalization_claim_token = NULL,
     finalization_lease_expires_at = NULL, finalized_at = NULL, updated_at = $1
-WHERE id = $2::uuid AND status = 'succeeded'`,
-		now, runID, newGeneration)
-	if err != nil {
-		return false, ErrUnavailable
-	}
-	if command.RowsAffected() != 1 {
+WHERE id = $2::uuid AND status = 'succeeded'
+RETURNING `+pgClockMillis, now, runID, newGeneration).Scan(&reopenedAtMs)
+	if errors.Is(err, pgx.ErrNoRows) {
 		// Re-verify raced us between the row lock above and this write --
 		// skip rather than force it.
 		return false, nil
+	}
+	if err != nil {
+		return false, ErrUnavailable
+	}
+	if err := store.markReopened(ctx, run.OrganizationID, targetDay, priorGeneration, reopenedAtMs); err != nil {
+		return false, err
 	}
 
 	partitionRows, err := tx.Query(ctx, `

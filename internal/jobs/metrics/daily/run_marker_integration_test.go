@@ -450,8 +450,10 @@ func TestRunMarkerPartialScopeRunDoesNotDisturbAFullOrgDay(t *testing.T) {
 	}
 }
 
-// F2 (vet 2): a backfill that reads Postgres before a live reopen commits must
-// not certify the reopened day. Forced at both read boundaries.
+// F2 / F9 (vet 2): the backfill and every reopen serialize on the (org, day)
+// marker lock. A reopen started while the backfill is between its reads blocks
+// until the backfill commits, then reopens with a later version, so the day
+// never ends up certified. Forced at both read boundaries.
 func TestRunMarkerBackfillRacingAReopenNeverCertifiesAReopenedDay(t *testing.T) {
 	for _, stage := range []string{"marker_read", "postgres_read"} {
 		t.Run(stage, func(t *testing.T) {
@@ -460,20 +462,35 @@ func TestRunMarkerBackfillRacingAReopenNeverCertifiesAReopenedDay(t *testing.T) 
 			const runID = "00000000-0000-4000-8000-000000087211"
 			stack.seedRun(t, runID, "00000000-0000-4000-8000-000000087212", markerOrgA, markerDay(1))
 			processFinalizeJob(t, ctx, stack.store, runID)
+			// Remove the live row so the backfill wants to append 'succeeded'.
+			stack.clearMarkers(t, markerOrgA)
+			reopenDone := make(chan error, 1)
 			stack.store.backfillHook = func(at string) {
 				if at != stage {
 					return
 				}
 				stack.store.backfillHook = nil
-				if _, err := stack.store.RedriveFinalizeForRange(
-					ctx, stack.publisher, markerOrgA, markerDay(1), markerDay(1), "marker-race-"+stage, true, testFinalizeRedriveReason, false); err != nil {
-					t.Errorf("reopen inside the backfill window: %v", err)
+				go func() {
+					_, err := stack.store.RedriveFinalizeForRange(
+						ctx, stack.publisher, markerOrgA, markerDay(1), markerDay(1), "marker-race-"+stage, true, testFinalizeRedriveReason, false)
+					reopenDone <- err
+				}()
+				select {
+				case err := <-reopenDone:
+					t.Errorf("the reopen finished inside the backfill window (err=%v): it must wait for the marker lock", err)
+				case <-time.After(500 * time.Millisecond):
 				}
 			}
-			// Remove the live row so the backfill wants to append 'succeeded'.
-			stack.clearMarkers(t, markerOrgA)
 			if _, err := stack.store.BackfillRunMarkers(ctx, stack.reader, markerOrgA, markerDay(1), markerDay(1), false); err != nil {
 				t.Fatal(err)
+			}
+			select {
+			case err := <-reopenDone:
+				if err != nil {
+					t.Fatalf("reopen: %v", err)
+				}
+			case <-time.After(30 * time.Second):
+				t.Fatal("the reopen never finished after the backfill committed")
 			}
 			var status, finalization string
 			if err := stack.pool.QueryRow(ctx, `SELECT status, finalization_status FROM daily_metrics_runs WHERE id = $1::uuid`, runID).
@@ -481,11 +498,127 @@ func TestRunMarkerBackfillRacingAReopenNeverCertifiesAReopenedDay(t *testing.T) 
 				t.Fatal(err)
 			}
 			state := stack.states(t, markerOrgA, markerDay(1), markerDay(1))["2026-09-01"]
-			if status == "running" && finalization == "pending" && state == RunMarkerSucceeded {
-				t.Fatalf("FALSE SUCCEEDED: run is %s/%s (reopened) but the marker reads %q", status, finalization, state)
+			if status != "running" || finalization != "pending" || state != RunMarkerReopened {
+				t.Fatalf("run is %s/%s and the marker reads %q, want running/pending and reopened", status, finalization, state)
 			}
 		})
 	}
+}
+
+// F9 (vet 2): a backfill that starts while a reopen is inside its transaction
+// (the 'reopened' marker is appended, the reset not yet committed) must wait for
+// that transaction. It then reads the reopened run and appends nothing false.
+// Both reopen paths.
+func TestRunMarkerBackfillWaitsForAReopenTransaction(t *testing.T) {
+	for _, path := range []string{"finalize-redrive", "partition-recompute"} {
+		t.Run(path, func(t *testing.T) {
+			stack := newMarkerStack(t)
+			ctx := context.Background()
+			const runID = "00000000-0000-4000-8000-000000087261"
+			stack.seedRun(t, runID, "00000000-0000-4000-8000-000000087262", markerOrgA, markerDay(1))
+			processFinalizeJob(t, ctx, stack.store, runID)
+			if path == "partition-recompute" {
+				if _, err := stack.pool.Exec(ctx, `UPDATE daily_metrics_runs SET generation = 'fixed-schedule:daily_metrics_fanout:2026-09-02T01:00:00Z' WHERE id = $1::uuid`, runID); err != nil {
+					t.Fatal(err)
+				}
+			}
+			backfillDone := make(chan error, 1)
+			var fired bool
+			stack.store.SetRunMarkerWriter(writerFunc(func(c context.Context, m RunMarker) error {
+				err := stack.writer.AppendRunMarker(c, m)
+				if err == nil && m.State == RunMarkerReopened && !fired {
+					fired = true
+					go func() {
+						_, e := stack.store.BackfillRunMarkers(ctx, stack.reader, markerOrgA, markerDay(1), markerDay(1), false)
+						backfillDone <- e
+					}()
+					select {
+					case e := <-backfillDone:
+						t.Errorf("the backfill finished inside the reopen transaction (err=%v): it must wait for the marker lock", e)
+					case <-time.After(500 * time.Millisecond):
+					}
+				}
+				return err
+			}))
+			var err error
+			if path == "finalize-redrive" {
+				_, err = stack.store.RedriveFinalizeForRange(ctx, stack.publisher, markerOrgA, markerDay(1), markerDay(1),
+					"marker-window", true, testFinalizeRedriveReason, false)
+			} else {
+				_, err = stack.store.RedrivePartitionsForRange(ctx, stack.publisher, markerOrgA, markerDay(1), markerDay(1),
+					"marker-window", "repo_user_commit", testPartitionRecomputeReason, false)
+			}
+			stack.store.SetRunMarkerWriter(stack.writer)
+			if err != nil || !fired {
+				t.Fatalf("setup: reopen err=%v fired=%v", err, fired)
+			}
+			select {
+			case e := <-backfillDone:
+				if e != nil {
+					t.Fatalf("backfill: %v", e)
+				}
+			case <-time.After(30 * time.Second):
+				t.Fatal("the backfill never finished after the reopen committed")
+			}
+			var status, finalization string
+			if err := stack.pool.QueryRow(ctx, `SELECT status, finalization_status FROM daily_metrics_runs WHERE id = $1::uuid`, runID).
+				Scan(&status, &finalization); err != nil {
+				t.Fatal(err)
+			}
+			if state := stack.states(t, markerOrgA, markerDay(1), markerDay(1))["2026-09-01"]; status == "succeeded" || state == RunMarkerSucceeded {
+				t.Fatalf("FALSE SUCCEEDED: run is %s/%s, marker reads %q", status, finalization, state)
+			}
+		})
+	}
+}
+
+// The dispatch claim takes the same lock: a claim that arrives while the
+// backfill is between its reads waits for it, then appends 'reopened' with a
+// later version.
+func TestRunMarkerDispatchClaimWaitsForTheBackfill(t *testing.T) {
+	stack := newMarkerStack(t)
+	ctx := context.Background()
+	const firstRun = "00000000-0000-4000-8000-000000087271"
+	stack.seedRun(t, firstRun, "00000000-0000-4000-8000-000000087272", markerOrgA, markerDay(1))
+	processFinalizeJob(t, ctx, stack.store, firstRun)
+	second := stack.startRun(t, markerOrgA, markerDay(1), "post-sync:00000000-0000-4000-8000-000000087273", nil)
+	stack.clearMarkers(t, markerOrgA)
+	claimDone := make(chan error, 1)
+	stack.store.backfillHook = func(at string) {
+		if at != "postgres_read" {
+			return
+		}
+		stack.store.backfillHook = nil
+		go func() {
+			_, err := stack.store.ClaimDispatch(ctx, second)
+			claimDone <- err
+		}()
+		select {
+		case err := <-claimDone:
+			t.Errorf("the claim finished inside the backfill window (err=%v): it must wait for the marker lock", err)
+		case <-time.After(500 * time.Millisecond):
+		}
+	}
+	if _, err := stack.store.BackfillRunMarkers(ctx, stack.reader, markerOrgA, markerDay(1), markerDay(1), false); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case err := <-claimDone:
+		if err != nil {
+			t.Fatalf("claim: %v", err)
+		}
+	case <-time.After(30 * time.Second):
+		t.Fatal("the claim never finished after the backfill committed")
+	}
+	if got := stack.states(t, markerOrgA, markerDay(1), markerDay(1))["2026-09-01"]; got != RunMarkerReopened {
+		t.Fatalf("state = %q, want reopened (a run is in flight)", got)
+	}
+}
+
+type writerFunc func(context.Context, RunMarker) error
+
+func (fn writerFunc) AppendRunMarker(ctx context.Context, marker RunMarker) error {
+	return fn(ctx, marker)
 }
 
 // F3 (vet 2): the version is the Postgres clock. A worker whose clock is a year
@@ -613,5 +746,39 @@ func TestRunMarkerBackfillHealsARolledBackReopen(t *testing.T) {
 	}
 	if got := stack.states(t, markerOrgA, markerDay(1), markerDay(1))["2026-09-01"]; got != RunMarkerSucceeded {
 		t.Fatalf("state after the backfill = %q, want succeeded (Postgres says the run is succeeded)", got)
+	}
+}
+
+// lockProbeReader records how many advisory locks exist at the instant the
+// backfill reads ClickHouse.
+type lockProbeReader struct {
+	inner RunMarkerReader
+	probe func()
+}
+
+func (r *lockProbeReader) RunMarkerStates(ctx context.Context, org string, from, to time.Time) (map[string]RunMarkerObservation, error) {
+	r.probe()
+	return r.inner.RunMarkerStates(ctx, org, from, to)
+}
+
+// The backfill takes the (org, day) lock BEFORE it reads ClickHouse: when the
+// ClickHouse read starts, an advisory lock is already held.
+func TestRunMarkerBackfillHoldsTheLockBeforeItReadsClickHouse(t *testing.T) {
+	stack := newMarkerStack(t)
+	ctx := context.Background()
+	stack.seedRun(t, "00000000-0000-4000-8000-000000087281", "00000000-0000-4000-8000-000000087282", markerOrgA, markerDay(1))
+	held := -1
+	reader := &lockProbeReader{inner: stack.reader, probe: func() {
+		if err := stack.pool.QueryRow(ctx, `
+SELECT count(*) FROM pg_locks
+WHERE locktype = 'advisory' AND granted AND database = (SELECT oid FROM pg_database WHERE datname = current_database())`).Scan(&held); err != nil {
+			t.Error(err)
+		}
+	}}
+	if _, err := stack.store.BackfillRunMarkers(ctx, reader, markerOrgA, markerDay(1), markerDay(1), false); err != nil {
+		t.Fatal(err)
+	}
+	if held < 1 {
+		t.Fatalf("advisory locks held when the ClickHouse read started = %d, want the day's lock already held", held)
 	}
 }

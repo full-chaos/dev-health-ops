@@ -210,5 +210,16 @@ counts it with `outcome="failed"`. `dho workers metrics daily-marker-backfill
 --org <uuid> --from <day> --to <day>` makes the table agree with Postgres for
 a range. It looks only at full-org runs and takes the latest of them by
 creation time. It appends a row only when the current state differs, so a
-second run appends nothing, and the version it writes cannot outrank a later
-live event. A run with status `no_repositories` is not marked.
+second run appends nothing. A run with status `no_repositories` is not marked.
+
+Concurrency. The backfill, the reopen resets (finalize-redrive,
+partition-recompute) and the dispatch claim all take one Postgres advisory
+lock per organization and day. The backfill takes it first, then reads
+ClickHouse, then reads Postgres, then appends, then commits. A reopen that is
+still inside its transaction therefore blocks the backfill until it commits or
+rolls back, and the backfill then reads the state after it. The guarantee is
+that a backfill never certifies a day from a Postgres state older than a
+marker event it could see; a reopen that rolled back after writing its marker is
+healed by the next backfill. The live `succeeded` append after a finalize commit
+is not under the lock: its version is the stored `finalized_at`, which every
+later reopen outranks.

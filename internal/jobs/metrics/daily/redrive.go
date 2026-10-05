@@ -858,6 +858,9 @@ VALUES ($1::uuid, $2::uuid, $3::uuid, $4::date, $5, $6, 'finalize-redrive', $7, 
 		// One Postgres clock read in the reset itself is the 'reopened'
 		// marker's version. A marker that cannot be written refuses the reset
 		// (the tx rolls back).
+		if err := store.lockMarkerDayIfEnabled(ctx, tx, run.OrganizationID, targetDay); err != nil {
+			return false, false, err
+		}
 		var reopenedAtMs int64
 		err := tx.QueryRow(ctx, `
 UPDATE public.daily_metrics_runs

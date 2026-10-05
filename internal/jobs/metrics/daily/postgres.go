@@ -731,6 +731,31 @@ func (store *PostgresStore) ClaimDispatch(ctx context.Context, runID string) (*R
 	}
 	var run Run
 	var targetDay string
+	// CHAOS-8710: the claim runs in one transaction under the (org, day)
+	// marker lock, so its 'reopened' append cannot interleave with a backfill.
+	tx, err := store.pool.Begin(ctx)
+	if err != nil {
+		return nil, ErrUnavailable
+	}
+	defer func() {
+		rollbackCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
+		defer cancel()
+		_ = tx.Rollback(rollbackCtx)
+	}()
+	if store.markerWriter != nil {
+		var lockOrg, lockDay string
+		err := tx.QueryRow(ctx, `SELECT org_id::text, target_day::text FROM public.daily_metrics_runs WHERE id = $1::uuid`, runID).
+			Scan(&lockOrg, &lockDay)
+		if errors.Is(err, pgx.ErrNoRows) {
+			return nil, nil
+		}
+		if err != nil {
+			return nil, ErrUnavailable
+		}
+		if err := lockMarkerDay(ctx, tx, lockOrg, lockDay); err != nil {
+			return nil, err
+		}
+	}
 	// RepositoryDiscoveryRequired is generation-agnostic: it is true exactly
 	// when the run was created with no partitions yet, whichever entry point
 	// created it (the nightly fixed schedule, or a post-sync re-drive per
@@ -739,7 +764,7 @@ func (store *PostgresStore) ClaimDispatch(ctx context.Context, runID string) (*R
 	// a request with explicit RepositoryIDs inserts its partitions in the same
 	// transaction that creates the run, so it is never seen as pending here.
 	var claimedAtMs int64
-	err := store.pool.QueryRow(ctx, `
+	err = tx.QueryRow(ctx, `
 UPDATE public.daily_metrics_runs
 SET status = 'running', updated_at = $1
 WHERE id = $2::uuid AND status IN ('pending', 'running')
@@ -761,6 +786,9 @@ RETURNING id::text, org_id::text, generation, status, target_day::text,
 	// earlier generation of the day succeeded.
 	if err := store.markInFlight(ctx, run, claimedAtMs); err != nil {
 		return nil, err
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return nil, ErrUnavailable
 	}
 	return &run, nil
 }

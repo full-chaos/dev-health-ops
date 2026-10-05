@@ -24,12 +24,19 @@ const allowExcludedOp = "featureFlagTimeseries" // has an unproven named-limit e
 
 func seedClassRootWithExcludedShape(t *testing.T, pool *pgxpool.Pool) string {
 	t.Helper()
+	return seedClassRoot(t, pool, []string{allowExcludedOp + ":A=doc_operation_not_receipt_backed"})
+}
+
+// seedClassRoot seeds the analytics root as a shadow decision and writes the per-root receipt that admits it, listing
+// excluded shapes when given.
+func seedClassRoot(t *testing.T, pool *pgxpool.Pool, excluded []string) string {
+	t.Helper()
 	ctx := context.Background()
 	op := mcpclass.Operation("analytics")
 	provenance, err := json.Marshal(goapiproof.ReceiptProvenance{
 		MeasurementRoute: goapiproof.RouteProof, EdgeBuildBinding: goapiproof.EdgeBuildPresent, EdgeMode: goapiproof.EdgeModeDocRoute,
 		MCPClass: &goapiproof.MCPClassProvenance{Root: "analytics", Reference: "go_document_route", Executed: 3, Matched: 3,
-			Excluded: []string{allowExcludedOp + ":A=doc_operation_not_receipt_backed"}},
+			Excluded: excluded},
 	})
 	if err != nil {
 		t.Fatal(err)

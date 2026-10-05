@@ -63,8 +63,6 @@ func TestRunOperationRouteFollowsTheClassRowOfItsRoot(t *testing.T) {
 	}
 	handler, _, _, _, _ := newQueryHandler(&fakeHotspotsCHClient{}, pool, verifier, itTestSchemaDigest, os.Getenv)
 	runOperation := markClassGated(handler) // what buildQueryRoute mounts at /query/run-operation
-	documentDigest := digestHex(registeredHotspotsDocument)
-	setRoutingMode(t, pool, documentDigest, "hotspots", "canary") // the DOCUMENT row is lit all along: only the class row changes
 	token := signTestEnvelope(t, priv, "org-1")
 	hotspots := mcpclass.Operation("hotspots")
 

@@ -144,11 +144,18 @@ func TestQueryAPIRoleDriverObservesAMissingColumnGrant(t *testing.T) {
 // on one role is enough) and the driver must report a permission denial for the
 // path that reads that relation: a driver that passed anyway would be a test
 // that cannot fail.
+// rollbackWindowRoutingStateGrant is declared in the posture manifest and reached by no path of this build (CHAOS-8705):
+// an older build, the rollback window, still reads it. CHAOS-8706 drops the table and this exemption with it.
+const rollbackWindowRoutingStateGrant = "go_api_routing_state"
+
 func TestQueryAPIRoleDriverObservesAMissingGrant(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 8*time.Minute)
 	defer cancel()
 	fixture := startQueryAPIRoleFixture(t, ctx)
 	for _, table := range postgresstore.QueryAPIPosture().RequiredTables {
+		if table.TableName == rollbackWindowRoutingStateGrant {
+			continue
+		}
 		if _, err := fixture.admin.Exec(ctx, "REVOKE SELECT ON public."+table.TableName+" FROM "+fixture.role); err != nil {
 			t.Fatalf("revoke %s: %v", table.TableName, err)
 		}
@@ -190,10 +197,7 @@ type queryAPIRoleFixture struct {
 }
 
 const (
-	pathsOrg      = "0a0a0a0a-0a0a-4a0a-8a0a-0a0a0a0a0a0a"
-	pathsSchema   = "paths-schema-digest"
-	pathsDocument = "paths-document-digest"
-	pathsOp       = "pathsOperation"
+	pathsOrg = "0a0a0a0a-0a0a-4a0a-8a0a-0a0a0a0a0a0a"
 
 	// CHAOS-6263 PR (a): the identity fixtures /query's edge-carrier path
 	// reads (internal/api/policy.PGStore) -- an active superuser (also the
@@ -287,7 +291,6 @@ func startQueryAPIRoleFixture(t *testing.T, ctx context.Context) *queryAPIRoleFi
 	pgseed.SetFeatureFlag(ctx, t, admin, "1b1b1b1b-1b1b-4b1b-8b1b-1b1b1b1b1b1b", "byo_llm", "free", true)
 	pgseed.OrgLicense(ctx, t, admin, pathsOrg, "enterprise", "{}")
 	pgseed.Setting(ctx, t, admin, pathsOrg, "llm", "provider", "openai", false)
-	pgseed.RoutingState(ctx, t, admin, pathsSchema, pathsDocument, pathsOp, "primary")
 	pgseed.ClassDecision(ctx, t, admin, mcpclass.Operation("hotspots"), "canary")
 
 	// CHAOS-6263 PR (a): identity fixtures for /query's edge-carrier
@@ -325,22 +328,12 @@ func (f *queryAPIRoleFixture) driveEveryPathCollecting(t *testing.T, ctx context
 		}
 	}
 
-	// Routing registry: Enabled swallows a query error into "false", so assert
-	// the STATE it exists to reach (the seeded "go" row reads as reachable).
+	// Class decisions: Enabled swallows a query error into "false", so assert the STATE it exists to reach.
 	// The class switch reads go_api_class_decision (CHAOS-8735): assert the state it exists to reach, not that it ran.
 	if !routeswitch.NewClassDecisionSwitch(pool, mcpRoutingDigests()).Enabled(mcpclass.Operation("hotspots")) {
 		fail("routeswitch.ClassDecisionSwitch", errors.New("Enabled() = false for a seeded canary class decision (a swallowed permission error reads exactly like this)"))
 		var mode string
 		fail("routeswitch.ClassDecisionSwitch/direct", pool.QueryRow(ctx, `SELECT mode FROM go_api_class_decision WHERE operation = $1`, mcpclass.Operation("hotspots")).Scan(&mode))
-	}
-	registry := routeswitch.NewPostgresSwitch(pool, pathsSchema, map[string]string{pathsOp: pathsDocument})
-	if !registry.Enabled(pathsOp) {
-		fail("routeswitch.Enabled", errors.New("Enabled() = false for a seeded reachable routing row (a swallowed permission error reads exactly like this)"))
-		// Surface the underlying denial, which Enabled logs and hides.
-		var mode string
-		fail("routeswitch.Enabled/direct", pool.QueryRow(ctx,
-			`SELECT mode FROM go_api_routing_state WHERE schema_digest = $1 AND document_digest = $2 AND selected_operation = $3`,
-			pathsSchema, pathsDocument, pathsOp).Scan(&mode))
 	}
 	// Saved reports: every mutation, then every read.
 	writer := newReportWriter(pool, filepath.Join(repoRootFromHere(t), "contracts", "jobs", "v1"))

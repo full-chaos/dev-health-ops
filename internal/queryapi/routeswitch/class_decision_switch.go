@@ -9,9 +9,33 @@ package routeswitch
 import (
 	"context"
 	"log"
+	"time"
 
+	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
+
+// lookupTimeout bounds a single Enabled() read. Enabled has no context parameter, so an unbounded lookup would
+// let a blocked connection or an exhausted pool hang a request handler during a database outage.
+const lookupTimeout = 2 * time.Second
+
+// reachableModes are the modes that serve a real request. shadow does not: the client still gets Python's answer.
+var reachableModes = map[string]bool{
+	"canary":  true,
+	"primary": true,
+}
+
+// proofReachableModes adds shadow for the measurement-only proof route, which a real request never reaches.
+// disabled and python stay dark there too: they are decisions, not "awaiting measurement".
+var proofReachableModes = map[string]bool{
+	"canary":  true,
+	"primary": true,
+	"shadow":  true,
+}
+
+type registryReader interface {
+	Query(ctx context.Context, sql string, args ...any) (pgx.Rows, error)
+}
 
 // ClassDecisionSwitch is the switch of the MCP class-row gate and the MCP listener.
 type ClassDecisionSwitch struct {

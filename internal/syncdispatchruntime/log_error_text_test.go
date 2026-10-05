@@ -167,9 +167,7 @@ func TestTheDerivedDependencySetIsCoveredAndTheLegacyListOnlyShrinks(t *testing.
 
 // legacyErrorLogCalls is the number of log calls in the legacy-listed dependencies that carry an error-typed operand TODAY (a
 // NAMED LIMIT, reported by the test with file:line; the sweep is its own work item). It only shrinks: a new such call fails.
-// The 47th is internal/platform/secrets/hidden.go (Hidden.LogValue): the walker counts any String() call in a log call's
-// arguments, and h.String() there returns only the redaction marker, never error text (CHAOS-8716).
-const legacyErrorLogCalls = 47
+const legacyErrorLogCalls = 46
 
 // logCallsWithErrors returns the log calls of one package (a callee in log/slog or log, a method of their types) that take an
 // error-typed operand, or an Error()/String() call, anywhere in their arguments.

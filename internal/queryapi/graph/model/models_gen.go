@@ -917,6 +917,8 @@ type HomeSignal struct {
 	Category    string  `json:"category"`
 	// Null when the signal is not scoped to one entity (e.g. an org-wide signal).
 	ScopeEntity *ScopeEntityRef `json:"scopeEntity,omitempty"`
+	// Current primary work-item attribution evidence for work-item metrics; null when this window has no attributable work items.
+	Attribution *SignalAttribution `json:"attribution,omitempty"`
 }
 
 type HomeTile struct {
@@ -1475,6 +1477,30 @@ type SecurityPaginationInput struct {
 type SeverityBucket struct {
 	Severity string `json:"severity"`
 	Count    int    `json:"count"`
+}
+
+// Source and confidence distribution for the work items behind one Home signal.
+type SignalAttribution struct {
+	// Number of attributed work items behind these distributions.
+	Items      int                                `json:"items"`
+	Sources    []SignalAttributionSourceCount     `json:"sources"`
+	Confidence []SignalAttributionConfidenceCount `json:"confidence"`
+}
+
+// One confidence bucket of a Home signal's work-item attribution distribution.
+type SignalAttributionConfidenceCount struct {
+	Confidence TeamAttributionConfidence `json:"confidence"`
+	Items      int                       `json:"items"`
+	// Fraction of SignalAttribution.items in this bucket.
+	Share float64 `json:"share"`
+}
+
+// One source bucket of a Home signal's work-item attribution distribution.
+type SignalAttributionSourceCount struct {
+	Source TeamAttributionSource `json:"source"`
+	Items  int                   `json:"items"`
+	// Fraction of SignalAttribution.items in this bucket.
+	Share float64 `json:"share"`
 }
 
 type SparkPoint struct {

@@ -283,9 +283,37 @@ func homeSignalsFromResponse(signals []home.Signal) []model.HomeSignal {
 			EvidenceRef:       s.EvidenceRef,
 			Category:          s.Category,
 			ScopeEntity:       scopeEntity,
+			Attribution:       homeSignalAttributionFromResponse(s.Attribution),
 		})
 	}
 	return out
+}
+
+func homeSignalAttributionFromResponse(attribution *home.SignalAttribution) *model.SignalAttribution {
+	if attribution == nil {
+		return nil
+	}
+	sources := make([]model.SignalAttributionSourceCount, 0, len(attribution.Sources))
+	for _, source := range attribution.Sources {
+		sources = append(sources, model.SignalAttributionSourceCount{
+			Source: model.TeamAttributionSourceFromStored(source.Source),
+			Items:  source.Items,
+			Share:  source.Share,
+		})
+	}
+	confidence := make([]model.SignalAttributionConfidenceCount, 0, len(attribution.Confidence))
+	for _, bucket := range attribution.Confidence {
+		confidence = append(confidence, model.SignalAttributionConfidenceCount{
+			Confidence: model.TeamAttributionConfidenceFromStored(bucket.Confidence),
+			Items:      bucket.Items,
+			Share:      bucket.Share,
+		})
+	}
+	return &model.SignalAttribution{
+		Items:      attribution.Items,
+		Sources:    sources,
+		Confidence: confidence,
+	}
 }
 
 func homeLimitingFactorFromResponse(lf home.LimitingFactor) *model.HomeLimitingFactor {

@@ -136,6 +136,11 @@ func orgGoldenHandler(t *testing.T) func(t *testing.T, query string, bindings []
 			return &fixtureRowScanner{rows: [][]any{{40.0, 50.0}}}, nil
 		case strings.Contains(q, "cycle_time_hours IS NOT NULL"):
 			return &fixtureRowScanner{rows: [][]any{{45.0, 50.0}}}, nil
+		case strings.Contains(q, "FROM work_item_team_attributions FINAL") && strings.Contains(q, "GROUP BY a.source, a.confidence"):
+			// The snapshots predate Home signal attribution. An empty successful
+			// attribution read keeps them as Go snapshots while dedicated tests
+			// exercise real distribution values and their attachment.
+			return &fixtureRowScanner{}, nil
 
 		case strings.Contains(q, "FROM repos FINAL") && strings.Contains(q, "FROM work_items FINAL") && strings.Contains(q, "'ci' AS source"):
 			return &fixtureRowScanner{rows: [][]any{

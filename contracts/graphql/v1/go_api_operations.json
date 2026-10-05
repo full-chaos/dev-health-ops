@@ -154,7 +154,12 @@
   },
   {
     "operation": "home",
-    "digest": "9776798e809030868e3a7fc8643b06d122573f03a3c48a7710d86b1842b33554"
+    "digest": "c02bb493d709b8c445e2ac711bdf93d6a2cdb7933d1073a20bf7dad3ffd06545"
+  },
+  {
+    "operation": "home",
+    "digest": "9776798e809030868e3a7fc8643b06d122573f03a3c48a7710d86b1842b33554",
+    "legacy": true
   },
   {
     "operation": "hotspots",

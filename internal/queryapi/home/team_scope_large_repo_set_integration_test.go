@@ -216,8 +216,8 @@ func TestHomeTeamOwnership_ScopeFilterForMetricNarrowsToTheOwnedRepos(t *testing
 		t.Fatalf("fetchMetricValue with a team scope: %v", err)
 	}
 	want := float64(teamOwnedRepoCount * 100)
-	if got != want {
-		t.Fatalf("fetchMetricValue over team %q = %v, want %v (the owned repositories only -- the unowned repository's 999 must not contribute)", teamID, got, want)
+	if got.Value != want || !got.HasData {
+		t.Fatalf("fetchMetricValue over team %q = %+v, want value %v with data (the owned repositories only -- the unowned repository's 999 must not contribute)", teamID, got, want)
 	}
 }
 
@@ -247,8 +247,8 @@ func TestHomeTeamOwnership_TeamWithNoOwnershipRowsReadsEmpty(t *testing.T) {
 	if err != nil {
 		t.Fatalf("fetchMetricValue: %v", err)
 	}
-	if got != 0 {
-		t.Fatalf("fetchMetricValue for a team owning no repository = %v, want 0", got)
+	if got.Value != 0 || got.HasData {
+		t.Fatalf("fetchMetricValue for a team owning no repository = %+v, want value 0 with no data", got)
 	}
 }
 

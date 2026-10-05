@@ -432,6 +432,136 @@ const registeredHomeDocument = `query Home($orgId: String!, $filters: FilterInpu
       value
       unit
       deltaPct
+      hasData
+      hasPriorData
+      spark {
+        ts
+        value
+        __typename
+      }
+      __typename
+    }
+    reworkThemeAllocation {
+      theme
+      label
+      allocation
+      allocationPct
+      prsMerged
+      churnLoc
+      __typename
+    }
+    summary {
+      id
+      text
+      evidenceLink
+      __typename
+    }
+    tiles {
+      key
+      value {
+        title
+        subtitle
+        link
+        __typename
+      }
+      __typename
+    }
+    constraint {
+      title
+      claim
+      evidence {
+        label
+        link
+        __typename
+      }
+      experiments
+      __typename
+    }
+    events {
+      ts
+      type
+      text
+      link
+      __typename
+    }
+    healthState {
+      status
+      headline
+      summary
+      asOf
+      __typename
+    }
+    signals {
+      id
+      title
+      metric
+      currentValue
+      priorValue
+      delta
+      direction
+      severity
+      confidence
+      affectedScope
+      evidenceCount
+      whyItMatters
+      recommendedAction
+      evidenceRef
+      category
+      scopeEntity {
+        id
+        displayName
+        __typename
+      }
+      __typename
+    }
+    limitingFactor {
+      claim
+      whyItMatters
+      recommendedAction
+      confidence
+      evidenceRef
+      __typename
+    }
+    dataConfidence {
+      level
+      coveragePct
+      connectedSources
+      missingSources
+      caveats
+      __typename
+    }
+    __typename
+  }
+}`
+
+// registeredHomeV1Document is the real Home text from before CHAOS-8169
+// added the two per-window data-presence selections. It stays a legacy text
+// so deployed web builds continue to resolve while the new query rolls out.
+// Its captured wire form is testdata/wire_capture/home_v1_captured.graphql.
+const registeredHomeV1Document = `query Home($orgId: String!, $filters: FilterInput, $window: HomeWindowInput) {
+  home(orgId: $orgId, filters: $filters, window: $window) {
+    freshness {
+      lastIngestedAt
+      latestSuccessfulSyncAt
+      sources {
+        provider
+        status
+        __typename
+      }
+      coverage {
+        reposCoveredPct
+        prsLinkedToIssuesPct
+        issuesWithCycleStatesPct
+        __typename
+      }
+      __typename
+    }
+    deltas {
+      metric
+      label
+      value
+      unit
+      deltaPct
       spark {
         ts
         value
@@ -4056,6 +4186,7 @@ var legacyDigestsByOperation = map[string][]string{
 	"aiOpportunities":      {digestHex(registeredAiOpportunitiesV1Document)},
 	"aiWorkflowDrilldown":  {digestHex(registeredAiWorkflowDrilldownV1Document)},
 	"capacityForecast":     {digestHex(registeredCapacityForecastV1Document), digestHex(registeredCapacityForecastV2Document)},
+	"home":                 {digestHex(registeredHomeV1Document)},
 	"improveOpportunities": {digestHex(registeredImproveOpportunitiesV1Document)},
 	"operatingReview":      {digestHex(registeredOperatingReviewV1Document)},
 	"reviewEdges":          {digestHex(registeredReviewEdgesV1Document)},

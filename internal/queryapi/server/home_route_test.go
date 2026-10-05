@@ -181,6 +181,30 @@ func TestNewHomeGetHandlerHappyPathShape(t *testing.T) {
 	if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
 		t.Fatalf("decode body: %v (body=%s)", err, rec.Body.String())
 	}
+	var body struct {
+		Deltas      []map[string]any `json:"deltas"`
+		Constraint  map[string]any   `json:"constraint"`
+		HealthState struct {
+			Status string `json:"status"`
+		} `json:"health_state"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
+		t.Fatalf("decode REST body: %v", err)
+	}
+	if body.HealthState.Status != "no_data" {
+		t.Fatalf("health_state.status = %q, want no_data", body.HealthState.Status)
+	}
+	if body.Constraint == nil || body.Constraint["title"] != "" || body.Constraint["claim"] != "" {
+		t.Fatalf("no-data REST constraint = %#v, want an empty legacy card", body.Constraint)
+	}
+	for _, delta := range body.Deltas {
+		if _, ok := delta["has_data"]; ok {
+			t.Fatalf("REST delta contains GraphQL-only has_data: %#v", delta)
+		}
+		if _, ok := delta["has_prior_data"]; ok {
+			t.Fatalf("REST delta contains GraphQL-only has_prior_data: %#v", delta)
+		}
+	}
 }
 
 // TestNewHomePostHandlerMissingBodyIs422 pins an empty POST body's

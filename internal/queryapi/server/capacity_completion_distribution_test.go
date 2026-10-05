@@ -112,7 +112,7 @@ func TestCapacityCompletionDistributionDocument_SelectsExactlyTheDistribution(t 
 	}
 }
 
-// The document carries no defaults of its own: the input is one required variable and the SDL input type supplies historyDays 90 and simulations 10000.
+// The document carries no defaults of its own: the input is one nullable variable (an absent input or an absent team is the explicit org scope) and the SDL input type supplies historyDays 90 and simulations 10000.
 func TestCapacityCompletionDistributionDocument_InputIsOneVariableWithSDLDefaults(t *testing.T) {
 	op := loadCapacityCompletionDistribution(t)
 	for _, v := range op.VariableDefinitions {
@@ -176,6 +176,8 @@ func (s *cdScanner) Scan(dest ...any) error {
 			*p = row[i].(time.Time)
 		case *uint64:
 			*p = row[i].(uint64)
+		case *string:
+			*p = row[i].(string)
 		default:
 			return errors.New("cdScanner: unsupported scan target")
 		}
@@ -188,9 +190,21 @@ func (*cdScanner) Close() error { return nil }
 type cdClient struct {
 	responses []*cdScanner
 	bindings  [][]dhclickhouse.Binding
+	// owners are the teams the ownership read answers for (CHAOS-8717); ownershipBindings are the
+	// bindings of each ownership read, kept apart from the throughput and backlog reads in bindings.
+	owners            []string
+	ownershipBindings [][]dhclickhouse.Binding
 }
 
-func (c *cdClient) Query(_ context.Context, _ string, b []dhclickhouse.Binding) (dhclickhouse.RowScanner, error) {
+func (c *cdClient) Query(_ context.Context, statement string, b []dhclickhouse.Binding) (dhclickhouse.RowScanner, error) {
+	if strings.Contains(statement, "FROM team_repo_ownership") {
+		c.ownershipBindings = append(c.ownershipBindings, b)
+		rows := make([][]any, 0, len(c.owners))
+		for _, id := range c.owners {
+			rows = append(rows, []any{id})
+		}
+		return &cdScanner{rows: rows}, nil
+	}
 	c.bindings = append(c.bindings, b)
 	if len(c.bindings) > len(c.responses) {
 		return nil, errors.New("unexpected extra query")
@@ -205,7 +219,7 @@ func TestCapacityCompletionDistributionDocument_ServesTheCapacityForecastShapePe
 	for i, n := range []uint64{2, 4, 6, 8, 10} {
 		throughput = append(throughput, []any{base.AddDate(0, 0, i), n})
 	}
-	client := &cdClient{responses: []*cdScanner{{rows: throughput}, {rows: [][]any{{uint64(30)}}}}}
+	client := &cdClient{responses: []*cdScanner{{rows: throughput}, {rows: [][]any{{uint64(30)}}}}, owners: []string{"team-a"}}
 	handler := newGraphQLServer(&graph.Resolver{ClickHouse: client})
 
 	body, _ := json.Marshal(map[string]any{
@@ -271,5 +285,120 @@ func TestCapacityCompletionDistributionDocument_ServesTheCapacityForecastShapePe
 	}
 	if !sawTeam {
 		t.Errorf("the throughput read carried no team-a binding: %v", client.bindings[0])
+	}
+}
+
+// CHAOS-8717: a team answers only through team_repo_ownership. serveDistribution runs the document for
+// org-7 over a client whose ownership read answers for `owners`, and returns the decoded
+// capacityForecast (nil when the answer is null) and the client.
+func serveDistribution(t *testing.T, input map[string]any, owners []string) (map[string]json.RawMessage, *cdClient) {
+	t.Helper()
+	base := time.Now().UTC().Truncate(24*time.Hour).AddDate(0, 0, -10)
+	var throughput [][]any
+	for i, n := range []uint64{2, 4, 6, 8, 10} {
+		throughput = append(throughput, []any{base.AddDate(0, 0, i), n})
+	}
+	client := &cdClient{responses: []*cdScanner{{rows: throughput}, {rows: [][]any{{uint64(30)}}}}, owners: owners}
+	handler := newGraphQLServer(&graph.Resolver{ClickHouse: client})
+	body, _ := json.Marshal(map[string]any{
+		"query":     registeredCapacityCompletionDistributionDocument,
+		"variables": map[string]any{"orgId": "org-7", "input": input},
+	})
+	req := httptest.NewRequest(http.MethodPost, "/query", strings.NewReader(string(body)))
+	req.Header.Set("Content-Type", "application/json")
+	req = req.WithContext(authctx.WithClaims(req.Context(), authctx.Claims{OrgID: "org-7"}))
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+	var out struct {
+		Data struct {
+			CapacityForecast map[string]json.RawMessage `json:"capacityForecast"`
+		} `json:"data"`
+		Errors []any `json:"errors"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &out); err != nil || rec.Code != http.StatusOK || len(out.Errors) > 0 {
+		t.Fatalf("status %d, decode %v, errors %v: %s", rec.Code, err, out.Errors, rec.Body.String())
+	}
+	return out.Data.CapacityForecast, client
+}
+
+func teamBindingsOf(bindings []dhclickhouse.Binding) (single string, many []string) {
+	for _, b := range bindings {
+		switch b.Name {
+		case "team_id":
+			single, _ = b.Value.(string)
+		case "team_ids":
+			many, _ = b.Value.([]string)
+		}
+	}
+	return single, many
+}
+
+// A team with no ownership row has no team answer: the forecast is null, and the throughput table is never
+// read for it, so no org-wide or team_id-keyed row can stand in. (Red before the fix: the resolver answered
+// with the distribution of whatever the table held.)
+func TestCapacityCompletionDistribution_ATeamWithNoOwnershipRowsHasNoAnswer(t *testing.T) {
+	got, client := serveDistribution(t, map[string]any{"teamId": "team-unowned"}, nil)
+	if got != nil {
+		t.Fatalf("a team with zero ownership rows was answered: %v", got)
+	}
+	if len(client.bindings) != 0 {
+		t.Fatalf("the throughput or backlog table was read for an unowned team: %v", client.bindings)
+	}
+	if len(client.ownershipBindings) != 1 {
+		t.Fatalf("ownership reads = %d, want 1", len(client.ownershipBindings))
+	}
+}
+
+// A team of another organization owns nothing in this one: the ownership read is bound to the caller's
+// org, so the team has no answer.
+func TestCapacityCompletionDistribution_ATeamOfAnotherOrgIsRefusedByTheOrgBoundOwnershipRead(t *testing.T) {
+	got, client := serveDistribution(t, map[string]any{"teamId": "team-of-org-9"}, nil)
+	if got != nil {
+		t.Fatalf("a team that owns nothing in org-7 was answered: %v", got)
+	}
+	var org any
+	for _, b := range client.ownershipBindings[0] {
+		if b.Name == "org_id" {
+			org = b.Value
+		}
+	}
+	if org != "org-7" {
+		t.Fatalf("the ownership read is bound to org %v, want the caller's org-7", org)
+	}
+}
+
+// An owned team is answered, scoped to that team.
+func TestCapacityCompletionDistribution_AnOwnedTeamIsAnsweredAndScoped(t *testing.T) {
+	got, client := serveDistribution(t, map[string]any{"teamId": "team-a"}, []string{"team-a"})
+	if got == nil || len(got["completionDistribution"]) == 0 || string(got["completionDistribution"]) == "null" {
+		t.Fatalf("an owned team has no distribution: %v", got)
+	}
+	if single, _ := teamBindingsOf(client.bindings[0]); single != "team-a" {
+		t.Fatalf("throughput bound team_id %q, want team-a", single)
+	}
+}
+
+// Of several requested teams only the owned ones are read; the rest are dropped, never widened to the org.
+func TestCapacityCompletionDistribution_OnlyTheOwnedTeamsOfSeveralAreRead(t *testing.T) {
+	got, client := serveDistribution(t, map[string]any{"teamIds": []string{"team-a", "team-unowned"}}, []string{"team-a"})
+	if got == nil {
+		t.Fatal("the owned team of two requested got no answer")
+	}
+	if single, many := teamBindingsOf(client.bindings[0]); single != "team-a" || len(many) != 0 {
+		t.Fatalf("throughput team binding single=%q many=%v, want team-a only", single, many)
+	}
+}
+
+// No team at all is the explicit org-wide scope the nullable input permits: no ownership read, and answered.
+func TestCapacityCompletionDistribution_NoTeamIsTheExplicitOrgScope(t *testing.T) {
+	got, client := serveDistribution(t, map[string]any{}, nil)
+	if got == nil {
+		t.Fatal("an org-wide request got no answer")
+	}
+	if len(client.ownershipBindings) != 0 {
+		t.Fatalf("an org-wide request read ownership: %v", client.ownershipBindings)
+	}
+	if single, many := teamBindingsOf(client.bindings[0]); single != "" || len(many) != 0 {
+		t.Fatalf("an org-wide request bound a team: %q %v", single, many)
 	}
 }

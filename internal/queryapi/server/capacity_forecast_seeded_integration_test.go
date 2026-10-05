@@ -281,6 +281,36 @@ func TestCapacityForecastComputesAgainstRealMetricsRows(t *testing.T) {
 		t.Fatalf("seed work_item_metrics_daily: %v", err)
 	}
 
+	// CHAOS-8717: a team answers only through team_repo_ownership. team-alpha owns a repository in this org;
+	// team-noown has throughput rows here and no ownership row anywhere; team-theirs has throughput rows here
+	// and owns a repository only in the OTHER org.
+	owner := func(org, team, repo string) {
+		t.Helper()
+		if err := raw.Exec(ctx, fmt.Sprintf(
+			`INSERT INTO team_repo_ownership (org_id, provider, team_id, repo_id, repo_full_name, match_type, source, is_primary, specificity, priority, valid_from, valid_to, updated_at)
+			VALUES ('%s', 'github', '%s', NULL, '%s', 'exact', 'inferred', 0, 0, 0, toDateTime64('2026-01-01 00:00:00',3), NULL, toDateTime64('2026-01-01 00:00:00',3))`,
+			org, team, repo)); err != nil {
+			t.Fatalf("seed team_repo_ownership: %v", err)
+		}
+	}
+	owner("org-mine", "team-alpha", "acme/alpha")
+	owner("org-theirs", "team-theirs", "acme/theirs")
+	for _, team := range []string{"team-noown", "team-theirs"} {
+		if err := raw.Exec(ctx, fmt.Sprintf(
+			`INSERT INTO work_item_metrics_daily (day, provider, work_scope_id, team_id, items_completed, wip_count_end_of_day, computed_at, org_id)
+			VALUES (toDate('%s'), 'jira', 'scope-x', '%s', 7, 70, toDateTime('2026-09-01 00:00:00'), 'org-mine')`,
+			anchor.Format("2006-01-02"), team)); err != nil {
+			t.Fatalf("seed work_item_metrics_daily for %s: %v", team, err)
+		}
+	}
+	for _, team := range []string{"team-noown", "team-theirs"} {
+		unowned := &model.CapacityForecastInput{TeamID: &team, HistoryDays: 90, Simulations: 200}
+		forecast, err := capacityforecast.ResolveForecast(ctx, client, "org-mine", unowned, anchor)
+		if err != nil || forecast != nil {
+			t.Errorf("%s has throughput rows in org-mine and no ownership there: forecast %+v, err %v; want a nil forecast", team, forecast, err)
+		}
+	}
+
 	teamID := "team-alpha"
 	input := &model.CapacityForecastInput{
 		TeamID:      &teamID,

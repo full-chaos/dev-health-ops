@@ -108,9 +108,28 @@ type fakeClient struct {
 	calls      int
 	statements []string
 	bindings   [][]clickhouse.Binding
+	// owners is the set of teams the ownership read (ownedTeamsSQL) answers for. Nil means every
+	// requested team owns a repository, so a test that is not about ownership need not state it; a
+	// non-nil empty slice means no team does. The ownership statements are kept apart from
+	// statements/bindings (the two reads the forecast is about), in ownershipBindings.
+	owners            []string
+	ownershipBindings [][]clickhouse.Binding
 }
 
 func (f *fakeClient) Query(_ context.Context, statement string, bindings []clickhouse.Binding) (clickhouse.RowScanner, error) {
+	if statement == ownedTeamsSQL {
+		f.ownershipBindings = append(f.ownershipBindings, bindings)
+		requested, _ := bindingValue(bindings, "team_ids")
+		owned := f.owners
+		if owned == nil {
+			owned, _ = requested.([]string)
+		}
+		rows := make([][]any, 0, len(owned))
+		for _, id := range owned {
+			rows = append(rows, []any{id})
+		}
+		return &fakeRowScanner{rows: rows}, nil
+	}
 	index := f.calls
 	f.calls++
 	f.statements = append(f.statements, statement)

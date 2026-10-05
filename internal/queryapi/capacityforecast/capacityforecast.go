@@ -224,6 +224,35 @@ func ResolveForecast(
 		}
 	}
 
+	// CHAOS-8717: a requested team answers only through ownership rows. A team with none is reported
+	// missing (a null forecast, logged with its reason) and is never widened to the organization: the
+	// throughput table would otherwise answer for any team_id it carries a row for, or, once every
+	// requested team is dropped, for the whole org. A request with no team at all is the explicit
+	// org-wide scope the nullable input permits, and is untouched.
+	if len(teamIDs) > 0 {
+		owned, ownErr := ownedTeams(ctx, client, orgID, teamIDs, now)
+		if ownErr != nil {
+			return nil, ownErr
+		}
+		if len(owned) == 0 {
+			slog.WarnContext(ctx, "query_api.capacity_forecast.empty",
+				"org_id", orgID,
+				"team_ids", teamsForLog(teamIDs),
+				"reason", "no_team_ownership: none of the requested teams has a team_repo_ownership row open now",
+				"duration_ms", time.Since(started).Milliseconds(),
+			)
+			return nil, nil
+		}
+		if len(owned) < len(teamIDs) {
+			slog.WarnContext(ctx, "query_api.capacity_forecast.teams_without_ownership_dropped",
+				"org_id", orgID,
+				"requested", len(teamIDs),
+				"owned", len(owned),
+			)
+			teamIDs = owned
+		}
+	}
+
 	history, err := loadThroughput(ctx, client, orgID, teamIDs, workScopeID, historyDays, now)
 	if err != nil {
 		return nil, err

@@ -1,10 +1,12 @@
 # CHAOS-5349 wire-form fixtures (capacity / throughput forecast)
 
-`capacityForecast.graphql`, `capacityForecasts.graphql` and
-`throughputForecast.graphql` are the exact document text
+`capacityForecast.graphql`, `capacityForecasts.graphql`,
+`throughputForecast.graphql` and `capacityCompletionDistribution.graphql`
+(CHAOS-8598) are the exact document text
 `query_route.go`'s `registeredCapacityForecastDocument`,
-`registeredCapacityForecastsDocument` and
-`registeredThroughputForecastDocument` must digest to for a real client's
+`registeredCapacityForecastsDocument`,
+`registeredThroughputForecastDocument` and
+`registeredCapacityCompletionDistributionDocument` must digest to for a real client's
 request to reach this route at all.
 
 ## Provenance — and how this differs from `../wire_capture/`

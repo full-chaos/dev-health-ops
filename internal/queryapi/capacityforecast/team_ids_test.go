@@ -2,9 +2,12 @@ package capacityforecast
 
 import (
 	"context"
+	"errors"
 	"reflect"
 	"strings"
 	"testing"
+
+	"github.com/full-chaos/dev-health-go/clickhouse"
 
 	"github.com/full-chaos/dev-health-ops/internal/queryapi/graph/model"
 )
@@ -147,4 +150,64 @@ func TestMultiTeamReadsAreASingleTableSumWithoutAJoin(t *testing.T) {
 	if !strings.Contains(client.statements[0], "GROUP BY day") || strings.Contains(client.statements[0], "GROUP BY day,") {
 		t.Errorf("throughput must group by day alone so teams add up per day:\n%s", client.statements[0])
 	}
+}
+
+// CHAOS-8717: a requested team answers only through ownership rows. capacityForecast and
+// capacityCompletionDistribution share this resolver, so both are covered here.
+func TestResolveForecastATeamWithNoOwnershipRowsIsMissingAndReadsNoThroughput(t *testing.T) {
+	input := &model.CapacityForecastInput{TeamIds: []string{"team-unowned"}, HistoryDays: 30, Simulations: 50}
+	client := &fakeClient{owners: []string{}, responses: []*fakeRowScanner{throughputRows(t, 2, 4, 6), {rows: [][]any{{uint64(30)}}}}}
+	got, err := ResolveForecast(context.Background(), client, "org-7", input, day(t, "2026-09-01"))
+	if err != nil || got != nil {
+		t.Fatalf("a team with zero ownership rows: forecast %v, err %v; want a nil forecast", got, err)
+	}
+	if len(client.statements) != 0 {
+		t.Fatalf("throughput or backlog was read for an unowned team: %v", client.statements)
+	}
+	if len(client.ownershipBindings) != 1 {
+		t.Fatalf("ownership reads = %d, want 1", len(client.ownershipBindings))
+	}
+	if org, _ := bindingValue(client.ownershipBindings[0], "org_id"); org != "org-7" {
+		t.Fatalf("the ownership read is bound to org %v, want the caller's org-7", org)
+	}
+}
+
+func TestResolveForecastReadsOnlyTheOwnedTeamsOfSeveral(t *testing.T) {
+	input := &model.CapacityForecastInput{TeamIds: []string{"team-a", "team-unowned", "team-b"}, HistoryDays: 30, Simulations: 50}
+	client := &fakeClient{owners: []string{"team-b", "team-a"}, responses: []*fakeRowScanner{throughputRows(t, 2, 4, 6, 8, 10), {rows: [][]any{{uint64(30)}}}}}
+	got, err := ResolveForecast(context.Background(), client, "org-7", input, day(t, "2026-09-01"))
+	if err != nil || got == nil {
+		t.Fatalf("forecast %v, err %v; want an answer for the owned teams", got, err)
+	}
+	for index := range client.statements {
+		value, _ := bindingValue(client.bindings[index], "team_ids")
+		if want := []string{"team-a", "team-b"}; !reflect.DeepEqual(value, want) {
+			t.Errorf("statement %d team_ids %v, want the owned teams in requested order %v", index, value, want)
+		}
+	}
+}
+
+func TestResolveForecastWithNoTeamReadsNoOwnership(t *testing.T) {
+	input := &model.CapacityForecastInput{HistoryDays: 30, Simulations: 50}
+	client := &fakeClient{responses: []*fakeRowScanner{throughputRows(t, 2, 4, 6, 8, 10), {rows: [][]any{{uint64(30)}}}}}
+	got, err := ResolveForecast(context.Background(), client, "org-7", input, day(t, "2026-09-01"))
+	if err != nil || got == nil {
+		t.Fatalf("an org-wide request: forecast %v, err %v", got, err)
+	}
+	if len(client.ownershipBindings) != 0 {
+		t.Fatalf("an org-wide request read ownership: %v", client.ownershipBindings)
+	}
+}
+
+func TestOwnedTeamsFailsClosedOnAReadError(t *testing.T) {
+	_, err := ownedTeams(context.Background(), errClient{}, "org-7", []string{"team-a"}, day(t, "2026-09-01"))
+	if err == nil {
+		t.Fatal("an ownership read that failed was treated as an answer")
+	}
+}
+
+type errClient struct{}
+
+func (errClient) Query(context.Context, string, []clickhouse.Binding) (clickhouse.RowScanner, error) {
+	return nil, errors.New("boom")
 }

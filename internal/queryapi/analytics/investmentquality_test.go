@@ -175,7 +175,7 @@ func TestResolveEvidenceQualityStats_QueryError_IsFatal(t *testing.T) {
 func TestResolveEvidenceQualityByGroup_UsesDominantPersistedGroupAndPreservesUnknownMean(t *testing.T) {
 	client := &routingFakeClient{}
 	client.on("evidence_quality_group_key", &fakeRowScanner{rows: [][]any{
-		{"feature_delivery", 0.70, uint64(2), uint64(2)},
+		{"feature_delivery", 0.0, uint64(2), uint64(2)},
 		{"maintenance", math.NaN(), uint64(3), uint64(0)},
 	}})
 	groupBy := model.DimensionInputTheme
@@ -192,8 +192,8 @@ func TestResolveEvidenceQualityByGroup_UsesDominantPersistedGroupAndPreservesUnk
 	if len(got) != 2 {
 		t.Fatalf("len(groups) = %d, want 2: %+v", len(got), got)
 	}
-	if got[0].Key != "feature_delivery" || got[0].Total != 2 || got[0].Mean == nil || *got[0].Mean != 0.70 {
-		t.Fatalf("feature_delivery group = %+v, want mean 0.70 over 2 units", got[0])
+	if got[0].Key != "feature_delivery" || got[0].Total != 2 || got[0].Mean == nil || *got[0].Mean != 0.0 {
+		t.Fatalf("feature_delivery group = %+v, want observed zero mean over 2 units", got[0])
 	}
 	if got[0].Label == nil || *got[0].Label != "feature_delivery" {
 		t.Errorf("feature_delivery label = %v, want the non-ID key fallback", got[0].Label)

@@ -184,7 +184,7 @@ func BuildResponse(ctx context.Context, chClient QueryClient, pgClient PGQueryCl
 	allocationCategorySQL, allocationCategoryBindings := workCategoryFilter(f)
 
 	var lastIngested *time.Time
-	var coverage map[string]float64
+	var coverage Coverage
 	var sources map[string]string
 	var scopeDataConfidence ScopeDataConfidence
 	var deltas []MetricDelta
@@ -227,7 +227,7 @@ func BuildResponse(ctx context.Context, chClient QueryClient, pgClient PGQueryCl
 		reworkAllocation = []ReworkThemeAllocation{}
 	}
 
-	dataConfidence := BuildDataConfidence(coverage, sources)
+	dataConfidence := BuildDataConfidence(coverage.ObservedValues(), sources)
 	if !hasCurrentMetricData(deltas) {
 		return noDataResponse(lastIngested, latestSuccessfulSyncAt, coverage, sources, deltas, reworkAllocation, dataConfidence, scopeDataConfidence), nil
 	}
@@ -347,11 +347,7 @@ func BuildResponse(ctx context.Context, chClient QueryClient, pgClient PGQueryCl
 			LastIngestedAt:         (*pytime.NaiveDateTime)(lastIngested),
 			LatestSuccessfulSyncAt: (*MicroDateTime)(latestSuccessfulSyncAt),
 			Sources:                sources,
-			Coverage: Coverage{
-				ReposCoveredPct:          coverage["repos_covered_pct"],
-				PRsLinkedToIssuesPct:     coverage["prs_linked_to_issues_pct"],
-				IssuesWithCycleStatesPct: coverage["issues_with_cycle_states_pct"],
-			},
+			Coverage:               coverage,
 		},
 		Deltas:                deltas,
 		ReworkThemeAllocation: reworkAllocation,
@@ -376,7 +372,7 @@ func hasCurrentMetricData(deltas []MetricDelta) bool {
 	return false
 }
 
-func noDataResponse(lastIngested *time.Time, latestSuccessfulSyncAt *time.Time, coverage map[string]float64, sources map[string]string, deltas []MetricDelta, reworkAllocation []ReworkThemeAllocation, dataConfidence DataConfidence, scopeDataConfidence ScopeDataConfidence) *Response {
+func noDataResponse(lastIngested *time.Time, latestSuccessfulSyncAt *time.Time, coverage Coverage, sources map[string]string, deltas []MetricDelta, reworkAllocation []ReworkThemeAllocation, dataConfidence DataConfidence, scopeDataConfidence ScopeDataConfidence) *Response {
 	if deltas == nil {
 		deltas = []MetricDelta{}
 	}
@@ -388,11 +384,7 @@ func noDataResponse(lastIngested *time.Time, latestSuccessfulSyncAt *time.Time, 
 			LastIngestedAt:         (*pytime.NaiveDateTime)(lastIngested),
 			LatestSuccessfulSyncAt: (*MicroDateTime)(latestSuccessfulSyncAt),
 			Sources:                sources,
-			Coverage: Coverage{
-				ReposCoveredPct:          coverage["repos_covered_pct"],
-				PRsLinkedToIssuesPct:     coverage["prs_linked_to_issues_pct"],
-				IssuesWithCycleStatesPct: coverage["issues_with_cycle_states_pct"],
-			},
+			Coverage:               coverage,
 		},
 		Deltas:                deltas,
 		ReworkThemeAllocation: reworkAllocation,

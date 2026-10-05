@@ -62,7 +62,9 @@ func fetchLastIngestedAt(ctx context.Context, client QueryClient, orgID string) 
 }
 
 // fetchCoverage ports fetch_coverage (api/queries/freshness.py:54-121).
-func fetchCoverage(ctx context.Context, client QueryClient, startDay, endDay time.Time, orgID string) (map[string]float64, error) {
+// Each percentage is null when its own denominator has no records. This
+// preserves the difference between unavailable coverage and observed 0%.
+func fetchCoverage(ctx context.Context, client QueryClient, startDay, endDay time.Time, orgID string) (Coverage, error) {
 	orgBinding := []dhclickhouse.Binding{{Name: "org_id", Value: orgID}}
 	windowBindings := []dhclickhouse.Binding{
 		{Name: "start_day", Value: formatDay(startDay)},
@@ -76,7 +78,7 @@ func fetchCoverage(ctx context.Context, client QueryClient, startDay, endDay tim
         WHERE org_id = {org_id:String}
     `, orgBinding)
 	if err != nil {
-		return nil, fmt.Errorf("home: fetch_coverage total repos: %w", err)
+		return Coverage{}, fmt.Errorf("home: fetch_coverage total repos: %w", err)
 	}
 
 	covered, err := queryOneFloat(ctx, client, `
@@ -86,12 +88,9 @@ func fetchCoverage(ctx context.Context, client QueryClient, startDay, endDay tim
           AND org_id = {org_id:String}
     `, windowBindings)
 	if err != nil {
-		return nil, fmt.Errorf("home: fetch_coverage covered repos: %w", err)
+		return Coverage{}, fmt.Errorf("home: fetch_coverage covered repos: %w", err)
 	}
-	reposCoveredPct := 0.0
-	if totalRepos != 0 {
-		reposCoveredPct = covered / totalRepos * 100.0
-	}
+	reposCoveredPct := coveragePercent(covered, totalRepos)
 
 	linked, total, err := queryTwoFloats(ctx, client, `
         SELECT
@@ -102,12 +101,9 @@ func fetchCoverage(ctx context.Context, client QueryClient, startDay, endDay tim
           AND org_id = {org_id:String}
     `, windowBindings)
 	if err != nil {
-		return nil, fmt.Errorf("home: fetch_coverage pr link: %w", err)
+		return Coverage{}, fmt.Errorf("home: fetch_coverage pr link: %w", err)
 	}
-	prsLinkedPct := 0.0
-	if total != 0 {
-		prsLinkedPct = linked / total * 100.0
-	}
+	prsLinkedPct := coveragePercent(linked, total)
 
 	withCycle, totalCycle, err := queryTwoFloats(ctx, client, `
         SELECT
@@ -118,18 +114,23 @@ func fetchCoverage(ctx context.Context, client QueryClient, startDay, endDay tim
           AND org_id = {org_id:String}
     `, windowBindings)
 	if err != nil {
-		return nil, fmt.Errorf("home: fetch_coverage issue cycle: %w", err)
+		return Coverage{}, fmt.Errorf("home: fetch_coverage issue cycle: %w", err)
 	}
-	issuesCyclePct := 0.0
-	if totalCycle != 0 {
-		issuesCyclePct = withCycle / totalCycle * 100.0
-	}
+	issuesCyclePct := coveragePercent(withCycle, totalCycle)
 
-	return map[string]float64{
-		"repos_covered_pct":            reposCoveredPct,
-		"prs_linked_to_issues_pct":     prsLinkedPct,
-		"issues_with_cycle_states_pct": issuesCyclePct,
+	return Coverage{
+		ReposCoveredPct:          reposCoveredPct,
+		PRsLinkedToIssuesPct:     prsLinkedPct,
+		IssuesWithCycleStatesPct: issuesCyclePct,
 	}, nil
+}
+
+func coveragePercent(numerator, denominator float64) *float64 {
+	if denominator == 0 {
+		return nil
+	}
+	percentage := numerator / denominator * 100.0
+	return &percentage
 }
 
 // fetchScopeDataConfidence reads only the repositories selected by the Home

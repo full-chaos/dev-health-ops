@@ -754,9 +754,12 @@ type ConnectorStatus {
 }
 
 type Coverage {
-  reposCoveredPct: Float!
-  prsLinkedToIssuesPct: Float!
-  issuesWithCycleStatesPct: Float!
+  """Null when no repositories are available to measure."""
+  reposCoveredPct: Float
+  """Null when the current window contains no work items to link."""
+  prsLinkedToIssuesPct: Float
+  """Null when the current window contains no work items for cycle-state coverage."""
+  issuesWithCycleStatesPct: Float
 }
 
 type CoverageStat {

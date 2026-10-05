@@ -70,6 +70,54 @@ func (emptyRowsHomeScanner) Scan(...any) error { return nil }
 func (emptyRowsHomeScanner) Err() error        { return nil }
 func (emptyRowsHomeScanner) Close() error      { return nil }
 
+// homeCoverageRowsClient supplies only the three aggregate reads that
+// fetchCoverage performs. Every other Home reader sees no rows, so these
+// tests exercise the real HTTP handler and JSON encoder while controlling
+// each coverage denominator independently.
+type homeCoverageRowsClient struct {
+	reposCovered, reposTotal float64
+	linked, workItems        float64
+	withCycle, cycleItems    float64
+}
+
+func (c homeCoverageRowsClient) Query(_ context.Context, query string, _ []dhclickhouse.Binding) (dhclickhouse.RowScanner, error) {
+	switch {
+	case strings.Contains(query, "countDistinct(id)) AS total"):
+		return &homeCoverageRowsScanner{values: []float64{c.reposTotal}}, nil
+	case strings.Contains(query, "countDistinct(repo_id)) AS covered"):
+		return &homeCoverageRowsScanner{values: []float64{c.reposCovered}}, nil
+	case strings.Contains(query, "countIf(work_scope_id != '')"):
+		return &homeCoverageRowsScanner{values: []float64{c.linked, c.workItems}}, nil
+	case strings.Contains(query, "countIf(cycle_time_hours IS NOT NULL)"):
+		return &homeCoverageRowsScanner{values: []float64{c.withCycle, c.cycleItems}}, nil
+	default:
+		return emptyRowsHomeScanner{}, nil
+	}
+}
+
+type homeCoverageRowsScanner struct {
+	values  []float64
+	scanned bool
+}
+
+func (s *homeCoverageRowsScanner) Next() bool {
+	if s.scanned {
+		return false
+	}
+	s.scanned = true
+	return true
+}
+
+func (s *homeCoverageRowsScanner) Scan(dest ...any) error {
+	for index, destination := range dest {
+		*destination.(*float64) = s.values[index]
+	}
+	return nil
+}
+
+func (*homeCoverageRowsScanner) Err() error   { return nil }
+func (*homeCoverageRowsScanner) Close() error { return nil }
+
 func TestNewHomeGetHandlerRequiresAuthContext(t *testing.T) {
 	handler := newHomeGetHandler(emptyRowsHomeClient{}, nil)
 	req := httptest.NewRequest(http.MethodGet, "/api/v1/home", nil)
@@ -206,6 +254,77 @@ func TestNewHomeGetHandlerHappyPathShape(t *testing.T) {
 		}
 	}
 }
+
+func TestNewHomeGetHandlerCoverageDistinguishesUnavailableFromObservedZero(t *testing.T) {
+	tests := []struct {
+		name   string
+		client homeCoverageRowsClient
+		expect map[string]*float64
+	}{
+		{
+			name:   "each zero denominator is null",
+			client: homeCoverageRowsClient{},
+			expect: map[string]*float64{
+				"repos_covered_pct": nil, "prs_linked_to_issues_pct": nil, "issues_with_cycle_states_pct": nil,
+			},
+		},
+		{
+			name:   "observed zero stays numeric zero",
+			client: homeCoverageRowsClient{reposTotal: 2, workItems: 3, cycleItems: 3},
+			expect: map[string]*float64{
+				"repos_covered_pct": float64Pointer(0), "prs_linked_to_issues_pct": float64Pointer(0), "issues_with_cycle_states_pct": float64Pointer(0),
+			},
+		},
+		{
+			name:   "one unavailable denominator does not collapse the coverage object",
+			client: homeCoverageRowsClient{workItems: 3, withCycle: 1, cycleItems: 2},
+			expect: map[string]*float64{
+				"repos_covered_pct": nil, "prs_linked_to_issues_pct": float64Pointer(0), "issues_with_cycle_states_pct": float64Pointer(50),
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			handler := newHomeGetHandler(tt.client, nil)
+			req := httptest.NewRequest(http.MethodGet, "/api/v1/home?scope_type=org", nil)
+			req = req.WithContext(authctx.WithClaims(req.Context(), authctx.Claims{OrgID: "org-1"}))
+			rec := httptest.NewRecorder()
+			serveRoute(t, handler, rec, req)
+			if rec.Code != http.StatusOK {
+				t.Fatalf("status = %d, want %d; body=%s", rec.Code, http.StatusOK, rec.Body.String())
+			}
+
+			var body struct {
+				Freshness struct {
+					Coverage map[string]any `json:"coverage"`
+				} `json:"freshness"`
+			}
+			if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
+				t.Fatalf("decode body: %v; body=%s", err, rec.Body.String())
+			}
+			for field, want := range tt.expect {
+				got, exists := body.Freshness.Coverage[field]
+				if !exists {
+					t.Errorf("freshness.coverage.%s is absent; want explicit JSON value", field)
+					continue
+				}
+				if want == nil {
+					if got != nil {
+						t.Errorf("freshness.coverage.%s = %v, want null", field, got)
+					}
+					continue
+				}
+				value, ok := got.(float64)
+				if !ok || value != *want {
+					t.Errorf("freshness.coverage.%s = %v, want numeric %v", field, got, *want)
+				}
+			}
+		})
+	}
+}
+
+func float64Pointer(value float64) *float64 { return &value }
 
 // TestNewHomePostHandlerMissingBodyIs422 pins an empty POST body's
 // missing-"body" shape, matching sankey_route.go's own precedent for

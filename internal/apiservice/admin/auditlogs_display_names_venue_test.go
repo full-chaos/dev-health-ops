@@ -5,10 +5,12 @@ package admin_test
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"testing"
 
 	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/venueoracle"
@@ -120,7 +122,7 @@ VALUES ($1, $2, $3, $4, $5, $6, $4, '{}'::json, '{}'::json, 'success',
 			}
 		},
 	})
-	base, _ := startGoServer(t, ctx, venue, jwtKey)
+	base, apiPool := startGoServer(t, ctx, venue, jwtKey)
 	auth := map[string]string{"Authorization": "Bearer " + venue.Tokens["admin"]}
 
 	expected := map[string]auditDisplayExpectation{
@@ -139,9 +141,16 @@ VALUES ($1, $2, $3, $4, $5, $6, $4, '{}'::json, '{}'::json, 'success',
 		"actor-without-display-name":         {actor: nil, resource: nil},
 	}
 
-	list := auditLogPage(t, venueoracle.Do(t, base, venueoracle.Request{
+	listResponse := venueoracle.Do(t, base, venueoracle.Request{
 		Name: "audit list resolved display names", Method: http.MethodGet, Path: "/api/v1/admin/audit-logs", Headers: auth,
-	}))
+	})
+	auditDisplayNamesDiagnostic(t, ctx, venue, apiPool, listResponse.Status, orgID, []auditDisplayDiagnosticFixture{
+		{action: "organization", logID: logIDs["organization"], resourceID: orgID, table: "organizations", orgColumn: "id", visibilitySQL: auditDisplayOrganizationVisibilitySQL},
+		{action: "sso-provider", logID: logIDs["sso-provider"], resourceID: providerID, table: "sso_providers", orgColumn: "org_id", visibilitySQL: auditDisplayProviderVisibilitySQL},
+		{action: "ingest-source", logID: logIDs["ingest-source"], resourceID: sourceID, table: "external_ingest_sources", orgColumn: "org_id", visibilitySQL: auditDisplaySourceVisibilitySQL},
+		{action: "ingest-token", logID: logIDs["ingest-token"], resourceID: tokenID, table: "external_ingest_tokens", orgColumn: "org_id", visibilitySQL: auditDisplayTokenVisibilitySQL},
+	})
+	list := auditLogPage(t, listResponse)
 	if list.Total != len(expected) || len(list.Items) != len(expected) {
 		t.Fatalf("audit list cardinality = total %d, items %d; want %d", list.Total, len(list.Items), len(expected))
 	}
@@ -181,6 +190,129 @@ VALUES ($1, $2, $3, $4, $5, $6, $4, '{}'::json, '{}'::json, 'success',
 	assertAuditDisplayNames(t, platform.Items, expected)
 
 	venueoracle.WriteGoOnlyProof(t, "real migrated Postgres and all audit read routes resolve only authoritative audited-org display names; missing, malformed, cross-org, and e-mail-only records stay null")
+}
+
+const (
+	auditDisplayOrganizationVisibilitySQL = `SELECT
+	EXISTS (SELECT 1 FROM organizations WHERE id = $1::uuid),
+	EXISTS (SELECT 1 FROM organizations WHERE id = $1::uuid AND id = $2::uuid)`
+	auditDisplayProviderVisibilitySQL = `SELECT
+	EXISTS (SELECT 1 FROM sso_providers WHERE id = $1::uuid),
+	EXISTS (SELECT 1 FROM sso_providers WHERE id = $1::uuid AND org_id = $2::uuid)`
+	auditDisplaySourceVisibilitySQL = `SELECT
+	EXISTS (SELECT 1 FROM external_ingest_sources WHERE id = $1::uuid),
+	EXISTS (SELECT 1 FROM external_ingest_sources WHERE id = $1::uuid AND org_id = $2::text)`
+	auditDisplayTokenVisibilitySQL = `SELECT
+	EXISTS (SELECT 1 FROM external_ingest_tokens WHERE id = $1::uuid),
+	EXISTS (SELECT 1 FROM external_ingest_tokens WHERE id = $1::uuid AND org_id = $2::text)`
+)
+
+type auditDisplayDiagnosticFixture struct {
+	action            string
+	logID, resourceID uuid.UUID
+	table, orgColumn  string
+	visibilitySQL     string
+}
+
+// auditDisplayNamesDiagnostic records bounded facts from the real venue when
+// the response assertions below fail. It deliberately probes the same Go
+// database through the API role and a fixture-owner connection. It emits only
+// fixture booleans and type names: no headers, row values, or credentials.
+func auditDisplayNamesDiagnostic(
+	t *testing.T,
+	ctx context.Context,
+	venue *venueoracle.Venue,
+	apiPool *pgxpool.Pool,
+	endpointStatus int,
+	orgID uuid.UUID,
+	fixtures []auditDisplayDiagnosticFixture,
+) {
+	t.Helper()
+	fixturePool, err := pgxpool.New(ctx, venue.AdminURI(t, venue.GoDB))
+	if err != nil {
+		t.Fatalf("audit display diagnostic fixture connection failed: %s", auditDisplayDiagnosticError(err))
+	}
+	t.Cleanup(fixturePool.Close)
+
+	for _, connection := range []struct {
+		name string
+		pool *pgxpool.Pool
+	}{
+		{name: "api", pool: apiPool},
+		{name: "fixture", pool: fixturePool},
+	} {
+		var isAPIRole bool
+		err := connection.pool.QueryRow(ctx, `SELECT current_user = $1`, venue.Roles["api"]).Scan(&isAPIRole)
+		requireAuditDisplayDiagnostic(t, connection.name, "connection", "api-role", err)
+		if connection.name == "api" && !isAPIRole {
+			t.Fatal("audit display diagnostic api connection is not the venue api role")
+		}
+
+		for _, fixture := range fixtures {
+			auditResourceIDType, targetIDType := "", ""
+			var targetIDMatches, caseUUIDMatches, auditOrgMatchesScope bool
+			err := connection.pool.QueryRow(ctx, `SELECT
+	pg_typeof(a.resource_id)::text,
+	pg_typeof($2::uuid)::text,
+	a.resource_id = $2::text,
+	CASE WHEN a.resource_id ~* '^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$' THEN a.resource_id::uuid END = $2::uuid,
+	a.org_id = $3::uuid
+FROM audit_logs a
+WHERE a.id = $1::uuid`, fixture.logID, fixture.resourceID, orgID).Scan(
+				&auditResourceIDType,
+				&targetIDType,
+				&targetIDMatches,
+				&caseUUIDMatches,
+				&auditOrgMatchesScope,
+			)
+			requireAuditDisplayDiagnostic(t, connection.name, fixture.action, "audit-row", err)
+
+			tableIDType, tableOrgIDType := "", ""
+			err = connection.pool.QueryRow(ctx, `SELECT
+	id_attribute.atttypid::regtype::text,
+	org_attribute.atttypid::regtype::text
+FROM pg_class relation
+JOIN pg_namespace schema ON schema.oid = relation.relnamespace
+JOIN pg_attribute id_attribute ON id_attribute.attrelid = relation.oid AND id_attribute.attname = 'id' AND NOT id_attribute.attisdropped
+JOIN pg_attribute org_attribute ON org_attribute.attrelid = relation.oid AND org_attribute.attname = $2 AND NOT org_attribute.attisdropped
+WHERE schema.nspname = 'public' AND relation.relname = $1`, fixture.table, fixture.orgColumn).Scan(&tableIDType, &tableOrgIDType)
+			requireAuditDisplayDiagnostic(t, connection.name, fixture.action, "target-column-types", err)
+
+			var targetVisible, scopedTargetVisible bool
+			err = connection.pool.QueryRow(ctx, fixture.visibilitySQL, fixture.resourceID, orgID).Scan(&targetVisible, &scopedTargetVisible)
+			requireAuditDisplayDiagnostic(t, connection.name, fixture.action, "target-visibility", err)
+
+			t.Logf("audit display diagnostic role=%s endpoint_status=%d action=%s audit_resource_id_type=%s target_id_type=%s table_id_type=%s table_org_id_type=%s target_id_matches=%t case_uuid_matches=%t audit_org_matches_scope=%t target_visible=%t scoped_target_visible=%t",
+				connection.name,
+				endpointStatus,
+				fixture.action,
+				auditResourceIDType,
+				targetIDType,
+				tableIDType,
+				tableOrgIDType,
+				targetIDMatches,
+				caseUUIDMatches,
+				auditOrgMatchesScope,
+				targetVisible,
+				scopedTargetVisible,
+			)
+		}
+	}
+}
+
+func requireAuditDisplayDiagnostic(t *testing.T, role, action, probe string, err error) {
+	t.Helper()
+	if err != nil {
+		t.Fatalf("audit display diagnostic role=%s action=%s probe=%s failed: %s", role, action, probe, auditDisplayDiagnosticError(err))
+	}
+}
+
+func auditDisplayDiagnosticError(err error) string {
+	var pgErr *pgconn.PgError
+	if errors.As(err, &pgErr) {
+		return "sqlstate=" + pgErr.Code
+	}
+	return "non-postgres-error"
 }
 
 type auditDisplayExpectation struct {

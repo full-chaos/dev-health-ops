@@ -750,8 +750,7 @@ func VerifyCandidateBuild(running string, expected string, routing map[string]Ro
 //
 // This was briefly DEMOTED to a recorded fact, on the argument that the
 // comparison could not affect a receipt: reachability is decided by mode
-// rather than by current_candidate_build (postgres_switch.go:71-78), the
-// Python edge never reads the column, and every receipt names the identity
+// rather than by current_candidate_build, and every receipt names the identity
 // read from /buildinfo, so a stale row could not make a receipt say the
 // wrong thing.
 //

@@ -6,8 +6,8 @@ package server
 // Postgres, real gqlgen) serves a registered operation whatever its routing row says -- no row, a row
 // left at another schema digest, a row in shadow, python or disabled -- and nothing else moved: the
 // class gate of /query/run-operation and the MCP listener keep every root dark until its class row says
-// otherwise (securityAlerts with them), the proof route still needs a row, and a document that is not a
-// registered text is refused.
+// otherwise (securityAlerts with them), the proof route serves a registered operation the same way (CHAOS-8705:
+// it reads no row either), and a document that is not a registered text is refused.
 
 import (
 	"context"
@@ -16,6 +16,8 @@ import (
 	"os"
 	"strings"
 	"testing"
+
+	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/full-chaos/dev-health-ops/internal/mcpclass"
 	"github.com/full-chaos/dev-health-ops/internal/queryapi/principal"
@@ -41,7 +43,7 @@ func TestCatalogRuleServesAnOperationWithNoRowAndLeavesTheClassRowsAlone(t *test
 	securityAlertsVariables := map[string]any{"orgId": "org-1"}
 	classRow := func(schemaDigest, root, mode string) {
 		t.Helper()
-		pgseed.RoutingState(context.Background(), t, pool, schemaDigest, mcpclass.DocumentDigest(), mcpclass.Operation(root), mode)
+		pgseed.ClassDecision(context.Background(), t, pool, mcpclass.Operation(root), mode)
 	}
 	served := func(label string, status int, body string) {
 		t.Helper()
@@ -79,7 +81,7 @@ func TestCatalogRuleServesAnOperationWithNoRowAndLeavesTheClassRowsAlone(t *test
 	t.Run("empty table: the MCP listener refuses a root with no class row", func(t *testing.T) {
 		listener, ch := classListener(t, pool)
 		assertMCPRefused(t, classHotspots(t, listener), ch, http.StatusNotFound, mcpReasonRootFieldNotEnabled)
-		class := newClassRowSwitch(pool, itTestSchemaDigest)
+		class := newClassRowSwitch(pool)
 		for _, root := range mcpclass.SortedRoots() {
 			if class.Enabled(mcpclass.Operation(root)) {
 				t.Errorf("empty table: the class-row switch enabled %s", mcpclass.Operation(root))
@@ -87,10 +89,11 @@ func TestCatalogRuleServesAnOperationWithNoRowAndLeavesTheClassRowsAlone(t *test
 		}
 	})
 
-	t.Run("empty table: the proof route still needs a row", func(t *testing.T) {
+	t.Run("empty table: the proof route serves a registered operation too", func(t *testing.T) {
 		rec := postGraphQLWithVariables(t, proof, registeredHotspotsDocument, token, hotspotsVariables())
-		if rec.Code != http.StatusNotFound {
-			t.Fatalf("/query/proof for an operation with no row: status %d, want 404", rec.Code)
+		served("hotspots on the proof route with no row", rec.Code, rec.Body.String())
+		if rec := postGraphQLWithVariables(t, proof, "query { __typename }", token, nil); rec.Code != http.StatusNotFound {
+			t.Fatalf("/query/proof for a document that is not a registered text: status %d, want 404", rec.Code)
 		}
 	})
 
@@ -122,8 +125,8 @@ func TestCatalogRuleServesAnOperationWithNoRowAndLeavesTheClassRowsAlone(t *test
 	t.Run("production-like rows: the document rows serve, the securityAlerts class root stays dark", func(t *testing.T) {
 		// Production: a canary document row per catalog operation, a canary class row for 13 roots, and
 		// the securityAlerts class row only at an older schema digest, in shadow (CHAOS-8143).
-		setRoutingMode(t, pool, digestHex(registeredHotspotsDocument), "hotspots", "canary")
-		setRoutingMode(t, pool, digestHex(registeredSecurityAlertsDocument), "securityAlerts", "canary")
+		plantRoutingRow(t, pool, digestHex(registeredHotspotsDocument), "hotspots", "canary")
+		plantRoutingRow(t, pool, digestHex(registeredSecurityAlertsDocument), "securityAlerts", "canary")
 		for _, root := range mcpclass.SortedRoots() {
 			if root != "securityAlerts" {
 				classRow(itTestSchemaDigest, root, "canary")
@@ -141,9 +144,17 @@ func TestCatalogRuleServesAnOperationWithNoRowAndLeavesTheClassRowsAlone(t *test
 
 	t.Run("a row in a non-served mode does not hold a catalog operation dark", func(t *testing.T) {
 		for _, mode := range []string{"disabled", "python", "shadow"} {
-			setRoutingMode(t, pool, digestHex(registeredHotspotsDocument), "hotspots", mode)
+			plantRoutingRow(t, pool, digestHex(registeredHotspotsDocument), "hotspots", mode)
 			rec := postGraphQLWithVariables(t, handler, registeredHotspotsDocument, token, hotspotsVariables())
 			served("hotspots with a "+mode+" row", rec.Code, rec.Body.String())
 		}
 	})
+}
+
+// plantRoutingRow writes a go_api_routing_state row, which this build never reads: the tests above plant rows of every
+// mode and digest to show that serving ignores them. The only writer of the table left in this package; CHAOS-8706
+// drops the table and this test with it.
+func plantRoutingRow(t *testing.T, pool *pgxpool.Pool, documentDigest, operation, mode string) {
+	t.Helper()
+	pgseed.RoutingState(context.Background(), t, pool, itTestSchemaDigest, documentDigest, operation, mode)
 }

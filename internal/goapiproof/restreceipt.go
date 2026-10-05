@@ -10,9 +10,7 @@ import (
 
 // RESTReceipt is one immutable go_api_rest_proof_run row -- the REST
 // sibling of Receipt (receipt.go). REST has no GraphQL schema digest,
-// document digest or selected-operation name to key a receipt by, and no
-// go_api_routing_state row to read a candidate build from the way a
-// GraphQL operation does, so this receipt's identity is what the ported
+// document digest or selected-operation name to key a receipt by, so this receipt's identity is what the ported
 // route actually is: (Method, Path, CandidateBuild) -- see alembic
 // 0134_add_go_api_rest_proof_run.py's own module doc comment for why
 // that replaces Receipt's four-column key rather than reusing it, and why

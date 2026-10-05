@@ -1082,7 +1082,7 @@ ch_ensure_dho() {
     CH_PROBE_DETAIL="could not create a temp file for the dho build log"
     return 1
   }
-  if ! (cd "${ROOT}" && go build -o "${DHO}" ./cmd/dho) >"${build_log}" 2>&1; then
+  if ! (cd "${ROOT}" && go build -trimpath -o "${DHO}" ./cmd/dho) >"${build_log}" 2>&1; then
     CH_PROBE_DETAIL="go build -o ${DHO} ./cmd/dho FAILED: $(tr '\n' ' ' <"${build_log}" | cut -c1-400)"
     rm -f "${build_log}"
     return 1

@@ -160,6 +160,39 @@ func TestFetchIssuesQueryOrderByWorkItemIDTiebreak(t *testing.T) {
 	}
 }
 
+// TestBlockedIssueSourceDedupsBeforeItFiltersZero pins migration 104's
+// persisted-data contract at the API reader. A zero is the newest state of
+// an item-day, so it must participate in argMax before the positive predicate
+// runs. The outer window group then gives the result table one row per item.
+func TestBlockedIssueSourceDedupsBeforeItFiltersZero(t *testing.T) {
+	source, bindings := renderBlockedIssueWindowSource("team", []string{"team-a"})
+	for _, want := range []string{
+		"FROM work_item_blocked_durations_daily",
+		"WHERE org_id = {org_id:String}",
+		"day >= {start_day:Date} AND day < {end_day:Date}",
+		"GROUP BY day, provider, work_item_id",
+		"argMax(tuple(work_scope_id, team_id, team_name, duration_hours), computed_at)",
+		"WHERE latest_snapshot.4 > 0",
+		"AND b.team_id IN {scope_ids:Array(String)}",
+		"GROUP BY provider, work_item_id",
+	} {
+		if !strings.Contains(source, want) {
+			t.Fatalf("blocked source missing %q:\n%s", want, source)
+		}
+	}
+	if latest, positive := strings.Index(source, "argMax(tuple("), strings.Index(source, "WHERE latest_snapshot.4 > 0"); latest == -1 || positive == -1 || latest > positive {
+		t.Fatalf("blocked source filters before latest snapshot selection:\n%s", source)
+	}
+	if v, ok := bindingValue(bindings, "scope_ids"); !ok || fmt.Sprint(v) != fmt.Sprint([]string{"team-a"}) {
+		t.Fatalf("scope binding = %v (present=%t), want [team-a]", v, ok)
+	}
+
+	query := fmt.Sprintf(fetchBlockedIssuesQuery, source, "")
+	if count, limit := strings.Index(query, "count() OVER () AS total_count"), strings.Index(query, "LIMIT {limit:UInt64}"); count == -1 || limit == -1 || count > limit {
+		t.Fatalf("blocked count must be measured before the page limit:\n%s", query)
+	}
+}
+
 func TestBuildIssuesResponseNilReader(t *testing.T) {
 	_, err := BuildIssuesResponse(context.Background(), nil, "org-1", IssueParams{})
 	if !errors.Is(err, ErrUnavailable) {
@@ -179,6 +212,90 @@ func TestBuildIssuesResponseQueryError(t *testing.T) {
 	_, err = BuildIssuesResponse(context.Background(), reader, "org-1", IssueParams{ScopeLevel: "org", Limit: 50})
 	if err == nil || !strings.Contains(err.Error(), "boom") {
 		t.Fatalf("err = %v, want wrapped boom", err)
+	}
+}
+
+// TestBuildIssuesResponseBlockedOnlyReturnsAllProviderRowsAndWindowCount
+// exercises the persisted source rather than the ordinary cycle-time query.
+// The same source format is provider-agnostic, so every provider has a row in
+// the result; Count is the unbounded number before the request's limit.
+func TestBuildIssuesResponseBlockedOnlyReturnsAllProviderRowsAndWindowCount(t *testing.T) {
+	allRows := [][]any{
+		{"github:acme/api#1", "github", "team-a", uint64(4)},
+		{"gitlab:group/api#2", "gitlab", "team-a", uint64(4)},
+		{"jira:OPS-3", "jira", "team-a", uint64(4)},
+		{"linear:ENG-4", "linear", "team-a", uint64(4)},
+	}
+	client := fakeQueryClient{t: t, handler: func(t *testing.T, query string, bindings []dhclickhouse.Binding) (dhclickhouse.RowScanner, error) {
+		if strings.Contains(query, "FROM work_item_cycle_times") || !strings.Contains(query, "FROM work_item_blocked_durations_daily") {
+			t.Fatalf("blocked-only request read the wrong source:\n%s", query)
+		}
+		if v, _ := bindingValue(bindings, "org_id"); v != "org-acme" {
+			t.Fatalf("org_id binding = %v, want org-acme", v)
+		}
+		if v, _ := bindingValue(bindings, "scope_ids"); fmt.Sprint(v) != fmt.Sprint([]string{"team-a"}) {
+			t.Fatalf("scope_ids binding = %v, want [team-a]", v)
+		}
+		if v, _ := bindingValue(bindings, "limit"); v == 2 {
+			return &fixtureRowScanner{rows: allRows[:2]}, nil
+		}
+		return &fixtureRowScanner{rows: allRows}, nil
+	}}
+	reader, err := NewReader(client)
+	if err != nil {
+		t.Fatalf("NewReader: %v", err)
+	}
+	params := IssueParams{
+		StartDay: day(2026, 10, 1, 0, 0, 0), EndDay: day(2026, 10, 8, 0, 0, 0),
+		ScopeLevel: "team", ScopeIDs: []string{"team-a"}, Limit: 50, BlockedOnly: true,
+	}
+	resp, err := BuildIssuesResponse(context.Background(), reader, "org-acme", params)
+	if err != nil {
+		t.Fatalf("BuildIssuesResponse: %v", err)
+	}
+	if resp.Count == nil || *resp.Count != 4 {
+		t.Fatalf("Count = %v, want 4", resp.Count)
+	}
+	providers := map[string]bool{}
+	for _, item := range resp.Items {
+		providers[item.Provider] = true
+		if item.Status != "blocked" || item.TeamID == nil || *item.TeamID != "team-a" {
+			t.Fatalf("blocked item = %+v, want blocked with team-a", item)
+		}
+	}
+	for _, provider := range []string{"github", "gitlab", "jira", "linear"} {
+		if !providers[provider] {
+			t.Fatalf("blocked response omitted provider %q: %+v", provider, resp.Items)
+		}
+	}
+
+	params.Limit = 2
+	resp, err = BuildIssuesResponse(context.Background(), reader, "org-acme", params)
+	if err != nil {
+		t.Fatalf("BuildIssuesResponse limited: %v", err)
+	}
+	if len(resp.Items) != 2 || resp.Count == nil || *resp.Count != 4 {
+		t.Fatalf("limited blocked response = %+v, want two items and total count 4", resp)
+	}
+}
+
+func TestBuildIssuesResponseBlockedOnlyEmptyResultReportsMeasuredZero(t *testing.T) {
+	client := fakeQueryClient{t: t, handler: func(_ *testing.T, query string, _ []dhclickhouse.Binding) (dhclickhouse.RowScanner, error) {
+		if !strings.Contains(query, "count() OVER ()") {
+			t.Fatalf("blocked-only request did not measure its count:\n%s", query)
+		}
+		return &fixtureRowScanner{}, nil
+	}}
+	reader, err := NewReader(client)
+	if err != nil {
+		t.Fatalf("NewReader: %v", err)
+	}
+	resp, err := BuildIssuesResponse(context.Background(), reader, "org-acme", IssueParams{BlockedOnly: true, Limit: 50})
+	if err != nil {
+		t.Fatalf("BuildIssuesResponse: %v", err)
+	}
+	if resp.Count == nil || *resp.Count != 0 || len(resp.Items) != 0 {
+		t.Fatalf("empty blocked response = %+v, want items=[] count=0", resp)
 	}
 }
 

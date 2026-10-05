@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"io"
+	"log/slog"
 	"net/http"
 	"net/url"
 	"os"
@@ -98,15 +99,12 @@ func fetchJiraDevStatusPullRequests(
 // set (parity ruled, team-lead 2026-09-01) under its own env var, since this
 // route's trust boundary is independently configurable from Linear's.
 func jiraTrustedSCMHosts() map[string]struct{} {
-	hosts := map[string]struct{}{
-		"github.com": {}, "www.github.com": {}, "gitlab.com": {},
-	}
-	for _, value := range strings.Split(os.Getenv("JIRA_TRUSTED_SCM_HOSTS"), ",") {
-		if host := strings.ToLower(strings.TrimSpace(value)); host != "" {
-			hosts[host] = struct{}{}
-		}
-	}
+	hosts, _ := jiraTrustedSCMHostsAndRoots()
 	return hosts
+}
+
+func jiraTrustedSCMHostsAndRoots() (map[string]struct{}, map[string][]string) {
+	return parseTrustedSCMHostEntries(os.Getenv("JIRA_TRUSTED_SCM_HOSTS"), "github.com", "www.github.com", "gitlab.com")
 }
 
 // jiraDevStatusPullRequestSourceID parses a PR/MR URL from the dev-status
@@ -117,16 +115,27 @@ func jiraTrustedSCMHosts() map[string]struct{} {
 // path shape decides the provider: GitHub's `/pull/N`, GitLab's
 // `/-/merge_requests/N` (or the pre-`/-/` `/merge_requests/N`).
 func jiraDevStatusPullRequestSourceID(rawURL string) string {
+	source, _ := jiraDevStatusPullRequestSource(rawURL)
+	return source
+}
+
+// jiraDevStatusPullRequestSource is jiraDevStatusPullRequestSourceID that also reports a GitLab merge-request URL whose
+// project path or number fails parseGitLabReference (rejected): such a URL is not written and not counted as synced.
+func jiraDevStatusPullRequestSource(rawURL string) (source string, rejected bool) {
 	parsed, err := url.Parse(rawURL)
 	if err != nil || parsed.Host == "" || parsed.User != nil {
-		return ""
+		return "", false
 	}
-	if _, ok := jiraTrustedSCMHosts()[strings.ToLower(parsed.Host)]; !ok {
-		return ""
+	hosts, roots := jiraTrustedSCMHostsAndRoots()
+	if _, ok := hosts[strings.ToLower(parsed.Host)]; !ok {
+		return "", false
 	}
-	parts := strings.Split(strings.Trim(parsed.Path, "/"), "/")
+	parts, ok := stripSCMURLRoot(roots, parsed.Host, strings.Split(strings.Trim(parsed.Path, "/"), "/"))
+	if !ok {
+		return "", false
+	}
 	if len(parts) >= 4 && parts[len(parts)-2] == "pull" {
-		return "ghpr:" + strings.Join(parts[:len(parts)-2], "/") + "#" + parts[len(parts)-1]
+		return "ghpr:" + strings.Join(parts[:len(parts)-2], "/") + "#" + parts[len(parts)-1], false
 	}
 	if len(parts) >= 3 && parts[len(parts)-2] == "merge_requests" {
 		project := parts[:len(parts)-2]
@@ -134,10 +143,10 @@ func jiraDevStatusPullRequestSourceID(rawURL string) string {
 			project = project[:len(project)-1]
 		}
 		if len(project) >= 2 {
-			return "gitlab:" + strings.Join(project, "/") + "!" + parts[len(parts)-1]
+			return gitlabMergeRequestSourceID(strings.Join(project, "/"), parts[len(parts)-1])
 		}
 	}
-	return ""
+	return "", false
 }
 
 // extractJiraDevStatusDependencies emits the PRIMARY provider-attached
@@ -157,7 +166,11 @@ func extractJiraDevStatusDependencies(
 	seen := make(map[string]struct{})
 	for _, detail := range payload.Detail {
 		for _, pullRequest := range detail.PullRequests {
-			source := jiraDevStatusPullRequestSourceID(pullRequest.URL)
+			source, rejected := jiraDevStatusPullRequestSource(pullRequest.URL)
+			if rejected {
+				slog.Warn("providersync.jira.dev_status_gitlab_reference_rejected", "org_id", claim.OrgID, "issue", workItemID)
+				continue
+			}
 			if source == "" || source == workItemID {
 				continue
 			}

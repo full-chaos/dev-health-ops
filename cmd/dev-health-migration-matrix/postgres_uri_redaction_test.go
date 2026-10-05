@@ -3,6 +3,8 @@ package main
 import (
 	"bytes"
 	"flag"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -105,7 +107,12 @@ func TestRegisterFlags_DSNExplicitEmptyWinsOverTheEnvValue(t *testing.T) {
 func TestRunRender_BoundaryRedactsAConnectErrorCarryingTheMarker(t *testing.T) {
 	root := repoRoot(t)
 
-	err := runRender(root, postgresURIAdversarialDSN, "", "none", nil)
+	// The DSN is read only for the REST proof, which needs query-api's build: name it in a fleet file.
+	fleet := filepath.Join(t.TempDir(), "fleet.json")
+	if err := os.WriteFile(fleet, []byte(`{"`+queryAPIContainerName+`": "0123456789abcdef0123456789abcdef01234567"}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	err := runRender(root, postgresURIAdversarialDSN, fleet, nil)
 	if err == nil {
 		t.Fatal("want a connect error against the adversarial DSN")
 	}

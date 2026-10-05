@@ -7,9 +7,9 @@ from pydantic import BaseModel, ConfigDict, Field
 
 
 class Coverage(BaseModel):
-    repos_covered_pct: float
-    prs_linked_to_issues_pct: float
-    issues_with_cycle_states_pct: float
+    repos_covered_pct: float | None
+    prs_linked_to_issues_pct: float | None
+    issues_with_cycle_states_pct: float | None
 
 
 class Freshness(BaseModel):

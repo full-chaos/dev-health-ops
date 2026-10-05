@@ -138,9 +138,55 @@ func TestMCPClassRowAtAnotherSchemaDigestIsServed(t *testing.T) {
 	}
 }
 
-// The other three states stay dark: no class row at any digest, a non-served mode at another digest,
-// and a non-served row at the LIVE digest over an older canary row (the live digest decides first, so
-// `disable` still darks a root).
+// D4796: the NEWEST class row across all digests decides (updated_at; the live digest wins a tie). A decision is
+// durable across a schema move: an older canary row does not undo a newer disable, and a newer canary row
+// lifts an older python row.
+func TestMCPClassRowTheNewestRowAcrossDigestsDecides(t *testing.T) {
+	const live = "sha256:7214-moved-schema-digest"
+	hotspots := mcpclass.Operation("hotspots")
+	digest := mcpclass.DocumentDigest()
+	old, newer := time.Date(2026, 9, 1, 0, 0, 0, 0, time.UTC), time.Date(2026, 9, 2, 0, 0, 0, 0, time.UTC)
+	for name, tc := range map[string]struct {
+		rows []struct {
+			schema, mode string
+			at           time.Time
+		}
+		want bool
+	}{
+		"canary at A only": {rows: []struct {
+			schema, mode string
+			at           time.Time
+		}{{"sha256:A", "canary", old}}, want: true},
+		"canary at A older, python at B newer, no row at the live digest": {rows: []struct {
+			schema, mode string
+			at           time.Time
+		}{{"sha256:A", "canary", old}, {"sha256:B", "python", newer}}, want: false},
+		"python at B older, canary at A newer": {rows: []struct {
+			schema, mode string
+			at           time.Time
+		}{{"sha256:B", "python", old}, {"sha256:A", "canary", newer}}, want: true},
+		"disabled at A newer than canary at the live digest": {rows: []struct {
+			schema, mode string
+			at           time.Time
+		}{{live, "canary", old}, {"sha256:A", "disabled", newer}}, want: false},
+		"a tie goes to the live digest": {rows: []struct {
+			schema, mode string
+			at           time.Time
+		}{{"sha256:A", "python", old}, {live, "canary", old}}, want: true},
+	} {
+		t.Run(name, func(t *testing.T) {
+			pool := startTestRegistryPostgres(t)
+			for _, row := range tc.rows {
+				pgseed.RoutingStateAt(t.Context(), t, pool, row.schema, digest, hotspots, row.mode, row.at)
+			}
+			if got := classServedAt(t, pool, live); got != tc.want {
+				t.Fatalf("served = %t, want %t", got, tc.want)
+			}
+		})
+	}
+}
+
+// The other states stay dark: no class row at any digest, and a python row at another digest.
 func TestMCPClassRowStatesThatStayDark(t *testing.T) {
 	const moved = "sha256:7214-moved-schema-digest"
 	hotspots := mcpclass.Operation("hotspots")
@@ -157,12 +203,12 @@ func TestMCPClassRowStatesThatStayDark(t *testing.T) {
 			t.Fatal("a python class row at another digest serves the root")
 		}
 	})
-	t.Run("a live shadow row over an older canary row", func(t *testing.T) {
+	t.Run("a live shadow row newer than an older canary row", func(t *testing.T) {
 		pool := startTestRegistryPostgres(t)
 		pgseed.RoutingState(t.Context(), t, pool, "sha256:an-older-digest", mcpclass.DocumentDigest(), hotspots, "canary")
 		pgseed.RoutingState(t.Context(), t, pool, moved, mcpclass.DocumentDigest(), hotspots, "shadow")
 		if classServedAt(t, pool, moved) {
-			t.Fatal("the live digest's shadow row did not dark the root over an older canary row")
+			t.Fatal("the newer live shadow row did not dark the root over an older canary row")
 		}
 	})
 }

@@ -103,6 +103,16 @@ ON CONFLICT (schema_digest, document_digest, selected_operation) DO UPDATE SET m
 		schemaDigest, documentDigest, operation, mode)
 }
 
+// RoutingStateAt is RoutingState with an explicit updated_at, for a test that needs rows of one operation at
+// different digests in a stated order of age.
+func RoutingStateAt(ctx context.Context, t testing.TB, pool *pgxpool.Pool, schemaDigest, documentDigest, operation, mode string, updatedAt time.Time) {
+	t.Helper()
+	RoutingState(ctx, t, pool, schemaDigest, documentDigest, operation, mode)
+	exec(ctx, t, pool, "go_api routing state updated_at", `
+UPDATE go_api_routing_state SET updated_at = $4 WHERE schema_digest = $1 AND document_digest = $2 AND selected_operation = $3`,
+		schemaDigest, documentDigest, operation, updatedAt)
+}
+
 // SetFeatureFlag makes key exist with exactly this floor and enabled state, replacing the row the
 // migrations already register for it (they register the shipped flags). Use it where a test needs a
 // specific state of a shipped flag; use FeatureFlag for a flag the migrations do not register.

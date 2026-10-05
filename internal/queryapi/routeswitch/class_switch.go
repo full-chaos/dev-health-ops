@@ -1,14 +1,15 @@
 package routeswitch
 
-// The class-row switch (CHAOS-8704, owner ruling D4789 of 2026-10-04): an MCP class root is served when
-// its class row is in a served mode at ANY schema digest. Class rows used to be keyed to the live schema
-// digest, so every schema change left them stale and dark until `carry` copied them forward; with carry
-// gone the digest is no longer a condition. The one-time proof (`dho goapi routing enable` with a
-// receipt) is still what writes a class row.
+// The class-row switch (CHAOS-8704, owner ruling D4789 of 2026-10-04, refined by D4796): an MCP class root is
+// decided by its NEWEST class row across all schema digests. Class rows used to be keyed to the live schema
+// digest, so every schema change left them dark until `carry` moved them; with carry gone the digest is no
+// longer a condition, and no re-proof is needed after a schema change. The newest row decides (ordered by
+// updated_at; on a tie the row at the live digest wins), so a decision stays durable: a `disable` written at
+// one digest is not undone by an older canary row at another.
 //
-// A root with no class row stays dark. A row in a non-served mode stays dark. When rows exist at the live
-// schema digest they decide alone, so `disable` at the live digest still darks a root whose older row
-// is canary; with none, every row of the root decides, and any served one serves it.
+// A root with no class row stays dark. The root is served only when its newest row is in a served mode
+// (canary or primary). The one-time proof (`dho goapi routing enable` with a receipt) is still what writes a
+// class row.
 
 import (
 	"context"
@@ -37,8 +38,10 @@ func NewClassSwitch(pool *pgxpool.Pool, schemaDigest string, documentDigests map
 	return &ClassSwitch{pool: pool, schemaDigest: schemaDigest, documentDigests: copied}
 }
 
-const classRowsSQL = `SELECT mode, schema_digest = $3 FROM go_api_routing_state
-		 WHERE document_digest = $1 AND selected_operation = $2`
+const classRowsSQL = `SELECT mode FROM go_api_routing_state
+		 WHERE document_digest = $1 AND selected_operation = $2
+		 ORDER BY updated_at DESC, (schema_digest = $3) DESC
+		 LIMIT 1`
 
 // Enabled reports whether the class root's rows serve it. A read that fails refuses: a table this process
 // cannot read cannot show that the root is lit.
@@ -55,26 +58,16 @@ func (s *ClassSwitch) Enabled(operation string) bool {
 		return false
 	}
 	defer rows.Close()
-	var liveModes, otherModes []string
-	for rows.Next() {
-		var mode string
-		var live bool
-		if err := rows.Scan(&mode, &live); err != nil {
+	if !rows.Next() {
+		if err := rows.Err(); err != nil {
 			log.Printf("routeswitch: ClassSwitch lookup failed for operation %q: %v", operation, err)
-			return false
 		}
-		if live {
-			liveModes = append(liveModes, mode)
-		} else {
-			otherModes = append(otherModes, mode)
-		}
+		return false
 	}
-	if err := rows.Err(); err != nil {
+	var mode string
+	if err := rows.Scan(&mode); err != nil {
 		log.Printf("routeswitch: ClassSwitch lookup failed for operation %q: %v", operation, err)
 		return false
 	}
-	if len(liveModes) > 0 {
-		return anyReachable(liveModes, reachableModes)
-	}
-	return anyReachable(otherModes, reachableModes)
+	return reachableModes[mode]
 }

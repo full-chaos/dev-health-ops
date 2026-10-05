@@ -305,9 +305,10 @@ pin and the history table below work exactly as before.
 ## When the schema digest moves
 
 A schema change no longer un-routes anything (CHAOS-8702, CHAOS-8704). query-api's `/query` and
-`/graphql` serve every registered operation and read no routing row, and the MCP class-row switch serves
-a root whose class row is in a served mode at ANY schema digest (a row at the live digest decides first, so
-`disable` still works; owner ruling D4789). `dho goapi routing carry`, the helm pre-upgrade carry hook and
+`/graphql` serve every registered operation and read no routing row, and the MCP class-row switch is decided by a root's NEWEST class row
+across all schema digests (`updated_at`; the live digest wins a tie): served if that row is canary or primary, dark
+otherwise. A decision is durable, so an older canary row at another digest does not undo a newer `disable`, and no
+re-proof is needed after a schema change (owner rulings D4789, D4796). `dho goapi routing carry`, the helm pre-upgrade carry hook and
 the stale-rows alarm are gone. A class row is written once by `seed` and `enable` (with a per-root proof
 receipt); a roll does not move it.
 
@@ -598,10 +599,6 @@ audit table must outlive the row it describes.
 |---|---|---|
 | `go_api_routing.rows_stale` (ERROR log) | Python edge startup (`api/_lifespan.py`) | Rows exist, none at the live digest |
 | `devhealth_go_api_routing_digest_drift_total{result="stale"}` | Python edge startup | Same condition, as a scrapeable counter |
-| `query-api: ROUTING ROWS STALE` (log) | `query-api` route construction | Same condition, on the Go plane |
-| structured ERROR-level record (`slog`, no fixed line text) | `query-api` route construction (`registry_drift_telemetry.go`) | Same condition, leveled so a log-level alert rule fires on it -- the plain-text line above carries no level at all |
-| `devhealth_query_api_routing_rows_for_digest` (gauge, `schema_digest` attr) | `query-api` route construction | Rows keyed to the digest THIS process computed; 0 with the total gauge below `>0` is the DEAD-fleet condition, on every startup, not only at read time |
-| `devhealth_query_api_routing_rows_total` (gauge, `schema_digest` attr) | `query-api` route construction | Disambiguates the gauge above from the legitimate `total == 0` posture, where no row decides anything and the catalog rule serves every registered operation |
 | `devhealth_go_api_dispatch_fallback_total{reason="no_routing_row"}` | Python edge, per request | A dispatch-eligible request found no row |
 | `devhealth_query_api_routeswitch_digest_miss_total{operation}` (and its WARN record) | `query-api`, per request | An operation has no row at the live key and is refused: on the class-row and proof switches only. The serving route (`/query`, `/graphql`) reads no row (CHAOS-8702) |
 | `ci/check_go_api_routing_digest.py` | CI | The SDL moved without updating the pin and this table |

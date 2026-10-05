@@ -1000,6 +1000,7 @@ config:
   GITHUB_FETCH_MILESTONES: "true"
   GITHUB_LINEAR_LINKBACK_BOTS: "linear[bot]"
   LINEAR_TRUSTED_SCM_HOSTS: ""
+  JIRA_TRUSTED_SCM_HOSTS: ""
 
 # =============================================================================
 # Secrets

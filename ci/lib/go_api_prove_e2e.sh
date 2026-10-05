@@ -153,6 +153,7 @@ go_api_prove_e2e_mint_edge_token() {
 # paths the moment the Python body is gone.
 query_api_e2e_start() {
   local dir commit pgx_uri
+  pgx_uri="$(go_api_prove_e2e_pgx_uri)"
   dir="${TMP_DIR}/go-api-prove"
   GO_API_PROVE_E2E_DIR="${dir}"
   mkdir -p "${dir}/artifacts"

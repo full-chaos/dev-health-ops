@@ -2,6 +2,7 @@ package categorize
 
 import (
 	"context"
+	"github.com/full-chaos/dev-health-ops/internal/platform/secrets"
 	"net/http"
 	"testing"
 
@@ -13,19 +14,19 @@ import (
 func TestASuppliedClientNeverFollowsARedirectToAnotherOrigin(t *testing.T) {
 	t.Run("openai", func(t *testing.T) {
 		probe := redirectprobe.New(t)
-		provider := NewOpenAIProvider(OpenAIProviderConfig{APIKey: "SECRET", BaseURL: probe.Base.URL, HTTPClient: probe.Client()})
+		provider := NewOpenAIProvider(OpenAIProviderConfig{APIKey: secrets.NewHidden("SECRET"), BaseURL: probe.Base.URL, HTTPClient: probe.Client()})
 		_, _, _ = provider.executeResponsesRequest(context.Background(), openAIResponsesRequest{})
 		probe.Assert(t)
 	})
 	t.Run("ollama", func(t *testing.T) {
 		probe := redirectprobe.New(t)
-		provider := NewOllamaProvider(OllamaProviderConfig{APIKey: "SECRET", BaseURL: probe.Base.URL, HTTPClient: probe.Client()})
+		provider := NewOllamaProvider(OllamaProviderConfig{APIKey: secrets.NewHidden("SECRET"), BaseURL: probe.Base.URL, HTTPClient: probe.Client()})
 		_, _, _, _ = provider.executeChatRequest(context.Background(), ollamaChatRequest{})
 		probe.Assert(t)
 	})
 	t.Run("local", func(t *testing.T) {
 		probe := redirectprobe.New(t)
-		provider := NewLocalProvider(LocalProviderConfig{APIKey: "SECRET", BaseURL: probe.Base.URL, HTTPClient: probe.Client()})
+		provider := NewLocalProvider(LocalProviderConfig{APIKey: secrets.NewHidden("SECRET"), BaseURL: probe.Base.URL, HTTPClient: probe.Client()})
 		_, _, _ = provider.executeChatCompletionRequest(context.Background(), localChatRequest{})
 		probe.Assert(t)
 	})
@@ -35,19 +36,19 @@ func TestASuppliedClientNeverFollowsARedirectToAnotherOrigin(t *testing.T) {
 func TestTheDefaultProviderClientsNeverFollowARedirectToAnotherOrigin(t *testing.T) {
 	t.Run("openai", func(t *testing.T) {
 		probe := redirectprobe.New(t)
-		provider := NewOpenAIProvider(OpenAIProviderConfig{APIKey: "SECRET", BaseURL: probe.Base.URL})
+		provider := NewOpenAIProvider(OpenAIProviderConfig{APIKey: secrets.NewHidden("SECRET"), BaseURL: probe.Base.URL})
 		_, _, _ = provider.executeResponsesRequest(context.Background(), openAIResponsesRequest{})
 		probe.Assert(t)
 	})
 	t.Run("ollama", func(t *testing.T) {
 		probe := redirectprobe.New(t)
-		provider := NewOllamaProvider(OllamaProviderConfig{APIKey: "SECRET", BaseURL: probe.Base.URL})
+		provider := NewOllamaProvider(OllamaProviderConfig{APIKey: secrets.NewHidden("SECRET"), BaseURL: probe.Base.URL})
 		_, _, _, _ = provider.executeChatRequest(context.Background(), ollamaChatRequest{})
 		probe.Assert(t)
 	})
 	t.Run("local", func(t *testing.T) {
 		probe := redirectprobe.New(t)
-		provider := NewLocalProvider(LocalProviderConfig{APIKey: "SECRET", BaseURL: probe.Base.URL})
+		provider := NewLocalProvider(LocalProviderConfig{APIKey: secrets.NewHidden("SECRET"), BaseURL: probe.Base.URL})
 		_, _, _ = provider.executeChatCompletionRequest(context.Background(), localChatRequest{})
 		probe.Assert(t)
 	})

@@ -18,6 +18,7 @@ import (
 	dhclickhouse "github.com/full-chaos/dev-health-go/clickhouse"
 	"github.com/full-chaos/dev-health-ops/internal/queryapi/authctx"
 	"github.com/full-chaos/dev-health-ops/internal/queryapi/graph"
+	"github.com/full-chaos/dev-health-ops/internal/queryapi/teamscope"
 )
 
 // CHAOS-8598: the per-team completionDistribution read document that MCP run_operation serves by digest.
@@ -358,7 +359,7 @@ func TestCapacityCompletionDistribution_ATeamOfAnotherOrgIsRefusedByTheOrgBoundO
 	}
 	var org any
 	for _, b := range client.ownershipBindings[0] {
-		if b.Name == "org_id" {
+		if b.Name == teamscope.BindingOrgID {
 			org = b.Value
 		}
 	}
@@ -378,14 +379,22 @@ func TestCapacityCompletionDistribution_AnOwnedTeamIsAnsweredAndScoped(t *testin
 	}
 }
 
-// Of several requested teams only the owned ones are read; the rest are dropped, never widened to the org.
-func TestCapacityCompletionDistribution_OnlyTheOwnedTeamsOfSeveralAreRead(t *testing.T) {
+// Of several requested teams, one unowned makes the whole answer missing: no partial answer, no widening to the org.
+func TestCapacityCompletionDistribution_APartlyUnownedCohortIsMissing(t *testing.T) {
 	got, client := serveDistribution(t, map[string]any{"teamIds": []string{"team-a", "team-unowned"}}, []string{"team-a"})
-	if got == nil {
-		t.Fatal("the owned team of two requested got no answer")
+	if got != nil {
+		t.Fatalf("a partly unowned cohort was answered: %v", got)
 	}
-	if single, many := teamBindingsOf(client.bindings[0]); single != "team-a" || len(many) != 0 {
-		t.Fatalf("throughput team binding single=%q many=%v, want team-a only", single, many)
+	if len(client.bindings) != 0 {
+		t.Fatalf("the throughput table was read for a partly unowned cohort: %v", client.bindings)
+	}
+}
+
+// A supplied list of blank ids is missing, never the org scope.
+func TestCapacityCompletionDistribution_ASuppliedListOfBlankIdsIsMissing(t *testing.T) {
+	got, client := serveDistribution(t, map[string]any{"teamIds": []string{"", ""}}, nil)
+	if got != nil || len(client.bindings) != 0 {
+		t.Fatalf("an all-blank team list: answer %v, throughput reads %d; want missing and none", got, len(client.bindings))
 	}
 }
 

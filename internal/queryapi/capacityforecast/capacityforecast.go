@@ -83,6 +83,7 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/jobs/metrics/numerical"
 	"github.com/full-chaos/dev-health-ops/internal/queryapi/graph/model"
 	"github.com/full-chaos/dev-health-ops/internal/queryapi/graphqldate"
+	"github.com/full-chaos/dev-health-ops/internal/queryapi/teamscope"
 )
 
 // QueryClient is the read-only ClickHouse query boundary this package needs --
@@ -224,33 +225,30 @@ func ResolveForecast(
 		}
 	}
 
-	// CHAOS-8717: a requested team answers only through ownership rows. A team with none is reported
-	// missing (a null forecast, logged with its reason) and is never widened to the organization: the
-	// throughput table would otherwise answer for any team_id it carries a row for, or, once every
-	// requested team is dropped, for the whole org. A request with no team at all is the explicit
-	// org-wide scope the nullable input permits, and is untouched.
-	if len(teamIDs) > 0 {
-		owned, ownErr := ownedTeams(ctx, client, orgID, teamIDs, now)
+	// CHAOS-8717, rulings D4792: a requested team answers only through ownership rows (teamscope.OwnedTeams:
+	// open, on a catalogued repository, bound to this org), and all-or-nothing: if ANY requested team is
+	// unowned the answer is MISSING (a null forecast, the reason logged), never narrowed to the owned
+	// remainder and never widened to the organization; there is no partial answer until the schema can say
+	// "partial" (CHAOS-8729). A supplied teamIds list that holds no usable id (all blank) is missing too:
+	// org scope is an ABSENT team (no teamIds, no teamId), the explicit scope the nullable input permits.
+	suppliedTeams := input != nil && len(input.TeamIds) > 0
+	if len(teamIDs) > 0 || suppliedTeams {
+		owned, ownErr := teamscope.OwnedTeams(ctx, client, orgID, teamIDs, now)
 		if ownErr != nil {
-			return nil, ownErr
+			return nil, fmt.Errorf("capacityForecast: %w", ownErr)
 		}
-		if len(owned) == 0 {
+		if len(teamIDs) == 0 || len(owned) < len(teamIDs) {
 			slog.WarnContext(ctx, "query_api.capacity_forecast.empty",
 				"org_id", orgID,
 				"team_ids", teamsForLog(teamIDs),
-				"reason", "no_team_ownership: none of the requested teams has a team_repo_ownership row open now",
+				"requested", len(teamIDs),
+				"owned", len(owned),
+				"reason", "no_team_ownership: a requested team has no team_repo_ownership row open now on a catalogued repository, or no usable team id was supplied",
 				"duration_ms", time.Since(started).Milliseconds(),
 			)
 			return nil, nil
 		}
-		if len(owned) < len(teamIDs) {
-			slog.WarnContext(ctx, "query_api.capacity_forecast.teams_without_ownership_dropped",
-				"org_id", orgID,
-				"requested", len(teamIDs),
-				"owned", len(owned),
-			)
-			teamIDs = owned
-		}
+		teamIDs = owned
 	}
 
 	history, err := loadThroughput(ctx, client, orgID, teamIDs, workScopeID, historyDays, now)
@@ -467,6 +465,28 @@ func ResolveForecasts(
 	limit := 10
 	if filters != nil {
 		limit = filters.Limit
+	}
+
+	// CHAOS-8727: a requested team answers only through ownership rows. An unowned team has no forecasts to
+	// list: the connection is empty, and capacity_forecasts is never read for it.
+	if filters != nil && filters.TeamID != nil && *filters.TeamID != "" {
+		owned, ownErr := teamscope.OwnedTeams(ctx, client, orgID, []string{*filters.TeamID}, time.Now())
+		if ownErr != nil {
+			return nil, fmt.Errorf("capacityForecasts: %w", ownErr)
+		}
+		if len(owned) == 0 {
+			slog.WarnContext(ctx, "query_api.capacity_forecasts.empty",
+				"org_id", orgID,
+				"filters", filterLabel(filters),
+				"limit", limit,
+				"reason", "no_team_ownership: the requested team has no team_repo_ownership row open now",
+				"duration_ms", time.Since(started).Milliseconds(),
+			)
+			return &model.CapacityForecastConnection{
+				Edges:    make([]model.CapacityForecastEdge, 0),
+				PageInfo: &model.PageInfo{},
+			}, nil
+		}
 	}
 
 	conditions := []string{"org_id = {org_id:String}"}

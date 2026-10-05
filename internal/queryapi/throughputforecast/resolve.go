@@ -12,6 +12,7 @@ import (
 
 	"github.com/full-chaos/dev-health-ops/internal/queryapi/graph/model"
 	"github.com/full-chaos/dev-health-ops/internal/queryapi/graphqldate"
+	"github.com/full-chaos/dev-health-ops/internal/queryapi/teamscope"
 )
 
 // noHistoryForecastID is the literal Python puts in forecast_id when a scope has
@@ -47,6 +48,32 @@ func Resolve(
 	// would bill the org for a request that was never going to answer.
 	if input.HistoryWeeks <= 0 {
 		return nil, fmt.Errorf("throughputForecast: history_weeks must be positive")
+	}
+
+	// CHAOS-8727: a requested team answers only through ownership rows (teamscope.OwnedTeams: open, in the
+	// catalog, bound to this org), and all-or-nothing: if ANY requested team is unowned the answer is MISSING,
+	// a null forecast with its reason logged, and no team_id-keyed table is read. There is no partial answer
+	// until the schema can say "partial" (CHAOS-8729). A supplied list that holds no usable id (all blank) is
+	// missing too, never the org scope: org scope is an ABSENT team list. This is different from the
+	// structured empty payload below, which answers an OWNED team that has no history yet.
+	if len(input.TeamIds) > 0 {
+		requested := teamscope.DistinctTeamIDs(input.TeamIds)
+		owned, err := teamscope.OwnedTeams(ctx, client, orgID, requested, now)
+		if err != nil {
+			return nil, fmt.Errorf("throughputForecast: %w", err)
+		}
+		if len(requested) == 0 || len(owned) < len(requested) {
+			slog.WarnContext(ctx, "query_api.throughput_forecast.empty",
+				"org_id", orgID,
+				"scope", scopeLabel(input),
+				"requested", len(requested),
+				"owned", len(owned),
+				"reason", "no_team_ownership: a requested team has no team_repo_ownership row open now on a catalogued repository, or no usable team id was supplied",
+				"duration_ms", time.Since(started).Milliseconds(),
+			)
+			return nil, nil
+		}
+		input.TeamIds = owned
 	}
 
 	// Single-team scopes carry the team on the result so the UI can label the
@@ -198,8 +225,7 @@ func Resolve(
 
 // scopeLabel renders the request's scope for a log line.
 //
-// The team ids are the caller's own selection, already authorized against this
-// org by the envelope -- but the count is logged rather than the ids past a
+// The team ids are the caller's own selection (answered only if owned, see Resolve) -- the count is logged rather than the ids past a
 // handful, so a 500-team selection cannot turn one log line into a page of
 // output.
 func scopeLabel(input model.ThroughputForecastInput) string {

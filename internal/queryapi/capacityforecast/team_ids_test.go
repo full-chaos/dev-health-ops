@@ -7,9 +7,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/full-chaos/dev-health-go/clickhouse"
-
 	"github.com/full-chaos/dev-health-ops/internal/queryapi/graph/model"
+	"github.com/full-chaos/dev-health-ops/internal/queryapi/teamscope"
 )
 
 // CHAOS-7964: capacityForecast reads EVERY selected team. Before, only the
@@ -124,7 +123,7 @@ func TestResolveForecastOneTeamKeepsTheSingleBind(t *testing.T) {
 }
 
 func TestResolveForecastNoTeamIsOrgWide(t *testing.T) {
-	_, client := runWith(t, &model.CapacityForecastInput{TeamIds: []string{"", ""}})
+	_, client := runWith(t, &model.CapacityForecastInput{})
 	for index, statement := range client.statements {
 		if strings.Contains(statement, "team_id") {
 			t.Errorf("statement %d filters on a team for an empty selection:\n%s", index, statement)
@@ -167,23 +166,63 @@ func TestResolveForecastATeamWithNoOwnershipRowsIsMissingAndReadsNoThroughput(t 
 	if len(client.ownershipBindings) != 1 {
 		t.Fatalf("ownership reads = %d, want 1", len(client.ownershipBindings))
 	}
-	if org, _ := bindingValue(client.ownershipBindings[0], "org_id"); org != "org-7" {
+	if org, _ := bindingValue(client.ownershipBindings[0], teamscope.BindingOrgID); org != "org-7" {
 		t.Fatalf("the ownership read is bound to org %v, want the caller's org-7", org)
 	}
 }
 
-func TestResolveForecastReadsOnlyTheOwnedTeamsOfSeveral(t *testing.T) {
+// Round repro #4: all-or-nothing. [owned, unowned] used to be narrowed to the owned team and served as a full
+// multi-team answer; now any unowned team makes the answer missing and nothing else is read.
+func TestResolveForecastIsMissingWhenAnyOfSeveralRequestedTeamsIsUnowned(t *testing.T) {
 	input := &model.CapacityForecastInput{TeamIds: []string{"team-a", "team-unowned", "team-b"}, HistoryDays: 30, Simulations: 50}
 	client := &fakeClient{owners: []string{"team-b", "team-a"}, responses: []*fakeRowScanner{throughputRows(t, 2, 4, 6, 8, 10), {rows: [][]any{{uint64(30)}}}}}
 	got, err := ResolveForecast(context.Background(), client, "org-7", input, day(t, "2026-09-01"))
+	if err != nil || got != nil {
+		t.Fatalf("forecast %v, err %v; want a nil forecast: a partial answer would look like the whole cohort's", got, err)
+	}
+	if len(client.statements) != 0 {
+		t.Fatalf("a team_id-keyed table was read for a partly unowned cohort: %v", client.statements)
+	}
+}
+
+func TestResolveForecastReadsEveryDistinctTeamWhenAllAreOwned(t *testing.T) {
+	input := &model.CapacityForecastInput{TeamIds: []string{"team-b", "", "team-a", "team-b"}, HistoryDays: 30, Simulations: 50}
+	client := &fakeClient{responses: []*fakeRowScanner{throughputRows(t, 2, 4, 6, 8, 10), {rows: [][]any{{uint64(30)}}}}}
+	got, err := ResolveForecast(context.Background(), client, "org-7", input, day(t, "2026-09-01"))
 	if err != nil || got == nil {
-		t.Fatalf("forecast %v, err %v; want an answer for the owned teams", got, err)
+		t.Fatalf("forecast %v, err %v; want an answer", got, err)
 	}
 	for index := range client.statements {
 		value, _ := bindingValue(client.bindings[index], "team_ids")
-		if want := []string{"team-a", "team-b"}; !reflect.DeepEqual(value, want) {
-			t.Errorf("statement %d team_ids %v, want the owned teams in requested order %v", index, value, want)
+		if want := []string{"team-b", "team-a"}; !reflect.DeepEqual(value, want) {
+			t.Errorf("statement %d team_ids %v, want the distinct requested teams %v", index, value, want)
 		}
+	}
+}
+
+// Round repro #1: a supplied teamIds list with no usable id is missing, never the org scope.
+func TestResolveForecastASuppliedListOfBlankIdsIsMissingNotOrgWide(t *testing.T) {
+	input := &model.CapacityForecastInput{TeamIds: []string{"", ""}, HistoryDays: 30, Simulations: 50}
+	client := &fakeClient{responses: []*fakeRowScanner{throughputRows(t, 2, 4, 6, 8, 10), {rows: [][]any{{uint64(30)}}}}}
+	got, err := ResolveForecast(context.Background(), client, "org-7", input, day(t, "2026-09-01"))
+	if err != nil || got != nil {
+		t.Fatalf("forecast %v, err %v; want a nil forecast", got, err)
+	}
+	if len(client.statements) != 0 {
+		t.Fatalf("an org-wide read ran for an all-blank team list: %v", client.statements)
+	}
+}
+
+// Only the ownership read fails; the resolver stops with an error and reads nothing else.
+func TestResolveForecastFailsClosedWhenOnlyTheOwnershipReadFails(t *testing.T) {
+	input := &model.CapacityForecastInput{TeamIds: []string{"team-a"}, HistoryDays: 30, Simulations: 50}
+	client := &fakeClient{ownershipErr: errors.New("ownership down"), responses: []*fakeRowScanner{throughputRows(t, 2, 4, 6, 8, 10), {rows: [][]any{{uint64(30)}}}}}
+	got, err := ResolveForecast(context.Background(), client, "org-7", input, day(t, "2026-09-01"))
+	if err == nil || got != nil {
+		t.Fatalf("forecast %v, err %v; want an error and no forecast", got, err)
+	}
+	if len(client.statements) != 0 {
+		t.Fatalf("a team_id-keyed table was read after the ownership read failed: %v", client.statements)
 	}
 }
 
@@ -197,17 +236,4 @@ func TestResolveForecastWithNoTeamReadsNoOwnership(t *testing.T) {
 	if len(client.ownershipBindings) != 0 {
 		t.Fatalf("an org-wide request read ownership: %v", client.ownershipBindings)
 	}
-}
-
-func TestOwnedTeamsFailsClosedOnAReadError(t *testing.T) {
-	_, err := ownedTeams(context.Background(), errClient{}, "org-7", []string{"team-a"}, day(t, "2026-09-01"))
-	if err == nil {
-		t.Fatal("an ownership read that failed was treated as an answer")
-	}
-}
-
-type errClient struct{}
-
-func (errClient) Query(context.Context, string, []clickhouse.Binding) (clickhouse.RowScanner, error) {
-	return nil, errors.New("boom")
 }

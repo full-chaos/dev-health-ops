@@ -158,17 +158,22 @@ func BuildExplainResponse(ctx context.Context, reader *Reader, orgID string, par
 	}
 	scopeFilterSQL += metricStatusFilterSQL(config.StatusFilter)
 
-	currentRaw, err := reader.fetchMetricValue(ctx, config.Table, config.Column, config.Aggregator, params.StartDay, params.EndDay, scopeFilterSQL, scopeBindings, orgID)
+	currentRaw, hasData, err := reader.fetchMetricValue(ctx, config.Table, config.Column, config.Aggregator, params.StartDay, params.EndDay, scopeFilterSQL, scopeBindings, orgID)
 	if err != nil {
 		return nil, err
 	}
-	previousRaw, err := reader.fetchMetricValue(ctx, config.Table, config.Column, config.Aggregator, params.CompareStart, params.CompareEnd, scopeFilterSQL, scopeBindings, orgID)
+	previousRaw, hasPriorData, err := reader.fetchMetricValue(ctx, config.Table, config.Column, config.Aggregator, params.CompareStart, params.CompareEnd, scopeFilterSQL, scopeBindings, orgID)
 	if err != nil {
 		return nil, err
 	}
 	currentValue := safeFloat(currentRaw)
 	previousValue := safeFloat(previousRaw)
 	pctChange := safeFloat(deltaPct(currentValue, previousValue))
+	if !hasData || !hasPriorData {
+		// CHAOS-8491: a window with no stored value is not a measured 0. An empty current window
+		// would otherwise read as -100 % against a real prior; the flags below carry the fact.
+		pctChange = 0.0
+	}
 
 	drivers, err := reader.fetchMetricDriverDelta(ctx, config.Table, config.Column, config.GroupBy, config.Aggregator, params.StartDay, params.EndDay, params.CompareStart, params.CompareEnd, scopeFilterSQL, scopeBindings, orgID)
 	if err != nil {
@@ -252,6 +257,8 @@ func BuildExplainResponse(ctx context.Context, reader *Reader, orgID string, par
 		Unit:         config.Unit,
 		Value:        safeTransform(config.Transform, currentValue),
 		DeltaPct:     pctChange,
+		HasData:      hasData,
+		HasPriorData: hasPriorData,
 		Drivers:      driverModels,
 		Contributors: contributorModels,
 		// explain.py builds prs, then issues; a Python dict keeps that order.

@@ -100,9 +100,9 @@ func metricFromClause(table, column, scopeFilterSQL, startParam, endParam string
 // two-layer None-then-NaN/Inf handling (fetch_metric_value's inner
 // `float(value or 0.0)`, then build_explain_response's own outer
 // safe_float call).
-func (reader *Reader) fetchMetricValue(ctx context.Context, table, column, aggregator string, startDay, endDay time.Time, scopeFilterSQL string, scopeBindings []dhclickhouse.Binding, orgID string) (float64, error) {
+func (reader *Reader) fetchMetricValue(ctx context.Context, table, column, aggregator string, startDay, endDay time.Time, scopeFilterSQL string, scopeBindings []dhclickhouse.Binding, orgID string) (float64, bool, error) {
 	if reader == nil || reader.client == nil {
-		return 0, ErrUnavailable
+		return 0, false, ErrUnavailable
 	}
 
 	fromClause := metricFromClause(table, column, scopeFilterSQL, "start_day", "end_day")
@@ -121,10 +121,11 @@ func (reader *Reader) fetchMetricValue(ctx context.Context, table, column, aggre
 	// static, driver-safe destination type.
 	query := fmt.Sprintf(`
 SELECT
-    toFloat64(%s(%s)) AS value
+    toFloat64(%s(%s)) AS value,
+    count(%s) AS known_count
 FROM %s
 %s
-`, aggregator, column, fromClause, settingsMaxExecutionTime())
+`, aggregator, column, column, fromClause, settingsMaxExecutionTime())
 
 	bindings := append([]dhclickhouse.Binding{
 		{Name: "start_day", Value: dateBindingValue(startDay)},
@@ -134,21 +135,27 @@ FROM %s
 
 	rows, err := reader.client.Query(ctx, query, bindings)
 	if err != nil {
-		return 0, fmt.Errorf("fetch metric value: %w", err)
+		return 0, false, fmt.Errorf("fetch metric value: %w", err)
 	}
 	defer rows.Close()
 
 	if !rows.Next() {
 		if err := rows.Err(); err != nil {
-			return 0, fmt.Errorf("iterate metric value rows: %w", err)
+			return 0, false, fmt.Errorf("iterate metric value rows: %w", err)
 		}
-		return 0.0, nil
+		return 0.0, false, nil
 	}
 	var value *float64
-	if err := rows.Scan(&value); err != nil {
-		return 0, fmt.Errorf("scan metric value row: %w", err)
+	var knownCount uint64
+	if err := rows.Scan(&value, &knownCount); err != nil {
+		return 0, false, fmt.Errorf("scan metric value row: %w", err)
 	}
-	return floatOrZero(value), nil
+	// hasData is true when the window holds at least one stored (non-NULL)
+	// value for the column (CHAOS-8491). count(col) comes from the SAME
+	// query as the aggregate and never counts a NULL, so a stored 0 reads
+	// as data and an empty window (sum() answers 0, avg() answers NaN)
+	// does not. Never a test on the aggregate itself.
+	return floatOrZero(value), knownCount > 0, nil
 }
 
 // metricRow is one row fetchMetricContributors/fetchMetricDriverDelta

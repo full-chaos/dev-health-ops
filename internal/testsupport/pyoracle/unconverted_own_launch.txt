@@ -5,5 +5,4 @@
 # The list only shrinks: the owner of a package converts its sites to
 # producer.Command and deletes its line in the same change (CHAOS-7707).
 internal/api/externalingest
-internal/pgmigrate
 internal/providersync

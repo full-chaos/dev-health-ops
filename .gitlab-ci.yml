@@ -1,3 +1,58 @@
+# Disaster-recovery pipeline. It mirrors the CI that .github/workflows/ runs
+# (CHAOS-3426). Rule: call the SAME repo scripts as the workflows (ci/*.sh,
+# ci/check_go.sh verbs, ci/run_*.sh); do not copy their logic here. The only
+# logic kept inline is logic that the workflows themselves keep inline.
+#
+# GAPS (what this file does NOT mirror; named, not faked):
+#   - Required-check rules, rulesets and merge queue: GitLab has no `test`,
+#     `go-quality` or `metrics-executed-proof` required-check names. The
+#     pipeline status of the jobs above is the verdict; they are not wired to
+#     branch protection here.
+#   - CodeQL (codeql-analysis.yml) and the SARIF upload to GitHub code scanning.
+#   - Self-hosted runner labels, the ARC pool and its dind-smoke-test jobs, the
+#     SELF_HOSTED_RUNNERS switch, arc-runner-image.yml, mirror-test-images.yml.
+#   - OIDC, GitHub Releases and tagging: auto-release.yml, the PyPI upload of
+#     publish-pypi.yml (only its build step is mirrored), cloud-deploy.yml and
+#     the Cloudflare publish of docs-cloudflare.yml (docs:guards runs the same
+#     strict build, link and accessibility checks).
+#   - mutation-battery.yml (a manual, secret-backed matrix).
+#   - Go storage integration is NOT sharded (a static file cannot take the
+#     dynamic plan matrix); the whole suite runs in one job.
+#   - Go images: no GHA layer cache, no push-by-digest, no `latest` or branch
+#     tags (docker-images.yml's fan-in-latest); the registry is the GitLab one.
+#   - Image archives for the scan stage are amd64 only (as go-container-security).
+#   - go:arm64-numeric-parity needs an arm64 runner: set GITLAB_ARM64_RUNNER_TAG.
+#   - Go-relevance skip (ci/go_relevance.sh) is not used: go:quality always runs.
+#   - Python lint (ruff) and typecheck (mypy), the Python unit matrix, the
+#     coverage gate and the Python integration tier are gone from GitHub
+#     (#3748, #3761); they are gone here too.
+#   - Stage order: GitLab stages gate each other, so security, scan and build
+#     jobs use `needs: []` to run even when a go or e2e job is red (GitHub runs
+#     its workflows independently); the remaining stage gating is not mirrored.
+#   - go:container-smoke publishes ports on 127.0.0.1 (ci/check_go_containers.sh)
+#     and curls them from the job container; with a dind service the port is in
+#     the dind container. Unproven; expected to work on a pod-network executor.
+#   - docs:guards has no check_ask_dev_copy_drift.py step: correct after #3761
+#     deletes that script and its docs-guards.yml step.
+#   - Needs a runner that allows privileged dind (docker:27-dind services).
+#
+# Job map (GitHub workflow : job -> GitLab job):
+#   test.yml : docs-tests, tooling-tests      -> tests:docs, tests:tooling
+#   go-quality.yml : go-quality-leg           -> go:quality (matrix)
+#   go.yml : go-storage-integration           -> go:storage-integration (unsharded)
+#   go.yml : go-container-smoke               -> go:container-smoke (matrix)
+#   go.yml : go-container-reproducibility     -> go:container-reproducibility
+#   go.yml : go-container-security            -> security:go-image-build, scan:trivy, scan:sbom
+#   go.yml : go-arm64-numeric-parity          -> go:arm64-numeric-parity (opt-in runner tag)
+#   go.yml : graphql-wire-parity              -> go:graphql-wire-parity
+#   live-e2e.yml : live-e2e, metrics-executed-proof -> e2e:live, e2e:metrics-executed-proof
+#   security-scan.yml / scheduled-scan.yml    -> security:pip-audit, security:semgrep, security:gitleaks
+#   governance.yml : governance               -> governance
+#   docs-guards.yml / docs-inventory-review.yml / docs-health-report.yml -> docs:*
+#   docker-images.yml : go-build, go-api-tools-build + merge -> build:go-images, build:go-images-manifest
+#   venue-oracles*.yml                        -> go:venue-oracles, go:venue-oracles-changed
+#   publish-pypi.yml : build step             -> build:pypi-package
+
 workflow:
   rules:
     - if: $CI_COMMIT_TAG
@@ -8,11 +63,12 @@ workflow:
     - if: $CI_PIPELINE_SOURCE == "web"
 
 stages:
-  - lint
+  - validate
   - test
-  - integration
+  - go
   - e2e
   - security
+  - scan
   - build
 
 variables:
@@ -21,324 +77,671 @@ variables:
   PIP_ROOT_USER_ACTION: "ignore"
   PYTHONDONTWRITEBYTECODE: "1"
   PYTHONUNBUFFERED: "1"
-  TEST_RESULTS_DIR: "$CI_PROJECT_DIR/test-results"
+  GIT_DEPTH: "0"
+  GO_IMAGE: "golang:1.27.0-bookworm"
+  DOCKER_CLI_VERSION: "27.5.1"
+  DOCKER_IMAGE: "docker:27"
+  DIND_IMAGE: "docker:27-dind"
+  # The test dependency images come from the ghcr mirror (same digests as the
+  # Docker Hub originals), as in go-quality.yml, so no job hits the Hub rate limit.
+  TESTCONTAINERS_HUB_IMAGE_NAME_PREFIX: "ghcr.io/full-chaos"
+
+# Run when Go, container, CI or Python-test inputs change. A superset of
+# go.yml's `paths` list (the workflow's list stays the source of truth; a
+# superset only runs more).
+.code_changes: &code_changes
+  - "**/*.go"
+  - go.mod
+  - go.sum
+  - go.work
+  - go.work.sum
+  - contracts/**/*
+  - deploy/**/*
+  - docker/**/*
+  - cmd/**/*
+  - internal/**/*
+  - third_party/**/*
+  - tools/**/*
+  - src/**/*
+  - tests/**/*
+  - ci/**/*
+  - scripts/**/*
+  - migrations/**/*
+  - alerts/**/*
+  - requirements.txt
+  - requirements-docs.txt
+  - pyproject.toml
+  - uv.lock
+  - pytest.ini
+  - alembic.ini
+  - lefthook.yml
+  - compose.yml
+  - Makefile
+  - .dockerignore
+  - .gitlab-ci.yml
+
+.code_rules: &code_rules
+  - if: $CI_PIPELINE_SOURCE == "merge_request_event" || $CI_PIPELINE_SOURCE == "merge_train"
+    changes: *code_changes
+  - if: $CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH
+    changes: *code_changes
+  - if: $CI_PIPELINE_SOURCE == "web" || $CI_PIPELINE_SOURCE == "schedule" || $CI_COMMIT_TAG
+
+# security-scan.yml has no path filter: the scans run on every merge request,
+# default-branch push, schedule, manual run and tag.
+.security_rules: &security_rules
+  - if: $CI_PIPELINE_SOURCE == "merge_request_event" || $CI_PIPELINE_SOURCE == "merge_train"
+  - if: $CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH
+  - if: $CI_PIPELINE_SOURCE == "web" || $CI_PIPELINE_SOURCE == "schedule" || $CI_COMMIT_TAG
+
+.mr_rules: &mr_rules
+  - if: $CI_PIPELINE_SOURCE == "merge_request_event" || $CI_PIPELINE_SOURCE == "merge_train"
+
+.main_rules: &main_rules
+  - if: $CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH
+  - if: $CI_PIPELINE_SOURCE == "web"
+
+# ---------------------------------------------------------------------------
+# Shared building blocks
+# ---------------------------------------------------------------------------
 
 .python_job:
+  image: python:3.14
   cache:
     key: "pip-$CI_JOB_IMAGE"
     paths:
       - .cache/pip
-  before_script:
-    - python -V
-    - python -m pip install --upgrade pip
-    - pip install -r requirements.txt
 
-.wait_test_services:
-  script:
-    - &wait_test_services |
-      python - <<'PY'
-      import asyncio
-      import os
-      import urllib.error
-      import urllib.request
-      from sqlalchemy import text
-      from sqlalchemy.ext.asyncio import create_async_engine
-
-
-      async def wait_postgres(url: str) -> None:
-          engine = create_async_engine(url, pool_pre_ping=True)
-          try:
-              for attempt in range(30):
-                  try:
-                      async with engine.connect() as conn:
-                          await conn.execute(text("SELECT 1"))
-                      return
-                  except Exception:
-                      if attempt == 29:
-                          raise
-                      await asyncio.sleep(1)
-          finally:
-              await engine.dispose()
-
-
-      def wait_clickhouse(url: str) -> None:
-          request = urllib.request.Request(url)
-          for attempt in range(30):
-              try:
-                  with urllib.request.urlopen(request, timeout=2) as response:
-                      if response.status == 200:
-                          return
-              except (OSError, urllib.error.URLError):
-                  if attempt == 29:
-                      raise
-              import time
-
-              time.sleep(1)
-
-
-      async def main() -> None:
-          await wait_postgres(os.environ["POSTGRES_URI"])
-          wait_clickhouse(os.environ["CLICKHOUSE_HEALTH_URL"])
-
-
-      asyncio.run(main())
-      PY
-
-pipeline:validate:
-  stage: lint
-  image: python:3.14
-  rules:
-    - if: $CI_PIPELINE_SOURCE == "merge_request_event"
-    - if: $CI_PIPELINE_SOURCE == "merge_train"
-    - if: $CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH
-    - if: $CI_PIPELINE_SOURCE == "schedule"
-    - if: $CI_PIPELINE_SOURCE == "web"
-    - if: $CI_COMMIT_TAG
+# Docker CLI (static, sha256-pinned) so a golang image can drive the dind daemon.
+.docker_cli:
   script:
     - |
+      set -eu
+      case "$(uname -m)" in
+        x86_64) arch=x86_64; sha=4f798b3ee1e0140eab5bf30b0edc4e84f4cdb53255a429dc3bbae9524845d640 ;;
+        aarch64|arm64) arch=aarch64; sha=e6b53725a73763ab3f988c73f8772eaed429754c1a579db5ff11f21990fd1817 ;;
+        *) echo "unsupported architecture: $(uname -m)" >&2; exit 1 ;;
+      esac
+      curl -fsSL -o /tmp/docker.tgz "https://download.docker.com/linux/static/stable/${arch}/docker-${DOCKER_CLI_VERSION}.tgz"
+      echo "${sha}  /tmp/docker.tgz" | sha256sum -c -
+      tar -xzf /tmp/docker.tgz -C /usr/local/bin --strip-components=1 docker/docker
+      for _ in $(seq 1 60); do
+        docker info >/dev/null 2>&1 && break
+        sleep 1
+      done
+      docker info >/dev/null
+
+# Go + Docker (dind) + Python (uv, locked env) toolbox, as the GitHub jobs
+# get from setup-go + setup-uv on a runner that has Docker.
+.go_job:
+  image: $GO_IMAGE
+  services:
+    - name: $DIND_IMAGE
+      alias: docker
+  variables:
+    DOCKER_HOST: tcp://docker:2375
+    DOCKER_TLS_CERTDIR: ""
+  before_script:
+    - apt-get update -y
+    - apt-get install -y --no-install-recommends jq postgresql-client python3 python3-pip
+    - !reference [.docker_cli, script]
+    - go version
+
+# uv + the locked Python env (kept Python tests, live-e2e, metrics proof).
+.uv_env:
+  script:
+    - pip install --break-system-packages uv
+    - uv sync --frozen --all-extras --dev --python 3.14
+    - export PATH="$PWD/.venv/bin:$PATH"
+    - uv pip install --python .venv/bin/python -r requirements-docs.txt
+
+# Service containers of live-e2e.yml / metrics-executed-proof (same images,
+# anonymous pull from the ghcr mirror).
+.live_services:
+  services:
+    - name: $DIND_IMAGE
+      alias: docker
+    - name: ghcr.io/full-chaos/postgres:18-alpine@sha256:9a8afca54e7861fd90fab5fdf4c42477a6b1cb7d293595148e674e0a3181de15
+      alias: postgres
+    - name: ghcr.io/full-chaos/clickhouse/clickhouse-server:26.7
+      alias: clickhouse
+    - name: ghcr.io/full-chaos/valkey/valkey:8-alpine
+      alias: valkey
+  variables:
+    DOCKER_HOST: tcp://docker:2375
+    DOCKER_TLS_CERTDIR: ""
+    POSTGRES_USER: postgres
+    POSTGRES_PASSWORD: postgres
+    POSTGRES_DB: test_db
+    CLICKHOUSE_DB: default
+    CLICKHOUSE_USER: ch
+    CLICKHOUSE_PASSWORD: ch
+    # The scripts default to localhost; GitLab services answer on their alias.
+    POSTGRES_HOST: postgres
+    CLICKHOUSE_HOST: clickhouse
+    VALKEY_HOST: valkey
+    LIVE_E2E_VALKEY_HOST: valkey
+    POSTGRES_URI: postgresql+asyncpg://postgres:postgres@postgres:5432/test_db
+    DATABASE_URI: postgresql+asyncpg://postgres:postgres@postgres:5432/test_db
+    CLICKHOUSE_URI: clickhouse://ch:ch@clickhouse:8123/default
+    REDIS_URL: redis://valkey:6379/1
+
+.wait_live_services:
+  script:
+    - |
+      for target in postgres:5432 clickhouse:8123 clickhouse:9000 valkey:6379; do
+        host="${target%%:*}"; port="${target##*:}"
+        ok=0
+        for _ in $(seq 1 60); do
+          if (exec 3<>"/dev/tcp/${host}/${port}") 2>/dev/null; then ok=1; break; fi
+          sleep 1
+        done
+        [ "${ok}" = 1 ] || { echo "service ${host}:${port} did not become reachable" >&2; exit 1; }
+      done
+
+# Docker-only jobs (image builds) run in the official docker image (it ships buildx).
+.docker_job:
+  image: $DOCKER_IMAGE
+  services:
+    - name: $DIND_IMAGE
+      alias: docker
+  variables:
+    DOCKER_HOST: tcp://docker:2375
+    DOCKER_TLS_CERTDIR: ""
+  before_script:
+    - apk add --no-cache bash git coreutils gawk grep jq curl
+    - |
+      for _ in $(seq 1 60); do
+        docker info >/dev/null 2>&1 && break
+        sleep 1
+      done
+    - docker version
+    - docker buildx version
+
+# Build metadata, as the "Determine build metadata" step of docker-images.yml.
+.build_metadata:
+  script:
+    - |
+      SHA="$(git rev-parse HEAD)"
+      VERSION="$(printf '%s' "${SHA}" | cut -c1-7)"
+      if [ -n "${CI_COMMIT_TAG:-}" ]; then VERSION="${CI_COMMIT_TAG}"; fi
+      EPOCH="$(git log -1 --pretty=%ct)"
+      export VERSION COMMIT="${SHA}" SOURCE_DATE_EPOCH="${EPOCH}"
+      export BUILD_TIME="$(date -u -d "@${EPOCH}" +%Y-%m-%dT%H:%M:%SZ)"
+
+# ---------------------------------------------------------------------------
+# validate
+# ---------------------------------------------------------------------------
+
+pipeline:validate:
+  stage: validate
+  image: python:3.14
+  script:
+    - pip install pyyaml
+    - |
       python - <<'PY'
+      import sys
       from pathlib import Path
 
+      import yaml
+
+
+      class Loader(yaml.SafeLoader):
+          pass
+
+
+      Loader.add_constructor("!reference", lambda loader, node: loader.construct_sequence(node))
+      doc = yaml.load(Path(".gitlab-ci.yml").read_text(), Loader=Loader)
       required_jobs = {
-          "lint",
-          "typecheck:mypy",
-          "test",
-          "coverage",
-          "integration",
-          "live-e2e",
+          "governance",
+          "tests:docs",
+          "tests:tooling",
+          "docs:guards",
+          "docs:inventory-review",
+          "go:quality",
+          "go:storage-integration",
+          "go:container-smoke",
+          "go:container-reproducibility",
+          "go:graphql-wire-parity",
+          "e2e:live",
+          "e2e:metrics-executed-proof",
           "security:pip-audit",
           "security:semgrep",
           "security:gitleaks",
-          "docker:build",
+          "security:go-image-build",
+          "scan:trivy",
+          "scan:sbom",
+          "build:go-images",
+          "build:go-images-manifest",
       }
-      content = Path(".gitlab-ci.yml").read_text()
-      missing = [job for job in sorted(required_jobs) if f"\n{job}:\n" not in content]
-      if missing:
-          raise SystemExit(f"Missing expected GitLab parity jobs: {', '.join(missing)}")
+      jobs = {k: v for k, v in doc.items() if isinstance(v, dict) and not k.startswith(".") and "stage" in v}
+      stages = set(doc["stages"])
+      errors = [f"missing job: {j}" for j in sorted(required_jobs - set(jobs))]
+      errors += [f"{k}: unknown stage {v['stage']}" for k, v in jobs.items() if v["stage"] not in stages]
+      for k, v in jobs.items():
+          for need in v.get("needs", []):
+              name = need["job"] if isinstance(need, dict) else need
+              if name not in jobs:
+                  errors.append(f"{k}: needs unknown job {name}")
+      removed = {"lint", "typecheck:mypy", "test", "coverage", "integration", "live-e2e", "docker:build"}
+      errors += [f"retired job is back: {j}" for j in sorted(removed & set(jobs))]
+      if errors:
+          raise SystemExit("\n".join(errors))
       print("GitLab pipeline parity jobs are present.")
       PY
 
-lint:
-  extends: .python_job
-  stage: lint
+# governance.yml: the TEST-EVIDENCE / RISK-NOTES gate, on merge requests.
+governance:
+  stage: validate
   image: python:3.14
-  rules: &code_rules
-    - if: $CI_PIPELINE_SOURCE == "web"
-    - if: $CI_PIPELINE_SOURCE == "merge_request_event"
-      changes: &code_changes
-        - src/**/*
-        - tests/**/*
-        - ci/**/*
-        - migrations/**/*
-        - requirements.txt
-        - pyproject.toml
-        - pytest.ini
-        - alembic.ini
-        - Makefile
-        - scripts/**/*
-        - .gitlab-ci.yml
-    - if: $CI_PIPELINE_SOURCE == "merge_train"
-      changes: *code_changes
-    - if: $CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH
-      changes: *code_changes
+  rules: *mr_rules
+  variables:
+    PR_BODY: $CI_MERGE_REQUEST_DESCRIPTION
   script:
-    - pip install ruff
-    - ruff format --check .
-    - ruff check .
+    - python3 ci/check_governance_gate.py --base-sha "$CI_MERGE_REQUEST_DIFF_BASE_SHA" --head-sha "$CI_COMMIT_SHA"
 
-typecheck:mypy:
-  extends: .python_job
-  stage: lint
-  image: python:3.14
-  rules: *code_rules
-  script:
-    - mypy --install-types --non-interactive .
-  allow_failure: false
+# ---------------------------------------------------------------------------
+# test (test.yml: docs-tests, tooling-tests incl. the kept Python tests)
+# ---------------------------------------------------------------------------
 
-test:
+tests:docs:
   extends: .python_job
   stage: test
-  image: python:${PYTHON_VERSION}
+  before_script:
+    - pip install uv
+    - uv sync --frozen --all-extras --dev --python 3.14
+    - uv pip install --python .venv/bin/python -r requirements-docs.txt
+    - export PATH="$PWD/.venv/bin:$PATH"
+  script:
+    - pytest tests/docs -q
+
+tests:tooling:
+  extends: .go_job
+  stage: test
+  timeout: 1h
+  variables:
+    OTEL_ENABLED: "false"
+    HELM_VERSION: "v3.21.4"
+  before_script:
+    - !reference [.go_job, before_script]
+    - !reference [.uv_env, script]
+    - |
+      case "$(uname -m)" in
+        x86_64) helm_arch=amd64 ;;
+        aarch64|arm64) helm_arch=arm64 ;;
+        *) echo "unsupported architecture: $(uname -m)" >&2; exit 1 ;;
+      esac
+      curl -fsSL -o /tmp/helm.tgz "https://get.helm.sh/helm-${HELM_VERSION}-linux-${helm_arch}.tar.gz"
+      expected="$(curl -fsSL "https://get.helm.sh/helm-${HELM_VERSION}-linux-${helm_arch}.tar.gz.sha256sum" | awk '{print $1}')"
+      echo "${expected}  /tmp/helm.tgz" | sha256sum -c -
+      tar -xzf /tmp/helm.tgz -C /tmp
+      install -m 0755 "/tmp/linux-${helm_arch}/helm" /usr/local/bin/helm
+  script:
+    - pytest tests/tooling -q -n 4
+    # The Python tests that pin things which stay after the Python source is
+    # deleted: an explicit list, not a negative filter (same as test.yml).
+    - |
+      set -euo pipefail
+      mapfile -t kept < <(grep -v '^[[:space:]]*#' ci/kept_python_tests.txt | grep -v '^[[:space:]]*$')
+      if [ "${#kept[@]}" -lt 40 ]; then
+        echo "ci/kept_python_tests.txt lists only ${#kept[@]} files: a short or empty list would run nothing (or everything)" >&2
+        exit 1
+      fi
+      printf 'kept files: %s\n' "${#kept[@]}"
+      pytest "${kept[@]}" -q -rs -n 4
+
+# ---------------------------------------------------------------------------
+# docs (docs-guards.yml, docs-inventory-review.yml, docs-health-report.yml)
+# ---------------------------------------------------------------------------
+
+docs:guards:
+  extends: .python_job
+  stage: test
+  before_script:
+    - pip install -r requirements-docs.txt
+    - mkdir -p .build
+  script:
+    - |
+      set -o pipefail
+      python scripts/validate_docs_v2_publication.py 2>&1 | tee .build/docs-publication-validation.log
+      python -m mkdocs build --strict --config-file mkdocs.yml 2>&1 | tee .build/docs-build.log
+      python scripts/check_built_site_links.py --site-dir .build/docs 2>&1 | tee .build/docs-links.log
+      python scripts/check_docs_candidate_search.py --site-dir .build/docs --queries docs-data/search-acceptance.json 2>&1 | tee .build/docs-search.log
+      python scripts/check_docs_candidate_accessibility.py --site-dir .build/docs --css docs/stylesheets/extra.css 2>&1 | tee .build/docs-accessibility.log
+      python scripts/check_docs_candidate_facts.py 2>&1 | tee .build/docs-facts.log
+      python scripts/check_code_prerequisites.py 2>&1 | tee .build/docs-code-prerequisites.log
+      python scripts/check_freshness_inventory.py 2>&1 | tee .build/docs-freshness-inventory.log
+  artifacts:
+    when: always
+    expire_in: 14 days
+    paths:
+      - .build/docs-*.log
+
+docs:inventory-review:
+  extends: .python_job
+  stage: test
+  before_script:
+    - python -m pip install 'PyYAML==6.0.3'
+  script:
+    - mkdir -p .build
+    - cp docs-data/inventory/documentation-inventory.json .build/documentation-inventory.json
+    - |
+      python scripts/validate_docs_inventory_review.py \
+        --generated-json .build/documentation-inventory.json \
+        --inventory-dir docs-data/inventory \
+        --ia-dir docs-data/ia
+
+# Scheduled and diagnostic: never blocks a merge request.
+docs:health-report:
+  extends: .python_job
+  stage: test
+  rules:
+    - if: $CI_PIPELINE_SOURCE == "schedule"
+  before_script:
+    - pip install -r requirements-docs.txt
+    - mkdir -p .build
+  script:
+    - python -m mkdocs build --strict --config-file mkdocs.yml
+    # Only the external-link step may fail (continue-on-error in docs-health-report.yml);
+    # the build above fails the job.
+    - |
+      set -o pipefail
+      rc=0
+      python scripts/check_external_links.py \
+        --built-site .build/docs \
+        --allowlist docs-data/external-link-allowlist.yml \
+        --site-url https://docs.fullchaos.dev \
+        2>&1 | tee .build/docs-external-links.log || rc=$?
+      echo "external link check exit code: ${rc} (diagnostic, does not block)"
+  artifacts:
+    when: always
+    expire_in: 30 days
+    paths:
+      - .build/docs-external-links.log
+
+# ---------------------------------------------------------------------------
+# go (go-quality.yml, go.yml, venue-oracles*.yml)
+# ---------------------------------------------------------------------------
+
+# The required `go-quality` check of GitHub: the five legs of go-quality.yml.
+# GitLab has no fan-in job: the pipeline status of these legs is the verdict.
+# The legs always run (no Go-relevance skip), a superset of the workflow.
+go:quality:
+  extends: .go_job
+  stage: go
+  timeout: 45m
+  parallel:
+    matrix:
+      - LEG: ["static", "test", "race 1 3", "race 2 3", "race 3 3"]
+  before_script:
+    - !reference [.go_job, before_script]
+    - |
+      if [ "${LEG}" = "static" ]; then
+        # Install the pinned linter (version and sha256), as go-quality.yml does.
+        version=0.11.0
+        case "$(uname -m)" in
+          x86_64) arch=x86_64; sha=b7af85e41cc99489dcc21d66c6d5f3685138f06d34651e6d34b42ec6d54fe6f6 ;;
+          aarch64|arm64) arch=aarch64; sha=68a8133197a50beb8803f8d42f9908d1af1c5540d4bb05fdfca8c1fa47decefc ;;
+          *) echo "unsupported architecture: $(uname -m)" >&2; exit 1 ;;
+        esac
+        tarball="shellcheck-v${version}.linux.${arch}.tar.gz"
+        curl -fsSL -o "/tmp/${tarball}" "https://github.com/koalaman/shellcheck/releases/download/v${version}/${tarball}"
+        echo "${sha}  /tmp/${tarball}" | sha256sum -c -
+        tar -xzf "/tmp/${tarball}" -C /tmp
+        install -m 0755 "/tmp/shellcheck-v${version}/shellcheck" /usr/local/bin/shellcheck
+      fi
+  script:
+    - |
+      set -euo pipefail
+      if [ "${LEG}" = "static" ]; then
+        bash ci/check_migration_matrix.sh stamp
+        bash ci/check_migration_matrix.sh contract
+        bash ci/check_migration_matrix_test.sh
+        bash ci/go_worker_fixture_test.sh
+        go run ./cmd/gqlgen-guard check-drift
+        # The closed lists are held to their size on the merge base (merge requests only).
+        if [ -n "${CI_MERGE_REQUEST_DIFF_BASE_SHA:-}" ]; then
+          export RATCHET_BASE_SHA="${CI_MERGE_REQUEST_DIFF_BASE_SHA}"
+          if git cat-file -e "${RATCHET_BASE_SHA}:contracts/jobs/v1" 2>/dev/null; then
+            base_dir="$(mktemp -d)"
+            git archive "${RATCHET_BASE_SHA}" contracts/jobs/v1 | tar -x -C "${base_dir}"
+            export DEV_HEALTH_CONTRACT_BASE="${base_dir}/contracts/jobs/v1"
+          fi
+        fi
+      fi
+      bash ci/check_go.sh integration-prepull
+      read -r -a leg_args <<< "${LEG}"
+      bash ci/check_go.sh ci-leg "${leg_args[@]}"
+      if [ "${LEG}" = "static" ]; then
+        bash ci/check_shellcheck_pin.sh
+        bash ci/check_river_compat_static.sh
+      fi
+
+# go.yml: go-storage-integration-plan + -shard + the fan-in. The plan emits a
+# dynamic matrix that a static GitLab file cannot take, so this job validates
+# the plan, then runs the full suite unsharded (the `integration` verb).
+go:storage-integration:
+  extends: .go_job
+  stage: go
+  timeout: 2h
+  rules: *code_rules
+  script:
+    - bash ci/check_go.sh integration-shard-plan
+    - bash ci/check_go.sh integration-prepull
+    - bash ci/check_go.sh integration
+
+go:container-smoke:
+  extends: .docker_job
+  stage: go
+  timeout: 45m
   rules: *code_rules
   parallel:
     matrix:
-      - PYTHON_VERSION: ["3.14"]
-  services:
-    - name: postgres:17.4
-      alias: postgres
-    - name: clickhouse/clickhouse-server:25.1
-      alias: clickhouse
+      - PLATFORM: ["linux/amd64", "linux/arm64"]
   variables:
-    POSTGRES_USER: postgres
-    POSTGRES_PASSWORD: postgres
-    POSTGRES_DB: test_db
-    CLICKHOUSE_DB: default
-    CLICKHOUSE_USER: ch
-    CLICKHOUSE_PASSWORD: ch
-    DATABASE_URI: clickhouse://ch:ch@clickhouse:8123/default
-    CLICKHOUSE_URI: clickhouse://ch:ch@clickhouse:8123/default
-    CLICKHOUSE_HEALTH_URL: http://ch:ch@clickhouse:8123/?query=SELECT%201
-    POSTGRES_URI: postgresql+asyncpg://postgres:postgres@postgres:5432/test_db
-    DEV_HEALTH_POSTGRES_TEST_URI: postgresql+asyncpg://postgres:postgres@postgres:5432/test_db
-    SECONDARY_DATABASE_URI: mongodb://localhost:27017
-    OTEL_ENABLED: "false"
-    # Cap xdist workers so parallelism does not contend on the single
-    # postgres/clickhouse service container (CHAOS-2586).
-    PYTEST_XDIST_WORKERS: "4"
+    DOCKER_DEFAULT_PLATFORM: $PLATFORM
+  before_script:
+    - !reference [.docker_job, before_script]
+    - env -u DOCKER_DEFAULT_PLATFORM docker run --privileged --rm tonistiigi/binfmt --install all
   script:
-    - apt-get update -y
-    - apt-get install -y --no-install-recommends curl git build-essential
-    - pip install ruff
-    - *wait_test_services
-    - chmod +x ci/run_tests.sh
-    - mkdir -p test-results/logs
-    - |
-      set -o pipefail
-      ./ci/run_tests.sh unit 2>&1 | tee "test-results/logs/unit-${PYTHON_VERSION}.log"
-  artifacts:
-    when: always
-    expire_in: 14 days
-    paths:
-      - test-results/junit/*.xml
-      - test-results/logs/*.log
-    reports:
-      junit: test-results/junit/*.xml
+    - bash ci/check_go_containers.sh smoke
 
-# Full coverage-gated suite (ruff/mypy gates + unit tests with coverage
-# threshold + integration/e2e). Kept OFF the per-MR critical path: runs on the
-# merge train (before code reaches the default branch) and on the default
-# branch (post-merge verification), never on a plain merge_request_event.
-# Reassigned from the retired 3.11 leg to 3.12 and parallelized (CHAOS-2586);
-# moved to 3.14 to match the shipped interpreter (CHAOS-3419).
-coverage:
-  extends: .python_job
-  stage: test
-  image: python:3.14
-  rules:
-    - if: $CI_PIPELINE_SOURCE == "web"
-    - if: $CI_PIPELINE_SOURCE == "merge_train"
-      changes: *code_changes
-    - if: $CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH
-      changes: *code_changes
-  services:
-    - name: postgres:17.4
-      alias: postgres
-    - name: clickhouse/clickhouse-server:25.1
-      alias: clickhouse
-  variables:
-    POSTGRES_USER: postgres
-    POSTGRES_PASSWORD: postgres
-    POSTGRES_DB: test_db
-    CLICKHOUSE_DB: default
-    CLICKHOUSE_USER: ch
-    CLICKHOUSE_PASSWORD: ch
-    DATABASE_URI: clickhouse://ch:ch@clickhouse:8123/default
-    CLICKHOUSE_URI: clickhouse://ch:ch@clickhouse:8123/default
-    CLICKHOUSE_HEALTH_URL: http://ch:ch@clickhouse:8123/?query=SELECT%201
-    POSTGRES_URI: postgresql+asyncpg://postgres:postgres@postgres:5432/test_db
-    SECONDARY_DATABASE_URI: mongodb://localhost:27017
-    COVERAGE_THRESHOLD: "70"
-    OTEL_ENABLED: "false"
-    PYTEST_XDIST_WORKERS: "4"
-  script:
-    - apt-get update -y
-    - apt-get install -y --no-install-recommends curl git build-essential
-    - pip install ruff
-    - *wait_test_services
-    - chmod +x ci/run_tests.sh
-    - mkdir -p test-results/logs
-    - |
-      set -o pipefail
-      ./ci/run_tests.sh ci 2>&1 | tee "test-results/logs/ci-3.14.log"
-  artifacts:
-    when: always
-    expire_in: 14 days
-    paths:
-      - test-results/junit/*.xml
-      - test-results/logs/*.log
-      - coverage.xml
-    reports:
-      junit: test-results/junit/*.xml
-  coverage: '/^TOTAL.*\s(\d+%)$/'
-
-integration:
-  extends: .python_job
-  stage: integration
-  image: python:3.14
-  rules:
-    - if: $CI_PIPELINE_SOURCE == "web"
-    - if: $CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH
-  variables:
-    GITHUB_TOKEN: $GH_TOKEN
-    GITLAB_TOKEN: $GL_TOKEN
-    GITLAB_URL: $GITLAB_URL
-    SKIP_INTEGRATION_TESTS: $SKIP_INTEGRATION_TESTS
-  script:
-    - chmod +x ci/run_tests.sh
-    - mkdir -p test-results/logs
-    - set -o pipefail
-    - ./ci/run_tests.sh integration 2>&1 | tee test-results/logs/integration.log
-  artifacts:
-    when: always
-    expire_in: 14 days
-    paths:
-      - test-results/junit/integration.xml
-      - test-results/logs/integration.log
-    reports:
-      junit: test-results/junit/integration.xml
-
-live-e2e:
-  extends: .python_job
-  stage: e2e
-  image: python:3.14
+go:container-reproducibility:
+  extends: .docker_job
+  stage: go
+  timeout: 1h
   rules: *code_rules
-  services:
-    - name: postgres:17.4
-      alias: postgres
-    - name: clickhouse/clickhouse-server:25.1
-      alias: clickhouse
+  script:
+    - bash ci/check_go_containers.sh reproducible
+
+# go-arm64-numeric-parity: runs only on an arm64 runner. Set the CI/CD variable
+# GITLAB_ARM64_RUNNER_TAG to the tag of such a runner to enable it.
+go:arm64-numeric-parity:
+  stage: go
+  image: $GO_IMAGE
+  timeout: 15m
+  tags:
+    - $GITLAB_ARM64_RUNNER_TAG
+  rules:
+    - if: $GITLAB_ARM64_RUNNER_TAG && ($CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH || $CI_PIPELINE_SOURCE == "schedule" || $CI_PIPELINE_SOURCE == "web")
+    - if: $GITLAB_ARM64_RUNNER_TAG && ($CI_PIPELINE_SOURCE == "merge_request_event" || $CI_PIPELINE_SOURCE == "merge_train")
+      changes: *code_changes
+  before_script:
+    - apt-get update -y
+    - apt-get install -y --no-install-recommends jq
+  script:
+    - |
+      set -euo pipefail
+      arch="$(go env GOARCH)"
+      if [ "${arch}" != "arm64" ]; then
+        echo "expected GOARCH=arm64 on the arm64 runner, got '${arch}'" >&2
+        exit 1
+      fi
+      go test -mod=readonly -count=1 -timeout 8m -json ./internal/jobs/... ./internal/queryapi/... \
+        -run '(MatchesLivePythonBitExact|IntegerPercentilesMatchesLivePython)$' \
+        | tee go-test-output.json
+      ran=$(jq -s '[.[] | select(.Action=="run" and (.Test // "") != "")] | length' go-test-output.json)
+      echo "tests actually run: ${ran}"
+      if [ "${ran}" -eq 0 ]; then
+        echo "0 tests matched the -run pattern: this job would prove nothing. Failing loud." >&2
+        exit 1
+      fi
+
+# go.yml: graphql-wire-parity (this repo's HEAD against dev-health-web).
+go:graphql-wire-parity:
+  stage: go
+  image: $GO_IMAGE
+  timeout: 20m
+  rules: *code_rules
   variables:
-    POSTGRES_USER: postgres
-    POSTGRES_PASSWORD: postgres
-    POSTGRES_DB: test_db
-    CLICKHOUSE_DB: default
-    CLICKHOUSE_USER: ch
-    CLICKHOUSE_PASSWORD: ch
+    WEB_REPO: https://github.com/full-chaos/dev-health-web.git
+    NODE_VERSION: "22"
+  script:
+    - |
+      set -euo pipefail
+      apt-get update -y
+      apt-get install -y --no-install-recommends jq xz-utils
+      branch="${CI_MERGE_REQUEST_SOURCE_BRANCH_NAME:-${CI_COMMIT_REF_NAME}}"
+      ref=main
+      set +e
+      git ls-remote --exit-code --heads "${WEB_REPO}" "refs/heads/${branch}" >/dev/null 2>ls-remote.err
+      rc=$?
+      set -e
+      if [ "${rc}" -eq 0 ]; then
+        ref="${branch}"
+        echo "graphql-wire-parity: paired branch '${branch}' found on dev-health-web; using it instead of main"
+      elif [ "${rc}" -eq 2 ]; then
+        echo "graphql-wire-parity: no branch named '${branch}' on dev-health-web (unpaired change); using main"
+      else
+        echo "graphql-wire-parity: could not determine whether '${branch}' exists on dev-health-web (see below)" >&2
+        cat ls-remote.err >&2
+        exit 1
+      fi
+      git clone --depth 1 --branch "${ref}" "${WEB_REPO}" dev-health-web-main
+      case "$(uname -m)" in
+        x86_64) node_arch=x64 ;;
+        aarch64|arm64) node_arch=arm64 ;;
+        *) echo "unsupported architecture: $(uname -m)" >&2; exit 1 ;;
+      esac
+      base="https://nodejs.org/dist/latest-v${NODE_VERSION}.x"
+      tarball="$(curl -fsSL "${base}/SHASUMS256.txt" | awk -v a="linux-${node_arch}.tar.xz" '$2 ~ a {print $2; exit}')"
+      curl -fsSL -o "/tmp/${tarball}" "${base}/${tarball}"
+      (cd /tmp && curl -fsSL "${base}/SHASUMS256.txt" | grep " ${tarball}\$" | sha256sum -c -)
+      tar -xJf "/tmp/${tarball}" -C /usr/local --strip-components=1
+      corepack enable
+      cd dev-health-web-main
+      pnpm install --frozen-lockfile
+      pnpm graphql:wire-parity:check --ops-root "${CI_PROJECT_DIR}"
+
+# venue-oracles.yml: on the default branch (and by hand), 8 shards.
+go:venue-oracles:
+  extends: .go_job
+  stage: go
+  timeout: 1h
+  rules: *main_rules
+  parallel:
+    matrix:
+      - SHARD: ["1", "2", "3", "4", "5", "6", "7", "8"]
+  script:
+    - bash ci/check_go.sh integration-prepull
+    - bash ci/check_go.sh venue-oracles "${SHARD}" 8
+
+# venue-oracles-changed.yml: the oracles of the packages a merge request changes.
+go:venue-oracles-changed:
+  extends: .go_job
+  stage: go
+  timeout: 1h
+  rules: *mr_rules
+  script:
+    - |
+      set -euo pipefail
+      git diff --name-only -z "${CI_MERGE_REQUEST_DIFF_BASE_SHA}...${CI_COMMIT_SHA}" > changed.txt
+      bash ci/check_go.sh venue-oracles --changed changed.txt --list | grep '^SELECT' > selected.txt || true
+      count="$(wc -l < selected.txt | tr -d ' ')"
+      echo "selected ${count} venue oracle test(s):"
+      cat selected.txt
+      if [ "${count}" -eq 0 ]; then
+        echo "VENUE ORACLES NOT RUN: no changed path lies in a package with a registered venue oracle. This green is NOT oracle evidence."
+        exit 0
+      fi
+      bash ci/check_go.sh integration-prepull
+      bash ci/check_go.sh venue-oracles --changed changed.txt
+
+# ---------------------------------------------------------------------------
+# e2e (live-e2e.yml)
+# ---------------------------------------------------------------------------
+
+e2e:live:
+  extends: [.go_job, .live_services]
+  stage: e2e
+  timeout: 45m
+  rules: *code_rules
+  variables:
     DISABLE_DOTENV: "1"
-    DATABASE_URI: postgresql+asyncpg://postgres:postgres@postgres:5432/test_db
-    CLICKHOUSE_URI: clickhouse://ch:ch@clickhouse:8123/default
-    CLICKHOUSE_HEALTH_URL: http://ch:ch@clickhouse:8123/?query=SELECT%201
-    POSTGRES_URI: postgresql+asyncpg://postgres:postgres@postgres:5432/test_db
+    OPERATIONAL_ORDERING_CONTRACT: "2"
+    DEV_HEALTH_ALLOW_CELERY_RIVER_CUTOVER: "1"
+    ENVIRONMENT: test
+    OTEL_ENABLED: "false"
     LIVE_E2E_FIXTURE_SEED: "20260219"
     LIVE_E2E_API_LOG_FILE: ./live-e2e-api.log
+    LIVE_E2E_WORKER_LOG_FILE: ./live-e2e-worker.log
+    LIVE_E2E_RECONCILER_LOG_FILE: ./live-e2e-reconciler.log
+  before_script:
+    - !reference [.go_job, before_script]
+    - !reference [.uv_env, script]
+    - !reference [.wait_live_services, script]
   script:
-    - apt-get update -y
-    - apt-get install -y --no-install-recommends curl git build-essential
-    - *wait_test_services
     - chmod +x ci/run_tests.sh ci/run_live_backend_e2e.sh
     - ./ci/run_tests.sh live-e2e
   artifacts:
-    when: on_failure
+    when: always
     expire_in: 14 days
     paths:
       - live-e2e-api.log
+      - live-e2e-worker.log
+      - live-e2e-reconciler.log
 
+e2e:metrics-executed-proof:
+  extends: [.go_job, .live_services]
+  stage: e2e
+  timeout: 45m
+  rules: *code_rules
+  variables:
+    DISABLE_DOTENV: "1"
+    OTEL_ENABLED: "false"
+    OPERATIONAL_ORDERING_CONTRACT: "2"
+    METRICS_PROOF_WORKER_LOG_FILE: ./metrics-executed-proof-worker.log
+    METRICS_PROOF_RECONCILER_LOG_FILE: ./metrics-executed-proof-reconciler.log
+    METRICS_PROOF_SUMMARY_JSON_FILE: ./metrics-executed-proof-family-summary.json
+  before_script:
+    - !reference [.go_job, before_script]
+    - !reference [.uv_env, script]
+    - !reference [.wait_live_services, script]
+  script:
+    - chmod +x ci/run_metrics_executed_proof.sh
+    - ./ci/run_metrics_executed_proof.sh
+  artifacts:
+    when: always
+    expire_in: 14 days
+    paths:
+      - metrics-executed-proof-worker.log
+      - metrics-executed-proof-reconciler.log
+      - metrics-executed-proof-family-summary.json
+
+# ---------------------------------------------------------------------------
+# security (security-scan.yml, scheduled-scan.yml)
+# ---------------------------------------------------------------------------
+
+# scheduled-scan.yml (weekly pip-audit) is the same job on a schedule pipeline.
 security:pip-audit:
   stage: security
   image: python:3.14
-  rules:
-    - if: $CI_PIPELINE_SOURCE == "schedule"
-    - if: $CI_PIPELINE_SOURCE == "web"
-    - if: $CI_PIPELINE_SOURCE == "merge_request_event"
-      changes: *code_changes
-    - if: $CI_PIPELINE_SOURCE == "merge_train"
-      changes: *code_changes
-    - if: $CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH
-      changes: *code_changes
+  needs: []
+  rules: *security_rules
   before_script:
     - python -V
     - python -m pip install --upgrade pip
-    - pip install "pip-audit>=2.7.0"
+    - pip install "pip-audit==2.10.0"
   script:
     - |
       IGNORE_ARGS=""
@@ -364,106 +767,272 @@ security:pip-audit:
     paths:
       - pip-audit-report.md
 
+# continue-on-error in security-scan.yml, so allow_failure here.
 security:semgrep:
   stage: security
-  image: semgrep/semgrep:latest
-  rules:
-    - if: $CI_PIPELINE_SOURCE == "schedule"
-    - if: $CI_PIPELINE_SOURCE == "web"
-    - if: $CI_PIPELINE_SOURCE == "merge_request_event"
-      changes: *code_changes
-    - if: $CI_PIPELINE_SOURCE == "merge_train"
-      changes: *code_changes
-    - if: $CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH
-      changes: *code_changes
+  image: python:3.14
+  needs: []
+  rules: *security_rules
+  allow_failure: true
+  before_script:
+    - apt-get update -y
+    - apt-get install -y --no-install-recommends jq
+    - pip install "semgrep>=1.99.0"
   script:
     - semgrep scan --config auto --sarif --output semgrep.sarif
-  allow_failure: true
+    # Drop nosemgrep-suppressed findings from the SARIF, as security-scan.yml does.
+    - |
+      if jq '.runs[].results |= map(select(
+              ((.suppressions // []) | length == 0)
+              or ((.suppressions // []) | any(
+                   .kind != "inSource"
+                   or ((.status // "accepted") != "accepted")
+                 ))
+            ))' semgrep.sarif > semgrep.filtered.sarif \
+          && jq -e '.runs' semgrep.filtered.sarif > /dev/null; then
+        mv semgrep.filtered.sarif semgrep.sarif
+      else
+        echo "WARNING: SARIF suppression filter failed; keeping unfiltered results"
+      fi
   artifacts:
     when: always
     expire_in: 14 days
     paths:
       - semgrep.sarif
 
+# A finding fails the job (no allow_failure), as in security-scan.yml.
 security:gitleaks:
   stage: security
-  image:
-    name: zricethezav/gitleaks:latest
-    entrypoint: [""]
-  rules:
-    - if: $CI_PIPELINE_SOURCE == "schedule"
-    - if: $CI_PIPELINE_SOURCE == "web"
-    - if: $CI_PIPELINE_SOURCE == "merge_request_event"
-      changes: *code_changes
-    - if: $CI_PIPELINE_SOURCE == "merge_train"
-      changes: *code_changes
-    - if: $CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH
-      changes: *code_changes
+  image: python:3.14
+  needs: []
+  rules: *security_rules
   variables:
-    GIT_DEPTH: "0"
+    GITLEAKS_VERSION: "8.24.3"
+    GITLEAKS_SHA256: "9991e0b2903da4c8f6122b5c3186448b927a5da4deef1fe45271c3793f4ee29c"
   script:
-    - gitleaks detect --source . --report-format sarif --report-path gitleaks.sarif
-  allow_failure: true
+    - |
+      set -euo pipefail
+      tarball="gitleaks_${GITLEAKS_VERSION}_linux_x64.tar.gz"
+      curl -sSfL --retry 3 -o "/tmp/${tarball}" \
+        "https://github.com/gitleaks/gitleaks/releases/download/v${GITLEAKS_VERSION}/${tarball}"
+      echo "${GITLEAKS_SHA256}  /tmp/${tarball}" | sha256sum --check --strict
+      mkdir -p /tmp/gitleaks
+      tar -xzf "/tmp/${tarball}" -C /tmp/gitleaks gitleaks
+      test "$(/tmp/gitleaks/gitleaks version)" = "${GITLEAKS_VERSION}"
+      # The commits this pipeline adds (new commits only, merges excluded,
+      # first-parent line only), never the history already on the default
+      # branch. Any other pipeline (schedule, web, tag) scans everything.
+      range=""
+      if [ -n "${CI_MERGE_REQUEST_DIFF_BASE_SHA:-}" ]; then
+        range="${CI_MERGE_REQUEST_DIFF_BASE_SHA}..${CI_COMMIT_SHA}"
+      elif [ "${CI_PIPELINE_SOURCE}" = "push" ] && [ "${CI_COMMIT_BRANCH:-}" = "${CI_DEFAULT_BRANCH}" ]; then
+        if [ -n "${CI_COMMIT_BEFORE_SHA:-}" ] && [ "${CI_COMMIT_BEFORE_SHA//0/}" != "" ]; then
+          range="${CI_COMMIT_BEFORE_SHA}..${CI_COMMIT_SHA}"
+        else
+          range="-1"
+        fi
+      fi
+      args=(detect --redact -v --exit-code=2 --report-format=sarif --report-path=gitleaks.sarif --log-level=debug)
+      if [ -n "${range}" ]; then
+        if [ "${range}" = "-1" ]; then
+          if [ "$(git rev-list --parents -n 1 HEAD | wc -w)" -gt 2 ]; then
+            echo "the last commit is a merge commit: nothing to scan" >&2
+            exit 1
+          fi
+          args+=("--log-opts=-1")
+        else
+          count="$(git rev-list --count --no-merges --first-parent "${range}")"
+          if [ "${count}" -lt 1 ]; then
+            echo "the scan range ${range} holds no commit to scan" >&2
+            exit 1
+          fi
+          args+=("--log-opts=--no-merges --first-parent ${range}")
+        fi
+      fi
+      echo "gitleaks ${args[*]}"
+      /tmp/gitleaks/gitleaks "${args[@]}"
   artifacts:
     when: always
     expire_in: 14 days
     paths:
       - gitleaks.sarif
 
-docker:build:
-  stage: build
-  image: docker:27
-  services:
-    - name: docker:27-dind
-      alias: docker
-  rules:
-    - if: $CI_PIPELINE_SOURCE == "web"
-    - if: $CI_COMMIT_TAG
-    - if: $CI_PIPELINE_SOURCE == "merge_request_event"
-      changes: &docker_changes
-        - src/**/*
-        - requirements.txt
-        - pyproject.toml
-        - docker/**/*
-        - compose.yml
-        - .dockerignore
-        - deploy/**/*
-        - Makefile
-        - .gitlab-ci.yml
-    - if: $CI_PIPELINE_SOURCE == "merge_train"
-      changes: *docker_changes
-    - if: $CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH
-      changes: *docker_changes
+# go.yml: go-container-security, first half (build the four Go images).
+security:go-image-build:
+  extends: .docker_job
+  stage: security
+  needs: []
+  timeout: 25m
+  rules: *code_rules
   parallel:
     matrix:
-      - DOCKER_TARGET: ["api"]
-        DOCKER_PLATFORM: ["linux/amd64", "linux/arm64"]
-  variables:
-    DOCKER_HOST: tcp://docker:2375
-    DOCKER_TLS_CERTDIR: ""
-    IMAGE_REGISTRY: $CI_REGISTRY_IMAGE
-    SETUPTOOLS_SCM_PRETEND_VERSION: "0.0.0.dev0+$CI_COMMIT_SHORT_SHA"
-  before_script:
-    - docker version
-    - docker buildx version
-    - docker buildx create --use --name dev-health-builder || docker buildx use dev-health-builder
+      - TARGET: ["operator", "contractcheck", "migrate", "dho"]
   script:
     - |
-      PLATFORM_TAG=$(printf '%s' "$DOCKER_PLATFORM" | tr '/:' '--')
-      IMAGE_NAME="${IMAGE_REGISTRY}/dev-hops-${DOCKER_TARGET}:${CI_COMMIT_SHORT_SHA}-${PLATFORM_TAG}"
-      PUSH_FLAG="--load"
-      if [ "${PUSH_IMAGES:-false}" = "true" ] && [ -n "${CI_REGISTRY_USER:-}" ]; then
-        docker login -u "$CI_REGISTRY_USER" -p "$CI_REGISTRY_PASSWORD" "$CI_REGISTRY"
-        PUSH_FLAG="--push"
+      docker build \
+        --file docker/go-worker.Dockerfile \
+        --target "${TARGET}" \
+        --build-arg VERSION=phase1-ci \
+        --build-arg COMMIT=0000000000000000000000000000000000000000 \
+        --build-arg BUILD_TIME=1970-01-01T00:00:00Z \
+        --build-arg SOURCE_DATE_EPOCH=0 \
+        --tag "dev-health-go-${TARGET}:security" \
+        .
+    - mkdir -p images
+    - docker save -o "images/${TARGET}.tar" "dev-health-go-${TARGET}:security"
+  artifacts:
+    expire_in: 1 day
+    paths:
+      - images/*.tar
+
+# go-container-security, second half: the Trivy scan (CRITICAL fails) and the SBOM.
+scan:trivy:
+  stage: scan
+  image:
+    name: aquasec/trivy:0.70.0
+    entrypoint: [""]
+  needs: ["security:go-image-build"]
+  rules: *code_rules
+  script:
+    - |
+      set -eu
+      found=0
+      for tar in images/*.tar; do
+        [ -e "${tar}" ] || continue
+        found=$((found + 1))
+        trivy image --input "${tar}" --scanners vuln --pkg-types os,library --severity CRITICAL --exit-code 1
+      done
+      [ "${found}" -ge 4 ] || { echo "expected 4 image archives, found ${found}: the scan did not run on every image" >&2; exit 1; }
+
+scan:sbom:
+  stage: scan
+  # A normal image with a shell, running as root; syft is the pinned release
+  # binary (v1.42.3, sha256 from the release checksums file), run by absolute path.
+  image: python:3.14
+  needs: ["security:go-image-build"]
+  rules: *code_rules
+  variables:
+    SYFT_VERSION: "1.42.3"
+  script:
+    - |
+      set -eu
+      case "$(uname -m)" in
+        x86_64) arch=amd64; sha=0d6be741479eddd2c8644a288990c04f3df0d609bbc1599a005532a9dff63509 ;;
+        aarch64|arm64) arch=arm64; sha=dc630590c953347789d08f8ebf57c7d8094db89100785fcd94b1cddeac791804 ;;
+        *) echo "unsupported architecture: $(uname -m)" >&2; exit 1 ;;
+      esac
+      tarball="syft_${SYFT_VERSION}_linux_${arch}.tar.gz"
+      curl -sSfL --retry 3 -o "/tmp/${tarball}" \
+        "https://github.com/anchore/syft/releases/download/v${SYFT_VERSION}/${tarball}"
+      echo "${sha}  /tmp/${tarball}" | sha256sum --check --strict
+      mkdir -p /tmp/syft
+      tar -xzf "/tmp/${tarball}" -C /tmp/syft syft
+      test "$(/tmp/syft/syft version | awk '/^Version:/ {print $2}')" = "${SYFT_VERSION}"
+      found=0
+      mkdir -p sbom
+      for tar in images/*.tar; do
+        [ -e "${tar}" ] || continue
+        found=$((found + 1))
+        name="$(basename "${tar}" .tar)"
+        /tmp/syft/syft scan "docker-archive:${tar}" -o "spdx-json=sbom/go-${name}-sbom.spdx.json"
+      done
+      [ "${found}" -ge 4 ] || { echo "expected 4 image archives, found ${found}: the SBOM did not run on every image" >&2; exit 1; }
+  artifacts:
+    expire_in: 14 days
+    paths:
+      - sbom/*.json
+
+# ---------------------------------------------------------------------------
+# build (docker-images.yml, publish-pypi.yml)
+# ---------------------------------------------------------------------------
+
+# docker-images.yml: go-build (operator, contractcheck, migrate, dho from
+# docker/go-worker.Dockerfile) and go-api-tools-build (docker/go-api-tools.Dockerfile),
+# each on amd64 and arm64. One image per platform, tagged <sha>-<platform>;
+# build:go-images-manifest joins them. It pushes only on the default branch
+# and on tags, and only when the GitLab registry is available.
+build:go-images:
+  extends: .docker_job
+  stage: build
+  needs: []
+  timeout: 45m
+  rules: *code_rules
+  parallel:
+    matrix:
+      - DOCKER_FILE: ["docker/go-worker.Dockerfile"]
+        IMAGE: ["operator", "contractcheck", "migrate", "dho"]
+        PLATFORM: ["linux/amd64", "linux/arm64"]
+      - DOCKER_FILE: ["docker/go-api-tools.Dockerfile"]
+        IMAGE: ["api-tools"]
+        DOCKER_TARGET: ["runtime"]
+        PLATFORM: ["linux/amd64", "linux/arm64"]
+  before_script:
+    - !reference [.docker_job, before_script]
+    - docker run --privileged --rm tonistiigi/binfmt --install all
+    - docker buildx create --use --name dev-health-builder || docker buildx use dev-health-builder
+  script:
+    - !reference [.build_metadata, script]
+    - |
+      set -eu
+      target="${DOCKER_TARGET:-${IMAGE}}"
+      platform_tag="$(printf '%s' "${PLATFORM}" | tr '/:' '--')"
+      image_name="${CI_REGISTRY_IMAGE}/dev-health-go-${IMAGE}:${CI_COMMIT_SHORT_SHA}-${platform_tag}"
+      push_flag="--load"
+      if { [ "${CI_COMMIT_BRANCH:-}" = "${CI_DEFAULT_BRANCH}" ] || [ -n "${CI_COMMIT_TAG:-}" ]; } && [ -n "${CI_REGISTRY_USER:-}" ]; then
+        printf '%s' "${CI_REGISTRY_PASSWORD}" | docker login -u "${CI_REGISTRY_USER}" --password-stdin "${CI_REGISTRY}"
+        push_flag="--push"
       fi
       docker buildx build \
-        --platform "$DOCKER_PLATFORM" \
-        --file docker/Dockerfile \
-        --target "$DOCKER_TARGET" \
-        --build-arg "SETUPTOOLS_SCM_PRETEND_VERSION=${SETUPTOOLS_SCM_PRETEND_VERSION}" \
-        --tag "$IMAGE_NAME" \
-        $PUSH_FLAG \
+        --platform "${PLATFORM}" \
+        --file "${DOCKER_FILE}" \
+        --target "${target}" \
+        --build-arg "VERSION=${VERSION}" \
+        --build-arg "COMMIT=${COMMIT}" \
+        --build-arg "BUILD_TIME=${BUILD_TIME}" \
+        --build-arg "SOURCE_DATE_EPOCH=${SOURCE_DATE_EPOCH}" \
+        --tag "${image_name}" \
+        ${push_flag} \
         .
-      if [ "$PUSH_FLAG" = "--load" ]; then
-        echo "Built $IMAGE_NAME locally. Set PUSH_IMAGES=true on a registry-backed pipeline to publish."
-      fi
+      echo "Built ${image_name} (${push_flag})"
+
+build:go-images-manifest:
+  extends: .docker_job
+  stage: build
+  needs:
+    - job: build:go-images
+      optional: true
+  rules:
+    - if: $CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH && $CI_REGISTRY_USER
+      changes: *code_changes
+    - if: $CI_COMMIT_TAG && $CI_REGISTRY_USER
+  parallel:
+    matrix:
+      - IMAGE: ["operator", "contractcheck", "migrate", "dho", "api-tools"]
+  script:
+    - |
+      set -eu
+      printf '%s' "${CI_REGISTRY_PASSWORD}" | docker login -u "${CI_REGISTRY_USER}" --password-stdin "${CI_REGISTRY}"
+      repo="${CI_REGISTRY_IMAGE}/dev-health-go-${IMAGE}"
+      set -- -t "${repo}:${CI_COMMIT_SHORT_SHA}"
+      if [ -n "${CI_COMMIT_TAG:-}" ]; then set -- "$@" -t "${repo}:${CI_COMMIT_TAG}"; fi
+      docker buildx imagetools create "$@" \
+        "${repo}:${CI_COMMIT_SHORT_SHA}-linux-amd64" \
+        "${repo}:${CI_COMMIT_SHORT_SHA}-linux-arm64"
+      docker buildx imagetools inspect "${repo}:${CI_COMMIT_SHORT_SHA}"
+
+# publish-pypi.yml: the build step on a release tag. The upload needs the
+# PyPI token and stays on GitHub (see the gap list).
+build:pypi-package:
+  extends: .python_job
+  stage: build
+  rules:
+    - if: $CI_COMMIT_TAG
+  before_script:
+    - python -m pip install --upgrade pip
+    - pip install build
+  script:
+    - python -m build
+  artifacts:
+    expire_in: 14 days
+    paths:
+      - dist/*

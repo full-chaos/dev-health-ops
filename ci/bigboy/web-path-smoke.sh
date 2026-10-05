@@ -2,7 +2,7 @@
 # web-path-smoke.sh -- CHAOS-6987/R460: the ONLY sanctioned proof that a bigboy cut
 # serves the real org end to end through a real browser session, not a hand-minted
 # token. Logs in through web's real /api/v1/auth/login route as the bigboy admin,
-# then runs web-path-smoke.py's exact Cockpit/Diagnose operations against the router.
+# then runs the Cockpit/Diagnose operations (`dho smoke web-path`, internal/websmoke, from the dho image) against the router.
 #
 # Credentials: DHO_SMOKE_ADMIN_EMAIL + DHO_SMOKE_ADMIN_PASSWORD_FILE (0600, *_FILE
 # convention, CHAOS-6972) in ops/.env. FAILS LOUD (rc=1, named reason) while either
@@ -18,7 +18,6 @@ R=/home/ubuntu/devhealth
 cd "$R"
 
 BASE_COMPOSE_ARGS=(--env-file ops/.env -f compose.yml -f compose/compose.go.workers.yml \
-  -f compose/compose.metrics-api.local.yml \
   -f .remember/lanes/team-lead/reconciler-sweep-override.yml \
   -f compose/compose.bigboy.images.yml \
   -f "$HERE/compose.bigboy.router.yml" -f "$HERE/compose.bigboy.smoke.yml")
@@ -33,7 +32,7 @@ if [ -z "${DHO_SMOKE_CATALOG_FILE:-}" ]; then
     st 1; echo "FAIL: set DHO_SMOKE_CATALOG_FILE or DHO_SMOKE_OPS_SHA (the deployed ops sha) -- the smoke cannot verify web's GraphQL documents without the edge catalog" >&2; exit 1
   fi
   DHO_SMOKE_CATALOG_FILE=$(mktemp)
-  if ! gh api "repos/full-chaos/dev-health-ops/contents/src/dev_health_ops/api/graphql/go_api_operations.json?ref=$DHO_SMOKE_OPS_SHA" -H 'Accept: application/vnd.github.raw' > "$DHO_SMOKE_CATALOG_FILE"; then
+  if ! gh api "repos/full-chaos/dev-health-ops/contents/contracts/graphql/v1/go_api_operations.json?ref=$DHO_SMOKE_OPS_SHA" -H 'Accept: application/vnd.github.raw' > "$DHO_SMOKE_CATALOG_FILE"; then
     st 1; echo "FAIL: could not fetch the edge catalog at $DHO_SMOKE_OPS_SHA" >&2; exit 1
   fi
 fi

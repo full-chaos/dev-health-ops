@@ -1,10 +1,13 @@
 package migrationmatrix
 
 import (
+	"encoding/json"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/full-chaos/dev-health-ops/internal/queryapi/server"
 )
 
 func writeTempFile(t *testing.T, dir, rel, body string) string {
@@ -100,131 +103,43 @@ func TestApiV1RoutesFiltersOutNonAPIRoutes(t *testing.T) {
 	}
 }
 
-const fixtureQueryAPIMain = `package main
+// The query-api route set is the production table, executed (CHAOS-8307): these tests
+// pin what the matrix reads from it.
 
-import "net/http"
-
-func main() {
-	mux := http.NewServeMux()
-	if quadrantHandler, quadrantCleanup, quadrantOK, quadrantErr := buildQuadrantRoute(); quadrantErr != nil {
-		panic(quadrantErr)
-	} else if quadrantOK {
-		defer quadrantCleanup()
-		mux.HandleFunc("/api/v1/quadrant", quadrantHandler)
+func TestLoadQueryAPIMuxRoutesIsTheProductionTable(t *testing.T) {
+	want := map[string]bool{}
+	for _, route := range server.RESTRoutes() {
+		want[route.Pattern] = true
 	}
-}
-`
-
-const fixtureQuadrantRoute = `package main
-
-import "net/http"
-
-func buildQuadrantRoute() (handler http.HandlerFunc, cleanup func(), ok bool, err error) {
-	return nil, func() {}, true, nil
-}
-`
-
-func TestLoadQueryAPIMuxRoutesResolvesTheBuilderFunctionDefinition(t *testing.T) {
-	dir := t.TempDir()
-	writeTempFile(t, dir, "main.go", fixtureQueryAPIMain)
-	writeTempFile(t, dir, "quadrant_route.go", fixtureQuadrantRoute)
-
-	routes, err := LoadQueryAPIMuxRoutes(dir)
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
+	routes := LoadQueryAPIMuxRoutes()
+	if len(routes) != len(want) || len(routes) < 20 {
+		t.Fatalf("got %d routes, the production table has %d distinct patterns", len(routes), len(want))
 	}
-	if len(routes) != 1 || routes[0].Path != "/api/v1/quadrant" {
-		t.Fatalf("got %+v, want exactly one /api/v1/quadrant route", routes)
-	}
-	if want := "internal/queryapi/server/quadrant_route.go#buildQuadrantRoute"; routes[0].HandlerLoc != want {
-		t.Fatalf("HandlerLoc = %q, want %q (the builder's symbol, never a line)", routes[0].HandlerLoc, want)
-	}
-}
-
-// The citation must not depend on where in the file the builder sits: an
-// unrelated edit above it shifts every later line and, when the citation was a
-// line number, failed the doc-drift check on PRs that did not touch a route
-// (CHAOS-6633). Renaming the builder is a real mapping change and must still
-// change the citation, so the drift check keeps failing for it.
-func TestLoadQueryAPIMuxRoutesCitationIgnoresLineShiftsButNotRenames(t *testing.T) {
-	cite := func(t *testing.T, routeFile string) string {
-		t.Helper()
-		dir := t.TempDir()
-		writeTempFile(t, dir, "main.go", fixtureQueryAPIMain)
-		writeTempFile(t, dir, "quadrant_route.go", routeFile)
-		routes, err := LoadQueryAPIMuxRoutes(dir)
-		if err != nil {
-			t.Fatalf("unexpected error: %v", err)
+	for _, route := range routes {
+		if !want[route.Path] {
+			t.Errorf("%s is not a pattern of the production route table", route.Path)
 		}
-		if len(routes) != 1 {
-			t.Fatalf("got %+v, want exactly one route", routes)
+	}
+}
+
+// The citation names the builder's symbol and never a line: an unrelated edit above
+// the builder shifts every later line and, when the citation was a line number, failed
+// the doc-drift check on PRs that did not touch a route (CHAOS-6633). A renamed builder
+// changes the table row and so the citation, so the drift check keeps failing for a
+// real mapping change.
+func TestLoadQueryAPIMuxRoutesCitesTheBuilderSymbolAndNeverALine(t *testing.T) {
+	for _, route := range LoadQueryAPIMuxRoutes() {
+		prefix := "internal/queryapi/server/"
+		if !strings.HasPrefix(route.HandlerLoc, prefix) || !strings.Contains(route.HandlerLoc, "_route.go#build") {
+			t.Errorf("%s: HandlerLoc = %q, want %s<file>_route.go#build<X>Route", route.Path, route.HandlerLoc, prefix)
+			continue
 		}
-		return routes[0].HandlerLoc
+		if strings.ContainsAny(route.HandlerLoc[strings.LastIndex(route.HandlerLoc, "#"):], "0123456789") {
+			t.Errorf("%s: citation %q carries a digit after '#': a line number crept back in", route.Path, route.HandlerLoc)
+		}
 	}
-	base := cite(t, fixtureQuadrantRoute)
-	shifted := cite(t, strings.Replace(fixtureQuadrantRoute, "import \"net/http\"\n",
-		"import \"net/http\"\n\n// an unrelated edit above the builder\n// adds these lines\nvar unrelated = 1\n", 1))
-	if shifted != base {
-		t.Fatalf("shifting the builder down changed the citation: %q -> %q", base, shifted)
-	}
-	if strings.ContainsAny(base[strings.LastIndex(base, "#"):], "0123456789") {
-		t.Fatalf("citation %q carries a digit after '#': a line number crept back in", base)
-	}
-	// A rename is a mapping change: main.go now names a builder no file
-	// defines, so the citation falls back to the mount, and differs from base.
-	renamed := cite(t, strings.ReplaceAll(fixtureQuadrantRoute, "buildQuadrantRoute", "buildQuadrantRoute2"))
-	if renamed == base {
-		t.Fatalf("renaming the builder left the citation unchanged (%q): a stale mapping would pass the drift check", base)
-	}
-}
-
-func TestLoadQueryAPIMuxRoutesFallsBackToTheMountSiteWhenTheBuilderCannotBeResolved(t *testing.T) {
-	dir := t.TempDir()
-	writeTempFile(t, dir, "main.go", `package main
-
-import "net/http"
-
-func main() {
-	mux := http.NewServeMux()
-	handler := inlineHandler()
-	mux.HandleFunc("/api/v1/quadrant", handler)
-}
-
-func inlineHandler() http.HandlerFunc { return nil }
-`)
-	routes, err := LoadQueryAPIMuxRoutes(dir)
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-	if len(routes) != 1 {
-		t.Fatalf("got %+v, want exactly one route", routes)
-	}
-	if want := `internal/queryapi/server/main.go#HandleFunc(/api/v1/quadrant)`; routes[0].HandlerLoc != want {
-		t.Fatalf("HandlerLoc = %q, want the mux registration named by its route, %q", routes[0].HandlerLoc, want)
-	}
-}
-
-func TestLoadQueryAPIMuxRoutesIgnoresTestFiles(t *testing.T) {
-	dir := t.TempDir()
-	writeTempFile(t, dir, "main.go", `package main
-
-func main() {}
-`)
-	writeTempFile(t, dir, "main_test.go", `package main
-
-import "net/http"
-
-func init() {
-	mux := http.NewServeMux()
-	mux.HandleFunc("/api/v1/from-a-test-file", nil)
-}
-`)
-	routes, err := LoadQueryAPIMuxRoutes(dir)
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-	if len(routes) != 0 {
-		t.Fatalf("expected _test.go files to be excluded, got %+v", routes)
+	if got := queryAPILoc("quadrant_route.go", "buildQuadrantRoute"); got != "internal/queryapi/server/quadrant_route.go#buildQuadrantRoute" {
+		t.Fatalf("queryAPILoc = %q", got)
 	}
 }
 
@@ -243,36 +158,13 @@ func init() {
 // fixture left open: pairing against an ACTUAL mux.HandleFunc
 // registration, not just the Python side.
 func TestLoadRESTEndpointsMatchesAPathParameterRoute(t *testing.T) {
-	dir := t.TempDir()
-	mainPy := writeTempFile(t, dir, "main.py", `@app.get("/api/v1/people/{person_id}/summary", response_model=PersonSummaryResponse)
-async def people_summary(person_id: str, request: Request):
-    ...
-`)
-	queryAPIDir := filepath.Join(dir, "cmd", "query-api")
-	writeTempFile(t, queryAPIDir, "main.go", `package main
+	mainPy := writeFrozenRoutes(t, "GET /api/v1/people/{person_id}/summary")
+	muxRoutes := []QueryAPIMuxRoute{{
+		Path:       "/api/v1/people/{person_id}/summary",
+		HandlerLoc: queryAPILoc("people_summary_route.go", "buildPeopleSummaryRoute"),
+	}}
 
-import "net/http"
-
-func main() {
-	mux := http.NewServeMux()
-	if h, cleanup, ok, err := buildPeopleSummaryRoute(getenv); err != nil {
-		panic(err)
-	} else if ok {
-		defer cleanup()
-		mux.HandleFunc("/api/v1/people/{person_id}/summary", h)
-	}
-}
-`)
-	writeTempFile(t, queryAPIDir, "people_summary_route.go", `package main
-
-import "net/http"
-
-func buildPeopleSummaryRoute(getenv func(string) string) (handler http.HandlerFunc, cleanup func(), ok bool, err error) {
-	return nil, func() {}, true, nil
-}
-`)
-
-	rows, err := LoadRESTEndpoints(mainPy, queryAPIDir)
+	rows, err := LoadRESTEndpoints(mainPy, muxRoutes)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -297,18 +189,8 @@ func buildPeopleSummaryRoute(getenv func(string) string) (handler http.HandlerFu
 // Seeding a fixture main.py with a route absent from query-api's mux must
 // enumerate it and mark it python-only, not silently drop it.
 func TestLoadRESTEndpointsCatchesANewlyAddedPythonOnlyRoute(t *testing.T) {
-	dir := t.TempDir()
-	mainPy := writeTempFile(t, dir, "main.py", `@app.get("/api/v1/brand-new-endpoint")
-async def brand_new():
-    ...
-`)
-	queryAPIDir := filepath.Join(dir, "query-api")
-	writeTempFile(t, queryAPIDir, "main.go", `package main
-
-func main() {}
-`)
-
-	rows, err := LoadRESTEndpoints(mainPy, queryAPIDir)
+	mainPy := writeFrozenRoutes(t, "GET /api/v1/brand-new-endpoint")
+	rows, err := LoadRESTEndpoints(mainPy, nil)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -324,23 +206,8 @@ func main() {}
 // test: a route previously ported loses its Go registration and the row
 // must flip, not keep reporting ported from a stale memory.
 func TestLoadRESTEndpointsFlipsToPythonOnlyWhenTheGoRouteDisappears(t *testing.T) {
-	dir := t.TempDir()
-	mainPy := writeTempFile(t, dir, "main.py", `@app.get("/api/v1/quadrant")
-async def quadrant():
-    ...
-`)
-	queryAPIDir := filepath.Join(dir, "query-api")
-
-	writeTempFile(t, queryAPIDir, "main.go", `package main
-
-import "net/http"
-
-func main() {
-	mux := http.NewServeMux()
-	mux.HandleFunc("/api/v1/quadrant", nil)
-}
-`)
-	rows, err := LoadRESTEndpoints(mainPy, queryAPIDir)
+	mainPy := writeFrozenRoutes(t, "GET /api/v1/quadrant")
+	rows, err := LoadRESTEndpoints(mainPy, []QueryAPIMuxRoute{{Path: "/api/v1/quadrant", HandlerLoc: queryAPILoc("quadrant_route.go", "buildQuadrantRoute")}})
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -348,13 +215,8 @@ func main() {
 		t.Fatalf("setup check failed: got status %q, want ported before the route is removed", rows[0].Status)
 	}
 
-	// Now the Go route disappears -- the same file, re-registered with
-	// nothing left in it.
-	writeTempFile(t, queryAPIDir, "main.go", `package main
-
-func main() {}
-`)
-	rows, err = LoadRESTEndpoints(mainPy, queryAPIDir)
+	// Now the Go route disappears from the table.
+	rows, err = LoadRESTEndpoints(mainPy, nil)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -364,37 +226,25 @@ func main() {}
 }
 
 func TestLoadRESTEndpointsRejectsAStaleRESTDeadByDesignEntry(t *testing.T) {
-	dir := t.TempDir()
-	mainPy := writeTempFile(t, dir, "main.py", `@app.get("/api/v1/meta")
-async def meta():
-    ...
-`)
-	queryAPIDir := filepath.Join(dir, "query-api")
-	writeTempFile(t, queryAPIDir, "main.go", "package main\n\nfunc main() {}\n")
+	mainPy := writeFrozenRoutes(t, "GET /api/v1/meta")
 
 	previous := RESTDeadByDesign
 	RESTDeadByDesign = map[string]string{"GET /api/v1/a-route-that-does-not-exist": "CHAOS-0000: fake citation for this test"}
 	defer func() { RESTDeadByDesign = previous }()
 
-	if _, err := LoadRESTEndpoints(mainPy, queryAPIDir); err == nil {
+	if _, err := LoadRESTEndpoints(mainPy, nil); err == nil {
 		t.Fatal("expected an error for a RESTDeadByDesign entry naming a route main.py no longer declares")
 	}
 }
 
 func TestLoadRESTEndpointsAppliesRESTDeadByDesign(t *testing.T) {
-	dir := t.TempDir()
-	mainPy := writeTempFile(t, dir, "main.py", `@app.get("/api/v1/meta")
-async def meta():
-    ...
-`)
-	queryAPIDir := filepath.Join(dir, "query-api")
-	writeTempFile(t, queryAPIDir, "main.go", "package main\n\nfunc main() {}\n")
+	mainPy := writeFrozenRoutes(t, "GET /api/v1/meta")
 
 	previous := RESTDeadByDesign
 	RESTDeadByDesign = map[string]string{"GET /api/v1/meta": "CHAOS-0000: chris ruled this stays Python (test fixture)"}
 	defer func() { RESTDeadByDesign = previous }()
 
-	rows, err := LoadRESTEndpoints(mainPy, queryAPIDir)
+	rows, err := LoadRESTEndpoints(mainPy, nil)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -413,7 +263,7 @@ func TestRenderRESTEndpointsBlockRendersCountsAndRowsGolden(t *testing.T) {
 		{Method: "GET", Path: "/api/v1/opportunities", Status: RESTDeadByDesignStatus, Note: "CHAOS-0000"},
 	}
 	got := RenderRESTEndpointsBlock(rows)
-	want := "_3 `/api/v1/*` routes in `src/dev_health_ops/api/main.py`: **1** ported, **1** python-only, **1** dead-by-design._\n\n" +
+	want := "_3 `/api/v1/*` routes in the frozen Python api route list (`contracts/migration-status/v1/python-rest-routes.json`): **1** ported, **1** python-only, **1** dead-by-design._\n\n" +
 		"| Method | Path | Status | Go handler |\n" +
 		"| --- | --- | --- | --- |\n" +
 		"| POST | `/api/v1/investment/explain` | ported | `internal/queryapi/server/investment_explain_route.go:119` |\n" +
@@ -433,8 +283,8 @@ func TestRenderRESTEndpointsBlockRendersCountsAndRowsGolden(t *testing.T) {
 func TestLoadRESTEndpointsOnTheRealRepo(t *testing.T) {
 	root := repoRootForTest(t)
 	rows, err := LoadRESTEndpoints(
-		filepath.Join(root, "src/dev_health_ops/api/main.py"),
-		filepath.Join(root, "internal/queryapi/server"),
+		filepath.Join(root, FrozenRESTRoutesRelative),
+		LoadQueryAPIMuxRoutes(),
 	)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
@@ -723,4 +573,20 @@ func TestLoadRESTEndpointsOnTheRealRepo(t *testing.T) {
 	if pythonOnly != 0 {
 		t.Fatalf("got %d python-only routes, want 0: every /api/v1/* route main.py declares is registered by a Go handler", pythonOnly)
 	}
+}
+
+// writeFrozenRoutes writes a frozen route list holding the given
+// "METHOD /path" entries and returns its path.
+func writeFrozenRoutes(t *testing.T, entries ...string) string {
+	t.Helper()
+	var frozen FrozenRESTRoutes
+	for _, entry := range entries {
+		method, path, _ := strings.Cut(entry, " ")
+		frozen.Routes = append(frozen.Routes, FrozenRESTRoute{Method: method, Path: path})
+	}
+	raw, err := json.Marshal(frozen)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return writeTempFile(t, t.TempDir(), "python-rest-routes.json", string(raw))
 }

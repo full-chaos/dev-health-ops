@@ -21,6 +21,8 @@ subject that the catalog cannot confirm stops the run: no status, change,
 metric, or evidence tool executes without an exact, committed subject.
 {: .fc-page-lede }
 
+> **Note:** The Go api does not serve the Ask Dev (`/api/v1/dev`) surface. This page is a record of the Python surface that was removed.
+
 This page describes the runtime behavior CHAOS-3292 introduced. The wire
 contracts it produces are described in
 [Ask Dev v2 contracts](ask-dev-contracts-v2.md).

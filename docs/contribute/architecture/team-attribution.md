@@ -483,6 +483,17 @@ means the ClickHouse `teams` dimension is empty.
 > GitLab/Jira/Linear-only orgs have no `team_repo_ownership` writer by design (§0.2 above); their
 > repos resolve to a team only via `teams.repo_patterns` (manually configured, or fixtures).
 
+> **CHAOS-8512: TestOps daily rows use repository ownership, not patterns.** The native
+> `testops_pipeline`, `testops_test`, `testops_coverage`, and `testops_risk` families retain a
+> non-empty source-row `team_id` when one exists. Otherwise, they use the single authoritative
+> `team_repo_ownership` owner for the repository at the **end of the target day**, ranked by
+> `is_primary DESC, specificity DESC, updated_at DESC, team_id ASC`. An unowned repository stays
+> NULL: these families do not fall back to `teams.repo_patterns` or person membership. The shared
+> ownership reader resolves direct and provider-access ownership rows by repository identity before
+> it applies that ranking, so the TestOps consumer has no provider-specific branch. Real-ClickHouse
+> integration tests seed an in-day multi-claim and require the primary owner on all six TestOps
+> output tables.
+
 > **CHAOS-4365 item 2 (merged, `dev-health-ops#1963`, squash `017f964b2`): `team_cognitive_load_daily` — an
 > append-only, ownership-scoped table.** The `resolveCognitiveLoad` GraphQL resolver's single-team
 > path (`teamId` set, `repoId` NOT set) reads this table directly instead of the org-wide
@@ -638,6 +649,8 @@ One path: `run_team_autoimport` → `team_autoimport_<provider>.populate()` → 
 > **Three (legacy bridge) + three (native, CHAOS-4431/4434/4432) chains reach `team_autoimport_<provider>.
 > populate()` or bypass it entirely — status as of CHAOS-4431's base branch (`team-catalog-native-dispatch`,
 > stacked PRs #1989/#1984/#1985, NOT YET MERGED — main is under deploy-freeze).**
+>
+> The first two rows name `src/dev_health_ops/api/internal/worker_sync.py`, which was removed with the Python api.
 >
 > | Producer | Chain | Honours the 3 flags? | Providers |
 > |---|---|---|---|
@@ -1418,7 +1431,7 @@ A PR/MR only inherits a team if an edge to its issue exists. The link is capture
 
 | Tier | Source | Trust gate | Edge |
 |---|---|---|---|
-| Primary | **Linear issue attachment** (the integration's PR/MR link) | integration `sourceType` **AND** allowlisted host (public SaaS + `LINEAR_TRUSTED_SCM_HOSTS`) | `ghpr:…`/`gitlab:… → linear:KEY` (direct id) |
+| Primary | **Linear issue attachment** (the integration's PR/MR link) | integration `sourceType` **AND** allowlisted host (public SaaS + `LINEAR_TRUSTED_SCM_HOSTS`; an entry may be `host/root` for a self-managed instance under a relative URL root, which is stripped before the project path) | `ghpr:…`/`gitlab:… → linear:KEY` (direct id) |
 | Secondary | **GitHub PR comment** (the Linear bot's linkback) | exact `linear[bot]` actor (`GITHUB_LINEAR_LINKBACK_BOTS`) + `linear.app` URL | `ghpr:… → extkey:KEY` |
 | Tertiary | **PR body / head branch** (the author's own ref) | magic-word / Linear branch convention | `ghpr:… → extkey:KEY` |
 
@@ -1454,7 +1467,8 @@ cycle-time consumer, and DOES apply to Linear). Today:
 | Provider | PRIMARY (provider-attached PR mapping) | Go port (`internal/providersync`) | Path-B fallback (`work_graph/builder.py` text-parse) |
 |---|---|---|---|
 | Linear | `extract_linear_dependencies` (`providers/linear/normalize.py`) — issue attachments, sourceType + trusted-host gated | `normalizeLinearDependencies`/`linearAttachmentWorkItemID` (`linear_work_items_route.go`) — **ported with equivalent trust-gate semantics (sourceType + host allowlist), no loss.** One minor divergence: Python's PR/MR-number match requires digits (`\d+`, `normalize.py:77`); Go accepts any final path segment (`linear_work_items_route.go:890`) — functionally inert (a non-numeric segment can't match a real `git_pull_requests.number`), not literally byte-for-byte. | Excluded from THIS Path-B fallback by design (`builder.py:1112-1114` — Linear's links arrive as attachments via the dependency pass above, not via text parsing here). §2's Secondary/Tertiary above is Linear's own (Path A) fallback and is very much used. |
-| Jira | **Built, Go-only** (CHAOS-4757) — `fetchJiraDevStatusPullRequests`/`extractJiraDevStatusDependencies` (`internal/providersync/jira_dev_status.go`) call `GET /rest/dev-status/1.0/issue/detail` (GitHub-for-Jira panel), gated behind a `fetch_dev_status` claim option (default false — an extra REST call per issue). A 400/404 (no app configured for this issue) is a ruled clean typed no-op (`dev_status_unavailable`, `dev_health_jira_dev_status_total` metric), never an error. `extract_jira_issue_dependencies` (`providers/jira/normalize.py`) remains issue↔issue `issuelinks` only — no Python dev-status ingestion exists or is planned | **No Python producer** — per the standing sync-ownership rule, this PRIMARY mechanism was implemented directly in Go with no Python side to "port" from. **Fixtures-only proof**: no local org has the GitHub-for-Jira app installed, so this has not been proven against real dev-status data; live proof awaits such an org | Still active alongside the new PRIMARY (not gated on its presence): `jira_key_lookup`'s text-parse continues to run unconditionally |
+| Jira | **Built, Go-only** (CHAOS-4757) — `fetchJiraDevStatusPullRequests`/`extractJiraDevStatusDependencies` (`internal/providersync/jira_dev_status.go`) call `GET /rest/dev-status/1.0/issue/detail` once per application type, `GitHub` then `GitLab` (CHAOS-8526; a GitLab merge-request URL becomes a `gitlab:<path>!<n>` source, a GitHub pull URL `ghpr:<owner>/<repo>#<n>`; both share the `dev_status_max_requests` budget; a failing type does not hide the links the other returned; each type's outcome — synced, empty, `dev_status_unavailable`, failed, `cap_skipped` — is logged per issue and counted as `dev_health_jira_dev_status_total{outcome="<type>_<outcome>"}`, so a wrong application-type value reads as a loud zero), gated behind a `fetch_dev_status` claim option (default false — an extra REST call per issue). A 400/404 (no app configured for this issue) is a ruled clean typed no-op (`dev_status_unavailable`, `dev_health_jira_dev_status_total` metric), never an error. `extract_jira_issue_dependencies` (`providers/jira/normalize.py`) remains issue↔issue `issuelinks` only — no Python dev-status ingestion exists or is planned | **No Python producer** — per the standing sync-ownership rule, this PRIMARY mechanism was implemented directly in Go with no Python side to "port" from. **Fixtures-only proof**: no local org has the GitHub-for-Jira app installed, so this has not been proven against real dev-status data; live proof awaits such an org | Still active alongside the new PRIMARY (not gated on its presence): `jira_key_lookup`'s text-parse continues to run unconditionally Hosts beyond public GitHub/GitLab.com are trusted through `JIRA_TRUSTED_SCM_HOSTS` (`host` or `host/root`; the root is the instance's relative URL root, stripped before the project path, case-sensitive). |
+| GitLab | **Built, Go-only** (CHAOS-8526) — per issue, `GET /projects/:id/issues/:iid/closed_by` (`collectGitLabClosingMergeRequests`, under the `fetch_links` option) → `normalizeGitLabClosingMergeRequests` (`internal/providersync/gitlab_work_items_rows.go`) emits MR-source / issue-target rows of raw kind `gitlab_closing_reference`; the `issueprlinks` admission for it accepts only a well-formed `gitlab:<path>#<n>` issue target. **State rule (same as GitHub's `closingIssuesReferences`):** every MR `closed_by` returns links, open, merged or closed-unmerged; the MR's state is not a filter. A failing `closed_by` fetch is logged with the issue, counted (`dev_health_gitlab_closing_mr_fetch_total`, `closing_reference_fetch_failed`), listed under `incomplete`; the batch goes on. **Transient** failures (5xx, timeout, 429, network) hold the watermark so the next run asks again; **terminal** ones, which repeat on every run for the same issue, advance it: 404/403 (`terminal_unavailable`), page cap exceeded (`terminal_page_cap`), answer does not decode (`terminal_undecodable`) (D4771). A cancelled run stops (no test yet) | **No Python producer.** Fixtures-only proof: no live GitLab org read yet | The text-parse fallback stays; an `extkey:` prefix is never a donor row |
 | GitHub Issues | **Built, Go-only** (CHAOS-4757) — `extractGitHubClosingIssueReferences` (`internal/providersync/github_work_items_rows.go`) parses `closingIssuesReferences` off the existing per-PR GraphQL social fetch (`gitHubWorkItemPRSocialFetcher`, `github_work_items_social_fetch.go`), requested unconditionally on the top-level (non-continuation) page and tolerated as absent rather than erroring — a deliberate leniency for a best-effort supplementary field, unlike the strict Comments/TimelineItems connections | **No Python producer** — per the standing sync-ownership rule (no Python sync changes for anything Go workers run), this PRIMARY mechanism was implemented directly in Go with no Python side to "port" from | Still active alongside the new PRIMARY (not gated on its presence, matching the Linear-vs-Secondary/Tertiary pattern above): `gh_issue_lookup`'s text-parse continues to run unconditionally. The GitHub `work-items` native route's planner-level veto was lifted (CHAOS-4731), but this org had **zero** `work_items` rows for `provider = 'github'` as of the CHAOS-4752 investigation (2026-09-01) — an operator/sync-config fact for THIS org, not a code-level gate; a different org with that dataset enabled would have rows to look up against. |
 
 A PR whose PM-provider integration was never configured for that issue (chris: *"if it's not
@@ -2067,8 +2081,8 @@ native family construction is attempted if the ClickHouse connection fails
 to open, so a construction-time fallback to Python was never actually
 reachable in production.
 
-**Fixtures finding (CHAOS-4365 item 3):** `dev-hops fixtures generate
---with-metrics` never called `run_daily_metrics_finalize` before this
+**Fixtures finding (CHAOS-4365 item 3):** the Python fixtures generator
+(`fixtures/runner.py`, run with `--with-metrics`) never called `run_daily_metrics_finalize` before this
 change — it only ran `run_daily_metrics_job`'s own older, narrower inline
 finalize block (IC metrics/landscape only). Every `--with-metrics` fixtures
 run therefore produced REPO-scope rows only for `compounding_risk_daily`,
@@ -2102,7 +2116,6 @@ only the two doc references were fixed here; the rest are reported for a follow-
 **Still stale — code comments, out of scope for a docs-only change:**
 - `src/dev_health_ops/metrics/compute_work_items.py:135` (on `_SOURCE_ORDER`) and `:154` (on
   `_DONOR_SOURCES`) — two citations in this one file, not one.
-- `src/dev_health_ops/api/queries/investment.py:267` (on `PRIMARY_WORK_ITEM_TEAM_ATTRIBUTION_SOURCE`).
 - `src/dev_health_ops/external_ingest/sinks.py:514`.
 
 **Planning records — now honoured, not just flagged:**

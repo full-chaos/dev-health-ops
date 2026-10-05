@@ -140,11 +140,6 @@ Issues = "https://github.com/chrisgeo/dev-health-ops/issues"
 Documentation = "https://github.com/chrisgeo/dev-health-ops/blob/main/docs/architecture/licensing.md"
 License = "https://github.com/chrisgeo/dev-health-ops/blob/main/LICENSE.md"
 
-[project.scripts]
-dev-health-ops = "dev_health_ops.cli:main"
-dev-hops = "dev_health_ops.cli:main"
-
-
 [tool.setuptools_scm]
 version_scheme = "post-release"
 local_scheme = "dirty-tag"
@@ -209,7 +204,10 @@ include-package-data = true
 # `dev-hops go-api routing` and ci/check_go_api_routing_digest.py.) Caught by codex round 1 on #2204 before it shipped
 # (tests/tooling/test_contract_artifact_packaging.py's RUNTIME_CONTRACT_TREES
 # now covers this tree too).
-"contracts/graphql/v1" = ["contracts/graphql/v1/*.graphql"]
+"contracts/graphql/v1" = [
+  "contracts/graphql/v1/*.graphql",
+  "contracts/graphql/v1/go_api_operations.json",
+]
 
 [tool.ruff]
 line-length = 88
@@ -263,9 +261,16 @@ per-file-ignores = { "__init__.py" = [
   "E402",
 ] }
 
+[tool.ruff.lint.isort]
+known-first-party = ["dev_health_ops"]
+
 [tool.ruff.format]
 quote-style = "double"
 indent-style = "space"
+# The bytes of this recorded-oracle script are pinned by a frozen golden
+# (it holds the program digest), so a reformat breaks the pin. Format check
+# only: `ruff check` still lints the file. One path, not a glob (CHAOS-8395).
+exclude = ["internal/syncdispatchruntime/testdata/dispatch_admission_oracle.py"]
 
 [tool.mypy]
 python_version = "3.14"

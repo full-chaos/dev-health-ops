@@ -12,7 +12,6 @@ import (
 	"testing"
 
 	"github.com/full-chaos/dev-health-ops/internal/streamrunner"
-	"github.com/full-chaos/dev-health-ops/internal/testsupport/moduleroot"
 	"github.com/google/uuid"
 )
 
@@ -230,17 +229,50 @@ func TestEveryDeclaredExternalFieldReachesAColumnOrIsNamedUnstored(t *testing.T)
 	}
 }
 
-// Every field the ingest API declares for an entity reaches a column through
-// the entity's contract table, or is named as unstored with its reason.
-func TestEveryDeclaredIngestFieldReachesAColumnOrIsNamedUnstored(t *testing.T) {
-	_, filename, _, ok := moduleroot.Caller(0)
-	if !ok {
-		t.Fatal("locate test")
-	}
-	raw, err := os.ReadFile(filepath.Join(filepath.Dir(filename), "..", "..", "src", "dev_health_ops", "api", "ingest", "schemas.py"))
+// frozenIngestFields reads testdata/python_ingest_declared_fields.json: the
+// fields src/dev_health_ops/api/ingest/schemas.py declared per ingest class when
+// the Python api source was scheduled for deletion.
+func frozenIngestFields(t *testing.T) map[string][]string {
+	t.Helper()
+	raw, err := os.ReadFile(filepath.Join("testdata", "python_ingest_declared_fields.json"))
 	if err != nil {
 		t.Fatal(err)
 	}
+	var frozen struct {
+		Classes map[string][]string `json:"classes"`
+	}
+	if err := json.Unmarshal(raw, &frozen); err != nil {
+		t.Fatal(err)
+	}
+	return frozen.Classes
+}
+
+var pythonIngestFieldLine = regexp.MustCompile(`^    ([a-z_]+): `)
+
+// pythonIngestClassFields reads one class's declared fields out of schemas.py.
+func pythonIngestClassFields(t *testing.T, source, class string) []string {
+	t.Helper()
+	start := strings.Index(source, "\nclass "+class+"(BaseModel):\n")
+	if start < 0 {
+		t.Fatalf("class %s not found", class)
+	}
+	body := source[start+1:]
+	if end := strings.Index(body[1:], "\nclass "); end >= 0 {
+		body = body[:end+1]
+	}
+	var fields []string
+	for _, line := range strings.Split(body, "\n") {
+		if match := pythonIngestFieldLine.FindStringSubmatch(line); match != nil {
+			fields = append(fields, match[1])
+		}
+	}
+	return fields
+}
+
+// Every field the ingest API declares for an entity reaches a column
+// through the entity's contract table, or is named as unstored with its reason.
+func TestEveryDeclaredIngestFieldReachesAColumnOrIsNamedUnstored(t *testing.T) {
+	frozen := frozenIngestFields(t)
 	contracts := []struct {
 		class    string
 		contract storedversion.Contract
@@ -249,7 +281,6 @@ func TestEveryDeclaredIngestFieldReachesAColumnOrIsNamedUnstored(t *testing.T) {
 		{"IngestPullRequest", internalPullRequestContract}, {"IngestDeployment", internalDeploymentContract},
 		{"IngestWorkItem", internalWorkItemContract},
 	}
-	field := regexp.MustCompile(`^    ([a-z_]+): `)
 	for _, c := range contracts {
 		t.Run(c.class, func(t *testing.T) {
 			translated := map[string]bool{}
@@ -258,27 +289,14 @@ func TestEveryDeclaredIngestFieldReachesAColumnOrIsNamedUnstored(t *testing.T) {
 					translated[name] = true
 				}
 			}
-			start := strings.Index(string(raw), "\nclass "+c.class+"(BaseModel):\n")
-			if start < 0 {
-				t.Fatalf("class %s not found", c.class)
-			}
-			body := string(raw)[start+1:]
-			if end := strings.Index(body[1:], "\nclass "); end >= 0 {
-				body = body[:end+1]
-			}
-			declared := 0
-			for _, line := range strings.Split(body, "\n") {
-				match := field.FindStringSubmatch(line)
-				if match == nil {
-					continue
-				}
-				declared = declared + 1
-				reason := internalUnstoredFields[c.class][match[1]]
-				if translated[match[1]] == (reason != "") {
-					t.Errorf("%s: translated=%v unstored=%q; want exactly one", match[1], translated[match[1]], reason)
+			declared := frozen[c.class]
+			for _, name := range declared {
+				reason := internalUnstoredFields[c.class][name]
+				if translated[name] == (reason != "") {
+					t.Errorf("%s: translated=%v unstored=%q; want exactly one", name, translated[name], reason)
 				}
 			}
-			if declared == 0 {
+			if len(declared) == 0 {
 				t.Fatalf("%s declares no fields", c.class)
 			}
 		})

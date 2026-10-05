@@ -91,6 +91,16 @@ func normalize(t *testing.T, stdout string, clickhouse bool) string {
 		kept = []any{}
 	}
 	plan["warnings"] = kept
+	// A table a migration added after the Python freeze is in the Go plan
+	// (the Go verb discovers org tables live) and cannot be in the frozen
+	// Python plan. It is taken out of the plan before the comparison.
+	// goDelete checks that each named table really is in the Go plan, so an
+	// entry cannot outlive its table.
+	if tables := planClickHouseTables(plan); tables != nil {
+		for table := range orgDeleteTablesAfterThePythonFreeze {
+			delete(tables, table)
+		}
+	}
 	var out bytes.Buffer
 	encoder := json.NewEncoder(&out)
 	encoder.SetEscapeHTML(false)
@@ -99,6 +109,51 @@ func normalize(t *testing.T, stdout string, clickhouse bool) string {
 		t.Fatal(err)
 	}
 	return strings.TrimSuffix(out.String(), "\n") + "\n"
+}
+
+// orgDeleteTablesAfterThePythonFreeze names each org-scoped ClickHouse table
+// a migration added after adminPythonBuild, where the frozen Python plan
+// was recorded: table -> the migration that added it. The same tables are
+// named in internal/apiservice/admin's clickHouseOrgTablesAfterThePythonFreeze.
+var orgDeleteTablesAfterThePythonFreeze = map[string]string{
+	"work_item_dependency_first_seen":   "102_work_item_dependency_first_seen.sql",    // CHAOS-8574
+	"work_item_relations_read":          "103_work_item_relation_writer_and_read.sql", // CHAOS-8578
+	"work_item_blocked_durations_daily": "104_work_item_blocked_durations.sql",        // CHAOS-8489
+}
+
+// planClickHouseTables returns the table -> row count map of a delete
+// plan's ClickHouse part, or nil when the plan has none.
+func planClickHouseTables(plan map[string]any) map[string]any {
+	clickhouse, ok := plan["clickhouse"].(map[string]any)
+	if !ok {
+		return nil
+	}
+	tables, _ := clickhouse["tables"].(map[string]any)
+	return tables
+}
+
+// assertTablesAfterTheFreezeArePlanned fails when the Go plan lists
+// ClickHouse tables and one of orgDeleteTablesAfterThePythonFreeze is not
+// among them: the Go verb must plan (and so delete) every org table, and an
+// entry for a table the plan no longer holds has rotted.
+func assertTablesAfterTheFreezeArePlanned(t *testing.T, scenario string, stdout string) {
+	t.Helper()
+	if !strings.HasPrefix(stdout, "{") {
+		return
+	}
+	var plan map[string]any
+	if err := json.Unmarshal([]byte(stdout), &plan); err != nil {
+		return
+	}
+	tables := planClickHouseTables(plan)
+	if tables == nil {
+		return
+	}
+	for table, migration := range orgDeleteTablesAfterThePythonFreeze {
+		if _, planned := tables[table]; !planned {
+			t.Errorf("%s: the Go plan does not list %s (migration %s): the verb would leave an organization's rows there, or the entry in orgDeleteTablesAfterThePythonFreeze has rotted", scenario, table, migration)
+		}
+	}
 }
 
 // pgSeed makes the target and the control organization the same rows.
@@ -378,6 +433,9 @@ func deleteEnv(fixture *chFixture, scenario deleteScenario, python bool) map[str
 
 func goDelete(t *testing.T, db *database, fixture *chFixture, scenario deleteScenario) deleteResult {
 	code, stdout := goVerbEnv(t, db, deleteEnv(fixture, scenario, false), scenario.args)
+	if scenario.clickhouse {
+		assertTablesAfterTheFreezeArePlanned(t, scenario.name, stdout)
+	}
 	return deleteResult{Name: scenario.name, Exit: code, Stdout: normalize(t, stdout, scenario.clickhouse), State: snapshot(t, db, fixture, scenario)}
 }
 

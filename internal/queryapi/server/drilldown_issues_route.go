@@ -351,11 +351,12 @@ func newDrilldownIssuesPostHandler(reader *drilldown.Reader) http.HandlerFunc {
 		}
 
 		params := drilldown.IssueParams{
-			StartDay:   startTS,
-			EndDay:     endTS,
-			ScopeLevel: scopeLevel,
-			ScopeIDs:   scopeIDs,
-			Limit:      limit,
+			StartDay:    startTS,
+			EndDay:      endTS,
+			ScopeLevel:  scopeLevel,
+			ScopeIDs:    scopeIDs,
+			Limit:       limit,
+			BlockedOnly: blockedOnlyFromMetricFilter(filtersValue),
 		}
 
 		resp, err := drilldown.BuildIssuesResponse(r.Context(), reader, claims.OrgID, params)
@@ -365,4 +366,27 @@ func newDrilldownIssuesPostHandler(reader *drilldown.Reader) http.HandlerFunc {
 		}
 		writeDrilldownIssuesResponse(w, r, claims.OrgID, resp)
 	}
+}
+
+// blockedOnlyFromMetricFilter reads the already-validated Pydantic-shaped
+// value instead of the lossy legacyJSON map. MetricFilter accepts values such
+// as the JSON string "true" for its bool field; coerceBoolBodyField preserves
+// that accepted value for the request builder. False, null and an absent key
+// retain the ordinary issue drilldown.
+func blockedOnlyFromMetricFilter(value pyjson.Value) bool {
+	filters, ok := value.(*pyjson.Object)
+	if !ok {
+		return false
+	}
+	howValue, hasHow := filters.Get("how")
+	how, ok := howValue.(*pyjson.Object)
+	if !hasHow || !ok {
+		return false
+	}
+	blockedValue, hasBlocked := how.Get("blocked")
+	if !hasBlocked {
+		return false
+	}
+	blocked, present, detail := coerceBoolBodyField([]any{"body", "filters", "how", "blocked"}, blockedValue)
+	return detail == nil && present && blocked
 }

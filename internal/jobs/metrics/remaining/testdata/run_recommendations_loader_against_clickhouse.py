@@ -7,22 +7,19 @@ against the REAL Python one reading the SAME rows from the SAME database. That
 is what makes the comparison cover the SQL text and not merely the
 post-processing, which the no-container corpus already pins.
 
-Usage:
-    run_recommendations_loader_against_clickhouse.py --dsn URL --team ID --org ID \
-        --window-start YYYY-MM-DD --window-end YYYY-MM-DD
+It runs as a Produce producer (CHAOS-8303): the program text is passed to the interpreter with -c, the request is one JSON
+object on stdin ({"team", "org", "window_start", "window_end"}), the address of the run's database is the CLICKHOUSE_URI environment
+entry, and the checkout's src is on PYTHONPATH (the closed environment). The answer is the one JSON line on stdout. Recorded once on the
+pinned build by the record verb and frozen; the Go loader is compared with the frozen answers.
 """
 
 from __future__ import annotations
 
-import argparse
 import json
+import os
 import struct
 import sys
 from datetime import date
-from pathlib import Path
-
-REPO_ROOT = Path(__file__).resolve().parents[5]
-sys.path.insert(0, str(REPO_ROOT / "src"))
 
 import clickhouse_connect  # noqa: E402
 
@@ -36,21 +33,14 @@ def bits(value):
 
 
 def main() -> int:
-    parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--dsn", required=True)
-    parser.add_argument("--team", required=True)
-    parser.add_argument("--org", required=True)
-    parser.add_argument("--window-start", required=True)
-    parser.add_argument("--window-end", required=True)
-    args = parser.parse_args()
-
-    client = clickhouse_connect.get_client(dsn=args.dsn)
-    loader = ClickHouseMetricsLoader(client, org_id=args.org)
+    request = json.loads(sys.stdin.read())
+    client = clickhouse_connect.get_client(dsn=os.environ["CLICKHOUSE_URI"])
+    loader = ClickHouseMetricsLoader(client, org_id=request["org"])
     snapshot = loader.load_team_metrics_window(
-        args.team,
-        args.org,
-        date.fromisoformat(args.window_start),
-        date.fromisoformat(args.window_end),
+        request["team"],
+        request["org"],
+        date.fromisoformat(request["window_start"]),
+        date.fromisoformat(request["window_end"]),
     )
 
     json.dump(

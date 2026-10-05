@@ -17,7 +17,9 @@
 # PARALLEL LEGS (CHAOS-6690). The gate used to be ONE 34-minute step
 # (`check_go.sh ci`: vet 2, test 5.6, race 17, live-Python oracles 8.4, the rest
 # ~1.5) and was the whole critical path of a PR (median 28.6 min, p90 36.8, plus
-# 3 min of queue). It now runs as five parallel legs (`check_go.sh ci-leg`) and
+# 3 min of queue). It now runs as parallel legs (`check_go.sh ci-leg`; the live-Python
+# oracle leg was deleted with the oracles, CHAOS-7308, and no step of this
+# workflow installs Python) and
 # a fan-in job that KEEPS the required context name `go-quality`, so no
 # branch-protection edit is needed. The fan-in is `unconditional`: a leg that is
 # skipped, cancelled or missing from the result FAILS the gate (a measurement
@@ -82,8 +84,6 @@ jobs:
             args: race 2 3
           - name: race-3-of-3
             args: race 3 3
-          - name: oracles
-            args: oracles
     # Routed to the self-hosted ARC pool while GitHub-hosted dispatch is
     # stalled (org plan change, 2026-09-04; chris ruling 16:54 PDT: route the
     # ruleset-required contexts to oci-arc-runners so merges can continue).
@@ -109,21 +109,12 @@ jobs:
           # cannot see it. This is a git fetch, not a Docker Hub pull.
           fetch-depth: 0
 
-      - name: Check the migration matrix has not gone stale
+      - name: Check the migration matrix stamps are real commits
         if: matrix.name == 'static'
-        # UNCONDITIONAL, and deliberately placed before the relevance
-        # decision below. Every other gate in this repo fires because a PR
-        # TOUCHED something; this one has to fire because nobody did. The
-        # "Last verified" stamp on docs/go-migration-matrix.md sat five days
-        # and roughly forty merges behind main while the page read as
-        # current, and no test, script or workflow read it at all -- a
-        # path-filtered check could not have caught that, because the
-        # failure is an absence of commits, not a commit.
-        #
-        # bash + git only: no Go toolchain, no venv, no network, so it runs
-        # on either leg before anything is installed. The heavier contract
-        # half runs under `go test ./...` on the Go-relevant leg.
-        run: bash ci/check_migration_matrix.sh freshness
+        # Structural only (CHAOS-8620): the stamps must be 40-hex ancestors of
+        # HEAD. No age budget: the matrix is a record of a finished migration.
+        # bash + git only, so it runs on either leg before anything installs.
+        run: bash ci/check_migration_matrix.sh stamp
 
       - name: Decide whether this change set is Go-relevant
         id: relevance
@@ -223,23 +214,6 @@ jobs:
         # comparing against it, which would make this step incapable of failing.
         # A test asserts this command does not carry it.
         run: go run -trimpath ./cmd/gqlgen-guard check-drift
-
-      - name: Set up Python 3.14 for the live provider oracles
-        # The relevance decision above needs no Python (ci/go_relevance.sh). The live-Python oracles and the unit tests that
-        # run real Python programs still do, and they resolve the deployed 3.14 from PATH: without this step they ran on the
-        # runner's 3.12 and failed (pyjson: a JSONDecodeError text that differs between 3.12 and 3.14). A change that is
-        # not Go-relevant no longer pays for the setup.
-        if: steps.relevance.outputs.relevant == 'true'
-        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
-        with:
-          python-version: '3.14'
-
-      - name: Install locked live provider oracle dependencies
-        # EVERY leg: unit tests in the test and race legs run real Python
-        # programs too (e.g. admin TestOrgDeletionTargetsMatchThePythonList);
-        # the single-job gate had these installed for all of them.
-        if: steps.relevance.outputs.relevant == 'true'
-        run: python -m pip install --no-deps -r ci/requirements-live-python-oracles.txt
 
       - name: Prepare base job contracts
         if: steps.relevance.outputs.relevant == 'true' && matrix.name == 'static' && (github.event_name == 'pull_request' || github.event_name == 'merge_group')

@@ -10,6 +10,11 @@ package routing
 // in process) -- not the internal listener and not the proof allowlist. A
 // shadow row alone routes no client anywhere; shadow->canary is still
 // `enable`, behind its receipt or reviewed named limit.
+//
+// CHAOS-8517: for a CATALOG operation the first row is no longer neutral. An
+// operation with no row at any schema digest is served by query-api; its
+// shadow row holds it dark until `enable`. The verb names every such
+// operation on stderr, in a dry run too.
 
 import (
 	"context"
@@ -59,6 +64,7 @@ func runSeed(argv []string) error {
 	if err != nil {
 		return err
 	}
+	noteCatalogOperations(isClass)
 	var catalog map[string]string
 	var named []string
 	if isClass {

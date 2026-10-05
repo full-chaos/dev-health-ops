@@ -3,10 +3,10 @@ package goapiproof
 // The review_evidence prefixes `enable` and `status` agree on.
 //
 // A row enabled without a store proof run says so on the row itself, in the
-// one place a reader six weeks later still looks. `enable` writes exactly one
-// such prefix (NamedLimitEvidencePrefix); the two older prefixes below are
-// only READ, so a row written before the change keeps its own word in
-// `status` until the next `enable` rewrites it.
+// one place a reader six weeks later still looks. `enable` writes two such
+// prefixes (NamedLimitEvidencePrefix, CatalogRuleEvidencePrefix); the two
+// older prefixes below are only READ, so a row written before the change
+// keeps its own word in `status` until the next `enable` rewrites it.
 
 import (
 	"crypto/sha256"
@@ -19,6 +19,17 @@ import (
 // go-served ledger's written limit instead of a store proof run. The sha256
 // of that written reason follows, then the operator's evidence.
 const NamedLimitEvidencePrefix = "NAMED-LIMIT:"
+
+// CatalogRuleEvidencePrefix starts review_evidence on a catalog operation's
+// row enabled with neither a store proof run nor a ledger limit (CHAOS-8586):
+// the catalog rule serves the operation without a row, so no proof guards the
+// row that lifts a hold. The operator's evidence follows.
+const CatalogRuleEvidencePrefix = "CATALOG-RULE:"
+
+// CatalogRuleEvidence is the ONE writer of that prefix.
+func CatalogRuleEvidence(operatorEvidence string) string {
+	return CatalogRuleEvidencePrefix + " " + operatorEvidence
+}
 
 // legacyVenueEvidencePrefix and legacyNoProdDataEvidencePrefix start
 // review_evidence on rows written by the venue-receipt path this package no

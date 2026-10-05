@@ -42,6 +42,60 @@ type fixtureClientD struct {
 	c          oracleDCase
 	statements []string
 	bindings   [][]clickhouse.Binding
+
+	// The two catalogue name reads of aiOpportunities (CHAOS-8114) are Go-only: the Python detector never
+	// made them. They are answered and recorded APART from the detector reads, so the read-by-read
+	// comparison with the Python calls (checkCallsD) and the statement pins still see exactly the detector
+	// reads. With no rows set the catalogues are empty and every name is null, which is what a recorded
+	// Python case compares with. opportunity_names_test.go sets them.
+	catalogueTeams      [][]any // id, name, repo_patterns
+	catalogueRepos      [][]any // repo_id, full_name
+	catalogueTeamsErr   error
+	catalogueReposErr   error
+	catalogueStatements []string
+	catalogueBindings   [][]clickhouse.Binding
+}
+
+// catalogueNameRead reports which catalogue a statement reads for display names: "teams", "repos" or "".
+// The repository read is told from the slug lookup (also FROM repos) by its id-list binding.
+func catalogueNameRead(st string) string {
+	switch {
+	case strings.Contains(st, "FROM teams"):
+		return "teams"
+	case strings.Contains(st, "FROM repos") && strings.Contains(st, "{repo_ids:Array(String)}"):
+		return "repos"
+	}
+	return ""
+}
+
+func (f *fixtureClientD) catalogueQuery(which, st string, b []clickhouse.Binding) (clickhouse.RowScanner, error) {
+	f.catalogueStatements = append(f.catalogueStatements, st)
+	f.catalogueBindings = append(f.catalogueBindings, b)
+	if which == "teams" {
+		if f.catalogueTeamsErr != nil {
+			return nil, f.catalogueTeamsErr
+		}
+		return &scriptedRows{rows: f.catalogueTeams}, nil
+	}
+	if f.catalogueReposErr != nil {
+		return nil, f.catalogueReposErr
+	}
+	// Like the statement's IN predicate: only the repositories asked for.
+	asked := map[string]bool{}
+	for _, x := range b {
+		if ids, ok := x.Value.([]string); ok && x.Name == "repo_ids" {
+			for _, id := range ids {
+				asked[id] = true
+			}
+		}
+	}
+	var rows [][]any
+	for _, row := range f.catalogueRepos {
+		if asked[row[0].(string)] {
+			rows = append(rows, row)
+		}
+	}
+	return &scriptedRows{rows: rows}, nil
 }
 
 func optF(m map[string]any, k string) any {
@@ -62,6 +116,9 @@ func strList(v any) []string {
 }
 
 func (f *fixtureClientD) Query(_ context.Context, st string, b []clickhouse.Binding) (clickhouse.RowScanner, error) {
+	if which := catalogueNameRead(st); which != "" {
+		return f.catalogueQuery(which, st, b)
+	}
 	f.statements = append(f.statements, st)
 	f.bindings = append(f.bindings, b)
 	c := f.c
@@ -129,6 +186,59 @@ func (f *fixtureClientD) Query(_ context.Context, st string, b []clickhouse.Bind
 	return nil, errors.New("fixtureClientD: unscripted statement: " + st)
 }
 
+// flowGoOnlyKeys are the only response keys the Go flow detector returns that the Python detector does
+// not (CHAOS-7626): the measured value, the rule's threshold, their unit and the side of the threshold
+// that fires. They are a declared Go-only extension of ImproveOpportunity (the Go plane owns the SDL;
+// Python must only be a subset of it). Everything else is still compared whole against Python. The list
+// is pinned by TestFlowGoOnlyKeysAreExactlyTheDeclaredFour: it cannot grow unnoticed.
+var flowGoOnlyKeys = []string{"threshold", "thresholdDirection", "unit", "value"}
+
+// checkAndStripFlowGoOnly requires every flow opportunity to carry the Go-only keys, typed, and removes
+// them so the rest of the response can be compared with the Python one.
+func checkAndStripFlowGoOnly(t *testing.T, got map[string]any) {
+	t.Helper()
+	list, _ := got["opportunities"].([]any)
+	for i, item := range list {
+		o, ok := item.(map[string]any)
+		if !ok {
+			t.Fatalf("opportunities[%d] is not an object", i)
+		}
+		for _, key := range flowGoOnlyKeys {
+			if _, present := o[key]; !present {
+				t.Errorf("opportunities[%d] lacks the Go-only key %q", i, key)
+			}
+		}
+		if _, ok := o["value"].(float64); !ok {
+			t.Errorf("opportunities[%d].value = %T, want a number", i, o["value"])
+		}
+		if th, ok := o["threshold"].(float64); !ok || th <= 0 {
+			t.Errorf("opportunities[%d].threshold = %v, want a positive number", i, o["threshold"])
+		}
+		switch o["unit"] {
+		case "HOURS", "RATIO", "ITEMS":
+		default:
+			t.Errorf("opportunities[%d].unit = %v, want HOURS, RATIO or ITEMS", i, o["unit"])
+		}
+		switch o["thresholdDirection"] {
+		case "ABOVE", "BELOW":
+		default:
+			t.Errorf("opportunities[%d].thresholdDirection = %v, want ABOVE or BELOW", i, o["thresholdDirection"])
+		}
+		for _, key := range flowGoOnlyKeys {
+			delete(o, key)
+		}
+	}
+}
+
+// TestFlowGoOnlyKeysAreExactlyTheDeclaredFour fails if the strip list ever holds a key that is not one
+// of the four CHAOS-7626 fields, so the Go-only allowance cannot grow quietly.
+func TestFlowGoOnlyKeysAreExactlyTheDeclaredFour(t *testing.T) {
+	want := []string{"threshold", "thresholdDirection", "unit", "value"}
+	if !reflect.DeepEqual(flowGoOnlyKeys, want) {
+		t.Fatalf("flowGoOnlyKeys = %v, want exactly %v", flowGoOnlyKeys, want)
+	}
+}
+
 // TestOpportunityDetectors_MatchPythonDetectors replays captured Python
 // cases of the AI opportunity detector and the flow detector -- every rule
 // threshold, formatted rationale, score, ordering and clamp -- and requires
@@ -167,6 +277,9 @@ func TestOpportunityDetectors_MatchPythonDetectors(t *testing.T) {
 			enc, _ := json.Marshal(got)
 			var gotMap map[string]any
 			_ = json.Unmarshal(enc, &gotMap)
+			if c.Kind != "ai" {
+				checkAndStripFlowGoOnly(t, gotMap)
+			}
 			g, w := normalizeD(gotMap), normalizeD(c.Expected)
 			if !reflect.DeepEqual(g, w) {
 				gj, _ := json.MarshalIndent(g, "", " ")

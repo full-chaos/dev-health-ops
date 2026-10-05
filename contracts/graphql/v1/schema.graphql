@@ -144,6 +144,7 @@ type AIImpactBucketRow {
   incidentRate: Float
   testGapPrs: Int!
   testGapRate: Float
+  day: Date!
 }
 
 type AIImpactBucketTotals {
@@ -220,6 +221,14 @@ type AIOpportunity {
   score: Float!
   evidenceRefs: [String!]!
   workGraphDrilldowns: [AIWorkGraphDrilldownRef!]!
+  """
+  The repository's full name in the org's repository catalogue (CHAOS-8114). Null = the catalogue holds no name for ``repoId``, or the catalogue could not be read. It is never the id.
+  """
+  repoName: String
+  """
+  The name of the team ``teamId`` names, from the org's team catalogue (CHAOS-8114). Null = the opportunity has no team, the catalogue holds no name for it, or the catalogue could not be read. It is never the id.
+  """
+  teamName: String
 }
 
 enum AIOpportunityKind {
@@ -329,6 +338,14 @@ type AIWorkflowGraphEdgeOut {
 type AIWorkflowGraphNodeOut {
   nodeType: String!
   nodeId: String!
+  """
+  The node's display name (CHAOS-8113). By ``nodeType``: ``pr`` = the pull request's title; ``deployment`` = "<environment> deploy"; ``incident`` = "<title> (<status>)"; ``issue`` = the issue's own id when it is a readable key. Null = no name is known: the catalogue does not name the node, the name read failed, or the type carries no name (see ``nameExpected``). It is never an id that is, or holds, a UUID or an opaque hash. Every end of an edge in ``edges`` that has an id has a node in ``nodes`` with the same type and id, so a client names an edge end by that node.
+  """
+  displayName: String
+  """
+  True = nodes of this type carry a name (``pr``, ``deployment``, ``incident``, ``issue``): a null ``displayName`` is then a gap, and a client draws "Not reported". False = the type has no name by design (a review outcome, an AI workflow run, a diff): a client draws the type words alone.
+  """
+  nameExpected: Boolean!
 }
 
 enum AIWorkflowRootTypeInput {
@@ -345,6 +362,8 @@ type AiAttributedPr {
   workType: String
   teamId: String
   mergedAt: DateTime
+  repoName: String
+  teamName: String
 }
 
 type AiAttributedPrsResult {
@@ -466,13 +485,57 @@ type CapacityDistribution {
   days: [CapacityDistributionBin!]
   "Fixed-date mode: items completed by the target date, one bin per distinct total."
   items: [CapacityDistributionBin!]
+  """
+  The number of simulation runs behind each mode (CHAOS-8477): the counts of one
+  mode's bins sum to it, the runs that did not finish included. The modes of one
+  forecast come from one simulation and hold the same number of runs. The share
+  of the runs that finished is served on each bin (cumulativeShare).
+  """
+  runs: Int!
+  """
+  The number of days-mode runs that did NOT finish inside the simulated horizon
+  (CHAOS-8477): the simulation stops a run after ``horizonDays`` days, with
+  items still open, and records it in the ``days`` bin at ``horizonDays``. Such
+  a run is not done. A run that needs exactly ``horizonDays`` days is recorded
+  in the same bin and cannot be told apart, so it is counted here too. Null =
+  the days mode did not simulate (``days`` is null).
+  """
+  unfinishedRuns: Int
+  """
+  The horizon of the days simulation, in days (CHAOS-8477): 365. A ``days`` bin
+  with this value means "this many days or more".
+  """
+  horizonDays: Int!
 }
 
 type CapacityDistributionBin {
-  "The outcome: a day count (days) or an item count (items)."
+  """
+  The outcome: a day count (days) or an item count (items). A day count is the
+  number of days after the day the forecast was computed: the same axis as
+  p50Days, p85Days and p95Days (p50Date is that day plus p50Days). A day count
+  equal to the distribution's horizonDays means "that many days or more": the
+  simulation stops a run there, done or not.
+  """
   value: Int!
-  "How many simulation runs ended on this value."
+  "How many simulation runs ended on this value. In the days bin at horizonDays: how many runs were stopped there."
   count: Int!
+  """
+  The share of ALL the mode's simulation runs (CHAOS-8477), from the same Monte
+  Carlo distribution as p50Days / p85Days / p95Days: 0 to 1, never lower than
+  on the bin before. In the days mode it is the share of the runs that FINISHED
+  (the target items were done) on or before that day. A run that reached the
+  horizon is not done: the bin at horizonDays adds nothing to the share, so the
+  last share is below 1 when any run reached the horizon (unfinishedRuns), and
+  it is 1 only when every run finished. In the items mode it is the share of
+  the runs with this many items or fewer, and 1 on the last bin. The percentile
+  days are an interpolated rank of the same runs: the day on which this share
+  first reaches 0.50 and p50Days both lie between the outcomes of the same two
+  consecutive ranked runs, so they are the same day unless those two runs ended
+  on different days (and so for 0.85 and p85Days, 0.95 and p95Days). When so
+  many runs reached the horizon that the share never reaches a percentile, that
+  percentile day is horizonDays and means "horizonDays or more".
+  """
+  cumulativeShare: Float!
 }
 
 type CapacityForecastConnection {
@@ -496,6 +559,7 @@ input CapacityForecastFilterInput {
 
 input CapacityForecastInput {
   teamId: String = null
+  teamIds: [String!] = null
   workScopeId: String = null
   targetItems: Int = null
   targetDate: Date = null
@@ -1017,6 +1081,19 @@ type ImproveOpportunity {
   severity: String!
   evidenceRefs: [String!]!
   recommendedAction: String!
+  """
+  The measured metric the rule compared, in `unit`. The same number the rationale states.
+  """
+  value: Float!
+  """
+  The rule's limit, in `unit`. A fixed constant of the detector, not a per-organization setting.
+  """
+  threshold: Float!
+  unit: ImproveOpportunityUnit!
+  """
+  Which side of the threshold fires the rule: ABOVE (value > threshold) or BELOW (value < threshold).
+  """
+  thresholdDirection: ThresholdDirection!
 }
 
 enum ImproveOpportunityKind {
@@ -1027,6 +1104,12 @@ enum ImproveOpportunityKind {
   LOW_THROUGHPUT
   HIGH_CHURN
   HIGH_CHANGE_FAILURE
+}
+
+enum ImproveOpportunityUnit {
+  HOURS
+  RATIO
+  ITEMS
 }
 
 """
@@ -1123,6 +1206,10 @@ type OperatingReviewDelta {
   absolute: Float!
   percent: Float
   status: String!
+  """
+  False = the prior week holds no stored value for the metric (CHAOS-8115); see ``OperatingReviewMetric.hasData``. ``priorValue`` is then a 0 placeholder, and ``absolute``, ``percent`` and ``status`` compare with that placeholder: a client draws "No data" for the prior week and no change.
+  """
+  hasPriorData: Boolean!
 }
 
 input OperatingReviewInput {
@@ -1136,6 +1223,10 @@ type OperatingReviewMetric {
   value: Float!
   unit: String!
   delta: OperatingReviewDelta!
+  """
+  True = the week holds a stored value for the metric (CHAOS-8115). False = no row of the metric's daily table in the week, only NULL values, or a read that failed: ``value`` is then a 0 placeholder, not a measured zero, and a client draws "No data". True with ``value`` 0 is a stored zero.
+  """
+  hasData: Boolean!
 }
 
 type OperatingReviewSection {
@@ -1395,6 +1486,16 @@ type Query {
   testopsRisk(orgId: String!, input: TestOpsRiskInput!): TestOpsRiskResult!
 
   """
+  CI job names that failed in a window, by workflow and job name (CHAOS-8513). Computed at read time from the stored job runs of every CI provider.
+  """
+  testopsJobFailures(orgId: String!, input: TestOpsJobFailuresInput!): TestOpsJobFailuresResult!
+
+  """
+  Each repository's coverage baseline (CHAOS-8111): its own mean coverage over the 30 days before ``endDate`` (``endDate`` itself is not included). Not a set target. One row per repository with a stored coverage row in those 30 days, in ``repoId`` order.
+  """
+  coverageBaselines(orgId: String!, endDate: Date!, repoIds: [String!] = null, teamIds: [String!] = null): [RepoCoverageBaseline!]!
+
+  """
   Cyclomatic complexity trend by repo or file. Reads from append-only ``repo_complexity_daily`` / ``file_complexity_snapshots`` tables — no recomputation, pure surface of persisted data.
   """
   complexityTimeseries(input: ComplexityTimeseriesInput!): ComplexityTimeseriesResult!
@@ -1492,6 +1593,22 @@ type RepoBusFactor {
   evidenceSampleCount: Int!
 }
 
+type RepoCoverageBaseline {
+  repoId: String!
+  """The repository's full name in the org's catalogue. Null = the catalogue holds no name; never the id."""
+  repoName: String
+  """
+  Mean line coverage, in percent (0 to 100), over the days of the 30 that hold a value. Null = fewer than 7 such days (``lineDays``): then there is no baseline. Never 0 for "none", never the current value.
+  """
+  lineBaselinePct: Float
+  """Days of the 30 that hold a line coverage value."""
+  lineDays: Int!
+  """Mean branch coverage, in percent; the same rules as ``lineBaselinePct``."""
+  branchBaselinePct: Float
+  """Days of the 30 that hold a branch coverage value."""
+  branchDays: Int!
+}
+
 type ReportRunConnection {
   items: [ReportRunType!]!
   total: Int!
@@ -1513,11 +1630,33 @@ type ReportRunType {
 }
 
 type ReviewEdgeRow {
+  """
+  The stored identity of the reviewer: a provider login or a display name. Deprecated in favour of reviewerName and reviewerKey (CHAOS-8485); it stays for clients that still read it.
+  """
   reviewer: String!
+  """
+  The stored identity of the author: the pull request's author e-mail address when there is one, else its author name, else "unknown". It can be an e-mail address. Deprecated in favour of authorName and authorKey (CHAOS-8485): a client that may not show an e-mail address must not select it.
+  """
   author: String!
   reviewsCount: Int!
   day: Date!
   repoId: String
+  """
+  The reviewer's display name (CHAOS-8485): the display name of the org's identity the stored reviewer belongs to; else the stored reviewer itself when it is not an e-mail address (a provider login). Never an e-mail address. Null = no name is known.
+  """
+  reviewerName: String
+  """
+  The author's display name (CHAOS-8485): the display name of the org's identity the stored author belongs to; else, for an author stored by e-mail address, the author name the provider gave on the pull request; else the stored author itself when it is not an e-mail address. Never an e-mail address. Null = no name is known.
+  """
+  authorName: String
+  """
+  An opaque key of the reviewer inside the org (CHAOS-8485): the same person has the same key in every answer, as reviewer and as author when the identity resolves. It is not an e-mail address and not a name; use it only to tell people apart and to join rows.
+  """
+  reviewerKey: String!
+  """
+  An opaque key of the author inside the org (CHAOS-8485); see reviewerKey.
+  """
+  authorKey: String!
 }
 
 input ReviewEdgesInput {
@@ -1525,12 +1664,23 @@ input ReviewEdgesInput {
   sinceDate: Date!
   untilDate: Date!
   repoIds: [String!] = null
+  """
+  Team ids (CHAOS-7785). Narrows the edges to the repositories these teams OWN (team_repo_ownership, as of now); person membership is never read. Combined with ``repoIds`` the two both apply (a pair must be on a listed repository and on a team-owned one).
+  """
+  teamIds: [String!] = null
   limit: Int! = 500
 }
 
 type ReviewEdgesResult {
   edges: [ReviewEdgeRow!]!
+  """
+  Number of deduplicated (pair, day) rows the filters match, before the ``limit`` cut (CHAOS-7786). One row is one reviewer-to-author pair on one day, so this counts rows, not distinct pairs. Never less than ``edges``.
+  """
   totalCount: Int!
+  """
+  True when ``totalCount`` is greater than the number of ``edges`` returned: the list was cut by ``limit`` (CHAOS-7786).
+  """
+  truncated: Boolean!
 }
 
 type ReworkThemeAllocation {
@@ -1740,6 +1890,59 @@ enum TeamAttributionSource {
   UNASSIGNED
 }
 
+type TestOpsJobFailureGroup {
+  """
+  The workflow (GitHub Actions) or pipeline (GitLab CI) name of the runs. Null = the job runs have no stored pipeline row, or the row has no name.
+  """
+  workflowName: String
+  jobName: String!
+  """
+  The CI provider of the runs, as the pipeline row stores it (for example ``github_actions``). Null = the job runs have no stored pipeline row.
+  """
+  provider: String
+  """
+  Job runs of this group that started in the window and reached a result (success, failure or cancelled). A skipped, queued or running job is not a run.
+  """
+  runs: Int!
+  """
+  The runs that failed (a failure, an error or a timeout). Always above 0: a group with no failed run is not served.
+  """
+  failedRuns: Int!
+  """
+  ``failedRuns / runs``: a share from 0 to 1, NOT a percent. Null = no run to divide by (not served today: every served group has a failed run).
+  """
+  failureRate: Float
+}
+
+input TestOpsJobFailuresInput {
+  """First day of the window (UTC), included. The day a job run started places it."""
+  sinceDate: Date!
+  """
+  Last day of the window (UTC), included. At most 90 days after ``sinceDate`` (a "90 days" window of today minus 90 days to today is served); a later day, or a day before ``sinceDate``, is an error, not a cut answer.
+  """
+  untilDate: Date!
+  repoIds: [String!] = null
+  """
+  Team ids. Narrows the runs to the repositories these teams OWN (team_repo_ownership, as of now); person membership is never read. With ``repoIds`` both apply.
+  """
+  teamIds: [String!] = null
+  """Most groups to serve: 1 to 100."""
+  limit: Int! = 20
+}
+
+type TestOpsJobFailuresResult {
+  """
+  The groups with the most failed runs first (then by job name, workflow name and provider), cut at ``limit``.
+  """
+  groups: [TestOpsJobFailureGroup!]!
+  """
+  Number of groups that match before the ``limit`` cut. Never less than ``groups``.
+  """
+  totalCount: Int!
+  """True = ``totalCount`` is above the number of ``groups`` served."""
+  truncated: Boolean!
+}
+
 type TestOpsRiskBreakdownItem {
   category: String!
   hours: Float!
@@ -1780,6 +1983,11 @@ type TestOpsRiskSparkPoint {
 type TestOpsRiskTrendPoint {
   date: Date!
   riskScore: Float!
+}
+
+enum ThresholdDirection {
+  ABOVE
+  BELOW
 }
 
 type ThroughputEstimateCoverage {

@@ -27,6 +27,12 @@ func TestJiraDevStatusPullRequestSourceIDParsesTrustedGitHubURLOnly(t *testing.T
 		{"not a pull URL", "https://github.com/acme/api/issues/968", ""},
 		{"malformed URL", "://not a url", ""},
 		{"userinfo present", "https://user:pass@github.com/acme/api/pull/968", ""},
+		{"gitlab MR URL", "https://gitlab.com/acme/api/-/merge_requests/12", "gitlab:acme/api!12"},
+		{"gitlab MR URL in a subgroup", "https://gitlab.com/acme/platform/api/-/merge_requests/12", "gitlab:acme/platform/api!12"},
+		{"gitlab MR URL without the dash segment", "https://gitlab.com/acme/api/merge_requests/12", "gitlab:acme/api!12"},
+		{"gitlab untrusted host", "https://gitlab.internal.example.com/acme/api/-/merge_requests/12", ""},
+		{"gitlab issue URL", "https://gitlab.com/acme/api/-/issues/12", ""},
+		{"gitlab MR URL with no project", "https://gitlab.com/-/merge_requests/12", ""},
 	}
 	for _, testCase := range cases {
 		testCase := testCase
@@ -85,6 +91,11 @@ type jiraDevStatusDoer struct {
 	// (the last entry repeats past its length) -- used to simulate
 	// HTTPClient.Do's internal retries against a transient status.
 	statuses []int
+	// applicationTypes records the applicationType of every request, in order.
+	applicationTypes []string
+	// bodyByType answers 200 with this body for that application type; statusByType answers that status.
+	bodyByType   map[string]string
+	statusByType map[string]int
 }
 
 func (doer *jiraDevStatusDoer) Do(request *http.Request) (*http.Response, error) {
@@ -94,8 +105,22 @@ func (doer *jiraDevStatusDoer) Do(request *http.Request) (*http.Response, error)
 	if request.URL.Path != "/rest/dev-status/1.0/issue/detail" {
 		doer.t.Fatalf("unexpected path %s", request.URL.Path)
 	}
-	if got := request.URL.Query().Get("applicationType"); got != "GitHub" {
-		doer.t.Fatalf("applicationType=%q", got)
+	applicationType := request.URL.Query().Get("applicationType")
+	if applicationType != "GitHub" && applicationType != "GitLab" {
+		doer.t.Fatalf("applicationType=%q", applicationType)
+	}
+	doer.applicationTypes = append(doer.applicationTypes, applicationType)
+	if body, ok := doer.bodyByType[applicationType]; ok {
+		return &http.Response{
+			StatusCode: http.StatusOK, Header: http.Header{"Content-Type": []string{"application/json"}},
+			Body: io.NopCloser(strings.NewReader(body)), Request: request,
+		}, nil
+	}
+	if status, ok := doer.statusByType[applicationType]; ok {
+		return &http.Response{
+			StatusCode: status, Header: http.Header{"Content-Type": []string{"application/json"}},
+			Body: io.NopCloser(strings.NewReader(`{}`)), Request: request,
+		}, nil
 	}
 	if got := request.URL.Query().Get("dataType"); got != "pullrequest" {
 		doer.t.Fatalf("dataType=%q", got)
@@ -148,17 +173,18 @@ func TestFetchJiraDevStatusPullRequestsCountingAttemptsCountsRetries(t *testing.
 		body: `{"errorMessages":["temporarily unavailable"]}`,
 	}
 	client := jiraDevStatusTestClientWithRetries(t, fakehttp.Client(doer), 3)
-	_, available, attempts, err := fetchJiraDevStatusPullRequestsCountingAttempts(
+	_, available, attempts, outcomes, err := fetchJiraDevStatusPullRequestsCountingAttempts(
 		context.Background(), client, "10050", 0,
 	)
+	assertDevStatusOutcomes(t, outcomes, "GitHub:failed,GitLab:failed")
 	if err == nil || available {
 		t.Fatalf("expected a genuine error after exhausting retries, available=%v err=%v", available, err)
 	}
-	if attempts != 3 {
-		t.Fatalf("attempts=%d want=3 (RetryPolicy.MaxAttempts, all consumed by transient 503s)", attempts)
+	if attempts != 6 {
+		t.Fatalf("attempts=%d want=6 (RetryPolicy.MaxAttempts per application type, all consumed by transient 503s)", attempts)
 	}
-	if doer.requests != 3 {
-		t.Fatalf("doer observed %d real wire requests, want=3", doer.requests)
+	if doer.requests != 6 {
+		t.Fatalf("doer observed %d real wire requests, want=6", doer.requests)
 	}
 }
 
@@ -176,9 +202,10 @@ func TestFetchJiraDevStatusPullRequestsCountingAttemptsHonorsRemainingBudget(t *
 	}
 	// Client policy allows up to 3 attempts, but only 1 remains in the budget.
 	client := jiraDevStatusTestClientWithRetries(t, fakehttp.Client(doer), 3)
-	_, available, attempts, err := fetchJiraDevStatusPullRequestsCountingAttempts(
+	_, available, attempts, outcomes, err := fetchJiraDevStatusPullRequestsCountingAttempts(
 		context.Background(), client, "10050", 1,
 	)
+	assertDevStatusOutcomes(t, outcomes, "GitHub:failed,GitLab:cap_skipped")
 	if err == nil || available {
 		t.Fatalf("expected a genuine error, available=%v err=%v", available, err)
 	}
@@ -200,17 +227,18 @@ func TestFetchJiraDevStatusPullRequestsCountingAttemptsCountsExactlyOneOnSuccess
 		body: `{"detail":[{"pullRequests":[{"url":"https://github.com/acme/api/pull/968"}]}]}`,
 	}
 	client := jiraDevStatusTestClientWithRetries(t, fakehttp.Client(doer), 3)
-	payload, available, attempts, err := fetchJiraDevStatusPullRequestsCountingAttempts(
+	payload, available, attempts, outcomes, err := fetchJiraDevStatusPullRequestsCountingAttempts(
 		context.Background(), client, "10050", 0,
 	)
+	assertDevStatusOutcomes(t, outcomes, "GitHub:synced,GitLab:synced")
 	if err != nil || !available {
 		t.Fatalf("available=%v err=%v", available, err)
 	}
-	if attempts != 1 {
-		t.Fatalf("attempts=%d want=1", attempts)
+	if attempts != 2 {
+		t.Fatalf("attempts=%d want=2 (one request per application type)", attempts)
 	}
-	if len(payload.Detail) != 1 {
-		t.Fatalf("payload=%+v", payload)
+	if len(payload.Detail) != 2 || !reflect.DeepEqual(doer.applicationTypes, []string{"GitHub", "GitLab"}) {
+		t.Fatalf("payload=%+v types=%v", payload, doer.applicationTypes)
 	}
 }
 
@@ -221,7 +249,7 @@ func TestFetchJiraDevStatusPullRequestsParsesOKResponse(t *testing.T) {
 		body: `{"detail":[{"pullRequests":[{"url":"https://github.com/acme/api/pull/968"}]}]}`,
 	}
 	payload, available, err := fetchJiraDevStatusPullRequests(
-		context.Background(), jiraDevStatusTestClient(t, fakehttp.Client(doer)), "10050",
+		context.Background(), jiraDevStatusTestClient(t, fakehttp.Client(doer)), "10050", "GitHub",
 	)
 	if err != nil || !available {
 		t.Fatalf("available=%v err=%v", available, err)
@@ -244,7 +272,7 @@ func TestFetchJiraDevStatusPullRequestsTreats400And404AsCleanNoOp(t *testing.T) 
 			t.Parallel()
 			doer := &jiraDevStatusDoer{t: t, status: status, body: `{"errorMessages":["no dev-status data"]}`}
 			payload, available, err := fetchJiraDevStatusPullRequests(
-				context.Background(), jiraDevStatusTestClient(t, fakehttp.Client(doer)), "10050",
+				context.Background(), jiraDevStatusTestClient(t, fakehttp.Client(doer)), "10050", "GitHub",
 			)
 			if err != nil {
 				t.Fatalf("expected a clean no-op, got err=%v", err)
@@ -260,9 +288,113 @@ func TestFetchJiraDevStatusPullRequestsFailsOnUnexpectedStatus(t *testing.T) {
 	t.Parallel()
 	doer := &jiraDevStatusDoer{t: t, status: http.StatusInternalServerError, body: `{}`}
 	_, available, err := fetchJiraDevStatusPullRequests(
-		context.Background(), jiraDevStatusTestClient(t, fakehttp.Client(doer)), "10050",
+		context.Background(), jiraDevStatusTestClient(t, fakehttp.Client(doer)), "10050", "GitHub",
 	)
 	if err == nil || available {
 		t.Fatalf("expected a genuine error, available=%v err=%v", available, err)
+	}
+}
+
+// CHAOS-8526: the dev-status route asks GitHub AND GitLab, the merged payload carries both providers' links, and a
+// Jira issue linked to a GitLab MR gets a jira_dev_status row whose source is the gitlab: MR id.
+func TestFetchJiraDevStatusAllProvidersMergesGitLabLinks(t *testing.T) {
+	t.Parallel()
+	doer := &jiraDevStatusDoer{t: t, bodyByType: map[string]string{
+		"GitHub": `{"detail":[{"pullRequests":[{"url":"https://github.com/acme/api/pull/968"}]}]}`,
+		"GitLab": `{"detail":[{"pullRequests":[{"url":"https://gitlab.com/acme/platform/api/-/merge_requests/12"}]}]}`,
+	}}
+	client := jiraDevStatusTestClientWithRetries(t, fakehttp.Client(doer), 1)
+	payload, available, attempts, outcomes, err := fetchJiraDevStatusPullRequestsCountingAttempts(context.Background(), client, "10050", 0)
+	assertDevStatusOutcomes(t, outcomes, "GitHub:synced,GitLab:synced")
+	if err != nil || !available || attempts != 2 {
+		t.Fatalf("available=%v attempts=%d err=%v", available, attempts, err)
+	}
+	rows := extractJiraDevStatusDependencies(nativeTestClaim("jira", "work-items"), "jira:OPS-101", payload, time.Date(2026, 9, 1, 12, 0, 0, 0, time.UTC))
+	got := make([]string, 0, len(rows))
+	for _, row := range rows {
+		got = append(got, row.SourceWorkItemID+"|"+row.TargetWorkItemID+"|"+row.RelationshipTypeRaw)
+	}
+	want := []string{"ghpr:acme/api#968|jira:OPS-101|jira_dev_status", "gitlab:acme/platform/api!12|jira:OPS-101|jira_dev_status"}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("rows=%v want=%v", got, want)
+	}
+}
+
+// A GitLab application that is not configured (400/404) is a clean no-op that must not hide the GitHub links; a GitLab
+// 500 is reported as an error but still returns what GitHub answered.
+func TestFetchJiraDevStatusAllProvidersOneTypeDownKeepsTheOther(t *testing.T) {
+	t.Parallel()
+	github := `{"detail":[{"pullRequests":[{"url":"https://github.com/acme/api/pull/968"}]}]}`
+	for name, c := range map[string]struct {
+		status  int
+		wantErr bool
+	}{"gitlab app not configured": {http.StatusNotFound, false}, "gitlab app failing": {http.StatusInternalServerError, true}} {
+		t.Run(name, func(t *testing.T) {
+			doer := &jiraDevStatusDoer{t: t, bodyByType: map[string]string{"GitHub": github}, statusByType: map[string]int{"GitLab": c.status}}
+			client := jiraDevStatusTestClientWithRetries(t, fakehttp.Client(doer), 1)
+			payload, available, _, outcomes, err := fetchJiraDevStatusPullRequestsCountingAttempts(context.Background(), client, "10050", 0)
+			wantOutcomes := map[int]string{http.StatusNotFound: "GitHub:synced,GitLab:dev_status_unavailable", http.StatusInternalServerError: "GitHub:synced,GitLab:failed"}[c.status]
+			assertDevStatusOutcomes(t, outcomes, wantOutcomes)
+			if (err != nil) != c.wantErr || !available || len(payload.Detail) != 1 {
+				t.Fatalf("available=%v detail=%d err=%v wantErr=%v", available, len(payload.Detail), err, c.wantErr)
+			}
+		})
+	}
+}
+
+// The request cap is shared across application types: a budget of 1 asks GitHub only; a budget of 2 asks both.
+func TestFetchJiraDevStatusAllProvidersSharesTheRequestBudget(t *testing.T) {
+	t.Parallel()
+	for budget, want := range map[int][]string{1: {"GitHub"}, 2: {"GitHub", "GitLab"}} {
+		doer := &jiraDevStatusDoer{t: t, status: http.StatusOK, body: `{"detail":[]}`}
+		client := jiraDevStatusTestClientWithRetries(t, fakehttp.Client(doer), 1)
+		_, _, attempts, outcomes, err := fetchJiraDevStatusPullRequestsCountingAttempts(context.Background(), client, "10050", budget)
+		wantOutcomes := map[int]string{1: "GitHub:empty,GitLab:cap_skipped", 2: "GitHub:empty,GitLab:empty"}[budget]
+		assertDevStatusOutcomes(t, outcomes, wantOutcomes)
+		if err != nil || attempts != len(want) || !reflect.DeepEqual(doer.applicationTypes, want) {
+			t.Fatalf("budget=%d attempts=%d types=%v err=%v want=%v", budget, attempts, doer.applicationTypes, err, want)
+		}
+	}
+}
+
+// assertDevStatusOutcomes pins the per-application-type result of one issue's dev-status fetch, so a type that is skipped by
+// the cap, unavailable, empty or failing is counted under its own outcome (CHAOS-8526) and never reads as a silent zero.
+func assertDevStatusOutcomes(t *testing.T, outcomes []jiraDevStatusTypeOutcome, want string) {
+	t.Helper()
+	parts := make([]string, 0, len(outcomes))
+	for _, outcome := range outcomes {
+		parts = append(parts, outcome.ApplicationType+":"+outcome.Outcome)
+	}
+	if got := strings.Join(parts, ","); got != want {
+		t.Fatalf("per-type outcomes=%q want=%q", got, want)
+	}
+}
+
+// A self-managed instance under a relative URL root keeps the root out of the project path: the host is configured as
+// "host/root" and the root is stripped; a URL on that host outside the root is not an id.
+func TestJiraDevStatusPullRequestSourceIDStripsConfiguredURLRoot(t *testing.T) {
+	t.Setenv("JIRA_TRUSTED_SCM_HOSTS", "git.internal.example.com/gitlab, other.example.com")
+	cases := map[string]struct{ url, want string }{
+		"relative root stripped":           {"https://git.internal.example.com/gitlab/group/subgroup/project/-/merge_requests/9", "gitlab:group/subgroup/project!9"},
+		"two-segment project":              {"https://git.internal.example.com/gitlab/acme/api/-/merge_requests/9", "gitlab:acme/api!9"},
+		"outside the root is rejected":     {"https://git.internal.example.com/group/project/-/merge_requests/9", ""},
+		"root only, no project":            {"https://git.internal.example.com/gitlab/-/merge_requests/9", ""},
+		"host without a root is untouched": {"https://other.example.com/acme/api/-/merge_requests/9", "gitlab:acme/api!9"},
+		"default host untouched":           {"https://gitlab.com/acme/api/-/merge_requests/9", "gitlab:acme/api!9"},
+	}
+	for name, c := range cases {
+		if got := jiraDevStatusPullRequestSourceID(c.url); got != c.want {
+			t.Errorf("%s: %q want %q", name, got, c.want)
+		}
+	}
+}
+
+func TestJiraDevStatusPullRequestSourceIDURLRootIsCaseConsistent(t *testing.T) {
+	t.Setenv("JIRA_TRUSTED_SCM_HOSTS", "Git.Internal.Example.com/GitLab")
+	if got := jiraDevStatusPullRequestSourceID("https://git.internal.example.com/GitLab/acme/api/-/merge_requests/9"); got != "gitlab:acme/api!9" {
+		t.Fatalf("exact-case root: %q", got)
+	}
+	if got := jiraDevStatusPullRequestSourceID("https://git.internal.example.com/gitlab/acme/api/-/merge_requests/9"); got != "" {
+		t.Fatalf("different-case root must not match: %q", got)
 	}
 }

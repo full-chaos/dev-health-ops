@@ -50,11 +50,11 @@
 //
 // No host or secret is named above by design: an operator fills in the
 // service addresses and org from the deployment's own operator record.
-// No -query-api-src either: the corpus's coverage check runs against
+// No query-api source flag: the corpus's coverage check runs against
 // goapiproof.MountedRESTPaths, a checked-in snapshot compiled into this
 // binary, never against a live query-api source tree -- the tools image
-// this command actually ships in carries no Go source at all (see that
-// flag's own doc string and MountedRESTPaths' own doc comment).
+// this command actually ships in carries no Go source at all (see
+// MountedRESTPaths' own doc comment).
 package restprove
 
 import (
@@ -80,7 +80,6 @@ import (
 
 	"github.com/full-chaos/dev-health-ops/internal/cli"
 	"github.com/full-chaos/dev-health-ops/internal/goapiproof"
-	"github.com/full-chaos/dev-health-ops/internal/migrationmatrix"
 	"github.com/full-chaos/dev-health-ops/internal/platform/secrets"
 	"github.com/full-chaos/dev-health-ops/internal/platform/version"
 	pgstorage "github.com/full-chaos/dev-health-ops/internal/storage/postgres"
@@ -167,7 +166,6 @@ type flags struct {
 	candidateMetricsURL string
 	buildInfoURL        string
 	candidateBuild      string
-	queryAPISrc         string
 
 	allowProverBuildSkew bool
 
@@ -261,7 +259,6 @@ func registerFlags() (*flag.FlagSet, *flags) {
 	fs.StringVar(&f.buildInfoURL, "buildinfo-url", "", "GET /buildinfo on the service this run measures -- the ONLY source of the build identity every receipt names. Defaults to that service's address + \"/buildinfo\"; under -service=dho-api it must be on the -dho-api-url host")
 	fs.BoolVar(&f.allowProverBuildSkew, proverBuildSkewFlag[1:], false, "measure even when this binary was not built from the candidate build's commit (or carries no commit at all): its declarations, shapes and corpus are then another commit's, and the report records the skew as prover_build_skew_allowed")
 	fs.StringVar(&f.candidateBuild, "candidate-build", "", "optional CROSS-CHECK: fail if the running build is not this sha. Never the source of the value written -- the value written always comes from /buildinfo, matching go-api-prove's own -candidate-build flag")
-	fs.StringVar(&f.queryAPISrc, "query-api-src", "", "OPTIONAL dev-only override: path to a REAL query-api source checkout, read LIVE to confirm this corpus's paths match what the mux actually mounts (migrationmatrix.LoadQueryAPIMuxRoutes). Empty (the default) uses goapiproof.MountedRESTPaths, the checked-in snapshot this binary ships with -- the operator tools image carries no Go source tree at all, so that is the ONLY option available there. Set this only when running from a real repo checkout, to catch drift immediately instead of waiting for TestMountedRESTPathsMatchesTheRealQueryAPIMux's own CI run")
 	fs.StringVar(&f.candidateBearerExec, "candidate-bearer-exec", "", "JSON array whose first element is an ALLOWLISTED HELPER NAME (\"mint-envelope\" or \"mint-edge-token\", never a path -- see goapiproof.MintViaAllowlistedHelper) printing a FRESH bearer credential for query-api on stdout, e.g. [\"mint-envelope\",\"-org\",\"<org>\"]. Re-run as the credential ages. The helper reads any secret it needs from ITS OWN environment -- never from an argument here. The remaining elements are the helper's own argv, never a shell string: nothing is interpolated into a shell. The helper's stdout and stderr are NEVER reported by this command")
 	fs.StringVar(&f.baselineBearerExec, "baseline-bearer-exec", "", "JSON array, same allowlisted-helper-name-plus-argv shape as -candidate-bearer-exec, printing a FRESH bearer credential for the Python api service on stdout -- see credential.go's own doc comment for why one credential kind cannot be assumed to reach both planes")
 	secrets.BindFlag(fs, &f.postgresURI, "postgres-uri", postgresURIEnvVar, "domain Postgres DSN holding go_api_proof_run. Required unless -dry-run")
@@ -1196,8 +1193,8 @@ func run(f flags) (err error) {
 	}
 
 	// Checked FIRST, ahead of every credential/network step below: both
-	// need no network and (in the default, -query-api-src-unset case) no
-	// filesystem either, so a corpus/coverage problem is refused
+	// need no network and no filesystem either (the query-api route table is
+	// compiled in), so a corpus/coverage problem is refused
 	// immediately rather than after a wasted round-trip -- and, not
 	// incidentally, this ordering is what lets a smoke run from a
 	// directory with no source tree at all prove the coverage check on
@@ -1208,20 +1205,6 @@ func run(f flags) (err error) {
 	if f.service == goapiproof.RESTServiceDHOAPI {
 		// query-api's mux is not this service's; this service's coverage is
 		// asserted by the corpus's own tests, not by a run.
-	} else if f.queryAPISrc != "" {
-		// OPTIONAL dev-only override: read a REAL query-api checkout live,
-		// to catch drift immediately instead of waiting for
-		// TestMountedRESTPathsMatchesTheRealQueryAPIMux's own CI run. Off
-		// by default -- see that flag's own doc string for why the
-		// runtime image cannot use this path at all.
-		mounted, err := migrationmatrix.LoadQueryAPIMuxRoutes(f.queryAPISrc)
-		if err != nil {
-			return fmt.Errorf("read query-api's mounted REST routes from %s: %w", f.queryAPISrc, err)
-		}
-		mountedPaths = make([]string, 0, len(mounted))
-		for _, route := range mounted {
-			mountedPaths = append(mountedPaths, route.Path)
-		}
 	} else {
 		mountedPaths = goapiproof.MountedRESTPaths()
 	}

@@ -2,7 +2,7 @@
   "schema_version": 1,
   "$comment": "CUT-01 transitional workload inventory contract (CHAOS-3073). Maps every legacy Celery/Beat/API/registry/stream surface discovered in the Wave-0 audit to a target owner or explicit removal. See docs/architecture/transitional-workload-inventory.md for the update procedure and CI gate (ci/check_transitional_inventory.py).",
   "source_audit": "Wave-0 inventory audit, 147 surfaces (docs/plans/go-worker-cutover-implementation-plan.md CUT-01; TRD sec 6, 8.3)",
-  "row_count": 31,
+  "row_count": 27,
   "ownership_model": {
     "owner_role": "'primary' rows are the exclusive canonical claimant of a target_kind_id (a Beat entry, registry kind, stream, transport route, or a standalone celery task with no other owning row). 'contributor' rows are dispatch/trigger call sites, or implementation bodies, that feed an existing primary row and may freely share a target_owner value with other contributors.",
     "exclusivity_rule": "At most one row may be owner_role=primary for any given target_kind_id. CI enforces this; it does not require target_owner.value itself to be unique, since many contributor rows legitimately share one coarse target process description."
@@ -337,7 +337,7 @@
       "verification_status": "verified",
       "compatibility_dependency": "None. CHAOS-5353 deletes send_billing_notification, billing_emails.py and the /api/internal/worker-operational/billing route entirely; BillingHandler.Work (internal/jobs/operational/billinghandler.go) owns the completion fence, the owner-email lookup, all seven email renderings and the provider send -- no Python callback of any kind.",
       "deletion_evidence_requirement": "Already satisfied by this PR: registry.json kind `operational.billing_notification` passes Registry.ValidateStartup with BillingHandler as its concrete non-HTTP-bridge handler, and the compatibility runner import is removed from the Python API.",
-      "acceptance_test_id": "tests/test_credential_confusion_production_stack.py::test_the_deleted_billing_route_is_gone_not_merely_unused",
+      "acceptance_test_id": "tests/workers/test_helm_billing_edge_removed.py::test_no_workload_or_service_is_named_billing_edge",
       "notes": "CHAOS-5353: was the last operational COMPAT bridge; the seven email bodies are pinned byte-for-byte against the retired Python renderer by internal/jobs/operational/testdata/billing_email/*.json. CORRECTION: acceptance_test_id re-pointed here from tests/api/test_worker_operational_bridge.py (deleted -- worker_operational.py's last route, /heartbeat, was ported to native Go and the whole module had no route left)."
     },
     {
@@ -603,102 +603,6 @@
       "deletion_evidence_requirement": "Satisfied. registry.json kind `workgraph.build` resolves to a concrete non-HTTP-bridge handler (buildHandler); no compatibility runner import exists in the Python API to remove.",
       "acceptance_test_id": "tests/workers/job_contracts/test_registry.py",
       "notes": "CORRECTION: this row previously read python_compatibility, stale since this kind's HTTP bridge and its Python compute body were both already deleted outright with no fallback left to describe."
-    },
-    {
-      "id": "stream_surface:src/dev_health_ops/api/ingest/streams.py:15",
-      "surface": "internal ingest stream",
-      "class": "stream_surface",
-      "source": {
-        "file": "src/dev_health_ops/api/ingest/streams.py",
-        "line": 15
-      },
-      "queue_or_cadence": "consumer group ingest-consumers",
-      "dispatches": "run_ingest_consumer (Python) / dho stream-runner profile ingest (Go)",
-      "dispatch_mechanism": "stream_consumer_group",
-      "owner_role": "primary",
-      "target_owner": {
-        "type": "native_process",
-        "value": "stream-ingest"
-      },
-      "target_kind_id": "stream:ingest-consumers",
-      "current_implementation_state": "native_go",
-      "verification_status": "verified",
-      "compatibility_dependency": "Python Celery Beat launcher remains active in tandem pending Celery-off cutover.",
-      "deletion_evidence_requirement": "Corresponding Beat launcher entry and Celery consumer task removed; Go consumer group is sole consumer for 30 days with matching lag/throughput.",
-      "acceptance_test_id": "tests/workers/test_go_worker_alerts.py",
-      "notes": "Go consumer name go-internal-ingest, dependencies.go:345; groups match"
-    },
-    {
-      "id": "stream_surface:src/dev_health_ops/api/product_telemetry/streams.py:11",
-      "surface": "product telemetry stream",
-      "class": "stream_surface",
-      "source": {
-        "file": "src/dev_health_ops/api/product_telemetry/streams.py",
-        "line": 11
-      },
-      "queue_or_cadence": "consumer group product-telemetry-consumers",
-      "dispatches": "run_product_telemetry_consumer (Python) / dho stream-runner profile ingest (Go)",
-      "dispatch_mechanism": "stream_consumer_group",
-      "owner_role": "primary",
-      "target_owner": {
-        "type": "native_process",
-        "value": "stream-ingest"
-      },
-      "target_kind_id": "stream:product-telemetry-consumers",
-      "current_implementation_state": "native_go",
-      "verification_status": "verified",
-      "compatibility_dependency": "Python Celery Beat launcher remains active in tandem pending Celery-off cutover.",
-      "deletion_evidence_requirement": "Corresponding Beat launcher entry and Celery consumer task removed; Go consumer group is sole consumer for 30 days with matching lag/throughput.",
-      "acceptance_test_id": "tests/workers/test_go_worker_alerts.py",
-      "notes": "Go consumer name go-product-telemetry, dependencies.go:356; groups match"
-    },
-    {
-      "id": "stream_surface:src/dev_health_ops/api/external_ingest/streams.py:45",
-      "surface": "external ingest stream",
-      "class": "stream_surface",
-      "source": {
-        "file": "src/dev_health_ops/api/external_ingest/streams.py",
-        "line": 45
-      },
-      "queue_or_cadence": "consumer group external-ingest-consumers",
-      "dispatches": "run_external_ingest_consumer (Python) / dho stream-runner profile external (Go, singleton)",
-      "dispatch_mechanism": "stream_consumer_group",
-      "owner_role": "primary",
-      "target_owner": {
-        "type": "native_process",
-        "value": "stream-external"
-      },
-      "target_kind_id": "stream:external-ingest-consumers",
-      "current_implementation_state": "native_go",
-      "verification_status": "verified",
-      "compatibility_dependency": "Python Celery Beat launcher remains active in tandem pending Celery-off cutover.",
-      "deletion_evidence_requirement": "Corresponding Beat launcher entry and Celery consumer task removed; Go consumer group is sole consumer for 30 days with matching lag/throughput.",
-      "acceptance_test_id": "tests/workers/test_go_worker_alerts.py",
-      "notes": "Go consumer name go-external-ingest, dependencies.go:367; groups match"
-    },
-    {
-      "id": "stream_surface:src/dev_health_ops/api/webhooks/pagerduty.py:340",
-      "surface": "PagerDuty webhook event stream",
-      "class": "stream_surface",
-      "source": {
-        "file": "src/dev_health_ops/api/webhooks/pagerduty.py",
-        "line": 340
-      },
-      "queue_or_cadence": "pagerduty-webhook-consumers",
-      "dispatches": "internal/jobs/pagerduty (Go stream consumer)",
-      "dispatch_mechanism": "stream_consumer_group",
-      "owner_role": "primary",
-      "target_owner": {
-        "type": "native_process",
-        "value": "PagerDuty Go stream handler"
-      },
-      "target_kind_id": "stream:pagerduty_direct_dispatch",
-      "current_implementation_state": "native_go",
-      "verification_status": "verified",
-      "compatibility_dependency": "None. CHAOS-4105 deleted the Python direct write-then-.delay dispatch; the Go consumer group is the only reader.",
-      "deletion_evidence_requirement": "None. The stream itself is the native transport, not a transitional surface: the ingress writes it and internal/jobs/pagerduty consumes it under a Postgres receipt.",
-      "acceptance_test_id": "tests/api/webhooks/test_pagerduty_binding_receiver.py",
-      "notes": "Reconciled natively by internal/jobs/pagerduty (CHAOS-4105); rows are written through the providersync PagerDuty effect sinks."
     },
     {
       "id": "sync_dispatch_transport_route:contracts/sync-dispatch/v1/transport-routes.json:5",

@@ -61,3 +61,100 @@ zero semantics, supported scopes and dimensions, range limits, comparison
 rule, definition version, query version, source version, and freshness policy.
 The query response preserves source evidence references and reports the prior
 immediately preceding window of equal duration when comparison is requested.
+
+## Blocked hours in `work_item_state_durations_daily`
+
+`work_item_state_durations_daily` holds, for each day, the hours that work
+items spent in each normalized status. Blocked Work reads the rows whose
+status is `blocked`. An item's hours are `blocked` in two cases:
+
+1. **Status name or label.** The provider status maps to `blocked` (for
+   example a status named "Blocked" or "On Hold", or a label `blocked`).
+2. **An open blocker.** Another work item blocks it. This comes from the
+   blocking relations the providers report (`work_item_dependencies`): Jira
+   issue links, GitLab issue links, Linear relations, and for GitHub the
+   words "blocked by", "depends on" or "blocks" before an issue reference in
+   the issue text. GitHub has no native blocking relation in this data.
+
+For case 2 the item is `blocked` only while all of these hold:
+
+- its own status is not `done` or `canceled`;
+- the blocker is a synced work item of the same organization;
+- the relation is known to exist;
+- the blocker is open (until its completion time).
+
+In that interval `blocked` replaces the item's own status. The item's total
+hours in the day do not change.
+
+### Per-item Blocked Work evidence
+
+`work_item_blocked_durations_daily` stores the item-level evidence for a
+Blocked Work list and count. For every item the daily state worker processes
+that contributes state time to a day, it stores the blocked part of that time
+in `duration_hours`, together with the provider, work scope and team that the
+worker resolved for that snapshot.
+
+A row with `duration_hours = 0` is deliberate. It is written when a later
+compute finds that a previously blocked item has no blocked hours for that
+day. The stable row identity is organization, day, provider and work item;
+work scope and team are snapshot values, so a team or scope change cannot
+keep an old blocked result alive.
+
+Readers select the latest row by `computed_at` for each stable identity and
+only then keep rows with a positive duration. Filtering before selecting the
+latest row could show an item that a recompute has removed. The Blocked Work
+list and count read those latest positive rows. A `POST /api/v1/drilldown/issues`
+request with `filters.how.blocked: true` returns one row per provider and work
+item in its window, plus a `count` before the response limit. Team scope keeps
+the item-days recorded for that team before the window is reduced to one row.
+
+When the relation is known to exist:
+
+- **Start.** The provider's own time of the link, when the synced data
+  carries one (GitLab issue links and Linear relations carry it; Jira links
+  and relations read from text do not). If it does not, the first time a
+  sync saw the relation. The
+  second is too late when the link is older than the first sync that saw it,
+  so blocked hours can be too low. They are never too high: the creation time
+  of the two items is never used as the start.
+- **End.** When the provider no longer reports the relation, the last time a
+  sync saw it. A removed link is noticed when an item that carries it is
+  synced again by a sync that reads its relations. For a link of the
+  provider (Jira issue links, Linear relations, GitLab issue links) that is
+  either of the two items. For a relation read from text (GitHub, GitLab
+  description keywords, an issue key in text) it is the item that holds the
+  text; a sync of the other item says nothing about it. The GitHub Projects
+  v2 board sync reads no issue text, so it ends no relation. This end is
+  never too late. It can be too early by the time between the last sync that
+  saw the relation and its removal, and for the two cases named in the
+  limits below. The blocked hours of earlier days do not change when a link
+  is removed.
+
+Limits of the relation data:
+
+- A relation with no stored start gives no blocked hours.
+- A blocker that is not a synced work item, or a finished blocker that has no
+  completion time, gives no blocked hours. Missing data is not estimated.
+- The current status of an item (for example in `work_item_cycle_times`) is
+  not changed by a relation. Only the daily hours are.
+- **Relations and items not synced since the writer and read times were
+  stored.** Two cases end too early for data written before then, until the
+  next sync that reads the relation:
+  - **GitLab, description keyword `blocks`.** Such a stored relation does not
+    say if it came from an issue link or from the word in a description. It
+    then ends at its last sync when the blocked issue is synced later than
+    the blocker, and is open again when the blocker is synced again. A
+    relation synced since stores which issue writes it, and ends only when
+    that issue is synced without it.
+  - **GitHub issues on a Projects v2 board.** For an issue whose relations
+    were last read before the read time was stored, a board sync looks like
+    a sync that read the text, and its text relations end at the last sync
+    that read the text. Once a sync that reads the text has stored the read
+    time, a board sync ends nothing.
+
+  In both cases blocked hours can be too low, never too high.
+- **GitHub relations read from a comment** (a Linear bot's link-back). The
+  comments of an issue are optional data: when a sync cannot read them, or
+  reads only the first comments, it still writes the issue, and a relation
+  that only a comment held ends at the last sync that read it. Blocked hours
+  can be too low, never too high.

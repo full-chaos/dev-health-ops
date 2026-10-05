@@ -337,9 +337,9 @@ func LoadNativeFamilies(path string) (*NativeFamilies, error) {
 }
 
 // Catalog is the registered-operation catalog,
-// src/dev_health_ops/api/graphql/go_api_operations.json: the
+// contracts/graphql/v1/go_api_operations.json: the
 // (operation, document digest) pairs the edge dispatches by. It is the SAME
-// file `dev-hops go-api routing status` reports against.
+// file `dho goapi routing status` reports against.
 //
 // Why the matrix reads it: a routing row at the LIVE schema
 // digest whose document the catalog does not name cannot be dispatched --
@@ -358,6 +358,9 @@ type Catalog struct {
 func (c Catalog) Names(operation, documentDigest string) bool {
 	return c.documents[operation][documentDigest]
 }
+
+// OperationCount is the number of operations the catalog registers.
+func (c Catalog) OperationCount() int { return len(c.documents) }
 
 // Documents lists the digests the catalog registers for operation, sorted.
 func (c Catalog) Documents(operation string) []string {
@@ -417,6 +420,9 @@ func LoadCatalog(path string) (Catalog, error) {
 		// refuses anything else, including an explicit null; a raw message
 		// tells an absent key from a null one.
 		Kind json.RawMessage `json:"kind"`
+		// Legacy is present (and true) only for a text the operation accepted before its current one
+		// (CHAOS-8000 dual accept). It is still a document the catalog names, so it is a pair like any other.
+		Legacy json.RawMessage `json:"legacy"`
 	}
 	dec := json.NewDecoder(bytes.NewReader(raw))
 	dec.DisallowUnknownFields()
@@ -427,6 +433,9 @@ func LoadCatalog(path string) (Catalog, error) {
 	for _, entry := range entries {
 		if entry.Kind != nil && string(entry.Kind) != `"query"` && string(entry.Kind) != `"mutation"` {
 			return Catalog{}, fmt.Errorf("%s: operation %q has kind %s, want \"query\" or \"mutation\"", path, entry.Operation, entry.Kind)
+		}
+		if entry.Legacy != nil && string(entry.Legacy) != "true" {
+			return Catalog{}, fmt.Errorf("%s: operation %q has legacy %s, want the key absent or true", path, entry.Operation, entry.Legacy)
 		}
 		pairs = append(pairs, [2]string{entry.Operation, entry.Digest})
 	}

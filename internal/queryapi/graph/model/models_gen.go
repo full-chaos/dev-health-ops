@@ -136,20 +136,21 @@ type AIHotspotOverlapRow struct {
 }
 
 type AIImpactBucketRow struct {
-	Bucket                string   `json:"bucket"`
-	PrsTotal              int      `json:"prsTotal"`
-	PrsMerged             int      `json:"prsMerged"`
-	CycleTimeAvgHours     *float64 `json:"cycleTimeAvgHours,omitempty"`
-	ReviewsPerPr          *float64 `json:"reviewsPerPr,omitempty"`
-	ChangesRequestedPerPr *float64 `json:"changesRequestedPerPr,omitempty"`
-	ReworkPrs             int      `json:"reworkPrs"`
-	ReworkRate            *float64 `json:"reworkRate,omitempty"`
-	RevertPrs             int      `json:"revertPrs"`
-	RevertRate            *float64 `json:"revertRate,omitempty"`
-	IncidentsCount        int      `json:"incidentsCount"`
-	IncidentRate          *float64 `json:"incidentRate,omitempty"`
-	TestGapPrs            int      `json:"testGapPrs"`
-	TestGapRate           *float64 `json:"testGapRate,omitempty"`
+	Bucket                string           `json:"bucket"`
+	PrsTotal              int              `json:"prsTotal"`
+	PrsMerged             int              `json:"prsMerged"`
+	CycleTimeAvgHours     *float64         `json:"cycleTimeAvgHours,omitempty"`
+	ReviewsPerPr          *float64         `json:"reviewsPerPr,omitempty"`
+	ChangesRequestedPerPr *float64         `json:"changesRequestedPerPr,omitempty"`
+	ReworkPrs             int              `json:"reworkPrs"`
+	ReworkRate            *float64         `json:"reworkRate,omitempty"`
+	RevertPrs             int              `json:"revertPrs"`
+	RevertRate            *float64         `json:"revertRate,omitempty"`
+	IncidentsCount        int              `json:"incidentsCount"`
+	IncidentRate          *float64         `json:"incidentRate,omitempty"`
+	TestGapPrs            int              `json:"testGapPrs"`
+	TestGapRate           *float64         `json:"testGapRate,omitempty"`
+	Day                   graphqldate.Date `json:"day"`
 }
 
 type AIImpactBucketTotals struct {
@@ -226,6 +227,10 @@ type AIOpportunity struct {
 	Score               float64                   `json:"score"`
 	EvidenceRefs        []string                  `json:"evidenceRefs"`
 	WorkGraphDrilldowns []AIWorkGraphDrilldownRef `json:"workGraphDrilldowns"`
+	// The repository's full name in the org's repository catalogue (CHAOS-8114). Null = the catalogue holds no name for ``repoId``, or the catalogue could not be read. It is never the id.
+	RepoName *string `json:"repoName,omitempty"`
+	// The name of the team ``teamId`` names, from the org's team catalogue (CHAOS-8114). Null = the opportunity has no team, the catalogue holds no name for it, or the catalogue could not be read. It is never the id.
+	TeamName *string `json:"teamName,omitempty"`
 }
 
 type AIReviewLoadResult struct {
@@ -322,6 +327,10 @@ type AIWorkflowGraphEdgeOut struct {
 type AIWorkflowGraphNodeOut struct {
 	NodeType string `json:"nodeType"`
 	NodeID   string `json:"nodeId"`
+	// The node's display name (CHAOS-8113). By ``nodeType``: ``pr`` = the pull request's title; ``deployment`` = "<environment> deploy"; ``incident`` = "<title> (<status>)"; ``issue`` = the issue's own id when it is a readable key. Null = no name is known: the catalogue does not name the node, the name read failed, or the type carries no name (see ``nameExpected``). It is never an id that is, or holds, a UUID or an opaque hash. Every end of an edge in ``edges`` that has an id has a node in ``nodes`` with the same type and id, so a client names an edge end by that node.
+	DisplayName *string `json:"displayName,omitempty"`
+	// True = nodes of this type carry a name (``pr``, ``deployment``, ``incident``, ``issue``): a null ``displayName`` is then a gap, and a client draws "Not reported". False = the type has no name by design (a review outcome, an AI workflow run, a diff): a client draws the type words alone.
+	NameExpected bool `json:"nameExpected"`
 }
 
 type AiAttributedPr struct {
@@ -332,6 +341,8 @@ type AiAttributedPr struct {
 	WorkType *string    `json:"workType,omitempty"`
 	TeamID   *string    `json:"teamId,omitempty"`
 	MergedAt *time.Time `json:"mergedAt,omitempty"`
+	RepoName *string    `json:"repoName,omitempty"`
+	TeamName *string    `json:"teamName,omitempty"`
 }
 
 type AiAttributedPrsResult struct {
@@ -409,13 +420,47 @@ type CapacityDistribution struct {
 	Days []CapacityDistributionBin `json:"days,omitempty"`
 	// Fixed-date mode: items completed by the target date, one bin per distinct total.
 	Items []CapacityDistributionBin `json:"items,omitempty"`
+	// The number of simulation runs behind each mode (CHAOS-8477): the counts of one
+	// mode's bins sum to it, the runs that did not finish included. The modes of one
+	// forecast come from one simulation and hold the same number of runs. The share
+	// of the runs that finished is served on each bin (cumulativeShare).
+	Runs int `json:"runs"`
+	// The number of days-mode runs that did NOT finish inside the simulated horizon
+	// (CHAOS-8477): the simulation stops a run after ``horizonDays`` days, with
+	// items still open, and records it in the ``days`` bin at ``horizonDays``. Such
+	// a run is not done. A run that needs exactly ``horizonDays`` days is recorded
+	// in the same bin and cannot be told apart, so it is counted here too. Null =
+	// the days mode did not simulate (``days`` is null).
+	UnfinishedRuns *int `json:"unfinishedRuns,omitempty"`
+	// The horizon of the days simulation, in days (CHAOS-8477): 365. A ``days`` bin
+	// with this value means "this many days or more".
+	HorizonDays int `json:"horizonDays"`
 }
 
 type CapacityDistributionBin struct {
-	// The outcome: a day count (days) or an item count (items).
+	// The outcome: a day count (days) or an item count (items). A day count is the
+	// number of days after the day the forecast was computed: the same axis as
+	// p50Days, p85Days and p95Days (p50Date is that day plus p50Days). A day count
+	// equal to the distribution's horizonDays means "that many days or more": the
+	// simulation stops a run there, done or not.
 	Value int `json:"value"`
-	// How many simulation runs ended on this value.
+	// How many simulation runs ended on this value. In the days bin at horizonDays: how many runs were stopped there.
 	Count int `json:"count"`
+	// The share of ALL the mode's simulation runs (CHAOS-8477), from the same Monte
+	// Carlo distribution as p50Days / p85Days / p95Days: 0 to 1, never lower than
+	// on the bin before. In the days mode it is the share of the runs that FINISHED
+	// (the target items were done) on or before that day. A run that reached the
+	// horizon is not done: the bin at horizonDays adds nothing to the share, so the
+	// last share is below 1 when any run reached the horizon (unfinishedRuns), and
+	// it is 1 only when every run finished. In the items mode it is the share of
+	// the runs with this many items or fewer, and 1 on the last bin. The percentile
+	// days are an interpolated rank of the same runs: the day on which this share
+	// first reaches 0.50 and p50Days both lie between the outcomes of the same two
+	// consecutive ranked runs, so they are the same day unless those two runs ended
+	// on different days (and so for 0.85 and p85Days, 0.95 and p95Days). When so
+	// many runs reached the horizon that the share never reaches a percentile, that
+	// percentile day is horizonDays and means "horizonDays or more".
+	CumulativeShare float64 `json:"cumulativeShare"`
 }
 
 type CapacityForecast struct {
@@ -467,6 +512,7 @@ type CapacityForecastFilterInput struct {
 
 type CapacityForecastInput struct {
 	TeamID      *string           `json:"teamId,omitempty"`
+	TeamIds     []string          `json:"teamIds,omitempty"`
 	WorkScopeID *string           `json:"workScopeId,omitempty"`
 	TargetItems *int              `json:"targetItems,omitempty"`
 	TargetDate  *graphqldate.Date `json:"targetDate,omitempty"`
@@ -931,6 +977,13 @@ type ImproveOpportunity struct {
 	Severity          string                 `json:"severity"`
 	EvidenceRefs      []string               `json:"evidenceRefs"`
 	RecommendedAction string                 `json:"recommendedAction"`
+	// The measured metric the rule compared, in `unit`. The same number the rationale states.
+	Value float64 `json:"value"`
+	// The rule's limit, in `unit`. A fixed constant of the detector, not a per-organization setting.
+	Threshold float64                `json:"threshold"`
+	Unit      ImproveOpportunityUnit `json:"unit"`
+	// Which side of the threshold fires the rule: ABOVE (value > threshold) or BELOW (value < threshold).
+	ThresholdDirection ThresholdDirection `json:"thresholdDirection"`
 }
 
 type MaintainerShare struct {
@@ -984,6 +1037,8 @@ type OperatingReviewDelta struct {
 	Absolute   float64  `json:"absolute"`
 	Percent    *float64 `json:"percent,omitempty"`
 	Status     string   `json:"status"`
+	// False = the prior week holds no stored value for the metric (CHAOS-8115); see ``OperatingReviewMetric.hasData``. ``priorValue`` is then a 0 placeholder, and ``absolute``, ``percent`` and ``status`` compare with that placeholder: a client draws "No data" for the prior week and no change.
+	HasPriorData bool `json:"hasPriorData"`
 }
 
 type OperatingReviewInput struct {
@@ -997,6 +1052,8 @@ type OperatingReviewMetric struct {
 	Value float64               `json:"value"`
 	Unit  string                `json:"unit"`
 	Delta *OperatingReviewDelta `json:"delta"`
+	// True = the week holds a stored value for the metric (CHAOS-8115). False = no row of the metric's daily table in the week, only NULL values, or a read that failed: ``value`` is then a 0 placeholder, not a measured zero, and a client draws "No data". True with ``value`` 0 is a stored zero.
+	HasData bool `json:"hasData"`
 }
 
 type OperatingReviewSection struct {
@@ -1196,6 +1253,20 @@ type RepoBusFactor struct {
 	EvidenceSampleCount int               `json:"evidenceSampleCount"`
 }
 
+type RepoCoverageBaseline struct {
+	RepoID string `json:"repoId"`
+	// The repository's full name in the org's catalogue. Null = the catalogue holds no name; never the id.
+	RepoName *string `json:"repoName,omitempty"`
+	// Mean line coverage, in percent (0 to 100), over the days of the 30 that hold a value. Null = fewer than 7 such days (``lineDays``): then there is no baseline. Never 0 for "none", never the current value.
+	LineBaselinePct *float64 `json:"lineBaselinePct,omitempty"`
+	// Days of the 30 that hold a line coverage value.
+	LineDays int `json:"lineDays"`
+	// Mean branch coverage, in percent; the same rules as ``lineBaselinePct``.
+	BranchBaselinePct *float64 `json:"branchBaselinePct,omitempty"`
+	// Days of the 30 that hold a branch coverage value.
+	BranchDays int `json:"branchDays"`
+}
+
 type ReportRunConnection struct {
 	Items []ReportRunType `json:"items"`
 	Total int             `json:"total"`
@@ -1217,11 +1288,21 @@ type ReportRunType struct {
 }
 
 type ReviewEdgeRow struct {
-	Reviewer     string           `json:"reviewer"`
+	// The stored identity of the reviewer: a provider login or a display name. Deprecated in favour of reviewerName and reviewerKey (CHAOS-8485); it stays for clients that still read it.
+	Reviewer string `json:"reviewer"`
+	// The stored identity of the author: the pull request's author e-mail address when there is one, else its author name, else "unknown". It can be an e-mail address. Deprecated in favour of authorName and authorKey (CHAOS-8485): a client that may not show an e-mail address must not select it.
 	Author       string           `json:"author"`
 	ReviewsCount int              `json:"reviewsCount"`
 	Day          graphqldate.Date `json:"day"`
 	RepoID       *string          `json:"repoId,omitempty"`
+	// The reviewer's display name (CHAOS-8485): the display name of the org's identity the stored reviewer belongs to; else the stored reviewer itself when it is not an e-mail address (a provider login). Never an e-mail address. Null = no name is known.
+	ReviewerName *string `json:"reviewerName,omitempty"`
+	// The author's display name (CHAOS-8485): the display name of the org's identity the stored author belongs to; else, for an author stored by e-mail address, the author name the provider gave on the pull request; else the stored author itself when it is not an e-mail address. Never an e-mail address. Null = no name is known.
+	AuthorName *string `json:"authorName,omitempty"`
+	// An opaque key of the reviewer inside the org (CHAOS-8485): the same person has the same key in every answer, as reviewer and as author when the identity resolves. It is not an e-mail address and not a name; use it only to tell people apart and to join rows.
+	ReviewerKey string `json:"reviewerKey"`
+	// An opaque key of the author inside the org (CHAOS-8485); see reviewerKey.
+	AuthorKey string `json:"authorKey"`
 }
 
 type ReviewEdgesInput struct {
@@ -1229,12 +1310,17 @@ type ReviewEdgesInput struct {
 	SinceDate graphqldate.Date `json:"sinceDate"`
 	UntilDate graphqldate.Date `json:"untilDate"`
 	RepoIds   []string         `json:"repoIds,omitempty"`
-	Limit     int              `json:"limit"`
+	// Team ids (CHAOS-7785). Narrows the edges to the repositories these teams OWN (team_repo_ownership, as of now); person membership is never read. Combined with ``repoIds`` the two both apply (a pair must be on a listed repository and on a team-owned one).
+	TeamIds []string `json:"teamIds,omitempty"`
+	Limit   int      `json:"limit"`
 }
 
 type ReviewEdgesResult struct {
-	Edges      []ReviewEdgeRow `json:"edges"`
-	TotalCount int             `json:"totalCount"`
+	Edges []ReviewEdgeRow `json:"edges"`
+	// Number of deduplicated (pair, day) rows the filters match, before the ``limit`` cut (CHAOS-7786). One row is one reviewer-to-author pair on one day, so this counts rows, not distinct pairs. Never less than ``edges``.
+	TotalCount int `json:"totalCount"`
+	// True when ``totalCount`` is greater than the number of ``edges`` returned: the list was cut by ``limit`` (CHAOS-7786).
+	Truncated bool `json:"truncated"`
 }
 
 type ReworkThemeAllocation struct {
@@ -1369,6 +1455,41 @@ type SummarySentence struct {
 	ID           string `json:"id"`
 	Text         string `json:"text"`
 	EvidenceLink string `json:"evidenceLink"`
+}
+
+type TestOpsJobFailureGroup struct {
+	// The workflow (GitHub Actions) or pipeline (GitLab CI) name of the runs. Null = the job runs have no stored pipeline row, or the row has no name.
+	WorkflowName *string `json:"workflowName,omitempty"`
+	JobName      string  `json:"jobName"`
+	// The CI provider of the runs, as the pipeline row stores it (for example ``github_actions``). Null = the job runs have no stored pipeline row.
+	Provider *string `json:"provider,omitempty"`
+	// Job runs of this group that started in the window and reached a result (success, failure or cancelled). A skipped, queued or running job is not a run.
+	Runs int `json:"runs"`
+	// The runs that failed (a failure, an error or a timeout). Always above 0: a group with no failed run is not served.
+	FailedRuns int `json:"failedRuns"`
+	// ``failedRuns / runs``: a share from 0 to 1, NOT a percent. Null = no run to divide by (not served today: every served group has a failed run).
+	FailureRate *float64 `json:"failureRate,omitempty"`
+}
+
+type TestOpsJobFailuresInput struct {
+	// First day of the window (UTC), included. The day a job run started places it.
+	SinceDate graphqldate.Date `json:"sinceDate"`
+	// Last day of the window (UTC), included. At most 90 days after ``sinceDate`` (a "90 days" window of today minus 90 days to today is served); a later day, or a day before ``sinceDate``, is an error, not a cut answer.
+	UntilDate graphqldate.Date `json:"untilDate"`
+	RepoIds   []string         `json:"repoIds,omitempty"`
+	// Team ids. Narrows the runs to the repositories these teams OWN (team_repo_ownership, as of now); person membership is never read. With ``repoIds`` both apply.
+	TeamIds []string `json:"teamIds,omitempty"`
+	// Most groups to serve: 1 to 100.
+	Limit int `json:"limit"`
+}
+
+type TestOpsJobFailuresResult struct {
+	// The groups with the most failed runs first (then by job name, workflow name and provider), cut at ``limit``.
+	Groups []TestOpsJobFailureGroup `json:"groups"`
+	// Number of groups that match before the ``limit`` cut. Never less than ``groups``.
+	TotalCount int `json:"totalCount"`
+	// True = ``totalCount`` is above the number of ``groups`` served.
+	Truncated bool `json:"truncated"`
 }
 
 type TestOpsRiskBreakdownItem struct {
@@ -2086,6 +2207,49 @@ func (e ImproveOpportunityKind) MarshalGQL(w io.Writer) {
 	fmt.Fprint(w, strconv.Quote(e.String()))
 }
 
+type ImproveOpportunityUnit string
+
+const (
+	ImproveOpportunityUnitHours ImproveOpportunityUnit = "HOURS"
+	ImproveOpportunityUnitRatio ImproveOpportunityUnit = "RATIO"
+	ImproveOpportunityUnitItems ImproveOpportunityUnit = "ITEMS"
+)
+
+var AllImproveOpportunityUnit = []ImproveOpportunityUnit{
+	ImproveOpportunityUnitHours,
+	ImproveOpportunityUnitRatio,
+	ImproveOpportunityUnitItems,
+}
+
+func (e ImproveOpportunityUnit) IsValid() bool {
+	switch e {
+	case ImproveOpportunityUnitHours, ImproveOpportunityUnitRatio, ImproveOpportunityUnitItems:
+		return true
+	}
+	return false
+}
+
+func (e ImproveOpportunityUnit) String() string {
+	return string(e)
+}
+
+func (e *ImproveOpportunityUnit) UnmarshalGQL(v any) error {
+	str, ok := v.(string)
+	if !ok {
+		return fmt.Errorf("enums must be strings")
+	}
+
+	*e = ImproveOpportunityUnit(str)
+	if !e.IsValid() {
+		return fmt.Errorf("%s is not a valid ImproveOpportunityUnit", str)
+	}
+	return nil
+}
+
+func (e ImproveOpportunityUnit) MarshalGQL(w io.Writer) {
+	fmt.Fprint(w, strconv.Quote(e.String()))
+}
+
 type MeasureInput string
 
 const (
@@ -2536,6 +2700,47 @@ func (e *TeamAttributionSource) UnmarshalGQL(v any) error {
 }
 
 func (e TeamAttributionSource) MarshalGQL(w io.Writer) {
+	fmt.Fprint(w, strconv.Quote(e.String()))
+}
+
+type ThresholdDirection string
+
+const (
+	ThresholdDirectionAbove ThresholdDirection = "ABOVE"
+	ThresholdDirectionBelow ThresholdDirection = "BELOW"
+)
+
+var AllThresholdDirection = []ThresholdDirection{
+	ThresholdDirectionAbove,
+	ThresholdDirectionBelow,
+}
+
+func (e ThresholdDirection) IsValid() bool {
+	switch e {
+	case ThresholdDirectionAbove, ThresholdDirectionBelow:
+		return true
+	}
+	return false
+}
+
+func (e ThresholdDirection) String() string {
+	return string(e)
+}
+
+func (e *ThresholdDirection) UnmarshalGQL(v any) error {
+	str, ok := v.(string)
+	if !ok {
+		return fmt.Errorf("enums must be strings")
+	}
+
+	*e = ThresholdDirection(str)
+	if !e.IsValid() {
+		return fmt.Errorf("%s is not a valid ThresholdDirection", str)
+	}
+	return nil
+}
+
+func (e ThresholdDirection) MarshalGQL(w io.Writer) {
 	fmt.Fprint(w, strconv.Quote(e.String()))
 }
 

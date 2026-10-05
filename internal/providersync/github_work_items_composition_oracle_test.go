@@ -3,6 +3,7 @@ package providersync
 import (
 	"context"
 
+	"github.com/full-chaos/dev-health-ops/internal/jobs/metrics/workitemmetrics"
 	"github.com/full-chaos/dev-health-ops/internal/teamattribution"
 )
 
@@ -48,4 +49,12 @@ func (source *githubMultiDayOracleSource) LoadStoredInheritableEdges(
 ) ([]githubWorkItemDependencyRow, error) {
 	source.storedEdgeLoads++
 	return nil, nil
+}
+
+// LoadStoredBlockingFacts: this double holds no stored blocking relation
+// (CHAOS-8493), so no item of its units has an open blocker.
+func (source *githubMultiDayOracleSource) LoadStoredBlockingFacts(
+	context.Context, Claim, []string, []workitemmetrics.BlockingRelation,
+) ([]workitemmetrics.BlockingRelation, []workitemmetrics.RelationEnd, error) {
+	return nil, nil, nil
 }

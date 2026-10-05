@@ -254,17 +254,41 @@ func TestEnableWarnsOnEveryUnprovenRowItActuallyWrites(t *testing.T) {
 	t.Setenv(bearerEnvVar, verbTestBearer)
 	server := startQueryAPI(t, localSchemaDigest(), map[string]string{verbTestOperation: digest, verbTestUnlimitedOperation: otherDigest})
 
-	// An operation the ledger names no limit for, and that has no proof run
-	// for this build, is REFUSED outright.
-	_, _, err := captureVerb(t, enableArgs(server, dsn, catalogPath, "-operations", verbTestUnlimitedOperation)...)
-	if err == nil {
-		t.Fatal("enable wrote a row for a build with no deployed_executed proof and no ledger limit")
+	// A catalog operation the ledger names no limit for, with no proof run for
+	// this build, is admitted by the catalog rule (CHAOS-8586) -- and says so,
+	// per row, at the moment and on the row, never as a named limit.
+	out, errOut, err := captureVerb(t, enableArgs(server, dsn, catalogPath, "-operations", verbTestUnlimitedOperation)...)
+	if err != nil {
+		t.Fatalf("enable of a catalog operation with no proof and no ledger limit: %v", err)
 	}
-	assertNoRows(t, dsn)
+	for _, want := range []string{
+		"go_api_routing.enabled_catalog_rule",
+		"operation=" + verbTestUnlimitedOperation,
+		"stage_evidence=none",
+		"candidate_build=" + verbTestBuild,
+		"dry_run=false",
+	} {
+		if !strings.Contains(errOut, want) {
+			t.Fatalf("the catalog-rule line is missing %q.\nstderr:\n%s", want, errOut)
+		}
+	}
+	if strings.Contains(errOut, "enabled_named_limit") || strings.Contains(out, "(NAMED-LIMIT ") {
+		t.Fatalf("a catalog-rule enablement was reported as a named limit.\nstdout:\n%s\nstderr:\n%s", out, errOut)
+	}
+	if !strings.Contains(out, "(CATALOG-RULE)") || !strings.Contains(out, "proven=0 named_limit=0 catalog_rule=1") {
+		t.Fatalf("the report does not mark the row CATALOG-RULE:\n%s", out)
+	}
+	var catalogEvidence string
+	if err := queryRow(t, dsn, `SELECT review_evidence FROM go_api_routing_state WHERE selected_operation = '`+verbTestUnlimitedOperation+`'`, &catalogEvidence); err != nil {
+		t.Fatal(err)
+	}
+	if catalogEvidence != goapiproof.CatalogRuleEvidence("the end-to-end verb fixture") {
+		t.Fatalf("review_evidence = %q, want the CATALOG-RULE prefix", catalogEvidence)
+	}
 
 	// An operation the ledger names a limit for is written AND the warning
 	// names it.
-	out, errOut, err := captureVerb(t, enableArgs(server, dsn, catalogPath)...)
+	out, errOut, err = captureVerb(t, enableArgs(server, dsn, catalogPath)...)
 	if err != nil {
 		t.Fatalf("enable of a ledger-limited operation: %v", err)
 	}
@@ -288,7 +312,7 @@ func TestEnableWarnsOnEveryUnprovenRowItActuallyWrites(t *testing.T) {
 	// evidence carries it, which is what `status` reads to keep saying
 	// NAMED-LIMIT for as long as the row is in force.
 	var evidence string
-	if err := queryRow(t, dsn, `SELECT review_evidence FROM go_api_routing_state`, &evidence); err != nil {
+	if err := queryRow(t, dsn, `SELECT review_evidence FROM go_api_routing_state WHERE selected_operation = '`+verbTestOperation+`'`, &evidence); err != nil {
 		t.Fatal(err)
 	}
 	if !goapiproof.HasNamedLimitEvidence(evidence) {

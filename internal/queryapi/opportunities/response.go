@@ -19,6 +19,7 @@ package opportunities
 import (
 	"context"
 	"fmt"
+	"math"
 	"sort"
 	"time"
 
@@ -32,6 +33,44 @@ type Card struct {
 	Rationale            string   `json:"rationale"`
 	EvidenceLinks        []string `json:"evidence_links"`
 	SuggestedExperiments []string `json:"suggested_experiments"`
+
+	// The move the card is about, as values (CHAOS-8109). Before, the size
+	// and the direction of the move were only inside the rationale sentence
+	// ("... climbed 33% in the last 7 days."), so a caller that wanted to show
+	// them had to parse served text. Go-only fields: the Python reference
+	// never had them.
+
+	// ChangePercent is the metric's delta_pct of the Home response this card
+	// was built from, unrounded and signed: the same number Home serves for
+	// the metric, so the two surfaces cannot disagree. Null on the fallback
+	// card ("Maintain steady flow"), which is about no metric: no move is not
+	// a move of 0.
+	ChangePercent *float64 `json:"change_percent"`
+	// Direction is "up" for a metric that climbed and "down" for one that
+	// fell: the sign of ChangePercent, as a word. It is NOT good or bad (a
+	// card exists only for a move the wrong way; which way that is depends on
+	// the metric). Null on the fallback card.
+	Direction *string `json:"direction"`
+	// RangeDays and CompareDays are the comparison window ChangePercent was
+	// computed over: the request's own time filter (the current window and
+	// the window before it).
+	RangeDays   int `json:"range_days"`
+	CompareDays int `json:"compare_days"`
+}
+
+// The two values of Card.Direction.
+const (
+	DirectionUp   = "up"
+	DirectionDown = "down"
+)
+
+// directionFor is the direction of a worsened metric's move. A worsened delta
+// is never 0 (isWorsened), so there is no third value.
+func directionFor(d home.MetricDelta) string {
+	if d.DeltaPct < 0 {
+		return DirectionDown
+	}
+	return DirectionUp
 }
 
 // Response is the wire shape of OpportunitiesResponse (schemas.py:205-206).
@@ -103,6 +142,32 @@ func suggestedExperimentsFor(metric string) []string {
 	return defaultSuggestedExperiments
 }
 
+// isWorsened reports whether the metric moved the wrong way for its polarity.
+func isWorsened(d home.MetricDelta) bool {
+	if home.LowerIsBetter(d.Metric) {
+		return d.DeltaPct > 0
+	}
+	return d.DeltaPct < 0
+}
+
+// titleFor: "Reduce X" for a lower-is-better metric, "Recover X" for a
+// higher-is-better one (the verbs the Improve hero uses).
+func titleFor(d home.MetricDelta) string {
+	if home.LowerIsBetter(d.Metric) {
+		return fmt.Sprintf("Reduce %s", d.Label)
+	}
+	return fmt.Sprintf("Recover %s", d.Label)
+}
+
+// rationaleFor says "climbed" or "fell" with the size of the move.
+func rationaleFor(d home.MetricDelta, rangeDays int) string {
+	verb := "climbed"
+	if d.DeltaPct < 0 {
+		verb = "fell"
+	}
+	return fmt.Sprintf("%s %s %.0f%% in the last %d days.", d.Label, verb, math.Abs(d.DeltaPct), rangeDays)
+}
+
 // primaryScopeID ports _primary_scope_id (services/opportunities.py:112-115).
 func primaryScopeID(f home.Filters) string {
 	if len(f.Scope.IDs) > 0 {
@@ -117,41 +182,48 @@ func primaryScopeID(f home.Filters) string {
 // composes at (it imports and calls build_home_response, never a
 // ClickHouse/Postgres reader directly).
 func FromHomeResponse(h *home.Response, f home.Filters) *Response {
-	// "negative" is build_opportunities_response's own variable name
-	// (services/opportunities.py:71) for deltas with delta_pct > 0 --
-	// kept as a doc note here, not a Go identifier, since the Python name
-	// does not describe what it holds.
-	var positive []home.MetricDelta
+	// An opportunity is a metric that moved the WRONG way, by polarity: a
+	// lower-is-better metric that climbed (delta_pct > 0), or a
+	// higher-is-better metric that fell (delta_pct < 0). An improvement is not
+	// an opportunity. (The Python build_opportunities_response kept every
+	// delta_pct > 0 whatever the metric, so a climbing throughput became a
+	// "Reduce Throughput" card: CHAOS-7776. This is an intentional divergence.)
+	var worsened []home.MetricDelta
 	for _, d := range h.Deltas {
-		if d.DeltaPct > 0 {
-			positive = append(positive, d)
+		if isWorsened(d) {
+			worsened = append(worsened, d)
 		}
 	}
-	// sorted(..., reverse=True) is stable: equal delta_pct values keep
-	// their original _METRICS order (services/home.py) -- sort.SliceStable
-	// preserves the same guarantee.
-	sort.SliceStable(positive, func(i, j int) bool {
-		return positive[i].DeltaPct > positive[j].DeltaPct
+	// Ranked by the size of the move; sort.SliceStable keeps the original
+	// _METRICS order for equal sizes, as Python's stable sort did.
+	sort.SliceStable(worsened, func(i, j int) bool {
+		return math.Abs(worsened[i].DeltaPct) > math.Abs(worsened[j].DeltaPct)
 	})
 
-	n := len(positive)
+	n := len(worsened)
 	if n > 4 {
 		n = 4
 	}
-	ranked := positive[:n]
+	ranked := worsened[:n]
 
 	scopeID := primaryScopeID(f)
 	cards := make([]Card, 0, len(ranked))
 	for idx, delta := range ranked {
+		changePercent := delta.DeltaPct
+		direction := directionFor(delta)
 		cards = append(cards, Card{
 			ID:        fmt.Sprintf("opp-%d", idx+1),
-			Title:     fmt.Sprintf("Reduce %s", delta.Label),
-			Rationale: fmt.Sprintf("%s climbed %.0f%% in the last %d days.", delta.Label, delta.DeltaPct, f.Time.RangeDays),
+			Title:     titleFor(delta),
+			Rationale: rationaleFor(delta, f.Time.RangeDays),
 			EvidenceLinks: []string{fmt.Sprintf(
 				"/api/v1/explain?metric=%s&scope_type=%s&scope_id=%s&range_days=%d&compare_days=%d",
 				delta.Metric, f.Scope.Level, scopeID, f.Time.RangeDays, f.Time.CompareDays,
 			)},
 			SuggestedExperiments: suggestedExperimentsFor(delta.Metric),
+			ChangePercent:        &changePercent,
+			Direction:            &direction,
+			RangeDays:            f.Time.RangeDays,
+			CompareDays:          f.Time.CompareDays,
 		})
 	}
 
@@ -165,6 +237,9 @@ func FromHomeResponse(h *home.Response, f home.Filters) *Response {
 				f.Scope.Level, scopeID,
 			)},
 			SuggestedExperiments: []string{"Share the current playbook with new teams."},
+			// No metric moved the wrong way: no change and no direction.
+			RangeDays:   f.Time.RangeDays,
+			CompareDays: f.Time.CompareDays,
 		})
 	}
 

@@ -15,9 +15,7 @@ so a `GATE PASSED. [8/8 ...]` line says nothing about a Go diff. Any change unde
 
 ```bash
 cd <your ops worktree root>
-UV_CACHE_DIR="$(git rev-parse --show-toplevel)/.uv-cache" SETUPTOOLS_SCM_PRETEND_VERSION=0.0.0 \
-  uv sync --all-extras --dev --no-install-project   # once per worktree — see AGENTS.md § Worktrees and branches
-PYTHON="$PWD/.venv/bin/python" bash ci/check_go.sh all
+bash ci/check_go.sh all
 ```
 
 Expect `rc=0`. The `test`/`race` verbs alone report ~118 `ok` package lines;
@@ -28,7 +26,7 @@ locally** — `all` has required Docker unconditionally since `multi-replica-wor
 was added, `check_integration` is not a new prerequisite, only new time.
 
 Three verbs, in ascending cost:
-- `fast` — format + vet + unit + live-python-oracles + build + contract +
+- `fast` — format + vet + unit + build + contract +
   multi-replica-workers + an integration shard **plan** only (no execution,
   no race detector). The quick local-iteration mode.
 - `ci` — `fast` plus the race detector. Byte-for-byte what `all` ran before
@@ -47,46 +45,16 @@ For fast local iteration on one package without paying for the whole suite:
 GOWORK=off go test -mod=readonly -tags=integration -count=1 ./internal/<pkg>/...
 ```
 
-## Why both the venv and `PYTHON` are required
+## No Python for the Go gate
 
-Many Go tests are **live-Python oracles**: they shell out to a Python
-interpreter that imports real `dev_health_ops` modules and compare its output
-against the Go implementation byte-for-byte. That interpreter is resolved from
-the *environment*, not from the worktree, and it is resolved two different ways
-in two different places:
-
-| Call site | Resolution |
-|---|---|
-| synccoverage / fernet oracles | `<root>/.venv/bin/python`, falling back to `python3` only when the venv is **absent** |
-| `pythonExecutable` (`internal/providersync/capabilities_test.go`) | `$PYTHON`, else bare `python3` from PATH |
-
-So a worktree needs **both**: a `.venv` for the first group, and `PYTHON`
-exported for the second. Missing either produces a failure that reads exactly
-like a code defect in a file you never touched.
-
-Observed failure modes, both environment and neither a real regression:
-
-```
-# no .venv in the worktree
-ModuleNotFoundError: No module named 'pydantic'
-
-# .venv present, PYTHON unset -> bare python3 from PATH
-ModuleNotFoundError: No module named 'radon'
-```
-
-A missing module that IS declared in `pyproject.toml` is the signature. Fix the
-environment before reading the diff. This is the same PATH-resolution class as
-CHAOS-3913 (lefthook resolving a global `mypy`/`ruff`), in a third place.
+The live-Python oracles (Go tests that started the Python implementation and
+compared answers) were deleted (CHAOS-7308): Go is the implementation of
+record. The recorded answers stay as plain Go regression tests (frozen
+goldens) and need no interpreter, no `.venv` and no `PYTHON`. A Go test that
+needs Python is a defect; do not add one.
 
 ## Hard rules
 
-- **Never build the worktree venv with pyenv.** Use the `uv sync` recipe above
-  (canonical form: `AGENTS.md` § Worktrees and branches). It is the sanctioned
-  path precisely because creating the venv under pyenv is awkward; this is
-  settled, do not re-derive a pip alternative. A bare `uv sync --all-extras
-  --dev` without `UV_CACHE_DIR` and `--no-install-project` reintroduces the
-  shared-cache lock contention and setuptools_scm hang the canonical recipe
-  exists to avoid (CHAOS-4411 / CHAOS-4181 / CHAOS-4407).
 - **`ok` does not mean "ran".** Env-gated suites skip and the package still
   prints `ok`. Count before believing a green:
   ```bash
@@ -112,34 +80,18 @@ CHAOS-3913 (lefthook resolving a global `mypy`/`ruff`), in a third place.
   or `integration` now.
 - **A red check means no merge.** No diagnosed exclusions.
 
-## Cross-language parity oracles
+## Frozen goldens
 
-Changing anything that exists in **both** Python and Go — the sync coverage
-payload builder is the live example — means the parity oracle must pass, and it
-sits behind its own gate:
-
-```bash
-PYTHON="$PWD/.venv/bin/python" \
-DEV_HEALTH_LIVE_PYTHON_ORACLES=1 \
-DEV_HEALTH_LIVE_PYTHON_ORACLE_PROOF_DIR=/tmp/oracle-proof \
-  go test ./internal/synccoverage/ -run TestPayloadMatchesLivePythonProduction -count=1
-```
-
-Without the env vars it **skips**, and the package still reports `ok` — see the
-`ok` rule above. Run it explicitly when you touch either side.
-
-Confirm such an oracle is actually comparing what you changed rather than
-passing vacuously: perturb the Go side (e.g. bump a shared constant), watch it
-FAIL, and check the diff it prints names the Python value you expect. A parity
-test you have not seen fail is not yet evidence.
+A behaviour that once existed in both Python and Go is held by a frozen golden
+(a recorded Python answer). Recording stops: do not re-record. A golden test
+that fails means the Go side drifted; fix Go. Confirm a golden test is
+comparing what you changed rather than passing vacuously: perturb the Go side,
+watch it FAIL, and check that the diff names the recorded value you expect.
 
 ## Constants that must move in lockstep
 
 `internal/synccoverage/types.go`'s `projectionVersion` and
-`SYNC_COVERAGE_PROJECTION_VERSION` in
-`src/dev_health_ops/api/services/sync_coverage.py` are read by different
-processes against the same table. The API filters projections on its value, so
-a mismatch makes every projection unreadable and coverage returns 503
-indefinitely. Bump both in one changeset, and remember the Python side is
-bind-mounted into the API container (live on save) while the Go side ships in a
-built image — they do **not** go live at the same moment locally.
+`coverageProjectionVersion` in `internal/api/syncadmin/coverage.go` are read by
+different processes against the same table. The API filters projections on its
+value, so a mismatch makes every projection unreadable and coverage returns 503
+indefinitely. Bump both in one changeset.

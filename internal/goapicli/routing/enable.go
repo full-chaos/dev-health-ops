@@ -21,8 +21,11 @@ package routing
 //     the authority on what it serves; the catalog is the authority on
 //     what the edge can dispatch. Both must say yes or the row is
 //     unreachable from one side or the other.
-//  4. Has this exact candidate build been proven? See
-//     goapiproof.EnablementProofStage.
+//  4. Has this exact candidate build been proven? Asked of an MCP class
+//     root only (goapiproof.EnablementProofStage). A catalog operation is
+//     admitted without a receipt or a ledger limit, because the catalog
+//     rule serves it when it has no row (CHAOS-8586); the outcome still
+//     names what admitted it.
 
 import (
 	"context"
@@ -107,6 +110,7 @@ func runEnable(argv []string) error {
 	if err != nil {
 		return err
 	}
+	noteCatalogOperations(isClass)
 	var catalog, kinds map[string]string
 	var operations []string
 	if isClass {
@@ -295,10 +299,17 @@ func runEnable(argv []string) error {
 		return classifyWriteError(err)
 	}
 
-	var unproven int
+	var namedLimit, catalogRule int
 	for _, outcome := range outcomes {
+		if outcome.CatalogRule {
+			catalogRule++
+			fmt.Fprintf(stderr,
+				"go_api_routing.enabled_catalog_rule operation=%s stage_evidence=none candidate_build=%s schema_digest=%s document_digest=%s mode=%s dry_run=%t\n",
+				outcome.Operation, running, registry.SchemaDigest, outcome.DocumentDigest, mode, dryRun)
+			continue
+		}
 		if !outcome.Proven {
-			unproven++
+			namedLimit++
 			// One structured line PER ROW, not one per invocation: an
 			// operator (or a log search six weeks later) must be able to
 			// find WHICH operations were turned on without a proof run, not
@@ -324,11 +335,14 @@ func runEnable(argv []string) error {
 		goapiproof.EndpointLabelWithPort(registryURL), goapiproof.EndpointLabelWithPort(buildInfoURL))
 	fmt.Fprintf(stdout, "go-api-routing: schema_digest=%s candidate_build=%s mode=%s rollout=%d dry_run=%t\n",
 		registry.SchemaDigest, running, mode, rollout, dryRun)
-	fmt.Fprintf(stdout, "go-api-routing: %s total=%d proven=%d named_limit=%d\n",
-		verb, len(outcomes), len(outcomes)-unproven, unproven)
+	fmt.Fprintf(stdout, "go-api-routing: %s total=%d proven=%d named_limit=%d catalog_rule=%d\n",
+		verb, len(outcomes), len(outcomes)-namedLimit-catalogRule, namedLimit, catalogRule)
 	for _, outcome := range outcomes {
 		flag := ""
-		if !outcome.Proven {
+		switch {
+		case outcome.CatalogRule:
+			flag = "  (CATALOG-RULE)"
+		case !outcome.Proven:
 			flag = "  (NAMED-LIMIT " + goapiproof.NamedLimitDigest(outcome.NamedLimit) + ")"
 		}
 		fmt.Fprintf(stdout, "go-api-routing:   %-24s mode=%-8s %-40s digest=%s%s\n", outcome.Operation, outcome.Mode, outcome.CandidateBuild, outcome.DocumentDigest, flag)

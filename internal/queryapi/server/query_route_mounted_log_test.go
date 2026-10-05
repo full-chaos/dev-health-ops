@@ -94,7 +94,7 @@ func TestMountedRouteLogMessage_EmptyMapNamesNoOperations(t *testing.T) {
 // Postgres pool -- pgxpool.New does not dial eagerly, see CHAOS-4512's
 // query_route_readyz_integration_test.go for the same premise proven
 // against buildQueryRoute), cross-checked against
-// src/dev_health_ops/api/graphql/go_api_operations.json -- the CHECKED-IN
+// contracts/graphql/v1/go_api_operations.json -- the CHECKED-IN
 // catalog test_go_api_operation_catalog.py's
 // test_checked_in_catalog_has_not_drifted_from_registrydump already keeps
 // byte-for-byte in sync with cmd/registrydump's independent
@@ -185,13 +185,16 @@ func TestNewQueryHandler_LoggedOperationSetMatchesCheckedInCatalog(t *testing.T)
 	if err != nil {
 		t.Fatalf("resolve repo root: %v", err)
 	}
-	catalogPath := filepath.Join(repoRoot, "src", "dev_health_ops", "api", "graphql", "go_api_operations.json")
+	catalogPath := filepath.Join(repoRoot, "contracts", "graphql", "v1", "go_api_operations.json")
 	catalogBytes, err := os.ReadFile(catalogPath)
 	if err != nil {
 		t.Fatalf("read checked-in catalog %s: %v", catalogPath, err)
 	}
 	var catalog []struct {
 		Operation string `json:"operation"`
+		// Legacy marks a text the operation accepted before its current one (CHAOS-8000 dual accept): the
+		// catalog holds one entry per accepted text, the mount log names each OPERATION once.
+		Legacy bool `json:"legacy"`
 	}
 	if err := json.Unmarshal(catalogBytes, &catalog); err != nil {
 		t.Fatalf("parse checked-in catalog: %v", err)
@@ -200,9 +203,15 @@ func TestNewQueryHandler_LoggedOperationSetMatchesCheckedInCatalog(t *testing.T)
 		t.Fatalf("checked-in catalog %s is empty -- cannot cross-check against it", catalogPath)
 	}
 
-	if len(loggedOperations) != len(catalog) {
-		t.Fatalf("logged %d operations, checked-in catalog has %d -- logged=%v",
-			len(loggedOperations), len(catalog), loggedOperations)
+	current := 0
+	for _, entry := range catalog {
+		if !entry.Legacy {
+			current++
+		}
+	}
+	if len(loggedOperations) != current {
+		t.Fatalf("logged %d operations, checked-in catalog has %d current ones (%d entries in all) -- logged=%v",
+			len(loggedOperations), current, len(catalog), loggedOperations)
 	}
 	for _, entry := range catalog {
 		if !loggedOperations[entry.Operation] {

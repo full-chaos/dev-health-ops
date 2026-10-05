@@ -6,13 +6,13 @@
 # Invoked ONLY by web-path-smoke.sh, after that gate passes.
 services:
   web-smoke:
-    image: ghcr.io/full-chaos/dev-hops-api@sha256:ab18700f0ef7c29e5833525833c8726752970177c03f3d3bda87188c3bf09295
-    profiles: ["smoke"]
-    # Run as the host operator (uid 1001), not the image's appuser (10001): the password
-    # file is 0600 and owned by the operator, and the receipt lands in _records/.
+    # CHAOS-8647: the smoke is the `dho smoke web-path` verb. Its image (the dho image by digest, the same
+    # pin as query-api and migrate) is set in compose.bigboy.images.yml, so a repin moves it with them.
+    # Run as the host operator (uid 1001), not root: the password file is 0600 and owned by the
+    # operator, and the receipt lands in _records/.
     user: "1001:1001"
-    entrypoint: ["python3"]
-    command: ["/smoke/web-path-smoke.py"]
+    entrypoint: ["/usr/local/bin/dho"]
+    command: ["smoke", "web-path"]
     working_dir: /smoke
     networks: [dev-health]
     environment:
@@ -22,6 +22,7 @@ services:
       DHO_SMOKE_PUBLIC_HOST: www.commanderkeen.dev
       DHO_SMOKE_WEB_SRC: /web-src
       DHO_SMOKE_CATALOG: /catalog/catalog.json
+      DHO_SMOKE_ROUTING_OPS: /smoke/routing-ops.txt
       # A caller (e.g. bigboy-cut.sh) may export this to a per-cut path under
       # _records/bigboy-<sha8>/ before invoking; unset falls back to the flat name.
       DHO_SMOKE_RECEIPT_PATH: ${DHO_SMOKE_RECEIPT_PATH:-/receipts/web-path-smoke-receipt.json}

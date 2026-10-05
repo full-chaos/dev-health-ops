@@ -7,7 +7,6 @@ import (
 	"fmt"
 	"math"
 	"net/http/httptest"
-	"path/filepath"
 	"reflect"
 	"sort"
 	"strings"
@@ -15,7 +14,6 @@ import (
 	"time"
 
 	"github.com/full-chaos/dev-health-ops/internal/api/pyjson"
-	"github.com/full-chaos/dev-health-ops/internal/migrationmatrix"
 	"github.com/full-chaos/dev-health-ops/internal/queryapi/aggflame"
 	"github.com/full-chaos/dev-health-ops/internal/queryapi/drilldown"
 	"github.com/full-chaos/dev-health-ops/internal/queryapi/explain"
@@ -31,7 +29,6 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/queryapi/quadrant"
 	"github.com/full-chaos/dev-health-ops/internal/queryapi/sankey"
 	"github.com/full-chaos/dev-health-ops/internal/queryapi/workunitexplain"
-	"github.com/full-chaos/dev-health-ops/internal/testsupport/moduleroot"
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/programoracle"
 )
 
@@ -113,6 +110,256 @@ type responseModelOracleRoute struct {
 	data func(value any) (string, error)
 }
 
+// opportunitiesPythonCard and opportunitiesPythonResponse are the shape the
+// frozen FastAPI model of /api/v1/opportunities has: the five fields the
+// Python reference served. The Go response (opportunities.Card) has four more
+// since CHAOS-8109 (change_percent, direction, range_days, compare_days), which
+// the Python model never had. The frozen program was recorded for the Python
+// shape and nothing is recorded again, so the oracle below still checks THAT
+// shape, written by the production writer: the five shared fields are byte
+// identical to FastAPI's. It says nothing about the four Go-only fields.
+//
+// TestOpportunitiesCardIsThePythonCardPlusTheDeclaredGoOnlyFields ties this
+// shape to the production type: the production card must be exactly these
+// five fields, in this order, followed by exactly the four declared ones. A
+// field added, removed, renamed or moved in either type fails it.
+type opportunitiesPythonCard struct {
+	ID                   string   `json:"id"`
+	Title                string   `json:"title"`
+	Rationale            string   `json:"rationale"`
+	EvidenceLinks        []string `json:"evidence_links"`
+	SuggestedExperiments []string `json:"suggested_experiments"`
+}
+
+type opportunitiesPythonResponse struct {
+	Items []opportunitiesPythonCard `json:"items"`
+}
+
+// issuesPythonResponse is the frozen FastAPI response shape for the issue
+// drilldown. The Go-only Count field is emitted only for the new
+// filters.how.blocked=true contract (CHAOS-8106); ordinary issue drilldowns
+// retain this Python shape. The declaration test below makes that widening
+// explicit instead of treating the frozen model as an API ceiling.
+type issuesPythonResponse struct {
+	Items []drilldown.IssueItem `json:"items"`
+}
+
+func TestIssuesResponseIsThePythonResponsePlusBlockedCount(t *testing.T) {
+	type field struct{ name, goType, tag string }
+	fieldsOf := func(typ reflect.Type) []field {
+		fields := make([]field, 0, typ.NumField())
+		for index := range typ.NumField() {
+			f := typ.Field(index)
+			fields = append(fields, field{f.Name, f.Type.String(), string(f.Tag)})
+		}
+		return fields
+	}
+
+	want := append(fieldsOf(reflect.TypeOf(issuesPythonResponse{})), field{"Count", "*uint64", `json:"count,omitempty"`})
+	if got := fieldsOf(reflect.TypeOf(drilldown.IssuesResponse{})); !reflect.DeepEqual(got, want) {
+		t.Errorf("drilldown.IssuesResponse fields =\n %v\nwant the Python fields followed by blocked-only Count:\n %v", got, want)
+	}
+
+	count := uint64(1)
+	recorder := httptest.NewRecorder()
+	if err := writeModelResponse(recorder, &drilldown.IssuesResponse{Items: []drilldown.IssueItem{}, Count: &count}); err != nil {
+		t.Fatalf("writeModelResponse: %v", err)
+	}
+	if body := recorder.Body.String(); !strings.Contains(body, `"count":1`) {
+		t.Errorf("the production body has no blocked-only count: %s", body)
+	}
+}
+
+// opportunitiesGoOnlyCardFields are the fields of opportunities.Card the
+// Python model does not have (CHAOS-8109), in declaration order.
+var opportunitiesGoOnlyCardFields = []struct{ name, goType, tag string }{
+	{"ChangePercent", "*float64", `json:"change_percent"`},
+	{"Direction", "*string", `json:"direction"`},
+	{"RangeDays", "int", `json:"range_days"`},
+	{"CompareDays", "int", `json:"compare_days"`},
+}
+
+func TestOpportunitiesCardIsThePythonCardPlusTheDeclaredGoOnlyFields(t *testing.T) {
+	type field struct{ name, goType, tag string }
+	fieldsOf := func(typ reflect.Type) []field {
+		out := make([]field, 0, typ.NumField())
+		for index := range typ.NumField() {
+			f := typ.Field(index)
+			out = append(out, field{f.Name, f.Type.String(), string(f.Tag)})
+		}
+		return out
+	}
+
+	want := fieldsOf(reflect.TypeOf(opportunitiesPythonCard{}))
+	for _, goOnly := range opportunitiesGoOnlyCardFields {
+		want = append(want, field{goOnly.name, goOnly.goType, goOnly.tag})
+	}
+	if got := fieldsOf(reflect.TypeOf(opportunities.Card{})); !reflect.DeepEqual(got, want) {
+		t.Errorf("opportunities.Card fields =\n %v\nwant the five Python fields, then the four Go-only ones:\n %v", got, want)
+	}
+
+	response := fieldsOf(reflect.TypeOf(opportunities.Response{}))
+	if len(response) != 1 || response[0] != (field{"Items", "[]opportunities.Card", `json:"items"`}) {
+		t.Errorf("opportunities.Response fields = %v, want Items alone", response)
+	}
+
+	// The production writer does write the Go-only fields: the oracle's
+	// Python shape must not be read as "the route serves five fields".
+	change, direction := 12.5, opportunities.DirectionUp
+	recorder := httptest.NewRecorder()
+	if err := writeModelResponse(recorder, &opportunities.Response{Items: []opportunities.Card{{
+		ID: "opp-1", Title: "Reduce Cycle Time", Rationale: "r", EvidenceLinks: []string{}, SuggestedExperiments: []string{},
+		ChangePercent: &change, Direction: &direction, RangeDays: 30, CompareDays: 14,
+	}}}); err != nil {
+		t.Fatalf("writeModelResponse: %v", err)
+	}
+	body := recorder.Body.String()
+	for _, part := range []string{`"change_percent":12.5`, `"direction":"up"`, `"range_days":30`, `"compare_days":14`} {
+		if !strings.Contains(body, part) {
+			t.Errorf("the production body has no %s: %s", part, body)
+		}
+	}
+}
+
+// explainPythonResponse is the shape the frozen FastAPI model of
+// /api/v1/explain has: the eight fields of ExplainResponse the Python
+// reference served. The Go response (explain.Response) has two more since
+// CHAOS-8103 (repositories, source_url), which the Python model never had.
+// Nothing is recorded again, so the oracle below still checks THIS shape,
+// written by the production writer: the eight shared fields are byte
+// identical to FastAPI's. It says nothing about the two Go-only fields.
+//
+// TestExplainResponseIsThePythonResponsePlusTheDeclaredGoOnlyFields ties
+// this shape to the production type: the production response must be
+// exactly these eight fields, in this order, followed by exactly the two
+// declared ones.
+type explainPythonResponse struct {
+	Metric         string                    `json:"metric"`
+	Label          string                    `json:"label"`
+	Unit           string                    `json:"unit"`
+	Value          float64                   `json:"value"`
+	DeltaPct       float64                   `json:"delta_pct"`
+	Drivers        []explain.Contributor     `json:"drivers"`
+	Contributors   []explain.Contributor     `json:"contributors"`
+	DrilldownLinks pyjson.OrderedMap[string] `json:"drilldown_links"`
+}
+
+// explainGoOnlyResponseFields are the fields of explain.Response the Python
+// model does not have (CHAOS-8103), in declaration order.
+var explainGoOnlyResponseFields = []struct{ name, goType, tag string }{
+	{"Repositories", "*[]explain.Repository", `json:"repositories"`},
+	{"SourceURL", "*string", `json:"source_url"`},
+}
+
+func TestExplainResponseIsThePythonResponsePlusTheDeclaredGoOnlyFields(t *testing.T) {
+	type field struct{ name, goType, tag string }
+	fieldsOf := func(typ reflect.Type) []field {
+		out := make([]field, 0, typ.NumField())
+		for index := range typ.NumField() {
+			f := typ.Field(index)
+			out = append(out, field{f.Name, f.Type.String(), string(f.Tag)})
+		}
+		return out
+	}
+	want := fieldsOf(reflect.TypeOf(explainPythonResponse{}))
+	for _, goOnly := range explainGoOnlyResponseFields {
+		want = append(want, field{goOnly.name, goOnly.goType, goOnly.tag})
+	}
+	if got := fieldsOf(reflect.TypeOf(explain.Response{})); !reflect.DeepEqual(got, want) {
+		t.Errorf("explain.Response fields =\n %v\nwant the eight Python fields, then the two Go-only ones:\n %v", got, want)
+	}
+
+	// The production writer does write the Go-only fields, null included:
+	// the oracle's Python shape must not be read as "the route serves eight
+	// fields".
+	name, sourceURL := "webapp", "https://github.com/acme/webapp"
+	repositories := []explain.Repository{{ID: "repo-a", Name: &name, Value: 3, SourceURL: &sourceURL}, {ID: "repo-b", Value: 1}}
+	for _, testCase := range []struct {
+		response explain.Response
+		parts    []string
+	}{
+		{explain.Response{Drivers: []explain.Contributor{}, Contributors: []explain.Contributor{}, Repositories: &repositories, SourceURL: &sourceURL}, []string{
+			`"repositories":[{"id":"repo-a","name":"webapp","value":3.0,"source_url":"https://github.com/acme/webapp"},{"id":"repo-b","name":null,"value":1.0,"source_url":null}]`,
+			`"source_url":"https://github.com/acme/webapp"}`,
+		}},
+		{explain.Response{Drivers: []explain.Contributor{}, Contributors: []explain.Contributor{}}, []string{`"repositories":null,"source_url":null}`}},
+	} {
+		recorder := httptest.NewRecorder()
+		if err := writeModelResponse(recorder, &testCase.response); err != nil {
+			t.Fatalf("writeModelResponse: %v", err)
+		}
+		body := recorder.Body.String()
+		for _, part := range testCase.parts {
+			if !strings.Contains(body, part) {
+				t.Errorf("the production body has no %s: %s", part, body)
+			}
+		}
+	}
+}
+
+// withoutExplainGoOnlyFields returns an explain body as the production writer
+// writes it, without its declared Go-only fields (explainGoOnlyResponseFields),
+// so that it can be compared byte for byte with a frozen Python body. The
+// fields are the last ones of the type, so they are the tail of the body:
+// that tail must hold exactly them, in their order, or it is an error -- it
+// never silently drops anything else.
+func withoutExplainGoOnlyFields(body string) (string, error) {
+	jsonName := func(tag string) string {
+		name, _, _ := strings.Cut(strings.TrimSuffix(strings.TrimPrefix(tag, `json:"`), `"`), ",")
+		return name
+	}
+	first := jsonName(explainGoOnlyResponseFields[0].tag)
+	marker := `,"` + first + `":`
+	at := strings.LastIndex(body, marker)
+	if at < 0 || !strings.HasSuffix(body, "}") {
+		return "", fmt.Errorf("explain body has no %s tail: %s", first, body)
+	}
+	tail := "{" + body[at+1:]
+	decoder := json.NewDecoder(strings.NewReader(tail))
+	if _, err := decoder.Token(); err != nil {
+		return "", err
+	}
+	for index, field := range explainGoOnlyResponseFields {
+		key, err := decoder.Token()
+		if err != nil {
+			return "", err
+		}
+		if want := jsonName(field.tag); key != want {
+			return "", fmt.Errorf("explain body tail field %d is %v, want %q: %s", index, key, jsonName(field.tag), tail)
+		}
+		var value json.RawMessage
+		if err := decoder.Decode(&value); err != nil {
+			return "", err
+		}
+	}
+	if closing, err := decoder.Token(); err != nil || closing != json.Delim('}') || decoder.More() {
+		return "", fmt.Errorf("explain body tail holds more than the Go-only fields: %s", tail)
+	}
+	return body[:at] + "}", nil
+}
+
+func TestWithoutExplainGoOnlyFieldsLeavesThePythonShapeOrFails(t *testing.T) {
+	for _, testCase := range []struct{ body, want string }{
+		{`{"metric":"churn","drilldown_links":{"prs":"a"},"repositories":null,"source_url":null}`, `{"metric":"churn","drilldown_links":{"prs":"a"}}`},
+		{`{"metric":"churn","repositories":[{"id":"r","name":null,"value":1.0,"source_url":"https://github.com/a/repositories"}],"source_url":"https://x"}`, `{"metric":"churn"}`},
+	} {
+		got, err := withoutExplainGoOnlyFields(testCase.body)
+		if err != nil || got != testCase.want {
+			t.Fatalf("withoutExplainGoOnlyFields(%s) = %s, %v; want %s", testCase.body, got, err, testCase.want)
+		}
+	}
+	for _, body := range []string{
+		`{"metric":"churn"}`,
+		`{"metric":"churn","repositories":null}`,
+		`{"metric":"churn","repositories":null,"source_url":null,"extra":1}`,
+		`{"metric":"churn","source_url":null,"repositories":null}`,
+	} {
+		if got, err := withoutExplainGoOnlyFields(body); err == nil {
+			t.Fatalf("withoutExplainGoOnlyFields(%s) = %s, want an error", body, got)
+		}
+	}
+}
+
 func responseModelOracleRoutes() map[string]responseModelOracleRoute {
 	plain := func(response any) responseModelOracleRoute { return responseModelOracleRoute{response: response} }
 	sankeyRoute := plain((*sankey.Response)(nil))
@@ -120,8 +367,8 @@ func responseModelOracleRoutes() map[string]responseModelOracleRoute {
 		"GET /api/v1/meta":                                plain(meta.Response{}),
 		"GET /api/v1/home":                                plain((*home.Response)(nil)),
 		"POST /api/v1/home":                               plain((*home.Response)(nil)),
-		"GET /api/v1/explain":                             plain((*explain.Response)(nil)),
-		"POST /api/v1/explain":                            plain((*explain.Response)(nil)),
+		"GET /api/v1/explain":                             plain((*explainPythonResponse)(nil)),
+		"POST /api/v1/explain":                            plain((*explainPythonResponse)(nil)),
 		"GET /api/v1/heatmap":                             plain((*heatmap.Response)(nil)),
 		"GET /api/v1/work-units":                          plain([]workUnitInvestmentWire(nil)),
 		"POST /api/v1/work-units":                         plain([]workUnitInvestmentWire(nil)),
@@ -131,15 +378,15 @@ func responseModelOracleRoutes() map[string]responseModelOracleRoute {
 		"GET /api/v1/quadrant":                            plain((*quadrant.Response)(nil)),
 		"GET /api/v1/drilldown/prs":                       plain((*drilldown.PRsResponse)(nil)),
 		"POST /api/v1/drilldown/prs":                      plain((*drilldown.PRsResponse)(nil)),
-		"GET /api/v1/drilldown/issues":                    plain((*drilldown.IssuesResponse)(nil)),
-		"POST /api/v1/drilldown/issues":                   plain((*drilldown.IssuesResponse)(nil)),
+		"GET /api/v1/drilldown/issues":                    plain((*issuesPythonResponse)(nil)),
+		"POST /api/v1/drilldown/issues":                   plain((*issuesPythonResponse)(nil)),
 		"GET /api/v1/people":                              plain([]people.SearchResult(nil)),
 		"GET /api/v1/people/{person_id}/summary":          plain(people.SummaryResponse{}),
 		"GET /api/v1/people/{person_id}/metric":           plain(people.MetricResponse{}),
 		"GET /api/v1/people/{person_id}/drilldown/prs":    plain((*people.DrilldownPRsResponse)(nil)),
 		"GET /api/v1/people/{person_id}/drilldown/issues": plain((*people.DrilldownIssuesResponse)(nil)),
-		"GET /api/v1/opportunities":                       plain((*opportunities.Response)(nil)),
-		"POST /api/v1/opportunities":                      plain((*opportunities.Response)(nil)),
+		"GET /api/v1/opportunities":                       plain((*opportunitiesPythonResponse)(nil)),
+		"POST /api/v1/opportunities":                      plain((*opportunitiesPythonResponse)(nil)),
 		"GET /api/v1/investment":                          plain((*investment.Response)(nil)),
 		"POST /api/v1/investment":                         plain((*investment.Response)(nil)),
 		"GET /api/v1/investment/sunburst":                 plain([]investment.SunburstSlice(nil)),
@@ -177,10 +424,6 @@ func responseModelOracleRoutes() map[string]responseModelOracleRoute {
 // same data, and the two bodies must be byte-identical. That also pins
 // field order, int-versus-float field types, and fields the model drops.
 func TestQueryAPIResponseModelsMatchFrozenPython(t *testing.T) {
-	_, file, _, ok := moduleroot.Caller(0)
-	if !ok {
-		t.Fatal("cannot locate the test source")
-	}
 	// Each mode is its own golden: the input of "render" is built from the
 	// answer of "table".
 	runPython := func(mode string, input any) json.RawMessage {
@@ -218,12 +461,8 @@ func TestQueryAPIResponseModelsMatchFrozenPython(t *testing.T) {
 
 	// The route table, both directions, on the paths the query-api serves.
 	served := map[string]bool{}
-	muxRoutes, err := migrationmatrix.LoadQueryAPIMuxRoutes(filepath.Dir(file))
-	if err != nil {
-		t.Fatal(err)
-	}
-	for _, route := range muxRoutes {
-		served[route.Path] = true
+	for _, route := range RESTRoutes() {
+		served[route.Pattern] = true
 	}
 	pythonModel := map[string]bool{}
 	for _, row := range table.Routes {
@@ -305,6 +544,7 @@ func TestQueryAPIResponseModelsMatchFrozenPython(t *testing.T) {
 				data = string(encoded)
 			}
 			var goBody []byte
+			var err error
 			if route.write != nil {
 				goBody, err = route.write(value)
 				if err != nil {

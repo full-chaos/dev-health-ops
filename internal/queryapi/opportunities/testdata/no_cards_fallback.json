@@ -5,11 +5,15 @@
       "title": "Maintain steady flow",
       "rationale": "Key metrics are stable. Focus on sustaining current practices.",
       "evidence_links": [
-        "/api/v1/home?scope_type=repo&scope_id=checkout-service"
+        "/api/v1/home?scope_type=repo\u0026scope_id=checkout-service"
       ],
       "suggested_experiments": [
         "Share the current playbook with new teams."
-      ]
+      ],
+      "change_percent": null,
+      "direction": null,
+      "range_days": 14,
+      "compare_days": 14
     }
   ]
 }

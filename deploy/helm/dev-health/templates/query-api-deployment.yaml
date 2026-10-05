@@ -3,7 +3,7 @@ The Go query plane. The Python edge's dispatcher forwards a GraphQL operation
 here (GO_API_QUERY_API_URL, see dev-health.configData) when the routing
 registry says the Go plane serves it; with queryApi disabled the edge never
 learns an endpoint and every operation stays on the Python plane, which is why
-this defaults off like metricsApi.
+this defaults off.
 */ -}}
 {{- if .Values.queryApi.enabled }}
 {{- /*
@@ -76,7 +76,7 @@ metadata:
 spec:
   replicas: {{ .Values.queryApi.replicas }}
   {{- /*
-  Same guarantee api-deployment.yaml states: never dip below current serving
+  Same guarantee the deleted Python api Deployment stated: never dip below current serving
   capacity during a rollout. Kubernetes' 25%/25% default only behaves at
   replicas: 1 by rounding.
   */}}
@@ -307,21 +307,23 @@ spec:
     - ports:
         - protocol: TCP
           port: {{ .Values.queryApi.port }}
-    # The internal listener trusts X-DH-Internal-* identity headers from whoever can reach it, so
-    # the network is the boundary: only this release's api pods (the edge dispatcher), plus any
-    # pod selector the operator adds under queryApi.internal.allowedFrom (for example the tools
-    # pod that runs `dho goapi prove-write`). Never every pod in the namespace.
+    {{- /*
+    The internal listener trusts X-DH-Internal-* identity headers from whoever can reach it, so the network is the
+    boundary: only the pod selectors the operator names under queryApi.internal.allowedFrom (for example the tools pod
+    that runs `dho goapi prove-write`). CHAOS-7520: no workload of this release calls the internal port any more (its
+    only caller was the Python api's edge dispatcher), so there is no release-local peer. With allowedFrom empty the
+    rule is OMITTED: a rule with an empty `from` admits every source, so this policy denies the port to everybody. With networkPolicy.enabled the shared policy's in-namespace rule still admits every release pod on this port (NetworkPolicies are additive); only the ingress controller and sources outside the namespace are denied.
+    */}}
+    {{- with .Values.queryApi.internal.allowedFrom }}
     - from:
-        - podSelector:
-            matchLabels:
-              {{- include "dev-health.componentSelectorLabels" (dict "component" "api" "context" $) | nindent 14 }}
-        {{- range .Values.queryApi.internal.allowedFrom }}
+        {{- range . }}
         - podSelector:
             {{- toYaml . | nindent 12 }}
         {{- end }}
       ports:
         - protocol: TCP
-          port: {{ .Values.queryApi.internal.port }}
+          port: {{ $.Values.queryApi.internal.port }}
+    {{- end }}
 {{- end }}
 {{- if .Values.queryApi.mcp.enabled }}
 ---

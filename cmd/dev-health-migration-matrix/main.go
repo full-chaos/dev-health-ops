@@ -30,6 +30,7 @@ import (
 	"fmt"
 	envsecrets "github.com/full-chaos/dev-health-ops/internal/platform/secrets"
 	"io"
+	"log/slog"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -38,6 +39,7 @@ import (
 	"time"
 
 	"github.com/full-chaos/dev-health-ops/internal/migrationmatrix"
+	"github.com/full-chaos/dev-health-ops/internal/platform/logging"
 	"github.com/full-chaos/dev-health-ops/internal/platform/secrets"
 )
 
@@ -58,20 +60,19 @@ const (
 	remainingFamiliesRel   = "internal/jobs/metrics/remaining/families.json"
 	jobDailyPyRelative     = "src/dev_health_ops/metrics/job_daily.py"
 
-	// The "Per REST endpoint" section's two sources. Both are already
-	// covered by go.yml's path filters -- main.py by the existing
-	// `src/dev_health_ops/api/**` entry, query-api's *.go files as
-	// ordinary Go source.
-	mainPyRelative      = "src/dev_health_ops/api/main.py"
-	queryAPIDirRelative = "internal/queryapi/server"
+	// The "Per REST endpoint" section's two sources: the frozen copy of the
+	// Python api's route list (the Python tree is being deleted, so the page no
+	// longer reads main.py) and query-api's route table, executed
+	// (internal/queryapi/server.RESTRoutes, CHAOS-8307).
+	frozenRoutesRelative = migrationmatrix.FrozenRESTRoutesRelative
 
 	// catalogRelative is the registered-operation catalog the edge
 	// dispatches by -- the file `dev-hops go-api routing status` reports
 	// DOCUMENT_DRIFT against. Read by -check as well as -render, so a row
 	// the edge cannot dispatch fails the committed page (R14) rather than
 	// rendering as served. Trap #98: it is a non-Go input;
-	// go.yml's `src/dev_health_ops/api/**` path filter already covers it.
-	catalogRelative = "src/dev_health_ops/api/graphql/go_api_operations.json"
+	// go.yml's `contracts/**` path filter covers it.
+	catalogRelative = "contracts/graphql/v1/go_api_operations.json"
 )
 
 // defaultFleetContainers is the compose fleet whose image labels answer
@@ -98,7 +99,6 @@ var defaultFleetContainers = []string{
 	"dev-health-go-scheduler-1",
 	"dev-health-go-reconciler-1",
 	queryAPIContainerName,
-	"dev-health-api-1",
 }
 
 // matrixFlags holds the pointers registerFlags binds. A struct rather than
@@ -130,6 +130,9 @@ func registerFlags(set *flag.FlagSet) *matrixFlags {
 }
 
 func main() {
+	// The binary links the query-api server package (its route table, CHAOS-8307), whose
+	// dependencies log through slog.Default(); this makes that the redacting handler.
+	logging.InstallDefault(logging.NewJSON(os.Stderr, slog.LevelInfo))
 	f := registerFlags(flag.CommandLine)
 	flag.Parse()
 	secrets.ResolveFlag(flag.CommandLine, f.dsn, "dsn", postgresURIEnvVar)
@@ -289,7 +292,7 @@ func legacyBlocks(root string, families *migrationmatrix.NativeFamilies, restPro
 	if err != nil {
 		return nil, fmt.Errorf("workgraph investment block: %w", err)
 	}
-	restRows, err := migrationmatrix.LoadRESTEndpoints(filepath.Join(root, mainPyRelative), filepath.Join(root, queryAPIDirRelative))
+	restRows, err := migrationmatrix.LoadRESTEndpoints(filepath.Join(root, frozenRoutesRelative), migrationmatrix.LoadQueryAPIMuxRoutes())
 	if err != nil {
 		return nil, fmt.Errorf("REST endpoints: %w", err)
 	}
@@ -660,6 +663,15 @@ func printRoutingSQL(w io.Writer) error {
 // of -print-routing-sql. Parsing is migrationmatrix.ParseRoutingSnapshot --
 // the same function ReadRoutingState uses on the same statement's value --
 // so an offline snapshot cannot be read by a different rule than a live one.
+//
+// A snapshot with NO rows is read, as the live reader always read an empty
+// table (CHAOS-8543). It was refused here while an empty go_api_routing_state
+// meant "nothing is served"; since the catalog rule (queryapi/routeswitch/
+// catalog_switch.go) it is a valid state, in which query-api serves every
+// catalog operation with no routing row, and the page says so
+// (migrationmatrix.RenderOpsBlock). A file that is not a snapshot is still
+// refused: ParseRoutingSnapshot requires the object and its proof_run_total,
+// so an empty or hand-built file does not read as an empty table.
 func readRoutingFile(path, currentDigest string) ([]migrationmatrix.OperationRow, int, error) {
 	raw, err := os.ReadFile(path) //nolint:gosec // operator-supplied path
 	if err != nil {
@@ -668,10 +680,6 @@ func readRoutingFile(path, currentDigest string) ([]migrationmatrix.OperationRow
 	rows, total, err := migrationmatrix.ParseRoutingSnapshot(raw, currentDigest)
 	if err != nil {
 		return nil, 0, fmt.Errorf("routing file %s: %w", path, err)
-	}
-	if len(rows) == 0 {
-		return nil, 0, fmt.Errorf("routing file %s has no rows; an EMPTY go_api_routing_state is itself a finding, "+
-			"but it must be recorded deliberately rather than read as a parse failure", path)
 	}
 	return rows, total, nil
 }

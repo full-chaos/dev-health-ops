@@ -49,7 +49,7 @@ var clickHouseOrgTableKnownPythonOnlyStale = map[string]string{
 // This test needs a real, migrated ClickHouse (chmigrate, the migration
 // chain `dho migrate clickhouse upgrade` applies) and, only while recording,
 // a python3 interpreter; it does not need the live-Python FastAPI app, so it
-// is not gated on DEV_HEALTH_LIVE_PYTHON_ORACLES -- only -tags=integration,
+// is not gated on DEV_HEALTH_VENUE_ORACLES -- only -tags=integration,
 // like every other container-backed test in this tree.
 func TestClickHouseOrgTableDiscoveryMatchesThePythonMigrationRegex(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Minute)
@@ -176,4 +176,18 @@ print(json.dumps(sorted(org_deletion._clickhouse_tables_from_migrations())))
 // clickHouseOrgTablesAfterThePythonFreeze names each org-scoped ClickHouse
 // table a migration added after adminPythonBuild, where org_deletion.py's
 // list was frozen: table -> the migration that added it.
-var clickHouseOrgTablesAfterThePythonFreeze = map[string]string{}
+var clickHouseOrgTablesAfterThePythonFreeze = map[string]string{
+	// The first time a sync wrote each work item relation (CHAOS-8574). It
+	// is keyed by org_id and filled by a materialized view from
+	// work_item_dependencies, so an organization's rows in it must go when
+	// the organization is deleted, like the relations themselves.
+	"work_item_dependency_first_seen": "102_work_item_dependency_first_seen.sql",
+	// The latest time a pass that reads an item's relations wrote the item
+	// (CHAOS-8578). Keyed by org_id and filled by a materialized view from
+	// work_items, so an organization's rows in it go with its work items.
+	"work_item_relations_read": "103_work_item_relation_writer_and_read.sql",
+	// The latest blocked duration snapshot for each work item (CHAOS-8489).
+	// It is keyed by org_id and the daily worker writes it directly, so an
+	// organization's evidence rows must go when the organization is deleted.
+	"work_item_blocked_durations_daily": "104_work_item_blocked_durations.sql",
+}

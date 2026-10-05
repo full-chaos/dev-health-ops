@@ -409,7 +409,7 @@ def test_the_matrix_carries_exactly_the_legs_the_script_knows() -> None:
     names = [e["name"] for e in entries]
     assert len(set(names)) == len(names), "duplicate leg names"
     non_race = sorted(a for a in args if not a.startswith("race "))
-    assert non_race == ["oracles", "static", "test"], args
+    assert non_race == ["static", "test"], args
     races = sorted(a for a in args if a.startswith("race "))
     count = len(races)
     assert count >= 1
@@ -467,17 +467,6 @@ def test_only_the_static_leg_runs_the_static_only_steps() -> None:
         name = step.get("name", "")
         if name.startswith(static_only):
             assert "matrix.name == 'static'" in str(step.get("if", "")), name
-    # The locked live-Python dependencies are installed by EVERY leg: unit tests
-    # of the test and race legs run real Python programs too.
-    deps = [
-        s
-        for s in leg["steps"]
-        if "Install locked live provider oracle dependencies" in s.get("name", "")
-    ]
-    assert len(deps) == 1
-    assert "matrix.name" not in str(deps[0].get("if", "")), (
-        "the oracle dependencies must be installed on every leg, not only one"
-    )
 
 
 # ---------------------------------------------------------------------------
@@ -934,10 +923,6 @@ GO_CALL_EXCEPTIONS = {
         "ci/check_migration_matrix.sh",
         'go run ./cmd/dev-health-migration-matrix -render -root ."',
     ): "the text of the re-verify hint a human reads (a multi-line message), not a call",
-    (
-        "ci/python_free_ratchet.sh",
-        "go test stream artifact",
-    ): "words in a message, not a call",
 }
 
 
@@ -1044,7 +1029,7 @@ def test_every_go_call_of_check_go_names_mod_readonly_and_trimpath() -> None:
     # The derivation is by verb, so a call that lost -mod=readonly is still found; and a
     # line that names both a go verb and -mod=readonly must be one the derivation found.
     derived = [command for file, command in _go_calls() if file == "ci/check_go.sh"]
-    assert len(derived) >= 20, f"only {len(derived)} calls derived from check_go.sh"
+    assert len(derived) >= 15, f"only {len(derived)} calls derived from check_go.sh"
     for command in derived:
         assert "-mod=readonly" in command, (
             f"check_go.sh call without -mod=readonly: {command[:90]}"

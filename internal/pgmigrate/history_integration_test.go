@@ -10,7 +10,6 @@ import (
 	"os/exec"
 	"path/filepath"
 	"reflect"
-	"sort"
 	"strings"
 	"testing"
 
@@ -70,7 +69,7 @@ func goHistory(t *testing.T) string {
 
 // historyPythonBuild is the build whose Python CLI (Alembic) answered the scenarios: a build that still
 // carried it.
-const historyPythonBuild = "a4847c5e93607451a0c987b314d37e02fc43ce85"
+const historyPythonBuild = "dc20788d69ae68129772e6cb5fd3fe972b27c843"
 
 // TestHistoryMatchesTheFrozenAlembicOutput compares dho's `history` text with what the REAL `dev-hops migrate
 // postgres history` printed in each scenario, and the one verb dho refuses (`downgrade`) with what Alembic did
@@ -85,7 +84,7 @@ func TestHistoryMatchesTheFrozenAlembicOutput(t *testing.T) {
 	golden := venueoracle.OpenGolden(t, venueoracle.GoldenSpec{
 		Path:        "testdata/golden/history.json",
 		PythonBuild: historyPythonBuild,
-		SHA256:      "070ce3be31bd17bb8e1245db998ed4822e7c1c0517c4690b2b8bc5e5a7a7baba",
+		SHA256:      "291b804d39ee0225b2fa05536898f42b3b3794bef50fa3833286900c7fd4a0ef",
 		Recipe: "git worktree add --detach $DIR " + historyPythonBuild + " (with its .venv: uv sync --frozen --no-install-project); then from the repository root: " +
 			"go run ./internal/testsupport/venueoracle/goldenrecord -pkg ./internal/pgmigrate/ -test '^TestHistoryMatchesTheFrozenAlembicOutput$' -python-root $DIR",
 	})
@@ -100,17 +99,17 @@ func TestHistoryMatchesTheFrozenAlembicOutput(t *testing.T) {
 		t.Fatal(err)
 	}
 	request := venueoracle.ProgramRequest("history scenarios", pythonCLIProgram, input, historyPythonSettings)
-	answers := golden.Produce(t, root, []venueoracle.Request{request}, func(_ *venueoracle.Producer, _ []venueoracle.Request) []venueoracle.Response {
+	answers := golden.Produce(t, root, []venueoracle.Request{request}, func(producer *venueoracle.Producer, _ []venueoracle.Request) []venueoracle.Response {
 		produced := historyGoldenFile{History: map[string]string{}}
 		for _, scenario := range historyScenarios {
-			code, text := pythonMigrate(t, root, historyPythonSettings, scenario.env, "", "history")
+			code, text := pythonMigrate(t, producer, historyPythonSettings, scenario.env, "", "history")
 			if code != 0 {
 				t.Fatalf("%s: alembic history exited %d", scenario.name, code)
 			}
 			produced.History[scenario.name] = text
 		}
 		uri, _ := revisionsDatabase(t)
-		code, _ := pythonMigrate(t, root, historyPythonSettings, []string{"DEV_HEALTH_ALLOW_CELERY_RIVER_CUTOVER=1"}, uri, "downgrade", "0139")
+		code, _ := pythonMigrate(t, producer, historyPythonSettings, []string{"DEV_HEALTH_ALLOW_CELERY_RIVER_CUTOVER=1"}, uri, "downgrade", "0139")
 		produced.Downgrade.Exit = code
 		produced.Downgrade.VersionsAfter = recordedVersions(t, uri)
 		body, err := json.Marshal(produced)
@@ -171,51 +170,49 @@ var (
 	historyPythonSettings   = map[string]string{"OTEL_ENABLED": "false"}
 )
 
-// pgmigratePythonEnv is the producer's CLOSED environment: PATH and HOME, the checkout's source, and the
-// settings map; nothing is inherited from the test process. This is the form of what the history producer
-// used to do by hand (it removed MIGRATION_DATABASE_URI and DEV_HEALTH_ALLOW_CELERY_RIVER_CUTOVER from
-// os.Environ() because they change the answer): they are absent by construction, and
-// TestPgmigratePythonEnvIsClosed keeps that visible. A per-run value (a database address) or a scenario's own
-// variable is appended by name by the caller.
-func pgmigratePythonEnv(root string, settings map[string]string) []string {
-	env := []string{"PATH=" + os.Getenv("PATH"), "HOME=" + os.Getenv("HOME"), "PYTHONPATH=" + filepath.Join(root, "src"), "PYTHONDONTWRITEBYTECODE=1"}
-	names := make([]string, 0, len(settings))
-	for name := range settings {
-		names = append(names, name)
+// declaredWith is settings plus a scenario's own NAME=VALUE entries (the cutover switch, a hash seed): they shape
+// the answer, so the launcher takes them as declared entries, where a later entry replaces the closed
+// environment's default of the same name. A scenario's entries are part of its request's input, so the key
+// holds them.
+func declaredWith(settings map[string]string, env []string) map[string]string {
+	declared := map[string]string{}
+	for name, value := range settings {
+		declared[name] = value
 	}
-	sort.Strings(names)
-	for _, name := range names {
-		env = append(env, name+"="+settings[name])
+	for _, entry := range env {
+		name, value, _ := strings.Cut(entry, "=")
+		declared[name] = value
 	}
-	return env
+	return declared
 }
 
-func pythonMigrate(t *testing.T, root string, settings map[string]string, env []string, uri string, args ...string) (int, string) {
+func pythonMigrate(t *testing.T, producer *venueoracle.Producer, settings map[string]string, env []string, uri string, args ...string) (int, string) {
 	t.Helper()
-	return pythonCLI(t, root, settings, env, uri, append([]string{"migrate", "postgres"}, args...)...)
+	return pythonCLI(t, producer, settings, env, uri, append([]string{"migrate", "postgres"}, args...)...)
 }
 
-// pythonCLI runs `dev-hops ARGS` (the real entry point, in process) and returns its
-// exit code and stdout.
-func pythonCLI(t *testing.T, root string, settings map[string]string, env []string, uri string, cliArgs ...string) (int, string) {
+// pythonCLI runs `dev-hops ARGS` (the real entry point, in process) through the producer's launcher (the
+// closed environment) and returns its exit code and stdout.
+func pythonCLI(t *testing.T, producer *venueoracle.Producer, settings map[string]string, env []string, uri string, cliArgs ...string) (int, string) {
 	t.Helper()
-	python := pyoracle.Resolve(t, root)
-	command := exec.Command(python, append([]string{"-c", pythonCLIProgram}, cliArgs...)...)
-	command.Env = pgmigratePythonEnv(root, settings)
+	var extra []string
 	if uri != "" {
 		// The async engine (migrate status) takes asyncpg's own query names.
 		pyURI := strings.Replace(strings.Replace(uri, "postgres://", "postgresql+asyncpg://", 1), "sslmode=", "ssl=", 1)
-		command.Env = append(command.Env, "POSTGRES_URI="+pyURI, "DATABASE_URI="+pyURI)
+		extra = []string{"POSTGRES_URI=" + pyURI, "DATABASE_URI=" + pyURI}
 	}
-	command.Env = append(command.Env, env...)
+	command, err := producer.Command(context.Background(), declaredWith(settings, env), extra, append([]string{"-c", pythonCLIProgram}, cliArgs...)...)
+	if err != nil {
+		t.Fatal(err)
+	}
 	var stdout, stderr bytes.Buffer
 	command.Stdout, command.Stderr = &stdout, &stderr
-	err := command.Run()
+	err = command.Run()
 	code := 0
 	if err != nil {
 		exitErr, ok := err.(*exec.ExitError)
 		if !ok {
-			t.Fatalf("the Python producer did not run: %v", pyoracle.RunError(python, err, []byte(stderr.String())))
+			t.Fatalf("the Python producer did not run: %v", pyoracle.RunError(command.Path, err, []byte(stderr.String())))
 		}
 		code = exitErr.ExitCode()
 	}
@@ -236,17 +233,15 @@ func recordedVersions(t *testing.T, uri string) []string {
 	return versions
 }
 
-// TestHistoryGraphIsTheAlembicChain regenerates the embedded walk from the Python
-// scripts (in the integration shard, next to the baseline capture) and fails when
-// baseline/history.json differs. With DHO_HISTORY_UPDATE=1
-// it rewrites the file.
-func TestHistoryGraphIsTheAlembicChain(t *testing.T) {
-	root, err := filepath.Abs(filepath.Join("..", ".."))
-	if err != nil {
-		t.Fatal(err)
-	}
-	python := pyoracle.Resolve(t, root)
-	const program = `
+// historyWalkSHA256 pins testdata/golden/history_walk.json (the record verb rewrites it).
+const historyWalkSHA256 = "f202489c0982272f29fa1d169812e69cce30ec331107b431740b3453cc868e14"
+
+// historyWalkSettings are the variables that shape the walk program's answer: the producer's environment AND
+// part of the golden's request key.
+var historyWalkSettings = map[string]string{"OTEL_ENABLED": "false", "DEV_HEALTH_ALLOW_CELERY_RIVER_CUTOVER": "1"}
+
+// historyWalkProgram prints the Alembic walk of the Python scripts as JSON.
+const historyWalkProgram = `
 import json, sys
 from alembic import util
 from alembic.script import ScriptDirectory
@@ -271,27 +266,59 @@ for sc in script.walk_revisions(base="base", head="heads"):
     out.append(entry)
 print(json.dumps(out, indent=1, ensure_ascii=False))
 `
-	command := exec.Command(python, "-c", program)
-	command.Env = append(removeEnv(os.Environ(), "MIGRATION_DATABASE_URI"), "PYTHONPATH="+filepath.Join(root, "src"), "OTEL_ENABLED=false", "DEV_HEALTH_ALLOW_CELERY_RIVER_CUTOVER=1")
-	var stdout, stderr bytes.Buffer
-	command.Stdout, command.Stderr = &stdout, &stderr
-	if err := command.Run(); err != nil {
-		t.Fatalf("the generator failed: %v", pyoracle.RunError(python, err, []byte(stderr.String())))
+
+// TestHistoryGraphIsTheAlembicChain compares the embedded walk (baseline/history.json) with the walk the REAL
+// Alembic scripts gave: the program ran once on statesPythonBuild and its output is frozen in
+// testdata/golden/history_walk.json (CHAOS-7797), so no Python starts here. With DHO_HISTORY_UPDATE=1 it
+// rewrites baseline/history.json from the golden.
+func TestHistoryGraphIsTheAlembicChain(t *testing.T) {
+	repoRoot, err := filepath.Abs(filepath.Join("..", ".."))
+	if err != nil {
+		t.Fatal(err)
 	}
+	golden := venueoracle.OpenGolden(t, venueoracle.GoldenSpec{
+		Path:        "testdata/golden/history_walk.json",
+		PythonBuild: statesPythonBuild,
+		SHA256:      historyWalkSHA256,
+		Recipe: "git worktree add --detach $DIR " + statesPythonBuild + " (with its .venv: uv sync --frozen --no-install-project); then from the repository root: " +
+			"go run ./internal/testsupport/venueoracle/goldenrecord -pkg ./internal/pgmigrate/ -test '^TestHistoryGraphIsTheAlembicChain$' -python-root $DIR",
+	})
+	root := golden.PythonRoot(t, repoRoot)
+	request := venueoracle.ProgramRequest("alembic walk", historyWalkProgram, nil, historyWalkSettings)
+	answers := golden.Produce(t, root, []venueoracle.Request{request}, func(producer *venueoracle.Producer, _ []venueoracle.Request) []venueoracle.Response {
+		requireAlembicStamp(t, producer.Root)
+		command, err := producer.Command(context.Background(), historyWalkSettings, nil, "-c", historyWalkProgram)
+		if err != nil {
+			t.Fatal(err)
+		}
+		var stdout, stderr bytes.Buffer
+		command.Stdout, command.Stderr = &stdout, &stderr
+		if err := command.Run(); err != nil {
+			t.Fatalf("the generator failed: %v", pyoracle.RunError(command.Path, err, []byte(stderr.String())))
+		}
+		return []venueoracle.Response{{Status: 0, Body: venueoracle.PackBody(stdout.Bytes())}}
+	})
+	golden.Consumed(t, answers...)
+	walk := []byte(venueoracle.UnpackBody(t, answers[0].Body))
 	if os.Getenv("DHO_HISTORY_UPDATE") == "1" {
-		if err := os.WriteFile("baseline/history.json", stdout.Bytes(), 0o644); err != nil {
+		if err := os.WriteFile("baseline/history.json", walk, 0o644); err != nil {
 			t.Fatal(err)
 		}
 	}
 	var want, got []pgmigrate.HistoryEntry
-	if err := json.Unmarshal(stdout.Bytes(), &want); err != nil {
-		t.Fatalf("decode the generated walk: %v", err)
+	if err := json.Unmarshal(walk, &want); err != nil {
+		t.Fatalf("decode the frozen walk: %v", err)
+	}
+	if len(want) == 0 {
+		t.Fatal("the frozen walk holds no revision: the measurement did not happen")
 	}
 	got, err = pgmigrate.LoadHistory()
 	if err != nil {
 		t.Fatal(err)
 	}
 	if !reflect.DeepEqual(got, want) {
-		t.Fatalf("baseline/history.json is not what the Alembic scripts walk to (%d entries embedded, %d generated): regenerate it with DHO_HISTORY_UPDATE=1 go test -tags integration -run TestHistoryGraphIsTheAlembicChain ./internal/pgmigrate", len(got), len(want))
+		t.Fatalf("baseline/history.json is not what the Alembic scripts walk to (%d entries embedded, %d in the golden): regenerate the golden (testdata/golden/history_walk.json), then DHO_HISTORY_UPDATE=1 go test -tags integration -run TestHistoryGraphIsTheAlembicChain ./internal/pgmigrate", len(got), len(want))
 	}
+	golden.SkipDiff(t)
+	golden.Finish(t)
 }

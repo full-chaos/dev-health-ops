@@ -386,25 +386,93 @@ LIMIT {limit:UInt32} OFFSET {offset:UInt32}`, bindings)
 }
 
 // repoTeamMap resolves each repository id to the team its full name
-// matches; nil means the catalogues could not be read.
+// selects; a catalogue read that fails degrades to "no team", never an error.
 func repoTeamMap(ctx context.Context, client QueryClient, orgID string, repoIDs []string, operation string) map[string]*string {
-	if len(repoIDs) == 0 || orgID == "" {
-		return map[string]*string{}
-	}
-	teams, err := loadTeams(ctx, client, orgID)
-	if err != nil {
-		warnCatalogue(ctx, operation, err)
-		return map[string]*string{}
-	}
-	names, err := loadRepoNamesFor(ctx, client, orgID, repoIDs)
-	if err != nil {
-		warnCatalogue(ctx, operation, err)
-		return map[string]*string{}
-	}
-	return resolveTeams(teams, repoIDs, names)
+	return loadRepoCatalogue(ctx, client, orgID, repoIDs, operation).teamByRepo
 }
 
-func loadRepoNamesFor(ctx context.Context, client QueryClient, orgID string, ids []string) (map[string]string, error) {
+// repoCatalogue is what the repository and team catalogues say about a page of
+// repositories: the team each one selects, plus the display names the
+// aiAttributedPrs rows (CHAOS-7773) and the aiOpportunities rows (CHAOS-8114)
+// carry. A name is present only when the catalogue holds a non-empty one: an id
+// is never offered as a name.
+type repoCatalogue struct {
+	teamByRepo map[string]*string
+	repoNames  map[string]string
+	teamNames  map[string]string
+}
+
+// repoName is the repository's catalogue full name, or nil.
+func (c repoCatalogue) repoName(repoID string) *string {
+	if n, ok := c.repoNames[repoID]; ok && n != "" {
+		return &n
+	}
+	return nil
+}
+
+// teamName is the catalogue name of the team with this id, or nil.
+func (c repoCatalogue) teamName(teamID *string) *string {
+	if teamID == nil {
+		return nil
+	}
+	if n, ok := c.teamNames[*teamID]; ok && n != "" {
+		return &n
+	}
+	return nil
+}
+
+// loadRepoCatalogue reads the team and repository catalogues once for a page.
+// Each read degrades on its own: a failed teams read leaves no team and no team
+// name, a failed repository read leaves no repository name and no team (a team
+// is selected by the repository full name); either way the rows still come back.
+// The team NAMES need the teams read only: a row that carries its own team id
+// (an aiOpportunities row) keeps its team name when the repository read fails.
+func loadRepoCatalogue(ctx context.Context, client QueryClient, orgID string, repoIDs []string, operation string) repoCatalogue {
+	out := repoCatalogue{
+		teamByRepo: map[string]*string{},
+		repoNames:  map[string]string{},
+		teamNames:  map[string]string{},
+	}
+	if len(repoIDs) == 0 || orgID == "" {
+		return out
+	}
+	teams, teamsErr := loadTeams(ctx, client, orgID)
+	if teamsErr != nil {
+		warnCatalogue(ctx, operation, teamsErr)
+	}
+	raw, namesErr := queryRepoNames(ctx, client, orgID, repoIDs)
+	if namesErr != nil {
+		warnCatalogue(ctx, operation, namesErr)
+	}
+	for id, name := range raw {
+		if name != "" {
+			out.repoNames[id] = name
+		}
+	}
+	// teams is empty when its read failed.
+	for _, t := range teams {
+		if t.Name != "" {
+			out.teamNames[t.ID] = t.Name
+		}
+	}
+	if teamsErr != nil || namesErr != nil {
+		return out
+	}
+	// The reference reads a repository with no full name as its id.
+	fallback := make(map[string]string, len(raw))
+	for id, name := range raw {
+		if name == "" {
+			name = id
+		}
+		fallback[id] = name
+	}
+	out.teamByRepo = resolveTeams(teams, repoIDs, fallback)
+	return out
+}
+
+// queryRepoNames returns each found repository's catalogue full name; an empty
+// name stays empty so callers choose their own fallback.
+func queryRepoNames(ctx context.Context, client QueryClient, orgID string, ids []string) (map[string]string, error) {
 	rs, err := client.Query(ctx, `SELECT toString(id) AS repo_id, coalesce(repo, '') AS full_name
 FROM repos
 WHERE org_id = {org_id:String}
@@ -420,9 +488,6 @@ WHERE org_id = {org_id:String}
 		var id, name string
 		if err := rs.Scan(&id, &name); err != nil {
 			return nil, fmt.Errorf("repos scan: %w", err)
-		}
-		if name == "" {
-			name = id
 		}
 		out[id] = name
 	}

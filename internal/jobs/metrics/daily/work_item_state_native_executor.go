@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log/slog"
 	"sort"
 	"time"
 
@@ -11,6 +12,7 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/full-chaos/dev-health-ops/internal/jobruntime"
+	"github.com/full-chaos/dev-health-ops/internal/jobs/metrics/workitemblockers"
 	"github.com/full-chaos/dev-health-ops/internal/jobs/metrics/workitemmetrics"
 )
 
@@ -107,6 +109,12 @@ func (executor *WorkItemStateExecutor) ComputeFamily(
 	end := start.Add(24 * time.Hour)
 
 	total := 0
+	// The blocked spans (CHAOS-8493) are organization-wide -- a blocker lives
+	// in any repository, or in none -- so they are read ONCE for the
+	// partition, by the first repository that has anything to compute, and
+	// not at all when no repository does.
+	var blocked map[string][]workitemmetrics.BlockedInterval
+	blockedLoaded := false
 	for _, repoID := range repoIDs {
 		items, err := LoadWorkItemStateWorkItems(ctx, executor.conn, run.OrganizationID, repoID, start, end)
 		if err != nil {
@@ -133,13 +141,42 @@ func (executor *WorkItemStateExecutor) ComputeFamily(
 			return wrapWorkItemStatePartialWrite(total, repoID, err)
 		}
 
+		if !blockedLoaded {
+			// A failed read fails the partition. Computing without it would
+			// write full-length rows for the statuses the blocked hours
+			// belong to, and those rows would read as a complete answer.
+			var ended workitemmetrics.EndedRelationStats
+			blocked, ended, err = workitemblockers.LoadBlockedIntervals(ctx, executor.conn, run.OrganizationID)
+			if err != nil {
+				return wrapWorkItemStatePartialWrite(total, repoID, err)
+			}
+			blockedLoaded = true
+			// One line per partition, no id: how many relations the end rule
+			// closed, by provider, and how many of them are the named case of
+			// a github issue on a Projects v2 board.
+			counts := ended.Counts()
+			slog.Info(workitemmetrics.EndedRelationsLogMessage,
+				"writer", "daily_family",
+				"relations", counts.Relations,
+				"ended", counts.Ended,
+				"ended_github", counts.EndedGitHub,
+				"ended_gitlab", counts.EndedGitLab,
+				"ended_jira", counts.EndedJira,
+				"ended_linear", counts.EndedLinear,
+				"ended_other", counts.EndedOther,
+				"github_board_candidates", counts.GitHubBoardCandidates,
+			)
+		}
+
 		// One honest, real-wall-clock timestamp per repo group -- see
 		// WriteTeamMetricsDailyPerRepo's doc comment for why this
 		// mirrors Python's real per-repo_id call cadence rather than
 		// stamping the whole partition with one shared value.
 		computedAt := executor.nowUTC()
 
-		rows, missingAttribution := computeWorkItemStateDurationsForRepo(day, start, end, items, transitions, attributions, computedAt)
+		rows, itemRows, missingAttribution := computeWorkItemStateDurationRowsForRepo(
+			day, start, end, items, transitions, attributions, computedAt, blocked,
+		)
 
 		// CHAOS-4278 (codex round-1 P2 finding): observe as soon as the
 		// count is known, BEFORE attempting the write -- unlike
@@ -168,6 +205,11 @@ func (executor *WorkItemStateExecutor) ComputeFamily(
 		// confirmed success, or the failing write's own truthful count is
 		// discarded a second time.
 		written, err := WriteWorkItemStateDurationsDaily(ctx, executor.conn, run.OrganizationID, day, rows, computedAt)
+		total += written
+		if err != nil {
+			return wrapWorkItemStatePartialWrite(total, repoID, err)
+		}
+		written, err = WriteWorkItemBlockedDurationsDaily(ctx, executor.conn, run.OrganizationID, day, itemRows, computedAt)
 		total += written
 		if err != nil {
 			return wrapWorkItemStatePartialWrite(total, repoID, err)
@@ -274,6 +316,27 @@ func segmentWorkItemStatuses(
 	return filtered
 }
 
+// overlayWorkItemStateBlocked applies workitemmetrics.OverlayBlocked to this
+// family's own segment type. With no interval the segments are returned as
+// they are, so an item with no open blocker is computed exactly as before.
+func overlayWorkItemStateBlocked(
+	segments []workItemStateSegment, intervals []workitemmetrics.BlockedInterval,
+) []workItemStateSegment {
+	if len(segments) == 0 || len(intervals) == 0 {
+		return segments
+	}
+	shared := make([]workitemmetrics.StatusSegment, 0, len(segments))
+	for _, segment := range segments {
+		shared = append(shared, workitemmetrics.StatusSegment{Status: segment.status, Start: segment.start, End: segment.end})
+	}
+	overlaid := workitemmetrics.OverlayBlocked(shared, intervals)
+	result := make([]workItemStateSegment, 0, len(overlaid))
+	for _, segment := range overlaid {
+		result = append(result, workItemStateSegment{status: segment.Status, start: segment.Start, end: segment.End})
+	}
+	return result
+}
+
 // workItemStateTotalKey mirrors the Python (provider, work_scope_id,
 // team_id, status) aggregation key.
 type workItemStateTotalKey struct {
@@ -298,7 +361,26 @@ func computeWorkItemStateDurationsForRepo(
 	transitions []workItemStateTransition,
 	attributions map[string]workItemPrimaryAttribution,
 	computedAt time.Time,
+	blocked map[string][]workitemmetrics.BlockedInterval,
 ) ([]workItemStateDailyRow, int) {
+	rows, _, missingAttribution := computeWorkItemStateDurationRowsForRepo(
+		day, start, end, items, transitions, attributions, computedAt, blocked,
+	)
+	return rows, missingAttribution
+}
+
+// computeWorkItemStateDurationRowsForRepo produces the established aggregate
+// rows plus one blocked-duration snapshot for each item that contributed to the
+// target day. A zero is deliberate: it supersedes an earlier positive snapshot
+// when a recompute finds that the item no longer has blocked time.
+func computeWorkItemStateDurationRowsForRepo(
+	day, start, end time.Time,
+	items []workItemStateWorkItem,
+	transitions []workItemStateTransition,
+	attributions map[string]workItemPrimaryAttribution,
+	computedAt time.Time,
+	blocked map[string][]workitemmetrics.BlockedInterval,
+) ([]workItemStateDailyRow, []workItemBlockedDurationDailyRow, int) {
 	transitionsByItem := make(map[string][]workItemStateTransition, len(transitions))
 	for _, transition := range transitions {
 		transitionsByItem[transition.WorkItemID] = append(transitionsByItem[transition.WorkItemID], transition)
@@ -316,6 +398,7 @@ func computeWorkItemStateDurationsForRepo(
 	keysSeen := make(map[workItemStateTotalKey]struct{})
 	itemsSeen := make(map[workItemStateTotalKey]map[string]struct{})
 	teamNameByKey := make(map[[3]string]string) // (provider, workScopeID, teamID) -> teamName
+	itemRows := make([]workItemBlockedDurationDailyRow, 0, len(sortedItems))
 	missingAttribution := 0
 
 	for _, item := range sortedItems {
@@ -332,7 +415,14 @@ func computeWorkItemStateDurationsForRepo(
 		workScopeID := item.workScopeID()
 		teamNameByKey[[3]string{item.Provider, workScopeID, teamID}] = teamName
 
-		for _, segment := range segmentWorkItemStatuses(item.CreatedAt, item.CompletedAt, item.Status, itemTransitions, computedAt) {
+		segments := segmentWorkItemStatuses(item.CreatedAt, item.CompletedAt, item.Status, itemTransitions, computedAt)
+		// CHAOS-8493: the parts of a non-terminal segment in which the item
+		// has an open blocker are "blocked". The hours of the item do not
+		// change; see workitemmetrics.OverlayBlocked.
+		segments = overlayWorkItemStateBlocked(segments, blocked[item.WorkItemID])
+		blockedHours := 0.0
+		contributed := false
+		for _, segment := range segments {
 			overlapStart := segment.start
 			if start.After(overlapStart) {
 				overlapStart = start
@@ -344,7 +434,11 @@ func computeWorkItemStateDurationsForRepo(
 			if !overlapEnd.After(overlapStart) {
 				continue
 			}
+			contributed = true
 			hours := overlapEnd.Sub(overlapStart).Hours()
+			if segment.status == workitemmetrics.StatusBlocked {
+				blockedHours += hours
+			}
 			key := workItemStateTotalKey{provider: item.Provider, workScopeID: workScopeID, teamID: teamID, status: segment.status}
 			if _, ok := keysSeen[key]; !ok {
 				keysSeen[key] = struct{}{}
@@ -357,6 +451,16 @@ func computeWorkItemStateDurationsForRepo(
 				itemsSeen[key] = seen
 			}
 			seen[item.WorkItemID] = struct{}{}
+		}
+		if contributed {
+			itemRows = append(itemRows, workItemBlockedDurationDailyRow{
+				Provider:      item.Provider,
+				WorkScopeID:   workScopeID,
+				TeamID:        teamID,
+				TeamName:      teamName,
+				WorkItemID:    item.WorkItemID,
+				DurationHours: blockedHours,
+			})
 		}
 	}
 
@@ -392,7 +496,21 @@ func computeWorkItemStateDurationsForRepo(
 			AvgWIP:       totalHours / 24.0,
 		})
 	}
-	return rows, missingAttribution
+	sort.Slice(itemRows, func(i, j int) bool {
+		a, b := itemRows[i], itemRows[j]
+		if a.Provider != b.Provider {
+			return a.Provider < b.Provider
+		}
+		if a.WorkScopeID != b.WorkScopeID {
+			return a.WorkScopeID < b.WorkScopeID
+		}
+		if a.TeamID != b.TeamID {
+			return a.TeamID < b.TeamID
+		}
+		return a.WorkItemID < b.WorkItemID
+	})
+
+	return rows, itemRows, missingAttribution
 }
 
 // resolveWorkItemPrimaryTeam applies normalize_team_id/normalize_team_name

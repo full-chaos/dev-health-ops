@@ -12,7 +12,6 @@ import (
 	"io"
 	"net/url"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"reflect"
 	"regexp"
@@ -26,9 +25,10 @@ import (
 
 	"github.com/full-chaos/dev-health-ops/internal/pgmigrate"
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/containers"
-	"github.com/full-chaos/dev-health-ops/internal/testsupport/pyoracle"
-	"github.com/full-chaos/dev-health-ops/internal/testsupport/venueoracle"
 )
+
+// baselineStatesSHA256 pins testdata/golden/baseline_states.json (the record verb rewrites it).
+const baselineStatesSHA256 = "0fb604ebb9779d7349690056311b702b7c319e39eaad1c6f055dc7d5147f62d0"
 
 // updateEnv, set to 1, rewrites baseline/head.json from the executed
 // upgrade instead of comparing against it. CI never sets it, so there the
@@ -50,22 +50,14 @@ for revision in sys.argv[2:]:
         sys.exit(code)
 `
 
-// pythonUpgrade builds a database with the real Python upgrade, revision by revision.
-func pythonUpgrade(t *testing.T, python, root, uri string, revisions ...string) {
-	t.Helper()
-	command := exec.Command(python, append([]string{"-c", upgradeProgram, uri}, revisions...)...)
-	command.Env = append(os.Environ(), "PYTHONPATH="+filepath.Join(root, "src"))
-	if output, err := command.CombinedOutput(); err != nil {
-		t.Fatalf("the Python upgrade to %v failed: %v", revisions, pyoracle.RunError(python, err, output))
-	}
-}
-
 // productionSettings are the settings the head is captured with: the ones
 // production runs (read from prod, 2026-09-24).
 var productionSettings = pgmigrate.Settings{Cutover: true, RiverSchema: "river"}
 
-// TestBaselineVenueOracleIsTheExecutedPythonUpgrade is the baseline's provenance and the
-// differential oracle of the whole migrator:
+// TestBaselineIsTheFrozenPythonUpgrade is the baseline's provenance and the
+// differential oracle of the whole migrator. The REAL Python upgrade ran once on statesPythonBuild; what it
+// built is frozen in testdata/golden/baseline_states.json (frozen_states_integration_test.go: one capture
+// per state, restored and asserted before use), so no Python starts here (CHAOS-7797):
 //
 //  1. capture: run the REAL Python upgrade, with production's settings, to the
 //     baseline revision (0138 and the River cutover 0066: prod's state) on a fresh
@@ -82,7 +74,7 @@ var productionSettings = pgmigrate.Settings{Cutover: true, RiverSchema: "river"}
 //     refused as below the head, naming the cutover; a database missing the
 //     application head is refused naming it; a public schema without
 //     alembic_version is refused as foreign.
-func TestBaselineVenueOracleIsTheExecutedPythonUpgrade(t *testing.T) {
+func TestBaselineIsTheFrozenPythonUpgrade(t *testing.T) {
 	ctx := context.Background()
 	instance, err := containers.StartPostgres(ctx)
 	if err != nil {
@@ -101,11 +93,11 @@ func TestBaselineVenueOracleIsTheExecutedPythonUpgrade(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	root, err := filepath.Abs(filepath.Join("..", ".."))
-	if err != nil {
-		t.Fatal(err)
+	specs := []stateSpec{upgradeSpec("0138", "0066"), upgradeSpec("head")}
+	for _, file := range chain[:len(chain)-1] {
+		specs = append(specs, upgradeSpec(file.Revision, "0066"))
 	}
-	python := pyoracle.Resolve(t, root)
+	golden, frozen := openStatesGolden(t, "testdata/golden/baseline_states.json", baselineStatesSHA256, "TestBaselineIsTheFrozenPythonUpgrade", specs)
 
 	t.Setenv(pgmigrate.CutoverEnv, "1")
 	t.Setenv(pgmigrate.RiverSchemaEnv, productionSettings.RiverSchema)
@@ -115,19 +107,15 @@ func TestBaselineVenueOracleIsTheExecutedPythonUpgrade(t *testing.T) {
 		t.Fatalf("the capture environment reads as %+v, want production's %+v", got, productionSettings)
 	}
 
-	// pythonAt builds a database with the real Python upgrade to a revision (and the
-	// cutover) and captures it.
-	// It also returns when the upgrade started: the rows it seeds carry timestamps
-	// from then, and a database the migrator upgrades later is captured over the whole
-	// span.
+	// pythonAt is the database the real Python upgrade left at a revision (and the cutover): the frozen
+	// capture restored into a scratch database (its heads, tables and row counts asserted), and the frozen
+	// capture itself. It also returns when the restore started: the rows the capture seeds carry now() from
+	// then, and a database the migrator upgrades later is captured over the whole span.
 	pythonAt := func(revisions ...string) (string, pgmigrate.Baseline, time.Time) {
 		t.Helper()
-		database := scratchDatabase(t, admin)
-		started := time.Now()
-		pythonUpgrade(t, python, root, databaseURI(t, instance.URI, database), revisions...)
-		captured := capture(t, ctx, instance, database, window{started, time.Now()})
-		captured.Cutover, captured.RiverSchema = productionSettings.Cutover, productionSettings.RiverSchema
-		return database, captured, started
+		name := strings.Join(revisions, "+")
+		restored := frozen.restoreState(t, ctx, instance, admin, name)
+		return restored.database, frozen.state(t, name).Capture, restored.started
 	}
 
 	// 1. the baseline is the Python upgrade to its own revision.
@@ -143,7 +131,7 @@ func TestBaselineVenueOracleIsTheExecutedPythonUpgrade(t *testing.T) {
 	}
 	if diff := compare(captured, checkedIn); diff != "" {
 		t.Fatalf("baseline/head.json is not what the Python upgrade to 0138 builds today (%s); regenerate it with "+
-			"%s=1 go test -tags=integration -run TestBaselineVenueOracleIsTheExecutedPythonUpgrade ./internal/pgmigrate",
+			"%s=1 go test -tags=integration -run TestBaselineIsTheFrozenPythonUpgrade ./internal/pgmigrate (after re-recording testdata/golden/baseline_states.json)",
 			diff, updateEnv)
 	}
 	wantHeads := pgmigrate.Heads(checkedIn, chain)
@@ -293,7 +281,8 @@ func TestBaselineVenueOracleIsTheExecutedPythonUpgrade(t *testing.T) {
 	if !errors.As(err, &foreign) {
 		t.Fatalf("upgrade over tables without alembic_version = %v, want a foreign-database refusal", err)
 	}
-	venueoracle.WriteProof(t)
+	golden.SkipDiff(t)
+	golden.Finish(t)
 }
 
 // window is the time a migration ran. A seed row stamped inside it was
@@ -305,7 +294,10 @@ type window struct{ from, to time.Time }
 
 var timestampLiteral = regexp.MustCompile(`'(\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}(?:\.\d{1,6})?)(\+00)?'`)
 
-func (w window) replaceWithNow(data string) string {
+func (w window) replaceWithNow(data string) string { return w.replaceWith(data, "now()") }
+
+// replaceWith replaces each timestamp literal inside the window by replacement.
+func (w window) replaceWith(data, replacement string) string {
 	if w.from.IsZero() {
 		return data
 	}
@@ -316,7 +308,7 @@ func (w window) replaceWithNow(data string) string {
 		if err != nil || stamp.Before(from) || stamp.After(to) {
 			return literal
 		}
-		return "now()"
+		return replacement
 	})
 }
 
@@ -339,6 +331,12 @@ var insertLine = regexp.MustCompile(`^INSERT INTO public\.(\w+) \((.*?)\) VALUES
 var uuidLiteral = regexp.MustCompile(`^'[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}'$`)
 
 func canonicalIDs(data string) string {
+	return mapRandomIDs(data, func(n int) string { return fmt.Sprintf("'<random-id-%d>'", n) })
+}
+
+// mapRandomIDs replaces each distinct value of a randomIDColumns column by token(n), n the order of first
+// appearance, so a value used twice (role_permissions.permission_id) stays one value.
+func mapRandomIDs(data string, token func(n int) string) string {
 	tokens := map[string]string{}
 	lines := strings.Split(data, "\n")
 	for index, line := range lines {
@@ -355,12 +353,12 @@ func canonicalIDs(data string) string {
 			if !randomIDColumns[match[1]][column] || !uuidLiteral.MatchString(values[position]) {
 				continue
 			}
-			token, ok := tokens[values[position]]
+			mapped, ok := tokens[values[position]]
 			if !ok {
-				token = fmt.Sprintf("'<random-id-%d>'", len(tokens)+1)
-				tokens[values[position]] = token
+				mapped = token(len(tokens) + 1)
+				tokens[values[position]] = mapped
 			}
-			values[position] = token
+			values[position] = mapped
 		}
 		lines[index] = "INSERT INTO public." + match[1] + " (" + match[2] + ") VALUES (" + strings.Join(values, ", ") + ");"
 	}

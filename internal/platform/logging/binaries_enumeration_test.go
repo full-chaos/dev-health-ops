@@ -36,7 +36,7 @@ var binaryLogging = map[string]string{
 	"ask-dev-jobs-probe":                     "installs",
 	"auth-migrate":                           "silent",
 	"auth-service":                           "authruntime",
-	"dev-health-migration-matrix":            "silent",
+	"dev-health-migration-matrix":            "installs",
 	"dev-health-provider-fixture":            "installs",
 	"dev-health-provider-normalized-fixture": "installs",
 	"dev-health-worker-migrate":              "silent",

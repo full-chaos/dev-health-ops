@@ -9,7 +9,6 @@ import (
 	"path/filepath"
 	"regexp"
 	"sort"
-	"strconv"
 	"strings"
 	"testing"
 )
@@ -75,28 +74,41 @@ func goTestFuncDeclared(t *testing.T, path, name string) bool {
 // rather than left raising, so the ledger-vs-schema.py check skips it.
 var pythonFieldDeletedOutright = map[string]bool{"home": true}
 
+// pythonSchemaFacts is what the ledger is held to: the root fields whose
+// Strawberry body raises the deletion error, and that error's message template.
+type pythonSchemaFacts struct {
+	RaisingFields []string `json:"raising_fields"`
+	Message       string   `json:"message"`
+}
+
+// frozenSchemaFacts reads testdata/python_schema_deleted_fields.json: those
+// facts as they were in src/dev_health_ops/api/graphql/schema.py when the
+// Python api source was scheduled for deletion.
+func frozenSchemaFacts(t *testing.T) pythonSchemaFacts {
+	t.Helper()
+	raw, err := os.ReadFile(filepath.Join("testdata", "python_schema_deleted_fields.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var facts pythonSchemaFacts
+	if err := json.Unmarshal(raw, &facts); err != nil {
+		t.Fatal(err)
+	}
+	if len(facts.RaisingFields) == 0 || facts.Message == "" {
+		t.Fatal("the frozen schema facts are empty")
+	}
+	sort.Strings(facts.RaisingFields)
+	return facts
+}
+
 // The ledger names exactly the operations whose Strawberry field body raises
 // the deletion error, and its message template is the text that field body
 // raises. A ledger entry with a live Python path, or a deleted path with no
 // ledger entry, turns this red.
 func TestLedgerMatchesTheDeletedFieldBodiesInSchemaPy(t *testing.T) {
-	root := repoRootFromTest(t)
-	raw, err := os.ReadFile(filepath.Join(root, filepath.FromSlash("src/dev_health_ops/api/graphql/schema.py")))
-	if err != nil {
-		t.Fatal(err)
-	}
-	source := string(raw)
-
-	callers := map[string]bool{}
-	for _, match := range regexp.MustCompile(`_raise_served_by_query_api\(\s*"([A-Za-z0-9_]+)"`).FindAllStringSubmatch(source, -1) {
-		callers[match[1]] = true
-	}
+	frozen := frozenSchemaFacts(t)
+	fromSchema := frozen.RaisingFields
 	ledger := defaultLedgerForTest(t)
-	var fromSchema []string
-	for operation := range callers {
-		fromSchema = append(fromSchema, operation)
-	}
-	sort.Strings(fromSchema)
 	// A ledger operation is either a root field whose body raises, or a named
 	// document over one (its response root is the root field that raises).
 	roots := map[string]bool{}
@@ -122,40 +134,9 @@ func TestLedgerMatchesTheDeletedFieldBodiesInSchemaPy(t *testing.T) {
 		t.Fatalf("schema.py raises the deletion error for %v; the ledger's response roots are %v", fromSchema, fromLedger)
 	}
 
-	if got := pythonRaisedMessage(t, source); got != ledger.MessageTemplate {
-		t.Fatalf("schema.py raises\n%q\nthe ledger expects\n%q", got, ledger.MessageTemplate)
+	if frozen.Message != ledger.MessageTemplate {
+		t.Fatalf("schema.py raises\n%q\nthe ledger expects\n%q", frozen.Message, ledger.MessageTemplate)
 	}
-}
-
-// pythonRaisedMessage concatenates the string literals of the
-// GoServedOperationUnavailableError raise in _raise_served_by_query_api,
-// keeping the f-string placeholder for the operation as "{operation}".
-func pythonRaisedMessage(t *testing.T, source string) string {
-	t.Helper()
-	marker := "raise GoServedOperationUnavailableError("
-	start := strings.Index(source, marker)
-	if start < 0 {
-		t.Fatal("schema.py has no GoServedOperationUnavailableError raise")
-	}
-	rest := source[start+len(marker):]
-	literal := regexp.MustCompile(`^\s*f?"((?:[^"\\]|\\.)*)"`)
-	var message strings.Builder
-	for {
-		match := literal.FindStringSubmatch(rest)
-		if match == nil {
-			break
-		}
-		unquoted, err := strconv.Unquote(`"` + match[1] + `"`)
-		if err != nil {
-			t.Fatalf("unquote %q: %v", match[1], err)
-		}
-		message.WriteString(unquoted)
-		rest = rest[len(match[0]):]
-	}
-	if message.Len() == 0 {
-		t.Fatal("no string literal found in the raise")
-	}
-	return message.String()
 }
 
 func TestLedgerRejectsMalformedDocuments(t *testing.T) {

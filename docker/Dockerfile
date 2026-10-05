@@ -56,8 +56,10 @@ COPY cmd/dev-health-worker-migrate ./cmd/dev-health-worker-migrate
 COPY cmd/ask-dev-jobs-probe ./cmd/ask-dev-jobs-probe
 COPY internal ./internal
 # dev-health-worker-migrate embeds the job migration policy it seeds route
-# rows from (contracts/jobs/v1/embed.go).
+# rows from (contracts/jobs/v1/embed.go) and the sync-dispatch route policy
+# it moves seeded route rows by (contracts/sync-dispatch/v1/embed.go).
 COPY contracts/jobs/v1 ./contracts/jobs/v1
+COPY contracts/sync-dispatch/v1 ./contracts/sync-dispatch/v1
 
 RUN --mount=type=cache,target=/go/pkg/mod \
     --mount=type=cache,target=/root/.cache/go-build \
@@ -128,7 +130,7 @@ ARG BUILD_TIME="1970-01-01T00:00:00Z"
 # org.opencontainers.image.revision off whatever is currently tagged
 # `latest` to decide whether a new build may move that tag.
 LABEL org.opencontainers.image.title="Dev Health ops runtime" \
-      org.opencontainers.image.description="dev-health-ops API and runner images" \
+      org.opencontainers.image.description="dev-health-ops runtime image" \
       org.opencontainers.image.source="https://github.com/full-chaos/dev-health-ops" \
       org.opencontainers.image.version=${VERSION} \
       org.opencontainers.image.revision=${COMMIT} \
@@ -167,16 +169,3 @@ RUN useradd --uid 10001 --create-home --shell /bin/bash appuser
 WORKDIR /app
 
 USER 10001
-
-
-# ── API target ────────────────────────────────────────────────────────────────
-FROM runtime AS api
-
-EXPOSE 8000
-
-# Readiness probe — fast check, no external dependency validation
-HEALTHCHECK --interval=15s --timeout=5s --start-period=30s --retries=3 \
-  CMD wget -qO- http://localhost:8000/ready || exit 1
-
-ENTRYPOINT ["dev-hops", "api"]
-CMD ["--host", "0.0.0.0", "--port", "8000"]

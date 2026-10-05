@@ -1,0 +1,73 @@
+query AIImpactSummary($orgId: String!, $dateRange: AIDateRangeInput!, $scope: AIScopeInput) {
+  aiImpactSummary(orgId: $orgId, dateRange: $dateRange, scope: $scope) {
+    orgId
+    startDate
+    endDate
+    totalPrs
+    aiAssistedPrs
+    agentCreatedPrs
+    humanPrs
+    unknownPrs
+    aiAssistedPrRatio
+    dataAvailable
+    computedAt
+    byBucket {
+      bucket
+      prsTotal
+      prsMerged
+      aiAssistedPrRatio
+      agentCreatedPrCount
+      cycleTimeAvgHours
+      aiCycleTimeDeltaHours
+      aiReviewAmplification
+      reworkDragRate
+      revertRate
+      incidentDragRate
+      testGapRate
+      leverage {
+        prsComponent
+        cycleTimeComponent
+        reviewComponent
+        reworkComponent
+        testComponent
+        incidentComponent
+        __typename
+      }
+      __typename
+    }
+    daily {
+      bucket
+      prsTotal
+      prsMerged
+      cycleTimeAvgHours
+      reviewsPerPr
+      changesRequestedPerPr
+      reworkPrs
+      reworkRate
+      revertPrs
+      revertRate
+      incidentsCount
+      incidentRate
+      testGapPrs
+      testGapRate
+      __typename
+    }
+    repoBreakdown {
+      scopeId
+      scopeLabel
+      aiPrsTotal
+      aiAssistedPrRatio
+      reworkRateDelta
+      __typename
+    }
+    teamBreakdown {
+      scopeId
+      scopeLabel
+      aiPrsTotal
+      aiAssistedPrRatio
+      reworkRateDelta
+      __typename
+    }
+    __typename
+  }
+}

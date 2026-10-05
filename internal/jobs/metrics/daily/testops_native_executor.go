@@ -41,14 +41,13 @@ import (
 //
 // # repoName is the repo_id string, deliberately
 //
-// Identical reasoning to TestopsRiskExecutor's own note: the live bridge call
-// site never passes repo_name, so discover_repos falls back to
-// `full_name = repo_name or str(repo_id)` (job_daily.py:135). In production
-// repo_names_by_id[repo_id] IS the stringified UUID, so repo_team_resolver can
-// never match a real pattern on this path. Loading the real name here would
-// make Go MORE accurate than live Python rather than row-identical to it,
-// which the standing port rule forbids (reproduce Python's behaviour,
-// including its latent defects; a fix goes in its own ticket).
+// The resolver is keyed by the repository id (testops_repo_owner.go,
+// CHAOS-8512): the team of a row is the repository's authoritative owner in
+// team_repo_ownership, and that table is read by repository id. So each
+// compute call gets repoID.String() as the name it resolves, and no
+// repository name is loaded. Before CHAOS-8512 the resolver matched
+// teams.repo_patterns against that same id string, which no real pattern
+// equals, so every row had a NULL team.
 // -----------------------------------------------------------------------
 
 var errTestopsNativeUnavailable = errors.New("testops native executor unavailable")
@@ -69,9 +68,8 @@ func newTestopsNativeBase(conn driver.Conn) (testopsNativeBase, error) {
 }
 
 // testopsNativeScope is the validated, per-partition setup all three
-// executors perform identically: check the run, parse the repo scope, build
-// the same repo-pattern resolver job_daily.py builds once per run, and derive
-// the day window.
+// executors perform identically: check the run, parse the repo scope, derive
+// the day window, and load the repository-owner resolver for that day.
 type testopsNativeScope struct {
 	repoIDs    []uuid.UUID
 	resolver   testops.RepoTeamResolver
@@ -96,23 +94,21 @@ func (base testopsNativeBase) scope(
 		return testopsNativeScope{}, fmt.Errorf(
 			"%w: partition %s repo_ids: %v", ErrInvalidState, partition.ID, err)
 	}
-	// job_daily.py builds repo_team_resolver ONCE per run
-	// (build_repo_pattern_resolver(teams_data)) and passes it into every
-	// family's compute call. Reuse team_wellbeing's existing loader/resolver
-	// rather than a second implementation of the same query -- CHAOS-4294's
-	// codex round 1 caught testops_risk shipping with NO team resolution at
-	// all, silently nulling every repo-pattern-derived team_id.
-	teams, err := LoadWellbeingTeams(ctx, base.conn, run.OrganizationID)
+	// The team of a row is the repository's authoritative owner as of the end
+	// of the target day (CHAOS-8512, testops_repo_owner.go), built once per
+	// partition and passed into every repository's compute call.
+	day := chDate(run.TargetDay)
+	end := day.Add(24 * time.Hour)
+	resolver, err := loadTestopsRepoOwnerResolver(ctx, base.conn, run.OrganizationID, end)
 	if err != nil {
 		return testopsNativeScope{}, err
 	}
-	day := chDate(run.TargetDay)
 	return testopsNativeScope{
 		repoIDs:    repoIDs,
-		resolver:   NewRepoPatternResolver(teams),
+		resolver:   resolver,
 		day:        day,
 		start:      day,
-		end:        day.Add(24 * time.Hour),
+		end:        end,
 		computedAt: base.nowUTC(),
 	}, nil
 }

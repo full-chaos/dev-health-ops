@@ -10,6 +10,7 @@ import (
 
 	"github.com/jackc/pgx/v5/pgxpool"
 
+	"github.com/full-chaos/dev-health-ops/internal/mcpclass"
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/routingauditschema"
 )
 
@@ -144,16 +145,25 @@ func TestEnableRecordsTheStateItReplaced(t *testing.T) {
 }
 
 // The audit row commits with the routing write or not at all. A REFUSED
-// enable must leave no trace claiming an operator enabled something.
+// enable must leave no trace claiming an operator enabled something. Only an
+// MCP class root can still be refused for want of proof (CHAOS-8586), so the
+// refusal here is an unproven class root.
 func TestARefusedEnableWritesNeitherARoutingRowNorAnAuditRow(t *testing.T) {
 	ctx := t.Context()
 	pool := startAuditedRegistryPostgres(t)
 
-	if _, err := Enable(ctx, pool, enableRequest("featureFlags")); !errors.Is(err, ErrEnableUnproven) {
+	request := enableRequest(mcpclass.Operation("hotspots"))
+	request.DocumentDigest = mcpclass.Digests()
+	request.OperationKinds = map[string]string{mcpclass.Operation("hotspots"): OperationKindMCPClass}
+	if _, err := Enable(ctx, pool, request); !errors.Is(err, ErrEnableUnproven) {
 		t.Fatalf("Enable = %v, want ErrEnableUnproven", err)
 	}
 	if audits := readAuditRows(t, ctx, pool); len(audits) != 0 {
 		t.Fatalf("a refused enable wrote %d audit row(s): %+v", len(audits), audits)
+	}
+	var rows int
+	if err := pool.QueryRow(ctx, `SELECT count(*) FROM go_api_routing_state`).Scan(&rows); err != nil || rows != 0 {
+		t.Fatalf("a refused enable left %d routing row(s) (err %v)", rows, err)
 	}
 }
 

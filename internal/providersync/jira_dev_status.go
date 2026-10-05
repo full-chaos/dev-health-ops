@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"io"
+	"log/slog"
 	"net/http"
 	"net/url"
 	"os"
@@ -27,9 +28,14 @@ const jiraDevStatusUnavailableCause = "dev_status_unavailable"
 // mirroring comments_limit's shape.
 const jiraDevStatusMaxRequestsPerRun = 500
 
+// jiraDevStatusApplicationTypes are the SCM applications the route asks the dev-status endpoint about, one request each
+// (CHAOS-8526: GitLab was missing, so a Jira issue linked to a GitLab MR got no native link). The URL shape of each
+// returned pull request, not the application type, picks the work-item id parser (jiraDevStatusPullRequestSourceID).
+var jiraDevStatusApplicationTypes = []string{"GitHub", "GitLab"}
+
 // jiraDevStatusPayload is the GET /rest/dev-status/1.0/issue/detail response
-// shape for applicationType=GitHub, dataType=pullrequest -- the
-// GitHub-for-Jira panel's data source and Jira's own PRIMARY provider-attached
+// shape for applicationType=GitHub or GitLab, dataType=pullrequest -- the
+// SCM-for-Jira panel's data source and Jira's own PRIMARY provider-attached
 // PR mapping (team-attribution.md's PRIMARY/FALLBACK design). Only the field
 // this route consumes is modeled; the endpoint returns considerably more
 // (branches, repositories, reviewers, commentCount, ...).
@@ -61,9 +67,10 @@ func fetchJiraDevStatusPullRequests(
 	ctx context.Context,
 	client *providerfoundation.HTTPClient,
 	issueID string,
+	applicationType string,
 ) (payload jiraDevStatusPayload, available bool, err error) {
 	query := url.Values{
-		"issueId": {issueID}, "applicationType": {"GitHub"}, "dataType": {"pullrequest"},
+		"issueId": {issueID}, "applicationType": {applicationType}, "dataType": {"pullrequest"},
 	}
 	response, err := client.Do(ctx, http.MethodGet, "/rest/dev-status/1.0/issue/detail?"+query.Encode(), nil)
 	if err != nil {
@@ -92,35 +99,54 @@ func fetchJiraDevStatusPullRequests(
 // set (parity ruled, team-lead 2026-09-01) under its own env var, since this
 // route's trust boundary is independently configurable from Linear's.
 func jiraTrustedSCMHosts() map[string]struct{} {
-	hosts := map[string]struct{}{
-		"github.com": {}, "www.github.com": {},
-	}
-	for _, value := range strings.Split(os.Getenv("JIRA_TRUSTED_SCM_HOSTS"), ",") {
-		if host := strings.ToLower(strings.TrimSpace(value)); host != "" {
-			hosts[host] = struct{}{}
-		}
-	}
+	hosts, _ := jiraTrustedSCMHostsAndRoots()
 	return hosts
 }
 
-// jiraDevStatusPullRequestSourceID parses a GitHub PR URL from the dev-status
-// panel into the same ghpr:owner/repo#N work-item id shape every other
-// PRIMARY producer uses (extractGitHubClosingIssueReferences,
-// linearAttachmentWorkItemID), trusted-host gated the same way. Only GitHub
-// URLs: this route only ever requests applicationType=GitHub.
+func jiraTrustedSCMHostsAndRoots() (map[string]struct{}, map[string][]string) {
+	return parseTrustedSCMHostEntries(os.Getenv("JIRA_TRUSTED_SCM_HOSTS"), "github.com", "www.github.com", "gitlab.com")
+}
+
+// jiraDevStatusPullRequestSourceID parses a PR/MR URL from the dev-status
+// panel into the same work-item id shape every other PRIMARY producer uses:
+// ghpr:owner/repo#N for GitHub (extractGitHubClosingIssueReferences,
+// linearAttachmentWorkItemID) and gitlab:group/project!N for GitLab
+// (normalizeGitLabMergeRequestWorkItem), trusted-host gated the same way. The
+// path shape decides the provider: GitHub's `/pull/N`, GitLab's
+// `/-/merge_requests/N` (or the pre-`/-/` `/merge_requests/N`).
 func jiraDevStatusPullRequestSourceID(rawURL string) string {
+	source, _ := jiraDevStatusPullRequestSource(rawURL)
+	return source
+}
+
+// jiraDevStatusPullRequestSource is jiraDevStatusPullRequestSourceID that also reports a GitLab merge-request URL whose
+// project path or number fails parseGitLabReference (rejected): such a URL is not written and not counted as synced.
+func jiraDevStatusPullRequestSource(rawURL string) (source string, rejected bool) {
 	parsed, err := url.Parse(rawURL)
 	if err != nil || parsed.Host == "" || parsed.User != nil {
-		return ""
+		return "", false
 	}
-	if _, ok := jiraTrustedSCMHosts()[strings.ToLower(parsed.Host)]; !ok {
-		return ""
+	hosts, roots := jiraTrustedSCMHostsAndRoots()
+	if _, ok := hosts[strings.ToLower(parsed.Host)]; !ok {
+		return "", false
 	}
-	parts := strings.Split(strings.Trim(parsed.Path, "/"), "/")
+	parts, ok := stripSCMURLRoot(roots, parsed.Host, strings.Split(strings.Trim(parsed.Path, "/"), "/"))
+	if !ok {
+		return "", false
+	}
 	if len(parts) >= 4 && parts[len(parts)-2] == "pull" {
-		return "ghpr:" + strings.Join(parts[:len(parts)-2], "/") + "#" + parts[len(parts)-1]
+		return "ghpr:" + strings.Join(parts[:len(parts)-2], "/") + "#" + parts[len(parts)-1], false
 	}
-	return ""
+	if len(parts) >= 3 && parts[len(parts)-2] == "merge_requests" {
+		project := parts[:len(parts)-2]
+		if project[len(project)-1] == "-" {
+			project = project[:len(project)-1]
+		}
+		if len(project) >= 2 {
+			return gitlabMergeRequestSourceID(strings.Join(project, "/"), parts[len(parts)-1])
+		}
+	}
+	return "", false
 }
 
 // extractJiraDevStatusDependencies emits the PRIMARY provider-attached
@@ -140,7 +166,11 @@ func extractJiraDevStatusDependencies(
 	seen := make(map[string]struct{})
 	for _, detail := range payload.Detail {
 		for _, pullRequest := range detail.PullRequests {
-			source := jiraDevStatusPullRequestSourceID(pullRequest.URL)
+			source, rejected := jiraDevStatusPullRequestSource(pullRequest.URL)
+			if rejected {
+				slog.Warn("providersync.jira.dev_status_gitlab_reference_rejected", "org_id", claim.OrgID, "issue", workItemID)
+				continue
+			}
 			if source == "" || source == workItemID {
 				continue
 			}
@@ -195,12 +225,55 @@ func fetchJiraDevStatusPullRequestsCountingAttempts(
 	client *providerfoundation.HTTPClient,
 	issueID string,
 	remainingBudget int,
-) (payload jiraDevStatusPayload, available bool, attempts int, err error) {
+) (payload jiraDevStatusPayload, available bool, attempts int, outcomes []jiraDevStatusTypeOutcome, err error) {
 	counted := *client
 	counted.Doer = jiraDevStatusCountingDoer{delegate: client.Doer, attempts: &attempts}
-	if remainingBudget > 0 && remainingBudget < counted.Retry.MaxAttempts {
-		counted.Retry.MaxAttempts = remainingBudget
+	for _, applicationType := range jiraDevStatusApplicationTypes {
+		budget := 0
+		if remainingBudget > 0 {
+			if budget = remainingBudget - attempts; budget <= 0 {
+				// The cap is spent: this application type is not asked, and that is counted, not silent.
+				outcomes = append(outcomes, jiraDevStatusTypeOutcome{ApplicationType: applicationType, Outcome: "cap_skipped"})
+				continue
+			}
+		}
+		call := counted
+		if budget > 0 && budget < call.Retry.MaxAttempts {
+			call.Retry.MaxAttempts = budget
+		}
+		one, ok, oneErr := fetchJiraDevStatusPullRequests(ctx, &call, issueID, applicationType)
+		switch {
+		case oneErr != nil:
+			// A failing application type must not hide the links another one returned: the error is reported
+			// (the issue is recorded incomplete) and the payload of the types that answered is still returned.
+			if err == nil {
+				err = oneErr
+			}
+			outcomes = append(outcomes, jiraDevStatusTypeOutcome{ApplicationType: applicationType, Outcome: "failed", Err: oneErr})
+		case !ok:
+			outcomes = append(outcomes, jiraDevStatusTypeOutcome{ApplicationType: applicationType, Outcome: jiraDevStatusUnavailableCause})
+		default:
+			available = true
+			payload.Detail = append(payload.Detail, one.Detail...)
+			pullRequests := 0
+			for _, detail := range one.Detail {
+				pullRequests += len(detail.PullRequests)
+			}
+			outcome := "synced"
+			if pullRequests == 0 {
+				outcome = "empty"
+			}
+			outcomes = append(outcomes, jiraDevStatusTypeOutcome{ApplicationType: applicationType, Outcome: outcome, PullRequests: pullRequests})
+		}
 	}
-	payload, available, err = fetchJiraDevStatusPullRequests(ctx, &counted, issueID)
-	return payload, available, attempts, err
+	return payload, available, attempts, outcomes, err
+}
+
+// jiraDevStatusTypeOutcome is the result of one dev-status request for one application type.
+type jiraDevStatusTypeOutcome struct {
+	ApplicationType string
+	// Outcome is synced, empty (200, no pull requests), dev_status_unavailable (400/404), failed or cap_skipped.
+	Outcome      string
+	PullRequests int
+	Err          error
 }

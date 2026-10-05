@@ -3,7 +3,10 @@ package providersync
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
+	"github.com/full-chaos/dev-health-ops/internal/platform/logging"
+	"log/slog"
 	"net/http"
 	"net/url"
 	"strconv"
@@ -222,6 +225,10 @@ func (handler GitLabWorkItemsRouteHandler) Collect(
 	fetchMilestones := gitLabWorkItemsFlag(handler.FetchMilestones)
 	includeMRs := gitLabWorkItemsFlag(handler.IncludeMRs)
 	pages := 1 // the project binding request
+	closingSynced := 0
+	issueLinksUnsupported := 0
+	closingIncomplete := make([]string, 0)
+	closingTransient, closingTerminal := 0, 0
 
 	if fetchMilestones {
 		milestones, milestonePages, milestoneErr := collectGitLabMilestones(
@@ -312,6 +319,49 @@ func (handler GitLabWorkItemsRouteHandler) Collect(
 			}
 			rows.Dependencies = append(rows.Dependencies,
 				normalizeGitLabDependencies(claim, item.WorkItemID, fullName, description, links, normalizedAt)...)
+			unsupported := 0
+			for _, link := range links {
+				if _, ok := link.targetWorkItemID(); !ok {
+					unsupported++
+				}
+			}
+			if unsupported > 0 {
+				issueLinksUnsupported += unsupported
+				slog.Warn("providersync.gitlab.issue_link_unsupported_shape",
+					"org_id", claim.OrgID, "unit_id", claim.ID, "issue", item.WorkItemID, "count", unsupported)
+			}
+			closing, closingPages, closingErr := collectGitLabClosingMergeRequests(
+				ctx, &counted, root+"/issues/"+strconv.Itoa(payload.IID)+"/closed_by",
+				perPage, nestedMaxPages,
+			)
+			pages += closingPages
+			if closingErr != nil {
+				// An optional sub-fetch: a cancelled run still stops. A terminal answer (404/403: not readable with this
+				// credential) is logged, counted under its own outcome and reported incomplete, but the watermark advances,
+				// since retrying cannot help. Any other failure (5xx, timeout, 429, network) is transient: logged, counted,
+				// reported incomplete, and the watermark is held so the next run asks again (a closing MR does not move the
+				// issue's updated_at, so a lost answer would otherwise never be re-fetched). The batch goes on either way.
+				if ctx.Err() != nil {
+					return CompleteRouteBatch{}, closingErr
+				}
+				closingIncomplete = append(closingIncomplete, item.WorkItemID)
+				outcome := gitLabClosingFetchOutcome(closingErr)
+				if outcome == "transient_failed" {
+					closingTransient++
+				} else {
+					closingTerminal++
+				}
+				counted.Metrics.RecordGitLabClosingMRFetch(outcome)
+				errorClass, errorType := logging.ErrorClass(closingErr), logging.ErrorType(closingErr) // never the error text (CHAOS-7933)
+				slog.Warn("providersync.gitlab.closing_mr_fetch_failed",
+					"org_id", claim.OrgID, "unit_id", claim.ID, "issue", item.WorkItemID, "outcome", outcome,
+					"error_class", errorClass, "error_type", errorType)
+			} else {
+				counted.Metrics.RecordGitLabClosingMRFetch("synced")
+				closingRows := normalizeGitLabClosingMergeRequests(claim, item.WorkItemID, closing, normalizedAt)
+				closingSynced += len(closingRows)
+				rows.Dependencies = append(rows.Dependencies, closingRows...)
+			}
 		}
 		if fetchComments {
 			notes, notePages, noteErr := collectGitLabNotes(
@@ -422,6 +472,9 @@ func (handler GitLabWorkItemsRouteHandler) Collect(
 			return CompleteRouteBatch{}, ErrInvalidConfiguration
 		}
 		watermark = derived.Watermark
+		if closingTransient > 0 {
+			watermark = nil
+		}
 		derivedRecords = len(derived.AIAttributions) + len(derived.EstimateCoverageMetricsDaily) +
 			len(derived.InvestmentClassificationsDaily) + len(derived.InvestmentMetricsDaily) +
 			len(derived.IssueTypeMetricsDaily) + len(derived.WorkItemCycleTimes) +
@@ -449,6 +502,16 @@ func (handler GitLabWorkItemsRouteHandler) Collect(
 		"derived_destinations_unimplemented": derivedUnimplemented,
 		"watermark_held_for_derived_gap":     len(derivedUnimplemented) > 0,
 		"gitlab_work_items":                  summary,
+		// CHAOS-8526: gitlab_closing_reference rows synced, and the issues whose closed_by fetch failed, split into
+		// transient (the watermark is held while any did) and terminal 404/403 (the watermark advances).
+		"closing_reference_dependencies_synced": closingSynced,
+		"issue_links_unsupported_shape":         issueLinksUnsupported,
+		"closing_reference_fetch_failed":        closingTransient + closingTerminal,
+		"closing_reference_fetch_transient":     closingTransient,
+		"closing_reference_fetch_terminal":      closingTerminal,
+	}
+	if len(closingIncomplete) > 0 {
+		result["incomplete"] = closingIncomplete
 	}
 	result = attachWorkItemTeamInheritanceObservation(result, handler.Derived)
 	return CompleteRouteBatch{
@@ -562,6 +625,28 @@ func collectGitLabIssueLinks(
 	return result, pages, nil
 }
 
+func collectGitLabClosingMergeRequests(
+	ctx context.Context, client *providerfoundation.HTTPClient, path string,
+	perPage, maxPages int,
+) ([]gitlabClosingMergeRequestPayload, int, error) {
+	items, pages, err := collectGitLabPayloads(ctx, client, path, nil, perPage, maxPages)
+	if err != nil {
+		return nil, pages, err
+	}
+	result := make([]gitlabClosingMergeRequestPayload, 0, len(items))
+	for _, raw := range items {
+		var payload gitlabClosingMergeRequestPayload
+		if err := json.Unmarshal(raw, &payload); err != nil {
+			return nil, pages, providerfoundation.ErrNormalizationInvalid
+		}
+		if _, ok := payload.reference(); !ok {
+			return nil, pages, providerfoundation.ErrNormalizationInvalid
+		}
+		result = append(result, payload)
+	}
+	return result, pages, nil
+}
+
 func collectGitLabNotes(
 	ctx context.Context, client *providerfoundation.HTTPClient, path string,
 	perPage, maxPages, limit int,
@@ -593,3 +678,23 @@ func buildGitLabWorkItemEffectsFromRows(rows gitlabWorkItemRows) ([]EffectBatch,
 }
 
 var _ CompleteRouteHandler = GitLabWorkItemsRouteHandler{}
+
+// gitLabClosingFetchOutcome classifies a failed closed_by fetch for the watermark (D4771). Terminal outcomes repeat on
+// every run for the same issue, so retrying cannot help: terminal_unavailable (404, or a 403 that is not rate
+// limiting: not readable with this credential), terminal_page_cap (the answer exceeds the page cap) and terminal_undecodable (the answer does not decode).
+// Anything else (5xx, timeout, 429, network, or an error that is not a ProviderError) is transient_failed, the safe side
+// for a watermark.
+func gitLabClosingFetchOutcome(err error) string {
+	switch {
+	case errors.Is(err, ErrPaginationCapExceeded):
+		return "terminal_page_cap"
+	case errors.Is(err, providerfoundation.ErrNormalizationInvalid):
+		return "terminal_undecodable"
+	}
+	var providerErr *providerfoundation.ProviderError
+	if errors.As(err, &providerErr) && providerErr != nil && providerErr.Class != providerfoundation.ErrorRateLimited &&
+		(providerErr.StatusCode == http.StatusNotFound || providerErr.StatusCode == http.StatusForbidden) {
+		return "terminal_unavailable"
+	}
+	return "transient_failed"
+}

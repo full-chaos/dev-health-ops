@@ -1,8 +1,13 @@
 # Every file under internal/pgmigrate/testdata: sha256, kind, path. Written by `go run ./internal/testsupport/recordedfiles/manifest`; never edit it by hand.
 # python-recorded set: e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855 (0 files)
-# header-before-stamp set: 6af606be5de8aa974b1188ccf9e6d94180acf97177904a505ee0ab4fa7e28e0c (3 files)
-62f6781dc12172ab2dbc7c964930a46352dffc890dda59b08efde1a33ceb16f5	header-before-stamp	golden/alias.json
+# header-before-stamp set: e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855 (0 files)
+-	header	golden/alias.json
+-	header	golden/baseline_states.json
 -	header	golden/downgrade.json
-070ce3be31bd17bb8e1245db998ed4822e7c1c0517c4690b2b8bc5e5a7a7baba	header-before-stamp	golden/history.json
-ee5e84d2dfb5c0986c255d963631f1325453ec993f82bb7849c2145af380c523	header-before-stamp	golden/revisions.json
+-	header	golden/history.json
+-	header	golden/history_walk.json
+-	header	golden/hook_states.json
+-	header	golden/old_script_heads.json
+-	header	golden/preflight_states.json
+-	header	golden/revisions.json
 c3d8806acf042551eaa0b99f4854a7aa8779946b0e86b070b32c90ea5295e64f	unclassified	hand_ddl_ledger.tsv

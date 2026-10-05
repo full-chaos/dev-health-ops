@@ -121,24 +121,28 @@ Or use `--patch-file` to avoid credential exposure (Trap #121).
 
 ## Step 6: First-time routing rows
 
-An operation that has no routing row cannot be proven or enabled on production: `dho goapi prove` routes through the proof route only when a row exists, `dho goapi routing disable` never inserts one, and `dho goapi routing enable` refuses an operation with no recorded proof run for the running build (there is no waiver flag; the only exception is a written limit in the compiled go-served ledger). `dho goapi routing seed` creates that first row. It writes **shadow only** (owner `go`, rollout 0), never changes an existing row, and never moves a row between schema digests (that is `dho goapi routing carry`). A first row comes only from `seed`: `carry` moves existing rows to a new schema digest and never creates one. `carry` preserves a **shadow** row verbatim (still shadow, rollout unchanged) when it is still valid at the new digest, so a registration survives a schema change; a shadow row that is not valid there (document moved, operation or MCP root gone from the image, a different row already at the new digest, or a build that is not the running one) is printed as `SKIP` with its reason and never blocks the roll. A served row (canary or primary) in the same state still refuses. A digest whose live rows are all shadow is never refused by `carry`; the "no reachable row" refusal needs a non-shadow live row with every row skipped.
+**A catalog operation needs no routing row, and no routing row can hold it dark.** query-api's `/query` and `/graphql` serve every registered operation and read no `go_api_routing_state` row to decide (CHAOS-8702): a missing row, a row at an older schema digest, and a row in mode `shadow`, `python` or `disabled` all serve. A stack whose routing table is empty serves the whole catalog, and this step is not part of a first start. To hold a catalog operation dark, change the code and deploy.
 
-Nothing is typed but the operation names. The schema digest and each document digest come from the running query-api's `/registry` (checked against this binary's SDL and the edge catalog), and the build comes from `/buildinfo`. Run it from the tools image of the same cut, with the Postgres DSN and the envelope key in the environment (never argv):
+**MCP class roots are decided by one row per root, in `go_api_class_decision` (CHAOS-8735), not by a routing row.** The row is keyed by the operation alone (`mcp:<root>`), so a schema change moves nothing: the class switch, the proof route, `status`, `enable`, `disable`, `seed` and `repoint` all read and write that one row, and no step has to carry it to a new schema digest. `enable` still needs a class receipt for the running build at the live schema digest (a proof is a fact about a build at a schema digest); `repoint` rewrites only the build the decision names and never its mode or `decided_at`. Migration 0146 creates the table and copies the newest `go_api_routing_state` row of each class root into it (on an equal timestamp a row that is not in a served mode wins, then the greater schema digest); the old rows are left in place and nothing reads them.
+
+**Roll sheet: make no routing writes during the roll.** Do not run `enable`, `disable`, `seed` or `repoint` between the migration and the new query-api serving: an old tools image writes the old table.
+
+`seed`, `enable` and `disable` take the roots by name (`-operations mcp:<root>`, or `all-mcp`): `seed` writes a shadow decision, `enable` a canary or primary one after the class receipt, `disable` any other mode. They still accept a catalog operation, but its row is not read for serving, so it changes nothing (those catalog-operation paths are removed in CHAOS-8705). Nothing is typed but the root names; the schema digest and the build come from the running query-api's `/registry` and `/buildinfo`. Run from the tools image of the same cut, with the Postgres DSN and the envelope key in the environment (never argv):
 
 ```bash
-dho goapi routing seed -operations home,recommendations \
-  -recorded-by <operator> -review-evidence "CHAOS-7165 first-time shadow row" -dry-run
-# then again without -dry-run; or seed every registered operation with no row at any digest:
-dho goapi routing seed -all-unrouted -recorded-by <operator> -review-evidence "<why>"
+dho goapi routing seed -operations mcp:hotspots \
+  -recorded-by <operator> -review-evidence "<why>" -dry-run
+# then again without -dry-run; then prove the root, then:
+dho goapi routing enable -operations mcp:hotspots -recorded-by <operator> -review-evidence "<why>"
 ```
 
-Per operation it prints `created`, `already-present` (a shadow row is already at the running digest; zero writes) or `refused` (exit 2): a row at the running digest in any other mode, or a row only at an older schema digest (run `dho goapi routing carry`). One refused operation refuses the whole run: nothing is written for any operation. Every created row and its audit row carry a `seed: ` evidence prefix, and one run shares one audit correlation id (printed in the `go_api_routing.seeded` event). A schema digest mismatch, an operation the running query-api does not register, or a catalog digest divergence refuses the whole run before any write. It needs only Postgres, `/registry` and `/buildinfo`; it does not need the internal listener or the proof allowlist.
+`seed` writes a **shadow** row (owner `go`, rollout 0) and never changes an existing row. It prints `created`, `already-present` or `refused` (exit 2): a row at the running digest in any other mode, or a row only at an older schema digest (that row already decides the root). `enable` needs a per-root `deployed_executed` receipt for the running build (`dho goapi prove -mcp-roots <root>`), and there is no waiver flag. `repoint` stays only so `dho goapi prove` accepts the rows: it refuses a row that names another build.
 
-**Shadow set (3 ops) intentionally NOT seeded** — enabling known-mismatch operations as canary first is a stop condition. Canary operations route to the real query-api against the baseline API. Real proof compares both planes; shadow refused-by-name (expected on prod) is never compared.
+The Step 7 text below was written when catalog operations were enabled by row; it describes the proof harness, and the catalog parts of it are being removed (CHAOS-8705).
 
 ## Step 7: Real proof (go-api-prove)
 
-**Production note.** The proof route (`/query/proof`) does not mount on a production posture, and the edge dispatches only routed rows, so a read operation on production has no proof path before it is routed. A shadow row from Step 6 does not make it reachable. Moving it to canary goes through `dho goapi routing enable`, which needs a proof receipt for the running build or a reviewed `enable_limit` in the compiled go-served ledger (`internal/goapiproof/goserved_ledger.json`). Mutations use `dho goapi prove-write` on the internal listener and need no ledger entry.
+**Production note.** The proof route (`/query/proof`) does not mount on a production posture, so a read operation that is held in shadow has no proof path on production (an operation with no row at all is served, see Step 6). A shadow row from Step 6 does not make it reachable. Moving it to canary goes through `dho goapi routing enable`, which admits a catalog operation with no proof receipt and no ledger entry (CHAOS-8586) and marks the row `CATALOG-RULE:`; a proof receipt or a reviewed `enable_limit` in the compiled go-served ledger (`internal/goapiproof/goserved_ledger.json`) is still recorded as what admitted it when one exists. An MCP class root still needs a per-root receipt.
 
 ### Grant the proof service principal read access to the org (once per org)
 
@@ -158,6 +162,8 @@ Seat note: the principal then shows as a `viewer` member of that org
 (`go-api-prove@service.dev-health.invalid`) in member lists and may count
 toward the org's seats. Remove the membership to revoke it for that org, or
 set `users.is_active = false` to revoke it everywhere.
+
+> **Not runnable now:** the two proofs below, `dho goapi prove -edge-url` and `dho goapi rest-prove -python-api-url`, compare against a Python api, and the Python api was removed. There is no Python edge to point them at, so these steps cannot run. The tools are unchanged.
 
 Real proof run after the metrics drain completes (Trap #174 repair landed). Tools image carries the `dho` operator binary (spec S1, CHAOS-6280) built from the same `dev-health-api` digest.
 
@@ -243,11 +249,11 @@ The verb writes only in the Fixture Org named by the environment (it never creat
 compares the persisted effects with the case's committed baseline digest, and refuses to call a run a match unless the
 response carries the candidate build. A match removes its dataset; anything else keeps it and names it. `-via query-api`
 (a direct POST to query-api) records route `proof` and admits `canary`; `-via edge` records route `edge`, which
-`primary` requires. `enable` then admits the mutation only on that receipt.
+`primary` requires. A catalog mutation needs no receipt to be enabled (the catalog rule admits it, `routing_enable.go:396-416`); the receipt is evidence, and `enable` records which of proof run, named limit or catalog rule admitted it.
 
 ### Enable the canary set
 
-After the proof run records a `deployed_executed` result for each canary operation at the running build, enable them with the Go verb. The candidate build is read from the deployed process's `/buildinfo`; there is no build flag and no waiver flag. Operations are one comma-separated value:
+Enable the canary operations with the Go verb. An MCP class operation (`mcp:<root>`) needs a per-root `deployed_executed` receipt for the running build. A catalog operation (every other registered document) is admitted without a receipt: the catalog rule serves it when it has no routing row, so `enable` records `CATALOG-RULE:` in `review_evidence` instead of refusing. A written limit in the go-served ledger is recorded as `NAMED-LIMIT:`. The candidate build is read from the deployed process's `/buildinfo`; there is no build flag and no waiver flag. Operations are one comma-separated value:
 
 ```bash
 GO_API_ROUTING_BEARER=<envelope> dho goapi routing enable \
@@ -259,7 +265,7 @@ GO_API_ROUTING_BEARER=<envelope> dho goapi routing enable \
   -review-evidence "First-time enable on prod k3s, JOB 7 step 6"
 ```
 
-Add `-dry-run` first to see which operations would be admitted; a refusal names the operations with no proof run.
+Add `-dry-run` first to see which operations would be admitted and what admits each (proof run, named limit, or catalog rule); a refusal names only MCP class operations that have no per-root receipt.
 
 ## Step 8: Enable the investment explanation (optional, requires encryption keys)
 
@@ -277,8 +283,8 @@ Without both keys in the same change, encrypted org settings silently fall back 
 
 query-api's Deployment lists `env` explicitly and has **no `envFrom` by
 default** — it does not pick up any key from the platform Secret
-(`dev-health-ops`) the way the Python `api`/`metricsApi`
-workloads do. For investment-explain, query-api needs four platform vars:
+(`dev-health-ops`) the way the removed Python `api`/`metricsApi`
+workloads did. For investment-explain, query-api needs four platform vars:
 `LLM_PROVIDER`, `OPENAI_API_KEY`, `LLM_MODEL`, and `SETTINGS_ENCRYPTION_KEY`.
 
 Two ways to supply them:

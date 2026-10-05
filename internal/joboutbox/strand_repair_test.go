@@ -354,6 +354,70 @@ func TestStrandShapeFormsDifferOnlyInLocking(t *testing.T) {
 	}
 }
 
+// TestStrandSurveysReachTheOutboxThroughAnIndex pins, by text, the access path
+// each shape gives the planner (CHAOS-8421).
+//
+// The outbox is bound to its domain row through an expression on `args` that
+// has no index, so on that binding alone every candidate domain row cost one
+// sequential scan of the whole outbox. The three daily/work-graph shapes also
+// bind the River job to the domain row, which River's GIN index on
+// river_job.args answers, and from the job the outbox is one probe of its
+// unique river_job_id index. This test is the cheap half of the guard: it
+// fails on a deleted or re-aliased predicate without a database. The half that
+// proves the planner actually takes the path, and that the predicate changes
+// which rows match, is in the integration suite.
+func TestStrandSurveysReachTheOutboxThroughAnIndex(t *testing.T) {
+	domainAlias := map[string]string{
+		"partition": "partition",
+		"finalize":  "run",
+		"workgraph": "request",
+	}
+	queries := strandQueriesUnderTest()
+	if len(domainAlias)+1 != len(queries) {
+		t.Fatalf("%d shapes are registered but this test knows %d daily/work-graph shapes plus the "+
+			"provider-unit one; a new shape needs its own indexed path into the outbox",
+			len(queries), len(domainAlias))
+	}
+	for name, alias := range domainAlias {
+		shape := newStrandShape(name, queries[name], `"river"."river_job"`)
+		for form, query := range map[string]string{"survey": shape.survey, "lock": shape.lock} {
+			// On the job join, beside the river_job_id equality -- not in the
+			// WHERE of some other relation, and not instead of the equality.
+			riverBinding := `JOIN "river"."river_job" AS job
+		ON job.id = outbox.river_job_id
+		AND job.args @> jsonb_build_object('domain', jsonb_build_object('id', ` + alias + `.id::text))`
+			if !strings.Contains(query, riverBinding) {
+				t.Fatalf("the %s %s form no longer binds the River job's args to %s.id; without it the "+
+					"planner's only way into the outbox is one sequential scan per candidate row",
+					name, form, alias)
+			}
+			// The River binding is ADDED to the outbox binding, never a
+			// replacement for it: the outbox envelope is the authority on which
+			// domain row a delivery belongs to.
+			if !strings.Contains(query, alias+".id::text = outbox.args #>> '{domain,id}'") {
+				t.Fatalf("the %s %s form lost the outbox-to-domain binding on args; the River binding "+
+					"must narrow the access path, not replace the identity check", name, form)
+			}
+			// Not through the dedupe key. The redrive publishers write
+			// "<kind>:redrive:<id>:<nonce>" keys for the same domain row, and an
+			// equality on the canonical key would drop those rows from the
+			// repair silently.
+			if strings.Contains(query, "outbox.dedupe_key =") || strings.Contains(query, "outbox.dedupe_key LIKE") {
+				t.Fatalf("the %s %s form selects on outbox.dedupe_key; redrive deliveries carry a "+
+					"different key for the same domain row and would stop being repaired", name, form)
+			}
+		}
+	}
+	// The provider-unit shape has always bound the exact key and reaches the
+	// outbox through uq_worker_job_outbox_dedupe_key. It has no redrive form,
+	// so that binding is its indexed path and it needs no River binding.
+	providerUnit := queries[providerUnitShapeName]
+	if !strings.Contains(providerUnit, "outbox.dedupe_key = 'sync.provider_unit:' || unit.id::text") {
+		t.Fatal("the provider_unit query lost its dedupe-key binding, which is its only indexed " +
+			"path into the outbox")
+	}
+}
+
 func strandQueriesUnderTest() map[string]string {
 	return map[string]string{
 		"partition":           repairStrandedPartitionSQL,

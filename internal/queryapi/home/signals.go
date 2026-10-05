@@ -40,6 +40,14 @@ var lowerIsBetter = map[string]bool{
 	"compounding_risk":    true,
 }
 
+// LowerIsBetter reports whether a smaller value of the home metric is the good
+// direction. A metric that is not listed (throughput, deploy_freq, ci_success)
+// is higher-is-better. The set is kept equal to the web metric catalog's
+// `lowerIsBetter` polarity (see polarity_test.go).
+func LowerIsBetter(metric string) bool {
+	return lowerIsBetter[metric]
+}
+
 var metricCategories = map[string]string{
 	"cycle_time":          CategoryDelivery,
 	"review_latency":      CategoryDynamics,
@@ -158,16 +166,60 @@ func confidenceFromEvidence(evidenceCount int, coveragePct *float64) string {
 	return "low"
 }
 
-// formatValue ports _format_value (services/home.py:369-373).
+// formatValue ports _format_value (services/home.py:369-373), and then groups
+// the digits of the whole part in threes with a comma (CHAOS-8178): the web
+// shows these strings as served and does not parse or re-format them, so
+// "3387254 loc" was what a reader saw. DECLARED DIVERGENCE from the Python
+// reference, which wrote no separator; it changes every served value of 1,000
+// or more and no other.
 func formatValue(value float64, unit string) string {
 	suffix := ""
 	if unit != "" {
 		suffix = " " + unit
 	}
 	if absFloat(value) >= 100 || value == float64(int64(value)) {
-		return fmt.Sprintf("%.0f%s", value, suffix)
+		return groupThousands(fmt.Sprintf("%.0f", value)) + suffix
 	}
-	return fmt.Sprintf("%.1f%s", value, suffix)
+	return groupThousands(fmt.Sprintf("%.1f", value)) + suffix
+}
+
+// groupThousands puts a comma between each group of three digits of the whole
+// part of a plain decimal number ("-1234567.8" -> "-1,234,567.8"). The sign
+// and the fraction are kept as they are. A text that is not a plain decimal
+// number (for example "NaN" or "+Inf", which %f writes for a non-finite
+// value) is returned unchanged.
+func groupThousands(number string) string {
+	sign, digits := "", number
+	if strings.HasPrefix(digits, "-") {
+		sign, digits = "-", digits[1:]
+	}
+	whole, fraction := digits, ""
+	if dot := strings.IndexByte(digits, '.'); dot >= 0 {
+		whole, fraction = digits[:dot], digits[dot:]
+	}
+	if len(whole) <= 3 {
+		return number
+	}
+	for _, r := range whole {
+		if r < '0' || r > '9' {
+			return number
+		}
+	}
+	var grouped strings.Builder
+	grouped.Grow(len(number) + len(whole)/3)
+	grouped.WriteString(sign)
+	head := len(whole) % 3
+	if head > 0 {
+		grouped.WriteString(whole[:head])
+	}
+	for index := head; index < len(whole); index += 3 {
+		if index > 0 {
+			grouped.WriteByte(',')
+		}
+		grouped.WriteString(whole[index : index+3])
+	}
+	grouped.WriteString(fraction)
+	return grouped.String()
 }
 
 // formatDeltaValue ports _format_delta_value (services/home.py:376-379).

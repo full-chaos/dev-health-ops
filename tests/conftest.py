@@ -3,6 +3,7 @@
 import logging
 import mimetypes
 import os
+import shutil
 import uuid
 import zlib
 from pathlib import Path
@@ -61,6 +62,40 @@ _POST_SCRUB_RESIDUE: list[str] = []
 _SCRUB_RAN = False
 
 
+#: CHAOS-8310: ``web.env.BACKEND_URL`` is required when ``web.enabled`` (the chart default), so a
+#: ``helm template`` that sets nothing about web fails. Most helm tests render other things (hooks,
+#: workers, listeners): this is the ONE shared place that gives every ``helm template`` a placeholder
+#: value -- a ``helm`` wrapper first on PATH that puts ``--set web.env.BACKEND_URL=<this>`` right after
+#: ``template`` (helm gives ``--set`` precedence over every ``-f`` values file, in either order: a test that renders a profile's own value must set ``HELM_SHIM_OFF=1``; only a later ``--set`` of the same key wins). ``HELM_SHIM_OFF=1`` in a command's
+#: environment bypasses it: ``tests/test_helm_web_extra_volumes.py::test_web_backend_url_is_required`` is the
+#: test that must see the refusal.
+HELM_TEST_WEB_BACKEND_URL = "http://backend.test:8000"
+
+
+@pytest.fixture(scope="session", autouse=True)
+def _helm_web_backend_url_shim(tmp_path_factory):
+    real = shutil.which("helm")
+    if real is None:
+        yield
+        return
+    shim_dir = tmp_path_factory.mktemp("helm-shim")
+    shim = shim_dir / "helm"
+    shim.write_text(
+        "#!/usr/bin/env bash\n"
+        'if [ "${HELM_SHIM_OFF:-}" = 1 ] || [ "${1:-}" != template ]; then '
+        f'exec "{real}" "$@"; fi\n'
+        f'shift\nexec "{real}" template --set "web.env.BACKEND_URL={HELM_TEST_WEB_BACKEND_URL}" "$@"\n',
+        encoding="utf-8",
+    )
+    shim.chmod(0o755)
+    saved = os.environ.get("PATH", "")
+    os.environ["PATH"] = f"{shim_dir}{os.pathsep}{saved}"
+    try:
+        yield
+    finally:
+        os.environ["PATH"] = saved
+
+
 @pytest.fixture(autouse=True)
 def setup_test_env(monkeypatch):
     """Ensure a default DATABASE_URI and JWT_SECRET_KEY are set for tests."""
@@ -89,21 +124,6 @@ def setup_test_env(monkeypatch):
     # specifically assert the NEW default use monkeypatch.delenv to
     # override, same pattern as JWT_SECRET_KEY above.
     monkeypatch.setenv("SYNC_GO_MANUAL_BACKFILL_PLANNER_ENABLED", "false")
-
-
-@pytest.fixture(autouse=True)
-def mock_analytics_db_url(monkeypatch):
-    """Mock analytics DB URL so endpoints don't return 503 in tests.
-
-    CHAOS-6241 deleted main.py's own callers of ``_analytics_db_url``; the
-    former surviving importer, api/dev/router.py's ask-dev endpoints, was
-    itself deleted under CHAOS-6262.
-    """
-
-    def stub() -> str:
-        return "clickhouse://localhost:8123/default"
-
-    monkeypatch.setattr("dev_health_ops.api._health._analytics_db_url", stub)
 
 
 @pytest.fixture(autouse=True)

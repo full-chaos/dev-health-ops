@@ -44,6 +44,7 @@ import (
 
 	"github.com/full-chaos/dev-health-ops/internal/queryapi/graph/model"
 	"github.com/full-chaos/dev-health-ops/internal/queryapi/graphqldate"
+	"github.com/full-chaos/dev-health-ops/internal/queryapi/teamscope"
 )
 
 // MaxRows mirrors Python's MAX_REVIEW_EDGES_ROWS -- a hard cap on returned
@@ -74,6 +75,25 @@ func clampLimit(limit int) int {
 	return limit
 }
 
+// ExcludedIdentitiesFragment is the read-time exclusion of provider bots and self pairs
+// (CHAOS-7787, RN-5, ruling 63), ANDed into the inner query's WHERE right after the window
+// (before the repo and team filters, the GROUP BY, the LIMIT and the count), so the cut and
+// totalCount only ever see the kept rows. Reviewer and author are GROUP BY keys, so filtering the
+// rows is the same as filtering the deduplicated pairs.
+//
+//   - A bot is a login ending in "[bot]" (GitHub reserves the bracketed login for App actors; the
+//     same test teamattribution uses). GitHub's `type: Bot` is NOT used: it is not stored.
+//   - A self pair is reviewer = author, compared lower-cased and trimmed. Reviewer is the login or
+//     display name and author is the email when there is one, so only the same-string case is
+//     caught.
+//
+// The golden test (which pins this statement to the python-recorded text) strips exactly this
+// fragment and nothing else.
+const ExcludedIdentitiesFragment = `
+              AND NOT endsWith(lowerUTF8(trimBoth(reviewer)), '[bot]')
+              AND NOT endsWith(lowerUTF8(trimBoth(author)), '[bot]')
+              AND lowerUTF8(trimBoth(reviewer)) != lowerUTF8(trimBoth(author))`
+
 // Resolve ports resolve_review_edges/_fetch_review_edges. orgID must
 // already be the AUTHORIZED org (the caller's verified envelope claim,
 // not necessarily the client-supplied `input.orgId` GraphQL argument --
@@ -85,6 +105,25 @@ func clampLimit(limit int) int {
 // must not pre-clamp and must not trust the GraphQL schema's default
 // alone (a client can send any value).
 func Resolve(ctx context.Context, client QueryClient, orgID string, sinceDate, untilDate graphqldate.Date, repoIDs []string, limit int) (*model.ReviewEdgesResult, error) {
+	return ResolveScoped(ctx, client, orgID, sinceDate, untilDate, Scope{RepoIDs: repoIDs}, limit)
+}
+
+// Scope narrows the edges to a set of repositories. Both fields are optional and, when both are
+// given, BOTH apply (a pair must be on a listed repository AND on a repository a listed team
+// owns): the two are filters of one list. Team = repository OWNERSHIP only
+// (teamscope.RepoCondition, from team_repo_ownership), never person membership. This differs
+// from the home route, which ORs explicit repositories with a team's.
+type Scope struct {
+	RepoIDs []string
+	// TeamIDs are team ids; blank ids are dropped, and no ids left means no team scope.
+	TeamIDs []string
+	// AsOf is the one instant the ownership is read at; the zero value means now (UTC).
+	AsOf time.Time
+}
+
+// ResolveScoped is Resolve with a Scope. With a zero Scope.TeamIDs it issues the same statement
+// and bindings as Resolve always did (the frozen golden pins that).
+func ResolveScoped(ctx context.Context, client QueryClient, orgID string, sinceDate, untilDate graphqldate.Date, scope Scope, limit int) (*model.ReviewEdgesResult, error) {
 	if client == nil {
 		return nil, errors.New("reviewedges: clickhouse client is required")
 	}
@@ -96,6 +135,7 @@ func Resolve(ctx context.Context, client QueryClient, orgID string, sinceDate, u
 		{Name: "limit", Value: clampLimit(limit)},
 	}
 
+	repoIDs := scope.RepoIDs
 	repoFilter := ""
 	if len(repoIDs) > 0 {
 		repoFilter = `
@@ -107,15 +147,22 @@ func Resolve(ctx context.Context, client QueryClient, orgID string, sinceDate, u
 		bindings = append(bindings, clickhouse.Binding{Name: "repo_ids", Value: repoIDs})
 	}
 
-	query := `
-        SELECT
-            reviewer,
-            author,
-            reviews_count,
-            day,
-            toString(repo_id) AS repo_id
-        FROM (
-            SELECT
+	// A team scope is ANDed in beside the repo filter: inside the inner query's WHERE, so it
+	// narrows the rows BEFORE the dedup and the LIMIT (a small team is never starved by other
+	// teams' bigger rows). repo_id is a UUID column and the condition compares ids as strings.
+	asOf := scope.AsOf
+	if asOf.IsZero() {
+		asOf = time.Now().UTC()
+	}
+	if teamCondition, teamBindings := teamscope.RepoCondition(orgID, "toString(repo_id)", scope.TeamIDs, asOf); teamCondition != "" {
+		repoFilter += "\n              AND " + teamCondition
+		bindings = append(bindings, teamBindings...)
+	}
+
+	// The deduplicated (pair, day) rows under the org, window, repo and team filters. BOTH the row
+	// query and the count query are built from this one text, so the count can never drift from
+	// the rows it counts (a test compares them).
+	inner := `SELECT
                 repo_id,
                 reviewer,
                 author,
@@ -124,8 +171,18 @@ func Resolve(ctx context.Context, client QueryClient, orgID string, sinceDate, u
             FROM review_edges_daily
             WHERE org_id = {org_id:String}
               AND day >= {since_date:Date}
-              AND day <= {until_date:Date}` + repoFilter + `
-            GROUP BY repo_id, reviewer, author, day
+              AND day <= {until_date:Date}` + ExcludedIdentitiesFragment + repoFilter + `
+            GROUP BY repo_id, reviewer, author, day`
+
+	query := `
+        SELECT
+            reviewer,
+            author,
+            reviews_count,
+            day,
+            toString(repo_id) AS repo_id
+        FROM (
+            ` + inner + `
         )
         ORDER BY reviews_count DESC, repo_id, reviewer, author, day
         LIMIT {limit:UInt64}`
@@ -173,9 +230,58 @@ func Resolve(ctx context.Context, client QueryClient, orgID string, sinceDate, u
 	if err := rows.Err(); err != nil {
 		return nil, fmt.Errorf("reviewedges: rows: %w", err)
 	}
+	if err := rows.Close(); err != nil {
+		return nil, fmt.Errorf("reviewedges: close rows: %w", err)
+	}
+
+	total, err := countRows(ctx, client, inner, bindings)
+	if err != nil {
+		return nil, err
+	}
+	// The count and the rows are two reads; never report fewer rows available than were returned.
+	if total < len(edges) {
+		total = len(edges)
+	}
+
+	// CHAOS-8485: the display names and the keys of the people of the returned rows.
+	if err := attachPeople(ctx, client, orgID, edges); err != nil {
+		return nil, err
+	}
 
 	return &model.ReviewEdgesResult{
 		Edges:      edges,
-		TotalCount: len(edges),
+		TotalCount: total,
+		Truncated:  total > len(edges),
 	}, nil
+}
+
+// countStatement is the count of the same deduplicated rows the row query cuts from. The
+// LIMIT binding is not used here and is not sent.
+func countStatement(inner string) string {
+	return "SELECT count() FROM (\n            " + inner + "\n        )"
+}
+
+func countRows(ctx context.Context, client QueryClient, inner string, bindings []clickhouse.Binding) (int, error) {
+	countBindings := make([]clickhouse.Binding, 0, len(bindings))
+	for _, b := range bindings {
+		if b.Name != "limit" {
+			countBindings = append(countBindings, b)
+		}
+	}
+	rows, err := client.Query(ctx, countStatement(inner), countBindings)
+	if err != nil {
+		return 0, fmt.Errorf("reviewedges: count query: %w", err)
+	}
+	defer rows.Close()
+	var total uint64
+	if !rows.Next() {
+		if err := rows.Err(); err != nil {
+			return 0, fmt.Errorf("reviewedges: count rows: %w", err)
+		}
+		return 0, errors.New("reviewedges: count query returned no row")
+	}
+	if err := rows.Scan(&total); err != nil {
+		return 0, fmt.Errorf("reviewedges: count scan: %w", err)
+	}
+	return int(total), nil
 }

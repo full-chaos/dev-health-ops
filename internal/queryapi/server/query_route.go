@@ -169,6 +169,27 @@ const registeredFeatureFlagsDocument = `query FeatureFlagRegistry($orgId: String
 const registeredReviewEdgesDocument = `query ReviewEdges($input: ReviewEdgesInput!) {
   reviewEdges(input: $input) {
     edges {
+      reviewerKey
+      authorKey
+      reviewerName
+      authorName
+      reviewsCount
+      day
+      repoId
+      __typename
+    }
+    totalCount
+    __typename
+  }
+}`
+
+// registeredReviewEdgesV1Document is the text of `reviewEdges` BEFORE the Review Network table asked for the served names and keys instead of the stored reviewer and author strings (CHAOS-8485).
+// It stays a legacy text (see legacyDigestsByOperation), so a web build still sending it keeps working while the
+// new one rolls out; the operation's ONE current document is registeredReviewEdgesDocument above. Remove it
+// with the cleanup ticket once no client sends it (testdata/wire_capture/reviewedges_v1_captured.graphql).
+const registeredReviewEdgesV1Document = `query ReviewEdges($input: ReviewEdgesInput!) {
+  reviewEdges(input: $input) {
+    edges {
       reviewer
       author
       reviewsCount
@@ -272,6 +293,47 @@ const registeredHotspotsDocument = `query Hotspots($input: HotspotsInput!) {
 // $orgId variable is parsed by this route but never trusted for scoping;
 // see operatingreview package's doc comment's Authorization section).
 const registeredOperatingReviewDocument = `query OperatingReview($orgId: String!, $input: OperatingReviewInput!) {
+  operatingReview(orgId: $orgId, input: $input) {
+    orgId
+    teamId
+    weekStart
+    priorWeekStart
+    sections {
+      key
+      title
+      changed
+      improved
+      worsened
+      metrics {
+        key
+        label
+        value
+        unit
+        hasData
+        delta {
+          value
+          priorValue
+          absolute
+          percent
+          status
+          hasPriorData
+          __typename
+        }
+        __typename
+      }
+      __typename
+    }
+    recommendations
+    recommendationsEmptyState
+    __typename
+  }
+}`
+
+// registeredOperatingReviewV1Document is the text of `operatingReview` BEFORE the Operating Review asked whether each week of a metric holds data (CHAOS-8115).
+// It stays a legacy text (see legacyDigestsByOperation), so a web build still sending it keeps working while the
+// new one rolls out; the operation's ONE current document is registeredOperatingReviewDocument above. Remove it
+// with the cleanup ticket once no client sends it (testdata/wire_capture/operatingreview_v1_captured.graphql).
+const registeredOperatingReviewV1Document = `query OperatingReview($orgId: String!, $input: OperatingReviewInput!) {
   operatingReview(orgId: $orgId, input: $input) {
     orgId
     teamId
@@ -796,6 +858,124 @@ const registeredCapacityForecastDocument = `query CapacityForecast($orgId: Strin
     historyDays
     insufficientHistory
     highVariance
+    completionDistribution {
+      runs
+      unfinishedRuns
+      horizonDays
+      days {
+        value
+        count
+        cumulativeShare
+        __typename
+      }
+      items {
+        value
+        count
+        cumulativeShare
+        __typename
+      }
+      __typename
+    }
+    __typename
+  }
+}`
+
+// registeredCapacityCompletionDistributionDocument is CHAOS-8598's per-team read document: one team's capacityForecast, selecting only
+// completionDistribution{days items}. It is the MCP run_operation read of the Monte Carlo histograms. The text is the wire form (urql formatDocument + stringifyDocument, so __typename is injected) of the web source const the graphql-wire-parity gate pairs it with.
+// The whole input is ONE variable ($input: CapacityForecastInput): acr refuses a variable nested in a literal argument. The client supplies
+// {teamId}; historyDays and simulations default in the SDL input type (90 and 10000; 10000 is mcpMaxSimulations). The operation key differs from the GraphQL root (capacityForecast) because a digest maps to exactly one operation.
+const registeredCapacityCompletionDistributionDocument = `query CapacityCompletionDistribution($orgId: String!, $input: CapacityForecastInput) {
+  capacityForecast(orgId: $orgId, input: $input) {
+    completionDistribution {
+      days {
+        value
+        count
+        __typename
+      }
+      items {
+        value
+        count
+        __typename
+      }
+      __typename
+    }
+    __typename
+  }
+}`
+
+// registeredCapacityForecastV2Document is the text capacityForecast accepted BEFORE it asked for `runs` and for
+// `cumulativeShare` on the bins of completionDistribution (CHAOS-8477): the text CHAOS-7994 registered. It stays a
+// legacy text (see legacyDigestsByOperation), beside V1 below, so a web build still sending it keeps working
+// while the new web rolls out; the operation's ONE current document is registeredCapacityForecastDocument above.
+// Wire form, same provenance: testdata/wire_form/capacityForecast.v2.graphql.
+const registeredCapacityForecastV2Document = `query CapacityForecast($orgId: String!, $input: CapacityForecastInput) {
+  capacityForecast(orgId: $orgId, input: $input) {
+    forecastId
+    computedAt
+    teamId
+    workScopeId
+    backlogSize
+    targetItems
+    targetDate
+    p50Date
+    p85Date
+    p95Date
+    p50Days
+    p85Days
+    p95Days
+    p50Items
+    p85Items
+    p95Items
+    throughputMean
+    throughputStddev
+    historyDays
+    insufficientHistory
+    highVariance
+    completionDistribution {
+      days {
+        value
+        count
+        __typename
+      }
+      items {
+        value
+        count
+        __typename
+      }
+      __typename
+    }
+    __typename
+  }
+}`
+
+// registeredCapacityForecastV1Document is the text capacityForecast accepted BEFORE it asked for
+// completionDistribution (CHAOS-7994, CHAOS-8000 dual accept). It stays a legacy text (see
+// legacyDigestsByOperation) so a web build still sending it keeps working while the new web rolls out; the
+// operation's ONE current document is registeredCapacityForecastDocument above. Wire form, same provenance:
+// testdata/wire_form/capacityForecast.v1.graphql.
+const registeredCapacityForecastV1Document = `query CapacityForecast($orgId: String!, $input: CapacityForecastInput) {
+  capacityForecast(orgId: $orgId, input: $input) {
+    forecastId
+    computedAt
+    teamId
+    workScopeId
+    backlogSize
+    targetItems
+    targetDate
+    p50Date
+    p85Date
+    p95Date
+    p50Days
+    p85Days
+    p95Days
+    p50Items
+    p85Items
+    p95Items
+    throughputMean
+    throughputStddev
+    historyDays
+    insufficientHistory
+    highVariance
     __typename
   }
 }`
@@ -1144,6 +1324,50 @@ const registeredFeatureFlagTimeseriesDocument = `query FeatureFlagTimeseries($or
   }
 }`
 
+// registeredTestopsJobFailuresDocument is the registered document for the
+// `testopsJobFailures` operation (CHAOS-8513, Go-only: no Python resolver
+// exists), the exact wire-form text the web client sends
+// (testdata/wire_capture/testopsjobfailures_captured.graphql; the wire form of
+// TESTOPS_JOB_FAILURES_QUERY, computed with the web's pinned urql).
+const registeredTestopsJobFailuresDocument = `query TestOpsJobFailures($orgId: String!, $input: TestOpsJobFailuresInput!) {
+  testopsJobFailures(orgId: $orgId, input: $input) {
+    groups {
+      workflowName
+      jobName
+      provider
+      runs
+      failedRuns
+      failureRate
+      __typename
+    }
+    totalCount
+    truncated
+    __typename
+  }
+}`
+
+// registeredCoverageBaselinesDocument is the registered document for the
+// `coverageBaselines` operation (CHAOS-8111, Go-only: no Python resolver
+// exists), the exact wire-form text the web client sends
+// (testdata/wire_capture/coveragebaselines_captured.graphql; the wire form of
+// TESTOPS_COVERAGE_BASELINES_QUERY, computed with the web's pinned urql).
+const registeredCoverageBaselinesDocument = `query CoverageBaselines($orgId: String!, $endDate: Date!, $repoIds: [String!], $teamIds: [String!]) {
+  coverageBaselines(
+    orgId: $orgId
+    endDate: $endDate
+    repoIds: $repoIds
+    teamIds: $teamIds
+  ) {
+    repoId
+    repoName
+    lineBaselinePct
+    lineDays
+    branchBaselinePct
+    branchDays
+    __typename
+  }
+}`
+
 // registeredTestopsRiskDocument is the registered document for the
 // `testopsRisk` operation, the exact wire-form text a real web client
 // sends (testdata/wire_capture/testopsrisk_captured.graphql).
@@ -1228,6 +1452,85 @@ const registeredBusFactorDocument = `query BusFactor($orgId: String!, $scope: Bu
 // `aiImpactSummary` operation, the exact wire-form text a real web client sends
 // (testdata/wire_capture/aiimpactsummary_captured.graphql).
 const registeredAiImpactSummaryDocument = `query AIImpactSummary($orgId: String!, $dateRange: AIDateRangeInput!, $scope: AIScopeInput) {
+  aiImpactSummary(orgId: $orgId, dateRange: $dateRange, scope: $scope) {
+    orgId
+    startDate
+    endDate
+    totalPrs
+    aiAssistedPrs
+    agentCreatedPrs
+    humanPrs
+    unknownPrs
+    aiAssistedPrRatio
+    dataAvailable
+    computedAt
+    byBucket {
+      bucket
+      prsTotal
+      prsMerged
+      aiAssistedPrRatio
+      agentCreatedPrCount
+      cycleTimeAvgHours
+      aiCycleTimeDeltaHours
+      aiReviewAmplification
+      reworkDragRate
+      revertRate
+      incidentDragRate
+      testGapRate
+      leverage {
+        prsComponent
+        cycleTimeComponent
+        reviewComponent
+        reworkComponent
+        testComponent
+        incidentComponent
+        __typename
+      }
+      __typename
+    }
+    daily {
+      bucket
+      prsTotal
+      prsMerged
+      cycleTimeAvgHours
+      reviewsPerPr
+      changesRequestedPerPr
+      reworkPrs
+      reworkRate
+      revertPrs
+      revertRate
+      incidentsCount
+      incidentRate
+      testGapPrs
+      testGapRate
+      day
+      __typename
+    }
+    repoBreakdown {
+      scopeId
+      scopeLabel
+      aiPrsTotal
+      aiAssistedPrRatio
+      reworkRateDelta
+      __typename
+    }
+    teamBreakdown {
+      scopeId
+      scopeLabel
+      aiPrsTotal
+      aiAssistedPrRatio
+      reworkRateDelta
+      __typename
+    }
+    __typename
+  }
+}`
+
+// registeredAiImpactSummaryV1Document is the text of `aiImpactSummary` BEFORE the Impact page asked for `daily.day`
+// (CHAOS-7992, CHAOS-8000 dual accept): a web build still on the old text keeps working while the new one rolls out.
+// Listed in legacyDigestsByOperation; remove it with the cleanup ticket once no client sends it
+// (testdata/wire_capture/aiimpactsummary_v1_captured.graphql).
+const registeredAiImpactSummaryV1Document = `query AIImpactSummary($orgId: String!, $dateRange: AIDateRangeInput!, $scope: AIScopeInput) {
   aiImpactSummary(orgId: $orgId, dateRange: $dateRange, scope: $scope) {
     orgId
     startDate
@@ -1449,6 +1752,37 @@ const registeredAiOpportunitiesDocument = `query AIOpportunities($orgId: String!
       opportunityId
       kind
       repoId
+      repoName
+      teamId
+      teamName
+      title
+      rationale
+      score
+      evidenceRefs
+      workGraphDrilldowns {
+        rootType
+        rootId
+        label
+        __typename
+      }
+      __typename
+    }
+    __typename
+  }
+}`
+
+// registeredAiOpportunitiesV1Document is the text of `aiOpportunities` BEFORE the AI opportunity list asked for the served repository and team names (CHAOS-8114).
+// It stays a legacy text (see legacyDigestsByOperation), so a web build still sending it keeps working while the
+// new one rolls out; the operation's ONE current document is registeredAiOpportunitiesDocument above. Remove it
+// with the cleanup ticket once no client sends it (testdata/wire_capture/aiopportunities_v1_captured.graphql).
+const registeredAiOpportunitiesV1Document = `query AIOpportunities($orgId: String!, $scope: AIScopeInput, $limit: Int! = 5) {
+  aiOpportunities(orgId: $orgId, scope: $scope, limit: $limit) {
+    orgId
+    detectorReady
+    recommendations {
+      opportunityId
+      kind
+      repoId
       teamId
       title
       rationale
@@ -1470,6 +1804,37 @@ const registeredAiOpportunitiesDocument = `query AIOpportunities($orgId: String!
 // `improveOpportunities` operation, the exact wire-form text a real web client sends
 // (testdata/wire_capture/improveopportunities_captured.graphql).
 const registeredImproveOpportunitiesDocument = `query ImproveOpportunities($scope: AIScopeInput, $limit: Int! = 10, $windowDays: Int! = 30) {
+  improveOpportunities(scope: $scope, limit: $limit, windowDays: $windowDays) {
+    orgId
+    detectorReady
+    totalCount
+    opportunities {
+      opportunityId
+      kind
+      entityType
+      entityId
+      title
+      rationale
+      score
+      severity
+      evidenceRefs
+      recommendedAction
+      value
+      threshold
+      unit
+      thresholdDirection
+      __typename
+    }
+    __typename
+  }
+}`
+
+// registeredImproveOpportunitiesV1Document is the text of `improveOpportunities` BEFORE the Automations table asked
+// for `value`, `threshold`, `unit` and `thresholdDirection` (CHAOS-8537; the web half is CHAOS-8500; the fields are CHAOS-7626). It stays a
+// legacy text (see legacyDigestsByOperation), so a web build still sending it keeps working while the new one rolls
+// out; the operation's ONE current document is registeredImproveOpportunitiesDocument above. Remove it with the
+// cleanup ticket once no client sends it (testdata/wire_capture/improveopportunities_v1_captured.graphql).
+const registeredImproveOpportunitiesV1Document = `query ImproveOpportunities($scope: AIScopeInput, $limit: Int! = 10, $windowDays: Int! = 30) {
   improveOpportunities(scope: $scope, limit: $limit, windowDays: $windowDays) {
     orgId
     detectorReady
@@ -1524,6 +1889,48 @@ const registeredAiGovernanceSummaryDocument = `query AIGovernanceSummary($orgId:
 // `aiWorkflowDrilldown` operation, the exact wire-form text a real web client sends
 // (testdata/wire_capture/aiworkflowdrilldown_captured.graphql).
 const registeredAiWorkflowDrilldownDocument = `query AIWorkflowDrilldown($orgId: String!, $rootType: AIWorkflowRootTypeInput!, $rootId: String!, $depth: Int! = 3, $limit: Int! = 100) {
+  aiWorkflowDrilldown(
+    orgId: $orgId
+    rootType: $rootType
+    rootId: $rootId
+    depth: $depth
+    limit: $limit
+  ) {
+    orgId
+    rootType
+    rootId
+    partial
+    dataAvailable
+    nodes {
+      nodeType
+      nodeId
+      displayName
+      nameExpected
+      __typename
+    }
+    edges {
+      edgeId
+      sourceType
+      sourceId
+      targetType
+      targetId
+      edgeType
+      confidence
+      source
+      evidence
+      provider
+      repoId
+      __typename
+    }
+    __typename
+  }
+}`
+
+// registeredAiWorkflowDrilldownV1Document is the text of `aiWorkflowDrilldown` BEFORE the AI evidence rows asked for the served node names and whether a node type carries a name (CHAOS-8113).
+// It stays a legacy text (see legacyDigestsByOperation), so a web build still sending it keeps working while the
+// new one rolls out; the operation's ONE current document is registeredAiWorkflowDrilldownDocument above. Remove it
+// with the cleanup ticket once no client sends it (testdata/wire_capture/aiworkflowdrilldown_v1_captured.graphql).
+const registeredAiWorkflowDrilldownV1Document = `query AIWorkflowDrilldown($orgId: String!, $rootType: AIWorkflowRootTypeInput!, $rootId: String!, $depth: Int! = 3, $limit: Int! = 100) {
   aiWorkflowDrilldown(
     orgId: $orgId
     rootType: $rootType
@@ -1650,6 +2057,39 @@ const registeredAiRiskBreakdownDocument = `query AIRiskBreakdown($orgId: String!
 // `aiAttributedPrs` operation, the exact wire-form text a real web client sends
 // (testdata/wire_capture/aiattributedprs_captured.graphql).
 const registeredAiAttributedPrsDocument = `query AIAttributedPrs($orgId: String!, $dateRange: AIDateRangeInput!, $scope: AIScopeInput, $limit: Int! = 50, $offset: Int! = 0) {
+  aiAttributedPrs(
+    orgId: $orgId
+    dateRange: $dateRange
+    scope: $scope
+    limit: $limit
+    offset: $offset
+  ) {
+    orgId
+    startDate
+    endDate
+    total
+    hasMore
+    dataAvailable
+    rows {
+      repoId
+      repoName
+      number
+      title
+      kind
+      workType
+      teamId
+      mergedAt
+      __typename
+    }
+    __typename
+  }
+}`
+
+// registeredAiAttributedPrsV1Document is the text of `aiAttributedPrs` BEFORE the PR Evidence list asked for
+// `repoName` (CHAOS-7991, CHAOS-8000 dual accept): a web build still on the old text keeps working while the new
+// one rolls out. Listed in legacyDigestsByOperation; remove it with the cleanup ticket once no client sends it
+// (testdata/wire_capture/aiattributedprs_v1_captured.graphql).
+const registeredAiAttributedPrsV1Document = `query AIAttributedPrs($orgId: String!, $dateRange: AIDateRangeInput!, $scope: AIScopeInput, $limit: Int! = 50, $offset: Int! = 0) {
   aiAttributedPrs(
     orgId: $orgId
     dateRange: $dateRange
@@ -2732,7 +3172,7 @@ func buildQueryRoute(getenv getenvFunc, cfg queryRouteConfig) (queryRouteHandler
 	// on, and both the combined check and the per-class probes read its last answer.
 	posture := queryAPIPostureCheck(getenv, pgPool)
 	// CHAOS-7831: ONE class-row switch for the MCP listener and the named-operation route (:8091), so a root's class row is one decision.
-	classSwitch := newClassRowSwitch(pgPool, schemaDigest)
+	classSwitch := newClassRowSwitch(pgPool)
 	handler, proofHandler, proofWriteHandler, registryHandler, err := newQueryHandler(analytics.PinInvestmentMembershipScope(chClient), pgPool, verifier, schemaDigest, getenv, classSwitch)
 	if err != nil {
 		pgPool.Close()
@@ -2748,7 +3188,7 @@ func buildQueryRoute(getenv getenvFunc, cfg queryRouteConfig) (queryRouteHandler
 	}
 	mcpHandler := newMCPHandler(mcpClient, pgPool, classSwitch, getenv)
 	// CHAOS-7214: the proof variant over a switch that also admits shadow rows.
-	mcpProofHandler := newMCPProofHandler(mcpHandler, routeswitch.NewProofSwitch(pgPool, schemaDigest, mcpRoutingDigests()), verifier, newProofOrgAllowed(pgPool))
+	mcpProofHandler := newMCPProofHandler(mcpHandler, routeswitch.NewClassDecisionProofSwitch(pgPool, mcpRoutingDigests()), verifier, newProofOrgAllowed(pgPool))
 	handlers := queryRouteHandlers{
 		Query:      handler,
 		Proof:      proofHandler,
@@ -3110,6 +3550,7 @@ func newQueryHandler(chClient featureflags.QueryClient, pgPool *pgxpool.Pool, ve
 		"investmentBreakdown":               digestHex(registeredInvestmentBreakdownDocument),
 		"investmentFull":                    digestHex(registeredInvestmentFullDocument),
 		"capacityForecast":                  digestHex(registeredCapacityForecastDocument),
+		"capacityCompletionDistribution":    digestHex(registeredCapacityCompletionDistributionDocument),
 		"capacityForecasts":                 digestHex(registeredCapacityForecastsDocument),
 		"throughputForecast":                digestHex(registeredThroughputForecastDocument),
 		"featureFlagEvents":                 digestHex(registeredFeatureFlagEventsDocument),
@@ -3150,6 +3591,8 @@ func newQueryHandler(chClient featureflags.QueryClient, pgPool *pgxpool.Pool, ve
 		"aiAttributedPrs":                   digestHex(registeredAiAttributedPrsDocument),
 		"aiAttributionOverview":             digestHex(registeredAiAttributionOverviewDocument),
 		"testopsRisk":                       digestHex(registeredTestopsRiskDocument),
+		"testopsJobFailures":                digestHex(registeredTestopsJobFailuresDocument),
+		"coverageBaselines":                 digestHex(registeredCoverageBaselinesDocument),
 		"workItemTeamAttributions":          digestHex(registeredWorkItemTeamAttributionsDocument),
 		"recommendations":                   digestHex(registeredRecommendationsDocument),
 	}
@@ -3165,17 +3608,20 @@ func newQueryHandler(chClient featureflags.QueryClient, pgPool *pgxpool.Pool, ve
 	// That is the same by-construction discipline mountedRouteLogMessage
 	// above exists to enforce, applied to the two surfaces an operator
 	// uses to answer "is anything actually enabled?".
-	logRoutingStateDrift(pgPool, schemaDigest)
 	registryHandler := newRegistryHandler(schemaDigest, digestByOperation)
-	sw := routeswitch.NewPostgresSwitch(pgPool, schemaDigest, digestByOperation)
+	// CHAOS-8702: the serving switch reads no routing row -- a registered operation is served
+	// (routeswitch/catalog_switch.go). The proof switch below and the class-row switch
+	// (newClassRowSwitch) still read rows: a measurement route needs a row and an MCP class root with no
+	// row is dark.
+	sw := routeswitch.NewCatalogSwitch(digestByOperation)
 	routeMux := routeswitch.NewMux(sw)
 
 	// operationByDigest is digestByOperation's reverse index, built once
 	// here rather than on every request -- operationForDocument does a
 	// single map lookup per request, not a linear scan.
-	operationByDigest := make(map[string]string, len(digestByOperation))
-	for operation, digest := range digestByOperation {
-		operationByDigest[digest] = operation
+	operationByDigest, err := buildOperationByDigest(digestByOperation, legacyDigestsByOperation)
+	if err != nil {
+		return nil, nil, nil, nil, fmt.Errorf("query-api: %w", err)
 	}
 
 	gqlHandler := newGraphQLServer(&graph.Resolver{ClickHouse: chClient, Postgres: pgPool, ReportWriter: newReportWriter(pgPool, jobContractRoot)})
@@ -3191,7 +3637,7 @@ func newQueryHandler(chClient featureflags.QueryClient, pgPool *pgxpool.Pool, ve
 	// verification and org context. ONLY the Switch differs, which is the
 	// entire point: a proof must exercise the real path, and a second
 	// hand-written copy of this closure would be a second path.
-	proofMux := routeswitch.NewMux(routeswitch.NewProofSwitch(pgPool, schemaDigest, digestByOperation))
+	proofMux := routeswitch.NewMux(routeswitch.NewProofSwitchWithLegacy(pgPool, schemaDigest, digestByOperation, legacyDigestsByOperation))
 	for operation := range digestByOperation {
 		proofMux.Register(operation, gqlHandler)
 	}
@@ -3221,7 +3667,7 @@ func newQueryHandler(chClient featureflags.QueryClient, pgPool *pgxpool.Pool, ve
 	// CHAOS-7831: the class-row switch is the one the MCP listener uses (same type, same keys, live read); only the serving handler is gated: the
 	// proof handlers measure a root BEFORE it is enabled and must keep running on a dark one.
 	// buildQueryRoute passes the ONE switch instance it also gives the MCP handler; a caller that passes none (the unit tests) gets one built the same way.
-	classSwitch := newClassRowSwitch(pgPool, schemaDigest)
+	classSwitch := newClassRowSwitch(pgPool)
 	if len(classSwitches) > 0 {
 		classSwitch = classSwitches[0]
 	}
@@ -3578,6 +4024,54 @@ func newDocumentDispatchHandler(getenv getenvFunc, routeMux *routeswitch.Mux, op
 		}
 		routeMux.Dispatch(operation, w, r)
 	}
+}
+
+// legacyDigestsByOperation lists, per operation, the digests of the registered texts it accepted BEFORE its
+// current one (CHAOS-8000 dual accept). A request carrying a legacy text resolves to the same operation as one
+// carrying the current text, so a web build still on the old text keeps working while the new text rolls out;
+// the operation keeps ONE current document in digestByOperation. Each legacy text is a
+// `registered<Operation>V<n>Document` const (a literal, so cmd/registrydump can read it) named once here and never in
+// digestByOperation. The literal below is cmd/registrydump's second parse target: keep its exact shape
+// (`"<operation>": {digestHex(<constIdent>), ...}`). Empty = every operation accepts one text.
+var legacyDigestsByOperation = map[string][]string{
+	"aiAttributedPrs":      {digestHex(registeredAiAttributedPrsV1Document)},
+	"aiImpactSummary":      {digestHex(registeredAiImpactSummaryV1Document)},
+	"aiOpportunities":      {digestHex(registeredAiOpportunitiesV1Document)},
+	"aiWorkflowDrilldown":  {digestHex(registeredAiWorkflowDrilldownV1Document)},
+	"capacityForecast":     {digestHex(registeredCapacityForecastV1Document), digestHex(registeredCapacityForecastV2Document)},
+	"improveOpportunities": {digestHex(registeredImproveOpportunitiesV1Document)},
+	"operatingReview":      {digestHex(registeredOperatingReviewV1Document)},
+	"reviewEdges":          {digestHex(registeredReviewEdgesV1Document)},
+}
+
+// buildOperationByDigest is the reverse index digest -> operation over every accepted text: each operation's
+// current digest plus its legacy ones. A digest that maps to two operations is refused (the lookup would be
+// ambiguous), and so is a legacy entry for an operation digestByOperation does not register.
+func buildOperationByDigest(digestByOperation map[string]string, legacy map[string][]string) (map[string]string, error) {
+	out := make(map[string]string, len(digestByOperation))
+	for operation, digest := range digestByOperation {
+		if other, dup := out[digest]; dup {
+			return nil, fmt.Errorf("digest %s is registered for both %q and %q", digest, other, operation)
+		}
+		out[digest] = operation
+	}
+	operations := make([]string, 0, len(legacy))
+	for operation := range legacy {
+		operations = append(operations, operation)
+	}
+	sort.Strings(operations)
+	for _, operation := range operations {
+		if _, registered := digestByOperation[operation]; !registered {
+			return nil, fmt.Errorf("legacy digests for %q, which is not a registered operation", operation)
+		}
+		for _, digest := range legacy[operation] {
+			if other, dup := out[digest]; dup {
+				return nil, fmt.Errorf("legacy digest %s of %q is already registered for %q", digest, operation, other)
+			}
+			out[digest] = operation
+		}
+	}
+	return out, nil
 }
 
 // operationForDocument resolves a request's raw query text to a

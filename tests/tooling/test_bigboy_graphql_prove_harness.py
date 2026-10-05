@@ -105,17 +105,17 @@ def _prove_command(calls: list[list[str]]) -> str:
     return command
 
 
-def test_the_default_edge_is_the_python_edge_in_python_reference_mode(
+def test_the_default_edge_is_the_routed_graphql_in_go_edge_mode(
     tmp_path: Path,
 ) -> None:
     """Run for real against a recording docker: with no second argument the prover is handed
-    the Python edge and no -go-edge."""
+    -go-edge and the routed /graphql (the stack has no Python edge)."""
     rc, calls = _run_harness(tmp_path, SHA)
     assert rc == 0, calls
     command = _prove_command(calls)
-    assert " -edge-url http://localhost:8000/graphql " in command
-    assert "-go-edge" not in command and "traefik" not in command
-    assert "through the Python edge," in command
+    assert " -go-edge -edge-url http://traefik:3000/graphql " in command
+    assert "localhost:8000" not in command
+    assert "through the routed /graphql in Go-edge mode," in command
 
 
 def test_go_edge_hands_the_prover_the_routed_graphql_in_go_edge_mode(

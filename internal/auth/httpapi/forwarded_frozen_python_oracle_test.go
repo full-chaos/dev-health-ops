@@ -38,8 +38,8 @@ func TestForwardedSchemeMatchesFrozenUvicorn(t *testing.T) {
 	}
 	var cases []forwardedCase
 	for _, allow := range []string{"127.0.0.1", "*", "", "10.0.0.0/8", "10.0.0.1/8", " 10.0.0.1 , 127.0.0.1", "::1", "unix-socket", "fe80::/10"} {
-		for _, peer := range []string{"127.0.0.1", "10.9.9.9", "10.0.0.1", "::1", "::ffff:127.0.0.1", "unix-socket", ""} {
-			for _, headers := range [][]string{nil, {"https"}, {"http"}, {"https", "http"}, {" \x1chttps\u00a0"}, {"HTTPS"}, {"wss"}, {"ws"}, {""}} {
+		for _, peer := range []string{"127.0.0.1", "10.9.9.9", "10.0.0.1", "::1", "::ffff:127.0.0.1", "unix-socket", "", "10.0.0.1/8", "10.0.0.0/8"} {
+			for _, headers := range [][]string{nil, {"https"}, {"http"}, {"https", "http"}, {" \x1chttps\u00a0"}, {"HTTPS"}, {"wss"}, {"ws"}, {""}, {"\u0085https"}, {"https\u00e9"}, {"\u00a0wss\u0085"}} {
 				for _, secure := range []bool{false, true} {
 					cases = append(cases, forwardedCase{Allow: allow, Peer: [2]any{peer, 5000}, Headers: headers, TLS: secure})
 				}

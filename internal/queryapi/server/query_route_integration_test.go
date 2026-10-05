@@ -135,17 +135,29 @@ func (c *fakeCHClient) Query(_ context.Context, _ string, _ []clickhouse.Binding
 }
 
 // fakeReviewEdgesCHClient is a minimal reviewedges.QueryClient double for
-// the CHAOS-4368 Wave 2 reachability test below. Unlike fakeCHClient,
-// reviewedges.Resolve issues exactly ONE query per invocation (no
-// separate count query), so this fake needs no call-parity bookkeeping --
-// every call gets the same single scripted row, which is enough to prove
-// the HTTP-level reachability contract this test exists for. It is NOT a
+// the CHAOS-4368 Wave 2 reachability test below. reviewedges.Resolve
+// issues the row query and then (CHAOS-7786) a count query that starts
+// with "SELECT count()"; the fake tells them apart by that prefix, not by
+// call parity, so it stays correct however often the resolver is invoked.
+// The row query gets the single scripted row; the count query gets its
+// total (1: nothing is cut). That is enough to prove the HTTP-level
+// reachability contract this test exists for. It is NOT a
 // substitute for the real-ClickHouse dual-run proof (that lives in the
 // Python-side stage-2 test,
 // ops/tests/api/graphql/test_go_api_dual_run_review_edges.py).
 type fakeReviewEdgesCHClient struct{}
 
-func (c *fakeReviewEdgesCHClient) Query(_ context.Context, _ string, _ []clickhouse.Binding) (clickhouse.RowScanner, error) {
+func (c *fakeReviewEdgesCHClient) Query(_ context.Context, statement string, _ []clickhouse.Binding) (clickhouse.RowScanner, error) {
+	if strings.HasPrefix(strings.TrimSpace(statement), "SELECT count()") {
+		return &fakeRows{rows: [][]any{{uint64(1)}}}, nil
+	}
+	// CHAOS-8485: the people reads (the org's identities, then the pull request
+	// author names). No row: the scripted reviewer and author are e-mail
+	// addresses that no identity and no pull request names, so each gets a key and
+	// a null name.
+	if strings.Contains(statement, "FROM identities FINAL") || strings.Contains(statement, "FROM git_pull_requests FINAL") {
+		return &fakeRows{rows: nil}, nil
+	}
 	return &fakeRows{rows: [][]any{
 		{"reviewer@example.com", "author@example.com", uint32(3), time.Date(2026, 8, 20, 0, 0, 0, 0, time.UTC), "repo-a"},
 	}}, nil
@@ -381,18 +393,24 @@ func TestFeatureFlagsRoute_ReachableOnlyWhenSwitchEnabled(t *testing.T) {
 	documentDigest := digestHex(registeredFeatureFlagsDocument)
 	token := signTestEnvelope(t, priv, "org-1")
 
-	t.Run("disabled_by_default", func(t *testing.T) {
+	// CHAOS-8517: this subtest was "disabled_by_default" and pinned 404 for an operation with no
+	// routing-state row. The catalog rule serves a registered operation that has no row at any schema
+	// digest, so on this fresh table the request now reaches the resolver.
+	t.Run("no_routing_row_is_served_by_the_catalog_rule", func(t *testing.T) {
 		rec := postGraphQL(t, handler, registeredFeatureFlagsDocument, token)
-		if rec.Code != http.StatusNotFound {
-			t.Fatalf("no routing-state row: got %d, want 404", rec.Code)
+		if rec.Code != http.StatusOK {
+			t.Fatalf("no routing-state row: got %d, want 200 (served by the catalog rule), body=%s", rec.Code, rec.Body.String())
+		}
+		if strings.Contains(rec.Body.String(), `"errors"`) || !strings.Contains(rec.Body.String(), "flag-a") {
+			t.Fatalf("no routing-state row: expected the fake row's flag key with no errors, got %s", rec.Body.String())
 		}
 	})
 
-	t.Run("mode_python_unreachable", func(t *testing.T) {
+	t.Run("mode_python_row_does_not_refuse", func(t *testing.T) {
 		setRoutingMode(t, pool, documentDigest, "featureFlags", "python")
 		rec := postGraphQL(t, handler, registeredFeatureFlagsDocument, token)
-		if rec.Code != http.StatusNotFound {
-			t.Fatalf("mode=python: got %d, want 404", rec.Code)
+		if rec.Code == http.StatusNotFound {
+			t.Fatalf("mode=python row: got %d, a row never refuses a registered operation (CHAOS-8702)", rec.Code)
 		}
 	})
 
@@ -437,8 +455,8 @@ func TestFeatureFlagsRoute_ReachableOnlyWhenSwitchEnabled(t *testing.T) {
 			t.Fatalf("expected a real featureFlags result before rollback, got %s", rec.Body.String())
 		}
 		setRoutingMode(t, pool, documentDigest, "featureFlags", "disabled")
-		if rec := postGraphQL(t, handler, registeredFeatureFlagsDocument, token); rec.Code != http.StatusNotFound {
-			t.Fatalf("expected 404 immediately after rollback, got %d", rec.Code)
+		if rec := postGraphQL(t, handler, registeredFeatureFlagsDocument, token); rec.Code == http.StatusNotFound {
+			t.Fatalf("a disabled row must not refuse a registered operation (CHAOS-8702): got %d", rec.Code)
 		}
 	})
 }
@@ -478,10 +496,13 @@ func TestReviewEdgesRoute_ReachableOnlyWhenSwitchEnabled(t *testing.T) {
 	documentDigest := digestHex(registeredReviewEdgesDocument)
 	token := signTestEnvelope(t, priv, "org-1")
 
-	t.Run("disabled_by_default", func(t *testing.T) {
+	// CHAOS-8517: this subtest was "disabled_by_default" and pinned 404 for an operation with no
+	// routing-state row. The catalog rule serves a registered operation that has no row at any schema
+	// digest, so on this fresh table the request now reaches the resolver.
+	t.Run("no_routing_row_is_served_by_the_catalog_rule", func(t *testing.T) {
 		rec := postGraphQLWithVariables(t, handler, registeredReviewEdgesDocument, token, reviewEdgesVariables())
-		if rec.Code != http.StatusNotFound {
-			t.Fatalf("no routing-state row: got %d, want 404", rec.Code)
+		if rec.Code != http.StatusOK {
+			t.Fatalf("no routing-state row: got %d, want 200 (served by the catalog rule), body=%s", rec.Code, rec.Body.String())
 		}
 	})
 
@@ -491,8 +512,18 @@ func TestReviewEdgesRoute_ReachableOnlyWhenSwitchEnabled(t *testing.T) {
 		if rec.Code != http.StatusOK {
 			t.Fatalf("mode=canary: got %d, body=%s", rec.Code, rec.Body.String())
 		}
-		if strings.Contains(rec.Body.String(), `"errors"`) || !strings.Contains(rec.Body.String(), "reviewer@example.com") {
-			t.Fatalf("expected response to contain the fake row's reviewer with no errors, got %s", rec.Body.String())
+		// CHAOS-8485: the registered document asks for the keys and names, not for the stored strings:
+		// the fake row is served (its count and its opaque keys) and its e-mail addresses are not.
+		body := rec.Body.String()
+		if strings.Contains(body, `"errors"`) || !strings.Contains(body, `"reviewsCount":3`) || !strings.Contains(body, `"reviewerKey":"p_`) || !strings.Contains(body, `"authorKey":"p_`) {
+			t.Fatalf("expected the fake row with its keys and no errors, got %s", body)
+		}
+		if strings.Contains(body, "@example.com") {
+			t.Fatalf("the answer of the current document holds an e-mail address: %s", body)
+		}
+		// CHAOS-7786: totalCount is the count query's answer (1 row available, 1 returned).
+		if !strings.Contains(rec.Body.String(), `"totalCount":1`) {
+			t.Fatalf("expected totalCount 1 from the count query, got %s", rec.Body.String())
 		}
 	})
 
@@ -512,31 +543,18 @@ func TestReviewEdgesRoute_ReachableOnlyWhenSwitchEnabled(t *testing.T) {
 		}
 	})
 
-	// The two operations sharing one Mux/PostgresSwitch instance must NOT
-	// leak reachability into each other: enabling reviewEdges must not
-	// make featureFlags (a document this test never registered a routing
-	// row for) reachable, and vice versa -- each go_api_routing_state row
-	// is keyed by its own document_digest AND selected_operation.
-	t.Run("enabling_reviewEdges_does_not_enable_featureFlags", func(t *testing.T) {
-		setRoutingMode(t, pool, documentDigest, "reviewEdges", "canary")
-		rec := postGraphQL(t, handler, registeredFeatureFlagsDocument, token)
-		if rec.Code != http.StatusNotFound {
-			t.Fatalf("featureFlags should stay unreachable when only reviewEdges is canaried: got %d", rec.Code)
-		}
-	})
-
 	t.Run("rollback_to_disabled_revokes_reachability_immediately", func(t *testing.T) {
 		setRoutingMode(t, pool, documentDigest, "reviewEdges", "canary")
 		rec := postGraphQLWithVariables(t, handler, registeredReviewEdgesDocument, token, reviewEdgesVariables())
 		if rec.Code != http.StatusOK {
 			t.Fatalf("expected 200 before rollback, got %d", rec.Code)
 		}
-		if strings.Contains(rec.Body.String(), `"errors"`) || !strings.Contains(rec.Body.String(), "reviewer@example.com") {
+		if strings.Contains(rec.Body.String(), `"errors"`) || !strings.Contains(rec.Body.String(), `"reviewsCount":3`) {
 			t.Fatalf("expected a real reviewEdges result before rollback, got %s", rec.Body.String())
 		}
 		setRoutingMode(t, pool, documentDigest, "reviewEdges", "disabled")
-		if rec := postGraphQLWithVariables(t, handler, registeredReviewEdgesDocument, token, reviewEdgesVariables()); rec.Code != http.StatusNotFound {
-			t.Fatalf("expected 404 immediately after rollback, got %d", rec.Code)
+		if rec := postGraphQLWithVariables(t, handler, registeredReviewEdgesDocument, token, reviewEdgesVariables()); rec.Code == http.StatusNotFound {
+			t.Fatalf("a disabled row must not refuse a registered operation (CHAOS-8702): got %d", rec.Code)
 		}
 	})
 }
@@ -575,10 +593,13 @@ func TestCognitiveLoadRoute_ReachableOnlyWhenSwitchEnabled(t *testing.T) {
 	documentDigest := digestHex(registeredCognitiveLoadDocument)
 	token := signTestEnvelope(t, priv, "org-1")
 
-	t.Run("disabled_by_default", func(t *testing.T) {
+	// CHAOS-8517: this subtest was "disabled_by_default" and pinned 404 for an operation with no
+	// routing-state row. The catalog rule serves a registered operation that has no row at any schema
+	// digest, so on this fresh table the request now reaches the resolver.
+	t.Run("no_routing_row_is_served_by_the_catalog_rule", func(t *testing.T) {
 		rec := postGraphQLWithVariables(t, handler, registeredCognitiveLoadDocument, token, cognitiveLoadVariables())
-		if rec.Code != http.StatusNotFound {
-			t.Fatalf("no routing-state row: got %d, want 404", rec.Code)
+		if rec.Code != http.StatusOK {
+			t.Fatalf("no routing-state row: got %d, want 200 (served by the catalog rule), body=%s", rec.Code, rec.Body.String())
 		}
 	})
 
@@ -609,18 +630,6 @@ func TestCognitiveLoadRoute_ReachableOnlyWhenSwitchEnabled(t *testing.T) {
 		}
 	})
 
-	// The three operations sharing one Mux/PostgresSwitch instance must
-	// NOT leak reachability into each other.
-	t.Run("enabling_cognitiveLoad_does_not_enable_featureFlags_or_reviewEdges", func(t *testing.T) {
-		setRoutingMode(t, pool, documentDigest, "cognitiveLoad", "canary")
-		if rec := postGraphQL(t, handler, registeredFeatureFlagsDocument, token); rec.Code != http.StatusNotFound {
-			t.Fatalf("featureFlags should stay unreachable when only cognitiveLoad is canaried: got %d", rec.Code)
-		}
-		if rec := postGraphQLWithVariables(t, handler, registeredReviewEdgesDocument, token, reviewEdgesVariables()); rec.Code != http.StatusNotFound {
-			t.Fatalf("reviewEdges should stay unreachable when only cognitiveLoad is canaried: got %d", rec.Code)
-		}
-	})
-
 	t.Run("rollback_to_disabled_revokes_reachability_immediately", func(t *testing.T) {
 		setRoutingMode(t, pool, documentDigest, "cognitiveLoad", "canary")
 		rec := postGraphQLWithVariables(t, handler, registeredCognitiveLoadDocument, token, cognitiveLoadVariables())
@@ -631,8 +640,8 @@ func TestCognitiveLoadRoute_ReachableOnlyWhenSwitchEnabled(t *testing.T) {
 			t.Fatalf("expected a real cognitiveLoad result before rollback, got %s", rec.Body.String())
 		}
 		setRoutingMode(t, pool, documentDigest, "cognitiveLoad", "disabled")
-		if rec := postGraphQLWithVariables(t, handler, registeredCognitiveLoadDocument, token, cognitiveLoadVariables()); rec.Code != http.StatusNotFound {
-			t.Fatalf("expected 404 immediately after rollback, got %d", rec.Code)
+		if rec := postGraphQLWithVariables(t, handler, registeredCognitiveLoadDocument, token, cognitiveLoadVariables()); rec.Code == http.StatusNotFound {
+			t.Fatalf("a disabled row must not refuse a registered operation (CHAOS-8702): got %d", rec.Code)
 		}
 	})
 }
@@ -673,10 +682,13 @@ func TestComplexityTimeseriesRoute_ReachableOnlyWhenSwitchEnabled(t *testing.T) 
 	documentDigest := digestHex(registeredComplexityTimeseriesDocument)
 	token := signTestEnvelope(t, priv, "org-1")
 
-	t.Run("disabled_by_default", func(t *testing.T) {
+	// CHAOS-8517: this subtest was "disabled_by_default" and pinned 404 for an operation with no
+	// routing-state row. The catalog rule serves a registered operation that has no row at any schema
+	// digest, so on this fresh table the request now reaches the resolver.
+	t.Run("no_routing_row_is_served_by_the_catalog_rule", func(t *testing.T) {
 		rec := postGraphQLWithVariables(t, handler, registeredComplexityTimeseriesDocument, token, complexityTimeseriesVariables())
-		if rec.Code != http.StatusNotFound {
-			t.Fatalf("no routing-state row: got %d, want 404", rec.Code)
+		if rec.Code != http.StatusOK {
+			t.Fatalf("no routing-state row: got %d, want 200 (served by the catalog rule), body=%s", rec.Code, rec.Body.String())
 		}
 	})
 
@@ -713,16 +725,6 @@ func TestComplexityTimeseriesRoute_ReachableOnlyWhenSwitchEnabled(t *testing.T) 
 		}
 	})
 
-	// The three operations sharing one Mux/PostgresSwitch instance must NOT
-	// leak reachability into each other.
-	t.Run("enabling_complexityTimeseries_does_not_enable_featureFlags", func(t *testing.T) {
-		setRoutingMode(t, pool, documentDigest, "complexityTimeseries", "canary")
-		rec := postGraphQL(t, handler, registeredFeatureFlagsDocument, token)
-		if rec.Code != http.StatusNotFound {
-			t.Fatalf("featureFlags should stay unreachable when only complexityTimeseries is canaried: got %d", rec.Code)
-		}
-	})
-
 	t.Run("rollback_to_disabled_revokes_reachability_immediately", func(t *testing.T) {
 		setRoutingMode(t, pool, documentDigest, "complexityTimeseries", "canary")
 		rec := postGraphQLWithVariables(t, handler, registeredComplexityTimeseriesDocument, token, complexityTimeseriesVariables())
@@ -735,8 +737,8 @@ func TestComplexityTimeseriesRoute_ReachableOnlyWhenSwitchEnabled(t *testing.T) 
 			t.Fatalf("expected a real complexityTimeseries result (incl. the locTotal metric) before rollback, got %s", rec.Body.String())
 		}
 		setRoutingMode(t, pool, documentDigest, "complexityTimeseries", "disabled")
-		if rec := postGraphQLWithVariables(t, handler, registeredComplexityTimeseriesDocument, token, complexityTimeseriesVariables()); rec.Code != http.StatusNotFound {
-			t.Fatalf("expected 404 immediately after rollback, got %d", rec.Code)
+		if rec := postGraphQLWithVariables(t, handler, registeredComplexityTimeseriesDocument, token, complexityTimeseriesVariables()); rec.Code == http.StatusNotFound {
+			t.Fatalf("a disabled row must not refuse a registered operation (CHAOS-8702): got %d", rec.Code)
 		}
 	})
 }
@@ -775,10 +777,13 @@ func TestHotspotsRoute_ReachableOnlyWhenSwitchEnabled(t *testing.T) {
 	documentDigest := digestHex(registeredHotspotsDocument)
 	token := signTestEnvelope(t, priv, "org-1")
 
-	t.Run("disabled_by_default", func(t *testing.T) {
+	// CHAOS-8517: this subtest was "disabled_by_default" and pinned 404 for an operation with no
+	// routing-state row. The catalog rule serves a registered operation that has no row at any schema
+	// digest, so on this fresh table the request now reaches the resolver.
+	t.Run("no_routing_row_is_served_by_the_catalog_rule", func(t *testing.T) {
 		rec := postGraphQLWithVariables(t, handler, registeredHotspotsDocument, token, hotspotsVariables())
-		if rec.Code != http.StatusNotFound {
-			t.Fatalf("no routing-state row: got %d, want 404", rec.Code)
+		if rec.Code != http.StatusOK {
+			t.Fatalf("no routing-state row: got %d, want 200 (served by the catalog rule), body=%s", rec.Code, rec.Body.String())
 		}
 	})
 
@@ -809,14 +814,6 @@ func TestHotspotsRoute_ReachableOnlyWhenSwitchEnabled(t *testing.T) {
 		}
 	})
 
-	t.Run("enabling_hotspots_does_not_enable_featureFlags", func(t *testing.T) {
-		setRoutingMode(t, pool, documentDigest, "hotspots", "canary")
-		rec := postGraphQL(t, handler, registeredFeatureFlagsDocument, token)
-		if rec.Code != http.StatusNotFound {
-			t.Fatalf("featureFlags should stay unreachable when only hotspots is canaried: got %d", rec.Code)
-		}
-	})
-
 	t.Run("rollback_to_disabled_revokes_reachability_immediately", func(t *testing.T) {
 		setRoutingMode(t, pool, documentDigest, "hotspots", "canary")
 		rec := postGraphQLWithVariables(t, handler, registeredHotspotsDocument, token, hotspotsVariables())
@@ -827,8 +824,8 @@ func TestHotspotsRoute_ReachableOnlyWhenSwitchEnabled(t *testing.T) {
 			t.Fatalf("expected a real hotspots result before rollback, got %s", rec.Body.String())
 		}
 		setRoutingMode(t, pool, documentDigest, "hotspots", "disabled")
-		if rec := postGraphQLWithVariables(t, handler, registeredHotspotsDocument, token, hotspotsVariables()); rec.Code != http.StatusNotFound {
-			t.Fatalf("expected 404 immediately after rollback, got %d", rec.Code)
+		if rec := postGraphQLWithVariables(t, handler, registeredHotspotsDocument, token, hotspotsVariables()); rec.Code == http.StatusNotFound {
+			t.Fatalf("a disabled row must not refuse a registered operation (CHAOS-8702): got %d", rec.Code)
 		}
 	})
 }
@@ -871,10 +868,13 @@ func TestOperatingReviewRoute_ReachableOnlyWhenSwitchEnabled(t *testing.T) {
 	documentDigest := digestHex(registeredOperatingReviewDocument)
 	token := signTestEnvelope(t, priv, "org-1")
 
-	t.Run("disabled_by_default", func(t *testing.T) {
+	// CHAOS-8517: this subtest was "disabled_by_default" and pinned 404 for an operation with no
+	// routing-state row. The catalog rule serves a registered operation that has no row at any schema
+	// digest, so on this fresh table the request now reaches the resolver.
+	t.Run("no_routing_row_is_served_by_the_catalog_rule", func(t *testing.T) {
 		rec := postGraphQLWithVariables(t, handler, registeredOperatingReviewDocument, token, operatingReviewVariables())
-		if rec.Code != http.StatusNotFound {
-			t.Fatalf("no routing-state row: got %d, want 404", rec.Code)
+		if rec.Code != http.StatusOK {
+			t.Fatalf("no routing-state row: got %d, want 200 (served by the catalog rule), body=%s", rec.Code, rec.Body.String())
 		}
 	})
 
@@ -912,14 +912,6 @@ func TestOperatingReviewRoute_ReachableOnlyWhenSwitchEnabled(t *testing.T) {
 		}
 	})
 
-	t.Run("enabling_operatingReview_does_not_enable_featureFlags", func(t *testing.T) {
-		setRoutingMode(t, pool, documentDigest, "operatingReview", "canary")
-		rec := postGraphQL(t, handler, registeredFeatureFlagsDocument, token)
-		if rec.Code != http.StatusNotFound {
-			t.Fatalf("featureFlags should stay unreachable when only operatingReview is canaried: got %d", rec.Code)
-		}
-	})
-
 	t.Run("rollback_to_disabled_revokes_reachability_immediately", func(t *testing.T) {
 		setRoutingMode(t, pool, documentDigest, "operatingReview", "canary")
 		rec := postGraphQLWithVariables(t, handler, registeredOperatingReviewDocument, token, operatingReviewVariables())
@@ -927,8 +919,8 @@ func TestOperatingReviewRoute_ReachableOnlyWhenSwitchEnabled(t *testing.T) {
 			t.Fatalf("expected 200 before rollback, got %d", rec.Code)
 		}
 		setRoutingMode(t, pool, documentDigest, "operatingReview", "disabled")
-		if rec := postGraphQLWithVariables(t, handler, registeredOperatingReviewDocument, token, operatingReviewVariables()); rec.Code != http.StatusNotFound {
-			t.Fatalf("expected 404 immediately after rollback, got %d", rec.Code)
+		if rec := postGraphQLWithVariables(t, handler, registeredOperatingReviewDocument, token, operatingReviewVariables()); rec.Code == http.StatusNotFound {
+			t.Fatalf("a disabled row must not refuse a registered operation (CHAOS-8702): got %d", rec.Code)
 		}
 	})
 }
@@ -993,10 +985,13 @@ func TestHomeRoute_ReachableOnlyWhenSwitchEnabled(t *testing.T) {
 	documentDigest := digestHex(registeredHomeDocument)
 	token := signTestEnvelope(t, priv, "org-1")
 
-	t.Run("disabled_by_default", func(t *testing.T) {
+	// CHAOS-8517: this subtest was "disabled_by_default" and pinned 404 for an operation with no
+	// routing-state row. The catalog rule serves a registered operation that has no row at any schema
+	// digest, so on this fresh table the request now reaches the resolver.
+	t.Run("no_routing_row_is_served_by_the_catalog_rule", func(t *testing.T) {
 		rec := postGraphQLWithVariables(t, handler, registeredHomeDocument, token, homeVariables())
-		if rec.Code != http.StatusNotFound {
-			t.Fatalf("no routing-state row: got %d, want 404", rec.Code)
+		if rec.Code != http.StatusOK {
+			t.Fatalf("no routing-state row: got %d, want 200 (served by the catalog rule), body=%s", rec.Code, rec.Body.String())
 		}
 	})
 
@@ -1040,14 +1035,6 @@ func TestHomeRoute_ReachableOnlyWhenSwitchEnabled(t *testing.T) {
 		}
 	})
 
-	t.Run("enabling_home_does_not_enable_featureFlags", func(t *testing.T) {
-		setRoutingMode(t, pool, documentDigest, "home", "canary")
-		rec := postGraphQL(t, handler, registeredFeatureFlagsDocument, token)
-		if rec.Code != http.StatusNotFound {
-			t.Fatalf("featureFlags should stay unreachable when only home is canaried: got %d", rec.Code)
-		}
-	})
-
 	t.Run("rollback_to_disabled_revokes_reachability_immediately", func(t *testing.T) {
 		setRoutingMode(t, pool, documentDigest, "home", "canary")
 		rec := postGraphQLWithVariables(t, handler, registeredHomeDocument, token, homeVariables())
@@ -1055,8 +1042,8 @@ func TestHomeRoute_ReachableOnlyWhenSwitchEnabled(t *testing.T) {
 			t.Fatalf("expected 200 before rollback, got %d", rec.Code)
 		}
 		setRoutingMode(t, pool, documentDigest, "home", "disabled")
-		if rec := postGraphQLWithVariables(t, handler, registeredHomeDocument, token, homeVariables()); rec.Code != http.StatusNotFound {
-			t.Fatalf("expected 404 immediately after rollback, got %d", rec.Code)
+		if rec := postGraphQLWithVariables(t, handler, registeredHomeDocument, token, homeVariables()); rec.Code == http.StatusNotFound {
+			t.Fatalf("a disabled row must not refuse a registered operation (CHAOS-8702): got %d", rec.Code)
 		}
 	})
 }
@@ -1174,10 +1161,13 @@ func TestFlowMatrixRoute_ReachableOnlyWhenSwitchEnabled(t *testing.T) {
 	documentDigest := digestHex(registeredFlowMatrixDocument)
 	token := signTestEnvelope(t, priv, "org-1")
 
-	t.Run("disabled_by_default", func(t *testing.T) {
+	// CHAOS-8517: this subtest was "disabled_by_default" and pinned 404 for an operation with no
+	// routing-state row. The catalog rule serves a registered operation that has no row at any schema
+	// digest, so on this fresh table the request now reaches the resolver.
+	t.Run("no_routing_row_is_served_by_the_catalog_rule", func(t *testing.T) {
 		rec := postGraphQLWithVariables(t, handler, registeredFlowMatrixDocument, token, flowMatrixVariables())
-		if rec.Code != http.StatusNotFound {
-			t.Fatalf("no routing-state row: got %d, want 404", rec.Code)
+		if rec.Code != http.StatusOK {
+			t.Fatalf("no routing-state row: got %d, want 200 (served by the catalog rule), body=%s", rec.Code, rec.Body.String())
 		}
 	})
 
@@ -1226,13 +1216,6 @@ func TestFlowMatrixRoute_ReachableOnlyWhenSwitchEnabled(t *testing.T) {
 		}
 	})
 
-	t.Run("enabling_flowMatrix_does_not_enable_featureFlags", func(t *testing.T) {
-		setRoutingMode(t, pool, documentDigest, "flowMatrix", "canary")
-		rec := postGraphQL(t, handler, registeredFeatureFlagsDocument, token)
-		if rec.Code != http.StatusNotFound {
-			t.Fatalf("featureFlags should stay unreachable when only flowMatrix is canaried: got %d", rec.Code)
-		}
-	})
 }
 
 // TestQueryRouteClickHouseClient_ToleratesRealResultVolume is the

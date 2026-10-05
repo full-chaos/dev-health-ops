@@ -4,7 +4,7 @@ summary: Query allowlisted analytics primitives through the read-only GraphQL AP
 content_type: task-guide
 owner: platform-api
 source_of_truth:
-  - src/dev_health_ops/api/graphql/schema.py
+  - contracts/graphql/v1/schema.graphql
   - internal/queryapi/analytics/resolve.go
   - docs/api/graphql-overview.md
 applicability: current

@@ -33,7 +33,7 @@ func runDisable(argv []string) error {
 	common.bindPostgresURI(set, "domain Postgres DSN holding go_api_routing_state")
 	set.StringVar(&common.operations, "operations", "all-registered", "comma-separated operation names, or 'all-registered' (default)")
 	set.StringVar(&common.catalogPath, "catalog", goapiproof.DefaultCatalogPath, "the edge's registered-document catalog")
-	set.StringVar(&mode, "mode", "", "python = the documented safe default (same as no row); disabled = same reachability but records a deliberate decision; shadow = the client still gets Python's response (required)")
+	set.StringVar(&mode, "mode", "", "python = not served, the documented safe default; disabled = same reachability but records a deliberate decision; shadow = the client still gets Python's response (required). Each holds a catalog operation dark: an operation with NO row at any schema digest is served, and this verb never inserts one")
 	set.StringVar(&candidateBuild, "candidate-build", "", "optional GUARD: refuse if a row points at a different build than this, i.e. somebody repointed it since you looked. NEVER written -- disable changes mode only")
 	set.StringVar(&documentDigest, "document", "", "target the live row by its OWN document digest instead of the catalog's -- the only way to select a DOCUMENT_DRIFT row (as `status` names it), e.g. to guard-check -candidate-build against it. Exact-match; requires exactly one -operations name")
 	set.StringVar(&common.recordedBy, "recorded-by", "", "WHO is running this. Required with -apply")
@@ -91,6 +91,7 @@ func runDisable(argv []string) error {
 	if err != nil {
 		return err
 	}
+	noteCatalogOperations(isClass)
 	var catalog map[string]string
 	var operations []string
 	if isClass {

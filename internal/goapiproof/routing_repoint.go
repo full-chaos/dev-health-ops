@@ -48,10 +48,13 @@ import (
 // exactly the "somebody typed a sha" provenance the proof runner refuses.
 var ErrRepointBuildMismatch = errors.New("goapiproof: re-point build does not match the running build")
 
-// ErrRepointNoRows is returned when no routing row exists at the schema
-// digest. It is an error rather than an empty success for the reason the
-// whole subsystem exists: "the registry is unreachable or empty" and
-// "every row is already correct" must not read alike.
+// ErrRepointNoRows is returned when routing rows exist, none of them at the
+// schema digest, and at least one of them is in a served mode. It is an error
+// rather than an empty success for the reason the whole subsystem exists:
+// "every row sits at a digest nothing reads" and "every row is already
+// correct" must not read alike. A table with no row at any digest is
+// ErrRoutingTableEmpty instead, and one whose rows elsewhere are all in a dark
+// mode is ErrRoutingRowsOnlyDark; neither is a refusal.
 var ErrRepointNoRows = errors.New("goapiproof: no routing rows at this schema digest")
 
 // ErrRepointUnknownOperation reports an --operations name with no row at
@@ -245,6 +248,33 @@ func Repoint(ctx context.Context, pool *pgxpool.Pool, request RepointRequest) ([
 	if err := request.validate(); err != nil {
 		return nil, err
 	}
+	// CHAOS-8735: MCP class roots are decided by go_api_class_decision; repoint rewrites the build they name and
+	// nothing else, whatever the schema digest, so the proof harness can run after a schema move.
+	class, document := splitClassOperations(request.Operations)
+	if len(class) > 0 && len(document) > 0 {
+		return nil, errMixedClassAndDocument
+	}
+	var classOutcomes []RepointOutcome
+	if len(request.Operations) == 0 || len(class) > 0 {
+		var err error
+		if classOutcomes, err = repointClassDecisions(ctx, pool, request, class); err != nil {
+			return nil, err
+		}
+		if len(class) > 0 {
+			return classOutcomes, nil
+		}
+	}
+	documentOutcomes, err := repointDocumentRows(ctx, pool, request)
+	if err != nil {
+		if len(classOutcomes) > 0 && (errors.Is(err, ErrRoutingTableEmpty) || errors.Is(err, ErrRoutingRowsOnlyDark) || errors.Is(err, ErrRepointNoRows)) {
+			return classOutcomes, nil
+		}
+		return nil, err
+	}
+	return append(classOutcomes, documentOutcomes...), nil
+}
+
+func repointDocumentRows(ctx context.Context, pool *pgxpool.Pool, request RepointRequest) ([]RepointOutcome, error) {
 	var lastRace error
 	for attempt := 0; attempt < repointAttempts; attempt++ {
 		outcomes, err := repointOnce(ctx, pool, request)
@@ -260,12 +290,6 @@ func Repoint(ctx context.Context, pool *pgxpool.Pool, request RepointRequest) ([
 		ErrRepointRacedAnotherWriter, repointAttempts, lastRace)
 }
 
-// rowKey is a routing row's full identity within one schema digest.
-//
-// Keyed by BOTH columns, never by operation alone: one operation can have
-// several rows at a schema digest under different document digests, and
-// three separate findings across three review rounds were all a map that
-// forgot that (r1 F5, r2 R2-03, r3 CONC-01).
 type rowKey struct{ operation, documentDigest string }
 
 func repointOnce(ctx context.Context, pool *pgxpool.Pool, request RepointRequest) ([]RepointOutcome, error) {
@@ -300,7 +324,24 @@ func repointOnce(ctx context.Context, pool *pgxpool.Pool, request RepointRequest
 		return nil, err
 	}
 	if len(surveyed) == 0 {
-		return nil, fmt.Errorf("%w: %s", ErrRepointNoRows, request.SchemaDigest)
+		// The same split `carry` makes (CHAOS-8543, CHAOS-8586), decided under
+		// the table lock: no row at ANY digest, or rows elsewhere that are all in
+		// a dark mode, is a valid state with nothing to re-point; a served row at
+		// another digest is the refusal this always was. A row that appeared at
+		// this digest since the survey starts the run over (Repoint retries).
+		answer, err := answerNoLiveRow(ctx, tx, request.SchemaDigest)
+		if err != nil {
+			return nil, err
+		}
+		switch answer {
+		case noLiveRowTableEmpty, noLiveRowOnlyDark:
+			return nil, noLiveRowError(ctx, tx, request.SchemaDigest, answer)
+		case noLiveRowAppeared:
+			return nil, fmt.Errorf("%w: a row appeared at %s after the survey read none there",
+				ErrRepointRacedAnotherWriter, request.SchemaDigest)
+		default:
+			return nil, fmt.Errorf("%w: %s", ErrRepointNoRows, request.SchemaDigest)
+		}
 	}
 	surveyedByKey := make(map[rowKey]routingRow, len(surveyed))
 	surveyedOperations := map[string]bool{}

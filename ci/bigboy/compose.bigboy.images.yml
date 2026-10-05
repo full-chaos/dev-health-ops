@@ -1,36 +1,41 @@
 # gwc-venue-bigboy (2026-09-20, chris: "just go ahead and deploy bigboy images"); re-pinned 2026-09-24 by prod-ops
 # (R427 pre-prod venue, D2288) to ops main a97b97ed (CHAOS-6512+6259 group; previous overlay kept as .bak-1152962c): bigboy runs PROD's build
 # (was rev 156, ops 3689edec) so a venue receipt admits at the same build production runs.
-# Self-contained: also carries compose.bigboy.overrides.yml content (query-api x2 + ports, api nofile) so the
-# recreate does not drop the running project's overrides. migrate runs prod's own api image (migrations 0135).
+# Self-contained: also carries compose.bigboy.overrides.yml content (query-api x2 + ports) so the
+# recreate does not drop the running project's overrides.
+# CHAOS-8361: the stack is Go-only. No service here runs the Python api image: the `api` service of the base
+# compose.yml is in a profile nothing enables, `migrate` runs the dho image, the smoke runner
+# (compose.bigboy.smoke.yml) runs a plain Python base image, and venue-prove is on the stack's networks itself.
 services:
+  # CHAOS-8361: the Python api is retired on bigboy, as in prod. The base compose.yml (a host file) still
+  # declares the service, so it moves to a profile nothing enables: `up` never starts it and `ps` never lists
+  # it. The running container is removed BEFORE the cut's `up` (`docker compose ... rm -sf api`, one approved
+  # line on the lead's GO, the order the billing-edge retirement used). Nothing else in this file names it:
+  # web no longer waits for it and venue-prove no longer shares its network namespace.
   api:
-    image: ghcr.io/full-chaos/dev-hops-api@sha256:ab18700f0ef7c29e5833525833c8726752970177c03f3d3bda87188c3bf09295
-    ulimits:
-      nofile:
-        soft: 65536
-        hard: 65536
-    # compose.yml mounts chris's ops checkout over /app and runs `pip install -e . && ... --reload`, so the api ran
-    # the CHECKOUT's code (its SDL digest 19485ec1), not the image's. Run the image's own installed code (prod's build).
-    volumes: !override
-      - ./.go-api-dev/envelope-private-key.pem:/secrets/go-api-envelope-private-key.pem:ro
-    entrypoint: !override ["sh", "-c", 'export GO_API_ENVELOPE_PRIVATE_KEY="$$(cat /secrets/go-api-envelope-private-key.pem)" && exec python -m dev_health_ops.cli --log-level info api --host 0.0.0.0 --port 8000']
-    # D2726 (2026-09-27, CHAOS-6987): base compose.yml's own default for this var is
-    # ${GO_API_ENVELOPE_KEY_ID:-go-api-envelope-2026-08} -- a kid the bigboy JWKS file
-    # (.go-api-dev/envelope-jwks.json) does NOT contain (it only has "local-dev-20260906",
-    # 3 weeks stale, matching venue-tools/venue-prove's own override below). api was signing
-    # its internal envelope-to-query-api dispatch with the unmatched default kid, so query-api
-    # rejected every dispatched call as query_api.envelope.rejected/unknown_kid. Override to
-    # the SAME kid venue-tools/venue-prove already use, so api's signature matches what the
-    # JWKS actually verifies against.
-    environment:
-      GO_API_ENVELOPE_KEY_ID: local-dev-20260906
+    profiles:
+      - retired-python-api
+  # CHAOS-7019 (2026-09-28, gwc-bigboy-ops-2): bigboy-cut.sh never rebuilds `web`, so it silently ran
+  # a stale local build across cuts (found live during the CHAOS-6262 proof: /dev still served a
+  # pre-#955 page). Pin `web` to its own CI-built image (Build Docker images workflow, ghcr.io/full-chaos/
+  # dev-health-web:sha-<S7>), same pattern as the other 4 images below, instead of building on the host.
+  web:
+    image: ghcr.io/full-chaos/dev-health-web@sha256:a087d8e24c15d0ac942f034b4c61efacc11db90239e6c479489804365dfddc38
+    build: !reset null
+    # CHAOS-8361: the base file makes web wait for a healthy `api`. That service is retired above, and compose
+    # refuses a dependency on a service of a disabled profile, so the list is stated again without it. web
+    # reaches the planes through the router (BACKEND_URL, compose.bigboy.router.yml).
+    depends_on: !override
+      valkey:
+        condition: service_healthy
+      bugsink:
+        condition: service_started
   # CHAOS-6434 (ops main a97b97ed and after): dev-health-query-api is RETIRED. query-api is now the
   # `dho query-api` verb of the dho image; the root compose.yml's own query-api service (docker/query-api.Dockerfile)
   # can no longer build against this ops sha, so this overlay replaces its image/command/entrypoint entirely
   # rather than layering a digest onto it.
   query-api:
-    image: ghcr.io/full-chaos/dev-health-go-dho@sha256:d5bd451bf33e83608f094c8017b7189dffb312f996e7f4974afafa16754afc73
+    image: ghcr.io/full-chaos/dev-health-go-dho@sha256:970d2b765aac5da23e1ec58482663e51ac1ab5a78fc024d3d81feabfb0e14d44
     build: !reset null
     entrypoint: !override ["/usr/local/bin/dho"]
     command: !override ["query-api"]
@@ -82,7 +87,15 @@ services:
       # never added to `ports:` above. Matches prod's mechanism (deploy/values.prod.yaml
       # QUERY_API_INTERNAL_ADDR), a different literal port (8095) so it is never confused
       # with the host-published 8091-8092 range, which is the PUBLIC listener only.
+      CORS_ALLOWED_ORIGINS: http://localhost:3000
       QUERY_API_INTERNAL_ADDR: ":8095"
+      # CHAOS-7214 (lead-authorized): the MCP caller-class listener (container-only, never in `ports:`),
+      # its allowed-cidrs boundary (the same subnet as the internal listener), and the proof routes'
+      # gate (/query/proof-mcp, /query/proof-write; internal listener only, proof-org gated).
+      QUERY_API_MCP_ADDR: ":8096"
+      QUERY_API_MCP_BOUNDARY: allowed-cidrs
+      QUERY_API_MCP_ALLOWED_CIDRS: 10.199.79.0/28
+      GO_API_PROOF_WRITE_ROUTE_ENABLED: "true"
       # D2953: the real admission control (not yet built, gwc-cut-hardening/CHAOS-7097 or
       # its successor ticket -- confirm scope before trusting this is wired). Must equal
       # the `dho-query-internal` network's `ipam.config` subnet below, byte for byte.
@@ -127,13 +140,24 @@ services:
       OPENAI_API_KEY: ${OPENAI_API_KEY}
       LLM_MODEL: ${LLM_MODEL}
       SETTINGS_ENCRYPTION_KEY: ${SETTINGS_ENCRYPTION_KEY}
+      # TEMPORARY (gap-4 investigation, 2026-09-27): debug logging to trace the
+      # "Username/Password Authentication Failed" 401. Revert after.
+      DEV_HEALTH_LOG_LEVEL: debug
+  # CHAOS-7054: migrate runs `dho migrate upgrade --river` (the base file's command) from the dho image, the same
+  # digest as query-api above: the one-shot the cut runs before it recreates the planes.
   migrate:
-    image: ghcr.io/full-chaos/dev-hops-api@sha256:ab18700f0ef7c29e5833525833c8726752970177c03f3d3bda87188c3bf09295
-    volumes: !override []
+    image: ghcr.io/full-chaos/dev-health-go-dho@sha256:970d2b765aac5da23e1ec58482663e51ac1ab5a78fc024d3d81feabfb0e14d44
+    build: !reset null
+  # CHAOS-8647: the web-path smoke runs `dho smoke web-path` from the dho image, the same digest as query-api and
+  # migrate. compose.bigboy.smoke.yml (the smoke's own chain) holds the rest of the service.
+  web-smoke:
+    image: ghcr.io/full-chaos/dev-health-go-dho@sha256:970d2b765aac5da23e1ec58482663e51ac1ab5a78fc024d3d81feabfb0e14d44
+    build: !reset null
+    profiles: ["smoke"]
   # one-off prover shell, never started by 'up' (profile venue). POSTGRES_URI is interpolated by compose from
   # the same defaults the stack uses, so no credential passes through a file or argv of this lane.
   venue-tools:
-    image: ghcr.io/full-chaos/dev-health-go-api-tools@sha256:a9421becdcb98188bd1fe6ae2679d40ffdd132b51f19dc572a70f781bd6bb506
+    image: ghcr.io/full-chaos/dev-health-go-api-tools@sha256:7c767865398aa0a9053dcad5cd93001b1f4771fbb4690570210c25d8369ae48f
     profiles: ["venue"]
     user: "1001:1001"
     entrypoint: ["sh", "-c"]
@@ -151,14 +175,20 @@ services:
     volumes:
       - ./.go-api-dev/envelope-private-key.pem:/keys/envelope.pem:ro
       - /var/lib/oci-cache/lane-scratch/gwc-venue-bigboy:/work
-  # venue prover: shares api's network namespace so the edge host is localhost (the CheckVenue host allowlist).
+  # venue prover. CHAOS-8361: it no longer shares the Python api's network namespace (`network_mode:
+  # "service:api"`, for an edge on localhost). It proves through the routed /graphql in Go-edge mode
+  # (bigboy-graphql-prove.sh) and is on the two networks the api container was on: `dev-health` (the router,
+  # query-api, postgres) and `dho-query-internal` (CHAOS-7214: the class proof reaches query-api's internal
+  # listener :8095 and MCP listener :8096 from an allowed peer, 10.199.79.0/28).
   venue-prove:
-    image: ghcr.io/full-chaos/dev-health-go-api-tools@sha256:a9421becdcb98188bd1fe6ae2679d40ffdd132b51f19dc572a70f781bd6bb506
+    image: ghcr.io/full-chaos/dev-health-go-api-tools@sha256:7c767865398aa0a9053dcad5cd93001b1f4771fbb4690570210c25d8369ae48f
     profiles: ["venue"]
     user: "1001:1001"
     entrypoint: ["sh", "-c"]
     working_dir: /work
-    network_mode: "service:api"
+    networks:
+      - dev-health
+      - dho-query-internal
     environment:
       POSTGRES_URI: postgresql://${POSTGRES_USER:-devhealth}:${POSTGRES_PASSWORD:-devhealth}@postgres:5432/${POSTGRES_DB:-devhealth}
       GO_API_QUERY_API_URL: http://query-api:8090
@@ -172,7 +202,7 @@ services:
   # R427 pre-prod venue (prod-ops, 2026-09-24): the dho api (Go plane) at prod's build. Its Postgres and ClickHouse
   # logins and this env file are provisioned by _records/bigboy-1152962/setup-goapi-logins.sh (0600, never printed).
   go-api:
-    image: ghcr.io/full-chaos/dev-health-go-dho@sha256:d5bd451bf33e83608f094c8017b7189dffb312f996e7f4974afafa16754afc73
+    image: ghcr.io/full-chaos/dev-health-go-dho@sha256:970d2b765aac5da23e1ec58482663e51ac1ab5a78fc024d3d81feabfb0e14d44
     entrypoint: ["/usr/local/bin/dho"]
     command: ["api"]
     env_file:

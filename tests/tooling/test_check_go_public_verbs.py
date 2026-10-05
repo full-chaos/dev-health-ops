@@ -13,7 +13,6 @@ PUBLIC_VERBS = (
     "vet",
     "test",
     "race",
-    "live-python-oracles",
     "build",
     "contract",
     "multi-replica-workers",
@@ -43,7 +42,6 @@ _FAST_STEPS = (
     "check_format",
     "check_vet",
     "check_test",
-    "check_live_python_oracles",
     "check_build",
     "check_contract",
     "check_ratchets",
@@ -57,7 +55,6 @@ _CI_STEPS = (
     "check_vet",
     "check_test",
     "check_race",
-    "check_live_python_oracles",
     "check_build",
     "check_contract",
     "check_ratchets",
@@ -71,7 +68,6 @@ _ALL_STEPS = (
     "check_vet",
     "check_test",
     "check_race",
-    "check_live_python_oracles",
     "check_build",
     "check_contract",
     "check_ratchets",
@@ -154,12 +150,15 @@ def test_help_completes_and_documents_every_public_verb() -> None:
     assert result.returncode == 0, result.stdout + result.stderr
     # The Go toolchain directive may fetch a newer patch release on a cold
     # cache and announces it on stderr ("go: downloading go1.27.0 ...").
-    # That is environment noise, not help output — anything else on stderr
-    # still fails.
+    # That is environment noise, not help output. So is the one informational
+    # line check_go.sh prints when no Go cache dir is configured (CHAOS-5268;
+    # every hosted run). Anything else on stderr still fails.
     unexpected_stderr = [
         line
         for line in result.stderr.splitlines()
-        if line.strip() and not line.startswith("go: downloading ")
+        if line.strip()
+        and not line.startswith("go: downloading ")
+        and not line.startswith("check_go.sh: no Go build cache dir is configured")
     ]
     assert unexpected_stderr == []
     documented_verbs = {

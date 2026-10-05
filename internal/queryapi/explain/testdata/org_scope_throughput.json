@@ -43,5 +43,7 @@
   "drilldown_links": {
     "prs": "/api/v1/drilldown/prs?metric=throughput",
     "issues": "/api/v1/drilldown/issues?metric=throughput"
-  }
+  },
+  "repositories": null,
+  "source_url": null
 }

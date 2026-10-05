@@ -1,0 +1,220 @@
+package providersync
+
+import (
+	"context"
+	"log/slog"
+	"sort"
+	"strings"
+	"time"
+
+	"github.com/full-chaos/dev-health-ops/internal/jobs/metrics/workitemmetrics"
+	"github.com/full-chaos/dev-health-ops/internal/providerfoundation"
+)
+
+// loadWorkItemBlockedIntervalsForProvider returns, per work item id, the
+// spans in which that item has an open blocker (CHAOS-8493), for the items
+// of one sync unit.
+//
+// The decision is workitemmetrics.BlockedIntervalsByItem -- the ONE rule this
+// deriver shares with the work_item_state daily family, the other writer of
+// work_item_state_durations_daily. This function only assembles its inputs,
+// from two places:
+//
+//   - the STORE, through the source: the blocking relations that name one of
+//     the unit's items, and the stored items that are the other ends;
+//   - the UNIT itself: the relations and the item rows this sync just
+//     normalized. They are not in the store yet when the deriver runs, and
+//     they are NEWER than what is, so they are merged in rather than read
+//     back: of two rows for one relation the one synced last is the
+//     relation, and of two rows for one item the rule keeps the one synced
+//     last.
+//
+// Merging the fresh rows is what makes "the provider no longer reports this
+// relation" work at sync time: an item re-synced without a link it used to
+// have carries a last_synced newer than the stored relation row.
+//
+// A failed stored read fails the unit, for the reason
+// LoadStoredBlockingFacts gives.
+func loadWorkItemBlockedIntervalsForProvider(
+	ctx context.Context,
+	provider string,
+	claim Claim,
+	rows githubWorkItemRows,
+	source githubWorkItemDerivationContextSource,
+) (map[string][]workitemmetrics.BlockedInterval, error) {
+	if ctx == nil || source == nil || claim.Validate() != nil ||
+		claim.Provider != provider || claim.Dataset != "work-items" {
+		return nil, ErrInvalidConfiguration
+	}
+	if len(rows.WorkItems) == 0 {
+		return nil, nil
+	}
+	ends := make([]workitemmetrics.RelationEnd, 0, len(rows.WorkItems))
+	for _, item := range rows.WorkItems {
+		if item.OrgID != claim.OrgID {
+			return nil, providerfoundation.ErrInvalidScope
+		}
+		end := workitemmetrics.RelationEnd{
+			WorkItemID: item.WorkItemID, Provider: item.Provider, ProjectID: derefString(item.ProjectID),
+			Status: item.Status, CreatedAt: item.CreatedAt.UTC(), CompletedAt: item.CompletedAt,
+			LastSynced: item.LastSynced.UTC(),
+		}
+		// This sync read the item's relations unless it is the github
+		// Projects v2 board pass, the one work_items writer that reads none
+		// -- the same test the view over work_items applies when the row is
+		// stored (work_item_relations_read, CHAOS-8578).
+		if relationsReadBy(end) {
+			read := end.LastSynced
+			end.RelationsReadAt = &read
+		}
+		ends = append(ends, end)
+	}
+	// The stored relations that name one of the unit's items: by the item's
+	// id, and -- for a jira or linear item -- by the external-key form of its
+	// issue key. A relation read from text in ANOTHER item ("blocks OPS-9")
+	// names this unit's item only by that key; without it this deriver would
+	// not see a relation the daily family sees, and the two writers of
+	// work_item_state_durations_daily would write different rows.
+	namingSet := make(map[string]struct{}, len(rows.WorkItems))
+	for _, item := range rows.WorkItems {
+		namingSet[item.WorkItemID] = struct{}{}
+		if target, keyed := workitemmetrics.ExternalKeyTarget(item.Provider, item.WorkItemID); keyed {
+			namingSet[target] = struct{}{}
+		}
+	}
+	naming := make([]string, 0, len(namingSet))
+	for id := range namingSet {
+		naming = append(naming, id)
+	}
+	sort.Strings(naming)
+
+	fresh := make([]workitemmetrics.BlockingRelation, 0, len(rows.Dependencies))
+	for _, dependency := range rows.Dependencies {
+		if dependency.OrgID != claim.OrgID {
+			return nil, providerfoundation.ErrInvalidScope
+		}
+		fresh = append(fresh, workitemmetrics.BlockingRelation{
+			SourceID: dependency.SourceWorkItemID, TargetID: dependency.TargetWorkItemID,
+			RelationshipType: dependency.RelationshipType,
+			Raw:              dependency.RelationshipTypeRaw,
+			SemanticsVersion: dependency.RelationshipSemanticsVersion,
+			LastSynced:       dependency.LastSynced.UTC(),
+			// What the normalizer stored with the row (CHAOS-8578): the
+			// provider's time of the link and who writes the row.
+			StartedAt: utcTimePointer(dependency.RelationStartedAt),
+			Writer:    dependency.RelationWriter,
+		})
+	}
+
+	stored, storedEnds, err := source.LoadStoredBlockingFacts(ctx, claim, naming, fresh)
+	if err != nil {
+		return nil, err
+	}
+	intervals, ended := workitemmetrics.BlockedIntervalsWithStats(
+		mergeBlockingRelations(stored, fresh), append(storedEnds, ends...),
+	)
+	// One line per unit, no id: how many relations the end rule closed, by
+	// provider, and how many of them are the named case of a github issue on
+	// a Projects v2 board.
+	counts := ended.Counts()
+	slog.Info(workitemmetrics.EndedRelationsLogMessage,
+		"writer", "sync_time_deriver",
+		"relations", counts.Relations,
+		"ended", counts.Ended,
+		"ended_github", counts.EndedGitHub,
+		"ended_gitlab", counts.EndedGitLab,
+		"ended_jira", counts.EndedJira,
+		"ended_linear", counts.EndedLinear,
+		"ended_other", counts.EndedOther,
+		"github_board_candidates", counts.GitHubBoardCandidates,
+	)
+	return intervals, nil
+}
+
+// mergeBlockingRelations returns one row per (source, target, type): of a
+// stored and a fresh row for the same relation, the one synced last. The
+// result is in key order, so it does not depend on the order of its inputs.
+//
+// The two times a relation start comes from are carried across the merge:
+//
+//   - FirstSeenAt is the STORED first-seen time when the relation is stored.
+//     A fresh relation that is not stored yet was first seen by THIS sync, so
+//     its first-seen time is its own last_synced -- the value the store will
+//     hold for it once this unit's rows are written. A stored relation with
+//     no stored first-seen time keeps none: its start is not known.
+//   - StartedAt (the provider's own link time) is the surviving row's, else
+//     the other row's: a provider that reported the time once is not
+//     forgotten because a later payload omitted it.
+func mergeBlockingRelations(stored, fresh []workitemmetrics.BlockingRelation) []workitemmetrics.BlockingRelation {
+	type key struct{ source, target, relationship string }
+	keyOf := func(relation workitemmetrics.BlockingRelation) key {
+		return key{relation.SourceID, relation.TargetID, relation.RelationshipType}
+	}
+	newest := make(map[key]workitemmetrics.BlockingRelation, len(stored)+len(fresh))
+	for _, relation := range stored {
+		k := keyOf(relation)
+		if existing, seen := newest[k]; seen && !relation.LastSynced.After(existing.LastSynced) {
+			continue
+		}
+		newest[k] = relation
+	}
+	for _, relation := range fresh {
+		k := keyOf(relation)
+		existing, isStored := newest[k]
+		merged := relation
+		if !isStored {
+			// First written by this sync (or by an earlier row of this same
+			// unit): the earliest of them is when the relation was first seen.
+			firstSeen := relation.LastSynced.UTC()
+			merged.FirstSeenAt = &firstSeen
+			newest[k] = merged
+			continue
+		}
+		other := existing
+		if !relation.LastSynced.After(existing.LastSynced) {
+			merged, other = existing, relation
+		}
+		merged.FirstSeenAt = existing.FirstSeenAt
+		if merged.StartedAt == nil {
+			merged.StartedAt = other.StartedAt
+		}
+		newest[k] = merged
+	}
+	keys := make([]key, 0, len(newest))
+	for k := range newest {
+		keys = append(keys, k)
+	}
+	sort.Slice(keys, func(left, right int) bool {
+		a, b := keys[left], keys[right]
+		if a.source != b.source {
+			return a.source < b.source
+		}
+		if a.target != b.target {
+			return a.target < b.target
+		}
+		return a.relationship < b.relationship
+	})
+	merged := make([]workitemmetrics.BlockingRelation, 0, len(keys))
+	for _, k := range keys {
+		merged = append(merged, newest[k])
+	}
+	return merged
+}
+
+// relationsReadBy reports whether the sync that wrote this work item row read
+// the item's relations: every row except a github row written by the
+// Projects v2 board pass (project_id workitemmetrics.GitHubBoardProjectPrefix),
+// which reads no issue text. It is the test of the view that fills
+// work_item_relations_read (migration 103_work_item_relation_writer_and_read).
+func relationsReadBy(end workitemmetrics.RelationEnd) bool {
+	return end.Provider != "github" || !strings.HasPrefix(end.ProjectID, workitemmetrics.GitHubBoardProjectPrefix)
+}
+
+// utcTimePointer returns a copy of value in UTC, or nil.
+func utcTimePointer(value *time.Time) *time.Time {
+	if value == nil {
+		return nil
+	}
+	utc := value.UTC()
+	return &utc
+}

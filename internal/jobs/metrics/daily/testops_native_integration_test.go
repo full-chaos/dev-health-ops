@@ -269,7 +269,7 @@ func TestNativeTestopsPushdownMatchesRowLoadersAgainstRealClickHouse(t *testing.
 // TestNativeTestopsExecutorsWriteTheirTablesAgainstRealClickHouse drives the
 // three executors through the SAME entry point PartitionHandler uses
 // (ComputeFamily), so it also covers the scope/validation path, the
-// LoadWellbeingTeams call every family makes, and the ClickHouse batch
+// repository-owner lookup every family makes, and the ClickHouse batch
 // writers -- none of which the differential above touches.
 func TestNativeTestopsExecutorsWriteTheirTablesAgainstRealClickHouse(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Minute)
@@ -292,6 +292,7 @@ func TestNativeTestopsExecutorsWriteTheirTablesAgainstRealClickHouse(t *testing.
 	repoID := uuid.MustParse("00000000-0000-4000-8000-0000000000a1")
 	day := time.Date(2026, 8, 27, 0, 0, 0, 0, time.UTC)
 	seedTestopsDifferentialFixture(ctx, t, conn, orgID, repoID, day)
+	seedTestopsAuthoritativeOwner(ctx, t, conn, orgID, repoID, day)
 
 	run := Run{ID: "run-1", OrganizationID: orgID, TargetDay: day}
 	partition := Partition{ID: "partition-1", RunID: "run-1", RepoIDs: []RepositoryID{RepositoryID(repoID.String())}}
@@ -313,10 +314,11 @@ func TestNativeTestopsExecutorsWriteTheirTablesAgainstRealClickHouse(t *testing.
 		name     string
 		executor NativeFamilyExecutor
 		table    string
+		readMode testopsDailyTeamReadMode
 	}{
-		{"testops_pipeline", pipelineExecutor, "testops_pipeline_metrics_daily"},
-		{"testops_test", testExecutor, "testops_test_metrics_daily"},
-		{"testops_coverage", coverageExecutor, "testops_coverage_metrics_daily"},
+		{"testops_pipeline", pipelineExecutor, "testops_pipeline_metrics_daily", testopsDailyTeamReadFinal},
+		{"testops_test", testExecutor, "testops_test_metrics_daily", testopsDailyTeamReadFinal},
+		{"testops_coverage", coverageExecutor, "testops_coverage_metrics_daily", testopsDailyTeamReadFinal},
 	} {
 		written, err := spec.executor.ComputeFamily(ctx, run, partition)
 		if err != nil {
@@ -346,8 +348,9 @@ func TestNativeTestopsExecutorsWriteTheirTablesAgainstRealClickHouse(t *testing.
 		if stored != uint64(written) {
 			t.Fatalf("%s wrote %d rows but reported %d", spec.name, stored, written)
 		}
+		assertTestopsDailyTeam(ctx, t, conn, spec.table, orgID, repoID, testopsAuthoritativeTeamID, spec.readMode)
 		if spec.name == "testops_pipeline" {
-			assertMergedTestopsPipelineRow(ctx, t, conn, orgID, repoID)
+			assertMergedTestopsPipelineRow(ctx, t, conn, orgID, repoID, testopsAuthoritativeTeamID)
 		}
 	}
 }
@@ -365,9 +368,10 @@ func TestNativeTestopsExecutorsWriteTheirTablesAgainstRealClickHouse(t *testing.
 // 675) whichever copy wins the tie; every queue sample is 0.1. The success
 // versus failure split depends on the tie's winner, which the differential
 // test pins, so only their sum (4) is asserted here. The runs disagree on
-// service (nil, empty, named), so the merged row carries no service; none
-// carries a team, so team is NULL as well.
-func assertMergedTestopsPipelineRow(ctx context.Context, t *testing.T, conn driver.Conn, orgID string, repoID uuid.UUID) {
+// service (nil, empty, named), so the merged row carries no service. Every
+// input row has no source team, so the ownership resolver supplies the one
+// authoritative owner for the merged row.
+func assertMergedTestopsPipelineRow(ctx context.Context, t *testing.T, conn driver.Conn, orgID string, repoID uuid.UUID, wantTeam string) {
 	t.Helper()
 	var (
 		pipelines, success, failure, cancelled uint32
@@ -399,8 +403,106 @@ FROM testops_pipeline_metrics_daily FINAL WHERE org_id = ? AND repo_id = ?`, org
 	near("p95_duration_seconds", p95, 675)
 	near("avg_queue_seconds", avgQueue, 0.1)
 	near("p95_queue_seconds", p95Queue, 0.1)
-	if team != nil || service != nil {
-		t.Errorf("testops_pipeline team=%v service=%v, want both NULL (the groups disagree)", team, service)
+	if team == nil || *team != wantTeam || service != nil {
+		t.Errorf("testops_pipeline team=%v service=%v, want team=%q and service=NULL", team, service, wantTeam)
+	}
+}
+
+const testopsAuthoritativeTeamID = "team-primary"
+
+// seedTestopsAuthoritativeOwner adds two active claims for one repository.
+// The primary claim is deliberately less specific, so the integration proof
+// observes the canonical is_primary-first ranking rather than insertion order
+// or specificity. valid_from is noon on the target day: this also proves
+// TestOps resolves at the day end rather than at its start.
+func seedTestopsAuthoritativeOwner(
+	ctx context.Context, t *testing.T, conn driver.Conn,
+	orgID string, repoID uuid.UUID, day time.Time,
+) {
+	seedTestopsRepositoryOwnerClaims(ctx, t, conn, orgID, repoID, day, testopsAuthoritativeTeamID)
+}
+
+func seedTestopsRepositoryOwnerClaims(
+	ctx context.Context, t *testing.T, conn driver.Conn,
+	orgID string, repoID uuid.UUID, day time.Time, primaryTeamID string,
+) {
+	t.Helper()
+	validFrom := day.Add(12 * time.Hour)
+	for _, claim := range []struct {
+		teamID      string
+		isPrimary   uint8
+		specificity uint16
+	}{
+		{teamID: "team-low", isPrimary: 0, specificity: 999},
+		{teamID: primaryTeamID, isPrimary: 1, specificity: 1},
+	} {
+		if err := conn.Exec(ctx, `
+INSERT INTO team_repo_ownership
+    (org_id, provider, team_id, repo_id, repo_full_name, match_type,
+     source, is_primary, specificity, priority, valid_from, valid_to, updated_at)
+VALUES (?, 'github', ?, ?, ?, 'exact', 'inferred', ?, ?, 0, ?, NULL, ?)`,
+			orgID, claim.teamID, repoID, repoID.String(), claim.isPrimary, claim.specificity, validFrom, validFrom,
+		); err != nil {
+			t.Fatalf("seed TestOps repository ownership for %s: %v", claim.teamID, err)
+		}
+	}
+}
+
+type testopsDailyTeamReadMode uint8
+
+const (
+	testopsDailyTeamReadPlain testopsDailyTeamReadMode = iota
+	testopsDailyTeamReadFinal
+)
+
+func assertTestopsDailyTeam(
+	ctx context.Context, t *testing.T, conn driver.Conn, table, orgID string, repoID uuid.UUID, wantTeam string,
+	readMode testopsDailyTeamReadMode,
+) {
+	t.Helper()
+	final := ""
+	switch readMode {
+	case testopsDailyTeamReadPlain:
+	case testopsDailyTeamReadFinal:
+		final = " FINAL"
+	default:
+		t.Fatalf("unknown TestOps daily read mode %d", readMode)
+	}
+	var team *string
+	if err := conn.QueryRow(ctx,
+		fmt.Sprintf("SELECT team_id FROM %s%s WHERE org_id = ? AND repo_id = ?", table, final),
+		orgID, repoID,
+	).Scan(&team); err != nil {
+		t.Fatalf("%s team readback: %v", table, err)
+	}
+	if team == nil || *team != wantTeam {
+		t.Fatalf("%s team_id=%v, want %q from authoritative repository ownership", table, team, wantTeam)
+	}
+}
+
+// applyTestopsRepositoryOwnershipSchema supplies the two tables the
+// authoritative owner reader queries. The risk integration tests have small
+// purpose-built schemas, so they must declare this production dependency
+// explicitly instead of accidentally testing an older resolver.
+func applyTestopsRepositoryOwnershipSchema(ctx context.Context, t *testing.T, conn driver.Conn) {
+	t.Helper()
+	for _, statement := range []string{
+		`CREATE TABLE repos (
+    id UUID, repo String, org_id String, provider String
+) ENGINE = ReplacingMergeTree ORDER BY (id)`,
+		`CREATE TABLE team_repo_ownership (
+    org_id String, provider String, team_id String, repo_id Nullable(UUID),
+    repo_full_name String, match_type Enum8('exact' = 1, 'pattern' = 2),
+    source Enum8('native' = 1, 'jira_legacy' = 2, 'provider_access' = 3, 'manual' = 4, 'inferred' = 5),
+    is_primary UInt8 DEFAULT 0, specificity UInt16 DEFAULT 0, priority Int32 DEFAULT 0,
+    valid_from DateTime64(3, 'UTC'), valid_to Nullable(DateTime64(3, 'UTC')),
+    updated_at DateTime64(3, 'UTC')
+) ENGINE = ReplacingMergeTree(updated_at)
+  ORDER BY (org_id, provider, repo_full_name, team_id, source, valid_from)`,
+	} {
+		if err := conn.Exec(ctx, statement); err != nil {
+			t.Fatalf("create TestOps ownership dependency: %v", err)
+		}
 	}
 }
 

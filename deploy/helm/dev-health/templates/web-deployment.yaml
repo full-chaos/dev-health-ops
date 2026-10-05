@@ -42,7 +42,7 @@ spec:
             - name: HOSTNAME
               value: "::"
             - name: BACKEND_URL
-              value: {{ default (printf "http://%s-api:%d" (include "dev-health.fullname" .) (.Values.api.port | int)) .Values.web.env.BACKEND_URL | quote }}
+              value: {{ required "web.env.BACKEND_URL is required whenever web.enabled=true (CHAOS-8310): it is the base URL of the backend web's server-side requests go to -- REST (go-api) and /graphql (query-api) are different Go services, so no single in-chart default is correct. Set web.env.BACKEND_URL explicitly for this environment (for example the ingress host that fans out both), or web.enabled=false." .Values.web.env.BACKEND_URL | quote }}
             - name: AUTH_SECRET
               {{- if .Values.web.env.AUTH_SECRET }}
               value: {{ .Values.web.env.AUTH_SECRET | quote }}

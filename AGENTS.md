@@ -23,7 +23,6 @@ Backend: ingest → metrics → API → jobs. The versioned platform contract (W
 | `connectors/` | **Legacy & frozen.** No new code — compatibility aliases only. |
 | `processors/` | Orchestrate provider calls + persistence. No raw fetch / no provider normalization. |
 | `metrics/` + `metrics/sinks/` | Compute rollups; **sinks are the only persistence path** (`sinks/clickhouse/`). |
-| `api/` | FastAPI app (`api/main.py`) + Strawberry GraphQL (`api/graphql/`), admin, auth, billing, webhooks, ingest. |
 | `workers/` | Job implementations shared with the Go fleet: sync, metrics, reports, team auto-import. The Celery app that used to consume them is retired. |
 | `work_graph/`, `llm/`, `licensing/`, `reports/`, `backfill/`, `sync/` | Investment categorization, LLM calls, billing/licensing, AI reports, backfills, sync orchestration. |
 
@@ -58,7 +57,7 @@ Design checks every Ask Dev / acr / ops-metrics change must pass — checks 1–
 
 Contract rule: any acr contract widening ⇒ ask-dev pin bump before any live proof. Team authorization is ownership-derived (`team_repo_ownership` rows), so team answers are impossible until ownership is synced.
 
-Data vocabulary: "local" = the admin@test.com org (`70d529e0`, REAL synced data on the compose stack); `dev-hops fixtures generate` = contrived CI data; "prod" = read-only post-deploy readback. Team = project/repo OWNERSHIP only (never person→membership→team); ownership is sync-derived, provider-agnostic; no manual TEAM mappings (ClickHouse `manual_fallback` records remain valid for work-item/PR attribution — never for team authorization).
+Data vocabulary: "local" = the admin@test.com org (`70d529e0`, REAL synced data on the compose stack); `dho fixtures generate` (frozen parameter sets only, `--seed` required, analytics rows only) = contrived CI data; "prod" = read-only post-deploy readback. Team = project/repo OWNERSHIP only (never person→membership→team); ownership is sync-derived, provider-agnostic; no manual TEAM mappings (ClickHouse `manual_fallback` records remain valid for work-item/PR attribution — never for team authorization).
 
 Checks that bite hardest here: 3, 9, 12, 13, 17 — plus: team is OWNERSHIP only, never person→membership→team; metrics readers dedup daily tables by `computed_at` (`argMax`/`LIMIT 1 BY`; merges are eventual), never zero-fill missing days.
 
@@ -72,25 +71,26 @@ Checks that bite hardest here: 3, 9, 12, 13, 17 — plus: team is OWNERSHIP only
 - **Atlassian AGG:** Jira issue listing is REST/JQL; GraphQL is fetch-by-key + worklog/ops-team enrichment. Gate with `ATLASSIAN_GQL_ENABLED`, `JIRA_FETCH_WORKLOGS`, `JIRA_USE_PROVIDER`.
 - **Team attribution source of truth (CHAOS-2600 — governing contract, rolling out CS1–CS7):** ClickHouse is the **only** system of record for teams **and** identity→team membership; there is no Postgres `TeamMapping`/`IdentityMapping` — those models, services, and tables were **deleted in CHAOS-2600 CS6 (CHAOS-2607)** (Alembic `0020` drops the tables), along with the bridge `team_bridge.py` + `team_reconcile.py` (removed CS5), the `sync-team-drift`/`reconcile-team-members` tasks, and the Postgres-backed drift engine (the four admin drift-review endpoints currently stand as HTTP 501 stubs and are being **rebuilt natively on ClickHouse — not deleted — under CHAOS-2622**; the earlier "removed in CS7 with the web caller" intent is superseded and must not be executed). Admin team/identity CRUD goes through `ClickHouseTeamAdminService` / `ClickHouseIdentityStore` (CH `teams` + `identities`); identity membership is edited surgically by facet so Auto Import members survive. Manual mappings are ClickHouse fallback records (`source = manual_fallback`) — never overrides, never outranking WTI-native facts. PR/MR attribution comes from an **actual linked issue donor row**, not an issue-key prefix. Staged precedence + decision tree + off-the-rails matrix: [`docs/contribute/architecture/team-attribution.md`](docs/contribute/architecture/team-attribution.md) §0.
 - **Documentation freshness:** when you change attribution behavior (precedence, WTI normalization, PR/MR issue linking, manual fallback, ClickHouse attribution tables, API provenance), update the matching docs **in the same PR** and make tests assert the documented precedence. The legacy Postgres-path docs (`database-architecture.md`, `cli-reference.md`) are rewritten in the CS that removes that behavior (CS5/CS6). If docs and code disagree, the implementation is incomplete.
+- **Entity tree:** Repository <> Pull request <> Issue <> Project, for every provider. A link is an actual `work_item_dependencies` row, never an issue-key prefix or an issue's own `repo_id`; a team is reached through ownership only. Read the diagram before designing any walk, membership, link or ownership logic: [`docs/contribute/architecture/data-and-storage.md`](docs/contribute/architecture/data-and-storage.md) "Entity tree: repositories, pull requests, issues, projects".
 - **Provider coverage (provider-agnostic contract):** attribution must be tested across the full **provider × entity matrix** — `{jira, gitlab, github, linear} × {teams, projects, members, issues}`. Changes must keep the matrix green; **never add Linear-only coverage** (jira/github/gitlab work items have `native_team_key=None`, so non-Linear attribution rides entirely on the autoimport team/project/member dimension). Live matrix + open gaps: [`docs/contribute/architecture/team-attribution.md`](docs/contribute/architecture/team-attribution.md) §0.4 (gaps tracked in CHAOS-2609).
 
-## CLI quickref (full reference: [`docs/ops/cli-reference.md`](docs/ops/cli-reference.md))
+## CLI quickref (full reference: [`docs/reference/cli/index.md`](docs/reference/cli/index.md))
 
 ```bash
-dev-hops migrate postgres && dev-hops migrate clickhouse          # required on fresh envs
-CLICKHOUSE_URI=… dev-hops sync git --provider local --repo-path PATH
-CLICKHOUSE_URI=… dev-hops sync work-items --provider <jira|github|gitlab|all> -s "org/*"
-CLICKHOUSE_URI=… dev-hops fixtures generate --sink "$CLICKHOUSE_URI" --days 30
-dho workers metrics daily-start --org <org-id> --day <YYYY-MM-DD> --reason <code> --correlation-id <id>   # the dev-hops metrics wrappers were deleted (spec S2)
+dho migrate postgres upgrade && dho migrate clickhouse upgrade     # required on fresh envs (or: dho migrate upgrade)
+CLICKHOUSE_URI=… dho sync git --provider local --repo-path PATH
+dho backfill run --config-id <uuid> --backfill 30                  # work items sync through the native Go route; no manual per-provider verb
+CLICKHOUSE_URI=… dho fixtures generate --sink "$CLICKHOUSE_URI" --seed 20260219 --repo-name acme/live-e2e --days 14 --commits-per-day 6 --pr-count 24 --team-count 10 --with-metrics --with-work-graph   # frozen parameter sets only
+dho workers metrics daily-start --org <org-id> --day <YYYY-MM-DD> --reason <code> --correlation-id <id>
 ```
 
-**Interim (CHAOS-2475):** bare CLI runs inline and skips credential preflight. Prefer triggering the equivalent job (sync-config/backfill endpoints, `triggerReport` mutation) so workers supply tokens/LLM/Stripe keys. **Celery is retired (CHAOS-4026, 2026-08-21):** `dev-hops workers start-worker`/`start-scheduler` no longer exist; see [`docs/operate/run/workers-and-jobs.md`](docs/operate/run/workers-and-jobs.md) for running the Go worker/scheduler processes.
+**Interim (CHAOS-2475):** a bare `dho` verb runs inline in your terminal session. Prefer triggering the equivalent job (sync-config/backfill endpoints, `triggerReport` mutation) so workers supply tokens/LLM/Stripe keys. **Celery is retired (CHAOS-4026, 2026-08-21):** the Go processes are `dho worker` and `dho scheduler`; see [`docs/operate/run/workers-and-jobs.md`](docs/operate/run/workers-and-jobs.md) for running the Go worker/scheduler processes.
 
 ## Tests & hooks
 
-- API endpoint tests follow [`tests/api/auth/test_invite_flow.py`](tests/api/auth/test_invite_flow.py) (aiosqlite in-memory, `dependency_overrides`, `httpx.ASGITransport`). Journey: [`tests/api/test_new_user_journey.py`](tests/api/test_new_user_journey.py). Admin CRUD: `tests/api/admin/`.
-- GraphQL schema export `api/graphql/export_schema.py` is consumed by web CI for drift detection.
-- **Lefthook** (`make install` once — `core.hooksPath` is shared across worktrees): `commit-msg` strips agent attribution; `pre-commit` ruff format+fix then `mypy` gate; `pre-push` `ruff format --check` + `ruff check` + `mypy`. Fix code, don't add ignores/config exclusions.
+- The api is Go (`dho api`, `dho query-api`): its tests are Go tests under `internal/`. There is no Python api test tree.
+- The GraphQL schema pin `contracts/graphql/v1/schema.graphql` is consumed by web CI for drift detection.
+- **Lefthook** (`make install` once — `core.hooksPath` is shared across worktrees): `commit-msg` strips agent attribution; `pre-commit` ruff format+fix; `pre-push` `ruff format --check` + `ruff check` (no mypy: CI retired it, CHAOS-8616). Fix code, don't add ignores/config exclusions.
 - **Mutation testing has no shared harness — do not write one.** `scripts/mutation_harness.py`, its ~8k lines of meta-tests, and its 98 checked-in plan JSONs were removed under CHAOS-3875: no GitHub workflow ever ran them, only `ci/local_validate.sh`'s `verify` stage touched the harness at all, and the plans had to be re-anchored by hand on every refactor of the files they pinned. The durable lesson from the 2026-07-26 incident survives the tool: three ad-hoc per-lane harnesses produced false results, all the same shape — the harness could not detect its own failure. One left `if false && (guard)` on disk while reporting a restore it had "verified" with `go build`; one used `git checkout` to restore and silently reverted unrelated uncommitted edits; one waited on `pgrep -qf "m22.sh"`, matched its own command line, and hung. **Never verify a restore with a build or a git check** (`go build`/`go vet` pass on `if false && …`; `git diff` calls an *untracked* file clean whatever it contains), and **mutate compound predicates clause by clause** — a wholesale mutation reported KILLED on a condition holding a wrong, unasserted clause. If you need a one-off kill proof, run it by hand, restore by content digest, and keep it out of the tree.
 
 ## Worktrees and branches
@@ -111,7 +111,7 @@ git push -u origin HEAD:<branch>
 - Verify before the *first* push: `git for-each-ref --format='%(refname:short) -> %(upstream:short)' refs/heads/<branch>` must print nothing after `->`. After `git push -u` sets the upstream, the same command legitimately prints `origin/<branch>` — the check that matters from then on is that it never prints `origin/main`.
 - **`dev-health-go` trap:** that repo sets `push.default=upstream`. A tracked branch plus a bare `git push` pushes `main` there even faster than elsewhere — the same `--no-track` + explicit-refspec recipe is mandatory, no exceptions.
 - **Always set `UV_CACHE_DIR` per worktree (CHAOS-4411).** uv's default cache is `~/.cache/uv`, shared machine-wide; concurrent `uv sync` runs from different worktrees serialize on `~/.cache/uv/.lock` (and the editable sdist build lock under it), which has cost lanes 30+ minute waits. Each worktree already gets its own `.venv` — give it its own cache dir too. `.uv-cache/` is gitignored. Cost: no cross-worktree cache sharing, more disk per worktree.
-- **`--no-install-project` is required too (CHAOS-4181 / CHAOS-4407).** setuptools_scm's git file finder shells out to `git check-attr -z --stdin export-ignore` while building the editable install of `dev-health-ops` itself; the pipe deadlocks forever (0% CPU, not slow) once this repo's file list fills the 64KB buffer — every linked worktree hits it, `SETUPTOOLS_SCM_PRETEND_VERSION` does NOT avoid it (the file-listing call runs regardless of the version env var). `--no-install-project` skips that build entirely — the 158 third-party deps still install, and `pytest.ini`'s `pythonpath = src` resolves test imports without the local package being installed. Cost: no `.venv/bin/dev-hops` console script, so `ci/local_validate.sh`'s ClickHouse-dependent stages can't run in this venv locally — run those via CI, or `SKIP_CLICKHOUSE=1 bash ci/local_validate.sh` for the pure-Python stages only. To run them locally anyway, point `local_validate.sh` at the checked-in wrapper: `DEVHOPS=ci/dev-hops` (CHAOS-4491).
+- **`--no-install-project` is required too (CHAOS-4181 / CHAOS-4407).** setuptools_scm's git file finder shells out to `git check-attr -z --stdin export-ignore` while building the editable install of `dev-health-ops` itself; the pipe deadlocks forever (0% CPU, not slow) once this repo's file list fills the 64KB buffer — every linked worktree hits it, `SETUPTOOLS_SCM_PRETEND_VERSION` does NOT avoid it (the file-listing call runs regardless of the version env var). `--no-install-project` skips that build entirely — the 158 third-party deps still install, and `pytest.ini`'s `pythonpath = src` resolves test imports without the local package being installed. The ClickHouse-dependent stages of `ci/local_validate.sh` do not need the project installed: they build `dho` from this tree (`go build ./cmd/dho`) as the ClickHouse migrator, and need a ClickHouse and a Go toolchain. Run them there or via CI, or use `SKIP_CLICKHOUSE=1 bash ci/local_validate.sh` for the pure-Python stages only.
 
 ### Cluster-isolated lanes (CHAOS-4428)
 
@@ -211,20 +211,14 @@ bash ci/local_validate.sh
 
 It mirrors the PR-time CI gates of the ops repo and MUST be green before `git push`:
 
-1. `ruff format --check .` and `ruff check .` (== lint.yml)
-2. `mypy --install-types --non-interactive .` (== typecheck.yml)
-3. The **FULL** unit suite, byte-for-byte as `ci/run_tests.sh unit_tests()` runs it
-   (`pytest tests -m "not benchmark and not clickhouse" --ignore=… -n 4 --dist loadscope`,
-   matching CI's `PYTEST_XDIST_WORKERS=4` — the worker count changes the test→worker
-   distribution and a different count surfaces order-dependent pollution CI never hits),
-   with the local socks5h proxy neutralized. **Run the whole `tests/` dir — never a
-   hand-picked subset of files.** Many CI-blocking guards are unmarked pure-Python
-   tests that glob/parse `src/` (migration-splitter semicolon guard, RMT `org_id`
-   sorting-key contract, dataclass/sink `org_id` parity, pyformat-`%%` safety); a
-   per-file run passes locally while these fail in CI. This is exactly how CHAOS-2604
-   broke: a push after running only 2 test files missed
-   `tests/test_clickhouse_migration_splitter.py::test_no_committed_migration_comment_line_contains_semicolon`.
-   A few unmarked API tests (`tests/api/admin/test_org_deletion.py`) also call
+1. `ruff format --check .` and `ruff check .` (local only; CI no longer runs ruff)
+2. The **hosted** Python test selection, the same files the hosted `test` check runs after
+   CHAOS-8352 removed the Python unit matrix: `tests/docs`, `tests/tooling` (`-n 4`) and the
+   explicit list in `ci/kept_python_tests.txt` (read from that file, never copied), with the
+   local socks5h proxy neutralized. **Do not run the whole `tests/` dir**: it still holds
+   tests of the deleted Python api tree and is red by construction (CHAOS-8692). A new file
+   is covered only when it is added to `ci/kept_python_tests.txt` on purpose.
+   Tests that call
    `get_clickhouse_uri()` and need a reachable, migrated ClickHouse — the gate provisions
    an isolated **scratch db**, migrates it, and points `CLICKHOUSE_URI` at it before
    running the suite, exactly as CI provides one (a locked dev `default` user makes them
@@ -232,15 +226,15 @@ It mirrors the PR-time CI gates of the ops repo and MUST be green before `git pu
    hard-fails before the unit suite ever runs at all (see CHAOS-3571 below) — the
    module-deselect behavior only fires under the explicit `SKIP_CLICKHOUSE=1` opt-out,
    where the pure-Python guards still run but that one CH-dependent module is skipped.
-4. A **live-ClickHouse argMax proof** that CI's unit/ci tiers never run: after migrating
+3. A **live-ClickHouse argMax proof** that CI's unit/ci tiers never run: after migrating
    the scratch db, it builds a real `ClickHouseDataLoader` and `await`s
    `load_team_attribution_context`, forcing the real engine to parse + EXECUTE every
    `argMax(…, (updated_at, valid_from))` / `GROUP BY` block. The mock-based unit test
    only string-matches `argMax`; only a live engine catches a tuple-arg / column /
    unescaped-`%` mistake. (The broader seeded `pytest -m clickhouse` suite —
-   flow-matrix-live, recommendations, resolver EXPLAIN — needs `dev-hops fixtures
-   generate` and is a separate opt-in run, not part of this gate; CI does not run it either.)
-5. A **host-wide single-flight lock** (CHAOS-3403): the gate serializes across every
+   flow-matrix-live, recommendations, resolver EXPLAIN — needs `dho fixtures
+   generate` (a frozen parameter set) and is a separate opt-in run, not part of this gate; CI does not run it either.)
+4. A **host-wide single-flight lock** (CHAOS-3403): the gate serializes across every
    worktree on the host, since all worktrees share one ClickHouse container and one
    host's CPU/RAM. A run that finds the lock already held blocks, waiting up to
    `LOCK_WAIT_SECS` (default 1800s = 30 minutes), then fails with an actionable
@@ -262,7 +256,7 @@ it after.
 container is unavailable — that exact behavior let a FAILED docker probe read as
 "container not running" and silently drop 3 of 8 stages while still printing
 `GATE PASSED`. Every reason the CH stages might not run (docker missing, the probe
-itself failing/timing out, the container confirmed absent, a missing dev-hops CLI)
+itself failing/timing out, the container confirmed absent, a missing `dho` binary)
 is now a **hard failure** with a message naming the true mechanism. The **only**
 sanctioned way to run without the CH-dependent stages is the explicit, logged
 `SKIP_CLICKHOUSE=1` opt-out — a caller decision made up front, not a runtime probe

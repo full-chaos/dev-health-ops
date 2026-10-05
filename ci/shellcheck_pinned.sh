@@ -117,10 +117,6 @@ FILES=(
   "${ROOT}/ci/check_venue_oracle_registry.sh"
   # executed-vs-skipped verdict of the main venue runs.
   "${ROOT}/ci/last-venue-run.sh"
-  "${ROOT}/ci/last-python-free-run.sh"
-  "${ROOT}/ci/python_free_ratchet.sh"
-  "${ROOT}/ci/python_tripwire.sh"
-  "${ROOT}/ci/python_tripwire_shim.sh"
   "${ROOT}/ci/lib/venue_oracle_registry.sh"
   # this script itself, AND the self-test that enforces it -- lane-4441's read:
   # the script enforcing the lint was the one script the lint did not check,
@@ -140,11 +136,9 @@ FILES=(
   # tracked scripts CI never linted, added because they are already clean
   # under the pin -- verified, not assumed
   "${ROOT}/ci/aggregate_gate_results.sh"
-  "${ROOT}/ci/check_lint_scope.sh"
   "${ROOT}/ci/run_tests.sh"
   "${ROOT}/docker/init-extra-dbs.sh"
   "${ROOT}/scripts/acceptance/container_source_guard.sh"
-  "${ROOT}/scripts/acceptance/run_wave4_corpus.sh"
   "${ROOT}/scripts/run_py_tool.sh"
   "${ROOT}/tests/compatibility/provider/run.sh"
   "${ROOT}/.github/docs-legacy/examples/customer-push/generic-runner.sh"

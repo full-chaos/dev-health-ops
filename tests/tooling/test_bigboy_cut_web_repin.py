@@ -46,12 +46,12 @@ def test_web_repin_runs_after_repin_and_before_migrate_up() -> None:
 
 def test_up_recreates_web_alongside_the_other_pinned_images() -> None:
     lines = _lines(CUT)
-    up_at = _first(lines, "--no-deps --no-build api query-api go-api")
+    up_at = _first(lines, "--no-deps --no-build query-api go-api")
     up_line = lines[up_at]
     assert "--no-build" in up_line, "web must never be host-built"
     tokens = up_line.split()
     assert "web" in tokens[tokens.index("go-api") : tokens.index("go-api") + 2], (
-        f"`web` must be recreated in the same up invocation as api/query-api/go-api: {up_line!r}"
+        f"`web` must be recreated in the same up invocation as query-api/go-api: {up_line!r}"
     )
 
 
@@ -374,9 +374,7 @@ def test_the_cut_stops_before_migrate_when_the_web_repin_fails(tmp_path: Path) -
     assert "STEP repin-web rc=3" in proc.stdout, proc.stdout
     assert proc.returncode == 1, (proc.returncode, proc.stdout)
     assert "cut stops: web re-pin failed rc=3" in proc.stdout
-    assert (
-        "STEP migrate" not in proc.stdout and "STEP routing-carry" not in proc.stdout
-    ), proc.stdout
+    assert "STEP migrate" not in proc.stdout, proc.stdout
 
 
 def test_the_cut_goes_on_to_migrate_when_the_web_repin_succeeds(tmp_path: Path) -> None:

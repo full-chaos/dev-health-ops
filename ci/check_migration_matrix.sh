@@ -12,37 +12,27 @@
 # them going the way of the "Last verified" stamp, which no test, script or
 # workflow read at all until today.
 #
-# TWO MODES, DELIBERATELY SPLIT BY WHAT THEY NEED
-# -----------------------------------------------
-# THE TWO SHAS, AND WHY BOTH ARE CHECKED
-# --------------------------------------
-#   "Last verified" (markdown)  a HUMAN's claim about the hand-curated citation
-#                               and CLI-verb rows. Forgeable by editing a line,
-#                               which is why the failure message says so out loud.
-#   ops_sha (last-render.json)  the MERGE-BASE with main at render time, written
-#                               by the tool. Not typeable by hand, so it is the
-#                               half of the freshness claim that cannot be faked.
-#                               It is the merge-base and NOT the render commit
-#                               because a squash merge makes a branch commit
-#                               unreachable from main forever -- recording the
-#                               branch tip here took main red for every PR after
-#                               #2389 landed. `render_commit` records the actual
-#                               commit for the audit trail and is never checked.
+# CHAOS-8620: THE AGE BUDGET IS GONE
+# ---------------------------------
+# The page tracked the Python -> Go migration of the api. The Python api is
+# deleted, so the page is a record, not a living plan, and a refresh needs a
+# live Postgres and a fleet file that CI does not have. A budget on the age of
+# the stamps would turn every PR and main red once a week for a record nobody
+# is editing. So no stamp age is checked anywhere. What stays is STRUCTURAL:
 #
-#   freshness  Pure bash + git. No Go toolchain, no venv, no network. It runs
-#              UNCONDITIONALLY on every PR -- and that is the entire point: a
-#              document rots when NOBODY touches it, so a path-filtered or
-#              relevance-gated check is structurally incapable of catching the
-#              failure it exists to catch. This is the mode that would have
-#              fired on 2026-09-05, not on 2026-09-09.
+#   stamp     Pure bash + git. The "Last verified" sha and the ops_sha in
+#             last-render.json must be real 40-hex commits that are ancestors
+#             of HEAD, and rendered_at must parse. Runs on every PR.
+#   contract  Delegates to `go run ./cmd/dev-health-migration-matrix -check`,
+#             which re-renders from COMMITTED sources only and fails when the
+#             page disagrees with its generator. Needs Go.
 #
-#   contract   Delegates to `go run ./cmd/dev-health-migration-matrix -check`,
-#              which re-renders from COMMITTED sources only and fails when a
-#              row claims a status its evidence column cannot support. Needs
-#              Go; runs on the Go-relevant leg.
+# ops_sha is the MERGE-BASE with main at render time, written by the tool. It
+# is the merge-base and NOT the render commit because a squash merge makes a
+# branch commit unreachable from main forever. `render_commit` records the
+# actual commit for the audit trail and is never checked.
 #
-# `all` runs both. Default is `all` locally, so a human typing the bare command
-# gets the whole gate.
+# `all` runs both. Default is `all` locally.
 set -euo pipefail
 
 SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" >/dev/null 2>&1 && pwd -P)"
@@ -58,12 +48,6 @@ RENDER_JSON="${ROOT}/contracts/migration-status/v1/last-render.json"
 # a commit is a bug in the tool, not in the operator.
 REVERIFY_COMMAND="go run ./cmd/dev-health-migration-matrix -render -root ."
 
-# The staleness budget, in days, for BOTH the hand-curated "Last verified"
-# stamp and the live-source render. Seven is not arbitrary: the stamp that
-# prompted this work was five days and roughly forty merges behind main and
-# still read as current.
-MAX_AGE_DAYS="${MATRIX_MAX_AGE_DAYS:-7}"
-
 # printf BUILTIN, not `cat <<EOF`. Bash writes a here-document into a pipe it
 # also holds the read end of, so a payload at or above the measured ~400-byte
 # budget hangs the script forever on a host with a small pipe buffer
@@ -71,17 +55,15 @@ MAX_AGE_DAYS="${MATRIX_MAX_AGE_DAYS:-7}"
 # tests/tooling/test_local_validate_heredocs.py enforces this over all of ci/.
 usage() {
   printf '%s\n' \
-    'usage: ci/check_migration_matrix.sh [freshness|contract|all]' \
+    'usage: ci/check_migration_matrix.sh [stamp|contract|all]' \
     '' \
-    '  freshness  bash+git only; asserts the "Last verified" sha AND the' \
-    '             tool-written ops_sha in last-render.json are each 40-hex,' \
-    '             ancestors of HEAD, and no older than MATRIX_MAX_AGE_DAYS' \
-    '             (default 7).' \
+    '  stamp      bash+git only; asserts the "Last verified" sha AND the' \
+    '             tool-written ops_sha in last-render.json are each 40-hex' \
+    '             ancestors of HEAD. No age is checked (CHAOS-8620).' \
     '  contract   go run ./cmd/dev-health-migration-matrix -check' \
     '  all        both (default)' \
     '' \
     'env:' \
-    '  MATRIX_MAX_AGE_DAYS  staleness budget in days (default 7)' \
     '  MATRIX_ROOT          repository root (default: this script'"'"'s parent)'
 }
 
@@ -90,13 +72,7 @@ die() {
   exit 1
 }
 
-# epoch_now and epoch_of are separated so a test can freeze the clock without
-# reaching into git.
-epoch_now() {
-  printf '%s' "${MATRIX_NOW_EPOCH:-$(date -u +%s)}"
-}
-
-check_freshness() {
+check_stamp() {
   [ -f "${DOC}" ] || die "missing ${DOC}"
 
   # The stamp line looks like:
@@ -133,29 +109,10 @@ If CI made a shallow checkout, this job needs fetch-depth: 0."
 The page claims to have been verified against a commit this branch does not
 contain, so nothing on it was verified against what is about to merge."
 
-  local verified_epoch now age_days
-  verified_epoch="$(git -C "${ROOT}" show -s --format=%ct "${sha}")"
-  now="$(epoch_now)"
-  age_days=$(( (now - verified_epoch) / 86400 ))
-
-  if [ "${age_days}" -gt "${MAX_AGE_DAYS}" ]; then
-    die "check_migration_matrix: 'Last verified' ${sha} is ${age_days} days old (budget ${MAX_AGE_DAYS} days).
-
-Re-verify, then commit:
-  ${REVERIFY_COMMAND}
-
-That refreshes every machine-read cell and writes the sha it read from into
-${RENDER_JSON#"${ROOT}/"}. The 'Last verified' stamp is the OTHER half -- the
-hand-curated citation and CLI-verb rows -- so moving it means re-reading those
-rows against the current tree first and fixing what has changed. Bumping the
-stamp WITHOUT re-reading them is the exact failure this gate exists to prevent,
-and it is not detectable from here; that part is on you."
-  fi
-
   [ -f "${RENDER_JSON}" ] || die "missing ${RENDER_JSON}
 Run: go run ./cmd/dev-health-migration-matrix -render -root ."
 
-  local rendered_at rendered_epoch render_age
+  local rendered_at rendered_epoch
   rendered_at="$(sed -n 's/.*"rendered_at"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' "${RENDER_JSON}" | head -n1)"
   [ -n "${rendered_at}" ] || die "check_migration_matrix: ${RENDER_JSON} has no rendered_at"
 
@@ -211,18 +168,8 @@ ancestor, the render came from an unrelated history.
 Re-verify, then commit:
   ${REVERIFY_COMMAND}"
 
-  render_age=$(( ($(epoch_now) - rendered_epoch) / 86400 ))
-  if [ "${render_age}" -gt "${MAX_AGE_DAYS}" ]; then
-    die "check_migration_matrix: the live sources behind the STATUS (v2) tables were last read
-${render_age} days ago (budget ${MAX_AGE_DAYS} days). The page is describing a fleet and a
-routing table that may no longer exist.
-
-Re-verify, then commit:
-  ${REVERIFY_COMMAND}"
-  fi
-
-  printf 'migration matrix freshness OK: last verified %s (%d days), rendered %s at %s (%d days), budget %d days\n' \
-    "${sha:0:12}" "${age_days}" "${rendered_at}" "${ops_sha:0:12}" "${render_age}" "${MAX_AGE_DAYS}"
+  printf 'migration matrix stamp OK: last verified %s, rendered %s at %s (no age budget)\n' \
+    "${sha:0:12}" "${rendered_at}" "${ops_sha:0:12}"
 }
 
 check_contract() {
@@ -232,10 +179,10 @@ check_contract() {
 
 main() {
   case "${1:-all}" in
-    freshness) check_freshness ;;
+    stamp) check_stamp ;;
     contract) check_contract ;;
     all)
-      check_freshness
+      check_stamp
       check_contract
       ;;
     -h | --help | help)

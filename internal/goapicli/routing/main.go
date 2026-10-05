@@ -1,7 +1,7 @@
 // Command go-api-routing is the operator surface for Go-API rollout,
 // in Go.
 //
-// Four verbs, and the split between them is the same one
+// The verbs, and the split between them is the same one
 // `dev-hops go-api routing` draws:
 //
 //	repoint  provenance only -- point rows at the build that is actually
@@ -10,11 +10,6 @@
 //	disable  turn operations OFF. Deliberately FEWER preflights: it must
 //	         work when the planes disagree and when query-api is down,
 //	         which is exactly when it is needed.
-//	carry    provenance-and-reachability preserving COPY, run BEFORE a
-//	         roll: every reachable row moves to the schema digest this
-//	         binary's embedded SDL computes, so the roll does not
-//	         un-route what is already enabled. Writes nothing at the
-//	         live digest, so a rollback still finds its own rows.
 //	status   a diagnostic that never refuses and never fails on an
 //	         unhealthy state.
 //
@@ -98,7 +93,6 @@ verbs:
   enable    turn operations ON (mode canary|primary), with every preflight
   disable   turn operations OFF (mode python|disabled|shadow); mode only, never the build
   seed      create the FIRST routing row (shadow only) for operations that have none
-  carry     BEFORE a roll: copy every reachable row to the schema digest this binary computes
   status    report both planes' digests and every operation's row; never fails
   proof-org manage /query/proof-write's org allowlist (add/remove/list); see "proof-org -h"
 
@@ -106,14 +100,14 @@ Run "dho goapi routing <verb> -h" for that verb's flags.`
 
 // Command is the `goapi routing` verb of the dho binary. It routes to
 // run(env.Args) unchanged -- routing's own verbs (repoint, enable, disable,
-// carry, status) stay a single flat dispatch inside run rather than a
+// seed, status) stay a single flat dispatch inside run rather than a
 // second layer of cli.Command children, so this fold changes nothing about
 // how a request reaches a verb, only how the process itself is invoked.
 func Command() cli.Command {
 	return cli.Command{
 		Name:    "routing",
 		Kind:    cli.Verb,
-		Summary: "repoint/enable/disable/carry/status the Go-API routing registry",
+		Summary: "repoint/enable/disable/seed/status the Go-API routing registry",
 		Run: func(_ context.Context, env cli.Env) int {
 			stdout = env.Stdout
 			stderr = env.Stderr
@@ -298,8 +292,6 @@ func run(argv []string) error {
 		return helpAsSuccess(runDisable(rest))
 	case "seed":
 		return helpAsSuccess(runSeed(rest))
-	case "carry":
-		return helpAsSuccess(runCarry(rest))
 	case "status":
 		return helpAsSuccess(runStatus(rest))
 	case "proof-org":

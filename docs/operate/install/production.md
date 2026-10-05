@@ -59,7 +59,7 @@ Use an external secret store or the scheduler's secret mechanism. Never commit p
 
 ## Database identities and migration ordering
 
-For the Python API runtime, `POSTGRES_URI` may use transaction-mode PgBouncer when `PGBOUNCER_TRANSACTION_MODE=true`. Migrations must bypass the transaction pooler.
+For the Go runtime, `POSTGRES_URI` may use transaction-mode PgBouncer when `PGBOUNCER_TRANSACTION_MODE=true`. Migrations must bypass the transaction pooler.
 
 When the Go coexistence foundation is deployed, keep these responsibilities distinct:
 
@@ -86,6 +86,8 @@ helm upgrade --install dev-health deploy/helm/dev-health \
   --namespace dev-health --create-namespace \
   -f values.production.yaml
 ```
+
+Set `web.env.BACKEND_URL` in your values file (the chart has no default and the render fails while it is not set): `BACKEND_URL` is the base URL the web Deployment's server-side requests go to. Point it at a host that routes REST requests to the Go api and `/graphql` to query-api (for example your ingress host). Or set `web.enabled: false`. The chart no longer renders a Python api, and it has no quickstart values profile: a self-hosted install uses the Compose stack. Values keys of the removed Python api (`api`, `metricsApi`, `image`, `web.backendFromRelease`) are ignored without an error.
 
 The migration hooks run before the application workloads roll: the chart's migrate Job applies the PostgreSQL and ClickHouse schema, the optional `provisionRoles` and `riverMigrate` hooks provision the runtime roles and apply the River schema and grants, and the route-activate hook applies the route table. Inspect them before relying on the release:
 

@@ -431,7 +431,7 @@ func TestQueryAPIResponseModelsMatchFrozenPython(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		output := frozenPython(t, "query-response-models-"+mode+".golden.json", programoracle.Program{Name: "response models " + mode, Text: pythonResponseModelProgram, Stdin: payload})[0]
+		output := frozenHomeResponseModelPython(t, "query-response-models-"+mode+".golden.json", programoracle.Program{Name: "response models " + mode, Text: pythonResponseModelProgram, Stdin: payload})[0]
 		for _, line := range strings.Split(output, "\n") {
 			if rest, ok := strings.CutPrefix(line, "RESULT "); ok {
 				return json.RawMessage(rest)

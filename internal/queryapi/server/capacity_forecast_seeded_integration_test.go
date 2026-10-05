@@ -341,6 +341,63 @@ func TestCapacityForecastComputesAgainstRealMetricsRows(t *testing.T) {
 	}
 }
 
+// This is an evidence-only test for CHAOS-8498. It is intentionally red when
+// the reported behavior occurs and must not be merged as a regression test.
+//
+// The selected teams have independent newest rows: team-current has 40 WIP on
+// the anchor day and team-behind has 30 WIP on the preceding day. The current
+// query selects one maximum day across the whole selected set, so the result
+// excludes team-behind's newest row and reports 40 rather than the two teams'
+// latest-row total of 70.
+func TestCapacityForecastReproducesBehindTeamBacklogOmission(t *testing.T) {
+	ctx := context.Background()
+	_, client, raw := migratedClickHouse(ctx, t)
+
+	anchor := time.Date(2026, 9, 1, 0, 0, 0, 0, time.UTC)
+	values := ""
+	for index := range 30 {
+		if index > 0 {
+			values += ", "
+		}
+		day := anchor.AddDate(0, 0, -29+index).Format("2006-01-02")
+		values += fmt.Sprintf(
+			"(toDate('%s'), 'jira', 'scope-x', 'team-current', 5, 40, toDateTime('2026-09-01 00:00:00'), 'org-mine')",
+			day,
+		)
+	}
+	behindDay := anchor.AddDate(0, 0, -1).Format("2006-01-02")
+	values += fmt.Sprintf(
+		", (toDate('%s'), 'jira', 'scope-x', 'team-behind', 0, 30, toDateTime('2026-09-01 00:00:00'), 'org-mine')",
+		behindDay,
+	)
+	seed := `
+        INSERT INTO work_item_metrics_daily
+            (day, provider, work_scope_id, team_id, items_completed, wip_count_end_of_day, computed_at, org_id)
+        VALUES ` + values
+	if err := raw.Exec(ctx, seed); err != nil {
+		t.Fatalf("seed work_item_metrics_daily: %v", err)
+	}
+
+	targetItems := 1
+	input := &model.CapacityForecastInput{
+		TeamIds:     []string{"team-current", "team-behind"},
+		TargetItems: &targetItems,
+		HistoryDays: 30,
+		Simulations: 1,
+	}
+	got, err := capacityforecast.ResolveForecast(ctx, client, "org-mine", input, anchor)
+	if err != nil {
+		t.Fatalf("ResolveForecast: %v", err)
+	}
+	if got == nil {
+		t.Fatal("got nil, want a forecast for two selected teams with history")
+	}
+	if got.BacklogSize != 40 {
+		t.Fatalf("reproduction input changed: backlogSize=%d, want the one-global-day result 40", got.BacklogSize)
+	}
+	t.Fatalf("REPRODUCED CHAOS-8498: backlogSize=%d; team-behind's latest 30 WIP at %s is omitted from the selected teams' latest-row total 70", got.BacklogSize, behindDay)
+}
+
 func TestCapacityForecastReturnsNilForAnOrgWithNoRows(t *testing.T) {
 	ctx := context.Background()
 	_, client, _ := migratedClickHouse(ctx, t)

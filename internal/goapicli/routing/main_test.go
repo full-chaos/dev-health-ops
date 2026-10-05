@@ -384,9 +384,6 @@ func TestEveryVerbRefusesItsOwnMissingPreconditions(t *testing.T) {
 		"repoint with no provenance":      {[]string{"repoint"}, "-recorded-by"},
 		"repoint with no postgres":        {[]string{"repoint", "-recorded-by", "w", "-review-evidence", "y"}, "-postgres-uri"},
 		"repoint with no credential":      {[]string{"repoint", "-recorded-by", "w", "-review-evidence", "y", "-postgres-uri", "postgres://x"}, bearerEnvVar},
-		"carry with no provenance":        {[]string{"carry"}, "-recorded-by"},
-		"carry with no postgres":          {[]string{"carry", "-recorded-by", "w", "-review-evidence", "y"}, "-postgres-uri"},
-		"carry with no credential":        {[]string{"carry", "-recorded-by", "w", "-review-evidence", "y", "-postgres-uri", "postgres://x"}, bearerEnvVar},
 	} {
 		t.Run(name, func(t *testing.T) {
 			err := run(testCase.argv)
@@ -421,7 +418,7 @@ func TestEnableAndRepointRefuseWithNoQueryAPIURLConfiguredAtAll(t *testing.T) {
 		t.Fatal(err)
 	}
 	for name, argv := range map[string][]string{
-		"enable, no registry-url":  {"enable", "-mode", "canary", "-recorded-by", "w", "-review-evidence", "y", "-postgres-uri", "postgres://x", "-catalog", catalogPath},
+		"enable, no registry-url":  {"enable", "-operations", "mcp:hotspots", "-mode", "canary", "-recorded-by", "w", "-review-evidence", "y", "-postgres-uri", "postgres://x", "-catalog", catalogPath},
 		"repoint, no registry-url": {"repoint", "-recorded-by", "w", "-review-evidence", "y", "-postgres-uri", "postgres://x"},
 	} {
 		t.Run(name, func(t *testing.T) {

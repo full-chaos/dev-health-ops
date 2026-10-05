@@ -11,6 +11,7 @@ package routing
 // are never mixed, because they are admitted by different receipts.
 
 import (
+	"fmt"
 	"strings"
 
 	schemav1 "github.com/full-chaos/dev-health-ops/contracts/graphql/v1"
@@ -88,4 +89,15 @@ func classKinds(operations []string) map[string]string {
 		kinds[operation] = goapiproof.OperationKindMCPClass
 	}
 	return kinds
+}
+
+// catalogOperationNote is the line enable, disable and seed print for a catalog operation (CHAOS-8704): the
+// verb still writes its row, but query-api serves a registered operation whatever its row says, so a
+// success line from the verb must not read as an effect on serving.
+const catalogOperationNote = "go-api-routing: note: catalog operations are served regardless of routing rows; this row affects only MCP class roots and the proof route"
+
+func noteCatalogOperations(isClass bool) {
+	if !isClass {
+		fmt.Fprintln(stderr, catalogOperationNote)
+	}
 }

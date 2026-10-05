@@ -41,7 +41,7 @@ func TestCatalogRuleServesAnOperationWithNoRowAndLeavesTheClassRowsAlone(t *test
 	securityAlertsVariables := map[string]any{"orgId": "org-1"}
 	classRow := func(schemaDigest, root, mode string) {
 		t.Helper()
-		pgseed.RoutingState(context.Background(), t, pool, schemaDigest, mcpclass.DocumentDigest(), mcpclass.Operation(root), mode)
+		pgseed.ClassDecision(context.Background(), t, pool, mcpclass.Operation(root), mode)
 	}
 	served := func(label string, status int, body string) {
 		t.Helper()
@@ -79,7 +79,7 @@ func TestCatalogRuleServesAnOperationWithNoRowAndLeavesTheClassRowsAlone(t *test
 	t.Run("empty table: the MCP listener refuses a root with no class row", func(t *testing.T) {
 		listener, ch := classListener(t, pool)
 		assertMCPRefused(t, classHotspots(t, listener), ch, http.StatusNotFound, mcpReasonRootFieldNotEnabled)
-		class := newClassRowSwitch(pool, itTestSchemaDigest)
+		class := newClassRowSwitch(pool)
 		for _, root := range mcpclass.SortedRoots() {
 			if class.Enabled(mcpclass.Operation(root)) {
 				t.Errorf("empty table: the class-row switch enabled %s", mcpclass.Operation(root))

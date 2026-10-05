@@ -41,3 +41,36 @@ func noteLine(stderrOut string) string {
 	}
 	return ""
 }
+
+// CHAOS-8704 (vet 2 P2): enable, disable and seed on a CATALOG operation still write their row, and say it has
+// no effect on serving; status does not show a catalog operation with a non-served row as dark.
+func TestVerbsOnACatalogOperationSayTheRowDoesNotAffectServing(t *testing.T) {
+	pool, dsn := startVerbPostgres(t)
+	digests := map[string]string{seedOpA: seedDigA, seedOpB: seedDigB}
+	catalog := writeCatalog(t, digests)
+	t.Setenv(bearerEnvVar, verbTestBearer)
+	server := startQueryAPI(t, localSchemaDigest(), digests)
+	registry := server.URL + "/registry"
+
+	_, errOut, err := captureVerb(t, seedCmd(server.URL, dsn, catalog, "-operations", seedOpA)...)
+	if err != nil || !strings.Contains(errOut, catalogOperationNote) {
+		t.Fatalf("seed on a catalog operation: err %v, stderr:\n%s", err, errOut)
+	}
+	if rows := readSeedRows(t, pool); len(rows) != 1 || rows[0].mode != "shadow" {
+		t.Fatalf("seed must still write its shadow row: %+v", rows)
+	}
+	_, errOut, err = captureVerb(t, "disable", "-postgres-uri", dsn, "-catalog", catalog,
+		"-operations", seedOpA, "-mode", "disabled", "-apply", "-recorded-by", "x", "-review-evidence", "y")
+	if err != nil || !strings.Contains(errOut, catalogOperationNote) {
+		t.Fatalf("disable on a catalog operation: err %v, stderr:\n%s", err, errOut)
+	}
+	_, errOut, _ = captureVerb(t, "enable", "-registry-url", registry, "-buildinfo-url", server.URL+"/buildinfo", "-postgres-uri", dsn, "-catalog", catalog,
+		"-operations", seedOpA, "-mode", "canary", "-dry-run", "-recorded-by", "x", "-review-evidence", "y")
+	if !strings.Contains(errOut, catalogOperationNote) {
+		t.Fatalf("enable on a catalog operation printed no note:\n%s", errOut)
+	}
+	out, _, err := captureVerb(t, "status", "-postgres-uri", dsn, "-catalog", catalog, "-registry-url", registry)
+	if err != nil || !strings.Contains(out, "this build serves the operation whatever this row's mode says (disabled)") {
+		t.Fatalf("status shows a disabled row of a catalog operation without saying it is served (err %v):\n%s", err, out)
+	}
+}

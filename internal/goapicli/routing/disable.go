@@ -91,6 +91,7 @@ func runDisable(argv []string) error {
 	if err != nil {
 		return err
 	}
+	noteCatalogOperations(isClass)
 	var catalog map[string]string
 	var operations []string
 	if isClass {

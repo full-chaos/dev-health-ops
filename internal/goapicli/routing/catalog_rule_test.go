@@ -133,3 +133,18 @@ func TestStatusTextSaysServedOnlyForAnOperationWithNoRow(t *testing.T) {
 		t.Errorf("a MATCH entry with no served_without_row answer was reported under the catalog rule:\n%s", out)
 	}
 }
+
+func TestNoteCatalogOperationsPrintsOnlyForACatalogScope(t *testing.T) {
+	var out strings.Builder
+	saved := stderr
+	stderr = &out
+	t.Cleanup(func() { stderr = saved })
+	noteCatalogOperations(true)
+	if out.Len() != 0 {
+		t.Fatalf("an MCP class scope printed a note: %q", out.String())
+	}
+	noteCatalogOperations(false)
+	if strings.TrimSpace(out.String()) != catalogOperationNote {
+		t.Fatalf("a catalog scope printed %q, want the note", out.String())
+	}
+}

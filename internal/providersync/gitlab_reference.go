@@ -4,8 +4,6 @@ import (
 	"errors"
 	"strconv"
 	"strings"
-
-	"github.com/full-chaos/dev-health-ops/internal/jobs/workgraph/issueprlinks"
 )
 
 // GitLab's own reference form for a cross-project item is "<project path>!<iid>" (merge request) or
@@ -31,7 +29,8 @@ type gitlabReference struct {
 
 // parseGitLabReference parses references.full for the given marker. The project path is "/"-separated segments of
 // [A-Za-z0-9_.-], none empty, "." or "..". The iid is a canonical positive integer that fits uint32, the type
-// issueprlinks.Derive parses and the pull-request number column holds, so the route and Derive cannot disagree. No
+// issueprlinks.ParsePRSource parses and the pull-request number column holds (providersync must not import issueprlinks: its
+// logging would join this package's dependency set; TestParseGitLabReferenceAgreesWithDerive pins the agreement). No
 // whitespace is trimmed: a reference with it is a changed answer shape, not something to repair.
 func parseGitLabReference(full string, marker byte) (gitlabReference, error) {
 	if full == "" {
@@ -48,13 +47,6 @@ func parseGitLabReference(full string, marker byte) (gitlabReference, error) {
 	parsed, err := strconv.ParseUint(number, 10, 32)
 	if err != nil || parsed == 0 || strconv.FormatUint(parsed, 10) != number {
 		return gitlabReference{}, errGitLabReferenceIID
-	}
-	if marker == gitlabMergeRequestMarker {
-		// Derive's own parse of the id this reference becomes; a disagreement is a reject here, not a "synced" row there.
-		source, ok := issueprlinks.ParsePRSource("gitlab:" + path + "!" + number)
-		if !ok || source.PRNumber != uint32(parsed) || source.RepoSlug != path {
-			return gitlabReference{}, errGitLabReferenceIID
-		}
 	}
 	return gitlabReference{Path: path, IID: uint32(parsed)}, nil
 }

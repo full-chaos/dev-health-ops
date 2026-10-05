@@ -9,6 +9,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/full-chaos/dev-health-ops/internal/jobs/workgraph/issueprlinks"
+
 	"github.com/full-chaos/dev-health-ops/internal/providerfoundation"
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/fakehttp"
 )
@@ -121,5 +123,21 @@ func TestGitLabWorkItemsRouteCountsLinksWithoutReferencesAsUnsupported(t *testin
 	}
 	if batch.Result["issue_links_unsupported_shape"] != 1 {
 		t.Fatalf("result=%v want issue_links_unsupported_shape=1", batch.Result)
+	}
+}
+
+// The route's parser and Derive's ParsePRSource accept and reject the same merge-request references, so a reference the
+// route calls good is never rejected later as unparseable_source.
+func TestParseGitLabReferenceAgreesWithDerive(t *testing.T) {
+	t.Parallel()
+	for _, full := range []string{
+		"acme/api!9", "acme/api!4294967295", "acme/api!4294967296", "acme/api!0", "acme/api!09", "acme/api!+9", "acme/api!-9",
+		"acme/api!", "!9", "acme/api!9 ", "acme/api!٣", "acme/api!1e3", "a/b!c!9",
+	} {
+		reference, err := parseGitLabReference(full, gitlabMergeRequestMarker)
+		source, ok := issueprlinks.ParsePRSource("gitlab:" + full)
+		if err == nil && (!ok || source.PRNumber != reference.IID || source.RepoSlug != reference.Path) {
+			t.Errorf("%q: the route accepts %+v, Derive parses ok=%v %+v", full, reference, ok, source)
+		}
 	}
 }

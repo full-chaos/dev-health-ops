@@ -7,7 +7,9 @@ import (
 	"crypto/sha256"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net/http"
+	"strings"
 	"testing"
 	"time"
 
@@ -274,14 +276,19 @@ func auditDisplayNamesDiagnostic(
 			}
 			basePlan, basePlanPresent := plan.Nodes["a"]
 			targetPlan, targetPlanPresent := plan.Nodes[planAlias]
+			organizationPlanPath, organizationPlanPathPresent := plan.TargetPaths["resource_org"]
+			providerPlanPath, providerPlanPathPresent := plan.TargetPaths["provider"]
+			sourcePlanPath, sourcePlanPathPresent := plan.TargetPaths["source"]
+			tokenPlanPath, tokenPlanPathPresent := plan.TargetPaths["token"]
 			timingMeasured := auditDisplayTimestampPairMeasured(joinIssuedAt, joinResultAt) &&
 				auditDisplayTimestampPairMeasured(projectionIssuedAt, projectionResultAt) &&
 				auditDisplayTimestampPairMeasured(planIssuedAt, planResultAt)
 			basePlanMeasured := auditDisplayPlanNodeMeasured(basePlan, "a", "audit_logs")
 			targetPlanMeasured := auditDisplayPlanNodeMeasured(targetPlan, planAlias, planRelation)
+			parentPlanPathsMeasured := auditDisplayParentPlanPathsMeasured(plan)
 			typeMeasured := auditDisplayBranchTypesMeasured(fixture.action, state, branch)
 
-			t.Logf("audit display diagnostic role=%s endpoint_status=%d action=%s join_query_sha256=%x projection_query_sha256=%x plan_query_sha256=%x params_sha256=%x param_types=uuid,uuid process_utc=%s join_issued_utc=%s join_result_utc=%s projection_issued_utc=%s projection_result_utc=%s plan_issued_utc=%s plan_result_utc=%s input_types={resource_id=%s,org_id=%s} selected_types={target_id=%s,target_org_id=%s} selected_resource_type=%s organization={type=%t,uuid=%t,target=%t,scope=%t,alias=%t,display=%t} provider={type=%t,uuid=%t,target=%t,scope=%t,alias=%t,display=%t} source={type=%t,uuid=%t,target=%t,scope=%t,alias=%t,display=%t} token={type=%t,uuid=%t,target=%t,scope=%t,alias=%t,display=%t} production_case_projection_found=%t production_case_projection_present=%t production_encoder_resource_display_name_present=%t plan_base={present=%t,node=%s,join=%s,relation=%s,alias=%s,rows=%g,rows_present=%t,loops=%g,loops_present=%t,join_filter=%t,hash_cond=%t,merge_cond=%t,index_cond=%t,filter=%t} plan_target={present=%t,node=%s,join=%s,relation=%s,alias=%s,rows=%g,rows_present=%t,loops=%g,loops_present=%t,join_filter=%t,hash_cond=%t,merge_cond=%t,index_cond=%t,filter=%t}",
+			t.Logf("audit display diagnostic role=%s endpoint_status=%d action=%s join_query_sha256=%x projection_query_sha256=%x plan_query_sha256=%x params_sha256=%x param_types=uuid,uuid process_utc=%s join_issued_utc=%s join_result_utc=%s projection_issued_utc=%s projection_result_utc=%s plan_issued_utc=%s plan_result_utc=%s input_types={resource_id=%s,org_id=%s} selected_types={target_id=%s,target_org_id=%s} selected_resource_type=%s organization={type=%t,uuid=%t,target=%t,scope=%t,alias=%t,display=%t} provider={type=%t,uuid=%t,target=%t,scope=%t,alias=%t,display=%t} source={type=%t,uuid=%t,target=%t,scope=%t,alias=%t,display=%t} token={type=%t,uuid=%t,target=%t,scope=%t,alias=%t,display=%t} production_case_projection_found=%t production_case_projection_present=%t production_encoder_resource_display_name_present=%t plan_base={present=%t,node=%s,join=%s,relation=%s,alias=%s,rows=%g,rows_present=%t,loops=%g,loops_present=%t,join_filter=%t,hash_cond=%t,merge_cond=%t,index_cond=%t,filter=%t} plan_target={present=%t,node=%s,join=%s,relation=%s,alias=%s,rows=%g,rows_present=%t,loops=%g,loops_present=%t,join_filter=%t,hash_cond=%t,merge_cond=%t,index_cond=%t,filter=%t} parent_paths={organization_present=%t,provider_present=%t,source_present=%t,token_present=%t,measured=%t,organization=%s,provider=%s,source=%s,token=%s}",
 				connection.name,
 				endpointStatus,
 				fixture.action,
@@ -356,9 +363,18 @@ func auditDisplayNamesDiagnostic(
 				targetPlan.MergeCondPresent,
 				targetPlan.IndexCondPresent,
 				targetPlan.FilterPresent,
+				organizationPlanPathPresent,
+				providerPlanPathPresent,
+				sourcePlanPathPresent,
+				tokenPlanPathPresent,
+				parentPlanPathsMeasured,
+				auditDisplayPlanPathForLog(organizationPlanPath),
+				auditDisplayPlanPathForLog(providerPlanPath),
+				auditDisplayPlanPathForLog(sourcePlanPath),
+				auditDisplayPlanPathForLog(tokenPlanPath),
 			)
-			if !auditDisplayBranchMeasured(branch) || !projectionFound || !projectionResourceDisplayNamePresent || !encodedResourceDisplayNamePresent || !timingMeasured || !basePlanMeasured || !targetPlanMeasured || !typeMeasured {
-				t.Errorf("audit display diagnostic action=%s selected={type=%t,uuid=%t,target=%t,scope=%t,alias=%t,display=%t} production_projection={found=%t,scan=%t,encode=%t} timing_measured=%t base_plan_measured=%t target_plan_measured=%t type_measured=%t",
+			if !auditDisplayBranchMeasured(branch) || !projectionFound || !projectionResourceDisplayNamePresent || !encodedResourceDisplayNamePresent || !timingMeasured || !basePlanMeasured || !targetPlanMeasured || !parentPlanPathsMeasured || !typeMeasured {
+				t.Errorf("audit display diagnostic action=%s selected={type=%t,uuid=%t,target=%t,scope=%t,alias=%t,display=%t} production_projection={found=%t,scan=%t,encode=%t} timing_measured=%t base_plan_measured=%t target_plan_measured=%t parent_plan_paths_measured=%t type_measured=%t",
 					fixture.action,
 					branch.ResourceTypeMatches,
 					branch.UUIDGuardMatches,
@@ -372,6 +388,7 @@ func auditDisplayNamesDiagnostic(
 					timingMeasured,
 					basePlanMeasured,
 					targetPlanMeasured,
+					parentPlanPathsMeasured,
 					typeMeasured,
 				)
 			}
@@ -433,6 +450,71 @@ func auditDisplayTimestampPairMeasured(issued, result time.Time) bool {
 
 func auditDisplayPlanNodeMeasured(node admininternal.AuditLogPlanNodeForTest, wantAlias, wantRelation string) bool {
 	return node.NodeType != "" && node.Alias == wantAlias && node.RelationName == wantRelation && node.ActualRowsPresent && node.ActualLoopsPresent
+}
+
+func auditDisplayParentPlanPathsMeasured(plan admininternal.AuditLogProjectionPlanStateForTest) bool {
+	for alias, relation := range map[string]string{
+		"resource_org": "organizations",
+		"provider":     "sso_providers",
+		"source":       "external_ingest_sources",
+		"token":        "external_ingest_tokens",
+	} {
+		path, ok := plan.TargetPaths[alias]
+		if !ok || len(path) < 2 {
+			return false
+		}
+		for index, node := range path {
+			if node.NodeType == "" || node.PathDepth != index || !node.ActualRowsPresent || !node.ActualLoopsPresent {
+				return false
+			}
+			if index == 0 {
+				if node.ChildSide != "root" {
+					return false
+				}
+			} else if node.ChildSide == "" {
+				return false
+			}
+		}
+		last := path[len(path)-1]
+		if last.Alias != alias || last.RelationName != relation {
+			return false
+		}
+	}
+	return true
+}
+
+// auditDisplayPlanPathForLog emits the complete parent/child structure while
+// retaining only fixed plan names, numeric execution facts, and condition
+// hashes. The parser drops the original condition text before this call.
+func auditDisplayPlanPathForLog(path []admininternal.AuditLogPlanNodeForTest) string {
+	parts := make([]string, 0, len(path))
+	for _, node := range path {
+		parts = append(parts, fmt.Sprintf(
+			"{depth=%d,node=%s,join=%s,side=%s,relation=%s,alias=%s,rows=%g,rows_present=%t,loops=%g,loops_present=%t,rows_removed_join=%g,rows_removed_join_present=%t,rows_removed_filter=%g,rows_removed_filter_present=%t,rows_removed_index_recheck=%g,rows_removed_index_recheck_present=%t,join_filter_sha256=%s,hash_cond_sha256=%s,merge_cond_sha256=%s,index_cond_sha256=%s,filter_sha256=%s}",
+			node.PathDepth,
+			node.NodeType,
+			node.JoinType,
+			node.ChildSide,
+			node.RelationName,
+			node.Alias,
+			node.ActualRows,
+			node.ActualRowsPresent,
+			node.ActualLoops,
+			node.ActualLoopsPresent,
+			node.RowsRemovedByJoinFilter,
+			node.RowsRemovedByJoinFilterPresent,
+			node.RowsRemovedByFilter,
+			node.RowsRemovedByFilterPresent,
+			node.RowsRemovedByIndexRecheck,
+			node.RowsRemovedByIndexRecheckPresent,
+			node.JoinFilterSHA256,
+			node.HashCondSHA256,
+			node.MergeCondSHA256,
+			node.IndexCondSHA256,
+			node.FilterSHA256,
+		))
+	}
+	return "[" + strings.Join(parts, ",") + "]"
 }
 
 func requireAuditDisplayDiagnostic(t *testing.T, role, action, probe string, err error) {

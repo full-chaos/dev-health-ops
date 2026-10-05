@@ -17,6 +17,7 @@ import (
 
 	"github.com/full-chaos/dev-health-ops/internal/api/policy"
 	"github.com/full-chaos/dev-health-ops/internal/llmorgsettings"
+	"github.com/full-chaos/dev-health-ops/internal/mcpclass"
 	"github.com/full-chaos/dev-health-ops/internal/queryapi/datahealth"
 	"github.com/full-chaos/dev-health-ops/internal/queryapi/home"
 	"github.com/full-chaos/dev-health-ops/internal/queryapi/producttelemetry"
@@ -287,6 +288,7 @@ func startQueryAPIRoleFixture(t *testing.T, ctx context.Context) *queryAPIRoleFi
 	pgseed.OrgLicense(ctx, t, admin, pathsOrg, "enterprise", "{}")
 	pgseed.Setting(ctx, t, admin, pathsOrg, "llm", "provider", "openai", false)
 	pgseed.RoutingState(ctx, t, admin, pathsSchema, pathsDocument, pathsOp, "primary")
+	pgseed.ClassDecision(ctx, t, admin, mcpclass.Operation("hotspots"), "canary")
 
 	// CHAOS-6263 PR (a): identity fixtures for /query's edge-carrier
 	// PGStore reads (see the consts' own doc comment).
@@ -325,6 +327,12 @@ func (f *queryAPIRoleFixture) driveEveryPathCollecting(t *testing.T, ctx context
 
 	// Routing registry: Enabled swallows a query error into "false", so assert
 	// the STATE it exists to reach (the seeded "go" row reads as reachable).
+	// The class switch reads go_api_class_decision (CHAOS-8735): assert the state it exists to reach, not that it ran.
+	if !routeswitch.NewClassDecisionSwitch(pool, mcpRoutingDigests()).Enabled(mcpclass.Operation("hotspots")) {
+		fail("routeswitch.ClassDecisionSwitch", errors.New("Enabled() = false for a seeded canary class decision (a swallowed permission error reads exactly like this)"))
+		var mode string
+		fail("routeswitch.ClassDecisionSwitch/direct", pool.QueryRow(ctx, `SELECT mode FROM go_api_class_decision WHERE operation = $1`, mcpclass.Operation("hotspots")).Scan(&mode))
+	}
 	registry := routeswitch.NewPostgresSwitch(pool, pathsSchema, map[string]string{pathsOp: pathsDocument})
 	if !registry.Enabled(pathsOp) {
 		fail("routeswitch.Enabled", errors.New("Enabled() = false for a seeded reachable routing row (a swallowed permission error reads exactly like this)"))

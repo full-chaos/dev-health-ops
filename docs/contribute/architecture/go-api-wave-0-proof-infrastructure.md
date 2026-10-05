@@ -304,16 +304,16 @@ pin and the history table below work exactly as before.
 
 ## When the schema digest moves
 
-A schema change no longer un-routes anything (CHAOS-8702, CHAOS-8704). query-api's `/query` and
-`/graphql` serve every registered operation and read no routing row, and the MCP class-row switch is decided by a root's NEWEST class row
-across all schema digests (`updated_at`; the live digest wins a tie): served if that row is canary or primary, dark
-otherwise. A decision is durable, so an older canary row at another digest does not undo a newer `disable`, and no
-re-proof is needed after a schema change (owner rulings D4789, D4796). `dho goapi routing carry`, the helm pre-upgrade carry hook and
-the stale-rows alarm are gone. A class row is written once by `seed` and `enable` (with a per-root proof
-receipt); a roll does not move it.
+A schema change no longer un-routes anything (CHAOS-8702, CHAOS-8704, CHAOS-8735). query-api's `/query` and
+`/graphql` serve every registered operation and read no routing row. An MCP class root is decided by ONE row in
+`go_api_class_decision`, keyed by the operation alone (`mcp:<root>`), written by `seed`, `enable` (after a per-root
+class receipt at the live digest) and `disable`, and read by the class switch, the proof route and `status`: the digest
+cannot matter, and nothing has to move the row on a roll. `dho goapi routing carry`, the helm pre-upgrade carry hook and
+the stale-rows alarm are gone.
 
-`repoint` stays for one reason: `dho goapi prove` refuses a row that names a build other than the running
-one, so `bigboy-graphql-prove.sh` runs `repoint` before it proves.
+`repoint` rewrites the build a class decision names, and never its mode or `decided_at`; it works after a schema move.
+`dho goapi prove` refuses a document row that names a build other than the running one, so `bigboy-graphql-prove.sh`
+runs `repoint` before it proves.
 
 ### After alembic 0129: every earlier proof reads UNPROVEN until re-proven
 

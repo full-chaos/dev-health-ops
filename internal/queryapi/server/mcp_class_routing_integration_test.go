@@ -80,7 +80,7 @@ func classEnable(pool *pgxpool.Pool, operations ...string) ([]goapiproof.EnableO
 func classListener(t *testing.T, pool *pgxpool.Pool) (http.Handler, *countingMCPClient) {
 	t.Helper()
 	ch := &countingMCPClient{}
-	sw := routeswitch.NewClassSwitch(pool, classTestSchema, mcpRoutingDigests())
+	sw := routeswitch.NewClassDecisionSwitch(pool, mcpRoutingDigests())
 	getenv := getenvFunc(func(string) string { return "" })
 	return internalidentity.MCP(newMCPHandlerWithLimits(ch, nil, sw, getenv, mcpDefaultLimits())), ch
 }
@@ -128,91 +128,6 @@ func TestMCPClassRowServesOnlyAfterSeedProofAndEnable(t *testing.T) {
 	}
 }
 
-// CHAOS-8704 (owner ruling D4789): a class row at another schema digest is served. The listener that
-// computes a different digest than the row's still lights the root; no carry has to move the row.
-func TestMCPClassRowAtAnotherSchemaDigestIsServed(t *testing.T) {
-	pool := startTestRegistryPostgres(t)
-	classEnabled(t, pool, "hotspots")
-	if !classServedAt(t, pool, "sha256:"+strings.Repeat("c", 64)) {
-		t.Fatal("a canary class row at another schema digest does not serve the root")
-	}
-}
-
-// D4796: the NEWEST class row across all digests decides (updated_at; the live digest wins a tie). A decision is
-// durable across a schema move: an older canary row does not undo a newer disable, and a newer canary row
-// lifts an older python row.
-func TestMCPClassRowTheNewestRowAcrossDigestsDecides(t *testing.T) {
-	const live = "sha256:7214-moved-schema-digest"
-	hotspots := mcpclass.Operation("hotspots")
-	digest := mcpclass.DocumentDigest()
-	old, newer := time.Date(2026, 9, 1, 0, 0, 0, 0, time.UTC), time.Date(2026, 9, 2, 0, 0, 0, 0, time.UTC)
-	for name, tc := range map[string]struct {
-		rows []struct {
-			schema, mode string
-			at           time.Time
-		}
-		want bool
-	}{
-		"canary at A only": {rows: []struct {
-			schema, mode string
-			at           time.Time
-		}{{"sha256:A", "canary", old}}, want: true},
-		"canary at A older, python at B newer, no row at the live digest": {rows: []struct {
-			schema, mode string
-			at           time.Time
-		}{{"sha256:A", "canary", old}, {"sha256:B", "python", newer}}, want: false},
-		"python at B older, canary at A newer": {rows: []struct {
-			schema, mode string
-			at           time.Time
-		}{{"sha256:B", "python", old}, {"sha256:A", "canary", newer}}, want: true},
-		"disabled at A newer than canary at the live digest": {rows: []struct {
-			schema, mode string
-			at           time.Time
-		}{{live, "canary", old}, {"sha256:A", "disabled", newer}}, want: false},
-		"a tie goes to the live digest": {rows: []struct {
-			schema, mode string
-			at           time.Time
-		}{{"sha256:A", "python", old}, {live, "canary", old}}, want: true},
-	} {
-		t.Run(name, func(t *testing.T) {
-			pool := startTestRegistryPostgres(t)
-			for _, row := range tc.rows {
-				pgseed.RoutingStateAt(t.Context(), t, pool, row.schema, digest, hotspots, row.mode, row.at)
-			}
-			if got := classServedAt(t, pool, live); got != tc.want {
-				t.Fatalf("served = %t, want %t", got, tc.want)
-			}
-		})
-	}
-}
-
-// The other states stay dark: no class row at any digest, and a python row at another digest.
-func TestMCPClassRowStatesThatStayDark(t *testing.T) {
-	const moved = "sha256:7214-moved-schema-digest"
-	hotspots := mcpclass.Operation("hotspots")
-	t.Run("no class row", func(t *testing.T) {
-		pool := startTestRegistryPostgres(t)
-		if classServedAt(t, pool, moved) {
-			t.Fatal("a root with no class row is served")
-		}
-	})
-	t.Run("a python row at another digest", func(t *testing.T) {
-		pool := startTestRegistryPostgres(t)
-		pgseed.RoutingState(t.Context(), t, pool, classTestSchema, mcpclass.DocumentDigest(), hotspots, "python")
-		if classServedAt(t, pool, moved) {
-			t.Fatal("a python class row at another digest serves the root")
-		}
-	})
-	t.Run("a live shadow row newer than an older canary row", func(t *testing.T) {
-		pool := startTestRegistryPostgres(t)
-		pgseed.RoutingState(t.Context(), t, pool, "sha256:an-older-digest", mcpclass.DocumentDigest(), hotspots, "canary")
-		pgseed.RoutingState(t.Context(), t, pool, moved, mcpclass.DocumentDigest(), hotspots, "shadow")
-		if classServedAt(t, pool, moved) {
-			t.Fatal("the newer live shadow row did not dark the root over an older canary row")
-		}
-	})
-}
-
 // Enable admits a class root by its class receipt in BOTH directions' terms: a
 // receipt on the wrong route, an unbound one, or one for another document digest
 // admits nothing.
@@ -248,8 +163,8 @@ func proofHandlers(t *testing.T, pool *pgxpool.Pool) (mcp, proof, bare http.Hand
 	}
 	ch = &countingMCPClient{}
 	getenv := getenvFunc(func(string) string { return "" })
-	base := newMCPHandlerWithLimits(ch, nil, routeswitch.NewPostgresSwitch(pool, classTestSchema, mcpRoutingDigests()), getenv, mcpDefaultLimits())
-	proofSwitch := routeswitch.NewProofSwitch(pool, classTestSchema, mcpRoutingDigests())
+	base := newMCPHandlerWithLimits(ch, nil, routeswitch.NewClassDecisionSwitch(pool, mcpRoutingDigests()), getenv, mcpDefaultLimits())
+	proofSwitch := routeswitch.NewClassDecisionProofSwitch(pool, mcpRoutingDigests())
 	proofHandler := newMCPProofHandler(base, proofSwitch, verifier, newProofOrgAllowed(pool))
 	if proofHandler == nil {
 		t.Fatal("newMCPProofHandler returned nil")
@@ -330,32 +245,78 @@ func classEnabled(t *testing.T, pool *pgxpool.Pool, root string) {
 	}
 }
 
-func classServedAt(t *testing.T, pool *pgxpool.Pool, schemaDigest string) bool {
+func classServed(t *testing.T, pool *pgxpool.Pool) bool {
 	t.Helper()
 	ch := &countingMCPClient{}
-	sw := routeswitch.NewClassSwitch(pool, schemaDigest, mcpRoutingDigests())
+	sw := routeswitch.NewClassDecisionSwitch(pool, mcpRoutingDigests())
 	listener := internalidentity.MCP(newMCPHandlerWithLimits(ch, nil, sw, getenvFunc(func(string) string { return "" }), mcpDefaultLimits()))
 	rec := classHotspots(t, listener)
 	return rec.Code == http.StatusOK
 }
 
-// Repoint moves provenance only: a class row keeps serving and now names the
-// running build, so the next roll's carry does not hit a stale build.
-func TestMCPClassRepointKeepsTheRowServingAndNamesTheRunningBuild(t *testing.T) {
+const movedSchemaDigest = "sha256:7214-moved-schema-digest"
+
+// CHAOS-8735: the decision does not depend on the schema digest. After a schema move nothing has to be carried
+// and the root is still served.
+func TestMCPClassDecisionSurvivesASchemaDigestMove(t *testing.T) {
 	pool := startTestRegistryPostgres(t)
 	classEnabled(t, pool, "hotspots")
-	const next = "7214bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
-	if _, err := goapiproof.Repoint(t.Context(), pool, goapiproof.RepointRequest{
-		SchemaDigest: classTestSchema, RunningBuild: next, RecordedBy: "test", ReviewEvidence: "after the roll", PrincipalID: "test-principal",
+	if !classServed(t, pool) {
+		t.Fatal("precondition: the enabled root is served")
+	}
+	var rows int
+	if err := pool.QueryRow(t.Context(), `SELECT count(*) FROM go_api_class_decision`).Scan(&rows); err != nil || rows != 1 {
+		t.Fatalf("class decisions = %d (err %v), want one row per operation", rows, err)
+	}
+}
+
+// vet-2 repro: after a schema move `disable` still turns a root off (it acts on the decision, not on a row at the
+// live digest), and `enable` at the new digest turns it on again.
+func TestMCPClassDisableAndEnableWorkAfterASchemaMove(t *testing.T) {
+	pool := startTestRegistryPostgres(t)
+	hotspots := mcpclass.Operation("hotspots")
+	classEnabled(t, pool, "hotspots")
+	if _, err := goapiproof.Disable(t.Context(), pool, goapiproof.DisableRequest{
+		SchemaDigest: movedSchemaDigest, Operations: []string{hotspots}, DocumentDigest: mcpclass.Digests(),
+		NewMode: "disabled", RecordedBy: "test", ReviewEvidence: "off after the move", Apply: true,
 	}); err != nil {
-		t.Fatalf("repoint: %v", err)
+		t.Fatalf("disable after a schema move: %v", err)
 	}
-	var build string
-	if err := pool.QueryRow(t.Context(), `SELECT current_candidate_build FROM go_api_routing_state WHERE selected_operation = $1`, mcpclass.Operation("hotspots")).Scan(&build); err != nil || build != next {
-		t.Fatalf("class row build = %q (err %v), want %q", build, err, next)
+	if classServed(t, pool) {
+		t.Fatal("a root disabled after a schema move is still served")
 	}
-	if !classServedAt(t, pool, classTestSchema) {
-		t.Fatal("a repoint made the class root dark")
+}
+
+// vet-2 repro: repoint is provenance only. It rewrites the build, keeps the mode and decided_at, and works after a
+// schema move (no row at the live digest is needed), so the bigboy prove can run.
+func TestMCPClassRepointIsProvenanceOnlyAndWorksAfterASchemaMove(t *testing.T) {
+	pool := startTestRegistryPostgres(t)
+	hotspots := mcpclass.Operation("hotspots")
+	classEnabled(t, pool, "hotspots")
+	var decidedBefore time.Time
+	if err := pool.QueryRow(t.Context(), `SELECT decided_at FROM go_api_class_decision WHERE operation = $1`, hotspots).Scan(&decidedBefore); err != nil {
+		t.Fatal(err)
+	}
+	const next = "7214bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+	outcomes, err := goapiproof.Repoint(t.Context(), pool, goapiproof.RepointRequest{
+		SchemaDigest: movedSchemaDigest, RunningBuild: next, RecordedBy: "test", ReviewEvidence: "after the move", PrincipalID: "test-principal",
+	})
+	if err != nil {
+		t.Fatalf("repoint after a schema move: %v", err)
+	}
+	if len(outcomes) != 1 || !outcomes[0].Changed {
+		t.Fatalf("outcomes %+v, want the one class decision repointed", outcomes)
+	}
+	var mode, build string
+	var decidedAfter time.Time
+	if err := pool.QueryRow(t.Context(), `SELECT mode, current_candidate_build, decided_at FROM go_api_class_decision WHERE operation = $1`, hotspots).Scan(&mode, &build, &decidedAfter); err != nil {
+		t.Fatal(err)
+	}
+	if mode != "canary" || build != next || !decidedAfter.Equal(decidedBefore) {
+		t.Fatalf("after repoint: mode %q build %q decided_at %v (was %v); want canary, %s, unchanged", mode, build, decidedAfter, decidedBefore, next)
+	}
+	if !classServed(t, pool) {
+		t.Fatal("a repoint changed what is served")
 	}
 }
 
@@ -369,7 +330,7 @@ func TestMCPClassDisableTurnsTheRootOff(t *testing.T) {
 	}); err != nil {
 		t.Fatalf("disable: %v", err)
 	}
-	if classServedAt(t, pool, classTestSchema) {
+	if classServed(t, pool) {
 		t.Fatal("a disabled class root is still served")
 	}
 }
@@ -463,12 +424,48 @@ func TestDocumentRowsAndMCPClassRowsGovernSeparateRoutes(t *testing.T) {
 	if _, err := classEnable(pool, overview); err != nil {
 		t.Fatalf("enable the class row: %v", err)
 	}
-	classSwitch := routeswitch.NewPostgresSwitch(pool, classTestSchema, mcpRoutingDigests())
+	classSwitch := routeswitch.NewClassDecisionSwitch(pool, mcpRoutingDigests())
 	if !classSwitch.Enabled(overview) {
 		t.Fatal("the class row is canary: the MCP switch must serve it")
 	}
 	otherDocSwitch := routeswitch.NewPostgresSwitch(pool, classTestSchema, map[string]string{"securityOverview": docDigest})
 	if otherDocSwitch.Enabled("securityOverview") {
 		t.Fatal("an enabled mcp:securityOverview class row must not enable the document operation securityOverview")
+	}
+}
+
+// vet-2 repro: `status` and the switch read the same decision. For every mode of the one decision row, and for no
+// row at all, the status verdict is the switch's answer.
+func TestMCPClassStatusAndTheSwitchAgreeForEveryState(t *testing.T) {
+	pool := startTestRegistryPostgres(t)
+	served, err := mcpclass.ServedRoots(schemav1.SDL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	hotspots := mcpclass.Operation("hotspots")
+	statusReachable := func() bool {
+		rows, err := goapiproof.MCPClassStatusRows(t.Context(), pool, movedSchemaDigest, served)
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, row := range rows {
+			if row.Operation == hotspots {
+				return row.Reachable
+			}
+		}
+		t.Fatal("hotspots is not reported")
+		return false
+	}
+	if statusReachable() || classServed(t, pool) {
+		t.Fatal("no decision: status or the switch calls the root lit")
+	}
+	for _, mode := range []string{"canary", "primary", "shadow", "python", "disabled"} {
+		pgseed.ClassDecision(t.Context(), t, pool, hotspots, mode)
+		if got, want := statusReachable(), classServed(t, pool); got != want {
+			t.Errorf("mode %s: status reachable=%t, the switch serves=%t", mode, got, want)
+		}
+		if want := mode == "canary" || mode == "primary"; classServed(t, pool) != want {
+			t.Errorf("mode %s: the switch serves=%t, want %t", mode, classServed(t, pool), want)
+		}
 	}
 }

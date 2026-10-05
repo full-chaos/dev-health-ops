@@ -103,14 +103,14 @@ ON CONFLICT (schema_digest, document_digest, selected_operation) DO UPDATE SET m
 		schemaDigest, documentDigest, operation, mode)
 }
 
-// RoutingStateAt is RoutingState with an explicit updated_at, for a test that needs rows of one operation at
-// different digests in a stated order of age.
-func RoutingStateAt(ctx context.Context, t testing.TB, pool *pgxpool.Pool, schemaDigest, documentDigest, operation, mode string, updatedAt time.Time) {
+// ClassDecision upserts the go_api_class_decision row of one MCP class operation (CHAOS-8735): the single,
+// digest-free decision of the root.
+func ClassDecision(ctx context.Context, t testing.TB, pool *pgxpool.Pool, operation, mode string) {
 	t.Helper()
-	RoutingState(ctx, t, pool, schemaDigest, documentDigest, operation, mode)
-	exec(ctx, t, pool, "go_api routing state updated_at", `
-UPDATE go_api_routing_state SET updated_at = $4 WHERE schema_digest = $1 AND document_digest = $2 AND selected_operation = $3`,
-		schemaDigest, documentDigest, operation, updatedAt)
+	exec(ctx, t, pool, "go_api class decision", `
+INSERT INTO go_api_class_decision (operation, mode, current_candidate_build, schema_digest)
+VALUES ($1, $2, 'test-build', 'sha256:test')
+ON CONFLICT (operation) DO UPDATE SET mode = $2, decided_at = now()`, operation, mode)
 }
 
 // SetFeatureFlag makes key exist with exactly this floor and enabled state, replacing the row the

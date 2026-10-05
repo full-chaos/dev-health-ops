@@ -245,6 +245,13 @@ func Disable(ctx context.Context, pool *pgxpool.Pool, request DisableRequest) ([
 	if err := request.validate(); err != nil {
 		return nil, err
 	}
+	// CHAOS-8735: MCP class roots are decided by go_api_class_decision, one row per operation.
+	if class, document := splitClassOperations(request.Operations); len(class) > 0 {
+		if len(document) > 0 {
+			return nil, errMixedClassAndDocument
+		}
+		return disableClassDecisions(ctx, pool, request)
+	}
 
 	tx, err := pool.Begin(ctx)
 	if err != nil {

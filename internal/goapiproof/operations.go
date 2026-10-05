@@ -1179,6 +1179,17 @@ var operationSpecs = map[string]OperationSpec{
 			}}
 		},
 	},
+	// coverageBaselines (CHAOS-8111) is Go-only from its first day: no Python
+	// resolver ever existed. Its two floats are ClickHouse avg() values of the
+	// stored daily percentages; with no baseline answer to compare with, no
+	// Tier-B leaf is declared. The request is the web's: the day after the
+	// window's last day, and no scope.
+	"coverageBaselines": {
+		ResponseRoot: "coverageBaselines",
+		Variables: func(orgID string, w Window) map[string]any {
+			return map[string]any{"orgId": orgID, "endDate": w.UntilDate}
+		},
+	},
 	"throughputForecast": {
 		ResponseRoot: "throughputForecast",
 		RootNullable: true,

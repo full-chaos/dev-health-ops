@@ -236,7 +236,7 @@ WHERE org_id = ? AND repo_id = toUUID(?) AND run_id = 'run-1' AND suite_id = 'su
 		"testops_quality_drag",
 		"testops_pipeline_stability",
 	} {
-		assertTestopsDailyTeam(ctx, t, conn, table, orgID, repoUUID, testopsAuthoritativeTeamID)
+		assertTestopsDailyTeam(ctx, t, conn, table, orgID, repoUUID, testopsAuthoritativeTeamID, testopsDailyTeamReadPlain)
 	}
 
 	var confidenceScore float64

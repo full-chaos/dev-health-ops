@@ -314,10 +314,11 @@ func TestNativeTestopsExecutorsWriteTheirTablesAgainstRealClickHouse(t *testing.
 		name     string
 		executor NativeFamilyExecutor
 		table    string
+		readMode testopsDailyTeamReadMode
 	}{
-		{"testops_pipeline", pipelineExecutor, "testops_pipeline_metrics_daily"},
-		{"testops_test", testExecutor, "testops_test_metrics_daily"},
-		{"testops_coverage", coverageExecutor, "testops_coverage_metrics_daily"},
+		{"testops_pipeline", pipelineExecutor, "testops_pipeline_metrics_daily", testopsDailyTeamReadFinal},
+		{"testops_test", testExecutor, "testops_test_metrics_daily", testopsDailyTeamReadFinal},
+		{"testops_coverage", coverageExecutor, "testops_coverage_metrics_daily", testopsDailyTeamReadFinal},
 	} {
 		written, err := spec.executor.ComputeFamily(ctx, run, partition)
 		if err != nil {
@@ -347,7 +348,7 @@ func TestNativeTestopsExecutorsWriteTheirTablesAgainstRealClickHouse(t *testing.
 		if stored != uint64(written) {
 			t.Fatalf("%s wrote %d rows but reported %d", spec.name, stored, written)
 		}
-		assertTestopsDailyTeam(ctx, t, conn, spec.table, orgID, repoID, testopsAuthoritativeTeamID)
+		assertTestopsDailyTeam(ctx, t, conn, spec.table, orgID, repoID, testopsAuthoritativeTeamID, spec.readMode)
 		if spec.name == "testops_pipeline" {
 			assertMergedTestopsPipelineRow(ctx, t, conn, orgID, repoID, testopsAuthoritativeTeamID)
 		}
@@ -447,13 +448,29 @@ VALUES (?, 'github', ?, ?, ?, 'exact', 'inferred', ?, ?, 0, ?, NULL, ?)`,
 	}
 }
 
+type testopsDailyTeamReadMode uint8
+
+const (
+	testopsDailyTeamReadPlain testopsDailyTeamReadMode = iota
+	testopsDailyTeamReadFinal
+)
+
 func assertTestopsDailyTeam(
 	ctx context.Context, t *testing.T, conn driver.Conn, table, orgID string, repoID uuid.UUID, wantTeam string,
+	readMode testopsDailyTeamReadMode,
 ) {
 	t.Helper()
+	final := ""
+	switch readMode {
+	case testopsDailyTeamReadPlain:
+	case testopsDailyTeamReadFinal:
+		final = " FINAL"
+	default:
+		t.Fatalf("unknown TestOps daily read mode %d", readMode)
+	}
 	var team *string
 	if err := conn.QueryRow(ctx,
-		fmt.Sprintf("SELECT team_id FROM %s FINAL WHERE org_id = ? AND repo_id = ?", table),
+		fmt.Sprintf("SELECT team_id FROM %s%s WHERE org_id = ? AND repo_id = ?", table, final),
 		orgID, repoID,
 	).Scan(&team); err != nil {
 		t.Fatalf("%s team readback: %v", table, err)

@@ -9,6 +9,7 @@ import (
 	"errors"
 	"net/http"
 	"testing"
+	"time"
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgconn"
@@ -234,12 +235,18 @@ func auditDisplayNamesDiagnostic(
 		}
 
 		for _, fixture := range fixtures {
-			query := admininternal.AuditLogJoinDiagnosticSQLForTest() + ` WHERE a.id = $1 AND a.org_id = $2`
-			queryHash := sha256.Sum256([]byte(query))
+			joinQuery := admininternal.AuditLogJoinDiagnosticSQLForTest() + ` WHERE a.id = $1 AND a.org_id = $2`
+			projectionQuery := admininternal.AuditLogProjectionSQLForTest() + ` WHERE a.id = $1 AND a.org_id = $2`
+			planQuery := admininternal.AuditLogProjectionExplainSQLForTest() + ` WHERE a.id = $1 AND a.org_id = $2`
+			joinQueryHash := sha256.Sum256([]byte(joinQuery))
+			projectionQueryHash := sha256.Sum256([]byte(projectionQuery))
+			planQueryHash := sha256.Sum256([]byte(planQuery))
 			parameterHash := sha256.Sum256([]byte(fixture.logID.String() + "|" + orgID.String()))
+			joinIssuedAt := time.Now().UTC()
 			state, err := admininternal.AuditLogJoinStateForTest(
-				connection.pool.QueryRow(ctx, query, fixture.logID, orgID),
+				connection.pool.QueryRow(ctx, joinQuery, fixture.logID, orgID),
 			)
+			joinResultAt := time.Now().UTC()
 			requireAuditDisplayDiagnostic(t, connection.name, fixture.action, "exact-audit-log-from", err)
 			branch, known := auditDisplaySelectedBranchState(fixture.action, state)
 			if !known {
@@ -248,17 +255,51 @@ func auditDisplayNamesDiagnostic(
 
 			// This second query is only for the production scanner and encoder.
 			// All join predicates and aliases are measured by query above.
+			projectionIssuedAt := time.Now().UTC()
 			projectionFound, projectionResourceDisplayNamePresent, encodedResourceDisplayNamePresent, err := admininternal.AuditLogResourceDisplayNameStateForTest(
-				connection.pool.QueryRow(ctx, admininternal.AuditLogProjectionSQLForTest()+` WHERE a.id = $1 AND a.org_id = $2`, fixture.logID, orgID),
+				connection.pool.QueryRow(ctx, projectionQuery, fixture.logID, orgID),
 			)
+			projectionResultAt := time.Now().UTC()
 			requireAuditDisplayDiagnostic(t, connection.name, fixture.action, "production-projection-and-scan", err)
 
-			t.Logf("audit display diagnostic role=%s endpoint_status=%d action=%s query_sha256=%x params_sha256=%x param_types=uuid,uuid selected_resource_type=%s organization={type=%t,uuid=%t,target=%t,scope=%t,alias=%t,display=%t} provider={type=%t,uuid=%t,target=%t,scope=%t,alias=%t,display=%t} source={type=%t,uuid=%t,target=%t,scope=%t,alias=%t,display=%t} token={type=%t,uuid=%t,target=%t,scope=%t,alias=%t,display=%t} production_case_projection_found=%t production_case_projection_present=%t production_encoder_resource_display_name_present=%t",
+			planIssuedAt := time.Now().UTC()
+			plan, err := admininternal.AuditLogProjectionPlanForTest(
+				connection.pool.QueryRow(ctx, planQuery, fixture.logID, orgID),
+			)
+			planResultAt := time.Now().UTC()
+			requireAuditDisplayDiagnostic(t, connection.name, fixture.action, "exact-production-projection-plan", err)
+			planAlias, planRelation, known := auditDisplayPlanAlias(fixture.action)
+			if !known {
+				t.Fatalf("audit display diagnostic action=%s has no plan alias", fixture.action)
+			}
+			basePlan, basePlanPresent := plan.Nodes["a"]
+			targetPlan, targetPlanPresent := plan.Nodes[planAlias]
+			timingMeasured := auditDisplayTimestampPairMeasured(joinIssuedAt, joinResultAt) &&
+				auditDisplayTimestampPairMeasured(projectionIssuedAt, projectionResultAt) &&
+				auditDisplayTimestampPairMeasured(planIssuedAt, planResultAt)
+			basePlanMeasured := auditDisplayPlanNodeMeasured(basePlan, "a", "audit_logs")
+			targetPlanMeasured := auditDisplayPlanNodeMeasured(targetPlan, planAlias, planRelation)
+			typeMeasured := auditDisplayBranchTypesMeasured(fixture.action, state, branch)
+
+			t.Logf("audit display diagnostic role=%s endpoint_status=%d action=%s join_query_sha256=%x projection_query_sha256=%x plan_query_sha256=%x params_sha256=%x param_types=uuid,uuid process_utc=%s join_issued_utc=%s join_result_utc=%s projection_issued_utc=%s projection_result_utc=%s plan_issued_utc=%s plan_result_utc=%s input_types={resource_id=%s,org_id=%s} selected_types={target_id=%s,target_org_id=%s} selected_resource_type=%s organization={type=%t,uuid=%t,target=%t,scope=%t,alias=%t,display=%t} provider={type=%t,uuid=%t,target=%t,scope=%t,alias=%t,display=%t} source={type=%t,uuid=%t,target=%t,scope=%t,alias=%t,display=%t} token={type=%t,uuid=%t,target=%t,scope=%t,alias=%t,display=%t} production_case_projection_found=%t production_case_projection_present=%t production_encoder_resource_display_name_present=%t plan_base={present=%t,node=%s,join=%s,relation=%s,alias=%s,rows=%g,rows_present=%t,loops=%g,loops_present=%t,join_filter=%t,hash_cond=%t,merge_cond=%t,index_cond=%t,filter=%t} plan_target={present=%t,node=%s,join=%s,relation=%s,alias=%s,rows=%g,rows_present=%t,loops=%g,loops_present=%t,join_filter=%t,hash_cond=%t,merge_cond=%t,index_cond=%t,filter=%t}",
 				connection.name,
 				endpointStatus,
 				fixture.action,
-				queryHash,
+				joinQueryHash,
+				projectionQueryHash,
+				planQueryHash,
 				parameterHash,
+				time.Now().UTC().Format(time.RFC3339Nano),
+				joinIssuedAt.Format(time.RFC3339Nano),
+				joinResultAt.Format(time.RFC3339Nano),
+				projectionIssuedAt.Format(time.RFC3339Nano),
+				projectionResultAt.Format(time.RFC3339Nano),
+				planIssuedAt.Format(time.RFC3339Nano),
+				planResultAt.Format(time.RFC3339Nano),
+				state.ResourceIDType,
+				state.OrgIDType,
+				branch.TargetIDType,
+				branch.TargetOrgIDType,
 				state.ResourceType,
 				state.Organization.ResourceTypeMatches,
 				state.Organization.UUIDGuardMatches,
@@ -287,9 +328,37 @@ func auditDisplayNamesDiagnostic(
 				projectionFound,
 				projectionResourceDisplayNamePresent,
 				encodedResourceDisplayNamePresent,
+				basePlanPresent,
+				basePlan.NodeType,
+				basePlan.JoinType,
+				basePlan.RelationName,
+				basePlan.Alias,
+				basePlan.ActualRows,
+				basePlan.ActualRowsPresent,
+				basePlan.ActualLoops,
+				basePlan.ActualLoopsPresent,
+				basePlan.JoinFilterPresent,
+				basePlan.HashCondPresent,
+				basePlan.MergeCondPresent,
+				basePlan.IndexCondPresent,
+				basePlan.FilterPresent,
+				targetPlanPresent,
+				targetPlan.NodeType,
+				targetPlan.JoinType,
+				targetPlan.RelationName,
+				targetPlan.Alias,
+				targetPlan.ActualRows,
+				targetPlan.ActualRowsPresent,
+				targetPlan.ActualLoops,
+				targetPlan.ActualLoopsPresent,
+				targetPlan.JoinFilterPresent,
+				targetPlan.HashCondPresent,
+				targetPlan.MergeCondPresent,
+				targetPlan.IndexCondPresent,
+				targetPlan.FilterPresent,
 			)
-			if !auditDisplayBranchMeasured(branch) || !projectionFound || !projectionResourceDisplayNamePresent || !encodedResourceDisplayNamePresent {
-				t.Errorf("audit display diagnostic action=%s selected={type=%t,uuid=%t,target=%t,scope=%t,alias=%t,display=%t} production_projection={found=%t,scan=%t,encode=%t}",
+			if !auditDisplayBranchMeasured(branch) || !projectionFound || !projectionResourceDisplayNamePresent || !encodedResourceDisplayNamePresent || !timingMeasured || !basePlanMeasured || !targetPlanMeasured || !typeMeasured {
+				t.Errorf("audit display diagnostic action=%s selected={type=%t,uuid=%t,target=%t,scope=%t,alias=%t,display=%t} production_projection={found=%t,scan=%t,encode=%t} timing_measured=%t base_plan_measured=%t target_plan_measured=%t type_measured=%t",
 					fixture.action,
 					branch.ResourceTypeMatches,
 					branch.UUIDGuardMatches,
@@ -300,6 +369,10 @@ func auditDisplayNamesDiagnostic(
 					projectionFound,
 					projectionResourceDisplayNamePresent,
 					encodedResourceDisplayNamePresent,
+					timingMeasured,
+					basePlanMeasured,
+					targetPlanMeasured,
+					typeMeasured,
 				)
 			}
 		}
@@ -323,6 +396,43 @@ func auditDisplaySelectedBranchState(action string, state admininternal.AuditLog
 
 func auditDisplayBranchMeasured(branch admininternal.AuditLogJoinBranchStateForTest) bool {
 	return branch.ResourceTypeMatches && branch.UUIDGuardMatches && branch.TargetIDMatches && branch.TargetScopeMatches && branch.JoinedRowPresent && branch.DisplayPresent
+}
+
+func auditDisplayPlanAlias(action string) (alias, relation string, ok bool) {
+	switch action {
+	case "organization":
+		return "resource_org", "organizations", true
+	case "sso-provider":
+		return "provider", "sso_providers", true
+	case "ingest-source":
+		return "source", "external_ingest_sources", true
+	case "ingest-token":
+		return "token", "external_ingest_tokens", true
+	default:
+		return "", "", false
+	}
+}
+
+func auditDisplayBranchTypesMeasured(action string, state admininternal.AuditLogJoinDiagnosticStateForTest, branch admininternal.AuditLogJoinBranchStateForTest) bool {
+	if state.ResourceIDType != "text" || state.OrgIDType != "uuid" || branch.TargetIDType != "uuid" {
+		return false
+	}
+	switch action {
+	case "organization", "sso-provider":
+		return branch.TargetOrgIDType == "uuid"
+	case "ingest-source", "ingest-token":
+		return branch.TargetOrgIDType == "text"
+	default:
+		return false
+	}
+}
+
+func auditDisplayTimestampPairMeasured(issued, result time.Time) bool {
+	return !issued.IsZero() && !result.IsZero() && !result.Before(issued)
+}
+
+func auditDisplayPlanNodeMeasured(node admininternal.AuditLogPlanNodeForTest, wantAlias, wantRelation string) bool {
+	return node.NodeType != "" && node.Alias == wantAlias && node.RelationName == wantRelation && node.ActualRowsPresent && node.ActualLoopsPresent
 }
 
 func requireAuditDisplayDiagnostic(t *testing.T, role, action, probe string, err error) {

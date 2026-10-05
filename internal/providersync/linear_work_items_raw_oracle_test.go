@@ -98,7 +98,7 @@ func TestLinearDependencyMatchesFrozenPythonProductionRows(t *testing.T) {
 			},
 		},
 		buildLinearDependencyOracleRow,
-		nil,
+		workItemDependencyColumnsAfterThePythonFreeze,
 	)
 }
 

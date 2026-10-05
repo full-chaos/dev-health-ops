@@ -1,0 +1,16 @@
+query CoverageBaselines($orgId: String!, $endDate: Date!, $repoIds: [String!], $teamIds: [String!]) {
+  coverageBaselines(
+    orgId: $orgId
+    endDate: $endDate
+    repoIds: $repoIds
+    teamIds: $teamIds
+  ) {
+    repoId
+    repoName
+    lineBaselinePct
+    lineDays
+    branchBaselinePct
+    branchDays
+    __typename
+  }
+}

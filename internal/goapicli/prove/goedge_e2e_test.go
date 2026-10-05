@@ -91,7 +91,7 @@ func runAgainstEdge(t *testing.T, edgeURL string, extraArgs ...string) (stdout s
 	if err := os.WriteFile(docsPath, docsJSON, 0o600); err != nil {
 		t.Fatal(err)
 	}
-	pool = &e2ePool{routingRows: [][]any{{"featureFlags", digest, "canary", e2eBuildSHA}}}
+	pool = &e2ePool{}
 	withFakePool(t, pool)
 	withOrgMinter(t, "70d529e0", "70d529e0")
 	reportPath = filepath.Join(t.TempDir(), "report.json")

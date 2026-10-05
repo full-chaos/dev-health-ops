@@ -45,5 +45,20 @@
   "drilldown_links": {
     "prs": "/api/v1/drilldown/prs?metric=deploy_freq",
     "issues": "/api/v1/drilldown/issues?metric=deploy_freq"
-  }
+  },
+  "repositories": [
+    {
+      "id": "repo-a",
+      "name": "webapp",
+      "value": 15.0,
+      "source_url": "https://gitlab.example.com/acme/webapp"
+    },
+    {
+      "id": "44444444-4444-4444-4444-444444444444",
+      "name": null,
+      "value": 16.0,
+      "source_url": null
+    }
+  ],
+  "source_url": null
 }

@@ -777,49 +777,6 @@ migrations:
       #    operator's responsibility, the same as any other digest pin.
       image: ""
       pullPolicy: ""
-    # -- CHAOS-7023/CHAOS-7016/D2811: pre-upgrade routing carry (+ a
-    #    repoint-then-retry fallback for rows that lag the actually-running
-    #    build) and post-upgrade routing repoint, unconditional every roll.
-    #    Rows in go_api_routing_state are keyed by schema_digest; a roll
-    #    that changes the GraphQL SDL computes a new digest and un-routes
-    #    every currently-enabled operation the instant the first new pod
-    #    starts unless carry has already copied those rows forward -- and a
-    #    roll with NO schema change can still leave rows naming a build from
-    #    a PRIOR roll if nothing ever repointed them (the exact gap that hit
-    #    the real rev196 prod roll). No enabled/disabled knob: this is a
-    #    gate, not an optional feature, so both Jobs render whenever
-    #    migrations.hook.enabled is true, on pre-upgrade/post-upgrade only
-    #    (never pre-install -- there is no live query-api to carry FROM on a
-    #    fresh install, carry's whole premise is a process already running).
-    goApiRoutingTools:
-      # -- Image carrying `dho` ON PATH (docker/go-api-tools.Dockerfile) but
-      #    with NO dho ENTRYPOINT set (its CMD is `sleep infinity`, matching
-      #    its other role as the operator's one-off tools pod) -- unlike
-      #    routeActivate.image above, these hooks override `command`
-      #    themselves (a shell chain: mint the routing envelope, then run
-      #    `dho goapi routing carry`/`repoint`), so pin validation here is
-      #    inline in the template rather than a dev-health.pinnedOperatorImageCheck
-      #    call: that helper's identity check requires a bare-dho-entrypoint
-      #    image and explicitly denies dev-health-go-api-tools by name (see
-      #    _helpers.tpl's own comment on why -- it is a real, deliberate
-      #    check for a different invocation shape, not a gap). Same pin-shape
-      #    rule as every other hook image: repo@sha256:<64 hex>, or
-      #    repo:sha-<12 hex>, or repo:local only with pullPolicy Never/
-      #    IfNotPresent -- required, no floating default.
-      image: ""
-      pullPolicy: ""
-      # -- The organization `dho mint envelope` mints the routing bearer
-      #    for. A disposable operator/fixture org, never a real customer
-      #    org -- the envelope only authenticates the /buildinfo read this
-      #    verb makes, it touches no org data. REQUIRED: the render refuses
-      #    an empty value rather than guessing one.
-      mintOrg: ""
-      # -- The post-upgrade repoint hook waits for query-api's rollout: it retries the guarded
-      #    repoint (refused while /buildinfo reports a build other than this image's own commit)
-      #    up to `repointMaxAttempts` times, `repointRetryIntervalSeconds` apart (default 90 x 10s =
-      #    15 minutes), and fails the hook if it never succeeds.
-      repointMaxAttempts: 90
-      repointRetryIntervalSeconds: 10
     backoffLimit: 2
     activeDeadlineSeconds: 1800
     resources:
@@ -1000,6 +957,7 @@ config:
   GITHUB_FETCH_MILESTONES: "true"
   GITHUB_LINEAR_LINKBACK_BOTS: "linear[bot]"
   LINEAR_TRUSTED_SCM_HOSTS: ""
+  JIRA_TRUSTED_SCM_HOSTS: ""
 
 # =============================================================================
 # Secrets
@@ -1024,7 +982,7 @@ secrets:
     # invalidation the Go finalize emits never reaches the API's cache.
     VALKEY_URI: ""
     # -- query-api's OWN connection to the registry tables
-    #    (go_api_candidate_build / go_api_routing_state / go_api_proof_run).
+    #    (go_api_candidate_build / go_api_class_decision / go_api_proof_run).
     #    A dedicated key rather than a widened one: the DSN a long-running
     #    runtime service holds and the one a one-shot migration Job holds are
     #    different credentials with different lifetimes, and today query-api

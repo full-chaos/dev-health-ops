@@ -28,7 +28,6 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/queryapi/workgraph"
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/containers"
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/pgschema"
-	"github.com/full-chaos/dev-health-ops/internal/testsupport/pgseed"
 )
 
 const (
@@ -81,7 +80,7 @@ func (r *fakeRows) Scan(dest ...any) error {
 			// this shared fake previously had no matching case -- every
 			// metric silently stayed nil (Go's zero value for an
 			// unpopulated *uint64 struct field) while
-			// TestComplexityTimeseriesRoute_ReachableOnlyWhenSwitchEnabled
+			// TestComplexityTimeseriesRoute_IsServedByTheCatalog
 			// kept passing because it only asserted the repo label, not
 			// any metric value. A nil row[i] here mirrors a real NULL
 			// column value; a non-nil one allocates and populates, same
@@ -325,17 +324,6 @@ func startTestRegistryPostgres(t *testing.T) *pgxpool.Pool {
 	return pool
 }
 
-// setRoutingMode upserts the go_api_routing_state row for one
-// (schema_digest, document_digest, selected_operation) triple. operation
-// is CHAOS-4368 Wave 2's generalization -- Wave 1 hardcoded
-// 'featureFlags' here since it was the only operation this route ever
-// mounted; a second operation (reviewEdges) now needs its own
-// independently-gated row.
-func setRoutingMode(t *testing.T, pool *pgxpool.Pool, documentDigest, operation, mode string) {
-	t.Helper()
-	pgseed.RoutingState(context.Background(), t, pool, itTestSchemaDigest, documentDigest, operation, mode)
-}
-
 func postGraphQL(t *testing.T, handler http.HandlerFunc, query, bearer string) *httptest.ResponseRecorder {
 	t.Helper()
 	return postGraphQLWithVariables(t, handler, query, bearer, map[string]any{
@@ -368,7 +356,7 @@ func postGraphQLWithVariables(t *testing.T, handler http.HandlerFunc, query, bea
 	return rec
 }
 
-// TestFeatureFlagsRoute_ReachableOnlyWhenSwitchEnabled is the CHAOS-4367
+// TestFeatureFlagsRoute_IsServedByTheCatalog is the CHAOS-4367
 // Wave-1-specific extension of routeswitch's generic table-driven
 // reachability test: it exercises the REAL HTTP handler this wave mounts
 // (newQueryHandler: real Mux, real PostgresSwitch reading a real Postgres
@@ -376,7 +364,7 @@ func postGraphQLWithVariables(t *testing.T, handler http.HandlerFunc, query, bea
 // handlerNamed stand-in -- proving the featureFlags route in query-api is
 // live only when go_api_routing_state says so, end to end through the
 // actual HTTP entry point.
-func TestFeatureFlagsRoute_ReachableOnlyWhenSwitchEnabled(t *testing.T) {
+func TestFeatureFlagsRoute_IsServedByTheCatalog(t *testing.T) {
 	pool := startTestRegistryPostgres(t)
 
 	pub, priv, err := ed25519.GenerateKey(nil)
@@ -390,7 +378,6 @@ func TestFeatureFlagsRoute_ReachableOnlyWhenSwitchEnabled(t *testing.T) {
 	}
 
 	handler, _, _, _, _ := newQueryHandler(&fakeCHClient{}, pool, verifier, itTestSchemaDigest, os.Getenv)
-	documentDigest := digestHex(registeredFeatureFlagsDocument)
 	token := signTestEnvelope(t, priv, "org-1")
 
 	// CHAOS-8517: this subtest was "disabled_by_default" and pinned 404 for an operation with no
@@ -406,16 +393,7 @@ func TestFeatureFlagsRoute_ReachableOnlyWhenSwitchEnabled(t *testing.T) {
 		}
 	})
 
-	t.Run("mode_python_unreachable", func(t *testing.T) {
-		setRoutingMode(t, pool, documentDigest, "featureFlags", "python")
-		rec := postGraphQL(t, handler, registeredFeatureFlagsDocument, token)
-		if rec.Code != http.StatusNotFound {
-			t.Fatalf("mode=python: got %d, want 404", rec.Code)
-		}
-	})
-
 	t.Run("mode_canary_reachable_and_returns_data", func(t *testing.T) {
-		setRoutingMode(t, pool, documentDigest, "featureFlags", "canary")
 		rec := postGraphQL(t, handler, registeredFeatureFlagsDocument, token)
 		if rec.Code != http.StatusOK {
 			t.Fatalf("mode=canary: got %d, body=%s", rec.Code, rec.Body.String())
@@ -426,7 +404,6 @@ func TestFeatureFlagsRoute_ReachableOnlyWhenSwitchEnabled(t *testing.T) {
 	})
 
 	t.Run("unregistered_document_is_unreachable_even_when_enabled", func(t *testing.T) {
-		setRoutingMode(t, pool, documentDigest, "featureFlags", "canary")
 		rec := postGraphQL(t, handler, "query { __typename }", token)
 		if rec.Code != http.StatusNotFound {
 			t.Fatalf("unregistered document: got %d, want 404", rec.Code)
@@ -434,31 +411,12 @@ func TestFeatureFlagsRoute_ReachableOnlyWhenSwitchEnabled(t *testing.T) {
 	})
 
 	t.Run("missing_bearer_token_is_unauthorized_even_when_enabled", func(t *testing.T) {
-		setRoutingMode(t, pool, documentDigest, "featureFlags", "canary")
 		rec := postGraphQL(t, handler, registeredFeatureFlagsDocument, "")
 		if rec.Code != http.StatusUnauthorized {
 			t.Fatalf("no token: got %d, want 401", rec.Code)
 		}
 	})
 
-	t.Run("rollback_to_disabled_revokes_reachability_immediately", func(t *testing.T) {
-		setRoutingMode(t, pool, documentDigest, "featureFlags", "canary")
-		rec := postGraphQL(t, handler, registeredFeatureFlagsDocument, token)
-		if rec.Code != http.StatusOK {
-			t.Fatalf("expected 200 before rollback, got %d", rec.Code)
-		}
-		// Status-code-only would pass even for a GraphQL-level error
-		// response (gqlgen returns HTTP 200 for a field error, not just a
-		// successful result) -- assert the body actually carries real
-		// data, not an error masquerading as a 200.
-		if strings.Contains(rec.Body.String(), `"errors"`) || !strings.Contains(rec.Body.String(), "flag-a") {
-			t.Fatalf("expected a real featureFlags result before rollback, got %s", rec.Body.String())
-		}
-		setRoutingMode(t, pool, documentDigest, "featureFlags", "disabled")
-		if rec := postGraphQL(t, handler, registeredFeatureFlagsDocument, token); rec.Code != http.StatusNotFound {
-			t.Fatalf("expected 404 immediately after rollback, got %d", rec.Code)
-		}
-	})
 }
 
 func reviewEdgesVariables() map[string]any {
@@ -472,14 +430,14 @@ func reviewEdgesVariables() map[string]any {
 	}
 }
 
-// TestReviewEdgesRoute_ReachableOnlyWhenSwitchEnabled is CHAOS-4368 Wave
-// 2's extension of TestFeatureFlagsRoute_ReachableOnlyWhenSwitchEnabled to
+// TestReviewEdgesRoute_IsServedByTheCatalog is CHAOS-4368 Wave
+// 2's extension of TestFeatureFlagsRoute_IsServedByTheCatalog to
 // the SECOND operation this route now mounts: it exercises the same real
 // HTTP handler (newQueryHandler: real Mux, real PostgresSwitch reading a
 // real Postgres table, real gqlgen server, real principal.Verifier), this
 // time dispatching reviewEdges, proving its reachability is gated
 // independently by its OWN go_api_routing_state row.
-func TestReviewEdgesRoute_ReachableOnlyWhenSwitchEnabled(t *testing.T) {
+func TestReviewEdgesRoute_IsServedByTheCatalog(t *testing.T) {
 	pool := startTestRegistryPostgres(t)
 
 	pub, priv, err := ed25519.GenerateKey(nil)
@@ -493,7 +451,6 @@ func TestReviewEdgesRoute_ReachableOnlyWhenSwitchEnabled(t *testing.T) {
 	}
 
 	handler, _, _, _, _ := newQueryHandler(&fakeReviewEdgesCHClient{}, pool, verifier, itTestSchemaDigest, os.Getenv)
-	documentDigest := digestHex(registeredReviewEdgesDocument)
 	token := signTestEnvelope(t, priv, "org-1")
 
 	// CHAOS-8517: this subtest was "disabled_by_default" and pinned 404 for an operation with no
@@ -507,7 +464,6 @@ func TestReviewEdgesRoute_ReachableOnlyWhenSwitchEnabled(t *testing.T) {
 	})
 
 	t.Run("mode_canary_reachable_and_returns_data", func(t *testing.T) {
-		setRoutingMode(t, pool, documentDigest, "reviewEdges", "canary")
 		rec := postGraphQLWithVariables(t, handler, registeredReviewEdgesDocument, token, reviewEdgesVariables())
 		if rec.Code != http.StatusOK {
 			t.Fatalf("mode=canary: got %d, body=%s", rec.Code, rec.Body.String())
@@ -528,7 +484,6 @@ func TestReviewEdgesRoute_ReachableOnlyWhenSwitchEnabled(t *testing.T) {
 	})
 
 	t.Run("unregistered_document_is_unreachable_even_when_enabled", func(t *testing.T) {
-		setRoutingMode(t, pool, documentDigest, "reviewEdges", "canary")
 		rec := postGraphQLWithVariables(t, handler, "query { __typename }", token, nil)
 		if rec.Code != http.StatusNotFound {
 			t.Fatalf("unregistered document: got %d, want 404", rec.Code)
@@ -536,45 +491,12 @@ func TestReviewEdgesRoute_ReachableOnlyWhenSwitchEnabled(t *testing.T) {
 	})
 
 	t.Run("missing_bearer_token_is_unauthorized_even_when_enabled", func(t *testing.T) {
-		setRoutingMode(t, pool, documentDigest, "reviewEdges", "canary")
 		rec := postGraphQLWithVariables(t, handler, registeredReviewEdgesDocument, "", reviewEdgesVariables())
 		if rec.Code != http.StatusUnauthorized {
 			t.Fatalf("no token: got %d, want 401", rec.Code)
 		}
 	})
 
-	// The two operations sharing one Mux/PostgresSwitch instance must NOT
-	// leak reachability into each other: enabling reviewEdges must not
-	// make featureFlags (a document this test never registered a routing
-	// row for) reachable, and vice versa -- each go_api_routing_state row
-	// is keyed by its own document_digest AND selected_operation.
-	// CHAOS-8517: this subtest was "enabling_reviewEdges_does_not_enable_featureFlags" and relied on
-	// featureFlags having NO row (404). An operation with no row is served now, so the same property --
-	// a row of one operation does not decide another -- is pinned from the side that still refuses:
-	// featureFlags is held dark by its OWN row, and a canary row of reviewEdges does not lift it.
-	t.Run("a_canary_row_of_reviewEdges_does_not_lift_the_hold_on_featureFlags", func(t *testing.T) {
-		setRoutingMode(t, pool, digestHex(registeredFeatureFlagsDocument), "featureFlags", "disabled")
-		setRoutingMode(t, pool, documentDigest, "reviewEdges", "canary")
-		rec := postGraphQL(t, handler, registeredFeatureFlagsDocument, token)
-		if rec.Code != http.StatusNotFound {
-			t.Fatalf("featureFlags is held dark by its own disabled row and must stay unreachable while only reviewEdges is canaried: got %d", rec.Code)
-		}
-	})
-
-	t.Run("rollback_to_disabled_revokes_reachability_immediately", func(t *testing.T) {
-		setRoutingMode(t, pool, documentDigest, "reviewEdges", "canary")
-		rec := postGraphQLWithVariables(t, handler, registeredReviewEdgesDocument, token, reviewEdgesVariables())
-		if rec.Code != http.StatusOK {
-			t.Fatalf("expected 200 before rollback, got %d", rec.Code)
-		}
-		if strings.Contains(rec.Body.String(), `"errors"`) || !strings.Contains(rec.Body.String(), `"reviewsCount":3`) {
-			t.Fatalf("expected a real reviewEdges result before rollback, got %s", rec.Body.String())
-		}
-		setRoutingMode(t, pool, documentDigest, "reviewEdges", "disabled")
-		if rec := postGraphQLWithVariables(t, handler, registeredReviewEdgesDocument, token, reviewEdgesVariables()); rec.Code != http.StatusNotFound {
-			t.Fatalf("expected 404 immediately after rollback, got %d", rec.Code)
-		}
-	})
 }
 
 func cognitiveLoadVariables() map[string]any {
@@ -587,14 +509,14 @@ func cognitiveLoadVariables() map[string]any {
 	}
 }
 
-// TestCognitiveLoadRoute_ReachableOnlyWhenSwitchEnabled is CHAOS-4369 Wave
-// 3's extension of TestFeatureFlagsRoute_ReachableOnlyWhenSwitchEnabled to
+// TestCognitiveLoadRoute_IsServedByTheCatalog is CHAOS-4369 Wave
+// 3's extension of TestFeatureFlagsRoute_IsServedByTheCatalog to
 // the THIRD operation this route now mounts: it exercises the same real
 // HTTP handler (newQueryHandler: real Mux, real PostgresSwitch reading a
 // real Postgres table, real gqlgen server, real principal.Verifier), this
 // time dispatching cognitiveLoad, proving its reachability is gated
 // independently by its OWN go_api_routing_state row.
-func TestCognitiveLoadRoute_ReachableOnlyWhenSwitchEnabled(t *testing.T) {
+func TestCognitiveLoadRoute_IsServedByTheCatalog(t *testing.T) {
 	pool := startTestRegistryPostgres(t)
 
 	pub, priv, err := ed25519.GenerateKey(nil)
@@ -608,7 +530,6 @@ func TestCognitiveLoadRoute_ReachableOnlyWhenSwitchEnabled(t *testing.T) {
 	}
 
 	handler, _, _, _, _ := newQueryHandler(&fakeCognitiveLoadCHClient{}, pool, verifier, itTestSchemaDigest, os.Getenv)
-	documentDigest := digestHex(registeredCognitiveLoadDocument)
 	token := signTestEnvelope(t, priv, "org-1")
 
 	// CHAOS-8517: this subtest was "disabled_by_default" and pinned 404 for an operation with no
@@ -622,7 +543,6 @@ func TestCognitiveLoadRoute_ReachableOnlyWhenSwitchEnabled(t *testing.T) {
 	})
 
 	t.Run("mode_canary_reachable_and_returns_data", func(t *testing.T) {
-		setRoutingMode(t, pool, documentDigest, "cognitiveLoad", "canary")
 		rec := postGraphQLWithVariables(t, handler, registeredCognitiveLoadDocument, token, cognitiveLoadVariables())
 		if rec.Code != http.StatusOK {
 			t.Fatalf("mode=canary: got %d, body=%s", rec.Code, rec.Body.String())
@@ -633,7 +553,6 @@ func TestCognitiveLoadRoute_ReachableOnlyWhenSwitchEnabled(t *testing.T) {
 	})
 
 	t.Run("unregistered_document_is_unreachable_even_when_enabled", func(t *testing.T) {
-		setRoutingMode(t, pool, documentDigest, "cognitiveLoad", "canary")
 		rec := postGraphQLWithVariables(t, handler, "query { __typename }", token, nil)
 		if rec.Code != http.StatusNotFound {
 			t.Fatalf("unregistered document: got %d, want 404", rec.Code)
@@ -641,45 +560,12 @@ func TestCognitiveLoadRoute_ReachableOnlyWhenSwitchEnabled(t *testing.T) {
 	})
 
 	t.Run("missing_bearer_token_is_unauthorized_even_when_enabled", func(t *testing.T) {
-		setRoutingMode(t, pool, documentDigest, "cognitiveLoad", "canary")
 		rec := postGraphQLWithVariables(t, handler, registeredCognitiveLoadDocument, "", cognitiveLoadVariables())
 		if rec.Code != http.StatusUnauthorized {
 			t.Fatalf("no token: got %d, want 401", rec.Code)
 		}
 	})
 
-	// The three operations sharing one Mux/PostgresSwitch instance must
-	// NOT leak reachability into each other.
-	// CHAOS-8517: this subtest was "enabling_cognitiveLoad_does_not_enable_featureFlags_or_reviewEdges"
-	// and relied on both having NO row (404). An operation with no row is served now, so the same
-	// property is pinned from the side that still refuses: each is held dark by its OWN row, and a
-	// canary row of cognitiveLoad lifts neither.
-	t.Run("a_canary_row_of_cognitiveLoad_does_not_lift_the_hold_on_featureFlags_or_reviewEdges", func(t *testing.T) {
-		setRoutingMode(t, pool, digestHex(registeredFeatureFlagsDocument), "featureFlags", "disabled")
-		setRoutingMode(t, pool, digestHex(registeredReviewEdgesDocument), "reviewEdges", "disabled")
-		setRoutingMode(t, pool, documentDigest, "cognitiveLoad", "canary")
-		if rec := postGraphQL(t, handler, registeredFeatureFlagsDocument, token); rec.Code != http.StatusNotFound {
-			t.Fatalf("featureFlags is held dark by its own disabled row and must stay unreachable while only cognitiveLoad is canaried: got %d", rec.Code)
-		}
-		if rec := postGraphQLWithVariables(t, handler, registeredReviewEdgesDocument, token, reviewEdgesVariables()); rec.Code != http.StatusNotFound {
-			t.Fatalf("reviewEdges is held dark by its own disabled row and must stay unreachable while only cognitiveLoad is canaried: got %d", rec.Code)
-		}
-	})
-
-	t.Run("rollback_to_disabled_revokes_reachability_immediately", func(t *testing.T) {
-		setRoutingMode(t, pool, documentDigest, "cognitiveLoad", "canary")
-		rec := postGraphQLWithVariables(t, handler, registeredCognitiveLoadDocument, token, cognitiveLoadVariables())
-		if rec.Code != http.StatusOK {
-			t.Fatalf("expected 200 before rollback, got %d", rec.Code)
-		}
-		if strings.Contains(rec.Body.String(), `"errors"`) || !strings.Contains(rec.Body.String(), "2026-08-20") {
-			t.Fatalf("expected a real cognitiveLoad result before rollback, got %s", rec.Body.String())
-		}
-		setRoutingMode(t, pool, documentDigest, "cognitiveLoad", "disabled")
-		if rec := postGraphQLWithVariables(t, handler, registeredCognitiveLoadDocument, token, cognitiveLoadVariables()); rec.Code != http.StatusNotFound {
-			t.Fatalf("expected 404 immediately after rollback, got %d", rec.Code)
-		}
-	})
 }
 
 func complexityTimeseriesVariables() map[string]any {
@@ -695,13 +581,13 @@ func complexityTimeseriesVariables() map[string]any {
 	}
 }
 
-// TestComplexityTimeseriesRoute_ReachableOnlyWhenSwitchEnabled is CHAOS-4369
+// TestComplexityTimeseriesRoute_IsServedByTheCatalog is CHAOS-4369
 // Wave 3's extension of the same reachability contract to a THIRD operation
 // this route now mounts: real Mux, real PostgresSwitch reading a real
 // Postgres table, real gqlgen server, real principal.Verifier -- proving
 // complexityTimeseries's reachability is gated independently by its OWN
 // go_api_routing_state row.
-func TestComplexityTimeseriesRoute_ReachableOnlyWhenSwitchEnabled(t *testing.T) {
+func TestComplexityTimeseriesRoute_IsServedByTheCatalog(t *testing.T) {
 	pool := startTestRegistryPostgres(t)
 
 	pub, priv, err := ed25519.GenerateKey(nil)
@@ -715,7 +601,6 @@ func TestComplexityTimeseriesRoute_ReachableOnlyWhenSwitchEnabled(t *testing.T) 
 	}
 
 	handler, _, _, _, _ := newQueryHandler(&fakeComplexityTimeseriesCHClient{}, pool, verifier, itTestSchemaDigest, os.Getenv)
-	documentDigest := digestHex(registeredComplexityTimeseriesDocument)
 	token := signTestEnvelope(t, priv, "org-1")
 
 	// CHAOS-8517: this subtest was "disabled_by_default" and pinned 404 for an operation with no
@@ -729,7 +614,6 @@ func TestComplexityTimeseriesRoute_ReachableOnlyWhenSwitchEnabled(t *testing.T) 
 	})
 
 	t.Run("mode_canary_reachable_and_returns_data", func(t *testing.T) {
-		setRoutingMode(t, pool, documentDigest, "complexityTimeseries", "canary")
 		rec := postGraphQLWithVariables(t, handler, registeredComplexityTimeseriesDocument, token, complexityTimeseriesVariables())
 		if rec.Code != http.StatusOK {
 			t.Fatalf("mode=canary: got %d, body=%s", rec.Code, rec.Body.String())
@@ -746,7 +630,6 @@ func TestComplexityTimeseriesRoute_ReachableOnlyWhenSwitchEnabled(t *testing.T) 
 	})
 
 	t.Run("unregistered_document_is_unreachable_even_when_enabled", func(t *testing.T) {
-		setRoutingMode(t, pool, documentDigest, "complexityTimeseries", "canary")
 		rec := postGraphQLWithVariables(t, handler, "query { __typename }", token, nil)
 		if rec.Code != http.StatusNotFound {
 			t.Fatalf("unregistered document: got %d, want 404", rec.Code)
@@ -754,44 +637,12 @@ func TestComplexityTimeseriesRoute_ReachableOnlyWhenSwitchEnabled(t *testing.T) 
 	})
 
 	t.Run("missing_bearer_token_is_unauthorized_even_when_enabled", func(t *testing.T) {
-		setRoutingMode(t, pool, documentDigest, "complexityTimeseries", "canary")
 		rec := postGraphQLWithVariables(t, handler, registeredComplexityTimeseriesDocument, "", complexityTimeseriesVariables())
 		if rec.Code != http.StatusUnauthorized {
 			t.Fatalf("no token: got %d, want 401", rec.Code)
 		}
 	})
 
-	// The three operations sharing one Mux/PostgresSwitch instance must NOT
-	// leak reachability into each other.
-	// CHAOS-8517: this subtest was "enabling_complexityTimeseries_does_not_enable_featureFlags" and relied on
-	// featureFlags having NO row (404). An operation with no row is served now, so the same property --
-	// a row of one operation does not decide another -- is pinned from the side that still refuses:
-	// featureFlags is held dark by its OWN row, and a canary row of complexityTimeseries does not lift it.
-	t.Run("a_canary_row_of_complexityTimeseries_does_not_lift_the_hold_on_featureFlags", func(t *testing.T) {
-		setRoutingMode(t, pool, digestHex(registeredFeatureFlagsDocument), "featureFlags", "disabled")
-		setRoutingMode(t, pool, documentDigest, "complexityTimeseries", "canary")
-		rec := postGraphQL(t, handler, registeredFeatureFlagsDocument, token)
-		if rec.Code != http.StatusNotFound {
-			t.Fatalf("featureFlags is held dark by its own disabled row and must stay unreachable while only complexityTimeseries is canaried: got %d", rec.Code)
-		}
-	})
-
-	t.Run("rollback_to_disabled_revokes_reachability_immediately", func(t *testing.T) {
-		setRoutingMode(t, pool, documentDigest, "complexityTimeseries", "canary")
-		rec := postGraphQLWithVariables(t, handler, registeredComplexityTimeseriesDocument, token, complexityTimeseriesVariables())
-		if rec.Code != http.StatusOK {
-			t.Fatalf("expected 200 before rollback, got %d", rec.Code)
-		}
-		if strings.Contains(rec.Body.String(), `"errors"`) ||
-			!strings.Contains(rec.Body.String(), "org/repo-a") ||
-			!strings.Contains(rec.Body.String(), `"locTotal":1000`) {
-			t.Fatalf("expected a real complexityTimeseries result (incl. the locTotal metric) before rollback, got %s", rec.Body.String())
-		}
-		setRoutingMode(t, pool, documentDigest, "complexityTimeseries", "disabled")
-		if rec := postGraphQLWithVariables(t, handler, registeredComplexityTimeseriesDocument, token, complexityTimeseriesVariables()); rec.Code != http.StatusNotFound {
-			t.Fatalf("expected 404 immediately after rollback, got %d", rec.Code)
-		}
-	})
 }
 
 func hotspotsVariables() map[string]any {
@@ -805,13 +656,13 @@ func hotspotsVariables() map[string]any {
 	}
 }
 
-// TestHotspotsRoute_ReachableOnlyWhenSwitchEnabled is CHAOS-4369 Wave 3's
+// TestHotspotsRoute_IsServedByTheCatalog is CHAOS-4369 Wave 3's
 // extension of the same reachability contract to hotspots, the second
 // Wave 3 operation (after complexityTimeseries): real Mux, real
 // PostgresSwitch reading a real Postgres table, real gqlgen server, real
 // principal.Verifier -- proving hotspots's reachability is gated
 // independently by its OWN go_api_routing_state row.
-func TestHotspotsRoute_ReachableOnlyWhenSwitchEnabled(t *testing.T) {
+func TestHotspotsRoute_IsServedByTheCatalog(t *testing.T) {
 	pool := startTestRegistryPostgres(t)
 
 	pub, priv, err := ed25519.GenerateKey(nil)
@@ -825,7 +676,6 @@ func TestHotspotsRoute_ReachableOnlyWhenSwitchEnabled(t *testing.T) {
 	}
 
 	handler, _, _, _, _ := newQueryHandler(&fakeHotspotsCHClient{}, pool, verifier, itTestSchemaDigest, os.Getenv)
-	documentDigest := digestHex(registeredHotspotsDocument)
 	token := signTestEnvelope(t, priv, "org-1")
 
 	// CHAOS-8517: this subtest was "disabled_by_default" and pinned 404 for an operation with no
@@ -839,7 +689,6 @@ func TestHotspotsRoute_ReachableOnlyWhenSwitchEnabled(t *testing.T) {
 	})
 
 	t.Run("mode_canary_reachable_and_returns_data", func(t *testing.T) {
-		setRoutingMode(t, pool, documentDigest, "hotspots", "canary")
 		rec := postGraphQLWithVariables(t, handler, registeredHotspotsDocument, token, hotspotsVariables())
 		if rec.Code != http.StatusOK {
 			t.Fatalf("mode=canary: got %d, body=%s", rec.Code, rec.Body.String())
@@ -850,7 +699,6 @@ func TestHotspotsRoute_ReachableOnlyWhenSwitchEnabled(t *testing.T) {
 	})
 
 	t.Run("unregistered_document_is_unreachable_even_when_enabled", func(t *testing.T) {
-		setRoutingMode(t, pool, documentDigest, "hotspots", "canary")
 		rec := postGraphQLWithVariables(t, handler, "query { __typename }", token, nil)
 		if rec.Code != http.StatusNotFound {
 			t.Fatalf("unregistered document: got %d, want 404", rec.Code)
@@ -858,40 +706,12 @@ func TestHotspotsRoute_ReachableOnlyWhenSwitchEnabled(t *testing.T) {
 	})
 
 	t.Run("missing_bearer_token_is_unauthorized_even_when_enabled", func(t *testing.T) {
-		setRoutingMode(t, pool, documentDigest, "hotspots", "canary")
 		rec := postGraphQLWithVariables(t, handler, registeredHotspotsDocument, "", hotspotsVariables())
 		if rec.Code != http.StatusUnauthorized {
 			t.Fatalf("no token: got %d, want 401", rec.Code)
 		}
 	})
 
-	// CHAOS-8517: this subtest was "enabling_hotspots_does_not_enable_featureFlags" and relied on
-	// featureFlags having NO row (404). An operation with no row is served now, so the same property --
-	// a row of one operation does not decide another -- is pinned from the side that still refuses:
-	// featureFlags is held dark by its OWN row, and a canary row of hotspots does not lift it.
-	t.Run("a_canary_row_of_hotspots_does_not_lift_the_hold_on_featureFlags", func(t *testing.T) {
-		setRoutingMode(t, pool, digestHex(registeredFeatureFlagsDocument), "featureFlags", "disabled")
-		setRoutingMode(t, pool, documentDigest, "hotspots", "canary")
-		rec := postGraphQL(t, handler, registeredFeatureFlagsDocument, token)
-		if rec.Code != http.StatusNotFound {
-			t.Fatalf("featureFlags is held dark by its own disabled row and must stay unreachable while only hotspots is canaried: got %d", rec.Code)
-		}
-	})
-
-	t.Run("rollback_to_disabled_revokes_reachability_immediately", func(t *testing.T) {
-		setRoutingMode(t, pool, documentDigest, "hotspots", "canary")
-		rec := postGraphQLWithVariables(t, handler, registeredHotspotsDocument, token, hotspotsVariables())
-		if rec.Code != http.StatusOK {
-			t.Fatalf("expected 200 before rollback, got %d", rec.Code)
-		}
-		if strings.Contains(rec.Body.String(), `"errors"`) || !strings.Contains(rec.Body.String(), "org/repo-a") {
-			t.Fatalf("expected a real hotspots result before rollback, got %s", rec.Body.String())
-		}
-		setRoutingMode(t, pool, documentDigest, "hotspots", "disabled")
-		if rec := postGraphQLWithVariables(t, handler, registeredHotspotsDocument, token, hotspotsVariables()); rec.Code != http.StatusNotFound {
-			t.Fatalf("expected 404 immediately after rollback, got %d", rec.Code)
-		}
-	})
 }
 
 // TestBuildQueryRoute_FailsFastOnWrongClickHouseProtocol is the regression
@@ -905,7 +725,7 @@ func operatingReviewVariables() map[string]any {
 	}
 }
 
-// TestOperatingReviewRoute_ReachableOnlyWhenSwitchEnabled is CHAOS-4352
+// TestOperatingReviewRoute_IsServedByTheCatalog is CHAOS-4352
 // Wave 4 Lane B's (CHAOS-4505) extension of the same reachability
 // contract to operatingReview: real Mux, real PostgresSwitch reading a
 // real Postgres table, real gqlgen server, real principal.Verifier --
@@ -915,7 +735,7 @@ func operatingReviewVariables() map[string]any {
 // `$orgId` and `$input` variables (matching featureFlags, not
 // hotspots/cognitiveLoad/complexityTimeseries/reviewEdges) -- see
 // registeredOperatingReviewDocument's own doc comment.
-func TestOperatingReviewRoute_ReachableOnlyWhenSwitchEnabled(t *testing.T) {
+func TestOperatingReviewRoute_IsServedByTheCatalog(t *testing.T) {
 	pool := startTestRegistryPostgres(t)
 
 	pub, priv, err := ed25519.GenerateKey(nil)
@@ -929,7 +749,6 @@ func TestOperatingReviewRoute_ReachableOnlyWhenSwitchEnabled(t *testing.T) {
 	}
 
 	handler, _, _, _, _ := newQueryHandler(&fakeOperatingReviewCHClient{}, pool, verifier, itTestSchemaDigest, os.Getenv)
-	documentDigest := digestHex(registeredOperatingReviewDocument)
 	token := signTestEnvelope(t, priv, "org-1")
 
 	// CHAOS-8517: this subtest was "disabled_by_default" and pinned 404 for an operation with no
@@ -943,7 +762,6 @@ func TestOperatingReviewRoute_ReachableOnlyWhenSwitchEnabled(t *testing.T) {
 	})
 
 	t.Run("mode_canary_reachable_and_returns_data", func(t *testing.T) {
-		setRoutingMode(t, pool, documentDigest, "operatingReview", "canary")
 		rec := postGraphQLWithVariables(t, handler, registeredOperatingReviewDocument, token, operatingReviewVariables())
 		if rec.Code != http.StatusOK {
 			t.Fatalf("mode=canary: got %d, body=%s", rec.Code, rec.Body.String())
@@ -961,7 +779,6 @@ func TestOperatingReviewRoute_ReachableOnlyWhenSwitchEnabled(t *testing.T) {
 	})
 
 	t.Run("unregistered_document_is_unreachable_even_when_enabled", func(t *testing.T) {
-		setRoutingMode(t, pool, documentDigest, "operatingReview", "canary")
 		rec := postGraphQLWithVariables(t, handler, "query { __typename }", token, nil)
 		if rec.Code != http.StatusNotFound {
 			t.Fatalf("unregistered document: got %d, want 404", rec.Code)
@@ -969,37 +786,12 @@ func TestOperatingReviewRoute_ReachableOnlyWhenSwitchEnabled(t *testing.T) {
 	})
 
 	t.Run("missing_bearer_token_is_unauthorized_even_when_enabled", func(t *testing.T) {
-		setRoutingMode(t, pool, documentDigest, "operatingReview", "canary")
 		rec := postGraphQLWithVariables(t, handler, registeredOperatingReviewDocument, "", operatingReviewVariables())
 		if rec.Code != http.StatusUnauthorized {
 			t.Fatalf("no token: got %d, want 401", rec.Code)
 		}
 	})
 
-	// CHAOS-8517: this subtest was "enabling_operatingReview_does_not_enable_featureFlags" and relied on
-	// featureFlags having NO row (404). An operation with no row is served now, so the same property --
-	// a row of one operation does not decide another -- is pinned from the side that still refuses:
-	// featureFlags is held dark by its OWN row, and a canary row of operatingReview does not lift it.
-	t.Run("a_canary_row_of_operatingReview_does_not_lift_the_hold_on_featureFlags", func(t *testing.T) {
-		setRoutingMode(t, pool, digestHex(registeredFeatureFlagsDocument), "featureFlags", "disabled")
-		setRoutingMode(t, pool, documentDigest, "operatingReview", "canary")
-		rec := postGraphQL(t, handler, registeredFeatureFlagsDocument, token)
-		if rec.Code != http.StatusNotFound {
-			t.Fatalf("featureFlags is held dark by its own disabled row and must stay unreachable while only operatingReview is canaried: got %d", rec.Code)
-		}
-	})
-
-	t.Run("rollback_to_disabled_revokes_reachability_immediately", func(t *testing.T) {
-		setRoutingMode(t, pool, documentDigest, "operatingReview", "canary")
-		rec := postGraphQLWithVariables(t, handler, registeredOperatingReviewDocument, token, operatingReviewVariables())
-		if rec.Code != http.StatusOK {
-			t.Fatalf("expected 200 before rollback, got %d", rec.Code)
-		}
-		setRoutingMode(t, pool, documentDigest, "operatingReview", "disabled")
-		if rec := postGraphQLWithVariables(t, handler, registeredOperatingReviewDocument, token, operatingReviewVariables()); rec.Code != http.StatusNotFound {
-			t.Fatalf("expected 404 immediately after rollback, got %d", rec.Code)
-		}
-	})
 }
 
 func homeVariables() map[string]any {
@@ -1032,7 +824,7 @@ func (emptyHomeCHClient) Query(_ context.Context, _ string, _ []clickhouse.Bindi
 	return emptyHomeRowScanner{}, nil
 }
 
-// TestHomeRoute_ReachableOnlyWhenSwitchEnabled is CHAOS-6084/CHAOS-7042's
+// TestHomeRoute_IsServedByTheCatalog is CHAOS-6084/CHAOS-7042's
 // extension of the same reachability contract to home: real Mux, real
 // PostgresSwitch reading a real (migrated, testcontainer) Postgres
 // table, real gqlgen server, real principal.Verifier, and -- unlike
@@ -1045,7 +837,7 @@ func (emptyHomeCHClient) Query(_ context.Context, _ string, _ []clickhouse.Bindi
 // AUTHORED text (see that const's doc comment for why it is authored
 // rather than captured from a real client file: CHAOS-6084 found zero
 // web callers of this field).
-func TestHomeRoute_ReachableOnlyWhenSwitchEnabled(t *testing.T) {
+func TestHomeRoute_IsServedByTheCatalog(t *testing.T) {
 	pool := startTestRegistryPostgres(t)
 
 	pub, priv, err := ed25519.GenerateKey(nil)
@@ -1059,7 +851,6 @@ func TestHomeRoute_ReachableOnlyWhenSwitchEnabled(t *testing.T) {
 	}
 
 	handler, _, _, _, _ := newQueryHandler(emptyHomeCHClient{}, pool, verifier, itTestSchemaDigest, os.Getenv)
-	documentDigest := digestHex(registeredHomeDocument)
 	token := signTestEnvelope(t, priv, "org-1")
 
 	// CHAOS-8517: this subtest was "disabled_by_default" and pinned 404 for an operation with no
@@ -1073,7 +864,6 @@ func TestHomeRoute_ReachableOnlyWhenSwitchEnabled(t *testing.T) {
 	})
 
 	t.Run("mode_canary_reachable_and_returns_data", func(t *testing.T) {
-		setRoutingMode(t, pool, documentDigest, "home", "canary")
 		rec := postGraphQLWithVariables(t, handler, registeredHomeDocument, token, homeVariables())
 		if rec.Code != http.StatusOK {
 			t.Fatalf("mode=canary: got %d, body=%s", rec.Code, rec.Body.String())
@@ -1097,7 +887,6 @@ func TestHomeRoute_ReachableOnlyWhenSwitchEnabled(t *testing.T) {
 	})
 
 	t.Run("unregistered_document_is_unreachable_even_when_enabled", func(t *testing.T) {
-		setRoutingMode(t, pool, documentDigest, "home", "canary")
 		rec := postGraphQLWithVariables(t, handler, "query { __typename }", token, nil)
 		if rec.Code != http.StatusNotFound {
 			t.Fatalf("unregistered document: got %d, want 404", rec.Code)
@@ -1105,37 +894,12 @@ func TestHomeRoute_ReachableOnlyWhenSwitchEnabled(t *testing.T) {
 	})
 
 	t.Run("missing_bearer_token_is_unauthorized_even_when_enabled", func(t *testing.T) {
-		setRoutingMode(t, pool, documentDigest, "home", "canary")
 		rec := postGraphQLWithVariables(t, handler, registeredHomeDocument, "", homeVariables())
 		if rec.Code != http.StatusUnauthorized {
 			t.Fatalf("no token: got %d, want 401", rec.Code)
 		}
 	})
 
-	// CHAOS-8517: this subtest was "enabling_home_does_not_enable_featureFlags" and relied on
-	// featureFlags having NO row (404). An operation with no row is served now, so the same property --
-	// a row of one operation does not decide another -- is pinned from the side that still refuses:
-	// featureFlags is held dark by its OWN row, and a canary row of home does not lift it.
-	t.Run("a_canary_row_of_home_does_not_lift_the_hold_on_featureFlags", func(t *testing.T) {
-		setRoutingMode(t, pool, digestHex(registeredFeatureFlagsDocument), "featureFlags", "disabled")
-		setRoutingMode(t, pool, documentDigest, "home", "canary")
-		rec := postGraphQL(t, handler, registeredFeatureFlagsDocument, token)
-		if rec.Code != http.StatusNotFound {
-			t.Fatalf("featureFlags is held dark by its own disabled row and must stay unreachable while only home is canaried: got %d", rec.Code)
-		}
-	})
-
-	t.Run("rollback_to_disabled_revokes_reachability_immediately", func(t *testing.T) {
-		setRoutingMode(t, pool, documentDigest, "home", "canary")
-		rec := postGraphQLWithVariables(t, handler, registeredHomeDocument, token, homeVariables())
-		if rec.Code != http.StatusOK {
-			t.Fatalf("expected 200 before rollback, got %d", rec.Code)
-		}
-		setRoutingMode(t, pool, documentDigest, "home", "disabled")
-		if rec := postGraphQLWithVariables(t, handler, registeredHomeDocument, token, homeVariables()); rec.Code != http.StatusNotFound {
-			t.Fatalf("expected 404 immediately after rollback, got %d", rec.Code)
-		}
-	})
 }
 
 // resolves to a DIFFERENT port for a Go process (native wire protocol)
@@ -1227,14 +991,14 @@ func flowMatrixVariables() map[string]any {
 	}
 }
 
-// TestFlowMatrixRoute_ReachableOnlyWhenSwitchEnabled is CHAOS-4506's
+// TestFlowMatrixRoute_IsServedByTheCatalog is CHAOS-4506's
 // extension of the same reachability contract (real Mux, real
 // PostgresSwitch, real gqlgen server, real principal.Verifier) to the
 // flowMatrix operation -- the ONLY analytics-touching document this PR
 // registers; see registeredFlowMatrixDocument's doc comment in
 // query_route.go for why INVESTMENT_BREAKDOWN_QUERY/INVESTMENT_FULL_QUERY
 // are deliberately NOT registered yet.
-func TestFlowMatrixRoute_ReachableOnlyWhenSwitchEnabled(t *testing.T) {
+func TestFlowMatrixRoute_IsServedByTheCatalog(t *testing.T) {
 	pool := startTestRegistryPostgres(t)
 
 	pub, priv, err := ed25519.GenerateKey(nil)
@@ -1248,7 +1012,6 @@ func TestFlowMatrixRoute_ReachableOnlyWhenSwitchEnabled(t *testing.T) {
 	}
 
 	handler, _, _, _, _ := newQueryHandler(&fakeFlowMatrixCHClient{}, pool, verifier, itTestSchemaDigest, os.Getenv)
-	documentDigest := digestHex(registeredFlowMatrixDocument)
 	token := signTestEnvelope(t, priv, "org-1")
 
 	// CHAOS-8517: this subtest was "disabled_by_default" and pinned 404 for an operation with no
@@ -1262,7 +1025,6 @@ func TestFlowMatrixRoute_ReachableOnlyWhenSwitchEnabled(t *testing.T) {
 	})
 
 	t.Run("mode_canary_reachable_and_returns_data", func(t *testing.T) {
-		setRoutingMode(t, pool, documentDigest, "flowMatrix", "canary")
 		rec := postGraphQLWithVariables(t, handler, registeredFlowMatrixDocument, token, flowMatrixVariables())
 		if rec.Code != http.StatusOK {
 			t.Fatalf("mode=canary: got %d, body=%s", rec.Code, rec.Body.String())
@@ -1273,7 +1035,6 @@ func TestFlowMatrixRoute_ReachableOnlyWhenSwitchEnabled(t *testing.T) {
 	})
 
 	t.Run("wrong_orgid_argument_is_rejected", func(t *testing.T) {
-		setRoutingMode(t, pool, documentDigest, "flowMatrix", "canary")
 		vars := flowMatrixVariables()
 		vars["orgId"] = "org-2" // token authenticates org-1
 		rec := postGraphQLWithVariables(t, handler, registeredFlowMatrixDocument, token, vars)
@@ -1291,7 +1052,6 @@ func TestFlowMatrixRoute_ReachableOnlyWhenSwitchEnabled(t *testing.T) {
 	})
 
 	t.Run("unregistered_document_is_unreachable_even_when_enabled", func(t *testing.T) {
-		setRoutingMode(t, pool, documentDigest, "flowMatrix", "canary")
 		rec := postGraphQLWithVariables(t, handler, "query { __typename }", token, nil)
 		if rec.Code != http.StatusNotFound {
 			t.Fatalf("unregistered document: got %d, want 404", rec.Code)
@@ -1299,25 +1059,12 @@ func TestFlowMatrixRoute_ReachableOnlyWhenSwitchEnabled(t *testing.T) {
 	})
 
 	t.Run("missing_bearer_token_is_unauthorized_even_when_enabled", func(t *testing.T) {
-		setRoutingMode(t, pool, documentDigest, "flowMatrix", "canary")
 		rec := postGraphQLWithVariables(t, handler, registeredFlowMatrixDocument, "", flowMatrixVariables())
 		if rec.Code != http.StatusUnauthorized {
 			t.Fatalf("no token: got %d, want 401", rec.Code)
 		}
 	})
 
-	// CHAOS-8517: this subtest was "enabling_flowMatrix_does_not_enable_featureFlags" and relied on
-	// featureFlags having NO row (404). An operation with no row is served now, so the same property --
-	// a row of one operation does not decide another -- is pinned from the side that still refuses:
-	// featureFlags is held dark by its OWN row, and a canary row of flowMatrix does not lift it.
-	t.Run("a_canary_row_of_flowMatrix_does_not_lift_the_hold_on_featureFlags", func(t *testing.T) {
-		setRoutingMode(t, pool, digestHex(registeredFeatureFlagsDocument), "featureFlags", "disabled")
-		setRoutingMode(t, pool, documentDigest, "flowMatrix", "canary")
-		rec := postGraphQL(t, handler, registeredFeatureFlagsDocument, token)
-		if rec.Code != http.StatusNotFound {
-			t.Fatalf("featureFlags is held dark by its own disabled row and must stay unreachable while only flowMatrix is canaried: got %d", rec.Code)
-		}
-	})
 }
 
 // TestQueryRouteClickHouseClient_ToleratesRealResultVolume is the

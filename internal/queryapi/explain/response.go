@@ -213,6 +213,44 @@ func BuildExplainResponse(ctx context.Context, reader *Reader, orgID string, par
 		contributorModels = append(contributorModels, buildContributor(row, params.Metric, params.ScopeLevel, primaryID, config.Transform, displayNames, 0.0))
 	}
 
+	// CHAOS-8103 (Go-only fields). Repositories: the contributor rows of a
+	// metric stored per repository, the same aggregation, with names and
+	// provider URLs; null for a metric stored per team. SourceURL: the
+	// provider URL of the scope's repository when the scope is one
+	// repository. One read of the stored URLs serves both.
+	var repositories *[]Repository
+	var sourceURL *string
+	perRepository := config.GroupBy == "repo_id"
+	scopeRef, scopeIsOneRepository := scopeRepositoryRef(params)
+	if perRepository || scopeIsOneRepository {
+		var urlIDs []string
+		if perRepository {
+			urlIDs = append(urlIDs, collectRowIDs(nil, contributors)...)
+		}
+		scopeRepoID := ""
+		if scopeIsOneRepository {
+			id, found, err := reader.resolveRepoID(ctx, scopeRef, orgID)
+			if err != nil {
+				return nil, err
+			}
+			if found {
+				scopeRepoID = id
+				urlIDs = append(urlIDs, id)
+			}
+		}
+		sourceURLs, err := reader.fetchRepoSourceURLs(ctx, orgID, urlIDs)
+		if err != nil {
+			return nil, err
+		}
+		if perRepository {
+			list := buildRepositories(contributors, config.Transform, displayNames, sourceURLs)
+			repositories = &list
+		}
+		if served, ok := sourceURLs[scopeRepoID]; ok && scopeRepoID != "" {
+			sourceURL = &served
+		}
+	}
+
 	return &Response{
 		Metric:       params.Metric,
 		Label:        config.Label,
@@ -228,6 +266,8 @@ func BuildExplainResponse(ctx context.Context, reader *Reader, orgID string, par
 			pyjson.KeyValue[string]{Key: "prs", Value: fmt.Sprintf("/api/v1/drilldown/prs?metric=%s", params.Metric)},
 			pyjson.KeyValue[string]{Key: "issues", Value: fmt.Sprintf("/api/v1/drilldown/issues?metric=%s", params.Metric)},
 		),
+		Repositories: repositories,
+		SourceURL:    sourceURL,
 	}, nil
 }
 

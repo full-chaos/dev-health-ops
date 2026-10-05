@@ -30,7 +30,7 @@ import (
 
 // downgradePythonBuild is the build whose Python `dev-hops migrate postgres downgrade` (real Alembic) answered
 // the scenarios: a build that still carried the Python CLI.
-const downgradePythonBuild = "a4847c5e93607451a0c987b314d37e02fc43ce85"
+const downgradePythonBuild = "dc20788d69ae68129772e6cb5fd3fe972b27c843"
 
 // downgradePythonProgram is the entry point the producer runs: the real dev-hops CLI.
 const downgradePythonProgram = "import sys\nfrom dev_health_ops import cli\nraise SystemExit(cli.main(sys.argv[1:]))\n"
@@ -174,7 +174,7 @@ func schemaShape(t *testing.T, uri string) string {
 }
 
 // Each down file, run by dho on a real PostgreSQL, leaves exactly the schema the
-// previous revision's upgrade builds -- asserted at every step of 0145 -> 0138, and the
+// previous revision's upgrade builds -- asserted at every step of 0146 -> 0138, and the
 // up/down/up round trip returns to the head. A down file that left an object behind, or
 // dropped one too many, fails on the step that did it.
 func TestDowngradeReachesThePreviousRevisionsSchema(t *testing.T) {
@@ -315,7 +315,7 @@ func TestDowngradeRefusalsLeaveTheDatabaseAlone(t *testing.T) {
 // Alembic runs the whole downgrade walk in one transaction (env.py wraps it in
 // context.begin_transaction()), so a step that fails rolls back every step before it;
 // dho does the same. A valid row (purpose 'setup') makes 0141's down violate the
-// restored check constraint after 0145, 0144, 0143 and 0142 were reverted: nothing may
+// restored check constraint after 0146, 0145, 0144, 0143 and 0142 were reverted: nothing may
 // change, and the error says so.
 func TestDowngradeFailureMidWalkRollsBackTheWholeWalk(t *testing.T) {
 	d := newDownInstance(t)
@@ -324,14 +324,14 @@ func TestDowngradeFailureMidWalkRollsBackTheWholeWalk(t *testing.T) {
 	insertSetupRevocation(t, uri)
 	before := schemaShape(t, uri)
 	code, _, stderr := goDowngrade(t, uri, "0140")
-	if code != cli.ExitFailure || !strings.Contains(stderr, "downgrade_failed") || !strings.Contains(stderr, "down 0141") || !strings.Contains(stderr, "verified by re-read: alembic_version still holds [0066 0145]") || !strings.Contains(stderr, `"observed":["0066","0145"],"outcome":"rolled_back"`) {
+	if code != cli.ExitFailure || !strings.Contains(stderr, "downgrade_failed") || !strings.Contains(stderr, "down 0141") || !strings.Contains(stderr, "verified by re-read: alembic_version still holds [0066 0146]") || !strings.Contains(stderr, `"observed":["0066","0146"],"outcome":"rolled_back"`) {
 		t.Fatalf("exit %d stderr %s, want downgrade_failed naming 0141 and the verified unchanged state", code, stderr)
 	}
 	if got := schemaShape(t, uri); got != before {
 		t.Fatalf("the failed walk changed the database:\n%s", shapeDiff(before, got))
 	}
-	if got := alembicVersions(t, uri); !reflect.DeepEqual(got, []string{"0066", "0145"}) {
-		t.Fatalf("alembic_version %v after the failed walk, want 0066 and 0145", got)
+	if got := alembicVersions(t, uri); !reflect.DeepEqual(got, []string{"0066", "0146"}) {
+		t.Fatalf("alembic_version %v after the failed walk, want 0066 and 0146", got)
 	}
 }
 
@@ -460,7 +460,7 @@ func TestDowngradeReportsOnlyVerifiedStateAfterALostCommitAcknowledgement(t *tes
 			t.Fatalf("the server holds %v, want the committed 0066 0138", got)
 		}
 		if code != cli.ExitFailure || stdout != "" || strings.Contains(stderr, "rolled back") ||
-			!strings.Contains(stderr, "verified by re-read: the database CHANGED") || !strings.Contains(stderr, "[0066 0138]") || !strings.Contains(stderr, `"msg":"migrate outcome","direction":"down","from":["0066","0145"],"requested":"0138","observed":["0066","0138"],"outcome":"committed"`) {
+			!strings.Contains(stderr, "verified by re-read: the database CHANGED") || !strings.Contains(stderr, "[0066 0138]") || !strings.Contains(stderr, `"msg":"migrate outcome","direction":"down","from":["0066","0146"],"requested":"0138","observed":["0066","0138"],"outcome":"committed"`) {
 			t.Fatalf("exit %d stdout %q stderr %q, want a failure that reports the verified committed state", code, stdout, stderr)
 		}
 	})
@@ -656,7 +656,7 @@ func TestDowngradeMatchesFrozenPythonDowngrade(t *testing.T) {
 	golden := venueoracle.OpenGolden(t, venueoracle.GoldenSpec{
 		Path:        "testdata/golden/downgrade.json",
 		PythonBuild: downgradePythonBuild,
-		SHA256:      "8e4aeacab24c76612f3e429f05eeec5f9e354f7a0318ed2baffa2bfd3d01efee",
+		SHA256:      "b3e6e7a7f39af6f75398ad4950f0bc79d07e5697150deb091532a0c1a850af53",
 		Recipe: "git worktree add --detach $DIR " + downgradePythonBuild + " (with its .venv: uv sync --frozen --no-install-project); then from the repository root: " +
 			"go run ./internal/testsupport/venueoracle/goldenrecord -pkg ./internal/pgmigrate/ -test '^TestDowngradeMatchesFrozenPythonDowngrade$' -python-root $DIR",
 	})
@@ -694,7 +694,7 @@ func TestDowngradeMatchesFrozenPythonDowngrade(t *testing.T) {
 		if got := schemaShape(t, goURI); got != want.Shape {
 			t.Errorf("downgrade %s: dho and Python disagree:\n%s", target, shapeDiff(want.Shape, got))
 		}
-		if target != "0145" && equalSorted(want.Versions, []string{"0066", "0145"}) {
+		if equalSorted(want.Versions, []string{"0066", "0146"}) {
 			t.Errorf("downgrade %s: Python did not move alembic_version", target)
 		}
 	}

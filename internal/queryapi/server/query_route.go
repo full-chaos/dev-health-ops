@@ -1,14 +1,17 @@
+// CHAOS-8702: the per-row switch these comments call PostgresSwitch is gone. Every registered document is served
+// (routeswitch.NewCatalogSwitch) and no routing row decides it; where a comment below describes registration as not
+// enabling a document, it describes the history before that change.
+//
 // CHAOS-4367 Wave 1: wires the ONE live route this binary now serves --
-// featureFlags -- behind routeswitch.Mux + the registry-backed
-// PostgresSwitch, gated by a verified effective-principal envelope. See
+// featureFlags -- behind routeswitch.Mux, gated by a verified effective-principal envelope. See
 // main.go's package doc for what Wave 0 left empty; this file is what
 // Wave 1 adds on top of it.
 //
 // CHAOS-4368 Wave 2 adds a SECOND operation, reviewEdges, on the same
 // /query route and the same routeswitch.Mux + PostgresSwitch pipeline --
 // each operation gets its own registered document + digest + Mux
-// registration, gated independently (the go_api_routing_state row for one
-// operation has no effect on the other's reachability).
+// registration. query-api serves every registered operation (routeswitch.NewCatalogSwitch): no routing row
+// decides it.
 package server
 
 import (
@@ -722,16 +725,8 @@ const registeredFlowMatrixDocument = `query FlowMatrix($orgId: String!, $batch: 
 // Copied byte-for-byte from web/src/lib/graphql/queries.ts:10-28's
 // INVESTMENT_BREAKDOWN_QUERY, operation name "InvestmentBreakdown".
 //
-// REGISTRATION IS NOT ENABLEMENT (chris's standing ruling, carried
-// verbatim from CHAOS-4538's brief): PostgresSwitch.Enabled() is
-// fail-closed (routeswitch/postgres_switch.go) -- a missing registry
-// row, a lookup error, or an unresolvable digest all return false and
-// Python keeps serving every real request. Registering this document
-// only makes it POSSIBLE for a future, separately-decided enablement to
-// route traffic here; it does not itself route anything. Whether/when
-// to enable is the orchestrator's/chris's call, not this port's --
-// "register the two documents" is CHAOS-4538's literal scope item 5,
-// "enable" is explicitly NOT.
+// REGISTRATION SERVES THE DOCUMENT (CHAOS-8702; it was "not enablement" under the per-row switch, chris's ruling in
+// CHAOS-4538's brief): the catalog switch serves every registered document and reads no routing row.
 //
 // This document's name implies "investment-only" but the schema does
 // not enforce that: `useInvestment` is a batch-level VARIABLE the web
@@ -1320,6 +1315,50 @@ const registeredFeatureFlagTimeseriesDocument = `query FeatureFlagTimeseries($or
       }
       __typename
     }
+    __typename
+  }
+}`
+
+// registeredTestopsJobFailuresDocument is the registered document for the
+// `testopsJobFailures` operation (CHAOS-8513, Go-only: no Python resolver
+// exists), the exact wire-form text the web client sends
+// (testdata/wire_capture/testopsjobfailures_captured.graphql; the wire form of
+// TESTOPS_JOB_FAILURES_QUERY, computed with the web's pinned urql).
+const registeredTestopsJobFailuresDocument = `query TestOpsJobFailures($orgId: String!, $input: TestOpsJobFailuresInput!) {
+  testopsJobFailures(orgId: $orgId, input: $input) {
+    groups {
+      workflowName
+      jobName
+      provider
+      runs
+      failedRuns
+      failureRate
+      __typename
+    }
+    totalCount
+    truncated
+    __typename
+  }
+}`
+
+// registeredCoverageBaselinesDocument is the registered document for the
+// `coverageBaselines` operation (CHAOS-8111, Go-only: no Python resolver
+// exists), the exact wire-form text the web client sends
+// (testdata/wire_capture/coveragebaselines_captured.graphql; the wire form of
+// TESTOPS_COVERAGE_BASELINES_QUERY, computed with the web's pinned urql).
+const registeredCoverageBaselinesDocument = `query CoverageBaselines($orgId: String!, $endDate: Date!, $repoIds: [String!], $teamIds: [String!]) {
+  coverageBaselines(
+    orgId: $orgId
+    endDate: $endDate
+    repoIds: $repoIds
+    teamIds: $teamIds
+  ) {
+    repoId
+    repoName
+    lineBaselinePct
+    lineDays
+    branchBaselinePct
+    branchDays
     __typename
   }
 }`
@@ -2338,17 +2377,8 @@ const registeredSecurityAlertsDocument = `query SecurityAlerts($orgId: String!, 
 // schema.resolvers.go's Pr resolver) and registers the document here,
 // satisfying that guard's condition.
 //
-// REGISTRATION IS NOT ENABLEMENT (same standing ruling
-// registeredInvestmentBreakdownDocument's doc comment carries verbatim
-// from CHAOS-4538's brief): PostgresSwitch.Enabled() is fail-closed
-// (routeswitch/postgres_switch.go) -- a missing registry row, a lookup
-// error, or an unresolvable digest all return false and Python keeps
-// serving every real request. Registering this document only makes it
-// POSSIBLE for a future, separately-decided enablement to route traffic
-// here (and makes it reachable via /query/proof, the shadow-inclusive
-// measurement-only plane -- CHAOS-5425); it does not itself route
-// anything. Whether/when to enable is the orchestrator's/chris's call,
-// not this port's.
+// REGISTRATION SERVES THE DOCUMENT (CHAOS-8702; see registeredInvestmentBreakdownDocument's doc comment): the catalog
+// switch serves it on /query and on /query/proof, the measurement-only plane (CHAOS-5425).
 //
 // Same "registered documents only" contract, same "sourced from the real
 // client file, not reconstructed" discipline as every const above: this
@@ -2429,8 +2459,7 @@ const registeredPrDetailDocument = `query PrDetail($orgId: String!, $id: ID!) {
 // testdata/wire_capture/catalog_values_captured.graphql and asserted equal
 // by TestRegisteredCatalogDocuments_MatchCapturedWireFixtures.
 //
-// Registration is not enablement: PostgresSwitch.Enabled() is fail-closed,
-// so Python keeps answering until a routing row is enabled.
+// Registration serves it: the catalog switch reads no routing row (CHAOS-8702).
 const registeredCatalogValuesDocument = `query CatalogValues($orgId: String!, $dimension: DimensionInput!) {
   catalog(orgId: $orgId, dimension: $dimension) {
     values {
@@ -2462,8 +2491,8 @@ const registeredAcrRepositoryScopesDocument = `query ACRRepositoryScopes($orgId:
 // registeredConnectorsDataHealthDocument is the registered document for the connector-health read on the data-health connectors page: the
 // urql wire form of the web client's query, captured under
 // testdata/wire_capture/data_health_connectors_captured.graphql and asserted equal by
-// TestRegisteredDataHealthDocuments_MatchCapturedWireFixtures. Registration is
-// not enablement: PostgresSwitch.Enabled() is fail-closed.
+// TestRegisteredDataHealthDocuments_MatchCapturedWireFixtures. Registration
+// serves it: the catalog switch reads no routing row (CHAOS-8702).
 const registeredConnectorsDataHealthDocument = `query GetConnectorsDataHealth($teamId: ID!) {
   dataHealth(team: $teamId) {
     connectors {
@@ -2486,8 +2515,8 @@ const registeredConnectorsDataHealthDocument = `query GetConnectorsDataHealth($t
 // registeredDataHealthIdentityDocument is the registered document for the identity-mapping read on the data-health identity page: the
 // urql wire form of the web client's query, captured under
 // testdata/wire_capture/data_health_identity_captured.graphql and asserted equal by
-// TestRegisteredDataHealthDocuments_MatchCapturedWireFixtures. Registration is
-// not enablement: PostgresSwitch.Enabled() is fail-closed.
+// TestRegisteredDataHealthDocuments_MatchCapturedWireFixtures. Registration
+// serves it: the catalog switch reads no routing row (CHAOS-8702).
 const registeredDataHealthIdentityDocument = `query DataHealthIdentity($team: ID!) {
   dataHealth(team: $team) {
     identityMapping {
@@ -2519,8 +2548,8 @@ const registeredDataHealthIdentityDocument = `query DataHealthIdentity($team: ID
 // registeredMetricLineageDocument is the registered document for the metric-lineage read the data-health popover issues under team ALL: the
 // urql wire form of the web client's query, captured under
 // testdata/wire_capture/data_health_metric_lineage_captured.graphql and asserted equal by
-// TestRegisteredDataHealthDocuments_MatchCapturedWireFixtures. Registration is
-// not enablement: PostgresSwitch.Enabled() is fail-closed.
+// TestRegisteredDataHealthDocuments_MatchCapturedWireFixtures. Registration
+// serves it: the catalog switch reads no routing row (CHAOS-8702).
 const registeredMetricLineageDocument = `query MetricLineage($metricId: ID!) {
   dataHealth(team: 
 "ALL") {
@@ -2543,8 +2572,8 @@ const registeredMetricLineageDocument = `query MetricLineage($metricId: ID!) {
 // registeredMappingCoverageHealthDocument is the registered document for the mapping-coverage read on the data-health mapping page: the
 // urql wire form of the web client's query, captured under
 // testdata/wire_capture/data_health_mapping_coverage_captured.graphql and asserted equal by
-// TestRegisteredDataHealthDocuments_MatchCapturedWireFixtures. Registration is
-// not enablement: PostgresSwitch.Enabled() is fail-closed.
+// TestRegisteredDataHealthDocuments_MatchCapturedWireFixtures. Registration
+// serves it: the catalog switch reads no routing row (CHAOS-8702).
 const registeredMappingCoverageHealthDocument = `query GetMappingCoverageHealth($teamId: ID!) {
   dataHealth(team: $teamId) {
     mappingCoverage {
@@ -2569,8 +2598,8 @@ const registeredMappingCoverageHealthDocument = `query GetMappingCoverageHealth(
 // registeredExperimentsDocument is the registered document for the experiments read on the improve experiments page: the
 // urql wire form of the web client's query, captured under
 // testdata/wire_capture/experiments_captured.graphql and asserted equal by
-// TestRegisteredExperimentsDocument_MatchesCapturedWireFixture. Registration is
-// not enablement: PostgresSwitch.Enabled() is fail-closed.
+// TestRegisteredExperimentsDocument_MatchesCapturedWireFixture. Registration
+// serves it: the catalog switch reads no routing row (CHAOS-8702).
 const registeredExperimentsDocument = `query Experiments($orgId: String!, $filters: FilterInput) {
   experiments(orgId: $orgId, filters: $filters) {
     items {
@@ -2594,8 +2623,8 @@ const registeredExperimentsDocument = `query Experiments($orgId: String!, $filte
 // registeredProductTelemetryDashboardDocument is the registered document for the per-org product telemetry dashboard read: the
 // urql wire form of the web client's query, captured under
 // testdata/wire_capture/product_telemetry_dashboard_captured.graphql and asserted equal by
-// TestRegisteredProductTelemetryDocuments_MatchCapturedWireFixtures. Registration is
-// not enablement: PostgresSwitch.Enabled() is fail-closed.
+// TestRegisteredProductTelemetryDocuments_MatchCapturedWireFixtures. Registration
+// serves it: the catalog switch reads no routing row (CHAOS-8702).
 const registeredProductTelemetryDashboardDocument = `query ProductTelemetryDashboard($orgId: String!, $input: ProductTelemetryDashboardInput!) {
   productTelemetryDashboard(orgId: $orgId, input: $input) {
     dailyActiveUsers {
@@ -2656,8 +2685,8 @@ const registeredProductTelemetryDashboardDocument = `query ProductTelemetryDashb
 // registeredProductTelemetryPlatformDashboardDocument is the registered document for the cross-org platform product telemetry dashboard read: the
 // urql wire form of the web client's query, captured under
 // testdata/wire_capture/product_telemetry_platform_dashboard_captured.graphql and asserted equal by
-// TestRegisteredProductTelemetryDocuments_MatchCapturedWireFixtures. Registration is
-// not enablement: PostgresSwitch.Enabled() is fail-closed.
+// TestRegisteredProductTelemetryDocuments_MatchCapturedWireFixtures. Registration
+// serves it: the catalog switch reads no routing row (CHAOS-8702).
 const registeredProductTelemetryPlatformDashboardDocument = `query ProductTelemetryPlatformDashboard($input: ProductTelemetryDashboardInput!) {
   productTelemetryPlatformDashboard(input: $input) {
     totals {
@@ -3128,7 +3157,7 @@ func buildQueryRoute(getenv getenvFunc, cfg queryRouteConfig) (queryRouteHandler
 	// on, and both the combined check and the per-class probes read its last answer.
 	posture := queryAPIPostureCheck(getenv, pgPool)
 	// CHAOS-7831: ONE class-row switch for the MCP listener and the named-operation route (:8091), so a root's class row is one decision.
-	classSwitch := newClassRowSwitch(pgPool, schemaDigest)
+	classSwitch := newClassRowSwitch(pgPool)
 	handler, proofHandler, proofWriteHandler, registryHandler, err := newQueryHandler(analytics.PinInvestmentMembershipScope(chClient), pgPool, verifier, schemaDigest, getenv, classSwitch)
 	if err != nil {
 		pgPool.Close()
@@ -3144,7 +3173,7 @@ func buildQueryRoute(getenv getenvFunc, cfg queryRouteConfig) (queryRouteHandler
 	}
 	mcpHandler := newMCPHandler(mcpClient, pgPool, classSwitch, getenv)
 	// CHAOS-7214: the proof variant over a switch that also admits shadow rows.
-	mcpProofHandler := newMCPProofHandler(mcpHandler, routeswitch.NewProofSwitch(pgPool, schemaDigest, mcpRoutingDigests()), verifier, newProofOrgAllowed(pgPool))
+	mcpProofHandler := newMCPProofHandler(mcpHandler, routeswitch.NewClassDecisionProofSwitch(pgPool, mcpRoutingDigests()), verifier, newProofOrgAllowed(pgPool))
 	handlers := queryRouteHandlers{
 		Query:      handler,
 		Proof:      proofHandler,
@@ -3370,16 +3399,11 @@ func (e *readyzDependencyError) Unwrap() error { return e.Cause }
 // Both operations share the SAME gqlgen handler instance (one schema, one
 // executable server -- gqlgen's handler is safe for concurrent reuse
 // across requests) but are registered under DISTINCT Mux operation keys,
-// each gated by its own go_api_routing_state row: enabling featureFlags
-// does not enable reviewEdges and vice versa.
+// both served by the catalog switch.
 //
-// eligible_orgs and rollout_percentage are inert by design (CHAOS-6807; it is
-// PostgresSwitch's documented point 2): Mode=canary/primary is reachable for
-// every authenticated org once dispatched here, because Switch.Enabled(operation
-// string) takes no org argument, the Python edge that decides delegation does
-// not enforce them, and these operations have no Python resolver for an org
-// outside a cohort to fall back to. `dho goapi routing enable` refuses a
-// partial rollout and `status` flags a row that records one.
+// There is no per-org or partial rollout (CHAOS-6807, CHAOS-8702): a registered operation is served to every
+// authenticated org, because Switch.Enabled(operation string) takes no org argument and these operations have no
+// Python resolver for an org outside a cohort to fall back to.
 // maxUnwrapChainLogBytes bounds the CHAOS-4647 unwrap-chain log line
 // (codex review, merge-gate round, P3 ARGUED): the deepest cause is
 // frequently a ClickHouse *proto.Exception, whose Message field is
@@ -3481,9 +3505,8 @@ func newQueryHandler(chClient featureflags.QueryClient, pgPool *pgxpool.Pool, ve
 	// other row in this map, where the key already matches the GraphQL
 	// field name 1:1. operationForDocument resolves by DOCUMENT DIGEST,
 	// never by GraphQL operation/field name, so this key only has to be
-	// internally consistent across this map, digestByOperation's reverse
-	// index, and each go_api_routing_state row PostgresSwitch looks up by
-	// this same string -- it is never compared against request text.
+	// internally consistent across this map and digestByOperation's reverse
+	// index -- it is never compared against request text.
 	//
 	// This is cmd/registrydump's parse target -- see
 	// mountedRouteLogMessage's doc comment above for why this literal's
@@ -3547,6 +3570,8 @@ func newQueryHandler(chClient featureflags.QueryClient, pgPool *pgxpool.Pool, ve
 		"aiAttributedPrs":                   digestHex(registeredAiAttributedPrsDocument),
 		"aiAttributionOverview":             digestHex(registeredAiAttributionOverviewDocument),
 		"testopsRisk":                       digestHex(registeredTestopsRiskDocument),
+		"testopsJobFailures":                digestHex(registeredTestopsJobFailuresDocument),
+		"coverageBaselines":                 digestHex(registeredCoverageBaselinesDocument),
 		"workItemTeamAttributions":          digestHex(registeredWorkItemTeamAttributionsDocument),
 		"recommendations":                   digestHex(registeredRecommendationsDocument),
 	}
@@ -3562,14 +3587,12 @@ func newQueryHandler(chClient featureflags.QueryClient, pgPool *pgxpool.Pool, ve
 	// That is the same by-construction discipline mountedRouteLogMessage
 	// above exists to enforce, applied to the two surfaces an operator
 	// uses to answer "is anything actually enabled?".
-	logRoutingStateDrift(pgPool, schemaDigest)
 	registryHandler := newRegistryHandler(schemaDigest, digestByOperation)
-	// CHAOS-8517: the serving switch carries the catalog rule -- a registered operation with no routing
-	// row at any schema digest is served; an operation that has a row keeps its row's answer
-	// (routeswitch/catalog_switch.go holds the rule and its row-state table). Only THIS switch has it:
-	// the proof switch below and the class-row switch (newClassRowSwitch) are built by the other
-	// constructors, so a measurement route still needs a row and an MCP class root with no row is dark.
-	sw := routeswitch.NewCatalogSwitchWithLegacy(pgPool, schemaDigest, digestByOperation, legacyDigestsByOperation)
+	// CHAOS-8702: the serving switch reads no routing row -- a registered operation is served
+	// (routeswitch/catalog_switch.go). The proof switch below and the class-row switch
+	// (newClassRowSwitch) still read rows: a measurement route needs a row and an MCP class root with no
+	// row is dark.
+	sw := routeswitch.NewCatalogSwitch(digestByOperation)
 	routeMux := routeswitch.NewMux(sw)
 
 	// operationByDigest is digestByOperation's reverse index, built once
@@ -3585,21 +3608,17 @@ func newQueryHandler(chClient featureflags.QueryClient, pgPool *pgxpool.Pool, ve
 		routeMux.Register(operation, gqlHandler)
 	}
 
-	// CHAOS-5425: the SAME pipeline is built a second time over a
-	// measurement-only Switch, so a shadow-mode operation can be executed
-	// on the deployed build without exposing it to real traffic. Both
-	// handlers share newDocumentDispatchHandler below -- byte-identical
-	// ingress, body-size contract, document resolution, bearer/envelope
-	// verification and org context. ONLY the Switch differs, which is the
-	// entire point: a proof must exercise the real path, and a second
-	// hand-written copy of this closure would be a second path.
-	proofMux := routeswitch.NewMux(routeswitch.NewProofSwitchWithLegacy(pgPool, schemaDigest, digestByOperation, legacyDigestsByOperation))
+	// CHAOS-5425: the SAME pipeline is built a second time for the measurement-only proof route, so a
+	// proof exercises the real path. Both handlers share newDocumentDispatchHandler below -- byte-identical
+	// ingress, body-size contract, document resolution, bearer/envelope verification and org context. The
+	// catalog switch serves every registered operation, as on the serving route: no routing row decides it.
+	proofMux := routeswitch.NewMux(routeswitch.NewCatalogSwitch(digestByOperation))
 	for operation := range digestByOperation {
 		proofMux.Register(operation, gqlHandler)
 	}
 
 	// CHAOS-7096: a THIRD instance of the same shared pipeline, over its own
-	// Switch, independent of go_api_routing_state -- a proof-write operation
+	// Switch, independent of any routing state -- a proof-write operation
 	// is by definition one CHAOS-6098 could not yet get a receipt for at its
 	// target mode, so gating it on that mode would recreate the exact
 	// circularity this route exists to break (routing_enable.go's
@@ -3623,7 +3642,7 @@ func newQueryHandler(chClient featureflags.QueryClient, pgPool *pgxpool.Pool, ve
 	// CHAOS-7831: the class-row switch is the one the MCP listener uses (same type, same keys, live read); only the serving handler is gated: the
 	// proof handlers measure a root BEFORE it is enabled and must keep running on a dark one.
 	// buildQueryRoute passes the ONE switch instance it also gives the MCP handler; a caller that passes none (the unit tests) gets one built the same way.
-	classSwitch := newClassRowSwitch(pgPool, schemaDigest)
+	classSwitch := newClassRowSwitch(pgPool)
 	if len(classSwitches) > 0 {
 		classSwitch = classSwitches[0]
 	}

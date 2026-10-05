@@ -4,7 +4,7 @@
 # WHY THIS EXISTS (CHAOS-2604 root cause):
 #   A change was pushed after running only 2 test FILES locally. CI then failed on
 #   tests/test_clickhouse_migration_splitter.py::test_no_committed_migration_comment_line_contains_semicolon
-#   — a pure-Python guard that lives in the FULL unit suite but was not one of the 2
+#   — a pure-Python guard that lived in the full unit suite (removed from hosted CI by CHAOS-8352) but was not one of the 2
 #   files run. Separately, a new argMax SQL query in load_team_attribution_context had
 #   NO live-ClickHouse execution proof (clickhouse-marked tests are opt-in / skipped).
 #   This gate closes BOTH gaps.
@@ -18,7 +18,8 @@
 #   1. ruff format --check .
 #   2. ruff check .
 #   3. the fast Go gate (format, vet, test; race remains in the dedicated Go CI)
-#   4. the FULL Python unit tier, as ci/run_tests.sh unit_tests() runs it, with
+#   4. the hosted Python test selection (tests/docs, tests/tooling and
+#      ci/kept_python_tests.txt, as test.yml runs it, CHAOS-8352), with
 #      the local socks5h proxy neutralized.
 #   5. an ISOLATED live-ClickHouse stage that the CI unit/ci tiers never run:
 #      apply the schema to a SCRATCH db, run the clickhouse-marked attribution
@@ -923,11 +924,9 @@ run_stage() {
 }
 
 # --- Preflight: must run from the worktree with its .venv. --------------------------
-# CI-parity for pip installs: .github/workflows/test.yml (test-matrix AND
-# coverage jobs) runs `pip install -r requirements.txt` then
-# `pip install -r requirements-docs.txt` before invoking ci/run_tests.sh.
-# gate_unit_suite() below runs that SAME `pytest tests -m "not benchmark and
-# not clickhouse"` invocation, which collects tests/docs/*.py — and those
+# CI-parity for pip installs: the docs-tests and tooling-tests jobs of
+# .github/workflows/test.yml install requirements-docs.txt too.
+# gate_unit_suite() below runs tests/docs, and those
 # tests shell out to `python -m mkdocs build --strict`. `uv sync --all-extras
 # --dev` (requirements.txt / -e .[dev]) does NOT pull in requirements-docs.txt
 # (mkdocs-material lives outside pyproject.toml on purpose, per docs-guards.yml
@@ -984,31 +983,29 @@ gate_lint_check() { "${RUFF}" check .; }
 gate_go_fast() { bash "${ROOT}/ci/check_go.sh" fast; }
 gate_river_compat_static() { bash "${ROOT}/ci/check_river_compat_static.sh"; }
 
-# --- The FULL unit suite — the CHAOS-2604 fix. NOT a file subset. ------------------
-# Byte-for-byte the marker filter + ignores of ci/run_tests.sh unit_tests().
-# This collects every unmarked pure-Python guard (the migration-splitter semicolon
-# guard, RMT org_id sorting-key contract, dataclass/sink parity, pyformat-%% safety),
-# which a 2-file run silently skips.
-#
-# CI runs the matrix with PYTEST_XDIST_WORKERS=4 (test.yml). Mirror it EXACTLY:
-# the xdist worker count drives the test->worker distribution, and a handful of
-# tests are sensitive to cross-test global-state pollution under parallelism
-# (conftest documents CHAOS-2265 / CHAOS-2586). Running -n auto (more workers than
-# CI on a many-core dev box) reshuffles that distribution and surfaces pollution
-# FAILURES that CI's -n 4 never hits — i.e. false reds that destroy trust in the
-# gate. Default to 4 to match CI; override with PYTEST_XDIST_WORKERS.
+# --- The unit step: the HOSTED selection (CHAOS-8352 removed the full-suite matrix). --
+# Same three pytest invocations as the `tooling-tests` and `docs-tests` jobs of
+# .github/workflows/test.yml (and tests:docs / tests:tooling in .gitlab-ci.yml):
+# tests/docs, tests/tooling, and the explicit list in ci/kept_python_tests.txt,
+# read from that file so the gate cannot drift from the hosted job. Running the
+# whole tests/ dir is no longer the standard: it collects tests of the deleted
+# Python api tree and is red by construction.
+# -n 4 mirrors the hosted jobs.
 gate_unit_suite() {
   local nw="${PYTEST_XDIST_WORKERS:-4}"
-  local extra=()
-  # When CH_READY=1, ch_provision exported CLICKHOUSE_URI=<scratch>; it is
-  # inherited here (PROXY_OFF only unsets proxy vars).
+  local list="${ROOT}/ci/kept_python_tests.txt"
+  local kept=()
+  [ -f "${list}" ] || die "missing ${list}: the hosted kept-test list."
+  mapfile -t kept < <(grep -v '^[[:space:]]*#' "${list}" | grep -v '^[[:space:]]*$')
+  # Same guard as test.yml: a short or empty list would run nothing.
+  [ "${#kept[@]}" -ge 40 ] || die "${list} lists only ${#kept[@]} files (hosted jobs require >= 40)."
+  printf '   kept files: %s\n' "${#kept[@]}"
   OTEL_ENABLED=false PYTHONPATH=src \
-    "${PROXY_OFF[@]}" "${PYBIN}" -m pytest tests \
-    -m "not benchmark and not clickhouse" \
-    --ignore=tests/test_connectors_integration.py \
-    --ignore=tests/test_private_repo_access.py \
-    "${extra[@]}" \
-    -n "${nw}" --dist loadscope -ra --tb=short -q
+    "${PROXY_OFF[@]}" "${PYBIN}" -m pytest tests/docs -q || return 1
+  OTEL_ENABLED=false PYTHONPATH=src \
+    "${PROXY_OFF[@]}" "${PYBIN}" -m pytest tests/tooling -q -n "${nw}" || return 1
+  OTEL_ENABLED=false PYTHONPATH=src \
+    "${PROXY_OFF[@]}" "${PYBIN}" -m pytest "${kept[@]}" -q -rs -n "${nw}"
 }
 
 # --- Live-ClickHouse stage, ISOLATED to a scratch db (dropped on exit). ------------
@@ -1085,7 +1082,7 @@ ch_ensure_dho() {
     CH_PROBE_DETAIL="could not create a temp file for the dho build log"
     return 1
   }
-  if ! (cd "${ROOT}" && go build -o "${DHO}" ./cmd/dho) >"${build_log}" 2>&1; then
+  if ! (cd "${ROOT}" && go build -trimpath -o "${DHO}" ./cmd/dho) >"${build_log}" 2>&1; then
     CH_PROBE_DETAIL="go build -o ${DHO} ./cmd/dho FAILED: $(tr '\n' ' ' <"${build_log}" | cut -c1-400)"
     rm -f "${build_log}"
     return 1
@@ -1526,7 +1523,7 @@ run_declared_stages() {
   # run_stage "go: format + vet + test"     go_fast    gate_go_fast
   # run_stage "river: static compatibility harness" river_compat gate_river_compat_static
   ch_provision # scratch db + migrations; exports CLICKHOUSE_URI when available
-  run_stage "unit suite (FULL, not subset)" unit_suite gate_unit_suite
+  run_stage "unit suite (hosted selection)" unit_suite gate_unit_suite
   ch_tests # argMax live-exec proof on the real engine (reuses the scratch db)
 
   verify_stage_manifest

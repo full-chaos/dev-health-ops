@@ -69,9 +69,7 @@ import (
 // -- a PATH-keyed entry (team-lead ruling), not a GraphQL document
 // digest: there is no GraphQL document behind a REST route. Backed by
 // its own DynamicSwitch (below) rather than folded into /query's
-// PostgresSwitch, because PostgresSwitch.Enabled requires a
-// (schema_digest, document_digest) pair for every operation
-// (go_api_routing_state's real primary key, routeswitch/postgres_switch.go)
+// catalog switch, which serves registered documents
 // -- a REST path has no document to digest, and inventing a sentinel
 // value to satisfy that shape would model this route as something it
 // structurally is not. DynamicSwitch has no such requirement: it is

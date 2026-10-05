@@ -1,7 +1,7 @@
 package routing
 
 // The `proof-org` verb: CHAOS-7096's own allowlist management, independent
-// of every other verb's go_api_routing_state machinery -- no schema digest,
+// of every other verb's class-decision machinery -- no schema digest,
 // no candidate build, no mode. add/remove/list on go_api_proof_orgs, each
 // write audited to go_api_proof_org_audits (goapiproof.AddProofOrg/
 // RemoveProofOrg do both in one transaction).

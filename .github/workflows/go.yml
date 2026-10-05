@@ -580,7 +580,7 @@ jobs:
           # Before CHAOS-5349 the job's package glob silently excluded it --
           # the test existed, passed on amd64, and was never once run on the
           # architecture it was written for.
-          go test -mod=readonly -count=1 -timeout 8m -json ./internal/jobs/... ./internal/queryapi/... \
+          go test -mod=readonly -trimpath -count=1 -timeout 8m -json ./internal/jobs/... ./internal/queryapi/... \
             -run '(MatchesLivePythonBitExact|IntegerPercentilesMatchesLivePython)$' \
             | tee go-test-output.json
           ran=$(jq -s '[.[] | select(.Action=="run" and (.Test // "") != "")] | length' go-test-output.json)

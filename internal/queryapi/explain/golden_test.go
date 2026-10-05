@@ -131,14 +131,30 @@ type explainQueryDispatch struct {
 	currentStartDay  string // "YYYY-MM-DD" -- distinguishes the current-window fetchMetricValue call from the previous/compare one (identical query TEXT, different bound start_day)
 	driverRows       [][]any
 	contributorRows  [][]any
+
+	// sourceURLRows answers fetchRepoSourceURLs (CHAOS-8103): id, the
+	// stored url. sourceURLIDs records the ids each such read asked for.
+	sourceURLRows [][]any
+	sourceURLIDs  [][]string
+
+	// resolveRepoIDMiss answers a resolveRepoID read with no row (a
+	// reference that resolves to no repository).
+	resolveRepoIDMiss bool
 }
 
 func (d *explainQueryDispatch) handle(t *testing.T, query string, bindings []dhclickhouse.Binding) (dhclickhouse.RowScanner, error) {
 	switch {
+	case strings.Contains(query, "AS source_url"):
+		ids, _ := bindingValue(bindings, "repo_ids")
+		asked, _ := ids.([]string)
+		d.sourceURLIDs = append(d.sourceURLIDs, asked)
+		return &fixtureRowScanner{rows: d.sourceURLRows}, nil
 	case strings.Contains(query, "AS scope_id, repo AS display_name"), strings.Contains(query, "AS scope_id, name AS display_name"):
 		return &fixtureRowScanner{rows: d.displayNameRows}, nil
 	case strings.Contains(query, "FROM repos FINAL") && d.resolveRepoIDRow != nil:
 		return &fixtureRowScanner{rows: [][]any{d.resolveRepoIDRow}}, nil
+	case strings.Contains(query, "FROM repos FINAL") && d.resolveRepoIDMiss:
+		return &fixtureRowScanner{}, nil
 	case strings.Contains(query, "delta_pct"):
 		return &fixtureRowScanner{rows: d.driverRows}, nil
 	case strings.Contains(query, "ORDER BY value DESC"):
@@ -272,6 +288,7 @@ func TestGoldenRepoScopeReviewLatency(t *testing.T) {
 		contributorRows: [][]any{
 			{resolvedRepoID, 5.0},
 		},
+		sourceURLRows: [][]any{{resolvedRepoID, "https://github.com/acme/webapp"}},
 	}
 	client := fakeQueryClient{t: t, handler: dispatch.handle}
 	reader, err := NewReader(client)
@@ -338,6 +355,8 @@ func TestGoldenSumAggregatorMetricRanksBySum(t *testing.T) {
 			{"repo-a", 15.0},
 			{"44444444-4444-4444-4444-444444444444", 16.0},
 		},
+		// repo-a has a stored url; the second repository has none.
+		sourceURLRows: [][]any{{"repo-a", "https://gitlab.example.com/acme/webapp"}},
 	}
 	client := fakeQueryClient{t: t, handler: dispatch.handle}
 	reader, err := NewReader(client)

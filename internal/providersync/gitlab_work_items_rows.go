@@ -121,6 +121,16 @@ type gitlabIssueLinkPayload struct {
 	LinkCreatedAt *string `json:"link_created_at"`
 }
 
+// targetWorkItemID is the linked issue's work-item id from its references.full, never completed from the source issue's
+// project; ok is false for an entry without a usable reference (an unsupported shape).
+func (link gitlabIssueLinkPayload) targetWorkItemID() (string, bool) {
+	reference, err := parseGitLabReference(link.References.Full, gitlabIssueMarker)
+	if err != nil || link.IID.String() != strconv.FormatUint(uint64(reference.IID), 10) {
+		return "", false
+	}
+	return "gitlab:" + reference.Path + "#" + strconv.FormatUint(uint64(reference.IID), 10), true
+}
+
 // gitlabClosingMergeRequestPayload is one entry of GET /projects/:id/issues/:iid/closed_by: a merge request that closes
 // the issue on merge (closing keyword in its description or title; GitLab's own statement of the link).
 type gitlabClosingMergeRequestPayload struct {
@@ -128,6 +138,16 @@ type gitlabClosingMergeRequestPayload struct {
 	References struct {
 		Full string `json:"full"`
 	} `json:"references"`
+}
+
+// reference parses the entry's references.full as a merge-request reference and requires the iid field to agree with it.
+// Anything less is an answer-shape change, never a guess.
+func (payload gitlabClosingMergeRequestPayload) reference() (gitlabReference, bool) {
+	reference, err := parseGitLabReference(payload.References.Full, gitlabMergeRequestMarker)
+	if err != nil || payload.IID.String() != strconv.FormatUint(uint64(reference.IID), 10) {
+		return gitlabReference{}, false
+	}
+	return reference, true
 }
 
 type gitlabIdentityResolver func(gitlabWorkItemUserPayload) string
@@ -687,30 +707,22 @@ var (
 // normalizeGitLabClosingMergeRequests emits the PRIMARY provider-attached MR<->issue link for GitLab (CHAOS-8526), the
 // counterpart of extractGitHubClosingIssueReferences: source = the MR (gitlab:<path>!<iid>, the id
 // normalizeGitLabMergeRequestWorkItem mints), target = this issue, raw kind gitlab_closing_reference. The MR's own
-// project path comes from references.full (an MR from another project keeps its path); only when that is absent does
-// the issue's project stand in.
+// project path comes from references.full (an MR from another project keeps its path); an entry without it is rejected
+// by the collector (gitlabClosingMergeRequestPayload.reference), never completed from the issue's project.
 func normalizeGitLabClosingMergeRequests(
 	claim Claim,
 	issueWorkItemID string,
-	fullName string,
 	mergeRequests []gitlabClosingMergeRequestPayload,
 	normalizedAt time.Time,
 ) []gitlabWorkItemDependencyRow {
 	rows := make([]gitlabWorkItemDependencyRow, 0, len(mergeRequests))
 	seen := make(map[string]struct{}, len(mergeRequests))
 	for _, mergeRequest := range mergeRequests {
-		iid := mergeRequest.IID.String()
-		if parsed, err := strconv.Atoi(iid); err != nil || parsed < 1 {
+		reference, ok := mergeRequest.reference()
+		if !ok {
 			continue
 		}
-		path := strings.TrimSpace(mergeRequest.References.Full)
-		if index := strings.LastIndex(path, "!"); index >= 0 {
-			path = path[:index]
-		}
-		if path == "" {
-			path = fullName
-		}
-		source := "gitlab:" + path + "!" + iid
+		source := "gitlab:" + reference.Path + "!" + strconv.FormatUint(uint64(reference.IID), 10)
 		if _, duplicate := seen[source]; duplicate || source == issueWorkItemID {
 			continue
 		}
@@ -762,18 +774,10 @@ func normalizeGitLabDependencies(
 		}
 	}
 	for _, link := range links {
-		targetIID := link.IID.String()
-		if targetIID == "" || targetIID == "0" {
+		targetID, ok := link.targetWorkItemID()
+		if !ok {
 			continue
 		}
-		targetPath := link.References.Full
-		if index := strings.Index(targetPath, "#"); index >= 0 {
-			targetPath = targetPath[:index]
-		}
-		if strings.TrimSpace(targetPath) == "" {
-			targetPath = fullName
-		}
-		targetID := "gitlab:" + targetPath + "#" + targetIID
 		if _, seen := seenTargets[targetID]; seen {
 			continue
 		}

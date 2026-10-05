@@ -86,6 +86,28 @@ For case 2 the item is `blocked` only while all of these hold:
 In that interval `blocked` replaces the item's own status. The item's total
 hours in the day do not change.
 
+### Per-item Blocked Work evidence
+
+`work_item_blocked_durations_daily` stores the item-level evidence for a
+Blocked Work list and count. For every item the daily state worker processes
+that contributes state time to a day, it stores the blocked part of that time
+in `duration_hours`, together with the provider, work scope and team that the
+worker resolved for that snapshot.
+
+A row with `duration_hours = 0` is deliberate. It is written when a later
+compute finds that a previously blocked item has no blocked hours for that
+day. The stable row identity is organization, day, provider and work item;
+work scope and team are snapshot values, so a team or scope change cannot
+keep an old blocked result alive.
+
+Readers select the latest row by `computed_at` for each stable identity and
+only then keep rows with a positive duration. Filtering before selecting the
+latest row could show an item that a recompute has removed. The Blocked Work
+list and count read those latest positive rows. A `POST /api/v1/drilldown/issues`
+request with `filters.how.blocked: true` returns one row per provider and work
+item in its window, plus a `count` before the response limit. Team scope keeps
+the item-days recorded for that team before the window is reduced to one row.
+
 When the relation is known to exist:
 
 - **Start.** The provider's own time of the link, when the synced data

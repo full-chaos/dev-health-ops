@@ -113,6 +113,11 @@ func TestWorkItemStateComputeFamilyWritesBlockedRowsFromOpenBlockers(t *testing.
     status String, duration_hours Float64, items_touched UInt32, computed_at DateTime,
     avg_wip Float64, org_id String
 ) ENGINE = MergeTree PARTITION BY toYYYYMM(day) ORDER BY (provider, work_scope_id, team_id, status, day)`,
+		`CREATE TABLE work_item_blocked_durations_daily (
+    day Date, provider String, work_scope_id String, team_id String, team_name String,
+    work_item_id String, duration_hours Float64, computed_at DateTime64(3, 'UTC'), org_id String
+) ENGINE = ReplacingMergeTree(computed_at)
+PARTITION BY toYYYYMM(day) ORDER BY (org_id, day, provider, work_item_id)`,
 		workItemStateDependenciesDDL,
 		workItemStateFirstSeenDDL,
 		workItemStateRelationsReadDDL,
@@ -281,6 +286,48 @@ GROUP BY status`, org)
 		t.Fatalf("org B was not computed and has rows: %+v", got)
 	}
 
+	// The item-level table is the durable list/count source. It keeps a zero
+	// row for #5/#6 as well as positive rows, so a later recompute can remove a
+	// once-blocked item without leaving its earlier positive snapshot behind.
+	readBlockedItemHours := func(org string) map[string]float64 {
+		t.Helper()
+		rows, err := conn.Query(ctx, `
+SELECT work_item_id, argMax(duration_hours, computed_at)
+FROM work_item_blocked_durations_daily
+WHERE org_id = ? AND day = toDate('2026-08-24')
+GROUP BY work_item_id`, org)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer rows.Close()
+		hours := map[string]float64{}
+		for rows.Next() {
+			var id string
+			var duration float64
+			if err := rows.Scan(&id, &duration); err != nil {
+				t.Fatal(err)
+			}
+			hours[id] = duration
+		}
+		if err := rows.Err(); err != nil {
+			t.Fatal(err)
+		}
+		return hours
+	}
+	wantItemHours := map[string]float64{
+		"gh:a/repo#1": 15,
+		"gh:a/repo#3": 24,
+		"gh:a/repo#4": 12,
+		"gh:a/repo#5": 0,
+		"gh:a/repo#6": 0,
+	}
+	if got := readBlockedItemHours(orgA); !reflect.DeepEqual(got, wantItemHours) {
+		t.Fatalf("org A item-level blocked durations = %+v, want %+v", got, wantItemHours)
+	}
+	if got := readBlockedItemHours(orgB); len(got) != 0 {
+		t.Fatalf("org B was not computed and has item-level rows: %+v", got)
+	}
+
 	// The other tenant, computed on its own: its blocker is open all day and
 	// its relation was first seen at 00:00, so its one item is blocked for 24
 	// hours -- from ITS relation and ITS first-seen time, not org A's.
@@ -295,5 +342,11 @@ GROUP BY status`, org)
 	}
 	if got := readTotals(orgA); !reflect.DeepEqual(got, want) {
 		t.Fatalf("org A totals changed after org B ran: %+v, want %+v", got, want)
+	}
+	if got, wantB := readBlockedItemHours(orgB), (map[string]float64{"gh:a/repo#1": 24}); !reflect.DeepEqual(got, wantB) {
+		t.Fatalf("org B item-level blocked durations = %+v, want %+v", got, wantB)
+	}
+	if got := readBlockedItemHours(orgA); !reflect.DeepEqual(got, wantItemHours) {
+		t.Fatalf("org A item-level rows changed after org B ran: %+v, want %+v", got, wantItemHours)
 	}
 }

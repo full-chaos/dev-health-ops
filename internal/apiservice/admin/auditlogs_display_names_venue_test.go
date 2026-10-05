@@ -4,6 +4,7 @@ package admin_test
 
 import (
 	"context"
+	"crypto/sha256"
 	"encoding/json"
 	"errors"
 	"net/http"
@@ -146,10 +147,10 @@ VALUES ($1, $2, $3, $4, $5, $6, $4, '{}'::json, '{}'::json, 'success',
 		Name: "audit list resolved display names", Method: http.MethodGet, Path: "/api/v1/admin/audit-logs", Headers: auth,
 	})
 	auditDisplayNamesDiagnostic(t, ctx, venue, apiPool, listResponse.Status, orgID, []auditDisplayDiagnosticFixture{
-		{action: "organization", resourceType: "organization", logID: logIDs["organization"], resourceID: orgID, table: "organizations", orgColumn: "id", visibilitySQL: auditDisplayOrganizationVisibilitySQL, directPredicateSQL: auditDisplayOrganizationDirectPredicateSQL},
-		{action: "sso-provider", resourceType: "sso_provider", logID: logIDs["sso-provider"], resourceID: providerID, table: "sso_providers", orgColumn: "org_id", visibilitySQL: auditDisplayProviderVisibilitySQL, directPredicateSQL: auditDisplayProviderDirectPredicateSQL},
-		{action: "ingest-source", resourceType: "ingest_source", logID: logIDs["ingest-source"], resourceID: sourceID, table: "external_ingest_sources", orgColumn: "org_id", visibilitySQL: auditDisplaySourceVisibilitySQL, directPredicateSQL: auditDisplaySourceDirectPredicateSQL},
-		{action: "ingest-token", resourceType: "ingest_token", logID: logIDs["ingest-token"], resourceID: tokenID, table: "external_ingest_tokens", orgColumn: "org_id", visibilitySQL: auditDisplayTokenVisibilitySQL, directPredicateSQL: auditDisplayTokenDirectPredicateSQL},
+		{action: "organization", logID: logIDs["organization"]},
+		{action: "sso-provider", logID: logIDs["sso-provider"]},
+		{action: "ingest-source", logID: logIDs["ingest-source"]},
+		{action: "ingest-token", logID: logIDs["ingest-token"]},
 	})
 	list := auditLogPage(t, listResponse)
 	if list.Total != len(expected) || len(list.Items) != len(expected) {
@@ -193,59 +194,9 @@ VALUES ($1, $2, $3, $4, $5, $6, $4, '{}'::json, '{}'::json, 'success',
 	venueoracle.WriteGoOnlyProof(t, "real migrated Postgres and all audit read routes resolve only authoritative audited-org display names; missing, malformed, cross-org, and e-mail-only records stay null")
 }
 
-const (
-	auditDisplayOrganizationVisibilitySQL = `SELECT
-	EXISTS (SELECT 1 FROM organizations WHERE id = $1::uuid),
-	EXISTS (SELECT 1 FROM organizations WHERE id = $1::uuid AND id = $2::uuid)`
-	auditDisplayOrganizationDirectPredicateSQL = `SELECT EXISTS (
-	SELECT 1
-	FROM audit_logs a
-	JOIN organizations resource_org ON resource_org.id = CASE
-		WHEN a.resource_id ~* '^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$' THEN a.resource_id::uuid
-	END AND resource_org.id = a.org_id
-	WHERE a.id = $1::uuid AND a.org_id = $2::uuid AND a.resource_type = 'organization'
-)`
-	auditDisplayProviderVisibilitySQL = `SELECT
-	EXISTS (SELECT 1 FROM sso_providers WHERE id = $1::uuid),
-	EXISTS (SELECT 1 FROM sso_providers WHERE id = $1::uuid AND org_id = $2::uuid)`
-	auditDisplayProviderDirectPredicateSQL = `SELECT EXISTS (
-	SELECT 1
-	FROM audit_logs a
-	JOIN sso_providers provider ON provider.id = CASE
-		WHEN a.resource_id ~* '^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$' THEN a.resource_id::uuid
-	END AND provider.org_id = a.org_id
-	WHERE a.id = $1::uuid AND a.org_id = $2::uuid AND a.resource_type = 'sso_provider'
-)`
-	auditDisplaySourceVisibilitySQL = `SELECT
-	EXISTS (SELECT 1 FROM external_ingest_sources WHERE id = $1::uuid),
-	EXISTS (SELECT 1 FROM external_ingest_sources WHERE id = $1::uuid AND org_id = $2::text)`
-	auditDisplaySourceDirectPredicateSQL = `SELECT EXISTS (
-	SELECT 1
-	FROM audit_logs a
-	JOIN external_ingest_sources source ON source.id = CASE
-		WHEN a.resource_id ~* '^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$' THEN a.resource_id::uuid
-	END AND source.org_id = a.org_id::text
-	WHERE a.id = $1::uuid AND a.org_id = $2::uuid AND a.resource_type = 'ingest_source'
-)`
-	auditDisplayTokenVisibilitySQL = `SELECT
-	EXISTS (SELECT 1 FROM external_ingest_tokens WHERE id = $1::uuid),
-	EXISTS (SELECT 1 FROM external_ingest_tokens WHERE id = $1::uuid AND org_id = $2::text)`
-	auditDisplayTokenDirectPredicateSQL = `SELECT EXISTS (
-	SELECT 1
-	FROM audit_logs a
-	JOIN external_ingest_tokens token ON token.id = CASE
-		WHEN a.resource_id ~* '^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$' THEN a.resource_id::uuid
-	END AND token.org_id = a.org_id::text
-	WHERE a.id = $1::uuid AND a.org_id = $2::uuid AND a.resource_type = 'ingest_token'
-)`
-)
-
 type auditDisplayDiagnosticFixture struct {
-	action, resourceType string
-	logID, resourceID    uuid.UUID
-	table, orgColumn     string
-	visibilitySQL        string
-	directPredicateSQL   string
+	action string
+	logID  uuid.UUID
 }
 
 // auditDisplayNamesDiagnostic records bounded facts from the real venue when
@@ -283,104 +234,95 @@ func auditDisplayNamesDiagnostic(
 		}
 
 		for _, fixture := range fixtures {
-			actualResourceType, organizationRow, organizationDisplay, providerRow, providerDisplay, sourceRow, sourceDisplay, tokenRow, tokenDisplay, err := admininternal.AuditLogJoinStateForTest(
-				connection.pool.QueryRow(ctx, admininternal.AuditLogJoinDiagnosticSQLForTest()+` WHERE a.id = $1 AND a.org_id = $2`, fixture.logID, orgID),
+			query := admininternal.AuditLogJoinDiagnosticSQLForTest() + ` WHERE a.id = $1 AND a.org_id = $2`
+			queryHash := sha256.Sum256([]byte(query))
+			parameterHash := sha256.Sum256([]byte(fixture.logID.String() + "|" + orgID.String()))
+			state, err := admininternal.AuditLogJoinStateForTest(
+				connection.pool.QueryRow(ctx, query, fixture.logID, orgID),
 			)
-			requireAuditDisplayDiagnostic(t, connection.name, fixture.action, "production-join-branches", err)
-			joinedRowPresent, joinedDisplayFieldPresent := auditDisplayJoinedBranchState(
-				fixture.action,
-				organizationRow, organizationDisplay,
-				providerRow, providerDisplay,
-				sourceRow, sourceDisplay,
-				tokenRow, tokenDisplay,
-			)
+			requireAuditDisplayDiagnostic(t, connection.name, fixture.action, "exact-audit-log-from", err)
+			branch, known := auditDisplaySelectedBranchState(fixture.action, state)
+			if !known {
+				t.Fatalf("audit display diagnostic action=%s has no selected branch", fixture.action)
+			}
 
+			// This second query is only for the production scanner and encoder.
+			// All join predicates and aliases are measured by query above.
 			projectionFound, projectionResourceDisplayNamePresent, encodedResourceDisplayNamePresent, err := admininternal.AuditLogResourceDisplayNameStateForTest(
 				connection.pool.QueryRow(ctx, admininternal.AuditLogProjectionSQLForTest()+` WHERE a.id = $1 AND a.org_id = $2`, fixture.logID, orgID),
 			)
 			requireAuditDisplayDiagnostic(t, connection.name, fixture.action, "production-projection-and-scan", err)
 
-			auditResourceIDType, targetIDType := "", ""
-			var targetIDMatches, caseUUIDMatches, auditOrgMatchesScope bool
-			err = connection.pool.QueryRow(ctx, `SELECT
-	pg_typeof(a.resource_id)::text,
-	pg_typeof($2::uuid)::text,
-	a.resource_id = $2::text,
-	CASE WHEN a.resource_id ~* '^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$' THEN a.resource_id::uuid END = $2::uuid,
-	a.org_id = $3::uuid
-FROM audit_logs a
-WHERE a.id = $1::uuid`, fixture.logID, fixture.resourceID, orgID).Scan(
-				&auditResourceIDType,
-				&targetIDType,
-				&targetIDMatches,
-				&caseUUIDMatches,
-				&auditOrgMatchesScope,
-			)
-			requireAuditDisplayDiagnostic(t, connection.name, fixture.action, "audit-row", err)
-
-			tableIDType, tableOrgIDType := "", ""
-			err = connection.pool.QueryRow(ctx, `SELECT
-	id_attribute.atttypid::regtype::text,
-	org_attribute.atttypid::regtype::text
-FROM pg_class relation
-JOIN pg_namespace schema ON schema.oid = relation.relnamespace
-JOIN pg_attribute id_attribute ON id_attribute.attrelid = relation.oid AND id_attribute.attname = 'id' AND NOT id_attribute.attisdropped
-JOIN pg_attribute org_attribute ON org_attribute.attrelid = relation.oid AND org_attribute.attname = $2 AND NOT org_attribute.attisdropped
-WHERE schema.nspname = 'public' AND relation.relname = $1`, fixture.table, fixture.orgColumn).Scan(&tableIDType, &tableOrgIDType)
-			requireAuditDisplayDiagnostic(t, connection.name, fixture.action, "target-column-types", err)
-
-			var targetVisible, scopedTargetVisible bool
-			err = connection.pool.QueryRow(ctx, fixture.visibilitySQL, fixture.resourceID, orgID).Scan(&targetVisible, &scopedTargetVisible)
-			requireAuditDisplayDiagnostic(t, connection.name, fixture.action, "target-visibility", err)
-
-			var directJoinPredicateMatches bool
-			err = connection.pool.QueryRow(ctx, fixture.directPredicateSQL, fixture.logID, orgID).Scan(&directJoinPredicateMatches)
-			requireAuditDisplayDiagnostic(t, connection.name, fixture.action, "direct-join-predicate", err)
-
-			t.Logf("audit display diagnostic role=%s endpoint_status=%d action=%s actual_resource_type_matches_expected=%t direct_target_visible=%t direct_target_scope_matches=%t direct_join_predicate_matches=%t combined_joined_row_present=%t combined_joined_display_column_present=%t production_case_projection_found=%t production_case_projection_present=%t production_encoder_resource_display_name_present=%t audit_resource_id_type=%s target_id_type=%s table_id_type=%s table_org_id_type=%s target_id_matches=%t case_uuid_matches=%t audit_org_matches_scope=%t",
+			t.Logf("audit display diagnostic role=%s endpoint_status=%d action=%s query_sha256=%x params_sha256=%x param_types=uuid,uuid selected_resource_type=%s organization={type=%t,uuid=%t,target=%t,scope=%t,alias=%t,display=%t} provider={type=%t,uuid=%t,target=%t,scope=%t,alias=%t,display=%t} source={type=%t,uuid=%t,target=%t,scope=%t,alias=%t,display=%t} token={type=%t,uuid=%t,target=%t,scope=%t,alias=%t,display=%t} production_case_projection_found=%t production_case_projection_present=%t production_encoder_resource_display_name_present=%t",
 				connection.name,
 				endpointStatus,
 				fixture.action,
-				actualResourceType == fixture.resourceType,
-				targetVisible,
-				scopedTargetVisible,
-				directJoinPredicateMatches,
-				joinedRowPresent,
-				joinedDisplayFieldPresent,
+				queryHash,
+				parameterHash,
+				state.ResourceType,
+				state.Organization.ResourceTypeMatches,
+				state.Organization.UUIDGuardMatches,
+				state.Organization.TargetIDMatches,
+				state.Organization.TargetScopeMatches,
+				state.Organization.JoinedRowPresent,
+				state.Organization.DisplayPresent,
+				state.Provider.ResourceTypeMatches,
+				state.Provider.UUIDGuardMatches,
+				state.Provider.TargetIDMatches,
+				state.Provider.TargetScopeMatches,
+				state.Provider.JoinedRowPresent,
+				state.Provider.DisplayPresent,
+				state.Source.ResourceTypeMatches,
+				state.Source.UUIDGuardMatches,
+				state.Source.TargetIDMatches,
+				state.Source.TargetScopeMatches,
+				state.Source.JoinedRowPresent,
+				state.Source.DisplayPresent,
+				state.Token.ResourceTypeMatches,
+				state.Token.UUIDGuardMatches,
+				state.Token.TargetIDMatches,
+				state.Token.TargetScopeMatches,
+				state.Token.JoinedRowPresent,
+				state.Token.DisplayPresent,
 				projectionFound,
 				projectionResourceDisplayNamePresent,
 				encodedResourceDisplayNamePresent,
-				auditResourceIDType,
-				targetIDType,
-				tableIDType,
-				tableOrgIDType,
-				targetIDMatches,
-				caseUUIDMatches,
-				auditOrgMatchesScope,
 			)
+			if !auditDisplayBranchMeasured(branch) || !projectionFound || !projectionResourceDisplayNamePresent || !encodedResourceDisplayNamePresent {
+				t.Errorf("audit display diagnostic action=%s selected={type=%t,uuid=%t,target=%t,scope=%t,alias=%t,display=%t} production_projection={found=%t,scan=%t,encode=%t}",
+					fixture.action,
+					branch.ResourceTypeMatches,
+					branch.UUIDGuardMatches,
+					branch.TargetIDMatches,
+					branch.TargetScopeMatches,
+					branch.JoinedRowPresent,
+					branch.DisplayPresent,
+					projectionFound,
+					projectionResourceDisplayNamePresent,
+					encodedResourceDisplayNamePresent,
+				)
+			}
 		}
 	}
 }
 
-func auditDisplayJoinedBranchState(
-	action string,
-	organizationRow, organizationDisplay bool,
-	providerRow, providerDisplay bool,
-	sourceRow, sourceDisplay bool,
-	tokenRow, tokenDisplay bool,
-) (rowPresent, displayPresent bool) {
+func auditDisplaySelectedBranchState(action string, state admininternal.AuditLogJoinDiagnosticStateForTest) (admininternal.AuditLogJoinBranchStateForTest, bool) {
 	switch action {
 	case "organization":
-		return organizationRow, organizationDisplay
+		return state.Organization, true
 	case "sso-provider":
-		return providerRow, providerDisplay
+		return state.Provider, true
 	case "ingest-source":
-		return sourceRow, sourceDisplay
+		return state.Source, true
 	case "ingest-token":
-		return tokenRow, tokenDisplay
+		return state.Token, true
 	default:
-		return false, false
+		return admininternal.AuditLogJoinBranchStateForTest{}, false
 	}
+}
+
+func auditDisplayBranchMeasured(branch admininternal.AuditLogJoinBranchStateForTest) bool {
+	return branch.ResourceTypeMatches && branch.UUIDGuardMatches && branch.TargetIDMatches && branch.TargetScopeMatches && branch.JoinedRowPresent && branch.DisplayPresent
 }
 
 func requireAuditDisplayDiagnostic(t *testing.T, role, action, probe string, err error) {

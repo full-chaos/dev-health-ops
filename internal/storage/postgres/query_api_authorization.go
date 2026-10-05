@@ -27,8 +27,10 @@ import (
 // is the completeness proof: it drives each of these paths as the role.
 //
 // Reads:
-//   - go_api_routing_state: routeswitch.PostgresSwitch.Enabled (every request),
-//     the proof switch, and the registry route's digest-drift log.
+//   - go_api_routing_state: read by no code of this build (CHAOS-8702). It stays here only until CHAOS-8706 drops the table:
+//     an older build, the rollback window, still reads it, and the posture check refuses a role that holds a privilege
+//     the manifest does not declare.
+//   - go_api_class_decision: routeswitch.ClassDecisionSwitch.Enabled, the MCP listener's and the class-row gate's read.
 //   - go_api_proof_orgs: /query/proof-write's org allowlist (CHAOS-7096) --
 //     a per-request lookup keyed on the authenticated claims' OrgID, checked
 //     before routeMux.Dispatch. Empty by default; only dho goapi routing

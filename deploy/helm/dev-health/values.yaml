@@ -982,7 +982,7 @@ secrets:
     # invalidation the Go finalize emits never reaches the API's cache.
     VALKEY_URI: ""
     # -- query-api's OWN connection to the registry tables
-    #    (go_api_candidate_build / go_api_routing_state / go_api_proof_run).
+    #    (go_api_candidate_build / go_api_class_decision / go_api_proof_run).
     #    A dedicated key rather than a widened one: the DSN a long-running
     #    runtime service holds and the one a one-shot migration Job holds are
     #    different credentials with different lifetimes, and today query-api

@@ -382,7 +382,7 @@ func TestClassGateDecidesPerDocumentWhenAnOperationHasTwoDocuments(t *testing.T)
 }
 
 // Source guard: ONE constructor builds the class-row switch (newClassRowSwitch: canary and primary rows only), and buildQueryRoute and
-// newQueryHandler both use it. NewProofSwitch admits SHADOW rows: it must stay on the measurement-only proof handler and nowhere near the switch the
+// newQueryHandler both use it. NewClassDecisionProofSwitch admits SHADOW decisions: it must stay on the measurement-only proof handler and nowhere near the switch the
 // MCP listener and this route serve through (a shadow root would be served on both ports).
 func TestTheClassRowSwitchIsBuiltByOneConstructorThatDoesNotAdmitShadowRows(t *testing.T) {
 	raw, err := os.ReadFile("query_route.go")

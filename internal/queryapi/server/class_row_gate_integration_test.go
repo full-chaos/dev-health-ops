@@ -2,7 +2,7 @@
 
 package server
 
-// CHAOS-7831 wiring proof: the REAL newQueryHandler (real Mux, real PostgresSwitch over a real Postgres, real gqlgen) refuses a run_operation request
+// CHAOS-7831 wiring proof: the REAL newQueryHandler (real Mux, real ClassDecisionSwitch over a real Postgres, real gqlgen) refuses a run_operation request
 // (internal listener + acr identity headers) for a root whose class row is dark, serves it when the class row is lit, and does not gate the
 // envelope-bearer caller (the web app). The unit tests (class_row_gate_test.go) pin the gate; this pins that the route is wired to it.
 
@@ -63,8 +63,6 @@ func TestRunOperationRouteFollowsTheClassRowOfItsRoot(t *testing.T) {
 	}
 	handler, _, _, _, _ := newQueryHandler(&fakeHotspotsCHClient{}, pool, verifier, itTestSchemaDigest, os.Getenv)
 	runOperation := markClassGated(handler) // what buildQueryRoute mounts at /query/run-operation
-	documentDigest := digestHex(registeredHotspotsDocument)
-	setRoutingMode(t, pool, documentDigest, "hotspots", "canary") // the DOCUMENT row is lit all along: only the class row changes
 	token := signTestEnvelope(t, priv, "org-1")
 	hotspots := mcpclass.Operation("hotspots")
 

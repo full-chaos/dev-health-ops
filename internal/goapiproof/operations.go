@@ -72,7 +72,7 @@ type OperationSpec struct {
 	// DOCUMENT selects at the top of `data` -- which is not always the
 	// operation name. flowMatrix, investmentBreakdown and investmentFull
 	// all select `analytics`, because query_route.go's operation keys are
-	// its own Mux/PostgresSwitch keys, chosen to disambiguate several
+	// its own Mux keys, chosen to disambiguate several
 	// registered documents that share a root field.
 	//
 	// It exists so every declared parity path can be checked against the

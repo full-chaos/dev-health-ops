@@ -20,9 +20,9 @@
 # requires ALL FIVE of the env vars below together; if any one is unset,
 # /query is never mounted (main.go's documented "stay Wave-0 empty"
 # fallback) -- see that file's doc comment. Getting five-of-five set is a
-# NECESSARY but not SUFFICIENT condition for traffic: routing rows in
-# go_api_routing_state are a separate, deliberately NOT-this-lane's step
-# (see .remember/go-api-enablement-runbook.md).
+# NECESSARY condition for traffic: query-api serves every registered operation
+# with no routing row (CHAOS-8702); only MCP class roots need a decision in
+# go_api_class_decision.
 #
 # Key material is environment-specific and is NEVER committed here:
 #   - GO_API_ENVELOPE_JWKS_PATH points at a JWKS file (public key only)
@@ -66,8 +66,8 @@ services:
       # "ClickHouse readiness check failed" (see deploy/go-workers's
       # go-worker service for the identical, already-documented gotcha).
       CLICKHOUSE_URI: clickhouse://${CLICKHOUSE_USER:-ch}:${CLICKHOUSE_PASSWORD:-ch}@clickhouse:9000/${CLICKHOUSE_DB:-default}
-      # Registry tables (go_api_candidate_build / go_api_routing_state /
-      # go_api_proof_run, alembic 0114) live in the same devhealth Postgres
+      # Registry tables (go_api_candidate_build / go_api_class_decision /
+      # go_api_proof_run) live in the same devhealth Postgres
       # database the api service uses, reached the same way every other Go
       # service in this stack reaches it -- pgbouncer:6432 in transaction
       # mode, plain `postgresql://` scheme (pgx, not SQLAlchemy, so no

@@ -338,7 +338,7 @@ run_in_modules() {
 }
 
 check_vet() {
-  run_in_modules "go vet" go vet -mod=readonly ./...
+  run_in_modules "go vet" go vet -mod=readonly -trimpath ./...
 }
 
 # check_race_excluded_ran (CHAOS-8135, CHAOS-8118): a test compiled out of the -race leg by a `!race` build tag must
@@ -358,7 +358,7 @@ check_race_excluded_ran() {
     package="${row%%$'\t'*}"
     [ -n "${name}" ] && [ -n "${package}" ] && [ "${name}" != "${package}" ] || die "race_excluded_tests.tsv row is not <package><TAB><test>"
     [ -d "${ROOT}/${package}" ] || die "race-excluded package ${package} does not exist"
-    out="$(cd "${ROOT}" && "${GO_ENV_OFF[@]}" GOWORK=off go test -mod=readonly -count=1 -v -run "^${name}\$" "./${package}" 2>&1)" \
+    out="$(cd "${ROOT}" && "${GO_ENV_OFF[@]}" GOWORK=off go test -mod=readonly -trimpath -count=1 -v -run "^${name}\$" "./${package}" 2>&1)" \
       || { printf '%s\n' "${out}" | tail -n 40 >&2; die "race-excluded test ${package} ${name} failed in the non-race leg"; }
     printf '%s\n' "${out}" | grep -q -- "^--- PASS: ${name} (" || die "race-excluded test ${package} ${name} did not run in the non-race leg (no PASS line)"
     printf 'race-excluded-ran: %s %s PASS\n' "${package}" "${name}"
@@ -368,12 +368,12 @@ check_race_excluded_ran() {
 }
 
 check_test() {
-  run_in_modules "go test" go test -mod=readonly ./...
+  run_in_modules "go test" go test -mod=readonly -trimpath ./...
   check_race_excluded_ran
 }
 
 check_race() {
-  run_in_modules "go test -race" go test -mod=readonly -race ./...
+  run_in_modules "go test -race" go test -mod=readonly -trimpath -race ./...
 }
 
 # check_race_shard SHARD COUNT (CHAOS-6690): the SHARD-th of COUNT weight-balanced
@@ -396,7 +396,7 @@ check_providersync_race_shard() {
   [ -f "${weights}" ] || die "providersync race shards need ${weights}"
   # CHAOS-8275: list EVERY name of the RACE test binary (so a //go:build race file is seen too), not just ^Test of the plain build. A Fuzz*,
   # Example* or Benchmark* name would be selected by no `-run ^(Test...)$` shard and run in no race leg, so it fails here instead.
-  listing="$(cd "${ROOT}" && "${GO_ENV_OFF[@]}" GOWORK=off go test -mod=readonly -race -list '.*' ./internal/providersync)" \
+  listing="$(cd "${ROOT}" && "${GO_ENV_OFF[@]}" GOWORK=off go test -mod=readonly -trimpath -race -list '.*' ./internal/providersync)" \
     || die "go test -race -list failed for internal/providersync"
   listing="$(printf '%s\n' "${listing}" | grep -Ev '^(ok|FAIL|\?|---)[[:space:]]' | grep -v '^$' || true)"
   other="$(printf '%s\n' "${listing}" | grep -v '^Test' || true)"
@@ -421,7 +421,7 @@ check_providersync_race_shard() {
   printf 'go test -race providersync shard %s/%s: %s of %s tests\n' "${shard}" "${count}" "$(printf '%s\n' "${regex}" | tr -cd '|' | wc -c | awk '{print $1 + 1}')" "${total}"
   (
     cd "${ROOT}"
-    "${GO_ENV_OFF[@]}" GOWORK=off go test -mod=readonly -race -run "${regex}" ./internal/providersync
+    "${GO_ENV_OFF[@]}" GOWORK=off go test -mod=readonly -trimpath -race -run "${regex}" ./internal/providersync
   )
 }
 
@@ -460,7 +460,7 @@ check_race_shard() {
     selected=$((selected + ${#pkgs[@]}))
     (
       cd "${ROOT}/${module_dir}"
-      "${GO_ENV_OFF[@]}" GOWORK=off go test -mod=readonly -race "${pkgs[@]}"
+      "${GO_ENV_OFF[@]}" GOWORK=off go test -mod=readonly -trimpath -race "${pkgs[@]}"
     )
   done
   [ "${selected}" -gt 0 ] \
@@ -477,7 +477,7 @@ check_ratchets() {
   printf 'ratchets: closed lists against the merge base\n'
   (
     cd "${ROOT}"
-    "${GO_ENV_OFF[@]}" GOWORK=off go run -mod=readonly ./internal/testsupport/ratchet/cmd/ratchets
+    "${GO_ENV_OFF[@]}" GOWORK=off go run -mod=readonly -trimpath ./internal/testsupport/ratchet/cmd/ratchets
   )
 }
 
@@ -806,7 +806,7 @@ check_venue_oracles() {
         GOWORK=off \
         DEV_HEALTH_VENUE_ORACLES=1 \
         DEV_HEALTH_LIVE_PYTHON_ORACLE_PROOF_DIR="${pkg_proof_dir}" \
-        go test -mod=readonly -tags=integration -count=1 -timeout=40m \
+        go test -mod=readonly -trimpath -tags=integration -count=1 -timeout=40m \
           -run "${pattern}" -json "${rel}"
     ) >"${json_log}" 2>"${stderr_log}" || go_test_status=$?
 
@@ -880,7 +880,7 @@ check_build() {
 
   # An explicit directory keeps single-main nested modules (including River
   # N-1) from dropping an executable into their source directory.
-  run_in_modules "go build" go build -mod=readonly \
+  run_in_modules "go build" go build -mod=readonly -trimpath \
     -o "${DEV_HEALTH_GO_BUILD_OUTPUT}/bin/" ./...
 
   git -C "${ROOT}" status --short --untracked-files=all > "${status_after}"
@@ -904,7 +904,7 @@ check_contract() {
   printf 'job contracts: validate\n'
   (
     cd "${ROOT}"
-    "${GO_ENV_OFF[@]}" GOWORK=off go run -mod=readonly ./cmd/dho contracts \
+    "${GO_ENV_OFF[@]}" GOWORK=off go run -mod=readonly -trimpath ./cmd/dho contracts \
       validate --root "${contract_root}"
   )
 
@@ -914,7 +914,7 @@ check_contract() {
     printf 'job contracts: compare %s\n' "${contract_base}"
     (
       cd "${ROOT}"
-      "${GO_ENV_OFF[@]}" GOWORK=off go run -mod=readonly ./cmd/dho contracts \
+      "${GO_ENV_OFF[@]}" GOWORK=off go run -mod=readonly -trimpath ./cmd/dho contracts \
         compare --base "${contract_base}" --candidate "${contract_root}"
     )
   fi
@@ -1753,7 +1753,7 @@ check_integration_package_shard() {
     fi
     (
       cd "${ROOT}/${module_dir}"
-      "${GO_ENV_OFF[@]}" GOWORK=off ${INTEGRATION_TEST_ENV[@]+"${INTEGRATION_TEST_ENV[@]}"} go test -mod=readonly -tags=integration -count=1 -timeout=30m "${run_pkgs[@]}"
+      "${GO_ENV_OFF[@]}" GOWORK=off ${INTEGRATION_TEST_ENV[@]+"${INTEGRATION_TEST_ENV[@]}"} go test -mod=readonly -trimpath -tags=integration -count=1 -timeout=30m "${run_pkgs[@]}"
     )
   done
 
@@ -1801,7 +1801,7 @@ check_providersync_test_shard() {
     "${shard}" "${selected_count}"
   (
     cd "${ROOT}"
-    "${GO_ENV_OFF[@]}" GOWORK=off go test -mod=readonly -tags=integration -count=1 -timeout=30m -run "${test_regex}" ./internal/providersync
+    "${GO_ENV_OFF[@]}" GOWORK=off go test -mod=readonly -trimpath -tags=integration -count=1 -timeout=30m -run "${test_regex}" ./internal/providersync
   )
 }
 
@@ -1851,7 +1851,7 @@ check_integration() {
     printf 'go test integration: %s -> %s\n' "${module_dir}" "${run_pkgs[*]}"
     (
       cd "${ROOT}/${module_dir}"
-      "${GO_ENV_OFF[@]}" GOWORK=off ${INTEGRATION_TEST_ENV[@]+"${INTEGRATION_TEST_ENV[@]}"} go test -mod=readonly -tags=integration -count=1 -timeout=30m "${run_pkgs[@]}"
+      "${GO_ENV_OFF[@]}" GOWORK=off ${INTEGRATION_TEST_ENV[@]+"${INTEGRATION_TEST_ENV[@]}"} go test -mod=readonly -trimpath -tags=integration -count=1 -timeout=30m "${run_pkgs[@]}"
     )
   done
 }
@@ -1866,7 +1866,7 @@ check_multi_replica_workers() {
     "${GO_ENV_OFF[@]}" \
       GOWORK=off \
       DEV_HEALTH_MULTI_REPLICA_PROOF="${proof_file}" \
-      go test -mod=readonly -tags=integration -count=1 -timeout=5m \
+      go test -mod=readonly -trimpath -tags=integration -count=1 -timeout=5m \
         -run '^TestExplicitQueueMultiReplicaClaimDrainRestart$' \
         ./internal/workerservice
   ) || result=$?
@@ -1905,7 +1905,7 @@ check_multi_replica_workers() {
 # ./...` needs no Docker and runs in seconds, so it belongs in the fast path
 # rather than the Docker-backed integration job.
 check_integration_vet() {
-  run_in_modules "go vet -tags=integration" go vet -mod=readonly -tags=integration ./...
+  run_in_modules "go vet -tags=integration" go vet -mod=readonly -trimpath -tags=integration ./...
 }
 
 discover_modules

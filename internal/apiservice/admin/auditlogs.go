@@ -81,10 +81,10 @@ const auditLogFrom = ` FROM audit_logs a
 		AND provider.id = a.resource_id::uuid AND provider.org_id = a.org_id
 	LEFT JOIN external_ingest_sources source ON a.resource_type = 'ingest_source'
 		AND a.resource_id ~* '^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$'
-		AND source.id = a.resource_id::uuid AND source.org_id = a.org_id
+		AND source.id = a.resource_id::uuid AND source.org_id = a.org_id::text
 	LEFT JOIN external_ingest_tokens token ON a.resource_type = 'ingest_token'
 		AND a.resource_id ~* '^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$'
-		AND token.id = a.resource_id::uuid AND token.org_id = a.org_id`
+		AND token.id = a.resource_id::uuid AND token.org_id = a.org_id::text`
 
 func scanAuditLog(row pgx.Row) (*auditLog, error) {
 	var log auditLog

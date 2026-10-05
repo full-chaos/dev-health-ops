@@ -3,6 +3,7 @@ package analytics
 import (
 	"context"
 	"errors"
+	"slices"
 	"strings"
 	"testing"
 
@@ -141,6 +142,115 @@ func TestCompileBreakdown_ExactKeysBypassIndependentTopNCut(t *testing.T) {
 	got, ok := bindings["breakdown_keys"].([]string)
 	if !ok || len(got) != 2 || got[0] != "repo-line" || got[1] != "repo-branch" {
 		t.Errorf("breakdown_keys binding = %#v, want the requested keys", bindings["breakdown_keys"])
+	}
+}
+
+func TestCompileBreakdown_ExactEmptyKeysDifferFromUnspecified(t *testing.T) {
+	base := BreakdownRequest{
+		Dimension: DimensionRepo,
+		Measure:   MeasureCoverageBranchPct,
+		StartDate: mustDate(t, "2026-01-01"),
+		EndDate:   mustDate(t, "2026-01-31"),
+		TopN:      1,
+	}
+	unspecified, err := CompileBreakdown(base, "org-1", 30, false, nil)
+	if err != nil {
+		t.Fatalf("CompileBreakdown unspecified keys: %v", err)
+	}
+	if !strings.Contains(unspecified.sql, "LIMIT {top_n:UInt32}") {
+		t.Fatalf("unspecified keys must keep topN cut: %s", unspecified.sql)
+	}
+	if got := bindingMap(unspecified.bindings)["top_n"]; got != 1 {
+		t.Fatalf("unspecified keys top_n = %#v, want 1", got)
+	}
+
+	exactEmpty := base
+	exactEmpty.Keys = []string{}
+	q, err := CompileBreakdown(exactEmpty, "org-1", 30, false, nil)
+	if err != nil {
+		t.Fatalf("CompileBreakdown exact empty keys: %v", err)
+	}
+	if strings.Contains(q.sql, "LIMIT {top_n:UInt32}") {
+		t.Fatalf("an exact empty set must not become a topN answer: %s", q.sql)
+	}
+	if !strings.Contains(q.sql, "repo_id IN {breakdown_keys:Array(String)}") {
+		t.Fatalf("exact empty set must retain the key predicate: %s", q.sql)
+	}
+	keys, ok := bindingMap(q.bindings)["breakdown_keys"].([]string)
+	if !ok || len(keys) != 0 {
+		t.Fatalf("exact empty binding = %#v, want an empty []string", bindingMap(q.bindings)["breakdown_keys"])
+	}
+	if _, ok := bindingMap(q.bindings)["top_n"]; ok {
+		t.Fatalf("exact empty set must not bind top_n: %#v", bindingMap(q.bindings))
+	}
+}
+
+func TestCompileBreakdown_ExactKeysRetainOrgTeamAndRepoScope(t *testing.T) {
+	for _, tc := range []struct {
+		name          string
+		dimension     Dimension
+		useInvestment bool
+		filters       *model.FilterInput
+		wantScopeSQL  string
+		wantScopeIDs  []string
+	}{
+		{
+			name:      "team scope",
+			dimension: DimensionRepo,
+			filters: &model.FilterInput{Scope: &model.ScopeFilterInput{
+				Level: model.ScopeLevelInputTeam,
+				Ids:   []string{"team-a", "team-b"},
+			}},
+			wantScopeSQL: "team_id IN {scope_ids:Array(String)}",
+			wantScopeIDs: []string{"team-a", "team-b"},
+		},
+		{
+			name:          "repo scope",
+			dimension:     DimensionTheme,
+			useInvestment: true,
+			filters: &model.FilterInput{Scope: &model.ScopeFilterInput{
+				Level: model.ScopeLevelInputRepo,
+				Ids:   []string{"repo-a", "repo-b"},
+			}},
+			wantScopeSQL: "repo_id IN {scope_ids:Array(String)}",
+			wantScopeIDs: []string{"repo-a", "repo-b"},
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			q, err := CompileBreakdown(BreakdownRequest{
+				Dimension: tc.dimension,
+				Measure:   MeasureCount,
+				StartDate: mustDate(t, "2026-01-01"),
+				EndDate:   mustDate(t, "2026-01-31"),
+				TopN:      1,
+				Keys:      []string{"selected-key"},
+			}, "org-1", 30, tc.useInvestment, tc.filters)
+			if err != nil {
+				t.Fatalf("CompileBreakdown: %v", err)
+			}
+			if !strings.Contains(q.sql, "org_id = {org_id:String}") {
+				t.Fatalf("exact-key query lost its org predicate: %s", q.sql)
+			}
+			if !strings.Contains(q.sql, tc.wantScopeSQL) {
+				t.Fatalf("exact-key query lost scope predicate %q: %s", tc.wantScopeSQL, q.sql)
+			}
+			if !strings.Contains(q.sql, "IN {breakdown_keys:Array(String)}") {
+				t.Fatalf("exact-key query lost key predicate: %s", q.sql)
+			}
+			bindings := bindingMap(q.bindings)
+			if got := bindings["org_id"]; got != "org-1" {
+				t.Fatalf("org_id binding = %#v, want org-1", got)
+			}
+			if got, ok := bindings["scope_ids"].([]string); !ok || !slices.Equal(got, tc.wantScopeIDs) {
+				t.Fatalf("scope_ids binding = %#v, want %#v", bindings["scope_ids"], tc.wantScopeIDs)
+			}
+			if got, ok := bindings["breakdown_keys"].([]string); !ok || !slices.Equal(got, []string{"selected-key"}) {
+				t.Fatalf("breakdown_keys binding = %#v, want selected-key", bindings["breakdown_keys"])
+			}
+			if _, ok := bindings["top_n"]; ok {
+				t.Fatalf("exact-key query must not retain top_n: %#v", bindings)
+			}
+		})
 	}
 }
 

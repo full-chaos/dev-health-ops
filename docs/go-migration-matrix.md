@@ -208,7 +208,7 @@ candidate_build)` and never carries it forward across any of the four changing. 
 says nothing about whether a new binary is the one that was measured: re-run `dho goapi prove` against the deployed build.
 
 <!-- BEGIN GENERATED GO API OPERATIONS -->
-_Rendered 2026-10-05T10:34:50Z against main merge-base `2529f7a27fc5ee61e587d4a1ae0eb5b2c68157d8`; SDL digest pin `sha256:e931b3c76732183f508561100c42c8188d160e2bd0d1593e5087f9ebee8ce44c`; fleet read 2026-09-28T10:08:59Z via fleet file fleet-prod-2026-09-28.json._
+_Rendered 2026-10-05T14:27:38Z against main merge-base `4274e49fc4ed8a963234f802a68e329161a38e37`; SDL digest pin `sha256:6718c90eef38eff9f6e0dca83d27395d058dd4256cbb779205f8407879de22e5`; fleet read 2026-09-28T10:08:59Z via fleet file fleet-prod-2026-09-28.json._
 
 _query-api serves all **61** catalog operations: the catalog switch (`routeswitch.NewCatalogSwitch`) reads no routing row, so there is no per-operation mode, liveness or proof column to render. The only routing state is the MCP class decision per root (`go_api_class_decision`); `dho goapi routing status` reports it._
 <!-- END GENERATED GO API OPERATIONS -->

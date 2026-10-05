@@ -47,9 +47,6 @@ func runSeed(argv []string) error {
 	if err := common.requirePositiveTimeout(); err != nil {
 		return err
 	}
-	if err := requireClassOperations("seed", common.operations); err != nil {
-		return err
-	}
 	if allUnrouted == (strings.TrimSpace(common.operations) != "") {
 		return refuse("give exactly one of -operations <names> or -all-unrouted")
 	}

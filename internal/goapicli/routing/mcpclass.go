@@ -89,19 +89,3 @@ func classKinds(operations []string) map[string]string {
 	}
 	return kinds
 }
-
-// catalogOperationRefusal is the answer of enable, disable and seed to a document (catalog) operation:
-// query-api serves every registered operation and reads no routing row for it (CHAOS-8702), so there is
-// nothing to turn on, off or create. Only MCP class rows (mcp:<root> or all-mcp) are still decided by a row.
-const catalogOperationRefusal = "`%s` takes MCP class rows only (-operations mcp:<root> or all-mcp). A catalog operation is served by query-api whatever its routing row says, so there is nothing to turn on, off or create for it; to hold one dark, change the code and deploy"
-
-// requireClassOperations refuses, before any credential, database or network step, a request that does
-// not name MCP class rows.
-func requireClassOperations(verb, operations string) error {
-	if _, isClass, err := resolveClassScope(operations); err != nil {
-		return err
-	} else if !isClass {
-		return refuse(catalogOperationRefusal, verb)
-	}
-	return nil
-}

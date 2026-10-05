@@ -90,9 +90,9 @@ const usage = `dho goapi routing <verb> [flags]
 
 verbs:
   repoint   point every routing row at the build /buildinfo reports, modes untouched
-  enable    turn MCP class roots ON (mode canary|primary), with every preflight
-  disable   turn MCP class roots OFF (mode python|disabled|shadow); mode only, never the build
-  seed      create the FIRST routing row (shadow only) of an MCP class root
+  enable    turn operations ON (mode canary|primary), with every preflight
+  disable   turn operations OFF (mode python|disabled|shadow); mode only, never the build
+  seed      create the FIRST routing row (shadow only) for operations that have none
   status    report both planes' digests and every operation's row; never fails
   proof-org manage /query/proof-write's org allowlist (add/remove/list); see "proof-org -h"
 
@@ -107,7 +107,7 @@ func Command() cli.Command {
 	return cli.Command{
 		Name:    "routing",
 		Kind:    cli.Verb,
-		Summary: "repoint/enable/disable/seed/status the Go-API routing registry (MCP class rows)",
+		Summary: "repoint/enable/disable/seed/status the Go-API routing registry",
 		Run: func(_ context.Context, env cli.Env) int {
 			stdout = env.Stdout
 			stderr = env.Stderr

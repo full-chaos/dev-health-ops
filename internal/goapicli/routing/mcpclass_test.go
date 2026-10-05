@@ -139,35 +139,3 @@ func TestEnableAllowExcludedTakesOperationNamesOnly(t *testing.T) {
 		}
 	}
 }
-
-// CHAOS-8704: enable, disable and seed take MCP class rows only. A catalog operation is refused by name
-// before any flag the verb needs for a write (database, credential) is read, so the refusal needs none.
-func TestEnableDisableSeedRefuseACatalogOperationAndAcceptAClassRoot(t *testing.T) {
-	for _, verb := range []string{"enable", "disable", "seed"} {
-		for _, operations := range []string{"featureFlags", "all-registered", "featureFlags,hotspots", ""} {
-			err := requireClassOperations(verb, operations)
-			if err == nil || !strings.Contains(err.Error(), "`"+verb+"` takes MCP class rows only") {
-				t.Errorf("%s with -operations %q: err = %v, want the catalog-operation refusal", verb, operations, err)
-			}
-		}
-		for _, operations := range []string{"mcp:hotspots", "all-mcp"} {
-			if err := requireClassOperations(verb, operations); err != nil {
-				t.Errorf("%s with -operations %q: err = %v, want accepted", verb, operations, err)
-			}
-		}
-	}
-}
-
-func TestVerbsRefuseACatalogOperationThroughTheRealEntryPoint(t *testing.T) {
-	for _, argv := range [][]string{
-		{"enable", "-operations", "featureFlags", "-recorded-by", "t", "-review-evidence", "t"},
-		{"disable", "-operations", "featureFlags", "-recorded-by", "t", "-review-evidence", "t"},
-		{"seed", "-operations", "featureFlags", "-recorded-by", "t", "-review-evidence", "t"},
-		{"seed", "-all-unrouted", "-recorded-by", "t", "-review-evidence", "t"},
-	} {
-		err := run(argv)
-		if err == nil || !strings.Contains(err.Error(), "takes MCP class rows only") {
-			t.Errorf("%v: err = %v, want the catalog-operation refusal", argv, err)
-		}
-	}
-}

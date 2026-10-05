@@ -171,7 +171,7 @@ func TestSeedRefusesAnExistingRowInAnyOtherModeAndTouchesNothing(t *testing.T) {
 	}
 }
 
-func TestSeedRefusesAnOperationWithARowOnlyAtAnOlderDigestAndSaysCarry(t *testing.T) {
+func TestSeedRefusesAnOperationWithARowOnlyAtAnOlderDigest(t *testing.T) {
 	pool, dsn := startVerbPostgres(t)
 	catalog := writeCatalog(t, map[string]string{seedOpA: seedDigA})
 	t.Setenv(bearerEnvVar, verbTestBearer)
@@ -182,8 +182,8 @@ func TestSeedRefusesAnOperationWithARowOnlyAtAnOlderDigestAndSaysCarry(t *testin
 	if err == nil {
 		t.Fatal("seed must refuse")
 	}
-	if !strings.Contains(out, "routing carry") {
-		t.Fatalf("refusal must say to run routing carry: %s", out)
+	if !strings.Contains(out, "is left where it is (nothing moves rows between digests)") {
+		t.Fatalf("refusal must say the older row is left where it is: %s", out)
 	}
 	if rows := readSeedRows(t, pool); len(rows) != 1 || rows[0].schema != seedOlder {
 		t.Fatalf("no row may be written at the running digest: %+v", rows)

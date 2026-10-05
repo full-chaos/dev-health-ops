@@ -100,14 +100,14 @@ func TestStatusTextSaysServedOnlyForAnOperationWithNoRow(t *testing.T) {
 	missing := goapiproof.OperationStatus{Operation: "hotspots", DocumentDigest: "catalog-digest", DigestState: goapiproof.DigestMissing}
 
 	out := text(map[string]int{}, missing, agree, false)
-	if !strings.Contains(out, "no routing row at any schema digest: SERVED by the catalog rule of this build; a query-api older than this build refuses it") {
+	if !strings.Contains(out, "no routing row at any schema digest: SERVED by this build, which reads no routing row for a catalog operation") {
 		t.Errorf("an operation with no row is not reported served:\n%s", out)
 	}
-	if !strings.Contains(out, "table is empty") || !strings.Contains(out, "a query-api of this build serves every registered operation") || strings.Contains(out, "nothing is enabled") {
+	if !strings.Contains(out, "table is empty") || !strings.Contains(out, "a query-api of this build serves every registered operation without a row") || strings.Contains(out, "nothing is enabled") {
 		t.Errorf("the empty-table line still reads as if nothing were served:\n%s", out)
 	}
 
-	if out := text(map[string]int{}, missing, nil, true); strings.Contains(out, "SERVED by the catalog rule") || !strings.Contains(out, "could not be asked whether it registers this one") {
+	if out := text(map[string]int{}, missing, nil, true); strings.Contains(out, "SERVED by this build") || !strings.Contains(out, "could not be asked whether it registers this one") {
 		t.Errorf("with the deployed plane unreachable the text must not claim the operation is served:\n%s", out)
 	}
 	for name, status := range map[string]goapiproof.OperationStatus{
@@ -119,7 +119,7 @@ func TestStatusTextSaysServedOnlyForAnOperationWithNoRow(t *testing.T) {
 			t.Errorf("%s: an operation that has a row was reported under the catalog rule:\n%s", name, out)
 		}
 	}
-	if out := text(map[string]int{}, missing, map[string]string{"hotspots": "other"}, false); strings.Contains(out, "SERVED by the catalog rule") {
+	if out := text(map[string]int{}, missing, map[string]string{"hotspots": "other"}, false); strings.Contains(out, "SERVED by this build") {
 		t.Errorf("an operation the deployed plane registers under another document was reported served:\n%s", out)
 	}
 	// An entry that is not MISSING never gets the line, whatever its served_without_row holds: a report

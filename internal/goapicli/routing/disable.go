@@ -75,9 +75,6 @@ func runDisable(argv []string) error {
 	if err := common.requirePositiveTimeout(); err != nil {
 		return err
 	}
-	if err := requireClassOperations("disable", common.operations); err != nil {
-		return err
-	}
 	if mode == "" {
 		return refuse("-mode is required and must be one of %v", goapiproof.DisableModes)
 	}

@@ -103,7 +103,10 @@ keep an old blocked result alive.
 Readers select the latest row by `computed_at` for each stable identity and
 only then keep rows with a positive duration. Filtering before selecting the
 latest row could show an item that a recompute has removed. The Blocked Work
-list and count read those latest positive rows.
+list and count read those latest positive rows. A `POST /api/v1/drilldown/issues`
+request with `filters.how.blocked: true` returns one row per provider and work
+item in its window, plus a `count` before the response limit. Team scope keeps
+the item-days recorded for that team before the window is reduced to one row.
 
 When the relation is known to exist:
 

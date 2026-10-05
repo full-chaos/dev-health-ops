@@ -228,7 +228,7 @@ GO_API_PROVE_WRITE_FIXTURE_ORG=<fixture org id> dho goapi prove-write \
 Both verbs read the domain Postgres DSN from `POSTGRES_URI` in the environment when `-postgres-uri` is absent; keep it out of the command line, where it would show in the process arguments.
 
 `-query-url` must name the INTERNAL listener's `/query/proof-write`. The verb's default (`http://localhost:8090/query`) is the
-public route, which answers 404 for a mutation whose routing row is not yet eligible: exactly the bootstrap case. Before the
+public route: it carries real traffic and has no proof-org allowlist, so a proof write goes through the internal listener's `/query/proof-write` instead (mutation-only, mounted only on the internal listener, and refusing every org not on the allowlist). Before the
 first run, on the query-api Deployment: enable the internal listener (`queryApi.internal.enabled`, or the umbrella chart's
 `queryApiInternal`), set `GO_API_PROOF_WRITE_ROUTE_ENABLED=true`, and put the Fixture Org on the allowlist with
 `dho goapi routing proof-org add -org <fixture org id> -recorded-by <operator> -review-evidence "<why>"` (with `POSTGRES_URI` in the environment, never on the command line). The route refuses every org not

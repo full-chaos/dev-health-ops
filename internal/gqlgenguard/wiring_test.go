@@ -31,7 +31,7 @@ func readRepoFile(t *testing.T, rel string) string {
 }
 
 // guardStepPattern finds the workflow step that runs the guard.
-var guardStepPattern = regexp.MustCompile(`(?m)^\s*run:\s*go run \./cmd/gqlgen-guard\s+(\S+)(.*)$`)
+var guardStepPattern = regexp.MustCompile(`(?m)^\s*run:\s*go run (?:-trimpath\s+)?\./cmd/gqlgen-guard\s+(\S+)(.*)$`)
 
 func TestTheDriftCheckIsWiredIntoGoQualityAndIsActive(t *testing.T) {
 	// The workflow is PARSED, not scanned as text: a text scan accepts

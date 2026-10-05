@@ -735,6 +735,10 @@ CLI was deleted afterwards, and each area is now:
   `dho admin`, `dho migrate`
 - `dev-hops workers inspect` -- `dho workers` (partial)
 
+## Declared differences from the recorded Python answer
+
+- **`/graphql`, org-less superadmin naming an org (CHAOS-7710, owner decision 2026-10-04).** A verified superadmin whose claims carry no org, that names an org (`orgId` / `org_id` argument) and sends no `X-Org-Id` header, is refused with `Authorization required` (`internal/queryapi/graph/operation_org_guard.go`, `operationOrgDecision`). The recorded Python answer rebinds to the named org and serves it, and it also reads a `?org_id=` query fallback. Go does neither. An org-less superadmin reaches the platform admin pages only. A superadmin that impersonates a user carries that user's org id and is served for that org. Pinned by `TestOperationOrgGuardRefusesAnOrglessSuperuserNamingAnOrg` and `TestOperationOrgGuardServesAnImpersonationSessionNamingItsOrg`.
+
 ## Known gaps (not fixed in this PR)
 
 - ~~**`internal/jobs/families.json` does not exist** -- workgraph/investment kinds have no machine-readable

@@ -34,7 +34,6 @@ _SRC = _REPO_ROOT / "src" / "dev_health_ops"
 #: as attempted in the same transaction.
 _ATTEMPTED_WRITERS = {
     "internal/scheduler/sync/materializer.go": "RecordExecutedProofAttempted",
-    "src/dev_health_ops/sync/planner.py": "record_executed_proof_attempts",
     # CHAOS-4266: the executed-proof gate's synthetic cicd/deployments/
     # incidents/tests seeding constructs a SyncRunUnit already at SUCCESS,
     # so it records ATTEMPTED in the same transaction as the insert.

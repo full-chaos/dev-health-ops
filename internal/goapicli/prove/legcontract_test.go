@@ -180,7 +180,7 @@ func exitFixture(t *testing.T, onGraphQL func(w http.ResponseWriter, baseline bo
 	if err := os.WriteFile(docsPath, docs, 0o600); err != nil {
 		t.Fatal(err)
 	}
-	withFakePool(t, &e2ePool{routingRows: [][]any{{"featureFlags", digest, "canary", buildSHA}}})
+	withFakePool(t, &e2ePool{})
 	withOrgMinter(t, org, org)
 	reportPath = filepath.Join(t.TempDir(), "report.json")
 	return []string{

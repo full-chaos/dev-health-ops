@@ -1,28 +1,18 @@
 package server
 
-// GET /registry, and the startup routing-state drift log.
+// GET /registry.
 //
-// Both exist because of one failure. On 2026-09-01 an SDL change (#2065,
+// It exists because of one failure. On 2026-09-01 an SDL change (#2065,
 // 33b3f3f21d) moved the canonical schema digest from sha256:67b87d38... to
-// sha256:29d509cd.... Twelve go_api_routing_state rows had been seeded
-// hours earlier at the OLD digest, every one of them mode=canary,
-// rollout_percentage=100. PostgresSwitch keys its lookup on
-// (schema_digest, document_digest, selected_operation), so from that
-// commit onward every Enabled() call returned false, every request fell
-// back to Python, and both planes did so EXACTLY AS DESIGNED -- a missing
-// row is the documented safe default (see PostgresSwitch's doc comment).
+// sha256:29d509cd.... Twelve routing rows had been seeded hours earlier at the
+// OLD digest, and from that commit onward every request fell back to Python,
+// silently, for six days. Routing rows no longer decide what query-api serves
+// (CHAOS-8702), but the digest check remains useful.
 //
-// Nothing was wrong with the fail-closed behaviour. What was wrong is
-// that "no operation is enabled" and "every enablement silently died"
-// produced identical, invisible output. It took six days and a
-// hand-written psql query to notice.
-//
-// The surface here closes that (the startup drift line and its gauges were removed with the routing gate, CHAOS-8704):
-//
-//   - GET /registry lets `dev-hops go-api routing` ask this process --
+//   - GET /registry lets `dho goapi routing` ask this process --
 //     not a checkout, not a checked-in mirror -- what it registers and
-//     what digest it computed, so an enablement can REFUSE before writing
-//     rows the running binary could never read.
+//     what digest it computed, so an enablement can REFUSE a checkout
+//     whose SDL is not the running binary's.
 //
 // It is built from the same digestByOperation map and schemaDigest
 // newQueryHandler hands to the switches, so it cannot drift from the

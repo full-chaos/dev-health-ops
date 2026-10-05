@@ -119,14 +119,12 @@ func renderRegressions(tickets []string) string {
 	return "**" + strings.Join(sorted, ", ") + "**"
 }
 
-// RenderOpsBlock renders the per-operation table plus the provenance line.
-// Every cell is machine-read; nothing here is hand-editable, which is the
-// whole reason the block exists.
+// RenderOpsBlock renders the Go-API operations block: the provenance line and what serves them. query-api serves
+// every registered catalog operation (routeswitch.NewCatalogSwitch) and no routing row decides it, so there is no
+// per-operation mode, liveness or proof cell to render (CHAOS-8702); the only routing state is the MCP class
+// decisions, which `dho goapi routing status` reports.
 //
-// catalog is the registered-operation catalog the edge dispatches by. It
-// decides DOCUMENT_DRIFT: a live row whose (operation, document) pair the
-// catalog does not name renders as such in the liveness cell and is
-// counted on its own line, never as a serving row.
+// catalog is the registered-operation catalog the edge dispatches by.
 func RenderOpsBlock(render *Render, catalog Catalog) string {
 	var b strings.Builder
 
@@ -137,83 +135,9 @@ func RenderOpsBlock(render *Render, catalog Catalog) string {
 		fleetReadStamp(render.FleetReadAt),
 		render.FleetSource,
 	))
-
-	// The three numbers a reader should see before any row. They are put on
-	// the page rather than left to be tallied by eye, because the tally is
-	// exactly what nobody did: every "Go API is live" claim was read off a
-	// mode column while these three said otherwise.
-	b.WriteString(fmt.Sprintf("_Rows in `go_api_proof_run` at read time: **%d**. Operations reachable to real clients with no deployed-executed proof: **%d**. Rows whose mode says Go but whose schema digest no longer matches the pin, so the row cannot be matched and its operation is held dark, not served: **%d**._\n\n",
-		render.ProofRunTotal,
-		UnprovenReachable(render.Operations, catalog),
-		DeadReachable(render.Operations),
-	))
-	// Always printed, zero included: a count that appears only when it is
-	// non-zero reads the same as a count nobody computed.
-	b.WriteString(fmt.Sprintf("_Live rows the edge cannot dispatch -- serving a document the operation catalog does not name (DOCUMENT_DRIFT, as `dho goapi routing status` reports it): **%d**; for an operation the catalog does not register (UNREGISTERED, as `dho goapi routing status` reports it): **%d**. Live rows with no recorded document digest, read before the reader carried it, so neither can be judged for them: **%d**._\n\n",
-		DriftedLive(render.Operations, catalog, StateDocumentDrift),
-		DriftedLive(render.Operations, catalog, StateUnregistered),
-		UnjudgedLive(render.Operations),
-	))
-
-	// An empty table is a valid state since the catalog rule (CHAOS-8543), and
-	// on it every count above is 0 and the table below has no row -- which, with
-	// nothing else said, reads as "nothing is served". The opposite is true, so
-	// the page says it. Written ONLY for a snapshot with no row: a snapshot that
-	// has rows renders exactly what it rendered before.
-	if len(render.Operations) == 0 {
-		b.WriteString(fmt.Sprintf("_`go_api_routing_state` held no row at read time. That is a valid state: query-api serves every catalog operation that has no routing row, so all **%d** catalog operations are served, none of them through a routing row and none of them proven by one. The counts above read routing rows only._\n\n",
-			catalog.OperationCount()))
-	}
-
-	b.WriteString("| Operation | Mode | Schema digest | Candidate build | Live at current pin | Proven (derived) | Parity ticket |\n")
-	b.WriteString("| --- | --- | --- | --- | --- | --- | --- |\n")
-
-	rows := append([]OperationRow(nil), render.Operations...)
-	sort.Slice(rows, func(i, j int) bool {
-		if rows[i].Live != rows[j].Live {
-			return rows[i].Live // live rows first
-		}
-		if rows[i].SchemaDigest != rows[j].SchemaDigest {
-			return rows[i].SchemaDigest < rows[j].SchemaDigest
-		}
-		if rows[i].Operation != rows[j].Operation {
-			return rows[i].Operation < rows[j].Operation
-		}
-		// Two rows sharing (schema digest, operation) differ only by
-		// document -- the DOCUMENT_DRIFT shape. Without this the order of
-		// the pair was sort.Slice's, which is not stable, so the committed
-		// page and -check's re-render could disagree on identical data.
-		return rows[i].DocumentDigest < rows[j].DocumentDigest
-	})
-
-	for _, row := range rows {
-		live := "**DEAD** (digest moved)"
-		switch DispatchState(row, catalog) {
-		case StateDocumentDrift:
-			live = "**DOCUMENT_DRIFT** (serves document `" + shortHex(row.DocumentDigest) + "`, which the catalog does not name)"
-		case StateUnregistered:
-			live = "**UNREGISTERED** (serves document `" + shortHex(row.DocumentDigest) + "`; the catalog does not register this operation)"
-		default:
-			if row.Live {
-				live = "yes"
-			}
-		}
-		proven := "**none**"
-		if row.Proven != NoProof {
-			proven = "`" + row.Proven + "`"
-		}
-		mode := row.Mode
-		if row.Live && reachableModes[row.Mode] && row.Proven == NoProof && !DocumentDrift(row, catalog) {
-			// The row a client can actually hit with nothing proving it.
-			mode = row.Mode + " / **UNPROVEN**"
-		}
-		ticket := row.ParityTicket
-		if ticket == "" {
-			ticket = "--"
-		}
-		b.WriteString(fmt.Sprintf("| `%s` | %s | `%s` | `%s` | %s | %s | %s |\n",
-			row.Operation, mode, shortDigest(row.SchemaDigest), shortSha(row.CandidateBuild), live, proven, ticket))
-	}
+	b.WriteString(fmt.Sprintf("_query-api serves all **%d** catalog operations: the catalog switch (`routeswitch.NewCatalogSwitch`) reads no routing row, so there is no per-operation mode, liveness or proof column to render. "+
+		"The only routing state is the MCP class decision per root (`go_api_class_decision`); `dho goapi routing status` reports it._\n",
+		catalog.OperationCount()))
 	return b.String()
 }
 

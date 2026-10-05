@@ -2,16 +2,11 @@ package routing
 
 // CHAOS-7214: the MCP class rows in the routing verbs.
 //
-// A class row's operation is "mcp:<rootField>" (internal/mcpclass). It has no
-// registered document, so the document-operation checks that read the edge
-// catalog or the deployed /registry cannot apply to it; each verb that learns
-// the class swaps those checks for the class's own (allowlisted root, root is
-// a Query field of THIS binary's SDL, the class digest) and keeps every other
-// preflight. One run is one class: document operations and class operations
-// are never mixed, because they are admitted by different receipts.
+// A class decision's operation is "mcp:<rootField>" (internal/mcpclass). It has no registered document, so each
+// verb checks the class's own preconditions (allowlisted root, root is a Query field of THIS binary's SDL, the class
+// digest). The verbs take class operations only.
 
 import (
-	"fmt"
 	"strings"
 
 	schemav1 "github.com/full-chaos/dev-health-ops/contracts/graphql/v1"
@@ -91,13 +86,22 @@ func classKinds(operations []string) map[string]string {
 	return kinds
 }
 
-// catalogOperationNote is the line enable, disable and seed print for a catalog operation (CHAOS-8704): the
-// verb still writes its row, but query-api serves a registered operation whatever its row says, so a
-// success line from the verb must not read as an effect on serving.
-const catalogOperationNote = "go-api-routing: note: catalog operations are served regardless of routing rows; this row affects only MCP class roots and the proof route"
+const classOperationsUsage = "comma-separated MCP class operations (mcp:<root>), or 'all-mcp' (required)"
 
-func noteCatalogOperations(isClass bool) {
-	if !isClass {
-		fmt.Fprintln(stderr, catalogOperationNote)
+// requireClassScope resolves -operations to MCP class operations and refuses anything else: a catalog operation has
+// no routing state, because query-api serves every registered operation without a row.
+func requireClassScope(verb, raw string) (classScope, error) {
+	names, err := goapiproof.SplitOperations(raw)
+	if err != nil || names == nil {
+		return classScope{}, refuse("-operations is required: %s", classOperationsUsage)
 	}
+	scope, isClass, err := resolveClassScope(raw)
+	if err != nil {
+		return classScope{}, err
+	}
+	if !isClass {
+		return classScope{}, refuse("%s applies to MCP class roots (-operations mcp:<root> or all-mcp) only: query-api serves every registered catalog operation without a routing row, so there is nothing to %s for: %s",
+			verb, verb, strings.Join(names, ","))
+	}
+	return scope, nil
 }

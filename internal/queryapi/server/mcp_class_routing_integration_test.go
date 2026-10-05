@@ -335,7 +335,7 @@ func TestMCPClassDisableTurnsTheRootOff(t *testing.T) {
 	}
 }
 
-// status names a dark root and does not list a class row as an UNREGISTERED operation.
+// status names a dark root and the proof it rests on.
 func TestMCPClassStatusNamesDarkRootsAndProof(t *testing.T) {
 	pool := startTestRegistryPostgres(t)
 	classEnabled(t, pool, "hotspots")
@@ -364,46 +364,30 @@ func TestMCPClassStatusNamesDarkRootsAndProof(t *testing.T) {
 	if m := by["catalog"]; m.DigestState != goapiproof.DigestMissing || !m.Dark {
 		t.Fatalf("catalog (no row) = %+v, want MISSING and dark", m)
 	}
-	statuses, err := goapiproof.RoutingStatusRows(t.Context(), pool, classTestSchema, "", map[string]string{"featureFlags": "sha256:" + strings.Repeat("a", 64)})
-	if err != nil {
-		t.Fatal(err)
-	}
-	for _, status := range statuses {
-		if mcpclass.IsOperation(status.Operation) {
-			t.Fatalf("class row %s listed in the per-operation table as %s", status.Operation, status.DigestState)
-		}
-	}
 }
 
-// CHAOS-7833: the two routing-row families govern DIFFERENT routes and neither stands in for the other.
-//   - document rows (selected_operation = the named document operation, e.g. "hotspots") govern the named-operation route (/query on :8090/:8091,
-//     the route acr's run_operation calls): query_route.go builds that switch from the document digests;
-//   - class rows (selected_operation = "mcp:<root>") govern the MCP listener (:8092, acr's graphql_query): mcp_route.go asks sw.Enabled("mcp:"+root).
+// CHAOS-7833, CHAOS-8702: the two routes are decided apart, and neither is decided by a routing row of the other kind.
+//   - the named-operation route (/query on :8090/:8091, the route acr's run_operation calls) serves every registered catalog operation, with no row:
+//     query_route.go builds that switch from the document digests (routeswitch.NewCatalogSwitch);
+//   - the MCP listener (:8092, acr's graphql_query) serves a root only when its class decision (go_api_class_decision, "mcp:<root>") says so:
+//     mcp_route.go asks sw.Enabled("mcp:"+root).
 //
-// A canary DOCUMENT row for hotspots therefore does not serve the MCP listener, and an enabled CLASS row does not enable the document operation.
-func TestDocumentRowsAndMCPClassRowsGovernSeparateRoutes(t *testing.T) {
+// A catalog operation is therefore served with no class decision, and an enabled class decision does not change what the catalog switch answers.
+func TestDocumentRoutesAndMCPClassDecisionsAreDecidedApart(t *testing.T) {
 	pool := startTestRegistryPostgres(t)
-	ctx := t.Context()
-	const docOp, docDigest = "hotspots", "sha256:7833aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
-	if _, err := pool.Exec(ctx, `INSERT INTO public.go_api_candidate_build (schema_digest, document_digest, selected_operation, candidate_build)
-		VALUES ($1, $2, $3, $4)`, classTestSchema, docDigest, docOp, classTestBuild); err != nil {
-		t.Fatal(err)
+	catalog := routeswitch.NewCatalogSwitch(map[string]string{"hotspots": "sha256:7833aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"})
+	if !catalog.Enabled("hotspots") {
+		t.Fatal("a registered catalog operation must be served with no row at all")
 	}
-	if _, err := pool.Exec(ctx, `INSERT INTO public.go_api_routing_state
-		(schema_digest, document_digest, selected_operation, current_candidate_build, owner, mode, rollout_percentage, review_evidence, recorded_by)
-		VALUES ($1, $2, $3, $4, 'go', 'canary', 100, 'a document row', 'test')`, classTestSchema, docDigest, docOp, classTestBuild); err != nil {
-		t.Fatal(err)
-	}
-	documentSwitch := routeswitch.NewPostgresSwitch(pool, classTestSchema, map[string]string{docOp: docDigest})
-	if !documentSwitch.Enabled(docOp) {
-		t.Fatal("the document row is canary: the document-route switch must serve it")
+	if catalog.Enabled("mcp:hotspots") {
+		t.Fatal("the catalog switch must not serve an operation it does not register: a class root is decided by its own table")
 	}
 
-	// 1. The canary DOCUMENT row does not enable the MCP listener's root: it asks for "mcp:hotspots", which has no row.
+	// 1. With no class decision the MCP listener refuses the root, whatever the catalog switch says of the document.
 	listener, ch := classListener(t, pool)
 	assertMCPRefused(t, classHotspots(t, listener), ch, http.StatusNotFound, mcpReasonRootFieldNotEnabled)
 
-	// ...and an enabled CLASS row for the same root is what serves it, while the document row stays what it was.
+	// ...and an enabled class decision is what serves it.
 	hotspotsClass := mcpclass.Operation("hotspots")
 	classSeed(t, pool, hotspotsClass)
 	classReceipt(t, pool, hotspotsClass, goapiproof.RouteProof, goapiproof.EdgeBuildPresent)
@@ -411,26 +395,22 @@ func TestDocumentRowsAndMCPClassRowsGovernSeparateRoutes(t *testing.T) {
 		t.Fatalf("enable mcp:hotspots: %v", err)
 	}
 	if rec := classHotspots(t, listener); rec.Code != http.StatusOK || strings.Contains(rec.Body.String(), mcpReasonRootFieldNotEnabled) {
-		t.Fatalf("enabled class row: status %d body %s, want the MCP listener to serve it", rec.Code, rec.Body.String())
-	}
-	if !documentSwitch.Enabled(docOp) {
-		t.Fatal("enabling the class row changed the document row's reachability")
+		t.Fatalf("enabled class decision: status %d body %s, want the MCP listener to serve it", rec.Code, rec.Body.String())
 	}
 
-	// 2. An enabled CLASS row does not enable a document operation of the same name on the document route.
+	// 2. An enabled class decision for one root does not light another root.
 	overview := mcpclass.Operation("securityOverview")
 	classSeed(t, pool, overview)
 	classReceipt(t, pool, overview, goapiproof.RouteProof, goapiproof.EdgeBuildPresent)
 	if _, err := classEnable(pool, overview); err != nil {
-		t.Fatalf("enable the class row: %v", err)
+		t.Fatalf("enable the class decision: %v", err)
 	}
 	classSwitch := routeswitch.NewClassDecisionSwitch(pool, mcpRoutingDigests())
 	if !classSwitch.Enabled(overview) {
-		t.Fatal("the class row is canary: the MCP switch must serve it")
+		t.Fatal("the class decision is canary: the MCP switch must serve it")
 	}
-	otherDocSwitch := routeswitch.NewPostgresSwitch(pool, classTestSchema, map[string]string{"securityOverview": docDigest})
-	if otherDocSwitch.Enabled("securityOverview") {
-		t.Fatal("an enabled mcp:securityOverview class row must not enable the document operation securityOverview")
+	if classSwitch.Enabled(mcpclass.Operation("catalog")) {
+		t.Fatal("a root with no decision must stay dark")
 	}
 }
 

@@ -14,13 +14,13 @@ func TestEveryWriteVerbRefusesAControlCharacterInRecordedBy(t *testing.T) {
 	t.Setenv("POSTGRES_URI", "")
 	forged := "lane\ngo_api_routing.seeded operation=forged mode_after=primary"
 	for name, argv := range map[string][]string{
-		"seed":              {"seed", "-all-unrouted"},
+		"seed":              {"seed", "-operations", "mcp:hotspots"},
 		"enable":            {"enable", "-mode", "canary"},
 		"repoint":           {"repoint"},
 		"disable -apply":    {"disable", "-mode", "python", "-apply", "-postgres-uri", "postgres://x"},
 		"proof-org add":     {"proof-org", "add", "-org", "00000000-0000-4000-8000-000000000001"},
 		"proof-org remove":  {"proof-org", "remove", "-org", "00000000-0000-4000-8000-000000000001"},
-		"seed carriage ret": {"seed", "-all-unrouted"},
+		"seed carriage ret": {"seed", "-operations", "mcp:hotspots"},
 	} {
 		recordedBy := forged
 		if strings.Contains(name, "carriage") {

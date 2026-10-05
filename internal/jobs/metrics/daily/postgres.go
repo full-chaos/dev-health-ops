@@ -115,6 +115,10 @@ type PostgresStore struct {
 	finalizeSweepObserver      jobruntime.DailyMetricsFinalizeSweepObserver
 	finalizeRedriveObserver    jobruntime.DailyMetricsFinalizeRedriveObserver
 	partitionRecomputeObserver jobruntime.DailyMetricsPartitionRecomputeObserver
+	// markerWriter and markerObserver are the CHAOS-8710 ClickHouse run
+	// marker (run_marker.go). Nil writer: no marker is written.
+	markerWriter   RunMarkerWriter
+	markerObserver RunMarkerObserver
 }
 
 // SetRedriveObserver wires the optional operator-redrive telemetry observer
@@ -1494,6 +1498,9 @@ WHERE run_id = $2::uuid AND status = 'open'`, now, claim.Run.ID); err != nil {
 	if err := tx.Commit(ctx); err != nil {
 		return ErrUnavailable
 	}
+	// CHAOS-8710: after the commit, never before it, and never able to fail
+	// the run. A failed append leaves the day unknown to marker readers.
+	store.markSucceeded(ctx, claim.Run)
 	return nil
 }
 

@@ -152,6 +152,18 @@ func buildDailyWorker(
 			return workerFamily{}, errWorkerDependencyUnavailable
 		}
 		metricsClickHouse = clickhouseConnection
+		// CHAOS-8710: the ClickHouse run marker. CompleteFinalize appends
+		// 'succeeded' through it after its Postgres commit; a failed append is
+		// logged and counted and never fails the run.
+		markerStore, markerErr := daily.NewClickHouseRunMarkerStore(clickhouseConnection)
+		if markerErr != nil {
+			_ = clickhouseConnection.Close()
+			return workerFamily{}, errWorkerDependencyUnavailable
+		}
+		store.SetRunMarkerWriter(markerStore)
+		if markerObserver, ok := observer.(jobruntime.DailyMetricsRunMarkerObserver); ok {
+			store.SetRunMarkerObserver(markerObserver)
+		}
 		for _, spec := range dailySpecs {
 			switch spec.Kind {
 			case jobcontract.KindDailyMetricsDispatch:

@@ -387,6 +387,11 @@ VALUES ($1::uuid, $2::uuid, $3::uuid, $4::date, $5, $6, $7, 'partition-recompute
 		return false, ErrUnavailable
 	}
 
+	// CHAOS-8710: the marker goes first. If it cannot be written the reopen is
+	// refused, because a reopened day must never keep reading as succeeded.
+	if err := store.markReopened(ctx, run.OrganizationID, targetDay, priorGeneration); err != nil {
+		return false, err
+	}
 	now := store.now().UTC()
 	command, err := tx.Exec(ctx, `
 UPDATE public.daily_metrics_runs

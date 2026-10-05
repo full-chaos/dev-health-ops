@@ -847,6 +847,10 @@ VALUES ($1::uuid, $2::uuid, $3::uuid, $4::date, $5, $6, 'finalize-redrive', $7, 
 		// ever reads this run's stored generation value for partition
 		// identity again.
 		newGeneration := "redrive:" + nonce
+		// CHAOS-8710: marker first; a failed append refuses the reset.
+		if err := store.markReopened(ctx, run.OrganizationID, targetDay, run.Generation); err != nil {
+			return false, false, err
+		}
 		command, err := tx.Exec(ctx, `
 UPDATE public.daily_metrics_runs
 SET status = 'running', finalization_status = 'pending',

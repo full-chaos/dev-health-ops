@@ -158,3 +158,52 @@ Limits of the relation data:
   reads only the first comments, it still writes the issue, and a relation
   that only a comment held ends at the last sync that read it. Blocked hours
   can be too low, never too high.
+
+## Daily run marker: did the day's metrics run succeed
+
+`repo_metrics_daily` and the other daily tables have a row only for a day with
+activity. A day with no activity and a day that was never computed both show
+as no row. `daily_metrics_run_marker` (ClickHouse migration 105) records the
+state of the daily metrics run so a reader can tell the two apart.
+
+| Column | Meaning |
+| --- | --- |
+| `org_id` | Organization. Every read filters on it. |
+| `target_day` | The calendar day the run computed (UTC). |
+| `generation` | The run generation the event came from. Not ordered. |
+| `state` | `succeeded` or `reopened`. |
+| `finalized_at` | When the event was recorded. |
+| `version` | Milliseconds since the epoch. Orders the events of one day. |
+
+The table is append-only. The worker appends `succeeded` after the run for one
+organization and day reaches status and finalization status `succeeded` in
+Postgres. A redrive or partition recompute that reopens a succeeded run
+appends `reopened` before it commits the reopen, and is refused if that
+append fails. Nothing is updated or deleted.
+
+**Reader rule.** For each `(org_id, target_day)` take `argMax(state, version)`
+over all generations:
+
+```sql
+SELECT target_day, argMax(state, version) AS state
+FROM daily_metrics_run_marker
+WHERE org_id = {org} AND target_day BETWEEN {from} AND {to}
+GROUP BY org_id, target_day
+```
+
+- `succeeded`: the run finished for that organization and day. A day with no
+  repository row is a day with no activity.
+- `reopened`, or no row at all: unknown. Never read this as zero activity.
+
+A failed `succeeded` append never fails the run. The day stays unknown, the
+failure is logged, and `dev_health_daily_metrics_run_marker_appends_total`
+counts it with `outcome="failed"`. `dho workers metrics daily-marker-backfill
+--org <uuid> --from <day> --to <day>` makes the table agree with Postgres for
+a range. It appends a row only when the current state differs, so a second
+run appends nothing. The backfill takes the latest run of each day by
+creation time.
+
+Limits. The marker records a run that finished. It does not say a newer run
+for the same day is not in flight: a day stays `succeeded` until that run is
+reopened or the backfill sees it not succeeded. A run with status
+`no_repositories` is not marked.

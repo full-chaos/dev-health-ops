@@ -240,7 +240,7 @@ A row that is live, reachable to real clients (`canary`/`primary`) and carries n
 is required before stage 4/5, and "a bare 200 does not qualify".
 
 <!-- BEGIN GENERATED GO API OPERATIONS -->
-_Rendered 2026-09-28T10:08:59Z against main merge-base `f03f57d51c957ad7601fd2154089e152f8cf30d2`; SDL digest pin `sha256:70ea633c2ddf24ab4a7a080aa0cbc2d032a753840f5ef71110948b308d4f9c56`; fleet read 2026-09-28T10:08:59Z via fleet file fleet-prod-2026-09-28.json._
+_Rendered 2026-09-28T10:08:59Z against main merge-base `732f223b66a976ef65c4259da8b0b09813626615`; SDL digest pin `sha256:04e00d688739d2b0c71b95133ede095955febec1533261b84350ff07de9a9f01`; fleet read 2026-09-28T10:08:59Z via fleet file fleet-prod-2026-09-28.json._
 
 _Rows in `go_api_proof_run` at read time: **16991**. Operations reachable to real clients with no deployed-executed proof: **50**. Rows whose mode says Go but whose schema digest no longer matches the pin, so the row cannot be matched and its operation is held dark, not served: **88**._
 
@@ -734,6 +734,10 @@ CLI was deleted afterwards, and each area is now:
 - `dev-hops billing` / `service-credentials` / `admin` / `migrate` -- `dho billing`, `dho service-credentials`,
   `dho admin`, `dho migrate`
 - `dev-hops workers inspect` -- `dho workers` (partial)
+
+## Declared differences from the recorded Python answer
+
+- **`/graphql`, org-less superadmin naming an org (CHAOS-7710, owner decision 2026-10-04).** A verified superadmin whose claims carry no org, that names an org (`orgId` / `org_id` argument) and sends no `X-Org-Id` header, is refused with `Authorization required` (`internal/queryapi/graph/operation_org_guard.go`, `operationOrgDecision`). The recorded Python answer rebinds to the named org and serves it, and it also reads a `?org_id=` query fallback. Go does neither. An org-less superadmin reaches the platform admin pages only. A superadmin that impersonates a user carries that user's org id and is served for that org. Pinned by `TestOperationOrgGuardRefusesAnOrglessSuperuserNamingAnOrg` and `TestOperationOrgGuardServesAnImpersonationSessionNamingItsOrg`.
 
 ## Known gaps (not fixed in this PR)
 

@@ -115,7 +115,9 @@ type Contributor struct {
 	DisplayName  *string `json:"display_name"`
 }
 
-// Response ports api/models/schemas.py's ExplainResponse model.
+// Response ports api/models/schemas.py's ExplainResponse model (the first
+// eight fields), followed by the Go-only fields of CHAOS-8103 that the Python
+// model never had: Repositories and SourceURL (repositories.go).
 type Response struct {
 	Metric         string                    `json:"metric"`
 	Label          string                    `json:"label"`
@@ -125,6 +127,14 @@ type Response struct {
 	Drivers        []Contributor             `json:"drivers"`
 	Contributors   []Contributor             `json:"contributors"`
 	DrilldownLinks pyjson.OrderedMap[string] `json:"drilldown_links"`
+	// Repositories is the per-repository aggregation of a metric stored per
+	// repository (GroupBy repo_id): null for a metric stored per team, [] for
+	// a repository metric with no rows in the window.
+	Repositories *[]Repository `json:"repositories"`
+	// SourceURL is the stored provider URL of the scope's repository, only
+	// when the scope is one repository; null otherwise and when none is
+	// stored.
+	SourceURL *string `json:"source_url"`
 }
 
 // safeFloat ports api/utils/numeric.py's safe_float for an already-float64

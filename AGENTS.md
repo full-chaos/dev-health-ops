@@ -212,17 +212,12 @@ bash ci/local_validate.sh
 It mirrors the PR-time CI gates of the ops repo and MUST be green before `git push`:
 
 1. `ruff format --check .` and `ruff check .` (local only; CI no longer runs ruff)
-2. The **FULL** unit suite, byte-for-byte as `ci/run_tests.sh unit_tests()` runs it
-   (`pytest tests -m "not benchmark and not clickhouse" --ignore=… -n 4 --dist loadscope`,
-   matching CI's `PYTEST_XDIST_WORKERS=4` — the worker count changes the test→worker
-   distribution and a different count surfaces order-dependent pollution CI never hits),
-   with the local socks5h proxy neutralized. **Run the whole `tests/` dir — never a
-   hand-picked subset of files.** Many CI-blocking guards are unmarked pure-Python
-   tests that glob/parse `src/` (migration-splitter semicolon guard, RMT `org_id`
-   sorting-key contract, dataclass/sink `org_id` parity, pyformat-`%%` safety); a
-   per-file run passes locally while these fail in CI. This is exactly how CHAOS-2604
-   broke: a push after running only 2 test files missed
-   `tests/test_clickhouse_migration_splitter.py::test_no_committed_migration_comment_line_contains_semicolon`.
+2. The **hosted** Python test selection, the same files the hosted `test` check runs after
+   CHAOS-8352 removed the Python unit matrix: `tests/docs`, `tests/tooling` (`-n 4`) and the
+   explicit list in `ci/kept_python_tests.txt` (read from that file, never copied), with the
+   local socks5h proxy neutralized. **Do not run the whole `tests/` dir**: it still holds
+   tests of the deleted Python api tree and is red by construction (CHAOS-8692). A new file
+   is covered only when it is added to `ci/kept_python_tests.txt` on purpose.
    Tests that call
    `get_clickhouse_uri()` and need a reachable, migrated ClickHouse — the gate provisions
    an isolated **scratch db**, migrates it, and points `CLICKHOUSE_URI` at it before

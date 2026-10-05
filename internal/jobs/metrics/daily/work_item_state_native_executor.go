@@ -174,7 +174,9 @@ func (executor *WorkItemStateExecutor) ComputeFamily(
 		// stamping the whole partition with one shared value.
 		computedAt := executor.nowUTC()
 
-		rows, missingAttribution := computeWorkItemStateDurationsForRepo(day, start, end, items, transitions, attributions, computedAt, blocked)
+		rows, itemRows, missingAttribution := computeWorkItemStateDurationRowsForRepo(
+			day, start, end, items, transitions, attributions, computedAt, blocked,
+		)
 
 		// CHAOS-4278 (codex round-1 P2 finding): observe as soon as the
 		// count is known, BEFORE attempting the write -- unlike
@@ -203,6 +205,11 @@ func (executor *WorkItemStateExecutor) ComputeFamily(
 		// confirmed success, or the failing write's own truthful count is
 		// discarded a second time.
 		written, err := WriteWorkItemStateDurationsDaily(ctx, executor.conn, run.OrganizationID, day, rows, computedAt)
+		total += written
+		if err != nil {
+			return wrapWorkItemStatePartialWrite(total, repoID, err)
+		}
+		written, err = WriteWorkItemBlockedDurationsDaily(ctx, executor.conn, run.OrganizationID, day, itemRows, computedAt)
 		total += written
 		if err != nil {
 			return wrapWorkItemStatePartialWrite(total, repoID, err)
@@ -356,6 +363,24 @@ func computeWorkItemStateDurationsForRepo(
 	computedAt time.Time,
 	blocked map[string][]workitemmetrics.BlockedInterval,
 ) ([]workItemStateDailyRow, int) {
+	rows, _, missingAttribution := computeWorkItemStateDurationRowsForRepo(
+		day, start, end, items, transitions, attributions, computedAt, blocked,
+	)
+	return rows, missingAttribution
+}
+
+// computeWorkItemStateDurationRowsForRepo produces the established aggregate
+// rows plus one blocked-duration snapshot for each item that contributed to the
+// target day. A zero is deliberate: it supersedes an earlier positive snapshot
+// when a recompute finds that the item no longer has blocked time.
+func computeWorkItemStateDurationRowsForRepo(
+	day, start, end time.Time,
+	items []workItemStateWorkItem,
+	transitions []workItemStateTransition,
+	attributions map[string]workItemPrimaryAttribution,
+	computedAt time.Time,
+	blocked map[string][]workitemmetrics.BlockedInterval,
+) ([]workItemStateDailyRow, []workItemBlockedDurationDailyRow, int) {
 	transitionsByItem := make(map[string][]workItemStateTransition, len(transitions))
 	for _, transition := range transitions {
 		transitionsByItem[transition.WorkItemID] = append(transitionsByItem[transition.WorkItemID], transition)
@@ -373,6 +398,7 @@ func computeWorkItemStateDurationsForRepo(
 	keysSeen := make(map[workItemStateTotalKey]struct{})
 	itemsSeen := make(map[workItemStateTotalKey]map[string]struct{})
 	teamNameByKey := make(map[[3]string]string) // (provider, workScopeID, teamID) -> teamName
+	itemRows := make([]workItemBlockedDurationDailyRow, 0, len(sortedItems))
 	missingAttribution := 0
 
 	for _, item := range sortedItems {
@@ -394,6 +420,8 @@ func computeWorkItemStateDurationsForRepo(
 		// has an open blocker are "blocked". The hours of the item do not
 		// change; see workitemmetrics.OverlayBlocked.
 		segments = overlayWorkItemStateBlocked(segments, blocked[item.WorkItemID])
+		blockedHours := 0.0
+		contributed := false
 		for _, segment := range segments {
 			overlapStart := segment.start
 			if start.After(overlapStart) {
@@ -406,7 +434,11 @@ func computeWorkItemStateDurationsForRepo(
 			if !overlapEnd.After(overlapStart) {
 				continue
 			}
+			contributed = true
 			hours := overlapEnd.Sub(overlapStart).Hours()
+			if segment.status == workitemmetrics.StatusBlocked {
+				blockedHours += hours
+			}
 			key := workItemStateTotalKey{provider: item.Provider, workScopeID: workScopeID, teamID: teamID, status: segment.status}
 			if _, ok := keysSeen[key]; !ok {
 				keysSeen[key] = struct{}{}
@@ -419,6 +451,16 @@ func computeWorkItemStateDurationsForRepo(
 				itemsSeen[key] = seen
 			}
 			seen[item.WorkItemID] = struct{}{}
+		}
+		if contributed {
+			itemRows = append(itemRows, workItemBlockedDurationDailyRow{
+				Provider:      item.Provider,
+				WorkScopeID:   workScopeID,
+				TeamID:        teamID,
+				TeamName:      teamName,
+				WorkItemID:    item.WorkItemID,
+				DurationHours: blockedHours,
+			})
 		}
 	}
 
@@ -454,7 +496,21 @@ func computeWorkItemStateDurationsForRepo(
 			AvgWIP:       totalHours / 24.0,
 		})
 	}
-	return rows, missingAttribution
+	sort.Slice(itemRows, func(i, j int) bool {
+		a, b := itemRows[i], itemRows[j]
+		if a.Provider != b.Provider {
+			return a.Provider < b.Provider
+		}
+		if a.WorkScopeID != b.WorkScopeID {
+			return a.WorkScopeID < b.WorkScopeID
+		}
+		if a.TeamID != b.TeamID {
+			return a.TeamID < b.TeamID
+		}
+		return a.WorkItemID < b.WorkItemID
+	})
+
+	return rows, itemRows, missingAttribution
 }
 
 // resolveWorkItemPrimaryTeam applies normalize_team_id/normalize_team_name

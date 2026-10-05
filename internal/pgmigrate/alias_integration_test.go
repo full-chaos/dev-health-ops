@@ -154,7 +154,7 @@ func pythonAlias(t *testing.T, producer *venueoracle.Producer, uri string, s ali
 }
 
 // aliasPythonBuild is the build whose Python CLI answered the scenarios: a build that still carried it.
-const aliasPythonBuild = "969cd8f6a6cf9adcae1d34bb83a1480fdd942c15"
+const aliasPythonBuild = "7eff91a89925ddcaa12ffa3c9d66ad095b349111"
 
 // TestAliasesMatchTheFrozenPythonOutput runs the flat verbs on a real PostgreSQL in every scenario and
 // compares exit code and text with what the REAL `dev-hops migrate heads|history|current|status` printed
@@ -169,7 +169,7 @@ func TestAliasesMatchTheFrozenPythonOutput(t *testing.T) {
 	golden := venueoracle.OpenGolden(t, venueoracle.GoldenSpec{
 		Path:        "testdata/golden/alias.json",
 		PythonBuild: aliasPythonBuild,
-		SHA256:      "d8874f604ee94cacca47102a55e5152fa01b251b24ec9992ad3a96dc78da65c5",
+		SHA256:      "6fa2ff07bf57d60e3b90fa2f0fe05f2b1fd296e64b24f7eb8980b010e5345002",
 		Recipe: "git worktree add --detach $DIR " + aliasPythonBuild + " (with its .venv: uv sync --frozen --no-install-project); then from the repository root: " +
 			"go run ./internal/testsupport/venueoracle/goldenrecord -pkg ./internal/pgmigrate/ -test '^TestAliasesMatchTheFrozenPythonOutput$' -python-root $DIR",
 	})

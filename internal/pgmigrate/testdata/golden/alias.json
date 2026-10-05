@@ -1,9 +1,9 @@
 {
   "header": {
     "test": "TestAliasesMatchTheFrozenPythonOutput",
-    "python_build": "969cd8f6a6cf9adcae1d34bb83a1480fdd942c15",
-    "producer_digest": "135ab7b0e062a879df646d57e50ff3c9b3a299f6119dfcc2f2fd49a1b3445a37",
-    "recipe": "git worktree add --detach $DIR 969cd8f6a6cf9adcae1d34bb83a1480fdd942c15 (with its .venv: uv sync --frozen --no-install-project); then from the repository root: go run ./internal/testsupport/venueoracle/goldenrecord -pkg ./internal/pgmigrate/ -test '^TestAliasesMatchTheFrozenPythonOutput$' -python-root $DIR",
+    "python_build": "7eff91a89925ddcaa12ffa3c9d66ad095b349111",
+    "producer_digest": "98d53b9e548c3e54815c9656d01b61df9960e3233c2312e18fe5c74f72787175",
+    "recipe": "git worktree add --detach $DIR 7eff91a89925ddcaa12ffa3c9d66ad095b349111 (with its .venv: uv sync --frozen --no-install-project); then from the repository root: go run ./internal/testsupport/venueoracle/goldenrecord -pkg ./internal/pgmigrate/ -test '^TestAliasesMatchTheFrozenPythonOutput$' -python-root $DIR",
     "recorded_by": "goldenrecord",
     "blanked": {}
   },

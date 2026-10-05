@@ -313,7 +313,7 @@ func TestRunMarkerBackfillHidesADayWhosePostgresRunIsNotSucceeded(t *testing.T) 
 	const runID = "00000000-0000-4000-8000-000000087151"
 	stack.seedRun(t, runID, "00000000-0000-4000-8000-000000087152", markerOrgA, markerDay(1))
 	processFinalizeJob(t, ctx, stack.store, runID)
-	if _, err := stack.pool.Exec(ctx, `UPDATE daily_metrics_runs SET status = 'running', finalization_status = 'pending' WHERE id = $1::uuid`, runID); err != nil {
+	if _, err := stack.pool.Exec(ctx, `UPDATE daily_metrics_runs SET status = 'running', finalization_status = 'pending', finalized_at = NULL, updated_at = '2020-01-01T00:00:00Z' WHERE id = $1::uuid`, runID); err != nil {
 		t.Fatal(err)
 	}
 	outcome, err := stack.store.BackfillRunMarkers(ctx, stack.reader, markerOrgA, markerDay(1), markerDay(3), false)

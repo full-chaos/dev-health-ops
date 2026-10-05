@@ -14,8 +14,8 @@ import (
 
 	"github.com/full-chaos/dev-health-ops/internal/jobs/metrics/numerical"
 	"github.com/full-chaos/dev-health-ops/internal/queryapi/graph/model"
-	"github.com/full-chaos/dev-health-ops/internal/queryapi/teamscope"
 	"github.com/full-chaos/dev-health-ops/internal/queryapi/graphqldate"
+	"github.com/full-chaos/dev-health-ops/internal/queryapi/teamscope"
 )
 
 // A fake row scanner and client, same shape as hotspots_test.go's, per this

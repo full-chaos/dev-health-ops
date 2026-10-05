@@ -10,6 +10,10 @@
 {{- if and $localBundledPostgres (not (has "post-install" $hookEvents)) }}
 {{- fail "migrations.hook.localBundledPostgres=true requires migrations.hook.events to include post-install" }}
 {{- end }}
+{{- $classDecisionDigest := .Values.migrations.hook.classDecisionLiveSchemaDigest | default "" }}
+{{- if and $classDecisionDigest (not (regexMatch "^sha256:[0-9a-f]{64}$" $classDecisionDigest)) }}
+{{- fail "migrations.hook.classDecisionLiveSchemaDigest must be empty or sha256:<64 hex> (the schema_digest of the running query-api's GET /registry)" }}
+{{- end }}
 {{- /*
 Database migration hook (CHAOS-2304).
 
@@ -178,6 +182,17 @@ spec:
               value: {{ .Values.migrations.hook.celeryRiverCutover | quote }}
             - name: OPERATIONAL_ORDERING_CONTRACT
               value: {{ include "dev-health.operationalOrderingContract" . | quote }}
+            {{- /*
+            CHAOS-8744: Postgres migration 0146 copies each MCP class row at
+            the RUNNING image's schema digest; the roll reads it from that
+            image's GET /registry before the upgrade and sets
+            migrations.hook.classDecisionLiveSchemaDigest. Unset: no env, and
+            0146 refuses when MCP class rows exist.
+            */}}
+            {{- with $classDecisionDigest }}
+            - name: DHO_CLASS_DECISION_LIVE_SCHEMA_DIGEST
+              value: {{ . | quote }}
+            {{- end }}
             {{- with .Values.migrations.hook.extraEnv }}
             {{- toYaml . | nindent 12 }}
             {{- end }}

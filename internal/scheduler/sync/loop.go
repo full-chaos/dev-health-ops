@@ -156,6 +156,12 @@ type Loop struct {
 	skippedOrgMissing        uint64
 	skippedFeatureDisabled   uint64
 	skippedNotPlannerManaged uint64
+
+	// unscheduledConfigs is the last pass's count of active, planner-managed
+	// configs without a schedule_cron (CHAOS-8768); lastUnscheduledReport
+	// paces that pass.
+	unscheduledConfigs    uint64
+	lastUnscheduledReport time.Time
 }
 
 func NewLoop(stepper HandoffStepper, coordinator Coordinator, config LoopConfig) (*Loop, error) {
@@ -307,6 +313,7 @@ func (loop *Loop) step(parent context.Context, now time.Time) (stepErr error) {
 	if err != nil {
 		return err
 	}
+	loop.reportUnscheduledConfigs(stepCtx, now.UTC())
 	// Consume in the same window that produced. A separate cadence would let
 	// the marker advance while the occurrence it handed off sat unconsumed.
 	stage = "reconcile"
@@ -464,6 +471,7 @@ func (loop *Loop) WritePrometheus(output io.Writer) error {
 	minted, repeated, idle := loop.occurrencesMinted, loop.occurrencesRepeated, loop.idleDueWindows
 	orgMissing, featureDisabled := loop.skippedOrgMissing, loop.skippedFeatureDisabled
 	notPlannerManaged := loop.skippedNotPlannerManaged
+	unscheduled := loop.unscheduledConfigs
 	loop.mu.Unlock()
 
 	age := 0.0
@@ -485,6 +493,7 @@ func (loop *Loop) WritePrometheus(output io.Writer) error {
 	writeLoopCounter(&text, "sync_scheduler_skipped_org_missing_total", "Due candidates refused before minting because their organization no longer exists. Sustained growth means schedules are outliving the orgs that owned them.", orgMissing)
 	writeLoopCounter(&text, "sync_scheduler_skipped_feature_disabled_total", "Due candidates refused before minting because their sync targets require the canonical-incident feature and the organization is not entitled to it.", featureDisabled)
 	writeLoopCounter(&text, "sync_scheduler_skipped_not_planner_managed_total", "Due candidates refused before minting because planner_managed is false, marking them a fixture or legacy fan-out config that must never be scheduled (CHAOS-4174).", notPlannerManaged)
+	fmt.Fprintf(&text, "# HELP sync_scheduler_configs_without_schedule Active planner-managed sync configs the scheduler never plans because sync_options.schedule_cron is empty, as of the last hourly pass (CHAOS-8768).\n# TYPE sync_scheduler_configs_without_schedule gauge\nsync_scheduler_configs_without_schedule %d\n", unscheduled)
 	fmt.Fprintf(&text, "# HELP sync_scheduler_consecutive_failures Consecutive failed handoff windows.\n# TYPE sync_scheduler_consecutive_failures gauge\nsync_scheduler_consecutive_failures %d\n", consecutive)
 	fmt.Fprint(&text, "# HELP sync_scheduler_up Whether the scheduler has completed a current successful handoff window.\n# TYPE sync_scheduler_up gauge\nsync_scheduler_up ")
 	if up {

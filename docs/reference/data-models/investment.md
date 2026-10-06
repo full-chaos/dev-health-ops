@@ -211,6 +211,18 @@ persisted table — it is a query-time CTE (`LATEST_WORK_UNIT_INVESTMENTS_CTE`,
 `fetch_investment_breakdown(include_team_id=...)` parameter — that phrasing describes the pattern,
 not a real function signature.
 
+**`work_unit_investments.evidence_quote_count` (migration 106, `Nullable(UInt32)`)** is the number of distinct
+`(source_id, quote)` the row's run wrote to `work_unit_investment_quotes`. It is written by the materializer
+(`internal/jobs/investment`) for every row of a run that persists evidence snippets, and read only by the
+materializer's skip-existing check: a unit whose row is otherwise fresh (same unit, input hash and model version) is
+rewritten when the quotes visible under the row's `categorization_run_id` are not that many. The quote key has no run
+id, so a later run's equal-text quote replaces the older run's after a ClickHouse merge; if that run dies before it
+writes its investment row, the row the readers show would keep fewer or no quotes for good without this check.
+`NULL` means "not recorded" (rows written before migration 106, or a run that did not persist snippets) and counts as
+complete. No reader selects it, no read model joins it, and the recorded Python answers compare other columns only
+(`internal/jobs/investment/materialize_frozen_python_golden_test.go` pins the outcome, rollup and gate decisions, not a
+whole row). See the operator runbook note "Quotes of a crashed rewrite".
+
 **Consumers outside this repo must read the canonical join, never `investment_metrics_daily`.**
 CHAOS-4398 found that `dev-health-acr`'s `FactInvestment` producer (CHAOS-4363/#308) reads
 `investment_metrics_daily` and therefore surfaces the deprecated legacy taxonomy, not the

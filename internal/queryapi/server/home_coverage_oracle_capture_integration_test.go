@@ -117,7 +117,7 @@ func captureCHAOS8509HomePair(t *testing.T, key chaos8169HomeNoDataLedgerKey, py
 		expected[entry.Path] = entry
 	}
 	ledgerEntries := make(map[string]chaos8169HomeNoDataLedgerEntry, len(ledger.Entries))
-	wantLeaves := policy.DifferenceLeaves
+	wantLeaves := chaos8509HomeCaptureDifferenceLeaves(policy, ledger)
 	for _, entry := range ledger.Entries {
 		if got := chaos8169JSONText(t, chaos8169HomeValue(t, python, entry.Path)); got != entry.Python {
 			t.Errorf("CHAOS-8509 capture existing Python ledger %s = %s, want %s", entry.Path, got, entry.Python)
@@ -128,7 +128,6 @@ func captureCHAOS8509HomePair(t *testing.T, key chaos8169HomeNoDataLedgerKey, py
 			return
 		}
 		ledgerEntries[entry.Path] = entry
-		wantLeaves += entry.Leaves
 	}
 	for _, root := range ledger.StrictRoots {
 		if !chaos8509ExistingStrictRoot(t, python, goResponse, root) {
@@ -275,4 +274,38 @@ func chaos8509HomeCaptureValue(object *pyjson.Object, path string) (pyjson.Value
 func chaos8509HomeCaptureDigest(body string) string {
 	sum := sha256.Sum256([]byte(body))
 	return hex.EncodeToString(sum[:])
+}
+
+// chaos8509HomeCaptureDifferenceLeaves is the total observed difference count
+// for a capture. The ledger parameter makes explicit that D4834/D4840 leaves
+// are already part of that total and must not be added again.
+func chaos8509HomeCaptureDifferenceLeaves(policy chaos8509HomeCapturePolicy, _ chaos8169HomeNoDataLedger) int {
+	return policy.DifferenceLeaves
+}
+
+func TestCHAOS8509HomeCaptureDifferenceLeafTotals(t *testing.T) {
+	wants := map[chaos8169HomeNoDataLedgerKey]int{
+		chaos8169DictOrderHomeLedgerKey:                 197,
+		chaos8169GraphQLEdgeHomeLedgerKeys["POST home"]: 204,
+		chaos8169GraphQLEdgeHomeLedgerKeys["GET home"]:  204,
+	}
+	for key, want := range wants {
+		t.Run(key.Oracle+"/"+key.Case, func(t *testing.T) {
+			policy, ok := chaos8509HomeCapturePolicies[key]
+			if !ok {
+				t.Fatalf("no CHAOS-8509 capture policy for %s/%s", key.Oracle, key.Case)
+			}
+			ledger := chaos8169HomeLedgerFor(t, key)
+			ledgerLeaves := 0
+			for _, entry := range ledger.Entries {
+				ledgerLeaves += entry.Leaves
+			}
+			if got := ledgerLeaves + len(policy.Entries); got != want {
+				t.Fatalf("approved captured leaves = existing ledger %d + CHAOS-8509 paths %d = %d, want %d", ledgerLeaves, len(policy.Entries), got, want)
+			}
+			if got := chaos8509HomeCaptureDifferenceLeaves(policy, ledger); got != want {
+				t.Fatalf("capture total difference leaves = %d, want %d; existing ledger leaves must not be added twice", got, want)
+			}
+		})
+	}
 }

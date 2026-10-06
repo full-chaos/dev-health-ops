@@ -130,7 +130,7 @@ independent sets of pairs converted here:
   `TestInvestmentCallSiteArtifactPremiseHolds`/
   `TestInvestmentClassifierUnreachableRulesStayUnreachable`, is repointed at
   a new Go-source reflector (`investmentParseGoCallSitePremise`, same file)
-  that parses the compute source (now `internal/jobs/metrics/workitemengine/compute.go`) for its own
+  that parses `github_work_item_engine_destinations.go`'s own
   `InvestmentArtifact{...}` composite literal via `go/ast` -- Go is
   production now, so the premise derives from Go source, not Python's dead
   mirror of it. A new tripwire

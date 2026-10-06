@@ -390,6 +390,9 @@ type BreakdownRequestInput struct {
 	Measure   MeasureInput    `json:"measure"`
 	DateRange *DateRangeInput `json:"dateRange"`
 	TopN      int             `json:"topN"`
+	// Optional exact dimension keys. When present, returns these keys without the
+	// independent topN cut so related breakdown measures can be joined safely.
+	Keys []string `json:"keys,omitempty"`
 }
 
 type BreakdownResult struct {

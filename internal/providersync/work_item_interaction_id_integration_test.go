@@ -154,3 +154,18 @@ func TestTheAdapterRefusesARowWithoutAnID(t *testing.T) {
 		t.Fatalf("%d rows reached the table", count)
 	}
 }
+
+// P1 (review round 1): GitLab note ids above 2^53, through the real route,
+// the real adapter and the migrated table, are two rows.
+func TestGitLabNoteIDsAbove2Pow53AreTwoStoredRows(t *testing.T) {
+	ctx, conn := newWorkItemEffectsConn(t)
+	rows := gitLabNotesInteractionRows(t, noteJSON(idTwoPow53), noteJSON(idTwoPow53Plus1))
+	if len(rows) != 2 {
+		t.Fatalf("route gave %d rows", len(rows))
+	}
+	org := nativeTestClaim("gitlab", "work-items").OrgID
+	writeInteractionRows(t, ctx, conn, org, rows)
+	if got := interactionViewCount(t, ctx, conn, org, rows[0].WorkItemID); got != 2 {
+		t.Fatalf("persisted rows = %d, want 2", got)
+	}
+}

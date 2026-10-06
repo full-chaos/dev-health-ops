@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"math"
 	"strconv"
 	"strings"
 	"sync/atomic"
@@ -83,8 +84,16 @@ func interactionIDFrom(value any) string {
 	case string:
 		id = typed
 	case json.Number:
+		// Exact text; decoders must use UseNumber so a number never passes
+		// through float64 (ids above 2^53 would collapse).
 		id = typed.String()
+		if !isPositiveIntegerText(id) {
+			return ""
+		}
 	case float64:
+		if typed != math.Trunc(typed) || typed < 0 || typed >= 1<<53 {
+			return ""
+		}
 		id = strconv.FormatFloat(typed, 'f', -1, 64)
 	default:
 		return ""
@@ -94,4 +103,19 @@ func interactionIDFrom(value any) string {
 		return ""
 	}
 	return id
+}
+
+// isPositiveIntegerText is true for plain decimal digits only: a negative,
+// fractional or exponent number is not a provider comment id and takes the
+// missing-id path (the comment is skipped, counted and logged).
+func isPositiveIntegerText(text string) bool {
+	if text == "" {
+		return false
+	}
+	for _, r := range text {
+		if r < '0' || r > '9' {
+			return false
+		}
+	}
+	return true
 }

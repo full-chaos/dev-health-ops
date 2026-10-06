@@ -4,6 +4,7 @@ package sync
 
 import (
 	"context"
+	"fmt"
 	"testing"
 	"time"
 
@@ -71,14 +72,63 @@ func TestUnscheduledConfigsPostgresCountsOnlyActivePlannerManagedWithoutCron(t *
 	if err != nil {
 		t.Fatal(err)
 	}
-	got, err := repository.UnscheduledConfigs(ctx)
+	got, total, err := repository.UnscheduledConfigs(ctx)
 	if err != nil {
 		t.Fatalf("UnscheduledConfigs() error = %v", err)
 	}
 	if len(got) != 1 {
 		t.Fatalf("UnscheduledConfigs() = %#v, want exactly the active planner-managed config without a cron", got)
 	}
+	if total != 1 {
+		t.Fatalf("total = %d, want 1", total)
+	}
 	if got[0].Provider != "jira" || got[0].Hash != ConfigHash(noCronID) {
 		t.Fatalf("UnscheduledConfigs()[0] = %#v, want provider jira and hash %s", got[0], ConfigHash(noCronID))
+	}
+}
+
+// CHAOS-8768 r1 P1-b on real Postgres: 202 matching configs -> 200 listed, true total 202.
+func TestUnscheduledConfigsPostgresReportsTrueTotalBeyondTheListCap(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 4*time.Minute)
+	defer cancel()
+	instance, err := containers.StartPostgres(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() {
+		closeCtx, closeCancel := context.WithTimeout(context.Background(), 30*time.Second)
+		defer closeCancel()
+		if err := instance.Close(closeCtx); err != nil {
+			t.Errorf("terminate PostgreSQL: %v", err)
+		}
+	}()
+	pool, err := pgxpool.New(ctx, instance.URI)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer pool.Close()
+	if err := createSchedulerIntegrationFixture(ctx, t, pool); err != nil {
+		t.Fatal(err)
+	}
+	const matching = unscheduledConfigReportLimit + 2
+	for index := 0; index < matching; index++ {
+		if err := insertPlannerFixture(ctx, pool, plannerFixture{
+			configID: fmt.Sprintf("00000000-0000-4000-8000-%012d", 100000+index),
+			jobID:    fmt.Sprintf("00000000-0000-4000-8000-%012d", 200000+index),
+			orgID:    "org-integration", plannerManaged: true, options: `{}`, createdAt: "2026-01-01T01:00:00-08:00",
+		}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	repository, err := NewRepository(pool)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got, total, err := repository.UnscheduledConfigs(ctx)
+	if err != nil {
+		t.Fatalf("UnscheduledConfigs() error = %v", err)
+	}
+	if len(got) != unscheduledConfigReportLimit || total != matching {
+		t.Fatalf("listed %d, total %d; want %d listed and true total %d", len(got), total, unscheduledConfigReportLimit, matching)
 	}
 }

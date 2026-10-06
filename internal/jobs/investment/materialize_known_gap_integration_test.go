@@ -16,6 +16,7 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/jobs/investment/categorize"
 	"github.com/full-chaos/dev-health-ops/internal/jobs/investment/chquery"
 	"github.com/full-chaos/dev-health-ops/internal/jobs/investment/chwrite"
+	"github.com/full-chaos/dev-health-ops/internal/queryapi/analytics"
 	"github.com/full-chaos/dev-health-ops/internal/queryapi/investmentexplain"
 	clickhousestore "github.com/full-chaos/dev-health-ops/internal/storage/clickhouse"
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/chschema"
@@ -41,6 +42,13 @@ import (
 //	step 3  the variant "the request failed on a spent budget": the unit is
 //	        crashed again (NO merge forced this time) and never retried; the NEXT
 //	        request rewrites it the same way.
+//
+//	step 4  the case healing does NOT cover: a FORCE-only rewrite of an unchanged
+//	        unit (same input hash, same model) crashes; skip-existing never keys on
+//	        Force, so the next normal request SKIPS the unit and its quotes stay lost
+//	        (the effort is rewritten: skipped units still get their effort rows).
+//
+// Effort is read through the production reader source in every step.
 //
 // Fixing the gap itself means a data-model choice (the quote key, the readers or
 // the skip-existing rule), which is not made here. When that lands, step 1's
@@ -101,9 +109,18 @@ func TestKnownGapCHAOS8788CrashedRewriteOfAnOlderUnitThenHealing(t *testing.T) {
 		}
 		return m
 	}
+	// runAt maps a run id to its ComputedAt: the production effort reader exposes
+	// the generation's computed_at, not the run id, so a view names the run by it.
+	runAt := map[string]time.Time{}
 	cfg := func(run string, at time.Time) Config {
+		runAt[run] = at
 		return Config{OrgID: hierarchyCascadeTestOrg, FromTS: windowStart, ToTS: windowEnd, RunID: run,
 			ComputedAt: at, ProviderName: "mock", PersistEvidenceSnippets: true}
+	}
+	cfgForce := func(run string, at time.Time) Config {
+		config := cfg(run, at)
+		config.Force = true
+		return config
 	}
 	crashAfterQuotesAndEffort := &failingBatchConn{Conn: conn, failTable: "work_unit_investments", armed: true}
 
@@ -137,9 +154,25 @@ func TestKnownGapCHAOS8788CrashedRewriteOfAnOlderUnitThenHealing(t *testing.T) {
 			t.Fatal(qerr)
 		}
 		seen.quotes = len(quotes)
-		if err := conn.QueryRow(ctx, `SELECT argMax(categorization_run_id, computed_at) FROM work_unit_repo_effort
-			WHERE org_id = ? AND work_unit_id = ?`, hierarchyCascadeTestOrg, seen.unit).Scan(&seen.effortRun); err != nil {
-			t.Fatal(err)
+		// Effort through the PRODUCTION reader source (the one every analytics
+		// query joins), not direct SQL on the table.
+		effortRows, eerr := client.Query(ctx, `SELECT max(e.latest_repo_effort_computed_at) FROM `+analytics.LatestWorkUnitRepoEffortSource()+` AS e
+			WHERE e.work_unit_id = {unit:String}`, []dhclickhouse.Binding{
+			{Name: "org_id", Value: hierarchyCascadeTestOrg}, {Name: "unit", Value: seen.unit},
+		})
+		if eerr != nil {
+			t.Fatal(eerr)
+		}
+		defer effortRows.Close()
+		var effortAt time.Time
+		if !effortRows.Next() || effortRows.Scan(&effortAt) != nil {
+			t.Fatal("the production effort reader returned no row")
+		}
+		seen.effortRun = "?"
+		for run, at := range runAt {
+			if at.Equal(effortAt) {
+				seen.effortRun = run
+			}
 		}
 		return seen
 	}
@@ -210,5 +243,28 @@ func TestKnownGapCHAOS8788CrashedRewriteOfAnOlderUnitThenHealing(t *testing.T) {
 	}
 	if healed := observe(); healed.investmentRun != "run-new-4" || healed.quotes != 1 || healed.effortRun != "run-new-4" {
 		t.Fatalf("step 3: view = %+v, want the next request's row, quote and effort", healed)
+	}
+
+	// step 4, the case the healing does NOT cover (CHAOS-8788, r1 of #3843): a
+	// FORCE-only rewrite of an UNCHANGED unit (same input hash, same model
+	// version) that crashes. Skip-existing keys on unit + hash + model, never on
+	// Force, so the next NORMAL request skips the unit: the quotes stay lost.
+	if _, err := newMaterializer(&failingBatchConn{Conn: conn, failTable: "work_unit_investments", armed: true}).
+		Run(ctx, cfgForce("run-force-1", within.Add(5*time.Hour))); err == nil {
+		t.Fatal("step 4: the forced rewrite succeeded, want the injected investment write failure")
+	}
+	merge()
+	if crashed := observe(); crashed.investmentRun != "run-new-4" || crashed.quotes != 0 || crashed.effortRun != "run-force-1" {
+		t.Fatalf("step 4: view after the forced crash and a merge = %+v, want the run-new-4 row with NO quotes beside run-force-1 effort", crashed)
+	}
+	stats, err = newMaterializer(conn).Run(ctx, cfg("run-normal", within.Add(6*time.Hour)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if stats.SkippedExisting != 1 {
+		t.Fatalf("step 4: the normal request skipped %d unit(s), want 1: the unit's key is unchanged", stats.SkippedExisting)
+	}
+	if stuck := observe(); stuck.investmentRun != "run-new-4" || stuck.quotes != 0 || stuck.effortRun != "run-normal" {
+		t.Fatalf("step 4: view after the normal request = %+v, want the quotes STILL lost (skipped unit), effort rewritten by the skipped path", stuck)
 	}
 }

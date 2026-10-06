@@ -623,9 +623,14 @@ func (m *Materializer) Run(ctx context.Context, cfg Config) (Stats, error) {
 	// run's quote and effort rows BESIDE the old row. After a ClickHouse merge a
 	// quote of equal text replaces the old run's quote (the quote key has no run
 	// id), so the old row can show fewer or no quotes, and the effort reader
-	// shows the half-written run's effort. The retry rewrites the unit (it is not
-	// skipped: the new key is still absent), which heals it; a request that
-	// ends failed leaves it until the next request. Pinned by
+	// shows the half-written run's effort. WHEN IT HEALS: the retry of the same
+	// request rewrites the unit, and so does any later request for which the
+	// unit's skip-existing key changed (its input hash or the model version), or
+	// that sets Force again. WHEN IT DOES NOT: skip-existing keys on unit + input
+	// hash + model version and never on Force, so a FORCE-only rewrite of an
+	// unchanged unit that crashed, once its request ended failed, is SKIPPED by the
+	// next normal request and its quotes stay lost (the effort is rewritten: skipped
+	// units still get their effort rows). Pinned by
 	// TestKnownGapCHAOS8788CrashedRewriteOfAnOlderUnitThenHealing.
 	if len(quotes) > 0 {
 		if _, err := m.writer.WriteQuotes(ctx, cfg.OrgID, quotes); err != nil {

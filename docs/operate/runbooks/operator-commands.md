@@ -103,13 +103,26 @@ new request over the same window.
 Known gap (CHAOS-8788, not fixed here): the output writes are ordered quotes, repo effort, investment row LAST, so
 a crashed first run of a unit leaves no visible partial rows. For a unit that ALREADY has an investment row
 (re-categorised because its evidence, the model or `force` changed, or its last status was a fallback), a crash
-between the writes leaves the new run's quote and effort rows beside the old investment row until the retry
-completes (the retry rewrites the unit; it is never skipped). After a ClickHouse merge, a quote of equal text
-replaces the old run's quote (the quote key has no run id), so the old row can show fewer or no quotes, and the
-effort reader shows the half-written run's effort. The retry heals it (skip-existing keys on the input hash, so the
-unit is rewritten, never skipped); a request that ends `failed` leaves it until the next scheduled request
-rewrites the unit. Both are executed in `TestKnownGapCHAOS8788CrashedRewriteOfAnOlderUnitThenHealing` (real
-ClickHouse and readers; a merge is forced between the crash and the retry, and not forced before the third step).
+between the writes leaves the new run's quote and effort rows beside the old investment row until the unit is
+rewritten. After a ClickHouse merge, a quote of equal text replaces the old run's quote (the quote key has no run
+id), so the old row can show fewer or no quotes, and the effort reader shows the half-written run's effort.
+
+- **When a later request heals it:** the retry of the same request (skip-existing keys on unit + input hash + model
+  version, so a unit whose rewrite never landed is not skipped); any later request for which that key changed (the
+  unit's input hash or the model version); or a request that sets `force` again.
+- **When it does NOT:** a FORCE-only rewrite of an UNCHANGED unit (same input hash, same model) that crashed, once its
+  request ended `failed`. Skip-existing never keys on `force`, so the next normal request SKIPS the unit and its
+  quotes stay lost (the effort rows are rewritten: skipped units still get their effort). Only a change of the
+  unit's evidence or model, or another forced request, rewrites it.
+
+Both are executed in `TestKnownGapCHAOS8788CrashedRewriteOfAnOlderUnitThenHealing` (real ClickHouse, the real
+investment, quote and effort readers; a merge is forced between the crash and the retry in step 1, and not forced
+in step 3; step 4 is the force-only case).
+
+Operational limit of the retry budget: if the terminal `Fail` write itself keeps failing (database unavailable),
+every claim after the 9th still stops at the claim-time gate without running the executor (it stays capped at 9
+runs), but the request's claim count and the ledger count keep growing past 9 and the request stays `running` until a
+`Fail` lands.
 
 Related reference (not a command, background): [Job recovery lifecycle](../run/job-recovery-lifecycle.md) --
 River only rescues a stuck-`running` job after `max(RescueStuckJobsAfter=1h default, kind timeout)`; a job

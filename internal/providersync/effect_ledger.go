@@ -22,6 +22,24 @@ const (
 	maxEffectLedgerStateBytes = 32 << 10
 )
 
+// EffectBoundExceededError reports a destination batch above the bounded write
+// contract (maxEffectRows rows or maxEffectPayloadBytes bytes). The bound is a
+// property of the unit's result, so a retry rebuilds the same oversized batch
+// from the same provider data. It wraps ErrEffectRecoveryUnsafe so every
+// existing errors.Is match keeps working; the unit handler uses errors.As to
+// tell this deterministic refusal apart from the other recovery-unsafe sites.
+// It carries no count, name or path, so its text is static.
+type EffectBoundExceededError struct {
+	// Bound is "rows" or "payload_bytes".
+	Bound string
+}
+
+func (e *EffectBoundExceededError) Error() string {
+	return ErrEffectRecoveryUnsafe.Error() + ": batch exceeds " + e.Bound + " bound"
+}
+
+func (e *EffectBoundExceededError) Unwrap() error { return ErrEffectRecoveryUnsafe }
+
 type EffectRecoveryPolicy string
 type EffectInspection string
 
@@ -62,7 +80,10 @@ func BuildEffectBatch(
 	rows []json.RawMessage,
 ) (EffectBatch, error) {
 	destination = strings.TrimSpace(destination)
-	if destination == "" || len(rows) > maxEffectRows || !validEffectRecovery(recovery) {
+	if len(rows) > maxEffectRows {
+		return EffectBatch{}, &EffectBoundExceededError{Bound: "rows"}
+	}
+	if destination == "" || !validEffectRecovery(recovery) {
 		return EffectBatch{}, ErrEffectRecoveryUnsafe
 	}
 	canonical := make([]json.RawMessage, 0, len(rows))
@@ -78,7 +99,7 @@ func BuildEffectBatch(
 		}
 		encoded := append(json.RawMessage(nil), compact.Bytes()...)
 		if total > maxEffectPayloadBytes-len(encoded) {
-			return EffectBatch{}, ErrEffectRecoveryUnsafe
+			return EffectBatch{}, &EffectBoundExceededError{Bound: "payload_bytes"}
 		}
 		total += len(encoded)
 		canonical = append(canonical, encoded)

@@ -1,0 +1,20 @@
+-- work_unit_investments keeps one row per work unit and the quotes of that
+-- row's run live in work_unit_investment_quotes. The quote key is
+-- (work_unit_id, source_id, quote): it has NO run id, so when a later run writes
+-- a quote of equal text, a ClickHouse merge keeps only the newer run's row. If
+-- that later run then dies before it writes its investment row, the row the
+-- readers still show (the older run) finds fewer or no quotes under its own run
+-- id, and skip-existing (unit + input hash + model version) skips the unit on
+-- every later request, so nothing ever writes them back.
+--
+-- evidence_quote_count is the number of distinct (source_id, quote) the row's
+-- run wrote. The materializer compares it with the number of quotes visible
+-- under the row's run id before it skips a unit, and rewrites a unit where the
+-- two differ.
+--
+-- NULL means "not recorded" and is treated as complete: every row written before
+-- this migration, and every row written by a run that did not persist evidence
+-- snippets. Such rows are not checked and not repaired. A run that rewrites a
+-- unit (any change of its input hash or model version, a unit whose last status
+-- was a fallback, or force) records the count on the new row.
+ALTER TABLE work_unit_investments ADD COLUMN IF NOT EXISTS evidence_quote_count Nullable(UInt32) COMMENT 'Distinct (source_id, quote) the row''s run wrote to work_unit_investment_quotes. NULL = not recorded (rows written before migration 106, or a run that did not persist evidence snippets): treated as complete.';

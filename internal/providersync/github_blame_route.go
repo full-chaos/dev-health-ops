@@ -345,7 +345,7 @@ func collectGitHubBlame(
 	rows := make([]gitBlameRow, 0)
 	progressRows := make([]gitHubBlamePathProgressRow, 0, len(paths))
 	retryableFailures := 0
-	rowBytes, usedBytes := 0, 0
+	usedBytes := 0
 	for index, filePath := range paths {
 		if outcome := progress.InFlightOutcomes[filePath]; recoveryGeneration != "" &&
 			(outcome == gitHubBlameOutcomeEmpty || outcome == gitHubBlameOutcomeRetryableError) {
@@ -377,33 +377,31 @@ func collectGitHubBlame(
 			remainingPaths++
 			continue
 		}
-		fileRows := make([]gitBlameRow, 0)
-		fileBytes := 0
+		// Size the file from the range bounds BEFORE materialising a row per
+		// line: a file above the bound must be refused without allocating it.
+		fileLines, fileBytes, overBound := 0, 0, false
 		for _, blameRange := range ranges {
 			if blameRange.StartingLine == 0 || blameRange.EndingLine < blameRange.StartingLine {
 				return CompleteRouteBatch{}, providerfoundation.ErrNormalizationInvalid
 			}
-			for lineNo := blameRange.StartingLine; lineNo <= blameRange.EndingLine; lineNo++ {
-				row := newGitHubBlameRow(claim, repoID, filePath, lineNo, blameRange, normalizedAt)
-				if err := row.validate(claim); err != nil {
-					return CompleteRouteBatch{}, err
-				}
-				if lineNo == blameRange.StartingLine {
-					encoded, marshalErr := json.Marshal(row)
-					if marshalErr != nil {
-						return CompleteRouteBatch{}, providerfoundation.ErrNormalizationInvalid
-					}
-					rowBytes = len(encoded)
-				}
-				fileRows = append(fileRows, row)
-				fileBytes += rowBytes
-				if lineNo == ^uint32(0) {
-					break
-				}
+			first := newGitHubBlameRow(claim, repoID, filePath, blameRange.StartingLine, blameRange, normalizedAt)
+			if err := first.validate(claim); err != nil {
+				return CompleteRouteBatch{}, err
+			}
+			encoded, marshalErr := json.Marshal(first)
+			if marshalErr != nil {
+				return CompleteRouteBatch{}, providerfoundation.ErrNormalizationInvalid
+			}
+			lines := int(blameRange.EndingLine-blameRange.StartingLine) + 1
+			fileLines += lines
+			fileBytes += lines * len(encoded)
+			if recoveryGeneration == "" &&
+				(len(rows)+fileLines > limits.maxRows || usedBytes+fileBytes > limits.maxPayloadBytes) {
+				overBound = true
+				break
 			}
 		}
-		if recoveryGeneration == "" &&
-			(len(rows)+len(fileRows) > limits.maxRows || usedBytes+fileBytes > limits.maxPayloadBytes) {
+		if overBound {
 			if len(rows) == 0 {
 				// One file alone exceeds the write contract: it stays retryable
 				// and rotates behind other paths instead of blocking the unit.
@@ -418,6 +416,19 @@ func collectGitHubBlame(
 			remainingPaths += len(paths) - index
 			logGitHubBlameBudgetStop("rows", index, len(paths)-index, len(rows), requests)
 			break
+		}
+		fileRows := make([]gitBlameRow, 0, fileLines)
+		for _, blameRange := range ranges {
+			for lineNo := blameRange.StartingLine; lineNo <= blameRange.EndingLine; lineNo++ {
+				row := newGitHubBlameRow(claim, repoID, filePath, lineNo, blameRange, normalizedAt)
+				if err := row.validate(claim); err != nil {
+					return CompleteRouteBatch{}, err
+				}
+				fileRows = append(fileRows, row)
+				if lineNo == ^uint32(0) {
+					break
+				}
+			}
 		}
 		outcome := gitHubBlameOutcomeEmpty
 		if len(ranges) > 0 {

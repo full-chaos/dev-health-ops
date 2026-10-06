@@ -9,6 +9,7 @@ import (
 	"io"
 	"log/slog"
 	"net/http"
+	"runtime"
 	"slices"
 	"strings"
 	"sync"
@@ -28,6 +29,7 @@ type gitHubBigTreeDoer struct {
 	dirs         int
 	filesPerDir  int
 	linesPerFile int
+	linesByPath  map[string]int
 	// recursive: "full" (normal, not truncated), "truncated" (GitHub flag,
 	// partial list), "" (derived: over the cap when large enough).
 	recursive string
@@ -146,6 +148,9 @@ func (doer *gitHubBigTreeDoer) Do(request *http.Request) (*http.Response, error)
 		doer.blamed = append(doer.blamed, requestBody.Variables["path"])
 		doer.mu.Unlock()
 		lines := doer.linesPerFile
+		if override, ok := doer.linesByPath[requestBody.Variables["path"]]; ok {
+			lines = override
+		}
 		if lines == 0 {
 			lines = 2
 		}
@@ -418,7 +423,7 @@ func TestGitHubBlameRouteStopsBeforeTheJobDeadline(t *testing.T) {
 
 func TestGitHubBlameRouteStopsBelowThePayloadBound(t *testing.T) {
 	blameCaptureSlog(t)
-	doer := &gitHubBigTreeDoer{t: t, dirs: 1, filesPerDir: 6, linesPerFile: 10, bigDir: -1, truncatedDir: -1}
+	doer := &gitHubBigTreeDoer{t: t, dirs: 1, filesPerDir: 6, linesPerFile: 9, bigDir: -1, truncatedDir: -1}
 	probe, err := runBigTreeBlame(t, doer, GitHubBlameRouteHandler{}, nil)
 	if err != nil {
 		t.Fatal(err)
@@ -430,7 +435,7 @@ func TestGitHubBlameRouteStopsBelowThePayloadBound(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got := len(progressPaths(t, batch)); got < 1 || got > 2 || batch.Result["remaining_paths"] != 6-got {
+	if got := len(progressPaths(t, batch)); got != 2 || batch.Result["remaining_paths"] != 4 {
 		t.Fatalf("blamed=%d result=%v, want the payload bound to stop the unit", got, batch.Result)
 	}
 	if batch.Effects[1].PayloadBytes > limits.maxPayloadBytes {
@@ -446,6 +451,12 @@ func TestGitHubBlameRouteBoundsAreInclusive(t *testing.T) {
 	batch, err := runBigTreeBlame(t, doer, GitHubBlameRouteHandler{limits: &limits}, nil)
 	if err != nil || len(batch.Effects[1].Rows) != 4 || len(progressPaths(t, batch)) != 2 {
 		t.Fatalf("err=%v rows=%d, want exactly maxRows rows accepted", err, len(batch.Effects[1].Rows))
+	}
+
+	limits.maxRows = 5
+	batch, err = runBigTreeBlame(t, doer, GitHubBlameRouteHandler{limits: &limits}, nil)
+	if err != nil || len(batch.Effects[1].Rows) != 4 || len(progressPaths(t, batch)) != 2 {
+		t.Fatalf("err=%v rows=%d, want 2 files: a third would make 6 rows above 5", err, len(batch.Effects[1].Rows))
 	}
 
 	fixed := time.Date(2026, 7, 23, 12, 0, 0, 0, time.UTC)
@@ -489,5 +500,31 @@ func TestGitHubBlameRecoveryReplaysEveryInFlightPathWithoutTheRunBounds(t *testi
 	)
 	if err != nil || len(progressPaths(t, batch)) != 3 || len(batch.Effects[1].Rows) != 6 {
 		t.Fatalf("err=%v progress=%d rows=%d, want all 3 in-flight paths replayed", err, len(progressPaths(t, batch)), len(batch.Effects[1].Rows))
+	}
+}
+
+// A file whose single range is far above the write bound is refused from the
+// range bounds, without a row per line ever being allocated.
+func TestGitHubBlameRouteRefusesAHugeRangeWithoutMaterialisingIt(t *testing.T) {
+	blameCaptureSlog(t)
+	doer := &gitHubBigTreeDoer{
+		t: t, dirs: 1, filesPerDir: 3, linesPerFile: 2, bigDir: -1, truncatedDir: -1,
+		linesByPath: map[string]int{bigTreePath(0, 1): 2_000_000},
+	}
+	var before, after runtime.MemStats
+	runtime.GC()
+	runtime.ReadMemStats(&before)
+	batch, err := runBigTreeBlame(t, doer, GitHubBlameRouteHandler{}, nil)
+	runtime.ReadMemStats(&after)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if allocated := after.TotalAlloc - before.TotalAlloc; allocated > 100<<20 {
+		t.Fatalf("allocated %d bytes for a refused file, want no per-line rows", allocated)
+	}
+	got := progressPaths(t, batch)
+	if !slices.Equal(got, []string{bigTreePath(0, 0)}) || batch.Result["remaining_paths"] != 2 ||
+		len(batch.Effects[1].Rows) != 2 {
+		t.Fatalf("blamed=%v result=%v, want the unit to stop before the huge file", got, batch.Result)
 	}
 }

@@ -110,7 +110,7 @@ func TestHomeResponseWireDateTimeLeavesMatchPythonBytes(t *testing.T) {
 		ReworkThemeAllocation: []ReworkThemeAllocation{},
 		Summary:               []SummarySentence{},
 		Tiles:                 pyjson.NewOrderedMap[Tile](),
-		Constraint:            ConstraintCard{Evidence: []ConstraintEvidence{}, Experiments: []string{}},
+		Constraint:            &ConstraintCard{Evidence: []ConstraintEvidence{}, Experiments: []string{}},
 		Events:                []EventItem{{TS: eventTS, Type: "spike", Text: "t", Link: "l"}},
 		HealthState:           HealthState{AsOf: &lastIngested},
 		Signals:               []Signal{},

@@ -1037,7 +1037,8 @@ type HomeResult {
   reworkThemeAllocation: [ReworkThemeAllocation!]!
   summary: [SummarySentence!]!
   tiles: [HomeTileEntry!]!
-  constraint: ConstraintCard!
+  "The present constraint when current-window data exists; null when the window has no data."
+  constraint: ConstraintCard
   events: [EventItem!]!
   healthState: HealthState!
   signals: [HomeSignal!]!
@@ -1181,6 +1182,10 @@ type MetricDelta {
   value: Float!
   unit: String!
   deltaPct: Float!
+  "Whether the current window has one or more stored source rows. A stored zero has this field set to true."
+  hasData: Boolean!
+  "Whether the comparison window has one or more stored source rows."
+  hasPriorData: Boolean!
   spark: [SparkPoint!]!
 }
 

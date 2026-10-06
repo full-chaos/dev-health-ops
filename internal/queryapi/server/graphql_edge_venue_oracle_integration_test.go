@@ -639,6 +639,22 @@ func edgeCompare(t *testing.T, goBase string, cs []edgeCase, python []venueoracl
 	var parityPython []venueoracle.Response
 	var receipt strings.Builder
 	for i, c := range cs {
+		if key, ok := chaos8169GraphQLEdgeHomeLedgerKey(c.request.Name); ok {
+			goResponse := venueoracle.Do(t, goBase, c.request)
+			if golden != nil {
+				golden.Consumed(t, python[i])
+			}
+			if python[i].Status != goResponse.Status {
+				t.Errorf("%s: D4840 Home ledger needs equal status; python=%d go=%d", c.request.Name, python[i].Status, goResponse.Status)
+			}
+			if differing := headersThatDiffer(c.request, python[i], goResponse); len(differing) > 0 {
+				t.Errorf("%s: D4840 Home ledger has undeclared header differences %v\n python %v\n go     %v",
+					c.request.Name, differing, python[i].Headers, goResponse.Headers)
+			}
+			assertCHAOS8169HomeNoDataLedger(t, key, chaos8169GraphQLHomeBody(t, python[i].Body), chaos8169GraphQLHomeBody(t, goResponse.Body))
+			fmt.Fprintf(&receipt, "%-58s python=%d go=%d D4840 Home ledger validated\n", c.request.Name, python[i].Status, goResponse.Status)
+			continue
+		}
 		if c.declared == "" {
 			parity = append(parity, c.request)
 			parityPython = append(parityPython, python[i])

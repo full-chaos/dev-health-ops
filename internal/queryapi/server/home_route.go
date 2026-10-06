@@ -42,6 +42,71 @@ const (
 
 const homeEnabledEnvVar = "GO_API_HOME_ENABLED"
 
+// homeRESTResponse is the frozen Python REST response shape. The newer
+// GraphQL Home contract carries the no-data flags and permits a nil
+// constraint. The old Pydantic HomeResponse cannot carry either shape, so
+// REST preserves its required constraint object and omits GraphQL-only flags.
+// A no-data REST response has an empty constraint card; health_state.status is
+// still "no_data", and it contains no claim, evidence, or experiment.
+type homeRESTResponse struct {
+	Freshness             home.Freshness               `json:"freshness"`
+	Deltas                []homeRESTMetricDelta        `json:"deltas"`
+	ReworkThemeAllocation []home.ReworkThemeAllocation `json:"rework_theme_allocation"`
+	Summary               []home.SummarySentence       `json:"summary"`
+	Tiles                 pyjson.OrderedMap[home.Tile] `json:"tiles"`
+	Constraint            home.ConstraintCard          `json:"constraint"`
+	Events                []home.EventItem             `json:"events"`
+	HealthState           home.HealthState             `json:"health_state"`
+	Signals               []home.Signal                `json:"signals"`
+	LimitingFactor        home.LimitingFactor          `json:"limiting_factor"`
+	DataConfidence        home.DataConfidence          `json:"data_confidence"`
+}
+
+// homeRESTMetricDelta is the frozen Python MetricDelta shape. hasData and
+// hasPriorData are GraphQL-only distinctions, because FastAPI drops fields it
+// does not declare in its legacy REST model.
+type homeRESTMetricDelta struct {
+	Metric   string            `json:"metric"`
+	Label    string            `json:"label"`
+	Value    float64           `json:"value"`
+	Unit     string            `json:"unit"`
+	DeltaPct float64           `json:"delta_pct"`
+	Spark    []home.SparkPoint `json:"spark"`
+}
+
+func homeRESTResponseFrom(resp *home.Response) homeRESTResponse {
+	deltas := make([]homeRESTMetricDelta, 0, len(resp.Deltas))
+	for _, delta := range resp.Deltas {
+		deltas = append(deltas, homeRESTMetricDelta{
+			Metric:   delta.Metric,
+			Label:    delta.Label,
+			Value:    delta.Value,
+			Unit:     delta.Unit,
+			DeltaPct: delta.DeltaPct,
+			Spark:    delta.Spark,
+		})
+	}
+
+	constraint := home.ConstraintCard{}
+	if resp.Constraint != nil {
+		constraint = *resp.Constraint
+	}
+
+	return homeRESTResponse{
+		Freshness:             resp.Freshness,
+		Deltas:                deltas,
+		ReworkThemeAllocation: resp.ReworkThemeAllocation,
+		Summary:               resp.Summary,
+		Tiles:                 resp.Tiles,
+		Constraint:            constraint,
+		Events:                resp.Events,
+		HealthState:           resp.HealthState,
+		Signals:               resp.Signals,
+		LimitingFactor:        resp.LimitingFactor,
+		DataConfidence:        resp.DataConfidence,
+	}
+}
+
 // homeMaxBodyBytes is a Go-side-only safety cap on the POST body --
 // Python's real endpoint has no request-body size limit at all for this
 // route, matching investment_explain_route.go's own documented gap for
@@ -329,7 +394,7 @@ func homeFiltersFromMap(filters map[string]any) home.Filters {
 // raw w.Write of pre-marshalled bytes, matching every other route in
 // this binary.
 func writeHomeResponse(w http.ResponseWriter, r *http.Request, orgID string, resp *home.Response) {
-	if encodeErr := writeModelResponse(w, resp); encodeErr != nil {
+	if encodeErr := writeModelResponse(w, homeRESTResponseFrom(resp)); encodeErr != nil {
 		log.Printf("query-api: home: encode response failed: org_id=%s request_id=%s err=%v",
 			orgID, envelopeRequestID(r), encodeErr)
 		writeModelFailure(w)

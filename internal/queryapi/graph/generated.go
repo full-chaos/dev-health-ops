@@ -854,12 +854,14 @@ type ComplexityRoot struct {
 	}
 
 	MetricDelta struct {
-		DeltaPct func(childComplexity int) int
-		Label    func(childComplexity int) int
-		Metric   func(childComplexity int) int
-		Spark    func(childComplexity int) int
-		Unit     func(childComplexity int) int
-		Value    func(childComplexity int) int
+		DeltaPct     func(childComplexity int) int
+		HasData      func(childComplexity int) int
+		HasPriorData func(childComplexity int) int
+		Label        func(childComplexity int) int
+		Metric       func(childComplexity int) int
+		Spark        func(childComplexity int) int
+		Unit         func(childComplexity int) int
+		Value        func(childComplexity int) int
 	}
 
 	MetricLineage struct {
@@ -5336,6 +5338,20 @@ func (e *executableSchema) Complexity(typeName, field string, childComplexity in
 		}
 
 		return e.complexity.MetricDelta.DeltaPct(childComplexity), true
+
+	case "MetricDelta.hasData":
+		if e.complexity.MetricDelta.HasData == nil {
+			break
+		}
+
+		return e.complexity.MetricDelta.HasData(childComplexity), true
+
+	case "MetricDelta.hasPriorData":
+		if e.complexity.MetricDelta.HasPriorData == nil {
+			break
+		}
+
+		return e.complexity.MetricDelta.HasPriorData(childComplexity), true
 
 	case "MetricDelta.label":
 		if e.complexity.MetricDelta.Label == nil {
@@ -9973,7 +9989,8 @@ type HomeResult {
   reworkThemeAllocation: [ReworkThemeAllocation!]!
   summary: [SummarySentence!]!
   tiles: [HomeTileEntry!]!
-  constraint: ConstraintCard!
+  "The present constraint when current-window data exists; null when the window has no data."
+  constraint: ConstraintCard
   events: [EventItem!]!
   healthState: HealthState!
   signals: [HomeSignal!]!
@@ -10117,6 +10134,10 @@ type MetricDelta {
   value: Float!
   unit: String!
   deltaPct: Float!
+  "Whether the current window has one or more stored source rows. A stored zero has this field set to true."
+  hasData: Boolean!
+  "Whether the comparison window has one or more stored source rows."
+  hasPriorData: Boolean!
   spark: [SparkPoint!]!
 }
 
@@ -35625,6 +35646,10 @@ func (ec *executionContext) fieldContext_HomeResult_deltas(_ context.Context, fi
 				return ec.fieldContext_MetricDelta_unit(ctx, field)
 			case "deltaPct":
 				return ec.fieldContext_MetricDelta_deltaPct(ctx, field)
+			case "hasData":
+				return ec.fieldContext_MetricDelta_hasData(ctx, field)
+			case "hasPriorData":
+				return ec.fieldContext_MetricDelta_hasPriorData(ctx, field)
 			case "spark":
 				return ec.fieldContext_MetricDelta_spark(ctx, field)
 			}
@@ -35815,14 +35840,11 @@ func (ec *executionContext) _HomeResult_constraint(ctx context.Context, field gr
 		return graphql.Null
 	}
 	if resTmp == nil {
-		if !graphql.HasFieldError(ctx, fc) {
-			ec.Errorf(ctx, "must not be null")
-		}
 		return graphql.Null
 	}
 	res := resTmp.(*model.ConstraintCard)
 	fc.Result = res
-	return ec.marshalNConstraintCard2ᚖgithubᚗcomᚋfullᚑchaosᚋdevᚑhealthᚑopsᚋinternalᚋqueryapiᚋgraphᚋmodelᚐConstraintCard(ctx, field.Selections, res)
+	return ec.marshalOConstraintCard2ᚖgithubᚗcomᚋfullᚑchaosᚋdevᚑhealthᚑopsᚋinternalᚋqueryapiᚋgraphᚋmodelᚐConstraintCard(ctx, field.Selections, res)
 }
 
 func (ec *executionContext) fieldContext_HomeResult_constraint(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
@@ -38955,6 +38977,94 @@ func (ec *executionContext) fieldContext_MetricDelta_deltaPct(_ context.Context,
 		IsResolver: false,
 		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
 			return nil, errors.New("field of type Float does not have child fields")
+		},
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _MetricDelta_hasData(ctx context.Context, field graphql.CollectedField, obj *model.MetricDelta) (ret graphql.Marshaler) {
+	fc, err := ec.fieldContext_MetricDelta_hasData(ctx, field)
+	if err != nil {
+		return graphql.Null
+	}
+	ctx = graphql.WithFieldContext(ctx, fc)
+	defer func() {
+		if r := recover(); r != nil {
+			ec.Error(ctx, ec.Recover(ctx, r))
+			ret = graphql.Null
+		}
+	}()
+	resTmp, err := ec.ResolverMiddleware(ctx, func(rctx context.Context) (any, error) {
+		ctx = rctx // use context from middleware stack in children
+		return obj.HasData, nil
+	})
+	if err != nil {
+		ec.Error(ctx, err)
+		return graphql.Null
+	}
+	if resTmp == nil {
+		if !graphql.HasFieldError(ctx, fc) {
+			ec.Errorf(ctx, "must not be null")
+		}
+		return graphql.Null
+	}
+	res := resTmp.(bool)
+	fc.Result = res
+	return ec.marshalNBoolean2bool(ctx, field.Selections, res)
+}
+
+func (ec *executionContext) fieldContext_MetricDelta_hasData(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "MetricDelta",
+		Field:      field,
+		IsMethod:   false,
+		IsResolver: false,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return nil, errors.New("field of type Boolean does not have child fields")
+		},
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _MetricDelta_hasPriorData(ctx context.Context, field graphql.CollectedField, obj *model.MetricDelta) (ret graphql.Marshaler) {
+	fc, err := ec.fieldContext_MetricDelta_hasPriorData(ctx, field)
+	if err != nil {
+		return graphql.Null
+	}
+	ctx = graphql.WithFieldContext(ctx, fc)
+	defer func() {
+		if r := recover(); r != nil {
+			ec.Error(ctx, ec.Recover(ctx, r))
+			ret = graphql.Null
+		}
+	}()
+	resTmp, err := ec.ResolverMiddleware(ctx, func(rctx context.Context) (any, error) {
+		ctx = rctx // use context from middleware stack in children
+		return obj.HasPriorData, nil
+	})
+	if err != nil {
+		ec.Error(ctx, err)
+		return graphql.Null
+	}
+	if resTmp == nil {
+		if !graphql.HasFieldError(ctx, fc) {
+			ec.Errorf(ctx, "must not be null")
+		}
+		return graphql.Null
+	}
+	res := resTmp.(bool)
+	fc.Result = res
+	return ec.marshalNBoolean2bool(ctx, field.Selections, res)
+}
+
+func (ec *executionContext) fieldContext_MetricDelta_hasPriorData(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "MetricDelta",
+		Field:      field,
+		IsMethod:   false,
+		IsResolver: false,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return nil, errors.New("field of type Boolean does not have child fields")
 		},
 	}
 	return fc, nil
@@ -69304,9 +69414,6 @@ func (ec *executionContext) _HomeResult(ctx context.Context, sel ast.SelectionSe
 			}
 		case "constraint":
 			out.Values[i] = ec._HomeResult_constraint(ctx, field, obj)
-			if out.Values[i] == graphql.Null {
-				out.Invalids++
-			}
 		case "events":
 			out.Values[i] = ec._HomeResult_events(ctx, field, obj)
 			if out.Values[i] == graphql.Null {
@@ -69995,6 +70102,16 @@ func (ec *executionContext) _MetricDelta(ctx context.Context, sel ast.SelectionS
 			}
 		case "deltaPct":
 			out.Values[i] = ec._MetricDelta_deltaPct(ctx, field, obj)
+			if out.Values[i] == graphql.Null {
+				out.Invalids++
+			}
+		case "hasData":
+			out.Values[i] = ec._MetricDelta_hasData(ctx, field, obj)
+			if out.Values[i] == graphql.Null {
+				out.Invalids++
+			}
+		case "hasPriorData":
+			out.Values[i] = ec._MetricDelta_hasPriorData(ctx, field, obj)
 			if out.Values[i] == graphql.Null {
 				out.Invalids++
 			}
@@ -77381,16 +77498,6 @@ func (ec *executionContext) marshalNConnectorStatus2ᚕgithubᚗcomᚋfullᚑcha
 	return ret
 }
 
-func (ec *executionContext) marshalNConstraintCard2ᚖgithubᚗcomᚋfullᚑchaosᚋdevᚑhealthᚑopsᚋinternalᚋqueryapiᚋgraphᚋmodelᚐConstraintCard(ctx context.Context, sel ast.SelectionSet, v *model.ConstraintCard) graphql.Marshaler {
-	if v == nil {
-		if !graphql.HasFieldError(ctx, graphql.GetFieldContext(ctx)) {
-			ec.Errorf(ctx, "the requested element is null which the schema does not allow")
-		}
-		return graphql.Null
-	}
-	return ec._ConstraintCard(ctx, sel, v)
-}
-
 func (ec *executionContext) marshalNConstraintEvidence2githubᚗcomᚋfullᚑchaosᚋdevᚑhealthᚑopsᚋinternalᚋqueryapiᚋgraphᚋmodelᚐConstraintEvidence(ctx context.Context, sel ast.SelectionSet, v model.ConstraintEvidence) graphql.Marshaler {
 	return ec._ConstraintEvidence(ctx, sel, &v)
 }
@@ -81487,6 +81594,13 @@ func (ec *executionContext) marshalOConnectorFailure2ᚖgithubᚗcomᚋfullᚑch
 		return graphql.Null
 	}
 	return ec._ConnectorFailure(ctx, sel, v)
+}
+
+func (ec *executionContext) marshalOConstraintCard2ᚖgithubᚗcomᚋfullᚑchaosᚋdevᚑhealthᚑopsᚋinternalᚋqueryapiᚋgraphᚋmodelᚐConstraintCard(ctx context.Context, sel ast.SelectionSet, v *model.ConstraintCard) graphql.Marshaler {
+	if v == nil {
+		return graphql.Null
+	}
+	return ec._ConstraintCard(ctx, sel, v)
 }
 
 func (ec *executionContext) marshalOCoverage2ᚖgithubᚗcomᚋfullᚑchaosᚋdevᚑhealthᚑopsᚋinternalᚋqueryapiᚋgraphᚋmodelᚐCoverage(ctx context.Context, sel ast.SelectionSet, v *model.Coverage) graphql.Marshaler {

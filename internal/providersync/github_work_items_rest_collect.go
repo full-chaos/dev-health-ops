@@ -4,6 +4,8 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
+	"log/slog"
 	"math"
 	"net/http"
 	"net/url"
@@ -16,9 +18,32 @@ import (
 )
 
 const (
-	githubWorkItemEventLimit   = 1000
+	// githubWorkItemEventLimit is the Python producer's issue-event cap, kept
+	// ONLY because the frozen selection oracle records it. No production path
+	// applies it any more: issue and PR events are paged to the end under the
+	// shared page bound and fail closed past it (CHAOS-8770).
+	githubWorkItemEventLimit = 1000
+	// githubWorkItemCommentLimit is the DEFAULT of the user option
+	// comments_limit. The option stays an explicit, user-set cap; a cut it
+	// makes is counted and logged, never silent (CHAOS-8770).
 	githubWorkItemCommentLimit = 500
+	// githubWorkItemEventsUnbounded asks the PR-social fetch for every timeline
+	// event: no item cap, only the page bound.
+	githubWorkItemEventsUnbounded = 1<<31 - 1
 )
+
+// githubWorkItemNestedBoundExceeded reports a nested list that still had a next
+// page after the page bound. It names the repository, the owner item and the
+// field, logs at ERROR, and wraps ErrPaginationCapExceeded so the unit fails
+// loudly. It carries no payload text and no credential.
+func githubWorkItemNestedBoundExceeded(repository string, number int, field string, pages int) error {
+	slog.Error("providersync.github.nested_list_bound_exceeded",
+		"repository", repository, "issue", number, "field", field, "pages", pages)
+	return fmt.Errorf(
+		"%w: github %s of %s#%d still had a next page after %d pages",
+		ErrPaginationCapExceeded, field, repository, number, pages,
+	)
+}
 
 // GitHubWorkItemsRESTIncomplete preserves Python's intentionally best-effort
 // milestone and issue-comment behavior without turning a failed optional
@@ -52,6 +77,10 @@ type GitHubWorkItemsRESTResult struct {
 	PullRequests []GitHubWorkItemsRESTPullRequest
 	Incomplete   []GitHubWorkItemsRESTIncomplete
 	Evidence     FetchEvidence
+	// CommentsTruncated counts issues whose comments the user's comments_limit
+	// cut while more comments existed. A named, counted limit: it holds no
+	// watermark and never reads as complete.
+	CommentsTruncated int
 }
 
 // NoOptionalDegradation reports only whether this REST layer observed an
@@ -285,20 +314,22 @@ func (collector GitHubWorkItemsRESTCollector) collectIssues(
 		}
 		events, eventPage, err := collectGitHubWorkItemChildPages(
 			ctx, client, root+"/issues/"+strconv.Itoa(listed.Number)+"/events",
-			collector.maxPages(), githubWorkItemEventLimit,
+			collector.maxPages(), 0,
 		)
 		result.addPageEvidence(eventPage)
 		if err != nil {
 			return err
 		}
 		if eventPage.PageBudgetExhausted {
-			return ErrPaginationCapExceeded
+			return githubWorkItemNestedBoundExceeded(result.RepoFullName, listed.Number, "events", eventPage.Pages)
 		}
 		comments := []json.RawMessage{}
 		if options.fetchComments && options.commentsLimit > 0 {
 			commentRows, commentPage, commentErr := collectGitHubWorkItemChildPages(
 				ctx, client, root+"/issues/"+strconv.Itoa(listed.Number)+"/comments",
-				collector.maxPages(), options.commentsLimit,
+				// One row past the limit tells a real cut from a list that holds
+				// exactly the limit.
+				collector.maxPages(), githubWorkItemCommentLookahead(options.commentsLimit),
 			)
 			result.addPageEvidence(commentPage)
 			switch {
@@ -311,9 +342,16 @@ func (collector GitHubWorkItemsRESTCollector) collectIssues(
 				result.addIncomplete("issue_comments", strconv.Itoa(listed.Number), commentErr)
 				comments = commentRows
 			case commentPage.PageBudgetExhausted:
-				return ErrPaginationCapExceeded
+				return githubWorkItemNestedBoundExceeded(result.RepoFullName, listed.Number, "comments", commentPage.Pages)
 			default:
 				comments = commentRows
+				if len(comments) > options.commentsLimit {
+					comments = comments[:options.commentsLimit]
+					result.CommentsTruncated++
+					slog.Warn("providersync.github.issue_comments_truncated_by_option",
+						"repository", result.RepoFullName, "issue", listed.Number,
+						"comments_limit", options.commentsLimit)
+				}
 			}
 		}
 		rows, normalizeErr := normalizeGitHubIssueBundle(
@@ -568,4 +606,13 @@ func appendGitHubWorkItemRows(target *githubWorkItemRows, source githubWorkItemR
 	target.Interactions = append(target.Interactions, source.Interactions...)
 	target.Sprints = append(target.Sprints, source.Sprints...)
 	target.AIAttributions = append(target.AIAttributions, source.AIAttributions...)
+}
+
+// githubWorkItemCommentLookahead is the comment limit plus one row, saturating:
+// the extra row tells a real cut from a list that holds exactly the limit.
+func githubWorkItemCommentLookahead(limit int) int {
+	if limit >= math.MaxInt {
+		return limit
+	}
+	return limit + 1
 }

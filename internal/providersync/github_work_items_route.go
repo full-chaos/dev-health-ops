@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"sort"
 	"strconv"
 	"time"
@@ -89,6 +90,11 @@ var githubWorkItemsOptionalIncompleteComponents = map[string]bool{
 //     later run reproduces identically — the recipe's "never both capped and
 //     successful" rule, and what the REST side already does by returning
 //     ErrPaginationCapExceeded rather than typed incompleteness.
+//   - item_page_bound: one pull request's comment or event list still had a
+//     next page after the page bound (CHAOS-8777). Same consequence as
+//     pagination_cap, but a different event: the per-fetch request budget is
+//     shared by every pull request of the unit, this is one item outgrowing
+//     its own bound, and the log names the pull request and the field.
 //   - invalid_pagination: a missing or stalled cursor. That is a defect in our
 //     own traversal, not a provider condition Python has any analogue for, and
 //     it must surface as a failure rather than as a routine degradation entry.
@@ -97,7 +103,24 @@ var githubWorkItemsOptionalIncompleteComponents = map[string]bool{
 // (gitHubWorkItemPRSocialFailureCause); no Python site can emit them.
 var githubWorkItemsBlockingIncompleteCauses = map[string]bool{
 	"pagination_cap":     true,
+	"item_page_bound":    true,
 	"invalid_pagination": true,
+}
+
+// GitHubWorkItemsBlockingIncompleteCause is the error a blocked batch carries.
+// It is ErrGitHubWorkItemsIncomplete, and when any entry is a page-bound
+// refusal (pagination_cap, item_page_bound) it ALSO wraps
+// ErrPaginationCapExceeded: that refusal is deterministic given the provider's
+// state, so the worker's terminal classifier (providerunit
+// deterministicTerminalCategory) must record it once as pagination_incomplete
+// instead of re-running the whole fetch to the attempt limit (CHAOS-8777).
+func GitHubWorkItemsBlockingIncompleteCause(incomplete []GitHubWorkItemsIncomplete) error {
+	for _, partial := range incomplete {
+		if partial.Cause == "pagination_cap" || partial.Cause == "item_page_bound" {
+			return fmt.Errorf("%w: %w", ErrGitHubWorkItemsIncomplete, ErrPaginationCapExceeded)
+		}
+	}
+	return ErrGitHubWorkItemsIncomplete
 }
 
 // githubWorkItemsIncompleteIsOptional decides one entry. Cause is checked
@@ -272,6 +295,7 @@ func (handler GitHubWorkItemsRouteHandler) Collect(
 	rows := restResult.Rows
 	evidence := restResult.Evidence
 
+	prCommentsTruncated := 0
 	if len(restResult.PullRequests) > 0 {
 		targets := make([]int, 0, len(restResult.PullRequests))
 		for _, pull := range restResult.PullRequests {
@@ -282,7 +306,7 @@ func (handler GitHubWorkItemsRouteHandler) Collect(
 			commentsLimit = options.commentsLimit
 		}
 		socialResult, socialErr := handler.Social.Fetch(
-			ctx, claim, client, targets, commentsLimit, githubWorkItemEventLimit,
+			ctx, claim, client, targets, commentsLimit, githubWorkItemEventsUnbounded,
 		)
 		usage.add(GitHubWorkItemsRequestUsage{
 			Transport: socialResult.Usage.Transport, RouteFamily: socialResult.Usage.RouteFamily,
@@ -311,6 +335,9 @@ func (handler GitHubWorkItemsRouteHandler) Collect(
 		for _, pull := range restResult.PullRequests {
 			subject := strconv.Itoa(pull.Number)
 			payload, exists := socialResult.Payloads[pull.Number]
+			if exists && payload.CommentsTruncated {
+				prCommentsTruncated++
+			}
 			if !exists && socialComplete {
 				return CompleteRouteBatch{}, usage.wrap(providerfoundation.ErrGraphQLResponse)
 			}
@@ -388,6 +415,7 @@ func (handler GitHubWorkItemsRouteHandler) Collect(
 	// audible at boot, which is where it belongs — reading the environment on
 	// this path to warn about it would reintroduce the dependency D18 removes.
 	projectState := "disabled"
+	projectLabelsTruncated := 0
 	if len(projectTargets) > 0 {
 		projectResult, projectErr := handler.Projects.Fetch(
 			ctx, claim, credential, client, normalizedAt, handler.ResolveIdentity,
@@ -404,6 +432,7 @@ func (handler GitHubWorkItemsRouteHandler) Collect(
 			return CompleteRouteBatch{}, usage.wrap(err)
 		}
 		incomplete = append(incomplete, projectResult.Incomplete...)
+		projectLabelsTruncated += projectResult.LabelsTruncated
 		// CHAOS-4193(d): the read-then-diff pass. Runs after validation (so it
 		// only ever diffs a result already proven well-formed) and before the
 		// merge, appending its rows to the SAME ProjectMemberships slice the
@@ -428,7 +457,7 @@ func (handler GitHubWorkItemsRouteHandler) Collect(
 	for _, partial := range incomplete {
 		if !githubWorkItemsIncompleteIsOptional(partial) {
 			return CompleteRouteBatch{}, usage.wrapRoute(
-				ErrGitHubWorkItemsIncomplete, evidence, incomplete,
+				GitHubWorkItemsBlockingIncompleteCause(incomplete), evidence, incomplete,
 			)
 		}
 	}
@@ -456,18 +485,30 @@ func (handler GitHubWorkItemsRouteHandler) Collect(
 			closingReferenceDependenciesSynced++
 		}
 	}
+	resultFields := map[string]any{
+		"work_items_synced":                     len(rows.WorkItems),
+		"projects_v2":                           projectState,
+		"closing_reference_dependencies_synced": closingReferenceDependenciesSynced,
+		githubWorkItemsIncompleteResultKey:      incomplete,
+		"observations": map[string]any{
+			"provider_usage": usage.snapshot(),
+		},
+	}
+	// CHAOS-8770: a cut made by the user's comments_limit is a named, counted
+	// limit. The keys are present only when a cut happened.
+	if restResult.CommentsTruncated > 0 {
+		resultFields["issue_comments_truncated_by_limit"] = restResult.CommentsTruncated
+	}
+	if projectLabelsTruncated > 0 {
+		resultFields["projects_v2_item_labels_truncated"] = projectLabelsTruncated
+	}
+	if prCommentsTruncated > 0 {
+		resultFields["pr_comments_truncated_by_limit"] = prCommentsTruncated
+	}
 	return CompleteRouteBatch{
 		Effects: effects,
 		Result: attachGitHubWorkItemTeamAttributionObservation(
-			attachWorkItemTeamInheritanceObservation(map[string]any{
-				"work_items_synced":                     len(rows.WorkItems),
-				"projects_v2":                           projectState,
-				"closing_reference_dependencies_synced": closingReferenceDependenciesSynced,
-				githubWorkItemsIncompleteResultKey:      incomplete,
-				"observations": map[string]any{
-					"provider_usage": usage.snapshot(),
-				},
-			}, handler.Deriver),
+			attachWorkItemTeamInheritanceObservation(resultFields, handler.Deriver),
 			handler.Deriver,
 		),
 		Watermark: watermark,

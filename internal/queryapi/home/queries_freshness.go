@@ -31,6 +31,7 @@ import (
 
 	dhclickhouse "github.com/full-chaos/dev-health-go/clickhouse"
 
+	"github.com/full-chaos/dev-health-ops/internal/api/pytime"
 	"github.com/full-chaos/dev-health-ops/internal/jobs/workgraph/units"
 )
 
@@ -129,6 +130,93 @@ func fetchCoverage(ctx context.Context, client QueryClient, startDay, endDay tim
 		"prs_linked_to_issues_pct":     prsLinkedPct,
 		"issues_with_cycle_states_pct": issuesCyclePct,
 	}, nil
+}
+
+// fetchScopeDataConfidence reads only the repositories selected by the Home
+// request. It uses repoScopeFilter so team scope is always resolved through
+// repository ownership, never team membership or a manual mapping.
+//
+// The joined metrics are restricted to the response window. Therefore a
+// covered repository has both an in-window metric row and an ingestion time;
+// a scope with no current metrics is visible as low confidence rather than a
+// made-up zero percentage.
+func fetchScopeDataConfidence(ctx context.Context, client QueryClient, f Filters, startDay, endDay time.Time, orgID string, asOf time.Time) (ScopeDataConfidence, error) {
+	scopeFilter, scopeBindings, err := repoScopeFilter(ctx, client, f, orgID, "toString(r.id)", asOf)
+	if err != nil {
+		return ScopeDataConfidence{}, fmt.Errorf("home: resolve scope data confidence repositories: %w", err)
+	}
+
+	query := fmt.Sprintf(`
+        SELECT
+            toInt64(countDistinct(r.id)) AS total_repos,
+            toInt64(countDistinctIf(r.id, metrics.is_covered = 1)) AS covered_repos,
+            maxOrNull(if(metrics.is_covered = 1, metrics.last_ingested_at, NULL)) AS last_ingested_at
+        FROM repos AS r FINAL
+        LEFT JOIN (
+            SELECT
+                repo_id,
+                toUInt8(1) AS is_covered,
+                max(computed_at) AS last_ingested_at
+            FROM repo_metrics_daily FINAL
+            WHERE day >= {start_day:Date} AND day < {end_day:Date}
+              AND org_id = {org_id:String}
+            GROUP BY repo_id
+        ) AS metrics ON metrics.repo_id = r.id
+        WHERE r.org_id = {org_id:String}
+        %s
+    `, scopeFilter)
+	bindings := []dhclickhouse.Binding{
+		{Name: "start_day", Value: formatDay(startDay)},
+		{Name: "end_day", Value: formatDay(endDay)},
+		{Name: "org_id", Value: orgID},
+	}
+	bindings = append(bindings, scopeBindings...)
+
+	rows, err := client.Query(ctx, query, bindings)
+	if err != nil {
+		return ScopeDataConfidence{}, fmt.Errorf("home: fetch scope data confidence query: %w", err)
+	}
+	defer rows.Close()
+	if !rows.Next() {
+		return ScopeDataConfidence{}, rows.Err()
+	}
+	var totalRepos, coveredRepos int64
+	var lastIngested *time.Time
+	if err := rows.Scan(&totalRepos, &coveredRepos, &lastIngested); err != nil {
+		return ScopeDataConfidence{}, fmt.Errorf("home: fetch scope data confidence scan: %w", err)
+	}
+	if err := rows.Err(); err != nil {
+		return ScopeDataConfidence{}, err
+	}
+	return buildScopeDataConfidence(totalRepos, coveredRepos, lastIngested), nil
+}
+
+func buildScopeDataConfidence(totalRepos, coveredRepos int64, lastIngested *time.Time) ScopeDataConfidence {
+	confidence := ScopeDataConfidence{Level: "low", Caveats: []string{}}
+	if totalRepos <= 0 {
+		confidence.Caveats = append(confidence.Caveats, "The selected scope has no repositories, so coverage could not be computed.")
+		return confidence
+	}
+
+	coveragePct := float64(coveredRepos) / float64(totalRepos) * 100
+	confidence.CoveragePct = &coveragePct
+	if lastIngested != nil {
+		value := pytime.NaiveDateTime(*lastIngested)
+		confidence.LastIngestedAt = &value
+	}
+
+	switch {
+	case coveragePct >= 75 && lastIngested != nil:
+		confidence.Level = "high"
+	case coveragePct >= 40 && lastIngested != nil:
+		confidence.Level = "medium"
+	}
+	if coveredRepos == 0 || lastIngested == nil {
+		confidence.Caveats = append(confidence.Caveats, "No repository metrics were ingested for the selected scope and window.")
+	} else if coveragePct < 60 {
+		confidence.Caveats = append(confidence.Caveats, "Repository coverage appears partial for the selected scope and window.")
+	}
+	return confidence
 }
 
 // fetchSourceStatuses ports fetch_source_statuses (api/queries/

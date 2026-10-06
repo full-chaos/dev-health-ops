@@ -120,13 +120,6 @@ query Home($orgId: String!, $filters: FilterInput, $window: HomeWindowInput) {
       caveats
       __typename
     }
-    scopeDataConfidence {
-      level
-      coveragePct
-      lastIngestedAt
-      caveats
-      __typename
-    }
     __typename
   }
 }

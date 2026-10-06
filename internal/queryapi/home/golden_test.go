@@ -125,6 +125,9 @@ func orgGoldenHandler(t *testing.T) func(t *testing.T, query string, bindings []
 		case strings.Contains(q, "maxOrNull(computed_at) AS last_ingested_at"):
 			return &fixtureRowScanner{rows: [][]any{{time.Date(2024, 1, 8, 10, 0, 0, 0, time.UTC)}}}, nil
 
+		case strings.Contains(q, "metrics.is_covered = 1"):
+			return &fixtureRowScanner{rows: [][]any{{int64(10), int64(8), time.Date(2024, 1, 8, 10, 0, 0, 0, time.UTC)}}}, nil
+
 		case strings.Contains(q, "countDistinct(id)) AS total"):
 			return &fixtureRowScanner{rows: [][]any{{10.0}}}, nil
 		case strings.Contains(q, "countDistinct(repo_id)) AS covered"):

@@ -1011,6 +1011,16 @@ type HomeDataConfidence {
   caveats: [String!]!
 }
 
+"""Coverage and metric-ingestion quality for the repositories selected by this Home request."""
+type HomeScopeDataConfidence {
+  level: String!
+  """Null when the selected scope has no repositories."""
+  coveragePct: Float
+  """Most recent in-window repository-metric ingestion, or null when the scope has none."""
+  lastIngestedAt: String
+  caveats: [String!]!
+}
+
 type HomeTile {
   title: String!
   subtitle: String!
@@ -1044,6 +1054,8 @@ type HomeResult {
   signals: [HomeSignal!]!
   limitingFactor: HomeLimitingFactor!
   dataConfidence: HomeDataConfidence!
+  """Coverage and ingestion quality for the selected repository scope; distinct from org-wide dataConfidence."""
+  scopeDataConfidence: HomeScopeDataConfidence!
 }
 
 type SummarySentence {

@@ -588,5 +588,11 @@
     "caveats": [
       "Some source freshness checks are missing or stale."
     ]
+  },
+  "scope_data_confidence": {
+    "level": "high",
+    "coverage_pct": 80,
+    "last_ingested_at": "2024-01-08T10:00:00",
+    "caveats": []
   }
 }

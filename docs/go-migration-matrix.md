@@ -208,7 +208,7 @@ candidate_build)` and never carries it forward across any of the four changing. 
 says nothing about whether a new binary is the one that was measured: re-run `dho goapi prove` against the deployed build.
 
 <!-- BEGIN GENERATED GO API OPERATIONS -->
-_Rendered 2026-10-06T09:15:36Z against main merge-base `c2bb8c51dcacab9daff8b871f9d0c0246775015b`; SDL digest pin `sha256:20165b2ec92a2463b420e8060ac4611c5652068701df1bac6f2dc9bace390934`; fleet read 2026-10-06T02:34:43Z via docker inspect dev-health-go-worker-1 dev-health-go-worker-heavy-1 dev-health-go-worker-ops-1 dev-health-go-scheduler-1 dev-health-go-reconciler-1 dev-health-query-api-1._
+_Rendered 2026-10-06T09:50:02Z against main merge-base `c2bb8c51dcacab9daff8b871f9d0c0246775015b`; SDL digest pin `sha256:20165b2ec92a2463b420e8060ac4611c5652068701df1bac6f2dc9bace390934`; fleet read (not read) via not read._
 
 _query-api serves all **63** catalog operations: the catalog switch (`routeswitch.NewCatalogSwitch`) reads no routing row, so there is no per-operation mode, liveness or proof column to render. The only routing state is the MCP class decision per root (`go_api_class_decision`); `dho goapi routing status` reports it._
 <!-- END GENERATED GO API OPERATIONS -->
@@ -294,9 +294,9 @@ aggregation layer built on top of these tables (see METRICS below).
 | github | `commits` | NATIVE | `git_commits` | True | True |
 | github | `deployments` | NATIVE | `deployments` | True | True |
 | github | `files` | NATIVE | `git_files` | True | True |
-| github | `pr-comments` | NATIVE | `git_pull_request_reviews`, `git_pull_requests` | True | False |
-| github | `pr-reviews` | NATIVE | `git_pull_request_reviews`, `git_pull_requests` | True | False |
-| github | `prs` | NATIVE | `git_pull_request_reviews`, `git_pull_requests` | True | True |
+| github | `pr-comments` | NATIVE | `ai_attribution`, `git_pull_request_reviews`, `git_pull_requests` | True | False |
+| github | `pr-reviews` | NATIVE | `ai_attribution`, `git_pull_request_reviews`, `git_pull_requests` | True | False |
+| github | `prs` | NATIVE | `ai_attribution`, `git_pull_request_reviews`, `git_pull_requests` | True | True |
 | github | `repo-metadata` | NATIVE | `repos` | True | True |
 | github | `security` | NATIVE | `security_alerts` | True | True |
 | github | `tests` | NATIVE | `ci_acceptance_checks`, `ci_job_runs`, `ci_pipeline_runs`, `coverage_snapshots`, `test_case_results`, `test_suite_results` | True | False |
@@ -313,9 +313,9 @@ aggregation layer built on top of these tables (see METRICS below).
 | gitlab | `feature-flags` | NATIVE | `feature_flag`, `feature_flag_event`, `work_graph_edges` | True | True |
 | gitlab | `files` | NATIVE | `git_files` | True | True |
 | gitlab | `incidents` | NATIVE | `operational_incidents`, `operational_service_repository_mappings`, `operational_services` | True | True |
-| gitlab | `pr-comments` | NATIVE | `git_pull_request_reviews`, `git_pull_requests` | True | False |
-| gitlab | `pr-reviews` | NATIVE | `git_pull_request_reviews`, `git_pull_requests` | True | False |
-| gitlab | `prs` | NATIVE | `git_pull_request_reviews`, `git_pull_requests` | True | True |
+| gitlab | `pr-comments` | NATIVE | `ai_attribution`, `git_pull_request_reviews`, `git_pull_requests` | True | False |
+| gitlab | `pr-reviews` | NATIVE | `ai_attribution`, `git_pull_request_reviews`, `git_pull_requests` | True | False |
+| gitlab | `prs` | NATIVE | `ai_attribution`, `git_pull_request_reviews`, `git_pull_requests` | True | True |
 | gitlab | `repo-metadata` | NATIVE | `repos` | True | True |
 | gitlab | `security` | NATIVE | `security_alerts` | True | True |
 | gitlab | `tests` | NATIVE | `ci_acceptance_checks`, `ci_job_runs`, `ci_pipeline_runs`, `coverage_snapshots`, `test_case_results`, `test_suite_results` | True | False |
@@ -474,7 +474,7 @@ deleted, the frozen file and this one test survive.
 | Area | Executor | Writer call site | Ticket |
 |---|---|---|---|
 | ai_governance / ai_impact / ai_workflow | NATIVE | see METRICS' daily-families table above (all three now native; this hand-authored row is not generator-checked and had drifted stale for all three, not just the family this row's own PR ported -- caught by codex round chaos-5220-r1) | CHAOS-4285/4280/4286 |
-| **ai attribution** | **NATIVE** | WRITE path: NATIVE for github (`internal/providersync/github_work_items_ai_attribution_effects_clickhouse.go`, part of native work-items sync) and gitlab/linear (`internal/providersync/gitlab_work_item_derived.go:286-293,570-581`, `internal/providersync/linear_work_items_derived.go:52,286` -- both build/write the `ai_attribution` projection as part of native work-items sync); jira explicitly writes **zero** rows by design ("evaluated-empty effect", `internal/providersync/jira_work_item_derived.go:14-20` -- no AI-attribution signal exists for jira, not a gap). READ: `internal/queryapi/aianalytics` (which replaced the Python `AIImpactClickHouseLoader`) is the query-api plane (Go query-api epic CHAOS-4352), out of CHAOS-3092 scope -- CHAOS-3092 is about worker compute families and the bridge, not the API read plane. | none found |
+| **ai attribution** | **NATIVE** | WRITE path: NATIVE. Pull-request (github) and merge-request (gitlab) attribution is written by the native `prs` unit alone, through the shared adapter (`internal/providersync/github_work_items_ai_attribution_effects_clickhouse.go`; gitlab wrapper `internal/providersync/gitlab_work_item_derived.go`), and the github/gitlab work-items routes emit none (one writer per key); linear issue-label attribution (`internal/providersync/linear_work_items_derived.go:52,286`) is built and written by the native work-items sync; jira explicitly writes **zero** rows by design ("evaluated-empty effect", `internal/providersync/jira_work_item_derived.go:14-20` -- no AI-attribution signal exists for jira, not a gap). READ: `internal/queryapi/aianalytics` (which replaced the Python `AIImpactClickHouseLoader`) is the query-api plane (Go query-api epic CHAOS-4352), out of CHAOS-3092 scope -- CHAOS-3092 is about worker compute families and the bridge, not the API read plane. | none found |
 
 ## INVESTMENT / WORK-GRAPH
 

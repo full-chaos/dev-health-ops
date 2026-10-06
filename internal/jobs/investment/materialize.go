@@ -612,10 +612,26 @@ func (m *Materializer) Run(ctx context.Context, cfg Config) (Stats, error) {
 	// skipped the unit and its quotes were never written. With the investment
 	// row last, a unit is invisible to skip-existing until its quotes and effort
 	// rows exist, so a crashed run is simply redone: every table is a
-	// ReplacingMergeTree and the keys are stable, so the re-run overwrites. No
-	// reader sees these tables without an investment row (all join FROM
-	// work_unit_investments; quotes are read by the row's own run id), so the
-	// extra rows of a crashed run stay invisible until the investment row lands.
+	// ReplacingMergeTree and the keys are stable, so the re-run overwrites.
+	//
+	// WHAT THIS DOES AND DOES NOT PROTECT (CHAOS-8788, a known gap): for a unit
+	// WITHOUT an older investment row, the rows of a crashed run stay invisible
+	// (every reader joins FROM work_unit_investments; quotes are read by the
+	// row's own run id). For a unit that ALREADY has an investment row -- it is
+	// being re-categorised because its evidence, the model or force changed, or
+	// its last status was a fallback -- a crash between the writes leaves the new
+	// run's quote and effort rows BESIDE the old row. After a ClickHouse merge a
+	// quote of equal text replaces the old run's quote (the quote key has no run
+	// id), so the old row can show fewer or no quotes, and the effort reader
+	// shows the half-written run's effort. WHEN IT HEALS: the retry of the same
+	// request rewrites the unit, and so does any later request for which the
+	// unit's skip-existing key changed (its input hash or the model version), or
+	// that sets Force again. WHEN IT DOES NOT: skip-existing keys on unit + input
+	// hash + model version and never on Force, so a FORCE-only rewrite of an
+	// unchanged unit that crashed, once its request ended failed, is SKIPPED by the
+	// next normal request and its quotes stay lost (the effort is rewritten: skipped
+	// units still get their effort rows). Pinned by
+	// TestKnownGapCHAOS8788CrashedRewriteOfAnOlderUnitThenHealing.
 	if len(quotes) > 0 {
 		if _, err := m.writer.WriteQuotes(ctx, cfg.OrgID, quotes); err != nil {
 			return Stats{}, fmt.Errorf("write work_unit_investment_quotes: %w", err)

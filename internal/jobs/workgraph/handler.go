@@ -241,6 +241,32 @@ func errorLogAttrs(err error) []any {
 	return attrs
 }
 
+// errRetryBudgetSpentAtClaim marks a claim that arrived above the retry budget.
+var errRetryBudgetSpentAtClaim = errors.New("work graph retry budget was spent before this claim")
+
+// failBudgetSpent ends the request 'failed' with failure_class
+// retry_budget_exhausted: one ERROR line (class labels only, never error text)
+// and a Permanent result. lastClass is why the last retryable failure was
+// retryable, or "claim_time" when the budget was found spent at claim time.
+func (h *materializeHandler) failBudgetSpent(
+	ctx context.Context, claim Claim, requestID string, organizationID *string, lastClass string, err error,
+) error {
+	h.logger.Error("workgraph handler: permanent failure, retry budget exhausted",
+		slog.String("request_id", requestID), slog.String("kind", string(KindMaterialize)),
+		slog.String("organization_id", *organizationID),
+		slog.Int("claim_count", claim.Request.AttemptCount),
+		slog.String("failure_class", FailureClassRetryBudgetExhausted),
+		slog.String("last_retryable_class", lastClass),
+	)
+	detail := "retry budget exhausted: " + lastClass
+	if failErr := releaseFailed(h.store, ctx, claim, detail); failErr != nil {
+		h.logger.Error("workgraph handler: could not record the failed state; the lease will expire and the request be reclaimed",
+			withErrorAttrs([]any{slog.String("request_id", requestID),
+				slog.String("failure_class", FailureClassRetryBudgetExhausted)}, failErr)...)
+	}
+	return jobruntime.Permanent(err)
+}
+
 func releaseFailed(store Store, ctx context.Context, claim Claim, detail string) error {
 	releaseCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
 	defer cancel()
@@ -430,9 +456,21 @@ func (h *materializeHandler) work(ctx context.Context, requestID string, organiz
 	}
 	return runClaimedWork(ctx, h.store, h.logger, requestID, KindMaterialize, organizationID, domain,
 		func(workCtx context.Context, claim Claim) ([]byte, error) {
+			// The budget is a bound only if EVERY path meets it. A claim whose own
+			// failure is not classified here -- its lease was lost, so
+			// runClaimedWork returns Retryable before the classifier -- never
+			// reaches the failure-time check below, so the next claim meets the
+			// budget FIRST: a fresh claim already above it ends the request
+			// failed with its own valid token, before any work runs (CHAOS-8782).
+			if claim.Request.AttemptCount > retryBudgetClaims {
+				return nil, errRetryBudgetSpentAtClaim
+			}
 			return h.executor.Execute(workCtx, claim)
 		},
 		func(ctx context.Context, claim Claim, err error) error {
+			if errors.Is(err, errRetryBudgetSpentAtClaim) {
+				return h.failBudgetSpent(ctx, claim, requestID, organizationID, "claim_time", err)
+			}
 			// Terminal ONLY for a deterministic cause (CHAOS-8782). A cancelled
 			// context (worker drain), a deadline, a network or database blip,
 			// a lease-renew error and any unclassified error are NOT proof the
@@ -468,20 +506,7 @@ func (h *materializeHandler) work(ctx context.Context, requestID string, organiz
 			// 'ambiguous'; the hourly schedule is the outer retry. Class labels
 			// only, never error text.
 			if claim.Request.AttemptCount >= retryBudgetClaims {
-				h.logger.Error("workgraph handler: permanent failure, retry budget exhausted",
-					slog.String("request_id", requestID), slog.String("kind", string(KindMaterialize)),
-					slog.String("organization_id", *organizationID),
-					slog.Int("claim_count", claim.Request.AttemptCount),
-					slog.String("failure_class", FailureClassRetryBudgetExhausted),
-					slog.String("last_retryable_class", retryableClass(err)),
-				)
-				detail := "retry budget exhausted: " + retryableClass(err)
-				if failErr := releaseFailed(h.store, ctx, claim, detail); failErr != nil {
-					h.logger.Error("workgraph handler: could not record the failed state; the lease will expire and the request be reclaimed",
-						withErrorAttrs([]any{slog.String("request_id", requestID),
-							slog.String("failure_class", FailureClassRetryBudgetExhausted)}, failErr)...)
-				}
-				return jobruntime.Permanent(err)
+				return h.failBudgetSpent(ctx, claim, requestID, organizationID, retryableClass(err), err)
 			}
 			// Release the lease with a DETACHED context (the job context is
 			// usually the thing that was cancelled) so another pod can claim

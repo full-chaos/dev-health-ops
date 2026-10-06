@@ -8,6 +8,7 @@ import (
 	"net"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/full-chaos/dev-health-ops/internal/jobruntime"
 )
@@ -132,5 +133,83 @@ INSERT INTO work_graph_execution_requests (
 	}
 	if nextState != "succeeded" {
 		t.Fatalf("next request state = %s, want succeeded", nextState)
+	}
+}
+
+// TestLeaseLostThroughTheBudgetEndsFailedAtClaimTime (CHAOS-8782 r1 P1-2, repro
+// by gwc-round) on the real handler and Postgres state code. A claim whose
+// lease is lost returns Retryable BEFORE the classifier, so its failure never
+// meets the failure-time budget check: on main claim 9 loses its lease and a
+// tenth claim runs again (claim_count 9, state running, retryable). The budget
+// is therefore enforced at CLAIM time too: claims 1..9 all lose their lease,
+// claim 10 does not execute and the request is `failed` with its own valid
+// token.
+func TestLeaseLostThroughTheBudgetEndsFailedAtClaimTime(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+	defer cancel()
+	pool, store, _ := startWorkGraphReleaseLostFixture(t, ctx)
+	insertMaterializeRequest(t, ctx, pool)
+	store.lease = 3 * time.Second
+
+	executed := 0
+	handler, err := NewMaterializeHandler(store, funcExecutor{run: func(runCtx context.Context, _ Claim) ([]byte, error) {
+		executed++
+		if executed > retryBudgetClaims {
+			return nil, errors.New("executor ran for a claim above the budget")
+		}
+		<-runCtx.Done() // the lease is lost under it: Renew fails and cancels this context
+		return nil, runCtx.Err()
+	}}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	base := time.Date(2026, 10, 6, 11, 0, 0, 0, time.UTC)
+	for claim := 1; claim <= retryBudgetClaims; claim++ {
+		start := base.Add(time.Duration(claim) * time.Minute)
+		calls := 0
+		// The first clock read is the claim (lease = start + 3 s); every later
+		// read is 4 s on, past the lease: the next renewal loses it.
+		store.now = func() time.Time {
+			calls++
+			if calls == 1 {
+				return start
+			}
+			return start.Add(4 * time.Second)
+		}
+		workErr := handler.Work(ctx, materializeExecution())
+		if workErr == nil || !strings.Contains(workErr.Error(), string(jobruntime.CategoryRetryable)) {
+			t.Fatalf("claim %d: %v, want a retryable lease-lost result", claim, workErr)
+		}
+	}
+	var state string
+	var claims int
+	if err := pool.QueryRow(ctx, `SELECT state, attempt_count FROM work_graph_execution_requests WHERE id = $1`, testRequestID).Scan(&state, &claims); err != nil {
+		t.Fatal(err)
+	}
+	if claims != retryBudgetClaims || state != "running" {
+		t.Fatalf("after %d lost leases: claims=%d state=%s, want the stale 9th claim still running", retryBudgetClaims, claims, state)
+	}
+
+	// Claim 10: a steady clock, so its own lease is valid.
+	final := base.Add(time.Hour)
+	store.now = func() time.Time { return final }
+	workErr := handler.Work(ctx, materializeExecution())
+	if workErr == nil || !strings.Contains(workErr.Error(), string(jobruntime.CategoryPermanent)) {
+		t.Fatalf("claim %d: %v, want permanent", retryBudgetClaims+1, workErr)
+	}
+	if executed != retryBudgetClaims {
+		t.Fatalf("executor ran %d times, want %d: a claim above the budget must not run any work", executed, retryBudgetClaims)
+	}
+	request, ledger := requestAndLedgerState(t, ctx, pool)
+	if request != "failed" || ledger != "failed" {
+		t.Fatalf("request=%s ledger=%s, want failed/failed", request, ledger)
+	}
+	var detail string
+	if err := pool.QueryRow(ctx, `SELECT failure_detail FROM work_graph_execution_ledger WHERE request_id = $1`, testRequestID).Scan(&detail); err != nil {
+		t.Fatal(err)
+	}
+	if detail != "retry budget exhausted: claim_time" {
+		t.Fatalf("ledger detail = %q", detail)
 	}
 }

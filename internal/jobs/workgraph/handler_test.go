@@ -501,7 +501,10 @@ func TestRetryBudgetSpentFailsTheRequestWithBothClassLabels(t *testing.T) {
 	}{
 		{retryBudgetClaims - 1, false, ""},
 		{retryBudgetClaims, true, "unclassified"},
-		{retryBudgetClaims + 3, true, "unclassified"},
+		// A claim ABOVE the budget (the previous claim lost its lease, so its failure
+		// was never classified) ends failed at claim time, before any work runs.
+		{retryBudgetClaims + 1, true, "claim_time"},
+		{retryBudgetClaims + 3, true, "claim_time"},
 		{retryBudgetClaims, true, "context_canceled"},
 	} {
 		claim := testMaterializeClaim(time.Second)
@@ -512,13 +515,17 @@ func TestRetryBudgetSpentFailsTheRequestWithBothClassLabels(t *testing.T) {
 			failure = fmt.Errorf("write: %w", context.Canceled)
 		}
 		var logs strings.Builder
-		handler, err := NewMaterializeHandler(store, classifyingExecutor{err: failure}, slog.New(slog.NewTextHandler(&logs, nil)))
+		executor := &countingExecutor{err: failure}
+		handler, err := NewMaterializeHandler(store, executor, slog.New(slog.NewTextHandler(&logs, nil)))
 		if err != nil {
 			t.Fatal(err)
 		}
 		workErr := handler.Work(context.Background(), materializeExecution())
 		if workErr == nil {
 			t.Fatalf("claims=%d: Work succeeded", testCase.claims)
+		}
+		if testCase.wantClass == "claim_time" && executor.calls != 0 {
+			t.Fatalf("claims=%d: the executor ran %d time(s) for a claim above the budget", testCase.claims, executor.calls)
 		}
 		category := jobruntime.CategoryRetryable
 		if testCase.wantFail {
@@ -663,4 +670,14 @@ func TestOperatorFacingLiteralsArePinned(t *testing.T) {
 			t.Fatalf("retryableClass(%v) = %q, want %q", err, got, want)
 		}
 	}
+}
+
+type countingExecutor struct {
+	err   error
+	calls int
+}
+
+func (executor *countingExecutor) Execute(context.Context, Claim) ([]byte, error) {
+	executor.calls++
+	return nil, executor.err
 }

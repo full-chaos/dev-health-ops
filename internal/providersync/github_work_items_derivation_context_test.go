@@ -427,6 +427,11 @@ func TestLoadGitHubWorkItemDerivationContextCapsDonorTargets(t *testing.T) {
 	if !errors.Is(err, ErrEffectRecoveryUnsafe) {
 		t.Fatalf("error = %v, want ErrEffectRecoveryUnsafe", err)
 	}
+	var bound *EffectBoundExceededError
+	if !errors.As(err, &bound) || bound.Limit != "derivation_targets" ||
+		bound.Rows != teamattribution.GithubWorkItemDerivationContextLimit+1 {
+		t.Fatalf("error = %#v, want the typed derivation_targets bound with its count", bound)
+	}
 	if source.called {
 		t.Fatal("over-limit donor target set reached loader")
 	}

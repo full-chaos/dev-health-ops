@@ -430,6 +430,11 @@ input BreakdownRequestInput {
   measure: MeasureInput!
   dateRange: DateRangeInput!
   topN: Int! = 10
+  """
+  Optional exact dimension keys. When present, returns these keys without the
+  independent topN cut so related breakdown measures can be joined safely.
+  """
+  keys: [String!] = null
 }
 
 type BreakdownResult {

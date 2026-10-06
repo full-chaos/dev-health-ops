@@ -29,6 +29,10 @@ type linearNestedServer struct {
 	totalPages int
 	nested     int  // requests served for the nested connection
 	identical  bool // every node of labels/comments carries the same fields, only the id differs
+	// overlap makes every follow-up page repeat the previous page's node (same
+	// id), the way a provider that re-serves a row at a page boundary would.
+	overlap bool
+	queries []string // every query text the route sent
 }
 
 var linearNestedQueryMarkers = map[string]string{
@@ -73,7 +77,11 @@ func linearNestedNodeVariant(field string, index int, identical bool) string {
 func (server *linearNestedServer) page(field string, index int) string {
 	more := index < server.totalPages-1
 	pageInfo := fmt.Sprintf(`{"hasNextPage":%t,"endCursor":%q}`, more, "c"+strconv.Itoa(index))
-	connection := fmt.Sprintf(`{"nodes":[%s],"pageInfo":%s}`, linearNestedNodeVariant(field, index, server.identical), pageInfo)
+	nodes := linearNestedNodeVariant(field, index, server.identical)
+	if server.overlap && index > 0 && field != "cycles" {
+		nodes = linearNestedNodeVariant(field, index-1, server.identical) + "," + nodes
+	}
+	connection := fmt.Sprintf(`{"nodes":[%s],"pageInfo":%s}`, nodes, pageInfo)
 	if field == "cycles" {
 		return `{"data":{"cycles":` + connection + `}}`
 	}
@@ -118,6 +126,7 @@ func (server *linearNestedServer) Do(request *http.Request) (*http.Response, err
 	}
 	server.mu.Lock()
 	defer server.mu.Unlock()
+	server.queries = append(server.queries, body.Query)
 	var payload string
 	switch {
 	case strings.Contains(body.Query, "query LinearWorkItemsTeam("):
@@ -153,7 +162,12 @@ func collectWithLinearNestedServer(t *testing.T, field string, totalPages int) (
 
 func collectWithLinearNestedServerVariant(t *testing.T, field string, totalPages int, identical bool) (CompleteRouteBatch, *linearNestedServer, error) {
 	t.Helper()
-	server := &linearNestedServer{field: field, totalPages: totalPages, identical: identical}
+	return collectWithLinearNestedServerOptions(t, &linearNestedServer{field: field, totalPages: totalPages, identical: identical})
+}
+
+func collectWithLinearNestedServerOptions(t *testing.T, server *linearNestedServer) (CompleteRouteBatch, *linearNestedServer, error) {
+	t.Helper()
+	field := server.field
 	claim := nativeTestClaim("linear", "work-items")
 	claim.SourceExternalID = "ENG"
 	handler := LinearWorkItemsRouteHandler{FetchCycles: boolPointer(field == "cycles")}

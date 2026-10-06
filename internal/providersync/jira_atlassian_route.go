@@ -27,10 +27,13 @@ import (
 )
 
 const (
-	jiraAtlassianMaxPages       = 1_000
-	jiraAtlassianMaxRows        = 100_000
-	jiraAtlassianPerPage        = 50
-	jiraAtlassianWorklogPerPage = 100
+	jiraAtlassianMaxPages = 1_000
+	jiraAtlassianMaxRows  = 100_000
+	jiraAtlassianPerPage  = 50
+	// jiraAtlassianDefaultCommentsLimit is the per-issue comment cap used when
+	// the dataset options carry no comments_limit (CHAOS-8806).
+	jiraAtlassianDefaultCommentsLimit = 500
+	jiraAtlassianWorklogPerPage       = 100
 )
 
 // jiraAtlassianCountingDoer observes actual wire attempts, including
@@ -220,8 +223,13 @@ func (handler JiraAtlassianRouteHandler) Collect(
 	}, Worklogs: make([]jiraWorklogRow, 0)}
 	optionalIncomplete := make([]string, 0)
 	worklogObservations := make([]JiraWorklogFetchObservation, 0)
-	fetchComments := jiraOptionBool(claim, "fetch_comments", false)
-	commentsLimit := jiraOptionInt(claim, "comments_limit", 0)
+	// CHAOS-8806: issue comments are collected by default. An ABSENT option
+	// means ON (new and existing configurations alike); an explicit false
+	// stays off and an explicit comments_limit stays. The default per-issue
+	// cap is the same as GitHub's (500), so no issue reads an unbounded
+	// number of comments.
+	fetchComments := jiraOptionBool(claim, "fetch_comments", true)
+	commentsLimit := jiraOptionInt(claim, "comments_limit", jiraAtlassianDefaultCommentsLimit)
 	fetchWorklogs := jiraOptionBool(claim, "fetch_worklogs", false)
 	useGraphQL := jiraOptionBool(claim, "atlassian_gql_enabled", false)
 	fetchBoardSprints := jiraOptionBool(claim, "fetch_board_sprints", false)

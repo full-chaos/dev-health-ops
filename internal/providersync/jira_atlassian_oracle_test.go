@@ -91,6 +91,7 @@ func buildJiraAtlassianOracleSurfaces(t *testing.T, input map[string]any) jiraAt
 	claim.SourceExternalID = "OPS"
 	claim.DatasetOptions = map[string]any{
 		"fetch_worklogs": jiraBatchBool(input["fetch_worklogs"], false), "fetch_board_sprints": jiraBatchBool(input["fetch_board_sprints"], false),
+		"fetch_comments":        false, // the frozen Python producer has no comment surface
 		"atlassian_gql_enabled": jiraBatchBool(input["graphql_fallback"], false),
 		"sprint_field":          "customfield_10020",
 	}

@@ -6,10 +6,15 @@ import (
 	"fmt"
 	"log/slog"
 	"net"
+	"regexp"
+	"strconv"
 	"strings"
 	"time"
 	"unicode"
 	"unicode/utf8"
+
+	"github.com/ClickHouse/clickhouse-go/v2"
+	"github.com/jackc/pgx/v5/pgconn"
 
 	"github.com/full-chaos/dev-health-ops/internal/jobcontract"
 	"github.com/full-chaos/dev-health-ops/internal/jobruntime"
@@ -197,6 +202,43 @@ func retryableClass(err error) string {
 	default:
 		return "unclassified"
 	}
+}
+
+var sqlStateShape = regexp.MustCompile(`^[0-9A-Z]{5}$`)
+
+// withErrorAttrs appends the loggable description of err to base: error_class,
+// the Go type of the root cause, and (when the error carries one) a ClickHouse
+// exception code or a SQLSTATE. NEVER the error text: that can hold a row value,
+// a connection string or provider output.
+func withErrorAttrs(base []any, err error) []any {
+	return append(base, errorLogAttrs(err)...)
+}
+
+func errorLogAttrs(err error) []any {
+	if err == nil {
+		return nil
+	}
+	root := err
+	for {
+		next := errors.Unwrap(root)
+		if next == nil {
+			break
+		}
+		root = next
+	}
+	attrs := []any{
+		slog.String("error_class", retryableClass(err)),
+		slog.String("error_type", fmt.Sprintf("%T", root)),
+	}
+	var exception *clickhouse.Exception
+	if errors.As(err, &exception) && exception != nil {
+		attrs = append(attrs, slog.String("ch_code", strconv.FormatInt(int64(exception.Code), 10)))
+	}
+	var pgError *pgconn.PgError
+	if errors.As(err, &pgError) && pgError != nil && sqlStateShape.MatchString(pgError.Code) {
+		attrs = append(attrs, slog.String("sqlstate", pgError.Code))
+	}
+	return attrs
 }
 
 func releaseFailed(store Store, ctx context.Context, claim Claim, detail string) error {
@@ -410,9 +452,8 @@ func (h *materializeHandler) work(ctx context.Context, requestID string, organiz
 				)
 				if failErr := releaseFailed(h.store, ctx, claim, "deterministic failure: "+deterministic.Class); failErr != nil {
 					h.logger.Error("workgraph handler: could not record the failed state; the lease will expire and the request be reclaimed",
-						slog.String("request_id", requestID), slog.String("failure_class", deterministic.Class),
-						slog.Any("error", failErr),
-					)
+						withErrorAttrs([]any{slog.String("request_id", requestID),
+							slog.String("failure_class", deterministic.Class)}, failErr)...)
 				}
 				return jobruntime.Permanent(err)
 			}
@@ -437,9 +478,8 @@ func (h *materializeHandler) work(ctx context.Context, requestID string, organiz
 				detail := "retry budget exhausted: " + retryableClass(err)
 				if failErr := releaseFailed(h.store, ctx, claim, detail); failErr != nil {
 					h.logger.Error("workgraph handler: could not record the failed state; the lease will expire and the request be reclaimed",
-						slog.String("request_id", requestID), slog.String("failure_class", FailureClassRetryBudgetExhausted),
-						slog.Any("error", failErr),
-					)
+						withErrorAttrs([]any{slog.String("request_id", requestID),
+							slog.String("failure_class", FailureClassRetryBudgetExhausted)}, failErr)...)
 				}
 				return jobruntime.Permanent(err)
 			}
@@ -450,15 +490,16 @@ func (h *materializeHandler) work(ctx context.Context, requestID string, organiz
 			// lease expiry is the fallback, loudly.
 			if requeueErr := requeueClaim(h.store, ctx, claim); requeueErr != nil {
 				h.logger.Warn("workgraph handler: could not release the lease after a retryable failure; the retry waits for lease expiry",
-					slog.String("request_id", requestID), slog.String("kind", string(KindMaterialize)),
-					slog.String("organization_id", *organizationID), slog.Any("error", requeueErr),
-				)
+					withErrorAttrs([]any{slog.String("request_id", requestID), slog.String("kind", string(KindMaterialize)),
+						slog.String("organization_id", *organizationID)}, requeueErr)...)
 			}
+			// No raw error text on this path (CHAOS-8784 class rule): it can hold
+			// a row value or a connection string. The class label, the Go type of
+			// the root cause and a driver code are enough to act on.
 			h.logger.Warn("workgraph handler: retryable failure, request left claimable",
-				slog.String("request_id", requestID), slog.String("kind", string(KindMaterialize)),
-				slog.String("organization_id", *organizationID), slog.Any("error", err),
-				slog.Bool("context_cancelled", ctx.Err() != nil),
-			)
+				withErrorAttrs([]any{slog.String("request_id", requestID), slog.String("kind", string(KindMaterialize)),
+					slog.String("organization_id", *organizationID), slog.String("failure_class", retryableClass(err)),
+					slog.Bool("context_cancelled", ctx.Err() != nil)}, err)...)
 			return jobruntime.Retryable(err)
 		},
 	)

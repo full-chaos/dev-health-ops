@@ -4,6 +4,8 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"github.com/ClickHouse/clickhouse-go/v2"
+	"github.com/jackc/pgx/v5/pgconn"
 	"log/slog"
 	"net"
 	"net/http"
@@ -220,6 +222,10 @@ type fakeStore struct {
 	fails, requeues int
 	requeueErr      error
 	lastFailDetail  string
+	// Release contexts as the store saw them: a release write that inherits a
+	// cancelled job context is a write that never lands (CHAOS-8782 F2).
+	releaseCtxErrs     []error
+	releaseCtxDeadline []bool
 	// lastEvidence is what Complete received, so a test can assert what the
 	// step fragments merged into rather than only that a completion happened.
 	lastEvidence []byte
@@ -246,16 +252,24 @@ func (s *fakeStore) Complete(_ context.Context, _ Claim, evidence []byte) error 
 	s.lastEvidence = evidence
 	return nil
 }
-func (s *fakeStore) Fail(_ context.Context, _ Claim, detail string) error {
+func (s *fakeStore) noteReleaseContext(ctx context.Context) {
+	_, hasDeadline := ctx.Deadline()
+	s.releaseCtxErrs = append(s.releaseCtxErrs, ctx.Err())
+	s.releaseCtxDeadline = append(s.releaseCtxDeadline, hasDeadline)
+}
+func (s *fakeStore) Fail(ctx context.Context, _ Claim, detail string) error {
+	s.noteReleaseContext(ctx)
 	s.fails++
 	s.lastFailDetail = detail
 	return nil
 }
-func (s *fakeStore) Requeue(context.Context, Claim) error {
+func (s *fakeStore) Requeue(ctx context.Context, _ Claim) error {
+	s.noteReleaseContext(ctx)
 	s.requeues++
 	return s.requeueErr
 }
-func (s *fakeStore) Ambiguous(_ context.Context, _ Claim, detail string) error {
+func (s *fakeStore) Ambiguous(ctx context.Context, _ Claim, detail string) error {
+	s.noteReleaseContext(ctx)
 	s.ambiguous++
 	s.lastAmbiguousDetail = detail
 	return nil
@@ -543,6 +557,110 @@ func TestRetryBudgetSpentFailsTheRequestWithBothClassLabels(t *testing.T) {
 		}
 		if strings.Contains(line, "secret detail") || store.lastFailDetail != "retry budget exhausted: "+testCase.wantClass {
 			t.Fatalf("budget line leaks error text or ledger detail wrong: %q / %q", line, store.lastFailDetail)
+		}
+	}
+}
+
+// CHAOS-8782 F1: no raw error text on the retry path. The error text can hold a
+// row value or a connection string; the log carries the class label, the Go
+// type of the root cause and a driver code.
+func TestRetryPathLogsClassTypeAndCodeNeverErrorText(t *testing.T) {
+	const sentinel = "SENTINEL-ROW-VALUE-7c1e"
+	for _, testCase := range []struct {
+		name     string
+		err      error
+		wantAttr []string
+	}{
+		{"postgres", fmt.Errorf("write batch: %w", &pgconn.PgError{Code: "40001", Message: sentinel}),
+			[]string{"failure_class=unclassified", "error_type=*pgconn.PgError", "sqlstate=40001"}},
+		{"clickhouse", fmt.Errorf("read: %w", &clickhouse.Exception{Code: 159, Message: sentinel}),
+			[]string{"failure_class=unclassified", "error_type=*proto.Exception", "ch_code=159"}},
+		{"plain", errors.New("dial " + sentinel), []string{"failure_class=unclassified", "error_type=*errors.errorString"}},
+		{"cancelled", fmt.Errorf("%s: %w", sentinel, context.Canceled), []string{"failure_class=context_canceled"}},
+	} {
+		t.Run(testCase.name, func(t *testing.T) {
+			store := &fakeStore{claim: testMaterializeClaim(time.Second), requeueErr: fmt.Errorf("%w: "+sentinel, ErrUnavailable)}
+			var logs strings.Builder
+			handler, err := NewMaterializeHandler(store, classifyingExecutor{err: testCase.err},
+				slog.New(slog.NewTextHandler(&logs, &slog.HandlerOptions{Level: slog.LevelDebug})))
+			if err != nil {
+				t.Fatal(err)
+			}
+			if workErr := handler.Work(context.Background(), materializeExecution()); workErr == nil ||
+				!strings.Contains(workErr.Error(), string(jobruntime.CategoryRetryable)) {
+				t.Fatalf("Work = %v, want retryable", workErr)
+			}
+			if strings.Contains(logs.String(), sentinel) {
+				t.Fatalf("a log line carries raw error text:\n%s", logs.String())
+			}
+			for _, want := range testCase.wantAttr {
+				if !strings.Contains(logs.String(), want) {
+					t.Fatalf("log lacks %q:\n%s", want, logs.String())
+				}
+			}
+			// The failed requeue line (store error = ErrUnavailable + sentinel) too.
+			if !strings.Contains(logs.String(), "waits for lease expiry") || !strings.Contains(logs.String(), "error_class=dependency_unavailable") {
+				t.Fatalf("requeue-failure line missing or without a type:\n%s", logs.String())
+			}
+		})
+	}
+}
+
+// CHAOS-8782 F2: every release write uses a context DETACHED from the job
+// context (the job context is what a drain cancels) and bounded by a timeout.
+func TestReleaseWritesAreDetachedFromACancelledJobContext(t *testing.T) {
+	cancelled, cancel := context.WithCancel(context.Background())
+	cancel()
+	claim := *testMaterializeClaim(time.Second)
+	store := &fakeStore{claim: &claim}
+	if err := releaseFailed(store, cancelled, claim, "x"); err != nil {
+		t.Fatal(err)
+	}
+	if err := requeueClaim(store, cancelled, claim); err != nil {
+		t.Fatal(err)
+	}
+	if err := releaseAmbiguous(store, cancelled, claim, "x"); err != nil {
+		t.Fatal(err)
+	}
+	if len(store.releaseCtxErrs) != 3 {
+		t.Fatalf("release writes seen = %d, want 3", len(store.releaseCtxErrs))
+	}
+	for index, ctxErr := range store.releaseCtxErrs {
+		if ctxErr != nil || !store.releaseCtxDeadline[index] {
+			t.Fatalf("release write %d saw ctx err %v, deadline %v: it must be detached and bounded", index, ctxErr, store.releaseCtxDeadline[index])
+		}
+	}
+}
+
+// The literals operators and runbooks rely on are pinned: the budget, the class
+// and label texts, the ledger detail prefixes.
+func TestOperatorFacingLiteralsArePinned(t *testing.T) {
+	if retryBudgetClaims != 9 {
+		t.Fatalf("retryBudgetClaims = %d: the runbook and the PR name 9 claims (three River cycles)", retryBudgetClaims)
+	}
+	for got, want := range map[string]string{
+		FailureClassRetryBudgetExhausted: "retry_budget_exhausted",
+		ClassLLMDeterministic:            "llm_deterministic",
+		ClassScopeInvalid:                "scope_invalid",
+		ClassWindowInvalid:               "window_invalid",
+		ClassLLMBatchUnsupport:           "llm_batch_mode_unsupported",
+		ClassLLMProviderInvalid:          "llm_provider_invalid",
+		ClassOrgRequired:                 "org_required",
+		ClassEvidenceEncode:              "evidence_encode",
+		ClassKindMismatch:                "executor_kind_mismatch",
+	} {
+		if got != want {
+			t.Fatalf("class label %q, want %q", got, want)
+		}
+	}
+	for err, want := range map[error]string{
+		context.Canceled:         "context_canceled",
+		context.DeadlineExceeded: "deadline_exceeded",
+		ErrUnavailable:           "dependency_unavailable",
+		errors.New("x"):          "unclassified",
+	} {
+		if got := retryableClass(err); got != want {
+			t.Fatalf("retryableClass(%v) = %q, want %q", err, got, want)
 		}
 	}
 }

@@ -711,9 +711,12 @@ type ConstraintEvidence struct {
 }
 
 type Coverage struct {
-	ReposCoveredPct          float64 `json:"reposCoveredPct"`
-	PrsLinkedToIssuesPct     float64 `json:"prsLinkedToIssuesPct"`
-	IssuesWithCycleStatesPct float64 `json:"issuesWithCycleStatesPct"`
+	// Null when no repositories are available to measure.
+	ReposCoveredPct *float64 `json:"reposCoveredPct,omitempty"`
+	// Null when the current window contains no work items to link.
+	PrsLinkedToIssuesPct *float64 `json:"prsLinkedToIssuesPct,omitempty"`
+	// Null when the current window contains no work items for cycle-state coverage.
+	IssuesWithCycleStatesPct *float64 `json:"issuesWithCycleStatesPct,omitempty"`
 }
 
 type CoverageStat struct {
@@ -891,12 +894,25 @@ type HomeResult struct {
 	ReworkThemeAllocation []ReworkThemeAllocation `json:"reworkThemeAllocation"`
 	Summary               []SummarySentence       `json:"summary"`
 	Tiles                 []HomeTileEntry         `json:"tiles"`
-	Constraint            *ConstraintCard         `json:"constraint"`
-	Events                []EventItem             `json:"events"`
-	HealthState           *HealthState            `json:"healthState"`
-	Signals               []HomeSignal            `json:"signals"`
-	LimitingFactor        *HomeLimitingFactor     `json:"limitingFactor"`
-	DataConfidence        *HomeDataConfidence     `json:"dataConfidence"`
+	// The present constraint when current-window data exists; null when the window has no data.
+	Constraint     *ConstraintCard     `json:"constraint,omitempty"`
+	Events         []EventItem         `json:"events"`
+	HealthState    *HealthState        `json:"healthState"`
+	Signals        []HomeSignal        `json:"signals"`
+	LimitingFactor *HomeLimitingFactor `json:"limitingFactor"`
+	DataConfidence *HomeDataConfidence `json:"dataConfidence"`
+	// Coverage and ingestion quality for the selected repository scope; distinct from org-wide dataConfidence.
+	ScopeDataConfidence *HomeScopeDataConfidence `json:"scopeDataConfidence"`
+}
+
+// Coverage and metric-ingestion quality for the repositories selected by this Home request.
+type HomeScopeDataConfidence struct {
+	Level string `json:"level"`
+	// Null when the selected scope has no repositories.
+	CoveragePct *float64 `json:"coveragePct,omitempty"`
+	// Most recent in-window repository-metric ingestion, or null when the scope has none.
+	LastIngestedAt *string  `json:"lastIngestedAt,omitempty"`
+	Caveats        []string `json:"caveats"`
 }
 
 type HomeSignal struct {
@@ -919,6 +935,8 @@ type HomeSignal struct {
 	Category    string  `json:"category"`
 	// Null when the signal is not scoped to one entity (e.g. an org-wide signal).
 	ScopeEntity *ScopeEntityRef `json:"scopeEntity,omitempty"`
+	// Current primary work-item attribution evidence for work-item metrics; null when this window has no attributable work items.
+	Attribution *SignalAttribution `json:"attribution,omitempty"`
 }
 
 type HomeTile struct {
@@ -1015,12 +1033,16 @@ type MappingCoverage struct {
 }
 
 type MetricDelta struct {
-	Metric   string       `json:"metric"`
-	Label    string       `json:"label"`
-	Value    float64      `json:"value"`
-	Unit     string       `json:"unit"`
-	DeltaPct float64      `json:"deltaPct"`
-	Spark    []SparkPoint `json:"spark"`
+	Metric   string  `json:"metric"`
+	Label    string  `json:"label"`
+	Value    float64 `json:"value"`
+	Unit     string  `json:"unit"`
+	DeltaPct float64 `json:"deltaPct"`
+	// Whether the current window has one or more stored source rows. A stored zero has this field set to true.
+	HasData bool `json:"hasData"`
+	// Whether the comparison window has one or more stored source rows.
+	HasPriorData bool         `json:"hasPriorData"`
+	Spark        []SparkPoint `json:"spark"`
 }
 
 type MetricLineage struct {
@@ -1477,6 +1499,30 @@ type SecurityPaginationInput struct {
 type SeverityBucket struct {
 	Severity string `json:"severity"`
 	Count    int    `json:"count"`
+}
+
+// Source and confidence distribution for the work items behind one Home signal.
+type SignalAttribution struct {
+	// Number of attributed work items behind these distributions.
+	Items      int                                `json:"items"`
+	Sources    []SignalAttributionSourceCount     `json:"sources"`
+	Confidence []SignalAttributionConfidenceCount `json:"confidence"`
+}
+
+// One confidence bucket of a Home signal's work-item attribution distribution.
+type SignalAttributionConfidenceCount struct {
+	Confidence TeamAttributionConfidence `json:"confidence"`
+	Items      int                       `json:"items"`
+	// Fraction of SignalAttribution.items in this bucket.
+	Share float64 `json:"share"`
+}
+
+// One source bucket of a Home signal's work-item attribution distribution.
+type SignalAttributionSourceCount struct {
+	Source TeamAttributionSource `json:"source"`
+	Items  int                   `json:"items"`
+	// Fraction of SignalAttribution.items in this bucket.
+	Share float64 `json:"share"`
 }
 
 type SparkPoint struct {

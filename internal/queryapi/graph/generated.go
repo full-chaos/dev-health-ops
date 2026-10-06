@@ -761,13 +761,22 @@ type ComplexityRoot struct {
 		HealthState           func(childComplexity int) int
 		LimitingFactor        func(childComplexity int) int
 		ReworkThemeAllocation func(childComplexity int) int
+		ScopeDataConfidence   func(childComplexity int) int
 		Signals               func(childComplexity int) int
 		Summary               func(childComplexity int) int
 		Tiles                 func(childComplexity int) int
 	}
 
+	HomeScopeDataConfidence struct {
+		Caveats        func(childComplexity int) int
+		CoveragePct    func(childComplexity int) int
+		LastIngestedAt func(childComplexity int) int
+		Level          func(childComplexity int) int
+	}
+
 	HomeSignal struct {
 		AffectedScope     func(childComplexity int) int
+		Attribution       func(childComplexity int) int
 		Category          func(childComplexity int) int
 		Confidence        func(childComplexity int) int
 		CurrentValue      func(childComplexity int) int
@@ -854,12 +863,14 @@ type ComplexityRoot struct {
 	}
 
 	MetricDelta struct {
-		DeltaPct func(childComplexity int) int
-		Label    func(childComplexity int) int
-		Metric   func(childComplexity int) int
-		Spark    func(childComplexity int) int
-		Unit     func(childComplexity int) int
-		Value    func(childComplexity int) int
+		DeltaPct     func(childComplexity int) int
+		HasData      func(childComplexity int) int
+		HasPriorData func(childComplexity int) int
+		Label        func(childComplexity int) int
+		Metric       func(childComplexity int) int
+		Spark        func(childComplexity int) int
+		Unit         func(childComplexity int) int
+		Value        func(childComplexity int) int
 	}
 
 	MetricLineage struct {
@@ -1315,6 +1326,24 @@ type ComplexityRoot struct {
 	SeverityBucket struct {
 		Count    func(childComplexity int) int
 		Severity func(childComplexity int) int
+	}
+
+	SignalAttribution struct {
+		Confidence func(childComplexity int) int
+		Items      func(childComplexity int) int
+		Sources    func(childComplexity int) int
+	}
+
+	SignalAttributionConfidenceCount struct {
+		Confidence func(childComplexity int) int
+		Items      func(childComplexity int) int
+		Share      func(childComplexity int) int
+	}
+
+	SignalAttributionSourceCount struct {
+		Items  func(childComplexity int) int
+		Share  func(childComplexity int) int
+		Source func(childComplexity int) int
 	}
 
 	SparkPoint struct {
@@ -4911,6 +4940,13 @@ func (e *executableSchema) Complexity(typeName, field string, childComplexity in
 
 		return e.complexity.HomeResult.ReworkThemeAllocation(childComplexity), true
 
+	case "HomeResult.scopeDataConfidence":
+		if e.complexity.HomeResult.ScopeDataConfidence == nil {
+			break
+		}
+
+		return e.complexity.HomeResult.ScopeDataConfidence(childComplexity), true
+
 	case "HomeResult.signals":
 		if e.complexity.HomeResult.Signals == nil {
 			break
@@ -4932,12 +4968,47 @@ func (e *executableSchema) Complexity(typeName, field string, childComplexity in
 
 		return e.complexity.HomeResult.Tiles(childComplexity), true
 
+	case "HomeScopeDataConfidence.caveats":
+		if e.complexity.HomeScopeDataConfidence.Caveats == nil {
+			break
+		}
+
+		return e.complexity.HomeScopeDataConfidence.Caveats(childComplexity), true
+
+	case "HomeScopeDataConfidence.coveragePct":
+		if e.complexity.HomeScopeDataConfidence.CoveragePct == nil {
+			break
+		}
+
+		return e.complexity.HomeScopeDataConfidence.CoveragePct(childComplexity), true
+
+	case "HomeScopeDataConfidence.lastIngestedAt":
+		if e.complexity.HomeScopeDataConfidence.LastIngestedAt == nil {
+			break
+		}
+
+		return e.complexity.HomeScopeDataConfidence.LastIngestedAt(childComplexity), true
+
+	case "HomeScopeDataConfidence.level":
+		if e.complexity.HomeScopeDataConfidence.Level == nil {
+			break
+		}
+
+		return e.complexity.HomeScopeDataConfidence.Level(childComplexity), true
+
 	case "HomeSignal.affectedScope":
 		if e.complexity.HomeSignal.AffectedScope == nil {
 			break
 		}
 
 		return e.complexity.HomeSignal.AffectedScope(childComplexity), true
+
+	case "HomeSignal.attribution":
+		if e.complexity.HomeSignal.Attribution == nil {
+			break
+		}
+
+		return e.complexity.HomeSignal.Attribution(childComplexity), true
 
 	case "HomeSignal.category":
 		if e.complexity.HomeSignal.Category == nil {
@@ -5337,6 +5408,20 @@ func (e *executableSchema) Complexity(typeName, field string, childComplexity in
 		}
 
 		return e.complexity.MetricDelta.DeltaPct(childComplexity), true
+
+	case "MetricDelta.hasData":
+		if e.complexity.MetricDelta.HasData == nil {
+			break
+		}
+
+		return e.complexity.MetricDelta.HasData(childComplexity), true
+
+	case "MetricDelta.hasPriorData":
+		if e.complexity.MetricDelta.HasPriorData == nil {
+			break
+		}
+
+		return e.complexity.MetricDelta.HasPriorData(childComplexity), true
 
 	case "MetricDelta.label":
 		if e.complexity.MetricDelta.Label == nil {
@@ -7821,6 +7906,69 @@ func (e *executableSchema) Complexity(typeName, field string, childComplexity in
 
 		return e.complexity.SeverityBucket.Severity(childComplexity), true
 
+	case "SignalAttribution.confidence":
+		if e.complexity.SignalAttribution.Confidence == nil {
+			break
+		}
+
+		return e.complexity.SignalAttribution.Confidence(childComplexity), true
+
+	case "SignalAttribution.items":
+		if e.complexity.SignalAttribution.Items == nil {
+			break
+		}
+
+		return e.complexity.SignalAttribution.Items(childComplexity), true
+
+	case "SignalAttribution.sources":
+		if e.complexity.SignalAttribution.Sources == nil {
+			break
+		}
+
+		return e.complexity.SignalAttribution.Sources(childComplexity), true
+
+	case "SignalAttributionConfidenceCount.confidence":
+		if e.complexity.SignalAttributionConfidenceCount.Confidence == nil {
+			break
+		}
+
+		return e.complexity.SignalAttributionConfidenceCount.Confidence(childComplexity), true
+
+	case "SignalAttributionConfidenceCount.items":
+		if e.complexity.SignalAttributionConfidenceCount.Items == nil {
+			break
+		}
+
+		return e.complexity.SignalAttributionConfidenceCount.Items(childComplexity), true
+
+	case "SignalAttributionConfidenceCount.share":
+		if e.complexity.SignalAttributionConfidenceCount.Share == nil {
+			break
+		}
+
+		return e.complexity.SignalAttributionConfidenceCount.Share(childComplexity), true
+
+	case "SignalAttributionSourceCount.items":
+		if e.complexity.SignalAttributionSourceCount.Items == nil {
+			break
+		}
+
+		return e.complexity.SignalAttributionSourceCount.Items(childComplexity), true
+
+	case "SignalAttributionSourceCount.share":
+		if e.complexity.SignalAttributionSourceCount.Share == nil {
+			break
+		}
+
+		return e.complexity.SignalAttributionSourceCount.Share(childComplexity), true
+
+	case "SignalAttributionSourceCount.source":
+		if e.complexity.SignalAttributionSourceCount.Source == nil {
+			break
+		}
+
+		return e.complexity.SignalAttributionSourceCount.Source(childComplexity), true
+
 	case "SparkPoint.ts":
 		if e.complexity.SparkPoint.Ts == nil {
 			break
@@ -9722,9 +9870,12 @@ type ConnectorStatus {
 }
 
 type Coverage {
-  reposCoveredPct: Float!
-  prsLinkedToIssuesPct: Float!
-  issuesWithCycleStatesPct: Float!
+  """Null when no repositories are available to measure."""
+  reposCoveredPct: Float
+  """Null when the current window contains no work items to link."""
+  prsLinkedToIssuesPct: Float
+  """Null when the current window contains no work items for cycle-state coverage."""
+  issuesWithCycleStatesPct: Float
 }
 
 type CoverageStat {
@@ -9936,6 +10087,32 @@ type HomeSignal {
   category: String!
   """Null when the signal is not scoped to one entity (e.g. an org-wide signal)."""
   scopeEntity: ScopeEntityRef
+  """Current primary work-item attribution evidence for work-item metrics; null when this window has no attributable work items."""
+  attribution: SignalAttribution
+}
+
+"""Source and confidence distribution for the work items behind one Home signal."""
+type SignalAttribution {
+  """Number of attributed work items behind these distributions."""
+  items: Int!
+  sources: [SignalAttributionSourceCount!]!
+  confidence: [SignalAttributionConfidenceCount!]!
+}
+
+"""One source bucket of a Home signal's work-item attribution distribution."""
+type SignalAttributionSourceCount {
+  source: TeamAttributionSource!
+  items: Int!
+  """Fraction of SignalAttribution.items in this bucket."""
+  share: Float!
+}
+
+"""One confidence bucket of a Home signal's work-item attribution distribution."""
+type SignalAttributionConfidenceCount {
+  confidence: TeamAttributionConfidence!
+  items: Int!
+  """Fraction of SignalAttribution.items in this bucket."""
+  share: Float!
 }
 
 type HomeLimitingFactor {
@@ -9952,6 +10129,16 @@ type HomeDataConfidence {
   coveragePct: Float
   connectedSources: [String!]!
   missingSources: [String!]!
+  caveats: [String!]!
+}
+
+"""Coverage and metric-ingestion quality for the repositories selected by this Home request."""
+type HomeScopeDataConfidence {
+  level: String!
+  """Null when the selected scope has no repositories."""
+  coveragePct: Float
+  """Most recent in-window repository-metric ingestion, or null when the scope has none."""
+  lastIngestedAt: String
   caveats: [String!]!
 }
 
@@ -9981,12 +10168,15 @@ type HomeResult {
   reworkThemeAllocation: [ReworkThemeAllocation!]!
   summary: [SummarySentence!]!
   tiles: [HomeTileEntry!]!
-  constraint: ConstraintCard!
+  "The present constraint when current-window data exists; null when the window has no data."
+  constraint: ConstraintCard
   events: [EventItem!]!
   healthState: HealthState!
   signals: [HomeSignal!]!
   limitingFactor: HomeLimitingFactor!
   dataConfidence: HomeDataConfidence!
+  """Coverage and ingestion quality for the selected repository scope; distinct from org-wide dataConfidence."""
+  scopeDataConfidence: HomeScopeDataConfidence!
 }
 
 type SummarySentence {
@@ -10125,6 +10315,10 @@ type MetricDelta {
   value: Float!
   unit: String!
   deltaPct: Float!
+  "Whether the current window has one or more stored source rows. A stored zero has this field set to true."
+  hasData: Boolean!
+  "Whether the comparison window has one or more stored source rows."
+  hasPriorData: Boolean!
   spark: [SparkPoint!]!
 }
 
@@ -31787,14 +31981,11 @@ func (ec *executionContext) _Coverage_reposCoveredPct(ctx context.Context, field
 		return graphql.Null
 	}
 	if resTmp == nil {
-		if !graphql.HasFieldError(ctx, fc) {
-			ec.Errorf(ctx, "must not be null")
-		}
 		return graphql.Null
 	}
-	res := resTmp.(float64)
+	res := resTmp.(*float64)
 	fc.Result = res
-	return ec.marshalNFloat2float64(ctx, field.Selections, res)
+	return ec.marshalOFloat2ᚖfloat64(ctx, field.Selections, res)
 }
 
 func (ec *executionContext) fieldContext_Coverage_reposCoveredPct(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
@@ -31831,14 +32022,11 @@ func (ec *executionContext) _Coverage_prsLinkedToIssuesPct(ctx context.Context, 
 		return graphql.Null
 	}
 	if resTmp == nil {
-		if !graphql.HasFieldError(ctx, fc) {
-			ec.Errorf(ctx, "must not be null")
-		}
 		return graphql.Null
 	}
-	res := resTmp.(float64)
+	res := resTmp.(*float64)
 	fc.Result = res
-	return ec.marshalNFloat2float64(ctx, field.Selections, res)
+	return ec.marshalOFloat2ᚖfloat64(ctx, field.Selections, res)
 }
 
 func (ec *executionContext) fieldContext_Coverage_prsLinkedToIssuesPct(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
@@ -31875,14 +32063,11 @@ func (ec *executionContext) _Coverage_issuesWithCycleStatesPct(ctx context.Conte
 		return graphql.Null
 	}
 	if resTmp == nil {
-		if !graphql.HasFieldError(ctx, fc) {
-			ec.Errorf(ctx, "must not be null")
-		}
 		return graphql.Null
 	}
-	res := resTmp.(float64)
+	res := resTmp.(*float64)
 	fc.Result = res
-	return ec.marshalNFloat2float64(ctx, field.Selections, res)
+	return ec.marshalOFloat2ᚖfloat64(ctx, field.Selections, res)
 }
 
 func (ec *executionContext) fieldContext_Coverage_issuesWithCycleStatesPct(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
@@ -35652,6 +35837,10 @@ func (ec *executionContext) fieldContext_HomeResult_deltas(_ context.Context, fi
 				return ec.fieldContext_MetricDelta_unit(ctx, field)
 			case "deltaPct":
 				return ec.fieldContext_MetricDelta_deltaPct(ctx, field)
+			case "hasData":
+				return ec.fieldContext_MetricDelta_hasData(ctx, field)
+			case "hasPriorData":
+				return ec.fieldContext_MetricDelta_hasPriorData(ctx, field)
 			case "spark":
 				return ec.fieldContext_MetricDelta_spark(ctx, field)
 			}
@@ -35842,14 +36031,11 @@ func (ec *executionContext) _HomeResult_constraint(ctx context.Context, field gr
 		return graphql.Null
 	}
 	if resTmp == nil {
-		if !graphql.HasFieldError(ctx, fc) {
-			ec.Errorf(ctx, "must not be null")
-		}
 		return graphql.Null
 	}
 	res := resTmp.(*model.ConstraintCard)
 	fc.Result = res
-	return ec.marshalNConstraintCard2ᚖgithubᚗcomᚋfullᚑchaosᚋdevᚑhealthᚑopsᚋinternalᚋqueryapiᚋgraphᚋmodelᚐConstraintCard(ctx, field.Selections, res)
+	return ec.marshalOConstraintCard2ᚖgithubᚗcomᚋfullᚑchaosᚋdevᚑhealthᚑopsᚋinternalᚋqueryapiᚋgraphᚋmodelᚐConstraintCard(ctx, field.Selections, res)
 }
 
 func (ec *executionContext) fieldContext_HomeResult_constraint(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
@@ -36054,6 +36240,8 @@ func (ec *executionContext) fieldContext_HomeResult_signals(_ context.Context, f
 				return ec.fieldContext_HomeSignal_category(ctx, field)
 			case "scopeEntity":
 				return ec.fieldContext_HomeSignal_scopeEntity(ctx, field)
+			case "attribution":
+				return ec.fieldContext_HomeSignal_attribution(ctx, field)
 			}
 			return nil, fmt.Errorf("no field named %q was found under type HomeSignal", field.Name)
 		},
@@ -36168,6 +36356,230 @@ func (ec *executionContext) fieldContext_HomeResult_dataConfidence(_ context.Con
 				return ec.fieldContext_HomeDataConfidence_caveats(ctx, field)
 			}
 			return nil, fmt.Errorf("no field named %q was found under type HomeDataConfidence", field.Name)
+		},
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _HomeResult_scopeDataConfidence(ctx context.Context, field graphql.CollectedField, obj *model.HomeResult) (ret graphql.Marshaler) {
+	fc, err := ec.fieldContext_HomeResult_scopeDataConfidence(ctx, field)
+	if err != nil {
+		return graphql.Null
+	}
+	ctx = graphql.WithFieldContext(ctx, fc)
+	defer func() {
+		if r := recover(); r != nil {
+			ec.Error(ctx, ec.Recover(ctx, r))
+			ret = graphql.Null
+		}
+	}()
+	resTmp, err := ec.ResolverMiddleware(ctx, func(rctx context.Context) (any, error) {
+		ctx = rctx // use context from middleware stack in children
+		return obj.ScopeDataConfidence, nil
+	})
+	if err != nil {
+		ec.Error(ctx, err)
+		return graphql.Null
+	}
+	if resTmp == nil {
+		if !graphql.HasFieldError(ctx, fc) {
+			ec.Errorf(ctx, "must not be null")
+		}
+		return graphql.Null
+	}
+	res := resTmp.(*model.HomeScopeDataConfidence)
+	fc.Result = res
+	return ec.marshalNHomeScopeDataConfidence2ᚖgithubᚗcomᚋfullᚑchaosᚋdevᚑhealthᚑopsᚋinternalᚋqueryapiᚋgraphᚋmodelᚐHomeScopeDataConfidence(ctx, field.Selections, res)
+}
+
+func (ec *executionContext) fieldContext_HomeResult_scopeDataConfidence(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "HomeResult",
+		Field:      field,
+		IsMethod:   false,
+		IsResolver: false,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			switch field.Name {
+			case "level":
+				return ec.fieldContext_HomeScopeDataConfidence_level(ctx, field)
+			case "coveragePct":
+				return ec.fieldContext_HomeScopeDataConfidence_coveragePct(ctx, field)
+			case "lastIngestedAt":
+				return ec.fieldContext_HomeScopeDataConfidence_lastIngestedAt(ctx, field)
+			case "caveats":
+				return ec.fieldContext_HomeScopeDataConfidence_caveats(ctx, field)
+			}
+			return nil, fmt.Errorf("no field named %q was found under type HomeScopeDataConfidence", field.Name)
+		},
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _HomeScopeDataConfidence_level(ctx context.Context, field graphql.CollectedField, obj *model.HomeScopeDataConfidence) (ret graphql.Marshaler) {
+	fc, err := ec.fieldContext_HomeScopeDataConfidence_level(ctx, field)
+	if err != nil {
+		return graphql.Null
+	}
+	ctx = graphql.WithFieldContext(ctx, fc)
+	defer func() {
+		if r := recover(); r != nil {
+			ec.Error(ctx, ec.Recover(ctx, r))
+			ret = graphql.Null
+		}
+	}()
+	resTmp, err := ec.ResolverMiddleware(ctx, func(rctx context.Context) (any, error) {
+		ctx = rctx // use context from middleware stack in children
+		return obj.Level, nil
+	})
+	if err != nil {
+		ec.Error(ctx, err)
+		return graphql.Null
+	}
+	if resTmp == nil {
+		if !graphql.HasFieldError(ctx, fc) {
+			ec.Errorf(ctx, "must not be null")
+		}
+		return graphql.Null
+	}
+	res := resTmp.(string)
+	fc.Result = res
+	return ec.marshalNString2string(ctx, field.Selections, res)
+}
+
+func (ec *executionContext) fieldContext_HomeScopeDataConfidence_level(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "HomeScopeDataConfidence",
+		Field:      field,
+		IsMethod:   false,
+		IsResolver: false,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return nil, errors.New("field of type String does not have child fields")
+		},
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _HomeScopeDataConfidence_coveragePct(ctx context.Context, field graphql.CollectedField, obj *model.HomeScopeDataConfidence) (ret graphql.Marshaler) {
+	fc, err := ec.fieldContext_HomeScopeDataConfidence_coveragePct(ctx, field)
+	if err != nil {
+		return graphql.Null
+	}
+	ctx = graphql.WithFieldContext(ctx, fc)
+	defer func() {
+		if r := recover(); r != nil {
+			ec.Error(ctx, ec.Recover(ctx, r))
+			ret = graphql.Null
+		}
+	}()
+	resTmp, err := ec.ResolverMiddleware(ctx, func(rctx context.Context) (any, error) {
+		ctx = rctx // use context from middleware stack in children
+		return obj.CoveragePct, nil
+	})
+	if err != nil {
+		ec.Error(ctx, err)
+		return graphql.Null
+	}
+	if resTmp == nil {
+		return graphql.Null
+	}
+	res := resTmp.(*float64)
+	fc.Result = res
+	return ec.marshalOFloat2ᚖfloat64(ctx, field.Selections, res)
+}
+
+func (ec *executionContext) fieldContext_HomeScopeDataConfidence_coveragePct(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "HomeScopeDataConfidence",
+		Field:      field,
+		IsMethod:   false,
+		IsResolver: false,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return nil, errors.New("field of type Float does not have child fields")
+		},
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _HomeScopeDataConfidence_lastIngestedAt(ctx context.Context, field graphql.CollectedField, obj *model.HomeScopeDataConfidence) (ret graphql.Marshaler) {
+	fc, err := ec.fieldContext_HomeScopeDataConfidence_lastIngestedAt(ctx, field)
+	if err != nil {
+		return graphql.Null
+	}
+	ctx = graphql.WithFieldContext(ctx, fc)
+	defer func() {
+		if r := recover(); r != nil {
+			ec.Error(ctx, ec.Recover(ctx, r))
+			ret = graphql.Null
+		}
+	}()
+	resTmp, err := ec.ResolverMiddleware(ctx, func(rctx context.Context) (any, error) {
+		ctx = rctx // use context from middleware stack in children
+		return obj.LastIngestedAt, nil
+	})
+	if err != nil {
+		ec.Error(ctx, err)
+		return graphql.Null
+	}
+	if resTmp == nil {
+		return graphql.Null
+	}
+	res := resTmp.(*string)
+	fc.Result = res
+	return ec.marshalOString2ᚖstring(ctx, field.Selections, res)
+}
+
+func (ec *executionContext) fieldContext_HomeScopeDataConfidence_lastIngestedAt(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "HomeScopeDataConfidence",
+		Field:      field,
+		IsMethod:   false,
+		IsResolver: false,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return nil, errors.New("field of type String does not have child fields")
+		},
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _HomeScopeDataConfidence_caveats(ctx context.Context, field graphql.CollectedField, obj *model.HomeScopeDataConfidence) (ret graphql.Marshaler) {
+	fc, err := ec.fieldContext_HomeScopeDataConfidence_caveats(ctx, field)
+	if err != nil {
+		return graphql.Null
+	}
+	ctx = graphql.WithFieldContext(ctx, fc)
+	defer func() {
+		if r := recover(); r != nil {
+			ec.Error(ctx, ec.Recover(ctx, r))
+			ret = graphql.Null
+		}
+	}()
+	resTmp, err := ec.ResolverMiddleware(ctx, func(rctx context.Context) (any, error) {
+		ctx = rctx // use context from middleware stack in children
+		return obj.Caveats, nil
+	})
+	if err != nil {
+		ec.Error(ctx, err)
+		return graphql.Null
+	}
+	if resTmp == nil {
+		if !graphql.HasFieldError(ctx, fc) {
+			ec.Errorf(ctx, "must not be null")
+		}
+		return graphql.Null
+	}
+	res := resTmp.([]string)
+	fc.Result = res
+	return ec.marshalNString2ᚕstringᚄ(ctx, field.Selections, res)
+}
+
+func (ec *executionContext) fieldContext_HomeScopeDataConfidence_caveats(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "HomeScopeDataConfidence",
+		Field:      field,
+		IsMethod:   false,
+		IsResolver: false,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return nil, errors.New("field of type String does not have child fields")
 		},
 	}
 	return fc, nil
@@ -36866,6 +37278,55 @@ func (ec *executionContext) fieldContext_HomeSignal_scopeEntity(_ context.Contex
 				return ec.fieldContext_ScopeEntityRef_displayName(ctx, field)
 			}
 			return nil, fmt.Errorf("no field named %q was found under type ScopeEntityRef", field.Name)
+		},
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _HomeSignal_attribution(ctx context.Context, field graphql.CollectedField, obj *model.HomeSignal) (ret graphql.Marshaler) {
+	fc, err := ec.fieldContext_HomeSignal_attribution(ctx, field)
+	if err != nil {
+		return graphql.Null
+	}
+	ctx = graphql.WithFieldContext(ctx, fc)
+	defer func() {
+		if r := recover(); r != nil {
+			ec.Error(ctx, ec.Recover(ctx, r))
+			ret = graphql.Null
+		}
+	}()
+	resTmp, err := ec.ResolverMiddleware(ctx, func(rctx context.Context) (any, error) {
+		ctx = rctx // use context from middleware stack in children
+		return obj.Attribution, nil
+	})
+	if err != nil {
+		ec.Error(ctx, err)
+		return graphql.Null
+	}
+	if resTmp == nil {
+		return graphql.Null
+	}
+	res := resTmp.(*model.SignalAttribution)
+	fc.Result = res
+	return ec.marshalOSignalAttribution2ᚖgithubᚗcomᚋfullᚑchaosᚋdevᚑhealthᚑopsᚋinternalᚋqueryapiᚋgraphᚋmodelᚐSignalAttribution(ctx, field.Selections, res)
+}
+
+func (ec *executionContext) fieldContext_HomeSignal_attribution(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "HomeSignal",
+		Field:      field,
+		IsMethod:   false,
+		IsResolver: false,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			switch field.Name {
+			case "items":
+				return ec.fieldContext_SignalAttribution_items(ctx, field)
+			case "sources":
+				return ec.fieldContext_SignalAttribution_sources(ctx, field)
+			case "confidence":
+				return ec.fieldContext_SignalAttribution_confidence(ctx, field)
+			}
+			return nil, fmt.Errorf("no field named %q was found under type SignalAttribution", field.Name)
 		},
 	}
 	return fc, nil
@@ -38982,6 +39443,94 @@ func (ec *executionContext) fieldContext_MetricDelta_deltaPct(_ context.Context,
 		IsResolver: false,
 		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
 			return nil, errors.New("field of type Float does not have child fields")
+		},
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _MetricDelta_hasData(ctx context.Context, field graphql.CollectedField, obj *model.MetricDelta) (ret graphql.Marshaler) {
+	fc, err := ec.fieldContext_MetricDelta_hasData(ctx, field)
+	if err != nil {
+		return graphql.Null
+	}
+	ctx = graphql.WithFieldContext(ctx, fc)
+	defer func() {
+		if r := recover(); r != nil {
+			ec.Error(ctx, ec.Recover(ctx, r))
+			ret = graphql.Null
+		}
+	}()
+	resTmp, err := ec.ResolverMiddleware(ctx, func(rctx context.Context) (any, error) {
+		ctx = rctx // use context from middleware stack in children
+		return obj.HasData, nil
+	})
+	if err != nil {
+		ec.Error(ctx, err)
+		return graphql.Null
+	}
+	if resTmp == nil {
+		if !graphql.HasFieldError(ctx, fc) {
+			ec.Errorf(ctx, "must not be null")
+		}
+		return graphql.Null
+	}
+	res := resTmp.(bool)
+	fc.Result = res
+	return ec.marshalNBoolean2bool(ctx, field.Selections, res)
+}
+
+func (ec *executionContext) fieldContext_MetricDelta_hasData(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "MetricDelta",
+		Field:      field,
+		IsMethod:   false,
+		IsResolver: false,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return nil, errors.New("field of type Boolean does not have child fields")
+		},
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _MetricDelta_hasPriorData(ctx context.Context, field graphql.CollectedField, obj *model.MetricDelta) (ret graphql.Marshaler) {
+	fc, err := ec.fieldContext_MetricDelta_hasPriorData(ctx, field)
+	if err != nil {
+		return graphql.Null
+	}
+	ctx = graphql.WithFieldContext(ctx, fc)
+	defer func() {
+		if r := recover(); r != nil {
+			ec.Error(ctx, ec.Recover(ctx, r))
+			ret = graphql.Null
+		}
+	}()
+	resTmp, err := ec.ResolverMiddleware(ctx, func(rctx context.Context) (any, error) {
+		ctx = rctx // use context from middleware stack in children
+		return obj.HasPriorData, nil
+	})
+	if err != nil {
+		ec.Error(ctx, err)
+		return graphql.Null
+	}
+	if resTmp == nil {
+		if !graphql.HasFieldError(ctx, fc) {
+			ec.Errorf(ctx, "must not be null")
+		}
+		return graphql.Null
+	}
+	res := resTmp.(bool)
+	fc.Result = res
+	return ec.marshalNBoolean2bool(ctx, field.Selections, res)
+}
+
+func (ec *executionContext) fieldContext_MetricDelta_hasPriorData(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "MetricDelta",
+		Field:      field,
+		IsMethod:   false,
+		IsResolver: false,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return nil, errors.New("field of type Boolean does not have child fields")
 		},
 	}
 	return fc, nil
@@ -45903,6 +46452,8 @@ func (ec *executionContext) fieldContext_Query_home(ctx context.Context, field g
 				return ec.fieldContext_HomeResult_limitingFactor(ctx, field)
 			case "dataConfidence":
 				return ec.fieldContext_HomeResult_dataConfidence(ctx, field)
+			case "scopeDataConfidence":
+				return ec.fieldContext_HomeResult_scopeDataConfidence(ctx, field)
 			}
 			return nil, fmt.Errorf("no field named %q was found under type HomeResult", field.Name)
 		},
@@ -54601,6 +55152,418 @@ func (ec *executionContext) fieldContext_SeverityBucket_count(_ context.Context,
 		IsResolver: false,
 		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
 			return nil, errors.New("field of type Int does not have child fields")
+		},
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _SignalAttribution_items(ctx context.Context, field graphql.CollectedField, obj *model.SignalAttribution) (ret graphql.Marshaler) {
+	fc, err := ec.fieldContext_SignalAttribution_items(ctx, field)
+	if err != nil {
+		return graphql.Null
+	}
+	ctx = graphql.WithFieldContext(ctx, fc)
+	defer func() {
+		if r := recover(); r != nil {
+			ec.Error(ctx, ec.Recover(ctx, r))
+			ret = graphql.Null
+		}
+	}()
+	resTmp, err := ec.ResolverMiddleware(ctx, func(rctx context.Context) (any, error) {
+		ctx = rctx // use context from middleware stack in children
+		return obj.Items, nil
+	})
+	if err != nil {
+		ec.Error(ctx, err)
+		return graphql.Null
+	}
+	if resTmp == nil {
+		if !graphql.HasFieldError(ctx, fc) {
+			ec.Errorf(ctx, "must not be null")
+		}
+		return graphql.Null
+	}
+	res := resTmp.(int)
+	fc.Result = res
+	return ec.marshalNInt2int(ctx, field.Selections, res)
+}
+
+func (ec *executionContext) fieldContext_SignalAttribution_items(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "SignalAttribution",
+		Field:      field,
+		IsMethod:   false,
+		IsResolver: false,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return nil, errors.New("field of type Int does not have child fields")
+		},
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _SignalAttribution_sources(ctx context.Context, field graphql.CollectedField, obj *model.SignalAttribution) (ret graphql.Marshaler) {
+	fc, err := ec.fieldContext_SignalAttribution_sources(ctx, field)
+	if err != nil {
+		return graphql.Null
+	}
+	ctx = graphql.WithFieldContext(ctx, fc)
+	defer func() {
+		if r := recover(); r != nil {
+			ec.Error(ctx, ec.Recover(ctx, r))
+			ret = graphql.Null
+		}
+	}()
+	resTmp, err := ec.ResolverMiddleware(ctx, func(rctx context.Context) (any, error) {
+		ctx = rctx // use context from middleware stack in children
+		return obj.Sources, nil
+	})
+	if err != nil {
+		ec.Error(ctx, err)
+		return graphql.Null
+	}
+	if resTmp == nil {
+		if !graphql.HasFieldError(ctx, fc) {
+			ec.Errorf(ctx, "must not be null")
+		}
+		return graphql.Null
+	}
+	res := resTmp.([]model.SignalAttributionSourceCount)
+	fc.Result = res
+	return ec.marshalNSignalAttributionSourceCount2ᚕgithubᚗcomᚋfullᚑchaosᚋdevᚑhealthᚑopsᚋinternalᚋqueryapiᚋgraphᚋmodelᚐSignalAttributionSourceCountᚄ(ctx, field.Selections, res)
+}
+
+func (ec *executionContext) fieldContext_SignalAttribution_sources(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "SignalAttribution",
+		Field:      field,
+		IsMethod:   false,
+		IsResolver: false,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			switch field.Name {
+			case "source":
+				return ec.fieldContext_SignalAttributionSourceCount_source(ctx, field)
+			case "items":
+				return ec.fieldContext_SignalAttributionSourceCount_items(ctx, field)
+			case "share":
+				return ec.fieldContext_SignalAttributionSourceCount_share(ctx, field)
+			}
+			return nil, fmt.Errorf("no field named %q was found under type SignalAttributionSourceCount", field.Name)
+		},
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _SignalAttribution_confidence(ctx context.Context, field graphql.CollectedField, obj *model.SignalAttribution) (ret graphql.Marshaler) {
+	fc, err := ec.fieldContext_SignalAttribution_confidence(ctx, field)
+	if err != nil {
+		return graphql.Null
+	}
+	ctx = graphql.WithFieldContext(ctx, fc)
+	defer func() {
+		if r := recover(); r != nil {
+			ec.Error(ctx, ec.Recover(ctx, r))
+			ret = graphql.Null
+		}
+	}()
+	resTmp, err := ec.ResolverMiddleware(ctx, func(rctx context.Context) (any, error) {
+		ctx = rctx // use context from middleware stack in children
+		return obj.Confidence, nil
+	})
+	if err != nil {
+		ec.Error(ctx, err)
+		return graphql.Null
+	}
+	if resTmp == nil {
+		if !graphql.HasFieldError(ctx, fc) {
+			ec.Errorf(ctx, "must not be null")
+		}
+		return graphql.Null
+	}
+	res := resTmp.([]model.SignalAttributionConfidenceCount)
+	fc.Result = res
+	return ec.marshalNSignalAttributionConfidenceCount2ᚕgithubᚗcomᚋfullᚑchaosᚋdevᚑhealthᚑopsᚋinternalᚋqueryapiᚋgraphᚋmodelᚐSignalAttributionConfidenceCountᚄ(ctx, field.Selections, res)
+}
+
+func (ec *executionContext) fieldContext_SignalAttribution_confidence(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "SignalAttribution",
+		Field:      field,
+		IsMethod:   false,
+		IsResolver: false,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			switch field.Name {
+			case "confidence":
+				return ec.fieldContext_SignalAttributionConfidenceCount_confidence(ctx, field)
+			case "items":
+				return ec.fieldContext_SignalAttributionConfidenceCount_items(ctx, field)
+			case "share":
+				return ec.fieldContext_SignalAttributionConfidenceCount_share(ctx, field)
+			}
+			return nil, fmt.Errorf("no field named %q was found under type SignalAttributionConfidenceCount", field.Name)
+		},
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _SignalAttributionConfidenceCount_confidence(ctx context.Context, field graphql.CollectedField, obj *model.SignalAttributionConfidenceCount) (ret graphql.Marshaler) {
+	fc, err := ec.fieldContext_SignalAttributionConfidenceCount_confidence(ctx, field)
+	if err != nil {
+		return graphql.Null
+	}
+	ctx = graphql.WithFieldContext(ctx, fc)
+	defer func() {
+		if r := recover(); r != nil {
+			ec.Error(ctx, ec.Recover(ctx, r))
+			ret = graphql.Null
+		}
+	}()
+	resTmp, err := ec.ResolverMiddleware(ctx, func(rctx context.Context) (any, error) {
+		ctx = rctx // use context from middleware stack in children
+		return obj.Confidence, nil
+	})
+	if err != nil {
+		ec.Error(ctx, err)
+		return graphql.Null
+	}
+	if resTmp == nil {
+		if !graphql.HasFieldError(ctx, fc) {
+			ec.Errorf(ctx, "must not be null")
+		}
+		return graphql.Null
+	}
+	res := resTmp.(model.TeamAttributionConfidence)
+	fc.Result = res
+	return ec.marshalNTeamAttributionConfidence2githubᚗcomᚋfullᚑchaosᚋdevᚑhealthᚑopsᚋinternalᚋqueryapiᚋgraphᚋmodelᚐTeamAttributionConfidence(ctx, field.Selections, res)
+}
+
+func (ec *executionContext) fieldContext_SignalAttributionConfidenceCount_confidence(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "SignalAttributionConfidenceCount",
+		Field:      field,
+		IsMethod:   false,
+		IsResolver: false,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return nil, errors.New("field of type TeamAttributionConfidence does not have child fields")
+		},
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _SignalAttributionConfidenceCount_items(ctx context.Context, field graphql.CollectedField, obj *model.SignalAttributionConfidenceCount) (ret graphql.Marshaler) {
+	fc, err := ec.fieldContext_SignalAttributionConfidenceCount_items(ctx, field)
+	if err != nil {
+		return graphql.Null
+	}
+	ctx = graphql.WithFieldContext(ctx, fc)
+	defer func() {
+		if r := recover(); r != nil {
+			ec.Error(ctx, ec.Recover(ctx, r))
+			ret = graphql.Null
+		}
+	}()
+	resTmp, err := ec.ResolverMiddleware(ctx, func(rctx context.Context) (any, error) {
+		ctx = rctx // use context from middleware stack in children
+		return obj.Items, nil
+	})
+	if err != nil {
+		ec.Error(ctx, err)
+		return graphql.Null
+	}
+	if resTmp == nil {
+		if !graphql.HasFieldError(ctx, fc) {
+			ec.Errorf(ctx, "must not be null")
+		}
+		return graphql.Null
+	}
+	res := resTmp.(int)
+	fc.Result = res
+	return ec.marshalNInt2int(ctx, field.Selections, res)
+}
+
+func (ec *executionContext) fieldContext_SignalAttributionConfidenceCount_items(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "SignalAttributionConfidenceCount",
+		Field:      field,
+		IsMethod:   false,
+		IsResolver: false,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return nil, errors.New("field of type Int does not have child fields")
+		},
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _SignalAttributionConfidenceCount_share(ctx context.Context, field graphql.CollectedField, obj *model.SignalAttributionConfidenceCount) (ret graphql.Marshaler) {
+	fc, err := ec.fieldContext_SignalAttributionConfidenceCount_share(ctx, field)
+	if err != nil {
+		return graphql.Null
+	}
+	ctx = graphql.WithFieldContext(ctx, fc)
+	defer func() {
+		if r := recover(); r != nil {
+			ec.Error(ctx, ec.Recover(ctx, r))
+			ret = graphql.Null
+		}
+	}()
+	resTmp, err := ec.ResolverMiddleware(ctx, func(rctx context.Context) (any, error) {
+		ctx = rctx // use context from middleware stack in children
+		return obj.Share, nil
+	})
+	if err != nil {
+		ec.Error(ctx, err)
+		return graphql.Null
+	}
+	if resTmp == nil {
+		if !graphql.HasFieldError(ctx, fc) {
+			ec.Errorf(ctx, "must not be null")
+		}
+		return graphql.Null
+	}
+	res := resTmp.(float64)
+	fc.Result = res
+	return ec.marshalNFloat2float64(ctx, field.Selections, res)
+}
+
+func (ec *executionContext) fieldContext_SignalAttributionConfidenceCount_share(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "SignalAttributionConfidenceCount",
+		Field:      field,
+		IsMethod:   false,
+		IsResolver: false,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return nil, errors.New("field of type Float does not have child fields")
+		},
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _SignalAttributionSourceCount_source(ctx context.Context, field graphql.CollectedField, obj *model.SignalAttributionSourceCount) (ret graphql.Marshaler) {
+	fc, err := ec.fieldContext_SignalAttributionSourceCount_source(ctx, field)
+	if err != nil {
+		return graphql.Null
+	}
+	ctx = graphql.WithFieldContext(ctx, fc)
+	defer func() {
+		if r := recover(); r != nil {
+			ec.Error(ctx, ec.Recover(ctx, r))
+			ret = graphql.Null
+		}
+	}()
+	resTmp, err := ec.ResolverMiddleware(ctx, func(rctx context.Context) (any, error) {
+		ctx = rctx // use context from middleware stack in children
+		return obj.Source, nil
+	})
+	if err != nil {
+		ec.Error(ctx, err)
+		return graphql.Null
+	}
+	if resTmp == nil {
+		if !graphql.HasFieldError(ctx, fc) {
+			ec.Errorf(ctx, "must not be null")
+		}
+		return graphql.Null
+	}
+	res := resTmp.(model.TeamAttributionSource)
+	fc.Result = res
+	return ec.marshalNTeamAttributionSource2githubᚗcomᚋfullᚑchaosᚋdevᚑhealthᚑopsᚋinternalᚋqueryapiᚋgraphᚋmodelᚐTeamAttributionSource(ctx, field.Selections, res)
+}
+
+func (ec *executionContext) fieldContext_SignalAttributionSourceCount_source(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "SignalAttributionSourceCount",
+		Field:      field,
+		IsMethod:   false,
+		IsResolver: false,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return nil, errors.New("field of type TeamAttributionSource does not have child fields")
+		},
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _SignalAttributionSourceCount_items(ctx context.Context, field graphql.CollectedField, obj *model.SignalAttributionSourceCount) (ret graphql.Marshaler) {
+	fc, err := ec.fieldContext_SignalAttributionSourceCount_items(ctx, field)
+	if err != nil {
+		return graphql.Null
+	}
+	ctx = graphql.WithFieldContext(ctx, fc)
+	defer func() {
+		if r := recover(); r != nil {
+			ec.Error(ctx, ec.Recover(ctx, r))
+			ret = graphql.Null
+		}
+	}()
+	resTmp, err := ec.ResolverMiddleware(ctx, func(rctx context.Context) (any, error) {
+		ctx = rctx // use context from middleware stack in children
+		return obj.Items, nil
+	})
+	if err != nil {
+		ec.Error(ctx, err)
+		return graphql.Null
+	}
+	if resTmp == nil {
+		if !graphql.HasFieldError(ctx, fc) {
+			ec.Errorf(ctx, "must not be null")
+		}
+		return graphql.Null
+	}
+	res := resTmp.(int)
+	fc.Result = res
+	return ec.marshalNInt2int(ctx, field.Selections, res)
+}
+
+func (ec *executionContext) fieldContext_SignalAttributionSourceCount_items(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "SignalAttributionSourceCount",
+		Field:      field,
+		IsMethod:   false,
+		IsResolver: false,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return nil, errors.New("field of type Int does not have child fields")
+		},
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _SignalAttributionSourceCount_share(ctx context.Context, field graphql.CollectedField, obj *model.SignalAttributionSourceCount) (ret graphql.Marshaler) {
+	fc, err := ec.fieldContext_SignalAttributionSourceCount_share(ctx, field)
+	if err != nil {
+		return graphql.Null
+	}
+	ctx = graphql.WithFieldContext(ctx, fc)
+	defer func() {
+		if r := recover(); r != nil {
+			ec.Error(ctx, ec.Recover(ctx, r))
+			ret = graphql.Null
+		}
+	}()
+	resTmp, err := ec.ResolverMiddleware(ctx, func(rctx context.Context) (any, error) {
+		ctx = rctx // use context from middleware stack in children
+		return obj.Share, nil
+	})
+	if err != nil {
+		ec.Error(ctx, err)
+		return graphql.Null
+	}
+	if resTmp == nil {
+		if !graphql.HasFieldError(ctx, fc) {
+			ec.Errorf(ctx, "must not be null")
+		}
+		return graphql.Null
+	}
+	res := resTmp.(float64)
+	fc.Result = res
+	return ec.marshalNFloat2float64(ctx, field.Selections, res)
+}
+
+func (ec *executionContext) fieldContext_SignalAttributionSourceCount_share(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "SignalAttributionSourceCount",
+		Field:      field,
+		IsMethod:   false,
+		IsResolver: false,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return nil, errors.New("field of type Float does not have child fields")
 		},
 	}
 	return fc, nil
@@ -68316,19 +69279,10 @@ func (ec *executionContext) _Coverage(ctx context.Context, sel ast.SelectionSet,
 			out.Values[i] = graphql.MarshalString("Coverage")
 		case "reposCoveredPct":
 			out.Values[i] = ec._Coverage_reposCoveredPct(ctx, field, obj)
-			if out.Values[i] == graphql.Null {
-				out.Invalids++
-			}
 		case "prsLinkedToIssuesPct":
 			out.Values[i] = ec._Coverage_prsLinkedToIssuesPct(ctx, field, obj)
-			if out.Values[i] == graphql.Null {
-				out.Invalids++
-			}
 		case "issuesWithCycleStatesPct":
 			out.Values[i] = ec._Coverage_issuesWithCycleStatesPct(ctx, field, obj)
-			if out.Values[i] == graphql.Null {
-				out.Invalids++
-			}
 		default:
 			panic("unknown field " + strconv.Quote(field.Name))
 		}
@@ -69384,9 +70338,6 @@ func (ec *executionContext) _HomeResult(ctx context.Context, sel ast.SelectionSe
 			}
 		case "constraint":
 			out.Values[i] = ec._HomeResult_constraint(ctx, field, obj)
-			if out.Values[i] == graphql.Null {
-				out.Invalids++
-			}
 		case "events":
 			out.Values[i] = ec._HomeResult_events(ctx, field, obj)
 			if out.Values[i] == graphql.Null {
@@ -69409,6 +70360,59 @@ func (ec *executionContext) _HomeResult(ctx context.Context, sel ast.SelectionSe
 			}
 		case "dataConfidence":
 			out.Values[i] = ec._HomeResult_dataConfidence(ctx, field, obj)
+			if out.Values[i] == graphql.Null {
+				out.Invalids++
+			}
+		case "scopeDataConfidence":
+			out.Values[i] = ec._HomeResult_scopeDataConfidence(ctx, field, obj)
+			if out.Values[i] == graphql.Null {
+				out.Invalids++
+			}
+		default:
+			panic("unknown field " + strconv.Quote(field.Name))
+		}
+	}
+	out.Dispatch(ctx)
+	if out.Invalids > 0 {
+		return graphql.Null
+	}
+
+	atomic.AddInt32(&ec.deferred, int32(len(deferred)))
+
+	for label, dfs := range deferred {
+		ec.processDeferredGroup(graphql.DeferredGroup{
+			Label:    label,
+			Path:     graphql.GetPath(ctx),
+			FieldSet: dfs,
+			Context:  ctx,
+		})
+	}
+
+	return out
+}
+
+var homeScopeDataConfidenceImplementors = []string{"HomeScopeDataConfidence"}
+
+func (ec *executionContext) _HomeScopeDataConfidence(ctx context.Context, sel ast.SelectionSet, obj *model.HomeScopeDataConfidence) graphql.Marshaler {
+	fields := graphql.CollectFields(ec.OperationContext, sel, homeScopeDataConfidenceImplementors)
+
+	out := graphql.NewFieldSet(fields)
+	deferred := make(map[string]*graphql.FieldSet)
+	for i, field := range fields {
+		switch field.Name {
+		case "__typename":
+			out.Values[i] = graphql.MarshalString("HomeScopeDataConfidence")
+		case "level":
+			out.Values[i] = ec._HomeScopeDataConfidence_level(ctx, field, obj)
+			if out.Values[i] == graphql.Null {
+				out.Invalids++
+			}
+		case "coveragePct":
+			out.Values[i] = ec._HomeScopeDataConfidence_coveragePct(ctx, field, obj)
+		case "lastIngestedAt":
+			out.Values[i] = ec._HomeScopeDataConfidence_lastIngestedAt(ctx, field, obj)
+		case "caveats":
+			out.Values[i] = ec._HomeScopeDataConfidence_caveats(ctx, field, obj)
 			if out.Values[i] == graphql.Null {
 				out.Invalids++
 			}
@@ -69514,6 +70518,8 @@ func (ec *executionContext) _HomeSignal(ctx context.Context, sel ast.SelectionSe
 			}
 		case "scopeEntity":
 			out.Values[i] = ec._HomeSignal_scopeEntity(ctx, field, obj)
+		case "attribution":
+			out.Values[i] = ec._HomeSignal_attribution(ctx, field, obj)
 		default:
 			panic("unknown field " + strconv.Quote(field.Name))
 		}
@@ -70075,6 +71081,16 @@ func (ec *executionContext) _MetricDelta(ctx context.Context, sel ast.SelectionS
 			}
 		case "deltaPct":
 			out.Values[i] = ec._MetricDelta_deltaPct(ctx, field, obj)
+			if out.Values[i] == graphql.Null {
+				out.Invalids++
+			}
+		case "hasData":
+			out.Values[i] = ec._MetricDelta_hasData(ctx, field, obj)
+			if out.Values[i] == graphql.Null {
+				out.Invalids++
+			}
+		case "hasPriorData":
+			out.Values[i] = ec._MetricDelta_hasPriorData(ctx, field, obj)
 			if out.Values[i] == graphql.Null {
 				out.Invalids++
 			}
@@ -73827,6 +74843,153 @@ func (ec *executionContext) _SeverityBucket(ctx context.Context, sel ast.Selecti
 	return out
 }
 
+var signalAttributionImplementors = []string{"SignalAttribution"}
+
+func (ec *executionContext) _SignalAttribution(ctx context.Context, sel ast.SelectionSet, obj *model.SignalAttribution) graphql.Marshaler {
+	fields := graphql.CollectFields(ec.OperationContext, sel, signalAttributionImplementors)
+
+	out := graphql.NewFieldSet(fields)
+	deferred := make(map[string]*graphql.FieldSet)
+	for i, field := range fields {
+		switch field.Name {
+		case "__typename":
+			out.Values[i] = graphql.MarshalString("SignalAttribution")
+		case "items":
+			out.Values[i] = ec._SignalAttribution_items(ctx, field, obj)
+			if out.Values[i] == graphql.Null {
+				out.Invalids++
+			}
+		case "sources":
+			out.Values[i] = ec._SignalAttribution_sources(ctx, field, obj)
+			if out.Values[i] == graphql.Null {
+				out.Invalids++
+			}
+		case "confidence":
+			out.Values[i] = ec._SignalAttribution_confidence(ctx, field, obj)
+			if out.Values[i] == graphql.Null {
+				out.Invalids++
+			}
+		default:
+			panic("unknown field " + strconv.Quote(field.Name))
+		}
+	}
+	out.Dispatch(ctx)
+	if out.Invalids > 0 {
+		return graphql.Null
+	}
+
+	atomic.AddInt32(&ec.deferred, int32(len(deferred)))
+
+	for label, dfs := range deferred {
+		ec.processDeferredGroup(graphql.DeferredGroup{
+			Label:    label,
+			Path:     graphql.GetPath(ctx),
+			FieldSet: dfs,
+			Context:  ctx,
+		})
+	}
+
+	return out
+}
+
+var signalAttributionConfidenceCountImplementors = []string{"SignalAttributionConfidenceCount"}
+
+func (ec *executionContext) _SignalAttributionConfidenceCount(ctx context.Context, sel ast.SelectionSet, obj *model.SignalAttributionConfidenceCount) graphql.Marshaler {
+	fields := graphql.CollectFields(ec.OperationContext, sel, signalAttributionConfidenceCountImplementors)
+
+	out := graphql.NewFieldSet(fields)
+	deferred := make(map[string]*graphql.FieldSet)
+	for i, field := range fields {
+		switch field.Name {
+		case "__typename":
+			out.Values[i] = graphql.MarshalString("SignalAttributionConfidenceCount")
+		case "confidence":
+			out.Values[i] = ec._SignalAttributionConfidenceCount_confidence(ctx, field, obj)
+			if out.Values[i] == graphql.Null {
+				out.Invalids++
+			}
+		case "items":
+			out.Values[i] = ec._SignalAttributionConfidenceCount_items(ctx, field, obj)
+			if out.Values[i] == graphql.Null {
+				out.Invalids++
+			}
+		case "share":
+			out.Values[i] = ec._SignalAttributionConfidenceCount_share(ctx, field, obj)
+			if out.Values[i] == graphql.Null {
+				out.Invalids++
+			}
+		default:
+			panic("unknown field " + strconv.Quote(field.Name))
+		}
+	}
+	out.Dispatch(ctx)
+	if out.Invalids > 0 {
+		return graphql.Null
+	}
+
+	atomic.AddInt32(&ec.deferred, int32(len(deferred)))
+
+	for label, dfs := range deferred {
+		ec.processDeferredGroup(graphql.DeferredGroup{
+			Label:    label,
+			Path:     graphql.GetPath(ctx),
+			FieldSet: dfs,
+			Context:  ctx,
+		})
+	}
+
+	return out
+}
+
+var signalAttributionSourceCountImplementors = []string{"SignalAttributionSourceCount"}
+
+func (ec *executionContext) _SignalAttributionSourceCount(ctx context.Context, sel ast.SelectionSet, obj *model.SignalAttributionSourceCount) graphql.Marshaler {
+	fields := graphql.CollectFields(ec.OperationContext, sel, signalAttributionSourceCountImplementors)
+
+	out := graphql.NewFieldSet(fields)
+	deferred := make(map[string]*graphql.FieldSet)
+	for i, field := range fields {
+		switch field.Name {
+		case "__typename":
+			out.Values[i] = graphql.MarshalString("SignalAttributionSourceCount")
+		case "source":
+			out.Values[i] = ec._SignalAttributionSourceCount_source(ctx, field, obj)
+			if out.Values[i] == graphql.Null {
+				out.Invalids++
+			}
+		case "items":
+			out.Values[i] = ec._SignalAttributionSourceCount_items(ctx, field, obj)
+			if out.Values[i] == graphql.Null {
+				out.Invalids++
+			}
+		case "share":
+			out.Values[i] = ec._SignalAttributionSourceCount_share(ctx, field, obj)
+			if out.Values[i] == graphql.Null {
+				out.Invalids++
+			}
+		default:
+			panic("unknown field " + strconv.Quote(field.Name))
+		}
+	}
+	out.Dispatch(ctx)
+	if out.Invalids > 0 {
+		return graphql.Null
+	}
+
+	atomic.AddInt32(&ec.deferred, int32(len(deferred)))
+
+	for label, dfs := range deferred {
+		ec.processDeferredGroup(graphql.DeferredGroup{
+			Label:    label,
+			Path:     graphql.GetPath(ctx),
+			FieldSet: dfs,
+			Context:  ctx,
+		})
+	}
+
+	return out
+}
+
 var sparkPointImplementors = []string{"SparkPoint"}
 
 func (ec *executionContext) _SparkPoint(ctx context.Context, sel ast.SelectionSet, obj *model.SparkPoint) graphql.Marshaler {
@@ -77466,16 +78629,6 @@ func (ec *executionContext) marshalNConnectorStatus2ᚕgithubᚗcomᚋfullᚑcha
 	return ret
 }
 
-func (ec *executionContext) marshalNConstraintCard2ᚖgithubᚗcomᚋfullᚑchaosᚋdevᚑhealthᚑopsᚋinternalᚋqueryapiᚋgraphᚋmodelᚐConstraintCard(ctx context.Context, sel ast.SelectionSet, v *model.ConstraintCard) graphql.Marshaler {
-	if v == nil {
-		if !graphql.HasFieldError(ctx, graphql.GetFieldContext(ctx)) {
-			ec.Errorf(ctx, "the requested element is null which the schema does not allow")
-		}
-		return graphql.Null
-	}
-	return ec._ConstraintCard(ctx, sel, v)
-}
-
 func (ec *executionContext) marshalNConstraintEvidence2githubᚗcomᚋfullᚑchaosᚋdevᚑhealthᚑopsᚋinternalᚋqueryapiᚋgraphᚋmodelᚐConstraintEvidence(ctx context.Context, sel ast.SelectionSet, v model.ConstraintEvidence) graphql.Marshaler {
 	return ec._ConstraintEvidence(ctx, sel, &v)
 }
@@ -78065,6 +79218,16 @@ func (ec *executionContext) marshalNHomeResult2ᚖgithubᚗcomᚋfullᚑchaosᚋ
 		return graphql.Null
 	}
 	return ec._HomeResult(ctx, sel, v)
+}
+
+func (ec *executionContext) marshalNHomeScopeDataConfidence2ᚖgithubᚗcomᚋfullᚑchaosᚋdevᚑhealthᚑopsᚋinternalᚋqueryapiᚋgraphᚋmodelᚐHomeScopeDataConfidence(ctx context.Context, sel ast.SelectionSet, v *model.HomeScopeDataConfidence) graphql.Marshaler {
+	if v == nil {
+		if !graphql.HasFieldError(ctx, graphql.GetFieldContext(ctx)) {
+			ec.Errorf(ctx, "the requested element is null which the schema does not allow")
+		}
+		return graphql.Null
+	}
+	return ec._HomeScopeDataConfidence(ctx, sel, v)
 }
 
 func (ec *executionContext) marshalNHomeSignal2githubᚗcomᚋfullᚑchaosᚋdevᚑhealthᚑopsᚋinternalᚋqueryapiᚋgraphᚋmodelᚐHomeSignal(ctx context.Context, sel ast.SelectionSet, v model.HomeSignal) graphql.Marshaler {
@@ -79975,6 +81138,102 @@ func (ec *executionContext) marshalNSeverityBucket2ᚕgithubᚗcomᚋfullᚑchao
 	return ret
 }
 
+func (ec *executionContext) marshalNSignalAttributionConfidenceCount2githubᚗcomᚋfullᚑchaosᚋdevᚑhealthᚑopsᚋinternalᚋqueryapiᚋgraphᚋmodelᚐSignalAttributionConfidenceCount(ctx context.Context, sel ast.SelectionSet, v model.SignalAttributionConfidenceCount) graphql.Marshaler {
+	return ec._SignalAttributionConfidenceCount(ctx, sel, &v)
+}
+
+func (ec *executionContext) marshalNSignalAttributionConfidenceCount2ᚕgithubᚗcomᚋfullᚑchaosᚋdevᚑhealthᚑopsᚋinternalᚋqueryapiᚋgraphᚋmodelᚐSignalAttributionConfidenceCountᚄ(ctx context.Context, sel ast.SelectionSet, v []model.SignalAttributionConfidenceCount) graphql.Marshaler {
+	ret := make(graphql.Array, len(v))
+	var wg sync.WaitGroup
+	isLen1 := len(v) == 1
+	if !isLen1 {
+		wg.Add(len(v))
+	}
+	for i := range v {
+		i := i
+		fc := &graphql.FieldContext{
+			Index:  &i,
+			Result: &v[i],
+		}
+		ctx := graphql.WithFieldContext(ctx, fc)
+		f := func(i int) {
+			defer func() {
+				if r := recover(); r != nil {
+					ec.Error(ctx, ec.Recover(ctx, r))
+					ret = nil
+				}
+			}()
+			if !isLen1 {
+				defer wg.Done()
+			}
+			ret[i] = ec.marshalNSignalAttributionConfidenceCount2githubᚗcomᚋfullᚑchaosᚋdevᚑhealthᚑopsᚋinternalᚋqueryapiᚋgraphᚋmodelᚐSignalAttributionConfidenceCount(ctx, sel, v[i])
+		}
+		if isLen1 {
+			f(i)
+		} else {
+			go f(i)
+		}
+
+	}
+	wg.Wait()
+
+	for _, e := range ret {
+		if e == graphql.Null {
+			return graphql.Null
+		}
+	}
+
+	return ret
+}
+
+func (ec *executionContext) marshalNSignalAttributionSourceCount2githubᚗcomᚋfullᚑchaosᚋdevᚑhealthᚑopsᚋinternalᚋqueryapiᚋgraphᚋmodelᚐSignalAttributionSourceCount(ctx context.Context, sel ast.SelectionSet, v model.SignalAttributionSourceCount) graphql.Marshaler {
+	return ec._SignalAttributionSourceCount(ctx, sel, &v)
+}
+
+func (ec *executionContext) marshalNSignalAttributionSourceCount2ᚕgithubᚗcomᚋfullᚑchaosᚋdevᚑhealthᚑopsᚋinternalᚋqueryapiᚋgraphᚋmodelᚐSignalAttributionSourceCountᚄ(ctx context.Context, sel ast.SelectionSet, v []model.SignalAttributionSourceCount) graphql.Marshaler {
+	ret := make(graphql.Array, len(v))
+	var wg sync.WaitGroup
+	isLen1 := len(v) == 1
+	if !isLen1 {
+		wg.Add(len(v))
+	}
+	for i := range v {
+		i := i
+		fc := &graphql.FieldContext{
+			Index:  &i,
+			Result: &v[i],
+		}
+		ctx := graphql.WithFieldContext(ctx, fc)
+		f := func(i int) {
+			defer func() {
+				if r := recover(); r != nil {
+					ec.Error(ctx, ec.Recover(ctx, r))
+					ret = nil
+				}
+			}()
+			if !isLen1 {
+				defer wg.Done()
+			}
+			ret[i] = ec.marshalNSignalAttributionSourceCount2githubᚗcomᚋfullᚑchaosᚋdevᚑhealthᚑopsᚋinternalᚋqueryapiᚋgraphᚋmodelᚐSignalAttributionSourceCount(ctx, sel, v[i])
+		}
+		if isLen1 {
+			f(i)
+		} else {
+			go f(i)
+		}
+
+	}
+	wg.Wait()
+
+	for _, e := range ret {
+		if e == graphql.Null {
+			return graphql.Null
+		}
+	}
+
+	return ret
+}
+
 func (ec *executionContext) marshalNSparkPoint2githubᚗcomᚋfullᚑchaosᚋdevᚑhealthᚑopsᚋinternalᚋqueryapiᚋgraphᚋmodelᚐSparkPoint(ctx context.Context, sel ast.SelectionSet, v model.SparkPoint) graphql.Marshaler {
 	return ec._SparkPoint(ctx, sel, &v)
 }
@@ -81584,6 +82843,13 @@ func (ec *executionContext) marshalOConnectorFailure2ᚖgithubᚗcomᚋfullᚑch
 	return ec._ConnectorFailure(ctx, sel, v)
 }
 
+func (ec *executionContext) marshalOConstraintCard2ᚖgithubᚗcomᚋfullᚑchaosᚋdevᚑhealthᚑopsᚋinternalᚋqueryapiᚋgraphᚋmodelᚐConstraintCard(ctx context.Context, sel ast.SelectionSet, v *model.ConstraintCard) graphql.Marshaler {
+	if v == nil {
+		return graphql.Null
+	}
+	return ec._ConstraintCard(ctx, sel, v)
+}
+
 func (ec *executionContext) marshalOCoverage2ᚖgithubᚗcomᚋfullᚑchaosᚋdevᚑhealthᚑopsᚋinternalᚋqueryapiᚋgraphᚋmodelᚐCoverage(ctx context.Context, sel ast.SelectionSet, v *model.Coverage) graphql.Marshaler {
 	if v == nil {
 		return graphql.Null
@@ -82060,6 +83326,13 @@ func (ec *executionContext) marshalOSecurityStateInput2ᚕgithubᚗcomᚋfullᚑ
 	}
 
 	return ret
+}
+
+func (ec *executionContext) marshalOSignalAttribution2ᚖgithubᚗcomᚋfullᚑchaosᚋdevᚑhealthᚑopsᚋinternalᚋqueryapiᚋgraphᚋmodelᚐSignalAttribution(ctx context.Context, sel ast.SelectionSet, v *model.SignalAttribution) graphql.Marshaler {
+	if v == nil {
+		return graphql.Null
+	}
+	return ec._SignalAttribution(ctx, sel, v)
 }
 
 func (ec *executionContext) unmarshalOString2ᚕstringᚄ(ctx context.Context, v any) ([]string, error) {

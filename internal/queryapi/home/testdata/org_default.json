@@ -20,6 +20,8 @@
       "value": 2,
       "unit": "days",
       "delta_pct": -20,
+      "has_data": true,
+      "has_prior_data": true,
       "spark": [
         {
           "ts": "2024-01-02T00:00:00",
@@ -37,6 +39,8 @@
       "value": 5,
       "unit": "hours",
       "delta_pct": 25,
+      "has_data": true,
+      "has_prior_data": true,
       "spark": [
         {
           "ts": "2024-01-02T00:00:00",
@@ -54,6 +58,8 @@
       "value": 20,
       "unit": "items",
       "delta_pct": 33.33333333333333,
+      "has_data": true,
+      "has_prior_data": true,
       "spark": [
         {
           "ts": "2024-01-02T00:00:00",
@@ -71,6 +77,8 @@
       "value": 3,
       "unit": "deploys",
       "delta_pct": 0,
+      "has_data": true,
+      "has_prior_data": true,
       "spark": [
         {
           "ts": "2024-01-02T00:00:00",
@@ -88,6 +96,8 @@
       "value": 1000,
       "unit": "loc",
       "delta_pct": 25,
+      "has_data": true,
+      "has_prior_data": true,
       "spark": [
         {
           "ts": "2024-01-02T00:00:00",
@@ -105,6 +115,8 @@
       "value": 50,
       "unit": "%",
       "delta_pct": 24.999999999999993,
+      "has_data": true,
+      "has_prior_data": true,
       "spark": [
         {
           "ts": "2024-01-02T00:00:00",
@@ -122,6 +134,8 @@
       "value": 10,
       "unit": "hours",
       "delta_pct": 25,
+      "has_data": true,
+      "has_prior_data": true,
       "spark": [
         {
           "ts": "2024-01-02T00:00:00",
@@ -139,6 +153,8 @@
       "value": 10,
       "unit": "%",
       "delta_pct": 25.000000000000007,
+      "has_data": true,
+      "has_prior_data": true,
       "spark": [
         {
           "ts": "2024-01-02T00:00:00",
@@ -156,6 +172,8 @@
       "value": 20,
       "unit": "%",
       "delta_pct": 33.33333333333335,
+      "has_data": true,
+      "has_prior_data": true,
       "spark": [
         {
           "ts": "2024-01-02T00:00:00",
@@ -173,6 +191,8 @@
       "value": 12,
       "unit": "%",
       "delta_pct": 19.99999999999999,
+      "has_data": true,
+      "has_prior_data": true,
       "spark": [
         {
           "ts": "2024-01-02T00:00:00",
@@ -190,6 +210,8 @@
       "value": 95,
       "unit": "%",
       "delta_pct": 5.555555555555548,
+      "has_data": true,
+      "has_prior_data": true,
       "spark": [
         {
           "ts": "2024-01-02T00:00:00",
@@ -548,5 +570,11 @@
     "caveats": [
       "Some source freshness checks are missing or stale."
     ]
+  },
+  "scope_data_confidence": {
+    "level": "high",
+    "coverage_pct": 80,
+    "last_ingested_at": "2024-01-08T10:00:00",
+    "caveats": []
   }
 }

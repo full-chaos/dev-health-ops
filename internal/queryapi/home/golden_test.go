@@ -125,6 +125,9 @@ func orgGoldenHandler(t *testing.T) func(t *testing.T, query string, bindings []
 		case strings.Contains(q, "maxOrNull(computed_at) AS last_ingested_at"):
 			return &fixtureRowScanner{rows: [][]any{{time.Date(2024, 1, 8, 10, 0, 0, 0, time.UTC)}}}, nil
 
+		case strings.Contains(q, "metrics.is_covered = 1"):
+			return &fixtureRowScanner{rows: [][]any{{int64(10), int64(8), time.Date(2024, 1, 8, 10, 0, 0, 0, time.UTC)}}}, nil
+
 		case strings.Contains(q, "countDistinct(id)) AS total"):
 			return &fixtureRowScanner{rows: [][]any{{10.0}}}, nil
 		case strings.Contains(q, "countDistinct(repo_id)) AS covered"):
@@ -133,6 +136,11 @@ func orgGoldenHandler(t *testing.T) func(t *testing.T, query string, bindings []
 			return &fixtureRowScanner{rows: [][]any{{40.0, 50.0}}}, nil
 		case strings.Contains(q, "cycle_time_hours IS NOT NULL"):
 			return &fixtureRowScanner{rows: [][]any{{45.0, 50.0}}}, nil
+		case strings.Contains(q, "FROM work_item_team_attributions FINAL") && strings.Contains(q, "GROUP BY a.source, a.confidence"):
+			// The snapshots predate Home signal attribution. An empty successful
+			// attribution read keeps them as Go snapshots while dedicated tests
+			// exercise real distribution values and their attachment.
+			return &fixtureRowScanner{}, nil
 
 		case strings.Contains(q, "FROM repos FINAL") && strings.Contains(q, "FROM work_items FINAL") && strings.Contains(q, "'ci' AS source"):
 			return &fixtureRowScanner{rows: [][]any{
@@ -153,9 +161,9 @@ func orgGoldenHandler(t *testing.T) func(t *testing.T, query string, bindings []
 				return seriesScanner(fx.series), nil
 			}
 			if isCurrentWindow(bindings) {
-				return &fixtureRowScanner{rows: [][]any{{fx.current}}}, nil
+				return &fixtureRowScanner{rows: [][]any{{int64(1), fx.current}}}, nil
 			}
-			return &fixtureRowScanner{rows: [][]any{{fx.previous}}}, nil
+			return &fixtureRowScanner{rows: [][]any{{int64(1), fx.previous}}}, nil
 
 		case strings.Contains(q, "duration_hours") && strings.Contains(q, "FROM work_item_state_durations_daily"):
 			if isCurrentWindow(bindings) {
@@ -190,9 +198,9 @@ func orgGoldenHandler(t *testing.T) func(t *testing.T, query string, bindings []
 				return seriesScanner(fx.series), nil
 			}
 			if isCurrentWindow(bindings) {
-				return &fixtureRowScanner{rows: [][]any{{fx.current}}}, nil
+				return &fixtureRowScanner{rows: [][]any{{int64(1), fx.current}}}, nil
 			}
-			return &fixtureRowScanner{rows: [][]any{{fx.previous}}}, nil
+			return &fixtureRowScanner{rows: [][]any{{int64(1), fx.previous}}}, nil
 		}
 
 		t.Fatalf("unexpected query for org golden fixture:\n%s", query)

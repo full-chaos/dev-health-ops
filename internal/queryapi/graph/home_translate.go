@@ -15,8 +15,9 @@ package graph
 //
 // The DATA comes from home.BuildResponse, the SAME already
 // golden-parity-proven builder (against the real build_home_response)
-// that backs REST home_route.go. CHAOS-7070 grows the GraphQL HomeResult
-// type to expose the FULL Response (every field, not the original
+// that the GraphQL resolver translates in full. REST home_route.go adapts
+// that response to its frozen Python contract. CHAOS-7070 grows the GraphQL
+// HomeResult type to expose the FULL Response (every field, not the original
 // three) -- no new query logic is added here, only translation.
 
 import (
@@ -117,12 +118,14 @@ func homeResultFromResponse(resp *home.Response) *model.HomeResult {
 	deltas := make([]model.MetricDelta, 0, len(resp.Deltas))
 	for _, d := range resp.Deltas {
 		deltas = append(deltas, model.MetricDelta{
-			Metric:   d.Metric,
-			Label:    d.Label,
-			Value:    d.Value,
-			Unit:     d.Unit,
-			DeltaPct: d.DeltaPct,
-			Spark:    homeSparkFromResponse(d.Spark),
+			Metric:       d.Metric,
+			Label:        d.Label,
+			Value:        d.Value,
+			Unit:         d.Unit,
+			DeltaPct:     d.DeltaPct,
+			HasData:      d.HasData,
+			HasPriorData: d.HasPriorData,
+			Spark:        homeSparkFromResponse(d.Spark),
 		})
 	}
 
@@ -159,6 +162,7 @@ func homeResultFromResponse(resp *home.Response) *model.HomeResult {
 		Signals:               homeSignalsFromResponse(resp.Signals),
 		LimitingFactor:        homeLimitingFactorFromResponse(resp.LimitingFactor),
 		DataConfidence:        homeDataConfidenceFromResponse(resp.DataConfidence),
+		ScopeDataConfidence:   homeScopeDataConfidenceFromResponse(resp.ScopeDataConfidence),
 	}
 }
 
@@ -211,7 +215,10 @@ func homeTilesFromResponse(tiles pyjson.OrderedMap[home.Tile]) []model.HomeTileE
 	return out
 }
 
-func homeConstraintFromResponse(c home.ConstraintCard) *model.ConstraintCard {
+func homeConstraintFromResponse(c *home.ConstraintCard) *model.ConstraintCard {
+	if c == nil {
+		return nil
+	}
 	evidence := make([]model.ConstraintEvidence, 0, len(c.Evidence))
 	for _, e := range c.Evidence {
 		evidence = append(evidence, model.ConstraintEvidence{Label: e.Label, Link: e.Link})
@@ -276,9 +283,37 @@ func homeSignalsFromResponse(signals []home.Signal) []model.HomeSignal {
 			EvidenceRef:       s.EvidenceRef,
 			Category:          s.Category,
 			ScopeEntity:       scopeEntity,
+			Attribution:       homeSignalAttributionFromResponse(s.Attribution),
 		})
 	}
 	return out
+}
+
+func homeSignalAttributionFromResponse(attribution *home.SignalAttribution) *model.SignalAttribution {
+	if attribution == nil {
+		return nil
+	}
+	sources := make([]model.SignalAttributionSourceCount, 0, len(attribution.Sources))
+	for _, source := range attribution.Sources {
+		sources = append(sources, model.SignalAttributionSourceCount{
+			Source: model.TeamAttributionSourceFromStored(source.Source),
+			Items:  source.Items,
+			Share:  source.Share,
+		})
+	}
+	confidence := make([]model.SignalAttributionConfidenceCount, 0, len(attribution.Confidence))
+	for _, bucket := range attribution.Confidence {
+		confidence = append(confidence, model.SignalAttributionConfidenceCount{
+			Confidence: model.TeamAttributionConfidenceFromStored(bucket.Confidence),
+			Items:      bucket.Items,
+			Share:      bucket.Share,
+		})
+	}
+	return &model.SignalAttribution{
+		Items:      attribution.Items,
+		Sources:    sources,
+		Confidence: confidence,
+	}
 }
 
 func homeLimitingFactorFromResponse(lf home.LimitingFactor) *model.HomeLimitingFactor {
@@ -310,6 +345,19 @@ func homeDataConfidenceFromResponse(dc home.DataConfidence) *model.HomeDataConfi
 		ConnectedSources: connected,
 		MissingSources:   missing,
 		Caveats:          caveats,
+	}
+}
+
+func homeScopeDataConfidenceFromResponse(dc home.ScopeDataConfidence) *model.HomeScopeDataConfidence {
+	caveats := dc.Caveats
+	if caveats == nil {
+		caveats = []string{}
+	}
+	return &model.HomeScopeDataConfidence{
+		Level:          dc.Level,
+		CoveragePct:    dc.CoveragePct,
+		LastIngestedAt: naiveDateTimeToGraphQL(dc.LastIngestedAt),
+		Caveats:        caveats,
 	}
 }
 

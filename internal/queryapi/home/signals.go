@@ -364,6 +364,9 @@ func BuildDataConfidence(coverage map[string]float64, sources map[string]string)
 func BuildMetricSignals(deltas []MetricDelta, f Filters, dataConfidence DataConfidence) []Signal {
 	signals := make([]Signal, 0, len(deltas))
 	for _, delta := range deltas {
+		if !delta.HasData {
+			continue
+		}
 		dir := signalDirection(delta.DeltaPct)
 		evidenceCount := len(delta.Spark)
 		impact := metricImpact(delta.Metric, delta.DeltaPct)
@@ -400,6 +403,31 @@ func BuildMetricSignals(deltas []MetricDelta, f Filters, dataConfidence DataConf
 		})
 	}
 	return RankSignals(signals)
+}
+
+// AttachSignalAttribution adds one work-item-attribution distribution to the
+// Home metrics that are backed by work-item data. It deliberately leaves
+// repository metrics, recommendations, and risk signals without this
+// attribution: their team relationship comes from a different source.
+func AttachSignalAttribution(signals []Signal, attribution *SignalAttribution) []Signal {
+	if attribution == nil {
+		return signals
+	}
+	for i := range signals {
+		if isWorkItemMetric(signals[i].Metric) {
+			signals[i].Attribution = attribution
+		}
+	}
+	return signals
+}
+
+func isWorkItemMetric(metric string) bool {
+	switch metric {
+	case "cycle_time", "throughput", "wip_saturation", "blocked_work":
+		return true
+	default:
+		return false
+	}
 }
 
 // deltaMagnitude ports _rank_signals's own local _delta_magnitude
@@ -652,11 +680,17 @@ func RiskSignal(row RiskRow, f Filters, dataConfidence DataConfidence) (Signal, 
 
 // SelectConstraint ports _select_constraint (services/home.py:953-963).
 func SelectConstraint(deltas []MetricDelta) MetricDelta {
-	if len(deltas) == 0 {
+	withData := make([]MetricDelta, 0, len(deltas))
+	for _, delta := range deltas {
+		if delta.HasData {
+			withData = append(withData, delta)
+		}
+	}
+	if len(withData) == 0 {
 		return MetricDelta{Metric: "cycle_time", Label: "Cycle Time", Unit: "days"}
 	}
-	out := make([]MetricDelta, len(deltas))
-	copy(out, deltas)
+	out := make([]MetricDelta, len(withData))
+	copy(out, withData)
 	sort.SliceStable(out, func(i, j int) bool { return out[i].DeltaPct < out[j].DeltaPct })
 	return out[len(out)-1]
 }

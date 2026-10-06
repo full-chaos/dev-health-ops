@@ -377,7 +377,8 @@ func TestVenueOracleQueryAPIDictOrder(t *testing.T) {
 	}
 
 	python := runDictOrderPython(t, golden, venue, root, cases)
-	same := 0
+	byteIdentical := 0
+	ledgerValidated := 0
 	for index, tc := range cases {
 		request := httptest.NewRequest(tc.method, tc.path, strings.NewReader(tc.body))
 		if tc.body != "" {
@@ -410,6 +411,24 @@ func TestVenueOracleQueryAPIDictOrder(t *testing.T) {
 			// side; and its spark timestamps are CHAOS-6605.
 			goBody = freshnessObject(t, goBody)
 		}
+		if tc.Kind == "home" {
+			if recorder.Code != answer.Status {
+				t.Errorf("%s: status DIFF\n python %d %s\n go     %d", tc.Name, answer.Status, answer.Error, recorder.Code)
+				continue
+			}
+			// CHAOS-8169 / GWC D4834: the frozen a484 Python response keeps
+			// executing. CHAOS-8509 composes the unchanged ledger with the
+			// approved nullable coverage leaves and makes every other JSON
+			// leaf strict.
+			captureCHAOS8509HomePair(t, chaos8169DictOrderHomeLedgerKey, pythonBody, goBody)
+			policy, ok := chaos8509HomeCapturePolicies[chaos8169DictOrderHomeLedgerKey]
+			if !ok {
+				t.Fatal("CHAOS-8509 has no dict-order Home policy")
+			}
+			assertCHAOS8509HomeCapturePolicy(t, chaos8169DictOrderHomeLedgerKey, policy, pythonBody, goBody)
+			ledgerValidated++
+			continue
+		}
 		if recorder.Code != answer.Status || goBody != pythonBody {
 			t.Errorf("%s: DIFF\n python %d %s %s\n go     %d %s", tc.Name, answer.Status, pythonBody, answer.Error, recorder.Code, goBody)
 			continue
@@ -421,9 +440,9 @@ func TestVenueOracleQueryAPIDictOrder(t *testing.T) {
 			t.Errorf("%s: both answered %d, so the case compares no dict (python: %s)", tc.Name, answer.Status, answer.Error)
 			continue
 		}
-		same++
+		byteIdentical++
 	}
-	t.Logf("%d of %d cases byte-identical to the Python service's response_model body", same, len(cases))
+	t.Logf("%d of %d cases byte-identical to the Python service's response_model body; %d CHAOS-8169 D4834 ledger-validated", byteIdentical, len(cases), ledgerValidated)
 	golden.SkipDiff(t)
 	venueoracle.WriteGoOnlyProof(t, "the Go query-api's response bodies against the frozen answers of the Python services")
 	golden.Finish(t)

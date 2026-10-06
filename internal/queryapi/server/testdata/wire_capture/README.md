@@ -247,40 +247,38 @@ to the query source text.
 
 # home wire-capture fixture
 
-`home_captured.graphql` (`Home`) is the wire-form text of `HOME_QUERY`
-(`web/src/lib/graphql/queries.ts`, CHAOS-7064's real caller of this
-field), produced the same way `pr_captured.graphql` above was: importing
-the web repo's own, live, pinned `wireForm()`
-(`scripts/graphql-wire-parity.ts`) and applying it directly to the
-`HOME_QUERY` export via `tsx`, so `@urql/core` resolved from the web
-repo's own pinned `node_modules` (`createRequest` -> `formatDocument` ->
-`stringifyDocument`, the same three real functions `fetchExchange`
-calls in production). CHAOS-7070's own r1 review found the first cut of
-this PR authored `registeredHomeDocument` by hand from the schema
-instead of registering `HOME_QUERY`'s real wire form -- this fixture,
-and `query_route_wire_capture_test.go`'s
-`TestRegisteredHomeDocument_MatchesCapturedWireFixture`, are the fix:
-proof against the actual client text, not proof against the const's own
-claim about itself.
+`home_captured.graphql` (`Home`) is the current wire-form text of
+`HOME_QUERY` (`web/src/lib/graphql/queries.ts`). It was captured on
+2026-10-04 from web commit `9e4315766c6a0345a9bd84d5a5038a6f1b4da52d`
+with the normal `graphqlFetch` path, using
+`scripts/capture-graphql-wire-fixture.ts --operation home`.
+The capture imports the real `HOME_QUERY` and uses the same pinned urql
+client path that production uses. It is the source for
+`registeredHomeDocument`; it is not a hand-derived schema fixture.
 
-The wire-form digest happens to equal the hand-authored const's digest
-from that first cut (both are `9776798e8090...`) -- HOME_QUERY's own
-field order and nesting were written to match `HomeResult`'s SDL
-exhaustively, same as the hand-authored version was, so urql's
-`__typename` injection landed on the identical selection tree. That is a
-coincidence of this operation's specific history, not something a
-future change may rely on: the registered const's source of truth is,
-and must stay, this captured fixture, never a hand-derivation from the
-schema.
+`home_v3_captured.graphql` is the immediately preceding, real captured
+Home document. CHAOS-8102 preserves it while web builds roll over to the
+current document, which adds `HomeSignal.attribution`.
+`home_v2_captured.graphql` is the earlier text before CHAOS-8107 added
+`scopeDataConfidence`. `home_v1_captured.graphql` is the text before
+CHAOS-8169 added `deltas.hasData` and `deltas.hasPriorData`. The route maps
+all four digests to the `home` operation. Remove a legacy registration only
+with its cleanup ticket after no supported web build sends it.
+
+`query_route_wire_capture_test.go` verifies each registered text against
+its captured bytes. `query_route_home_no_data_test.go` verifies the
+current and three legacy documents’ selections and that all resolve to `home`.
 
 | fixture | sha256(wire form) |
 | --- | --- |
-| `home_captured.graphql` | `9776798e809030868e3a7fc8643b06d122573f03a3c48a7710d86b1842b33554` |
+| `home_captured.graphql` | `f920722d8e56ae44b85ce535ab0364ab10eb6baf70da1b49cc60a1f915abe7a1` |
+| `home_v3_captured.graphql` | `cff105a9f8c5d5f2363f3d50510db34081c84c9c652afe380975b49c15a4c6eb` |
+| `home_v2_captured.graphql` | `c02bb493d709b8c445e2ac711bdf93d6a2cdb7933d1073a20bf7dad3ffd06545` |
+| `home_v1_captured.graphql` | `9776798e809030868e3a7fc8643b06d122573f03a3c48a7710d86b1842b33554` |
 
-(For contrast, `sha256(HOME_QUERY.trim())` on the raw, unprinted source
-text is `d4bb71ec7a9f667b5801fb23487bc3479628a11695eafa0e85507ae43c12a04b`
--- different from the wire-form digest above, because the source text
-has no `__typename` at all; the negative control in
-`TestRegisteredHomeDocument_MatchesCapturedWireFixture` pins this
-difference the same way the featureFlags/featureFlagEvents tests above
-do.)
+For contrast, `sha256(HOME_QUERY.trim())` on the raw, unprinted current
+source text is `bcba9a4e032d9664672cc828ac4cfe9406807139b13d2f66fe04b3ee3787dc09`.
+It differs from the current wire-form digest because the source text has
+no injected `__typename`. The negative control in
+`TestRegisteredHomeDocument_MatchesCapturedWireFixture` pins that
+difference.

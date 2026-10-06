@@ -424,8 +424,10 @@ const registeredOperatingReviewV1Document = `query OperatingReview($orgId: Strin
 // Freshness, HomeFreshnessSource, Coverage, MetricDelta, SparkPoint,
 // ReworkThemeAllocation, SummarySentence, HomeTileEntry, HomeTile,
 // ConstraintCard, ConstraintEvidence, EventItem, HealthState, HomeSignal,
-// ScopeEntityRef, HomeLimitingFactor, HomeDataConfidence -- every field
-// each type declares, not a hand-picked subset), formatted to match
+// ScopeEntityRef, SignalAttribution, SignalAttributionSourceCount,
+// SignalAttributionConfidenceCount, HomeLimitingFactor, HomeDataConfidence,
+// HomeScopeDataConfidence -- every field each type declares, not a hand-picked
+// subset), formatted to match
 // this file's other entries' urql-print convention (multi-line,
 // `__typename` on every object selection). The digest of the captured
 // wire fixture must equal this constant's
@@ -455,6 +457,426 @@ const registeredOperatingReviewV1Document = `query OperatingReview($orgId: Strin
 // new field got a 404 digest-miss even though queryResolver.Home mapped
 // it correctly. So this selection set is exhaustive per type.
 const registeredHomeDocument = `query Home($orgId: String!, $filters: FilterInput, $window: HomeWindowInput) {
+  home(orgId: $orgId, filters: $filters, window: $window) {
+    freshness {
+      lastIngestedAt
+      latestSuccessfulSyncAt
+      sources {
+        provider
+        status
+        __typename
+      }
+      coverage {
+        reposCoveredPct
+        prsLinkedToIssuesPct
+        issuesWithCycleStatesPct
+        __typename
+      }
+      __typename
+    }
+    deltas {
+      metric
+      label
+      value
+      unit
+      deltaPct
+      hasData
+      hasPriorData
+      spark {
+        ts
+        value
+        __typename
+      }
+      __typename
+    }
+    reworkThemeAllocation {
+      theme
+      label
+      allocation
+      allocationPct
+      prsMerged
+      churnLoc
+      __typename
+    }
+    summary {
+      id
+      text
+      evidenceLink
+      __typename
+    }
+    tiles {
+      key
+      value {
+        title
+        subtitle
+        link
+        __typename
+      }
+      __typename
+    }
+    constraint {
+      title
+      claim
+      evidence {
+        label
+        link
+        __typename
+      }
+      experiments
+      __typename
+    }
+    events {
+      ts
+      type
+      text
+      link
+      __typename
+    }
+    healthState {
+      status
+      headline
+      summary
+      asOf
+      __typename
+    }
+    signals {
+      id
+      title
+      metric
+      currentValue
+      priorValue
+      delta
+      direction
+      severity
+      confidence
+      affectedScope
+      evidenceCount
+      whyItMatters
+      recommendedAction
+      evidenceRef
+      category
+      scopeEntity {
+        id
+        displayName
+        __typename
+      }
+      attribution {
+        items
+        sources {
+          source
+          items
+          share
+          __typename
+        }
+        confidence {
+          confidence
+          items
+          share
+          __typename
+        }
+        __typename
+      }
+      __typename
+    }
+    limitingFactor {
+      claim
+      whyItMatters
+      recommendedAction
+      confidence
+      evidenceRef
+      __typename
+    }
+    dataConfidence {
+      level
+      coveragePct
+      connectedSources
+      missingSources
+      caveats
+      __typename
+    }
+    scopeDataConfidence {
+      level
+      coveragePct
+      lastIngestedAt
+      caveats
+      __typename
+    }
+    __typename
+  }
+}`
+
+// registeredHomeV3Document is the real Home text from before CHAOS-8102
+// added HomeSignal.attribution. It stays a legacy text so the CHAOS-8107
+// web build remains accepted while the attribution query rolls out. Its
+// captured wire form is testdata/wire_capture/home_v3_captured.graphql.
+const registeredHomeV3Document = `query Home($orgId: String!, $filters: FilterInput, $window: HomeWindowInput) {
+  home(orgId: $orgId, filters: $filters, window: $window) {
+    freshness {
+      lastIngestedAt
+      latestSuccessfulSyncAt
+      sources {
+        provider
+        status
+        __typename
+      }
+      coverage {
+        reposCoveredPct
+        prsLinkedToIssuesPct
+        issuesWithCycleStatesPct
+        __typename
+      }
+      __typename
+    }
+    deltas {
+      metric
+      label
+      value
+      unit
+      deltaPct
+      hasData
+      hasPriorData
+      spark {
+        ts
+        value
+        __typename
+      }
+      __typename
+    }
+    reworkThemeAllocation {
+      theme
+      label
+      allocation
+      allocationPct
+      prsMerged
+      churnLoc
+      __typename
+    }
+    summary {
+      id
+      text
+      evidenceLink
+      __typename
+    }
+    tiles {
+      key
+      value {
+        title
+        subtitle
+        link
+        __typename
+      }
+      __typename
+    }
+    constraint {
+      title
+      claim
+      evidence {
+        label
+        link
+        __typename
+      }
+      experiments
+      __typename
+    }
+    events {
+      ts
+      type
+      text
+      link
+      __typename
+    }
+    healthState {
+      status
+      headline
+      summary
+      asOf
+      __typename
+    }
+    signals {
+      id
+      title
+      metric
+      currentValue
+      priorValue
+      delta
+      direction
+      severity
+      confidence
+      affectedScope
+      evidenceCount
+      whyItMatters
+      recommendedAction
+      evidenceRef
+      category
+      scopeEntity {
+        id
+        displayName
+        __typename
+      }
+      __typename
+    }
+    limitingFactor {
+      claim
+      whyItMatters
+      recommendedAction
+      confidence
+      evidenceRef
+      __typename
+    }
+    dataConfidence {
+      level
+      coveragePct
+      connectedSources
+      missingSources
+      caveats
+      __typename
+    }
+    scopeDataConfidence {
+      level
+      coveragePct
+      lastIngestedAt
+      caveats
+      __typename
+    }
+    __typename
+  }
+}`
+
+// registeredHomeV2Document is the real Home text from before CHAOS-8107
+// added scopeDataConfidence. It stays a legacy text so the CHAOS-8169
+// web build remains accepted while the scoped-confidence query rolls out.
+// Its captured wire form is testdata/wire_capture/home_v2_captured.graphql.
+const registeredHomeV2Document = `query Home($orgId: String!, $filters: FilterInput, $window: HomeWindowInput) {
+  home(orgId: $orgId, filters: $filters, window: $window) {
+    freshness {
+      lastIngestedAt
+      latestSuccessfulSyncAt
+      sources {
+        provider
+        status
+        __typename
+      }
+      coverage {
+        reposCoveredPct
+        prsLinkedToIssuesPct
+        issuesWithCycleStatesPct
+        __typename
+      }
+      __typename
+    }
+    deltas {
+      metric
+      label
+      value
+      unit
+      deltaPct
+      hasData
+      hasPriorData
+      spark {
+        ts
+        value
+        __typename
+      }
+      __typename
+    }
+    reworkThemeAllocation {
+      theme
+      label
+      allocation
+      allocationPct
+      prsMerged
+      churnLoc
+      __typename
+    }
+    summary {
+      id
+      text
+      evidenceLink
+      __typename
+    }
+    tiles {
+      key
+      value {
+        title
+        subtitle
+        link
+        __typename
+      }
+      __typename
+    }
+    constraint {
+      title
+      claim
+      evidence {
+        label
+        link
+        __typename
+      }
+      experiments
+      __typename
+    }
+    events {
+      ts
+      type
+      text
+      link
+      __typename
+    }
+    healthState {
+      status
+      headline
+      summary
+      asOf
+      __typename
+    }
+    signals {
+      id
+      title
+      metric
+      currentValue
+      priorValue
+      delta
+      direction
+      severity
+      confidence
+      affectedScope
+      evidenceCount
+      whyItMatters
+      recommendedAction
+      evidenceRef
+      category
+      scopeEntity {
+        id
+        displayName
+        __typename
+      }
+      __typename
+    }
+    limitingFactor {
+      claim
+      whyItMatters
+      recommendedAction
+      confidence
+      evidenceRef
+      __typename
+    }
+    dataConfidence {
+      level
+      coveragePct
+      connectedSources
+      missingSources
+      caveats
+      __typename
+    }
+    __typename
+  }
+}`
+
+// registeredHomeV1Document is the real Home text from before CHAOS-8169
+// added the two per-window data-presence selections. It stays a legacy text
+// so deployed web builds continue to resolve while the new query rolls out.
+// Its captured wire form is testdata/wire_capture/home_v1_captured.graphql.
+const registeredHomeV1Document = `query Home($orgId: String!, $filters: FilterInput, $window: HomeWindowInput) {
   home(orgId: $orgId, filters: $filters, window: $window) {
     freshness {
       lastIngestedAt
@@ -2569,7 +2991,7 @@ const registeredCatalogValuesDocument = `query CatalogValues($orgId: String!, $d
 // repository-scope read the agent-context runtime performs: `catalog` with
 // the REPO dimension fixed in the document text. It is a separate operation
 // from registeredCatalogValuesDocument because each registered document
-// carries its own digest. Wire form captured under
+// carries its own digest and routing row. Wire form captured under
 // testdata/wire_capture/acr_repository_scopes_captured.graphql.
 const registeredAcrRepositoryScopesDocument = `query ACRRepositoryScopes($orgId: String!) {
   catalog(orgId: $orgId, dimension: REPO) {
@@ -4105,15 +4527,16 @@ func newDocumentDispatchHandler(getenv getenvFunc, routeMux *routeswitch.Mux, op
 // digestByOperation. The literal below is cmd/registrydump's second parse target: keep its exact shape
 // (`"<operation>": {digestHex(<constIdent>), ...}`). Empty = every operation accepts one text.
 var legacyDigestsByOperation = map[string][]string{
-	"aiAttributedPrs":      {digestHex(registeredAiAttributedPrsV1Document)},
-	"aiImpactSummary":      {digestHex(registeredAiImpactSummaryV1Document)},
-	"aiOpportunities":      {digestHex(registeredAiOpportunitiesV1Document)},
-	"aiWorkflowDrilldown":  {digestHex(registeredAiWorkflowDrilldownV1Document)},
-	"capacityForecast":     {digestHex(registeredCapacityForecastV1Document), digestHex(registeredCapacityForecastV2Document)},
+	"aiAttributedPrs":       {digestHex(registeredAiAttributedPrsV1Document)},
+	"aiImpactSummary":       {digestHex(registeredAiImpactSummaryV1Document)},
+	"aiOpportunities":       {digestHex(registeredAiOpportunitiesV1Document)},
+	"aiWorkflowDrilldown":   {digestHex(registeredAiWorkflowDrilldownV1Document)},
+	"capacityForecast":      {digestHex(registeredCapacityForecastV1Document), digestHex(registeredCapacityForecastV2Document)},
 	"coverageScopeBaseline": {digestHex(registeredCoverageScopeBaselineV1Document)},
-	"improveOpportunities": {digestHex(registeredImproveOpportunitiesV1Document)},
-	"operatingReview":      {digestHex(registeredOperatingReviewV1Document), digestHex(registeredOperatingReviewV2Document)},
-	"reviewEdges":          {digestHex(registeredReviewEdgesV1Document)},
+	"home":                  {digestHex(registeredHomeV1Document), digestHex(registeredHomeV2Document), digestHex(registeredHomeV3Document)},
+	"improveOpportunities":  {digestHex(registeredImproveOpportunitiesV1Document)},
+	"operatingReview":       {digestHex(registeredOperatingReviewV1Document), digestHex(registeredOperatingReviewV2Document)},
+	"reviewEdges":           {digestHex(registeredReviewEdgesV1Document)},
 }
 
 // buildOperationByDigest is the reverse index digest -> operation over every accepted text: each operation's

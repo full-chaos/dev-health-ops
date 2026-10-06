@@ -639,6 +639,32 @@ func edgeCompare(t *testing.T, goBase string, cs []edgeCase, python []venueoracl
 	var parityPython []venueoracle.Response
 	var receipt strings.Builder
 	for i, c := range cs {
+		if key, ok := chaos8169GraphQLEdgeHomeLedgerKey(c.request.Name); ok {
+			goResponse := venueoracle.Do(t, goBase, c.request)
+			if golden != nil {
+				golden.Consumed(t, python[i])
+			}
+			statusEqual := python[i].Status == goResponse.Status
+			if !statusEqual {
+				t.Errorf("%s: D4840 Home ledger needs equal status; python=%d go=%d", c.request.Name, python[i].Status, goResponse.Status)
+			}
+			differing := headersThatDiffer(c.request, python[i], goResponse)
+			headersEqual := len(differing) == 0
+			if !headersEqual {
+				t.Errorf("%s: D4840 Home ledger has undeclared header differences %v\n python %v\n go     %v",
+					c.request.Name, differing, python[i].Headers, goResponse.Headers)
+			}
+			if chaos8509HomeCaptureAllowed(statusEqual, headersEqual) {
+				captureCHAOS8509HomePair(t, key, chaos8169GraphQLHomeBody(t, python[i].Body), chaos8169GraphQLHomeBody(t, goResponse.Body))
+			}
+			policy, ok := chaos8509HomeCapturePolicies[key]
+			if !ok {
+				t.Fatalf("CHAOS-8509 has no GraphQL Home policy for %s", c.request.Name)
+			}
+			assertCHAOS8509HomeCapturePolicy(t, key, policy, chaos8169GraphQLHomeBody(t, python[i].Body), chaos8169GraphQLHomeBody(t, goResponse.Body))
+			fmt.Fprintf(&receipt, "%-58s python=%d go=%d D4840 Home ledger validated\n", c.request.Name, python[i].Status, goResponse.Status)
+			continue
+		}
 		if c.declared == "" {
 			parity = append(parity, c.request)
 			parityPython = append(parityPython, python[i])

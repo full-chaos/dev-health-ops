@@ -778,9 +778,12 @@ type ConnectorStatus {
 }
 
 type Coverage {
-  reposCoveredPct: Float!
-  prsLinkedToIssuesPct: Float!
-  issuesWithCycleStatesPct: Float!
+  """Null when no repositories are available to measure."""
+  reposCoveredPct: Float
+  """Null when the current window contains no work items to link."""
+  prsLinkedToIssuesPct: Float
+  """Null when the current window contains no work items for cycle-state coverage."""
+  issuesWithCycleStatesPct: Float
 }
 
 type CoverageStat {
@@ -992,6 +995,32 @@ type HomeSignal {
   category: String!
   """Null when the signal is not scoped to one entity (e.g. an org-wide signal)."""
   scopeEntity: ScopeEntityRef
+  """Current primary work-item attribution evidence for work-item metrics; null when this window has no attributable work items."""
+  attribution: SignalAttribution
+}
+
+"""Source and confidence distribution for the work items behind one Home signal."""
+type SignalAttribution {
+  """Number of attributed work items behind these distributions."""
+  items: Int!
+  sources: [SignalAttributionSourceCount!]!
+  confidence: [SignalAttributionConfidenceCount!]!
+}
+
+"""One source bucket of a Home signal's work-item attribution distribution."""
+type SignalAttributionSourceCount {
+  source: TeamAttributionSource!
+  items: Int!
+  """Fraction of SignalAttribution.items in this bucket."""
+  share: Float!
+}
+
+"""One confidence bucket of a Home signal's work-item attribution distribution."""
+type SignalAttributionConfidenceCount {
+  confidence: TeamAttributionConfidence!
+  items: Int!
+  """Fraction of SignalAttribution.items in this bucket."""
+  share: Float!
 }
 
 type HomeLimitingFactor {
@@ -1008,6 +1037,16 @@ type HomeDataConfidence {
   coveragePct: Float
   connectedSources: [String!]!
   missingSources: [String!]!
+  caveats: [String!]!
+}
+
+"""Coverage and metric-ingestion quality for the repositories selected by this Home request."""
+type HomeScopeDataConfidence {
+  level: String!
+  """Null when the selected scope has no repositories."""
+  coveragePct: Float
+  """Most recent in-window repository-metric ingestion, or null when the scope has none."""
+  lastIngestedAt: String
   caveats: [String!]!
 }
 
@@ -1037,12 +1076,15 @@ type HomeResult {
   reworkThemeAllocation: [ReworkThemeAllocation!]!
   summary: [SummarySentence!]!
   tiles: [HomeTileEntry!]!
-  constraint: ConstraintCard!
+  "The present constraint when current-window data exists; null when the window has no data."
+  constraint: ConstraintCard
   events: [EventItem!]!
   healthState: HealthState!
   signals: [HomeSignal!]!
   limitingFactor: HomeLimitingFactor!
   dataConfidence: HomeDataConfidence!
+  """Coverage and ingestion quality for the selected repository scope; distinct from org-wide dataConfidence."""
+  scopeDataConfidence: HomeScopeDataConfidence!
 }
 
 type SummarySentence {
@@ -1181,6 +1223,10 @@ type MetricDelta {
   value: Float!
   unit: String!
   deltaPct: Float!
+  "Whether the current window has one or more stored source rows. A stored zero has this field set to true."
+  hasData: Boolean!
+  "Whether the comparison window has one or more stored source rows."
+  hasPriorData: Boolean!
   spark: [SparkPoint!]!
 }
 

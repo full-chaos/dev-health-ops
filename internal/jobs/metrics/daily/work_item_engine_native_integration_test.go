@@ -285,6 +285,10 @@ func TestLoadWorkItemStateTransitionsReadsByWorkItemIDNotRepositoryOrProvider(t 
 	seedWorkItemEngineItem(t, ctx, conn, orgID, otherRepo, "gh:acme/web#9", "quality", day.AddDate(0, 0, -2), nil, nil, nil)
 	// Another tenant holds an item with the same id in the same repository.
 	seedWorkItemEngineItem(t, ctx, conn, "org-other", repoID, "gh:acme/api#1", "quality", day.AddDate(0, 0, -2), nil, nil, nil)
+	// Another tenant holds, IN THIS repository id, an item whose id is the id
+	// of this tenant's item of the other repository. The item list that
+	// selects the transitions must be this tenant's.
+	seedWorkItemEngineItem(t, ctx, conn, "org-other", repoID, "gh:acme/web#9", "quality", day.AddDate(0, 0, -2), nil, nil, nil)
 
 	insert := func(org string, repo uuid.UUID, workItemID, provider string, occurredAt time.Time, from, to string, synced time.Time) {
 		t.Helper()

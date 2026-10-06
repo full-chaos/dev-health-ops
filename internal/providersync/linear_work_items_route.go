@@ -3,6 +3,7 @@ package providersync
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"log/slog"
 	"net/http"
 	"net/url"
@@ -31,16 +32,18 @@ func (doer linearWorkItemsCountingDoer) Do(request *http.Request) (*http.Respons
 }
 
 const (
-	linearWorkItemsDefaultPerPage = 50
-	linearWorkItemsMaxPerPage     = 100
-	linearWorkItemsDefaultPages   = 100
-	// LinearClient's bulk issue query asks for 50 comments.  The Python
-	// provider's explicit comment helper has a bounded 100-comment contract;
-	// keep the native route on that same boundary instead of silently dropping
-	// a second page or issuing an unbounded nested crawl.
-	linearWorkItemsCommentsPerPage  = 50
-	linearWorkItemsCommentsMaxPages = 2
-	linearWorkItemsHistoryPerPage   = 50
+	linearWorkItemsDefaultPerPage  = 50
+	linearWorkItemsMaxPerPage      = 100
+	linearWorkItemsDefaultPages    = 100
+	linearWorkItemsCommentsPerPage = 50
+	linearWorkItemsHistoryPerPage  = 50
+	// linearNestedHardMaxPages is the per-issue (cycles: per-team), per-field
+	// runaway guard for a nested connection that is paged to its own end
+	// (CHAOS-8767). 50 pages is 5000 rows at 100/page (2500 at 50/page): far
+	// above any real Linear issue, low enough to stop a cursor that never
+	// ends. Past it the unit fails loudly naming the issue and field; nothing
+	// is truncated.
+	linearNestedHardMaxPages = 50
 )
 
 // linearWorkItemsQuery deliberately follows the fields selected by
@@ -503,7 +506,20 @@ func appendLinearUnique[T any](existing []T, extra ...[]T) []T {
 	return existing
 }
 
-func linearNestedPageLimit() int { return 5 } // 5 * 100 == Python's 500-row bound
+func linearNestedPageLimit() int { return linearNestedHardMaxPages }
+
+// linearNestedBoundExceeded reports a nested connection that still had a next
+// page after the hard bound. It names the owner and field, logs at ERROR, and
+// wraps ErrPaginationCapExceeded so the unit fails permanently and loudly.
+func linearNestedBoundExceeded(owner, field string, pages, items int) error {
+	slog.Error("providersync.linear.nested_connection_bound_exceeded",
+		"owner", owner, "field", field, "pages", pages, "items", items,
+		"max_pages", linearNestedHardMaxPages)
+	return fmt.Errorf(
+		"%w: linear %s of %s still had a next page after %d pages (%d items, max %d pages)",
+		ErrPaginationCapExceeded, field, owner, pages, items, linearNestedHardMaxPages,
+	)
+}
 
 func linearReferenceTeamPayload(
 	rows []LinearReferenceTeam,
@@ -711,7 +727,7 @@ func collectLinearCycles(
 		return nil, 0, err
 	}
 	if page.PageBudgetExhausted {
-		return nil, page.Pages, ErrPaginationCapExceeded
+		return nil, page.Pages, linearNestedBoundExceeded("team "+teamID, "cycles", page.Pages, len(page.Items))
 	}
 	cycles := make([]linearCyclePayload, 0, len(page.Items))
 	for _, raw := range page.Items {
@@ -743,7 +759,7 @@ func collectLinearIssueAttachments(
 		return nil, 0, err
 	}
 	if page.PageBudgetExhausted {
-		return nil, page.Pages, ErrPaginationCapExceeded
+		return nil, page.Pages, linearNestedBoundExceeded("issue "+issueID, "attachments", page.Pages, len(page.Items))
 	}
 	items := make([]linearAttachmentPayload, 0, len(page.Items))
 	for _, raw := range page.Items {
@@ -776,7 +792,7 @@ func collectLinearIssueHistory(
 		return nil, 0, err
 	}
 	if page.PageBudgetExhausted {
-		return nil, page.Pages, ErrPaginationCapExceeded
+		return nil, page.Pages, linearNestedBoundExceeded("issue "+issueID, "history", page.Pages, len(page.Items))
 	}
 	items := make([]linearHistoryEntry, 0, len(page.Items))
 	for _, raw := range page.Items {
@@ -801,7 +817,7 @@ func collectLinearIssueComments(
 			Variables:      map[string]any{"issueId": issueID},
 			ConnectionPath: []string{"issue", "comments"},
 			PerPage:        linearWorkItemsCommentsPerPage,
-			MaxPages:       linearWorkItemsCommentsMaxPages,
+			MaxPages:       linearNestedPageLimit(),
 			InitialCursor:  after,
 		},
 	)
@@ -809,7 +825,7 @@ func collectLinearIssueComments(
 		return nil, 0, err
 	}
 	if page.PageBudgetExhausted {
-		return nil, page.Pages, ErrPaginationCapExceeded
+		return nil, page.Pages, linearNestedBoundExceeded("issue "+issueID, "comments", page.Pages, len(page.Items))
 	}
 	comments := make([]linearCommentPayload, 0, len(page.Items))
 	for _, raw := range page.Items {
@@ -848,7 +864,7 @@ func collectLinearIssueRelations(
 		return nil, 0, err
 	}
 	if page.PageBudgetExhausted {
-		return nil, page.Pages, ErrPaginationCapExceeded
+		return nil, page.Pages, linearNestedBoundExceeded("issue "+issueID, connection, page.Pages, len(page.Items))
 	}
 	items := make([]linearRelationPayload, 0, len(page.Items))
 	for _, raw := range page.Items {

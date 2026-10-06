@@ -390,14 +390,24 @@ func TestCHAOS8788UnrecordedAndZeroQuoteUnitsAreComplete(t *testing.T) {
 	if _, err := h.run(h.materializer(h.conn, mock), h.cfg("run-old", h.within, false)); err != nil {
 		t.Fatal(err)
 	}
-	// Make the row a pre-migration row: NULL count, and its quotes gone.
+	// Make the row a pre-migration row: NULL count. NULL must stay NULL (never
+	// read as 0): its quote is VISIBLE here, so a NULL treated as 0 would count
+	// 1 != 0 and rewrite the unit.
 	if err := h.conn.Exec(h.ctx, `ALTER TABLE work_unit_investments UPDATE evidence_quote_count = NULL WHERE org_id = ? SETTINGS mutations_sync = 2`, hierarchyCascadeTestOrg); err != nil {
 		t.Fatal(err)
 	}
+	stats, err := h.run(h.materializer(h.conn, mock), h.cfg("run-null-visible", h.within.Add(30*time.Minute), false))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if stats.SkippedExisting != 1 {
+		t.Fatalf("a row with a NULL count and a visible quote was rewritten (skipped %d, want 1): NULL must stay NULL", stats.SkippedExisting)
+	}
+	// And with its quotes gone as well: still complete, never repaired.
 	if err := h.conn.Exec(h.ctx, `ALTER TABLE work_unit_investment_quotes DELETE WHERE org_id = ? SETTINGS mutations_sync = 2`, hierarchyCascadeTestOrg); err != nil {
 		t.Fatal(err)
 	}
-	stats, err := h.run(h.materializer(h.conn, mock), h.cfg("run-next", h.within.Add(time.Hour), false))
+	stats, err = h.run(h.materializer(h.conn, mock), h.cfg("run-next", h.within.Add(time.Hour), false))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -536,5 +546,111 @@ func TestCHAOS8788LatestRowWithoutACountIsNullNotTheOlderCount(t *testing.T) {
 	found, ok := existing[chquery.InvestmentKey{WorkUnitID: unit, InputHash: hash}]
 	if !ok || found.RunID != "run-no-snippets" || found.QuoteCount != nil {
 		t.Fatalf("lookup = %+v (found %v), want the latest run's row with a NULL count, not the older run's 1", found, ok)
+	}
+}
+
+// insertQuote writes one quote row of the unit under a run, straight into the table.
+func (h *completenessHarness) insertQuote(unit, run, sourceType, sourceID, quote string, at time.Time) {
+	h.t.Helper()
+	if err := h.conn.Exec(h.ctx, `INSERT INTO work_unit_investment_quotes
+		(work_unit_id, quote, source_type, source_id, computed_at, categorization_run_id, org_id) VALUES (?, ?, ?, ?, ?, ?, ?)`,
+		unit, quote, sourceType, sourceID, at, run, hierarchyCascadeTestOrg); err != nil {
+		h.t.Fatal(err)
+	}
+}
+
+// (a) A unit whose visible quotes are ABOVE the recorded count is incomplete too:
+// the row's run recorded 1 and now shows 2 (a stray quote under its run id).
+func TestCHAOS8788MoreVisibleQuotesThanRecordedIsIncomplete(t *testing.T) {
+	h := newCompletenessHarness(t)
+	mock := categorize.MockProvider{}
+	h.setEvidence("1")
+	if _, err := h.run(h.materializer(h.conn, mock), h.cfg("run-old", h.within, false)); err != nil {
+		t.Fatal(err)
+	}
+	seen := h.observe()
+	h.insertQuote(seen.unit, "run-old", "issue_desc", "stray", "a stray quote under the row's run", h.within.Add(time.Minute))
+	if got := h.observe(); got.quotes != 2 {
+		t.Fatalf("setup: the row shows %d quotes, want 2 (recorded 1)", got.quotes)
+	}
+	stats, err := h.run(h.materializer(h.conn, mock), h.cfg("run-next", h.within.Add(time.Hour), false))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if stats.SkippedExisting != 0 {
+		t.Fatalf("a unit with 2 visible quotes against a recorded 1 was skipped (%d)", stats.SkippedExisting)
+	}
+	if got := h.observe(); got.investmentRun != "run-next" {
+		t.Fatalf("view = %+v, want the unit rewritten by the next request", got)
+	}
+}
+
+// (b) The recorded count is the DISTINCT (source_id, quote) count: a model that
+// emits the same pair twice writes ONE visible quote, so the unit must be skipped
+// on the next request. A raw length (2) would never match the 1 visible quote and
+// the unit would be rewritten on every request.
+func TestCHAOS8788DuplicateQuoteFromTheModelRecordsTheDistinctCount(t *testing.T) {
+	h := newCompletenessHarness(t)
+	h.setEvidence("1")
+	duplicating := twoQuoteProvider{second: [2]int{0, 80}} // the second quote is the first, whole
+	if _, err := h.run(h.materializer(h.conn, duplicating), h.cfg("run-old", h.within, false)); err != nil {
+		t.Fatal(err)
+	}
+	if got := h.observe(); got.quotes != 1 {
+		t.Fatalf("setup: the row shows %d quotes, want 1 (the pair was emitted twice)", got.quotes)
+	}
+	stats, err := h.run(h.materializer(h.conn, duplicating), h.cfg("run-next", h.within.Add(time.Hour), false))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if stats.SkippedExisting != 1 {
+		t.Fatalf("the unit was rewritten (skipped %d, want 1): the recorded count must be the distinct count, or it rewrites on every request", stats.SkippedExisting)
+	}
+}
+
+// (c) FetchVisibleQuoteCounts narrows its unit x run cross product to each unit's
+// OWN run: two units that appear with each other's run id in the same chunk.
+func TestCHAOS8788VisibleQuoteCountsKeepEachUnitToItsOwnRun(t *testing.T) {
+	h := newCompletenessHarness(t)
+	at := h.within
+	// U1 under R1: 2 quotes, under R2: 1. U2 under R2: 1 quote, under R1: 3.
+	h.insertQuote("U1", "R1", "issue_desc", "s", "u1 r1 a", at)
+	h.insertQuote("U1", "R1", "issue_desc", "s", "u1 r1 b", at)
+	h.insertQuote("U1", "R2", "issue_desc", "s", "u1 r2 a", at)
+	h.insertQuote("U2", "R2", "issue_desc", "s", "u2 r2 a", at)
+	for _, quote := range []string{"u2 r1 a", "u2 r1 b", "u2 r1 c"} {
+		h.insertQuote("U2", "R1", "issue_desc", "s", quote, at)
+	}
+	counts, err := h.reader.FetchVisibleQuoteCounts(h.ctx, hierarchyCascadeTestOrg,
+		[]chquery.UnitRun{{WorkUnitID: "U1", RunID: "R1"}, {WorkUnitID: "U2", RunID: "R2"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if counts["U1"] != 2 || counts["U2"] != 1 {
+		t.Fatalf("counts = %v, want U1=2 (its own run R1) and U2=1 (its own run R2)", counts)
+	}
+}
+
+// (d) The dedupe key is (work_unit_id, source_id, quote), like the table and the
+// product reader: the same quote with another source_type is ONE visible quote.
+func TestCHAOS8788SameQuoteWithAnotherSourceTypeIsOneVisibleQuote(t *testing.T) {
+	h := newCompletenessHarness(t)
+	h.setEvidence("1")
+	if _, err := h.run(h.materializer(h.conn, categorize.MockProvider{}), h.cfg("run-old", h.within, false)); err != nil {
+		t.Fatal(err)
+	}
+	seen := h.observe()
+	var quote, sourceID string
+	if err := h.conn.QueryRow(h.ctx, `SELECT quote, source_id FROM work_unit_investment_quotes WHERE org_id = ? LIMIT 1`,
+		hierarchyCascadeTestOrg).Scan(&quote, &sourceID); err != nil {
+		t.Fatal(err)
+	}
+	h.insertQuote(seen.unit, "run-old", "pr_body", sourceID, quote, h.within.Add(time.Minute)) // same key, other source_type
+	counts, err := h.reader.FetchVisibleQuoteCounts(h.ctx, hierarchyCascadeTestOrg, []chquery.UnitRun{{WorkUnitID: seen.unit, RunID: "run-old"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if product := h.observe(); product.quotes != 1 || counts[seen.unit] != 1 {
+		t.Fatalf("the same quote with another source_type: product reader %d, skip check %d, want 1 and 1", product.quotes, counts[seen.unit])
 	}
 }

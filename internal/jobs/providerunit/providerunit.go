@@ -136,11 +136,83 @@ const (
 	// attempt -- so the unit fails on the first one under a name that says why.
 	// The scope's next run is a new unit with a new snapshot and heals it.
 	PreviousReleaseSnapshotCategory = "previous_release_snapshot"
+	// ResponseTooLargeCategory covers a provider response above the shared
+	// per-object byte cap (providerfoundation.ObjectTooLargeError). The same
+	// request returns the same oversized body on every attempt and on every
+	// scheduled run, so it terminalizes on the first attempt (CHAOS-8797).
+	ResponseTooLargeCategory = "response_too_large"
+	// ResultTooLargeCategory covers a unit result above the bounded write
+	// contract (providersync.EffectBoundExceededError): the next attempt
+	// rebuilds the same oversized batch from the same provider data.
+	ResultTooLargeCategory = "result_too_large"
+	// TimeLimitCategory covers an attempt that reached the job time limit. It
+	// is terminal for this run: the next scheduled run is the retry, and
+	// repeating a full-length attempt five times inside one run only holds a
+	// worker slot (CHAOS-8797).
+	TimeLimitCategory = "time_limit"
 )
+
+// timeLimitReserve is how long before the job deadline the unit's
+// own work context ends. The lease expires at the job deadline, and the
+// failure write requires an unexpired lease, so a unit that ran to the
+// deadline could not record its own failure and ended as "worker lost".
+var timeLimitReserve = 30 * time.Second
+
+// failureWriteTimeout bounds the terminal failure write, which runs on a
+// context detached from the (possibly expired) work context.
+const failureWriteTimeout = 5 * time.Second
+
+// Cause classes that are not terminal categories. The stored cause class is a
+// closed vocabulary: a terminal category, one of these, or
+// providersync.CauseClassUnclassified. Never error text.
+const (
+	causeClassBudgetContended = "budget_contended"
+	// "provider_" + providerfoundation.ErrorClass for the rest.
+	causeClassProviderPrefix = "provider_"
+)
+
+var providerErrorClasses = map[providerfoundation.ErrorClass]struct{}{
+	providerfoundation.ErrorAuthentication: {}, providerfoundation.ErrorNotFound: {},
+	providerfoundation.ErrorConflict: {}, providerfoundation.ErrorRateLimited: {},
+	providerfoundation.ErrorTransient: {}, providerfoundation.ErrorCancelled: {},
+	providerfoundation.ErrorPermanent: {},
+}
+
+// causeClass names the class of the attempt's error from a fixed vocabulary.
+// timedOut is true when the job time limit ended the attempt.
+func causeClass(err error, timedOut bool) string {
+	if timedOut {
+		return TimeLimitCategory
+	}
+	if err == nil {
+		return providersync.CauseClassUnclassified
+	}
+	if category, deterministic := deterministicTerminalCategory(err); deterministic {
+		return category
+	}
+	if errors.Is(err, providerfoundation.ErrBudgetContended) {
+		return causeClassBudgetContended
+	}
+	var providerErr *providerfoundation.ProviderError
+	if errors.As(err, &providerErr) {
+		if _, known := providerErrorClasses[providerErr.Class]; known {
+			return causeClassProviderPrefix + string(providerErr.Class)
+		}
+	}
+	return providersync.CauseClassUnclassified
+}
 
 func deterministicTerminalCategory(err error) (string, bool) {
 	if errors.Is(err, providersync.ErrProviderDatasetUnavailable) {
 		return ProviderDatasetUnavailableCategory, true
+	}
+	var tooLarge *providerfoundation.ObjectTooLargeError
+	if errors.As(err, &tooLarge) {
+		return ResponseTooLargeCategory, true
+	}
+	var boundExceeded *providersync.EffectBoundExceededError
+	if errors.As(err, &boundExceeded) {
+		return ResultTooLargeCategory, true
 	}
 	// A fail-closed pagination or row-cap refusal is deterministic given the
 	// provider's current state: a repo with more in-window rows than the cap
@@ -454,6 +526,73 @@ type DuplicateKeyDetailRepository interface {
 	) error
 }
 
+// CauseClassRepository is optional so existing repository test doubles and
+// older rolling binaries remain source-compatible, exactly like
+// DuplicateKeyDetailRepository. Production's PostgresRepository implements it:
+// the cause class is stored beside the category as result.cause_class.
+type CauseClassRepository interface {
+	FailWithCauseClass(
+		ctx context.Context, claim providersync.Claim, category string, causeClass string,
+		detail *providersync.CauseDetail, startedAt, completedAt time.Time,
+	) error
+}
+
+// causeDetail returns the bounded counts of a size refusal, or nil.
+func causeDetail(err error) *providersync.CauseDetail {
+	var bound *providerfoundation.EffectBoundError
+	if !errors.As(err, &bound) {
+		return nil
+	}
+	return &providersync.CauseDetail{
+		Limit: bound.Limit, Table: bound.Table, Rows: bound.Rows, Bytes: bound.Bytes,
+	}
+}
+
+// failWithClass persists a failure category together with its cause class,
+// falling back to the plain Fail for a repository that cannot store one.
+func (handler *Handler) failWithClass(
+	ctx context.Context, claim providersync.Claim, category, class string,
+	detail *providersync.CauseDetail, startedAt, completedAt time.Time,
+) error {
+	if repository, supported := handler.Repository.(CauseClassRepository); supported {
+		return repository.FailWithCauseClass(ctx, claim, category, class, detail, startedAt, completedAt)
+	}
+	return handler.Repository.Fail(ctx, claim, category, startedAt, completedAt)
+}
+
+// logTerminalFailure writes the one WARN per terminal failure. Closed labels
+// and counts only: no error text, path, body or provider-supplied name.
+func logTerminalFailure(
+	execution *jobruntime.Execution[jobruntime.ProviderUnitArgs],
+	claim providersync.Claim, category, class string, detail *providersync.CauseDetail,
+) {
+	attributes := []any{
+		"provider", claim.Provider, "dataset", claim.Dataset,
+		"category", category, "cause_class", class,
+	}
+	if detail != nil {
+		attributes = append(attributes, "limit", detail.Limit, "table", detail.Table,
+			"rows", detail.Rows, "bytes", detail.Bytes)
+	}
+	if execution != nil {
+		attributes = append(attributes,
+			"attempt", execution.Attempt, "max_attempts", execution.Definition.MaxAttempts)
+	}
+	slog.Warn("provider unit failed terminally", attributes...)
+}
+
+// workContext ends the unit's own work timeLimitReserve before the
+// job deadline so the failure write still holds an unexpired lease. A deadline
+// too close for a reserve is left unchanged.
+func workContext(ctx context.Context, deadline time.Time) (context.Context, context.CancelFunc) {
+	// The context deadline runs on the wall clock, not on the injectable
+	// handler clock, so the remaining time is measured on the wall clock too.
+	if deadline.IsZero() || time.Until(deadline) <= 2*timeLimitReserve {
+		return context.WithCancel(ctx)
+	}
+	return context.WithDeadline(ctx, deadline.Add(-timeLimitReserve))
+}
+
 // failTerminal persists a unit's terminal category, and -- when err carries a
 // structured duplicate-natural-key detail and the repository supports it --
 // the colliding table and key fields too. Falls back to the plain Fail for
@@ -461,17 +600,21 @@ type DuplicateKeyDetailRepository interface {
 // (or test double) that does not implement DuplicateKeyDetailRepository, so
 // this is purely additive: no existing caller's behavior changes.
 func (handler *Handler) failTerminal(
-	ctx context.Context, claim providersync.Claim, category string, err error,
+	ctx context.Context, claim providersync.Claim, category, class string, err error,
 	startedAt, completedAt time.Time,
 ) error {
+	// Detached from the work context, which may already be past its deadline,
+	// and bounded so a stuck write cannot hold the worker.
+	writeCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), failureWriteTimeout)
+	defer cancel()
 	if table, fields, ok := providersync.DuplicateNaturalKeyDetailFrom(err); ok {
 		if repository, supported := handler.Repository.(DuplicateKeyDetailRepository); supported {
 			return repository.FailWithDuplicateKeyDetail(
-				context.WithoutCancel(ctx), claim, category, table, fields, startedAt, completedAt,
+				writeCtx, claim, category, table, fields, startedAt, completedAt,
 			)
 		}
 	}
-	return handler.Repository.Fail(context.WithoutCancel(ctx), claim, category, startedAt, completedAt)
+	return handler.failWithClass(writeCtx, claim, category, class, causeDetail(err), startedAt, completedAt)
 }
 
 // observeCicdPartialSuccess reports a github cicd/tests unit that advanced
@@ -821,9 +964,11 @@ func (handler *Handler) Work(
 	// reports CommittedRows on its FAILURE path too, and the terminalization
 	// alarm below needs it (CHAOS-4130).
 	var result providersync.CompleteRouteExecutionResult
+	workCtx, cancelWork := workContext(ctx, execution.Deadline)
+	defer cancelWork()
 	executor, err := handler.BuildExecutor(session)
 	if err == nil {
-		result, err = executor.Execute(ctx, session, descriptor)
+		result, err = executor.Execute(workCtx, session, descriptor)
 		if err == nil {
 			payload := cloneResult(result.Result)
 			if len(result.WorklogObservations) > 0 {
@@ -848,6 +993,12 @@ func (handler *Handler) Work(
 		}
 	}
 	completedAt := handler.now()
+	// The job time limit ended this attempt: the work context's own deadline,
+	// set before the lease deadline, or the job's, which the work context
+	// inherits. An error that merely wraps DeadlineExceeded is not enough: a
+	// single provider request that timed out is transient and keeps the
+	// ordinary retry.
+	timedOut := err != nil && errors.Is(workCtx.Err(), context.DeadlineExceeded)
 	// A prepared chunk can be continued after a bounded number of commits.
 	// Persist the claimable not-before fence before returning an attempt-neutral
 	// River snooze. Do not call ReleaseForRetry: that would turn a healthy
@@ -904,13 +1055,14 @@ func (handler *Handler) Work(
 			// The episode's count or wall-clock budget is spent. Fail with the
 			// rate-limit category rather than letting it fall through to the
 			// generic provider_unit_exhausted, which buries the real cause.
-			if failErr := handler.Repository.Fail(
+			if failErr := handler.failWithClass(
 				context.WithoutCancel(ctx), session.Claim, RateLimitCategory,
-				startedAt, completedAt,
+				causeClass(err, false), nil, startedAt, completedAt,
 			); failErr != nil {
 				return jobruntime.Retryable(jobruntime.WithSafeCauseText(failErr,
 					safeCause(retryCauseFailWriteFailed, session.Claim, execution, failErr)))
 			}
+			logTerminalFailure(execution, session.Claim, RateLimitCategory, causeClass(err, false), nil)
 			handler.observeLeaseRecovery(session.Claim, jobruntime.SyncLeaseResultFailed)
 			handler.logLifecycle(ctx, execution, session.Claim, "sync_provider_unit_finished", "failed", err)
 			return jobruntime.Permanent(jobruntime.WithSafeCauseText(err,
@@ -941,12 +1093,17 @@ func (handler *Handler) Work(
 	// A deterministic fault cannot succeed on a later attempt. Burning the
 	// remaining attempts would only delay the outcome and then bury the real
 	// cause under the generic provider_unit_exhausted category.
-	if category, deterministic := deterministicTerminalCategory(err); deterministic {
+	category, deterministic := deterministicTerminalCategory(err)
+	if !deterministic && timedOut {
+		category, deterministic = TimeLimitCategory, true
+	}
+	if deterministic {
+		class := causeClass(err, timedOut)
 		// Discarding this error would report a permanent, already-recorded
 		// outcome while the category never persisted and run finalization
 		// never armed, leaving the run nonterminal. Stay retryable so a later
 		// attempt can record it, exactly as the route-reconciliation path does.
-		if failErr := handler.failTerminal(ctx, session.Claim, category, err, startedAt, completedAt); failErr != nil {
+		if failErr := handler.failTerminal(ctx, session.Claim, category, class, err, startedAt, completedAt); failErr != nil {
 			return jobruntime.Retryable(jobruntime.WithSafeCauseText(failErr,
 				safeCause(retryCauseFailWriteFailed, session.Claim, execution, failErr)))
 		}
@@ -960,6 +1117,7 @@ func (handler *Handler) Work(
 		handler.observeDuplicateNaturalKeyCollision(session.Claim, category, err)
 		handler.observeLeaseRecovery(session.Claim, jobruntime.SyncLeaseResultFailed)
 		handler.logLifecycle(ctx, execution, session.Claim, "sync_provider_unit_finished", "failed", err)
+		logTerminalFailure(execution, session.Claim, category, class, causeDetail(err))
 		// The deterministic category IS the answer here -- all_artifacts_unreadable,
 		// auth, not_found, pagination_incomplete, feature_disabled and the rest
 		// are each a compile-time literal at the top of this file.
@@ -971,11 +1129,13 @@ func (handler *Handler) Work(
 		// this capture (where the prior code discarded the error entirely)
 		// only adds the ability to gate the metric on true success; it does
 		// not change the existing best-effort, always-retryable behavior.
-		failErr := handler.Repository.Fail(
+		failErr := handler.failWithClass(
 			context.WithoutCancel(ctx), session.Claim, exhaustedFailureCategory(session.Claim),
-			startedAt, completedAt,
+			causeClass(err, false), causeDetail(err), startedAt, completedAt,
 		)
 		if failErr == nil {
+			logTerminalFailure(execution, session.Claim,
+				exhaustedFailureCategory(session.Claim), causeClass(err, false), causeDetail(err))
 			handler.observeTerminalWithCommittedRows(
 				session.Claim, result, exhaustedFailureCategory(session.Claim), err,
 			)

@@ -657,7 +657,11 @@ func edgeCompare(t *testing.T, goBase string, cs []edgeCase, python []venueoracl
 			if chaos8509HomeCaptureAllowed(statusEqual, headersEqual) {
 				captureCHAOS8509HomePair(t, key, chaos8169GraphQLHomeBody(t, python[i].Body), chaos8169GraphQLHomeBody(t, goResponse.Body))
 			}
-			assertCHAOS8169HomeNoDataLedger(t, key, chaos8169GraphQLHomeBody(t, python[i].Body), chaos8169GraphQLHomeBody(t, goResponse.Body))
+			policy, ok := chaos8509HomeCapturePolicies[key]
+			if !ok {
+				t.Fatalf("CHAOS-8509 has no GraphQL Home policy for %s", c.request.Name)
+			}
+			assertCHAOS8509HomeCapturePolicy(t, key, policy, chaos8169GraphQLHomeBody(t, python[i].Body), chaos8169GraphQLHomeBody(t, goResponse.Body))
 			fmt.Fprintf(&receipt, "%-58s python=%d go=%d D4840 Home ledger validated\n", c.request.Name, python[i].Status, goResponse.Status)
 			continue
 		}

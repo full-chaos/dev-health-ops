@@ -417,10 +417,15 @@ func TestVenueOracleQueryAPIDictOrder(t *testing.T) {
 				continue
 			}
 			// CHAOS-8169 / GWC D4834: the frozen a484 Python response keeps
-			// executing. This ledger permits only the approved empty-window
-			// difference and makes every other JSON leaf strict.
+			// executing. CHAOS-8509 composes the unchanged ledger with the
+			// approved nullable coverage leaves and makes every other JSON
+			// leaf strict.
 			captureCHAOS8509HomePair(t, chaos8169DictOrderHomeLedgerKey, pythonBody, goBody)
-			assertCHAOS8169HomeNoDataLedger(t, chaos8169DictOrderHomeLedgerKey, pythonBody, goBody)
+			policy, ok := chaos8509HomeCapturePolicies[chaos8169DictOrderHomeLedgerKey]
+			if !ok {
+				t.Fatal("CHAOS-8509 has no dict-order Home policy")
+			}
+			assertCHAOS8509HomeCapturePolicy(t, chaos8169DictOrderHomeLedgerKey, policy, pythonBody, goBody)
 			ledgerValidated++
 			continue
 		}

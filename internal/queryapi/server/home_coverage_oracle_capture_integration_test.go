@@ -27,9 +27,20 @@ type chaos8509HomeCaptureEntry struct {
 }
 
 type chaos8509HomeCapturePolicy struct {
-	Entries          []chaos8509HomeCaptureEntry
-	DifferenceLeaves int
-	File             string
+	Entries                []chaos8509HomeCaptureEntry
+	DifferenceLeaves       int
+	LegacyDifferenceLeaves int
+	File                   string
+	FixtureSHA256          string
+	PythonSHA256           string
+	GoSHA256               string
+	SourceHead             string
+	SourceRun              string
+	SourceJob              string
+	SourceArtifact         string
+	SourceReceiptSHA256    string
+	ExpectedStatus         int
+	HeadersEqual           bool
 }
 
 type chaos8509HomeCapture struct {
@@ -40,45 +51,6 @@ type chaos8509HomeCapture struct {
 	PythonSHA256     string `json:"python_sha256"`
 	GoSHA256         string `json:"go_sha256"`
 	DifferenceLeaves int    `json:"difference_leaves"`
-}
-
-// chaos8509HomeCapturePolicies names the settled Home boundary. It is
-// intentionally separate from the CHAOS-8169 ledger: the latter's business
-// roots remain unchanged, and this capture cannot approve any other leaf.
-var chaos8509HomeCapturePolicies = map[chaos8169HomeNoDataLedgerKey]chaos8509HomeCapturePolicy{
-	chaos8169DictOrderHomeLedgerKey: {
-		Entries: []chaos8509HomeCaptureEntry{
-			{Path: "/freshness/coverage/repos_covered_pct", Python: "0.0", Go: "null"},
-			{Path: "/freshness/coverage/prs_linked_to_issues_pct", Python: "0.0", Go: "null"},
-			{Path: "/freshness/coverage/issues_with_cycle_states_pct", Python: "0.0", Go: "null"},
-			{Path: "/data_confidence/coverage_pct", Python: "0.0", Go: "null"},
-			{Path: "/data_confidence/caveats/0", Python: `"Coverage appears partial; treat cockpit signals as directional."`, Go: `"Coverage could not be computed from available lineage fields."`},
-		},
-		DifferenceLeaves: 197,
-		File:             "dict-order-home-no-data.json",
-	},
-	chaos8169GraphQLEdgeHomeLedgerKeys["POST home"]: {
-		Entries: []chaos8509HomeCaptureEntry{
-			{Path: "/freshness/coverage/reposCoveredPct", Python: "0", Go: "null"},
-			{Path: "/freshness/coverage/prsLinkedToIssuesPct", Python: "0", Go: "null"},
-			{Path: "/freshness/coverage/issuesWithCycleStatesPct", Python: "0", Go: "null"},
-			{Path: "/dataConfidence/coveragePct", Python: "0", Go: "null"},
-			{Path: "/dataConfidence/caveats/0", Python: `"Coverage appears partial; treat cockpit signals as directional."`, Go: `"Coverage could not be computed from available lineage fields."`},
-		},
-		DifferenceLeaves: 204,
-		File:             "graphql-edge-post-home.json",
-	},
-	chaos8169GraphQLEdgeHomeLedgerKeys["GET home"]: {
-		Entries: []chaos8509HomeCaptureEntry{
-			{Path: "/freshness/coverage/reposCoveredPct", Python: "0", Go: "null"},
-			{Path: "/freshness/coverage/prsLinkedToIssuesPct", Python: "0", Go: "null"},
-			{Path: "/dataConfidence/coveragePct", Python: "0", Go: "null"},
-			{Path: "/dataConfidence/caveats/0", Python: `"Coverage appears partial; treat cockpit signals as directional."`, Go: `"Coverage could not be computed from available lineage fields."`},
-			{Path: "/freshness/coverage/issuesWithCycleStatesPct", Python: "0", Go: "null"},
-		},
-		DifferenceLeaves: 204,
-		File:             "graphql-edge-get-home.json",
-	},
 }
 
 // captureCHAOS8509HomePair stores a fixture-only pair from the existing real
@@ -116,6 +88,7 @@ func captureCHAOS8509HomePair(t *testing.T, key chaos8169HomeNoDataLedgerKey, py
 	}
 	ledgerEntries := make(map[string]chaos8169HomeNoDataLedgerEntry, len(ledger.Entries))
 	wantLeaves := chaos8509HomeCaptureDifferenceLeaves(policy, ledger)
+	legacyLeaves := 0
 	for _, entry := range ledger.Entries {
 		if got := chaos8169JSONText(t, chaos8169HomeValue(t, python, entry.Path)); got != entry.Python {
 			t.Errorf("CHAOS-8509 capture existing Python ledger %s = %s, want %s", entry.Path, got, entry.Python)
@@ -126,6 +99,15 @@ func captureCHAOS8509HomePair(t *testing.T, key chaos8169HomeNoDataLedgerKey, py
 			return
 		}
 		ledgerEntries[entry.Path] = entry
+		legacyLeaves += entry.Leaves
+	}
+	if legacyLeaves != policy.LegacyDifferenceLeaves {
+		t.Errorf("CHAOS-8509 capture %s/%s legacy difference leaves = %d, want %d", key.Oracle, key.Case, legacyLeaves, policy.LegacyDifferenceLeaves)
+		return
+	}
+	if policy.ExpectedStatus != 200 || !policy.HeadersEqual {
+		t.Errorf("CHAOS-8509 capture %s/%s transport policy = status %d headers_equal %t, want status 200 and equal headers", key.Oracle, key.Case, policy.ExpectedStatus, policy.HeadersEqual)
+		return
 	}
 	for _, root := range ledger.StrictRoots {
 		if !chaos8509ExistingStrictRoot(t, python, goResponse, root) {

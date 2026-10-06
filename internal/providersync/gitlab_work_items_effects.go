@@ -438,7 +438,7 @@ func (adapter GitLabWorkItemInteractionsClickHouseAdapter) WriteGitLabWorkItemEf
 		return ErrInvalidConfiguration
 	}
 	for _, row := range rows {
-		if row.OrgID != identity.OrgID || row.Provider != "gitlab" || row.InteractionType != "comment" || row.BodyLength < 0 {
+		if row.OrgID != identity.OrgID || row.Provider != "gitlab" || row.InteractionType != "comment" || row.BodyLength < 0 || row.InteractionID == "" {
 			return ErrInvalidConfiguration
 		}
 	}
@@ -453,7 +453,7 @@ func (adapter GitLabWorkItemInteractionsClickHouseAdapter) InspectGitLabWorkItem
 		return EffectConflict, ErrInvalidConfiguration
 	}
 	for _, row := range rows {
-		if row.OrgID != identity.OrgID || row.Provider != "gitlab" || row.InteractionType != "comment" || row.BodyLength < 0 {
+		if row.OrgID != identity.OrgID || row.Provider != "gitlab" || row.InteractionType != "comment" || row.BodyLength < 0 || row.InteractionID == "" {
 			return EffectConflict, ErrInvalidConfiguration
 		}
 	}

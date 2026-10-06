@@ -46,7 +46,7 @@ func (doer *jiraAtlassianDoer) Do(request *http.Request) (*http.Response, error)
 	case strings.HasPrefix(request.URL.Path, "/rest/api/3/issue/OPS-201/changelog"):
 		body = `{"values":[{"created":"2026-08-01T09:00:00Z","author":{"accountId":"account-1"},"items":[{"field":"status","fromString":"To Do","toString":"Done"}]}],"total":1,"isLast":true}`
 	case strings.HasPrefix(request.URL.Path, "/rest/api/3/issue/OPS-201/comment"):
-		body = `{"comments":[{"created":"2026-08-02T10:00:00Z","author":{"accountId":"commenter"},"body":"verified"}],"isLast":true}`
+		body = `{"comments":[{"id":"10002","created":"2026-08-02T10:00:00Z","author":{"accountId":"commenter"},"body":"verified"}],"isLast":true}`
 	case strings.HasPrefix(request.URL.Path, "/rest/api/3/issue/OPS-201/worklog"):
 		body = `{"startAt":0,"maxResults":100,"total":1,"worklogs":[{"id":"wl-201","author":{"accountId":"worker","displayName":"Worker"},"started":"2026-08-01T10:00:00.123456Z","timeSpentSeconds":2700,"created":"2026-08-01T10:01:00.123456Z","updated":"2026-08-01T10:02:00.123456Z"}]}`
 	case request.URL.Path == "/rest/agile/1.0/board":

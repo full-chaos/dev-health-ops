@@ -72,7 +72,7 @@ func collectGitLabLargeNestedListsForm(t *testing.T, notes, labelEvents, stateEv
 		}
 	}
 	pagesFor(root+"/issues/42/notes", notes, func(i int) string {
-		return fmt.Sprintf(`{"system":false,"body":"note %d","created_at":"2026-07-02T12:%02d:%02dZ","author":{"username":"alice"}}`, i, (i/60)%60, i%60)
+		return fmt.Sprintf(`{"id":%d,"system":false,"body":"note %d","created_at":"2026-07-02T12:%02d:%02dZ","author":{"username":"alice"}}`, i+1000, i, (i/60)%60, i%60)
 	})
 	pagesFor(root+"/issues/42/resource_label_events", labelEvents, func(i int) string {
 		return fmt.Sprintf(`{"action":"add","created_at":"2026-07-02T10:%02d:%02dZ","label":{"name":"done"}}`, (i/60)%60, i%60)
@@ -199,7 +199,7 @@ func TestGitLabWorkItemsRouteNestedBoundFollowsALowerTopLevelMaxPages(t *testing
 func TestGitLabWorkItemsRouteEmptyPageAdvertisingANextPageFailsClosed(t *testing.T) {
 	notes := func(count int) []string {
 		return gitLabPagedResponses(count, func(i int) string {
-			return fmt.Sprintf(`{"system":false,"body":"note %d","created_at":"2026-07-02T12:%02d:%02dZ","author":{"username":"alice"}}`, i, (i/60)%60, i%60)
+			return fmt.Sprintf(`{"id":%d,"system":false,"body":"note %d","created_at":"2026-07-02T12:%02d:%02dZ","author":{"username":"alice"}}`, i+1000, i, (i/60)%60, i%60)
 		})
 	}
 	for _, test := range []struct {

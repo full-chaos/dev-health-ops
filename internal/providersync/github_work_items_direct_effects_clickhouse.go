@@ -695,9 +695,9 @@ func (adapter GitHubWorkItemReopenEventsClickHouseAdapter) InspectGitHubWorkItem
 // write_work_item_interactions (metrics/sinks/clickhouse/work_graph.py:373).
 type GitHubWorkItemInteractionsClickHouseAdapter struct{ Conn driver.Conn }
 
-const gitHubWorkItemInteractionsInsert = `INSERT INTO work_item_interactions (work_item_id, provider, interaction_type, occurred_at, actor, body_length, last_synced, org_id)`
+const gitHubWorkItemInteractionsInsert = `INSERT INTO work_item_interactions (work_item_id, provider, interaction_type, occurred_at, actor, body_length, last_synced, org_id, interaction_id)`
 
-const gitHubWorkItemInteractionsSelect = `SELECT work_item_id, provider, interaction_type, occurred_at, actor, body_length, last_synced, org_id FROM work_item_interactions FINAL WHERE org_id = ? AND work_item_id = ? AND occurred_at = toDateTime64(?, 3, 'UTC') AND interaction_type = ?`
+const gitHubWorkItemInteractionsSelect = `SELECT work_item_id, provider, interaction_type, occurred_at, actor, body_length, last_synced, org_id, interaction_id FROM work_item_interactions FINAL WHERE org_id = ? AND work_item_id = ? AND occurred_at = toDateTime64(?, 3, 'UTC') AND interaction_type = ? AND interaction_id = ?`
 
 func (adapter GitHubWorkItemInteractionsClickHouseAdapter) WriteGitHubWorkItemEffect(
 	ctx context.Context,
@@ -716,7 +716,7 @@ func (adapter GitHubWorkItemInteractionsClickHouseAdapter) WriteGitHubWorkItemEf
 	for _, row := range rows {
 		// body_length is UInt32; a negative length cannot round-trip and must
 		// never reach the driver as a silent wrap.
-		if row.OrgID != identity.OrgID || row.BodyLength < 0 {
+		if row.OrgID != identity.OrgID || row.BodyLength < 0 || row.InteractionID == "" {
 			return ErrInvalidConfiguration
 		}
 	}
@@ -752,7 +752,7 @@ func (adapter GitHubWorkItemInteractionsClickHouseAdapter) InspectGitHubWorkItem
 		return EffectConflict, err
 	}
 	for _, row := range rows {
-		if row.OrgID != identity.OrgID || row.BodyLength < 0 {
+		if row.OrgID != identity.OrgID || row.BodyLength < 0 || row.InteractionID == "" {
 			return EffectConflict, ErrInvalidConfiguration
 		}
 	}
@@ -764,6 +764,7 @@ func (adapter GitHubWorkItemInteractionsClickHouseAdapter) InspectGitHubWorkItem
 		result, err := adapter.Conn.Query(
 			ctx, gitHubWorkItemInteractionsSelect,
 			row.OrgID, row.WorkItemID, clickHouseMillisParam(row.OccurredAt), row.InteractionType,
+			row.InteractionID,
 		)
 		if err != nil {
 			return EffectConflict, err
@@ -776,7 +777,7 @@ func (adapter GitHubWorkItemInteractionsClickHouseAdapter) InspectGitHubWorkItem
 			if err := result.Scan(
 				&actual.WorkItemID, &actual.Provider, &actual.InteractionType,
 				&actual.OccurredAt, &actual.Actor, &actualBodyLength,
-				&actual.LastSynced, &actual.OrgID,
+				&actual.LastSynced, &actual.OrgID, &actual.InteractionID,
 			); err != nil {
 				return EffectConflict, err
 			}
@@ -793,6 +794,7 @@ func (adapter GitHubWorkItemInteractionsClickHouseAdapter) InspectGitHubWorkItem
 		}
 		if actual.WorkItemID != row.WorkItemID || actual.Provider != row.Provider ||
 			actual.InteractionType != row.InteractionType ||
+			actual.InteractionID != row.InteractionID ||
 			!actual.OccurredAt.Equal(clickHouseMillis(row.OccurredAt)) ||
 			!stringPointersEqual(actual.Actor, row.Actor) ||
 			actualBodyLength != uint32(row.BodyLength) ||
@@ -1107,6 +1109,7 @@ func workItemInteractionValues(row githubWorkItemInteractionRow) []any {
 	return []any{
 		row.WorkItemID, row.Provider, row.InteractionType, clickHouseMillis(row.OccurredAt),
 		row.Actor, uint32(row.BodyLength), clickHouseMillis(row.LastSynced), row.OrgID,
+		row.InteractionID,
 	}
 }
 
@@ -1205,6 +1208,7 @@ func workItemInteractionSortingKey(row githubWorkItemInteractionRow) string {
 	return strings.Join([]string{
 		row.OrgID, row.WorkItemID,
 		clickHouseMillis(row.OccurredAt).Format(time.RFC3339Nano), row.InteractionType,
+		row.InteractionID,
 	}, workItemKeySeparator)
 }
 

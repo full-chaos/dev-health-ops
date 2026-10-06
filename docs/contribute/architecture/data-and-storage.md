@@ -82,6 +82,16 @@ ClickHouse writes must preserve:
 
 A missing provider transition or absent bounded-page result is unknown, not automatically a tombstone.
 
+### Work item comments: `work_item_interactions`
+
+The sorting key is `(org_id, work_item_id, occurred_at, interaction_type, interaction_id)`. `interaction_id` is the provider's own comment id (Jira, GitHub, GitLab and Linear all write it), so two comments of one work item in the same millisecond are two rows. A comment the provider sends without an id is skipped and counted (`providersync.interaction.comment_missing_id`, a class label and no body); it is never written with an empty id.
+
+An empty `interaction_id` marks a **legacy row**, written before the key carried the id, and nothing else. The legacy row of a comment and the keyed row of the same comment have different keys and are never merged. So a reader never counts comments from the table: it reads the view `work_item_interactions_current`, which is the documented reader contract. The view applies `FINAL`, and hides a legacy row once any keyed row exists in its slot `(org_id, work_item_id, occurred_at, interaction_type)`. A legacy row with no keyed row in its slot stays visible, and `is_legacy_id` marks it. A slot that held several comments and was only partly re-fetched shows only the re-fetched ones: the rest is missing, not invented.
+
+The old collapse lost comments for good: the second of two same-millisecond comments was never stored. Only fetching that comment from the provider again, with the new writer, brings it back, as a keyed row. This change fetches nothing by itself and makes no promise that any sync mode finds old comments: which comments a sync fetches depends on its window, and a window that does not reach the comment's work item does not fetch it. Repairing old data is an operator task, one backfill per integration over the window to repair, run after the migration and the release are on every pod. It is tracked apart from this change, with its own proof.
+
+Migration `107_work_item_interactions_comment_id.sql` is one `ALTER` and the view. The column is added with no `DEFAULT` (ClickHouse refuses a column with a default expression in the sorting key) and the key is extended in the same statement. It must be applied before a pod that writes `interaction_id` runs; an old pod's insert (no `interaction_id` in its column list) still works and writes a legacy row.
+
 ## Project membership: provider event to graph edge
 
 A work item's project used to be a plain overwrite column on `work_items`. That

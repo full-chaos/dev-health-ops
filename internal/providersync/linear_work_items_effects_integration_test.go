@@ -123,7 +123,7 @@ func TestLinearClickHouseAdaptersWriteAndReadBackTenantFencedRows(t *testing.T) 
 	interaction := linearWorkItemInteractionRow{
 		WorkItemID: item.WorkItemID, Provider: "linear", InteractionType: "comment",
 		OccurredAt: now, Actor: stringPtr("alice@example.com"), BodyLength: 12,
-		LastSynced: now, OrgID: claim.OrgID,
+		LastSynced: now, OrgID: claim.OrgID, InteractionID: "comment-1",
 	}
 	interactionEffect := linearIntegrationEffect(t, "work_item_interactions", interaction)
 	interactionIdentity, err := newLinearWorkItemEffectIdentity(claim, interactionEffect)

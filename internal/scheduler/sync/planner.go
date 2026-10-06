@@ -174,6 +174,13 @@ type PlannerInput struct {
 	// It decides between a count only (opted out, never ran, or stopped long
 	// ago) and a count plus WARN (stopped within workItemFamilyStoppedWarnWindow).
 	LastWorkItemSuccessAt *time.Time
+	// WorkItemClockAt is the DATABASE clock read in the same statement as
+	// LastWorkItemSuccessAt. The WARN window is measured against it, never
+	// against Now: Now is the occurrence's scheduled time, and a delayed or
+	// retried occurrence is replayed oldest first, so an age taken from Now
+	// goes negative and warns for a success that is long past the window.
+	// Zero when LastWorkItemSuccessAt is nil or the read failed.
+	WorkItemClockAt time.Time
 }
 
 // PlannedUnit is the complete secret-free unit row prior to persistence.
@@ -432,7 +439,7 @@ func reportWorkItemFamilyNotEnabled(input PlannerInput, provider string) {
 		return
 	}
 	globalPlanGateTelemetry.observe(provider, canonicalWorkItemsDataset, planGateOutcomeFamilyNotEnabled)
-	ageDays, recent := workItemFamilyStoppedAgeDays(input.Now, input.LastWorkItemSuccessAt)
+	ageDays, recent := workItemFamilyStoppedAgeDays(input.WorkItemClockAt, input.LastWorkItemSuccessAt)
 	if !recent {
 		return
 	}
@@ -454,7 +461,7 @@ func reportWorkItemFamilyNotEnabled(input PlannerInput, provider string) {
 const workItemFamilyStoppedWarnWindow = 14 * 24 * time.Hour
 
 // workItemFamilyStoppedAgeDays returns the whole-day age of the newest
-// successful work-items unit at now and whether it is inside the WARN window
+// successful work-items unit at now (the database clock) and whether it is inside the WARN window
 // (a unit exactly the window old still warns). A nil last success (never ran)
 // is outside it, and a last success after now (clock skew) is age zero.
 func workItemFamilyStoppedAgeDays(now time.Time, lastSuccess *time.Time) (int, bool) {

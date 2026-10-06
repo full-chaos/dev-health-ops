@@ -42,6 +42,13 @@ func TestNativeMaterializerWorkItemFamilyStoppedSignalReadsLiveUnitHistory(t *te
 			wantWarn: true,
 		},
 		{
+			name: "successful work-items unit 16 days old by the clock, occurrence scheduled earlier: count only",
+			seed: func(t *testing.T, fixture materializerFixture) {
+				seedPriorSyncRunUnit(t, fixture, "work-items", "success", `{}`)
+				ageUnits(t, fixture, 16*24*time.Hour)
+			},
+		},
+		{
 			name: "successful work-items unit 15 days old: count only",
 			seed: func(t *testing.T, fixture materializerFixture) {
 				seedPriorSyncRunUnit(t, fixture, "work-items", "success", `{}`)
@@ -197,12 +204,15 @@ VALUES ($1,'incremental',NULL,NULL,ARRAY['commits'],'manual')`,
 	}
 }
 
-// ageUnits dates every seeded unit age before the occurrence's scheduled time,
-// the "Now" the planner measures recency against.
+// ageUnits dates every seeded unit age before the DATABASE clock. The fixture's
+// occurrence is scheduled in 2026-08, long before the clock: it stands for a
+// delayed occurrence replayed oldest first, so the recency window must not
+// follow the scheduled time.
 func ageUnits(t *testing.T, fixture materializerFixture, age time.Duration) {
 	t.Helper()
 	if _, err := fixture.pool.Exec(context.Background(),
-		`UPDATE sync_run_units SET updated_at = $1`, fixture.occurrence.ScheduledFor.Add(-age)); err != nil {
+		`UPDATE sync_run_units SET updated_at = clock_timestamp() - make_interval(secs => $1)`,
+		age.Seconds()); err != nil {
 		t.Fatal(err)
 	}
 }
@@ -212,6 +222,7 @@ func TestLoadWorkItemLastSuccessAtLivePostgres(t *testing.T) {
 	fixture := startMaterializerPostgres(t)
 	ctx := context.Background()
 	const integrationID = "00000000-0000-4000-8000-000000001002"
+	var lastClock time.Time
 	ask := func(orgID, integration string) *time.Time {
 		t.Helper()
 		tx, err := fixture.pool.Begin(ctx)
@@ -219,7 +230,9 @@ func TestLoadWorkItemLastSuccessAtLivePostgres(t *testing.T) {
 			t.Fatal(err)
 		}
 		defer func() { _ = tx.Rollback(ctx) }()
-		return loadWorkItemLastSuccessAt(ctx, tx, "github", orgID, integration)
+		last, clock := loadWorkItemLastSuccessAt(ctx, tx, "github", orgID, integration)
+		lastClock = clock
+		return last
 	}
 	if got := ask(fixture.occurrence.OrgID, integrationID); got != nil {
 		t.Fatalf("no units yet: last success = %v, want nil", got)
@@ -240,6 +253,9 @@ func TestLoadWorkItemLastSuccessAtLivePostgres(t *testing.T) {
 	}
 	if got := ask(fixture.occurrence.OrgID, integrationID); got == nil || !got.Equal(newer) {
 		t.Fatalf("last success = %v, want the newest success %v", got, newer)
+	}
+	if drift := time.Since(lastClock); drift < -time.Minute || drift > time.Minute {
+		t.Fatalf("clock %v is not the database clock now (drift %v)", lastClock, drift)
 	}
 	if got := ask("another-org", integrationID); got != nil {
 		t.Fatalf("another org's integration id must not match: %v", got)
@@ -337,8 +353,8 @@ func TestLoadWorkItemLastSuccessAtRunsWithSelectOnlyRole(t *testing.T) {
 	if _, err := tx.Exec(ctx, `SET LOCAL ROLE `+role); err != nil {
 		t.Fatal(err)
 	}
-	if loadWorkItemLastSuccessAt(ctx, tx, "github", fixture.occurrence.OrgID,
-		"00000000-0000-4000-8000-000000001002") == nil {
+	if last, _ := loadWorkItemLastSuccessAt(ctx, tx, "github", fixture.occurrence.OrgID,
+		"00000000-0000-4000-8000-000000001002"); last == nil {
 		t.Fatal("a SELECT-only role must read the last-success fact")
 	}
 }
@@ -370,8 +386,8 @@ func TestLoadWorkItemLastSuccessAtFailureIsContainedAndLoggedByCategory(t *testi
 	if _, err := tx.Exec(ctx, `SET LOCAL ROLE `+role); err != nil {
 		t.Fatal(err)
 	}
-	if loadWorkItemLastSuccessAt(ctx, tx, "github", fixture.occurrence.OrgID,
-		"00000000-0000-4000-8000-000000001002") != nil {
+	if last, clock := loadWorkItemLastSuccessAt(ctx, tx, "github", fixture.occurrence.OrgID,
+		"00000000-0000-4000-8000-000000001002"); last != nil || !clock.IsZero() {
 		t.Fatal("a failed read must answer nil")
 	}
 	// The transaction survived the Postgres error.

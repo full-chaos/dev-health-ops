@@ -800,9 +800,10 @@ WHERE config.id = $1::uuid AND config.org_id = $2 AND integration.is_active`, oc
 	// a work-items unit, so the planner can tell "stopped" from "never opted
 	// in". Skipped for every plan that has a family row.
 	var lastWorkItemSuccessAt *time.Time
+	var workItemClockAt time.Time
 	scheduledParent := plannerManaged && explicitDatasetKeys == nil
 	if scheduledParent && PlanNeedsWorkItemLastSuccess(provider, true, datasets) {
-		lastWorkItemSuccessAt = loadWorkItemLastSuccessAt(ctx, tx, provider, orgID, integrationID)
+		lastWorkItemSuccessAt, workItemClockAt = loadWorkItemLastSuccessAt(ctx, tx, provider, orgID, integrationID)
 	}
 	watermarks, err := loadPlanWatermarks(ctx, tx, orgID, sources, datasets)
 	if err != nil {
@@ -834,6 +835,7 @@ WHERE config.id = $1::uuid AND config.org_id = $2 AND integration.is_active`, oc
 			WatermarkOverlap: watermarkOverlap, Sources: sources, Datasets: datasets, Watermarks: watermarks,
 			PlannerManagedParent:  scheduledParent,
 			LastWorkItemSuccessAt: lastWorkItemSuccessAt,
+			WorkItemClockAt:       workItemClockAt,
 		},
 		provider:               provider,
 		configuredCredentialID: credentialID,
@@ -1728,14 +1730,16 @@ func syncTargetsRequireCanonicalIncident(targets []string) bool {
 }
 
 // workItemLastSuccessSQL returns the time of the newest successful unit of
-// the work-item family for one integration, or NULL when there is none. The
+// the work-item family for one integration, or NULL when there is none, and
+// the database clock in the same statement (the recency window is measured on
+// that clock, never the worker clock or the occurrence's scheduled time). The
 // (org_id, integration_id) equality pair is the leading prefix of
 // ix_sync_run_units_coverage_scan (alembic 0076: org_id, integration_id,
 // source_id, dataset_key, before_at), so the read is bounded by this one
 // integration's unit rows. It runs only for a plan with no enabled work-item
 // family row, never for a healthy plan.
 const workItemLastSuccessSQL = `
-SELECT max(updated_at) FROM public.sync_run_units
+SELECT max(updated_at), clock_timestamp() FROM public.sync_run_units
 WHERE org_id = $1 AND integration_id = $2::uuid
   AND dataset_key = ANY($3::text[]) AND status = 'success'`
 
@@ -1746,22 +1750,23 @@ WHERE org_id = $1 AND integration_id = $2::uuid
 // statement runs in a savepoint, which keeps the coordinator transaction
 // usable after a Postgres error, and a failure is logged by category only
 // (no error operand) and reads as "unknown" (nil), which is the quiet answer.
-func loadWorkItemLastSuccessAt(ctx context.Context, tx pgx.Tx, provider, orgID, integrationID string) *time.Time {
-	unavailable := func() *time.Time {
+func loadWorkItemLastSuccessAt(ctx context.Context, tx pgx.Tx, provider, orgID, integrationID string) (*time.Time, time.Time) {
+	unavailable := func() (*time.Time, time.Time) {
 		slog.Default().Warn("sync.materializer.work_item_ran_before_unavailable",
 			slog.String("provider", provider),
 			slog.String("org_id", orgID),
 			slog.String("integration_id", integrationID),
 			slog.String("error_category", "ran_before_query_failed"))
-		return nil
+		return nil, time.Time{}
 	}
 	savepoint, err := tx.Begin(ctx)
 	if err != nil {
 		return unavailable()
 	}
 	var lastSuccess *time.Time
+	var databaseClock time.Time
 	if err := savepoint.QueryRow(ctx, workItemLastSuccessSQL, orgID, integrationID,
-		workitemcontract.FamilyDatasets()).Scan(&lastSuccess); err != nil {
+		workitemcontract.FamilyDatasets()).Scan(&lastSuccess, &databaseClock); err != nil {
 		_ = savepoint.Rollback(ctx)
 		return unavailable()
 	}
@@ -1772,7 +1777,7 @@ func loadWorkItemLastSuccessAt(ctx context.Context, tx pgx.Tx, provider, orgID, 
 		utc := lastSuccess.UTC()
 		lastSuccess = &utc
 	}
-	return lastSuccess
+	return lastSuccess, databaseClock.UTC()
 }
 
 // loadPlanDatasets loads the enabled datasets a plan runs against.

@@ -77,6 +77,7 @@ func familyPlanInput(provider string, datasets []PlanDataset) PlannerInput {
 	return PlannerInput{
 		OrgID: "org-8773", IntegrationID: "integration-8773", Mode: SyncModeIncremental,
 		Now:                  familyPlanNow,
+		WorkItemClockAt:      familyPlanNow,
 		PlannerManagedParent: true,
 		Sources: []PlanSource{
 			{ID: "s1", ExternalID: "one", Provider: provider, FullName: "one"},
@@ -255,6 +256,44 @@ func TestCoordinatorPostureGrantsSelectOnSyncRunUnits(t *testing.T) {
 		}
 	}
 	t.Fatal("coordinator posture does not require sync_run_units: the ran-before probe would fail in production")
+}
+
+// The age is measured on the database clock, not the occurrence's scheduled
+// time: a replayed old occurrence (Now 20 days before the clock) must not
+// turn a 16-day-old success into a negative age that warns.
+func TestWorkItemFamilyStoppedWarnWindowUsesTheDatabaseClockNotNow(t *testing.T) {
+	for _, provider := range []string{"github", "gitlab", "jira", "linear"} {
+		other := nonFamilyDatasets(provider)
+		for _, tc := range []struct {
+			name     string
+			age      time.Duration
+			wantWarn bool
+		}{
+			{"16 days old by the clock", 16 * 24 * time.Hour, false},
+			{"3 days old by the clock", 3 * 24 * time.Hour, true},
+		} {
+			t.Run(provider+"/"+tc.name, func(t *testing.T) {
+				globalPlanGateTelemetry.resetForTest()
+				logs := captureDefaultLogs(t)
+				input := familyPlanInput(provider, other)
+				input.Now = familyPlanNow.Add(-20 * 24 * time.Hour) // replayed oldest occurrence
+				input.LastWorkItemSuccessAt = agoPtr(tc.age)
+				if _, err := BuildScheduledPlan(input); err != nil {
+					t.Fatal(err)
+				}
+				if got := globalPlanGateTelemetry.snapshotForTest(provider, "work-items", planGateOutcomeFamilyNotEnabled); got != 1 {
+					t.Fatalf("family_not_enabled count = %d, want 1", got)
+				}
+				stopped := stoppedFamilyLogs(logs())
+				if tc.wantWarn != (len(stopped) == 1) {
+					t.Fatalf("wantWarn=%v, WARN entries=%+v", tc.wantWarn, stopped)
+				}
+				if tc.wantWarn && stopped[0].Fields["last_success_age_days"] != float64(3) {
+					t.Fatalf("age = %v, want 3", stopped[0].Fields["last_success_age_days"])
+				}
+			})
+		}
+	}
 }
 
 // The window boundary with literal times: a unit exactly 14 days old still

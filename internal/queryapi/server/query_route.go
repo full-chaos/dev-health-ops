@@ -1363,14 +1363,29 @@ const registeredCoverageBaselinesDocument = `query CoverageBaselines($orgId: Str
   }
 }`
 
-// registeredCoverageScopeBaselineDocument is the registered document for the
-// `coverageScopeBaseline` operation (CHAOS-8541, Go-only: no Python resolver
-// exists), the exact wire-form text the web client sends
-// (testdata/wire_capture/coveragescopebaseline_captured.graphql; the wire form
-// of TESTOPS_COVERAGE_SCOPE_BASELINE_QUERY, computed with the web's pinned
-// urql). The web sends no scope and reads the line baseline only.
-const registeredCoverageScopeBaselineDocument = `query CoverageScopeBaseline($orgId: String!, $endDate: Date!) {
+// registeredCoverageScopeBaselineV1Document is the unscoped text accepted
+// before CHAOS-8682. Keep it as a legacy document while older web builds roll
+// out.
+const registeredCoverageScopeBaselineV1Document = `query CoverageScopeBaseline($orgId: String!, $endDate: Date!) {
   coverageScopeBaseline(orgId: $orgId, endDate: $endDate) {
+    lineBaselinePct
+    lineDays
+    __typename
+  }
+}`
+
+// registeredCoverageScopeBaselineDocument is the scoped registered document
+// for the `coverageScopeBaseline` operation (CHAOS-8682, Go-only: no Python
+// resolver exists). It is the exact wire form of the web's
+// TESTOPS_COVERAGE_SCOPE_BASELINE_QUERY, produced with the web's pinned urql
+// and captured at testdata/wire_capture/coveragescopebaseline_captured.graphql.
+const registeredCoverageScopeBaselineDocument = `query CoverageScopeBaseline($orgId: String!, $endDate: Date!, $repoIds: [String!], $teamIds: [String!]) {
+  coverageScopeBaseline(
+    orgId: $orgId
+    endDate: $endDate
+    repoIds: $repoIds
+    teamIds: $teamIds
+  ) {
     lineBaselinePct
     lineDays
     __typename
@@ -2511,7 +2526,7 @@ const registeredCatalogValuesDocument = `query CatalogValues($orgId: String!, $d
 // repository-scope read the agent-context runtime performs: `catalog` with
 // the REPO dimension fixed in the document text. It is a separate operation
 // from registeredCatalogValuesDocument because each registered document
-// carries its own digest and routing row. Wire form captured under
+// carries its own digest. Wire form captured under
 // testdata/wire_capture/acr_repository_scopes_captured.graphql.
 const registeredAcrRepositoryScopesDocument = `query ACRRepositoryScopes($orgId: String!) {
   catalog(orgId: $orgId, dimension: REPO) {
@@ -4047,14 +4062,15 @@ func newDocumentDispatchHandler(getenv getenvFunc, routeMux *routeswitch.Mux, op
 // digestByOperation. The literal below is cmd/registrydump's second parse target: keep its exact shape
 // (`"<operation>": {digestHex(<constIdent>), ...}`). Empty = every operation accepts one text.
 var legacyDigestsByOperation = map[string][]string{
-	"aiAttributedPrs":      {digestHex(registeredAiAttributedPrsV1Document)},
-	"aiImpactSummary":      {digestHex(registeredAiImpactSummaryV1Document)},
-	"aiOpportunities":      {digestHex(registeredAiOpportunitiesV1Document)},
-	"aiWorkflowDrilldown":  {digestHex(registeredAiWorkflowDrilldownV1Document)},
-	"capacityForecast":     {digestHex(registeredCapacityForecastV1Document), digestHex(registeredCapacityForecastV2Document)},
-	"improveOpportunities": {digestHex(registeredImproveOpportunitiesV1Document)},
-	"operatingReview":      {digestHex(registeredOperatingReviewV1Document)},
-	"reviewEdges":          {digestHex(registeredReviewEdgesV1Document)},
+	"aiAttributedPrs":       {digestHex(registeredAiAttributedPrsV1Document)},
+	"aiImpactSummary":       {digestHex(registeredAiImpactSummaryV1Document)},
+	"aiOpportunities":       {digestHex(registeredAiOpportunitiesV1Document)},
+	"aiWorkflowDrilldown":   {digestHex(registeredAiWorkflowDrilldownV1Document)},
+	"capacityForecast":      {digestHex(registeredCapacityForecastV1Document), digestHex(registeredCapacityForecastV2Document)},
+	"coverageScopeBaseline": {digestHex(registeredCoverageScopeBaselineV1Document)},
+	"improveOpportunities":  {digestHex(registeredImproveOpportunitiesV1Document)},
+	"operatingReview":       {digestHex(registeredOperatingReviewV1Document)},
+	"reviewEdges":           {digestHex(registeredReviewEdgesV1Document)},
 }
 
 // buildOperationByDigest is the reverse index digest -> operation over every accepted text: each operation's

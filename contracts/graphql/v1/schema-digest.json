@@ -1,10 +1,11 @@
 {
   "_comment": [
     "The canonical schema digest of schema.graphql in this revision, pinned so a",
-    "change to the SDL cannot land silently. Every go_api_routing_state row is",
-    "keyed by this value: when it moves, EVERY existing row becomes unreachable",
-    "and both planes fall back to Python without erroring. That happened on",
-    "2026-09-01 and went unnoticed for six days.",
+    "change to the SDL cannot land silently. Until CHAOS-8702 every",
+    "go_api_routing_state row was keyed by this value, and moving it darkened",
+    "every operation without an error (2026-09-01, unnoticed for six days).",
+    "That table is dropped (alembic 0147, CHAOS-8706); the pin still names the",
+    "schema that proof receipts and acr vendoring were made against.",
     "",
     "ci/check_go_api_routing_digest.py fails when this value does not match the",
     "digest computed from schema.graphql, and again when the value is not",

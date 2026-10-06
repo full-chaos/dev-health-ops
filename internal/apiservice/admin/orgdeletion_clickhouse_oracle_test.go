@@ -190,4 +190,8 @@ var clickHouseOrgTablesAfterThePythonFreeze = map[string]string{
 	// It is keyed by org_id and the daily worker writes it directly, so an
 	// organization's evidence rows must go when the organization is deleted.
 	"work_item_blocked_durations_daily": "104_work_item_blocked_durations.sql",
+	// The ClickHouse record of the daily run state (CHAOS-8710). Keyed by
+	// org_id and written by the daily worker, so an organization's marker rows
+	// must go when the organization is deleted.
+	"daily_metrics_run_marker": "105_daily_metrics_run_marker.sql",
 }

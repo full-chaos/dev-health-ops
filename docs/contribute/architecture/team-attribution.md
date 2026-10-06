@@ -1721,6 +1721,8 @@ durations, and co-occurrence bridges, but they are not the owning team source.
   `014_work_graph.sql`) feeding `work_unit_investments.structural_evidence_json`'s `prs` array
   (§0.4 CHAOS-2416 bullet) — it is not read by the team-attribution resolver at all. Both answer
   "which table carries the cross-provider link," for different readers.
+  For the entity tree, `work_graph_issue_pr` is the issue <> pull request link of record; its
+  `provenance` tier ranks native > explicit_text > heuristic, and a consumer names the tier.
 - **`git_pull_requests` is not a work item and carries no `work_item_id`.** It is the raw
   git-log-sourced PR fact table (`000_raw_tables.sql`, tenant-scoped by `org_id` since migration
   `027`) used for git-side PR metrics (review load, cycle time from the git side) — with no

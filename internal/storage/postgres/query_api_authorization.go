@@ -27,9 +27,6 @@ import (
 // is the completeness proof: it drives each of these paths as the role.
 //
 // Reads:
-//   - go_api_routing_state: read by no code of this build (CHAOS-8702). It stays here only until CHAOS-8706 drops the table:
-//     an older build, the rollback window, still reads it, and the posture check refuses a role that holds a privilege
-//     the manifest does not declare.
 //   - go_api_class_decision: routeswitch.ClassDecisionSwitch.Enabled, the MCP listener's and the class-row gate's read.
 //   - go_api_proof_orgs: /query/proof-write's org allowlist (CHAOS-7096) --
 //     a per-request lookup keyed on the authenticated claims' OrgID, checked
@@ -95,7 +92,6 @@ func queryAPIPosture() RolePosture {
 			{"scheduled_jobs", true, true, false},
 			{"report_runs", true, false, false},
 			{"worker_job_outbox", true, false, false},
-			{"go_api_routing_state", false, false, false},
 			{"go_api_proof_orgs", false, false, false},
 			{"go_api_class_decision", false, false, false},
 			{"sync_configurations", false, false, false},

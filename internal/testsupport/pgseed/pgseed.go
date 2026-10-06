@@ -89,20 +89,6 @@ INSERT INTO integration_credentials (id, org_id, provider, name, is_active, crea
 VALUES ($1::uuid, $2, $3, 'credential-' || $1::text, true, now(), now())`, id, orgID, provider)
 }
 
-// RoutingState upserts the go_api_routing_state row for one (schema digest, document digest,
-// operation) triple in the given mode, registering the candidate build the row's foreign key needs.
-func RoutingState(ctx context.Context, t testing.TB, pool *pgxpool.Pool, schemaDigest, documentDigest, operation, mode string) {
-	t.Helper()
-	exec(ctx, t, pool, "go_api candidate build", `
-INSERT INTO go_api_candidate_build (schema_digest, document_digest, selected_operation, candidate_build)
-VALUES ($1, $2, $3, 'test-build') ON CONFLICT DO NOTHING`, schemaDigest, documentDigest, operation)
-	exec(ctx, t, pool, "go_api routing state", `
-INSERT INTO go_api_routing_state (schema_digest, document_digest, selected_operation, current_candidate_build, owner, mode)
-VALUES ($1, $2, $3, 'test-build', 'python', $4)
-ON CONFLICT (schema_digest, document_digest, selected_operation) DO UPDATE SET mode = $4`,
-		schemaDigest, documentDigest, operation, mode)
-}
-
 // ClassDecision upserts the go_api_class_decision row of one MCP class operation (CHAOS-8735): the single,
 // digest-free decision of the root.
 func ClassDecision(ctx context.Context, t testing.TB, pool *pgxpool.Pool, operation, mode string) {

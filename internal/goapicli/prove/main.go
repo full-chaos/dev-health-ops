@@ -739,10 +739,8 @@ func emitReport(f flags, registry goapiproof.RegistryView, builds goapiproof.Pro
 	// it is the count that says whether anything got past the preconditions
 	// at all, and "nothing was admissible" reads nothing like "everything
 	// matched" once it is on the line.
-	// stale_routing_rows is printed even at zero, like every other counter
-	// here: "no row was stale" and "nobody looked" must not read alike.
-	fmt.Printf("go-api-prove: attempted=%d admitted=%d executed=%d refused=%d receipts_written=%d stale_routing_rows=%d\n",
-		summary.Attempted, summary.Admitted, summary.Executed, summary.Refused, summary.ReceiptsWritten, summary.StaleRoutingRows)
+	fmt.Printf("go-api-prove: attempted=%d admitted=%d executed=%d refused=%d receipts_written=%d\n",
+		summary.Attempted, summary.Admitted, summary.Executed, summary.Refused, summary.ReceiptsWritten)
 	proofURL := f.proofURL
 	if proofURL == "" {
 		proofURL = "(none: shadow-mode operations cannot be measured in this deployment)"

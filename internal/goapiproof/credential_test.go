@@ -1093,12 +1093,9 @@ func TestTheGuardsThisChangeAddsAreKillable(t *testing.T) {
 		edge.goBuild = runner.Registry.BuildIdentity
 		runner.Routing["featureFlags"] = RoutingRow{Mode: "canary", CandidateBuild: "0000000000000000000000000000000000000000"}
 
-		outcomes, summary, err := runner.Run(context.Background())
+		outcomes, _, err := runner.Run(context.Background())
 		if err != nil {
 			t.Fatalf("Run: %v", err)
-		}
-		if summary.StaleRoutingRows != 1 {
-			t.Fatalf("the stale row was not COUNTED: %d", summary.StaleRoutingRows)
 		}
 		if outcomes[0].RoutingRowBuild == "" {
 			t.Fatal("the stale row was not RECORDED on the outcome")

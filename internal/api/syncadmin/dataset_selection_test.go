@@ -318,3 +318,18 @@ func TestDecodeSyncConfigUpdateReadsTheBaseList(t *testing.T) {
 		}
 	}
 }
+
+// TestIncidentGateTargetsKeepEveryItemThatIsNotAMirroredString: the gate
+// input of the routes keeps an item that is not a string (the gate answers
+// it as it always did) and every item of a config with no integration.
+func TestIncidentGateTargetsKeepEveryItemThatIsNotAMirroredString(t *testing.T) {
+	integration := uuid.New()
+	stored := []pyjson.Value{"work-items", float64(7), "operational", nil}
+	whole := incidentGateTargets(&syncConfig{Provider: "jira", IntegrationID: &integration}, stored)
+	if want := []pyjson.Value{float64(7), nil}; !reflect.DeepEqual(whole, want) {
+		t.Errorf("whole-integration jira: %v, want %v (the two mirrored strings left out, the other items kept)", whole, want)
+	}
+	if none := incidentGateTargets(&syncConfig{Provider: "jira"}, stored); !reflect.DeepEqual(none, stored) {
+		t.Errorf("jira with no integration: %v, want every item %v", none, stored)
+	}
+}

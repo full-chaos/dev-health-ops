@@ -359,3 +359,85 @@ func TestAParentSaveGivesAChildOnlyWhatARequestAskedFor(t *testing.T) {
 		}
 	}
 }
+
+// TestASaveOfTheShownListKeepsAGatedRowOn pins a deliberate difference from
+// the save that rebuilt the rows from the submitted list. State: the
+// incidents row is on, the org has no canonical-incident feature, the stored
+// list does not name the gated target. The plan-time gate reads the rows, so
+// the whole configuration is not planned. A save of the shown list keeps the
+// row (the rows own the selection), so the plan stays ineligible until the
+// row goes off; the pre-gates accept the configuration before and after.
+// That one gated row stops the whole configuration is tracked in CHAOS-8837.
+func TestASaveOfTheShownListKeepsAGatedRowOn(t *testing.T) {
+	v := startCascadeVenue(t, false)
+	for _, testCase := range []struct {
+		provider, stored string
+		rows             []string
+	}{
+		{"jira", `["work-items"]`, []string{"work-items", "incidents"}},
+		{"gitlab", `["git"]`, []string{"commits", "incidents"}},
+	} {
+		parent := v.seed(testCase.provider, testCase.stored, testCase.rows)
+		before := v.read(testCase.provider+" whole integration, before the save", parent)
+		shown := v.shown(parent.config)
+		if status, body := v.call("PATCH", "/api/v1/admin/sync-configs/"+parent.config.String(), `{"sync_targets":`+shown+`}`); status != http.StatusOK {
+			t.Fatalf("%s: the save of the shown list %s: %d %s", testCase.provider, shown, status, body)
+		}
+		if rows := v.rows(parent.integration); !strings.Contains(rows, "incidents=true") {
+			t.Errorf("%s: the rows after a save of the shown list %s are [%s]: the save switched the incidents row off", testCase.provider, shown, rows)
+		}
+		after := v.read(testCase.provider+" whole integration, after the save of the shown list", parent)
+		for label, result := range map[string]cascadeResult{"before": before, "after": after} {
+			if result.SyncNow != http.StatusAccepted || result.Backfill != http.StatusAccepted || result.Scheduled != schedsync.OccurrenceMinted {
+				t.Errorf("%s, %s the save: a pre-gate refuses the configuration: %+v", testCase.provider, label, result)
+			}
+			if result.Plan != "ineligible" {
+				t.Errorf("%s, %s the save: the plan is %q, want ineligible (the incidents row is on and the org has no feature)", testCase.provider, label, result.Plan)
+			}
+		}
+	}
+}
+
+// TestAGatedTargetOfAConfigurationWithNoIntegrationIsStillRefused: a
+// configuration with no integration has no dataset rows, so its stored list
+// is its selection and no item of it is a mirror. A gated target in it
+// refuses Sync now and the scheduled run when the org has no feature.
+func TestAGatedTargetOfAConfigurationWithNoIntegrationIsStillRefused(t *testing.T) {
+	v := startCascadeVenue(t, false)
+	for _, testCase := range []struct{ provider, stored string }{
+		{"jira", `["work-items","operational"]`},
+		{"gitlab", `["git","incidents"]`},
+	} {
+		v.sequence++
+		one := cascadeSeeded{config: uuid.New(), job: uuid.New()}
+		v.exec(`INSERT INTO sync_configurations (id, org_id, name, provider, sync_targets, sync_options, is_active, planner_managed, created_at, updated_at)
+VALUES ($1, $2, $3, $4, $5::json, '{"schedule_cron":"0 * * * *"}'::json, true, false, now(), now())`,
+			one.config, v.org, fmt.Sprintf("no integration %d", v.sequence), testCase.provider, testCase.stored)
+		v.exec(`INSERT INTO scheduled_jobs (id,org_id,name,sync_config_id,job_type,schedule_cron,timezone,status,is_running,created_at,updated_at)
+VALUES ($1::uuid,$2,'job-'||$1::text,$3::uuid,'sync','0 * * * *','UTC',1,FALSE,now(),now())`, one.job, v.org, one.config)
+		path := "/api/v1/admin/sync-configs/" + one.config.String()
+		if status, body := v.call("POST", path+"/trigger", ""); status != http.StatusForbidden {
+			t.Errorf("%s with no integration, stored %s: Sync now answers %d %.120s, want 403", testCase.provider, testCase.stored, status, body)
+		}
+		if status, body := v.call("PATCH", path, `{"initial_sync_depth":30}`); status != http.StatusForbidden {
+			t.Errorf("%s with no integration, stored %s: a save with no list answers %d %.120s, want 403", testCase.provider, testCase.stored, status, body)
+		}
+		when := time.Date(2026, 10, 7, 0, 0, 0, 0, time.UTC).Add(time.Duration(v.sequence) * time.Hour)
+		digest := sha256.Sum256([]byte(one.config.String()))
+		tx, err := v.pool.Begin(context.Background())
+		if err != nil {
+			t.Fatal(err)
+		}
+		outcome, err := schedsync.NewOccurrenceCoordinator().Handoff(context.Background(), tx, schedsync.Occurrence{
+			ID: "sha256:" + hex.EncodeToString(digest[:]), IdentityVersion: schedsync.OccurrenceIdentityVersion,
+			ConfigID: one.config.String(), OrgID: v.org, JobID: one.job.String(), ScheduledFor: when, ObservedAt: when,
+		})
+		_ = tx.Rollback(context.Background())
+		if err != nil {
+			t.Fatalf("%s: handoff: %v", testCase.provider, err)
+		}
+		if outcome != schedsync.OccurrenceRefusedFeatureDisabled {
+			t.Errorf("%s with no integration, stored %s: the scheduled run is %v, want refused_feature_disabled", testCase.provider, testCase.stored, outcome)
+		}
+	}
+}

@@ -40,6 +40,14 @@ const (
 	// fails and every work-item effect is lost. The dataset option
 	// comments_row_budget may only LOWER it.
 	jiraAtlassianDefaultCommentsRowBudget = 50_000
+	// jiraAtlassianCommentsTimeShareDivisor sets the TIME budget of comment
+	// reads (CHAOS-8806): they stop when the time left to the context deadline
+	// the unit carries is below 1/N of the work window (the span from the
+	// start of Collect to that deadline). Comment reads cost one serial request
+	// per issue, and a deadline is terminal for the unit, so the other half of
+	// the window is the reserve for the rest of the loop (worklogs, dev-status,
+	// the remaining issues' changelogs), the effect build and the write.
+	jiraAtlassianCommentsTimeShareDivisor = 2
 )
 
 // jiraAtlassianCommentsRowBudget is the per-unit interaction row budget: the
@@ -247,7 +255,14 @@ func (handler JiraAtlassianRouteHandler) Collect(
 	fetchComments := jiraOptionBool(claim, "fetch_comments", true)
 	commentsLimit := jiraOptionInt(claim, "comments_limit", jiraAtlassianDefaultCommentsLimit)
 	commentsBudget := jiraAtlassianCommentsRowBudget(claim)
-	commentsBudgetSkipped := 0
+	commentsBudgetSkipped, commentsTimeSkipped := 0, 0
+	// With no deadline on the context there is no time budget.
+	commentsStopAt, commentsHaveDeadline := time.Time{}, false
+	if deadline, ok := ctx.Deadline(); ok {
+		started := time.Now()
+		commentsStopAt = started.Add(deadline.Sub(started) / jiraAtlassianCommentsTimeShareDivisor)
+		commentsHaveDeadline = true
+	}
 	fetchWorklogs := jiraOptionBool(claim, "fetch_worklogs", false)
 	useGraphQL := jiraOptionBool(claim, "atlassian_gql_enabled", false)
 	fetchBoardSprints := jiraOptionBool(claim, "fetch_board_sprints", false)
@@ -412,7 +427,11 @@ func (handler JiraAtlassianRouteHandler) Collect(
 			// grows past it: the issue limit is the smaller of comments_limit
 			// and what is left of the budget. Issues arrive ORDER BY updated
 			// DESC, so the newest issues get their comments first.
-			if remaining := commentsBudget - len(rows.Interactions); remaining <= 0 {
+			// The TIME budget is checked first, with the same effect: skip the
+			// read, count it, keep the work item and the rest of the loop.
+			if commentsHaveDeadline && time.Now().After(commentsStopAt) {
+				commentsTimeSkipped++
+			} else if remaining := commentsBudget - len(rows.Interactions); remaining <= 0 {
 				commentsBudgetSkipped++
 			} else {
 				issueLimit := commentsLimit
@@ -592,14 +611,29 @@ func (handler JiraAtlassianRouteHandler) Collect(
 	if len(optionalIncomplete) > 0 {
 		result["incomplete"] = optionalIncomplete
 	}
-	if commentsBudgetSkipped > 0 {
+	if commentsBudgetSkipped > 0 || commentsTimeSkipped > 0 {
 		// CHAOS-8806: NOT part of "incomplete": a held watermark would re-read the
 		// same window, reach the same budget and never move. Counts only.
-		result["incomplete_nonholding"] = []string{"comments:budget:" + strconv.Itoa(commentsBudgetSkipped)}
+		markers := make([]string, 0, 2)
+		cause := ""
+		if commentsBudgetSkipped > 0 {
+			markers = append(markers, "comments:budget:"+strconv.Itoa(commentsBudgetSkipped))
+			cause = "rows"
+		}
+		if commentsTimeSkipped > 0 {
+			markers = append(markers, "comments:time:"+strconv.Itoa(commentsTimeSkipped))
+			if cause != "" {
+				cause += "+"
+			}
+			cause += "time"
+		}
+		result["incomplete_nonholding"] = markers
 		result["comments_budget_skipped_issues"] = commentsBudgetSkipped
-		slog.Warn("providersync.jira.comments_row_budget_reached",
-			"org_id", claim.OrgID, "unit_id", claim.ID, "budget", commentsBudget,
-			"interaction_rows", len(rows.Interactions), "skipped_issues", commentsBudgetSkipped)
+		result["comments_time_skipped_issues"] = commentsTimeSkipped
+		slog.Warn("providersync.jira.comments_budget_reached",
+			"org_id", claim.OrgID, "unit_id", claim.ID, "cause", cause, "row_budget", commentsBudget,
+			"interaction_rows", len(rows.Interactions), "skipped_issues_rows", commentsBudgetSkipped,
+			"skipped_issues_time", commentsTimeSkipped)
 	}
 	rows.MembershipCreation.result("jira", result)
 	result = attachWorkItemTeamInheritanceObservation(result, handler.Derived)

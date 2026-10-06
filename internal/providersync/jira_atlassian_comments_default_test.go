@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"log/slog"
 	"net/http"
 	"strconv"
 	"strings"
@@ -47,9 +48,14 @@ func jiraManyCommentsDoer(t *testing.T, total int, commentRequests *int) jiraAtl
 
 func collectJiraComments(t *testing.T, claim Claim, doer jiraAtlassianDoerFunc) CompleteRouteBatch {
 	t.Helper()
+	return collectJiraCommentsCtx(t, context.Background(), claim, doer)
+}
+
+func collectJiraCommentsCtx(t *testing.T, ctx context.Context, claim Claim, doer jiraAtlassianDoerFunc) CompleteRouteBatch {
+	t.Helper()
 	client := jiraWorkItemsTestClient(t, fakehttp.Client(doer), providerfoundation.LeaseGuardFunc(func(context.Context) error { return nil }))
 	batch, err := jiraAtlassianCompleteHandler(t).Collect(
-		context.Background(), claim, providerfoundation.Credential{}, client,
+		ctx, claim, providerfoundation.Credential{}, client,
 		time.Date(2026, 8, 10, 12, 0, 0, 123456000, time.UTC),
 	)
 	if err != nil {
@@ -148,6 +154,23 @@ type jiraBudgetDoer struct {
 	comments  int
 	worklogs  int
 	failIssue string
+	// commentDelay is slept (honouring the request context) in every comment
+	// read; slowWorklog is slept in the worklog read of one issue key.
+	commentDelay   time.Duration
+	slowWorklog    string
+	slowWorklogFor time.Duration
+}
+
+func jiraSleep(ctx context.Context, delay time.Duration) error {
+	if delay <= 0 {
+		return nil
+	}
+	select {
+	case <-time.After(delay):
+		return nil
+	case <-ctx.Done():
+		return ctx.Err()
+	}
 }
 
 func (doer *jiraBudgetDoer) Do(request *http.Request) (*http.Response, error) {
@@ -166,10 +189,18 @@ func (doer *jiraBudgetDoer) Do(request *http.Request) (*http.Response, error) {
 		return respond(`{"values":[],"total":0,"isLast":true}`)
 	case strings.HasSuffix(path, "/worklog"):
 		doer.worklogs++
+		if strings.Contains(path, "/"+doer.slowWorklog+"/") {
+			if err := jiraSleep(request.Context(), doer.slowWorklogFor); err != nil {
+				return nil, err
+			}
+		}
 		return respond(`{"startAt":0,"maxResults":100,"total":0,"worklogs":[]}`)
 	case strings.HasSuffix(path, "/comment"):
 		doer.comments++
 		key := strings.TrimSuffix(strings.TrimPrefix(path, "/rest/api/3/issue/"), "/comment")
+		if err := jiraSleep(request.Context(), doer.commentDelay); err != nil {
+			return nil, err
+		}
 		if key == doer.failIssue {
 			return nil, context.DeadlineExceeded
 		}
@@ -284,5 +315,93 @@ func TestJiraAtlassianCommentsFetchErrorStillHoldsWatermarkNextToBudget(t *testi
 	}
 	if rows := jiraInteractionRows(t, batch); len(rows) != 3 {
 		t.Fatalf("rows=%d want=3", len(rows))
+	}
+}
+
+// The second vet's case (CHAOS-8806): +1 serial comment request per issue can
+// run the unit into its deadline, which is terminal and loses every work item.
+// A TIME budget stops the comment reads at half of the work window.
+func TestJiraAtlassianCommentsTimeBudgetKeepsUnitBeforeDeadline(t *testing.T) {
+	doer := &jiraBudgetDoer{t: t, issues: 60, perIssue: 3, commentDelay: 25 * time.Millisecond}
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	started := time.Now()
+	batch := collectJiraCommentsCtx(t, ctx, jiraCommentsClaim(nil), doer.Do)
+	if time.Since(started) >= time.Second {
+		t.Fatalf("unit ran into its deadline: %v", time.Since(started))
+	}
+	if got := jiraWorkItemEffectRows(t, batch); got != 60 {
+		t.Fatalf("work item rows=%d want=60", got)
+	}
+	rows := len(jiraInteractionRows(t, batch))
+	if rows == 0 || rows >= 60*3 {
+		t.Fatalf("interaction rows=%d want some, not all", rows)
+	}
+	skipped, _ := batch.Result["comments_time_skipped_issues"].(int)
+	markers, _ := batch.Result["incomplete_nonholding"].([]string)
+	if skipped == 0 || skipped+rows/3 != 60 || len(markers) != 1 || markers[0] != fmt.Sprintf("comments:time:%d", skipped) {
+		t.Fatalf("skipped=%d rows=%d markers=%#v", skipped, rows, markers)
+	}
+	if _, held := batch.Result["incomplete"]; held || batch.Watermark == nil {
+		t.Fatalf("time budget held the watermark: %#v", batch.Result["incomplete"])
+	}
+}
+
+func TestJiraAtlassianCommentsNoDeadlineMeansNoTimeBudget(t *testing.T) {
+	doer := &jiraBudgetDoer{t: t, issues: 20, perIssue: 3, commentDelay: 5 * time.Millisecond}
+	batch := collectJiraComments(t, jiraCommentsClaim(nil), doer.Do)
+	if rows := len(jiraInteractionRows(t, batch)); rows != 60 {
+		t.Fatalf("rows=%d want=60", rows)
+	}
+	if _, present := batch.Result["incomplete_nonholding"]; present {
+		t.Fatalf("marker without budget: %#v", batch.Result["incomplete_nonholding"])
+	}
+}
+
+// Both budgets apply in one unit: issues 4-5 meet the row budget, then the
+// worklog read of issue 5 is slow and passes half of the window, so issues 6+
+// meet the time budget. Every work item still lands.
+func TestJiraAtlassianCommentsBothBudgetsAndWarnLine(t *testing.T) {
+	var logs strings.Builder
+	previous := slog.Default()
+	slog.SetDefault(slog.New(slog.NewTextHandler(&logs, nil)))
+	defer slog.SetDefault(previous)
+
+	doer := &jiraBudgetDoer{t: t, issues: 20, perIssue: 3, slowWorklog: "OPS-5", slowWorklogFor: 600 * time.Millisecond}
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	claim := jiraCommentsClaim(map[string]any{"comments_row_budget": 9, "fetch_worklogs": true})
+	batch := collectJiraCommentsCtx(t, ctx, claim, doer.Do)
+	if rows := len(jiraInteractionRows(t, batch)); rows != 9 {
+		t.Fatalf("rows=%d want=9", rows)
+	}
+	if got := jiraWorkItemEffectRows(t, batch); got != 20 {
+		t.Fatalf("work item rows=%d want=20", got)
+	}
+	markers, _ := batch.Result["incomplete_nonholding"].([]string)
+	if fmt.Sprint(markers) != "[comments:budget:2 comments:time:15]" {
+		t.Fatalf("markers=%#v", markers)
+	}
+	if batch.Watermark == nil {
+		t.Fatal("watermark held")
+	}
+	line := logs.String()
+	for _, want := range []string{"level=WARN", "providersync.jira.comments_budget_reached", "cause=rows+time", "skipped_issues_rows=2", "skipped_issues_time=15", "interaction_rows=9"} {
+		if !strings.Contains(line, want) {
+			t.Fatalf("WARN line lacks %q: %s", want, line)
+		}
+	}
+	if strings.Contains(line, "commenter") {
+		t.Fatalf("WARN line carries comment content: %s", line)
+	}
+}
+
+// Survivor of the second vet: an explicit comments_limit of 0 means "no
+// per-issue cap", so only the row budget bounds the read.
+func TestJiraAtlassianCommentsExplicitZeroLimitIsStillBoundedByBudget(t *testing.T) {
+	doer := &jiraBudgetDoer{t: t, issues: 4, perIssue: 5}
+	batch := collectJiraComments(t, jiraCommentsClaim(map[string]any{"comments_limit": 0, "comments_row_budget": 7}), doer.Do)
+	if rows := len(jiraInteractionRows(t, batch)); rows != 7 {
+		t.Fatalf("rows=%d want=7", rows)
 	}
 }

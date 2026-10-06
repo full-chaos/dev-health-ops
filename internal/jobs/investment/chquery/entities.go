@@ -693,7 +693,9 @@ func (reader *Reader) FetchExistingInvestmentKeys(
                 categorization_input_hash,
                 argMax(categorization_status, computed_at) AS latest_status,
                 argMax(categorization_run_id, computed_at) AS latest_run_id,
-                argMax(evidence_quote_count, computed_at) AS latest_quote_count
+                -- tuple() keeps a NULL: a bare argMax skips rows whose value is NULL and
+                -- would return an OLDER row's count for the unit's latest row.
+                (argMax(tuple(evidence_quote_count), computed_at)).1 AS latest_quote_count
             FROM work_unit_investments
             WHERE org_id = {org_id:String}
               AND work_unit_id IN {work_unit_ids:Array(String)}

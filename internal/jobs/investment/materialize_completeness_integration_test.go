@@ -211,7 +211,7 @@ func TestCHAOS8788CrashedRewriteOfAnOlderUnitIsHealedByTheNextRequest(t *testing
 		t.Fatalf("step 0 view = %+v, want run-old with 1 quote", got)
 	}
 	var recorded *uint32
-	if err := h.conn.QueryRow(h.ctx, `SELECT argMax(evidence_quote_count, computed_at) FROM work_unit_investments
+	if err := h.conn.QueryRow(h.ctx, `SELECT (argMax(tuple(evidence_quote_count), computed_at)).1 FROM work_unit_investments
 		WHERE org_id = ?`, hierarchyCascadeTestOrg).Scan(&recorded); err != nil || recorded == nil || *recorded != 1 {
 		t.Fatalf("step 0: recorded evidence_quote_count = %v, err=%v, want 1", recorded, err)
 	}
@@ -414,5 +414,127 @@ func TestCHAOS8788UnrecordedAndZeroQuoteUnitsAreComplete(t *testing.T) {
 	}
 	if stats.SkippedExisting != 1 {
 		t.Fatalf("a unit that recorded 0 quotes and shows 0 was rewritten (skipped %d, want 1)", stats.SkippedExisting)
+	}
+}
+
+// TestCHAOS8788VisibleQuoteCountEqualsTheProductReaderBeforeAndAfterAMerge: the
+// count the skip check uses (chquery.FetchVisibleQuoteCounts) must be the number
+// of quotes the PRODUCT reader (investmentexplain FetchWorkUnitInvestmentQuotes)
+// returns for the row, at every moment: before and after `OPTIMIZE ... FINAL`,
+// and with physical duplicates of one quote of one run. Both filter on the row's
+// run id FIRST, then dedupe on (work_unit_id, source_id, quote), neither uses FINAL.
+func TestCHAOS8788VisibleQuoteCountEqualsTheProductReaderBeforeAndAfterAMerge(t *testing.T) {
+	h := newCompletenessHarness(t)
+	mock := categorize.MockProvider{}
+	h.setEvidence("1")
+	if _, err := h.run(h.materializer(h.conn, mock), h.cfg("run-old", h.within, false)); err != nil {
+		t.Fatal(err)
+	}
+	compare := func(state string) {
+		t.Helper()
+		seen := h.observe()
+		counts, err := h.reader.FetchVisibleQuoteCounts(h.ctx, hierarchyCascadeTestOrg,
+			[]chquery.UnitRun{{WorkUnitID: seen.unit, RunID: seen.investmentRun}})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if int(counts[seen.unit]) != seen.quotes {
+			t.Fatalf("%s: the skip check counts %d, the product reader returns %d for the row's run", state, counts[seen.unit], seen.quotes)
+		}
+	}
+	compare("steady state")
+
+	// Physical duplicates of the SAME quote of the SAME run (two inserts, no merge):
+	// one visible quote for both.
+	if err := h.conn.Exec(h.ctx, `INSERT INTO work_unit_investment_quotes
+		(work_unit_id, quote, source_type, source_id, computed_at, categorization_run_id, org_id)
+		SELECT work_unit_id, quote, source_type, source_id, computed_at + INTERVAL 1 SECOND, categorization_run_id, org_id
+		FROM work_unit_investment_quotes WHERE org_id = ?`, hierarchyCascadeTestOrg); err != nil {
+		t.Fatal(err)
+	}
+	compare("unmerged physical duplicate of one quote")
+
+	// A later run's equal-text quote beside the old row's quote: BEFORE the merge
+	// the old quote is still there for both; AFTER it, gone for both.
+	if _, err := h.run(h.materializer(h.crashing(), mock), h.cfg("run-force-1", h.within.Add(time.Hour), true)); err == nil {
+		t.Fatal("the forced rewrite succeeded, want the injected investment write failure")
+	}
+	compare("before OPTIMIZE ... FINAL")
+	if before := h.observe(); before.quotes != 1 {
+		t.Fatalf("before the merge the product reader returns %d quotes, want 1", before.quotes)
+	}
+	h.merge()
+	compare("after OPTIMIZE ... FINAL")
+	if after := h.observe(); after.quotes != 0 {
+		t.Fatalf("after the merge the product reader returns %d quotes, want 0", after.quotes)
+	}
+}
+
+// Which runs write NULL after migration 106: only a run that does not persist
+// evidence snippets (the count is then unknown). A run that persists snippets
+// but produced no quote (here: too little evidence text, a fallback outcome)
+// records 0, never NULL.
+func TestCHAOS8788RunWithoutQuotesRecordsZeroAndWithoutSnippetsRecordsNull(t *testing.T) {
+	h := newCompletenessHarness(t)
+	mock := categorize.MockProvider{}
+	for _, id := range []string{"Q1", "Q2"} {
+		if err := h.conn.Exec(h.ctx, `ALTER TABLE work_items UPDATE description = 'short' WHERE work_item_id = ? SETTINGS mutations_sync = 2`, id); err != nil {
+			t.Fatal(err)
+		}
+	}
+	recorded := func() (*uint32, string) {
+		t.Helper()
+		var count *uint32
+		var status string
+		if err := h.conn.QueryRow(h.ctx, `SELECT (argMax(tuple(evidence_quote_count), computed_at)).1, argMax(categorization_status, computed_at)
+			FROM work_unit_investments WHERE org_id = ?`, hierarchyCascadeTestOrg).Scan(&count, &status); err != nil {
+			t.Fatal(err)
+		}
+		return count, status
+	}
+	if _, err := h.run(h.materializer(h.conn, mock), h.cfg("run-fallback", h.within, false)); err != nil {
+		t.Fatal(err)
+	}
+	if count, status := recorded(); status == "ok" || count == nil || *count != 0 {
+		t.Fatalf("a snippet-persisting run with no quote recorded count=%v status=%s, want 0 and a fallback status", count, status)
+	}
+	noSnippets := h.cfg("run-no-snippets", h.within.Add(time.Hour), true)
+	noSnippets.PersistEvidenceSnippets = false
+	if _, err := h.run(h.materializer(h.conn, mock), noSnippets); err != nil {
+		t.Fatal(err)
+	}
+	if count, _ := recorded(); count != nil {
+		t.Fatalf("a run that does not persist snippets recorded %d, want NULL (unknown)", *count)
+	}
+}
+
+// The skip lookup returns NULL for a unit whose LATEST row has no recorded count,
+// not the count of an older row of the same key: a bare argMax skips NULL values
+// and would resurrect the older count (the query reads the tuple instead).
+func TestCHAOS8788LatestRowWithoutACountIsNullNotTheOlderCount(t *testing.T) {
+	h := newCompletenessHarness(t)
+	mock := categorize.MockProvider{}
+	h.setEvidence("1")
+	if _, err := h.run(h.materializer(h.conn, mock), h.cfg("run-old", h.within, false)); err != nil {
+		t.Fatal(err)
+	}
+	noSnippets := h.cfg("run-no-snippets", h.within.Add(time.Hour), true) // same evidence, same key
+	noSnippets.PersistEvidenceSnippets = false
+	if _, err := h.run(h.materializer(h.conn, mock), noSnippets); err != nil {
+		t.Fatal(err)
+	}
+	var unit, hash, model string
+	if err := h.conn.QueryRow(h.ctx, `SELECT work_unit_id, categorization_input_hash, categorization_model_version
+		FROM work_unit_investments WHERE org_id = ? LIMIT 1`, hierarchyCascadeTestOrg).Scan(&unit, &hash, &model); err != nil {
+		t.Fatal(err)
+	}
+	existing, err := h.reader.FetchExistingInvestmentKeys(h.ctx, hierarchyCascadeTestOrg,
+		[]chquery.InvestmentKey{{WorkUnitID: unit, InputHash: hash}}, model)
+	if err != nil {
+		t.Fatal(err)
+	}
+	found, ok := existing[chquery.InvestmentKey{WorkUnitID: unit, InputHash: hash}]
+	if !ok || found.RunID != "run-no-snippets" || found.QuoteCount != nil {
+		t.Fatalf("lookup = %+v (found %v), want the latest run's row with a NULL count, not the older run's 1", found, ok)
 	}
 }

@@ -66,7 +66,7 @@ func TestWorkUnitInvestmentQuoteCountIsNullableAndRerunnable(t *testing.T) {
 	read := func(unit string) *uint32 {
 		t.Helper()
 		var count *uint32
-		if err := conn.QueryRow(ctx, `SELECT argMax(evidence_quote_count, computed_at) FROM work_unit_investments
+		if err := conn.QueryRow(ctx, `SELECT (argMax(tuple(evidence_quote_count), computed_at)).1 FROM work_unit_investments
 			WHERE org_id = 'org' AND work_unit_id = ?`, unit).Scan(&count); err != nil {
 			t.Fatal(err)
 		}

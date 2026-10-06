@@ -799,10 +799,10 @@ WHERE config.id = $1::uuid AND config.org_id = $2 AND integration.is_active`, oc
 	// work-item family row, ask once whether this integration ever finished
 	// a work-items unit, so the planner can tell "stopped" from "never opted
 	// in". Skipped for every plan that has a family row.
-	workItemUnitsRanBefore := false
+	var lastWorkItemSuccessAt *time.Time
 	scheduledParent := plannerManaged && explicitDatasetKeys == nil
-	if scheduledParent && PlanNeedsWorkItemRanBefore(provider, true, datasets) {
-		workItemUnitsRanBefore = loadWorkItemUnitsRanBefore(ctx, tx, provider, orgID, integrationID)
+	if scheduledParent && PlanNeedsWorkItemLastSuccess(provider, true, datasets) {
+		lastWorkItemSuccessAt = loadWorkItemLastSuccessAt(ctx, tx, provider, orgID, integrationID)
 	}
 	watermarks, err := loadPlanWatermarks(ctx, tx, orgID, sources, datasets)
 	if err != nil {
@@ -832,8 +832,8 @@ WHERE config.id = $1::uuid AND config.org_id = $2 AND integration.is_active`, oc
 			Now: occurrence.ScheduledFor.UTC(), Before: before, Since: since,
 			IntegrationDepthDays: depth, TierBackfillDaysCap: tierCap,
 			WatermarkOverlap: watermarkOverlap, Sources: sources, Datasets: datasets, Watermarks: watermarks,
-			PlannerManagedParent:   scheduledParent,
-			WorkItemUnitsRanBefore: workItemUnitsRanBefore,
+			PlannerManagedParent:  scheduledParent,
+			LastWorkItemSuccessAt: lastWorkItemSuccessAt,
 		},
 		provider:               provider,
 		configuredCredentialID: credentialID,
@@ -1727,50 +1727,52 @@ func syncTargetsRequireCanonicalIncident(targets []string) bool {
 	return false
 }
 
-// workItemUnitsRanBeforeSQL answers "did this integration ever finish a
-// work-items unit with status success". The (org_id, integration_id) equality
-// pair is the leading prefix of ix_sync_run_units_coverage_scan (alembic
-// 0076: org_id, integration_id, source_id, dataset_key, before_at), so the
-// EXISTS probe reads only this integration's unit rows and stops at the first
-// match. It runs only for a plan with no enabled work-item family row, never
-// for a healthy plan.
-const workItemUnitsRanBeforeSQL = `
-SELECT EXISTS (
-  SELECT 1 FROM public.sync_run_units
-  WHERE org_id = $1 AND integration_id = $2::uuid
-    AND dataset_key = ANY($3::text[]) AND status = 'success'
-)`
+// workItemLastSuccessSQL returns the time of the newest successful unit of
+// the work-item family for one integration, or NULL when there is none. The
+// (org_id, integration_id) equality pair is the leading prefix of
+// ix_sync_run_units_coverage_scan (alembic 0076: org_id, integration_id,
+// source_id, dataset_key, before_at), so the read is bounded by this one
+// integration's unit rows. It runs only for a plan with no enabled work-item
+// family row, never for a healthy plan.
+const workItemLastSuccessSQL = `
+SELECT max(updated_at) FROM public.sync_run_units
+WHERE org_id = $1 AND integration_id = $2::uuid
+  AND dataset_key = ANY($3::text[]) AND status = 'success'`
 
-// loadWorkItemUnitsRanBefore reads the CHAOS-8773 "ran before" fact on the
+// loadWorkItemLastSuccessAt reads the CHAOS-8773 recency fact on the
 // coordinator transaction (SELECT on sync_run_units is in the coordinator
 // posture, domain_authorization.go coordinatorPosture). The fact only decides
 // whether a WARN is written, so a failed read must never fail the plan: the
 // statement runs in a savepoint, which keeps the coordinator transaction
 // usable after a Postgres error, and a failure is logged by category only
-// (no error operand) and reads as "unknown", which is the quiet answer.
-func loadWorkItemUnitsRanBefore(ctx context.Context, tx pgx.Tx, provider, orgID, integrationID string) bool {
-	unavailable := func() bool {
+// (no error operand) and reads as "unknown" (nil), which is the quiet answer.
+func loadWorkItemLastSuccessAt(ctx context.Context, tx pgx.Tx, provider, orgID, integrationID string) *time.Time {
+	unavailable := func() *time.Time {
 		slog.Default().Warn("sync.materializer.work_item_ran_before_unavailable",
 			slog.String("provider", provider),
 			slog.String("org_id", orgID),
 			slog.String("integration_id", integrationID),
 			slog.String("error_category", "ran_before_query_failed"))
-		return false
+		return nil
 	}
 	savepoint, err := tx.Begin(ctx)
 	if err != nil {
 		return unavailable()
 	}
-	var ranBefore bool
-	if err := savepoint.QueryRow(ctx, workItemUnitsRanBeforeSQL, orgID, integrationID,
-		workitemcontract.FamilyDatasets()).Scan(&ranBefore); err != nil {
+	var lastSuccess *time.Time
+	if err := savepoint.QueryRow(ctx, workItemLastSuccessSQL, orgID, integrationID,
+		workitemcontract.FamilyDatasets()).Scan(&lastSuccess); err != nil {
 		_ = savepoint.Rollback(ctx)
 		return unavailable()
 	}
 	if err := savepoint.Commit(ctx); err != nil {
 		return unavailable()
 	}
-	return ranBefore
+	if lastSuccess != nil {
+		utc := lastSuccess.UTC()
+		lastSuccess = &utc
+	}
+	return lastSuccess
 }
 
 // loadPlanDatasets loads the enabled datasets a plan runs against.

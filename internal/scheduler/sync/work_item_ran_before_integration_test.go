@@ -8,11 +8,12 @@ import (
 	"log/slog"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/full-chaos/dev-health-ops/internal/workitemcontract"
 )
 
-// CHAOS-8773: the "ran before" fact is read from live sync_run_units rows by
+// CHAOS-8773: the recency fact is read from live sync_run_units rows by
 // the real materializer, through Materialize -> loadMaterializationPlan ->
 // PlannerInput -> BuildScheduledPlan. The fixture is a planner-managed github
 // parent whose only enabled dataset is "commits", so it has no work-item
@@ -28,13 +29,30 @@ func TestNativeMaterializerWorkItemFamilyStoppedSignalReadsLiveUnitHistory(t *te
 			name: "earlier successful work-items unit: count and WARN",
 			seed: func(t *testing.T, fixture materializerFixture) {
 				seedPriorSyncRunUnit(t, fixture, "work-items", "success", `{}`)
+				ageUnits(t, fixture, 3*24*time.Hour)
 			},
 			wantWarn: true,
+		},
+		{
+			name: "successful work-items unit 13 days old: count and WARN",
+			seed: func(t *testing.T, fixture materializerFixture) {
+				seedPriorSyncRunUnit(t, fixture, "work-items", "success", `{}`)
+				ageUnits(t, fixture, 13*24*time.Hour)
+			},
+			wantWarn: true,
+		},
+		{
+			name: "successful work-items unit 15 days old: count only",
+			seed: func(t *testing.T, fixture materializerFixture) {
+				seedPriorSyncRunUnit(t, fixture, "work-items", "success", `{}`)
+				ageUnits(t, fixture, 15*24*time.Hour)
+			},
 		},
 		{
 			name: "earlier successful alias unit: count and WARN",
 			seed: func(t *testing.T, fixture materializerFixture) {
 				seedPriorSyncRunUnit(t, fixture, "work-item-labels", "success", `{}`)
+				ageUnits(t, fixture, 3*24*time.Hour)
 			},
 			wantWarn: true,
 		},
@@ -179,33 +197,52 @@ VALUES ($1,'incremental',NULL,NULL,ARRAY['commits'],'manual')`,
 	}
 }
 
+// ageUnits dates every seeded unit age before the occurrence's scheduled time,
+// the "Now" the planner measures recency against.
+func ageUnits(t *testing.T, fixture materializerFixture, age time.Duration) {
+	t.Helper()
+	if _, err := fixture.pool.Exec(context.Background(),
+		`UPDATE sync_run_units SET updated_at = $1`, fixture.occurrence.ScheduledFor.Add(-age)); err != nil {
+		t.Fatal(err)
+	}
+}
+
 // The query itself, against rows of every shape that must and must not count.
-func TestLoadWorkItemUnitsRanBeforeLivePostgres(t *testing.T) {
+func TestLoadWorkItemLastSuccessAtLivePostgres(t *testing.T) {
 	fixture := startMaterializerPostgres(t)
 	ctx := context.Background()
 	const integrationID = "00000000-0000-4000-8000-000000001002"
-	ask := func(orgID, integration string) bool {
+	ask := func(orgID, integration string) *time.Time {
 		t.Helper()
 		tx, err := fixture.pool.Begin(ctx)
 		if err != nil {
 			t.Fatal(err)
 		}
 		defer func() { _ = tx.Rollback(ctx) }()
-		return loadWorkItemUnitsRanBefore(ctx, tx, "github", orgID, integration)
+		return loadWorkItemLastSuccessAt(ctx, tx, "github", orgID, integration)
 	}
-	if ask(fixture.occurrence.OrgID, integrationID) {
-		t.Fatal("no units yet: ran before must be false")
+	if got := ask(fixture.occurrence.OrgID, integrationID); got != nil {
+		t.Fatalf("no units yet: last success = %v, want nil", got)
 	}
 	seedPriorSyncRunUnit(t, fixture, "work-items", "failed", `{}`)
-	if ask(fixture.occurrence.OrgID, integrationID) {
-		t.Fatal("a failed unit is not an earlier success")
+	if got := ask(fixture.occurrence.OrgID, integrationID); got != nil {
+		t.Fatalf("a failed unit is not a success: %v", got)
 	}
+	older := time.Date(2026, 9, 1, 8, 0, 0, 0, time.UTC)
+	newer := time.Date(2026, 9, 20, 9, 30, 0, 0, time.UTC)
 	seedPriorSyncRunUnit(t, fixture, "work-items", "success", `{}`)
-	if !ask(fixture.occurrence.OrgID, integrationID) {
-		t.Fatal("a successful work-items unit must read as ran before")
+	seedPriorSyncRunUnit(t, fixture, "work-item-labels", "success", `{}`)
+	for dataset, at := range map[string]time.Time{"work-items": older, "work-item-labels": newer} {
+		if _, err := fixture.pool.Exec(ctx,
+			`UPDATE sync_run_units SET updated_at = $1 WHERE dataset_key = $2 AND status = 'success'`, at, dataset); err != nil {
+			t.Fatal(err)
+		}
 	}
-	if ask("another-org", integrationID) {
-		t.Fatal("another org's integration id must not match")
+	if got := ask(fixture.occurrence.OrgID, integrationID); got == nil || !got.Equal(newer) {
+		t.Fatalf("last success = %v, want the newest success %v", got, newer)
+	}
+	if got := ask("another-org", integrationID); got != nil {
+		t.Fatalf("another org's integration id must not match: %v", got)
 	}
 	// The PR states the probe uses ix_sync_run_units_coverage_scan; plan the
 	// same statement with sequential scans disabled and require that index.
@@ -217,7 +254,7 @@ func TestLoadWorkItemUnitsRanBeforeLivePostgres(t *testing.T) {
 	if _, err := tx.Exec(ctx, "SET LOCAL enable_seqscan = off"); err != nil {
 		t.Fatal(err)
 	}
-	rows, err := tx.Query(ctx, "EXPLAIN "+workItemUnitsRanBeforeSQL,
+	rows, err := tx.Query(ctx, "EXPLAIN "+workItemLastSuccessSQL,
 		fixture.occurrence.OrgID, integrationID, workitemcontract.FamilyDatasets())
 	if err != nil {
 		t.Fatal(err)
@@ -271,7 +308,7 @@ VALUES (gen_random_uuid(),$1,$2::uuid,$3::uuid,(SELECT id FROM integration_sourc
 // login holding exactly that. This is the coordinator role's footing, whose
 // posture declares SELECT always required on sync_run_units
 // (TestCoordinatorPostureGrantsSelectOnSyncRunUnits).
-func TestLoadWorkItemUnitsRanBeforeRunsWithSelectOnlyRole(t *testing.T) {
+func TestLoadWorkItemLastSuccessAtRunsWithSelectOnlyRole(t *testing.T) {
 	fixture := startMaterializerPostgres(t)
 	ctx := context.Background()
 	seedPriorSyncRunUnit(t, fixture, "work-items", "success", `{}`)
@@ -300,15 +337,15 @@ func TestLoadWorkItemUnitsRanBeforeRunsWithSelectOnlyRole(t *testing.T) {
 	if _, err := tx.Exec(ctx, `SET LOCAL ROLE `+role); err != nil {
 		t.Fatal(err)
 	}
-	if !loadWorkItemUnitsRanBefore(ctx, tx, "github", fixture.occurrence.OrgID,
-		"00000000-0000-4000-8000-000000001002") {
-		t.Fatal("a SELECT-only role must read the ran-before fact")
+	if loadWorkItemLastSuccessAt(ctx, tx, "github", fixture.occurrence.OrgID,
+		"00000000-0000-4000-8000-000000001002") == nil {
+		t.Fatal("a SELECT-only role must read the last-success fact")
 	}
 }
 
 // A failed read must not fail the plan: the coordinator transaction stays
 // usable, the answer is the quiet "no", and the log carries a category only.
-func TestLoadWorkItemUnitsRanBeforeFailureIsContainedAndLoggedByCategory(t *testing.T) {
+func TestLoadWorkItemLastSuccessAtFailureIsContainedAndLoggedByCategory(t *testing.T) {
 	fixture := startMaterializerPostgres(t)
 	ctx := context.Background()
 	seedPriorSyncRunUnit(t, fixture, "work-items", "success", `{}`)
@@ -333,9 +370,9 @@ func TestLoadWorkItemUnitsRanBeforeFailureIsContainedAndLoggedByCategory(t *test
 	if _, err := tx.Exec(ctx, `SET LOCAL ROLE `+role); err != nil {
 		t.Fatal(err)
 	}
-	if loadWorkItemUnitsRanBefore(ctx, tx, "github", fixture.occurrence.OrgID,
-		"00000000-0000-4000-8000-000000001002") {
-		t.Fatal("a failed read must answer false")
+	if loadWorkItemLastSuccessAt(ctx, tx, "github", fixture.occurrence.OrgID,
+		"00000000-0000-4000-8000-000000001002") != nil {
+		t.Fatal("a failed read must answer nil")
 	}
 	// The transaction survived the Postgres error.
 	if _, err := tx.Exec(ctx, `SELECT 1`); err != nil {

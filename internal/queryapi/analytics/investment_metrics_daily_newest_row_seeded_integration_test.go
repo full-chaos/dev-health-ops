@@ -103,7 +103,10 @@ func TestBreakdownOverInvestmentMetricsDailyTakesTheNewestRowOfEachKey(t *testin
 	if len(result.Items) != 1 || result.Items[0].Key != "quality" {
 		t.Fatalf("breakdown items = %+v, want one item of the quality area", result.Items)
 	}
-	if result.Items[0].Value == nil || *result.Items[0].Value != 4 {
-		t.Fatalf("quality count = %v, want 4: the newest row of each key (4 + 0). 10 is every row summed", result.Items[0].Value)
+	if result.Items[0].Value == nil {
+		t.Fatal("quality count is absent, want 4")
+	}
+	if *result.Items[0].Value != 4 {
+		t.Fatalf("quality count = %v, want 4: the newest row of each key (4 + 0). 10 is every row summed", *result.Items[0].Value)
 	}
 }

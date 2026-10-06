@@ -391,11 +391,17 @@ func (collector GitHubWorkItemsRESTCollector) collectPullRequests(
 		"state": {"all"}, "sort": {"updated"}, "direction": {"desc"},
 		"per_page": {"100"},
 	}
+	// The pull-request side of a work-item unit takes the same whole-day
+	// fetch window as the issue side (Python gave iter_issues and
+	// iter_pull_requests the same since/until). The two window predicates are
+	// shared with the prs dataset route and read a Claim, so they get the
+	// claim with the whole-day window; the prs route keeps its exact instants.
+	fetchWindowClaim := workItemClaimWithWholeDayFetchWindow(claim)
 	page, err := providerfoundation.CollectGitHubLinkPages(
 		ctx, client, providerfoundation.GitHubPageOptions{
 			Path: root + "/pulls", Query: query, MaxPages: collector.maxPages(),
 			StopAt: func(raw json.RawMessage) bool {
-				return pullCrossedSinceBoundary(raw, claim)
+				return pullCrossedSinceBoundary(raw, fetchWindowClaim)
 			},
 		},
 	)
@@ -406,7 +412,7 @@ func (collector GitHubWorkItemsRESTCollector) collectPullRequests(
 	if page.PageBudgetExhausted {
 		return ErrPaginationCapExceeded
 	}
-	numbers, err := filterGitHubPullWindow(page.Items, claim)
+	numbers, err := filterGitHubPullWindow(page.Items, fetchWindowClaim)
 	if err != nil {
 		return err
 	}

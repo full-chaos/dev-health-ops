@@ -36,6 +36,68 @@
               }
             }
           },
+          "pull_requests_kept": {
+            "a_first_second_of_the_next_day": {
+              "kept": {
+                "t": "bool",
+                "v": "false"
+              },
+              "updated_at": {
+                "t": "datetime",
+                "v": "2026-06-18T00:00:00.000000Z"
+              }
+            },
+            "b_last_second_of_the_last_day": {
+              "kept": {
+                "t": "bool",
+                "v": "true"
+              },
+              "updated_at": {
+                "t": "datetime",
+                "v": "2026-06-17T23:59:59.000000Z"
+              }
+            },
+            "c_one_second_after_the_unit_end": {
+              "kept": {
+                "t": "bool",
+                "v": "true"
+              },
+              "updated_at": {
+                "t": "datetime",
+                "v": "2026-06-17T13:00:01.000000Z"
+              }
+            },
+            "d_one_second_before_the_unit_start": {
+              "kept": {
+                "t": "bool",
+                "v": "true"
+              },
+              "updated_at": {
+                "t": "datetime",
+                "v": "2026-06-17T11:59:59.000000Z"
+              }
+            },
+            "e_start_of_the_first_day": {
+              "kept": {
+                "t": "bool",
+                "v": "true"
+              },
+              "updated_at": {
+                "t": "datetime",
+                "v": "2026-06-17T00:00:00.000000Z"
+              }
+            },
+            "f_last_second_before_the_first_day": {
+              "kept": {
+                "t": "bool",
+                "v": "false"
+              },
+              "updated_at": {
+                "t": "datetime",
+                "v": "2026-06-16T23:59:59.000000Z"
+              }
+            }
+          },
           "since": {
             "t": "datetime",
             "v": "2026-06-17T00:00:00.000000Z"
@@ -149,6 +211,68 @@
               "updated_at": {
                 "t": "datetime",
                 "v": "2026-06-18T00:30:01.000000Z"
+              }
+            }
+          },
+          "pull_requests_kept": {
+            "a_first_second_of_the_next_day": {
+              "kept": {
+                "t": "bool",
+                "v": "false"
+              },
+              "updated_at": {
+                "t": "datetime",
+                "v": "2026-06-19T00:00:00.000000Z"
+              }
+            },
+            "b_last_second_of_the_last_day": {
+              "kept": {
+                "t": "bool",
+                "v": "true"
+              },
+              "updated_at": {
+                "t": "datetime",
+                "v": "2026-06-18T23:59:59.000000Z"
+              }
+            },
+            "c_one_second_after_the_unit_end": {
+              "kept": {
+                "t": "bool",
+                "v": "true"
+              },
+              "updated_at": {
+                "t": "datetime",
+                "v": "2026-06-18T00:30:01.000000Z"
+              }
+            },
+            "d_one_second_before_the_unit_start": {
+              "kept": {
+                "t": "bool",
+                "v": "true"
+              },
+              "updated_at": {
+                "t": "datetime",
+                "v": "2026-06-17T23:29:59.000000Z"
+              }
+            },
+            "e_start_of_the_first_day": {
+              "kept": {
+                "t": "bool",
+                "v": "true"
+              },
+              "updated_at": {
+                "t": "datetime",
+                "v": "2026-06-17T00:00:00.000000Z"
+              }
+            },
+            "f_last_second_before_the_first_day": {
+              "kept": {
+                "t": "bool",
+                "v": "false"
+              },
+              "updated_at": {
+                "t": "datetime",
+                "v": "2026-06-16T23:59:59.000000Z"
               }
             }
           },
@@ -268,6 +392,68 @@
               }
             }
           },
+          "pull_requests_kept": {
+            "a_first_second_of_the_next_day": {
+              "kept": {
+                "t": "bool",
+                "v": "false"
+              },
+              "updated_at": {
+                "t": "datetime",
+                "v": "2026-06-18T00:00:00.000000Z"
+              }
+            },
+            "b_last_second_of_the_last_day": {
+              "kept": {
+                "t": "bool",
+                "v": "true"
+              },
+              "updated_at": {
+                "t": "datetime",
+                "v": "2026-06-17T23:59:59.000000Z"
+              }
+            },
+            "c_one_second_after_the_unit_end": {
+              "kept": {
+                "t": "bool",
+                "v": "true"
+              },
+              "updated_at": {
+                "t": "datetime",
+                "v": "2026-06-17T13:00:01.000000Z"
+              }
+            },
+            "d_one_second_before_the_unit_start": {
+              "kept": {
+                "t": "bool",
+                "v": "true"
+              },
+              "updated_at": {
+                "t": "datetime",
+                "v": "2026-06-14T09:15:26.123456Z"
+              }
+            },
+            "e_start_of_the_first_day": {
+              "kept": {
+                "t": "bool",
+                "v": "true"
+              },
+              "updated_at": {
+                "t": "datetime",
+                "v": "2026-06-14T00:00:00.000000Z"
+              }
+            },
+            "f_last_second_before_the_first_day": {
+              "kept": {
+                "t": "bool",
+                "v": "false"
+              },
+              "updated_at": {
+                "t": "datetime",
+                "v": "2026-06-13T23:59:59.000000Z"
+              }
+            }
+          },
           "since": {
             "t": "datetime",
             "v": "2026-06-14T00:00:00.000000Z"
@@ -381,6 +567,68 @@
               "updated_at": {
                 "t": "datetime",
                 "v": "2026-06-17T13:00:01.000000Z"
+              }
+            }
+          },
+          "pull_requests_kept": {
+            "a_first_second_of_the_next_day": {
+              "kept": {
+                "t": "bool",
+                "v": "false"
+              },
+              "updated_at": {
+                "t": "datetime",
+                "v": "2026-06-18T00:00:00.000000Z"
+              }
+            },
+            "b_last_second_of_the_last_day": {
+              "kept": {
+                "t": "bool",
+                "v": "true"
+              },
+              "updated_at": {
+                "t": "datetime",
+                "v": "2026-06-17T23:59:59.000000Z"
+              }
+            },
+            "c_one_second_after_the_unit_end": {
+              "kept": {
+                "t": "bool",
+                "v": "true"
+              },
+              "updated_at": {
+                "t": "datetime",
+                "v": "2026-06-17T13:00:01.000000Z"
+              }
+            },
+            "d_one_second_before_the_unit_start": {
+              "kept": {
+                "t": "bool",
+                "v": "true"
+              },
+              "updated_at": {
+                "t": "datetime",
+                "v": "2026-03-19T12:59:59.000000Z"
+              }
+            },
+            "e_start_of_the_first_day": {
+              "kept": {
+                "t": "bool",
+                "v": "true"
+              },
+              "updated_at": {
+                "t": "datetime",
+                "v": "2026-03-19T00:00:00.000000Z"
+              }
+            },
+            "f_last_second_before_the_first_day": {
+              "kept": {
+                "t": "bool",
+                "v": "false"
+              },
+              "updated_at": {
+                "t": "datetime",
+                "v": "2026-03-18T23:59:59.000000Z"
               }
             }
           },
@@ -500,6 +748,68 @@
               }
             }
           },
+          "pull_requests_kept": {
+            "a_first_second_of_the_next_day": {
+              "kept": {
+                "t": "bool",
+                "v": "false"
+              },
+              "updated_at": {
+                "t": "datetime",
+                "v": "2026-06-19T00:00:00.000000Z"
+              }
+            },
+            "b_last_second_of_the_last_day": {
+              "kept": {
+                "t": "bool",
+                "v": "true"
+              },
+              "updated_at": {
+                "t": "datetime",
+                "v": "2026-06-18T23:59:59.000000Z"
+              }
+            },
+            "c_one_second_after_the_unit_end": {
+              "kept": {
+                "t": "bool",
+                "v": "true"
+              },
+              "updated_at": {
+                "t": "datetime",
+                "v": "2026-06-18T00:00:01.000000Z"
+              }
+            },
+            "d_one_second_before_the_unit_start": {
+              "kept": {
+                "t": "bool",
+                "v": "true"
+              },
+              "updated_at": {
+                "t": "datetime",
+                "v": "2026-06-17T22:59:59.000000Z"
+              }
+            },
+            "e_start_of_the_first_day": {
+              "kept": {
+                "t": "bool",
+                "v": "true"
+              },
+              "updated_at": {
+                "t": "datetime",
+                "v": "2026-06-17T00:00:00.000000Z"
+              }
+            },
+            "f_last_second_before_the_first_day": {
+              "kept": {
+                "t": "bool",
+                "v": "false"
+              },
+              "updated_at": {
+                "t": "datetime",
+                "v": "2026-06-16T23:59:59.000000Z"
+              }
+            }
+          },
           "since": {
             "t": "datetime",
             "v": "2026-06-17T00:00:00.000000Z"
@@ -613,6 +923,68 @@
               "updated_at": {
                 "t": "datetime",
                 "v": "2026-06-17T00:30:01.000000Z"
+              }
+            }
+          },
+          "pull_requests_kept": {
+            "a_first_second_of_the_next_day": {
+              "kept": {
+                "t": "bool",
+                "v": "false"
+              },
+              "updated_at": {
+                "t": "datetime",
+                "v": "2026-06-18T00:00:00.000000Z"
+              }
+            },
+            "b_last_second_of_the_last_day": {
+              "kept": {
+                "t": "bool",
+                "v": "true"
+              },
+              "updated_at": {
+                "t": "datetime",
+                "v": "2026-06-17T23:59:59.000000Z"
+              }
+            },
+            "c_one_second_after_the_unit_end": {
+              "kept": {
+                "t": "bool",
+                "v": "true"
+              },
+              "updated_at": {
+                "t": "datetime",
+                "v": "2026-06-17T00:30:01.000000Z"
+              }
+            },
+            "d_one_second_before_the_unit_start": {
+              "kept": {
+                "t": "bool",
+                "v": "true"
+              },
+              "updated_at": {
+                "t": "datetime",
+                "v": "2026-06-16T23:29:59.000000Z"
+              }
+            },
+            "e_start_of_the_first_day": {
+              "kept": {
+                "t": "bool",
+                "v": "true"
+              },
+              "updated_at": {
+                "t": "datetime",
+                "v": "2026-06-16T00:00:00.000000Z"
+              }
+            },
+            "f_last_second_before_the_first_day": {
+              "kept": {
+                "t": "bool",
+                "v": "false"
+              },
+              "updated_at": {
+                "t": "datetime",
+                "v": "2026-06-15T23:59:59.000000Z"
               }
             }
           },

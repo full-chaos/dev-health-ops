@@ -36,6 +36,7 @@ COMMON = SRC + "utils/datetime.py"
 JIRA_PROVIDER = SRC + "providers/jira/provider.py"
 JIRA_CLIENT = SRC + "providers/jira/client.py"
 GITHUB_PROVIDER = SRC + "providers/github/provider.py"
+GITHUB_CLIENT = SRC + "providers/github/client.py"
 GITLAB_PROVIDER = SRC + "providers/gitlab/provider.py"
 LINEAR_PROVIDER = SRC + "providers/linear/provider.py"
 LINEAR_CLIENT = SRC + "providers/linear/client.py"
@@ -202,6 +203,21 @@ def main() -> None:
     jira_legacy = function(jira_provider, "_ingest_via_legacy_client")
     jira_client = ast.parse(source(commit, JIRA_CLIENT))
     github_provider = ast.parse(source(commit, GITHUB_PROVIDER))
+    github_client = ast.parse(source(commit, GITHUB_CLIENT))
+    # The provider gives iter_issues and iter_pull_requests the same window.
+    github_text = source(commit, GITHUB_PROVIDER)
+    for call in ("client.iter_issues(", "client.iter_pull_requests("):
+        at = github_text.index(call)
+        if (
+            github_text.count(call) != 1
+            or "since=since," not in github_text[at : at + 400]
+        ):
+            raise SystemExit(f"github provider: {call} does not pass since=since")
+    pulls_at = github_text.index("client.iter_pull_requests(")
+    if "until=until," not in github_text[pulls_at : pulls_at + 400]:
+        raise SystemExit(
+            "github provider: iter_pull_requests does not pass until=until"
+        )
     gitlab_provider = ast.parse(source(commit, GITLAB_PROVIDER))
     linear_provider = ast.parse(source(commit, LINEAR_PROVIDER))
     linear_client = ast.parse(source(commit, LINEAR_CLIENT))
@@ -290,6 +306,60 @@ def main() -> None:
             for label, at in probes
         }
 
+        # The pull-request list (client.iter_pull_requests): it is sorted by
+        # update time, newest first; iteration STOPS at the first pull request
+        # updated before `since` and SKIPS one updated after `until`.
+        pulls = dict(base)
+        run(
+            [
+                function(github_client, "_parse_github_datetime"),
+                function(github_client, "_item_updated_before"),
+                function(github_client, "_item_updated_after"),
+            ],
+            pulls,
+        )
+        cutoff = pulls["_parse_github_datetime"](github["since"])
+        until_cutoff = pulls["_parse_github_datetime"](github["until"])
+        first_day = since_dt.date()
+        pull_probes = [
+            (
+                "a_first_second_of_the_next_day",
+                datetime.combine(
+                    end_day + timedelta(days=1), time.min, tzinfo=timezone.utc
+                ),
+            ),
+            (
+                "b_last_second_of_the_last_day",
+                datetime.combine(end_day, time(23, 59, 59), tzinfo=timezone.utc),
+            ),
+            (
+                "c_one_second_after_the_unit_end",
+                context.window_end + timedelta(seconds=1),
+            ),
+            (
+                "d_one_second_before_the_unit_start",
+                context.window_start - timedelta(seconds=1),
+            ),
+            (
+                "e_start_of_the_first_day",
+                datetime.combine(first_day, time.min, tzinfo=timezone.utc),
+            ),
+            (
+                "f_last_second_before_the_first_day",
+                datetime.combine(first_day, time.min, tzinfo=timezone.utc)
+                - timedelta(seconds=1),
+            ),
+        ]
+        pulls_kept = {}
+        stopped = False
+        for label, at in pull_probes:
+            item = SimpleNamespace(updated_at=at)
+            if not stopped and pulls["_item_updated_before"](item, cutoff):
+                stopped = True
+            pulls_kept[label] = not stopped and not pulls["_item_updated_after"](
+                item, until_cutoff
+            )
+
         gitlab = dict(base, _to_utc=to_utc, ctx=ctx)
         run(
             [assignment(gitlab_provider, "updated_after", "ctx.window.updated_since")],
@@ -334,6 +404,13 @@ def main() -> None:
                         "kept": {
                             label: {"updated_at": leaf(at), "kept": leaf(kept[label])}
                             for label, at in probes
+                        },
+                        "pull_requests_kept": {
+                            label: {
+                                "updated_at": leaf(at),
+                                "kept": leaf(pulls_kept[label]),
+                            }
+                            for label, at in pull_probes
                         },
                     },
                     "gitlab": {

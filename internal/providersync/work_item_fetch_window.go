@@ -69,6 +69,18 @@ func workItemWholeDayFetchWindow(claim Claim) workItemFetchWindow {
 	return window
 }
 
+// workItemClaimWithWholeDayFetchWindow returns a copy of the claim whose
+// window is the whole-day fetch window. It exists for request code that a
+// work-item route shares with another dataset and that reads its window from
+// a Claim (the GitHub pull-request list predicates). Use the copy ONLY to
+// select what to fetch: the watermark, the day loop and everything that is
+// stored keep the unit's own claim.
+func workItemClaimWithWholeDayFetchWindow(claim Claim) Claim {
+	window := workItemWholeDayFetchWindow(claim)
+	claim.SinceAt, claim.BeforeAt = window.Since, window.Until
+	return claim
+}
+
 func workItemFetchWindowUTCDay(value time.Time) time.Time {
 	utc := value.UTC()
 	return time.Date(utc.Year(), utc.Month(), utc.Day(), 0, 0, 0, 0, time.UTC)

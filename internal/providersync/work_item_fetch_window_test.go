@@ -14,6 +14,8 @@ package providersync
 //	utils/datetime.py               to_utc
 //	providers/jira/provider.py      the two date reductions; client.py build_jira_jql
 //	providers/github/provider.py    since, until, within_active_window
+//	providers/github/client.py      the pull-request list predicates
+//	                                (_item_updated_before stops, _item_updated_after skips)
 //	providers/gitlab/provider.py    updated_after
 //	providers/linear/provider.py    updated_after, updated_before; client.py the gte/lte lines
 //
@@ -40,6 +42,7 @@ import (
 	"fmt"
 	"go/ast"
 	"go/parser"
+	"go/printer"
 	"go/token"
 	"io"
 	"net/http"
@@ -97,8 +100,17 @@ type workItemFetchWindowGoKept struct {
 }
 
 type workItemFetchWindowGoGitHub struct {
-	Since *time.Time                           `json:"since"`
-	Kept  map[string]workItemFetchWindowGoKept `json:"kept"`
+	Since            *time.Time                           `json:"since"`
+	Kept             map[string]workItemFetchWindowGoKept `json:"kept"`
+	PullRequestsKept map[string]workItemFetchWindowGoKept `json:"pull_requests_kept"`
+}
+
+// workItemFetchWindowProbes is a list of items by label with their
+// updated_at. Pull-request probes must be in the provider's order (newest
+// first): the labels of the recorded ones sort that way.
+type workItemFetchWindowProbes struct {
+	labels []string
+	at     []time.Time
 }
 
 type workItemFetchWindowGoGitLab struct {
@@ -193,14 +205,22 @@ func workItemFetchWindowClaim(provider string, since, before time.Time) Claim {
 
 // --- the four routes, each observed through the request it sends ---
 
-var workItemFetchWindowGitHubChild = regexp.MustCompile(`^/repos/acme/api/issues/(\d+)/(events|comments)$`)
+var (
+	workItemFetchWindowGitHubChild = regexp.MustCompile(`^/repos/acme/api/issues/(\d+)/(events|comments)$`)
+	workItemFetchWindowGitHubPull  = regexp.MustCompile(`^/repos/acme/api/pulls/(\d+)$`)
+)
+
+const workItemFetchWindowFirstPullNumber = 101
 
 type workItemFetchWindowGitHubDoer struct {
 	t *testing.T
-	// probes are the updated_at instants of issues 1..n.
+	// probes are the updated_at instants of issues 1..n; pulls those of
+	// pull requests 101.., newest first.
 	probes        []time.Time
+	pulls         []time.Time
 	issueRequests []*http.Request
 	eventsAsked   map[int]bool
+	pullsAsked    map[int]bool
 }
 
 func (doer *workItemFetchWindowGitHubDoer) Do(request *http.Request) (*http.Response, error) {
@@ -230,39 +250,75 @@ func (doer *workItemFetchWindowGitHubDoer) Do(request *http.Request) (*http.Resp
 		}
 		return reply(listed)
 	}
+	if path == "/repos/acme/api/pulls" {
+		listed := []map[string]any{}
+		for index, updated := range doer.pulls {
+			listed = append(listed, map[string]any{
+				"number": workItemFetchWindowFirstPullNumber + index, "updated_at": updated.UTC().Format(time.RFC3339),
+			})
+		}
+		return reply(listed)
+	}
+	if match := workItemFetchWindowGitHubPull.FindStringSubmatch(path); match != nil {
+		number, _ := strconv.Atoi(match[1])
+		index := number - workItemFetchWindowFirstPullNumber
+		if index < 0 || index >= len(doer.pulls) {
+			doer.t.Errorf("unexpected pull request %d", number)
+			return reply(map[string]any{})
+		}
+		doer.pullsAsked[number] = true
+		return reply(map[string]any{
+			"number": number, "title": "pull " + match[1], "state": "open",
+			"created_at": "2026-01-05T09:00:00Z", "updated_at": doer.pulls[index].UTC().Format(time.RFC3339),
+			"user": map[string]any{"login": "reporter"},
+		})
+	}
 	if match := workItemFetchWindowGitHubChild.FindStringSubmatch(path); match != nil {
 		number, _ := strconv.Atoi(match[1])
-		if match[2] == "events" {
+		if match[2] == "events" && number < workItemFetchWindowFirstPullNumber {
 			doer.eventsAsked[number] = true
 		}
 		return reply([]any{})
+	}
+	if strings.HasPrefix(path, "/repos/acme/api/pulls/") {
+		return reply([]any{}) // nested lists of a kept pull request
 	}
 	doer.t.Errorf("unexpected GitHub request %s", request.URL.String())
 	return reply(map[string]any{})
 }
 
-// observeGitHubWorkItemFetchWindow runs the real collector. The end of the
-// window is a client-side filter, so it is observed by what the collector
-// keeps: an issue is kept when the collector asks for its events.
+// observeGitHubWorkItemFetchWindow runs the real collector on a claim. The
+// end of the window is a client-side filter and the pull-request list has no
+// server-side window at all, so both are observed by what the collector
+// keeps: an issue is kept when the collector asks for its events, a pull
+// request when the collector asks for its detail.
 func observeGitHubWorkItemFetchWindow(
-	t *testing.T, since, before time.Time, probeLabels []string, probes []time.Time,
+	t *testing.T, claim Claim, runAt time.Time, issues, pulls workItemFetchWindowProbes,
 ) workItemFetchWindowGoGitHub {
 	t.Helper()
-	claim := workItemFetchWindowClaim("github", since, before)
 	claim.DatasetOptions = map[string]any{
-		"include_issues": true, "include_pull_requests": false,
+		"include_issues": true, "include_pull_requests": true,
 		"fetch_comments": false, "fetch_milestones": false,
 	}
-	doer := &workItemFetchWindowGitHubDoer{t: t, probes: probes, eventsAsked: map[int]bool{}}
+	doer := &workItemFetchWindowGitHubDoer{
+		t: t, probes: issues.at, pulls: pulls.at, eventsAsked: map[int]bool{}, pullsAsked: map[int]bool{},
+	}
+	for index := 1; index < len(pulls.at); index++ {
+		if pulls.at[index].After(pulls.at[index-1]) {
+			t.Fatalf("pull-request probes are not newest first: %v", pulls.labels)
+		}
+	}
 	_, err := (GitHubWorkItemsRESTCollector{}).Collect(context.Background(), claim,
-		gitHubPullRequestClient(t, fakehttp.Client(doer), "https://api.github.com"), before.Add(time.Minute))
+		gitHubPullRequestClient(t, fakehttp.Client(doer), "https://api.github.com"), runAt)
 	if err != nil {
 		t.Fatalf("github collect: %v", err)
 	}
 	if len(doer.issueRequests) != 1 {
 		t.Fatalf("github issue list requests=%d want 1", len(doer.issueRequests))
 	}
-	observed := workItemFetchWindowGoGitHub{Kept: map[string]workItemFetchWindowGoKept{}}
+	observed := workItemFetchWindowGoGitHub{
+		Kept: map[string]workItemFetchWindowGoKept{}, PullRequestsKept: map[string]workItemFetchWindowGoKept{},
+	}
 	query := doer.issueRequests[0].URL.Query()
 	if query.Has("since") {
 		value, parseErr := time.Parse(time.RFC3339, query.Get("since"))
@@ -271,10 +327,35 @@ func observeGitHubWorkItemFetchWindow(
 		}
 		observed.Since = &value
 	}
-	for index, label := range probeLabels {
-		observed.Kept[label] = workItemFetchWindowGoKept{UpdatedAt: probes[index], Kept: doer.eventsAsked[index+1]}
+	for index, label := range issues.labels {
+		observed.Kept[label] = workItemFetchWindowGoKept{UpdatedAt: issues.at[index], Kept: doer.eventsAsked[index+1]}
+	}
+	for index, label := range pulls.labels {
+		observed.PullRequestsKept[label] = workItemFetchWindowGoKept{
+			UpdatedAt: pulls.at[index], Kept: doer.pullsAsked[workItemFetchWindowFirstPullNumber+index],
+		}
 	}
 	return observed
+}
+
+// workItemFetchWindowRecordedProbes reads one recorded {label: {updated_at,
+// kept}} dict, in label order.
+func workItemFetchWindowRecordedProbes(t *testing.T, recorded any, want int) workItemFetchWindowProbes {
+	t.Helper()
+	byLabel, _ := recorded.(map[string]any)
+	probes := workItemFetchWindowProbes{}
+	for label := range byLabel {
+		probes.labels = append(probes.labels, label)
+	}
+	sort.Strings(probes.labels)
+	if len(probes.labels) != want {
+		t.Fatalf("recorded probes=%v want %d", probes.labels, want)
+	}
+	for _, label := range probes.labels {
+		probe, _ := byLabel[label].(map[string]any)
+		probes.at = append(probes.at, workItemFetchWindowRecordedInstant(t, probe["updated_at"]))
+	}
+	return probes
 }
 
 func observeGitLabWorkItemFetchWindow(t *testing.T, since, before time.Time) (workItemFetchWindowGoGitLab, []string) {
@@ -455,22 +536,10 @@ func TestWorkItemRoutesSendTheFetchWindowOfTheFrozenPython(t *testing.T) {
 				goWorkItemFetchWindowDays(t, since, before))
 
 			pythonGitHub, _ := recorded.Python["github"].(map[string]any)
-			pythonKept, _ := pythonGitHub["kept"].(map[string]any)
-			labels := make([]string, 0, len(pythonKept))
-			for label := range pythonKept {
-				labels = append(labels, label)
-			}
-			sort.Strings(labels)
-			if len(labels) != 3 {
-				t.Fatalf("github probes=%v want 3", labels)
-			}
-			probes := make([]time.Time, 0, len(labels))
-			for _, label := range labels {
-				probe, _ := pythonKept[label].(map[string]any)
-				probes = append(probes, workItemFetchWindowRecordedInstant(t, probe["updated_at"]))
-			}
 			assertWorkItemFetchWindowEqualsPython(t, "github", recorded.Python["github"],
-				observeGitHubWorkItemFetchWindow(t, since, before, labels, probes))
+				observeGitHubWorkItemFetchWindow(t, workItemFetchWindowClaim("github", since, before), before.Add(time.Minute),
+					workItemFetchWindowRecordedProbes(t, pythonGitHub["kept"], 3),
+					workItemFetchWindowRecordedProbes(t, pythonGitHub["pull_requests_kept"], 6)))
 
 			gitlab, _ := observeGitLabWorkItemFetchWindow(t, since, before)
 			assertWorkItemFetchWindowEqualsPython(t, "gitlab", recorded.Python["gitlab"], gitlab)
@@ -515,28 +584,95 @@ var (
 	workItemFetchWindowHourlyBefore = time.Date(2026, 6, 17, 13, 0, 0, 0, time.UTC)
 )
 
-func TestGitHubWorkItemsRouteSendsTheWholeDayFetchWindowForAnHourlyUnit(t *testing.T) {
-	labels := []string{"start_of_the_day", "after_the_unit_end", "last_second_of_the_day", "next_day"}
-	probes := []time.Time{
-		time.Date(2026, 6, 17, 0, 0, 0, 0, time.UTC),
-		time.Date(2026, 6, 17, 13, 0, 1, 0, time.UTC),
-		time.Date(2026, 6, 17, 23, 59, 59, 0, time.UTC),
-		time.Date(2026, 6, 18, 0, 0, 0, 0, time.UTC),
+func workItemFetchWindowHourlyGitHubProbes() (issues, pulls workItemFetchWindowProbes) {
+	issues = workItemFetchWindowProbes{
+		labels: []string{"start_of_the_day", "after_the_unit_end", "last_second_of_the_day", "next_day"},
+		at: []time.Time{
+			time.Date(2026, 6, 17, 0, 0, 0, 0, time.UTC),
+			time.Date(2026, 6, 17, 13, 0, 1, 0, time.UTC),
+			time.Date(2026, 6, 17, 23, 59, 59, 0, time.UTC),
+			time.Date(2026, 6, 18, 0, 0, 0, 0, time.UTC),
+		},
 	}
+	pulls = workItemFetchWindowProbes{ // newest first
+		labels: []string{"next_day", "last_second_of_the_day", "after_the_unit_end", "before_the_unit_start", "start_of_the_day", "day_before"},
+		at: []time.Time{
+			time.Date(2026, 6, 18, 0, 0, 0, 0, time.UTC),
+			time.Date(2026, 6, 17, 23, 59, 59, 0, time.UTC),
+			time.Date(2026, 6, 17, 13, 0, 1, 0, time.UTC),
+			time.Date(2026, 6, 17, 11, 59, 59, 0, time.UTC),
+			time.Date(2026, 6, 17, 0, 0, 0, 0, time.UTC),
+			time.Date(2026, 6, 16, 23, 59, 59, 0, time.UTC),
+		},
+	}
+	return issues, pulls
+}
+
+func assertWorkItemFetchWindowKept(t *testing.T, what string, observed map[string]workItemFetchWindowGoKept, want map[string]bool) {
+	t.Helper()
+	if len(observed) != len(want) {
+		t.Errorf("%s: probes=%d want %d", what, len(observed), len(want))
+	}
+	for label, kept := range want {
+		if observed[label].Kept != kept {
+			t.Errorf("%s %s (updated %s) kept=%v want %v",
+				what, label, observed[label].UpdatedAt.Format(time.RFC3339), observed[label].Kept, kept)
+		}
+	}
+}
+
+func TestGitHubWorkItemsRouteSendsTheWholeDayFetchWindowForAnHourlyUnit(t *testing.T) {
+	issues, pulls := workItemFetchWindowHourlyGitHubProbes()
 	observed := observeGitHubWorkItemFetchWindow(t,
-		workItemFetchWindowHourlySince, workItemFetchWindowHourlyBefore, labels, probes)
+		workItemFetchWindowClaim("github", workItemFetchWindowHourlySince, workItemFetchWindowHourlyBefore),
+		workItemFetchWindowHourlyBefore.Add(time.Minute), issues, pulls)
 	if observed.Since == nil || observed.Since.Format(time.RFC3339Nano) != "2026-06-17T00:00:00Z" {
 		t.Errorf("GitHub since=%v want 2026-06-17T00:00:00Z (00:00 UTC of the unit's day)", observed.Since)
 	}
-	want := map[string]bool{
+	assertWorkItemFetchWindowKept(t, "GitHub issue", observed.Kept, map[string]bool{
 		"start_of_the_day": true, "after_the_unit_end": true, "last_second_of_the_day": true, "next_day": false,
+	})
+	// The pull-request side of the same unit takes the same whole-day window.
+	assertWorkItemFetchWindowKept(t, "GitHub pull request", observed.PullRequestsKept, map[string]bool{
+		"next_day": false, "last_second_of_the_day": true, "after_the_unit_end": true,
+		"before_the_unit_start": true, "start_of_the_day": true, "day_before": false,
+	})
+}
+
+// TestGitHubWorkItemsRouteDoesNotNarrowAFetchWithAMissingBound: a unit with
+// no start sends no `since` and keeps every older item; a unit with no end
+// keeps every newer item. The other bound stays whole-day aligned.
+func TestGitHubWorkItemsRouteDoesNotNarrowAFetchWithAMissingBound(t *testing.T) {
+	issues, pulls := workItemFetchWindowHourlyGitHubProbes()
+	runAt := workItemFetchWindowHourlyBefore.Add(time.Minute)
+
+	noStart := workItemFetchWindowClaim("github", workItemFetchWindowHourlySince, workItemFetchWindowHourlyBefore)
+	noStart.SinceAt = nil
+	observed := observeGitHubWorkItemFetchWindow(t, noStart, runAt, issues, pulls)
+	if observed.Since != nil {
+		t.Errorf("a unit with no start sent since=%v; it must send no since", observed.Since)
 	}
-	for label, kept := range want {
-		if observed.Kept[label].Kept != kept {
-			t.Errorf("GitHub issue %s (updated %s) kept=%v want %v",
-				label, observed.Kept[label].UpdatedAt.Format(time.RFC3339), observed.Kept[label].Kept, kept)
-		}
+	assertWorkItemFetchWindowKept(t, "no start: GitHub issue", observed.Kept, map[string]bool{
+		"start_of_the_day": true, "after_the_unit_end": true, "last_second_of_the_day": true, "next_day": false,
+	})
+	assertWorkItemFetchWindowKept(t, "no start: GitHub pull request", observed.PullRequestsKept, map[string]bool{
+		"next_day": false, "last_second_of_the_day": true, "after_the_unit_end": true,
+		"before_the_unit_start": true, "start_of_the_day": true, "day_before": true,
+	})
+
+	noEnd := workItemFetchWindowClaim("github", workItemFetchWindowHourlySince, workItemFetchWindowHourlyBefore)
+	noEnd.BeforeAt = nil
+	observed = observeGitHubWorkItemFetchWindow(t, noEnd, runAt, issues, pulls)
+	if observed.Since == nil || observed.Since.Format(time.RFC3339Nano) != "2026-06-17T00:00:00Z" {
+		t.Errorf("no end: GitHub since=%v want 2026-06-17T00:00:00Z", observed.Since)
 	}
+	assertWorkItemFetchWindowKept(t, "no end: GitHub issue", observed.Kept, map[string]bool{
+		"start_of_the_day": true, "after_the_unit_end": true, "last_second_of_the_day": true, "next_day": true,
+	})
+	assertWorkItemFetchWindowKept(t, "no end: GitHub pull request", observed.PullRequestsKept, map[string]bool{
+		"next_day": true, "last_second_of_the_day": true, "after_the_unit_end": true,
+		"before_the_unit_start": true, "start_of_the_day": true, "day_before": false,
+	})
 }
 
 func TestGitLabWorkItemsRouteSendsTheWholeDayFetchWindowForAnHourlyUnit(t *testing.T) {
@@ -627,11 +763,42 @@ func TestWorkItemWholeDayFetchWindowAlignsBothEndsToUTCDays(t *testing.T) {
 		}
 	}
 
-	// A missing bound stays missing: the helper never narrows a fetch.
+	// A missing bound stays missing: the helper never narrows a fetch. Each
+	// side by itself, so that "no start" cannot become "the end's day" (the
+	// Python rule for an absent start) and "no end" cannot become "the
+	// start's day".
+	since := time.Date(2026, 6, 17, 12, 0, 0, 0, time.UTC)
+	before := time.Date(2026, 6, 19, 13, 0, 0, 0, time.UTC)
 	open := nativeTestClaim("github", "work-items")
 	open.SinceAt, open.BeforeAt = nil, nil
 	if window := workItemWholeDayFetchWindow(open); window.Since != nil || window.Until != nil {
 		t.Errorf("a claim with no window got a fetch window: %+v", window)
+	}
+	open.SinceAt, open.BeforeAt = nil, &before
+	if window := workItemWholeDayFetchWindow(open); window.Since != nil ||
+		window.Until == nil || window.Until.Format(time.RFC3339Nano) != "2026-06-19T23:59:59.999999Z" {
+		t.Errorf("no start: window=%v .. %v want none .. 2026-06-19T23:59:59.999999Z", window.Since, window.Until)
+	}
+	open.SinceAt, open.BeforeAt = &since, nil
+	if window := workItemWholeDayFetchWindow(open); window.Until != nil ||
+		window.Since == nil || window.Since.Format(time.RFC3339Nano) != "2026-06-17T00:00:00Z" {
+		t.Errorf("no end: window=%v .. %v want 2026-06-17T00:00:00Z .. none", window.Since, window.Until)
+	}
+
+	// The claim copy for shared request code carries exactly the helper's
+	// window and leaves the unit's own claim as it was.
+	unit := workItemFetchWindowClaim("github", since, before)
+	aligned := workItemClaimWithWholeDayFetchWindow(unit)
+	want := workItemWholeDayFetchWindow(unit)
+	if !aligned.SinceAt.Equal(*want.Since) || !aligned.BeforeAt.Equal(*want.Until) {
+		t.Errorf("claim copy window=%v .. %v want %v .. %v", aligned.SinceAt, aligned.BeforeAt, want.Since, want.Until)
+	}
+	if !unit.SinceAt.Equal(since) || !unit.BeforeAt.Equal(before) {
+		t.Errorf("the unit's own claim was changed: %v .. %v", unit.SinceAt, unit.BeforeAt)
+	}
+	open.SinceAt, open.BeforeAt = nil, nil
+	if copyOfOpen := workItemClaimWithWholeDayFetchWindow(open); copyOfOpen.SinceAt != nil || copyOfOpen.BeforeAt != nil {
+		t.Errorf("a claim with no window got one in its copy: %v .. %v", copyOfOpen.SinceAt, copyOfOpen.BeforeAt)
 	}
 }
 
@@ -723,16 +890,17 @@ func TestWorkItemDerivedDaysStayInsideTheFetchWindow(t *testing.T) {
 // through workItemWholeDayFetchWindow instead; otherwise add it here with its
 // purpose.
 var workItemWindowReads = map[string]string{
-	"work_item_fetch_window.go workItemWholeDayFetchWindow SinceAt=2 BeforeAt=2":      "THE helper: the only request use",
-	"github_work_items_composition.go githubWorkItemDerivedDays SinceAt=3 BeforeAt=3": "the deriver's day loop",
-	"github_work_items_route.go Collect SinceAt=0 BeforeAt=2":                         "the watermark the unit reports",
-	"gitlab_work_item_derived.go Derive SinceAt=0 BeforeAt=2":                         "the watermark the deriver reports",
-	"gitlab_work_items_route.go Collect SinceAt=0 BeforeAt=3":                         "claim validation; watermark check",
-	"jira_atlassian_route.go Collect SinceAt=2 BeforeAt=3":                            "claim validation; watermark check",
-	"jira_work_item_derived.go Derive SinceAt=0 BeforeAt=2":                           "claim validation; the watermark",
-	"jira_work_items_route.go Collect SinceAt=3 BeforeAt=4":                           "claim validation; the watermark",
-	"linear_work_items_composition.go Collect SinceAt=0 BeforeAt=2":                   "watermark check",
-	"linear_work_items_route.go Collect SinceAt=0 BeforeAt=2":                         "claim validation; the watermark",
+	"work_item_fetch_window.go workItemWholeDayFetchWindow SinceAt=2 BeforeAt=2":          "THE helper: the only request use",
+	"work_item_fetch_window.go workItemClaimWithWholeDayFetchWindow SinceAt=1 BeforeAt=1": "writes the helper's window into a claim copy",
+	"github_work_items_composition.go githubWorkItemDerivedDays SinceAt=3 BeforeAt=3":     "the deriver's day loop",
+	"github_work_items_route.go Collect SinceAt=0 BeforeAt=2":                             "the watermark the unit reports",
+	"gitlab_work_item_derived.go Derive SinceAt=0 BeforeAt=2":                             "the watermark the deriver reports",
+	"gitlab_work_items_route.go Collect SinceAt=0 BeforeAt=3":                             "claim validation; watermark check",
+	"jira_atlassian_route.go Collect SinceAt=2 BeforeAt=3":                                "claim validation; watermark check",
+	"jira_work_item_derived.go Derive SinceAt=0 BeforeAt=2":                               "claim validation; the watermark",
+	"jira_work_items_route.go Collect SinceAt=3 BeforeAt=4":                               "claim validation; the watermark",
+	"linear_work_items_composition.go Collect SinceAt=0 BeforeAt=2":                       "watermark check",
+	"linear_work_items_route.go Collect SinceAt=0 BeforeAt=2":                             "claim validation; the watermark",
 }
 
 func workItemWindowReadCensus(t *testing.T) []string {
@@ -747,7 +915,7 @@ func workItemWindowReadCensus(t *testing.T) []string {
 		if strings.HasSuffix(name, "_test.go") {
 			continue
 		}
-		if !strings.Contains(name, "work_item") && name != "jira_atlassian_route.go" {
+		if !workItemFetchWindowCensusFile(name) {
 			continue
 		}
 		scanned++
@@ -797,5 +965,181 @@ func TestWorkItemRoutesReadTheWindowOnlyThroughTheFetchWindowHelper(t *testing.T
 		t.Fatalf("reads of the claim's window in the work-item files changed.\n"+
 			"A provider request takes its window from workItemWholeDayFetchWindow and from nowhere else.\n"+
 			"found:\n  %s\nwant:\n  %s", strings.Join(found, "\n  "), strings.Join(want, "\n  "))
+	}
+}
+
+// workItemWindowReaderCalls is every call, from a work-item file, of a
+// package-level function that reads the claim's window itself or through
+// another package-level function, wherever that function is declared. The
+// read census above sees only the work-item files; this one sees a work-item
+// route that hands its claim to a window predicate of ANOTHER file (the
+// GitHub pull-request list predicates live in github_prs_route.go).
+//
+// A call that selects what to fetch must get the whole-day window: the
+// helper's result, or the claim copy of workItemClaimWithWholeDayFetchWindow.
+//
+// Limit: a method (a call through a receiver) that reads the window is not
+// followed.
+var workItemWindowReaderCalls = map[string]string{
+	"github_work_items_rest_collect.go collectIssues workItemWholeDayFetchWindow(claim)":                         "the helper",
+	"github_work_items_rest_collect.go collectPullRequests workItemClaimWithWholeDayFetchWindow(claim)":          "the helper's claim copy",
+	"github_work_items_rest_collect.go collectPullRequests pullCrossedSinceBoundary(raw, fetchWindowClaim)":      "whole-day window: the claim copy",
+	"github_work_items_rest_collect.go collectPullRequests filterGitHubPullWindow(page.Items, fetchWindowClaim)": "whole-day window: the claim copy",
+	"gitlab_work_items_route.go Collect workItemWholeDayFetchWindow(claim)":                                      "the helper",
+	"linear_work_items_route.go Collect workItemWholeDayFetchWindow(claim)":                                      "the helper",
+	"jira_work_items_route.go jiraWorkItemsJQL workItemWholeDayFetchWindow(claim)":                               "the helper",
+	"jira_work_items_route.go Collect jiraWorkItemsJQL(claim, projectKey)":                                       "builds the JQL through the helper",
+	"jira_atlassian_route.go Collect jiraWorkItemsJQL(claim, projectKey)":                                        "builds the JQL through the helper",
+	"work_item_fetch_window.go workItemClaimWithWholeDayFetchWindow workItemWholeDayFetchWindow(claim)":          "the helper",
+	"github_work_items_composition.go deriveForProvider githubWorkItemDerivedDays(claim, normalizedAt)":          "the deriver's day loop",
+	"gitlab_work_item_derived.go Derive githubWorkItemDerivedDays(claim, normalizedAt)":                          "the deriver's day loop",
+	"jira_work_item_derived.go Derive githubWorkItemDerivedDays(claim, normalizedAt)":                            "the deriver's day loop",
+	"linear_work_items_derived.go Derive githubWorkItemDerivedDays(claim, normalizedAt)":                         "the deriver's day loop",
+}
+
+func workItemFetchWindowCensusFile(name string) bool {
+	return strings.Contains(name, "work_item") || name == "jira_atlassian_route.go"
+}
+
+func TestWorkItemRoutesHandTheirWindowToSharedRequestCodeOnlyThroughTheHelper(t *testing.T) {
+	files, err := filepath.Glob("*.go")
+	if err != nil {
+		t.Fatal(err)
+	}
+	fileSet := token.NewFileSet()
+	type declared struct {
+		file     string
+		function *ast.FuncDecl
+	}
+	functions := []declared{}
+	for _, name := range files {
+		if strings.HasSuffix(name, "_test.go") {
+			continue
+		}
+		parsed, parseErr := parser.ParseFile(fileSet, name, nil, parser.SkipObjectResolution)
+		if parseErr != nil {
+			t.Fatal(parseErr)
+		}
+		for _, declaration := range parsed.Decls {
+			if function, ok := declaration.(*ast.FuncDecl); ok && function.Body != nil {
+				functions = append(functions, declared{name, function})
+			}
+		}
+	}
+	if len(functions) < 1000 {
+		t.Fatalf("the census read %d functions; it must read the whole package", len(functions))
+	}
+	plainCalls := func(function *ast.FuncDecl) []*ast.CallExpr {
+		calls := []*ast.CallExpr{}
+		ast.Inspect(function.Body, func(node ast.Node) bool {
+			if call, ok := node.(*ast.CallExpr); ok {
+				if _, isIdent := call.Fun.(*ast.Ident); isIdent {
+					calls = append(calls, call)
+				}
+			}
+			return true
+		})
+		return calls
+	}
+	// Package-level functions that read the window themselves...
+	readers := map[string]bool{}
+	for _, entry := range functions {
+		if entry.function.Recv != nil {
+			continue
+		}
+		ast.Inspect(entry.function.Body, func(node ast.Node) bool {
+			if selector, ok := node.(*ast.SelectorExpr); ok &&
+				(selector.Sel.Name == "SinceAt" || selector.Sel.Name == "BeforeAt") {
+				readers[entry.function.Name.Name] = true
+			}
+			return true
+		})
+	}
+	if !readers["pullOutsideKnownWindow"] || !readers["workItemWholeDayFetchWindow"] {
+		t.Fatalf("the census did not find the known window readers: %v", readers)
+	}
+	// ...or through another package-level function.
+	for grew := true; grew; {
+		grew = false
+		for _, entry := range functions {
+			if entry.function.Recv != nil || readers[entry.function.Name.Name] {
+				continue
+			}
+			for _, call := range plainCalls(entry.function) {
+				if readers[call.Fun.(*ast.Ident).Name] {
+					readers[entry.function.Name.Name] = true
+					grew = true
+				}
+			}
+		}
+	}
+	found := map[string]bool{}
+	for _, entry := range functions {
+		if !workItemFetchWindowCensusFile(entry.file) {
+			continue
+		}
+		for _, call := range plainCalls(entry.function) {
+			if !readers[call.Fun.(*ast.Ident).Name] {
+				continue
+			}
+			var text strings.Builder
+			if err := printer.Fprint(&text, fileSet, call); err != nil {
+				t.Fatal(err)
+			}
+			found[entry.file+" "+entry.function.Name.Name+" "+strings.Join(strings.Fields(text.String()), " ")] = true
+		}
+	}
+	foundLines, want := []string{}, []string{}
+	for line := range found {
+		foundLines = append(foundLines, line)
+	}
+	for line := range workItemWindowReaderCalls {
+		want = append(want, line)
+	}
+	sort.Strings(foundLines)
+	sort.Strings(want)
+	if !reflect.DeepEqual(foundLines, want) {
+		t.Fatalf("calls from the work-item files into code that reads the claim's window changed.\n"+
+			"Code that selects what to fetch gets the whole-day window (the helper or its claim copy).\n"+
+			"found:\n  %s\nwant:\n  %s", strings.Join(foundLines, "\n  "), strings.Join(want, "\n  "))
+	}
+}
+
+// TestGitHubPullRequestRouteKeepsTheExactWindowOfItsUnit: the whole-day fetch
+// window belongs to the work-item units only. The prs dataset route shares
+// the two pull-request window predicates with the work-item route and must
+// keep the unit's exact instants: for a unit 15:00-16:00 it takes the pull
+// request updated at 15:30 and neither the one updated at 16:30 (after the
+// end, same day) nor the one updated at 14:30 (before the start, same day).
+func TestGitHubPullRequestRouteKeepsTheExactWindowOfItsUnit(t *testing.T) {
+	since := time.Date(2026, 7, 21, 15, 0, 0, 0, time.UTC)
+	before := time.Date(2026, 7, 21, 16, 0, 0, 0, time.UTC)
+	claim := nativeTestClaim("github", "prs")
+	claim.SinceAt, claim.BeforeAt = &since, &before
+	bodies := defaultGitHubPullRequestFixtures()
+	bodies["/repos/acme/api/pulls"] = `[
+  {"number": 43, "updated_at": "2026-07-21T16:30:00Z"},
+  {"number": 42, "updated_at": "2026-07-21T15:30:00Z"},
+  {"number": 41, "updated_at": "2026-07-21T14:30:00Z"}
+]`
+	doer := &gitHubPullRequestDoer{t: t, bodies: bodies}
+	now := before.Add(time.Minute)
+	batch, err := (GitHubPullRequestRouteHandler{Now: func() time.Time { return now }}).Collect(
+		context.Background(), claim, providerfoundation.Credential{},
+		gitHubPullRequestClient(t, fakehttp.Client(doer), "https://api.github.com"), now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if batch.Evidence.Records != 1 {
+		t.Errorf("records=%d want 1 (only #42 is inside 15:00-16:00)", batch.Evidence.Records)
+	}
+	detail := []string{}
+	for _, path := range doer.requests {
+		if strings.HasPrefix(path, "/repos/acme/api/pulls/") {
+			detail = append(detail, path)
+		}
+	}
+	if !reflect.DeepEqual(detail, []string{"/repos/acme/api/pulls/42"}) {
+		t.Errorf("pull-request detail requests=%v want only #42: the prs route must not take the whole-day window", detail)
 	}
 }

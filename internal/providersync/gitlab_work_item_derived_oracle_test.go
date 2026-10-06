@@ -220,40 +220,34 @@ func gitlabAIAttributionOracleInput(rawMR map[string]any, source string) map[str
 	}
 }
 
+// buildGitLabAIAttributionOracleRow runs the PR/MR attribution through the
+// ONE route that writes it, the prs unit, over a single merge request list
+// item, and returns the row of the requested source. The frozen Python answer
+// is the same function (gitlab_mr_ai_attributions) the work-items route used
+// to be compared against.
 func buildGitLabAIAttributionOracleRow(
 	t *testing.T,
 	input map[string]any,
 ) githubAIAttributionRow {
 	t.Helper()
-	responses := gitLabWorkItemResponses()
-	root := "/api/v4/projects/123"
-	rawMR, err := json.Marshal([]any{input["raw_mr"]})
+	rawMR := map[string]any{"user_notes_count": 0, "target_branch": "main"}
+	for key, value := range input["raw_mr"].(map[string]any) {
+		rawMR[key] = value
+	}
+	list, err := json.Marshal([]any{rawMR})
 	if err != nil {
 		t.Fatal(err)
 	}
-	responses[root+"/issues?page=1"] = []string{"[]"}
-	responses[root+"/merge_requests?page=1"] = []string{string(rawMR), "[]"}
-	no := false
-	claim := nativeTestClaim("gitlab", "work-items")
+	claim := nativeTestClaim("gitlab", "prs")
 	claim.OrgID = input["org_id"].(string)
-	statusMapping := loadRealStatusMapping(t)
-	classifier, err := NewInvestmentClassifier(investmentConfigPath(t, "real"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	batch, err := (GitLabWorkItemsRouteHandler{
-		StatusMapping: statusMapping,
-		Derived: GitLabWorkItemDeriver{
-			Source:               &githubMultiDayOracleSource{},
-			statusMapping:        statusMapping,
-			investmentClassifier: classifier,
-		},
-		FetchComments: &no, FetchHistory: &no, FetchLabels: &no,
-		FetchLinks: &no, FetchMilestones: &no,
-	}).Collect(
-		context.Background(), claim,
-		providerfoundation.Credential{Provider: "gitlab", ID: claim.CredentialID},
-		gitLabWorkItemsClient(t, fakehttp.Client(&gitLabWorkItemsDoer{responses: responses})),
+	// The oracle merge requests were updated in early August.
+	since, before := time.Date(2026, 7, 1, 0, 0, 0, 0, time.UTC), time.Date(2026, 9, 1, 0, 0, 0, 0, time.UTC)
+	claim.SinceAt, claim.BeforeAt = &since, &before
+	batch, err := (GitLabPullRequestRouteHandler{PerPage: 100}).Collect(
+		context.Background(), claim, providerfoundation.Credential{},
+		glAttributionClient(t, &glAttributionDoer{
+			list: string(list), project: `{"id":123,"path":"api","path_with_namespace":"acme/api","name":"api"}`,
+		}),
 		time.Date(2026, 8, 3, 12, 0, 0, 0, time.UTC),
 	)
 	if err != nil {
@@ -273,7 +267,7 @@ func buildGitLabAIAttributionOracleRow(
 			}
 		}
 	}
-	t.Errorf("Go GitLab work-items route omitted authoritative ai_attribution source %q", input["signal_source"])
+	t.Errorf("Go GitLab prs route omitted authoritative ai_attribution source %q", input["signal_source"])
 	return githubAIAttributionRow{
 		Evidence: map[string]any{"oracle_failure": fmt.Sprint(input["signal_source"])},
 	}
@@ -644,16 +638,10 @@ func TestGitLabWorkItemsRouteComposesSixteenEffectsAndAdvancesWatermark(t *testi
 			aiEffect = &copy
 		}
 	}
-	if aiEffect == nil || len(aiEffect.Rows) != 1 {
-		t.Fatalf("AI effect=%+v want one authoritative MR signal", aiEffect)
-	}
-	var attribution gitlabAIAttributionRow
-	if err := json.Unmarshal(aiEffect.Rows[0], &attribution); err != nil {
-		t.Fatal(err)
-	}
-	if attribution.Provider != "gitlab" || attribution.Source != "pr_label" ||
-		attribution.SubjectID != "9" || attribution.Confidence != 0.95 {
-		t.Fatalf("AI attribution=%+v", attribution)
+	// The destination stays in the manifest, but the work-items route writes no
+	// merge-request attribution: the prs unit is its only writer.
+	if aiEffect == nil || len(aiEffect.Rows) != 0 {
+		t.Fatalf("AI effect=%+v want the destination present and empty", aiEffect)
 	}
 	summary, ok := batch.Result["gitlab_work_items"].(GitLabWorkItemsResult)
 	if !ok {

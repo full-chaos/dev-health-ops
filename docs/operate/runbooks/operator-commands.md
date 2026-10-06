@@ -106,8 +106,10 @@ a crashed first run of a unit leaves no visible partial rows. For a unit that AL
 between the writes leaves the new run's quote and effort rows beside the old investment row until the retry
 completes (the retry rewrites the unit; it is never skipped). After a ClickHouse merge, a quote of equal text
 replaces the old run's quote (the quote key has no run id), so the old row can show fewer or no quotes, and the
-effort reader shows the half-written run's effort. The retry heals it; a request that ends `failed` leaves it until
-the next scheduled request rewrites the unit.
+effort reader shows the half-written run's effort. The retry heals it (skip-existing keys on the input hash, so the
+unit is rewritten, never skipped); a request that ends `failed` leaves it until the next scheduled request
+rewrites the unit. Both are executed in `TestKnownGapCHAOS8788CrashedRewriteOfAnOlderUnitThenHealing` (real
+ClickHouse and readers; a merge is forced between the crash and the retry, and not forced before the third step).
 
 Related reference (not a command, background): [Job recovery lifecycle](../run/job-recovery-lifecycle.md) --
 River only rescues a stuck-`running` job after `max(RescueStuckJobsAfter=1h default, kind timeout)`; a job

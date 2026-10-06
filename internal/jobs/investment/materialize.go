@@ -626,7 +626,7 @@ func (m *Materializer) Run(ctx context.Context, cfg Config) (Stats, error) {
 	// shows the half-written run's effort. The retry rewrites the unit (it is not
 	// skipped: the new key is still absent), which heals it; a request that
 	// ends failed leaves it until the next request. Pinned by
-	// TestKnownGapCHAOS8788OldInvestmentLosesQuotesAfterCrashedRewrite.
+	// TestKnownGapCHAOS8788CrashedRewriteOfAnOlderUnitThenHealing.
 	if len(quotes) > 0 {
 		if _, err := m.writer.WriteQuotes(ctx, cfg.OrgID, quotes); err != nil {
 			return Stats{}, fmt.Errorf("write work_unit_investment_quotes: %w", err)

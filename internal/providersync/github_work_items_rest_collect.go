@@ -286,8 +286,12 @@ func (collector GitHubWorkItemsRESTCollector) collectIssues(
 	result *GitHubWorkItemsRESTResult,
 ) error {
 	query := url.Values{"state": {"all"}, "per_page": {"100"}}
-	if claim.SinceAt != nil {
-		query.Set("since", claim.SinceAt.UTC().Format(time.RFC3339))
+	// The whole-day fetch window (CHAOS-8808): since is 00:00 UTC of the
+	// window's first day, and the client-side end filter below uses the end of
+	// the window's last day. See workItemWholeDayFetchWindow.
+	window := workItemWholeDayFetchWindow(claim)
+	if window.Since != nil {
+		query.Set("since", window.Since.Format(time.RFC3339))
 	}
 	page, err := providerfoundation.CollectGitHubLinkPages(
 		ctx, client, providerfoundation.GitHubPageOptions{
@@ -309,7 +313,7 @@ func (collector GitHubWorkItemsRESTCollector) collectIssues(
 		if len(listed.PullRequest) != 0 && string(listed.PullRequest) != "null" {
 			continue
 		}
-		if githubWorkItemsRESTUpdatedAfterBefore(listed.UpdatedAt, claim.BeforeAt) {
+		if githubWorkItemsRESTUpdatedAfterBefore(listed.UpdatedAt, window.Until) {
 			continue
 		}
 		events, eventPage, err := collectGitHubWorkItemChildPages(

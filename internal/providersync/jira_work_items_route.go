@@ -302,8 +302,12 @@ func jiraWorkItemsJQL(claim Claim, projectKey string) string {
 	if jiraOptionBool(claim, "fetch_all", false) {
 		return fmt.Sprintf("project = '%s' ORDER BY updated DESC", projectKey)
 	}
-	updatedSince := claim.SinceAt.UTC().Format("2006-01-02")
-	activeUntil := claim.BeforeAt.UTC().Format("2006-01-02")
+	// The dates of the whole-day fetch window (workItemWholeDayFetchWindow).
+	// Jira reduces both bounds to dates, so this is the same request as before
+	// CHAOS-8808; the helper is used so that all four routes share one rule.
+	window := workItemWholeDayFetchWindow(claim)
+	updatedSince := window.Since.Format("2006-01-02")
+	activeUntil := window.Until.Format("2006-01-02")
 	return fmt.Sprintf("project = '%s' AND (updated >= '%s' OR (statusCategory != Done AND created <= '%s')) ORDER BY updated DESC", projectKey, updatedSince, activeUntil)
 }
 

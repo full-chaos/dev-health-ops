@@ -1,0 +1,705 @@
+{
+  "cases": [
+    {
+      "name": "hourly_window_inside_a_day",
+      "python": {
+        "github": {
+          "kept": {
+            "first_second_of_the_next_day": {
+              "kept": {
+                "t": "bool",
+                "v": "false"
+              },
+              "updated_at": {
+                "t": "datetime",
+                "v": "2026-06-18T00:00:00.000000Z"
+              }
+            },
+            "last_second_of_the_last_day": {
+              "kept": {
+                "t": "bool",
+                "v": "true"
+              },
+              "updated_at": {
+                "t": "datetime",
+                "v": "2026-06-17T23:59:59.000000Z"
+              }
+            },
+            "one_second_after_the_unit_end": {
+              "kept": {
+                "t": "bool",
+                "v": "true"
+              },
+              "updated_at": {
+                "t": "datetime",
+                "v": "2026-06-17T13:00:01.000000Z"
+              }
+            }
+          },
+          "since": {
+            "t": "datetime",
+            "v": "2026-06-17T00:00:00.000000Z"
+          }
+        },
+        "gitlab": {
+          "updated_after": {
+            "t": "datetime",
+            "v": "2026-06-17T00:00:00.000000Z"
+          },
+          "updated_before": null
+        },
+        "jira": {
+          "jql": {
+            "t": "str",
+            "v": "project = 'OPS' AND (updated >= '2026-06-17' OR (statusCategory != Done AND created <= '2026-06-17')) ORDER BY updated DESC"
+          }
+        },
+        "linear": {
+          "gte": {
+            "t": "datetime",
+            "v": "2026-06-17T00:00:00.000000Z"
+          },
+          "lte": {
+            "t": "datetime",
+            "v": "2026-06-17T23:59:59.999999Z"
+          }
+        },
+        "window": {
+          "backfill_days": {
+            "t": "int",
+            "v": "1"
+          },
+          "day": {
+            "t": "date",
+            "v": "2026-06-17"
+          },
+          "day_count": {
+            "t": "int",
+            "v": "1"
+          },
+          "first_day": {
+            "t": "date",
+            "v": "2026-06-17"
+          },
+          "last_day": {
+            "t": "date",
+            "v": "2026-06-17"
+          },
+          "since_dt": {
+            "t": "datetime",
+            "v": "2026-06-17T00:00:00.000000Z"
+          },
+          "until_dt": {
+            "t": "datetime",
+            "v": "2026-06-17T23:59:59.999999Z"
+          }
+        }
+      },
+      "python_with_own_offset": {
+        "first_day": {
+          "t": "date",
+          "v": "2026-06-17"
+        },
+        "last_day": {
+          "t": "date",
+          "v": "2026-06-17"
+        }
+      },
+      "unit": {
+        "before_at": {
+          "t": "datetime",
+          "v": "2026-06-17T13:00:00.000000Z"
+        },
+        "since_at": {
+          "t": "datetime",
+          "v": "2026-06-17T12:00:00.000000Z"
+        }
+      }
+    },
+    {
+      "name": "window_crosses_midnight_utc",
+      "python": {
+        "github": {
+          "kept": {
+            "first_second_of_the_next_day": {
+              "kept": {
+                "t": "bool",
+                "v": "false"
+              },
+              "updated_at": {
+                "t": "datetime",
+                "v": "2026-06-19T00:00:00.000000Z"
+              }
+            },
+            "last_second_of_the_last_day": {
+              "kept": {
+                "t": "bool",
+                "v": "true"
+              },
+              "updated_at": {
+                "t": "datetime",
+                "v": "2026-06-18T23:59:59.000000Z"
+              }
+            },
+            "one_second_after_the_unit_end": {
+              "kept": {
+                "t": "bool",
+                "v": "true"
+              },
+              "updated_at": {
+                "t": "datetime",
+                "v": "2026-06-18T00:30:01.000000Z"
+              }
+            }
+          },
+          "since": {
+            "t": "datetime",
+            "v": "2026-06-17T00:00:00.000000Z"
+          }
+        },
+        "gitlab": {
+          "updated_after": {
+            "t": "datetime",
+            "v": "2026-06-17T00:00:00.000000Z"
+          },
+          "updated_before": null
+        },
+        "jira": {
+          "jql": {
+            "t": "str",
+            "v": "project = 'OPS' AND (updated >= '2026-06-17' OR (statusCategory != Done AND created <= '2026-06-18')) ORDER BY updated DESC"
+          }
+        },
+        "linear": {
+          "gte": {
+            "t": "datetime",
+            "v": "2026-06-17T00:00:00.000000Z"
+          },
+          "lte": {
+            "t": "datetime",
+            "v": "2026-06-18T23:59:59.999999Z"
+          }
+        },
+        "window": {
+          "backfill_days": {
+            "t": "int",
+            "v": "2"
+          },
+          "day": {
+            "t": "date",
+            "v": "2026-06-18"
+          },
+          "day_count": {
+            "t": "int",
+            "v": "2"
+          },
+          "first_day": {
+            "t": "date",
+            "v": "2026-06-17"
+          },
+          "last_day": {
+            "t": "date",
+            "v": "2026-06-18"
+          },
+          "since_dt": {
+            "t": "datetime",
+            "v": "2026-06-17T00:00:00.000000Z"
+          },
+          "until_dt": {
+            "t": "datetime",
+            "v": "2026-06-18T23:59:59.999999Z"
+          }
+        }
+      },
+      "python_with_own_offset": {
+        "first_day": {
+          "t": "date",
+          "v": "2026-06-17"
+        },
+        "last_day": {
+          "t": "date",
+          "v": "2026-06-18"
+        }
+      },
+      "unit": {
+        "before_at": {
+          "t": "datetime",
+          "v": "2026-06-18T00:30:00.000000Z"
+        },
+        "since_at": {
+          "t": "datetime",
+          "v": "2026-06-17T23:30:00.000000Z"
+        }
+      }
+    },
+    {
+      "name": "multi_day_catch_up",
+      "python": {
+        "github": {
+          "kept": {
+            "first_second_of_the_next_day": {
+              "kept": {
+                "t": "bool",
+                "v": "false"
+              },
+              "updated_at": {
+                "t": "datetime",
+                "v": "2026-06-18T00:00:00.000000Z"
+              }
+            },
+            "last_second_of_the_last_day": {
+              "kept": {
+                "t": "bool",
+                "v": "true"
+              },
+              "updated_at": {
+                "t": "datetime",
+                "v": "2026-06-17T23:59:59.000000Z"
+              }
+            },
+            "one_second_after_the_unit_end": {
+              "kept": {
+                "t": "bool",
+                "v": "true"
+              },
+              "updated_at": {
+                "t": "datetime",
+                "v": "2026-06-17T13:00:01.000000Z"
+              }
+            }
+          },
+          "since": {
+            "t": "datetime",
+            "v": "2026-06-14T00:00:00.000000Z"
+          }
+        },
+        "gitlab": {
+          "updated_after": {
+            "t": "datetime",
+            "v": "2026-06-14T00:00:00.000000Z"
+          },
+          "updated_before": null
+        },
+        "jira": {
+          "jql": {
+            "t": "str",
+            "v": "project = 'OPS' AND (updated >= '2026-06-14' OR (statusCategory != Done AND created <= '2026-06-17')) ORDER BY updated DESC"
+          }
+        },
+        "linear": {
+          "gte": {
+            "t": "datetime",
+            "v": "2026-06-14T00:00:00.000000Z"
+          },
+          "lte": {
+            "t": "datetime",
+            "v": "2026-06-17T23:59:59.999999Z"
+          }
+        },
+        "window": {
+          "backfill_days": {
+            "t": "int",
+            "v": "4"
+          },
+          "day": {
+            "t": "date",
+            "v": "2026-06-17"
+          },
+          "day_count": {
+            "t": "int",
+            "v": "4"
+          },
+          "first_day": {
+            "t": "date",
+            "v": "2026-06-14"
+          },
+          "last_day": {
+            "t": "date",
+            "v": "2026-06-17"
+          },
+          "since_dt": {
+            "t": "datetime",
+            "v": "2026-06-14T00:00:00.000000Z"
+          },
+          "until_dt": {
+            "t": "datetime",
+            "v": "2026-06-17T23:59:59.999999Z"
+          }
+        }
+      },
+      "python_with_own_offset": {
+        "first_day": {
+          "t": "date",
+          "v": "2026-06-14"
+        },
+        "last_day": {
+          "t": "date",
+          "v": "2026-06-17"
+        }
+      },
+      "unit": {
+        "before_at": {
+          "t": "datetime",
+          "v": "2026-06-17T13:00:00.000000Z"
+        },
+        "since_at": {
+          "t": "datetime",
+          "v": "2026-06-14T09:15:27.123456Z"
+        }
+      }
+    },
+    {
+      "name": "first_sync_of_90_days",
+      "python": {
+        "github": {
+          "kept": {
+            "first_second_of_the_next_day": {
+              "kept": {
+                "t": "bool",
+                "v": "false"
+              },
+              "updated_at": {
+                "t": "datetime",
+                "v": "2026-06-18T00:00:00.000000Z"
+              }
+            },
+            "last_second_of_the_last_day": {
+              "kept": {
+                "t": "bool",
+                "v": "true"
+              },
+              "updated_at": {
+                "t": "datetime",
+                "v": "2026-06-17T23:59:59.000000Z"
+              }
+            },
+            "one_second_after_the_unit_end": {
+              "kept": {
+                "t": "bool",
+                "v": "true"
+              },
+              "updated_at": {
+                "t": "datetime",
+                "v": "2026-06-17T13:00:01.000000Z"
+              }
+            }
+          },
+          "since": {
+            "t": "datetime",
+            "v": "2026-03-19T00:00:00.000000Z"
+          }
+        },
+        "gitlab": {
+          "updated_after": {
+            "t": "datetime",
+            "v": "2026-03-19T00:00:00.000000Z"
+          },
+          "updated_before": null
+        },
+        "jira": {
+          "jql": {
+            "t": "str",
+            "v": "project = 'OPS' AND (updated >= '2026-03-19' OR (statusCategory != Done AND created <= '2026-06-17')) ORDER BY updated DESC"
+          }
+        },
+        "linear": {
+          "gte": {
+            "t": "datetime",
+            "v": "2026-03-19T00:00:00.000000Z"
+          },
+          "lte": {
+            "t": "datetime",
+            "v": "2026-06-17T23:59:59.999999Z"
+          }
+        },
+        "window": {
+          "backfill_days": {
+            "t": "int",
+            "v": "91"
+          },
+          "day": {
+            "t": "date",
+            "v": "2026-06-17"
+          },
+          "day_count": {
+            "t": "int",
+            "v": "91"
+          },
+          "first_day": {
+            "t": "date",
+            "v": "2026-03-19"
+          },
+          "last_day": {
+            "t": "date",
+            "v": "2026-06-17"
+          },
+          "since_dt": {
+            "t": "datetime",
+            "v": "2026-03-19T00:00:00.000000Z"
+          },
+          "until_dt": {
+            "t": "datetime",
+            "v": "2026-06-17T23:59:59.999999Z"
+          }
+        }
+      },
+      "python_with_own_offset": {
+        "first_day": {
+          "t": "date",
+          "v": "2026-03-19"
+        },
+        "last_day": {
+          "t": "date",
+          "v": "2026-06-17"
+        }
+      },
+      "unit": {
+        "before_at": {
+          "t": "datetime",
+          "v": "2026-06-17T13:00:00.000000Z"
+        },
+        "since_at": {
+          "t": "datetime",
+          "v": "2026-03-19T13:00:00.000000Z"
+        }
+      }
+    },
+    {
+      "name": "window_ends_exactly_at_midnight",
+      "python": {
+        "github": {
+          "kept": {
+            "first_second_of_the_next_day": {
+              "kept": {
+                "t": "bool",
+                "v": "false"
+              },
+              "updated_at": {
+                "t": "datetime",
+                "v": "2026-06-19T00:00:00.000000Z"
+              }
+            },
+            "last_second_of_the_last_day": {
+              "kept": {
+                "t": "bool",
+                "v": "true"
+              },
+              "updated_at": {
+                "t": "datetime",
+                "v": "2026-06-18T23:59:59.000000Z"
+              }
+            },
+            "one_second_after_the_unit_end": {
+              "kept": {
+                "t": "bool",
+                "v": "true"
+              },
+              "updated_at": {
+                "t": "datetime",
+                "v": "2026-06-18T00:00:01.000000Z"
+              }
+            }
+          },
+          "since": {
+            "t": "datetime",
+            "v": "2026-06-17T00:00:00.000000Z"
+          }
+        },
+        "gitlab": {
+          "updated_after": {
+            "t": "datetime",
+            "v": "2026-06-17T00:00:00.000000Z"
+          },
+          "updated_before": null
+        },
+        "jira": {
+          "jql": {
+            "t": "str",
+            "v": "project = 'OPS' AND (updated >= '2026-06-17' OR (statusCategory != Done AND created <= '2026-06-18')) ORDER BY updated DESC"
+          }
+        },
+        "linear": {
+          "gte": {
+            "t": "datetime",
+            "v": "2026-06-17T00:00:00.000000Z"
+          },
+          "lte": {
+            "t": "datetime",
+            "v": "2026-06-18T23:59:59.999999Z"
+          }
+        },
+        "window": {
+          "backfill_days": {
+            "t": "int",
+            "v": "2"
+          },
+          "day": {
+            "t": "date",
+            "v": "2026-06-18"
+          },
+          "day_count": {
+            "t": "int",
+            "v": "2"
+          },
+          "first_day": {
+            "t": "date",
+            "v": "2026-06-17"
+          },
+          "last_day": {
+            "t": "date",
+            "v": "2026-06-18"
+          },
+          "since_dt": {
+            "t": "datetime",
+            "v": "2026-06-17T00:00:00.000000Z"
+          },
+          "until_dt": {
+            "t": "datetime",
+            "v": "2026-06-18T23:59:59.999999Z"
+          }
+        }
+      },
+      "python_with_own_offset": {
+        "first_day": {
+          "t": "date",
+          "v": "2026-06-17"
+        },
+        "last_day": {
+          "t": "date",
+          "v": "2026-06-18"
+        }
+      },
+      "unit": {
+        "before_at": {
+          "t": "datetime",
+          "v": "2026-06-18T00:00:00.000000Z"
+        },
+        "since_at": {
+          "t": "datetime",
+          "v": "2026-06-17T23:00:00.000000Z"
+        }
+      }
+    },
+    {
+      "name": "instant_with_an_offset",
+      "python": {
+        "github": {
+          "kept": {
+            "first_second_of_the_next_day": {
+              "kept": {
+                "t": "bool",
+                "v": "false"
+              },
+              "updated_at": {
+                "t": "datetime",
+                "v": "2026-06-18T00:00:00.000000Z"
+              }
+            },
+            "last_second_of_the_last_day": {
+              "kept": {
+                "t": "bool",
+                "v": "true"
+              },
+              "updated_at": {
+                "t": "datetime",
+                "v": "2026-06-17T23:59:59.000000Z"
+              }
+            },
+            "one_second_after_the_unit_end": {
+              "kept": {
+                "t": "bool",
+                "v": "true"
+              },
+              "updated_at": {
+                "t": "datetime",
+                "v": "2026-06-17T00:30:01.000000Z"
+              }
+            }
+          },
+          "since": {
+            "t": "datetime",
+            "v": "2026-06-16T00:00:00.000000Z"
+          }
+        },
+        "gitlab": {
+          "updated_after": {
+            "t": "datetime",
+            "v": "2026-06-16T00:00:00.000000Z"
+          },
+          "updated_before": null
+        },
+        "jira": {
+          "jql": {
+            "t": "str",
+            "v": "project = 'OPS' AND (updated >= '2026-06-16' OR (statusCategory != Done AND created <= '2026-06-17')) ORDER BY updated DESC"
+          }
+        },
+        "linear": {
+          "gte": {
+            "t": "datetime",
+            "v": "2026-06-16T00:00:00.000000Z"
+          },
+          "lte": {
+            "t": "datetime",
+            "v": "2026-06-17T23:59:59.999999Z"
+          }
+        },
+        "window": {
+          "backfill_days": {
+            "t": "int",
+            "v": "2"
+          },
+          "day": {
+            "t": "date",
+            "v": "2026-06-17"
+          },
+          "day_count": {
+            "t": "int",
+            "v": "2"
+          },
+          "first_day": {
+            "t": "date",
+            "v": "2026-06-16"
+          },
+          "last_day": {
+            "t": "date",
+            "v": "2026-06-17"
+          },
+          "since_dt": {
+            "t": "datetime",
+            "v": "2026-06-16T00:00:00.000000Z"
+          },
+          "until_dt": {
+            "t": "datetime",
+            "v": "2026-06-17T23:59:59.999999Z"
+          }
+        }
+      },
+      "python_with_own_offset": {
+        "first_day": {
+          "t": "date",
+          "v": "2026-06-17"
+        },
+        "last_day": {
+          "t": "date",
+          "v": "2026-06-17"
+        }
+      },
+      "unit": {
+        "before_at": {
+          "t": "datetime",
+          "v": "2026-06-17T00:30:00.000000Z"
+        },
+        "since_at": {
+          "t": "datetime",
+          "v": "2026-06-16T23:30:00.000000Z"
+        }
+      }
+    }
+  ],
+  "program": "internal/providersync/testdata/work_item_fetch_window_recorder.py",
+  "recorded_from": {
+    "argument": "0dcecf34a^",
+    "commit": "b702598e89599d707b709e451d543c4211c9d4ee"
+  }
+}

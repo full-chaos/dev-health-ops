@@ -258,8 +258,10 @@ func (handler GitLabWorkItemsRouteHandler) Collect(
 	// This intentionally has no updated_before parameter. The actual
 	// fetch_gitlab_work_items producer passes updated_after only to
 	// python-gitlab; its until value is not part of that API call.
-	if claim.SinceAt != nil {
-		query.Set("updated_after", claim.SinceAt.UTC().Format(time.RFC3339Nano))
+	// The start is 00:00 UTC of the window's first day (CHAOS-8808); see
+	// workItemWholeDayFetchWindow. Its end is not sent, as in Python.
+	if window := workItemWholeDayFetchWindow(claim); window.Since != nil {
+		query.Set("updated_after", window.Since.Format(time.RFC3339Nano))
 	}
 	issuePayloads, issuePages, issueErr := collectGitLabPayloads(
 		ctx, &counted, root+"/issues", query, perPage, maxPages,

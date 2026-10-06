@@ -1274,12 +1274,16 @@ func (handler LinearWorkItemsRouteHandler) Collect(
 			}},
 			"archivedAt": map[string]any{"null": true},
 		}
+		// Whole-day fetch window (CHAOS-8808): gte 00:00 UTC of the window's
+		// first day, lte the end of its last day. See
+		// workItemWholeDayFetchWindow.
 		updatedAt := map[string]any{}
-		if claim.SinceAt != nil {
-			updatedAt["gte"] = claim.SinceAt.UTC().Format(time.RFC3339Nano)
+		window := workItemWholeDayFetchWindow(claim)
+		if window.Since != nil {
+			updatedAt["gte"] = window.Since.Format(time.RFC3339Nano)
 		}
-		if claim.BeforeAt != nil {
-			updatedAt["lte"] = claim.BeforeAt.UTC().Format(time.RFC3339Nano)
+		if window.Until != nil {
+			updatedAt["lte"] = window.Until.Format(time.RFC3339Nano)
 		}
 		if len(updatedAt) > 0 {
 			filter["updatedAt"] = updatedAt

@@ -236,6 +236,33 @@ VALUES ($1::uuid,$2,'job-'||$1::text,$3::uuid,'sync','0 * * * *','UTC',1,FALSE,n
 		}
 	}
 
+	// The stored list of a whole-integration config names a gated target
+	// that has a dataset (an earlier save put it there while the org had the
+	// feature). The list cannot say whether a request or a row put it
+	// there, so the readers of the list do not refuse; the rows decide at
+	// plan time. With the incidents row on the plan refuses the occurrence
+	// (no dataset of the config is fetched, as for a list without the
+	// target); with the row off the other datasets are planned.
+	for _, testCase := range []struct {
+		provider, stored string
+		rows             []string
+		putRepositories  int
+	}{
+		{"jira", `["work-items","operational"]`, []string{"work-items", "incidents"}, http.StatusBadRequest},
+		{"gitlab", `["git","incidents"]`, []string{"commits", "incidents"}, http.StatusOK},
+	} {
+		one := seed(testCase.provider, testCase.stored, testCase.rows)
+		want := gateReaderResult{http.StatusAccepted, http.StatusAccepted, testCase.putRepositories, schedsync.OccurrenceMinted, "ineligible"}
+		if got := read(testCase.provider+" stored gated target, incidents row on", one); got != want {
+			t.Errorf("%s, stored list %s, incidents row on: %+v, want %+v", testCase.provider, testCase.stored, got, want)
+		}
+		exec(`UPDATE integration_datasets SET is_enabled = false WHERE integration_id = $1 AND dataset_key = 'incidents'`, one.integration)
+		want.plan = "planned"
+		if got := read(testCase.provider+" stored gated target, incidents row off", one); got != want {
+			t.Errorf("%s, stored list %s, incidents row off: %+v, want %+v", testCase.provider, testCase.stored, got, want)
+		}
+	}
+
 	// A child config (pinned to one source) and a config with no rule but
 	// its list: the list is the selection a request made, never a mirror. A
 	// gated target in it refuses every reader, though it has a dataset and

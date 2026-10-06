@@ -20,6 +20,7 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/providerfoundation"
 	"github.com/full-chaos/dev-health-ops/internal/providersync"
 	"github.com/full-chaos/dev-health-ops/internal/syncbudget"
+	"github.com/full-chaos/dev-health-ops/internal/workitemcontract"
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
@@ -794,6 +795,18 @@ WHERE config.id = $1::uuid AND config.org_id = $2 AND integration.is_active`, oc
 			return loadedMaterializationPlan{}, ErrOccurrenceIneligible
 		}
 	}
+	// CHAOS-8773: when a scheduled planner-managed parent has no enabled
+	// work-item family row, ask once whether this integration ever finished
+	// a work-items unit, so the planner can tell "stopped" from "never opted
+	// in". Skipped for every plan that has a family row.
+	workItemUnitsRanBefore := false
+	scheduledParent := plannerManaged && explicitDatasetKeys == nil
+	if scheduledParent && PlanNeedsWorkItemRanBefore(provider, true, datasets) {
+		workItemUnitsRanBefore, err = loadWorkItemUnitsRanBefore(ctx, tx, orgID, integrationID)
+		if err != nil {
+			return loadedMaterializationPlan{}, err
+		}
+	}
 	watermarks, err := loadPlanWatermarks(ctx, tx, orgID, sources, datasets)
 	if err != nil {
 		return loadedMaterializationPlan{}, err
@@ -822,6 +835,8 @@ WHERE config.id = $1::uuid AND config.org_id = $2 AND integration.is_active`, oc
 			Now: occurrence.ScheduledFor.UTC(), Before: before, Since: since,
 			IntegrationDepthDays: depth, TierBackfillDaysCap: tierCap,
 			WatermarkOverlap: watermarkOverlap, Sources: sources, Datasets: datasets, Watermarks: watermarks,
+			PlannerManagedParent:   scheduledParent,
+			WorkItemUnitsRanBefore: workItemUnitsRanBefore,
 		},
 		provider:               provider,
 		configuredCredentialID: credentialID,
@@ -1713,6 +1728,31 @@ func syncTargetsRequireCanonicalIncident(targets []string) bool {
 		}
 	}
 	return false
+}
+
+// workItemUnitsRanBeforeSQL answers "did this integration ever finish a
+// work-items unit with status success". The (org_id, integration_id) equality
+// pair is the leading prefix of ix_sync_run_units_coverage_scan (alembic
+// 0076: org_id, integration_id, source_id, dataset_key, before_at), so the
+// EXISTS probe reads only this integration's unit rows and stops at the first
+// match. It runs only for a plan with no enabled work-item family row, never
+// for a healthy plan.
+const workItemUnitsRanBeforeSQL = `
+SELECT EXISTS (
+  SELECT 1 FROM public.sync_run_units
+  WHERE org_id = $1 AND integration_id = $2::uuid
+    AND dataset_key = ANY($3::text[]) AND status = 'success'
+)`
+
+// loadWorkItemUnitsRanBefore reads the CHAOS-8773 "ran before" fact on the
+// coordinator transaction (SELECT on sync_run_units is already granted).
+func loadWorkItemUnitsRanBefore(ctx context.Context, tx pgx.Tx, orgID, integrationID string) (bool, error) {
+	var ranBefore bool
+	if err := tx.QueryRow(ctx, workItemUnitsRanBeforeSQL, orgID, integrationID,
+		workitemcontract.FamilyDatasets()).Scan(&ranBefore); err != nil {
+		return false, fmt.Errorf("load work-item units ran before: %w", err)
+	}
+	return ranBefore, nil
 }
 
 // loadPlanDatasets loads the enabled datasets a plan runs against.

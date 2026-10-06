@@ -222,6 +222,10 @@ func Resolve(ctx context.Context, client QueryClient, orgID string, batch model.
 	if err != nil {
 		return nil, fmt.Errorf("analytics: evidenceQualityStats: %w", err)
 	}
+	evidenceQualityByGroup, err := resolveEvidenceQualityByGroup(ctx, client, orgID, batch, useInvestment, resolvedFilters)
+	if err != nil {
+		return nil, fmt.Errorf("analytics: evidenceQualityByGroup: %w", err)
+	}
 	// analytics.py:970-973: evidence_quality_distribution is literally
 	// evidence_quality_stats.band_counts, reused, never recomputed --
 	// preserve that aliasing here (same JSON bytes on both fields) rather
@@ -238,6 +242,7 @@ func Resolve(ctx context.Context, client QueryClient, orgID string, batch model.
 		FlowMatrix:                  flowMatrixResult,
 		EvidenceQualityDistribution: evidenceQualityDistribution,
 		EvidenceQualityStats:        evidenceQualityStats,
+		EvidenceQualityByGroup:      evidenceQualityByGroup,
 	}, nil
 }
 

@@ -389,6 +389,13 @@ input AnalyticsRequestInput {
   flowMatrix: FlowMatrixRequestInput = null
   useInvestment: Boolean = null
   filters: FilterInput = null
+  """
+  Optional grouping for persisted work-unit evidence quality. Only THEME,
+  SUBCATEGORY and WORK_TYPE are valid. The selected key is the unit's
+  deterministic dominant persisted value, so one unit contributes to one
+  group.
+  """
+  evidenceQualityGroupBy: DimensionInput = null
 }
 
 type AnalyticsResult {
@@ -398,6 +405,18 @@ type AnalyticsResult {
   flowMatrix: FlowMatrixResult
   evidenceQualityDistribution: JSON
   evidenceQualityStats: EvidenceQualityStats
+  evidenceQualityByGroup: [EvidenceQualityGroup!]
+}
+
+"""
+One persisted-work-unit evidence-quality aggregate. `total` counts every unit
+in the group. `mean` is null when no unit in the group has a known quality.
+"""
+type EvidenceQualityGroup {
+  key: String!
+  label: String
+  mean: Float
+  total: Int!
 }
 
 type BreakdownItem {
@@ -411,6 +430,11 @@ input BreakdownRequestInput {
   measure: MeasureInput!
   dateRange: DateRangeInput!
   topN: Int! = 10
+  """
+  Optional exact dimension keys. When present, returns these keys without the
+  independent topN cut so related breakdown measures can be joined safely.
+  """
+  keys: [String!] = null
 }
 
 type BreakdownResult {

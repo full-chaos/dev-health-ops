@@ -805,6 +805,17 @@ var operationSpecs = map[string]OperationSpec{
 			"data.analytics.breakdowns.items.value":      "on the investment path MeasureCount compiles to SUM(subcategory_kv.2), a FLOAT sum (validate.go:245-246). Derived from CHAOS-5451's rule rather than an observed divergence, and this table's payload always sets useInvestment=true; on the non-investment path the same measure is an exact integer sum",
 		}},
 	},
+	// CHAOS-8104's dedicated browser document selects only the persisted
+	// quality means grouped by the supplied investment dimension. Keep its
+	// input distinct from investmentBreakdown: the operation would otherwise
+	// return an empty group list and a proof would measure no group path.
+	"investmentEvidenceQuality": {
+		ResponseRoot: "analytics",
+		Variables:    investmentEvidenceQualityVariables,
+		Parity: Options{FloatTierB: map[string]string{
+			"data.analytics.evidenceQualityByGroup.mean": "avgIf(evidence_quality) over each persisted group -- ClickHouse float aggregate, order-nondeterministic (investmentquality.go:278, CHAOS-5451)",
+		}},
+	},
 	// sankey.coverage.teamCoverage/.repoCoverage: CORRECTED, not new --
 	// this table used to say these were count()/countIf() integers on the
 	// committed WORK_TYPE payload and would only become float sums if a
@@ -1420,6 +1431,21 @@ func investmentVariables(orgID string, w Window) map[string]any {
 			"topN":      10,
 		}},
 		"useInvestment": true,
+	}}
+}
+
+// investmentEvidenceQualityVariables builds the real web consumer's
+// investment batch. The document selects evidenceQualityByGroup, so an
+// explicit allowed grouping is required; leaving it absent returns no groups.
+func investmentEvidenceQualityVariables(orgID string, w Window) map[string]any {
+	return map[string]any{"orgId": orgID, "batch": map[string]any{
+		"breakdowns": []any{map[string]any{
+			"dimension": "THEME", "measure": "COUNT",
+			"dateRange": map[string]any{"startDate": w.SinceDate, "endDate": w.UntilDate},
+			"topN":      1,
+		}},
+		"evidenceQualityGroupBy": "THEME",
+		"useInvestment":          true,
 	}}
 }
 

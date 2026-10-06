@@ -126,6 +126,7 @@ enum WorkGraphNodeTypeInput.PR other
 enum WorkGraphNodeTypeInput.RELEASE other
 enum WorkGraphNodeTypeInput.REVIEW_OUTCOME other
 input AnalyticsRequestInput.breakdowns other
+input AnalyticsRequestInput.evidenceQualityGroupBy other
 input AnalyticsRequestInput.filters other
 input AnalyticsRequestInput.flowMatrix other
 input AnalyticsRequestInput.sankey other
@@ -133,6 +134,7 @@ input AnalyticsRequestInput.timeseries other
 input AnalyticsRequestInput.useInvestment other
 input BreakdownRequestInput.dateRange other
 input BreakdownRequestInput.dimension other
+input BreakdownRequestInput.keys other
 input BreakdownRequestInput.measure other
 input BreakdownRequestInput.topN other
 input CapacityForecastFilterInput.fromDate other

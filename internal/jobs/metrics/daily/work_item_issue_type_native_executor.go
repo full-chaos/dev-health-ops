@@ -40,12 +40,20 @@ const WorkItemIssueTypeFamilyName = "work_item_issue_type"
 //
 // # Append only, newest per key
 //
-// The table is plain MergeTree. Every run appends one row per key of the
-// repository's stored items; readers take the newest computed_at per key. A
-// key that had a live row for the day and that this run no longer produces
-// gets a row of zeros, from this run's compute, so the older row does not stay
-// the newest one. A repository with no stored item and no earlier row for the
-// day gets nothing: a day with no data is never filled.
+// The table is plain MergeTree. On a day that has data for the repository,
+// every run appends one row per key of the repository's stored items; readers
+// take the newest computed_at per key. A key whose newest row of the day holds
+// a count and that this run no longer produces, or produces with no count,
+// gets a row of zeros, so the older row does not stay the newest one.
+//
+// # A day with no data is never filled
+//
+// The compute opens a bucket for every item it is given, so on a day on which
+// no item of the repository was created, completed or active it returns one
+// row of zeros per key. Those rows are not written: a (repository, day) with
+// no data gets no row, and a reader can tell "no data" from "zero". The only
+// rows such a day can get are the zeros that replace a key's older row that
+// holds a count (see issueTypeMetricsRowsToWrite).
 type WorkItemIssueTypeExecutor struct {
 	conn       driver.Conn
 	normalizer workitemengine.TypeNormalizer
@@ -113,7 +121,7 @@ func (executor *WorkItemIssueTypeExecutor) ComputeFamily(
 			items, scope.start, scope.end,
 			workItemEngineTeamResolver(items, attributions), executor.normalizer,
 		)
-		rows = withIssueTypeMetricsZeroRows(rows, live, repoID)
+		rows = issueTypeMetricsRowsToWrite(rows, live, repoID)
 
 		written, err := WriteIssueTypeMetricsDaily(
 			ctx, executor.conn, run.OrganizationID, scope.day, rows, computedAt,

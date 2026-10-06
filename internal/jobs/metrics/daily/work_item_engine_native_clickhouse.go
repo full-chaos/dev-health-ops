@@ -21,9 +21,10 @@ import (
 //
 // activeOnDay=false returns EVERY stored item of the repository. The
 // issue-type compute opens a bucket for every item it is given before any time
-// check, so a key whose items are all outside the day still gets a row of
-// zeros; a narrower read would drop those rows and the family would no longer
-// equal the sync deriver on the same item set.
+// check, so on a day that has data a key whose items are all outside the day
+// still gets a row of zeros; a narrower read would drop those rows and the
+// family would no longer equal the sync deriver on the same item set. (On a
+// day with no data the family stores none of them: issueTypeMetricsRowsToWrite.)
 //
 // activeOnDay=true returns the items that are active on the day: created before
 // the day ends, and not completed before the day starts. That is the SAME
@@ -197,6 +198,37 @@ func withIssueTypeMetricsZeroRows(
 		})
 	}
 	return result
+}
+
+// issueTypeMetricsRowsToWrite is the set of rows the family stores for one
+// (repository, day).
+//
+// The day has data when at least one computed row holds a count. Then every
+// computed row is stored, the rows of zeros included, and a live key the
+// compute did not produce gets a row of zeros.
+//
+// The day has no data when every computed row is a row of zeros (the compute
+// returns one per key of the stored items whatever the day). Then no computed
+// row is stored: a day with no data is never filled. A live key still gets its
+// row of zeros, because its older row holds a count that is no longer true.
+func issueTypeMetricsRowsToWrite(
+	computed []workitemengine.IssueTypeMetricsDailyRow, live []issueTypeMetricsKey, repoID uuid.UUID,
+) []workitemengine.IssueTypeMetricsDailyRow {
+	if !issueTypeMetricsHoldACount(computed) {
+		computed = nil
+	}
+	return withIssueTypeMetricsZeroRows(computed, live, repoID)
+}
+
+// issueTypeMetricsHoldACount reports whether any row counts an item created,
+// completed or active on the day.
+func issueTypeMetricsHoldACount(rows []workitemengine.IssueTypeMetricsDailyRow) bool {
+	for _, row := range rows {
+		if row.CreatedCount != 0 || row.CompletedCount != 0 || row.ActiveCount != 0 {
+			return true
+		}
+	}
+	return false
 }
 
 // WriteIssueTypeMetricsDaily appends one day's rows with the INSERT the sync

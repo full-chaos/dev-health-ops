@@ -77,31 +77,31 @@ func dailyFamilyMatrixCases() []dailyFamilyMatrixCase {
 		{
 			provider: "github", orgID: "81111111-1111-4111-8111-111111111111", repoID: &githubRepo,
 			itemID:    func(number int) string { return fmt.Sprintf("gh:acme/api#%d", number) },
-			itemType:  map[string]string{"bug": "issue", "feature": "issue", "security": "issue", "chore": "issue", "documentation": "issue"},
+			itemType:  map[string]string{"bug": "issue", "feature": "issue", "security": "issue", "chore": "issue", "documentation": "issue", "incident": "issue"},
 			projectID: stringPointer("acme/api"),
 		},
 		{
 			provider: "gitlab", orgID: "82222222-2222-4222-8222-222222222222", repoID: &gitlabRepo,
 			itemID:    func(number int) string { return fmt.Sprintf("gitlab:acme/api#%d", number) },
-			itemType:  map[string]string{"bug": "incident", "feature": "issue", "security": "issue", "chore": "task", "documentation": "issue"},
+			itemType:  map[string]string{"bug": "incident", "feature": "issue", "security": "issue", "chore": "task", "documentation": "issue", "incident": "issue"},
 			projectID: stringPointer("123"),
 		},
 		{
 			provider: "jira", orgID: "83333333-3333-4333-8333-333333333333",
 			itemID:     func(number int) string { return fmt.Sprintf("jira:OPS-%d", number) },
-			itemType:   map[string]string{"bug": "Bug", "feature": "Story", "security": "Task", "chore": "Task", "documentation": "Sub-task"},
+			itemType:   map[string]string{"bug": "Bug", "feature": "Story", "security": "Task", "chore": "Task", "documentation": "Sub-task", "incident": "Epic"},
 			projectKey: stringPointer("OPS"), projectID: stringPointer("10001"),
 		},
 		{
 			provider: "linear", orgID: "84444444-4444-4444-8444-444444444444",
 			itemID:        func(number int) string { return fmt.Sprintf("linear:OPS-%d", number) },
-			itemType:      map[string]string{"bug": "bug", "feature": "feature", "security": "task", "chore": "task", "documentation": "task"},
+			itemType:      map[string]string{"bug": "bug", "feature": "feature", "security": "task", "chore": "task", "documentation": "task", "incident": "task"},
 			nativeTeamKey: stringPointer("OPS"), projectID: stringPointer("project-platform"),
 		},
 	}
 }
 
-// dailyFamilyMatrixRows is the FULL item set of one provider case: six items
+// dailyFamilyMatrixRows is the FULL item set of one provider case: seven items
 // whose creation, start, completion and status changes put something in every
 // derived table of the day.
 //
@@ -111,6 +111,10 @@ func dailyFamilyMatrixCases() []dailyFamilyMatrixCase {
 //	4  chore     created day-20, done at day-2 (not active on the day)
 //	5  documentation  created day-2, open, no status change
 //	6  feature   created day-1, in_progress at day 03:00, done at day 21:00, 5 points
+//	7  incident  created day-30, done at day-10: not active on the day. Where
+//	             the status mapping gives it a type of its own (github, gitlab,
+//	             jira), that key still has a row in issue_type_metrics_daily,
+//	             all zeros.
 func dailyFamilyMatrixRows(testCase dailyFamilyMatrixCase, normalizedAt time.Time) githubWorkItemRows {
 	day := dailyFamilyMatrixDay
 	at := func(days int, hours float64) time.Time {
@@ -135,6 +139,7 @@ func dailyFamilyMatrixRows(testCase dailyFamilyMatrixCase, normalizedAt time.Tim
 		{4, "chore", "done", at(-20, 0), timePtr(at(-4, 0)), timePtr(at(-2, 0)), nil, "linus"},
 		{5, "documentation", "todo", at(-2, 0), nil, nil, nil, ""},
 		{6, "feature", "done", at(-1, 0), timePtr(at(0, 3)), timePtr(at(0, 21)), points(5), "grace"},
+		{7, "incident", "done", at(-30, 0), timePtr(at(-25, 0)), timePtr(at(-10, 0)), nil, "linus"},
 	}
 	rows := githubWorkItemRows{}
 	for _, item := range specs {
@@ -566,6 +571,38 @@ SELECT sum(completed), sum(created), sum(active) FROM (
   GROUP BY day, repo_id, provider, team_id, issue_type_norm)`, testCase.orgID, day,
 			).Scan(&issueTypeCompleted, &issueTypeCreated, &issueTypeActive); err != nil {
 				t.Fatal(err)
+			}
+			// Item 7 is not active on the day. Its normalized type comes from
+			// the real status mapping; where no other item has that type, the
+			// family must still write the key, as a row of zeros.
+			statusMapping, err := LoadStatusMapping(resolveStatusMappingConfig(t, "real"))
+			if err != nil {
+				t.Fatal(err)
+			}
+			inactive := rows.WorkItems[len(rows.WorkItems)-1]
+			inactiveType := statusMapping.NormalizeType(inactive.Provider, inactive.Type, inactive.Labels)
+			ownType := true
+			for _, item := range rows.WorkItems[:len(rows.WorkItems)-1] {
+				if statusMapping.NormalizeType(item.Provider, item.Type, item.Labels) == inactiveType {
+					ownType = false
+				}
+			}
+			if !ownType && testCase.provider != "linear" {
+				t.Fatalf("the inactive item's type %q is the type of another item: the fixture no longer has a key with no active item", inactiveType)
+			}
+			if ownType {
+				var versions, counts uint64
+				if err := conn.QueryRow(ctx, `
+SELECT count(), toUInt64(sum(active_count + created_count + completed_count))
+FROM issue_type_metrics_daily
+WHERE org_id = ? AND day = ? AND issue_type_norm = ? AND computed_at > ?`, testCase.orgID, day, inactiveType, deriverStamp,
+				).Scan(&versions, &counts); err != nil {
+					t.Fatal(err)
+				}
+				if versions != 1 || counts != 0 {
+					t.Errorf("issue_type_metrics_daily, the %q key from the family: rows=%d counts=%d, want one row of zeros (the key of an item that is not active on the day)",
+						inactiveType, versions, counts)
+				}
 			}
 			if issueTypeCompleted != 3 || issueTypeCreated != 1 || issueTypeActive != 5 {
 				t.Errorf("issue_type_metrics_daily of the day, newest per key: completed=%d created=%d active=%d, want 3, 1 and 5",

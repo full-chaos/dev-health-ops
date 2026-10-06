@@ -45,7 +45,8 @@ attempt to restore the prior fingerprint.
 Migration 0108 turned off every dataset that a sync configuration's target
 list did not name. If a configuration had work-item datasets enabled but its
 targets did not include `work-items`, those datasets are now off. Work items
-(and the data that depends on them, such as AI attribution) then stop with no
+(and the data that depends on them, such as issue-based AI attribution;
+pull-request attribution comes from the `prs` dataset) then stop with no
 error: the configuration still syncs its other datasets and reports success.
 
 **How to see it**: the scheduler writes one `sync.plan.work_item_family_stopped`

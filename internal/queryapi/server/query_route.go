@@ -2511,7 +2511,7 @@ const registeredCatalogValuesDocument = `query CatalogValues($orgId: String!, $d
 // repository-scope read the agent-context runtime performs: `catalog` with
 // the REPO dimension fixed in the document text. It is a separate operation
 // from registeredCatalogValuesDocument because each registered document
-// carries its own digest and routing row. Wire form captured under
+// carries its own digest. Wire form captured under
 // testdata/wire_capture/acr_repository_scopes_captured.graphql.
 const registeredAcrRepositoryScopesDocument = `query ACRRepositoryScopes($orgId: String!) {
   catalog(orgId: $orgId, dimension: REPO) {

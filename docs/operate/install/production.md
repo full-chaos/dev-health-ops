@@ -34,7 +34,7 @@ route is served by one.
 What that means when you deploy:
 
 - the Go worker deployment groups are the production worker topology, not a coexistence foundation waiting on approval. Each group renders at the replica count its `goWorkers.groups` entry sets, so an operator sizes only the groups that environment needs;
-- routes are served by the Go runtime, and a route's owner is recorded in the routing state rather than assumed from the deployment;
+- routes are served by the Go runtime, and a worker route's owner is recorded in the worker route state (the job-route tables, not the retired `go_api_routing_state`) rather than assumed from the deployment;
 - River queue ownership is established per job kind, and changing it still requires contract, handler, parity, canary, and rollback evidence;
 - the reconciler refuses a route that drifts from the checked-in policy, so a
   deployment whose routes disagree with the manifest fails closed rather than

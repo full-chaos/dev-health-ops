@@ -1,7 +1,7 @@
 """Add ``daily_metrics_runs.full_org`` -- whether a run computes the whole organization.
 
-Revision ID: 0147
-Revises: 0146
+Revision ID: 0148
+Revises: 0147
 
 CHAOS-8710. The ClickHouse daily run marker may certify an (organization, day) only from a run that
 computes every repository of the organization. That scope was never stored: a run started with an
@@ -26,8 +26,8 @@ from __future__ import annotations
 import sqlalchemy as sa
 from alembic import op
 
-revision: str = "0147"
-down_revision: str | None = "0146"
+revision: str = "0148"
+down_revision: str | None = "0147"
 branch_labels = None
 depends_on = None
 

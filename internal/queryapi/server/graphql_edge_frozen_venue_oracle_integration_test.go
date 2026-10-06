@@ -12,7 +12,6 @@ import (
 	"time"
 
 	"github.com/golang-jwt/jwt/v5"
-	"github.com/jackc/pgx/v5/pgxpool"
 
 	schemav1 "github.com/full-chaos/dev-health-ops/contracts/graphql/v1"
 	"github.com/full-chaos/dev-health-ops/internal/goapiproof"
@@ -96,22 +95,8 @@ func TestGraphQLEdgeFrozenVenueOracle(t *testing.T) {
 		return clock.ReplaceAllString(body, "<clock>")
 	})
 
-	// A registered operation whose routing row is off: both planes' rows are turned off, as an operator
-	// would. query-api reads no routing row any more (CHAOS-8702), so it serves both operations. The Python plane's database exists only while recording.
-	for _, database := range []string{venue.SourceDB, venue.GoDB} {
-		if database == venue.SourceDB && !golden.Recording() {
-			continue
-		}
-		pool, err := pgxpool.New(ctx, venue.AdminURI(t, database))
-		if err != nil {
-			t.Fatal(err)
-		}
-		if _, err := pool.Exec(ctx, `UPDATE go_api_routing_state SET mode = 'disabled' WHERE selected_operation = ANY($1)`,
-			[]string{query.Operation, mutation.Operation}); err != nil {
-			t.Fatal(err)
-		}
-		pool.Close()
-	}
+	// A registered operation whose routing row is off, as an operator would turn it off on the Python plane
+	// (recorded). The go_api_routing_state table is gone (CHAOS-8706) and query-api read no routing row since CHAOS-8702, so it serves both operations.
 	mutationSpec, _ := goapiproof.SpecFor(mutation.Operation)
 	run([]edgeCase{
 		{request: edgePost("row off: "+query.Operation, member, queryBody, nil),

@@ -429,15 +429,11 @@ type Summary struct {
 	// Admitted is serialised even when zero. "nothing passed admission"
 	// and "everything passed and nothing differed" are different facts,
 	// and a run whose admitted count is 0 measured nothing at all.
-	Admitted int `json:"admitted"`
-	Executed int `json:"executed"`
-	Refused  int `json:"refused"`
-	// StaleRoutingRows is serialised even when zero. A run in which every
-	// routing row still named an older build is a run worth looking at,
-	// and "none were stale" is a different fact from "nobody checked".
-	StaleRoutingRows int            `json:"stale_routing_rows"`
-	ReceiptsWritten  int            `json:"receipts_written"`
-	ByTerminalState  map[string]int `json:"by_terminal_state"`
+	Admitted        int            `json:"admitted"`
+	Executed        int            `json:"executed"`
+	Refused         int            `json:"refused"`
+	ReceiptsWritten int            `json:"receipts_written"`
+	ByTerminalState map[string]int `json:"by_terminal_state"`
 	// ProvenUnderStochasticLeafClass counts executed outcomes whose
 	// ProvenUnder is ProvenUnderStochasticLeafClass. Serialised even when
 	// zero.
@@ -668,9 +664,6 @@ func (r *Runner) Run(ctx context.Context) ([]Outcome, Summary, error) {
 		summary.Attempted++
 		if outcome.Admitted {
 			summary.Admitted++
-		}
-		if outcome.RoutingRowBuild != "" {
-			summary.StaleRoutingRows++
 		}
 		if outcome.Executed {
 			summary.Executed++

@@ -1,4 +1,4 @@
--- Alembic revision 0147 (down_revision 0146), rendered with `alembic upgrade 0146:0147 --sql`.
+-- Alembic revision 0148 (down_revision 0147), rendered with `alembic upgrade 0147:0148 --sql`.
 -- The migrator runs this file and the alembic_version update in one transaction.
 
 ALTER TABLE daily_metrics_runs ADD COLUMN full_org BOOLEAN DEFAULT false NOT NULL;

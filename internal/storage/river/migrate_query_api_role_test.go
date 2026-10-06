@@ -16,7 +16,7 @@ func queryAPIOptions() MigrationOptions {
 		{TableName: "scheduled_jobs", AllowInsert: true, AllowUpdate: true},
 		{TableName: "report_runs", AllowInsert: true},
 		{TableName: "worker_job_outbox", AllowInsert: true},
-		{TableName: "go_api_routing_state"},
+		{TableName: "go_api_class_decision"},
 		{TableName: "organizations"},
 	}
 	return options
@@ -73,7 +73,7 @@ func TestQueryAPIGrantStatementsAreTheBaselineAndTheManifestOnly(t *testing.T) {
 		`DO $$ BEGIN IF to_regclass('public.scheduled_jobs') IS NOT NULL THEN GRANT SELECT, INSERT, UPDATE ON TABLE "public"."scheduled_jobs" TO "dev_health_query_api"; END IF; END $$`,
 		`DO $$ BEGIN IF to_regclass('public.report_runs') IS NOT NULL THEN GRANT SELECT, INSERT ON TABLE "public"."report_runs" TO "dev_health_query_api"; END IF; END $$`,
 		`DO $$ BEGIN IF to_regclass('public.worker_job_outbox') IS NOT NULL THEN GRANT SELECT, INSERT ON TABLE "public"."worker_job_outbox" TO "dev_health_query_api"; END IF; END $$`,
-		`DO $$ BEGIN IF to_regclass('public.go_api_routing_state') IS NOT NULL THEN GRANT SELECT ON TABLE "public"."go_api_routing_state" TO "dev_health_query_api"; END IF; END $$`,
+		`DO $$ BEGIN IF to_regclass('public.go_api_class_decision') IS NOT NULL THEN GRANT SELECT ON TABLE "public"."go_api_class_decision" TO "dev_health_query_api"; END IF; END $$`,
 		`DO $$ BEGIN IF to_regclass('public.organizations') IS NOT NULL THEN GRANT SELECT ON TABLE "public"."organizations" TO "dev_health_query_api"; END IF; END $$`,
 	}
 	if !reflect.DeepEqual(statements, want) {

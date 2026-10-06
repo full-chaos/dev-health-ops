@@ -1,41 +1,32 @@
-"""Go API operation rollout registry + proof ledger (CHAOS-4366 Wave 0).
+"""Go API operation proof ledger (CHAOS-4366 Wave 0).
 
-Plan doc: ``.github/docs-legacy/plans/go-api-epic.md`` §8.3. Three tables,
-not one, because a single table cannot be both the append-only proof target
-and the mutable routing decision (``mode``/``rollout_percentage``/"which
-build is current" all change as a rollout progresses, but a proof must stay
-pinned to the exact build it proved):
+Plan doc: ``.github/docs-legacy/plans/go-api-epic.md`` §8.3. Two tables:
 
 * :class:`CandidateBuild` -- immutable, append-only. One row is created the
   first time a ``candidate_build`` registers against an operation; it is
   never updated. :class:`ProofRun` references this row (via the full
   4-column composite key), so a proof can never be silently reattributed to
   a later build.
-* :class:`RoutingState` -- exactly one mutable row per
-  ``(schema_digest, document_digest, selected_operation)``. Holds the
-  *current* ``candidate_build`` pointer, ``mode``, ``rollout_percentage``,
-  and ``eligible_orgs``. This is what the request router reads on every
-  call, and what a rollback mutates in place -- moving the pointer back to
-  an earlier (already-immutable) :class:`CandidateBuild` row is exactly the
-  "registry change, not an image rollback" from plan §5.
 * :class:`ProofRun` -- one row per (stage, request) proof attempt. Records
   which *request* produced its verdict (``request_identity``), not only
   which candidate, because a registered document invoked with different
   variables/auth-context/org can diverge even at the same document digest.
 
-The FK from :class:`RoutingState`/:class:`ProofRun` to
-:class:`CandidateBuild` is a full 4-column composite FK
-(``schema_digest``, ``document_digest``, ``selected_operation``,
-``*_candidate_build``) -- never just the bare ``candidate_build`` string --
-so a build can only ever be "current" or "proven" for the exact operation
-triple it was registered against.
+The FK from :class:`ProofRun` to :class:`CandidateBuild` is a full 4-column
+composite FK (``schema_digest``, ``document_digest``, ``selected_operation``,
+``candidate_build``) -- never just the bare ``candidate_build`` string -- so a
+build can only ever be "proven" for the exact operation triple it was
+registered against.
+
+The mutable routing table of Wave 0 (``go_api_routing_state``) is gone
+(alembic 0147, CHAOS-8706): query-api serves every registered operation, and an
+MCP class root is decided by ``go_api_class_decision`` (alembic 0146).
 """
 
 from __future__ import annotations
 
 import uuid
 from datetime import datetime, timezone
-from typing import Any
 
 from sqlalchemy import (
     JSON,
@@ -128,80 +119,6 @@ class CandidateBuild(Base):
     )
 
 
-class RoutingState(Base):
-    """Exactly one mutable row per ``(schema_digest, document_digest,
-    selected_operation)``. Read by the request router on every call; a
-    rollback mutates ``current_candidate_build`` in place.
-    """
-
-    __tablename__ = "go_api_routing_state"
-
-    schema_digest: Mapped[str] = mapped_column(Text, nullable=False)
-    document_digest: Mapped[str] = mapped_column(Text, nullable=False)
-    selected_operation: Mapped[str] = mapped_column(Text, nullable=False)
-    current_candidate_build: Mapped[str] = mapped_column(Text, nullable=False)
-    owner: Mapped[str] = mapped_column(Text, nullable=False)
-    mode: Mapped[str] = mapped_column(Text, nullable=False, default="python")
-    #: JSON array of org ids, or null/omitted meaning "all orgs eligible".
-    #: Never used to widen a `disabled`/`python` mode entry -- eligibility
-    #: only matters once mode is shadow/canary/primary.
-    eligible_orgs: Mapped[Any | None] = mapped_column(JSON, nullable=True)
-    rollout_percentage: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
-    #: WHO ran the command that wrote this row (the CLI's resolved operator
-    #: identity, else the host user) and WHY, in their own words. Nullable
-    #: because every row written before alembic 0127 has neither.
-    #:
-    #: These exist because a routing row is a decision, and a decision with
-    #: no durable "who/why" is unreadable six weeks later -- the same
-    #: complaint that produced the UNPROVEN marker in `status`. Rows enabled
-    #: without a proof run once carried their reason nowhere but a chat
-    #: message.
-    review_evidence: Mapped[str | None] = mapped_column(Text, nullable=True)
-    recorded_by: Mapped[str | None] = mapped_column(Text, nullable=True)
-    updated_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True),
-        nullable=False,
-        default=lambda: datetime.now(timezone.utc),
-        onupdate=lambda: datetime.now(timezone.utc),
-    )
-
-    __table_args__ = (
-        PrimaryKeyConstraint(
-            "schema_digest",
-            "document_digest",
-            "selected_operation",
-            name="pk_go_api_routing_state",
-        ),
-        ForeignKeyConstraint(
-            [
-                "schema_digest",
-                "document_digest",
-                "selected_operation",
-                "current_candidate_build",
-            ],
-            [
-                "go_api_candidate_build.schema_digest",
-                "go_api_candidate_build.document_digest",
-                "go_api_candidate_build.selected_operation",
-                "go_api_candidate_build.candidate_build",
-            ],
-            name="fk_go_api_routing_state_candidate_build",
-        ),
-        CheckConstraint(
-            f"owner IN {OWNERS!r}",
-            name="ck_go_api_routing_state_owner",
-        ),
-        CheckConstraint(
-            f"mode IN {MODES!r}",
-            name="ck_go_api_routing_state_mode",
-        ),
-        CheckConstraint(
-            "rollout_percentage >= 0 AND rollout_percentage <= 100",
-            name="ck_go_api_routing_state_rollout_percentage",
-        ),
-    )
-
-
 class ProofRun(Base):
     """One row per proof attempt. The proof's immutable key is
     ``(schema_digest, document_digest, selected_operation, candidate_build)``
@@ -269,7 +186,7 @@ class ProofRun(Base):
     #: made ``create_all`` raise for every one of those tests, ~875 errors
     #: from one column. The variant keeps a real array in Postgres, where
     #: the Go writer sends a ``[]string``, without breaking the in-memory
-    #: fixtures. ``eligible_orgs`` on RoutingState solves the same problem
+    #: fixtures. ``eligible_orgs`` on the removed routing table solved the same problem
     #: by being plain JSON everywhere.
     baseline_defect: Mapped[list[str] | None] = mapped_column(
         ARRAY(Text).with_variant(JSON(), "sqlite"), nullable=True

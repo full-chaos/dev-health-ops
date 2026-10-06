@@ -368,15 +368,21 @@ type AnalyticsRequestInput struct {
 	FlowMatrix    *FlowMatrixRequestInput  `json:"flowMatrix,omitempty"`
 	UseInvestment *bool                    `json:"useInvestment,omitempty"`
 	Filters       *FilterInput             `json:"filters,omitempty"`
+	// Optional grouping for persisted work-unit evidence quality. Only THEME,
+	// SUBCATEGORY and WORK_TYPE are valid. The selected key is the unit's
+	// deterministic dominant persisted value, so one unit contributes to one
+	// group.
+	EvidenceQualityGroupBy *DimensionInput `json:"evidenceQualityGroupBy,omitempty"`
 }
 
 type AnalyticsResult struct {
-	Timeseries                  []TimeseriesResult    `json:"timeseries"`
-	Breakdowns                  []BreakdownResult     `json:"breakdowns"`
-	Sankey                      *SankeyResult         `json:"sankey,omitempty"`
-	FlowMatrix                  *FlowMatrixResult     `json:"flowMatrix,omitempty"`
-	EvidenceQualityDistribution graphqljson.JSON      `json:"evidenceQualityDistribution,omitempty"`
-	EvidenceQualityStats        *EvidenceQualityStats `json:"evidenceQualityStats,omitempty"`
+	Timeseries                  []TimeseriesResult     `json:"timeseries"`
+	Breakdowns                  []BreakdownResult      `json:"breakdowns"`
+	Sankey                      *SankeyResult          `json:"sankey,omitempty"`
+	FlowMatrix                  *FlowMatrixResult      `json:"flowMatrix,omitempty"`
+	EvidenceQualityDistribution graphqljson.JSON       `json:"evidenceQualityDistribution,omitempty"`
+	EvidenceQualityStats        *EvidenceQualityStats  `json:"evidenceQualityStats,omitempty"`
+	EvidenceQualityByGroup      []EvidenceQualityGroup `json:"evidenceQualityByGroup,omitempty"`
 }
 
 type BreakdownRequestInput struct {
@@ -734,6 +740,15 @@ type EventItem struct {
 	Type string `json:"type"`
 	Text string `json:"text"`
 	Link string `json:"link"`
+}
+
+// One persisted-work-unit evidence-quality aggregate. `total` counts every unit
+// in the group. `mean` is null when no unit in the group has a known quality.
+type EvidenceQualityGroup struct {
+	Key   string   `json:"key"`
+	Label *string  `json:"label,omitempty"`
+	Mean  *float64 `json:"mean,omitempty"`
+	Total int      `json:"total"`
 }
 
 type EvidenceQualityStats struct {

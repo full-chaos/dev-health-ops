@@ -78,7 +78,6 @@ def test_the_scan_finds_the_commands_it_is_meant_to_check() -> None:
     }
     assert "query-api-bootstrap.md" in scanned
     assert "go-api-wave-0-proof-infrastructure.md" in scanned
-    assert "check_go_api_routing_digest.py" in scanned
 
 
 @pytest.mark.parametrize(

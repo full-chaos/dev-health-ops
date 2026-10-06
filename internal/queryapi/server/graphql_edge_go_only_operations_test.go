@@ -17,10 +17,30 @@ import (
 //
 // This list must not become a way to stop measuring an operation the golden does measure: the test below fails
 // for a listed operation that has a frozen request.
-var edgeGoOnlyFromBirth = map[string]string{
-	"coverageBaselines":     registeredCoverageBaselinesDocument,
-	"coverageScopeBaseline": registeredCoverageScopeBaselineDocument,
-	"testopsJobFailures":    registeredTestopsJobFailuresDocument,
+type edgeGoOnlyDocument struct {
+	document string
+	root     string
+}
+
+var edgeGoOnlyFromBirth = map[string]edgeGoOnlyDocument{
+	"coverageBaselines": {
+		document: registeredCoverageBaselinesDocument,
+		root:     "coverageBaselines",
+	},
+	"coverageScopeBaseline": {
+		document: registeredCoverageScopeBaselineDocument,
+		root:     "coverageScopeBaseline",
+	},
+	// CHAOS-8104 is a dedicated operation over the existing analytics root.
+	// The operation key is deliberately not the selected field name.
+	"investmentEvidenceQuality": {
+		document: registeredInvestmentEvidenceQualityDocument,
+		root:     "analytics",
+	},
+	"testopsJobFailures": {
+		document: registeredTestopsJobFailuresDocument,
+		root:     "testopsJobFailures",
+	},
 }
 
 func TestEdgeOracleGoOnlyOperationsHaveNoFrozenRequest(t *testing.T) {
@@ -37,9 +57,9 @@ func TestEdgeOracleGoOnlyOperationsHaveNoFrozenRequest(t *testing.T) {
 	if len(edgeGoOnlyFromBirth) == 0 {
 		t.Fatal("no Go-only operation is listed: remove the list and this test with the last entry")
 	}
-	for operation, document := range edgeGoOnlyFromBirth {
-		if !strings.Contains(document, "  "+operation+"(") {
-			t.Errorf("%s: the listed document does not select the operation's root field", operation)
+	for operation, entry := range edgeGoOnlyFromBirth {
+		if !strings.Contains(entry.document, "  "+entry.root+"(") {
+			t.Errorf("%s: the listed document does not select root field %s", operation, entry.root)
 		}
 		for _, method := range []string{"POST", "GET"} {
 			if label := `"` + method + " " + operation + `"`; strings.Contains(string(golden), label) {

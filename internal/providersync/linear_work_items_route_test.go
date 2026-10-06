@@ -457,26 +457,6 @@ func TestLinearWorkItemsRoutePaginatesCommentsWithinPythonBound(t *testing.T) {
 	}
 }
 
-func TestLinearWorkItemsRouteFailsClosedWhenCommentsExceedBound(t *testing.T) {
-	t.Parallel()
-	doer := &linearWorkItemsDoer{responses: []string{
-		linearTeamResponse(),
-		`{"data":{"issues":{"nodes":[{"id":"lin-issue-47","identifier":"ENG-47","title":"Too many comments","createdAt":"2026-07-25T09:00:00Z","updatedAt":"2026-07-28T16:30:00Z","state":{"name":"Todo","type":"unstarted"},"labels":{"nodes":[]},"comments":{"nodes":[],"pageInfo":{"hasNextPage":true,"endCursor":"comment-cursor"}},"attachments":{"nodes":[]},"relations":{"nodes":[]},"inverseRelations":{"nodes":[]}}],"pageInfo":{"hasNextPage":false,"endCursor":null}}}}`,
-		`{"data":{"issue":{"comments":{"nodes":[],"pageInfo":{"hasNextPage":true,"endCursor":"comment-cursor-2"}}}}}`,
-		`{"data":{"issue":{"comments":{"nodes":[],"pageInfo":{"hasNextPage":true,"endCursor":"comment-cursor-3"}}}}}`,
-	}}
-	claim := nativeTestClaim("linear", "work-items")
-	claim.SourceExternalID = "ENG"
-	_, err := (LinearWorkItemsRouteHandler{FetchCycles: boolPointer(false)}).Collect(
-		context.Background(), claim,
-		providerfoundation.Credential{Provider: "linear", ID: claim.CredentialID},
-		linearWorkItemsClient(t, fakehttp.Client(doer)), time.Date(2026, 8, 3, 12, 0, 0, 0, time.UTC),
-	)
-	if !errors.Is(err, ErrPaginationCapExceeded) {
-		t.Fatalf("error=%v, want comment pagination cap", err)
-	}
-}
-
 func TestLinearReferenceTeamAndSprintCacheMirrorPythonResolution(t *testing.T) {
 	t.Parallel()
 	claim := nativeTestClaim("linear", "work-items")

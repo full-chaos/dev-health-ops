@@ -743,13 +743,19 @@ func (store *PostgresStore) redriveOneFinalizeForRange(
 		_ = tx.Rollback(rollbackCtx)
 	}()
 
+	// CHAOS-8710: the (org, day) marker lock first, the run row lock second.
+	if !dryRun {
+		if err := store.lockMarkerDayForRun(ctx, tx, runID); err != nil {
+			return false, false, err
+		}
+	}
 	var run Run
 	var targetDay, status, finalizationStatus string
 	var leaseExpiresAt *time.Time
 	var hasPartitions, allPartitionsSucceeded bool
 	err = tx.QueryRow(ctx, `
 SELECT run.id::text, run.org_id::text, run.generation, run.status, run.target_day::text,
-  run.finalization_status, run.finalization_lease_expires_at,
+  run.finalization_status, run.finalization_lease_expires_at, run.full_org,
   EXISTS (
       SELECT 1 FROM public.daily_metrics_partitions AS partition
       WHERE partition.run_id = run.id
@@ -762,7 +768,7 @@ FROM public.daily_metrics_runs AS run
 WHERE run.id = $1::uuid
 FOR UPDATE OF run`, runID).Scan(
 		&run.ID, &run.OrganizationID, &run.Generation, &status, &targetDay,
-		&finalizationStatus, &leaseExpiresAt, &hasPartitions, &allPartitionsSucceeded,
+		&finalizationStatus, &leaseExpiresAt, &run.FullOrg, &hasPartitions, &allPartitionsSucceeded,
 	)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return false, false, nil
@@ -847,20 +853,28 @@ VALUES ($1::uuid, $2::uuid, $3::uuid, $4::date, $5, $6, 'finalize-redrive', $7, 
 		// ever reads this run's stored generation value for partition
 		// identity again.
 		newGeneration := "redrive:" + nonce
-		command, err := tx.Exec(ctx, `
+		// One Postgres clock read in the reset itself is the 'reopened'
+		// marker's version. A marker that cannot be written refuses the reset
+		// (the tx rolls back).
+		var reopenedAtMs int64
+		err := tx.QueryRow(ctx, `
 UPDATE public.daily_metrics_runs
 SET status = 'running', finalization_status = 'pending',
     finalization_claim_token = NULL, finalization_lease_expires_at = NULL,
     generation = $3, updated_at = $1
-WHERE id = $2::uuid AND status = 'succeeded' AND finalization_status = 'succeeded'`,
-			now, runID, newGeneration)
-		if err != nil {
-			return false, false, ErrUnavailable
-		}
-		if command.RowsAffected() != 1 {
+WHERE id = $2::uuid AND status = 'succeeded' AND finalization_status = 'succeeded'
+RETURNING `+pgClockMillis,
+			now, runID, newGeneration).Scan(&reopenedAtMs)
+		if errors.Is(err, pgx.ErrNoRows) {
 			// Settled differently under us since the row lock above (e.g. a
 			// concurrent caller already reset it) -- skip, don't force it.
 			return false, false, nil
+		}
+		if err != nil {
+			return false, false, ErrUnavailable
+		}
+		if err := store.markReopened(ctx, run, targetDay, reopenedAtMs); err != nil {
+			return false, false, err
 		}
 		run.Status = "running"
 		run.Generation = newGeneration

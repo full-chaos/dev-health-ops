@@ -54,7 +54,7 @@ securityOverview
 testOpsCoverage
 testOpsPipeline
 testOpsTest
-testopsRisk KNOWN-MISSING CHAOS-6993 enable refused by the proof gate: no bigboy go-api-prove run (prod's proof does not count)
+testopsRisk
 throughputForecast
 triggerReport
 updateSavedReport

@@ -26,11 +26,18 @@ type linearProjectTeamsServer struct {
 	totalPages    int
 	followUps     int
 	projectsQuery string
+	// emptyEmbeddedCursor makes the teams page embedded in the projects query say
+	// "next page" with an EMPTY endCursor.
+	emptyEmbeddedCursor bool
 }
 
 func (server *linearProjectTeamsServer) teamsPage(index int) string {
-	return fmt.Sprintf(`{"nodes":[{"id":"team-id-%d","key":"K%d"}],"pageInfo":{"hasNextPage":%t,"endCursor":"c%d"}}`,
-		index, index, index < server.totalPages-1, index)
+	cursor := fmt.Sprintf("c%d", index)
+	if index == 0 && server.emptyEmbeddedCursor {
+		cursor = ""
+	}
+	return fmt.Sprintf(`{"nodes":[{"id":"team-id-%d","key":"K%d"}],"pageInfo":{"hasNextPage":%t,"endCursor":%q}}`,
+		index, index, index < server.totalPages-1, cursor)
 }
 
 func (server *linearProjectTeamsServer) Do(request *http.Request) (*http.Response, error) {
@@ -82,7 +89,11 @@ func (server *linearProjectTeamsServer) Do(request *http.Request) (*http.Respons
 
 func collectLinearProjectTeams(t *testing.T, totalPages int, strict bool) (LinearReferenceCatalogBatch, *linearProjectTeamsServer, error) {
 	t.Helper()
-	server := &linearProjectTeamsServer{totalPages: totalPages}
+	return collectLinearProjectTeamsFrom(t, &linearProjectTeamsServer{totalPages: totalPages}, strict)
+}
+
+func collectLinearProjectTeamsFrom(t *testing.T, server *linearProjectTeamsServer, strict bool) (LinearReferenceCatalogBatch, *linearProjectTeamsServer, error) {
+	t.Helper()
 	claim := nativeTestClaim("linear", "work-items")
 	claim.SourceExternalID = "workspace"
 	ref := teamCatalogRefFromClaim(claim)
@@ -162,5 +173,31 @@ func TestLinearReferenceCatalogNonStrictProjectTeamsBoundKeepsOtherRows(t *testi
 	if batch.Evidence.ProjectsComplete || projectOwnershipRows(batch) != 0 || len(batch.Rows.Teams) != 1 {
 		t.Fatalf("projectsComplete=%v ownership=%d teams=%d", batch.Evidence.ProjectsComplete,
 			projectOwnershipRows(batch), len(batch.Rows.Teams))
+	}
+}
+
+// CHAOS-8781 r1 P1-2 (M7) and P2, for a project's teams: an EMBEDDED page that
+// said "next page" with an empty cursor fails closed before any follow-up, the
+// failure evidence counts the page that WAS read (teams 1 + cycles 1 + projects 1
+// + embedded 1), and a strict failure never reports the projects list complete.
+// Non-strict keeps the other rows and also reports projects incomplete.
+func TestLinearReferenceCatalogProjectTeamsWithAnEmptyEmbeddedCursorFailClosed(t *testing.T) {
+	t.Parallel()
+	batch, server, err := collectLinearProjectTeamsFrom(t, &linearProjectTeamsServer{totalPages: 5, emptyEmbeddedCursor: true}, true)
+	if !errors.Is(err, providerfoundation.ErrPaginationInvalid) || batch.Failure == nil {
+		t.Fatalf("err=%v failure=%+v", err, batch.Failure)
+	}
+	if server.followUps != 0 {
+		t.Fatalf("follow-ups=%d want 0", server.followUps)
+	}
+	if batch.Failure.Pages != 4 || batch.Evidence.Pages != 4 {
+		t.Fatalf("failure pages=%d evidence pages=%d want 4", batch.Failure.Pages, batch.Evidence.Pages)
+	}
+	if batch.Evidence.ProjectsComplete {
+		t.Fatal("a strict project-team failure reports the projects list complete")
+	}
+	lenient, _, err := collectLinearProjectTeamsFrom(t, &linearProjectTeamsServer{totalPages: 5, emptyEmbeddedCursor: true}, false)
+	if err != nil || lenient.Failure != nil || lenient.Evidence.ProjectsComplete || len(lenient.Rows.Teams) != 1 {
+		t.Fatalf("non-strict: err=%v failure=%+v projectsComplete=%v teams=%d", err, lenient.Failure, lenient.Evidence.ProjectsComplete, len(lenient.Rows.Teams))
 	}
 }

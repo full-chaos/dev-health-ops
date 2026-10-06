@@ -318,8 +318,9 @@ func rolloutProof(t *testing.T, oldShape, interactionsLanded bool) {
 		if oldShape && !interactionsLanded {
 			// the refusal is the adapter's, it is the same on every attempt, and
 			// it leaves the interactions effect un-committed (never written with '')
-			if !errors.Is(err, ErrInvalidConfiguration) || interactionsStatus == string(GenerationBlockCommitted) {
-				t.Fatalf("attempt %d: err=%v interactions=%q, want the adapter's refusal and an un-committed effect", attempt, err, interactionsStatus)
+			if !errors.Is(err, ErrPreviousReleaseSnapshot) || !errors.Is(err, ErrInvalidConfiguration) ||
+				interactionsStatus == string(GenerationBlockCommitted) {
+				t.Fatalf("attempt %d: err=%v interactions=%q, want the previous-release refusal (the class the unit handler fails on at once) and an un-committed effect", attempt, err, interactionsStatus)
 			}
 		} else if err != nil || interactionsStatus != string(GenerationBlockCommitted) {
 			t.Fatalf("attempt %d: err=%v interactions=%q, want a clean recovery", attempt, err, interactionsStatus)

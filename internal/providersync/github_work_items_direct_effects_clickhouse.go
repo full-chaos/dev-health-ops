@@ -713,12 +713,12 @@ func (adapter GitHubWorkItemInteractionsClickHouseAdapter) WriteGitHubWorkItemEf
 	); err != nil {
 		return err
 	}
+	if err := refuseInteractionRowsWithoutID(identity, rows); err != nil {
+		return err
+	}
 	for _, row := range rows {
 		// body_length is UInt32; a negative length cannot round-trip and must
 		// never reach the driver as a silent wrap.
-		if row.InteractionID == "" {
-			return errInteractionWithoutID
-		}
 		if row.OrgID != identity.OrgID || row.BodyLength < 0 {
 			return ErrInvalidConfiguration
 		}

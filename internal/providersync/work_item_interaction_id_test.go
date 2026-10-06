@@ -2,6 +2,8 @@ package providersync
 
 import (
 	"encoding/json"
+	"errors"
+	"strings"
 	"testing"
 	"time"
 )
@@ -178,5 +180,37 @@ func TestInteractionSortingKeyAndValuesCarryTheID(t *testing.T) {
 	values := workItemInteractionValues(first)
 	if got := values[len(values)-1]; got != "c-1" {
 		t.Fatalf("the last inserted value is %v, want the interaction id", got)
+	}
+}
+
+// CHAOS-8790: a row stored by the previous release is refused under a class of
+// its own (so the unit handler fails the unit on the first attempt), after ONE
+// WARN that carries a class label and counts and nothing from the row.
+func TestRowsWithoutAnIDAreRefusedUnderTheirOwnClassWithOneCountsOnlyWarn(t *testing.T) {
+	logs := captureSlog(t)
+	secret := "comment body that must never be logged"
+	rows := []githubWorkItemInteractionRow{
+		{WorkItemID: "wi-1", Provider: "gitlab", InteractionType: "comment", InteractionID: "c-1", Actor: &secret},
+		{WorkItemID: "wi-1", Provider: "gitlab", InteractionType: "comment"},
+		{WorkItemID: "wi-1", Provider: "gitlab", InteractionType: "comment"},
+	}
+	identity := GitHubWorkItemEffectIdentity{OrgID: "org-acme", Provider: "gitlab"}
+	err := refuseInteractionRowsWithoutID(identity, rows)
+	if !errors.Is(err, ErrPreviousReleaseSnapshot) || !errors.Is(err, ErrInvalidConfiguration) {
+		t.Fatalf("err=%v, want the previous-release class (and still an invalid configuration)", err)
+	}
+	line := logs.String()
+	for _, want := range []string{"class=previous_release_snapshot", "rows=3", "rows_without_interaction_id=2", "provider=gitlab"} {
+		if !strings.Contains(line, want) {
+			t.Fatalf("the WARN lacks %q: %s", want, line)
+		}
+	}
+	if strings.Count(line, "level=WARN") != 1 || strings.Contains(line, secret) || strings.Contains(line, "wi-1") ||
+		strings.Contains(line, err.Error()) {
+		t.Fatalf("want exactly one WARN with counts only: %s", line)
+	}
+	logs.Reset()
+	if err := refuseInteractionRowsWithoutID(identity, rows[:1]); err != nil || logs.Len() != 0 {
+		t.Fatalf("rows that all have an id: err=%v log=%q", err, logs.String())
 	}
 }

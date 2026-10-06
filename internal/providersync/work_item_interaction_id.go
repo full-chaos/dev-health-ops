@@ -2,6 +2,7 @@ package providersync
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log/slog"
 	"strconv"
@@ -14,15 +15,41 @@ import (
 // (a legacy row) and nothing else: a comment the provider sent WITHOUT an id
 // is skipped and counted, never written with ''.
 
-// errInteractionWithoutID is the refusal of a work_item_interactions row that
-// carries no interaction_id: a row stored by the previous release (a prepared
-// snapshot an old pod wrote and a new pod replays). It is an
-// ErrInvalidConfiguration, and says which row, so the log is not read as a
-// configuration fault.
-var errInteractionWithoutID = fmt.Errorf(
-	"%w: work_item_interactions row without interaction_id (stored by the previous release)",
-	ErrInvalidConfiguration,
+// ErrPreviousReleaseSnapshot is a prepared snapshot, stored by the previous
+// release, whose work_item_interactions rows have no interaction_id
+// (CHAOS-8790). It is DETERMINISTIC: the same snapshot is replayed on every
+// attempt, so the unit fails on the first one under its own class
+// (providerunit.PreviousReleaseSnapshotCategory) instead of burning its
+// attempts. The scope's next run is a new unit with a new snapshot.
+var ErrPreviousReleaseSnapshot = errors.New(
+	"provider sync prepared effect rows were stored by the previous release",
 )
+
+// errInteractionWithoutID is the refusal of such a row. It is also an
+// ErrInvalidConfiguration (what it was before it had a class of its own).
+var errInteractionWithoutID = fmt.Errorf(
+	"%w: work_item_interactions rows without interaction_id: %w",
+	ErrPreviousReleaseSnapshot, ErrInvalidConfiguration,
+)
+
+// refuseInteractionRowsWithoutID returns errInteractionWithoutID when any row
+// has no interaction_id, after one WARN: a class label and counts only, never
+// a row, a body or the raw error text.
+func refuseInteractionRowsWithoutID(identity GitHubWorkItemEffectIdentity, rows []githubWorkItemInteractionRow) error {
+	missing := 0
+	for _, row := range rows {
+		if row.InteractionID == "" {
+			missing++
+		}
+	}
+	if missing == 0 {
+		return nil
+	}
+	slog.Warn("providersync.interaction.previous_release_snapshot",
+		"class", "previous_release_snapshot", "provider", identity.Provider,
+		"org_id", identity.OrgID, "rows", len(rows), "rows_without_interaction_id", missing)
+	return errInteractionWithoutID
+}
 
 var interactionMissingIDCounts = map[string]*atomic.Int64{
 	"github": {}, "gitlab": {}, "jira": {}, "linear": {},

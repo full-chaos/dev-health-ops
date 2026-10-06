@@ -291,6 +291,51 @@ func TestProviderDatasetUnavailableTerminalizesOnFirstAttempt(t *testing.T) {
 	}
 }
 
+// CHAOS-8790: an old pod's snapshot replayed by a new pod is refused the same
+// way on every attempt, so the unit fails on the FIRST attempt under its own
+// class and is never released for another.
+func TestPreviousReleaseSnapshotTerminalizesOnFirstAttempt(t *testing.T) {
+	t.Parallel()
+	now := time.Date(2026, 10, 6, 12, 0, 0, 0, time.UTC)
+	unit := providerUnit()
+	unit.Provider = "gitlab"
+	unit.Dataset = "feature-flags"
+	unit.SourceExternalID = "group/project"
+	unit.SourceName = "group/project"
+	repository := newMemoryUnitRepository(unit)
+	executions := 0
+	handler := &Handler{
+		Repository:    repository,
+		LeaseDuration: time.Minute,
+		Heartbeat:     10 * time.Second,
+		Now:           func() time.Time { return now },
+		BuildExecutor: func(*providersync.LeaseSession) (providersync.CompleteRouteExecutor, error) {
+			executions++
+			return providersync.CompleteRouteExecutor{}, fmt.Errorf("executing route: %w",
+				providersync.ErrPreviousReleaseSnapshot)
+		},
+	}
+	execution := providerExecution(unit, now, 1)
+	execution.Definition.MaxAttempts = 5
+
+	err := handler.Work(context.Background(), execution)
+	if !errors.Is(err, providersync.ErrPreviousReleaseSnapshot) {
+		t.Fatalf("Work()=%v want the previous-release refusal", err)
+	}
+	if repository.status != "failed" || repository.attempt != 1 || repository.failures != 1 ||
+		repository.lastFailCategory != "previous_release_snapshot" || executions != 1 {
+		t.Fatalf("status=%q attempt=%d failures=%d category=%q executions=%d",
+			repository.status, repository.attempt, repository.failures,
+			repository.lastFailCategory, executions)
+	}
+	if repository.releaseCalls != 0 {
+		t.Fatalf("the unit was released for retry %d times", repository.releaseCalls)
+	}
+	if PreviousReleaseSnapshotCategory != "previous_release_snapshot" {
+		t.Fatalf("the category is %q", PreviousReleaseSnapshotCategory)
+	}
+}
+
 func TestProviderBudgetContentionDelayIsDeterministicAndBounded(t *testing.T) {
 	t.Parallel()
 	first := providerBudgetContentionDelay("11111111-1111-4111-8111-111111111111", 0)

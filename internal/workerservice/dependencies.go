@@ -771,7 +771,11 @@ func (preclaimReadinessComponent) Shutdown(context.Context) error { return nil }
 type workerProcessComponent struct {
 	components []lifecycle.Component
 	budget     time.Duration
-	presence   workerPresenceLifecycle
+	// grace is the shutdown timeout the composition settled on (the configured
+	// one, or the one derived from the selected queues when the flag is unset).
+	// The lifecycle runtime is built from it (platform/shell.RuntimeShutdownTimeout).
+	grace    time.Duration
+	presence workerPresenceLifecycle
 }
 
 type workerPresenceLifecycle interface {
@@ -783,6 +787,11 @@ type workerPresenceLifecycle interface {
 
 func (workerProcessComponent) Name() string                            { return "river-workers" }
 func (component workerProcessComponent) ShutdownBudget() time.Duration { return component.budget }
+
+// RequiredShutdownTimeout implements lifecycle.ShutdownTimeoutSource.
+func (component workerProcessComponent) RequiredShutdownTimeout() time.Duration {
+	return component.grace
+}
 func (component workerProcessComponent) Errors() <-chan error {
 	if component.presence == nil {
 		return nil
@@ -1307,7 +1316,7 @@ func configureWorkerDependenciesWithSources(
 		"domain_database_max_connections", dependencies.startup.Connections.Domain,
 	)
 	components = append(components, workerProcessComponent{
-		components: []lifecycle.Component{workerProcess}, budget: dependencies.workerDrainBudget, presence: presence,
+		components: []lifecycle.Component{workerProcess}, budget: dependencies.workerDrainBudget, grace: dependencies.shutdownGrace, presence: presence,
 	})
 	return components, nil
 }

@@ -981,14 +981,17 @@ confirmed by hand while building CHAOS-4266.
 `river.Config.SoftStopTimeout` = the drain budget (`--shutdown-timeout` minus the 60 s
 `workerFinalizationBuffer`) minus a 30 s `workerReleaseBuffer`
 (`internal/workerservice/dependencies.go`): 7170 s for `heavy`, 870 s for `ops`, `sync` and `sync-provider`.
-On SIGTERM the River client stops fetching, running jobs finish, and only the jobs still running after the soft
+On SIGTERM the River client starts no NEW fetch (at most the fetch already in flight can still deliver
+jobs, and they run inside the soft stop), running jobs finish, and only the jobs still running after the soft
 stop are cancelled; Stop keeps waiting for the drain budget, so the 30 s release buffer is the time those jobs
 have to write their release (a requeue, a failed state), and the 60 s finalization buffer stays for the other
 components and the process exit. Before this, River tied job contexts to the signal context and cancelled
 every running job at once (no `SoftStopTimeout` = `StopAndCancel`), so the configured `--shutdown-timeout` was
-never used. River reads a zero `SoftStopTimeout` as "off", so a worker is refused at build time without one,
+never used. River reads a zero `SoftStopTimeout` as "off", so a worker is refused at startup without one,
 and a shutdown timeout that leaves no positive soft stop is a startup error. A job that needs its whole
-timeout and was claimed at the stop signal is cancelled 30 s early. River itself logs a WARN `Soft stop
+timeout and was claimed at the stop signal is cancelled 30 s early. An UNSET `--shutdown-timeout` is derived
+from the selected queues (longest job + 60 s + 30 s) and the lifecycle runtime runs on that SAME derived value
+(`shell.RuntimeShutdownTimeout`: one source for the budget), not on the 30 s package default. River itself logs a WARN `Soft stop
 timeout; cancelling remaining job contexts` when that cancel fires: operators will see it.
 
 Operator facts:

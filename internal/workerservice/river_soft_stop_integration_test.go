@@ -6,6 +6,7 @@ import (
 	"context"
 	"io"
 	"log/slog"
+	"path/filepath"
 	"strings"
 	"sync"
 	"testing"
@@ -13,6 +14,9 @@ import (
 
 	"github.com/full-chaos/dev-health-ops/internal/jobruntime"
 	"github.com/full-chaos/dev-health-ops/internal/platform/config"
+	"github.com/full-chaos/dev-health-ops/internal/platform/health"
+	"github.com/full-chaos/dev-health-ops/internal/platform/lifecycle"
+	"github.com/full-chaos/dev-health-ops/internal/platform/shell"
 	postgresstore "github.com/full-chaos/dev-health-ops/internal/storage/postgres"
 	riverstore "github.com/full-chaos/dev-health-ops/internal/storage/river"
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/containers"
@@ -250,9 +254,14 @@ func TestRiverStopSignalIsSoft(t *testing.T) {
 		}
 		waitStarted(t, probe, "running")
 		signal()
-		// Inserted AFTER the signal: a pod in minute 119 of its drain must not
-		// pick up a 2 h job.
-		time.Sleep(500 * time.Millisecond)
+		// Inserted AFTER the signal: River starts no NEW fetch once stopping, so a
+		// pod in minute 119 of its drain does not pick up a 2 h job. "Not claimed"
+		// is asserted only for a job that appears after any fetch already in flight
+		// at the signal has landed: River runs such a fetch under WithoutCancel
+		// (producer.go:818), so at most that one fetch can still deliver jobs, and
+		// they run inside the soft stop. The pause is what keeps the assertion
+		// deterministic instead of racing that fetch.
+		time.Sleep(2 * time.Second)
 		if _, err := process.client.Insert(ctx, softStopArgs{Name: "late"}, &river.InsertOpts{Queue: queue}); err != nil {
 			t.Fatal(err)
 		}
@@ -336,5 +345,129 @@ func TestRiverSoftStopSpentCancelsAndStopWaitsForTheRelease(t *testing.T) {
 				t.Fatal("control: the release write finished inside a Stop budget equal to the soft stop; the case proves nothing")
 			}
 		})
+	}
+}
+
+// TestUnsetShutdownTimeoutRuntimeOutlivesTheDefaultAndReleases (CHAOS-8783 r1 P1,
+// reproduced by gwc-round): with --shutdown-timeout UNSET the composition
+// derives grace, drain budget and soft stop from the selected queues, and the
+// runtime the shell builds must run on that same derived value. Real River and
+// Postgres, the real composition, the real shell.RuntimeShutdownTimeout and the
+// real lifecycle runtime. A running job outlives the 30 s package default after
+// the stop signal and finishes normally; the runtime returns only after it.
+//
+// Plant: shell.RuntimeShutdownTimeout returns the configured value (the
+// pre-fix shell.go): the runtime gives up at 30 s with the job still running.
+func TestUnsetShutdownTimeoutRuntimeOutlivesTheDefaultAndReleases(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
+	t.Cleanup(cancel)
+	pool := riverFixturePool(t, ctx)
+	probe := newSoftStopProbe(0)
+
+	t.Chdir(filepath.Join("..", ".."))
+	runtimeRegistry, err := jobruntime.Load(defaultContractRoot)
+	if err != nil {
+		t.Fatal(err)
+	}
+	queues := []string{"coverage", "heartbeat", "retention", "webhooks"}
+	sources := productionWorkerDependencySources
+	sources.contractRoot = defaultContractRoot
+	sources.openDatabase = func(context.Context, config.Config) (workerDatabase, error) { return &fakeWorkerDatabase{}, nil }
+	sources.loadRuntimeRegistry = func(string) (*jobruntime.Registry, error) { return runtimeRegistry, nil }
+	sources.buildReports, sources.buildDaily, sources.buildProviderSync = nil, nil, nil
+	sources.buildSyncCoordinator, sources.buildWorkgraph = nil, nil
+	concurrency := map[string]int{}
+	budgets := make([]jobruntime.QueueBudget, 0, len(queues))
+	for _, queue := range queues {
+		concurrency[queue] = 1
+		budgets = append(budgets, jobruntime.QueueBudget{Queue: queue, MaxWorkers: 1})
+	}
+	sources.buildOperational = fakeHandlerBuilder("ops", mustSelectedQueueSpecs(t, runtimeRegistry, queues...), budgets...)
+	// The REAL process builder, over the real queue pool, with the probe worker.
+	sources.buildRiverProcess = func(
+		cfg config.Config, _ workerDatabase, workers *river.Workers, family workerFamily, logger *slog.Logger,
+	) (lifecycle.Component, error) {
+		if err := river.AddWorkerSafely(workers, &softStopWorker{probe: probe}); err != nil {
+			return nil, err
+		}
+		database := &postgresWorkerDatabase{pools: &postgresstore.RuntimePools{QueueControl: pool}}
+		return newRiverWorkerProcess(cfg, database, workers, family, logger)
+	}
+	cfg := config.Config{
+		Queues: queues, WorkerQueueConcurrency: concurrency, WorkerGroup: "ops",
+		ShutdownTimeout: config.DefaultShutdownTimeout, ShutdownTimeoutExplicit: false, // the flag is UNSET
+		RiverDatabaseSchema: "river", WorkerInstanceID: uuid.NewString(),
+		DomainDatabaseMaxConns: 4, QueueDatabaseMaxConns: 2, PreclaimReadinessTimeout: 30 * time.Second,
+	}
+	components, err := configureWorkerDependenciesWithSources(ctx, cfg, health.NewRegistry(time.Second), sources)
+	if err != nil {
+		t.Fatal(err)
+	}
+	riverWorkers, ok := components[len(components)-1].(workerProcessComponent)
+	if !ok {
+		t.Fatalf("last component = %T", components[len(components)-1])
+	}
+	timeout := shell.RuntimeShutdownTimeout(cfg.ShutdownTimeout, components)
+	if want := 900*time.Second + workerFinalizationBuffer + workerReleaseBuffer; timeout != want || timeout <= config.DefaultShutdownTimeout {
+		t.Fatalf("runtime shutdown timeout = %s, want the derived %s (not the %s default)", timeout, want, config.DefaultShutdownTimeout)
+	}
+
+	runtime, err := lifecycle.New(lifecycle.Options{
+		Logger: slog.New(slog.NewTextHandler(io.Discard, nil)), ShutdownTimeout: timeout,
+		// The composition's own budgets and grace; only the worker-presence
+		// heartbeat (a fake database here) is left out.
+		Components: []lifecycle.Component{workerProcessComponent{
+			components: riverWorkers.components, budget: riverWorkers.budget, grace: riverWorkers.grace,
+		}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	signalCtx, signal := context.WithCancel(ctx)
+	runDone := make(chan error, 1)
+	go func() { runDone <- runtime.Run(signalCtx) }()
+
+	process := riverWorkers.components[0].(riverWorkerProcess)
+	deadline := time.Now().Add(30 * time.Second)
+	for {
+		if _, err := process.client.Insert(ctx, softStopArgs{Name: "long"}, &river.InsertOpts{Queue: "heartbeat"}); err == nil {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("could not insert the job")
+		}
+		time.Sleep(200 * time.Millisecond)
+	}
+	select {
+	case got := <-probe.started:
+		if got != "long" {
+			t.Fatalf("job %q started", got)
+		}
+	case err := <-runDone:
+		t.Fatalf("the runtime returned early: %v", err)
+	case <-time.After(30 * time.Second):
+		t.Fatal("job \"long\" never started")
+	}
+	signalledAt := time.Now()
+	signal()
+	// The job needs longer than the 30 s default after the signal.
+	time.AfterFunc(33*time.Second, func() { close(probe.release) })
+
+	select {
+	case err := <-runDone:
+		returnedAfter := time.Since(signalledAt)
+		probe.mu.Lock()
+		finishedAt, finished := probe.finished["long"]
+		_, cancelled := probe.cancelledAt["long"]
+		probe.mu.Unlock()
+		if err != nil {
+			t.Fatalf("runtime returned %v after %s", err, returnedAfter)
+		}
+		if cancelled || !finished || returnedAfter < 33*time.Second || finishedAt.After(time.Now()) {
+			t.Fatalf("runtime returned after %s: job finished=%v cancelled=%v; it must outlive the %s default and return only after the job",
+				returnedAfter, finished, cancelled, config.DefaultShutdownTimeout)
+		}
+	case <-time.After(3 * time.Minute):
+		t.Fatal("the runtime never returned")
 	}
 }

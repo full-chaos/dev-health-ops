@@ -32,6 +32,15 @@ type ShutdownBudgetSource interface {
 	ShutdownBudget() time.Duration
 }
 
+// ShutdownTimeoutSource lets a component state the shutdown timeout the WHOLE
+// runtime needs when it differs from the configured one: the worker derives its
+// grace from the selected queues when --shutdown-timeout is not set, and the
+// runtime must run on that same value, not on the 30 s package default
+// (CHAOS-8783). Zero means "no opinion".
+type ShutdownTimeoutSource interface {
+	RequiredShutdownTimeout() time.Duration
+}
+
 type Options struct {
 	Logger          *slog.Logger
 	ShutdownTimeout time.Duration

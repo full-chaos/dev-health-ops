@@ -4,8 +4,17 @@ import (
 	"context"
 	"github.com/ClickHouse/clickhouse-go/v2/lib/driver"
 	"github.com/google/uuid"
+	"log/slog"
 	"sort"
 )
+
+// RepositoryDiscoveryLogMessage is the one line the discoverer writes for each
+// successful discovery. It says how many partition members the daily fan-out
+// gets and whether one of them is the nil repository id (the work items that
+// have no repository). Without it, "the daily job did not visit the items with
+// no repository" and "the organization has no such item" look the same from
+// outside. The attributes are an id, a flag and counts only.
+const RepositoryDiscoveryLogMessage = "daily metrics repository discovery"
 
 // repositoryRows is the narrow ClickHouse capability used by the scheduled
 // daily fan-out. Keeping the adapter on this one method makes it impossible for
@@ -64,10 +73,17 @@ ORDER BY id`, organizationID)
 	if err != nil {
 		return nil, err
 	}
+	repositories := len(identifiers)
 	if hasNil {
 		identifiers = append(identifiers, RepositoryID(uuid.Nil.String()))
 		sort.Slice(identifiers, func(left, right int) bool { return identifiers[left] < identifiers[right] })
 	}
+	slog.InfoContext(ctx, RepositoryDiscoveryLogMessage,
+		"organization_id", organizationID,
+		"no_repository_partition_added", hasNil,
+		"repositories_discovered", repositories,
+		"partitions_discovered", len(identifiers),
+	)
 	return identifiers, nil
 }
 

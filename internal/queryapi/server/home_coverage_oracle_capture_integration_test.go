@@ -82,7 +82,8 @@ var chaos8509HomeCapturePolicies = map[chaos8169HomeNoDataLedgerKey]chaos8509Hom
 }
 
 // captureCHAOS8509HomePair stores a fixture-only pair from the existing real
-// handler oracle after the unchanged CHAOS-8169 assertion has failed closed.
+// handler oracle after that pair's status and header checks, before the
+// unchanged CHAOS-8169 assertion records its expected fail-closed result.
 // It writes no default path, never replaces a previous capture, and refuses
 // any pair whose values or complete difference set are not the settled five.
 func captureCHAOS8509HomePair(t *testing.T, key chaos8169HomeNoDataLedgerKey, pythonBody, goBody string) {
@@ -97,9 +98,6 @@ func captureCHAOS8509HomePair(t *testing.T, key chaos8169HomeNoDataLedgerKey, py
 	}
 	policy, ok := chaos8509HomeCapturePolicies[key]
 	if !ok {
-		return
-	}
-	if t.Failed() {
 		return
 	}
 	info, err := os.Stat(captureDir)

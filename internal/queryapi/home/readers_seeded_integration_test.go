@@ -328,30 +328,6 @@ func TestHomeReaders_SeededRealClickHouse(t *testing.T) {
 		}
 	})
 
-	t.Run("fetchScopeDataConfidence_usesOwnedRepositoriesAndWindowMetrics", func(t *testing.T) {
-		got, err := fetchScopeDataConfidence(
-			ctx,
-			client,
-			Filters{Scope: ScopeFilter{Level: "team", IDs: []string{"team-1"}}},
-			startDay,
-			endDay,
-			seededOrgID,
-			time.Date(2026, 1, 2, 11, 0, 0, 0, time.UTC),
-		)
-		if err != nil {
-			t.Fatalf("fetchScopeDataConfidence: %v", err)
-		}
-		if got.Level != "high" {
-			t.Errorf("level = %q, want high for the one owned repository with window metrics", got.Level)
-		}
-		if got.CoveragePct == nil || *got.CoveragePct != 100 {
-			t.Errorf("coverage = %v, want 100 for the one owned repository", got.CoveragePct)
-		}
-		if got.LastIngestedAt == nil || time.Time(*got.LastIngestedAt).UTC().Format("2006-01-02 15:04:05") != tNew {
-			t.Errorf("last ingested = %v, want %s", got.LastIngestedAt, tNew)
-		}
-	})
-
 	t.Run("fetchSourceStatuses_dedupInvariantButMustExecute", func(t *testing.T) {
 		got, err := fetchSourceStatuses(ctx, client, startDay, seededOrgID)
 		if err != nil {

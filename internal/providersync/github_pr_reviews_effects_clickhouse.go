@@ -113,6 +113,11 @@ func (sink GitHubPullRequestSocialClickHouseEffects) InspectEffect(
 		if err := sink.Lease.Assert(ctx); err != nil {
 			return EffectConflict, err
 		}
+		// Nothing to compare for an empty batch: absent, as the reviews
+		// destination answers, and without parsing the tenant.
+		if len(effect.Rows) == 0 {
+			return EffectAbsent, nil
+		}
 		return sink.aiAttributionAdapter().InspectGitHubWorkItemEffect(ctx, identity, effect)
 	}
 	if effect.Destination != "git_pull_request_reviews" {

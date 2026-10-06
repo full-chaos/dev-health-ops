@@ -57,7 +57,7 @@ query LinearWorkItems($first: Int!, $after: String, $filter: IssueFilter) {
       state { name type }
       assignee { name email }
       creator { name email }
-      labels { nodes { name } }
+      labels(first: 50) { nodes { name } pageInfo { hasNextPage endCursor } }
       parent { identifier }
       project { id name }
       cycle { id number name }
@@ -125,6 +125,16 @@ query LinearWorkItemsCycles($first: Int!, $after: String, $filter: CycleFilter) 
       team { id key name }
     }
     pageInfo { hasNextPage endCursor }
+  }
+}`
+
+const linearWorkItemsLabelsQuery = `
+query LinearWorkItemsLabels($first: Int!, $after: String, $issueId: String!) {
+  issue(id: $issueId) {
+    labels(first: $first, after: $after) {
+      nodes { name }
+      pageInfo { hasNextPage endCursor }
+    }
   }
 }`
 
@@ -230,10 +240,13 @@ type linearIdentityPayload struct {
 	Email string `json:"email"`
 }
 
+type linearLabelPayload struct {
+	Name string `json:"name"`
+}
+
 type linearLabelsPayload struct {
-	Nodes []struct {
-		Name string `json:"name"`
-	} `json:"nodes"`
+	Nodes    []linearLabelPayload  `json:"nodes"`
+	PageInfo linearPageInfoPayload `json:"pageInfo"`
 }
 
 type linearParentPayload struct {
@@ -738,6 +751,39 @@ func collectLinearCycles(
 		cycles = append(cycles, cycle)
 	}
 	return cycles, page.Pages, nil
+}
+
+func collectLinearIssueLabels(
+	ctx context.Context,
+	client *providerfoundation.HTTPClient,
+	issueID string,
+	after string,
+) ([]linearLabelPayload, int, error) {
+	page, err := providerfoundation.CollectLinearGraphQLPages(
+		ctx, client, providerfoundation.LinearPageOptions{
+			Query:          linearWorkItemsLabelsQuery,
+			Variables:      map[string]any{"issueId": issueID},
+			ConnectionPath: []string{"issue", "labels"},
+			PerPage:        50,
+			MaxPages:       linearNestedPageLimit(),
+			InitialCursor:  after,
+		},
+	)
+	if err != nil {
+		return nil, 0, err
+	}
+	if page.PageBudgetExhausted {
+		return nil, page.Pages, linearNestedBoundExceeded("issue "+issueID, "labels", page.Pages, len(page.Items))
+	}
+	items := make([]linearLabelPayload, 0, len(page.Items))
+	for _, raw := range page.Items {
+		var item linearLabelPayload
+		if err := json.Unmarshal(raw, &item); err != nil {
+			return nil, page.Pages, providerfoundation.ErrNormalizationInvalid
+		}
+		items = append(items, item)
+	}
+	return items, page.Pages, nil
 }
 
 func collectLinearIssueAttachments(
@@ -1261,6 +1307,23 @@ func (handler LinearWorkItemsRouteHandler) Collect(
 			}
 			if payload.ID == "" {
 				return CompleteRouteBatch{}, providerfoundation.ErrNormalizationInvalid
+			}
+			if payload.Labels.PageInfo.HasNextPage {
+				cursor, cursorErr := linearConnectionCursor(payload.Labels.PageInfo)
+				if cursorErr != nil {
+					return CompleteRouteBatch{}, cursorErr
+				}
+				labels, labelPages, labelErr := collectLinearIssueLabels(
+					ctx, client, payload.ID, cursor,
+				)
+				pagesSeen += labelPages
+				if labelErr != nil {
+					return CompleteRouteBatch{}, labelErr
+				}
+				// Cursor paging never overlaps, and two labels may share a
+				// name: append as-is, no de-duplication.
+				payload.Labels.Nodes = append(payload.Labels.Nodes, labels...)
+				payload.Labels.PageInfo = linearPageInfoPayload{}
 			}
 			if payload.Attachments.PageInfo.HasNextPage {
 				cursor, cursorErr := linearConnectionCursor(payload.Attachments.PageInfo)

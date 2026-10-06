@@ -31,6 +31,7 @@ type linearNestedServer struct {
 }
 
 var linearNestedQueryMarkers = map[string]string{
+	"labels":           "query LinearWorkItemsLabels(",
 	"attachments":      "query LinearWorkItemsAttachments(",
 	"history":          "query LinearWorkItemsHistory(",
 	"comments":         "query LinearWorkItemsComments(",
@@ -41,6 +42,8 @@ var linearNestedQueryMarkers = map[string]string{
 
 func linearNestedNode(field string, index int) string {
 	switch field {
+	case "labels":
+		return fmt.Sprintf(`{"name":"label-%d"}`, index)
 	case "attachments":
 		return fmt.Sprintf(`{"url":"https://github.com/acme/repo/pull/%d","sourceType":"github"}`, index+1)
 	case "history":
@@ -69,7 +72,7 @@ func (server *linearNestedServer) page(field string, index int) string {
 func (server *linearNestedServer) issue() string {
 	empty := `{"nodes":[],"pageInfo":{"hasNextPage":false,"endCursor":null}}`
 	conns := map[string]string{
-		"attachments": empty, "history": `{"nodes":[]}`, "comments": empty,
+		"labels": empty, "attachments": empty, "history": `{"nodes":[]}`, "comments": empty,
 		"relations": empty, "inverseRelations": empty,
 	}
 	if server.field != "cycles" {
@@ -77,7 +80,7 @@ func (server *linearNestedServer) issue() string {
 	}
 	return `{"data":{"issues":{"nodes":[{"id":"lin-issue-big","identifier":"ENG-45","title":"Big",
 		"createdAt":"2026-07-25T09:00:00Z","updatedAt":"2026-07-28T16:30:00Z",
-		"state":{"name":"Todo","type":"unstarted"},"labels":{"nodes":[]},
+		"state":{"name":"Todo","type":"unstarted"},"labels":` + conns["labels"] + `,
 		"history":` + conns["history"] + `,"comments":` + conns["comments"] + `,
 		"attachments":` + conns["attachments"] + `,"relations":` + conns["relations"] + `,
 		"inverseRelations":` + conns["inverseRelations"] + `}],
@@ -152,7 +155,7 @@ func collectWithLinearNestedServer(t *testing.T, field string, totalPages int) (
 func TestLinearWorkItemsNestedConnectionsPageToTheEnd(t *testing.T) {
 	t.Parallel()
 	const totalPages = 12 // more than the old 5-page and 2-page caps
-	for _, field := range []string{"attachments", "history", "comments", "relations", "inverseRelations", "cycles"} {
+	for _, field := range []string{"labels", "attachments", "history", "comments", "relations", "inverseRelations", "cycles"} {
 		t.Run(field, func(t *testing.T) {
 			t.Parallel()
 			batch, server, err := collectWithLinearNestedServer(t, field, totalPages)
@@ -165,6 +168,19 @@ func TestLinearWorkItemsNestedConnectionsPageToTheEnd(t *testing.T) {
 			}
 			if server.nested != want {
 				t.Fatalf("%s nested requests=%d want %d", field, server.nested, want)
+			}
+			if field == "labels" {
+				var row linearWorkItemRow
+				for _, effect := range batch.Effects {
+					if effect.Destination == "work_items" {
+						if err := json.Unmarshal(effect.Rows[0], &row); err != nil {
+							t.Fatal(err)
+						}
+					}
+				}
+				if len(row.Labels) != totalPages {
+					t.Fatalf("labels=%d want %d", len(row.Labels), totalPages)
+				}
 			}
 			if field == "comments" {
 				for _, effect := range batch.Effects {
@@ -186,7 +202,7 @@ func TestLinearWorkItemsNestedHardBoundNamesIssueAndField(t *testing.T) {
 	slog.SetDefault(slog.New(slog.NewTextHandler(&logs, &slog.HandlerOptions{Level: slog.LevelDebug})))
 	t.Cleanup(func() { slog.SetDefault(previous) })
 
-	for _, field := range []string{"attachments", "history", "comments", "relations", "inverseRelations", "cycles"} {
+	for _, field := range []string{"labels", "attachments", "history", "comments", "relations", "inverseRelations", "cycles"} {
 		logs.Reset()
 		_, server, err := collectWithLinearNestedServer(t, field, linearNestedHardMaxPages+5)
 		if !errors.Is(err, ErrPaginationCapExceeded) {

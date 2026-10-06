@@ -70,3 +70,29 @@ func IncidentGateTargets(provider string, hasIntegration, hasSource bool, stored
 	}
 	return out
 }
+
+// CascadedSyncTargets is the list a save of a parent configuration gives one
+// child configuration. A child's stored list is its own selection, never a
+// mirror, so a mirrored item of the parent must not reach it: the mirror
+// never leaves the parent. The result is the submitted list, in its order and
+// with its duplicates, without every item that is a mirrored item of the
+// parent (StoredTargetIsMirrored), unless this save adds the item (the
+// request asked for it) or the child already holds it (an earlier request
+// asked for it). A parent whose rows do not own its selection has no mirrored
+// item: its children get the submitted list as it is.
+func CascadedSyncTargets(provider string, parentHasIntegration, parentHasSource bool, submitted, added, childStored []string) []string {
+	asked := map[string]bool{}
+	for _, target := range added {
+		asked[target] = true
+	}
+	for _, target := range childStored {
+		asked[target] = true
+	}
+	out := make([]string, 0, len(submitted))
+	for _, target := range submitted {
+		if asked[target] || !StoredTargetIsMirrored(provider, parentHasIntegration, parentHasSource, target) {
+			out = append(out, target)
+		}
+	}
+	return out
+}

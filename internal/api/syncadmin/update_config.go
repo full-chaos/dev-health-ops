@@ -321,7 +321,7 @@ func (h *handlers) updateSyncConfigTx(ctx context.Context, tx pgx.Tx, org string
 		return nil, err
 	}
 	if config.ParentID == nil {
-		if err := h.cascadeToChildren(ctx, tx, org, config.ID, in, options, cleared, optionsProvided, now); err != nil {
+		if err := h.cascadeToChildren(ctx, tx, org, config, in, change.added, options, cleared, optionsProvided, now); err != nil {
 			return nil, err
 		}
 	}
@@ -550,9 +550,14 @@ func updateServicesDatasetMappings(ctx context.Context, tx pgx.Tx, org string, i
 // config whose parent is this one (by parent_id alone, as Python selects
 // them) takes the body's targets and activity, and the schedule keys the
 // body set or cleared; then each child's sync job is upserted.
-func (h *handlers) cascadeToChildren(ctx context.Context, tx pgx.Tx, org string, parentID uuid.UUID, in syncConfigUpdate,
+//
+// The targets a child takes are providersync.CascadedSyncTargets of the
+// body's list: a child's list is its own selection, so an item the parent's
+// list holds only as the mirror of a dataset row is not written to it. added
+// is the targets this save adds to the parent's list.
+func (h *handlers) cascadeToChildren(ctx context.Context, tx pgx.Tx, org string, parent *syncConfig, in syncConfigUpdate, added []string,
 	options *pyjson.Object, cleared map[string]bool, optionsProvided bool, now time.Time) error {
-	rows, err := tx.Query(ctx, `SELECT `+syncConfigColumns+` FROM sync_configurations WHERE parent_id = $1`, parentID)
+	rows, err := tx.Query(ctx, `SELECT `+syncConfigColumns+` FROM sync_configurations WHERE parent_id = $1`, parent.ID)
 	if err != nil {
 		return fmt.Errorf("read child configs: %w", err)
 	}
@@ -580,11 +585,8 @@ func (h *handlers) cascadeToChildren(ctx context.Context, tx pgx.Tx, org string,
 		}
 		newTargets := storedTargets
 		if in.syncTargetsSet {
-			list := make([]pyjson.Value, len(in.syncTargets))
-			for index, target := range in.syncTargets {
-				list[index] = target
-			}
-			newTargets = list
+			newTargets = stringValues(providersync.CascadedSyncTargets(parent.Provider, parent.IntegrationID != nil, parent.SourceID != nil,
+				in.syncTargets, added, storedListItems(storedTargets)))
 		}
 		newActive := child.IsActive
 		if in.isActive != nil {

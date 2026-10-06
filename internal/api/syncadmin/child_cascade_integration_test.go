@@ -1,0 +1,361 @@
+//go:build integration
+
+package syncadmin
+
+import (
+	"bytes"
+	"context"
+	"crypto/sha256"
+	"encoding/hex"
+	"encoding/json"
+	"errors"
+	"fmt"
+	"io"
+	"net/http"
+	"net/http/httptest"
+	"strings"
+	"testing"
+	"time"
+
+	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5/pgxpool"
+
+	schedsync "github.com/full-chaos/dev-health-ops/internal/scheduler/sync"
+	"github.com/full-chaos/dev-health-ops/internal/testsupport/containers"
+	"github.com/full-chaos/dev-health-ops/internal/testsupport/pgschema"
+	"github.com/full-chaos/dev-health-ops/internal/testsupport/pgseed"
+)
+
+// A save of a parent configuration cascades its list to every child
+// configuration (cascadeToChildren). A child's stored list is its own
+// selection, never a mirror of the dataset rows: the tests below read every
+// reader of the child's list before and after a parent save.
+
+type cascadeVenue struct {
+	t            *testing.T
+	pool         *pgxpool.Pool
+	org          string
+	server       *httptest.Server
+	materializer schedsync.Materializer
+	sequence     int
+	hour         int
+}
+
+type cascadeSeeded struct {
+	integration, config, job uuid.UUID
+	source                   *string
+}
+
+type cascadeResult struct {
+	SyncNow, Backfill, PutRepositories, PatchNoList int
+	Scheduled                                       schedsync.HandoffOutcome
+	Plan                                            string
+}
+
+func startCascadeVenue(t *testing.T, incidentFeature bool) *cascadeVenue {
+	t.Helper()
+	t.Setenv("SYNC_MANUAL_TRIGGER_AWAIT_SECONDS", "0.3")
+	ctx := context.Background()
+	instance, err := containers.StartPostgres(ctx)
+	if err != nil {
+		t.Fatalf("start postgres: %v", err)
+	}
+	t.Cleanup(func() { _ = instance.Close(context.Background()) })
+	pool, err := pgxpool.New(ctx, instance.URI)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(pool.Close)
+	pgschema.Apply(ctx, t, pool)
+	org := uuid.NewString()
+	var feature string
+	if err := pool.QueryRow(ctx, `SELECT id::text FROM feature_flags WHERE key = $1`, canonicalIncidentFeatureKey).Scan(&feature); err != nil {
+		t.Fatal(err)
+	}
+	pgseed.Org(ctx, t, pool, org, "enterprise")
+	pgseed.OrgOverride(ctx, t, pool, org, feature, incidentFeature)
+	mux := http.NewServeMux()
+	for _, route := range Routes(Deps{Pool: pool, Guard: testGuard(t), Logger: quiet()}) {
+		mux.Handle(route.Method+" "+route.Pattern, route.Handler)
+	}
+	server := httptest.NewServer(mux)
+	t.Cleanup(server.Close)
+	materializer, err := schedsync.NewNativeMaterializer(pool)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return &cascadeVenue{t: t, pool: pool, org: org, server: server, materializer: materializer}
+}
+
+func (v *cascadeVenue) call(method, path, body string) (int, string) {
+	v.t.Helper()
+	var reader io.Reader
+	if body != "" {
+		reader = bytes.NewReader([]byte(body))
+	}
+	request, err := http.NewRequest(method, v.server.URL+path, reader)
+	if err != nil {
+		v.t.Fatal(err)
+	}
+	request.Header.Set("Authorization", "Bearer "+sign(v.t, "admin", v.org))
+	if body != "" {
+		request.Header.Set("Content-Type", "application/json")
+	}
+	response, err := http.DefaultClient.Do(request)
+	if err != nil {
+		v.t.Fatal(err)
+	}
+	defer response.Body.Close()
+	text, _ := io.ReadAll(response.Body)
+	return response.StatusCode, string(text)
+}
+
+func (v *cascadeVenue) exec(sql string, args ...any) {
+	v.t.Helper()
+	if _, err := v.pool.Exec(context.Background(), sql, args...); err != nil {
+		v.t.Fatalf("seed: %v", err)
+	}
+}
+
+func (v *cascadeVenue) seed(provider, stored string, rows []string) cascadeSeeded {
+	v.t.Helper()
+	v.sequence++
+	one := cascadeSeeded{integration: uuid.New(), config: uuid.New(), job: uuid.New()}
+	v.exec(`INSERT INTO integrations (id, org_id, provider, name, config, is_active, created_at, updated_at)
+VALUES ($1, $2, $3, $4, '{}'::json, true, now(), now())`, one.integration, v.org, provider, fmt.Sprintf("integration %d", v.sequence))
+	for _, key := range rows {
+		v.exec(`INSERT INTO integration_datasets (id, org_id, integration_id, dataset_key, is_enabled, options) VALUES ($1, $2, $3, $4, true, '{}'::json)`,
+			uuid.New(), v.org, one.integration, key)
+	}
+	v.exec(`INSERT INTO sync_configurations (id, org_id, name, provider, sync_targets, sync_options, is_active, planner_managed,
+integration_id, source_id, created_at, updated_at) VALUES ($1, $2, $3, $4, $5::json, '{"schedule_cron":"0 * * * *"}'::json, true, true, $6, NULL, now(), now())`,
+		one.config, v.org, fmt.Sprintf("config %d", v.sequence), provider, stored, one.integration)
+	v.exec(`INSERT INTO scheduled_jobs (id,org_id,name,sync_config_id,job_type,schedule_cron,timezone,status,is_running,created_at,updated_at)
+VALUES ($1::uuid,$2,'job-'||$1::text,$3::uuid,'sync','0 * * * *','UTC',1,FALSE,now(),now())`, one.job, v.org, one.config)
+	return one
+}
+
+// child adds a config pinned to one source of the parent's integration, with
+// parent_id set (the legacy child the save cascades to).
+func (v *cascadeVenue) child(parent cascadeSeeded, provider, stored string) cascadeSeeded {
+	v.t.Helper()
+	v.sequence++
+	source := uuid.New()
+	v.exec(`INSERT INTO integration_sources (id, org_id, integration_id, provider, source_type, external_id, name, full_name, metadata, is_enabled, discovered_at, last_seen_at)
+VALUES ($1, $2, $3, $4, 'repo', $5, $5, $5, '{}'::json, true, now(), now())`, source, v.org, parent.integration, provider, fmt.Sprintf("acme/child-%d", v.sequence))
+	one := cascadeSeeded{integration: parent.integration, config: uuid.New(), job: uuid.New()}
+	v.exec(`INSERT INTO sync_configurations (id, org_id, name, provider, sync_targets, sync_options, is_active, planner_managed,
+integration_id, source_id, parent_id, created_at, updated_at) VALUES ($1, $2, $3, $4, $5::json, '{"schedule_cron":"0 * * * *"}'::json, true, false, $6, $7, $8, now(), now())`,
+		one.config, v.org, fmt.Sprintf("child %d", v.sequence), provider, stored, parent.integration, source, parent.config)
+	v.exec(`INSERT INTO scheduled_jobs (id,org_id,name,sync_config_id,job_type,schedule_cron,timezone,status,is_running,created_at,updated_at)
+VALUES ($1::uuid,$2,'job-'||$1::text,$3::uuid,'sync','0 * * * *','UTC',1,FALSE,now(),now())`, one.job, v.org, one.config)
+	text := source.String()
+	one.source = &text
+	return one
+}
+
+func (v *cascadeVenue) stored(config uuid.UUID) string {
+	v.t.Helper()
+	var text string
+	if err := v.pool.QueryRow(context.Background(), `SELECT sync_targets::text FROM sync_configurations WHERE id = $1`, config).Scan(&text); err != nil {
+		v.t.Fatal(err)
+	}
+	return text
+}
+
+// storedList is the config's stored list as compact JSON, so that two lists
+// with the same items compare equal whatever spacing the writer used.
+func (v *cascadeVenue) storedList(config uuid.UUID) string {
+	v.t.Helper()
+	var items []string
+	if err := json.Unmarshal([]byte(v.stored(config)), &items); err != nil {
+		v.t.Fatalf("stored list of %s: %v", config, err)
+	}
+	compact, err := json.Marshal(items)
+	if err != nil {
+		v.t.Fatal(err)
+	}
+	return string(compact)
+}
+
+func (v *cascadeVenue) rows(integration uuid.UUID) string {
+	v.t.Helper()
+	var text string
+	if err := v.pool.QueryRow(context.Background(), `SELECT coalesce(string_agg(dataset_key || '=' || is_enabled::text, ',' ORDER BY dataset_key), '')
+FROM integration_datasets WHERE integration_id = $1`, integration).Scan(&text); err != nil {
+		v.t.Fatal(err)
+	}
+	return text
+}
+
+func (v *cascadeVenue) shown(config uuid.UUID) string {
+	v.t.Helper()
+	status, body := v.call("GET", "/api/v1/admin/sync-configs/"+config.String(), "")
+	if status != 200 {
+		v.t.Fatalf("GET: %d %s", status, body)
+	}
+	var shown struct {
+		SyncTargets []string `json:"sync_targets"`
+	}
+	if err := json.Unmarshal([]byte(body), &shown); err != nil {
+		v.t.Fatal(err)
+	}
+	echo, _ := json.Marshal(shown.SyncTargets)
+	return string(echo)
+}
+
+func (v *cascadeVenue) plan(label string, one cascadeSeeded, occurrenceID string, when time.Time) string {
+	ctx := context.Background()
+	tx, err := v.pool.Begin(ctx)
+	if err != nil {
+		v.t.Fatal(err)
+	}
+	_, err = v.materializer.Materialize(ctx, tx, schedsync.PendingOccurrence{
+		ID: occurrenceID, IdentityVersion: schedsync.OccurrenceIdentityVersion,
+		OrgID: v.org, ConfigID: one.config.String(), JobID: one.job.String(), ScheduledFor: when,
+		ConfigActive: true, ConfigPlannerManaged: one.source == nil, ConfigSourceID: one.source, JobStatus: 0, JobType: "sync",
+	})
+	_ = tx.Rollback(ctx)
+	switch {
+	case err == nil:
+		return "planned"
+	case errors.Is(err, schedsync.ErrOccurrenceIneligible):
+		return "ineligible"
+	default:
+		return "error: " + err.Error()
+	}
+}
+
+func (v *cascadeVenue) read(label string, one cascadeSeeded) cascadeResult {
+	v.t.Helper()
+	ctx := context.Background()
+	v.hour++
+	when := time.Date(2026, 10, 6, 0, 0, 0, 0, time.UTC).Add(time.Duration(v.hour) * time.Hour)
+	digest := sha256.Sum256([]byte(fmt.Sprintf("%s %s %d", label, one.config, v.hour)))
+	occurrenceID := "sha256:" + hex.EncodeToString(digest[:])
+	path := "/api/v1/admin/sync-configs/" + one.config.String()
+	var result cascadeResult
+	result.SyncNow, _ = v.call("POST", path+"/trigger", "")
+	result.Backfill, _ = v.call("POST", path+"/backfill", `{"since":"2026-09-01","before":"2026-09-03"}`)
+	result.PutRepositories, _ = v.call("PUT", path+"/repositories", `{"owner":"acme","repos":[]}`)
+	result.PatchNoList, _ = v.call("PATCH", path, `{"initial_sync_depth":30}`)
+	tx, err := v.pool.Begin(ctx)
+	if err != nil {
+		v.t.Fatal(err)
+	}
+	result.Scheduled, err = schedsync.NewOccurrenceCoordinator().Handoff(ctx, tx, schedsync.Occurrence{
+		ID: occurrenceID, IdentityVersion: schedsync.OccurrenceIdentityVersion,
+		ConfigID: one.config.String(), OrgID: v.org, JobID: one.job.String(), ScheduledFor: when, ObservedAt: when,
+	})
+	_ = tx.Rollback(ctx)
+	if err != nil {
+		v.t.Fatalf("%s: handoff: %v", label, err)
+	}
+	result.Plan = v.plan(label, one, occurrenceID, when)
+	v.t.Logf("STATE %-62s stored=%s rows=[%s] -> %+v", label, v.stored(one.config), v.rows(one.integration), result)
+	return result
+}
+
+// TestAParentSaveOfTheShownListLeavesEveryReaderOfAChildAsItWas: the org has
+// no canonical-incident feature and the incidents row of the integration is
+// on, so the list the parent shows names the gated target. A save of that
+// list must not write the target to the child: the child's stored list and
+// what every reader of it answers stay as they were.
+func TestAParentSaveOfTheShownListLeavesEveryReaderOfAChildAsItWas(t *testing.T) {
+	v := startCascadeVenue(t, false)
+	for _, testCase := range []struct {
+		provider, stored, gated string
+		rows                    []string
+	}{
+		{"jira", `["work-items"]`, "operational", []string{"work-items", "incidents"}},
+		{"gitlab", `["git"]`, "incidents", []string{"commits", "incidents"}},
+	} {
+		parent := v.seed(testCase.provider, testCase.stored, testCase.rows)
+		child := v.child(parent, testCase.provider, testCase.stored)
+		before := v.read(testCase.provider+" child, before the parent save", child)
+		shown := v.shown(parent.config)
+		if !strings.Contains(shown, `"`+testCase.gated+`"`) {
+			t.Fatalf("harness: %s: the parent shows %s, without the gated target %q: nothing is measured", testCase.provider, shown, testCase.gated)
+		}
+		status, body := v.call("PATCH", "/api/v1/admin/sync-configs/"+parent.config.String(), `{"sync_targets":`+shown+`}`)
+		if status != http.StatusOK {
+			t.Fatalf("%s: the parent save: %d %s", testCase.provider, status, body)
+		}
+		if got := v.storedList(child.config); got != testCase.stored {
+			t.Errorf("%s: the child's stored list is %s after a parent save of the shown list %s, want %s", testCase.provider, got, shown, testCase.stored)
+		}
+		after := v.read(testCase.provider+" child, after the parent save of the shown list", child)
+		if before.SyncNow == http.StatusForbidden || before.Backfill == http.StatusForbidden || before.PatchNoList != http.StatusOK ||
+			before.Scheduled != schedsync.OccurrenceMinted || before.Plan != "planned" {
+			t.Fatalf("harness: %s: the child is refused before the save: %+v", testCase.provider, before)
+		}
+		if before != after {
+			t.Errorf("%s: the child answers %+v before the parent save and %+v after it", testCase.provider, before, after)
+		}
+	}
+}
+
+// TestAParentSaveGivesAChildOnlyWhatARequestAskedFor: the org has the
+// canonical-incident feature, so no save is refused and only the cascade
+// decides the child's list. Each case names the list the child must hold
+// after the save.
+func TestAParentSaveGivesAChildOnlyWhatARequestAskedFor(t *testing.T) {
+	v := startCascadeVenue(t, true)
+	const shownList = "<the list GET shows>"
+	for _, testCase := range []struct {
+		name, provider, parentStored string
+		rows                         []string
+		childStored, submitted       string
+		wantChild                    string
+	}{
+		// The mirror never leaves the parent, with the feature on too.
+		{"jira: a target that shows only because its row is on", "jira", `["work-items"]`, []string{"work-items", "incidents"},
+			`["work-items"]`, shownList, `["work-items"]`},
+		{"gitlab: a target that shows only because its row is on", "gitlab", `["git"]`, []string{"commits", "incidents"},
+			`["git"]`, shownList, `["git"]`},
+		// The user adds the gated target on the parent and no row shows it:
+		// a request asked for it, so the child takes it.
+		{"jira: the save adds the gated target", "jira", `["work-items"]`, []string{"work-items"},
+			`["work-items"]`, `["work-items","operational"]`, `["work-items","operational"]`},
+		{"gitlab: the save adds the gated target", "gitlab", `["git"]`, []string{"commits"},
+			`["git"]`, `["git","incidents"]`, `["git","incidents"]`},
+		// The child already holds the target: an earlier request asked for it.
+		{"jira: the child already holds the gated target", "jira", `["work-items","operational"]`, []string{"work-items", "incidents"},
+			`["work-items","operational"]`, shownList, `["work-items","operational"]`},
+		{"gitlab: the child already holds the gated target", "gitlab", `["git","incidents"]`, []string{"commits", "incidents"},
+			`["git","incidents"]`, shownList, `["git","incidents"]`},
+		// The save drops a target: the child loses it.
+		{"jira: the save drops the gated target", "jira", `["work-items","operational"]`, []string{"work-items", "incidents"},
+			`["work-items","operational"]`, `["work-items"]`, `["work-items"]`},
+		{"gitlab: the save drops the gated target", "gitlab", `["git","incidents"]`, []string{"commits", "incidents"},
+			`["git","incidents"]`, `["git"]`, `["git"]`},
+		// GitHub "incidents" and Linear "operational" are the target of no
+		// dataset of the provider: no row can show them, the parent's list
+		// holds them only because a request asked, and the child takes the
+		// submitted list as it is.
+		{"github: a gated target with no dataset, kept", "github", `["git","incidents"]`, []string{"commits"},
+			`["git"]`, shownList, `["git","incidents"]`},
+		{"github: a gated target with no dataset, added", "github", `["git"]`, []string{"commits"},
+			`["git"]`, `["git","incidents"]`, `["git","incidents"]`},
+		{"linear: a gated target with no dataset, kept", "linear", `["work-items","operational"]`, []string{"work-items"},
+			`["work-items"]`, shownList, `["work-items","operational"]`},
+		{"linear: a gated target with no dataset, added", "linear", `["work-items"]`, []string{"work-items"},
+			`["work-items"]`, `["work-items","operational"]`, `["work-items","operational"]`},
+	} {
+		parent := v.seed(testCase.provider, testCase.parentStored, testCase.rows)
+		child := v.child(parent, testCase.provider, testCase.childStored)
+		submitted := testCase.submitted
+		if submitted == shownList {
+			submitted = v.shown(parent.config)
+		}
+		status, body := v.call("PATCH", "/api/v1/admin/sync-configs/"+parent.config.String(), `{"sync_targets":`+submitted+`}`)
+		if status != http.StatusOK {
+			t.Errorf("%s: the parent save of %s: %d %s", testCase.name, submitted, status, body)
+			continue
+		}
+		if got := v.storedList(child.config); got != testCase.wantChild {
+			t.Errorf("%s: parent save of %s (parent stored %s, rows [%s]): the child's stored list is %s, want %s",
+				testCase.name, submitted, v.stored(parent.config), v.rows(parent.integration), got, testCase.wantChild)
+		}
+	}
+}

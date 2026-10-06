@@ -141,3 +141,48 @@ func TestIncidentGateTargetsLeavesOutOnlyAMirroredTarget(t *testing.T) {
 		t.Errorf("pagerduty: %v, want the stored list %v", got, pagerduty)
 	}
 }
+
+// TestCascadedSyncTargetsNeverCarriesTheMirrorToAChild: what a save of a
+// parent gives one child. One case for each reason an item stays or goes.
+func TestCascadedSyncTargetsNeverCarriesTheMirrorToAChild(t *testing.T) {
+	for _, testCase := range []struct {
+		name                         string
+		provider                     string
+		hasIntegration, hasSource    bool
+		submitted, added, childHolds []string
+		want                         []string
+	}{
+		{"jira: an item that only mirrors a row does not reach the child", "jira", true, false,
+			[]string{"work-items", "operational"}, nil, []string{"work-items"}, []string{"work-items"}},
+		{"gitlab: an item that only mirrors a row does not reach the child", "gitlab", true, false,
+			[]string{"git", "incidents"}, nil, []string{"git"}, []string{"git"}},
+		{"an item this save adds reaches the child", "jira", true, false,
+			[]string{"work-items", "operational"}, []string{"operational"}, []string{"work-items"}, []string{"work-items", "operational"}},
+		{"an item the child holds stays, in the submitted order", "jira", true, false,
+			[]string{"operational", "work-items"}, nil, []string{"work-items", "operational"}, []string{"operational", "work-items"}},
+		{"an item the save drops leaves the child", "jira", true, false,
+			[]string{"work-items"}, nil, []string{"work-items", "operational"}, []string{"work-items"}},
+		{"an item only the child holds leaves the child", "gitlab", true, false,
+			[]string{"git"}, nil, []string{"git", "prs"}, []string{"git"}},
+		{"github: an item with no dataset reaches the child", "github", true, false,
+			[]string{"git", "incidents"}, nil, []string{"git"}, []string{"git", "incidents"}},
+		{"linear: an item with no dataset reaches the child", "linear", true, false,
+			[]string{"work-items", "operational"}, nil, []string{"work-items"}, []string{"work-items", "operational"}},
+		{"an item not spelled as the registry spells it is not a mirrored item", "jira", true, false,
+			[]string{"work-items", "Operational"}, nil, []string{"work-items"}, []string{"work-items", "Operational"}},
+		{"pagerduty: the parent's list is its selection, the child gets it whole", "pagerduty", true, false,
+			[]string{"operational"}, nil, nil, []string{"operational"}},
+		{"a parent with no integration has no rows, the child gets the list whole", "jira", false, false,
+			[]string{"work-items", "operational"}, nil, nil, []string{"work-items", "operational"}},
+		{"a parent pinned to a source has its own selection, the child gets the list whole", "jira", true, true,
+			[]string{"work-items", "operational"}, nil, nil, []string{"work-items", "operational"}},
+		{"duplicates of a kept item stay", "github", true, false,
+			[]string{"incidents", "incidents"}, nil, nil, []string{"incidents", "incidents"}},
+		{"an empty list empties the child", "jira", true, false, []string{}, nil, []string{"work-items"}, []string{}},
+	} {
+		got := CascadedSyncTargets(testCase.provider, testCase.hasIntegration, testCase.hasSource, testCase.submitted, testCase.added, testCase.childHolds)
+		if !reflect.DeepEqual(got, testCase.want) {
+			t.Errorf("%s: %v, want %v", testCase.name, got, testCase.want)
+		}
+	}
+}

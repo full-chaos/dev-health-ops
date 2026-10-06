@@ -30,6 +30,7 @@ import (
 
 	"github.com/jackc/pgx/v5"
 
+	"github.com/full-chaos/dev-health-ops/internal/providersync"
 	schedsync "github.com/full-chaos/dev-health-ops/internal/scheduler/sync"
 )
 
@@ -90,10 +91,12 @@ func sourceIDsFor(config *Config, enabled []string) []string {
 	return nil
 }
 
-// rowsOwnSelection reports whether the configuration covers its whole
-// integration: the integration's dataset rows then own which datasets run.
+// rowsOwnSelection reports whether the integration's dataset rows own which
+// datasets run (providersync.RowsOwnSyncSelection: a whole-integration
+// configuration of any provider but PagerDuty, whose rows the plan itself
+// forces on and whose stored list the verb still validates).
 func rowsOwnSelection(config *Config) bool {
-	return config.IntegrationID != nil && config.SourceID == nil
+	return providersync.RowsOwnSyncSelection(config.Provider, config.IntegrationID != nil, config.SourceID != nil)
 }
 
 // enabledDatasetKeys is the keys of the integration's enabled dataset rows

@@ -12,7 +12,6 @@ import (
 
 	"github.com/full-chaos/dev-health-ops/internal/api/pyjson"
 	"github.com/full-chaos/dev-health-ops/internal/providersync"
-	"github.com/full-chaos/dev-health-ops/internal/pythonparity"
 )
 
 // The dataset row is the single owner of "which datasets of an integration
@@ -28,15 +27,29 @@ import (
 // rebuilt the rows from the submitted list on every save, in both directions.
 
 // rowsOwnSelection reports whether the config's sync_targets is derived from
-// its integration's dataset rows: a whole-integration config (integration
-// set, no source) of any provider but PagerDuty. A child config's list
-// narrows the enabled rows and a config with no integration has no rows:
-// both keep their stored list. The platform owns PagerDuty's rows (every
-// plan forces the operational set on), and its plan-time repair reads the
-// stored list, so a PagerDuty config keeps its stored list and a save writes
-// no dataset row.
+// its integration's dataset rows (providersync.RowsOwnSyncSelection: a
+// whole-integration config of any provider but PagerDuty). Every other
+// config keeps its stored list and a save of it writes no dataset row.
 func rowsOwnSelection(config *syncConfig) bool {
-	return config.IntegrationID != nil && config.SourceID == nil && pythonparity.Lower(config.Provider) != "pagerduty"
+	return providersync.RowsOwnSyncSelection(config.Provider, config.IntegrationID != nil, config.SourceID != nil)
+}
+
+// incidentGateTargets is the items of the config's stored list the
+// canonical-incident gate reads (providersync.IncidentGateTargets, over the
+// list as the routes decode it): an item that mirrors a dataset row is left
+// out, every other item stays, a non-string item included, so the gate
+// answers it as before. Every route that runs the gate on the stored list
+// takes its targets from here.
+func incidentGateTargets(config *syncConfig, stored []pyjson.Value) []pyjson.Value {
+	out := make([]pyjson.Value, 0, len(stored))
+	for _, target := range stored {
+		if text, ok := target.(string); ok &&
+			providersync.StoredTargetIsMirrored(config.Provider, config.IntegrationID != nil, config.SourceID != nil, text) {
+			continue
+		}
+		out = append(out, target)
+	}
+	return out
 }
 
 // storedListItems is the string items of a stored sync_targets JSON list, in
@@ -53,22 +66,6 @@ func storedListItems(stored pyjson.Value) []string {
 		}
 	}
 	return items
-}
-
-// passthroughTargets is the targets of a list that are the legacy target of
-// no dataset of the provider (GitHub "incidents"), in order, each once. No
-// row can show such a target, so the list keeps it as stored.
-func passthroughTargets(provider string, targets []string) []string {
-	out := []string{}
-	seen := map[string]bool{}
-	for _, target := range targets {
-		if seen[target] || providersync.SyncTargetHasDataset(provider, target) {
-			continue
-		}
-		seen[target] = true
-		out = append(out, target)
-	}
-	return out
 }
 
 // shownTargets is the list a whole-integration config shows: the targets
@@ -291,7 +288,7 @@ func deriveShownTargets(ctx context.Context, read func(context.Context, string, 
 			return err
 		}
 		items := storedListItems(stored)
-		config.shownTargets = shownTargets(config.Provider, enabled[*config.IntegrationID], passthroughTargets(config.Provider, items), items)
+		config.shownTargets = shownTargets(config.Provider, enabled[*config.IntegrationID], providersync.PassthroughSyncTargets(config.Provider, items), items)
 		config.shownTargetsSet = true
 	}
 	return nil

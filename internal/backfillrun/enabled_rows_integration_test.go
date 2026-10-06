@@ -11,6 +11,7 @@ import (
 	"github.com/jackc/pgx/v5"
 
 	"github.com/full-chaos/dev-health-ops/internal/cli"
+	schedsync "github.com/full-chaos/dev-health-ops/internal/scheduler/sync"
 )
 
 // TestBackfillRunNamesExactlyTheEnabledDatasetRows runs the verb on
@@ -135,5 +136,75 @@ VALUES ($1::uuid, $2, $3, $4, $5::json, '{}'::json, true, true, $6::uuid, now(),
 	}
 	if after := datasetRows(); after != before {
 		t.Errorf("the verb changed dataset rows\nbefore:\n%s\nafter:\n%s", before, after)
+	}
+}
+
+// TestBackfillRunKeepsTheStoredListOfAPagerDutyConfiguration: the dataset
+// rows do not own a PagerDuty configuration's selection (the plan forces its
+// rows on; no save writes them), so the verb still reads its stored list. A
+// PagerDuty integration with no dataset row yet starts a run that names the
+// operational set, and a stored list PagerDuty does not support is refused
+// whatever rows are on.
+func TestBackfillRunKeepsTheStoredListOfAPagerDutyConfiguration(t *testing.T) {
+	instance, admin := startDatabase(t)
+	uri := freshDatabase(t, instance, admin)
+	ctx := context.Background()
+	conn, err := pgx.Connect(ctx, uri)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer conn.Close(ctx)
+	exec := func(sql string, args ...any) {
+		t.Helper()
+		if _, err := conn.Exec(ctx, sql, args...); err != nil {
+			t.Fatalf("seed: %v\n%s", err, sql)
+		}
+	}
+	operational, err := schedsync.PlannerDatasetKeys("pagerduty", []string{"operational"})
+	if err != nil || len(operational) == 0 {
+		t.Fatalf("the operational set of PagerDuty: %v %v", operational, err)
+	}
+	for _, s := range []struct {
+		n      int
+		stored string
+		on     []string
+	}{
+		{n: 201, stored: `["operational"]`},
+		{n: 202, stored: `["operational", "git"]`, on: []string{"incidents"}},
+	} {
+		integration, config := uuidN(0x1a, s.n), uuidN(0xc0, s.n)
+		exec(`INSERT INTO integrations (id, org_id, provider, name, config, is_active, created_at, updated_at)
+VALUES ($1::uuid, $2, 'pagerduty', $3, '{}'::json, true, now(), now())`, integration, testOrg, fmt.Sprintf("integration-%d", s.n))
+		exec(`INSERT INTO integration_sources (id, org_id, integration_id, provider, source_type, external_id, name, full_name, metadata, is_enabled, discovered_at, last_seen_at)
+VALUES ($1::uuid, $2, $3::uuid, 'pagerduty', 'repo', $4, $4, $4, '{}'::json, true, now(), now())`,
+			uuidN(0x5a, s.n*10), testOrg, integration, fmt.Sprintf("account-%d", s.n))
+		exec(`INSERT INTO sync_configurations (id, org_id, name, provider, sync_targets, sync_options, is_active, planner_managed, integration_id, created_at, updated_at)
+VALUES ($1::uuid, $2, $3, 'pagerduty', $4::json, '{}'::json, true, true, $5::uuid, now(), now())`,
+			config, testOrg, fmt.Sprintf("rows-%d", s.n), s.stored, integration)
+		for _, key := range s.on {
+			exec(`INSERT INTO integration_datasets (id, org_id, integration_id, dataset_key, is_enabled, options) VALUES (gen_random_uuid(), $1, $2::uuid, $3, true, '{}'::json)`, testOrg, integration, key)
+		}
+	}
+
+	run := scenario{name: "pagerduty, no dataset row", id: uuidN(0xc0, 201), args: []string{"--backfill", "1", "--before", "2026-03-10"}}
+	reset(t, uri, run)
+	code, _, stderr := goRun(t, uri, run)
+	if code != cli.ExitOK {
+		t.Fatalf("%s: exit %d, want a started run; stderr:\n%s", run.name, code, stderr)
+	}
+	if named := triggerDatasetKeys(t, uri); len(named) != 1 || fmt.Sprint(named[0]) != fmt.Sprint(operational) {
+		t.Errorf("%s: the run names %v, want the operational set of the stored list %v", run.name, named, operational)
+	}
+
+	run = scenario{name: "pagerduty, a stored list it does not support", id: uuidN(0xc0, 202), args: []string{"--backfill", "1", "--before", "2026-03-10"}}
+	reset(t, uri, run)
+	code, _, stderr = goRun(t, uri, run)
+	if code == cli.ExitOK || !strings.Contains(stderr, "has sync_targets ['git'] that provider 'pagerduty' does not recognize") {
+		t.Errorf("%s: exit %d, want the refusal of the stored list; stderr:\n%s", run.name, code, stderr)
+	}
+	for table, lines := range rows(t, uri) {
+		if len(lines) != 0 {
+			t.Errorf("%s: the refused run left %d rows in %s", run.name, len(lines), table)
+		}
 	}
 }

@@ -9,6 +9,8 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
+
+	"github.com/full-chaos/dev-health-ops/internal/providersync"
 )
 
 var (
@@ -152,7 +154,7 @@ func coordinatorEligibility(
 		return false, OccurrenceRefusedOrgMissing, nil
 	}
 
-	targets, err := configuredSyncTargets(ctx, transaction, occurrence)
+	targets, err := configuredIncidentGateTargets(ctx, transaction, occurrence)
 	if err != nil {
 		return false, "", err
 	}
@@ -221,21 +223,28 @@ func organizationExists(
 	return true, nil
 }
 
-// configuredSyncTargets reads the schedule's legacy sync targets, which decide
-// whether the canonical-incident feature applies at all.
-func configuredSyncTargets(
+// configuredIncidentGateTargets reads the schedule's stored sync targets and
+// returns the ones that decide whether the canonical-incident feature applies
+// at all (providersync.IncidentGateTargets): a target the list names only as
+// the mirror of a dataset row is not one of them, so it cannot refuse the
+// schedule here. The plan-time gate on the rows still decides whether an
+// incident dataset is fetched.
+func configuredIncidentGateTargets(
 	ctx context.Context,
 	transaction HandoffTransaction,
 	occurrence Occurrence,
 ) ([]string, error) {
 	var encoded []byte
+	var provider string
+	var hasIntegration, hasSource bool
 	err := transaction.QueryRow(
 		ctx,
-		`SELECT sync_targets::jsonb FROM public.sync_configurations
+		`SELECT sync_targets::jsonb, provider, integration_id IS NOT NULL, source_id IS NOT NULL
+		 FROM public.sync_configurations
 		 WHERE id = $1::uuid AND org_id = $2`,
 		occurrence.ConfigID,
 		occurrence.OrgID,
-	).Scan(&encoded)
+	).Scan(&encoded, &provider, &hasIntegration, &hasSource)
 	if errors.Is(err, pgx.ErrNoRows) {
 		// The configuration vanished between the locked candidate read and
 		// here. Treat it as ungated rather than inventing an entitlement
@@ -272,5 +281,5 @@ func configuredSyncTargets(
 		}
 		targets = append(targets, fmt.Sprint(value))
 	}
-	return targets, nil
+	return providersync.IncidentGateTargets(provider, hasIntegration, hasSource, targets), nil
 }

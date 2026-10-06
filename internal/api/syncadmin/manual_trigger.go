@@ -405,7 +405,7 @@ func (h *handlers) triggerSyncConfig(w http.ResponseWriter, r *http.Request) {
 		h.fail(w, r, "sync_targets", err)
 		return
 	}
-	if err := h.requireCanonicalIncident(ctx, org, targets); err != nil {
+	if err := h.requireCanonicalIncident(ctx, org, incidentGateTargets(config, targets)); err != nil {
 		h.answerOrFail(w, r, "canonical_incident_feature", err)
 		return
 	}

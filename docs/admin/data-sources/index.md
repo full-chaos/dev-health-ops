@@ -72,9 +72,11 @@ A save changes only what you changed. Checking a box switches on every dataset o
 Two cases differ:
 
 - **PagerDuty.** The platform manages PagerDuty datasets as one set; they cannot be switched off one at a time. Unchecking the only box ("operational") stops the whole PagerDuty configuration at its next run.
-- **Incident data without the incident feature.** When incident data is on for a connection but the organization does not have canonical incident ingestion, you can still save other settings. A save is refused only when it switches incident data on.
+- **Incident data without the incident feature.** When incident data is on for a connection but the organization does not have canonical incident ingestion, you can still save other settings. A save is refused only when it switches incident data on. A save of the list the form shows changes nothing else for the connection: "Sync now", a backfill, a change of the repository selection and the scheduled runs are accepted or refused exactly as before the save. Incident data itself is not fetched while the organization does not have the feature.
 
-A backfill started with `dho backfill run` covers the datasets that are on for the connection. It does not switch a dataset on.
+A backfill started with `dho backfill run` covers the datasets that are on for the connection. It does not switch a dataset on. A PagerDuty backfill always covers the PagerDuty set.
+
+**API clients.** `GET` of a sync configuration returns `sync_targets` computed from the datasets that are on. A `PATCH` with `sync_targets` changes only the data types that differ from that list. A client that keeps a form open can also send `sync_targets_base`, the `sync_targets` list it read when it opened the form: the save then changes only the data types that differ between `sync_targets_base` and `sync_targets`, so a change made elsewhere in the meantime is kept. `sync_targets_base` is optional (`null` is the same as absent); otherwise it must be a list of strings (anything else is refused with 422 and nothing is saved), and it has an effect only together with `sync_targets`.
 
 ## Availability boundaries
 

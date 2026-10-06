@@ -17,6 +17,7 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/api/policy"
 	"github.com/full-chaos/dev-health-ops/internal/api/pybody"
 	"github.com/full-chaos/dev-health-ops/internal/api/pyjson"
+	"github.com/full-chaos/dev-health-ops/internal/providersync"
 	"github.com/full-chaos/dev-health-ops/internal/pythonparity"
 	schedsync "github.com/full-chaos/dev-health-ops/internal/scheduler/sync"
 	"github.com/full-chaos/dev-health-ops/internal/synccoverage"
@@ -177,19 +178,19 @@ func (h *handlers) updateSyncConfigTx(ctx context.Context, tx pgx.Tx, org string
 			return nil, err
 		}
 		change, err = planSelectionChange(config.Provider, enabled[*config.IntegrationID],
-			passthroughTargets(config.Provider, storedListItems(storedTargetsValue)), in.syncTargets, in.syncTargetsBase, in.syncTargetsBaseSet)
+			providersync.PassthroughSyncTargets(config.Provider, storedListItems(storedTargetsValue)), in.syncTargets, in.syncTargetsBase, in.syncTargetsBaseSet)
 		if err != nil {
 			return nil, err
 		}
 		gateTargets = change.gatedTargets()
-	case rowsOwn:
-		gateTargets = stringValues(passthroughTargets(config.Provider, storedListItems(storedTargetsValue)))
 	case in.syncTargetsSet:
 		gateTargets = stringValues(in.syncTargets)
 	default:
-		if gateTargets, err = pyIterate(storedTargetsValue); err != nil {
+		stored, err := pyIterate(storedTargetsValue)
+		if err != nil {
 			return nil, err
 		}
+		gateTargets = incidentGateTargets(config, stored)
 	}
 	if err := h.requireCanonicalIncident(ctx, org, gateTargets); err != nil {
 		return nil, err

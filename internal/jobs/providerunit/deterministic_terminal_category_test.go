@@ -107,6 +107,13 @@ func TestDeterministicTerminalCategoryContract(t *testing.T) {
 			err:      providersync.ErrDuplicateNaturalKey,
 			category: DuplicateNaturalKeyCategory,
 		},
+		{
+			// CHAOS-8790: a snapshot an old pod stored, replayed by a new pod,
+			// is refused identically on every attempt.
+			name:     "previous release snapshot",
+			err:      providersync.ErrPreviousReleaseSnapshot,
+			category: PreviousReleaseSnapshotCategory,
+		},
 	}
 	for _, testCase := range deterministic {
 		t.Run(testCase.name, func(t *testing.T) {

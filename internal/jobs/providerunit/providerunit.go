@@ -129,6 +129,13 @@ const (
 	// gitlab_tests_route.go), so this category exists to fail fast, once
 	// instead of five times, on a collision class nobody has diagnosed yet.
 	DuplicateNaturalKeyCategory = "duplicate_natural_key"
+	// PreviousReleaseSnapshotCategory covers a prepared snapshot stored by the
+	// previous release whose work_item_interactions rows have no
+	// interaction_id (CHAOS-8790): an old pod prepared it, died, and a new pod
+	// replays it. Deterministic -- the same snapshot is replayed on every
+	// attempt -- so the unit fails on the first one under a name that says why.
+	// The scope's next run is a new unit with a new snapshot and heals it.
+	PreviousReleaseSnapshotCategory = "previous_release_snapshot"
 	// ResponseTooLargeCategory covers a provider response above the shared
 	// per-object byte cap (providerfoundation.ObjectTooLargeError). The same
 	// request returns the same oversized body on every attempt and on every
@@ -248,6 +255,9 @@ func deterministicTerminalCategory(err error) (string, bool) {
 	}
 	if errors.Is(err, providersync.ErrEffectRecoveryAmbiguous) {
 		return EffectRecoveryAmbiguousCategory, true
+	}
+	if errors.Is(err, providersync.ErrPreviousReleaseSnapshot) {
+		return PreviousReleaseSnapshotCategory, true
 	}
 	return "", false
 }

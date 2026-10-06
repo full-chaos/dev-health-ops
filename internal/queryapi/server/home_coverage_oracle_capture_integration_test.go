@@ -281,6 +281,13 @@ func chaos8509HomeCaptureDifferenceLeaves(policy chaos8509HomeCapturePolicy, _ c
 	return policy.DifferenceLeaves
 }
 
+// chaos8509HomeCaptureAllowed evaluates only the current pair's transport
+// contract. An earlier pair's expected fail-closed ledger result must not
+// prevent another independently valid pair from being captured.
+func chaos8509HomeCaptureAllowed(statusEqual, headersEqual bool) bool {
+	return statusEqual && headersEqual
+}
+
 func TestCHAOS8509HomeCaptureDifferenceLeafTotals(t *testing.T) {
 	wants := map[chaos8169HomeNoDataLedgerKey]int{
 		chaos8169DictOrderHomeLedgerKey:                 197,
@@ -303,6 +310,25 @@ func TestCHAOS8509HomeCaptureDifferenceLeafTotals(t *testing.T) {
 			}
 			if got := chaos8509HomeCaptureDifferenceLeaves(policy, ledger); got != want {
 				t.Fatalf("capture total difference leaves = %d, want %d; existing ledger leaves must not be added twice", got, want)
+			}
+		})
+	}
+}
+
+func TestCHAOS8509HomeCaptureEligibility(t *testing.T) {
+	for _, test := range []struct {
+		name         string
+		statusEqual  bool
+		headersEqual bool
+		want         bool
+	}{
+		{name: "valid GET after earlier expected POST failure", statusEqual: true, headersEqual: true, want: true},
+		{name: "current status mismatch", statusEqual: false, headersEqual: true, want: false},
+		{name: "current header mismatch", statusEqual: true, headersEqual: false, want: false},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			if got := chaos8509HomeCaptureAllowed(test.statusEqual, test.headersEqual); got != test.want {
+				t.Fatalf("capture allowed = %t, want %t", got, test.want)
 			}
 		})
 	}

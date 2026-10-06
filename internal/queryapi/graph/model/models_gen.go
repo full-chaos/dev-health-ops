@@ -1082,7 +1082,9 @@ type OperatingReviewDelta struct {
 }
 
 type OperatingReviewInput struct {
-	TeamID    *string          `json:"teamId,omitempty"`
+	TeamID *string `json:"teamId,omitempty"`
+	// Teams to review together (CHAOS-8516). The answer is the review of the UNION of these teams' stored rows, by the same rules as the one-team and the all-teams review: a count is a sum, a ratio is made from summed numerators and denominators, and a mean is a mean over the stored rows, never a mean of team values. One id gives the one-team review. Null or empty = ``teamId`` applies (or all teams). ``teamId`` and ``teamIds`` together are an error. Rows with no team are in the all-teams review only.
+	TeamIds   []string         `json:"teamIds,omitempty"`
 	WeekStart graphqldate.Date `json:"weekStart"`
 }
 
@@ -1094,6 +1096,8 @@ type OperatingReviewMetric struct {
 	Delta *OperatingReviewDelta `json:"delta"`
 	// True = the week holds a stored value for the metric (CHAOS-8115). False = no row of the metric's daily table in the week, only NULL values, or a read that failed: ``value`` is then a 0 placeholder, not a measured zero, and a client draws "No data". True with ``value`` 0 is a stored zero.
 	HasData bool `json:"hasData"`
+	// Whether the request's team selection narrows this metric (CHAOS-8516).
+	Scope OperatingReviewMetricScope `json:"scope"`
 }
 
 type OperatingReviewSection struct {
@@ -2401,6 +2405,49 @@ func (e *MeasureInput) UnmarshalGQL(v any) error {
 }
 
 func (e MeasureInput) MarshalGQL(w io.Writer) {
+	fmt.Fprint(w, strconv.Quote(e.String()))
+}
+
+type OperatingReviewMetricScope string
+
+const (
+	// The value follows the request's team selection: one team, several teams together, or all teams when none is selected.
+	OperatingReviewMetricScopeTeam OperatingReviewMetricScope = "TEAM"
+	// The value is the whole organisation's, whatever team is selected: the metric's daily tables hold no team. A client labels it "organisation", not as the selection's value.
+	OperatingReviewMetricScopeOrganization OperatingReviewMetricScope = "ORGANIZATION"
+)
+
+var AllOperatingReviewMetricScope = []OperatingReviewMetricScope{
+	OperatingReviewMetricScopeTeam,
+	OperatingReviewMetricScopeOrganization,
+}
+
+func (e OperatingReviewMetricScope) IsValid() bool {
+	switch e {
+	case OperatingReviewMetricScopeTeam, OperatingReviewMetricScopeOrganization:
+		return true
+	}
+	return false
+}
+
+func (e OperatingReviewMetricScope) String() string {
+	return string(e)
+}
+
+func (e *OperatingReviewMetricScope) UnmarshalGQL(v any) error {
+	str, ok := v.(string)
+	if !ok {
+		return fmt.Errorf("enums must be strings")
+	}
+
+	*e = OperatingReviewMetricScope(str)
+	if !e.IsValid() {
+		return fmt.Errorf("%s is not a valid OperatingReviewMetricScope", str)
+	}
+	return nil
+}
+
+func (e OperatingReviewMetricScope) MarshalGQL(w io.Writer) {
 	fmt.Fprint(w, strconv.Quote(e.String()))
 }
 

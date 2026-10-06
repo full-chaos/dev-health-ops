@@ -69,7 +69,7 @@ func TestFetchInvestmentTakesTheNewestRowOfEachKey(t *testing.T) {
 
 	// With a team filter the key of that team alone: its newest row is zero.
 	team := "team-x"
-	rows, err = fetchInvestment(ctx, client, org, &team, day, day.AddDate(0, 0, 1))
+	rows, err = fetchInvestment(ctx, client, org, teamSelection{team}, day, day.AddDate(0, 0, 1))
 	if err != nil {
 		t.Fatalf("fetchInvestment team: %v", err)
 	}

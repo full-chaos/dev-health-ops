@@ -33,19 +33,7 @@ func (sink GitHubPullRequestClickHouseEffects) WriteEffect(
 	claim Claim,
 	effect EffectBatch,
 ) error {
-	if effect.Destination == prAIAttributionDestination {
-		return sink.social().WriteEffect(ctx, claim, effect)
-	}
 	return sink.writePullRequestEffect(ctx, claim, effect, "prs")
-}
-
-// social is the PR-social sink over the same connection, lease and provider.
-// The prs route emits ai_attribution beside git_pull_requests, and the one
-// writer of that destination lives on the social sink.
-func (sink GitHubPullRequestClickHouseEffects) social() GitHubPullRequestSocialClickHouseEffects {
-	return GitHubPullRequestSocialClickHouseEffects{
-		Conn: sink.Conn, Lease: sink.Lease, Provider: sink.provider(),
-	}
 }
 
 // writePullRequestEffect owns the complete git_pull_requests row write. The
@@ -200,9 +188,6 @@ func (sink GitHubPullRequestClickHouseEffects) InspectEffect(
 	claim Claim,
 	effect EffectBatch,
 ) (EffectInspection, error) {
-	if effect.Destination == prAIAttributionDestination {
-		return sink.social().InspectEffect(ctx, claim, effect)
-	}
 	return sink.inspectPullRequestEffect(ctx, claim, effect, "prs")
 }
 

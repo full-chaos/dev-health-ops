@@ -6,6 +6,7 @@ import (
 	"errors"
 	"io"
 	"net/http"
+	"os"
 	"reflect"
 	"sort"
 	"strings"
@@ -325,6 +326,8 @@ const (
 
 type glAttributionDoer struct {
 	requests []string
+	// list and project override the default fixtures when set.
+	list, project string
 }
 
 func (doer *glAttributionDoer) Do(request *http.Request) (*http.Response, error) {
@@ -332,12 +335,19 @@ func (doer *glAttributionDoer) Do(request *http.Request) (*http.Response, error)
 	doer.requests = append(doer.requests, path)
 	root := "/api/v4/projects/123"
 	status, body := http.StatusOK, `[]`
+	list, project := glAttributionMRList, glAttributionProject
+	if doer.list != "" {
+		list = doer.list
+	}
+	if doer.project != "" {
+		project = doer.project
+	}
 	switch {
 	case path == root:
-		body = glAttributionProject
+		body = project
 	case path == root+"/merge_requests":
 		if page := request.URL.Query().Get("page"); page == "" || page == "1" {
-			body = glAttributionMRList
+			body = list
 		}
 	case strings.HasSuffix(path, "/approvals"):
 		status, body = http.StatusNotFound, `{"message":"approvals unavailable"}`
@@ -391,16 +401,14 @@ func glAttributionWorkItemsRows(t *testing.T) []githubAIAttributionRow {
 	return deriver.rows.AIAttributions
 }
 
-// TestGitLabPRsRouteAttributionEqualsWorkItemsRouteRowForRow is the GitLab
-// twin of the GitHub equality test: both routes read the same merge request
-// list items through their own real collector and normalizer.
-func TestGitLabPRsRouteAttributionEqualsWorkItemsRouteRowForRow(t *testing.T) {
+// TestGitLabPRsRouteAttributionCostsNoExtraRequest pins that the merge request
+// attribution rows come out of the list items the unit already fetched, and
+// that the fixture exercises every detector input. Equality with the former
+// work-items route output is TestPRsRouteAttributionEqualsTheRecordedWorkItemsRouteRows.
+func TestGitLabPRsRouteAttributionCostsNoExtraRequest(t *testing.T) {
 	batch, prsDoer := glAttributionPRsBatch(t)
-	fromPRs := sortedAttributions(attributionEffectRows(t, batch))
-	fromWorkItems := sortedAttributions(glAttributionWorkItemsRows(t))
-
 	sources, subjects := map[string]bool{}, map[string]bool{}
-	for _, row := range fromWorkItems {
+	for _, row := range attributionEffectRows(t, batch) {
 		sources[row.Source] = true
 		subjects[row.SubjectID] = true
 	}
@@ -412,14 +420,145 @@ func TestGitLabPRsRouteAttributionEqualsWorkItemsRouteRowForRow(t *testing.T) {
 	if subjects["9"] || !subjects["7"] || !subjects["8"] {
 		t.Fatalf("subjects=%v want 7 and 8 only", subjects)
 	}
-	prsJSON, _ := json.Marshal(fromPRs)
-	itemsJSON, _ := json.Marshal(fromWorkItems)
-	if string(prsJSON) != string(itemsJSON) {
-		t.Fatalf("gitlab prs route rows differ from work-items route rows\nprs:   %s\nitems: %s", prsJSON, itemsJSON)
+	// Exactly the requests the unit made before attribution existed: the
+	// project, the merge request list, and the approvals and notes of each
+	// merge request. The attribution rows add none.
+	root := "/api/v4/projects/123"
+	wantRequests := []string{root, root + "/merge_requests"}
+	for _, iid := range []string{"7", "8", "9"} {
+		wantRequests = append(wantRequests,
+			root+"/merge_requests/"+iid+"/approvals", root+"/merge_requests/"+iid+"/notes")
 	}
-	for _, request := range prsDoer.requests {
-		if strings.HasSuffix(request, "/merge_requests/7") || strings.Contains(request, "/labels") {
-			t.Fatalf("attribution must reuse the list item, saw request %s", request)
+	if !reflect.DeepEqual(prsDoer.requests, wantRequests) {
+		t.Fatalf("gitlab prs requests=%q want %q", prsDoer.requests, wantRequests)
+	}
+}
+
+// TestPRAttributionSinkAssertsTheLeaseBeforeWriting pins that the new
+// destination is fenced by the unit lease like every other destination of the
+// unit: a lost lease stops the write, with rows or without. The readback fence
+// needs a connection and is pinned in the integration test.
+func TestPRAttributionSinkAssertsTheLeaseBeforeWriting(t *testing.T) {
+	t.Parallel()
+	batch, _ := prAttributionPRsEffect(t)
+	sink := GitHubPullRequestSocialClickHouseEffects{
+		Lease: providerfoundation.LeaseGuardFunc(func(context.Context) error { return providerfoundation.ErrLeaseLost }),
+	}
+	claim := prAttributionClaim("github", "prs")
+	if err := sink.WriteEffect(context.Background(), claim, batch.Effects[1]); !errors.Is(err, providerfoundation.ErrLeaseLost) {
+		t.Fatalf("write with a lost lease: err=%v", err)
+	}
+	empty, err := effectBatchFromValues("ai_attribution", EffectReadbackRequired, []githubAIAttributionRow{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := sink.WriteEffect(context.Background(), claim, empty); !errors.Is(err, providerfoundation.ErrLeaseLost) {
+		t.Fatalf("empty write with a lost lease: err=%v", err)
+	}
+}
+
+// recordedWorkItemsRouteRows are the ai_attribution rows the work-items routes
+// emitted for the same fixtures before the prs unit became the only writer,
+// recorded from the real routes at that commit
+// (testdata/prs_ai_attribution_work_items_route_recorded.json). The prs route
+// must reproduce them row for row: same key, same content.
+func recordedWorkItemsRouteRows(t *testing.T, provider string) []githubAIAttributionRow {
+	t.Helper()
+	raw, err := os.ReadFile("testdata/prs_ai_attribution_work_items_route_recorded.json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var recorded map[string][]githubAIAttributionRow
+	if err := json.Unmarshal(raw, &recorded); err != nil {
+		t.Fatal(err)
+	}
+	rows := recorded[provider]
+	if len(rows) == 0 {
+		t.Fatalf("recording has no %s rows", provider)
+	}
+	return sortedAttributions(rows)
+}
+
+// githubWorkItemsRouteAttributionRows runs the REAL github work-items route
+// (collector, normalizers, route) over the same pull request responses and
+// returns the rows of its ai_attribution effect.
+func githubWorkItemsRouteAttributionRows(t *testing.T) []githubAIAttributionRow {
+	t.Helper()
+	claim := githubWorkItemsRESTClaim()
+	claim.OrgID = prAttributionOrgID
+	claim.DatasetOptions["fetch_milestones"] = false
+	social := `{"data":{"repository":{"pr0":{"number":54,"comments":{"nodes":[],"pageInfo":{"hasNextPage":false,"endCursor":null}},"timelineItems":{"nodes":[],"pageInfo":{"hasNextPage":false,"endCursor":null}}},"pr1":{"number":53,"comments":{"nodes":[],"pageInfo":{"hasNextPage":false,"endCursor":null}},"timelineItems":{"nodes":[],"pageInfo":{"hasNextPage":false,"endCursor":null}}},"pr2":{"number":52,"comments":{"nodes":[],"pageInfo":{"hasNextPage":false,"endCursor":null}},"timelineItems":{"nodes":[],"pageInfo":{"hasNextPage":false,"endCursor":null}}}}}}`
+	doer := &githubWorkItemsRouteDoer{
+		t: t,
+		rest: &githubWorkItemsRESTDoer{t: t, replies: map[string][]githubWorkItemsRESTReply{
+			"/repos/acme/api":          {{body: prAttributionRepo}},
+			"/repos/acme/api/issues":   {{body: `[]`}},
+			"/repos/acme/api/pulls":    {{body: prAttributionList}},
+			"/repos/acme/api/pulls/52": {{body: prAttributionDetail52}},
+			"/repos/acme/api/pulls/53": {{body: prAttributionDetail53}},
+			"/repos/acme/api/pulls/54": {{body: prAttributionDetail54}},
+		}},
+		graphqlReplies: []string{social},
+	}
+	handler := GitHubWorkItemsRouteHandler{
+		Projects:                      &githubWorkItemsRouteProjectPolicy{},
+		ProjectMembershipSnapshotDiff: githubProjectV2NoopSnapshotDiffReader{},
+		Deriver:                       &githubWorkItemsRouteDeriver{rows: githubWorkItemsRouteDerivedRows(t)},
+	}
+	batch, err := handler.Collect(
+		context.Background(), claim,
+		providerfoundation.Credential{Provider: "github", ID: claim.CredentialID},
+		gitHubPullRequestClient(t, fakehttp.Client(doer), "https://api.github.com"),
+		prAttributionNormalizedAt(),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// The pull requests must have been collected, or an empty answer proves
+	// nothing about attribution.
+	pulls := 0
+	for _, effect := range batch.Effects {
+		if effect.Destination == "work_items" {
+			pulls = len(effect.Rows)
 		}
+	}
+	if pulls != 3 {
+		t.Fatalf("work-items route collected %d pull requests, want 3", pulls)
+	}
+	return attributionEffectRows(t, batch)
+}
+
+// TestWorkItemsRoutesWriteNoPullRequestAttribution pins the one-writer rule:
+// the work-items routes see the same pull requests and merge requests as the
+// prs unit, and emit no pull-request ai_attribution row, so no key has two
+// writers.
+func TestWorkItemsRoutesWriteNoPullRequestAttribution(t *testing.T) {
+	if rows := githubWorkItemsRouteAttributionRows(t); len(rows) != 0 {
+		t.Fatalf("github work-items route emitted %d pull-request attribution rows", len(rows))
+	}
+	if rows := glAttributionWorkItemsRows(t); len(rows) != 0 {
+		t.Fatalf("gitlab work-items route emitted %d merge-request attribution rows", len(rows))
+	}
+}
+
+func TestPRsRouteAttributionEqualsTheRecordedWorkItemsRouteRows(t *testing.T) {
+	for provider, collect := range map[string]func(*testing.T) []githubAIAttributionRow{
+		"github": func(t *testing.T) []githubAIAttributionRow {
+			batch, _ := prAttributionPRsEffect(t)
+			return attributionEffectRows(t, batch)
+		},
+		"gitlab": func(t *testing.T) []githubAIAttributionRow {
+			batch, _ := glAttributionPRsBatch(t)
+			return attributionEffectRows(t, batch)
+		},
+	} {
+		provider, collect := provider, collect
+		t.Run(provider, func(t *testing.T) {
+			got, _ := json.Marshal(sortedAttributions(collect(t)))
+			want, _ := json.Marshal(recordedWorkItemsRouteRows(t, provider))
+			if string(got) != string(want) {
+				t.Fatalf("prs route rows differ from the recorded work-items route rows\nprs:      %s\nrecorded: %s", got, want)
+			}
+		})
 	}
 }

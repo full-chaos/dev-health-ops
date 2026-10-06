@@ -4,6 +4,7 @@ package providersync
 
 import (
 	"context"
+	"errors"
 	"testing"
 	"time"
 
@@ -93,7 +94,7 @@ func prAttributionScenarios() []prAttributionScenario {
 			batch, _ := prAttributionPRsEffect(t)
 			return batch.Effects[1]
 		},
-		workItemRows:   prAttributionWorkItemsRows,
+		workItemRows:   githubWorkItemsRouteAttributionRows,
 		prsClaim:       prAttributionClaim("github", "prs"),
 		workItemsClaim: prAttributionClaim("github", "work-items"),
 		prsSink: func(conn driver.Conn) EffectSink {
@@ -222,26 +223,101 @@ func TestPRsSyncWritesPullRequestAttributionThroughTheProductionReader(t *testin
 			scenario.assertReaderSees(t, store, prsOnlyKeys)
 		})
 
-		t.Run(scenario.provider+"/both on, work items first", func(t *testing.T) {
+		// Both datasets on: the work-items route runs against the same pull
+		// requests and writes no pull-request attribution, so the prs unit is
+		// the only writer of every key. A prs unit that crashed between its
+		// ai_attribution write and its ledger commit recovers by readback
+		// after the work-items unit ran: that readback must still be exact
+		// (an ambiguous answer is a terminal unit failure).
+		t.Run(scenario.provider+"/both on, work items after prs", func(t *testing.T) {
 			store.reset(t)
-			scenario.writeWorkItemsRoute(t, store, base.Add(-time.Hour))
 			scenario.writePRsRoute(t, store)
+			scenario.writeWorkItemsRoute(t, store, base.Add(time.Hour))
+			scenario.assertPRsReadbackExact(t, store)
 			scenario.writePRsRoute(t, store)
 			scenario.assertReaderSees(t, store, prsOnlyKeys)
 		})
 
-		t.Run(scenario.provider+"/both on, prs first", func(t *testing.T) {
+		t.Run(scenario.provider+"/both on, work items before prs", func(t *testing.T) {
 			store.reset(t)
+			scenario.writeWorkItemsRoute(t, store, base.Add(-time.Hour))
 			scenario.writePRsRoute(t, store)
-			scenario.writeWorkItemsRoute(t, store, base.Add(time.Hour))
-			scenario.writeWorkItemsRoute(t, store, base.Add(time.Hour))
+			scenario.assertPRsReadbackExact(t, store)
 			scenario.assertReaderSees(t, store, prsOnlyKeys)
 		})
 
 		t.Run(scenario.provider+"/work items on, prs off", func(t *testing.T) {
 			store.reset(t)
 			scenario.writeWorkItemsRoute(t, store, base)
-			scenario.assertReaderSees(t, store, prsOnlyKeys)
+			if rows := store.count(t, "SELECT count() FROM ai_attribution"); rows != 0 {
+				t.Fatalf("the work-items route wrote %d pull-request attribution rows, want none", rows)
+			}
+		})
+	}
+}
+
+// assertPRsReadbackExact asks the prs unit's readback about its own effect, as
+// crash recovery does, and requires the exact answer.
+func (scenario prAttributionScenario) assertPRsReadbackExact(t *testing.T, store prAttributionStore) {
+	t.Helper()
+	got, err := scenario.prsReadback(store.conn).InspectEffect(store.ctx, scenario.prsClaim, scenario.prsEffect(t))
+	if err != nil || got != EffectExact {
+		t.Fatalf("prs readback after the work-items unit ran: %v err=%v, want exact", got, err)
+	}
+}
+
+// TestPRsSyncAttributionReadbackAnswersAbsentExactAndConflict pins the three
+// readback answers the effect committer recovers by, and that the lease fences
+// the readback: a row not yet written is absent, the written row is exact, and
+// a newer different version of the same key is a conflict (never silently
+// exact).
+func TestPRsSyncAttributionReadbackAnswersAbsentExactAndConflict(t *testing.T) {
+	store := startPRAttributionStore(t)
+	for _, scenario := range prAttributionScenarios() {
+		scenario := scenario
+		t.Run(scenario.provider, func(t *testing.T) {
+			store.reset(t)
+			effect := scenario.prsEffect(t)
+			inspect := func() EffectInspection {
+				t.Helper()
+				got, err := scenario.prsReadback(store.conn).InspectEffect(store.ctx, scenario.prsClaim, effect)
+				if err != nil {
+					t.Fatal(err)
+				}
+				return got
+			}
+			if got := inspect(); got != EffectAbsent {
+				t.Fatalf("before the write: %v want absent", got)
+			}
+			scenario.writePRsRoute(t, store)
+			if got := inspect(); got != EffectExact {
+				t.Fatalf("after the write: %v want exact", got)
+			}
+			rows, err := decodeEffectRows[githubAIAttributionRow](effect)
+			if err != nil {
+				t.Fatal(err)
+			}
+			for index := range rows {
+				rows[index].Confidence = 0.5
+				rows[index].IngestedAt = rows[index].IngestedAt.Add(time.Hour)
+			}
+			newer, err := effectBatchFromValues("ai_attribution", EffectReadbackRequired, rows)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := scenario.prsSink(store.conn).WriteEffect(store.ctx, scenario.prsClaim, newer); err != nil {
+				t.Fatal(err)
+			}
+			if got := inspect(); got != EffectConflict {
+				t.Fatalf("after a newer different version: %v want conflict", got)
+			}
+			lost := GitHubPullRequestSocialClickHouseEffects{
+				Conn: store.conn, Provider: scenario.provider,
+				Lease: providerfoundation.LeaseGuardFunc(func(context.Context) error { return providerfoundation.ErrLeaseLost }),
+			}
+			if _, err := lost.InspectEffect(store.ctx, scenario.prsClaim, effect); !errors.Is(err, providerfoundation.ErrLeaseLost) {
+				t.Fatalf("readback with a lost lease: err=%v", err)
+			}
 		})
 	}
 }

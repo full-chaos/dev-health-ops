@@ -350,6 +350,12 @@ func (handler GitHubWorkItemsRouteHandler) Collect(
 				})
 				break
 			}
+			// Pull-request AI attribution is written by the prs unit alone: one
+			// writer per ai_attribution key keeps effect recovery exact (the
+			// adapter's version verdict reads a newer row as another owner).
+			// The bundle still carries the rows so the shared detector stays
+			// covered by its own oracle; the route does not emit them.
+			bundle.AIAttributions = []githubAIAttributionRow{}
 			appendGitHubWorkItemRows(&rows, bundle)
 			// codex round 2b (P2, CHAOS-4757): closingIssuesReferences is
 			// evidence-bearing (team-attribution edges), not cosmetic like

@@ -166,13 +166,14 @@ Key invariants:
 The Python path above is retired; the Go sync routes write `ai_attribution` through one
 adapter (`internal/providersync/github_work_items_ai_attribution_effects_clickhouse.go`)
 and one pull-request detector (`detectGitHubPullRequestAttributions` in
-`internal/providersync/github_work_items_rows.go`). Which sync dataset must be on:
+`internal/providersync/github_work_items_rows.go`; GitLab merge requests call it through
+`normalizeGitLabMRAIAttributions`). Which sync dataset must be on:
 
-| Provider | Subject | Writer | Dataset that must be on |
-| -------- | ------- | ------ | ----------------------- |
-| github   | `pull_request` (bare PR number, repo-scoped) | `prs` unit and `work-items` unit | `prs` **or** `work-items` (with the `sync_prs` flag) |
-| gitlab   | `pull_request` (merge request `iid`, repo-scoped) | `prs` unit and `work-items` unit | `prs` **or** `work-items` |
-| linear   | `issue` (`source = issue_label`, `repo_id` NULL) | `work-items` unit only | `work-items` |
+| Provider | Subject | Single writer | Dataset that must be on |
+| -------- | ------- | ------------- | ----------------------- |
+| github   | `pull_request` (bare PR number, repo-scoped) | `prs` unit | `prs` (or an alias, `pr-reviews` / `pr-comments`, which fold onto it) |
+| gitlab   | `pull_request` (merge request `iid`, repo-scoped) | `prs` unit | `prs` (or an alias) |
+| linear   | `issue` (`source = issue_label`, `repo_id` NULL) | `work-items` unit | `work-items` |
 | jira     | none | none: Jira has no pull-request entity and no attribution producer (`work-items` emits an evaluated-empty effect) | not applicable |
 
 Pull-request attribution does **not** need the Work Items dataset. The `prs` unit builds its rows
@@ -181,17 +182,31 @@ list item (GitLab) it already fetched, so it adds no request. `pr-reviews` and `
 aliases of the `prs` unit: they are never planned on their own and carry the same three
 destinations (`git_pull_requests`, `git_pull_request_reviews`, `ai_attribution`).
 
-**Two writers, one row.** When both datasets are on, both routes write the same key
-`(org_id, provider, subject_type, repo_id, subject_id, source)` from the same detector over the
-same payload, so `ReplacingMergeTree(computed_at)` and the `FINAL` in the resolved view keep one
-row per key; the later `computed_at` wins and the two never disagree on content. A test per
-provider feeds the same responses to both real collectors and requires equal rows
-(`prs_ai_attribution_test.go`), and an integration test reads the result through
-`ai_attribution_resolved` and the `aiAttributionOverview` resolver
-(`prs_ai_attribution_integration_test.go`).
+**One writer per key.** The GitHub and GitLab `work-items` routes still see the same pull
+requests and merge requests, but emit no pull-request attribution: their `ai_attribution`
+destination stays in the manifest with no rows. Two writers of one key would make effect
+recovery ambiguous (a newer row from the other writer reads as "another owner", see
+`workItemVersionVerdict`), and an ambiguous recovery is a terminal unit failure. The row identity
+and content are unchanged: a recorded fixture of the former work-items route output
+(`testdata/prs_ai_attribution_work_items_route_recorded.json`) must be reproduced row for row
+by the `prs` route, and the frozen Python rows are compared against the `prs` route.
+
+**Named cost and drift cases.**
+
+- GitLab: merge requests always entered the work-items route, whatever the other datasets. An
+  integration with Work Items on and `prs` off therefore had merge-request attribution and no
+  longer does. The `prs` dataset is now the one that produces it.
+- GitHub: pull requests entered the work-items route only with the `sync_prs` flag, which the
+  planner sets (`internal/scheduler/sync/planner.go`) when a `prs`, `pr-reviews` or `pr-comments`
+  dataset is enabled for the source; with that dataset enabled the `prs` unit runs too, so nothing
+  is lost. A config whose target list names `prs` while the `prs` dataset row is disabled gets no
+  pull-request attribution; the config PATCH keeps the two in step.
 
 `ai_attribution_resolved` is a plain `VIEW` over `ai_attribution FINAL`, created by migration 035
-and replaced by 043 (repo-scoped partition) and 076; no job or writer populates it.
+and replaced by 043 (repo-scoped partition) and 076; no job or writer populates it. An
+integration test (`prs_ai_attribution_integration_test.go`) writes through the sink the worker
+builds and reads through the view and the `aiAttributionOverview` resolver
+(`internal/queryapi/aianalytics`).
 
 Corrections to older text: the GitHub `subject_id` is the bare PR number (not `ghpr:{repo}#{n}`;
 that prefix belongs to the `work_items` id, and the comment in migration 044 predates the writer),

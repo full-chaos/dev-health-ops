@@ -231,6 +231,24 @@ type dependencyReason interface {
 	DependencyReason() string
 }
 
+// RuntimeShutdownTimeout is the shutdown timeout the lifecycle runtime runs on:
+// the configured one, or the larger value a component says it needs
+// (lifecycle.ShutdownTimeoutSource). ONE source for the shutdown budget: the
+// worker composition derives its grace from the selected queues when the flag is
+// unset, and the runtime must be built from that same value, or it gives up at
+// the 30 s default while the River soft stop is still running (CHAOS-8783).
+func RuntimeShutdownTimeout(configured time.Duration, components []lifecycle.Component) time.Duration {
+	effective := configured
+	for _, component := range components {
+		if source, ok := component.(lifecycle.ShutdownTimeoutSource); ok {
+			if required := source.RequiredShutdownTimeout(); required > effective {
+				effective = required
+			}
+		}
+	}
+	return effective
+}
+
 func Execute(
 	parent context.Context,
 	spec Spec,
@@ -403,9 +421,14 @@ func Execute(
 	}
 	components = append(components, health.Gate{Registry: registry})
 
+	shutdownTimeout := RuntimeShutdownTimeout(cfg.ShutdownTimeout, components)
+	if shutdownTimeout != cfg.ShutdownTimeout {
+		logger.InfoContext(ctx, "shutdown timeout set by the dependency composition",
+			"configured", cfg.ShutdownTimeout.String(), "effective", shutdownTimeout.String())
+	}
 	runtime, err := lifecycle.New(lifecycle.Options{
 		Logger:          logger,
-		ShutdownTimeout: cfg.ShutdownTimeout,
+		ShutdownTimeout: shutdownTimeout,
 		Components:      components,
 	})
 	if err != nil {

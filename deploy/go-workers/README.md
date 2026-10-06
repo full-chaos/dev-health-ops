@@ -976,6 +976,39 @@ value that looks reasonable for a quick manual test or CI run (10s, 60s,
 even 420s) fails this check silently under the same opaque reason string —
 confirmed by hand while building CHAOS-4266.
 
+### A stop signal is a SOFT stop: old pods drain for up to the drain budget (CHAOS-8783)
+
+`river.Config.SoftStopTimeout` = the drain budget (`--shutdown-timeout` minus the 60 s
+`workerFinalizationBuffer`) minus a 30 s `workerReleaseBuffer`
+(`internal/workerservice/dependencies.go`): 7170 s for `heavy`, 870 s for `ops`, `sync` and `sync-provider`.
+On SIGTERM the River client starts no NEW fetch (at most the fetch already in flight can still deliver
+jobs, and they run inside the soft stop), running jobs finish, and only the jobs still running after the soft
+stop are cancelled; Stop keeps waiting for the drain budget, so the 30 s release buffer is the time those jobs
+have to write their release (a requeue, a failed state), and the 60 s finalization buffer stays for the other
+components and the process exit. Before this, River tied job contexts to the signal context and cancelled
+every running job at once (no `SoftStopTimeout` = `StopAndCancel`), so the configured `--shutdown-timeout` was
+never used. River reads a zero `SoftStopTimeout` as "off", so a worker is refused at startup without one,
+and a shutdown timeout that leaves no positive soft stop is a startup error. A job that needs its whole
+timeout and was claimed at the stop signal is cancelled 30 s early. An UNSET `--shutdown-timeout` is derived
+from the selected queues (longest job + 60 s + 30 s) and the lifecycle runtime runs on that SAME derived value
+(`shell.RuntimeShutdownTimeout`: one source for the budget), not on the 30 s package default. River itself logs a WARN `Soft stop
+timeout; cancelling remaining job contexts` when that cancel fires: operators will see it.
+
+Operator facts:
+
+- On every roll and every scale-down an old pod can stay `Terminating` for up to 7170 s (`heavy`) or 870 s
+  (`ops`, `sync`, `sync-provider`) of soft stop, plus up to 30 s of release, beside the new pods. Capacity for
+  both is needed.
+- Old code runs against the NEW schema for that time. A migration that drops or renames something old code
+  uses must ship one release after the code stopped using it.
+- A roll proof must not count a `Terminating` pod as "not on the pin".
+- `terminationGracePeriodSeconds` equals `--shutdown-timeout` (go-workers.yaml), so the 60 s buffer is all the
+  slack there is (the release buffer sits inside the drain budget).
+- Old and new code write the same keys for the drain time. Kinds that read back a ReplacingMergeTree version
+  to decide ownership (provider-sync effects, `workItemVersionVerdict`: a NEWER row means another owner and
+  is a terminal unit failure) are not safe with two writers of one key; last-writer-wins tables
+  (`investment.materialize`, daily metrics) tolerate it, but an old writer can overwrite a newer row.
+
 ### Provisioning order for a BRAND NEW database: `provision_river_roles.sql` before `dho migrate river`, always
 
 The "coordinator/domain readiness failure" section above is written around

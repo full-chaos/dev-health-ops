@@ -139,7 +139,8 @@ func newRiverWorkerProcess(
 ) (lifecycle.Component, error) {
 	postgresDatabase, ok := database.(*postgresWorkerDatabase)
 	if !ok || postgresDatabase.pools == nil || postgresDatabase.pools.QueueControl == nil ||
-		workers == nil || logger == nil || cfg.WorkerInstanceID == "" || len(family.queues) == 0 {
+		workers == nil || logger == nil || cfg.WorkerInstanceID == "" || len(family.queues) == 0 ||
+		family.softStop <= 0 {
 		return nil, errWorkerDependencyUnavailable
 	}
 
@@ -155,7 +156,7 @@ func newRiverWorkerProcess(
 	}
 	client, err := river.NewClient(
 		riverpgxv5.New(postgresDatabase.pools.QueueControl),
-		riverWorkerClientConfig(cfg, queues, workers, logger),
+		riverWorkerClientConfig(cfg, queues, workers, logger, family.softStop),
 	)
 	if err != nil {
 		return nil, errWorkerDependencyUnavailable
@@ -212,11 +213,21 @@ func reindexDisabled() []string { return []string{} }
 // process runs with. It is a named function so a test can assert the shipped
 // configuration's real behaviour against a real database, instead of asserting
 // against a look-alike config that could drift from this one.
+//
+// softStop is river.Config.SoftStopTimeout, and it is what makes the process's
+// stop signal a SOFT stop (CHAOS-8783). The River client starts its jobs under
+// the context passed to Start, which here is the signal context: with no
+// SoftStopTimeout River ties the job contexts to it, so SIGTERM cancels every
+// in-flight job at once and the configured shutdown timeout is never used
+// (client.go "equivalent to StopAndCancel"). With one, the signal stops fetching
+// and lets running jobs finish; River cancels whatever is still running only
+// after softStop. River reads zero as "off", so callers must never pass it.
 func riverWorkerClientConfig(
 	cfg config.Config,
 	queues map[string]river.QueueConfig,
 	workers *river.Workers,
 	logger *slog.Logger,
+	softStop time.Duration,
 ) *river.Config {
 	return &river.Config{
 		ID:                  cfg.WorkerInstanceID,
@@ -224,6 +235,7 @@ func riverWorkerClientConfig(
 		Queues:              queues,
 		ReindexerIndexNames: reindexDisabled(),
 		Schema:              cfg.RiverDatabaseSchema,
+		SoftStopTimeout:     softStop,
 		Workers:             workers,
 		// otelriver emits the baseline river.work span (kind, queue, status) for
 		// every claimed job, picking up the global tracer provider tracing.Init

@@ -67,6 +67,12 @@ func TestSavingTheShownListChangesNoRowForEveryEnabledSubset(t *testing.T) {
 					}
 				}
 				shown := shownTargets(provider, enabled, passthrough, nil)
+				// The shown list holds every passthrough target, and nothing the
+				// enabled keys do not give: a save of a list that lost one would
+				// read as "the user removed it".
+				if want := append(providersync.DerivedSyncTargets(provider, enabled), passthrough...); !reflect.DeepEqual(shown, want) {
+					t.Fatalf("%s enabled=%v passthrough=%v: shown %v, want %v", provider, enabled, passthrough, shown, want)
+				}
 				for _, baseSet := range []bool{false, true} {
 					cases++
 					change := mustPlan(t, provider, enabled, passthrough, shown, shown, baseSet)

@@ -160,6 +160,14 @@ func TestGitLabWorkItemsRouteConfiguredNestedBoundIsClampedToTheCeiling(t *testi
 	if !errors.Is(err, ErrPaginationCapExceeded) {
 		t.Fatalf("NestedMaxPages 101 collected past the ceiling: err=%v", err)
 	}
+	// The ceiling holds for any configured value up to the validated maximum,
+	// e.g. a stray NestedMaxPages: 10_000 in the worker wiring is harmless.
+	for _, configured := range []int{101, 5_000, 10_000} {
+		_, err = collectGitLabLargeNestedListsWith(t, 10_100, 0, 0, GitLabWorkItemsRouteHandler{PerPage: 100, MaxPages: 10, NestedMaxPages: configured})
+		if !errors.Is(err, ErrPaginationCapExceeded) {
+			t.Fatalf("NestedMaxPages %d collected past the ceiling: err=%v", configured, err)
+		}
+	}
 	// A lower configured value still lowers it: 50 full pages pass, 51 fail.
 	lower := GitLabWorkItemsRouteHandler{PerPage: 100, MaxPages: 10, NestedMaxPages: 50}
 	if _, err = collectGitLabLargeNestedListsWith(t, 5_000, 0, 0, lower); err != nil {

@@ -389,6 +389,7 @@ func discoverMembersLinear(ctx context.Context, apiKey secrets.Value, teamKey st
 	}
 	normalized := strings.TrimPrefix(teamKey, "linear:")
 	cursor := ""
+	walk := newLinearCursorWalk("teams", 0, "")
 	for {
 		variables := map[string]any{"first": linearTeamsPerPage}
 		if cursor != "" {
@@ -424,41 +425,34 @@ func discoverMembersLinear(ctx context.Context, apiKey secrets.Value, teamKey st
 			return linearNodeMembers(nodes)
 		}
 		pageInfo := objectAt(teams, "pageInfo")
-		if hasNext, _ := pageInfo.Get("hasNextPage"); !truthy(hasNext) {
+		hasNext, _ := pageInfo.Get("hasNextPage")
+		endCursor, _ := pageInfo.Get("endCursor")
+		next, more, err := walk.next(truthy(hasNext), strOrEmpty(endCursor))
+		if err != nil {
+			return nil, err
+		}
+		if !more {
 			return []discoveredMember{}, nil
 		}
-		endCursor, _ := pageInfo.Get("endCursor")
-		cursor, _ = endCursor.(string)
+		cursor = next
 	}
 }
-
-// linearMemberMaxPages is the hard bound on ONE team's members connection: 50
-// pages in all, the inline page included (the same bound every nested Linear
-// connection has, CHAOS-8781). 50 pages is 2,500 members at the 50 per page this
-// walk reads: far above any real team, low enough to stop a cursor that never
-// ends. Past it discovery fails closed naming the team; nothing is truncated.
-const linearMemberMaxPages = 50
 
 // linearAllTeamMembers is LinearClient.get_team_members from the inline page
 // on: the pages AFTER the one embedded in the teams query, inactive users
 // dropped (a missing `active` counts as active). embeddedCursor is the inline
-// page's endCursor, so the walk continues where that page ended.
+// page's endCursor, so the walk continues where that page ended. The inline page
+// is page 1 of the 50-page bound, and an empty or repeated cursor fails closed
+// (linearCursorWalk).
 func linearAllTeamMembers(ctx context.Context, client *providerfoundation.HTTPClient, teamID, embeddedCursor string) ([]pyjson.Value, error) {
-	if embeddedCursor == "" {
-		return nil, errors.New("linear members of team " + teamID + " said there was a next page but gave no cursor")
+	walk := newLinearCursorWalk("members of team "+teamID, 1, embeddedCursor)
+	cursor, err := walk.requireCursor(embeddedCursor)
+	if err != nil {
+		return nil, err
 	}
 	var members []pyjson.Value
-	cursor := embeddedCursor
-	for followUps := 0; ; followUps++ {
-		// The inline page is page 1, so linearMemberMaxPages-1 follow-ups remain.
-		if followUps >= linearMemberMaxPages-1 {
-			return nil, fmt.Errorf("linear members of team %s still had a next page after %d pages (max %d pages)",
-				teamID, linearMemberMaxPages, linearMemberMaxPages)
-		}
-		variables := map[string]any{"teamId": teamID, "first": linearTeamsPerPage}
-		if cursor != "" {
-			variables["after"] = cursor
-		}
+	for {
+		variables := map[string]any{"teamId": teamID, "first": linearTeamsPerPage, "after": cursor}
 		data, err := linearGraphQL(ctx, client, linearTeamMembersQuery, variables)
 		if err != nil {
 			return nil, err
@@ -475,11 +469,16 @@ func linearAllTeamMembers(ctx context.Context, client *providerfoundation.HTTPCl
 			}
 		}
 		pageInfo := objectAt(page, "pageInfo")
-		if hasNext, _ := pageInfo.Get("hasNextPage"); !truthy(hasNext) {
+		hasNext, _ := pageInfo.Get("hasNextPage")
+		endCursor, _ := pageInfo.Get("endCursor")
+		next, more, err := walk.next(truthy(hasNext), strOrEmpty(endCursor))
+		if err != nil {
+			return nil, err
+		}
+		if !more {
 			return members, nil
 		}
-		endCursor, _ := pageInfo.Get("endCursor")
-		cursor, _ = endCursor.(string)
+		cursor = next
 	}
 }
 

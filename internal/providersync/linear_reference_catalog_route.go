@@ -402,6 +402,8 @@ func (handler LinearReferenceCatalogRouteHandler) CollectReferenceCatalog(
 				teams, teamsErr := collectLinearReferenceProjectTeams(ctx, client, payload)
 				evidence.Pages += teams.pages
 				if teamsErr != nil {
+					// Strict: the failure batch clears the flag. Non-strict keeps the
+					// other rows but the projects list is incomplete (below).
 					if ref.Strict {
 						return linearReferenceCatalogFailureBatch(evidence, "projects", evidence.Pages, evidence.Records, teamsErr, errors.Is(teamsErr, ErrPaginationCapExceeded))
 					}
@@ -547,6 +549,16 @@ func linearReferenceCatalogFailureBatch(
 	collectErr error,
 	capReached bool,
 ) (LinearReferenceCatalogBatch, error) {
+	// A failure never reports the failed surface complete, wherever in the walk
+	// the flag was set (CHAOS-8781).
+	switch surface {
+	case "teams":
+		evidence.TeamsComplete = false
+	case "members":
+		evidence.MembersComplete = false
+	case "projects":
+		evidence.ProjectsComplete = false
+	}
 	code := LinearReferenceCatalogInvalidResponse
 	if capReached || errors.Is(collectErr, ErrPaginationCapExceeded) {
 		code = LinearReferenceCatalogPaginationCap
@@ -878,6 +890,8 @@ func collectLinearReferenceProjectTeams(
 	result := linearReferenceProjectTeamsResult{}
 	cursor := strings.TrimSpace(project.Teams.PageInfo.EndCursor)
 	if cursor == "" {
+		// The embedded page WAS read: the failure evidence counts it.
+		result.pages = 1
 		return result, providerfoundation.ErrPaginationInvalid
 	}
 	raw, pages, capped, err := collectLinearReferenceConnection(
@@ -925,7 +939,8 @@ func collectLinearReferenceTeamMembers(
 ) ([]json.RawMessage, int, bool, error) {
 	cursor := strings.TrimSpace(team.Members.PageInfo.EndCursor)
 	if cursor == "" {
-		return nil, 0, false, providerfoundation.ErrPaginationInvalid
+		// The embedded page WAS read: the failure evidence counts it.
+		return nil, 1, false, providerfoundation.ErrPaginationInvalid
 	}
 	followUps := min(maxPages, linearNestedHardMaxPages-1)
 	raw, pages, capped, err := collectLinearReferenceConnection(

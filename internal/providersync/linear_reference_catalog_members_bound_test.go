@@ -26,11 +26,18 @@ type linearCatalogMembersServer struct {
 	totalPages int
 	followUps  int
 	afters     []string
+	// emptyEmbeddedCursor makes the page embedded in the teams query say "next
+	// page" with an EMPTY endCursor.
+	emptyEmbeddedCursor bool
 }
 
 func (server *linearCatalogMembersServer) page(index int) string {
-	return fmt.Sprintf(`{"nodes":[{"id":"user-%d","name":"Member %d","email":"m%d@example.com","active":true}],"pageInfo":{"hasNextPage":%t,"endCursor":"m%d"}}`,
-		index, index, index, index < server.totalPages-1, index)
+	cursor := fmt.Sprintf("m%d", index)
+	if index == 0 && server.emptyEmbeddedCursor {
+		cursor = ""
+	}
+	return fmt.Sprintf(`{"nodes":[{"id":"user-%d","name":"Member %d","email":"m%d@example.com","active":true}],"pageInfo":{"hasNextPage":%t,"endCursor":%q}}`,
+		index, index, index, index < server.totalPages-1, cursor)
 }
 
 func (server *linearCatalogMembersServer) Do(request *http.Request) (*http.Response, error) {
@@ -77,7 +84,11 @@ func (server *linearCatalogMembersServer) Do(request *http.Request) (*http.Respo
 
 func collectLinearCatalogMembers(t *testing.T, totalPages int, maxPages int) (LinearReferenceCatalogBatch, *linearCatalogMembersServer, error) {
 	t.Helper()
-	server := &linearCatalogMembersServer{totalPages: totalPages}
+	return collectLinearCatalogMembersFrom(t, &linearCatalogMembersServer{totalPages: totalPages}, maxPages)
+}
+
+func collectLinearCatalogMembersFrom(t *testing.T, server *linearCatalogMembersServer, maxPages int) (LinearReferenceCatalogBatch, *linearCatalogMembersServer, error) {
+	t.Helper()
 	claim := nativeTestClaim("linear", "work-items")
 	claim.SourceExternalID = "workspace"
 	batch, err := (LinearReferenceCatalogRouteHandler{PerPage: 50, MaxPages: maxPages}).CollectReferenceCatalog(
@@ -146,9 +157,60 @@ func TestLinearReferenceCatalogProjectTeamsEvidenceCountsTheEmbeddedPage(t *test
 	if !errors.Is(err, ErrPaginationCapExceeded) || batch.Failure == nil || batch.Failure.Pages != 53 {
 		t.Fatalf("51 pages: err=%v failure=%+v want failure pages 53", err, batch.Failure)
 	}
-	for _, want := range []string{"level=ERROR", "field=teams", "pages=50", "items=50", `owner="project project-big"`} {
-		if !strings.Contains(logs.String(), want) {
-			t.Fatalf("cap log lacks %q: %s", want, logs.String())
+	// Exact tokens: "pages=50" is also a suffix of "max_pages=50", so the
+	// assertion is on whole space-delimited fields.
+	fields := map[string]bool{}
+	for _, field := range strings.Fields(logs.String()) {
+		fields[field] = true
+	}
+	for _, want := range []string{"level=ERROR", "field=teams", "pages=50", "items=50", "max_pages=50", "owner=\"project", "project-big\""} {
+		if !fields[want] {
+			t.Fatalf("cap log lacks the field %q: %s", want, logs.String())
 		}
+	}
+	if batch.Evidence.ProjectsComplete {
+		t.Fatal("a strict project-team failure reports the projects list complete")
+	}
+}
+
+// A members cap log carries the item count of ALL pages read (embedded included)
+// and its exact pages field.
+func TestLinearReferenceCatalogMembersCapLogCarriesExactPagesAndItems(t *testing.T) {
+	var logs bytes.Buffer
+	previous := slog.Default()
+	slog.SetDefault(slog.New(slog.NewTextHandler(&logs, &slog.HandlerOptions{Level: slog.LevelDebug})))
+	t.Cleanup(func() { slog.SetDefault(previous) })
+	if _, _, err := collectLinearCatalogMembers(t, 51, 100); !errors.Is(err, ErrPaginationCapExceeded) {
+		t.Fatalf("err=%v", err)
+	}
+	fields := map[string]bool{}
+	for _, field := range strings.Fields(logs.String()) {
+		fields[field] = true
+	}
+	for _, want := range []string{"level=ERROR", "field=members", "pages=50", "items=50", "max_pages=50"} {
+		if !fields[want] {
+			t.Fatalf("members cap log lacks the field %q: %s", want, logs.String())
+		}
+	}
+}
+
+// CHAOS-8781 r1 P1-2 (M7): an EMBEDDED page that said "next page" with an empty
+// cursor cannot be continued (starting over would read page 1 twice). It fails
+// closed with ErrPaginationInvalid BEFORE any follow-up request, the failure
+// evidence counts the embedded page that WAS read (teams 1 + embedded 1), and the
+// failed surface is not reported complete.
+func TestLinearReferenceCatalogMembersWithAnEmptyEmbeddedCursorFailClosed(t *testing.T) {
+	batch, server, err := collectLinearCatalogMembersFrom(t, &linearCatalogMembersServer{totalPages: 5, emptyEmbeddedCursor: true}, 100)
+	if !errors.Is(err, providerfoundation.ErrPaginationInvalid) || batch.Failure == nil {
+		t.Fatalf("err=%v failure=%+v", err, batch.Failure)
+	}
+	if server.followUps != 0 {
+		t.Fatalf("follow-ups=%d want 0 (no request without a cursor)", server.followUps)
+	}
+	if batch.Failure.Pages != 2 || batch.Evidence.Pages != 2 {
+		t.Fatalf("failure pages=%d evidence pages=%d want 2 (teams page + embedded members page)", batch.Failure.Pages, batch.Evidence.Pages)
+	}
+	if batch.Evidence.MembersComplete {
+		t.Fatal("a failed members read reports members complete")
 	}
 }

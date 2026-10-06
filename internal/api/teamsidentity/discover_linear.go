@@ -80,8 +80,9 @@ type linearTeamsResponse struct {
 
 // discoverLinear mirrors TeamDiscoveryService.discover_linear
 // (team_discovery.py:160-188): walks LinearClient.iter_teams() (a cursor-
-// paginated GraphQL query, every page, no upper bound -- unlike GitLab's
-// discovery walk, Python sets no cap here) and maps each node's key/name/
+// paginated GraphQL query, every page; Python sets no cap here, Go holds the
+// walk to the 50-page bound and fails closed on a missing or repeated cursor,
+// CHAOS-8781) and maps each node's key/name/
 // description straight across; description falling back to nothing
 // (nil) when Linear returns none, matching `team.get("description")`.
 func discoverLinear(ctx context.Context, credential providerfoundation.Credential) ([]discoveredTeam, error) {
@@ -91,6 +92,7 @@ func discoverLinear(ctx context.Context, credential providerfoundation.Credentia
 	}
 	var teams []discoveredTeam
 	cursor := ""
+	walk := newLinearCursorWalk("teams", 0, "")
 	for {
 		variables := map[string]any{"first": linearTeamsPerPage}
 		if cursor != "" {
@@ -128,10 +130,14 @@ func discoverLinear(ctx context.Context, credential providerfoundation.Credentia
 				Associations:   associations,
 			})
 		}
-		if !payload.Data.Teams.PageInfo.HasNextPage {
+		next, more, err := walk.next(payload.Data.Teams.PageInfo.HasNextPage, payload.Data.Teams.PageInfo.EndCursor)
+		if err != nil {
+			return nil, err
+		}
+		if !more {
 			break
 		}
-		cursor = payload.Data.Teams.PageInfo.EndCursor
+		cursor = next
 	}
 	return teams, nil
 }

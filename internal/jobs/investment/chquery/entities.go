@@ -616,6 +616,18 @@ type InvestmentKey struct {
 	InputHash  string
 }
 
+// ExistingInvestment is what the skip-existing lookup knows about a unit's
+// latest ok/repaired row for one (unit, input hash, model version) key beyond
+// the fact that it exists (CHAOS-8788).
+type ExistingInvestment struct {
+	// RunID is the categorization_run_id of that row: the run whose quotes the
+	// readers look up for it.
+	RunID string
+	// QuoteCount is the row's evidence_quote_count (migration 106), the number of
+	// distinct (source_id, quote) its run wrote. nil = not recorded.
+	QuoteCount *uint32
+}
+
 // FetchExistingInvestmentKeys ports materialize.py:700-745
 // _fetch_existing_investment_keys -- the skip-existing lookup that keeps a
 // steady-state run from re-paying for categorizations nothing has invalidated.
@@ -640,7 +652,7 @@ type InvestmentKey struct {
 // retried.
 func (reader *Reader) FetchExistingInvestmentKeys(
 	ctx context.Context, organizationID string, keys []InvestmentKey, modelVersion string,
-) (map[InvestmentKey]struct{}, error) {
+) (map[InvestmentKey]ExistingInvestment, error) {
 	if reader == nil || reader.conn == nil {
 		return nil, ErrUnavailable
 	}
@@ -665,18 +677,25 @@ func (reader *Reader) FetchExistingInvestmentKeys(
 		}
 	}
 	if len(wanted) == 0 {
-		return map[InvestmentKey]struct{}{}, nil
+		return map[InvestmentKey]ExistingInvestment{}, nil
 	}
 	sort.Strings(workUnitIDs)
 	sort.Strings(inputHashes)
 
+	// The two extra columns (CHAOS-8788) come from the SAME latest row as the
+	// status, in the SAME single query: the skip decision needs the row's run id
+	// and its recorded quote count, not another round trip per unit.
 	query := `
-        SELECT work_unit_id, categorization_input_hash
+        SELECT work_unit_id, categorization_input_hash, latest_run_id, latest_quote_count
         FROM (
             SELECT
                 work_unit_id,
                 categorization_input_hash,
-                argMax(categorization_status, computed_at) AS latest_status
+                argMax(categorization_status, computed_at) AS latest_status,
+                argMax(categorization_run_id, computed_at) AS latest_run_id,
+                -- tuple() keeps a NULL: a bare argMax skips rows whose value is NULL and
+                -- would return an OLDER row's count for the unit's latest row.
+                (argMax(tuple(evidence_quote_count), computed_at)).1 AS latest_quote_count
             FROM work_unit_investments
             WHERE org_id = {org_id:String}
               AND work_unit_id IN {work_unit_ids:Array(String)}
@@ -698,10 +717,11 @@ func (reader *Reader) FetchExistingInvestmentKeys(
 	}
 	defer func() { _ = rows.Close() }()
 
-	existing := make(map[InvestmentKey]struct{}, len(wanted))
+	existing := make(map[InvestmentKey]ExistingInvestment, len(wanted))
 	for rows.Next() {
-		var workUnitID, inputHash string
-		if err := rows.Scan(&workUnitID, &inputHash); err != nil {
+		var workUnitID, inputHash, runID string
+		var quoteCount *uint32
+		if err := rows.Scan(&workUnitID, &inputHash, &runID, &quoteCount); err != nil {
 			return nil, fmt.Errorf("scan existing investment key row: %w", err)
 		}
 		workUnitID = pythonparity.DecodeClickHouseStringValue(workUnitID)
@@ -720,10 +740,95 @@ func (reader *Reader) FetchExistingInvestmentKeys(
 		if _, ok := wanted[key]; !ok {
 			continue
 		}
-		existing[key] = struct{}{}
+		existing[key] = ExistingInvestment{RunID: runID, QuoteCount: quoteCount}
 	}
 	if err := rows.Err(); err != nil {
 		return nil, fmt.Errorf("iterate existing investment key rows: %w", err)
 	}
 	return existing, nil
+}
+
+// quoteCountChunk bounds the work_unit_ids array of one FetchVisibleQuoteCounts
+// query, like the readers' own lookup chunks.
+const quoteCountChunk = 2000
+
+// UnitRun names the run whose quotes a unit's investment row shows.
+type UnitRun struct {
+	WorkUnitID string
+	RunID      string
+}
+
+// FetchVisibleQuoteCounts returns, per unit, how many distinct (source_id,
+// quote) are visible under the given run id: the number the quotes reader shows
+// for the unit's investment row (FetchWorkUnitInvestmentQuotes filters on the
+// row's own run id and dedupes on the quote key). One query per chunk of units,
+// never one per unit. A unit with no visible quote has no entry in the result
+// map: its count is 0 (CHAOS-8788).
+func (reader *Reader) FetchVisibleQuoteCounts(
+	ctx context.Context, organizationID string, wanted []UnitRun,
+) (map[string]uint32, error) {
+	if reader == nil || reader.conn == nil {
+		return nil, ErrUnavailable
+	}
+	counts := make(map[string]uint32, len(wanted))
+	runByUnit := make(map[string]string, len(wanted))
+	for _, unit := range wanted {
+		runByUnit[unit.WorkUnitID] = unit.RunID
+	}
+	unitIDs := make([]string, 0, len(runByUnit))
+	for unit := range runByUnit {
+		unitIDs = append(unitIDs, unit)
+	}
+	sort.Strings(unitIDs)
+	for start := 0; start < len(unitIDs); start += quoteCountChunk {
+		end := min(start+quoteCountChunk, len(unitIDs))
+		chunk := unitIDs[start:end]
+		runIDs := make([]string, 0, len(chunk))
+		seenRun := make(map[string]struct{}, len(chunk))
+		for _, unit := range chunk {
+			if _, ok := seenRun[runByUnit[unit]]; !ok {
+				seenRun[runByUnit[unit]] = struct{}{}
+				runIDs = append(runIDs, runByUnit[unit])
+			}
+		}
+		// The unit and run filters are two independent sets (a cross product the
+		// Go side narrows back to the real pairs), the same shape as the
+		// skip-existing lookup. GROUP BY the quote key plus the run id: physical
+		// duplicates of one quote of one run are one visible quote.
+		rows, err := reader.conn.Query(ctx, `
+        SELECT work_unit_id, categorization_run_id, count() AS visible
+        FROM (
+            SELECT work_unit_id, source_id, quote, categorization_run_id
+            FROM work_unit_investment_quotes
+            WHERE org_id = {org_id:String}
+              AND work_unit_id IN {work_unit_ids:Array(String)}
+              AND categorization_run_id IN {run_ids:Array(String)}
+            GROUP BY work_unit_id, source_id, quote, categorization_run_id
+        )
+        GROUP BY work_unit_id, categorization_run_id`,
+			clickhouse.Named("org_id", organizationID),
+			clickhouse.Named("work_unit_ids", chunk),
+			clickhouse.Named("run_ids", runIDs),
+		)
+		if err != nil {
+			return nil, fmt.Errorf("query visible quote counts: %w", err)
+		}
+		for rows.Next() {
+			var workUnitID, runID string
+			var visible uint64
+			if err := rows.Scan(&workUnitID, &runID, &visible); err != nil {
+				_ = rows.Close()
+				return nil, fmt.Errorf("scan visible quote count row: %w", err)
+			}
+			if runByUnit[workUnitID] == runID {
+				counts[workUnitID] = uint32(visible)
+			}
+		}
+		if err := rows.Err(); err != nil {
+			_ = rows.Close()
+			return nil, fmt.Errorf("iterate visible quote count rows: %w", err)
+		}
+		_ = rows.Close()
+	}
+	return counts, nil
 }

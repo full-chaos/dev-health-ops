@@ -139,7 +139,7 @@ func TestFailTerminalPersistsDuplicateKeyDetailWhenSupported(t *testing.T) {
 
 	err := realDuplicateNaturalKeyError(t)
 	now := time.Now()
-	if failErr := handler.failTerminal(context.Background(), claim, DuplicateNaturalKeyCategory, err, now, now.Add(time.Second)); failErr != nil {
+	if failErr := handler.failTerminal(context.Background(), claim, DuplicateNaturalKeyCategory, DuplicateNaturalKeyCategory, err, now, now.Add(time.Second)); failErr != nil {
 		t.Fatalf("failTerminal returned %v, want nil", failErr)
 	}
 
@@ -180,7 +180,7 @@ func TestFailTerminalFallsBackToPlainFailWithoutSupport(t *testing.T) {
 
 	err := realDuplicateNaturalKeyError(t)
 	now := time.Now()
-	if failErr := handler.failTerminal(context.Background(), claim, DuplicateNaturalKeyCategory, err, now, now.Add(time.Second)); failErr != nil {
+	if failErr := handler.failTerminal(context.Background(), claim, DuplicateNaturalKeyCategory, DuplicateNaturalKeyCategory, err, now, now.Add(time.Second)); failErr != nil {
 		t.Fatalf("failTerminal returned %v, want nil", failErr)
 	}
 	if repository.failures != 1 || repository.lastFailCategory != DuplicateNaturalKeyCategory {
@@ -203,7 +203,7 @@ func TestFailTerminalUsesPlainFailForNonDuplicateKeyCategories(t *testing.T) {
 
 	now := time.Now()
 	if failErr := handler.failTerminal(
-		context.Background(), claim, FeatureDisabledCategory, providersync.ErrIncidentEntitlementDisabled, now, now.Add(time.Second),
+		context.Background(), claim, FeatureDisabledCategory, FeatureDisabledCategory, providersync.ErrIncidentEntitlementDisabled, now, now.Add(time.Second),
 	); failErr != nil {
 		t.Fatalf("failTerminal returned %v, want nil", failErr)
 	}

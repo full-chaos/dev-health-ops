@@ -9,7 +9,6 @@ import (
 	"io"
 	"log/slog"
 	"net/http"
-	"runtime"
 	"slices"
 	"strings"
 	"sync"
@@ -503,28 +502,181 @@ func TestGitHubBlameRecoveryReplaysEveryInFlightPathWithoutTheRunBounds(t *testi
 	}
 }
 
-// A file whose single range is far above the write bound is refused from the
-// range bounds, without a row per line ever being allocated.
-func TestGitHubBlameRouteRefusesAHugeRangeWithoutMaterialisingIt(t *testing.T) {
+// The bound is applied from the range sizes, before expansion: a refused file
+// builds no row at all, and every malformed range has a defined outcome.
+func TestGitHubBlameRouteRefusesAnOversizeRangeBeforeExpandingIt(t *testing.T) {
 	blameCaptureSlog(t)
+	for _, lines := range []int{2_000_000, 4_294_967_295} {
+		doer := &gitHubBigTreeDoer{
+			t: t, dirs: 1, filesPerDir: 3, linesPerFile: 2, bigDir: -1, truncatedDir: -1,
+			linesByPath: map[string]int{bigTreePath(0, 1): lines},
+		}
+		built := 0
+		limits := defaultGitHubBlameLimits()
+		limits.rowsBuilt = &built
+		batch, err := runBigTreeBlame(t, doer, GitHubBlameRouteHandler{limits: &limits}, nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		got := progressPaths(t, batch)
+		if built != 2 || !slices.Equal(got, []string{bigTreePath(0, 0)}) ||
+			batch.Result["remaining_paths"] != 2 || len(batch.Effects[1].Rows) != 2 {
+			t.Fatalf("lines=%d built=%d blamed=%v result=%v, want only the first file expanded", lines, built, got, batch.Result)
+		}
+	}
+	// The same file first in the unit: rotated as a retryable path, nothing built.
 	doer := &gitHubBigTreeDoer{
-		t: t, dirs: 1, filesPerDir: 3, linesPerFile: 2, bigDir: -1, truncatedDir: -1,
-		linesByPath: map[string]int{bigTreePath(0, 1): 2_000_000},
+		t: t, dirs: 1, filesPerDir: 1, bigDir: -1, truncatedDir: -1,
+		linesByPath: map[string]int{bigTreePath(0, 0): 4_294_967_295},
 	}
-	var before, after runtime.MemStats
-	runtime.GC()
-	runtime.ReadMemStats(&before)
-	batch, err := runBigTreeBlame(t, doer, GitHubBlameRouteHandler{}, nil)
-	runtime.ReadMemStats(&after)
-	if err != nil {
-		t.Fatal(err)
+	built := 0
+	limits := defaultGitHubBlameLimits()
+	limits.rowsBuilt = &built
+	batch, err := runBigTreeBlame(t, doer, GitHubBlameRouteHandler{limits: &limits}, nil)
+	if err != nil || built != 0 || batch.Result["retryable_path_failures"] != 1 || len(batch.Effects[1].Rows) != 0 {
+		t.Fatalf("err=%v built=%d result=%v", err, built, batch.Result)
 	}
-	if allocated := after.TotalAlloc - before.TotalAlloc; allocated > 100<<20 {
-		t.Fatalf("allocated %d bytes for a refused file, want no per-line rows", allocated)
+}
+
+func TestGitHubBlameRangeArithmeticHasADefinedOutcomePerShape(t *testing.T) {
+	blameCaptureSlog(t)
+	for _, test := range []struct {
+		name   string
+		ranges string
+		err    error
+	}{
+		{"end before start", `[{"startingLine":5,"endingLine":4,"commit":{"oid":"a"}}]`, providerfoundation.ErrNormalizationInvalid},
+		{"zero start", `[{"startingLine":0,"endingLine":3,"commit":{"oid":"a"}}]`, providerfoundation.ErrNormalizationInvalid},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			client := gitHubRepositoryClient(t, fakehttp.Client(gitHubFixedRangeDoer{t: t, ranges: test.ranges}), "https://api.github.com")
+			_, err := (GitHubBlameRouteHandler{Coverage: staticGitHubBlameCoverage{}}).Collect(
+				context.Background(), nativeTestClaim("github", "blame"), providerfoundation.Credential{}, client,
+				time.Date(2026, 7, 23, 12, 30, 0, 0, time.UTC))
+			if !errors.Is(err, test.err) {
+				t.Fatalf("err=%v want %v", err, test.err)
+			}
+		})
 	}
-	got := progressPaths(t, batch)
-	if !slices.Equal(got, []string{bigTreePath(0, 0)}) || batch.Result["remaining_paths"] != 2 ||
-		len(batch.Effects[1].Rows) != 2 {
-		t.Fatalf("blamed=%v result=%v, want the unit to stop before the huge file", got, batch.Result)
+	// A negative number cannot decode into a line: the file is a retryable
+	// path failure, exactly like any other unreadable blame response.
+	client := gitHubRepositoryClient(t, fakehttp.Client(gitHubFixedRangeDoer{
+		t: t, ranges: `[{"startingLine":-1,"endingLine":3,"commit":{"oid":"a"}}]`,
+	}), "https://api.github.com")
+	batch, err := (GitHubBlameRouteHandler{Coverage: staticGitHubBlameCoverage{}}).Collect(
+		context.Background(), nativeTestClaim("github", "blame"), providerfoundation.Credential{}, client,
+		time.Date(2026, 7, 23, 12, 30, 0, 0, time.UTC))
+	if err != nil || batch.Result["retryable_path_failures"] != 1 || len(batch.Effects[1].Rows) != 0 {
+		t.Fatalf("err=%v result=%v", err, batch.Result)
+	}
+	// Two maximum-size ranges: the product and the sum stay in int64 and the file is refused.
+	two := `[{"startingLine":1,"endingLine":4294967295,"commit":{"oid":"a"}},{"startingLine":1,"endingLine":4294967295,"commit":{"oid":"b"}}]`
+	built := 0
+	limits := defaultGitHubBlameLimits()
+	limits.rowsBuilt = &built
+	client = gitHubRepositoryClient(t, fakehttp.Client(gitHubFixedRangeDoer{t: t, ranges: two}), "https://api.github.com")
+	batch, err = (GitHubBlameRouteHandler{Coverage: staticGitHubBlameCoverage{}, limits: &limits}).Collect(
+		context.Background(), nativeTestClaim("github", "blame"), providerfoundation.Credential{}, client,
+		time.Date(2026, 7, 23, 12, 30, 0, 0, time.UTC))
+	if err != nil || built != 0 || batch.Result["retryable_path_failures"] != 1 {
+		t.Fatalf("err=%v built=%d result=%v", err, built, batch.Result)
+	}
+}
+
+// A replayed file the write contract would refuse fails with the write step's
+// class before any row is allocated.
+func TestGitHubBlameRecoveryRefusesAnOversizeFileBeforeExpandingIt(t *testing.T) {
+	blameCaptureSlog(t)
+	claim := nativeTestClaim("github", "blame")
+	client := gitHubRepositoryClient(t, fakehttp.Client(gitHubFixedRangeDoer{
+		t: t, ranges: `[{"startingLine":1,"endingLine":4294967295,"commit":{"oid":"a"}}]`,
+	}), "https://api.github.com")
+	built := 0
+	limits := defaultGitHubBlameLimits()
+	limits.rowsBuilt = &built
+	_, err := collectGitHubBlame(
+		context.Background(), claim, client, time.Date(2026, 7, 23, 12, 30, 0, 0, time.UTC),
+		staticGitHubBlameCoverage{state: GitHubBlameProgressState{InFlightOutcomes: map[string]string{
+			"src/file-000.go": gitHubBlameOutcomeRows,
+		}}},
+		gitHubBlameMaxFiles, false, claim.GenerationKey(), limits,
+	)
+	if !errors.Is(err, ErrEffectRecoveryUnsafe) || built != 0 {
+		t.Fatalf("err=%v built=%d", err, built)
+	}
+	// Each write-contract bound alone must refuse a replayed file: rows only
+	// (100,001 short lines) and payload only (few lines, very long path).
+	longPath := "src/" + strings.Repeat("a", 3000) + ".go"
+	for _, variant := range []struct {
+		name, ranges, path string
+	}{
+		{"rows only", `[{"startingLine":1,"endingLine":100001,"commit":{"oid":"a"}}]`, ""},
+		{"payload only", `[{"startingLine":1,"endingLine":30000,"commit":{"oid":"a"}}]`, longPath},
+	} {
+		path := variant.path
+		if path == "" {
+			path = "src/file-000.go"
+		}
+		built = 0
+		client = gitHubRepositoryClient(t, fakehttp.Client(gitHubFixedRangeDoer{t: t, ranges: variant.ranges, path: variant.path}), "https://api.github.com")
+		_, err = collectGitHubBlame(
+			context.Background(), claim, client, time.Date(2026, 7, 23, 12, 30, 0, 0, time.UTC),
+			staticGitHubBlameCoverage{state: GitHubBlameProgressState{InFlightOutcomes: map[string]string{
+				path: gitHubBlameOutcomeRows,
+			}}},
+			gitHubBlameMaxFiles, false, claim.GenerationKey(), limits,
+		)
+		if !errors.Is(err, ErrEffectRecoveryUnsafe) || built != 0 {
+			t.Fatalf("%s: err=%v built=%d", variant.name, err, built)
+		}
+	}
+}
+
+// gitHubFixedRangeDoer serves a one-file repository whose blame response is
+// the given raw ranges array.
+type gitHubFixedRangeDoer struct {
+	t      *testing.T
+	ranges string
+	path   string
+}
+
+func (doer gitHubFixedRangeDoer) Do(request *http.Request) (*http.Response, error) {
+	body := `{"full_name":"acme/api","default_branch":"main"}`
+	switch request.URL.Path {
+	case "/repos/acme/api":
+	case "/repos/acme/api/commits":
+		body = `[{"sha":"tree-sha"}]`
+	case "/repos/acme/api/git/trees/tree-sha":
+		path := doer.path
+		if path == "" {
+			path = "src/file-000.go"
+		}
+		body = `{"tree":[{"path":"` + path + `","type":"blob","size":20}]}`
+	case "/graphql":
+		body = `{"data":{"repository":{"object":{"blame":{"ranges":` + doer.ranges + `}}}}}`
+	default:
+		doer.t.Fatalf("unexpected request %s", request.URL.String())
+	}
+	return &http.Response{
+		StatusCode: http.StatusOK, Header: http.Header{"Content-Type": []string{"application/json"}},
+		Body: io.NopCloser(strings.NewReader(body)), Request: request,
+	}, nil
+}
+
+func TestGitHubBlameRecoveryAcceptsAFileExactlyAtTheWriteBound(t *testing.T) {
+	blameCaptureSlog(t)
+	claim := nativeTestClaim("github", "blame")
+	client := gitHubRepositoryClient(t, fakehttp.Client(gitHubFixedRangeDoer{
+		t: t, ranges: fmt.Sprintf(`[{"startingLine":1,"endingLine":%d,"commit":{"oid":"a"}}]`, maxEffectRows),
+	}), "https://api.github.com")
+	batch, err := collectGitHubBlame(
+		context.Background(), claim, client, time.Date(2026, 7, 23, 12, 30, 0, 0, time.UTC),
+		staticGitHubBlameCoverage{state: GitHubBlameProgressState{InFlightOutcomes: map[string]string{
+			"src/file-000.go": gitHubBlameOutcomeRows,
+		}}},
+		gitHubBlameMaxFiles, false, claim.GenerationKey(), defaultGitHubBlameLimits(),
+	)
+	if err != nil || len(batch.Effects[1].Rows) != maxEffectRows {
+		t.Fatalf("err=%v, want exactly %d rows accepted", err, maxEffectRows)
 	}
 }

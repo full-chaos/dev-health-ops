@@ -9425,6 +9425,11 @@ input BreakdownRequestInput {
   measure: MeasureInput!
   dateRange: DateRangeInput!
   topN: Int! = 10
+  """
+  Optional exact dimension keys. When present, returns these keys without the
+  independent topN cut so related breakdown measures can be joined safely.
+  """
+  keys: [String!] = null
 }
 
 type BreakdownResult {
@@ -63310,7 +63315,7 @@ func (ec *executionContext) unmarshalInputBreakdownRequestInput(ctx context.Cont
 		asMap["topN"] = 10
 	}
 
-	fieldsInOrder := [...]string{"dimension", "measure", "dateRange", "topN"}
+	fieldsInOrder := [...]string{"dimension", "measure", "dateRange", "topN", "keys"}
 	for _, k := range fieldsInOrder {
 		v, ok := asMap[k]
 		if !ok {
@@ -63345,6 +63350,13 @@ func (ec *executionContext) unmarshalInputBreakdownRequestInput(ctx context.Cont
 				return it, err
 			}
 			it.TopN = data
+		case "keys":
+			ctx := graphql.WithPathContext(ctx, graphql.NewPathWithField("keys"))
+			data, err := ec.unmarshalOString2ᚕstringᚄ(ctx, v)
+			if err != nil {
+				return it, err
+			}
+			it.Keys = data
 		}
 	}
 

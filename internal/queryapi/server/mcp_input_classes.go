@@ -134,6 +134,7 @@ input AnalyticsRequestInput.timeseries other
 input AnalyticsRequestInput.useInvestment other
 input BreakdownRequestInput.dateRange other
 input BreakdownRequestInput.dimension other
+input BreakdownRequestInput.keys other
 input BreakdownRequestInput.measure other
 input BreakdownRequestInput.topN other
 input CapacityForecastFilterInput.fromDate other

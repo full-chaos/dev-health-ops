@@ -265,10 +265,7 @@ func (handler LinearReferenceCatalogRouteHandler) CollectReferenceCatalog(
 			memberNodes := append([]linearReferenceCatalogMemberPayload(nil), payload.Members.Nodes...)
 			membersComplete := !payload.Members.PageInfo.HasNextPage
 			if payload.Members.PageInfo.HasNextPage {
-				extra, memberPages, memberCap, memberErr := collectLinearReferenceConnection(
-					ctx, client, linearReferenceCatalogMembersQuery, linearReferenceConnectionTeamMembers,
-					linearReferenceConnectionVariables{TeamID: payload.ID}, linearReferenceCatalogMemberPageSize, maxPages,
-				)
+				extra, memberPages, memberCap, memberErr := collectLinearReferenceTeamMembers(ctx, client, payload, maxPages)
 				evidence.Pages += memberPages
 				if memberErr != nil || memberCap {
 					return linearReferenceCatalogFailureBatch(evidence, "members", evidence.Pages, evidence.Records, memberErr, memberCap)
@@ -888,7 +885,9 @@ func collectLinearReferenceProjectTeams(
 		linearReferenceConnectionVariables{ProjectID: project.ID, After: &cursor},
 		50, linearNestedHardMaxPages-1,
 	)
-	result.pages = pages
+	// The first page is embedded in the projects query: it is a page of this
+	// connection too, so the evidence counts it (CHAOS-8781).
+	result.pages = pages + 1
 	if capped {
 		slog.Error("providersync.linear.nested_connection_bound_exceeded",
 			"owner", "project "+project.ID, "field", "teams", "pages", pages+1,
@@ -909,4 +908,40 @@ func collectLinearReferenceProjectTeams(
 		result.nodes = append(result.nodes, team)
 	}
 	return result, nil
+}
+
+// collectLinearReferenceTeamMembers continues a team's members connection from
+// the endCursor of the page embedded in the teams query (it does not start over)
+// and holds it to the same hard bound as every nested Linear connection: the
+// embedded page counts, so the connection holds linearNestedHardMaxPages pages
+// in total. A configured maxPages may only lower it. Past the bound the error
+// names the team and the field, and carries no payload text (CHAOS-8781).
+// The returned page count includes the embedded page.
+func collectLinearReferenceTeamMembers(
+	ctx context.Context,
+	client *providerfoundation.HTTPClient,
+	team linearReferenceCatalogTeamPayload,
+	maxPages int,
+) ([]json.RawMessage, int, bool, error) {
+	cursor := strings.TrimSpace(team.Members.PageInfo.EndCursor)
+	if cursor == "" {
+		return nil, 0, false, providerfoundation.ErrPaginationInvalid
+	}
+	followUps := min(maxPages, linearNestedHardMaxPages-1)
+	raw, pages, capped, err := collectLinearReferenceConnection(
+		ctx, client, linearReferenceCatalogMembersQuery, linearReferenceConnectionTeamMembers,
+		linearReferenceConnectionVariables{TeamID: team.ID, After: &cursor},
+		linearReferenceCatalogMemberPageSize, followUps,
+	)
+	pages++ // the embedded first page
+	if capped {
+		slog.Error("providersync.linear.nested_connection_bound_exceeded",
+			"owner", "team "+team.ID, "field", "members", "pages", pages,
+			"items", len(raw)+len(team.Members.Nodes), "max_pages", followUps+1)
+		return raw, pages, true, fmt.Errorf(
+			"%w: linear members of team %s still had a next page after %d pages (max %d pages)",
+			ErrPaginationCapExceeded, team.ID, pages, followUps+1,
+		)
+	}
+	return raw, pages, false, err
 }

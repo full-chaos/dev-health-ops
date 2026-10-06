@@ -233,9 +233,9 @@ func TestGitHubProjectV2PaginationMatchesFrozenPythonProducer(t *testing.T) {
 		t, "github/work-items-project-v2/pagination", []oracleCase{{ID: "outer_and_nested", Input: map[string]any{}}},
 		func(t *testing.T, _ map[string]any) gitHubProjectV2PaginationOracleRow {
 			doer := &gitHubProjectV2Doer{t: t, replies: []string{
-				`{"data":{"organization":{"projectV2":{"items":{"nodes":[{"id":"PVTI_1","content":{"__typename":"DraftIssue","title":"one"},"fieldValues":{"nodes":[]},"changes":{"nodes":[{"createdAt":"2026-08-01T08:00:00Z"}],"pageInfo":{"hasNextPage":true,"endCursor":"change-1"}}}],"pageInfo":{"hasNextPage":true,"endCursor":"item-1"}}}}}}`,
+				`{"data":{"organization":{"projectV2":{"items":{"nodes":[{"id":"PVTI_1","content":{"__typename":"DraftIssue","title":"one"},"fieldValues":{"nodes":[],"pageInfo":{"hasNextPage":false,"endCursor":null}},"changes":{"nodes":[{"createdAt":"2026-08-01T08:00:00Z"}],"pageInfo":{"hasNextPage":true,"endCursor":"change-1"}}}],"pageInfo":{"hasNextPage":true,"endCursor":"item-1"}}}}}}`,
 				`{"data":{"node":{"changes":{"nodes":[{"createdAt":"2026-08-02T08:00:00Z"}],"pageInfo":{"hasNextPage":false,"endCursor":null}}}}}`,
-				`{"data":{"organization":{"projectV2":{"items":{"nodes":[{"id":"PVTI_2","content":{"__typename":"DraftIssue","title":"two"},"fieldValues":{"nodes":[]},"changes":{"nodes":[],"pageInfo":{"hasNextPage":false,"endCursor":null}}}],"pageInfo":{"hasNextPage":false,"endCursor":null}}}}}}`,
+				`{"data":{"organization":{"projectV2":{"items":{"nodes":[{"id":"PVTI_2","content":{"__typename":"DraftIssue","title":"two"},"fieldValues":{"nodes":[],"pageInfo":{"hasNextPage":false,"endCursor":null}},"changes":{"nodes":[],"pageInfo":{"hasNextPage":false,"endCursor":null}}}],"pageInfo":{"hasNextPage":false,"endCursor":null}}}}}}`,
 			}}
 			evidence := FetchEvidence{}
 			items, err := fetchGitHubProjectV2Target(context.Background(), githubProjectV2TestClient(t, fakehttp.Client(doer)), GitHubProjectV2Target{OrgLogin: "acme", ProjectNumber: 3}, &evidence)

@@ -569,70 +569,165 @@ func TestGitHubWorkItemsRESTCollectorDegradesOnOptionalPullRequestFailure(t *tes
 	})
 }
 
-func TestGitHubWorkItemsRESTCollectorStopsAtExactlyOneThousandEvents(t *testing.T) {
-	t.Parallel()
+// githubWorkItemsRESTEventClaim is a claim that reads issue events only.
+func githubWorkItemsRESTEventClaim() Claim {
 	claim := githubWorkItemsRESTClaim()
 	claim.DatasetOptions = map[string]any{
 		"include_issues": true, "include_pull_requests": false,
 		"fetch_comments": false, "fetch_milestones": false,
 		"comments_limit": 17,
 	}
-	eventReplies := githubWorkItemsRESTFullPageReplies(
-		10, 100, "/repos/acme/api/issues/42/events",
-		func(index int) string {
-			return `{"id":` + strconv.Itoa(index+1) +
-				`,"event":"assigned","created_at":"2026-07-20T00:00:00Z"}`
-		},
-	)
+	return claim
+}
+
+// githubWorkItemsRESTEventReplies is a list of `total` events in pages of 100
+// whose LAST page carries no rel=next, the way GitHub ends a list.
+func githubWorkItemsRESTEventReplies(path string, total int) []githubWorkItemsRESTReply {
+	pages := (total + 99) / 100
+	replies := githubWorkItemsRESTFullPageReplies(pages, 100, path, func(index int) string {
+		event := "closed"
+		if index%2 == 1 {
+			event = "reopened"
+		}
+		return `{"id":` + strconv.Itoa(index+1) + `,"event":"` + event +
+			`","created_at":"2026-07-20T00:00:00Z"}`
+	})
+	last := total - (pages-1)*100
+	if last < 100 {
+		items := make([]string, 0, last)
+		for offset := 0; offset < last; offset++ {
+			index := (pages-1)*100 + offset
+			event := "closed"
+			if index%2 == 1 {
+				event = "reopened"
+			}
+			items = append(items, `{"id":`+strconv.Itoa(index+1)+`,"event":"`+event+
+				`","created_at":"2026-07-20T00:00:00Z"}`)
+		}
+		replies[pages-1].body = "[" + strings.Join(items, ",") + "]"
+	}
+	replies[pages-1].link = ""
+	return replies
+}
+
+func collectGitHubWorkItemEvents(t *testing.T, total int) (GitHubWorkItemsRESTResult, *githubWorkItemsRESTDoer, error) {
+	t.Helper()
 	doer := &githubWorkItemsRESTDoer{t: t, replies: map[string][]githubWorkItemsRESTReply{
 		"/repos/acme/api":                  {{body: `{"id":4567,"full_name":"Acme/API"}`}},
 		"/repos/acme/api/issues":           {{body: `[{"number":42,"title":"Issue","state":"open","created_at":"2026-07-02T00:00:00Z","updated_at":"2026-07-20T00:00:00Z"}]`}},
-		"/repos/acme/api/issues/42/events": eventReplies,
+		"/repos/acme/api/issues/42/events": githubWorkItemsRESTEventReplies("/repos/acme/api/issues/42/events", total),
 	}}
 	result, err := (GitHubWorkItemsRESTCollector{}).Collect(
-		context.Background(), claim,
+		context.Background(), githubWorkItemsRESTEventClaim(),
 		gitHubPullRequestClient(t, fakehttp.Client(doer), "https://api.github.com"), time.Now(),
 	)
-	if err != nil || !result.NoOptionalDegradation() || result.Evidence.Pages != 11 ||
-		result.Evidence.Requests != 12 || len(result.Rows.WorkItems) != 1 {
+	return result, doer, err
+}
+
+// CHAOS-8770: events are no longer cut at 1000. 1150 events across 12 pages
+// are all read and all reach the rows.
+func TestGitHubWorkItemsRESTCollectorPagesEventsPastTheOldThousandCap(t *testing.T) {
+	t.Parallel()
+	result, doer, err := collectGitHubWorkItemEvents(t, 1150)
+	if err != nil || !result.NoOptionalDegradation() || len(result.Rows.WorkItems) != 1 {
 		t.Fatalf("result=%+v error=%v requests=%d", result, err, len(doer.requests))
 	}
-	if got := countGitHubWorkItemsRESTRequests(doer.requests, "/repos/acme/api/issues/42/events?"); got != 10 {
-		t.Fatalf("event requests=%d want 10; requests=%v", got, doer.requests)
+	if got := countGitHubWorkItemsRESTRequests(doer.requests, "/repos/acme/api/issues/42/events?"); got != 12 {
+		t.Fatalf("event requests=%d want 12; requests=%v", got, doer.requests)
+	}
+	if got := len(result.Rows.StatusTransitions); got != 1150 {
+		t.Fatalf("transitions=%d want 1150 (old cap 1000)", got)
 	}
 }
 
-func TestGitHubWorkItemsRESTCollectorUsesConfiguredFullPageCommentLimit(t *testing.T) {
+// Literal numbers: 100 pages (the shared page bound) pass, 101 fail closed with
+// the repository, the issue and the field named.
+func TestGitHubWorkItemsRESTCollectorEventsPageBoundIsExactlyOneHundredPages(t *testing.T) {
 	t.Parallel()
+	result, doer, err := collectGitHubWorkItemEvents(t, 10_000)
+	if err != nil || len(result.Rows.StatusTransitions) != 10_000 ||
+		countGitHubWorkItemsRESTRequests(doer.requests, "/repos/acme/api/issues/42/events?") != 100 {
+		t.Fatalf("100 pages: err=%v transitions=%d", err, len(result.Rows.StatusTransitions))
+	}
+	_, _, err = collectGitHubWorkItemEvents(t, 10_001)
+	if !errors.Is(err, ErrPaginationCapExceeded) {
+		t.Fatalf("101 pages: err=%v want ErrPaginationCapExceeded", err)
+	}
+	for _, want := range []string{"events of Acme/API#42", "after 100 pages"} {
+		if !strings.Contains(err.Error(), want) {
+			t.Fatalf("error %q lacks %q", err, want)
+		}
+	}
+}
+
+func githubWorkItemsRESTCommentCollect(t *testing.T, limit, total int) (GitHubWorkItemsRESTResult, *githubWorkItemsRESTDoer, error) {
+	t.Helper()
 	claim := githubWorkItemsRESTClaim()
 	claim.DatasetOptions = map[string]any{
 		"include_issues": true, "include_pull_requests": false,
 		"fetch_comments": true, "fetch_milestones": false,
-		"comments_limit": 200,
+		"comments_limit": limit,
 	}
-	commentReplies := githubWorkItemsRESTFullPageReplies(
-		2, 100, "/repos/acme/api/issues/42/comments",
+	replies := githubWorkItemsRESTFullPageReplies(
+		total/100, 100, "/repos/acme/api/issues/42/comments",
 		func(index int) string {
 			return `{"id":` + strconv.Itoa(index+1) +
 				`,"body":"comment","created_at":"2026-07-20T00:00:00Z","user":{"login":"reviewer"}}`
 		},
 	)
+	replies[len(replies)-1].link = "" // GitHub ends a list without rel=next.
 	doer := &githubWorkItemsRESTDoer{t: t, replies: map[string][]githubWorkItemsRESTReply{
 		"/repos/acme/api":                    {{body: `{"id":4567,"full_name":"Acme/API"}`}},
 		"/repos/acme/api/issues":             {{body: `[{"number":42,"title":"Issue","state":"open","created_at":"2026-07-02T00:00:00Z","updated_at":"2026-07-20T00:00:00Z"}]`}},
 		"/repos/acme/api/issues/42/events":   {{body: `[]`}},
-		"/repos/acme/api/issues/42/comments": commentReplies,
+		"/repos/acme/api/issues/42/comments": replies,
 	}}
 	result, err := (GitHubWorkItemsRESTCollector{}).Collect(
 		context.Background(), claim,
 		gitHubPullRequestClient(t, fakehttp.Client(doer), "https://api.github.com"), time.Now(),
 	)
+	return result, doer, err
+}
+
+// A list that holds exactly the limit is complete: nothing is cut or counted.
+func TestGitHubWorkItemsRESTCollectorUsesConfiguredFullPageCommentLimit(t *testing.T) {
+	t.Parallel()
+	result, doer, err := githubWorkItemsRESTCommentCollect(t, 200, 200)
 	if err != nil || !result.NoOptionalDegradation() || len(result.Rows.Interactions) != 200 ||
-		result.Evidence.Pages != 4 || result.Evidence.Requests != 5 {
+		result.CommentsTruncated != 0 || result.Evidence.Pages != 4 || result.Evidence.Requests != 5 {
 		t.Fatalf("result=%+v error=%v requests=%d", result, err, len(doer.requests))
 	}
 	if got := countGitHubWorkItemsRESTRequests(doer.requests, "/repos/acme/api/issues/42/comments?"); got != 2 {
 		t.Fatalf("comment requests=%d want 2; requests=%v", got, doer.requests)
+	}
+}
+
+// The user's comments_limit is an explicit cap. When it cuts a list that still
+// had rows, the cut is counted and logged, never silent.
+func TestGitHubWorkItemsRESTCollectorCountsACommentCutByTheUserLimit(t *testing.T) {
+	t.Parallel()
+	result, _, err := githubWorkItemsRESTCommentCollect(t, 200, 300)
+	if err != nil || len(result.Rows.Interactions) != 200 || result.CommentsTruncated != 1 {
+		t.Fatalf("interactions=%d truncated=%d err=%v", len(result.Rows.Interactions), result.CommentsTruncated, err)
+	}
+}
+
+// Literal numbers: with no user cap in the way, 100 pages of comments pass and
+// 101 fail closed naming the repository, the issue and the field.
+func TestGitHubWorkItemsRESTCollectorCommentsPageBoundIsExactlyOneHundredPages(t *testing.T) {
+	t.Parallel()
+	result, _, err := githubWorkItemsRESTCommentCollect(t, 1_000_000, 10_000)
+	if err != nil || len(result.Rows.Interactions) != 10_000 || result.CommentsTruncated != 0 {
+		t.Fatalf("100 pages: interactions=%d err=%v", len(result.Rows.Interactions), err)
+	}
+	_, _, err = githubWorkItemsRESTCommentCollect(t, 1_000_000, 10_100)
+	if !errors.Is(err, ErrPaginationCapExceeded) {
+		t.Fatalf("101 pages: err=%v want ErrPaginationCapExceeded", err)
+	}
+	for _, want := range []string{"comments of Acme/API#42", "after 100 pages"} {
+		if !strings.Contains(err.Error(), want) {
+			t.Fatalf("error %q lacks %q", err, want)
+		}
 	}
 }
 

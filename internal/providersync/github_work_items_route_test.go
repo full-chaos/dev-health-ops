@@ -256,7 +256,7 @@ func TestGitHubWorkItemsRouteComposesRESTSocialProjectsDerivedRowsAndUsage(t *te
 		{
 			name: "unidentified item", reason: githubProjectsV2UnidentifiedItem,
 			reply: `{"data":{"organization":{"projectV2":{"items":{"nodes":[` +
-				`{"id":"PVTI_1","content":{"__typename":"SomeFutureContentType"},"fieldValues":{"nodes":[]},"changes":{"nodes":[],"pageInfo":{"hasNextPage":false,"endCursor":null}}}` +
+				`{"id":"PVTI_1","content":{"__typename":"SomeFutureContentType"},"fieldValues":{"nodes":[],"pageInfo":{"hasNextPage":false,"endCursor":null}},"changes":{"nodes":[],"pageInfo":{"hasNextPage":false,"endCursor":null}}}` +
 				`],"pageInfo":{"hasNextPage":false,"endCursor":null}}}}}}`,
 		},
 		// codex adversarial review, CHAOS-4289 round 2: this item (Issue #7 in
@@ -268,7 +268,7 @@ func TestGitHubWorkItemsRouteComposesRESTSocialProjectsDerivedRowsAndUsage(t *te
 		{
 			name: "nested changes nodes missing", reason: githubProjectsV2StructuralDegraded,
 			reply: `{"data":{"organization":{"projectV2":{"items":{"nodes":[` +
-				`{"id":"PVTI_1","content":{"__typename":"Issue","number":7,"repository":{"nameWithOwner":"acme/api"}},"fieldValues":{"nodes":[]},"changes":{"pageInfo":{"hasNextPage":false,"endCursor":null}}}` +
+				`{"id":"PVTI_1","content":{"__typename":"Issue","number":7,"repository":{"nameWithOwner":"acme/api"}},"fieldValues":{"nodes":[],"pageInfo":{"hasNextPage":false,"endCursor":null}},"changes":{"pageInfo":{"hasNextPage":false,"endCursor":null}}}` +
 				`],"pageInfo":{"hasNextPage":false,"endCursor":null}}}}}}`,
 		},
 	} {
@@ -670,6 +670,11 @@ func TestGitHubWorkItemsRouteFailsClosedOnBlockingSocialCauses(t *testing.T) {
 		fetcher   GitHubWorkItemPRSocialFetcher
 		reply     string
 		wantCause string
+		// wantCap: the page-bound refusal is deterministic, so the error must
+		// ALSO satisfy ErrPaginationCapExceeded (the worker's terminal
+		// classifier keys on it, CHAOS-8777 r1 P1-3). invalid_pagination is a
+		// defect of ours, not a bound, and must not.
+		wantCap bool
 	}{
 		{
 			name:      "invalid_pagination",
@@ -681,6 +686,7 @@ func TestGitHubWorkItemsRouteFailsClosedOnBlockingSocialCauses(t *testing.T) {
 			fetcher:   GitHubWorkItemPRSocialFetcher{MaxRequests: 1},
 			reply:     `{"data":{"repository":{"pr0":{"number":52,"comments":{"nodes":[],"pageInfo":{"hasNextPage":true,"endCursor":"c1"}},"timelineItems":{"nodes":[],"pageInfo":{"hasNextPage":false,"endCursor":null}}}}}}`,
 			wantCause: "pagination_cap",
+			wantCap:   true,
 		},
 	} {
 		t.Run(test.name, func(t *testing.T) {
@@ -710,6 +716,10 @@ func TestGitHubWorkItemsRouteFailsClosedOnBlockingSocialCauses(t *testing.T) {
 			)
 			if !errors.Is(err, ErrGitHubWorkItemsIncomplete) {
 				t.Fatalf("%s landed a batch instead of failing the unit: %v", test.wantCause, err)
+			}
+			if errors.Is(err, ErrPaginationCapExceeded) != test.wantCap {
+				t.Fatalf("%s: errors.Is(ErrPaginationCapExceeded)=%v want %v", test.wantCause,
+					errors.Is(err, ErrPaginationCapExceeded), test.wantCap)
 			}
 			if !reflect.DeepEqual(batch, CompleteRouteBatch{}) || deriver.calls != 0 {
 				t.Fatalf("blocking cause returned batch=%+v or derived %d times", batch, deriver.calls)
@@ -1054,6 +1064,20 @@ func TestGitHubWorkItemsRouteTruncatesTimestampsToTheColumnPrecision(t *testing.
 // fixtures as the composition test, parameterised on normalizedAt.
 func githubWorkItemsRouteCollectForTruncation(t *testing.T, normalizedAt time.Time) CompleteRouteBatch {
 	t.Helper()
+	return githubWorkItemsRouteCollectWithCuts(t, normalizedAt, githubWorkItemsRouteCuts{})
+}
+
+// githubWorkItemsRouteCuts makes the route's fixtures hit the named limits of
+// CHAOS-8770: a PR comment list the user's comments_limit cuts, and board items
+// whose labels outgrew the one page the items query reads.
+type githubWorkItemsRouteCuts struct {
+	prCommentsCut    bool
+	boardLabelsCut   int
+	issueCommentsCut bool
+}
+
+func githubWorkItemsRouteCollectWithCuts(t *testing.T, normalizedAt time.Time, cuts githubWorkItemsRouteCuts) CompleteRouteBatch {
+	t.Helper()
 	claim := githubWorkItemsRESTClaim()
 	claim.DatasetOptions["fetch_milestones"] = false
 	claim.IntegrationConfig = map[string]any{"github_projects_v2": []any{
@@ -1061,10 +1085,20 @@ func githubWorkItemsRouteCollectForTruncation(t *testing.T, normalizedAt time.Ti
 	}}
 	fixtures := githubWorkItemsRESTFixtures()
 	delete(fixtures, "/repos/acme/api/milestones")
+	if cuts.issueCommentsCut {
+		claim.DatasetOptions["comments_limit"] = 1
+		fixtures["/repos/acme/api/issues/42/comments"] = []githubWorkItemsRESTReply{{body: `[{"id":1,"body":"one","created_at":"2026-07-20T12:00:00Z","user":{"login":"reviewer"}},{"id":2,"body":"two","created_at":"2026-07-20T13:00:00Z","user":{"login":"reviewer"}}]`}}
+	}
+	socialReply := `{"data":{"repository":{"pr0":{"number":52,"comments":{"nodes":[{"databaseId":9007199254740993,"body":"social","createdAt":"2026-07-23T00:00:00Z","author":{"login":"reviewer"}}],"pageInfo":{"hasNextPage":false,"endCursor":null}},"timelineItems":{"nodes":[{"__typename":"ClosedEvent","createdAt":"2026-07-24T00:00:00Z","actor":{"login":"closer"}}],"pageInfo":{"hasNextPage":false,"endCursor":null}}}}}}`
+	if cuts.prCommentsCut {
+		claim.DatasetOptions["comments_limit"] = 1
+		socialReply = strings.Replace(socialReply, `"author":{"login":"reviewer"}}],"pageInfo":{"hasNextPage":false,"endCursor":null}}`,
+			`"author":{"login":"reviewer"}}],"pageInfo":{"hasNextPage":true,"endCursor":"more"}}`, 1)
+	}
 	doer := &githubWorkItemsRouteDoer{
 		t:              t,
 		rest:           &githubWorkItemsRESTDoer{t: t, replies: fixtures},
-		graphqlReplies: []string{`{"data":{"repository":{"pr0":{"number":52,"comments":{"nodes":[{"databaseId":9007199254740993,"body":"social","createdAt":"2026-07-23T00:00:00Z","author":{"login":"reviewer"}}],"pageInfo":{"hasNextPage":false,"endCursor":null}},"timelineItems":{"nodes":[{"__typename":"ClosedEvent","createdAt":"2026-07-24T00:00:00Z","actor":{"login":"closer"}}],"pageInfo":{"hasNextPage":false,"endCursor":null}}}}}}`},
+		graphqlReplies: []string{socialReply},
 	}
 	client := gitHubPullRequestClient(t, fakehttp.Client(doer), "https://api.github.com")
 	// The Projects policy is a stub, so these rows bypass the real normalizer
@@ -1094,8 +1128,9 @@ func githubWorkItemsRouteCollectForTruncation(t *testing.T, normalizedAt time.Ti
 			Transport: "graphql", RouteFamily: "work_item_prs",
 			Dimension: BudgetGraphQLCost, RequestCount: 3,
 		},
-		Targets:   1,
-		Snapshots: []githubProjectV2BoardSnapshot{{ProjectScopeID: "ghprojv2:acme#3"}},
+		Targets:         1,
+		Snapshots:       []githubProjectV2BoardSnapshot{{ProjectScopeID: "ghprojv2:acme#3"}},
+		LabelsTruncated: cuts.boardLabelsCut,
 	}}
 	deriver := &githubWorkItemsRouteDeriver{rows: githubWorkItemsRouteDerivedRows(t)}
 	handler := GitHubWorkItemsRouteHandler{Projects: projects, ProjectMembershipSnapshotDiff: githubProjectV2NoopSnapshotDiffReader{}, Deriver: deriver}
@@ -1108,4 +1143,22 @@ func githubWorkItemsRouteCollectForTruncation(t *testing.T, normalizedAt time.Ti
 		t.Fatal(err)
 	}
 	return batch
+}
+
+// CHAOS-8770: a cut made by the user's comments_limit, and board items whose
+// labels outgrew one page, reach the route result as named, counted limits. A
+// run without a cut carries neither key.
+func TestGitHubWorkItemsRouteReportsNamedLimitCuts(t *testing.T) {
+	now := time.Date(2026, 8, 4, 12, 0, 0, 0, time.UTC)
+	plain := githubWorkItemsRouteCollectWithCuts(t, now, githubWorkItemsRouteCuts{})
+	for _, key := range []string{"pr_comments_truncated_by_limit", "projects_v2_item_labels_truncated", "issue_comments_truncated_by_limit"} {
+		if _, present := plain.Result[key]; present {
+			t.Fatalf("a run without a cut carries %q: %+v", key, plain.Result)
+		}
+	}
+	cut := githubWorkItemsRouteCollectWithCuts(t, now, githubWorkItemsRouteCuts{prCommentsCut: true, boardLabelsCut: 2, issueCommentsCut: true})
+	if cut.Result["pr_comments_truncated_by_limit"] != 1 || cut.Result["projects_v2_item_labels_truncated"] != 2 ||
+		cut.Result["issue_comments_truncated_by_limit"] != 1 {
+		t.Fatalf("result=%+v", cut.Result)
+	}
 }

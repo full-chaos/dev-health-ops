@@ -328,9 +328,14 @@ func TestClassDecisionBackfillThroughTheUpgradeVerbTreatsAnEmptyLiveDigestAsUnse
 			if err != nil {
 				t.Fatal(err)
 			}
-			// The verb walks to the head, 0147 (CHAOS-8706), which drops the source table after 0146 ran.
-			if !hasRevision(recorded, "0147") {
-				t.Errorf("alembic_version = %v, want the head 0147 recorded", recorded)
+			// The verb walks to the head of the chain (never a literal: a later revision must not break this test).
+			chain, err := pgmigrate.LoadChain()
+			if err != nil {
+				t.Fatal(err)
+			}
+			head := chain[len(chain)-1].Revision
+			if !hasRevision(recorded, head) {
+				t.Errorf("alembic_version = %v, want the head %s recorded", recorded, head)
 			}
 			if got := readDecisions(t, conn); len(got) != 0 {
 				t.Errorf("decisions %+v, want none", got)
@@ -590,5 +595,45 @@ func TestPreflightPredictsTheClassDecisionGuard(t *testing.T) {
 					report.Verdict, report.Reason, code, report.Pending, stderr)
 			}
 		})
+	}
+}
+
+// CHAOS-8755 G4 (preflight.go: the `containsRevision(report.Pending, classDecisionRevision)` clause): the 0146
+// guard is predicted only while 0146 is pending. Once 0146 is applied and a later revision (0147) is the only
+// pending one, the legacy class rows 0146 left in place and an unset live digest must NOT turn the verdict into
+// needs_manual: the upgrade would not run the guard (0146 is recorded), so it applies. Without the clause the
+// preflight evaluates the guard for a walk that never runs it.
+func TestPreflightDoesNotPredictThe0146GuardOnceItIsApplied(t *testing.T) {
+	ctx := context.Background()
+	d := newDownInstance(t)
+	chain, err := pgmigrate.LoadChain()
+	if err != nil {
+		t.Fatal(err)
+	}
+	applied0146 := positionOf0146(t, chain) + 1
+	if applied0146 >= len(chain) {
+		t.Fatalf("the chain holds no revision after 0146 (position %d of %d): the case this test needs does not exist", applied0146, len(chain))
+	}
+	uri := d.at(t, applied0146)
+	conn := connect(t, uri)
+	for _, row := range backfillCaseRows() {
+		if _, err := conn.Exec(ctx, `INSERT INTO go_api_candidate_build (schema_digest, document_digest, selected_operation, candidate_build)
+			VALUES ($1, $2, $3, $4) ON CONFLICT DO NOTHING`, row.schema, row.document, row.operation, row.build); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := conn.Exec(ctx, `INSERT INTO go_api_routing_state (schema_digest, document_digest, selected_operation, current_candidate_build, owner, mode, rollout_percentage, updated_at)
+			VALUES ($1, $2, $3, $4, 'go', $5, 100, $6)`, row.schema, row.document, row.operation, row.build, row.mode, row.at); err != nil {
+			t.Fatal(err)
+		}
+	}
+	code, report, stderr := runPreflightVerb(t, uri, nil) // no live digest in the environment
+	if report.Verdict != pgmigrate.VerdictAppliesCleanly || code != pgmigrate.ExitAppliesCleanly {
+		t.Fatalf("preflight = %s/%s exit %d (%s), want applies_cleanly exit 10: 0146 is applied, so its guard does not run", report.Verdict, report.Reason, code, stderr)
+	}
+	if hasRevision(report.Pending, "0146") || !hasRevision(report.Pending, chain[applied0146].Revision) {
+		t.Fatalf("pending = %v, want only the revisions after 0146 (%s)", report.Pending, chain[applied0146].Revision)
+	}
+	if upgradeCode, upgradeStderr := runUpgradeVerb(t, uri, nil); upgradeCode != cli.ExitOK {
+		t.Fatalf("upgrade exit %d (%s): the preflight said it applies, and it must", upgradeCode, upgradeStderr)
 	}
 }

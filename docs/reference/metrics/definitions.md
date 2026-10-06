@@ -158,3 +158,80 @@ Limits of the relation data:
   reads only the first comments, it still writes the issue, and a relation
   that only a comment held ends at the last sync that read it. Blocked hours
   can be too low, never too high.
+
+## Daily run marker: did the day's metrics run succeed
+
+`repo_metrics_daily` and the other daily tables have a row only for a day with
+activity. A day with no activity and a day that was never computed both show
+as no row. `daily_metrics_run_marker` (ClickHouse migration 105) records the
+state of the daily metrics run so a reader can tell the two apart.
+
+| Column | Meaning |
+| --- | --- |
+| `org_id` | Organization. Every read filters on it. |
+| `target_day` | The calendar day the run computed (UTC). |
+| `generation` | The run generation the event came from. Informational, not ordered. |
+| `state` | `succeeded` or `reopened`. |
+| `finalized_at` | The version as a timestamp. |
+| `version` | Postgres clock reading in milliseconds, taken in the transaction that appends the row: the claim or reset that writes `reopened`, or the sync function's own transaction for `succeeded` (which runs after the finalize commit). Orders the events of one day. |
+
+**The invariant.** The marker says `succeeded` for an organization and day
+only when, at the moment of the append, committed Postgres says the latest run
+of that day that computes the whole organization is succeeded. Whether a run
+computes the whole organization is recorded when it is created
+(`daily_metrics_runs.full_org`, true when no explicit repository list was
+given): the scheduled fan-out, the post-sync run, a manual run without
+`--repo-id`, and the external-recompute all-repository fallback all qualify. A
+run started with a repository list computes only those repositories and never
+certifies the day. Runs created before the column existed are classed by their generation: only
+the scheduled fan-out counts. Older post-sync, manual and external-recompute
+runs stay unmarked, because the post-sync site passed the triggering sync's
+repository ids until 2026-08-25 (CHAOS-4263) and nothing stored says which kind
+an old row is; their days read unknown, never a false succeeded.
+
+The table is append-only and has two writers of `succeeded`: the function that
+runs after a finalize commits, and the backfill. They are the same function
+(`markerSync`): it takes the lock, reads committed Postgres, and appends
+`succeeded` only if the day's latest full-org run is succeeded, `reopened` if
+that run is not, and nothing if the table already agrees. `reopened` is also
+appended when a full-org run is claimed for dispatch (so a day that a run is
+recomputing is not certified) and when a redrive or partition recompute
+reopens a succeeded run, inside the transaction that does it and before its
+commit; if the append fails, that transaction rolls back and nothing changes.
+Versions come from one clock, the Postgres server, read under the lock, never
+from the writing host.
+
+**Reader rule.** For each `(org_id, target_day)` take the row with the greatest
+`version` over all generations, and let `reopened` win a tie:
+
+```sql
+SELECT target_day, argMax(state, (version, state = 'reopened')) AS state
+FROM daily_metrics_run_marker
+WHERE org_id = {org} AND target_day BETWEEN {from} AND {to}
+GROUP BY org_id, target_day
+```
+
+- `succeeded`: a full-org run finished for that organization and day. A day
+  with no repository row is a day with no activity.
+- `reopened`, or no row at all: unknown. Never read this as zero activity.
+
+A failed `succeeded` append never fails the run. The day stays unknown, the
+failure is logged, and `dev_health_daily_metrics_run_marker_appends_total`
+counts it with `outcome="failed"`. `dho workers metrics daily-marker-backfill
+--org <uuid> --from <day> --to <day>` runs the same function for each day of a
+range. It appends only when the table differs from Postgres, so a second run
+appends nothing. A run with status `no_repositories` never writes `succeeded`, but a full-org run that was claimed first has already written `reopened`, so its day reads unknown (never certified).
+
+The day's latest full-org run is the one with the greatest `created_at`, and that column is stamped from the Postgres clock when the run is created, not from the worker's, so a skewed worker cannot sort a newer run before an older one.
+
+Concurrency. Every writer of one organization and day takes one Postgres
+advisory lock: the sync function, the dispatch claim, and the redrive and
+recompute resets. The sync function takes it first, then reads ClickHouse, then
+reads Postgres, then appends, then commits. A claim or reopen that is still
+inside its transaction therefore blocks the sync until it commits or rolls
+back, and the sync then reads the state after it. The guarantee: no `succeeded`
+is appended from a Postgres state older than a transition that had already
+written its `reopened`. A reopen whose transaction rolled back after writing
+its marker leaves the day unknown until the next sync, which heals it because
+Postgres still says succeeded. A run that was created but not yet claimed does
+not hide an older `succeeded` (it has not started computing); the claim does.

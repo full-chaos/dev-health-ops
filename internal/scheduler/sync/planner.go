@@ -160,6 +160,20 @@ type PlannerInput struct {
 	// exactly as it did before CHAOS-4060. The production caller
 	// (NativeMaterializer) always supplies a real, non-nil snapshot.
 	ExecutedProof *providersync.ExecutedProofEvidence
+	// PlannerManagedParent is true only for a planner-managed parent config
+	// planned by a scheduled occurrence with no explicit dataset selector
+	// (CHAOS-8773). Only then does "no enabled work-item family row" mean the
+	// operator or a migration turned work items off, so only then does
+	// BuildScheduledPlan report it. A manual selector that names other
+	// datasets, or a source-scoped child config, never reports.
+	PlannerManagedParent bool
+	// WorkItemUnitsRanBefore is the materializer's answer to "did this
+	// integration ever finish a work-items unit with status success"
+	// (CHAOS-8773). The planner is pure and cannot read it; the materializer
+	// loads it only when the work-item family list is empty. It decides
+	// between a count only (opted out, never ran) and a count plus WARN
+	// (stopped after it ran).
+	WorkItemUnitsRanBefore bool
 }
 
 // PlannedUnit is the complete secret-free unit row prior to persistence.
@@ -258,8 +272,13 @@ func BuildScheduledPlan(input PlannerInput) ([]PlannedUnit, error) {
 		before = input.Before.UTC()
 	}
 	units := make([]PlannedUnit, 0, len(input.Sources)*len(input.Datasets))
+	reportedStoppedFamily := make(map[string]bool, 1)
 	for _, source := range input.Sources {
 		provider := strings.ToLower(source.Provider)
+		if input.PlannerManagedParent && !reportedStoppedFamily[provider] {
+			reportedStoppedFamily[provider] = true
+			reportWorkItemFamilyNotEnabled(input, provider)
+		}
 		prsEnabled := false
 		familyDatasets := workitemcontract.FamilyDatasets()
 		family := make([]PlanDataset, 0, len(familyDatasets))
@@ -367,6 +386,59 @@ func BuildScheduledPlan(input PlannerInput) ([]PlannedUnit, error) {
 		}
 	}
 	return units, nil
+}
+
+// workItemFamilyProviders are the four providers whose work items ride the
+// atomic work-item family. A work-item family row is opt-in for each of them.
+var workItemFamilyProviders = []string{"github", "gitlab", "jira", "linear"}
+
+// planHasWorkItemFamilyDataset reports whether the enabled dataset list holds
+// at least one work-item family row the planner would collapse for provider.
+// It is the single definition shared by the planner and the materializer, so
+// the "ran before" query runs exactly when the planner reports.
+func planHasWorkItemFamilyDataset(provider string, datasets []PlanDataset) bool {
+	for _, dataset := range datasets {
+		if !workitemcontract.IsFamilyDataset(dataset.Key) {
+			continue
+		}
+		if _, ok := datasetSpecification(provider, dataset.Key); ok {
+			return true
+		}
+	}
+	return false
+}
+
+// PlanNeedsWorkItemRanBefore reports whether the materializer must load the
+// WorkItemUnitsRanBefore fact for this plan: a scheduled planner-managed
+// parent of a work-item provider whose enabled dataset list holds no family
+// row.
+func PlanNeedsWorkItemRanBefore(provider string, plannerManaged bool, datasets []PlanDataset) bool {
+	return plannerManaged && slices.Contains(workItemFamilyProviders, provider) &&
+		!planHasWorkItemFamilyDataset(provider, datasets)
+}
+
+// reportWorkItemFamilyNotEnabled is the CHAOS-8773 signal. A parent config
+// with no enabled work-item family row plans no work-items unit, and before
+// this it did so with no log, no row and no metric: alembic 0108 turned such
+// rows off on real deployments and work items stopped for weeks unseen.
+// Every such plan counts on sync_plan_gate_total (outcome family_not_enabled).
+// A WARN is added only when the integration finished a work-items unit
+// before, because work items are opt-in and a config that never ran them is
+// not a fault. The log call carries no error operand.
+func reportWorkItemFamilyNotEnabled(input PlannerInput, provider string) {
+	if !slices.Contains(workItemFamilyProviders, provider) ||
+		planHasWorkItemFamilyDataset(provider, input.Datasets) {
+		return
+	}
+	globalPlanGateTelemetry.observe(provider, canonicalWorkItemsDataset, planGateOutcomeFamilyNotEnabled)
+	if !input.WorkItemUnitsRanBefore {
+		return
+	}
+	slog.Default().Warn("sync.plan.work_item_family_stopped",
+		slog.String("provider", provider),
+		slog.String("org_id", input.OrgID),
+		slog.String("integration_id", input.IntegrationID),
+		slog.String("family", canonicalWorkItemsDataset))
 }
 
 // buildWorkItemFamilyUnit collapses the atomic work-item family (all

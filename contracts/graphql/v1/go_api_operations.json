@@ -116,7 +116,12 @@
   },
   {
     "operation": "coverageScopeBaseline",
-    "digest": "2badf6b15232c05fb72f06c74a5da54a6037ba0a69e400aaba346dee5633dc5f"
+    "digest": "071c15a21f584816f94d86c48268b41638e2a66f1e6e8fd96b9047f48fa0a7ca"
+  },
+  {
+    "operation": "coverageScopeBaseline",
+    "digest": "2badf6b15232c05fb72f06c74a5da54a6037ba0a69e400aaba346dee5633dc5f",
+    "legacy": true
   },
   {
     "operation": "createSavedReport",

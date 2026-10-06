@@ -53,6 +53,7 @@ page) intentionally read a stored team column instead.
 
 Repositories, pull requests, issues, and projects form one entity tree; see
 [Entity tree: repositories, pull requests, issues, projects](../../contribute/architecture/data-and-storage.md#entity-tree-repositories-pull-requests-issues-projects).
+The issue <> pull request link of record is `work_graph_issue_pr`, with a `provenance` tier of native > explicit_text > heuristic; all three count as links, and a lower tier is never presented as native.
 
 For the full precedence decision tree, the source reference matrix, the provider coverage contract,
 symptom-to-fix diagnostics, and the recovery/backfill runbook, see

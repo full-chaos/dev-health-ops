@@ -87,8 +87,8 @@ failing claim ends it `failed` with `failure_class=retry_budget_exhausted` and a
 label on the ERROR line. Nothing re-arms a `failed` request; the hourly schedule makes the next one. An
 operator reads the ledger `failure_detail` and the ERROR line, fixes the cause, and waits for the next
 scheduled request (`dho workers workgraph repair` refuses a `failed` request: it only reopens `ambiguous`
-ones). Only a deterministic cause (a deterministic LLM failure, an invalid scope, window or provider, an evidence encode
-error) ends the request `failed`; the ERROR line names a class label (`failure_class`), never provider
+ones). Besides the spent budget, a deterministic cause (a deterministic LLM failure, an invalid scope, window or
+provider, an evidence encode error) ends the request `failed`; the ERROR line names a class label (`failure_class`), never provider
 text. A `failed` request blocks `membership_backfill` of the same sync run until the undelivered ceiling,
 and a later sync run makes a new request. `ambiguous` now appears only for a claimed request that does not
 match its River envelope. Requests that went `ambiguous` before this change (17 on prod, 2026-10-06) are

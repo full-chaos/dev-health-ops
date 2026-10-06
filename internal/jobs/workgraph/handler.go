@@ -171,6 +171,18 @@ func sanitizeDetail(value string, limit int) string {
 	return builder.String()
 }
 
+func releaseFailed(store Store, ctx context.Context, claim Claim, detail string) error {
+	releaseCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
+	defer cancel()
+	return store.Fail(releaseCtx, claim, detail)
+}
+
+func requeueClaim(store Store, ctx context.Context, claim Claim) error {
+	releaseCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
+	defer cancel()
+	return store.Requeue(releaseCtx, claim)
+}
+
 func releaseAmbiguous(store Store, ctx context.Context, claim Claim, detail string) error {
 	releaseCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
 	defer cancel()
@@ -351,31 +363,48 @@ func (h *materializeHandler) work(ctx context.Context, requestID string, organiz
 			return h.executor.Execute(workCtx, claim)
 		},
 		func(ctx context.Context, claim Claim, err error) error {
-			// A failure the executor could positively place as "never sent" or
-			// "the bridge declined" carries no possibility of a half-applied
-			// side effect, so there is nothing ambiguous to record. Releasing
-			// ambiguous here is what wedged CHAOS-4970's chain: 'ambiguous' is a
-			// state Claim refuses and joboutbox's strand-repair sweep excludes
-			// by construction, and no Go caller exists for the Python /repair
-			// endpoint that is the only way out of it -- so a transient DNS
-			// blip or a 401 became a permanently dead request. Leaving the lease
-			// alone instead keeps the ordinary reclaim path reachable: the next
-			// attempt parks on LeaseActiveError until the lease expires, then
-			// Claim's expired-lease branch reclaims it, all inside River's own
-			// attempt budget.
-			if errors.Is(err, ErrCompatibilityNotSent) || errors.Is(err, ErrCompatibilityRefused) {
-				return jobruntime.Retryable(err)
+			// Terminal ONLY for a deterministic cause (CHAOS-8782). A cancelled
+			// context (worker drain), a deadline, a network or database blip,
+			// a lease-renew error and any unclassified error are NOT proof the
+			// work cannot succeed: Execute is safe to re-run (every write is a
+			// ReplacingMergeTree row keyed by work unit; skip-existing spares
+			// units already categorised), so those are retried. 'ambiguous'
+			// used to be the default here and stranded the request for good
+			// (Claim refuses it, strand repair excludes it, no Go caller
+			// repairs it).
+			var deterministic *DeterministicError
+			if errors.As(err, &deterministic) {
+				// The class is a code label. The error text can carry provider
+				// output, so it is NOT logged here.
+				h.logger.Error("workgraph handler: permanent failure, deterministic cause",
+					slog.String("request_id", requestID), slog.String("kind", string(KindMaterialize)),
+					slog.String("organization_id", *organizationID), slog.String("failure_class", deterministic.Class),
+				)
+				if failErr := releaseFailed(h.store, ctx, claim, "deterministic failure: "+deterministic.Class); failErr != nil {
+					h.logger.Error("workgraph handler: could not record the failed state; the lease will expire and the request be reclaimed",
+						slog.String("request_id", requestID), slog.String("failure_class", deterministic.Class),
+						slog.Any("error", failErr),
+					)
+				}
+				return jobruntime.Permanent(err)
 			}
-			// Loud, not just recorded on the ambiguous ledger row: this is the
-			// permanent-cancel path, and the underlying error is exactly what
-			// an operator needs to see without having to correlate a ledger
-			// detail string back to a cause.
-			h.logger.Error("workgraph handler: permanent cancel after ambiguous compatibility outcome",
+			// Release the lease with a DETACHED context (the job context is
+			// usually the thing that was cancelled) so another pod can claim
+			// the request within seconds. The lease is 10 minutes; without
+			// this write the retry would park on it. If the write fails, the
+			// lease expiry is the fallback, loudly.
+			if requeueErr := requeueClaim(h.store, ctx, claim); requeueErr != nil {
+				h.logger.Warn("workgraph handler: could not release the lease after a retryable failure; the retry waits for lease expiry",
+					slog.String("request_id", requestID), slog.String("kind", string(KindMaterialize)),
+					slog.String("organization_id", *organizationID), slog.Any("error", requeueErr),
+				)
+			}
+			h.logger.Warn("workgraph handler: retryable failure, request left claimable",
 				slog.String("request_id", requestID), slog.String("kind", string(KindMaterialize)),
 				slog.String("organization_id", *organizationID), slog.Any("error", err),
+				slog.Bool("context_cancelled", ctx.Err() != nil),
 			)
-			_ = releaseAmbiguous(h.store, ctx, claim, compatibilityAmbiguousDetail(err))
-			return jobruntime.Permanent(err)
+			return jobruntime.Retryable(err)
 		},
 	)
 }

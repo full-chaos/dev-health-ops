@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log/slog"
 	"net"
 	"net/http"
 	"strings"
@@ -163,20 +164,21 @@ func TestBuildRejectsTenantEnvelopeMismatchBeforeClaim(t *testing.T) {
 	}
 }
 
-// TestMaterializeCompatibilityFailureIsAmbiguousNotRetried is the
-// Materialize-side counterpart of the old (pre-CHAOS-4924) Build test of the
-// same shape: Materialize still bridges, so a generic, unclassified bridge
-// failure still has no positive "never sent"/"declined" placement and still
-// releases Ambiguous -- unchanged by the Build cutover.
-func TestMaterializeCompatibilityFailureIsAmbiguousNotRetried(t *testing.T) {
+// TestMaterializeUnclassifiedFailureIsRetriedNotAmbiguous (CHAOS-8782): an
+// executor error with no deterministic cause is retried and the request is
+// requeued -- it is never released 'ambiguous' and never failed.
+func TestMaterializeUnclassifiedFailureIsRetriedNotAmbiguous(t *testing.T) {
 	store := &fakeStore{claim: testMaterializeClaim(time.Second)}
 	handler, err := NewMaterializeHandler(store, failingExecutor{}, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
 	err = handler.Work(context.Background(), materializeExecution())
-	if err == nil || !strings.Contains(err.Error(), string(jobruntime.CategoryPermanent)) || store.ambiguous != 1 || store.completions != 0 {
-		t.Fatalf("error=%v ambiguous=%d completions=%d", err, store.ambiguous, store.completions)
+	if err == nil || !strings.Contains(err.Error(), string(jobruntime.CategoryRetryable)) {
+		t.Fatalf("error=%v, want retryable", err)
+	}
+	if store.ambiguous != 0 || store.fails != 0 || store.requeues != 1 || store.completions != 0 {
+		t.Fatalf("ambiguous=%d fails=%d requeues=%d completions=%d", store.ambiguous, store.fails, store.requeues, store.completions)
 	}
 }
 
@@ -213,6 +215,11 @@ type fakeStore struct {
 	claim                                            *Claim
 	claimErr                                         error
 	claims, renewals, completions, ambiguous, loseAt int
+	// fails/requeues count the CHAOS-8782 releases; requeueErr scripts a failed
+	// requeue write (the lease-expiry fallback path).
+	fails, requeues int
+	requeueErr      error
+	lastFailDetail  string
 	// lastEvidence is what Complete received, so a test can assert what the
 	// step fragments merged into rather than only that a completion happened.
 	lastEvidence []byte
@@ -239,7 +246,15 @@ func (s *fakeStore) Complete(_ context.Context, _ Claim, evidence []byte) error 
 	s.lastEvidence = evidence
 	return nil
 }
-func (*fakeStore) Fail(context.Context, Claim, string) error { return nil }
+func (s *fakeStore) Fail(_ context.Context, _ Claim, detail string) error {
+	s.fails++
+	s.lastFailDetail = detail
+	return nil
+}
+func (s *fakeStore) Requeue(context.Context, Claim) error {
+	s.requeues++
+	return s.requeueErr
+}
 func (s *fakeStore) Ambiguous(_ context.Context, _ Claim, detail string) error {
 	s.ambiguous++
 	s.lastAmbiguousDetail = detail
@@ -353,11 +368,11 @@ func TestHandlerRetriesNotSentAndRefusedWithoutReleasingAmbiguous(t *testing.T) 
 	}
 }
 
-func TestHandlerReleasesUnknownAmbiguousWithTheClassifiedDetail(t *testing.T) {
-	executeErr := fmt.Errorf("%w: status=%d bridge exploded", ErrCompatibilityUnknown, http.StatusInternalServerError)
-	// Materialize, not Build: see TestHandlerRetriesNotSentAndRefusedWithoutReleasingAmbiguous.
+func TestHandlerFailsDeterministicWithTheClassLabelOnly(t *testing.T) {
+	executeErr := Deterministic(ClassLLMDeterministic, errors.New("provider said: key sk-ABC is wrong"))
 	store := &fakeStore{claim: testMaterializeClaim(time.Second)}
-	handler, err := NewMaterializeHandler(store, classifyingExecutor{err: executeErr}, nil)
+	var logs strings.Builder
+	handler, err := NewMaterializeHandler(store, classifyingExecutor{err: executeErr}, slog.New(slog.NewTextHandler(&logs, nil)))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -365,23 +380,32 @@ func TestHandlerReleasesUnknownAmbiguousWithTheClassifiedDetail(t *testing.T) {
 	if workErr == nil || !strings.Contains(workErr.Error(), string(jobruntime.CategoryPermanent)) {
 		t.Fatalf("Work = %v, want category %s", workErr, jobruntime.CategoryPermanent)
 	}
-	if store.ambiguous != 1 {
-		t.Fatalf("ambiguous releases = %d, want 1", store.ambiguous)
+	if store.fails != 1 || store.ambiguous != 0 || store.requeues != 0 {
+		t.Fatalf("fails=%d ambiguous=%d requeues=%d", store.fails, store.ambiguous, store.requeues)
 	}
-	// The fixed literal is exactly what made 22 ledger rows indistinguishable
-	// from each other. The detail that reaches the store must now name the
-	// classification, the status, and the executor's own text.
-	detail := store.lastAmbiguousDetail
-	if detail == "compatibility execution outcome is unknown" {
-		t.Fatalf("ledger detail is still the fixed literal: %q", detail)
+	if store.lastFailDetail != "deterministic failure: "+ClassLLMDeterministic {
+		t.Fatalf("ledger detail = %q", store.lastFailDetail)
 	}
-	for _, want := range []string{"outcome is unknown", "status=500", "bridge exploded"} {
-		if !strings.Contains(detail, want) {
-			t.Fatalf("ledger detail %q is missing %q", detail, want)
-		}
+	if strings.Contains(logs.String(), "provider said") || !strings.Contains(logs.String(), "failure_class="+ClassLLMDeterministic) || !strings.Contains(logs.String(), "level=ERROR") {
+		t.Fatalf("log must carry the class label and an ERROR level, never provider text:\n%s", logs.String())
 	}
-	if length := utf8.RuneCountInString(detail); length == 0 || length > maxAmbiguousDetailBytes {
-		t.Fatalf("ledger detail length = %d, want 1..%d", length, maxAmbiguousDetailBytes)
+}
+
+// A failed requeue write must not hide the failure: the handler still returns
+// Retryable (the lease expiry is the fallback) and logs a WARN.
+func TestHandlerRequeueFailureFallsBackToLeaseExpiryLoudly(t *testing.T) {
+	store := &fakeStore{claim: testMaterializeClaim(time.Second), requeueErr: ErrUnavailable}
+	var logs strings.Builder
+	handler, err := NewMaterializeHandler(store, failingExecutor{}, slog.New(slog.NewTextHandler(&logs, nil)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	workErr := handler.Work(context.Background(), materializeExecution())
+	if workErr == nil || !strings.Contains(workErr.Error(), string(jobruntime.CategoryRetryable)) {
+		t.Fatalf("Work = %v, want retryable", workErr)
+	}
+	if store.ambiguous != 0 || !strings.Contains(logs.String(), "waits for lease expiry") || !strings.Contains(logs.String(), "level=WARN") {
+		t.Fatalf("ambiguous=%d logs:\n%s", store.ambiguous, logs.String())
 	}
 }
 

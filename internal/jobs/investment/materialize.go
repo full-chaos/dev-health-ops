@@ -31,6 +31,7 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/jobs/investment/categorize"
 	"github.com/full-chaos/dev-health-ops/internal/jobs/investment/chquery"
 	"github.com/full-chaos/dev-health-ops/internal/jobs/investment/chwrite"
+	"github.com/full-chaos/dev-health-ops/internal/jobs/workgraph"
 	"github.com/full-chaos/dev-health-ops/internal/jobs/workgraph/units"
 	"github.com/full-chaos/dev-health-ops/internal/pythonparity"
 )
@@ -562,7 +563,8 @@ func (m *Materializer) Run(ctx context.Context, cfg Config) (Stats, error) {
 
 		auditJSON, err := marshalCategorizationAudit(outcome)
 		if err != nil {
-			return Stats{}, fmt.Errorf("encode categorization audit for %s: %w", record.WorkUnitID, err)
+			return Stats{}, workgraph.Deterministic(workgraph.ClassEvidenceEncode,
+				fmt.Errorf("encode categorization audit for %s: %w", record.WorkUnitID, err))
 		}
 		record.CategorizationErrorsJSON = auditJSON
 
@@ -744,8 +746,9 @@ func (m *Materializer) categorizePending(
 	wg.Wait()
 
 	if fatalErr != nil {
-		return fmt.Errorf("investment categorization stopped on deterministic LLM failure (%s): %w",
-			categorize.FormatFailureSummary(len(outcomes), stats.LLMFailureCounts), fatalErr)
+		return workgraph.Deterministic(workgraph.ClassLLMDeterministic,
+			fmt.Errorf("investment categorization stopped on deterministic LLM failure (%s): %w",
+				categorize.FormatFailureSummary(len(outcomes), stats.LLMFailureCounts), fatalErr))
 	}
 	return nil
 }

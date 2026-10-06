@@ -603,11 +603,22 @@ func (m *Materializer) Run(ctx context.Context, cfg Config) (Stats, error) {
 			"run_id", cfg.RunID, "error", err.Error())
 	}
 
-	// WRITE. Same three tables, same order, same "skip the call when empty"
-	// shape as materialize.py:1826-1831.
-	if len(investments) > 0 {
-		if _, err := m.writer.WriteInvestments(ctx, cfg.OrgID, investments); err != nil {
-			return Stats{}, fmt.Errorf("write work_unit_investments: %w", err)
+	// WRITE. Same three tables, same "skip the call when empty" shape as
+	// materialize.py:1826-1831, in a DELIBERATELY different order: quotes, then
+	// repo effort, then the investment rows LAST (CHAOS-8782).
+	//
+	// Skip-existing (FetchExistingInvestmentKeys) keys on the work_unit_investments
+	// row alone. If that row landed first and the run then died, the re-run
+	// skipped the unit and its quotes were never written. With the investment
+	// row last, a unit is invisible to skip-existing until its quotes and effort
+	// rows exist, so a crashed run is simply redone: every table is a
+	// ReplacingMergeTree and the keys are stable, so the re-run overwrites. No
+	// reader sees these tables without an investment row (all join FROM
+	// work_unit_investments; quotes are read by the row's own run id), so the
+	// extra rows of a crashed run stay invisible until the investment row lands.
+	if len(quotes) > 0 {
+		if _, err := m.writer.WriteQuotes(ctx, cfg.OrgID, quotes); err != nil {
+			return Stats{}, fmt.Errorf("write work_unit_investment_quotes: %w", err)
 		}
 	}
 	if len(repoEfforts) > 0 {
@@ -615,9 +626,9 @@ func (m *Materializer) Run(ctx context.Context, cfg Config) (Stats, error) {
 			return Stats{}, fmt.Errorf("write work_unit_repo_effort: %w", err)
 		}
 	}
-	if len(quotes) > 0 {
-		if _, err := m.writer.WriteQuotes(ctx, cfg.OrgID, quotes); err != nil {
-			return Stats{}, fmt.Errorf("write work_unit_investment_quotes: %w", err)
+	if len(investments) > 0 {
+		if _, err := m.writer.WriteInvestments(ctx, cfg.OrgID, investments); err != nil {
+			return Stats{}, fmt.Errorf("write work_unit_investments: %w", err)
 		}
 	}
 
